@@ -26,6 +26,8 @@ installation, upgrades, recovery, and hardening, see the
 - [Operator Guide](docs/operator-guide.md)
 - [OpenAI compatibility contract](docs/contracts/openai-compatibility.md)
 - [Security model](docs/threat-model.md)
+- [Distributed evolution and state ownership](docs/distributed-state-ownership.md)
+- [Gateway idempotency contract](docs/idempotency-contract.md)
 - [Backup and restore](docs/backup-restore.md)
 - [Contributing](CONTRIBUTING.md)
 - [Security policy](SECURITY.md)

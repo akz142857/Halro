@@ -73,6 +73,7 @@ scope is governed by reviewed release notes and release gates.
 | Contracts | ADRs, threat model, Gateway correctness, OpenAI compatibility, provider capabilities |
 | Container delivery | 15.0 MB static non-root distroless image; UID/GID 65532, loopback-only built-in readiness check, CI metadata assertions, and signed/checksummed release tarball path |
 | CI/release gate | test, Race, Vet, vulnerability scan, web artifact scan, SDK compatibility, SSE stress, container and release builds; signed/checksummed assets are generated before a separate `v1-release` evidence approval, and only GitHub-verified annotated tags can publish |
+| Distributed Phase 0 foundations | Standalone/HA/Cluster ADR, Project ownership and state matrix, deterministic versioned mutation envelope, epoch fencing primitive, durable project-scoped idempotency lifecycle, and reproducible capacity-baseline contract; no consensus or multi-writer mode |
 
 ## Verified commands
 
