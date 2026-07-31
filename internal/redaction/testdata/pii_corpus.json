@@ -1,0 +1,21 @@
+{
+  "positives": [
+    {"category": "china_phone", "value": "13800138000"},
+    {"category": "email", "value": "security@example.com"},
+    {"category": "china_id", "value": "11010519491231002X"},
+    {"category": "bank_card_candidate", "value": "4111 1111 1111 1111"},
+    {"category": "gateway_key", "value": "gw_0123456789abcdefghijklmnopqrstuvwxyz_ABCD"}
+  ],
+  "negatives": [
+    "4111111111111112",
+    "110105194912310021",
+    "order_20260731_123456789",
+    "2026-07-31T16:45:12Z",
+    "550e8400-e29b-41d4-a716-446655440000",
+    "192.168.100.200",
+    "version-123456789012",
+    "12345678901",
+    "user@example",
+    "sk-short"
+  ]
+}

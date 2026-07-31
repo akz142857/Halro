@@ -1,0 +1,245 @@
+name: release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify public repository and license boundary
+        run: |
+          test -f LICENSE
+          test -f NOTICE
+          test -f THIRD_PARTY_NOTICES.md
+          test ! -e v1.0.0.md
+          ! git ls-files | grep -E '(^|/)(data|node_modules|bin)/|(^|/)(master\.key|config\.yaml|v1\.0\.0\.md)$|\.(hmbk|pem|p12|pprof|prof|test)$'
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go test ./...
+      - run: go test -race ./...
+      - run: go vet ./...
+      - name: Go vulnerability scan
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+
+  sdk-compatibility:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: tests/compatibility/python/requirements.txt
+      - run: python -m pip install -r tests/compatibility/python/requirements.txt
+      - run: npm ci --ignore-scripts
+        working-directory: tests/compatibility/node
+      - name: Run official SDK black-box contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          go run ./tests/compatibility/server --listen 127.0.0.1:18088 &
+          compat_server_pid=$!
+          trap 'kill "$compat_server_pid" 2>/dev/null || true' EXIT
+          for attempt in {1..60}; do
+            if curl --fail --silent http://127.0.0.1:18088/healthz >/dev/null; then
+              break
+            fi
+            if ! kill -0 "$compat_server_pid" 2>/dev/null; then
+              wait "$compat_server_pid"
+            fi
+            sleep 0.25
+          done
+          curl --fail --silent http://127.0.0.1:18088/healthz >/dev/null
+          python tests/compatibility/python/test_sdk.py
+          npm test --prefix tests/compatibility/node
+          go -C tests/compatibility/go test ./...
+
+  stress:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: 1000 concurrent SSE cleanup gate
+        run: HEIMDALL_STRESS=1 go test ./tests/stress -run TestThousandConcurrentSSEConnectionsCleanup -count=1 -v
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci --ignore-scripts
+        working-directory: web
+      - run: npm test
+        working-directory: web
+      - run: npm audit --audit-level=moderate
+        working-directory: web
+      - run: npm run build
+        working-directory: web
+      - uses: actions/upload-artifact@v4
+        with:
+          name: admin-dist
+          path: internal/webui/dist
+
+  binaries:
+    needs: [quality, sdk-compatibility, web, stress]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: admin-dist
+          path: internal/webui/dist
+      - name: Build licensed static binary archive
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+          RELEASE_VERSION: ${{ github.ref_name }}
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: |
+          package_dir="release/heimdall-${GOOS}-${GOARCH}"
+          mkdir -p "${package_dir}"
+          go build -trimpath \
+            -ldflags "-s -w -X github.com/akz142857/Heimdall/internal/buildinfo.Version=${RELEASE_VERSION} -X github.com/akz142857/Heimdall/internal/buildinfo.Commit=${RELEASE_COMMIT} -X github.com/akz142857/Heimdall/internal/buildinfo.Date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -o "${package_dir}/heimdall" ./cmd/heimdall
+          cp LICENSE NOTICE THIRD_PARTY_NOTICES.md README.md "${package_dir}/"
+          tar -C release -czf "release/heimdall-${GOOS}-${GOARCH}.tar.gz" \
+            "heimdall-${GOOS}-${GOARCH}"
+          rm -r "${package_dir}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: heimdall-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: release/heimdall-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
+
+  container:
+    needs: [quality, sdk-compatibility, stress]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build release container image
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: |
+          IMAGE_TAG=${RELEASE_VERSION//\//-}
+          docker build \
+            --build-arg RELEASE_VERSION=${RELEASE_VERSION} \
+            --build-arg RELEASE_COMMIT=${RELEASE_COMMIT} \
+            --build-arg RELEASE_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+            --tag heimdall:${IMAGE_TAG} .
+          docker run --rm --entrypoint /usr/local/bin/heimdall heimdall:${IMAGE_TAG} version
+          test "$(docker image inspect heimdall:${IMAGE_TAG} --format '{{.Config.User}}')" = "65532:65532"
+          docker save heimdall:${IMAGE_TAG} | gzip -n > heimdall-container.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: heimdall-container
+          path: heimdall-container.tar.gz
+
+  provenance:
+    needs: [binaries, container]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: heimdall-*
+          path: release
+          merge-multiple: true
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: release/heimdall.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Generate checksums
+        working-directory: release
+        run: sha256sum heimdall-* heimdall.spdx.json > checksums.txt
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v4.1.2
+      - name: Keyless sign release blobs
+        working-directory: release
+        run: |
+          for artifact in heimdall-* heimdall.spdx.json checksums.txt; do
+            cosign sign-blob --yes --bundle "${artifact}.sigstore.json" "${artifact}"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: release
+
+  publish:
+    needs: provenance
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: v1-release
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: release
+      - name: Publish immutable GitHub release after evidence approval
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag_sha=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${GITHUB_REF_NAME}" --jq '.object | select(.type == "tag") | .sha')
+          test -n "${tag_sha}"
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_sha}" --jq '.verification.verified')" = "true"
+          release_notes=(--notes-file docs/release-notes-v1.0.0.md)
+          if [[ "${GITHUB_REF_NAME}" == *-rc.* ]]; then
+            release_notes=(--generate-notes --prerelease)
+          fi
+          gh release create "${GITHUB_REF_NAME}" release/* --verify-tag "${release_notes[@]}" --title "Heimdall ${GITHUB_REF_NAME}"

@@ -1,0 +1,48 @@
+import { useEffect, useState, type MouseEvent, type ReactNode } from "react";
+
+const navigationEvent = "heimdall:navigate";
+
+export function navigate(path: string) {
+  if (window.location.pathname === path) return;
+  window.history.pushState({}, "", path);
+  window.dispatchEvent(new Event(navigationEvent));
+}
+
+export function usePathname() {
+  const [path, setPath] = useState(window.location.pathname);
+  useEffect(() => {
+    const update = () => setPath(window.location.pathname);
+    window.addEventListener("popstate", update);
+    window.addEventListener(navigationEvent, update);
+    return () => {
+      window.removeEventListener("popstate", update);
+      window.removeEventListener(navigationEvent, update);
+    };
+  }, []);
+  return path;
+}
+
+export function Link({
+  href,
+  children,
+  className,
+  ariaCurrent,
+}: {
+  href: string;
+  children: ReactNode;
+  className?: string;
+  ariaCurrent?: "page";
+}) {
+  const onClick = (event: MouseEvent<HTMLAnchorElement>) => {
+    if (
+      event.button !== 0 ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.shiftKey ||
+      event.altKey
+    ) return;
+    event.preventDefault();
+    navigate(href);
+  };
+  return <a href={href} onClick={onClick} className={className} aria-current={ariaCurrent}>{children}</a>;
+}

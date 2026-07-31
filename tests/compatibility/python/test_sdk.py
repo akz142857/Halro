@@ -1,0 +1,93 @@
+import json
+import os
+import time
+import urllib.request
+
+import openai
+
+
+BASE_URL = os.environ.get("HEIMDALL_COMPAT_BASE_URL", "http://127.0.0.1:18088/v1")
+API_KEY = "gw_sdk_compatibility"
+
+
+def client(api_key: str = API_KEY) -> openai.OpenAI:
+    return openai.OpenAI(api_key=api_key, base_url=BASE_URL, max_retries=0, timeout=5.0)
+
+
+def test_non_stream_and_embeddings() -> None:
+    completion = client().chat.completions.create(
+        model="compat-chat", messages=[{"role": "user", "content": "ping"}]
+    )
+    assert completion.choices[0].message.content == "compat-ok"
+    assert completion.usage is not None and completion.usage.total_tokens == 5
+
+    embedding = client().embeddings.create(model="compat-embedding", input="ping")
+    assert embedding.data[0].embedding == [0.125, -0.25, 0.5]
+    assert embedding.usage.total_tokens == 2
+
+
+def test_stream_tool_calls_and_usage_only_chunk() -> None:
+    stream = client().chat.completions.create(
+        model="compat-chat",
+        messages=[{"role": "user", "content": "ping"}],
+        stream=True,
+        stream_options={"include_usage": True},
+    )
+    content = ""
+    arguments = ""
+    total_tokens = None
+    for chunk in stream:
+        if chunk.usage is not None:
+            total_tokens = chunk.usage.total_tokens
+        for choice in chunk.choices:
+            content += choice.delta.content or ""
+            for call in choice.delta.tool_calls or []:
+                arguments += call.function.arguments or ""
+    assert content == "compat-ok"
+    assert json.loads(arguments) == {"value": "ok"}
+    assert total_tokens == 7
+
+
+def test_error_matrix() -> None:
+    cases = [("error-budget", 403), ("error-rate", 429), ("error-provider", 502)]
+    for model, status in cases:
+        try:
+            client().chat.completions.create(
+                model=model, messages=[{"role": "user", "content": "ping"}]
+            )
+            raise AssertionError(f"{model} unexpectedly succeeded")
+        except openai.APIStatusError as exc:
+            assert exc.status_code == status
+    try:
+        client("gw_invalid").chat.completions.create(
+            model="compat-chat", messages=[{"role": "user", "content": "ping"}]
+        )
+        raise AssertionError("invalid key unexpectedly succeeded")
+    except openai.AuthenticationError as exc:
+        assert exc.status_code == 401
+
+
+def test_disconnecting_stream_releases_server_resources() -> None:
+    stream = client().chat.completions.create(
+        model="slow-stream",
+        messages=[{"role": "user", "content": "ping"}],
+        stream=True,
+    )
+    next(iter(stream))
+    stream.close()
+    stats_url = BASE_URL.removesuffix("/v1") + "/compat/stats"
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        with urllib.request.urlopen(stats_url, timeout=1) as response:
+            stats = json.load(response)
+        if stats["active_streams"] == 0 and stats["canceled_streams"] >= 1:
+            return
+        time.sleep(0.05)
+    raise AssertionError(f"stream resources were not released: {stats}")
+
+
+if __name__ == "__main__":
+    test_non_stream_and_embeddings()
+    test_stream_tool_calls_and_usage_only_chunk()
+    test_error_matrix()
+    test_disconnecting_stream_releases_server_resources()

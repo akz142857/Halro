@@ -1,0 +1,221 @@
+# Operator Guide
+
+This guide covers a single-node Heimdall installation. Run offline commands
+with the server stopped: the data directory has one exclusive owner.
+
+## Clean install
+
+Use a release binary for the target OS/architecture, or build the exact source
+commit with `make build`. Keep the binary, configuration, Master Key, and data
+directory on persistent storage with different backup handling for the key.
+
+```bash
+cp configs/config.example.yaml ./config.yaml
+./heimdall config check --config ./config.yaml
+./heimdall init --config ./config.yaml
+printf '%s' "$ADMIN_PASSWORD" | ./heimdall admin bootstrap \
+  --config ./config.yaml --username admin
+printf '%s' "$PROVIDER_SECRET" | ./heimdall bootstrap \
+  --config ./config.yaml \
+  --provider-type openai \
+  --provider-base-url https://api.openai.com \
+  --provider-model gpt-5-mini \
+  --public-model chat
+./heimdall serve --config ./config.yaml
+```
+
+The bootstrap response contains the Gateway Key once. Move it directly to the
+workload secret store; do not put it in shell history, source control, logs, or
+browser storage. The generated Master Key must remain a regular `0600` file.
+Back it up separately from both the data directory and encrypted backup key.
+
+Default listeners are loopback-only. To expose Heimdall, use TLS and an
+authenticated reverse proxy with an explicitly configured origin/trusted proxy
+boundary. Admin and Metrics must never use public plaintext listeners.
+
+## Configuration reference
+
+`configs/config.example.yaml` is the canonical complete v1 example. Important
+groups are:
+
+- `server`: three listener addresses and HTTP size/time limits;
+- `tls`: certificate and private-key paths shared by enabled listeners;
+- `storage`: data directory, bbolt filename, and Master Key path;
+- `admin`: session/idle limits, login rate, and external origin;
+- `usage`: timezone, WAL batching, checkpoint/Parquet cadence, retention;
+- `gateway`: route/attempt/stream deadlines and active probe interval;
+- `retry` and `circuit_breaker`: bounded attempt and failure policy;
+- `alerts`: queue, worker, timeout, retry, and dedup bounds;
+- `security`: private egress and trusted proxy policy;
+- `metrics`: exporter enablement and authentication requirement.
+
+Unknown YAML fields and invalid durations are rejected. Listener, TLS, storage,
+egress, proxy, and Metrics-auth changes require restart. The Admin Settings page
+only changes the explicitly writable runtime settings. Always run `config check`
+before restart.
+
+## Offline diagnostics and break-glass access
+
+Stop Heimdall, then run the read-only diagnostic before upgrades, restores, or
+when startup fails:
+
+```bash
+./heimdall doctor --config ./config.yaml
+```
+
+The JSON report verifies configuration safety, exclusive data ownership, file
+permissions, the exact bbolt schema, Master Key/Vault binding, the WAL checksum
+and complete tail, Parquet manifests/checksums, usage timezone, free disk space,
+and Provider/Deployment/Route references. A partial WAL is reported as a
+failure but is never truncated or repaired. Network Provider probes are
+intentionally skipped; run audited connection tests in Admin after startup.
+The diagnostic acquires the already initialized lock file through a read-only
+descriptor and does not rewrite its PID metadata. Regression tests hash every
+file under the data directory before and after a successful run.
+
+If the local Admin password is lost, keep the server stopped and pipe a new
+password through standard input:
+
+```bash
+printf '%s' "$NEW_ADMIN_PASSWORD" | ./heimdall admin reset-password \
+  --config ./config.yaml --username admin
+```
+
+The reset verifies the Master Key first, replaces the Argon2id verifier,
+increments the session generation, invalidates every existing session, and
+appends `admin.password.reset` to the trusted Audit chain. The password is not
+accepted as a command-line argument.
+
+## Master Key rotation
+
+Rotation is an offline operation. First create and verify an encrypted backup,
+stop Heimdall, retain the old Master Key with backups created under it, and
+generate a separate replacement key with mode `0600`:
+
+```bash
+umask 077
+openssl rand 32 > /secure/path/new-master.key
+./heimdall key rotate --config ./config.yaml \
+  --new-key-file /secure/path/new-master.key
+```
+
+The command advances the persistent versioned keyring, rewrites every
+Credential into a copy-on-write bbolt image,
+increments its key version, invalidates all Admin sessions, preserves the
+existing Audit HMAC chain under a new authenticated envelope, compacts retired
+ciphertext pages, and atomically publishes the database and active Master Key.
+Only SHA-256 fingerprints and record counts are printed.
+
+If the host or command stops during rotation, do not restore individual files
+or choose another replacement key. Rerun the exact command with the same
+`--new-key-file`; the authenticated temporary recovery bridge makes both the
+“new DB/old key” and “new DB/new key” states recoverable. The bridge is removed
+through a second compacted COW publication only after all records and the Audit
+key verify with the new Master Key. After successful startup and backup
+verification, retain the replacement key according to key-custody policy and
+remove unnecessary duplicate copies. Older backups still require their
+recorded old Master Key.
+
+## Provider setup
+
+Create an encrypted Credential first, then a Provider, Deployment, and public
+Route in the Admin console. Credential audience binds provider type plus the
+normalized endpoint origin; changing either requires a matching credential
+rotation. Keep private endpoint access disabled unless the deployment genuinely
+needs it and the hostname/IP boundary has been reviewed.
+
+| Type | Base URL example | Secret format | Declared v1 profile |
+|---|---|---|---|
+| OpenAI | `https://api.openai.com` | API key | GA chat, stream, embeddings |
+| Azure OpenAI | resource endpoint | API key plus explicit API version on Provider | GA deployment paths |
+| DeepSeek | `https://api.deepseek.com` | API key | GA chat/stream profile |
+| OpenAI-compatible | reviewed HTTPS origin | API key | conservative capabilities; opt in extras |
+| Gemini | `https://generativelanguage.googleapis.com` | API key | Beta text chat/stream and float embeddings |
+| Bedrock | `https://bedrock-runtime.us-east-1.amazonaws.com` | JSON below | Beta text Converse/ConverseStream |
+
+Bedrock JSON is one encrypted secret. `session_token` is optional and `region`
+must match the endpoint hostname:
+
+```json
+{"access_key_id":"...","secret_access_key":"...","session_token":"...","region":"us-east-1"}
+```
+
+The Bedrock Beta profile does not read environment credentials or IMDS and does
+not declare embeddings, tools, vision, or JSON mode. Connection tests are
+audited; they never return upstream response bodies or credentials.
+
+## Alerts
+
+Create an encrypted webhook header credential when the receiver requires one,
+then configure a Generic JSON endpoint and test it from Operations. Delivery is
+bounded, retried with jitter, deduplicated, and routed through SafeTransport.
+Webhook payloads are telemetry-redacted and intentionally omit prompts,
+responses, credentials, raw IPs, and detailed provider topology. See
+`docs/webhook-payloads.md` for Slack, Discord, Feishu, and WeCom receiver
+examples.
+
+## Upgrade and rollback
+
+1. Read release notes and verify the binary checksum and Sigstore bundle.
+2. Stop Heimdall and confirm the process released the data-directory lock.
+3. Create and verify an encrypted backup; preserve the current binary/config.
+4. Run the new binary's `config check` against a copy of the configuration.
+5. Start the new binary. Migrations are versioned and applied during open.
+6. Check `/health/live`, `/health/ready`, Admin system status, Metrics, a
+   non-stream request, a stream request, and usage settlement.
+
+Do not downgrade a migrated data directory in place. If validation fails, stop
+the new binary and follow `docs/backup-restore.md`; restore preserves the old
+live directory as a rollback directory. Never replace only bbolt while keeping
+a WAL/Audit/Parquet set from another epoch.
+
+## Troubleshooting
+
+- Startup says the data directory is locked: another Heimdall or offline
+  command owns it. Find the owner; do not delete lock files to bypass it.
+- Readiness is false: inspect accounting state and WAL errors first. Heimdall
+  deliberately stops new provider calls when durable accounting is unsafe.
+- Provider test is unhealthy: verify HTTPS hostname, credential audience/type,
+  model deployment, Azure API version, and Bedrock region. Upstream bodies are
+  intentionally hidden; use the provider control plane for detailed diagnosis.
+- Requests return 403: check Project enabled state, key revocation, allowed
+  routes/CIDRs, daily budget, Token Guard block, and redaction reject policy.
+- Requests return 429: distinguish Project RPM/TPM/concurrency, Provider or
+  Deployment concurrency, Token Guard, and upstream rate limits using metrics.
+- Restore fails before switch: use the exact backup key, live Master Key, and
+  verified Backup ID. The live directory remains unchanged on preflight failure.
+- Disk usage grows: inspect retention settings, Parquet manifest verification,
+  WAL/checkpoint progress, and backup copies. See `docs/usage-storage.md`.
+
+Operational references: `docs/metrics-reference.md`, `docs/backup-restore.md`,
+`docs/crash-recovery-matrix.md`, `docs/usage-storage.md`,
+`docs/token-guard-ewma.md`, `docs/security-review-v1.md`, and
+`docs/releasing.md`.
+
+## Optional container image
+
+`Dockerfile` builds the React console and a static Go binary, then copies only
+the binary and an owned data directory into the non-root distroless runtime.
+No shell or package manager is present in the final image.
+
+The CI workflow rebuilds the image and verifies its version command, runtime
+UID/GID, and healthcheck metadata. Tagged releases also attach a signed,
+checksummed `heimdall-container.tar.gz`; load it with
+`gzip -dc heimdall-container.tar.gz | docker load`.
+
+```bash
+docker build -t heimdall:v1.0.0 .
+docker run --rm --user 65532:65532 \
+  -v "$PWD/config.yaml:/etc/heimdall/config.yaml:ro" \
+  -v "$PWD/master.key:/run/secrets/heimdall-master.key:ro" \
+  -v heimdall-data:/var/lib/heimdall \
+  -p 8080:8080 -p 8081:8081 heimdall:v1.0.0
+```
+
+Container configuration must use `/var/lib/heimdall` for `storage.data_dir`
+and `/run/secrets/heimdall-master.key` for the Master Key. A listener exposed
+outside the container must follow the same TLS rules as a bare-metal install;
+do not weaken Admin/Metrics listener validation for Docker. The built-in
+healthcheck calls only a loopback HTTP(S) readiness URL, follows no redirects,
+and can be changed with `HEIMDALL_HEALTH_URL` when TLS is enabled. Ensure its
+hostname is covered by the mounted certificate.

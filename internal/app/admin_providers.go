@@ -1,0 +1,761 @@
+package app
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/akz142857/Heimdall/internal/domain"
+	"github.com/akz142857/Heimdall/internal/id"
+	"github.com/akz142857/Heimdall/internal/provider"
+	"github.com/akz142857/Heimdall/internal/safetransport"
+	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
+	"github.com/go-chi/chi/v5"
+)
+
+type credentialInput struct {
+	Name    string              `json:"name"`
+	Type    domain.ProviderType `json:"type"`
+	BaseURL string              `json:"base_url"`
+	Secret  *string             `json:"secret,omitempty"`
+}
+
+type providerInput struct {
+	Name           string                       `json:"name"`
+	Type           domain.ProviderType          `json:"type"`
+	BaseURL        string                       `json:"base_url"`
+	APIVersion     string                       `json:"api_version,omitempty"`
+	CredentialID   string                       `json:"credential_id"`
+	Capabilities   *domain.ProviderCapabilities `json:"capabilities,omitempty"`
+	MaxConcurrency int64                        `json:"max_concurrency"`
+	Enabled        bool                         `json:"enabled"`
+}
+
+type routeInput struct {
+	PublicModel            string `json:"public_model"`
+	DeploymentID           string `json:"deployment_id,omitempty"`
+	ProviderID             string `json:"provider_id"`
+	ProviderModel          string `json:"provider_model"`
+	InputMicrosPerMillion  int64  `json:"input_micros_per_million"`
+	OutputMicrosPerMillion int64  `json:"output_micros_per_million"`
+	Priority               int    `json:"priority"`
+	Strategy               string `json:"strategy"`
+	Enabled                bool   `json:"enabled"`
+}
+
+func (r *Runtime) createAdminCredential(writer http.ResponseWriter, request *http.Request) {
+	var input credentialInput
+	if err := decodeAdminJSON(request, &input); err != nil || input.Secret == nil {
+		adminBadRequest(writer, "invalid request")
+		return
+	}
+	credentialID, err := id.New("cred")
+	if err != nil {
+		adminStoreError(writer)
+		return
+	}
+	credential, err := r.credentialFromInput(credentialID, input, nil, time.Now().UTC())
+	if err != nil {
+		adminBadRequest(writer, err.Error())
+		return
+	}
+	r.adminMutationMu.Lock()
+	defer r.adminMutationMu.Unlock()
+	credential, err = r.store.PutCredential(request.Context(), credential, 0)
+	if err != nil {
+		adminMutationError(writer, err)
+		return
+	}
+	if err := r.auditAdminMutation(request, "credential.create", "credential", credential.ID); err != nil {
+		adminAuditError(writer)
+		return
+	}
+	writer.Header().Set("ETag", revisionETag(credential.Revision))
+	writeJSON(writer, http.StatusCreated, credentialViewFrom(credential))
+}
+
+func (r *Runtime) updateAdminCredential(writer http.ResponseWriter, request *http.Request) {
+	expected, ok := requireRevision(writer, request)
+	if !ok {
+		return
+	}
+	var input credentialInput
+	if err := decodeAdminJSON(request, &input); err != nil {
+		adminBadRequest(writer, "invalid request")
+		return
+	}
+	r.adminMutationMu.Lock()
+	defer r.adminMutationMu.Unlock()
+	current, err := r.store.GetCredential(request.Context(), chi.URLParam(request, "id"))
+	if err != nil {
+		adminMutationError(writer, err)
+		return
+	}
+	if current.Revision != expected {
+		adminPreconditionFailed(writer)
+		return
+	}
+	credential, err := r.credentialFromInput(current.ID, input, &current, current.CreatedAt)
+	if err != nil {
+		adminBadRequest(writer, err.Error())
+		return
+	}
+	if err := r.validateCredentialReferences(request, credential); err != nil {
+		writeJSON(writer, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	credential, err = r.store.PutCredential(request.Context(), credential, expected)
+	if err != nil {
+		adminMutationError(writer, err)
+		return
+	}
+	if err := r.reloadProviderRegistry(request.Context()); err != nil {
+		adminConfigurationError(writer, err)
+		return
+	}
+	if err := r.auditAdminMutation(request, "credential.rotate", "credential", credential.ID); err != nil {
+		adminAuditError(writer)
+		return
+	}
+	writer.Header().Set("ETag", revisionETag(credential.Revision))
+	writeJSON(writer, http.StatusOK, credentialViewFrom(credential))
+}
+
+func (r *Runtime) deleteAdminCredential(writer http.ResponseWriter, request *http.Request) {
+	expected, ok := requireRevision(writer, request)
+	if !ok {
+		return
+	}
+	credentialID := chi.URLParam(request, "id")
+	r.adminMutationMu.Lock()
+	defer r.adminMutationMu.Unlock()
+	if err := r.store.DeleteCredential(request.Context(), credentialID, expected); err != nil {
+		if errors.Is(err, boltstore.ErrCredentialInUse) {
+			writeJSON(writer, http.StatusConflict, map[string]string{"error": "credential is still referenced"})
+			return
+		}
+		adminMutationError(writer, err)
+		return
+	}
+	if err := r.auditAdminMutation(request, "credential.delete", "credential", credentialID); err != nil {
+		adminAuditError(writer)
+		return
+	}
+	writer.WriteHeader(http.StatusNoContent)
+}
+
+func (r *Runtime) createAdminProvider(writer http.ResponseWriter, request *http.Request) {
+	var input providerInput
+	if err := decodeAdminJSON(request, &input); err != nil {
+		adminBadRequest(writer, "invalid request")
+		return
+	}
+	providerID, err := id.New("prv")
+	if err != nil {
+		adminStoreError(writer)
+		return
+	}
+	now := time.Now().UTC()
+	r.adminMutationMu.Lock()
+	defer r.adminMutationMu.Unlock()
+	instance, err := r.providerFromInput(request, providerID, input, now, now)
+	if err != nil {
+		adminBadRequest(writer, err.Error())
+		return
+	}
+	instance, err = r.store.PutProvider(request.Context(), instance, 0)
+	if err != nil {
+		adminMutationError(writer, err)
+		return
+	}
+	if err := r.reloadProviderRegistry(request.Context()); err != nil {
+		adminConfigurationError(writer, err)
+		return
+	}
+	if err := r.auditAdminMutation(request, "provider.create", "provider", instance.ID); err != nil {
+		adminAuditError(writer)
+		return
+	}
+	writer.Header().Set("ETag", revisionETag(instance.Revision))
+	writeJSON(writer, http.StatusCreated, instance)
+}
+
+func (r *Runtime) updateAdminProvider(writer http.ResponseWriter, request *http.Request) {
+	expected, ok := requireRevision(writer, request)
+	if !ok {
+		return
+	}
+	var input providerInput
+	if err := decodeAdminJSON(request, &input); err != nil {
+		adminBadRequest(writer, "invalid request")
+		return
+	}
+	r.adminMutationMu.Lock()
+	defer r.adminMutationMu.Unlock()
+	current, err := r.store.GetProvider(request.Context(), chi.URLParam(request, "id"))
+	if err != nil {
+		adminMutationError(writer, err)
+		return
+	}
+	if current.Revision != expected {
+		adminPreconditionFailed(writer)
+		return
+	}
+	instance, err := r.providerFromInput(request, current.ID, input, current.CreatedAt, time.Now().UTC())
+	if err != nil {
+		adminBadRequest(writer, err.Error())
+		return
+	}
+	if err := r.validateProviderCanDeactivate(request, instance.ID, instance.Enabled); err != nil {
+		writeJSON(writer, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	instance.DeletedAt = current.DeletedAt
+	instance, err = r.store.PutProvider(request.Context(), instance, expected)
+	if err != nil {
+		adminMutationError(writer, err)
+		return
+	}
+	if err := r.reloadProviderRegistry(request.Context()); err != nil {
+		adminConfigurationError(writer, err)
+		return
+	}
+	if err := r.auditAdminMutation(request, "provider.update", "provider", instance.ID); err != nil {
+		adminAuditError(writer)
+		return
+	}
+	writer.Header().Set("ETag", revisionETag(instance.Revision))
+	writeJSON(writer, http.StatusOK, instance)
+}
+
+func (r *Runtime) deleteAdminProvider(writer http.ResponseWriter, request *http.Request) {
+	expected, ok := requireRevision(writer, request)
+	if !ok {
+		return
+	}
+	r.adminMutationMu.Lock()
+	defer r.adminMutationMu.Unlock()
+	instance, err := r.store.GetProvider(request.Context(), chi.URLParam(request, "id"))
+	if err != nil {
+		adminMutationError(writer, err)
+		return
+	}
+	if instance.Revision != expected {
+		adminPreconditionFailed(writer)
+		return
+	}
+	if err := r.validateProviderCanDeactivate(request, instance.ID, false); err != nil {
+		writeJSON(writer, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	now := time.Now().UTC()
+	instance.Enabled = false
+	instance.UpdatedAt = now
+	instance.DeletedAt = &now
+	instance, err = r.store.PutProvider(request.Context(), instance, expected)
+	if err != nil {
+		adminMutationError(writer, err)
+		return
+	}
+	if err := r.reloadProviderRegistry(request.Context()); err != nil {
+		adminConfigurationError(writer, err)
+		return
+	}
+	if err := r.auditAdminMutation(request, "provider.delete", "provider", instance.ID); err != nil {
+		adminAuditError(writer)
+		return
+	}
+	writer.Header().Set("ETag", revisionETag(instance.Revision))
+	writer.WriteHeader(http.StatusNoContent)
+}
+
+func (r *Runtime) testAdminProvider(writer http.ResponseWriter, request *http.Request) {
+	providerID := chi.URLParam(request, "id")
+	instance, err := r.store.GetProvider(request.Context(), providerID)
+	if err != nil || instance.DeletedAt != nil {
+		adminNotFound(writer)
+		return
+	}
+	if !instance.Enabled {
+		adminBadRequest(writer, "provider is disabled")
+		return
+	}
+	adapter, ok := r.providers.AdapterForProvider(providerID)
+	if !ok {
+		adminBadRequest(writer, "provider requires an enabled route before connection testing")
+		return
+	}
+	prober, ok := adapter.(provider.Prober)
+	if !ok {
+		adminBadRequest(writer, "provider does not support connection testing")
+		return
+	}
+	deployments, err := r.store.ListDeployments(request.Context())
+	if err != nil {
+		adminStoreError(writer)
+		return
+	}
+	providerModel := ""
+	for _, deployment := range deployments {
+		if deployment.ProviderID == providerID && deployment.Enabled && deployment.DeletedAt == nil {
+			providerModel = deployment.ProviderModel
+			break
+		}
+	}
+	if providerModel == "" {
+		routes, listErr := r.store.ListRoutes(request.Context())
+		if listErr != nil {
+			adminStoreError(writer)
+			return
+		}
+		for _, route := range routes {
+			if route.ProviderID == providerID && route.Enabled && route.DeletedAt == nil {
+				providerModel = route.ProviderModel
+				break
+			}
+		}
+	}
+	r.runAdminProbe(writer, request, prober, providerModel, "provider", providerID, normalizedProviderCapabilities(instance))
+}
+
+func (r *Runtime) runAdminProbe(
+	writer http.ResponseWriter,
+	request *http.Request,
+	prober provider.Prober,
+	providerModel string,
+	resourceType string,
+	resourceID string,
+	capabilities domain.ProviderCapabilities,
+) {
+	timeout := r.config.Gateway.AttemptResponseHeaderTimeout.Value()
+	if timeout <= 0 {
+		timeout = 15 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(request.Context(), timeout)
+	defer cancel()
+	started := time.Now()
+	err := prober.Probe(ctx, providerModel)
+	latencyMS := time.Since(started).Milliseconds()
+	action := resourceType + ".test.success"
+	if err != nil {
+		action = resourceType + ".test.failure"
+	}
+	if auditErr := r.auditAdminMutation(request, action, resourceType, resourceID); auditErr != nil {
+		adminAuditError(writer)
+		return
+	}
+	if err != nil {
+		errorClass := provider.ErrorUnknown
+		var classified *provider.Error
+		if errors.As(err, &classified) {
+			errorClass = classified.Class
+		}
+		writeJSON(writer, http.StatusBadGateway, map[string]any{
+			"status": "unhealthy", "latency_ms": latencyMS, "error_class": errorClass,
+		})
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"status": "healthy", "latency_ms": latencyMS,
+		"capabilities": capabilities,
+	})
+}
+
+func (r *Runtime) testAdminRoute(writer http.ResponseWriter, request *http.Request) {
+	route, err := r.store.GetRoute(request.Context(), chi.URLParam(request, "id"))
+	if err != nil || route.DeletedAt != nil {
+		adminNotFound(writer)
+		return
+	}
+	if !route.Enabled {
+		adminBadRequest(writer, "route is disabled")
+		return
+	}
+	providerID := route.ProviderID
+	providerModel := route.ProviderModel
+	capabilities := domain.ProviderCapabilities{}
+	if route.DeploymentID != "" {
+		deployment, deploymentErr := r.store.GetDeployment(request.Context(), route.DeploymentID)
+		if deploymentErr != nil || deployment.DeletedAt != nil || !deployment.Enabled {
+			adminBadRequest(writer, "route deployment is unavailable")
+			return
+		}
+		providerID = deployment.ProviderID
+		providerModel = deployment.ProviderModel
+		capabilities = deployment.Capabilities
+	}
+	instance, err := r.store.GetProvider(request.Context(), providerID)
+	if err != nil || instance.DeletedAt != nil || !instance.Enabled {
+		adminBadRequest(writer, "route provider is unavailable")
+		return
+	}
+	if route.DeploymentID == "" {
+		capabilities = normalizedProviderCapabilities(instance)
+	}
+	adapter, ok := r.providers.AdapterForProvider(providerID)
+	if !ok {
+		adminBadRequest(writer, "route provider adapter is unavailable")
+		return
+	}
+	prober, ok := adapter.(provider.Prober)
+	if !ok {
+		adminBadRequest(writer, "provider does not support connection testing")
+		return
+	}
+	r.runAdminProbe(writer, request, prober, providerModel, "route", route.ID, capabilities)
+}
+
+func (r *Runtime) createAdminRoute(writer http.ResponseWriter, request *http.Request) {
+	var input routeInput
+	if err := decodeAdminJSON(request, &input); err != nil {
+		adminBadRequest(writer, "invalid request")
+		return
+	}
+	routeID, err := id.New("rte")
+	if err != nil {
+		adminStoreError(writer)
+		return
+	}
+	now := time.Now().UTC()
+	route := input.route(routeID, now, now)
+	if err := route.Validate(); err != nil {
+		adminBadRequest(writer, err.Error())
+		return
+	}
+	r.adminMutationMu.Lock()
+	defer r.adminMutationMu.Unlock()
+	if err := r.validateAdminRoute(request, route, ""); err != nil {
+		adminBadRequest(writer, err.Error())
+		return
+	}
+	route, err = r.store.PutRoute(request.Context(), route, 0)
+	if err != nil {
+		adminMutationError(writer, err)
+		return
+	}
+	if err := r.reloadProviderRegistry(request.Context()); err != nil {
+		adminConfigurationError(writer, err)
+		return
+	}
+	if err := r.auditAdminMutation(request, "route.create", "route", route.ID); err != nil {
+		adminAuditError(writer)
+		return
+	}
+	writer.Header().Set("ETag", revisionETag(route.Revision))
+	writeJSON(writer, http.StatusCreated, route)
+}
+
+func (r *Runtime) updateAdminRoute(writer http.ResponseWriter, request *http.Request) {
+	expected, ok := requireRevision(writer, request)
+	if !ok {
+		return
+	}
+	var input routeInput
+	if err := decodeAdminJSON(request, &input); err != nil {
+		adminBadRequest(writer, "invalid request")
+		return
+	}
+	r.adminMutationMu.Lock()
+	defer r.adminMutationMu.Unlock()
+	current, err := r.store.GetRoute(request.Context(), chi.URLParam(request, "id"))
+	if err != nil {
+		adminMutationError(writer, err)
+		return
+	}
+	if current.Revision != expected {
+		adminPreconditionFailed(writer)
+		return
+	}
+	route := input.route(current.ID, current.CreatedAt, time.Now().UTC())
+	route.DeletedAt = current.DeletedAt
+	if err := route.Validate(); err != nil {
+		adminBadRequest(writer, err.Error())
+		return
+	}
+	if err := r.validateAdminRoute(request, route, current.ID); err != nil {
+		adminBadRequest(writer, err.Error())
+		return
+	}
+	route, err = r.store.PutRoute(request.Context(), route, expected)
+	if err != nil {
+		adminMutationError(writer, err)
+		return
+	}
+	if err := r.reloadProviderRegistry(request.Context()); err != nil {
+		adminConfigurationError(writer, err)
+		return
+	}
+	if err := r.auditAdminMutation(request, "route.update", "route", route.ID); err != nil {
+		adminAuditError(writer)
+		return
+	}
+	writer.Header().Set("ETag", revisionETag(route.Revision))
+	writeJSON(writer, http.StatusOK, route)
+}
+
+func (r *Runtime) deleteAdminRoute(writer http.ResponseWriter, request *http.Request) {
+	expected, ok := requireRevision(writer, request)
+	if !ok {
+		return
+	}
+	r.adminMutationMu.Lock()
+	defer r.adminMutationMu.Unlock()
+	route, err := r.store.GetRoute(request.Context(), chi.URLParam(request, "id"))
+	if err != nil {
+		adminMutationError(writer, err)
+		return
+	}
+	if route.Revision != expected {
+		adminPreconditionFailed(writer)
+		return
+	}
+	now := time.Now().UTC()
+	route.Enabled = false
+	route.UpdatedAt = now
+	route.DeletedAt = &now
+	route, err = r.store.PutRoute(request.Context(), route, expected)
+	if err != nil {
+		adminMutationError(writer, err)
+		return
+	}
+	if err := r.reloadProviderRegistry(request.Context()); err != nil {
+		adminConfigurationError(writer, err)
+		return
+	}
+	if err := r.auditAdminMutation(request, "route.delete", "route", route.ID); err != nil {
+		adminAuditError(writer)
+		return
+	}
+	writer.Header().Set("ETag", revisionETag(route.Revision))
+	writer.WriteHeader(http.StatusNoContent)
+}
+
+func (r *Runtime) credentialFromInput(
+	id string,
+	input credentialInput,
+	current *domain.Credential,
+	createdAt time.Time,
+) (domain.Credential, error) {
+	if strings.TrimSpace(input.Name) == "" {
+		return domain.Credential{}, errors.New("credential name is required")
+	}
+	if !implementedProviderType(input.Type) {
+		return domain.Credential{}, errors.New("provider type is not implemented")
+	}
+	if _, err := safetransport.ValidateURL(input.BaseURL, safetransport.Policy{
+		RequireHTTPS: true, AllowPrivate: r.config.Security.AllowPrivateProviderEndpoints,
+	}); err != nil {
+		return domain.Credential{}, err
+	}
+	audience, err := safetransport.Audience(input.BaseURL, string(input.Type))
+	if err != nil {
+		return domain.Credential{}, err
+	}
+	var plaintext []byte
+	if input.Secret != nil {
+		plaintext = []byte(*input.Secret)
+		if len(plaintext) == 0 || len(plaintext) > 16<<10 {
+			clear(plaintext)
+			return domain.Credential{}, errors.New("provider secret must contain 1 to 16384 bytes")
+		}
+	} else {
+		if current == nil {
+			return domain.Credential{}, errors.New("provider secret is required")
+		}
+		plaintext, err = r.vault.DecryptCredential(
+			current.ID, string(current.Type), current.Audience, current.Ciphertext,
+		)
+		if err != nil {
+			return domain.Credential{}, errors.New("stored credential could not be decrypted")
+		}
+	}
+	defer clear(plaintext)
+	ciphertext, err := r.vault.EncryptCredential(id, string(input.Type), audience, plaintext)
+	if err != nil {
+		return domain.Credential{}, err
+	}
+	now := time.Now().UTC()
+	keyVersion := uint16(1)
+	if current != nil {
+		if current.KeyVersion == ^uint16(0) {
+			return domain.Credential{}, errors.New("credential key version is exhausted")
+		}
+		keyVersion = current.KeyVersion + 1
+	}
+	credential := domain.Credential{
+		ID: id, Name: input.Name, Type: input.Type, Audience: audience,
+		Ciphertext: ciphertext, KeyVersion: keyVersion, CreatedAt: createdAt, UpdatedAt: now,
+	}
+	return credential, credential.Validate()
+}
+
+func (r *Runtime) providerFromInput(
+	request *http.Request,
+	id string,
+	input providerInput,
+	createdAt time.Time,
+	updatedAt time.Time,
+) (domain.ProviderInstance, error) {
+	if !implementedProviderType(input.Type) {
+		return domain.ProviderInstance{}, errors.New("provider type is not implemented")
+	}
+	endpoint, err := safetransport.ValidateURL(input.BaseURL, safetransport.Policy{
+		RequireHTTPS: true, AllowPrivate: r.config.Security.AllowPrivateProviderEndpoints,
+	})
+	if err != nil {
+		return domain.ProviderInstance{}, err
+	}
+	credential, err := r.store.GetCredential(request.Context(), input.CredentialID)
+	if err != nil {
+		return domain.ProviderInstance{}, errors.New("credential was not found")
+	}
+	audience, err := safetransport.Audience(input.BaseURL, string(input.Type))
+	if err != nil {
+		return domain.ProviderInstance{}, err
+	}
+	if credential.Type != input.Type || credential.Audience != audience {
+		return domain.ProviderInstance{}, errors.New("credential type or audience does not match provider")
+	}
+	instance := domain.ProviderInstance{
+		ID: id, Name: input.Name, Type: input.Type, BaseURL: input.BaseURL,
+		APIVersion:     strings.TrimSpace(input.APIVersion),
+		CredentialID:   input.CredentialID,
+		AllowedHosts:   []string{strings.ToLower(endpoint.Hostname())},
+		MaxConcurrency: input.MaxConcurrency,
+		Enabled:        input.Enabled, CreatedAt: createdAt, UpdatedAt: updatedAt,
+	}
+	if input.Capabilities == nil {
+		instance.Capabilities = domain.DefaultProviderCapabilities(input.Type)
+	} else {
+		instance.Capabilities = *input.Capabilities
+		if !instance.Capabilities.Chat && !instance.Capabilities.Embeddings {
+			return domain.ProviderInstance{}, errors.New("provider must declare chat or embeddings capability")
+		}
+	}
+	return instance, instance.Validate()
+}
+
+func (input routeInput) route(id string, createdAt, updatedAt time.Time) domain.Route {
+	return domain.Route{
+		ID: id, PublicModel: input.PublicModel, DeploymentID: input.DeploymentID, ProviderID: input.ProviderID,
+		ProviderModel: input.ProviderModel, InputMicrosPerMillion: input.InputMicrosPerMillion,
+		OutputMicrosPerMillion: input.OutputMicrosPerMillion, Priority: input.Priority,
+		Strategy: input.Strategy, Enabled: input.Enabled, CreatedAt: createdAt, UpdatedAt: updatedAt,
+	}
+}
+
+func (r *Runtime) validateAdminRoute(request *http.Request, candidate domain.Route, replacingID string) error {
+	if candidate.DeploymentID != "" {
+		deployment, err := r.store.GetDeployment(request.Context(), candidate.DeploymentID)
+		if err != nil || deployment.DeletedAt != nil || (candidate.Enabled && !deployment.Enabled) {
+			return errors.New("route deployment is unavailable")
+		}
+		instance, err := r.store.GetProvider(request.Context(), deployment.ProviderID)
+		if err != nil || instance.DeletedAt != nil || (candidate.Enabled && !instance.Enabled) {
+			return errors.New("route deployment provider is unavailable")
+		}
+	} else {
+		instance, err := r.store.GetProvider(request.Context(), candidate.ProviderID)
+		if err != nil || instance.DeletedAt != nil || (candidate.Enabled && !instance.Enabled) {
+			return errors.New("route provider is unavailable")
+		}
+	}
+	routes, err := r.store.ListRoutes(request.Context())
+	if err != nil {
+		return errors.New("routes are unavailable")
+	}
+	strategy := candidate.Strategy
+	if strategy == "" {
+		strategy = "ordered"
+	}
+	for _, route := range routes {
+		if route.ID == replacingID || route.DeletedAt != nil || !route.Enabled ||
+			!candidate.Enabled || route.PublicModel != candidate.PublicModel {
+			continue
+		}
+		existingStrategy := route.Strategy
+		if existingStrategy == "" {
+			existingStrategy = "ordered"
+		}
+		if existingStrategy != strategy {
+			return errors.New("all enabled routes for a public model must use the same strategy")
+		}
+	}
+	return nil
+}
+
+func (r *Runtime) validateCredentialReferences(
+	request *http.Request,
+	credential domain.Credential,
+) error {
+	instances, err := r.store.ListProviders(request.Context())
+	if err != nil {
+		return errors.New("providers are unavailable")
+	}
+	for _, instance := range instances {
+		if instance.CredentialID != credential.ID || instance.DeletedAt != nil {
+			continue
+		}
+		audience, err := safetransport.Audience(instance.BaseURL, string(instance.Type))
+		if err != nil || instance.Type != credential.Type || audience != credential.Audience {
+			return errors.New("credential type or audience conflicts with an existing provider")
+		}
+	}
+	return nil
+}
+
+func (r *Runtime) validateProviderCanDeactivate(
+	request *http.Request,
+	providerID string,
+	willBeEnabled bool,
+) error {
+	if willBeEnabled {
+		return nil
+	}
+	deployments, err := r.store.ListDeployments(request.Context())
+	if err != nil {
+		return errors.New("deployments are unavailable")
+	}
+	for _, deployment := range deployments {
+		if deployment.ProviderID == providerID && deployment.Enabled && deployment.DeletedAt == nil {
+			return errors.New("disable or delete the provider's active deployments first")
+		}
+	}
+	routes, err := r.store.ListRoutes(request.Context())
+	if err != nil {
+		return errors.New("routes are unavailable")
+	}
+	for _, route := range routes {
+		if route.DeploymentID == "" && route.ProviderID == providerID && route.Enabled && route.DeletedAt == nil {
+			return errors.New("disable or delete the provider's active routes first")
+		}
+	}
+	return nil
+}
+
+func implementedProviderType(value domain.ProviderType) bool {
+	switch value {
+	case domain.ProviderOpenAI, domain.ProviderAzureOpenAI,
+		domain.ProviderDeepSeek, domain.ProviderOpenAICompatible, domain.ProviderGemini,
+		domain.ProviderBedrock:
+		return true
+	default:
+		return false
+	}
+}
+
+func credentialViewFrom(item domain.Credential) credentialView {
+	return credentialView{
+		ID: item.ID, Name: item.Name, Type: item.Type,
+		SecretConfigured: len(item.Ciphertext) > 0, KeyVersion: item.KeyVersion,
+		Revision: item.Revision,
+	}
+}
+
+func adminConfigurationError(writer http.ResponseWriter, err error) {
+	writeJSON(writer, http.StatusConflict, map[string]string{
+		"error": "configuration could not be activated",
+	})
+}

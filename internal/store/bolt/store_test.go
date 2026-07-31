@@ -1,0 +1,612 @@
+package bolt
+
+import (
+	"bytes"
+	"context"
+	"encoding/binary"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/akz142857/Heimdall/internal/domain"
+	"github.com/akz142857/Heimdall/internal/ledger"
+	bbolt "go.etcd.io/bbolt"
+)
+
+func TestMetadataMigrationFromV1IsAtomicAndRecorded(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "metadata.db")
+	createV1Metadata(t, path)
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	version, err := store.SchemaVersion()
+	if err != nil || version != schemaVersion {
+		t.Fatalf("version=%d err=%v", version, err)
+	}
+	history, err := store.MigrationHistory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 3 ||
+		history[0] != (MigrationRecord{Version: 1, Name: "initial_schema"}) ||
+		history[1] != (MigrationRecord{Version: 2, Name: "migration_history"}) ||
+		history[2] != (MigrationRecord{Version: 3, Name: "deployments"}) {
+		t.Fatalf("history=%#v", history)
+	}
+}
+
+func TestMetadataSnapshotIsConsistentAndReopenable(t *testing.T) {
+	root := t.TempDir()
+	store, err := Open(filepath.Join(root, "metadata.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshotPath := filepath.Join(root, "stage", "metadata.db")
+	info, err := store.Snapshot(snapshotPath)
+	if err != nil {
+		store.Close()
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if info.SchemaVersion != schemaVersion || info.TxID == 0 {
+		t.Fatalf("snapshot info=%#v", info)
+	}
+	snapshot, err := Open(snapshotPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer snapshot.Close()
+	version, err := snapshot.SchemaVersion()
+	if err != nil || version != schemaVersion {
+		t.Fatalf("snapshot schema=%d err=%v", version, err)
+	}
+}
+
+func TestV2RouteMigrationMaterializesDeploymentAndPreservesRoute(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "metadata.db")
+	db, err := bbolt.Open(path, 0o600, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	legacy := domain.Route{
+		ID: "route_legacy", PublicModel: "chat", ProviderID: "provider_legacy",
+		ProviderModel: "gpt-legacy", InputMicrosPerMillion: 10, OutputMicrosPerMillion: 20,
+		Priority: 3, Enabled: true, CreatedAt: now, UpdatedAt: now, Revision: 4,
+	}
+	err = db.Update(func(tx *bbolt.Tx) error {
+		for _, name := range requiredBuckets() {
+			if bytes.Equal(name, bucketDeployments) {
+				continue
+			}
+			if _, createErr := tx.CreateBucketIfNotExists(name); createErr != nil {
+				return createErr
+			}
+		}
+		encodedRoute, encodeErr := json.Marshal(legacy)
+		if encodeErr != nil {
+			return encodeErr
+		}
+		if putErr := tx.Bucket(bucketRoutes).Put([]byte(legacy.ID), encodedRoute); putErr != nil {
+			return putErr
+		}
+		for version, name := range map[uint64]string{1: "initial_schema", 2: "migration_history"} {
+			record, encodeErr := json.Marshal(MigrationRecord{Version: version, Name: name})
+			if encodeErr != nil {
+				return encodeErr
+			}
+			if putErr := tx.Bucket(bucketMigrationHistory).Put(versionKey(version), record); putErr != nil {
+				return putErr
+			}
+		}
+		var encodedVersion [8]byte
+		binary.BigEndian.PutUint64(encodedVersion[:], 2)
+		return tx.Bucket(bucketMeta).Put(keySchemaVersion, encodedVersion[:])
+	})
+	if closeErr := db.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	route, err := store.GetRoute(context.Background(), legacy.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if route.DeploymentID != "dep_migrated_"+legacy.ID || route.Revision != legacy.Revision {
+		t.Fatalf("migrated route=%#v", route)
+	}
+	deployment, err := store.GetDeployment(context.Background(), route.DeploymentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deployment.ProviderID != legacy.ProviderID || deployment.ProviderModel != legacy.ProviderModel ||
+		deployment.InputMicrosPerMillion != legacy.InputMicrosPerMillion || deployment.Revision != 1 {
+		t.Fatalf("migrated deployment=%#v", deployment)
+	}
+}
+
+func TestInterruptedMetadataMigrationRollsBackToV1(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "metadata.db")
+	createV1Metadata(t, path)
+	injected := errors.New("injected migration failure")
+	if _, err := openWithMigrationHook(path, func(version uint64) error {
+		if version == 2 {
+			return injected
+		}
+		return nil
+	}); !errors.Is(err, injected) {
+		t.Fatalf("unexpected migration error: %v", err)
+	}
+	db, err := bbolt.Open(path, 0o600, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = db.View(func(tx *bbolt.Tx) error {
+		raw := tx.Bucket(bucketMeta).Get(keySchemaVersion)
+		if binary.BigEndian.Uint64(raw) != 1 {
+			t.Fatalf("schema changed after rollback: %x", raw)
+		}
+		if tx.Bucket(bucketMigrationHistory) != nil {
+			t.Fatal("migration bucket survived rolled-back transaction")
+		}
+		return nil
+	})
+	if closeErr := db.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(path)
+	if err != nil {
+		t.Fatalf("retry migration: %v", err)
+	}
+	store.Close()
+}
+
+func TestDeploymentMigrationSurvivesEveryInjectedKillPoint(t *testing.T) {
+	const routeCount = 8
+	root := t.TempDir()
+	templatePath := filepath.Join(root, "metadata-v2.db")
+	createV2MetadataWithRoutes(t, templatePath, routeCount)
+	template, err := os.ReadFile(templatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var points []string
+	probePath := filepath.Join(root, "probe.db")
+	if err := os.WriteFile(probePath, template, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	probe, err := openWithMigrationStepHook(probePath, func(version uint64, point string) error {
+		if version == 3 {
+			points = append(points, point)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := probe.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if len(points) < routeCount*4+7 {
+		t.Fatalf("only %d migration fault points were exercised: %v", len(points), points)
+	}
+
+	for killPoint := range points {
+		killPoint := killPoint
+		t.Run(fmt.Sprintf("%03d_%s", killPoint, points[killPoint]), func(t *testing.T) {
+			path := filepath.Join(root, fmt.Sprintf("kill-%03d.db", killPoint))
+			if err := os.WriteFile(path, template, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			injected := errors.New("injected process death")
+			seen := 0
+			_, err := openWithMigrationStepHook(path, func(version uint64, _ string) error {
+				if version != 3 {
+					return nil
+				}
+				current := seen
+				seen++
+				if current == killPoint {
+					return injected
+				}
+				return nil
+			})
+			if !errors.Is(err, injected) {
+				t.Fatalf("kill point %d returned %v", killPoint, err)
+			}
+			assertV2MetadataUnchanged(t, path, routeCount)
+
+			retried, err := Open(path)
+			if err != nil {
+				t.Fatalf("retry after kill point %d: %v", killPoint, err)
+			}
+			defer retried.Close()
+			version, err := retried.SchemaVersion()
+			if err != nil || version != schemaVersion {
+				t.Fatalf("schema=%d err=%v", version, err)
+			}
+			for index := 0; index < routeCount; index++ {
+				routeID := fmt.Sprintf("route_%02d", index)
+				route, err := retried.GetRoute(context.Background(), routeID)
+				if err != nil || route.DeploymentID != "dep_migrated_"+routeID {
+					t.Fatalf("route %s after retry=%#v err=%v", routeID, route, err)
+				}
+				if _, err := retried.GetDeployment(context.Background(), route.DeploymentID); err != nil {
+					t.Fatalf("deployment %s after retry: %v", route.DeploymentID, err)
+				}
+			}
+		})
+	}
+}
+
+func createV2MetadataWithRoutes(t *testing.T, path string, count int) {
+	t.Helper()
+	db, err := bbolt.Open(path, 0o600, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = db.Update(func(tx *bbolt.Tx) error {
+		for _, name := range requiredBuckets() {
+			if bytes.Equal(name, bucketDeployments) {
+				continue
+			}
+			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
+				return err
+			}
+		}
+		var encodedVersion [8]byte
+		binary.BigEndian.PutUint64(encodedVersion[:], 2)
+		if err := tx.Bucket(bucketMeta).Put(keySchemaVersion, encodedVersion[:]); err != nil {
+			return err
+		}
+		for version, name := range map[uint64]string{1: "initial_schema", 2: "migration_history"} {
+			record, err := json.Marshal(MigrationRecord{Version: version, Name: name})
+			if err != nil {
+				return err
+			}
+			if err := tx.Bucket(bucketMigrationHistory).Put(versionKey(version), record); err != nil {
+				return err
+			}
+		}
+		now := time.Unix(1_700_000_000, 0).UTC()
+		for index := 0; index < count; index++ {
+			route := domain.Route{
+				ID: fmt.Sprintf("route_%02d", index), PublicModel: fmt.Sprintf("chat-%02d", index),
+				ProviderID: "provider_legacy", ProviderModel: fmt.Sprintf("model-%02d", index),
+				InputMicrosPerMillion: 10, OutputMicrosPerMillion: 20,
+				Priority: index, Enabled: true, CreatedAt: now, UpdatedAt: now, Revision: 1,
+			}
+			encoded, err := json.Marshal(route)
+			if err != nil {
+				return err
+			}
+			if err := tx.Bucket(bucketRoutes).Put([]byte(route.ID), encoded); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if closeErr := db.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertV2MetadataUnchanged(t *testing.T, path string, routeCount int) {
+	t.Helper()
+	db, err := bbolt.Open(path, 0o600, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = db.View(func(tx *bbolt.Tx) error {
+		if tx.Bucket(bucketDeployments) != nil {
+			return errors.New("deployments bucket survived rolled-back migration")
+		}
+		rawVersion := tx.Bucket(bucketMeta).Get(keySchemaVersion)
+		if len(rawVersion) != 8 || binary.BigEndian.Uint64(rawVersion) != 2 {
+			return fmt.Errorf("schema changed after rollback: %x", rawVersion)
+		}
+		routes := tx.Bucket(bucketRoutes)
+		if routes.Stats().KeyN != routeCount {
+			return fmt.Errorf("route count changed: %d", routes.Stats().KeyN)
+		}
+		return routes.ForEach(func(_, raw []byte) error {
+			var route domain.Route
+			if err := json.Unmarshal(raw, &route); err != nil {
+				return err
+			}
+			if route.DeploymentID != "" || route.ProviderID != "provider_legacy" || route.ProviderModel == "" {
+				return fmt.Errorf("legacy route was partially mutated: %#v", route)
+			}
+			return nil
+		})
+	})
+	if closeErr := db.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMetadataNewerSchemaIsRejectedWithoutMutation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "metadata.db")
+	createV1Metadata(t, path)
+	db, err := bbolt.Open(path, 0o600, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Update(func(tx *bbolt.Tx) error {
+		var encoded [8]byte
+		binary.BigEndian.PutUint64(encoded[:], schemaVersion+1)
+		return tx.Bucket(bucketMeta).Put(keySchemaVersion, encoded[:])
+	}); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	if _, err := Open(path); err == nil {
+		t.Fatal("newer metadata schema was accepted")
+	}
+	db, err = bbolt.Open(path, 0o600, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.View(func(tx *bbolt.Tx) error {
+		if tx.Bucket(bucketMigrationHistory) != nil {
+			t.Fatal("rejected newer schema was mutated")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func createV1Metadata(t *testing.T, path string) {
+	t.Helper()
+	db, err := bbolt.Open(path, 0o600, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = db.Update(func(tx *bbolt.Tx) error {
+		for _, name := range requiredBuckets() {
+			if bytes.Equal(name, bucketMigrationHistory) || bytes.Equal(name, bucketDeployments) {
+				continue
+			}
+			if _, err := tx.CreateBucket(name); err != nil {
+				return err
+			}
+		}
+		var encoded [8]byte
+		binary.BigEndian.PutUint64(encoded[:], 1)
+		return tx.Bucket(bucketMeta).Put(keySchemaVersion, encoded[:])
+	})
+	if closeErr := db.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestUsageCheckpointPersistenceAndMonotonicity(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	first := ledger.Watermark{Generation: 1, Offset: 100, Sequence: 2}
+	if err := store.PutUsageCheckpoint(first, []byte(`{"version":1}`)); err != nil {
+		t.Fatal(err)
+	}
+	got, payload, err := store.UsageCheckpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != first || string(payload) != `{"version":1}` {
+		t.Fatalf("watermark=%#v payload=%s", got, payload)
+	}
+	older := ledger.Watermark{Generation: 1, Offset: 50, Sequence: 1}
+	if err := store.PutUsageCheckpoint(older, []byte(`{"version":1}`)); err == nil {
+		t.Fatal("expected a backwards checkpoint to be rejected")
+	}
+}
+
+func TestAuditCheckpointPersistenceAndMonotonicity(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.PutAuditCheckpoint(AuditCheckpoint{}); err != nil {
+		t.Fatal(err)
+	}
+	var hash [32]byte
+	hash[0] = 1
+	checkpoint := AuditCheckpoint{Records: 1, Bytes: 100, LastHash: hash}
+	if err := store.PutAuditCheckpoint(checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.AuditCheckpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != checkpoint {
+		t.Fatalf("checkpoint=%#v", got)
+	}
+	if err := store.PutAuditCheckpoint(AuditCheckpoint{}); err == nil {
+		t.Fatal("expected backwards checkpoint rejection")
+	}
+	conflict := checkpoint
+	conflict.Bytes++
+	if err := store.PutAuditCheckpoint(conflict); err == nil {
+		t.Fatal("expected same-sequence conflict")
+	}
+}
+
+func TestCredentialPersistenceAndRevision(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "metadata.db")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	credential := domain.Credential{
+		ID:         "cred_1",
+		Name:       "openai",
+		Type:       domain.ProviderOpenAI,
+		Audience:   "https://api.openai.com:443",
+		Ciphertext: []byte("ciphertext"),
+		KeyVersion: 1,
+		CreatedAt:  time.Now().UTC(),
+		UpdatedAt:  time.Now().UTC(),
+	}
+	credential, err = store.PutCredential(ctx, credential, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if credential.Revision != 1 {
+		t.Fatalf("unexpected revision: %d", credential.Revision)
+	}
+	credential.Name = "renamed"
+	if _, err := store.PutCredential(ctx, credential, 99); !errors.Is(err, ErrRevisionConflict) {
+		t.Fatalf("expected revision conflict, got %v", err)
+	}
+	credential, err = store.PutCredential(ctx, credential, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if credential.Revision != 2 {
+		t.Fatalf("unexpected updated revision: %d", credential.Revision)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	got, err := store.GetCredential(ctx, credential.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != "renamed" || !bytes.Equal(got.Ciphertext, credential.Ciphertext) {
+		t.Fatalf("unexpected credential after reopen: %#v", got)
+	}
+}
+
+func TestGatewayKeyHashIndex(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	project := domain.Project{ID: "prj_1", Name: "project", Enabled: true}
+	if _, err := store.PutProject(ctx, project, 0); err != nil {
+		t.Fatal(err)
+	}
+	var hash [32]byte
+	copy(hash[:], []byte("unique-hash"))
+	key := domain.GatewayKey{
+		ID:          "key_1",
+		ProjectID:   project.ID,
+		Name:        "production",
+		HashVersion: 1,
+		KeyHash:     hash,
+		Enabled:     true,
+		CreatedAt:   time.Now().UTC(),
+	}
+	if _, err := store.PutGatewayKey(ctx, key, 0); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.FindGatewayKeyByHash(ctx, hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != key.ID {
+		t.Fatalf("unexpected key: %#v", got)
+	}
+}
+
+func TestProviderAndRouteReferencesAndUniqueness(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	credential := domain.Credential{
+		ID:         "cred_1",
+		Name:       "openai",
+		Type:       domain.ProviderOpenAI,
+		Audience:   "https://api.openai.com:443",
+		Ciphertext: []byte("ciphertext"),
+		KeyVersion: 1,
+		CreatedAt:  time.Now().UTC(),
+		UpdatedAt:  time.Now().UTC(),
+	}
+	if _, err := store.PutCredential(ctx, credential, 0); err != nil {
+		t.Fatal(err)
+	}
+	instance := domain.ProviderInstance{
+		ID:           "provider_1",
+		Name:         "OpenAI",
+		Type:         domain.ProviderOpenAI,
+		BaseURL:      "https://api.openai.com",
+		CredentialID: credential.ID,
+		AllowedHosts: []string{"api.openai.com"},
+		Enabled:      true,
+		CreatedAt:    time.Now().UTC(),
+		UpdatedAt:    time.Now().UTC(),
+	}
+	if _, err := store.PutProvider(ctx, instance, 0); err != nil {
+		t.Fatal(err)
+	}
+	route := domain.Route{
+		ID:                    "route_1",
+		PublicModel:           "chat",
+		ProviderID:            instance.ID,
+		ProviderModel:         "gpt-test",
+		InputMicrosPerMillion: 100,
+		Enabled:               true,
+		CreatedAt:             time.Now().UTC(),
+		UpdatedAt:             time.Now().UTC(),
+	}
+	if _, err := store.PutRoute(ctx, route, 0); err != nil {
+		t.Fatal(err)
+	}
+	fallback := route
+	fallback.ID = "route_2"
+	fallback.Priority = 1
+	if _, err := store.PutRoute(ctx, fallback, 0); err != nil {
+		t.Fatalf("store fallback route: %v", err)
+	}
+	routes, err := store.ListRoutes(ctx)
+	if err != nil || len(routes) != 2 || routes[0].ProviderID != instance.ID {
+		t.Fatalf("unexpected routes=%#v err=%v", routes, err)
+	}
+}

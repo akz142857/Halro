@@ -1,0 +1,465 @@
+package config
+
+import (
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/netip"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"gopkg.in/yaml.v3"
+)
+
+const SchemaVersion = 1
+
+type Config struct {
+	Version        int            `yaml:"version"`
+	Server         Server         `yaml:"server"`
+	TLS            TLS            `yaml:"tls"`
+	Storage        Storage        `yaml:"storage"`
+	Admin          Admin          `yaml:"admin"`
+	Usage          Usage          `yaml:"usage"`
+	Gateway        Gateway        `yaml:"gateway"`
+	Retry          Retry          `yaml:"retry"`
+	CircuitBreaker CircuitBreaker `yaml:"circuit_breaker"`
+	Alerts         Alerts         `yaml:"alerts"`
+	Security       Security       `yaml:"security"`
+	Metrics        Metrics        `yaml:"metrics"`
+}
+
+type Server struct {
+	GatewayListen     string   `yaml:"gateway_listen"`
+	AdminListen       string   `yaml:"admin_listen"`
+	MetricsListen     string   `yaml:"metrics_listen"`
+	ReadHeaderTimeout Duration `yaml:"read_header_timeout"`
+	ReadBodyTimeout   Duration `yaml:"read_body_timeout"`
+	MaxHeaderBytes    int      `yaml:"max_header_bytes"`
+	MaxRequestBytes   int64    `yaml:"max_request_bytes"`
+}
+
+type TLS struct {
+	Enabled  bool   `yaml:"enabled"`
+	CertFile string `yaml:"cert_file"`
+	KeyFile  string `yaml:"key_file"`
+}
+
+type Storage struct {
+	DataDir       string `yaml:"data_dir"`
+	MetadataFile  string `yaml:"metadata_file"`
+	MasterKeyFile string `yaml:"master_key_file"`
+}
+
+type Usage struct {
+	Durability             string   `yaml:"durability"`
+	Timezone               string   `yaml:"timezone"`
+	WALQueueCapacity       int      `yaml:"wal_queue_capacity"`
+	WALMaxBatch            int      `yaml:"wal_max_batch"`
+	WALFlushInterval       Duration `yaml:"wal_flush_interval"`
+	AnalyticsQueueCapacity int      `yaml:"analytics_queue_capacity"`
+	CheckpointInterval     Duration `yaml:"checkpoint_interval"`
+	ParquetInterval        Duration `yaml:"parquet_interval"`
+	RetentionDays          int      `yaml:"retention_days"`
+}
+
+type Admin struct {
+	SessionTTL     Duration `yaml:"session_ttl"`
+	IdleTimeout    Duration `yaml:"idle_timeout"`
+	LoginRPM       int      `yaml:"login_rpm"`
+	ExternalOrigin string   `yaml:"external_origin"`
+}
+
+type Gateway struct {
+	RouteTotalTimeout            Duration `yaml:"route_total_timeout"`
+	AttemptConnectTimeout        Duration `yaml:"attempt_connect_timeout"`
+	AttemptResponseHeaderTimeout Duration `yaml:"attempt_response_header_timeout"`
+	StreamIdleTimeout            Duration `yaml:"stream_idle_timeout"`
+	DownstreamWriteTimeout       Duration `yaml:"downstream_write_timeout"`
+	StreamMaxDuration            Duration `yaml:"stream_max_duration"`
+	MaxTotalAttempts             int      `yaml:"max_total_attempts"`
+	HealthProbeInterval          Duration `yaml:"health_probe_interval"`
+}
+
+type Retry struct {
+	MaxAttemptsPerTarget int      `yaml:"max_attempts_per_target"`
+	BaseDelay            Duration `yaml:"base_delay"`
+	MaxDelay             Duration `yaml:"max_delay"`
+	Jitter               bool     `yaml:"jitter"`
+}
+
+type CircuitBreaker struct {
+	ConsecutiveFailures int      `yaml:"consecutive_failures"`
+	OpenDuration        Duration `yaml:"open_duration"`
+	HalfOpenMaxRequests int      `yaml:"half_open_max_requests"`
+}
+
+type Alerts struct {
+	QueueCapacity int      `yaml:"queue_capacity"`
+	Workers       int      `yaml:"workers"`
+	Timeout       Duration `yaml:"timeout"`
+	MaxAttempts   int      `yaml:"max_attempts"`
+	BaseDelay     Duration `yaml:"base_delay"`
+	MaxDelay      Duration `yaml:"max_delay"`
+	DedupCooldown Duration `yaml:"dedup_cooldown"`
+}
+
+type Duration time.Duration
+
+func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind != yaml.ScalarNode {
+		return errors.New("duration must be a scalar")
+	}
+	parsed, err := time.ParseDuration(value.Value)
+	if err != nil {
+		return err
+	}
+	*d = Duration(parsed)
+	return nil
+}
+
+func (d Duration) Value() time.Duration {
+	return time.Duration(d)
+}
+
+type Security struct {
+	AllowPrivateProviderEndpoints bool     `yaml:"allow_private_provider_endpoints"`
+	AllowPrivateWebhooks          bool     `yaml:"allow_private_webhooks"`
+	TrustProxyHeaders             bool     `yaml:"trust_proxy_headers"`
+	TrustedProxyCIDRs             []string `yaml:"trusted_proxy_cidrs"`
+}
+
+type Metrics struct {
+	Enabled     bool `yaml:"enabled"`
+	RequireAuth bool `yaml:"require_auth"`
+}
+
+type LoadOptions struct {
+	AllowInsecurePublicGateway bool
+}
+
+func Load(path string, opts LoadOptions) (Config, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return Config{}, fmt.Errorf("open config: %w", err)
+	}
+	defer file.Close()
+
+	cfg, err := Decode(file)
+	if err != nil {
+		return Config{}, err
+	}
+	if err := cfg.Normalize(); err != nil {
+		return Config{}, err
+	}
+	if err := cfg.Validate(opts); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
+func Decode(r io.Reader) (Config, error) {
+	decoder := yaml.NewDecoder(r)
+	decoder.KnownFields(true)
+
+	var cfg Config
+	if err := decoder.Decode(&cfg); err != nil {
+		return Config{}, fmt.Errorf("decode config: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return Config{}, errors.New("decode config: multiple YAML documents are not allowed")
+		}
+		return Config{}, fmt.Errorf("decode trailing config: %w", err)
+	}
+	return cfg, nil
+}
+
+func (c *Config) Normalize() error {
+	var err error
+	c.Storage.DataDir, err = cleanAbsolutePath(c.Storage.DataDir)
+	if err != nil {
+		return fmt.Errorf("storage.data_dir: %w", err)
+	}
+	c.Storage.MasterKeyFile, err = cleanAbsolutePath(c.Storage.MasterKeyFile)
+	if err != nil {
+		return fmt.Errorf("storage.master_key_file: %w", err)
+	}
+	if c.TLS.CertFile != "" {
+		c.TLS.CertFile, err = cleanAbsolutePath(c.TLS.CertFile)
+		if err != nil {
+			return fmt.Errorf("tls.cert_file: %w", err)
+		}
+	}
+	if c.TLS.KeyFile != "" {
+		c.TLS.KeyFile, err = cleanAbsolutePath(c.TLS.KeyFile)
+		if err != nil {
+			return fmt.Errorf("tls.key_file: %w", err)
+		}
+	}
+	if c.Retry.MaxAttemptsPerTarget == 0 {
+		c.Retry.MaxAttemptsPerTarget = 2
+	}
+	if c.Retry.BaseDelay == 0 {
+		c.Retry.BaseDelay = Duration(100 * time.Millisecond)
+	}
+	if c.Retry.MaxDelay == 0 {
+		c.Retry.MaxDelay = Duration(2 * time.Second)
+	}
+	if c.CircuitBreaker.ConsecutiveFailures == 0 {
+		c.CircuitBreaker.ConsecutiveFailures = 5
+	}
+	if c.Gateway.HealthProbeInterval == 0 {
+		c.Gateway.HealthProbeInterval = Duration(30 * time.Second)
+	}
+	if c.CircuitBreaker.OpenDuration == 0 {
+		c.CircuitBreaker.OpenDuration = Duration(30 * time.Second)
+	}
+	if c.CircuitBreaker.HalfOpenMaxRequests == 0 {
+		c.CircuitBreaker.HalfOpenMaxRequests = 1
+	}
+	if c.Alerts.QueueCapacity == 0 {
+		c.Alerts.QueueCapacity = 1024
+	}
+	if c.Alerts.Workers == 0 {
+		c.Alerts.Workers = 2
+	}
+	if c.Alerts.Timeout == 0 {
+		c.Alerts.Timeout = Duration(5 * time.Second)
+	}
+	if c.Alerts.MaxAttempts == 0 {
+		c.Alerts.MaxAttempts = 3
+	}
+	if c.Alerts.BaseDelay == 0 {
+		c.Alerts.BaseDelay = Duration(250 * time.Millisecond)
+	}
+	if c.Alerts.MaxDelay == 0 {
+		c.Alerts.MaxDelay = Duration(5 * time.Second)
+	}
+	if c.Alerts.DedupCooldown == 0 {
+		c.Alerts.DedupCooldown = Duration(time.Minute)
+	}
+	if c.Usage.WALQueueCapacity == 0 {
+		c.Usage.WALQueueCapacity = 4096
+	}
+	if c.Usage.AnalyticsQueueCapacity == 0 {
+		c.Usage.AnalyticsQueueCapacity = 4096
+	}
+	if c.Usage.WALMaxBatch == 0 {
+		c.Usage.WALMaxBatch = 128
+	}
+	if c.Usage.WALFlushInterval == 0 {
+		c.Usage.WALFlushInterval = Duration(2 * time.Millisecond)
+	}
+	if c.Usage.CheckpointInterval == 0 {
+		c.Usage.CheckpointInterval = Duration(time.Minute)
+	}
+	if c.Usage.ParquetInterval == 0 {
+		c.Usage.ParquetInterval = Duration(time.Hour)
+	}
+	if c.Usage.RetentionDays == 0 {
+		c.Usage.RetentionDays = 90
+	}
+	if c.Admin.SessionTTL == 0 {
+		c.Admin.SessionTTL = Duration(8 * time.Hour)
+	}
+	if c.Admin.IdleTimeout == 0 {
+		c.Admin.IdleTimeout = Duration(30 * time.Minute)
+	}
+	if c.Admin.LoginRPM == 0 {
+		c.Admin.LoginRPM = 5
+	}
+	return nil
+}
+
+func (c Config) Validate(opts LoadOptions) error {
+	var problems []error
+	if c.Version != SchemaVersion {
+		problems = append(problems, fmt.Errorf("version must be %d", SchemaVersion))
+	}
+	if c.Storage.DataDir == "" {
+		problems = append(problems, errors.New("storage.data_dir is required"))
+	}
+	if c.Storage.MasterKeyFile == "" {
+		problems = append(problems, errors.New("storage.master_key_file is required"))
+	}
+	if c.Storage.MetadataFile == "" || filepath.Base(c.Storage.MetadataFile) != c.Storage.MetadataFile {
+		problems = append(problems, errors.New("storage.metadata_file must be a file name without path components"))
+	}
+	if c.TLS.Enabled {
+		if c.TLS.CertFile == "" || c.TLS.KeyFile == "" {
+			problems = append(problems, errors.New("tls.cert_file and tls.key_file are required when TLS is enabled"))
+		}
+	} else if c.TLS.CertFile != "" || c.TLS.KeyFile != "" {
+		problems = append(problems, errors.New("tls cert/key cannot be set while TLS is disabled"))
+	}
+
+	problems = append(problems, validateListener("server.gateway_listen", c.Server.GatewayListen, c.TLS.Enabled, opts.AllowInsecurePublicGateway)...)
+	problems = append(problems, validateListener("server.admin_listen", c.Server.AdminListen, c.TLS.Enabled, false)...)
+	if c.Metrics.Enabled {
+		problems = append(problems, validateListener("server.metrics_listen", c.Server.MetricsListen, c.TLS.Enabled, false)...)
+	}
+	listeners := map[string]string{
+		"gateway": c.Server.GatewayListen,
+		"admin":   c.Server.AdminListen,
+	}
+	if c.Metrics.Enabled {
+		listeners["metrics"] = c.Server.MetricsListen
+	}
+	for leftName, leftAddress := range listeners {
+		for rightName, rightAddress := range listeners {
+			if leftName < rightName && leftAddress == rightAddress {
+				problems = append(problems, fmt.Errorf("server %s and %s listeners must be distinct", leftName, rightName))
+			}
+		}
+	}
+
+	if c.Server.ReadHeaderTimeout <= 0 {
+		problems = append(problems, errors.New("server.read_header_timeout must be positive"))
+	}
+	if c.Server.ReadBodyTimeout <= 0 {
+		problems = append(problems, errors.New("server.read_body_timeout must be positive"))
+	}
+	if c.Server.MaxHeaderBytes < 1024 {
+		problems = append(problems, errors.New("server.max_header_bytes must be at least 1024"))
+	}
+	if c.Server.MaxRequestBytes <= 0 {
+		problems = append(problems, errors.New("server.max_request_bytes must be positive"))
+	}
+	for name, value := range map[string]Duration{
+		"gateway.route_total_timeout":             c.Gateway.RouteTotalTimeout,
+		"gateway.attempt_connect_timeout":         c.Gateway.AttemptConnectTimeout,
+		"gateway.attempt_response_header_timeout": c.Gateway.AttemptResponseHeaderTimeout,
+		"gateway.stream_idle_timeout":             c.Gateway.StreamIdleTimeout,
+		"gateway.downstream_write_timeout":        c.Gateway.DownstreamWriteTimeout,
+		"gateway.stream_max_duration":             c.Gateway.StreamMaxDuration,
+		"gateway.health_probe_interval":           c.Gateway.HealthProbeInterval,
+	} {
+		if value <= 0 {
+			problems = append(problems, fmt.Errorf("%s must be positive", name))
+		}
+	}
+	if c.Gateway.MaxTotalAttempts < 1 {
+		problems = append(problems, errors.New("gateway.max_total_attempts must be at least 1"))
+	}
+	if c.Retry.MaxAttemptsPerTarget < 1 {
+		problems = append(problems, errors.New("retry.max_attempts_per_target must be at least 1"))
+	}
+	if c.Retry.BaseDelay <= 0 || c.Retry.MaxDelay < c.Retry.BaseDelay {
+		problems = append(problems, errors.New("retry delays must be positive and max_delay must be at least base_delay"))
+	}
+	if c.CircuitBreaker.ConsecutiveFailures < 1 || c.CircuitBreaker.OpenDuration <= 0 ||
+		c.CircuitBreaker.HalfOpenMaxRequests < 1 {
+		problems = append(problems, errors.New("circuit_breaker values must be positive"))
+	}
+	if c.Alerts.QueueCapacity < 1 || c.Alerts.Workers < 1 || c.Alerts.Timeout <= 0 ||
+		c.Alerts.MaxAttempts < 1 || c.Alerts.BaseDelay <= 0 ||
+		c.Alerts.MaxDelay < c.Alerts.BaseDelay || c.Alerts.DedupCooldown <= 0 {
+		problems = append(problems, errors.New("alerts queue, workers, timeout, attempts, delays, and cooldown must be positive"))
+	}
+	if c.Usage.Durability != "strict" && c.Usage.Durability != "balanced" {
+		problems = append(problems, errors.New("usage.durability must be strict or balanced"))
+	}
+	if c.Usage.WALQueueCapacity < 1 || c.Usage.AnalyticsQueueCapacity < 1 || c.Usage.WALMaxBatch < 1 ||
+		c.Usage.WALMaxBatch > c.Usage.WALQueueCapacity ||
+		c.Usage.WALFlushInterval <= 0 {
+		problems = append(problems, errors.New(
+			"usage WAL queue, max batch, and flush interval must be positive and max batch cannot exceed queue capacity",
+		))
+	}
+	if c.Usage.Timezone == "" {
+		problems = append(problems, errors.New("usage.timezone is required"))
+	} else if _, err := time.LoadLocation(c.Usage.Timezone); err != nil {
+		problems = append(problems, fmt.Errorf("usage.timezone: %w", err))
+	}
+	if c.Usage.CheckpointInterval <= 0 {
+		problems = append(problems, errors.New("usage.checkpoint_interval must be positive"))
+	}
+	if c.Usage.ParquetInterval <= 0 {
+		problems = append(problems, errors.New("usage.parquet_interval must be positive"))
+	}
+	if c.Usage.RetentionDays < 1 {
+		problems = append(problems, errors.New("usage.retention_days must be at least 1"))
+	}
+	if c.Admin.SessionTTL <= 0 || c.Admin.IdleTimeout <= 0 ||
+		c.Admin.IdleTimeout > c.Admin.SessionTTL || c.Admin.LoginRPM < 1 {
+		problems = append(problems, errors.New(
+			"admin session TTL, idle timeout, and login RPM must be positive; idle timeout cannot exceed TTL",
+		))
+	}
+	if c.Admin.ExternalOrigin != "" {
+		origin, err := url.Parse(c.Admin.ExternalOrigin)
+		if err != nil || origin.Scheme != "https" || origin.Host == "" ||
+			origin.Path != "" || origin.RawQuery != "" || origin.Fragment != "" {
+			problems = append(problems, errors.New(
+				"admin.external_origin must be an HTTPS origin without path, query, or fragment",
+			))
+		}
+	}
+	for _, raw := range c.Security.TrustedProxyCIDRs {
+		if _, err := netip.ParsePrefix(raw); err != nil {
+			problems = append(problems, fmt.Errorf("security.trusted_proxy_cidrs %q: %w", raw, err))
+		}
+	}
+	if c.Security.TrustProxyHeaders && len(c.Security.TrustedProxyCIDRs) == 0 {
+		problems = append(problems, errors.New("security.trusted_proxy_cidrs is required when proxy headers are trusted"))
+	}
+	return errors.Join(problems...)
+}
+
+func (c Config) MetadataPath() string {
+	return filepath.Join(c.Storage.DataDir, c.Storage.MetadataFile)
+}
+
+func (c Config) LedgerPath() string {
+	return filepath.Join(c.Storage.DataDir, "ledger", "ledger.wal")
+}
+
+func (c Config) UsagePath() string {
+	return filepath.Join(c.Storage.DataDir, "usage")
+}
+
+func (c Config) AuditPath() string {
+	return filepath.Join(c.Storage.DataDir, "audit", "audit.log")
+}
+
+func cleanAbsolutePath(value string) (string, error) {
+	if strings.TrimSpace(value) == "" {
+		return "", nil
+	}
+	absolute, err := filepath.Abs(value)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Clean(absolute), nil
+}
+
+func validateListener(name, address string, tlsEnabled, allowInsecurePublic bool) []error {
+	if address == "" {
+		return []error{fmt.Errorf("%s is required", name)}
+	}
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return []error{fmt.Errorf("%s: %w", name, err)}
+	}
+	if tlsEnabled || listenerHostIsLoopback(host) {
+		return nil
+	}
+	if allowInsecurePublic && name == "server.gateway_listen" {
+		return nil
+	}
+	return []error{fmt.Errorf("%s must bind loopback unless TLS is enabled", name)}
+}
+
+func listenerHostIsLoopback(host string) bool {
+	host = strings.Trim(host, "[]")
+	if host == "localhost" {
+		return true
+	}
+	address, err := netip.ParseAddr(host)
+	return err == nil && address.IsLoopback()
+}

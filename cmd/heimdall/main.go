@@ -1,0 +1,472 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/netip"
+	"net/url"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"syscall"
+	"time"
+
+	"github.com/akz142857/Heimdall/internal/app"
+	backuppkg "github.com/akz142857/Heimdall/internal/backup"
+	"github.com/akz142857/Heimdall/internal/buildinfo"
+	"github.com/akz142857/Heimdall/internal/config"
+	"github.com/akz142857/Heimdall/internal/domain"
+	"github.com/akz142857/Heimdall/internal/safelog"
+)
+
+func main() {
+	logger := safelog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	if err := run(os.Args[1:], logger); err != nil {
+		logger.Error("command failed", "error", err)
+		os.Exit(1)
+	}
+}
+
+func run(arguments []string, logger *slog.Logger) error {
+	if len(arguments) == 0 {
+		return errors.New("usage: heimdall <init|bootstrap|admin|key|backup|restore|usage|audit|metrics|doctor|serve|healthcheck|config|version>")
+	}
+	switch arguments[0] {
+	case "healthcheck":
+		flags := flag.NewFlagSet("healthcheck", flag.ContinueOnError)
+		defaultURL := os.Getenv("HEIMDALL_HEALTH_URL")
+		if defaultURL == "" {
+			defaultURL = "http://127.0.0.1:8080/health/ready"
+		}
+		healthURL := flags.String("url", defaultURL, "loopback readiness URL")
+		timeout := flags.Duration("timeout", 2*time.Second, "health request timeout")
+		if err := flags.Parse(arguments[1:]); err != nil {
+			return err
+		}
+		return runHealthcheck(*healthURL, *timeout)
+	case "version":
+		return json.NewEncoder(os.Stdout).Encode(buildinfo.Current())
+	case "init":
+		flags := flag.NewFlagSet("init", flag.ContinueOnError)
+		configPath := flags.String("config", "config.yaml", "configuration file")
+		if err := flags.Parse(arguments[1:]); err != nil {
+			return err
+		}
+		cfg, err := config.Load(*configPath, config.LoadOptions{})
+		if err != nil {
+			return err
+		}
+		if err := app.Initialize(cfg); err != nil {
+			return err
+		}
+		fmt.Fprintln(os.Stdout, "Heimdall initialized")
+		return nil
+	case "serve":
+		flags := flag.NewFlagSet("serve", flag.ContinueOnError)
+		configPath := flags.String("config", "config.yaml", "configuration file")
+		allowInsecure := flags.Bool("allow-insecure-public-listen", false, "allow only the Gateway listener to bind public plaintext")
+		if err := flags.Parse(arguments[1:]); err != nil {
+			return err
+		}
+		cfg, err := config.Load(*configPath, config.LoadOptions{AllowInsecurePublicGateway: *allowInsecure})
+		if err != nil {
+			return err
+		}
+		if *allowInsecure {
+			logger.Warn("insecure public Gateway override enabled")
+		}
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		runtime, err := app.Open(ctx, cfg, logger)
+		if err != nil {
+			return err
+		}
+		defer runtime.Close()
+		return runtime.Run(ctx)
+	case "bootstrap":
+		flags := flag.NewFlagSet("bootstrap", flag.ContinueOnError)
+		configPath := flags.String("config", "config.yaml", "configuration file")
+		providerName := flags.String("provider-name", "OpenAI", "provider display name")
+		providerType := flags.String("provider-type", string(domain.ProviderOpenAI), "openai, azure_openai, deepseek, openai_compatible, gemini, or bedrock")
+		providerBaseURL := flags.String("provider-base-url", "https://api.openai.com", "provider base URL")
+		providerAPIVersion := flags.String("provider-api-version", "", "provider API version (required for azure_openai)")
+		providerModel := flags.String("provider-model", "", "provider model name")
+		publicModel := flags.String("public-model", "chat", "public model alias")
+		projectName := flags.String("project-name", "Default", "project display name")
+		dailyBudget := flags.Int64("daily-budget-micros-usd", 0, "daily budget in micro-USD; zero is unlimited")
+		inputPrice := flags.Int64("input-micros-per-million", 0, "input price in micro-USD per million tokens")
+		outputPrice := flags.Int64("output-micros-per-million", 0, "output price in micro-USD per million tokens")
+		if err := flags.Parse(arguments[1:]); err != nil {
+			return err
+		}
+		cfg, err := config.Load(*configPath, config.LoadOptions{})
+		if err != nil {
+			return err
+		}
+		secret, err := io.ReadAll(io.LimitReader(os.Stdin, (16<<10)+1))
+		if err != nil {
+			return fmt.Errorf("read provider key from stdin: %w", err)
+		}
+		secret = bytes.TrimSpace(secret)
+		defer clear(secret)
+		result, err := app.Bootstrap(context.Background(), cfg, app.BootstrapOptions{
+			ProviderName: *providerName, ProviderType: domain.ProviderType(*providerType),
+			ProviderBaseURL: *providerBaseURL, ProviderAPIVersion: *providerAPIVersion,
+			ProviderModel: *providerModel, PublicModel: *publicModel,
+			ProjectName: *projectName, DailyBudgetMicrosUSD: *dailyBudget,
+			InputMicrosPerMillion: *inputPrice, OutputMicrosPerMillion: *outputPrice,
+		}, secret)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(os.Stderr, "Gateway key is shown once; store it securely.")
+		return json.NewEncoder(os.Stdout).Encode(result)
+	case "admin":
+		if len(arguments) < 2 || (arguments[1] != "bootstrap" && arguments[1] != "reset-password") {
+			return errors.New("usage: heimdall admin <bootstrap|reset-password> --config <path> --username <name>")
+		}
+		command := arguments[1]
+		flags := flag.NewFlagSet("admin "+command, flag.ContinueOnError)
+		configPath := flags.String("config", "config.yaml", "configuration file")
+		username := flags.String("username", "admin", "local admin username")
+		if err := flags.Parse(arguments[2:]); err != nil {
+			return err
+		}
+		cfg, err := config.Load(*configPath, config.LoadOptions{})
+		if err != nil {
+			return err
+		}
+		password, err := io.ReadAll(io.LimitReader(os.Stdin, 1025))
+		if err != nil {
+			return fmt.Errorf("read admin password from stdin: %w", err)
+		}
+		password = bytes.TrimRight(password, "\r\n")
+		defer clear(password)
+		if command == "bootstrap" {
+			if err := app.BootstrapAdmin(context.Background(), cfg, *username, password); err != nil {
+				return err
+			}
+			fmt.Fprintln(os.Stdout, "Admin user created")
+			return nil
+		}
+		if err := app.ResetAdminPassword(context.Background(), cfg, *username, password); err != nil {
+			return err
+		}
+		fmt.Fprintln(os.Stdout, "Admin password reset; all existing sessions invalidated")
+		return nil
+	case "config":
+		if len(arguments) < 2 || arguments[1] != "check" {
+			return errors.New("usage: heimdall config check --config <path>")
+		}
+		flags := flag.NewFlagSet("config check", flag.ContinueOnError)
+		configPath := flags.String("config", "config.yaml", "configuration file")
+		if err := flags.Parse(arguments[2:]); err != nil {
+			return err
+		}
+		if _, err := config.Load(*configPath, config.LoadOptions{}); err != nil {
+			return err
+		}
+		fmt.Fprintln(os.Stdout, "configuration valid")
+		return nil
+	case "key":
+		if len(arguments) < 2 {
+			return errors.New("usage: heimdall key <create|disable|rotate>")
+		}
+		switch arguments[1] {
+		case "rotate":
+			flags := flag.NewFlagSet("key rotate", flag.ContinueOnError)
+			configPath := flags.String("config", "config.yaml", "configuration file")
+			newKeyFile := flags.String("new-key-file", "", "existing 32-byte replacement master key file")
+			if err := flags.Parse(arguments[2:]); err != nil {
+				return err
+			}
+			if *newKeyFile == "" {
+				return errors.New("key rotate requires --new-key-file")
+			}
+			cfg, err := config.Load(*configPath, config.LoadOptions{})
+			if err != nil {
+				return err
+			}
+			result, err := app.RotateMasterKey(context.Background(), cfg, *newKeyFile)
+			if err != nil {
+				return err
+			}
+			return json.NewEncoder(os.Stdout).Encode(result)
+		case "create":
+			flags := flag.NewFlagSet("key create", flag.ContinueOnError)
+			configPath := flags.String("config", "config.yaml", "configuration file")
+			projectID := flags.String("project-id", "", "project ID")
+			name := flags.String("name", "", "key display name")
+			if err := flags.Parse(arguments[2:]); err != nil {
+				return err
+			}
+			cfg, err := config.Load(*configPath, config.LoadOptions{})
+			if err != nil {
+				return err
+			}
+			result, err := app.CreateProjectKey(context.Background(), cfg, *projectID, *name)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintln(os.Stderr, "Gateway key is shown once; store it securely.")
+			return json.NewEncoder(os.Stdout).Encode(result)
+		case "disable":
+			flags := flag.NewFlagSet("key disable", flag.ContinueOnError)
+			configPath := flags.String("config", "config.yaml", "configuration file")
+			keyID := flags.String("key-id", "", "Gateway key ID")
+			if err := flags.Parse(arguments[2:]); err != nil {
+				return err
+			}
+			cfg, err := config.Load(*configPath, config.LoadOptions{})
+			if err != nil {
+				return err
+			}
+			if err := app.DisableProjectKey(context.Background(), cfg, *keyID); err != nil {
+				return err
+			}
+			fmt.Fprintln(os.Stdout, "Gateway key disabled")
+			return nil
+		default:
+			return fmt.Errorf("unknown key command %q", arguments[1])
+		}
+	case "restore":
+		return run(append([]string{"backup", "restore"}, arguments[1:]...), logger)
+	case "backup":
+		if len(arguments) < 2 {
+			return errors.New("usage: heimdall backup <create|verify|restore>")
+		}
+		switch arguments[1] {
+		case "create":
+			flags := flag.NewFlagSet("backup create", flag.ContinueOnError)
+			configPath := flags.String("config", "config.yaml", "configuration file")
+			outputPath := flags.String("output", "", "encrypted backup output file")
+			keyPath := flags.String("key-file", "", "32-byte backup key file with mode 0600")
+			if err := flags.Parse(arguments[2:]); err != nil {
+				return err
+			}
+			if *outputPath == "" || *keyPath == "" {
+				return errors.New("backup create requires --output and --key-file")
+			}
+			cfg, err := config.Load(*configPath, config.LoadOptions{})
+			if err != nil {
+				return err
+			}
+			key, err := backuppkg.LoadKeyFile(*keyPath)
+			if err != nil {
+				return err
+			}
+			defer clear(key)
+			absoluteOutput, err := filepath.Abs(*outputPath)
+			if err != nil {
+				return err
+			}
+			manifest, err := app.CreateBackup(
+				context.Background(), cfg, *configPath, absoluteOutput, key,
+			)
+			if err != nil {
+				return err
+			}
+			return json.NewEncoder(os.Stdout).Encode(manifest)
+		case "verify":
+			flags := flag.NewFlagSet("backup verify", flag.ContinueOnError)
+			backupPath := flags.String("file", "", "encrypted backup file")
+			keyPath := flags.String("key-file", "", "32-byte backup key file with mode 0600")
+			if err := flags.Parse(arguments[2:]); err != nil {
+				return err
+			}
+			if *backupPath == "" || *keyPath == "" {
+				return errors.New("backup verify requires --file and --key-file")
+			}
+			key, err := backuppkg.LoadKeyFile(*keyPath)
+			if err != nil {
+				return err
+			}
+			defer clear(key)
+			manifest, err := app.VerifyBackup(*backupPath, key)
+			if err != nil {
+				return err
+			}
+			return json.NewEncoder(os.Stdout).Encode(manifest)
+		case "restore":
+			flags := flag.NewFlagSet("backup restore", flag.ContinueOnError)
+			configPath := flags.String("config", "config.yaml", "configuration file")
+			backupPath := flags.String("file", "", "encrypted backup file")
+			keyPath := flags.String("key-file", "", "32-byte backup key file with mode 0600")
+			confirmation := flags.String("confirm-backup-id", "", "exact verified backup ID")
+			if err := flags.Parse(arguments[2:]); err != nil {
+				return err
+			}
+			if *backupPath == "" || *keyPath == "" || *confirmation == "" {
+				return errors.New("backup restore requires --file, --key-file, and --confirm-backup-id")
+			}
+			cfg, err := config.Load(*configPath, config.LoadOptions{})
+			if err != nil {
+				return err
+			}
+			key, err := backuppkg.LoadKeyFile(*keyPath)
+			if err != nil {
+				return err
+			}
+			defer clear(key)
+			result, err := app.RestoreBackup(
+				context.Background(), cfg, *backupPath, key, *confirmation,
+			)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintln(os.Stderr, "Restore complete; previous data directory was preserved for rollback.")
+			return json.NewEncoder(os.Stdout).Encode(result)
+		default:
+			return fmt.Errorf("unknown backup command %q", arguments[1])
+		}
+	case "usage":
+		if len(arguments) < 2 {
+			return errors.New("usage: heimdall usage <compact|verify|prune>")
+		}
+		flags := flag.NewFlagSet("usage "+arguments[1], flag.ContinueOnError)
+		configPath := flags.String("config", "config.yaml", "configuration file")
+		before := flags.String("before", "", "prune partitions before YYYY-MM-DD")
+		if err := flags.Parse(arguments[2:]); err != nil {
+			return err
+		}
+		cfg, err := config.Load(*configPath, config.LoadOptions{})
+		if err != nil {
+			return err
+		}
+		switch arguments[1] {
+		case "compact":
+			manifest, err := app.CompactUsage(context.Background(), cfg)
+			if err != nil {
+				return err
+			}
+			return json.NewEncoder(os.Stdout).Encode(manifest)
+		case "verify":
+			report, err := app.VerifyUsage(context.Background(), cfg)
+			if err != nil {
+				return err
+			}
+			return json.NewEncoder(os.Stdout).Encode(report)
+		case "prune":
+			cutoff := time.Now().UTC().AddDate(0, 0, -cfg.Usage.RetentionDays)
+			if *before != "" {
+				parsed, err := time.Parse("2006-01-02", *before)
+				if err != nil {
+					return fmt.Errorf("parse --before: %w", err)
+				}
+				cutoff = parsed
+			}
+			report, err := app.PruneUsage(context.Background(), cfg, cutoff)
+			if err != nil {
+				return err
+			}
+			return json.NewEncoder(os.Stdout).Encode(report)
+		default:
+			return fmt.Errorf("unknown usage command %q", arguments[1])
+		}
+	case "audit":
+		if len(arguments) < 2 || arguments[1] != "verify" {
+			return errors.New("usage: heimdall audit verify --config <path>")
+		}
+		flags := flag.NewFlagSet("audit verify", flag.ContinueOnError)
+		configPath := flags.String("config", "config.yaml", "configuration file")
+		if err := flags.Parse(arguments[2:]); err != nil {
+			return err
+		}
+		cfg, err := config.Load(*configPath, config.LoadOptions{})
+		if err != nil {
+			return err
+		}
+		summary, err := app.VerifyAudit(context.Background(), cfg)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(os.Stdout).Encode(summary)
+	case "doctor":
+		flags := flag.NewFlagSet("doctor", flag.ContinueOnError)
+		configPath := flags.String("config", "config.yaml", "configuration file")
+		if err := flags.Parse(arguments[1:]); err != nil {
+			return err
+		}
+		cfg, err := config.Load(*configPath, config.LoadOptions{})
+		if err != nil {
+			return err
+		}
+		report, doctorErr := app.Doctor(context.Background(), cfg)
+		encodeErr := json.NewEncoder(os.Stdout).Encode(report)
+		return errors.Join(doctorErr, encodeErr)
+	case "metrics":
+		if len(arguments) < 2 || arguments[1] != "token" {
+			return errors.New("usage: heimdall metrics token --config <path>")
+		}
+		flags := flag.NewFlagSet("metrics token", flag.ContinueOnError)
+		configPath := flags.String("config", "config.yaml", "configuration file")
+		if err := flags.Parse(arguments[2:]); err != nil {
+			return err
+		}
+		cfg, err := config.Load(*configPath, config.LoadOptions{})
+		if err != nil {
+			return err
+		}
+		token, err := app.MetricsToken(cfg)
+		if err != nil {
+			return err
+		}
+		defer clear(token)
+		fmt.Fprintln(os.Stderr, "Metrics bearer token grants access to aggregate operational data.")
+		_, err = fmt.Fprintln(os.Stdout, string(token))
+		return err
+	default:
+		return fmt.Errorf("unknown command %q", arguments[0])
+	}
+}
+
+func runHealthcheck(rawURL string, timeout time.Duration) error {
+	client := &http.Client{
+		Timeout:   timeout,
+		Transport: &http.Transport{Proxy: nil},
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return errors.New("healthcheck redirects are disabled")
+		},
+	}
+	return runHealthcheckWithClient(rawURL, timeout, client)
+}
+
+func runHealthcheckWithClient(rawURL string, timeout time.Duration, client *http.Client) error {
+	if timeout <= 0 || timeout > 30*time.Second {
+		return errors.New("healthcheck timeout must be between zero and 30 seconds")
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") ||
+		parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return errors.New("healthcheck URL must be a plain HTTP(S) loopback URL")
+	}
+	hostname := parsed.Hostname()
+	loopback := hostname == "localhost"
+	if address, parseErr := netip.ParseAddr(hostname); parseErr == nil {
+		loopback = address.IsLoopback()
+	}
+	if !loopback {
+		return errors.New("healthcheck URL must use a loopback host")
+	}
+	request, err := http.NewRequestWithContext(context.Background(), http.MethodGet, parsed.String(), nil)
+	if err != nil {
+		return errors.New("create healthcheck request")
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return errors.New("readiness endpoint is unavailable")
+	}
+	defer response.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4<<10))
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("readiness endpoint returned status %d", response.StatusCode)
+	}
+	return nil
+}

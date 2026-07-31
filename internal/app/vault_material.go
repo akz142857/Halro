@@ -1,0 +1,74 @@
+package app
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+
+	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
+	"github.com/akz142857/Heimdall/internal/vault"
+)
+
+const (
+	auditKeyID       = "system:audit-hmac"
+	auditKeyProvider = "system"
+	auditKeyAudience = "heimdall:audit:v1"
+
+	rotationBridgeID       = "system:master-key-rotation"
+	rotationBridgeProvider = "system"
+	rotationBridgeAudience = "heimdall:master-key-rotation:v1"
+)
+
+func encryptAuditHMACKey(secretVault *vault.Vault, key []byte) ([]byte, error) {
+	if len(key) != 32 {
+		return nil, errors.New("audit HMAC key must be 32 bytes")
+	}
+	return secretVault.EncryptCredential(
+		auditKeyID, auditKeyProvider, auditKeyAudience, key,
+	)
+}
+
+func loadAuditHMACKey(store *boltstore.Store, secretVault *vault.Vault, masterKey []byte) ([]byte, error) {
+	envelope, err := store.AuditHMACEnvelope()
+	if errors.Is(err, boltstore.ErrNotFound) {
+		return vault.DeriveAuditHMACKey(masterKey)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load audit HMAC envelope: %w", err)
+	}
+	key, err := secretVault.DecryptCredential(
+		auditKeyID, auditKeyProvider, auditKeyAudience, envelope,
+	)
+	if err != nil || len(key) != 32 {
+		clear(key)
+		return nil, errors.New("audit HMAC envelope does not authenticate")
+	}
+	return key, nil
+}
+
+func encryptRotationBridge(oldVault *vault.Vault, newMasterKey []byte) ([]byte, error) {
+	if len(newMasterKey) != vault.MasterKeySize {
+		return nil, errors.New("new master key must be 32 bytes")
+	}
+	return oldVault.EncryptCredential(
+		rotationBridgeID, rotationBridgeProvider, rotationBridgeAudience, newMasterKey,
+	)
+}
+
+func verifyRotationBridge(store *boltstore.Store, oldVault *vault.Vault, expectedNewKey []byte) error {
+	envelope, err := store.VaultRotationBridge()
+	if err != nil {
+		return fmt.Errorf("load vault rotation bridge: %w", err)
+	}
+	key, err := oldVault.DecryptCredential(
+		rotationBridgeID, rotationBridgeProvider, rotationBridgeAudience, envelope,
+	)
+	if err != nil {
+		return errors.New("vault rotation bridge does not authenticate")
+	}
+	defer clear(key)
+	if !bytes.Equal(key, expectedNewKey) {
+		return errors.New("vault rotation bridge targets a different master key")
+	}
+	return nil
+}

@@ -1,0 +1,6 @@
+* text=auto
+*.go text eol=lf
+*.{js,mjs,ts,tsx,json,yaml,yml,md} text eol=lf
+internal/webui/dist/** linguist-generated=true
+web/package-lock.json linguist-generated=true
+tests/compatibility/node/package-lock.json linguist-generated=true

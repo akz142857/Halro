@@ -1,0 +1,41 @@
+name: Feature request
+description: Propose a focused improvement consistent with the single-binary model
+title: "feat: "
+labels: ["enhancement", "triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user or operator problem should Heimdall solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the public contract, not only an implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Compatibility and security impact
+      description: Cover API/config/storage compatibility, secrets, accounting, and resource bounds.
+    validations:
+      required: true
+  - type: checkboxes
+    id: principles
+    attributes:
+      label: Project principles
+      options:
+        - label: The proposal preserves the single-binary, no-external-service operating model.
+          required: true
+        - label: I searched existing issues and documentation.
+          required: true

@@ -1,0 +1,108 @@
+package usage
+
+import (
+	"fmt"
+	"testing"
+	"time"
+
+	"github.com/akz142857/Heimdall/internal/ledger"
+)
+
+func TestUsageCursorFilteringRequestDetailAndDashboard(t *testing.T) {
+	aggregate := NewAggregate()
+	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
+	var sequence uint64
+	for requestIndex := 1; requestIndex <= 3; requestIndex++ {
+		requestID := fmt.Sprintf("req_%d", requestIndex)
+		attemptID := requestID + ":1"
+		for _, event := range []ledger.Event{
+			{EventID: requestID + "_accepted", Kind: ledger.EventRequestAccepted,
+				RequestID: requestID, ProjectID: "project", PeriodID: "period",
+				OccurredAt:     now.Add(time.Duration(requestIndex) * time.Minute),
+				RequestedModel: "chat"},
+			{EventID: requestID + "_settled", Kind: ledger.EventAttemptSettled,
+				RequestID: requestID, AttemptID: attemptID, ProjectID: "project",
+				ProviderID: fmt.Sprintf("provider_%d", requestIndex), PeriodID: "period",
+				OccurredAt:          now.Add(time.Duration(requestIndex)*time.Minute + time.Second),
+				ProviderInputTokens: int64(requestIndex), CommittedMicrosUSD: int64(requestIndex),
+				Outcome: "success"},
+			{EventID: requestID + "_final", Kind: ledger.EventRequestFinalized,
+				RequestID: requestID, ProjectID: "project", PeriodID: "period",
+				OccurredAt: now.Add(time.Duration(requestIndex)*time.Minute + time.Second),
+				Outcome:    "success"},
+		} {
+			sequence++
+			if err := aggregate.Apply(ledger.Record{
+				Sequence: sequence, Offset: int64(sequence * 100), Event: event,
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	first, err := aggregate.QueryAttempts(AttemptQuery{Limit: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Attempts) != 2 || first.Attempts[0].RequestID != "req_3" ||
+		first.NextCursor == "" {
+		t.Fatalf("first page=%#v", first)
+	}
+	cursor, err := DecodeCursor(first.NextCursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := aggregate.QueryAttempts(AttemptQuery{Limit: 2, BeforeSequence: cursor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second.Attempts) != 1 || second.Attempts[0].RequestID != "req_1" ||
+		second.NextCursor != "" {
+		t.Fatalf("second page=%#v", second)
+	}
+	filtered, err := aggregate.QueryAttempts(AttemptQuery{Limit: 10, ProviderID: "provider_2"})
+	if err != nil || len(filtered.Attempts) != 1 || filtered.Attempts[0].RequestID != "req_2" {
+		t.Fatalf("filtered=%#v err=%v", filtered, err)
+	}
+	detail, exists := aggregate.RequestDetail("req_2")
+	if !exists || len(detail.Attempts) != 1 || detail.Summary.RequestID != "req_2" {
+		t.Fatalf("detail=%#v exists=%v", detail, exists)
+	}
+	dashboard := aggregate.Dashboard(now.Add(time.Hour), time.UTC)
+	if dashboard.Today.Requests != 3 || dashboard.Today.Attempts != 3 ||
+		dashboard.Today.InputTokens != 6 {
+		t.Fatalf("dashboard=%#v", dashboard)
+	}
+}
+
+func TestDashboardSeparatesConservativeTokenEstimates(t *testing.T) {
+	aggregate := NewAggregate()
+	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
+	for index, event := range []ledger.Event{
+		{EventID: "estimated", Kind: ledger.EventAttemptSettled, RequestID: "req_estimated",
+			AttemptID: "attempt_estimated", ProjectID: "project", PeriodID: "period",
+			OccurredAt: now, ProviderInputTokens: 9, ProviderOutputTokens: 16_384,
+			TokenEstimated: true, Outcome: "provider_error"},
+		{EventID: "reported", Kind: ledger.EventAttemptSettled, RequestID: "req_reported",
+			AttemptID: "attempt_reported", ProjectID: "project", PeriodID: "period",
+			OccurredAt: now.Add(time.Minute), ProviderInputTokens: 7, ProviderOutputTokens: 167,
+			Outcome: "success"},
+	} {
+		if err := aggregate.Apply(ledger.Record{
+			Sequence: uint64(index + 1), Offset: int64((index + 1) * 100), Event: event,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	dashboard := aggregate.Dashboard(now.Add(time.Hour), time.UTC)
+	if dashboard.Today.InputTokens != 16 || dashboard.Today.OutputTokens != 16_551 {
+		t.Fatalf("accounting totals changed: %#v", dashboard.Today)
+	}
+	if dashboard.Today.EstimatedInputTokens != 9 ||
+		dashboard.Today.EstimatedOutputTokens != 16_384 {
+		t.Fatalf("estimated totals not separated: %#v", dashboard.Today)
+	}
+	if len(dashboard.Hourly) != 1 || dashboard.Hourly[0].EstimatedOutputTokens != 16_384 {
+		t.Fatalf("hourly estimated totals not separated: %#v", dashboard.Hourly)
+	}
+}

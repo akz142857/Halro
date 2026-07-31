@@ -1,0 +1,8 @@
+Heimdall
+Copyright 2026 Heimdall contributors
+
+This product is licensed under the Apache License, Version 2.0.
+
+This product includes parquet-go, Copyright 2023 Twilio, Inc., licensed under
+the Apache License, Version 2.0. parquet-go includes code based on Apache
+Parquet, Copyright 2014 The Apache Software Foundation.

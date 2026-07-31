@@ -1,0 +1,71 @@
+name: Bug report
+description: Report a reproducible Heimdall defect without sensitive data
+title: "bug: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not report vulnerabilities here. Follow SECURITY.md. Never attach keys, prompts, responses, databases, WAL files, backups, or raw IPs.
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: v1.x.y or 40-character commit
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Gateway API
+        - Provider adapter
+        - Routing / retry / circuit breaker
+        - Authentication / key management
+        - Budget / limiter / Token Guard
+        - Redaction
+        - Usage / WAL / Parquet
+        - Admin UI
+        - Backup / restore / operations
+        - Build / release / documentation
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, architecture, deployment type, and Provider type. Sanitize all values.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Include exact steps and synthetic inputs only.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include stable error codes and sanitized logs, not secrets or payloads.
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Safety checks
+      options:
+        - label: I searched existing issues.
+          required: true
+        - label: This is not a security vulnerability.
+          required: true
+        - label: I removed all credentials, prompts, responses, private endpoints, raw IPs, and local data.
+          required: true
