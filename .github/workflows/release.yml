@@ -25,7 +25,7 @@ jobs:
           test -f THIRD_PARTY_NOTICES.md
           test ! -e v1.0.0.md
           ! git ls-files | grep -E '(^|/)(data|node_modules|bin)/|(^|/)(master\.key|config\.yaml|v1\.0\.0\.md)$|\.(hmbk|pem|p12|pprof|prof|test)$'
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -39,7 +39,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -79,7 +79,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -125,7 +125,7 @@ jobs:
             goarch: arm64
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
