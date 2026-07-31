@@ -29,7 +29,8 @@ const projectSchema = z.object({
   redactionPolicyID: z.string(),
   enabled: z.boolean(),
 });
-type ProjectValue = z.infer<typeof projectSchema>;
+type ProjectInput = z.input<typeof projectSchema>;
+type ProjectValue = z.output<typeof projectSchema>;
 
 export function ProjectsPage() {
   const [selected, setSelected] = useState<string>("");
@@ -201,7 +202,7 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
     register,
     handleSubmit,
     formState: { errors },
-  } = useForm<ProjectValue>({
+  } = useForm<ProjectInput, unknown, ProjectValue>({
     resolver: zodResolver(projectSchema),
     defaultValues: {
       name: current?.name ?? "",

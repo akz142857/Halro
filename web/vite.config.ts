@@ -11,9 +11,13 @@ export default defineConfig({
     assetsInlineLimit: 0,
     rollupOptions: {
       output: {
-        manualChunks: {
-          react: ["react", "react-dom"],
-          query: ["@tanstack/react-query", "@tanstack/react-table"],
+        manualChunks(id) {
+          if (id.includes("/node_modules/react/") || id.includes("/node_modules/react-dom/")) {
+            return "react";
+          }
+          if (id.includes("/node_modules/@tanstack/react-query/") || id.includes("/node_modules/@tanstack/react-table/")) {
+            return "query";
+          }
         },
       },
     },
