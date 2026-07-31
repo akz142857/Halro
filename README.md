@@ -36,7 +36,7 @@ installation, upgrades, recovery, and hardening, see the
 
 Requirements:
 
-- Go 1.24
+- Go 1.26.5 or later
 
 Validate the current foundation:
 
