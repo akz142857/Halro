@@ -28,6 +28,7 @@ scope is governed by reviewed release notes and release gates.
 | OpenAI-compatible API | strict chat-completions and embeddings contracts, stable errors, body limits |
 | SSE streaming | bounded SSE parser, semantic chunks, `[DONE]`, usage settlement, first-payload error boundary |
 | Resilient routing | ordered/round-robin candidates, bounded retry with backoff/jitter, fallback before payload |
+| Shared Gateway orchestration | common authentication/routing, admission/accounting lifecycle, attempt acquisition/settlement, and terminal error mapping across Chat, streaming Chat, and Embeddings |
 | Circuit breaker | per-target Closed/Open/HalfOpen state, passive failures, single/limited probes |
 | Multi-attempt accounting | one Request lifecycle with independently reserved and settled Provider attempts |
 | GA Provider adapters | OpenAI, Azure OpenAI, DeepSeek, and generic OpenAI-compatible chat/stream/embedding profiles with cancellation and capability enforcement |
@@ -64,7 +65,8 @@ scope is governed by reviewed release notes and release gates.
 | Project and key Admin API | CSRF-protected lifecycle, `If-Match` revisions, one-time key response, immediate auth snapshot refresh |
 | Provider Admin API | audience-bound credential encryption/rotation, full Provider create/edit/enable/disable/delete/test lifecycle, capability upper bounds, Deployment capability subsets and atomic runtime route replacement |
 | Admin contract completion | revisioned Credential deletion with atomic Provider/Webhook reference protection; Project Token Guard unblock; Route connection test; collection and per-resource Alert test endpoints |
-| Admin mutation integrity | serialized mutations, dependency guards, tombstones, HMAC Audit events, `no-store` and strict CSP headers |
+| Admin mutation integrity | dependency-scoped mutation ordering, dependency guards, tombstones, HMAC Audit events, `no-store` and strict CSP headers |
+| Concurrent mutation and admission paths | Admin writes use dependency-scoped consistency domains and group-committed audit batches; limiter state is Project-local, Token Guard state is subject-local, and durable Budget operations use Project locks with globally ordered Ledger application |
 | Embedded Admin console | React/TypeScript/Vite SPA embedded with `go:embed`; login/logout, in-session password and CSRF/session rotation, Dashboard, Projects/Keys, Credentials/Providers, Deployments/Routes, Usage, merged Redaction/Token Guard Policies, Alerts/Audit Operations and status |
 | Admin localization | complete semantic-key `zh-CN`/`en-US` resources with parity test, single-language navigation, no-refresh switching, public bootstrap locale, separately saved revisioned instance default and per-admin server-side preference (no browser persistence), document language updates, localized display enums, and safe localized API errors |
 | Operations CLI | byte-verified read-only `doctor` using a non-rewriting existing lock plus read-only bbolt/WAL paths, offline audited Admin password reset/session invalidation, top-level restore alias, config/usage/audit/backup/key lifecycle commands |

@@ -99,6 +99,36 @@ func TestBudgetCheckIncludesConcurrentReservations(t *testing.T) {
 	}
 }
 
+func TestConcurrentProjectsPreserveLedgerOrder(t *testing.T) {
+	manager, state, closeLog := newTestManager(t)
+	defer closeLog()
+	const projects = 16
+	var wait sync.WaitGroup
+	errorsByProject := make(chan error, projects)
+	for index := 0; index < projects; index++ {
+		wait.Add(1)
+		go func(index int) {
+			defer wait.Done()
+			projectID := fmt.Sprintf("project_%d", index)
+			request, err := manager.BeginRequest(context.Background(), projectID, fmt.Sprintf("request_%d", index))
+			if err == nil {
+				err = manager.Finalize(context.Background(), request, "success")
+			}
+			errorsByProject <- err
+		}(index)
+	}
+	wait.Wait()
+	close(errorsByProject)
+	for err := range errorsByProject {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if state.Watermark().Sequence != projects*2 {
+		t.Fatalf("watermark=%d", state.Watermark().Sequence)
+	}
+}
+
 func TestThousandConcurrentReservationsNeverOversell(t *testing.T) {
 	manager, state, closeLog := newTestManager(t)
 	defer closeLog()

@@ -51,8 +51,8 @@ func (r *Runtime) updateAdminUISettings(writer http.ResponseWriter, request *htt
 		adminBadRequest(writer, err.Error())
 		return
 	}
-	r.adminMutationMu.Lock()
-	defer r.adminMutationMu.Unlock()
+	r.adminSettingsMu.Lock()
+	defer r.adminSettingsMu.Unlock()
 	settings, err := r.store.PutInstanceUISettings(settings, expected)
 	if err != nil {
 		adminMutationError(writer, err)
@@ -93,8 +93,8 @@ func (r *Runtime) updateAdminPreferences(writer http.ResponseWriter, request *ht
 		return
 	}
 	admin := request.Context().Value(adminContextKey{}).(adminRequestContext)
-	r.adminMutationMu.Lock()
-	defer r.adminMutationMu.Unlock()
+	r.adminSettingsMu.Lock()
+	defer r.adminSettingsMu.Unlock()
 	user, err := r.store.GetAdminUser(request.Context(), admin.session.Username)
 	if err != nil {
 		adminStoreError(writer)

@@ -55,8 +55,8 @@ func (r *Runtime) createAdminProject(writer http.ResponseWriter, request *http.R
 		adminBadRequest(writer, err.Error())
 		return
 	}
-	r.adminMutationMu.Lock()
-	defer r.adminMutationMu.Unlock()
+	r.adminProjectMu.Lock()
+	defer r.adminProjectMu.Unlock()
 	if err := r.validateProjectReferences(request, project); err != nil {
 		writeJSON(writer, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
@@ -87,8 +87,8 @@ func (r *Runtime) updateAdminProject(writer http.ResponseWriter, request *http.R
 		adminBadRequest(writer, "invalid request")
 		return
 	}
-	r.adminMutationMu.Lock()
-	defer r.adminMutationMu.Unlock()
+	r.adminProjectMu.Lock()
+	defer r.adminProjectMu.Unlock()
 	current, err := r.store.GetProject(request.Context(), chi.URLParam(request, "id"))
 	if err != nil {
 		adminMutationError(writer, err)
@@ -129,8 +129,8 @@ func (r *Runtime) deleteAdminProject(writer http.ResponseWriter, request *http.R
 	if !ok {
 		return
 	}
-	r.adminMutationMu.Lock()
-	defer r.adminMutationMu.Unlock()
+	r.adminProjectMu.Lock()
+	defer r.adminProjectMu.Unlock()
 	project, err := r.store.GetProject(request.Context(), chi.URLParam(request, "id"))
 	if err != nil {
 		adminMutationError(writer, err)
@@ -162,8 +162,8 @@ func (r *Runtime) deleteAdminProject(writer http.ResponseWriter, request *http.R
 
 func (r *Runtime) unblockAdminProject(writer http.ResponseWriter, request *http.Request) {
 	projectID := chi.URLParam(request, "id")
-	r.adminMutationMu.Lock()
-	defer r.adminMutationMu.Unlock()
+	r.adminProjectMu.Lock()
+	defer r.adminProjectMu.Unlock()
 	project, err := r.store.GetProject(request.Context(), projectID)
 	if err != nil || project.DeletedAt != nil {
 		adminNotFound(writer)
@@ -189,8 +189,8 @@ func (r *Runtime) createAdminProjectKey(writer http.ResponseWriter, request *htt
 		adminBadRequest(writer, err.Error())
 		return
 	}
-	r.adminMutationMu.Lock()
-	defer r.adminMutationMu.Unlock()
+	r.adminProjectMu.Lock()
+	defer r.adminProjectMu.Unlock()
 	project, err := r.store.GetProject(request.Context(), projectID)
 	if err != nil || project.DeletedAt != nil {
 		adminNotFound(writer)
@@ -242,8 +242,8 @@ func (r *Runtime) updateAdminProjectKey(writer http.ResponseWriter, request *htt
 		adminBadRequest(writer, "invalid request")
 		return
 	}
-	r.adminMutationMu.Lock()
-	defer r.adminMutationMu.Unlock()
+	r.adminProjectMu.Lock()
+	defer r.adminProjectMu.Unlock()
 	key, ok := r.adminProjectKey(writer, request)
 	if !ok {
 		return
@@ -282,8 +282,8 @@ func (r *Runtime) deleteAdminProjectKey(writer http.ResponseWriter, request *htt
 	if !ok {
 		return
 	}
-	r.adminMutationMu.Lock()
-	defer r.adminMutationMu.Unlock()
+	r.adminProjectMu.Lock()
+	defer r.adminProjectMu.Unlock()
 	key, ok := r.adminProjectKey(writer, request)
 	if !ok {
 		return

@@ -61,8 +61,8 @@ func (r *Runtime) createAdminCredential(writer http.ResponseWriter, request *htt
 		adminBadRequest(writer, err.Error())
 		return
 	}
-	r.adminMutationMu.Lock()
-	defer r.adminMutationMu.Unlock()
+	r.adminTopologyMu.Lock()
+	defer r.adminTopologyMu.Unlock()
 	credential, err = r.store.PutCredential(request.Context(), credential, 0)
 	if err != nil {
 		adminMutationError(writer, err)
@@ -86,8 +86,8 @@ func (r *Runtime) updateAdminCredential(writer http.ResponseWriter, request *htt
 		adminBadRequest(writer, "invalid request")
 		return
 	}
-	r.adminMutationMu.Lock()
-	defer r.adminMutationMu.Unlock()
+	r.adminTopologyMu.Lock()
+	defer r.adminTopologyMu.Unlock()
 	current, err := r.store.GetCredential(request.Context(), chi.URLParam(request, "id"))
 	if err != nil {
 		adminMutationError(writer, err)
@@ -129,8 +129,8 @@ func (r *Runtime) deleteAdminCredential(writer http.ResponseWriter, request *htt
 		return
 	}
 	credentialID := chi.URLParam(request, "id")
-	r.adminMutationMu.Lock()
-	defer r.adminMutationMu.Unlock()
+	r.adminTopologyMu.Lock()
+	defer r.adminTopologyMu.Unlock()
 	if err := r.store.DeleteCredential(request.Context(), credentialID, expected); err != nil {
 		if errors.Is(err, boltstore.ErrCredentialInUse) {
 			writeJSON(writer, http.StatusConflict, map[string]string{"error": "credential is still referenced"})
@@ -158,8 +158,8 @@ func (r *Runtime) createAdminProvider(writer http.ResponseWriter, request *http.
 		return
 	}
 	now := time.Now().UTC()
-	r.adminMutationMu.Lock()
-	defer r.adminMutationMu.Unlock()
+	r.adminTopologyMu.Lock()
+	defer r.adminTopologyMu.Unlock()
 	instance, err := r.providerFromInput(request, providerID, input, now, now)
 	if err != nil {
 		adminBadRequest(writer, err.Error())
@@ -192,8 +192,8 @@ func (r *Runtime) updateAdminProvider(writer http.ResponseWriter, request *http.
 		adminBadRequest(writer, "invalid request")
 		return
 	}
-	r.adminMutationMu.Lock()
-	defer r.adminMutationMu.Unlock()
+	r.adminTopologyMu.Lock()
+	defer r.adminTopologyMu.Unlock()
 	current, err := r.store.GetProvider(request.Context(), chi.URLParam(request, "id"))
 	if err != nil {
 		adminMutationError(writer, err)
@@ -235,8 +235,8 @@ func (r *Runtime) deleteAdminProvider(writer http.ResponseWriter, request *http.
 	if !ok {
 		return
 	}
-	r.adminMutationMu.Lock()
-	defer r.adminMutationMu.Unlock()
+	r.adminTopologyMu.Lock()
+	defer r.adminTopologyMu.Unlock()
 	instance, err := r.store.GetProvider(request.Context(), chi.URLParam(request, "id"))
 	if err != nil {
 		adminMutationError(writer, err)
@@ -424,8 +424,8 @@ func (r *Runtime) createAdminRoute(writer http.ResponseWriter, request *http.Req
 		adminBadRequest(writer, err.Error())
 		return
 	}
-	r.adminMutationMu.Lock()
-	defer r.adminMutationMu.Unlock()
+	r.adminTopologyMu.Lock()
+	defer r.adminTopologyMu.Unlock()
 	if err := r.validateAdminRoute(request, route, ""); err != nil {
 		adminBadRequest(writer, err.Error())
 		return
@@ -457,8 +457,8 @@ func (r *Runtime) updateAdminRoute(writer http.ResponseWriter, request *http.Req
 		adminBadRequest(writer, "invalid request")
 		return
 	}
-	r.adminMutationMu.Lock()
-	defer r.adminMutationMu.Unlock()
+	r.adminTopologyMu.Lock()
+	defer r.adminTopologyMu.Unlock()
 	current, err := r.store.GetRoute(request.Context(), chi.URLParam(request, "id"))
 	if err != nil {
 		adminMutationError(writer, err)
@@ -500,8 +500,8 @@ func (r *Runtime) deleteAdminRoute(writer http.ResponseWriter, request *http.Req
 	if !ok {
 		return
 	}
-	r.adminMutationMu.Lock()
-	defer r.adminMutationMu.Unlock()
+	r.adminTopologyMu.Lock()
+	defer r.adminTopologyMu.Unlock()
 	route, err := r.store.GetRoute(request.Context(), chi.URLParam(request, "id"))
 	if err != nil {
 		adminMutationError(writer, err)

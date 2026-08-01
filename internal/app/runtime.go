@@ -38,44 +38,52 @@ import (
 )
 
 type Runtime struct {
-	config           config.Config
-	logger           *slog.Logger
-	lock             *lock.Lock
-	store            *boltstore.Store
-	ledger           *ledger.Log
-	state            *ledger.State
-	status           *ledger.Status
-	vault            *vault.Vault
-	auth             *auth.Snapshot
-	providers        *provider.Registry
-	accounting       *budget.Manager
-	gateway          *gatewayapi.Handler
-	gatewayService   *gatewaycore.Service
-	tokenGuard       *tokenguard.Manager
-	redactor         *redaction.Engine
-	alerts           *alert.Dispatcher
-	audit            *audit.Log
-	auditCommitMu    sync.Mutex
-	adminMutationMu  sync.Mutex
-	metricsTokenHash [32]byte
-	adminSessions    *adminauth.Manager
-	adminLoginMu     sync.Mutex
-	adminLogin       map[string]adminLoginWindow
-	setupMu          sync.Mutex
-	setupToken       string
-	setupTokenNeeded bool
-	backgroundCtx    context.Context
-	backgroundCancel context.CancelFunc
-	backgroundWait   sync.WaitGroup
-	usage            *usage.Aggregate
-	usageCollector   *usage.Collector
-	usageExporter    *usage.Exporter
-	usageLocation    *time.Location
-	closeOnce        sync.Once
-	closeErr         error
-	draining         atomic.Bool
-	runtimeSettings  atomic.Pointer[domain.RuntimeSettings]
-	uiSettings       atomic.Pointer[domain.InstanceUISettings]
+	config            config.Config
+	logger            *slog.Logger
+	lock              *lock.Lock
+	store             *boltstore.Store
+	ledger            *ledger.Log
+	state             *ledger.State
+	status            *ledger.Status
+	vault             *vault.Vault
+	auth              *auth.Snapshot
+	providers         *provider.Registry
+	accounting        *budget.Manager
+	gateway           *gatewayapi.Handler
+	gatewayService    *gatewaycore.Service
+	tokenGuard        *tokenguard.Manager
+	redactor          *redaction.Engine
+	alerts            *alert.Dispatcher
+	audit             *audit.Log
+	auditBatchMu      sync.Mutex
+	auditBatchPending []adminAuditRequest
+	auditBatchRunning bool
+	adminTopologyMu   sync.Mutex
+	adminProjectMu    sync.Mutex
+	adminAlertMu      sync.Mutex
+	adminSettingsMu   sync.Mutex
+	adminIdentityMu   sync.Mutex
+	metricsTokenHash  [32]byte
+	adminSessions     *adminauth.Manager
+	adminLoginMu      sync.Mutex
+	adminLogin        map[string]adminLoginWindow
+	adminSetupRateMu  sync.Mutex
+	adminSetupRate    map[string]adminLoginWindow
+	setupMu           sync.Mutex
+	setupToken        string
+	setupTokenNeeded  bool
+	backgroundCtx     context.Context
+	backgroundCancel  context.CancelFunc
+	backgroundWait    sync.WaitGroup
+	usage             *usage.Aggregate
+	usageCollector    *usage.Collector
+	usageExporter     *usage.Exporter
+	usageLocation     *time.Location
+	closeOnce         sync.Once
+	closeErr          error
+	draining          atomic.Bool
+	runtimeSettings   atomic.Pointer[domain.RuntimeSettings]
+	uiSettings        atomic.Pointer[domain.InstanceUISettings]
 }
 
 func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime, error) {
@@ -347,6 +355,7 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		metricsTokenHash: metricsTokenHash,
 		adminSessions:    adminSessions,
 		adminLogin:       make(map[string]adminLoginWindow),
+		adminSetupRate:   make(map[string]adminLoginWindow),
 		setupToken:       setupToken,
 		setupTokenNeeded: setupRequiresToken(cfg),
 		usage:            usageAggregate,
@@ -630,9 +639,7 @@ func (r *Runtime) Close() error {
 		r.backgroundCancel()
 		r.backgroundWait.Wait()
 		r.alerts.Close()
-		r.auditCommitMu.Lock()
 		auditErr := appendSystemAudit(r.audit, r.store, "system.shutdown")
-		r.auditCommitMu.Unlock()
 		r.closeErr = errors.Join(
 			auditErr,
 			func() error {

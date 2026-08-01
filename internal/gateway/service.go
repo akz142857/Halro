@@ -90,6 +90,216 @@ type ServiceOptions struct {
 	Redactor                   *redaction.Engine
 }
 
+type requestRun struct {
+	service         *Service
+	principal       auth.AuthResult
+	policyLease     *limiter.Lease
+	requestLease    budget.Request
+	requestID       string
+	actualTPMTokens int64
+	providerCalled  bool
+	providerFailed  bool
+}
+
+type activeAttempt struct {
+	service     *Service
+	run         *requestRun
+	accounting  budget.Attempt
+	breaker     *circuit.Lease
+	concurrency *targetConcurrencyLease
+	startedAt   time.Time
+}
+
+func (s *Service) resolveRequest(
+	ctx context.Context,
+	plaintextKey, model string,
+	operation provider.Operation,
+	unsupportedMessage string,
+) (auth.AuthResult, []provider.Target, error) {
+	principal, err := s.auth.Authenticate(plaintextKey, s.now())
+	if err != nil {
+		return auth.AuthResult{}, nil, gatewayError("invalid_api_key", "invalid API key", 401, err)
+	}
+	if !slices.Contains(principal.Project.AllowedRoutes, model) {
+		return auth.AuthResult{}, nil, gatewayError("model_not_allowed", "model is not allowed for this project", 403, nil)
+	}
+	if err := authorizeSource(ctx, principal.Project); err != nil {
+		return auth.AuthResult{}, nil, err
+	}
+	targets := s.registry.ResolveCandidatesFor(model, operation)
+	if len(targets) == 0 {
+		if len(s.registry.ResolveAll(model)) > 0 {
+			return auth.AuthResult{}, nil, gatewayError("unsupported_feature", unsupportedMessage, 400, nil)
+		}
+		return auth.AuthResult{}, nil, gatewayError("model_not_found", "model route was not found", 404, nil)
+	}
+	return principal, targets, nil
+}
+
+func (s *Service) beginRequestRun(
+	ctx context.Context,
+	principal auth.AuthResult,
+	model string,
+	targets []provider.Target,
+	totalTokens, inputTokens, outputTokens int64,
+) (*requestRun, error) {
+	if err := s.admitTokenGuard(ctx, principal, targets, totalTokens, inputTokens, outputTokens); err != nil {
+		return nil, err
+	}
+	policyLease, err := s.limiter.Acquire(principal.Project, totalTokens, s.now())
+	if err != nil {
+		return nil, s.mapLimitError(err)
+	}
+	requestID, err := id.New("req")
+	if err != nil {
+		policyLease.Release()
+		return nil, gatewayError("internal_error", "unable to create request ID", 500, err)
+	}
+	requestLease, err := s.accounting.BeginRequestDetailed(
+		ctx, principal.Project.ID, principal.Key.ID, requestID, model,
+	)
+	if err != nil {
+		policyLease.Release()
+		return nil, gatewayError("accounting_unavailable", "accounting is unavailable", 503, err)
+	}
+	return &requestRun{
+		service: s, principal: principal, policyLease: policyLease,
+		requestLease: requestLease, requestID: requestID,
+	}, nil
+}
+
+func (run *requestRun) close() {
+	_ = run.policyLease.Reconcile(run.actualTPMTokens, run.service.now())
+	run.policyLease.Release()
+	if run.providerCalled {
+		run.service.tokenGuard.Complete(
+			run.principal.Project.TokenGuardPolicyID,
+			run.principal.Project.ID,
+			run.principal.Key.ID,
+			run.service.now(),
+			run.providerFailed,
+		)
+	}
+}
+
+func (run *requestRun) recordProviderResult(providerErr error, settlement budget.Settlement) {
+	run.providerCalled = true
+	run.providerFailed = providerErr != nil
+	run.actualTPMTokens = accumulateTPMTokens(run.actualTPMTokens, settlement)
+}
+
+func (s *Service) exhaustedAttemptsError(lastErr error) error {
+	switch {
+	case errors.Is(lastErr, budget.ErrExceeded):
+		s.rejections.budget.Add(1)
+		return gatewayError("budget_exceeded", "daily budget exceeded", 403, lastErr)
+	case errors.Is(lastErr, errDeploymentConcurrency):
+		return gatewayError("deployment_concurrency_limit_exceeded", "deployment concurrency limit exceeded", 429, lastErr)
+	case errors.Is(lastErr, provider.ErrConcurrency):
+		err := gatewayError("provider_concurrency_limit_exceeded", "all eligible providers are at their concurrency limit", 429, lastErr)
+		err.RetryAfter = time.Second
+		return err
+	case errors.Is(lastErr, circuit.ErrOpen):
+		return gatewayError("provider_unavailable", "all provider circuits are open", 503, lastErr)
+	case errors.Is(lastErr, context.Canceled), errors.Is(lastErr, context.DeadlineExceeded):
+		return lastErr
+	case lastErr != nil:
+		return mapProviderError(lastErr)
+	default:
+		return gatewayError("provider_unavailable", "no provider attempt was available", 503, nil)
+	}
+}
+
+func terminalProviderError(err error) error {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	return mapProviderError(err)
+}
+
+func (s *Service) startAttempt(
+	ctx context.Context,
+	run *requestRun,
+	target provider.Target,
+	inputTokens, outputTokens int64,
+	targetIndex, targetTry, attemptNumber int,
+) (*activeAttempt, error) {
+	breakerLease, err := s.breakers.Acquire(target.ID, s.now())
+	if err != nil {
+		return nil, err
+	}
+	providerLease, err := s.acquireTargetConcurrency(target)
+	if err != nil {
+		breakerLease.Done(nil, s.now())
+		if errors.Is(err, errDeploymentConcurrency) {
+			s.rejections.deploymentConcurrency.Add(1)
+		} else {
+			s.rejections.providerConcurrency.Add(1)
+		}
+		return nil, err
+	}
+	reservation, err := estimateReservation(inputTokens, outputTokens, target)
+	if err != nil {
+		providerLease.Release()
+		breakerLease.Done(nil, s.now())
+		finalizeErr := s.finalizeRequest(run.requestLease, "accounting_error")
+		return nil, gatewayError(
+			"accounting_unavailable", "accounting is unavailable", 503,
+			errors.Join(err, finalizeErr),
+		)
+	}
+	attempt, err := s.accounting.ReserveAttemptDetailed(
+		ctx, run.requestLease, run.principal.Project.DailyBudgetMicrosUSD, reservation,
+		budget.AttemptMetadata{
+			RouteID: target.ID, DeploymentID: target.DeploymentID,
+			ProviderID: target.ProviderID, ProviderModel: target.ProviderModel,
+			AttemptNumber: attemptNumber, RetryCount: targetTry, FallbackCount: targetIndex,
+		},
+	)
+	if err != nil {
+		providerLease.Release()
+		breakerLease.Done(nil, s.now())
+		if errors.Is(err, budget.ErrExceeded) {
+			return nil, err
+		}
+		finalizeErr := s.finalizeRequest(run.requestLease, "accounting_error")
+		return nil, gatewayError(
+			"accounting_unavailable", "accounting is unavailable", 503,
+			errors.Join(err, finalizeErr),
+		)
+	}
+	if err := s.accounting.MarkStarted(ctx, attempt); err != nil {
+		providerLease.Release()
+		breakerLease.Done(nil, s.now())
+		cleanupErr := s.settleAttempt(attempt, budget.Settlement{Outcome: "start_failed"})
+		finalizeErr := s.finalizeRequest(run.requestLease, "accounting_error")
+		return nil, gatewayError(
+			"accounting_unavailable", "accounting is unavailable", 503,
+			errors.Join(err, cleanupErr, finalizeErr),
+		)
+	}
+	return &activeAttempt{
+		service: s, run: run, accounting: attempt, breaker: breakerLease,
+		concurrency: providerLease, startedAt: s.now(),
+	}, nil
+}
+
+func (attempt *activeAttempt) finish(providerErr error, settlement budget.Settlement) error {
+	attempt.concurrency.Release()
+	attempt.run.recordProviderResult(providerErr, settlement)
+	enrichSettlement(&settlement, providerErr, attempt.startedAt, attempt.service.now())
+	if err := attempt.service.settleAttempt(attempt.accounting, settlement); err != nil {
+		attempt.breaker.Done(availabilityFailure(providerErr), attempt.service.now())
+		finalizeErr := attempt.service.finalizeRequest(attempt.run.requestLease, "accounting_error")
+		return gatewayError(
+			"accounting_unavailable", "request accounting could not be finalized", 503,
+			errors.Join(err, finalizeErr),
+		)
+	}
+	attempt.breaker.Done(availabilityFailure(providerErr), attempt.service.now())
+	return nil
+}
+
 type RejectionMetrics struct {
 	RPM                   uint64
 	TPM                   uint64
@@ -244,22 +454,12 @@ func (s *Service) Chat(
 	if request.Stream {
 		return openaiapi.ChatCompletionResponse{}, gatewayError("unsupported_feature", "streaming is not available yet", 400, nil)
 	}
-	principal, err := s.auth.Authenticate(plaintextKey, s.now())
+	principal, targets, err := s.resolveRequest(
+		ctx, plaintextKey, request.Model, provider.OperationChat,
+		"model route does not support chat completions",
+	)
 	if err != nil {
-		return openaiapi.ChatCompletionResponse{}, gatewayError("invalid_api_key", "invalid API key", 401, err)
-	}
-	if !slices.Contains(principal.Project.AllowedRoutes, request.Model) {
-		return openaiapi.ChatCompletionResponse{}, gatewayError("model_not_allowed", "model is not allowed for this project", 403, nil)
-	}
-	if err := authorizeSource(ctx, principal.Project); err != nil {
 		return openaiapi.ChatCompletionResponse{}, err
-	}
-	targets := s.registry.ResolveCandidatesFor(request.Model, provider.OperationChat)
-	if len(targets) == 0 {
-		if len(s.registry.ResolveAll(request.Model)) > 0 {
-			return openaiapi.ChatCompletionResponse{}, gatewayError("unsupported_feature", "model route does not support chat completions", 400, nil)
-		}
-		return openaiapi.ChatCompletionResponse{}, gatewayError("model_not_found", "model route was not found", 404, nil)
 	}
 	targets = filterChatCapabilities(targets, request)
 	if len(targets) == 0 {
@@ -285,41 +485,12 @@ func (s *Service) Chat(
 	if len(targets) == 0 {
 		return openaiapi.ChatCompletionResponse{}, gatewayError("token_limit_exceeded", "request exceeds the model deployment token limits", 400, nil)
 	}
-	if err := s.admitTokenGuard(ctx, principal, targets, totalTokens, inputTokens, outputTokens); err != nil {
+	run, err := s.beginRequestRun(ctx, principal, request.Model, targets, totalTokens, inputTokens, outputTokens)
+	if err != nil {
 		return openaiapi.ChatCompletionResponse{}, err
 	}
-	providerCalled := false
-	providerFailed := false
-	defer func() {
-		if providerCalled {
-			s.tokenGuard.Complete(
-				principal.Project.TokenGuardPolicyID,
-				principal.Project.ID,
-				principal.Key.ID,
-				s.now(),
-				providerFailed,
-			)
-		}
-	}()
-	policyLease, err := s.limiter.Acquire(principal.Project, totalTokens, s.now())
-	if err != nil {
-		return openaiapi.ChatCompletionResponse{}, s.mapLimitError(err)
-	}
-	actualTPMTokens := int64(0)
-	defer func() {
-		_ = policyLease.Reconcile(actualTPMTokens, s.now())
-		policyLease.Release()
-	}()
-	requestID, err := id.New("req")
-	if err != nil {
-		return openaiapi.ChatCompletionResponse{}, gatewayError("internal_error", "unable to create request ID", 500, err)
-	}
-	requestLease, err := s.accounting.BeginRequestDetailed(
-		ctx, principal.Project.ID, principal.Key.ID, requestID, request.Model,
-	)
-	if err != nil {
-		return openaiapi.ChatCompletionResponse{}, gatewayError("accounting_unavailable", "accounting is unavailable", 503, err)
-	}
+	defer run.close()
+	requestID, requestLease := run.requestID, run.requestLease
 	var lastErr error
 	attemptCount := 0
 	for targetIndex, target := range targets {
@@ -334,82 +505,28 @@ func (s *Service) Chat(
 					break
 				}
 			}
-			breakerLease, err := s.breakers.Acquire(target.ID, s.now())
-			if err != nil {
-				lastErr = err
-				break
-			}
-			providerLease, err := s.acquireTargetConcurrency(target)
-			if err != nil {
-				breakerLease.Done(nil, s.now())
-				if errors.Is(err, errDeploymentConcurrency) {
-					s.rejections.deploymentConcurrency.Add(1)
-				} else {
-					s.rejections.providerConcurrency.Add(1)
-				}
-				lastErr = err
-				break
-			}
-			reservation, err := estimateReservation(inputTokens, outputTokens, target)
-			if err != nil {
-				providerLease.Release()
-				breakerLease.Done(nil, s.now())
-				if !errors.Is(err, budget.ErrExceeded) {
-					finalizeErr := s.finalizeRequest(requestLease, "accounting_error")
-					return openaiapi.ChatCompletionResponse{}, gatewayError(
-						"accounting_unavailable", "accounting is unavailable", 503,
-						errors.Join(err, finalizeErr),
-					)
-				}
-				lastErr = err
-				break
-			}
-			attempt, err := s.accounting.ReserveAttemptDetailed(
-				ctx, requestLease, principal.Project.DailyBudgetMicrosUSD, reservation,
-				budget.AttemptMetadata{
-					RouteID: target.ID, DeploymentID: target.DeploymentID,
-					ProviderID: target.ProviderID, ProviderModel: target.ProviderModel,
-					AttemptNumber: attemptCount + 1, RetryCount: targetTry, FallbackCount: targetIndex,
-				},
+			attempt, err := s.startAttempt(
+				ctx, run, target, inputTokens, outputTokens,
+				targetIndex, targetTry, attemptCount+1,
 			)
 			if err != nil {
-				providerLease.Release()
-				breakerLease.Done(nil, s.now())
+				var fatal *Error
+				if errors.As(err, &fatal) {
+					return openaiapi.ChatCompletionResponse{}, fatal
+				}
 				lastErr = err
 				break
 			}
 			attemptCount++
-			if err := s.accounting.MarkStarted(ctx, attempt); err != nil {
-				providerLease.Release()
-				breakerLease.Done(nil, s.now())
-				cleanupErr := s.settleAttempt(attempt, budget.Settlement{Outcome: "start_failed"})
-				finalizeErr := s.finalizeRequest(requestLease, "accounting_error")
-				return openaiapi.ChatCompletionResponse{}, gatewayError(
-					"accounting_unavailable", "accounting is unavailable", 503,
-					errors.Join(err, cleanupErr, finalizeErr),
-				)
-			}
-			providerCalled = true
-			startedAt := s.now()
 			response, providerErr := target.Adapter.Chat(ctx, provider.ChatCall{
 				RequestID: requestID, ProviderModel: target.ProviderModel, Request: request,
 			})
-			providerLease.Release()
-			providerFailed = providerErr != nil
 			settlement := settlementForResult(
-				response, providerErr, inputTokens, outputTokens, target, attempt.ReservationMicrosUSD,
+				response, providerErr, inputTokens, outputTokens, target, attempt.accounting.ReservationMicrosUSD,
 			)
-			actualTPMTokens = accumulateTPMTokens(actualTPMTokens, settlement)
-			enrichSettlement(&settlement, providerErr, startedAt, s.now())
-			if err := s.settleAttempt(attempt, settlement); err != nil {
-				breakerLease.Done(availabilityFailure(providerErr), s.now())
-				finalizeErr := s.finalizeRequest(requestLease, "accounting_error")
-				return openaiapi.ChatCompletionResponse{}, gatewayError(
-					"accounting_unavailable", "request accounting could not be finalized", 503,
-					errors.Join(err, finalizeErr),
-				)
+			if err := attempt.finish(providerErr, settlement); err != nil {
+				return openaiapi.ChatCompletionResponse{}, err
 			}
-			breakerLease.Done(availabilityFailure(providerErr), s.now())
 			if providerErr == nil {
 				response, err = s.redactor.ProcessOutboundChat(
 					principal.Project.RedactionPolicyID, response,
@@ -438,7 +555,7 @@ func (s *Service) Chat(
 						"accounting_unavailable", "request accounting could not be finalized", 503, err,
 					)
 				}
-				return openaiapi.ChatCompletionResponse{}, mapProviderError(providerErr)
+				return openaiapi.ChatCompletionResponse{}, terminalProviderError(providerErr)
 			}
 		}
 		if attemptCount >= s.maxAttempts || ctx.Err() != nil {
@@ -450,23 +567,7 @@ func (s *Service) Chat(
 			"accounting_unavailable", "request accounting could not be finalized", 503, err,
 		)
 	}
-	switch {
-	case errors.Is(lastErr, budget.ErrExceeded):
-		s.rejections.budget.Add(1)
-		return openaiapi.ChatCompletionResponse{}, gatewayError("budget_exceeded", "daily budget exceeded", 403, lastErr)
-	case errors.Is(lastErr, errDeploymentConcurrency):
-		return openaiapi.ChatCompletionResponse{}, gatewayError("deployment_concurrency_limit_exceeded", "deployment concurrency limit exceeded", 429, lastErr)
-	case errors.Is(lastErr, provider.ErrConcurrency):
-		err := gatewayError("provider_concurrency_limit_exceeded", "all eligible providers are at their concurrency limit", 429, lastErr)
-		err.RetryAfter = time.Second
-		return openaiapi.ChatCompletionResponse{}, err
-	case errors.Is(lastErr, circuit.ErrOpen):
-		return openaiapi.ChatCompletionResponse{}, gatewayError("provider_unavailable", "all provider circuits are open", 503, lastErr)
-	case lastErr != nil:
-		return openaiapi.ChatCompletionResponse{}, mapProviderError(lastErr)
-	default:
-		return openaiapi.ChatCompletionResponse{}, gatewayError("provider_unavailable", "no provider attempt was available", 503, nil)
-	}
+	return openaiapi.ChatCompletionResponse{}, s.exhaustedAttemptsError(lastErr)
 }
 
 func (s *Service) ChatStream(
@@ -478,22 +579,12 @@ func (s *Service) ChatStream(
 	if !request.Stream {
 		return gatewayError("invalid_request_error", "stream must be true", 400, nil)
 	}
-	principal, err := s.auth.Authenticate(plaintextKey, s.now())
+	principal, targets, err := s.resolveRequest(
+		ctx, plaintextKey, request.Model, provider.OperationChatStream,
+		"model route does not support streaming",
+	)
 	if err != nil {
-		return gatewayError("invalid_api_key", "invalid API key", 401, err)
-	}
-	if !slices.Contains(principal.Project.AllowedRoutes, request.Model) {
-		return gatewayError("model_not_allowed", "model is not allowed for this project", 403, nil)
-	}
-	if err := authorizeSource(ctx, principal.Project); err != nil {
 		return err
-	}
-	targets := s.registry.ResolveCandidatesFor(request.Model, provider.OperationChatStream)
-	if len(targets) == 0 {
-		if len(s.registry.ResolveAll(request.Model)) > 0 {
-			return gatewayError("unsupported_feature", "model route does not support streaming", 400, nil)
-		}
-		return gatewayError("model_not_found", "model route was not found", 404, nil)
 	}
 	targets = filterChatCapabilities(targets, request)
 	if len(targets) == 0 {
@@ -526,41 +617,12 @@ func (s *Service) ChatStream(
 	if len(targets) == 0 {
 		return gatewayError("token_limit_exceeded", "request exceeds the model deployment token limits", 400, nil)
 	}
-	if err := s.admitTokenGuard(ctx, principal, targets, totalTokens, inputTokens, outputTokens); err != nil {
+	run, err := s.beginRequestRun(ctx, principal, request.Model, targets, totalTokens, inputTokens, outputTokens)
+	if err != nil {
 		return err
 	}
-	providerCalled := false
-	providerFailed := false
-	defer func() {
-		if providerCalled {
-			s.tokenGuard.Complete(
-				principal.Project.TokenGuardPolicyID,
-				principal.Project.ID,
-				principal.Key.ID,
-				s.now(),
-				providerFailed,
-			)
-		}
-	}()
-	policyLease, err := s.limiter.Acquire(principal.Project, totalTokens, s.now())
-	if err != nil {
-		return s.mapLimitError(err)
-	}
-	actualTPMTokens := int64(0)
-	defer func() {
-		_ = policyLease.Reconcile(actualTPMTokens, s.now())
-		policyLease.Release()
-	}()
-	requestID, err := id.New("req")
-	if err != nil {
-		return gatewayError("internal_error", "unable to create request ID", 500, err)
-	}
-	requestLease, err := s.accounting.BeginRequestDetailed(
-		ctx, principal.Project.ID, principal.Key.ID, requestID, request.Model,
-	)
-	if err != nil {
-		return gatewayError("accounting_unavailable", "accounting is unavailable", 503, err)
-	}
+	defer run.close()
+	requestID, requestLease := run.requestID, run.requestLease
 	var lastErr error
 	totalAttempts := 0
 	emitted := false
@@ -576,70 +638,27 @@ func (s *Service) ChatStream(
 					break
 				}
 			}
-			breakerLease, err := s.breakers.Acquire(target.ID, s.now())
-			if err != nil {
-				lastErr = err
-				break
-			}
-			providerLease, err := s.acquireTargetConcurrency(target)
-			if err != nil {
-				breakerLease.Done(nil, s.now())
-				if errors.Is(err, errDeploymentConcurrency) {
-					s.rejections.deploymentConcurrency.Add(1)
-				} else {
-					s.rejections.providerConcurrency.Add(1)
-				}
-				lastErr = err
-				break
-			}
-			reservation, err := estimateReservation(inputTokens, outputTokens, target)
-			if err != nil {
-				providerLease.Release()
-				breakerLease.Done(nil, s.now())
-				if !errors.Is(err, budget.ErrExceeded) {
-					finalizeErr := s.finalizeRequest(requestLease, "accounting_error")
-					return gatewayError(
-						"accounting_unavailable", "accounting is unavailable", 503,
-						errors.Join(err, finalizeErr),
-					)
-				}
-				lastErr = err
-				break
-			}
-			attempt, err := s.accounting.ReserveAttemptDetailed(
-				ctx, requestLease, principal.Project.DailyBudgetMicrosUSD, reservation,
-				budget.AttemptMetadata{
-					RouteID: target.ID, DeploymentID: target.DeploymentID,
-					ProviderID: target.ProviderID, ProviderModel: target.ProviderModel,
-					AttemptNumber: totalAttempts + 1, RetryCount: targetTry, FallbackCount: targetIndex,
-				},
+			attempt, err := s.startAttempt(
+				ctx, run, target, inputTokens, outputTokens,
+				targetIndex, targetTry, totalAttempts+1,
 			)
 			if err != nil {
-				providerLease.Release()
-				breakerLease.Done(nil, s.now())
+				var fatal *Error
+				if errors.As(err, &fatal) {
+					return fatal
+				}
 				lastErr = err
 				break
 			}
 			totalAttempts++
-			if err := s.accounting.MarkStarted(ctx, attempt); err != nil {
-				providerLease.Release()
-				breakerLease.Done(nil, s.now())
-				cleanupErr := s.settleAttempt(attempt, budget.Settlement{Outcome: "start_failed"})
-				finalizeErr := s.finalizeRequest(requestLease, "accounting_error")
-				return gatewayError(
-					"accounting_unavailable", "accounting is unavailable", 503,
-					errors.Join(err, cleanupErr, finalizeErr),
-				)
-			}
 			attemptEmitted := false
-			startedAt := s.now()
 			streamRedactor, streamErr := s.redactor.NewStream(
 				principal.Project.RedactionPolicyID,
 			)
 			if streamErr != nil {
-				providerLease.Release()
-				breakerLease.Done(nil, s.now())
-				cleanupErr := s.settleAttempt(attempt, budget.Settlement{Outcome: "policy_rejected"})
+				attempt.concurrency.Release()
+				attempt.breaker.Done(nil, s.now())
+				cleanupErr := s.settleAttempt(attempt.accounting, budget.Settlement{Outcome: "policy_rejected"})
 				finalizeErr := s.finalizeRequest(requestLease, "policy_rejected")
 				return gatewayError(
 					"streaming_redaction_incompatible",
@@ -647,7 +666,6 @@ func (s *Service) ChatStream(
 					400, errors.Join(streamErr, cleanupErr, finalizeErr),
 				)
 			}
-			providerCalled = true
 			usage, providerErr := target.Adapter.ChatStream(ctx, provider.ChatCall{
 				RequestID: requestID, ProviderModel: target.ProviderModel, Request: request,
 			}, func(event semantic.Event) error {
@@ -684,23 +702,13 @@ func (s *Service) ChatStream(
 					}
 				}
 			}
-			providerLease.Release()
-			providerFailed = providerErr != nil
 			settlement := streamSettlement(
 				usage, providerErr, attemptEmitted, inputTokens, outputTokens,
-				target, attempt.ReservationMicrosUSD,
+				target, attempt.accounting.ReservationMicrosUSD,
 			)
-			actualTPMTokens = accumulateTPMTokens(actualTPMTokens, settlement)
-			enrichSettlement(&settlement, providerErr, startedAt, s.now())
-			if err := s.settleAttempt(attempt, settlement); err != nil {
-				breakerLease.Done(availabilityFailure(providerErr), s.now())
-				finalizeErr := s.finalizeRequest(requestLease, "accounting_error")
-				return gatewayError(
-					"accounting_unavailable", "request accounting could not be finalized", 503,
-					errors.Join(err, finalizeErr),
-				)
+			if err := attempt.finish(providerErr, settlement); err != nil {
+				return err
 			}
-			breakerLease.Done(availabilityFailure(providerErr), s.now())
 			if providerErr == nil {
 				if err := s.finalizeRequest(requestLease, "success"); err != nil {
 					return gatewayError("accounting_unavailable", "request accounting could not be finalized", 503, err)
@@ -722,10 +730,7 @@ func (s *Service) ChatStream(
 						providerErr,
 					)
 				}
-				if errors.Is(providerErr, context.Canceled) || errors.Is(providerErr, context.DeadlineExceeded) {
-					return providerErr
-				}
-				return mapProviderError(providerErr)
+				return terminalProviderError(providerErr)
 			}
 		}
 		if totalAttempts >= s.maxAttempts || emitted || ctx.Err() != nil {
@@ -735,25 +740,7 @@ func (s *Service) ChatStream(
 	if err := s.finalizeRequest(requestLease, "provider_error"); err != nil {
 		return gatewayError("accounting_unavailable", "request accounting could not be finalized", 503, err)
 	}
-	switch {
-	case errors.Is(lastErr, budget.ErrExceeded):
-		s.rejections.budget.Add(1)
-		return gatewayError("budget_exceeded", "daily budget exceeded", 403, lastErr)
-	case errors.Is(lastErr, errDeploymentConcurrency):
-		return gatewayError("deployment_concurrency_limit_exceeded", "deployment concurrency limit exceeded", 429, lastErr)
-	case errors.Is(lastErr, provider.ErrConcurrency):
-		err := gatewayError("provider_concurrency_limit_exceeded", "all eligible providers are at their concurrency limit", 429, lastErr)
-		err.RetryAfter = time.Second
-		return err
-	case errors.Is(lastErr, circuit.ErrOpen):
-		return gatewayError("provider_unavailable", "all provider circuits are open", 503, lastErr)
-	case errors.Is(lastErr, context.Canceled), errors.Is(lastErr, context.DeadlineExceeded):
-		return lastErr
-	case lastErr != nil:
-		return mapProviderError(lastErr)
-	default:
-		return gatewayError("provider_unavailable", "no provider attempt was available", 503, nil)
-	}
+	return s.exhaustedAttemptsError(lastErr)
 }
 
 func (s *Service) Embeddings(
@@ -761,22 +748,12 @@ func (s *Service) Embeddings(
 	plaintextKey string,
 	request openaiapi.EmbeddingRequest,
 ) (openaiapi.EmbeddingResponse, error) {
-	principal, err := s.auth.Authenticate(plaintextKey, s.now())
+	principal, targets, err := s.resolveRequest(
+		ctx, plaintextKey, request.Model, provider.OperationEmbeddings,
+		"model route does not support embeddings",
+	)
 	if err != nil {
-		return openaiapi.EmbeddingResponse{}, gatewayError("invalid_api_key", "invalid API key", 401, err)
-	}
-	if !slices.Contains(principal.Project.AllowedRoutes, request.Model) {
-		return openaiapi.EmbeddingResponse{}, gatewayError("model_not_allowed", "model is not allowed for this project", 403, nil)
-	}
-	if err := authorizeSource(ctx, principal.Project); err != nil {
 		return openaiapi.EmbeddingResponse{}, err
-	}
-	targets := s.registry.ResolveCandidatesFor(request.Model, provider.OperationEmbeddings)
-	if len(targets) == 0 {
-		if len(s.registry.ResolveAll(request.Model)) > 0 {
-			return openaiapi.EmbeddingResponse{}, gatewayError("unsupported_feature", "model route does not support embeddings", 400, nil)
-		}
-		return openaiapi.EmbeddingResponse{}, gatewayError("model_not_found", "model route was not found", 404, nil)
 	}
 	request, err = s.redactor.ProcessInboundEmbedding(
 		principal.Project.RedactionPolicyID, request,
@@ -792,41 +769,12 @@ func (s *Service) Embeddings(
 	if len(targets) == 0 {
 		return openaiapi.EmbeddingResponse{}, gatewayError("token_limit_exceeded", "request exceeds the model deployment token limits", 400, nil)
 	}
-	if err := s.admitTokenGuard(ctx, principal, targets, inputTokens, inputTokens, 0); err != nil {
+	run, err := s.beginRequestRun(ctx, principal, request.Model, targets, inputTokens, inputTokens, 0)
+	if err != nil {
 		return openaiapi.EmbeddingResponse{}, err
 	}
-	providerCalled := false
-	providerFailed := false
-	defer func() {
-		if providerCalled {
-			s.tokenGuard.Complete(
-				principal.Project.TokenGuardPolicyID,
-				principal.Project.ID,
-				principal.Key.ID,
-				s.now(),
-				providerFailed,
-			)
-		}
-	}()
-	policyLease, err := s.limiter.Acquire(principal.Project, inputTokens, s.now())
-	if err != nil {
-		return openaiapi.EmbeddingResponse{}, s.mapLimitError(err)
-	}
-	actualTPMTokens := int64(0)
-	defer func() {
-		_ = policyLease.Reconcile(actualTPMTokens, s.now())
-		policyLease.Release()
-	}()
-	requestID, err := id.New("req")
-	if err != nil {
-		return openaiapi.EmbeddingResponse{}, gatewayError("internal_error", "unable to create request ID", 500, err)
-	}
-	requestLease, err := s.accounting.BeginRequestDetailed(
-		ctx, principal.Project.ID, principal.Key.ID, requestID, request.Model,
-	)
-	if err != nil {
-		return openaiapi.EmbeddingResponse{}, gatewayError("accounting_unavailable", "accounting is unavailable", 503, err)
-	}
+	defer run.close()
+	requestID, requestLease := run.requestID, run.requestLease
 	var lastErr error
 	attemptCount := 0
 	for targetIndex, target := range targets {
@@ -841,82 +789,28 @@ func (s *Service) Embeddings(
 					break
 				}
 			}
-			breakerLease, err := s.breakers.Acquire(target.ID, s.now())
-			if err != nil {
-				lastErr = err
-				break
-			}
-			providerLease, err := s.acquireTargetConcurrency(target)
-			if err != nil {
-				breakerLease.Done(nil, s.now())
-				if errors.Is(err, errDeploymentConcurrency) {
-					s.rejections.deploymentConcurrency.Add(1)
-				} else {
-					s.rejections.providerConcurrency.Add(1)
-				}
-				lastErr = err
-				break
-			}
-			reservation, err := estimateReservation(inputTokens, 0, target)
-			if err != nil {
-				providerLease.Release()
-				breakerLease.Done(nil, s.now())
-				lastErr = err
-				break
-			}
-			attempt, err := s.accounting.ReserveAttemptDetailed(
-				ctx, requestLease, principal.Project.DailyBudgetMicrosUSD, reservation,
-				budget.AttemptMetadata{
-					RouteID: target.ID, DeploymentID: target.DeploymentID,
-					ProviderID: target.ProviderID, ProviderModel: target.ProviderModel,
-					AttemptNumber: attemptCount + 1, RetryCount: targetTry, FallbackCount: targetIndex,
-				},
+			attempt, err := s.startAttempt(
+				ctx, run, target, inputTokens, 0,
+				targetIndex, targetTry, attemptCount+1,
 			)
 			if err != nil {
-				providerLease.Release()
-				breakerLease.Done(nil, s.now())
-				if !errors.Is(err, budget.ErrExceeded) {
-					finalizeErr := s.finalizeRequest(requestLease, "accounting_error")
-					return openaiapi.EmbeddingResponse{}, gatewayError(
-						"accounting_unavailable", "accounting is unavailable", 503,
-						errors.Join(err, finalizeErr),
-					)
+				var fatal *Error
+				if errors.As(err, &fatal) {
+					return openaiapi.EmbeddingResponse{}, fatal
 				}
 				lastErr = err
 				break
 			}
 			attemptCount++
-			if err := s.accounting.MarkStarted(ctx, attempt); err != nil {
-				providerLease.Release()
-				breakerLease.Done(nil, s.now())
-				cleanupErr := s.settleAttempt(attempt, budget.Settlement{Outcome: "start_failed"})
-				finalizeErr := s.finalizeRequest(requestLease, "accounting_error")
-				return openaiapi.EmbeddingResponse{}, gatewayError(
-					"accounting_unavailable", "accounting is unavailable", 503,
-					errors.Join(err, cleanupErr, finalizeErr),
-				)
-			}
-			providerCalled = true
-			startedAt := s.now()
 			response, providerErr := target.Adapter.Embed(ctx, provider.EmbeddingCall{
 				RequestID: requestID, ProviderModel: target.ProviderModel, Request: request,
 			})
-			providerLease.Release()
-			providerFailed = providerErr != nil
 			settlement := embeddingSettlement(
-				response, providerErr, inputTokens, target, attempt.ReservationMicrosUSD,
+				response, providerErr, inputTokens, target, attempt.accounting.ReservationMicrosUSD,
 			)
-			actualTPMTokens = accumulateTPMTokens(actualTPMTokens, settlement)
-			enrichSettlement(&settlement, providerErr, startedAt, s.now())
-			if err := s.settleAttempt(attempt, settlement); err != nil {
-				breakerLease.Done(availabilityFailure(providerErr), s.now())
-				finalizeErr := s.finalizeRequest(requestLease, "accounting_error")
-				return openaiapi.EmbeddingResponse{}, gatewayError(
-					"accounting_unavailable", "request accounting could not be finalized", 503,
-					errors.Join(err, finalizeErr),
-				)
+			if err := attempt.finish(providerErr, settlement); err != nil {
+				return openaiapi.EmbeddingResponse{}, err
 			}
-			breakerLease.Done(availabilityFailure(providerErr), s.now())
 			if providerErr == nil {
 				if err := s.finalizeRequest(requestLease, "success"); err != nil {
 					return openaiapi.EmbeddingResponse{}, gatewayError(
@@ -933,7 +827,7 @@ func (s *Service) Embeddings(
 						"accounting_unavailable", "request accounting could not be finalized", 503, err,
 					)
 				}
-				return openaiapi.EmbeddingResponse{}, mapProviderError(providerErr)
+				return openaiapi.EmbeddingResponse{}, terminalProviderError(providerErr)
 			}
 		}
 		if attemptCount >= s.maxAttempts || ctx.Err() != nil {
@@ -945,23 +839,7 @@ func (s *Service) Embeddings(
 			"accounting_unavailable", "request accounting could not be finalized", 503, err,
 		)
 	}
-	switch {
-	case errors.Is(lastErr, budget.ErrExceeded):
-		s.rejections.budget.Add(1)
-		return openaiapi.EmbeddingResponse{}, gatewayError("budget_exceeded", "daily budget exceeded", 403, lastErr)
-	case errors.Is(lastErr, errDeploymentConcurrency):
-		return openaiapi.EmbeddingResponse{}, gatewayError("deployment_concurrency_limit_exceeded", "deployment concurrency limit exceeded", 429, lastErr)
-	case errors.Is(lastErr, provider.ErrConcurrency):
-		err := gatewayError("provider_concurrency_limit_exceeded", "all eligible providers are at their concurrency limit", 429, lastErr)
-		err.RetryAfter = time.Second
-		return openaiapi.EmbeddingResponse{}, err
-	case errors.Is(lastErr, circuit.ErrOpen):
-		return openaiapi.EmbeddingResponse{}, gatewayError("provider_unavailable", "all provider circuits are open", 503, lastErr)
-	case lastErr != nil:
-		return openaiapi.EmbeddingResponse{}, mapProviderError(lastErr)
-	default:
-		return openaiapi.EmbeddingResponse{}, gatewayError("provider_unavailable", "no provider attempt was available", 503, nil)
-	}
+	return openaiapi.EmbeddingResponse{}, s.exhaustedAttemptsError(lastErr)
 }
 
 func accumulateTPMTokens(total int64, settlement budget.Settlement) int64 {

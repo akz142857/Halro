@@ -621,6 +621,28 @@ func TestAmbiguousProviderFailureIsEstimatedAndSettled(t *testing.T) {
 	}
 }
 
+func TestAllOperationsPreserveTerminalContextErrors(t *testing.T) {
+	f := newFixture(t, 10_000)
+	defer f.close()
+	f.adapter.err = context.Canceled
+
+	if _, err := f.service.Chat(context.Background(), f.plaintext, chatRequest()); !errors.Is(err, context.Canceled) {
+		t.Fatalf("chat error=%v", err)
+	}
+	if _, err := f.service.Embeddings(context.Background(), f.plaintext, openaiapi.EmbeddingRequest{
+		Model: "chat", Input: json.RawMessage(`["hello"]`),
+	}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("embeddings error=%v", err)
+	}
+	streamRequest := chatRequest()
+	streamRequest.Stream = true
+	if err := f.service.ChatStream(context.Background(), f.plaintext, streamRequest, func(openaiapi.ChatCompletionResponse) error {
+		return nil
+	}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("stream error=%v", err)
+	}
+}
+
 func TestEmbeddingsUsesSameAuthorizationAndAccounting(t *testing.T) {
 	f := newFixture(t, 1_000)
 	defer f.close()

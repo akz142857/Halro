@@ -36,8 +36,8 @@ func (r *Runtime) createAdminDeployment(writer http.ResponseWriter, request *htt
 		adminStoreError(writer)
 		return
 	}
-	r.adminMutationMu.Lock()
-	defer r.adminMutationMu.Unlock()
+	r.adminTopologyMu.Lock()
+	defer r.adminTopologyMu.Unlock()
 	now := time.Now().UTC()
 	deployment, err := r.deploymentFromInput(request, deploymentID, input, now, now)
 	if err != nil {
@@ -71,8 +71,8 @@ func (r *Runtime) updateAdminDeployment(writer http.ResponseWriter, request *htt
 		adminBadRequest(writer, "invalid request")
 		return
 	}
-	r.adminMutationMu.Lock()
-	defer r.adminMutationMu.Unlock()
+	r.adminTopologyMu.Lock()
+	defer r.adminTopologyMu.Unlock()
 	current, err := r.store.GetDeployment(request.Context(), chi.URLParam(request, "id"))
 	if err != nil || current.DeletedAt != nil {
 		adminNotFound(writer)
@@ -114,8 +114,8 @@ func (r *Runtime) deleteAdminDeployment(writer http.ResponseWriter, request *htt
 	if !ok {
 		return
 	}
-	r.adminMutationMu.Lock()
-	defer r.adminMutationMu.Unlock()
+	r.adminTopologyMu.Lock()
+	defer r.adminTopologyMu.Unlock()
 	deployment, err := r.store.GetDeployment(request.Context(), chi.URLParam(request, "id"))
 	if err != nil || deployment.DeletedAt != nil {
 		adminNotFound(writer)

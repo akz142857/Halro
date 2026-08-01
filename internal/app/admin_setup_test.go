@@ -121,8 +121,8 @@ func TestAdminSetupRequiresTransientTokenForPublicAdmin(t *testing.T) {
 	throttled.RemoteAddr = "192.0.2.10:1234"
 	throttledResponse := httptest.NewRecorder()
 	runtime.adminRouter().ServeHTTP(throttledResponse, throttled)
-	if throttledResponse.Code != http.StatusTooManyRequests {
-		t.Fatalf("throttled token status=%d body=%s", throttledResponse.Code, throttledResponse.Body.String())
+	if throttledResponse.Code != http.StatusForbidden {
+		t.Fatalf("setup limiter shared login state: status=%d body=%s", throttledResponse.Code, throttledResponse.Body.String())
 	}
 
 	for _, candidate := range []string{"", "wrong-token", token} {

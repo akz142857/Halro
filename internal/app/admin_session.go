@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/akz142857/Heimdall/internal/adminauth"
@@ -21,6 +22,11 @@ const adminSessionCookie = "__Host-heimdall_session"
 type adminLoginWindow struct {
 	minute   time.Time
 	attempts int
+}
+
+type adminAuditRequest struct {
+	event  audit.Event
+	result chan error
 }
 
 type adminContextKey struct{}
@@ -261,26 +267,34 @@ func (r *Runtime) adminSameOrigin(request *http.Request) bool {
 }
 
 func (r *Runtime) allowAdminLogin(remoteAddress string, now time.Time) bool {
+	return allowAdminRate(&r.adminLoginMu, r.adminLogin, remoteAddress, now, r.config.Admin.LoginRPM)
+}
+
+func (r *Runtime) allowAdminSetup(remoteAddress string, now time.Time) bool {
+	return allowAdminRate(&r.adminSetupRateMu, r.adminSetupRate, remoteAddress, now, r.config.Admin.LoginRPM)
+}
+
+func allowAdminRate(mu *sync.Mutex, windows map[string]adminLoginWindow, remoteAddress string, now time.Time, limit int) bool {
 	host, _, err := net.SplitHostPort(remoteAddress)
 	if err != nil {
 		host = remoteAddress
 	}
 	minute := now.UTC().Truncate(time.Minute)
-	r.adminLoginMu.Lock()
-	defer r.adminLoginMu.Unlock()
-	window := r.adminLogin[host]
+	mu.Lock()
+	defer mu.Unlock()
+	window := windows[host]
 	if window.minute != minute {
 		window = adminLoginWindow{minute: minute}
 	}
-	if window.attempts >= r.config.Admin.LoginRPM {
+	if window.attempts >= limit {
 		return false
 	}
 	window.attempts++
-	r.adminLogin[host] = window
-	if len(r.adminLogin) > 4096 {
-		for key, value := range r.adminLogin {
+	windows[host] = window
+	if len(windows) > 4096 {
+		for key, value := range windows {
 			if value.minute.Before(minute) {
-				delete(r.adminLogin, key)
+				delete(windows, key)
 			}
 		}
 	}
@@ -302,20 +316,52 @@ func (r *Runtime) auditAdminLogin(username, outcome, reason string) {
 func (r *Runtime) appendAdminAudit(
 	actorType, actorID, action, targetType, targetID, outcome, reason string,
 ) error {
-	r.auditCommitMu.Lock()
-	defer r.auditCommitMu.Unlock()
 	eventID, err := id.New("aud")
 	if err != nil {
 		return err
 	}
-	if _, err := r.audit.Append(context.Background(), audit.Event{
+	request := adminAuditRequest{event: audit.Event{
 		EventID: eventID, OccurredAt: time.Now().UTC(), ActorType: actorType,
 		ActorID: actorID, Action: action, TargetType: targetType, TargetID: targetID,
 		Outcome: outcome, ReasonCode: reason,
-	}); err != nil {
-		return err
+	}, result: make(chan error, 1)}
+	r.auditBatchMu.Lock()
+	r.auditBatchPending = append(r.auditBatchPending, request)
+	leader := !r.auditBatchRunning
+	if leader {
+		r.auditBatchRunning = true
 	}
-	return checkpointAudit(r.store, r.audit.Summary())
+	r.auditBatchMu.Unlock()
+	if leader {
+		r.flushAdminAuditBatches()
+	}
+	return <-request.result
+}
+
+func (r *Runtime) flushAdminAuditBatches() {
+	for {
+		time.Sleep(time.Millisecond)
+		r.auditBatchMu.Lock()
+		batch := r.auditBatchPending
+		r.auditBatchPending = nil
+		if len(batch) == 0 {
+			r.auditBatchRunning = false
+			r.auditBatchMu.Unlock()
+			return
+		}
+		r.auditBatchMu.Unlock()
+		events := make([]audit.Event, len(batch))
+		for index := range batch {
+			events[index] = batch[index].event
+		}
+		_, err := r.audit.AppendBatch(context.Background(), events)
+		if err == nil {
+			err = checkpointAudit(r.store, r.audit.Summary())
+		}
+		for index := range batch {
+			batch[index].result <- err
+		}
+	}
 }
 
 func decodeAdminJSON(request *http.Request, value any) error {

@@ -91,7 +91,7 @@ func (r *Runtime) setupAdmin(writer http.ResponseWriter, request *http.Request) 
 	}
 	if r.setupTokenNeeded {
 		if !r.verifySetupToken(input.SetupToken) {
-			if !r.allowAdminLogin(request.RemoteAddr, time.Now()) {
+			if !r.allowAdminSetup(request.RemoteAddr, time.Now()) {
 				writer.Header().Set("Retry-After", "60")
 				writeJSON(writer, http.StatusTooManyRequests, map[string]string{"error": "setup rate limit exceeded"})
 				return
@@ -99,7 +99,7 @@ func (r *Runtime) setupAdmin(writer http.ResponseWriter, request *http.Request) 
 			writeJSON(writer, http.StatusForbidden, map[string]string{"error": "invalid setup token"})
 			return
 		}
-	} else if !r.allowAdminLogin(request.RemoteAddr, time.Now()) {
+	} else if !r.allowAdminSetup(request.RemoteAddr, time.Now()) {
 		writer.Header().Set("Retry-After", "60")
 		writeJSON(writer, http.StatusTooManyRequests, map[string]string{"error": "setup rate limit exceeded"})
 		return
@@ -112,8 +112,8 @@ func (r *Runtime) setupAdmin(writer http.ResponseWriter, request *http.Request) 
 	}
 	defer clear(user.PasswordHash)
 	defer clear(user.PasswordSalt)
-	r.adminMutationMu.Lock()
-	defer r.adminMutationMu.Unlock()
+	r.adminIdentityMu.Lock()
+	defer r.adminIdentityMu.Unlock()
 	createdUser, err := r.store.CreateFirstAdmin(request.Context(), user)
 	if errors.Is(err, boltstore.ErrAdminInitialized) {
 		writeJSON(writer, http.StatusConflict, map[string]string{"error": "administrator setup is already complete"})

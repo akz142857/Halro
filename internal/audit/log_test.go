@@ -34,6 +34,37 @@ func TestAuditRoundTripAndVerification(t *testing.T) {
 	}
 }
 
+func TestAppendBatchProducesOneConsecutiveDurableChain(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.log")
+	key := randomKey(t)
+	log, err := Open(path, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := []Event{
+		validEvent(1, "project.create"),
+		validEvent(2, "provider.update"),
+		validEvent(3, "route.delete"),
+	}
+	records, err := log.AppendBatch(context.Background(), events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != len(events) || records[0].Sequence != 1 || records[2].Sequence != 3 {
+		t.Fatalf("records=%#v", records)
+	}
+	if err := log.Close(); err != nil {
+		t.Fatal(err)
+	}
+	summary, err := Verify(path, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Records != 3 || summary.LastHash != records[2].Hash {
+		t.Fatalf("summary=%#v", summary)
+	}
+}
+
 func TestAuditDetectsTamperingAndWrongKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.log")
 	key := randomKey(t)

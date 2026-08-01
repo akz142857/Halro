@@ -136,36 +136,59 @@ func Verify(path string, key []byte) (Summary, error) {
 }
 
 func (l *Log) Append(ctx context.Context, event Event) (Record, error) {
-	if err := event.Validate(); err != nil {
-		return Record{}, err
-	}
-	if err := ctx.Err(); err != nil {
-		return Record{}, err
-	}
-	payload, err := json.Marshal(event)
+	records, err := l.AppendBatch(ctx, []Event{event})
 	if err != nil {
 		return Record{}, err
 	}
-	if len(payload) > maxPayloadSize {
-		return Record{}, errors.New("audit event exceeds maximum size")
+	return records[0], nil
+}
+
+// AppendBatch writes a consecutive hash-chain segment and makes it durable
+// with one fsync. Either every returned record is durable or an error is
+// returned and the log must be treated as unavailable by the caller.
+func (l *Log) AppendBatch(ctx context.Context, events []Event) ([]Record, error) {
+	if len(events) == 0 {
+		return nil, nil
+	}
+	payloads := make([][]byte, len(events))
+	for index, event := range events {
+		if err := event.Validate(); err != nil {
+			return nil, err
+		}
+		payload, err := json.Marshal(event)
+		if err != nil {
+			return nil, err
+		}
+		if len(payload) > maxPayloadSize {
+			return nil, errors.New("audit event exceeds maximum size")
+		}
+		payloads[index] = payload
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.file == nil {
-		return Record{}, errors.New("audit log is closed")
+		return nil, errors.New("audit log is closed")
 	}
-	sequence := l.sequence + 1
-	frame, hash := encodeFrame(l.key, sequence, l.lastHash, payload)
-	if err := writeFull(l.file, frame); err != nil {
-		return Record{}, fmt.Errorf("append audit log: %w", err)
+	records := make([]Record, 0, len(events))
+	sequence, offset, previous := l.sequence, l.offset, l.lastHash
+	for index, payload := range payloads {
+		sequence++
+		frame, hash := encodeFrame(l.key, sequence, previous, payload)
+		if err := writeFull(l.file, frame); err != nil {
+			return nil, fmt.Errorf("append audit log: %w", err)
+		}
+		offset += int64(len(frame))
+		previous = hash
+		records = append(records, Record{Sequence: sequence, Event: events[index], Hash: hash})
 	}
 	if err := l.file.Sync(); err != nil {
-		return Record{}, fmt.Errorf("sync audit log: %w", err)
+		return nil, fmt.Errorf("sync audit log: %w", err)
 	}
-	l.sequence = sequence
-	l.offset += int64(len(frame))
-	l.lastHash = hash
-	return Record{Sequence: sequence, Event: event, Hash: hash}, nil
+	l.sequence, l.offset, l.lastHash = sequence, offset, previous
+	return records, nil
 }
 
 func (l *Log) Replay(visit func(Record) error) (Summary, error) {

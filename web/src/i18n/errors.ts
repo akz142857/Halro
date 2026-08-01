@@ -3,7 +3,6 @@ import { ApiError } from "../api";
 
 export function localizedError(t: TFunction, error: unknown) {
   if (!(error instanceof ApiError)) return t("errors.network");
-  if (error.code && i18nErrorCodes.has(error.code)) return t(`errors.${error.code}`);
   if (error.status === 400 || error.status === 422) return t("errors.badRequest");
   if (error.status === 401) return t("errors.authentication");
   if (error.status === 403) return t("errors.forbidden");
@@ -12,7 +11,3 @@ export function localizedError(t: TFunction, error: unknown) {
   if (error.status === 429) return t("errors.rateLimited");
   return t("errors.server");
 }
-
-const i18nErrorCodes = new Set([
-  "badRequest", "authentication", "forbidden", "notFound", "conflict", "rateLimited", "server", "network",
-]);
