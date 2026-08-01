@@ -8,6 +8,8 @@ import (
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
+	"github.com/openai/openai-go/v3/responses"
+	"github.com/openai/openai-go/v3/shared"
 )
 
 func TestOfficialGoSDK(t *testing.T) {
@@ -32,6 +34,37 @@ func TestOfficialGoSDK(t *testing.T) {
 	}
 	if completion.Choices[0].Message.Content != "compat-ok" || completion.Usage.TotalTokens != 5 {
 		t.Fatalf("unexpected completion: %#v", completion)
+	}
+	responseParams := responses.ResponseNewParams{
+		Model: shared.ResponsesModel("compat-chat"),
+		Input: responses.ResponseNewParamsInputUnion{OfString: openai.String("ping")},
+		Store: openai.Bool(false),
+	}
+	response, err := client.Responses.New(context.Background(), responseParams)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.OutputText() != "compat-ok" || response.Usage.TotalTokens != 5 {
+		t.Fatalf("unexpected response: %#v", response)
+	}
+	responseStream := client.Responses.NewStreaming(context.Background(), responseParams)
+	defer responseStream.Close()
+	var responseText string
+	var completed bool
+	for responseStream.Next() {
+		event := responseStream.Current()
+		if event.Type == "response.output_text.delta" {
+			responseText += event.Delta
+		}
+		if event.Type == "response.completed" {
+			completed = true
+		}
+	}
+	if err := responseStream.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if responseText != "compat-ok" || !completed {
+		t.Fatalf("unexpected Responses stream text=%q completed=%v", responseText, completed)
 	}
 
 	stream := client.Chat.Completions.NewStreaming(context.Background(), params)

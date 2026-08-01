@@ -574,6 +574,37 @@ func TestChatAuthenticatesRoutesReservesAndSettles(t *testing.T) {
 	}
 }
 
+func TestResponsesUsesGenerationHotPathAndRestoresPublicModel(t *testing.T) {
+	f := newFixture(t, 1_000)
+	defer f.close()
+	maxOutput := int64(20)
+	response, err := f.service.Responses(context.Background(), f.plaintext, openaiapi.ResponseRequest{
+		Model: "chat", Input: json.RawMessage(`"hello"`), MaxOutputTokens: &maxOutput,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Model != "chat" || response.Object != "response" || response.ID != "resp_1" || f.adapter.calls != 1 {
+		t.Fatalf("response=%#v calls=%d", response, f.adapter.calls)
+	}
+	if f.adapter.lastChatRequest.MaxCompletionTokens == nil || *f.adapter.lastChatRequest.MaxCompletionTokens != maxOutput {
+		t.Fatalf("max output token mapping was lost: %#v", f.adapter.lastChatRequest)
+	}
+}
+
+func TestResponsesRejectsStatefulRequestBeforeProvider(t *testing.T) {
+	f := newFixture(t, 1_000)
+	defer f.close()
+	store := true
+	_, err := f.service.Responses(context.Background(), f.plaintext, openaiapi.ResponseRequest{Model: "chat", Input: json.RawMessage(`"hello"`), Store: &store})
+	if err == nil {
+		t.Fatal("stateful Responses request was accepted")
+	}
+	if f.adapter.calls != 0 {
+		t.Fatalf("stateful request reached provider: calls=%d", f.adapter.calls)
+	}
+}
+
 func TestBudgetExceededBeforeProviderCall(t *testing.T) {
 	f := newFixture(t, 10)
 	defer f.close()

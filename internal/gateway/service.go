@@ -591,6 +591,96 @@ func (s *Service) Chat(
 	return openaiapi.ChatCompletionResponse{}, s.exhaustedAttemptsError(lastErr)
 }
 
+// Responses implements the Phase 1A stateless Responses facade by translating
+// the declared portable subset to the existing semantic generation hot path.
+func (s *Service) Responses(
+	ctx context.Context,
+	plaintextKey string,
+	request openaiapi.ResponseRequest,
+) (openaiapi.Response, error) {
+	if request.Stream {
+		return openaiapi.Response{}, gatewayError("invalid_request_error", "stream must be false", 400, nil)
+	}
+	canonical, err := openaiwire.DecodeResponseGenerate(request)
+	if err != nil {
+		return openaiapi.Response{}, gatewayError("invalid_request_error", "request cannot be represented safely", 400, err)
+	}
+	chatRequest, err := openaiwire.RenderGenerateRequest(canonical, request.Model)
+	if err != nil {
+		return openaiapi.Response{}, gatewayError("invalid_request_error", "request cannot be translated safely", 400, err)
+	}
+	chatResponse, err := s.Chat(ctx, plaintextKey, chatRequest)
+	if err != nil {
+		return openaiapi.Response{}, err
+	}
+	result, err := openaiwire.DecodeGenerateResult(chatResponse)
+	if err != nil {
+		return openaiapi.Response{}, gatewayError("provider_error", "provider response cannot be represented safely", 502, err)
+	}
+	response, err := openaiwire.RenderResponseResult(result, request)
+	if err != nil {
+		return openaiapi.Response{}, gatewayError("provider_error", "provider response cannot be rendered safely", 502, err)
+	}
+	return response, nil
+}
+
+func (s *Service) ResponsesStream(
+	ctx context.Context,
+	plaintextKey string,
+	request openaiapi.ResponseRequest,
+	emit func(openaiapi.ResponseStreamEvent) error,
+) error {
+	if !request.Stream {
+		return gatewayError("invalid_request_error", "stream must be true", 400, nil)
+	}
+	canonical, err := openaiwire.DecodeResponseGenerate(request)
+	if err != nil {
+		return gatewayError("invalid_request_error", "request cannot be represented safely", 400, err)
+	}
+	chatRequest, err := openaiwire.RenderGenerateRequest(canonical, request.Model)
+	if err != nil {
+		return gatewayError("invalid_request_error", "request cannot be translated safely", 400, err)
+	}
+	renderer := openaiwire.NewResponseStreamRenderer(request)
+	emittedResponseEvent := false
+	streamTranslationError := func(err error) error {
+		if err == nil || !emittedResponseEvent {
+			return err
+		}
+		return &provider.Error{Class: provider.ErrorMalformed, Ambiguous: true, Message: "Responses stream failed after payload", Cause: err}
+	}
+	err = s.ChatStream(ctx, plaintextKey, chatRequest, func(chunk openaiapi.ChatCompletionResponse) error {
+		event, decodeErr := openaiwire.DecodeEvent(chunk)
+		if decodeErr != nil {
+			return streamTranslationError(decodeErr)
+		}
+		events, renderErr := renderer.Accept(event)
+		if renderErr != nil {
+			return streamTranslationError(renderErr)
+		}
+		for _, responseEvent := range events {
+			if emitErr := emit(responseEvent); emitErr != nil {
+				return streamTranslationError(emitErr)
+			}
+			emittedResponseEvent = true
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	events, err := renderer.Complete()
+	if err != nil {
+		return gatewayError("provider_error", "provider stream cannot be completed safely", 502, err)
+	}
+	for _, event := range events {
+		if err := emit(event); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Service) ChatStream(
 	ctx context.Context,
 	plaintextKey string,

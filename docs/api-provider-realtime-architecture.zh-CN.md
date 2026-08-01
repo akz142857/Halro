@@ -274,7 +274,7 @@ Surface、Profile、Region 和模型标识。
 |---|---|---|
 | Tier 0 | `/v1/chat/completions` | Current |
 | Tier 0 | `/v1/embeddings` | Current |
-| Tier 1 | `/v1/responses`，包含 SSE 事件 | Target |
+| Tier 1 | `/v1/responses` Stateless Create + 文本 SSE | Phase 1A 已实现 |
 | Tier 1 | `/v1/models` 的 Gateway 可用模型视图 | Target |
 | Tier 2 | `/v1/audio/transcriptions`、`/v1/audio/speech` | Target |
 | Tier 2 | `/v1/images/generations` | Target |
@@ -296,6 +296,16 @@ Compatibility Manifest，逐项声明：
 首版如果只提供无状态 Create/Stream，必须将其标记为明确的 Stateless Compatibility Tier，
 并在 Provider I/O 前拒绝所有状态字段。Provider Resource ID 必须包装或登记其 Provider、
 Deployment、Profile、Region 和资源类型；资源创建成功后禁止跨 Provider Fallback。
+
+Phase 1A 实施结果：`openai.responses.stateless.v1` 已发布，只提供严格的
+`POST /v1/responses` Create 与文本 SSE。省略 `store` 等价于 `false`；`store:true`、
+`previous_response_id`、Conversation、Background、Prompt/Metadata 资源、Hosted Tools、
+Reasoning 输出和流式 Function Call 均在 Provider I/O 前拒绝。该 Tier 返回的 `resp_*` 是
+不可检索、不可持久化的 Gateway 关联 ID，不是 Provider Resource ID。可移植子集映射到
+Canonical `generate` 后复用现有版本化 ProviderPrimitive，因此认证、路由、预算、计费、
+脱敏、Retry/歧义边界和模型别名仍由原热路径负责。事件顺序、终止语义与资源所有权见
+[ADR 0005](adr/0005-stateless-responses-facade.md)，逐字段/事件/Profile 契约见
+[Endpoint Compatibility Manifest](compatibility/endpoint-manifests.json)。
 
 ### 5.3 Anthropic 原生 Facade
 
@@ -1623,9 +1633,13 @@ Semantic Requirements；“可以表达后续需求”不等于已经支持对�
 
 ### Phase 1（Next）：Stateless Responses 与原生 Messages
 
-- 前置批准 Responses Resource Ownership ADR 和 Portable/Native ADR；
-- 发布逐 Method、Field、Event、State 的 Compatibility Manifest；
-- 实现 `/v1/responses` 普通和 SSE Facade；
+实施状态：Phase 1A Stateless Responses 已完成本文档声明的首个兼容 Tier；其余条目仍属于
+Phase 1B+，不能因 `/v1/responses` 已上线而视为整个 Phase 1 完成。
+
+- [Phase 1A 已完成] 批准 Stateless Responses Resource Ownership、Portable/Native、
+  Termination/Event 决策（ADR 0005）；
+- [Phase 1A 已完成] 发布逐 Method、Field、Event、State 的 Compatibility Manifest；
+- [Phase 1A 已完成] 实现 `/v1/responses` 普通和文本 SSE Facade；
 - 实现 Anthropic `/v1/messages` 普通和 SSE Facade；
 - 增加对应 Provider Primitive Adapter，而不是 OpenAI-specific 通用 Adapter；
 - 增加 `bedrock.mantle.openai.chat.v1`，并随对应北向 Facade 增加

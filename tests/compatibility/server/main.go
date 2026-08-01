@@ -28,6 +28,61 @@ type service struct {
 	canceledStreams atomic.Int64
 }
 
+func (s *service) Responses(_ context.Context, key string, request openaiapi.ResponseRequest) (openaiapi.Response, error) {
+	if err := contractError(key, request.Model); err != nil {
+		return openaiapi.Response{}, err
+	}
+	completedAt := int64(1_800_000_000)
+	return openaiapi.Response{
+		ID: "resp_compat", Object: "response", CreatedAt: completedAt, Status: "completed", Background: false,
+		CompletedAt: &completedAt, Error: nil, IncompleteDetails: nil, Instructions: nil,
+		MaxOutputTokens: request.MaxOutputTokens, Model: request.Model,
+		Output:            []openaiapi.ResponseOutputItem{{ID: "msg_compat", Type: "message", Status: "completed", Role: "assistant", Content: []openaiapi.ResponseOutputContent{{Type: "output_text", Text: "compat-ok", Annotations: []any{}, Logprobs: []any{}}}}},
+		ParallelToolCalls: true, PreviousResponseID: nil, Reasoning: openaiapi.ResponseReasoningOut{Effort: nil, Summary: nil},
+		Store: false, Temperature: request.Temperature, Text: openaiapi.ResponseTextOut{Format: openaiapi.ResponseTextFormat{Type: "text"}},
+		ToolChoice: "auto", Tools: []openaiapi.ResponseTool{}, TopP: request.TopP, Truncation: "disabled",
+		Usage: &openaiapi.ResponseUsage{InputTokens: 3, OutputTokens: 2, TotalTokens: 5}, Metadata: map[string]string{},
+	}, nil
+}
+
+func (s *service) ResponsesStream(ctx context.Context, key string, request openaiapi.ResponseRequest, emit func(openaiapi.ResponseStreamEvent) error) error {
+	if err := contractError(key, request.Model); err != nil {
+		return err
+	}
+	s.activeStreams.Add(1)
+	defer s.activeStreams.Add(-1)
+	response, _ := s.Responses(ctx, key, request)
+	response.Status, response.CompletedAt, response.Output, response.Usage = "in_progress", nil, []openaiapi.ResponseOutputItem{}, nil
+	sequence := int64(0)
+	emitEvent := func(event openaiapi.ResponseStreamEvent) error {
+		event.SequenceNumber = sequence
+		sequence++
+		return emit(event)
+	}
+	if err := emitEvent(openaiapi.ResponseStreamEvent{Type: "response.created", Response: &response}); err != nil {
+		return err
+	}
+	if request.Model == "slow-stream" {
+		<-ctx.Done()
+		s.canceledStreams.Add(1)
+		return ctx.Err()
+	}
+	outputIndex, contentIndex := 0, 0
+	item := openaiapi.ResponseOutputItem{ID: "msg_compat", Type: "message", Status: "in_progress", Role: "assistant", Content: []openaiapi.ResponseOutputContent{}}
+	part := openaiapi.ResponseOutputContent{Type: "output_text", Text: "", Annotations: []any{}, Logprobs: []any{}}
+	if err := emitEvent(openaiapi.ResponseStreamEvent{Type: "response.output_item.added", OutputIndex: &outputIndex, Item: &item}); err != nil {
+		return err
+	}
+	if err := emitEvent(openaiapi.ResponseStreamEvent{Type: "response.content_part.added", OutputIndex: &outputIndex, ContentIndex: &contentIndex, ItemID: item.ID, Part: &part}); err != nil {
+		return err
+	}
+	if err := emitEvent(openaiapi.ResponseStreamEvent{Type: "response.output_text.delta", OutputIndex: &outputIndex, ContentIndex: &contentIndex, ItemID: item.ID, Delta: "compat-ok"}); err != nil {
+		return err
+	}
+	completed, _ := s.Responses(ctx, key, request)
+	return emitEvent(openaiapi.ResponseStreamEvent{Type: "response.completed", Response: &completed})
+}
+
 func (s *service) Chat(_ context.Context, key string, request openaiapi.ChatCompletionRequest) (openaiapi.ChatCompletionResponse, error) {
 	if err := contractError(key, request.Model); err != nil {
 		return openaiapi.ChatCompletionResponse{}, err
@@ -138,6 +193,7 @@ func main() {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/chat/completions", handler.ChatCompletions)
+	mux.HandleFunc("POST /v1/responses", handler.Responses)
 	mux.HandleFunc("POST /v1/embeddings", handler.Embeddings)
 	mux.HandleFunc("GET /healthz", func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusNoContent)

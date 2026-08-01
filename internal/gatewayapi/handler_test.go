@@ -23,6 +23,25 @@ type fakeService struct {
 	calls    int
 }
 
+func (s *fakeService) Responses(_ context.Context, key string, request openaiapi.ResponseRequest) (openaiapi.Response, error) {
+	s.calls++
+	s.key = key
+	return openaiapi.Response{ID: "resp_1", Object: "response", Status: "completed", Model: request.Model, Output: []openaiapi.ResponseOutputItem{}, Tools: []openaiapi.ResponseTool{}, Metadata: map[string]string{}}, s.err
+}
+
+func (s *fakeService) ResponsesStream(_ context.Context, key string, request openaiapi.ResponseRequest, emit func(openaiapi.ResponseStreamEvent) error) error {
+	s.calls++
+	s.key = key
+	if s.err != nil {
+		return s.err
+	}
+	response := openaiapi.Response{ID: "resp_1", Object: "response", Status: "completed", Model: request.Model, Output: []openaiapi.ResponseOutputItem{}, Tools: []openaiapi.ResponseTool{}, Metadata: map[string]string{}}
+	if err := emit(openaiapi.ResponseStreamEvent{Type: "response.created", SequenceNumber: 0, Response: &response}); err != nil {
+		return err
+	}
+	return emit(openaiapi.ResponseStreamEvent{Type: "response.completed", SequenceNumber: 1, Response: &response})
+}
+
 func (s *fakeService) Chat(
 	_ context.Context,
 	key string,
@@ -94,6 +113,50 @@ func TestChatCompletionsContract(t *testing.T) {
 	}
 	if response.Header().Get("Cache-Control") != "no-store" {
 		t.Fatal("sensitive response was cacheable")
+	}
+}
+
+func TestResponsesContractAndTypedSSE(t *testing.T) {
+	service := &fakeService{}
+	handler, err := New(service, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"chat","input":"hello","store":false}`))
+	request.Header.Set("Authorization", "Bearer gw_test")
+	response := httptest.NewRecorder()
+	handler.Responses(response, request)
+	if response.Code != http.StatusOK || service.calls != 1 || service.key != "gw_test" {
+		t.Fatalf("status=%d calls=%d body=%s", response.Code, service.calls, response.Body.String())
+	}
+
+	streamRequest := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"chat","input":"hello","stream":true,"store":false}`))
+	streamRequest.Header.Set("Authorization", "Bearer gw_test")
+	streamResponse := httptest.NewRecorder()
+	handler.Responses(streamResponse, streamRequest)
+	if streamResponse.Code != http.StatusOK || !strings.Contains(streamResponse.Body.String(), "event: response.created") || !strings.Contains(streamResponse.Body.String(), "event: response.completed") || strings.Contains(streamResponse.Body.String(), "[DONE]") {
+		t.Fatalf("unexpected Responses SSE: status=%d body=%s", streamResponse.Code, streamResponse.Body.String())
+	}
+}
+
+func TestResponsesRejectsStateBeforeServiceInvocation(t *testing.T) {
+	service := &fakeService{}
+	handler, _ := New(service, 1024)
+	for _, body := range []string{
+		`{"model":"chat","input":"hello","store":true}`,
+		`{"model":"chat","input":"hello","previous_response_id":"resp_1"}`,
+		`{"model":"chat","input":"hello","background":true}`,
+	} {
+		request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
+		request.Header.Set("Authorization", "Bearer gw_test")
+		response := httptest.NewRecorder()
+		handler.Responses(response, request)
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("body=%s status=%d response=%s", body, response.Code, response.Body.String())
+		}
+	}
+	if service.calls != 0 {
+		t.Fatalf("unsafe requests reached service: calls=%d", service.calls)
 	}
 }
 

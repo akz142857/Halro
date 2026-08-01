@@ -21,6 +21,9 @@ Provider adapter owns transport fixtures for its request, response, and stream
 wire format. The bridge fixture deliberately does not claim six-provider wire
 compatibility.
 
-Only `POST /v1/chat/completions` and `POST /v1/embeddings` are currently
-published. Future API families must add separate, versioned manifests before
-they can be described as compatible.
+`POST /v1/chat/completions`, `POST /v1/embeddings`, and the explicitly
+stateless `POST /v1/responses` tier are published. The Responses tier treats an
+omitted `store` as false and rejects all state/resource fields before Provider
+I/O; see [ADR 0005](../adr/0005-stateless-responses-facade.md). Future API
+families and any stored Responses tier must add separate, versioned manifests
+before they can be described as compatible.
