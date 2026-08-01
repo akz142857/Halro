@@ -19,6 +19,9 @@ import type {
   LocalePreference,
   SupportedLocale,
   Session,
+  MFAChallenge,
+  MFAStatus,
+  MFAEnrollment,
   SetupStatus,
   SystemStatus,
   TokenGuardPolicy,
@@ -109,13 +112,26 @@ export const api = {
     return result.data;
   },
   async login(username: string, password: string) {
-    const result = await request<Session>(
+    const result = await request<Session | MFAChallenge>(
       "/session/login",
       json("POST", { username, password }),
     );
-    csrfToken = result.data.csrf_token;
+	if ("csrf_token" in result.data) csrfToken = result.data.csrf_token;
     return result.data;
   },
+  async completeMFA(challengeToken: string, code: string) {
+    const result = await request<Session>("/session/mfa/totp", json("POST", { challenge_token: challengeToken, code })); csrfToken = result.data.csrf_token; return result.data;
+  },
+  async completeMFARecovery(challengeToken: string, recoveryCode: string) {
+    const result = await request<Session>("/session/mfa/recovery-code", json("POST", { challenge_token: challengeToken, recovery_code: recoveryCode })); csrfToken = result.data.csrf_token; return result.data;
+  },
+  cancelMFAChallenge: (challengeToken:string) => request<{status:string}>("/session/mfa/challenge",json("DELETE",{challenge_token:challengeToken})).then((v)=>v.data),
+  mfaStatus: () => request<MFAStatus>("/security/mfa").then((v) => v.data),
+  createMFAAuthenticator: (name: string, currentPassword: string, code: string) => request<MFAEnrollment>("/security/mfa/authenticators", json("POST", { name, current_password: currentPassword, code })).then((v) => v.data),
+  confirmMFAAuthenticator: (id: string, code: string) => request<{status:string; recovery_codes?:string[]}>(`/security/mfa/authenticators/${encodeURIComponent(id)}/confirm`, json("POST", {code})).then((v)=>v.data),
+  deleteMFAAuthenticator: (id: string, currentPassword: string, code: string) => request<{status:string}>(`/security/mfa/authenticators/${encodeURIComponent(id)}`, json("DELETE", {current_password:currentPassword,code})).then((v)=>v.data),
+  regenerateMFARecoveryCodes: (currentPassword:string,code:string) => request<{recovery_codes:string[]}>("/security/mfa/recovery-codes/regenerate",json("POST",{current_password:currentPassword,code})).then((v)=>v.data),
+  disableMFA: (currentPassword:string,code:string) => request<{status:string}>("/security/mfa",json("DELETE",{current_password:currentPassword,code})).then((v)=>v.data),
   async session() {
     const result = await request<Session>("/session");
     csrfToken = result.data.csrf_token;

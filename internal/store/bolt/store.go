@@ -3,6 +3,7 @@ package bolt
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -17,7 +18,7 @@ import (
 	bbolt "go.etcd.io/bbolt"
 )
 
-const schemaVersion uint64 = 7
+const schemaVersion uint64 = 8
 
 func CurrentSchemaVersion() uint64 { return schemaVersion }
 
@@ -32,30 +33,33 @@ var (
 )
 
 var (
-	bucketMeta               = []byte("meta")
-	bucketCredentials        = []byte("credentials")
-	bucketProjects           = []byte("projects")
-	bucketGatewayKeys        = []byte("gateway_keys")
-	bucketGatewayKeyHash     = []byte("gateway_key_hash")
-	bucketProviders          = []byte("providers")
-	bucketDeployments        = []byte("deployments")
-	bucketRoutes             = []byte("routes")
-	bucketRedactionPolicies  = []byte("redaction_policies")
-	bucketTokenGuardPolicies = []byte("token_guard_policies")
-	bucketAlertWebhooks      = []byte("alert_webhooks")
-	bucketAdminUsers         = []byte("admin_users")
-	bucketAdminSessions      = []byte("admin_sessions")
-	bucketMigrationHistory   = []byte("migration_history")
-	bucketProviderResources  = []byte("provider_resources")
-	keySchemaVersion         = []byte("schema_version")
-	keyVaultCheck            = []byte("vault_key_check")
-	keyUsageCheckpoint       = []byte("usage_checkpoint")
-	keyTokenGuardCheckpoint  = []byte("token_guard_checkpoint")
-	keyAuditCheckpoint       = []byte("audit_checkpoint")
-	keyAuditHMACEnvelope     = []byte("audit_hmac_envelope")
-	keyVaultKeyring          = []byte("vault_keyring")
-	keyRuntimeSettings       = []byte("runtime_settings")
-	keyInstanceUISettings    = []byte("instance_ui_settings")
+	bucketMeta                   = []byte("meta")
+	bucketCredentials            = []byte("credentials")
+	bucketProjects               = []byte("projects")
+	bucketGatewayKeys            = []byte("gateway_keys")
+	bucketGatewayKeyHash         = []byte("gateway_key_hash")
+	bucketProviders              = []byte("providers")
+	bucketDeployments            = []byte("deployments")
+	bucketRoutes                 = []byte("routes")
+	bucketRedactionPolicies      = []byte("redaction_policies")
+	bucketTokenGuardPolicies     = []byte("token_guard_policies")
+	bucketAlertWebhooks          = []byte("alert_webhooks")
+	bucketAdminUsers             = []byte("admin_users")
+	bucketAdminSessions          = []byte("admin_sessions")
+	bucketAdminMFAAuthenticators = []byte("admin_mfa_authenticators")
+	bucketAdminMFARecoveryCodes  = []byte("admin_mfa_recovery_codes")
+	bucketAdminMFAChallenges     = []byte("admin_mfa_challenges")
+	bucketMigrationHistory       = []byte("migration_history")
+	bucketProviderResources      = []byte("provider_resources")
+	keySchemaVersion             = []byte("schema_version")
+	keyVaultCheck                = []byte("vault_key_check")
+	keyUsageCheckpoint           = []byte("usage_checkpoint")
+	keyTokenGuardCheckpoint      = []byte("token_guard_checkpoint")
+	keyAuditCheckpoint           = []byte("audit_checkpoint")
+	keyAuditHMACEnvelope         = []byte("audit_hmac_envelope")
+	keyVaultKeyring              = []byte("vault_keyring")
+	keyRuntimeSettings           = []byte("runtime_settings")
+	keyInstanceUISettings        = []byte("instance_ui_settings")
 )
 
 type MigrationRecord struct {
@@ -152,6 +156,14 @@ var migrations = []migration{
 			return err
 		}
 		return migrationStep(step, "after_provider_resource_creation_status")
+	}},
+	{version: 8, name: "admin_mfa", up: func(tx *bbolt.Tx, step func(string) error) error {
+		for _, name := range [][]byte{bucketAdminMFAAuthenticators, bucketAdminMFARecoveryCodes, bucketAdminMFAChallenges} {
+			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
+				return err
+			}
+		}
+		return migrationStep(step, "after_create_admin_mfa_buckets")
 	}},
 }
 
@@ -458,13 +470,14 @@ type VaultRewrite struct {
 	AuditHMACEnvelope []byte
 	Keyring           VaultKeyring
 	Transform         func(domain.Credential) (domain.Credential, error)
+	TransformAdminMFA func(domain.AdminMFAAuthenticator) (domain.AdminMFAAuthenticator, error)
 }
 
 // RewriteVaultMaterial runs only against an offline copy of metadata. All
 // credential ciphertext and system envelopes change in one bbolt transaction.
 func (s *Store) RewriteVaultMaterial(options VaultRewrite) error {
 	if len(options.VaultKeyCheck) == 0 || len(options.AuditHMACEnvelope) == 0 ||
-		options.Transform == nil || options.Keyring.Validate() != nil ||
+		options.Transform == nil || options.TransformAdminMFA == nil || options.Keyring.Validate() != nil ||
 		len(options.Keyring.RecoveryEnvelope) == 0 {
 		return errors.New("complete vault rewrite material is required")
 	}
@@ -494,6 +507,31 @@ func (s *Store) RewriteVaultMaterial(options VaultRewrite) error {
 				return err
 			}
 		}
+		authenticators := tx.Bucket(bucketAdminMFAAuthenticators)
+		mfaCursor := authenticators.Cursor()
+		for key, raw := mfaCursor.First(); key != nil; key, raw = mfaCursor.Next() {
+			var value domain.AdminMFAAuthenticator
+			if err := json.Unmarshal(raw, &value); err != nil {
+				return err
+			}
+			updated, err := options.TransformAdminMFA(value)
+			if err != nil {
+				return err
+			}
+			if updated.ID != value.ID || updated.Username != value.Username || updated.Revision != value.Revision {
+				return errors.New("vault rewrite cannot change MFA identity or revision")
+			}
+			if err = updated.Validate(); err != nil {
+				return err
+			}
+			encoded, err := json.Marshal(updated)
+			if err != nil {
+				return err
+			}
+			if err = authenticators.Put(key, encoded); err != nil {
+				return err
+			}
+		}
 		meta := tx.Bucket(bucketMeta)
 		if err := meta.Put(keyVaultCheck, options.VaultKeyCheck); err != nil {
 			return err
@@ -518,6 +556,24 @@ func (s *Store) RewriteVaultMaterial(options VaultRewrite) error {
 		}
 		return nil
 	})
+}
+
+func (s *Store) ListAllAdminMFAAuthenticators(ctx context.Context) ([]domain.AdminMFAAuthenticator, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	var values []domain.AdminMFAAuthenticator
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		return tx.Bucket(bucketAdminMFAAuthenticators).ForEach(func(_, raw []byte) error {
+			var value domain.AdminMFAAuthenticator
+			if err := json.Unmarshal(raw, &value); err != nil {
+				return err
+			}
+			values = append(values, value)
+			return nil
+		})
+	})
+	return values, err
 }
 
 func (s *Store) ClearVaultRotationBridge() error {
@@ -1087,6 +1143,9 @@ func requiredBuckets() [][]byte {
 		bucketAlertWebhooks,
 		bucketAdminUsers,
 		bucketAdminSessions,
+		bucketAdminMFAAuthenticators,
+		bucketAdminMFARecoveryCodes,
+		bucketAdminMFAChallenges,
 		bucketMigrationHistory,
 		bucketProviderResources,
 	}
@@ -1279,6 +1338,226 @@ func (s *Store) DeleteAdminSessionsForUser(ctx context.Context, username string)
 				return err
 			}
 			if session.Username == username {
+				if err := cursor.Delete(); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
+}
+
+func adminMFAKey(username, id string) string { return username + "\x00" + id }
+
+func (s *Store) PutAdminMFAAuthenticator(ctx context.Context, value domain.AdminMFAAuthenticator, expected uint64) (domain.AdminMFAAuthenticator, error) {
+	if err := value.Validate(); err != nil {
+		return value, err
+	}
+	if err := ctx.Err(); err != nil {
+		return value, err
+	}
+	err := s.db.Update(func(tx *bbolt.Tx) error {
+		return putVersioned(tx.Bucket(bucketAdminMFAAuthenticators), adminMFAKey(value.Username, value.ID), expected, &value)
+	})
+	return value, err
+}
+
+func (s *Store) GetAdminMFAAuthenticator(ctx context.Context, username, id string) (domain.AdminMFAAuthenticator, error) {
+	var value domain.AdminMFAAuthenticator
+	err := s.getJSON(ctx, bucketAdminMFAAuthenticators, adminMFAKey(username, id), &value)
+	return value, err
+}
+
+func (s *Store) ListAdminMFAAuthenticators(ctx context.Context, username string) ([]domain.AdminMFAAuthenticator, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	values := []domain.AdminMFAAuthenticator{}
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		prefix := []byte(username + "\x00")
+		cursor := tx.Bucket(bucketAdminMFAAuthenticators).Cursor()
+		for key, raw := cursor.Seek(prefix); key != nil && bytes.HasPrefix(key, prefix); key, raw = cursor.Next() {
+			var value domain.AdminMFAAuthenticator
+			if err := json.Unmarshal(raw, &value); err != nil {
+				return err
+			}
+			values = append(values, value)
+		}
+		return nil
+	})
+	return values, err
+}
+
+// AcceptAdminMFATimeStep atomically prevents concurrent or repeated use of a TOTP time step.
+func (s *Store) AcceptAdminMFATimeStep(ctx context.Context, username, id string, step int64, now time.Time) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(bucketAdminMFAAuthenticators)
+		key := []byte(adminMFAKey(username, id))
+		raw := bucket.Get(key)
+		if raw == nil {
+			return ErrNotFound
+		}
+		var value domain.AdminMFAAuthenticator
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return err
+		}
+		if value.Status != domain.AdminMFAStatusActive || step <= value.LastAcceptedTimeStep {
+			return ErrRevisionConflict
+		}
+		value.LastAcceptedTimeStep = step
+		used := now.UTC()
+		value.LastUsedAt = &used
+		value.Revision++
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return err
+		}
+		return bucket.Put(key, encoded)
+	})
+}
+
+func (s *Store) ReplaceAdminMFARecoveryCodes(ctx context.Context, username string, codes []domain.AdminMFARecoveryCode) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	for _, code := range codes {
+		if code.Username != username {
+			return errors.New("MFA recovery code user mismatch")
+		}
+		if err := code.Validate(); err != nil {
+			return err
+		}
+	}
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(bucketAdminMFARecoveryCodes)
+		prefix := []byte(username + "\x00")
+		cursor := bucket.Cursor()
+		for key, _ := cursor.Seek(prefix); key != nil && bytes.HasPrefix(key, prefix); key, _ = cursor.Next() {
+			if err := cursor.Delete(); err != nil {
+				return err
+			}
+		}
+		for _, code := range codes {
+			raw, err := json.Marshal(code)
+			if err != nil {
+				return err
+			}
+			if err := bucket.Put([]byte(adminMFAKey(username, code.ID)), raw); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func (s *Store) ConsumeAdminMFARecoveryCode(ctx context.Context, username string, hash [32]byte, now time.Time) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	remaining := 0
+	found := false
+	err := s.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(bucketAdminMFARecoveryCodes)
+		prefix := []byte(username + "\x00")
+		cursor := bucket.Cursor()
+		for key, raw := cursor.Seek(prefix); key != nil && bytes.HasPrefix(key, prefix); key, raw = cursor.Next() {
+			var code domain.AdminMFARecoveryCode
+			if err := json.Unmarshal(raw, &code); err != nil {
+				return err
+			}
+			if code.UsedAt == nil && subtle.ConstantTimeCompare(code.CodeHash[:], hash[:]) == 1 {
+				used := now.UTC()
+				code.UsedAt = &used
+				encoded, _ := json.Marshal(code)
+				if err := bucket.Put(key, encoded); err != nil {
+					return err
+				}
+				found = true
+			} else if code.UsedAt == nil {
+				remaining++
+			}
+		}
+		if !found {
+			return ErrNotFound
+		}
+		return nil
+	})
+	return remaining, err
+}
+
+func (s *Store) PutAdminMFAChallenge(ctx context.Context, value domain.AdminMFAChallenge) error {
+	if err := value.Validate(); err != nil {
+		return err
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	return s.db.Update(func(tx *bbolt.Tx) error { return tx.Bucket(bucketAdminMFAChallenges).Put(value.IDHash[:], raw) })
+}
+
+func (s *Store) GetAdminMFAChallenge(ctx context.Context, hash [32]byte) (domain.AdminMFAChallenge, error) {
+	var value domain.AdminMFAChallenge
+	if err := ctx.Err(); err != nil {
+		return value, err
+	}
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		raw := tx.Bucket(bucketAdminMFAChallenges).Get(hash[:])
+		if raw == nil {
+			return ErrNotFound
+		}
+		return json.Unmarshal(raw, &value)
+	})
+	return value, err
+}
+
+func (s *Store) DeleteAdminMFAChallenge(ctx context.Context, hash [32]byte) error {
+	return s.db.Update(func(tx *bbolt.Tx) error { return tx.Bucket(bucketAdminMFAChallenges).Delete(hash[:]) })
+}
+
+func (s *Store) FailAdminMFAChallenge(ctx context.Context, hash [32]byte) error {
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(bucketAdminMFAChallenges)
+		raw := bucket.Get(hash[:])
+		if raw == nil {
+			return ErrNotFound
+		}
+		var value domain.AdminMFAChallenge
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return err
+		}
+		if value.AttemptsRemaining <= 1 {
+			return bucket.Delete(hash[:])
+		}
+		value.AttemptsRemaining--
+		encoded, _ := json.Marshal(value)
+		return bucket.Put(hash[:], encoded)
+	})
+}
+
+func (s *Store) DeleteAdminMFAForUser(ctx context.Context, username string) error {
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		for _, bucketName := range [][]byte{bucketAdminMFAAuthenticators, bucketAdminMFARecoveryCodes} {
+			bucket := tx.Bucket(bucketName)
+			prefix := []byte(username + "\x00")
+			cursor := bucket.Cursor()
+			for key, _ := cursor.Seek(prefix); key != nil && bytes.HasPrefix(key, prefix); key, _ = cursor.Next() {
+				if err := cursor.Delete(); err != nil {
+					return err
+				}
+			}
+		}
+		bucket := tx.Bucket(bucketAdminMFAChallenges)
+		cursor := bucket.Cursor()
+		for key, raw := cursor.First(); key != nil; key, raw = cursor.Next() {
+			var value domain.AdminMFAChallenge
+			if err := json.Unmarshal(raw, &value); err != nil {
+				return err
+			}
+			if value.Username == username {
 				if err := cursor.Delete(); err != nil {
 					return err
 				}

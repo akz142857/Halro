@@ -66,7 +66,7 @@ scope is governed by reviewed release notes and release gates.
 | Audit integrity | HMAC hash chain, bbolt head checkpoint, lifecycle events, offline verify |
 | Backup | offline epoch-consistent bbolt/fixed-WAL/Usage/Audit snapshot, chunked AES-GCM archive, atomic publication and verification; 100 concurrent append/restore exact-watermark gate |
 | Prometheus baseline | authenticated low-cardinality Usage/WAL/Alert/provider metrics |
-| Admin authentication | offline bootstrap, Argon2id password, hash-only sessions, Secure/HttpOnly/SameSite cookie, Origin + CSRF enforcement |
+| Admin authentication | offline bootstrap, Argon2id password, hash-only sessions, Secure/HttpOnly/SameSite cookie, Origin + CSRF enforcement; standard TOTP with multiple independently revocable encrypted authenticators, two-stage login challenges, replay protection, one-time recovery codes, optional/required policy, and offline MFA reset |
 | Admin read API | Dashboard, Usage request detail, system status, secret-safe resources, Audit cursor pagination |
 | Project and key Admin API | CSRF-protected lifecycle, `If-Match` revisions, one-time key response, immediate auth snapshot refresh |
 | Provider Admin API | audience-bound credential encryption/rotation, full Provider create/edit/enable/disable/delete/test lifecycle, capability upper bounds, Deployment capability subsets and atomic runtime route replacement |

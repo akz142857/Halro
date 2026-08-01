@@ -89,6 +89,73 @@ func (v *Vault) DecryptCredential(credentialID, providerType, audience string, e
 	return plaintext, nil
 }
 
+func (v *Vault) EncryptAdminMFA(authenticatorID, username string, plaintext []byte) ([]byte, error) {
+	return v.encryptScoped("admin-mfa", authenticatorID, username, plaintext)
+}
+
+func (v *Vault) DecryptAdminMFA(authenticatorID, username string, envelope []byte) ([]byte, error) {
+	return v.decryptScoped("admin-mfa", authenticatorID, username, envelope)
+}
+
+func (v *Vault) encryptScoped(kind, id, audience string, plaintext []byte) ([]byte, error) {
+	aead, aad, err := v.scopedAEAD(kind, id, audience)
+	if err != nil {
+		return nil, err
+	}
+	nonce := make([]byte, aead.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, err
+	}
+	sealed := aead.Seal(nil, nonce, plaintext, aad)
+	envelope := make([]byte, 6+len(nonce)+len(sealed))
+	copy(envelope[:4], envelopeMagic)
+	envelope[4] = envelopeVersion
+	envelope[5] = byte(len(nonce))
+	copy(envelope[6:], nonce)
+	copy(envelope[6+len(nonce):], sealed)
+	return envelope, nil
+}
+
+func (v *Vault) decryptScoped(kind, id, audience string, envelope []byte) ([]byte, error) {
+	if len(envelope) < 6 || string(envelope[:4]) != envelopeMagic || envelope[4] != envelopeVersion {
+		return nil, errors.New("invalid secret envelope")
+	}
+	aead, aad, err := v.scopedAEAD(kind, id, audience)
+	if err != nil {
+		return nil, err
+	}
+	n := int(envelope[5])
+	if n != aead.NonceSize() || len(envelope) < 6+n {
+		return nil, errors.New("invalid secret nonce")
+	}
+	plaintext, err := aead.Open(nil, envelope[6:6+n], envelope[6+n:], aad)
+	if err != nil {
+		return nil, errors.New("secret authentication failed")
+	}
+	return plaintext, nil
+}
+
+func (v *Vault) scopedAEAD(kind, id, audience string) (cipher.AEAD, []byte, error) {
+	if len(v.masterKey) != MasterKeySize || kind == "" || id == "" || audience == "" {
+		return nil, nil, errors.New("invalid secret scope")
+	}
+	aad, err := credentialAAD(id, kind, audience)
+	if err != nil {
+		return nil, nil, err
+	}
+	key, err := hkdf.Key(sha256.New, v.masterKey, []byte("heimdall:vault:v1"), "heimdall:"+kind+"-key:v1:"+id+":"+audience, 32)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer clear(key)
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, nil, err
+	}
+	aead, err := cipher.NewGCM(block)
+	return aead, aad, err
+}
+
 func (v *Vault) credentialAEAD(credentialID, providerType, audience string) (cipher.AEAD, error) {
 	if len(v.masterKey) != MasterKeySize {
 		return nil, errors.New("vault is closed")

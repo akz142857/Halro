@@ -34,14 +34,15 @@ func TestMetadataMigrationFromV1IsAtomicAndRecorded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(history) != 7 ||
+	if len(history) != 8 ||
 		history[0] != (MigrationRecord{Version: 1, Name: "initial_schema"}) ||
 		history[1] != (MigrationRecord{Version: 2, Name: "migration_history"}) ||
 		history[2] != (MigrationRecord{Version: 3, Name: "deployments"}) ||
 		history[3] != (MigrationRecord{Version: 4, Name: "provider_profiles"}) ||
 		history[4] != (MigrationRecord{Version: 5, Name: "provider_resources"}) ||
 		history[5] != (MigrationRecord{Version: 6, Name: "phase2_capability_evidence"}) ||
-		history[6] != (MigrationRecord{Version: 7, Name: "provider_resource_creation_status"}) {
+		history[6] != (MigrationRecord{Version: 7, Name: "provider_resource_creation_status"}) ||
+		history[7] != (MigrationRecord{Version: 8, Name: "admin_mfa"}) {
 		t.Fatalf("history=%#v", history)
 	}
 }

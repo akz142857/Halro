@@ -18,6 +18,7 @@ The frontend advisory scan reports zero vulnerabilities. CI now reruns both Go a
 | Boundary | Evidence | Result |
 |---|---|---|
 | Admin authentication | Argon2id password verification, signed server-side session, fixation rotation, absolute/idle expiry tests | Pass |
+| Admin TOTP MFA | encrypted independent seeds, short-lived hash-only pre-auth challenges, atomic time-step replay protection, hash-only one-time recovery codes, offline reset | Pass |
 | Admin mutations | Same-origin session plus CSRF middleware and `If-Match` revision checks | Pass |
 | Gateway keys | One-time plaintext response, SHA-256 hash-only persistence, revocation snapshot refresh | Pass |
 | Provider/Webhook secrets | AES-GCM envelope with HKDF-derived keys and audience-bound AAD; API views never expose ciphertext | Pass |

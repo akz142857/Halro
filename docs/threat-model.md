@@ -5,7 +5,7 @@
 - master key;
 - provider credentials;
 - Gateway keys;
-- Admin password and sessions;
+- Admin password, encrypted TOTP seeds, recovery-code hashes, login challenges, and sessions;
 - TLS private key;
 - webhook/backup secrets;
 - usage, cost, source-IP derivatives, and audit data;
@@ -46,6 +46,8 @@ The host root account is trusted for v1. Audit chaining detects offline record m
 | Disk failure | accounting state machine, readiness false, stop new provider calls |
 | Backup disclosure | authenticated encrypted backup by default |
 | Browser secret recovery | no-store, strict CSP, no service worker, no local storage |
+| Admin password disclosure | optional or required TOTP; no full Admin Session is issued until the second factor succeeds |
+| TOTP/recovery replay | per-authenticator atomic time-step watermark; recovery codes are hash-only and atomically consumed |
 
 ## Default assumptions
 

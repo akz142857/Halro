@@ -29,6 +29,20 @@ func TestMasterKeyRotationReencryptsCredentialsAndPreservesAuditChain(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
+	fixtureVault, err := vault.New(oldKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mfaSecret := []byte("12345678901234567890")
+	mfaCiphertext, err := fixtureVault.EncryptAdminMFA("mfa_rotation", "admin", mfaSecret)
+	fixtureVault.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if _, err = beforeStore.PutAdminMFAAuthenticator(context.Background(), domain.AdminMFAAuthenticator{ID: "mfa_rotation", Username: "admin", Name: "rotation phone", Type: domain.AdminMFATypeTOTP, SecretCiphertext: mfaCiphertext, Status: domain.AdminMFAStatusActive, CreatedAt: now, ConfirmedAt: &now}, 0); err != nil {
+		t.Fatal(err)
+	}
 	beforeCredential, err := beforeStore.GetCredential(context.Background(), credentialID)
 	if closeErr := beforeStore.Close(); err == nil {
 		err = closeErr
@@ -84,6 +98,15 @@ func TestMasterKeyRotationReencryptsCredentialsAndPreservesAuditChain(t *testing
 		t.Fatalf("rotated credential version=%d plaintext_match=%t", credential.KeyVersion, bytes.Equal(plaintext, providerSecret))
 	}
 	clear(plaintext)
+	rotatedMFA, err := store.GetAdminMFAAuthenticator(context.Background(), "admin", "mfa_rotation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mfaPlaintext, err := newVault.DecryptAdminMFA(rotatedMFA.ID, rotatedMFA.Username, rotatedMFA.SecretCiphertext)
+	if err != nil || !bytes.Equal(mfaPlaintext, mfaSecret) {
+		t.Fatalf("rotated MFA secret invalid: %v", err)
+	}
+	clear(mfaPlaintext)
 	oldVault, err := vault.New(oldKey)
 	if err != nil {
 		t.Fatal(err)

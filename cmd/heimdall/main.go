@@ -152,8 +152,8 @@ func run(arguments []string, logger *slog.Logger) error {
 		fmt.Fprintln(os.Stderr, "Gateway key is shown once; store it securely.")
 		return json.NewEncoder(os.Stdout).Encode(result)
 	case "admin":
-		if len(arguments) < 2 || (arguments[1] != "bootstrap" && arguments[1] != "reset-password") {
-			return errors.New("usage: heimdall admin <bootstrap|reset-password> --config <path> --username <name>")
+		if len(arguments) < 2 || (arguments[1] != "bootstrap" && arguments[1] != "reset-password" && arguments[1] != "reset-mfa") {
+			return errors.New("usage: heimdall admin <bootstrap|reset-password|reset-mfa> --config <path> --username <name>")
 		}
 		command := arguments[1]
 		flags := flag.NewFlagSet("admin "+command, flag.ContinueOnError)
@@ -165,6 +165,13 @@ func run(arguments []string, logger *slog.Logger) error {
 		cfg, err := config.Load(*configPath, config.LoadOptions{})
 		if err != nil {
 			return err
+		}
+		if command == "reset-mfa" {
+			if err := app.ResetAdminMFA(context.Background(), cfg, *username); err != nil {
+				return err
+			}
+			fmt.Fprintln(os.Stdout, "Admin MFA reset; all existing sessions invalidated")
+			return nil
 		}
 		password, err := io.ReadAll(io.LimitReader(os.Stdin, 1025))
 		if err != nil {

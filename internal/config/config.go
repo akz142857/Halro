@@ -71,6 +71,7 @@ type Admin struct {
 	IdleTimeout    Duration `yaml:"idle_timeout"`
 	LoginRPM       int      `yaml:"login_rpm"`
 	ExternalOrigin string   `yaml:"external_origin"`
+	MFAPolicy      string   `yaml:"mfa_policy"`
 }
 
 type Gateway struct {
@@ -277,6 +278,9 @@ func (c *Config) Normalize() error {
 	if c.Admin.LoginRPM == 0 {
 		c.Admin.LoginRPM = 5
 	}
+	if c.Admin.MFAPolicy == "" {
+		c.Admin.MFAPolicy = "optional"
+	}
 	return nil
 }
 
@@ -394,6 +398,9 @@ func (c Config) Validate(opts LoadOptions) error {
 		problems = append(problems, errors.New(
 			"admin session TTL, idle timeout, and login RPM must be positive; idle timeout cannot exceed TTL",
 		))
+	}
+	if c.Admin.MFAPolicy != "optional" && c.Admin.MFAPolicy != "required" {
+		return errors.New("admin.mfa_policy must be optional or required")
 	}
 	if c.Admin.ExternalOrigin != "" {
 		origin, err := url.Parse(c.Admin.ExternalOrigin)

@@ -29,6 +29,7 @@ property of their respective owners.
 | TanStack Query and Table | MIT |
 | uPlot | MIT |
 | Zod | MIT |
+| qrcode | MIT |
 
 The Apache-2.0 license text is included in [LICENSE](LICENSE). MIT, BSD, and
 Apache licenses require preservation of their upstream copyright and license

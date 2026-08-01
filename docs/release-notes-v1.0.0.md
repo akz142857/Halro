@@ -63,6 +63,9 @@ credentials, IMDS, or the default credential chain.
 - Admin sessions use Argon2id password verification, hash-only server-side
   tokens, Secure/HttpOnly/SameSite cookies, origin checks, CSRF, and bounded
   login attempts.
+- Admin accounts can bind multiple independent standard TOTP authenticators.
+  Two-stage login, encrypted seeds, replay protection, one-time recovery codes,
+  optional/required policy, and audited offline MFA reset are included.
 - `heimdall key rotate --new-key-file ...` performs offline per-Credential COW
   re-encryption with a persistent versioned keyring, atomic Master Key
   publication, Admin-session invalidation, stable protected Audit HMAC key, and

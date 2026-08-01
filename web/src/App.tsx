@@ -52,6 +52,7 @@ export function App() {
   }, [session.data, uiBootstrap.data?.default_locale]);
   useEffect(() => {
     if (session.data && path === "/admin/login") navigate("/admin");
+	if (session.data?.mfa_setup_required && !path.startsWith("/admin/settings")) navigate("/admin/settings");
   }, [path, session.data]);
   if (setup.isPending) {
     return <div className="boot"><span className="brand-mark">H</span><Loading label={t("app.checkingSetup")} /></div>;

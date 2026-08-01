@@ -127,6 +127,24 @@ increments the session generation, invalidates every existing session, and
 appends `admin.password.reset` to the trusted Audit chain. The password is not
 accepted as a command-line argument.
 
+### Authenticator two-factor authentication
+
+Set `admin.mfa_policy` to `optional` (the upgrade-compatible default) or
+`required`. Remote Admin deployments should use `required`. Heimdall implements
+standard 6-digit, 30-second TOTP and works with Microsoft Authenticator, Google
+Authenticator, 1Password, and other compatible applications. Production hosts
+must keep UTC time synchronized.
+
+If every authenticator and recovery code is lost, stop Heimdall and run:
+
+```bash
+./heimdall admin reset-mfa --config ./config.yaml --username admin
+```
+
+This removes all factors and recovery codes, invalidates sessions and pending
+challenges, and appends `admin.mfa.reset_offline` to the trusted Audit chain.
+With `mfa_policy: required`, the next password login is restricted to setup.
+
 ## Master Key rotation
 
 Rotation is an offline operation. First create and verify an encrypted backup,

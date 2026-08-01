@@ -161,3 +161,66 @@ func ResetAdminPassword(
 	}
 	return checkpointAudit(store, auditLog.Summary())
 }
+
+// ResetAdminMFA is an offline break-glass operation. It removes all second
+// factors and invalidates every session for the selected administrator.
+func ResetAdminMFA(ctx context.Context, cfg config.Config, username string) error {
+	dataLock, err := lock.Acquire(cfg.Storage.DataDir)
+	if err != nil {
+		return err
+	}
+	defer dataLock.Close()
+	store, err := boltstore.Open(cfg.MetadataPath())
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	user, err := store.GetAdminUser(ctx, username)
+	if err != nil {
+		return errors.New("admin user was not found")
+	}
+	masterKey, err := vault.LoadMasterKey(cfg.Storage.MasterKeyFile)
+	if err != nil {
+		return err
+	}
+	defer clear(masterKey)
+	secretVault, err := vault.New(masterKey)
+	if err != nil {
+		return err
+	}
+	defer secretVault.Close()
+	if err = verifyVaultKeyCheck(store, secretVault); err != nil {
+		return err
+	}
+	auditKey, err := loadAuditHMACKey(store, secretVault, masterKey)
+	if err != nil {
+		return err
+	}
+	defer clear(auditKey)
+	auditLog, err := audit.Open(cfg.AuditPath(), auditKey)
+	if err != nil {
+		return err
+	}
+	defer auditLog.Close()
+	if err = reconcileAuditCheckpoint(store, auditLog.Summary()); err != nil {
+		return err
+	}
+	if err = store.DeleteAdminMFAForUser(ctx, username); err != nil {
+		return err
+	}
+	user.SessionGeneration++
+	if _, err = store.PutAdminUser(ctx, user, user.Revision); err != nil {
+		return err
+	}
+	if err = store.DeleteAdminSessionsForUser(ctx, username); err != nil {
+		return err
+	}
+	eventID, err := id.New("aud")
+	if err != nil {
+		return err
+	}
+	if _, err = auditLog.Append(ctx, audit.Event{EventID: eventID, OccurredAt: time.Now().UTC(), ActorType: "local_cli", Action: "admin.mfa.reset_offline", TargetType: "admin_user", TargetID: username, Outcome: "success"}); err != nil {
+		return err
+	}
+	return checkpointAudit(store, auditLog.Summary())
+}

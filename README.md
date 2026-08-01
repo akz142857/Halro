@@ -60,6 +60,11 @@ create the first administrator; the password is hashed in local metadata and
 is never written to configuration. Later runs use the same command and open
 the normal login page.
 
+The Admin console supports standard TOTP two-factor authentication with
+multiple independently revocable authenticators and one-time recovery codes.
+It works with Microsoft Authenticator, Google Authenticator, 1Password, and
+other compatible apps without contacting those vendors.
+
 The setup and login pages include a language selector. After login, language
 preferences and the instance-wide default are managed under **Settings →
 Language**. The administrator preference is stored server-side, so it follows

@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
+import QRCode from "qrcode";
 import { api } from "../api";
 import { ErrorState, Field, Loading, PageHeader, StatusDot } from "../components";
 import { applyPreference } from "../i18n";
@@ -42,6 +43,7 @@ export function SettingsPage() {
       )}
       {settings.data && <RuntimeSettingsForm settings={settings.data.data} />}
       <PasswordChangeForm />
+      <MFASettings />
       {status.data && (
         <div className="settings-grid">
           <section className="panel system-card">
@@ -76,6 +78,28 @@ export function SettingsPage() {
     </>
   );
 }
+
+function MFASettings() {
+  const { t } = useTranslation(); const queryClient = useQueryClient();
+  const status = useQuery({queryKey:["mfa"],queryFn:api.mfaStatus}); const [name,setName]=useState(""); const [password,setPassword]=useState(""); const [approvalCode,setApprovalCode]=useState(""); const [confirmCode,setConfirmCode]=useState(""); const [enrollment,setEnrollment]=useState<Awaited<ReturnType<typeof api.createMFAAuthenticator>>|null>(null); const [recovery,setRecovery]=useState<string[]>([]);
+  const [actionTarget,setActionTarget]=useState(""); const [actionPassword,setActionPassword]=useState(""); const [actionCode,setActionCode]=useState("");
+  const create=useMutation({mutationFn:()=>api.createMFAAuthenticator(name,password,approvalCode),onSuccess:(value)=>{setEnrollment(value);setPassword("");setApprovalCode("")}});
+  const confirm=useMutation({mutationFn:()=>api.confirmMFAAuthenticator(enrollment!.id,confirmCode),onSuccess:async(value)=>{setRecovery(value.recovery_codes||[]);setEnrollment(null);setConfirmCode("");await queryClient.invalidateQueries({queryKey:["mfa"]});await queryClient.invalidateQueries({queryKey:["session"]})}});
+  const revoke=useMutation({mutationFn:()=>api.deleteMFAAuthenticator(actionTarget,actionPassword,actionCode),onSuccess:async()=>{setActionTarget("");setActionPassword("");setActionCode("");await queryClient.invalidateQueries({queryKey:["mfa"]});await queryClient.invalidateQueries({queryKey:["session"]})}});
+  const regenerate=useMutation({mutationFn:()=>api.regenerateMFARecoveryCodes(actionPassword,actionCode),onSuccess:async(value)=>{setRecovery(value.recovery_codes);setActionPassword("");setActionCode("");await queryClient.invalidateQueries({queryKey:["session"]})}});
+  return <section className="panel runtime-settings"><header className="panel-header"><div><p className="eyebrow">{t("settings.security")}</p><h2>{t("settings.mfaTitle")}</h2><p>{t("settings.mfaDescription")}</p></div><span className="badge">{status.data?.policy||"optional"}</span></header>
+    {status.isError&&<ErrorState error={status.error}/>} {status.data?.authenticators.map((a)=><div className="notice" key={a.id}><strong>{a.name}</strong><span>{t("settings.lastUsed")}: {a.last_used_at||t("common.never")}</span><button type="button" className="button ghost" onClick={()=>setActionTarget(a.id)}>{t("settings.revokeAuthenticator")}</button></div>)}
+    {actionTarget&&<form onSubmit={(e)=>{e.preventDefault();revoke.mutate()}}><Field label={t("settings.currentPassword")}><input required type="password" autoComplete="current-password" value={actionPassword} onChange={(e)=>setActionPassword(e.target.value)}/></Field><Field label={t("auth.authenticatorCode")} hint={t("settings.otherAuthenticatorHint")}><input required inputMode="numeric" value={actionCode} onChange={(e)=>setActionCode(e.target.value)}/></Field>{revoke.isError&&<ErrorState error={revoke.error}/>}<div className="form-actions"><button className="button danger" disabled={revoke.isPending}>{t("settings.confirmRevoke")}</button><button type="button" className="button ghost" onClick={()=>setActionTarget("")}>{t("common.cancel")}</button></div></form>}
+    {!enrollment&&<form onSubmit={(e)=>{e.preventDefault();create.mutate()}}><Field label={t("settings.deviceName")}><input required maxLength={64} value={name} onChange={(e)=>setName(e.target.value)}/></Field><Field label={t("settings.currentPassword")}><input required type="password" autoComplete="current-password" value={password} onChange={(e)=>setPassword(e.target.value)}/></Field>{status.data?.enabled&&<Field label={t("auth.authenticatorCode")} hint={t("settings.existingCodeHint")}><input required inputMode="numeric" autoComplete="one-time-code" value={approvalCode} onChange={(e)=>setApprovalCode(e.target.value)}/></Field>}{create.isError&&<ErrorState error={create.error}/>}<div className="form-actions"><button className="button primary" disabled={create.isPending}>{t("settings.addAuthenticator")}</button></div></form>}
+    {enrollment&&<form onSubmit={(e)=>{e.preventDefault();confirm.mutate()}}><div className="notice warning"><strong>{t("settings.scanAuthenticator")}</strong><EnrollmentQR uri={enrollment.otpauth_uri}/><span>{t("settings.manualSecret")}: <code>{enrollment.secret}</code></span></div><Field label={t("auth.authenticatorCode")}><input autoFocus required inputMode="numeric" autoComplete="one-time-code" value={confirmCode} onChange={(e)=>setConfirmCode(e.target.value)}/></Field>{confirm.isError&&<ErrorState error={confirm.error}/>}<div className="form-actions"><button className="button primary" disabled={confirm.isPending}>{t("auth.verify")}</button></div></form>}
+    {recovery.length>0&&<div className="notice warning" role="status"><strong>{t("settings.saveRecoveryCodes")}</strong><pre>{recovery.join("\n")}</pre><button className="button" onClick={()=>navigator.clipboard.writeText(recovery.join("\n"))}>{t("common.copy")}</button><button className="button" onClick={()=>downloadRecoveryCodes(recovery)}>{t("common.download")}</button><button className="button ghost" onClick={()=>setRecovery([])}>{t("settings.savedRecoveryCodes")}</button></div>}
+    {status.data?.enabled&&!actionTarget&&<form onSubmit={(e)=>{e.preventDefault();regenerate.mutate()}}><h3>{t("settings.regenerateRecovery")}</h3><Field label={t("settings.currentPassword")}><input required type="password" autoComplete="current-password" value={actionPassword} onChange={(e)=>setActionPassword(e.target.value)}/></Field><Field label={t("auth.authenticatorCode")}><input required inputMode="numeric" value={actionCode} onChange={(e)=>setActionCode(e.target.value)}/></Field>{regenerate.isError&&<ErrorState error={regenerate.error}/>}<div className="form-actions"><button className="button" disabled={regenerate.isPending}>{t("settings.regenerateRecovery")}</button></div></form>}
+  </section>
+}
+
+function EnrollmentQR({uri}:{uri:string}) { const [source,setSource]=useState(""); useEffect(()=>{let active=true;void QRCode.toDataURL(uri,{errorCorrectionLevel:"M",margin:2,width:240}).then((value)=>{if(active)setSource(value)});return()=>{active=false;setSource("")}},[uri]);return source?<img src={source} width={240} height={240} alt="Authenticator enrollment QR code"/>:<Loading/> }
+
+function downloadRecoveryCodes(codes:string[]){const url=URL.createObjectURL(new Blob([`Heimdall recovery codes\n\n${codes.join("\n")}\n`],{type:"text/plain"}));const link=document.createElement("a");link.href=url;link.download="heimdall-recovery-codes.txt";link.click();URL.revokeObjectURL(url)}
 
 export function PasswordChangeForm() {
   const { t } = useTranslation();
