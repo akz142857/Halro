@@ -18,6 +18,8 @@ import (
 	"github.com/akz142857/Heimdall/internal/auth"
 	"github.com/akz142857/Heimdall/internal/budget"
 	"github.com/akz142857/Heimdall/internal/circuit"
+	"github.com/akz142857/Heimdall/internal/compatibility"
+	openaiwire "github.com/akz142857/Heimdall/internal/compatibility/openai"
 	"github.com/akz142857/Heimdall/internal/domain"
 	"github.com/akz142857/Heimdall/internal/id"
 	"github.com/akz142857/Heimdall/internal/limiter"
@@ -461,13 +463,23 @@ func (s *Service) Chat(
 	if err != nil {
 		return openaiapi.ChatCompletionResponse{}, err
 	}
-	targets = filterChatCapabilities(targets, request)
+	canonical, err := openaiwire.DecodeGenerate(request)
+	if err != nil {
+		return openaiapi.ChatCompletionResponse{}, gatewayError("invalid_request_error", "request cannot be represented safely", 400, err)
+	}
+	targets = filterSemanticCapabilities(targets, canonical.Requirements)
+	targets = filterGenerateProfileCompatibility(targets, canonical)
+	targets = filterPrimitiveTargets(targets, provider.OperationChat)
 	if len(targets) == 0 {
 		return openaiapi.ChatCompletionResponse{}, gatewayError("unsupported_feature", "model route does not support the requested chat capabilities", 400, nil)
 	}
 	request, err = s.redactor.ProcessInboundChat(principal.Project.RedactionPolicyID, request)
 	if err != nil {
 		return openaiapi.ChatCompletionResponse{}, gatewayError("sensitive_data_detected", "request contains secret material", 400, err)
+	}
+	canonical, err = openaiwire.DecodeGenerate(request)
+	if err != nil {
+		return openaiapi.ChatCompletionResponse{}, gatewayError("invalid_request_error", "redacted request cannot be represented safely", 400, err)
 	}
 	inputTokens := estimateInputTokens(request.EstimatedInputBytes())
 	if principal.Project.MaxInputTokens > 0 && inputTokens > principal.Project.MaxInputTokens {
@@ -518,11 +530,20 @@ func (s *Service) Chat(
 				break
 			}
 			attemptCount++
-			response, providerErr := target.Adapter.Chat(ctx, provider.ChatCall{
-				RequestID: requestID, ProviderModel: target.ProviderModel, Request: request,
-			})
+			generation, resolveErr := target.Generation(provider.OperationChat)
+			if resolveErr != nil {
+				return openaiapi.ChatCompletionResponse{}, gatewayError("unsupported_feature", "generation primitive is unavailable", 400, resolveErr)
+			}
+			semanticResponse, providerErr := generation.Generate(ctx, provider.GenerateCall{RequestID: requestID, ProviderModel: target.ProviderModel, Request: canonical})
+			response := openaiapi.ChatCompletionResponse{}
+			if providerErr == nil {
+				response, err = openaiwire.RenderGenerateResult(semanticResponse)
+				if err != nil {
+					providerErr = &provider.Error{Class: provider.ErrorMalformed, Ambiguous: true, Message: "render canonical generate result", Cause: err}
+				}
+			}
 			settlement := settlementForResult(
-				response, providerErr, inputTokens, outputTokens, target, attempt.accounting.ReservationMicrosUSD,
+				semanticResponse, providerErr, inputTokens, outputTokens, target, attempt.accounting.ReservationMicrosUSD,
 			)
 			if err := attempt.finish(providerErr, settlement); err != nil {
 				return openaiapi.ChatCompletionResponse{}, err
@@ -586,7 +607,13 @@ func (s *Service) ChatStream(
 	if err != nil {
 		return err
 	}
-	targets = filterChatCapabilities(targets, request)
+	canonical, err := openaiwire.DecodeGenerate(request)
+	if err != nil {
+		return gatewayError("invalid_request_error", "request cannot be represented safely", 400, err)
+	}
+	targets = filterSemanticCapabilities(targets, canonical.Requirements)
+	targets = filterGenerateProfileCompatibility(targets, canonical)
+	targets = filterPrimitiveTargets(targets, provider.OperationChatStream)
 	if len(targets) == 0 {
 		return gatewayError("unsupported_feature", "model route does not support the requested chat capabilities", 400, nil)
 	}
@@ -600,6 +627,10 @@ func (s *Service) ChatStream(
 	request, err = s.redactor.ProcessInboundChat(principal.Project.RedactionPolicyID, request)
 	if err != nil {
 		return gatewayError("sensitive_data_detected", "request contains secret material", 400, err)
+	}
+	canonical, err = openaiwire.DecodeGenerate(request)
+	if err != nil {
+		return gatewayError("invalid_request_error", "redacted request cannot be represented safely", 400, err)
 	}
 	inputTokens := estimateInputTokens(request.EstimatedInputBytes())
 	if principal.Project.MaxInputTokens > 0 && inputTokens > principal.Project.MaxInputTokens {
@@ -666,10 +697,18 @@ func (s *Service) ChatStream(
 					400, errors.Join(streamErr, cleanupErr, finalizeErr),
 				)
 			}
-			usage, providerErr := target.Adapter.ChatStream(ctx, provider.ChatCall{
-				RequestID: requestID, ProviderModel: target.ProviderModel, Request: request,
+			semanticStream := semantic.NewStreamValidator()
+			generation, resolveErr := target.Generation(provider.OperationChatStream)
+			if resolveErr != nil {
+				return gatewayError("unsupported_feature", "generation primitive is unavailable", 400, resolveErr)
+			}
+			semanticUsage, providerErr := generation.GenerateStream(ctx, provider.GenerateCall{
+				RequestID: requestID, ProviderModel: target.ProviderModel, Request: canonical,
 			}, func(event semantic.Event) error {
-				chunk, conversionErr := event.OpenAIChunk()
+				if validationErr := semanticStream.Accept(event); validationErr != nil {
+					return validationErr
+				}
+				chunk, conversionErr := openaiwire.RenderEvent(event)
 				if conversionErr != nil {
 					return conversionErr
 				}
@@ -688,6 +727,9 @@ func (s *Service) ChatStream(
 				return nil
 			})
 			if providerErr == nil {
+				providerErr = semanticStream.Finalize(canonical.IncludeUsage)
+			}
+			if providerErr == nil {
 				var chunks []openaiapi.ChatCompletionResponse
 				chunks, providerErr = streamRedactor.Flush()
 				for _, safeChunk := range chunks {
@@ -703,7 +745,7 @@ func (s *Service) ChatStream(
 				}
 			}
 			settlement := streamSettlement(
-				usage, providerErr, attemptEmitted, inputTokens, outputTokens,
+				semanticUsage, providerErr, attemptEmitted, inputTokens, outputTokens,
 				target, attempt.accounting.ReservationMicrosUSD,
 			)
 			if err := attempt.finish(providerErr, settlement); err != nil {
@@ -761,6 +803,15 @@ func (s *Service) Embeddings(
 	if err != nil {
 		return openaiapi.EmbeddingResponse{}, gatewayError("sensitive_data_detected", "request contains secret material", 400, err)
 	}
+	canonical, err := openaiwire.DecodeEmbedding(request)
+	if err != nil {
+		return openaiapi.EmbeddingResponse{}, gatewayError("invalid_request_error", "embedding request cannot be represented safely", 400, err)
+	}
+	targets = filterPrimitiveTargets(targets, provider.OperationEmbeddings)
+	targets = filterEmbeddingProfileCompatibility(targets, canonical)
+	if len(targets) == 0 {
+		return openaiapi.EmbeddingResponse{}, gatewayError("unsupported_feature", "model route cannot represent the requested embedding fields", 400, nil)
+	}
 	inputTokens := request.EstimatedInputTokens()
 	if principal.Project.MaxInputTokens > 0 && inputTokens > principal.Project.MaxInputTokens {
 		return openaiapi.EmbeddingResponse{}, gatewayError("token_limit_exceeded", "estimated input tokens exceed the project limit", 400, nil)
@@ -802,11 +853,20 @@ func (s *Service) Embeddings(
 				break
 			}
 			attemptCount++
-			response, providerErr := target.Adapter.Embed(ctx, provider.EmbeddingCall{
-				RequestID: requestID, ProviderModel: target.ProviderModel, Request: request,
-			})
+			embedding, resolveErr := target.Embedding()
+			if resolveErr != nil {
+				return openaiapi.EmbeddingResponse{}, gatewayError("unsupported_feature", "embedding primitive is unavailable", 400, resolveErr)
+			}
+			semanticResponse, providerErr := embedding.EmbedSemantic(ctx, provider.EmbedCall{RequestID: requestID, ProviderModel: target.ProviderModel, Request: canonical})
+			response := openaiapi.EmbeddingResponse{}
+			if providerErr == nil {
+				response, err = openaiwire.RenderEmbeddingResult(semanticResponse)
+				if err != nil {
+					providerErr = &provider.Error{Class: provider.ErrorMalformed, Ambiguous: true, Message: "render canonical embedding result", Cause: err}
+				}
+			}
 			settlement := embeddingSettlement(
-				response, providerErr, inputTokens, target, attempt.accounting.ReservationMicrosUSD,
+				semanticResponse, providerErr, inputTokens, target, attempt.accounting.ReservationMicrosUSD,
 			)
 			if err := attempt.finish(providerErr, settlement); err != nil {
 				return openaiapi.EmbeddingResponse{}, err
@@ -986,26 +1046,40 @@ func (s *Service) admitTokenGuard(
 	return nil
 }
 
-func filterChatCapabilities(targets []provider.Target, request openaiapi.ChatCompletionRequest) []provider.Target {
-	requiresTools := len(request.Tools) > 0 || hasJSONValue(request.ToolChoice)
-	requiresVision := requestUsesVision(request)
-	requiresJSON := requestUsesJSONMode(request.ResponseFormat)
-	requiresDeveloper := false
-	requiresReasoning := request.ReasoningEffort != ""
-	for _, message := range request.Messages {
-		requiresDeveloper = requiresDeveloper || message.Role == "developer"
-		requiresReasoning = requiresReasoning || message.ReasoningContent != ""
-		requiresTools = requiresTools || message.Role == "tool" || len(message.ToolCalls) > 0 || message.ToolCallID != ""
-	}
-	requiresStreamUsage := request.StreamOptions != nil && request.StreamOptions.IncludeUsage
+func filterSemanticCapabilities(targets []provider.Target, requirements semantic.Requirements) []provider.Target {
 	return slices.DeleteFunc(slices.Clone(targets), func(target provider.Target) bool {
 		capabilities := target.Capabilities
-		return (requiresTools && !capabilities.Tools) ||
-			(requiresVision && !capabilities.Vision) ||
-			(requiresJSON && !capabilities.JSONMode) ||
-			(requiresDeveloper && !capabilities.DeveloperRole) ||
-			(requiresReasoning && !capabilities.Reasoning) ||
-			(requiresStreamUsage && !capabilities.StreamUsage)
+		if target.LegacyUnprofiled && (requirements.Tools || requirements.ParallelTools ||
+			requirements.InputImage || requirements.StructuredJSON || requirements.DeveloperRole ||
+			requirements.Reasoning || requirements.StreamUsage || requirements.Seed ||
+			requirements.MultipleCandidates || requirements.EndUserReference) {
+			return true
+		}
+		return (requirements.Tools && !capabilities.Tools) ||
+			(requirements.InputImage && !capabilities.Vision) ||
+			(requirements.StructuredJSON && !capabilities.JSONMode) ||
+			(requirements.DeveloperRole && !capabilities.DeveloperRole) ||
+			(requirements.Reasoning && !capabilities.Reasoning) ||
+			(requirements.StreamUsage && !capabilities.StreamUsage)
+	})
+}
+
+func filterGenerateProfileCompatibility(targets []provider.Target, request semantic.GenerateRequest) []provider.Target {
+	return slices.DeleteFunc(slices.Clone(targets), func(target provider.Target) bool {
+		return len(compatibility.UnsupportedGenerateFields(target.ProfileID, request)) > 0
+	})
+}
+
+func filterEmbeddingProfileCompatibility(targets []provider.Target, request semantic.EmbeddingRequest) []provider.Target {
+	return slices.DeleteFunc(slices.Clone(targets), func(target provider.Target) bool {
+		return len(compatibility.UnsupportedEmbeddingFields(target.ProfileID, request)) > 0
+	})
+}
+
+func filterPrimitiveTargets(targets []provider.Target, operation provider.Operation) []provider.Target {
+	return slices.DeleteFunc(slices.Clone(targets), func(target provider.Target) bool {
+		_, ok := target.ResolveOperation(operation)
+		return !ok
 	})
 }
 
@@ -1076,7 +1150,7 @@ func authorizeSource(ctx context.Context, project domain.Project) error {
 }
 
 func settlementForResult(
-	response openaiapi.ChatCompletionResponse,
+	response semantic.GenerateResult,
 	providerErr error,
 	estimatedInputTokens int64,
 	estimatedOutputTokens int64,
@@ -1090,6 +1164,12 @@ func settlementForResult(
 		if !errors.As(providerErr, &classified) || !classified.Ambiguous {
 			return result
 		}
+		if validSemanticUsage(response.Usage) {
+			result.ProviderInputTokens = response.Usage.InputTokens
+			result.ProviderOutputTokens = response.Usage.OutputTokens
+			setSettlementCost(&result, target, reservationMicrosUSD)
+			return result
+		}
 		result.ProviderInputTokens = estimatedInputTokens
 		result.ProviderOutputTokens = estimatedOutputTokens
 		result.PreparedOutputTokens = estimatedOutputTokens
@@ -1098,15 +1178,15 @@ func settlementForResult(
 		setSettlementCost(&result, target, reservationMicrosUSD)
 		return result
 	}
-	if !validUsage(response.Usage) {
+	if !validSemanticUsage(response.Usage) {
 		result.ProviderInputTokens = estimatedInputTokens
 		result.ProviderOutputTokens = estimatedOutputTokens
 		result.PreparedOutputTokens = estimatedOutputTokens
 		result.TokenEstimated = true
 		result.CostEstimated = true
 	} else {
-		result.ProviderInputTokens = response.Usage.PromptTokens
-		result.ProviderOutputTokens = response.Usage.CompletionTokens
+		result.ProviderInputTokens = response.Usage.InputTokens
+		result.ProviderOutputTokens = response.Usage.OutputTokens
 	}
 	setSettlementCost(&result, target, reservationMicrosUSD)
 	return result
@@ -1152,7 +1232,7 @@ func enrichSettlement(result *budget.Settlement, providerErr error, startedAt, c
 }
 
 func embeddingSettlement(
-	response openaiapi.EmbeddingResponse,
+	response semantic.EmbeddingResult,
 	providerErr error,
 	estimatedInputTokens int64,
 	target provider.Target,
@@ -1165,22 +1245,27 @@ func embeddingSettlement(
 		if !errors.As(providerErr, &classified) || !classified.Ambiguous {
 			return result
 		}
+		if validSemanticUsage(response.Usage) {
+			result.ProviderInputTokens = response.Usage.InputTokens
+			setSettlementCost(&result, target, reservationMicrosUSD)
+			return result
+		}
 		result.ProviderInputTokens = estimatedInputTokens
 		result.TokenEstimated = true
 		result.CostEstimated = true
-	} else if !validUsage(response.Usage) {
+	} else if !validSemanticUsage(response.Usage) {
 		result.ProviderInputTokens = estimatedInputTokens
 		result.TokenEstimated = true
 		result.CostEstimated = true
 	} else {
-		result.ProviderInputTokens = response.Usage.PromptTokens
+		result.ProviderInputTokens = response.Usage.InputTokens
 	}
 	setSettlementCost(&result, target, reservationMicrosUSD)
 	return result
 }
 
 func streamSettlement(
-	usage *openaiapi.Usage,
+	usage *semantic.Usage,
 	providerErr error,
 	emitted bool,
 	estimatedInputTokens int64,
@@ -1192,9 +1277,9 @@ func streamSettlement(
 	if providerErr != nil {
 		result.Outcome = "provider_error"
 	}
-	if validUsage(usage) {
-		result.ProviderInputTokens = usage.PromptTokens
-		result.ProviderOutputTokens = usage.CompletionTokens
+	if validSemanticUsage(usage) {
+		result.ProviderInputTokens = usage.InputTokens
+		result.ProviderOutputTokens = usage.OutputTokens
 	} else if providerErr == nil || emitted {
 		result.ProviderInputTokens = estimatedInputTokens
 		result.ProviderOutputTokens = estimatedOutputTokens
@@ -1215,16 +1300,16 @@ func streamSettlement(
 	return result
 }
 
-func validUsage(usage *openaiapi.Usage) bool {
-	if usage == nil || usage.PromptTokens < 0 || usage.CompletionTokens < 0 || usage.TotalTokens < 0 {
+func validSemanticUsage(usage *semantic.Usage) bool {
+	if usage == nil || usage.InputTokens < 0 || usage.OutputTokens < 0 || usage.TotalTokens < 0 {
 		return false
 	}
-	if usage.PromptTokens > maxAccountableTokens ||
-		usage.CompletionTokens > maxAccountableTokens ||
+	if usage.InputTokens > maxAccountableTokens ||
+		usage.OutputTokens > maxAccountableTokens ||
 		usage.TotalTokens > maxAccountableTokens {
 		return false
 	}
-	total, err := addTokens(usage.PromptTokens, usage.CompletionTokens)
+	total, err := addTokens(usage.InputTokens, usage.OutputTokens)
 	return err == nil && usage.TotalTokens >= total
 }
 

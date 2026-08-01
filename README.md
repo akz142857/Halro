@@ -26,6 +26,7 @@ installation, upgrades, recovery, and hardening, see the
 - [Operator Guide](docs/operator-guide.md)
 - [OpenAI compatibility contract](docs/contracts/openai-compatibility.md)
 - [多协议 LLM API、Provider 与 Realtime 架构设计](docs/api-provider-realtime-architecture.zh-CN.md)
+- [Machine-readable endpoint compatibility manifests](docs/compatibility/endpoint-manifests.json)
 - [Security model](docs/threat-model.md)
 - [Distributed evolution and state ownership](docs/distributed-state-ownership.md)
 - [Gateway idempotency contract](docs/idempotency-contract.md)

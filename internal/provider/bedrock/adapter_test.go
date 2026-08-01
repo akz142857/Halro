@@ -63,6 +63,17 @@ func TestConverseSignsAndTranslatesTextWithoutLeakingSecret(t *testing.T) {
 	}
 }
 
+func TestTranslateRequestRejectsFieldsBedrockWouldDrop(t *testing.T) {
+	candidates := 2
+	request := openaiapi.ChatCompletionRequest{
+		Messages: []openaiapi.Message{{Role: "user", Content: openaiapi.TextContent("hi")}},
+		N:        &candidates,
+	}
+	if _, err := translateRequest(request); err == nil {
+		t.Fatal("multiple candidates were silently dropped")
+	}
+}
+
 func TestConverseStreamNormalizesAWSFramesAndUsage(t *testing.T) {
 	var stream bytes.Buffer
 	writeEventFrame(t, &stream, "messageStart", `{"role":"assistant"}`)
@@ -90,8 +101,8 @@ func TestConverseStreamNormalizesAWSFramesAndUsage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 3 || events[0].Choices[0].Delta.Role != "assistant" ||
-		*events[2].Choices[0].FinishReason != "length" || usage == nil || usage.TotalTokens != 5 {
+	if len(events) != 3 || events[0].Outputs[0].Role != semantic.RoleAssistant ||
+		events[2].Outputs[0].NativeTermination != "length" || usage == nil || usage.TotalTokens != 5 {
 		t.Fatalf("events=%#v usage=%#v", events, usage)
 	}
 }
@@ -344,6 +355,23 @@ func TestBedrockTextProfileRejectsUndeclaredDeveloperRoleBeforeProviderIO(t *tes
 	})
 	if err == nil || called {
 		t.Fatalf("developer role err=%v provider_called=%t", err, called)
+	}
+}
+
+func TestBedrockTextProfileRejectsMessageNameBeforeProviderIO(t *testing.T) {
+	called := false
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		called = true
+		return jsonResponse(http.StatusOK, `{}`), nil
+	})}
+	adapter := newTestAdapter(t, client)
+	defer adapter.Close()
+	_, err := adapter.Chat(context.Background(), provider.ChatCall{
+		RequestID: "req_name", ProviderModel: "model",
+		Request: openaiapi.ChatCompletionRequest{Messages: []openaiapi.Message{{Role: "user", Name: "customer", Content: openaiapi.TextContent("hi")}}},
+	})
+	if err == nil || called {
+		t.Fatalf("message name err=%v provider_called=%t", err, called)
 	}
 }
 

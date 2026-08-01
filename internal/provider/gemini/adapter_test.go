@@ -54,6 +54,24 @@ func TestChatTranslatesOpenAITextAndUsesHeaderAuthentication(t *testing.T) {
 	}
 }
 
+func TestTranslateChatRejectsFieldsGeminiWouldDrop(t *testing.T) {
+	seed := int64(7)
+	request := openaiapi.ChatCompletionRequest{
+		Messages: []openaiapi.Message{{Role: "user", Content: openaiapi.TextContent("hi")}},
+		Seed:     &seed,
+	}
+	if _, err := translateChat(request); err == nil {
+		t.Fatal("seed was silently dropped")
+	}
+}
+
+func TestTranslateChatRejectsMessageName(t *testing.T) {
+	request := openaiapi.ChatCompletionRequest{Messages: []openaiapi.Message{{Role: "user", Name: "customer", Content: openaiapi.TextContent("hi")}}}
+	if _, err := translateChat(request); err == nil {
+		t.Fatal("messages[].name was silently dropped")
+	}
+}
+
 func TestStreamNormalizesGeminiSSEAndUsage(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Query().Get("alt") != "sse" {
@@ -61,7 +79,8 @@ func TestStreamNormalizesGeminiSSEAndUsage(t *testing.T) {
 		}
 		writer.Header().Set("Content-Type", "text/event-stream")
 		_, _ = writer.Write([]byte("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"hel\"}]},\"index\":0}],\"responseId\":\"resp_stream\"}\n\n"))
-		_, _ = writer.Write([]byte("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"lo\"}]},\"finishReason\":\"MAX_TOKENS\",\"index\":0}],\"usageMetadata\":{\"promptTokenCount\":3,\"candidatesTokenCount\":2}}\n\n"))
+		_, _ = writer.Write([]byte("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"l\"}]},\"index\":0}],\"usageMetadata\":{\"promptTokenCount\":3,\"candidatesTokenCount\":2}}\n\n"))
+		_, _ = writer.Write([]byte("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"o\"}]},\"finishReason\":\"MAX_TOKENS\",\"index\":0}]}\n\n"))
 	}))
 	defer server.Close()
 	adapter := testAdapter(t, server.URL)
@@ -77,9 +96,35 @@ func TestStreamNormalizesGeminiSSEAndUsage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 2 || events[0].Choices[0].Delta.Role != "assistant" ||
-		*events[1].Choices[0].FinishReason != "length" || usage == nil || usage.TotalTokens != 5 {
+	if len(events) != 3 || events[0].Outputs[0].Role != semantic.RoleAssistant || events[1].Usage != nil ||
+		events[2].Outputs[0].NativeTermination != "length" || usage == nil || usage.TotalTokens != 5 {
 		t.Fatalf("events=%#v usage=%#v", events, usage)
+	}
+}
+
+func TestUnknownGeminiFinishReasonIsPreserved(t *testing.T) {
+	response, err := translateResponse(generateResponse{Candidates: []candidate{{Content: content{Parts: []part{{Text: "blocked"}}}, FinishReason: "FUTURE_SAFETY_REASON"}}}, "model", "request")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Choices[0].FinishReason == nil || *response.Choices[0].FinishReason != "FUTURE_SAFETY_REASON" {
+		t.Fatalf("unknown finish reason was not preserved: %#v", response.Choices[0].FinishReason)
+	}
+	event, _, err := translateStreamChunk(generateResponse{Candidates: []candidate{{Content: content{Parts: []part{{Text: "blocked"}}}, FinishReason: "FUTURE_SAFETY_REASON"}}}, "model", "request", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.Outputs[0].NativeTermination != "FUTURE_SAFETY_REASON" || event.Outputs[0].Termination != "unknown" {
+		t.Fatalf("unknown stream termination was not preserved: %#v", event.Outputs[0])
+	}
+}
+
+func TestGeminiAcceptedHTTPFailuresAreAmbiguous(t *testing.T) {
+	for _, status := range []int{http.StatusRequestTimeout, http.StatusInternalServerError} {
+		err := httpError(status, strings.NewReader("provider detail"))
+		if !err.Ambiguous || err.Retryable {
+			t.Fatalf("status %d classification=%#v", status, err)
+		}
 	}
 }
 

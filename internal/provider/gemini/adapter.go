@@ -226,7 +226,7 @@ func (a *Adapter) ChatStream(ctx context.Context, call provider.ChatCall, emit f
 		if chunkUsage != nil {
 			usage = chunkUsage
 		}
-		if len(semanticEvent.Choices) == 0 {
+		if len(semanticEvent.Outputs) == 0 {
 			continue
 		}
 		if err := emit(semanticEvent); err != nil {
@@ -239,6 +239,9 @@ func (a *Adapter) ChatStream(ctx context.Context, call provider.ChatCall, emit f
 func (a *Adapter) Embed(ctx context.Context, call provider.EmbeddingCall) (openaiapi.EmbeddingResponse, error) {
 	if call.Request.EncodingFormat == "base64" {
 		return openaiapi.EmbeddingResponse{}, badRequest("Gemini Beta supports float embeddings only", nil)
+	}
+	if call.Request.User != "" {
+		return openaiapi.EmbeddingResponse{}, badRequest("Gemini Beta does not declare the OpenAI user field", nil)
 	}
 	inputs, err := embeddingInputs(call.Request.Input)
 	if err != nil {
@@ -266,6 +269,9 @@ func (a *Adapter) Embed(ctx context.Context, call provider.EmbeddingCall) (opena
 }
 
 func translateChat(request openaiapi.ChatCompletionRequest) (generateRequest, error) {
+	if request.Seed != nil || len(request.Tools) != 0 || len(request.ToolChoice) != 0 || request.ParallelToolCalls != nil || len(request.ResponseFormat) != 0 || request.ReasoningEffort != "" || request.User != "" {
+		return generateRequest{}, badRequest("Gemini Beta cannot represent one or more requested OpenAI fields", nil)
+	}
 	result := generateRequest{GenerationConfig: generationConfig{
 		Temperature: request.Temperature, TopP: request.TopP, CandidateCount: request.N,
 	}}
@@ -285,6 +291,9 @@ func translateChat(request openaiapi.ChatCompletionRequest) (generateRequest, er
 	}
 	var system []string
 	for _, message := range request.Messages {
+		if message.Name != "" {
+			return generateRequest{}, badRequest("Gemini Beta does not declare messages[].name", nil)
+		}
 		text, ok := openaiapi.DecodeTextContent(message.Content)
 		if !ok {
 			return generateRequest{}, badRequest("Gemini Beta supports text message content only", nil)
@@ -334,27 +343,39 @@ func translateResponse(source generateResponse, model, requestID string) (openai
 func translateStreamChunk(source generateResponse, model, requestID string, first bool) (semantic.Event, *openaiapi.Usage, error) {
 	usage := openAIUsage(source.UsageMetadata)
 	event := semantic.Event{
-		Kind: semantic.KindDelta, ID: responseID(source.ResponseID, requestID), Object: "chat.completion.chunk",
+		Kind: semantic.EventDelta, ID: responseID(source.ResponseID, requestID),
 		Created: time.Now().Unix(), Model: firstNonEmpty(source.ModelVersion, model),
 	}
 	for _, candidate := range source.Candidates {
-		delta := semantic.Delta{Content: openaiapi.TextContent(partsText(candidate.Content.Parts))}
+		output := semantic.OutputDelta{Index: candidate.Index, Content: []semantic.ContentDelta{{Kind: semantic.ContentText, Text: partsText(candidate.Content.Parts)}}}
 		if first {
-			delta.Role = "assistant"
+			output.Role = semantic.RoleAssistant
 		}
-		event.Choices = append(event.Choices, semantic.Choice{
-			Index: candidate.Index, Delta: delta, FinishReason: finishReason(candidate.FinishReason),
-		})
+		if finish := finishReason(candidate.FinishReason); finish != nil {
+			output.NativeTermination = *finish
+			output.Termination = normalizeGeminiTermination(*finish)
+		}
+		event.Outputs = append(event.Outputs, output)
 	}
-	if usage != nil {
-		event.Usage = &semantic.Usage{InputTokens: usage.PromptTokens, OutputTokens: usage.CompletionTokens, TotalTokens: usage.TotalTokens}
-	}
-	if len(event.Choices) != 0 {
+	if len(event.Outputs) != 0 {
 		if err := event.Validate(); err != nil {
 			return semantic.Event{}, usage, malformed("Gemini stream chunk is semantically invalid", err)
 		}
 	}
 	return event, usage, nil
+}
+
+func normalizeGeminiTermination(value string) string {
+	switch value {
+	case "stop":
+		return "complete"
+	case "length":
+		return "max_output"
+	case "content_filter":
+		return "refusal"
+	default:
+		return "unknown"
+	}
 }
 
 func (a *Adapter) postJSON(ctx context.Context, model, operation, requestID string, input, output any) error {
@@ -459,11 +480,14 @@ func partsText(parts []part) string {
 }
 
 func finishReason(value string) *string {
+	value = strings.TrimSpace(value)
 	if value == "" {
 		return nil
 	}
-	mapped := "stop"
+	mapped := value
 	switch strings.ToUpper(value) {
+	case "STOP":
+		mapped = "stop"
 	case "MAX_TOKENS":
 		mapped = "length"
 	case "SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT":
@@ -509,11 +533,11 @@ func httpError(status int, body io.Reader) *provider.Error {
 	case status == http.StatusUnauthorized || status == http.StatusForbidden:
 		result.Class = provider.ErrorAuthentication
 	case status == http.StatusRequestTimeout:
-		result.Class, result.Retryable = provider.ErrorTimeout, true
+		result.Class, result.Ambiguous = provider.ErrorTimeout, true
 	case status == http.StatusTooManyRequests:
 		result.Class, result.Retryable = provider.ErrorRateLimit, true
 	case status >= 500:
-		result.Class, result.Retryable = provider.ErrorProvider5xx, true
+		result.Class, result.Ambiguous = provider.ErrorProvider5xx, true
 	default:
 		result.Class = provider.ErrorBadRequest
 	}

@@ -1,12 +1,9 @@
 package semantic
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
-
-	"github.com/akz142857/Heimdall/internal/openaiapi"
 )
 
 const (
@@ -14,164 +11,101 @@ const (
 	MaxToolArgumentBytes = 32 << 10
 )
 
-type Kind string
+type EventKind string
 
 const (
-	KindDelta Kind = "delta"
-	KindUsage Kind = "usage"
+	EventDelta EventKind = "output_delta"
+	EventUsage EventKind = "usage"
 )
 
-// Event is the Provider-independent streaming boundary. Provider wire frames
-// are normalized here before redaction, routing delivery, or SDK encoding.
 type Event struct {
-	Kind    Kind     `json:"kind"`
-	ID      string   `json:"id"`
-	Object  string   `json:"object"`
-	Created int64    `json:"created"`
-	Model   string   `json:"model"`
-	Choices []Choice `json:"choices,omitempty"`
-	Usage   *Usage   `json:"usage,omitempty"`
+	Kind            EventKind       `json:"kind"`
+	ID              string          `json:"id"`
+	Created         int64           `json:"created,omitempty"`
+	Model           string          `json:"model"`
+	Outputs         []OutputDelta   `json:"outputs,omitempty"`
+	Usage           *Usage          `json:"usage,omitempty"`
+	Translation     TranslationLoss `json:"translation,omitempty"`
+	MappingRevision uint64          `json:"mapping_revision,omitempty"`
 }
 
-type Choice struct {
-	Index        int     `json:"index"`
-	Delta        Delta   `json:"delta"`
-	FinishReason *string `json:"finish_reason"`
+type OutputDelta struct {
+	Index             int            `json:"index"`
+	Role              Role           `json:"role,omitempty"`
+	Content           []ContentDelta `json:"content,omitempty"`
+	Termination       string         `json:"termination,omitempty"`
+	NativeTermination string         `json:"native_termination,omitempty"`
 }
 
-type Delta struct {
-	Role             string          `json:"role,omitempty"`
-	Content          json.RawMessage `json:"content,omitempty"`
-	ReasoningContent string          `json:"reasoning_content,omitempty"`
-	Name             string          `json:"name,omitempty"`
-	ToolCallID       string          `json:"tool_call_id,omitempty"`
-	ToolCalls        []ToolCall      `json:"tool_calls,omitempty"`
-}
-
-type ToolCall struct {
-	Index     *int   `json:"index,omitempty"`
-	ID        string `json:"id,omitempty"`
-	Type      string `json:"type,omitempty"`
-	Name      string `json:"name,omitempty"`
-	Arguments string `json:"arguments,omitempty"`
-}
-
-type Usage struct {
-	InputTokens  int64 `json:"input_tokens"`
-	OutputTokens int64 `json:"output_tokens"`
-	TotalTokens  int64 `json:"total_tokens"`
-}
-
-func FromOpenAIChunk(chunk openaiapi.ChatCompletionResponse) (Event, error) {
-	event := Event{
-		ID: chunk.ID, Object: chunk.Object, Created: chunk.Created, Model: chunk.Model,
-	}
-	if len(chunk.Choices) > 0 {
-		event.Kind = KindDelta
-		event.Choices = make([]Choice, 0, len(chunk.Choices))
-		seenChoices := make(map[int]struct{}, len(chunk.Choices))
-		for _, source := range chunk.Choices {
-			if source.Index < 0 {
-				return Event{}, errors.New("semantic choice index cannot be negative")
-			}
-			if _, exists := seenChoices[source.Index]; exists {
-				return Event{}, errors.New("semantic event contains duplicate choice index")
-			}
-			seenChoices[source.Index] = struct{}{}
-			if source.Delta == nil {
-				return Event{}, errors.New("streaming choice is missing delta")
-			}
-			delta := Delta{
-				Role: source.Delta.Role, Content: bytes.Clone(source.Delta.Content),
-				ReasoningContent: source.Delta.ReasoningContent,
-				Name:             source.Delta.Name, ToolCallID: source.Delta.ToolCallID,
-			}
-			for _, call := range source.Delta.ToolCalls {
-				if len(call.Function.Arguments) > MaxToolArgumentBytes {
-					return Event{}, errors.New("semantic tool argument fragment exceeds limit")
-				}
-				var index *int
-				if call.Index != nil {
-					copyIndex := *call.Index
-					if copyIndex < 0 {
-						return Event{}, errors.New("semantic tool call index cannot be negative")
-					}
-					index = &copyIndex
-				}
-				delta.ToolCalls = append(delta.ToolCalls, ToolCall{
-					Index: index, ID: call.ID, Type: call.Type,
-					Name: call.Function.Name, Arguments: call.Function.Arguments,
-				})
-			}
-			event.Choices = append(event.Choices, Choice{
-				Index: source.Index, Delta: delta, FinishReason: cloneString(source.FinishReason),
-			})
-		}
-	} else if chunk.Usage != nil {
-		event.Kind = KindUsage
-	}
-	if chunk.Usage != nil {
-		event.Usage = &Usage{
-			InputTokens:  chunk.Usage.PromptTokens,
-			OutputTokens: chunk.Usage.CompletionTokens,
-			TotalTokens:  chunk.Usage.TotalTokens,
-		}
-	}
-	if err := event.Validate(); err != nil {
-		return Event{}, err
-	}
-	return event, nil
+type ContentDelta struct {
+	Kind              ContentKind `json:"kind"`
+	Text              string      `json:"text,omitempty"`
+	ToolIndex         *int        `json:"tool_index,omitempty"`
+	CallID            string      `json:"call_id,omitempty"`
+	Name              string      `json:"name,omitempty"`
+	ArgumentsFragment string      `json:"arguments_fragment,omitempty"`
 }
 
 func (event Event) Validate() error {
-	if event.ID == "" || event.Object == "" {
-		return errors.New("semantic event is missing id or object")
+	if event.ID == "" || event.Model == "" {
+		return errors.New("semantic event identity is incomplete")
 	}
 	switch event.Kind {
-	case KindDelta:
-		if len(event.Choices) == 0 {
-			return errors.New("semantic delta event has no choices")
+	case EventDelta:
+		if len(event.Outputs) == 0 {
+			return errors.New("semantic delta event has no outputs")
 		}
-	case KindUsage:
-		if len(event.Choices) != 0 || event.Usage == nil {
+	case EventUsage:
+		if len(event.Outputs) != 0 || event.Usage == nil {
 			return errors.New("semantic usage event is invalid")
 		}
 	default:
 		return errors.New("semantic event kind is invalid")
 	}
-	seenChoices := make(map[int]struct{}, len(event.Choices))
-	for _, choice := range event.Choices {
-		if choice.Index < 0 {
-			return errors.New("semantic choice index cannot be negative")
+	seen := map[int]struct{}{}
+	for _, output := range event.Outputs {
+		if output.Index < 0 {
+			return errors.New("semantic output index cannot be negative")
 		}
-		if _, exists := seenChoices[choice.Index]; exists {
-			return errors.New("semantic event contains duplicate choice index")
+		if _, ok := seen[output.Index]; ok {
+			return errors.New("semantic event contains duplicate output index")
 		}
-		seenChoices[choice.Index] = struct{}{}
-		if len(choice.Delta.Content) > 0 && !json.Valid(choice.Delta.Content) {
-			return errors.New("semantic content is invalid JSON")
+		seen[output.Index] = struct{}{}
+		if output.Role != "" && output.Role != RoleAssistant {
+			return errors.New("semantic stream output role is invalid")
 		}
-		seenTools := make(map[int]struct{}, len(choice.Delta.ToolCalls))
-		for _, call := range choice.Delta.ToolCalls {
-			if len(call.Arguments) > MaxToolArgumentBytes {
-				return errors.New("semantic tool argument fragment exceeds limit")
+		toolIndexes := map[int]struct{}{}
+		for _, delta := range output.Content {
+			switch delta.Kind {
+			case ContentText, ContentReasoning:
+				if delta.ToolIndex != nil || delta.CallID != "" || delta.Name != "" || delta.ArgumentsFragment != "" {
+					return errors.New("semantic text delta has tool fields")
+				}
+			case ContentToolCall:
+				if len(delta.ArgumentsFragment) > MaxToolArgumentBytes {
+					return errors.New("semantic tool argument fragment exceeds limit")
+				}
+				if delta.ToolIndex != nil {
+					if *delta.ToolIndex < 0 {
+						return errors.New("semantic tool index cannot be negative")
+					}
+					if _, ok := toolIndexes[*delta.ToolIndex]; ok {
+						return errors.New("semantic delta contains duplicate tool index")
+					}
+					toolIndexes[*delta.ToolIndex] = struct{}{}
+				}
+			default:
+				return errors.New("semantic stream content kind is invalid")
 			}
-			if call.Index == nil {
-				continue
-			}
-			if *call.Index < 0 {
-				return errors.New("semantic tool call index cannot be negative")
-			}
-			if _, exists := seenTools[*call.Index]; exists {
-				return errors.New("semantic delta contains duplicate tool call index")
-			}
-			seenTools[*call.Index] = struct{}{}
 		}
 	}
-	if event.Usage != nil && (event.Usage.InputTokens < 0 ||
-		event.Usage.OutputTokens < 0 || event.Usage.TotalTokens < 0 ||
-		event.Usage.TotalTokens < event.Usage.InputTokens+event.Usage.OutputTokens) {
-		return errors.New("semantic usage is invalid")
+	if event.Usage != nil {
+		if err := event.Usage.Validate(); err != nil {
+			return err
+		}
+	}
+	if event.MappingRevision == 0 && event.Translation != "" || event.MappingRevision != 0 && !validTranslationLoss(event.Translation) {
+		return errors.New("semantic event audit metadata is invalid")
 	}
 	encoded, err := json.Marshal(event)
 	if err != nil {
@@ -183,48 +117,108 @@ func (event Event) Validate() error {
 	return nil
 }
 
-func (event Event) OpenAIChunk() (openaiapi.ChatCompletionResponse, error) {
-	if err := event.Validate(); err != nil {
-		return openaiapi.ChatCompletionResponse{}, err
-	}
-	chunk := openaiapi.ChatCompletionResponse{
-		ID: event.ID, Object: event.Object, Created: event.Created, Model: event.Model,
-	}
-	for _, source := range event.Choices {
-		delta := &openaiapi.Message{
-			Role: source.Delta.Role, Content: bytes.Clone(source.Delta.Content),
-			ReasoningContent: source.Delta.ReasoningContent,
-			Name:             source.Delta.Name, ToolCallID: source.Delta.ToolCallID,
-		}
-		for _, call := range source.Delta.ToolCalls {
-			var index *int
-			if call.Index != nil {
-				copyIndex := *call.Index
-				index = &copyIndex
-			}
-			delta.ToolCalls = append(delta.ToolCalls, openaiapi.ToolCall{
-				Index: index, ID: call.ID, Type: call.Type,
-				Function: openaiapi.ToolCallFunction{Name: call.Name, Arguments: call.Arguments},
-			})
-		}
-		chunk.Choices = append(chunk.Choices, openaiapi.Choice{
-			Index: source.Index, Delta: delta, FinishReason: cloneString(source.FinishReason),
-		})
-	}
-	if event.Usage != nil {
-		chunk.Usage = &openaiapi.Usage{
-			PromptTokens:     event.Usage.InputTokens,
-			CompletionTokens: event.Usage.OutputTokens,
-			TotalTokens:      event.Usage.TotalTokens,
-		}
-	}
-	return chunk, nil
+type StreamValidator struct {
+	id        string
+	model     string
+	seen      map[int]struct{}
+	terminal  map[int]struct{}
+	tools     map[string]*streamToolState
+	usageSeen bool
 }
 
-func cloneString(value *string) *string {
-	if value == nil {
+type streamToolState struct {
+	callID string
+	name   string
+	bytes  int
+}
+
+func NewStreamValidator() *StreamValidator {
+	return &StreamValidator{seen: map[int]struct{}{}, terminal: map[int]struct{}{}, tools: map[string]*streamToolState{}}
+}
+
+func (validator *StreamValidator) Accept(event Event) error {
+	if validator == nil {
+		return errors.New("semantic stream validator is nil")
+	}
+	if err := event.Validate(); err != nil {
+		return err
+	}
+	if event.MappingRevision == 0 || !validTranslationLoss(event.Translation) {
+		return errors.New("semantic stream event is missing audit metadata")
+	}
+	if validator.id == "" {
+		validator.id, validator.model = event.ID, event.Model
+	} else if validator.id != event.ID || validator.model != event.Model {
+		return errors.New("semantic stream identity changed")
+	}
+	if validator.usageSeen {
+		return errors.New("semantic stream emitted data after final usage")
+	}
+	if event.Kind == EventUsage {
+		validator.usageSeen = true
 		return nil
 	}
-	copyValue := *value
-	return &copyValue
+	for _, output := range event.Outputs {
+		if _, done := validator.terminal[output.Index]; done {
+			return errors.New("semantic stream emitted output after termination")
+		}
+		validator.seen[output.Index] = struct{}{}
+		for _, delta := range output.Content {
+			if delta.Kind == ContentToolCall {
+				if delta.ToolIndex == nil {
+					return errors.New("semantic streamed tool call is missing its index")
+				}
+				key := fmt.Sprintf("%d:%d", output.Index, *delta.ToolIndex)
+				state := validator.tools[key]
+				if state == nil {
+					state = &streamToolState{}
+					validator.tools[key] = state
+				}
+				if delta.CallID != "" {
+					if state.callID != "" && state.callID != delta.CallID {
+						return errors.New("semantic streamed tool call changed call id")
+					}
+					state.callID = delta.CallID
+				}
+				if delta.Name != "" {
+					if state.name != "" && state.name != delta.Name {
+						return errors.New("semantic streamed tool call changed name")
+					}
+					state.name = delta.Name
+				}
+				state.bytes += len(delta.ArgumentsFragment)
+				if state.bytes > MaxToolArgumentBytes {
+					return errors.New("semantic streamed tool arguments exceed limit")
+				}
+			}
+		}
+		if output.Termination != "" || output.NativeTermination != "" {
+			validator.terminal[output.Index] = struct{}{}
+		}
+	}
+	return nil
+}
+
+func (validator *StreamValidator) Finalize(requireUsage bool) error {
+	if validator == nil || len(validator.seen) == 0 {
+		return errors.New("semantic stream emitted no output")
+	}
+	for index := range validator.seen {
+		if _, ok := validator.terminal[index]; !ok {
+			return errors.New("semantic stream output did not terminate")
+		}
+	}
+	for _, tool := range validator.tools {
+		if tool.callID == "" || tool.name == "" {
+			return errors.New("semantic streamed tool call identity is incomplete")
+		}
+	}
+	if requireUsage && !validator.usageSeen {
+		return errors.New("semantic stream omitted required usage")
+	}
+	return nil
+}
+
+func validTranslationLoss(loss TranslationLoss) bool {
+	return loss == TranslationNone || loss == TranslationDeclared || loss == TranslationUnsupported
 }
