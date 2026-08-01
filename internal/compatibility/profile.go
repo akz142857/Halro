@@ -10,6 +10,7 @@ type NorthboundProfileID string
 const (
 	ProfileOpenAIChatCompletions NorthboundProfileID = "openai.chat-completions.v1"
 	ProfileOpenAIEmbeddings      NorthboundProfileID = "openai.embeddings.v1"
+	ProfileOpenAIResponses       NorthboundProfileID = "openai.responses.stateless.v1"
 )
 
 type NorthboundProfile struct {
@@ -30,6 +31,7 @@ func BuiltinNorthboundProfile(id NorthboundProfileID) (NorthboundProfile, bool) 
 	profiles := map[NorthboundProfileID]NorthboundProfile{
 		ProfileOpenAIChatCompletions: {ID: ProfileOpenAIChatCompletions, Revision: 1, Protocol: "openai", Methods: []string{"POST /v1/chat/completions"}},
 		ProfileOpenAIEmbeddings:      {ID: ProfileOpenAIEmbeddings, Revision: 1, Protocol: "openai", Methods: []string{"POST /v1/embeddings"}},
+		ProfileOpenAIResponses:       {ID: ProfileOpenAIResponses, Revision: 1, Protocol: "openai", Methods: []string{"POST /v1/responses"}},
 	}
 	profile, ok := profiles[id]
 	profile.Methods = slices.Clone(profile.Methods)

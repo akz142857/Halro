@@ -25,6 +25,24 @@ def test_non_stream_and_embeddings() -> None:
     assert embedding.data[0].embedding == [0.125, -0.25, 0.5]
     assert embedding.usage.total_tokens == 2
 
+    response = client().responses.create(model="compat-chat", input="ping", store=False)
+    assert response.output_text == "compat-ok"
+    assert response.usage is not None and response.usage.total_tokens == 5
+    assert response.store is False
+
+
+def test_responses_stream() -> None:
+    stream = client().responses.create(model="compat-chat", input="ping", store=False, stream=True)
+    content = ""
+    completed = False
+    for event in stream:
+        if event.type == "response.output_text.delta":
+            content += event.delta
+        if event.type == "response.completed":
+            completed = True
+    assert content == "compat-ok"
+    assert completed
+
 
 def test_stream_tool_calls_and_usage_only_chunk() -> None:
     stream = client().chat.completions.create(
@@ -88,6 +106,8 @@ def test_disconnecting_stream_releases_server_resources() -> None:
 
 if __name__ == "__main__":
     test_non_stream_and_embeddings()
+    # Keep the executable CI entry point aligned with pytest discovery.
+    test_responses_stream()
     test_stream_tool_calls_and_usage_only_chunk()
     test_error_matrix()
     test_disconnecting_stream_releases_server_resources()

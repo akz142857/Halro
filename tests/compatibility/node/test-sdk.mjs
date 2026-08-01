@@ -12,6 +12,21 @@ const completion = await client.chat.completions.create({
 assert.equal(completion.choices[0].message.content, 'compat-ok');
 assert.equal(completion.usage.total_tokens, 5);
 
+const response = await client.responses.create({ model: 'compat-chat', input: 'ping', store: false });
+assert.equal(response.output_text, 'compat-ok');
+assert.equal(response.usage.total_tokens, 5);
+assert.equal(response.store, false);
+
+const responseStream = await client.responses.create({ model: 'compat-chat', input: 'ping', store: false, stream: true });
+let responseText = '';
+let responseCompleted = false;
+for await (const event of responseStream) {
+  if (event.type === 'response.output_text.delta') responseText += event.delta;
+  if (event.type === 'response.completed') responseCompleted = true;
+}
+assert.equal(responseText, 'compat-ok');
+assert.equal(responseCompleted, true);
+
 const embedding = await client.embeddings.create({ model: 'compat-embedding', input: 'ping' });
 assert.deepEqual(embedding.data[0].embedding, [0.125, -0.25, 0.5]);
 assert.equal(embedding.usage.total_tokens, 2);

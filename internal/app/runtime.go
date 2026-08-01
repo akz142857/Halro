@@ -720,6 +720,7 @@ func (r *Runtime) gatewayRouter() http.Handler {
 	router.Get("/health/live", r.live)
 	router.Get("/health/ready", r.ready)
 	router.Post("/v1/chat/completions", r.gateway.ChatCompletions)
+	router.Post("/v1/responses", r.gateway.Responses)
 	router.Post("/v1/embeddings", r.gateway.Embeddings)
 	router.Get("/", func(writer http.ResponseWriter, _ *http.Request) {
 		writeJSON(writer, http.StatusOK, map[string]any{

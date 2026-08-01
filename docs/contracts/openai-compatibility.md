@@ -4,6 +4,7 @@
 
 - `POST /v1/chat/completions`
 - `POST /v1/embeddings`
+- `POST /v1/responses` (`openai.responses.stateless.v1`)
 
 ## Required request matrix
 
@@ -37,3 +38,29 @@ Unknown or unsupported parameters are rejected unless a deployment explicitly de
 - defined malformed-event and disconnect handling.
 
 Compatibility is tested with the Python, Node, and Go OpenAI SDKs. A Heimdall stream error extension is not represented as a standard OpenAI guarantee.
+
+## Stateless Responses tier
+
+The Responses endpoint has its own typed item and event contract; it is not a
+Chat Completions response with renamed fields. Phase 1A supports strict Create
+and text SSE only. Omitted `store` is treated as false. `store: true`,
+`previous_response_id`, Conversations, background mode, prompt resources,
+webhooks, retrieve/delete/cancel/input-items operations, hosted tools, strict
+function tools, reasoning output, and streaming function calls are rejected
+before Provider I/O.
+
+For redaction safety, Phase 1A does not echo original instructions, tool
+definitions/tool choice, or structured schema bodies in response metadata;
+those response fields use conservative null/empty/default values.
+
+Portable input messages, instructions, scalar generation controls, supported
+function calls, and supported text formats are mapped to semantic `generate`
+and executed through the selected deployment's versioned generation primitive.
+The exact per-provider field coverage is authoritative in
+[`endpoint-manifests.json`](../compatibility/endpoint-manifests.json).
+
+Responses SSE uses named `response.*` events with monotonic sequence numbers
+and ends at `response.completed` or `response.incomplete`; it never emits the
+Chat Completions `[DONE]` sentinel. See
+[ADR 0005](../adr/0005-stateless-responses-facade.md) for ownership, event, and
+termination decisions.
