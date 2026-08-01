@@ -110,13 +110,14 @@ records carry `declared` capability evidence; records migrated from the older
 capability snapshot remain `legacy` until verified. The Admin API and console
 show these values so an upgrade cannot silently grant a deployment new behavior.
 
-- OpenAI: Bearer authentication and standard `/v1` chat, stream, and embedding endpoints.
+- OpenAI: separate immutable profiles for chat/embeddings and Phase 2 Moderations, Images, Audio, Files, and Batches.
 - Anthropic: native `POST /v1/messages` JSON/SSE with `x-api-key`, signed Thinking round-trip, and explicit portable/native routing. Embeddings and `count_tokens` are not declared.
 - Azure OpenAI: `api-key` authentication and deployment-scoped data-plane paths. Set `--provider-api-version` during bootstrap, or `api_version` through the Admin API; Heimdall intentionally does not silently select or upgrade it.
 - DeepSeek: OpenAI-compatible chat/stream profile with embeddings disabled by default.
 - Generic OpenAI-compatible: chat, stream, and embeddings by default; optional capabilities can be declared through the Admin API.
 - Gemini (Beta): native `generateContent`, SSE, and float embedding translation for the text-only subset; API keys use the `x-goog-api-key` header.
-- AWS Bedrock (Beta): native Converse and ConverseStream translation for text chat, AWS EventStream checksum validation, usage normalization, and SigV4 authentication. Embeddings, tools, vision, JSON mode, and the AWS default credential chain are not declared in this Beta profile.
+- AWS Bedrock Runtime/Agent Runtime (Beta): isolated profiles for Converse, Titan Text Embeddings V2, Titan Image V2, Cohere Rerank 3.5, and Nova Reel Async. Each profile pins one operation/model schema and uses explicit-session SigV4; arbitrary JSON is never exposed.
+- AWS Bedrock Mantle (Beta): three isolated profiles for OpenAI Chat Completions, stateless OpenAI Responses, and native Anthropic Messages. Mantle uses a regional Bedrock API key; Responses always sends `store:false`. Runtime and Mantle credentials, audiences, quotas, concurrency, and capability evidence are not merged.
 
 Provider capabilities are enforced before an upstream call. An Admin connection
 test uses `/models` where available. Azure tests the configured deployment path
@@ -156,6 +157,11 @@ authorizer is bound to the configured endpoint authority:
 static credentials only; it does not contact IMDS or read an ambient AWS
 credential chain. An opt-in billable smoke test is available in
 `internal/provider/bedrock/real_smoke_test.go`.
+
+Mantle uses `https://bedrock-mantle.<region>.api.aws` and a Bedrock API key.
+Choose the Mantle access surface when saving the credential, then create one
+Provider instance per required wire profile. The same audience-bound Mantle
+credential may be reused by those instances; it cannot be attached to Runtime.
 
 Additional internal keys can be issued and disabled offline:
 

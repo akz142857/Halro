@@ -175,7 +175,7 @@ export const zhCN = {
     trendAria: "最近七天请求与令牌趋势图",
   },
   capabilities: {
-    chat: "对话", streaming: "流式", embeddings: "向量嵌入", tools: "工具调用", vision: "视觉", json_mode: "JSON 模式", developer_role: "开发者角色", reasoning: "推理", stream_usage: "流式用量",
+    chat: "对话", streaming: "流式", embeddings: "向量嵌入", moderations: "内容审核", images: "图像", transcriptions: "音频转写", speech: "语音合成", files: "文件", batches: "批处理", rerank: "重排", async_generate: "异步生成", tools: "工具调用", vision: "视觉", json_mode: "JSON 模式", developer_role: "开发者角色", reasoning: "推理", stream_usage: "流式用量",
   },
   usage: {
     eyebrow: "持久化计费", title: "用量", description: "记录每次服务商尝试的令牌、成本、延迟与终态。筛选不会执行任意 SQL。",
@@ -200,7 +200,7 @@ export const zhCN = {
     edit: "编辑模型部署", createTitle: "创建模型部署", providerRequired: "需要可用服务商", providerRequiredDescription: "先在服务商页面创建并启用一个上游连接。",
     name: "部署名称", provider: "服务商", upstreamModel: "上游模型名称", capabilitySubset: "模型能力（只能是服务商能力的子集）",
     maxContext: "最大上下文令牌", maxContextHint: "0 表示沿用服务商未声明的限制", maxOutputTokens: "最大输出令牌", maxOutputHint: "不得超过上下文或服务商限制",
-    concurrencyLimit: "并发上限", concurrencyHint: "0 表示不在部署层限制", inputUSD: "输入 USD / 百万令牌", outputUSD: "输出 USD / 百万令牌",
+    concurrencyLimit: "并发上限", concurrencyHint: "0 表示不在部署层限制", inputUSD: "输入 USD / 百万令牌", outputUSD: "输出 USD / 百万令牌", fixedRequestUSD: "每请求固定 USD", fixedRequestHint: "用于媒体、重排、文件、批处理和异步操作", region: "区域", regionHint: "区域化 Bedrock 配置必填；通常从服务商端点自动推导",
     priority: "默认优先级", weight: "权重", enable: "启用模型部署", save: "保存并热加载", createAndLoad: "创建并热加载",
   },
   routes: {
@@ -236,7 +236,11 @@ export const zhCN = {
     deleteCredential: "删除凭据“{{name}}”？仍被服务商引用时操作会被拒绝。", rotateCredential: "轮换服务商凭据", saveCredential: "保存服务商凭据",
     credentialName: "凭据名称", providerType: "服务商类型", boundURL: "绑定的基础地址", boundURLHint: "密钥将与规范化后的协议、主机、端口和服务商类型绑定",
     newSecret: "新密钥（留空则只更新元数据）", providerSecret: "服务商密钥", awsCredentialJSON: "AWS 凭据 JSON", secretConfigured: "已配置的密钥永不回显",
-    bedrockHint: "字段：access_key_id、secret_access_key、region；session_token 可选。区域必须匹配基础地址。", secretHint: "只通过 HTTPS 请求体发送，不写入浏览器存储",
+    bedrockSurface: "Bedrock 访问面", bedrockSurfaceHint: "Runtime 与 Mantle 使用不同端点、凭据方案、配额池和服务商实例。", bedrockRuntime: "Bedrock Runtime · Converse", bedrockMantle: "Bedrock Mantle · OpenAI / Anthropic API",
+    bedrockHint: "字段：access_key_id、secret_access_key、region；session_token 可选。区域必须匹配基础地址。", bedrockMantleHint: "粘贴 Bedrock API Key。Heimdall 将它绑定到准确的区域 Mantle 端点，且不会写入浏览器存储。", secretHint: "只通过 HTTPS 请求体发送，不写入浏览器存储",
+    bedrockProfileHint: "每个服务商实例只选择一种线协议；需要多个 Mantle 协议时，请分别创建实例。",
+    openAIProfiles: { chat: "Chat Completions", media: "媒体与资源" },
+    bedrockProfiles: { "bedrock.runtime.converse.text.v1": "Runtime · Converse 文本", "bedrock.runtime.invoke.titan-embed-text-v2.v1": "Runtime · Titan 文本向量 V2", "bedrock.runtime.invoke.titan-image-v2.v1": "Runtime · Titan 图像生成 V2", "bedrock.agent-runtime.rerank.cohere-v3-5.v1": "Agent Runtime · Cohere 重排 3.5", "bedrock.runtime.async.nova-reel-v1.v1": "Runtime · Nova Reel 异步", "bedrock.mantle.openai.chat.v1": "Mantle · OpenAI Chat Completions", "bedrock.mantle.openai.responses.v1": "Mantle · OpenAI Responses（无状态）", "bedrock.mantle.anthropic.messages.v1": "Mantle · Anthropic Messages" },
     rotateSecurely: "安全轮换", saveEncrypted: "加密保存", editProvider: "编辑服务商", createProvider: "创建服务商", credentialRequired: "需要先创建凭据",
     credentialRequiredDescription: "关闭此窗口，使用“＋ 凭据”保存一个绑定受众的密钥。", providerName: "服务商名称", type: "类型", baseURL: "基础地址（Base URL）", apiVersion: "API 版本", apiVersionHint: "显式固定 Azure 数据面 API 版本；升级时由管理员变更",
     maxConcurrency: "服务商最大并发", maxConcurrencyHint: "0 表示不限；用于保护上游账户和模型部署", capabilityLimit: "服务商能力上限",

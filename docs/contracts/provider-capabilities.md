@@ -41,6 +41,14 @@ be erased by a Deployment.
 | OpenAI-compatible | GA | yes | yes | yes | opt-in | Bearer key |
 | Gemini generateContent | Beta | text | yes | float | not declared | `x-goog-api-key` |
 | AWS Bedrock Converse | Beta | text | yes | no | not declared | SigV4, encrypted static JSON |
+| AWS Bedrock Invoke Titan Text Embeddings V2 | Beta | no | no | one string; float; 256/512/1024 | no | SigV4, encrypted static JSON |
+| OpenAI Media/Resources | Beta | no | no | no | Moderations, Images, Audio, Files, Batches | Bearer key |
+| AWS Bedrock Titan Image V2 | Beta | no | no | no | strict image generation | SigV4, encrypted static JSON |
+| AWS Bedrock Agent Runtime Cohere Rerank 3.5 | Beta | no | no | no | strict rerank | SigV4, encrypted static JSON |
+| AWS Bedrock Nova Reel Async | Beta | no | no | no | async video with explicit S3 output | SigV4, encrypted static JSON |
+| AWS Bedrock Mantle OpenAI Chat | Beta | yes | yes | no | tools/vision/JSON/reasoning | Bedrock API key as Bearer |
+| AWS Bedrock Mantle Responses | Beta | stateless | text SSE | no | tools/vision/JSON; no reasoning output | Bedrock API key as Bearer |
+| AWS Bedrock Mantle Anthropic Messages | Beta | yes | yes | no | tools/vision/reasoning | Bedrock API key as `x-api-key` |
 
 The Gemini Beta adapter translates text messages, system instructions,
 generation limits, stop sequences, finish reasons, usage metadata, SSE chunks,
@@ -49,11 +57,22 @@ tool messages/calls, JSON mode, and base64 embedding output until their semantic
 contracts and redaction behavior have dedicated tests. API keys are sent only
 in the header, never in query strings.
 
-The Bedrock Beta adapter translates system/developer, user, and assistant text
-messages to Converse; normalizes output text, finish reasons, and token usage;
-and validates AWS EventStream prelude and message CRCs before emitting semantic
+The Bedrock Converse adapter translates system/developer, user, and assistant
+text messages; normalizes output text, finish reasons, and token usage; and
+validates AWS EventStream prelude and message CRCs before emitting semantic
 chunks. It rejects tool, vision, JSON-mode, embedding, unknown-event, and
-truncated-stream inputs instead of silently downgrading them. Static access key,
-secret, optional session token, and region are encrypted as one audience-bound
-credential. The region must match the endpoint hostname. The adapter neither
-reads environment credentials nor contacts IMDS.
+truncated-stream inputs instead of silently downgrading them. The separate Titan
+Text Embeddings V2 InvokeModel profile accepts one string and validates the
+versioned native schema, dimensions, float vector and token usage. It rejects
+batch fan-out and arbitrary JSON. Static access key, secret, optional session
+token, and region are encrypted as one audience-bound credential. The region
+must match the endpoint hostname. Runtime adapters neither read environment
+credentials nor contact IMDS.
+
+Mantle is a separate access surface. Only regional
+`bedrock-mantle.<region>.api.aws` origins are accepted. Each Provider instance
+selects one immutable wire profile; Runtime credentials cannot be attached to
+Mantle. The Responses profile participates only in Heimdall's stateless tier
+and always sends `store:false`. Native Anthropic routing preserves validated
+thinking signatures and raw event order while remaining pinned to the selected
+Mantle Anthropic profile.

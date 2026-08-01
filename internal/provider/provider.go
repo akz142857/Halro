@@ -91,6 +91,14 @@ type Capabilities struct {
 	Chat             bool
 	Streaming        bool
 	Embeddings       bool
+	Moderations      bool
+	Images           bool
+	Transcriptions   bool
+	Speech           bool
+	Files            bool
+	Batches          bool
+	Rerank           bool
+	AsyncGenerate    bool
 	Tools            bool
 	Vision           bool
 	JSONMode         bool
@@ -117,6 +125,14 @@ const (
 	OperationEmbeddings     Operation = "embeddings"
 	OperationMessages       Operation = "anthropic_messages"
 	OperationMessagesStream Operation = "anthropic_messages_stream"
+	OperationModerations    Operation = "moderations"
+	OperationImages         Operation = "images"
+	OperationTranscriptions Operation = "audio_transcriptions"
+	OperationSpeech         Operation = "audio_speech"
+	OperationFiles          Operation = "files"
+	OperationBatches        Operation = "batches"
+	OperationRerank         Operation = "rerank"
+	OperationAsyncInvoke    Operation = "async_invoke"
 )
 
 type Target struct {
@@ -127,9 +143,11 @@ type Target struct {
 	ProviderModel          string
 	AccessSurface          domain.AccessSurface
 	ProfileID              domain.ProviderProfileID
+	Region                 string
 	Adapter                Adapter
 	InputMicrosPerMillion  int64
 	OutputMicrosPerMillion int64
+	FixedRequestMicrosUSD  int64
 	Priority               int
 	Strategy               string
 	Capabilities           Capabilities

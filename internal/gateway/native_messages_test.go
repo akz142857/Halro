@@ -19,10 +19,18 @@ import (
 	"github.com/akz142857/Heimdall/internal/semantic"
 )
 
-type nativeMessagesFake struct{ payload []byte }
+type nativeMessagesFake struct {
+	payload      []byte
+	providerType domain.ProviderType
+}
 
-func (*nativeMessagesFake) Type() string { return string(domain.ProviderAnthropic) }
-func (*nativeMessagesFake) Close()       {}
+func (fake *nativeMessagesFake) Type() string {
+	if fake.providerType == "" {
+		return string(domain.ProviderAnthropic)
+	}
+	return string(fake.providerType)
+}
+func (*nativeMessagesFake) Close() {}
 func (*nativeMessagesFake) Chat(context.Context, provider.ChatCall) (openaiapi.ChatCompletionResponse, error) {
 	return openaiapi.ChatCompletionResponse{}, errors.New("unexpected portable call")
 }
@@ -55,6 +63,10 @@ func (fake *nativeMessagesFake) MessagesNativeStream(_ context.Context, call pro
 }
 
 func newNativeMessagesFixture(t *testing.T) (*Service, *nativeMessagesFake, string, func()) {
+	return newNativeMessagesFixtureForProfile(t, domain.ProfileAnthropicMessages)
+}
+
+func newNativeMessagesFixtureForProfile(t *testing.T, profileID domain.ProviderProfileID) (*Service, *nativeMessagesFake, string, func()) {
 	t.Helper()
 	project := domain.Project{ID: "project_native", Name: "Native", Enabled: true, AllowedRoutes: []string{"claude"}, DailyBudgetMicrosUSD: 1000000, MaxInputTokens: 10000, MaxOutputTokens: 1000}
 	plaintext, key, err := auth.GenerateGatewayKey(project.ID, "test", nil)
@@ -75,14 +87,15 @@ func newNativeMessagesFixture(t *testing.T) (*Service, *nativeMessagesFake, stri
 	if err != nil {
 		t.Fatal(err)
 	}
-	fake := &nativeMessagesFake{}
-	manifest, _ := provider.BuiltinProfile(domain.ProfileAnthropicMessages)
-	bridge, err := provider.NewLegacyAdapterBridge(fake, manifest, domain.EvidenceForCapabilities(domain.DefaultProviderCapabilities(domain.ProviderAnthropic), domain.EvidenceVerified))
+	manifest, _ := provider.BuiltinProfile(profileID)
+	fake := &nativeMessagesFake{providerType: manifest.ProviderType}
+	capabilities := domain.DefaultProviderCapabilitiesForProfile(manifest.ProviderType, profileID)
+	bridge, err := provider.NewLegacyAdapterBridge(fake, manifest, domain.EvidenceForCapabilities(capabilities, domain.EvidenceVerified))
 	if err != nil {
 		t.Fatal(err)
 	}
 	registry := provider.NewRegistry()
-	if err := registry.Register(provider.Target{ID: "route_native", ProviderID: "provider_native", PublicModel: "claude", ProviderModel: "claude-provider", AccessSurface: domain.SurfaceAnthropic, ProfileID: domain.ProfileAnthropicMessages, Adapter: bridge, Capabilities: provider.Capabilities{Chat: true, Streaming: true, Tools: true, Reasoning: true, StreamUsage: true}, InputMicrosPerMillion: 1000, OutputMicrosPerMillion: 1000}); err != nil {
+	if err := registry.Register(provider.Target{ID: "route_native", ProviderID: "provider_native", PublicModel: "claude", ProviderModel: "claude-provider", AccessSurface: manifest.AccessSurface, ProfileID: profileID, Adapter: bridge, Capabilities: provider.Capabilities{Chat: true, Streaming: true, Tools: true, Reasoning: true, StreamUsage: true}, InputMicrosPerMillion: 1000, OutputMicrosPerMillion: 1000}); err != nil {
 		t.Fatal(err)
 	}
 	service, err := NewService(snapshot, registry, accounting)
@@ -90,6 +103,21 @@ func newNativeMessagesFixture(t *testing.T) (*Service, *nativeMessagesFake, stri
 		t.Fatal(err)
 	}
 	return service, fake, plaintext, func() { _ = log.Close() }
+}
+
+func TestNativeMessagesPinsBedrockMantleAnthropicProfile(t *testing.T) {
+	service, fake, key, closeFixture := newNativeMessagesFixtureForProfile(t, domain.ProfileBedrockMantleAnthropicMessages)
+	defer closeFixture()
+	request, err := anthropicapi.DecodeMessageRequest(bytes.NewBufferString(`{"model":"claude","max_tokens":64,"messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"hidden","signature":"mantle-sig"},{"type":"text","text":"safe projection"}]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.MessagesNative(context.Background(), key, anthropicapi.SupportedVersion, request); err != nil {
+		t.Fatal(err)
+	}
+	if fake.Type() != string(domain.ProviderBedrock) || !bytes.Contains(fake.payload, []byte(`"signature":"mantle-sig"`)) {
+		t.Fatalf("Mantle native route changed identity or signature: type=%s payload=%s", fake.Type(), fake.payload)
+	}
 }
 
 func TestNativeMessagesPreservesSignedThinkingAndPinsProfile(t *testing.T) {

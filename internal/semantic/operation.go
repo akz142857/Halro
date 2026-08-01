@@ -8,13 +8,23 @@ import "errors"
 type Operation string
 
 const (
-	OperationGenerate Operation = "generate"
-	OperationEmbed    Operation = "embed"
+	OperationGenerate      Operation = "generate"
+	OperationEmbed         Operation = "embed"
+	OperationModerate      Operation = "moderate"
+	OperationImage         Operation = "image"
+	OperationTranscribe    Operation = "transcribe"
+	OperationSynthesize    Operation = "synthesize"
+	OperationRerank        Operation = "rerank"
+	OperationAsyncGenerate Operation = "async_generate"
+	OperationFile          Operation = "file"
+	OperationBatch         Operation = "batch"
 )
 
 func (operation Operation) Validate() error {
 	switch operation {
-	case OperationGenerate, OperationEmbed:
+	case OperationGenerate, OperationEmbed, OperationModerate, OperationImage,
+		OperationTranscribe, OperationSynthesize, OperationRerank,
+		OperationAsyncGenerate, OperationFile, OperationBatch:
 		return nil
 	default:
 		return errors.New("semantic operation is invalid")

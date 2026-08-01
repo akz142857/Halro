@@ -287,6 +287,26 @@ func (e *Engine) ProcessInboundEmbedding(
 	return request, err
 }
 
+func (e *Engine) ProcessText(policyID, scope, value string) (string, error) {
+	if scope != "inbound" && scope != "outbound" {
+		return "", errors.New("redaction scope is invalid")
+	}
+	encoded, _ := json.Marshal(value)
+	processed, err := e.processRaw(policyID, scope, encoded)
+	if err != nil {
+		return "", err
+	}
+	var result string
+	if err := json.Unmarshal(processed, &result); err != nil {
+		return "", err
+	}
+	return result, nil
+}
+
+func (e *Engine) ProcessJSON(policyID, scope string, value json.RawMessage) (json.RawMessage, error) {
+	return e.processRaw(policyID, scope, value)
+}
+
 func (e *Engine) ProcessOutboundChat(
 	policyID string,
 	response openaiapi.ChatCompletionResponse,

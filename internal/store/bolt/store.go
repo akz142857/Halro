@@ -17,7 +17,7 @@ import (
 	bbolt "go.etcd.io/bbolt"
 )
 
-const schemaVersion uint64 = 4
+const schemaVersion uint64 = 7
 
 func CurrentSchemaVersion() uint64 { return schemaVersion }
 
@@ -28,6 +28,7 @@ var (
 	ErrKeyHashConflict  = errors.New("gateway key hash already exists")
 	ErrCredentialInUse  = errors.New("credential is still referenced")
 	ErrAdminInitialized = errors.New("an admin user already exists")
+	errStopIteration    = errors.New("stop iteration")
 )
 
 var (
@@ -45,6 +46,7 @@ var (
 	bucketAdminUsers         = []byte("admin_users")
 	bucketAdminSessions      = []byte("admin_sessions")
 	bucketMigrationHistory   = []byte("migration_history")
+	bucketProviderResources  = []byte("provider_resources")
 	keySchemaVersion         = []byte("schema_version")
 	keyVaultCheck            = []byte("vault_key_check")
 	keyUsageCheckpoint       = []byte("usage_checkpoint")
@@ -94,6 +96,63 @@ var migrations = []migration{
 	}},
 	{version: 3, name: "deployments", up: migrateDeployments},
 	{version: 4, name: "provider_profiles", up: migrateProviderProfiles},
+	{version: 5, name: "provider_resources", up: func(tx *bbolt.Tx, step func(string) error) error {
+		if err := migrationStep(step, "before_create_provider_resources"); err != nil {
+			return err
+		}
+		if _, err := tx.CreateBucketIfNotExists(bucketProviderResources); err != nil {
+			return err
+		}
+		return migrationStep(step, "after_create_provider_resources")
+	}},
+	{version: 6, name: "phase2_capability_evidence", up: func(tx *bbolt.Tx, step func(string) error) error {
+		if err := migrationStep(step, "before_phase2_capability_evidence"); err != nil {
+			return err
+		}
+		for _, bucketName := range [][]byte{bucketProviders, bucketDeployments} {
+			if err := rewriteBucket(tx.Bucket(bucketName), func(raw []byte) ([]byte, error) {
+				if bytes.Equal(bucketName, bucketProviders) {
+					var value domain.ProviderInstance
+					if err := json.Unmarshal(raw, &value); err != nil {
+						return nil, err
+					}
+					value.CapabilityEvidence = domain.NormalizeCapabilityEvidence(value.Capabilities, value.CapabilityEvidence, domain.EvidenceLegacy)
+					return json.Marshal(value)
+				}
+				var value domain.Deployment
+				if err := json.Unmarshal(raw, &value); err != nil {
+					return nil, err
+				}
+				value.CapabilityEvidence = domain.NormalizeCapabilityEvidence(value.Capabilities, value.CapabilityEvidence, domain.EvidenceLegacy)
+				return json.Marshal(value)
+			}); err != nil {
+				return err
+			}
+		}
+		return migrationStep(step, "after_phase2_capability_evidence")
+	}},
+	{version: 7, name: "provider_resource_creation_status", up: func(tx *bbolt.Tx, step func(string) error) error {
+		if err := migrationStep(step, "before_provider_resource_creation_status"); err != nil {
+			return err
+		}
+		if err := rewriteBucket(tx.Bucket(bucketProviderResources), func(raw []byte) ([]byte, error) {
+			var value domain.ProviderResource
+			if err := json.Unmarshal(raw, &value); err != nil {
+				return nil, err
+			}
+			if value.CreationStatus == "" {
+				if value.UpstreamID == "" {
+					value.CreationStatus = "unknown"
+				} else {
+					value.CreationStatus = "completed"
+				}
+			}
+			return json.Marshal(value)
+		}); err != nil {
+			return err
+		}
+		return migrationStep(step, "after_provider_resource_creation_status")
+	}},
 }
 
 type usageCheckpoint struct {
@@ -979,7 +1038,7 @@ func normalizeProviderProfile(instance *domain.ProviderInstance, evidence domain
 	if legacyProfile && !instance.Capabilities.Chat && !instance.Capabilities.Embeddings {
 		instance.Capabilities = domain.DefaultProviderCapabilities(instance.Type)
 	}
-	if instance.Type == domain.ProviderBedrock {
+	if instance.ProfileID == domain.ProfileBedrockConverseText {
 		instance.Capabilities.DeveloperRole = false
 	}
 	if len(instance.CapabilityEvidence) == 0 {
@@ -998,7 +1057,7 @@ func normalizeDeploymentProfile(deployment *domain.Deployment, instance domain.P
 	if legacyProfile && !deployment.Capabilities.Chat && !deployment.Capabilities.Embeddings {
 		deployment.Capabilities = instance.Capabilities
 	}
-	if instance.Type == domain.ProviderBedrock {
+	if instance.ProfileID == domain.ProfileBedrockConverseText {
 		deployment.Capabilities.DeveloperRole = false
 	}
 	if len(deployment.CapabilityEvidence) == 0 {
@@ -1029,6 +1088,7 @@ func requiredBuckets() [][]byte {
 		bucketAdminUsers,
 		bucketAdminSessions,
 		bucketMigrationHistory,
+		bucketProviderResources,
 	}
 }
 
@@ -1827,6 +1887,121 @@ func (s *Store) listJSON(ctx context.Context, bucketName []byte, visit func([]by
 			return visit(value)
 		})
 	})
+}
+
+func (s *Store) PutProviderResource(ctx context.Context, resource domain.ProviderResource, expectedRevision uint64) (domain.ProviderResource, error) {
+	if err := resource.Validate(); err != nil {
+		return domain.ProviderResource{}, err
+	}
+	err := s.db.Update(func(tx *bbolt.Tx) error {
+		if tx.Bucket(bucketProjects).Get([]byte(resource.ProjectID)) == nil {
+			return errors.New("resource project does not exist")
+		}
+		if tx.Bucket(bucketProviders).Get([]byte(resource.ProviderID)) == nil {
+			return errors.New("resource provider does not exist")
+		}
+		if tx.Bucket(bucketDeployments).Get([]byte(resource.DeploymentID)) == nil {
+			return errors.New("resource deployment does not exist")
+		}
+		bucket := tx.Bucket(bucketProviderResources)
+		if expectedRevision == 0 && resource.IdempotencyKeyHash != ([32]byte{}) {
+			if err := bucket.ForEach(func(key, raw []byte) error {
+				var existing domain.ProviderResource
+				if err := json.Unmarshal(raw, &existing); err != nil {
+					return err
+				}
+				if existing.ProjectID == resource.ProjectID && existing.Kind == resource.Kind && existing.IdempotencyKeyHash == resource.IdempotencyKeyHash {
+					return ErrAlreadyExists
+				}
+				return nil
+			}); err != nil {
+				return err
+			}
+		}
+		return putVersioned(bucket, resource.ID, expectedRevision, &resource)
+	})
+	return resource, err
+}
+
+func (s *Store) ProviderResource(ctx context.Context, projectID, id string) (domain.ProviderResource, error) {
+	var resource domain.ProviderResource
+	if err := s.getJSON(ctx, bucketProviderResources, id, &resource); err != nil {
+		return resource, err
+	}
+	if resource.ProjectID != projectID {
+		return domain.ProviderResource{}, ErrNotFound
+	}
+	return resource, nil
+}
+
+func (s *Store) ProviderResourceByIdempotency(ctx context.Context, projectID string, kind domain.ProviderResourceKind, keyHash [32]byte) (domain.ProviderResource, error) {
+	var found domain.ProviderResource
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		return tx.Bucket(bucketProviderResources).ForEach(func(_, raw []byte) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			var resource domain.ProviderResource
+			if err := json.Unmarshal(raw, &resource); err != nil {
+				return err
+			}
+			if resource.ProjectID == projectID && resource.Kind == kind && resource.IdempotencyKeyHash == keyHash {
+				found = resource
+				return errStopIteration
+			}
+			return nil
+		})
+	})
+	if errors.Is(err, errStopIteration) {
+		return found, nil
+	}
+	if err != nil {
+		return found, err
+	}
+	return found, ErrNotFound
+}
+
+func (s *Store) DeleteProviderResource(ctx context.Context, projectID, id string) error {
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(bucketProviderResources)
+		raw := bucket.Get([]byte(id))
+		if raw == nil {
+			return ErrNotFound
+		}
+		var resource domain.ProviderResource
+		if err := json.Unmarshal(raw, &resource); err != nil {
+			return err
+		}
+		if resource.ProjectID != projectID {
+			return ErrNotFound
+		}
+		return bucket.Delete([]byte(id))
+	})
+}
+
+func (s *Store) ReapProviderResources(ctx context.Context, now time.Time) ([]domain.ProviderResource, error) {
+	var removed []domain.ProviderResource
+	err := s.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(bucketProviderResources)
+		cursor := bucket.Cursor()
+		for key, raw := cursor.First(); key != nil; key, raw = cursor.Next() {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			var resource domain.ProviderResource
+			if err := json.Unmarshal(raw, &resource); err != nil {
+				return err
+			}
+			if !resource.ExpiresAt.After(now) {
+				removed = append(removed, resource)
+				if err := cursor.Delete(); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
+	return removed, err
 }
 
 type revisioned interface {

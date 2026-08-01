@@ -27,7 +27,9 @@ Provider、模型、协议和部署形态持续演进。
 截至本文日期，仓库中已注册的公开推理接口是：
 
 - `POST /v1/chat/completions`；
-- `POST /v1/embeddings`。
+- `POST /v1/embeddings`；
+- `POST /v1/responses`（无状态子集）；
+- `POST /v1/messages`（Portable 与 Native）。
 
 当前 Provider 层支持请求级 Chat、SSE Streaming 和 Embeddings Adapter，并已接入：
 
@@ -37,14 +39,15 @@ Provider、模型、协议和部署形态持续演进。
 - 通用 OpenAI-compatible Provider；
 - Gemini Beta 文本生成、SSE 和 Embeddings；
 - AWS Bedrock Beta Converse/ConverseStream。
+- AWS Bedrock Mantle OpenAI Chat、Stateless Responses 与 Anthropic Messages。
 
 Phase 0A 已在当前代码中增加版本化 Provider Profile、Access Surface、Operation Registry、
 Credential Scheme、逐能力证据和 LegacyAdapterBridge。旧记录经原子 Schema Migration 标记为
 `legacy`，新建记录标记为 `declared`；Admin API 与界面可查看 Profile、Surface、Scheme 和证据。
 Phase 0B 已在网关热路径加入最小 Canonical IR、Provider-neutral Stream Event、版本化
 NativeEnvelope/GovernanceView 和字段级 Compatibility Manifest；南向旧 Adapter 仍通过
-LegacyAdapterBridge 迁移。Responses、Anthropic Messages、公开 Native Endpoint 和 Realtime
-仍未实现。
+LegacyAdapterBridge 迁移。Phase 1A/1B/1C 已分别落地 Stateless Responses、Anthropic Messages
+与三个隔离的 Bedrock Mantle Profile；Realtime 仍未实现。
 
 当前能力声明包含 Chat、Streaming、Embeddings、Tools、Vision、JSON、Developer
 Role、Reasoning、Stream Usage 和 Token Limits。Realtime、Audio、Image Generation、
@@ -633,9 +636,25 @@ Profile 必须声明允许的认证集合和 Header。`bedrock-runtime` 与 `bed
 
 ### 7.5 AWS Bedrock Profile 家族
 
-当前代码中的 Bedrock Beta 只代表 `bedrock.runtime.converse.text.v1` 的早期实现：文本
-Converse/ConverseStream、基础推理参数、SigV4、Usage 和 AWS EventStream 校验。它不表示
-Bedrock Provider 的其他 Profile 已经实现。
+当前 Runtime/Agent Runtime Profile 均按操作与模型族隔离；不存在任意 JSON `InvokeModel`
+透传。Phase 1C 另外实现三个 Mantle Profile：
+
+- `bedrock.mantle.openai.chat.v1` → `/v1/chat/completions`；
+- `bedrock.mantle.openai.responses.v1` → `/v1/responses`，始终发送 `store:false`；
+- `bedrock.mantle.anthropic.messages.v1` → `/anthropic/v1/messages`，支持 Native Thinking
+  Signature Round-trip。
+- `bedrock.runtime.invoke.titan-embed-text-v2.v1` → `/v1/embeddings` 的单字符串、Float、
+  256/512/1024 维子集；固定 `amazon.titan-embed-text-v2:0`、`normalize:true` 和 Float 输出。
+- `bedrock.runtime.invoke.titan-image-v2.v1` → `/v1/images/generations` 的严格 TEXT_IMAGE 子集；
+  固定 `amazon.titan-image-generator-v2:0`。
+- `bedrock.agent-runtime.rerank.cohere-v3-5.v1` → `/v1/rerank`；固定 Cohere Rerank 3.5，
+  并使用独立的 `bedrock-agent-runtime` SigV4 服务域。
+- `bedrock.runtime.async.nova-reel-v1.v1` → `/v1/async/invocations`；固定 Nova Reel，输出必须
+  使用显式 `s3://` URI，查询按创建时所有者回源。
+
+Mantle 只接受 `https://bedrock-mantle.<region>.api.aws` 区域 Origin 和加密保存的 Bedrock
+API Key。OpenAI 线协议使用 Bearer Header，Anthropic 线协议使用 `x-api-key`。Mantle 与 Runtime
+不共享 Credential Scheme、Credential Audience、Provider ID、并发上限、Circuit、配额假设或能力证据。
 
 目标 Profile 分工如下：
 
@@ -1642,8 +1661,9 @@ Semantic Requirements；“可以表达后续需求”不等于已经支持对�
 
 ### Phase 1（Next）：Stateless Responses 与原生 Messages
 
-实施状态：Phase 1A Stateless Responses 与 Phase 1B Anthropic Messages 已完成。AWS Mantle
-Profile 等其余条目仍属于后续工作，因此不能视为整个 Phase 1 已全部完成。
+实施状态（2026-08-01）：Phase 1A Stateless Responses、Phase 1B Anthropic Messages 与
+Phase 1C AWS Bedrock Mantle Profiles 已完成。Phase 1 当前计划项已经闭环，但这不扩大到 Phase 2
+资源型 API、Realtime 或完整 Bedrock API。
 
 - [Phase 1A 已完成] 批准 Stateless Responses Resource Ownership、Portable/Native、
   Termination/Event 决策（ADR 0005）；
@@ -1652,9 +1672,10 @@ Profile 等其余条目仍属于后续工作，因此不能视为整个 Phase 1 
 - [Phase 1B 已完成] 实现 Anthropic `/v1/messages` 普通和 SSE Facade；
 - [Phase 1B 已完成] 增加 Anthropic Messages Provider Primitive Adapter，而不是
   OpenAI-specific 通用 Adapter；
-- 增加 `bedrock.mantle.openai.chat.v1`，并随对应北向 Facade 增加
+- [Phase 1C 已完成] 增加 `bedrock.mantle.openai.chat.v1`，并随对应北向 Facade 增加
   `bedrock.mantle.openai.responses.v1` 与 `bedrock.mantle.anthropic.messages.v1`；
-- Mantle 与 Runtime 使用独立 Access Surface、Credential Audience、Quota 和 Capability Evidence；
+- [Phase 1C 已完成] Mantle 与 Runtime 使用独立 Access Surface、Credential Audience、Quota
+  假设和 Capability Evidence；Mantle Responses 强制 `store:false`；
 - [Phase 1B 已完成] 完成 OpenAI/Anthropic/Gemini Tool Choice 与 Function Calling Golden Matrix；
 - [Phase 1B 已完成] 验证 Thinking Signature Roundtrip Integrity；
 - [Phase 1B 已完成] 实现 Anthropic Portable/Native Route 模式；
@@ -1663,16 +1684,20 @@ Profile 等其余条目仍属于后续工作，因此不能视为整个 Phase 1 
 完成标准：跨协议只发生已声明的无损转换，Tool/Reasoning/JSON/Usage/Event/Termination 均有
 明确契约；如果只支持 Stateless Responses，所有状态字段在 Provider I/O 前稳定拒绝。
 
-### Phase 2（Deferred until demand）：媒体和资源型 API
+### Phase 2（已完成）：媒体和资源型 API
 
-- Audio Transcription/Speech；
-- Image Generation；
-- Moderation；
-- 按模型族实现 Bedrock `InvokeModel`/Response Stream Profile，优先覆盖有明确需求的
-  Embeddings、Rerank、Image，禁止任意 JSON 透传；
-- 对 Bedrock Async Invoke 做资源所有权、S3 输入输出、幂等、轮询、取消、TTL 和清理 ADR 后
-  再实现视频或大媒体任务；
-- 对 Files/Batches 做资源所有权 ADR 后再决定实现；
+实施状态（2026-08-02）：本阶段范围已完成。OpenAI Profile 覆盖 Moderations、Images、Audio
+Transcription/Speech、Files 与 Batches；Bedrock 覆盖 Titan Text Embeddings V2、Titan Image V2、
+Cohere Rerank 3.5 和 Nova Reel Async。Azure OpenAI 与 Gemini 没有在本阶段新增媒体能力。
+
+- 所有 Bedrock 模型族均使用严格请求/响应 schema，禁止任意 JSON 透传和隐式批量 Fan-out；
+- Files/Batches/Async 的外部 ID 均为项目作用域 Heimdall ID；所有权固定绑定 Provider、
+  Deployment、Profile 和 Region；创建要求 `Idempotency-Key`，未知结果禁止盲目重试；
+- 文件内容以 `0600` 权限原子写入数据目录下的私有对象目录，元数据写入 bbolt；删除和 TTL
+  回收同时清理对象；
+- Bedrock Async 输出要求显式 S3 URI。AWS Bedrock Runtime 没有已接受异步任务的取消 API，
+  因此取消端点在验证资源所有权后稳定返回 `provider_cancel_unsupported`，不会伪造成功；
+- 资源查询/取消/删除只使用创建时所有者，所有者不可用时 fail closed，不发生跨部署 fallback。
 - 扩展媒体大小、格式、扫描、成本和生命周期策略。
 
 完成标准：资源 ID 不会被错误地跨 Provider 使用，媒体不会进入日志和不必要的持久层。
@@ -1769,7 +1794,7 @@ Manifest；其余记录在对应 Phase 获得真实需求、负责人和预算�
 | 决策 | 结论 |
 |---|---|
 | 是否宣称支持 OpenAI 全部 API | 否，按 Endpoint 和字段级契约声明 |
-| v1 是否实现 Responses、Messages、Realtime 或 HA | Phase 1A 已实现 Stateless Responses Tier，Phase 1B 已实现 Anthropic Messages；Realtime 与 HA 仍不属于当前 v1 范围 |
+| v1 是否实现 Responses、Messages、Realtime 或 HA | Phase 1A 已实现 Stateless Responses Tier，Phase 1B 已实现 Anthropic Messages，Phase 1C 已实现隔离的 Bedrock Mantle Profiles；Realtime 与 HA 仍不属于当前 v1 范围 |
 | 是否只提供 OpenAI 北向协议 | 否，同时允许 Anthropic 等原生 Facade |
 | 是否把所有 Provider 强制转换成 OpenAI | 否，只执行可证明的无损转换 |
 | 一个 Provider 是否只对应一个 Adapter | 否，Provider 下按 Access Surface、版本化 Profile 和 Operation Adapter 组织 |
@@ -1778,7 +1803,7 @@ Manifest；其余记录在对应 Phase 获得真实需求、负责人和预算�
 | 是否需要 Portable/Native 模式 | 是，解决跨 Provider 与原生能力之间的矛盾 |
 | Native 模式是否全部转为 Canonical IR | 否，使用 NativeEnvelope，并提取受限 GovernanceView |
 | Responses 是否直接按完整 API 实现 | 否，先完成 Resource Ownership；否则只提供明确 Stateless Tier |
-| 当前 Bedrock Beta 是否等价于完整 AWS Bedrock | 否，只代表 Runtime Converse/ConverseStream 文本子集 |
+| 当前 Bedrock Beta 是否等价于完整 AWS Bedrock | 否，现有范围是 Runtime Converse/ConverseStream 文本子集，加上 Mantle Chat、Stateless Responses 和 Anthropic Messages 三个 Profile |
 | AWS Mantle 是否复用现有 Bedrock Converse Adapter | 否，作为独立 Access Surface 和 OpenAI/Anthropic Profile |
 | AWS Agents、Knowledge Bases、Flows 是否属于核心 Gateway | 否，除非另立 Facade、Ownership ADR 和 Assurance Profile |
 | Realtime 是否复用普通 Adapter | 否，建立独立 Session 和 Realtime Adapter |
@@ -1796,7 +1821,7 @@ Manifest；其余记录在对应 Phase 获得真实需求、负责人和预算�
 | Broker Mode 是否等价于完整 Gateway | 否，使用独立 Assurance Profile，强治理 Project 默认拒绝 |
 | 故障时是否允许从 Gateway Terminated 静默降级到 Provider Direct | 否，连接模式和最低 Assurance 必须由 Project/Route 显式授权 |
 | Heimdall 是否最终自行终止 WebRTC | 未决定；自建、独立/第三方 Media Service 和 Direct Broker 都是候选终态 |
-| 当前优先级 | Stateless Responses 与 Anthropic Messages 已完成；Next 为剩余 Phase 1 Provider Profile；Realtime 与 WebRTC 暂缓 |
+| 当前优先级 | Phase 1A/1B/1C 与已授权 Phase 2 范围完成；Realtime 与 WebRTC 仍暂缓，后续新模型族继续按独立 Profile 和真实需求准入 |
 
 ## 21. 协议与内部契约参考
 
@@ -1812,6 +1837,11 @@ Manifest；其余记录在对应 Phase 获得真实需求、负责人和预算�
 - [Gemini Live API](https://ai.google.dev/gemini-api/docs/live-api)
 - [Gemini Live WebSocket Reference](https://ai.google.dev/api/live)
 - [AWS Bedrock Supported APIs](https://docs.aws.amazon.com/bedrock/latest/userguide/apis.html)
+- [AWS Bedrock Mantle Responses API](https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html)
+- [AWS Bedrock Mantle Chat Completions](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-chat-completions-mantle.html)
+- [AWS Bedrock Mantle Anthropic Messages](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-messages-api.html)
+- [AWS Bedrock Endpoints](https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html)
+- [AWS Bedrock Quotas](https://docs.aws.amazon.com/bedrock/latest/userguide/quotas.html)
 - [AWS Bedrock Model/API Compatibility](https://docs.aws.amazon.com/bedrock/latest/userguide/models-api-compatibility.html)
 - [AWS Bedrock Converse API](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html)
 - [AWS Bedrock Runtime Operations](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_Operations_Amazon_Bedrock_Runtime.html)

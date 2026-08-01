@@ -33,7 +33,9 @@ func (m ProfileManifest) Validate() error {
 	seen := make(map[Operation]struct{}, len(m.Operations))
 	for _, operation := range m.Operations {
 		switch operation {
-		case OperationChat, OperationChatStream, OperationEmbeddings, OperationMessages, OperationMessagesStream:
+		case OperationChat, OperationChatStream, OperationEmbeddings, OperationMessages, OperationMessagesStream,
+			OperationModerations, OperationImages, OperationTranscriptions, OperationSpeech,
+			OperationFiles, OperationBatches, OperationRerank, OperationAsyncInvoke:
 		default:
 			return errors.New("provider profile manifest contains an unknown operation")
 		}
@@ -66,13 +68,21 @@ func (m ProfileManifest) Validate() error {
 
 func profileAllowsPrimitive(profileID domain.ProviderProfileID, operation Operation, primitive Primitive) bool {
 	expected := map[domain.ProviderProfileID]map[Operation]Primitive{
-		domain.ProfileOpenAIChatEmbeddings: {OperationChat: PrimitiveOpenAIChatCompletions, OperationChatStream: PrimitiveOpenAIChatStream, OperationEmbeddings: PrimitiveOpenAIEmbeddings},
-		domain.ProfileAnthropicMessages:    {OperationChat: PrimitiveAnthropicMessages, OperationChatStream: PrimitiveAnthropicMessagesStream, OperationMessages: PrimitiveAnthropicMessages, OperationMessagesStream: PrimitiveAnthropicMessagesStream},
-		domain.ProfileAzureChatEmbeddings:  {OperationChat: PrimitiveAzureChatCompletions, OperationChatStream: PrimitiveAzureChatStream, OperationEmbeddings: PrimitiveAzureEmbeddings},
-		domain.ProfileDeepSeekChat:         {OperationChat: PrimitiveDeepSeekChat, OperationChatStream: PrimitiveDeepSeekChatStream},
-		domain.ProfileOpenAICompatible:     {OperationChat: PrimitiveCompatibleChat, OperationChatStream: PrimitiveCompatibleChatStream, OperationEmbeddings: PrimitiveCompatibleEmbeddings},
-		domain.ProfileGeminiText:           {OperationChat: PrimitiveGeminiGenerateContent, OperationChatStream: PrimitiveGeminiStreamGenerateContent, OperationEmbeddings: PrimitiveGeminiEmbedContent},
-		domain.ProfileBedrockConverseText:  {OperationChat: PrimitiveBedrockConverse, OperationChatStream: PrimitiveBedrockConverseStream},
+		domain.ProfileOpenAIChatEmbeddings:           {OperationChat: PrimitiveOpenAIChatCompletions, OperationChatStream: PrimitiveOpenAIChatStream, OperationEmbeddings: PrimitiveOpenAIEmbeddings},
+		domain.ProfileAnthropicMessages:              {OperationChat: PrimitiveAnthropicMessages, OperationChatStream: PrimitiveAnthropicMessagesStream, OperationMessages: PrimitiveAnthropicMessages, OperationMessagesStream: PrimitiveAnthropicMessagesStream},
+		domain.ProfileAzureChatEmbeddings:            {OperationChat: PrimitiveAzureChatCompletions, OperationChatStream: PrimitiveAzureChatStream, OperationEmbeddings: PrimitiveAzureEmbeddings},
+		domain.ProfileDeepSeekChat:                   {OperationChat: PrimitiveDeepSeekChat, OperationChatStream: PrimitiveDeepSeekChatStream},
+		domain.ProfileOpenAICompatible:               {OperationChat: PrimitiveCompatibleChat, OperationChatStream: PrimitiveCompatibleChatStream, OperationEmbeddings: PrimitiveCompatibleEmbeddings},
+		domain.ProfileGeminiText:                     {OperationChat: PrimitiveGeminiGenerateContent, OperationChatStream: PrimitiveGeminiStreamGenerateContent, OperationEmbeddings: PrimitiveGeminiEmbedContent},
+		domain.ProfileBedrockConverseText:            {OperationChat: PrimitiveBedrockConverse, OperationChatStream: PrimitiveBedrockConverseStream},
+		domain.ProfileBedrockInvokeTitanEmbedV2:      {OperationEmbeddings: PrimitiveBedrockInvokeTitanEmbedV2},
+		domain.ProfileOpenAIPhase2:                   {OperationModerations: PrimitiveOpenAIModerations, OperationImages: PrimitiveOpenAIImages, OperationTranscriptions: PrimitiveOpenAIAudioTranscriptions, OperationSpeech: PrimitiveOpenAIAudioSpeech, OperationFiles: PrimitiveOpenAIFiles, OperationBatches: PrimitiveOpenAIBatches},
+		domain.ProfileBedrockInvokeTitanImageV2:      {OperationImages: PrimitiveBedrockTitanImageV2},
+		domain.ProfileBedrockAgentRerankCohere35:     {OperationRerank: PrimitiveBedrockAgentRerankCohere35},
+		domain.ProfileBedrockAsyncNovaReel:           {OperationAsyncInvoke: PrimitiveBedrockAsyncNovaReel},
+		domain.ProfileBedrockMantleOpenAIChat:        {OperationChat: PrimitiveBedrockMantleOpenAIChat, OperationChatStream: PrimitiveBedrockMantleOpenAIChatStream},
+		domain.ProfileBedrockMantleOpenAIResponses:   {OperationChat: PrimitiveBedrockMantleOpenAIResponses, OperationChatStream: PrimitiveBedrockMantleOpenAIResponsesStream},
+		domain.ProfileBedrockMantleAnthropicMessages: {OperationChat: PrimitiveBedrockMantleAnthropicMessages, OperationChatStream: PrimitiveBedrockMantleAnthropicMessagesStream, OperationMessages: PrimitiveBedrockMantleAnthropicMessages, OperationMessagesStream: PrimitiveBedrockMantleAnthropicMessagesStream},
 	}
 	operations, ok := expected[profileID]
 	if !ok {
@@ -112,10 +122,22 @@ func (s operationSet) Resolve(operation Operation) (OperationAdapter, bool) {
 			return legacyGenerationPrimitive{adapter: s.adapter, primitive: binding.Primitive, operation: binding.LegacyOperation}, true
 		case semantic.OperationEmbed:
 			return legacyEmbeddingPrimitive{adapter: s.adapter, primitive: binding.Primitive, operation: binding.LegacyOperation}, true
+		default:
+			return phase2OperationPrimitive{operation: binding.LegacyOperation, semantic: binding.SemanticOperation, primitive: binding.Primitive}, true
 		}
 	}
 	return nil, false
 }
+
+type phase2OperationPrimitive struct {
+	operation Operation
+	semantic  semantic.Operation
+	primitive Primitive
+}
+
+func (p phase2OperationPrimitive) LegacyOperation() Operation            { return p.operation }
+func (p phase2OperationPrimitive) SemanticOperation() semantic.Operation { return p.semantic }
+func (p phase2OperationPrimitive) ProviderPrimitive() Primitive          { return p.primitive }
 
 type ProfiledAdapter interface {
 	Adapter
@@ -162,6 +184,112 @@ func (b *LegacyAdapterBridge) Capabilities() Capabilities {
 		return reporter.Capabilities()
 	}
 	return Capabilities{Chat: true, Streaming: true, Embeddings: true}
+}
+
+func (b *LegacyAdapterBridge) Moderate(ctx context.Context, call ModerationCall) (ModerationResult, error) {
+	a, ok := b.Adapter.(StatelessPhase2Adapter)
+	if !ok {
+		return ModerationResult{}, errors.New("moderation is unavailable")
+	}
+	return a.Moderate(ctx, call)
+}
+func (b *LegacyAdapterBridge) GenerateImage(ctx context.Context, call ImageCall) (ImageResult, error) {
+	a, ok := b.Adapter.(StatelessPhase2Adapter)
+	if !ok {
+		return ImageResult{}, errors.New("image generation is unavailable")
+	}
+	return a.GenerateImage(ctx, call)
+}
+func (b *LegacyAdapterBridge) Transcribe(ctx context.Context, call TranscriptionCall) (TranscriptionResult, error) {
+	a, ok := b.Adapter.(StatelessPhase2Adapter)
+	if !ok {
+		return TranscriptionResult{}, errors.New("transcription is unavailable")
+	}
+	return a.Transcribe(ctx, call)
+}
+func (b *LegacyAdapterBridge) Synthesize(ctx context.Context, call SpeechCall) (SpeechResult, error) {
+	a, ok := b.Adapter.(StatelessPhase2Adapter)
+	if !ok {
+		return SpeechResult{}, errors.New("speech is unavailable")
+	}
+	return a.Synthesize(ctx, call)
+}
+func (b *LegacyAdapterBridge) CreateFile(ctx context.Context, call FileCreateCall) (FileObject, error) {
+	a, ok := b.Adapter.(ResourcePhase2Adapter)
+	if !ok {
+		return FileObject{}, errors.New("files are unavailable")
+	}
+	return a.CreateFile(ctx, call)
+}
+func (b *LegacyAdapterBridge) GetFile(ctx context.Context, requestID, id string) (FileObject, error) {
+	a, ok := b.Adapter.(ResourcePhase2Adapter)
+	if !ok {
+		return FileObject{}, errors.New("files are unavailable")
+	}
+	return a.GetFile(ctx, requestID, id)
+}
+func (b *LegacyAdapterBridge) DownloadFile(ctx context.Context, requestID, id string) (FileContent, error) {
+	a, ok := b.Adapter.(ResourcePhase2Adapter)
+	if !ok {
+		return FileContent{}, errors.New("files are unavailable")
+	}
+	return a.DownloadFile(ctx, requestID, id)
+}
+func (b *LegacyAdapterBridge) DeleteFile(ctx context.Context, requestID, id string) (FileDeleteResult, error) {
+	a, ok := b.Adapter.(ResourcePhase2Adapter)
+	if !ok {
+		return FileDeleteResult{}, errors.New("files are unavailable")
+	}
+	return a.DeleteFile(ctx, requestID, id)
+}
+func (b *LegacyAdapterBridge) CreateBatch(ctx context.Context, call BatchCreateCall) (BatchObject, error) {
+	a, ok := b.Adapter.(ResourcePhase2Adapter)
+	if !ok {
+		return BatchObject{}, errors.New("batches are unavailable")
+	}
+	return a.CreateBatch(ctx, call)
+}
+func (b *LegacyAdapterBridge) GetBatch(ctx context.Context, requestID, id string) (BatchObject, error) {
+	a, ok := b.Adapter.(ResourcePhase2Adapter)
+	if !ok {
+		return BatchObject{}, errors.New("batches are unavailable")
+	}
+	return a.GetBatch(ctx, requestID, id)
+}
+func (b *LegacyAdapterBridge) CancelBatch(ctx context.Context, requestID, id string) (BatchObject, error) {
+	a, ok := b.Adapter.(ResourcePhase2Adapter)
+	if !ok {
+		return BatchObject{}, errors.New("batches are unavailable")
+	}
+	return a.CancelBatch(ctx, requestID, id)
+}
+func (b *LegacyAdapterBridge) Rerank(ctx context.Context, call RerankCall) (RerankResult, error) {
+	a, ok := b.Adapter.(BedrockPhase2Adapter)
+	if !ok {
+		return RerankResult{}, errors.New("rerank is unavailable")
+	}
+	return a.Rerank(ctx, call)
+}
+func (b *LegacyAdapterBridge) StartAsyncInvoke(ctx context.Context, call AsyncInvokeCall) (AsyncInvokeObject, error) {
+	a, ok := b.Adapter.(BedrockPhase2Adapter)
+	if !ok {
+		return AsyncInvokeObject{}, errors.New("async invoke is unavailable")
+	}
+	return a.StartAsyncInvoke(ctx, call)
+}
+func (b *LegacyAdapterBridge) GetAsyncInvoke(ctx context.Context, requestID, id string) (AsyncInvokeObject, error) {
+	a, ok := b.Adapter.(BedrockPhase2Adapter)
+	if !ok {
+		return AsyncInvokeObject{}, errors.New("async invoke is unavailable")
+	}
+	return a.GetAsyncInvoke(ctx, requestID, id)
+}
+func (b *LegacyAdapterBridge) GenerateBedrockImage(ctx context.Context, call ImageCall) (ImageResult, error) {
+	a, ok := b.Adapter.(BedrockPhase2Adapter)
+	if !ok {
+		return ImageResult{}, errors.New("Bedrock image generation is unavailable")
+	}
+	return a.GenerateBedrockImage(ctx, call)
 }
 func (b *LegacyAdapterBridge) Probe(ctx context.Context, model string) error {
 	prober, ok := b.Adapter.(Prober)
@@ -230,6 +358,38 @@ func BuiltinProfile(id domain.ProviderProfileID) (ProfileManifest, bool) {
 			AccessSurface: domain.SurfaceBedrockRuntime, CredentialScheme: domain.CredentialAWSSigV4Explicit,
 			Operations:        []Operation{OperationChat, OperationChatStream},
 			PrimitiveBindings: []PrimitiveBinding{{OperationChat, semantic.OperationGenerate, PrimitiveBedrockConverse}, {OperationChatStream, semantic.OperationGenerate, PrimitiveBedrockConverseStream}},
+		},
+		domain.ProfileBedrockInvokeTitanEmbedV2: {
+			ID: domain.ProfileBedrockInvokeTitanEmbedV2, Revision: 1, ProviderType: domain.ProviderBedrock,
+			AccessSurface: domain.SurfaceBedrockRuntime, CredentialScheme: domain.CredentialAWSSigV4Explicit,
+			Operations:        []Operation{OperationEmbeddings},
+			PrimitiveBindings: []PrimitiveBinding{{OperationEmbeddings, semantic.OperationEmbed, PrimitiveBedrockInvokeTitanEmbedV2}},
+		},
+		domain.ProfileOpenAIPhase2: {
+			ID: domain.ProfileOpenAIPhase2, Revision: 1, ProviderType: domain.ProviderOpenAI, AccessSurface: domain.SurfaceOpenAI, CredentialScheme: domain.CredentialBearerStatic,
+			Operations:        []Operation{OperationModerations, OperationImages, OperationTranscriptions, OperationSpeech, OperationFiles, OperationBatches},
+			PrimitiveBindings: []PrimitiveBinding{{OperationModerations, semantic.OperationModerate, PrimitiveOpenAIModerations}, {OperationImages, semantic.OperationImage, PrimitiveOpenAIImages}, {OperationTranscriptions, semantic.OperationTranscribe, PrimitiveOpenAIAudioTranscriptions}, {OperationSpeech, semantic.OperationSynthesize, PrimitiveOpenAIAudioSpeech}, {OperationFiles, semantic.OperationFile, PrimitiveOpenAIFiles}, {OperationBatches, semantic.OperationBatch, PrimitiveOpenAIBatches}},
+		},
+		domain.ProfileBedrockInvokeTitanImageV2:  {ID: domain.ProfileBedrockInvokeTitanImageV2, Revision: 1, ProviderType: domain.ProviderBedrock, AccessSurface: domain.SurfaceBedrockRuntime, CredentialScheme: domain.CredentialAWSSigV4Explicit, Operations: []Operation{OperationImages}, PrimitiveBindings: []PrimitiveBinding{{OperationImages, semantic.OperationImage, PrimitiveBedrockTitanImageV2}}},
+		domain.ProfileBedrockAgentRerankCohere35: {ID: domain.ProfileBedrockAgentRerankCohere35, Revision: 1, ProviderType: domain.ProviderBedrock, AccessSurface: domain.SurfaceBedrockAgentRuntime, CredentialScheme: domain.CredentialAWSSigV4Explicit, Operations: []Operation{OperationRerank}, PrimitiveBindings: []PrimitiveBinding{{OperationRerank, semantic.OperationRerank, PrimitiveBedrockAgentRerankCohere35}}},
+		domain.ProfileBedrockAsyncNovaReel:       {ID: domain.ProfileBedrockAsyncNovaReel, Revision: 1, ProviderType: domain.ProviderBedrock, AccessSurface: domain.SurfaceBedrockRuntime, CredentialScheme: domain.CredentialAWSSigV4Explicit, Operations: []Operation{OperationAsyncInvoke}, PrimitiveBindings: []PrimitiveBinding{{OperationAsyncInvoke, semantic.OperationAsyncGenerate, PrimitiveBedrockAsyncNovaReel}}},
+		domain.ProfileBedrockMantleOpenAIChat: {
+			ID: domain.ProfileBedrockMantleOpenAIChat, Revision: 1, ProviderType: domain.ProviderBedrock,
+			AccessSurface: domain.SurfaceBedrockMantle, CredentialScheme: domain.CredentialBedrockAPIKey,
+			Operations:        []Operation{OperationChat, OperationChatStream},
+			PrimitiveBindings: []PrimitiveBinding{{OperationChat, semantic.OperationGenerate, PrimitiveBedrockMantleOpenAIChat}, {OperationChatStream, semantic.OperationGenerate, PrimitiveBedrockMantleOpenAIChatStream}},
+		},
+		domain.ProfileBedrockMantleOpenAIResponses: {
+			ID: domain.ProfileBedrockMantleOpenAIResponses, Revision: 1, ProviderType: domain.ProviderBedrock,
+			AccessSurface: domain.SurfaceBedrockMantle, CredentialScheme: domain.CredentialBedrockAPIKey,
+			Operations:        []Operation{OperationChat, OperationChatStream},
+			PrimitiveBindings: []PrimitiveBinding{{OperationChat, semantic.OperationGenerate, PrimitiveBedrockMantleOpenAIResponses}, {OperationChatStream, semantic.OperationGenerate, PrimitiveBedrockMantleOpenAIResponsesStream}},
+		},
+		domain.ProfileBedrockMantleAnthropicMessages: {
+			ID: domain.ProfileBedrockMantleAnthropicMessages, Revision: 1, ProviderType: domain.ProviderBedrock,
+			AccessSurface: domain.SurfaceBedrockMantle, CredentialScheme: domain.CredentialBedrockAPIKey,
+			Operations:        []Operation{OperationChat, OperationChatStream, OperationMessages, OperationMessagesStream},
+			PrimitiveBindings: []PrimitiveBinding{{OperationChat, semantic.OperationGenerate, PrimitiveBedrockMantleAnthropicMessages}, {OperationChatStream, semantic.OperationGenerate, PrimitiveBedrockMantleAnthropicMessagesStream}, {OperationMessages, semantic.OperationGenerate, PrimitiveBedrockMantleAnthropicMessages}, {OperationMessagesStream, semantic.OperationGenerate, PrimitiveBedrockMantleAnthropicMessagesStream}},
 		},
 	}
 	manifest, ok := manifests[id]

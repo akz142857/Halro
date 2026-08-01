@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -281,6 +282,8 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 			CircuitHalfOpenMaxRequests: cfg.CircuitBreaker.HalfOpenMaxRequests,
 			TokenGuard:                 tokenGuard,
 			Redactor:                   redactor,
+			Resources:                  metadata,
+			ResourceObjectDir:          filepath.Join(cfg.Storage.DataDir, "provider-objects"),
 		},
 	)
 	if err != nil {
@@ -413,7 +416,7 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 	runtime.backgroundCancel = backgroundCancel
 	runtime.alerts.SetObserver(runtime.auditAlertDelivery)
 	runtime.alerts.Start()
-	runtime.backgroundWait.Add(4)
+	runtime.backgroundWait.Add(5)
 	go func() {
 		defer runtime.backgroundWait.Done()
 		runtime.usageCollector.Run(backgroundContext)
@@ -432,6 +435,10 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 	go func() {
 		defer runtime.backgroundWait.Done()
 		runtime.runActiveDeploymentProbes(backgroundContext)
+	}()
+	go func() {
+		defer runtime.backgroundWait.Done()
+		runtime.runProviderResourceMaintenance(backgroundContext)
 	}()
 	return runtime, nil
 }
@@ -723,6 +730,21 @@ func (r *Runtime) gatewayRouter() http.Handler {
 	router.Post("/v1/responses", r.gateway.Responses)
 	router.Post("/v1/messages", r.gateway.Messages)
 	router.Post("/v1/embeddings", r.gateway.Embeddings)
+	router.Post("/v1/moderations", r.gateway.Moderations)
+	router.Post("/v1/images/generations", r.gateway.Images)
+	router.Post("/v1/audio/speech", r.gateway.Speech)
+	router.Post("/v1/audio/transcriptions", r.gateway.Transcriptions)
+	router.Post("/v1/rerank", r.gateway.Rerank)
+	router.Post("/v1/async/invocations", r.gateway.StartAsyncInvoke)
+	router.Get("/v1/async/invocations/{asyncID}", r.gateway.GetAsyncInvoke)
+	router.Post("/v1/async/invocations/{asyncID}/cancel", r.gateway.CancelAsyncInvoke)
+	router.Post("/v1/files", r.gateway.CreateFile)
+	router.Get("/v1/files/{fileID}", r.gateway.GetFile)
+	router.Get("/v1/files/{fileID}/content", r.gateway.DownloadFile)
+	router.Delete("/v1/files/{fileID}", r.gateway.DeleteFile)
+	router.Post("/v1/batches", r.gateway.CreateBatch)
+	router.Get("/v1/batches/{batchID}", r.gateway.GetBatch)
+	router.Post("/v1/batches/{batchID}/cancel", r.gateway.CancelBatch)
 	router.Get("/", func(writer http.ResponseWriter, _ *http.Request) {
 		writeJSON(writer, http.StatusOK, map[string]any{
 			"name":    "heimdall",

@@ -119,7 +119,7 @@ func TestLegacyBridgeEmbeddingProfileBindings(t *testing.T) {
 		t.Fatal(err)
 	}
 	var golden string
-	for _, profileID := range []domain.ProviderProfileID{domain.ProfileOpenAIChatEmbeddings, domain.ProfileAzureChatEmbeddings, domain.ProfileOpenAICompatible, domain.ProfileGeminiText} {
+	for _, profileID := range []domain.ProviderProfileID{domain.ProfileOpenAIChatEmbeddings, domain.ProfileAzureChatEmbeddings, domain.ProfileOpenAICompatible, domain.ProfileGeminiText, domain.ProfileBedrockInvokeTitanEmbedV2} {
 		manifest, _ := BuiltinProfile(profileID)
 		legacy := &profileMatrixLegacy{providerType: string(manifest.ProviderType)}
 		bridge, err := NewLegacyAdapterBridge(legacy, manifest, nil)
@@ -136,9 +136,9 @@ func TestLegacyBridgeEmbeddingProfileBindings(t *testing.T) {
 		}
 		encoded, _ := json.Marshal(result)
 		assertNoProviderLeak(t, encoded)
-		if profileID == domain.ProfileGeminiText {
+		if profileID == domain.ProfileGeminiText || profileID == domain.ProfileBedrockInvokeTitanEmbedV2 {
 			if result.Translation != semantic.TranslationDeclared {
-				t.Fatal("Gemini embedding transform was not declared")
+				t.Fatalf("%s embedding transform was not declared", profileID)
 			}
 			result.Translation = semantic.TranslationNone
 			encoded, _ = json.Marshal(result)

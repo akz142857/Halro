@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"os"
+	"path/filepath"
 	"slices"
 	"sync/atomic"
 	"time"
@@ -75,6 +77,8 @@ type Service struct {
 	rejections            rejectionCounters
 	sourceHashKey         [32]byte
 	now                   func() time.Time
+	resources             Phase2ResourceStore
+	resourceObjectDir     string
 }
 
 func NewService(authSnapshot *auth.Snapshot, registry *provider.Registry, accounting *budget.Manager) (*Service, error) {
@@ -92,6 +96,8 @@ type ServiceOptions struct {
 	RetryJitter                bool
 	TokenGuard                 *tokenguard.Manager
 	Redactor                   *redaction.Engine
+	Resources                  Phase2ResourceStore
+	ResourceObjectDir          string
 }
 
 type requestRun struct {
@@ -371,6 +377,18 @@ func NewServiceWithOptions(
 	if options.Redactor == nil {
 		options.Redactor = redaction.NewDefault()
 	}
+	if options.ResourceObjectDir != "" {
+		options.ResourceObjectDir = filepath.Clean(options.ResourceObjectDir)
+		if !filepath.IsAbs(options.ResourceObjectDir) {
+			return nil, errors.New("resource object directory must be absolute")
+		}
+		if err := os.MkdirAll(options.ResourceObjectDir, 0o700); err != nil {
+			return nil, fmt.Errorf("create resource object directory: %w", err)
+		}
+		if err := os.Chmod(options.ResourceObjectDir, 0o700); err != nil {
+			return nil, fmt.Errorf("secure resource object directory: %w", err)
+		}
+	}
 	var sourceHashKey [32]byte
 	if _, err := cryptorand.Read(sourceHashKey[:]); err != nil {
 		return nil, errors.New("generate source hashing key")
@@ -392,6 +410,8 @@ func NewServiceWithOptions(
 		deploymentConcurrency: provider.NewConcurrencyManager(),
 		sourceHashKey:         sourceHashKey,
 		now:                   time.Now,
+		resources:             options.Resources,
+		resourceObjectDir:     options.ResourceObjectDir,
 	}, nil
 }
 
@@ -799,18 +819,18 @@ func (s *Service) MessagesNative(ctx context.Context, plaintextKey, version stri
 	if err != nil {
 		return anthropicapi.Message{}, gatewayError("unsupported_feature", "native Messages primitive is unavailable", 400, err)
 	}
-	payload, _ := envelope.PayloadFor(domain.ProfileAnthropicMessages, 1, compatibility.NativeRequest)
+	payload, _ := envelope.PayloadFor(target.ProfileID, 1, compatibility.NativeRequest)
 	result, providerErr := adapter.MessagesNative(ctx, provider.NativeMessageCall{RequestID: run.requestID, ProviderModel: target.ProviderModel, Version: version, Payload: payload})
 	var message anthropicapi.Message
 	var semanticResult semantic.GenerateResult
 	if providerErr == nil {
 		registry, _ := anthropicwire.NewNativeSchemaRegistry()
 		identity := nativeIdentity(principal, target, request.Model)
-		responseEnvelope, envelopeErr := compatibility.NewNativeResponseEnvelope(registry, domain.ProfileAnthropicMessages, 1, http.Header{}, result.Payload, identity)
+		responseEnvelope, envelopeErr := compatibility.NewNativeResponseEnvelope(registry, target.ProfileID, 1, http.Header{}, result.Payload, identity)
 		if envelopeErr != nil {
 			providerErr = &provider.Error{Class: provider.ErrorMalformed, Ambiguous: true, Message: "validate native Anthropic response", Cause: envelopeErr}
 		} else {
-			safePayload, _ := responseEnvelope.PayloadFor(domain.ProfileAnthropicMessages, 1, compatibility.NativeResponse)
+			safePayload, _ := responseEnvelope.PayloadFor(target.ProfileID, 1, compatibility.NativeResponse)
 			message, providerErr = anthropicapi.DecodeMessage(safePayload)
 			if providerErr == nil {
 				providerErr = s.checkNativeOutboundRedaction(principal, message)
@@ -874,17 +894,17 @@ func (s *Service) MessagesNativeStream(ctx context.Context, plaintextKey, versio
 	if err != nil {
 		return gatewayError("unsupported_feature", "native Messages stream primitive is unavailable", 400, err)
 	}
-	payload, _ := envelope.PayloadFor(domain.ProfileAnthropicMessages, 1, compatibility.NativeRequest)
+	payload, _ := envelope.PayloadFor(target.ProfileID, 1, compatibility.NativeRequest)
 	registry, _ := anthropicwire.NewNativeSchemaRegistry()
 	identity := nativeIdentity(principal, target, request.Model)
 	emitted := false
 	providerErrorEvent := false
 	usage, providerErr := adapter.MessagesNativeStream(ctx, provider.NativeMessageCall{RequestID: run.requestID, ProviderModel: target.ProviderModel, Version: version, Payload: payload}, func(event anthropicapi.RawStreamEvent) error {
-		eventEnvelope, envelopeErr := compatibility.NewNativeEventEnvelope(registry, domain.ProfileAnthropicMessages, 1, http.Header{}, event.Data, identity)
+		eventEnvelope, envelopeErr := compatibility.NewNativeEventEnvelope(registry, target.ProfileID, 1, http.Header{}, event.Data, identity)
 		if envelopeErr != nil {
 			return envelopeErr
 		}
-		safePayload, _ := eventEnvelope.PayloadFor(domain.ProfileAnthropicMessages, 1, compatibility.NativeEvent)
+		safePayload, _ := eventEnvelope.PayloadFor(target.ProfileID, 1, compatibility.NativeEvent)
 		if event.Type == "message_start" {
 			safePayload, envelopeErr = rewriteAnthropicStreamModel(safePayload, request.Model)
 			if envelopeErr != nil {
@@ -958,7 +978,7 @@ func (s *Service) prepareNativeMessages(ctx context.Context, plaintextKey, versi
 		return auth.AuthResult{}, provider.Target{}, nil, 0, 0, err
 	}
 	targets = slices.DeleteFunc(targets, func(target provider.Target) bool {
-		return target.ProfileID != domain.ProfileAnthropicMessages || target.AccessSurface != domain.SurfaceAnthropic
+		return !isNativeAnthropicProfile(target.ProfileID, target.AccessSurface)
 	})
 	if len(targets) == 0 {
 		return auth.AuthResult{}, provider.Target{}, nil, 0, 0, gatewayError("unsupported_feature", "native mode requires an Anthropic Messages provider profile", 400, nil)
@@ -968,7 +988,7 @@ func (s *Service) prepareNativeMessages(ctx context.Context, plaintextKey, versi
 	if err != nil {
 		return auth.AuthResult{}, provider.Target{}, nil, 0, 0, gatewayError("internal_error", "native schema is unavailable", 500, err)
 	}
-	envelope, err := compatibility.NewNativeEnvelope(registry, domain.ProfileAnthropicMessages, 1, anthropicwire.NativeHeaders(version), request.Raw, nativeIdentity(principal, target, request.Model))
+	envelope, err := compatibility.NewNativeEnvelope(registry, target.ProfileID, 1, anthropicwire.NativeHeaders(version), request.Raw, nativeIdentity(principal, target, request.Model))
 	if err != nil {
 		return auth.AuthResult{}, provider.Target{}, nil, 0, 0, gatewayError("invalid_request_error", "native request failed schema validation", 400, err)
 	}
@@ -984,6 +1004,11 @@ func (s *Service) prepareNativeMessages(ctx context.Context, plaintextKey, versi
 		return auth.AuthResult{}, provider.Target{}, nil, 0, 0, gatewayError("token_limit_exceeded", "request exceeds the model deployment token limits", 400, nil)
 	}
 	return principal, target, envelope, inputTokens, outputTokens, nil
+}
+
+func isNativeAnthropicProfile(profileID domain.ProviderProfileID, surface domain.AccessSurface) bool {
+	return profileID == domain.ProfileAnthropicMessages && surface == domain.SurfaceAnthropic ||
+		profileID == domain.ProfileBedrockMantleAnthropicMessages && surface == domain.SurfaceBedrockMantle
 }
 
 func nativeIdentity(principal auth.AuthResult, target provider.Target, model string) compatibility.NativeIdentity {
@@ -1437,6 +1462,10 @@ func estimateReservation(inputTokens, outputTokens int64, target provider.Target
 	if err != nil {
 		return 0, gatewayError("accounting_error", "unable to estimate request cost", 503, err)
 	}
+	if target.FixedRequestMicrosUSD > math.MaxInt64-reservation {
+		return 0, gatewayError("accounting_error", "fixed request price overflows", 503, nil)
+	}
+	reservation += target.FixedRequestMicrosUSD
 	if reservation == 0 {
 		reservation = 1
 	}
@@ -1705,7 +1734,12 @@ func setSettlementCost(result *budget.Settlement, target provider.Target, reserv
 		result.CostEstimated = true
 		return
 	}
-	result.CommittedMicrosUSD = cost
+	if target.FixedRequestMicrosUSD > math.MaxInt64-cost {
+		result.CommittedMicrosUSD = reservationMicrosUSD
+		result.CostEstimated = true
+		return
+	}
+	result.CommittedMicrosUSD = cost + target.FixedRequestMicrosUSD
 }
 
 func enrichSettlement(result *budget.Settlement, providerErr error, startedAt, completedAt time.Time) {

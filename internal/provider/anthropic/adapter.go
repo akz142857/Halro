@@ -25,10 +25,13 @@ import (
 const maxResponseBytes = 16 << 20
 
 type Options struct {
-	Endpoint     *url.URL
-	Authorizer   provider.Authorizer
-	Client       *http.Client
-	Capabilities provider.Capabilities
+	Endpoint         *url.URL
+	Authorizer       provider.Authorizer
+	Client           *http.Client
+	Capabilities     provider.Capabilities
+	ProviderType     string
+	CredentialScheme domain.CredentialScheme
+	MessagesPath     string
 }
 
 type Adapter struct {
@@ -36,19 +39,29 @@ type Adapter struct {
 	authorizer   provider.Authorizer
 	client       *http.Client
 	capabilities provider.Capabilities
+	providerType string
+	messagesPath string
 }
 
 func New(options Options) (*Adapter, error) {
 	if options.Endpoint == nil || options.Authorizer == nil || options.Client == nil {
 		return nil, errors.New("endpoint, authorizer, and client are required")
 	}
-	if options.Authorizer.Scheme() != domain.CredentialAnthropicAPIKey {
+	expectedScheme := options.CredentialScheme
+	if expectedScheme == "" {
+		expectedScheme = domain.CredentialAnthropicAPIKey
+	}
+	if options.Authorizer.Scheme() != expectedScheme {
 		return nil, errors.New("credential scheme does not match Anthropic profile")
 	}
-	return &Adapter{endpoint: options.Endpoint, authorizer: options.Authorizer, client: options.Client, capabilities: options.Capabilities}, nil
+	providerType := options.ProviderType
+	if providerType == "" {
+		providerType = string(domain.ProviderAnthropic)
+	}
+	return &Adapter{endpoint: options.Endpoint, authorizer: options.Authorizer, client: options.Client, capabilities: options.Capabilities, providerType: providerType, messagesPath: options.MessagesPath}, nil
 }
 
-func (adapter *Adapter) Type() string                        { return string(domain.ProviderAnthropic) }
+func (adapter *Adapter) Type() string                        { return adapter.providerType }
 func (adapter *Adapter) Capabilities() provider.Capabilities { return adapter.capabilities }
 func (adapter *Adapter) Close()                              { adapter.authorizer.Close(); adapter.client.CloseIdleConnections() }
 
@@ -145,7 +158,7 @@ func (adapter *Adapter) MessagesNative(ctx context.Context, call provider.Native
 	if _, err := anthropicapi.DecodeMessage(body); err != nil {
 		return provider.NativeMessageResult{}, malformed("validate Anthropic response", err)
 	}
-	return provider.NativeMessageResult{Payload: body, ProviderRequestID: response.Header.Get("request-id"), RetryAfter: parseRetryAfter(response.Header)}, nil
+	return provider.NativeMessageResult{Payload: body, ProviderRequestID: upstreamRequestID(response.Header), RetryAfter: parseRetryAfter(response.Header)}, nil
 }
 
 func (adapter *Adapter) MessagesNativeStream(ctx context.Context, call provider.NativeMessageCall, emit func(anthropicapi.RawStreamEvent) error) (*anthropicapi.Usage, error) {
@@ -202,10 +215,14 @@ func (adapter *Adapter) MessagesNativeStream(ctx context.Context, call provider.
 func (adapter *Adapter) request(ctx context.Context, call provider.NativeMessageCall, payload []byte, stream bool) (*http.Request, error) {
 	endpoint := *adapter.endpoint
 	endpoint.Path = strings.TrimRight(endpoint.Path, "/")
-	if !strings.HasSuffix(endpoint.Path, "/v1") {
-		endpoint.Path += "/v1"
+	if adapter.messagesPath != "" {
+		endpoint.Path += "/" + strings.Trim(adapter.messagesPath, "/")
+	} else {
+		if !strings.HasSuffix(endpoint.Path, "/v1") {
+			endpoint.Path += "/v1"
+		}
+		endpoint.Path += "/messages"
 	}
-	endpoint.Path += "/messages"
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), bytes.NewReader(payload))
 	if err != nil {
 		return nil, badRequest("create Anthropic request", err)
@@ -261,7 +278,16 @@ func decodeHTTPError(response *http.Response) error {
 	if message == "" {
 		message = http.StatusText(response.StatusCode)
 	}
-	return &provider.Error{Class: class, StatusCode: response.StatusCode, Retryable: retryable, Message: message, ProviderRequestID: response.Header.Get("request-id"), ProviderCode: envelope.Error.Type, RetryAfter: parseRetryAfter(response.Header)}
+	return &provider.Error{Class: class, StatusCode: response.StatusCode, Retryable: retryable, Message: message, ProviderRequestID: upstreamRequestID(response.Header), ProviderCode: envelope.Error.Type, RetryAfter: parseRetryAfter(response.Header)}
+}
+
+func upstreamRequestID(header http.Header) string {
+	for _, name := range []string{"request-id", "x-amzn-requestid", "x-amzn-request-id", "x-request-id"} {
+		if value := strings.TrimSpace(header.Get(name)); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func parseRetryAfter(header http.Header) time.Duration {

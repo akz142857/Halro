@@ -97,14 +97,17 @@ export type AccessSurface =
   | "openai-compatible"
   | "gemini-generate-content"
   | "anthropic-api"
-  | "bedrock-runtime";
+  | "bedrock-runtime"
+  | "bedrock-agent-runtime"
+  | "bedrock-mantle";
 
 export type CredentialScheme =
   | "bearer.static"
   | "anthropic.x-api-key"
   | "azure.api-key"
   | "google.api-key"
-  | "aws.sigv4.explicit-session";
+  | "aws.sigv4.explicit-session"
+  | "aws.bedrock.api-key";
 
 export type CapabilityEvidence = "verified" | "declared" | "legacy" | "unsupported";
 export type CapabilityEvidenceSet = Record<string, CapabilityEvidence>;
@@ -122,6 +125,14 @@ export interface ProviderCapabilities {
   chat: boolean;
   streaming: boolean;
   embeddings: boolean;
+  moderations: boolean;
+  images: boolean;
+  transcriptions: boolean;
+  speech: boolean;
+  files: boolean;
+  batches: boolean;
+  rerank: boolean;
+  async_generate: boolean;
   tools: boolean;
   vision: boolean;
   json_mode: boolean;
@@ -159,10 +170,12 @@ export interface Deployment {
   provider_model: string;
   access_surface: AccessSurface;
   profile_id: string;
+  region: string;
   capabilities: ProviderCapabilities;
   capability_evidence: CapabilityEvidenceSet;
   input_micros_per_million: number;
   output_micros_per_million: number;
+  fixed_request_micros_usd: number;
   max_concurrency: number;
   priority: number;
   weight: number;

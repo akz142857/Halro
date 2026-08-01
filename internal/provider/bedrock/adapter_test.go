@@ -10,10 +10,12 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/akz142857/Heimdall/internal/domain"
 	"github.com/akz142857/Heimdall/internal/openaiapi"
 	"github.com/akz142857/Heimdall/internal/provider"
 	"github.com/akz142857/Heimdall/internal/semantic"
@@ -375,6 +377,90 @@ func TestBedrockTextProfileRejectsMessageNameBeforeProviderIO(t *testing.T) {
 	}
 }
 
+func TestTitanEmbedV2SignsExactInvokeSchemaAndMapsUsage(t *testing.T) {
+	vector := make([]float64, 256)
+	for index := range vector {
+		vector[index] = float64(index) / 256
+	}
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.Method != http.MethodPost || request.URL.EscapedPath() != "/model/amazon.titan-embed-text-v2:0/invoke" {
+			t.Fatalf("method=%s path=%s", request.Method, request.URL.EscapedPath())
+		}
+		if !strings.Contains(request.Header.Get("Authorization"), "/us-east-1/bedrock/aws4_request") ||
+			request.Header.Get("Content-Type") != "application/json" || request.Header.Get("Accept") != "application/json" {
+			t.Fatalf("headers=%#v", request.Header)
+		}
+		var payload map[string]json.RawMessage
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if len(payload) != 4 || string(payload["inputText"]) != `"hello"` || string(payload["dimensions"]) != "256" ||
+			string(payload["normalize"]) != "true" || string(payload["embeddingTypes"]) != `["float"]` {
+			t.Fatalf("payload=%s", mustJSON(t, payload))
+		}
+		body := mustJSON(t, map[string]any{
+			"embedding": vector, "inputTextTokenCount": 3,
+			"embeddingsByType": map[string]any{"float": vector},
+		})
+		return jsonResponse(http.StatusOK, body), nil
+	})}
+	adapter := newTitanTestAdapter(t, client)
+	defer adapter.Close()
+	dimensions := int64(256)
+	response, err := adapter.Embed(context.Background(), provider.EmbeddingCall{
+		RequestID: "req_embed", ProviderModel: titanEmbedV2ModelID,
+		Request: openaiapi.EmbeddingRequest{Input: json.RawMessage(`"hello"`), Dimensions: &dimensions, EncodingFormat: "float"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []float64
+	if len(response.Data) != 1 || json.Unmarshal(response.Data[0].Embedding, &got) != nil || !slices.Equal(got, vector) ||
+		response.Usage == nil || response.Usage.PromptTokens != 3 || response.Usage.CompletionTokens != 0 || response.Usage.TotalTokens != 3 {
+		t.Fatalf("response=%#v vector_length=%d", response, len(got))
+	}
+}
+
+func TestTitanEmbedV2RejectsUnsupportedRequestsBeforeProviderIO(t *testing.T) {
+	called := false
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		called = true
+		return jsonResponse(http.StatusOK, `{}`), nil
+	})}
+	adapter := newTitanTestAdapter(t, client)
+	defer adapter.Close()
+	invalidDimensions := int64(128)
+	for _, request := range []openaiapi.EmbeddingRequest{
+		{Input: json.RawMessage(`["one","two"]`)},
+		{Input: json.RawMessage(`"hello"`), EncodingFormat: "base64"},
+		{Input: json.RawMessage(`"hello"`), Dimensions: &invalidDimensions},
+		{Input: json.RawMessage(`"hello"`), User: "tenant"},
+	} {
+		if _, err := adapter.Embed(context.Background(), provider.EmbeddingCall{ProviderModel: titanEmbedV2ModelID, Request: request}); err == nil {
+			t.Fatalf("unsupported request was accepted: %#v", request)
+		}
+	}
+	if _, err := adapter.Embed(context.Background(), provider.EmbeddingCall{ProviderModel: "cohere.embed-v4:0", Request: openaiapi.EmbeddingRequest{Input: json.RawMessage(`"hello"`)}}); err == nil {
+		t.Fatal("wrong model family was accepted")
+	}
+	if called {
+		t.Fatal("provider was called for an unsupported request")
+	}
+}
+
+func TestTitanEmbedV2RejectsMalformedNativeResponse(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return jsonResponse(http.StatusOK, `{"embedding":[0.1],"inputTextTokenCount":1,"embeddingsByType":{"float":[0.1]}}`), nil
+	})}
+	adapter := newTitanTestAdapter(t, client)
+	defer adapter.Close()
+	_, err := adapter.Embed(context.Background(), provider.EmbeddingCall{ProviderModel: titanEmbedV2ModelID, Request: openaiapi.EmbeddingRequest{Input: json.RawMessage(`"hello"`)}})
+	var classified *provider.Error
+	if !errors.As(err, &classified) || classified.Class != provider.ErrorMalformed || !classified.Ambiguous {
+		t.Fatalf("classification=%#v err=%v", classified, err)
+	}
+}
+
 func newTestAdapter(t *testing.T, client *http.Client) *Adapter {
 	t.Helper()
 	endpoint, _ := url.Parse("https://bedrock-runtime.us-east-1.amazonaws.com")
@@ -386,6 +472,29 @@ func newTestAdapter(t *testing.T, client *http.Client) *Adapter {
 		t.Fatal(err)
 	}
 	return adapter
+}
+
+func newTitanTestAdapter(t *testing.T, client *http.Client) *Adapter {
+	t.Helper()
+	endpoint, _ := url.Parse("https://bedrock-runtime.us-east-1.amazonaws.com")
+	adapter, err := New(Options{
+		Endpoint: endpoint, CredentialJSON: []byte(testCredential), Client: client,
+		ProfileID: domain.ProfileBedrockInvokeTitanEmbedV2,
+		Now:       func() time.Time { return time.Date(2026, 7, 31, 12, 34, 56, 0, time.UTC) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return adapter
+}
+
+func mustJSON(t *testing.T, value any) string {
+	t.Helper()
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(encoded)
 }
 
 func jsonResponse(status int, body string) *http.Response {
