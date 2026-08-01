@@ -270,13 +270,32 @@ func TestSourceIPTrustsForwardedChainOnlyFromConfiguredProxy(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/", nil)
 	request.RemoteAddr = "10.0.0.1:1234"
 	request.Header.Set("X-Forwarded-For", "198.51.100.9, 10.0.0.2")
-	if got := handler.sourceIP(request); got != netip.MustParseAddr("198.51.100.9") {
+	if got, ok := handler.sourceIP(request); !ok || got != netip.MustParseAddr("198.51.100.9") {
 		t.Fatalf("source=%s", got)
 	}
 	request.RemoteAddr = "203.0.113.7:1234"
 	request.Header.Set("X-Forwarded-For", "198.51.100.10")
-	if got := handler.sourceIP(request); got != netip.MustParseAddr("203.0.113.7") {
+	if got, ok := handler.sourceIP(request); !ok || got != netip.MustParseAddr("203.0.113.7") {
 		t.Fatalf("spoofed forwarded header was trusted: %s", got)
+	}
+}
+
+func TestTrustedProxyRejectsMalformedForwardedFor(t *testing.T) {
+	service := &fakeService{}
+	handler, err := NewWithOptions(service, Options{
+		TrustedProxyCIDRs: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")},
+		TrustProxyHeaders: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{}`))
+	request.RemoteAddr = "10.0.0.1:1234"
+	request.Header.Set("X-Forwarded-For", "not-an-ip")
+	response := httptest.NewRecorder()
+	handler.ChatCompletions(response, request)
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "invalid_forwarded_for") {
+		t.Fatalf("status=%d body=%q", response.Code, response.Body.String())
 	}
 }
 

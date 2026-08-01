@@ -15,8 +15,9 @@ import (
 )
 
 const (
-	sessionPrefix = "hms_"
-	sessionBytes  = 32
+	sessionPrefix      = "hms_"
+	sessionBytes       = 32
+	maxRefreshInterval = time.Minute
 )
 
 var ErrInvalidSession = errors.New("invalid admin session")
@@ -112,6 +113,10 @@ func (m *Manager) Authenticate(
 	if err != nil || user.SessionGeneration != session.Generation {
 		_ = m.store.DeleteAdminSession(context.WithoutCancel(ctx), hash)
 		return domain.AdminSession{}, ErrInvalidSession
+	}
+	refreshInterval := min(m.idleTimeout/4, maxRefreshInterval)
+	if now.Sub(session.LastSeenAt) < refreshInterval {
+		return session, nil
 	}
 	session.LastSeenAt = now
 	session.IdleExpiresAt = now.Add(m.idleTimeout)

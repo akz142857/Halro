@@ -52,6 +52,10 @@ Back it up separately from both the data directory and encrypted backup key.
 Default listeners are loopback-only. To expose Heimdall, use TLS and an
 authenticated reverse proxy with an explicitly configured origin/trusted proxy
 boundary. Admin and Metrics must never use public plaintext listeners.
+When Gateway proxy headers are enabled, every request received from a trusted
+proxy must carry a syntactically valid `X-Forwarded-For` chain. Missing or
+malformed chains are rejected with HTTP 400 so CIDR authorization and Token
+Guard cannot silently lose their source-IP signal.
 
 ## Configuration reference
 
@@ -68,6 +72,13 @@ groups are:
 - `alerts`: queue, worker, timeout, retry, and dedup bounds;
 - `security`: private egress and trusted proxy policy;
 - `metrics`: exporter enablement and authentication requirement.
+
+Retry limits do not override Heimdall's ambiguity boundary. If an upstream
+request might already have executed, Heimdall records a conservative estimated
+settlement and returns the failure without retrying or switching Provider. Safe
+fallback remains available for explicitly classified non-ambiguous failures.
+This fail-closed behavior is not configurable in v1; changing it requires an
+end-to-end idempotency contract with the upstream Provider.
 
 Unknown YAML fields and invalid durations are rejected. Listener, TLS, storage,
 egress, proxy, and Metrics-auth changes require restart. The Admin Settings page

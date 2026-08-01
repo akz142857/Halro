@@ -600,6 +600,13 @@ func TestAmbiguousProviderFailureIsEstimatedAndSettled(t *testing.T) {
 		Retryable: true,
 		Message:   "connection lost",
 	}
+	fallback := &fakeAdapter{response: f.adapter.response}
+	if err := f.registry.Register(provider.Target{
+		ID: "target_2", PublicModel: "chat", ProviderModel: "provider-model",
+		Adapter: fallback, Priority: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	_, err := f.service.Chat(context.Background(), f.plaintext, chatRequest())
 	if err == nil {
 		t.Fatal("expected provider error")
@@ -608,6 +615,9 @@ func TestAmbiguousProviderFailureIsEstimatedAndSettled(t *testing.T) {
 	balance := f.state.Balance(f.project.ID, period)
 	if balance.ReservedMicrosUSD != 0 || balance.CommittedMicrosUSD == 0 {
 		t.Fatalf("ambiguous attempt was not conservatively settled: %#v", balance)
+	}
+	if f.adapter.calls != 1 || fallback.calls != 0 {
+		t.Fatalf("ambiguous execution was retried: primary=%d fallback=%d", f.adapter.calls, fallback.calls)
 	}
 }
 

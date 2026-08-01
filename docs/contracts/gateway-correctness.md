@@ -9,6 +9,14 @@ This contract is normative for v1.
 - Provider concurrency, token usage, and cost count once per attempt.
 - Every attempt receives an independent durable budget reservation.
 - Retry/fallback stops when a new reservation cannot be obtained.
+- A failure is ambiguous when the request may have reached the provider but no
+  authoritative result was received (for example, a timeout or connection loss
+  after dispatch). Ambiguous attempts are never retried or sent to a fallback,
+  even if the transport error is otherwise transient. This prevents duplicate
+  generation, side effects, and charges. The attempt is conservatively settled
+  and still contributes to circuit-breaker availability state.
+- Explicitly classified pre-execution failures and safe provider failures may
+  retry or fall back within the configured attempt limits.
 
 ## Delivery boundary
 

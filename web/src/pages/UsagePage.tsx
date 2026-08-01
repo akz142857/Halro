@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { api } from "../api";
 import { ErrorState, Loading, PageHeader, StatusDot } from "../components";
@@ -9,15 +9,16 @@ export function UsagePage() {
   const { t } = useTranslation();
   const [status, setStatus] = useState("");
   const [model, setModel] = useState("");
-  const queryString = new URLSearchParams({
-    limit: "100",
-    ...(status ? { status } : {}),
-    ...(model ? { model } : {}),
-  }).toString();
-  const usage = useQuery({
+  const usage = useInfiniteQuery({
     queryKey: ["usage", status, model],
-    queryFn: () => api.usage(`?${queryString}`),
+    initialPageParam: "",
+    queryFn: ({ pageParam }) => api.usage(`?${new URLSearchParams({
+      limit: "100", ...(status ? { status } : {}), ...(model ? { model } : {}),
+      ...(pageParam ? { cursor: pageParam } : {}),
+    })}`),
+    getNextPageParam: (page) => page.next_cursor || undefined,
   });
+  const attempts = usage.data?.pages.flatMap((page) => page.items) ?? [];
   return (
     <>
       <PageHeader
@@ -35,7 +36,7 @@ export function UsagePage() {
             <option value="error">{t("usage.error")}</option>
           </select>
         </label>
-        <span className="filter-count">{t("usage.records", { count: usage.data?.items.length ?? 0 })}</span>
+        <span className="filter-count">{t("usage.records", { count: attempts.length })}</span>
       </div>
       {usage.isPending && <Loading />}
       {usage.isError && <ErrorState error={usage.error} />}
@@ -44,7 +45,7 @@ export function UsagePage() {
           <table>
             <thead><tr><th>{t("usage.request")}</th><th>{t("usage.model")}</th><th>{t("usage.tokens")}</th><th>{t("usage.cost")}</th><th>{t("usage.latency")}</th><th>{t("usage.status")}</th><th>{t("usage.time")}</th></tr></thead>
             <tbody>
-              {usage.data.items.map((attempt) => (
+              {attempts.map((attempt) => (
                 <tr key={attempt.event_id}>
                   <td><code>{attempt.request_id}</code><small>{t("usage.attempt", { count: attempt.attempt })}</small></td>
                   <td><strong>{attempt.requested_model || "—"}</strong><small>{attempt.provider_model}</small></td>
@@ -57,6 +58,9 @@ export function UsagePage() {
               ))}
             </tbody>
           </table>
+          {usage.hasNextPage && <button className="button ghost load-more" disabled={usage.isFetchingNextPage} onClick={() => usage.fetchNextPage()}>
+            {usage.isFetchingNextPage ? t("common.loading") : t("common.loadMore")}
+          </button>}
         </div>
       )}
     </>

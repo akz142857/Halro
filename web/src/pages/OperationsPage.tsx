@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 import { api } from "../api";
 import {
@@ -18,7 +18,12 @@ import { useTranslation } from "react-i18next";
 export function OperationsPage() {
   const { t } = useTranslation();
   const [editing, setEditing] = useState<AlertWebhook | "new" | null>(null);
-  const audit = useQuery({ queryKey: ["audit"], queryFn: api.audit });
+  const audit = useInfiniteQuery({
+    queryKey: ["audit"], initialPageParam: "",
+    queryFn: ({ pageParam }) => api.audit(`?${new URLSearchParams({ limit: "100", ...(pageParam ? { cursor: pageParam } : {}) })}`),
+    getNextPageParam: (page) => page.next_cursor || undefined,
+  });
+  const auditRecords = audit.data?.pages.flatMap((page) => page.items) ?? [];
   const alerts = useQuery({ queryKey: ["alerts"], queryFn: api.alerts });
   const queryClient = useQueryClient();
   const remove = useMutation({
@@ -82,7 +87,7 @@ export function OperationsPage() {
         {audit.isError && <ErrorState error={audit.error} />}
         {audit.data && (
           <div className="timeline">
-            {audit.data.items.map((record) => (
+            {auditRecords.map((record) => (
               <article key={record.sequence}>
                 <span className="timeline-sequence">#{record.sequence}</span>
                 <span className="timeline-mark" />
@@ -93,6 +98,9 @@ export function OperationsPage() {
                 </div>
               </article>
             ))}
+            {audit.hasNextPage && <button className="button ghost load-more" disabled={audit.isFetchingNextPage} onClick={() => audit.fetchNextPage()}>
+              {audit.isFetchingNextPage ? t("common.loading") : t("common.loadMore")}
+            </button>}
           </div>
         )}
       </section>

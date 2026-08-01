@@ -207,8 +207,28 @@ func (r *Registry) ResolveCandidates(publicModel string) []Target {
 }
 
 func (r *Registry) ResolveCandidatesFor(publicModel string, operation Operation) []Target {
+	r.mu.RLock()
+	targets := r.resolveCandidatesLocked(publicModel, operation)
+	r.mu.RUnlock()
+	if len(targets) < 2 || targets[0].Strategy != "round_robin" {
+		return targets
+	}
+
+	// Round-robin is the only resolution strategy that mutates registry state.
+	// Re-resolve after upgrading the lock so a concurrent reload cannot rotate a
+	// stale candidate snapshot.
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	targets = r.resolveCandidatesLocked(publicModel, operation)
+	if len(targets) < 2 || targets[0].Strategy != "round_robin" {
+		return targets
+	}
+	offset := int(r.next[publicModel] % uint64(len(targets)))
+	r.next[publicModel]++
+	return append(targets[offset:], targets[:offset]...)
+}
+
+func (r *Registry) resolveCandidatesLocked(publicModel string, operation Operation) []Target {
 	targets := slices.Clone(r.targets[publicModel])
 	targets = slices.DeleteFunc(targets, func(target Target) bool {
 		healthy, probed := r.health[target.DeploymentID]
@@ -228,12 +248,7 @@ func (r *Registry) ResolveCandidatesFor(publicModel string, operation Operation)
 			}
 		})
 	}
-	if len(targets) < 2 || targets[0].Strategy != "round_robin" {
-		return targets
-	}
-	offset := int(r.next[publicModel] % uint64(len(targets)))
-	r.next[publicModel]++
-	return append(targets[offset:], targets[:offset]...)
+	return targets
 }
 
 // SetDeploymentHealthy updates active-probe health. Unknown deployments remain

@@ -8,6 +8,7 @@ import { useTranslation } from "react-i18next";
 export default function TrendChart({ buckets }: { buckets: Bucket[] }) {
   const { t } = useTranslation();
   const host = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<uPlot | null>(null);
   useEffect(() => {
     if (!host.current) return;
     const series = buildTrendSeries(buckets);
@@ -31,14 +32,23 @@ export default function TrendChart({ buckets }: { buckets: Bucket[] }) {
       series.data,
       host.current,
     );
+    chartRef.current = chart;
     const resize = new ResizeObserver(([entry]) => {
       chart.setSize({ width: Math.max(entry.contentRect.width, 320), height: 280 });
     });
     resize.observe(host.current);
     return () => {
+      chartRef.current = null;
       resize.disconnect();
       chart.destroy();
     };
-  }, [buckets, t]);
+  }, [t]);
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    const series = buildTrendSeries(buckets);
+    chart.setData(series.data);
+    chart.setScale("x", { min: series.range[0], max: series.range[1] });
+  }, [buckets]);
   return <div className="trend-chart" ref={host} aria-label={t("dashboard.trendAria")} />;
 }

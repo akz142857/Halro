@@ -257,7 +257,7 @@ export const api = {
     ).then((value) => value.data),
   usage: (query = "") =>
     request<Page<UsageAttempt>>(`/usage${query}`).then((value) => value.data),
-  audit: () => request<Page<AuditRecord>>("/audit").then((value) => value.data),
+  audit: (query = "") => request<Page<AuditRecord>>(`/audit${query}`).then((value) => value.data),
   tokenGuardPolicies: () =>
     request<Page<TokenGuardPolicy>>("/token-guard-policies").then((value) => value.data),
   createTokenGuardPolicy: (value: unknown) =>

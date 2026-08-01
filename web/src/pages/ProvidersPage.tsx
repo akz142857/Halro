@@ -14,6 +14,14 @@ import {
 import type { Credential, Provider, ProviderCapabilities, ProviderType } from "../types";
 import { useTranslation } from "react-i18next";
 
+const providerTypes: ProviderType[] = [
+  "openai", "azure_openai", "deepseek", "gemini", "bedrock", "openai_compatible",
+];
+
+function ProviderTypeOptions({ t }: { t: ReturnType<typeof useTranslation>["t"] }) {
+  return providerTypes.map((type) => <option key={type} value={type}>{t(`providers.types.${type}`)}</option>);
+}
+
 function defaultBaseURL(type: ProviderType) {
   if (type === "gemini") return "https://generativelanguage.googleapis.com";
   if (type === "deepseek") return "https://api.deepseek.com";
@@ -213,12 +221,7 @@ function CredentialForm({
             setType(next);
             setBaseURL(defaultBaseURL(next));
           }}>
-            <option value="openai">OpenAI</option>
-            <option value="azure_openai">Azure OpenAI</option>
-            <option value="deepseek">DeepSeek</option>
-            <option value="gemini">Gemini (Beta)</option>
-            <option value="bedrock">AWS Bedrock (Beta)</option>
-            <option value="openai_compatible">OpenAI Compatible</option>
+            <ProviderTypeOptions t={t} />
           </select>
         </Field>
         <Field label={t("providers.boundURL")} hint={t("providers.boundURLHint")}>
@@ -311,12 +314,7 @@ function ProviderForm({
               setCredentialID(credentials.find((credential) => credential.type === next)?.id ?? "");
               setCapabilities(defaultProviderCapabilities(next));
             }}>
-              <option value="openai">OpenAI</option>
-              <option value="azure_openai">Azure OpenAI</option>
-              <option value="deepseek">DeepSeek</option>
-              <option value="gemini">Gemini (Beta)</option>
-              <option value="bedrock">AWS Bedrock (Beta)</option>
-              <option value="openai_compatible">OpenAI Compatible</option>
+              <ProviderTypeOptions t={t} />
             </select>
           </Field>
           <Field label={t("providers.baseURL")}><input value={baseURL} onChange={(event) => setBaseURL(event.target.value)} /></Field>
