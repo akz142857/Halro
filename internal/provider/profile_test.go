@@ -68,6 +68,53 @@ func TestBedrockMantleProfilesUseDistinctPrimitivesOnOneIsolatedSurface(t *testi
 	}
 }
 
+func TestBedrockTitanEmbeddingProfileUsesInvokePrimitiveOnly(t *testing.T) {
+	manifest, ok := BuiltinProfile(domain.ProfileBedrockInvokeTitanEmbedV2)
+	if !ok || manifest.Validate() != nil {
+		t.Fatalf("invalid Titan embedding profile: %#v", manifest)
+	}
+	if manifest.AccessSurface != domain.SurfaceBedrockRuntime || manifest.CredentialScheme != domain.CredentialAWSSigV4Explicit ||
+		len(manifest.Operations) != 1 || manifest.Operations[0] != OperationEmbeddings ||
+		len(manifest.PrimitiveBindings) != 1 || manifest.PrimitiveBindings[0].Primitive != PrimitiveBedrockInvokeTitanEmbedV2 {
+		t.Fatalf("profile axes or primitive are incorrect: %#v", manifest)
+	}
+}
+
+func TestPhase2ProfilesKeepAccessSurfacesAndPrimitivesIsolated(t *testing.T) {
+	cases := []struct {
+		id        domain.ProviderProfileID
+		surface   domain.AccessSurface
+		operation Operation
+		primitive Primitive
+	}{
+		{domain.ProfileOpenAIPhase2, domain.SurfaceOpenAI, OperationFiles, PrimitiveOpenAIFiles},
+		{domain.ProfileBedrockInvokeTitanImageV2, domain.SurfaceBedrockRuntime, OperationImages, PrimitiveBedrockTitanImageV2},
+		{domain.ProfileBedrockAgentRerankCohere35, domain.SurfaceBedrockAgentRuntime, OperationRerank, PrimitiveBedrockAgentRerankCohere35},
+		{domain.ProfileBedrockAsyncNovaReel, domain.SurfaceBedrockRuntime, OperationAsyncInvoke, PrimitiveBedrockAsyncNovaReel},
+	}
+	for _, tc := range cases {
+		manifest, ok := BuiltinProfile(tc.id)
+		if !ok {
+			t.Fatalf("missing profile %s", tc.id)
+		}
+		if err := manifest.Validate(); err != nil {
+			t.Fatalf("profile %s: %v", tc.id, err)
+		}
+		if manifest.AccessSurface != tc.surface {
+			t.Fatalf("profile %s surface=%s", tc.id, manifest.AccessSurface)
+		}
+		found := false
+		for _, binding := range manifest.PrimitiveBindings {
+			if binding.LegacyOperation == tc.operation && binding.Primitive == tc.primitive {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("profile %s missing isolated primitive", tc.id)
+		}
+	}
+}
+
 func TestLegacyAdapterBridgeExposesProfileOperationsAndEvidenceCopies(t *testing.T) {
 	manifest, _ := BuiltinProfile(domain.ProfileOpenAIChatEmbeddings)
 	evidence := domain.EvidenceForCapabilities(domain.DefaultProviderCapabilities(domain.ProviderOpenAI), domain.EvidenceLegacy)

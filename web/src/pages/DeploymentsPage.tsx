@@ -154,6 +154,8 @@ function DeploymentForm({
   const [capabilities, setCapabilities] = useState<ProviderCapabilities>(current?.capabilities ?? initialProvider?.capabilities ?? emptyCapabilities());
   const [inputPrice, setInputPrice] = useState((current?.input_micros_per_million ?? 0) / 1_000_000);
   const [outputPrice, setOutputPrice] = useState((current?.output_micros_per_million ?? 0) / 1_000_000);
+  const [fixedRequestPrice, setFixedRequestPrice] = useState((current?.fixed_request_micros_usd ?? 0) / 1_000_000);
+  const [region, setRegion] = useState(current?.region ?? "");
   const [maxConcurrency, setMaxConcurrency] = useState(current?.max_concurrency ?? 0);
   const [priority, setPriority] = useState(current?.priority ?? 10);
   const [weight, setWeight] = useState(current?.weight ?? 1);
@@ -166,6 +168,8 @@ function DeploymentForm({
     capabilities,
     input_micros_per_million: Math.round(inputPrice * 1_000_000),
     output_micros_per_million: Math.round(outputPrice * 1_000_000),
+    fixed_request_micros_usd: Math.round(fixedRequestPrice * 1_000_000),
+    region: region.trim(),
     max_concurrency: maxConcurrency,
     priority,
     weight,
@@ -202,9 +206,10 @@ function DeploymentForm({
             </select>
           </Field>
           <Field label={t("deployments.upstreamModel")}><input required value={providerModel} onChange={(event) => setProviderModel(event.target.value)} /></Field>
+          <Field label={t("deployments.region")} hint={t("deployments.regionHint")}><input value={region} onChange={(event) => setRegion(event.target.value)} /></Field>
           <fieldset className="form-grid">
             <legend>{t("deployments.capabilitySubset")}</legend>
-            {(["chat", "streaming", "embeddings", "tools", "vision", "json_mode", "developer_role", "reasoning", "stream_usage"] as const).map((name) => (
+            {(["chat", "streaming", "embeddings", "moderations", "images", "transcriptions", "speech", "files", "batches", "rerank", "async_generate", "tools", "vision", "json_mode", "developer_role", "reasoning", "stream_usage"] as const).map((name) => (
               <label className="check-row" key={name}>
                 <input
                   type="checkbox"
@@ -224,6 +229,7 @@ function DeploymentForm({
           <Field label={t("deployments.concurrencyLimit")} hint={t("deployments.concurrencyHint")}><input min="0" type="number" value={maxConcurrency} onChange={(event) => setMaxConcurrency(Number(event.target.value))} /></Field>
           <Field label={t("deployments.inputUSD")}><input min="0" type="number" step="0.000001" value={inputPrice} onChange={(event) => setInputPrice(Number(event.target.value))} /></Field>
           <Field label={t("deployments.outputUSD")}><input min="0" type="number" step="0.000001" value={outputPrice} onChange={(event) => setOutputPrice(Number(event.target.value))} /></Field>
+          <Field label={t("deployments.fixedRequestUSD")} hint={t("deployments.fixedRequestHint")}><input min="0" type="number" step="0.000001" value={fixedRequestPrice} onChange={(event) => setFixedRequestPrice(Number(event.target.value))} /></Field>
           <Field label={t("deployments.priority")}><input type="number" value={priority} onChange={(event) => setPriority(Number(event.target.value))} /></Field>
           <Field label={t("deployments.weight")}><input min="1" type="number" value={weight} onChange={(event) => setWeight(Number(event.target.value))} /></Field>
           <label className="check-row"><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />{t("deployments.enable")}</label>
@@ -243,6 +249,14 @@ function emptyCapabilities(): ProviderCapabilities {
     chat: true,
     streaming: true,
     embeddings: false,
+    moderations: false,
+    images: false,
+    transcriptions: false,
+    speech: false,
+    files: false,
+    batches: false,
+    rerank: false,
+    async_generate: false,
     tools: false,
     vision: false,
     json_mode: false,

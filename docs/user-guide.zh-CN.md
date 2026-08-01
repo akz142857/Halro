@@ -248,6 +248,11 @@ curl http://127.0.0.1:8080/v1/embeddings \
 
 通常应为 Chat 与 Embedding 创建不同 Deployment 和公开 Route。
 
+Bedrock Runtime 的 `bedrock.runtime.invoke.titan-embed-text-v2.v1` Profile 固定使用
+`amazon.titan-embed-text-v2:0`，当前只接受单个字符串、Float 输出和 256/512/1024 维。
+数组、Token 数组、`base64`、`user` 与其他维度会在访问 AWS 前拒绝；需要批量时请由客户端逐条
+调用并自行控制并发，不要假设 Heimdall 会做隐藏 Fan-out。
+
 ### 4.5 Python OpenAI SDK
 
 ```python
@@ -379,7 +384,19 @@ unset HEIMDALL_METRICS_TOKEN
   --key-id key_...
 ```
 
-## 10. 备份与恢复
+## 10. Phase 2 媒体与资源接口
+
+管理端可为 OpenAI 选择独立的“媒体与资源”Profile，并为 Bedrock 分别选择 Titan Image、
+Cohere Rerank 或 Nova Reel Async Profile。不要把多个协议能力合并到同一个 Provider。
+Files、Batches 与 Async 创建请求必须携带 `Idempotency-Key`；上传文件还必须携带
+`Heimdall-Route`。资源 ID 只在创建它的 Project 内可见，查询和删除始终回到原 Provider、
+Deployment、Profile 与 Region。Bedrock 异步任务当前不能取消；接口会明确返回
+`provider_cancel_unsupported`，而不是显示虚假的成功状态。
+
+部署页的“每请求固定 USD”用于媒体、重排和资源操作；请按上游价格配置，否则预算统计只会
+保留最小保守占位。文件内容保存在数据目录的私有对象目录，并随删除或 TTL 回收清理。
+
+## 11. 备份与恢复
 
 离线创建加密备份：
 
@@ -408,7 +425,7 @@ openssl rand 32 > backup.key
 
 恢复前必须停止服务，并严格按照 [Backup and restore](backup-restore.md) 操作。
 
-## 11. 诊断和常见问题
+## 12. 诊断和常见问题
 
 服务停止后执行只读诊断：
 
@@ -430,7 +447,7 @@ openssl rand 32 > backup.key
 | 数据目录 locked | 另一个 Heimdall 或离线命令正在持有数据目录；不要手工删除锁文件绕过 |
 | Readiness 失败 | 先检查 Accounting、WAL append error、磁盘空间和 Usage lag |
 
-## 12. 安全注意事项
+## 13. 安全注意事项
 
 - 示例配置仅监听 `127.0.0.1`；公网监听必须配置 TLS 和经过审核的反向代理边界；
 - Admin 和 Metrics 不允许通过公网明文暴露；

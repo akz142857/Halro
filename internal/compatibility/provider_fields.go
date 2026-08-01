@@ -1,6 +1,8 @@
 package compatibility
 
 import (
+	"encoding/json"
+
 	"github.com/akz142857/Heimdall/internal/domain"
 	"github.com/akz142857/Heimdall/internal/semantic"
 )
@@ -113,6 +115,22 @@ func UnsupportedEmbeddingFields(profileID domain.ProviderProfileID, request sema
 		var unsupported []string
 		if request.Encoding != "" && request.Encoding != "float" {
 			unsupported = append(unsupported, "encoding_format")
+		}
+		if request.EndUserRef != "" {
+			unsupported = append(unsupported, "user")
+		}
+		return unsupported
+	case domain.ProfileBedrockInvokeTitanEmbedV2:
+		var unsupported []string
+		var input string
+		if json.Unmarshal(request.Input, &input) != nil {
+			unsupported = append(unsupported, "input")
+		}
+		if request.Encoding != "" && request.Encoding != "float" {
+			unsupported = append(unsupported, "encoding_format")
+		}
+		if request.Dimensions != nil && *request.Dimensions != 256 && *request.Dimensions != 512 && *request.Dimensions != 1024 {
+			unsupported = append(unsupported, "dimensions")
 		}
 		if request.EndUserRef != "" {
 			unsupported = append(unsupported, "user")

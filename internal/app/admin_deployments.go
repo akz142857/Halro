@@ -3,12 +3,14 @@ package app
 import (
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/akz142857/Heimdall/internal/domain"
 	"github.com/akz142857/Heimdall/internal/id"
 	"github.com/akz142857/Heimdall/internal/provider"
+	bedrockprovider "github.com/akz142857/Heimdall/internal/provider/bedrock"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -18,9 +20,11 @@ type deploymentInput struct {
 	ProviderModel          string                       `json:"provider_model"`
 	AccessSurface          domain.AccessSurface         `json:"access_surface,omitempty"`
 	ProfileID              domain.ProviderProfileID     `json:"profile_id,omitempty"`
+	Region                 string                       `json:"region"`
 	Capabilities           *domain.ProviderCapabilities `json:"capabilities,omitempty"`
 	InputMicrosPerMillion  int64                        `json:"input_micros_per_million"`
 	OutputMicrosPerMillion int64                        `json:"output_micros_per_million"`
+	FixedRequestMicrosUSD  int64                        `json:"fixed_request_micros_usd"`
 	MaxConcurrency         int64                        `json:"max_concurrency"`
 	Priority               int                          `json:"priority"`
 	Weight                 int                          `json:"weight"`
@@ -200,6 +204,9 @@ func (r *Runtime) deploymentFromInput(request *http.Request, deploymentID string
 		input.ProfileID != "" && input.ProfileID != instance.ProfileID {
 		return domain.Deployment{}, errors.New("deployment access surface or profile does not match provider")
 	}
+	if err := bedrockprovider.ValidateProfileModel(instance.ProfileID, input.ProviderModel); err != nil {
+		return domain.Deployment{}, err
+	}
 	evidence := deploymentCapabilityEvidence(capabilities, instance.CapabilityEvidence, currentEvidence)
 	for name, value := range evidence {
 		if !capabilitiesEnabledByName(capabilities, name) && value != domain.EvidenceUnsupported {
@@ -213,13 +220,24 @@ func (r *Runtime) deploymentFromInput(request *http.Request, deploymentID string
 	if weight == 0 {
 		weight = 1
 	}
+	region := strings.TrimSpace(input.Region)
+	if region == "" && strings.HasPrefix(string(instance.AccessSurface), "bedrock-") {
+		if parsed, parseErr := url.Parse(instance.BaseURL); parseErr == nil {
+			parts := strings.Split(parsed.Hostname(), ".")
+			if len(parts) > 1 {
+				region = parts[1]
+			}
+		}
+	}
 	deployment := domain.Deployment{
 		ID: deploymentID, Name: strings.TrimSpace(input.Name), ProviderID: input.ProviderID,
 		ProviderModel: strings.TrimSpace(input.ProviderModel), Capabilities: capabilities,
 		AccessSurface: instance.AccessSurface, ProfileID: instance.ProfileID,
+		Region:                 region,
 		CapabilityEvidence:     evidence,
 		InputMicrosPerMillion:  input.InputMicrosPerMillion,
 		OutputMicrosPerMillion: input.OutputMicrosPerMillion,
+		FixedRequestMicrosUSD:  input.FixedRequestMicrosUSD,
 		MaxConcurrency:         input.MaxConcurrency, Priority: input.Priority, Weight: weight,
 		Enabled: input.Enabled, CreatedAt: createdAt, UpdatedAt: updatedAt,
 	}
@@ -265,6 +283,22 @@ func capabilitiesEnabledByName(value domain.ProviderCapabilities, name string) b
 		return value.Reasoning
 	case "stream_usage":
 		return value.StreamUsage
+	case "moderations":
+		return value.Moderations
+	case "images":
+		return value.Images
+	case "transcriptions":
+		return value.Transcriptions
+	case "speech":
+		return value.Speech
+	case "files":
+		return value.Files
+	case "batches":
+		return value.Batches
+	case "rerank":
+		return value.Rerank
+	case "async_generate":
+		return value.AsyncGenerate
 	default:
 		return false
 	}
@@ -293,6 +327,14 @@ func capabilitySubset(candidate, available domain.ProviderCapabilities) bool {
 		(!candidate.DeveloperRole || available.DeveloperRole) &&
 		(!candidate.Reasoning || available.Reasoning) &&
 		(!candidate.StreamUsage || available.StreamUsage) &&
+		(!candidate.Moderations || available.Moderations) &&
+		(!candidate.Images || available.Images) &&
+		(!candidate.Transcriptions || available.Transcriptions) &&
+		(!candidate.Speech || available.Speech) &&
+		(!candidate.Files || available.Files) &&
+		(!candidate.Batches || available.Batches) &&
+		(!candidate.Rerank || available.Rerank) &&
+		(!candidate.AsyncGenerate || available.AsyncGenerate) &&
 		capabilityLimitSubset(candidate.MaxContextTokens, available.MaxContextTokens) &&
 		capabilityLimitSubset(candidate.MaxOutputTokens, available.MaxOutputTokens)
 }

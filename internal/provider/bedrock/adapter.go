@@ -27,12 +27,14 @@ type Options struct {
 	Client         *http.Client
 	Now            func() time.Time
 	Authorizer     provider.Authorizer
+	ProfileID      domain.ProviderProfileID
 }
 
 type Adapter struct {
 	endpoint   *url.URL
 	client     *http.Client
 	authorizer provider.Authorizer
+	profileID  domain.ProviderProfileID
 }
 
 type textBlock struct {
@@ -97,8 +99,16 @@ func New(options Options) (*Adapter, error) {
 		authorizer.Close()
 		return nil, errors.New("credential scheme does not match Bedrock profile")
 	}
+	profileID := options.ProfileID
+	if profileID == "" {
+		profileID = domain.ProfileBedrockConverseText
+	}
+	if profileID != domain.ProfileBedrockConverseText && profileID != domain.ProfileBedrockInvokeTitanEmbedV2 && profileID != domain.ProfileBedrockInvokeTitanImageV2 && profileID != domain.ProfileBedrockAsyncNovaReel && profileID != domain.ProfileBedrockAgentRerankCohere35 {
+		authorizer.Close()
+		return nil, errors.New("Bedrock Runtime profile is not implemented")
+	}
 	endpoint := *options.Endpoint
-	return &Adapter{endpoint: &endpoint, client: options.Client, authorizer: authorizer}, nil
+	return &Adapter{endpoint: &endpoint, client: options.Client, authorizer: authorizer, profileID: profileID}, nil
 }
 
 func NewAuthorizer(endpoint *url.URL, credentialJSON []byte, now func() time.Time) (provider.Authorizer, error) {
@@ -145,7 +155,9 @@ func NewAuthorizer(endpoint *url.URL, credentialJSON []byte, now func() time.Tim
 	if err != nil {
 		return nil, err
 	}
-	if !validBedrockRuntimeHost(endpoint.Hostname(), signed.region) {
+	if validBedrockAgentRuntimeHost(endpoint.Hostname(), signed.region) {
+		signed.service = "bedrock-agent-runtime"
+	} else if !validBedrockRuntimeHost(endpoint.Hostname(), signed.region) {
 		signed.Close()
 		return nil, errors.New("AWS endpoint host is not an approved Bedrock Runtime endpoint for the credential region")
 	}
@@ -154,6 +166,17 @@ func NewAuthorizer(endpoint *url.URL, credentialJSON []byte, now func() time.Tim
 		signed.now = now
 	}
 	return signed, nil
+}
+
+func validBedrockAgentRuntimeHost(host, region string) bool {
+	host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+	region = strings.ToLower(region)
+	for _, allowed := range []string{"bedrock-agent-runtime." + region + ".amazonaws.com", "bedrock-agent-runtime." + region + ".amazonaws.com.cn", "bedrock-agent-runtime." + region + ".api.aws"} {
+		if host == allowed {
+			return true
+		}
+	}
+	return false
 }
 
 func decodeCredentialBytes(raw json.RawMessage, optional bool) ([]byte, error) {
@@ -199,6 +222,18 @@ func validBedrockRuntimeHost(host, region string) bool {
 func (a *Adapter) Type() string { return "bedrock" }
 
 func (a *Adapter) Capabilities() provider.Capabilities {
+	if a.profileID == domain.ProfileBedrockInvokeTitanEmbedV2 {
+		return provider.Capabilities{Embeddings: true, MaxContextTokens: titanEmbedV2MaxTokens}
+	}
+	if a.profileID == domain.ProfileBedrockInvokeTitanImageV2 {
+		return provider.Capabilities{Images: true}
+	}
+	if a.profileID == domain.ProfileBedrockAgentRerankCohere35 {
+		return provider.Capabilities{Rerank: true}
+	}
+	if a.profileID == domain.ProfileBedrockAsyncNovaReel {
+		return provider.Capabilities{AsyncGenerate: true}
+	}
 	return provider.Capabilities{Chat: true, Streaming: true, StreamUsage: true}
 }
 
@@ -208,7 +243,25 @@ func (a *Adapter) Close() {
 }
 
 func (a *Adapter) Probe(ctx context.Context, model string) error {
-	endpoint, err := a.operationURL(model, "converse")
+	if err := ValidateProfileModel(a.profileID, model); err != nil {
+		return badRequest(err.Error(), nil)
+	}
+	operation := "converse"
+	if a.profileID == domain.ProfileBedrockInvokeTitanEmbedV2 || a.profileID == domain.ProfileBedrockInvokeTitanImageV2 {
+		operation = "invoke"
+	}
+	var endpoint url.URL
+	var err error
+	if a.profileID == domain.ProfileBedrockAsyncNovaReel || a.profileID == domain.ProfileBedrockAgentRerankCohere35 {
+		endpoint = *a.endpoint
+		if a.profileID == domain.ProfileBedrockAsyncNovaReel {
+			endpoint.Path = strings.TrimRight(endpoint.Path, "/") + "/async-invoke"
+		} else {
+			endpoint.Path = strings.TrimRight(endpoint.Path, "/") + "/rerank"
+		}
+	} else {
+		endpoint, err = a.operationURL(model, operation)
+	}
 	if err != nil {
 		return err
 	}
@@ -232,6 +285,9 @@ func (a *Adapter) Probe(ctx context.Context, model string) error {
 }
 
 func (a *Adapter) Chat(ctx context.Context, call provider.ChatCall) (openaiapi.ChatCompletionResponse, error) {
+	if a.profileID != domain.ProfileBedrockConverseText {
+		return openaiapi.ChatCompletionResponse{}, badRequest("Bedrock Invoke embeddings profile does not declare chat", nil)
+	}
 	payload, err := translateRequest(call.Request)
 	if err != nil {
 		return openaiapi.ChatCompletionResponse{}, err
@@ -264,6 +320,9 @@ func (a *Adapter) Chat(ctx context.Context, call provider.ChatCall) (openaiapi.C
 }
 
 func (a *Adapter) ChatStream(ctx context.Context, call provider.ChatCall, emit func(semantic.Event) error) (*openaiapi.Usage, error) {
+	if a.profileID != domain.ProfileBedrockConverseText {
+		return nil, badRequest("Bedrock Invoke embeddings profile does not declare streaming chat", nil)
+	}
 	if emit == nil {
 		return nil, badRequest("stream callback is required", nil)
 	}
@@ -352,8 +411,11 @@ func (a *Adapter) ChatStream(ctx context.Context, call provider.ChatCall, emit f
 	}
 }
 
-func (a *Adapter) Embed(context.Context, provider.EmbeddingCall) (openaiapi.EmbeddingResponse, error) {
-	return openaiapi.EmbeddingResponse{}, badRequest("Bedrock Beta Converse profile does not declare embeddings", nil)
+func (a *Adapter) Embed(ctx context.Context, call provider.EmbeddingCall) (openaiapi.EmbeddingResponse, error) {
+	if a.profileID != domain.ProfileBedrockInvokeTitanEmbedV2 {
+		return openaiapi.EmbeddingResponse{}, badRequest("Bedrock Converse profile does not declare embeddings", nil)
+	}
+	return a.embedTitanV2(ctx, call)
 }
 
 func translateRequest(request openaiapi.ChatCompletionRequest) (converseRequest, error) {
@@ -522,6 +584,9 @@ func (a *Adapter) postJSON(ctx context.Context, model, operation, requestID stri
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return "", classifyHTTP(response)
+	}
+	if !strings.HasPrefix(strings.ToLower(response.Header.Get("Content-Type")), "application/json") {
+		return "", malformed("Bedrock did not return JSON", nil)
 	}
 	payload, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
 	if err != nil || len(payload) > maxResponseBytes {

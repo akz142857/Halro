@@ -175,7 +175,7 @@ export const enUS = {
     trendAria: "Request and token trend for the last seven days",
   },
   capabilities: {
-    chat: "Chat", streaming: "Streaming", embeddings: "Embeddings", tools: "Tools", vision: "Vision", json_mode: "JSON mode", developer_role: "Developer role", reasoning: "Reasoning", stream_usage: "Stream usage",
+    chat: "Chat", streaming: "Streaming", embeddings: "Embeddings", moderations: "Moderations", images: "Images", transcriptions: "Transcriptions", speech: "Speech", files: "Files", batches: "Batches", rerank: "Rerank", async_generate: "Async generation", tools: "Tools", vision: "Vision", json_mode: "JSON mode", developer_role: "Developer role", reasoning: "Reasoning", stream_usage: "Stream usage",
   },
   usage: {
     eyebrow: "Durable accounting", title: "Usage", description: "Tokens, cost, latency, and terminal state for every provider attempt. Filters never execute arbitrary SQL.",
@@ -200,7 +200,7 @@ export const enUS = {
     edit: "Edit deployment", createTitle: "Create deployment", providerRequired: "An enabled provider is required", providerRequiredDescription: "Create and enable an upstream connection on the Providers page first.",
     name: "Deployment name", provider: "Provider", upstreamModel: "Upstream model name", capabilitySubset: "Model capabilities (must be a subset of provider capabilities)",
     maxContext: "Maximum context tokens", maxContextHint: "0 uses an undeclared provider limit", maxOutputTokens: "Maximum output tokens", maxOutputHint: "Cannot exceed the context or provider limit",
-    concurrencyLimit: "Concurrency limit", concurrencyHint: "0 disables deployment-level limiting", inputUSD: "Input USD / 1M tokens", outputUSD: "Output USD / 1M tokens",
+    concurrencyLimit: "Concurrency limit", concurrencyHint: "0 disables deployment-level limiting", inputUSD: "Input USD / 1M tokens", outputUSD: "Output USD / 1M tokens", fixedRequestUSD: "Fixed USD / request", fixedRequestHint: "Used for media, rerank, file, batch, and async operations", region: "Region", regionHint: "Required for regional Bedrock profiles; normally derived from the provider endpoint",
     priority: "Default priority", weight: "Weight", enable: "Enable deployment", save: "Save and hot-reload", createAndLoad: "Create and hot-reload",
   },
   routes: {
@@ -239,7 +239,8 @@ export const enUS = {
     bedrockSurface: "Bedrock access surface", bedrockSurfaceHint: "Runtime and Mantle use separate endpoints, credential schemes, quotas, and provider instances.", bedrockRuntime: "Bedrock Runtime · Converse", bedrockMantle: "Bedrock Mantle · OpenAI / Anthropic APIs",
     bedrockHint: "Fields: access_key_id, secret_access_key, region; session_token is optional. Region must match the base URL.", bedrockMantleHint: "Paste a Bedrock API key. Heimdall binds it to the exact regional Mantle endpoint and never stores it in the browser.", secretHint: "Sent only in an HTTPS request body and never stored in browser storage",
     bedrockProfileHint: "Each provider instance selects one wire protocol. Create separate instances to expose multiple Mantle protocols.",
-    bedrockProfiles: { "bedrock.runtime.converse.text.v1": "Runtime · Converse text", "bedrock.mantle.openai.chat.v1": "Mantle · OpenAI Chat Completions", "bedrock.mantle.openai.responses.v1": "Mantle · OpenAI Responses (stateless)", "bedrock.mantle.anthropic.messages.v1": "Mantle · Anthropic Messages" },
+    openAIProfiles: { chat: "Chat Completions", media: "Media and resources" },
+    bedrockProfiles: { "bedrock.runtime.converse.text.v1": "Runtime · Converse text", "bedrock.runtime.invoke.titan-embed-text-v2.v1": "Runtime · Titan Text Embeddings V2", "bedrock.runtime.invoke.titan-image-v2.v1": "Runtime · Titan Image Generator V2", "bedrock.agent-runtime.rerank.cohere-v3-5.v1": "Agent Runtime · Cohere Rerank 3.5", "bedrock.runtime.async.nova-reel-v1.v1": "Runtime · Nova Reel async", "bedrock.mantle.openai.chat.v1": "Mantle · OpenAI Chat Completions", "bedrock.mantle.openai.responses.v1": "Mantle · OpenAI Responses (stateless)", "bedrock.mantle.anthropic.messages.v1": "Mantle · Anthropic Messages" },
     rotateSecurely: "Rotate securely", saveEncrypted: "Save encrypted", editProvider: "Edit provider", createProvider: "Create provider", credentialRequired: "Create a credential first",
     credentialRequiredDescription: "Close this dialog and use “＋ Credential” to save an audience-bound secret.", providerName: "Provider name", type: "Type", baseURL: "Base URL", apiVersion: "API version", apiVersionHint: "Pin the Azure data-plane API version explicitly; an administrator changes it during upgrades",
     maxConcurrency: "Provider maximum concurrency", maxConcurrencyHint: "0 means unlimited; protects the upstream account and deployments", capabilityLimit: "Provider capability limits",

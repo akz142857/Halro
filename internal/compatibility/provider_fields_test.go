@@ -1,6 +1,7 @@
 package compatibility
 
 import (
+	"encoding/json"
 	"slices"
 	"testing"
 
@@ -88,6 +89,29 @@ func TestGeminiEmbeddingFieldCompatibility(t *testing.T) {
 	fields := UnsupportedEmbeddingFields(domain.ProfileGeminiText, request)
 	if len(fields) != 2 || fields[0] != "encoding_format" || fields[1] != "user" {
 		t.Fatalf("unexpected unsupported fields: %v", fields)
+	}
+}
+
+func TestTitanEmbeddingProfileRejectsPartialOpenAISemantics(t *testing.T) {
+	dimensions := int64(128)
+	request := semantic.EmbeddingRequest{
+		Operation: semantic.OperationEmbed, Source: semantic.Source{ProfileID: "openai.embeddings.v1", ProfileRevision: 1},
+		Mode: semantic.ModePortable, RequestedModel: "embedding", Input: json.RawMessage(`["one","two"]`),
+		Encoding: "base64", Dimensions: &dimensions, EndUserRef: "tenant",
+	}
+	request.Requirements = request.DeriveRequirements()
+	fields := UnsupportedEmbeddingFields(domain.ProfileBedrockInvokeTitanEmbedV2, request)
+	if !slices.Equal(fields, []string{"input", "encoding_format", "dimensions", "user"}) {
+		t.Fatalf("fields=%v", fields)
+	}
+	validDimensions := int64(512)
+	request.Input = json.RawMessage(`"one"`)
+	request.Encoding = "float"
+	request.Dimensions = &validDimensions
+	request.EndUserRef = ""
+	request.Requirements = request.DeriveRequirements()
+	if fields := UnsupportedEmbeddingFields(domain.ProfileBedrockInvokeTitanEmbedV2, request); len(fields) != 0 {
+		t.Fatalf("valid request rejected: %v", fields)
 	}
 }
 

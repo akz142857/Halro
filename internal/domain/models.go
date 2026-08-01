@@ -19,6 +19,52 @@ const (
 	ProviderGemini           ProviderType = "gemini"
 )
 
+type ProviderResourceKind string
+
+const (
+	ResourceFile        ProviderResourceKind = "file"
+	ResourceBatch       ProviderResourceKind = "batch"
+	ResourceAsyncInvoke ProviderResourceKind = "async_invoke"
+)
+
+type ProviderResource struct {
+	ID                 string               `json:"id"`
+	Kind               ProviderResourceKind `json:"kind"`
+	ProjectID          string               `json:"project_id"`
+	ProviderID         string               `json:"provider_id"`
+	DeploymentID       string               `json:"deployment_id"`
+	PublicModel        string               `json:"public_model"`
+	ProfileID          ProviderProfileID    `json:"profile_id"`
+	Region             string               `json:"region"`
+	UpstreamID         string               `json:"upstream_id"`
+	IdempotencyKeyHash [32]byte             `json:"idempotency_key_hash"`
+	RequestFingerprint [32]byte             `json:"request_fingerprint"`
+	CreationStatus     string               `json:"creation_status"`
+	Status             string               `json:"status"`
+	ObjectPath         string               `json:"object_path,omitempty"`
+	ObjectContentType  string               `json:"object_content_type,omitempty"`
+	CreatedAt          time.Time            `json:"created_at"`
+	UpdatedAt          time.Time            `json:"updated_at"`
+	ExpiresAt          time.Time            `json:"expires_at"`
+	Revision           uint64               `json:"revision"`
+}
+
+func (r *ProviderResource) GetRevision() uint64  { return r.Revision }
+func (r *ProviderResource) SetRevision(v uint64) { r.Revision = v }
+func (r ProviderResource) Validate() error {
+	var problems []error
+	if r.ID == "" || r.ProjectID == "" || r.ProviderID == "" || r.DeploymentID == "" || r.ProfileID == "" || r.PublicModel == "" {
+		problems = append(problems, errors.New("resource identity and owner are required"))
+	}
+	if r.Kind != ResourceFile && r.Kind != ResourceBatch && r.Kind != ResourceAsyncInvoke {
+		problems = append(problems, errors.New("resource kind is invalid"))
+	}
+	if r.CreationStatus == "" || r.Status == "" || r.CreatedAt.IsZero() || r.UpdatedAt.IsZero() || r.ExpiresAt.IsZero() || !r.ExpiresAt.After(r.CreatedAt) {
+		problems = append(problems, errors.New("resource lifecycle is invalid"))
+	}
+	return errors.Join(problems...)
+}
+
 type Credential struct {
 	ID            string           `json:"id"`
 	Name          string           `json:"name"`
@@ -152,6 +198,14 @@ type ProviderCapabilities struct {
 	Chat             bool  `json:"chat"`
 	Streaming        bool  `json:"streaming"`
 	Embeddings       bool  `json:"embeddings"`
+	Moderations      bool  `json:"moderations"`
+	Images           bool  `json:"images"`
+	Transcriptions   bool  `json:"transcriptions"`
+	Speech           bool  `json:"speech"`
+	Files            bool  `json:"files"`
+	Batches          bool  `json:"batches"`
+	Rerank           bool  `json:"rerank"`
+	AsyncGenerate    bool  `json:"async_generate"`
 	Tools            bool  `json:"tools"`
 	Vision           bool  `json:"vision"`
 	JSONMode         bool  `json:"json_mode"`
@@ -194,8 +248,8 @@ func (p ProviderInstance) Validate() error {
 		problems = append(problems, errors.New("provider allowed hosts must not be empty"))
 	}
 	capabilities := p.Capabilities
-	if !capabilities.Chat && !capabilities.Embeddings {
-		problems = append(problems, errors.New("provider must declare chat or embeddings capability"))
+	if !capabilities.AnyOperation() {
+		problems = append(problems, errors.New("provider must declare at least one operation capability"))
 	}
 	if capabilities.Streaming && !capabilities.Chat {
 		problems = append(problems, errors.New("streaming capability requires chat capability"))
@@ -245,6 +299,16 @@ func DefaultProviderCapabilities(providerType ProviderType) ProviderCapabilities
 
 func DefaultProviderCapabilitiesForProfile(providerType ProviderType, profileID ProviderProfileID) ProviderCapabilities {
 	switch profileID {
+	case ProfileOpenAIPhase2:
+		return ProviderCapabilities{Moderations: true, Images: true, Transcriptions: true, Speech: true, Files: true, Batches: true}
+	case ProfileBedrockInvokeTitanEmbedV2:
+		return ProviderCapabilities{Embeddings: true, MaxContextTokens: 8192}
+	case ProfileBedrockInvokeTitanImageV2:
+		return ProviderCapabilities{Images: true}
+	case ProfileBedrockAgentRerankCohere35:
+		return ProviderCapabilities{Rerank: true}
+	case ProfileBedrockAsyncNovaReel:
+		return ProviderCapabilities{AsyncGenerate: true}
 	case ProfileBedrockMantleOpenAIChat:
 		return ProviderCapabilities{Chat: true, Streaming: true, Tools: true, Vision: true, JSONMode: true, DeveloperRole: true, Reasoning: true, StreamUsage: true}
 	case ProfileBedrockMantleOpenAIResponses:
@@ -269,10 +333,12 @@ type Deployment struct {
 	ProviderModel          string                `json:"provider_model"`
 	AccessSurface          AccessSurface         `json:"access_surface"`
 	ProfileID              ProviderProfileID     `json:"profile_id"`
+	Region                 string                `json:"region"`
 	Capabilities           ProviderCapabilities  `json:"capabilities"`
 	CapabilityEvidence     CapabilityEvidenceSet `json:"capability_evidence"`
 	InputMicrosPerMillion  int64                 `json:"input_micros_per_million"`
 	OutputMicrosPerMillion int64                 `json:"output_micros_per_million"`
+	FixedRequestMicrosUSD  int64                 `json:"fixed_request_micros_usd"`
 	MaxConcurrency         int64                 `json:"max_concurrency"`
 	Priority               int                   `json:"priority"`
 	Weight                 int                   `json:"weight"`
@@ -303,10 +369,13 @@ func (d Deployment) Validate() error {
 	if strings.TrimSpace(string(d.AccessSurface)) == "" || strings.TrimSpace(string(d.ProfileID)) == "" {
 		problems = append(problems, errors.New("deployment access surface and profile are required"))
 	}
-	if !d.Capabilities.Chat && !d.Capabilities.Embeddings {
-		problems = append(problems, errors.New("deployment must declare chat or embeddings capability"))
+	if isRegionalProfile(d.ProfileID) && strings.TrimSpace(d.Region) == "" {
+		problems = append(problems, errors.New("regional deployment requires region"))
 	}
-	if d.InputMicrosPerMillion < 0 || d.OutputMicrosPerMillion < 0 {
+	if !d.Capabilities.AnyOperation() {
+		problems = append(problems, errors.New("deployment must declare at least one operation capability"))
+	}
+	if d.InputMicrosPerMillion < 0 || d.OutputMicrosPerMillion < 0 || d.FixedRequestMicrosUSD < 0 {
 		problems = append(problems, errors.New("deployment prices cannot be negative"))
 	}
 	if d.MaxConcurrency < 0 {
@@ -326,6 +395,14 @@ func (d Deployment) Validate() error {
 		problems = append(problems, errors.New("deployment weight cannot be negative"))
 	}
 	return errors.Join(problems...)
+}
+
+func (c ProviderCapabilities) AnyOperation() bool {
+	return c.Chat || c.Embeddings || c.Moderations || c.Images || c.Transcriptions || c.Speech || c.Files || c.Batches || c.Rerank || c.AsyncGenerate
+}
+
+func isRegionalProfile(id ProviderProfileID) bool {
+	return id == ProfileBedrockConverseText || id == ProfileBedrockInvokeTitanEmbedV2 || id == ProfileBedrockInvokeTitanImageV2 || id == ProfileBedrockAgentRerankCohere35 || id == ProfileBedrockAsyncNovaReel
 }
 
 type Route struct {

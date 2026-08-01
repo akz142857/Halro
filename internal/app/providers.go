@@ -136,6 +136,7 @@ func loadProviderRegistry(
 		adapterCapabilities := provider.Capabilities{
 			Chat: capabilities.Chat, Streaming: capabilities.Streaming,
 			Embeddings: capabilities.Embeddings, Tools: capabilities.Tools,
+			Moderations: capabilities.Moderations, Images: capabilities.Images, Transcriptions: capabilities.Transcriptions, Speech: capabilities.Speech, Files: capabilities.Files, Batches: capabilities.Batches, Rerank: capabilities.Rerank, AsyncGenerate: capabilities.AsyncGenerate,
 			Vision: capabilities.Vision, JSONMode: capabilities.JSONMode,
 			DeveloperRole: capabilities.DeveloperRole, Reasoning: capabilities.Reasoning,
 			StreamUsage:      capabilities.StreamUsage,
@@ -178,7 +179,12 @@ func loadProviderRegistry(
 			case domain.ProfileBedrockConverseText:
 				authorizer, err = bedrockprovider.NewAuthorizer(endpoint, plaintext, nil)
 				if err == nil {
-					adapter, err = bedrockprovider.New(bedrockprovider.Options{Endpoint: endpoint, Authorizer: authorizer, Client: client})
+					adapter, err = bedrockprovider.New(bedrockprovider.Options{Endpoint: endpoint, Authorizer: authorizer, Client: client, ProfileID: instance.ProfileID})
+				}
+			case domain.ProfileBedrockInvokeTitanEmbedV2, domain.ProfileBedrockInvokeTitanImageV2, domain.ProfileBedrockAsyncNovaReel, domain.ProfileBedrockAgentRerankCohere35:
+				authorizer, err = bedrockprovider.NewAuthorizer(endpoint, plaintext, nil)
+				if err == nil {
+					adapter, err = bedrockprovider.New(bedrockprovider.Options{Endpoint: endpoint, Authorizer: authorizer, Client: client, ProfileID: instance.ProfileID})
 				}
 			case domain.ProfileBedrockMantleOpenAIChat:
 				err = bedrockmantleprovider.ValidateEndpoint(endpoint)
@@ -238,6 +244,7 @@ func loadProviderRegistry(
 		providerModel := route.ProviderModel
 		inputPrice := route.InputMicrosPerMillion
 		outputPrice := route.OutputMicrosPerMillion
+		fixedPrice := int64(0)
 		deploymentID := route.DeploymentID
 		deploymentLimit := int64(0)
 		var capabilities provider.Capabilities
@@ -250,6 +257,7 @@ func loadProviderRegistry(
 			providerModel = deployment.ProviderModel
 			inputPrice = deployment.InputMicrosPerMillion
 			outputPrice = deployment.OutputMicrosPerMillion
+			fixedPrice = deployment.FixedRequestMicrosUSD
 			deploymentLimit = deployment.MaxConcurrency
 			capabilities = deploymentCapabilities(deployment, adapters[providerID])
 		}
@@ -260,6 +268,11 @@ func loadProviderRegistry(
 		if deploymentID == "" {
 			capabilities = adapterCapabilitiesFor(adapter)
 		}
+		if profiled, ok := adapter.(provider.ProfiledAdapter); ok {
+			if err := bedrockprovider.ValidateProfileModel(profiled.Profile().ID, providerModel); err != nil {
+				return fail(fmt.Errorf("route %q provider model: %w", route.ID, err))
+			}
+		}
 		if err := registry.Register(provider.Target{
 			ID:                     route.ID,
 			DeploymentID:           deploymentID,
@@ -268,9 +281,11 @@ func loadProviderRegistry(
 			ProviderModel:          providerModel,
 			AccessSurface:          deploymentByID[deploymentID].AccessSurface,
 			ProfileID:              deploymentByID[deploymentID].ProfileID,
+			Region:                 deploymentByID[deploymentID].Region,
 			Adapter:                adapter,
 			InputMicrosPerMillion:  inputPrice,
 			OutputMicrosPerMillion: outputPrice,
+			FixedRequestMicrosUSD:  fixedPrice,
 			Priority:               route.Priority,
 			Strategy:               route.Strategy,
 			Capabilities:           capabilities,
@@ -287,13 +302,14 @@ func loadProviderRegistry(
 func deploymentCapabilities(deployment domain.Deployment, adapter provider.Adapter) provider.Capabilities {
 	available := adapterCapabilitiesFor(adapter)
 	declared := deployment.Capabilities
-	if !declared.Chat && !declared.Embeddings {
+	if !declared.AnyOperation() {
 		return available
 	}
 	return provider.Capabilities{
-		Chat:             available.Chat && declared.Chat,
-		Streaming:        available.Streaming && declared.Streaming,
-		Embeddings:       available.Embeddings && declared.Embeddings,
+		Chat:        available.Chat && declared.Chat,
+		Streaming:   available.Streaming && declared.Streaming,
+		Embeddings:  available.Embeddings && declared.Embeddings,
+		Moderations: available.Moderations && declared.Moderations, Images: available.Images && declared.Images, Transcriptions: available.Transcriptions && declared.Transcriptions, Speech: available.Speech && declared.Speech, Files: available.Files && declared.Files, Batches: available.Batches && declared.Batches, Rerank: available.Rerank && declared.Rerank, AsyncGenerate: available.AsyncGenerate && declared.AsyncGenerate,
 		Tools:            available.Tools && declared.Tools,
 		Vision:           available.Vision && declared.Vision,
 		JSONMode:         available.JSONMode && declared.JSONMode,
@@ -317,8 +333,8 @@ func minimumCapabilityLimit(left, right int64) int64 {
 
 func normalizedProviderCapabilities(instance domain.ProviderInstance) domain.ProviderCapabilities {
 	capabilities := instance.Capabilities
-	if !capabilities.Chat && !capabilities.Embeddings {
-		return domain.DefaultProviderCapabilities(instance.Type)
+	if !capabilities.AnyOperation() {
+		return domain.DefaultProviderCapabilitiesForProfile(instance.Type, instance.ProfileID)
 	}
 	return capabilities
 }

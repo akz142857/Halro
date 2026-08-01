@@ -11,6 +11,7 @@ import (
 	"github.com/akz142857/Heimdall/internal/domain"
 	"github.com/akz142857/Heimdall/internal/id"
 	"github.com/akz142857/Heimdall/internal/provider"
+	bedrockprovider "github.com/akz142857/Heimdall/internal/provider/bedrock"
 	bedrockmantleprovider "github.com/akz142857/Heimdall/internal/provider/bedrockmantle"
 	"github.com/akz142857/Heimdall/internal/safetransport"
 	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
@@ -695,12 +696,25 @@ func (r *Runtime) providerFromInput(
 		instance.Capabilities = domain.DefaultProviderCapabilitiesForProfile(input.Type, profile.ProfileID)
 	} else {
 		instance.Capabilities = *input.Capabilities
-		if !instance.Capabilities.Chat && !instance.Capabilities.Embeddings {
-			return domain.ProviderInstance{}, errors.New("provider must declare chat or embeddings capability")
+		if !instance.Capabilities.AnyOperation() {
+			return domain.ProviderInstance{}, errors.New("provider must declare at least one operation capability")
+		}
+		if isStrictOperationProfile(profile.ProfileID) &&
+			!capabilitySubset(instance.Capabilities, domain.DefaultProviderCapabilitiesForProfile(input.Type, profile.ProfileID)) {
+			return domain.ProviderInstance{}, errors.New("provider capabilities exceed the immutable operation profile")
 		}
 	}
 	instance.CapabilityEvidence = preserveCapabilityEvidence(instance.Capabilities, currentEvidence)
 	return instance, instance.Validate()
+}
+
+func isStrictOperationProfile(id domain.ProviderProfileID) bool {
+	switch id {
+	case domain.ProfileOpenAIPhase2, domain.ProfileBedrockInvokeTitanEmbedV2, domain.ProfileBedrockInvokeTitanImageV2, domain.ProfileBedrockAgentRerankCohere35, domain.ProfileBedrockAsyncNovaReel:
+		return true
+	default:
+		return false
+	}
 }
 
 func preserveCapabilityEvidence(capabilities domain.ProviderCapabilities, current domain.CapabilityEvidenceSet) domain.CapabilityEvidenceSet {
@@ -735,10 +749,16 @@ func (r *Runtime) validateAdminRoute(request *http.Request, candidate domain.Rou
 		if err != nil || instance.DeletedAt != nil || (candidate.Enabled && !instance.Enabled) {
 			return errors.New("route deployment provider is unavailable")
 		}
+		if err := bedrockprovider.ValidateProfileModel(instance.ProfileID, deployment.ProviderModel); err != nil {
+			return err
+		}
 	} else {
 		instance, err := r.store.GetProvider(request.Context(), candidate.ProviderID)
 		if err != nil || instance.DeletedAt != nil || (candidate.Enabled && !instance.Enabled) {
 			return errors.New("route provider is unavailable")
+		}
+		if err := bedrockprovider.ValidateProfileModel(instance.ProfileID, candidate.ProviderModel); err != nil {
+			return err
 		}
 	}
 	routes, err := r.store.ListRoutes(request.Context())

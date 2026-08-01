@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"os"
+	"path/filepath"
 	"slices"
 	"sync/atomic"
 	"time"
@@ -75,6 +77,8 @@ type Service struct {
 	rejections            rejectionCounters
 	sourceHashKey         [32]byte
 	now                   func() time.Time
+	resources             Phase2ResourceStore
+	resourceObjectDir     string
 }
 
 func NewService(authSnapshot *auth.Snapshot, registry *provider.Registry, accounting *budget.Manager) (*Service, error) {
@@ -92,6 +96,8 @@ type ServiceOptions struct {
 	RetryJitter                bool
 	TokenGuard                 *tokenguard.Manager
 	Redactor                   *redaction.Engine
+	Resources                  Phase2ResourceStore
+	ResourceObjectDir          string
 }
 
 type requestRun struct {
@@ -371,6 +377,18 @@ func NewServiceWithOptions(
 	if options.Redactor == nil {
 		options.Redactor = redaction.NewDefault()
 	}
+	if options.ResourceObjectDir != "" {
+		options.ResourceObjectDir = filepath.Clean(options.ResourceObjectDir)
+		if !filepath.IsAbs(options.ResourceObjectDir) {
+			return nil, errors.New("resource object directory must be absolute")
+		}
+		if err := os.MkdirAll(options.ResourceObjectDir, 0o700); err != nil {
+			return nil, fmt.Errorf("create resource object directory: %w", err)
+		}
+		if err := os.Chmod(options.ResourceObjectDir, 0o700); err != nil {
+			return nil, fmt.Errorf("secure resource object directory: %w", err)
+		}
+	}
 	var sourceHashKey [32]byte
 	if _, err := cryptorand.Read(sourceHashKey[:]); err != nil {
 		return nil, errors.New("generate source hashing key")
@@ -392,6 +410,8 @@ func NewServiceWithOptions(
 		deploymentConcurrency: provider.NewConcurrencyManager(),
 		sourceHashKey:         sourceHashKey,
 		now:                   time.Now,
+		resources:             options.Resources,
+		resourceObjectDir:     options.ResourceObjectDir,
 	}, nil
 }
 
@@ -1442,6 +1462,10 @@ func estimateReservation(inputTokens, outputTokens int64, target provider.Target
 	if err != nil {
 		return 0, gatewayError("accounting_error", "unable to estimate request cost", 503, err)
 	}
+	if target.FixedRequestMicrosUSD > math.MaxInt64-reservation {
+		return 0, gatewayError("accounting_error", "fixed request price overflows", 503, nil)
+	}
+	reservation += target.FixedRequestMicrosUSD
 	if reservation == 0 {
 		reservation = 1
 	}
@@ -1710,7 +1734,12 @@ func setSettlementCost(result *budget.Settlement, target provider.Target, reserv
 		result.CostEstimated = true
 		return
 	}
-	result.CommittedMicrosUSD = cost
+	if target.FixedRequestMicrosUSD > math.MaxInt64-cost {
+		result.CommittedMicrosUSD = reservationMicrosUSD
+		result.CostEstimated = true
+		return
+	}
+	result.CommittedMicrosUSD = cost + target.FixedRequestMicrosUSD
 }
 
 func enrichSettlement(result *budget.Settlement, providerErr error, startedAt, completedAt time.Time) {

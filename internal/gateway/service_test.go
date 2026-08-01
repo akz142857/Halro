@@ -730,6 +730,24 @@ func TestEmbeddingsRejectsRouteWithoutCapabilityBeforeProviderCall(t *testing.T)
 	}
 }
 
+func TestTitanEmbeddingProfileFiltersBatchBeforeProviderIO(t *testing.T) {
+	request := semantic.EmbeddingRequest{
+		Operation: semantic.OperationEmbed,
+		Source:    semantic.Source{ProfileID: "openai.embeddings.v1", ProfileRevision: 1},
+		Mode:      semantic.ModePortable, RequestedModel: "embedding", Input: json.RawMessage(`["one","two"]`),
+	}
+	request.Requirements = request.DeriveRequirements()
+	targets := []provider.Target{{ProfileID: domain.ProfileBedrockInvokeTitanEmbedV2}}
+	if compatible := filterEmbeddingProfileCompatibility(targets, request); len(compatible) != 0 {
+		t.Fatalf("Titan batch request reached provider candidates: %#v", compatible)
+	}
+	request.Input = json.RawMessage(`"one"`)
+	request.Requirements = request.DeriveRequirements()
+	if compatible := filterEmbeddingProfileCompatibility(targets, request); len(compatible) != 1 {
+		t.Fatalf("Titan single input was filtered: %#v", compatible)
+	}
+}
+
 func TestChatRejectsUnsupportedSemanticCapabilityBeforeProviderCall(t *testing.T) {
 	f := newFixture(t, 1_000)
 	defer f.close()

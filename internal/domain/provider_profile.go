@@ -12,14 +12,15 @@ type CredentialScheme string
 type CapabilityEvidence string
 
 const (
-	SurfaceOpenAI           AccessSurface = "openai-api"
-	SurfaceAnthropic        AccessSurface = "anthropic-api"
-	SurfaceAzureOpenAI      AccessSurface = "azure-openai"
-	SurfaceDeepSeek         AccessSurface = "deepseek-api"
-	SurfaceOpenAICompatible AccessSurface = "openai-compatible"
-	SurfaceGemini           AccessSurface = "gemini-generate-content"
-	SurfaceBedrockRuntime   AccessSurface = "bedrock-runtime"
-	SurfaceBedrockMantle    AccessSurface = "bedrock-mantle"
+	SurfaceOpenAI              AccessSurface = "openai-api"
+	SurfaceAnthropic           AccessSurface = "anthropic-api"
+	SurfaceAzureOpenAI         AccessSurface = "azure-openai"
+	SurfaceDeepSeek            AccessSurface = "deepseek-api"
+	SurfaceOpenAICompatible    AccessSurface = "openai-compatible"
+	SurfaceGemini              AccessSurface = "gemini-generate-content"
+	SurfaceBedrockRuntime      AccessSurface = "bedrock-runtime"
+	SurfaceBedrockMantle       AccessSurface = "bedrock-mantle"
+	SurfaceBedrockAgentRuntime AccessSurface = "bedrock-agent-runtime"
 )
 
 const (
@@ -30,6 +31,11 @@ const (
 	ProfileOpenAICompatible               ProviderProfileID = "openai-compatible.chat-embeddings.v1"
 	ProfileGeminiText                     ProviderProfileID = "gemini.generate-content.text.v1beta"
 	ProfileBedrockConverseText            ProviderProfileID = "bedrock.runtime.converse.text.v1"
+	ProfileBedrockInvokeTitanEmbedV2      ProviderProfileID = "bedrock.runtime.invoke.titan-embed-text-v2.v1"
+	ProfileOpenAIPhase2                   ProviderProfileID = "openai.media-resources.v1"
+	ProfileBedrockInvokeTitanImageV2      ProviderProfileID = "bedrock.runtime.invoke.titan-image-v2.v1"
+	ProfileBedrockAgentRerankCohere35     ProviderProfileID = "bedrock.agent-runtime.rerank.cohere-v3-5.v1"
+	ProfileBedrockAsyncNovaReel           ProviderProfileID = "bedrock.runtime.async.nova-reel-v1.v1"
 	ProfileBedrockMantleOpenAIChat        ProviderProfileID = "bedrock.mantle.openai.chat.v1"
 	ProfileBedrockMantleOpenAIResponses   ProviderProfileID = "bedrock.mantle.openai.responses.v1"
 	ProfileBedrockMantleAnthropicMessages ProviderProfileID = "bedrock.mantle.anthropic.messages.v1"
@@ -53,7 +59,7 @@ const (
 
 var capabilityNames = []string{
 	"chat", "streaming", "embeddings", "tools", "vision", "json_mode",
-	"developer_role", "reasoning", "stream_usage",
+	"developer_role", "reasoning", "stream_usage", "moderations", "images", "transcriptions", "speech", "files", "batches", "rerank", "async_generate",
 }
 
 type CapabilityEvidenceSet map[string]CapabilityEvidence
@@ -87,7 +93,7 @@ func DefaultProviderProfile(providerType ProviderType) (ProviderProfileDefaults,
 
 func RegisteredProviderProfile(profile ProviderProfileID) (ProviderType, ProviderProfileDefaults, bool) {
 	switch profile {
-	case ProfileOpenAIChatEmbeddings:
+	case ProfileOpenAIChatEmbeddings, ProfileOpenAIPhase2:
 		return ProviderOpenAI, ProviderProfileDefaults{SurfaceOpenAI, profile, CredentialBearerStatic}, true
 	case ProfileAnthropicMessages:
 		return ProviderAnthropic, ProviderProfileDefaults{SurfaceAnthropic, profile, CredentialAnthropicAPIKey}, true
@@ -99,8 +105,10 @@ func RegisteredProviderProfile(profile ProviderProfileID) (ProviderType, Provide
 		return ProviderOpenAICompatible, ProviderProfileDefaults{SurfaceOpenAICompatible, profile, CredentialBearerStatic}, true
 	case ProfileGeminiText:
 		return ProviderGemini, ProviderProfileDefaults{SurfaceGemini, profile, CredentialGoogleAPIKey}, true
-	case ProfileBedrockConverseText:
+	case ProfileBedrockConverseText, ProfileBedrockInvokeTitanEmbedV2, ProfileBedrockInvokeTitanImageV2, ProfileBedrockAsyncNovaReel:
 		return ProviderBedrock, ProviderProfileDefaults{SurfaceBedrockRuntime, profile, CredentialAWSSigV4Explicit}, true
+	case ProfileBedrockAgentRerankCohere35:
+		return ProviderBedrock, ProviderProfileDefaults{SurfaceBedrockAgentRuntime, profile, CredentialAWSSigV4Explicit}, true
 	case ProfileBedrockMantleOpenAIChat, ProfileBedrockMantleOpenAIResponses, ProfileBedrockMantleAnthropicMessages:
 		return ProviderBedrock, ProviderProfileDefaults{SurfaceBedrockMantle, profile, CredentialBedrockAPIKey}, true
 	default:
@@ -123,6 +131,8 @@ func ResolveCredentialProfile(providerType ProviderType, surface AccessSurface, 
 	for _, profileID := range []ProviderProfileID{
 		ProfileOpenAIChatEmbeddings, ProfileAnthropicMessages, ProfileAzureChatEmbeddings,
 		ProfileDeepSeekChat, ProfileOpenAICompatible, ProfileGeminiText, ProfileBedrockConverseText,
+		ProfileBedrockInvokeTitanEmbedV2,
+		ProfileOpenAIPhase2, ProfileBedrockInvokeTitanImageV2, ProfileBedrockAgentRerankCohere35, ProfileBedrockAsyncNovaReel,
 		ProfileBedrockMantleOpenAIChat, ProfileBedrockMantleOpenAIResponses, ProfileBedrockMantleAnthropicMessages,
 	} {
 		registeredType, profile, ok := RegisteredProviderProfile(profileID)
@@ -141,6 +151,7 @@ func EvidenceForCapabilities(capabilities ProviderCapabilities, enabled Capabili
 		"vision": capabilities.Vision, "json_mode": capabilities.JSONMode,
 		"developer_role": capabilities.DeveloperRole, "reasoning": capabilities.Reasoning,
 		"stream_usage": capabilities.StreamUsage,
+		"moderations":  capabilities.Moderations, "images": capabilities.Images, "transcriptions": capabilities.Transcriptions, "speech": capabilities.Speech, "files": capabilities.Files, "batches": capabilities.Batches, "rerank": capabilities.Rerank, "async_generate": capabilities.AsyncGenerate,
 	}
 	for _, name := range capabilityNames {
 		if values[name] {
@@ -150,6 +161,25 @@ func EvidenceForCapabilities(capabilities ProviderCapabilities, enabled Capabili
 		}
 	}
 	return result
+}
+
+func NormalizeCapabilityEvidence(capabilities ProviderCapabilities, existing CapabilityEvidenceSet, fallback CapabilityEvidence) CapabilityEvidenceSet {
+	result := EvidenceForCapabilities(capabilities, fallback)
+	for name, value := range existing {
+		if _, known := result[name]; known {
+			result[name] = value
+		}
+	}
+	for name, value := range result {
+		if value != EvidenceUnsupported && !capabilityEnabled(capabilities, name) {
+			result[name] = EvidenceUnsupported
+		}
+	}
+	return result
+}
+func capabilityEnabled(c ProviderCapabilities, name string) bool {
+	values := map[string]bool{"chat": c.Chat, "streaming": c.Streaming, "embeddings": c.Embeddings, "tools": c.Tools, "vision": c.Vision, "json_mode": c.JSONMode, "developer_role": c.DeveloperRole, "reasoning": c.Reasoning, "stream_usage": c.StreamUsage, "moderations": c.Moderations, "images": c.Images, "transcriptions": c.Transcriptions, "speech": c.Speech, "files": c.Files, "batches": c.Batches, "rerank": c.Rerank, "async_generate": c.AsyncGenerate}
+	return values[name]
 }
 
 func (e CapabilityEvidenceSet) Clone() CapabilityEvidenceSet {
@@ -187,6 +217,7 @@ func (e CapabilityEvidenceSet) Validate(capabilities ProviderCapabilities) error
 		"vision": capabilities.Vision, "json_mode": capabilities.JSONMode,
 		"developer_role": capabilities.DeveloperRole, "reasoning": capabilities.Reasoning,
 		"stream_usage": capabilities.StreamUsage,
+		"moderations":  capabilities.Moderations, "images": capabilities.Images, "transcriptions": capabilities.Transcriptions, "speech": capabilities.Speech, "files": capabilities.Files, "batches": capabilities.Batches, "rerank": capabilities.Rerank, "async_generate": capabilities.AsyncGenerate,
 	}
 	for name, enabled := range values {
 		if enabled && e[name] == EvidenceUnsupported {

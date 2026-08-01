@@ -105,7 +105,7 @@ func (manifest EndpointCompatibilityManifest) Validate() error {
 
 func BuiltinEndpointManifests() []EndpointCompatibilityManifest {
 	chatProfiles := []domain.ProviderProfileID{domain.ProfileOpenAIChatEmbeddings, domain.ProfileAnthropicMessages, domain.ProfileAzureChatEmbeddings, domain.ProfileDeepSeekChat, domain.ProfileOpenAICompatible, domain.ProfileGeminiText, domain.ProfileBedrockConverseText, domain.ProfileBedrockMantleOpenAIChat, domain.ProfileBedrockMantleOpenAIResponses, domain.ProfileBedrockMantleAnthropicMessages}
-	embedProfiles := []domain.ProviderProfileID{domain.ProfileOpenAIChatEmbeddings, domain.ProfileAzureChatEmbeddings, domain.ProfileOpenAICompatible, domain.ProfileGeminiText}
+	embedProfiles := []domain.ProviderProfileID{domain.ProfileOpenAIChatEmbeddings, domain.ProfileAzureChatEmbeddings, domain.ProfileOpenAICompatible, domain.ProfileGeminiText, domain.ProfileBedrockInvokeTitanEmbedV2}
 	chatCoverage := []ProfileCoverage{
 		{ProfileID: domain.ProfileOpenAIChatEmbeddings},
 		{ProfileID: domain.ProfileAnthropicMessages, UnsupportedRequestFields: []string{"messages[].name", "n", "seed", "response_format", "reasoning_effort", "user"}, DeclaredTransforms: []string{"portable Chat content is mapped to Anthropic Messages blocks"}},
@@ -123,6 +123,7 @@ func BuiltinEndpointManifests() []EndpointCompatibilityManifest {
 		{ProfileID: domain.ProfileAzureChatEmbeddings},
 		{ProfileID: domain.ProfileOpenAICompatible},
 		{ProfileID: domain.ProfileGeminiText, UnsupportedRequestFields: []string{"encoding_format", "user"}, DeclaredTransforms: []string{"token usage is locally estimated when Gemini omits usage"}},
+		{ProfileID: domain.ProfileBedrockInvokeTitanEmbedV2, UnsupportedRequestFields: []string{"input", "encoding_format", "dimensions", "user"}, DeclaredTransforms: []string{"only one string input is accepted", "dimensions are limited to 256, 512, or 1024", "native requests force normalized float embeddings", "Bedrock inputTextTokenCount is mapped to OpenAI usage"}},
 	}
 	responseProfiles := slices.Clone(chatProfiles)
 	responseCoverage := []ProfileCoverage{
@@ -137,7 +138,7 @@ func BuiltinEndpointManifests() []EndpointCompatibilityManifest {
 		{ProfileID: domain.ProfileBedrockMantleOpenAIResponses, DeclaredTransforms: []string{"stateless Responses are sent directly with store=false"}},
 		{ProfileID: domain.ProfileBedrockMantleAnthropicMessages, UnsupportedRequestFields: []string{"text.format", "user"}, DeclaredTransforms: []string{"Responses items are mapped through Bedrock Mantle Anthropic Messages"}},
 	}
-	return []EndpointCompatibilityManifest{
+	manifests := []EndpointCompatibilityManifest{
 		{ID: "openai.chat-completions.v1", NorthboundProfile: ProfileOpenAIChatCompletions, ProfileRevision: 1, Protocol: "openai", Method: "POST", Path: "/v1/chat/completions", SemanticOperation: semantic.OperationGenerate, RequestFields: []string{"model", "messages", "messages[].name", "stream", "stream_options", "temperature", "top_p", "max_tokens", "max_completion_tokens", "n", "stop", "seed", "tools", "tool_choice", "parallel_tool_calls", "response_format", "reasoning_effort", "user"}, RequestHeaders: []string{"Authorization", "Content-Type"}, ResponseFields: []string{"id", "object", "created", "model", "choices", "usage"}, StreamEvents: []string{"chat.completion.chunk", "[DONE]", "error"}, StateSemantics: "stateless", SDKMatrix: []string{"openai-go", "openai-node", "openai-python"}, Status: StatusCompatible, DocumentedDeviations: []string{"gateway routes model names; provider-owned chat state is not exposed", "provider-specific unsupported fields are rejected before provider I/O"}, ProviderProfiles: chatProfiles, ProfileCoverage: chatCoverage},
 		{ID: "openai.embeddings.v1", NorthboundProfile: ProfileOpenAIEmbeddings, ProfileRevision: 1, Protocol: "openai", Method: "POST", Path: "/v1/embeddings", SemanticOperation: semantic.OperationEmbed, RequestFields: []string{"model", "input", "encoding_format", "dimensions", "user"}, RequestHeaders: []string{"Authorization", "Content-Type"}, ResponseFields: []string{"object", "data", "model", "usage"}, StateSemantics: "stateless", SDKMatrix: []string{"openai-go", "openai-node", "openai-python"}, Status: StatusCompatible, DocumentedDeviations: []string{"gateway routes model names", "provider-specific unsupported fields are rejected before provider I/O"}, ProviderProfiles: embedProfiles, ProfileCoverage: embedCoverage},
 		{ID: "openai.responses.stateless.v1", NorthboundProfile: ProfileOpenAIResponses, ProfileRevision: 1, Protocol: "openai", Method: "POST", Path: "/v1/responses", SemanticOperation: semantic.OperationGenerate,
@@ -157,6 +158,36 @@ func BuiltinEndpointManifests() []EndpointCompatibilityManifest {
 				{ProfileID: domain.ProfileBedrockMantleOpenAIResponses, UnsupportedRequestFields: []string{"stop_sequences", "top_k", "thinking", "metadata", "service_tier"}, DeclaredTransforms: []string{"portable Messages content is mapped through stateless Bedrock Mantle Responses", "streaming requests with tools are rejected before provider I/O"}},
 				{ProfileID: domain.ProfileBedrockMantleAnthropicMessages, DeclaredTransforms: []string{"native mode preserves validated Anthropic content blocks, thinking signatures, and events"}},
 			}},
+	}
+	return append(manifests, phase2EndpointManifests()...)
+}
+
+func phase2EndpointManifests() []EndpointCompatibilityManifest {
+	openAI := domain.ProfileOpenAIPhase2
+	imageProfiles := []domain.ProviderProfileID{openAI, domain.ProfileBedrockInvokeTitanImageV2}
+	makeManifest := func(id, method, path string, operation semantic.Operation, requestFields, responseFields []string, profiles []domain.ProviderProfileID, state string) EndpointCompatibilityManifest {
+		coverage := make([]ProfileCoverage, len(profiles))
+		for index, profileID := range profiles {
+			coverage[index] = ProfileCoverage{ProfileID: profileID}
+		}
+		return EndpointCompatibilityManifest{ID: id, NorthboundProfile: ProfileOpenAIPhase2, ProfileRevision: 1, Protocol: "openai", Method: method, Path: path, SemanticOperation: operation, RequestFields: requestFields, RequestHeaders: []string{"Authorization", "Content-Type", "Idempotency-Key when creating a resource"}, ResponseFields: responseFields, StateSemantics: state, SDKMatrix: []string{"openai-go", "openai-node", "openai-python"}, Status: StatusCompatible, DocumentedDeviations: []string{"unknown fields and unsupported profile fields are rejected before provider I/O", "resource identifiers are opaque Heimdall identifiers scoped to one project"}, ProviderProfiles: profiles, ProfileCoverage: coverage}
+	}
+	return []EndpointCompatibilityManifest{
+		makeManifest("openai.moderations.v1", "POST", "/v1/moderations", semantic.OperationModerate, []string{"model", "input"}, []string{"id", "model", "results"}, []domain.ProviderProfileID{openAI}, "stateless"),
+		makeManifest("openai.images.generations.v1", "POST", "/v1/images/generations", semantic.OperationImage, []string{"model", "prompt", "n", "quality", "response_format", "size", "style", "user"}, []string{"created", "data"}, imageProfiles, "stateless"),
+		makeManifest("openai.audio.transcriptions.v1", "POST", "/v1/audio/transcriptions", semantic.OperationTranscribe, []string{"file", "model", "language", "prompt", "response_format", "temperature"}, []string{"text"}, []domain.ProviderProfileID{openAI}, "stateless"),
+		makeManifest("openai.audio.speech.v1", "POST", "/v1/audio/speech", semantic.OperationSynthesize, []string{"model", "input", "voice", "response_format", "speed"}, []string{"binary audio"}, []domain.ProviderProfileID{openAI}, "stateless"),
+		makeManifest("openai.files.create.v1", "POST", "/v1/files", semantic.OperationFile, []string{"file", "purpose", "Heimdall-Route"}, []string{"id", "object", "bytes", "filename", "purpose", "status"}, []domain.ProviderProfileID{openAI}, "project-owned resource with 30 day TTL"),
+		makeManifest("openai.files.get.v1", "GET", "/v1/files/{id}", semantic.OperationFile, []string{"id"}, []string{"id", "object", "bytes", "filename", "purpose", "status"}, []domain.ProviderProfileID{openAI}, "project-owned resource"),
+		makeManifest("openai.files.content.v1", "GET", "/v1/files/{id}/content", semantic.OperationFile, []string{"id"}, []string{"binary content"}, []domain.ProviderProfileID{openAI}, "content served from the private local object directory"),
+		makeManifest("openai.files.delete.v1", "DELETE", "/v1/files/{id}", semantic.OperationFile, []string{"id"}, []string{"id", "object", "deleted"}, []domain.ProviderProfileID{openAI}, "deletes upstream, metadata, and local content"),
+		makeManifest("openai.batches.create.v1", "POST", "/v1/batches", semantic.OperationBatch, []string{"input_file_id", "endpoint", "completion_window", "metadata"}, []string{"id", "object", "status"}, []domain.ProviderProfileID{openAI}, "project-owned resource with 7 day TTL"),
+		makeManifest("openai.batches.get.v1", "GET", "/v1/batches/{id}", semantic.OperationBatch, []string{"id"}, []string{"id", "object", "status"}, []domain.ProviderProfileID{openAI}, "project-owned resource"),
+		makeManifest("openai.batches.cancel.v1", "POST", "/v1/batches/{id}/cancel", semantic.OperationBatch, []string{"id"}, []string{"id", "object", "status"}, []domain.ProviderProfileID{openAI}, "project-owned cancellable resource"),
+		makeManifest("heimdall.rerank.v1", "POST", "/v1/rerank", semantic.OperationRerank, []string{"model", "query", "documents", "top_n"}, []string{"results"}, []domain.ProviderProfileID{domain.ProfileBedrockAgentRerankCohere35}, "stateless Heimdall extension"),
+		makeManifest("heimdall.async.create.v1", "POST", "/v1/async/invocations", semantic.OperationAsyncGenerate, []string{"model", "prompt", "s3_output_uri", "duration_seconds", "dimension", "fps", "seed"}, []string{"invocation_arn", "status", "s3_output_uri"}, []domain.ProviderProfileID{domain.ProfileBedrockAsyncNovaReel}, "project-owned resource with 7 day TTL"),
+		makeManifest("heimdall.async.get.v1", "GET", "/v1/async/invocations/{id}", semantic.OperationAsyncGenerate, []string{"id"}, []string{"invocation_arn", "status", "s3_output_uri", "failure_message"}, []domain.ProviderProfileID{domain.ProfileBedrockAsyncNovaReel}, "project-owned resource"),
+		makeManifest("heimdall.async.cancel.v1", "POST", "/v1/async/invocations/{id}/cancel", semantic.OperationAsyncGenerate, []string{"id"}, []string{"error"}, []domain.ProviderProfileID{domain.ProfileBedrockAsyncNovaReel}, "always fails closed because Bedrock has no cancellation operation"),
 	}
 }
 

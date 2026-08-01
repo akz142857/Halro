@@ -286,6 +286,7 @@ type Handler struct {
 	service         Service
 	responses       ResponsesService
 	messages        MessagesService
+	phase2          Phase2Service
 	maxRequestBytes int64
 	routeTimeout    time.Duration
 	streamTimeout   time.Duration
@@ -332,6 +333,7 @@ func NewWithOptions(service Service, options Options) (*Handler, error) {
 	}
 	handler.responses, _ = service.(ResponsesService)
 	handler.messages, _ = service.(MessagesService)
+	handler.phase2, _ = service.(Phase2Service)
 	return handler, nil
 }
 

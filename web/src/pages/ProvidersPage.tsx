@@ -32,6 +32,10 @@ function defaultBaseURL(type: ProviderType) {
 
 const bedrockProfiles = [
   "bedrock.runtime.converse.text.v1",
+  "bedrock.runtime.invoke.titan-embed-text-v2.v1",
+  "bedrock.runtime.invoke.titan-image-v2.v1",
+  "bedrock.agent-runtime.rerank.cohere-v3-5.v1",
+  "bedrock.runtime.async.nova-reel-v1.v1",
   "bedrock.mantle.openai.chat.v1",
   "bedrock.mantle.openai.responses.v1",
   "bedrock.mantle.anthropic.messages.v1",
@@ -39,7 +43,10 @@ const bedrockProfiles = [
 type BedrockProfile = typeof bedrockProfiles[number];
 
 function bedrockProfileConfig(profile: BedrockProfile): { surface: AccessSurface; scheme: CredentialScheme; baseURL: string } {
-  if (profile === "bedrock.runtime.converse.text.v1") {
+  if (profile.startsWith("bedrock.agent-runtime.")) {
+    return { surface: "bedrock-agent-runtime", scheme: "aws.sigv4.explicit-session", baseURL: "https://bedrock-agent-runtime.us-east-1.amazonaws.com" };
+  }
+  if (profile.startsWith("bedrock.runtime.")) {
     return { surface: "bedrock-runtime", scheme: "aws.sigv4.explicit-session", baseURL: "https://bedrock-runtime.us-east-1.amazonaws.com" };
   }
   return { surface: "bedrock-mantle", scheme: "aws.bedrock.api-key", baseURL: "https://bedrock-mantle.us-east-1.api.aws" };
@@ -323,6 +330,7 @@ function ProviderForm({
   const [type, setType] = useState<ProviderType>(initialType);
   const initialProfile = current?.profile_id && isBedrockProfile(current.profile_id) ? current.profile_id : "bedrock.runtime.converse.text.v1";
   const [profileID, setProfileID] = useState<BedrockProfile>(initialProfile);
+  const [openAIProfileID, setOpenAIProfileID] = useState(current?.profile_id === "openai.media-resources.v1" ? "openai.media-resources.v1" : "openai.chat-completions.v1");
   const [baseURL, setBaseURL] = useState(current?.base_url ?? defaultBaseURL(initialType));
   const [apiVersion, setAPIVersion] = useState(current?.api_version ?? "");
   const [maxConcurrency, setMaxConcurrency] = useState(current?.max_concurrency ?? 0);
@@ -340,7 +348,7 @@ function ProviderForm({
         profile_id: profileID,
         access_surface: bedrockProfileConfig(profileID).surface,
         credential_scheme: bedrockProfileConfig(profileID).scheme,
-      } : {}),
+      } : type === "openai" ? { profile_id: openAIProfileID } : {}),
       ...(type === "azure_openai" ? { api_version: apiVersion } : {}),
       credential_id: credentialID, capabilities, max_concurrency: maxConcurrency, enabled,
       };
@@ -374,6 +382,7 @@ function ProviderForm({
               setType(next);
               setBaseURL(defaultBaseURL(next));
               setProfileID("bedrock.runtime.converse.text.v1");
+              setOpenAIProfileID("openai.chat-completions.v1");
               setCredentialID(credentials.find((credential) => credential.type === next && (next !== "bedrock" || credential.access_surface === "bedrock-runtime"))?.id ?? "");
               setCapabilities(defaultProviderCapabilities(next));
             }}>
@@ -391,6 +400,18 @@ function ProviderForm({
                 setCapabilities(defaultProviderCapabilities("bedrock", next));
               }}>
                 {bedrockProfiles.map((profile) => <option value={profile} key={profile}>{t(`providers.bedrockProfiles.${profile}`)}</option>)}
+              </select>
+            </Field>
+          )}
+          {type === "openai" && (
+            <Field label={t("providers.profile")}>
+              <select value={openAIProfileID} onChange={(event) => {
+                const next = event.target.value;
+                setOpenAIProfileID(next);
+                setCapabilities(defaultProviderCapabilities("openai", undefined, next));
+              }}>
+                <option value="openai.chat-completions.v1">{t("providers.openAIProfiles.chat")}</option>
+                <option value="openai.media-resources.v1">{t("providers.openAIProfiles.media")}</option>
               </select>
             </Field>
           )}
@@ -447,17 +468,19 @@ function ProviderForm({
 }
 
 const capabilityNames = [
-  "chat", "streaming", "embeddings", "tools", "vision", "json_mode",
+  "chat", "streaming", "embeddings", "moderations", "images", "transcriptions", "speech", "files", "batches", "rerank", "async_generate", "tools", "vision", "json_mode",
   "developer_role", "reasoning", "stream_usage",
 ] as const;
 
-function defaultProviderCapabilities(type: ProviderType, profileID: BedrockProfile = "bedrock.runtime.converse.text.v1"): ProviderCapabilities {
+function defaultProviderCapabilities(type: ProviderType, profileID: BedrockProfile = "bedrock.runtime.converse.text.v1", openAIProfileID = "openai.chat-completions.v1"): ProviderCapabilities {
   const value: ProviderCapabilities = {
     chat: true, streaming: true, embeddings: false, tools: false, vision: false,
+    moderations: false, images: false, transcriptions: false, speech: false, files: false, batches: false, rerank: false, async_generate: false,
     json_mode: false, developer_role: false, reasoning: false, stream_usage: false,
     max_context_tokens: 0, max_output_tokens: 0,
   };
   if (type === "openai" || type === "azure_openai") {
+    if (type === "openai" && openAIProfileID === "openai.media-resources.v1") return { ...value, chat: false, streaming: false, moderations: true, images: true, transcriptions: true, speech: true, files: true, batches: true };
     return { ...value, embeddings: true, tools: true, vision: true, json_mode: true, developer_role: true, reasoning: true, stream_usage: true };
   }
   if (type === "anthropic") return { ...value, tools: true, vision: true, reasoning: true, stream_usage: true };
@@ -466,6 +489,10 @@ function defaultProviderCapabilities(type: ProviderType, profileID: BedrockProfi
   if (type === "gemini") return { ...value, embeddings: true, developer_role: true, stream_usage: false };
   if (type === "bedrock") {
     if (profileID === "bedrock.runtime.converse.text.v1") return { ...value, stream_usage: true };
+    if (profileID === "bedrock.runtime.invoke.titan-embed-text-v2.v1") return { ...value, chat: false, streaming: false, embeddings: true, max_context_tokens: 8192 };
+    if (profileID === "bedrock.runtime.invoke.titan-image-v2.v1") return { ...value, chat: false, streaming: false, images: true };
+    if (profileID === "bedrock.agent-runtime.rerank.cohere-v3-5.v1") return { ...value, chat: false, streaming: false, rerank: true };
+    if (profileID === "bedrock.runtime.async.nova-reel-v1.v1") return { ...value, chat: false, streaming: false, async_generate: true };
     if (profileID === "bedrock.mantle.anthropic.messages.v1") return { ...value, tools: true, vision: true, reasoning: true, stream_usage: true };
     return { ...value, tools: true, vision: true, json_mode: true, developer_role: true, reasoning: profileID === "bedrock.mantle.openai.chat.v1", stream_usage: true };
   }

@@ -3,6 +3,7 @@ package bolt
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -33,11 +34,14 @@ func TestMetadataMigrationFromV1IsAtomicAndRecorded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(history) != 4 ||
+	if len(history) != 7 ||
 		history[0] != (MigrationRecord{Version: 1, Name: "initial_schema"}) ||
 		history[1] != (MigrationRecord{Version: 2, Name: "migration_history"}) ||
 		history[2] != (MigrationRecord{Version: 3, Name: "deployments"}) ||
-		history[3] != (MigrationRecord{Version: 4, Name: "provider_profiles"}) {
+		history[3] != (MigrationRecord{Version: 4, Name: "provider_profiles"}) ||
+		history[4] != (MigrationRecord{Version: 5, Name: "provider_resources"}) ||
+		history[5] != (MigrationRecord{Version: 6, Name: "phase2_capability_evidence"}) ||
+		history[6] != (MigrationRecord{Version: 7, Name: "provider_resource_creation_status"}) {
 		t.Fatalf("history=%#v", history)
 	}
 }
@@ -815,6 +819,31 @@ func TestStoreRejectsProfileAwareDefaultGrantsAndDeploymentEscalation(t *testing
 	}, 0)
 	if err != nil {
 		t.Fatal(err)
+	}
+	project, err := store.PutProject(ctx, domain.Project{ID: "project_resource", Name: "Resource owner", Enabled: true, AllowedRoutes: []string{"model"}, RPM: 10, TPM: 1000, MaxConcurrency: 1, CreatedAt: now, UpdatedAt: now}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyHash := sha256.Sum256([]byte("create-once"))
+	resource := domain.ProviderResource{ID: "file_external", Kind: domain.ResourceFile, ProjectID: project.ID, ProviderID: instance.ID, DeploymentID: validDeployment.ID, PublicModel: "model", ProfileID: instance.ProfileID, IdempotencyKeyHash: keyHash, CreationStatus: "completed", Status: "uploaded", CreatedAt: now.Add(-2 * time.Hour), UpdatedAt: now, ExpiresAt: now.Add(time.Hour)}
+	resource, err = store.PutProviderResource(ctx, resource, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.PutProviderResource(ctx, domain.ProviderResource{ID: "file_duplicate", Kind: domain.ResourceFile, ProjectID: project.ID, ProviderID: instance.ID, DeploymentID: validDeployment.ID, PublicModel: "model", ProfileID: instance.ProfileID, IdempotencyKeyHash: keyHash, CreationStatus: "reserved", Status: "pending", CreatedAt: now, UpdatedAt: now, ExpiresAt: now.Add(time.Hour)}, 0); !errors.Is(err, ErrAlreadyExists) {
+		t.Fatalf("duplicate idempotency reservation err=%v", err)
+	}
+	if _, err := store.ProviderResource(ctx, "another_project", resource.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-project read err=%v", err)
+	}
+	resource.ExpiresAt = now.Add(-time.Second)
+	resource.UpdatedAt = now
+	if _, err := store.PutProviderResource(ctx, resource, resource.Revision); err != nil {
+		t.Fatal(err)
+	}
+	reaped, err := store.ReapProviderResources(ctx, now)
+	if err != nil || len(reaped) != 1 || reaped[0].ID != resource.ID {
+		t.Fatalf("reaped=%#v err=%v", reaped, err)
 	}
 	_ = validDeployment
 	reduced := instance

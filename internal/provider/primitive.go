@@ -33,6 +33,16 @@ const (
 	PrimitiveGeminiEmbedContent                   Primitive = "gemini.embed-content"
 	PrimitiveBedrockConverse                      Primitive = "bedrock.converse"
 	PrimitiveBedrockConverseStream                Primitive = "bedrock.converse-stream"
+	PrimitiveBedrockInvokeTitanEmbedV2            Primitive = "bedrock.invoke-model.titan-embed-text-v2"
+	PrimitiveOpenAIModerations                    Primitive = "openai.moderations"
+	PrimitiveOpenAIImages                         Primitive = "openai.images"
+	PrimitiveOpenAIAudioTranscriptions            Primitive = "openai.audio.transcriptions"
+	PrimitiveOpenAIAudioSpeech                    Primitive = "openai.audio.speech"
+	PrimitiveOpenAIFiles                          Primitive = "openai.files"
+	PrimitiveOpenAIBatches                        Primitive = "openai.batches"
+	PrimitiveBedrockTitanImageV2                  Primitive = "bedrock.invoke-model.titan-image-v2"
+	PrimitiveBedrockAgentRerankCohere35           Primitive = "bedrock-agent-runtime.rerank.cohere-v3-5"
+	PrimitiveBedrockAsyncNovaReel                 Primitive = "bedrock.start-async-invoke.nova-reel-v1"
 	PrimitiveBedrockMantleOpenAIChat              Primitive = "bedrock.mantle.openai.chat"
 	PrimitiveBedrockMantleOpenAIChatStream        Primitive = "bedrock.mantle.openai.chat.stream"
 	PrimitiveBedrockMantleOpenAIResponses         Primitive = "bedrock.mantle.openai.responses"
@@ -53,6 +63,22 @@ func semanticOperationFor(operation Operation) semantic.Operation {
 		return semantic.OperationGenerate
 	case OperationEmbeddings:
 		return semantic.OperationEmbed
+	case OperationModerations:
+		return semantic.OperationModerate
+	case OperationImages:
+		return semantic.OperationImage
+	case OperationTranscriptions:
+		return semantic.OperationTranscribe
+	case OperationSpeech:
+		return semantic.OperationSynthesize
+	case OperationFiles:
+		return semantic.OperationFile
+	case OperationBatches:
+		return semantic.OperationBatch
+	case OperationRerank:
+		return semantic.OperationRerank
+	case OperationAsyncInvoke:
+		return semantic.OperationAsyncGenerate
 	default:
 		return ""
 	}
@@ -208,7 +234,8 @@ func translationForPrimitive(primitive Primitive) semantic.TranslationLoss {
 		PrimitiveDeepSeekChat, PrimitiveDeepSeekChatStream,
 		PrimitiveCompatibleChat, PrimitiveCompatibleChatStream, PrimitiveCompatibleEmbeddings:
 		return semantic.TranslationNone
-	case PrimitiveGeminiGenerateContent, PrimitiveGeminiStreamGenerateContent, PrimitiveGeminiEmbedContent, PrimitiveBedrockConverse, PrimitiveBedrockConverseStream:
+	case PrimitiveGeminiGenerateContent, PrimitiveGeminiStreamGenerateContent, PrimitiveGeminiEmbedContent,
+		PrimitiveBedrockConverse, PrimitiveBedrockConverseStream, PrimitiveBedrockInvokeTitanEmbedV2:
 		return semantic.TranslationDeclared
 	default:
 		// Unknown and legacy primitives have no versioned mapping contract that

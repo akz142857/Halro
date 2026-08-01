@@ -200,7 +200,8 @@
       "openai.chat-embeddings.v1",
       "azure-openai.chat-embeddings.v1",
       "openai-compatible.chat-embeddings.v1",
-      "gemini.generate-content.text.v1beta"
+      "gemini.generate-content.text.v1beta",
+      "bedrock.runtime.invoke.titan-embed-text-v2.v1"
     ],
     "profile_coverage": [
       {
@@ -220,6 +221,21 @@
         ],
         "declared_transforms": [
           "token usage is locally estimated when Gemini omits usage"
+        ]
+      },
+      {
+        "profile_id": "bedrock.runtime.invoke.titan-embed-text-v2.v1",
+        "unsupported_request_fields": [
+          "input",
+          "encoding_format",
+          "dimensions",
+          "user"
+        ],
+        "declared_transforms": [
+          "only one string input is accepted",
+          "dimensions are limited to 256, 512, or 1024",
+          "native requests force normalized float embeddings",
+          "Bedrock inputTextTokenCount is mapped to OpenAI usage"
         ]
       }
     ]
@@ -662,6 +678,652 @@
         "declared_transforms": [
           "native mode preserves validated Anthropic content blocks, thinking signatures, and events"
         ]
+      }
+    ]
+  },
+  {
+    "id": "openai.moderations.v1",
+    "northbound_profile": "openai.media-resources.v1",
+    "profile_revision": 1,
+    "protocol": "openai",
+    "method": "POST",
+    "path": "/v1/moderations",
+    "semantic_operation": "moderate",
+    "request_fields": [
+      "model",
+      "input"
+    ],
+    "request_headers": [
+      "Authorization",
+      "Content-Type",
+      "Idempotency-Key when creating a resource"
+    ],
+    "response_fields": [
+      "id",
+      "model",
+      "results"
+    ],
+    "state_semantics": "stateless",
+    "sdk_matrix": [
+      "openai-go",
+      "openai-node",
+      "openai-python"
+    ],
+    "status": "compatible",
+    "documented_deviations": [
+      "unknown fields and unsupported profile fields are rejected before provider I/O",
+      "resource identifiers are opaque Heimdall identifiers scoped to one project"
+    ],
+    "provider_profiles": [
+      "openai.media-resources.v1"
+    ],
+    "profile_coverage": [
+      {
+        "profile_id": "openai.media-resources.v1"
+      }
+    ]
+  },
+  {
+    "id": "openai.images.generations.v1",
+    "northbound_profile": "openai.media-resources.v1",
+    "profile_revision": 1,
+    "protocol": "openai",
+    "method": "POST",
+    "path": "/v1/images/generations",
+    "semantic_operation": "image",
+    "request_fields": [
+      "model",
+      "prompt",
+      "n",
+      "quality",
+      "response_format",
+      "size",
+      "style",
+      "user"
+    ],
+    "request_headers": [
+      "Authorization",
+      "Content-Type",
+      "Idempotency-Key when creating a resource"
+    ],
+    "response_fields": [
+      "created",
+      "data"
+    ],
+    "state_semantics": "stateless",
+    "sdk_matrix": [
+      "openai-go",
+      "openai-node",
+      "openai-python"
+    ],
+    "status": "compatible",
+    "documented_deviations": [
+      "unknown fields and unsupported profile fields are rejected before provider I/O",
+      "resource identifiers are opaque Heimdall identifiers scoped to one project"
+    ],
+    "provider_profiles": [
+      "openai.media-resources.v1",
+      "bedrock.runtime.invoke.titan-image-v2.v1"
+    ],
+    "profile_coverage": [
+      {
+        "profile_id": "openai.media-resources.v1"
+      },
+      {
+        "profile_id": "bedrock.runtime.invoke.titan-image-v2.v1"
+      }
+    ]
+  },
+  {
+    "id": "openai.audio.transcriptions.v1",
+    "northbound_profile": "openai.media-resources.v1",
+    "profile_revision": 1,
+    "protocol": "openai",
+    "method": "POST",
+    "path": "/v1/audio/transcriptions",
+    "semantic_operation": "transcribe",
+    "request_fields": [
+      "file",
+      "model",
+      "language",
+      "prompt",
+      "response_format",
+      "temperature"
+    ],
+    "request_headers": [
+      "Authorization",
+      "Content-Type",
+      "Idempotency-Key when creating a resource"
+    ],
+    "response_fields": [
+      "text"
+    ],
+    "state_semantics": "stateless",
+    "sdk_matrix": [
+      "openai-go",
+      "openai-node",
+      "openai-python"
+    ],
+    "status": "compatible",
+    "documented_deviations": [
+      "unknown fields and unsupported profile fields are rejected before provider I/O",
+      "resource identifiers are opaque Heimdall identifiers scoped to one project"
+    ],
+    "provider_profiles": [
+      "openai.media-resources.v1"
+    ],
+    "profile_coverage": [
+      {
+        "profile_id": "openai.media-resources.v1"
+      }
+    ]
+  },
+  {
+    "id": "openai.audio.speech.v1",
+    "northbound_profile": "openai.media-resources.v1",
+    "profile_revision": 1,
+    "protocol": "openai",
+    "method": "POST",
+    "path": "/v1/audio/speech",
+    "semantic_operation": "synthesize",
+    "request_fields": [
+      "model",
+      "input",
+      "voice",
+      "response_format",
+      "speed"
+    ],
+    "request_headers": [
+      "Authorization",
+      "Content-Type",
+      "Idempotency-Key when creating a resource"
+    ],
+    "response_fields": [
+      "binary audio"
+    ],
+    "state_semantics": "stateless",
+    "sdk_matrix": [
+      "openai-go",
+      "openai-node",
+      "openai-python"
+    ],
+    "status": "compatible",
+    "documented_deviations": [
+      "unknown fields and unsupported profile fields are rejected before provider I/O",
+      "resource identifiers are opaque Heimdall identifiers scoped to one project"
+    ],
+    "provider_profiles": [
+      "openai.media-resources.v1"
+    ],
+    "profile_coverage": [
+      {
+        "profile_id": "openai.media-resources.v1"
+      }
+    ]
+  },
+  {
+    "id": "openai.files.create.v1",
+    "northbound_profile": "openai.media-resources.v1",
+    "profile_revision": 1,
+    "protocol": "openai",
+    "method": "POST",
+    "path": "/v1/files",
+    "semantic_operation": "file",
+    "request_fields": [
+      "file",
+      "purpose",
+      "Heimdall-Route"
+    ],
+    "request_headers": [
+      "Authorization",
+      "Content-Type",
+      "Idempotency-Key when creating a resource"
+    ],
+    "response_fields": [
+      "id",
+      "object",
+      "bytes",
+      "filename",
+      "purpose",
+      "status"
+    ],
+    "state_semantics": "project-owned resource with 30 day TTL",
+    "sdk_matrix": [
+      "openai-go",
+      "openai-node",
+      "openai-python"
+    ],
+    "status": "compatible",
+    "documented_deviations": [
+      "unknown fields and unsupported profile fields are rejected before provider I/O",
+      "resource identifiers are opaque Heimdall identifiers scoped to one project"
+    ],
+    "provider_profiles": [
+      "openai.media-resources.v1"
+    ],
+    "profile_coverage": [
+      {
+        "profile_id": "openai.media-resources.v1"
+      }
+    ]
+  },
+  {
+    "id": "openai.files.get.v1",
+    "northbound_profile": "openai.media-resources.v1",
+    "profile_revision": 1,
+    "protocol": "openai",
+    "method": "GET",
+    "path": "/v1/files/{id}",
+    "semantic_operation": "file",
+    "request_fields": [
+      "id"
+    ],
+    "request_headers": [
+      "Authorization",
+      "Content-Type",
+      "Idempotency-Key when creating a resource"
+    ],
+    "response_fields": [
+      "id",
+      "object",
+      "bytes",
+      "filename",
+      "purpose",
+      "status"
+    ],
+    "state_semantics": "project-owned resource",
+    "sdk_matrix": [
+      "openai-go",
+      "openai-node",
+      "openai-python"
+    ],
+    "status": "compatible",
+    "documented_deviations": [
+      "unknown fields and unsupported profile fields are rejected before provider I/O",
+      "resource identifiers are opaque Heimdall identifiers scoped to one project"
+    ],
+    "provider_profiles": [
+      "openai.media-resources.v1"
+    ],
+    "profile_coverage": [
+      {
+        "profile_id": "openai.media-resources.v1"
+      }
+    ]
+  },
+  {
+    "id": "openai.files.content.v1",
+    "northbound_profile": "openai.media-resources.v1",
+    "profile_revision": 1,
+    "protocol": "openai",
+    "method": "GET",
+    "path": "/v1/files/{id}/content",
+    "semantic_operation": "file",
+    "request_fields": [
+      "id"
+    ],
+    "request_headers": [
+      "Authorization",
+      "Content-Type",
+      "Idempotency-Key when creating a resource"
+    ],
+    "response_fields": [
+      "binary content"
+    ],
+    "state_semantics": "content served from the private local object directory",
+    "sdk_matrix": [
+      "openai-go",
+      "openai-node",
+      "openai-python"
+    ],
+    "status": "compatible",
+    "documented_deviations": [
+      "unknown fields and unsupported profile fields are rejected before provider I/O",
+      "resource identifiers are opaque Heimdall identifiers scoped to one project"
+    ],
+    "provider_profiles": [
+      "openai.media-resources.v1"
+    ],
+    "profile_coverage": [
+      {
+        "profile_id": "openai.media-resources.v1"
+      }
+    ]
+  },
+  {
+    "id": "openai.files.delete.v1",
+    "northbound_profile": "openai.media-resources.v1",
+    "profile_revision": 1,
+    "protocol": "openai",
+    "method": "DELETE",
+    "path": "/v1/files/{id}",
+    "semantic_operation": "file",
+    "request_fields": [
+      "id"
+    ],
+    "request_headers": [
+      "Authorization",
+      "Content-Type",
+      "Idempotency-Key when creating a resource"
+    ],
+    "response_fields": [
+      "id",
+      "object",
+      "deleted"
+    ],
+    "state_semantics": "deletes upstream, metadata, and local content",
+    "sdk_matrix": [
+      "openai-go",
+      "openai-node",
+      "openai-python"
+    ],
+    "status": "compatible",
+    "documented_deviations": [
+      "unknown fields and unsupported profile fields are rejected before provider I/O",
+      "resource identifiers are opaque Heimdall identifiers scoped to one project"
+    ],
+    "provider_profiles": [
+      "openai.media-resources.v1"
+    ],
+    "profile_coverage": [
+      {
+        "profile_id": "openai.media-resources.v1"
+      }
+    ]
+  },
+  {
+    "id": "openai.batches.create.v1",
+    "northbound_profile": "openai.media-resources.v1",
+    "profile_revision": 1,
+    "protocol": "openai",
+    "method": "POST",
+    "path": "/v1/batches",
+    "semantic_operation": "batch",
+    "request_fields": [
+      "input_file_id",
+      "endpoint",
+      "completion_window",
+      "metadata"
+    ],
+    "request_headers": [
+      "Authorization",
+      "Content-Type",
+      "Idempotency-Key when creating a resource"
+    ],
+    "response_fields": [
+      "id",
+      "object",
+      "status"
+    ],
+    "state_semantics": "project-owned resource with 7 day TTL",
+    "sdk_matrix": [
+      "openai-go",
+      "openai-node",
+      "openai-python"
+    ],
+    "status": "compatible",
+    "documented_deviations": [
+      "unknown fields and unsupported profile fields are rejected before provider I/O",
+      "resource identifiers are opaque Heimdall identifiers scoped to one project"
+    ],
+    "provider_profiles": [
+      "openai.media-resources.v1"
+    ],
+    "profile_coverage": [
+      {
+        "profile_id": "openai.media-resources.v1"
+      }
+    ]
+  },
+  {
+    "id": "openai.batches.get.v1",
+    "northbound_profile": "openai.media-resources.v1",
+    "profile_revision": 1,
+    "protocol": "openai",
+    "method": "GET",
+    "path": "/v1/batches/{id}",
+    "semantic_operation": "batch",
+    "request_fields": [
+      "id"
+    ],
+    "request_headers": [
+      "Authorization",
+      "Content-Type",
+      "Idempotency-Key when creating a resource"
+    ],
+    "response_fields": [
+      "id",
+      "object",
+      "status"
+    ],
+    "state_semantics": "project-owned resource",
+    "sdk_matrix": [
+      "openai-go",
+      "openai-node",
+      "openai-python"
+    ],
+    "status": "compatible",
+    "documented_deviations": [
+      "unknown fields and unsupported profile fields are rejected before provider I/O",
+      "resource identifiers are opaque Heimdall identifiers scoped to one project"
+    ],
+    "provider_profiles": [
+      "openai.media-resources.v1"
+    ],
+    "profile_coverage": [
+      {
+        "profile_id": "openai.media-resources.v1"
+      }
+    ]
+  },
+  {
+    "id": "openai.batches.cancel.v1",
+    "northbound_profile": "openai.media-resources.v1",
+    "profile_revision": 1,
+    "protocol": "openai",
+    "method": "POST",
+    "path": "/v1/batches/{id}/cancel",
+    "semantic_operation": "batch",
+    "request_fields": [
+      "id"
+    ],
+    "request_headers": [
+      "Authorization",
+      "Content-Type",
+      "Idempotency-Key when creating a resource"
+    ],
+    "response_fields": [
+      "id",
+      "object",
+      "status"
+    ],
+    "state_semantics": "project-owned cancellable resource",
+    "sdk_matrix": [
+      "openai-go",
+      "openai-node",
+      "openai-python"
+    ],
+    "status": "compatible",
+    "documented_deviations": [
+      "unknown fields and unsupported profile fields are rejected before provider I/O",
+      "resource identifiers are opaque Heimdall identifiers scoped to one project"
+    ],
+    "provider_profiles": [
+      "openai.media-resources.v1"
+    ],
+    "profile_coverage": [
+      {
+        "profile_id": "openai.media-resources.v1"
+      }
+    ]
+  },
+  {
+    "id": "heimdall.rerank.v1",
+    "northbound_profile": "openai.media-resources.v1",
+    "profile_revision": 1,
+    "protocol": "openai",
+    "method": "POST",
+    "path": "/v1/rerank",
+    "semantic_operation": "rerank",
+    "request_fields": [
+      "model",
+      "query",
+      "documents",
+      "top_n"
+    ],
+    "request_headers": [
+      "Authorization",
+      "Content-Type",
+      "Idempotency-Key when creating a resource"
+    ],
+    "response_fields": [
+      "results"
+    ],
+    "state_semantics": "stateless Heimdall extension",
+    "sdk_matrix": [
+      "openai-go",
+      "openai-node",
+      "openai-python"
+    ],
+    "status": "compatible",
+    "documented_deviations": [
+      "unknown fields and unsupported profile fields are rejected before provider I/O",
+      "resource identifiers are opaque Heimdall identifiers scoped to one project"
+    ],
+    "provider_profiles": [
+      "bedrock.agent-runtime.rerank.cohere-v3-5.v1"
+    ],
+    "profile_coverage": [
+      {
+        "profile_id": "bedrock.agent-runtime.rerank.cohere-v3-5.v1"
+      }
+    ]
+  },
+  {
+    "id": "heimdall.async.create.v1",
+    "northbound_profile": "openai.media-resources.v1",
+    "profile_revision": 1,
+    "protocol": "openai",
+    "method": "POST",
+    "path": "/v1/async/invocations",
+    "semantic_operation": "async_generate",
+    "request_fields": [
+      "model",
+      "prompt",
+      "s3_output_uri",
+      "duration_seconds",
+      "dimension",
+      "fps",
+      "seed"
+    ],
+    "request_headers": [
+      "Authorization",
+      "Content-Type",
+      "Idempotency-Key when creating a resource"
+    ],
+    "response_fields": [
+      "invocation_arn",
+      "status",
+      "s3_output_uri"
+    ],
+    "state_semantics": "project-owned resource with 7 day TTL",
+    "sdk_matrix": [
+      "openai-go",
+      "openai-node",
+      "openai-python"
+    ],
+    "status": "compatible",
+    "documented_deviations": [
+      "unknown fields and unsupported profile fields are rejected before provider I/O",
+      "resource identifiers are opaque Heimdall identifiers scoped to one project"
+    ],
+    "provider_profiles": [
+      "bedrock.runtime.async.nova-reel-v1.v1"
+    ],
+    "profile_coverage": [
+      {
+        "profile_id": "bedrock.runtime.async.nova-reel-v1.v1"
+      }
+    ]
+  },
+  {
+    "id": "heimdall.async.get.v1",
+    "northbound_profile": "openai.media-resources.v1",
+    "profile_revision": 1,
+    "protocol": "openai",
+    "method": "GET",
+    "path": "/v1/async/invocations/{id}",
+    "semantic_operation": "async_generate",
+    "request_fields": [
+      "id"
+    ],
+    "request_headers": [
+      "Authorization",
+      "Content-Type",
+      "Idempotency-Key when creating a resource"
+    ],
+    "response_fields": [
+      "invocation_arn",
+      "status",
+      "s3_output_uri",
+      "failure_message"
+    ],
+    "state_semantics": "project-owned resource",
+    "sdk_matrix": [
+      "openai-go",
+      "openai-node",
+      "openai-python"
+    ],
+    "status": "compatible",
+    "documented_deviations": [
+      "unknown fields and unsupported profile fields are rejected before provider I/O",
+      "resource identifiers are opaque Heimdall identifiers scoped to one project"
+    ],
+    "provider_profiles": [
+      "bedrock.runtime.async.nova-reel-v1.v1"
+    ],
+    "profile_coverage": [
+      {
+        "profile_id": "bedrock.runtime.async.nova-reel-v1.v1"
+      }
+    ]
+  },
+  {
+    "id": "heimdall.async.cancel.v1",
+    "northbound_profile": "openai.media-resources.v1",
+    "profile_revision": 1,
+    "protocol": "openai",
+    "method": "POST",
+    "path": "/v1/async/invocations/{id}/cancel",
+    "semantic_operation": "async_generate",
+    "request_fields": [
+      "id"
+    ],
+    "request_headers": [
+      "Authorization",
+      "Content-Type",
+      "Idempotency-Key when creating a resource"
+    ],
+    "response_fields": [
+      "error"
+    ],
+    "state_semantics": "always fails closed because Bedrock has no cancellation operation",
+    "sdk_matrix": [
+      "openai-go",
+      "openai-node",
+      "openai-python"
+    ],
+    "status": "compatible",
+    "documented_deviations": [
+      "unknown fields and unsupported profile fields are rejected before provider I/O",
+      "resource identifiers are opaque Heimdall identifiers scoped to one project"
+    ],
+    "provider_profiles": [
+      "bedrock.runtime.async.nova-reel-v1.v1"
+    ],
+    "profile_coverage": [
+      {
+        "profile_id": "bedrock.runtime.async.nova-reel-v1.v1"
       }
     ]
   }

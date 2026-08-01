@@ -28,6 +28,7 @@ type signer struct {
 	secretKey    []byte
 	sessionToken []byte
 	region       string
+	service      string
 	authority    string
 	now          func() time.Time
 }
@@ -44,7 +45,7 @@ func newSigner(value credentials) (*signer, error) {
 	}
 	return &signer{
 		accessKeyID: value.AccessKeyID, secretKey: append([]byte(nil), value.SecretAccessKey...),
-		sessionToken: append([]byte(nil), value.SessionToken...), region: value.Region, now: time.Now,
+		sessionToken: append([]byte(nil), value.SessionToken...), region: value.Region, service: "bedrock", now: time.Now,
 	}, nil
 }
 
@@ -107,12 +108,16 @@ func (s *signer) Authorize(request *http.Request, payload []byte) error {
 	canonicalRequest := request.Method + "\n" + canonicalURI + "\n" + request.URL.RawQuery + "\n" +
 		canonicalHeaders.String() + signedHeaders + "\n" + payloadHex
 	canonicalHash := sha256.Sum256([]byte(canonicalRequest))
-	scope := date + "/" + s.region + "/bedrock/aws4_request"
+	service := s.service
+	if service == "" {
+		service = "bedrock"
+	}
+	scope := date + "/" + s.region + "/" + service + "/aws4_request"
 	stringToSign := "AWS4-HMAC-SHA256\n" + amzDate + "\n" + scope + "\n" + hex.EncodeToString(canonicalHash[:])
 	kDate := hmacSHA256([]byte("AWS4"+string(s.secretKey)), date)
 	kRegion := hmacSHA256(kDate, s.region)
 	clear(kDate)
-	kService := hmacSHA256(kRegion, "bedrock")
+	kService := hmacSHA256(kRegion, service)
 	clear(kRegion)
 	kSigning := hmacSHA256(kService, "aws4_request")
 	clear(kService)
