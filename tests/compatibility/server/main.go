@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/akz142857/Heimdall/internal/anthropicapi"
 	"github.com/akz142857/Heimdall/internal/gateway"
 	"github.com/akz142857/Heimdall/internal/gatewayapi"
 	"github.com/akz142857/Heimdall/internal/openaiapi"
@@ -26,6 +27,42 @@ const compatibilityKey = "gw_sdk_compatibility"
 type service struct {
 	activeStreams   atomic.Int64
 	canceledStreams atomic.Int64
+}
+
+func (s *service) Messages(_ context.Context, key string, request anthropicapi.MessageRequest) (anthropicapi.Message, error) {
+	if err := contractError(key, request.Model); err != nil {
+		return anthropicapi.Message{}, err
+	}
+	stop := "end_turn"
+	return anthropicapi.Message{ID: "msg_compat", Type: "message", Role: "assistant", Content: anthropicapi.ContentBlocks{{Type: "text", Text: "compat-ok"}}, Model: request.Model, StopReason: &stop, Usage: anthropicapi.Usage{InputTokens: 3, OutputTokens: 2}}, nil
+}
+func (s *service) MessagesStream(ctx context.Context, key string, request anthropicapi.MessageRequest, emit func(anthropicapi.StreamEvent) error) error {
+	if err := contractError(key, request.Model); err != nil {
+		return err
+	}
+	s.activeStreams.Add(1)
+	defer s.activeStreams.Add(-1)
+	message := anthropicapi.Message{ID: "msg_compat", Type: "message", Role: "assistant", Content: anthropicapi.ContentBlocks{}, Model: request.Model, Usage: anthropicapi.Usage{InputTokens: 3}}
+	index := 0
+	events := []anthropicapi.StreamEvent{{Type: "message_start", Message: &message}, {Type: "content_block_start", Index: &index, ContentBlock: map[string]any{"type": "text", "text": ""}}, {Type: "content_block_delta", Index: &index, Delta: map[string]any{"type": "text_delta", "text": "compat-ok"}}, {Type: "content_block_stop", Index: &index}, {Type: "message_delta", Delta: map[string]any{"stop_reason": "end_turn", "stop_sequence": nil}, Usage: &anthropicapi.Usage{OutputTokens: 2}}, {Type: "message_stop"}}
+	for _, event := range events {
+		if err := emit(event); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func (s *service) MessagesNative(ctx context.Context, key, _ string, request anthropicapi.MessageRequest) (anthropicapi.Message, error) {
+	return s.Messages(ctx, key, request)
+}
+func (s *service) MessagesNativeStream(ctx context.Context, key, _ string, request anthropicapi.MessageRequest, emit func(anthropicapi.RawStreamEvent) error) error {
+	return s.MessagesStream(ctx, key, request, func(event anthropicapi.StreamEvent) error {
+		payload, err := json.Marshal(event)
+		if err != nil {
+			return err
+		}
+		return emit(anthropicapi.RawStreamEvent{Type: event.Type, Data: payload})
+	})
 }
 
 func (s *service) Responses(_ context.Context, key string, request openaiapi.ResponseRequest) (openaiapi.Response, error) {
@@ -194,6 +231,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/chat/completions", handler.ChatCompletions)
 	mux.HandleFunc("POST /v1/responses", handler.Responses)
+	mux.HandleFunc("POST /v1/messages", handler.Messages)
 	mux.HandleFunc("POST /v1/embeddings", handler.Embeddings)
 	mux.HandleFunc("GET /healthz", func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusNoContent)

@@ -27,6 +27,7 @@ scope is governed by reviewed release notes and release gates.
 | SafeTransport | host allowlist, HTTPS policy, all-answer IP validation, pinned dial, no env proxy, no redirects |
 | OpenAI-compatible API | strict chat-completions and embeddings contracts, stable errors, body limits |
 | Stateless Responses Phase 1A | strict `POST /v1/responses` JSON and typed text SSE facade; state/resource fields fenced before Provider I/O; canonical Generate/ProviderPrimitive reuse; deterministic event lifecycle; machine-readable per-profile manifest; official Go/Node/Python SDK coverage |
+| Anthropic Messages Phase 1B | strict `POST /v1/messages` JSON and native SSE facade; required Anthropic version header and errors; portable canonical routing or native profile pinning; Tool Use/Tool Result and signed Thinking round-trip; OpenAI/Anthropic/Gemini tool-choice matrix; official Go/Node/Python Anthropic SDK coverage |
 | SSE streaming | bounded SSE parser, semantic chunks, `[DONE]`, usage settlement, first-payload error boundary |
 | Resilient routing | ordered/round-robin candidates, bounded retry with backoff/jitter, fallback before payload |
 | Shared Gateway orchestration | common authentication/routing, admission/accounting lifecycle, attempt acquisition/settlement, and terminal error mapping across Chat, streaming Chat, and Embeddings |

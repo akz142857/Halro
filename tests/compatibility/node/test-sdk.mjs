@@ -1,9 +1,19 @@
 import assert from 'node:assert/strict';
 import OpenAI from 'openai';
+import Anthropic from '@anthropic-ai/sdk';
 
 const baseURL = process.env.HEIMDALL_COMPAT_BASE_URL ?? 'http://127.0.0.1:18088/v1';
 const apiKey = 'gw_sdk_compatibility';
 const client = new OpenAI({ apiKey, baseURL, maxRetries: 0, timeout: 5_000 });
+const anthropic = new Anthropic({ apiKey, baseURL: baseURL.replace(/\/v1$/, ''), maxRetries: 0, timeout: 5_000 });
+
+const message = await anthropic.messages.create({ model: 'compat-chat', max_tokens: 32, messages: [{ role: 'user', content: 'ping' }] });
+assert.equal(message.content[0].text, 'compat-ok');
+assert.equal(message.usage.output_tokens, 2);
+const messageStream = await anthropic.messages.create({ model: 'compat-chat', max_tokens: 32, messages: [{ role: 'user', content: 'ping' }], stream: true });
+let anthropicText = '';
+for await (const event of messageStream) if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') anthropicText += event.delta.text;
+assert.equal(anthropicText, 'compat-ok');
 
 const completion = await client.chat.completions.create({
   model: 'compat-chat',

@@ -96,10 +96,12 @@ export type AccessSurface =
   | "deepseek-api"
   | "openai-compatible"
   | "gemini-generate-content"
+  | "anthropic-api"
   | "bedrock-runtime";
 
 export type CredentialScheme =
   | "bearer.static"
+  | "anthropic.x-api-key"
   | "azure.api-key"
   | "google.api-key"
   | "aws.sigv4.explicit-session";
@@ -110,6 +112,7 @@ export type CapabilityEvidenceSet = Record<string, CapabilityEvidence>;
 export type ProviderType =
   | "openai"
   | "azure_openai"
+  | "anthropic"
   | "deepseek"
   | "gemini"
   | "bedrock"

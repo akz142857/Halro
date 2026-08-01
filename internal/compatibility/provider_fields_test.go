@@ -73,8 +73,18 @@ func TestGeminiEmbeddingFieldCompatibility(t *testing.T) {
 func TestEndpointManifestCloneIsDeep(t *testing.T) {
 	original := BuiltinEndpointManifests()[0]
 	manifest := CloneEndpointManifest(original)
-	manifest.ProfileCoverage[4].UnsupportedRequestFields[0] = "mutated"
-	if original.ProfileCoverage[4].UnsupportedRequestFields[0] == "mutated" {
+	coverageIndex := -1
+	for index := range manifest.ProfileCoverage {
+		if len(manifest.ProfileCoverage[index].UnsupportedRequestFields) > 0 {
+			coverageIndex = index
+			break
+		}
+	}
+	if coverageIndex < 0 {
+		t.Fatal("test manifest has no unsupported profile fields")
+	}
+	manifest.ProfileCoverage[coverageIndex].UnsupportedRequestFields[0] = "mutated"
+	if original.ProfileCoverage[coverageIndex].UnsupportedRequestFields[0] == "mutated" {
 		t.Fatal("profile coverage shares mutable storage")
 	}
 }

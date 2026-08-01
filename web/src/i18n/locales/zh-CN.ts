@@ -227,7 +227,7 @@ export const zhCN = {
     keyName: "密钥名称", keyNameHint: "使用工作负载或服务名称，便于单独撤销", generateKey: "生成密钥",
   },
   providers: {
-    types: { openai: "OpenAI", azure_openai: "Azure OpenAI", deepseek: "DeepSeek", gemini: "Gemini（测试版）", bedrock: "AWS Bedrock（测试版）", openai_compatible: "OpenAI 兼容服务" },
+    types: { openai: "OpenAI", anthropic: "Anthropic", azure_openai: "Azure OpenAI", deepseek: "DeepSeek", gemini: "Gemini（测试版）", bedrock: "AWS Bedrock（测试版）", openai_compatible: "OpenAI 兼容服务" },
     eyebrow: "上游信任", title: "凭据与服务商", description: "服务商密钥加密保存在本机密钥库；运行时只按绑定的受众解密。",
     addCredential: "＋ 凭据", addProvider: "＋ 服务商", vault: "加密密钥库", credentials: "凭据", providers: "服务商", upstreams: "活跃上游",
     noCredentials: "没有服务商凭据", noCredentialsDescription: "先保存加密凭据，再创建服务商实例。", noProviders: "没有服务商", noProvidersDescription: "创建一个上游连接后，模型部署才能选择它。",

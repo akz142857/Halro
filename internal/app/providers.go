@@ -9,6 +9,7 @@ import (
 	"github.com/akz142857/Heimdall/internal/config"
 	"github.com/akz142857/Heimdall/internal/domain"
 	"github.com/akz142857/Heimdall/internal/provider"
+	anthropicprovider "github.com/akz142857/Heimdall/internal/provider/anthropic"
 	bedrockprovider "github.com/akz142857/Heimdall/internal/provider/bedrock"
 	geminiprovider "github.com/akz142857/Heimdall/internal/provider/gemini"
 	openaiprovider "github.com/akz142857/Heimdall/internal/provider/openai"
@@ -149,6 +150,11 @@ func loadProviderRegistry(
 					Endpoint: endpoint, Authorizer: authorizer, Client: client,
 					ProviderType: string(instance.Type), Capabilities: adapterCapabilities,
 				})
+			}
+		case domain.ProviderAnthropic:
+			authorizer, err = provider.NewStaticHeaderAuthorizer(instance.CredentialScheme, "x-api-key", "", plaintext, "Authorization")
+			if err == nil {
+				adapter, err = anthropicprovider.New(anthropicprovider.Options{Endpoint: endpoint, Authorizer: authorizer, Client: client, Capabilities: adapterCapabilities})
 			}
 		case domain.ProviderAzureOpenAI:
 			authorizer, err = provider.NewStaticHeaderAuthorizer(instance.CredentialScheme, "api-key", "", plaintext, "Authorization")

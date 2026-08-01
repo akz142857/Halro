@@ -4,6 +4,7 @@ import time
 import urllib.request
 
 import openai
+import anthropic
 
 
 BASE_URL = os.environ.get("HEIMDALL_COMPAT_BASE_URL", "http://127.0.0.1:18088/v1")
@@ -12,6 +13,18 @@ API_KEY = "gw_sdk_compatibility"
 
 def client(api_key: str = API_KEY) -> openai.OpenAI:
     return openai.OpenAI(api_key=api_key, base_url=BASE_URL, max_retries=0, timeout=5.0)
+
+
+def test_anthropic_messages() -> None:
+    sdk = anthropic.Anthropic(api_key=API_KEY, base_url=BASE_URL.removesuffix("/v1"), max_retries=0, timeout=5.0)
+    message = sdk.messages.create(model="compat-chat", max_tokens=32, messages=[{"role": "user", "content": "ping"}])
+    assert message.content[0].text == "compat-ok"
+    assert message.usage.output_tokens == 2
+    text = ""
+    with sdk.messages.stream(model="compat-chat", max_tokens=32, messages=[{"role": "user", "content": "ping"}]) as stream:
+        for value in stream.text_stream:
+            text += value
+    assert text == "compat-ok"
 
 
 def test_non_stream_and_embeddings() -> None:
@@ -105,6 +118,8 @@ def test_disconnecting_stream_releases_server_resources() -> None:
 
 
 if __name__ == "__main__":
+    # Official Anthropic SDKs exercise x-api-key and anthropic-version headers.
+    test_anthropic_messages()
     test_non_stream_and_embeddings()
     # Keep the executable CI entry point aligned with pytest discovery.
     test_responses_stream()

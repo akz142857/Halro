@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/akz142857/Heimdall/internal/anthropicapi"
 	"github.com/akz142857/Heimdall/internal/domain"
 	"github.com/akz142857/Heimdall/internal/openaiapi"
 	"github.com/akz142857/Heimdall/internal/semantic"
@@ -60,6 +61,24 @@ type EmbeddingCall struct {
 	Request       openaiapi.EmbeddingRequest
 }
 
+type NativeMessageCall struct {
+	RequestID     string
+	ProviderModel string
+	Version       string
+	Payload       []byte
+}
+
+type NativeMessageResult struct {
+	Payload           []byte
+	ProviderRequestID string
+	RetryAfter        time.Duration
+}
+
+type NativeMessagesAdapter interface {
+	MessagesNative(context.Context, NativeMessageCall) (NativeMessageResult, error)
+	MessagesNativeStream(context.Context, NativeMessageCall, func(anthropicapi.RawStreamEvent) error) (*anthropicapi.Usage, error)
+}
+
 type Adapter interface {
 	Type() string
 	Chat(context.Context, ChatCall) (openaiapi.ChatCompletionResponse, error)
@@ -93,9 +112,11 @@ type Prober interface {
 type Operation string
 
 const (
-	OperationChat       Operation = "chat"
-	OperationChatStream Operation = "chat_stream"
-	OperationEmbeddings Operation = "embeddings"
+	OperationChat           Operation = "chat"
+	OperationChatStream     Operation = "chat_stream"
+	OperationEmbeddings     Operation = "embeddings"
+	OperationMessages       Operation = "anthropic_messages"
+	OperationMessagesStream Operation = "anthropic_messages_stream"
 )
 
 type Target struct {
@@ -300,9 +321,9 @@ func (r *Registry) resolveCandidatesLocked(publicModel string, operation Operati
 			}
 			capabilityName := ""
 			switch operation {
-			case OperationChat:
+			case OperationChat, OperationMessages:
 				capabilityName = "chat"
-			case OperationChatStream:
+			case OperationChatStream, OperationMessagesStream:
 				if !target.Capabilities.Chat || !target.Capabilities.Streaming {
 					return true
 				}

@@ -15,10 +15,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/akz142857/Heimdall/internal/anthropicapi"
 	"github.com/akz142857/Heimdall/internal/auth"
 	"github.com/akz142857/Heimdall/internal/budget"
 	"github.com/akz142857/Heimdall/internal/circuit"
 	"github.com/akz142857/Heimdall/internal/compatibility"
+	anthropicwire "github.com/akz142857/Heimdall/internal/compatibility/anthropic"
 	openaiwire "github.com/akz142857/Heimdall/internal/compatibility/openai"
 	"github.com/akz142857/Heimdall/internal/domain"
 	"github.com/akz142857/Heimdall/internal/id"
@@ -677,6 +679,415 @@ func (s *Service) ResponsesStream(
 		if err := emit(event); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// Messages implements the portable tier of the Anthropic Messages facade.
+// Native mode has a separate, profile-pinned hot path so it cannot
+// accidentally inherit portable fallback behavior.
+func (s *Service) Messages(
+	ctx context.Context,
+	plaintextKey string,
+	request anthropicapi.MessageRequest,
+) (anthropicapi.Message, error) {
+	if request.Stream {
+		return anthropicapi.Message{}, gatewayError("invalid_request_error", "stream must be false", 400, nil)
+	}
+	canonical, err := anthropicwire.DecodePortable(request)
+	if err != nil {
+		return anthropicapi.Message{}, gatewayError("invalid_request_error", "request is not portable; use native mode with an Anthropic route", 400, err)
+	}
+	chatRequest, err := openaiwire.RenderGenerateRequest(canonical, request.Model)
+	if err != nil {
+		return anthropicapi.Message{}, gatewayError("invalid_request_error", "request cannot be translated safely", 400, err)
+	}
+	chatResponse, err := s.Chat(ctx, plaintextKey, chatRequest)
+	if err != nil {
+		return anthropicapi.Message{}, err
+	}
+	result, err := openaiwire.DecodeGenerateResult(chatResponse)
+	if err != nil {
+		return anthropicapi.Message{}, gatewayError("provider_error", "provider response cannot be represented safely", 502, err)
+	}
+	message, err := anthropicwire.RenderResult(result, request.Model)
+	if err != nil {
+		return anthropicapi.Message{}, gatewayError("provider_error", "provider response cannot be rendered safely", 502, err)
+	}
+	return message, nil
+}
+
+func (s *Service) MessagesStream(
+	ctx context.Context,
+	plaintextKey string,
+	request anthropicapi.MessageRequest,
+	emit func(anthropicapi.StreamEvent) error,
+) error {
+	if !request.Stream {
+		return gatewayError("invalid_request_error", "stream must be true", 400, nil)
+	}
+	canonical, err := anthropicwire.DecodePortable(request)
+	if err != nil {
+		return gatewayError("invalid_request_error", "request is not portable; use native mode with an Anthropic route", 400, err)
+	}
+	chatRequest, err := openaiwire.RenderGenerateRequest(canonical, request.Model)
+	if err != nil {
+		return gatewayError("invalid_request_error", "request cannot be translated safely", 400, err)
+	}
+	renderer := anthropicwire.NewStreamRenderer(request.Model)
+	emitted := false
+	err = s.ChatStream(ctx, plaintextKey, chatRequest, func(chunk openaiapi.ChatCompletionResponse) error {
+		event, decodeErr := openaiwire.DecodeEvent(chunk)
+		if decodeErr != nil {
+			return decodeErr
+		}
+		events, renderErr := renderer.Accept(event)
+		if renderErr != nil {
+			return renderErr
+		}
+		for _, event := range events {
+			if emitErr := emit(event); emitErr != nil {
+				return emitErr
+			}
+			emitted = true
+		}
+		return nil
+	})
+	if err != nil {
+		if emitted {
+			return &provider.Error{Class: provider.ErrorMalformed, Ambiguous: true, Message: "Anthropic stream failed after payload", Cause: err}
+		}
+		return err
+	}
+	events, err := renderer.Complete()
+	if err != nil {
+		return gatewayError("provider_error", "provider stream cannot be completed safely", 502, err)
+	}
+	for _, event := range events {
+		if err := emit(event); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Service) MessagesNative(ctx context.Context, plaintextKey, version string, request anthropicapi.MessageRequest) (anthropicapi.Message, error) {
+	if request.Stream {
+		return anthropicapi.Message{}, gatewayError("invalid_request_error", "stream must be false", 400, nil)
+	}
+	principal, target, envelope, inputTokens, outputTokens, err := s.prepareNativeMessages(ctx, plaintextKey, version, request, provider.OperationMessages)
+	if err != nil {
+		return anthropicapi.Message{}, err
+	}
+	if err := s.checkNativeInboundRedaction(principal, request); err != nil {
+		return anthropicapi.Message{}, err
+	}
+	totalTokens, err := addTokens(inputTokens, outputTokens)
+	if err != nil {
+		return anthropicapi.Message{}, gatewayError("token_limit_exceeded", "requested token count is too large", 400, err)
+	}
+	run, err := s.beginRequestRun(ctx, principal, request.Model, []provider.Target{target}, totalTokens, inputTokens, outputTokens)
+	if err != nil {
+		return anthropicapi.Message{}, err
+	}
+	defer run.close()
+	attempt, err := s.startAttempt(ctx, run, target, inputTokens, outputTokens, 0, 0, 1)
+	if err != nil {
+		return anthropicapi.Message{}, s.exhaustedAttemptsError(err)
+	}
+	adapter, err := target.NativeMessages(false)
+	if err != nil {
+		return anthropicapi.Message{}, gatewayError("unsupported_feature", "native Messages primitive is unavailable", 400, err)
+	}
+	payload, _ := envelope.PayloadFor(domain.ProfileAnthropicMessages, 1, compatibility.NativeRequest)
+	result, providerErr := adapter.MessagesNative(ctx, provider.NativeMessageCall{RequestID: run.requestID, ProviderModel: target.ProviderModel, Version: version, Payload: payload})
+	var message anthropicapi.Message
+	var semanticResult semantic.GenerateResult
+	if providerErr == nil {
+		registry, _ := anthropicwire.NewNativeSchemaRegistry()
+		identity := nativeIdentity(principal, target, request.Model)
+		responseEnvelope, envelopeErr := compatibility.NewNativeResponseEnvelope(registry, domain.ProfileAnthropicMessages, 1, http.Header{}, result.Payload, identity)
+		if envelopeErr != nil {
+			providerErr = &provider.Error{Class: provider.ErrorMalformed, Ambiguous: true, Message: "validate native Anthropic response", Cause: envelopeErr}
+		} else {
+			safePayload, _ := responseEnvelope.PayloadFor(domain.ProfileAnthropicMessages, 1, compatibility.NativeResponse)
+			message, providerErr = anthropicapi.DecodeMessage(safePayload)
+			if providerErr == nil {
+				providerErr = s.checkNativeOutboundRedaction(principal, message)
+			}
+		}
+	}
+	if message.ID != "" {
+		usage := semantic.Usage{InputTokens: message.Usage.InputTokens, OutputTokens: message.Usage.OutputTokens, TotalTokens: message.Usage.InputTokens + message.Usage.OutputTokens, Source: semantic.UsageProviderReported}
+		semanticResult.Usage = &usage
+	}
+	settlement := settlementForResult(semanticResult, providerErr, inputTokens, outputTokens, target, attempt.accounting.ReservationMicrosUSD)
+	if err := attempt.finish(providerErr, settlement); err != nil {
+		return anthropicapi.Message{}, err
+	}
+	outcome := "success"
+	if providerErr != nil {
+		outcome = "provider_error"
+	}
+	if err := s.finalizeRequest(run.requestLease, outcome); err != nil {
+		return anthropicapi.Message{}, gatewayError("accounting_unavailable", "request accounting could not be finalized", 503, err)
+	}
+	if providerErr != nil {
+		return anthropicapi.Message{}, terminalProviderError(providerErr)
+	}
+	message.Model = request.Model
+	return message, nil
+}
+
+func (s *Service) MessagesNativeStream(ctx context.Context, plaintextKey, version string, request anthropicapi.MessageRequest, emit func(anthropicapi.RawStreamEvent) error) error {
+	if !request.Stream {
+		return gatewayError("invalid_request_error", "stream must be true", 400, nil)
+	}
+	principal, target, envelope, inputTokens, outputTokens, err := s.prepareNativeMessages(ctx, plaintextKey, version, request, provider.OperationMessagesStream)
+	if err != nil {
+		return err
+	}
+	if err := s.checkNativeInboundRedaction(principal, request); err != nil {
+		return err
+	}
+	if !s.redactor.AllowsStreaming(principal.Project.RedactionPolicyID) {
+		return gatewayError("streaming_redaction_incompatible", "streaming is disabled by the Project redaction policy", 400, nil)
+	}
+	streamRedactor, err := s.redactor.NewStream(principal.Project.RedactionPolicyID)
+	if err != nil {
+		return gatewayError("streaming_redaction_incompatible", "streaming is disabled by the Project redaction policy", 400, err)
+	}
+	totalTokens, err := addTokens(inputTokens, outputTokens)
+	if err != nil {
+		return gatewayError("token_limit_exceeded", "requested token count is too large", 400, err)
+	}
+	run, err := s.beginRequestRun(ctx, principal, request.Model, []provider.Target{target}, totalTokens, inputTokens, outputTokens)
+	if err != nil {
+		return err
+	}
+	defer run.close()
+	attempt, err := s.startAttempt(ctx, run, target, inputTokens, outputTokens, 0, 0, 1)
+	if err != nil {
+		return s.exhaustedAttemptsError(err)
+	}
+	adapter, err := target.NativeMessages(true)
+	if err != nil {
+		return gatewayError("unsupported_feature", "native Messages stream primitive is unavailable", 400, err)
+	}
+	payload, _ := envelope.PayloadFor(domain.ProfileAnthropicMessages, 1, compatibility.NativeRequest)
+	registry, _ := anthropicwire.NewNativeSchemaRegistry()
+	identity := nativeIdentity(principal, target, request.Model)
+	emitted := false
+	providerErrorEvent := false
+	usage, providerErr := adapter.MessagesNativeStream(ctx, provider.NativeMessageCall{RequestID: run.requestID, ProviderModel: target.ProviderModel, Version: version, Payload: payload}, func(event anthropicapi.RawStreamEvent) error {
+		eventEnvelope, envelopeErr := compatibility.NewNativeEventEnvelope(registry, domain.ProfileAnthropicMessages, 1, http.Header{}, event.Data, identity)
+		if envelopeErr != nil {
+			return envelopeErr
+		}
+		safePayload, _ := eventEnvelope.PayloadFor(domain.ProfileAnthropicMessages, 1, compatibility.NativeEvent)
+		if event.Type == "message_start" {
+			safePayload, envelopeErr = rewriteAnthropicStreamModel(safePayload, request.Model)
+			if envelopeErr != nil {
+				return envelopeErr
+			}
+		}
+		if redactionErr := verifyNativeStreamRedaction(streamRedactor, event.Type, safePayload); redactionErr != nil {
+			return redactionErr
+		}
+		if emitErr := emit(anthropicapi.RawStreamEvent{Type: event.Type, Data: safePayload}); emitErr != nil {
+			return emitErr
+		}
+		emitted = true
+		providerErrorEvent = providerErrorEvent || event.Type == "error"
+		return nil
+	})
+	semanticUsage := (*semantic.Usage)(nil)
+	if usage != nil {
+		semanticUsage = &semantic.Usage{InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, TotalTokens: usage.InputTokens + usage.OutputTokens, Source: semantic.UsageProviderReported}
+	}
+	settlement := streamSettlement(semanticUsage, providerErr, emitted, inputTokens, outputTokens, target, attempt.accounting.ReservationMicrosUSD)
+	if err := attempt.finish(providerErr, settlement); err != nil {
+		return err
+	}
+	outcome := "success"
+	if providerErr != nil {
+		outcome = "provider_error"
+	}
+	if errors.Is(providerErr, redaction.ErrPolicyRejected) {
+		outcome = "policy_rejected"
+	}
+	if err := s.finalizeRequest(run.requestLease, outcome); err != nil {
+		return gatewayError("accounting_unavailable", "request accounting could not be finalized", 503, err)
+	}
+	if providerErr != nil {
+		if providerErrorEvent {
+			// The provider-native error event has already been delivered using
+			// Anthropic's schema; returning another error would duplicate it.
+			return nil
+		}
+		if emitted {
+			return &provider.Error{Class: provider.ErrorMalformed, Ambiguous: true, Message: "native Anthropic stream failed after payload", Cause: providerErr}
+		}
+		return terminalProviderError(providerErr)
+	}
+	return nil
+}
+
+func rewriteAnthropicStreamModel(payload json.RawMessage, publicModel string) (json.RawMessage, error) {
+	var event map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &event); err != nil {
+		return nil, err
+	}
+	var message map[string]json.RawMessage
+	if err := json.Unmarshal(event["message"], &message); err != nil {
+		return nil, err
+	}
+	encodedModel, _ := json.Marshal(publicModel)
+	message["model"] = encodedModel
+	encodedMessage, err := json.Marshal(message)
+	if err != nil {
+		return nil, err
+	}
+	event["message"] = encodedMessage
+	return json.Marshal(event)
+}
+
+func (s *Service) prepareNativeMessages(ctx context.Context, plaintextKey, version string, request anthropicapi.MessageRequest, operation provider.Operation) (auth.AuthResult, provider.Target, *compatibility.NativeEnvelope, int64, int64, error) {
+	principal, targets, err := s.resolveRequest(ctx, plaintextKey, request.Model, operation, "model route does not support native Anthropic Messages")
+	if err != nil {
+		return auth.AuthResult{}, provider.Target{}, nil, 0, 0, err
+	}
+	targets = slices.DeleteFunc(targets, func(target provider.Target) bool {
+		return target.ProfileID != domain.ProfileAnthropicMessages || target.AccessSurface != domain.SurfaceAnthropic
+	})
+	if len(targets) == 0 {
+		return auth.AuthResult{}, provider.Target{}, nil, 0, 0, gatewayError("unsupported_feature", "native mode requires an Anthropic Messages provider profile", 400, nil)
+	}
+	target := targets[0]
+	registry, err := anthropicwire.NewNativeSchemaRegistry()
+	if err != nil {
+		return auth.AuthResult{}, provider.Target{}, nil, 0, 0, gatewayError("internal_error", "native schema is unavailable", 500, err)
+	}
+	envelope, err := compatibility.NewNativeEnvelope(registry, domain.ProfileAnthropicMessages, 1, anthropicwire.NativeHeaders(version), request.Raw, nativeIdentity(principal, target, request.Model))
+	if err != nil {
+		return auth.AuthResult{}, provider.Target{}, nil, 0, 0, gatewayError("invalid_request_error", "native request failed schema validation", 400, err)
+	}
+	governance := envelope.Governance()
+	inputTokens, outputTokens := governance.EstimatedInputTokens, governance.EstimatedOutputTokens
+	if principal.Project.MaxInputTokens > 0 && inputTokens > principal.Project.MaxInputTokens {
+		return auth.AuthResult{}, provider.Target{}, nil, 0, 0, gatewayError("token_limit_exceeded", "estimated input tokens exceed the project limit", 400, nil)
+	}
+	if principal.Project.MaxOutputTokens > 0 && outputTokens > principal.Project.MaxOutputTokens {
+		return auth.AuthResult{}, provider.Target{}, nil, 0, 0, gatewayError("token_limit_exceeded", "requested output tokens exceed the project limit", 400, nil)
+	}
+	if len(filterTokenCapabilities([]provider.Target{target}, inputTokens, outputTokens)) == 0 {
+		return auth.AuthResult{}, provider.Target{}, nil, 0, 0, gatewayError("token_limit_exceeded", "request exceeds the model deployment token limits", 400, nil)
+	}
+	return principal, target, envelope, inputTokens, outputTokens, nil
+}
+
+func nativeIdentity(principal auth.AuthResult, target provider.Target, model string) compatibility.NativeIdentity {
+	return compatibility.NativeIdentity{ProjectID: principal.Project.ID, PrincipalID: principal.Key.ID, CredentialRef: "cred_" + target.ProviderID, RouteID: target.ID, RequestedModel: model}
+}
+
+func (s *Service) checkNativeInboundRedaction(principal auth.AuthResult, request anthropicapi.MessageRequest) error {
+	projection := request
+	projection.Thinking = nil
+	projection.Metadata = nil
+	projection.ServiceTier = ""
+	projection.TopK = nil
+	projection.Raw = nil
+	for messageIndex := range projection.Messages {
+		blocks := projection.Messages[messageIndex].Content[:0]
+		for _, block := range projection.Messages[messageIndex].Content {
+			if block.Type != "thinking" && block.Type != "redacted_thinking" {
+				blocks = append(blocks, block)
+			}
+		}
+		projection.Messages[messageIndex].Content = blocks
+	}
+	canonical, err := anthropicwire.DecodePortable(projection)
+	if err != nil {
+		return gatewayError("invalid_request_error", "native request cannot be inspected safely", 400, err)
+	}
+	chat, err := openaiwire.RenderGenerateRequest(canonical, request.Model)
+	if err != nil {
+		return gatewayError("invalid_request_error", "native request cannot be inspected safely", 400, err)
+	}
+	processed, err := s.redactor.ProcessInboundChat(principal.Project.RedactionPolicyID, chat)
+	if err != nil {
+		return gatewayError("sensitive_data_detected", "request contains secret material", 400, err)
+	}
+	left, _ := json.Marshal(chat)
+	right, _ := json.Marshal(processed)
+	if !bytes.Equal(left, right) {
+		return gatewayError("native_redaction_incompatible", "native payload would require rewriting", 400, redaction.ErrPolicyRejected)
+	}
+	return nil
+}
+
+func (s *Service) checkNativeOutboundRedaction(principal auth.AuthResult, message anthropicapi.Message) error {
+	projection := message
+	blocks := projection.Content[:0]
+	for _, block := range projection.Content {
+		if block.Type != "thinking" && block.Type != "redacted_thinking" {
+			blocks = append(blocks, block)
+		}
+	}
+	projection.Content = blocks
+	result, err := anthropicwire.DecodeResult(projection)
+	if err != nil {
+		return &provider.Error{Class: provider.ErrorMalformed, Ambiguous: true, Message: "native response cannot be inspected safely", Cause: err}
+	}
+	chat, err := openaiwire.RenderGenerateResult(result)
+	if err != nil {
+		return err
+	}
+	processed, err := s.redactor.ProcessOutboundChat(principal.Project.RedactionPolicyID, chat)
+	if err != nil {
+		return redaction.ErrPolicyRejected
+	}
+	left, _ := json.Marshal(chat)
+	right, _ := json.Marshal(processed)
+	if !bytes.Equal(left, right) {
+		return redaction.ErrPolicyRejected
+	}
+	return nil
+}
+
+func verifyNativeStreamRedaction(stream *redaction.Stream, eventType string, payload []byte) error {
+	if eventType != "content_block_delta" {
+		return nil
+	}
+	var value struct {
+		Delta struct {
+			Type        string `json:"type"`
+			Text        string `json:"text"`
+			PartialJSON string `json:"partial_json"`
+		} `json:"delta"`
+	}
+	if json.Unmarshal(payload, &value) != nil {
+		return redaction.ErrPolicyRejected
+	}
+	text := value.Delta.Text
+	if value.Delta.Type == "input_json_delta" {
+		text = value.Delta.PartialJSON
+	}
+	if text == "" {
+		return nil
+	}
+	chunk := openaiapi.ChatCompletionResponse{ID: "native-redaction", Object: "chat.completion.chunk", Model: "native", Choices: []openaiapi.Choice{{Index: 0, Delta: &openaiapi.Message{Role: "assistant", Content: openaiapi.TextContent(text)}}}}
+	processed, err := stream.Process(chunk)
+	if err != nil {
+		return err
+	}
+	if len(processed) != 1 {
+		return redaction.ErrPolicyRejected
+	}
+	original, _ := json.Marshal(chunk)
+	actual, _ := json.Marshal(processed[0])
+	if !bytes.Equal(original, actual) {
+		return redaction.ErrPolicyRejected
 	}
 	return nil
 }

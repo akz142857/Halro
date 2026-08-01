@@ -801,7 +801,7 @@ func (r *Runtime) validateProviderCanDeactivate(
 func implementedProviderType(value domain.ProviderType) bool {
 	switch value {
 	case domain.ProviderOpenAI, domain.ProviderAzureOpenAI,
-		domain.ProviderDeepSeek, domain.ProviderOpenAICompatible, domain.ProviderGemini,
+		domain.ProviderAnthropic, domain.ProviderDeepSeek, domain.ProviderOpenAICompatible, domain.ProviderGemini,
 		domain.ProviderBedrock:
 		return true
 	default:
