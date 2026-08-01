@@ -111,22 +111,31 @@ func Bootstrap(ctx context.Context, cfg config.Config, options BootstrapOptions,
 		return BootstrapResult{}, err
 	}
 	now := time.Now().UTC()
+	profile, ok := domain.DefaultProviderProfile(options.ProviderType)
+	if !ok {
+		return BootstrapResult{}, fmt.Errorf("provider profile is not implemented for %q", options.ProviderType)
+	}
+	capabilities := domain.DefaultProviderCapabilities(options.ProviderType)
+	evidence := domain.EvidenceForCapabilities(capabilities, domain.EvidenceDeclared)
 	records := &boltstore.BootstrapRecords{
 		Credential: domain.Credential{
 			ID: credentialID, Name: options.ProviderName, Type: options.ProviderType,
+			AccessSurface: profile.AccessSurface, Scheme: profile.CredentialScheme,
 			Audience: audience, Ciphertext: ciphertext, KeyVersion: 1, CreatedAt: now, UpdatedAt: now,
 		},
 		Provider: domain.ProviderInstance{
 			ID: providerID, Name: options.ProviderName, Type: options.ProviderType,
+			AccessSurface: profile.AccessSurface, ProfileID: profile.ProfileID, CredentialScheme: profile.CredentialScheme,
 			BaseURL: options.ProviderBaseURL, APIVersion: options.ProviderAPIVersion,
 			CredentialID: credentialID,
 			AllowedHosts: []string{strings.ToLower(endpoint.Hostname())}, Enabled: true, CreatedAt: now, UpdatedAt: now,
-			Capabilities: domain.DefaultProviderCapabilities(options.ProviderType),
+			Capabilities: capabilities, CapabilityEvidence: evidence.Clone(),
 		},
 		Deployment: domain.Deployment{
 			ID: deploymentID, Name: options.ProviderName + " / " + options.ProviderModel,
 			ProviderID: providerID, ProviderModel: options.ProviderModel,
-			Capabilities:           domain.DefaultProviderCapabilities(options.ProviderType),
+			AccessSurface: profile.AccessSurface, ProfileID: profile.ProfileID,
+			Capabilities: capabilities, CapabilityEvidence: evidence.Clone(),
 			InputMicrosPerMillion:  options.InputMicrosPerMillion,
 			OutputMicrosPerMillion: options.OutputMicrosPerMillion,
 			Weight:                 1, Enabled: true, CreatedAt: now, UpdatedAt: now,

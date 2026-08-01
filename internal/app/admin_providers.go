@@ -16,21 +16,26 @@ import (
 )
 
 type credentialInput struct {
-	Name    string              `json:"name"`
-	Type    domain.ProviderType `json:"type"`
-	BaseURL string              `json:"base_url"`
-	Secret  *string             `json:"secret,omitempty"`
+	Name          string                  `json:"name"`
+	Type          domain.ProviderType     `json:"type"`
+	BaseURL       string                  `json:"base_url"`
+	AccessSurface domain.AccessSurface    `json:"access_surface,omitempty"`
+	Scheme        domain.CredentialScheme `json:"scheme,omitempty"`
+	Secret        *string                 `json:"secret,omitempty"`
 }
 
 type providerInput struct {
-	Name           string                       `json:"name"`
-	Type           domain.ProviderType          `json:"type"`
-	BaseURL        string                       `json:"base_url"`
-	APIVersion     string                       `json:"api_version,omitempty"`
-	CredentialID   string                       `json:"credential_id"`
-	Capabilities   *domain.ProviderCapabilities `json:"capabilities,omitempty"`
-	MaxConcurrency int64                        `json:"max_concurrency"`
-	Enabled        bool                         `json:"enabled"`
+	Name             string                       `json:"name"`
+	Type             domain.ProviderType          `json:"type"`
+	BaseURL          string                       `json:"base_url"`
+	APIVersion       string                       `json:"api_version,omitempty"`
+	CredentialID     string                       `json:"credential_id"`
+	AccessSurface    domain.AccessSurface         `json:"access_surface,omitempty"`
+	ProfileID        domain.ProviderProfileID     `json:"profile_id,omitempty"`
+	CredentialScheme domain.CredentialScheme      `json:"credential_scheme,omitempty"`
+	Capabilities     *domain.ProviderCapabilities `json:"capabilities,omitempty"`
+	MaxConcurrency   int64                        `json:"max_concurrency"`
+	Enabled          bool                         `json:"enabled"`
 }
 
 type routeInput struct {
@@ -160,7 +165,7 @@ func (r *Runtime) createAdminProvider(writer http.ResponseWriter, request *http.
 	now := time.Now().UTC()
 	r.adminTopologyMu.Lock()
 	defer r.adminTopologyMu.Unlock()
-	instance, err := r.providerFromInput(request, providerID, input, now, now)
+	instance, err := r.providerFromInput(request, providerID, input, nil, now, now)
 	if err != nil {
 		adminBadRequest(writer, err.Error())
 		return
@@ -203,7 +208,24 @@ func (r *Runtime) updateAdminProvider(writer http.ResponseWriter, request *http.
 		adminPreconditionFailed(writer)
 		return
 	}
-	instance, err := r.providerFromInput(request, current.ID, input, current.CreatedAt, time.Now().UTC())
+	if input.Type != current.Type {
+		deployments, listErr := r.store.ListDeployments(request.Context())
+		if listErr != nil {
+			adminStoreError(writer)
+			return
+		}
+		for _, deployment := range deployments {
+			if deployment.ProviderID == current.ID && deployment.DeletedAt == nil {
+				adminBadRequest(writer, "provider type and profile cannot change while deployments reference it")
+				return
+			}
+		}
+	}
+	currentEvidence := current.CapabilityEvidence
+	if input.Type != current.Type {
+		currentEvidence = nil
+	}
+	instance, err := r.providerFromInput(request, current.ID, input, currentEvidence, current.CreatedAt, time.Now().UTC())
 	if err != nil {
 		adminBadRequest(writer, err.Error())
 		return
@@ -553,6 +575,16 @@ func (r *Runtime) credentialFromInput(
 	if err != nil {
 		return domain.Credential{}, err
 	}
+	profile, ok := domain.DefaultProviderProfile(input.Type)
+	if !ok {
+		return domain.Credential{}, errors.New("provider profile is not implemented")
+	}
+	if input.AccessSurface != "" && input.AccessSurface != profile.AccessSurface {
+		return domain.Credential{}, errors.New("credential access surface is incompatible")
+	}
+	if input.Scheme != "" && input.Scheme != profile.CredentialScheme {
+		return domain.Credential{}, errors.New("credential scheme is incompatible")
+	}
 	var plaintext []byte
 	if input.Secret != nil {
 		plaintext = []byte(*input.Secret)
@@ -585,7 +617,8 @@ func (r *Runtime) credentialFromInput(
 		keyVersion = current.KeyVersion + 1
 	}
 	credential := domain.Credential{
-		ID: id, Name: input.Name, Type: input.Type, Audience: audience,
+		ID: id, Name: input.Name, Type: input.Type, AccessSurface: profile.AccessSurface,
+		Scheme: profile.CredentialScheme, Audience: audience,
 		Ciphertext: ciphertext, KeyVersion: keyVersion, CreatedAt: createdAt, UpdatedAt: now,
 	}
 	return credential, credential.Validate()
@@ -595,6 +628,7 @@ func (r *Runtime) providerFromInput(
 	request *http.Request,
 	id string,
 	input providerInput,
+	currentEvidence domain.CapabilityEvidenceSet,
 	createdAt time.Time,
 	updatedAt time.Time,
 ) (domain.ProviderInstance, error) {
@@ -618,13 +652,28 @@ func (r *Runtime) providerFromInput(
 	if credential.Type != input.Type || credential.Audience != audience {
 		return domain.ProviderInstance{}, errors.New("credential type or audience does not match provider")
 	}
+	profile, ok := domain.DefaultProviderProfile(input.Type)
+	if !ok {
+		return domain.ProviderInstance{}, errors.New("provider profile is not implemented")
+	}
+	if input.AccessSurface != "" && input.AccessSurface != profile.AccessSurface ||
+		input.ProfileID != "" && input.ProfileID != profile.ProfileID ||
+		input.CredentialScheme != "" && input.CredentialScheme != profile.CredentialScheme {
+		return domain.ProviderInstance{}, errors.New("provider access surface, profile, or credential scheme is incompatible")
+	}
+	if credential.AccessSurface != profile.AccessSurface || credential.Scheme != profile.CredentialScheme {
+		return domain.ProviderInstance{}, errors.New("credential access surface or scheme does not match provider")
+	}
 	instance := domain.ProviderInstance{
 		ID: id, Name: input.Name, Type: input.Type, BaseURL: input.BaseURL,
-		APIVersion:     strings.TrimSpace(input.APIVersion),
-		CredentialID:   input.CredentialID,
-		AllowedHosts:   []string{strings.ToLower(endpoint.Hostname())},
-		MaxConcurrency: input.MaxConcurrency,
-		Enabled:        input.Enabled, CreatedAt: createdAt, UpdatedAt: updatedAt,
+		APIVersion:       strings.TrimSpace(input.APIVersion),
+		CredentialID:     input.CredentialID,
+		AccessSurface:    profile.AccessSurface,
+		ProfileID:        profile.ProfileID,
+		CredentialScheme: profile.CredentialScheme,
+		AllowedHosts:     []string{strings.ToLower(endpoint.Hostname())},
+		MaxConcurrency:   input.MaxConcurrency,
+		Enabled:          input.Enabled, CreatedAt: createdAt, UpdatedAt: updatedAt,
 	}
 	if input.Capabilities == nil {
 		instance.Capabilities = domain.DefaultProviderCapabilities(input.Type)
@@ -634,7 +683,21 @@ func (r *Runtime) providerFromInput(
 			return domain.ProviderInstance{}, errors.New("provider must declare chat or embeddings capability")
 		}
 	}
+	instance.CapabilityEvidence = preserveCapabilityEvidence(instance.Capabilities, currentEvidence)
 	return instance, instance.Validate()
+}
+
+func preserveCapabilityEvidence(capabilities domain.ProviderCapabilities, current domain.CapabilityEvidenceSet) domain.CapabilityEvidenceSet {
+	evidence := domain.EvidenceForCapabilities(capabilities, domain.EvidenceDeclared)
+	for name, value := range evidence {
+		if value == domain.EvidenceUnsupported {
+			continue
+		}
+		if previous := current[name]; previous != "" && previous != domain.EvidenceUnsupported {
+			evidence[name] = previous
+		}
+	}
+	return evidence
 }
 
 func (input routeInput) route(id string, createdAt, updatedAt time.Time) domain.Route {
@@ -749,6 +812,7 @@ func implementedProviderType(value domain.ProviderType) bool {
 func credentialViewFrom(item domain.Credential) credentialView {
 	return credentialView{
 		ID: item.ID, Name: item.Name, Type: item.Type,
+		AccessSurface: item.AccessSurface, Scheme: item.Scheme,
 		SecretConfigured: len(item.Ciphertext) > 0, KeyVersion: item.KeyVersion,
 		Revision: item.Revision,
 	}

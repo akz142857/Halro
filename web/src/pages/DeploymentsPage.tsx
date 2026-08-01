@@ -93,6 +93,8 @@ function DeploymentCard({
       <div className="deployment-model">
         <small>{providerName}</small>
         <strong>{deployment.provider_model}</strong>
+        <small>{deployment.access_surface}</small>
+        <code>{deployment.profile_id}</code>
         <code>{deployment.id}</code>
       </div>
       <dl>
@@ -105,6 +107,7 @@ function DeploymentCard({
       <div className="capability-list" aria-label={t("deployments.capabilities")}>
         {capabilities.length ? capabilities.map((capability) => <span className="badge" key={capability}>{t(`capabilities.${capability}`)}</span>) : <span className="badge">{t("deployments.none")}</span>}
       </div>
+      <small>{t("deployments.evidence")}: {evidenceSummary(deployment.capability_evidence)}</small>
       <footer>
         <button
           className={`badge ${test.isSuccess ? "good" : test.isError ? "warning" : ""}`}
@@ -126,6 +129,11 @@ function DeploymentCard({
       {(test.isError || remove.isError) && <ErrorState error={test.error || remove.error} />}
     </article>
   );
+}
+
+function evidenceSummary(evidence: Record<string, string>) {
+  const values = [...new Set(Object.values(evidence).filter((value) => value !== "unsupported"))];
+  return values.length ? values.join(" / ") : "—";
 }
 
 function DeploymentForm({

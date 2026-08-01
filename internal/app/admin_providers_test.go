@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/akz142857/Heimdall/internal/domain"
 	"github.com/akz142857/Heimdall/internal/provider"
 	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
 )
@@ -49,7 +50,8 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 	if err := json.Unmarshal(credentialResponse.Body.Bytes(), &credential); err != nil {
 		t.Fatal(err)
 	}
-	if !credential.SecretConfigured || credential.KeyVersion != 1 {
+	if !credential.SecretConfigured || credential.KeyVersion != 1 ||
+		credential.AccessSurface != domain.SurfaceOpenAI || credential.Scheme != domain.CredentialBearerStatic {
 		t.Fatalf("unexpected credential view: %#v", credential)
 	}
 
@@ -70,10 +72,27 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 		t.Fatalf("provider create status=%d body=%s", providerResponse.Code, providerResponse.Body.String())
 	}
 	var instance struct {
-		ID string `json:"id"`
+		ID                 string                       `json:"id"`
+		AccessSurface      domain.AccessSurface         `json:"access_surface"`
+		ProfileID          domain.ProviderProfileID     `json:"profile_id"`
+		CredentialScheme   domain.CredentialScheme      `json:"credential_scheme"`
+		CapabilityEvidence domain.CapabilityEvidenceSet `json:"capability_evidence"`
 	}
 	if err := json.Unmarshal(providerResponse.Body.Bytes(), &instance); err != nil {
 		t.Fatal(err)
+	}
+	if instance.AccessSurface != domain.SurfaceOpenAI || instance.ProfileID != domain.ProfileOpenAIChatEmbeddings ||
+		instance.CredentialScheme != domain.CredentialBearerStatic || instance.CapabilityEvidence["chat"] != domain.EvidenceDeclared {
+		t.Fatalf("unexpected provider profile: %#v", instance)
+	}
+	forgedEvidence := performAdminMutation(t, runtime, cookie, csrf,
+		http.MethodPost, "/admin/api/v1/providers", "", map[string]any{
+			"name": "Forged", "type": "openai", "base_url": "https://api.openai.com",
+			"credential_id":       credential.ID,
+			"capability_evidence": map[string]any{"chat": "verified"},
+		})
+	if forgedEvidence.Code != http.StatusBadRequest {
+		t.Fatalf("admin accepted forged capability evidence: %d %s", forgedEvidence.Code, forgedEvidence.Body.String())
 	}
 	blockedCredentialDelete := performAdminMutation(t, runtime, cookie, csrf,
 		http.MethodDelete, "/admin/api/v1/credentials/"+credential.ID, `"1"`, nil,
@@ -109,11 +128,26 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 		t.Fatalf("deployment create status=%d body=%s", deploymentResponse.Code, deploymentResponse.Body.String())
 	}
 	var deployment struct {
-		ID       string `json:"id"`
-		Revision uint64 `json:"revision"`
+		ID                 string                       `json:"id"`
+		Revision           uint64                       `json:"revision"`
+		AccessSurface      domain.AccessSurface         `json:"access_surface"`
+		ProfileID          domain.ProviderProfileID     `json:"profile_id"`
+		CapabilityEvidence domain.CapabilityEvidenceSet `json:"capability_evidence"`
 	}
 	if err := json.Unmarshal(deploymentResponse.Body.Bytes(), &deployment); err != nil {
 		t.Fatal(err)
+	}
+	if deployment.AccessSurface != domain.SurfaceOpenAI || deployment.ProfileID != domain.ProfileOpenAIChatEmbeddings ||
+		deployment.CapabilityEvidence["chat"] != domain.EvidenceDeclared {
+		t.Fatalf("unexpected deployment profile: %#v", deployment)
+	}
+	profileChange := performAdminMutation(t, runtime, cookie, csrf,
+		http.MethodPut, "/admin/api/v1/providers/"+instance.ID, `"1"`, map[string]any{
+			"name": "Changed", "type": "deepseek", "base_url": "https://api.deepseek.com",
+			"credential_id": credential.ID, "enabled": true,
+		})
+	if profileChange.Code != http.StatusBadRequest {
+		t.Fatalf("referenced provider profile changed: %d %s", profileChange.Code, profileChange.Body.String())
 	}
 
 	routeResponse := performAdminMutation(t, runtime, cookie, csrf,
@@ -130,7 +164,9 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 	if !ok || target.ProviderID != instance.ID || target.ProviderModel != "gpt-test" ||
 		target.MaxConcurrency != 3 || target.DeploymentID != deployment.ID || target.DeploymentConcurrency != 2 ||
 		!target.Capabilities.DeveloperRole || !target.Capabilities.Reasoning ||
-		target.Capabilities.MaxContextTokens != 128 || target.Capabilities.MaxOutputTokens != 64 {
+		target.Capabilities.MaxContextTokens != 128 || target.Capabilities.MaxOutputTokens != 64 ||
+		target.AccessSurface != domain.SurfaceOpenAI || target.ProfileID != domain.ProfileOpenAIChatEmbeddings ||
+		target.CapabilityEvidence["chat"] != domain.EvidenceDeclared {
 		t.Fatalf("route was not hot activated: %#v", target)
 	}
 
@@ -219,6 +255,30 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 	}
 	if _, err := runtime.store.GetCredential(context.Background(), credential.ID); !errors.Is(err, boltstore.ErrNotFound) {
 		t.Fatalf("deleted credential remained in store: %v", err)
+	}
+}
+
+func TestCapabilityEvidencePreservesLegacyAndDowngradesDisabledCapabilities(t *testing.T) {
+	providerCapabilities := domain.ProviderCapabilities{Chat: true, Streaming: true, Tools: true}
+	legacy := domain.EvidenceForCapabilities(providerCapabilities, domain.EvidenceLegacy)
+	updated := preserveCapabilityEvidence(providerCapabilities, legacy)
+	if updated["chat"] != domain.EvidenceLegacy || updated["tools"] != domain.EvidenceLegacy {
+		t.Fatalf("provider evidence was silently upgraded: %#v", updated)
+	}
+
+	deploymentCapabilities := domain.ProviderCapabilities{Chat: true, Streaming: true}
+	deployment := deploymentCapabilityEvidence(deploymentCapabilities, legacy, nil)
+	if deployment["chat"] != domain.EvidenceLegacy || deployment["tools"] != domain.EvidenceUnsupported {
+		t.Fatalf("deployment subset evidence=%#v", deployment)
+	}
+	verified := domain.EvidenceForCapabilities(deploymentCapabilities, domain.EvidenceVerified)
+	fresh := deploymentCapabilityEvidence(deploymentCapabilities, verified, nil)
+	if fresh["chat"] != domain.EvidenceDeclared {
+		t.Fatalf("new deployment inherited verified evidence: %#v", fresh)
+	}
+	preserved := deploymentCapabilityEvidence(deploymentCapabilities, verified, verified)
+	if preserved["chat"] != domain.EvidenceVerified {
+		t.Fatalf("unchanged deployment lost verified evidence: %#v", preserved)
 	}
 }
 

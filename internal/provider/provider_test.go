@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/akz142857/Heimdall/internal/domain"
 	"github.com/akz142857/Heimdall/internal/openaiapi"
 	"github.com/akz142857/Heimdall/internal/semantic"
 )
@@ -108,6 +109,55 @@ func TestRegistryFiltersCandidatesByDeclaredCapability(t *testing.T) {
 	}
 	if len(embeddings) != 1 || embeddings[0].ID != "embedding" {
 		t.Fatalf("embedding candidates=%#v", embeddings)
+	}
+}
+
+func TestRegistryCanRequireMinimumCapabilityEvidence(t *testing.T) {
+	registry := NewRegistry()
+	adapter := &registryAdapter{}
+	for _, target := range []Target{
+		{
+			ID: "legacy", PublicModel: "shared", ProviderModel: "legacy", Adapter: adapter,
+			Capabilities: Capabilities{Chat: true},
+			CapabilityEvidence: domain.EvidenceForCapabilities(
+				domain.ProviderCapabilities{Chat: true}, domain.EvidenceLegacy,
+			),
+		},
+		{
+			ID: "verified", PublicModel: "shared", ProviderModel: "verified", Adapter: adapter,
+			Capabilities: Capabilities{Chat: true}, Priority: 10,
+			CapabilityEvidence: domain.EvidenceForCapabilities(
+				domain.ProviderCapabilities{Chat: true}, domain.EvidenceVerified,
+			),
+		},
+	} {
+		if err := registry.Register(target); err != nil {
+			t.Fatal(err)
+		}
+	}
+	candidates := registry.ResolveCandidatesForEvidence("shared", OperationChat, domain.EvidenceDeclared)
+	if len(candidates) != 1 || candidates[0].ID != "verified" {
+		t.Fatalf("evidence-filtered candidates=%#v", candidates)
+	}
+}
+
+func TestRegistryEvidenceFilteringFailsClosedAndRequiresChatForStreaming(t *testing.T) {
+	registry := NewRegistry()
+	evidence := domain.EvidenceForCapabilities(
+		domain.ProviderCapabilities{Chat: true, Streaming: true}, domain.EvidenceVerified,
+	)
+	evidence["chat"] = domain.EvidenceLegacy
+	if err := registry.Register(Target{
+		ID: "mixed", PublicModel: "stream", ProviderModel: "model", Adapter: &registryAdapter{},
+		Capabilities: Capabilities{Chat: true, Streaming: true}, CapabilityEvidence: evidence,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if candidates := registry.ResolveCandidatesForEvidence("stream", OperationChatStream, domain.EvidenceVerified); len(candidates) != 0 {
+		t.Fatalf("streaming accepted weak chat evidence: %#v", candidates)
+	}
+	if candidates := registry.ResolveCandidatesForEvidence("stream", OperationChatStream, "typo"); len(candidates) != 0 {
+		t.Fatalf("invalid evidence threshold failed open: %#v", candidates)
 	}
 }
 

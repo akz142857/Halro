@@ -83,10 +83,29 @@ export interface Credential {
   id: string;
   name: string;
   type: ProviderType;
+  access_surface: AccessSurface;
+  scheme: CredentialScheme;
   secret_configured: boolean;
   key_version: number;
   revision: number;
 }
+
+export type AccessSurface =
+  | "openai-api"
+  | "azure-openai"
+  | "deepseek-api"
+  | "openai-compatible"
+  | "gemini-generate-content"
+  | "bedrock-runtime";
+
+export type CredentialScheme =
+  | "bearer.static"
+  | "azure.api-key"
+  | "google.api-key"
+  | "aws.sigv4.explicit-session";
+
+export type CapabilityEvidence = "verified" | "declared" | "legacy" | "unsupported";
+export type CapabilityEvidenceSet = Record<string, CapabilityEvidence>;
 
 export type ProviderType =
   | "openai"
@@ -114,11 +133,15 @@ export interface Provider {
   id: string;
   name: string;
   type: ProviderType;
+  access_surface: AccessSurface;
+  profile_id: string;
+  credential_scheme: CredentialScheme;
   base_url: string;
   api_version?: string;
   credential_id: string;
   allowed_hosts: string[];
   capabilities: ProviderCapabilities;
+  capability_evidence: CapabilityEvidenceSet;
   max_concurrency: number;
   enabled: boolean;
   revision: number;
@@ -131,7 +154,10 @@ export interface Deployment {
   name: string;
   provider_id: string;
   provider_model: string;
+  access_surface: AccessSurface;
+  profile_id: string;
   capabilities: ProviderCapabilities;
+  capability_evidence: CapabilityEvidenceSet;
   input_micros_per_million: number;
   output_micros_per_million: number;
   max_concurrency: number;

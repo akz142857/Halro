@@ -103,6 +103,12 @@ model alias (`chat` above), never the Provider model or Provider key.
 
 ## Provider profiles
 
+Every configured upstream is bound to an immutable versioned profile consisting
+of an access surface, supported operations, and one credential scheme. New
+records carry `declared` capability evidence; records migrated from the older
+capability snapshot remain `legacy` until verified. The Admin API and console
+show these values so an upgrade cannot silently grant a deployment new behavior.
+
 - OpenAI: Bearer authentication and standard `/v1` chat, stream, and embedding endpoints.
 - Azure OpenAI: `api-key` authentication and deployment-scoped data-plane paths. Set `--provider-api-version` during bootstrap, or `api_version` through the Admin API; Heimdall intentionally does not silently select or upgrade it.
 - DeepSeek: OpenAI-compatible chat/stream profile with embeddings disabled by default.
@@ -136,7 +142,9 @@ configuration, provider setup, alerts, upgrades, and troubleshooting, see
 [the Operator Guide](docs/operator-guide.md).
 
 Bedrock credentials are stored as one encrypted JSON secret. The region must
-match the runtime endpoint hostname:
+match an approved AWS Bedrock Runtime, FIPS, dual-stack, or PrivateLink endpoint
+hostname. A hostname that merely contains the region is rejected, and the SigV4
+authorizer is bound to the configured endpoint authority:
 
 ```json
 {"access_key_id":"...","secret_access_key":"...","session_token":"...","region":"us-east-1"}

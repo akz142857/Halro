@@ -66,7 +66,9 @@ func TestConverseSignsAndTranslatesTextWithoutLeakingSecret(t *testing.T) {
 func TestConverseStreamNormalizesAWSFramesAndUsage(t *testing.T) {
 	var stream bytes.Buffer
 	writeEventFrame(t, &stream, "messageStart", `{"role":"assistant"}`)
+	writeEventFrame(t, &stream, "contentBlockStart", `{"contentBlockIndex":0,"start":{}}`)
 	writeEventFrame(t, &stream, "contentBlockDelta", `{"contentBlockIndex":0,"delta":{"text":"hello"}}`)
+	writeEventFrame(t, &stream, "contentBlockStop", `{"contentBlockIndex":0}`)
 	writeEventFrame(t, &stream, "messageStop", `{"stopReason":"max_tokens"}`)
 	writeEventFrame(t, &stream, "metadata", `{"usage":{"inputTokens":3,"outputTokens":2,"totalTokens":5}}`)
 	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
@@ -100,7 +102,10 @@ func TestCredentialRegionErrorsAndProviderErrorsAreSafe(t *testing.T) {
 		t.Fatal("region-mismatched endpoint was accepted")
 	}
 	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-		return jsonResponse(http.StatusForbidden, `{"message":"test-secret-access-key-value"}`), nil
+		response := jsonResponse(http.StatusTooManyRequests, `{"message":"test-secret-access-key-value","code":"ThrottlingException"}`)
+		response.Header.Set("x-amzn-requestid", "aws-request-123")
+		response.Header.Set("Retry-After", "7")
+		return response, nil
 	})}
 	adapter := newTestAdapter(t, client)
 	defer adapter.Close()
@@ -112,8 +117,78 @@ func TestCredentialRegionErrorsAndProviderErrorsAreSafe(t *testing.T) {
 		t.Fatalf("unsafe error=%v", err)
 	}
 	var classified *provider.Error
-	if !errorsAs(err, &classified) || classified.Class != provider.ErrorAuthentication {
+	if !errorsAs(err, &classified) || classified.Class != provider.ErrorRateLimit ||
+		classified.ProviderRequestID != "aws-request-123" || classified.ProviderCode != "ThrottlingException" ||
+		classified.RetryAfter != 7*time.Second {
 		t.Fatalf("classification=%#v err=%v", classified, err)
+	}
+}
+
+func TestBedrockAuthorizerRejectsUnapprovedAndCrossAudienceHosts(t *testing.T) {
+	malicious, _ := url.Parse("https://attacker.us-east-1.example.com")
+	if _, err := NewAuthorizer(malicious, []byte(testCredential), nil); err == nil {
+		t.Fatal("non-AWS host containing the region was accepted")
+	}
+	insecure, _ := url.Parse("http://bedrock-runtime.us-east-1.amazonaws.com")
+	if _, err := NewAuthorizer(insecure, []byte(testCredential), nil); err == nil {
+		t.Fatal("plaintext Bedrock endpoint was accepted")
+	}
+	endpoint, _ := url.Parse("https://bedrock-runtime.us-east-1.amazonaws.com")
+	authorizer, err := NewAuthorizer(endpoint, []byte(testCredential), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer authorizer.Close()
+	request, _ := http.NewRequest(http.MethodPost, "https://bedrock-runtime.us-west-2.amazonaws.com/model/x/converse", nil)
+	if err := authorizer.Authorize(request, nil); err == nil {
+		t.Fatal("authorizer signed a request for another audience")
+	}
+}
+
+func TestBedrockHTTP5xxIsAmbiguousAndNotRetryable(t *testing.T) {
+	response := jsonResponse(http.StatusInternalServerError, `{"__type":"InternalServerException"}`)
+	classified := classifyHTTP(response)
+	if classified.Class != provider.ErrorProvider5xx || !classified.Ambiguous || classified.Retryable {
+		t.Fatalf("classification=%#v", classified)
+	}
+}
+
+func TestBedrockExecutionErrorsUseHeaderCodeAndRemainAmbiguous(t *testing.T) {
+	for _, test := range []struct {
+		status int
+		code   string
+		class  provider.ErrorClass
+	}{
+		{http.StatusRequestTimeout, "ModelTimeoutException:http", provider.ErrorTimeout},
+		{http.StatusFailedDependency, "ModelErrorException", provider.ErrorProvider5xx},
+	} {
+		response := jsonResponse(test.status, `{"message":"safe"}`)
+		response.Header.Set("x-amzn-errortype", test.code)
+		classified := classifyHTTP(response)
+		if classified.Class != test.class || !classified.Ambiguous || classified.Retryable || classified.ProviderCode == "" {
+			t.Fatalf("status=%d classification=%#v", test.status, classified)
+		}
+	}
+}
+
+func TestRetryAfterSaturatesWithoutDurationOverflow(t *testing.T) {
+	header := http.Header{"Retry-After": []string{"9223372036854775807"}}
+	if delay := retryAfter(header, time.Now()); delay != 24*time.Hour {
+		t.Fatalf("delay=%v", delay)
+	}
+}
+
+func TestBedrockStopReasonsPreserveLengthAndRejectUnknownValues(t *testing.T) {
+	if finish, err := mapFinishReason("model_context_window_exceeded"); err != nil || finish == nil || *finish != "length" {
+		t.Fatalf("finish=%v err=%v", finish, err)
+	}
+	if _, err := mapFinishReason("future_unknown_reason"); err == nil {
+		t.Fatal("unknown stop reason was silently accepted")
+	} else {
+		var classified *provider.Error
+		if !errors.As(err, &classified) || classified.Class != provider.ErrorMalformed || !classified.Ambiguous {
+			t.Fatalf("unknown stop classification=%#v", classified)
+		}
 	}
 }
 
@@ -135,6 +210,28 @@ func TestConverseStreamRejectsTruncatedAndNonTextStreams(t *testing.T) {
 		{name: "missing message stop", frame: func(t *testing.T, stream *bytes.Buffer) {
 			writeEventFrame(t, stream, "messageStart", `{"role":"assistant"}`)
 		}},
+		{name: "missing usage metadata", frame: func(t *testing.T, stream *bytes.Buffer) {
+			writeEventFrame(t, stream, "messageStart", `{"role":"assistant"}`)
+			writeEventFrame(t, stream, "messageStop", `{"stopReason":"end_turn"}`)
+		}},
+		{name: "empty usage metadata", frame: func(t *testing.T, stream *bytes.Buffer) {
+			writeEventFrame(t, stream, "messageStart", `{"role":"assistant"}`)
+			writeEventFrame(t, stream, "messageStop", `{"stopReason":"end_turn"}`)
+			writeEventFrame(t, stream, "metadata", `{}`)
+		}},
+		{name: "zero usage metadata", frame: func(t *testing.T, stream *bytes.Buffer) {
+			writeEventFrame(t, stream, "messageStart", `{"role":"assistant"}`)
+			writeEventFrame(t, stream, "messageStop", `{"stopReason":"end_turn"}`)
+			writeEventFrame(t, stream, "metadata", `{"usage":{}}`)
+		}},
+		{name: "missing content block index", frame: func(t *testing.T, stream *bytes.Buffer) {
+			writeEventFrame(t, stream, "messageStart", `{"role":"assistant"}`)
+			writeEventFrame(t, stream, "contentBlockStart", `{"start":{}}`)
+		}},
+		{name: "missing stop reason", frame: func(t *testing.T, stream *bytes.Buffer) {
+			writeEventFrame(t, stream, "messageStart", `{"role":"assistant"}`)
+			writeEventFrame(t, stream, "messageStop", `{}`)
+		}},
 		{name: "tool content block", frame: func(t *testing.T, stream *bytes.Buffer) {
 			writeEventFrame(t, stream, "messageStart", `{"role":"assistant"}`)
 			writeEventFrame(t, stream, "contentBlockStart", `{"contentBlockIndex":0,"start":{"toolUse":{"toolUseId":"1","name":"unsafe"}}}`)
@@ -146,6 +243,14 @@ func TestConverseStreamRejectsTruncatedAndNonTextStreams(t *testing.T) {
 		{name: "unsupported stop reason", frame: func(t *testing.T, stream *bytes.Buffer) {
 			writeEventFrame(t, stream, "messageStart", `{"role":"assistant"}`)
 			writeEventFrame(t, stream, "messageStop", `{"stopReason":"tool_use"}`)
+		}},
+		{name: "delta before message start", frame: func(t *testing.T, stream *bytes.Buffer) {
+			writeEventFrame(t, stream, "contentBlockDelta", `{"contentBlockIndex":0,"delta":{"text":"late"}}`)
+		}},
+		{name: "message stop before content block stop", frame: func(t *testing.T, stream *bytes.Buffer) {
+			writeEventFrame(t, stream, "messageStart", `{"role":"assistant"}`)
+			writeEventFrame(t, stream, "contentBlockDelta", `{"contentBlockIndex":0,"delta":{"text":"partial"}}`)
+			writeEventFrame(t, stream, "messageStop", `{"stopReason":"end_turn"}`)
 		}},
 	}
 	for _, test := range tests {
@@ -165,6 +270,30 @@ func TestConverseStreamRejectsTruncatedAndNonTextStreams(t *testing.T) {
 				t.Fatal("invalid Bedrock stream was accepted")
 			}
 		})
+	}
+}
+
+func TestBedrockStreamExceptionClassification(t *testing.T) {
+	validation := streamException("validationException", http.Header{}, nil)
+	if validation.Class != provider.ErrorBadRequest || validation.Retryable || validation.Ambiguous {
+		t.Fatalf("validation=%#v", validation)
+	}
+	model := streamException("modelStreamErrorException", http.Header{}, nil)
+	if model.Class != provider.ErrorProvider5xx || !model.Ambiguous || model.Retryable {
+		t.Fatalf("model stream=%#v", model)
+	}
+	timeout := streamException("modelTimeoutException", http.Header{}, nil)
+	if timeout.Class != provider.ErrorTimeout || !timeout.Ambiguous || timeout.Retryable {
+		t.Fatalf("model timeout=%#v", timeout)
+	}
+	header := http.Header{"Retry-After": []string{"5"}}
+	throttled := streamException("throttlingException", header, nil)
+	if throttled.Class != provider.ErrorRateLimit || throttled.RetryAfter != 5*time.Second {
+		t.Fatalf("throttled=%#v", throttled)
+	}
+	unknown := streamException("futureException", http.Header{}, nil)
+	if unknown.Class != provider.ErrorMalformed || !unknown.Ambiguous {
+		t.Fatalf("unknown=%#v", unknown)
 	}
 }
 
@@ -190,7 +319,31 @@ func TestConverseRejectsNonTextOutputAndInvalidUsage(t *testing.T) {
 			if err == nil {
 				t.Fatal("unsupported Bedrock response was accepted")
 			}
+			var classified *provider.Error
+			if !errors.As(err, &classified) || classified.Class != provider.ErrorMalformed || !classified.Ambiguous {
+				t.Fatalf("classification=%#v err=%v", classified, err)
+			}
 		})
+	}
+}
+
+func TestBedrockTextProfileRejectsUndeclaredDeveloperRoleBeforeProviderIO(t *testing.T) {
+	called := false
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		called = true
+		return jsonResponse(http.StatusOK, `{}`), nil
+	})}
+	adapter := newTestAdapter(t, client)
+	defer adapter.Close()
+	_, err := adapter.Chat(context.Background(), provider.ChatCall{
+		RequestID: "req_developer", ProviderModel: "model",
+		Request: openaiapi.ChatCompletionRequest{Messages: []openaiapi.Message{
+			{Role: "developer", Content: openaiapi.TextContent("do not accept")},
+			{Role: "user", Content: openaiapi.TextContent("hi")},
+		}},
+	})
+	if err == nil || called {
+		t.Fatalf("developer role err=%v provider_called=%t", err, called)
 	}
 }
 

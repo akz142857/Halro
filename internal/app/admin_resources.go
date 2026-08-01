@@ -15,12 +15,14 @@ import (
 )
 
 type credentialView struct {
-	ID               string              `json:"id"`
-	Name             string              `json:"name"`
-	Type             domain.ProviderType `json:"type"`
-	SecretConfigured bool                `json:"secret_configured"`
-	KeyVersion       uint16              `json:"key_version"`
-	Revision         uint64              `json:"revision"`
+	ID               string                  `json:"id"`
+	Name             string                  `json:"name"`
+	Type             domain.ProviderType     `json:"type"`
+	AccessSurface    domain.AccessSurface    `json:"access_surface"`
+	Scheme           domain.CredentialScheme `json:"scheme"`
+	SecretConfigured bool                    `json:"secret_configured"`
+	KeyVersion       uint16                  `json:"key_version"`
+	Revision         uint64                  `json:"revision"`
 }
 
 type gatewayKeyView struct {
@@ -102,6 +104,7 @@ func (r *Runtime) listAdminCredentials(writer http.ResponseWriter, request *http
 		}
 		views = append(views, credentialView{
 			ID: item.ID, Name: item.Name, Type: item.Type,
+			AccessSurface: item.AccessSurface, Scheme: item.Scheme,
 			SecretConfigured: len(item.Ciphertext) > 0, KeyVersion: item.KeyVersion,
 			Revision: item.Revision,
 		})
@@ -118,6 +121,7 @@ func (r *Runtime) getAdminCredential(writer http.ResponseWriter, request *http.R
 	writer.Header().Set("ETag", revisionETag(item.Revision))
 	writeJSON(writer, http.StatusOK, credentialView{
 		ID: item.ID, Name: item.Name, Type: item.Type,
+		AccessSurface: item.AccessSurface, Scheme: item.Scheme,
 		SecretConfigured: len(item.Ciphertext) > 0, KeyVersion: item.KeyVersion,
 		Revision: item.Revision,
 	})

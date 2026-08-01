@@ -19,15 +19,17 @@ const (
 )
 
 type Credential struct {
-	ID         string       `json:"id"`
-	Name       string       `json:"name"`
-	Type       ProviderType `json:"type"`
-	Audience   string       `json:"audience"`
-	Ciphertext []byte       `json:"ciphertext"`
-	KeyVersion uint16       `json:"key_version"`
-	CreatedAt  time.Time    `json:"created_at"`
-	UpdatedAt  time.Time    `json:"updated_at"`
-	Revision   uint64       `json:"revision"`
+	ID            string           `json:"id"`
+	Name          string           `json:"name"`
+	Type          ProviderType     `json:"type"`
+	AccessSurface AccessSurface    `json:"access_surface"`
+	Scheme        CredentialScheme `json:"scheme"`
+	Audience      string           `json:"audience"`
+	Ciphertext    []byte           `json:"ciphertext"`
+	KeyVersion    uint16           `json:"key_version"`
+	CreatedAt     time.Time        `json:"created_at"`
+	UpdatedAt     time.Time        `json:"updated_at"`
+	Revision      uint64           `json:"revision"`
 }
 
 func (c *Credential) GetRevision() uint64      { return c.Revision }
@@ -43,6 +45,12 @@ func (c Credential) Validate() error {
 	}
 	if c.Type == "" {
 		problems = append(problems, errors.New("credential type is required"))
+	}
+	defaults, ok := DefaultProviderProfile(c.Type)
+	if ok && (c.AccessSurface != defaults.AccessSurface || c.Scheme != defaults.CredentialScheme) {
+		problems = append(problems, errors.New("credential access surface or scheme is incompatible"))
+	} else if !ok && (c.AccessSurface != "" || c.Scheme != "") {
+		problems = append(problems, errors.New("custom credential types cannot declare a provider access surface or scheme"))
 	}
 	if strings.TrimSpace(c.Audience) == "" {
 		problems = append(problems, errors.New("credential audience is required"))
@@ -117,20 +125,24 @@ type GatewayKey struct {
 }
 
 type ProviderInstance struct {
-	ID             string               `json:"id"`
-	Name           string               `json:"name"`
-	Type           ProviderType         `json:"type"`
-	BaseURL        string               `json:"base_url"`
-	APIVersion     string               `json:"api_version,omitempty"`
-	CredentialID   string               `json:"credential_id"`
-	AllowedHosts   []string             `json:"allowed_hosts"`
-	Capabilities   ProviderCapabilities `json:"capabilities"`
-	MaxConcurrency int64                `json:"max_concurrency"`
-	Enabled        bool                 `json:"enabled"`
-	CreatedAt      time.Time            `json:"created_at"`
-	UpdatedAt      time.Time            `json:"updated_at"`
-	Revision       uint64               `json:"revision"`
-	DeletedAt      *time.Time           `json:"deleted_at,omitempty"`
+	ID                 string                `json:"id"`
+	Name               string                `json:"name"`
+	Type               ProviderType          `json:"type"`
+	BaseURL            string                `json:"base_url"`
+	APIVersion         string                `json:"api_version,omitempty"`
+	CredentialID       string                `json:"credential_id"`
+	AccessSurface      AccessSurface         `json:"access_surface"`
+	ProfileID          ProviderProfileID     `json:"profile_id"`
+	CredentialScheme   CredentialScheme      `json:"credential_scheme"`
+	AllowedHosts       []string              `json:"allowed_hosts"`
+	Capabilities       ProviderCapabilities  `json:"capabilities"`
+	CapabilityEvidence CapabilityEvidenceSet `json:"capability_evidence"`
+	MaxConcurrency     int64                 `json:"max_concurrency"`
+	Enabled            bool                  `json:"enabled"`
+	CreatedAt          time.Time             `json:"created_at"`
+	UpdatedAt          time.Time             `json:"updated_at"`
+	Revision           uint64                `json:"revision"`
+	DeletedAt          *time.Time            `json:"deleted_at,omitempty"`
 }
 
 type ProviderCapabilities struct {
@@ -166,6 +178,9 @@ func (p ProviderInstance) Validate() error {
 	if p.Type == ProviderAzureOpenAI && strings.TrimSpace(p.APIVersion) == "" {
 		problems = append(problems, errors.New("azure openai api version is required"))
 	}
+	if err := ValidateProviderProfile(p.Type, p.AccessSurface, p.ProfileID, p.CredentialScheme); err != nil {
+		problems = append(problems, err)
+	}
 	if strings.TrimSpace(p.BaseURL) == "" {
 		problems = append(problems, errors.New("provider base URL is required"))
 	}
@@ -177,8 +192,7 @@ func (p ProviderInstance) Validate() error {
 	}
 	capabilities := p.Capabilities
 	if !capabilities.Chat && !capabilities.Embeddings {
-		// Records created before capability declarations inherit profile defaults.
-		capabilities = DefaultProviderCapabilities(p.Type)
+		problems = append(problems, errors.New("provider must declare chat or embeddings capability"))
 	}
 	if capabilities.Streaming && !capabilities.Chat {
 		problems = append(problems, errors.New("streaming capability requires chat capability"))
@@ -186,6 +200,9 @@ func (p ProviderInstance) Validate() error {
 	if capabilities.MaxContextTokens < 0 || capabilities.MaxOutputTokens < 0 ||
 		(capabilities.MaxContextTokens > 0 && capabilities.MaxOutputTokens > capabilities.MaxContextTokens) {
 		problems = append(problems, errors.New("provider capability token limits are invalid"))
+	}
+	if err := p.CapabilityEvidence.Validate(capabilities); err != nil {
+		problems = append(problems, err)
 	}
 	if p.MaxConcurrency < 0 {
 		problems = append(problems, errors.New("provider max concurrency cannot be negative"))
@@ -215,7 +232,7 @@ func DefaultProviderCapabilities(providerType ProviderType) ProviderCapabilities
 		return ProviderCapabilities{Chat: true, Streaming: true, Embeddings: true, DeveloperRole: true}
 	case ProviderBedrock:
 		// Beta profile intentionally declares only Converse text chat and usage.
-		return ProviderCapabilities{Chat: true, Streaming: true, DeveloperRole: true, StreamUsage: true}
+		return ProviderCapabilities{Chat: true, Streaming: true, StreamUsage: true}
 	default:
 		return ProviderCapabilities{}
 	}
@@ -226,21 +243,24 @@ func DefaultProviderCapabilities(providerType ProviderType) ProviderCapabilities
 // price and target-level capacity. Routes reference Deployments and never
 // duplicate Provider secrets or endpoint configuration.
 type Deployment struct {
-	ID                     string               `json:"id"`
-	Name                   string               `json:"name"`
-	ProviderID             string               `json:"provider_id"`
-	ProviderModel          string               `json:"provider_model"`
-	Capabilities           ProviderCapabilities `json:"capabilities"`
-	InputMicrosPerMillion  int64                `json:"input_micros_per_million"`
-	OutputMicrosPerMillion int64                `json:"output_micros_per_million"`
-	MaxConcurrency         int64                `json:"max_concurrency"`
-	Priority               int                  `json:"priority"`
-	Weight                 int                  `json:"weight"`
-	Enabled                bool                 `json:"enabled"`
-	CreatedAt              time.Time            `json:"created_at"`
-	UpdatedAt              time.Time            `json:"updated_at"`
-	Revision               uint64               `json:"revision"`
-	DeletedAt              *time.Time           `json:"deleted_at,omitempty"`
+	ID                     string                `json:"id"`
+	Name                   string                `json:"name"`
+	ProviderID             string                `json:"provider_id"`
+	ProviderModel          string                `json:"provider_model"`
+	AccessSurface          AccessSurface         `json:"access_surface"`
+	ProfileID              ProviderProfileID     `json:"profile_id"`
+	Capabilities           ProviderCapabilities  `json:"capabilities"`
+	CapabilityEvidence     CapabilityEvidenceSet `json:"capability_evidence"`
+	InputMicrosPerMillion  int64                 `json:"input_micros_per_million"`
+	OutputMicrosPerMillion int64                 `json:"output_micros_per_million"`
+	MaxConcurrency         int64                 `json:"max_concurrency"`
+	Priority               int                   `json:"priority"`
+	Weight                 int                   `json:"weight"`
+	Enabled                bool                  `json:"enabled"`
+	CreatedAt              time.Time             `json:"created_at"`
+	UpdatedAt              time.Time             `json:"updated_at"`
+	Revision               uint64                `json:"revision"`
+	DeletedAt              *time.Time            `json:"deleted_at,omitempty"`
 }
 
 func (d *Deployment) GetRevision() uint64      { return d.Revision }
@@ -260,6 +280,12 @@ func (d Deployment) Validate() error {
 	if strings.TrimSpace(d.ProviderModel) == "" {
 		problems = append(problems, errors.New("deployment provider model is required"))
 	}
+	if strings.TrimSpace(string(d.AccessSurface)) == "" || strings.TrimSpace(string(d.ProfileID)) == "" {
+		problems = append(problems, errors.New("deployment access surface and profile are required"))
+	}
+	if !d.Capabilities.Chat && !d.Capabilities.Embeddings {
+		problems = append(problems, errors.New("deployment must declare chat or embeddings capability"))
+	}
 	if d.InputMicrosPerMillion < 0 || d.OutputMicrosPerMillion < 0 {
 		problems = append(problems, errors.New("deployment prices cannot be negative"))
 	}
@@ -269,6 +295,9 @@ func (d Deployment) Validate() error {
 	if d.Capabilities.MaxContextTokens < 0 || d.Capabilities.MaxOutputTokens < 0 ||
 		(d.Capabilities.MaxContextTokens > 0 && d.Capabilities.MaxOutputTokens > d.Capabilities.MaxContextTokens) {
 		problems = append(problems, errors.New("deployment capability token limits are invalid"))
+	}
+	if err := d.CapabilityEvidence.Validate(d.Capabilities); err != nil {
+		problems = append(problems, err)
 	}
 	if d.Priority < 0 {
 		problems = append(problems, errors.New("deployment priority cannot be negative"))

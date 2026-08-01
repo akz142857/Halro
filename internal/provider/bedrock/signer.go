@@ -9,21 +9,26 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/akz142857/Heimdall/internal/domain"
 )
 
 type credentials struct {
-	AccessKeyID     string `json:"access_key_id"`
-	SecretAccessKey string `json:"secret_access_key"`
-	SessionToken    string `json:"session_token,omitempty"`
-	Region          string `json:"region"`
+	AccessKeyID     string
+	SecretAccessKey []byte
+	SessionToken    []byte
+	Region          string
 }
 
 type signer struct {
+	mu           sync.RWMutex
 	accessKeyID  string
 	secretKey    []byte
 	sessionToken []byte
 	region       string
+	authority    string
 	now          func() time.Time
 }
 
@@ -38,21 +43,33 @@ func newSigner(value credentials) (*signer, error) {
 		return nil, errors.New("AWS region is invalid")
 	}
 	return &signer{
-		accessKeyID: value.AccessKeyID, secretKey: []byte(value.SecretAccessKey),
-		sessionToken: []byte(value.SessionToken), region: value.Region, now: time.Now,
+		accessKeyID: value.AccessKeyID, secretKey: append([]byte(nil), value.SecretAccessKey...),
+		sessionToken: append([]byte(nil), value.SessionToken...), region: value.Region, now: time.Now,
 	}, nil
 }
 
-func (s *signer) close() {
+func (s *signer) Close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	clear(s.secretKey)
 	clear(s.sessionToken)
 	s.secretKey = nil
 	s.sessionToken = nil
 }
 
-func (s *signer) sign(request *http.Request, payload []byte) error {
+func (s *signer) Scheme() domain.CredentialScheme { return domain.CredentialAWSSigV4Explicit }
+
+func (s *signer) Authorize(request *http.Request, payload []byte) error {
 	if request == nil || request.URL == nil || request.URL.Host == "" {
 		return errors.New("AWS request URL is required")
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if len(s.secretKey) == 0 {
+		return errors.New("AWS credential authorizer is closed")
+	}
+	if !strings.EqualFold(request.URL.Host, s.authority) {
+		return errors.New("AWS credential authorizer audience mismatch")
 	}
 	now := s.now().UTC()
 	amzDate, date := now.Format("20060102T150405Z"), now.Format("20060102")

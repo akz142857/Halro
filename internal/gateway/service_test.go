@@ -1008,3 +1008,20 @@ func TestChatStreamNeverFallsBackAfterPayload(t *testing.T) {
 		t.Fatalf("err=%v primary_calls=%d fallback_calls=%d", err, f.adapter.calls, fallback.calls)
 	}
 }
+
+func TestProviderRetryAfterPropagatesAndDelaysRetry(t *testing.T) {
+	upstream := &provider.Error{
+		Class: provider.ErrorRateLimit, Retryable: true, RetryAfter: 50 * time.Millisecond,
+	}
+	mapped := mapProviderError(upstream)
+	var gatewayErr *Error
+	if !errors.As(mapped, &gatewayErr) || gatewayErr.RetryAfter != upstream.RetryAfter {
+		t.Fatalf("mapped retry-after=%#v", gatewayErr)
+	}
+	service := &Service{retryBaseDelay: 0, retryMaxDelay: upstream.RetryAfter}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+	if err := service.waitRetry(ctx, 0, upstream); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("provider retry-after was ignored: %v", err)
+	}
+}

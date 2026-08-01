@@ -1,6 +1,6 @@
 # Heimdall 多协议 LLM API、Provider 与 Realtime 架构设计
 
-状态：设计提案 v5，已吸收多角色架构评审、OpenAI Realtime 与 AWS Bedrock 多协议分析，尚未代表已实现能力<br>
+状态：设计提案 v5；Phase 0A Provider Profile 基础已实现，其余章节仍是目标设计，不代表现有能力<br>
 最后更新：2026-08-01<br>
 适用范围：Gateway 数据面、Provider Adapter、能力协商、实时会话和未来分布式部署
 
@@ -37,6 +37,12 @@ Provider、模型、协议和部署形态持续演进。
 - 通用 OpenAI-compatible Provider；
 - Gemini Beta 文本生成、SSE 和 Embeddings；
 - AWS Bedrock Beta Converse/ConverseStream。
+
+Phase 0A 已在当前代码中增加版本化 Provider Profile、Access Surface、Operation Registry、
+Credential Scheme、逐能力证据和 LegacyAdapterBridge。旧记录经原子 Schema Migration 标记为
+`legacy`，新建记录标记为 `declared`；Admin API 与界面可查看 Profile、Surface、Scheme 和证据。
+这些基础设施仍桥接现有 OpenAI 类型 Adapter，尚不等于 Canonical IR、NativeEnvelope、Responses、
+Anthropic Messages 或 Realtime 已经实现。
 
 当前能力声明包含 Chat、Streaming、Embeddings、Tools、Vision、JSON、Developer
 Role、Reasoning、Stream Usage 和 Token Limits。Realtime、Audio、Image Generation、
@@ -1568,6 +1574,19 @@ internal/policy/
 ## 18. 分阶段开发方案
 
 ### Phase 0（Now/Next）：最小协议基础
+
+实施状态（2026-08-01）：Phase 0A 已完成 Access Surface、不可变 Provider Profile Manifest、
+Operation Registry、Credential Scheme Authorizer、Capability Evidence、LegacyAdapterBridge、Schema
+Migration、Admin 可见性和 Bedrock Converse 基线修正。Semantic Content/Result/Event、
+NativeEnvelope/GovernanceView、Endpoint Compatibility Manifest、依赖静态检查与跨 Profile Golden
+Matrix 留在后续 Phase 0B，不应由“Phase 0A 已完成”推断为已支持。
+
+Phase 0A 的 Bedrock SigV4 只接受显式列入规则的 AWS Runtime/FIPS/Dual-stack/PrivateLink
+Hostname，并在每次签名前复核 Authority；HTTP 5xx 与已接受流中的模型异常按未知执行结果保守
+处理，不做透明重放。声明 Stream Usage 的 ConverseStream 必须收到 Metadata 才算完整成功。
+普通 Admin 请求不能直接写入 `verified` 或 `legacy`；新 Deployment 的证据最高为 `declared`，
+只有相同 Provider/Profile/Model 的既有 Deployment 才能保留已验证证据。Provider 更新必须在同一
+事务内证明所有存量 Deployment 仍是其能力与证据子集。
 
 - 引入 NorthboundProfile、SemanticOperation、ProviderPrimitive 三层模型；
 - 引入 Access Surface、ProviderProfile、OperationRegistry 和 Credential Scheme；

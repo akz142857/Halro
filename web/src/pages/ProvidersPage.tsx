@@ -120,6 +120,8 @@ function ProviderRow({ provider, onEdit }: { provider: Provider; onEdit: () => v
         <div>
           <span><StatusDot ok={provider.enabled} /><strong>{provider.name}</strong></span>
           <small>{provider.base_url}</small>
+          <small>{t("providers.profile")}: <code>{provider.profile_id}</code></small>
+          <small>{t("providers.surface")}: {provider.access_surface} · {t("providers.evidence")}: {evidenceSummary(provider.capability_evidence)}</small>
           <small>{t("providers.concurrency", { value: provider.max_concurrency || t("common.unlimited") })}</small>
           <code>{provider.id}</code>
         </div>
@@ -160,7 +162,8 @@ function CredentialRow({ credential }: { credential: Credential }) {
         <span className="vault-lock" aria-hidden="true">◆</span>
         <div>
           <strong>{credential.name}</strong>
-          <small>{credential.type} · {t("providers.keyGeneration", { version: credential.key_version })}</small>
+          <small>{credential.type} · {credential.access_surface} · {credential.scheme}</small>
+          <small>{t("providers.keyGeneration", { version: credential.key_version })}</small>
           <code>{credential.id}</code>
         </div>
         <div className="row-actions">
@@ -177,6 +180,11 @@ function CredentialRow({ credential }: { credential: Credential }) {
       {rotating && <CredentialForm current={credential} onClose={() => setRotating(false)} />}
     </>
   );
+}
+
+function evidenceSummary(evidence: Record<string, string>) {
+  const values = [...new Set(Object.values(evidence).filter((value) => value !== "unsupported"))];
+  return values.length ? values.join(" / ") : "—";
 }
 
 function CredentialForm({
@@ -386,6 +394,6 @@ function defaultProviderCapabilities(type: ProviderType): ProviderCapabilities {
   if (type === "deepseek") return { ...value, tools: true, json_mode: true, reasoning: true, stream_usage: true };
   if (type === "openai_compatible") return { ...value, embeddings: true };
   if (type === "gemini") return { ...value, embeddings: true, developer_role: true, stream_usage: false };
-  if (type === "bedrock") return { ...value, developer_role: true, stream_usage: true };
+  if (type === "bedrock") return { ...value, stream_usage: true };
   return value;
 }

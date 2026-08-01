@@ -16,6 +16,8 @@ type deploymentInput struct {
 	Name                   string                       `json:"name"`
 	ProviderID             string                       `json:"provider_id"`
 	ProviderModel          string                       `json:"provider_model"`
+	AccessSurface          domain.AccessSurface         `json:"access_surface,omitempty"`
+	ProfileID              domain.ProviderProfileID     `json:"profile_id,omitempty"`
 	Capabilities           *domain.ProviderCapabilities `json:"capabilities,omitempty"`
 	InputMicrosPerMillion  int64                        `json:"input_micros_per_million"`
 	OutputMicrosPerMillion int64                        `json:"output_micros_per_million"`
@@ -39,7 +41,7 @@ func (r *Runtime) createAdminDeployment(writer http.ResponseWriter, request *htt
 	r.adminTopologyMu.Lock()
 	defer r.adminTopologyMu.Unlock()
 	now := time.Now().UTC()
-	deployment, err := r.deploymentFromInput(request, deploymentID, input, now, now)
+	deployment, err := r.deploymentFromInput(request, deploymentID, input, nil, now, now)
 	if err != nil {
 		adminBadRequest(writer, err.Error())
 		return
@@ -82,7 +84,11 @@ func (r *Runtime) updateAdminDeployment(writer http.ResponseWriter, request *htt
 		adminPreconditionFailed(writer)
 		return
 	}
-	deployment, err := r.deploymentFromInput(request, current.ID, input, current.CreatedAt, time.Now().UTC())
+	currentEvidence := domain.CapabilityEvidenceSet(nil)
+	if input.ProviderID == current.ProviderID && strings.TrimSpace(input.ProviderModel) == current.ProviderModel {
+		currentEvidence = current.CapabilityEvidence
+	}
+	deployment, err := r.deploymentFromInput(request, current.ID, input, currentEvidence, current.CreatedAt, time.Now().UTC())
 	if err != nil {
 		adminBadRequest(writer, err.Error())
 		return
@@ -178,7 +184,7 @@ func (r *Runtime) testAdminDeployment(writer http.ResponseWriter, request *http.
 	r.runAdminProbe(writer, request, prober, deployment.ProviderModel, "deployment", deployment.ID, deployment.Capabilities)
 }
 
-func (r *Runtime) deploymentFromInput(request *http.Request, deploymentID string, input deploymentInput, createdAt, updatedAt time.Time) (domain.Deployment, error) {
+func (r *Runtime) deploymentFromInput(request *http.Request, deploymentID string, input deploymentInput, currentEvidence domain.CapabilityEvidenceSet, createdAt, updatedAt time.Time) (domain.Deployment, error) {
 	instance, err := r.store.GetProvider(request.Context(), input.ProviderID)
 	if err != nil || instance.DeletedAt != nil || (input.Enabled && !instance.Enabled) {
 		return domain.Deployment{}, errors.New("deployment provider is unavailable")
@@ -190,6 +196,19 @@ func (r *Runtime) deploymentFromInput(request *http.Request, deploymentID string
 			return domain.Deployment{}, errors.New("deployment capabilities exceed provider capabilities")
 		}
 	}
+	if input.AccessSurface != "" && input.AccessSurface != instance.AccessSurface ||
+		input.ProfileID != "" && input.ProfileID != instance.ProfileID {
+		return domain.Deployment{}, errors.New("deployment access surface or profile does not match provider")
+	}
+	evidence := deploymentCapabilityEvidence(capabilities, instance.CapabilityEvidence, currentEvidence)
+	for name, value := range evidence {
+		if !capabilitiesEnabledByName(capabilities, name) && value != domain.EvidenceUnsupported {
+			return domain.Deployment{}, errors.New("deployment capability evidence exceeds enabled capabilities")
+		}
+		if providerValue, ok := instance.CapabilityEvidence[name]; ok && evidenceRank(value) > evidenceRank(providerValue) {
+			return domain.Deployment{}, errors.New("deployment capability evidence exceeds provider evidence")
+		}
+	}
 	weight := input.Weight
 	if weight == 0 {
 		weight = 1
@@ -197,12 +216,71 @@ func (r *Runtime) deploymentFromInput(request *http.Request, deploymentID string
 	deployment := domain.Deployment{
 		ID: deploymentID, Name: strings.TrimSpace(input.Name), ProviderID: input.ProviderID,
 		ProviderModel: strings.TrimSpace(input.ProviderModel), Capabilities: capabilities,
+		AccessSurface: instance.AccessSurface, ProfileID: instance.ProfileID,
+		CapabilityEvidence:     evidence,
 		InputMicrosPerMillion:  input.InputMicrosPerMillion,
 		OutputMicrosPerMillion: input.OutputMicrosPerMillion,
 		MaxConcurrency:         input.MaxConcurrency, Priority: input.Priority, Weight: weight,
 		Enabled: input.Enabled, CreatedAt: createdAt, UpdatedAt: updatedAt,
 	}
 	return deployment, deployment.Validate()
+}
+
+func deploymentCapabilityEvidence(capabilities domain.ProviderCapabilities, providerEvidence, currentEvidence domain.CapabilityEvidenceSet) domain.CapabilityEvidenceSet {
+	evidence := providerEvidence.Clone()
+	for name, value := range evidence {
+		if !capabilitiesEnabledByName(capabilities, name) {
+			evidence[name] = domain.EvidenceUnsupported
+			continue
+		}
+		providerValue := value
+		if value == domain.EvidenceVerified {
+			evidence[name] = domain.EvidenceDeclared
+		}
+		if previous := currentEvidence[name]; previous != "" && previous != domain.EvidenceUnsupported &&
+			evidenceRank(previous) <= evidenceRank(providerValue) {
+			evidence[name] = previous
+		}
+	}
+	return evidence
+}
+
+func capabilitiesEnabledByName(value domain.ProviderCapabilities, name string) bool {
+	switch name {
+	case "chat":
+		return value.Chat
+	case "streaming":
+		return value.Streaming
+	case "embeddings":
+		return value.Embeddings
+	case "tools":
+		return value.Tools
+	case "vision":
+		return value.Vision
+	case "json_mode":
+		return value.JSONMode
+	case "developer_role":
+		return value.DeveloperRole
+	case "reasoning":
+		return value.Reasoning
+	case "stream_usage":
+		return value.StreamUsage
+	default:
+		return false
+	}
+}
+
+func evidenceRank(value domain.CapabilityEvidence) int {
+	switch value {
+	case domain.EvidenceVerified:
+		return 3
+	case domain.EvidenceDeclared:
+		return 2
+	case domain.EvidenceLegacy:
+		return 1
+	default:
+		return 0
+	}
 }
 
 func capabilitySubset(candidate, available domain.ProviderCapabilities) bool {

@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/akz142857/Heimdall/internal/domain"
 	"github.com/akz142857/Heimdall/internal/openaiapi"
 	"github.com/akz142857/Heimdall/internal/provider"
 	"github.com/akz142857/Heimdall/internal/semantic"
@@ -21,7 +22,7 @@ const maxResponseBytes = 16 << 20
 
 type Adapter struct {
 	endpoint     *url.URL
-	apiKey       []byte
+	authorizer   provider.Authorizer
 	client       *http.Client
 	providerType string
 	apiVersion   string
@@ -47,6 +48,7 @@ type Options struct {
 	APIVersion   string
 	Azure        bool
 	Capabilities provider.Capabilities
+	Authorizer   provider.Authorizer
 }
 
 func NewWithOptions(options Options) (*Adapter, error) {
@@ -54,20 +56,37 @@ func NewWithOptions(options Options) (*Adapter, error) {
 	if endpoint == nil || client == nil {
 		return nil, errors.New("endpoint and client are required")
 	}
-	if len(apiKey) == 0 {
+	if len(apiKey) == 0 && options.Authorizer == nil {
 		return nil, errors.New("api key is required")
 	}
-	keyCopy := make([]byte, len(apiKey))
-	copy(keyCopy, apiKey)
 	if options.ProviderType == "" {
 		options.ProviderType = "openai_compatible"
 	}
 	if options.Azure && strings.TrimSpace(options.APIVersion) == "" {
-		clear(keyCopy)
 		return nil, errors.New("azure api version is required")
 	}
+	authorizer := options.Authorizer
+	if authorizer == nil {
+		var err error
+		if options.Azure {
+			authorizer, err = provider.NewStaticHeaderAuthorizer(domain.CredentialAzureAPIKey, "api-key", "", apiKey, "Authorization")
+		} else {
+			authorizer, err = provider.NewStaticHeaderAuthorizer(domain.CredentialBearerStatic, "Authorization", "Bearer ", apiKey, "api-key")
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	expectedScheme := domain.CredentialBearerStatic
+	if options.Azure {
+		expectedScheme = domain.CredentialAzureAPIKey
+	}
+	if authorizer.Scheme() != expectedScheme {
+		authorizer.Close()
+		return nil, errors.New("credential scheme does not match OpenAI adapter profile")
+	}
 	return &Adapter{
-		endpoint: endpoint, apiKey: keyCopy, client: client,
+		endpoint: endpoint, authorizer: authorizer, client: client,
 		providerType: options.ProviderType, apiVersion: options.APIVersion,
 		azure: options.Azure, capabilities: options.Capabilities,
 	}, nil
@@ -101,7 +120,9 @@ func (a *Adapter) Probe(ctx context.Context, providerModel string) error {
 	if err != nil {
 		return &provider.Error{Class: provider.ErrorBadRequest, Message: "create provider probe", Cause: err}
 	}
-	a.authorize(request)
+	if err := a.authorize(request); err != nil {
+		return &provider.Error{Class: provider.ErrorAuthentication, Message: "authorize provider probe", Cause: err}
+	}
 	request.Header.Set("Accept", "application/json")
 	response, err := a.client.Do(request)
 	if err != nil {
@@ -129,8 +150,7 @@ func (a *Adapter) Probe(ctx context.Context, providerModel string) error {
 }
 
 func (a *Adapter) Close() {
-	clear(a.apiKey)
-	a.apiKey = nil
+	a.authorizer.Close()
 	a.client.CloseIdleConnections()
 }
 
@@ -154,7 +174,9 @@ func (a *Adapter) Chat(ctx context.Context, call provider.ChatCall) (openaiapi.C
 	if err != nil {
 		return openaiapi.ChatCompletionResponse{}, &provider.Error{Class: provider.ErrorBadRequest, Message: "create provider request", Cause: err}
 	}
-	a.authorize(request)
+	if err := a.authorize(request); err != nil {
+		return openaiapi.ChatCompletionResponse{}, &provider.Error{Class: provider.ErrorAuthentication, Message: "authorize provider request", Cause: err}
+	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("X-Request-ID", call.RequestID)
@@ -215,7 +237,9 @@ func (a *Adapter) Embed(ctx context.Context, call provider.EmbeddingCall) (opena
 	if err != nil {
 		return openaiapi.EmbeddingResponse{}, &provider.Error{Class: provider.ErrorBadRequest, Message: "create provider request", Cause: err}
 	}
-	a.authorize(request)
+	if err := a.authorize(request); err != nil {
+		return openaiapi.EmbeddingResponse{}, &provider.Error{Class: provider.ErrorAuthentication, Message: "authorize provider embedding request", Cause: err}
+	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("X-Request-ID", call.RequestID)
@@ -286,7 +310,9 @@ func (a *Adapter) ChatStream(
 	if err != nil {
 		return nil, &provider.Error{Class: provider.ErrorBadRequest, Message: "create provider request", Cause: err}
 	}
-	a.authorize(request)
+	if err := a.authorize(request); err != nil {
+		return nil, &provider.Error{Class: provider.ErrorAuthentication, Message: "authorize provider stream request", Cause: err}
+	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "text/event-stream")
 	request.Header.Set("X-Request-ID", call.RequestID)
@@ -374,14 +400,8 @@ func (a *Adapter) operationURL(providerModel, operation string) url.URL {
 	return endpoint
 }
 
-func (a *Adapter) authorize(request *http.Request) {
-	if a.azure {
-		request.Header.Del("Authorization")
-		request.Header.Set("api-key", string(a.apiKey))
-		return
-	}
-	request.Header.Del("api-key")
-	request.Header.Set("Authorization", "Bearer "+string(a.apiKey))
+func (a *Adapter) authorize(request *http.Request) error {
+	return a.authorizer.Authorize(request, nil)
 }
 
 func validAzureDeployment(value string) bool {

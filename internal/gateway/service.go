@@ -500,7 +500,7 @@ func (s *Service) Chat(
 				break
 			}
 			if attemptCount > 0 {
-				if err := s.waitRetry(ctx, attemptCount-1); err != nil {
+				if err := s.waitRetry(ctx, attemptCount-1, lastErr); err != nil {
 					lastErr = err
 					break
 				}
@@ -633,7 +633,7 @@ func (s *Service) ChatStream(
 				break
 			}
 			if totalAttempts > 0 {
-				if err := s.waitRetry(ctx, totalAttempts-1); err != nil {
+				if err := s.waitRetry(ctx, totalAttempts-1, lastErr); err != nil {
 					lastErr = err
 					break
 				}
@@ -784,7 +784,7 @@ func (s *Service) Embeddings(
 				break
 			}
 			if attemptCount > 0 {
-				if err := s.waitRetry(ctx, attemptCount-1); err != nil {
+				if err := s.waitRetry(ctx, attemptCount-1, lastErr); err != nil {
 					lastErr = err
 					break
 				}
@@ -911,7 +911,7 @@ func availabilityFailure(err error) error {
 	}
 }
 
-func (s *Service) waitRetry(ctx context.Context, retryIndex int) error {
+func (s *Service) waitRetry(ctx context.Context, retryIndex int, previous error) error {
 	delay := s.retryBaseDelay
 	for index := 0; index < retryIndex && delay < s.retryMaxDelay; index++ {
 		if delay > s.retryMaxDelay/2 {
@@ -928,6 +928,10 @@ func (s *Service) waitRetry(ctx context.Context, retryIndex int) error {
 		if _, err := cryptorand.Read(random[:]); err == nil {
 			delay = delay/2 + time.Duration(int64(delay/2)*int64(random[0])/255)
 		}
+	}
+	var classified *provider.Error
+	if errors.As(previous, &classified) && classified.RetryAfter > delay {
+		delay = min(classified.RetryAfter, s.retryMaxDelay)
 	}
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
@@ -1262,18 +1266,21 @@ func mapProviderError(err error) error {
 	if !errors.As(err, &classified) {
 		return gatewayError("provider_error", "provider request failed", 502, err)
 	}
+	var mapped *Error
 	switch classified.Class {
 	case provider.ErrorBadRequest:
-		return gatewayError("invalid_request_error", "provider rejected the request", 400, err)
+		mapped = gatewayError("invalid_request_error", "provider rejected the request", 400, err)
 	case provider.ErrorAuthentication:
-		return gatewayError("provider_authentication_error", "provider authentication failed", 502, err)
+		mapped = gatewayError("provider_authentication_error", "provider authentication failed", 502, err)
 	case provider.ErrorRateLimit:
-		return gatewayError("provider_rate_limit", "provider rate limit exceeded", 429, err)
+		mapped = gatewayError("provider_rate_limit", "provider rate limit exceeded", 429, err)
 	case provider.ErrorTimeout:
-		return gatewayError("provider_timeout", "provider timed out", 504, err)
+		mapped = gatewayError("provider_timeout", "provider timed out", 504, err)
 	default:
-		return gatewayError("provider_error", "provider request failed", 502, err)
+		mapped = gatewayError("provider_error", "provider request failed", 502, err)
 	}
+	mapped.RetryAfter = classified.RetryAfter
+	return mapped
 }
 
 func (s *Service) mapLimitError(err error) error {

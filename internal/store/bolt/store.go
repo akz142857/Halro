@@ -17,7 +17,7 @@ import (
 	bbolt "go.etcd.io/bbolt"
 )
 
-const schemaVersion uint64 = 3
+const schemaVersion uint64 = 4
 
 func CurrentSchemaVersion() uint64 { return schemaVersion }
 
@@ -93,6 +93,7 @@ var migrations = []migration{
 		return migrationStep(step, "after_seed_migration_history")
 	}},
 	{version: 3, name: "deployments", up: migrateDeployments},
+	{version: 4, name: "provider_profiles", up: migrateProviderProfiles},
 }
 
 type usageCheckpoint struct {
@@ -617,6 +618,12 @@ func (s *Store) PutBootstrap(ctx context.Context, records *BootstrapRecords) err
 	if records == nil {
 		return errors.New("bootstrap records are required")
 	}
+	// Keep programmatic bootstrap callers compatible with records created before
+	// provider profiles became durable metadata. The public bootstrap path writes
+	// declared evidence explicitly; omitted metadata is conservatively legacy.
+	normalizeCredentialProfile(&records.Credential)
+	normalizeProviderProfile(&records.Provider, domain.EvidenceLegacy)
+	normalizeDeploymentProfile(&records.Deployment, records.Provider, domain.EvidenceLegacy)
 	if err := errors.Join(
 		records.Credential.Validate(),
 		records.Provider.Validate(),
@@ -632,6 +639,12 @@ func (s *Store) PutBootstrap(ctx context.Context, records *BootstrapRecords) err
 		records.Route.DeploymentID != records.Deployment.ID ||
 		records.GatewayKey.ProjectID != records.Project.ID {
 		return errors.New("bootstrap references are inconsistent")
+	}
+	if err := validateProviderCredentialProfile(records.Provider, records.Credential); err != nil {
+		return err
+	}
+	if err := validateDeploymentProviderProfile(records.Deployment, records.Provider); err != nil {
+		return err
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -858,6 +871,141 @@ func migrateDeployments(tx *bbolt.Tx, step func(string) error) error {
 	return nil
 }
 
+func migrateProviderProfiles(tx *bbolt.Tx, step func(string) error) error {
+	if err := migrationStep(step, "before_migrate_provider_profiles"); err != nil {
+		return err
+	}
+	credentials := tx.Bucket(bucketCredentials)
+	providers := tx.Bucket(bucketProviders)
+	deployments := tx.Bucket(bucketDeployments)
+	if credentials == nil || providers == nil || deployments == nil {
+		return errors.New("provider profile migration buckets are missing")
+	}
+	if err := rewriteBucket(credentials, func(raw []byte) ([]byte, error) {
+		var credential domain.Credential
+		if err := json.Unmarshal(raw, &credential); err != nil {
+			return nil, err
+		}
+		normalizeCredentialProfile(&credential)
+		return json.Marshal(credential)
+	}); err != nil {
+		return fmt.Errorf("migrate credential profiles: %w", err)
+	}
+	providerByID := make(map[string]domain.ProviderInstance)
+	if err := rewriteBucket(providers, func(raw []byte) ([]byte, error) {
+		var instance domain.ProviderInstance
+		if err := json.Unmarshal(raw, &instance); err != nil {
+			return nil, err
+		}
+		normalizeProviderProfile(&instance, domain.EvidenceLegacy)
+		providerByID[instance.ID] = instance
+		return json.Marshal(instance)
+	}); err != nil {
+		return fmt.Errorf("migrate provider profiles: %w", err)
+	}
+	if err := rewriteBucket(deployments, func(raw []byte) ([]byte, error) {
+		var deployment domain.Deployment
+		if err := json.Unmarshal(raw, &deployment); err != nil {
+			return nil, err
+		}
+		instance, ok := providerByID[deployment.ProviderID]
+		if !ok {
+			// Earlier migration fixtures and damaged legacy databases can contain
+			// orphan deployments. Profile migration must remain atomic and must not
+			// invent an access surface without a provider. Runtime topology checks
+			// continue to reject these records if they are used.
+			return raw, nil
+		}
+		normalizeDeploymentProfile(&deployment, instance, domain.EvidenceLegacy)
+		return json.Marshal(deployment)
+	}); err != nil {
+		return fmt.Errorf("migrate deployment profiles: %w", err)
+	}
+	return migrationStep(step, "after_migrate_provider_profiles")
+}
+
+func rewriteBucket(bucket *bbolt.Bucket, transform func([]byte) ([]byte, error)) error {
+	type entry struct{ key, value []byte }
+	var updates []entry
+	if err := bucket.ForEach(func(key, raw []byte) error {
+		if raw == nil {
+			return nil
+		}
+		encoded, err := transform(raw)
+		if err != nil {
+			return fmt.Errorf("record %q: %w", key, err)
+		}
+		updates = append(updates, entry{bytes.Clone(key), encoded})
+		return nil
+	}); err != nil {
+		return err
+	}
+	for _, update := range updates {
+		if err := bucket.Put(update.key, update.value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func normalizeCredentialProfile(credential *domain.Credential) {
+	profile, ok := domain.DefaultProviderProfile(credential.Type)
+	if !ok {
+		return
+	}
+	if credential.AccessSurface == "" {
+		credential.AccessSurface = profile.AccessSurface
+	}
+	if credential.Scheme == "" {
+		credential.Scheme = profile.CredentialScheme
+	}
+}
+
+func normalizeProviderProfile(instance *domain.ProviderInstance, evidence domain.CapabilityEvidence) {
+	legacyProfile := instance.AccessSurface == "" && instance.ProfileID == "" && instance.CredentialScheme == ""
+	profile, ok := domain.DefaultProviderProfile(instance.Type)
+	if !ok {
+		return
+	}
+	if instance.AccessSurface == "" {
+		instance.AccessSurface = profile.AccessSurface
+	}
+	if instance.ProfileID == "" {
+		instance.ProfileID = profile.ProfileID
+	}
+	if instance.CredentialScheme == "" {
+		instance.CredentialScheme = profile.CredentialScheme
+	}
+	if legacyProfile && !instance.Capabilities.Chat && !instance.Capabilities.Embeddings {
+		instance.Capabilities = domain.DefaultProviderCapabilities(instance.Type)
+	}
+	if instance.Type == domain.ProviderBedrock {
+		instance.Capabilities.DeveloperRole = false
+	}
+	if len(instance.CapabilityEvidence) == 0 {
+		instance.CapabilityEvidence = domain.EvidenceForCapabilities(instance.Capabilities, evidence)
+	}
+}
+
+func normalizeDeploymentProfile(deployment *domain.Deployment, instance domain.ProviderInstance, evidence domain.CapabilityEvidence) {
+	legacyProfile := deployment.AccessSurface == "" && deployment.ProfileID == ""
+	if deployment.AccessSurface == "" {
+		deployment.AccessSurface = instance.AccessSurface
+	}
+	if deployment.ProfileID == "" {
+		deployment.ProfileID = instance.ProfileID
+	}
+	if legacyProfile && !deployment.Capabilities.Chat && !deployment.Capabilities.Embeddings {
+		deployment.Capabilities = instance.Capabilities
+	}
+	if instance.Type == domain.ProviderBedrock {
+		deployment.Capabilities.DeveloperRole = false
+	}
+	if len(deployment.CapabilityEvidence) == 0 {
+		deployment.CapabilityEvidence = domain.EvidenceForCapabilities(deployment.Capabilities, evidence)
+	}
+}
+
 func migrationStep(step func(string) error, point string) error {
 	if step == nil {
 		return nil
@@ -1081,6 +1229,7 @@ func (s *Store) DeleteAdminSessionsForUser(ctx context.Context, username string)
 }
 
 func (s *Store) PutCredential(ctx context.Context, credential domain.Credential, expectedRevision uint64) (domain.Credential, error) {
+	normalizeCredentialProfile(&credential)
 	if err := credential.Validate(); err != nil {
 		return domain.Credential{}, err
 	}
@@ -1248,8 +1397,36 @@ func (s *Store) PutProvider(ctx context.Context, provider domain.ProviderInstanc
 		return domain.ProviderInstance{}, err
 	}
 	err := s.db.Update(func(tx *bbolt.Tx) error {
-		if tx.Bucket(bucketCredentials).Get([]byte(provider.CredentialID)) == nil {
+		rawCredential := tx.Bucket(bucketCredentials).Get([]byte(provider.CredentialID))
+		if rawCredential == nil {
 			return fmt.Errorf("credential %q: %w", provider.CredentialID, ErrNotFound)
+		}
+		var credential domain.Credential
+		if err := json.Unmarshal(rawCredential, &credential); err != nil {
+			return fmt.Errorf("decode credential %q: %w", provider.CredentialID, err)
+		}
+		normalizeCredentialProfile(&credential)
+		if err := validateProviderCredentialProfile(provider, credential); err != nil {
+			return err
+		}
+		deployments := tx.Bucket(bucketDeployments)
+		if err := deployments.ForEach(func(_, raw []byte) error {
+			if raw == nil {
+				return nil
+			}
+			var deployment domain.Deployment
+			if err := json.Unmarshal(raw, &deployment); err != nil {
+				return err
+			}
+			if deployment.ProviderID != provider.ID || deployment.DeletedAt != nil {
+				return nil
+			}
+			if err := validateDeploymentProviderProfile(deployment, provider); err != nil {
+				return fmt.Errorf("deployment %q would become incompatible: %w", deployment.ID, err)
+			}
+			return nil
+		}); err != nil {
+			return err
 		}
 		return putVersioned(tx.Bucket(bucketProviders), provider.ID, expectedRevision, &provider)
 	})
@@ -1277,19 +1454,85 @@ func (s *Store) ListProviders(ctx context.Context) ([]domain.ProviderInstance, e
 }
 
 func (s *Store) PutDeployment(ctx context.Context, deployment domain.Deployment, expectedRevision uint64) (domain.Deployment, error) {
-	if err := deployment.Validate(); err != nil {
-		return domain.Deployment{}, err
-	}
 	if err := ctx.Err(); err != nil {
 		return domain.Deployment{}, err
 	}
 	err := s.db.Update(func(tx *bbolt.Tx) error {
-		if tx.Bucket(bucketProviders).Get([]byte(deployment.ProviderID)) == nil {
+		rawProvider := tx.Bucket(bucketProviders).Get([]byte(deployment.ProviderID))
+		if rawProvider == nil {
 			return fmt.Errorf("provider %q: %w", deployment.ProviderID, ErrNotFound)
+		}
+		var instance domain.ProviderInstance
+		if err := json.Unmarshal(rawProvider, &instance); err != nil {
+			return fmt.Errorf("decode provider %q: %w", deployment.ProviderID, err)
+		}
+		if err := deployment.Validate(); err != nil {
+			return err
+		}
+		if err := validateDeploymentProviderProfile(deployment, instance); err != nil {
+			return err
 		}
 		return putVersioned(tx.Bucket(bucketDeployments), deployment.ID, expectedRevision, &deployment)
 	})
 	return deployment, err
+}
+
+func validateProviderCredentialProfile(instance domain.ProviderInstance, credential domain.Credential) error {
+	if credential.Type != instance.Type || credential.AccessSurface != instance.AccessSurface ||
+		credential.Scheme != instance.CredentialScheme {
+		return errors.New("provider credential profile is incompatible")
+	}
+	return nil
+}
+
+func validateDeploymentProviderProfile(deployment domain.Deployment, instance domain.ProviderInstance) error {
+	if deployment.AccessSurface != instance.AccessSurface || deployment.ProfileID != instance.ProfileID {
+		return errors.New("deployment access surface or profile does not match provider")
+	}
+	if !providerCapabilitySubset(deployment.Capabilities, instance.Capabilities) {
+		return errors.New("deployment capabilities exceed provider capabilities")
+	}
+	for name, value := range deployment.CapabilityEvidence {
+		providerValue, ok := instance.CapabilityEvidence[name]
+		if !ok || capabilityEvidenceRank(value) > capabilityEvidenceRank(providerValue) {
+			return errors.New("deployment capability evidence exceeds provider evidence")
+		}
+	}
+	return nil
+}
+
+func providerCapabilitySubset(candidate, available domain.ProviderCapabilities) bool {
+	return (!candidate.Chat || available.Chat) &&
+		(!candidate.Streaming || available.Streaming) &&
+		(!candidate.Embeddings || available.Embeddings) &&
+		(!candidate.Tools || available.Tools) &&
+		(!candidate.Vision || available.Vision) &&
+		(!candidate.JSONMode || available.JSONMode) &&
+		(!candidate.DeveloperRole || available.DeveloperRole) &&
+		(!candidate.Reasoning || available.Reasoning) &&
+		(!candidate.StreamUsage || available.StreamUsage) &&
+		providerCapabilityLimitSubset(candidate.MaxContextTokens, available.MaxContextTokens) &&
+		providerCapabilityLimitSubset(candidate.MaxOutputTokens, available.MaxOutputTokens)
+}
+
+func providerCapabilityLimitSubset(candidate, available int64) bool {
+	if available == 0 {
+		return candidate >= 0
+	}
+	return candidate > 0 && candidate <= available
+}
+
+func capabilityEvidenceRank(value domain.CapabilityEvidence) int {
+	switch value {
+	case domain.EvidenceVerified:
+		return 3
+	case domain.EvidenceDeclared:
+		return 2
+	case domain.EvidenceLegacy:
+		return 1
+	default:
+		return 0
+	}
 }
 
 func (s *Store) GetDeployment(ctx context.Context, id string) (domain.Deployment, error) {
