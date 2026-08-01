@@ -10,7 +10,7 @@ import{n as e,t}from"./rolldown-runtime-CbXtAM7H.js";import{C as n,E as r,S as i
             })));
           }
         }
-
+        
         if (${n}.value === undefined) {
           if (${o} in input) {
             newResult[${o}] = undefined;
@@ -18,7 +18,7 @@ import{n as e,t}from"./rolldown-runtime-CbXtAM7H.js";import{C as n,E as r,S as i
         } else {
           newResult[${o}] = ${n}.value;
         }
-
+        
       `):c?t.write(`
         if (${n}.issues.length) {
           payload.issues = payload.issues.concat(${n}.issues.map(iss => ({
@@ -26,7 +26,7 @@ import{n as e,t}from"./rolldown-runtime-CbXtAM7H.js";import{C as n,E as r,S as i
             path: iss.path ? [${o}, ...iss.path] : [${o}]
           })));
         }
-
+        
         if (${n}.value === undefined) {
           if (${o} in input) {
             newResult[${o}] = undefined;
@@ -34,7 +34,7 @@ import{n as e,t}from"./rolldown-runtime-CbXtAM7H.js";import{C as n,E as r,S as i
         } else {
           newResult[${o}] = ${n}.value;
         }
-
+        
       `):t.write(`
         const ${n}_present = ${o} in input;
         if (${n}.issues.length) {
