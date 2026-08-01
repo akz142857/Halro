@@ -15,24 +15,30 @@ import (
 type Primitive string
 
 const (
-	PrimitiveOpenAIChatCompletions       Primitive = "openai.chat-completions"
-	PrimitiveAnthropicMessages           Primitive = "anthropic.messages"
-	PrimitiveAnthropicMessagesStream     Primitive = "anthropic.messages.stream"
-	PrimitiveOpenAIChatStream            Primitive = "openai.chat-completions.stream"
-	PrimitiveOpenAIEmbeddings            Primitive = "openai.embeddings"
-	PrimitiveAzureChatCompletions        Primitive = "azure-openai.chat-completions"
-	PrimitiveAzureChatStream             Primitive = "azure-openai.chat-completions.stream"
-	PrimitiveAzureEmbeddings             Primitive = "azure-openai.embeddings"
-	PrimitiveDeepSeekChat                Primitive = "deepseek.chat-completions"
-	PrimitiveDeepSeekChatStream          Primitive = "deepseek.chat-completions.stream"
-	PrimitiveCompatibleChat              Primitive = "openai-compatible.chat-completions"
-	PrimitiveCompatibleChatStream        Primitive = "openai-compatible.chat-completions.stream"
-	PrimitiveCompatibleEmbeddings        Primitive = "openai-compatible.embeddings"
-	PrimitiveGeminiGenerateContent       Primitive = "gemini.generate-content"
-	PrimitiveGeminiStreamGenerateContent Primitive = "gemini.stream-generate-content"
-	PrimitiveGeminiEmbedContent          Primitive = "gemini.embed-content"
-	PrimitiveBedrockConverse             Primitive = "bedrock.converse"
-	PrimitiveBedrockConverseStream       Primitive = "bedrock.converse-stream"
+	PrimitiveOpenAIChatCompletions                Primitive = "openai.chat-completions"
+	PrimitiveAnthropicMessages                    Primitive = "anthropic.messages"
+	PrimitiveAnthropicMessagesStream              Primitive = "anthropic.messages.stream"
+	PrimitiveOpenAIChatStream                     Primitive = "openai.chat-completions.stream"
+	PrimitiveOpenAIEmbeddings                     Primitive = "openai.embeddings"
+	PrimitiveAzureChatCompletions                 Primitive = "azure-openai.chat-completions"
+	PrimitiveAzureChatStream                      Primitive = "azure-openai.chat-completions.stream"
+	PrimitiveAzureEmbeddings                      Primitive = "azure-openai.embeddings"
+	PrimitiveDeepSeekChat                         Primitive = "deepseek.chat-completions"
+	PrimitiveDeepSeekChatStream                   Primitive = "deepseek.chat-completions.stream"
+	PrimitiveCompatibleChat                       Primitive = "openai-compatible.chat-completions"
+	PrimitiveCompatibleChatStream                 Primitive = "openai-compatible.chat-completions.stream"
+	PrimitiveCompatibleEmbeddings                 Primitive = "openai-compatible.embeddings"
+	PrimitiveGeminiGenerateContent                Primitive = "gemini.generate-content"
+	PrimitiveGeminiStreamGenerateContent          Primitive = "gemini.stream-generate-content"
+	PrimitiveGeminiEmbedContent                   Primitive = "gemini.embed-content"
+	PrimitiveBedrockConverse                      Primitive = "bedrock.converse"
+	PrimitiveBedrockConverseStream                Primitive = "bedrock.converse-stream"
+	PrimitiveBedrockMantleOpenAIChat              Primitive = "bedrock.mantle.openai.chat"
+	PrimitiveBedrockMantleOpenAIChatStream        Primitive = "bedrock.mantle.openai.chat.stream"
+	PrimitiveBedrockMantleOpenAIResponses         Primitive = "bedrock.mantle.openai.responses"
+	PrimitiveBedrockMantleOpenAIResponsesStream   Primitive = "bedrock.mantle.openai.responses.stream"
+	PrimitiveBedrockMantleAnthropicMessages       Primitive = "bedrock.mantle.anthropic.messages"
+	PrimitiveBedrockMantleAnthropicMessagesStream Primitive = "bedrock.mantle.anthropic.messages.stream"
 )
 
 type PrimitiveBinding struct {
@@ -195,6 +201,9 @@ func translationForPrimitive(primitive Primitive) semantic.TranslationLoss {
 	switch primitive {
 	case PrimitiveOpenAIChatCompletions, PrimitiveOpenAIChatStream, PrimitiveOpenAIEmbeddings,
 		PrimitiveAnthropicMessages, PrimitiveAnthropicMessagesStream,
+		PrimitiveBedrockMantleOpenAIChat, PrimitiveBedrockMantleOpenAIChatStream,
+		PrimitiveBedrockMantleOpenAIResponses, PrimitiveBedrockMantleOpenAIResponsesStream,
+		PrimitiveBedrockMantleAnthropicMessages, PrimitiveBedrockMantleAnthropicMessagesStream,
 		PrimitiveAzureChatCompletions, PrimitiveAzureChatStream, PrimitiveAzureEmbeddings,
 		PrimitiveDeepSeekChat, PrimitiveDeepSeekChatStream,
 		PrimitiveCompatibleChat, PrimitiveCompatibleChatStream, PrimitiveCompatibleEmbeddings:

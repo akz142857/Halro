@@ -42,14 +42,15 @@ func New(endpoint *url.URL, apiKey []byte, client *http.Client) (*Adapter, error
 }
 
 type Options struct {
-	Endpoint     *url.URL
-	APIKey       []byte
-	Client       *http.Client
-	ProviderType string
-	APIVersion   string
-	Azure        bool
-	Capabilities provider.Capabilities
-	Authorizer   provider.Authorizer
+	Endpoint         *url.URL
+	APIKey           []byte
+	Client           *http.Client
+	ProviderType     string
+	APIVersion       string
+	Azure            bool
+	Capabilities     provider.Capabilities
+	Authorizer       provider.Authorizer
+	CredentialScheme domain.CredentialScheme
 }
 
 func NewWithOptions(options Options) (*Adapter, error) {
@@ -66,21 +67,24 @@ func NewWithOptions(options Options) (*Adapter, error) {
 	if options.Azure && strings.TrimSpace(options.APIVersion) == "" {
 		return nil, errors.New("azure api version is required")
 	}
+	expectedScheme := options.CredentialScheme
+	if expectedScheme == "" {
+		expectedScheme = domain.CredentialBearerStatic
+		if options.Azure {
+			expectedScheme = domain.CredentialAzureAPIKey
+		}
+	}
 	authorizer := options.Authorizer
 	if authorizer == nil {
 		var err error
 		if options.Azure {
-			authorizer, err = provider.NewStaticHeaderAuthorizer(domain.CredentialAzureAPIKey, "api-key", "", apiKey, "Authorization")
+			authorizer, err = provider.NewStaticHeaderAuthorizer(expectedScheme, "api-key", "", apiKey, "Authorization")
 		} else {
-			authorizer, err = provider.NewStaticHeaderAuthorizer(domain.CredentialBearerStatic, "Authorization", "Bearer ", apiKey, "api-key")
+			authorizer, err = provider.NewStaticHeaderAuthorizer(expectedScheme, "Authorization", "Bearer ", apiKey, "api-key", "x-api-key")
 		}
 		if err != nil {
 			return nil, err
 		}
-	}
-	expectedScheme := domain.CredentialBearerStatic
-	if options.Azure {
-		expectedScheme = domain.CredentialAzureAPIKey
 	}
 	if authorizer.Scheme() != expectedScheme {
 		authorizer.Close()

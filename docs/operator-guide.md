@@ -172,7 +172,8 @@ needs it and the hostname/IP boundary has been reviewed.
 | DeepSeek | `https://api.deepseek.com` | API key | GA chat/stream profile |
 | OpenAI-compatible | reviewed HTTPS origin | API key | conservative capabilities; opt in extras |
 | Gemini | `https://generativelanguage.googleapis.com` | API key | Beta text chat/stream and float embeddings |
-| Bedrock | `https://bedrock-runtime.us-east-1.amazonaws.com` | JSON below | Beta text Converse/ConverseStream |
+| Bedrock Runtime | `https://bedrock-runtime.us-east-1.amazonaws.com` | JSON below | Beta text Converse/ConverseStream |
+| Bedrock Mantle | `https://bedrock-mantle.us-east-1.api.aws` | Bedrock API key | Beta OpenAI Chat, stateless Responses, or Anthropic Messages |
 
 Bedrock JSON is one encrypted secret. `session_token` is optional and `region`
 must match the endpoint hostname:
@@ -184,6 +185,13 @@ must match the endpoint hostname:
 The Bedrock Beta profile does not read environment credentials or IMDS and does
 not declare embeddings, tools, vision, or JSON mode. Connection tests are
 audited; they never return upstream response bodies or credentials.
+
+For Mantle, select the Mantle access surface while creating the Credential and
+choose exactly one wire profile per Provider. OpenAI profiles send the Bedrock
+API key as Bearer authentication; the Anthropic profile sends it as `x-api-key`.
+The Responses profile always sends `store:false`. Runtime and Mantle use
+different credentials and Provider instances even when they belong to the same
+AWS account. Only regional `bedrock-mantle.<region>.api.aws` origins are accepted.
 
 ## Alerts
 

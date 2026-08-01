@@ -10,10 +10,37 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/akz142857/Heimdall/internal/domain"
 	"github.com/akz142857/Heimdall/internal/openaiapi"
 	"github.com/akz142857/Heimdall/internal/provider"
 	"github.com/akz142857/Heimdall/internal/semantic"
 )
+
+func TestBedrockMantleChatUsesBearerAPIKeyAndOpenAIPath(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.String() != "https://bedrock-mantle.us-east-1.api.aws/v1/chat/completions" || request.Header.Get("Authorization") != "Bearer bedrock-key" || request.Header.Get("x-api-key") != "" {
+			t.Fatalf("unexpected Mantle request: %s %#v", request.URL, request.Header)
+		}
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"id":"chatcmpl_1","object":"chat.completion","created":1,"model":"amazon.nova-pro","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`)), Request: request}, nil
+	})}
+	endpoint, _ := url.Parse("https://bedrock-mantle.us-east-1.api.aws")
+	authorizer, err := provider.NewStaticHeaderAuthorizer(domain.CredentialBedrockAPIKey, "Authorization", "Bearer ", []byte("bedrock-key"), "api-key", "x-api-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := NewWithOptions(Options{Endpoint: endpoint, Authorizer: authorizer, Client: client, ProviderType: string(domain.ProviderBedrock), CredentialScheme: domain.CredentialBedrockAPIKey, Capabilities: provider.Capabilities{Chat: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer adapter.Close()
+	if adapter.Type() != string(domain.ProviderBedrock) {
+		t.Fatalf("adapter type=%q", adapter.Type())
+	}
+	_, err = adapter.Chat(context.Background(), provider.ChatCall{RequestID: "req", ProviderModel: "amazon.nova-pro", Request: openaiapi.ChatCompletionRequest{Model: "public", Messages: []openaiapi.Message{{Role: "user", Content: openaiapi.TextContent("hi")}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
 

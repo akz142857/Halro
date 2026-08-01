@@ -405,6 +405,75 @@ func TestAdminBedrockProviderHotLoadsConverseCapabilities(t *testing.T) {
 	}
 }
 
+func TestAdminBedrockMantleProfilesAreSelectableAndSurfaceIsolated(t *testing.T) {
+	cfg := testConfig(t)
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := BootstrapAdmin(context.Background(), cfg, "admin", []byte("correct horse battery staple")); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := Open(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	cookie, csrf := loginAdminForTest(t, runtime)
+	endpoint := "https://bedrock-mantle.us-east-1.api.aws"
+	credentialResponse := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost, "/admin/api/v1/credentials", "", map[string]any{
+		"name": "Mantle API key", "type": "bedrock", "base_url": endpoint, "secret": "bedrock-api-key",
+		"access_surface": domain.SurfaceBedrockMantle, "scheme": domain.CredentialBedrockAPIKey,
+	})
+	if credentialResponse.Code != http.StatusCreated || strings.Contains(credentialResponse.Body.String(), "bedrock-api-key") {
+		t.Fatalf("credential create status=%d body=%s", credentialResponse.Code, credentialResponse.Body.String())
+	}
+	var credential credentialView
+	if err := json.Unmarshal(credentialResponse.Body.Bytes(), &credential); err != nil {
+		t.Fatal(err)
+	}
+	if credential.AccessSurface != domain.SurfaceBedrockMantle || credential.Scheme != domain.CredentialBedrockAPIKey {
+		t.Fatalf("unexpected credential binding: %#v", credential)
+	}
+	profiles := []domain.ProviderProfileID{
+		domain.ProfileBedrockMantleOpenAIChat,
+		domain.ProfileBedrockMantleOpenAIResponses,
+		domain.ProfileBedrockMantleAnthropicMessages,
+	}
+	for _, profileID := range profiles {
+		response := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost, "/admin/api/v1/providers", "", map[string]any{
+			"name": string(profileID), "type": "bedrock", "base_url": endpoint, "credential_id": credential.ID, "enabled": true,
+			"access_surface": domain.SurfaceBedrockMantle, "profile_id": profileID, "credential_scheme": domain.CredentialBedrockAPIKey,
+		})
+		if response.Code != http.StatusCreated {
+			t.Fatalf("create %s status=%d body=%s", profileID, response.Code, response.Body.String())
+		}
+		var instance domain.ProviderInstance
+		if err := json.Unmarshal(response.Body.Bytes(), &instance); err != nil {
+			t.Fatal(err)
+		}
+		if instance.ProfileID != profileID || instance.AccessSurface != domain.SurfaceBedrockMantle || instance.CredentialScheme != domain.CredentialBedrockAPIKey || !instance.Capabilities.Chat || !instance.Capabilities.Streaming {
+			t.Fatalf("unexpected %s provider: %#v", profileID, instance)
+		}
+		if profileID == domain.ProfileBedrockMantleOpenAIResponses && instance.Capabilities.Reasoning {
+			t.Fatal("stateless Responses profile advertised unrepresentable reasoning output")
+		}
+	}
+	crossSurface := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost, "/admin/api/v1/providers", "", map[string]any{
+		"name": "cross-surface", "type": "bedrock", "base_url": endpoint, "credential_id": credential.ID, "enabled": true,
+		"profile_id": domain.ProfileBedrockConverseText,
+	})
+	if crossSurface.Code != http.StatusBadRequest {
+		t.Fatalf("cross-surface provider status=%d body=%s", crossSurface.Code, crossSurface.Body.String())
+	}
+	unsafeEndpoint := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost, "/admin/api/v1/credentials", "", map[string]any{
+		"name": "unsafe", "type": "bedrock", "base_url": "https://example.com", "secret": "bedrock-api-key",
+		"access_surface": domain.SurfaceBedrockMantle, "scheme": domain.CredentialBedrockAPIKey,
+	})
+	if unsafeEndpoint.Code != http.StatusBadRequest {
+		t.Fatalf("unsafe Mantle endpoint status=%d body=%s", unsafeEndpoint.Code, unsafeEndpoint.Body.String())
+	}
+}
+
 func performAdminMutation(
 	t *testing.T,
 	runtime *Runtime,

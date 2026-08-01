@@ -47,10 +47,12 @@ func (c Credential) Validate() error {
 	if c.Type == "" {
 		problems = append(problems, errors.New("credential type is required"))
 	}
-	defaults, ok := DefaultProviderProfile(c.Type)
-	if ok && (c.AccessSurface != defaults.AccessSurface || c.Scheme != defaults.CredentialScheme) {
+	_, knownType := DefaultProviderProfile(c.Type)
+	resolved, compatible := ResolveCredentialProfile(c.Type, c.AccessSurface, c.Scheme)
+	compatible = compatible && c.AccessSurface == resolved.AccessSurface && c.Scheme == resolved.CredentialScheme
+	if knownType && !compatible {
 		problems = append(problems, errors.New("credential access surface or scheme is incompatible"))
-	} else if !ok && (c.AccessSurface != "" || c.Scheme != "") {
+	} else if !knownType && (c.AccessSurface != "" || c.Scheme != "") {
 		problems = append(problems, errors.New("custom credential types cannot declare a provider access surface or scheme"))
 	}
 	if strings.TrimSpace(c.Audience) == "" {
@@ -238,6 +240,21 @@ func DefaultProviderCapabilities(providerType ProviderType) ProviderCapabilities
 		return ProviderCapabilities{Chat: true, Streaming: true, StreamUsage: true}
 	default:
 		return ProviderCapabilities{}
+	}
+}
+
+func DefaultProviderCapabilitiesForProfile(providerType ProviderType, profileID ProviderProfileID) ProviderCapabilities {
+	switch profileID {
+	case ProfileBedrockMantleOpenAIChat:
+		return ProviderCapabilities{Chat: true, Streaming: true, Tools: true, Vision: true, JSONMode: true, DeveloperRole: true, Reasoning: true, StreamUsage: true}
+	case ProfileBedrockMantleOpenAIResponses:
+		// Phase 1C deliberately exposes only the stateless Responses subset. The
+		// current canonical response mapper cannot preserve reasoning items.
+		return ProviderCapabilities{Chat: true, Streaming: true, Tools: true, Vision: true, JSONMode: true, DeveloperRole: true, StreamUsage: true}
+	case ProfileBedrockMantleAnthropicMessages:
+		return ProviderCapabilities{Chat: true, Streaming: true, Tools: true, Vision: true, Reasoning: true, StreamUsage: true}
+	default:
+		return DefaultProviderCapabilities(providerType)
 	}
 }
 

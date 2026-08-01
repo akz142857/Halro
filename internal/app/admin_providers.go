@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/akz142857/Heimdall/internal/domain"
 	"github.com/akz142857/Heimdall/internal/id"
 	"github.com/akz142857/Heimdall/internal/provider"
+	bedrockmantleprovider "github.com/akz142857/Heimdall/internal/provider/bedrockmantle"
 	"github.com/akz142857/Heimdall/internal/safetransport"
 	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
 	"github.com/go-chi/chi/v5"
@@ -165,7 +167,7 @@ func (r *Runtime) createAdminProvider(writer http.ResponseWriter, request *http.
 	now := time.Now().UTC()
 	r.adminTopologyMu.Lock()
 	defer r.adminTopologyMu.Unlock()
-	instance, err := r.providerFromInput(request, providerID, input, nil, now, now)
+	instance, err := r.providerFromInput(request, providerID, input, "", nil, now, now)
 	if err != nil {
 		adminBadRequest(writer, err.Error())
 		return
@@ -222,10 +224,10 @@ func (r *Runtime) updateAdminProvider(writer http.ResponseWriter, request *http.
 		}
 	}
 	currentEvidence := current.CapabilityEvidence
-	if input.Type != current.Type {
+	if input.Type != current.Type || input.ProfileID != "" && input.ProfileID != current.ProfileID {
 		currentEvidence = nil
 	}
-	instance, err := r.providerFromInput(request, current.ID, input, currentEvidence, current.CreatedAt, time.Now().UTC())
+	instance, err := r.providerFromInput(request, current.ID, input, current.ProfileID, currentEvidence, current.CreatedAt, time.Now().UTC())
 	if err != nil {
 		adminBadRequest(writer, err.Error())
 		return
@@ -566,24 +568,28 @@ func (r *Runtime) credentialFromInput(
 	if !implementedProviderType(input.Type) {
 		return domain.Credential{}, errors.New("provider type is not implemented")
 	}
-	if _, err := safetransport.ValidateURL(input.BaseURL, safetransport.Policy{
+	endpoint, err := safetransport.ValidateURL(input.BaseURL, safetransport.Policy{
 		RequireHTTPS: true, AllowPrivate: r.config.Security.AllowPrivateProviderEndpoints,
-	}); err != nil {
+	})
+	if err != nil {
 		return domain.Credential{}, err
 	}
 	audience, err := safetransport.Audience(input.BaseURL, string(input.Type))
 	if err != nil {
 		return domain.Credential{}, err
 	}
-	profile, ok := domain.DefaultProviderProfile(input.Type)
+	surface, scheme := input.AccessSurface, input.Scheme
+	if current != nil && surface == "" && scheme == "" {
+		surface, scheme = current.AccessSurface, current.Scheme
+	}
+	profile, ok := domain.ResolveCredentialProfile(input.Type, surface, scheme)
 	if !ok {
-		return domain.Credential{}, errors.New("provider profile is not implemented")
+		return domain.Credential{}, fmt.Errorf("credential access surface %q or scheme %q is incompatible with provider type %q", surface, scheme, input.Type)
 	}
-	if input.AccessSurface != "" && input.AccessSurface != profile.AccessSurface {
-		return domain.Credential{}, errors.New("credential access surface is incompatible")
-	}
-	if input.Scheme != "" && input.Scheme != profile.CredentialScheme {
-		return domain.Credential{}, errors.New("credential scheme is incompatible")
+	if profile.AccessSurface == domain.SurfaceBedrockMantle {
+		if err := bedrockmantleprovider.ValidateEndpoint(endpoint); err != nil {
+			return domain.Credential{}, err
+		}
 	}
 	var plaintext []byte
 	if input.Secret != nil {
@@ -628,6 +634,7 @@ func (r *Runtime) providerFromInput(
 	request *http.Request,
 	id string,
 	input providerInput,
+	currentProfile domain.ProviderProfileID,
 	currentEvidence domain.CapabilityEvidenceSet,
 	createdAt time.Time,
 	updatedAt time.Time,
@@ -652,7 +659,11 @@ func (r *Runtime) providerFromInput(
 	if credential.Type != input.Type || credential.Audience != audience {
 		return domain.ProviderInstance{}, errors.New("credential type or audience does not match provider")
 	}
-	profile, ok := domain.DefaultProviderProfile(input.Type)
+	requestedProfile := input.ProfileID
+	if requestedProfile == "" {
+		requestedProfile = currentProfile
+	}
+	profile, ok := domain.ResolveProviderProfile(input.Type, requestedProfile)
 	if !ok {
 		return domain.ProviderInstance{}, errors.New("provider profile is not implemented")
 	}
@@ -663,6 +674,11 @@ func (r *Runtime) providerFromInput(
 	}
 	if credential.AccessSurface != profile.AccessSurface || credential.Scheme != profile.CredentialScheme {
 		return domain.ProviderInstance{}, errors.New("credential access surface or scheme does not match provider")
+	}
+	if profile.AccessSurface == domain.SurfaceBedrockMantle {
+		if err := bedrockmantleprovider.ValidateEndpoint(endpoint); err != nil {
+			return domain.ProviderInstance{}, err
+		}
 	}
 	instance := domain.ProviderInstance{
 		ID: id, Name: input.Name, Type: input.Type, BaseURL: input.BaseURL,
@@ -676,7 +692,7 @@ func (r *Runtime) providerFromInput(
 		Enabled:          input.Enabled, CreatedAt: createdAt, UpdatedAt: updatedAt,
 	}
 	if input.Capabilities == nil {
-		instance.Capabilities = domain.DefaultProviderCapabilities(input.Type)
+		instance.Capabilities = domain.DefaultProviderCapabilitiesForProfile(input.Type, profile.ProfileID)
 	} else {
 		instance.Capabilities = *input.Capabilities
 		if !instance.Capabilities.Chat && !instance.Capabilities.Embeddings {

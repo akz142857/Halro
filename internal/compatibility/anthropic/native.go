@@ -13,11 +13,15 @@ import (
 )
 
 func NewNativeSchemaRegistry() (*compatibility.NativeSchemaRegistry, error) {
-	return compatibility.NewNativeSchemaRegistry(compatibility.NativeSchema{
-		ProfileID: domain.ProfileAnthropicMessages, SchemaRevision: 1,
-		AllowedHeaders: []string{anthropicapi.VersionHeader}, MaxPayloadBytes: anthropicapi.MaxRequestBytes, MaxEventBytes: semantic.MaxEncodedEventBytes,
-		ValidatePayload: validateNativePayload, ExtractGovernance: extractNativeGovernance,
-	})
+	schemas := make([]compatibility.NativeSchema, 0, 2)
+	for _, profileID := range []domain.ProviderProfileID{domain.ProfileAnthropicMessages, domain.ProfileBedrockMantleAnthropicMessages} {
+		schemas = append(schemas, compatibility.NativeSchema{
+			ProfileID: profileID, SchemaRevision: 1,
+			AllowedHeaders: []string{anthropicapi.VersionHeader}, MaxPayloadBytes: anthropicapi.MaxRequestBytes, MaxEventBytes: semantic.MaxEncodedEventBytes,
+			ValidatePayload: validateNativePayload, ExtractGovernance: extractNativeGovernance,
+		})
+	}
+	return compatibility.NewNativeSchemaRegistry(schemas...)
 }
 
 func validateNativePayload(kind compatibility.NativePayloadKind, payload json.RawMessage) error {

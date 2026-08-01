@@ -41,6 +41,9 @@ be erased by a Deployment.
 | OpenAI-compatible | GA | yes | yes | yes | opt-in | Bearer key |
 | Gemini generateContent | Beta | text | yes | float | not declared | `x-goog-api-key` |
 | AWS Bedrock Converse | Beta | text | yes | no | not declared | SigV4, encrypted static JSON |
+| AWS Bedrock Mantle OpenAI Chat | Beta | yes | yes | no | tools/vision/JSON/reasoning | Bedrock API key as Bearer |
+| AWS Bedrock Mantle Responses | Beta | stateless | text SSE | no | tools/vision/JSON; no reasoning output | Bedrock API key as Bearer |
+| AWS Bedrock Mantle Anthropic Messages | Beta | yes | yes | no | tools/vision/reasoning | Bedrock API key as `x-api-key` |
 
 The Gemini Beta adapter translates text messages, system instructions,
 generation limits, stop sequences, finish reasons, usage metadata, SSE chunks,
@@ -57,3 +60,11 @@ truncated-stream inputs instead of silently downgrading them. Static access key,
 secret, optional session token, and region are encrypted as one audience-bound
 credential. The region must match the endpoint hostname. The adapter neither
 reads environment credentials nor contacts IMDS.
+
+Mantle is a separate access surface. Only regional
+`bedrock-mantle.<region>.api.aws` origins are accepted. Each Provider instance
+selects one immutable wire profile; Runtime credentials cannot be attached to
+Mantle. The Responses profile participates only in Heimdall's stateless tier
+and always sends `store:false`. Native Anthropic routing preserves validated
+thinking signatures and raw event order while remaining pinned to the selected
+Mantle Anthropic profile.

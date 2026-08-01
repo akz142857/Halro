@@ -39,6 +39,7 @@ scope is governed by reviewed release notes and release gates.
 | Real Provider evidence | fail-closed exact-commit GA matrix runner with per-profile credential isolation, output scrubbing, chat/stream/embedding contracts, and 0600 JSON evidence; execution still requires external accounts |
 | Gemini Beta adapter | native text `generateContent`, SSE, float embeddings, usage normalization, secret-safe errors, and opt-in real smoke test |
 | Bedrock Beta adapter | fixed `bedrock.runtime.converse.text.v1` text-only Converse/ConverseStream profile; strict encrypted credential JSON, explicit-session SigV4, region binding, AWS EventStream CRC/order/truncation checks, conservative stop-reason mapping, Provider request ID/code/Retry-After extraction, secret-safe errors, Admin hot-load integration, and opt-in real smoke test |
+| Bedrock Mantle Phase 1C | isolated `bedrock-mantle` surface with OpenAI Chat, stateless Responses and Anthropic Messages profiles; regional origin pinning, encrypted Bedrock API-key scheme, Bearer/x-api-key wire auth, `store:false`, native Thinking signature round-trip, Admin profile selection, and raw JSON/SSE fixtures |
 | Runtime provider loading | audience-bound decrypt, HTTPS/host policy, SafeTransport, route snapshot |
 | Offline bootstrap | atomic Provider/Route/Project/Key creation, secret via stdin, Gateway key shown once |
 | Internal key lifecycle | offline one-time key issuance and revisioned disable with snapshot reload tests |

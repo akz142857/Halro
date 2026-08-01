@@ -97,14 +97,16 @@ export type AccessSurface =
   | "openai-compatible"
   | "gemini-generate-content"
   | "anthropic-api"
-  | "bedrock-runtime";
+  | "bedrock-runtime"
+  | "bedrock-mantle";
 
 export type CredentialScheme =
   | "bearer.static"
   | "anthropic.x-api-key"
   | "azure.api-key"
   | "google.api-key"
-  | "aws.sigv4.explicit-session";
+  | "aws.sigv4.explicit-session"
+  | "aws.bedrock.api-key";
 
 export type CapabilityEvidence = "verified" | "declared" | "legacy" | "unsupported";
 export type CapabilityEvidenceSet = Record<string, CapabilityEvidence>;

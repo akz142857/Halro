@@ -11,7 +11,7 @@ import {
   StatusDot,
   ConfirmButton,
 } from "../components";
-import type { Credential, Provider, ProviderCapabilities, ProviderType } from "../types";
+import type { AccessSurface, Credential, CredentialScheme, Provider, ProviderCapabilities, ProviderType } from "../types";
 import { useTranslation } from "react-i18next";
 
 const providerTypes: ProviderType[] = [
@@ -28,6 +28,25 @@ function defaultBaseURL(type: ProviderType) {
   if (type === "deepseek") return "https://api.deepseek.com";
   if (type === "bedrock") return "https://bedrock-runtime.us-east-1.amazonaws.com";
   return "https://api.openai.com";
+}
+
+const bedrockProfiles = [
+  "bedrock.runtime.converse.text.v1",
+  "bedrock.mantle.openai.chat.v1",
+  "bedrock.mantle.openai.responses.v1",
+  "bedrock.mantle.anthropic.messages.v1",
+] as const;
+type BedrockProfile = typeof bedrockProfiles[number];
+
+function bedrockProfileConfig(profile: BedrockProfile): { surface: AccessSurface; scheme: CredentialScheme; baseURL: string } {
+  if (profile === "bedrock.runtime.converse.text.v1") {
+    return { surface: "bedrock-runtime", scheme: "aws.sigv4.explicit-session", baseURL: "https://bedrock-runtime.us-east-1.amazonaws.com" };
+  }
+  return { surface: "bedrock-mantle", scheme: "aws.bedrock.api-key", baseURL: "https://bedrock-mantle.us-east-1.api.aws" };
+}
+
+function isBedrockProfile(value: string): value is BedrockProfile {
+  return bedrockProfiles.includes(value as BedrockProfile);
 }
 
 export function ProvidersPage() {
@@ -199,17 +218,27 @@ function CredentialForm({
   const [name, setName] = useState(current?.name ?? "");
   const [type, setType] = useState<ProviderType>(current?.type ?? "openai");
   const [baseURL, setBaseURL] = useState(defaultBaseURL(current?.type ?? "openai"));
+  const [bedrockSurface, setBedrockSurface] = useState<"bedrock-runtime" | "bedrock-mantle">(
+    current?.access_surface === "bedrock-mantle" ? "bedrock-mantle" : "bedrock-runtime",
+  );
   const [secret, setSecret] = useState("");
   const queryClient = useQueryClient();
   const mutation = useMutation({
-    mutationFn: () => current
-      ? api.rotateCredential(current.id, {
+    mutationFn: () => {
+      const bedrockBinding = type === "bedrock"
+        ? bedrockProfileConfig(bedrockSurface === "bedrock-mantle" ? "bedrock.mantle.openai.chat.v1" : "bedrock.runtime.converse.text.v1")
+        : undefined;
+      const value = {
         name,
         type,
         base_url: baseURL,
+        ...(bedrockBinding ? { access_surface: bedrockBinding.surface, scheme: bedrockBinding.scheme } : {}),
         ...(secret ? { secret } : {}),
-      }, current.revision)
-      : api.createCredential({ name, type, base_url: baseURL, secret }),
+      };
+      return current
+        ? api.rotateCredential(current.id, value, current.revision)
+        : api.createCredential({ ...value, secret });
+    },
     onSettled: () => setSecret(""),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["credentials"] });
@@ -229,19 +258,35 @@ function CredentialForm({
             const next = event.target.value as ProviderType;
             setType(next);
             setBaseURL(defaultBaseURL(next));
+            setBedrockSurface("bedrock-runtime");
           }}>
             <ProviderTypeOptions t={t} />
           </select>
         </Field>
+        {type === "bedrock" && (
+          <Field label={t("providers.bedrockSurface")} hint={t("providers.bedrockSurfaceHint")}>
+            <select value={bedrockSurface} disabled={Boolean(current)} onChange={(event) => {
+              const next = event.target.value as "bedrock-runtime" | "bedrock-mantle";
+              setBedrockSurface(next);
+              const config = bedrockProfileConfig(next === "bedrock-mantle" ? "bedrock.mantle.openai.chat.v1" : "bedrock.runtime.converse.text.v1");
+              setBaseURL(config.baseURL);
+            }}>
+              <option value="bedrock-runtime">{t("providers.bedrockRuntime")}</option>
+              <option value="bedrock-mantle">{t("providers.bedrockMantle")}</option>
+            </select>
+          </Field>
+        )}
         <Field label={t("providers.boundURL")} hint={t("providers.boundURLHint")}>
           <input inputMode="url" value={baseURL} onChange={(event) => setBaseURL(event.target.value)} />
         </Field>
         <Field
-          label={current ? t("providers.newSecret") : type === "bedrock" ? t("providers.awsCredentialJSON") : t("providers.providerSecret")}
+          label={current ? t("providers.newSecret") : type === "bedrock" && bedrockSurface === "bedrock-runtime" ? t("providers.awsCredentialJSON") : t("providers.providerSecret")}
           hint={current
             ? t("providers.secretConfigured")
-            : type === "bedrock"
+            : type === "bedrock" && bedrockSurface === "bedrock-runtime"
               ? t("providers.bedrockHint")
+              : type === "bedrock"
+                ? t("providers.bedrockMantleHint")
               : t("providers.secretHint")}
         >
           <input
@@ -276,18 +321,26 @@ function ProviderForm({
   const initialType = current?.type ?? "openai";
   const [name, setName] = useState(current?.name ?? "");
   const [type, setType] = useState<ProviderType>(initialType);
+  const initialProfile = current?.profile_id && isBedrockProfile(current.profile_id) ? current.profile_id : "bedrock.runtime.converse.text.v1";
+  const [profileID, setProfileID] = useState<BedrockProfile>(initialProfile);
   const [baseURL, setBaseURL] = useState(current?.base_url ?? defaultBaseURL(initialType));
   const [apiVersion, setAPIVersion] = useState(current?.api_version ?? "");
   const [maxConcurrency, setMaxConcurrency] = useState(current?.max_concurrency ?? 0);
   const [enabled, setEnabled] = useState(current?.enabled ?? true);
   const [capabilities, setCapabilities] = useState<ProviderCapabilities>(current?.capabilities ?? defaultProviderCapabilities(initialType));
-  const [credentialID, setCredentialID] = useState(current?.credential_id ?? credentials.find((credential) => credential.type === initialType)?.id ?? "");
-  const matchingCredentials = credentials.filter((credential) => credential.type === type);
+  const selectedSurface = type === "bedrock" ? bedrockProfileConfig(profileID).surface : undefined;
+  const matchingCredentials = credentials.filter((credential) => credential.type === type && (!selectedSurface || credential.access_surface === selectedSurface));
+  const [credentialID, setCredentialID] = useState(current?.credential_id ?? credentials.find((credential) => credential.type === initialType && (initialType !== "bedrock" || credential.access_surface === bedrockProfileConfig(initialProfile).surface))?.id ?? "");
   const queryClient = useQueryClient();
   const mutation = useMutation({
     mutationFn: () => {
       const value = {
       name, type, base_url: baseURL,
+      ...(type === "bedrock" ? {
+        profile_id: profileID,
+        access_surface: bedrockProfileConfig(profileID).surface,
+        credential_scheme: bedrockProfileConfig(profileID).scheme,
+      } : {}),
       ...(type === "azure_openai" ? { api_version: apiVersion } : {}),
       credential_id: credentialID, capabilities, max_concurrency: maxConcurrency, enabled,
       };
@@ -320,12 +373,27 @@ function ProviderForm({
               const next = event.target.value as ProviderType;
               setType(next);
               setBaseURL(defaultBaseURL(next));
-              setCredentialID(credentials.find((credential) => credential.type === next)?.id ?? "");
+              setProfileID("bedrock.runtime.converse.text.v1");
+              setCredentialID(credentials.find((credential) => credential.type === next && (next !== "bedrock" || credential.access_surface === "bedrock-runtime"))?.id ?? "");
               setCapabilities(defaultProviderCapabilities(next));
             }}>
               <ProviderTypeOptions t={t} />
             </select>
           </Field>
+          {type === "bedrock" && (
+            <Field label={t("providers.profile")} hint={t("providers.bedrockProfileHint")}>
+              <select value={profileID} onChange={(event) => {
+                const next = event.target.value as BedrockProfile;
+                const config = bedrockProfileConfig(next);
+                setProfileID(next);
+                setBaseURL(config.baseURL);
+                setCredentialID(credentials.find((credential) => credential.type === "bedrock" && credential.access_surface === config.surface)?.id ?? "");
+                setCapabilities(defaultProviderCapabilities("bedrock", next));
+              }}>
+                {bedrockProfiles.map((profile) => <option value={profile} key={profile}>{t(`providers.bedrockProfiles.${profile}`)}</option>)}
+              </select>
+            </Field>
+          )}
           <Field label={t("providers.baseURL")}><input value={baseURL} onChange={(event) => setBaseURL(event.target.value)} /></Field>
           {type === "azure_openai" && (
             <Field label={t("providers.apiVersion")} hint={t("providers.apiVersionHint")}>
@@ -383,7 +451,7 @@ const capabilityNames = [
   "developer_role", "reasoning", "stream_usage",
 ] as const;
 
-function defaultProviderCapabilities(type: ProviderType): ProviderCapabilities {
+function defaultProviderCapabilities(type: ProviderType, profileID: BedrockProfile = "bedrock.runtime.converse.text.v1"): ProviderCapabilities {
   const value: ProviderCapabilities = {
     chat: true, streaming: true, embeddings: false, tools: false, vision: false,
     json_mode: false, developer_role: false, reasoning: false, stream_usage: false,
@@ -396,6 +464,10 @@ function defaultProviderCapabilities(type: ProviderType): ProviderCapabilities {
   if (type === "deepseek") return { ...value, tools: true, json_mode: true, reasoning: true, stream_usage: true };
   if (type === "openai_compatible") return { ...value, embeddings: true };
   if (type === "gemini") return { ...value, embeddings: true, developer_role: true, stream_usage: false };
-  if (type === "bedrock") return { ...value, stream_usage: true };
+  if (type === "bedrock") {
+    if (profileID === "bedrock.runtime.converse.text.v1") return { ...value, stream_usage: true };
+    if (profileID === "bedrock.mantle.anthropic.messages.v1") return { ...value, tools: true, vision: true, reasoning: true, stream_usage: true };
+    return { ...value, tools: true, vision: true, json_mode: true, developer_role: true, reasoning: profileID === "bedrock.mantle.openai.chat.v1", stream_usage: true };
+  }
   return value;
 }

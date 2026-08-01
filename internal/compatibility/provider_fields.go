@@ -36,7 +36,7 @@ func UnsupportedGenerateFields(profileID domain.ProviderProfileID, request seman
 		add(request.OutputFormat != nil, "response_format")
 		add(request.ReasoningEffort != "", "reasoning_effort")
 		add(request.EndUserRef != "", "user")
-	case domain.ProfileAnthropicMessages:
+	case domain.ProfileAnthropicMessages, domain.ProfileBedrockMantleAnthropicMessages:
 		add(hasNamedMessage(request), "messages[].name")
 		add(hasDeveloperMessage(request), "messages[].role=developer")
 		add(request.Candidates != nil && *request.Candidates > 1, "n")
@@ -44,7 +44,13 @@ func UnsupportedGenerateFields(profileID domain.ProviderProfileID, request seman
 		add(request.OutputFormat != nil, "response_format")
 		add(request.ReasoningEffort != "", "reasoning_effort")
 		add(request.EndUserRef != "", "user")
-	case domain.ProfileOpenAIChatEmbeddings, domain.ProfileAzureChatEmbeddings, domain.ProfileDeepSeekChat, domain.ProfileOpenAICompatible:
+	case domain.ProfileBedrockMantleOpenAIResponses:
+		add(request.Candidates != nil && *request.Candidates > 1, "n")
+		add(len(request.Stop) > 0, "stop")
+		add(request.Seed != nil, "seed")
+		add(request.Stream && len(request.Tools) > 0, "tools")
+		add(request.ReasoningEffort != "", "reasoning_effort")
+	case domain.ProfileOpenAIChatEmbeddings, domain.ProfileAzureChatEmbeddings, domain.ProfileDeepSeekChat, domain.ProfileOpenAICompatible, domain.ProfileBedrockMantleOpenAIChat:
 		// These profiles use the OpenAI-compatible wire representation directly.
 	default:
 		// Legacy or extension adapters do not have profile-level proof for optional

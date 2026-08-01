@@ -165,7 +165,8 @@ Provider 能力是上限，Deployment 能力只能是 Provider 能力的子集�
 | DeepSeek | `https://api.deepseek.com` | GA；默认不声明 embeddings |
 | OpenAI Compatible | 已审核的 HTTPS 地址 | 按实际平台声明能力 |
 | Gemini | `https://generativelanguage.googleapis.com` | Beta，原生适配器 |
-| Bedrock | `https://bedrock-runtime.<region>.amazonaws.com` | Beta，显式静态 AWS Credential |
+| Bedrock Runtime | `https://bedrock-runtime.<region>.amazonaws.com` | Beta，Converse 文本，显式静态 AWS Credential |
+| Bedrock Mantle | `https://bedrock-mantle.<region>.api.aws` | Beta，可选择 OpenAI Chat、无状态 Responses 或 Anthropic Messages |
 
 Bedrock Credential 是一个 JSON Secret：
 
@@ -174,6 +175,11 @@ Bedrock Credential 是一个 JSON Secret：
 ```
 
 `session_token` 可省略，`region` 必须与 endpoint 一致。系统不会访问 IMDS，也不会读取宿主机的默认 AWS Credential Chain。
+
+Mantle Credential 直接保存 Bedrock API Key，不使用上述 JSON。创建凭据时选择 Mantle 访问面，
+再为所需协议分别创建 Provider；一个 Provider 只绑定一个 Profile。Mantle Responses 始终以
+`store:false` 调用 AWS，不创建 Heimdall 无法管理的 30 天存储状态。Runtime 与 Mantle 的凭据、
+并发上限和能力证据相互隔离。
 
 ## 4. 调用 Gateway
 

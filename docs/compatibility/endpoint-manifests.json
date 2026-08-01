@@ -62,7 +62,10 @@
       "deepseek.chat.v1",
       "openai-compatible.chat-embeddings.v1",
       "gemini.generate-content.text.v1beta",
-      "bedrock.runtime.converse.text.v1"
+      "bedrock.runtime.converse.text.v1",
+      "bedrock.mantle.openai.chat.v1",
+      "bedrock.mantle.openai.responses.v1",
+      "bedrock.mantle.anthropic.messages.v1"
     ],
     "profile_coverage": [
       {
@@ -122,6 +125,37 @@
         ],
         "declared_transforms": [
           "Bedrock stop reasons are normalized to OpenAI finish reasons"
+        ]
+      },
+      {
+        "profile_id": "bedrock.mantle.openai.chat.v1"
+      },
+      {
+        "profile_id": "bedrock.mantle.openai.responses.v1",
+        "unsupported_request_fields": [
+          "n",
+          "stop",
+          "seed",
+          "reasoning_effort"
+        ],
+        "declared_transforms": [
+          "Chat messages are mapped to stateless Responses input items",
+          "store=false is always sent upstream",
+          "streaming requests with tools are rejected before provider I/O"
+        ]
+      },
+      {
+        "profile_id": "bedrock.mantle.anthropic.messages.v1",
+        "unsupported_request_fields": [
+          "messages[].name",
+          "n",
+          "seed",
+          "response_format",
+          "reasoning_effort",
+          "user"
+        ],
+        "declared_transforms": [
+          "portable Chat content is mapped to Bedrock Mantle Anthropic Messages blocks"
         ]
       }
     ]
@@ -339,7 +373,10 @@
       "deepseek.chat.v1",
       "openai-compatible.chat-embeddings.v1",
       "gemini.generate-content.text.v1beta",
-      "bedrock.runtime.converse.text.v1"
+      "bedrock.runtime.converse.text.v1",
+      "bedrock.mantle.openai.chat.v1",
+      "bedrock.mantle.openai.responses.v1",
+      "bedrock.mantle.anthropic.messages.v1"
     ],
     "profile_coverage": [
       {
@@ -401,6 +438,28 @@
         "declared_transforms": [
           "instructions are mapped to a developer message",
           "Bedrock stop reasons are normalized to Responses status"
+        ]
+      },
+      {
+        "profile_id": "bedrock.mantle.openai.chat.v1",
+        "declared_transforms": [
+          "Responses items are mapped through Bedrock Mantle Chat Completions"
+        ]
+      },
+      {
+        "profile_id": "bedrock.mantle.openai.responses.v1",
+        "declared_transforms": [
+          "stateless Responses are sent directly with store=false"
+        ]
+      },
+      {
+        "profile_id": "bedrock.mantle.anthropic.messages.v1",
+        "unsupported_request_fields": [
+          "text.format",
+          "user"
+        ],
+        "declared_transforms": [
+          "Responses items are mapped through Bedrock Mantle Anthropic Messages"
         ]
       }
     ]
@@ -464,7 +523,7 @@
       "ping",
       "error"
     ],
-    "state_semantics": "stateless; portable is default; native pins the exact Anthropic provider profile and disables cross-provider fallback",
+    "state_semantics": "stateless; portable is default; native pins one exact Anthropic-wire provider profile and disables cross-provider fallback",
     "sdk_matrix": [
       "anthropic-go",
       "anthropic-typescript",
@@ -475,7 +534,7 @@
       "only anthropic-version 2023-06-01 is accepted",
       "anthropic-beta and hosted tools are unavailable",
       "Gateway Keys are accepted through x-api-key for official SDK compatibility and are never forwarded upstream",
-      "native mode is selected with Heimdall-Route-Mode and requires the direct Anthropic profile"
+      "native mode is selected with Heimdall-Route-Mode and requires either the direct Anthropic or Bedrock Mantle Anthropic profile"
     ],
     "provider_profiles": [
       "openai.chat-embeddings.v1",
@@ -484,7 +543,10 @@
       "deepseek.chat.v1",
       "openai-compatible.chat-embeddings.v1",
       "gemini.generate-content.text.v1beta",
-      "bedrock.runtime.converse.text.v1"
+      "bedrock.runtime.converse.text.v1",
+      "bedrock.mantle.openai.chat.v1",
+      "bedrock.mantle.openai.responses.v1",
+      "bedrock.mantle.anthropic.messages.v1"
     ],
     "profile_coverage": [
       {
@@ -567,6 +629,38 @@
         ],
         "declared_transforms": [
           "portable text Messages content is mapped through Bedrock Converse"
+        ]
+      },
+      {
+        "profile_id": "bedrock.mantle.openai.chat.v1",
+        "unsupported_request_fields": [
+          "top_k",
+          "thinking",
+          "metadata",
+          "service_tier"
+        ],
+        "declared_transforms": [
+          "portable Messages content is mapped through Bedrock Mantle Chat Completions"
+        ]
+      },
+      {
+        "profile_id": "bedrock.mantle.openai.responses.v1",
+        "unsupported_request_fields": [
+          "stop_sequences",
+          "top_k",
+          "thinking",
+          "metadata",
+          "service_tier"
+        ],
+        "declared_transforms": [
+          "portable Messages content is mapped through stateless Bedrock Mantle Responses",
+          "streaming requests with tools are rejected before provider I/O"
+        ]
+      },
+      {
+        "profile_id": "bedrock.mantle.anthropic.messages.v1",
+        "declared_transforms": [
+          "native mode preserves validated Anthropic content blocks, thinking signatures, and events"
         ]
       }
     ]

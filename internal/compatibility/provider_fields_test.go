@@ -42,6 +42,27 @@ func TestProviderFieldCompatibilityRejectsUnsupportedMessageNames(t *testing.T) 
 	}
 }
 
+func TestBedrockMantleResponsesRejectsOnlyUnrepresentableChatFields(t *testing.T) {
+	seed := int64(7)
+	candidates := 2
+	request := semantic.GenerateRequest{
+		Stream: true, Candidates: &candidates, Stop: []string{"stop"}, Seed: &seed,
+		Tools: []semantic.Tool{{Name: "lookup"}}, ReasoningEffort: "high", EndUserRef: "supported-user",
+	}
+	fields := UnsupportedGenerateFields(domain.ProfileBedrockMantleOpenAIResponses, request)
+	for _, required := range []string{"n", "stop", "seed", "tools", "reasoning_effort"} {
+		if !slices.Contains(fields, required) {
+			t.Fatalf("Mantle Responses did not reject %s: %v", required, fields)
+		}
+	}
+	if slices.Contains(fields, "user") {
+		t.Fatalf("Mantle Responses rejected a represented field: %v", fields)
+	}
+	if fields := UnsupportedGenerateFields(domain.ProfileBedrockMantleOpenAIChat, request); len(fields) != 0 {
+		t.Fatalf("Mantle Chat unexpectedly rejected OpenAI wire fields: %v", fields)
+	}
+}
+
 func TestUnknownProviderProfileRejectsRichSemanticsAndDeclaresScalarConversion(t *testing.T) {
 	temperature := 0.5
 	request := semantic.GenerateRequest{

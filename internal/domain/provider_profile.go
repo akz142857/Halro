@@ -19,16 +19,20 @@ const (
 	SurfaceOpenAICompatible AccessSurface = "openai-compatible"
 	SurfaceGemini           AccessSurface = "gemini-generate-content"
 	SurfaceBedrockRuntime   AccessSurface = "bedrock-runtime"
+	SurfaceBedrockMantle    AccessSurface = "bedrock-mantle"
 )
 
 const (
-	ProfileOpenAIChatEmbeddings ProviderProfileID = "openai.chat-embeddings.v1"
-	ProfileAnthropicMessages    ProviderProfileID = "anthropic.messages.2023-06-01"
-	ProfileAzureChatEmbeddings  ProviderProfileID = "azure-openai.chat-embeddings.v1"
-	ProfileDeepSeekChat         ProviderProfileID = "deepseek.chat.v1"
-	ProfileOpenAICompatible     ProviderProfileID = "openai-compatible.chat-embeddings.v1"
-	ProfileGeminiText           ProviderProfileID = "gemini.generate-content.text.v1beta"
-	ProfileBedrockConverseText  ProviderProfileID = "bedrock.runtime.converse.text.v1"
+	ProfileOpenAIChatEmbeddings           ProviderProfileID = "openai.chat-embeddings.v1"
+	ProfileAnthropicMessages              ProviderProfileID = "anthropic.messages.2023-06-01"
+	ProfileAzureChatEmbeddings            ProviderProfileID = "azure-openai.chat-embeddings.v1"
+	ProfileDeepSeekChat                   ProviderProfileID = "deepseek.chat.v1"
+	ProfileOpenAICompatible               ProviderProfileID = "openai-compatible.chat-embeddings.v1"
+	ProfileGeminiText                     ProviderProfileID = "gemini.generate-content.text.v1beta"
+	ProfileBedrockConverseText            ProviderProfileID = "bedrock.runtime.converse.text.v1"
+	ProfileBedrockMantleOpenAIChat        ProviderProfileID = "bedrock.mantle.openai.chat.v1"
+	ProfileBedrockMantleOpenAIResponses   ProviderProfileID = "bedrock.mantle.openai.responses.v1"
+	ProfileBedrockMantleAnthropicMessages ProviderProfileID = "bedrock.mantle.anthropic.messages.v1"
 )
 
 const (
@@ -37,6 +41,7 @@ const (
 	CredentialAzureAPIKey      CredentialScheme = "azure.api-key"
 	CredentialGoogleAPIKey     CredentialScheme = "google.api-key"
 	CredentialAWSSigV4Explicit CredentialScheme = "aws.sigv4.explicit-session"
+	CredentialBedrockAPIKey    CredentialScheme = "aws.bedrock.api-key"
 )
 
 const (
@@ -96,9 +101,36 @@ func RegisteredProviderProfile(profile ProviderProfileID) (ProviderType, Provide
 		return ProviderGemini, ProviderProfileDefaults{SurfaceGemini, profile, CredentialGoogleAPIKey}, true
 	case ProfileBedrockConverseText:
 		return ProviderBedrock, ProviderProfileDefaults{SurfaceBedrockRuntime, profile, CredentialAWSSigV4Explicit}, true
+	case ProfileBedrockMantleOpenAIChat, ProfileBedrockMantleOpenAIResponses, ProfileBedrockMantleAnthropicMessages:
+		return ProviderBedrock, ProviderProfileDefaults{SurfaceBedrockMantle, profile, CredentialBedrockAPIKey}, true
 	default:
 		return "", ProviderProfileDefaults{}, false
 	}
+}
+
+func ResolveProviderProfile(providerType ProviderType, requested ProviderProfileID) (ProviderProfileDefaults, bool) {
+	if requested == "" {
+		return DefaultProviderProfile(providerType)
+	}
+	registeredType, profile, ok := RegisteredProviderProfile(requested)
+	return profile, ok && registeredType == providerType
+}
+
+func ResolveCredentialProfile(providerType ProviderType, surface AccessSurface, scheme CredentialScheme) (ProviderProfileDefaults, bool) {
+	if surface == "" && scheme == "" {
+		return DefaultProviderProfile(providerType)
+	}
+	for _, profileID := range []ProviderProfileID{
+		ProfileOpenAIChatEmbeddings, ProfileAnthropicMessages, ProfileAzureChatEmbeddings,
+		ProfileDeepSeekChat, ProfileOpenAICompatible, ProfileGeminiText, ProfileBedrockConverseText,
+		ProfileBedrockMantleOpenAIChat, ProfileBedrockMantleOpenAIResponses, ProfileBedrockMantleAnthropicMessages,
+	} {
+		registeredType, profile, ok := RegisteredProviderProfile(profileID)
+		if ok && registeredType == providerType && profile.AccessSurface == surface && profile.CredentialScheme == scheme {
+			return profile, true
+		}
+	}
+	return ProviderProfileDefaults{}, false
 }
 
 func EvidenceForCapabilities(capabilities ProviderCapabilities, enabled CapabilityEvidence) CapabilityEvidenceSet {

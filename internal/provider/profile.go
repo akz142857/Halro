@@ -66,13 +66,16 @@ func (m ProfileManifest) Validate() error {
 
 func profileAllowsPrimitive(profileID domain.ProviderProfileID, operation Operation, primitive Primitive) bool {
 	expected := map[domain.ProviderProfileID]map[Operation]Primitive{
-		domain.ProfileOpenAIChatEmbeddings: {OperationChat: PrimitiveOpenAIChatCompletions, OperationChatStream: PrimitiveOpenAIChatStream, OperationEmbeddings: PrimitiveOpenAIEmbeddings},
-		domain.ProfileAnthropicMessages:    {OperationChat: PrimitiveAnthropicMessages, OperationChatStream: PrimitiveAnthropicMessagesStream, OperationMessages: PrimitiveAnthropicMessages, OperationMessagesStream: PrimitiveAnthropicMessagesStream},
-		domain.ProfileAzureChatEmbeddings:  {OperationChat: PrimitiveAzureChatCompletions, OperationChatStream: PrimitiveAzureChatStream, OperationEmbeddings: PrimitiveAzureEmbeddings},
-		domain.ProfileDeepSeekChat:         {OperationChat: PrimitiveDeepSeekChat, OperationChatStream: PrimitiveDeepSeekChatStream},
-		domain.ProfileOpenAICompatible:     {OperationChat: PrimitiveCompatibleChat, OperationChatStream: PrimitiveCompatibleChatStream, OperationEmbeddings: PrimitiveCompatibleEmbeddings},
-		domain.ProfileGeminiText:           {OperationChat: PrimitiveGeminiGenerateContent, OperationChatStream: PrimitiveGeminiStreamGenerateContent, OperationEmbeddings: PrimitiveGeminiEmbedContent},
-		domain.ProfileBedrockConverseText:  {OperationChat: PrimitiveBedrockConverse, OperationChatStream: PrimitiveBedrockConverseStream},
+		domain.ProfileOpenAIChatEmbeddings:           {OperationChat: PrimitiveOpenAIChatCompletions, OperationChatStream: PrimitiveOpenAIChatStream, OperationEmbeddings: PrimitiveOpenAIEmbeddings},
+		domain.ProfileAnthropicMessages:              {OperationChat: PrimitiveAnthropicMessages, OperationChatStream: PrimitiveAnthropicMessagesStream, OperationMessages: PrimitiveAnthropicMessages, OperationMessagesStream: PrimitiveAnthropicMessagesStream},
+		domain.ProfileAzureChatEmbeddings:            {OperationChat: PrimitiveAzureChatCompletions, OperationChatStream: PrimitiveAzureChatStream, OperationEmbeddings: PrimitiveAzureEmbeddings},
+		domain.ProfileDeepSeekChat:                   {OperationChat: PrimitiveDeepSeekChat, OperationChatStream: PrimitiveDeepSeekChatStream},
+		domain.ProfileOpenAICompatible:               {OperationChat: PrimitiveCompatibleChat, OperationChatStream: PrimitiveCompatibleChatStream, OperationEmbeddings: PrimitiveCompatibleEmbeddings},
+		domain.ProfileGeminiText:                     {OperationChat: PrimitiveGeminiGenerateContent, OperationChatStream: PrimitiveGeminiStreamGenerateContent, OperationEmbeddings: PrimitiveGeminiEmbedContent},
+		domain.ProfileBedrockConverseText:            {OperationChat: PrimitiveBedrockConverse, OperationChatStream: PrimitiveBedrockConverseStream},
+		domain.ProfileBedrockMantleOpenAIChat:        {OperationChat: PrimitiveBedrockMantleOpenAIChat, OperationChatStream: PrimitiveBedrockMantleOpenAIChatStream},
+		domain.ProfileBedrockMantleOpenAIResponses:   {OperationChat: PrimitiveBedrockMantleOpenAIResponses, OperationChatStream: PrimitiveBedrockMantleOpenAIResponsesStream},
+		domain.ProfileBedrockMantleAnthropicMessages: {OperationChat: PrimitiveBedrockMantleAnthropicMessages, OperationChatStream: PrimitiveBedrockMantleAnthropicMessagesStream, OperationMessages: PrimitiveBedrockMantleAnthropicMessages, OperationMessagesStream: PrimitiveBedrockMantleAnthropicMessagesStream},
 	}
 	operations, ok := expected[profileID]
 	if !ok {
@@ -230,6 +233,24 @@ func BuiltinProfile(id domain.ProviderProfileID) (ProfileManifest, bool) {
 			AccessSurface: domain.SurfaceBedrockRuntime, CredentialScheme: domain.CredentialAWSSigV4Explicit,
 			Operations:        []Operation{OperationChat, OperationChatStream},
 			PrimitiveBindings: []PrimitiveBinding{{OperationChat, semantic.OperationGenerate, PrimitiveBedrockConverse}, {OperationChatStream, semantic.OperationGenerate, PrimitiveBedrockConverseStream}},
+		},
+		domain.ProfileBedrockMantleOpenAIChat: {
+			ID: domain.ProfileBedrockMantleOpenAIChat, Revision: 1, ProviderType: domain.ProviderBedrock,
+			AccessSurface: domain.SurfaceBedrockMantle, CredentialScheme: domain.CredentialBedrockAPIKey,
+			Operations:        []Operation{OperationChat, OperationChatStream},
+			PrimitiveBindings: []PrimitiveBinding{{OperationChat, semantic.OperationGenerate, PrimitiveBedrockMantleOpenAIChat}, {OperationChatStream, semantic.OperationGenerate, PrimitiveBedrockMantleOpenAIChatStream}},
+		},
+		domain.ProfileBedrockMantleOpenAIResponses: {
+			ID: domain.ProfileBedrockMantleOpenAIResponses, Revision: 1, ProviderType: domain.ProviderBedrock,
+			AccessSurface: domain.SurfaceBedrockMantle, CredentialScheme: domain.CredentialBedrockAPIKey,
+			Operations:        []Operation{OperationChat, OperationChatStream},
+			PrimitiveBindings: []PrimitiveBinding{{OperationChat, semantic.OperationGenerate, PrimitiveBedrockMantleOpenAIResponses}, {OperationChatStream, semantic.OperationGenerate, PrimitiveBedrockMantleOpenAIResponsesStream}},
+		},
+		domain.ProfileBedrockMantleAnthropicMessages: {
+			ID: domain.ProfileBedrockMantleAnthropicMessages, Revision: 1, ProviderType: domain.ProviderBedrock,
+			AccessSurface: domain.SurfaceBedrockMantle, CredentialScheme: domain.CredentialBedrockAPIKey,
+			Operations:        []Operation{OperationChat, OperationChatStream, OperationMessages, OperationMessagesStream},
+			PrimitiveBindings: []PrimitiveBinding{{OperationChat, semantic.OperationGenerate, PrimitiveBedrockMantleAnthropicMessages}, {OperationChatStream, semantic.OperationGenerate, PrimitiveBedrockMantleAnthropicMessagesStream}, {OperationMessages, semantic.OperationGenerate, PrimitiveBedrockMantleAnthropicMessages}, {OperationMessagesStream, semantic.OperationGenerate, PrimitiveBedrockMantleAnthropicMessagesStream}},
 		},
 	}
 	manifest, ok := manifests[id]

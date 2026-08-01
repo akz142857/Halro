@@ -39,6 +39,35 @@ func TestProfileValidationRejectsAnUnregisteredVersion(t *testing.T) {
 	}
 }
 
+func TestBedrockMantleProfilesUseDistinctPrimitivesOnOneIsolatedSurface(t *testing.T) {
+	cases := map[domain.ProviderProfileID]struct {
+		operation Operation
+		primitive Primitive
+	}{
+		domain.ProfileBedrockMantleOpenAIChat:        {OperationChat, PrimitiveBedrockMantleOpenAIChat},
+		domain.ProfileBedrockMantleOpenAIResponses:   {OperationChat, PrimitiveBedrockMantleOpenAIResponses},
+		domain.ProfileBedrockMantleAnthropicMessages: {OperationMessages, PrimitiveBedrockMantleAnthropicMessages},
+	}
+	for profileID, expected := range cases {
+		manifest, ok := BuiltinProfile(profileID)
+		if !ok || manifest.Validate() != nil {
+			t.Fatalf("invalid Mantle profile %s: %#v", profileID, manifest)
+		}
+		if manifest.ProviderType != domain.ProviderBedrock || manifest.AccessSurface != domain.SurfaceBedrockMantle || manifest.CredentialScheme != domain.CredentialBedrockAPIKey {
+			t.Fatalf("profile axes collapsed for %s: %#v", profileID, manifest)
+		}
+		found := false
+		for _, binding := range manifest.PrimitiveBindings {
+			if binding.LegacyOperation == expected.operation && binding.Primitive == expected.primitive {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("%s missing %s -> %s", profileID, expected.operation, expected.primitive)
+		}
+	}
+}
+
 func TestLegacyAdapterBridgeExposesProfileOperationsAndEvidenceCopies(t *testing.T) {
 	manifest, _ := BuiltinProfile(domain.ProfileOpenAIChatEmbeddings)
 	evidence := domain.EvidenceForCapabilities(domain.DefaultProviderCapabilities(domain.ProviderOpenAI), domain.EvidenceLegacy)

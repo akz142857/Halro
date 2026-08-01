@@ -979,7 +979,7 @@ func normalizeProviderProfile(instance *domain.ProviderInstance, evidence domain
 	if legacyProfile && !instance.Capabilities.Chat && !instance.Capabilities.Embeddings {
 		instance.Capabilities = domain.DefaultProviderCapabilities(instance.Type)
 	}
-	if instance.Type == domain.ProviderBedrock {
+	if instance.ProfileID == domain.ProfileBedrockConverseText {
 		instance.Capabilities.DeveloperRole = false
 	}
 	if len(instance.CapabilityEvidence) == 0 {
@@ -998,7 +998,7 @@ func normalizeDeploymentProfile(deployment *domain.Deployment, instance domain.P
 	if legacyProfile && !deployment.Capabilities.Chat && !deployment.Capabilities.Embeddings {
 		deployment.Capabilities = instance.Capabilities
 	}
-	if instance.Type == domain.ProviderBedrock {
+	if instance.ProfileID == domain.ProfileBedrockConverseText {
 		deployment.Capabilities.DeveloperRole = false
 	}
 	if len(deployment.CapabilityEvidence) == 0 {

@@ -11,6 +11,7 @@ import (
 	"github.com/akz142857/Heimdall/internal/provider"
 	anthropicprovider "github.com/akz142857/Heimdall/internal/provider/anthropic"
 	bedrockprovider "github.com/akz142857/Heimdall/internal/provider/bedrock"
+	bedrockmantleprovider "github.com/akz142857/Heimdall/internal/provider/bedrockmantle"
 	geminiprovider "github.com/akz142857/Heimdall/internal/provider/gemini"
 	openaiprovider "github.com/akz142857/Heimdall/internal/provider/openai"
 	"github.com/akz142857/Heimdall/internal/safetransport"
@@ -173,11 +174,38 @@ func loadProviderRegistry(
 				})
 			}
 		case domain.ProviderBedrock:
-			authorizer, err = bedrockprovider.NewAuthorizer(endpoint, plaintext, nil)
-			if err == nil {
-				adapter, err = bedrockprovider.New(bedrockprovider.Options{
-					Endpoint: endpoint, Authorizer: authorizer, Client: client,
-				})
+			switch instance.ProfileID {
+			case domain.ProfileBedrockConverseText:
+				authorizer, err = bedrockprovider.NewAuthorizer(endpoint, plaintext, nil)
+				if err == nil {
+					adapter, err = bedrockprovider.New(bedrockprovider.Options{Endpoint: endpoint, Authorizer: authorizer, Client: client})
+				}
+			case domain.ProfileBedrockMantleOpenAIChat:
+				err = bedrockmantleprovider.ValidateEndpoint(endpoint)
+				if err == nil {
+					authorizer, err = provider.NewStaticHeaderAuthorizer(instance.CredentialScheme, "Authorization", "Bearer ", plaintext, "api-key", "x-api-key")
+				}
+				if err == nil {
+					adapter, err = openaiprovider.NewWithOptions(openaiprovider.Options{Endpoint: endpoint, Authorizer: authorizer, Client: client, ProviderType: string(domain.ProviderBedrock), CredentialScheme: instance.CredentialScheme, Capabilities: adapterCapabilities})
+				}
+			case domain.ProfileBedrockMantleOpenAIResponses:
+				err = bedrockmantleprovider.ValidateEndpoint(endpoint)
+				if err == nil {
+					authorizer, err = provider.NewStaticHeaderAuthorizer(instance.CredentialScheme, "Authorization", "Bearer ", plaintext, "api-key", "x-api-key")
+				}
+				if err == nil {
+					adapter, err = bedrockmantleprovider.NewResponses(bedrockmantleprovider.ResponsesOptions{Endpoint: endpoint, Authorizer: authorizer, Client: client, Capabilities: adapterCapabilities})
+				}
+			case domain.ProfileBedrockMantleAnthropicMessages:
+				err = bedrockmantleprovider.ValidateEndpoint(endpoint)
+				if err == nil {
+					authorizer, err = provider.NewStaticHeaderAuthorizer(instance.CredentialScheme, "x-api-key", "", plaintext, "Authorization", "api-key")
+				}
+				if err == nil {
+					adapter, err = anthropicprovider.New(anthropicprovider.Options{Endpoint: endpoint, Authorizer: authorizer, Client: client, Capabilities: adapterCapabilities, ProviderType: string(domain.ProviderBedrock), CredentialScheme: instance.CredentialScheme, MessagesPath: "anthropic/v1/messages"})
+				}
+			default:
+				err = errors.New("Bedrock provider profile is not implemented")
 			}
 		default:
 			err = errors.New("provider type is not implemented")

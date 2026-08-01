@@ -67,6 +67,43 @@ func TestMessagesNativePreservesThinkingBlockOrderAndUsesProviderCredential(t *t
 	}
 }
 
+func TestBedrockMantleMessagesUsesNativePathAndAPIKey(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/anthropic/v1/messages" || request.Header.Get("x-api-key") != "bedrock-key" || request.Header.Get("Authorization") != "" || request.Header.Get("anthropic-version") != anthropicapi.SupportedVersion {
+			t.Errorf("unexpected Mantle request: %s %#v", request.URL.Path, request.Header)
+		}
+		var body map[string]json.RawMessage
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		if string(body["model"]) != `"anthropic.claude-provider"` || !strings.Contains(string(body["messages"]), "opaque-sig") {
+			t.Errorf("native payload changed: %s", body)
+		}
+		writer.Header().Set("content-type", "application/json")
+		writer.Header().Set("x-amzn-requestid", "aws-request-1")
+		_, _ = writer.Write([]byte(`{"id":"msg_provider","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"model":"anthropic.claude-provider","stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":4,"output_tokens":1}}`))
+	}))
+	defer server.Close()
+	endpoint, _ := url.Parse(server.URL)
+	authorizer, err := provider.NewStaticHeaderAuthorizer(domain.CredentialBedrockAPIKey, "x-api-key", "", []byte("bedrock-key"), "Authorization", "api-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := New(Options{Endpoint: endpoint, Authorizer: authorizer, Client: server.Client(), ProviderType: string(domain.ProviderBedrock), CredentialScheme: domain.CredentialBedrockAPIKey, MessagesPath: "anthropic/v1/messages", Capabilities: provider.Capabilities{Chat: true, Tools: true, Reasoning: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer adapter.Close()
+	payload := []byte(`{"model":"public","max_tokens":32,"messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"hidden","signature":"opaque-sig"},{"type":"tool_use","id":"toolu_1","name":"lookup","input":{}}]}]}`)
+	result, err := adapter.MessagesNative(context.Background(), provider.NativeMessageCall{RequestID: "req", ProviderModel: "anthropic.claude-provider", Version: anthropicapi.SupportedVersion, Payload: payload})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ProviderRequestID != "aws-request-1" {
+		t.Fatalf("AWS request id=%q", result.ProviderRequestID)
+	}
+}
+
 func TestMessagesNativeStreamValidatesAndPreservesEvents(t *testing.T) {
 	adapter := newTestAdapter(t, func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("content-type", "text/event-stream")

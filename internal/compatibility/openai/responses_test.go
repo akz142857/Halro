@@ -94,3 +94,24 @@ func TestResponseStreamRendererEmitsOrderedLifecycle(t *testing.T) {
 		t.Fatal("completed event omitted final usage")
 	}
 }
+
+func TestRenderProviderResponseRequestIsStatelessAndRejectsDroppedControls(t *testing.T) {
+	request := semantic.GenerateRequest{Operation: semantic.OperationGenerate, Source: semantic.Source{ProfileID: "test", ProfileRevision: 1}, Mode: semantic.ModePortable, RequestedModel: "public", Messages: []semantic.Message{{Role: semantic.RoleUser, Content: []semantic.Content{{Kind: semantic.ContentText, Text: "hi"}}}}}
+	rendered, err := RenderProviderResponseRequest(request, "amazon.nova-pro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rendered.Store == nil || *rendered.Store || rendered.Model != "amazon.nova-pro" || !bytes.Contains(rendered.Input, []byte(`"hi"`)) {
+		t.Fatalf("unsafe provider request: %#v", rendered)
+	}
+	seed := int64(1)
+	request.Seed = &seed
+	if _, err := RenderProviderResponseRequest(request, "amazon.nova-pro"); err == nil {
+		t.Fatal("seed would have been silently dropped")
+	}
+	request.Seed = nil
+	request.Stop = []string{"stop"}
+	if _, err := RenderProviderResponseRequest(request, "amazon.nova-pro"); err == nil {
+		t.Fatal("stop sequences would have been silently dropped")
+	}
+}

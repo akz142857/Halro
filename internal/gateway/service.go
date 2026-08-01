@@ -799,18 +799,18 @@ func (s *Service) MessagesNative(ctx context.Context, plaintextKey, version stri
 	if err != nil {
 		return anthropicapi.Message{}, gatewayError("unsupported_feature", "native Messages primitive is unavailable", 400, err)
 	}
-	payload, _ := envelope.PayloadFor(domain.ProfileAnthropicMessages, 1, compatibility.NativeRequest)
+	payload, _ := envelope.PayloadFor(target.ProfileID, 1, compatibility.NativeRequest)
 	result, providerErr := adapter.MessagesNative(ctx, provider.NativeMessageCall{RequestID: run.requestID, ProviderModel: target.ProviderModel, Version: version, Payload: payload})
 	var message anthropicapi.Message
 	var semanticResult semantic.GenerateResult
 	if providerErr == nil {
 		registry, _ := anthropicwire.NewNativeSchemaRegistry()
 		identity := nativeIdentity(principal, target, request.Model)
-		responseEnvelope, envelopeErr := compatibility.NewNativeResponseEnvelope(registry, domain.ProfileAnthropicMessages, 1, http.Header{}, result.Payload, identity)
+		responseEnvelope, envelopeErr := compatibility.NewNativeResponseEnvelope(registry, target.ProfileID, 1, http.Header{}, result.Payload, identity)
 		if envelopeErr != nil {
 			providerErr = &provider.Error{Class: provider.ErrorMalformed, Ambiguous: true, Message: "validate native Anthropic response", Cause: envelopeErr}
 		} else {
-			safePayload, _ := responseEnvelope.PayloadFor(domain.ProfileAnthropicMessages, 1, compatibility.NativeResponse)
+			safePayload, _ := responseEnvelope.PayloadFor(target.ProfileID, 1, compatibility.NativeResponse)
 			message, providerErr = anthropicapi.DecodeMessage(safePayload)
 			if providerErr == nil {
 				providerErr = s.checkNativeOutboundRedaction(principal, message)
@@ -874,17 +874,17 @@ func (s *Service) MessagesNativeStream(ctx context.Context, plaintextKey, versio
 	if err != nil {
 		return gatewayError("unsupported_feature", "native Messages stream primitive is unavailable", 400, err)
 	}
-	payload, _ := envelope.PayloadFor(domain.ProfileAnthropicMessages, 1, compatibility.NativeRequest)
+	payload, _ := envelope.PayloadFor(target.ProfileID, 1, compatibility.NativeRequest)
 	registry, _ := anthropicwire.NewNativeSchemaRegistry()
 	identity := nativeIdentity(principal, target, request.Model)
 	emitted := false
 	providerErrorEvent := false
 	usage, providerErr := adapter.MessagesNativeStream(ctx, provider.NativeMessageCall{RequestID: run.requestID, ProviderModel: target.ProviderModel, Version: version, Payload: payload}, func(event anthropicapi.RawStreamEvent) error {
-		eventEnvelope, envelopeErr := compatibility.NewNativeEventEnvelope(registry, domain.ProfileAnthropicMessages, 1, http.Header{}, event.Data, identity)
+		eventEnvelope, envelopeErr := compatibility.NewNativeEventEnvelope(registry, target.ProfileID, 1, http.Header{}, event.Data, identity)
 		if envelopeErr != nil {
 			return envelopeErr
 		}
-		safePayload, _ := eventEnvelope.PayloadFor(domain.ProfileAnthropicMessages, 1, compatibility.NativeEvent)
+		safePayload, _ := eventEnvelope.PayloadFor(target.ProfileID, 1, compatibility.NativeEvent)
 		if event.Type == "message_start" {
 			safePayload, envelopeErr = rewriteAnthropicStreamModel(safePayload, request.Model)
 			if envelopeErr != nil {
@@ -958,7 +958,7 @@ func (s *Service) prepareNativeMessages(ctx context.Context, plaintextKey, versi
 		return auth.AuthResult{}, provider.Target{}, nil, 0, 0, err
 	}
 	targets = slices.DeleteFunc(targets, func(target provider.Target) bool {
-		return target.ProfileID != domain.ProfileAnthropicMessages || target.AccessSurface != domain.SurfaceAnthropic
+		return !isNativeAnthropicProfile(target.ProfileID, target.AccessSurface)
 	})
 	if len(targets) == 0 {
 		return auth.AuthResult{}, provider.Target{}, nil, 0, 0, gatewayError("unsupported_feature", "native mode requires an Anthropic Messages provider profile", 400, nil)
@@ -968,7 +968,7 @@ func (s *Service) prepareNativeMessages(ctx context.Context, plaintextKey, versi
 	if err != nil {
 		return auth.AuthResult{}, provider.Target{}, nil, 0, 0, gatewayError("internal_error", "native schema is unavailable", 500, err)
 	}
-	envelope, err := compatibility.NewNativeEnvelope(registry, domain.ProfileAnthropicMessages, 1, anthropicwire.NativeHeaders(version), request.Raw, nativeIdentity(principal, target, request.Model))
+	envelope, err := compatibility.NewNativeEnvelope(registry, target.ProfileID, 1, anthropicwire.NativeHeaders(version), request.Raw, nativeIdentity(principal, target, request.Model))
 	if err != nil {
 		return auth.AuthResult{}, provider.Target{}, nil, 0, 0, gatewayError("invalid_request_error", "native request failed schema validation", 400, err)
 	}
@@ -984,6 +984,11 @@ func (s *Service) prepareNativeMessages(ctx context.Context, plaintextKey, versi
 		return auth.AuthResult{}, provider.Target{}, nil, 0, 0, gatewayError("token_limit_exceeded", "request exceeds the model deployment token limits", 400, nil)
 	}
 	return principal, target, envelope, inputTokens, outputTokens, nil
+}
+
+func isNativeAnthropicProfile(profileID domain.ProviderProfileID, surface domain.AccessSurface) bool {
+	return profileID == domain.ProfileAnthropicMessages && surface == domain.SurfaceAnthropic ||
+		profileID == domain.ProfileBedrockMantleAnthropicMessages && surface == domain.SurfaceBedrockMantle
 }
 
 func nativeIdentity(principal auth.AuthResult, target provider.Target, model string) compatibility.NativeIdentity {
