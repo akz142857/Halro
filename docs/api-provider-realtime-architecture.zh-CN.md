@@ -1759,7 +1759,7 @@ Manifest；其余记录在对应 Phase 获得真实需求、负责人和预算�
 | 决策 | 结论 |
 |---|---|
 | 是否宣称支持 OpenAI 全部 API | 否，按 Endpoint 和字段级契约声明 |
-| v1 是否实现 Responses、Realtime 或 HA | 否，v1 只强化现有 Chat/Embeddings 契约 |
+| v1 是否实现 Responses、Realtime 或 HA | Phase 1A 已实现明确的 Stateless Responses Tier；Realtime 与 HA 仍不属于当前 v1 范围 |
 | 是否只提供 OpenAI 北向协议 | 否，同时允许 Anthropic 等原生 Facade |
 | 是否把所有 Provider 强制转换成 OpenAI | 否，只执行可证明的无损转换 |
 | 一个 Provider 是否只对应一个 Adapter | 否，Provider 下按 Access Surface、版本化 Profile 和 Operation Adapter 组织 |
@@ -1786,7 +1786,7 @@ Manifest；其余记录在对应 Phase 获得真实需求、负责人和预算�
 | Broker Mode 是否等价于完整 Gateway | 否，使用独立 Assurance Profile，强治理 Project 默认拒绝 |
 | 故障时是否允许从 Gateway Terminated 静默降级到 Provider Direct | 否，连接模式和最低 Assurance 必须由 Project/Route 显式授权 |
 | Heimdall 是否最终自行终止 WebRTC | 未决定；自建、独立/第三方 Media Service 和 Direct Broker 都是候选终态 |
-| 当前优先级 | Now 强化现有端点；Next Stateless Responses/Messages；Realtime 与 WebRTC 暂缓 |
+| 当前优先级 | Stateless Responses 已完成；Next Anthropic Messages 与跨协议 Tool/Thinking 契约；Realtime 与 WebRTC 暂缓 |
 
 ## 21. 协议与内部契约参考
 
