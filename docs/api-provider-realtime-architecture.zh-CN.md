@@ -1,6 +1,6 @@
 # Heimdall 多协议 LLM API、Provider 与 Realtime 架构设计
 
-状态：设计提案 v3，已吸收两轮多角色架构评审，尚未代表已实现能力<br>
+状态：设计提案 v5，已吸收多角色架构评审、OpenAI Realtime 与 AWS Bedrock 多协议分析，尚未代表已实现能力<br>
 最后更新：2026-08-01<br>
 适用范围：Gateway 数据面、Provider Adapter、能力协商、实时会话和未来分布式部署
 
@@ -122,6 +122,31 @@ Provider。节点故障时首版终止连接，由客户端创建新 Session。
 第 11 章及 Realtime 后续章节是为了提前固定不能违反的安全和一致性边界，不是当前 HA 或
 媒体系统实施计划。
 
+### 3.7 一个 Provider 不等于一个 Adapter
+
+Provider 表示一个平台账户、信任边界和凭证集合，不表示单一 Wire Protocol。一个 Provider
+可以同时暴露多个 Access Surface，每个 Surface 又可以包含多个版本化 Profile。例如 AWS
+Bedrock 同时存在 `bedrock-runtime` 与 `bedrock-mantle`，前者提供 Converse、Invoke、Async
+和双向流，后者提供 OpenAI-compatible 与 Anthropic-compatible 接口。
+
+因此禁止继续假设：
+
+```text
+provider_type -> one adapter -> one capability snapshot
+```
+
+目标关系必须是：
+
+```text
+Provider -> Access Surface -> Profile -> Operation Adapter
+                                |
+                                +-> Credential Scheme
+                                +-> Capability Evidence
+```
+
+新增协议必须注册新的不可变 Profile，而不是不断扩大已有 Provider Adapter，或使已有
+Deployment 在升级后静默获得新行为。
+
 ## 4. 目标总体架构
 
 ```mermaid
@@ -143,17 +168,27 @@ flowchart LR
         Session["Realtime session manager"]
     end
 
-    subgraph Southbound["Southbound adapters"]
+    subgraph Southbound["Southbound profiles and operation adapters"]
+        ProfileRegistry["Profile / operation registry"]
+        Credential["Credential schemes"]
         OpenAIAdapter["OpenAI primitives"]
         AnthropicAdapter["Anthropic primitives"]
         GeminiAdapter["Gemini primitives"]
-        BedrockAdapter["Bedrock primitives"]
+        BedrockRuntime["Bedrock Runtime primitives"]
+        BedrockMantle["Bedrock Mantle primitives"]
         CompatibleAdapter["Compatible primitives"]
     end
 
     Client --> Northbound
     Northbound --> Auth --> Normalize --> Capability --> Router
-    Router --> Southbound
+    Router --> ProfileRegistry
+    ProfileRegistry --> Credential
+    ProfileRegistry --> OpenAIAdapter
+    ProfileRegistry --> AnthropicAdapter
+    ProfileRegistry --> GeminiAdapter
+    ProfileRegistry --> BedrockRuntime
+    ProfileRegistry --> BedrockMantle
+    ProfileRegistry --> CompatibleAdapter
     Router --> Ledger
     RealtimeAPI --> Session --> Router
 ```
@@ -191,6 +226,23 @@ Requirements 的 Anthropic Messages 或 Gemini generateContent Primitive。Provi
 
 这三个轴不得合并为一个枚举或一个接口，否则 Portable 模式会在类型层重新绑定某一家
 Provider。
+
+### 4.2 Access Surface
+
+Access Surface 是 Provider 内具有独立 Endpoint Family、认证服务名、配额、模型可见性和协议集的
+数据面。它不是普通 Base URL 字符串。Route 在选择 Deployment 时必须同时固定 Provider、Access
+Surface、Profile、Region 和模型标识。
+
+以 AWS 为例：
+
+| Access Surface | 主要协议 | 关键差异 |
+|---|---|---|
+| `bedrock-runtime` | Converse、Invoke、Async Invoke、CountTokens、Guardrails、Bidirectional Stream | SigV4 服务名 `bedrock`；包含模型原生和媒体接口 |
+| `bedrock-mantle` | OpenAI Chat Completions、OpenAI Responses、Anthropic Messages | 独立 Endpoint、配额与授权面；可使用对应开放协议 SDK |
+| `bedrock-agent-runtime` | Agents、Knowledge Bases、Flows | Provider-owned 状态和 Agent 生命周期；默认不属于核心推理 Gateway |
+
+不同 Access Surface 即使托管同一模型，也不能默认视为相同 Deployment 或共享限流状态；协议、
+配额、Usage、错误和资源归属必须分别验证。
 
 ## 5. 北向 API 设计
 
@@ -416,6 +468,24 @@ type RealtimeAdapter interface {
 }
 ```
 
+Profile 通过 Operation Registry 暴露它实际实现的小接口，不要求每个 Provider 实现一个持续
+膨胀的总接口：
+
+```go
+type ProviderProfile interface {
+    Manifest() ProfileManifest
+    Operations() OperationRegistry
+}
+
+type OperationRegistry interface {
+    Resolve(operation SemanticOperation) (OperationAdapter, bool)
+}
+```
+
+`OperationAdapter` 是受控的小接口联合，只能返回 Manifest 声明的实现。`Resolve` 不允许根据
+请求字段临时猜测协议，也不能在运行时把未知操作转发到任意 Provider URL。资源型、异步和
+Realtime 操作分别使用自己的生命周期接口，而不是塞入 `GenerationAdapter`。
+
 共同能力由独立接口承载：
 
 ```go
@@ -483,7 +553,13 @@ openai.realtime.ga.v1
 anthropic.messages.2023-06-01
 gemini.generate-content.v1beta
 gemini.live.v1beta
-bedrock.converse.v1
+bedrock.runtime.converse.text.v1
+bedrock.runtime.invoke.<model-family>.v1
+bedrock.runtime.async-invoke.v1
+bedrock.runtime.nova-sonic-bidirectional.v1
+bedrock.mantle.openai.chat.v1
+bedrock.mantle.openai.responses.v1
+bedrock.mantle.anthropic.messages.v1
 ```
 
 Profile 升级必须经过兼容测试，不能因 Heimdall 升级而静默改变现有 Deployment 行为。
@@ -504,6 +580,52 @@ Profile Manifest 至少包含：
 Beta Header Set 共同确定；Bedrock 能力还必须与 Access Surface、模型族、Region、Inference
 Profile 和 Guardrail Policy 相交。
 
+### 7.4 Credential Scheme
+
+Credential 获取、轮换和请求签名必须与协议转换器解耦。Profile Manifest 引用明确的
+Credential Scheme；Adapter 只能请求经过作用域限制的 Authorizer，不能直接读取宿主机环境、
+IMDS 或任意 Secret。
+
+```text
+bearer.static
+api-key.header
+aws.sigv4.explicit-session
+aws.sigv4.assume-role
+aws.sigv4.workload-identity
+aws.bedrock-api-key
+oauth.client-credentials
+```
+
+AWS 首版继续允许显式加密的 Access Key、Secret、可选 Session Token，但这只是一个 Scheme，
+不能成为所有 AWS Profile 的硬编码构造参数。生产工作负载可以增加显式配置的 AssumeRole 或
+Web Identity；默认 Credential Chain 和 IMDS 保持关闭，只有完成 SSRF、租户隔离、Credential
+刷新和失败语义评审后才可启用。Bedrock API Key 按具体 Profile 使用 Provider 文档规定的
+Authorization Header（例如 Bearer 或专用 API Key Header），且不能用于所有 Bedrock 操作；
+Profile 必须声明允许的认证集合和 Header。`bedrock-runtime` 与 `bedrock-mantle` 的 SigV4
+服务名、Endpoint Audience 和授权动作必须分别固定。
+
+### 7.5 AWS Bedrock Profile 家族
+
+当前代码中的 Bedrock Beta 只代表 `bedrock.runtime.converse.text.v1` 的早期实现：文本
+Converse/ConverseStream、基础推理参数、SigV4、Usage 和 AWS EventStream 校验。它不表示
+Bedrock Provider 的其他 Profile 已经实现。
+
+目标 Profile 分工如下：
+
+| Profile 家族 | Provider Primitive | 目标定位 |
+|---|---|---|
+| Runtime Converse | `Converse` / `ConverseStream` | 跨模型会话语义；按模型验证 Tools、多模态、Reasoning、Structured Output、Cache 和 Guardrail |
+| Runtime Invoke | `InvokeModel` / Response Stream | 模型族原生请求；用于 Embeddings、Image、Rerank 及 Converse 无法表达的能力 |
+| Runtime Async | `StartAsyncInvoke` / Get/List | 长任务和 S3 输出；需要独立资源所有权、幂等和清理契约 |
+| Runtime Realtime | `InvokeModelWithBidirectionalStream` | Nova Sonic 双向音频 Session；进入 Realtime 数据面 |
+| Mantle OpenAI | Chat Completions / Responses | 使用 OpenAI 北向语义，但仍具有 AWS Endpoint、认证、配额和模型矩阵 |
+| Mantle Anthropic | Messages | Anthropic 原生 Facade 的 AWS Access Surface，不经过 OpenAI IR 强制转换 |
+
+`InvokeModel` 必须按模型族使用版本化 Schema，不允许新增一个接受任意 JSON 的通用透传接口。
+Agents、Knowledge Bases、Flows 和 AgentCore 具有独立的 Provider-owned 状态、工具权限和资源
+生命周期，默认不属于核心 LLM 推理 Gateway；出现明确产品需求时另立 Facade、Ownership ADR
+和 Assurance Profile。
+
 ## 8. Capability 设计
 
 ### 8.1 从布尔值扩展为结构化能力
@@ -512,10 +634,11 @@ Realtime 和多模态接入后，仅使用 `Chat=true` 无法安全路由。目�
 
 ```text
 operations:
-  generate, embed, moderate, image, transcribe, synthesize, realtime
+  generate, embed, moderate, image, transcribe, synthesize, realtime,
+  count_tokens, async_generate
 
 transports:
-  http, sse, websocket, webrtc
+  http, sse, websocket, webrtc, bidirectional_eventstream
 
 input_modalities:
   text, image, audio, video, file
@@ -551,8 +674,15 @@ Structured Output、Token Limit 及其证据状态。Realtime、Audio Format、V
 在对应 Phase 启动时通过新 Profile Revision 增加，禁止为了“未来可能需要”提前实现未验证分支。
 
 Provider 声明能力上限，Deployment 只能收窄，不能扩张。Route 可以进一步限制允许能力。
-实际能力是 Profile、Provider Primitive、Model/Model Family、Deployment Snapshot 和 Route Policy
-的交集，不能使用 Provider 类型级常量替代。
+实际能力是 Access Surface、Profile、Provider Primitive、Credential Scheme、Model/Model Family、
+Region/Inference Profile、Guardrail Policy、Deployment Snapshot 和 Route Policy 的交集，不能使用
+Provider 类型级常量替代。相同模型经 `bedrock-runtime` 和 `bedrock-mantle` 调用时也必须分别
+产生能力证据和配额状态。
+
+Bedrock Converse 只有 `system`、`user` 和 `assistant` 语义，并不天然证明 OpenAI
+`developer` Role 的优先级可以无损保留。当前把 `developer` 合并到 `system` 的行为只能标记为
+Model/Profile 级 `declared transform`；在对应 Golden Test 证明前，Provider 级默认能力不得声明
+`developer_role=verified`。
 
 某些 Provider 的 Reasoning/Thinking Block 是带签名或不透明的 Roundtrip Artifact。Profile 必须
 声明 `roundtrip_integrity` 是 `none`、`semantic` 还是 `exact_opaque`。`exact_opaque` 内容必须按
@@ -650,14 +780,33 @@ Exactly Once。对于 Files、Batches、Responses 状态对象和 Realtime Sessi
 
 ### 10.1 协议定位
 
-本文的 OpenAI Realtime 目标范围只覆盖 WebRTC 和 WebSocket。WebRTC 建连时，客户端向
-`POST /v1/realtime/calls` 提交 SDP Offer 和 Session 配置，服务端返回 SDP Answer。
-WebSocket 和 WebRTC DataChannel 使用双向事件模型，但 WebRTC 音频通常通过加密 RTP Media
-Track 传输，而不是把音频数据全部放进普通 HTTP Body。
+本文的 OpenAI Realtime 目标范围只覆盖 WebRTC 和 WebSocket。OpenAI WebRTC 必须兼容两种
+原生初始化方式，不能把二者错误合并成同一条链路：
+
+1. **Unified Interface**：客户端先创建 SDP Offer，并把 Offer 交给 Heimdall；Heimdall 使用
+   服务端保存的 Provider Credential，把 SDP Offer 与 Session 配置一起提交到 OpenAI
+   `POST /v1/realtime/calls`，再把 SDP Answer 返回客户端。Session 创建与 SDP 协商在一次
+   上游调用中完成，不需要先获取 Provider 临时凭证；
+2. **Ephemeral Client Secret**：客户端先向 Heimdall 请求短期凭证；Heimdall 使用 Provider
+   Credential 调用 OpenAI `POST /v1/realtime/client_secrets`，将返回的短期、不透明 Client
+   Secret 交给客户端；客户端再携带该凭证和 SDP Offer 直接调用 OpenAI
+   `POST /v1/realtime/calls`，取得 SDP Answer。
+
+两种方式在协商完成后都可以形成 Client 与 OpenAI 的 Provider Direct WebRTC 数据路径；差异
+主要在于 SDP Exchange 是否经过 Heimdall，以及 Provider 临时凭证是否到达客户端。WebSocket
+和 WebRTC DataChannel 使用双向事件模型，但 WebRTC 音频通常通过加密 RTP Media Track
+传输，而不是把音频数据全部放进普通 HTTP Body。
 
 Gemini Live 是另一种原生、Stateful WebSocket 协议，使用自己的 Setup、Realtime Input、
 Server Content、Tool Call 和 Session Resume 事件。两者可以共享 Canonical Realtime Core，
 但不能共享未经转换的 Wire Event。
+
+AWS Nova Sonic 使用 Bedrock Runtime `InvokeModelWithBidirectionalStream`，是有最大会话时长、
+可承载多轮 Prompt/Response 和双向音频的 Stateful Event Stream。它既不是普通
+`ConverseStream`，也不应伪装成 Provider WebSocket。Heimdall 将其建模为独立
+`bedrock.runtime.nova-sonic-bidirectional.v1` Realtime Profile：与 OpenAI/Gemini 共享 Session、
+治理事件和 Accounting Core，但使用专用 Transport、Wire Event、SigV4 Credential、取消和
+超时实现。Bedrock API Key 不能被假定适用于该 Profile。
 
 ### 10.2 WebSocket 与 WebRTC
 
@@ -668,6 +817,10 @@ Server Content、Tool Call 和 Session Resume 事件。两者可以共享 Canoni
 | 内容 | JSON Event 和编码后的媒体块 | RTP Media Track + DataChannel Event |
 | 优点 | 易代理、易观测、易部署 | 低延迟、抖动控制、拥塞控制、浏览器媒体能力完整 |
 | 风险 | 队头阻塞，媒体效率较低 | ICE、NAT、DTLS-SRTP、TURN 和媒体运维复杂 |
+
+表中 WebSocket 与 WebRTC 只比较浏览器/通用实时传输。Provider 专用的双向 HTTP/2 Event
+Stream（例如 Nova Sonic）属于第三种南向 Transport；它可以接在 Heimdall Realtime Edge 之后，
+但不能复用 WebSocket Frame Parser 或 WebRTC Media Track 实现。
 
 ### 10.3 Control Plane 与 Realtime Edge
 
@@ -697,8 +850,10 @@ Accounting/Observability Side Channel
   - low-cardinality metrics
 ```
 
-普通 Gateway HTTP Listener 可以承载 Session 创建和 SDP Exchange，但媒体路径必须由
-Realtime Edge 管理。
+普通 Gateway HTTP Listener 可以承载 Session 创建和 SDP Exchange。媒体路径由所选拓扑决定：
+Provider Direct 模式由 Provider 承载，Gateway Terminated 模式由 Heimdall Realtime Edge
+承载，独立媒体服务模式由受信 Media Service 承载；文档和实现不得把“控制面由 Heimdall
+管理”误写成“媒体一定经过 Heimdall”。
 
 ### 10.4 Realtime Session 模型
 
@@ -848,16 +1003,33 @@ type RealtimeConnection interface {
 
 ### 10.7 WebRTC 拓扑选择
 
-#### 方案 A：Token Broker，客户端直连 Provider
+#### 方案 A：Provider Direct Broker，客户端直连 Provider
 
 ```text
-Client -> Heimdall: auth, route, short-lived token
-Client -> Provider: direct WebRTC
+Unified:
+  Client -> Heimdall: auth, route, SDP Offer
+  Heimdall -> Provider: provider credential + SDP Offer + session config
+  Provider -> Heimdall -> Client: SDP Answer
+  Client <-> Provider: direct WebRTC
+
+Ephemeral Client Secret:
+  Client -> Heimdall: auth, route, request short-lived credential
+  Heimdall -> Provider: mint provider client secret
+  Heimdall -> Client: opaque short-lived provider client secret
+  Client -> Provider: client secret + SDP Offer
+  Provider -> Client: SDP Answer
+  Client <-> Provider: direct WebRTC
 ```
 
 优点：延迟最低、实现和带宽成本最低。<br>
 缺点：媒体绕过 Heimdall，无法完整执行内容策略、精确实时限流和媒体审计；Provider 地址也会
 暴露给客户端。
+
+Unified 应作为 OpenAI Provider Direct 的默认握手方式，因为 Provider 长期凭证和临时凭证均
+不需要下发到浏览器，并且 Heimdall 可以在返回 SDP Answer 前完成认证、路由、预算预留和审计。
+Ephemeral Client Secret 作为 OpenAI 原生兼容入口保留，适用于客户端已经按照该流程集成的场景。
+二者具有相同的 Direct Media Assurance 下限，不能因为 Unified 的 SDP Exchange 经过 Heimdall
+就宣称 Heimdall 已经终止或完整观察媒体。
 
 #### 方案 B：Heimdall 终止 WebRTC
 
@@ -896,6 +1068,24 @@ NACK/PLI、GCC/TWCC、Codec/Resample、网络损伤调优、NAT/TURN 兼容、�
 Heimdall 必须拥有身份、路由、策略声明、预算和审计控制面，但不要求 Heimdall Go 进程永久
 承担 RTP 媒体面。方案 A 使用能力受限的 Broker Assurance Profile；方案 C 必须达到与内部
 Media Edge 相同的签名控制、Usage 和故障契约。
+
+Provider Direct 与 Gateway Terminated 是并列能力，不是互相替代的版本。OpenAI WebRTC 默认
+可以选择 Provider Direct 以利用 Provider 自身的媒体网络和故障域；需要强内容策略、精确实时
+预算、Gateway Tool Executor、媒体审计或协议桥接的 Route 才选择 Gateway Terminated 或受信
+Media Service。Project/Route 必须显式选择允许的连接模式及最低 Assurance，禁止在故障时把
+Gateway Terminated 静默降级成 Provider Direct。
+
+故障语义必须对调用方公开：
+
+| 故障时点 | Provider Direct | Gateway Terminated |
+|---|---|---|
+| Heimdall 在 Session 建立前不可用 | 不能创建新 Session，除非控制面已有可用副本 | 不能创建新 Session |
+| Heimdall 在 Session 建立后不可用 | 已建立的 Provider WebRTC 通常可以继续，控制、撤销、结算能力按 Profile 降级 | 当前 Edge 上的 Session 通常中断 |
+| Provider 不可用 | 当前 Session 中断；只允许客户端显式新建 Session 时重新路由 | 当前上游 Session 中断；只允许客户端显式新建 Session 时重新路由 |
+
+Provider Direct 提高的是“建连后的媒体数据面可用性”，并不能消除新 Session 对 Heimdall 控制
+面的依赖。若要求 Heimdall 故障时仍可创建新 Session，需要单独建设高可用 Control Plane；不应
+通过把长期 Provider Key 下发客户端或允许客户端绕过 Gateway Policy 来伪造高可用。
 
 Broker Profile 必须声明：
 
@@ -945,6 +1135,12 @@ Broker Mode 中 Heimdall Token 只授权创建 Broker Session；如果 Provider 
 Secret，Heimdall 通过服务端 Credential 换取后以不透明、短 TTL 形式交给客户端。该临时 Secret
 的真实约束能力取决于 Provider，不能因为 Heimdall Token 带有 `max_spend` 等 Claim 就宣称上游
 会执行这些限制。
+
+OpenAI Unified Interface 不需要把 Provider Client Secret 返回客户端，但客户端访问 Heimdall
+SDP Exchange 入口仍必须使用短期、受限的 Heimdall Session Authorization，并在返回 SDP
+Answer 前完成同等的 `consume(jti, ...)`、路由绑定、Origin 校验和预算预留。Ephemeral Client
+Secret 流程则必须同时区分 Heimdall Authorization 与 Provider Client Secret：前者授权 Heimdall
+创建 Broker Session，后者只用于建立对应的 OpenAI Realtime Call，二者不得混用或记录到日志。
 
 ## 11. 分布式与会话连贯性
 
@@ -1316,11 +1512,16 @@ internal/policy/
 ### 17.2 Adapter 测试
 
 - Canonical <-> Provider 转换 Golden Test；
+- 同一 Provider 的 Access Surface/Profile 隔离测试，禁止 Endpoint、SigV4 服务名、配额或能力串用；
 - 不可映射字段 Fail Closed；
 - Provider Error 分类；
 - Usage 缺失和估算；
 - Retry-After 和 Unknown Outcome；
 - Provider Version/Profile 固定；
+- AWS Converse Stop Reason、Content Block Union、Event 顺序、Request ID、Cache Usage、
+  Guardrail、Inference Profile 和 Region Matrix；
+- AWS Mantle OpenAI/Anthropic 官方 SDK 黑盒测试，以及 Runtime/Mantle 独立限流测试；
+- Credential Scheme 的刷新、撤销、过期、AssumeRole/Web Identity 和 IMDS 禁用测试；
 - 真实账户 Smoke Matrix。
 
 ### 17.3 Realtime 测试
@@ -1369,13 +1570,17 @@ internal/policy/
 ### Phase 0（Now/Next）：最小协议基础
 
 - 引入 NorthboundProfile、SemanticOperation、ProviderPrimitive 三层模型；
+- 引入 Access Surface、ProviderProfile、OperationRegistry 和 Credential Scheme；
 - 引入 Semantic Content/Result/Event 与 NativeEnvelope/GovernanceView；
 - 只实现 Chat/Embeddings 和 Phase 1 需要的最小 Capability；
 - 建立不可变 Provider Profile Manifest 和 Endpoint Compatibility Manifest；
 - 使用 LegacyAdapterBridge 迁移旧 Deployment，能力按 verified/declared/legacy/unsupported 标记；
 - 增加 Semantic Package 依赖静态检查和 Provider 字段 Golden Test；
 - 保持现有 Chat/Embeddings 对外行为不变；
-- 为“不支持即拒绝”建立统一错误。
+- 为“不支持即拒绝”建立统一错误；
+- 将现有 Bedrock Beta 固定为 `bedrock.runtime.converse.text.v1`，修复 Stop Reason Forward
+  Compatibility、Provider Request ID、Retry-After/Error Code，并把未经证明的 Developer Role
+  从 `verified` 降为 `declared transform` 或 Unsupported；
 
 完成标准：现有全部测试通过，当前两个 Endpoint 没有兼容性回归，新能力模型可以表达
 Responses、Anthropic Messages Requirements；北向协议不再成为南向 Adapter 接口；旧 Adapter
@@ -1388,6 +1593,9 @@ Responses、Anthropic Messages Requirements；北向协议不再成为南向 Ada
 - 实现 `/v1/responses` 普通和 SSE Facade；
 - 实现 Anthropic `/v1/messages` 普通和 SSE Facade；
 - 增加对应 Provider Primitive Adapter，而不是 OpenAI-specific 通用 Adapter；
+- 增加 `bedrock.mantle.openai.chat.v1`，并随对应北向 Facade 增加
+  `bedrock.mantle.openai.responses.v1` 与 `bedrock.mantle.anthropic.messages.v1`；
+- Mantle 与 Runtime 使用独立 Access Surface、Credential Audience、Quota 和 Capability Evidence；
 - 完成 OpenAI/Anthropic/Gemini Tool Choice 与 Function Calling Golden Matrix；
 - 验证 Thinking/Reasoning Roundtrip Integrity；
 - 实现 Portable/Native Route 模式；
@@ -1401,6 +1609,10 @@ Responses、Anthropic Messages Requirements；北向协议不再成为南向 Ada
 - Audio Transcription/Speech；
 - Image Generation；
 - Moderation；
+- 按模型族实现 Bedrock `InvokeModel`/Response Stream Profile，优先覆盖有明确需求的
+  Embeddings、Rerank、Image，禁止任意 JSON 透传；
+- 对 Bedrock Async Invoke 做资源所有权、S3 输入输出、幂等、轮询、取消、TTL 和清理 ADR 后
+  再实现视频或大媒体任务；
 - 对 Files/Batches 做资源所有权 ADR 后再决定实现；
 - 扩展媒体大小、格式、扫描、成本和生命周期策略。
 
@@ -1433,7 +1645,9 @@ Responses、Anthropic Messages Requirements；北向协议不再成为南向 Ada
 ### Phase 4（Deferred）：WebRTC Control Plane 与 Broker Mode
 
 - 前置批准 Broker Assurance ADR 和 WebRTC Transport Profile；
-- `/v1/realtime/calls` 兼容接口；
+- `/v1/realtime/calls` Unified SDP Exchange 兼容接口；
+- `/v1/realtime/client_secrets` Ephemeral Client Secret 兼容接口；
+- Provider Direct 与 Gateway Terminated 的显式 Route/Profile 选择，禁止静默 Assurance 降级；
 - SDP/ICE 安全策略和 Control/Media Affinity；
 - Browser Short-lived Token 和权威 `consume(jti)`；
 - Broker Assurance Capability、硬预算适用范围和 Provider Sideband Reconciliation；
@@ -1449,6 +1663,7 @@ Responses、Anthropic Messages Requirements；北向协议不再成为南向 Ada
 - 对选定媒体实现完成供应链审计、区域故障和回滚演练；
 - OpenAI WebRTC 上游或 WebRTC-to-WebSocket Bridge；
 - Gemini Live Adapter；
+- AWS Nova Sonic `InvokeModelWithBidirectionalStream` Adapter；
 - 可选 Azure Realtime；
 - 媒体级性能、容量、成本和灾难恢复基线。
 
@@ -1465,7 +1680,7 @@ Manifest；其余记录在对应 Phase 获得真实需求、负责人和预算�
 
 | ADR/设计 | 最晚完成时间 | 核心决策 |
 |---|---|---|
-| Protocol/Semantic/Primitive 与 Portable/Native | Phase 0 | 三层抽象、NativeEnvelope、GovernanceView、转换损失 |
+| Protocol/Semantic/Primitive 与 Portable/Native | Phase 0 | 三层抽象、Access Surface、Operation Registry、Credential Scheme、NativeEnvelope、GovernanceView、转换损失 |
 | Responses Resource Ownership | Phase 1 | Stateless Tier 或完整对象状态、Provider Resource ID 和后续路由 |
 | Files/Batches Resource Ownership | Phase 2 | 数据驻留、删除、Provider 绑定、异步状态和 Idempotency |
 | Realtime Accounting | Phase 3 | 单一 Ledger WAL、Reservation Extension、Usage Watermark、Reaper、Unknown Tail |
@@ -1482,8 +1697,9 @@ Manifest；其余记录在对应 Phase 获得真实需求、负责人和预算�
 
 | 开始阶段 | 必须完成 |
 |---|---|
-| Phase 0 | 三层抽象、Legacy Adapter 迁移、Profile/Compatibility Manifest |
+| Phase 0 | 三层抽象、Access Surface/Operation Registry/Credential Scheme、Legacy Adapter 迁移、Profile/Compatibility Manifest |
 | Phase 1 | Responses Ownership、Portable/Native、Termination/Event 契约 |
+| Phase 2 | Invoke 模型族 Schema；异步任务还需资源所有权、S3、幂等、取消和清理契约 |
 | Phase 3 | Accounting、Credential、Data Retention ADR 与 Threat Model；保持 Standalone |
 | Phase 3H | Ownership/Lease ADR、Quorum/Cluster 基础与真实单节点容量证据 |
 | Phase 4 | Broker Assurance、WebRTC Profile、Control/Media Affinity |
@@ -1497,12 +1713,20 @@ Manifest；其余记录在对应 Phase 获得真实需求、负责人和预算�
 | v1 是否实现 Responses、Realtime 或 HA | 否，v1 只强化现有 Chat/Embeddings 契约 |
 | 是否只提供 OpenAI 北向协议 | 否，同时允许 Anthropic 等原生 Facade |
 | 是否把所有 Provider 强制转换成 OpenAI | 否，只执行可证明的无损转换 |
+| 一个 Provider 是否只对应一个 Adapter | 否，Provider 下按 Access Surface、版本化 Profile 和 Operation Adapter 组织 |
+| 同一模型在不同 Access Surface 是否共享能力声明 | 否，Endpoint、认证、配额、协议和能力证据分别验证 |
 | 是否需要 Canonical IR | 是，但使用语义模型；NorthboundProfile 和 ProviderPrimitive 与之正交 |
 | 是否需要 Portable/Native 模式 | 是，解决跨 Provider 与原生能力之间的矛盾 |
 | Native 模式是否全部转为 Canonical IR | 否，使用 NativeEnvelope，并提取受限 GovernanceView |
 | Responses 是否直接按完整 API 实现 | 否，先完成 Resource Ownership；否则只提供明确 Stateless Tier |
+| 当前 Bedrock Beta 是否等价于完整 AWS Bedrock | 否，只代表 Runtime Converse/ConverseStream 文本子集 |
+| AWS Mantle 是否复用现有 Bedrock Converse Adapter | 否，作为独立 Access Surface 和 OpenAI/Anthropic Profile |
+| AWS Agents、Knowledge Bases、Flows 是否属于核心 Gateway | 否，除非另立 Facade、Ownership ADR 和 Assurance Profile |
 | Realtime 是否复用普通 Adapter | 否，建立独立 Session 和 Realtime Adapter |
 | WebSocket 和 WebRTC 是否相同实现 | 否，共享 Session/Event Core，Transport 独立 |
+| OpenAI WebRTC 是否只有一种初始化链路 | 否，同时兼容 Unified Interface 与 Ephemeral Client Secret |
+| OpenAI WebRTC 默认是否必须由 Heimdall 终止媒体 | 否，Provider Direct 可作为默认；强治理 Route 显式选择 Gateway Terminated 或受信 Media Service |
+| Provider Direct 是否使 Heimdall 完全退出关键路径 | 否，只提高已建连媒体面的独立性；新 Session 仍依赖 Heimdall 控制面 |
 | 浏览器是否持有 Provider/Gateway 长期 Key | 否，只使用短期、受限、单次凭证 |
 | 单次 Token 是否只靠离线验签 | 否，Provider Connect/SDP Answer 前必须权威原子 Consume |
 | 活跃 Realtime Session 是否跨节点透明迁移 | 首版不迁移，断开后显式重连 |
@@ -1511,6 +1735,7 @@ Manifest；其余记录在对应 Phase 获得真实需求、负责人和预算�
 | Epoch 是否能绝对切断第三方连接 | 否，只绝对围栏内部提交；外部连接依赖租约守卫并保守处理 Unknown |
 | Accounting 故障是否允许未预付宽限 | 否，只能消费故障前已持久预留且有最坏成本上界的额度 |
 | Broker Mode 是否等价于完整 Gateway | 否，使用独立 Assurance Profile，强治理 Project 默认拒绝 |
+| 故障时是否允许从 Gateway Terminated 静默降级到 Provider Direct | 否，连接模式和最低 Assurance 必须由 Project/Route 显式授权 |
 | Heimdall 是否最终自行终止 WebRTC | 未决定；自建、独立/第三方 Media Service 和 Direct Broker 都是候选终态 |
 | 当前优先级 | Now 强化现有端点；Next Stateless Responses/Messages；Realtime 与 WebRTC 暂缓 |
 
@@ -1519,13 +1744,21 @@ Manifest；其余记录在对应 Phase 获得真实需求、负责人和预算�
 - [OpenAI Developer Quickstart / Responses API](https://platform.openai.com/docs/quickstart/make-your-first-api-request)
 - [OpenAI Responses Streaming Events](https://platform.openai.com/docs/api-reference/responses-streaming)
 - [OpenAI Realtime API Reference](https://platform.openai.com/docs/api-reference/realtime)
+- [OpenAI Realtime WebRTC Guide](https://developers.openai.com/api/docs/guides/realtime-webrtc)
+- [OpenAI Realtime WebSocket Guide](https://developers.openai.com/api/docs/guides/realtime-websocket)
 - [Anthropic API Documentation](https://docs.anthropic.com/en/api/overview)
 - [Anthropic API Versioning](https://platform.claude.com/docs/en/api/versioning)
 - [Anthropic Beta Headers](https://platform.claude.com/docs/en/api/beta-headers)
 - [Gemini API Reference](https://ai.google.dev/api)
 - [Gemini Live API](https://ai.google.dev/gemini-api/docs/live-api)
 - [Gemini Live WebSocket Reference](https://ai.google.dev/api/live)
+- [AWS Bedrock Supported APIs](https://docs.aws.amazon.com/bedrock/latest/userguide/apis.html)
+- [AWS Bedrock Model/API Compatibility](https://docs.aws.amazon.com/bedrock/latest/userguide/models-api-compatibility.html)
 - [AWS Bedrock Converse API](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html)
+- [AWS Bedrock Runtime Operations](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_Operations_Amazon_Bedrock_Runtime.html)
+- [AWS Bedrock InvokeModel](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InvokeModel.html)
+- [AWS Bedrock Bidirectional Stream](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InvokeModelWithBidirectionalStream.html)
+- [AWS Bedrock API Keys](https://docs.aws.amazon.com/bedrock/latest/userguide/api-keys-reference.html)
 - [WebRTC 1.0](https://www.w3.org/TR/webrtc/)
 - [WebRTC Security Architecture](https://datatracker.ietf.org/doc/html/rfc8827)
 - [ADR 0002：单一 Ledger WAL 权威](adr/0002-ledger-authority.md)
