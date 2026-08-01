@@ -841,9 +841,20 @@ func TestStoreRejectsProfileAwareDefaultGrantsAndDeploymentEscalation(t *testing
 	if _, err := store.PutProviderResource(ctx, resource, resource.Revision); err != nil {
 		t.Fatal(err)
 	}
-	reaped, err := store.ReapProviderResources(ctx, now)
-	if err != nil || len(reaped) != 1 || reaped[0].ID != resource.ID {
-		t.Fatalf("reaped=%#v err=%v", reaped, err)
+	active := domain.ProviderResource{ID: "batch_active", Kind: domain.ResourceBatch, ProjectID: project.ID, ProviderID: instance.ID, DeploymentID: validDeployment.ID, PublicModel: "model", ProfileID: instance.ProfileID, CreationStatus: "completed", Status: "in_progress", CreatedAt: now.Add(-2 * time.Hour), UpdatedAt: now, ExpiresAt: now.Add(-time.Second)}
+	active, err = store.PutProviderResource(ctx, active, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expired, err := store.ExpiredProviderResources(ctx, now)
+	if err != nil || len(expired) != 1 || expired[0].ID != resource.ID {
+		t.Fatalf("expired=%#v err=%v", expired, err)
+	}
+	if _, err := store.ProviderResource(ctx, project.ID, active.ID); err != nil {
+		t.Fatalf("active expired resource lost its owner mapping: %v", err)
+	}
+	if _, err := store.ProviderResource(ctx, project.ID, resource.ID); err != nil {
+		t.Fatalf("expired resource was removed before object cleanup: %v", err)
 	}
 	_ = validDeployment
 	reduced := instance

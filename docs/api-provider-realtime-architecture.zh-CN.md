@@ -1,7 +1,7 @@
 # Heimdall 多协议 LLM API、Provider 与 Realtime 架构设计
 
-状态：设计提案 v6；Phase 0（0A + 0B）协议基础已实现，Phase 1 及以后仍是目标设计，不代表现有能力<br>
-最后更新：2026-08-01<br>
+状态：设计提案 v7；Phase 0、Phase 1 与已授权的 Phase 2 范围已实现；Phase 3 及以后仍是需求门控或延期设计，不代表现有能力<br>
+最后更新：2026-08-02<br>
 适用范围：Gateway 数据面、Provider Adapter、能力协商、实时会话和未来分布式部署
 
 ## 1. 背景
@@ -29,9 +29,14 @@ Provider、模型、协议和部署形态持续演进。
 - `POST /v1/chat/completions`；
 - `POST /v1/embeddings`；
 - `POST /v1/responses`（无状态子集）；
-- `POST /v1/messages`（Portable 与 Native）。
+- `POST /v1/messages`（Portable 与 Native）；
+- `POST /v1/moderations`、`POST /v1/images/generations`；
+- `POST /v1/audio/transcriptions`、`POST /v1/audio/speech`；
+- Files/Batches 的已发布 Method 子集；
+- Heimdall 扩展的 `POST /v1/rerank` 与 Async Invoke 资源接口。
 
-当前 Provider 层支持请求级 Chat、SSE Streaming 和 Embeddings Adapter，并已接入：
+当前 Provider 层支持请求级 Chat、SSE Streaming、Embeddings，以及已授权 Phase 2 的媒体、审核、
+重排和资源生命周期 Adapter，并已接入：
 
 - OpenAI；
 - Azure OpenAI；
@@ -40,6 +45,8 @@ Provider、模型、协议和部署形态持续演进。
 - Gemini Beta 文本生成、SSE 和 Embeddings；
 - AWS Bedrock Beta Converse/ConverseStream。
 - AWS Bedrock Mantle OpenAI Chat、Stateless Responses 与 Anthropic Messages。
+- AWS Bedrock Runtime Titan Text Embeddings V2、Titan Image V2 与 Nova Reel Async；
+- AWS Bedrock Agent Runtime Cohere Rerank 3.5。
 
 Phase 0A 已在当前代码中增加版本化 Provider Profile、Access Surface、Operation Registry、
 Credential Scheme、逐能力证据和 LegacyAdapterBridge。旧记录经原子 Schema Migration 标记为
@@ -49,9 +56,11 @@ NativeEnvelope/GovernanceView 和字段级 Compatibility Manifest；南向旧 Ad
 LegacyAdapterBridge 迁移。Phase 1A/1B/1C 已分别落地 Stateless Responses、Anthropic Messages
 与三个隔离的 Bedrock Mantle Profile；Realtime 仍未实现。
 
-当前能力声明包含 Chat、Streaming、Embeddings、Tools、Vision、JSON、Developer
-Role、Reasoning、Stream Usage 和 Token Limits。Realtime、Audio、Image Generation、
-Files、Batch、Provider 原生 API 尚不属于当前公开契约。
+当前能力声明包含 Chat、Streaming、Embeddings、Tools、Vision、JSON、Developer Role、Reasoning、
+Stream Usage、Token Limits，以及已授权 Phase 2 的 Moderations、Audio、Image Generation、Files、
+Batches、Rerank 和 Async Generate。Phase 2 Endpoint/Profile 当前为 **Experimental**：Gateway
+契约和 Provider Transport Fixture 已覆盖，但尚未通过第 17.4 节要求的完整官方 SDK、真实 Provider
+Smoke、Capacity/SLO 与安全发布门槛。Realtime 及未单独注册的 Provider 原生 API 尚不属于当前公开契约。
 
 因此本文中使用以下术语：
 
@@ -250,7 +259,7 @@ Surface、Profile、Region 和模型标识。
 |---|---|---|
 | `bedrock-runtime` | Converse、Invoke、Async Invoke、CountTokens、Guardrails、Bidirectional Stream | SigV4 服务名 `bedrock`；包含模型原生和媒体接口 |
 | `bedrock-mantle` | OpenAI Chat Completions、OpenAI Responses、Anthropic Messages | 独立 Endpoint、配额与授权面；可使用对应开放协议 SDK |
-| `bedrock-agent-runtime` | Agents、Knowledge Bases、Flows | Provider-owned 状态和 Agent 生命周期；默认不属于核心推理 Gateway |
+| `bedrock-agent-runtime` | Rerank；以及 Agents、Knowledge Bases、Flows | 仅隔离的 Rerank Profile 进入当前推理面；Provider-owned Agent 状态和生命周期默认不属于核心 Gateway |
 
 不同 Access Surface 即使托管同一模型，也不能默认视为相同 Deployment 或共享限流状态；协议、
 配额、Usage、错误和资源归属必须分别验证。
@@ -279,11 +288,11 @@ Surface、Profile、Region 和模型标识。
 | Tier 0 | `/v1/embeddings` | Current |
 | Tier 1 | `/v1/responses` Stateless Create + 文本 SSE | Phase 1A 已实现 |
 | Tier 1 | `/v1/models` 的 Gateway 可用模型视图 | Target |
-| Tier 2 | `/v1/audio/transcriptions`、`/v1/audio/speech` | Target |
-| Tier 2 | `/v1/images/generations` | Target |
-| Tier 2 | `/v1/moderations` | Target |
+| Tier 2 | `/v1/audio/transcriptions`、`/v1/audio/speech` | Phase 2 Experimental |
+| Tier 2 | `/v1/images/generations` | Phase 2 Experimental |
+| Tier 2 | `/v1/moderations` | Phase 2 Experimental |
 | Tier 3 | `/v1/realtime` WebSocket、`/v1/realtime/calls` WebRTC | Target |
-| Tier 3 | Files/Batches | Optional，需先定义资源所有权 |
+| Tier 3 | Files/Batches 的已发布 Method 子集 | Phase 2 Experimental；资源所有权已定义 |
 
 Responses 不能简单转换成 Chat Completions。它具有不同的输入/输出 Item、Tool、状态和 SSE
 事件模型。实现时应建立独立兼容契约，并将可移植部分映射到 Canonical IR。
@@ -661,8 +670,9 @@ API Key。OpenAI 线协议使用 Bearer Header，Anthropic 线协议使用 `x-ap
 | Profile 家族 | Provider Primitive | 目标定位 |
 |---|---|---|
 | Runtime Converse | `Converse` / `ConverseStream` | 跨模型会话语义；按模型验证 Tools、多模态、Reasoning、Structured Output、Cache 和 Guardrail |
-| Runtime Invoke | `InvokeModel` / Response Stream | 模型族原生请求；用于 Embeddings、Image、Rerank 及 Converse 无法表达的能力 |
+| Runtime Invoke | `InvokeModel` / Response Stream | 模型族原生请求；用于 Embeddings、Image 及 Converse 无法表达的能力 |
 | Runtime Async | `StartAsyncInvoke` / Get/List | 长任务和 S3 输出；需要独立资源所有权、幂等和清理契约 |
+| Agent Runtime Rerank | `Rerank` | 仅允许版本化、模型锁定的重排 Profile；不由此开放 Agents、Knowledge Bases 或 Flows |
 | Runtime Realtime | `InvokeModelWithBidirectionalStream` | Nova Sonic 双向音频 Session；进入 Realtime 数据面 |
 | Mantle OpenAI | Chat Completions / Responses | 使用 OpenAI 北向语义，但仍具有 AWS Endpoint、认证、配额和模型矩阵 |
 | Mantle Anthropic | Messages | Anthropic 原生 Facade 的 AWS Access Surface，不经过 OpenAI IR 强制转换 |
@@ -1613,7 +1623,7 @@ internal/policy/
 
 ## 18. 分阶段开发方案
 
-### Phase 0（Now/Next）：最小协议基础
+### Phase 0（已完成）：最小协议基础
 
 实施状态（2026-08-01）：Phase 0A 与 Phase 0B 已完成。Phase 0A 落地 Access Surface、不可变
 Provider Profile Manifest、Operation Registry、Credential Scheme Authorizer、Capability Evidence、
@@ -1659,7 +1669,7 @@ Responses、Anthropic Messages Requirements；北向协议不再成为南向 Ada
 实施验证：上述完成标准已经满足。Phase 1+ 的具体协议字段仍需在对应 Issue 中增量扩展
 Semantic Requirements；“可以表达后续需求”不等于已经支持对应公开 API。
 
-### Phase 1（Next）：Stateless Responses 与原生 Messages
+### Phase 1（已完成）：Stateless Responses 与原生 Messages
 
 实施状态（2026-08-01）：Phase 1A Stateless Responses、Phase 1B Anthropic Messages 与
 Phase 1C AWS Bedrock Mantle Profiles 已完成。Phase 1 当前计划项已经闭环，但这不扩大到 Phase 2
@@ -1684,23 +1694,34 @@ Phase 1C AWS Bedrock Mantle Profiles 已完成。Phase 1 当前计划项已经�
 完成标准：跨协议只发生已声明的无损转换，Tool/Reasoning/JSON/Usage/Event/Termination 均有
 明确契约；如果只支持 Stateless Responses，所有状态字段在 Provider I/O 前稳定拒绝。
 
-### Phase 2（已完成）：媒体和资源型 API
+### Phase 2（实现完成，Experimental）：媒体和资源型 API
 
 实施状态（2026-08-02）：本阶段范围已完成。OpenAI Profile 覆盖 Moderations、Images、Audio
 Transcription/Speech、Files 与 Batches；Bedrock 覆盖 Titan Text Embeddings V2、Titan Image V2、
 Cohere Rerank 3.5 和 Nova Reel Async。Azure OpenAI 与 Gemini 没有在本阶段新增媒体能力。
+这里的“完成”表示已授权实现范围和本阶段资源所有权门槛闭环，不表示这些 Endpoint/Profile 已达到
+GA。它们在 Compatibility Manifest 中保持 `experimental`：当前没有可声明的完整官方 SDK 黑盒
+Matrix；Heimdall 扩展的 Rerank/Async 也不存在 OpenAI 官方 SDK Surface。升级为 `compatible` 前仍须
+逐 Endpoint 满足第 17.4 节的 SDK、真实 Provider Smoke、安全、Capacity/SLO 和回滚门槛。
 
 - 所有 Bedrock 模型族均使用严格请求/响应 schema，禁止任意 JSON 透传和隐式批量 Fan-out；
 - Files/Batches/Async 的外部 ID 均为项目作用域 Heimdall ID；所有权固定绑定 Provider、
   Deployment、Profile 和 Region；创建要求 `Idempotency-Key`，未知结果禁止盲目重试；
 - 文件内容以 `0600` 权限原子写入数据目录下的私有对象目录，元数据写入 bbolt；删除和 TTL
-  回收同时清理对象；
+  回收通过创建时固定的 Owner 先确认上游文件已删除，再清理本地对象和元数据；非终态
+  Batch/Async 到期后保留 Owner 映射并等待对账，不按时钟直接丢弃；
 - Bedrock Async 输出要求显式 S3 URI。AWS Bedrock Runtime 没有已接受异步任务的取消 API，
   因此取消端点在验证资源所有权后稳定返回 `provider_cancel_unsupported`，不会伪造成功；
 - 资源查询/取消/删除只使用创建时所有者，所有者不可用时 fail closed，不发生跨部署 fallback。
-- 扩展媒体大小、格式、扫描、成本和生命周期策略。
+- 扩展媒体大小、格式、成本和生命周期策略。当前内置 Content Scanner 仅提供有界格式门禁、
+  危险文件头拒绝和伪装文本识别，不是恶意软件扫描器；需要 Malware Detection 的部署必须注入
+  专用 Scanner，并在扫描服务不可用时 Fail Closed。
 
 完成标准：资源 ID 不会被错误地跨 Provider 使用，媒体不会进入日志和不必要的持久层。
+
+本阶段不包含 `/v1/models`、Anthropic `count_tokens`、Azure/Gemini 新媒体能力、Realtime、状态型
+Responses、Vector Stores、Fine-tuning 或其他 Provider 控制面 API；这些项目保持各自的 Target、
+Optional、Later、Deferred 或 Out of scope 状态。
 
 ### Phase 3（Later, demand-gated）：Standalone Realtime WebSocket
 
@@ -1803,7 +1824,7 @@ Manifest；其余记录在对应 Phase 获得真实需求、负责人和预算�
 | 是否需要 Portable/Native 模式 | 是，解决跨 Provider 与原生能力之间的矛盾 |
 | Native 模式是否全部转为 Canonical IR | 否，使用 NativeEnvelope，并提取受限 GovernanceView |
 | Responses 是否直接按完整 API 实现 | 否，先完成 Resource Ownership；否则只提供明确 Stateless Tier |
-| 当前 Bedrock Beta 是否等价于完整 AWS Bedrock | 否，现有范围是 Runtime Converse/ConverseStream 文本子集，加上 Mantle Chat、Stateless Responses 和 Anthropic Messages 三个 Profile |
+| 当前 Bedrock Beta 是否等价于完整 AWS Bedrock | 否；除 Runtime Converse/ConverseStream 文本子集和三个 Mantle Profile 外，仅增加模型锁定的 Titan Text Embeddings V2、Titan Image V2、Cohere Rerank 3.5 与 Nova Reel Async Experimental Profile，不代表完整 Bedrock API |
 | AWS Mantle 是否复用现有 Bedrock Converse Adapter | 否，作为独立 Access Surface 和 OpenAI/Anthropic Profile |
 | AWS Agents、Knowledge Bases、Flows 是否属于核心 Gateway | 否，除非另立 Facade、Ownership ADR 和 Assurance Profile |
 | Realtime 是否复用普通 Adapter | 否，建立独立 Session 和 Realtime Adapter |
@@ -1821,7 +1842,7 @@ Manifest；其余记录在对应 Phase 获得真实需求、负责人和预算�
 | Broker Mode 是否等价于完整 Gateway | 否，使用独立 Assurance Profile，强治理 Project 默认拒绝 |
 | 故障时是否允许从 Gateway Terminated 静默降级到 Provider Direct | 否，连接模式和最低 Assurance 必须由 Project/Route 显式授权 |
 | Heimdall 是否最终自行终止 WebRTC | 未决定；自建、独立/第三方 Media Service 和 Direct Broker 都是候选终态 |
-| 当前优先级 | Phase 1A/1B/1C 与已授权 Phase 2 范围完成；Realtime 与 WebRTC 仍暂缓，后续新模型族继续按独立 Profile 和真实需求准入 |
+| 当前优先级 | Phase 1A/1B/1C 与已授权 Phase 2 实现范围完成；Phase 2 仍为 Experimental，须通过第 17.4 节门槛后才能标 Compatible/GA；`/v1/models` 与 Anthropic `count_tokens` 尚未实现，Realtime 与 WebRTC 仍暂缓；后续新模型族继续按独立 Profile 和真实需求准入 |
 
 ## 21. 协议与内部契约参考
 

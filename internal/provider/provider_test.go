@@ -134,6 +134,28 @@ func TestRegistryFiltersCandidatesByDeclaredCapability(t *testing.T) {
 	}
 }
 
+func TestRegistryRoutesEveryPhase2Capability(t *testing.T) {
+	operations := []Operation{OperationModerations, OperationImages, OperationTranscriptions, OperationSpeech, OperationFiles, OperationBatches, OperationRerank, OperationAsyncInvoke}
+	bindings := make([]PrimitiveBinding, 0, len(operations))
+	for _, operation := range operations {
+		bindings = append(bindings, PrimitiveBinding{LegacyOperation: operation, SemanticOperation: semanticOperationFor(operation), Primitive: Primitive("test." + string(operation))})
+	}
+	adapter := &registryAdapter{}
+	registry := NewRegistry()
+	target := Target{ID: "phase2", PublicModel: "phase2", ProviderModel: "provider-model", Adapter: adapter,
+		Capabilities: Capabilities{Moderations: true, Images: true, Transcriptions: true, Speech: true, Files: true, Batches: true, Rerank: true, AsyncGenerate: true},
+		operations:   operationSet{operations: operations, bindings: bindings, adapter: adapter},
+	}
+	if err := registry.Register(target); err != nil {
+		t.Fatal(err)
+	}
+	for _, operation := range operations {
+		if candidates := registry.ResolveCandidatesFor("phase2", operation); len(candidates) != 1 {
+			t.Fatalf("operation=%s candidates=%d", operation, len(candidates))
+		}
+	}
+}
+
 func TestRegistryCanRequireMinimumCapabilityEvidence(t *testing.T) {
 	registry := NewRegistry()
 	adapter := &registryAdapter{}

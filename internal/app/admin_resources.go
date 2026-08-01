@@ -20,6 +20,7 @@ type credentialView struct {
 	Type             domain.ProviderType     `json:"type"`
 	AccessSurface    domain.AccessSurface    `json:"access_surface"`
 	Scheme           domain.CredentialScheme `json:"scheme"`
+	BoundBaseURL     string                  `json:"bound_base_url"`
 	SecretConfigured bool                    `json:"secret_configured"`
 	KeyVersion       uint16                  `json:"key_version"`
 	Revision         uint64                  `json:"revision"`

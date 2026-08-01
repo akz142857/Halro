@@ -49,7 +49,7 @@ type EndpointCompatibilityManifest struct {
 }
 
 func (manifest EndpointCompatibilityManifest) Validate() error {
-	if manifest.ID == "" || manifest.NorthboundProfile == "" || manifest.ProfileRevision == 0 || manifest.Protocol == "" || manifest.Method == "" || !strings.HasPrefix(manifest.Path, "/") || manifest.SemanticOperation.Validate() != nil || manifest.StateSemantics == "" || len(manifest.RequestFields) == 0 || len(manifest.ResponseFields) == 0 || len(manifest.SDKMatrix) == 0 || len(manifest.ProviderProfiles) == 0 {
+	if manifest.ID == "" || manifest.NorthboundProfile == "" || manifest.ProfileRevision == 0 || manifest.Protocol == "" || manifest.Method == "" || !strings.HasPrefix(manifest.Path, "/") || manifest.SemanticOperation.Validate() != nil || manifest.StateSemantics == "" || len(manifest.RequestFields) == 0 || len(manifest.ResponseFields) == 0 || len(manifest.ProviderProfiles) == 0 {
 		return errors.New("endpoint compatibility manifest is incomplete")
 	}
 	switch manifest.Status {
@@ -59,6 +59,19 @@ func (manifest EndpointCompatibilityManifest) Validate() error {
 	}
 	if manifest.Status == StatusCompatible && len(manifest.DocumentedDeviations) == 0 {
 		return errors.New("compatible endpoint must explicitly document deviations or state none")
+	}
+	if manifest.Status == StatusCompatible && len(manifest.SDKMatrix) == 0 {
+		return errors.New("compatible endpoint must have a validated SDK matrix")
+	}
+	northbound, ok := BuiltinNorthboundProfile(manifest.NorthboundProfile)
+	if !ok {
+		return errors.New("endpoint compatibility manifest references an unknown northbound profile")
+	}
+	if northbound.Protocol != manifest.Protocol || northbound.Revision != manifest.ProfileRevision {
+		return errors.New("endpoint compatibility manifest does not match its northbound profile")
+	}
+	if !slices.Contains(northbound.Methods, manifest.Method+" "+manifest.Path) {
+		return errors.New("endpoint compatibility method is not registered by its northbound profile")
 	}
 	for _, list := range [][]string{manifest.RequestFields, manifest.RejectedRequestFields, manifest.RequestHeaders, manifest.ResponseFields, manifest.StreamEvents, manifest.SDKMatrix, manifest.DocumentedDeviations} {
 		if hasEmptyOrDuplicate(list) {
@@ -170,25 +183,45 @@ func phase2EndpointManifests() []EndpointCompatibilityManifest {
 		for index, profileID := range profiles {
 			coverage[index] = ProfileCoverage{ProfileID: profileID}
 		}
-		return EndpointCompatibilityManifest{ID: id, NorthboundProfile: ProfileOpenAIPhase2, ProfileRevision: 1, Protocol: "openai", Method: method, Path: path, SemanticOperation: operation, RequestFields: requestFields, RequestHeaders: []string{"Authorization", "Content-Type", "Idempotency-Key when creating a resource"}, ResponseFields: responseFields, StateSemantics: state, SDKMatrix: []string{"openai-go", "openai-node", "openai-python"}, Status: StatusCompatible, DocumentedDeviations: []string{"unknown fields and unsupported profile fields are rejected before provider I/O", "resource identifiers are opaque Heimdall identifiers scoped to one project"}, ProviderProfiles: profiles, ProfileCoverage: coverage}
+		return EndpointCompatibilityManifest{ID: id, NorthboundProfile: ProfileOpenAIPhase2, ProfileRevision: 1, Protocol: "openai", Method: method, Path: path, SemanticOperation: operation, RequestFields: requestFields, RequestHeaders: []string{"Authorization", "Content-Type", "Idempotency-Key when creating a resource"}, ResponseFields: responseFields, StateSemantics: state, Status: StatusExperimental, DocumentedDeviations: []string{"official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures", "unknown fields and unsupported profile fields are rejected before provider I/O", "resource identifiers are opaque Heimdall identifiers scoped to one project"}, ProviderProfiles: profiles, ProfileCoverage: coverage}
 	}
-	return []EndpointCompatibilityManifest{
+	manifests := []EndpointCompatibilityManifest{
 		makeManifest("openai.moderations.v1", "POST", "/v1/moderations", semantic.OperationModerate, []string{"model", "input"}, []string{"id", "model", "results"}, []domain.ProviderProfileID{openAI}, "stateless"),
-		makeManifest("openai.images.generations.v1", "POST", "/v1/images/generations", semantic.OperationImage, []string{"model", "prompt", "n", "quality", "response_format", "size", "style", "user"}, []string{"created", "data"}, imageProfiles, "stateless"),
+		makeManifest("openai.images.generations.v1", "POST", "/v1/images/generations", semantic.OperationImage, []string{"model", "prompt", "n", "quality", "response_format", "size", "style"}, []string{"created", "data", "data[].url", "data[].b64_json", "data[].revised_prompt"}, imageProfiles, "stateless"),
 		makeManifest("openai.audio.transcriptions.v1", "POST", "/v1/audio/transcriptions", semantic.OperationTranscribe, []string{"file", "model", "language", "prompt", "response_format", "temperature"}, []string{"text"}, []domain.ProviderProfileID{openAI}, "stateless"),
 		makeManifest("openai.audio.speech.v1", "POST", "/v1/audio/speech", semantic.OperationSynthesize, []string{"model", "input", "voice", "response_format", "speed"}, []string{"binary audio"}, []domain.ProviderProfileID{openAI}, "stateless"),
-		makeManifest("openai.files.create.v1", "POST", "/v1/files", semantic.OperationFile, []string{"file", "purpose", "Heimdall-Route"}, []string{"id", "object", "bytes", "filename", "purpose", "status"}, []domain.ProviderProfileID{openAI}, "project-owned resource with 30 day TTL"),
-		makeManifest("openai.files.get.v1", "GET", "/v1/files/{id}", semantic.OperationFile, []string{"id"}, []string{"id", "object", "bytes", "filename", "purpose", "status"}, []domain.ProviderProfileID{openAI}, "project-owned resource"),
+		makeManifest("openai.files.create.v1", "POST", "/v1/files", semantic.OperationFile, []string{"file", "purpose", "Heimdall-Route"}, []string{"id", "object", "bytes", "created_at", "filename", "purpose", "status", "status_details"}, []domain.ProviderProfileID{openAI}, "project-owned resource with 30 day TTL"),
+		makeManifest("openai.files.get.v1", "GET", "/v1/files/{id}", semantic.OperationFile, []string{"id"}, []string{"id", "object", "bytes", "created_at", "filename", "purpose", "status", "status_details"}, []domain.ProviderProfileID{openAI}, "project-owned resource"),
 		makeManifest("openai.files.content.v1", "GET", "/v1/files/{id}/content", semantic.OperationFile, []string{"id"}, []string{"binary content"}, []domain.ProviderProfileID{openAI}, "content served from the private local object directory"),
 		makeManifest("openai.files.delete.v1", "DELETE", "/v1/files/{id}", semantic.OperationFile, []string{"id"}, []string{"id", "object", "deleted"}, []domain.ProviderProfileID{openAI}, "deletes upstream, metadata, and local content"),
-		makeManifest("openai.batches.create.v1", "POST", "/v1/batches", semantic.OperationBatch, []string{"input_file_id", "endpoint", "completion_window", "metadata"}, []string{"id", "object", "status"}, []domain.ProviderProfileID{openAI}, "project-owned resource with 7 day TTL"),
-		makeManifest("openai.batches.get.v1", "GET", "/v1/batches/{id}", semantic.OperationBatch, []string{"id"}, []string{"id", "object", "status"}, []domain.ProviderProfileID{openAI}, "project-owned resource"),
-		makeManifest("openai.batches.cancel.v1", "POST", "/v1/batches/{id}/cancel", semantic.OperationBatch, []string{"id"}, []string{"id", "object", "status"}, []domain.ProviderProfileID{openAI}, "project-owned cancellable resource"),
+		makeManifest("openai.batches.create.v1", "POST", "/v1/batches", semantic.OperationBatch, []string{"input_file_id", "endpoint", "completion_window", "metadata"}, batchResponseFields(), []domain.ProviderProfileID{openAI}, "project-owned resource with 7 day TTL"),
+		makeManifest("openai.batches.get.v1", "GET", "/v1/batches/{id}", semantic.OperationBatch, []string{"id"}, batchResponseFields(), []domain.ProviderProfileID{openAI}, "project-owned resource"),
+		makeManifest("openai.batches.cancel.v1", "POST", "/v1/batches/{id}/cancel", semantic.OperationBatch, []string{"id"}, batchResponseFields(), []domain.ProviderProfileID{openAI}, "project-owned cancellable resource"),
 		makeManifest("heimdall.rerank.v1", "POST", "/v1/rerank", semantic.OperationRerank, []string{"model", "query", "documents", "top_n"}, []string{"results"}, []domain.ProviderProfileID{domain.ProfileBedrockAgentRerankCohere35}, "stateless Heimdall extension"),
-		makeManifest("heimdall.async.create.v1", "POST", "/v1/async/invocations", semantic.OperationAsyncGenerate, []string{"model", "prompt", "s3_output_uri", "duration_seconds", "dimension", "fps", "seed"}, []string{"invocation_arn", "status", "s3_output_uri"}, []domain.ProviderProfileID{domain.ProfileBedrockAsyncNovaReel}, "project-owned resource with 7 day TTL"),
-		makeManifest("heimdall.async.get.v1", "GET", "/v1/async/invocations/{id}", semantic.OperationAsyncGenerate, []string{"id"}, []string{"invocation_arn", "status", "s3_output_uri", "failure_message"}, []domain.ProviderProfileID{domain.ProfileBedrockAsyncNovaReel}, "project-owned resource"),
+		makeManifest("heimdall.async.create.v1", "POST", "/v1/async/invocations", semantic.OperationAsyncGenerate, []string{"model", "prompt", "s3_output_uri", "duration_seconds", "dimension", "fps", "seed"}, asyncResponseFields(), []domain.ProviderProfileID{domain.ProfileBedrockAsyncNovaReel}, "project-owned resource with 7 day TTL"),
+		makeManifest("heimdall.async.get.v1", "GET", "/v1/async/invocations/{id}", semantic.OperationAsyncGenerate, []string{"id"}, asyncResponseFields(), []domain.ProviderProfileID{domain.ProfileBedrockAsyncNovaReel}, "project-owned resource"),
 		makeManifest("heimdall.async.cancel.v1", "POST", "/v1/async/invocations/{id}/cancel", semantic.OperationAsyncGenerate, []string{"id"}, []string{"error"}, []domain.ProviderProfileID{domain.ProfileBedrockAsyncNovaReel}, "always fails closed because Bedrock has no cancellation operation"),
 	}
+	for index := range manifests {
+		if manifests[index].ID == "openai.images.generations.v1" {
+			manifests[index].RejectedRequestFields = []string{"user"}
+			manifests[index].DocumentedDeviations = append(manifests[index].DocumentedDeviations, "the OpenAI user field is not accepted by this experimental tier")
+		}
+		if strings.HasPrefix(manifests[index].ID, "heimdall.") {
+			manifests[index].Protocol = "heimdall"
+			manifests[index].NorthboundProfile = ProfileHeimdallPhase2
+			manifests[index].DocumentedDeviations = append(manifests[index].DocumentedDeviations, "this is a Heimdall extension and has no OpenAI official SDK surface")
+		}
+	}
+	return manifests
+}
+
+func batchResponseFields() []string {
+	return []string{"id", "object", "endpoint", "input_file_id", "completion_window", "status", "output_file_id", "error_file_id", "created_at", "expires_at", "completed_at", "failed_at", "cancelling_at", "cancelled_at", "metadata", "errors"}
+}
+
+func asyncResponseFields() []string {
+	return []string{"invocation_arn", "status", "s3_output_uri", "failure_message", "submitted_at", "last_modified_at"}
 }
 
 func CloneEndpointManifest(manifest EndpointCompatibilityManifest) EndpointCompatibilityManifest {

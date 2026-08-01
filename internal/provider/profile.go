@@ -183,7 +183,34 @@ func (b *LegacyAdapterBridge) Capabilities() Capabilities {
 	if reporter, ok := b.Adapter.(CapabilityReporter); ok {
 		return reporter.Capabilities()
 	}
-	return Capabilities{Chat: true, Streaming: true, Embeddings: true}
+	capabilities := Capabilities{}
+	for _, operation := range b.manifest.Operations {
+		switch operation {
+		case OperationChat, OperationMessages:
+			capabilities.Chat = true
+		case OperationChatStream, OperationMessagesStream:
+			capabilities.Chat, capabilities.Streaming = true, true
+		case OperationEmbeddings:
+			capabilities.Embeddings = true
+		case OperationModerations:
+			capabilities.Moderations = true
+		case OperationImages:
+			capabilities.Images = true
+		case OperationTranscriptions:
+			capabilities.Transcriptions = true
+		case OperationSpeech:
+			capabilities.Speech = true
+		case OperationFiles:
+			capabilities.Files = true
+		case OperationBatches:
+			capabilities.Batches = true
+		case OperationRerank:
+			capabilities.Rerank = true
+		case OperationAsyncInvoke:
+			capabilities.AsyncGenerate = true
+		}
+	}
+	return capabilities
 }
 
 func (b *LegacyAdapterBridge) Moderate(ctx context.Context, call ModerationCall) (ModerationResult, error) {

@@ -236,7 +236,7 @@ export const zhCN = {
     deleteCredential: "删除凭据“{{name}}”？仍被服务商引用时操作会被拒绝。", rotateCredential: "轮换服务商凭据", saveCredential: "保存服务商凭据",
     credentialName: "凭据名称", providerType: "服务商类型", boundURL: "绑定的基础地址", boundURLHint: "密钥将与规范化后的协议、主机、端口和服务商类型绑定",
     newSecret: "新密钥（留空则只更新元数据）", providerSecret: "服务商密钥", awsCredentialJSON: "AWS 凭据 JSON", secretConfigured: "已配置的密钥永不回显",
-    bedrockSurface: "Bedrock 访问面", bedrockSurfaceHint: "Runtime 与 Mantle 使用不同端点、凭据方案、配额池和服务商实例。", bedrockRuntime: "Bedrock Runtime · Converse", bedrockMantle: "Bedrock Mantle · OpenAI / Anthropic API",
+    bedrockSurface: "Bedrock 访问面", bedrockSurfaceHint: "Runtime、Agent Runtime 与 Mantle 使用不同端点、凭据方案、配额池和服务商实例。", bedrockRuntime: "Bedrock Runtime · Converse", bedrockAgentRuntime: "Bedrock Agent Runtime · 重排", bedrockMantle: "Bedrock Mantle · OpenAI / Anthropic API",
     bedrockHint: "字段：access_key_id、secret_access_key、region；session_token 可选。区域必须匹配基础地址。", bedrockMantleHint: "粘贴 Bedrock API Key。Heimdall 将它绑定到准确的区域 Mantle 端点，且不会写入浏览器存储。", secretHint: "只通过 HTTPS 请求体发送，不写入浏览器存储",
     bedrockProfileHint: "每个服务商实例只选择一种线协议；需要多个 Mantle 协议时，请分别创建实例。",
     openAIProfiles: { chat: "Chat Completions", media: "媒体与资源" },

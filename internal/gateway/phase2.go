@@ -2,13 +2,16 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/akz142857/Heimdall/internal/auth"
 	"github.com/akz142857/Heimdall/internal/budget"
 	"github.com/akz142857/Heimdall/internal/domain"
 	"github.com/akz142857/Heimdall/internal/openaiapi"
 	"github.com/akz142857/Heimdall/internal/provider"
+	"github.com/akz142857/Heimdall/internal/redaction"
 )
 
 func (s *Service) phase2Target(ctx context.Context, key, model string, operation provider.Operation) (auth.AuthResult, provider.Target, string, error) {
@@ -38,18 +41,28 @@ func (s *Service) accountedPhase2(ctx context.Context, principal auth.AuthResult
 	if err != nil {
 		return s.exhaustedAttemptsError(err)
 	}
-	providerErr := invoke()
+	invokeErr := invoke()
+	providerErr := invokeErr
+	policyRejected := errors.Is(invokeErr, redaction.ErrPolicyRejected)
+	if policyRejected {
+		providerErr = nil
+	}
 	settlement := budget.Settlement{ProviderInputTokens: inputUnits, TokenEstimated: true, CostEstimated: true}
 	setSettlementCost(&settlement, target, attempt.accounting.ReservationMicrosUSD)
 	if err := attempt.finish(providerErr, settlement); err != nil {
 		return err
 	}
 	outcome := "success"
-	if providerErr != nil {
+	if policyRejected {
+		outcome = "policy_rejected"
+	} else if providerErr != nil {
 		outcome = "provider_error"
 	}
 	if err := s.finalizeRequest(run.requestLease, outcome); err != nil {
 		return gatewayError("accounting_unavailable", "request accounting could not be finalized", 503, err)
+	}
+	if policyRejected {
+		return gatewayError("sensitive_data_detected", "response contains material rejected by policy", 502, invokeErr)
 	}
 	if providerErr != nil {
 		return mapProviderError(providerErr)
@@ -74,6 +87,9 @@ func (s *Service) Moderations(ctx context.Context, key string, request openaiapi
 	err = s.accountedPhase2(ctx, principal, request.Model, target, int64(len(request.Input))/4+1, &requestID, func() error {
 		var callErr error
 		result, callErr = adapter.Moderate(ctx, provider.ModerationCall{RequestID: requestID, ProviderModel: target.ProviderModel, Input: request.Input})
+		if callErr == nil {
+			result.Results, callErr = s.redactor.ProcessJSON(principal.Project.RedactionPolicyID, "outbound", result.Results)
+		}
 		return callErr
 	})
 	if err != nil {
@@ -95,12 +111,18 @@ func (s *Service) Images(ctx context.Context, key string, request openaiapi.Imag
 		err = s.accountedPhase2(ctx, principal, request.Model, target, int64(len(request.Prompt))/4+1, &requestID, func() error {
 			var callErr error
 			result, callErr = adapter.GenerateBedrockImage(ctx, provider.ImageCall{RequestID: requestID, ProviderModel: target.ProviderModel, Prompt: request.Prompt, Count: request.N, Quality: request.Quality, Size: request.Size, ResponseFormat: request.ResponseFormat, Style: request.Style})
+			if callErr == nil {
+				callErr = s.redactImageResult(principal.Project.RedactionPolicyID, &result)
+			}
 			return callErr
 		})
 	} else if adapter, ok := target.Adapter.(provider.StatelessPhase2Adapter); ok {
 		err = s.accountedPhase2(ctx, principal, request.Model, target, int64(len(request.Prompt))/4+1, &requestID, func() error {
 			var callErr error
 			result, callErr = adapter.GenerateImage(ctx, provider.ImageCall{RequestID: requestID, ProviderModel: target.ProviderModel, Prompt: request.Prompt, Count: request.N, Quality: request.Quality, Size: request.Size, ResponseFormat: request.ResponseFormat, Style: request.Style})
+			if callErr == nil {
+				callErr = s.redactImageResult(principal.Project.RedactionPolicyID, &result)
+			}
 			return callErr
 		})
 	} else {
@@ -148,6 +170,9 @@ func (s *Service) Transcription(ctx context.Context, key, model string, call pro
 	if !ok {
 		return provider.TranscriptionResult{}, gatewayError("unsupported_feature", "transcription adapter is unavailable", 400, nil)
 	}
+	if err := s.contentScanner.ScanAudio(call.Filename, call.ContentType, call.Data); err != nil {
+		return provider.TranscriptionResult{}, gatewayError("content_rejected", "audio was rejected by media policy", 400, err)
+	}
 	call.ProviderModel = target.ProviderModel
 	call.Prompt, err = s.redactor.ProcessText(principal.Project.RedactionPolicyID, "inbound", call.Prompt)
 	if err != nil {
@@ -158,12 +183,43 @@ func (s *Service) Transcription(ctx context.Context, key, model string, call pro
 		call.RequestID = requestID
 		var callErr error
 		result, callErr = adapter.Transcribe(ctx, call)
+		if callErr == nil {
+			callErr = s.redactTranscriptionResult(principal.Project.RedactionPolicyID, &result)
+		}
 		return callErr
 	})
 	if err != nil {
 		return provider.TranscriptionResult{}, err
 	}
 	return result, nil
+}
+
+func (s *Service) redactImageResult(policyID string, result *provider.ImageResult) error {
+	for index := range result.Data {
+		processed, err := s.redactor.ProcessText(policyID, "outbound", result.Data[index].RevisedPrompt)
+		if err != nil {
+			return err
+		}
+		result.Data[index].RevisedPrompt = processed
+	}
+	return nil
+}
+
+func (s *Service) redactTranscriptionResult(policyID string, result *provider.TranscriptionResult) error {
+	if strings.Contains(strings.ToLower(result.ContentType), "json") {
+		processed, err := s.redactor.ProcessJSON(policyID, "outbound", result.Data)
+		if err != nil {
+			return err
+		}
+		result.Data = processed
+		return nil
+	}
+	processed, err := s.redactor.ProcessText(policyID, "outbound", string(result.Data))
+	if err != nil {
+		return err
+	}
+	result.Data = []byte(processed)
+	return nil
 }
 func (s *Service) Rerank(ctx context.Context, key string, request openaiapi.RerankRequest) (provider.RerankResult, error) {
 	principal, target, requestID, err := s.phase2Target(ctx, key, request.Model, provider.OperationRerank)

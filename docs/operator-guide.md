@@ -194,11 +194,16 @@ upstream response bodies or credentials.
 Phase 2 resource creation requires `Idempotency-Key`. Files also require the
 `Heimdall-Route` header because multipart file creation has no `model` field.
 File bytes are kept under `storage.data_dir/provider-objects` with private
-permissions; bbolt records and objects are removed by TTL maintenance. Configure
+permissions. TTL maintenance uses the recorded owner to remove an upstream file
+before deleting its local object and bbolt record; active batches and async jobs
+retain their owner mapping past the nominal TTL. Configure
 `fixed_request_micros_usd` on media/resource deployments so budget admission is
 not treated as free. Bedrock async output must be an explicit `s3://` URI; its
 cancel endpoint intentionally returns `provider_cancel_unsupported` after
 ownership validation because Bedrock Runtime exposes no cancellation call.
+The built-in content scanner is a format admission gate, not antivirus. A
+deployment that requires malware detection must provide a dedicated scanner and
+fail closed when that scanner is unavailable.
 
 The opt-in real-provider test accepts `HEIMDALL_SMOKE_OPERATION=embeddings` with
 `HEIMDALL_SMOKE_MODEL=amazon.titan-embed-text-v2:0`; it incurs one AWS inference

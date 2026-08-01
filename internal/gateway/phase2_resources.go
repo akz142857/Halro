@@ -9,10 +9,10 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/akz142857/Heimdall/internal/auth"
+	"github.com/akz142857/Heimdall/internal/contentscan"
 	"github.com/akz142857/Heimdall/internal/domain"
 	"github.com/akz142857/Heimdall/internal/id"
 	"github.com/akz142857/Heimdall/internal/idempotency"
@@ -93,7 +93,8 @@ func (s *Service) resourcePrincipal(ctx context.Context, key string) (auth.AuthR
 }
 func (s *Service) ownedTarget(resource domain.ProviderResource) (provider.Target, error) {
 	for _, target := range s.registry.ResolveAll(resource.PublicModel) {
-		if target.ProviderID == resource.ProviderID && target.DeploymentID == resource.DeploymentID && target.ProfileID == resource.ProfileID {
+		if target.ProviderID == resource.ProviderID && target.DeploymentID == resource.DeploymentID &&
+			target.ProfileID == resource.ProfileID && target.Region == resource.Region {
 			return target, nil
 		}
 	}
@@ -111,7 +112,14 @@ func (s *Service) CreateFile(ctx context.Context, key, route, idempotencyKey str
 	if err := idempotency.ValidateKey(idempotencyKey); err != nil {
 		return provider.FileObject{}, gatewayError("invalid_idempotency_key", err.Error(), 400, err)
 	}
-	if strings.HasPrefix(strings.ToLower(call.ContentType), "text/") || strings.Contains(strings.ToLower(call.ContentType), "json") {
+	if err := s.contentScanner.ScanFile(call.Filename, call.ContentType, call.Data); err != nil {
+		return provider.FileObject{}, gatewayError("content_rejected", "file was rejected by media policy", 400, err)
+	}
+	call.Filename, err = s.redactor.ProcessText(principal.Project.RedactionPolicyID, "inbound", call.Filename)
+	if err != nil {
+		return provider.FileObject{}, gatewayError("sensitive_data_detected", "file name contains secret material", 400, err)
+	}
+	if contentscan.Textual(call.ContentType, call.Data) {
 		processed, e := s.redactor.ProcessText(principal.Project.RedactionPolicyID, "inbound", string(call.Data))
 		if e != nil {
 			return provider.FileObject{}, gatewayError("sensitive_data_detected", "file contains secret material", 400, e)
@@ -158,6 +166,9 @@ func (s *Service) CreateFile(ctx context.Context, key, route, idempotencyKey str
 		call.RequestID = requestID
 		var callErr error
 		upstream, callErr = adapter.CreateFile(ctx, call)
+		if callErr == nil {
+			callErr = s.redactFileObject(principal.Project.RedactionPolicyID, &upstream)
+		}
 		return callErr
 	})
 	if err != nil {
@@ -222,6 +233,9 @@ func (s *Service) GetFile(ctx context.Context, key, idValue string) (provider.Fi
 	err = s.accountedPhase2(ctx, principal, resource.PublicModel, target, 1, &requestID, func() error {
 		var callErr error
 		result, callErr = adapter.GetFile(ctx, requestID, resource.UpstreamID)
+		if callErr == nil {
+			callErr = s.redactFileObject(principal.Project.RedactionPolicyID, &result)
+		}
 		return callErr
 	})
 	if err != nil {
@@ -253,33 +267,151 @@ func (s *Service) DownloadFile(ctx context.Context, key, idValue string) (provid
 	}
 	return provider.FileContent{Data: data, ContentType: resource.ObjectContentType}, nil
 }
+
+func (s *Service) redactFileObject(policyID string, result *provider.FileObject) error {
+	var err error
+	result.Filename, err = s.redactor.ProcessText(policyID, "outbound", result.Filename)
+	if err != nil {
+		return err
+	}
+	result.StatusDetails, err = s.redactor.ProcessText(policyID, "outbound", result.StatusDetails)
+	return err
+}
 func (s *Service) DeleteFile(ctx context.Context, key, idValue string) (provider.FileDeleteResult, error) {
 	principal, resource, adapter, err := s.fileOwner(ctx, key, idValue)
 	if err != nil {
 		return provider.FileDeleteResult{}, err
 	}
+	result := provider.FileDeleteResult{ID: resource.ID, Object: "file", Deleted: true}
 	target, _ := s.ownedTarget(resource)
 	target.FixedRequestMicrosUSD = 0
-	requestID := ""
-	var result provider.FileDeleteResult
-	err = s.accountedPhase2(ctx, principal, resource.PublicModel, target, 1, &requestID, func() error {
-		var callErr error
-		result, callErr = adapter.DeleteFile(ctx, requestID, resource.UpstreamID)
-		return callErr
-	})
-	if err != nil {
-		return provider.FileDeleteResult{}, err
+	freshDelete := resource.CleanupStatus == ""
+	if freshDelete {
+		resource.CleanupStatus = "deleting"
+		resource.UpdatedAt = s.now()
+		resource, err = s.resources.PutProviderResource(ctx, resource, resource.Revision)
+		if err != nil {
+			return provider.FileDeleteResult{}, gatewayError("resource_store_unavailable", "file delete intent could not be recorded", 503, err)
+		}
+	}
+	if resource.CleanupStatus == "deleting" {
+		shouldDelete := freshDelete
+		if !freshDelete {
+			requestID := ""
+			var lookupErr error
+			accountingErr := s.accountedPhase2(ctx, principal, resource.PublicModel, target, 1, &requestID, func() error {
+				_, lookupErr = adapter.GetFile(ctx, requestID, resource.UpstreamID)
+				return lookupErr
+			})
+			switch {
+			case lookupErr == nil:
+				shouldDelete = true
+			case providerHTTPNotFound(lookupErr):
+				shouldDelete = false
+			default:
+				return provider.FileDeleteResult{}, accountingErr
+			}
+		}
+		if shouldDelete {
+			requestID := ""
+			var deleteErr error
+			accountingErr := s.accountedPhase2(ctx, principal, resource.PublicModel, target, 1, &requestID, func() error {
+				result, deleteErr = adapter.DeleteFile(ctx, requestID, resource.UpstreamID)
+				return deleteErr
+			})
+			if deleteErr != nil && !providerHTTPNotFound(deleteErr) {
+				return provider.FileDeleteResult{}, accountingErr
+			}
+		}
+		resource.CleanupStatus = "pending"
+		resource.UpdatedAt = s.now()
+		resource, err = s.resources.PutProviderResource(ctx, resource, resource.Revision)
+		if err != nil {
+			return provider.FileDeleteResult{}, gatewayError("resource_store_unavailable", "file cleanup state could not be recorded", 503, err)
+		}
+	}
+	if path, pathErr := s.resourceObjectPath(resource.ObjectPath); pathErr == nil {
+		if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			return provider.FileDeleteResult{}, gatewayError("resource_store_unavailable", fmt.Sprintf("file object cleanup failed: %v", removeErr), 503, removeErr)
+		}
 	}
 	if err := s.resources.DeleteProviderResource(ctx, principal.Project.ID, resource.ID); err != nil {
 		return provider.FileDeleteResult{}, gatewayError("resource_store_unavailable", "file owner could not be deleted", 503, err)
 	}
-	if path, pathErr := s.resourceObjectPath(resource.ObjectPath); pathErr == nil {
-		if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-			return provider.FileDeleteResult{}, gatewayError("resource_store_unavailable", fmt.Sprintf("file metadata was deleted but object cleanup failed: %v", removeErr), 503, removeErr)
-		}
-	}
 	result.ID = resource.ID
 	return result, nil
+}
+
+func providerHTTPNotFound(err error) bool {
+	var providerErr *provider.Error
+	return errors.As(err, &providerErr) && providerErr.StatusCode == 404
+}
+
+// CleanupExpiredProviderResource performs trusted TTL maintenance while still
+// honoring the immutable owner binding. File metadata is never discarded until
+// the pinned upstream file and the private local object are both confirmed
+// absent. Batch and async records are admitted here only after the store has
+// classified them as terminal.
+func (s *Service) CleanupExpiredProviderResource(ctx context.Context, resource domain.ProviderResource) error {
+	if !resource.ExpiryReapable() || resource.ExpiresAt.After(s.now()) {
+		return errors.New("provider resource is not eligible for expiry cleanup")
+	}
+	if resource.Kind != domain.ResourceFile {
+		return s.resources.DeleteProviderResource(ctx, resource.ProjectID, resource.ID)
+	}
+	target, err := s.ownedTarget(resource)
+	if err != nil {
+		return err
+	}
+	adapter, ok := target.Adapter.(provider.ResourcePhase2Adapter)
+	if !ok {
+		return gatewayError("resource_owner_unavailable", "file owner adapter is unavailable", 409, nil)
+	}
+	freshDelete := resource.CleanupStatus == ""
+	if freshDelete {
+		resource.CleanupStatus = "deleting"
+		resource.UpdatedAt = s.now()
+		resource, err = s.resources.PutProviderResource(ctx, resource, resource.Revision)
+		if err != nil {
+			return err
+		}
+	}
+	if resource.CleanupStatus == "deleting" {
+		shouldDelete := freshDelete
+		requestID, requestErr := id.New("req")
+		if requestErr != nil {
+			return requestErr
+		}
+		if !freshDelete {
+			_, lookupErr := adapter.GetFile(ctx, requestID, resource.UpstreamID)
+			switch {
+			case lookupErr == nil:
+				shouldDelete = true
+			case providerHTTPNotFound(lookupErr):
+				shouldDelete = false
+			default:
+				return lookupErr
+			}
+		}
+		if shouldDelete {
+			_, deleteErr := adapter.DeleteFile(ctx, requestID, resource.UpstreamID)
+			if deleteErr != nil && !providerHTTPNotFound(deleteErr) {
+				return deleteErr
+			}
+		}
+		resource.CleanupStatus = "pending"
+		resource.UpdatedAt = s.now()
+		resource, err = s.resources.PutProviderResource(ctx, resource, resource.Revision)
+		if err != nil {
+			return err
+		}
+	}
+	if path, pathErr := s.resourceObjectPath(resource.ObjectPath); pathErr == nil {
+		if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			return removeErr
+		}
+	}
+	return s.resources.DeleteProviderResource(ctx, resource.ProjectID, resource.ID)
 }
 
 func (s *Service) CreateBatch(ctx context.Context, key, idempotencyKey string, call provider.BatchCreateCall) (provider.BatchObject, error) {
@@ -328,6 +460,9 @@ func (s *Service) CreateBatch(ctx context.Context, key, idempotencyKey string, c
 		call.RequestID = requestID
 		var callErr error
 		upstream, callErr = adapter.CreateBatch(ctx, call)
+		if callErr == nil {
+			callErr = s.redactBatchObject(principal.Project.RedactionPolicyID, &upstream)
+		}
 		return callErr
 	})
 	if err != nil {
@@ -378,6 +513,9 @@ func (s *Service) GetBatch(ctx context.Context, key, idValue string) (provider.B
 	err = s.accountedPhase2(ctx, principal, resource.PublicModel, target, 1, &requestID, func() error {
 		var callErr error
 		result, callErr = adapter.GetBatch(ctx, requestID, resource.UpstreamID)
+		if callErr == nil {
+			callErr = s.redactBatchObject(principal.Project.RedactionPolicyID, &result)
+		}
 		return callErr
 	})
 	if err != nil {
@@ -401,6 +539,9 @@ func (s *Service) CancelBatch(ctx context.Context, key, idValue string) (provide
 	err = s.accountedPhase2(ctx, principal, resource.PublicModel, target, 1, &requestID, func() error {
 		var callErr error
 		result, callErr = adapter.CancelBatch(ctx, requestID, resource.UpstreamID)
+		if callErr == nil {
+			callErr = s.redactBatchObject(principal.Project.RedactionPolicyID, &result)
+		}
 		return callErr
 	})
 	if err != nil {
@@ -411,6 +552,22 @@ func (s *Service) CancelBatch(ctx context.Context, key, idValue string) (provide
 	}
 	result.ID = resource.ID
 	return result, nil
+}
+
+func (s *Service) redactBatchObject(policyID string, result *provider.BatchObject) error {
+	for key, value := range result.Metadata {
+		processed, err := s.redactor.ProcessText(policyID, "outbound", value)
+		if err != nil {
+			return err
+		}
+		result.Metadata[key] = processed
+	}
+	processed, err := s.redactor.ProcessJSON(policyID, "outbound", result.RawErrors)
+	if err != nil {
+		return err
+	}
+	result.RawErrors = processed
+	return nil
 }
 
 func (s *Service) StartAsyncInvoke(ctx context.Context, key, idempotencyKey string, request openaiapi.AsyncInvokeRequest) (provider.AsyncInvokeObject, error) {
@@ -524,6 +681,13 @@ func (s *Service) CancelAsyncInvoke(ctx context.Context, key, idValue string) (p
 	resource, err := s.resources.ProviderResource(ctx, principal.Project.ID, idValue)
 	if err != nil || resource.Kind != domain.ResourceAsyncInvoke {
 		return provider.AsyncInvokeObject{}, gatewayError("resource_not_found", "async invocation was not found", 404, err)
+	}
+	target, err := s.ownedTarget(resource)
+	if err != nil {
+		return provider.AsyncInvokeObject{}, err
+	}
+	if _, ok := target.Adapter.(provider.BedrockPhase2Adapter); !ok {
+		return provider.AsyncInvokeObject{}, gatewayError("resource_owner_unavailable", "async owner adapter is unavailable", 409, nil)
 	}
 	return provider.AsyncInvokeObject{}, gatewayError("provider_cancel_unsupported", "Amazon Bedrock Runtime does not provide cancellation for accepted async invocations", 409, nil)
 }

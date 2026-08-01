@@ -704,13 +704,10 @@
       "results"
     ],
     "state_semantics": "stateless",
-    "sdk_matrix": [
-      "openai-go",
-      "openai-node",
-      "openai-python"
-    ],
-    "status": "compatible",
+    "sdk_matrix": null,
+    "status": "experimental",
     "documented_deviations": [
+      "official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures",
       "unknown fields and unsupported profile fields are rejected before provider I/O",
       "resource identifiers are opaque Heimdall identifiers scoped to one project"
     ],
@@ -738,7 +735,9 @@
       "quality",
       "response_format",
       "size",
-      "style",
+      "style"
+    ],
+    "rejected_request_fields": [
       "user"
     ],
     "request_headers": [
@@ -748,18 +747,19 @@
     ],
     "response_fields": [
       "created",
-      "data"
+      "data",
+      "data[].url",
+      "data[].b64_json",
+      "data[].revised_prompt"
     ],
     "state_semantics": "stateless",
-    "sdk_matrix": [
-      "openai-go",
-      "openai-node",
-      "openai-python"
-    ],
-    "status": "compatible",
+    "sdk_matrix": null,
+    "status": "experimental",
     "documented_deviations": [
+      "official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures",
       "unknown fields and unsupported profile fields are rejected before provider I/O",
-      "resource identifiers are opaque Heimdall identifiers scoped to one project"
+      "resource identifiers are opaque Heimdall identifiers scoped to one project",
+      "the OpenAI user field is not accepted by this experimental tier"
     ],
     "provider_profiles": [
       "openai.media-resources.v1",
@@ -799,13 +799,10 @@
       "text"
     ],
     "state_semantics": "stateless",
-    "sdk_matrix": [
-      "openai-go",
-      "openai-node",
-      "openai-python"
-    ],
-    "status": "compatible",
+    "sdk_matrix": null,
+    "status": "experimental",
     "documented_deviations": [
+      "official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures",
       "unknown fields and unsupported profile fields are rejected before provider I/O",
       "resource identifiers are opaque Heimdall identifiers scoped to one project"
     ],
@@ -842,13 +839,10 @@
       "binary audio"
     ],
     "state_semantics": "stateless",
-    "sdk_matrix": [
-      "openai-go",
-      "openai-node",
-      "openai-python"
-    ],
-    "status": "compatible",
+    "sdk_matrix": null,
+    "status": "experimental",
     "documented_deviations": [
+      "official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures",
       "unknown fields and unsupported profile fields are rejected before provider I/O",
       "resource identifiers are opaque Heimdall identifiers scoped to one project"
     ],
@@ -883,18 +877,17 @@
       "id",
       "object",
       "bytes",
+      "created_at",
       "filename",
       "purpose",
-      "status"
+      "status",
+      "status_details"
     ],
     "state_semantics": "project-owned resource with 30 day TTL",
-    "sdk_matrix": [
-      "openai-go",
-      "openai-node",
-      "openai-python"
-    ],
-    "status": "compatible",
+    "sdk_matrix": null,
+    "status": "experimental",
     "documented_deviations": [
+      "official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures",
       "unknown fields and unsupported profile fields are rejected before provider I/O",
       "resource identifiers are opaque Heimdall identifiers scoped to one project"
     ],
@@ -927,18 +920,17 @@
       "id",
       "object",
       "bytes",
+      "created_at",
       "filename",
       "purpose",
-      "status"
+      "status",
+      "status_details"
     ],
     "state_semantics": "project-owned resource",
-    "sdk_matrix": [
-      "openai-go",
-      "openai-node",
-      "openai-python"
-    ],
-    "status": "compatible",
+    "sdk_matrix": null,
+    "status": "experimental",
     "documented_deviations": [
+      "official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures",
       "unknown fields and unsupported profile fields are rejected before provider I/O",
       "resource identifiers are opaque Heimdall identifiers scoped to one project"
     ],
@@ -971,13 +963,10 @@
       "binary content"
     ],
     "state_semantics": "content served from the private local object directory",
-    "sdk_matrix": [
-      "openai-go",
-      "openai-node",
-      "openai-python"
-    ],
-    "status": "compatible",
+    "sdk_matrix": null,
+    "status": "experimental",
     "documented_deviations": [
+      "official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures",
       "unknown fields and unsupported profile fields are rejected before provider I/O",
       "resource identifiers are opaque Heimdall identifiers scoped to one project"
     ],
@@ -1012,13 +1001,10 @@
       "deleted"
     ],
     "state_semantics": "deletes upstream, metadata, and local content",
-    "sdk_matrix": [
-      "openai-go",
-      "openai-node",
-      "openai-python"
-    ],
-    "status": "compatible",
+    "sdk_matrix": null,
+    "status": "experimental",
     "documented_deviations": [
+      "official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures",
       "unknown fields and unsupported profile fields are rejected before provider I/O",
       "resource identifiers are opaque Heimdall identifiers scoped to one project"
     ],
@@ -1053,16 +1039,26 @@
     "response_fields": [
       "id",
       "object",
-      "status"
+      "endpoint",
+      "input_file_id",
+      "completion_window",
+      "status",
+      "output_file_id",
+      "error_file_id",
+      "created_at",
+      "expires_at",
+      "completed_at",
+      "failed_at",
+      "cancelling_at",
+      "cancelled_at",
+      "metadata",
+      "errors"
     ],
     "state_semantics": "project-owned resource with 7 day TTL",
-    "sdk_matrix": [
-      "openai-go",
-      "openai-node",
-      "openai-python"
-    ],
-    "status": "compatible",
+    "sdk_matrix": null,
+    "status": "experimental",
     "documented_deviations": [
+      "official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures",
       "unknown fields and unsupported profile fields are rejected before provider I/O",
       "resource identifiers are opaque Heimdall identifiers scoped to one project"
     ],
@@ -1094,16 +1090,26 @@
     "response_fields": [
       "id",
       "object",
-      "status"
+      "endpoint",
+      "input_file_id",
+      "completion_window",
+      "status",
+      "output_file_id",
+      "error_file_id",
+      "created_at",
+      "expires_at",
+      "completed_at",
+      "failed_at",
+      "cancelling_at",
+      "cancelled_at",
+      "metadata",
+      "errors"
     ],
     "state_semantics": "project-owned resource",
-    "sdk_matrix": [
-      "openai-go",
-      "openai-node",
-      "openai-python"
-    ],
-    "status": "compatible",
+    "sdk_matrix": null,
+    "status": "experimental",
     "documented_deviations": [
+      "official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures",
       "unknown fields and unsupported profile fields are rejected before provider I/O",
       "resource identifiers are opaque Heimdall identifiers scoped to one project"
     ],
@@ -1135,16 +1141,26 @@
     "response_fields": [
       "id",
       "object",
-      "status"
+      "endpoint",
+      "input_file_id",
+      "completion_window",
+      "status",
+      "output_file_id",
+      "error_file_id",
+      "created_at",
+      "expires_at",
+      "completed_at",
+      "failed_at",
+      "cancelling_at",
+      "cancelled_at",
+      "metadata",
+      "errors"
     ],
     "state_semantics": "project-owned cancellable resource",
-    "sdk_matrix": [
-      "openai-go",
-      "openai-node",
-      "openai-python"
-    ],
-    "status": "compatible",
+    "sdk_matrix": null,
+    "status": "experimental",
     "documented_deviations": [
+      "official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures",
       "unknown fields and unsupported profile fields are rejected before provider I/O",
       "resource identifiers are opaque Heimdall identifiers scoped to one project"
     ],
@@ -1159,9 +1175,9 @@
   },
   {
     "id": "heimdall.rerank.v1",
-    "northbound_profile": "openai.media-resources.v1",
+    "northbound_profile": "heimdall.inference-resources.v1",
     "profile_revision": 1,
-    "protocol": "openai",
+    "protocol": "heimdall",
     "method": "POST",
     "path": "/v1/rerank",
     "semantic_operation": "rerank",
@@ -1180,15 +1196,13 @@
       "results"
     ],
     "state_semantics": "stateless Heimdall extension",
-    "sdk_matrix": [
-      "openai-go",
-      "openai-node",
-      "openai-python"
-    ],
-    "status": "compatible",
+    "sdk_matrix": null,
+    "status": "experimental",
     "documented_deviations": [
+      "official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures",
       "unknown fields and unsupported profile fields are rejected before provider I/O",
-      "resource identifiers are opaque Heimdall identifiers scoped to one project"
+      "resource identifiers are opaque Heimdall identifiers scoped to one project",
+      "this is a Heimdall extension and has no OpenAI official SDK surface"
     ],
     "provider_profiles": [
       "bedrock.agent-runtime.rerank.cohere-v3-5.v1"
@@ -1201,9 +1215,9 @@
   },
   {
     "id": "heimdall.async.create.v1",
-    "northbound_profile": "openai.media-resources.v1",
+    "northbound_profile": "heimdall.inference-resources.v1",
     "profile_revision": 1,
-    "protocol": "openai",
+    "protocol": "heimdall",
     "method": "POST",
     "path": "/v1/async/invocations",
     "semantic_operation": "async_generate",
@@ -1224,18 +1238,19 @@
     "response_fields": [
       "invocation_arn",
       "status",
-      "s3_output_uri"
+      "s3_output_uri",
+      "failure_message",
+      "submitted_at",
+      "last_modified_at"
     ],
     "state_semantics": "project-owned resource with 7 day TTL",
-    "sdk_matrix": [
-      "openai-go",
-      "openai-node",
-      "openai-python"
-    ],
-    "status": "compatible",
+    "sdk_matrix": null,
+    "status": "experimental",
     "documented_deviations": [
+      "official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures",
       "unknown fields and unsupported profile fields are rejected before provider I/O",
-      "resource identifiers are opaque Heimdall identifiers scoped to one project"
+      "resource identifiers are opaque Heimdall identifiers scoped to one project",
+      "this is a Heimdall extension and has no OpenAI official SDK surface"
     ],
     "provider_profiles": [
       "bedrock.runtime.async.nova-reel-v1.v1"
@@ -1248,9 +1263,9 @@
   },
   {
     "id": "heimdall.async.get.v1",
-    "northbound_profile": "openai.media-resources.v1",
+    "northbound_profile": "heimdall.inference-resources.v1",
     "profile_revision": 1,
-    "protocol": "openai",
+    "protocol": "heimdall",
     "method": "GET",
     "path": "/v1/async/invocations/{id}",
     "semantic_operation": "async_generate",
@@ -1266,18 +1281,18 @@
       "invocation_arn",
       "status",
       "s3_output_uri",
-      "failure_message"
+      "failure_message",
+      "submitted_at",
+      "last_modified_at"
     ],
     "state_semantics": "project-owned resource",
-    "sdk_matrix": [
-      "openai-go",
-      "openai-node",
-      "openai-python"
-    ],
-    "status": "compatible",
+    "sdk_matrix": null,
+    "status": "experimental",
     "documented_deviations": [
+      "official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures",
       "unknown fields and unsupported profile fields are rejected before provider I/O",
-      "resource identifiers are opaque Heimdall identifiers scoped to one project"
+      "resource identifiers are opaque Heimdall identifiers scoped to one project",
+      "this is a Heimdall extension and has no OpenAI official SDK surface"
     ],
     "provider_profiles": [
       "bedrock.runtime.async.nova-reel-v1.v1"
@@ -1290,9 +1305,9 @@
   },
   {
     "id": "heimdall.async.cancel.v1",
-    "northbound_profile": "openai.media-resources.v1",
+    "northbound_profile": "heimdall.inference-resources.v1",
     "profile_revision": 1,
-    "protocol": "openai",
+    "protocol": "heimdall",
     "method": "POST",
     "path": "/v1/async/invocations/{id}/cancel",
     "semantic_operation": "async_generate",
@@ -1308,15 +1323,13 @@
       "error"
     ],
     "state_semantics": "always fails closed because Bedrock has no cancellation operation",
-    "sdk_matrix": [
-      "openai-go",
-      "openai-node",
-      "openai-python"
-    ],
-    "status": "compatible",
+    "sdk_matrix": null,
+    "status": "experimental",
     "documented_deviations": [
+      "official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures",
       "unknown fields and unsupported profile fields are rejected before provider I/O",
-      "resource identifiers are opaque Heimdall identifiers scoped to one project"
+      "resource identifiers are opaque Heimdall identifiers scoped to one project",
+      "this is a Heimdall extension and has no OpenAI official SDK surface"
     ],
     "provider_profiles": [
       "bedrock.runtime.async.nova-reel-v1.v1"
