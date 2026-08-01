@@ -91,6 +91,7 @@ export interface Credential {
   type: ProviderType;
   access_surface: AccessSurface;
   scheme: CredentialScheme;
+  bound_base_url: string;
   secret_configured: boolean;
   key_version: number;
   revision: number;

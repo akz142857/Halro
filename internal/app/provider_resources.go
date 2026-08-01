@@ -3,8 +3,6 @@ package app
 import (
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
 	"time"
 )
 
@@ -25,20 +23,16 @@ func (r *Runtime) runProviderResourceMaintenance(ctx context.Context) {
 }
 
 func (r *Runtime) reapProviderResources(ctx context.Context) {
-	removed, err := r.store.ReapProviderResources(ctx, time.Now().UTC())
+	expired, err := r.store.ExpiredProviderResources(ctx, time.Now().UTC())
 	if err != nil {
 		if !errors.Is(err, context.Canceled) {
 			r.logger.Error("provider resource TTL reaper failed", "error", err)
 		}
 		return
 	}
-	objectDir := filepath.Join(r.config.Storage.DataDir, "provider-objects")
-	for _, resource := range removed {
-		if resource.ObjectPath == "" || filepath.Base(resource.ObjectPath) != resource.ObjectPath {
-			continue
-		}
-		if err := os.Remove(filepath.Join(objectDir, resource.ObjectPath)); err != nil && !errors.Is(err, os.ErrNotExist) {
-			r.logger.Error("provider resource object cleanup failed", "resource_id", resource.ID, "error", err)
+	for _, resource := range expired {
+		if err := r.gatewayService.CleanupExpiredProviderResource(ctx, resource); err != nil {
+			r.logger.Error("provider resource cleanup failed", "resource_id", resource.ID, "error", err)
 		}
 	}
 }

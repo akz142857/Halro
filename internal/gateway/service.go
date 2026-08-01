@@ -24,6 +24,7 @@ import (
 	"github.com/akz142857/Heimdall/internal/compatibility"
 	anthropicwire "github.com/akz142857/Heimdall/internal/compatibility/anthropic"
 	openaiwire "github.com/akz142857/Heimdall/internal/compatibility/openai"
+	"github.com/akz142857/Heimdall/internal/contentscan"
 	"github.com/akz142857/Heimdall/internal/domain"
 	"github.com/akz142857/Heimdall/internal/id"
 	"github.com/akz142857/Heimdall/internal/limiter"
@@ -79,6 +80,7 @@ type Service struct {
 	now                   func() time.Time
 	resources             Phase2ResourceStore
 	resourceObjectDir     string
+	contentScanner        contentscan.Scanner
 }
 
 func NewService(authSnapshot *auth.Snapshot, registry *provider.Registry, accounting *budget.Manager) (*Service, error) {
@@ -98,6 +100,7 @@ type ServiceOptions struct {
 	Redactor                   *redaction.Engine
 	Resources                  Phase2ResourceStore
 	ResourceObjectDir          string
+	ContentScanner             contentscan.Scanner
 }
 
 type requestRun struct {
@@ -377,6 +380,9 @@ func NewServiceWithOptions(
 	if options.Redactor == nil {
 		options.Redactor = redaction.NewDefault()
 	}
+	if options.ContentScanner == nil {
+		options.ContentScanner = contentscan.Builtin{}
+	}
 	if options.ResourceObjectDir != "" {
 		options.ResourceObjectDir = filepath.Clean(options.ResourceObjectDir)
 		if !filepath.IsAbs(options.ResourceObjectDir) {
@@ -412,6 +418,7 @@ func NewServiceWithOptions(
 		now:                   time.Now,
 		resources:             options.Resources,
 		resourceObjectDir:     options.ResourceObjectDir,
+		contentScanner:        options.ContentScanner,
 	}, nil
 }
 

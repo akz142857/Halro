@@ -40,6 +40,7 @@ type ProviderResource struct {
 	IdempotencyKeyHash [32]byte             `json:"idempotency_key_hash"`
 	RequestFingerprint [32]byte             `json:"request_fingerprint"`
 	CreationStatus     string               `json:"creation_status"`
+	CleanupStatus      string               `json:"cleanup_status,omitempty"`
 	Status             string               `json:"status"`
 	ObjectPath         string               `json:"object_path,omitempty"`
 	ObjectContentType  string               `json:"object_content_type,omitempty"`
@@ -62,7 +63,27 @@ func (r ProviderResource) Validate() error {
 	if r.CreationStatus == "" || r.Status == "" || r.CreatedAt.IsZero() || r.UpdatedAt.IsZero() || r.ExpiresAt.IsZero() || !r.ExpiresAt.After(r.CreatedAt) {
 		problems = append(problems, errors.New("resource lifecycle is invalid"))
 	}
+	if r.CleanupStatus != "" && r.CleanupStatus != "deleting" && r.CleanupStatus != "pending" {
+		problems = append(problems, errors.New("resource cleanup status is invalid"))
+	}
 	return errors.Join(problems...)
+}
+
+// ExpiryReapable prevents TTL maintenance from discarding the only owner
+// mapping for an operation that may still be running upstream.
+func (r ProviderResource) ExpiryReapable() bool {
+	if r.CreationStatus != "completed" {
+		return false
+	}
+	if r.Kind == ResourceFile {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(r.Status)) {
+	case "completed", "failed", "expired", "cancelled", "canceled", "succeeded":
+		return true
+	default:
+		return false
+	}
 }
 
 type Credential struct {

@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/akz142857/Heimdall/internal/openaiapi"
 	"github.com/akz142857/Heimdall/internal/provider"
@@ -33,10 +34,10 @@ func (s *phase2FakeService) Transcription(context.Context, string, string, provi
 	return provider.TranscriptionResult{ContentType: "application/json", Data: []byte(`{"text":"ok"}`)}, nil
 }
 func (s *phase2FakeService) Rerank(context.Context, string, openaiapi.RerankRequest) (provider.RerankResult, error) {
-	return provider.RerankResult{}, nil
+	return provider.RerankResult{Results: []provider.RerankItem{{Index: 1, RelevanceScore: 0.75}}, ProviderRequestID: "provider-secret"}, nil
 }
 func (s *phase2FakeService) StartAsyncInvoke(context.Context, string, string, openaiapi.AsyncInvokeRequest) (provider.AsyncInvokeObject, error) {
-	return provider.AsyncInvokeObject{InvocationARN: "async_1", Status: "InProgress"}, nil
+	return provider.AsyncInvokeObject{InvocationARN: "async_1", Status: "InProgress", S3OutputURI: "s3://bucket/output", ProviderRequestID: "provider-secret", SubmittedAt: time.Date(2026, 8, 2, 1, 2, 3, 0, time.FixedZone("offset", 3600))}, nil
 }
 func (s *phase2FakeService) GetAsyncInvoke(context.Context, string, string) (provider.AsyncInvokeObject, error) {
 	return provider.AsyncInvokeObject{}, nil
@@ -106,5 +107,49 @@ func TestFileUploadRequiresExplicitRouteAndPreservesBytes(t *testing.T) {
 	handler.CreateFile(response, request)
 	if response.Code != 200 || service.route != "batch-model" || string(service.file.Data) != "payload" {
 		t.Fatalf("status=%d route=%q file=%#v body=%s", response.Code, service.route, service.file, response.Body.String())
+	}
+}
+
+func TestRerankResponseUsesDeclaredWireShape(t *testing.T) {
+	handler, _ := New(&phase2FakeService{}, 1024)
+	request := httptest.NewRequest(http.MethodPost, "/v1/rerank", strings.NewReader(`{"model":"rerank","query":"q","documents":["a","b"],"top_n":1}`))
+	request.Header.Set("Authorization", "Bearer gw")
+	response := httptest.NewRecorder()
+	handler.Rerank(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := body["results"]; !ok || len(body) != 1 {
+		t.Fatalf("unexpected rerank wire shape: %s", response.Body.String())
+	}
+}
+
+func TestAsyncResponseUsesDeclaredWireShapeAndHidesProviderRequestID(t *testing.T) {
+	handler, _ := New(&phase2FakeService{}, 1024)
+	request := httptest.NewRequest(http.MethodPost, "/v1/async/invocations", strings.NewReader(`{"model":"video","prompt":"scene","s3_output_uri":"s3://bucket/output","duration_seconds":6}`))
+	request.Header.Set("Authorization", "Bearer gw")
+	request.Header.Set("Idempotency-Key", "async-1")
+	response := httptest.NewRecorder()
+	handler.StartAsyncInvoke(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"invocation_arn", "status", "s3_output_uri", "submitted_at"} {
+		if _, ok := body[field]; !ok {
+			t.Fatalf("missing %s: %s", field, response.Body.String())
+		}
+	}
+	for _, forbidden := range []string{"ProviderRequestID", "provider_request_id", "InvocationARN", "SubmittedAt", "last_modified_at"} {
+		if _, ok := body[forbidden]; ok {
+			t.Fatalf("unexpected %s: %s", forbidden, response.Body.String())
+		}
 	}
 }

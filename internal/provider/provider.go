@@ -109,6 +109,11 @@ type Capabilities struct {
 	MaxOutputTokens  int64
 }
 
+func (c Capabilities) AnyOperation() bool {
+	return c.Chat || c.Streaming || c.Embeddings || c.Moderations || c.Images ||
+		c.Transcriptions || c.Speech || c.Files || c.Batches || c.Rerank || c.AsyncGenerate
+}
+
 type CapabilityReporter interface {
 	Capabilities() Capabilities
 }
@@ -223,7 +228,7 @@ func (r *Registry) Register(target Target) error {
 	if target.Strategy != "ordered" && target.Strategy != "round_robin" {
 		return errors.New("route strategy must be ordered or round_robin")
 	}
-	if !target.Capabilities.Chat && !target.Capabilities.Embeddings {
+	if !target.Capabilities.AnyOperation() {
 		if reporter, ok := target.Adapter.(CapabilityReporter); ok {
 			target.Capabilities = reporter.Capabilities()
 		} else {
@@ -351,17 +356,61 @@ func (r *Registry) resolveCandidatesLocked(publicModel string, operation Operati
 				capabilityName = "streaming"
 			case OperationEmbeddings:
 				capabilityName = "embeddings"
+			case OperationModerations:
+				capabilityName = "moderations"
+			case OperationImages:
+				capabilityName = "images"
+			case OperationTranscriptions:
+				capabilityName = "transcriptions"
+			case OperationSpeech:
+				capabilityName = "speech"
+			case OperationFiles:
+				capabilityName = "files"
+			case OperationBatches:
+				capabilityName = "batches"
+			case OperationRerank:
+				capabilityName = "rerank"
+			case OperationAsyncInvoke:
+				capabilityName = "async_generate"
 			default:
 				return true
 			}
-			if capabilityName == "chat" && !target.Capabilities.Chat ||
-				capabilityName == "embeddings" && !target.Capabilities.Embeddings {
+			if !targetCapabilityEnabled(target.Capabilities, capabilityName) {
 				return true
 			}
 			return minimum != "" && !target.CapabilityEvidence.Satisfies(capabilityName, minimum)
 		})
 	}
 	return targets
+}
+
+func targetCapabilityEnabled(capabilities Capabilities, name string) bool {
+	switch name {
+	case "chat":
+		return capabilities.Chat
+	case "streaming":
+		return capabilities.Streaming
+	case "embeddings":
+		return capabilities.Embeddings
+	case "moderations":
+		return capabilities.Moderations
+	case "images":
+		return capabilities.Images
+	case "transcriptions":
+		return capabilities.Transcriptions
+	case "speech":
+		return capabilities.Speech
+	case "files":
+		return capabilities.Files
+	case "batches":
+		return capabilities.Batches
+	case "rerank":
+		return capabilities.Rerank
+	case "async_generate":
+		return capabilities.AsyncGenerate
+	default:
+		return false
+	}
 }
 
 func cloneTarget(target Target) Target {

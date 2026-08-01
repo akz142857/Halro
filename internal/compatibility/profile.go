@@ -13,6 +13,7 @@ const (
 	ProfileOpenAIResponses       NorthboundProfileID = "openai.responses.stateless.v1"
 	ProfileAnthropicMessages     NorthboundProfileID = "anthropic.messages.2023-06-01"
 	ProfileOpenAIPhase2          NorthboundProfileID = "openai.media-resources.v1"
+	ProfileHeimdallPhase2        NorthboundProfileID = "heimdall.inference-resources.v1"
 )
 
 type NorthboundProfile struct {
@@ -35,7 +36,8 @@ func BuiltinNorthboundProfile(id NorthboundProfileID) (NorthboundProfile, bool) 
 		ProfileOpenAIEmbeddings:      {ID: ProfileOpenAIEmbeddings, Revision: 1, Protocol: "openai", Methods: []string{"POST /v1/embeddings"}},
 		ProfileOpenAIResponses:       {ID: ProfileOpenAIResponses, Revision: 1, Protocol: "openai", Methods: []string{"POST /v1/responses"}},
 		ProfileAnthropicMessages:     {ID: ProfileAnthropicMessages, Revision: 1, Protocol: "anthropic", Methods: []string{"POST /v1/messages"}},
-		ProfileOpenAIPhase2:          {ID: ProfileOpenAIPhase2, Revision: 1, Protocol: "openai", Methods: []string{"POST /v1/moderations", "POST /v1/images/generations", "POST /v1/audio/transcriptions", "POST /v1/audio/speech", "POST /v1/files", "GET /v1/files/{id}", "GET /v1/files/{id}/content", "DELETE /v1/files/{id}", "POST /v1/batches", "GET /v1/batches/{id}", "POST /v1/batches/{id}/cancel", "POST /v1/rerank", "POST /v1/async/invocations", "GET /v1/async/invocations/{id}", "POST /v1/async/invocations/{id}/cancel"}},
+		ProfileOpenAIPhase2:          {ID: ProfileOpenAIPhase2, Revision: 1, Protocol: "openai", Methods: []string{"POST /v1/moderations", "POST /v1/images/generations", "POST /v1/audio/transcriptions", "POST /v1/audio/speech", "POST /v1/files", "GET /v1/files/{id}", "GET /v1/files/{id}/content", "DELETE /v1/files/{id}", "POST /v1/batches", "GET /v1/batches/{id}", "POST /v1/batches/{id}/cancel"}},
+		ProfileHeimdallPhase2:        {ID: ProfileHeimdallPhase2, Revision: 1, Protocol: "heimdall", Methods: []string{"POST /v1/rerank", "POST /v1/async/invocations", "GET /v1/async/invocations/{id}", "POST /v1/async/invocations/{id}/cancel"}},
 	}
 	profile, ok := profiles[id]
 	profile.Methods = slices.Clone(profile.Methods)
