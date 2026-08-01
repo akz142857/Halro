@@ -169,12 +169,14 @@ func DecodeTextContent(raw json.RawMessage) (string, bool) {
 }
 
 type ChatCompletionResponse struct {
-	ID      string   `json:"id"`
-	Object  string   `json:"object"`
-	Created int64    `json:"created"`
-	Model   string   `json:"model"`
-	Choices []Choice `json:"choices"`
-	Usage   *Usage   `json:"usage,omitempty"`
+	ID                      string   `json:"id"`
+	Object                  string   `json:"object"`
+	Created                 int64    `json:"created"`
+	Model                   string   `json:"model"`
+	Choices                 []Choice `json:"choices"`
+	Usage                   *Usage   `json:"usage,omitempty"`
+	SemanticMappingRevision uint64   `json:"-"`
+	SemanticTranslation     string   `json:"-"`
 }
 
 type Choice struct {

@@ -92,7 +92,7 @@ func TestRealProviderSmoke(t *testing.T) {
 	_, err = adapter.ChatStream(ctx, provider.ChatCall{
 		RequestID: "smoke_stream", ProviderModel: model, Request: streamRequest,
 	}, func(chunk semantic.Event) error {
-		if len(chunk.Choices) > 0 {
+		if len(chunk.Outputs) > 0 {
 			chunks++
 		}
 		return nil

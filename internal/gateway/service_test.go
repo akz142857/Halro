@@ -14,6 +14,7 @@ import (
 
 	"github.com/akz142857/Heimdall/internal/auth"
 	"github.com/akz142857/Heimdall/internal/budget"
+	openaiwire "github.com/akz142857/Heimdall/internal/compatibility/openai"
 	"github.com/akz142857/Heimdall/internal/domain"
 	"github.com/akz142857/Heimdall/internal/ledger"
 	"github.com/akz142857/Heimdall/internal/limiter"
@@ -74,8 +75,19 @@ func (a *fakeAdapter) ChatStream(
 	emit func(semantic.Event) error,
 ) (*openaiapi.Usage, error) {
 	a.calls++
-	for _, chunk := range a.streamChunks {
-		event, err := semantic.FromOpenAIChunk(chunk)
+	for index, chunk := range a.streamChunks {
+		if chunk.Model == "" {
+			chunk.Model = "provider-model"
+		}
+		if index == len(a.streamChunks)-1 {
+			for choiceIndex := range chunk.Choices {
+				if chunk.Choices[choiceIndex].FinishReason == nil {
+					finish := "stop"
+					chunk.Choices[choiceIndex].FinishReason = &finish
+				}
+			}
+		}
+		event, err := openaiwire.DecodeEvent(chunk)
 		if err != nil {
 			return a.streamUsage, err
 		}
@@ -725,7 +737,15 @@ func TestChatCapabilityFilterSelectsOnlyCompatibleFallback(t *testing.T) {
 	}
 	for name, request := range cases {
 		t.Run(name, func(t *testing.T) {
-			filtered := filterChatCapabilities(targets, request)
+			request.Model = "chat"
+			if len(request.Messages) == 0 {
+				request.Messages = []openaiapi.Message{{Role: "user", Content: openaiapi.TextContent("hello")}}
+			}
+			canonical, err := openaiwire.DecodeGenerate(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			filtered := filterSemanticCapabilities(targets, canonical.Requirements)
 			if len(filtered) != 1 || filtered[0].ID != "semantic" {
 				t.Fatalf("unexpected targets: %#v", filtered)
 			}
@@ -733,6 +753,50 @@ func TestChatCapabilityFilterSelectsOnlyCompatibleFallback(t *testing.T) {
 				t.Fatal("capability filtering mutated registry candidates")
 			}
 		})
+	}
+}
+
+func TestProfileCompatibilityFilterRejectsFieldsThatWouldBeDropped(t *testing.T) {
+	seed := int64(7)
+	request := chatRequest()
+	request.Seed = &seed
+	canonical, err := openaiwire.DecodeGenerate(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targets := []provider.Target{
+		{ID: "gemini", ProfileID: domain.ProfileGeminiText},
+		{ID: "openai", ProfileID: domain.ProfileOpenAIChatEmbeddings},
+	}
+	filtered := filterGenerateProfileCompatibility(targets, canonical)
+	if len(filtered) != 1 || filtered[0].ID != "openai" {
+		t.Fatalf("unexpected compatible targets: %#v", filtered)
+	}
+	if len(targets) != 2 {
+		t.Fatal("profile filtering mutated registry candidates")
+	}
+}
+
+func TestSemanticCapabilityFilterRejectsOptionalSemanticsForUnprofiledLegacyTarget(t *testing.T) {
+	target := provider.Target{
+		ID: "legacy", LegacyUnprofiled: true,
+		Capabilities: provider.Capabilities{
+			Chat: true, Streaming: true, Embeddings: true, Tools: true, Vision: true,
+			JSONMode: true, DeveloperRole: true, Reasoning: true, StreamUsage: true,
+		},
+	}
+	requirements := []semantic.Requirements{
+		{Tools: true}, {ParallelTools: true}, {InputImage: true}, {StructuredJSON: true},
+		{DeveloperRole: true}, {Reasoning: true}, {StreamUsage: true}, {Seed: true},
+		{MultipleCandidates: true}, {EndUserReference: true},
+	}
+	for _, requirement := range requirements {
+		if filtered := filterSemanticCapabilities([]provider.Target{target}, requirement); len(filtered) != 0 {
+			t.Fatalf("legacy target accepted optional requirements %#v", requirement)
+		}
+	}
+	if filtered := filterSemanticCapabilities([]provider.Target{target}, semantic.Requirements{Streaming: true}); len(filtered) != 1 {
+		t.Fatal("legacy target lost basic streaming compatibility")
 	}
 }
 
@@ -937,7 +1001,7 @@ func TestChatStreamUsesPublicModelAndSettlesUsage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(chunks) != 1 || chunks[0].Model != "chat" {
+	if len(chunks) != 2 || chunks[0].Model != "chat" || chunks[1].Model != "chat" || chunks[1].Choices[0].FinishReason == nil {
 		t.Fatalf("unexpected chunks: %#v", chunks)
 	}
 	period := time.Now().UTC().Format("2006-01-02")
@@ -981,7 +1045,7 @@ func TestChatStreamFallsBackOnlyBeforeFirstPayload(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if chunks != 1 || f.adapter.calls != 2 || fallback.calls != 1 {
+	if chunks != 2 || f.adapter.calls != 2 || fallback.calls != 1 {
 		t.Fatalf("chunks=%d primary_calls=%d fallback_calls=%d", chunks, f.adapter.calls, fallback.calls)
 	}
 }

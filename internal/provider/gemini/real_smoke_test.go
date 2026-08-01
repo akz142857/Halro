@@ -69,7 +69,7 @@ func TestRealProviderSmoke(t *testing.T) {
 	_, err = adapter.ChatStream(ctx, provider.ChatCall{
 		RequestID: "gemini_smoke_stream", ProviderModel: model, Request: request,
 	}, func(event semantic.Event) error {
-		if len(event.Choices) > 0 {
+		if len(event.Outputs) > 0 {
 			chunks++
 		}
 		return nil

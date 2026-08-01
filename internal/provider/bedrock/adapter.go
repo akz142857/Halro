@@ -343,7 +343,7 @@ func (a *Adapter) ChatStream(ctx context.Context, call provider.ChatCall, emit f
 		if !found {
 			continue
 		}
-		if event.Choices[0].Delta.Role == "assistant" {
+		if event.Outputs[0].Role == semantic.RoleAssistant {
 			sawMessage = true
 		}
 		if err := emit(event); err != nil {
@@ -357,6 +357,9 @@ func (a *Adapter) Embed(context.Context, provider.EmbeddingCall) (openaiapi.Embe
 }
 
 func translateRequest(request openaiapi.ChatCompletionRequest) (converseRequest, error) {
+	if (request.N != nil && *request.N != 1) || request.Seed != nil || len(request.Tools) != 0 || len(request.ToolChoice) != 0 || request.ParallelToolCalls != nil || len(request.ResponseFormat) != 0 || request.ReasoningEffort != "" || request.User != "" {
+		return converseRequest{}, badRequest("Bedrock Beta cannot represent one or more requested OpenAI fields", nil)
+	}
 	result := converseRequest{InferenceConfig: inferenceConfig{
 		Temperature: request.Temperature, TopP: request.TopP,
 	}}
@@ -375,6 +378,9 @@ func translateRequest(request openaiapi.ChatCompletionRequest) (converseRequest,
 		}
 	}
 	for _, source := range request.Messages {
+		if source.Name != "" {
+			return converseRequest{}, badRequest("Bedrock Beta does not declare messages[].name", nil)
+		}
 		text, ok := openaiapi.DecodeTextContent(source.Content)
 		if !ok {
 			return converseRequest{}, badRequest("Bedrock Beta supports text message content only", nil)
@@ -402,7 +408,7 @@ func translateRequest(request openaiapi.ChatCompletionRequest) (converseRequest,
 }
 
 func translateStreamEvent(eventType string, payload []byte, id, model string, created int64) (semantic.Event, bool, *openaiapi.Usage, error) {
-	base := semantic.Event{Kind: semantic.KindDelta, ID: id, Object: "chat.completion.chunk", Created: created, Model: model}
+	base := semantic.Event{Kind: semantic.EventDelta, ID: id, Created: created, Model: model}
 	switch eventType {
 	case "messageStart":
 		var body struct {
@@ -411,7 +417,7 @@ func translateStreamEvent(eventType string, payload []byte, id, model string, cr
 		if err := json.Unmarshal(payload, &body); err != nil || body.Role != "assistant" {
 			return semantic.Event{}, false, nil, malformed("decode Bedrock message start", err)
 		}
-		base.Choices = []semantic.Choice{{Index: 0, Delta: semantic.Delta{Role: "assistant"}}}
+		base.Outputs = []semantic.OutputDelta{{Index: 0, Role: semantic.RoleAssistant}}
 	case "contentBlockDelta":
 		var body struct {
 			Delta map[string]json.RawMessage `json:"delta"`
@@ -426,7 +432,7 @@ func translateStreamEvent(eventType string, payload []byte, id, model string, cr
 		if err := json.Unmarshal(body.Delta["text"], &text); err != nil {
 			return semantic.Event{}, false, nil, malformed("decode Bedrock text delta", err)
 		}
-		base.Choices = []semantic.Choice{{Index: 0, Delta: semantic.Delta{Content: openaiapi.TextContent(text)}}}
+		base.Outputs = []semantic.OutputDelta{{Index: 0, Content: []semantic.ContentDelta{{Kind: semantic.ContentText, Text: text}}}}
 	case "messageStop":
 		var body struct {
 			StopReason *string `json:"stopReason"`
@@ -438,7 +444,11 @@ func translateStreamEvent(eventType string, payload []byte, id, model string, cr
 		if err != nil {
 			return semantic.Event{}, false, nil, err
 		}
-		base.Choices = []semantic.Choice{{Index: 0, Delta: semantic.Delta{}, FinishReason: finish}}
+		native := ""
+		if finish != nil {
+			native = *finish
+		}
+		base.Outputs = []semantic.OutputDelta{{Index: 0, NativeTermination: native, Termination: normalizeBedrockTermination(native)}}
 	case "metadata":
 		var body struct {
 			Usage *tokenUsage `json:"usage"`
@@ -471,6 +481,19 @@ func translateStreamEvent(eventType string, payload []byte, id, model string, cr
 		return semantic.Event{}, false, nil, malformed("Bedrock stream event is semantically invalid", err)
 	}
 	return base, true, nil, nil
+}
+
+func normalizeBedrockTermination(value string) string {
+	switch value {
+	case "stop":
+		return "complete"
+	case "length":
+		return "max_output"
+	case "content_filter":
+		return "refusal"
+	default:
+		return "unknown"
+	}
 }
 
 func (a *Adapter) postJSON(ctx context.Context, model, operation, requestID string, input, output any) (string, error) {
