@@ -115,6 +115,11 @@ type Target struct {
 	CapabilityEvidence     domain.CapabilityEvidenceSet
 	MaxConcurrency         int64
 	DeploymentConcurrency  int64
+	// LegacyUnprofiled marks adapters that have not crossed the versioned
+	// ProfiledAdapter boundary. They remain usable for the original core
+	// operations, but optional portable semantics must fail closed.
+	LegacyUnprofiled bool
+	operations       OperationRegistry
 }
 
 type Registry struct {
@@ -166,6 +171,12 @@ func (r *Registry) Register(target Target) error {
 		if len(target.CapabilityEvidence) == 0 {
 			target.CapabilityEvidence = profiled.CapabilityEvidence()
 		}
+		target.operations = profiled.Operations()
+	} else {
+		if target.ProfileID != "" || target.AccessSurface != "" {
+			return errors.New("unprofiled adapter cannot claim a provider profile or access surface")
+		}
+		target.LegacyUnprofiled = true
 	}
 	if target.Strategy == "" {
 		target.Strategy = "ordered"
@@ -183,6 +194,27 @@ func (r *Registry) Register(target Target) error {
 			}
 		}
 	}
+	if target.LegacyUnprofiled {
+		// A legacy adapter has no immutable profile contract proving optional
+		// semantic support. Preserve its core operations, while preventing old
+		// capability booleans from claiming richer portable semantics.
+		target.Capabilities.Tools = false
+		target.Capabilities.Vision = false
+		target.Capabilities.JSONMode = false
+		target.Capabilities.DeveloperRole = false
+		target.Capabilities.Reasoning = false
+		target.Capabilities.StreamUsage = false
+	}
+	if target.LegacyUnprofiled && len(target.CapabilityEvidence) == 0 {
+		target.CapabilityEvidence = domain.EvidenceForCapabilities(
+			domain.ProviderCapabilities{
+				Chat: target.Capabilities.Chat, Streaming: target.Capabilities.Streaming,
+				Embeddings: target.Capabilities.Embeddings,
+			},
+			domain.EvidenceLegacy,
+		)
+	}
+	target = cloneTarget(target)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, existing := range r.targets[target.PublicModel] {
@@ -216,13 +248,13 @@ func (r *Registry) Resolve(publicModel string) (Target, bool) {
 	if len(targets) == 0 {
 		return Target{}, false
 	}
-	return targets[0], true
+	return cloneTarget(targets[0]), true
 }
 
 func (r *Registry) ResolveAll(publicModel string) []Target {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return slices.Clone(r.targets[publicModel])
+	return cloneTargets(r.targets[publicModel])
 }
 
 func (r *Registry) ResolveCandidates(publicModel string) []Target {
@@ -256,14 +288,14 @@ func (r *Registry) ResolveCandidatesForEvidence(publicModel string, operation Op
 }
 
 func (r *Registry) resolveCandidatesLocked(publicModel string, operation Operation, minimum domain.CapabilityEvidence) []Target {
-	targets := slices.Clone(r.targets[publicModel])
+	targets := cloneTargets(r.targets[publicModel])
 	targets = slices.DeleteFunc(targets, func(target Target) bool {
 		healthy, probed := r.health[target.DeploymentID]
 		return target.DeploymentID != "" && probed && !healthy
 	})
 	if operation != "" {
 		targets = slices.DeleteFunc(targets, func(target Target) bool {
-			if profiled, ok := target.Adapter.(ProfiledAdapter); ok && !profiled.Operations().Supports(operation) {
+			if _, ok := target.ResolveOperation(operation); !ok {
 				return true
 			}
 			capabilityName := ""
@@ -291,6 +323,18 @@ func (r *Registry) resolveCandidatesLocked(publicModel string, operation Operati
 		})
 	}
 	return targets
+}
+
+func cloneTarget(target Target) Target {
+	target.CapabilityEvidence = target.CapabilityEvidence.Clone()
+	return target
+}
+func cloneTargets(targets []Target) []Target {
+	result := make([]Target, len(targets))
+	for index, target := range targets {
+		result[index] = cloneTarget(target)
+	}
+	return result
 }
 
 // SetDeploymentHealthy updates active-probe health. Unknown deployments remain

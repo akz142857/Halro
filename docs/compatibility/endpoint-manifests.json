@@ -1,0 +1,178 @@
+[
+  {
+    "id": "openai.chat-completions.v1",
+    "northbound_profile": "openai.chat-completions.v1",
+    "profile_revision": 1,
+    "protocol": "openai",
+    "method": "POST",
+    "path": "/v1/chat/completions",
+    "semantic_operation": "generate",
+    "request_fields": [
+      "model",
+      "messages",
+      "messages[].name",
+      "stream",
+      "stream_options",
+      "temperature",
+      "top_p",
+      "max_tokens",
+      "max_completion_tokens",
+      "n",
+      "stop",
+      "seed",
+      "tools",
+      "tool_choice",
+      "parallel_tool_calls",
+      "response_format",
+      "reasoning_effort",
+      "user"
+    ],
+    "request_headers": [
+      "Authorization",
+      "Content-Type"
+    ],
+    "response_fields": [
+      "id",
+      "object",
+      "created",
+      "model",
+      "choices",
+      "usage"
+    ],
+    "stream_events": [
+      "chat.completion.chunk",
+      "[DONE]",
+      "error"
+    ],
+    "state_semantics": "stateless",
+    "sdk_matrix": [
+      "openai-go",
+      "openai-node",
+      "openai-python"
+    ],
+    "status": "compatible",
+    "documented_deviations": [
+      "gateway routes model names; provider-owned chat state is not exposed",
+      "provider-specific unsupported fields are rejected before provider I/O"
+    ],
+    "provider_profiles": [
+      "openai.chat-embeddings.v1",
+      "azure-openai.chat-embeddings.v1",
+      "deepseek.chat.v1",
+      "openai-compatible.chat-embeddings.v1",
+      "gemini.generate-content.text.v1beta",
+      "bedrock.runtime.converse.text.v1"
+    ],
+    "profile_coverage": [
+      {
+        "profile_id": "openai.chat-embeddings.v1"
+      },
+      {
+        "profile_id": "azure-openai.chat-embeddings.v1"
+      },
+      {
+        "profile_id": "deepseek.chat.v1"
+      },
+      {
+        "profile_id": "openai-compatible.chat-embeddings.v1"
+      },
+      {
+        "profile_id": "gemini.generate-content.text.v1beta",
+        "unsupported_request_fields": [
+          "messages[].name",
+          "seed",
+          "tools",
+          "tool_choice",
+          "parallel_tool_calls",
+          "response_format",
+          "reasoning_effort",
+          "user"
+        ],
+        "declared_transforms": [
+          "developer messages are merged into Gemini system_instruction"
+        ]
+      },
+      {
+        "profile_id": "bedrock.runtime.converse.text.v1",
+        "unsupported_request_fields": [
+          "messages[].name",
+          "n",
+          "seed",
+          "tools",
+          "tool_choice",
+          "parallel_tool_calls",
+          "response_format",
+          "reasoning_effort",
+          "user"
+        ],
+        "declared_transforms": [
+          "Bedrock stop reasons are normalized to OpenAI finish reasons"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "openai.embeddings.v1",
+    "northbound_profile": "openai.embeddings.v1",
+    "profile_revision": 1,
+    "protocol": "openai",
+    "method": "POST",
+    "path": "/v1/embeddings",
+    "semantic_operation": "embed",
+    "request_fields": [
+      "model",
+      "input",
+      "encoding_format",
+      "dimensions",
+      "user"
+    ],
+    "request_headers": [
+      "Authorization",
+      "Content-Type"
+    ],
+    "response_fields": [
+      "object",
+      "data",
+      "model",
+      "usage"
+    ],
+    "state_semantics": "stateless",
+    "sdk_matrix": [
+      "openai-go",
+      "openai-node",
+      "openai-python"
+    ],
+    "status": "compatible",
+    "documented_deviations": [
+      "gateway routes model names",
+      "provider-specific unsupported fields are rejected before provider I/O"
+    ],
+    "provider_profiles": [
+      "openai.chat-embeddings.v1",
+      "azure-openai.chat-embeddings.v1",
+      "openai-compatible.chat-embeddings.v1",
+      "gemini.generate-content.text.v1beta"
+    ],
+    "profile_coverage": [
+      {
+        "profile_id": "openai.chat-embeddings.v1"
+      },
+      {
+        "profile_id": "azure-openai.chat-embeddings.v1"
+      },
+      {
+        "profile_id": "openai-compatible.chat-embeddings.v1"
+      },
+      {
+        "profile_id": "gemini.generate-content.text.v1beta",
+        "unsupported_request_fields": [
+          "encoding_format",
+          "user"
+        ],
+        "declared_transforms": [
+          "token usage is locally estimated when Gemini omits usage"
+        ]
+      }
+    ]
+  }
+]

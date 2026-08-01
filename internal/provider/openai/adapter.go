@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strings"
 
+	openaiwire "github.com/akz142857/Heimdall/internal/compatibility/openai"
 	"github.com/akz142857/Heimdall/internal/domain"
 	"github.com/akz142857/Heimdall/internal/openaiapi"
 	"github.com/akz142857/Heimdall/internal/provider"
@@ -363,7 +364,7 @@ func (a *Adapter) ChatStream(
 				Message: "decode provider stream chunk", Cause: err,
 			}
 		}
-		semanticEvent, err := semantic.FromOpenAIChunk(chunk)
+		semanticEvent, err := openaiwire.DecodeEvent(chunk)
 		if err != nil {
 			return usage, &provider.Error{
 				Class: provider.ErrorMalformed, Ambiguous: true,

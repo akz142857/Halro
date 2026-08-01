@@ -51,6 +51,28 @@ func (*registryAdapter) Embed(context.Context, EmbeddingCall) (openaiapi.Embeddi
 	return openaiapi.EmbeddingResponse{}, nil
 }
 
+type mutableProfileAdapter struct {
+	registryAdapter
+	manifest ProfileManifest
+	enabled  bool
+}
+
+func (*mutableProfileAdapter) Type() string                     { return string(domain.ProviderOpenAI) }
+func (adapter *mutableProfileAdapter) Profile() ProfileManifest { return adapter.manifest }
+func (adapter *mutableProfileAdapter) Operations() OperationRegistry {
+	if !adapter.enabled {
+		return operationSet{adapter: adapter}
+	}
+	return operationSet{
+		operations: []Operation{OperationChat},
+		bindings:   adapter.manifest.PrimitiveBindings,
+		adapter:    adapter,
+	}
+}
+func (*mutableProfileAdapter) CapabilityEvidence() domain.CapabilityEvidenceSet {
+	return domain.EvidenceForCapabilities(domain.ProviderCapabilities{Chat: true}, domain.EvidenceDeclared)
+}
+
 func TestRegistryOrdersTargetsAndRoundRobinsStartingTarget(t *testing.T) {
 	registry := NewRegistry()
 	adapter := &registryAdapter{}
@@ -216,5 +238,94 @@ func TestRegistryReplaceIsAtomicAndReturnsRetiredAdapters(t *testing.T) {
 	next.Close()
 	if newAdapter.closed {
 		t.Fatal("replacement registry retained ownership after transfer")
+	}
+}
+
+func TestRegistryCapabilityEvidenceIsImmutableAcrossBoundaries(t *testing.T) {
+	evidence := domain.CapabilityEvidenceSet{"chat": domain.EvidenceVerified}
+	registry := NewRegistry()
+	if err := registry.Register(Target{ID: "target", PublicModel: "chat", ProviderModel: "model", Adapter: &registryAdapter{}, CapabilityEvidence: evidence}); err != nil {
+		t.Fatal(err)
+	}
+	evidence["chat"] = domain.EvidenceUnsupported
+	resolved, _ := registry.Resolve("chat")
+	if resolved.CapabilityEvidence["chat"] != domain.EvidenceVerified {
+		t.Fatal("registration retained caller evidence map")
+	}
+	resolved.CapabilityEvidence["chat"] = domain.EvidenceUnsupported
+	all := registry.ResolveAll("chat")
+	all[0].CapabilityEvidence["chat"] = domain.EvidenceLegacy
+	candidates := registry.ResolveCandidates("chat")
+	candidates[0].CapabilityEvidence["chat"] = domain.EvidenceDeclared
+	fresh, _ := registry.Resolve("chat")
+	if fresh.CapabilityEvidence["chat"] != domain.EvidenceVerified {
+		t.Fatal("registry exposed mutable evidence map")
+	}
+}
+
+func TestRegistryCandidateResolutionUsesCapturedOperationSnapshot(t *testing.T) {
+	manifest, ok := BuiltinProfile(domain.ProfileOpenAIChatEmbeddings)
+	if !ok {
+		t.Fatal("OpenAI profile is unavailable")
+	}
+	manifest.Operations = []Operation{OperationChat}
+	manifest.PrimitiveBindings = []PrimitiveBinding{{
+		LegacyOperation: OperationChat, SemanticOperation: semantic.OperationGenerate,
+		Primitive: PrimitiveOpenAIChatCompletions,
+	}}
+	adapter := &mutableProfileAdapter{manifest: manifest, enabled: true}
+	registry := NewRegistry()
+	if err := registry.Register(Target{
+		ID: "target", PublicModel: "chat", ProviderModel: "model", Adapter: adapter,
+		Capabilities: Capabilities{Chat: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	adapter.enabled = false
+	candidates := registry.ResolveCandidatesFor("chat", OperationChat)
+	if len(candidates) != 1 {
+		t.Fatalf("captured operation snapshot changed with adapter: %#v", candidates)
+	}
+	operation, ok := candidates[0].ResolveOperation(OperationChat)
+	if !ok || operation.ProviderPrimitive() != PrimitiveOpenAIChatCompletions {
+		t.Fatalf("captured primitive unavailable: %#v", operation)
+	}
+}
+
+func TestUnprofiledAdapterIsConservativeAndCannotClaimProfile(t *testing.T) {
+	registry := NewRegistry()
+	if err := registry.Register(Target{
+		ID: "legacy", PublicModel: "chat", ProviderModel: "model", Adapter: &registryAdapter{},
+		Capabilities: Capabilities{
+			Chat: true, Streaming: true, Embeddings: true, Tools: true, Vision: true,
+			JSONMode: true, DeveloperRole: true, Reasoning: true, StreamUsage: true,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	target, ok := registry.Resolve("chat")
+	if !ok || !target.LegacyUnprofiled {
+		t.Fatalf("legacy target was not marked conservatively: %#v", target)
+	}
+	if target.Capabilities.Tools || target.Capabilities.Vision || target.Capabilities.JSONMode ||
+		target.Capabilities.DeveloperRole || target.Capabilities.Reasoning || target.Capabilities.StreamUsage {
+		t.Fatalf("legacy target retained unproved optional capabilities: %#v", target.Capabilities)
+	}
+	if target.CapabilityEvidence["chat"] != domain.EvidenceLegacy ||
+		target.CapabilityEvidence["tools"] != domain.EvidenceUnsupported {
+		t.Fatalf("legacy evidence is not conservative: %#v", target.CapabilityEvidence)
+	}
+	generation, err := target.Generation(OperationChat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loss := translationForPrimitive(generation.ProviderPrimitive()); loss != semantic.TranslationDeclared {
+		t.Fatalf("legacy primitive claimed lossless translation: %s", loss)
+	}
+	if err := NewRegistry().Register(Target{
+		ID: "false-profile", PublicModel: "chat", ProviderModel: "model", Adapter: &registryAdapter{},
+		ProfileID: domain.ProfileOpenAIChatEmbeddings,
+	}); err == nil {
+		t.Fatal("unprofiled adapter claimed a registered profile")
 	}
 }

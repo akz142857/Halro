@@ -1,6 +1,6 @@
 # Heimdall 多协议 LLM API、Provider 与 Realtime 架构设计
 
-状态：设计提案 v5；Phase 0A Provider Profile 基础已实现，其余章节仍是目标设计，不代表现有能力<br>
+状态：设计提案 v6；Phase 0（0A + 0B）协议基础已实现，Phase 1 及以后仍是目标设计，不代表现有能力<br>
 最后更新：2026-08-01<br>
 适用范围：Gateway 数据面、Provider Adapter、能力协商、实时会话和未来分布式部署
 
@@ -41,8 +41,10 @@ Provider、模型、协议和部署形态持续演进。
 Phase 0A 已在当前代码中增加版本化 Provider Profile、Access Surface、Operation Registry、
 Credential Scheme、逐能力证据和 LegacyAdapterBridge。旧记录经原子 Schema Migration 标记为
 `legacy`，新建记录标记为 `declared`；Admin API 与界面可查看 Profile、Surface、Scheme 和证据。
-这些基础设施仍桥接现有 OpenAI 类型 Adapter，尚不等于 Canonical IR、NativeEnvelope、Responses、
-Anthropic Messages 或 Realtime 已经实现。
+Phase 0B 已在网关热路径加入最小 Canonical IR、Provider-neutral Stream Event、版本化
+NativeEnvelope/GovernanceView 和字段级 Compatibility Manifest；南向旧 Adapter 仍通过
+LegacyAdapterBridge 迁移。Responses、Anthropic Messages、公开 Native Endpoint 和 Realtime
+仍未实现。
 
 当前能力声明包含 Chat、Streaming、Embeddings、Tools、Vision、JSON、Developer
 Role、Reasoning、Stream Usage 和 Token Limits。Realtime、Audio、Image Generation、
@@ -1575,11 +1577,22 @@ internal/policy/
 
 ### Phase 0（Now/Next）：最小协议基础
 
-实施状态（2026-08-01）：Phase 0A 已完成 Access Surface、不可变 Provider Profile Manifest、
-Operation Registry、Credential Scheme Authorizer、Capability Evidence、LegacyAdapterBridge、Schema
-Migration、Admin 可见性和 Bedrock Converse 基线修正。Semantic Content/Result/Event、
-NativeEnvelope/GovernanceView、Endpoint Compatibility Manifest、依赖静态检查与跨 Profile Golden
-Matrix 留在后续 Phase 0B，不应由“Phase 0A 已完成”推断为已支持。
+实施状态（2026-08-01）：Phase 0A 与 Phase 0B 已完成。Phase 0A 落地 Access Surface、不可变
+Provider Profile Manifest、Operation Registry、Credential Scheme Authorizer、Capability Evidence、
+LegacyAdapterBridge、Schema Migration、Admin 可见性和 Bedrock Converse 基线修正。Phase 0B
+落地 NorthboundProfile / SemanticOperation / ProviderPrimitive 三个正交轴、现有 Generate/Embed 的
+最小 Semantic Content/Request/Result/Event、版本化 NativeEnvelope/GovernanceView、两个现有
+Endpoint 的机器可读 Compatibility Manifest、Semantic 依赖与导出 Canonical Schema Allowlist，
+以及六个内置 Profile 的 LegacyAdapterBridge 绑定不变量测试。后者不宣称验证真实 Provider Wire；
+真实协议行为由各 Adapter 的 Transport Fixture 与 Smoke 分层验证。
+
+当前 `POST /v1/chat/completions`、SSE 和 `POST /v1/embeddings` 热路径已经由 OpenAI Facade
+解码成 Canonical Request，再通过 Profile Operation Registry 解析 Provider Primitive；旧
+OpenAI-typed Adapter 只由 LegacyAdapterBridge 在南向边界调用。机器可读兼容声明发布在
+[`docs/compatibility/endpoint-manifests.json`](compatibility/endpoint-manifests.json)。
+NativeEnvelope 当前只提供经过 Schema、Header allowlist、大小和目标 Profile 校验的基础契约，
+尚未开放任何 Native 北向 Endpoint；这不表示 Responses、Anthropic Messages 或 Provider 任意
+JSON 透传已经实现。
 
 Phase 0A 的 Bedrock SigV4 只接受显式列入规则的 AWS Runtime/FIPS/Dual-stack/PrivateLink
 Hostname，并在每次签名前复核 Authority；HTTP 5xx 与已接受流中的模型异常按未知执行结果保守
@@ -1604,6 +1617,9 @@ Hostname，并在每次签名前复核 Authority；HTTP 5xx 与已接受流中�
 完成标准：现有全部测试通过，当前两个 Endpoint 没有兼容性回归，新能力模型可以表达
 Responses、Anthropic Messages Requirements；北向协议不再成为南向 Adapter 接口；旧 Adapter
 的证据状态可见且可迁移。此阶段不实现 Realtime Capability 全集。
+
+实施验证：上述完成标准已经满足。Phase 1+ 的具体协议字段仍需在对应 Issue 中增量扩展
+Semantic Requirements；“可以表达后续需求”不等于已经支持对应公开 API。
 
 ### Phase 1（Next）：Stateless Responses 与原生 Messages
 
