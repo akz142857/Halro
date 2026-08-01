@@ -321,6 +321,15 @@ Deployment。
 
 原生特性不能无损映射到其他 Provider 时，路由预检必须排除该候选，而不是降级请求。
 
+Phase 1B 实施结果：`anthropic.messages.v1` 已发布严格的 `POST /v1/messages` JSON 与
+Anthropic SSE Facade。请求必须携带 `anthropic-version: 2023-06-01`；默认 `portable` 模式只接受
+能够进入 Canonical `generate` 的无损子集，并可使用满足 Requirements 的跨 Provider 路由；
+`Heimdall-Route-Mode: native` 则固定 Anthropic Access Surface/Profile，禁用跨 Provider Fallback，
+通过 NativeEnvelope 保留 Tool Use/Tool Result、Thinking/Redacted Thinking 以及签名事件的顺序和
+不透明值。上游 Header、错误类型、Request ID、Retry-After 与 SSE 生命周期均有独立契约；
+OpenAI、Anthropic、Gemini 的 Tool Choice 差异由 Golden Matrix 校验。`count_tokens` 尚未实现，
+因此不在当前 Manifest 中。执行模式和不支持项见 [ADR 0006](adr/0006-anthropic-messages-facade.md)。
+
 ### 5.4 Portable 与 Native 模式
 
 每个协议请求都应明确落入一种执行模式：
@@ -1600,8 +1609,8 @@ Endpoint 的机器可读 Compatibility Manifest、Semantic 依赖与导出 Canon
 解码成 Canonical Request，再通过 Profile Operation Registry 解析 Provider Primitive；旧
 OpenAI-typed Adapter 只由 LegacyAdapterBridge 在南向边界调用。机器可读兼容声明发布在
 [`docs/compatibility/endpoint-manifests.json`](compatibility/endpoint-manifests.json)。
-NativeEnvelope 当前只提供经过 Schema、Header allowlist、大小和目标 Profile 校验的基础契约，
-尚未开放任何 Native 北向 Endpoint；这不表示 Responses、Anthropic Messages 或 Provider 任意
+NativeEnvelope 提供经过 Schema、Header allowlist、大小和目标 Profile 校验的基础契约，并已由
+Phase 1B 的 Anthropic Messages Native 模式首次用于公开北向 Endpoint；它仍不表示 Provider 任意
 JSON 透传已经实现。
 
 Phase 0A 的 Bedrock SigV4 只接受显式列入规则的 AWS Runtime/FIPS/Dual-stack/PrivateLink
@@ -1633,22 +1642,23 @@ Semantic Requirements；“可以表达后续需求”不等于已经支持对�
 
 ### Phase 1（Next）：Stateless Responses 与原生 Messages
 
-实施状态：Phase 1A Stateless Responses 已完成本文档声明的首个兼容 Tier；其余条目仍属于
-Phase 1B+，不能因 `/v1/responses` 已上线而视为整个 Phase 1 完成。
+实施状态：Phase 1A Stateless Responses 与 Phase 1B Anthropic Messages 已完成。AWS Mantle
+Profile 等其余条目仍属于后续工作，因此不能视为整个 Phase 1 已全部完成。
 
 - [Phase 1A 已完成] 批准 Stateless Responses Resource Ownership、Portable/Native、
   Termination/Event 决策（ADR 0005）；
 - [Phase 1A 已完成] 发布逐 Method、Field、Event、State 的 Compatibility Manifest；
 - [Phase 1A 已完成] 实现 `/v1/responses` 普通和文本 SSE Facade；
-- 实现 Anthropic `/v1/messages` 普通和 SSE Facade；
-- 增加对应 Provider Primitive Adapter，而不是 OpenAI-specific 通用 Adapter；
+- [Phase 1B 已完成] 实现 Anthropic `/v1/messages` 普通和 SSE Facade；
+- [Phase 1B 已完成] 增加 Anthropic Messages Provider Primitive Adapter，而不是
+  OpenAI-specific 通用 Adapter；
 - 增加 `bedrock.mantle.openai.chat.v1`，并随对应北向 Facade 增加
   `bedrock.mantle.openai.responses.v1` 与 `bedrock.mantle.anthropic.messages.v1`；
 - Mantle 与 Runtime 使用独立 Access Surface、Credential Audience、Quota 和 Capability Evidence；
-- 完成 OpenAI/Anthropic/Gemini Tool Choice 与 Function Calling Golden Matrix；
-- 验证 Thinking/Reasoning Roundtrip Integrity；
-- 实现 Portable/Native Route 模式；
-- 扩展官方 SDK Compatibility Matrix。
+- [Phase 1B 已完成] 完成 OpenAI/Anthropic/Gemini Tool Choice 与 Function Calling Golden Matrix；
+- [Phase 1B 已完成] 验证 Thinking Signature Roundtrip Integrity；
+- [Phase 1B 已完成] 实现 Anthropic Portable/Native Route 模式；
+- [Phase 1B 已完成] 扩展 Go/Node/Python 官方 Anthropic SDK Compatibility Matrix。
 
 完成标准：跨协议只发生已声明的无损转换，Tool/Reasoning/JSON/Usage/Event/Termination 均有
 明确契约；如果只支持 Stateless Responses，所有状态字段在 Provider I/O 前稳定拒绝。
@@ -1759,7 +1769,7 @@ Manifest；其余记录在对应 Phase 获得真实需求、负责人和预算�
 | 决策 | 结论 |
 |---|---|
 | 是否宣称支持 OpenAI 全部 API | 否，按 Endpoint 和字段级契约声明 |
-| v1 是否实现 Responses、Realtime 或 HA | Phase 1A 已实现明确的 Stateless Responses Tier；Realtime 与 HA 仍不属于当前 v1 范围 |
+| v1 是否实现 Responses、Messages、Realtime 或 HA | Phase 1A 已实现 Stateless Responses Tier，Phase 1B 已实现 Anthropic Messages；Realtime 与 HA 仍不属于当前 v1 范围 |
 | 是否只提供 OpenAI 北向协议 | 否，同时允许 Anthropic 等原生 Facade |
 | 是否把所有 Provider 强制转换成 OpenAI | 否，只执行可证明的无损转换 |
 | 一个 Provider 是否只对应一个 Adapter | 否，Provider 下按 Access Surface、版本化 Profile 和 Operation Adapter 组织 |
@@ -1786,7 +1796,7 @@ Manifest；其余记录在对应 Phase 获得真实需求、负责人和预算�
 | Broker Mode 是否等价于完整 Gateway | 否，使用独立 Assurance Profile，强治理 Project 默认拒绝 |
 | 故障时是否允许从 Gateway Terminated 静默降级到 Provider Direct | 否，连接模式和最低 Assurance 必须由 Project/Route 显式授权 |
 | Heimdall 是否最终自行终止 WebRTC | 未决定；自建、独立/第三方 Media Service 和 Direct Broker 都是候选终态 |
-| 当前优先级 | Stateless Responses 已完成；Next Anthropic Messages 与跨协议 Tool/Thinking 契约；Realtime 与 WebRTC 暂缓 |
+| 当前优先级 | Stateless Responses 与 Anthropic Messages 已完成；Next 为剩余 Phase 1 Provider Profile；Realtime 与 WebRTC 暂缓 |
 
 ## 21. 协议与内部契约参考
 

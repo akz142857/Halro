@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 
+	"github.com/akz142857/Heimdall/internal/anthropicapi"
 	"github.com/akz142857/Heimdall/internal/domain"
 	"github.com/akz142857/Heimdall/internal/semantic"
 )
@@ -32,7 +33,7 @@ func (m ProfileManifest) Validate() error {
 	seen := make(map[Operation]struct{}, len(m.Operations))
 	for _, operation := range m.Operations {
 		switch operation {
-		case OperationChat, OperationChatStream, OperationEmbeddings:
+		case OperationChat, OperationChatStream, OperationEmbeddings, OperationMessages, OperationMessagesStream:
 		default:
 			return errors.New("provider profile manifest contains an unknown operation")
 		}
@@ -66,6 +67,7 @@ func (m ProfileManifest) Validate() error {
 func profileAllowsPrimitive(profileID domain.ProviderProfileID, operation Operation, primitive Primitive) bool {
 	expected := map[domain.ProviderProfileID]map[Operation]Primitive{
 		domain.ProfileOpenAIChatEmbeddings: {OperationChat: PrimitiveOpenAIChatCompletions, OperationChatStream: PrimitiveOpenAIChatStream, OperationEmbeddings: PrimitiveOpenAIEmbeddings},
+		domain.ProfileAnthropicMessages:    {OperationChat: PrimitiveAnthropicMessages, OperationChatStream: PrimitiveAnthropicMessagesStream, OperationMessages: PrimitiveAnthropicMessages, OperationMessagesStream: PrimitiveAnthropicMessagesStream},
 		domain.ProfileAzureChatEmbeddings:  {OperationChat: PrimitiveAzureChatCompletions, OperationChatStream: PrimitiveAzureChatStream, OperationEmbeddings: PrimitiveAzureEmbeddings},
 		domain.ProfileDeepSeekChat:         {OperationChat: PrimitiveDeepSeekChat, OperationChatStream: PrimitiveDeepSeekChatStream},
 		domain.ProfileOpenAICompatible:     {OperationChat: PrimitiveCompatibleChat, OperationChatStream: PrimitiveCompatibleChatStream, OperationEmbeddings: PrimitiveCompatibleEmbeddings},
@@ -104,6 +106,9 @@ func (s operationSet) Resolve(operation Operation) (OperationAdapter, bool) {
 		}
 		switch binding.SemanticOperation {
 		case semantic.OperationGenerate:
+			if binding.LegacyOperation == OperationMessages || binding.LegacyOperation == OperationMessagesStream {
+				return nativeOperationPrimitive{adapter: s.adapter, primitive: binding.Primitive, operation: binding.LegacyOperation}, true
+			}
 			return legacyGenerationPrimitive{adapter: s.adapter, primitive: binding.Primitive, operation: binding.LegacyOperation}, true
 		case semantic.OperationEmbed:
 			return legacyEmbeddingPrimitive{adapter: s.adapter, primitive: binding.Primitive, operation: binding.LegacyOperation}, true
@@ -166,6 +171,22 @@ func (b *LegacyAdapterBridge) Probe(ctx context.Context, model string) error {
 	return prober.Probe(ctx, model)
 }
 
+func (b *LegacyAdapterBridge) MessagesNative(ctx context.Context, call NativeMessageCall) (NativeMessageResult, error) {
+	adapter, ok := b.Adapter.(NativeMessagesAdapter)
+	if !ok {
+		return NativeMessageResult{}, errors.New("native Messages is unavailable")
+	}
+	return adapter.MessagesNative(ctx, call)
+}
+
+func (b *LegacyAdapterBridge) MessagesNativeStream(ctx context.Context, call NativeMessageCall, emit func(anthropicapi.RawStreamEvent) error) (*anthropicapi.Usage, error) {
+	adapter, ok := b.Adapter.(NativeMessagesAdapter)
+	if !ok {
+		return nil, errors.New("native Messages streaming is unavailable")
+	}
+	return adapter.MessagesNativeStream(ctx, call, emit)
+}
+
 func BuiltinProfile(id domain.ProviderProfileID) (ProfileManifest, bool) {
 	manifests := map[domain.ProviderProfileID]ProfileManifest{
 		domain.ProfileOpenAIChatEmbeddings: {
@@ -173,6 +194,12 @@ func BuiltinProfile(id domain.ProviderProfileID) (ProfileManifest, bool) {
 			AccessSurface: domain.SurfaceOpenAI, CredentialScheme: domain.CredentialBearerStatic,
 			Operations:        []Operation{OperationChat, OperationChatStream, OperationEmbeddings},
 			PrimitiveBindings: []PrimitiveBinding{{OperationChat, semantic.OperationGenerate, PrimitiveOpenAIChatCompletions}, {OperationChatStream, semantic.OperationGenerate, PrimitiveOpenAIChatStream}, {OperationEmbeddings, semantic.OperationEmbed, PrimitiveOpenAIEmbeddings}},
+		},
+		domain.ProfileAnthropicMessages: {
+			ID: domain.ProfileAnthropicMessages, Revision: 1, ProviderType: domain.ProviderAnthropic,
+			AccessSurface: domain.SurfaceAnthropic, CredentialScheme: domain.CredentialAnthropicAPIKey,
+			Operations:        []Operation{OperationChat, OperationChatStream, OperationMessages, OperationMessagesStream},
+			PrimitiveBindings: []PrimitiveBinding{{OperationChat, semantic.OperationGenerate, PrimitiveAnthropicMessages}, {OperationChatStream, semantic.OperationGenerate, PrimitiveAnthropicMessagesStream}, {OperationMessages, semantic.OperationGenerate, PrimitiveAnthropicMessages}, {OperationMessagesStream, semantic.OperationGenerate, PrimitiveAnthropicMessagesStream}},
 		},
 		domain.ProfileAzureChatEmbeddings: {
 			ID: domain.ProfileAzureChatEmbeddings, Revision: 1, ProviderType: domain.ProviderAzureOpenAI,

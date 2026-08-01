@@ -11,8 +11,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akz142857/Heimdall/internal/anthropicapi"
 	"github.com/akz142857/Heimdall/internal/gateway"
 	"github.com/akz142857/Heimdall/internal/openaiapi"
+	"github.com/akz142857/Heimdall/internal/provider"
 )
 
 type fakeService struct {
@@ -21,6 +23,44 @@ type fakeService struct {
 	response openaiapi.ChatCompletionResponse
 	err      error
 	calls    int
+}
+
+func (s *fakeService) Messages(_ context.Context, key string, request anthropicapi.MessageRequest) (anthropicapi.Message, error) {
+	s.calls++
+	s.key = key
+	stop := "end_turn"
+	return anthropicapi.Message{ID: "msg_1", Type: "message", Role: "assistant", Model: request.Model, Content: anthropicapi.ContentBlocks{{Type: "text", Text: "hello"}}, StopReason: &stop, Usage: anthropicapi.Usage{InputTokens: 1, OutputTokens: 1}}, s.err
+}
+
+func (s *fakeService) MessagesStream(_ context.Context, key string, request anthropicapi.MessageRequest, emit func(anthropicapi.StreamEvent) error) error {
+	s.calls++
+	s.key = key
+	if s.err != nil {
+		return s.err
+	}
+	message := anthropicapi.Message{ID: "msg_1", Type: "message", Role: "assistant", Model: request.Model, Content: anthropicapi.ContentBlocks{}, Usage: anthropicapi.Usage{}}
+	if err := emit(anthropicapi.StreamEvent{Type: "message_start", Message: &message}); err != nil {
+		return err
+	}
+	return emit(anthropicapi.StreamEvent{Type: "message_stop"})
+}
+
+func (s *fakeService) MessagesNative(ctx context.Context, key, _ string, request anthropicapi.MessageRequest) (anthropicapi.Message, error) {
+	return s.Messages(ctx, key, request)
+}
+
+func (s *fakeService) MessagesNativeStream(_ context.Context, key, _ string, request anthropicapi.MessageRequest, emit func(anthropicapi.RawStreamEvent) error) error {
+	s.calls++
+	s.key = key
+	if s.err != nil {
+		return s.err
+	}
+	for _, event := range []anthropicapi.RawStreamEvent{{Type: "message_start", Data: json.RawMessage(`{"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"` + request.Model + `","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":1,"output_tokens":0}}}`)}, {Type: "message_delta", Data: json.RawMessage(`{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":1}}`)}, {Type: "message_stop", Data: json.RawMessage(`{"type":"message_stop"}`)}} {
+		if err := emit(event); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *fakeService) Responses(_ context.Context, key string, request openaiapi.ResponseRequest) (openaiapi.Response, error) {
@@ -136,6 +176,95 @@ func TestResponsesContractAndTypedSSE(t *testing.T) {
 	handler.Responses(streamResponse, streamRequest)
 	if streamResponse.Code != http.StatusOK || !strings.Contains(streamResponse.Body.String(), "event: response.created") || !strings.Contains(streamResponse.Body.String(), "event: response.completed") || strings.Contains(streamResponse.Body.String(), "[DONE]") {
 		t.Fatalf("unexpected Responses SSE: status=%d body=%s", streamResponse.Code, streamResponse.Body.String())
+	}
+}
+
+func TestAnthropicMessagesHeadersErrorsAndSSE(t *testing.T) {
+	service := &fakeService{}
+	handler, err := New(service, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := `{"model":"chat","max_tokens":32,"messages":[{"role":"user","content":"hello"}]}`
+
+	missingVersion := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+	missingVersion.Header.Set("x-api-key", "gw_test")
+	missingResponse := httptest.NewRecorder()
+	handler.Messages(missingResponse, missingVersion)
+	if missingResponse.Code != http.StatusBadRequest || !strings.Contains(missingResponse.Body.String(), `"type":"invalid_request_error"`) || missingResponse.Header().Get("request-id") == "" {
+		t.Fatalf("unexpected missing-version response: %#v %s", missingResponse.Result().Header, missingResponse.Body.String())
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+	request.Header.Set("x-api-key", "gw_test")
+	request.Header.Set("anthropic-version", anthropicapi.SupportedVersion)
+	response := httptest.NewRecorder()
+	handler.Messages(response, request)
+	if response.Code != http.StatusOK || service.key != "gw_test" || !strings.Contains(response.Body.String(), `"type":"message"`) {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	streamRequest := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"chat","max_tokens":32,"stream":true,"messages":[{"role":"user","content":"hello"}]}`))
+	streamRequest.Header.Set("x-api-key", "gw_test")
+	streamRequest.Header.Set("anthropic-version", anthropicapi.SupportedVersion)
+	streamResponse := httptest.NewRecorder()
+	handler.Messages(streamResponse, streamRequest)
+	if streamResponse.Code != http.StatusOK || !strings.Contains(streamResponse.Body.String(), "event: message_start") || !strings.Contains(streamResponse.Body.String(), "event: message_stop") || strings.Contains(streamResponse.Body.String(), "[DONE]") {
+		t.Fatalf("unexpected Messages SSE: %d %s", streamResponse.Code, streamResponse.Body.String())
+	}
+}
+
+func TestAnthropicMessagesRejectsBetaAndAmbiguousCredentials(t *testing.T) {
+	service := &fakeService{}
+	handler, _ := New(service, 2048)
+	body := `{"model":"chat","max_tokens":32,"messages":[{"role":"user","content":"hello"}]}`
+	for name, mutate := range map[string]func(http.Header){
+		"beta":          func(header http.Header) { header.Set("x-api-key", "gw_test"); header.Set("anthropic-beta", "feature") },
+		"ambiguous key": func(header http.Header) { header.Set("x-api-key", "one"); header.Set("Authorization", "Bearer two") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+			request.Header.Set("anthropic-version", anthropicapi.SupportedVersion)
+			mutate(request.Header)
+			response := httptest.NewRecorder()
+			handler.Messages(response, request)
+			if response.Code < 400 {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestAnthropicOverloadedErrorPreservesProtocolStatus(t *testing.T) {
+	handler, _ := New(&fakeService{}, 2048)
+	response := httptest.NewRecorder()
+	handler.renderAnthropicGatewayError(response, &gateway.Error{
+		Code: "provider_error", Message: "provider request failed", HTTPStatus: http.StatusBadGateway,
+		Cause: &provider.Error{Class: provider.ErrorProvider5xx, StatusCode: 529, ProviderCode: "overloaded_error"},
+	}, "req_test")
+	if response.Code != 529 || !strings.Contains(response.Body.String(), `"type":"overloaded_error"`) {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestAnthropicNativeModeUsesNativeServiceAndRawSSE(t *testing.T) {
+	service := &fakeService{}
+	handler, _ := New(service, 2048)
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"chat","max_tokens":32,"messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"x","signature":"sig"}]},{"role":"user","content":"continue"}]}`))
+	request.Header.Set("x-api-key", "gw_test")
+	request.Header.Set("anthropic-version", anthropicapi.SupportedVersion)
+	request.Header.Set(anthropicapi.RouteModeHeader, "native")
+	response := httptest.NewRecorder()
+	handler.Messages(response, request)
+	if response.Code != http.StatusOK || service.key != "gw_test" {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	stream := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"chat","max_tokens":32,"stream":true,"messages":[{"role":"user","content":"continue"}]}`))
+	stream.Header = request.Header.Clone()
+	streamResponse := httptest.NewRecorder()
+	handler.Messages(streamResponse, stream)
+	if streamResponse.Code != http.StatusOK || !strings.Contains(streamResponse.Body.String(), `event: message_start`) || !strings.Contains(streamResponse.Body.String(), `"type":"message_stop"`) || strings.Contains(streamResponse.Body.String(), "[DONE]") {
+		t.Fatalf("unexpected native SSE: %d %s", streamResponse.Code, streamResponse.Body.String())
 	}
 }
 

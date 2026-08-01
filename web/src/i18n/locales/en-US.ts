@@ -227,7 +227,7 @@ export const enUS = {
     keyName: "Key name", keyNameHint: "Use a workload or service name so it can be revoked independently", generateKey: "Generate key",
   },
   providers: {
-    types: { openai: "OpenAI", azure_openai: "Azure OpenAI", deepseek: "DeepSeek", gemini: "Gemini (Beta)", bedrock: "AWS Bedrock (Beta)", openai_compatible: "OpenAI compatible" },
+    types: { openai: "OpenAI", anthropic: "Anthropic", azure_openai: "Azure OpenAI", deepseek: "DeepSeek", gemini: "Gemini (Beta)", bedrock: "AWS Bedrock (Beta)", openai_compatible: "OpenAI compatible" },
     eyebrow: "Upstream trust", title: "Credentials & Providers", description: "Provider secrets remain encrypted in the local vault and are decrypted only for their bound audience at runtime.",
     addCredential: "＋ Credential", addProvider: "＋ Provider", vault: "Encrypted vault", credentials: "Credentials", providers: "Providers", upstreams: "Active upstreams",
     noCredentials: "No provider credentials", noCredentialsDescription: "Save an encrypted credential before creating a provider instance.", noProviders: "No providers", noProvidersDescription: "Create an upstream connection before a deployment can select it.",

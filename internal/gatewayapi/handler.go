@@ -10,8 +10,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akz142857/Heimdall/internal/anthropicapi"
 	"github.com/akz142857/Heimdall/internal/gateway"
+	"github.com/akz142857/Heimdall/internal/id"
 	"github.com/akz142857/Heimdall/internal/openaiapi"
+	"github.com/akz142857/Heimdall/internal/provider"
 	"github.com/akz142857/Heimdall/internal/requestmeta"
 	"github.com/akz142857/Heimdall/internal/sse"
 )
@@ -42,6 +45,13 @@ type Service interface {
 type ResponsesService interface {
 	Responses(context.Context, string, openaiapi.ResponseRequest) (openaiapi.Response, error)
 	ResponsesStream(context.Context, string, openaiapi.ResponseRequest, func(openaiapi.ResponseStreamEvent) error) error
+}
+
+type MessagesService interface {
+	Messages(context.Context, string, anthropicapi.MessageRequest) (anthropicapi.Message, error)
+	MessagesStream(context.Context, string, anthropicapi.MessageRequest, func(anthropicapi.StreamEvent) error) error
+	MessagesNative(context.Context, string, string, anthropicapi.MessageRequest) (anthropicapi.Message, error)
+	MessagesNativeStream(context.Context, string, string, anthropicapi.MessageRequest, func(anthropicapi.RawStreamEvent) error) error
 }
 
 func (h *Handler) Responses(writer http.ResponseWriter, request *http.Request) {
@@ -275,6 +285,7 @@ func (h *Handler) chatCompletionsStream(
 type Handler struct {
 	service         Service
 	responses       ResponsesService
+	messages        MessagesService
 	maxRequestBytes int64
 	routeTimeout    time.Duration
 	streamTimeout   time.Duration
@@ -320,7 +331,263 @@ func NewWithOptions(service Service, options Options) (*Handler, error) {
 		trustedProxies: append([]netip.Prefix(nil), options.TrustedProxyCIDRs...),
 	}
 	handler.responses, _ = service.(ResponsesService)
+	handler.messages, _ = service.(MessagesService)
 	return handler, nil
+}
+
+func (h *Handler) Messages(writer http.ResponseWriter, request *http.Request) {
+	writer.Header().Set("Cache-Control", "no-store")
+	requestID, err := id.New("req")
+	if err != nil {
+		writeAnthropicError(writer, http.StatusInternalServerError, "api_error", "internal server error", "")
+		return
+	}
+	writer.Header().Set("request-id", requestID)
+	request, ok := h.withSourceIPAnthropic(writer, request, requestID)
+	if !ok {
+		return
+	}
+	version := strings.TrimSpace(request.Header.Get(anthropicapi.VersionHeader))
+	if version == "" {
+		writeAnthropicError(writer, http.StatusBadRequest, "invalid_request_error", "anthropic-version header is required", requestID)
+		return
+	}
+	if version != anthropicapi.SupportedVersion {
+		writeAnthropicError(writer, http.StatusBadRequest, "invalid_request_error", "unsupported anthropic-version", requestID)
+		return
+	}
+	if strings.TrimSpace(request.Header.Get(anthropicapi.BetaHeader)) != "" {
+		writeAnthropicError(writer, http.StatusBadRequest, "invalid_request_error", "anthropic-beta is not supported by this profile", requestID)
+		return
+	}
+	mode, err := anthropicapi.ParseExecutionMode(request.Header.Get(anthropicapi.RouteModeHeader))
+	if err != nil {
+		writeAnthropicError(writer, http.StatusBadRequest, "invalid_request_error", err.Error(), requestID)
+		return
+	}
+	key, ok := anthropicGatewayKey(request.Header)
+	if !ok {
+		writer.Header().Set("WWW-Authenticate", `Bearer realm="heimdall"`)
+		writeAnthropicError(writer, http.StatusUnauthorized, "authentication_error", "missing or invalid gateway key", requestID)
+		return
+	}
+	request.Body = http.MaxBytesReader(writer, request.Body, h.maxRequestBytes)
+	decoded, err := anthropicapi.DecodeMessageRequest(request.Body)
+	if err != nil {
+		status, kind, message := http.StatusBadRequest, "invalid_request_error", "invalid request body"
+		var maxBytesError *http.MaxBytesError
+		if errors.As(err, &maxBytesError) || strings.Contains(err.Error(), "exceeds limit") {
+			status, kind, message = http.StatusRequestEntityTooLarge, "request_too_large", "request body exceeds the configured limit"
+		}
+		writeAnthropicError(writer, status, kind, message, requestID)
+		return
+	}
+	if mode == anthropicapi.ModeNative {
+		if decoded.Stream {
+			ctx, cancel := context.WithTimeout(request.Context(), h.streamTimeout)
+			defer cancel()
+			h.messagesNativeStream(writer, request.WithContext(ctx), key, version, decoded, requestID)
+			return
+		}
+		ctx, cancel := context.WithTimeout(request.Context(), h.routeTimeout)
+		defer cancel()
+		if h.messages == nil {
+			writeAnthropicError(writer, http.StatusNotImplemented, "api_error", "Messages API is unavailable", requestID)
+			return
+		}
+		response, callErr := h.messages.MessagesNative(ctx, key, version, decoded)
+		if callErr != nil {
+			h.renderAnthropicGatewayError(writer, callErr, requestID)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(writer).Encode(response)
+		return
+	}
+	if decoded.Stream {
+		ctx, cancel := context.WithTimeout(request.Context(), h.streamTimeout)
+		defer cancel()
+		h.messagesStream(writer, request.WithContext(ctx), key, decoded, requestID)
+		return
+	}
+	ctx, cancel := context.WithTimeout(request.Context(), h.routeTimeout)
+	defer cancel()
+	if h.messages == nil {
+		writeAnthropicError(writer, http.StatusNotImplemented, "api_error", "Messages API is unavailable", requestID)
+		return
+	}
+	response, err := h.messages.Messages(ctx, key, decoded)
+	if err != nil {
+		h.renderAnthropicGatewayError(writer, err, requestID)
+		return
+	}
+	writer.Header().Set("Content-Type", "application/json")
+	writer.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(writer).Encode(response)
+}
+
+func (h *Handler) messagesNativeStream(writer http.ResponseWriter, request *http.Request, key, version string, decoded anthropicapi.MessageRequest, requestID string) {
+	flusher, ok := writer.(http.Flusher)
+	if !ok {
+		writeAnthropicError(writer, http.StatusInternalServerError, "api_error", "response streaming is unavailable", requestID)
+		return
+	}
+	if h.messages == nil {
+		writeAnthropicError(writer, http.StatusNotImplemented, "api_error", "Messages API is unavailable", requestID)
+		return
+	}
+	encoder := sse.NewEncoder(writer)
+	started := false
+	start := func() {
+		if started {
+			return
+		}
+		writer.Header().Set("Content-Type", "text/event-stream")
+		writer.Header().Set("Cache-Control", "no-cache, no-store")
+		writer.Header().Set("Connection", "keep-alive")
+		writer.Header().Set("X-Accel-Buffering", "no")
+		writer.WriteHeader(http.StatusOK)
+		started = true
+	}
+	err := h.messages.MessagesNativeStream(request.Context(), key, version, decoded, func(event anthropicapi.RawStreamEvent) error {
+		start()
+		if err := http.NewResponseController(writer).SetWriteDeadline(time.Now().Add(h.writeTimeout)); err != nil && !errors.Is(err, http.ErrNotSupported) {
+			return err
+		}
+		if err := encoder.Write(sse.Event{Event: event.Type, Data: event.Data}); err != nil {
+			return err
+		}
+		flusher.Flush()
+		return nil
+	})
+	if !started && err != nil {
+		h.renderAnthropicGatewayError(writer, err, requestID)
+		return
+	}
+	if err == nil || errors.Is(err, context.Canceled) {
+		return
+	}
+	start()
+	failure := anthropicapi.StreamEvent{Type: "error", Error: &anthropicapi.ErrorDetail{Type: "api_error", Message: "stream terminated safely"}}
+	payload, _ := json.Marshal(failure)
+	_ = encoder.Write(sse.Event{Event: "error", Data: payload})
+	flusher.Flush()
+}
+
+func (h *Handler) messagesStream(writer http.ResponseWriter, request *http.Request, key string, decoded anthropicapi.MessageRequest, requestID string) {
+	flusher, ok := writer.(http.Flusher)
+	if !ok {
+		writeAnthropicError(writer, http.StatusInternalServerError, "api_error", "response streaming is unavailable", requestID)
+		return
+	}
+	if h.messages == nil {
+		writeAnthropicError(writer, http.StatusNotImplemented, "api_error", "Messages API is unavailable", requestID)
+		return
+	}
+	encoder := sse.NewEncoder(writer)
+	started := false
+	start := func() {
+		if started {
+			return
+		}
+		writer.Header().Set("Content-Type", "text/event-stream")
+		writer.Header().Set("Cache-Control", "no-cache, no-store")
+		writer.Header().Set("Connection", "keep-alive")
+		writer.Header().Set("X-Accel-Buffering", "no")
+		writer.WriteHeader(http.StatusOK)
+		started = true
+	}
+	err := h.messages.MessagesStream(request.Context(), key, decoded, func(event anthropicapi.StreamEvent) error {
+		payload, err := json.Marshal(event)
+		if err != nil {
+			return err
+		}
+		start()
+		if err := http.NewResponseController(writer).SetWriteDeadline(time.Now().Add(h.writeTimeout)); err != nil && !errors.Is(err, http.ErrNotSupported) {
+			return err
+		}
+		if err := encoder.Write(sse.Event{Event: event.Type, Data: payload}); err != nil {
+			return err
+		}
+		flusher.Flush()
+		return nil
+	})
+	if !started && err != nil {
+		h.renderAnthropicGatewayError(writer, err, requestID)
+		return
+	}
+	if err == nil || errors.Is(err, context.Canceled) {
+		return
+	}
+	start()
+	failure := anthropicapi.StreamEvent{Type: "error", Error: &anthropicapi.ErrorDetail{Type: "api_error", Message: "stream terminated safely"}}
+	payload, _ := json.Marshal(failure)
+	_ = encoder.Write(sse.Event{Event: "error", Data: payload})
+	flusher.Flush()
+}
+
+func anthropicGatewayKey(header http.Header) (string, bool) {
+	apiKey := strings.TrimSpace(header.Get("x-api-key"))
+	bearer, hasBearer := bearerToken(header.Get("Authorization"))
+	if apiKey != "" && hasBearer && apiKey != bearer {
+		return "", false
+	}
+	if apiKey != "" {
+		return apiKey, true
+	}
+	return bearer, hasBearer
+}
+
+func (h *Handler) withSourceIPAnthropic(writer http.ResponseWriter, request *http.Request, requestID string) (*http.Request, bool) {
+	source, ok := h.sourceIP(request)
+	if !ok {
+		writeAnthropicError(writer, http.StatusBadRequest, "invalid_request_error", "invalid X-Forwarded-For header", requestID)
+		return request, false
+	}
+	return request.WithContext(requestmeta.WithSourceIP(request.Context(), source)), true
+}
+
+func (h *Handler) renderAnthropicGatewayError(writer http.ResponseWriter, err error, requestID string) {
+	var gatewayError *gateway.Error
+	if !errors.As(err, &gatewayError) {
+		writeAnthropicError(writer, http.StatusInternalServerError, "api_error", "internal server error", requestID)
+		return
+	}
+	setRetryAfter(writer, gatewayError.RetryAfter)
+	var providerError *provider.Error
+	if errors.As(err, &providerError) && (providerError.StatusCode == 529 || providerError.ProviderCode == "overloaded_error") {
+		writeAnthropicError(writer, 529, "overloaded_error", gatewayError.Message, requestID)
+		return
+	}
+	kind := "invalid_request_error"
+	switch gatewayError.HTTPStatus {
+	case 401:
+		kind = "authentication_error"
+	case 403:
+		kind = "permission_error"
+	case 404:
+		kind = "not_found_error"
+	case 413:
+		kind = "request_too_large"
+	case 429:
+		kind = "rate_limit_error"
+	case 500, 502, 504:
+		kind = "api_error"
+	case 503:
+		kind = "overloaded_error"
+	}
+	writeAnthropicError(writer, gatewayError.HTTPStatus, kind, gatewayError.Message, requestID)
+}
+
+func writeAnthropicError(writer http.ResponseWriter, status int, kind, message, requestID string) {
+	writer.Header().Set("Content-Type", "application/json")
+	writer.Header().Set("Cache-Control", "no-store")
+	if requestID != "" {
+		writer.Header().Set("request-id", requestID)
+	}
+	writer.WriteHeader(status)
+	_ = json.NewEncoder(writer).Encode(anthropicapi.ErrorResponse{Type: "error", Error: anthropicapi.ErrorDetail{Type: kind, Message: message}, RequestID: requestID})
 }
 
 func (h *Handler) ChatCompletions(writer http.ResponseWriter, request *http.Request) {

@@ -16,6 +16,8 @@ type Primitive string
 
 const (
 	PrimitiveOpenAIChatCompletions       Primitive = "openai.chat-completions"
+	PrimitiveAnthropicMessages           Primitive = "anthropic.messages"
+	PrimitiveAnthropicMessagesStream     Primitive = "anthropic.messages.stream"
 	PrimitiveOpenAIChatStream            Primitive = "openai.chat-completions.stream"
 	PrimitiveOpenAIEmbeddings            Primitive = "openai.embeddings"
 	PrimitiveAzureChatCompletions        Primitive = "azure-openai.chat-completions"
@@ -41,7 +43,7 @@ type PrimitiveBinding struct {
 
 func semanticOperationFor(operation Operation) semantic.Operation {
 	switch operation {
-	case OperationChat, OperationChatStream:
+	case OperationChat, OperationChatStream, OperationMessages, OperationMessagesStream:
 		return semantic.OperationGenerate
 	case OperationEmbeddings:
 		return semantic.OperationEmbed
@@ -155,6 +157,18 @@ type legacyEmbeddingPrimitive struct {
 	operation Operation
 }
 
+type nativeOperationPrimitive struct {
+	adapter   Adapter
+	primitive Primitive
+	operation Operation
+}
+
+func (adapter nativeOperationPrimitive) LegacyOperation() Operation { return adapter.operation }
+func (adapter nativeOperationPrimitive) SemanticOperation() semantic.Operation {
+	return semantic.OperationGenerate
+}
+func (adapter nativeOperationPrimitive) ProviderPrimitive() Primitive { return adapter.primitive }
+
 func (adapter legacyEmbeddingPrimitive) LegacyOperation() Operation { return adapter.operation }
 func (adapter legacyEmbeddingPrimitive) SemanticOperation() semantic.Operation {
 	return semantic.OperationEmbed
@@ -180,6 +194,7 @@ func (adapter legacyEmbeddingPrimitive) EmbedSemantic(ctx context.Context, call 
 func translationForPrimitive(primitive Primitive) semantic.TranslationLoss {
 	switch primitive {
 	case PrimitiveOpenAIChatCompletions, PrimitiveOpenAIChatStream, PrimitiveOpenAIEmbeddings,
+		PrimitiveAnthropicMessages, PrimitiveAnthropicMessagesStream,
 		PrimitiveAzureChatCompletions, PrimitiveAzureChatStream, PrimitiveAzureEmbeddings,
 		PrimitiveDeepSeekChat, PrimitiveDeepSeekChatStream,
 		PrimitiveCompatibleChat, PrimitiveCompatibleChatStream, PrimitiveCompatibleEmbeddings:
@@ -245,4 +260,19 @@ func (target Target) Embedding() (EmbeddingAdapter, error) {
 		return nil, errors.New("embedding operation has an invalid adapter")
 	}
 	return embedding, nil
+}
+
+func (target Target) NativeMessages(stream bool) (NativeMessagesAdapter, error) {
+	operation := OperationMessages
+	if stream {
+		operation = OperationMessagesStream
+	}
+	if _, ok := target.ResolveOperation(operation); !ok {
+		return nil, errors.New("native Messages operation is unavailable")
+	}
+	adapter, ok := target.Adapter.(NativeMessagesAdapter)
+	if !ok {
+		return nil, errors.New("provider adapter does not implement native Messages")
+	}
+	return adapter, nil
 }

@@ -13,6 +13,7 @@ type CapabilityEvidence string
 
 const (
 	SurfaceOpenAI           AccessSurface = "openai-api"
+	SurfaceAnthropic        AccessSurface = "anthropic-api"
 	SurfaceAzureOpenAI      AccessSurface = "azure-openai"
 	SurfaceDeepSeek         AccessSurface = "deepseek-api"
 	SurfaceOpenAICompatible AccessSurface = "openai-compatible"
@@ -22,6 +23,7 @@ const (
 
 const (
 	ProfileOpenAIChatEmbeddings ProviderProfileID = "openai.chat-embeddings.v1"
+	ProfileAnthropicMessages    ProviderProfileID = "anthropic.messages.2023-06-01"
 	ProfileAzureChatEmbeddings  ProviderProfileID = "azure-openai.chat-embeddings.v1"
 	ProfileDeepSeekChat         ProviderProfileID = "deepseek.chat.v1"
 	ProfileOpenAICompatible     ProviderProfileID = "openai-compatible.chat-embeddings.v1"
@@ -31,6 +33,7 @@ const (
 
 const (
 	CredentialBearerStatic     CredentialScheme = "bearer.static"
+	CredentialAnthropicAPIKey  CredentialScheme = "anthropic.x-api-key"
 	CredentialAzureAPIKey      CredentialScheme = "azure.api-key"
 	CredentialGoogleAPIKey     CredentialScheme = "google.api-key"
 	CredentialAWSSigV4Explicit CredentialScheme = "aws.sigv4.explicit-session"
@@ -60,6 +63,8 @@ func DefaultProviderProfile(providerType ProviderType) (ProviderProfileDefaults,
 	switch providerType {
 	case ProviderOpenAI:
 		return ProviderProfileDefaults{SurfaceOpenAI, ProfileOpenAIChatEmbeddings, CredentialBearerStatic}, true
+	case ProviderAnthropic:
+		return ProviderProfileDefaults{SurfaceAnthropic, ProfileAnthropicMessages, CredentialAnthropicAPIKey}, true
 	case ProviderAzureOpenAI:
 		return ProviderProfileDefaults{SurfaceAzureOpenAI, ProfileAzureChatEmbeddings, CredentialAzureAPIKey}, true
 	case ProviderDeepSeek:
@@ -79,6 +84,8 @@ func RegisteredProviderProfile(profile ProviderProfileID) (ProviderType, Provide
 	switch profile {
 	case ProfileOpenAIChatEmbeddings:
 		return ProviderOpenAI, ProviderProfileDefaults{SurfaceOpenAI, profile, CredentialBearerStatic}, true
+	case ProfileAnthropicMessages:
+		return ProviderAnthropic, ProviderProfileDefaults{SurfaceAnthropic, profile, CredentialAnthropicAPIKey}, true
 	case ProfileAzureChatEmbeddings:
 		return ProviderAzureOpenAI, ProviderProfileDefaults{SurfaceAzureOpenAI, profile, CredentialAzureAPIKey}, true
 	case ProfileDeepSeekChat:

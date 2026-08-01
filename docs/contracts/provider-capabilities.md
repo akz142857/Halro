@@ -35,6 +35,7 @@ be erased by a Deployment.
 | Profile | Stage | Chat | Stream | Embeddings | Tools/Vision/JSON | Authentication |
 |---|---|---:|---:|---:|---:|---|
 | OpenAI | GA | yes | yes | yes | yes | Bearer key |
+| Anthropic Messages | GA | yes | yes | no | tools/vision/reasoning | `x-api-key` |
 | Azure OpenAI | GA | yes | yes | yes | yes | `api-key` |
 | DeepSeek | GA | yes | yes | no by default | tools/JSON | Bearer key |
 | OpenAI-compatible | GA | yes | yes | yes | opt-in | Bearer key |

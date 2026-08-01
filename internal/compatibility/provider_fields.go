@@ -36,6 +36,14 @@ func UnsupportedGenerateFields(profileID domain.ProviderProfileID, request seman
 		add(request.OutputFormat != nil, "response_format")
 		add(request.ReasoningEffort != "", "reasoning_effort")
 		add(request.EndUserRef != "", "user")
+	case domain.ProfileAnthropicMessages:
+		add(hasNamedMessage(request), "messages[].name")
+		add(hasDeveloperMessage(request), "messages[].role=developer")
+		add(request.Candidates != nil && *request.Candidates > 1, "n")
+		add(request.Seed != nil, "seed")
+		add(request.OutputFormat != nil, "response_format")
+		add(request.ReasoningEffort != "", "reasoning_effort")
+		add(request.EndUserRef != "", "user")
 	case domain.ProfileOpenAIChatEmbeddings, domain.ProfileAzureChatEmbeddings, domain.ProfileDeepSeekChat, domain.ProfileOpenAICompatible:
 		// These profiles use the OpenAI-compatible wire representation directly.
 	default:

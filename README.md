@@ -12,7 +12,7 @@ installation, upgrades, recovery, and hardening, see the
 
 ## Highlights
 
-- OpenAI-compatible chat, streaming, and embeddings APIs;
+- OpenAI-compatible chat, streaming, embeddings and Stateless Responses APIs, plus an Anthropic-compatible Messages facade;
 - encrypted Provider credential vault and hash-only internal Gateway keys;
 - Project budgets, RPM, TPM, concurrency, CIDR, and model authorization;
 - bounded retry, fallback, circuit breaking, and capability-aware routing;
@@ -111,6 +111,7 @@ capability snapshot remain `legacy` until verified. The Admin API and console
 show these values so an upgrade cannot silently grant a deployment new behavior.
 
 - OpenAI: Bearer authentication and standard `/v1` chat, stream, and embedding endpoints.
+- Anthropic: native `POST /v1/messages` JSON/SSE with `x-api-key`, signed Thinking round-trip, and explicit portable/native routing. Embeddings and `count_tokens` are not declared.
 - Azure OpenAI: `api-key` authentication and deployment-scoped data-plane paths. Set `--provider-api-version` during bootstrap, or `api_version` through the Admin API; Heimdall intentionally does not silently select or upgrade it.
 - DeepSeek: OpenAI-compatible chat/stream profile with embeddings disabled by default.
 - Generic OpenAI-compatible: chat, stream, and embeddings by default; optional capabilities can be declared through the Admin API.

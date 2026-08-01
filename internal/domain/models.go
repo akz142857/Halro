@@ -11,6 +11,7 @@ type ProviderType string
 
 const (
 	ProviderOpenAI           ProviderType = "openai"
+	ProviderAnthropic        ProviderType = "anthropic"
 	ProviderAzureOpenAI      ProviderType = "azure_openai"
 	ProviderDeepSeek         ProviderType = "deepseek"
 	ProviderOpenAICompatible ProviderType = "openai_compatible"
@@ -171,7 +172,7 @@ func (p ProviderInstance) Validate() error {
 		problems = append(problems, errors.New("provider name is required"))
 	}
 	switch p.Type {
-	case ProviderOpenAI, ProviderAzureOpenAI, ProviderDeepSeek, ProviderOpenAICompatible, ProviderGemini, ProviderBedrock:
+	case ProviderOpenAI, ProviderAnthropic, ProviderAzureOpenAI, ProviderDeepSeek, ProviderOpenAICompatible, ProviderGemini, ProviderBedrock:
 	default:
 		problems = append(problems, errors.New("provider type is not implemented"))
 	}
@@ -218,6 +219,8 @@ func DefaultProviderCapabilities(providerType ProviderType) ProviderCapabilities
 			Vision: true, JSONMode: true, DeveloperRole: true, Reasoning: true,
 			StreamUsage: true,
 		}
+	case ProviderAnthropic:
+		return ProviderCapabilities{Chat: true, Streaming: true, Tools: true, Vision: true, Reasoning: true, StreamUsage: true}
 	case ProviderDeepSeek:
 		return ProviderCapabilities{
 			Chat: true, Streaming: true, Tools: true, JSONMode: true,

@@ -15,7 +15,7 @@ import type { Credential, Provider, ProviderCapabilities, ProviderType } from ".
 import { useTranslation } from "react-i18next";
 
 const providerTypes: ProviderType[] = [
-  "openai", "azure_openai", "deepseek", "gemini", "bedrock", "openai_compatible",
+  "openai", "anthropic", "azure_openai", "deepseek", "gemini", "bedrock", "openai_compatible",
 ];
 
 function ProviderTypeOptions({ t }: { t: ReturnType<typeof useTranslation>["t"] }) {
@@ -24,6 +24,7 @@ function ProviderTypeOptions({ t }: { t: ReturnType<typeof useTranslation>["t"] 
 
 function defaultBaseURL(type: ProviderType) {
   if (type === "gemini") return "https://generativelanguage.googleapis.com";
+  if (type === "anthropic") return "https://api.anthropic.com";
   if (type === "deepseek") return "https://api.deepseek.com";
   if (type === "bedrock") return "https://bedrock-runtime.us-east-1.amazonaws.com";
   return "https://api.openai.com";
@@ -391,6 +392,7 @@ function defaultProviderCapabilities(type: ProviderType): ProviderCapabilities {
   if (type === "openai" || type === "azure_openai") {
     return { ...value, embeddings: true, tools: true, vision: true, json_mode: true, developer_role: true, reasoning: true, stream_usage: true };
   }
+  if (type === "anthropic") return { ...value, tools: true, vision: true, reasoning: true, stream_usage: true };
   if (type === "deepseek") return { ...value, tools: true, json_mode: true, reasoning: true, stream_usage: true };
   if (type === "openai_compatible") return { ...value, embeddings: true };
   if (type === "gemini") return { ...value, embeddings: true, developer_role: true, stream_usage: false };

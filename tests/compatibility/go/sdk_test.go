@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	anthropic "github.com/anthropics/anthropic-sdk-go"
+	anthropicoption "github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
@@ -22,6 +24,14 @@ func TestOfficialGoSDK(t *testing.T) {
 		option.WithBaseURL(baseURL),
 		option.WithMaxRetries(0),
 	)
+	anthropicClient := anthropic.NewClient(anthropicoption.WithAPIKey("gw_sdk_compatibility"), anthropicoption.WithBaseURL(strings.TrimSuffix(baseURL, "/v1")), anthropicoption.WithMaxRetries(0))
+	message, err := anthropicClient.Messages.New(context.Background(), anthropic.MessageNewParams{Model: anthropic.Model("compat-chat"), MaxTokens: 32, Messages: []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock("ping"))}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(message.Content) == 0 || message.Content[0].Text != "compat-ok" || message.Usage.OutputTokens != 2 {
+		t.Fatalf("unexpected Anthropic message: %#v", message)
+	}
 	params := openai.ChatCompletionNewParams{
 		Model: "compat-chat",
 		Messages: []openai.ChatCompletionMessageParamUnion{
