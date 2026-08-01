@@ -3,6 +3,7 @@ package app
 import (
 	"errors"
 	"fmt"
+	"os"
 
 	"github.com/akz142857/Heimdall/internal/audit"
 	"github.com/akz142857/Heimdall/internal/config"
@@ -11,6 +12,84 @@ import (
 	"github.com/akz142857/Heimdall/internal/store/lock"
 	"github.com/akz142857/Heimdall/internal/vault"
 )
+
+type InitializationState string
+
+const (
+	InitializationEmpty        InitializationState = "empty"
+	InitializationSystemReady  InitializationState = "system_ready"
+	InitializationInconsistent InitializationState = "inconsistent"
+)
+
+// InspectInitialization distinguishes a new instance from an initialized one
+// without opening or modifying any persistent state.
+func InspectInitialization(cfg config.Config) (InitializationState, error) {
+	masterKeyExists, err := pathExists(cfg.Storage.MasterKeyFile)
+	if err != nil {
+		return InitializationInconsistent, err
+	}
+	metadataExists, err := pathExists(cfg.MetadataPath())
+	if err != nil {
+		return InitializationInconsistent, err
+	}
+	ledgerExists, err := pathExists(cfg.LedgerPath())
+	if err != nil {
+		return InitializationInconsistent, err
+	}
+	auditExists, err := pathExists(cfg.AuditPath())
+	if err != nil {
+		return InitializationInconsistent, err
+	}
+	if masterKeyExists && metadataExists && ledgerExists && auditExists {
+		return InitializationSystemReady, nil
+	}
+	if masterKeyExists || metadataExists || ledgerExists || auditExists {
+		return InitializationInconsistent, nil
+	}
+	entries, err := os.ReadDir(cfg.Storage.DataDir)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return InitializationInconsistent, fmt.Errorf("inspect data directory: %w", err)
+	}
+	for _, entry := range entries {
+		if entry.Name() != ".heimdall.lock" {
+			return InitializationInconsistent, nil
+		}
+	}
+	return InitializationEmpty, nil
+}
+
+// InitializeIfNeeded initializes only a provably empty instance. Partial state
+// is never repaired or overwritten automatically.
+func InitializeIfNeeded(cfg config.Config) (bool, error) {
+	state, err := InspectInitialization(cfg)
+	if err != nil {
+		return false, err
+	}
+	switch state {
+	case InitializationSystemReady:
+		return false, nil
+	case InitializationInconsistent:
+		return false, errors.New("Heimdall initialization is incomplete; restore the matching master key and data directory or move the partial state aside")
+	case InitializationEmpty:
+		if err := Initialize(cfg); err != nil {
+			return false, err
+		}
+		return true, nil
+	default:
+		return false, fmt.Errorf("unknown initialization state %q", state)
+	}
+}
+
+func pathExists(path string) (bool, error) {
+	_, err := os.Lstat(path)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	return false, fmt.Errorf("inspect %s: %w", path, err)
+}
 
 const (
 	vaultKeyCheckID        = "system:key-check"

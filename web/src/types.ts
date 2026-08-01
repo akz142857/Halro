@@ -10,6 +10,12 @@ export interface Session {
   idle_expires_at: string;
 }
 
+export interface SetupStatus {
+  instance_initialized: boolean;
+  setup_required: boolean;
+  token_required: boolean;
+}
+
 export interface Bucket {
   hour: string;
   requests: number;

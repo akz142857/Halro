@@ -109,6 +109,10 @@ type Alerts struct {
 
 type Duration time.Duration
 
+func (d Duration) MarshalYAML() (any, error) {
+	return time.Duration(d).String(), nil
+}
+
 func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
 	if value.Kind != yaml.ScalarNode {
 		return errors.New("duration must be a scalar")

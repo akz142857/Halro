@@ -27,6 +27,7 @@ var (
 	ErrRevisionConflict = errors.New("record revision conflict")
 	ErrKeyHashConflict  = errors.New("gateway key hash already exists")
 	ErrCredentialInUse  = errors.New("credential is still referenced")
+	ErrAdminInitialized = errors.New("an admin user already exists")
 )
 
 var (
@@ -926,6 +927,29 @@ func (s *Store) PutAdminUser(
 	}
 	err := s.db.Update(func(tx *bbolt.Tx) error {
 		return putVersioned(tx.Bucket(bucketAdminUsers), user.Username, expectedRevision, &user)
+	})
+	return user, err
+}
+
+// CreateFirstAdmin atomically proves that the admin bucket is empty and
+// creates its first user. This prevents concurrent setup requests from both
+// succeeding.
+func (s *Store) CreateFirstAdmin(
+	ctx context.Context,
+	user domain.AdminUser,
+) (domain.AdminUser, error) {
+	if err := user.Validate(); err != nil {
+		return domain.AdminUser{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return domain.AdminUser{}, err
+	}
+	err := s.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(bucketAdminUsers)
+		if bucket.Stats().KeyN != 0 {
+			return ErrAdminInitialized
+		}
+		return putVersioned(bucket, user.Username, 0, &user)
 	})
 	return user, err
 }

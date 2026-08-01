@@ -29,6 +29,11 @@ make test
 make vet
 ```
 
+For interactive development, `make start` builds changed assets, creates a
+safe loopback-only config when needed, initializes an empty instance, and
+starts the embedded Admin console. `make dev` provides the same lifecycle
+through `go run`.
+
 Run the complete local gate before requesting review:
 
 ```bash

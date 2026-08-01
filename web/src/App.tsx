@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import { api, ApiError } from "./api";
 import { Layout } from "./Layout";
 import { Login } from "./Login";
+import { Setup } from "./Setup";
 import { Loading } from "./components";
 import { navigate, usePathname } from "./navigation";
 import { DashboardPage } from "./pages/DashboardPage";
@@ -18,15 +19,51 @@ import { UsagePage } from "./pages/UsagePage";
 export function App() {
   const path = usePathname();
   const queryClient = useQueryClient();
+  const setup = useQuery({
+    queryKey: ["setup"],
+    queryFn: api.setupStatus,
+    retry: 2,
+    staleTime: 10_000,
+  });
   const session = useQuery({
     queryKey: ["session"],
     queryFn: api.session,
     retry: (count, error) => !(error instanceof ApiError && error.status === 401) && count < 2,
     staleTime: 60_000,
+    enabled: setup.data?.setup_required === false,
   });
   useEffect(() => {
     if (session.data && path === "/admin/login") navigate("/admin");
   }, [path, session.data]);
+  if (setup.isPending) {
+    return <div className="boot"><span className="brand-mark">H</span><Loading label="正在检查初始化状态" /></div>;
+  }
+  if (setup.isError) {
+    return (
+      <div className="boot">
+        <span className="brand-mark">H</span>
+        <div className="notice error" role="alert">无法读取初始化状态，请确认 Heimdall Admin 服务可用。</div>
+        <button className="button primary" onClick={() => setup.refetch()}>重试</button>
+      </div>
+    );
+  }
+  if (setup.data.setup_required) {
+    return (
+      <Setup
+        tokenRequired={setup.data.token_required}
+        onAlreadyComplete={() => {
+          queryClient.setQueryData(["setup"], { ...setup.data, setup_required: false });
+          queryClient.removeQueries({ queryKey: ["session"] });
+          navigate("/admin/login");
+        }}
+        onSuccess={(created) => {
+          queryClient.setQueryData(["setup"], { ...setup.data, setup_required: false });
+          queryClient.setQueryData(["session"], created);
+          navigate("/admin");
+        }}
+      />
+    );
+  }
   if (session.isPending) {
     return <div className="boot"><span className="brand-mark">H</span><Loading label="正在验证本机会话" /></div>;
   }

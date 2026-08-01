@@ -14,6 +14,7 @@ import type {
   Route,
   RuntimeSettings,
   Session,
+  SetupStatus,
   SystemStatus,
   TokenGuardPolicy,
   TokenGuardPreview,
@@ -81,6 +82,26 @@ function json(method: string, value?: unknown): RequestInit {
 }
 
 export const api = {
+  setupStatus: () =>
+    request<SetupStatus>("/setup/status").then((value) => value.data),
+  async setupAdmin(
+    username: string,
+    password: string,
+    passwordConfirmation: string,
+    setupToken: string,
+  ) {
+    const result = await request<Session>(
+      "/setup/admin",
+      json("POST", {
+        username,
+        password,
+        password_confirmation: passwordConfirmation,
+        setup_token: setupToken,
+      }),
+    );
+    csrfToken = result.data.csrf_token;
+    return result.data;
+  },
   async login(username: string, password: string) {
     const result = await request<Session>(
       "/session/login",

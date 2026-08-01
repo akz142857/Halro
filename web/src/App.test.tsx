@@ -1,0 +1,46 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { api, ApiError } from "./api";
+import { App } from "./App";
+
+describe("App first-run routing", () => {
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  it("shows setup before attempting a login session", async () => {
+    vi.spyOn(api, "setupStatus").mockResolvedValue({
+      instance_initialized: true,
+      setup_required: true,
+      token_required: false,
+    });
+    const session = vi.spyOn(api, "session");
+    renderApp();
+    expect(await screen.findByRole("heading", { name: "设置管理员账户" })).toBeVisible();
+    expect(session).not.toHaveBeenCalled();
+  });
+
+  it("uses the normal login flow after setup is complete", async () => {
+    vi.spyOn(api, "setupStatus").mockResolvedValue({
+      instance_initialized: true,
+      setup_required: false,
+      token_required: false,
+    });
+    vi.spyOn(api, "session").mockRejectedValue(new ApiError(401, "not authenticated"));
+    renderApp();
+    await waitFor(() => expect(screen.getByRole("heading", { name: "进入控制台" })).toBeVisible());
+  });
+});
+
+function renderApp() {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  return render(
+    <QueryClientProvider client={client}>
+      <App />
+    </QueryClientProvider>,
+  );
+}

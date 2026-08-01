@@ -46,6 +46,18 @@ go test -race ./...
 go vet ./...
 ```
 
+Start a new local instance with one command:
+
+```bash
+make start
+```
+
+On the first run Heimdall creates a loopback-only `config.yaml`, initializes
+its local encrypted storage, and prints the Admin URL. Open `/admin/setup` to
+create the first administrator; the password is hashed in local metadata and
+is never written to configuration. Later runs use the same command and open
+the normal login page.
+
 The Admin console is a React build-time dependency and is embedded into the Go
 binary. It does not require Node.js at runtime:
 
@@ -58,10 +70,8 @@ cd ..
 go build -trimpath -o bin/heimdall ./cmd/heimdall
 ```
 
-After starting Heimdall, open the Admin listener at `/admin`. Bootstrap the
-first local administrator with `heimdall admin bootstrap` before signing in.
-
-Initialize and bootstrap a local instance:
+For headless automation and recovery, the original explicit workflow remains
+available while the server is stopped:
 
 ```bash
 go run ./cmd/heimdall init --config ./configs/config.example.yaml

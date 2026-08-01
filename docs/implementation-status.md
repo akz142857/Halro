@@ -67,6 +67,7 @@ scope is governed by reviewed release notes and release gates.
 | Admin mutation integrity | serialized mutations, dependency guards, tombstones, HMAC Audit events, `no-store` and strict CSP headers |
 | Embedded Admin console | React/TypeScript/Vite SPA embedded with `go:embed`; login/logout, in-session password and CSRF/session rotation, Dashboard, Projects/Keys, Credentials/Providers, Deployments/Routes, Usage, merged Redaction/Token Guard Policies, Alerts/Audit Operations and status |
 | Operations CLI | byte-verified read-only `doctor` using a non-rewriting existing lock plus read-only bbolt/WAL paths, offline audited Admin password reset/session invalidation, top-level restore alias, config/usage/audit/backup/key lifecycle commands |
+| First-run experience | `heimdall start` safe config generation, fail-closed idempotent system initialization, transactional first-Admin Web setup, transient public-listener setup token, and incremental `make start` build path |
 | Frozen API contract | route-registration regression covers every v1 Admin endpoint plus Chat, Embeddings, health and Metrics so a documented route cannot silently disappear |
 | Frontend security | in-memory CSRF, no browser persistence for secrets, one-time Key acknowledgement, destructive confirmations, no source maps/CDN/service worker |
 | Frontend quality gates | typed API client, TanStack Query/Table, lazy uPlot chart, Vitest component/API tests, 500 KiB gzip initial-bundle gate |

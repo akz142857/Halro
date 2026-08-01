@@ -5,6 +5,26 @@ with the server stopped: the data directory has one exclusive owner.
 
 ## Clean install
 
+For a local interactive installation from source, use the simplified path:
+
+```bash
+make start
+```
+
+The command builds changed assets, creates a `0600` loopback-only
+`config.yaml` if absent, initializes only a provably empty instance, and
+prints `/admin/setup`. Create the first administrator in that page. Repeating
+the command never replaces existing configuration, the Master Key, or data.
+If initialization is partial, startup fails closed and requires restoration of
+the matching files.
+
+When Admin is configured on a non-loopback TLS listener, startup also prints a
+one-time setup token. The token exists only in process memory, changes after a
+restart, and is required by the setup form to prevent first-user takeover.
+
+For headless and automated installation, use a release binary and retain the
+explicit offline flow below.
+
 Use a release binary for the target OS/architecture, or build the exact source
 commit with `make build`. Keep the binary, configuration, Master Key, and data
 directory on persistent storage with different backup handling for the key.

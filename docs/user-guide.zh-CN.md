@@ -33,24 +33,29 @@ git clone https://github.com/akz142857/Heimdall.git
 cd Heimdall
 ```
 
-构建前端和单二进制：
+首次启动只需要：
 
 ```bash
-make build
+make start
 ```
 
-构建结果为 `bin/heimdall`。React 静态资源已经嵌入二进制，运行时不需要 Node.js，也不需要单独启动前端服务。
+该命令会按需安装前端依赖、构建 `bin/heimdall`、创建只监听本机回环地址的
+`config.yaml`、初始化本地加密存储并启动服务。React 静态资源嵌入二进制，
+运行时不需要单独启动前端服务。
 
-### 2.2 初始化数据目录
+### 2.2 在页面中完成首次初始化
 
-示例配置默认只监听本机回环地址：
+终端会显示 Admin 地址：
 
-```bash
-./bin/heimdall config check --config ./configs/config.example.yaml
-./bin/heimdall init --config ./configs/config.example.yaml
+```text
+Admin: http://127.0.0.1:8081/admin/setup
 ```
 
-初始化会生成：
+打开页面并设置管理员用户名和至少 12 个字符的密码。密码只以 Argon2id 哈希
+保存在本机元数据中，不会写入 `config.yaml`。成功后初始化入口永久关闭，
+浏览器会自动创建安全会话并进入控制台。
+
+自动初始化会生成：
 
 - `master.key`：本机 Master Key，权限为 `0600`；
 - `data/heimdall.db`：元数据；
@@ -59,25 +64,33 @@ make build
 - 后续生成的 Usage checkpoint 与 Parquet 数据。
 
 Master Key 必须与数据目录分开备份。丢失 Master Key 后，Provider Credential 无法恢复。
+重复执行 `make start` 不会覆盖配置、Master Key 或数据。如果只剩 Master Key 或
+只剩元数据等残缺状态，Heimdall 会拒绝自动修复并要求人工恢复匹配的文件。
 
-### 2.3 创建管理员
+如果 Admin 通过 TLS 监听非回环地址，启动终端还会显示一次性 Setup Token，
+页面必须同时提交该 Token。它只保存在当前进程内，重启后自动轮换。
 
-管理员密码至少 12 字节。使用标准输入传递，不要把密码直接写进命令参数：
+### 2.3 后续启动
+
+以后仍然使用同一条命令：
 
 ```bash
-read -r -s ADMIN_PASSWORD
-printf '\n'
-printf '%s' "$ADMIN_PASSWORD" | ./bin/heimdall admin bootstrap \
-  --config ./configs/config.example.yaml \
-  --username admin
-unset ADMIN_PASSWORD
+make start
 ```
 
-### 2.4 启动服务
+系统检测到管理员已经存在后会显示正常登录页。停止服务按 `Ctrl+C`。
+
+### 2.4 Headless 与自动化部署
 
 ```bash
+./bin/heimdall init --config ./configs/config.example.yaml
+printf '%s' "$ADMIN_PASSWORD" | ./bin/heimdall admin bootstrap \
+  --config ./configs/config.example.yaml --username admin
 ./bin/heimdall serve --config ./configs/config.example.yaml
 ```
+
+这些离线命令继续用于无浏览器服务器、CI、自动化部署与紧急密码恢复，运行时
+持有数据目录独占锁，因此必须在服务停止时执行。
 
 默认地址：
 
@@ -87,7 +100,7 @@ unset ADMIN_PASSWORD
 | Gateway | `http://127.0.0.1:8080` | OpenAI Compatible API |
 | Metrics | `http://127.0.0.1:9090/metrics` | Prometheus 指标 |
 
-登录 Admin 使用用户名 `admin` 和上一步设置的密码。停止服务按 `Ctrl+C`。
+登录 Admin 使用首次初始化页面中设置的用户名和密码。
 
 ## 3. 配置第一个模型
 

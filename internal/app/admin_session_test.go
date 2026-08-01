@@ -253,8 +253,8 @@ func adminRequest(
 		}
 		reader = bytes.NewReader(encoded)
 	}
-	request := httptest.NewRequest(method, "http://example.com"+path, reader)
-	request.Header.Set("Origin", "http://example.com")
+	request := httptest.NewRequest(method, "http://127.0.0.1:18081"+path, reader)
+	request.Header.Set("Origin", "http://127.0.0.1:18081")
 	if body != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}

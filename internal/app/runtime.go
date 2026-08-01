@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/netip"
 	"sync"
@@ -60,6 +61,9 @@ type Runtime struct {
 	adminSessions    *adminauth.Manager
 	adminLoginMu     sync.Mutex
 	adminLogin       map[string]adminLoginWindow
+	setupMu          sync.Mutex
+	setupToken       string
+	setupTokenNeeded bool
 	backgroundCtx    context.Context
 	backgroundCancel context.CancelFunc
 	backgroundWait   sync.WaitGroup
@@ -111,6 +115,21 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 	if err != nil {
 		secretVault.Close()
 		return fail(err)
+	}
+	adminCount, err := metadata.AdminUserCount(ctx)
+	if err != nil {
+		metadata.Close()
+		secretVault.Close()
+		return fail(fmt.Errorf("inspect admin setup state: %w", err))
+	}
+	setupToken := ""
+	if adminCount == 0 {
+		setupToken, err = id.New("setup")
+		if err != nil {
+			metadata.Close()
+			secretVault.Close()
+			return fail(err)
+		}
 	}
 	adminSessions, err := adminauth.NewManager(
 		metadata,
@@ -327,6 +346,8 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		metricsTokenHash: metricsTokenHash,
 		adminSessions:    adminSessions,
 		adminLogin:       make(map[string]adminLoginWindow),
+		setupToken:       setupToken,
+		setupTokenNeeded: setupRequiresToken(cfg),
 		usage:            usageAggregate,
 		usageCollector:   usageCollector,
 		usageExporter:    usageExporter,
@@ -499,6 +520,13 @@ func verifyVaultKeyCheck(store *boltstore.Store, secretVault *vault.Vault) error
 }
 
 func (r *Runtime) Run(ctx context.Context) error {
+	return r.RunWithReady(ctx, nil)
+}
+
+// RunWithReady binds every configured listener before calling ready. This
+// keeps startup guidance and service-manager readiness signals from claiming
+// success when one of the ports cannot actually be opened.
+func (r *Runtime) RunWithReady(ctx context.Context, ready func() error) error {
 	servers := []*http.Server{
 		r.server("gateway", r.config.Server.GatewayListen, r.gatewayRouter()),
 		r.server("admin", r.config.Server.AdminListen, r.adminRouter()),
@@ -507,16 +535,40 @@ func (r *Runtime) Run(ctx context.Context) error {
 		servers = append(servers, r.server("metrics", r.config.Server.MetricsListen, r.metricsRouter()))
 	}
 
-	errs := make(chan error, len(servers))
+	type boundServer struct {
+		server   *http.Server
+		listener net.Listener
+	}
+	bound := make([]boundServer, 0, len(servers))
 	for _, server := range servers {
-		server := server
+		listener, err := net.Listen("tcp", server.Addr)
+		if err != nil {
+			for _, item := range bound {
+				_ = item.listener.Close()
+			}
+			return fmt.Errorf("bind listener %s: %w", server.Addr, err)
+		}
+		bound = append(bound, boundServer{server: server, listener: listener})
+	}
+	if ready != nil {
+		if err := ready(); err != nil {
+			for _, item := range bound {
+				_ = item.listener.Close()
+			}
+			return err
+		}
+	}
+
+	errs := make(chan error, len(bound))
+	for _, item := range bound {
+		item := item
 		go func() {
-			r.logger.Info("listener started", "address", server.Addr)
+			r.logger.Info("listener started", "address", item.server.Addr)
 			var err error
 			if r.config.TLS.Enabled {
-				err = server.ListenAndServeTLS(r.config.TLS.CertFile, r.config.TLS.KeyFile)
+				err = item.server.ServeTLS(item.listener, r.config.TLS.CertFile, r.config.TLS.KeyFile)
 			} else {
-				err = server.ListenAndServe()
+				err = item.server.Serve(item.listener)
 			}
 			if err != nil && !errors.Is(err, http.ErrServerClosed) {
 				errs <- err
@@ -658,6 +710,8 @@ func (r *Runtime) adminRouter() http.Handler {
 	router.Use(adminSecurityHeaders)
 	router.Get("/health/live", r.live)
 	router.Get("/health/ready", r.ready)
+	router.Get("/admin/api/v1/setup/status", r.getAdminSetupStatus)
+	router.Post("/admin/api/v1/setup/admin", r.setupAdmin)
 	router.Post("/admin/api/v1/session/login", r.loginAdmin)
 	router.With(r.requireAdmin).Get("/admin/api/v1/session", r.getAdminSession)
 	router.With(r.requireAdminMutation).Post("/admin/api/v1/session/logout", r.logoutAdmin)
