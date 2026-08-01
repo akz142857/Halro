@@ -83,10 +83,20 @@ func TestAdminBootstrapLoginCSRFAndLogout(t *testing.T) {
 	logout.Header.Set("X-CSRF-Token", loginBody.CSRFToken)
 	logoutResponse := httptest.NewRecorder()
 	runtime.adminRouter().ServeHTTP(logoutResponse, logout)
-	if logoutResponse.Code != http.StatusOK ||
-		logoutResponse.Header().Get("Clear-Site-Data") == "" {
+	if logoutResponse.Code != http.StatusOK {
 		runtime.Close()
 		t.Fatalf("logout status=%d body=%s", logoutResponse.Code, logoutResponse.Body.String())
+	}
+	if value := logoutResponse.Header().Get("Clear-Site-Data"); value != "" {
+		runtime.Close()
+		t.Fatalf("logout must not trigger synchronous origin clearing, got %q", value)
+	}
+	logoutCookies := logoutResponse.Result().Cookies()
+	if len(logoutCookies) != 1 || logoutCookies[0].Name != adminSessionCookie ||
+		logoutCookies[0].Value != "" || logoutCookies[0].MaxAge >= 0 ||
+		!logoutCookies[0].HttpOnly || !logoutCookies[0].Secure {
+		runtime.Close()
+		t.Fatalf("logout did not expire the secure session cookie: %#v", logoutCookies)
 	}
 
 	expiredRequest := adminRequest(t, http.MethodGet, "/admin/api/v1/session", nil)

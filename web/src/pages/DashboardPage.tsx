@@ -3,10 +3,12 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "../api";
 import { ErrorState, Loading, PageHeader, StatusDot } from "../components";
 import { compactNumber, money } from "../format";
+import { useTranslation } from "react-i18next";
 
 const TrendChart = lazy(() => import("../TrendChart"));
 
 export function DashboardPage() {
+  const { t } = useTranslation();
   const query = useQuery({
     queryKey: ["dashboard"],
     queryFn: api.dashboard,
@@ -28,47 +30,47 @@ export function DashboardPage() {
   return (
     <>
       <PageHeader
-        eyebrow="LIVE GATEWAY PULSE"
-        title="全局态势"
-        description="今天的模型流量、成本与运行健康度。数据来自本机 durable ledger。"
+        eyebrow={t("dashboard.eyebrow")}
+        title={t("dashboard.title")}
+        description={t("dashboard.description")}
         action={
           <div className={`health-pill ${accountingHealthy ? "" : "warning"}`}>
             <StatusDot ok={accountingHealthy} />
-            {accountingHealthy ? "账本健康" : "账本需要关注"}
+            {accountingHealthy ? t("dashboard.ledgerHealthy") : t("dashboard.ledgerWarning")}
           </div>
         }
       />
-      <section className="metric-grid" aria-label="今日关键指标">
-        <Metric label="REQUESTS" value={compactNumber(today.requests)} detail={`${today.attempts} provider attempts`} />
+      <section className="metric-grid" aria-label={t("dashboard.todayMetrics")}>
+        <Metric label={t("dashboard.requests")} value={compactNumber(today.requests)} detail={t("dashboard.attempts", { count: today.attempts })} />
         <Metric
-          label="TOKENS"
+          label={t("dashboard.tokens")}
           value={compactNumber(reportedTokens)}
-          detail={`${compactNumber(reportedInputTokens)} in / ${compactNumber(reportedOutputTokens)} out${estimatedTokens > 0 ? ` · ${compactNumber(estimatedTokens)} estimated excluded` : ""}`}
+          detail={`${t("dashboard.tokenDetail", { input: compactNumber(reportedInputTokens), output: compactNumber(reportedOutputTokens) })}${estimatedTokens > 0 ? t("dashboard.estimatedExcluded", { count: compactNumber(estimatedTokens) }) : ""}`}
         />
-        <Metric label="COST" value={money(today.cost_micros_usd)} detail="estimated + reported usage" />
-        <Metric label="ERROR RATE" value={`${(errorRate * 100).toFixed(1)}%`} detail={`${today.errors} failed attempts`} alert={errorRate > 0.1} />
-        <Metric label="ACTIVE" value={String(dashboard.usage.active_requests)} detail="requests in flight" />
-        <Metric label="AVG LATENCY" value={`${Math.round(averageLatency)} ms`} detail="provider attempts" />
+        <Metric label={t("dashboard.cost")} value={money(today.cost_micros_usd)} detail={t("dashboard.usageDetail")} />
+        <Metric label={t("dashboard.errorRate")} value={`${(errorRate * 100).toFixed(1)}%`} detail={t("dashboard.failedAttempts", { count: today.errors })} alert={errorRate > 0.1} />
+        <Metric label={t("dashboard.active")} value={String(dashboard.usage.active_requests)} detail={t("dashboard.inFlight")} />
+        <Metric label={t("dashboard.averageLatency")} value={`${Math.round(averageLatency)} ms`} detail={t("dashboard.providerAttempts")} />
       </section>
       <section className="dashboard-grid">
         <article className="panel chart-panel">
           <header className="panel-header">
-            <div><p className="eyebrow">7 DAY SIGNAL</p><h2>请求与 Token 趋势</h2></div>
-            <span className="legend"><i /> Requests <i /> Tokens</span>
+            <div><p className="eyebrow">{t("dashboard.trendEyebrow")}</p><h2>{t("dashboard.trendTitle")}</h2></div>
+            <span className="legend"><i /> {t("dashboard.trendLegend")}</span>
           </header>
-          <Suspense fallback={<Loading label="正在加载趋势图" />}>
+          <Suspense fallback={<Loading label={t("dashboard.loadingTrend")} />}>
             <TrendChart buckets={dashboard.usage.hourly} />
           </Suspense>
         </article>
         <article className="panel health-panel">
           <header className="panel-header">
-            <div><p className="eyebrow">SYSTEM CHANNELS</p><h2>内部状态</h2></div>
+            <div><p className="eyebrow">{t("dashboard.channels")}</p><h2>{t("dashboard.internalStatus")}</h2></div>
           </header>
-          <StatusRow label="Accounting ledger" ok={accountingHealthy} value={accountingHealthy ? "HEALTHY" : "DEGRADED"} />
-          <StatusRow label="Usage watermark" ok value={`#${dashboard.usage.watermark_sequence}`} />
-          <StatusRow label="Alert delivery" ok value={statValue(dashboard.alerts)} />
-          <StatusRow label="WAL queue" ok value={statValue(dashboard.wal)} />
-          <div className="panel-footnote">自动刷新 · 15 秒</div>
+          <StatusRow label={t("dashboard.accountingLedger")} ok={accountingHealthy} value={accountingHealthy ? t("dashboard.healthy") : t("dashboard.degraded")} />
+          <StatusRow label={t("dashboard.usageWatermark")} ok value={`#${dashboard.usage.watermark_sequence}`} />
+          <StatusRow label={t("dashboard.alertDelivery")} ok value={statValue(dashboard.alerts, t("dashboard.ready"))} />
+          <StatusRow label={t("dashboard.walQueue")} ok value={statValue(dashboard.wal, t("dashboard.ready"))} />
+          <div className="panel-footnote">{t("dashboard.autoRefresh")}</div>
         </article>
       </section>
     </>
@@ -104,7 +106,7 @@ function StatusRow({ label, ok, value }: { label: string; ok: boolean; value: st
   );
 }
 
-function statValue(stats: Record<string, number>) {
+function statValue(stats: Record<string, number>, ready: string) {
   const value = Object.values(stats).find((entry) => typeof entry === "number");
-  return value === undefined ? "READY" : compactNumber(value);
+  return value === undefined ? ready : compactNumber(value);
 }

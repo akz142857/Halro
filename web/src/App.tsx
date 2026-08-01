@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import { api, ApiError } from "./api";
 import { Layout } from "./Layout";
 import { Login } from "./Login";
@@ -15,10 +16,17 @@ import { ProvidersPage } from "./pages/ProvidersPage";
 import { RoutesPage } from "./pages/RoutesPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { UsagePage } from "./pages/UsagePage";
+import { applyLocale, applyPreference, resolveLocale } from "./i18n";
 
 export function App() {
+  const { t } = useTranslation();
   const path = usePathname();
   const queryClient = useQueryClient();
+  const uiBootstrap = useQuery({
+    queryKey: ["ui-bootstrap"],
+    queryFn: api.uiBootstrap,
+    staleTime: Infinity,
+  });
   const setup = useQuery({
     queryKey: ["setup"],
     queryFn: api.setupStatus,
@@ -33,17 +41,27 @@ export function App() {
     enabled: setup.data?.setup_required === false,
   });
   useEffect(() => {
+    if (uiBootstrap.data) {
+      void applyLocale(resolveLocale(undefined, uiBootstrap.data.default_locale));
+    }
+  }, [uiBootstrap.data]);
+  useEffect(() => {
+    if (session.data) {
+      void applyPreference(session.data.locale, uiBootstrap.data?.default_locale);
+    }
+  }, [session.data, uiBootstrap.data?.default_locale]);
+  useEffect(() => {
     if (session.data && path === "/admin/login") navigate("/admin");
   }, [path, session.data]);
   if (setup.isPending) {
-    return <div className="boot"><span className="brand-mark">H</span><Loading label="正在检查初始化状态" /></div>;
+    return <div className="boot"><span className="brand-mark">H</span><Loading label={t("app.checkingSetup")} /></div>;
   }
   if (setup.isError) {
     return (
       <div className="boot">
         <span className="brand-mark">H</span>
-        <div className="notice error" role="alert">无法读取初始化状态，请确认 Heimdall Admin 服务可用。</div>
-        <button className="button primary" onClick={() => setup.refetch()}>重试</button>
+        <div className="notice error" role="alert">{t("app.setupUnavailable")}</div>
+        <button className="button primary" onClick={() => setup.refetch()}>{t("common.retry")}</button>
       </div>
     );
   }
@@ -65,7 +83,7 @@ export function App() {
     );
   }
   if (session.isPending) {
-    return <div className="boot"><span className="brand-mark">H</span><Loading label="正在验证本机会话" /></div>;
+    return <div className="boot"><span className="brand-mark">H</span><Loading label={t("app.checkingSession")} /></div>;
   }
   if (session.isError) {
     return (
@@ -85,6 +103,7 @@ export function App() {
 }
 
 function Route({ path }: { path: string }) {
+  const { t } = useTranslation();
   if (path === "/admin" || path === "/admin/") return <DashboardPage />;
   if (path.startsWith("/admin/projects")) return <ProjectsPage />;
   if (path.startsWith("/admin/providers")) return <ProvidersPage />;
@@ -98,9 +117,9 @@ function Route({ path }: { path: string }) {
   if (path.startsWith("/admin/settings")) return <SettingsPage />;
   return (
     <section className="not-found">
-      <p className="eyebrow">ROUTE NOT FOUND</p>
-      <h1>这个控制台页面不存在。</h1>
-      <button className="button primary" onClick={() => navigate("/admin")}>返回总览</button>
+      <p className="eyebrow">{t("app.notFoundEyebrow")}</p>
+      <h1>{t("app.notFound")}</h1>
+      <button className="button primary" onClick={() => navigate("/admin")}>{t("app.backOverview")}</button>
     </section>
   );
 }

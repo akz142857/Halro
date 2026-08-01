@@ -141,6 +141,7 @@ func (r *Runtime) setupAdmin(writer http.ResponseWriter, request *http.Request) 
 	r.setAdminCookie(writer, created.Token, created.Session.AbsoluteExpiresAt)
 	writeJSON(writer, http.StatusCreated, map[string]any{
 		"username": createdUser.Username, "csrf_token": created.CSRFToken,
+		"locale":              "system",
 		"absolute_expires_at": created.Session.AbsoluteExpiresAt,
 		"idle_expires_at":     created.Session.IdleExpiresAt,
 	})

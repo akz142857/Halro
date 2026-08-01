@@ -16,9 +16,11 @@
     "@hookform/resolvers": "5.5.7",
     "@tanstack/react-query": "5.101.4",
     "@tanstack/react-table": "8.21.3",
+    "i18next": "26.3.6",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "react-hook-form": "7.83.0",
+    "react-i18next": "17.0.11",
     "uplot": "1.6.32",
     "zod": "4.4.3"
   },

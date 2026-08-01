@@ -5,6 +5,7 @@ export interface Page<T> {
 
 export interface Session {
   username: string;
+  locale: LocalePreference;
   csrf_token: string;
   absolute_expires_at: string;
   idle_expires_at: string;
@@ -286,5 +287,24 @@ export interface SystemStatus {
 export interface RuntimeSettings {
   health_probe_interval_seconds: number;
   updated_at?: string;
+  revision: number;
+}
+
+export type SupportedLocale = "zh-CN" | "en-US";
+export type LocalePreference = SupportedLocale | "system";
+
+export interface UIBootstrap {
+  default_locale: SupportedLocale;
+  supported_locales: SupportedLocale[];
+}
+
+export interface InstanceUISettings {
+  default_locale: SupportedLocale;
+  updated_at?: string;
+  revision: number;
+}
+
+export interface AdminPreferences {
+  locale: LocalePreference;
   revision: number;
 }

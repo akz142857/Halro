@@ -1,10 +1,13 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api, ApiError } from "./api";
 import { App } from "./App";
 
 describe("App first-run routing", () => {
+  beforeEach(() => {
+    vi.spyOn(api, "uiBootstrap").mockResolvedValue({ default_locale: "zh-CN", supported_locales: ["zh-CN", "en-US"] });
+  });
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();

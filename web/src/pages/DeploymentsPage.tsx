@@ -13,8 +13,10 @@ import {
 } from "../components";
 import { money } from "../format";
 import type { Deployment, Provider, ProviderCapabilities } from "../types";
+import { useTranslation } from "react-i18next";
 
 export function DeploymentsPage() {
+  const { t } = useTranslation();
   const [editing, setEditing] = useState<Deployment | null | "new">(null);
   const deployments = useQuery({ queryKey: ["deployments"], queryFn: api.deployments });
   const providers = useQuery({ queryKey: ["providers"], queryFn: api.providers });
@@ -25,18 +27,18 @@ export function DeploymentsPage() {
   return (
     <>
       <PageHeader
-        eyebrow="MODEL DEPLOYMENTS"
-        title="Deployments"
-        description="把 Provider 连接实例化为可路由的模型目标，在这里独立维护模型名称、能力、价格与并发上限。"
-        action={<button className="button primary" onClick={() => setEditing("new")}>＋ 新建 Deployment</button>}
+        eyebrow={t("deployments.eyebrow")}
+        title={t("deployments.title")}
+        description={t("deployments.description")}
+        action={<button className="button primary" onClick={() => setEditing("new")}>{t("deployments.create")}</button>}
       />
       {(deployments.isPending || providers.isPending) && <Loading />}
       {(deployments.isError || providers.isError) && <ErrorState error={deployments.error || providers.error} />}
       {deployments.data?.items.length === 0 && (
-        <EmptyState title="还没有模型 Deployment">先创建 Provider，再为具体上游模型建立 Deployment。</EmptyState>
+        <EmptyState title={t("deployments.emptyTitle")}>{t("deployments.emptyDescription")}</EmptyState>
       )}
       {!!deployments.data?.items.length && (
-        <section className="deployment-grid" aria-label="模型部署列表">
+        <section className="deployment-grid" aria-label={t("deployments.list")}>
           {deployments.data.items.map((deployment) => (
             <DeploymentCard
               key={deployment.id}
@@ -67,12 +69,13 @@ function DeploymentCard({
   providerName: string;
   onEdit: () => void;
 }) {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [probe, setProbe] = useState("");
   const test = useMutation({
     mutationFn: () => api.testDeployment(deployment.id),
-    onSuccess: (result) => setProbe(`HEALTHY · ${result.latency_ms}ms`),
-    onError: () => setProbe("UNHEALTHY"),
+    onSuccess: (result) => setProbe(t("deployments.healthy", { latency: result.latency_ms })),
+    onError: () => setProbe(t("deployments.unhealthy")),
   });
   const remove = useMutation({
     mutationFn: () => api.deleteDeployment(deployment.id, deployment.revision),
@@ -80,7 +83,7 @@ function DeploymentCard({
   });
   const capabilities = Object.entries(deployment.capabilities)
     .filter(([, enabled]) => typeof enabled === "boolean" && enabled)
-    .map(([name]) => name.replace("json_mode", "json"));
+    .map(([name]) => name);
   return (
     <article className="deployment-card">
       <header>
@@ -93,28 +96,28 @@ function DeploymentCard({
         <code>{deployment.id}</code>
       </div>
       <dl>
-        <div><dt>Input / 1M</dt><dd>{money(deployment.input_micros_per_million)}</dd></div>
-        <div><dt>Output / 1M</dt><dd>{money(deployment.output_micros_per_million)}</dd></div>
-        <div><dt>Concurrency</dt><dd>{deployment.max_concurrency || "Unlimited"}</dd></div>
-        <div><dt>Context</dt><dd>{deployment.capabilities.max_context_tokens || "Provider default"}</dd></div>
-        <div><dt>Max output</dt><dd>{deployment.capabilities.max_output_tokens || "Provider default"}</dd></div>
+        <div><dt>{t("deployments.inputPrice")}</dt><dd>{money(deployment.input_micros_per_million)}</dd></div>
+        <div><dt>{t("deployments.outputPrice")}</dt><dd>{money(deployment.output_micros_per_million)}</dd></div>
+        <div><dt>{t("deployments.concurrency")}</dt><dd>{deployment.max_concurrency || t("common.unlimited")}</dd></div>
+        <div><dt>{t("deployments.context")}</dt><dd>{deployment.capabilities.max_context_tokens || t("deployments.providerDefault")}</dd></div>
+        <div><dt>{t("deployments.maxOutput")}</dt><dd>{deployment.capabilities.max_output_tokens || t("deployments.providerDefault")}</dd></div>
       </dl>
-      <div className="capability-list" aria-label="能力">
-        {capabilities.length ? capabilities.map((capability) => <span className="badge" key={capability}>{capability}</span>) : <span className="badge">none</span>}
+      <div className="capability-list" aria-label={t("deployments.capabilities")}>
+        {capabilities.length ? capabilities.map((capability) => <span className="badge" key={capability}>{t(`capabilities.${capability}`)}</span>) : <span className="badge">{t("deployments.none")}</span>}
       </div>
       <footer>
         <button
-          className={`badge ${probe.startsWith("HEALTHY") ? "good" : probe === "UNHEALTHY" ? "warning" : ""}`}
+          className={`badge ${test.isSuccess ? "good" : test.isError ? "warning" : ""}`}
           disabled={!deployment.enabled || test.isPending}
           onClick={() => test.mutate()}
         >
-          {test.isPending ? "TESTING" : probe || (deployment.enabled ? "TEST" : "OFF")}
+          {test.isPending ? t("deployments.testing") : probe || (deployment.enabled ? t("deployments.test") : t("deployments.off"))}
         </button>
         <div className="row-actions">
-          <button className="button ghost" onClick={onEdit}>编辑</button>
+          <button className="button ghost" onClick={onEdit}>{t("common.edit")}</button>
           <ConfirmButton
-            label="删除"
-            confirmLabel={`删除 Deployment “${deployment.name}”？`}
+            label={t("common.delete")}
+            confirmLabel={t("deployments.deleteConfirm", { name: deployment.name })}
             onConfirm={() => remove.mutate()}
             disabled={remove.isPending}
           />
@@ -134,6 +137,7 @@ function DeploymentForm({
   providers: Provider[];
   onClose: () => void;
 }) {
+  const { t } = useTranslation();
   const enabledProviders = providers.filter((provider) => provider.enabled || provider.id === current?.provider_id);
   const [name, setName] = useState(current?.name ?? "");
   const [providerID, setProviderID] = useState(current?.provider_id ?? enabledProviders[0]?.id ?? "");
@@ -173,13 +177,13 @@ function DeploymentForm({
     if (name.trim() && providerID && providerModel.trim()) mutation.mutate();
   };
   return (
-    <Modal title={current ? "编辑 Deployment" : "创建 Deployment"} onClose={onClose}>
+    <Modal title={current ? t("deployments.edit") : t("deployments.createTitle")} onClose={onClose}>
       {enabledProviders.length === 0 ? (
-        <div className="notice warning"><strong>需要可用 Provider</strong><span>先在 Providers 页面创建并启用一个上游连接。</span></div>
+        <div className="notice warning"><strong>{t("deployments.providerRequired")}</strong><span>{t("deployments.providerRequiredDescription")}</span></div>
       ) : (
         <form className="form-grid" onSubmit={submit}>
-          <Field label="Deployment 名称"><input autoFocus required value={name} onChange={(event) => setName(event.target.value)} /></Field>
-          <Field label="Provider">
+          <Field label={t("deployments.name")}><input autoFocus required value={name} onChange={(event) => setName(event.target.value)} /></Field>
+          <Field label={t("deployments.provider")}>
             <select required value={providerID} onChange={(event) => {
               const next = event.target.value;
               setProviderID(next);
@@ -189,9 +193,9 @@ function DeploymentForm({
               {enabledProviders.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}
             </select>
           </Field>
-          <Field label="上游模型名称"><input required value={providerModel} onChange={(event) => setProviderModel(event.target.value)} /></Field>
+          <Field label={t("deployments.upstreamModel")}><input required value={providerModel} onChange={(event) => setProviderModel(event.target.value)} /></Field>
           <fieldset className="form-grid">
-            <legend>模型能力（只能是 Provider 能力的子集）</legend>
+            <legend>{t("deployments.capabilitySubset")}</legend>
             {(["chat", "streaming", "embeddings", "tools", "vision", "json_mode", "developer_role", "reasoning", "stream_usage"] as const).map((name) => (
               <label className="check-row" key={name}>
                 <input
@@ -199,26 +203,26 @@ function DeploymentForm({
                   checked={capabilities[name]}
                   onChange={(event) => setCapabilities({ ...capabilities, [name]: event.target.checked })}
                 />
-                <span>{name.replace("json_mode", "JSON mode").replaceAll("_", " ")}</span>
+                <span>{t(`capabilities.${name}`)}</span>
               </label>
             ))}
-            <Field label="最大 Context Tokens" hint="0 表示沿用 Provider 未声明的限制">
+            <Field label={t("deployments.maxContext")} hint={t("deployments.maxContextHint")}>
               <input min="0" type="number" value={capabilities.max_context_tokens} onChange={(event) => setCapabilities({ ...capabilities, max_context_tokens: Number(event.target.value) })} />
             </Field>
-            <Field label="最大 Output Tokens" hint="不得超过 Context 或 Provider 限制">
+            <Field label={t("deployments.maxOutputTokens")} hint={t("deployments.maxOutputHint")}>
               <input min="0" type="number" value={capabilities.max_output_tokens} onChange={(event) => setCapabilities({ ...capabilities, max_output_tokens: Number(event.target.value) })} />
             </Field>
           </fieldset>
-          <Field label="并发上限" hint="0 表示不在 Deployment 层限制"><input min="0" type="number" value={maxConcurrency} onChange={(event) => setMaxConcurrency(Number(event.target.value))} /></Field>
-          <Field label="Input USD / 1M tokens"><input min="0" type="number" step="0.000001" value={inputPrice} onChange={(event) => setInputPrice(Number(event.target.value))} /></Field>
-          <Field label="Output USD / 1M tokens"><input min="0" type="number" step="0.000001" value={outputPrice} onChange={(event) => setOutputPrice(Number(event.target.value))} /></Field>
-          <Field label="默认优先级"><input type="number" value={priority} onChange={(event) => setPriority(Number(event.target.value))} /></Field>
-          <Field label="权重"><input min="1" type="number" value={weight} onChange={(event) => setWeight(Number(event.target.value))} /></Field>
-          <label className="check-row"><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />启用 Deployment</label>
+          <Field label={t("deployments.concurrencyLimit")} hint={t("deployments.concurrencyHint")}><input min="0" type="number" value={maxConcurrency} onChange={(event) => setMaxConcurrency(Number(event.target.value))} /></Field>
+          <Field label={t("deployments.inputUSD")}><input min="0" type="number" step="0.000001" value={inputPrice} onChange={(event) => setInputPrice(Number(event.target.value))} /></Field>
+          <Field label={t("deployments.outputUSD")}><input min="0" type="number" step="0.000001" value={outputPrice} onChange={(event) => setOutputPrice(Number(event.target.value))} /></Field>
+          <Field label={t("deployments.priority")}><input type="number" value={priority} onChange={(event) => setPriority(Number(event.target.value))} /></Field>
+          <Field label={t("deployments.weight")}><input min="1" type="number" value={weight} onChange={(event) => setWeight(Number(event.target.value))} /></Field>
+          <label className="check-row"><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />{t("deployments.enable")}</label>
           {mutation.isError && <ErrorState error={mutation.error} />}
           <div className="form-actions">
-            <button type="button" className="button ghost" onClick={onClose}>取消</button>
-            <button className="button primary" disabled={mutation.isPending}>{current ? "保存并热加载" : "创建并热加载"}</button>
+            <button type="button" className="button ghost" onClick={onClose}>{t("common.cancel")}</button>
+            <button className="button primary" disabled={mutation.isPending}>{current ? t("deployments.save") : t("deployments.createAndLoad")}</button>
           </div>
         </form>
       )}

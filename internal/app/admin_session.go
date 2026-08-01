@@ -85,6 +85,7 @@ func (r *Runtime) loginAdmin(writer http.ResponseWriter, request *http.Request) 
 	r.setAdminCookie(writer, created.Token, created.Session.AbsoluteExpiresAt)
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"username": user.Username, "csrf_token": created.CSRFToken,
+		"locale":              domain.NormalizeLocalePreference(user.Locale),
 		"absolute_expires_at": created.Session.AbsoluteExpiresAt,
 		"idle_expires_at":     created.Session.IdleExpiresAt,
 	})
@@ -92,8 +93,14 @@ func (r *Runtime) loginAdmin(writer http.ResponseWriter, request *http.Request) 
 
 func (r *Runtime) getAdminSession(writer http.ResponseWriter, request *http.Request) {
 	admin := request.Context().Value(adminContextKey{}).(adminRequestContext)
+	user, err := r.store.GetAdminUser(request.Context(), admin.session.Username)
+	if err != nil {
+		adminStoreError(writer)
+		return
+	}
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"username":            admin.session.Username,
+		"locale":              domain.NormalizeLocalePreference(user.Locale),
 		"csrf_token":          r.adminSessionsCSRF(admin.token),
 		"absolute_expires_at": admin.session.AbsoluteExpiresAt,
 		"idle_expires_at":     admin.session.IdleExpiresAt,
@@ -114,7 +121,10 @@ func (r *Runtime) logoutAdmin(writer http.ResponseWriter, request *http.Request)
 		return
 	}
 	r.clearAdminCookie(writer)
-	writer.Header().Set("Clear-Site-Data", `"cache", "cookies", "storage"`)
+	// Admin secrets and CSRF state are memory-only, and every Admin API response
+	// is no-store. Clearing the entire origin cache here makes browsers delay the
+	// fetch completion (and therefore navigation) without removing additional
+	// sensitive state. Expire the scoped HttpOnly session cookie instead.
 	writeJSON(writer, http.StatusOK, map[string]string{"status": "logged_out"})
 }
 
@@ -146,6 +156,7 @@ func (r *Runtime) changeAdminPassword(writer http.ResponseWriter, request *http.
 	defer clear(replacement.PasswordHash)
 	defer clear(replacement.PasswordSalt)
 	replacement.CreatedAt = user.CreatedAt
+	replacement.Locale = user.Locale
 	replacement.SessionGeneration = user.SessionGeneration + 1
 	if _, err := r.store.PutAdminUser(request.Context(), replacement, user.Revision); err != nil {
 		writeJSON(writer, http.StatusConflict, map[string]string{"error": "password update conflict"})
@@ -171,6 +182,7 @@ func (r *Runtime) changeAdminPassword(writer http.ResponseWriter, request *http.
 	r.setAdminCookie(writer, created.Token, created.Session.AbsoluteExpiresAt)
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"username": user.Username, "csrf_token": created.CSRFToken,
+		"locale":              domain.NormalizeLocalePreference(user.Locale),
 		"absolute_expires_at": created.Session.AbsoluteExpiresAt,
 		"idle_expires_at":     created.Session.IdleExpiresAt,
 	})

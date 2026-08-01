@@ -18,7 +18,7 @@ installation, upgrades, recovery, and hardening, see the
 - bounded retry, fallback, circuit breaking, and capability-aware routing;
 - Token Guard anomaly containment and streaming-aware redaction;
 - durable local accounting, Parquet analytics, audit integrity, and Prometheus metrics;
-- embedded React Admin console in one Go binary, with no external database or cache.
+- embedded Chinese/English React Admin console in one Go binary, with no external database or cache.
 
 ## Documentation
 
@@ -57,6 +57,12 @@ its local encrypted storage, and prints the Admin URL. Open `/admin/setup` to
 create the first administrator; the password is hashed in local metadata and
 is never written to configuration. Later runs use the same command and open
 the normal login page.
+
+The setup and login pages include a language selector. After login, language
+preferences and the instance-wide default are managed under **Settings →
+Language**. The administrator preference is stored server-side, so it follows
+the account across browsers; choosing “follow instance default” uses the instance
+default.
 
 The Admin console is a React build-time dependency and is embedded into the Go
 binary. It does not require Node.js at runtime:

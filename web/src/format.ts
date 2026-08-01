@@ -1,10 +1,16 @@
+import i18n from "./i18n";
+
+function locale() {
+  return i18n.resolvedLanguage || "zh-CN";
+}
+
 export function compactNumber(value: number) {
-  return new Intl.NumberFormat("zh-CN", { notation: "compact", maximumFractionDigits: 1 })
+  return new Intl.NumberFormat(locale(), { notation: "compact", maximumFractionDigits: 1 })
     .format(value || 0);
 }
 
 export function money(micros: number) {
-  return new Intl.NumberFormat("en-US", {
+  return new Intl.NumberFormat(locale(), {
     style: "currency",
     currency: "USD",
     minimumFractionDigits: micros > 0 && micros < 10_000 ? 4 : 2,
@@ -13,7 +19,7 @@ export function money(micros: number) {
 
 export function dateTime(value?: string) {
   if (!value) return "—";
-  return new Intl.DateTimeFormat("zh-CN", {
+  return new Intl.DateTimeFormat(locale(), {
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",

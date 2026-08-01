@@ -7,6 +7,7 @@ describe("Login", () => {
   it("does not submit empty credentials and clears the form after success", async () => {
     const login = vi.spyOn(api, "login").mockResolvedValue({
       username: "admin",
+      locale: "system",
       csrf_token: "csrf",
       absolute_expires_at: "2026-01-01T00:00:00Z",
       idle_expires_at: "2026-01-01T00:00:00Z",

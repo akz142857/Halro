@@ -16,10 +16,12 @@ import {
 } from "../components";
 import { compactNumber, dateTime, money } from "../format";
 import type { CreatedGatewayKey, GatewayKey, Project } from "../types";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 
-const projectSchema = z.object({
-  name: z.string().trim().min(1, "请输入项目名称").max(128),
-  routes: z.string().trim().min(1, "至少允许一个模型别名"),
+const projectSchema = (t: TFunction) => z.object({
+  name: z.string().trim().min(1, t("projects.nameRequired")).max(128),
+  routes: z.string().trim().min(1, t("projects.routeRequired")),
   rpm: z.coerce.number().int().min(0),
   tpm: z.coerce.number().int().min(0),
   concurrency: z.coerce.number().int().min(0),
@@ -29,10 +31,11 @@ const projectSchema = z.object({
   redactionPolicyID: z.string(),
   enabled: z.boolean(),
 });
-type ProjectInput = z.input<typeof projectSchema>;
-type ProjectValue = z.output<typeof projectSchema>;
+type ProjectInput = z.input<ReturnType<typeof projectSchema>>;
+type ProjectValue = z.output<ReturnType<typeof projectSchema>>;
 
 export function ProjectsPage() {
+  const { t } = useTranslation();
   const [selected, setSelected] = useState<string>("");
   const [creating, setCreating] = useState(false);
   const projects = useQuery({ queryKey: ["projects"], queryFn: api.projects });
@@ -42,24 +45,24 @@ export function ProjectsPage() {
   return (
     <>
       <PageHeader
-        eyebrow="ACCESS BOUNDARIES"
-        title="Projects & Keys"
-        description="把预算、模型权限和调用速率绑定到业务边界，而不是散落的 Provider Key。"
-        action={<button className="button primary" onClick={() => setCreating(true)}>＋ 新建 Project</button>}
+        eyebrow={t("projects.eyebrow")}
+        title={t("projects.title")}
+        description={t("projects.description")}
+        action={<button className="button primary" onClick={() => setCreating(true)}>{t("projects.create")}</button>}
       />
       {projects.isPending && <Loading />}
       {projects.isError && <ErrorState error={projects.error} />}
       {projects.isSuccess && items.length === 0 && (
         <EmptyState
-          title="还没有 Project"
-          action={<button className="button primary" onClick={() => setCreating(true)}>创建第一个 Project</button>}
+          title={t("projects.emptyTitle")}
+          action={<button className="button primary" onClick={() => setCreating(true)}>{t("projects.first")}</button>}
         >
-          Project 是预算、限流、模型权限和内部 Key 的最小安全边界。
+          {t("projects.emptyDescription")}
         </EmptyState>
       )}
       {items.length > 0 && (
         <div className="split-view">
-          <section className="resource-list" aria-label="Project 列表">
+          <section className="resource-list" aria-label={t("projects.list")}>
             {items.map((project) => (
               <button
                 key={project.id}
@@ -71,7 +74,7 @@ export function ProjectsPage() {
                   <strong>{project.name}</strong>
                 </span>
                 <span className="resource-meta">
-                  {compactNumber(project.rpm)} RPM · {money(project.daily_budget_micros_usd)}/day
+                  {compactNumber(project.rpm)} RPM · {money(project.daily_budget_micros_usd)}{t("projects.perDay")}
                 </span>
                 <code>{project.id}</code>
               </button>
@@ -86,6 +89,7 @@ export function ProjectsPage() {
 }
 
 function ProjectDetail({ project }: { project: Project }) {
+  const { t } = useTranslation();
   const [keyDialog, setKeyDialog] = useState(false);
   const [editing, setEditing] = useState(false);
   const [unblockResult, setUnblockResult] = useState("");
@@ -95,7 +99,7 @@ function ProjectDetail({ project }: { project: Project }) {
   });
   const unblock = useMutation({
     mutationFn: () => api.unblockProject(project.id),
-    onSuccess: (value) => setUnblockResult(`已解除 ${value.subjects} 个异常状态`),
+    onSuccess: (value) => setUnblockResult(t("projects.unblocked", { count: value.subjects })),
   });
   const queryClient = useQueryClient();
   const remove = useMutation({
@@ -106,41 +110,41 @@ function ProjectDetail({ project }: { project: Project }) {
     <section className="detail-panel">
       <header className="detail-title">
         <div>
-          <p className="eyebrow">PROJECT POLICY</p>
+          <p className="eyebrow">{t("projects.policy")}</p>
           <h2>{project.name}</h2>
           <code>{project.id}</code>
         </div>
         <div className="row-actions">
-          <button className="button ghost" disabled={unblock.isPending} onClick={() => unblock.mutate()}>解除 Token Guard</button>
-          <button className="button ghost" onClick={() => setEditing(true)}>编辑</button>
+          <button className="button ghost" disabled={unblock.isPending} onClick={() => unblock.mutate()}>{t("projects.unblock")}</button>
+          <button className="button ghost" onClick={() => setEditing(true)}>{t("common.edit")}</button>
           <ConfirmButton
-            label="删除"
-            confirmLabel={`删除 Project “${project.name}”？其 Gateway Key 将立即失效。`}
+            label={t("common.delete")}
+            confirmLabel={t("projects.deleteConfirm", { name: project.name })}
             disabled={remove.isPending}
             onConfirm={() => remove.mutate()}
           />
           <span className={`badge ${project.enabled ? "good" : ""}`}>
-            {project.enabled ? "ENABLED" : "DISABLED"}
+            {project.enabled ? t("common.enabled") : t("common.disabled")}
           </span>
         </div>
       </header>
       <div className="policy-grid">
-        <Policy label="Allowed models" value={project.allowed_routes.join(", ") || "None"} />
-        <Policy label="Rate limit" value={`${compactNumber(project.rpm)} RPM / ${compactNumber(project.tpm)} TPM`} />
-        <Policy label="Concurrency" value={String(project.max_concurrency || "Unlimited")} />
-        <Policy label="Daily budget" value={project.daily_budget_micros_usd ? money(project.daily_budget_micros_usd) : "Unlimited"} />
-        <Policy label="Token Guard" value={project.token_guard_policy_id || "Not attached"} />
+        <Policy label={t("projects.allowedModels")} value={project.allowed_routes.join(", ") || t("common.none")} />
+        <Policy label={t("projects.rateLimit")} value={`${compactNumber(project.rpm)} RPM / ${compactNumber(project.tpm)} TPM`} />
+        <Policy label={t("projects.concurrency")} value={String(project.max_concurrency || t("common.unlimited"))} />
+        <Policy label={t("projects.dailyBudget")} value={project.daily_budget_micros_usd ? money(project.daily_budget_micros_usd) : t("common.unlimited")} />
+        <Policy label={t("projects.tokenGuardPolicy")} value={project.token_guard_policy_id || t("projects.notAttached")} />
       </div>
       {unblockResult && <div className="notice success"><strong>{unblockResult}</strong></div>}
       {unblock.isError && <ErrorState error={unblock.error} />}
       {remove.isError && <ErrorState error={remove.error} />}
       <header className="section-header">
-        <div><p className="eyebrow">INTERNAL CREDENTIALS</p><h3>Gateway Keys</h3></div>
-        <button className="button secondary" onClick={() => setKeyDialog(true)}>＋ 创建 Key</button>
+        <div><p className="eyebrow">{t("projects.credentials")}</p><h3>{t("projects.gatewayKeys")}</h3></div>
+        <button className="button secondary" onClick={() => setKeyDialog(true)}>{t("projects.createKey")}</button>
       </header>
-      {keys.isPending && <Loading label="正在读取 Key" />}
+      {keys.isPending && <Loading label={t("projects.loadingKeys")} />}
       {keys.isError && <ErrorState error={keys.error} />}
-      {keys.data?.items.length === 0 && <p className="quiet-row">这个 Project 还没有可用 Key。</p>}
+      {keys.data?.items.length === 0 && <p className="quiet-row">{t("projects.noKeys")}</p>}
       {keys.data?.items.map((key) => <KeyRow project={project} value={key} key={key.id} />)}
       {keyDialog && <CreateKey project={project} onClose={() => setKeyDialog(false)} />}
       {editing && <ProjectForm current={project} onClose={() => setEditing(false)} />}
@@ -149,6 +153,7 @@ function ProjectDetail({ project }: { project: Project }) {
 }
 
 function KeyRow({ project, value }: { project: Project; value: GatewayKey }) {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const mutation = useMutation({
     mutationFn: () => api.updateKey(
@@ -170,16 +175,16 @@ function KeyRow({ project, value }: { project: Project; value: GatewayKey }) {
         <code>{value.id}</code>
       </div>
       <div className="key-dates">
-        <small>创建 {dateTime(value.created_at)}</small>
-        <small>最近使用 {dateTime(value.last_used_at)}</small>
+        <small>{t("projects.created", { date: dateTime(value.created_at) })}</small>
+        <small>{t("projects.lastUsed", { date: dateTime(value.last_used_at) })}</small>
       </div>
       <div className="row-actions">
         <button className="button ghost" disabled={mutation.isPending} onClick={() => mutation.mutate()}>
-          {value.enabled ? "禁用" : "启用"}
+          {value.enabled ? t("common.disable") : t("common.enable")}
         </button>
         <ConfirmButton
-          label="删除"
-          confirmLabel={`确认永久停用 Key “${value.name}”？此操作不能恢复。`}
+          label={t("common.delete")}
+          confirmLabel={t("projects.keyDeleteConfirm", { name: value.name })}
           disabled={remove.isPending}
           onConfirm={() => remove.mutate()}
         />
@@ -189,6 +194,8 @@ function KeyRow({ project, value }: { project: Project; value: GatewayKey }) {
 }
 
 function ProjectForm({ current, onClose }: { current?: Project; onClose: () => void }) {
+  const { t } = useTranslation();
+  const schema = useMemo(() => projectSchema(t), [t]);
   const queryClient = useQueryClient();
   const policies = useQuery({
     queryKey: ["token-guard-policies"],
@@ -203,7 +210,7 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
     handleSubmit,
     formState: { errors },
   } = useForm<ProjectInput, unknown, ProjectValue>({
-    resolver: zodResolver(projectSchema),
+    resolver: zodResolver(schema),
     defaultValues: {
       name: current?.name ?? "",
       rpm: current?.rpm ?? 60,
@@ -245,40 +252,40 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
     },
   });
   return (
-    <Modal title={current ? "编辑 Project" : "创建 Project"} onClose={onClose}>
+    <Modal title={current ? t("projects.edit") : t("projects.createTitle")} onClose={onClose}>
       <form className="form-grid" onSubmit={handleSubmit((value) => mutation.mutate(value))}>
-        <Field label="名称" error={errors.name?.message}><input autoFocus {...register("name")} /></Field>
-        <Field label="允许的模型别名" hint="逗号或换行分隔" error={errors.routes?.message}>
+        <Field label={t("projects.name")} error={errors.name?.message}><input autoFocus {...register("name")} /></Field>
+        <Field label={t("projects.aliases")} hint={t("projects.aliasesHint")} error={errors.routes?.message}>
           <input {...register("routes")} />
         </Field>
-        <Field label="RPM"><input type="number" {...register("rpm")} /></Field>
-        <Field label="TPM"><input type="number" {...register("tpm")} /></Field>
-        <Field label="最大并发"><input type="number" {...register("concurrency")} /></Field>
-        <Field label="每日预算（USD）"><input type="number" step="0.01" {...register("budget")} /></Field>
-        <label className="check-row"><input type="checkbox" {...register("enabled")} />启用 Project</label>
-        <Field label="Token Guard Policy">
+        <Field label={t("projects.rpm")}><input type="number" {...register("rpm")} /></Field>
+        <Field label={t("projects.tpm")}><input type="number" {...register("tpm")} /></Field>
+        <Field label={t("projects.maxConcurrency")}><input type="number" {...register("concurrency")} /></Field>
+        <Field label={t("projects.dailyBudgetUSD")}><input type="number" step="0.01" {...register("budget")} /></Field>
+        <label className="check-row"><input type="checkbox" {...register("enabled")} />{t("projects.enable")}</label>
+        <Field label={t("projects.tokenGuardPolicy")}>
           <select {...register("tokenGuardPolicyID")}>
-            <option value="">不绑定</option>
+            <option value="">{t("projects.noBinding")}</option>
             {policies.data?.items.filter((policy) => policy.enabled).map((policy) => (
-              <option value={policy.id} key={policy.id}>{policy.name} · {policy.action}</option>
+              <option value={policy.id} key={policy.id}>{policy.name} · {policy.action === "temporary_block" ? t("policies.temporaryBlock") : policy.action === "alert" ? t("policies.alert") : t("policies.observe")}</option>
             ))}
           </select>
         </Field>
-        <Field label="脱敏 Policy">
+        <Field label={t("projects.redactionPolicy")}>
           <select {...register("redactionPolicyID")}>
-            <option value="">不绑定</option>
+            <option value="">{t("projects.noBinding")}</option>
             {redactionPolicies.data?.items.filter((policy) => policy.enabled).map((policy) => (
-              <option value={policy.id} key={policy.id}>{policy.name} · {policy.mode}</option>
+              <option value={policy.id} key={policy.id}>{policy.name} · {policy.mode === "strict" ? t("redaction.strictBadge") : policy.mode === "bounded_stream" ? t("redaction.boundedBadge") : t("redaction.detectStreamBadge")}</option>
             ))}
           </select>
         </Field>
-        <Field label="允许 CIDR" hint="留空表示不限制；逗号或换行分隔">
+        <Field label={t("projects.allowedCIDR")} hint={t("projects.cidrHint")}>
           <textarea rows={3} {...register("cidrs")} />
         </Field>
         {mutation.isError && <ErrorState error={mutation.error} />}
         <div className="form-actions">
-          <button type="button" className="button ghost" onClick={onClose}>取消</button>
-          <button className="button primary" disabled={mutation.isPending}>{current ? "保存并热加载" : "创建 Project"}</button>
+          <button type="button" className="button ghost" onClick={onClose}>{t("common.cancel")}</button>
+          <button className="button primary" disabled={mutation.isPending}>{current ? t("projects.save") : t("projects.createSubmit")}</button>
         </div>
       </form>
     </Modal>
@@ -286,6 +293,7 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
 }
 
 function CreateKey({ project, onClose }: { project: Project; onClose: () => void }) {
+  const { t } = useTranslation();
   const [name, setName] = useState("");
   const [created, setCreated] = useState<CreatedGatewayKey | null>(null);
   const [acknowledged, setAcknowledged] = useState(false);
@@ -305,11 +313,11 @@ function CreateKey({ project, onClose }: { project: Project; onClose: () => void
   };
   if (created) {
     return (
-      <Modal title="保存这个 Gateway Key" onClose={safelyClose}>
+      <Modal title={t("projects.saveKey")} onClose={safelyClose}>
         <div className="one-time-secret">
           <div className="notice warning">
-            <strong>只显示这一次</strong>
-            <span>离开后 Heimdall 无法恢复明文。不要将它保存到浏览器或聊天记录。</span>
+            <strong>{t("projects.oneTime")}</strong>
+            <span>{t("projects.oneTimeDescription")}</span>
           </div>
           <code className="secret-value">{created.key}</code>
           <button
@@ -319,34 +327,34 @@ function CreateKey({ project, onClose }: { project: Project; onClose: () => void
               setCopied(true);
             }}
           >
-            {copied ? "已复制到剪贴板" : "复制 Key"}
+            {copied ? t("common.copied") : t("projects.copyKey")}
           </button>
           <label className="check-row">
             <input type="checkbox" checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} />
-            <span>我已将 Key 保存到安全的 Secret Manager</span>
+            <span>{t("projects.keyStored")}</span>
           </label>
           <button className="button primary wide" disabled={!acknowledged} onClick={safelyClose}>
-            完成并清除明文
+            {t("projects.finish")}
           </button>
         </div>
       </Modal>
     );
   }
   return (
-    <Modal title="创建 Gateway Key" onClose={onClose}>
+    <Modal title={t("projects.createKeyTitle")} onClose={onClose}>
       <form
         onSubmit={(event) => {
           event.preventDefault();
           if (name.trim()) mutation.mutate();
         }}
       >
-        <Field label="Key 名称" hint="使用工作负载或服务名称，便于单独撤销">
+        <Field label={t("projects.keyName")} hint={t("projects.keyNameHint")}>
           <input autoFocus value={name} onChange={(event) => setName(event.target.value)} />
         </Field>
         {mutation.isError && <ErrorState error={mutation.error} />}
         <div className="form-actions">
-          <button type="button" className="button ghost" onClick={onClose}>取消</button>
-          <button className="button primary" disabled={!name.trim() || mutation.isPending}>生成 Key</button>
+          <button type="button" className="button ghost" onClick={onClose}>{t("common.cancel")}</button>
+          <button className="button primary" disabled={!name.trim() || mutation.isPending}>{t("projects.generateKey")}</button>
         </div>
       </form>
     </Modal>

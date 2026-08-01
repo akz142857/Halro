@@ -16,7 +16,7 @@ describe("admin accessibility baseline", () => {
     expect(screen.getByRole("link", { name: "跳到主要内容" })).toHaveAttribute("href", "#main-content");
     expect(screen.getByRole("navigation", { name: "主导航" })).toBeVisible();
     expect(screen.getByRole("main")).toHaveAttribute("id", "main-content");
-    expect(screen.getByRole("link", { name: /Deployments/ })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "模型部署" })).toHaveAttribute("aria-current", "page");
   });
 
   it("labels dialogs, moves focus, and supports Escape", () => {

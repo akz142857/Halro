@@ -3,8 +3,10 @@ import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
 import type { Bucket } from "./types";
 import { buildTrendSeries } from "./trend";
+import { useTranslation } from "react-i18next";
 
 export default function TrendChart({ buckets }: { buckets: Bucket[] }) {
+  const { t } = useTranslation();
   const host = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!host.current) return;
@@ -22,8 +24,8 @@ export default function TrendChart({ buckets }: { buckets: Bucket[] }) {
         ],
         series: [
           {},
-          { label: "Requests", stroke: "#d8ff61", width: 2, fill: "rgba(216,255,97,.07)" },
-          { label: "Tokens", stroke: "#58d6bc", width: 1.5, scale: "tokens" },
+          { label: t("dashboard.requests"), stroke: "#d8ff61", width: 2, fill: "rgba(216,255,97,.07)" },
+          { label: t("dashboard.tokens"), stroke: "#58d6bc", width: 1.5, scale: "tokens" },
         ],
       },
       series.data,
@@ -37,6 +39,6 @@ export default function TrendChart({ buckets }: { buckets: Bucket[] }) {
       resize.disconnect();
       chart.destroy();
     };
-  }, [buckets]);
-  return <div className="trend-chart" ref={host} aria-label="最近七天请求与 Token 趋势图" />;
+  }, [buckets, t]);
+  return <div className="trend-chart" ref={host} aria-label={t("dashboard.trendAria")} />;
 }

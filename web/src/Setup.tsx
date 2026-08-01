@@ -1,24 +1,15 @@
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { api, ApiError } from "./api";
 import { Field } from "./components";
 import type { Session } from "./types";
+import { LanguageSelect } from "./LanguageSelect";
+import { localizedError } from "./i18n/errors";
 
-const schema = z.object({
-  username: z.string().trim().min(1, "请输入用户名").max(128),
-  password: z.string()
-    .refine((value) => new TextEncoder().encode(value).length >= 12, "密码至少需要 12 字节")
-    .refine((value) => new TextEncoder().encode(value).length <= 1024, "密码不能超过 1024 字节"),
-  confirmation: z.string().min(1, "请再次输入密码")
-    .refine((value) => new TextEncoder().encode(value).length <= 1024, "密码不能超过 1024 字节"),
-  setupToken: z.string().max(128),
-}).refine((value) => value.password === value.confirmation, {
-  path: ["confirmation"],
-  message: "两次输入的密码不一致",
-});
-type SetupValue = z.infer<typeof schema>;
+type SetupValue = { username: string; password: string; confirmation: string; setupToken: string };
 
 export function Setup({
   tokenRequired,
@@ -29,6 +20,18 @@ export function Setup({
   onSuccess: (session: Session) => void;
   onAlreadyComplete: () => void;
 }) {
+  const { t } = useTranslation();
+  const schema = useMemo(() => z.object({
+    username: z.string().trim().min(1, t("auth.usernameRequired")).max(128),
+    password: z.string()
+      .refine((value) => new TextEncoder().encode(value).length >= 12, t("auth.passwordMin"))
+      .refine((value) => new TextEncoder().encode(value).length <= 1024, t("auth.passwordMax")),
+    confirmation: z.string().min(1, t("auth.confirmRequired"))
+      .refine((value) => new TextEncoder().encode(value).length <= 1024, t("auth.passwordMax")),
+    setupToken: z.string().max(128),
+  }).refine((value) => value.password === value.confirmation, {
+    path: ["confirmation"], message: t("auth.passwordMismatch"),
+  }), [t]);
   const [serverError, setServerError] = useState("");
   const {
     register,
@@ -42,7 +45,7 @@ export function Setup({
   });
   const submit = handleSubmit(async (value) => {
     if (tokenRequired && !value.setupToken.trim()) {
-      setError("setupToken", { message: "请输入启动终端显示的一次性 Setup Token" });
+      setError("setupToken", { message: t("auth.tokenRequired") });
       return;
     }
     setServerError("");
@@ -61,55 +64,56 @@ export function Setup({
         onAlreadyComplete();
         return;
       }
-      setServerError(error instanceof ApiError ? error.message : "初始化服务暂时不可用");
+      setServerError(error instanceof ApiError ? localizedError(t, error) : t("auth.serviceUnavailable"));
     }
   });
   return (
     <main className="login-page setup-page">
-      <section className="login-story" aria-label="初始化说明">
+      <section className="login-story" aria-label={t("auth.setupIntro")}>
         <div className="brand login-brand">
           <span className="brand-mark">H</span>
-          <span><strong>HEIMDALL</strong><small>FIRST-RUN SETUP</small></span>
+          <span><strong>HEIMDALL</strong><small>{t("auth.firstRunSubtitle")}</small></span>
         </div>
         <div>
-          <p className="eyebrow">WELCOME TO THE GATE</p>
-          <h1>创建这台网关的<br />第一位管理员。</h1>
-          <p>密码只会以 Argon2id 哈希保存在本机。完成后，首次初始化入口将永久关闭。</p>
+          <p className="eyebrow">{t("auth.setupEyebrow")}</p>
+          <h1>{t("auth.setupTitle")}</h1>
+          <p>{t("auth.setupDescription")}</p>
         </div>
         <ul className="trust-list">
-          <li><span>01</span>本机加密存储与独占数据锁</li>
-          <li><span>02</span>一次性并发安全初始化</li>
-          <li><span>03</span>自动创建安全管理会话</li>
+          <li><span>01</span>{t("auth.setupTrust1")}</li>
+          <li><span>02</span>{t("auth.setupTrust2")}</li>
+          <li><span>03</span>{t("auth.setupTrust3")}</li>
         </ul>
       </section>
       <section className="login-panel">
+        <LanguageSelect compact />
         <form onSubmit={submit} autoComplete="off">
-          <p className="eyebrow">INSTANCE INITIALIZATION</p>
-          <h2>设置管理员账户</h2>
-          <p>这是唯一一次无需登录即可创建管理员的操作。</p>
+          <p className="eyebrow">{t("auth.setupEyebrow")}</p>
+          <h2>{t("auth.setupHeading")}</h2>
+          <p>{t("auth.setupOnlyOnce")}</p>
           {serverError && <div className="notice error" role="alert">{serverError}</div>}
-          <Field label="管理员用户名" error={errors.username?.message}>
+          <Field label={t("auth.username")} error={errors.username?.message}>
             <input autoFocus autoComplete="username" {...register("username")} />
           </Field>
-          <Field label="管理员密码" hint="至少 12 字节" error={errors.password?.message}>
+          <Field label={t("auth.password")} hint={t("auth.passwordHint")} error={errors.password?.message}>
             <input type="password" autoComplete="new-password" {...register("password")} />
           </Field>
-          <Field label="确认密码" error={errors.confirmation?.message}>
+          <Field label={t("auth.confirmPassword")} error={errors.confirmation?.message}>
             <input type="password" autoComplete="new-password" {...register("confirmation")} />
           </Field>
           {tokenRequired && (
             <Field
-              label="Setup Token"
-              hint="从启动 Heimdall 的终端复制"
+              label={t("auth.setupToken")}
+              hint={t("auth.setupTokenHint")}
               error={errors.setupToken?.message}
             >
               <input type="password" autoComplete="off" spellCheck={false} {...register("setupToken")} />
             </Field>
           )}
           <button className="button primary wide" disabled={isSubmitting}>
-            {isSubmitting ? "正在安全初始化…" : "创建管理员并进入控制台"}
+            {isSubmitting ? t("auth.settingUp") : t("auth.setupSubmit")}
           </button>
-          <small className="login-note">受 Origin、限速、Argon2id 与可信审计链保护</small>
+          <small className="login-note">{t("auth.setupSecurity")}</small>
         </form>
       </section>
     </main>

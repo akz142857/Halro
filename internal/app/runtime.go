@@ -75,6 +75,7 @@ type Runtime struct {
 	closeErr         error
 	draining         atomic.Bool
 	runtimeSettings  atomic.Pointer[domain.RuntimeSettings]
+	uiSettings       atomic.Pointer[domain.InstanceUISettings]
 }
 
 func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime, error) {
@@ -379,6 +380,24 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		return fail(fmt.Errorf("load runtime settings: %w", err))
 	}
 	runtime.runtimeSettings.Store(&settings)
+	uiSettings, err := metadata.InstanceUISettings()
+	if errors.Is(err, boltstore.ErrNotFound) {
+		uiSettings = domain.InstanceUISettings{
+			DefaultLocale: domain.LocaleZhCN,
+			UpdatedAt:     time.Now().UTC(),
+		}
+		uiSettings, err = metadata.PutInstanceUISettings(uiSettings, 0)
+	}
+	if err != nil {
+		auditLog.Close()
+		alertDispatcher.Close()
+		ledgerLog.Close()
+		metadata.Close()
+		providerRegistry.Close()
+		secretVault.Close()
+		return fail(fmt.Errorf("initialize UI settings: %w", err))
+	}
+	runtime.uiSettings.Store(&uiSettings)
 	cleanupAdminSessions = false
 	backgroundContext, backgroundCancel := context.WithCancel(context.Background())
 	runtime.backgroundCtx = backgroundContext
@@ -711,6 +730,7 @@ func (r *Runtime) adminRouter() http.Handler {
 	router.Get("/health/live", r.live)
 	router.Get("/health/ready", r.ready)
 	router.Get("/admin/api/v1/setup/status", r.getAdminSetupStatus)
+	router.Get("/admin/api/v1/ui/bootstrap", r.getAdminUIBootstrap)
 	router.Post("/admin/api/v1/setup/admin", r.setupAdmin)
 	router.Post("/admin/api/v1/session/login", r.loginAdmin)
 	router.With(r.requireAdmin).Get("/admin/api/v1/session", r.getAdminSession)
@@ -722,6 +742,10 @@ func (r *Runtime) adminRouter() http.Handler {
 	router.With(r.requireAdmin).Get("/admin/api/v1/system/status", r.adminSystemStatus)
 	router.With(r.requireAdmin).Get("/admin/api/v1/settings", r.getAdminSettings)
 	router.With(r.requireAdminMutation).Put("/admin/api/v1/settings", r.updateAdminSettings)
+	router.With(r.requireAdmin).Get("/admin/api/v1/settings/ui", r.getAdminUISettings)
+	router.With(r.requireAdminMutation).Put("/admin/api/v1/settings/ui", r.updateAdminUISettings)
+	router.With(r.requireAdmin).Get("/admin/api/v1/preferences", r.getAdminPreferences)
+	router.With(r.requireAdminMutation).Put("/admin/api/v1/preferences", r.updateAdminPreferences)
 	router.With(r.requireAdmin).Get("/admin/api/v1/projects", r.listAdminProjects)
 	router.With(r.requireAdminMutation).Post("/admin/api/v1/projects", r.createAdminProject)
 	router.With(r.requireAdmin).Get("/admin/api/v1/projects/{id}", r.getAdminProject)

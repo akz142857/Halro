@@ -113,6 +113,7 @@ func ResetAdminPassword(
 	defer clear(replacement.PasswordHash)
 	defer clear(replacement.PasswordSalt)
 	replacement.CreatedAt = current.CreatedAt
+	replacement.Locale = current.Locale
 	replacement.SessionGeneration = current.SessionGeneration + 1
 
 	masterKey, err := vault.LoadMasterKey(cfg.Storage.MasterKeyFile)

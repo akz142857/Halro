@@ -80,7 +80,23 @@ make start
 
 系统检测到管理员已经存在后会显示正常登录页。停止服务按 `Ctrl+C`。
 
-### 2.4 Headless 与自动化部署
+### 2.4 界面语言
+
+首次初始化页和登录页右上角可以直接选择语言。Admin 当前完整支持简体中文与
+English，切换后无需刷新页面。
+
+登录后进入 **设置 → 界面语言**，可以分别配置：
+
+- **我的语言**：保存到当前管理员账号，在其他浏览器登录同一账号时继续生效；
+- **实例默认语言**：用于未登录页面，以及选择“跟随实例默认语言”的管理员。
+
+两个设置分别保存，因此某一个请求失败不会造成另一个设置显示为失败。语言解析顺序
+为管理员偏好、实例默认语言、浏览器语言、内置简体中文。实例默认语言属于全局
+设置，修改会写入 Audit；管理员偏好也有独立 Revision，并使用 `If-Match` 防止
+多个页面相互覆盖。Gateway API、Provider 模型名称、错误码和审计枚举等协议字段
+不会在协议层被翻译。语言偏好只保存在服务端元数据中，不写入浏览器持久化存储。
+
+### 2.5 Headless 与自动化部署
 
 ```bash
 ./bin/heimdall init --config ./configs/config.example.yaml
@@ -313,7 +329,7 @@ Redaction Policy 支持内置 PII/Secret、RE2 规则和字典。策略可以：
 - **Dashboard**：今日请求、Provider Attempt、Provider 报告 Token、成本、错误率、延迟和最近七天趋势；
 - **Usage**：每次 Provider Attempt 的状态、Token、成本、延迟以及是否为保守估算；
 - **Operations**：Alert 和 HMAC Audit Chain；
-- **Settings**：可热更新的运行参数和管理员密码；
+- **Settings**：界面语言、可热更新的运行参数和管理员密码；
 - **System Status**：账本、Usage watermark、队列与运行健康度。
 
 一个客户端请求可能产生多个 Provider Attempt，例如重试或 fallback。请求数与 Attempt 数不同是正常现象；成本、Token 和错误率按 Attempt 记录。

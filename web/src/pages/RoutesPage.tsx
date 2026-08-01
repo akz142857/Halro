@@ -18,10 +18,12 @@ import {
   StatusDot,
 } from "../components";
 import type { Deployment, Provider, Route } from "../types";
+import { useTranslation } from "react-i18next";
 
 const column = createColumnHelper<Route>();
 
 export function RoutesPage() {
+  const { t } = useTranslation();
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<Route>();
   const [testResult, setTestResult] = useState("");
@@ -35,8 +37,8 @@ export function RoutesPage() {
   });
   const test = useMutation({
     mutationFn: (route: Route) => api.testRoute(route.id),
-    onSuccess: (value) => setTestResult(`HEALTHY · ${value.latency_ms}ms`),
-    onError: () => setTestResult("UNHEALTHY"),
+    onSuccess: (value) => setTestResult(t("routes.healthy", { latency: value.latency_ms })),
+    onError: () => setTestResult(t("routes.unhealthy")),
   });
   const deploymentByID = useMemo(
     () => new Map(deployments.data?.items.map((item) => [item.id, item]) ?? []),
@@ -48,7 +50,7 @@ export function RoutesPage() {
   );
   const columns = useMemo(() => [
     column.accessor("public_model", {
-      header: "PUBLIC MODEL",
+      header: t("routes.publicModel"),
       cell: ({ row, getValue }) => (
         <div className="model-cell">
           <StatusDot ok={row.original.enabled} />
@@ -58,15 +60,15 @@ export function RoutesPage() {
       ),
     }),
     column.accessor("deployment_id", {
-      header: "DEPLOYMENT",
+      header: t("routes.deployment"),
       cell: ({ getValue }) => {
         const deployment = deploymentByID.get(getValue());
-        return deployment?.name || getValue() || "Legacy route";
+        return deployment?.name || getValue() || t("routes.legacy");
       },
     }),
     column.display({
       id: "provider",
-      header: "PROVIDER",
+      header: t("routes.provider"),
       cell: ({ row }) => {
         const deployment = deploymentByID.get(row.original.deployment_id);
         const providerID = deployment?.provider_id || row.original.provider_id || "";
@@ -75,31 +77,31 @@ export function RoutesPage() {
     }),
     column.display({
       id: "provider_model",
-      header: "UPSTREAM MODEL",
+      header: t("routes.upstreamModel"),
       cell: ({ row }) => deploymentByID.get(row.original.deployment_id)?.provider_model || row.original.provider_model,
     }),
     column.accessor("strategy", {
-      header: "STRATEGY",
-      cell: ({ getValue }) => <span className="badge">{getValue() || "ordered"}</span>,
+      header: t("routes.strategy"),
+      cell: ({ getValue }) => <span className="badge">{(getValue() || "ordered") === "round_robin" ? t("routes.roundRobin") : t("routes.ordered")}</span>,
     }),
-    column.accessor("priority", { header: "PRIORITY" }),
+    column.accessor("priority", { header: t("routes.priority") }),
     column.display({
       id: "actions",
       header: "",
       cell: ({ row }) => (
         <div className="row-actions">
-          <button className="button ghost" disabled={!row.original.enabled || test.isPending} onClick={() => test.mutate(row.original)}>测试</button>
-          <button className="button ghost" onClick={() => setEditing(row.original)}>编辑</button>
+          <button className="button ghost" disabled={!row.original.enabled || test.isPending} onClick={() => test.mutate(row.original)}>{t("common.test")}</button>
+          <button className="button ghost" onClick={() => setEditing(row.original)}>{t("common.edit")}</button>
           <ConfirmButton
-            label="删除"
-            confirmLabel={`删除 Route “${row.original.public_model}”？`}
+            label={t("common.delete")}
+            confirmLabel={t("routes.deleteConfirm", { name: row.original.public_model })}
             onConfirm={() => remove.mutate(row.original)}
             disabled={remove.isPending}
           />
         </div>
       ),
     }),
-  ], [deploymentByID, providerNames, remove, test]);
+  ], [deploymentByID, providerNames, remove, test, t]);
   const table = useReactTable({
     data: routes.data?.items ?? [],
     columns,
@@ -110,21 +112,21 @@ export function RoutesPage() {
   return (
     <>
       <PageHeader
-        eyebrow="MODEL FABRIC"
-        title="Routes"
-        description="公共模型别名只引用 Deployment；模型、价格、能力和并发策略由 Deployment 独立维护。"
-        action={<button className="button primary" onClick={() => setCreating(true)}>＋ 新建 Route</button>}
+        eyebrow={t("routes.eyebrow")}
+        title={t("routes.title")}
+        description={t("routes.description")}
+        action={<button className="button primary" onClick={() => setCreating(true)}>{t("routes.create")}</button>}
       />
       {pending && <Loading />}
       {error && <ErrorState error={error} />}
-      {testResult && <div className={`notice ${testResult.startsWith("HEALTHY") ? "success" : "warning"}`}><strong>{testResult}</strong></div>}
+      {testResult && <div className={`notice ${test.isSuccess ? "success" : "warning"}`}><strong>{testResult}</strong></div>}
       {routes.data?.items.length === 0 && (
-        <EmptyState title="还没有模型路由">创建 Route 后，OpenAI Compatible API 才能解析公共模型别名。</EmptyState>
+        <EmptyState title={t("routes.emptyTitle")}>{t("routes.emptyDescription")}</EmptyState>
       )}
       {!!routes.data?.items.length && (
         <div className="table-shell">
           <table>
-            <caption className="visually-hidden">模型路由列表</caption>
+            <caption className="visually-hidden">{t("routes.list")}</caption>
             <thead>
               {table.getHeaderGroups().map((group) => (
                 <tr key={group.id}>
@@ -157,6 +159,7 @@ export function RoutesPage() {
 }
 
 function RouteForm({ current, deployments, onClose }: { current?: Route; deployments: Deployment[]; onClose: () => void }) {
+  const { t } = useTranslation();
   const enabled = deployments.filter((item) => item.enabled || item.id === current?.deployment_id);
   const [publicModel, setPublicModel] = useState(current?.public_model ?? "chat");
   const [deploymentID, setDeploymentID] = useState(current?.deployment_id ?? enabled[0]?.id ?? "");
@@ -187,31 +190,31 @@ function RouteForm({ current, deployments, onClose }: { current?: Route; deploym
     if (publicModel.trim() && deploymentID) mutation.mutate();
   };
   return (
-    <Modal title={current ? "编辑模型 Route" : "创建模型 Route"} onClose={onClose}>
+    <Modal title={current ? t("routes.edit") : t("routes.createTitle")} onClose={onClose}>
       {enabled.length === 0 ? (
-        <div className="notice warning"><strong>需要可用 Deployment</strong><span>先在 Deployments 页面创建并启用一个模型部署。</span></div>
+        <div className="notice warning"><strong>{t("routes.deploymentRequired")}</strong><span>{t("routes.deploymentRequiredDescription")}</span></div>
       ) : (
         <form className="form-grid" onSubmit={submit}>
-          <Field label="公共模型别名"><input autoFocus required value={publicModel} onChange={(event) => setPublicModel(event.target.value)} /></Field>
-          <Field label="Deployment">
+          <Field label={t("routes.publicAlias")}><input autoFocus required value={publicModel} onChange={(event) => setPublicModel(event.target.value)} /></Field>
+          <Field label={t("routes.deployment")}>
             <select required value={deploymentID} onChange={(event) => setDeploymentID(event.target.value)}>
               {enabled.map((deployment) => (
                 <option value={deployment.id} key={deployment.id}>{deployment.name} · {deployment.provider_model}</option>
               ))}
             </select>
           </Field>
-          <Field label="路由策略">
+          <Field label={t("routes.routeStrategy")}>
             <select value={strategy} onChange={(event) => setStrategy(event.target.value as typeof strategy)}>
-              <option value="ordered">Ordered fallback</option>
-              <option value="round_robin">Round robin</option>
+              <option value="ordered">{t("routes.ordered")}</option>
+              <option value="round_robin">{t("routes.roundRobin")}</option>
             </select>
           </Field>
-          <Field label="优先级"><input type="number" value={priority} onChange={(event) => setPriority(Number(event.target.value))} /></Field>
-          <label className="check-row"><input type="checkbox" checked={routeEnabled} onChange={(event) => setRouteEnabled(event.target.checked)} />启用 Route</label>
+          <Field label={t("routes.priority")}><input type="number" value={priority} onChange={(event) => setPriority(Number(event.target.value))} /></Field>
+          <label className="check-row"><input type="checkbox" checked={routeEnabled} onChange={(event) => setRouteEnabled(event.target.checked)} />{t("routes.enable")}</label>
           {mutation.isError && <ErrorState error={mutation.error} />}
           <div className="form-actions">
-            <button type="button" className="button ghost" onClick={onClose}>取消</button>
-            <button className="button primary" disabled={mutation.isPending}>{current ? "保存并热加载" : "创建并热加载"}</button>
+            <button type="button" className="button ghost" onClick={onClose}>{t("common.cancel")}</button>
+            <button className="button primary" disabled={mutation.isPending}>{current ? t("routes.save") : t("routes.createAndLoad")}</button>
           </div>
         </form>
       )}

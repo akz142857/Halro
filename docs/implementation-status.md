@@ -1,6 +1,6 @@
 # Implementation status
 
-Last updated: 2026-07-31
+Last updated: 2026-08-01
 
 This file records implementation evidence for the current source tree. Release
 scope is governed by reviewed release notes and release gates.
@@ -66,6 +66,7 @@ scope is governed by reviewed release notes and release gates.
 | Admin contract completion | revisioned Credential deletion with atomic Provider/Webhook reference protection; Project Token Guard unblock; Route connection test; collection and per-resource Alert test endpoints |
 | Admin mutation integrity | serialized mutations, dependency guards, tombstones, HMAC Audit events, `no-store` and strict CSP headers |
 | Embedded Admin console | React/TypeScript/Vite SPA embedded with `go:embed`; login/logout, in-session password and CSRF/session rotation, Dashboard, Projects/Keys, Credentials/Providers, Deployments/Routes, Usage, merged Redaction/Token Guard Policies, Alerts/Audit Operations and status |
+| Admin localization | complete semantic-key `zh-CN`/`en-US` resources with parity test, single-language navigation, no-refresh switching, public bootstrap locale, separately saved revisioned instance default and per-admin server-side preference (no browser persistence), document language updates, localized display enums, and safe localized API errors |
 | Operations CLI | byte-verified read-only `doctor` using a non-rewriting existing lock plus read-only bbolt/WAL paths, offline audited Admin password reset/session invalidation, top-level restore alias, config/usage/audit/backup/key lifecycle commands |
 | First-run experience | `heimdall start` safe config generation, fail-closed idempotent system initialization, transactional first-Admin Web setup, transient public-listener setup token, and incremental `make start` build path |
 | Frozen API contract | route-registration regression covers every v1 Admin endpoint plus Chat, Embeddings, health and Metrics so a documented route cannot silently disappear |

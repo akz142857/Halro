@@ -53,6 +53,7 @@ var (
 	keyAuditHMACEnvelope     = []byte("audit_hmac_envelope")
 	keyVaultKeyring          = []byte("vault_keyring")
 	keyRuntimeSettings       = []byte("runtime_settings")
+	keyInstanceUISettings    = []byte("instance_ui_settings")
 )
 
 type MigrationRecord struct {
@@ -161,6 +162,48 @@ func (s *Store) PutRuntimeSettings(settings domain.RuntimeSettings, expectedRevi
 			return err
 		}
 		return bucket.Put(keyRuntimeSettings, encoded)
+	})
+	return settings, err
+}
+
+func (s *Store) InstanceUISettings() (domain.InstanceUISettings, error) {
+	var settings domain.InstanceUISettings
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		raw := tx.Bucket(bucketMeta).Get(keyInstanceUISettings)
+		if raw == nil {
+			return ErrNotFound
+		}
+		if err := json.Unmarshal(raw, &settings); err != nil {
+			return fmt.Errorf("decode instance UI settings: %w", err)
+		}
+		return settings.Validate()
+	})
+	return settings, err
+}
+
+func (s *Store) PutInstanceUISettings(settings domain.InstanceUISettings, expectedRevision uint64) (domain.InstanceUISettings, error) {
+	if err := settings.Validate(); err != nil {
+		return domain.InstanceUISettings{}, err
+	}
+	err := s.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(bucketMeta)
+		currentRevision := uint64(0)
+		if raw := bucket.Get(keyInstanceUISettings); raw != nil {
+			var current domain.InstanceUISettings
+			if err := json.Unmarshal(raw, &current); err != nil {
+				return fmt.Errorf("decode instance UI settings: %w", err)
+			}
+			currentRevision = current.Revision
+		}
+		if currentRevision != expectedRevision {
+			return ErrRevisionConflict
+		}
+		settings.Revision = currentRevision + 1
+		encoded, err := json.Marshal(settings)
+		if err != nil {
+			return err
+		}
+		return bucket.Put(keyInstanceUISettings, encoded)
 	})
 	return settings, err
 }

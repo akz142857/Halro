@@ -11,6 +11,7 @@ describe("first-run setup", () => {
   it("validates confirmation and creates the first administrator", async () => {
     const session = {
       username: "admin",
+      locale: "system" as const,
       csrf_token: "csrf",
       absolute_expires_at: "2026-08-02T00:00:00Z",
       idle_expires_at: "2026-08-01T01:00:00Z",

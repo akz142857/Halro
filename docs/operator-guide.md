@@ -74,6 +74,16 @@ egress, proxy, and Metrics-auth changes require restart. The Admin Settings page
 only changes the explicitly writable runtime settings. Always run `config check`
 before restart.
 
+Admin localization is metadata, not YAML configuration. The public
+`GET /admin/api/v1/ui/bootstrap` endpoint exposes only the instance default and
+supported locale identifiers so the setup/login shell can render before
+authentication. Authenticated administrators can update their own preference
+through `/admin/api/v1/preferences`; the instance default uses
+`/admin/api/v1/settings/ui`. Both mutation paths require CSRF protection and an
+`If-Match` revision, are audited, and never affect Gateway protocol payloads.
+Existing databases are initialized with `zh-CN`; older administrator records
+without a locale are interpreted as `system`.
+
 ## Offline diagnostics and break-glass access
 
 Stop Heimdall, then run the read-only diagnostic before upgrades, restores, or
