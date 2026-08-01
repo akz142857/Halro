@@ -33,6 +33,7 @@ func TestFrozenV1AdminRoutesAreRegistered(t *testing.T) {
 	expected := []string{
 		"POST /v1/chat/completions", "POST /v1/embeddings",
 		"GET /health/live", "GET /health/ready", "GET /metrics",
+		"GET /admin/api/v1/setup/status", "POST /admin/api/v1/setup/admin",
 		"POST /admin/api/v1/session/login", "POST /admin/api/v1/session/logout",
 		"GET /admin/api/v1/session", "POST /admin/api/v1/session/password",
 		"GET /admin/api/v1/credentials", "POST /admin/api/v1/credentials",

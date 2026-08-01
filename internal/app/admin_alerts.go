@@ -42,8 +42,10 @@ func (r *Runtime) createAdminAlert(writer http.ResponseWriter, request *http.Req
 		adminStoreError(writer)
 		return
 	}
-	r.adminMutationMu.Lock()
-	defer r.adminMutationMu.Unlock()
+	r.adminTopologyMu.Lock()
+	defer r.adminTopologyMu.Unlock()
+	r.adminAlertMu.Lock()
+	defer r.adminAlertMu.Unlock()
 	now := time.Now().UTC()
 	webhook, credential, credentialRevision, err := r.prepareAlertWebhook(
 		request, webhookID, input, nil, now, now,
@@ -81,8 +83,10 @@ func (r *Runtime) updateAdminAlert(writer http.ResponseWriter, request *http.Req
 		adminBadRequest(writer, "invalid request")
 		return
 	}
-	r.adminMutationMu.Lock()
-	defer r.adminMutationMu.Unlock()
+	r.adminTopologyMu.Lock()
+	defer r.adminTopologyMu.Unlock()
+	r.adminAlertMu.Lock()
+	defer r.adminAlertMu.Unlock()
 	current, err := r.store.GetAlertWebhook(request.Context(), chi.URLParam(request, "id"))
 	if err != nil || current.DeletedAt != nil {
 		adminNotFound(writer)
@@ -126,8 +130,10 @@ func (r *Runtime) deleteAdminAlert(writer http.ResponseWriter, request *http.Req
 	if !ok {
 		return
 	}
-	r.adminMutationMu.Lock()
-	defer r.adminMutationMu.Unlock()
+	r.adminTopologyMu.Lock()
+	defer r.adminTopologyMu.Unlock()
+	r.adminAlertMu.Lock()
+	defer r.adminAlertMu.Unlock()
 	webhook, err := r.store.GetAlertWebhook(request.Context(), chi.URLParam(request, "id"))
 	if err != nil || webhook.DeletedAt != nil {
 		adminNotFound(writer)

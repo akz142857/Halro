@@ -14,6 +14,7 @@ describe("typed admin API client", () => {
       if (String(input).endsWith("/session/login")) {
         return response({
           username: "admin",
+          locale: "system",
           csrf_token: "csrf-canary",
           absolute_expires_at: "2026-01-01T00:00:00Z",
           idle_expires_at: "2026-01-01T00:00:00Z",
@@ -22,6 +23,7 @@ describe("typed admin API client", () => {
       if (String(input).endsWith("/session/password")) {
         return response({
           username: "admin",
+          locale: "system",
           csrf_token: "csrf-rotated-canary",
           absolute_expires_at: "2026-01-01T00:00:00Z",
           idle_expires_at: "2026-01-01T00:00:00Z",

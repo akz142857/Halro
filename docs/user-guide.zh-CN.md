@@ -33,24 +33,29 @@ git clone https://github.com/akz142857/Heimdall.git
 cd Heimdall
 ```
 
-构建前端和单二进制：
+首次启动只需要：
 
 ```bash
-make build
+make start
 ```
 
-构建结果为 `bin/heimdall`。React 静态资源已经嵌入二进制，运行时不需要 Node.js，也不需要单独启动前端服务。
+该命令会按需安装前端依赖、构建 `bin/heimdall`、创建只监听本机回环地址的
+`config.yaml`、初始化本地加密存储并启动服务。React 静态资源嵌入二进制，
+运行时不需要单独启动前端服务。
 
-### 2.2 初始化数据目录
+### 2.2 在页面中完成首次初始化
 
-示例配置默认只监听本机回环地址：
+终端会显示 Admin 地址：
 
-```bash
-./bin/heimdall config check --config ./configs/config.example.yaml
-./bin/heimdall init --config ./configs/config.example.yaml
+```text
+Admin: http://127.0.0.1:8081/admin/setup
 ```
 
-初始化会生成：
+打开页面并设置管理员用户名和至少 12 个字符的密码。密码只以 Argon2id 哈希
+保存在本机元数据中，不会写入 `config.yaml`。成功后初始化入口永久关闭，
+浏览器会自动创建安全会话并进入控制台。
+
+自动初始化会生成：
 
 - `master.key`：本机 Master Key，权限为 `0600`；
 - `data/heimdall.db`：元数据；
@@ -59,25 +64,49 @@ make build
 - 后续生成的 Usage checkpoint 与 Parquet 数据。
 
 Master Key 必须与数据目录分开备份。丢失 Master Key 后，Provider Credential 无法恢复。
+重复执行 `make start` 不会覆盖配置、Master Key 或数据。如果只剩 Master Key 或
+只剩元数据等残缺状态，Heimdall 会拒绝自动修复并要求人工恢复匹配的文件。
 
-### 2.3 创建管理员
+如果 Admin 通过 TLS 监听非回环地址，启动终端还会显示一次性 Setup Token，
+页面必须同时提交该 Token。它只保存在当前进程内，重启后自动轮换。
 
-管理员密码至少 12 字节。使用标准输入传递，不要把密码直接写进命令参数：
+### 2.3 后续启动
+
+以后仍然使用同一条命令：
 
 ```bash
-read -r -s ADMIN_PASSWORD
-printf '\n'
-printf '%s' "$ADMIN_PASSWORD" | ./bin/heimdall admin bootstrap \
-  --config ./configs/config.example.yaml \
-  --username admin
-unset ADMIN_PASSWORD
+make start
 ```
 
-### 2.4 启动服务
+系统检测到管理员已经存在后会显示正常登录页。停止服务按 `Ctrl+C`。
+
+### 2.4 界面语言
+
+首次初始化页和登录页右上角可以直接选择语言。Admin 当前完整支持简体中文与
+English，切换后无需刷新页面。
+
+登录后进入 **设置 → 界面语言**，可以分别配置：
+
+- **我的语言**：保存到当前管理员账号，在其他浏览器登录同一账号时继续生效；
+- **实例默认语言**：用于未登录页面，以及选择“跟随实例默认语言”的管理员。
+
+两个设置分别保存，因此某一个请求失败不会造成另一个设置显示为失败。语言解析顺序
+为管理员偏好、实例默认语言、浏览器语言、内置简体中文。实例默认语言属于全局
+设置，修改会写入 Audit；管理员偏好也有独立 Revision，并使用 `If-Match` 防止
+多个页面相互覆盖。Gateway API、Provider 模型名称、错误码和审计枚举等协议字段
+不会在协议层被翻译。语言偏好只保存在服务端元数据中，不写入浏览器持久化存储。
+
+### 2.5 Headless 与自动化部署
 
 ```bash
+./bin/heimdall init --config ./configs/config.example.yaml
+printf '%s' "$ADMIN_PASSWORD" | ./bin/heimdall admin bootstrap \
+  --config ./configs/config.example.yaml --username admin
 ./bin/heimdall serve --config ./configs/config.example.yaml
 ```
+
+这些离线命令继续用于无浏览器服务器、CI、自动化部署与紧急密码恢复，运行时
+持有数据目录独占锁，因此必须在服务停止时执行。
 
 默认地址：
 
@@ -87,7 +116,7 @@ unset ADMIN_PASSWORD
 | Gateway | `http://127.0.0.1:8080` | OpenAI Compatible API |
 | Metrics | `http://127.0.0.1:9090/metrics` | Prometheus 指标 |
 
-登录 Admin 使用用户名 `admin` 和上一步设置的密码。停止服务按 `Ctrl+C`。
+登录 Admin 使用首次初始化页面中设置的用户名和密码。
 
 ## 3. 配置第一个模型
 
@@ -300,7 +329,7 @@ Redaction Policy 支持内置 PII/Secret、RE2 规则和字典。策略可以：
 - **Dashboard**：今日请求、Provider Attempt、Provider 报告 Token、成本、错误率、延迟和最近七天趋势；
 - **Usage**：每次 Provider Attempt 的状态、Token、成本、延迟以及是否为保守估算；
 - **Operations**：Alert 和 HMAC Audit Chain；
-- **Settings**：可热更新的运行参数和管理员密码；
+- **Settings**：界面语言、可热更新的运行参数和管理员密码；
 - **System Status**：账本、Usage watermark、队列与运行健康度。
 
 一个客户端请求可能产生多个 Provider Attempt，例如重试或 fallback。请求数与 Attempt 数不同是正常现象；成本、Token 和错误率按 Attempt 记录。

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akz142857/Heimdall/internal/domain"
 	"github.com/akz142857/Heimdall/internal/openaiapi"
 	"github.com/akz142857/Heimdall/internal/provider"
 	"github.com/akz142857/Heimdall/internal/semantic"
@@ -21,15 +22,16 @@ import (
 const maxResponseBytes = 16 << 20
 
 type Options struct {
-	Endpoint *url.URL
-	APIKey   []byte
-	Client   *http.Client
+	Endpoint   *url.URL
+	APIKey     []byte
+	Client     *http.Client
+	Authorizer provider.Authorizer
 }
 
 type Adapter struct {
-	endpoint *url.URL
-	apiKey   []byte
-	client   *http.Client
+	endpoint   *url.URL
+	authorizer provider.Authorizer
+	client     *http.Client
 }
 
 type content struct {
@@ -84,12 +86,23 @@ func New(options Options) (*Adapter, error) {
 	if options.Endpoint == nil || options.Client == nil {
 		return nil, errors.New("endpoint and client are required")
 	}
-	if len(options.APIKey) == 0 {
+	if len(options.APIKey) == 0 && options.Authorizer == nil {
 		return nil, errors.New("api key is required")
 	}
-	key := bytes.Clone(options.APIKey)
+	authorizer := options.Authorizer
+	if authorizer == nil {
+		var err error
+		authorizer, err = provider.NewStaticHeaderAuthorizer(domain.CredentialGoogleAPIKey, "x-goog-api-key", "", options.APIKey, "Authorization")
+		if err != nil {
+			return nil, err
+		}
+	}
+	if authorizer.Scheme() != domain.CredentialGoogleAPIKey {
+		authorizer.Close()
+		return nil, errors.New("credential scheme does not match Gemini adapter profile")
+	}
 	endpoint := *options.Endpoint
-	return &Adapter{endpoint: &endpoint, apiKey: key, client: options.Client}, nil
+	return &Adapter{endpoint: &endpoint, authorizer: authorizer, client: options.Client}, nil
 }
 
 func (a *Adapter) Type() string { return "gemini" }
@@ -99,8 +112,7 @@ func (a *Adapter) Capabilities() provider.Capabilities {
 }
 
 func (a *Adapter) Close() {
-	clear(a.apiKey)
-	a.apiKey = nil
+	a.authorizer.Close()
 	a.client.CloseIdleConnections()
 }
 
@@ -119,7 +131,9 @@ func (a *Adapter) Probe(ctx context.Context, model string) error {
 	if err != nil {
 		return badRequest("create Gemini probe", err)
 	}
-	a.authorize(request)
+	if err := a.authorize(request); err != nil {
+		return badRequest("authorize Gemini probe", err)
+	}
 	response, err := a.client.Do(request)
 	if err != nil {
 		return transportError("Gemini probe failed", err)
@@ -167,7 +181,9 @@ func (a *Adapter) ChatStream(ctx context.Context, call provider.ChatCall, emit f
 	if err != nil {
 		return nil, badRequest("create Gemini stream request", err)
 	}
-	a.authorize(request)
+	if err := a.authorize(request); err != nil {
+		return nil, badRequest("authorize Gemini stream request", err)
+	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "text/event-stream")
 	request.Header.Set("X-Request-ID", call.RequestID)
@@ -354,7 +370,9 @@ func (a *Adapter) postJSON(ctx context.Context, model, operation, requestID stri
 	if err != nil {
 		return badRequest("create Gemini request", err)
 	}
-	a.authorize(request)
+	if err := a.authorize(request); err != nil {
+		return badRequest("authorize Gemini request", err)
+	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("X-Request-ID", requestID)
@@ -408,9 +426,8 @@ func (a *Adapter) collectionURL() url.URL {
 	return endpoint
 }
 
-func (a *Adapter) authorize(request *http.Request) {
-	request.Header.Del("Authorization")
-	request.Header.Set("x-goog-api-key", string(a.apiKey))
+func (a *Adapter) authorize(request *http.Request) error {
+	return a.authorizer.Authorize(request, nil)
 }
 
 func embeddingInputs(raw json.RawMessage) ([]string, error) {

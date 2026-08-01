@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/netip"
 	"sync"
@@ -37,40 +38,52 @@ import (
 )
 
 type Runtime struct {
-	config           config.Config
-	logger           *slog.Logger
-	lock             *lock.Lock
-	store            *boltstore.Store
-	ledger           *ledger.Log
-	state            *ledger.State
-	status           *ledger.Status
-	vault            *vault.Vault
-	auth             *auth.Snapshot
-	providers        *provider.Registry
-	accounting       *budget.Manager
-	gateway          *gatewayapi.Handler
-	gatewayService   *gatewaycore.Service
-	tokenGuard       *tokenguard.Manager
-	redactor         *redaction.Engine
-	alerts           *alert.Dispatcher
-	audit            *audit.Log
-	auditCommitMu    sync.Mutex
-	adminMutationMu  sync.Mutex
-	metricsTokenHash [32]byte
-	adminSessions    *adminauth.Manager
-	adminLoginMu     sync.Mutex
-	adminLogin       map[string]adminLoginWindow
-	backgroundCtx    context.Context
-	backgroundCancel context.CancelFunc
-	backgroundWait   sync.WaitGroup
-	usage            *usage.Aggregate
-	usageCollector   *usage.Collector
-	usageExporter    *usage.Exporter
-	usageLocation    *time.Location
-	closeOnce        sync.Once
-	closeErr         error
-	draining         atomic.Bool
-	runtimeSettings  atomic.Pointer[domain.RuntimeSettings]
+	config            config.Config
+	logger            *slog.Logger
+	lock              *lock.Lock
+	store             *boltstore.Store
+	ledger            *ledger.Log
+	state             *ledger.State
+	status            *ledger.Status
+	vault             *vault.Vault
+	auth              *auth.Snapshot
+	providers         *provider.Registry
+	accounting        *budget.Manager
+	gateway           *gatewayapi.Handler
+	gatewayService    *gatewaycore.Service
+	tokenGuard        *tokenguard.Manager
+	redactor          *redaction.Engine
+	alerts            *alert.Dispatcher
+	audit             *audit.Log
+	auditBatchMu      sync.Mutex
+	auditBatchPending []adminAuditRequest
+	auditBatchRunning bool
+	adminTopologyMu   sync.Mutex
+	adminProjectMu    sync.Mutex
+	adminAlertMu      sync.Mutex
+	adminSettingsMu   sync.Mutex
+	adminIdentityMu   sync.Mutex
+	metricsTokenHash  [32]byte
+	adminSessions     *adminauth.Manager
+	adminLoginMu      sync.Mutex
+	adminLogin        map[string]adminLoginWindow
+	adminSetupRateMu  sync.Mutex
+	adminSetupRate    map[string]adminLoginWindow
+	setupMu           sync.Mutex
+	setupToken        string
+	setupTokenNeeded  bool
+	backgroundCtx     context.Context
+	backgroundCancel  context.CancelFunc
+	backgroundWait    sync.WaitGroup
+	usage             *usage.Aggregate
+	usageCollector    *usage.Collector
+	usageExporter     *usage.Exporter
+	usageLocation     *time.Location
+	closeOnce         sync.Once
+	closeErr          error
+	draining          atomic.Bool
+	runtimeSettings   atomic.Pointer[domain.RuntimeSettings]
+	uiSettings        atomic.Pointer[domain.InstanceUISettings]
 }
 
 func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime, error) {
@@ -111,6 +124,21 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 	if err != nil {
 		secretVault.Close()
 		return fail(err)
+	}
+	adminCount, err := metadata.AdminUserCount(ctx)
+	if err != nil {
+		metadata.Close()
+		secretVault.Close()
+		return fail(fmt.Errorf("inspect admin setup state: %w", err))
+	}
+	setupToken := ""
+	if adminCount == 0 {
+		setupToken, err = id.New("setup")
+		if err != nil {
+			metadata.Close()
+			secretVault.Close()
+			return fail(err)
+		}
 	}
 	adminSessions, err := adminauth.NewManager(
 		metadata,
@@ -327,6 +355,9 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		metricsTokenHash: metricsTokenHash,
 		adminSessions:    adminSessions,
 		adminLogin:       make(map[string]adminLoginWindow),
+		adminSetupRate:   make(map[string]adminLoginWindow),
+		setupToken:       setupToken,
+		setupTokenNeeded: setupRequiresToken(cfg),
 		usage:            usageAggregate,
 		usageCollector:   usageCollector,
 		usageExporter:    usageExporter,
@@ -358,6 +389,24 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		return fail(fmt.Errorf("load runtime settings: %w", err))
 	}
 	runtime.runtimeSettings.Store(&settings)
+	uiSettings, err := metadata.InstanceUISettings()
+	if errors.Is(err, boltstore.ErrNotFound) {
+		uiSettings = domain.InstanceUISettings{
+			DefaultLocale: domain.LocaleZhCN,
+			UpdatedAt:     time.Now().UTC(),
+		}
+		uiSettings, err = metadata.PutInstanceUISettings(uiSettings, 0)
+	}
+	if err != nil {
+		auditLog.Close()
+		alertDispatcher.Close()
+		ledgerLog.Close()
+		metadata.Close()
+		providerRegistry.Close()
+		secretVault.Close()
+		return fail(fmt.Errorf("initialize UI settings: %w", err))
+	}
+	runtime.uiSettings.Store(&uiSettings)
 	cleanupAdminSessions = false
 	backgroundContext, backgroundCancel := context.WithCancel(context.Background())
 	runtime.backgroundCtx = backgroundContext
@@ -499,6 +548,13 @@ func verifyVaultKeyCheck(store *boltstore.Store, secretVault *vault.Vault) error
 }
 
 func (r *Runtime) Run(ctx context.Context) error {
+	return r.RunWithReady(ctx, nil)
+}
+
+// RunWithReady binds every configured listener before calling ready. This
+// keeps startup guidance and service-manager readiness signals from claiming
+// success when one of the ports cannot actually be opened.
+func (r *Runtime) RunWithReady(ctx context.Context, ready func() error) error {
 	servers := []*http.Server{
 		r.server("gateway", r.config.Server.GatewayListen, r.gatewayRouter()),
 		r.server("admin", r.config.Server.AdminListen, r.adminRouter()),
@@ -507,16 +563,40 @@ func (r *Runtime) Run(ctx context.Context) error {
 		servers = append(servers, r.server("metrics", r.config.Server.MetricsListen, r.metricsRouter()))
 	}
 
-	errs := make(chan error, len(servers))
+	type boundServer struct {
+		server   *http.Server
+		listener net.Listener
+	}
+	bound := make([]boundServer, 0, len(servers))
 	for _, server := range servers {
-		server := server
+		listener, err := net.Listen("tcp", server.Addr)
+		if err != nil {
+			for _, item := range bound {
+				_ = item.listener.Close()
+			}
+			return fmt.Errorf("bind listener %s: %w", server.Addr, err)
+		}
+		bound = append(bound, boundServer{server: server, listener: listener})
+	}
+	if ready != nil {
+		if err := ready(); err != nil {
+			for _, item := range bound {
+				_ = item.listener.Close()
+			}
+			return err
+		}
+	}
+
+	errs := make(chan error, len(bound))
+	for _, item := range bound {
+		item := item
 		go func() {
-			r.logger.Info("listener started", "address", server.Addr)
+			r.logger.Info("listener started", "address", item.server.Addr)
 			var err error
 			if r.config.TLS.Enabled {
-				err = server.ListenAndServeTLS(r.config.TLS.CertFile, r.config.TLS.KeyFile)
+				err = item.server.ServeTLS(item.listener, r.config.TLS.CertFile, r.config.TLS.KeyFile)
 			} else {
-				err = server.ListenAndServe()
+				err = item.server.Serve(item.listener)
 			}
 			if err != nil && !errors.Is(err, http.ErrServerClosed) {
 				errs <- err
@@ -559,9 +639,7 @@ func (r *Runtime) Close() error {
 		r.backgroundCancel()
 		r.backgroundWait.Wait()
 		r.alerts.Close()
-		r.auditCommitMu.Lock()
 		auditErr := appendSystemAudit(r.audit, r.store, "system.shutdown")
-		r.auditCommitMu.Unlock()
 		r.closeErr = errors.Join(
 			auditErr,
 			func() error {
@@ -658,6 +736,9 @@ func (r *Runtime) adminRouter() http.Handler {
 	router.Use(adminSecurityHeaders)
 	router.Get("/health/live", r.live)
 	router.Get("/health/ready", r.ready)
+	router.Get("/admin/api/v1/setup/status", r.getAdminSetupStatus)
+	router.Get("/admin/api/v1/ui/bootstrap", r.getAdminUIBootstrap)
+	router.Post("/admin/api/v1/setup/admin", r.setupAdmin)
 	router.Post("/admin/api/v1/session/login", r.loginAdmin)
 	router.With(r.requireAdmin).Get("/admin/api/v1/session", r.getAdminSession)
 	router.With(r.requireAdminMutation).Post("/admin/api/v1/session/logout", r.logoutAdmin)
@@ -668,6 +749,10 @@ func (r *Runtime) adminRouter() http.Handler {
 	router.With(r.requireAdmin).Get("/admin/api/v1/system/status", r.adminSystemStatus)
 	router.With(r.requireAdmin).Get("/admin/api/v1/settings", r.getAdminSettings)
 	router.With(r.requireAdminMutation).Put("/admin/api/v1/settings", r.updateAdminSettings)
+	router.With(r.requireAdmin).Get("/admin/api/v1/settings/ui", r.getAdminUISettings)
+	router.With(r.requireAdminMutation).Put("/admin/api/v1/settings/ui", r.updateAdminUISettings)
+	router.With(r.requireAdmin).Get("/admin/api/v1/preferences", r.getAdminPreferences)
+	router.With(r.requireAdminMutation).Put("/admin/api/v1/preferences", r.updateAdminPreferences)
 	router.With(r.requireAdmin).Get("/admin/api/v1/projects", r.listAdminProjects)
 	router.With(r.requireAdminMutation).Post("/admin/api/v1/projects", r.createAdminProject)
 	router.With(r.requireAdmin).Get("/admin/api/v1/projects/{id}", r.getAdminProject)

@@ -15,10 +15,9 @@ type Config struct {
 }
 
 type state struct {
-	failures   int
-	openUntil  time.Time
-	halfOpen   int
-	generation uint64
+	failures  int
+	openUntil time.Time
+	halfOpen  int
 }
 
 type Manager struct {
@@ -28,10 +27,9 @@ type Manager struct {
 }
 
 type Lease struct {
-	once       sync.Once
-	manager    *Manager
-	targetID   string
-	generation uint64
+	once     sync.Once
+	manager  *Manager
+	targetID string
 }
 
 func New(config Config) (*Manager, error) {
@@ -64,10 +62,7 @@ func (m *Manager) Acquire(targetID string, now time.Time) (*Lease, error) {
 		}
 		current.halfOpen++
 	}
-	current.generation++
-	return &Lease{
-		manager: m, targetID: targetID, generation: current.generation,
-	}, nil
+	return &Lease{manager: m, targetID: targetID}, nil
 }
 
 // Done reports whether this attempt should affect availability health. A nil

@@ -600,6 +600,13 @@ func TestAmbiguousProviderFailureIsEstimatedAndSettled(t *testing.T) {
 		Retryable: true,
 		Message:   "connection lost",
 	}
+	fallback := &fakeAdapter{response: f.adapter.response}
+	if err := f.registry.Register(provider.Target{
+		ID: "target_2", PublicModel: "chat", ProviderModel: "provider-model",
+		Adapter: fallback, Priority: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	_, err := f.service.Chat(context.Background(), f.plaintext, chatRequest())
 	if err == nil {
 		t.Fatal("expected provider error")
@@ -608,6 +615,31 @@ func TestAmbiguousProviderFailureIsEstimatedAndSettled(t *testing.T) {
 	balance := f.state.Balance(f.project.ID, period)
 	if balance.ReservedMicrosUSD != 0 || balance.CommittedMicrosUSD == 0 {
 		t.Fatalf("ambiguous attempt was not conservatively settled: %#v", balance)
+	}
+	if f.adapter.calls != 1 || fallback.calls != 0 {
+		t.Fatalf("ambiguous execution was retried: primary=%d fallback=%d", f.adapter.calls, fallback.calls)
+	}
+}
+
+func TestAllOperationsPreserveTerminalContextErrors(t *testing.T) {
+	f := newFixture(t, 10_000)
+	defer f.close()
+	f.adapter.err = context.Canceled
+
+	if _, err := f.service.Chat(context.Background(), f.plaintext, chatRequest()); !errors.Is(err, context.Canceled) {
+		t.Fatalf("chat error=%v", err)
+	}
+	if _, err := f.service.Embeddings(context.Background(), f.plaintext, openaiapi.EmbeddingRequest{
+		Model: "chat", Input: json.RawMessage(`["hello"]`),
+	}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("embeddings error=%v", err)
+	}
+	streamRequest := chatRequest()
+	streamRequest.Stream = true
+	if err := f.service.ChatStream(context.Background(), f.plaintext, streamRequest, func(openaiapi.ChatCompletionResponse) error {
+		return nil
+	}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("stream error=%v", err)
 	}
 }
 
@@ -974,5 +1006,22 @@ func TestChatStreamNeverFallsBackAfterPayload(t *testing.T) {
 	})
 	if err == nil || f.adapter.calls != 1 || fallback.calls != 0 {
 		t.Fatalf("err=%v primary_calls=%d fallback_calls=%d", err, f.adapter.calls, fallback.calls)
+	}
+}
+
+func TestProviderRetryAfterPropagatesAndDelaysRetry(t *testing.T) {
+	upstream := &provider.Error{
+		Class: provider.ErrorRateLimit, Retryable: true, RetryAfter: 50 * time.Millisecond,
+	}
+	mapped := mapProviderError(upstream)
+	var gatewayErr *Error
+	if !errors.As(mapped, &gatewayErr) || gatewayErr.RetryAfter != upstream.RetryAfter {
+		t.Fatalf("mapped retry-after=%#v", gatewayErr)
+	}
+	service := &Service{retryBaseDelay: 0, retryMaxDelay: upstream.RetryAfter}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+	if err := service.waitRetry(ctx, 0, upstream); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("provider retry-after was ignored: %v", err)
 	}
 }

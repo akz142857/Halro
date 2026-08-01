@@ -2,11 +2,39 @@ package limiter
 
 import (
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/akz142857/Heimdall/internal/domain"
 )
+
+func TestConcurrentProjectsHaveIndependentStateLocks(t *testing.T) {
+	manager := New()
+	now := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
+	const projects = 64
+	var wait sync.WaitGroup
+	errorsByProject := make(chan error, projects)
+	for index := 0; index < projects; index++ {
+		wait.Add(1)
+		go func(index int) {
+			defer wait.Done()
+			lease, err := manager.Acquire(domain.Project{ID: fmt.Sprintf("p_%d", index), MaxConcurrency: 1}, 1, now)
+			if err == nil {
+				lease.Release()
+			}
+			errorsByProject <- err
+		}(index)
+	}
+	wait.Wait()
+	close(errorsByProject)
+	for err := range errorsByProject {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
 
 func TestAtomicPolicyAdmissionAndRelease(t *testing.T) {
 	manager := New()

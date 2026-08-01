@@ -5,9 +5,16 @@ export interface Page<T> {
 
 export interface Session {
   username: string;
+  locale: LocalePreference;
   csrf_token: string;
   absolute_expires_at: string;
   idle_expires_at: string;
+}
+
+export interface SetupStatus {
+  instance_initialized: boolean;
+  setup_required: boolean;
+  token_required: boolean;
 }
 
 export interface Bucket {
@@ -76,10 +83,29 @@ export interface Credential {
   id: string;
   name: string;
   type: ProviderType;
+  access_surface: AccessSurface;
+  scheme: CredentialScheme;
   secret_configured: boolean;
   key_version: number;
   revision: number;
 }
+
+export type AccessSurface =
+  | "openai-api"
+  | "azure-openai"
+  | "deepseek-api"
+  | "openai-compatible"
+  | "gemini-generate-content"
+  | "bedrock-runtime";
+
+export type CredentialScheme =
+  | "bearer.static"
+  | "azure.api-key"
+  | "google.api-key"
+  | "aws.sigv4.explicit-session";
+
+export type CapabilityEvidence = "verified" | "declared" | "legacy" | "unsupported";
+export type CapabilityEvidenceSet = Record<string, CapabilityEvidence>;
 
 export type ProviderType =
   | "openai"
@@ -107,11 +133,15 @@ export interface Provider {
   id: string;
   name: string;
   type: ProviderType;
+  access_surface: AccessSurface;
+  profile_id: string;
+  credential_scheme: CredentialScheme;
   base_url: string;
   api_version?: string;
   credential_id: string;
   allowed_hosts: string[];
   capabilities: ProviderCapabilities;
+  capability_evidence: CapabilityEvidenceSet;
   max_concurrency: number;
   enabled: boolean;
   revision: number;
@@ -124,7 +154,10 @@ export interface Deployment {
   name: string;
   provider_id: string;
   provider_model: string;
+  access_surface: AccessSurface;
+  profile_id: string;
   capabilities: ProviderCapabilities;
+  capability_evidence: CapabilityEvidenceSet;
   input_micros_per_million: number;
   output_micros_per_million: number;
   max_concurrency: number;
@@ -280,5 +313,24 @@ export interface SystemStatus {
 export interface RuntimeSettings {
   health_probe_interval_seconds: number;
   updated_at?: string;
+  revision: number;
+}
+
+export type SupportedLocale = "zh-CN" | "en-US";
+export type LocalePreference = SupportedLocale | "system";
+
+export interface UIBootstrap {
+  default_locale: SupportedLocale;
+  supported_locales: SupportedLocale[];
+}
+
+export interface InstanceUISettings {
+  default_locale: SupportedLocale;
+  updated_at?: string;
+  revision: number;
+}
+
+export interface AdminPreferences {
+  locale: LocalePreference;
   revision: number;
 }

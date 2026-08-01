@@ -13,7 +13,13 @@ import type {
   RedactionTestResult,
   Route,
   RuntimeSettings,
+  UIBootstrap,
+  InstanceUISettings,
+  AdminPreferences,
+  LocalePreference,
+  SupportedLocale,
   Session,
+  SetupStatus,
   SystemStatus,
   TokenGuardPolicy,
   TokenGuardPreview,
@@ -62,14 +68,14 @@ async function request<T>(
     try {
       payload = JSON.parse(text);
     } catch {
-      throw new ApiError(response.status, "服务端返回了无法解析的响应");
+      throw new ApiError(response.status, "server returned an invalid response", "invalid_response");
     }
   }
   if (!response.ok) {
     const error = payload as { error?: string; code?: string } | undefined;
     throw new ApiError(
       response.status,
-      error?.error || `请求失败（${response.status}）`,
+      error?.error || `request failed (${response.status})`,
       error?.code,
     );
   }
@@ -81,6 +87,27 @@ function json(method: string, value?: unknown): RequestInit {
 }
 
 export const api = {
+  uiBootstrap: () => request<UIBootstrap>("/ui/bootstrap").then((result) => result.data),
+  setupStatus: () =>
+    request<SetupStatus>("/setup/status").then((value) => value.data),
+  async setupAdmin(
+    username: string,
+    password: string,
+    passwordConfirmation: string,
+    setupToken: string,
+  ) {
+    const result = await request<Session>(
+      "/setup/admin",
+      json("POST", {
+        username,
+        password,
+        password_confirmation: passwordConfirmation,
+        setup_token: setupToken,
+      }),
+    );
+    csrfToken = result.data.csrf_token;
+    return result.data;
+  },
   async login(username: string, password: string) {
     const result = await request<Session>(
       "/session/login",
@@ -112,6 +139,12 @@ export const api = {
   settings: () => request<RuntimeSettings>("/settings"),
   updateSettings: (value: unknown, revision: number) =>
     request<RuntimeSettings>("/settings", json("PUT", value), `"${revision}"`),
+  uiSettings: () => request<InstanceUISettings>("/settings/ui"),
+  updateUISettings: (defaultLocale: SupportedLocale, revision: number) =>
+    request<InstanceUISettings>("/settings/ui", json("PUT", { default_locale: defaultLocale }), `"${revision}"`),
+  preferences: () => request<AdminPreferences>("/preferences"),
+  updatePreferences: (locale: LocalePreference, revision: number) =>
+    request<AdminPreferences>("/preferences", json("PUT", { locale }), `"${revision}"`),
   projects: () => request<Page<Project>>("/projects").then((value) => value.data),
   project: (id: string) => request<Project>(`/projects/${encodeURIComponent(id)}`),
   createProject: (value: unknown) =>
@@ -224,7 +257,7 @@ export const api = {
     ).then((value) => value.data),
   usage: (query = "") =>
     request<Page<UsageAttempt>>(`/usage${query}`).then((value) => value.data),
-  audit: () => request<Page<AuditRecord>>("/audit").then((value) => value.data),
+  audit: (query = "") => request<Page<AuditRecord>>(`/audit${query}`).then((value) => value.data),
   tokenGuardPolicies: () =>
     request<Page<TokenGuardPolicy>>("/token-guard-policies").then((value) => value.data),
   createTokenGuardPolicy: (value: unknown) =>

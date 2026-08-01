@@ -39,8 +39,8 @@ func (r *Runtime) updateAdminSettings(writer http.ResponseWriter, request *http.
 		adminBadRequest(writer, err.Error())
 		return
 	}
-	r.adminMutationMu.Lock()
-	defer r.adminMutationMu.Unlock()
+	r.adminSettingsMu.Lock()
+	defer r.adminSettingsMu.Unlock()
 	settings, err := r.store.PutRuntimeSettings(settings, expected)
 	if err != nil {
 		adminMutationError(writer, err)

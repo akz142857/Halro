@@ -1,12 +1,42 @@
 package tokenguard
 
 import (
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/akz142857/Heimdall/internal/domain"
 )
+
+func TestConcurrentSubjectsMaintainIndependentState(t *testing.T) {
+	manager, err := New([]domain.TokenGuardPolicy{testPolicy()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
+	const subjects = 64
+	var wait sync.WaitGroup
+	decisions := make(chan Decision, subjects)
+	for index := 0; index < subjects; index++ {
+		wait.Add(1)
+		go func(index int) {
+			defer wait.Done()
+			decisions <- manager.Admit(Input{
+				PolicyID: "guard_1", ProjectID: fmt.Sprintf("p_%d", index), KeyID: "key",
+				EstimatedTokens: 101, Now: now,
+			})
+		}(index)
+	}
+	wait.Wait()
+	close(decisions)
+	for decision := range decisions {
+		if !decision.Allowed || decision.Status != StatusSuspicious {
+			t.Fatalf("decision=%#v", decision)
+		}
+	}
+}
 
 func testPolicy() domain.TokenGuardPolicy {
 	return domain.TokenGuardPolicy{
@@ -339,9 +369,12 @@ func TestFixedThresholdAnomalyCannotPoisonEWMABaseline(t *testing.T) {
 	}
 	input.Now = start.Add(10 * time.Second)
 	manager.Admit(input)
-	manager.mu.Lock()
-	baselineSamples := manager.subjects["p:k"].baseline.Samples
-	manager.mu.Unlock()
+	manager.metadataMu.RLock()
+	subject := manager.subjects["p:k"]
+	manager.metadataMu.RUnlock()
+	subject.mu.Lock()
+	baselineSamples := subject.baseline.Samples
+	subject.mu.Unlock()
 	if baselineSamples != 10 {
 		t.Fatalf("baseline samples=%d", baselineSamples)
 	}
@@ -356,9 +389,9 @@ func TestFixedThresholdAnomalyCannotPoisonEWMABaseline(t *testing.T) {
 	input.Now = start.Add(20 * time.Second)
 	input.EstimatedTokens = 1
 	manager.Admit(input)
-	manager.mu.Lock()
-	got := manager.subjects["p:k"].baseline.Samples
-	manager.mu.Unlock()
+	subject.mu.Lock()
+	got := subject.baseline.Samples
+	subject.mu.Unlock()
 	if got != baselineSamples {
 		t.Fatalf("tainted fixed-threshold window changed baseline samples: before=%d after=%d", baselineSamples, got)
 	}

@@ -79,8 +79,8 @@ func (r *Runtime) createAdminRedactionPolicy(writer http.ResponseWriter, request
 		adminBadRequest(writer, err.Error())
 		return
 	}
-	r.adminMutationMu.Lock()
-	defer r.adminMutationMu.Unlock()
+	r.adminProjectMu.Lock()
+	defer r.adminProjectMu.Unlock()
 	policy, err = r.store.PutRedactionPolicy(request.Context(), policy, 0)
 	if err != nil {
 		adminMutationError(writer, err)
@@ -107,8 +107,8 @@ func (r *Runtime) updateAdminRedactionPolicy(writer http.ResponseWriter, request
 		adminBadRequest(writer, "invalid request")
 		return
 	}
-	r.adminMutationMu.Lock()
-	defer r.adminMutationMu.Unlock()
+	r.adminProjectMu.Lock()
+	defer r.adminProjectMu.Unlock()
 	current, err := r.store.GetRedactionPolicy(request.Context(), chi.URLParam(request, "id"))
 	if err != nil || current.DeletedAt != nil {
 		adminNotFound(writer)
@@ -148,8 +148,8 @@ func (r *Runtime) deleteAdminRedactionPolicy(writer http.ResponseWriter, request
 	if !ok {
 		return
 	}
-	r.adminMutationMu.Lock()
-	defer r.adminMutationMu.Unlock()
+	r.adminProjectMu.Lock()
+	defer r.adminProjectMu.Unlock()
 	policy, err := r.store.GetRedactionPolicy(request.Context(), chi.URLParam(request, "id"))
 	if err != nil || policy.DeletedAt != nil {
 		adminNotFound(writer)

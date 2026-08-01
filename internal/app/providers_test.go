@@ -77,6 +77,8 @@ func seedProvider(t *testing.T, cfg config.Config, mismatch bool) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
+	profile, _ := domain.DefaultProviderProfile(domain.ProviderOpenAI)
+	capabilities := domain.DefaultProviderCapabilities(domain.ProviderOpenAI)
 	credential := domain.Credential{
 		ID:         "cred_1",
 		Name:       "OpenAI",
@@ -91,15 +93,18 @@ func seedProvider(t *testing.T, cfg config.Config, mismatch bool) {
 		t.Fatal(err)
 	}
 	instance := domain.ProviderInstance{
-		ID:           "provider_1",
-		Name:         "OpenAI",
-		Type:         domain.ProviderOpenAI,
-		BaseURL:      "https://api.openai.com",
-		CredentialID: credential.ID,
-		AllowedHosts: []string{"api.openai.com"},
-		Enabled:      true,
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		ID:            "provider_1",
+		Name:          "OpenAI",
+		Type:          domain.ProviderOpenAI,
+		BaseURL:       "https://api.openai.com",
+		CredentialID:  credential.ID,
+		AllowedHosts:  []string{"api.openai.com"},
+		Enabled:       true,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+		AccessSurface: profile.AccessSurface, ProfileID: profile.ProfileID,
+		CredentialScheme: profile.CredentialScheme, Capabilities: capabilities,
+		CapabilityEvidence: domain.EvidenceForCapabilities(capabilities, domain.EvidenceDeclared),
 	}
 	if _, err := store.PutProvider(context.Background(), instance, 0); err != nil {
 		t.Fatal(err)

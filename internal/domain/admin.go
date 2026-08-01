@@ -8,6 +8,7 @@ import (
 
 type AdminUser struct {
 	Username          string    `json:"username"`
+	Locale            string    `json:"locale,omitempty"`
 	PasswordVersion   uint16    `json:"password_version"`
 	PasswordSalt      []byte    `json:"password_salt"`
 	PasswordHash      []byte    `json:"password_hash"`
@@ -39,6 +40,9 @@ func (u AdminUser) Validate() error {
 	}
 	if u.SessionGeneration == 0 {
 		problems = append(problems, errors.New("admin session generation is required"))
+	}
+	if !IsSupportedLocalePreference(u.Locale) {
+		problems = append(problems, errors.New("admin locale preference is not supported"))
 	}
 	if u.CreatedAt.IsZero() || u.UpdatedAt.IsZero() {
 		problems = append(problems, errors.New("admin timestamps are required"))

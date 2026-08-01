@@ -36,9 +36,39 @@ func main() {
 
 func run(arguments []string, logger *slog.Logger) error {
 	if len(arguments) == 0 {
-		return errors.New("usage: heimdall <init|bootstrap|admin|key|backup|restore|usage|audit|metrics|doctor|serve|healthcheck|config|version>")
+		return errors.New("usage: heimdall <start|init|bootstrap|admin|key|backup|restore|usage|audit|metrics|doctor|serve|healthcheck|config|version>")
 	}
 	switch arguments[0] {
+	case "start":
+		flags := flag.NewFlagSet("start", flag.ContinueOnError)
+		configPath := flags.String("config", "config.yaml", "configuration file")
+		allowInsecure := flags.Bool("allow-insecure-public-listen", false, "allow only the Gateway listener to bind public plaintext")
+		if err := flags.Parse(arguments[1:]); err != nil {
+			return err
+		}
+		if _, err := os.Stat(*configPath); errors.Is(err, os.ErrNotExist) {
+			if err := config.WriteDefault(*configPath); err != nil && !errors.Is(err, os.ErrExist) {
+				return err
+			}
+			fmt.Fprintf(os.Stdout, "Created safe local configuration at %s\n", *configPath)
+		} else if err != nil {
+			return fmt.Errorf("inspect config: %w", err)
+		}
+		cfg, err := config.Load(*configPath, config.LoadOptions{AllowInsecurePublicGateway: *allowInsecure})
+		if err != nil {
+			return err
+		}
+		if *allowInsecure {
+			logger.Warn("insecure public Gateway override enabled")
+		}
+		initialized, err := app.InitializeIfNeeded(cfg)
+		if err != nil {
+			return err
+		}
+		if initialized {
+			fmt.Fprintln(os.Stdout, "Initialized Heimdall system storage")
+		}
+		return runRuntime(cfg, logger, true)
 	case "healthcheck":
 		flags := flag.NewFlagSet("healthcheck", flag.ContinueOnError)
 		defaultURL := os.Getenv("HEIMDALL_HEALTH_URL")
@@ -82,14 +112,7 @@ func run(arguments []string, logger *slog.Logger) error {
 		if *allowInsecure {
 			logger.Warn("insecure public Gateway override enabled")
 		}
-		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-		defer stop()
-		runtime, err := app.Open(ctx, cfg, logger)
-		if err != nil {
-			return err
-		}
-		defer runtime.Close()
-		return runtime.Run(ctx)
+		return runRuntime(cfg, logger, false)
 	case "bootstrap":
 		flags := flag.NewFlagSet("bootstrap", flag.ContinueOnError)
 		configPath := flags.String("config", "config.yaml", "configuration file")
@@ -425,6 +448,48 @@ func run(arguments []string, logger *slog.Logger) error {
 	default:
 		return fmt.Errorf("unknown command %q", arguments[0])
 	}
+}
+
+func runRuntime(cfg config.Config, logger *slog.Logger, printGuide bool) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	runtime, err := app.Open(ctx, cfg, logger)
+	if err != nil {
+		return err
+	}
+	defer runtime.Close()
+	ready := func() error { return nil }
+	if printGuide {
+		ready = func() error {
+			status, err := runtime.SetupStatus(ctx)
+			if err != nil {
+				return err
+			}
+			scheme := "http"
+			if cfg.TLS.Enabled {
+				scheme = "https"
+			}
+			adminPath := "/admin"
+			if status.SetupRequired {
+				adminPath = "/admin/setup"
+			}
+			fmt.Fprintln(os.Stdout, "Heimdall is running")
+			fmt.Fprintf(os.Stdout, "Admin:   %s://%s%s\n", scheme, cfg.Server.AdminListen, adminPath)
+			fmt.Fprintf(os.Stdout, "Gateway: %s://%s\n", scheme, cfg.Server.GatewayListen)
+			if cfg.Metrics.Enabled {
+				fmt.Fprintf(os.Stdout, "Metrics: %s://%s\n", scheme, cfg.Server.MetricsListen)
+			}
+			if token, required, err := runtime.SetupToken(ctx); err != nil {
+				return err
+			} else if required {
+				// This is deliberately written directly to the controlling process,
+				// not through structured application logging.
+				fmt.Fprintf(os.Stderr, "One-time setup token: %s\n", token)
+			}
+			return nil
+		}
+	}
+	return runtime.RunWithReady(ctx, ready)
 }
 
 func runHealthcheck(rawURL string, timeout time.Duration) error {

@@ -14,8 +14,10 @@ import {
 import { compactNumber, money } from "../format";
 import type { TokenGuardPolicy, TokenGuardPreview } from "../types";
 import { RedactionPoliciesSection } from "./RedactionPoliciesSection";
+import { useTranslation } from "react-i18next";
 
 export function PoliciesPage() {
+  const { t } = useTranslation();
   const [editing, setEditing] = useState<TokenGuardPolicy | "new" | null>(null);
   const [previewing, setPreviewing] = useState<TokenGuardPolicy | null>(null);
   const policies = useQuery({
@@ -32,12 +34,12 @@ export function PoliciesPage() {
   return (
     <>
       <PageHeader
-        eyebrow="ANOMALY CONTAINMENT"
-        title="Token Guard Policies"
-        description="固定阈值负责处置；可选 EWMA 相对基线只检测和告警，绝不会自动封禁。"
+        eyebrow={t("policies.eyebrow")}
+        title={t("policies.title")}
+        description={t("policies.description")}
         action={
           <button className="button primary" onClick={() => setEditing("new")}>
-            ＋ 新建 Policy
+            {t("policies.create")}
           </button>
         }
       />
@@ -45,10 +47,10 @@ export function PoliciesPage() {
       {policies.isError && <ErrorState error={policies.error} />}
       {policies.data?.items.length === 0 && (
         <EmptyState
-          title="还没有 Token Guard Policy"
-          action={<button className="button primary" onClick={() => setEditing("new")}>创建安全基线</button>}
+          title={t("policies.emptyTitle")}
+          action={<button className="button primary" onClick={() => setEditing("new")}>{t("policies.baseline")}</button>}
         >
-          建议从 detect/alert 开始观察，再对明确的硬上限启用 temporary block。
+          {t("policies.emptyDescription")}
         </EmptyState>
       )}
       {!!policies.data?.items.length && (
@@ -58,26 +60,26 @@ export function PoliciesPage() {
               <header>
                 <span><StatusDot ok={policy.enabled} /><strong>{policy.name}</strong></span>
                 <span className={`badge ${policy.action === "temporary_block" ? "warning" : ""}`}>
-                  {policy.action}
+                  {policyActionLabel(t, policy.action)}
                 </span>
               </header>
               <div className="thresholds">
-                <Threshold label="Request" value={policy.request_tokens ? `${compactNumber(policy.request_tokens)} tokens` : "off"} />
-                <Threshold label="Per minute" value={policy.tokens_per_minute ? `${compactNumber(policy.tokens_per_minute)} tokens` : "off"} />
-                <Threshold label="Cost/min" value={policy.cost_micros_per_minute ? money(policy.cost_micros_per_minute) : "off"} />
-                <Threshold label="Concurrency" value={policy.concurrency ? String(policy.concurrency) : "off"} />
-                <Threshold label="Error rate" value={policy.error_rate ? `${Math.round(policy.error_rate * 100)}%` : "off"} />
-                <Threshold label="Unique IP/min" value={policy.unique_ips_per_minute ? String(policy.unique_ips_per_minute) : "off"} />
-                <Threshold label="EWMA baseline" value={policy.ewma_enabled ? `${policy.ewma_multiplier}× · detect only` : "off"} />
+                <Threshold label={t("policies.request")} value={policy.request_tokens ? t("policies.tokenCount", { count: compactNumber(policy.request_tokens) }) : t("policies.off")} />
+                <Threshold label={t("policies.perMinute")} value={policy.tokens_per_minute ? t("policies.tokenCount", { count: compactNumber(policy.tokens_per_minute) }) : t("policies.off")} />
+                <Threshold label={t("policies.costMinute")} value={policy.cost_micros_per_minute ? money(policy.cost_micros_per_minute) : t("policies.off")} />
+                <Threshold label={t("policies.concurrency")} value={policy.concurrency ? String(policy.concurrency) : t("policies.off")} />
+                <Threshold label={t("policies.errorRate")} value={policy.error_rate ? `${Math.round(policy.error_rate * 100)}%` : t("policies.off")} />
+                <Threshold label={t("policies.uniqueIP")} value={policy.unique_ips_per_minute ? String(policy.unique_ips_per_minute) : t("policies.off")} />
+                <Threshold label={t("policies.ewma")} value={policy.ewma_enabled ? `${policy.ewma_multiplier}× · ${t("policies.detectOnly")}` : t("policies.off")} />
               </div>
               <footer>
                 <code>{policy.id}</code>
                 <div className="row-actions">
-                  <button className="button ghost" onClick={() => setPreviewing(policy)}>模拟</button>
-                  <button className="button ghost" onClick={() => setEditing(policy)}>编辑</button>
+                  <button className="button ghost" onClick={() => setPreviewing(policy)}>{t("policies.simulate")}</button>
+                  <button className="button ghost" onClick={() => setEditing(policy)}>{t("common.edit")}</button>
                   <ConfirmButton
-                    label="删除"
-                    confirmLabel={`删除 Policy “${policy.name}”？被 Project 引用时服务端会拒绝。`}
+                    label={t("common.delete")}
+                    confirmLabel={t("policies.deleteConfirm", { name: policy.name })}
                     disabled={remove.isPending}
                     onConfirm={() => remove.mutate(policy)}
                   />
@@ -102,6 +104,7 @@ function PolicyForm({
   current?: TokenGuardPolicy;
   onClose: () => void;
 }) {
+  const { t } = useTranslation();
   const [name, setName] = useState(current?.name ?? "");
   const [action, setAction] = useState<TokenGuardPolicy["action"]>(current?.action ?? "alert");
   const [enabled, setEnabled] = useState(current?.enabled ?? true);
@@ -161,60 +164,60 @@ function PolicyForm({
     },
   });
   return (
-    <Modal title={current ? "编辑 Token Guard Policy" : "创建 Token Guard Policy"} onClose={onClose}>
+    <Modal title={current ? t("policies.edit") : t("policies.createTitle")} onClose={onClose}>
       <form className="form-grid" onSubmit={(event) => {
         event.preventDefault();
         if (name.trim()) mutation.mutate();
       }}>
-        <Field label="Policy 名称"><input autoFocus value={name} onChange={(event) => setName(event.target.value)} /></Field>
-        <Field label="处置动作">
+        <Field label={t("policies.name")}><input autoFocus value={name} onChange={(event) => setName(event.target.value)} /></Field>
+        <Field label={t("policies.action")}>
           <select value={action} onChange={(event) => setAction(event.target.value as typeof action)}>
-            <option value="observe">Observe only</option>
-            <option value="alert">Alert</option>
-            <option value="temporary_block">Temporary block</option>
+            <option value="observe">{t("policies.observe")}</option>
+            <option value="alert">{t("policies.alert")}</option>
+            <option value="temporary_block">{t("policies.temporaryBlock")}</option>
           </select>
         </Field>
-        <Field label="单请求 Token 上限"><NumberInput value={requestTokens} set={setRequestTokens} /></Field>
-        <Field label="每分钟 Token 上限"><NumberInput value={tokensPerMinute} set={setTokensPerMinute} /></Field>
-        <Field label="每分钟成本上限（USD）"><NumberInput value={costPerMinute} set={setCostPerMinute} step=".01" /></Field>
-        <Field label="并发上限"><NumberInput value={concurrency} set={setConcurrency} /></Field>
-        <Field label="错误率阈值（%）"><NumberInput value={errorRate} set={setErrorRate} step=".1" /></Field>
-        <Field label="最少样本"><NumberInput value={minimumSamples} set={setMinimumSamples} /></Field>
-        <Field label="每分钟唯一来源 IP"><NumberInput value={uniqueIPs} set={setUniqueIPs} /></Field>
+        <Field label={t("policies.requestLimit")}><NumberInput value={requestTokens} set={setRequestTokens} /></Field>
+        <Field label={t("policies.minuteLimit")}><NumberInput value={tokensPerMinute} set={setTokensPerMinute} /></Field>
+        <Field label={t("policies.costLimit")}><NumberInput value={costPerMinute} set={setCostPerMinute} step=".01" /></Field>
+        <Field label={t("policies.concurrencyLimit")}><NumberInput value={concurrency} set={setConcurrency} /></Field>
+        <Field label={t("policies.errorThreshold")}><NumberInput value={errorRate} set={setErrorRate} step=".1" /></Field>
+        <Field label={t("policies.minimumSamples")}><NumberInput value={minimumSamples} set={setMinimumSamples} /></Field>
+        <Field label={t("policies.uniqueSources")}><NumberInput value={uniqueIPs} set={setUniqueIPs} /></Field>
         {action === "temporary_block" && (
           <>
-            <Field label="触发次数"><NumberInput value={violations} set={setViolations} /></Field>
-            <Field label="封禁时长（秒）"><NumberInput value={blockTTL} set={setBlockTTL} /></Field>
-            <Field label="Cooldown（秒）"><NumberInput value={cooldown} set={setCooldown} /></Field>
+            <Field label={t("policies.violations")}><NumberInput value={violations} set={setViolations} /></Field>
+            <Field label={t("policies.blockTTL")}><NumberInput value={blockTTL} set={setBlockTTL} /></Field>
+            <Field label={t("policies.cooldown")}><NumberInput value={cooldown} set={setCooldown} /></Field>
           </>
         )}
         <label className="check-row">
           <input type="checkbox" checked={ewmaEnabled} onChange={(event) => setEWMAEnabled(event.target.checked)} />
-          <span>启用实验性 EWMA 相对基线（detect-only）</span>
+          <span>{t("policies.enableEWMA")}</span>
         </label>
         {ewmaEnabled && (
           <>
-            <p className="form-hint">EWMA 命中只产生告警；硬阈值仍优先，且只有硬阈值允许 temporary block。</p>
-            <Field label="EWMA Alpha"><NumberInput value={ewmaAlpha} set={setEWMAAlpha} step=".05" /></Field>
-            <Field label="相对基线倍数"><NumberInput value={ewmaMultiplier} set={setEWMAMultiplier} step=".1" /></Field>
-            <Field label="基线最少样本"><NumberInput value={ewmaMinimumSamples} set={setEWMAMinimumSamples} /></Field>
-            <Field label="Warmup（秒）"><NumberInput value={ewmaWarmup} set={setEWMAWarmup} /></Field>
-            <Field label="评估窗口（秒，10 秒倍数）"><NumberInput value={ewmaWindow} set={setEWMAWindow} /></Field>
-            <Field label="告警 Cooldown（秒）"><NumberInput value={ewmaCooldown} set={setEWMACooldown} /></Field>
-            <Field label="RPM 绝对下限"><NumberInput value={ewmaRPMFloor} set={setEWMARPMFloor} /></Field>
-            <Field label="TPM 绝对下限"><NumberInput value={ewmaTPMFloor} set={setEWMATPMFloor} /></Field>
-            <Field label="平均 Token/request 下限"><NumberInput value={ewmaTokensFloor} set={setEWMATokensFloor} step=".1" /></Field>
-            <Field label="成本速率下限（USD/min）"><NumberInput value={ewmaCostFloor} set={setEWMACostFloor} step=".01" /></Field>
+            <p className="form-hint">{t("policies.ewmaHint")}</p>
+            <Field label={t("policies.ewmaAlpha")}><NumberInput value={ewmaAlpha} set={setEWMAAlpha} step=".05" /></Field>
+            <Field label={t("policies.multiplier")}><NumberInput value={ewmaMultiplier} set={setEWMAMultiplier} step=".1" /></Field>
+            <Field label={t("policies.baselineSamples")}><NumberInput value={ewmaMinimumSamples} set={setEWMAMinimumSamples} /></Field>
+            <Field label={t("policies.warmup")}><NumberInput value={ewmaWarmup} set={setEWMAWarmup} /></Field>
+            <Field label={t("policies.window")}><NumberInput value={ewmaWindow} set={setEWMAWindow} /></Field>
+            <Field label={t("policies.alertCooldown")}><NumberInput value={ewmaCooldown} set={setEWMACooldown} /></Field>
+            <Field label={t("policies.rpmFloor")}><NumberInput value={ewmaRPMFloor} set={setEWMARPMFloor} /></Field>
+            <Field label={t("policies.tpmFloor")}><NumberInput value={ewmaTPMFloor} set={setEWMATPMFloor} /></Field>
+            <Field label={t("policies.tokenFloor")}><NumberInput value={ewmaTokensFloor} set={setEWMATokensFloor} step=".1" /></Field>
+            <Field label={t("policies.costFloor")}><NumberInput value={ewmaCostFloor} set={setEWMACostFloor} step=".01" /></Field>
           </>
         )}
         <label className="check-row">
           <input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />
-          <span>启用此 Policy</span>
+          <span>{t("policies.enable")}</span>
         </label>
         {mutation.isError && <ErrorState error={mutation.error} />}
         <div className="form-actions">
-          <button type="button" className="button ghost" onClick={onClose}>取消</button>
-          <button className="button primary" disabled={mutation.isPending}>保存 Policy</button>
+          <button type="button" className="button ghost" onClick={onClose}>{t("common.cancel")}</button>
+          <button className="button primary" disabled={mutation.isPending}>{t("policies.save")}</button>
         </div>
       </form>
     </Modal>
@@ -222,6 +225,7 @@ function PolicyForm({
 }
 
 function PolicyPreview({ policy, onClose }: { policy: TokenGuardPolicy; onClose: () => void }) {
+  const { t } = useTranslation();
   const [tokens, setTokens] = useState(policy.request_tokens || 1_000);
   const [windowTokens, setWindowTokens] = useState(0);
   const [concurrency, setConcurrency] = useState(1);
@@ -240,24 +244,24 @@ function PolicyPreview({ policy, onClose }: { policy: TokenGuardPolicy; onClose:
     onSuccess: setResult,
   });
   return (
-    <Modal title={`模拟 · ${policy.name}`} onClose={onClose}>
+    <Modal title={t("policies.previewTitle", { name: policy.name })} onClose={onClose}>
       <form onSubmit={(event) => { event.preventDefault(); mutation.mutate(); }}>
-        <Field label="本次估算 Token"><NumberInput value={tokens} set={setTokens} /></Field>
-        <Field label="窗口内已有 Token"><NumberInput value={windowTokens} set={setWindowTokens} /></Field>
-        <Field label="当前并发"><NumberInput value={concurrency} set={setConcurrency} /></Field>
+        <Field label={t("policies.estimatedTokens")}><NumberInput value={tokens} set={setTokens} /></Field>
+        <Field label={t("policies.windowTokens")}><NumberInput value={windowTokens} set={setWindowTokens} /></Field>
+        <Field label={t("policies.currentConcurrency")}><NumberInput value={concurrency} set={setConcurrency} /></Field>
         {result && (
           <div className={`preview-result ${result.violated ? "violated" : ""}`}>
             <StatusDot ok={!result.violated} />
             <div>
-              <strong>{result.violated ? `命中：${result.reason}` : "未命中阈值"}</strong>
-              <small>动作：{result.action}</small>
+              <strong>{result.violated ? t("policies.hit", { reason: result.reason }) : t("policies.noHit")}</strong>
+              <small>{t("policies.resultAction", { action: policyActionLabel(t, result.action) })}</small>
             </div>
           </div>
         )}
         {mutation.isError && <ErrorState error={mutation.error} />}
         <div className="form-actions">
-          <button type="button" className="button ghost" onClick={onClose}>关闭</button>
-          <button className="button primary" disabled={mutation.isPending}>运行模拟</button>
+          <button type="button" className="button ghost" onClick={onClose}>{t("common.close")}</button>
+          <button className="button primary" disabled={mutation.isPending}>{t("policies.run")}</button>
         </div>
       </form>
     </Modal>
@@ -278,4 +282,10 @@ function NumberInput({
 
 function Threshold({ label, value }: { label: string; value: string }) {
   return <div><small>{label}</small><strong>{value}</strong></div>;
+}
+
+function policyActionLabel(t: ReturnType<typeof useTranslation>["t"], action: string) {
+  if (action === "temporary_block") return t("policies.temporaryBlock");
+  if (action === "alert") return t("policies.alert");
+  return t("policies.observe");
 }

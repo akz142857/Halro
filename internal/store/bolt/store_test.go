@@ -33,11 +33,142 @@ func TestMetadataMigrationFromV1IsAtomicAndRecorded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(history) != 3 ||
+	if len(history) != 4 ||
 		history[0] != (MigrationRecord{Version: 1, Name: "initial_schema"}) ||
 		history[1] != (MigrationRecord{Version: 2, Name: "migration_history"}) ||
-		history[2] != (MigrationRecord{Version: 3, Name: "deployments"}) {
+		history[2] != (MigrationRecord{Version: 3, Name: "deployments"}) ||
+		history[3] != (MigrationRecord{Version: 4, Name: "provider_profiles"}) {
 		t.Fatalf("history=%#v", history)
+	}
+}
+
+func TestProviderProfileMigrationFromV3IsAtomicAndConservative(t *testing.T) {
+	root := t.TempDir()
+	templatePath := filepath.Join(root, "metadata-v3.db")
+	createV3ProviderMetadata(t, templatePath)
+	template, err := os.ReadFile(templatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, killPoint := range []string{"before_migrate_provider_profiles", "after_migrate_provider_profiles"} {
+		t.Run(killPoint, func(t *testing.T) {
+			path := filepath.Join(root, killPoint+".db")
+			if err := os.WriteFile(path, template, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			injected := errors.New("injected v4 failure")
+			_, err := openWithMigrationStepHook(path, func(version uint64, point string) error {
+				if version == 4 && point == killPoint {
+					return injected
+				}
+				return nil
+			})
+			if !errors.Is(err, injected) {
+				t.Fatalf("migration error=%v", err)
+			}
+			db, err := bbolt.Open(path, 0o600, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = db.View(func(tx *bbolt.Tx) error {
+				if version := binary.BigEndian.Uint64(tx.Bucket(bucketMeta).Get(keySchemaVersion)); version != 3 {
+					t.Fatalf("schema changed after rollback: %d", version)
+				}
+				var instance domain.ProviderInstance
+				if err := json.Unmarshal(tx.Bucket(bucketProviders).Get([]byte("provider_v3")), &instance); err != nil {
+					return err
+				}
+				if instance.ProfileID != "" || len(instance.CapabilityEvidence) != 0 {
+					t.Fatalf("partial v4 provider survived rollback: %#v", instance)
+				}
+				return nil
+			})
+			if closeErr := db.Close(); err == nil {
+				err = closeErr
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			store, err := Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			credential, _ := store.GetCredential(context.Background(), "credential_v3")
+			instance, _ := store.GetProvider(context.Background(), "provider_v3")
+			deployment, _ := store.GetDeployment(context.Background(), "deployment_v3")
+			if credential.AccessSurface != domain.SurfaceBedrockRuntime || credential.Scheme != domain.CredentialAWSSigV4Explicit ||
+				instance.ProfileID != domain.ProfileBedrockConverseText || instance.CapabilityEvidence["chat"] != domain.EvidenceLegacy ||
+				instance.Capabilities.DeveloperRole || deployment.ProfileID != domain.ProfileBedrockConverseText ||
+				deployment.CapabilityEvidence["chat"] != domain.EvidenceLegacy || deployment.Capabilities.DeveloperRole {
+				t.Fatalf("credential=%#v provider=%#v deployment=%#v", credential, instance, deployment)
+			}
+		})
+	}
+}
+
+func createV3ProviderMetadata(t *testing.T, path string) {
+	t.Helper()
+	db, err := bbolt.Open(path, 0o600, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	err = db.Update(func(tx *bbolt.Tx) error {
+		for _, name := range requiredBuckets() {
+			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
+				return err
+			}
+		}
+		credential := domain.Credential{
+			ID: "credential_v3", Name: "AWS", Type: domain.ProviderBedrock,
+			Audience: "https://bedrock-runtime.us-east-1.amazonaws.com:443|bedrock", Ciphertext: []byte("encrypted"),
+			KeyVersion: 1, CreatedAt: now, UpdatedAt: now, Revision: 1,
+		}
+		capabilities := domain.ProviderCapabilities{Chat: true, Streaming: true, DeveloperRole: true, StreamUsage: true}
+		instance := domain.ProviderInstance{
+			ID: "provider_v3", Name: "Bedrock", Type: domain.ProviderBedrock,
+			BaseURL: "https://bedrock-runtime.us-east-1.amazonaws.com", CredentialID: credential.ID,
+			AllowedHosts: []string{"bedrock-runtime.us-east-1.amazonaws.com"}, Capabilities: capabilities,
+			Enabled: true, CreatedAt: now, UpdatedAt: now, Revision: 1,
+		}
+		deployment := domain.Deployment{
+			ID: "deployment_v3", Name: "Claude", ProviderID: instance.ID, ProviderModel: "model",
+			Capabilities: capabilities, Weight: 1, Enabled: true, CreatedAt: now, UpdatedAt: now, Revision: 1,
+		}
+		for _, record := range []struct {
+			bucket []byte
+			id     string
+			value  any
+		}{
+			{bucketCredentials, credential.ID, credential},
+			{bucketProviders, instance.ID, instance},
+			{bucketDeployments, deployment.ID, deployment},
+		} {
+			encoded, err := json.Marshal(record.value)
+			if err != nil {
+				return err
+			}
+			if err := tx.Bucket(record.bucket).Put([]byte(record.id), encoded); err != nil {
+				return err
+			}
+		}
+		for version, name := range map[uint64]string{1: "initial_schema", 2: "migration_history", 3: "deployments"} {
+			record, _ := json.Marshal(MigrationRecord{Version: version, Name: name})
+			if err := tx.Bucket(bucketMigrationHistory).Put(versionKey(version), record); err != nil {
+				return err
+			}
+		}
+		var encodedVersion [8]byte
+		binary.BigEndian.PutUint64(encodedVersion[:], 3)
+		return tx.Bucket(bucketMeta).Put(keySchemaVersion, encodedVersion[:])
+	})
+	if closeErr := db.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -583,6 +714,12 @@ func TestProviderAndRouteReferencesAndUniqueness(t *testing.T) {
 		CreatedAt:    time.Now().UTC(),
 		UpdatedAt:    time.Now().UTC(),
 	}
+	profile, _ := domain.DefaultProviderProfile(instance.Type)
+	instance.AccessSurface = profile.AccessSurface
+	instance.ProfileID = profile.ProfileID
+	instance.CredentialScheme = profile.CredentialScheme
+	instance.Capabilities = domain.DefaultProviderCapabilities(instance.Type)
+	instance.CapabilityEvidence = domain.EvidenceForCapabilities(instance.Capabilities, domain.EvidenceDeclared)
 	if _, err := store.PutProvider(ctx, instance, 0); err != nil {
 		t.Fatal(err)
 	}
@@ -608,5 +745,82 @@ func TestProviderAndRouteReferencesAndUniqueness(t *testing.T) {
 	routes, err := store.ListRoutes(ctx)
 	if err != nil || len(routes) != 2 || routes[0].ProviderID != instance.ID {
 		t.Fatalf("unexpected routes=%#v err=%v", routes, err)
+	}
+}
+
+func TestStoreRejectsProfileAwareDefaultGrantsAndDeploymentEscalation(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	now := time.Now().UTC()
+	profile, _ := domain.DefaultProviderProfile(domain.ProviderOpenAI)
+	credential, err := store.PutCredential(ctx, domain.Credential{
+		ID: "cred_profile", Name: "OpenAI", Type: domain.ProviderOpenAI,
+		AccessSurface: profile.AccessSurface, Scheme: profile.CredentialScheme,
+		Audience: "audience", Ciphertext: []byte("ciphertext"), KeyVersion: 1,
+		CreatedAt: now, UpdatedAt: now,
+	}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.PutProvider(ctx, domain.ProviderInstance{
+		ID: "provider_empty", Name: "Empty", Type: domain.ProviderOpenAI,
+		AccessSurface: profile.AccessSurface, ProfileID: profile.ProfileID, CredentialScheme: profile.CredentialScheme,
+		BaseURL: "https://api.openai.com", CredentialID: credential.ID, AllowedHosts: []string{"api.openai.com"},
+		CapabilityEvidence: domain.EvidenceForCapabilities(domain.ProviderCapabilities{}, domain.EvidenceDeclared),
+		CreatedAt:          now, UpdatedAt: now,
+	}, 0)
+	if err == nil {
+		t.Fatal("profile-aware provider received implicit default capabilities")
+	}
+	providerCapabilities := domain.ProviderCapabilities{Chat: true, Streaming: true}
+	instance, err := store.PutProvider(ctx, domain.ProviderInstance{
+		ID: "provider_profile", Name: "OpenAI", Type: domain.ProviderOpenAI,
+		AccessSurface: profile.AccessSurface, ProfileID: profile.ProfileID, CredentialScheme: profile.CredentialScheme,
+		BaseURL: "https://api.openai.com", CredentialID: credential.ID, AllowedHosts: []string{"api.openai.com"},
+		Capabilities:       providerCapabilities,
+		CapabilityEvidence: domain.EvidenceForCapabilities(providerCapabilities, domain.EvidenceDeclared),
+		CreatedAt:          now, UpdatedAt: now,
+	}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	badCapabilities := domain.ProviderCapabilities{Chat: true, Tools: true}
+	_, err = store.PutDeployment(ctx, domain.Deployment{
+		ID: "deployment_capability", Name: "Escalated", ProviderID: instance.ID, ProviderModel: "model",
+		AccessSurface: instance.AccessSurface, ProfileID: instance.ProfileID, Capabilities: badCapabilities,
+		CapabilityEvidence: domain.EvidenceForCapabilities(badCapabilities, domain.EvidenceDeclared),
+		Weight:             1, CreatedAt: now, UpdatedAt: now,
+	}, 0)
+	if err == nil {
+		t.Fatal("deployment exceeded provider capabilities")
+	}
+	verified := domain.EvidenceForCapabilities(providerCapabilities, domain.EvidenceVerified)
+	_, err = store.PutDeployment(ctx, domain.Deployment{
+		ID: "deployment_evidence", Name: "Escalated evidence", ProviderID: instance.ID, ProviderModel: "model",
+		AccessSurface: instance.AccessSurface, ProfileID: instance.ProfileID, Capabilities: providerCapabilities,
+		CapabilityEvidence: verified, Weight: 1, CreatedAt: now, UpdatedAt: now,
+	}, 0)
+	if err == nil {
+		t.Fatal("deployment exceeded provider capability evidence")
+	}
+	validDeployment, err := store.PutDeployment(ctx, domain.Deployment{
+		ID: "deployment_valid", Name: "Valid", ProviderID: instance.ID, ProviderModel: "model",
+		AccessSurface: instance.AccessSurface, ProfileID: instance.ProfileID, Capabilities: providerCapabilities,
+		CapabilityEvidence: domain.EvidenceForCapabilities(providerCapabilities, domain.EvidenceDeclared),
+		Weight:             1, CreatedAt: now, UpdatedAt: now,
+	}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = validDeployment
+	reduced := instance
+	reduced.Capabilities.Streaming = false
+	reduced.CapabilityEvidence = domain.EvidenceForCapabilities(reduced.Capabilities, domain.EvidenceDeclared)
+	if _, err := store.PutProvider(ctx, reduced, instance.Revision); err == nil {
+		t.Fatal("provider update invalidated an existing deployment")
 	}
 }

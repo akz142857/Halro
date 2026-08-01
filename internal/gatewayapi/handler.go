@@ -41,7 +41,10 @@ type Service interface {
 
 func (h *Handler) Embeddings(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Cache-Control", "no-store")
-	request = request.WithContext(requestmeta.WithSourceIP(request.Context(), h.sourceIP(request)))
+	request, ok := h.withSourceIP(writer, request)
+	if !ok {
+		return
+	}
 	key, ok := bearerToken(request.Header.Get("Authorization"))
 	if !ok {
 		writer.Header().Set("WWW-Authenticate", `Bearer realm="heimdall"`)
@@ -198,7 +201,10 @@ func NewWithOptions(service Service, options Options) (*Handler, error) {
 
 func (h *Handler) ChatCompletions(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Cache-Control", "no-store")
-	request = request.WithContext(requestmeta.WithSourceIP(request.Context(), h.sourceIP(request)))
+	request, ok := h.withSourceIP(writer, request)
+	if !ok {
+		return
+	}
 	key, ok := bearerToken(request.Header.Get("Authorization"))
 	if !ok {
 		writer.Header().Set("WWW-Authenticate", `Bearer realm="heimdall"`)
@@ -253,27 +259,39 @@ func setRetryAfter(writer http.ResponseWriter, duration time.Duration) {
 	writer.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
 }
 
-func (h *Handler) sourceIP(request *http.Request) netip.Addr {
+func (h *Handler) withSourceIP(writer http.ResponseWriter, request *http.Request) (*http.Request, bool) {
+	source, ok := h.sourceIP(request)
+	if !ok {
+		writeError(writer, http.StatusBadRequest, "invalid_forwarded_for", "invalid X-Forwarded-For header", nil)
+		return request, false
+	}
+	return request.WithContext(requestmeta.WithSourceIP(request.Context(), source)), true
+}
+
+func (h *Handler) sourceIP(request *http.Request) (netip.Addr, bool) {
 	remote, err := netip.ParseAddrPort(request.RemoteAddr)
 	if err != nil {
-		return netip.Addr{}
+		return netip.Addr{}, false
 	}
 	current := remote.Addr().Unmap()
 	if !h.trustProxy || !prefixContains(h.trustedProxies, current) {
-		return current
+		return current, true
+	}
+	if strings.TrimSpace(request.Header.Get("X-Forwarded-For")) == "" {
+		return netip.Addr{}, false
 	}
 	parts := strings.Split(request.Header.Get("X-Forwarded-For"), ",")
 	for index := len(parts) - 1; index >= 0; index-- {
 		candidate, err := netip.ParseAddr(strings.TrimSpace(parts[index]))
 		if err != nil {
-			return netip.Addr{}
+			return netip.Addr{}, false
 		}
 		candidate = candidate.Unmap()
 		if !prefixContains(h.trustedProxies, candidate) {
-			return candidate
+			return candidate, true
 		}
 	}
-	return current
+	return current, true
 }
 
 func prefixContains(prefixes []netip.Prefix, address netip.Addr) bool {

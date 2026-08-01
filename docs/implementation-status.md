@@ -1,6 +1,6 @@
 # Implementation status
 
-Last updated: 2026-07-31
+Last updated: 2026-08-01
 
 This file records implementation evidence for the current source tree. Release
 scope is governed by reviewed release notes and release gates.
@@ -28,13 +28,15 @@ scope is governed by reviewed release notes and release gates.
 | OpenAI-compatible API | strict chat-completions and embeddings contracts, stable errors, body limits |
 | SSE streaming | bounded SSE parser, semantic chunks, `[DONE]`, usage settlement, first-payload error boundary |
 | Resilient routing | ordered/round-robin candidates, bounded retry with backoff/jitter, fallback before payload |
+| Shared Gateway orchestration | common authentication/routing, admission/accounting lifecycle, attempt acquisition/settlement, and terminal error mapping across Chat, streaming Chat, and Embeddings |
 | Circuit breaker | per-target Closed/Open/HalfOpen state, passive failures, single/limited probes |
 | Multi-attempt accounting | one Request lifecycle with independently reserved and settled Provider attempts |
 | GA Provider adapters | OpenAI, Azure OpenAI, DeepSeek, and generic OpenAI-compatible chat/stream/embedding profiles with cancellation and capability enforcement |
 | Capability contract | immutable Provider/Deployment declarations for chat, stream, embeddings, tools, vision, JSON, developer role, reasoning, stream usage and token limits; request-derived preflight filters incompatible fallbacks and fails before upstream I/O |
+| Provider profile Phase 0A | registered versioned immutable manifests bind Provider type to Access Surface, Operation Registry and Credential Scheme; scheme-specific authorizers are constructed outside adapters; capability evidence is persisted as verified/declared/legacy/unsupported, exposed in Admin, available to evidence-aware route resolution, and migrated atomically with old records kept conservatively legacy through `LegacyAdapterBridge`; normal writes are strict and Provider/Deployment capability and evidence relations are transactionally enforced |
 | Real Provider evidence | fail-closed exact-commit GA matrix runner with per-profile credential isolation, output scrubbing, chat/stream/embedding contracts, and 0600 JSON evidence; execution still requires external accounts |
 | Gemini Beta adapter | native text `generateContent`, SSE, float embeddings, usage normalization, secret-safe errors, and opt-in real smoke test |
-| Bedrock Beta adapter | native text Converse/ConverseStream, strict encrypted credential JSON, SigV4/session token, region binding, AWS EventStream CRC/truncation checks, usage/error normalization, Admin hot-load integration, and opt-in real smoke test |
+| Bedrock Beta adapter | fixed `bedrock.runtime.converse.text.v1` text-only Converse/ConverseStream profile; strict encrypted credential JSON, explicit-session SigV4, region binding, AWS EventStream CRC/order/truncation checks, conservative stop-reason mapping, Provider request ID/code/Retry-After extraction, secret-safe errors, Admin hot-load integration, and opt-in real smoke test |
 | Runtime provider loading | audience-bound decrypt, HTTPS/host policy, SafeTransport, route snapshot |
 | Offline bootstrap | atomic Provider/Route/Project/Key creation, secret via stdin, Gateway key shown once |
 | Internal key lifecycle | offline one-time key issuance and revisioned disable with snapshot reload tests |
@@ -64,9 +66,12 @@ scope is governed by reviewed release notes and release gates.
 | Project and key Admin API | CSRF-protected lifecycle, `If-Match` revisions, one-time key response, immediate auth snapshot refresh |
 | Provider Admin API | audience-bound credential encryption/rotation, full Provider create/edit/enable/disable/delete/test lifecycle, capability upper bounds, Deployment capability subsets and atomic runtime route replacement |
 | Admin contract completion | revisioned Credential deletion with atomic Provider/Webhook reference protection; Project Token Guard unblock; Route connection test; collection and per-resource Alert test endpoints |
-| Admin mutation integrity | serialized mutations, dependency guards, tombstones, HMAC Audit events, `no-store` and strict CSP headers |
+| Admin mutation integrity | dependency-scoped mutation ordering, dependency guards, tombstones, HMAC Audit events, `no-store` and strict CSP headers |
+| Concurrent mutation and admission paths | Admin writes use dependency-scoped consistency domains and group-committed audit batches; limiter state is Project-local, Token Guard state is subject-local, and durable Budget operations use Project locks with globally ordered Ledger application |
 | Embedded Admin console | React/TypeScript/Vite SPA embedded with `go:embed`; login/logout, in-session password and CSRF/session rotation, Dashboard, Projects/Keys, Credentials/Providers, Deployments/Routes, Usage, merged Redaction/Token Guard Policies, Alerts/Audit Operations and status |
+| Admin localization | complete semantic-key `zh-CN`/`en-US` resources with parity test, single-language navigation, no-refresh switching, public bootstrap locale, separately saved revisioned instance default and per-admin server-side preference (no browser persistence), document language updates, localized display enums, and safe localized API errors |
 | Operations CLI | byte-verified read-only `doctor` using a non-rewriting existing lock plus read-only bbolt/WAL paths, offline audited Admin password reset/session invalidation, top-level restore alias, config/usage/audit/backup/key lifecycle commands |
+| First-run experience | `heimdall start` safe config generation, fail-closed idempotent system initialization, transactional first-Admin Web setup, transient public-listener setup token, and incremental `make start` build path |
 | Frozen API contract | route-registration regression covers every v1 Admin endpoint plus Chat, Embeddings, health and Metrics so a documented route cannot silently disappear |
 | Frontend security | in-memory CSRF, no browser persistence for secrets, one-time Key acknowledgement, destructive confirmations, no source maps/CDN/service worker |
 | Frontend quality gates | typed API client, TanStack Query/Table, lazy uPlot chart, Vitest component/API tests, 500 KiB gzip initial-bundle gate |

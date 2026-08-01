@@ -3,6 +3,7 @@ package tokenguard
 import (
 	"encoding/json"
 	"errors"
+	"maps"
 	"math"
 	"sort"
 	"sync"
@@ -93,6 +94,7 @@ type bucket struct {
 }
 
 type subject struct {
+	mu             sync.Mutex
 	policyID       string
 	policyRevision uint64
 	projectID      string
@@ -134,10 +136,10 @@ type managerCheckpoint struct {
 const managerCheckpointVersion = 1
 
 type Manager struct {
-	mu       sync.Mutex
-	policies map[string]domain.TokenGuardPolicy
-	subjects map[string]*subject
-	events   chan Event
+	metadataMu sync.RWMutex
+	policies   map[string]domain.TokenGuardPolicy
+	subjects   map[string]*subject
+	events     chan Event
 }
 
 func New(policies []domain.TokenGuardPolicy) (*Manager, error) {
@@ -166,7 +168,7 @@ func (m *Manager) ReplacePolicies(policies []domain.TokenGuardPolicy) error {
 		}
 		next[policy.ID] = policy
 	}
-	m.mu.Lock()
+	m.metadataMu.Lock()
 	m.policies = next
 	for key, current := range m.subjects {
 		policy, exists := next[current.policyID]
@@ -174,7 +176,7 @@ func (m *Manager) ReplacePolicies(policies []domain.TokenGuardPolicy) error {
 			delete(m.subjects, key)
 		}
 	}
-	m.mu.Unlock()
+	m.metadataMu.Unlock()
 	return nil
 }
 
@@ -183,8 +185,8 @@ func (m *Manager) Events() <-chan Event {
 }
 
 func (m *Manager) HasPolicy(id string) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.metadataMu.RLock()
+	defer m.metadataMu.RUnlock()
 	_, ok := m.policies[id]
 	return ok
 }
@@ -193,23 +195,36 @@ func (m *Manager) Admit(input Input) Decision {
 	if input.Now.IsZero() {
 		input.Now = time.Now()
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.metadataMu.RLock()
 	policy, ok := m.policies[input.PolicyID]
 	if !ok {
+		m.metadataMu.RUnlock()
 		return Decision{Allowed: true, Status: StatusNormal}
 	}
 	key := input.ProjectID + ":" + input.KeyID
 	current := m.subjects[key]
+	m.metadataMu.RUnlock()
 	if current == nil || current.policyID != policy.ID || current.policyRevision != policy.Revision {
-		current = &subject{
-			policyID: policy.ID, policyRevision: policy.Revision,
-			projectID: input.ProjectID, keyID: input.KeyID,
-			status: StatusNormal, buckets: make(map[int64]*bucket),
-			lastEvent: make(map[string]time.Time),
+		m.metadataMu.Lock()
+		policy, ok = m.policies[input.PolicyID]
+		if !ok {
+			m.metadataMu.Unlock()
+			return Decision{Allowed: true, Status: StatusNormal}
 		}
-		m.subjects[key] = current
+		current = m.subjects[key]
+		if current == nil || current.policyID != policy.ID || current.policyRevision != policy.Revision {
+			current = &subject{
+				policyID: policy.ID, policyRevision: policy.Revision,
+				projectID: input.ProjectID, keyID: input.KeyID,
+				status: StatusNormal, buckets: make(map[int64]*bucket),
+				lastEvent: make(map[string]time.Time),
+			}
+			m.subjects[key] = current
+		}
+		m.metadataMu.Unlock()
 	}
+	current.mu.Lock()
+	defer current.mu.Unlock()
 	m.expireBuckets(current, input.Now)
 	ewmaReason := m.advanceEWMA(current, policy, input.Now)
 	if current.status == StatusTemporarilyBlocked {
@@ -271,18 +286,26 @@ func (m *Manager) Admit(input Input) Decision {
 }
 
 func (m *Manager) MarshalCheckpoint() ([]byte, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	items := make([]baselineCheckpoint, 0, len(m.subjects))
+	m.metadataMu.RLock()
+	subjects := make([]*subject, 0, len(m.subjects))
 	for _, current := range m.subjects {
-		policy, ok := m.policies[current.policyID]
+		subjects = append(subjects, current)
+	}
+	policies := maps.Clone(m.policies)
+	m.metadataMu.RUnlock()
+	items := make([]baselineCheckpoint, 0, len(subjects))
+	for _, current := range subjects {
+		current.mu.Lock()
+		policy, ok := policies[current.policyID]
 		if !ok || !policy.EWMAEnabled || !current.baseline.Initialized {
+			current.mu.Unlock()
 			continue
 		}
 		items = append(items, baselineCheckpoint{
 			PolicyID: current.policyID, PolicyRevision: current.policyRevision,
 			ProjectID: current.projectID, KeyID: current.keyID, Baseline: current.baseline,
 		})
+		current.mu.Unlock()
 	}
 	sort.Slice(items, func(left, right int) bool {
 		if items[left].ProjectID != items[right].ProjectID {
@@ -304,8 +327,8 @@ func (m *Manager) RestoreCheckpoint(payload []byte) error {
 	if saved.Version != managerCheckpointVersion || len(saved.Subjects) > 1_000_000 {
 		return errors.New("unsupported Token Guard checkpoint")
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.metadataMu.Lock()
+	defer m.metadataMu.Unlock()
 	next := make(map[string]*subject, len(saved.Subjects))
 	for _, item := range saved.Subjects {
 		if item.ProjectID == "" || item.KeyID == "" || item.PolicyID == "" || !validBaseline(item.Baseline) {
@@ -462,15 +485,18 @@ func (m *Manager) Complete(policyID, projectID, keyID string, now time.Time, fai
 	if !failed {
 		return
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.metadataMu.RLock()
 	if _, exists := m.policies[policyID]; !exists {
+		m.metadataMu.RUnlock()
 		return
 	}
 	current := m.subjects[projectID+":"+keyID]
+	m.metadataMu.RUnlock()
 	if current == nil {
 		return
 	}
+	current.mu.Lock()
+	defer current.mu.Unlock()
 	start := now.Truncate(10 * time.Second)
 	value := current.buckets[start.Unix()]
 	if value == nil {
@@ -481,9 +507,12 @@ func (m *Manager) Complete(policyID, projectID, keyID string, now time.Time, fai
 }
 
 func (m *Manager) Unblock(projectID, keyID string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if current := m.subjects[projectID+":"+keyID]; current != nil {
+	m.metadataMu.RLock()
+	current := m.subjects[projectID+":"+keyID]
+	m.metadataMu.RUnlock()
+	if current != nil {
+		current.mu.Lock()
+		defer current.mu.Unlock()
 		current.status = StatusNormal
 		current.violations = 0
 		current.blockedUntil = time.Time{}
@@ -491,17 +520,26 @@ func (m *Manager) Unblock(projectID, keyID string) {
 }
 
 func (m *Manager) UnblockProject(projectID string) int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	count := 0
+	m.metadataMu.RLock()
+	var subjects []*subject
 	for _, current := range m.subjects {
-		if current.projectID != projectID || current.status == StatusNormal {
+		if current.projectID == projectID {
+			subjects = append(subjects, current)
+		}
+	}
+	m.metadataMu.RUnlock()
+	count := 0
+	for _, current := range subjects {
+		current.mu.Lock()
+		if current.status == StatusNormal {
+			current.mu.Unlock()
 			continue
 		}
 		current.status = StatusNormal
 		current.violations = 0
 		current.blockedUntil = time.Time{}
 		count++
+		current.mu.Unlock()
 	}
 	return count
 }

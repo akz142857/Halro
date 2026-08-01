@@ -5,6 +5,26 @@ with the server stopped: the data directory has one exclusive owner.
 
 ## Clean install
 
+For a local interactive installation from source, use the simplified path:
+
+```bash
+make start
+```
+
+The command builds changed assets, creates a `0600` loopback-only
+`config.yaml` if absent, initializes only a provably empty instance, and
+prints `/admin/setup`. Create the first administrator in that page. Repeating
+the command never replaces existing configuration, the Master Key, or data.
+If initialization is partial, startup fails closed and requires restoration of
+the matching files.
+
+When Admin is configured on a non-loopback TLS listener, startup also prints a
+one-time setup token. The token exists only in process memory, changes after a
+restart, and is required by the setup form to prevent first-user takeover.
+
+For headless and automated installation, use a release binary and retain the
+explicit offline flow below.
+
 Use a release binary for the target OS/architecture, or build the exact source
 commit with `make build`. Keep the binary, configuration, Master Key, and data
 directory on persistent storage with different backup handling for the key.
@@ -32,6 +52,10 @@ Back it up separately from both the data directory and encrypted backup key.
 Default listeners are loopback-only. To expose Heimdall, use TLS and an
 authenticated reverse proxy with an explicitly configured origin/trusted proxy
 boundary. Admin and Metrics must never use public plaintext listeners.
+When Gateway proxy headers are enabled, every request received from a trusted
+proxy must carry a syntactically valid `X-Forwarded-For` chain. Missing or
+malformed chains are rejected with HTTP 400 so CIDR authorization and Token
+Guard cannot silently lose their source-IP signal.
 
 ## Configuration reference
 
@@ -49,10 +73,27 @@ groups are:
 - `security`: private egress and trusted proxy policy;
 - `metrics`: exporter enablement and authentication requirement.
 
+Retry limits do not override Heimdall's ambiguity boundary. If an upstream
+request might already have executed, Heimdall records a conservative estimated
+settlement and returns the failure without retrying or switching Provider. Safe
+fallback remains available for explicitly classified non-ambiguous failures.
+This fail-closed behavior is not configurable in v1; changing it requires an
+end-to-end idempotency contract with the upstream Provider.
+
 Unknown YAML fields and invalid durations are rejected. Listener, TLS, storage,
 egress, proxy, and Metrics-auth changes require restart. The Admin Settings page
 only changes the explicitly writable runtime settings. Always run `config check`
 before restart.
+
+Admin localization is metadata, not YAML configuration. The public
+`GET /admin/api/v1/ui/bootstrap` endpoint exposes only the instance default and
+supported locale identifiers so the setup/login shell can render before
+authentication. Authenticated administrators can update their own preference
+through `/admin/api/v1/preferences`; the instance default uses
+`/admin/api/v1/settings/ui`. Both mutation paths require CSRF protection and an
+`If-Match` revision, are audited, and never affect Gateway protocol payloads.
+Existing databases are initialized with `zh-CN`; older administrator records
+without a locale are interpreted as `system`.
 
 ## Offline diagnostics and break-glass access
 

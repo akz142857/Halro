@@ -31,20 +31,16 @@ func BootstrapAdmin(
 		return err
 	}
 	defer store.Close()
-	count, err := store.AdminUserCount(ctx)
-	if err != nil {
-		return err
-	}
-	if count != 0 {
-		return errors.New("an admin user already exists")
-	}
 	user, err := adminauth.NewUser(username, password, time.Now().UTC())
 	if err != nil {
 		return err
 	}
 	defer clear(user.PasswordHash)
 	defer clear(user.PasswordSalt)
-	if _, err := store.PutAdminUser(ctx, user, 0); err != nil {
+	if _, err := store.CreateFirstAdmin(ctx, user); err != nil {
+		if errors.Is(err, boltstore.ErrAdminInitialized) {
+			return errors.New("an admin user already exists")
+		}
 		return fmt.Errorf("store admin user: %w", err)
 	}
 	masterKey, err := vault.LoadMasterKey(cfg.Storage.MasterKeyFile)
@@ -117,6 +113,7 @@ func ResetAdminPassword(
 	defer clear(replacement.PasswordHash)
 	defer clear(replacement.PasswordSalt)
 	replacement.CreatedAt = current.CreatedAt
+	replacement.Locale = current.Locale
 	replacement.SessionGeneration = current.SessionGeneration + 1
 
 	masterKey, err := vault.LoadMasterKey(cfg.Storage.MasterKeyFile)

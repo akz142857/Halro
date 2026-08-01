@@ -29,14 +29,14 @@ type bucket struct {
 }
 
 type projectState struct {
+	mu          sync.Mutex
 	rpm         bucket
 	tpm         bucket
 	concurrency int64
 }
 
 type Manager struct {
-	mu       sync.Mutex
-	projects map[string]*projectState
+	projects sync.Map
 }
 
 type Lease struct {
@@ -47,7 +47,7 @@ type Lease struct {
 }
 
 func New() *Manager {
-	return &Manager{projects: make(map[string]*projectState)}
+	return &Manager{}
 }
 
 // Acquire atomically applies RPM, TPM, and concurrency admission. Zero limits
@@ -57,13 +57,10 @@ func (m *Manager) Acquire(project domain.Project, estimatedTokens int64, now tim
 	if estimatedTokens < 0 {
 		return nil, errors.New("estimated tokens cannot be negative")
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	state := m.projects[project.ID]
-	if state == nil {
-		state = &projectState{}
-		m.projects[project.ID] = state
-	}
+	value, _ := m.projects.LoadOrStore(project.ID, &projectState{})
+	state := value.(*projectState)
+	state.mu.Lock()
+	defer state.mu.Unlock()
 	refill(&state.rpm, project.RPM, now)
 	refill(&state.tpm, project.TPM, now)
 	if project.MaxConcurrency > 0 && state.concurrency >= project.MaxConcurrency {
@@ -90,25 +87,23 @@ func (m *Manager) Acquire(project domain.Project, estimatedTokens int64, now tim
 	}
 	state.concurrency++
 	return &Lease{release: func() {
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		current := m.projects[project.ID]
-		if current != nil && current.concurrency > 0 {
-			current.concurrency--
+		state.mu.Lock()
+		defer state.mu.Unlock()
+		if state.concurrency > 0 {
+			state.concurrency--
 		}
 	}, reconcile: func(actualTokens int64, reconciledAt time.Time) {
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		current := m.projects[project.ID]
-		if current == nil || current.tpm.limit <= 0 {
+		state.mu.Lock()
+		defer state.mu.Unlock()
+		if state.tpm.limit <= 0 {
 			return
 		}
-		limit := current.tpm.limit
-		refill(&current.tpm, limit, reconciledAt)
+		limit := state.tpm.limit
+		refill(&state.tpm, limit, reconciledAt)
 		delta := estimatedTokens - actualTokens
-		current.tpm.tokens += float64(delta)
-		if current.tpm.tokens > float64(limit) {
-			current.tpm.tokens = float64(limit)
+		state.tpm.tokens += float64(delta)
+		if state.tpm.tokens > float64(limit) {
+			state.tpm.tokens = float64(limit)
 		}
 	}}, nil
 }

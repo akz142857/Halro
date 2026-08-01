@@ -9,9 +9,11 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/akz142857/Heimdall/internal/domain"
 	"github.com/akz142857/Heimdall/internal/openaiapi"
 	"github.com/akz142857/Heimdall/internal/provider"
 	"github.com/akz142857/Heimdall/internal/semantic"
@@ -24,12 +26,13 @@ type Options struct {
 	CredentialJSON []byte
 	Client         *http.Client
 	Now            func() time.Time
+	Authorizer     provider.Authorizer
 }
 
 type Adapter struct {
-	endpoint *url.URL
-	client   *http.Client
-	signer   *signer
+	endpoint   *url.URL
+	client     *http.Client
+	authorizer provider.Authorizer
 }
 
 type textBlock struct {
@@ -60,6 +63,13 @@ type tokenUsage struct {
 	TotalTokens  int64 `json:"totalTokens"`
 }
 
+type credentialDocument struct {
+	AccessKeyID     string          `json:"access_key_id"`
+	SecretAccessKey json.RawMessage `json:"secret_access_key"`
+	SessionToken    json.RawMessage `json:"session_token,omitempty"`
+	Region          string          `json:"region"`
+}
+
 type converseResponse struct {
 	Output struct {
 		Message struct {
@@ -75,41 +85,125 @@ func New(options Options) (*Adapter, error) {
 	if options.Endpoint == nil || options.Client == nil {
 		return nil, errors.New("endpoint and client are required")
 	}
-	decoder := json.NewDecoder(bytes.NewReader(options.CredentialJSON))
+	authorizer := options.Authorizer
+	if authorizer == nil {
+		var err error
+		authorizer, err = NewAuthorizer(options.Endpoint, options.CredentialJSON, options.Now)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if authorizer.Scheme() != domain.CredentialAWSSigV4Explicit {
+		authorizer.Close()
+		return nil, errors.New("credential scheme does not match Bedrock profile")
+	}
+	endpoint := *options.Endpoint
+	return &Adapter{endpoint: &endpoint, client: options.Client, authorizer: authorizer}, nil
+}
+
+func NewAuthorizer(endpoint *url.URL, credentialJSON []byte, now func() time.Time) (provider.Authorizer, error) {
+	if endpoint == nil {
+		return nil, errors.New("endpoint is required")
+	}
+	if !strings.EqualFold(endpoint.Scheme, "https") || endpoint.User != nil ||
+		(endpoint.Port() != "" && endpoint.Port() != "443") {
+		return nil, errors.New("AWS Bedrock credential authorizer requires an HTTPS endpoint on port 443 without user info")
+	}
+	encoded := bytes.Clone(credentialJSON)
+	defer clear(encoded)
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
 	decoder.DisallowUnknownFields()
-	var value credentials
-	if err := decoder.Decode(&value); err != nil {
+	var document credentialDocument
+	defer func() {
+		clear(document.SecretAccessKey)
+		clear(document.SessionToken)
+	}()
+	if err := decoder.Decode(&document); err != nil {
 		return nil, errors.New("AWS credential must be valid JSON")
 	}
-	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF {
+	var trailing json.RawMessage
+	trailingErr := decoder.Decode(&trailing)
+	clear(trailing)
+	if trailingErr != io.EOF {
 		return nil, errors.New("AWS credential contains trailing data")
 	}
+	secret, err := decodeCredentialBytes(document.SecretAccessKey, false)
+	if err != nil {
+		return nil, errors.New("AWS secret_access_key is invalid")
+	}
+	defer clear(secret)
+	sessionToken, err := decodeCredentialBytes(document.SessionToken, true)
+	if err != nil {
+		return nil, errors.New("AWS session_token is invalid")
+	}
+	defer clear(sessionToken)
+	value := credentials{
+		AccessKeyID: document.AccessKeyID, SecretAccessKey: secret,
+		SessionToken: sessionToken, Region: document.Region,
+	}
 	signed, err := newSigner(value)
-	value.SecretAccessKey = ""
-	value.SessionToken = ""
 	if err != nil {
 		return nil, err
 	}
-	if !strings.Contains(strings.ToLower(options.Endpoint.Hostname()), "."+signed.region+".") {
-		signed.close()
-		return nil, errors.New("AWS endpoint host does not match credential region")
+	if !validBedrockRuntimeHost(endpoint.Hostname(), signed.region) {
+		signed.Close()
+		return nil, errors.New("AWS endpoint host is not an approved Bedrock Runtime endpoint for the credential region")
 	}
-	if options.Now != nil {
-		signed.now = options.Now
+	signed.authority = endpoint.Host
+	if now != nil {
+		signed.now = now
 	}
-	endpoint := *options.Endpoint
-	return &Adapter{endpoint: &endpoint, client: options.Client, signer: signed}, nil
+	return signed, nil
+}
+
+func decodeCredentialBytes(raw json.RawMessage, optional bool) ([]byte, error) {
+	if len(raw) == 0 && optional {
+		return nil, nil
+	}
+	if len(raw) < 2 || raw[0] != '"' || raw[len(raw)-1] != '"' {
+		return nil, errors.New("credential value must be a JSON string")
+	}
+	result := make([]byte, 0, len(raw)-2)
+	for _, value := range raw[1 : len(raw)-1] {
+		// AWS access secrets and session tokens use printable ASCII and do not
+		// require JSON escapes. Rejecting escapes avoids immutable decoded string
+		// copies that cannot be zeroized in Go.
+		if value < 0x21 || value > 0x7e || value == '\\' || value == '"' {
+			clear(result)
+			return nil, errors.New("credential value contains unsupported characters")
+		}
+		result = append(result, value)
+	}
+	return result, nil
+}
+
+func validBedrockRuntimeHost(host, region string) bool {
+	host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+	region = strings.ToLower(region)
+	for _, allowed := range []string{
+		"bedrock-runtime." + region + ".amazonaws.com",
+		"bedrock-runtime-fips." + region + ".amazonaws.com",
+		"bedrock-runtime." + region + ".amazonaws.com.cn",
+		"bedrock-runtime-fips." + region + ".amazonaws.com.cn",
+		"bedrock-runtime." + region + ".api.aws",
+		"bedrock-runtime-fips." + region + ".api.aws",
+	} {
+		if host == allowed {
+			return true
+		}
+	}
+	privateLinkSuffix := ".bedrock-runtime." + region + ".vpce.amazonaws.com"
+	return strings.HasPrefix(host, "vpce-") && strings.HasSuffix(host, privateLinkSuffix)
 }
 
 func (a *Adapter) Type() string { return "bedrock" }
 
 func (a *Adapter) Capabilities() provider.Capabilities {
-	return provider.Capabilities{Chat: true, Streaming: true, DeveloperRole: true, StreamUsage: true}
+	return provider.Capabilities{Chat: true, Streaming: true, StreamUsage: true}
 }
 
 func (a *Adapter) Close() {
-	a.signer.close()
+	a.authorizer.Close()
 	a.client.CloseIdleConnections()
 }
 
@@ -122,7 +216,7 @@ func (a *Adapter) Probe(ctx context.Context, model string) error {
 	if err != nil {
 		return badRequest("create Bedrock probe", err)
 	}
-	if err := a.signer.sign(request, nil); err != nil {
+	if err := a.authorizer.Authorize(request, nil); err != nil {
 		return badRequest("sign Bedrock probe", err)
 	}
 	response, err := a.client.Do(request)
@@ -134,7 +228,7 @@ func (a *Adapter) Probe(ctx context.Context, model string) error {
 		response.StatusCode == http.StatusBadRequest || response.StatusCode == http.StatusMethodNotAllowed {
 		return nil
 	}
-	return classifyHTTP(response.StatusCode, response.Body)
+	return classifyHTTP(response)
 }
 
 func (a *Adapter) Chat(ctx context.Context, call provider.ChatCall) (openaiapi.ChatCompletionResponse, error) {
@@ -143,7 +237,8 @@ func (a *Adapter) Chat(ctx context.Context, call provider.ChatCall) (openaiapi.C
 		return openaiapi.ChatCompletionResponse{}, err
 	}
 	var result converseResponse
-	if err := a.postJSON(ctx, call.ProviderModel, "converse", call.RequestID, payload, &result); err != nil {
+	upstreamRequestID, err := a.postJSON(ctx, call.ProviderModel, "converse", call.RequestID, payload, &result)
+	if err != nil {
 		return openaiapi.ChatCompletionResponse{}, err
 	}
 	if result.Output.Message.Role != "assistant" {
@@ -162,7 +257,7 @@ func (a *Adapter) Chat(ctx context.Context, call provider.ChatCall) (openaiapi.C
 		return openaiapi.ChatCompletionResponse{}, err
 	}
 	return openaiapi.ChatCompletionResponse{
-		ID: "bedrock-" + call.RequestID, Object: "chat.completion", Created: time.Now().Unix(), Model: call.ProviderModel,
+		ID: bedrockResponseID(upstreamRequestID, call.RequestID), Object: "chat.completion", Created: time.Now().Unix(), Model: call.ProviderModel,
 		Choices: []openaiapi.Choice{{Index: 0, Message: &openaiapi.Message{Role: "assistant", Content: openaiapi.TextContent(text)}, FinishReason: finish}},
 		Usage:   usage,
 	}, nil
@@ -191,7 +286,7 @@ func (a *Adapter) ChatStream(ctx context.Context, call provider.ChatCall, emit f
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/vnd.amazon.eventstream")
 	request.Header.Set("X-Request-ID", call.RequestID)
-	if err := a.signer.sign(request, encoded); err != nil {
+	if err := a.authorizer.Authorize(request, encoded); err != nil {
 		return nil, badRequest("sign Bedrock stream request", err)
 	}
 	response, err := a.client.Do(request)
@@ -200,16 +295,17 @@ func (a *Adapter) ChatStream(ctx context.Context, call provider.ChatCall, emit f
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, classifyHTTP(response.StatusCode, response.Body)
+		return nil, classifyHTTP(response)
 	}
 	if !strings.HasPrefix(strings.ToLower(response.Header.Get("Content-Type")), "application/vnd.amazon.eventstream") {
 		return nil, malformed("Bedrock did not return an AWS event stream", nil)
 	}
-	id := "bedrock-" + call.RequestID
+	id := bedrockResponseID(providerRequestID(response.Header), call.RequestID)
 	created := time.Now().Unix()
 	var usage *openaiapi.Usage
 	sawMessage := false
 	sawStop := false
+	state := newBedrockStreamState()
 	for {
 		frame, err := readStreamMessage(response.Body)
 		if errors.Is(err, io.EOF) {
@@ -219,6 +315,9 @@ func (a *Adapter) ChatStream(ctx context.Context, call provider.ChatCall, emit f
 			if !sawStop {
 				return usage, malformed("Bedrock stream ended before messageStop", nil)
 			}
+			if !state.metadataSeen {
+				return usage, malformed("Bedrock stream ended before usage metadata", nil)
+			}
 			return usage, nil
 		}
 		if err != nil {
@@ -226,7 +325,10 @@ func (a *Adapter) ChatStream(ctx context.Context, call provider.ChatCall, emit f
 		}
 		eventType := frame.Headers[":event-type"]
 		if frame.Headers[":message-type"] == "exception" || strings.HasSuffix(strings.ToLower(eventType), "exception") {
-			return usage, streamException(eventType)
+			return usage, streamException(eventType, response.Header, frame.Payload)
+		}
+		if err := state.Accept(eventType, frame.Payload); err != nil {
+			return usage, malformed("invalid Bedrock stream event order", err)
 		}
 		event, found, eventUsage, err := translateStreamEvent(eventType, frame.Payload, id, call.ProviderModel, created)
 		if err != nil {
@@ -278,8 +380,10 @@ func translateRequest(request openaiapi.ChatCompletionRequest) (converseRequest,
 			return converseRequest{}, badRequest("Bedrock Beta supports text message content only", nil)
 		}
 		switch source.Role {
-		case "system", "developer":
+		case "system":
 			result.System = append(result.System, textBlock{Text: text})
+		case "developer":
+			return converseRequest{}, badRequest("Bedrock Beta does not declare the developer role", nil)
 		case "user":
 			result.Messages = append(result.Messages, message{Role: "user", Content: []textBlock{{Text: text}}})
 		case "assistant":
@@ -316,7 +420,7 @@ func translateStreamEvent(eventType string, payload []byte, id, model string, cr
 			return semantic.Event{}, false, nil, malformed("decode Bedrock content delta", err)
 		}
 		if len(body.Delta) != 1 || body.Delta["text"] == nil {
-			return semantic.Event{}, false, nil, badRequest("Bedrock Beta received unsupported non-text stream delta", nil)
+			return semantic.Event{}, false, nil, malformed("Bedrock Beta received undeclared non-text stream delta", nil)
 		}
 		var text string
 		if err := json.Unmarshal(body.Delta["text"], &text); err != nil {
@@ -325,24 +429,27 @@ func translateStreamEvent(eventType string, payload []byte, id, model string, cr
 		base.Choices = []semantic.Choice{{Index: 0, Delta: semantic.Delta{Content: openaiapi.TextContent(text)}}}
 	case "messageStop":
 		var body struct {
-			StopReason string `json:"stopReason"`
+			StopReason *string `json:"stopReason"`
 		}
-		if err := json.Unmarshal(payload, &body); err != nil {
+		if err := json.Unmarshal(payload, &body); err != nil || body.StopReason == nil {
 			return semantic.Event{}, false, nil, malformed("decode Bedrock message stop", err)
 		}
-		finish, err := mapFinishReason(body.StopReason)
+		finish, err := mapFinishReason(*body.StopReason)
 		if err != nil {
 			return semantic.Event{}, false, nil, err
 		}
 		base.Choices = []semantic.Choice{{Index: 0, Delta: semantic.Delta{}, FinishReason: finish}}
 	case "metadata":
 		var body struct {
-			Usage tokenUsage `json:"usage"`
+			Usage *tokenUsage `json:"usage"`
 		}
-		if err := json.Unmarshal(payload, &body); err != nil {
+		if err := json.Unmarshal(payload, &body); err != nil || body.Usage == nil {
 			return semantic.Event{}, false, nil, malformed("decode Bedrock stream metadata", err)
 		}
-		usage, err := openAIUsage(body.Usage)
+		usage, err := openAIUsage(*body.Usage)
+		if err == nil && usage == nil {
+			err = malformed("Bedrock stream metadata contains empty usage", nil)
+		}
 		return semantic.Event{}, false, usage, err
 	case "contentBlockStart":
 		var body struct {
@@ -352,7 +459,7 @@ func translateStreamEvent(eventType string, payload []byte, id, model string, cr
 			return semantic.Event{}, false, nil, malformed("decode Bedrock content block start", err)
 		}
 		if len(body.Start) != 0 {
-			return semantic.Event{}, false, nil, badRequest("Bedrock Beta received unsupported non-text stream content", nil)
+			return semantic.Event{}, false, nil, malformed("Bedrock Beta received undeclared non-text stream content", nil)
 		}
 		return semantic.Event{}, false, nil, nil
 	case "contentBlockStop":
@@ -366,41 +473,41 @@ func translateStreamEvent(eventType string, payload []byte, id, model string, cr
 	return base, true, nil, nil
 }
 
-func (a *Adapter) postJSON(ctx context.Context, model, operation, requestID string, input, output any) error {
+func (a *Adapter) postJSON(ctx context.Context, model, operation, requestID string, input, output any) (string, error) {
 	encoded, err := json.Marshal(input)
 	if err != nil {
-		return badRequest("encode Bedrock request", err)
+		return "", badRequest("encode Bedrock request", err)
 	}
 	endpoint, err := a.operationURL(model, operation)
 	if err != nil {
-		return err
+		return "", err
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), bytes.NewReader(encoded))
 	if err != nil {
-		return badRequest("create Bedrock request", err)
+		return "", badRequest("create Bedrock request", err)
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("X-Request-ID", requestID)
-	if err := a.signer.sign(request, encoded); err != nil {
-		return badRequest("sign Bedrock request", err)
+	if err := a.authorizer.Authorize(request, encoded); err != nil {
+		return "", badRequest("sign Bedrock request", err)
 	}
 	response, err := a.client.Do(request)
 	if err != nil {
-		return transportError("Bedrock request failed", err)
+		return "", transportError("Bedrock request failed", err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return classifyHTTP(response.StatusCode, response.Body)
+		return "", classifyHTTP(response)
 	}
 	payload, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
 	if err != nil || len(payload) > maxResponseBytes {
-		return malformed("read Bedrock response", err)
+		return "", malformed("read Bedrock response", err)
 	}
 	if err := json.Unmarshal(payload, output); err != nil {
-		return malformed("decode Bedrock response", err)
+		return "", malformed("decode Bedrock response", err)
 	}
-	return nil
+	return providerRequestID(response.Header), nil
 }
 
 func (a *Adapter) operationURL(model, operation string) (url.URL, error) {
@@ -431,7 +538,7 @@ func responseBlocksText(blocks []json.RawMessage) (string, error) {
 			return "", malformed("decode Bedrock output block", err)
 		}
 		if len(block) != 1 || block["text"] == nil {
-			return "", badRequest("Bedrock Beta received unsupported non-text output", nil)
+			return "", malformed("Bedrock Beta received undeclared non-text output", nil)
 		}
 		var text string
 		if err := json.Unmarshal(block["text"], &text); err != nil {
@@ -454,44 +561,240 @@ func openAIUsage(value tokenUsage) (*openaiapi.Usage, error) {
 
 func mapFinishReason(value string) (*string, error) {
 	if value == "" {
-		return nil, nil
+		return nil, malformed("Bedrock response is missing stop reason", nil)
 	}
 	mapped := "stop"
 	switch value {
 	case "end_turn", "stop_sequence":
 	case "max_tokens":
 		mapped = "length"
+	case "model_context_window_exceeded":
+		mapped = "length"
 	case "guardrail_intervened", "content_filtered":
 		mapped = "content_filter"
+	case "malformed_model_output", "malformed_tool_use":
+		return nil, malformed("Bedrock model returned malformed output", nil)
+	case "tool_use":
+		return nil, malformed("Bedrock text profile received an undeclared tool result", nil)
 	default:
-		return nil, badRequest("Bedrock Beta received unsupported stop reason", nil)
+		return nil, malformed("Bedrock Beta received an unknown stop reason", nil)
 	}
 	return &mapped, nil
 }
 
-func classifyHTTP(status int, body io.Reader) *provider.Error {
-	_, _ = io.Copy(io.Discard, io.LimitReader(body, 4096))
-	result := &provider.Error{StatusCode: status, Message: fmt.Sprintf("Bedrock error (%d)", status)}
-	switch {
-	case status == http.StatusUnauthorized || status == http.StatusForbidden:
-		result.Class = provider.ErrorAuthentication
-	case status == http.StatusRequestTimeout:
-		result.Class, result.Retryable = provider.ErrorTimeout, true
-	case status == http.StatusTooManyRequests:
+func classifyHTTP(response *http.Response) *provider.Error {
+	status := response.StatusCode
+	payload, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
+	var body struct {
+		Code string `json:"code"`
+		Type string `json:"__type"`
+	}
+	_ = json.Unmarshal(payload, &body)
+	code := safeProviderCode(body.Code)
+	if code == "" {
+		code = safeProviderCode(body.Type)
+	}
+	headerErrorType := response.Header.Get("x-amzn-errortype")
+	if index := strings.IndexByte(headerErrorType, ':'); index >= 0 {
+		headerErrorType = headerErrorType[:index]
+	}
+	if headerCode := safeProviderCode(headerErrorType); headerCode != "" {
+		code = headerCode
+	}
+	result := &provider.Error{
+		StatusCode: status, Message: fmt.Sprintf("Bedrock error (%d)", status),
+		ProviderRequestID: providerRequestID(response.Header), ProviderCode: code,
+		RetryAfter: retryAfter(response.Header, time.Now()),
+	}
+	switch strings.ToLower(code) {
+	case "modeltimeoutexception":
+		result.Class, result.Ambiguous = provider.ErrorTimeout, true
+	case "modelerrorexception":
+		result.Class, result.Ambiguous = provider.ErrorProvider5xx, true
+	case "throttlingexception", "servicequotaexceededexception":
 		result.Class, result.Retryable = provider.ErrorRateLimit, true
-	case status >= 500:
-		result.Class, result.Retryable = provider.ErrorProvider5xx, true
-	default:
+	case "accessdeniedexception", "unrecognizedclientexception":
+		result.Class = provider.ErrorAuthentication
+	case "validationexception":
 		result.Class = provider.ErrorBadRequest
+	default:
+		switch {
+		case status == http.StatusUnauthorized || status == http.StatusForbidden:
+			result.Class = provider.ErrorAuthentication
+		case status == http.StatusRequestTimeout:
+			result.Class, result.Ambiguous = provider.ErrorTimeout, true
+		case status == http.StatusTooManyRequests:
+			result.Class, result.Retryable = provider.ErrorRateLimit, true
+		case status == http.StatusFailedDependency:
+			result.Class, result.Ambiguous = provider.ErrorProvider5xx, true
+		case status >= 500:
+			// The request reached the Bedrock data plane. A 5xx cannot prove that
+			// model execution did not start, so retry/fallback must not duplicate it.
+			result.Class, result.Ambiguous = provider.ErrorProvider5xx, true
+		default:
+			result.Class = provider.ErrorBadRequest
+		}
 	}
 	return result
 }
 
-func streamException(eventType string) *provider.Error {
-	if strings.Contains(strings.ToLower(eventType), "throttl") {
-		return &provider.Error{Class: provider.ErrorRateLimit, Retryable: true, Message: "Bedrock stream throttled"}
+func providerRequestID(header http.Header) string {
+	value := strings.TrimSpace(header.Get("x-amzn-requestid"))
+	if value == "" {
+		value = strings.TrimSpace(header.Get("x-amz-request-id"))
 	}
-	return &provider.Error{Class: provider.ErrorProvider5xx, Retryable: true, Ambiguous: true, Message: "Bedrock stream exception"}
+	if len(value) > 256 {
+		return ""
+	}
+	for _, char := range value {
+		if char < 0x21 || char > 0x7e {
+			return ""
+		}
+	}
+	return value
+}
+
+func safeProviderCode(value string) string {
+	value = strings.TrimSpace(value)
+	if index := strings.LastIndexAny(value, "#/"); index >= 0 {
+		value = value[index+1:]
+	}
+	if len(value) > 128 {
+		return ""
+	}
+	for _, char := range value {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') ||
+			(char >= '0' && char <= '9') || strings.ContainsRune("._:-", char) {
+			continue
+		}
+		return ""
+	}
+	return value
+}
+
+func retryAfter(header http.Header, now time.Time) time.Duration {
+	const maximum = 24 * time.Hour
+	value := strings.TrimSpace(header.Get("Retry-After"))
+	if value == "" {
+		return 0
+	}
+	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil && seconds >= 0 {
+		if seconds >= int64(maximum/time.Second) {
+			return maximum
+		}
+		return time.Duration(seconds) * time.Second
+	}
+	if deadline, err := http.ParseTime(value); err == nil && deadline.After(now) {
+		return min(deadline.Sub(now), maximum)
+	}
+	return 0
+}
+
+func bedrockResponseID(upstream, fallback string) string {
+	if upstream != "" {
+		return "bedrock-" + upstream
+	}
+	return "bedrock-" + fallback
+}
+
+func streamException(eventType string, header http.Header, payload []byte) *provider.Error {
+	requestID := providerRequestID(header)
+	code := safeProviderCode(eventType)
+	var details struct {
+		OriginalStatusCode int `json:"originalStatusCode"`
+	}
+	_ = json.Unmarshal(payload, &details)
+	switch strings.ToLower(eventType) {
+	case "validationexception":
+		return &provider.Error{Class: provider.ErrorBadRequest, Message: "Bedrock rejected the stream request", ProviderRequestID: requestID, ProviderCode: code}
+	case "throttlingexception":
+		return &provider.Error{Class: provider.ErrorRateLimit, Retryable: true, Message: "Bedrock stream is temporarily unavailable", ProviderRequestID: requestID, ProviderCode: code, RetryAfter: retryAfter(header, time.Now())}
+	case "modeltimeoutexception":
+		return &provider.Error{Class: provider.ErrorTimeout, Ambiguous: true, Message: "Bedrock model stream timed out after acceptance", ProviderRequestID: requestID, ProviderCode: code}
+	case "modelstreamerrorexception":
+		class := provider.ErrorProvider5xx
+		if details.OriginalStatusCode == http.StatusRequestTimeout {
+			class = provider.ErrorTimeout
+		}
+		return &provider.Error{Class: class, Ambiguous: true, Message: "Bedrock stream failed after acceptance", ProviderRequestID: requestID, ProviderCode: code}
+	case "internalserverexception", "serviceunavailableexception":
+		return &provider.Error{Class: provider.ErrorProvider5xx, Ambiguous: true, Message: "Bedrock stream failed after acceptance", ProviderRequestID: requestID, ProviderCode: code}
+	default:
+		return &provider.Error{Class: provider.ErrorMalformed, Ambiguous: true, Message: "Bedrock returned an unknown stream exception", ProviderRequestID: requestID, ProviderCode: code}
+	}
+}
+
+type bedrockStreamState struct {
+	messageStarted bool
+	messageStopped bool
+	metadataSeen   bool
+	blocks         map[int]bool
+}
+
+func newBedrockStreamState() *bedrockStreamState {
+	return &bedrockStreamState{blocks: make(map[int]bool)}
+}
+
+func (s *bedrockStreamState) Accept(eventType string, payload []byte) error {
+	switch eventType {
+	case "messageStart":
+		if s.messageStarted || s.messageStopped {
+			return errors.New("messageStart is duplicated or late")
+		}
+		s.messageStarted = true
+	case "contentBlockStart", "contentBlockDelta", "contentBlockStop":
+		if !s.messageStarted || s.messageStopped {
+			return errors.New("content block event is outside the active message")
+		}
+		var body struct {
+			ContentBlockIndex *int `json:"contentBlockIndex"`
+		}
+		if err := json.Unmarshal(payload, &body); err != nil || body.ContentBlockIndex == nil || *body.ContentBlockIndex < 0 || *body.ContentBlockIndex > 1024 {
+			return errors.New("content block index is invalid")
+		}
+		index := *body.ContentBlockIndex
+		closed, exists := s.blocks[index]
+		if !exists && len(s.blocks) >= 1024 {
+			return errors.New("content block count exceeds the profile limit")
+		}
+		if eventType == "contentBlockStop" {
+			if !exists || closed {
+				return errors.New("content block stop has no active block")
+			}
+			s.blocks[index] = true
+			return nil
+		}
+		if closed {
+			return errors.New("content block event follows contentBlockStop")
+		}
+		if eventType == "contentBlockStart" && exists {
+			return errors.New("contentBlockStart is duplicated")
+		}
+		if eventType == "contentBlockDelta" && !exists {
+			return errors.New("contentBlockDelta is missing contentBlockStart")
+		}
+		s.blocks[index] = false
+	case "messageStop":
+		if !s.messageStarted || s.messageStopped {
+			return errors.New("messageStop is missing messageStart or duplicated")
+		}
+		for _, closed := range s.blocks {
+			if !closed {
+				return errors.New("messageStop precedes contentBlockStop")
+			}
+		}
+		s.messageStopped = true
+	case "metadata":
+		if !s.messageStopped || s.metadataSeen {
+			return errors.New("metadata precedes messageStop or is duplicated")
+		}
+		s.metadataSeen = true
+	default:
+		if !s.messageStarted || s.messageStopped {
+			return errors.New("unknown event is outside the active message")
+		}
+	}
+	return nil
 }
 
 func badRequest(message string, cause error) *provider.Error {

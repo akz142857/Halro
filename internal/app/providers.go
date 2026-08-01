@@ -88,6 +88,14 @@ func loadProviderRegistry(
 		if credential.Type != instance.Type {
 			return fail(fmt.Errorf("provider %q credential type mismatch", instance.ID))
 		}
+		manifest, ok := provider.BuiltinProfile(instance.ProfileID)
+		if !ok || manifest.ProviderType != instance.Type || manifest.AccessSurface != instance.AccessSurface ||
+			manifest.CredentialScheme != instance.CredentialScheme {
+			return fail(fmt.Errorf("provider %q profile is unavailable or incompatible", instance.ID))
+		}
+		if credential.AccessSurface != instance.AccessSurface || credential.Scheme != instance.CredentialScheme {
+			return fail(fmt.Errorf("provider %q credential profile mismatch", instance.ID))
+		}
 		policy := safetransport.Policy{
 			RequireHTTPS: true,
 			AllowPrivate: cfg.Security.AllowPrivateProviderEndpoints,
@@ -132,34 +140,56 @@ func loadProviderRegistry(
 			MaxContextTokens: capabilities.MaxContextTokens, MaxOutputTokens: capabilities.MaxOutputTokens,
 		}
 		var adapter provider.Adapter
+		var authorizer provider.Authorizer
 		switch instance.Type {
 		case domain.ProviderOpenAI, domain.ProviderOpenAICompatible, domain.ProviderDeepSeek:
-			adapter, err = openaiprovider.NewWithOptions(openaiprovider.Options{
-				Endpoint: endpoint, APIKey: plaintext, Client: client,
-				ProviderType: string(instance.Type), Capabilities: adapterCapabilities,
-			})
+			authorizer, err = provider.NewStaticHeaderAuthorizer(instance.CredentialScheme, "Authorization", "Bearer ", plaintext, "api-key")
+			if err == nil {
+				adapter, err = openaiprovider.NewWithOptions(openaiprovider.Options{
+					Endpoint: endpoint, Authorizer: authorizer, Client: client,
+					ProviderType: string(instance.Type), Capabilities: adapterCapabilities,
+				})
+			}
 		case domain.ProviderAzureOpenAI:
-			adapter, err = openaiprovider.NewWithOptions(openaiprovider.Options{
-				Endpoint: endpoint, APIKey: plaintext, Client: client,
-				ProviderType: string(instance.Type), APIVersion: instance.APIVersion,
-				Azure: true, Capabilities: adapterCapabilities,
-			})
+			authorizer, err = provider.NewStaticHeaderAuthorizer(instance.CredentialScheme, "api-key", "", plaintext, "Authorization")
+			if err == nil {
+				adapter, err = openaiprovider.NewWithOptions(openaiprovider.Options{
+					Endpoint: endpoint, Authorizer: authorizer, Client: client,
+					ProviderType: string(instance.Type), APIVersion: instance.APIVersion,
+					Azure: true, Capabilities: adapterCapabilities,
+				})
+			}
 		case domain.ProviderGemini:
-			adapter, err = geminiprovider.New(geminiprovider.Options{
-				Endpoint: endpoint, APIKey: plaintext, Client: client,
-			})
+			authorizer, err = provider.NewStaticHeaderAuthorizer(instance.CredentialScheme, "x-goog-api-key", "", plaintext, "Authorization")
+			if err == nil {
+				adapter, err = geminiprovider.New(geminiprovider.Options{
+					Endpoint: endpoint, Authorizer: authorizer, Client: client,
+				})
+			}
 		case domain.ProviderBedrock:
-			adapter, err = bedrockprovider.New(bedrockprovider.Options{
-				Endpoint: endpoint, CredentialJSON: plaintext, Client: client,
-			})
+			authorizer, err = bedrockprovider.NewAuthorizer(endpoint, plaintext, nil)
+			if err == nil {
+				adapter, err = bedrockprovider.New(bedrockprovider.Options{
+					Endpoint: endpoint, Authorizer: authorizer, Client: client,
+				})
+			}
 		default:
 			err = errors.New("provider type is not implemented")
 		}
 		clear(plaintext)
 		if err != nil {
+			if authorizer != nil {
+				authorizer.Close()
+			}
 			client.CloseIdleConnections()
 			return fail(fmt.Errorf("provider %q adapter: %w", instance.ID, err))
 		}
+		profiled, err := provider.NewLegacyAdapterBridge(adapter, manifest, instance.CapabilityEvidence)
+		if err != nil {
+			adapter.Close()
+			return fail(fmt.Errorf("provider %q legacy bridge: %w", instance.ID, err))
+		}
+		adapter = profiled
 		adapters[instance.ID] = adapter
 		providerLimits[instance.ID] = instance.MaxConcurrency
 		if err := registry.RegisterAdapter(instance.ID, adapter); err != nil {
@@ -202,12 +232,15 @@ func loadProviderRegistry(
 			ProviderID:             providerID,
 			PublicModel:            route.PublicModel,
 			ProviderModel:          providerModel,
+			AccessSurface:          deploymentByID[deploymentID].AccessSurface,
+			ProfileID:              deploymentByID[deploymentID].ProfileID,
 			Adapter:                adapter,
 			InputMicrosPerMillion:  inputPrice,
 			OutputMicrosPerMillion: outputPrice,
 			Priority:               route.Priority,
 			Strategy:               route.Strategy,
 			Capabilities:           capabilities,
+			CapabilityEvidence:     deploymentByID[deploymentID].CapabilityEvidence.Clone(),
 			MaxConcurrency:         providerLimits[providerID],
 			DeploymentConcurrency:  deploymentLimit,
 		}); err != nil {

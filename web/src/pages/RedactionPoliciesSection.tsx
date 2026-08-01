@@ -15,6 +15,7 @@ import type {
   RedactionRule,
   RedactionTestResult,
 } from "../types";
+import { useTranslation } from "react-i18next";
 
 const builtins = [
   "china_phone", "email", "china_id", "bank_card_candidate",
@@ -34,6 +35,7 @@ function blankRule(): EditableRule {
 }
 
 export function RedactionPoliciesSection() {
+  const { t } = useTranslation();
   const [editing, setEditing] = useState<RedactionPolicy | "new" | null>(null);
   const [testing, setTesting] = useState<RedactionPolicy | null>(null);
   const policies = useQuery({
@@ -51,20 +53,20 @@ export function RedactionPoliciesSection() {
     <section className="policy-section">
       <div className="section-heading">
         <div>
-          <p className="eyebrow">DATA LOSS PREVENTION</p>
-          <h2>Redaction Policies</h2>
-          <p>在请求进入 Provider 前和响应返回内部调用方前，对结构化内容执行检测、掩码、替换或拒绝。</p>
+          <p className="eyebrow">{t("redaction.eyebrow")}</p>
+          <h2>{t("redaction.title")}</h2>
+          <p>{t("redaction.description")}</p>
         </div>
-        <button className="button primary" onClick={() => setEditing("new")}>＋ 新建脱敏 Policy</button>
+        <button className="button primary" onClick={() => setEditing("new")}>{t("redaction.create")}</button>
       </div>
       {policies.isPending && <Loading />}
       {policies.isError && <ErrorState error={policies.error} />}
       {policies.data?.items.length === 0 && (
         <EmptyState
-          title="还没有脱敏 Policy"
-          action={<button className="button primary" onClick={() => setEditing("new")}>创建脱敏基线</button>}
+          title={t("redaction.emptyTitle")}
+          action={<button className="button primary" onClick={() => setEditing("new")}>{t("redaction.baseline")}</button>}
         >
-          strict 模式会禁用流式响应，是当前最稳妥的生产默认值。
+          {t("redaction.emptyDescription")}
         </EmptyState>
       )}
       {!!policies.data?.items.length && (
@@ -73,26 +75,26 @@ export function RedactionPoliciesSection() {
             <article className="policy-card redaction-card" key={policy.id}>
               <header>
                 <span><StatusDot ok={policy.enabled} /><strong>{policy.name}</strong></span>
-                <span className="badge">{policy.mode}</span>
+                <span className="badge">{policy.mode === "strict" ? t("redaction.strictBadge") : policy.mode === "bounded_stream" ? t("redaction.boundedBadge") : t("redaction.detectStreamBadge")}</span>
               </header>
               <div className="redaction-rule-list">
                 {policy.rules.map((rule) => (
                   <div key={rule.id}>
-                    <span><strong>{rule.name}</strong><small>{rule.kind === "builtin" ? rule.builtin : rule.kind}</small></span>
-                    <code>{rule.scopes.join(" + ")}</code>
-                    <span className={`badge ${rule.action === "reject" ? "warning" : ""}`}>{rule.action}</span>
-                    <small>{rule.computed_max_match_bytes > 0 ? `≤ ${rule.computed_max_match_bytes} bytes` : "unbounded"}</small>
+                    <span><strong>{rule.name}</strong><small>{rule.kind === "builtin" ? rule.builtin : t(`redaction.${rule.kind}Badge`)}</small></span>
+                    <code>{rule.scopes.map((scope) => t(`redaction.${scope}`)).join(" + ")}</code>
+                    <span className={`badge ${rule.action === "reject" ? "warning" : ""}`}>{t(`redaction.${rule.action === "detect_only" ? "detect" : rule.action}`)}</span>
+                    <small>{rule.computed_max_match_bytes > 0 ? t("redaction.byteLimit", { count: rule.computed_max_match_bytes }) : t("redaction.unbounded")}</small>
                   </div>
                 ))}
               </div>
               <footer>
                 <code>{policy.id}</code>
                 <div className="row-actions">
-                  <button className="button ghost" onClick={() => setTesting(policy)}>测试</button>
-                  <button className="button ghost" onClick={() => setEditing(policy)}>编辑</button>
+                  <button className="button ghost" onClick={() => setTesting(policy)}>{t("common.test")}</button>
+                  <button className="button ghost" onClick={() => setEditing(policy)}>{t("common.edit")}</button>
                   <ConfirmButton
-                    label="删除"
-                    confirmLabel={`删除 Policy “${policy.name}”？被 Project 引用时服务端会拒绝。`}
+                    label={t("common.delete")}
+                    confirmLabel={t("redaction.deleteConfirm", { name: policy.name })}
                     disabled={remove.isPending}
                     onConfirm={() => remove.mutate(policy)}
                   />
@@ -121,6 +123,7 @@ function RedactionPolicyForm({
   current?: RedactionPolicy;
   onClose: () => void;
 }) {
+  const { t } = useTranslation();
   const [name, setName] = useState(current?.name ?? "");
   const [enabled, setEnabled] = useState(current?.enabled ?? true);
   const [mode, setMode] = useState<RedactionPolicy["mode"]>(current?.mode ?? "strict");
@@ -143,67 +146,67 @@ function RedactionPolicyForm({
     },
   });
   return (
-    <Modal title={current ? "编辑脱敏 Policy" : "创建脱敏 Policy"} onClose={onClose}>
+    <Modal title={current ? t("redaction.edit") : t("redaction.createTitle")} onClose={onClose}>
       <form className="redaction-form" onSubmit={(event: FormEvent) => {
         event.preventDefault();
         if (name.trim() && rules.length) mutation.mutate();
       }}>
         <div className="form-grid">
-          <Field label="Policy 名称"><input autoFocus value={name} onChange={(event) => setName(event.target.value)} /></Field>
-          <Field label="流式策略">
+          <Field label={t("redaction.name")}><input autoFocus value={name} onChange={(event) => setName(event.target.value)} /></Field>
+          <Field label={t("redaction.streaming")}>
             <select value={mode} onChange={(event) => setMode(event.target.value as typeof mode)}>
-              <option value="strict">Strict · 禁止流式</option>
-              <option value="bounded_stream">Bounded · 有界规则（执行规则当前仍保守拒绝流式）</option>
-              <option value="detect_only_stream">Detect only · 流式仅检测</option>
+              <option value="strict">{t("redaction.strict")}</option>
+              <option value="bounded_stream">{t("redaction.bounded")}</option>
+              <option value="detect_only_stream">{t("redaction.detectStream")}</option>
             </select>
           </Field>
         </div>
         <div className="notice warning">
-          <strong>安全边界</strong>
-          <span>Provider/Gateway Key 等密钥检测始终开启，不受此 Policy 开关影响。</span>
+          <strong>{t("redaction.boundary")}</strong>
+          <span>{t("redaction.boundaryDescription")}</span>
         </div>
         <div className="rule-editor-list">
           {rules.map((rule, index) => (
             <section className="rule-editor" key={rule.id || `new-${index}`}>
               <header>
-                <strong>规则 {index + 1}</strong>
-                {rules.length > 1 && <button type="button" className="button ghost" onClick={() => setRules(rules.filter((_, item) => item !== index))}>移除</button>}
+                <strong>{t("redaction.rule", { count: index + 1 })}</strong>
+                {rules.length > 1 && <button type="button" className="button ghost" onClick={() => setRules(rules.filter((_, item) => item !== index))}>{t("redaction.remove")}</button>}
               </header>
               <div className="form-grid">
-                <Field label="名称"><input value={rule.name} onChange={(event) => updateRule(index, { name: event.target.value })} /></Field>
-                <Field label="类型">
+                <Field label={t("redaction.ruleName")}><input value={rule.name} onChange={(event) => updateRule(index, { name: event.target.value })} /></Field>
+                <Field label={t("redaction.type")}>
                   <select value={rule.kind} onChange={(event) => updateRule(index, {
                     kind: event.target.value as EditableRule["kind"],
                     builtin: event.target.value === "builtin" ? "china_phone" : "",
                   })}>
-                    <option value="builtin">内置规则</option>
-                    <option value="regex">RE2 正则</option>
-                    <option value="dictionary">字典</option>
+                    <option value="builtin">{t("redaction.builtin")}</option>
+                    <option value="regex">{t("redaction.regex")}</option>
+                    <option value="dictionary">{t("redaction.dictionary")}</option>
                   </select>
                 </Field>
                 {rule.kind === "builtin" && (
-                  <Field label="内置类别">
+                  <Field label={t("redaction.category")}>
                     <select value={rule.builtin} onChange={(event) => updateRule(index, { builtin: event.target.value })}>
                       {builtins.map((item) => <option key={item} value={item}>{item}</option>)}
                     </select>
                   </Field>
                 )}
-                {rule.kind === "regex" && <Field label="正则表达式"><input value={rule.pattern ?? ""} onChange={(event) => updateRule(index, { pattern: event.target.value })} /></Field>}
+                {rule.kind === "regex" && <Field label={t("redaction.expression")}><input value={rule.pattern ?? ""} onChange={(event) => updateRule(index, { pattern: event.target.value })} /></Field>}
                 {rule.kind === "dictionary" && (
-                  <Field label="字典（每行一项）">
+                  <Field label={t("redaction.dictionaryItems")}>
                     <textarea rows={3} value={(rule.dictionary ?? []).join("\n")} onChange={(event) => updateRule(index, { dictionary: event.target.value.split("\n").map((value) => value.trim()).filter(Boolean) })} />
                   </Field>
                 )}
-                <Field label="动作">
+                <Field label={t("redaction.action")}>
                   <select value={rule.action} onChange={(event) => updateRule(index, { action: event.target.value as EditableRule["action"] })}>
-                    <option value="detect_only">Detect only</option>
-                    <option value="mask">Mask</option>
-                    <option value="replace">Replace</option>
-                    <option value="reject">Reject</option>
+                    <option value="detect_only">{t("redaction.detect")}</option>
+                    <option value="mask">{t("redaction.mask")}</option>
+                    <option value="replace">{t("redaction.replace")}</option>
+                    <option value="reject">{t("redaction.reject")}</option>
                   </select>
                 </Field>
-                {rule.action === "replace" && <Field label="替换文本"><input value={rule.replacement ?? ""} onChange={(event) => updateRule(index, { replacement: event.target.value })} /></Field>}
-                <Field label="优先级"><input type="number" value={rule.priority} onChange={(event) => updateRule(index, { priority: Number(event.target.value) })} /></Field>
+                {rule.action === "replace" && <Field label={t("redaction.replacement")}><input value={rule.replacement ?? ""} onChange={(event) => updateRule(index, { replacement: event.target.value })} /></Field>}
+                <Field label={t("redaction.priority")}><input type="number" value={rule.priority} onChange={(event) => updateRule(index, { priority: Number(event.target.value) })} /></Field>
                 <div className="scope-checks">
                   {(["inbound", "outbound"] as const).map((scope) => (
                     <label className="check-row" key={scope}>
@@ -212,27 +215,27 @@ function RedactionPolicyForm({
                           ? [...rule.scopes, scope]
                           : rule.scopes.filter((item) => item !== scope),
                       })} />
-                      <span>{scope}</span>
+                      <span>{t(`redaction.${scope}`)}</span>
                     </label>
                   ))}
                   <label className="check-row">
                     <input type="checkbox" checked={rule.enabled} onChange={(event) => updateRule(index, { enabled: event.target.checked })} />
-                    <span>启用规则</span>
+                    <span>{t("redaction.enableRule")}</span>
                   </label>
                 </div>
               </div>
             </section>
           ))}
         </div>
-        <button type="button" className="button ghost" onClick={() => setRules([...rules, blankRule()])}>＋ 添加规则</button>
+        <button type="button" className="button ghost" onClick={() => setRules([...rules, blankRule()])}>{t("redaction.addRule")}</button>
         <label className="check-row policy-enabled">
           <input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />
-          <span>启用此 Policy</span>
+          <span>{t("redaction.enable")}</span>
         </label>
         {mutation.isError && <ErrorState error={mutation.error} />}
         <div className="form-actions">
-          <button type="button" className="button ghost" onClick={onClose}>取消</button>
-          <button className="button primary" disabled={mutation.isPending}>编译并保存</button>
+          <button type="button" className="button ghost" onClick={onClose}>{t("common.cancel")}</button>
+          <button className="button primary" disabled={mutation.isPending}>{t("redaction.compile")}</button>
         </div>
       </form>
     </Modal>
@@ -240,6 +243,7 @@ function RedactionPolicyForm({
 }
 
 function RedactionPolicyTest({ policy, onClose }: { policy: RedactionPolicy; onClose: () => void }) {
+  const { t } = useTranslation();
   const [input, setInput] = useState("");
   const [scope, setScope] = useState<"inbound" | "outbound">("inbound");
   const [result, setResult] = useState<RedactionTestResult | null>(null);
@@ -248,30 +252,30 @@ function RedactionPolicyTest({ policy, onClose }: { policy: RedactionPolicy; onC
     onSuccess: setResult,
   });
   return (
-    <Modal title={`安全测试 · ${policy.name}`} onClose={onClose}>
+    <Modal title={t("redaction.testTitle", { name: policy.name })} onClose={onClose}>
       <form onSubmit={(event) => { event.preventDefault(); mutation.mutate(); }}>
-        <Field label="方向">
+        <Field label={t("redaction.direction")}>
           <select value={scope} onChange={(event) => setScope(event.target.value as typeof scope)}>
-            <option value="inbound">Inbound</option>
-            <option value="outbound">Outbound</option>
+            <option value="inbound">{t("redaction.inbound")}</option>
+            <option value="outbound">{t("redaction.outbound")}</option>
           </select>
         </Field>
-        <Field label="测试内容" hint="服务端只返回规则元数据，不回显原文。">
+        <Field label={t("redaction.content")} hint={t("redaction.contentHint")}>
           <textarea rows={6} value={input} onChange={(event) => setInput(event.target.value)} />
         </Field>
         {result && (
           <div className={`preview-result ${result.match_count ? "violated" : ""}`}>
             <StatusDot ok={!result.match_count} />
             <div>
-              <strong>{result.match_count ? `命中 ${result.match_count} 条规则` : "未命中规则"}</strong>
-              <small>{result.matches.map((match) => `${match.category} · ${match.action}`).join(" / ") || "输入不会出现在结果中"}</small>
+              <strong>{result.match_count ? t("redaction.matches", { count: result.match_count }) : t("redaction.noMatches")}</strong>
+              <small>{result.matches.map((match) => `${match.category} · ${t(`redaction.${match.action === "detect_only" ? "detect" : match.action}`)}`).join(" / ") || t("redaction.noEcho")}</small>
             </div>
           </div>
         )}
         {mutation.isError && <ErrorState error={mutation.error} />}
         <div className="form-actions">
-          <button type="button" className="button ghost" onClick={onClose}>关闭</button>
-          <button className="button primary" disabled={mutation.isPending || !input}>运行测试</button>
+          <button type="button" className="button ghost" onClick={onClose}>{t("common.close")}</button>
+          <button className="button primary" disabled={mutation.isPending || !input}>{t("redaction.run")}</button>
         </div>
       </form>
     </Modal>

@@ -39,6 +39,14 @@ func TestSessionHashPersistenceCSRFAndExpiry(t *testing.T) {
 		manager.VerifyCSRF(created.Token, "wrong") {
 		t.Fatal("invalid session or CSRF token behavior")
 	}
+	unrefreshed, err := manager.Authenticate(context.Background(), created.Token, now.Add(30*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !unrefreshed.LastSeenAt.Equal(created.Session.LastSeenAt) ||
+		!unrefreshed.IdleExpiresAt.Equal(created.Session.IdleExpiresAt) {
+		t.Fatal("session was persisted before the refresh interval elapsed")
+	}
 	if _, err := manager.Authenticate(context.Background(), created.Token, now.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}

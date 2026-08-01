@@ -1,5 +1,7 @@
 import { useEffect, useId, useRef, type ReactNode } from "react";
 import { ApiError } from "./api";
+import { useTranslation } from "react-i18next";
+import { localizedError } from "./i18n/errors";
 
 export function PageHeader({
   eyebrow,
@@ -48,20 +50,22 @@ export function EmptyState({
 }
 
 export function ErrorState({ error }: { error: unknown }) {
-  const message = error instanceof ApiError ? error.message : "数据暂时不可用";
+  const { t } = useTranslation();
+  const message = error instanceof ApiError ? localizedError(t, error) : t("common.dataUnavailable");
   return (
     <div className="notice error" role="alert">
-      <strong>无法完成请求</strong>
+      <strong>{t("common.requestFailed")}</strong>
       <span>{message}</span>
     </div>
   );
 }
 
-export function Loading({ label = "正在读取网关状态" }: { label?: string }) {
+export function Loading({ label }: { label?: string }) {
+  const { t } = useTranslation();
   return (
     <div className="loading" role="status">
       <span className="loading-bar" />
-      <span>{label}</span>
+      <span>{label || t("common.loading")}</span>
     </div>
   );
 }
@@ -77,6 +81,7 @@ export function Modal({
   onClose: () => void;
   dangerous?: boolean;
 }) {
+  const { t } = useTranslation();
   const titleID = useId();
   const dialog = useRef<HTMLElement>(null);
   useEffect(() => {
@@ -104,7 +109,7 @@ export function Modal({
       >
         <header>
           <h2 id={titleID}>{title}</h2>
-          <button className="icon-button" onClick={onClose} aria-label="关闭">×</button>
+          <button className="icon-button" onClick={onClose} aria-label={t("common.close")}>×</button>
         </header>
         {children}
       </section>

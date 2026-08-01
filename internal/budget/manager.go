@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"sync"
 	"time"
 
@@ -66,33 +67,46 @@ type Settlement struct {
 }
 
 type Manager struct {
-	mu        sync.Mutex
-	log       *ledger.Log
-	state     *ledger.State
-	location  *time.Location
-	now       func() time.Time
-	observers []func(ledger.Record)
+	projectLocks sync.Map
+	applyMu      sync.Mutex
+	applyCond    *sync.Cond
+	applyErr     error
+	observerMu   sync.RWMutex
+	log          *ledger.Log
+	state        *ledger.State
+	location     *time.Location
+	now          func() time.Time
+	observers    []func(ledger.Record)
 }
 
 func (m *Manager) AddObserver(observer func(ledger.Record)) {
 	if observer == nil {
 		return
 	}
-	m.mu.Lock()
+	m.observerMu.Lock()
 	m.observers = append(m.observers, observer)
-	m.mu.Unlock()
+	m.observerMu.Unlock()
 }
 
 func New(log *ledger.Log, state *ledger.State, location *time.Location) (*Manager, error) {
 	if log == nil || state == nil || location == nil {
 		return nil, errors.New("ledger log, state, and location are required")
 	}
-	return &Manager{
+	manager := &Manager{
 		log:      log,
 		state:    state,
 		location: location,
 		now:      time.Now,
-	}, nil
+	}
+	manager.applyCond = sync.NewCond(&manager.applyMu)
+	return manager, nil
+}
+
+func (m *Manager) lockProject(projectID string) func() {
+	value, _ := m.projectLocks.LoadOrStore(projectID, &sync.Mutex{})
+	lock := value.(*sync.Mutex)
+	lock.Lock()
+	return lock.Unlock
 }
 
 // BeginAttempt checks the project budget and durably reserves spend before an
@@ -134,8 +148,7 @@ func (m *Manager) BeginRequestDetailed(
 		RequestID: requestID, ProjectID: projectID, PeriodID: now.Format("2006-01-02"),
 		KeyID: keyID, RequestedModel: requestedModel,
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	defer m.lockProject(projectID)()
 	if err := m.appendApply(ctx, ledger.Event{
 		EventID: eventID, Kind: ledger.EventRequestAccepted,
 		RequestID: request.RequestID, ProjectID: request.ProjectID,
@@ -186,8 +199,7 @@ func (m *Manager) ReserveAttemptDetailed(
 		AttemptNumber: metadata.AttemptNumber, RetryCount: metadata.RetryCount,
 		FallbackCount: metadata.FallbackCount,
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	defer m.lockProject(request.ProjectID)()
 	balance := m.state.Balance(request.ProjectID, request.PeriodID)
 	total, err := checkedAdd(balance.CommittedMicrosUSD, balance.ReservedMicrosUSD)
 	if err != nil {
@@ -236,8 +248,7 @@ func (m *Manager) MarkStarted(ctx context.Context, attempt Attempt) error {
 	if err != nil {
 		return err
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	defer m.lockProject(attempt.ProjectID)()
 	return m.appendApply(ctx, ledger.Event{
 		EventID:   eventID,
 		Kind:      ledger.EventAttemptStarted,
@@ -266,8 +277,7 @@ func (m *Manager) Settle(ctx context.Context, attempt Attempt, settlement Settle
 	if err != nil {
 		return err
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	defer m.lockProject(attempt.ProjectID)()
 	return m.appendApply(ctx, ledger.Event{
 		EventID:              eventID,
 		Kind:                 ledger.EventAttemptSettled,
@@ -307,8 +317,7 @@ func (m *Manager) Finalize(ctx context.Context, request Request, outcome string)
 	if err != nil {
 		return err
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	defer m.lockProject(request.ProjectID)()
 	return m.appendApply(ctx, ledger.Event{
 		EventID:   eventID,
 		Kind:      ledger.EventRequestFinalized,
@@ -331,12 +340,29 @@ func (m *Manager) appendApply(ctx context.Context, event ledger.Event) error {
 		Offset:   watermark.Offset,
 		Event:    event,
 	}
+	m.applyMu.Lock()
+	for m.applyErr == nil && m.state.Watermark().Sequence+1 < record.Sequence {
+		m.applyCond.Wait()
+	}
+	if m.applyErr != nil {
+		err := m.applyErr
+		m.applyMu.Unlock()
+		return err
+	}
 	if err := m.state.Apply(record); err != nil {
+		m.applyErr = fmt.Errorf("apply durable accounting event: %w", err)
+		m.applyCond.Broadcast()
+		m.applyMu.Unlock()
 		return fmt.Errorf("apply durable accounting event: %w", err)
 	}
-	for _, observer := range m.observers {
+	m.observerMu.RLock()
+	observers := slices.Clone(m.observers)
+	m.observerMu.RUnlock()
+	for _, observer := range observers {
 		observer(record)
 	}
+	m.applyCond.Broadcast()
+	m.applyMu.Unlock()
 	return nil
 }
 

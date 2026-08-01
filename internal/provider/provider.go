@@ -5,7 +5,9 @@ import (
 	"errors"
 	"slices"
 	"sync"
+	"time"
 
+	"github.com/akz142857/Heimdall/internal/domain"
 	"github.com/akz142857/Heimdall/internal/openaiapi"
 	"github.com/akz142857/Heimdall/internal/semantic"
 )
@@ -24,12 +26,15 @@ const (
 )
 
 type Error struct {
-	Class      ErrorClass
-	StatusCode int
-	Retryable  bool
-	Ambiguous  bool
-	Message    string
-	Cause      error
+	Class             ErrorClass
+	StatusCode        int
+	Retryable         bool
+	Ambiguous         bool
+	Message           string
+	ProviderRequestID string
+	ProviderCode      string
+	RetryAfter        time.Duration
+	Cause             error
 }
 
 func (e *Error) Error() string {
@@ -99,12 +104,15 @@ type Target struct {
 	ProviderID             string
 	PublicModel            string
 	ProviderModel          string
+	AccessSurface          domain.AccessSurface
+	ProfileID              domain.ProviderProfileID
 	Adapter                Adapter
 	InputMicrosPerMillion  int64
 	OutputMicrosPerMillion int64
 	Priority               int
 	Strategy               string
 	Capabilities           Capabilities
+	CapabilityEvidence     domain.CapabilityEvidenceSet
 	MaxConcurrency         int64
 	DeploymentConcurrency  int64
 }
@@ -143,6 +151,21 @@ func (r *Registry) RegisterAdapter(providerID string, adapter Adapter) error {
 func (r *Registry) Register(target Target) error {
 	if target.ID == "" || target.PublicModel == "" || target.ProviderModel == "" || target.Adapter == nil {
 		return errors.New("target id, public model, provider model, and adapter are required")
+	}
+	if profiled, ok := target.Adapter.(ProfiledAdapter); ok {
+		manifest := profiled.Profile()
+		if target.ProfileID == "" {
+			target.ProfileID = manifest.ID
+		}
+		if target.AccessSurface == "" {
+			target.AccessSurface = manifest.AccessSurface
+		}
+		if target.ProfileID != manifest.ID || target.AccessSurface != manifest.AccessSurface {
+			return errors.New("target profile does not match adapter profile")
+		}
+		if len(target.CapabilityEvidence) == 0 {
+			target.CapabilityEvidence = profiled.CapabilityEvidence()
+		}
 	}
 	if target.Strategy == "" {
 		target.Strategy = "ordered"
@@ -207,8 +230,32 @@ func (r *Registry) ResolveCandidates(publicModel string) []Target {
 }
 
 func (r *Registry) ResolveCandidatesFor(publicModel string, operation Operation) []Target {
+	return r.ResolveCandidatesForEvidence(publicModel, operation, "")
+}
+
+func (r *Registry) ResolveCandidatesForEvidence(publicModel string, operation Operation, minimum domain.CapabilityEvidence) []Target {
+	r.mu.RLock()
+	targets := r.resolveCandidatesLocked(publicModel, operation, minimum)
+	r.mu.RUnlock()
+	if len(targets) < 2 || targets[0].Strategy != "round_robin" {
+		return targets
+	}
+
+	// Round-robin is the only resolution strategy that mutates registry state.
+	// Re-resolve after upgrading the lock so a concurrent reload cannot rotate a
+	// stale candidate snapshot.
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	targets = r.resolveCandidatesLocked(publicModel, operation, minimum)
+	if len(targets) < 2 || targets[0].Strategy != "round_robin" {
+		return targets
+	}
+	offset := int(r.next[publicModel] % uint64(len(targets)))
+	r.next[publicModel]++
+	return append(targets[offset:], targets[:offset]...)
+}
+
+func (r *Registry) resolveCandidatesLocked(publicModel string, operation Operation, minimum domain.CapabilityEvidence) []Target {
 	targets := slices.Clone(r.targets[publicModel])
 	targets = slices.DeleteFunc(targets, func(target Target) bool {
 		healthy, probed := r.health[target.DeploymentID]
@@ -216,24 +263,34 @@ func (r *Registry) ResolveCandidatesFor(publicModel string, operation Operation)
 	})
 	if operation != "" {
 		targets = slices.DeleteFunc(targets, func(target Target) bool {
+			if profiled, ok := target.Adapter.(ProfiledAdapter); ok && !profiled.Operations().Supports(operation) {
+				return true
+			}
+			capabilityName := ""
 			switch operation {
 			case OperationChat:
-				return !target.Capabilities.Chat
+				capabilityName = "chat"
 			case OperationChatStream:
-				return !target.Capabilities.Chat || !target.Capabilities.Streaming
+				if !target.Capabilities.Chat || !target.Capabilities.Streaming {
+					return true
+				}
+				if minimum != "" && !target.CapabilityEvidence.Satisfies("chat", minimum) {
+					return true
+				}
+				capabilityName = "streaming"
 			case OperationEmbeddings:
-				return !target.Capabilities.Embeddings
+				capabilityName = "embeddings"
 			default:
 				return true
 			}
+			if capabilityName == "chat" && !target.Capabilities.Chat ||
+				capabilityName == "embeddings" && !target.Capabilities.Embeddings {
+				return true
+			}
+			return minimum != "" && !target.CapabilityEvidence.Satisfies(capabilityName, minimum)
 		})
 	}
-	if len(targets) < 2 || targets[0].Strategy != "round_robin" {
-		return targets
-	}
-	offset := int(r.next[publicModel] % uint64(len(targets)))
-	r.next[publicModel]++
-	return append(targets[offset:], targets[:offset]...)
+	return targets
 }
 
 // SetDeploymentHealthy updates active-probe health. Unknown deployments remain
