@@ -335,7 +335,7 @@ export const enUS = {
   },
   policyManagement: {
     eyebrow: "Security governance", title: "Security Policies", description: "Manage anomalous-token containment and data-loss prevention policies with visible Project bindings.", views: "Security policy types",
-    search: "Search", searchPlaceholder: "Name or policy ID", status: "Status", mode: "Mode", all: "All", showing: "Showing {{visible}} / {{loaded}} loaded",
+    search: "Search", searchPlaceholder: "Name or policy ID", status: "Status", mode: "Mode", all: "All",
     policy: "Policy", summary: "Summary", bindings: "Project bindings", actions: "Actions", projectCount: "{{count}} Projects", enabledRules: "{{count}} enabled rules",
   },
   redaction: {

@@ -512,7 +512,7 @@ td small, td code { display: block; margin-top: 4px; color: var(--muted); }
 .policy-tabs { margin-bottom: 0; }
 .policy-management-panel { padding-top: 15px; }
 .policy-filter-bar { margin-bottom: 15px; }
-.policy-filter-bar > .button { margin-left: 0; }
+.policy-filter-bar > .button { margin-left: auto; }
 .policy-table td:first-child strong { display: block; }
 .policy-table td:first-child code { max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
 .policy-table td:nth-child(4) small { max-width: 440px; overflow: hidden; text-overflow: ellipsis; }
@@ -954,6 +954,7 @@ textarea { resize: vertical; }
   .alert-row .row-actions { grid-column: 1 / -1; }
   .filter-bar { align-items: stretch; flex-direction: column; }
   .filter-count { margin-left: 0; }
+  .policy-filter-bar > .button { align-self: flex-start; margin-left: 0; }
   .login-story { display: none; }
   .login-panel { min-height: 100vh; }
   .language-select.compact { top: 16px; right: 16px; }

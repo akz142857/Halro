@@ -335,7 +335,7 @@ export const zhCN = {
   },
   policyManagement: {
     eyebrow: "安全治理", title: "安全策略", description: "集中管理令牌异常遏制与数据防泄漏策略，并追踪项目绑定关系。", views: "安全策略类型",
-    search: "搜索", searchPlaceholder: "名称或策略 ID", status: "状态", mode: "模式", all: "全部", showing: "显示 {{visible}} / 已加载 {{loaded}}",
+    search: "搜索", searchPlaceholder: "名称或策略 ID", status: "状态", mode: "模式", all: "全部",
     policy: "策略", summary: "策略摘要", bindings: "项目绑定", actions: "操作", projectCount: "{{count}} 个项目", enabledRules: "{{count}} 条启用规则",
   },
   redaction: {
