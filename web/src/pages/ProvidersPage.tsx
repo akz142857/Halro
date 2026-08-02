@@ -41,6 +41,9 @@ const bedrockProfiles = [
   "bedrock.mantle.anthropic.messages.v1",
 ] as const;
 type BedrockProfile = typeof bedrockProfiles[number];
+type BedrockCredentialSurface = "bedrock-runtime" | "bedrock-agent-runtime" | "bedrock-mantle";
+
+const openAIChatProfile = "openai.chat-embeddings.v1";
 
 function bedrockProfileConfig(profile: BedrockProfile): { surface: AccessSurface; scheme: CredentialScheme; baseURL: string } {
   if (profile.startsWith("bedrock.agent-runtime.")) {
@@ -50,6 +53,12 @@ function bedrockProfileConfig(profile: BedrockProfile): { surface: AccessSurface
     return { surface: "bedrock-runtime", scheme: "aws.sigv4.explicit-session", baseURL: "https://bedrock-runtime.us-east-1.amazonaws.com" };
   }
   return { surface: "bedrock-mantle", scheme: "aws.bedrock.api-key", baseURL: "https://bedrock-mantle.us-east-1.api.aws" };
+}
+
+function bedrockCredentialConfig(surface: BedrockCredentialSurface) {
+  if (surface === "bedrock-agent-runtime") return bedrockProfileConfig("bedrock.agent-runtime.rerank.cohere-v3-5.v1");
+  if (surface === "bedrock-mantle") return bedrockProfileConfig("bedrock.mantle.openai.chat.v1");
+  return bedrockProfileConfig("bedrock.runtime.converse.text.v1");
 }
 
 function isBedrockProfile(value: string): value is BedrockProfile {
@@ -224,16 +233,18 @@ function CredentialForm({
   const { t } = useTranslation();
   const [name, setName] = useState(current?.name ?? "");
   const [type, setType] = useState<ProviderType>(current?.type ?? "openai");
-  const [baseURL, setBaseURL] = useState(defaultBaseURL(current?.type ?? "openai"));
-  const [bedrockSurface, setBedrockSurface] = useState<"bedrock-runtime" | "bedrock-mantle">(
-    current?.access_surface === "bedrock-mantle" ? "bedrock-mantle" : "bedrock-runtime",
+  const [baseURL, setBaseURL] = useState(current?.bound_base_url ?? defaultBaseURL(current?.type ?? "openai"));
+  const [bedrockSurface, setBedrockSurface] = useState<BedrockCredentialSurface>(
+    current?.access_surface === "bedrock-mantle" || current?.access_surface === "bedrock-agent-runtime"
+      ? current.access_surface
+      : "bedrock-runtime",
   );
   const [secret, setSecret] = useState("");
   const queryClient = useQueryClient();
   const mutation = useMutation({
     mutationFn: () => {
       const bedrockBinding = type === "bedrock"
-        ? bedrockProfileConfig(bedrockSurface === "bedrock-mantle" ? "bedrock.mantle.openai.chat.v1" : "bedrock.runtime.converse.text.v1")
+        ? bedrockCredentialConfig(bedrockSurface)
         : undefined;
       const value = {
         name,
@@ -261,7 +272,7 @@ function CredentialForm({
       <form onSubmit={submit} autoComplete="off">
         <Field label={t("providers.credentialName")}><input autoFocus value={name} onChange={(event) => setName(event.target.value)} /></Field>
         <Field label={t("providers.providerType")}>
-          <select value={type} onChange={(event) => {
+          <select value={type} disabled={Boolean(current)} onChange={(event) => {
             const next = event.target.value as ProviderType;
             setType(next);
             setBaseURL(defaultBaseURL(next));
@@ -273,12 +284,13 @@ function CredentialForm({
         {type === "bedrock" && (
           <Field label={t("providers.bedrockSurface")} hint={t("providers.bedrockSurfaceHint")}>
             <select value={bedrockSurface} disabled={Boolean(current)} onChange={(event) => {
-              const next = event.target.value as "bedrock-runtime" | "bedrock-mantle";
+              const next = event.target.value as BedrockCredentialSurface;
               setBedrockSurface(next);
-              const config = bedrockProfileConfig(next === "bedrock-mantle" ? "bedrock.mantle.openai.chat.v1" : "bedrock.runtime.converse.text.v1");
+              const config = bedrockCredentialConfig(next);
               setBaseURL(config.baseURL);
             }}>
               <option value="bedrock-runtime">{t("providers.bedrockRuntime")}</option>
+              <option value="bedrock-agent-runtime">{t("providers.bedrockAgentRuntime")}</option>
               <option value="bedrock-mantle">{t("providers.bedrockMantle")}</option>
             </select>
           </Field>
@@ -287,10 +299,10 @@ function CredentialForm({
           <input inputMode="url" value={baseURL} onChange={(event) => setBaseURL(event.target.value)} />
         </Field>
         <Field
-          label={current ? t("providers.newSecret") : type === "bedrock" && bedrockSurface === "bedrock-runtime" ? t("providers.awsCredentialJSON") : t("providers.providerSecret")}
+          label={current ? t("providers.newSecret") : type === "bedrock" && bedrockSurface !== "bedrock-mantle" ? t("providers.awsCredentialJSON") : t("providers.providerSecret")}
           hint={current
             ? t("providers.secretConfigured")
-            : type === "bedrock" && bedrockSurface === "bedrock-runtime"
+            : type === "bedrock" && bedrockSurface !== "bedrock-mantle"
               ? t("providers.bedrockHint")
               : type === "bedrock"
                 ? t("providers.bedrockMantleHint")
@@ -330,7 +342,7 @@ function ProviderForm({
   const [type, setType] = useState<ProviderType>(initialType);
   const initialProfile = current?.profile_id && isBedrockProfile(current.profile_id) ? current.profile_id : "bedrock.runtime.converse.text.v1";
   const [profileID, setProfileID] = useState<BedrockProfile>(initialProfile);
-  const [openAIProfileID, setOpenAIProfileID] = useState(current?.profile_id === "openai.media-resources.v1" ? "openai.media-resources.v1" : "openai.chat-completions.v1");
+  const [openAIProfileID, setOpenAIProfileID] = useState(current?.profile_id === "openai.media-resources.v1" ? "openai.media-resources.v1" : openAIChatProfile);
   const [baseURL, setBaseURL] = useState(current?.base_url ?? defaultBaseURL(initialType));
   const [apiVersion, setAPIVersion] = useState(current?.api_version ?? "");
   const [maxConcurrency, setMaxConcurrency] = useState(current?.max_concurrency ?? 0);
@@ -382,7 +394,7 @@ function ProviderForm({
               setType(next);
               setBaseURL(defaultBaseURL(next));
               setProfileID("bedrock.runtime.converse.text.v1");
-              setOpenAIProfileID("openai.chat-completions.v1");
+              setOpenAIProfileID(openAIChatProfile);
               setCredentialID(credentials.find((credential) => credential.type === next && (next !== "bedrock" || credential.access_surface === "bedrock-runtime"))?.id ?? "");
               setCapabilities(defaultProviderCapabilities(next));
             }}>
@@ -410,7 +422,7 @@ function ProviderForm({
                 setOpenAIProfileID(next);
                 setCapabilities(defaultProviderCapabilities("openai", undefined, next));
               }}>
-                <option value="openai.chat-completions.v1">{t("providers.openAIProfiles.chat")}</option>
+                <option value={openAIChatProfile}>{t("providers.openAIProfiles.chat")}</option>
                 <option value="openai.media-resources.v1">{t("providers.openAIProfiles.media")}</option>
               </select>
             </Field>
@@ -472,7 +484,7 @@ const capabilityNames = [
   "developer_role", "reasoning", "stream_usage",
 ] as const;
 
-function defaultProviderCapabilities(type: ProviderType, profileID: BedrockProfile = "bedrock.runtime.converse.text.v1", openAIProfileID = "openai.chat-completions.v1"): ProviderCapabilities {
+function defaultProviderCapabilities(type: ProviderType, profileID: BedrockProfile = "bedrock.runtime.converse.text.v1", openAIProfileID = openAIChatProfile): ProviderCapabilities {
   const value: ProviderCapabilities = {
     chat: true, streaming: true, embeddings: false, tools: false, vision: false,
     moderations: false, images: false, transcriptions: false, speech: false, files: false, batches: false, rerank: false, async_generate: false,

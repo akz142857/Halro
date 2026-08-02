@@ -258,6 +258,63 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 	}
 }
 
+func TestAdminCredentialViewPreservesBedrockBoundBaseURLForRotation(t *testing.T) {
+	cfg := testConfig(t)
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := BootstrapAdmin(context.Background(), cfg, "admin", []byte("correct horse battery staple")); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := Open(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	cookie, csrf := loginAdminForTest(t, runtime)
+
+	tests := []struct {
+		name    string
+		baseURL string
+		surface domain.AccessSurface
+		scheme  domain.CredentialScheme
+	}{
+		{name: "agent runtime", baseURL: "https://bedrock-agent-runtime.eu-west-1.amazonaws.com", surface: domain.SurfaceBedrockAgentRuntime, scheme: domain.CredentialAWSSigV4Explicit},
+		{name: "mantle", baseURL: "https://bedrock-mantle.ap-southeast-1.api.aws", surface: domain.SurfaceBedrockMantle, scheme: domain.CredentialBedrockAPIKey},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			created := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost, "/admin/api/v1/credentials", "", map[string]any{
+				"name": test.name, "type": "bedrock", "base_url": test.baseURL,
+				"access_surface": test.surface, "scheme": test.scheme, "secret": "test-secret",
+			})
+			if created.Code != http.StatusCreated {
+				t.Fatalf("create status=%d body=%s", created.Code, created.Body.String())
+			}
+			var view credentialView
+			if err := json.Unmarshal(created.Body.Bytes(), &view); err != nil {
+				t.Fatal(err)
+			}
+			if view.BoundBaseURL != test.baseURL+":443" || view.AccessSurface != test.surface || view.Scheme != test.scheme {
+				t.Fatalf("credential view=%#v", view)
+			}
+			rotated := performAdminMutation(t, runtime, cookie, csrf, http.MethodPut, "/admin/api/v1/credentials/"+view.ID, `"1"`, map[string]any{
+				"name": test.name, "type": "bedrock", "base_url": view.BoundBaseURL,
+				"access_surface": test.surface, "scheme": test.scheme, "secret": "rotated-secret",
+			})
+			if rotated.Code != http.StatusOK {
+				t.Fatalf("rotate status=%d body=%s", rotated.Code, rotated.Body.String())
+			}
+			if err := json.Unmarshal(rotated.Body.Bytes(), &view); err != nil {
+				t.Fatal(err)
+			}
+			if view.BoundBaseURL != test.baseURL+":443" || view.KeyVersion != 2 {
+				t.Fatalf("rotated credential view=%#v", view)
+			}
+		})
+	}
+}
+
 func TestCapabilityEvidencePreservesLegacyAndDowngradesDisabledCapabilities(t *testing.T) {
 	providerCapabilities := domain.ProviderCapabilities{Chat: true, Streaming: true, Tools: true}
 	legacy := domain.EvidenceForCapabilities(providerCapabilities, domain.EvidenceLegacy)

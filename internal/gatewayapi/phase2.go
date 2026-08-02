@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/akz142857/Heimdall/internal/gateway"
 	"github.com/akz142857/Heimdall/internal/openaiapi"
@@ -32,6 +33,30 @@ type Phase2Service interface {
 	CreateBatch(context.Context, string, string, provider.BatchCreateCall) (provider.BatchObject, error)
 	GetBatch(context.Context, string, string) (provider.BatchObject, error)
 	CancelBatch(context.Context, string, string) (provider.BatchObject, error)
+}
+
+type rerankResponse struct {
+	Results []provider.RerankItem `json:"results"`
+}
+
+type asyncInvokeResponse struct {
+	InvocationARN  string `json:"invocation_arn"`
+	Status         string `json:"status"`
+	S3OutputURI    string `json:"s3_output_uri,omitempty"`
+	FailureMessage string `json:"failure_message,omitempty"`
+	SubmittedAt    string `json:"submitted_at,omitempty"`
+	LastModifiedAt string `json:"last_modified_at,omitempty"`
+}
+
+func renderAsyncInvoke(value provider.AsyncInvokeObject) asyncInvokeResponse {
+	response := asyncInvokeResponse{InvocationARN: value.InvocationARN, Status: value.Status, S3OutputURI: value.S3OutputURI, FailureMessage: value.FailureMessage}
+	if !value.SubmittedAt.IsZero() {
+		response.SubmittedAt = value.SubmittedAt.UTC().Format(time.RFC3339Nano)
+	}
+	if !value.LastModifiedAt.IsZero() {
+		response.LastModifiedAt = value.LastModifiedAt.UTC().Format(time.RFC3339Nano)
+	}
+	return response
 }
 
 func (h *Handler) phase2JSON(writer http.ResponseWriter, request *http.Request, decode func(*json.Decoder) (any, error), invoke func(context.Context, string, any) (any, error)) {
@@ -87,12 +112,14 @@ func (h *Handler) Images(w http.ResponseWriter, r *http.Request) {
 }
 func (h *Handler) Rerank(w http.ResponseWriter, r *http.Request) {
 	h.phase2JSON(w, r, func(d *json.Decoder) (any, error) { return openaiapi.DecodeRerankRequest(d) }, func(ctx context.Context, key string, v any) (any, error) {
-		return h.phase2.Rerank(ctx, key, v.(openaiapi.RerankRequest))
+		result, err := h.phase2.Rerank(ctx, key, v.(openaiapi.RerankRequest))
+		return rerankResponse{Results: result.Results}, err
 	})
 }
 func (h *Handler) StartAsyncInvoke(w http.ResponseWriter, r *http.Request) {
 	h.phase2JSON(w, r, func(d *json.Decoder) (any, error) { return openaiapi.DecodeAsyncInvokeRequest(d) }, func(ctx context.Context, key string, v any) (any, error) {
-		return h.phase2.StartAsyncInvoke(ctx, key, strings.TrimSpace(r.Header.Get("Idempotency-Key")), v.(openaiapi.AsyncInvokeRequest))
+		result, err := h.phase2.StartAsyncInvoke(ctx, key, strings.TrimSpace(r.Header.Get("Idempotency-Key")), v.(openaiapi.AsyncInvokeRequest))
+		return renderAsyncInvoke(result), err
 	})
 }
 func (h *Handler) GetAsyncInvoke(w http.ResponseWriter, r *http.Request) { h.asyncAction(w, r, false) }
@@ -128,7 +155,7 @@ func (h *Handler) asyncAction(w http.ResponseWriter, r *http.Request, cancelAsyn
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(result)
+	_ = json.NewEncoder(w).Encode(renderAsyncInvoke(result))
 }
 func (h *Handler) Speech(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")

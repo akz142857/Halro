@@ -1979,9 +1979,9 @@ func (s *Store) DeleteProviderResource(ctx context.Context, projectID, id string
 	})
 }
 
-func (s *Store) ReapProviderResources(ctx context.Context, now time.Time) ([]domain.ProviderResource, error) {
-	var removed []domain.ProviderResource
-	err := s.db.Update(func(tx *bbolt.Tx) error {
+func (s *Store) ExpiredProviderResources(ctx context.Context, now time.Time) ([]domain.ProviderResource, error) {
+	var expired []domain.ProviderResource
+	err := s.db.View(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(bucketProviderResources)
 		cursor := bucket.Cursor()
 		for key, raw := cursor.First(); key != nil; key, raw = cursor.Next() {
@@ -1992,16 +1992,13 @@ func (s *Store) ReapProviderResources(ctx context.Context, now time.Time) ([]dom
 			if err := json.Unmarshal(raw, &resource); err != nil {
 				return err
 			}
-			if !resource.ExpiresAt.After(now) {
-				removed = append(removed, resource)
-				if err := cursor.Delete(); err != nil {
-					return err
-				}
+			if !resource.ExpiresAt.After(now) && resource.ExpiryReapable() {
+				expired = append(expired, resource)
 			}
 		}
 		return nil
 	})
-	return removed, err
+	return expired, err
 }
 
 type revisioned interface {

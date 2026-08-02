@@ -849,6 +849,7 @@ func credentialViewFrom(item domain.Credential) credentialView {
 	return credentialView{
 		ID: item.ID, Name: item.Name, Type: item.Type,
 		AccessSurface: item.AccessSurface, Scheme: item.Scheme,
+		BoundBaseURL:     strings.TrimSuffix(item.Audience, ":"+string(item.Type)),
 		SecretConfigured: len(item.Ciphertext) > 0, KeyVersion: item.KeyVersion,
 		Revision: item.Revision,
 	}
