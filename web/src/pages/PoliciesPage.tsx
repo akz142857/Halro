@@ -58,10 +58,11 @@ export function PoliciesPage() {
         title={t("policyManagement.title")}
         description={t("policyManagement.description")}
       />
-      <div className="provider-tabs policy-tabs" role="tablist" aria-label={t("policyManagement.views")}>
-        <button role="tab" aria-selected={tab === "token"} onClick={() => setTab("token")}>{t("policies.title")} <span>{tokenItems.length}{policies.hasNextPage ? "+" : ""}</span></button>
-        <button role="tab" aria-selected={tab === "redaction"} onClick={() => setTab("redaction")}>{t("redaction.title")} <span>{redactionItems.length}{redactionPolicies.hasNextPage ? "+" : ""}</span></button>
-      </div>
+      <div className="provider-tabs-shell policy-tabs-shell">
+        <div className="provider-tabs policy-tabs" role="tablist" aria-label={t("policyManagement.views")}>
+          <button role="tab" aria-selected={tab === "token"} onClick={() => setTab("token")}>{t("policies.title")} <span>{tokenItems.length}{policies.hasNextPage ? "+" : ""}</span></button>
+          <button role="tab" aria-selected={tab === "redaction"} onClick={() => setTab("redaction")}>{t("redaction.title")} <span>{redactionItems.length}{redactionPolicies.hasNextPage ? "+" : ""}</span></button>
+        </div>
       {tab === "token" && <section className="policy-management-panel" role="tabpanel" aria-label={t("policies.title")}>
         <div className="filter-bar policy-filter-bar">
           <label><span>{t("policyManagement.search")}</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("policyManagement.searchPlaceholder")} /></label>
@@ -83,6 +84,7 @@ export function PoliciesPage() {
         {policies.hasNextPage && <button className="button ghost policy-load-more" disabled={policies.isFetchingNextPage} onClick={() => policies.fetchNextPage()}>{policies.isFetchingNextPage ? t("common.loading") : t("common.loadMore")}</button>}
       </section>}
       {tab === "redaction" && <RedactionPoliciesSection policies={redactionItems} isPending={redactionPolicies.isPending} error={redactionPolicies.isError ? redactionPolicies.error : undefined} hasNextPage={redactionPolicies.hasNextPage} isFetchingNextPage={redactionPolicies.isFetchingNextPage} onLoadMore={() => redactionPolicies.fetchNextPage()} />}
+      </div>
       {editing && <PolicyForm current={editing === "new" ? undefined : editing} onClose={() => setEditing(null)} />}
       {previewing && <PolicyPreview policy={previewing} onClose={() => setPreviewing(null)} />}
     </>
