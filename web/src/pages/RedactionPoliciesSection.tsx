@@ -84,7 +84,7 @@ export function RedactionPoliciesSection({
         <label><span>{t("policyManagement.status")}</span><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">{t("policyManagement.all")}</option><option value="enabled">{t("common.enabled")}</option><option value="disabled">{t("common.disabled")}</option></select></label>
         <label><span>{t("policyManagement.mode")}</span><select value={mode} onChange={(event) => setMode(event.target.value)}><option value="">{t("policyManagement.all")}</option><option value="strict">{t("redaction.strictBadge")}</option><option value="bounded_stream">{t("redaction.boundedBadge")}</option><option value="detect_only_stream">{t("redaction.detectStreamBadge")}</option></select></label>
         <span className="filter-count">{t("policyManagement.showing", { visible: visible.length, loaded: policies.length })}</span>
-        <button id="new-redaction-policy" className="button primary" onClick={() => setEditing("new")}>{t("redaction.create")}</button>
+        <button className="button primary" onClick={() => setEditing("new")}>{t("redaction.create")}</button>
       </div>
       {isPending && <Loading />}
       {error !== undefined && <ErrorState error={error} />}

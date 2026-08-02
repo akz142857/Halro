@@ -57,11 +57,6 @@ export function PoliciesPage() {
         eyebrow={t("policyManagement.eyebrow")}
         title={t("policyManagement.title")}
         description={t("policyManagement.description")}
-        action={
-          <button className="button primary" onClick={() => tab === "token" ? setEditing("new") : document.getElementById("new-redaction-policy")?.click()}>
-            {tab === "token" ? t("policies.create") : t("redaction.create")}
-          </button>
-        }
       />
       <div className="provider-tabs policy-tabs" role="tablist" aria-label={t("policyManagement.views")}>
         <button role="tab" aria-selected={tab === "token"} onClick={() => setTab("token")}>{t("policies.title")} <span>{tokenItems.length}{policies.hasNextPage ? "+" : ""}</span></button>
@@ -73,6 +68,7 @@ export function PoliciesPage() {
           <label><span>{t("policyManagement.status")}</span><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">{t("policyManagement.all")}</option><option value="enabled">{t("common.enabled")}</option><option value="disabled">{t("common.disabled")}</option></select></label>
           <label><span>{t("policies.action")}</span><select value={action} onChange={(event) => setAction(event.target.value)}><option value="">{t("policyManagement.all")}</option><option value="observe">{t("policies.observe")}</option><option value="alert">{t("policies.alert")}</option><option value="temporary_block">{t("policies.temporaryBlock")}</option></select></label>
           <span className="filter-count">{t("policyManagement.showing", { visible: visible.length, loaded: tokenItems.length })}</span>
+          <button className="button primary" onClick={() => setEditing("new")}>{t("policies.create")}</button>
         </div>
         {policies.isPending && <Loading />}
         {policies.isError && <ErrorState error={policies.error} />}

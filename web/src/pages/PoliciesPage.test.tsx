@@ -93,6 +93,14 @@ describe("token guard policy workflow", () => {
     expect(await screen.findByText("Second guard")).toBeVisible();
     expect(api.tokenGuardPoliciesPage).toHaveBeenLastCalledWith(expect.stringContaining("cursor=cursor-1"));
   });
+
+  it("keeps one contextual create action in the active tab filter bar", async () => {
+    renderPage();
+    expect(await screen.findAllByRole("button", { name: "＋ 新建令牌防护策略" })).toHaveLength(1);
+    fireEvent.click(screen.getByRole("tab", { name: "脱敏策略 0" }));
+    expect(screen.queryByRole("button", { name: "＋ 新建令牌防护策略" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "＋ 新建脱敏策略" })).toHaveLength(1);
+  });
 });
 
 function renderPage() {
