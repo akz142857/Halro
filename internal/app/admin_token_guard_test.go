@@ -37,7 +37,7 @@ func TestAdminTokenGuardPolicyLifecycleAndPreview(t *testing.T) {
 		"ewma_minimum_samples": int64(100), "ewma_warmup_seconds": int64(3600),
 		"ewma_evaluation_window_seconds": int64(60), "ewma_cooldown_seconds": int64(300),
 		"ewma_absolute_rpm": int64(60), "ewma_absolute_tpm": int64(50_000),
-		"ewma_absolute_tokens_per_request": 4_000.0,
+		"ewma_absolute_tokens_per_request":     4_000.0,
 		"ewma_absolute_cost_micros_per_minute": int64(1_000_000),
 	}
 	created := performAdminMutation(t, runtime, cookie, csrf,
@@ -79,6 +79,20 @@ func TestAdminTokenGuardPolicyLifecycleAndPreview(t *testing.T) {
 		TokenGuardPolicyID: policy.ID, CreatedAt: now, UpdatedAt: now,
 	}, 0); err != nil {
 		t.Fatal(err)
+	}
+	listed := performAdminMutation(t, runtime, cookie, csrf,
+		http.MethodGet, "/admin/api/v1/token-guard-policies", "", nil)
+	if listed.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", listed.Code, listed.Body.String())
+	}
+	var page struct {
+		Items []tokenGuardView `json:"items"`
+	}
+	if err := json.Unmarshal(listed.Body.Bytes(), &page); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 || page.Items[0].BoundProjects != 1 {
+		t.Fatalf("unexpected policy bindings: %#v", page.Items)
 	}
 	blocked := performAdminMutation(t, runtime, cookie, csrf,
 		http.MethodDelete, "/admin/api/v1/token-guard-policies/"+policy.ID, `"1"`, nil)

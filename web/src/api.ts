@@ -286,6 +286,8 @@ export const api = {
   audit: (query = "") => request<Page<AuditRecord>>(`/audit${query}`).then((value) => value.data),
   tokenGuardPolicies: () =>
     request<Page<TokenGuardPolicy>>("/token-guard-policies").then((value) => value.data),
+  tokenGuardPoliciesPage: (query = "") =>
+    request<Page<TokenGuardPolicy>>(`/token-guard-policies${query}`).then((value) => value.data),
   createTokenGuardPolicy: (value: unknown) =>
     request<TokenGuardPolicy>("/token-guard-policies", json("POST", value)),
   updateTokenGuardPolicy: (id: string, value: unknown, revision: number) =>
@@ -307,6 +309,8 @@ export const api = {
     ).then((result) => result.data),
   redactionPolicies: () =>
     request<Page<RedactionPolicy>>("/redaction-policies").then((value) => value.data),
+  redactionPoliciesPage: (query = "") =>
+    request<Page<RedactionPolicy>>(`/redaction-policies${query}`).then((value) => value.data),
   createRedactionPolicy: (value: unknown) =>
     request<RedactionPolicy>("/redaction-policies", json("POST", value)),
   updateRedactionPolicy: (id: string, value: unknown, revision: number) =>

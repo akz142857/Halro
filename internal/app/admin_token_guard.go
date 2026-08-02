@@ -73,6 +73,7 @@ type tokenGuardView struct {
 	EWMAAbsoluteTokensPerRequest    float64 `json:"ewma_absolute_tokens_per_request"`
 	EWMAAbsoluteCostMicrosPerMinute int64   `json:"ewma_absolute_cost_micros_per_minute"`
 	Revision                        uint64  `json:"revision"`
+	BoundProjects                   int     `json:"bound_projects,omitempty"`
 }
 
 func (r *Runtime) getAdminTokenGuardPolicy(writer http.ResponseWriter, request *http.Request) {

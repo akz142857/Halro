@@ -318,6 +318,7 @@ export interface TokenGuardPolicy {
   ewma_absolute_tokens_per_request: number;
   ewma_absolute_cost_micros_per_minute: number;
   revision: number;
+  bound_projects?: number;
 }
 
 export interface TokenGuardPreview {
@@ -348,6 +349,7 @@ export interface RedactionPolicy {
   mode: "strict" | "bounded_stream" | "detect_only_stream";
   rules: RedactionRule[];
   revision: number;
+  bound_projects?: number;
 }
 
 export interface RedactionTestResult {

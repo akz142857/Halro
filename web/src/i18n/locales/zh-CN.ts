@@ -331,7 +331,12 @@ export const zhCN = {
     violations: "触发次数", blockTTL: "封禁时长（秒）", cooldown: "冷却时间（秒）", enableEWMA: "启用实验性 EWMA 相对基线（仅检测）",
     ewmaHint: "EWMA 命中只产生告警；硬阈值仍优先，且只有硬阈值允许临时封禁。", ewmaAlpha: "EWMA 平滑系数", multiplier: "相对基线倍数", baselineSamples: "基线最少样本", warmup: "预热（秒）", window: "评估窗口（秒，10 秒倍数）", alertCooldown: "告警冷却时间（秒）",
     rpmFloor: "RPM 绝对下限", tpmFloor: "TPM 绝对下限", tokenFloor: "平均令牌/请求下限", costFloor: "成本速率下限（USD/min）", enable: "启用此策略", save: "保存策略",
-    observe: "仅观察", alert: "告警", temporaryBlock: "临时封禁", previewTitle: "模拟 · {{name}}", estimatedTokens: "本次估算令牌", estimatedCost: "本次估算成本（USD）", windowTokens: "窗口内已有令牌", windowCost: "窗口内已有成本（USD）", windowRequests: "窗口内请求数", windowErrors: "窗口内错误数", windowUniqueIPs: "窗口内唯一 IP 数", newSource: "本次请求来自新来源（唯一 IP +1）", currentConcurrency: "当前并发", hit: "命中：{{reason}}", noHit: "未命中阈值", resultAction: "动作：{{action}}", run: "运行模拟",
+    observe: "仅观察", alert: "告警", temporaryBlock: "临时封禁", ewmaOff: "EWMA 关闭", previewTitle: "模拟 · {{name}}", estimatedTokens: "本次估算令牌", estimatedCost: "本次估算成本（USD）", windowTokens: "窗口内已有令牌", windowCost: "窗口内已有成本（USD）", windowRequests: "窗口内请求数", windowErrors: "窗口内错误数", windowUniqueIPs: "窗口内唯一 IP 数", newSource: "本次请求来自新来源（唯一 IP +1）", currentConcurrency: "当前并发", hit: "命中：{{reason}}", noHit: "未命中阈值", resultAction: "动作：{{action}}", run: "运行模拟",
+  },
+  policyManagement: {
+    eyebrow: "安全治理", title: "安全策略", description: "集中管理令牌异常遏制与数据防泄漏策略，并追踪项目绑定关系。", views: "安全策略类型",
+    search: "搜索", searchPlaceholder: "名称或策略 ID", status: "状态", mode: "模式", all: "全部", showing: "显示 {{visible}} / 已加载 {{loaded}}",
+    policy: "策略", summary: "策略摘要", bindings: "项目绑定", actions: "操作", projectCount: "{{count}} 个项目", enabledRules: "{{count}} 条启用规则",
   },
   redaction: {
     eyebrow: "数据防泄漏", title: "脱敏策略", description: "在请求进入服务商前和响应返回内部调用方前，对结构化内容执行检测、掩码、替换或拒绝。",

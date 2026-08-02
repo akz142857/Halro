@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 import { api } from "../api";
 import {
@@ -43,14 +43,33 @@ function ruleProblem(rule: EditableRule): string | null {
   return null;
 }
 
-export function RedactionPoliciesSection() {
+export function RedactionPoliciesSection({
+  policies,
+  isPending = false,
+  error,
+  hasNextPage = false,
+  isFetchingNextPage = false,
+  onLoadMore,
+}: {
+  policies: RedactionPolicy[];
+  isPending?: boolean;
+  error?: unknown;
+  hasNextPage?: boolean;
+  isFetchingNextPage?: boolean;
+  onLoadMore?: () => void;
+}) {
   const { t } = useTranslation();
   const [editing, setEditing] = useState<RedactionPolicy | "new" | null>(null);
   const [testing, setTesting] = useState<RedactionPolicy | null>(null);
-  const policies = useQuery({
-    queryKey: ["redaction-policies"],
-    queryFn: api.redactionPolicies,
-  });
+  const [search, setSearch] = useState("");
+  const [status, setStatus] = useState("");
+  const [mode, setMode] = useState("");
+  const normalizedSearch = search.trim().toLowerCase();
+  const visible = policies.filter((policy) =>
+    (!normalizedSearch || policy.name.toLowerCase().includes(normalizedSearch) || policy.id.toLowerCase().includes(normalizedSearch)) &&
+    (!status || (status === "enabled") === policy.enabled) &&
+    (!mode || policy.mode === mode),
+  );
   const queryClient = useQueryClient();
   const remove = useMutation({
     mutationFn: (policy: RedactionPolicy) =>
@@ -59,18 +78,17 @@ export function RedactionPoliciesSection() {
       queryClient.invalidateQueries({ queryKey: ["redaction-policies"] }),
   });
   return (
-    <section className="policy-section">
-      <div className="section-heading">
-        <div>
-          <p className="eyebrow">{t("redaction.eyebrow")}</p>
-          <h2>{t("redaction.title")}</h2>
-          <p>{t("redaction.description")}</p>
-        </div>
-        <button className="button primary" onClick={() => setEditing("new")}>{t("redaction.create")}</button>
+    <section className="policy-management-panel" role="tabpanel" aria-label={t("redaction.title")}>
+      <div className="filter-bar policy-filter-bar">
+        <label><span>{t("policyManagement.search")}</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("policyManagement.searchPlaceholder")} /></label>
+        <label><span>{t("policyManagement.status")}</span><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">{t("policyManagement.all")}</option><option value="enabled">{t("common.enabled")}</option><option value="disabled">{t("common.disabled")}</option></select></label>
+        <label><span>{t("policyManagement.mode")}</span><select value={mode} onChange={(event) => setMode(event.target.value)}><option value="">{t("policyManagement.all")}</option><option value="strict">{t("redaction.strictBadge")}</option><option value="bounded_stream">{t("redaction.boundedBadge")}</option><option value="detect_only_stream">{t("redaction.detectStreamBadge")}</option></select></label>
+        <span className="filter-count">{t("policyManagement.showing", { visible: visible.length, loaded: policies.length })}</span>
+        <button id="new-redaction-policy" className="button primary" onClick={() => setEditing("new")}>{t("redaction.create")}</button>
       </div>
-      {policies.isPending && <Loading />}
-      {policies.isError && <ErrorState error={policies.error} />}
-      {policies.data?.items.length === 0 && (
+      {isPending && <Loading />}
+      {error !== undefined && <ErrorState error={error} />}
+      {!isPending && policies.length === 0 && (
         <EmptyState
           title={t("redaction.emptyTitle")}
           action={<button className="button primary" onClick={() => setEditing("new")}>{t("redaction.baseline")}</button>}
@@ -78,42 +96,25 @@ export function RedactionPoliciesSection() {
           {t("redaction.emptyDescription")}
         </EmptyState>
       )}
-      {!!policies.data?.items.length && (
-        <div className="policy-card-grid">
-          {policies.data.items.map((policy) => (
-            <article className="policy-card redaction-card" key={policy.id}>
-              <header>
-                <span><StatusDot ok={policy.enabled} /><strong>{policy.name}</strong></span>
-                <span className="badge">{policy.mode === "strict" ? t("redaction.strictBadge") : policy.mode === "bounded_stream" ? t("redaction.boundedBadge") : t("redaction.detectStreamBadge")}</span>
-              </header>
-              <div className="redaction-rule-list">
-                {policy.rules.map((rule) => (
-                  <div key={rule.id}>
-                    <span><strong>{rule.name}</strong><small>{rule.kind === "builtin" ? rule.builtin : t(`redaction.${rule.kind}Badge`)}</small></span>
-                    <code>{rule.scopes.map((scope) => t(`redaction.${scope}`)).join(" + ")}</code>
-                    <span className={`badge ${rule.action === "reject" ? "warning" : ""}`}>{t(`redaction.${rule.action === "detect_only" ? "detect" : rule.action}`)}</span>
-                    <small>{rule.computed_max_match_bytes > 0 ? t("redaction.byteLimit", { count: rule.computed_max_match_bytes }) : t("redaction.unbounded")}</small>
-                  </div>
-                ))}
-              </div>
-              <footer>
-                <code>{policy.id}</code>
-                <div className="row-actions">
-                  <button className="button ghost" onClick={() => setTesting(policy)}>{t("common.test")}</button>
-                  <button className="button ghost" onClick={() => setEditing(policy)}>{t("common.edit")}</button>
-                  <ConfirmButton
-                    label={t("common.delete")}
-                    confirmLabel={t("redaction.deleteConfirm", { name: policy.name })}
-                    disabled={remove.isPending}
-                    onConfirm={() => remove.mutate(policy)}
-                  />
-                </div>
-              </footer>
-              {remove.isError && <ErrorState error={remove.error} />}
-            </article>
-          ))}
+      {!!policies.length && (
+        <div className="table-shell policy-table-shell">
+          <table className="policy-table"><thead><tr><th>{t("policyManagement.policy")}</th><th>{t("policyManagement.status")}</th><th>{t("policyManagement.mode")}</th><th>{t("policyManagement.summary")}</th><th>{t("policyManagement.bindings")}</th><th>{t("policyManagement.actions")}</th></tr></thead>
+          <tbody>{visible.map((policy) => {
+            const enabledRules = policy.rules.filter((rule) => rule.enabled);
+            const strongest = enabledRules.some((rule) => rule.action === "reject") ? "reject" : enabledRules.some((rule) => rule.action === "replace") ? "replace" : enabledRules.some((rule) => rule.action === "mask") ? "mask" : "detect_only";
+            return <tr key={policy.id}>
+              <td><strong>{policy.name}</strong><code>{policy.id}</code></td>
+              <td><span className="inline-status"><StatusDot ok={policy.enabled} />{policy.enabled ? t("common.enabled") : t("common.disabled")}</span></td>
+              <td><span className="badge">{policy.mode === "strict" ? t("redaction.strictBadge") : policy.mode === "bounded_stream" ? t("redaction.boundedBadge") : t("redaction.detectStreamBadge")}</span></td>
+              <td><strong>{t("redaction.rules", { count: policy.rules.length })}</strong><small>{t("policyManagement.enabledRules", { count: enabledRules.length })} · {t(`redaction.${strongest === "detect_only" ? "detect" : strongest}`)}</small></td>
+              <td>{t("policyManagement.projectCount", { count: policy.bound_projects ?? 0 })}</td>
+              <td><div className="row-actions policy-row-actions"><button className="button ghost" onClick={() => setTesting(policy)}>{t("common.test")}</button><button className="button ghost" onClick={() => setEditing(policy)}>{t("common.edit")}</button><ConfirmButton label={t("common.delete")} confirmLabel={t("redaction.deleteConfirm", { name: policy.name })} disabled={remove.isPending} onConfirm={() => remove.mutate(policy)} /></div></td>
+            </tr>;
+          })}</tbody></table>
+          {remove.isError && <ErrorState error={remove.error} />}
         </div>
       )}
+      {hasNextPage && <button className="button ghost policy-load-more" disabled={isFetchingNextPage} onClick={onLoadMore}>{isFetchingNextPage ? t("common.loading") : t("common.loadMore")}</button>}
       {editing && (
         <RedactionPolicyForm
           current={editing === "new" ? undefined : editing}
