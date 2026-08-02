@@ -77,6 +77,20 @@ func TestAdminRedactionPolicyLifecycleTestAndReferenceProtection(t *testing.T) {
 	}, 0); err != nil {
 		t.Fatal(err)
 	}
+	listed := performAdminMutation(t, runtime, cookie, csrf,
+		http.MethodGet, "/admin/api/v1/redaction-policies", "", nil)
+	if listed.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", listed.Code, listed.Body.String())
+	}
+	var page struct {
+		Items []redactionPolicyView `json:"items"`
+	}
+	if err := json.Unmarshal(listed.Body.Bytes(), &page); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 || page.Items[0].BoundProjects != 1 {
+		t.Fatalf("unexpected policy bindings: %#v", page.Items)
+	}
 	blocked := performAdminMutation(t, runtime, cookie, csrf,
 		http.MethodDelete, "/admin/api/v1/redaction-policies/"+policy.ID, `"1"`, nil)
 	if blocked.Code != http.StatusConflict {

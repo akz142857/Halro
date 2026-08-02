@@ -15,12 +15,13 @@ const policy = {
   ewma_cooldown_seconds: 300, ewma_absolute_rpm: 60, ewma_absolute_tpm: 50000,
   ewma_absolute_tokens_per_request: 4000, ewma_absolute_cost_micros_per_minute: 1000000,
   revision: 1,
+  bound_projects: 2,
 } as TokenGuardPolicy;
 
 describe("token guard policy workflow", () => {
   beforeEach(() => {
-    vi.spyOn(api, "tokenGuardPolicies").mockResolvedValue({ items: [], next_cursor: "" });
-    vi.spyOn(api, "redactionPolicies").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "tokenGuardPoliciesPage").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "redactionPoliciesPage").mockResolvedValue({ items: [], next_cursor: "" });
   });
 
   afterEach(() => vi.restoreAllMocks());
@@ -41,7 +42,7 @@ describe("token guard policy workflow", () => {
   });
 
   it("passes every relevant window signal to the simulator", async () => {
-    vi.mocked(api.tokenGuardPolicies).mockResolvedValue({ items: [policy], next_cursor: "" });
+    vi.mocked(api.tokenGuardPoliciesPage).mockResolvedValue({ items: [policy], next_cursor: "" });
     const preview = vi.spyOn(api, "previewTokenGuardPolicy").mockResolvedValue({ violated: false, reason: "", action: "observe" });
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "模拟" }));
@@ -76,10 +77,21 @@ describe("token guard policy workflow", () => {
     finish({} as never);
   });
 
-  it("exposes the enabled state as readable card text", async () => {
-    vi.mocked(api.tokenGuardPolicies).mockResolvedValue({ items: [policy], next_cursor: "" });
+  it("shows enabled state and project bindings in the compact table", async () => {
+    vi.mocked(api.tokenGuardPoliciesPage).mockResolvedValue({ items: [policy], next_cursor: "" });
     renderPage();
-    expect(await screen.findByText("启用", { selector: ".policy-card header small" })).toBeVisible();
+    expect(await screen.findByRole("cell", { name: "启用" })).toBeVisible();
+    expect(screen.getByText("2 个项目")).toBeVisible();
+  });
+
+  it("loads the next cursor page on demand", async () => {
+    vi.mocked(api.tokenGuardPoliciesPage)
+      .mockResolvedValueOnce({ items: [policy], next_cursor: "cursor-1" })
+      .mockResolvedValueOnce({ items: [{ ...policy, id: "tgp_second", name: "Second guard" }], next_cursor: "" });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "加载更多" }));
+    expect(await screen.findByText("Second guard")).toBeVisible();
+    expect(api.tokenGuardPoliciesPage).toHaveBeenLastCalledWith(expect.stringContaining("cursor=cursor-1"));
   });
 });
 

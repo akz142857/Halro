@@ -1,14 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
 import { RedactionPoliciesSection } from "./RedactionPoliciesSection";
 
 describe("RedactionPoliciesSection form safety", () => {
-  beforeEach(() => {
-    vi.spyOn(api, "redactionPolicies").mockResolvedValue({ items: [], next_cursor: "" });
-  });
-
   afterEach(() => vi.restoreAllMocks());
 
   it("creates policies disabled and converts enabled rules when detect-only streaming is selected", async () => {
@@ -89,7 +85,7 @@ function renderSection() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
-      <RedactionPoliciesSection />
+      <RedactionPoliciesSection policies={[]} />
     </QueryClientProvider>,
   );
 }

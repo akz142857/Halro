@@ -509,6 +509,16 @@ td small, td code { display: block; margin-top: 4px; color: var(--muted); }
 .alert-secret small { color: var(--muted-2); font: 8px var(--mono); letter-spacing: .08em; }
 .alert-secret strong { display: block; margin-top: 6px; font: 10px var(--mono); }
 .policy-card-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.policy-tabs { margin-bottom: 0; }
+.policy-management-panel { padding-top: 15px; }
+.policy-filter-bar { margin-bottom: 15px; }
+.policy-filter-bar > .button { margin-left: 0; }
+.policy-table td:first-child strong { display: block; }
+.policy-table td:first-child code { max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+.policy-table td:nth-child(4) small { max-width: 440px; overflow: hidden; text-overflow: ellipsis; }
+.policy-table th:last-child, .policy-table td:last-child { text-align: right; }
+.policy-row-actions { min-width: 235px; justify-content: flex-end; }
+.policy-load-more { display: block; margin: 16px auto 0; }
 .policy-card { background: rgba(11,25,22,.68); border: 1px solid var(--line); }
 .policy-card > header, .policy-card > footer {
   display: flex; align-items: center; justify-content: space-between; gap: 15px; padding: 17px 20px;

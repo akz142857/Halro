@@ -37,19 +37,35 @@ type redactionTestInput struct {
 	Scope string `json:"scope"`
 }
 
+type redactionPolicyView struct {
+	domain.RedactionPolicy
+	BoundProjects int `json:"bound_projects,omitempty"`
+}
+
 func (r *Runtime) listAdminRedactionPolicies(writer http.ResponseWriter, request *http.Request) {
 	items, err := r.store.ListRedactionPolicies(request.Context())
 	if err != nil {
 		adminStoreError(writer)
 		return
 	}
-	active := make([]domain.RedactionPolicy, 0, len(items))
-	for _, item := range items {
-		if item.DeletedAt == nil {
-			active = append(active, item)
+	bindings := make(map[string]int)
+	projects, err := r.store.ListProjects(request.Context())
+	if err != nil {
+		adminStoreError(writer)
+		return
+	}
+	for _, project := range projects {
+		if project.DeletedAt == nil && project.RedactionPolicyID != "" {
+			bindings[project.RedactionPolicyID]++
 		}
 	}
-	writeResourcePage(writer, request, active, func(item domain.RedactionPolicy) string { return item.ID })
+	active := make([]redactionPolicyView, 0, len(items))
+	for _, item := range items {
+		if item.DeletedAt == nil {
+			active = append(active, redactionPolicyView{RedactionPolicy: item, BoundProjects: bindings[item.ID]})
+		}
+	}
+	writeResourcePage(writer, request, active, func(item redactionPolicyView) string { return item.ID })
 }
 
 func (r *Runtime) getAdminRedactionPolicy(writer http.ResponseWriter, request *http.Request) {

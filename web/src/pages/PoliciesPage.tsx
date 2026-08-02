@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent, type InputHTMLAttributes } from "react";
 import { api } from "../api";
 import {
@@ -18,12 +18,32 @@ import { useTranslation } from "react-i18next";
 
 export function PoliciesPage() {
   const { t } = useTranslation();
+  const [tab, setTab] = useState<"token" | "redaction">("token");
+  const [search, setSearch] = useState("");
+  const [status, setStatus] = useState("");
+  const [action, setAction] = useState("");
   const [editing, setEditing] = useState<TokenGuardPolicy | "new" | null>(null);
   const [previewing, setPreviewing] = useState<TokenGuardPolicy | null>(null);
-  const policies = useQuery({
+  const policies = useInfiniteQuery({
     queryKey: ["token-guard-policies"],
-    queryFn: api.tokenGuardPolicies,
+    initialPageParam: "",
+    queryFn: ({ pageParam }) => api.tokenGuardPoliciesPage(`?${new URLSearchParams({ limit: "50", ...(pageParam ? { cursor: pageParam } : {}) })}`),
+    getNextPageParam: (page) => page.next_cursor || undefined,
   });
+  const redactionPolicies = useInfiniteQuery({
+    queryKey: ["redaction-policies"],
+    initialPageParam: "",
+    queryFn: ({ pageParam }) => api.redactionPoliciesPage(`?${new URLSearchParams({ limit: "50", ...(pageParam ? { cursor: pageParam } : {}) })}`),
+    getNextPageParam: (page) => page.next_cursor || undefined,
+  });
+  const tokenItems = policies.data?.pages.flatMap((page) => page.items) ?? [];
+  const redactionItems = redactionPolicies.data?.pages.flatMap((page) => page.items) ?? [];
+  const normalizedSearch = search.trim().toLowerCase();
+  const visible = tokenItems.filter((policy) =>
+    (!normalizedSearch || policy.name.toLowerCase().includes(normalizedSearch) || policy.id.toLowerCase().includes(normalizedSearch)) &&
+    (!status || (status === "enabled") === policy.enabled) &&
+    (!action || policy.action === action),
+  );
   const queryClient = useQueryClient();
   const remove = useMutation({
     mutationFn: (policy: TokenGuardPolicy) =>
@@ -34,65 +54,42 @@ export function PoliciesPage() {
   return (
     <>
       <PageHeader
-        eyebrow={t("policies.eyebrow")}
-        title={t("policies.title")}
-        description={t("policies.description")}
+        eyebrow={t("policyManagement.eyebrow")}
+        title={t("policyManagement.title")}
+        description={t("policyManagement.description")}
         action={
-          <button className="button primary" onClick={() => setEditing("new")}>
-            {t("policies.create")}
+          <button className="button primary" onClick={() => tab === "token" ? setEditing("new") : document.getElementById("new-redaction-policy")?.click()}>
+            {tab === "token" ? t("policies.create") : t("redaction.create")}
           </button>
         }
       />
-      {policies.isPending && <Loading />}
-      {policies.isError && <ErrorState error={policies.error} />}
-      {policies.data?.items.length === 0 && (
-        <EmptyState
-          title={t("policies.emptyTitle")}
-          action={<button className="button primary" onClick={() => setEditing("new")}>{t("policies.baseline")}</button>}
-        >
-          {t("policies.emptyDescription")}
-        </EmptyState>
-      )}
-      {!!policies.data?.items.length && (
-        <div className="policy-card-grid">
-          {policies.data.items.map((policy) => (
-            <article className="policy-card" key={policy.id}>
-              <header>
-                <span><StatusDot ok={policy.enabled} /><strong>{policy.name}</strong><small>{policy.enabled ? t("common.enabled") : t("common.disabled")}</small></span>
-                <span className={`badge ${policy.action === "temporary_block" ? "warning" : ""}`}>
-                  {policyActionLabel(t, policy.action)}
-                </span>
-              </header>
-              <div className="thresholds">
-                <Threshold label={t("policies.request")} value={policy.request_tokens ? t("policies.tokenCount", { count: compactNumber(policy.request_tokens) }) : t("policies.off")} />
-                <Threshold label={t("policies.perMinute")} value={policy.tokens_per_minute ? t("policies.tokenCount", { count: compactNumber(policy.tokens_per_minute) }) : t("policies.off")} />
-                <Threshold label={t("policies.costMinute")} value={policy.cost_micros_per_minute ? money(policy.cost_micros_per_minute) : t("policies.off")} />
-                <Threshold label={t("policies.concurrency")} value={policy.concurrency ? String(policy.concurrency) : t("policies.off")} />
-                <Threshold label={t("policies.errorRate")} value={policy.error_rate ? `${Math.round(policy.error_rate * 100)}%` : t("policies.off")} />
-                <Threshold label={t("policies.uniqueIP")} value={policy.unique_ips_per_minute ? String(policy.unique_ips_per_minute) : t("policies.off")} />
-                <Threshold label={t("policies.ewma")} value={policy.ewma_enabled ? `${policy.ewma_multiplier}× · ${t("policies.detectOnly")}` : t("policies.off")} />
-              </div>
-              <footer>
-                <code>{policy.id}</code>
-                <div className="row-actions">
-                  <button className="button ghost" onClick={() => setPreviewing(policy)}>{t("policies.simulate")}</button>
-                  <button className="button ghost" onClick={() => setEditing(policy)}>{t("common.edit")}</button>
-                  <ConfirmButton
-                    label={t("common.delete")}
-                    confirmLabel={t("policies.deleteConfirm", { name: policy.name })}
-                    disabled={remove.isPending}
-                    onConfirm={() => remove.mutate(policy)}
-                  />
-                </div>
-              </footer>
-              {remove.isError && <ErrorState error={remove.error} />}
-            </article>
-          ))}
+      <div className="provider-tabs policy-tabs" role="tablist" aria-label={t("policyManagement.views")}>
+        <button role="tab" aria-selected={tab === "token"} onClick={() => setTab("token")}>{t("policies.title")} <span>{tokenItems.length}{policies.hasNextPage ? "+" : ""}</span></button>
+        <button role="tab" aria-selected={tab === "redaction"} onClick={() => setTab("redaction")}>{t("redaction.title")} <span>{redactionItems.length}{redactionPolicies.hasNextPage ? "+" : ""}</span></button>
+      </div>
+      {tab === "token" && <section className="policy-management-panel" role="tabpanel" aria-label={t("policies.title")}>
+        <div className="filter-bar policy-filter-bar">
+          <label><span>{t("policyManagement.search")}</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("policyManagement.searchPlaceholder")} /></label>
+          <label><span>{t("policyManagement.status")}</span><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">{t("policyManagement.all")}</option><option value="enabled">{t("common.enabled")}</option><option value="disabled">{t("common.disabled")}</option></select></label>
+          <label><span>{t("policies.action")}</span><select value={action} onChange={(event) => setAction(event.target.value)}><option value="">{t("policyManagement.all")}</option><option value="observe">{t("policies.observe")}</option><option value="alert">{t("policies.alert")}</option><option value="temporary_block">{t("policies.temporaryBlock")}</option></select></label>
+          <span className="filter-count">{t("policyManagement.showing", { visible: visible.length, loaded: tokenItems.length })}</span>
         </div>
-      )}
+        {policies.isPending && <Loading />}
+        {policies.isError && <ErrorState error={policies.error} />}
+        {!policies.isPending && tokenItems.length === 0 && <EmptyState title={t("policies.emptyTitle")} action={<button className="button primary" onClick={() => setEditing("new")}>{t("policies.baseline")}</button>}>{t("policies.emptyDescription")}</EmptyState>}
+        {!!tokenItems.length && <div className="table-shell policy-table-shell"><table className="policy-table"><thead><tr><th>{t("policyManagement.policy")}</th><th>{t("policyManagement.status")}</th><th>{t("policies.action")}</th><th>{t("policyManagement.summary")}</th><th>{t("policyManagement.bindings")}</th><th>{t("policyManagement.actions")}</th></tr></thead><tbody>{visible.map((policy) => <tr key={policy.id}>
+          <td><strong>{policy.name}</strong><code>{policy.id}</code></td>
+          <td><span className="inline-status"><StatusDot ok={policy.enabled} />{policy.enabled ? t("common.enabled") : t("common.disabled")}</span></td>
+          <td><span className={`badge ${policy.action === "temporary_block" ? "warning" : ""}`}>{policyActionLabel(t, policy.action)}</span></td>
+          <td><strong>{compactNumber(policy.request_tokens)} / {compactNumber(policy.tokens_per_minute)} TPM</strong><small>{money(policy.cost_micros_per_minute)} · {policy.concurrency} {t("policies.concurrency")} · {policy.ewma_enabled ? `${policy.ewma_multiplier}× EWMA` : t("policies.ewmaOff")}</small></td>
+          <td>{t("policyManagement.projectCount", { count: policy.bound_projects ?? 0 })}</td>
+          <td><div className="row-actions policy-row-actions"><button className="button ghost" onClick={() => setPreviewing(policy)}>{t("policies.simulate")}</button><button className="button ghost" onClick={() => setEditing(policy)}>{t("common.edit")}</button><ConfirmButton label={t("common.delete")} confirmLabel={t("policies.deleteConfirm", { name: policy.name })} disabled={remove.isPending} onConfirm={() => remove.mutate(policy)} /></div></td>
+        </tr>)}</tbody></table>{remove.isError && <ErrorState error={remove.error} />}</div>}
+        {policies.hasNextPage && <button className="button ghost policy-load-more" disabled={policies.isFetchingNextPage} onClick={() => policies.fetchNextPage()}>{policies.isFetchingNextPage ? t("common.loading") : t("common.loadMore")}</button>}
+      </section>}
+      {tab === "redaction" && <RedactionPoliciesSection policies={redactionItems} isPending={redactionPolicies.isPending} error={redactionPolicies.isError ? redactionPolicies.error : undefined} hasNextPage={redactionPolicies.hasNextPage} isFetchingNextPage={redactionPolicies.isFetchingNextPage} onLoadMore={() => redactionPolicies.fetchNextPage()} />}
       {editing && <PolicyForm current={editing === "new" ? undefined : editing} onClose={() => setEditing(null)} />}
       {previewing && <PolicyPreview policy={previewing} onClose={() => setPreviewing(null)} />}
-      <RedactionPoliciesSection />
     </>
   );
 }
@@ -341,10 +338,6 @@ function validatePolicy(value: PolicyValues) {
     if (floors.some((floor) => !Number.isFinite(floor) || floor < 0) || floors.every((floor) => floor === 0)) errors.ewmaFloors = "At least one non-negative floor must be greater than 0";
   }
   return errors;
-}
-
-function Threshold({ label, value }: { label: string; value: string }) {
-  return <div><small>{label}</small><strong>{value}</strong></div>;
 }
 
 function policyActionLabel(t: ReturnType<typeof useTranslation>["t"], action: string) {

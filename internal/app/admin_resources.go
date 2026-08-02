@@ -216,8 +216,21 @@ func (r *Runtime) listAdminTokenGuardPolicies(writer http.ResponseWriter, reques
 		}
 	}
 	views := make([]tokenGuardView, 0, len(active))
+	bindings := make(map[string]int)
+	projects, err := r.store.ListProjects(request.Context())
+	if err != nil {
+		adminStoreError(writer)
+		return
+	}
+	for _, project := range projects {
+		if project.DeletedAt == nil && project.TokenGuardPolicyID != "" {
+			bindings[project.TokenGuardPolicyID]++
+		}
+	}
 	for _, item := range active {
-		views = append(views, tokenGuardPolicyView(item))
+		view := tokenGuardPolicyView(item)
+		view.BoundProjects = bindings[item.ID]
+		views = append(views, view)
 	}
 	writeResourcePage(writer, request, views, func(item tokenGuardView) string { return item.ID })
 }
