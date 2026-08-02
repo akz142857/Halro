@@ -331,6 +331,8 @@ td small, td code { display: block; margin-top: 4px; color: var(--muted); }
 .runtime-settings > form { display: grid; grid-template-columns: minmax(220px, .6fr) minmax(280px, 1fr) auto; align-items: end; gap: 18px; padding: 20px 22px; }
 .runtime-settings .field { margin: 0; }
 .runtime-settings .notice { margin: 0; }
+.runtime-settings .notice img { max-width: 100%; height: auto; }
+.runtime-settings .notice pre { max-width: 100%; overflow-x: auto; user-select: all; }
 .runtime-settings .notice.success { grid-column: 1 / -1; }
 .runtime-settings .form-actions { padding: 0; }
 .system-card { padding: 24px; }

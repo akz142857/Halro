@@ -129,6 +129,8 @@ export const api = {
   mfaStatus: () => request<MFAStatus>("/security/mfa").then((v) => v.data),
   createMFAAuthenticator: (name: string, currentPassword: string, code: string) => request<MFAEnrollment>("/security/mfa/authenticators", json("POST", { name, current_password: currentPassword, code })).then((v) => v.data),
   confirmMFAAuthenticator: (id: string, code: string) => request<{status:string; recovery_codes?:string[]}>(`/security/mfa/authenticators/${encodeURIComponent(id)}/confirm`, json("POST", {code})).then((v)=>v.data),
+  cancelPendingMFAAuthenticator: (id:string) => request<{status:string}>(`/security/mfa/authenticators/${encodeURIComponent(id)}/pending`,json("DELETE")).then((v)=>v.data),
+  renameMFAAuthenticator: (id:string,name:string,revision:number) => request<{status:string}>(`/security/mfa/authenticators/${encodeURIComponent(id)}`,json("PATCH",{name}),`\"${revision}\"`).then((v)=>v.data),
   deleteMFAAuthenticator: (id: string, currentPassword: string, code: string) => request<{status:string}>(`/security/mfa/authenticators/${encodeURIComponent(id)}`, json("DELETE", {current_password:currentPassword,code})).then((v)=>v.data),
   regenerateMFARecoveryCodes: (currentPassword:string,code:string) => request<{recovery_codes:string[]}>("/security/mfa/recovery-codes/regenerate",json("POST",{current_password:currentPassword,code})).then((v)=>v.data),
   disableMFA: (currentPassword:string,code:string) => request<{status:string}>("/security/mfa",json("DELETE",{current_password:currentPassword,code})).then((v)=>v.data),

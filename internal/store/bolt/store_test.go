@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,6 +18,161 @@ import (
 	"github.com/akz142857/Heimdall/internal/ledger"
 	bbolt "go.etcd.io/bbolt"
 )
+
+func TestAdminMFAChallengeClaimAndAuthenticatorInvariantsAreAtomic(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := time.Now().UTC()
+	hash := sha256.Sum256([]byte("challenge"))
+	challenge := domain.AdminMFAChallenge{IDHash: hash, Username: "admin", Purpose: domain.AdminMFAChallengeLogin, CreatedAt: now, ExpiresAt: now.Add(time.Minute), AttemptsRemaining: 5, SessionGeneration: 1}
+	if err := store.PutAdminMFAChallenge(context.Background(), challenge); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	results := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := store.ClaimAdminMFAChallenge(context.Background(), hash, now)
+			results <- err
+		}()
+	}
+	wg.Wait()
+	close(results)
+	successes := 0
+	for err := range results {
+		if err == nil {
+			successes++
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("challenge claims succeeded=%d", successes)
+	}
+	if err := store.FailAdminMFAChallenge(context.Background(), hash); err != nil {
+		t.Fatal(err)
+	}
+	replacementHash := sha256.Sum256([]byte("replacement-challenge"))
+	replacement := challenge
+	replacement.IDHash, replacement.CreatedAt, replacement.ExpiresAt = replacementHash, now.Add(time.Second), now.Add(time.Minute+time.Second)
+	if err := store.PutAdminMFAChallenge(context.Background(), replacement); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.GetAdminMFAChallenge(context.Background(), hash); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("old challenge survived replacement: %v", err)
+	}
+	storedReplacement, err := store.GetAdminMFAChallenge(context.Background(), replacementHash)
+	if err != nil || storedReplacement.AttemptsRemaining != 4 {
+		t.Fatalf("replacement attempts=%d err=%v", storedReplacement.AttemptsRemaining, err)
+	}
+
+	for i := 0; i < 5; i++ {
+		id := fmt.Sprintf("active-%d", i)
+		confirmed := now
+		_, err := store.PutAdminMFAAuthenticator(context.Background(), domain.AdminMFAAuthenticator{ID: id, Username: "admin", Name: id, Type: domain.AdminMFATypeTOTP, SecretCiphertext: []byte("ciphertext"), Status: domain.AdminMFAStatusActive, CreatedAt: now, ConfirmedAt: &confirmed}, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	expiry := now.Add(time.Minute)
+	_, err = store.PutAdminMFAAuthenticator(context.Background(), domain.AdminMFAAuthenticator{ID: "pending", Username: "admin", Name: "pending", Type: domain.AdminMFATypeTOTP, SecretCiphertext: []byte("ciphertext"), Status: domain.AdminMFAStatusPending, CreatedAt: now, ExpiresAt: &expiry}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ActivateAdminMFAAuthenticator(context.Background(), "admin", "pending", 1, now, 5); !errors.Is(err, ErrMFALimit) {
+		t.Fatalf("activate over limit err=%v", err)
+	}
+
+	for i := 1; i < 5; i++ {
+		if err := store.RevokeAdminMFAAuthenticator(context.Background(), "admin", fmt.Sprintf("active-%d", i), true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.RevokeAdminMFAAuthenticator(context.Background(), "admin", "active-0", true); !errors.Is(err, ErrMFARequired) {
+		t.Fatalf("required last revoke err=%v", err)
+	}
+	for i := 0; i < 2; i++ {
+		id := fmt.Sprintf("race-%d", i)
+		confirmed := now
+		_, err := store.PutAdminMFAAuthenticator(context.Background(), domain.AdminMFAAuthenticator{ID: id, Username: "race-admin", Name: id, Type: domain.AdminMFATypeTOTP, SecretCiphertext: []byte("ciphertext"), Status: domain.AdminMFAStatusActive, CreatedAt: now, ConfirmedAt: &confirmed}, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	results = make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func(id string) {
+			defer wg.Done()
+			results <- store.RevokeAdminMFAAuthenticator(context.Background(), "race-admin", id, true)
+		}(fmt.Sprintf("race-%d", i))
+	}
+	wg.Wait()
+	close(results)
+	revoked := 0
+	for err := range results {
+		if err == nil {
+			revoked++
+		}
+	}
+	if revoked != 1 {
+		t.Fatalf("concurrent required revocations succeeded=%d", revoked)
+	}
+}
+
+func TestAdminMFAEnrollmentCommitsRecoveryIdentityAndAuditTogether(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	now := time.Now().UTC()
+	user := domain.AdminUser{
+		Username: "admin", Locale: "en-US", PasswordVersion: 1,
+		PasswordSalt: bytes.Repeat([]byte{1}, 16), PasswordHash: bytes.Repeat([]byte{2}, 32),
+		ArgonMemoryKiB: 64 * 1024, ArgonIterations: 3, ArgonParallelism: 1,
+		SessionGeneration: 1, CreatedAt: now, UpdatedAt: now,
+	}
+	if _, err = store.PutAdminUser(ctx, user, 0); err != nil {
+		t.Fatal(err)
+	}
+	expires := now.Add(time.Minute)
+	authenticator := domain.AdminMFAAuthenticator{ID: "mfa_1", Username: user.Username, Name: "Phone", Type: domain.AdminMFATypeTOTP, SecretCiphertext: []byte("ciphertext"), Status: domain.AdminMFAStatusPending, CreatedAt: now, ExpiresAt: &expires}
+	if _, err = store.PutAdminMFAAuthenticator(ctx, authenticator, 0); err != nil {
+		t.Fatal(err)
+	}
+	codeHash := sha256.Sum256([]byte("recovery"))
+	codes := []domain.AdminMFARecoveryCode{{ID: "mrc_1", Username: user.Username, CodeHash: codeHash, CreatedAt: now, Generation: 1}}
+	intent := domain.AdminMFAAuditIntent{EventID: "aud_1", OccurredAt: now, ActorID: user.Username, Action: "admin.mfa.authenticator.added", TargetType: "admin_mfa_authenticator", TargetID: authenticator.ID}
+	rotated, first, err := store.ConfirmAdminMFAEnrollment(ctx, user.Username, authenticator.ID, 42, now, 5, codes, intent)
+	if err != nil || !first || rotated.SessionGeneration != 2 {
+		t.Fatalf("rotated=%#v first=%v err=%v", rotated, first, err)
+	}
+	storedAuthenticator, err := store.GetAdminMFAAuthenticator(ctx, user.Username, authenticator.ID)
+	if err != nil || storedAuthenticator.Status != domain.AdminMFAStatusActive || storedAuthenticator.LastAcceptedTimeStep != 42 {
+		t.Fatalf("authenticator=%#v err=%v", storedAuthenticator, err)
+	}
+	if remaining, err := store.CountUnusedAdminMFARecoveryCodes(ctx, user.Username); err != nil || remaining != 1 {
+		t.Fatalf("remaining=%d err=%v", remaining, err)
+	}
+	pending, err := store.ListPendingAdminMFAAudits(ctx)
+	if err != nil || len(pending) != 1 || pending[0].EventID != intent.EventID {
+		t.Fatalf("pending=%#v err=%v", pending, err)
+	}
+	other := intent
+	other.EventID = "aud_2"
+	if _, err = store.ReplaceAdminMFARecoveryCodesAndRotate(ctx, user.Username, codes, other); err == nil {
+		t.Fatal("a second lifecycle mutation overwrote an undelivered audit intent")
+	}
+	unchanged, err := store.GetAdminUser(ctx, user.Username)
+	if err != nil || unchanged.SessionGeneration != 2 || unchanged.PendingMFAAudit == nil || unchanged.PendingMFAAudit.EventID != intent.EventID {
+		t.Fatalf("user after rejected mutation=%#v err=%v", unchanged, err)
+	}
+}
 
 func TestMetadataMigrationFromV1IsAtomicAndRecorded(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "metadata.db")

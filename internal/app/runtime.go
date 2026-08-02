@@ -366,6 +366,15 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		usageExporter:    usageExporter,
 		usageLocation:    location,
 	}
+	if err := runtime.drainAdminMFAAuditIntents(ctx); err != nil {
+		auditLog.Close()
+		alertDispatcher.Close()
+		ledgerLog.Close()
+		metadata.Close()
+		providerRegistry.Close()
+		secretVault.Close()
+		return fail(fmt.Errorf("recover pending Admin MFA audit: %w", err))
+	}
 	settings, err := metadata.RuntimeSettings()
 	if errors.Is(err, boltstore.ErrNotFound) {
 		settings = domain.RuntimeSettings{
@@ -768,11 +777,12 @@ func (r *Runtime) adminRouter() http.Handler {
 	router.Post("/admin/api/v1/session/mfa/recovery-code", r.completeAdminMFARecovery)
 	router.Delete("/admin/api/v1/session/mfa/challenge", r.cancelAdminMFAChallenge)
 	router.With(r.requireAdminBase).Get("/admin/api/v1/session", r.getAdminSession)
-	router.With(r.requireAdminMutation).Post("/admin/api/v1/session/logout", r.logoutAdmin)
+	router.With(r.requireAdminSetupMutation).Post("/admin/api/v1/session/logout", r.logoutAdmin)
 	router.With(r.requireAdminMutation).Post("/admin/api/v1/session/password", r.changeAdminPassword)
 	router.With(r.requireAdminBase).Get("/admin/api/v1/security/mfa", r.getAdminMFA)
 	router.With(r.requireAdminSetupMutation).Post("/admin/api/v1/security/mfa/authenticators", r.createAdminMFAAuthenticator)
 	router.With(r.requireAdminSetupMutation).Post("/admin/api/v1/security/mfa/authenticators/{id}/confirm", r.confirmAdminMFAAuthenticator)
+	router.With(r.requireAdminSetupMutation).Delete("/admin/api/v1/security/mfa/authenticators/{id}/pending", r.cancelPendingAdminMFAAuthenticator)
 	router.With(r.requireAdminMutation).Patch("/admin/api/v1/security/mfa/authenticators/{id}", r.renameAdminMFAAuthenticator)
 	router.With(r.requireAdminMutation).Delete("/admin/api/v1/security/mfa/authenticators/{id}", r.deleteAdminMFAAuthenticator)
 	router.With(r.requireAdminMutation).Post("/admin/api/v1/security/mfa/recovery-codes/regenerate", r.regenerateAdminMFARecoveryCodes)

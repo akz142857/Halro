@@ -29,6 +29,9 @@ var (
 	ErrKeyHashConflict  = errors.New("gateway key hash already exists")
 	ErrCredentialInUse  = errors.New("credential is still referenced")
 	ErrAdminInitialized = errors.New("an admin user already exists")
+	ErrMFARequired      = errors.New("MFA is required")
+	ErrMFALimit         = errors.New("MFA authenticator limit reached")
+	ErrMFAClaimed       = errors.New("MFA challenge is already claimed")
 	errStopIteration    = errors.New("stop iteration")
 )
 
@@ -546,11 +549,37 @@ func (s *Store) RewriteVaultMaterial(options VaultRewrite) error {
 		if err := meta.Put(keyVaultKeyring, encodedKeyring); err != nil {
 			return err
 		}
-		// Master-key rotation invalidates every active Admin session.
+		// Master-key rotation invalidates every active Admin identity and
+		// pre-auth challenge in the same transaction as the ciphertext rewrite.
+		users := tx.Bucket(bucketAdminUsers)
+		userCursor := users.Cursor()
+		for key, raw := userCursor.First(); key != nil; key, raw = userCursor.Next() {
+			var user domain.AdminUser
+			if err := json.Unmarshal(raw, &user); err != nil {
+				return err
+			}
+			user.SessionGeneration++
+			user.Revision++
+			user.UpdatedAt = time.Now().UTC()
+			encoded, err := json.Marshal(user)
+			if err != nil {
+				return err
+			}
+			if err := users.Put(key, encoded); err != nil {
+				return err
+			}
+		}
 		sessions := tx.Bucket(bucketAdminSessions)
 		sessionCursor := sessions.Cursor()
 		for key, _ := sessionCursor.First(); key != nil; key, _ = sessionCursor.Next() {
 			if err := sessionCursor.Delete(); err != nil {
+				return err
+			}
+		}
+		challenges := tx.Bucket(bucketAdminMFAChallenges)
+		challengeCursor := challenges.Cursor()
+		for key, _ := challengeCursor.First(); key != nil; key, _ = challengeCursor.Next() {
+			if err := challengeCursor.Delete(); err != nil {
 				return err
 			}
 		}
@@ -1347,6 +1376,49 @@ func (s *Store) DeleteAdminSessionsForUser(ctx context.Context, username string)
 	})
 }
 
+// InvalidateAdminAuthenticationForRestore makes credentials captured in a
+// backup unusable before that backup is published as the live data set. The
+// user generation changes and both transient authentication buckets are
+// cleared in one transaction so a restored database can never expose a mixed
+// state.
+func (s *Store) InvalidateAdminAuthenticationForRestore(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		users := tx.Bucket(bucketAdminUsers)
+		cursor := users.Cursor()
+		for key, raw := cursor.First(); key != nil; key, raw = cursor.Next() {
+			var user domain.AdminUser
+			if err := json.Unmarshal(raw, &user); err != nil {
+				return fmt.Errorf("decode admin user %q during restore: %w", key, err)
+			}
+			if user.SessionGeneration == ^uint64(0) || user.Revision == ^uint64(0) {
+				return errors.New("admin authentication version is exhausted")
+			}
+			user.SessionGeneration++
+			user.Revision++
+			encoded, err := json.Marshal(user)
+			if err != nil {
+				return err
+			}
+			if err := users.Put(key, encoded); err != nil {
+				return err
+			}
+		}
+		for _, bucketName := range [][]byte{bucketAdminSessions, bucketAdminMFAChallenges} {
+			bucket := tx.Bucket(bucketName)
+			bucketCursor := bucket.Cursor()
+			for key, _ := bucketCursor.First(); key != nil; key, _ = bucketCursor.Next() {
+				if err := bucketCursor.Delete(); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
+}
+
 func adminMFAKey(username, id string) string { return username + "\x00" + id }
 
 func (s *Store) PutAdminMFAAuthenticator(ctx context.Context, value domain.AdminMFAAuthenticator, expected uint64) (domain.AdminMFAAuthenticator, error) {
@@ -1488,15 +1560,101 @@ func (s *Store) ConsumeAdminMFARecoveryCode(ctx context.Context, username string
 	return remaining, err
 }
 
+func (s *Store) CountUnusedAdminMFARecoveryCodes(ctx context.Context, username string) (int, error) {
+	count := 0
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		prefix := []byte(username + "\x00")
+		cursor := tx.Bucket(bucketAdminMFARecoveryCodes).Cursor()
+		for key, raw := cursor.Seek(prefix); key != nil && bytes.HasPrefix(key, prefix); key, raw = cursor.Next() {
+			var code domain.AdminMFARecoveryCode
+			if err := json.Unmarshal(raw, &code); err != nil {
+				return err
+			}
+			if code.UsedAt == nil {
+				count++
+			}
+		}
+		return nil
+	})
+	return count, err
+}
+
 func (s *Store) PutAdminMFAChallenge(ctx context.Context, value domain.AdminMFAChallenge) error {
 	if err := value.Validate(); err != nil {
 		return err
 	}
-	raw, err := json.Marshal(value)
-	if err != nil {
-		return err
-	}
-	return s.db.Update(func(tx *bbolt.Tx) error { return tx.Bucket(bucketAdminMFAChallenges).Put(value.IDHash[:], raw) })
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(bucketAdminMFAChallenges)
+		cursor := bucket.Cursor()
+		for key, existingRaw := cursor.First(); key != nil; key, existingRaw = cursor.Next() {
+			var existing domain.AdminMFAChallenge
+			if err := json.Unmarshal(existingRaw, &existing); err != nil {
+				return err
+			}
+			if existing.Username == value.Username && existing.SessionGeneration == value.SessionGeneration {
+				if value.CreatedAt.Before(existing.ExpiresAt) && existing.AttemptsRemaining < value.AttemptsRemaining {
+					value.AttemptsRemaining = existing.AttemptsRemaining
+				}
+				if err := cursor.Delete(); err != nil {
+					return err
+				}
+			}
+		}
+		raw, err := json.Marshal(value)
+		if err != nil {
+			return err
+		}
+		return bucket.Put(value.IDHash[:], raw)
+	})
+}
+
+func (s *Store) ClaimAdminMFAChallenge(ctx context.Context, hash [32]byte, now time.Time) (domain.AdminMFAChallenge, error) {
+	var value domain.AdminMFAChallenge
+	err := s.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(bucketAdminMFAChallenges)
+		raw := bucket.Get(hash[:])
+		if raw == nil {
+			return ErrNotFound
+		}
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return err
+		}
+		if !now.Before(value.ExpiresAt) {
+			_ = bucket.Delete(hash[:])
+			return ErrNotFound
+		}
+		if value.AttemptsRemaining == 0 {
+			return ErrNotFound
+		}
+		if value.Claimed {
+			return ErrMFAClaimed
+		}
+		value.Claimed = true
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return err
+		}
+		return bucket.Put(hash[:], encoded)
+	})
+	return value, err
+}
+
+func (s *Store) CompleteAdminMFAChallenge(ctx context.Context, hash [32]byte) error {
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(bucketAdminMFAChallenges)
+		raw := bucket.Get(hash[:])
+		if raw == nil {
+			return ErrNotFound
+		}
+		var value domain.AdminMFAChallenge
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return err
+		}
+		if !value.Claimed {
+			return ErrRevisionConflict
+		}
+		return bucket.Delete(hash[:])
+	})
 }
 
 func (s *Store) GetAdminMFAChallenge(ctx context.Context, hash [32]byte) (domain.AdminMFAChallenge, error) {
@@ -1530,11 +1688,99 @@ func (s *Store) FailAdminMFAChallenge(ctx context.Context, hash [32]byte) error 
 			return err
 		}
 		if value.AttemptsRemaining <= 1 {
-			return bucket.Delete(hash[:])
+			value.AttemptsRemaining = 0
+			value.Claimed = false
+			encoded, err := json.Marshal(value)
+			if err != nil {
+				return err
+			}
+			return bucket.Put(hash[:], encoded)
 		}
 		value.AttemptsRemaining--
+		value.Claimed = false
 		encoded, _ := json.Marshal(value)
 		return bucket.Put(hash[:], encoded)
+	})
+}
+
+func (s *Store) ActivateAdminMFAAuthenticator(ctx context.Context, username, id string, step int64, now time.Time, limit int) error {
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(bucketAdminMFAAuthenticators)
+		prefix := []byte(username + "\x00")
+		active := 0
+		cursor := bucket.Cursor()
+		for key, raw := cursor.Seek(prefix); key != nil && bytes.HasPrefix(key, prefix); key, raw = cursor.Next() {
+			var value domain.AdminMFAAuthenticator
+			if err := json.Unmarshal(raw, &value); err != nil {
+				return err
+			}
+			if value.Status == domain.AdminMFAStatusActive {
+				active++
+			}
+		}
+		if active >= limit {
+			return ErrMFALimit
+		}
+		key := []byte(adminMFAKey(username, id))
+		raw := bucket.Get(key)
+		if raw == nil {
+			return ErrNotFound
+		}
+		var value domain.AdminMFAAuthenticator
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return err
+		}
+		if value.Status != domain.AdminMFAStatusPending || value.ExpiresAt == nil || !now.Before(*value.ExpiresAt) {
+			return ErrRevisionConflict
+		}
+		value.Status, value.ConfirmedAt, value.ExpiresAt = domain.AdminMFAStatusActive, &now, nil
+		value.LastAcceptedTimeStep = step
+		value.Revision++
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return err
+		}
+		return bucket.Put(key, encoded)
+	})
+}
+
+func (s *Store) RevokeAdminMFAAuthenticator(ctx context.Context, username, id string, required bool) error {
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(bucketAdminMFAAuthenticators)
+		prefix := []byte(username + "\x00")
+		active := 0
+		cursor := bucket.Cursor()
+		for key, raw := cursor.Seek(prefix); key != nil && bytes.HasPrefix(key, prefix); key, raw = cursor.Next() {
+			var value domain.AdminMFAAuthenticator
+			if err := json.Unmarshal(raw, &value); err != nil {
+				return err
+			}
+			if value.Status == domain.AdminMFAStatusActive {
+				active++
+			}
+		}
+		key := []byte(adminMFAKey(username, id))
+		raw := bucket.Get(key)
+		if raw == nil {
+			return ErrNotFound
+		}
+		var value domain.AdminMFAAuthenticator
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return err
+		}
+		if value.Status != domain.AdminMFAStatusActive {
+			return ErrRevisionConflict
+		}
+		if required && active <= 1 {
+			return ErrMFARequired
+		}
+		value.Status, value.SecretCiphertext = domain.AdminMFAStatusRevoked, nil
+		value.Revision++
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return err
+		}
+		return bucket.Put(key, encoded)
 	})
 }
 
@@ -1565,6 +1811,382 @@ func (s *Store) DeleteAdminMFAForUser(ctx context.Context, username string) erro
 		}
 		return nil
 	})
+}
+
+// RotateAdminIdentity atomically advances the security generation and removes
+// every session and pre-auth challenge for one administrator.
+func (s *Store) RotateAdminIdentity(ctx context.Context, username string) (domain.AdminUser, error) {
+	var user domain.AdminUser
+	err := s.db.Update(func(tx *bbolt.Tx) error {
+		var err error
+		user, err = rotateAdminIdentityTx(tx, username)
+		return err
+	})
+	return user, err
+}
+
+func rotateAdminIdentityTx(tx *bbolt.Tx, username string) (domain.AdminUser, error) {
+	users := tx.Bucket(bucketAdminUsers)
+	raw := users.Get([]byte(username))
+	if raw == nil {
+		return domain.AdminUser{}, ErrNotFound
+	}
+	var user domain.AdminUser
+	if err := json.Unmarshal(raw, &user); err != nil {
+		return user, err
+	}
+	if user.SessionGeneration == ^uint64(0) || user.Revision == ^uint64(0) {
+		return user, errors.New("admin identity version exhausted")
+	}
+	user.SessionGeneration++
+	user.Revision++
+	user.UpdatedAt = time.Now().UTC()
+	encoded, err := json.Marshal(user)
+	if err != nil {
+		return user, err
+	}
+	if err = users.Put([]byte(username), encoded); err != nil {
+		return user, err
+	}
+	if err = deleteAdminIdentityRecords(tx, username, false); err != nil {
+		return user, err
+	}
+	return user, nil
+}
+
+func setPendingMFAAuditTx(tx *bbolt.Tx, user *domain.AdminUser, intent domain.AdminMFAAuditIntent) error {
+	if err := intent.Validate(); err != nil {
+		return err
+	}
+	if user.PendingMFAAudit != nil && user.PendingMFAAudit.EventID != intent.EventID {
+		return errors.New("a previous MFA audit event is still pending delivery")
+	}
+	user.PendingMFAAudit = &intent
+	encoded, err := json.Marshal(*user)
+	if err != nil {
+		return err
+	}
+	return tx.Bucket(bucketAdminUsers).Put([]byte(user.Username), encoded)
+}
+
+func (s *Store) ClearPendingAdminMFAAudit(ctx context.Context, username, eventID string) error {
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(bucketAdminUsers)
+		raw := bucket.Get([]byte(username))
+		if raw == nil {
+			return ErrNotFound
+		}
+		var user domain.AdminUser
+		if err := json.Unmarshal(raw, &user); err != nil {
+			return err
+		}
+		if user.PendingMFAAudit == nil {
+			return nil
+		}
+		if user.PendingMFAAudit.EventID != eventID {
+			return ErrRevisionConflict
+		}
+		user.PendingMFAAudit = nil
+		encoded, err := json.Marshal(user)
+		if err != nil {
+			return err
+		}
+		return bucket.Put([]byte(username), encoded)
+	})
+}
+
+func (s *Store) ListPendingAdminMFAAudits(ctx context.Context) ([]domain.AdminMFAAuditIntent, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	var values []domain.AdminMFAAuditIntent
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		return tx.Bucket(bucketAdminUsers).ForEach(func(_, raw []byte) error {
+			var user domain.AdminUser
+			if err := json.Unmarshal(raw, &user); err != nil {
+				return err
+			}
+			if user.PendingMFAAudit != nil {
+				values = append(values, *user.PendingMFAAudit)
+			}
+			return nil
+		})
+	})
+	return values, err
+}
+
+func replaceAdminMFARecoveryCodesTx(tx *bbolt.Tx, username string, codes []domain.AdminMFARecoveryCode) error {
+	for _, code := range codes {
+		if err := code.Validate(); err != nil {
+			return err
+		}
+		if code.Username != username {
+			return errors.New("MFA recovery code owner does not match")
+		}
+	}
+	bucket := tx.Bucket(bucketAdminMFARecoveryCodes)
+	prefix := []byte(username + "\x00")
+	cursor := bucket.Cursor()
+	for key, _ := cursor.Seek(prefix); key != nil && bytes.HasPrefix(key, prefix); key, _ = cursor.Next() {
+		if err := cursor.Delete(); err != nil {
+			return err
+		}
+	}
+	for _, code := range codes {
+		raw, err := json.Marshal(code)
+		if err != nil {
+			return err
+		}
+		if err = bucket.Put([]byte(adminMFAKey(username, code.ID)), raw); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ConfirmAdminMFAEnrollment atomically activates a pending factor, creates the
+// first recovery-code set when supplied, and rotates the administrator identity.
+func (s *Store) ConfirmAdminMFAEnrollment(ctx context.Context, username, id string, step int64, now time.Time, limit int, codes []domain.AdminMFARecoveryCode, intent domain.AdminMFAAuditIntent) (domain.AdminUser, bool, error) {
+	var user domain.AdminUser
+	first := false
+	err := s.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(bucketAdminMFAAuthenticators)
+		prefix := []byte(username + "\x00")
+		active := 0
+		cursor := bucket.Cursor()
+		for key, raw := cursor.Seek(prefix); key != nil && bytes.HasPrefix(key, prefix); key, raw = cursor.Next() {
+			var value domain.AdminMFAAuthenticator
+			if err := json.Unmarshal(raw, &value); err != nil {
+				return err
+			}
+			if value.Status == domain.AdminMFAStatusActive {
+				active++
+			}
+		}
+		if active >= limit {
+			return ErrMFALimit
+		}
+		key := []byte(adminMFAKey(username, id))
+		raw := bucket.Get(key)
+		if raw == nil {
+			return ErrNotFound
+		}
+		var value domain.AdminMFAAuthenticator
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return err
+		}
+		if value.Status != domain.AdminMFAStatusPending || value.ExpiresAt == nil || !now.Before(*value.ExpiresAt) {
+			return ErrRevisionConflict
+		}
+		value.Status = domain.AdminMFAStatusActive
+		value.ConfirmedAt = &now
+		value.ExpiresAt = nil
+		value.LastAcceptedTimeStep = step
+		value.Revision++
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return err
+		}
+		if err = bucket.Put(key, encoded); err != nil {
+			return err
+		}
+		if active == 0 {
+			if len(codes) == 0 {
+				return errors.New("first MFA authenticator requires recovery codes")
+			}
+			if err = replaceAdminMFARecoveryCodesTx(tx, username, codes); err != nil {
+				return err
+			}
+			first = true
+		}
+		user, err = rotateAdminIdentityTx(tx, username)
+		if err != nil {
+			return err
+		}
+		return setPendingMFAAuditTx(tx, &user, intent)
+	})
+	return user, first, err
+}
+
+func (s *Store) ReplaceAdminMFARecoveryCodesAndRotate(ctx context.Context, username string, codes []domain.AdminMFARecoveryCode, intent domain.AdminMFAAuditIntent) (domain.AdminUser, error) {
+	var user domain.AdminUser
+	err := s.db.Update(func(tx *bbolt.Tx) error {
+		if err := replaceAdminMFARecoveryCodesTx(tx, username, codes); err != nil {
+			return err
+		}
+		var err error
+		user, err = rotateAdminIdentityTx(tx, username)
+		if err != nil {
+			return err
+		}
+		return setPendingMFAAuditTx(tx, &user, intent)
+	})
+	return user, err
+}
+
+func (s *Store) RevokeAdminMFAAuthenticatorAndRotate(ctx context.Context, username, id string, required bool, clearRecovery bool, intent domain.AdminMFAAuditIntent) (domain.AdminUser, error) {
+	var user domain.AdminUser
+	err := s.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(bucketAdminMFAAuthenticators)
+		prefix := []byte(username + "\x00")
+		active := 0
+		cursor := bucket.Cursor()
+		for key, raw := cursor.Seek(prefix); key != nil && bytes.HasPrefix(key, prefix); key, raw = cursor.Next() {
+			var value domain.AdminMFAAuthenticator
+			if err := json.Unmarshal(raw, &value); err != nil {
+				return err
+			}
+			if value.Status == domain.AdminMFAStatusActive {
+				active++
+			}
+		}
+		key := []byte(adminMFAKey(username, id))
+		raw := bucket.Get(key)
+		if raw == nil {
+			return ErrNotFound
+		}
+		var value domain.AdminMFAAuthenticator
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return err
+		}
+		if value.Status != domain.AdminMFAStatusActive {
+			return ErrRevisionConflict
+		}
+		if required && active <= 1 {
+			return ErrMFARequired
+		}
+		value.Status = domain.AdminMFAStatusRevoked
+		value.SecretCiphertext = nil
+		value.Revision++
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return err
+		}
+		if err = bucket.Put(key, encoded); err != nil {
+			return err
+		}
+		if clearRecovery || active <= 1 {
+			if err = replaceAdminMFARecoveryCodesTx(tx, username, nil); err != nil {
+				return err
+			}
+		}
+		user, err = rotateAdminIdentityTx(tx, username)
+		if err != nil {
+			return err
+		}
+		return setPendingMFAAuditTx(tx, &user, intent)
+	})
+	return user, err
+}
+
+func (s *Store) DisableAdminMFAAndRotate(ctx context.Context, username string, recoveryHash *[32]byte, intent domain.AdminMFAAuditIntent) (domain.AdminUser, error) {
+	var user domain.AdminUser
+	err := s.db.Update(func(tx *bbolt.Tx) error {
+		if recoveryHash != nil {
+			matched := false
+			bucket := tx.Bucket(bucketAdminMFARecoveryCodes)
+			prefix := []byte(username + "\x00")
+			cursor := bucket.Cursor()
+			for key, raw := cursor.Seek(prefix); key != nil && bytes.HasPrefix(key, prefix); key, raw = cursor.Next() {
+				var code domain.AdminMFARecoveryCode
+				if err := json.Unmarshal(raw, &code); err != nil {
+					return err
+				}
+				if code.UsedAt == nil && subtle.ConstantTimeCompare(code.CodeHash[:], recoveryHash[:]) == 1 {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				return ErrNotFound
+			}
+		}
+		for _, bucketName := range [][]byte{bucketAdminMFAAuthenticators, bucketAdminMFARecoveryCodes} {
+			bucket := tx.Bucket(bucketName)
+			prefix := []byte(username + "\x00")
+			cursor := bucket.Cursor()
+			for key, _ := cursor.Seek(prefix); key != nil && bytes.HasPrefix(key, prefix); key, _ = cursor.Next() {
+				if err := cursor.Delete(); err != nil {
+					return err
+				}
+			}
+		}
+		var err error
+		user, err = rotateAdminIdentityTx(tx, username)
+		if err != nil {
+			return err
+		}
+		return setPendingMFAAuditTx(tx, &user, intent)
+	})
+	return user, err
+}
+
+// ResetAdminMFAIdentity additionally removes authenticators and recovery codes
+// in the same transaction as identity invalidation.
+func (s *Store) ResetAdminMFAIdentity(ctx context.Context, username string) (domain.AdminUser, error) {
+	var user domain.AdminUser
+	err := s.db.Update(func(tx *bbolt.Tx) error {
+		users := tx.Bucket(bucketAdminUsers)
+		raw := users.Get([]byte(username))
+		if raw == nil {
+			return ErrNotFound
+		}
+		if err := json.Unmarshal(raw, &user); err != nil {
+			return err
+		}
+		user.SessionGeneration++
+		user.Revision++
+		user.UpdatedAt = time.Now().UTC()
+		encoded, err := json.Marshal(user)
+		if err != nil {
+			return err
+		}
+		if err := users.Put([]byte(username), encoded); err != nil {
+			return err
+		}
+		return deleteAdminIdentityRecords(tx, username, true)
+	})
+	return user, err
+}
+
+func deleteAdminIdentityRecords(tx *bbolt.Tx, username string, includeMFA bool) error {
+	for _, bucketName := range [][]byte{bucketAdminSessions, bucketAdminMFAChallenges} {
+		bucket := tx.Bucket(bucketName)
+		cursor := bucket.Cursor()
+		for key, raw := cursor.First(); key != nil; key, raw = cursor.Next() {
+			matches := false
+			if bytes.Equal(bucketName, bucketAdminSessions) {
+				var value domain.AdminSession
+				if err := json.Unmarshal(raw, &value); err != nil {
+					return err
+				}
+				matches = value.Username == username
+			} else {
+				var value domain.AdminMFAChallenge
+				if err := json.Unmarshal(raw, &value); err != nil {
+					return err
+				}
+				matches = value.Username == username
+			}
+			if matches {
+				if err := cursor.Delete(); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	if includeMFA {
+		prefix := []byte(username + "\x00")
+		for _, bucketName := range [][]byte{bucketAdminMFAAuthenticators, bucketAdminMFARecoveryCodes} {
+			cursor := tx.Bucket(bucketName).Cursor()
+			for key, _ := cursor.Seek(prefix); key != nil && bytes.HasPrefix(key, prefix); key, _ = cursor.Next() {
+				if err := cursor.Delete(); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func (s *Store) PutCredential(ctx context.Context, credential domain.Credential, expectedRevision uint64) (domain.Credential, error) {

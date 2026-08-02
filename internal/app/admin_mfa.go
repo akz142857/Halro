@@ -2,13 +2,16 @@ package app
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/akz142857/Heimdall/internal/adminauth"
+	"github.com/akz142857/Heimdall/internal/audit"
 	"github.com/akz142857/Heimdall/internal/domain"
 	"github.com/akz142857/Heimdall/internal/id"
+	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -19,6 +22,37 @@ type adminMFAPublicAuthenticator struct {
 	CreatedAt  time.Time  `json:"created_at"`
 	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
 	Revision   uint64     `json:"revision"`
+}
+
+func newAdminMFAAuditIntent(username, action, targetType, targetID string) (domain.AdminMFAAuditIntent, error) {
+	eventID, err := id.New("aud")
+	if err != nil {
+		return domain.AdminMFAAuditIntent{}, err
+	}
+	return domain.AdminMFAAuditIntent{EventID: eventID, OccurredAt: time.Now().UTC(), ActorID: username, Action: action, TargetType: targetType, TargetID: targetID}, nil
+}
+
+func (r *Runtime) deliverAdminMFAAuditIntent(ctx context.Context, intent domain.AdminMFAAuditIntent) error {
+	if _, err := r.audit.Append(ctx, audit.Event{EventID: intent.EventID, OccurredAt: intent.OccurredAt, ActorType: "admin_user", ActorID: intent.ActorID, Action: intent.Action, TargetType: intent.TargetType, TargetID: intent.TargetID, Outcome: "success"}); err != nil {
+		return err
+	}
+	if err := checkpointAudit(r.store, r.audit.Summary()); err != nil {
+		return err
+	}
+	return r.store.ClearPendingAdminMFAAudit(ctx, intent.ActorID, intent.EventID)
+}
+
+func (r *Runtime) drainAdminMFAAuditIntents(ctx context.Context) error {
+	intents, err := r.store.ListPendingAdminMFAAudits(ctx)
+	if err != nil {
+		return err
+	}
+	for _, intent := range intents {
+		if err = r.deliverAdminMFAAuditIntent(ctx, intent); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *Runtime) activeAdminMFA(ctx context.Context, username string) ([]domain.AdminMFAAuthenticator, error) {
@@ -46,7 +80,12 @@ func (r *Runtime) getAdminMFA(w http.ResponseWriter, req *http.Request) {
 	for _, a := range active {
 		items = append(items, adminMFAPublicAuthenticator{a.ID, a.Name, a.Type, a.CreatedAt, a.LastUsedAt, a.Revision})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"enabled": len(items) > 0, "policy": r.config.Admin.MFAPolicy, "authenticators": items})
+	remaining, err := r.store.CountUnusedAdminMFARecoveryCodes(req.Context(), admin.session.Username)
+	if err != nil {
+		adminStoreError(w)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"enabled": len(items) > 0, "policy": r.config.Admin.MFAPolicy, "authenticators": items, "recovery_codes_remaining": remaining})
 }
 
 func (r *Runtime) createAdminMFAAuthenticator(w http.ResponseWriter, req *http.Request) {
@@ -122,7 +161,10 @@ func (r *Runtime) createAdminMFAAuthenticator(w http.ResponseWriter, req *http.R
 		writeJSON(w, 400, map[string]string{"error": "invalid authenticator"})
 		return
 	}
-	_ = r.appendAdminAudit("admin_user", user.Username, "admin.mfa.enrollment.started", "admin_mfa_authenticator", authID, "success", "")
+	if err = r.appendAdminAudit("admin_user", user.Username, "admin.mfa.enrollment.started", "admin_mfa_authenticator", authID, "success", ""); err != nil {
+		adminStoreError(w)
+		return
+	}
 	writeJSON(w, 201, map[string]any{"id": stored.ID, "name": stored.Name, "secret": adminauth.TOTPSecretBase32(secret), "otpauth_uri": adminauth.TOTPUri("Heimdall", user.Username, secret), "expires_at": expiry, "revision": stored.Revision})
 }
 
@@ -152,28 +194,32 @@ func (r *Runtime) confirmAdminMFAAuthenticator(w http.ResponseWriter, req *http.
 		return
 	}
 	now := time.Now().UTC()
-	a.Status = domain.AdminMFAStatusActive
-	a.ConfirmedAt = &now
-	a.ExpiresAt = nil
-	a.LastAcceptedTimeStep = step
-	if _, err = r.store.PutAdminMFAAuthenticator(req.Context(), a, a.Revision); err != nil {
+	recovery, records, err := newRecoveryCodes(a.Username, 1)
+	if err != nil {
 		adminStoreError(w)
 		return
 	}
-	active, _ := r.activeAdminMFA(req.Context(), a.Username)
-	recovery := []string(nil)
-	if len(active) == 1 {
-		recovery, err = r.replaceRecoveryCodes(req.Context(), a.Username, 1)
-		if err != nil {
-			adminStoreError(w)
-			return
-		}
-	}
-	if err := r.rotateAdminIdentity(req.Context(), w, a.Username); err != nil {
+	intent, err := newAdminMFAAuditIntent(a.Username, "admin.mfa.authenticator.added", "admin_mfa_authenticator", a.ID)
+	if err != nil {
 		adminStoreError(w)
 		return
 	}
-	_ = r.appendAdminAudit("admin_user", a.Username, "admin.mfa.authenticator.added", "admin_mfa_authenticator", a.ID, "success", "")
+	rotatedUser, first, err := r.store.ConfirmAdminMFAEnrollment(req.Context(), a.Username, a.ID, step, now, 5, records, intent)
+	if err != nil {
+		adminStoreError(w)
+		return
+	}
+	if !first {
+		recovery = nil
+	}
+	if err := r.installRotatedAdminSession(req.Context(), w, rotatedUser); err != nil {
+		adminStoreError(w)
+		return
+	}
+	if err = r.deliverAdminMFAAuditIntent(req.Context(), intent); err != nil {
+		adminStoreError(w)
+		return
+	}
 	writeJSON(w, 200, map[string]any{"status": "enabled", "recovery_codes": recovery})
 }
 
@@ -229,9 +275,8 @@ func (r *Runtime) completeMFA(w http.ResponseWriter, req *http.Request, token, c
 		writeJSON(w, 401, map[string]string{"error": "invalid credentials"})
 		return
 	}
-	challenge, err := r.store.GetAdminMFAChallenge(req.Context(), hash)
-	if err != nil || !time.Now().Before(challenge.ExpiresAt) {
-		_ = r.store.DeleteAdminMFAChallenge(context.Background(), hash)
+	challenge, err := r.store.ClaimAdminMFAChallenge(req.Context(), hash, time.Now())
+	if err != nil {
 		writeJSON(w, 401, map[string]string{"error": "invalid credentials"})
 		return
 	}
@@ -242,8 +287,9 @@ func (r *Runtime) completeMFA(w http.ResponseWriter, req *http.Request, token, c
 		return
 	}
 	ok := false
+	recoveryRemaining := 0
 	if recovery {
-		_, err = r.store.ConsumeAdminMFARecoveryCode(req.Context(), user.Username, adminauth.RecoveryCodeHash(code), time.Now())
+		recoveryRemaining, err = r.store.ConsumeAdminMFARecoveryCode(req.Context(), user.Username, adminauth.RecoveryCodeHash(code), time.Now())
 		ok = err == nil
 	} else {
 		active, _ := r.activeAdminMFA(req.Context(), user.Username)
@@ -254,7 +300,10 @@ func (r *Runtime) completeMFA(w http.ResponseWriter, req *http.Request, token, c
 		writeJSON(w, 401, map[string]string{"error": "invalid credentials"})
 		return
 	}
-	_ = r.store.DeleteAdminMFAChallenge(context.Background(), hash)
+	if err = r.store.CompleteAdminMFAChallenge(req.Context(), hash); err != nil {
+		adminStoreError(w)
+		return
+	}
 	created, err := r.adminSessions.Create(req.Context(), user, time.Now())
 	if err != nil {
 		adminStoreError(w)
@@ -270,7 +319,26 @@ func (r *Runtime) completeMFA(w http.ResponseWriter, req *http.Request, token, c
 		return
 	}
 	r.setAdminCookie(w, created.Token, created.Session.AbsoluteExpiresAt)
-	writeJSON(w, 200, map[string]any{"username": user.Username, "csrf_token": created.CSRFToken, "locale": domain.NormalizeLocalePreference(user.Locale), "absolute_expires_at": created.Session.AbsoluteExpiresAt, "idle_expires_at": created.Session.IdleExpiresAt})
+	writeJSON(w, 200, map[string]any{"username": user.Username, "csrf_token": created.CSRFToken, "locale": domain.NormalizeLocalePreference(user.Locale), "absolute_expires_at": created.Session.AbsoluteExpiresAt, "idle_expires_at": created.Session.IdleExpiresAt, "recovery_codes_remaining": recoveryRemaining})
+}
+
+func (r *Runtime) cancelPendingAdminMFAAuthenticator(w http.ResponseWriter, req *http.Request) {
+	admin := req.Context().Value(adminContextKey{}).(adminRequestContext)
+	a, err := r.store.GetAdminMFAAuthenticator(req.Context(), admin.session.Username, chi.URLParam(req, "id"))
+	if err != nil || a.Status != domain.AdminMFAStatusPending {
+		writeJSON(w, 404, map[string]string{"error": "authenticator not found"})
+		return
+	}
+	a.Status, a.SecretCiphertext = domain.AdminMFAStatusRevoked, nil
+	if _, err = r.store.PutAdminMFAAuthenticator(req.Context(), a, a.Revision); err != nil {
+		adminStoreError(w)
+		return
+	}
+	if err = r.appendAdminAudit("admin_user", a.Username, "admin.mfa.enrollment.cancelled", "admin_mfa_authenticator", a.ID, "success", ""); err != nil {
+		adminStoreError(w)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "cancelled"})
 }
 
 func (r *Runtime) verifyAnyTOTP(ctx context.Context, active []domain.AdminMFAAuthenticator, code string, now time.Time) (string, bool) {
@@ -289,36 +357,41 @@ func (r *Runtime) verifyAnyTOTP(ctx context.Context, active []domain.AdminMFAAut
 }
 
 func (r *Runtime) replaceRecoveryCodes(ctx context.Context, username string, generation uint64) ([]string, error) {
+	displays, records, err := newRecoveryCodes(username, generation)
+	if err != nil {
+		return nil, err
+	}
+	return displays, r.store.ReplaceAdminMFARecoveryCodes(ctx, username, records)
+}
+
+func newRecoveryCodes(username string, generation uint64) ([]string, []domain.AdminMFARecoveryCode, error) {
 	displays := make([]string, 10)
 	records := make([]domain.AdminMFARecoveryCode, 10)
 	now := time.Now().UTC()
 	for i := range records {
 		display, hash, err := adminauth.NewRecoveryCode()
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		codeID, err := id.New("mrc")
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		displays[i] = display
 		records[i] = domain.AdminMFARecoveryCode{ID: codeID, Username: username, CodeHash: hash, CreatedAt: now, Generation: generation}
 	}
-	return displays, r.store.ReplaceAdminMFARecoveryCodes(ctx, username, records)
+	return displays, records, nil
 }
 
 func (r *Runtime) rotateAdminIdentity(ctx context.Context, w http.ResponseWriter, username string) error {
-	user, err := r.store.GetAdminUser(ctx, username)
+	user, err := r.store.RotateAdminIdentity(ctx, username)
 	if err != nil {
 		return err
 	}
-	user.SessionGeneration++
-	if _, err = r.store.PutAdminUser(ctx, user, user.Revision); err != nil {
-		return err
-	}
-	if err = r.store.DeleteAdminSessionsForUser(ctx, username); err != nil {
-		return err
-	}
+	return r.installRotatedAdminSession(ctx, w, user)
+}
+
+func (r *Runtime) installRotatedAdminSession(ctx context.Context, w http.ResponseWriter, user domain.AdminUser) error {
 	created, err := r.adminSessions.Create(ctx, user, time.Now())
 	if err != nil {
 		return err
@@ -346,7 +419,10 @@ func (r *Runtime) renameAdminMFAAuthenticator(w http.ResponseWriter, req *http.R
 		writeJSON(w, 400, map[string]string{"error": "invalid authenticator"})
 		return
 	}
-	_ = r.appendAdminAudit("admin_user", a.Username, "admin.mfa.authenticator.renamed", "admin_mfa_authenticator", a.ID, "success", "")
+	if err = r.appendAdminAudit("admin_user", a.Username, "admin.mfa.authenticator.renamed", "admin_mfa_authenticator", a.ID, "success", ""); err != nil {
+		adminStoreError(w)
+		return
+	}
 	writeJSON(w, 200, map[string]string{"status": "renamed"})
 }
 
@@ -390,26 +466,29 @@ func (r *Runtime) deleteAdminMFAAuthenticator(w http.ResponseWriter, req *http.R
 			return
 		}
 	}
-	a, err := r.store.GetAdminMFAAuthenticator(req.Context(), user.Username, target)
+	_, err = r.store.GetAdminMFAAuthenticator(req.Context(), user.Username, target)
 	if err != nil {
 		writeJSON(w, 404, map[string]string{"error": "authenticator not found"})
 		return
 	}
-	a.Status = domain.AdminMFAStatusRevoked
-	clear(a.SecretCiphertext)
-	a.SecretCiphertext = nil
-	if _, err = r.store.PutAdminMFAAuthenticator(req.Context(), a, a.Revision); err != nil {
+	intent, err := newAdminMFAAuditIntent(user.Username, "admin.mfa.authenticator.revoked", "admin_mfa_authenticator", target)
+	if err != nil {
 		adminStoreError(w)
 		return
 	}
-	if len(others) == 0 {
-		_ = r.store.ReplaceAdminMFARecoveryCodes(req.Context(), user.Username, nil)
-	}
-	if err = r.rotateAdminIdentity(req.Context(), w, user.Username); err != nil {
+	rotatedUser, err := r.store.RevokeAdminMFAAuthenticatorAndRotate(req.Context(), user.Username, target, r.config.Admin.MFAPolicy == "required", len(others) == 0, intent)
+	if err != nil {
 		adminStoreError(w)
 		return
 	}
-	_ = r.appendAdminAudit("admin_user", user.Username, "admin.mfa.authenticator.revoked", "admin_mfa_authenticator", target, "success", "")
+	if err = r.installRotatedAdminSession(req.Context(), w, rotatedUser); err != nil {
+		adminStoreError(w)
+		return
+	}
+	if err = r.deliverAdminMFAAuditIntent(req.Context(), intent); err != nil {
+		adminStoreError(w)
+		return
+	}
 	writeJSON(w, 200, map[string]string{"status": "revoked"})
 }
 
@@ -435,16 +514,29 @@ func (r *Runtime) regenerateAdminMFARecoveryCodes(w http.ResponseWriter, req *ht
 		writeJSON(w, 401, map[string]string{"error": "invalid credentials"})
 		return
 	}
-	codes, err := r.replaceRecoveryCodes(req.Context(), user.Username, uint64(time.Now().UnixNano()))
+	codes, records, err := newRecoveryCodes(user.Username, uint64(time.Now().UnixNano()))
 	if err != nil {
 		adminStoreError(w)
 		return
 	}
-	if err = r.rotateAdminIdentity(req.Context(), w, user.Username); err != nil {
+	intent, err := newAdminMFAAuditIntent(user.Username, "admin.mfa.recovery_codes.regenerated", "admin_user", user.Username)
+	if err != nil {
 		adminStoreError(w)
 		return
 	}
-	_ = r.appendAdminAudit("admin_user", user.Username, "admin.mfa.recovery_codes.regenerated", "admin_user", user.Username, "success", "")
+	rotatedUser, err := r.store.ReplaceAdminMFARecoveryCodesAndRotate(req.Context(), user.Username, records, intent)
+	if err != nil {
+		adminStoreError(w)
+		return
+	}
+	if err = r.installRotatedAdminSession(req.Context(), w, rotatedUser); err != nil {
+		adminStoreError(w)
+		return
+	}
+	if err = r.deliverAdminMFAAuditIntent(req.Context(), intent); err != nil {
+		adminStoreError(w)
+		return
+	}
 	writeJSON(w, 200, map[string]any{"recovery_codes": codes})
 }
 
@@ -470,18 +562,32 @@ func (r *Runtime) disableAdminMFA(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, 401, map[string]string{"error": "invalid credentials"})
 		return
 	}
+	var recoveryHash *[32]byte
 	if _, ok := r.verifyAnyTOTP(req.Context(), active, in.Code, time.Now()); !ok {
-		writeJSON(w, 401, map[string]string{"error": "invalid credentials"})
-		return
+		hash := adminauth.RecoveryCodeHash(in.Code)
+		recoveryHash = &hash
 	}
-	if err = r.store.DeleteAdminMFAForUser(req.Context(), user.Username); err != nil {
+	intent, err := newAdminMFAAuditIntent(user.Username, "admin.mfa.disabled", "admin_user", user.Username)
+	if err != nil {
 		adminStoreError(w)
 		return
 	}
-	if err = r.rotateAdminIdentity(req.Context(), w, user.Username); err != nil {
+	rotatedUser, err := r.store.DisableAdminMFAAndRotate(req.Context(), user.Username, recoveryHash, intent)
+	if err != nil {
+		if errors.Is(err, boltstore.ErrNotFound) {
+			writeJSON(w, 401, map[string]string{"error": "invalid credentials"})
+			return
+		}
 		adminStoreError(w)
 		return
 	}
-	_ = r.appendAdminAudit("admin_user", user.Username, "admin.mfa.disabled", "admin_user", user.Username, "success", "")
+	if err = r.installRotatedAdminSession(req.Context(), w, rotatedUser); err != nil {
+		adminStoreError(w)
+		return
+	}
+	if err = r.deliverAdminMFAAuditIntent(req.Context(), intent); err != nil {
+		adminStoreError(w)
+		return
+	}
 	writeJSON(w, 200, map[string]string{"status": "disabled"})
 }

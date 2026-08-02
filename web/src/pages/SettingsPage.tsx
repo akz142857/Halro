@@ -5,18 +5,20 @@ import QRCode from "qrcode";
 import { api } from "../api";
 import { ErrorState, Field, Loading, PageHeader, StatusDot } from "../components";
 import { applyPreference } from "../i18n";
+import { setNavigationBlocked } from "../navigation";
 import type { AdminPreferences, InstanceUISettings, LocalePreference, SupportedLocale } from "../types";
 
-export function SettingsPage() {
+export function SettingsPage({ mfaSetupRequired = false }: { mfaSetupRequired?: boolean }) {
   const { t } = useTranslation();
   const status = useQuery({
     queryKey: ["system-status"],
     queryFn: api.systemStatus,
     refetchInterval: 15_000,
+    enabled: !mfaSetupRequired,
   });
-  const settings = useQuery({ queryKey: ["settings"], queryFn: api.settings });
-  const uiSettings = useQuery({ queryKey: ["ui-settings"], queryFn: api.uiSettings });
-  const preferences = useQuery({ queryKey: ["preferences"], queryFn: api.preferences });
+  const settings = useQuery({ queryKey: ["settings"], queryFn: api.settings, enabled: !mfaSetupRequired });
+  const uiSettings = useQuery({ queryKey: ["ui-settings"], queryFn: api.uiSettings, enabled: !mfaSetupRequired });
+  const preferences = useQuery({ queryKey: ["preferences"], queryFn: api.preferences, enabled: !mfaSetupRequired });
   const pending = status.isPending || settings.isPending || uiSettings.isPending || preferences.isPending;
   const error = status.error || settings.error || uiSettings.error || preferences.error;
   const accountingLabels = [t("settings.healthy"), t("settings.degraded"), t("settings.unavailable"), t("settings.recoveryRequired")];
@@ -33,18 +35,18 @@ export function SettingsPage() {
     <>
       <PageHeader
         eyebrow={t("settings.eyebrow")}
-        title={t("settings.title")}
-        description={t("settings.description")}
+        title={mfaSetupRequired?t("settings.mfaRequiredTitle"):t("settings.title")}
+        description={mfaSetupRequired?t("settings.mfaRequiredDescription"):t("settings.description")}
       />
-      {pending && <Loading />}
+      {!mfaSetupRequired&&pending && <Loading />}
       {error && <ErrorState error={error} />}
-      {uiSettings.data && preferences.data && (
+      {!mfaSetupRequired&&uiSettings.data && preferences.data && (
         <LanguageSettingsForm ui={uiSettings.data.data} preferences={preferences.data.data} />
       )}
-      {settings.data && <RuntimeSettingsForm settings={settings.data.data} />}
-      <PasswordChangeForm />
+      {!mfaSetupRequired&&settings.data && <RuntimeSettingsForm settings={settings.data.data} />}
+      {!mfaSetupRequired&&<PasswordChangeForm />}
       <MFASettings />
-      {status.data && (
+      {!mfaSetupRequired&&status.data && (
         <div className="settings-grid">
           <section className="panel system-card">
             <p className="eyebrow">{t("settings.build")}</p>
@@ -79,25 +81,65 @@ export function SettingsPage() {
   );
 }
 
-function MFASettings() {
-  const { t } = useTranslation(); const queryClient = useQueryClient();
-  const status = useQuery({queryKey:["mfa"],queryFn:api.mfaStatus}); const [name,setName]=useState(""); const [password,setPassword]=useState(""); const [approvalCode,setApprovalCode]=useState(""); const [confirmCode,setConfirmCode]=useState(""); const [enrollment,setEnrollment]=useState<Awaited<ReturnType<typeof api.createMFAAuthenticator>>|null>(null); const [recovery,setRecovery]=useState<string[]>([]);
-  const [actionTarget,setActionTarget]=useState(""); const [actionPassword,setActionPassword]=useState(""); const [actionCode,setActionCode]=useState("");
-  const create=useMutation({mutationFn:()=>api.createMFAAuthenticator(name,password,approvalCode),onSuccess:(value)=>{setEnrollment(value);setPassword("");setApprovalCode("")}});
-  const confirm=useMutation({mutationFn:()=>api.confirmMFAAuthenticator(enrollment!.id,confirmCode),onSuccess:async(value)=>{setRecovery(value.recovery_codes||[]);setEnrollment(null);setConfirmCode("");await queryClient.invalidateQueries({queryKey:["mfa"]});await queryClient.invalidateQueries({queryKey:["session"]})}});
-  const revoke=useMutation({mutationFn:()=>api.deleteMFAAuthenticator(actionTarget,actionPassword,actionCode),onSuccess:async()=>{setActionTarget("");setActionPassword("");setActionCode("");await queryClient.invalidateQueries({queryKey:["mfa"]});await queryClient.invalidateQueries({queryKey:["session"]})}});
-  const regenerate=useMutation({mutationFn:()=>api.regenerateMFARecoveryCodes(actionPassword,actionCode),onSuccess:async(value)=>{setRecovery(value.recovery_codes);setActionPassword("");setActionCode("");await queryClient.invalidateQueries({queryKey:["session"]})}});
-  return <section className="panel runtime-settings"><header className="panel-header"><div><p className="eyebrow">{t("settings.security")}</p><h2>{t("settings.mfaTitle")}</h2><p>{t("settings.mfaDescription")}</p></div><span className="badge">{status.data?.policy||"optional"}</span></header>
-    {status.isError&&<ErrorState error={status.error}/>} {status.data?.authenticators.map((a)=><div className="notice" key={a.id}><strong>{a.name}</strong><span>{t("settings.lastUsed")}: {a.last_used_at||t("common.never")}</span><button type="button" className="button ghost" onClick={()=>setActionTarget(a.id)}>{t("settings.revokeAuthenticator")}</button></div>)}
-    {actionTarget&&<form onSubmit={(e)=>{e.preventDefault();revoke.mutate()}}><Field label={t("settings.currentPassword")}><input required type="password" autoComplete="current-password" value={actionPassword} onChange={(e)=>setActionPassword(e.target.value)}/></Field><Field label={t("auth.authenticatorCode")} hint={t("settings.otherAuthenticatorHint")}><input required inputMode="numeric" value={actionCode} onChange={(e)=>setActionCode(e.target.value)}/></Field>{revoke.isError&&<ErrorState error={revoke.error}/>}<div className="form-actions"><button className="button danger" disabled={revoke.isPending}>{t("settings.confirmRevoke")}</button><button type="button" className="button ghost" onClick={()=>setActionTarget("")}>{t("common.cancel")}</button></div></form>}
-    {!enrollment&&<form onSubmit={(e)=>{e.preventDefault();create.mutate()}}><Field label={t("settings.deviceName")}><input required maxLength={64} value={name} onChange={(e)=>setName(e.target.value)}/></Field><Field label={t("settings.currentPassword")}><input required type="password" autoComplete="current-password" value={password} onChange={(e)=>setPassword(e.target.value)}/></Field>{status.data?.enabled&&<Field label={t("auth.authenticatorCode")} hint={t("settings.existingCodeHint")}><input required inputMode="numeric" autoComplete="one-time-code" value={approvalCode} onChange={(e)=>setApprovalCode(e.target.value)}/></Field>}{create.isError&&<ErrorState error={create.error}/>}<div className="form-actions"><button className="button primary" disabled={create.isPending}>{t("settings.addAuthenticator")}</button></div></form>}
-    {enrollment&&<form onSubmit={(e)=>{e.preventDefault();confirm.mutate()}}><div className="notice warning"><strong>{t("settings.scanAuthenticator")}</strong><EnrollmentQR uri={enrollment.otpauth_uri}/><span>{t("settings.manualSecret")}: <code>{enrollment.secret}</code></span></div><Field label={t("auth.authenticatorCode")}><input autoFocus required inputMode="numeric" autoComplete="one-time-code" value={confirmCode} onChange={(e)=>setConfirmCode(e.target.value)}/></Field>{confirm.isError&&<ErrorState error={confirm.error}/>}<div className="form-actions"><button className="button primary" disabled={confirm.isPending}>{t("auth.verify")}</button></div></form>}
-    {recovery.length>0&&<div className="notice warning" role="status"><strong>{t("settings.saveRecoveryCodes")}</strong><pre>{recovery.join("\n")}</pre><button className="button" onClick={()=>navigator.clipboard.writeText(recovery.join("\n"))}>{t("common.copy")}</button><button className="button" onClick={()=>downloadRecoveryCodes(recovery)}>{t("common.download")}</button><button className="button ghost" onClick={()=>setRecovery([])}>{t("settings.savedRecoveryCodes")}</button></div>}
-    {status.data?.enabled&&!actionTarget&&<form onSubmit={(e)=>{e.preventDefault();regenerate.mutate()}}><h3>{t("settings.regenerateRecovery")}</h3><Field label={t("settings.currentPassword")}><input required type="password" autoComplete="current-password" value={actionPassword} onChange={(e)=>setActionPassword(e.target.value)}/></Field><Field label={t("auth.authenticatorCode")}><input required inputMode="numeric" value={actionCode} onChange={(e)=>setActionCode(e.target.value)}/></Field>{regenerate.isError&&<ErrorState error={regenerate.error}/>}<div className="form-actions"><button className="button" disabled={regenerate.isPending}>{t("settings.regenerateRecovery")}</button></div></form>}
-  </section>
+export function MFASettings() {
+  const { t, i18n } = useTranslation();
+  const queryClient = useQueryClient();
+  const status = useQuery({ queryKey: ["mfa"], queryFn: api.mfaStatus });
+  const [name, setName] = useState("");
+  const [password, setPassword] = useState("");
+  const [approvalCode, setApprovalCode] = useState("");
+  const [confirmCode, setConfirmCode] = useState("");
+  const [enrollment, setEnrollment] = useState<Awaited<ReturnType<typeof api.createMFAAuthenticator>> | null>(null);
+  const [recovery, setRecovery] = useState<string[]>([]);
+  const [copyStatus, setCopyStatus] = useState("");
+  const [enrollmentExpired, setEnrollmentExpired] = useState(false);
+  const [revokeState, setRevokeState] = useState({ id: "", password: "", code: "" });
+  const [regenerateState, setRegenerateState] = useState({ password: "", code: "" });
+  const [disableState, setDisableState] = useState({ open: false, password: "", code: "", confirmed: false });
+  const [renameState, setRenameState] = useState({ id: "", name: "", revision: 0 });
+
+  useEffect(() => {
+    const blocked = recovery.length > 0;
+    setNavigationBlocked(blocked);
+    const beforeUnload = (event: BeforeUnloadEvent) => { if (blocked) event.preventDefault(); };
+    window.addEventListener("beforeunload", beforeUnload);
+    return () => { window.removeEventListener("beforeunload", beforeUnload); setNavigationBlocked(false); };
+  }, [recovery.length]);
+  useEffect(() => {
+    if (!enrollment) return;
+    const delay = Math.max(0, new Date(enrollment.expires_at).getTime() - Date.now());
+    const timer = window.setTimeout(() => { setEnrollment(null); setConfirmCode(""); setEnrollmentExpired(true); }, delay);
+    return () => window.clearTimeout(timer);
+  }, [enrollment]);
+
+  const refresh = async () => { await queryClient.invalidateQueries({ queryKey: ["mfa"] }); await queryClient.invalidateQueries({ queryKey: ["session"] }); };
+  const create = useMutation({ mutationFn: () => api.createMFAAuthenticator(name, password, approvalCode), onSettled: () => { setPassword(""); setApprovalCode(""); }, onSuccess: (value) => { setEnrollmentExpired(false); setEnrollment(value); } });
+  const confirm = useMutation({ mutationFn: () => api.confirmMFAAuthenticator(enrollment!.id, confirmCode), onSettled: () => setConfirmCode(""), onSuccess: async (value) => { setRecovery(value.recovery_codes || []); setEnrollment(null); setName(""); await refresh(); } });
+  const cancelEnrollment = useMutation({ mutationFn: () => api.cancelPendingMFAAuthenticator(enrollment!.id), onSuccess: () => { setEnrollment(null); setConfirmCode(""); }, onError: () => { /* keep the secret visible until server cancellation succeeds */ } });
+  const revoke = useMutation({ mutationFn: () => api.deleteMFAAuthenticator(revokeState.id, revokeState.password, revokeState.code), onSettled: () => setRevokeState((v) => ({ ...v, password: "", code: "" })), onSuccess: async () => { setRevokeState({ id: "", password: "", code: "" }); await refresh(); } });
+  const regenerate = useMutation({ mutationFn: () => api.regenerateMFARecoveryCodes(regenerateState.password, regenerateState.code), onSettled: () => setRegenerateState({ password: "", code: "" }), onSuccess: async (value) => { setRecovery(value.recovery_codes); await refresh(); } });
+  const disable = useMutation({ mutationFn: () => api.disableMFA(disableState.password, disableState.code), onSettled: () => setDisableState((v) => ({ ...v, password: "", code: "" })), onSuccess: async () => { setDisableState({ open: false, password: "", code: "", confirmed: false }); await refresh(); } });
+  const rename = useMutation({ mutationFn: () => api.renameMFAAuthenticator(renameState.id, renameState.name, renameState.revision), onSuccess: async () => { setRenameState({ id: "", name: "", revision: 0 }); await queryClient.invalidateQueries({ queryKey: ["mfa"] }); } });
+  const copyRecovery = async () => { try { await navigator.clipboard.writeText(recovery.join("\n")); setCopyStatus(t("settings.recoveryCopied")); } catch { setCopyStatus(t("settings.recoveryCopyFailed")); } };
+  const formatDate = (value?: string) => value ? new Intl.DateTimeFormat(i18n.language, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value)) : t("common.never");
+
+  return <section className="panel runtime-settings" aria-labelledby="mfa-title">
+    <header className="panel-header"><div><p className="eyebrow">{t("settings.security")}</p><h2 id="mfa-title">{t("settings.mfaTitle")}</h2><p>{t("settings.mfaDescription")}</p></div><span className="badge">{t(`settings.mfaPolicy.${status.data?.policy || "optional"}`)}</span></header>
+    {status.isError && <ErrorState error={status.error} />}
+    {enrollmentExpired && <div className="notice warning" role="status">{t("settings.enrollmentExpired")}</div>}
+    {status.data?.recovery_codes_remaining !== undefined && <p>{t("settings.recoveryRemaining", { count: status.data.recovery_codes_remaining })}</p>}
+    {status.data?.authenticators.map((a) => <div className="notice" key={a.id}><strong>{a.name}</strong><span>{t("settings.createdAt")}: {formatDate(a.created_at)}</span><span>{t("settings.lastUsed")}: {formatDate(a.last_used_at)}</span><div className="form-actions"><button type="button" className="button ghost" onClick={() => setRenameState({ id: a.id, name: a.name, revision: a.revision })}>{t("settings.renameAuthenticator")}</button><button type="button" className="button ghost" onClick={() => setRevokeState({ id: a.id, password: "", code: "" })}>{t("settings.revokeAuthenticator")}</button></div></div>)}
+    {renameState.id && <form onSubmit={(e) => { e.preventDefault(); rename.mutate(); }}><Field label={t("settings.deviceName")}><input autoFocus required maxLength={64} value={renameState.name} onChange={(e) => setRenameState((v) => ({ ...v, name: e.target.value }))} /></Field>{rename.isError && <ErrorState error={rename.error} />}<div className="form-actions"><button className="button primary" disabled={rename.isPending}>{t("common.save")}</button><button type="button" className="button ghost" onClick={() => setRenameState({ id: "", name: "", revision: 0 })}>{t("common.cancel")}</button></div></form>}
+    {revokeState.id && <form onSubmit={(e) => { e.preventDefault(); revoke.mutate(); }}><Field label={t("settings.currentPassword")}><input required type="password" autoComplete="current-password" value={revokeState.password} onChange={(e) => setRevokeState((v) => ({ ...v, password: e.target.value }))} /></Field><Field label={t("auth.authenticatorCode")} hint={t("settings.otherAuthenticatorHint")}><input required inputMode="numeric" autoComplete="one-time-code" value={revokeState.code} onChange={(e) => setRevokeState((v) => ({ ...v, code: e.target.value }))} /></Field>{revoke.isError && <ErrorState error={revoke.error} />}<div className="form-actions"><button className="button danger" disabled={revoke.isPending}>{t("settings.confirmRevoke")}</button><button type="button" className="button ghost" onClick={() => setRevokeState({ id: "", password: "", code: "" })}>{t("common.cancel")}</button></div></form>}
+    {!enrollment && !recovery.length && <form onSubmit={(e) => { e.preventDefault(); create.mutate(); }}><Field label={t("settings.deviceName")}><input required maxLength={64} value={name} onChange={(e) => setName(e.target.value)} /></Field><Field label={t("settings.currentPassword")}><input required type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} /></Field>{status.data?.enabled && <Field label={t("auth.authenticatorCode")} hint={t("settings.existingCodeHint")}><input required inputMode="numeric" autoComplete="one-time-code" value={approvalCode} onChange={(e) => setApprovalCode(e.target.value)} /></Field>}{create.isError && <ErrorState error={create.error} />}<div className="form-actions"><button className="button primary" disabled={create.isPending}>{t("settings.addAuthenticator")}</button></div></form>}
+    {enrollment && <form onSubmit={(e) => { e.preventDefault(); confirm.mutate(); }}><div className="notice warning"><strong>{t("settings.scanAuthenticator")}</strong><EnrollmentQR uri={enrollment.otpauth_uri} /><span>{t("settings.manualSecret")}: <code>{enrollment.secret}</code></span><small>{t("settings.enrollmentExpires", { value: formatDate(enrollment.expires_at) })}</small></div><Field label={t("auth.authenticatorCode")}><input autoFocus required inputMode="numeric" autoComplete="one-time-code" value={confirmCode} onChange={(e) => setConfirmCode(e.target.value)} /></Field>{confirm.isError && <ErrorState error={confirm.error} />}{cancelEnrollment.isError && <ErrorState error={cancelEnrollment.error} />}<div className="form-actions"><button className="button primary" disabled={confirm.isPending||cancelEnrollment.isPending}>{t("auth.verify")}</button><button type="button" className="button ghost" disabled={cancelEnrollment.isPending} onClick={()=>cancelEnrollment.mutate()}>{t("settings.cancelEnrollment")}</button></div></form>}
+    {recovery.length > 0 && <div className="notice warning"><strong>{t("settings.saveRecoveryCodes")}</strong><pre>{recovery.join("\n")}</pre><div aria-live="polite">{copyStatus}</div><div className="form-actions"><button type="button" className="button" onClick={() => void copyRecovery()}>{t("common.copy")}</button><button type="button" className="button" onClick={() => downloadRecoveryCodes(recovery)}>{t("common.download")}</button><button type="button" className="button ghost" onClick={() => { setRecovery([]); setCopyStatus(""); }}>{t("settings.savedRecoveryCodes")}</button></div></div>}
+    {status.data?.enabled && !revokeState.id && !recovery.length && <form onSubmit={(e) => { e.preventDefault(); regenerate.mutate(); }}><h3>{t("settings.regenerateRecovery")}</h3><Field label={t("settings.currentPassword")}><input required type="password" autoComplete="current-password" value={regenerateState.password} onChange={(e) => setRegenerateState((v) => ({ ...v, password: e.target.value }))} /></Field><Field label={t("auth.authenticatorCode")}><input required inputMode="numeric" autoComplete="one-time-code" value={regenerateState.code} onChange={(e) => setRegenerateState((v) => ({ ...v, code: e.target.value }))} /></Field>{regenerate.isError && <ErrorState error={regenerate.error} />}<div className="form-actions"><button className="button" disabled={regenerate.isPending}>{t("settings.regenerateRecovery")}</button></div></form>}
+    {status.data?.enabled && status.data.policy === "optional" && !recovery.length && <div>{!disableState.open ? <button type="button" className="button danger" onClick={() => setDisableState((v) => ({ ...v, open: true }))}>{t("settings.disableMFA")}</button> : <form onSubmit={(e) => { e.preventDefault(); disable.mutate(); }}><p>{t("settings.disableMFAWarning")}</p><Field label={t("settings.currentPassword")}><input required type="password" autoComplete="current-password" value={disableState.password} onChange={(e) => setDisableState((v) => ({ ...v, password: e.target.value }))} /></Field><Field label={t("auth.authenticatorCode")}><input required inputMode="numeric" autoComplete="one-time-code" value={disableState.code} onChange={(e) => setDisableState((v) => ({ ...v, code: e.target.value }))} /></Field><label><input type="checkbox" checked={disableState.confirmed} onChange={(e) => setDisableState((v) => ({ ...v, confirmed: e.target.checked }))} /> {t("settings.confirmDisableMFA")}</label>{disable.isError && <ErrorState error={disable.error} />}<div className="form-actions"><button className="button danger" disabled={!disableState.confirmed || disable.isPending}>{t("settings.disableMFA")}</button><button type="button" className="button ghost" onClick={() => setDisableState({ open: false, password: "", code: "", confirmed: false })}>{t("common.cancel")}</button></div></form>}</div>}
+  </section>;
 }
 
-function EnrollmentQR({uri}:{uri:string}) { const [source,setSource]=useState(""); useEffect(()=>{let active=true;void QRCode.toDataURL(uri,{errorCorrectionLevel:"M",margin:2,width:240}).then((value)=>{if(active)setSource(value)});return()=>{active=false;setSource("")}},[uri]);return source?<img src={source} width={240} height={240} alt="Authenticator enrollment QR code"/>:<Loading/> }
+function EnrollmentQR({uri}:{uri:string}) { const {t}=useTranslation(); const [source,setSource]=useState(""); useEffect(()=>{let active=true;void QRCode.toDataURL(uri,{errorCorrectionLevel:"M",margin:2,width:240}).then((value)=>{if(active)setSource(value)});return()=>{active=false;setSource("")}},[uri]);return source?<img src={source} width={240} height={240} alt={t("settings.enrollmentQRAlt")}/>:<Loading/> }
 
 function downloadRecoveryCodes(codes:string[]){const url=URL.createObjectURL(new Blob([`Heimdall recovery codes\n\n${codes.join("\n")}\n`],{type:"text/plain"}));const link=document.createElement("a");link.href=url;link.download="heimdall-recovery-codes.txt";link.click();URL.revokeObjectURL(url)}
 

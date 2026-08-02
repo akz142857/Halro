@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akz142857/Heimdall/internal/adminauth"
 	"github.com/akz142857/Heimdall/internal/audit"
 	"github.com/akz142857/Heimdall/internal/config"
 	"github.com/akz142857/Heimdall/internal/domain"
@@ -41,6 +42,18 @@ func TestMasterKeyRotationReencryptsCredentialsAndPreservesAuditChain(t *testing
 	}
 	now := time.Now().UTC()
 	if _, err = beforeStore.PutAdminMFAAuthenticator(context.Background(), domain.AdminMFAAuthenticator{ID: "mfa_rotation", Username: "admin", Name: "rotation phone", Type: domain.AdminMFATypeTOTP, SecretCiphertext: mfaCiphertext, Status: domain.AdminMFAStatusActive, CreatedAt: now, ConfirmedAt: &now}, 0); err != nil {
+		t.Fatal(err)
+	}
+	beforeUser, err := adminauth.NewUser("admin", []byte("correct horse battery staple"), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeUser, err = beforeStore.PutAdminUser(context.Background(), beforeUser, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	challengeHash := sha256.Sum256([]byte("rotation-challenge"))
+	if err = beforeStore.PutAdminMFAChallenge(context.Background(), domain.AdminMFAChallenge{IDHash: challengeHash, Username: "admin", Purpose: domain.AdminMFAChallengeLogin, CreatedAt: now, ExpiresAt: now.Add(time.Minute), AttemptsRemaining: 5, SessionGeneration: beforeUser.SessionGeneration}); err != nil {
 		t.Fatal(err)
 	}
 	beforeCredential, err := beforeStore.GetCredential(context.Background(), credentialID)
@@ -120,6 +133,13 @@ func TestMasterKeyRotationReencryptsCredentialsAndPreservesAuditChain(t *testing
 	}
 	if _, err := store.GetAdminSession(context.Background(), sha256.Sum256([]byte("rotation-session"))); !errors.Is(err, boltstore.ErrNotFound) {
 		t.Fatalf("admin session survived master key rotation: %v", err)
+	}
+	afterUser, err := store.GetAdminUser(context.Background(), "admin")
+	if err != nil || afterUser.SessionGeneration != beforeUser.SessionGeneration+1 {
+		t.Fatalf("rotation generation=%d err=%v", afterUser.SessionGeneration, err)
+	}
+	if _, err := store.GetAdminMFAChallenge(context.Background(), challengeHash); !errors.Is(err, boltstore.ErrNotFound) {
+		t.Fatalf("MFA challenge survived rotation: %v", err)
 	}
 	protectedAuditKey, err := loadAuditHMACKey(store, newVault, newKey)
 	if err != nil {

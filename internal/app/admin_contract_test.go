@@ -40,6 +40,7 @@ func TestFrozenV1AdminRoutesAreRegistered(t *testing.T) {
 		"DELETE /admin/api/v1/session/mfa/challenge",
 		"GET /admin/api/v1/security/mfa", "POST /admin/api/v1/security/mfa/authenticators",
 		"POST /admin/api/v1/security/mfa/authenticators/{}/confirm", "PATCH /admin/api/v1/security/mfa/authenticators/{}", "DELETE /admin/api/v1/security/mfa/authenticators/{}",
+		"DELETE /admin/api/v1/security/mfa/authenticators/{}/pending",
 		"POST /admin/api/v1/security/mfa/recovery-codes/regenerate", "DELETE /admin/api/v1/security/mfa",
 		"GET /admin/api/v1/credentials", "POST /admin/api/v1/credentials",
 		"GET /admin/api/v1/credentials/{}", "PUT /admin/api/v1/credentials/{}", "DELETE /admin/api/v1/credentials/{}",

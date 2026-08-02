@@ -14,6 +14,22 @@ const (
 	AdminMFAChallengeLogin = "login"
 )
 
+type AdminMFAAuditIntent struct {
+	EventID    string    `json:"event_id"`
+	OccurredAt time.Time `json:"occurred_at"`
+	ActorID    string    `json:"actor_id"`
+	Action     string    `json:"action"`
+	TargetType string    `json:"target_type"`
+	TargetID   string    `json:"target_id"`
+}
+
+func (i AdminMFAAuditIntent) Validate() error {
+	if i.EventID == "" || i.OccurredAt.IsZero() || i.ActorID == "" || i.Action == "" || i.TargetType == "" {
+		return errors.New("invalid MFA audit intent")
+	}
+	return nil
+}
+
 type AdminMFAAuthenticator struct {
 	ID                   string     `json:"id"`
 	Username             string     `json:"username"`
@@ -85,6 +101,7 @@ type AdminMFAChallenge struct {
 	ExpiresAt         time.Time `json:"expires_at"`
 	AttemptsRemaining uint8     `json:"attempts_remaining"`
 	SessionGeneration uint64    `json:"session_generation"`
+	Claimed           bool      `json:"claimed,omitempty"`
 }
 
 func (c AdminMFAChallenge) Validate() error {

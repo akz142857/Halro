@@ -175,8 +175,7 @@ func ResetAdminMFA(ctx context.Context, cfg config.Config, username string) erro
 		return err
 	}
 	defer store.Close()
-	user, err := store.GetAdminUser(ctx, username)
-	if err != nil {
+	if _, err := store.GetAdminUser(ctx, username); err != nil {
 		return errors.New("admin user was not found")
 	}
 	masterKey, err := vault.LoadMasterKey(cfg.Storage.MasterKeyFile)
@@ -205,14 +204,7 @@ func ResetAdminMFA(ctx context.Context, cfg config.Config, username string) erro
 	if err = reconcileAuditCheckpoint(store, auditLog.Summary()); err != nil {
 		return err
 	}
-	if err = store.DeleteAdminMFAForUser(ctx, username); err != nil {
-		return err
-	}
-	user.SessionGeneration++
-	if _, err = store.PutAdminUser(ctx, user, user.Revision); err != nil {
-		return err
-	}
-	if err = store.DeleteAdminSessionsForUser(ctx, username); err != nil {
+	if _, err = store.ResetAdminMFAIdentity(ctx, username); err != nil {
 		return err
 	}
 	eventID, err := id.New("aud")

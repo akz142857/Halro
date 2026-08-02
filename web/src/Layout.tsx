@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { api, clearSensitiveClientState } from "./api";
-import { Link, navigate, usePathname } from "./navigation";
+import { Link, navigate, setNavigationBlocked, usePathname } from "./navigation";
 import { useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -27,9 +27,11 @@ function LogoutIcon() {
 export function Layout({
   username,
   children,
+  restricted = false,
 }: {
   username: string;
   children: ReactNode;
+  restricted?: boolean;
 }) {
   const { t } = useTranslation();
   const path = usePathname();
@@ -43,6 +45,7 @@ export function Layout({
     } finally {
       clearSensitiveClientState();
       queryClient.clear();
+      setNavigationBlocked(false);
       navigate("/admin/login");
     }
   };
@@ -58,7 +61,7 @@ export function Layout({
           </span>
         </Link>
         <nav aria-label={t("navigation.label")}>
-          {navigation.map(([href, key, icon]) => {
+          {navigation.filter(([href]) => !restricted || href === "/admin/settings").map(([href, key, icon]) => {
             const active = href === "/admin"
               ? path === href
               : path === href || path.startsWith(`${href}/`);

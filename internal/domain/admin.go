@@ -7,18 +7,19 @@ import (
 )
 
 type AdminUser struct {
-	Username          string    `json:"username"`
-	Locale            string    `json:"locale,omitempty"`
-	PasswordVersion   uint16    `json:"password_version"`
-	PasswordSalt      []byte    `json:"password_salt"`
-	PasswordHash      []byte    `json:"password_hash"`
-	ArgonMemoryKiB    uint32    `json:"argon_memory_kib"`
-	ArgonIterations   uint32    `json:"argon_iterations"`
-	ArgonParallelism  uint8     `json:"argon_parallelism"`
-	SessionGeneration uint64    `json:"session_generation"`
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
-	Revision          uint64    `json:"revision"`
+	Username          string               `json:"username"`
+	Locale            string               `json:"locale,omitempty"`
+	PasswordVersion   uint16               `json:"password_version"`
+	PasswordSalt      []byte               `json:"password_salt"`
+	PasswordHash      []byte               `json:"password_hash"`
+	ArgonMemoryKiB    uint32               `json:"argon_memory_kib"`
+	ArgonIterations   uint32               `json:"argon_iterations"`
+	ArgonParallelism  uint8                `json:"argon_parallelism"`
+	SessionGeneration uint64               `json:"session_generation"`
+	CreatedAt         time.Time            `json:"created_at"`
+	UpdatedAt         time.Time            `json:"updated_at"`
+	Revision          uint64               `json:"revision"`
+	PendingMFAAudit   *AdminMFAAuditIntent `json:"pending_mfa_audit,omitempty"`
 }
 
 func (u *AdminUser) GetRevision() uint64      { return u.Revision }
@@ -46,6 +47,11 @@ func (u AdminUser) Validate() error {
 	}
 	if u.CreatedAt.IsZero() || u.UpdatedAt.IsZero() {
 		problems = append(problems, errors.New("admin timestamps are required"))
+	}
+	if u.PendingMFAAudit != nil {
+		if err := u.PendingMFAAudit.Validate(); err != nil {
+			problems = append(problems, err)
+		}
 	}
 	return errors.Join(problems...)
 }

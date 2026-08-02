@@ -101,4 +101,18 @@ func TestRequiredMFAPolicyRestrictsUnenrolledSessionToSetup(t *testing.T) {
 	if statusResponse.Code != http.StatusOK {
 		t.Fatalf("MFA setup status=%d", statusResponse.Code)
 	}
+	var loginBody struct {
+		CSRFToken string `json:"csrf_token"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &loginBody); err != nil {
+		t.Fatal(err)
+	}
+	logout := adminRequest(t, http.MethodPost, "/admin/api/v1/session/logout", nil)
+	logout.AddCookie(cookie)
+	logout.Header.Set("X-CSRF-Token", loginBody.CSRFToken)
+	logoutResponse := httptest.NewRecorder()
+	runtime.adminRouter().ServeHTTP(logoutResponse, logout)
+	if logoutResponse.Code != http.StatusOK {
+		t.Fatalf("unenrolled logout status=%d body=%s", logoutResponse.Code, logoutResponse.Body.String())
+	}
 }

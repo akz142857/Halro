@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/akz142857/Heimdall/internal/audit"
+	"github.com/akz142857/Heimdall/internal/domain"
 	"github.com/akz142857/Heimdall/internal/ledger"
 	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
 	"github.com/akz142857/Heimdall/internal/vault"
@@ -303,5 +305,79 @@ func TestRestoreValidatesStagesAtomicallyAndPreservesRollbackDirectory(t *testin
 	summary, err := VerifyAudit(context.Background(), cfg)
 	if err != nil || summary.Records < 3 {
 		t.Fatalf("restored audit is invalid: summary=%#v err=%v", summary, err)
+	}
+}
+
+func TestRestoreInvalidatesCapturedAdminSessionsAndMFAChallenges(t *testing.T) {
+	cfg := testConfig(t)
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := BootstrapAdmin(context.Background(), cfg, "admin", []byte("correct horse battery staple")); err != nil {
+		t.Fatal(err)
+	}
+	store, err := boltstore.Open(cfg.MetadataPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, err := store.GetAdminUser(context.Background(), "admin")
+	if err != nil {
+		store.Close()
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	sessionHash := sha256.Sum256([]byte("captured-restore-session"))
+	challengeHash := sha256.Sum256([]byte("captured-restore-challenge"))
+	if err := store.PutAdminSession(context.Background(), domain.AdminSession{
+		IDHash: sessionHash, Username: user.Username, Generation: user.SessionGeneration,
+		CreatedAt: now, LastSeenAt: now, AbsoluteExpiresAt: now.Add(time.Hour), IdleExpiresAt: now.Add(time.Hour),
+	}); err != nil {
+		store.Close()
+		t.Fatal(err)
+	}
+	if err := store.PutAdminMFAChallenge(context.Background(), domain.AdminMFAChallenge{
+		IDHash: challengeHash, Username: user.Username, Purpose: domain.AdminMFAChallengeLogin,
+		CreatedAt: now, ExpiresAt: now.Add(5 * time.Minute), AttemptsRemaining: 5,
+		SessionGeneration: user.SessionGeneration,
+	}); err != nil {
+		store.Close()
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	root := filepath.Dir(cfg.Storage.DataDir)
+	configPath := filepath.Join(root, "config.yaml")
+	if err := os.WriteFile(configPath, []byte("version: 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	archivePath := filepath.Join(root, "authentication-restore.hmbk")
+	backupKey := bytes.Repeat([]byte{0x58}, 32)
+	manifest, err := CreateBackup(context.Background(), cfg, configPath, archivePath, backupKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RestoreBackup(context.Background(), cfg, archivePath, backupKey, manifest.BackupID); err != nil {
+		t.Fatal(err)
+	}
+
+	restored, err := boltstore.Open(cfg.MetadataPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restored.Close()
+	restoredUser, err := restored.GetAdminUser(context.Background(), user.Username)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restoredUser.SessionGeneration != user.SessionGeneration+1 {
+		t.Fatalf("restored session generation=%d want=%d", restoredUser.SessionGeneration, user.SessionGeneration+1)
+	}
+	if _, err := restored.GetAdminSession(context.Background(), sessionHash); !errors.Is(err, boltstore.ErrNotFound) {
+		t.Fatalf("captured session survived restore: %v", err)
+	}
+	if _, err := restored.GetAdminMFAChallenge(context.Background(), challengeHash); !errors.Is(err, boltstore.ErrNotFound) {
+		t.Fatalf("captured MFA challenge survived restore: %v", err)
 	}
 }

@@ -65,6 +65,42 @@ func TestAppendBatchProducesOneConsecutiveDurableChain(t *testing.T) {
 	}
 }
 
+func TestAppendIsIdempotentByEventIDAcrossReopen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.log")
+	key := randomKey(t)
+	event := validEvent(7, "admin.mfa.disabled")
+	log, err := Open(path, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := log.Append(context.Background(), event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := log.Append(context.Background(), event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Sequence != second.Sequence || log.Summary().Records != 1 {
+		t.Fatalf("duplicate event appended: first=%#v second=%#v summary=%#v", first, second, log.Summary())
+	}
+	if err = log.Close(); err != nil {
+		t.Fatal(err)
+	}
+	log, err = Open(path, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer log.Close()
+	third, err := log.Append(context.Background(), event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if third.Sequence != first.Sequence || log.Summary().Records != 1 {
+		t.Fatalf("reopened duplicate appended: %#v", third)
+	}
+}
+
 func TestAuditDetectsTamperingAndWrongKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.log")
 	key := randomKey(t)
