@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akz142857/Heimdall/internal/adminauth"
 	"github.com/akz142857/Heimdall/internal/audit"
 	"github.com/akz142857/Heimdall/internal/config"
 	"github.com/akz142857/Heimdall/internal/domain"
@@ -27,6 +28,32 @@ func TestMasterKeyRotationReencryptsCredentialsAndPreservesAuditChain(t *testing
 
 	beforeStore, err := boltstore.Open(cfg.MetadataPath())
 	if err != nil {
+		t.Fatal(err)
+	}
+	fixtureVault, err := vault.New(oldKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mfaSecret := []byte("12345678901234567890")
+	mfaCiphertext, err := fixtureVault.EncryptAdminMFA("mfa_rotation", "admin", mfaSecret)
+	fixtureVault.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if _, err = beforeStore.PutAdminMFAAuthenticator(context.Background(), domain.AdminMFAAuthenticator{ID: "mfa_rotation", Username: "admin", Name: "rotation phone", Type: domain.AdminMFATypeTOTP, SecretCiphertext: mfaCiphertext, Status: domain.AdminMFAStatusActive, CreatedAt: now, ConfirmedAt: &now}, 0); err != nil {
+		t.Fatal(err)
+	}
+	beforeUser, err := adminauth.NewUser("admin", []byte("correct horse battery staple"), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeUser, err = beforeStore.PutAdminUser(context.Background(), beforeUser, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	challengeHash := sha256.Sum256([]byte("rotation-challenge"))
+	if err = beforeStore.PutAdminMFAChallenge(context.Background(), domain.AdminMFAChallenge{IDHash: challengeHash, Username: "admin", Purpose: domain.AdminMFAChallengeLogin, CreatedAt: now, ExpiresAt: now.Add(time.Minute), AttemptsRemaining: 5, SessionGeneration: beforeUser.SessionGeneration}); err != nil {
 		t.Fatal(err)
 	}
 	beforeCredential, err := beforeStore.GetCredential(context.Background(), credentialID)
@@ -84,6 +111,15 @@ func TestMasterKeyRotationReencryptsCredentialsAndPreservesAuditChain(t *testing
 		t.Fatalf("rotated credential version=%d plaintext_match=%t", credential.KeyVersion, bytes.Equal(plaintext, providerSecret))
 	}
 	clear(plaintext)
+	rotatedMFA, err := store.GetAdminMFAAuthenticator(context.Background(), "admin", "mfa_rotation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mfaPlaintext, err := newVault.DecryptAdminMFA(rotatedMFA.ID, rotatedMFA.Username, rotatedMFA.SecretCiphertext)
+	if err != nil || !bytes.Equal(mfaPlaintext, mfaSecret) {
+		t.Fatalf("rotated MFA secret invalid: %v", err)
+	}
+	clear(mfaPlaintext)
 	oldVault, err := vault.New(oldKey)
 	if err != nil {
 		t.Fatal(err)
@@ -97,6 +133,13 @@ func TestMasterKeyRotationReencryptsCredentialsAndPreservesAuditChain(t *testing
 	}
 	if _, err := store.GetAdminSession(context.Background(), sha256.Sum256([]byte("rotation-session"))); !errors.Is(err, boltstore.ErrNotFound) {
 		t.Fatalf("admin session survived master key rotation: %v", err)
+	}
+	afterUser, err := store.GetAdminUser(context.Background(), "admin")
+	if err != nil || afterUser.SessionGeneration != beforeUser.SessionGeneration+1 {
+		t.Fatalf("rotation generation=%d err=%v", afterUser.SessionGeneration, err)
+	}
+	if _, err := store.GetAdminMFAChallenge(context.Background(), challengeHash); !errors.Is(err, boltstore.ErrNotFound) {
+		t.Fatalf("MFA challenge survived rotation: %v", err)
 	}
 	protectedAuditKey, err := loadAuditHMACKey(store, newVault, newKey)
 	if err != nil {

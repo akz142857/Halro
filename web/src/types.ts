@@ -9,7 +9,13 @@ export interface Session {
   csrf_token: string;
   absolute_expires_at: string;
   idle_expires_at: string;
+  mfa_setup_required?: boolean;
 }
+
+export interface MFAChallenge { mfa_required: true; challenge_token: string; expires_at: string }
+export interface MFAAuthenticator { id: string; name: string; type: "totp"; created_at: string; last_used_at?: string; revision: number }
+export interface MFAStatus { enabled: boolean; policy: "optional" | "required"; authenticators: MFAAuthenticator[]; recovery_codes_remaining?: number }
+export interface MFAEnrollment { id: string; name: string; secret: string; otpauth_uri: string; expires_at: string; revision: number }
 
 export interface SetupStatus {
   instance_initialized: boolean;

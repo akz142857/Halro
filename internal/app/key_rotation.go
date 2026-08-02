@@ -258,6 +258,18 @@ func rotateMasterKeyWithHook(
 			credential.KeyVersion++
 			return credential, nil
 		},
+		TransformAdminMFA: func(value domain.AdminMFAAuthenticator) (domain.AdminMFAAuthenticator, error) {
+			if value.Status == domain.AdminMFAStatusRevoked {
+				return value, nil
+			}
+			plaintext, err := currentVault.DecryptAdminMFA(value.ID, value.Username, value.SecretCiphertext)
+			if err != nil {
+				return value, err
+			}
+			defer clear(plaintext)
+			value.SecretCiphertext, err = newVault.EncryptAdminMFA(value.ID, value.Username, plaintext)
+			return value, err
+		},
 	})
 	compactPath, compactPathErr := newMetadataStagePath(cfg.Storage.DataDir, "compact")
 	if compactPathErr != nil && err == nil {
@@ -413,6 +425,20 @@ func verifyRotatedMetadata(ctx context.Context, store *boltstore.Store, newVault
 		clear(plaintext)
 		if err != nil {
 			return fmt.Errorf("verify rotated credential %q: %w", credential.ID, err)
+		}
+	}
+	authenticators, err := store.ListAllAdminMFAAuthenticators(ctx)
+	if err != nil {
+		return err
+	}
+	for _, value := range authenticators {
+		if value.Status == domain.AdminMFAStatusRevoked {
+			continue
+		}
+		plaintext, decErr := newVault.DecryptAdminMFA(value.ID, value.Username, value.SecretCiphertext)
+		clear(plaintext)
+		if decErr != nil {
+			return fmt.Errorf("verify rotated MFA authenticator %q: %w", value.ID, decErr)
 		}
 	}
 	loadedAuditKey, err := loadAuditHMACKey(store, newVault, newKey)

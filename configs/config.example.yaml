@@ -23,6 +23,7 @@ admin:
   session_ttl: "8h"
   idle_timeout: "30m"
   login_rpm: 5
+  mfa_policy: "optional"
   external_origin: ""
 
 usage:

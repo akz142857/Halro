@@ -171,6 +171,15 @@ func RestoreBackup(
 	if err := validateRestoreStage(ctx, cfg, stageData, manifest); err != nil {
 		return RestoreResult{}, err
 	}
+	stageStore, err := boltstore.Open(stageMetadata)
+	if err != nil {
+		return RestoreResult{}, fmt.Errorf("open staged metadata for authentication invalidation: %w", err)
+	}
+	invalidateErr := stageStore.InvalidateAdminAuthenticationForRestore(ctx)
+	closeErr := stageStore.Close()
+	if err := errors.Join(invalidateErr, closeErr); err != nil {
+		return RestoreResult{}, fmt.Errorf("invalidate restored admin authentication: %w", err)
+	}
 
 	liveLock, err := lock.Acquire(cfg.Storage.DataDir)
 	if err != nil {

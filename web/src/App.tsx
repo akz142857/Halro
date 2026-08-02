@@ -51,8 +51,11 @@ export function App() {
     }
   }, [session.data, uiBootstrap.data?.default_locale]);
   useEffect(() => {
-    if (session.data && path === "/admin/login") navigate("/admin");
+    if (session.data && path === "/admin/login") navigate(session.data.mfa_setup_required ? "/admin/settings" : "/admin");
   }, [path, session.data]);
+  useEffect(() => {
+    if (session.data?.mfa_setup_required) document.getElementById("main-content")?.focus();
+  }, [session.data?.mfa_setup_required]);
   if (setup.isPending) {
     return <div className="boot"><span className="brand-mark">H</span><Loading label={t("app.checkingSetup")} /></div>;
   }
@@ -95,11 +98,10 @@ export function App() {
       />
     );
   }
-  return (
-    <Layout username={session.data.username}>
-      <Route path={path} />
-    </Layout>
-  );
+  if (session.data.mfa_setup_required) {
+    return <Layout username={session.data.username} restricted><SettingsPage mfaSetupRequired /></Layout>;
+  }
+  return <Layout username={session.data.username}><Route path={path} /></Layout>;
 }
 
 function Route({ path }: { path: string }) {

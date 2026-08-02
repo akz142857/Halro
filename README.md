@@ -180,6 +180,11 @@ go test -race ./...
 go vet ./...
 ```
 
+The Admin console supports standard TOTP two-factor authentication with
+multiple independently revocable authenticators and one-time recovery codes.
+It works with Microsoft Authenticator, Google Authenticator, 1Password, and
+other compatible apps without contacting those vendors.
+
 Rebuild and verify the embedded Admin console:
 
 ```bash

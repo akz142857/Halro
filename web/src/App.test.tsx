@@ -35,6 +35,17 @@ describe("App first-run routing", () => {
     renderApp();
     await waitFor(() => expect(screen.getByRole("heading", { name: "进入控制台" })).toBeVisible());
   });
+
+  it("renders only the restricted MFA setup surface when policy requires enrollment", async () => {
+    window.history.replaceState({}, "", "/admin/providers");
+    vi.spyOn(api, "setupStatus").mockResolvedValue({ instance_initialized: true, setup_required: false, token_required: false });
+    vi.spyOn(api, "session").mockResolvedValue({ username: "admin", locale: "system", csrf_token: "csrf", absolute_expires_at: "x", idle_expires_at: "x", mfa_setup_required: true });
+    vi.spyOn(api, "mfaStatus").mockResolvedValue({ enabled: false, policy: "required", authenticators: [] });
+    renderApp();
+    expect(await screen.findByRole("heading", { name: "必须设置二次验证" })).toBeVisible();
+    expect(screen.queryByRole("link", { name: /服务商/ })).not.toBeInTheDocument();
+    expect(screen.queryByText("变更管理员密码")).not.toBeInTheDocument();
+  });
 });
 
 function renderApp() {

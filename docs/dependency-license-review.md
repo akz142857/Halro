@@ -23,7 +23,7 @@ Transitive Go dependencies use permissive MIT, BSD, or Apache-2.0 terms. Their l
 
 ## Admin UI runtime dependencies
 
-React, React DOM, React Hook Form, Zod, TanStack Query/Table, the hook-form resolver, and uPlot declare MIT licenses. The lockfile also contains permissive MIT, BSD, ISC, Apache-2.0, BlueOak, CC0, and CC-BY metadata for build/test/browser-data packages. No GPL/AGPL runtime package was found.
+React, React DOM, React Hook Form, Zod, TanStack Query/Table, the hook-form resolver, uPlot, and the locally bundled `qrcode` enrollment renderer declare MIT licenses. The lockfile also contains permissive MIT, BSD, ISC, Apache-2.0, BlueOak, CC0, and CC-BY metadata for build/test/browser-data packages. No GPL/AGPL runtime package was found.
 
 ## Distribution requirements
 

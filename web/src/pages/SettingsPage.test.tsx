@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
-import { LanguageSettingsForm, PasswordChangeForm } from "./SettingsPage";
+import { LanguageSettingsForm, MFASettings, PasswordChangeForm } from "./SettingsPage";
 
 describe("PasswordChangeForm", () => {
   afterEach(() => vi.restoreAllMocks());
@@ -65,5 +65,34 @@ describe("LanguageSettingsForm", () => {
 
     fireEvent.click(saveInstance);
     await waitFor(() => expect(updateUISettings).toHaveBeenCalledWith("en-US", 7));
+  });
+});
+
+describe("MFASettings", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("shows authenticator metadata and renames with its revision", async () => {
+    vi.spyOn(api, "mfaStatus").mockResolvedValue({ enabled: true, policy: "optional", recovery_codes_remaining: 7, authenticators: [{ id: "mfa-1", name: "Phone", type: "totp", created_at: "2026-01-01T00:00:00Z", revision: 3 }] });
+    const rename = vi.spyOn(api, "renameMFAAuthenticator").mockResolvedValue({ status: "renamed" });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><MFASettings /></QueryClientProvider>);
+    expect(await screen.findByText("剩余恢复码：7")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "重命名" }));
+    fireEvent.change(screen.getAllByLabelText("身份验证器名称")[0], { target: { value: "Work phone" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(rename).toHaveBeenCalledWith("mfa-1", "Work phone", 3));
+  });
+
+  it("requires explicit confirmation before disabling optional MFA", async () => {
+    vi.spyOn(api, "mfaStatus").mockResolvedValue({ enabled: true, policy: "optional", authenticators: [] });
+    const disable = vi.spyOn(api, "disableMFA").mockResolvedValue({ status: "disabled" });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><MFASettings /></QueryClientProvider>);
+    fireEvent.click(await screen.findByRole("button", { name: "关闭二次验证" }));
+    const submit = screen.getAllByRole("button", { name: "关闭二次验证" })[0];
+    expect(submit).toBeDisabled();
+    fireEvent.click(screen.getByRole("checkbox"));
+    expect(submit).toBeEnabled();
+    expect(disable).not.toHaveBeenCalled();
   });
 });

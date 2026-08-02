@@ -1,5 +1,5 @@
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useMemo, useState } from "react";
+import { useMemo, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
@@ -17,6 +17,11 @@ export function Login({ onSuccess }: { onSuccess: () => void }) {
     password: z.string().min(1, t("auth.passwordRequired")).max(1024),
   }), [t]);
   const [serverError, setServerError] = useState("");
+	const [challenge, setChallenge] = useState("");
+	const [code, setCode] = useState("");
+	const [useRecovery, setUseRecovery] = useState(false);
+	const [mfaPending, setMFAPending] = useState(false);
+	const [cancelPending, setCancelPending] = useState(false);
   const {
     register,
     handleSubmit,
@@ -26,13 +31,16 @@ export function Login({ onSuccess }: { onSuccess: () => void }) {
   const submit = handleSubmit(async (value) => {
     setServerError("");
     try {
-      await api.login(value.username, value.password);
+	  const result = await api.login(value.username, value.password);
+		  if ("mfa_required" in result) { reset(); setChallenge(result.challenge_token); return; }
       reset();
       onSuccess();
     } catch (error) {
       setServerError(error instanceof ApiError ? localizedError(t, error) : t("auth.loginUnavailable"));
     }
   });
+	const submitMFA = async (event: FormEvent) => { event.preventDefault(); if(mfaPending) return; setMFAPending(true); setServerError(""); try { if(useRecovery) await api.completeMFARecovery(challenge,code); else await api.completeMFA(challenge,code); setCode("");setChallenge("");onSuccess(); } catch(error) { setServerError(error instanceof ApiError ? localizedError(t,error) : t("auth.loginUnavailable")); } finally { setMFAPending(false); } };
+	const cancelChallenge = async () => { if(cancelPending) return; setCancelPending(true);setServerError("");try { await api.cancelMFAChallenge(challenge);setChallenge("");setCode("");setUseRecovery(false); } catch(error) { setServerError(error instanceof ApiError ? localizedError(t,error) : t("auth.loginUnavailable")); } finally { setCancelPending(false); } };
   return (
     <main className="login-page">
       <section className="login-story" aria-label={t("auth.productIntro")}>
@@ -53,7 +61,14 @@ export function Login({ onSuccess }: { onSuccess: () => void }) {
       </section>
       <section className="login-panel">
         <LanguageSelect compact />
-        <form onSubmit={submit} autoComplete="on">
+		{challenge ? <form onSubmit={submitMFA} autoComplete="off">
+		  <p className="eyebrow">{t("auth.mfaEyebrow")}</p><h2>{t("auth.mfaHeading")}</h2><p>{t("auth.mfaPrompt")}</p>
+		  {serverError && <div className="notice error" role="alert">{serverError}</div>}
+		  <Field label={useRecovery?t("auth.recoveryCode"):t("auth.authenticatorCode")}><input autoFocus inputMode={useRecovery?undefined:"numeric"} autoComplete="one-time-code" value={code} onChange={(e)=>setCode(e.target.value)} required /></Field>
+			  <button className="button primary wide" disabled={!code||mfaPending} aria-busy={mfaPending}>{mfaPending?t("auth.verifying"):t("auth.verify")}</button>
+		  <button type="button" className="button ghost wide" onClick={()=>{setUseRecovery(!useRecovery);setCode("")}}>{useRecovery?t("auth.useAuthenticator"):t("auth.useRecovery")}</button>
+			  <button type="button" className="button ghost wide" disabled={cancelPending||mfaPending} onClick={()=>void cancelChallenge()}>{t("auth.backToPassword")}</button>
+		</form> : <form onSubmit={submit} autoComplete="on">
           <p className="eyebrow">{t("auth.loginEyebrow")}</p>
           <h2>{t("auth.loginHeading")}</h2>
           <p>{t("auth.loginPrompt")}</p>
@@ -68,7 +83,7 @@ export function Login({ onSuccess }: { onSuccess: () => void }) {
             {isSubmitting ? t("auth.loggingIn") : t("auth.login")}
           </button>
           <small className="login-note">{t("auth.loginSecurity")}</small>
-        </form>
+		</form>}
       </section>
     </main>
   );

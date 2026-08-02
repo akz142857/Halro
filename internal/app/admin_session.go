@@ -78,6 +78,33 @@ func (r *Runtime) loginAdmin(writer http.ResponseWriter, request *http.Request) 
 		writeJSON(writer, http.StatusUnauthorized, map[string]string{"error": "invalid credentials"})
 		return
 	}
+	authenticators, err := r.store.ListAdminMFAAuthenticators(request.Context(), user.Username)
+	if err != nil {
+		writeJSON(writer, http.StatusServiceUnavailable, map[string]string{"error": "authentication unavailable"})
+		return
+	}
+	hasMFA := false
+	for _, authenticator := range authenticators {
+		if authenticator.Status == domain.AdminMFAStatusActive {
+			hasMFA = true
+			break
+		}
+	}
+	if hasMFA {
+		token, hash, err := adminauth.NewChallengeToken()
+		if err != nil {
+			writeJSON(writer, http.StatusServiceUnavailable, map[string]string{"error": "authentication unavailable"})
+			return
+		}
+		now := time.Now().UTC()
+		challenge := domain.AdminMFAChallenge{IDHash: hash, Username: user.Username, Purpose: domain.AdminMFAChallengeLogin, CreatedAt: now, ExpiresAt: now.Add(5 * time.Minute), AttemptsRemaining: adminauth.MFAChallengeAttempts, SessionGeneration: user.SessionGeneration}
+		if err := r.store.PutAdminMFAChallenge(request.Context(), challenge); err != nil {
+			writeJSON(writer, http.StatusServiceUnavailable, map[string]string{"error": "authentication unavailable"})
+			return
+		}
+		writeJSON(writer, http.StatusAccepted, map[string]any{"mfa_required": true, "challenge_token": token, "expires_at": challenge.ExpiresAt})
+		return
+	}
 	created, err := r.adminSessions.Create(request.Context(), user, time.Now())
 	if err != nil {
 		writeJSON(writer, http.StatusServiceUnavailable, map[string]string{"error": "session unavailable"})
@@ -104,12 +131,14 @@ func (r *Runtime) getAdminSession(writer http.ResponseWriter, request *http.Requ
 		adminStoreError(writer)
 		return
 	}
+	active, _ := r.activeAdminMFA(request.Context(), admin.session.Username)
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"username":            admin.session.Username,
 		"locale":              domain.NormalizeLocalePreference(user.Locale),
 		"csrf_token":          r.adminSessionsCSRF(admin.token),
 		"absolute_expires_at": admin.session.AbsoluteExpiresAt,
 		"idle_expires_at":     admin.session.IdleExpiresAt,
+		"mfa_setup_required":  r.config.Admin.MFAPolicy == "required" && len(active) == 0,
 	})
 }
 
@@ -195,6 +224,20 @@ func (r *Runtime) changeAdminPassword(writer http.ResponseWriter, request *http.
 }
 
 func (r *Runtime) requireAdmin(next http.Handler) http.Handler {
+	return r.requireAdminBase(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if r.config.Admin.MFAPolicy == "required" {
+			admin := request.Context().Value(adminContextKey{}).(adminRequestContext)
+			active, err := r.activeAdminMFA(request.Context(), admin.session.Username)
+			if err != nil || len(active) == 0 {
+				writeJSON(writer, http.StatusForbidden, map[string]string{"error": "MFA setup required", "code": "mfa_setup_required"})
+				return
+			}
+		}
+		next.ServeHTTP(writer, request)
+	}))
+}
+
+func (r *Runtime) requireAdminBase(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		cookie, err := request.Cookie(adminSessionCookie)
 		if err != nil {
@@ -212,6 +255,17 @@ func (r *Runtime) requireAdmin(next http.Handler) http.Handler {
 		})
 		next.ServeHTTP(writer, request.WithContext(ctx))
 	})
+}
+
+func (r *Runtime) requireAdminSetupMutation(next http.Handler) http.Handler {
+	return r.requireAdminBase(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		admin := request.Context().Value(adminContextKey{}).(adminRequestContext)
+		if !r.adminSameOrigin(request) || !r.adminSessions.VerifyCSRF(admin.token, request.Header.Get("X-CSRF-Token")) {
+			writeJSON(writer, http.StatusForbidden, map[string]string{"error": "CSRF validation failed"})
+			return
+		}
+		next.ServeHTTP(writer, request)
+	}))
 }
 
 func (r *Runtime) requireAdminMutation(next http.Handler) http.Handler {

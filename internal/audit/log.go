@@ -71,12 +71,13 @@ type Summary struct {
 }
 
 type Log struct {
-	mu       sync.Mutex
-	file     *os.File
-	key      []byte
-	sequence uint64
-	offset   int64
-	lastHash [32]byte
+	mu               sync.Mutex
+	file             *os.File
+	key              []byte
+	sequence         uint64
+	offset           int64
+	lastHash         [32]byte
+	recordsByEventID map[string]Record
 }
 
 func Open(path string, key []byte) (*Log, error) {
@@ -90,7 +91,8 @@ func Open(path string, key []byte) (*Log, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open audit log: %w", err)
 	}
-	summary, partial, err := scan(file, key, nil)
+	recordsByEventID := make(map[string]Record)
+	summary, partial, err := scan(file, key, func(record Record) error { recordsByEventID[record.Event.EventID] = record; return nil })
 	if err != nil {
 		file.Close()
 		return nil, err
@@ -112,7 +114,7 @@ func Open(path string, key []byte) (*Log, error) {
 	keyCopy := append([]byte(nil), key...)
 	return &Log{
 		file: file, key: keyCopy, sequence: summary.Records,
-		offset: summary.Bytes, lastHash: summary.LastHash,
+		offset: summary.Bytes, lastHash: summary.LastHash, recordsByEventID: recordsByEventID,
 	}, nil
 }
 
@@ -172,9 +174,13 @@ func (l *Log) AppendBatch(ctx context.Context, events []Event) ([]Record, error)
 	if l.file == nil {
 		return nil, errors.New("audit log is closed")
 	}
-	records := make([]Record, 0, len(events))
+	records := make([]Record, len(events))
 	sequence, offset, previous := l.sequence, l.offset, l.lastHash
 	for index, payload := range payloads {
+		if existing, ok := l.recordsByEventID[events[index].EventID]; ok {
+			records[index] = existing
+			continue
+		}
 		sequence++
 		frame, hash := encodeFrame(l.key, sequence, previous, payload)
 		if err := writeFull(l.file, frame); err != nil {
@@ -182,12 +188,15 @@ func (l *Log) AppendBatch(ctx context.Context, events []Event) ([]Record, error)
 		}
 		offset += int64(len(frame))
 		previous = hash
-		records = append(records, Record{Sequence: sequence, Event: events[index], Hash: hash})
+		records[index] = Record{Sequence: sequence, Event: events[index], Hash: hash}
 	}
 	if err := l.file.Sync(); err != nil {
 		return nil, fmt.Errorf("sync audit log: %w", err)
 	}
 	l.sequence, l.offset, l.lastHash = sequence, offset, previous
+	for index, event := range events {
+		l.recordsByEventID[event.EventID] = records[index]
+	}
 	return records, nil
 }
 

@@ -373,6 +373,9 @@ unset HEIMDALL_METRICS_TOKEN
 - 怀疑泄露时立即在 Projects 页面禁用旧 Key 并创建新 Key；
 - 不要在停用前删除仍被业务使用的唯一 Key；
 - Admin 修改密码后会轮换 Session/CSRF 并使旧 Session 失效。
+- 在“设置 → 安全”中可以添加多个相互独立的身份验证器，兼容 Microsoft Authenticator、Google Authenticator、1Password 等标准 TOTP 应用。每个验证器可以单独撤销，任意一个有效验证码都能完成登录。
+- 首次启用时会生成 10 个只展示一次的恢复码。恢复码使用后立即失效，请离线保存，不要与管理员密码存放在一起。
+- 验证码依赖准确时间；如果持续失败，请检查服务器和手机的自动时间同步。
 
 服务停止时，也可以使用离线命令创建或禁用内部 Key：
 
