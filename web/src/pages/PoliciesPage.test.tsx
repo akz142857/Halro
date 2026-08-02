@@ -29,7 +29,7 @@ describe("token guard policy workflow", () => {
   it("creates policies disabled and reports domain validation at the fields", async () => {
     const create = vi.spyOn(api, "createTokenGuardPolicy").mockResolvedValue({} as never);
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "＋ 新建安全策略" }));
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 新建令牌防护策略" }));
 
     expect(screen.getByLabelText("启用此策略")).not.toBeChecked();
     fireEvent.change(screen.getByLabelText("错误率阈值（%）"), { target: { value: "101" } });
@@ -66,7 +66,7 @@ describe("token guard policy workflow", () => {
     let finish!: (value: never) => void;
     vi.spyOn(api, "createTokenGuardPolicy").mockReturnValue(new Promise((resolve) => { finish = resolve; }));
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "＋ 新建安全策略" }));
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 新建令牌防护策略" }));
     fireEvent.change(screen.getByLabelText("策略名称"), { target: { value: "Pending guard" } });
     fireEvent.click(screen.getByRole("button", { name: "保存策略" }));
 
@@ -92,6 +92,14 @@ describe("token guard policy workflow", () => {
     fireEvent.click(await screen.findByRole("button", { name: "加载更多" }));
     expect(await screen.findByText("Second guard")).toBeVisible();
     expect(api.tokenGuardPoliciesPage).toHaveBeenLastCalledWith(expect.stringContaining("cursor=cursor-1"));
+  });
+
+  it("keeps one contextual create action in the active tab filter bar", async () => {
+    renderPage();
+    expect(await screen.findAllByRole("button", { name: "＋ 新建令牌防护策略" })).toHaveLength(1);
+    fireEvent.click(screen.getByRole("tab", { name: "脱敏策略 0" }));
+    expect(screen.queryByRole("button", { name: "＋ 新建令牌防护策略" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "＋ 新建脱敏策略" })).toHaveLength(1);
   });
 });
 

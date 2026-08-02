@@ -57,22 +57,18 @@ export function PoliciesPage() {
         eyebrow={t("policyManagement.eyebrow")}
         title={t("policyManagement.title")}
         description={t("policyManagement.description")}
-        action={
-          <button className="button primary" onClick={() => tab === "token" ? setEditing("new") : document.getElementById("new-redaction-policy")?.click()}>
-            {tab === "token" ? t("policies.create") : t("redaction.create")}
-          </button>
-        }
       />
-      <div className="provider-tabs policy-tabs" role="tablist" aria-label={t("policyManagement.views")}>
-        <button role="tab" aria-selected={tab === "token"} onClick={() => setTab("token")}>{t("policies.title")} <span>{tokenItems.length}{policies.hasNextPage ? "+" : ""}</span></button>
-        <button role="tab" aria-selected={tab === "redaction"} onClick={() => setTab("redaction")}>{t("redaction.title")} <span>{redactionItems.length}{redactionPolicies.hasNextPage ? "+" : ""}</span></button>
-      </div>
+      <div className="provider-tabs-shell policy-tabs-shell">
+        <div className="provider-tabs policy-tabs" role="tablist" aria-label={t("policyManagement.views")}>
+          <button role="tab" aria-selected={tab === "token"} onClick={() => setTab("token")}>{t("policies.title")} <span>{tokenItems.length}{policies.hasNextPage ? "+" : ""}</span></button>
+          <button role="tab" aria-selected={tab === "redaction"} onClick={() => setTab("redaction")}>{t("redaction.title")} <span>{redactionItems.length}{redactionPolicies.hasNextPage ? "+" : ""}</span></button>
+        </div>
       {tab === "token" && <section className="policy-management-panel" role="tabpanel" aria-label={t("policies.title")}>
         <div className="filter-bar policy-filter-bar">
           <label><span>{t("policyManagement.search")}</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("policyManagement.searchPlaceholder")} /></label>
           <label><span>{t("policyManagement.status")}</span><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">{t("policyManagement.all")}</option><option value="enabled">{t("common.enabled")}</option><option value="disabled">{t("common.disabled")}</option></select></label>
           <label><span>{t("policies.action")}</span><select value={action} onChange={(event) => setAction(event.target.value)}><option value="">{t("policyManagement.all")}</option><option value="observe">{t("policies.observe")}</option><option value="alert">{t("policies.alert")}</option><option value="temporary_block">{t("policies.temporaryBlock")}</option></select></label>
-          <span className="filter-count">{t("policyManagement.showing", { visible: visible.length, loaded: tokenItems.length })}</span>
+          <button className="button primary" onClick={() => setEditing("new")}>{t("policies.create")}</button>
         </div>
         {policies.isPending && <Loading />}
         {policies.isError && <ErrorState error={policies.error} />}
@@ -88,6 +84,7 @@ export function PoliciesPage() {
         {policies.hasNextPage && <button className="button ghost policy-load-more" disabled={policies.isFetchingNextPage} onClick={() => policies.fetchNextPage()}>{policies.isFetchingNextPage ? t("common.loading") : t("common.loadMore")}</button>}
       </section>}
       {tab === "redaction" && <RedactionPoliciesSection policies={redactionItems} isPending={redactionPolicies.isPending} error={redactionPolicies.isError ? redactionPolicies.error : undefined} hasNextPage={redactionPolicies.hasNextPage} isFetchingNextPage={redactionPolicies.isFetchingNextPage} onLoadMore={() => redactionPolicies.fetchNextPage()} />}
+      </div>
       {editing && <PolicyForm current={editing === "new" ? undefined : editing} onClose={() => setEditing(null)} />}
       {previewing && <PolicyPreview policy={previewing} onClose={() => setPreviewing(null)} />}
     </>

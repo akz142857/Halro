@@ -299,9 +299,8 @@ export const enUS = {
     types: { openai: "OpenAI", anthropic: "Anthropic", azure_openai: "Azure OpenAI", deepseek: "DeepSeek", gemini: "Gemini (Beta)", bedrock: "AWS Bedrock (Beta)", openai_compatible: "OpenAI compatible" },
     eyebrow: "Upstream trust", title: "Credentials & Providers", description: "Provider secrets remain encrypted in the local vault and are decrypted only for their bound audience at runtime.",
     connectionSection: "Connection & capabilities", connectionSectionDescription: "Provider type determines the API family, authentication, and recommended capabilities; choose which capabilities this connection exposes.", capacitySection: "Credential & capacity", capacitySectionDescription: "Bind an encrypted credential and limit provider-level concurrency.", enableDescription: "When enabled, model deployments may use this upstream connection.", capabilitySectionDescription: "Choose the applicable capabilities exposed by this connection; each model may select only a subset.", fixedCapabilityDescription: "This capability implementation uses a fixed protocol and needs no further configuration.", capabilitySummary: "Selected capabilities", advancedCapabilities: "Applicable capabilities", advancedCapabilitiesHint: "Provider type supplies a recommended preset; capabilities that are unavailable or not implemented cannot be selected.", selectedCapabilities: "{{count}} enabled",
-    addCredential: "＋ Credential", addProvider: "＋ Provider", vault: "Encrypted vault", credentials: "Credentials", providers: "Providers", upstreams: "Active upstreams",
+    addCredential: "＋ Credential", addProvider: "＋ Provider",
     resourceViews: "Provider and credential views", providerConnections: "Provider connections", credentialVault: "Credential vault", openCredentialVault: "Open credential vault", filters: "Filter resources", search: "Search", searchProviders: "Search name, type, or API endpoint", searchCredentials: "Search name, type, or bound address", status: "Status", allStatuses: "All statuses", resultCount: "Showing {{visible}} of {{total}}", noMatches: "No matching results", noMatchesDescription: "Adjust the search text or status filter.", expandDetails: "View details", collapseDetails: "Hide details", usage: "Usage", generation: "Key generation", scheme: "Credential scheme",
-    providerSectionDescription: "Connect upstream APIs and make their credential, capabilities, and runtime state explicit.", credentialSectionDescription: "Store upstream secrets securely and see how each credential is used.",
     createCredentialFirst: "Create a credential first", providerDependencyHint: "A provider connection must bind an encrypted credential before its upstream can be configured.",
     noCredentials: "No provider credentials", noCredentialsDescription: "Save an encrypted credential before creating a provider instance.", noProviders: "No providers", noProvidersDescription: "Create an upstream connection before a deployment can select it.",
     healthy: "Healthy · {{latency}}ms", healthyStatus: "Healthy", unhealthy: "Unhealthy", notTested: "Not tested", testSummary: "{{healthy}}/{{total}} interfaces healthy · {{latency}}ms", testConnection: "Test connection", enabled: "Enabled",
@@ -324,7 +323,7 @@ export const enUS = {
   },
   policies: {
     eyebrow: "Anomaly containment", title: "Token Guard Policies", description: "Fixed thresholds enforce actions; the optional relative EWMA baseline only detects and alerts and never blocks automatically.",
-    create: "＋ New security policy", emptyTitle: "No token guard policies", emptyDescription: "Start with observe or alert, then enable temporary blocks only for explicit hard limits.", baseline: "Create security baseline",
+    create: "＋ New token guard policy", emptyTitle: "No token guard policies", emptyDescription: "Start with observe or alert, then enable temporary blocks only for explicit hard limits.", baseline: "Create security baseline",
     request: "Request", perMinute: "Per minute", costMinute: "Cost/min", concurrency: "Concurrency", errorRate: "Error rate", uniqueIP: "Unique IP/min", ewma: "EWMA baseline", off: "Off", detectOnly: "Detect only", tokenCount: "{{count}} tokens",
     simulate: "Simulate", deleteConfirm: "Delete security policy “{{name}}”?", edit: "Edit token guard policy", createTitle: "Create token guard policy", name: "Policy name", action: "Enforcement action",
     requestLimit: "Per-request token limit", minuteLimit: "Per-minute token limit", costLimit: "Per-minute cost limit (USD)", concurrencyLimit: "Concurrency limit", errorThreshold: "Error-rate threshold (%)", minimumSamples: "Minimum samples", uniqueSources: "Unique source IPs per minute",
@@ -335,7 +334,7 @@ export const enUS = {
   },
   policyManagement: {
     eyebrow: "Security governance", title: "Security Policies", description: "Manage anomalous-token containment and data-loss prevention policies with visible Project bindings.", views: "Security policy types",
-    search: "Search", searchPlaceholder: "Name or policy ID", status: "Status", mode: "Mode", all: "All", showing: "Showing {{visible}} / {{loaded}} loaded",
+    search: "Search", searchPlaceholder: "Name or policy ID", status: "Status", mode: "Mode", all: "All",
     policy: "Policy", summary: "Summary", bindings: "Project bindings", actions: "Actions", projectCount: "{{count}} Projects", enabledRules: "{{count}} enabled rules",
   },
   redaction: {

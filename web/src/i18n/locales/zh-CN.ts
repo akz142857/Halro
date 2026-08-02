@@ -299,9 +299,8 @@ export const zhCN = {
     types: { openai: "OpenAI", anthropic: "Anthropic", azure_openai: "Azure OpenAI", deepseek: "DeepSeek", gemini: "Gemini（测试版）", bedrock: "AWS Bedrock（测试版）", openai_compatible: "OpenAI 兼容服务" },
     eyebrow: "上游信任", title: "凭据与服务商", description: "服务商密钥加密保存在本机密钥库；运行时只按绑定的受众解密。",
     connectionSection: "连接与能力", connectionSectionDescription: "服务商类型决定 API 家族、认证方式和推荐能力；你可以选择这个连接实际开放的能力。", capacitySection: "凭据与容量", capacitySectionDescription: "绑定加密凭据并限制服务商级并发。", enableDescription: "启用后，模型部署可以使用这个上游连接。", capabilitySectionDescription: "选择此连接开放的适用能力；具体模型只能再从中选择子集。", fixedCapabilityDescription: "该能力实现使用固定协议，无需额外配置。", capabilitySummary: "已选能力", advancedCapabilities: "适用能力", advancedCapabilitiesHint: "服务商类型提供推荐预设；未实现或不适用的能力不可选择。", selectedCapabilities: "已启用 {{count}} 项",
-    addCredential: "＋ 凭据", addProvider: "＋ 服务商", vault: "加密密钥库", credentials: "凭据", providers: "服务商", upstreams: "活跃上游",
+    addCredential: "＋ 凭据", addProvider: "＋ 服务商",
     resourceViews: "服务商与凭据视图", providerConnections: "服务商连接", credentialVault: "凭据库", openCredentialVault: "前往凭据库", filters: "筛选资源", search: "搜索", searchProviders: "搜索名称、类型或 API 地址", searchCredentials: "搜索名称、类型或绑定地址", status: "状态", allStatuses: "全部状态", resultCount: "显示 {{visible}} / {{total}} 项", noMatches: "没有匹配结果", noMatchesDescription: "请调整搜索词或状态筛选。", expandDetails: "查看详情", collapseDetails: "收起详情", usage: "使用情况", generation: "密钥代次", scheme: "凭据方案",
-    providerSectionDescription: "连接上游 API，并明确它使用的凭据、能力与运行状态。", credentialSectionDescription: "安全保存上游密钥，并查看每个凭据被哪些连接使用。",
     createCredentialFirst: "请先创建凭据", providerDependencyHint: "服务商连接必须绑定一个加密凭据；创建后才能继续配置上游。",
     noCredentials: "没有服务商凭据", noCredentialsDescription: "先保存加密凭据，再创建服务商实例。", noProviders: "没有服务商", noProvidersDescription: "创建一个上游连接后，模型部署才能选择它。",
     healthy: "健康 · {{latency}}ms", healthyStatus: "健康", unhealthy: "不健康", notTested: "尚未检测", testSummary: "{{healthy}}/{{total}} 个接口正常 · {{latency}}ms", testConnection: "测试连接", enabled: "已启用",
@@ -324,7 +323,7 @@ export const zhCN = {
   },
   policies: {
     eyebrow: "异常遏制", title: "令牌防护策略", description: "固定阈值负责处置；可选 EWMA 相对基线只检测和告警，绝不会自动封禁。",
-    create: "＋ 新建安全策略", emptyTitle: "还没有令牌防护策略", emptyDescription: "建议从观察或告警开始，再对明确的硬上限启用临时封禁。", baseline: "创建安全基线",
+    create: "＋ 新建令牌防护策略", emptyTitle: "还没有令牌防护策略", emptyDescription: "建议从观察或告警开始，再对明确的硬上限启用临时封禁。", baseline: "创建安全基线",
     request: "单次请求", perMinute: "每分钟", costMinute: "每分钟成本", concurrency: "并发", errorRate: "错误率", uniqueIP: "每分钟唯一 IP", ewma: "EWMA 基线", off: "关闭", detectOnly: "仅检测", tokenCount: "{{count}} 个令牌",
     simulate: "模拟", deleteConfirm: "删除安全策略“{{name}}”？", edit: "编辑令牌防护策略", createTitle: "创建令牌防护策略", name: "策略名称", action: "处置动作",
     requestLimit: "单请求令牌上限", minuteLimit: "每分钟令牌上限", costLimit: "每分钟成本上限（USD）", concurrencyLimit: "并发上限", errorThreshold: "错误率阈值（%）", minimumSamples: "最少样本", uniqueSources: "每分钟唯一来源 IP",
@@ -335,7 +334,7 @@ export const zhCN = {
   },
   policyManagement: {
     eyebrow: "安全治理", title: "安全策略", description: "集中管理令牌异常遏制与数据防泄漏策略，并追踪项目绑定关系。", views: "安全策略类型",
-    search: "搜索", searchPlaceholder: "名称或策略 ID", status: "状态", mode: "模式", all: "全部", showing: "显示 {{visible}} / 已加载 {{loaded}}",
+    search: "搜索", searchPlaceholder: "名称或策略 ID", status: "状态", mode: "模式", all: "全部",
     policy: "策略", summary: "策略摘要", bindings: "项目绑定", actions: "操作", projectCount: "{{count}} 个项目", enabledRules: "{{count}} 条启用规则",
   },
   redaction: {
