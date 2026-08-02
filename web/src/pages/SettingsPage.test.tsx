@@ -17,6 +17,7 @@ describe("PasswordChangeForm", () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><PasswordChangeForm /></QueryClientProvider>);
 
+    fireEvent.click(screen.getByRole("button", { name: "变更管理员密码" }));
     const [current, next, confirmation] = screen.getAllByLabelText(/密码/);
     fireEvent.change(current, { target: { value: "old secure password" } });
     fireEvent.change(next, { target: { value: "new secure password" } });
@@ -29,16 +30,16 @@ describe("PasswordChangeForm", () => {
     fireEvent.click(screen.getByRole("button", { name: "变更管理员密码" }));
     await waitFor(() => expect(change).toHaveBeenCalledWith("old secure password", "new secure password"));
     expect(await screen.findByRole("status")).toHaveTextContent("会话已安全轮换");
-    expect(current).toHaveValue("");
-    expect(next).toHaveValue("");
-    expect(confirmation).toHaveValue("");
+    expect(current).not.toBeInTheDocument();
+    expect(next).not.toBeInTheDocument();
+    expect(confirmation).not.toBeInTheDocument();
   });
 });
 
 describe("LanguageSettingsForm", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it("saves administrator and instance language independently", async () => {
+  it("applies administrator language immediately and saves instance language explicitly", async () => {
     const updatePreferences = vi.spyOn(api, "updatePreferences").mockResolvedValue({
       data: { locale: "en-US", revision: 4 }, etag: '"4"',
     });
@@ -55,12 +56,11 @@ describe("LanguageSettingsForm", () => {
       </QueryClientProvider>,
     );
 
-    fireEvent.change(screen.getByLabelText("界面语言"), { target: { value: "en-US" } });
-    fireEvent.change(screen.getByLabelText("实例默认语言"), { target: { value: "en-US" } });
+    const instanceLocale = screen.getByLabelText("实例默认语言");
     const saveInstance = screen.getByRole("button", { name: "保存实例默认语言" });
-    fireEvent.click(screen.getByRole("button", { name: "保存我的界面语言" }));
-
+    fireEvent.change(screen.getByLabelText("界面语言"), { target: { value: "en-US" } });
     await waitFor(() => expect(updatePreferences).toHaveBeenCalledWith("en-US", 3));
+    fireEvent.change(instanceLocale, { target: { value: "en-US" } });
     expect(updateUISettings).not.toHaveBeenCalled();
 
     fireEvent.click(saveInstance);
@@ -94,5 +94,38 @@ describe("MFASettings", () => {
     fireEvent.click(screen.getByRole("checkbox"));
     expect(submit).toBeEnabled();
     expect(disable).not.toHaveBeenCalled();
+  });
+
+  it("does not claim MFA is optional while status is still loading", () => {
+    vi.spyOn(api, "mfaStatus").mockReturnValue(new Promise(() => {}));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><MFASettings /></QueryClientProvider>);
+    expect(screen.getByText("正在加载登录安全状态")).toBeVisible();
+    expect(screen.queryByText("可选")).not.toBeInTheDocument();
+  });
+
+  it("keeps recovery regeneration open after an error", async () => {
+    vi.spyOn(api, "mfaStatus").mockResolvedValue({ enabled: true, policy: "required", recovery_codes_remaining: 4, authenticators: [] });
+    vi.spyOn(api, "regenerateMFARecoveryCodes").mockRejectedValue(new Error("offline"));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><MFASettings /></QueryClientProvider>);
+    fireEvent.click(await screen.findByRole("button", { name: "生成新的恢复码" }));
+    const form = screen.getByRole("button", { name: "生成新的恢复码" }).closest("form")!;
+    const [password, code] = Array.from(form.querySelectorAll("input"));
+    fireEvent.change(password, { target: { value: "current password" } });
+    fireEvent.change(code, { target: { value: "123456" } });
+    fireEvent.click(screen.getByRole("button", { name: "生成新的恢复码" }));
+    expect(await screen.findByRole("alert")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "生成新的恢复码" })).toBeVisible();
+  });
+
+  it("restores focus after cancelling an authenticator action", async () => {
+    vi.spyOn(api, "mfaStatus").mockResolvedValue({ enabled: true, policy: "required", authenticators: [{ id: "mfa-1", name: "Phone", type: "totp", created_at: "2026-01-01T00:00:00Z", revision: 3 }] });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><MFASettings /></QueryClientProvider>);
+    const trigger = await screen.findByRole("button", { name: "重命名" });
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(trigger).toHaveFocus());
   });
 });

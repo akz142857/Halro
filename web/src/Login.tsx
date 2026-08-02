@@ -61,13 +61,15 @@ export function Login({ onSuccess }: { onSuccess: () => void }) {
       </section>
       <section className="login-panel">
         <LanguageSelect compact />
-		{challenge ? <form onSubmit={submitMFA} autoComplete="off">
+		{challenge ? <form className="auth-challenge-form" onSubmit={submitMFA} autoComplete="off">
 		  <p className="eyebrow">{t("auth.mfaEyebrow")}</p><h2>{t("auth.mfaHeading")}</h2><p>{t("auth.mfaPrompt")}</p>
 		  {serverError && <div className="notice error" role="alert">{serverError}</div>}
 		  <Field label={useRecovery?t("auth.recoveryCode"):t("auth.authenticatorCode")}><input autoFocus inputMode={useRecovery?undefined:"numeric"} autoComplete="one-time-code" value={code} onChange={(e)=>setCode(e.target.value)} required /></Field>
+		  <div className="auth-challenge-actions">
 			  <button className="button primary wide" disabled={!code||mfaPending} aria-busy={mfaPending}>{mfaPending?t("auth.verifying"):t("auth.verify")}</button>
-		  <button type="button" className="button ghost wide" onClick={()=>{setUseRecovery(!useRecovery);setCode("")}}>{useRecovery?t("auth.useAuthenticator"):t("auth.useRecovery")}</button>
-			  <button type="button" className="button ghost wide" disabled={cancelPending||mfaPending} onClick={()=>void cancelChallenge()}>{t("auth.backToPassword")}</button>
+		    <button type="button" className="button wide" onClick={()=>{setUseRecovery(!useRecovery);setCode("")}}>{useRecovery?t("auth.useAuthenticator"):t("auth.useRecovery")}</button>
+			  <button type="button" className="button ghost wide back-action" disabled={cancelPending||mfaPending} onClick={()=>void cancelChallenge()}>{t("auth.backToPassword")}</button>
+		  </div>
 		</form> : <form onSubmit={submit} autoComplete="on">
           <p className="eyebrow">{t("auth.loginEyebrow")}</p>
           <h2>{t("auth.loginHeading")}</h2>

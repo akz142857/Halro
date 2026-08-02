@@ -7,6 +7,7 @@ import (
 	"math"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/akz142857/Heimdall/internal/domain"
@@ -106,6 +107,8 @@ type subject struct {
 	buckets        map[int64]*bucket
 	lastEvent      map[string]time.Time
 	baseline       ewmaBaseline
+	inFlight       int64
+	lastSeen       time.Time
 }
 
 type ewmaBaseline struct {
@@ -126,6 +129,10 @@ type baselineCheckpoint struct {
 	ProjectID      string       `json:"project_id"`
 	KeyID          string       `json:"key_id"`
 	Baseline       ewmaBaseline `json:"baseline"`
+	Status         Status       `json:"status,omitempty"`
+	Violations     int64        `json:"violations,omitempty"`
+	LastViolation  time.Time    `json:"last_violation,omitempty"`
+	BlockedUntil   time.Time    `json:"blocked_until,omitempty"`
 }
 
 type managerCheckpoint struct {
@@ -133,13 +140,17 @@ type managerCheckpoint struct {
 	Subjects []baselineCheckpoint `json:"subjects"`
 }
 
-const managerCheckpointVersion = 1
+const managerCheckpointVersion = 2
+
+const defaultSubjectIdleTTL = 2 * time.Hour
 
 type Manager struct {
-	metadataMu sync.RWMutex
-	policies   map[string]domain.TokenGuardPolicy
-	subjects   map[string]*subject
-	events     chan Event
+	metadataMu     sync.RWMutex
+	policies       map[string]domain.TokenGuardPolicy
+	subjects       map[string]*subject
+	events         chan Event
+	droppedEvents  atomic.Uint64
+	subjectCreates atomic.Uint64
 }
 
 func New(policies []domain.TokenGuardPolicy) (*Manager, error) {
@@ -184,6 +195,28 @@ func (m *Manager) Events() <-chan Event {
 	return m.events
 }
 
+func (m *Manager) DroppedEvents() uint64 { return m.droppedEvents.Load() }
+
+// Lease represents one request counted atomically against a Token Guard
+// concurrency threshold. Release is idempotent.
+type Lease struct {
+	current *subject
+	once    sync.Once
+}
+
+func (l *Lease) Release() {
+	if l == nil || l.current == nil {
+		return
+	}
+	l.once.Do(func() {
+		l.current.mu.Lock()
+		if l.current.inFlight > 0 {
+			l.current.inFlight--
+		}
+		l.current.mu.Unlock()
+	})
+}
+
 func (m *Manager) HasPolicy(id string) bool {
 	m.metadataMu.RLock()
 	defer m.metadataMu.RUnlock()
@@ -192,6 +225,15 @@ func (m *Manager) HasPolicy(id string) bool {
 }
 
 func (m *Manager) Admit(input Input) Decision {
+	decision, _ := m.admit(input, false)
+	return decision
+}
+
+// Acquire evaluates admission and atomically holds a concurrency slot for an
+// allowed request until the returned lease is released.
+func (m *Manager) Acquire(input Input) (Decision, *Lease) { return m.admit(input, true) }
+
+func (m *Manager) admit(input Input, holdConcurrency bool) (Decision, *Lease) {
 	if input.Now.IsZero() {
 		input.Now = time.Now()
 	}
@@ -199,7 +241,7 @@ func (m *Manager) Admit(input Input) Decision {
 	policy, ok := m.policies[input.PolicyID]
 	if !ok {
 		m.metadataMu.RUnlock()
-		return Decision{Allowed: true, Status: StatusNormal}
+		return Decision{Allowed: true, Status: StatusNormal}, nil
 	}
 	key := input.ProjectID + ":" + input.KeyID
 	current := m.subjects[key]
@@ -209,15 +251,18 @@ func (m *Manager) Admit(input Input) Decision {
 		policy, ok = m.policies[input.PolicyID]
 		if !ok {
 			m.metadataMu.Unlock()
-			return Decision{Allowed: true, Status: StatusNormal}
+			return Decision{Allowed: true, Status: StatusNormal}, nil
 		}
 		current = m.subjects[key]
 		if current == nil || current.policyID != policy.ID || current.policyRevision != policy.Revision {
+			if m.subjectCreates.Add(1)%1024 == 0 {
+				m.pruneIdleLocked(input.Now, defaultSubjectIdleTTL)
+			}
 			current = &subject{
 				policyID: policy.ID, policyRevision: policy.Revision,
 				projectID: input.ProjectID, keyID: input.KeyID,
 				status: StatusNormal, buckets: make(map[int64]*bucket),
-				lastEvent: make(map[string]time.Time),
+				lastEvent: make(map[string]time.Time), lastSeen: input.Now,
 			}
 			m.subjects[key] = current
 		}
@@ -225,6 +270,10 @@ func (m *Manager) Admit(input Input) Decision {
 	}
 	current.mu.Lock()
 	defer current.mu.Unlock()
+	current.lastSeen = input.Now
+	if holdConcurrency {
+		input.Concurrency = saturatingAdd(current.inFlight, 1)
+	}
 	m.expireBuckets(current, input.Now)
 	ewmaReason := m.advanceEWMA(current, policy, input.Now)
 	if current.status == StatusTemporarilyBlocked {
@@ -232,7 +281,7 @@ func (m *Manager) Admit(input Input) Decision {
 			return Decision{
 				Allowed: false, Status: current.status, Reason: "temporary_block",
 				ExpiresAt: current.blockedUntil,
-			}
+			}, nil
 		}
 		current.status = StatusNormal
 		current.violations = 0
@@ -261,7 +310,7 @@ func (m *Manager) Admit(input Input) Decision {
 				return Decision{
 					Allowed: false, Status: current.status, Reason: reason,
 					ExpiresAt: current.blockedUntil,
-				}
+				}, nil
 			}
 			current.status = StatusSuspicious
 			m.emit(current, policy, input, "token_guard_suspicious", "warning", reason)
@@ -279,13 +328,27 @@ func (m *Manager) Admit(input Input) Decision {
 		current.baseline.FrozenUntil = input.Now.Add(policy.EWMACooldown)
 		m.emitWithStatus(current, input, "token_guard_ewma_detected", "warning", ewmaReason, StatusSuspicious, policy.EWMACooldown, current.baseline.FrozenUntil)
 		recordAccepted(current, input, false)
-		return Decision{Allowed: true, Status: StatusSuspicious, Reason: ewmaReason}
+		if holdConcurrency {
+			current.inFlight++
+		}
+		return Decision{Allowed: true, Status: StatusSuspicious, Reason: ewmaReason}, leaseFor(current, holdConcurrency)
 	}
 	recordAccepted(current, input, reason == "" && (current.baseline.FrozenUntil.IsZero() || !input.Now.Before(current.baseline.FrozenUntil)))
-	return Decision{Allowed: true, Status: current.status, Reason: reason}
+	if holdConcurrency {
+		current.inFlight++
+	}
+	return Decision{Allowed: true, Status: current.status, Reason: reason}, leaseFor(current, holdConcurrency)
+}
+
+func leaseFor(current *subject, held bool) *Lease {
+	if !held {
+		return nil
+	}
+	return &Lease{current: current}
 }
 
 func (m *Manager) MarshalCheckpoint() ([]byte, error) {
+	now := time.Now()
 	m.metadataMu.RLock()
 	subjects := make([]*subject, 0, len(m.subjects))
 	for _, current := range m.subjects {
@@ -297,13 +360,24 @@ func (m *Manager) MarshalCheckpoint() ([]byte, error) {
 	for _, current := range subjects {
 		current.mu.Lock()
 		policy, ok := policies[current.policyID]
-		if !ok || !policy.EWMAEnabled || !current.baseline.Initialized {
+		if !ok {
+			current.mu.Unlock()
+			continue
+		}
+		baselineEligible := policy.EWMAEnabled && current.baseline.Initialized
+		runtimeEligible := current.status == StatusTemporarilyBlocked && now.Before(current.blockedUntil)
+		if !runtimeEligible && current.violations > 0 && !current.lastViolation.IsZero() {
+			runtimeEligible = now.Sub(current.lastViolation) <= policy.Cooldown
+		}
+		if !baselineEligible && !runtimeEligible {
 			current.mu.Unlock()
 			continue
 		}
 		items = append(items, baselineCheckpoint{
 			PolicyID: current.policyID, PolicyRevision: current.policyRevision,
 			ProjectID: current.projectID, KeyID: current.keyID, Baseline: current.baseline,
+			Status: current.status, Violations: current.violations,
+			LastViolation: current.lastViolation, BlockedUntil: current.blockedUntil,
 		})
 		current.mu.Unlock()
 	}
@@ -324,24 +398,53 @@ func (m *Manager) RestoreCheckpoint(payload []byte) error {
 	if err := json.Unmarshal(payload, &saved); err != nil {
 		return errors.New("decode Token Guard checkpoint")
 	}
-	if saved.Version != managerCheckpointVersion || len(saved.Subjects) > 1_000_000 {
+	if (saved.Version != 1 && saved.Version != managerCheckpointVersion) || len(saved.Subjects) > 1_000_000 {
 		return errors.New("unsupported Token Guard checkpoint")
 	}
 	m.metadataMu.Lock()
 	defer m.metadataMu.Unlock()
 	next := make(map[string]*subject, len(saved.Subjects))
 	for _, item := range saved.Subjects {
-		if item.ProjectID == "" || item.KeyID == "" || item.PolicyID == "" || !validBaseline(item.Baseline) {
+		if item.ProjectID == "" || item.KeyID == "" || item.PolicyID == "" {
 			return errors.New("invalid Token Guard checkpoint")
 		}
 		policy, ok := m.policies[item.PolicyID]
-		if !ok || !policy.EWMAEnabled || policy.Revision != item.PolicyRevision {
+		if !ok || policy.Revision != item.PolicyRevision || (saved.Version == 1 && !policy.EWMAEnabled) {
 			continue
 		}
-		if item.Baseline.StartedAt.After(item.Baseline.WindowStart.Add(policy.EWMAEvaluationWindow)) ||
+		if item.Baseline.Initialized && (!validBaseline(item.Baseline) ||
+			item.Baseline.StartedAt.After(item.Baseline.WindowStart.Add(policy.EWMAEvaluationWindow)) ||
 			(!item.Baseline.FrozenUntil.IsZero() &&
-				item.Baseline.FrozenUntil.After(item.Baseline.WindowStart.Add(policy.EWMAEvaluationWindow+policy.EWMACooldown))) {
+				item.Baseline.FrozenUntil.After(item.Baseline.WindowStart.Add(policy.EWMAEvaluationWindow+policy.EWMACooldown)))) {
 			return errors.New("invalid Token Guard checkpoint timeline")
+		}
+		if saved.Version == 1 && !item.Baseline.Initialized {
+			return errors.New("invalid Token Guard checkpoint")
+		}
+		status, violations, lastViolation, blockedUntil := StatusNormal, int64(0), time.Time{}, time.Time{}
+		if saved.Version == managerCheckpointVersion {
+			if item.Violations < 0 || (item.Status != "" && item.Status != StatusNormal && item.Status != StatusSuspicious && item.Status != StatusTemporarilyBlocked) {
+				return errors.New("invalid Token Guard checkpoint runtime state")
+			}
+			now := time.Now()
+			runtimePresent := item.Violations > 0 || item.Status == StatusSuspicious || item.Status == StatusTemporarilyBlocked ||
+				!item.LastViolation.IsZero() || !item.BlockedUntil.IsZero()
+			if !item.Baseline.Initialized && !runtimePresent {
+				return errors.New("empty Token Guard checkpoint subject")
+			}
+			if !item.LastViolation.IsZero() && item.LastViolation.After(now.Add(time.Minute)) {
+				return errors.New("invalid Token Guard checkpoint violation time")
+			}
+			if item.Status == StatusTemporarilyBlocked && (item.Violations == 0 || item.LastViolation.IsZero() ||
+				item.BlockedUntil.IsZero() || item.BlockedUntil.Before(item.LastViolation) ||
+				item.BlockedUntil.After(item.LastViolation.Add(policy.BlockTTL))) {
+				return errors.New("invalid Token Guard checkpoint block")
+			}
+			if item.Status == StatusTemporarilyBlocked && now.Before(item.BlockedUntil) {
+				status, violations, lastViolation, blockedUntil = item.Status, item.Violations, item.LastViolation, item.BlockedUntil
+			} else if item.Violations > 0 && !item.LastViolation.IsZero() && now.Sub(item.LastViolation) <= policy.Cooldown {
+				status, violations, lastViolation = StatusSuspicious, item.Violations, item.LastViolation
+			}
 		}
 		key := item.ProjectID + ":" + item.KeyID
 		if _, duplicate := next[key]; duplicate {
@@ -350,8 +453,9 @@ func (m *Manager) RestoreCheckpoint(payload []byte) error {
 		next[key] = &subject{
 			policyID: item.PolicyID, policyRevision: item.PolicyRevision,
 			projectID: item.ProjectID, keyID: item.KeyID,
-			status: StatusNormal, buckets: make(map[int64]*bucket),
-			lastEvent: make(map[string]time.Time), baseline: item.Baseline,
+			status: status, violations: violations, lastViolation: lastViolation, blockedUntil: blockedUntil,
+			buckets: make(map[int64]*bucket), lastEvent: make(map[string]time.Time), baseline: item.Baseline,
+			lastSeen: time.Now(),
 		}
 	}
 	for key, current := range next {
@@ -544,6 +648,35 @@ func (m *Manager) UnblockProject(projectID string) int {
 	return count
 }
 
+// PruneIdle removes state only when it cannot affect enforcement: there are no
+// requests in flight, no live block/violation sequence, and no retained bucket
+// or initialized EWMA baseline. It is safe to call from maintenance or tests.
+func (m *Manager) PruneIdle(now time.Time, idleTTL time.Duration) int {
+	if idleTTL <= 0 {
+		idleTTL = defaultSubjectIdleTTL
+	}
+	m.metadataMu.Lock()
+	defer m.metadataMu.Unlock()
+	return m.pruneIdleLocked(now, idleTTL)
+}
+
+func (m *Manager) pruneIdleLocked(now time.Time, idleTTL time.Duration) int {
+	cutoff := now.Add(-idleTTL)
+	removed := 0
+	for key, current := range m.subjects {
+		current.mu.Lock()
+		m.expireBuckets(current, now)
+		idle := current.inFlight == 0 && current.status != StatusTemporarilyBlocked && current.violations == 0 &&
+			len(current.buckets) == 0 && !current.baseline.Initialized && !current.lastSeen.After(cutoff)
+		current.mu.Unlock()
+		if idle {
+			delete(m.subjects, key)
+			removed++
+		}
+	}
+	return removed
+}
+
 func (m *Manager) expireBuckets(current *subject, now time.Time) {
 	cutoff := now.Add(-time.Hour).Unix()
 	for key, value := range current.buckets {
@@ -672,5 +805,6 @@ func (m *Manager) emitWithStatus(
 	select {
 	case m.events <- event:
 	default:
+		m.droppedEvents.Add(1)
 	}
 }

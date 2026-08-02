@@ -105,6 +105,72 @@ func (a *Adapter) Capabilities() provider.Capabilities {
 	return a.capabilities
 }
 
+func (a *Adapter) modelCatalogURL() (url.URL, error) {
+	if a.azure {
+		return url.URL{}, &provider.Error{Class: provider.ErrorBadRequest, Message: "azure openai does not expose a universal model catalog"}
+	}
+	endpoint := *a.endpoint
+	basePath := strings.TrimRight(endpoint.Path, "/")
+	if strings.HasSuffix(basePath, "/v1") {
+		endpoint.Path = basePath + "/models"
+	} else {
+		endpoint.Path = basePath + "/v1/models"
+	}
+	return endpoint, nil
+}
+
+func (a *Adapter) ListModels(ctx context.Context) ([]provider.ModelDescriptor, error) {
+	endpoint, err := a.modelCatalogURL()
+	if err != nil {
+		return nil, err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	if err != nil {
+		return nil, &provider.Error{Class: provider.ErrorBadRequest, Message: "create model catalog request", Cause: err}
+	}
+	if err := a.authorize(request); err != nil {
+		return nil, &provider.Error{Class: provider.ErrorAuthentication, Message: "authorize model catalog request", Cause: err}
+	}
+	request.Header.Set("Accept", "application/json")
+	response, err := a.client.Do(request)
+	if err != nil {
+		class := provider.ErrorConnect
+		if errors.Is(err, context.DeadlineExceeded) {
+			class = provider.ErrorTimeout
+		}
+		return nil, &provider.Error{Class: class, Retryable: true, Message: "model catalog request failed", Cause: err}
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, classifyHTTPError(response.StatusCode, limitedErrorMessage(response.Body))
+	}
+	payload, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
+	if err != nil {
+		return nil, &provider.Error{Class: provider.ErrorMalformed, Message: "read model catalog response", Cause: err}
+	}
+	if len(payload) > maxResponseBytes {
+		return nil, &provider.Error{Class: provider.ErrorMalformed, Message: "model catalog response is too large"}
+	}
+	var catalog struct {
+		Data []struct {
+			ID      string `json:"id"`
+			OwnedBy string `json:"owned_by"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(payload, &catalog); err != nil {
+		return nil, &provider.Error{Class: provider.ErrorMalformed, Message: "decode model catalog response", Cause: err}
+	}
+	models := make([]provider.ModelDescriptor, 0, len(catalog.Data))
+	for _, model := range catalog.Data {
+		id := strings.TrimSpace(model.ID)
+		if id == "" || len(id) > 512 {
+			continue
+		}
+		models = append(models, provider.ModelDescriptor{ID: id, OwnedBy: strings.TrimSpace(model.OwnedBy)})
+	}
+	return models, nil
+}
+
 func (a *Adapter) Probe(ctx context.Context, providerModel string) error {
 	var endpoint url.URL
 	if a.azure {
@@ -113,12 +179,16 @@ func (a *Adapter) Probe(ctx context.Context, providerModel string) error {
 		}
 		endpoint = a.operationURL(providerModel, "chat/completions")
 	} else {
-		endpoint = *a.endpoint
-		basePath := strings.TrimRight(endpoint.Path, "/")
-		if strings.HasSuffix(basePath, "/v1") {
-			endpoint.Path = basePath + "/models"
-		} else {
-			endpoint.Path = basePath + "/v1/models"
+		var endpointErr error
+		endpoint, endpointErr = a.modelCatalogURL()
+		if endpointErr != nil {
+			return endpointErr
+		}
+		if model := strings.TrimSpace(providerModel); model != "" {
+			basePath := strings.TrimRight(endpoint.Path, "/")
+			baseEscapedPath := strings.TrimRight(endpoint.EscapedPath(), "/")
+			endpoint.Path = basePath + "/" + model
+			endpoint.RawPath = baseEscapedPath + "/" + url.PathEscape(model)
 		}
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)

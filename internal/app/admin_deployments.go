@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/url"
@@ -18,8 +19,10 @@ type deploymentInput struct {
 	Name                   string                       `json:"name"`
 	ProviderID             string                       `json:"provider_id"`
 	ProviderModel          string                       `json:"provider_model"`
+	TargetKind             domain.DeploymentTargetKind  `json:"target_kind,omitempty"`
 	AccessSurface          domain.AccessSurface         `json:"access_surface,omitempty"`
 	ProfileID              domain.ProviderProfileID     `json:"profile_id,omitempty"`
+	BindingID              string                       `json:"binding_id,omitempty"`
 	Region                 string                       `json:"region"`
 	Capabilities           *domain.ProviderCapabilities `json:"capabilities,omitempty"`
 	InputMicrosPerMillion  int64                        `json:"input_micros_per_million"`
@@ -35,6 +38,10 @@ func (r *Runtime) createAdminDeployment(writer http.ResponseWriter, request *htt
 	var input deploymentInput
 	if err := decodeAdminJSON(request, &input); err != nil {
 		adminBadRequest(writer, "invalid request")
+		return
+	}
+	if input.Enabled {
+		writeJSON(writer, http.StatusConflict, map[string]string{"error": "new deployments must be saved disabled and pass validation before enable"})
 		return
 	}
 	deploymentID, err := id.New("dep")
@@ -89,7 +96,9 @@ func (r *Runtime) updateAdminDeployment(writer http.ResponseWriter, request *htt
 		return
 	}
 	currentEvidence := domain.CapabilityEvidenceSet(nil)
-	if input.ProviderID == current.ProviderID && strings.TrimSpace(input.ProviderModel) == current.ProviderModel {
+	if input.ProviderID == current.ProviderID && strings.TrimSpace(input.ProviderModel) == current.ProviderModel &&
+		(input.BindingID == "" || input.BindingID == current.BindingID) &&
+		(input.ProfileID == "" || input.ProfileID == current.ProfileID) {
 		currentEvidence = current.CapabilityEvidence
 	}
 	deployment, err := r.deploymentFromInput(request, current.ID, input, currentEvidence, current.CreatedAt, time.Now().UTC())
@@ -97,7 +106,27 @@ func (r *Runtime) updateAdminDeployment(writer http.ResponseWriter, request *htt
 		adminBadRequest(writer, err.Error())
 		return
 	}
+	targetChanged := deployment.ProviderID != current.ProviderID ||
+		deployment.ProviderModel != current.ProviderModel ||
+		deployment.TargetKind != current.TargetKind && current.TargetKind != "" ||
+		deployment.BindingID != current.BindingID ||
+		deployment.ProfileID != current.ProfileID ||
+		deployment.AccessSurface != current.AccessSurface
+	if targetChanged {
+		writeJSON(writer, http.StatusConflict, map[string]string{"error": "deployment target identity is immutable; create and validate a replacement deployment"})
+		return
+	}
 	deployment.DeletedAt = current.DeletedAt
+	deployment.LastTestStatus = current.LastTestStatus
+	deployment.LastTestedAt = current.LastTestedAt
+	deployment.LastTestLatencyMillis = current.LastTestLatencyMillis
+	deployment.LastTestErrorClass = current.LastTestErrorClass
+	deployment.LastTestRevision = current.LastTestRevision
+	if deployment.Enabled && !current.Enabled &&
+		(current.LastTestStatus != domain.DeploymentTestHealthy || current.LastTestRevision != current.Revision) {
+		writeJSON(writer, http.StatusConflict, map[string]string{"error": "deployment must pass a current validation test before enable"})
+		return
+	}
 	if err := r.validateDeploymentCanDeactivate(request, deployment.ID, deployment.Enabled); err != nil {
 		writeJSON(writer, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
@@ -166,16 +195,12 @@ func (r *Runtime) testAdminDeployment(writer http.ResponseWriter, request *http.
 		adminNotFound(writer)
 		return
 	}
-	if !deployment.Enabled {
-		adminBadRequest(writer, "deployment is disabled")
-		return
-	}
 	instance, err := r.store.GetProvider(request.Context(), deployment.ProviderID)
 	if err != nil || !instance.Enabled || instance.DeletedAt != nil {
 		adminBadRequest(writer, "deployment provider is unavailable")
 		return
 	}
-	adapter, ok := r.providers.AdapterForProvider(deployment.ProviderID)
+	adapter, ok := adapterForDeployment(r.providers, instance, deployment)
 	if !ok {
 		adminBadRequest(writer, "deployment provider adapter is unavailable")
 		return
@@ -185,7 +210,73 @@ func (r *Runtime) testAdminDeployment(writer http.ResponseWriter, request *http.
 		adminBadRequest(writer, "provider does not support connection testing")
 		return
 	}
-	r.runAdminProbe(writer, request, prober, deployment.ProviderModel, "deployment", deployment.ID, deployment.Capabilities)
+	testedRevision := deployment.Revision
+	timeout := r.config.Gateway.AttemptResponseHeaderTimeout.Value()
+	if timeout <= 0 {
+		timeout = 15 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(request.Context(), timeout)
+	defer cancel()
+	started := time.Now()
+	probeErr := prober.Probe(ctx, deployment.ProviderModel)
+	testedAt := time.Now().UTC()
+	latencyMS := time.Since(started).Milliseconds()
+	errorClass := provider.ErrorUnknown
+	status := domain.DeploymentTestHealthy
+	if probeErr != nil {
+		status = domain.DeploymentTestUnhealthy
+		var classified *provider.Error
+		if errors.As(probeErr, &classified) {
+			errorClass = classified.Class
+		}
+	}
+
+	r.adminTopologyMu.Lock()
+	current, storeErr := r.store.GetDeployment(request.Context(), deployment.ID)
+	if storeErr != nil || current.DeletedAt != nil {
+		r.adminTopologyMu.Unlock()
+		adminNotFound(writer)
+		return
+	}
+	if current.Revision != testedRevision {
+		r.adminTopologyMu.Unlock()
+		writeJSON(writer, http.StatusConflict, map[string]string{"error": "deployment changed during validation; test the current revision again"})
+		return
+	}
+	current.LastTestStatus = status
+	current.LastTestedAt = &testedAt
+	current.LastTestLatencyMillis = latencyMS
+	current.LastTestRevision = current.Revision + 1
+	current.LastTestErrorClass = ""
+	if probeErr != nil {
+		current.LastTestErrorClass = string(errorClass)
+	}
+	current.UpdatedAt = testedAt
+	current, storeErr = r.store.PutDeployment(request.Context(), current, testedRevision)
+	r.adminTopologyMu.Unlock()
+	if storeErr != nil {
+		adminMutationError(writer, storeErr)
+		return
+	}
+	action := "deployment.test.success"
+	if probeErr != nil {
+		action = "deployment.test.failure"
+	}
+	if err := r.auditAdminMutation(request, action, "deployment", deployment.ID); err != nil {
+		adminAuditError(writer)
+		return
+	}
+	result := map[string]any{
+		"status": status, "latency_ms": latencyMS, "tested_at": testedAt, "revision": current.Revision,
+	}
+	writer.Header().Set("ETag", revisionETag(current.Revision))
+	if probeErr != nil {
+		result["error_class"] = errorClass
+		writeJSON(writer, http.StatusBadGateway, result)
+		return
+	}
+	result["capabilities"] = current.Capabilities
+	writeJSON(writer, http.StatusOK, result)
 }
 
 func (r *Runtime) deploymentFromInput(request *http.Request, deploymentID string, input deploymentInput, currentEvidence domain.CapabilityEvidenceSet, createdAt, updatedAt time.Time) (domain.Deployment, error) {
@@ -193,26 +284,34 @@ func (r *Runtime) deploymentFromInput(request *http.Request, deploymentID string
 	if err != nil || instance.DeletedAt != nil || (input.Enabled && !instance.Enabled) {
 		return domain.Deployment{}, errors.New("deployment provider is unavailable")
 	}
-	capabilities := normalizedProviderCapabilities(instance)
+	binding, err := resolveDeploymentBinding(instance, input.BindingID, input.ProfileID)
+	if err != nil {
+		return domain.Deployment{}, err
+	}
+	capabilities := binding.Capabilities
 	if input.Capabilities != nil {
 		capabilities = *input.Capabilities
-		if !capabilitySubset(capabilities, normalizedProviderCapabilities(instance)) {
+		if !domain.ProviderCapabilitiesSubset(capabilities, binding.Capabilities) {
 			return domain.Deployment{}, errors.New("deployment capabilities exceed provider capabilities")
 		}
 	}
-	if input.AccessSurface != "" && input.AccessSurface != instance.AccessSurface ||
-		input.ProfileID != "" && input.ProfileID != instance.ProfileID {
+	if input.AccessSurface != "" && input.AccessSurface != binding.AccessSurface ||
+		input.ProfileID != "" && input.ProfileID != binding.ProfileID {
 		return domain.Deployment{}, errors.New("deployment access surface or profile does not match provider")
 	}
-	if err := bedrockprovider.ValidateProfileModel(instance.ProfileID, input.ProviderModel); err != nil {
+	if err := bedrockprovider.ValidateProfileModel(binding.ProfileID, input.ProviderModel); err != nil {
 		return domain.Deployment{}, err
 	}
-	evidence := deploymentCapabilityEvidence(capabilities, instance.CapabilityEvidence, currentEvidence)
+	targetKind, err := deploymentTargetKind(instance.Type, binding.AccessSurface, binding.ProfileID, input.TargetKind)
+	if err != nil {
+		return domain.Deployment{}, err
+	}
+	evidence := deploymentCapabilityEvidence(capabilities, binding.CapabilityEvidence, currentEvidence)
 	for name, value := range evidence {
 		if !capabilitiesEnabledByName(capabilities, name) && value != domain.EvidenceUnsupported {
 			return domain.Deployment{}, errors.New("deployment capability evidence exceeds enabled capabilities")
 		}
-		if providerValue, ok := instance.CapabilityEvidence[name]; ok && evidenceRank(value) > evidenceRank(providerValue) {
+		if providerValue, ok := binding.CapabilityEvidence[name]; ok && evidenceRank(value) > evidenceRank(providerValue) {
 			return domain.Deployment{}, errors.New("deployment capability evidence exceeds provider evidence")
 		}
 	}
@@ -231,8 +330,8 @@ func (r *Runtime) deploymentFromInput(request *http.Request, deploymentID string
 	}
 	deployment := domain.Deployment{
 		ID: deploymentID, Name: strings.TrimSpace(input.Name), ProviderID: input.ProviderID,
-		ProviderModel: strings.TrimSpace(input.ProviderModel), Capabilities: capabilities,
-		AccessSurface: instance.AccessSurface, ProfileID: instance.ProfileID,
+		ProviderModel: strings.TrimSpace(input.ProviderModel), TargetKind: targetKind, Capabilities: capabilities,
+		AccessSurface: binding.AccessSurface, ProfileID: binding.ProfileID, BindingID: binding.ID,
 		Region:                 region,
 		CapabilityEvidence:     evidence,
 		InputMicrosPerMillion:  input.InputMicrosPerMillion,
@@ -242,6 +341,59 @@ func (r *Runtime) deploymentFromInput(request *http.Request, deploymentID string
 		Enabled: input.Enabled, CreatedAt: createdAt, UpdatedAt: updatedAt,
 	}
 	return deployment, deployment.Validate()
+}
+
+func deploymentTargetKind(providerType domain.ProviderType, surface domain.AccessSurface, profileID domain.ProviderProfileID, requested domain.DeploymentTargetKind) (domain.DeploymentTargetKind, error) {
+	if requested == "" {
+		switch {
+		case providerType == domain.ProviderAzureOpenAI:
+			return domain.TargetAzureDeployment, nil
+		case providerType == domain.ProviderOpenAICompatible:
+			return domain.TargetCustomEndpointModel, nil
+		case providerType == domain.ProviderBedrock && surface != domain.SurfaceBedrockMantle:
+			return domain.TargetBedrockFoundationModel, nil
+		default:
+			return domain.TargetModelID, nil
+		}
+	}
+	switch {
+	case providerType == domain.ProviderAzureOpenAI && requested == domain.TargetAzureDeployment:
+		return requested, nil
+	case providerType == domain.ProviderOpenAICompatible && (requested == domain.TargetCustomEndpointModel || requested == domain.TargetModelID):
+		return requested, nil
+	case providerType == domain.ProviderBedrock && surface == domain.SurfaceBedrockMantle && requested == domain.TargetModelID:
+		return requested, nil
+	case providerType == domain.ProviderBedrock && surface != domain.SurfaceBedrockMantle && profileID != domain.ProfileBedrockConverseText && requested == domain.TargetBedrockFoundationModel:
+		return requested, nil
+	case providerType == domain.ProviderBedrock && surface != domain.SurfaceBedrockMantle && profileID == domain.ProfileBedrockConverseText &&
+		(requested == domain.TargetBedrockFoundationModel || requested == domain.TargetBedrockInferenceProfile || requested == domain.TargetBedrockProvisionedThroughput):
+		return requested, nil
+	case providerType != domain.ProviderAzureOpenAI && providerType != domain.ProviderBedrock && providerType != domain.ProviderOpenAICompatible && requested == domain.TargetModelID:
+		return requested, nil
+	default:
+		return "", errors.New("deployment target kind is incompatible with provider or access surface")
+	}
+}
+
+func resolveDeploymentBinding(instance domain.ProviderInstance, bindingID string, profileID domain.ProviderProfileID) (domain.ProviderProfileBinding, error) {
+	bindings := instance.EffectiveProfileBindings()
+	if bindingID != "" {
+		binding, ok := instance.ProfileBinding(bindingID)
+		if !ok || !binding.Enabled {
+			return domain.ProviderProfileBinding{}, errors.New("deployment provider profile binding is unavailable")
+		}
+		return binding, nil
+	}
+	var matches []domain.ProviderProfileBinding
+	for _, binding := range bindings {
+		if binding.Enabled && (profileID == "" || binding.ProfileID == profileID) {
+			matches = append(matches, binding)
+		}
+	}
+	if len(matches) != 1 {
+		return domain.ProviderProfileBinding{}, errors.New("binding_id is required when provider profile binding is ambiguous")
+	}
+	return matches[0], nil
 }
 
 func deploymentCapabilityEvidence(capabilities domain.ProviderCapabilities, providerEvidence, currentEvidence domain.CapabilityEvidenceSet) domain.CapabilityEvidenceSet {
@@ -318,25 +470,7 @@ func evidenceRank(value domain.CapabilityEvidence) int {
 }
 
 func capabilitySubset(candidate, available domain.ProviderCapabilities) bool {
-	return (!candidate.Chat || available.Chat) &&
-		(!candidate.Streaming || available.Streaming) &&
-		(!candidate.Embeddings || available.Embeddings) &&
-		(!candidate.Tools || available.Tools) &&
-		(!candidate.Vision || available.Vision) &&
-		(!candidate.JSONMode || available.JSONMode) &&
-		(!candidate.DeveloperRole || available.DeveloperRole) &&
-		(!candidate.Reasoning || available.Reasoning) &&
-		(!candidate.StreamUsage || available.StreamUsage) &&
-		(!candidate.Moderations || available.Moderations) &&
-		(!candidate.Images || available.Images) &&
-		(!candidate.Transcriptions || available.Transcriptions) &&
-		(!candidate.Speech || available.Speech) &&
-		(!candidate.Files || available.Files) &&
-		(!candidate.Batches || available.Batches) &&
-		(!candidate.Rerank || available.Rerank) &&
-		(!candidate.AsyncGenerate || available.AsyncGenerate) &&
-		capabilityLimitSubset(candidate.MaxContextTokens, available.MaxContextTokens) &&
-		capabilityLimitSubset(candidate.MaxOutputTokens, available.MaxOutputTokens)
+	return domain.ProviderCapabilitiesSubset(candidate, available)
 }
 
 func capabilityLimitSubset(candidate, available int64) bool {

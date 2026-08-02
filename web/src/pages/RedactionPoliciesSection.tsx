@@ -34,6 +34,15 @@ function blankRule(): EditableRule {
   };
 }
 
+function ruleProblem(rule: EditableRule): string | null {
+  if (!rule.name.trim()) return "Rule name is required";
+  if (rule.scopes.length === 0) return "Select at least one scope";
+  if (!Number.isInteger(rule.priority) || rule.priority < 0) return "Priority must be a non-negative integer";
+  if (rule.kind === "regex" && !rule.pattern?.trim()) return "Regular expression is required";
+  if (rule.kind === "dictionary" && !rule.dictionary?.some((item) => item.trim())) return "At least one dictionary item is required";
+  return null;
+}
+
 export function RedactionPoliciesSection() {
   const { t } = useTranslation();
   const [editing, setEditing] = useState<RedactionPolicy | "new" | null>(null);
@@ -125,17 +134,38 @@ function RedactionPolicyForm({
 }) {
   const { t } = useTranslation();
   const [name, setName] = useState(current?.name ?? "");
-  const [enabled, setEnabled] = useState(current?.enabled ?? true);
+  const [enabled, setEnabled] = useState(current?.enabled ?? false);
   const [mode, setMode] = useState<RedactionPolicy["mode"]>(current?.mode ?? "strict");
   const [rules, setRules] = useState<EditableRule[]>(
     current?.rules.map(({ computed_max_match_bytes: _width, ...rule }) => rule) ?? [blankRule()],
   );
+  const [submitted, setSubmitted] = useState(false);
   const queryClient = useQueryClient();
   const updateRule = (index: number, value: Partial<EditableRule>) =>
     setRules((currentRules) =>
       currentRules.map((rule, currentIndex) => currentIndex === index ? { ...rule, ...value } : rule),
     );
+  const toggleScope = (index: number, scope: "inbound" | "outbound", checked: boolean) =>
+    setRules((currentRules) => currentRules.map((rule, currentIndex) => {
+      if (currentIndex !== index) return rule;
+      return {
+        ...rule,
+        scopes: checked
+          ? Array.from(new Set([...rule.scopes, scope]))
+          : rule.scopes.filter((item) => item !== scope),
+      };
+    }));
   const body = { name, enabled, mode, rules };
+  const problems = rules.map(ruleProblem);
+  const formValid = !!name.trim() && rules.length > 0 && problems.every((problem) => problem === null);
+  const changeMode = (nextMode: RedactionPolicy["mode"]) => {
+    setMode(nextMode);
+    if (nextMode === "detect_only_stream") {
+      setRules((currentRules) => currentRules.map((rule) =>
+        rule.enabled && rule.action !== "detect_only" ? { ...rule, action: "detect_only", replacement: undefined } : rule,
+      ));
+    }
+  };
   const mutation = useMutation({
     mutationFn: () => current
       ? api.updateRedactionPolicy(current.id, body, current.revision)
@@ -146,15 +176,16 @@ function RedactionPolicyForm({
     },
   });
   return (
-    <Modal title={current ? t("redaction.edit") : t("redaction.createTitle")} onClose={onClose}>
-      <form className="redaction-form" onSubmit={(event: FormEvent) => {
+    <Modal title={current ? t("redaction.edit") : t("redaction.createTitle")} onClose={onClose} closeDisabled={mutation.isPending}>
+      <form className="redaction-form" noValidate onSubmit={(event: FormEvent) => {
         event.preventDefault();
-        if (name.trim() && rules.length) mutation.mutate();
+        setSubmitted(true);
+        if (formValid) mutation.mutate();
       }}>
         <div className="form-grid">
-          <Field label={t("redaction.name")}><input autoFocus value={name} onChange={(event) => setName(event.target.value)} /></Field>
+          <Field label={t("redaction.name")}><input autoFocus aria-invalid={submitted && !name.trim()} required value={name} onChange={(event) => setName(event.target.value)} /></Field>
           <Field label={t("redaction.streaming")}>
-            <select value={mode} onChange={(event) => setMode(event.target.value as typeof mode)}>
+            <select value={mode} onChange={(event) => changeMode(event.target.value as typeof mode)}>
               <option value="strict">{t("redaction.strict")}</option>
               <option value="bounded_stream">{t("redaction.bounded")}</option>
               <option value="detect_only_stream">{t("redaction.detectStream")}</option>
@@ -165,6 +196,12 @@ function RedactionPolicyForm({
           <strong>{t("redaction.boundary")}</strong>
           <span>{t("redaction.boundaryDescription")}</span>
         </div>
+        {mode === "detect_only_stream" && (
+          <div className="notice warning" role="status">
+            <strong>{t("redaction.detectStreamBadge")}</strong>
+            <span>{t("redaction.enableRule")} → {t("redaction.detect")}</span>
+          </div>
+        )}
         <div className="rule-editor-list">
           {rules.map((rule, index) => (
             <section className="rule-editor" key={rule.id || `new-${index}`}>
@@ -173,7 +210,7 @@ function RedactionPolicyForm({
                 {rules.length > 1 && <button type="button" className="button ghost" onClick={() => setRules(rules.filter((_, item) => item !== index))}>{t("redaction.remove")}</button>}
               </header>
               <div className="form-grid">
-                <Field label={t("redaction.ruleName")}><input value={rule.name} onChange={(event) => updateRule(index, { name: event.target.value })} /></Field>
+                <Field label={t("redaction.ruleName")}><input required aria-invalid={submitted && !rule.name.trim()} value={rule.name} onChange={(event) => updateRule(index, { name: event.target.value })} /></Field>
                 <Field label={t("redaction.type")}>
                   <select value={rule.kind} onChange={(event) => updateRule(index, {
                     kind: event.target.value as EditableRule["kind"],
@@ -200,21 +237,17 @@ function RedactionPolicyForm({
                 <Field label={t("redaction.action")}>
                   <select value={rule.action} onChange={(event) => updateRule(index, { action: event.target.value as EditableRule["action"] })}>
                     <option value="detect_only">{t("redaction.detect")}</option>
-                    <option value="mask">{t("redaction.mask")}</option>
-                    <option value="replace">{t("redaction.replace")}</option>
-                    <option value="reject">{t("redaction.reject")}</option>
+                    <option value="mask" disabled={mode === "detect_only_stream"}>{t("redaction.mask")}</option>
+                    <option value="replace" disabled={mode === "detect_only_stream"}>{t("redaction.replace")}</option>
+                    <option value="reject" disabled={mode === "detect_only_stream"}>{t("redaction.reject")}</option>
                   </select>
                 </Field>
                 {rule.action === "replace" && <Field label={t("redaction.replacement")}><input value={rule.replacement ?? ""} onChange={(event) => updateRule(index, { replacement: event.target.value })} /></Field>}
-                <Field label={t("redaction.priority")}><input type="number" value={rule.priority} onChange={(event) => updateRule(index, { priority: Number(event.target.value) })} /></Field>
+                <Field label={t("redaction.priority")}><input min="0" step="1" type="number" aria-invalid={submitted && (!Number.isInteger(rule.priority) || rule.priority < 0)} value={Number.isNaN(rule.priority) ? "" : rule.priority} onChange={(event) => updateRule(index, { priority: event.target.value === "" ? Number.NaN : Number(event.target.value) })} /></Field>
                 <div className="scope-checks">
                   {(["inbound", "outbound"] as const).map((scope) => (
                     <label className="check-row" key={scope}>
-                      <input type="checkbox" checked={rule.scopes.includes(scope)} onChange={(event) => updateRule(index, {
-                        scopes: event.target.checked
-                          ? [...rule.scopes, scope]
-                          : rule.scopes.filter((item) => item !== scope),
-                      })} />
+                      <input type="checkbox" checked={rule.scopes.includes(scope)} onChange={(event) => toggleScope(index, scope, event.target.checked)} />
                       <span>{t(`redaction.${scope}`)}</span>
                     </label>
                   ))}
@@ -223,6 +256,7 @@ function RedactionPolicyForm({
                     <span>{t("redaction.enableRule")}</span>
                   </label>
                 </div>
+                {submitted && problems[index] && <p role="alert">{problems[index]}</p>}
               </div>
             </section>
           ))}
@@ -230,11 +264,11 @@ function RedactionPolicyForm({
         <button type="button" className="button ghost" onClick={() => setRules([...rules, blankRule()])}>{t("redaction.addRule")}</button>
         <label className="check-row policy-enabled">
           <input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />
-          <span>{t("redaction.enable")}</span>
+          <span>{t("redaction.enable")} · {enabled ? t("common.enabled") : t("common.disabled")}</span>
         </label>
         {mutation.isError && <ErrorState error={mutation.error} />}
         <div className="form-actions">
-          <button type="button" className="button ghost" onClick={onClose}>{t("common.cancel")}</button>
+          <button type="button" className="button ghost" disabled={mutation.isPending} onClick={onClose}>{t("common.cancel")}</button>
           <button className="button primary" disabled={mutation.isPending}>{t("redaction.compile")}</button>
         </div>
       </form>

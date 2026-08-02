@@ -237,9 +237,10 @@ func TestProfileOperationURLs(t *testing.T) {
 }
 
 func TestConnectionProbeUsesNonBillableEndpoint(t *testing.T) {
+	wantURL := "https://provider.example/v1/models/org%2Fgpt-test"
 	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
-		if request.Method != http.MethodGet || request.URL.String() != "https://provider.example/v1/models" {
-			t.Fatalf("unexpected probe: %s %s", request.Method, request.URL)
+		if request.Method != http.MethodGet || request.URL.String() != wantURL {
+			t.Fatalf("unexpected probe: %s %s want=%s", request.Method, request.URL, wantURL)
 		}
 		if request.Header.Get("Authorization") != "Bearer provider-key" {
 			t.Fatal("probe authorization was not set")
@@ -256,8 +257,41 @@ func TestConnectionProbeUsesNonBillableEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer adapter.Close()
-	if err := adapter.Probe(context.Background(), "unused"); err != nil {
+	if err := adapter.Probe(context.Background(), "org/gpt-test"); err != nil {
 		t.Fatal(err)
+	}
+	wantURL = "https://provider.example/v1/models"
+	if err := adapter.Probe(context.Background(), ""); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestListModelsUsesBoundCatalogEndpointAndParsesIDs(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.Method != http.MethodGet || request.URL.String() != "https://provider.example/v1/models" {
+			t.Fatalf("unexpected catalog request: %s %s", request.Method, request.URL)
+		}
+		if request.Header.Get("Authorization") != "Bearer provider-key" {
+			t.Fatal("catalog authorization was not set")
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK, Header: make(http.Header),
+			Body:    io.NopCloser(strings.NewReader(`{"object":"list","data":[{"id":"gpt-b","owned_by":"openai"},{"id":" gpt-a ","owned_by":" owner "},{"id":""}]}`)),
+			Request: request,
+		}, nil
+	})}
+	endpoint, _ := url.Parse("https://provider.example")
+	adapter, err := New(endpoint, []byte("provider-key"), client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer adapter.Close()
+	models, err := adapter.ListModels(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(models) != 2 || models[0].ID != "gpt-b" || models[1].ID != "gpt-a" || models[1].OwnedBy != "owner" {
+		t.Fatalf("models=%#v", models)
 	}
 }
 

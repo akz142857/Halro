@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"time"
 
 	"github.com/akz142857/Heimdall/internal/config"
@@ -70,8 +71,13 @@ func loadProviderRegistry(
 	for _, deployment := range deployments {
 		deploymentByID[deployment.ID] = deployment
 	}
+	instanceByID := make(map[string]domain.ProviderInstance, len(instances))
+	for _, instance := range instances {
+		instanceByID[instance.ID] = instance
+	}
 	registry := provider.NewRegistry()
 	adapters := make(map[string]provider.Adapter)
+	providerBindingIDs := make(map[string][]string)
 	providerLimits := make(map[string]int64)
 	fail := func(err error) (*provider.Registry, error) {
 		for _, adapter := range adapters {
@@ -90,14 +96,6 @@ func loadProviderRegistry(
 		if credential.Type != instance.Type {
 			return fail(fmt.Errorf("provider %q credential type mismatch", instance.ID))
 		}
-		manifest, ok := provider.BuiltinProfile(instance.ProfileID)
-		if !ok || manifest.ProviderType != instance.Type || manifest.AccessSurface != instance.AccessSurface ||
-			manifest.CredentialScheme != instance.CredentialScheme {
-			return fail(fmt.Errorf("provider %q profile is unavailable or incompatible", instance.ID))
-		}
-		if credential.AccessSurface != instance.AccessSurface || credential.Scheme != instance.CredentialScheme {
-			return fail(fmt.Errorf("provider %q credential profile mismatch", instance.ID))
-		}
 		policy := safetransport.Policy{
 			RequireHTTPS: true,
 			AllowPrivate: cfg.Security.AllowPrivateProviderEndpoints,
@@ -114,126 +112,37 @@ func loadProviderRegistry(
 		if credential.Audience != audience {
 			return fail(fmt.Errorf("provider %q credential audience mismatch", instance.ID))
 		}
-		plaintext, err := secretVault.DecryptCredential(
-			credential.ID,
-			string(credential.Type),
-			credential.Audience,
-			credential.Ciphertext,
-		)
-		if err != nil {
-			return fail(fmt.Errorf("provider %q decrypt credential: %w", instance.ID, err))
-		}
-		client, err := safetransport.NewClient(safetransport.Options{
-			Policy:                policy,
-			ConnectTimeout:        cfg.Gateway.AttemptConnectTimeout.Value(),
-			ResponseHeaderTimeout: cfg.Gateway.AttemptResponseHeaderTimeout.Value(),
-		})
-		if err != nil {
-			clear(plaintext)
-			return fail(fmt.Errorf("provider %q transport: %w", instance.ID, err))
-		}
-		capabilities := normalizedProviderCapabilities(instance)
-		adapterCapabilities := provider.Capabilities{
-			Chat: capabilities.Chat, Streaming: capabilities.Streaming,
-			Embeddings: capabilities.Embeddings, Tools: capabilities.Tools,
-			Moderations: capabilities.Moderations, Images: capabilities.Images, Transcriptions: capabilities.Transcriptions, Speech: capabilities.Speech, Files: capabilities.Files, Batches: capabilities.Batches, Rerank: capabilities.Rerank, AsyncGenerate: capabilities.AsyncGenerate,
-			Vision: capabilities.Vision, JSONMode: capabilities.JSONMode,
-			DeveloperRole: capabilities.DeveloperRole, Reasoning: capabilities.Reasoning,
-			StreamUsage:      capabilities.StreamUsage,
-			MaxContextTokens: capabilities.MaxContextTokens, MaxOutputTokens: capabilities.MaxOutputTokens,
-		}
-		var adapter provider.Adapter
-		var authorizer provider.Authorizer
-		switch instance.Type {
-		case domain.ProviderOpenAI, domain.ProviderOpenAICompatible, domain.ProviderDeepSeek:
-			authorizer, err = provider.NewStaticHeaderAuthorizer(instance.CredentialScheme, "Authorization", "Bearer ", plaintext, "api-key")
-			if err == nil {
-				adapter, err = openaiprovider.NewWithOptions(openaiprovider.Options{
-					Endpoint: endpoint, Authorizer: authorizer, Client: client,
-					ProviderType: string(instance.Type), Capabilities: adapterCapabilities,
-				})
-			}
-		case domain.ProviderAnthropic:
-			authorizer, err = provider.NewStaticHeaderAuthorizer(instance.CredentialScheme, "x-api-key", "", plaintext, "Authorization")
-			if err == nil {
-				adapter, err = anthropicprovider.New(anthropicprovider.Options{Endpoint: endpoint, Authorizer: authorizer, Client: client, Capabilities: adapterCapabilities})
-			}
-		case domain.ProviderAzureOpenAI:
-			authorizer, err = provider.NewStaticHeaderAuthorizer(instance.CredentialScheme, "api-key", "", plaintext, "Authorization")
-			if err == nil {
-				adapter, err = openaiprovider.NewWithOptions(openaiprovider.Options{
-					Endpoint: endpoint, Authorizer: authorizer, Client: client,
-					ProviderType: string(instance.Type), APIVersion: instance.APIVersion,
-					Azure: true, Capabilities: adapterCapabilities,
-				})
-			}
-		case domain.ProviderGemini:
-			authorizer, err = provider.NewStaticHeaderAuthorizer(instance.CredentialScheme, "x-goog-api-key", "", plaintext, "Authorization")
-			if err == nil {
-				adapter, err = geminiprovider.New(geminiprovider.Options{
-					Endpoint: endpoint, Authorizer: authorizer, Client: client,
-				})
-			}
-		case domain.ProviderBedrock:
-			switch instance.ProfileID {
-			case domain.ProfileBedrockConverseText:
-				authorizer, err = bedrockprovider.NewAuthorizer(endpoint, plaintext, nil)
-				if err == nil {
-					adapter, err = bedrockprovider.New(bedrockprovider.Options{Endpoint: endpoint, Authorizer: authorizer, Client: client, ProfileID: instance.ProfileID})
-				}
-			case domain.ProfileBedrockInvokeTitanEmbedV2, domain.ProfileBedrockInvokeTitanImageV2, domain.ProfileBedrockAsyncNovaReel, domain.ProfileBedrockAgentRerankCohere35:
-				authorizer, err = bedrockprovider.NewAuthorizer(endpoint, plaintext, nil)
-				if err == nil {
-					adapter, err = bedrockprovider.New(bedrockprovider.Options{Endpoint: endpoint, Authorizer: authorizer, Client: client, ProfileID: instance.ProfileID})
-				}
-			case domain.ProfileBedrockMantleOpenAIChat:
-				err = bedrockmantleprovider.ValidateEndpoint(endpoint)
-				if err == nil {
-					authorizer, err = provider.NewStaticHeaderAuthorizer(instance.CredentialScheme, "Authorization", "Bearer ", plaintext, "api-key", "x-api-key")
-				}
-				if err == nil {
-					adapter, err = openaiprovider.NewWithOptions(openaiprovider.Options{Endpoint: endpoint, Authorizer: authorizer, Client: client, ProviderType: string(domain.ProviderBedrock), CredentialScheme: instance.CredentialScheme, Capabilities: adapterCapabilities})
-				}
-			case domain.ProfileBedrockMantleOpenAIResponses:
-				err = bedrockmantleprovider.ValidateEndpoint(endpoint)
-				if err == nil {
-					authorizer, err = provider.NewStaticHeaderAuthorizer(instance.CredentialScheme, "Authorization", "Bearer ", plaintext, "api-key", "x-api-key")
-				}
-				if err == nil {
-					adapter, err = bedrockmantleprovider.NewResponses(bedrockmantleprovider.ResponsesOptions{Endpoint: endpoint, Authorizer: authorizer, Client: client, Capabilities: adapterCapabilities})
-				}
-			case domain.ProfileBedrockMantleAnthropicMessages:
-				err = bedrockmantleprovider.ValidateEndpoint(endpoint)
-				if err == nil {
-					authorizer, err = provider.NewStaticHeaderAuthorizer(instance.CredentialScheme, "x-api-key", "", plaintext, "Authorization", "api-key")
-				}
-				if err == nil {
-					adapter, err = anthropicprovider.New(anthropicprovider.Options{Endpoint: endpoint, Authorizer: authorizer, Client: client, Capabilities: adapterCapabilities, ProviderType: string(domain.ProviderBedrock), CredentialScheme: instance.CredentialScheme, MessagesPath: "anthropic/v1/messages"})
-				}
-			default:
-				err = errors.New("Bedrock provider profile is not implemented")
-			}
-		default:
-			err = errors.New("provider type is not implemented")
-		}
-		clear(plaintext)
-		if err != nil {
-			if authorizer != nil {
-				authorizer.Close()
-			}
-			client.CloseIdleConnections()
-			return fail(fmt.Errorf("provider %q adapter: %w", instance.ID, err))
-		}
-		profiled, err := provider.NewLegacyAdapterBridge(adapter, manifest, instance.CapabilityEvidence)
-		if err != nil {
-			adapter.Close()
-			return fail(fmt.Errorf("provider %q legacy bridge: %w", instance.ID, err))
-		}
-		adapter = profiled
-		adapters[instance.ID] = adapter
 		providerLimits[instance.ID] = instance.MaxConcurrency
-		if err := registry.RegisterAdapter(instance.ID, adapter); err != nil {
-			return fail(fmt.Errorf("register provider %q adapter: %w", instance.ID, err))
+		for _, binding := range instance.EffectiveProfileBindings() {
+			if !binding.Enabled {
+				continue
+			}
+			manifest, ok := provider.BuiltinProfile(binding.ProfileID)
+			if !ok || manifest.ProviderType != instance.Type || manifest.AccessSurface != binding.AccessSurface || manifest.CredentialScheme != binding.CredentialScheme {
+				return fail(fmt.Errorf("provider %q binding %q profile is unavailable or incompatible", instance.ID, binding.ID))
+			}
+			if credential.AccessSurface != binding.AccessSurface || credential.Scheme != binding.CredentialScheme {
+				return fail(fmt.Errorf("provider %q binding %q credential profile mismatch", instance.ID, binding.ID))
+			}
+			plaintext, decryptErr := secretVault.DecryptCredential(credential.ID, string(credential.Type), credential.Audience, credential.Ciphertext)
+			if decryptErr != nil {
+				return fail(fmt.Errorf("provider %q binding %q decrypt credential: %w", instance.ID, binding.ID, decryptErr))
+			}
+			adapter, adapterErr := newProviderBindingAdapter(cfg, instance, binding, endpoint, policy, plaintext)
+			clear(plaintext)
+			if adapterErr != nil {
+				return fail(fmt.Errorf("provider %q binding %q adapter: %w", instance.ID, binding.ID, adapterErr))
+			}
+			profiled, bridgeErr := provider.NewLegacyAdapterBridge(adapter, manifest, binding.CapabilityEvidence)
+			if bridgeErr != nil {
+				adapter.Close()
+				return fail(fmt.Errorf("provider %q binding %q legacy bridge: %w", instance.ID, binding.ID, bridgeErr))
+			}
+			adapters[binding.ID] = profiled
+			providerBindingIDs[instance.ID] = append(providerBindingIDs[instance.ID], binding.ID)
+			if err := registry.RegisterBindingAdapter(instance.ID, binding.ID, profiled); err != nil {
+				return fail(fmt.Errorf("register provider %q binding %q adapter: %w", instance.ID, binding.ID, err))
+			}
 		}
 	}
 	for _, route := range routes {
@@ -246,6 +155,7 @@ func loadProviderRegistry(
 		outputPrice := route.OutputMicrosPerMillion
 		fixedPrice := int64(0)
 		deploymentID := route.DeploymentID
+		bindingID := ""
 		deploymentLimit := int64(0)
 		var capabilities provider.Capabilities
 		if deploymentID != "" {
@@ -254,16 +164,27 @@ func loadProviderRegistry(
 				return fail(fmt.Errorf("route %q references an unavailable deployment", route.ID))
 			}
 			providerID = deployment.ProviderID
+			bindingID = deployment.BindingID
+			if bindingID == "" {
+				bindingID = matchingBindingID(instanceByID[providerID], deployment.ProfileID)
+			}
 			providerModel = deployment.ProviderModel
 			inputPrice = deployment.InputMicrosPerMillion
 			outputPrice = deployment.OutputMicrosPerMillion
 			fixedPrice = deployment.FixedRequestMicrosUSD
 			deploymentLimit = deployment.MaxConcurrency
-			capabilities = deploymentCapabilities(deployment, adapters[providerID])
+			capabilities = deploymentCapabilities(deployment, adapters[bindingID])
 		}
-		adapter := adapters[providerID]
+		if deploymentID == "" {
+			bindings := providerBindingIDs[providerID]
+			if len(bindings) != 1 {
+				return fail(fmt.Errorf("legacy route %q requires a provider with exactly one enabled binding", route.ID))
+			}
+			bindingID = bindings[0]
+		}
+		adapter := adapters[bindingID]
 		if adapter == nil {
-			return fail(fmt.Errorf("route %q references an unavailable provider", route.ID))
+			return fail(fmt.Errorf("route %q references an unavailable provider binding", route.ID))
 		}
 		if deploymentID == "" {
 			capabilities = adapterCapabilitiesFor(adapter)
@@ -277,6 +198,7 @@ func loadProviderRegistry(
 			ID:                     route.ID,
 			DeploymentID:           deploymentID,
 			ProviderID:             providerID,
+			BindingID:              bindingID,
 			PublicModel:            route.PublicModel,
 			ProviderModel:          providerModel,
 			AccessSurface:          deploymentByID[deploymentID].AccessSurface,
@@ -297,6 +219,124 @@ func loadProviderRegistry(
 		}
 	}
 	return registry, nil
+}
+
+func newProviderBindingAdapter(cfg config.Config, instance domain.ProviderInstance, binding domain.ProviderProfileBinding, endpoint *url.URL, policy safetransport.Policy, plaintext []byte) (provider.Adapter, error) {
+	client, err := safetransport.NewClient(safetransport.Options{
+		Policy: policy, ConnectTimeout: cfg.Gateway.AttemptConnectTimeout.Value(),
+		ResponseHeaderTimeout: cfg.Gateway.AttemptResponseHeaderTimeout.Value(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	capabilities := providerCapabilities(binding.Capabilities)
+	var adapter provider.Adapter
+	var authorizer provider.Authorizer
+	switch instance.Type {
+	case domain.ProviderOpenAI, domain.ProviderOpenAICompatible, domain.ProviderDeepSeek:
+		authorizer, err = provider.NewStaticHeaderAuthorizer(binding.CredentialScheme, "Authorization", "Bearer ", plaintext, "api-key")
+		if err == nil {
+			adapter, err = openaiprovider.NewWithOptions(openaiprovider.Options{Endpoint: endpoint, Authorizer: authorizer, Client: client, ProviderType: string(instance.Type), Capabilities: capabilities})
+		}
+	case domain.ProviderAnthropic:
+		authorizer, err = provider.NewStaticHeaderAuthorizer(binding.CredentialScheme, "x-api-key", "", plaintext, "Authorization")
+		if err == nil {
+			adapter, err = anthropicprovider.New(anthropicprovider.Options{Endpoint: endpoint, Authorizer: authorizer, Client: client, Capabilities: capabilities})
+		}
+	case domain.ProviderAzureOpenAI:
+		authorizer, err = provider.NewStaticHeaderAuthorizer(binding.CredentialScheme, "api-key", "", plaintext, "Authorization")
+		if err == nil {
+			adapter, err = openaiprovider.NewWithOptions(openaiprovider.Options{Endpoint: endpoint, Authorizer: authorizer, Client: client, ProviderType: string(instance.Type), APIVersion: instance.APIVersion, Azure: true, Capabilities: capabilities})
+		}
+	case domain.ProviderGemini:
+		authorizer, err = provider.NewStaticHeaderAuthorizer(binding.CredentialScheme, "x-goog-api-key", "", plaintext, "Authorization")
+		if err == nil {
+			adapter, err = geminiprovider.New(geminiprovider.Options{Endpoint: endpoint, Authorizer: authorizer, Client: client})
+		}
+	case domain.ProviderBedrock:
+		switch binding.ProfileID {
+		case domain.ProfileBedrockConverseText, domain.ProfileBedrockInvokeTitanEmbedV2, domain.ProfileBedrockInvokeTitanImageV2, domain.ProfileBedrockAsyncNovaReel, domain.ProfileBedrockAgentRerankCohere35:
+			authorizer, err = bedrockprovider.NewAuthorizer(endpoint, plaintext, nil)
+			if err == nil {
+				adapter, err = bedrockprovider.New(bedrockprovider.Options{Endpoint: endpoint, Authorizer: authorizer, Client: client, ProfileID: binding.ProfileID})
+			}
+		case domain.ProfileBedrockMantleOpenAIChat:
+			err = bedrockmantleprovider.ValidateEndpoint(endpoint)
+			if err == nil {
+				authorizer, err = provider.NewStaticHeaderAuthorizer(binding.CredentialScheme, "Authorization", "Bearer ", plaintext, "api-key", "x-api-key")
+			}
+			if err == nil {
+				adapter, err = openaiprovider.NewWithOptions(openaiprovider.Options{Endpoint: endpoint, Authorizer: authorizer, Client: client, ProviderType: string(domain.ProviderBedrock), CredentialScheme: binding.CredentialScheme, Capabilities: capabilities})
+			}
+		case domain.ProfileBedrockMantleOpenAIResponses:
+			err = bedrockmantleprovider.ValidateEndpoint(endpoint)
+			if err == nil {
+				authorizer, err = provider.NewStaticHeaderAuthorizer(binding.CredentialScheme, "Authorization", "Bearer ", plaintext, "api-key", "x-api-key")
+			}
+			if err == nil {
+				adapter, err = bedrockmantleprovider.NewResponses(bedrockmantleprovider.ResponsesOptions{Endpoint: endpoint, Authorizer: authorizer, Client: client, Capabilities: capabilities})
+			}
+		case domain.ProfileBedrockMantleAnthropicMessages:
+			err = bedrockmantleprovider.ValidateEndpoint(endpoint)
+			if err == nil {
+				authorizer, err = provider.NewStaticHeaderAuthorizer(binding.CredentialScheme, "x-api-key", "", plaintext, "Authorization", "api-key")
+			}
+			if err == nil {
+				adapter, err = anthropicprovider.New(anthropicprovider.Options{Endpoint: endpoint, Authorizer: authorizer, Client: client, Capabilities: capabilities, ProviderType: string(domain.ProviderBedrock), CredentialScheme: binding.CredentialScheme, MessagesPath: "anthropic/v1/messages"})
+			}
+		default:
+			err = errors.New("Bedrock provider profile is not implemented")
+		}
+	default:
+		err = errors.New("provider type is not implemented")
+	}
+	if err != nil {
+		if authorizer != nil {
+			authorizer.Close()
+		}
+		client.CloseIdleConnections()
+		return nil, err
+	}
+	return adapter, nil
+}
+
+func matchingBindingID(instance domain.ProviderInstance, profileID domain.ProviderProfileID) string {
+	matched := ""
+	for _, binding := range instance.EffectiveProfileBindings() {
+		if !binding.Enabled || binding.ProfileID != profileID {
+			continue
+		}
+		if matched != "" {
+			return ""
+		}
+		matched = binding.ID
+	}
+	return matched
+}
+
+func adapterForDeployment(registry *provider.Registry, instance domain.ProviderInstance, deployment domain.Deployment) (provider.Adapter, bool) {
+	bindingID := deployment.BindingID
+	if bindingID == "" {
+		bindingID = matchingBindingID(instance, deployment.ProfileID)
+	}
+	if adapter, ok := registry.AdapterForBinding(instance.ID, bindingID); ok {
+		return adapter, true
+	}
+	// Compatibility for extension registries that still expose exactly one
+	// Provider-keyed adapter. AdapterForProvider fails closed when ambiguous.
+	return registry.AdapterForProvider(instance.ID)
+}
+
+func providerCapabilities(capabilities domain.ProviderCapabilities) provider.Capabilities {
+	return provider.Capabilities{
+		Chat: capabilities.Chat, Streaming: capabilities.Streaming, Embeddings: capabilities.Embeddings,
+		Moderations: capabilities.Moderations, Images: capabilities.Images, Transcriptions: capabilities.Transcriptions,
+		Speech: capabilities.Speech, Files: capabilities.Files, Batches: capabilities.Batches,
+		Rerank: capabilities.Rerank, AsyncGenerate: capabilities.AsyncGenerate, Tools: capabilities.Tools,
+		Vision: capabilities.Vision, JSONMode: capabilities.JSONMode, DeveloperRole: capabilities.DeveloperRole,
+		Reasoning: capabilities.Reasoning, StreamUsage: capabilities.StreamUsage,
+		MaxContextTokens: capabilities.MaxContextTokens, MaxOutputTokens: capabilities.MaxOutputTokens,
+	}
 }
 
 func deploymentCapabilities(deployment domain.Deployment, adapter provider.Adapter) provider.Capabilities {

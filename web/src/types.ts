@@ -150,6 +150,13 @@ export interface ProviderCapabilities {
   max_output_tokens: number;
 }
 
+export interface ProviderBinding {
+  id?: string;
+  profile_id: string;
+  enabled: boolean;
+  capabilities: ProviderCapabilities;
+}
+
 export interface Provider {
   id: string;
   name: string;
@@ -162,12 +169,32 @@ export interface Provider {
   credential_id: string;
   allowed_hosts: string[];
   capabilities: ProviderCapabilities;
+  bindings?: ProviderBinding[];
   capability_evidence: CapabilityEvidenceSet;
   max_concurrency: number;
   enabled: boolean;
+  last_test_status?: "healthy" | "unhealthy";
+  last_tested_at?: string;
+  last_test_latency_millis?: number;
+  last_test_error_class?: string;
+  last_test_revision?: number;
+  last_test_healthy_targets?: number;
+  last_test_total_targets?: number;
   revision: number;
   created_at: string;
   updated_at: string;
+}
+
+export interface ProviderModelDescriptor {
+  id: string;
+  owned_by?: string;
+}
+
+export interface ProviderModelCatalog {
+  items: ProviderModelDescriptor[];
+  fetched_at: string;
+  expires_at: string;
+  cached: boolean;
 }
 
 export interface Deployment {
@@ -175,8 +202,10 @@ export interface Deployment {
   name: string;
   provider_id: string;
   provider_model: string;
+  target_kind?: DeploymentTargetKind;
   access_surface: AccessSurface;
   profile_id: string;
+  binding_id?: string;
   region: string;
   capabilities: ProviderCapabilities;
   capability_evidence: CapabilityEvidenceSet;
@@ -187,10 +216,23 @@ export interface Deployment {
   priority: number;
   weight: number;
   enabled: boolean;
+  last_test_status?: "healthy" | "unhealthy";
+  last_tested_at?: string;
+  last_test_latency_millis?: number;
+  last_test_error_class?: string;
+  last_test_revision?: number;
   revision: number;
   created_at: string;
   updated_at: string;
 }
+
+export type DeploymentTargetKind =
+  | "model_id"
+  | "azure_deployment"
+  | "bedrock_foundation_model"
+  | "bedrock_inference_profile"
+  | "bedrock_provisioned_throughput"
+  | "custom_endpoint_model";
 
 export interface Route {
   id: string;
@@ -203,6 +245,11 @@ export interface Route {
   priority: number;
   strategy: "ordered" | "round_robin" | "";
   enabled: boolean;
+  last_test_status?: "healthy" | "unhealthy";
+  last_tested_at?: string;
+  last_test_latency_millis?: number;
+  last_test_error_class?: string;
+  last_test_revision?: number;
   revision: number;
   created_at: string;
   updated_at: string;

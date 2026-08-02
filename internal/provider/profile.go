@@ -173,6 +173,8 @@ func (b *LegacyAdapterBridge) Profile() ProfileManifest {
 	manifest.PrimitiveBindings = slices.Clone(b.manifest.PrimitiveBindings)
 	return manifest
 }
+
+func (b *LegacyAdapterBridge) UnwrapAdapter() Adapter { return b.Adapter }
 func (b *LegacyAdapterBridge) Operations() OperationRegistry {
 	return operationSet{operations: slices.Clone(b.manifest.Operations), bindings: slices.Clone(b.manifest.PrimitiveBindings), adapter: b}
 }

@@ -12,13 +12,16 @@ import {
   EmptyState,
   ErrorState,
   Field,
+  InlineTestControl,
   Loading,
   Modal,
   PageHeader,
   StatusDot,
 } from "../components";
+import type { InlineTestState } from "../components";
 import type { Deployment, Provider, Route } from "../types";
 import { useTranslation } from "react-i18next";
+import { Link } from "../navigation";
 
 const column = createColumnHelper<Route>();
 
@@ -26,7 +29,6 @@ export function RoutesPage() {
   const { t } = useTranslation();
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<Route>();
-  const [testResult, setTestResult] = useState("");
   const routes = useQuery({ queryKey: ["routes"], queryFn: api.routes });
   const deployments = useQuery({ queryKey: ["deployments"], queryFn: api.deployments });
   const providers = useQuery({ queryKey: ["providers"], queryFn: api.providers });
@@ -34,11 +36,6 @@ export function RoutesPage() {
   const remove = useMutation({
     mutationFn: (route: Route) => api.deleteRoute(route.id, route.revision),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["routes"] }),
-  });
-  const test = useMutation({
-    mutationFn: (route: Route) => api.testRoute(route.id),
-    onSuccess: (value) => setTestResult(t("routes.healthy", { latency: value.latency_ms })),
-    onError: () => setTestResult(t("routes.unhealthy")),
   });
   const deploymentByID = useMemo(
     () => new Map(deployments.data?.items.map((item) => [item.id, item]) ?? []),
@@ -89,19 +86,21 @@ export function RoutesPage() {
       id: "actions",
       header: "",
       cell: ({ row }) => (
-        <div className="row-actions">
-          <button className="button ghost" disabled={!row.original.enabled || test.isPending} onClick={() => test.mutate(row.original)}>{t("common.test")}</button>
-          <button className="button ghost" onClick={() => setEditing(row.original)}>{t("common.edit")}</button>
-          <ConfirmButton
-            label={t("common.delete")}
-            confirmLabel={t("routes.deleteConfirm", { name: row.original.public_model })}
-            onConfirm={() => remove.mutate(row.original)}
-            disabled={remove.isPending}
-          />
+        <div className="row-actions route-row-actions">
+          <RouteTestAction route={row.original} />
+          <div className="row-actions route-management-actions">
+            <button className="button ghost" onClick={() => setEditing(row.original)}>{t("common.edit")}</button>
+            <ConfirmButton
+              label={t("common.delete")}
+              confirmLabel={t("routes.deleteConfirm", { name: row.original.public_model })}
+              onConfirm={() => remove.mutate(row.original)}
+              disabled={remove.isPending}
+            />
+          </div>
         </div>
       ),
     }),
-  ], [deploymentByID, providerNames, remove, test, t]);
+  ], [deploymentByID, providerNames, remove, t]);
   const table = useReactTable({
     data: routes.data?.items ?? [],
     columns,
@@ -119,13 +118,12 @@ export function RoutesPage() {
       />
       {pending && <Loading />}
       {error && <ErrorState error={error} />}
-      {testResult && <div className={`notice ${test.isSuccess ? "success" : "warning"}`}><strong>{testResult}</strong></div>}
       {routes.data?.items.length === 0 && (
         <EmptyState title={t("routes.emptyTitle")}>{t("routes.emptyDescription")}</EmptyState>
       )}
       {!!routes.data?.items.length && (
         <div className="table-shell">
-          <table>
+          <table className="route-table">
             <caption className="visually-hidden">{t("routes.list")}</caption>
             <thead>
               {table.getHeaderGroups().map((group) => (
@@ -156,6 +154,24 @@ export function RoutesPage() {
       )}
     </>
   );
+}
+
+function RouteTestAction({ route }: { route: Route }) {
+  const queryClient = useQueryClient();
+  const test = useMutation({ mutationFn: () => api.testRoute(route.id), onSettled: () => queryClient.invalidateQueries({ queryKey: ["routes"] }) });
+  const persistedTestIsCurrent = route.last_test_revision === route.revision;
+  const state: InlineTestState = test.isPending
+    ? "running"
+    : test.isError
+      ? "failure"
+      : test.isSuccess || persistedTestIsCurrent && route.last_test_status === "healthy"
+        ? "success"
+        : persistedTestIsCurrent && route.last_test_status === "unhealthy"
+          ? "failure"
+          : route.last_test_status
+            ? "stale"
+            : "idle";
+  return <InlineTestControl state={state} latency={test.data?.latency_ms ?? route.last_test_latency_millis} disabled={!route.enabled} onTest={() => test.mutate()} />;
 }
 
 function RouteForm({ current, deployments, onClose }: { current?: Route; deployments: Deployment[]; onClose: () => void }) {
@@ -192,7 +208,7 @@ function RouteForm({ current, deployments, onClose }: { current?: Route; deploym
   return (
     <Modal title={current ? t("routes.edit") : t("routes.createTitle")} onClose={onClose}>
       {enabled.length === 0 ? (
-        <div className="notice warning"><strong>{t("routes.deploymentRequired")}</strong><span>{t("routes.deploymentRequiredDescription")}</span></div>
+        <div className="notice warning"><strong>{t("routes.deploymentRequired")}</strong><span>{t("routes.deploymentRequiredDescription")}</span><Link className="notice-link" href="/admin/deployments">{t("routes.openDeployments")}</Link></div>
       ) : (
         <form className="form-grid" onSubmit={submit}>
           <Field label={t("routes.publicAlias")}><input autoFocus required value={publicModel} onChange={(event) => setPublicModel(event.target.value)} /></Field>

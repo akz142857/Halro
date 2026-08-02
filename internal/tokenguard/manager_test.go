@@ -146,6 +146,81 @@ func TestAlertDeduplicatesWithinCooldown(t *testing.T) {
 	}
 }
 
+func TestAcquireCountsConcurrencyAtomicallyAndReleaseIsIdempotent(t *testing.T) {
+	policy := domain.TokenGuardPolicy{ID: "guard", Name: "guard", Enabled: true, Action: "alert", Concurrency: 1}
+	manager, _ := New([]domain.TokenGuardPolicy{policy})
+	input := Input{PolicyID: policy.ID, ProjectID: "p", KeyID: "k", Now: time.Now()}
+	first, lease := manager.Acquire(input)
+	if !first.Allowed || first.Reason != "" || lease == nil {
+		t.Fatalf("first=%#v lease=%v", first, lease)
+	}
+	second, secondLease := manager.Acquire(input)
+	if !second.Allowed || second.Reason != "concurrency" || secondLease == nil {
+		t.Fatalf("second=%#v", second)
+	}
+	lease.Release()
+	lease.Release()
+	secondLease.Release()
+	third, thirdLease := manager.Acquire(input)
+	if !third.Allowed || third.Reason != "" {
+		t.Fatalf("third=%#v", third)
+	}
+	thirdLease.Release()
+}
+
+func TestCheckpointV2RestoresLiveBlockAndV1Baseline(t *testing.T) {
+	policy := testPolicy()
+	manager, _ := New([]domain.TokenGuardPolicy{policy})
+	now := time.Now().UTC()
+	input := Input{PolicyID: policy.ID, ProjectID: "p", KeyID: "k", EstimatedTokens: 101, Now: now}
+	manager.Admit(input)
+	input.Now = now.Add(time.Second)
+	if decision := manager.Admit(input); decision.Allowed {
+		t.Fatal("expected block")
+	}
+	payload, err := manager.MarshalCheckpoint()
+	if err != nil || !strings.Contains(string(payload), `"version":2`) {
+		t.Fatalf("checkpoint=%s err=%v", payload, err)
+	}
+	restored, _ := New([]domain.TokenGuardPolicy{policy})
+	if err := restored.RestoreCheckpoint(payload); err != nil {
+		t.Fatal(err)
+	}
+	input.Now = now.Add(2 * time.Second)
+	if decision := restored.Admit(input); decision.Allowed || decision.Reason != "temporary_block" {
+		t.Fatalf("restored=%#v", decision)
+	}
+
+	ewma := ewmaPolicy()
+	legacy, _ := New([]domain.TokenGuardPolicy{ewma})
+	v1 := fmt.Sprintf(`{"version":1,"subjects":[{"policy_id":%q,"policy_revision":0,"project_id":"p","key_id":"k","baseline":{"started_at":%q,"window_start":%q,"samples":10,"rpm":1,"tpm":1,"tokens_per_request":1,"cost_per_minute":1,"initialized":true}}]}`, ewma.ID, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
+	if err := legacy.RestoreCheckpoint([]byte(v1)); err != nil {
+		t.Fatalf("v1 restore: %v", err)
+	}
+}
+
+func TestDroppedEventsCountedAndIdleSubjectsPrunedSafely(t *testing.T) {
+	policy := domain.TokenGuardPolicy{ID: "guard", Name: "guard", Enabled: true, Action: "alert", RequestTokens: 1}
+	manager, _ := New([]domain.TokenGuardPolicy{policy})
+	now := time.Now()
+	for index := 0; index < 300; index++ {
+		manager.Admit(Input{PolicyID: policy.ID, ProjectID: fmt.Sprintf("p%d", index), KeyID: "k", EstimatedTokens: 2, Now: now})
+	}
+	if manager.DroppedEvents() == 0 {
+		t.Fatal("full event channel was not observable")
+	}
+	manager2, _ := New([]domain.TokenGuardPolicy{policy})
+	manager2.Admit(Input{PolicyID: policy.ID, ProjectID: "idle", KeyID: "k", Now: now})
+	if removed := manager2.PruneIdle(now.Add(3*time.Hour), 2*time.Hour); removed != 1 {
+		t.Fatalf("removed=%d", removed)
+	}
+	_, lease := manager2.Acquire(Input{PolicyID: policy.ID, ProjectID: "active", KeyID: "k", Now: now})
+	if removed := manager2.PruneIdle(now.Add(3*time.Hour), 2*time.Hour); removed != 0 {
+		t.Fatalf("active removed=%d", removed)
+	}
+	lease.Release()
+}
+
 func TestErrorRateUsesCompletedAcceptedRequests(t *testing.T) {
 	policy := testPolicy()
 	policy.Action = "alert"

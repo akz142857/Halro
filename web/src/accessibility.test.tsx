@@ -2,7 +2,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { Layout } from "./Layout";
-import { Modal } from "./components";
+import { Modal, OverflowMenu } from "./components";
+import { api } from "./api";
+import { SettingsPage } from "./pages/SettingsPage";
 
 describe("admin accessibility baseline", () => {
   it("provides landmarks, a skip link, and current navigation context", () => {
@@ -15,6 +17,9 @@ describe("admin accessibility baseline", () => {
     );
     expect(screen.getByRole("link", { name: "跳到主要内容" })).toHaveAttribute("href", "#main-content");
     expect(screen.getByRole("navigation", { name: "主导航" })).toBeVisible();
+    expect(Array.from(screen.getByRole("navigation", { name: "主导航" }).querySelectorAll("a")).map((link) => link.textContent)).toEqual([
+      "总览", "服务商", "模型部署", "模型路由", "安全策略", "项目与密钥", "用量", "运维", "设置",
+    ]);
     expect(screen.getByRole("main")).toHaveAttribute("id", "main-content");
     expect(screen.getByRole("link", { name: "模型部署" })).toHaveAttribute("aria-current", "page");
   });
@@ -26,5 +31,43 @@ describe("admin accessibility baseline", () => {
     expect(dialog).toHaveFocus();
     fireEvent.keyDown(document, { key: "Escape" });
     expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("closes overflow menus on outside interaction and Escape", () => {
+    const { container } = render(<OverflowMenu label="更多操作"><button>删除</button></OverflowMenu>);
+    const trigger = screen.getByLabelText("更多操作");
+    const details = container.querySelector("details")!;
+
+    fireEvent.click(trigger);
+    expect(details).toHaveAttribute("open");
+    fireEvent.pointerDown(document.body);
+    expect(details).not.toHaveAttribute("open");
+
+    fireEvent.click(trigger);
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(details).not.toHaveAttribute("open");
+    expect(trigger).toHaveFocus();
+  });
+
+  it("keeps one main landmark and exposes settings sections and field descriptions", async () => {
+    vi.spyOn(api, "systemStatus").mockResolvedValue({ build: { version: "dev", commit: "local", date: "" }, accounting_status: 0, draining: false, wal: {}, audit: {}, alerts: {}, usage_watermark: {} });
+    vi.spyOn(api, "settings").mockResolvedValue({ data: { health_probe_interval_seconds: 30, revision: 1 }, etag: '"1"' });
+    vi.spyOn(api, "uiSettings").mockResolvedValue({ data: { default_locale: "zh-CN", revision: 1 }, etag: '"1"' });
+    vi.spyOn(api, "preferences").mockResolvedValue({ data: { locale: "zh-CN", revision: 1 }, etag: '"1"' });
+    vi.spyOn(api, "mfaStatus").mockResolvedValue({ enabled: false, policy: "optional", authenticators: [] });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><Layout username="admin"><SettingsPage /></Layout></QueryClientProvider>);
+    await screen.findByRole("heading", { name: "通用" });
+    expect(screen.getAllByRole("main")).toHaveLength(1);
+    expect(await screen.findByRole("navigation", { name: "设置分区" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "通用" })).toHaveAttribute("aria-current", "page");
+    fireEvent.click(screen.getByRole("link", { name: "登录与安全" }));
+    expect(await screen.findByRole("link", { name: "登录与安全" })).toHaveAttribute("aria-current", "page");
+    fireEvent.click(screen.getByRole("button", { name: /变更管理员密码|Change administrator password/ }));
+    await screen.findByRole("heading", { name: /变更管理员密码|Change administrator password/ });
+    const nextPassword = document.querySelector<HTMLInputElement>('input[autocomplete="new-password"]');
+    expect(nextPassword).not.toBeNull();
+    const description = nextPassword!.getAttribute("aria-describedby");
+    expect(document.getElementById(description!)).toHaveTextContent(/12/);
   });
 });

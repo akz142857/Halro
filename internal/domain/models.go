@@ -195,24 +195,135 @@ type GatewayKey struct {
 }
 
 type ProviderInstance struct {
+	ID                     string                   `json:"id"`
+	Name                   string                   `json:"name"`
+	Type                   ProviderType             `json:"type"`
+	BaseURL                string                   `json:"base_url"`
+	APIVersion             string                   `json:"api_version,omitempty"`
+	CredentialID           string                   `json:"credential_id"`
+	AccessSurface          AccessSurface            `json:"access_surface"`
+	ProfileID              ProviderProfileID        `json:"profile_id"`
+	CredentialScheme       CredentialScheme         `json:"credential_scheme"`
+	AllowedHosts           []string                 `json:"allowed_hosts"`
+	Capabilities           ProviderCapabilities     `json:"capabilities"`
+	CapabilityEvidence     CapabilityEvidenceSet    `json:"capability_evidence"`
+	Bindings               []ProviderProfileBinding `json:"bindings,omitempty"`
+	MaxConcurrency         int64                    `json:"max_concurrency"`
+	Enabled                bool                     `json:"enabled"`
+	LastTestStatus         DeploymentTestStatus     `json:"last_test_status,omitempty"`
+	LastTestedAt           *time.Time               `json:"last_tested_at,omitempty"`
+	LastTestLatencyMillis  int64                    `json:"last_test_latency_millis,omitempty"`
+	LastTestErrorClass     string                   `json:"last_test_error_class,omitempty"`
+	LastTestRevision       uint64                   `json:"last_test_revision,omitempty"`
+	LastTestHealthyTargets int                      `json:"last_test_healthy_targets,omitempty"`
+	LastTestTotalTargets   int                      `json:"last_test_total_targets,omitempty"`
+	CreatedAt              time.Time                `json:"created_at"`
+	UpdatedAt              time.Time                `json:"updated_at"`
+	Revision               uint64                   `json:"revision"`
+	DeletedAt              *time.Time               `json:"deleted_at,omitempty"`
+}
+
+// ProviderProfileBinding binds one immutable provider protocol profile to a
+// connection. The provider's legacy profile fields remain a projection of the
+// first binding while v1 clients are supported.
+type ProviderProfileBinding struct {
 	ID                 string                `json:"id"`
-	Name               string                `json:"name"`
-	Type               ProviderType          `json:"type"`
-	BaseURL            string                `json:"base_url"`
-	APIVersion         string                `json:"api_version,omitempty"`
-	CredentialID       string                `json:"credential_id"`
-	AccessSurface      AccessSurface         `json:"access_surface"`
+	ProviderID         string                `json:"provider_id"`
 	ProfileID          ProviderProfileID     `json:"profile_id"`
+	AccessSurface      AccessSurface         `json:"access_surface"`
 	CredentialScheme   CredentialScheme      `json:"credential_scheme"`
-	AllowedHosts       []string              `json:"allowed_hosts"`
 	Capabilities       ProviderCapabilities  `json:"capabilities"`
 	CapabilityEvidence CapabilityEvidenceSet `json:"capability_evidence"`
-	MaxConcurrency     int64                 `json:"max_concurrency"`
 	Enabled            bool                  `json:"enabled"`
-	CreatedAt          time.Time             `json:"created_at"`
-	UpdatedAt          time.Time             `json:"updated_at"`
-	Revision           uint64                `json:"revision"`
-	DeletedAt          *time.Time            `json:"deleted_at,omitempty"`
+}
+
+func DefaultProviderProfileBindingID(providerID string, profileID ProviderProfileID) string {
+	return providerID + ":" + string(profileID)
+}
+
+func (b ProviderProfileBinding) Validate(providerID string, providerType ProviderType) error {
+	if strings.TrimSpace(b.ID) == "" {
+		return errors.New("provider profile binding id is required")
+	}
+	if b.ProviderID != providerID {
+		return errors.New("provider profile binding provider id is incompatible")
+	}
+	if err := ValidateProviderProfile(providerType, b.AccessSurface, b.ProfileID, b.CredentialScheme); err != nil {
+		return err
+	}
+	if b.Enabled && !b.Capabilities.AnyOperation() {
+		return errors.New("provider profile binding must declare at least one operation capability")
+	}
+	if b.Capabilities.Streaming && !b.Capabilities.Chat {
+		return errors.New("streaming capability requires chat capability")
+	}
+	if err := b.CapabilityEvidence.Validate(b.Capabilities); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (p ProviderInstance) EffectiveProfileBindings() []ProviderProfileBinding {
+	if len(p.Bindings) != 0 {
+		result := make([]ProviderProfileBinding, len(p.Bindings))
+		copy(result, p.Bindings)
+		return result
+	}
+	return []ProviderProfileBinding{{
+		ID: DefaultProviderProfileBindingID(p.ID, p.ProfileID), ProviderID: p.ID, ProfileID: p.ProfileID,
+		AccessSurface: p.AccessSurface, CredentialScheme: p.CredentialScheme,
+		Capabilities: p.Capabilities, CapabilityEvidence: p.CapabilityEvidence.Clone(), Enabled: p.Enabled,
+	}}
+}
+
+func (p ProviderInstance) ProfileBinding(id string) (ProviderProfileBinding, bool) {
+	for _, binding := range p.EffectiveProfileBindings() {
+		if binding.ID == id {
+			return binding, true
+		}
+	}
+	return ProviderProfileBinding{}, false
+}
+
+func BindingsCapabilitiesSummary(bindings []ProviderProfileBinding) (ProviderCapabilities, CapabilityEvidenceSet) {
+	var summary ProviderCapabilities
+	evidence := EvidenceForCapabilities(summary, EvidenceDeclared)
+	for _, binding := range bindings {
+		if !binding.Enabled {
+			continue
+		}
+		c := binding.Capabilities
+		summary.Chat = summary.Chat || c.Chat
+		summary.Streaming = summary.Streaming || c.Streaming
+		summary.Embeddings = summary.Embeddings || c.Embeddings
+		summary.Moderations = summary.Moderations || c.Moderations
+		summary.Images = summary.Images || c.Images
+		summary.Transcriptions = summary.Transcriptions || c.Transcriptions
+		summary.Speech = summary.Speech || c.Speech
+		summary.Files = summary.Files || c.Files
+		summary.Batches = summary.Batches || c.Batches
+		summary.Rerank = summary.Rerank || c.Rerank
+		summary.AsyncGenerate = summary.AsyncGenerate || c.AsyncGenerate
+		summary.Tools = summary.Tools || c.Tools
+		summary.Vision = summary.Vision || c.Vision
+		summary.JSONMode = summary.JSONMode || c.JSONMode
+		summary.DeveloperRole = summary.DeveloperRole || c.DeveloperRole
+		summary.Reasoning = summary.Reasoning || c.Reasoning
+		summary.StreamUsage = summary.StreamUsage || c.StreamUsage
+		if c.MaxContextTokens > summary.MaxContextTokens {
+			summary.MaxContextTokens = c.MaxContextTokens
+		}
+		if c.MaxOutputTokens > summary.MaxOutputTokens {
+			summary.MaxOutputTokens = c.MaxOutputTokens
+		}
+		for name, value := range binding.CapabilityEvidence {
+			if evidenceRank(value) > evidenceRank(evidence[name]) {
+				evidence[name] = value
+			}
+		}
+	}
+	evidence = NormalizeCapabilityEvidence(summary, evidence, EvidenceDeclared)
+	return summary, evidence
 }
 
 type ProviderCapabilities struct {
@@ -269,7 +380,7 @@ func (p ProviderInstance) Validate() error {
 		problems = append(problems, errors.New("provider allowed hosts must not be empty"))
 	}
 	capabilities := p.Capabilities
-	if !capabilities.AnyOperation() {
+	if !capabilities.AnyOperation() && (p.Enabled || len(p.Bindings) == 0) {
 		problems = append(problems, errors.New("provider must declare at least one operation capability"))
 	}
 	if capabilities.Streaming && !capabilities.Chat {
@@ -282,8 +393,62 @@ func (p ProviderInstance) Validate() error {
 	if err := p.CapabilityEvidence.Validate(capabilities); err != nil {
 		problems = append(problems, err)
 	}
+	seenBindings := make(map[string]struct{}, len(p.Bindings))
+	seenProfiles := make(map[ProviderProfileID]struct{}, len(p.Bindings))
+	enabledBinding := false
+	for _, binding := range p.Bindings {
+		if _, duplicate := seenBindings[binding.ID]; duplicate {
+			problems = append(problems, errors.New("provider profile binding ids must be unique"))
+			continue
+		}
+		seenBindings[binding.ID] = struct{}{}
+		if _, duplicate := seenProfiles[binding.ProfileID]; duplicate {
+			problems = append(problems, errors.New("provider profile bindings must not repeat a profile"))
+		}
+		seenProfiles[binding.ProfileID] = struct{}{}
+		enabledBinding = enabledBinding || binding.Enabled
+		if err := binding.Validate(p.ID, p.Type); err != nil {
+			problems = append(problems, err)
+		}
+		if binding.CredentialScheme != p.CredentialScheme {
+			problems = append(problems, errors.New("provider profile binding credential scheme is incompatible with connection"))
+		}
+		if binding.AccessSurface != p.AccessSurface {
+			problems = append(problems, errors.New("provider profile binding access surface is incompatible with connection"))
+		}
+	}
+	if p.Enabled && len(p.Bindings) != 0 && !enabledBinding {
+		problems = append(problems, errors.New("enabled provider requires an enabled profile binding"))
+	}
+	if len(p.Bindings) != 0 {
+		primary := p.Bindings[0]
+		if primary.ProfileID != p.ProfileID || primary.AccessSurface != p.AccessSurface || primary.CredentialScheme != p.CredentialScheme {
+			problems = append(problems, errors.New("provider legacy profile projection must match the primary binding"))
+		}
+		summary, evidence := BindingsCapabilitiesSummary(p.Bindings)
+		if !ProviderCapabilitiesSubset(p.Capabilities, summary) || !ProviderCapabilitiesSubset(summary, p.Capabilities) {
+			problems = append(problems, errors.New("provider capabilities must equal the profile binding summary"))
+		}
+		for name, value := range evidence {
+			if p.CapabilityEvidence[name] != value {
+				problems = append(problems, errors.New("provider capability evidence must equal the profile binding summary"))
+				break
+			}
+		}
+	}
 	if p.MaxConcurrency < 0 {
 		problems = append(problems, errors.New("provider max concurrency cannot be negative"))
+	}
+	if p.LastTestLatencyMillis < 0 || p.LastTestHealthyTargets < 0 || p.LastTestTotalTargets < 0 || p.LastTestHealthyTargets > p.LastTestTotalTargets {
+		problems = append(problems, errors.New("provider test result is invalid"))
+	}
+	if p.LastTestStatus != "" {
+		if p.LastTestStatus != DeploymentTestHealthy && p.LastTestStatus != DeploymentTestUnhealthy {
+			problems = append(problems, errors.New("provider test status is invalid"))
+		}
+		if p.LastTestedAt == nil || p.LastTestRevision == 0 || p.LastTestTotalTargets == 0 {
+			problems = append(problems, errors.New("provider test status requires timestamp, revision, and target count"))
+		}
 	}
 	return errors.Join(problems...)
 }
@@ -347,13 +512,26 @@ func DefaultProviderCapabilitiesForProfile(providerType ProviderType, profileID 
 // Provider owns transport and credentials; Deployment owns model capabilities,
 // price and target-level capacity. Routes reference Deployments and never
 // duplicate Provider secrets or endpoint configuration.
+type DeploymentTargetKind string
+
+const (
+	TargetModelID                      DeploymentTargetKind = "model_id"
+	TargetAzureDeployment              DeploymentTargetKind = "azure_deployment"
+	TargetBedrockFoundationModel       DeploymentTargetKind = "bedrock_foundation_model"
+	TargetBedrockInferenceProfile      DeploymentTargetKind = "bedrock_inference_profile"
+	TargetBedrockProvisionedThroughput DeploymentTargetKind = "bedrock_provisioned_throughput"
+	TargetCustomEndpointModel          DeploymentTargetKind = "custom_endpoint_model"
+)
+
 type Deployment struct {
 	ID                     string                `json:"id"`
 	Name                   string                `json:"name"`
 	ProviderID             string                `json:"provider_id"`
 	ProviderModel          string                `json:"provider_model"`
+	TargetKind             DeploymentTargetKind  `json:"target_kind,omitempty"`
 	AccessSurface          AccessSurface         `json:"access_surface"`
 	ProfileID              ProviderProfileID     `json:"profile_id"`
+	BindingID              string                `json:"binding_id,omitempty"`
 	Region                 string                `json:"region"`
 	Capabilities           ProviderCapabilities  `json:"capabilities"`
 	CapabilityEvidence     CapabilityEvidenceSet `json:"capability_evidence"`
@@ -364,11 +542,23 @@ type Deployment struct {
 	Priority               int                   `json:"priority"`
 	Weight                 int                   `json:"weight"`
 	Enabled                bool                  `json:"enabled"`
+	LastTestStatus         DeploymentTestStatus  `json:"last_test_status,omitempty"`
+	LastTestedAt           *time.Time            `json:"last_tested_at,omitempty"`
+	LastTestLatencyMillis  int64                 `json:"last_test_latency_millis,omitempty"`
+	LastTestErrorClass     string                `json:"last_test_error_class,omitempty"`
+	LastTestRevision       uint64                `json:"last_test_revision,omitempty"`
 	CreatedAt              time.Time             `json:"created_at"`
 	UpdatedAt              time.Time             `json:"updated_at"`
 	Revision               uint64                `json:"revision"`
 	DeletedAt              *time.Time            `json:"deleted_at,omitempty"`
 }
+
+type DeploymentTestStatus string
+
+const (
+	DeploymentTestHealthy   DeploymentTestStatus = "healthy"
+	DeploymentTestUnhealthy DeploymentTestStatus = "unhealthy"
+)
 
 func (d *Deployment) GetRevision() uint64      { return d.Revision }
 func (d *Deployment) SetRevision(value uint64) { d.Revision = value }
@@ -387,6 +577,14 @@ func (d Deployment) Validate() error {
 	if strings.TrimSpace(d.ProviderModel) == "" {
 		problems = append(problems, errors.New("deployment provider model is required"))
 	}
+	if d.TargetKind != "" {
+		switch d.TargetKind {
+		case TargetModelID, TargetAzureDeployment, TargetBedrockFoundationModel,
+			TargetBedrockInferenceProfile, TargetBedrockProvisionedThroughput, TargetCustomEndpointModel:
+		default:
+			problems = append(problems, errors.New("deployment target kind is invalid"))
+		}
+	}
 	if strings.TrimSpace(string(d.AccessSurface)) == "" || strings.TrimSpace(string(d.ProfileID)) == "" {
 		problems = append(problems, errors.New("deployment access surface and profile are required"))
 	}
@@ -396,11 +594,29 @@ func (d Deployment) Validate() error {
 	if !d.Capabilities.AnyOperation() {
 		problems = append(problems, errors.New("deployment must declare at least one operation capability"))
 	}
+	if (d.Capabilities.Streaming || d.Capabilities.Tools || d.Capabilities.Vision || d.Capabilities.JSONMode ||
+		d.Capabilities.DeveloperRole || d.Capabilities.Reasoning || d.Capabilities.StreamUsage) && !d.Capabilities.Chat {
+		problems = append(problems, errors.New("deployment chat features require chat capability"))
+	}
+	if d.Capabilities.StreamUsage && !d.Capabilities.Streaming {
+		problems = append(problems, errors.New("deployment stream usage requires streaming capability"))
+	}
 	if d.InputMicrosPerMillion < 0 || d.OutputMicrosPerMillion < 0 || d.FixedRequestMicrosUSD < 0 {
 		problems = append(problems, errors.New("deployment prices cannot be negative"))
 	}
 	if d.MaxConcurrency < 0 {
 		problems = append(problems, errors.New("deployment max concurrency cannot be negative"))
+	}
+	if d.LastTestLatencyMillis < 0 {
+		problems = append(problems, errors.New("deployment test latency cannot be negative"))
+	}
+	if d.LastTestStatus != "" {
+		if d.LastTestStatus != DeploymentTestHealthy && d.LastTestStatus != DeploymentTestUnhealthy {
+			problems = append(problems, errors.New("deployment test status is invalid"))
+		}
+		if d.LastTestedAt == nil || d.LastTestRevision == 0 {
+			problems = append(problems, errors.New("deployment test status requires timestamp and revision"))
+		}
 	}
 	if d.Capabilities.MaxContextTokens < 0 || d.Capabilities.MaxOutputTokens < 0 ||
 		(d.Capabilities.MaxContextTokens > 0 && d.Capabilities.MaxOutputTokens > d.Capabilities.MaxContextTokens) {
@@ -427,20 +643,25 @@ func isRegionalProfile(id ProviderProfileID) bool {
 }
 
 type Route struct {
-	ID                     string     `json:"id"`
-	PublicModel            string     `json:"public_model"`
-	DeploymentID           string     `json:"deployment_id,omitempty"`
-	ProviderID             string     `json:"provider_id,omitempty"` // Legacy schema v2 compatibility.
-	ProviderModel          string     `json:"provider_model,omitempty"`
-	InputMicrosPerMillion  int64      `json:"input_micros_per_million,omitempty"`
-	OutputMicrosPerMillion int64      `json:"output_micros_per_million,omitempty"`
-	Priority               int        `json:"priority"`
-	Strategy               string     `json:"strategy"`
-	Enabled                bool       `json:"enabled"`
-	CreatedAt              time.Time  `json:"created_at"`
-	UpdatedAt              time.Time  `json:"updated_at"`
-	Revision               uint64     `json:"revision"`
-	DeletedAt              *time.Time `json:"deleted_at,omitempty"`
+	ID                     string               `json:"id"`
+	PublicModel            string               `json:"public_model"`
+	DeploymentID           string               `json:"deployment_id,omitempty"`
+	ProviderID             string               `json:"provider_id,omitempty"` // Legacy schema v2 compatibility.
+	ProviderModel          string               `json:"provider_model,omitempty"`
+	InputMicrosPerMillion  int64                `json:"input_micros_per_million,omitempty"`
+	OutputMicrosPerMillion int64                `json:"output_micros_per_million,omitempty"`
+	Priority               int                  `json:"priority"`
+	Strategy               string               `json:"strategy"`
+	Enabled                bool                 `json:"enabled"`
+	LastTestStatus         DeploymentTestStatus `json:"last_test_status,omitempty"`
+	LastTestedAt           *time.Time           `json:"last_tested_at,omitempty"`
+	LastTestLatencyMillis  int64                `json:"last_test_latency_millis,omitempty"`
+	LastTestErrorClass     string               `json:"last_test_error_class,omitempty"`
+	LastTestRevision       uint64               `json:"last_test_revision,omitempty"`
+	CreatedAt              time.Time            `json:"created_at"`
+	UpdatedAt              time.Time            `json:"updated_at"`
+	Revision               uint64               `json:"revision"`
+	DeletedAt              *time.Time           `json:"deleted_at,omitempty"`
 }
 
 func (r *Route) GetRevision() uint64      { return r.Revision }
@@ -470,6 +691,17 @@ func (r Route) Validate() error {
 	}
 	if r.Strategy != "" && r.Strategy != "ordered" && r.Strategy != "round_robin" {
 		problems = append(problems, errors.New("route strategy must be ordered or round_robin"))
+	}
+	if r.LastTestLatencyMillis < 0 {
+		problems = append(problems, errors.New("route test latency cannot be negative"))
+	}
+	if r.LastTestStatus != "" {
+		if r.LastTestStatus != DeploymentTestHealthy && r.LastTestStatus != DeploymentTestUnhealthy {
+			problems = append(problems, errors.New("route test status is invalid"))
+		}
+		if r.LastTestedAt == nil || r.LastTestRevision == 0 {
+			problems = append(problems, errors.New("route test status requires timestamp and revision"))
+		}
 	}
 	return errors.Join(problems...)
 }

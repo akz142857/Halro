@@ -18,7 +18,7 @@ import (
 	bbolt "go.etcd.io/bbolt"
 )
 
-const schemaVersion uint64 = 8
+const schemaVersion uint64 = 9
 
 func CurrentSchemaVersion() uint64 { return schemaVersion }
 
@@ -168,6 +168,42 @@ var migrations = []migration{
 		}
 		return migrationStep(step, "after_create_admin_mfa_buckets")
 	}},
+	{version: 9, name: "provider_profile_bindings", up: migrateProviderProfileBindings},
+}
+
+func migrateProviderProfileBindings(tx *bbolt.Tx, step func(string) error) error {
+	if err := migrationStep(step, "before_migrate_provider_profile_bindings"); err != nil {
+		return err
+	}
+	providers, deployments := tx.Bucket(bucketProviders), tx.Bucket(bucketDeployments)
+	if providers == nil || deployments == nil {
+		return errors.New("provider profile binding migration buckets are missing")
+	}
+	providerByID := make(map[string]domain.ProviderInstance)
+	if err := rewriteBucket(providers, func(raw []byte) ([]byte, error) {
+		var instance domain.ProviderInstance
+		if err := json.Unmarshal(raw, &instance); err != nil {
+			return nil, err
+		}
+		normalizeProviderBindings(&instance)
+		providerByID[instance.ID] = instance
+		return json.Marshal(instance)
+	}); err != nil {
+		return fmt.Errorf("migrate provider profile bindings: %w", err)
+	}
+	if err := rewriteBucket(deployments, func(raw []byte) ([]byte, error) {
+		var deployment domain.Deployment
+		if err := json.Unmarshal(raw, &deployment); err != nil {
+			return nil, err
+		}
+		if instance, ok := providerByID[deployment.ProviderID]; ok {
+			normalizeDeploymentBinding(&deployment, instance)
+		}
+		return json.Marshal(deployment)
+	}); err != nil {
+		return fmt.Errorf("migrate deployment profile bindings: %w", err)
+	}
+	return migrationStep(step, "after_migrate_provider_profile_bindings")
 }
 
 type usageCheckpoint struct {
@@ -1129,6 +1165,21 @@ func normalizeProviderProfile(instance *domain.ProviderInstance, evidence domain
 	if len(instance.CapabilityEvidence) == 0 {
 		instance.CapabilityEvidence = domain.EvidenceForCapabilities(instance.Capabilities, evidence)
 	}
+	normalizeProviderBindings(instance)
+}
+
+func normalizeProviderBindings(instance *domain.ProviderInstance) {
+	if len(instance.Bindings) == 0 && instance.ProfileID != "" {
+		instance.Bindings = []domain.ProviderProfileBinding{{
+			ID: domain.DefaultProviderProfileBindingID(instance.ID, instance.ProfileID), ProviderID: instance.ID,
+			ProfileID: instance.ProfileID, AccessSurface: instance.AccessSurface,
+			CredentialScheme: instance.CredentialScheme, Capabilities: instance.Capabilities,
+			CapabilityEvidence: instance.CapabilityEvidence.Clone(), Enabled: instance.Enabled,
+		}}
+	}
+	if len(instance.Bindings) != 0 {
+		instance.Capabilities, instance.CapabilityEvidence = domain.BindingsCapabilitiesSummary(instance.Bindings)
+	}
 }
 
 func normalizeDeploymentProfile(deployment *domain.Deployment, instance domain.ProviderInstance, evidence domain.CapabilityEvidence) {
@@ -1147,6 +1198,19 @@ func normalizeDeploymentProfile(deployment *domain.Deployment, instance domain.P
 	}
 	if len(deployment.CapabilityEvidence) == 0 {
 		deployment.CapabilityEvidence = domain.EvidenceForCapabilities(deployment.Capabilities, evidence)
+	}
+	normalizeDeploymentBinding(deployment, instance)
+}
+
+func normalizeDeploymentBinding(deployment *domain.Deployment, instance domain.ProviderInstance) {
+	if deployment.BindingID != "" {
+		return
+	}
+	for _, binding := range instance.EffectiveProfileBindings() {
+		if binding.ProfileID == deployment.ProfileID && binding.AccessSurface == deployment.AccessSurface {
+			deployment.BindingID = binding.ID
+			return
+		}
 	}
 }
 
@@ -2397,6 +2461,9 @@ func (s *Store) PutProvider(ctx context.Context, provider domain.ProviderInstanc
 func (s *Store) GetProvider(ctx context.Context, id string) (domain.ProviderInstance, error) {
 	var provider domain.ProviderInstance
 	err := s.getJSON(ctx, bucketProviders, id, &provider)
+	if err == nil {
+		normalizeProviderBindings(&provider)
+	}
 	return provider, err
 }
 
@@ -2407,6 +2474,7 @@ func (s *Store) ListProviders(ctx context.Context) ([]domain.ProviderInstance, e
 		if err := json.Unmarshal(raw, &provider); err != nil {
 			return err
 		}
+		normalizeProviderBindings(&provider)
 		providers = append(providers, provider)
 		return nil
 	})
@@ -2447,14 +2515,22 @@ func validateProviderCredentialProfile(instance domain.ProviderInstance, credent
 }
 
 func validateDeploymentProviderProfile(deployment domain.Deployment, instance domain.ProviderInstance) error {
-	if deployment.AccessSurface != instance.AccessSurface || deployment.ProfileID != instance.ProfileID {
+	bindingID := deployment.BindingID
+	if bindingID == "" {
+		bindingID = domain.DefaultProviderProfileBindingID(instance.ID, deployment.ProfileID)
+	}
+	binding, ok := instance.ProfileBinding(bindingID)
+	if !ok {
+		return errors.New("deployment provider profile binding was not found")
+	}
+	if deployment.AccessSurface != binding.AccessSurface || deployment.ProfileID != binding.ProfileID {
 		return errors.New("deployment access surface or profile does not match provider")
 	}
-	if !providerCapabilitySubset(deployment.Capabilities, instance.Capabilities) {
+	if !domain.ProviderCapabilitiesSubset(deployment.Capabilities, binding.Capabilities) {
 		return errors.New("deployment capabilities exceed provider capabilities")
 	}
 	for name, value := range deployment.CapabilityEvidence {
-		providerValue, ok := instance.CapabilityEvidence[name]
+		providerValue, ok := binding.CapabilityEvidence[name]
 		if !ok || capabilityEvidenceRank(value) > capabilityEvidenceRank(providerValue) {
 			return errors.New("deployment capability evidence exceeds provider evidence")
 		}
@@ -2463,17 +2539,7 @@ func validateDeploymentProviderProfile(deployment domain.Deployment, instance do
 }
 
 func providerCapabilitySubset(candidate, available domain.ProviderCapabilities) bool {
-	return (!candidate.Chat || available.Chat) &&
-		(!candidate.Streaming || available.Streaming) &&
-		(!candidate.Embeddings || available.Embeddings) &&
-		(!candidate.Tools || available.Tools) &&
-		(!candidate.Vision || available.Vision) &&
-		(!candidate.JSONMode || available.JSONMode) &&
-		(!candidate.DeveloperRole || available.DeveloperRole) &&
-		(!candidate.Reasoning || available.Reasoning) &&
-		(!candidate.StreamUsage || available.StreamUsage) &&
-		providerCapabilityLimitSubset(candidate.MaxContextTokens, available.MaxContextTokens) &&
-		providerCapabilityLimitSubset(candidate.MaxOutputTokens, available.MaxOutputTokens)
+	return domain.ProviderCapabilitiesSubset(candidate, available)
 }
 
 func providerCapabilityLimitSubset(candidate, available int64) bool {
@@ -2499,15 +2565,31 @@ func capabilityEvidenceRank(value domain.CapabilityEvidence) int {
 func (s *Store) GetDeployment(ctx context.Context, id string) (domain.Deployment, error) {
 	var deployment domain.Deployment
 	err := s.getJSON(ctx, bucketDeployments, id, &deployment)
+	if err == nil && deployment.BindingID == "" {
+		if instance, providerErr := s.GetProvider(ctx, deployment.ProviderID); providerErr == nil {
+			normalizeDeploymentBinding(&deployment, instance)
+		}
+	}
 	return deployment, err
 }
 
 func (s *Store) ListDeployments(ctx context.Context) ([]domain.Deployment, error) {
+	providers, err := s.ListProviders(ctx)
+	if err != nil {
+		return nil, err
+	}
+	providerByID := make(map[string]domain.ProviderInstance, len(providers))
+	for _, instance := range providers {
+		providerByID[instance.ID] = instance
+	}
 	var deployments []domain.Deployment
-	err := s.listJSON(ctx, bucketDeployments, func(raw []byte) error {
+	err = s.listJSON(ctx, bucketDeployments, func(raw []byte) error {
 		var deployment domain.Deployment
 		if err := json.Unmarshal(raw, &deployment); err != nil {
 			return err
+		}
+		if instance, ok := providerByID[deployment.ProviderID]; ok {
+			normalizeDeploymentBinding(&deployment, instance)
 		}
 		deployments = append(deployments, deployment)
 		return nil
@@ -2528,8 +2610,19 @@ func (s *Store) PutRoute(ctx context.Context, route domain.Route, expectedRevisi
 			if tx.Bucket(bucketDeployments).Get([]byte(route.DeploymentID)) == nil {
 				return fmt.Errorf("deployment %q: %w", route.DeploymentID, ErrNotFound)
 			}
-		} else if tx.Bucket(bucketProviders).Get([]byte(route.ProviderID)) == nil {
-			return fmt.Errorf("provider %q: %w", route.ProviderID, ErrNotFound)
+		} else {
+			raw := tx.Bucket(bucketProviders).Get([]byte(route.ProviderID))
+			if raw == nil {
+				return fmt.Errorf("provider %q: %w", route.ProviderID, ErrNotFound)
+			}
+			var instance domain.ProviderInstance
+			if err := json.Unmarshal(raw, &instance); err != nil {
+				return err
+			}
+			normalizeProviderBindings(&instance)
+			if len(instance.Bindings) != 1 {
+				return errors.New("deployment is required for a provider with multiple profile bindings")
+			}
 		}
 		return putVersioned(tx.Bucket(bucketRoutes), route.ID, expectedRevision, &route)
 	})

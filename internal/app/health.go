@@ -43,7 +43,12 @@ func (r *Runtime) probeDeployments(ctx context.Context) {
 		if !deployment.Enabled || deployment.DeletedAt != nil {
 			continue
 		}
-		adapter, ok := r.providers.AdapterForProvider(deployment.ProviderID)
+		instance, instanceErr := r.store.GetProvider(ctx, deployment.ProviderID)
+		if instanceErr != nil || !instance.Enabled || instance.DeletedAt != nil {
+			r.providers.SetDeploymentHealthy(deployment.ID, false)
+			continue
+		}
+		adapter, ok := adapterForDeployment(r.providers, instance, deployment)
 		if !ok {
 			r.providers.SetDeploymentHealthy(deployment.ID, false)
 			continue

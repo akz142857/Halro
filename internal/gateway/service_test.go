@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -40,6 +41,7 @@ func (s source) ListProjects(context.Context) ([]domain.Project, error) {
 }
 
 type fakeAdapter struct {
+	mu                sync.Mutex
 	response          openaiapi.ChatCompletionResponse
 	embeddingResponse openaiapi.EmbeddingResponse
 	streamChunks      []openaiapi.ChatCompletionResponse
@@ -55,8 +57,10 @@ func (a *fakeAdapter) Type() string { return "fake" }
 func (a *fakeAdapter) Close()       {}
 
 func (a *fakeAdapter) Chat(_ context.Context, call provider.ChatCall) (openaiapi.ChatCompletionResponse, error) {
+	a.mu.Lock()
 	a.calls++
 	a.lastChatRequest = call.Request
+	a.mu.Unlock()
 	if a.started != nil {
 		a.started <- struct{}{}
 	}
@@ -74,7 +78,9 @@ func (a *fakeAdapter) ChatStream(
 	_ provider.ChatCall,
 	emit func(semantic.Event) error,
 ) (*openaiapi.Usage, error) {
+	a.mu.Lock()
 	a.calls++
+	a.mu.Unlock()
 	for index, chunk := range a.streamChunks {
 		if chunk.Model == "" {
 			chunk.Model = "provider-model"
@@ -99,7 +105,9 @@ func (a *fakeAdapter) ChatStream(
 }
 
 func (a *fakeAdapter) Embed(_ context.Context, call provider.EmbeddingCall) (openaiapi.EmbeddingResponse, error) {
+	a.mu.Lock()
 	a.calls++
+	a.mu.Unlock()
 	if call.ProviderModel != "provider-model" {
 		return openaiapi.EmbeddingResponse{}, errors.New("provider model was not mapped")
 	}
@@ -524,6 +532,52 @@ func TestTokenGuardBlocksRepeatedAnomalousRequestsBeforeProvider(t *testing.T) {
 	}
 	if f.adapter.calls != 1 {
 		t.Fatalf("blocked request reached provider; calls=%d", f.adapter.calls)
+	}
+}
+
+func TestTokenGuardConcurrencyUsesHeldRequestLeases(t *testing.T) {
+	f := newFixture(t, 10_000)
+	defer f.close()
+	project := f.project
+	project.TokenGuardPolicyID = "guard_concurrency"
+	plaintext, key, err := auth.GenerateGatewayKey(project.ID, "guarded-concurrency", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := auth.NewSnapshot()
+	if err := snapshot.Refresh(context.Background(), source{keys: []domain.GatewayKey{key}, projects: []domain.Project{project}}); err != nil {
+		t.Fatal(err)
+	}
+	guard, err := tokenguard.New([]domain.TokenGuardPolicy{{
+		ID: "guard_concurrency", Name: "concurrency", Enabled: true, Action: "temporary_block",
+		Concurrency: 1, MinimumSamples: 2, ViolationsBeforeBlock: 2,
+		BlockTTL: time.Minute, Cooldown: 30 * time.Second,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	f.adapter.started, f.adapter.release = started, release
+	service, err := NewServiceWithOptions(snapshot, f.registry, f.accounting, ServiceOptions{TokenGuard: guard})
+	if err != nil {
+		t.Fatal(err)
+	}
+	errs := make(chan error, 2)
+	for index := 0; index < 2; index++ {
+		go func() { _, callErr := service.Chat(context.Background(), plaintext, chatRequest()); errs <- callErr }()
+		<-started
+	}
+	_, err = service.Chat(context.Background(), plaintext, chatRequest())
+	var gatewayErr *Error
+	if !errors.As(err, &gatewayErr) || gatewayErr.Code != "token_guard_blocked" {
+		t.Fatalf("third request=%v", err)
+	}
+	close(release)
+	for index := 0; index < 2; index++ {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

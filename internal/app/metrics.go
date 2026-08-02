@@ -98,6 +98,8 @@ func (r *Runtime) writeMetrics(writer http.ResponseWriter) {
 	fmt.Fprintf(output, "heimdall_alert_delivery_total{status=\"dropped\"} %d\n", alertStats.Dropped)
 	metricHeader(output, "heimdall_alert_queue_depth", "gauge", "Queued alert events.")
 	fmt.Fprintf(output, "heimdall_alert_queue_depth %d\n", alertStats.Queued)
+	metricHeader(output, "heimdall_token_guard_events_dropped_total", "counter", "Token Guard security events dropped before alert dispatch.")
+	fmt.Fprintf(output, "heimdall_token_guard_events_dropped_total %d\n", r.tokenGuard.DroppedEvents())
 	metricHeader(output, "heimdall_provider_up", "gauge", "Provider adapter loaded and available for passive routing.")
 	for _, providerType := range r.providers.ProviderTypes() {
 		fmt.Fprintf(output, "heimdall_provider_up{provider_type=%s} 1\n",
