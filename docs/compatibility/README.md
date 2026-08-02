@@ -5,8 +5,11 @@ machine-readable compatibility contract for Heimdall's currently exposed LLM
 endpoints. It records the northbound profile and revision, method/path, accepted
 and emitted field sets, stream events, state semantics, SDK test matrix,
 documented deviations, and the built-in provider profiles eligible for routing.
-Each profile also has an explicit coverage record naming northbound fields that
-cannot be represented and any declared semantic transform.
+Each profile also has an explicit coverage record naming its own maturity
+status, northbound fields that cannot be represented, and any declared semantic
+transform. Endpoint maturity never promotes an individual provider profile:
+for example, `/v1/embeddings` remains compatible while the Phase 2 Titan Text
+Embeddings V2 coverage remains experimental.
 
 The JSON is generated conceptually from `compatibility.BuiltinEndpointManifests`
 and enforced as a golden snapshot by the Go test suite. Any change requires a

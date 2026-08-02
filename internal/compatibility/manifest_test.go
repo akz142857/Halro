@@ -58,6 +58,54 @@ func TestPhase2MaturityDoesNotClaimUnvalidatedSDKCompatibility(t *testing.T) {
 	}
 }
 
+func TestEmbeddingsProfileMaturityDoesNotPromoteTitanEmbed(t *testing.T) {
+	var embeddings EndpointCompatibilityManifest
+	for _, manifest := range BuiltinEndpointManifests() {
+		if manifest.ID == "openai.embeddings.v1" {
+			embeddings = manifest
+			break
+		}
+	}
+	if embeddings.Status != StatusCompatible {
+		t.Fatalf("embeddings endpoint status = %q, want compatible", embeddings.Status)
+	}
+	for _, coverage := range embeddings.ProfileCoverage {
+		want := StatusCompatible
+		if coverage.ProfileID == "bedrock.runtime.invoke.titan-embed-text-v2.v1" {
+			want = StatusExperimental
+		}
+		if coverage.Status != want {
+			t.Fatalf("%s status = %q, want %q", coverage.ProfileID, coverage.Status, want)
+		}
+	}
+}
+
+func TestManifestRejectsMissingProfileMaturity(t *testing.T) {
+	manifest := CloneEndpointManifest(BuiltinEndpointManifests()[0])
+	manifest.ProfileCoverage[0].Status = ""
+	if err := manifest.Validate(); err == nil {
+		t.Fatal("profile coverage without a maturity status was accepted")
+	}
+}
+
+func TestManifestRejectsPhase2ProfilePromotion(t *testing.T) {
+	var manifest EndpointCompatibilityManifest
+	for _, candidate := range BuiltinEndpointManifests() {
+		if candidate.ID == "openai.embeddings.v1" {
+			manifest = CloneEndpointManifest(candidate)
+			break
+		}
+	}
+	for index := range manifest.ProfileCoverage {
+		if manifest.ProfileCoverage[index].ProfileID == "bedrock.runtime.invoke.titan-embed-text-v2.v1" {
+			manifest.ProfileCoverage[index].Status = StatusCompatible
+		}
+	}
+	if err := manifest.Validate(); err == nil {
+		t.Fatal("phase 2 provider profile was promoted through a compatible endpoint")
+	}
+}
+
 func TestManifestRejectsNorthboundProfileDrift(t *testing.T) {
 	base := CloneEndpointManifest(BuiltinEndpointManifests()[0])
 	tests := []struct {
