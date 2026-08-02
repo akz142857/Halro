@@ -1794,7 +1794,7 @@ Manifest；其余记录在对应 Phase 获得真实需求、负责人和预算�
 | ADR/设计 | 最晚完成时间 | 核心决策 |
 |---|---|---|
 | Protocol/Semantic/Primitive 与 Portable/Native | Phase 0 | 三层抽象、Access Surface、Operation Registry、Credential Scheme、NativeEnvelope、GovernanceView、转换损失 |
-| Responses Resource Ownership | Phase 1 | Stateless Tier 或完整对象状态、Provider Resource ID 和后续路由 |
+| [ADR 0005：Stateless Responses Facade](adr/0005-stateless-responses-facade.md) | Phase 1 | Stateless Tier 或完整对象状态、Provider Resource ID 和后续路由 |
 | [ADR 0007：Bedrock Mantle Profile 隔离](adr/0007-bedrock-mantle-profiles.md) | Phase 1C | Mantle Access Surface、Credential、Profile 与 Runtime 隔离 |
 | [ADR 0008：Bedrock InvokeModel 模型族 Schema](adr/0008-bedrock-invoke-model-family-schemas.md) | Phase 2 | 模型锁定、严格 Schema 与禁止任意 JSON 透传 |
 | [ADR 0009：Phase 2 资源所有权](adr/0009-phase2-resource-ownership.md) | Phase 2 | Files/Batches/Async 数据驻留、删除、Provider 绑定、异步状态和 Idempotency |
