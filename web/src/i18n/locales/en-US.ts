@@ -324,7 +324,7 @@ export const enUS = {
   },
   policies: {
     eyebrow: "Anomaly containment", title: "Token Guard Policies", description: "Fixed thresholds enforce actions; the optional relative EWMA baseline only detects and alerts and never blocks automatically.",
-    create: "＋ New security policy", emptyTitle: "No token guard policies", emptyDescription: "Start with observe or alert, then enable temporary blocks only for explicit hard limits.", baseline: "Create security baseline",
+    create: "＋ New token guard policy", emptyTitle: "No token guard policies", emptyDescription: "Start with observe or alert, then enable temporary blocks only for explicit hard limits.", baseline: "Create security baseline",
     request: "Request", perMinute: "Per minute", costMinute: "Cost/min", concurrency: "Concurrency", errorRate: "Error rate", uniqueIP: "Unique IP/min", ewma: "EWMA baseline", off: "Off", detectOnly: "Detect only", tokenCount: "{{count}} tokens",
     simulate: "Simulate", deleteConfirm: "Delete security policy “{{name}}”?", edit: "Edit token guard policy", createTitle: "Create token guard policy", name: "Policy name", action: "Enforcement action",
     requestLimit: "Per-request token limit", minuteLimit: "Per-minute token limit", costLimit: "Per-minute cost limit (USD)", concurrencyLimit: "Concurrency limit", errorThreshold: "Error-rate threshold (%)", minimumSamples: "Minimum samples", uniqueSources: "Unique source IPs per minute",

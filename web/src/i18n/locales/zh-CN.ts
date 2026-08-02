@@ -324,7 +324,7 @@ export const zhCN = {
   },
   policies: {
     eyebrow: "异常遏制", title: "令牌防护策略", description: "固定阈值负责处置；可选 EWMA 相对基线只检测和告警，绝不会自动封禁。",
-    create: "＋ 新建安全策略", emptyTitle: "还没有令牌防护策略", emptyDescription: "建议从观察或告警开始，再对明确的硬上限启用临时封禁。", baseline: "创建安全基线",
+    create: "＋ 新建令牌防护策略", emptyTitle: "还没有令牌防护策略", emptyDescription: "建议从观察或告警开始，再对明确的硬上限启用临时封禁。", baseline: "创建安全基线",
     request: "单次请求", perMinute: "每分钟", costMinute: "每分钟成本", concurrency: "并发", errorRate: "错误率", uniqueIP: "每分钟唯一 IP", ewma: "EWMA 基线", off: "关闭", detectOnly: "仅检测", tokenCount: "{{count}} 个令牌",
     simulate: "模拟", deleteConfirm: "删除安全策略“{{name}}”？", edit: "编辑令牌防护策略", createTitle: "创建令牌防护策略", name: "策略名称", action: "处置动作",
     requestLimit: "单请求令牌上限", minuteLimit: "每分钟令牌上限", costLimit: "每分钟成本上限（USD）", concurrencyLimit: "并发上限", errorThreshold: "错误率阈值（%）", minimumSamples: "最少样本", uniqueSources: "每分钟唯一来源 IP",
