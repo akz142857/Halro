@@ -32,13 +32,38 @@ describe("token guard policy workflow", () => {
     fireEvent.click(await screen.findByRole("button", { name: "＋ 新建令牌防护策略" }));
 
     expect(screen.getByLabelText("启用此策略")).not.toBeChecked();
-    fireEvent.change(screen.getByLabelText("错误率阈值（%）"), { target: { value: "101" } });
+    fireEvent.change(screen.getByLabelText(/^错误率阈值（%）/), { target: { value: "101" } });
     fireEvent.click(screen.getByRole("button", { name: "保存策略" }));
 
-    expect(await screen.findByText("Required")).toBeVisible();
-    expect(screen.getByText("Must be between 0 and 100")).toBeVisible();
+    expect(await screen.findByText("必填")).toBeVisible();
+    expect(screen.getByText("必须在 0 到 100 之间")).toBeVisible();
     expect(screen.getByRole("textbox", { name: /^策略名称/ })).toHaveAttribute("aria-invalid", "true");
     expect(create).not.toHaveBeenCalled();
+  });
+
+  it("explains temporary-block escalation instead of implying immediate rejection", async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 新建令牌防护策略" }));
+    fireEvent.click(screen.getByRole("radio", { name: /临时封禁/ }));
+    expect(screen.getByText("非立即拒绝")).toBeVisible();
+    expect(screen.getByText(/达到样本和违规双门槛前，请求仍会放行/)).toBeVisible();
+  });
+
+  it("preserves legal zero EWMA floors while editing", async () => {
+    const zeroFloorPolicy = { ...policy, ewma_enabled: true, ewma_absolute_rpm: 0, ewma_absolute_tpm: 0, ewma_absolute_tokens_per_request: 0 };
+    vi.mocked(api.tokenGuardPoliciesPage).mockResolvedValue({ items: [zeroFloorPolicy], next_cursor: "" });
+    const update = vi.spyOn(api, "updateTokenGuardPolicy").mockResolvedValue({ data: zeroFloorPolicy, etag: '"2"' });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
+    expect(screen.getByLabelText("RPM 绝对下限")).toHaveValue(0);
+    expect(screen.getByLabelText("TPM 绝对下限")).toHaveValue(0);
+    expect(screen.getByLabelText("平均令牌/请求下限")).toHaveValue(0);
+    fireEvent.click(screen.getByRole("button", { name: "保存并立即应用" }));
+    await waitFor(() => expect(update).toHaveBeenCalledWith("tgp_test", expect.objectContaining({
+      ewma_absolute_rpm: 0,
+      ewma_absolute_tpm: 0,
+      ewma_absolute_tokens_per_request: 0,
+    }), 1));
   });
 
   it("passes every relevant window signal to the simulator", async () => {
