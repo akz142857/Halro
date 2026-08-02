@@ -28,6 +28,14 @@ describe("ProvidersPage profile and credential bindings", () => {
     window.history.replaceState({}, "", "/admin/providers");
   });
 
+  it("uses the tabs as the only repeated resource headings", async () => {
+    renderPage();
+    expect(await screen.findByRole("tab", { name: "服务商连接 0" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "服务商 0" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "凭据库 1" }));
+    expect(screen.queryByRole("heading", { name: "凭据 1" })).not.toBeInTheDocument();
+  });
+
   it("submits the registered OpenAI provider profile instead of the northbound profile", async () => {
     const create = vi.spyOn(api, "createProvider").mockResolvedValue({} as never);
     renderPage();

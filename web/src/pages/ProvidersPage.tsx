@@ -141,10 +141,6 @@ export function ProvidersPage() {
             <button id="credentials-tab" role="tab" tabIndex={activeView === "credentials" ? 0 : -1} aria-selected={activeView === "credentials"} aria-controls="credentials-panel" onKeyDown={handleTabKey} onClick={() => selectView("credentials")}>{t("providers.credentialVault")} <span>{credentialItems.length}</span></button>
           </div>
           {activeView === "providers" && <section id="providers-panel" role="tabpanel" aria-labelledby="providers-tab" className="panel provider-resource-panel">
-            <header className="panel-header">
-              <div><p className="eyebrow">{t("providers.upstreams")}</p><h2>{t("providers.providers")} <span className="section-count">{providerItems.length}</span></h2></div>
-              <small>{t("providers.providerSectionDescription")}</small>
-            </header>
             {!canCreateProvider && (
               <div className="dependency-notice"><div><strong>{t("providers.credentialRequired")}</strong><span>{t("providers.providerDependencyHint")}</span></div><button className="button secondary" onClick={() => { selectView("credentials"); setCredentialDialog(true); }}>{t("providers.openCredentialVault")}</button></div>
             )}
@@ -158,10 +154,6 @@ export function ProvidersPage() {
             ))}
           </section>}
           {activeView === "credentials" && <section id="credentials-panel" role="tabpanel" aria-labelledby="credentials-tab" className="panel provider-resource-panel">
-            <header className="panel-header">
-              <div><p className="eyebrow">{t("providers.vault")}</p><h2>{t("providers.credentials")} <span className="section-count">{credentialItems.length}</span></h2></div>
-              <small>{t("providers.credentialSectionDescription")}</small>
-            </header>
             {credentialItems.length === 0 && (
               <EmptyState title={t("providers.noCredentials")}>{t("providers.noCredentialsDescription")}</EmptyState>
             )}
