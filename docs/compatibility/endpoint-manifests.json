@@ -69,10 +69,12 @@
     ],
     "profile_coverage": [
       {
-        "profile_id": "openai.chat-embeddings.v1"
+        "profile_id": "openai.chat-embeddings.v1",
+        "status": "compatible"
       },
       {
         "profile_id": "anthropic.messages.2023-06-01",
+        "status": "compatible",
         "unsupported_request_fields": [
           "messages[].name",
           "n",
@@ -86,16 +88,20 @@
         ]
       },
       {
-        "profile_id": "azure-openai.chat-embeddings.v1"
+        "profile_id": "azure-openai.chat-embeddings.v1",
+        "status": "compatible"
       },
       {
-        "profile_id": "deepseek.chat.v1"
+        "profile_id": "deepseek.chat.v1",
+        "status": "compatible"
       },
       {
-        "profile_id": "openai-compatible.chat-embeddings.v1"
+        "profile_id": "openai-compatible.chat-embeddings.v1",
+        "status": "compatible"
       },
       {
         "profile_id": "gemini.generate-content.text.v1beta",
+        "status": "compatible",
         "unsupported_request_fields": [
           "messages[].name",
           "seed",
@@ -112,6 +118,7 @@
       },
       {
         "profile_id": "bedrock.runtime.converse.text.v1",
+        "status": "compatible",
         "unsupported_request_fields": [
           "messages[].name",
           "n",
@@ -128,10 +135,12 @@
         ]
       },
       {
-        "profile_id": "bedrock.mantle.openai.chat.v1"
+        "profile_id": "bedrock.mantle.openai.chat.v1",
+        "status": "compatible"
       },
       {
         "profile_id": "bedrock.mantle.openai.responses.v1",
+        "status": "compatible",
         "unsupported_request_fields": [
           "n",
           "stop",
@@ -146,6 +155,7 @@
       },
       {
         "profile_id": "bedrock.mantle.anthropic.messages.v1",
+        "status": "compatible",
         "unsupported_request_fields": [
           "messages[].name",
           "n",
@@ -205,16 +215,20 @@
     ],
     "profile_coverage": [
       {
-        "profile_id": "openai.chat-embeddings.v1"
+        "profile_id": "openai.chat-embeddings.v1",
+        "status": "compatible"
       },
       {
-        "profile_id": "azure-openai.chat-embeddings.v1"
+        "profile_id": "azure-openai.chat-embeddings.v1",
+        "status": "compatible"
       },
       {
-        "profile_id": "openai-compatible.chat-embeddings.v1"
+        "profile_id": "openai-compatible.chat-embeddings.v1",
+        "status": "compatible"
       },
       {
         "profile_id": "gemini.generate-content.text.v1beta",
+        "status": "compatible",
         "unsupported_request_fields": [
           "encoding_format",
           "user"
@@ -225,6 +239,7 @@
       },
       {
         "profile_id": "bedrock.runtime.invoke.titan-embed-text-v2.v1",
+        "status": "experimental",
         "unsupported_request_fields": [
           "input",
           "encoding_format",
@@ -397,12 +412,14 @@
     "profile_coverage": [
       {
         "profile_id": "openai.chat-embeddings.v1",
+        "status": "compatible",
         "declared_transforms": [
           "Responses items are mapped through the OpenAI Chat Completions ProviderPrimitive"
         ]
       },
       {
         "profile_id": "anthropic.messages.2023-06-01",
+        "status": "compatible",
         "unsupported_request_fields": [
           "text.format",
           "user"
@@ -413,24 +430,28 @@
       },
       {
         "profile_id": "azure-openai.chat-embeddings.v1",
+        "status": "compatible",
         "declared_transforms": [
           "Responses items are mapped through the Azure Chat Completions ProviderPrimitive"
         ]
       },
       {
         "profile_id": "deepseek.chat.v1",
+        "status": "compatible",
         "declared_transforms": [
           "Responses items are mapped through the DeepSeek Chat ProviderPrimitive"
         ]
       },
       {
         "profile_id": "openai-compatible.chat-embeddings.v1",
+        "status": "compatible",
         "declared_transforms": [
           "Responses items are mapped through the compatible Chat Completions ProviderPrimitive"
         ]
       },
       {
         "profile_id": "gemini.generate-content.text.v1beta",
+        "status": "compatible",
         "unsupported_request_fields": [
           "tools",
           "tool_choice",
@@ -444,6 +465,7 @@
       },
       {
         "profile_id": "bedrock.runtime.converse.text.v1",
+        "status": "compatible",
         "unsupported_request_fields": [
           "tools",
           "tool_choice",
@@ -458,18 +480,21 @@
       },
       {
         "profile_id": "bedrock.mantle.openai.chat.v1",
+        "status": "compatible",
         "declared_transforms": [
           "Responses items are mapped through Bedrock Mantle Chat Completions"
         ]
       },
       {
         "profile_id": "bedrock.mantle.openai.responses.v1",
+        "status": "compatible",
         "declared_transforms": [
           "stateless Responses are sent directly with store=false"
         ]
       },
       {
         "profile_id": "bedrock.mantle.anthropic.messages.v1",
+        "status": "compatible",
         "unsupported_request_fields": [
           "text.format",
           "user"
@@ -567,6 +592,7 @@
     "profile_coverage": [
       {
         "profile_id": "openai.chat-embeddings.v1",
+        "status": "compatible",
         "unsupported_request_fields": [
           "top_k",
           "thinking",
@@ -579,12 +605,14 @@
       },
       {
         "profile_id": "anthropic.messages.2023-06-01",
+        "status": "compatible",
         "declared_transforms": [
           "native mode preserves validated Anthropic content blocks and events"
         ]
       },
       {
         "profile_id": "azure-openai.chat-embeddings.v1",
+        "status": "compatible",
         "unsupported_request_fields": [
           "top_k",
           "thinking",
@@ -597,6 +625,7 @@
       },
       {
         "profile_id": "deepseek.chat.v1",
+        "status": "compatible",
         "unsupported_request_fields": [
           "top_k",
           "thinking",
@@ -609,6 +638,7 @@
       },
       {
         "profile_id": "openai-compatible.chat-embeddings.v1",
+        "status": "compatible",
         "unsupported_request_fields": [
           "top_k",
           "thinking",
@@ -621,6 +651,7 @@
       },
       {
         "profile_id": "gemini.generate-content.text.v1beta",
+        "status": "compatible",
         "unsupported_request_fields": [
           "top_k",
           "tools",
@@ -635,6 +666,7 @@
       },
       {
         "profile_id": "bedrock.runtime.converse.text.v1",
+        "status": "compatible",
         "unsupported_request_fields": [
           "top_k",
           "tools",
@@ -649,6 +681,7 @@
       },
       {
         "profile_id": "bedrock.mantle.openai.chat.v1",
+        "status": "compatible",
         "unsupported_request_fields": [
           "top_k",
           "thinking",
@@ -661,6 +694,7 @@
       },
       {
         "profile_id": "bedrock.mantle.openai.responses.v1",
+        "status": "compatible",
         "unsupported_request_fields": [
           "stop_sequences",
           "top_k",
@@ -675,6 +709,7 @@
       },
       {
         "profile_id": "bedrock.mantle.anthropic.messages.v1",
+        "status": "compatible",
         "declared_transforms": [
           "native mode preserves validated Anthropic content blocks, thinking signatures, and events"
         ]
@@ -716,7 +751,8 @@
     ],
     "profile_coverage": [
       {
-        "profile_id": "openai.media-resources.v1"
+        "profile_id": "openai.media-resources.v1",
+        "status": "experimental"
       }
     ]
   },
@@ -767,10 +803,12 @@
     ],
     "profile_coverage": [
       {
-        "profile_id": "openai.media-resources.v1"
+        "profile_id": "openai.media-resources.v1",
+        "status": "experimental"
       },
       {
-        "profile_id": "bedrock.runtime.invoke.titan-image-v2.v1"
+        "profile_id": "bedrock.runtime.invoke.titan-image-v2.v1",
+        "status": "experimental"
       }
     ]
   },
@@ -811,7 +849,8 @@
     ],
     "profile_coverage": [
       {
-        "profile_id": "openai.media-resources.v1"
+        "profile_id": "openai.media-resources.v1",
+        "status": "experimental"
       }
     ]
   },
@@ -851,7 +890,8 @@
     ],
     "profile_coverage": [
       {
-        "profile_id": "openai.media-resources.v1"
+        "profile_id": "openai.media-resources.v1",
+        "status": "experimental"
       }
     ]
   },
@@ -896,7 +936,8 @@
     ],
     "profile_coverage": [
       {
-        "profile_id": "openai.media-resources.v1"
+        "profile_id": "openai.media-resources.v1",
+        "status": "experimental"
       }
     ]
   },
@@ -939,7 +980,8 @@
     ],
     "profile_coverage": [
       {
-        "profile_id": "openai.media-resources.v1"
+        "profile_id": "openai.media-resources.v1",
+        "status": "experimental"
       }
     ]
   },
@@ -975,7 +1017,8 @@
     ],
     "profile_coverage": [
       {
-        "profile_id": "openai.media-resources.v1"
+        "profile_id": "openai.media-resources.v1",
+        "status": "experimental"
       }
     ]
   },
@@ -1013,7 +1056,8 @@
     ],
     "profile_coverage": [
       {
-        "profile_id": "openai.media-resources.v1"
+        "profile_id": "openai.media-resources.v1",
+        "status": "experimental"
       }
     ]
   },
@@ -1067,7 +1111,8 @@
     ],
     "profile_coverage": [
       {
-        "profile_id": "openai.media-resources.v1"
+        "profile_id": "openai.media-resources.v1",
+        "status": "experimental"
       }
     ]
   },
@@ -1118,7 +1163,8 @@
     ],
     "profile_coverage": [
       {
-        "profile_id": "openai.media-resources.v1"
+        "profile_id": "openai.media-resources.v1",
+        "status": "experimental"
       }
     ]
   },
@@ -1169,7 +1215,8 @@
     ],
     "profile_coverage": [
       {
-        "profile_id": "openai.media-resources.v1"
+        "profile_id": "openai.media-resources.v1",
+        "status": "experimental"
       }
     ]
   },
@@ -1209,7 +1256,8 @@
     ],
     "profile_coverage": [
       {
-        "profile_id": "bedrock.agent-runtime.rerank.cohere-v3-5.v1"
+        "profile_id": "bedrock.agent-runtime.rerank.cohere-v3-5.v1",
+        "status": "experimental"
       }
     ]
   },
@@ -1257,7 +1305,8 @@
     ],
     "profile_coverage": [
       {
-        "profile_id": "bedrock.runtime.async.nova-reel-v1.v1"
+        "profile_id": "bedrock.runtime.async.nova-reel-v1.v1",
+        "status": "experimental"
       }
     ]
   },
@@ -1299,7 +1348,8 @@
     ],
     "profile_coverage": [
       {
-        "profile_id": "bedrock.runtime.async.nova-reel-v1.v1"
+        "profile_id": "bedrock.runtime.async.nova-reel-v1.v1",
+        "status": "experimental"
       }
     ]
   },
@@ -1336,7 +1386,8 @@
     ],
     "profile_coverage": [
       {
-        "profile_id": "bedrock.runtime.async.nova-reel-v1.v1"
+        "profile_id": "bedrock.runtime.async.nova-reel-v1.v1",
+        "status": "experimental"
       }
     ]
   }

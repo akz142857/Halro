@@ -240,6 +240,10 @@ ProviderPrimitive
 - **SemanticOperation** 定义 Heimdall 可以治理和跨 Provider 表达的模型行为；
 - **ProviderPrimitive** 定义 Adapter 实际调用的 Provider API、版本、模型族和事件协议。
 
+以上是架构轴名称；当前 Go 实现分别落在 `internal/compatibility.NorthboundProfile`、
+`internal/semantic.Operation` 与 `internal/provider.Primitive`。示意图中的概念名不表示存在同名 Go
+类型，也不得据此把类型放回错误的包。
+
 例如 OpenAI Responses Facade 可以解码为 `generate`，然后路由到经过证明能够无损满足本次
 Requirements 的 Anthropic Messages 或 Gemini generateContent Primitive。Provider 不需要实现
 名为 `ResponseAdapter` 的 OpenAI 抽象。Renderer 最后按原始 NorthboundProfile 生成响应。
@@ -384,16 +388,17 @@ Canonical IR 不是另一个公开 API，而是 Heimdall 内部用于表达治�
 ### 6.1 Semantic Operation
 
 ```go
-type SemanticOperation string
+// internal/semantic
+type Operation string
 
 const (
-    OperationGenerate   SemanticOperation = "generate"
-    OperationEmbed      SemanticOperation = "embed"
-    OperationModerate   SemanticOperation = "moderate"
-    OperationImage      SemanticOperation = "image"
-    OperationTranscribe SemanticOperation = "transcribe"
-    OperationSynthesize SemanticOperation = "synthesize"
-    OperationRealtime   SemanticOperation = "realtime"
+    OperationGenerate   Operation = "generate"
+    OperationEmbed      Operation = "embed"
+    OperationModerate   Operation = "moderate"
+    OperationImage      Operation = "image"
+    OperationTranscribe Operation = "transcribe"
+    OperationSynthesize Operation = "synthesize"
+    OperationRealtime   Operation = "realtime"
 )
 ```
 
@@ -652,6 +657,9 @@ Profile 必须声明允许的认证集合和 Header。`bedrock-runtime` 与 `bed
 - `bedrock.mantle.openai.responses.v1` → `/v1/responses`，始终发送 `store:false`；
 - `bedrock.mantle.anthropic.messages.v1` → `/anthropic/v1/messages`，支持 Native Thinking
   Signature Round-trip。
+
+Phase 2 另外实现四个模型锁定的 Runtime/Agent Runtime Profile：
+
 - `bedrock.runtime.invoke.titan-embed-text-v2.v1` → `/v1/embeddings` 的单字符串、Float、
   256/512/1024 维子集；固定 `amazon.titan-embed-text-v2:0`、`normalize:true` 和 Float 输出。
 - `bedrock.runtime.invoke.titan-image-v2.v1` → `/v1/images/generations` 的严格 TEXT_IMAGE 子集；
@@ -1787,7 +1795,9 @@ Manifest；其余记录在对应 Phase 获得真实需求、负责人和预算�
 |---|---|---|
 | Protocol/Semantic/Primitive 与 Portable/Native | Phase 0 | 三层抽象、Access Surface、Operation Registry、Credential Scheme、NativeEnvelope、GovernanceView、转换损失 |
 | Responses Resource Ownership | Phase 1 | Stateless Tier 或完整对象状态、Provider Resource ID 和后续路由 |
-| Files/Batches Resource Ownership | Phase 2 | 数据驻留、删除、Provider 绑定、异步状态和 Idempotency |
+| [ADR 0007：Bedrock Mantle Profile 隔离](adr/0007-bedrock-mantle-profiles.md) | Phase 1C | Mantle Access Surface、Credential、Profile 与 Runtime 隔离 |
+| [ADR 0008：Bedrock InvokeModel 模型族 Schema](adr/0008-bedrock-invoke-model-family-schemas.md) | Phase 2 | 模型锁定、严格 Schema 与禁止任意 JSON 透传 |
+| [ADR 0009：Phase 2 资源所有权](adr/0009-phase2-resource-ownership.md) | Phase 2 | Files/Batches/Async 数据驻留、删除、Provider 绑定、异步状态和 Idempotency |
 | Realtime Accounting | Phase 3 | 单一 Ledger WAL、Reservation Extension、Usage Watermark、Reaper、Unknown Tail |
 | Realtime Ownership/Lease | Phase 3H | Project/Session 权威层级、双 Epoch、租约、HA/Cluster |
 | Realtime Credential | Phase 3 | Token Claim、原子 Consume、轮换、撤销、Audience、TURN Credential |
@@ -1873,6 +1883,11 @@ Manifest；其余记录在对应 Phase 获得真实需求、负责人和预算�
 - [WebRTC Security Architecture](https://datatracker.ietf.org/doc/html/rfc8827)
 - [ADR 0002：单一 Ledger WAL 权威](adr/0002-ledger-authority.md)
 - [ADR 0004：Project Ownership 分布式演进](adr/0004-distributed-evolution.md)
+- [ADR 0005：Stateless Responses Facade](adr/0005-stateless-responses-facade.md)
+- [ADR 0006：Anthropic Messages Facade](adr/0006-anthropic-messages-facade.md)
+- [ADR 0007：Bedrock Mantle Profile 隔离](adr/0007-bedrock-mantle-profiles.md)
+- [ADR 0008：Bedrock InvokeModel 模型族 Schema](adr/0008-bedrock-invoke-model-family-schemas.md)
+- [ADR 0009：Phase 2 资源所有权](adr/0009-phase2-resource-ownership.md)
 - [Distributed State Ownership](distributed-state-ownership.md)
 - [Threat Model](threat-model.md)
 
