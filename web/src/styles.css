@@ -510,7 +510,7 @@ td small, td code { display: block; margin-top: 4px; color: var(--muted); }
 .alert-secret strong { display: block; margin-top: 6px; font: 10px var(--mono); }
 .policy-card-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
 .policy-tabs { margin-bottom: 0; }
-.policy-management-panel { padding-top: 15px; }
+.policy-management-panel { padding-top: 8px; }
 .policy-filter-bar { margin-bottom: 15px; }
 .policy-filter-bar > .button { margin-left: auto; }
 .policy-table td:first-child strong { display: block; }
