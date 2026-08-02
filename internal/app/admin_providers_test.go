@@ -8,9 +8,11 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/akz142857/Heimdall/internal/domain"
 	"github.com/akz142857/Heimdall/internal/provider"
@@ -53,6 +55,63 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 	if !credential.SecretConfigured || credential.KeyVersion != 1 ||
 		credential.AccessSurface != domain.SurfaceOpenAI || credential.Scheme != domain.CredentialBearerStatic {
 		t.Fatalf("unexpected credential view: %#v", credential)
+	}
+
+	mediaOnlyResponse := performAdminMutation(t, runtime, cookie, csrf,
+		http.MethodPost, "/admin/api/v1/providers", "", map[string]any{
+			"name": "OpenAI media", "type": "openai", "base_url": "https://api.openai.com",
+			"credential_id": credential.ID, "enabled": true,
+			"bindings": []map[string]any{
+				{"id": "forged-chat", "profile_id": domain.ProfileOpenAIChatEmbeddings, "enabled": false, "capabilities": map[string]any{}},
+				{"id": "forged-media", "profile_id": domain.ProfileOpenAIPhase2, "enabled": true,
+					"capabilities":        map[string]any{"images": true, "files": true},
+					"capability_evidence": map[string]any{"images": domain.EvidenceVerified}},
+			},
+		})
+	if mediaOnlyResponse.Code != http.StatusCreated {
+		t.Fatalf("media-only provider create status=%d body=%s", mediaOnlyResponse.Code, mediaOnlyResponse.Body.String())
+	}
+	var mediaOnly domain.ProviderInstance
+	if err := json.Unmarshal(mediaOnlyResponse.Body.Bytes(), &mediaOnly); err != nil {
+		t.Fatal(err)
+	}
+	if mediaOnly.ProfileID != domain.ProfileOpenAIPhase2 || !mediaOnly.Capabilities.Images || !mediaOnly.Capabilities.Files ||
+		len(mediaOnly.Bindings) != 2 || mediaOnly.Bindings[0].ID != domain.DefaultProviderProfileBindingID(mediaOnly.ID, domain.ProfileOpenAIPhase2) ||
+		mediaOnly.Bindings[0].CapabilityEvidence["images"] != domain.EvidenceDeclared {
+		t.Fatalf("media-only provider was not canonicalized: %#v", mediaOnly)
+	}
+	allDisabled := performAdminMutation(t, runtime, cookie, csrf,
+		http.MethodPost, "/admin/api/v1/providers", "", map[string]any{
+			"name": "Disabled bindings", "type": "openai", "base_url": "https://api.openai.com",
+			"credential_id": credential.ID, "enabled": true,
+			"bindings": []map[string]any{{"profile_id": domain.ProfileOpenAIChatEmbeddings, "enabled": false, "capabilities": map[string]any{}}},
+		})
+	if allDisabled.Code != http.StatusBadRequest {
+		t.Fatalf("all-disabled bindings accepted: %d %s", allDisabled.Code, allDisabled.Body.String())
+	}
+	multiBindingResponse := performAdminMutation(t, runtime, cookie, csrf,
+		http.MethodPost, "/admin/api/v1/providers", "", map[string]any{
+			"name": "OpenAI complete", "type": "openai", "base_url": "https://api.openai.com",
+			"credential_id": credential.ID, "enabled": true,
+			"bindings": []map[string]any{
+				{"profile_id": domain.ProfileOpenAIChatEmbeddings, "enabled": true, "capabilities": map[string]any{"chat": true, "streaming": true, "embeddings": true}},
+				{"profile_id": domain.ProfileOpenAIPhase2, "enabled": true, "capabilities": map[string]any{"images": true, "files": true, "batches": true}},
+			},
+		})
+	if multiBindingResponse.Code != http.StatusCreated {
+		t.Fatalf("multi-binding provider create status=%d body=%s", multiBindingResponse.Code, multiBindingResponse.Body.String())
+	}
+	var multiBinding domain.ProviderInstance
+	if err := json.Unmarshal(multiBindingResponse.Body.Bytes(), &multiBinding); err != nil {
+		t.Fatal(err)
+	}
+	if len(multiBinding.Bindings) != 2 || !multiBinding.Capabilities.Chat || !multiBinding.Capabilities.Images {
+		t.Fatalf("multi-binding provider summary=%#v", multiBinding)
+	}
+	for _, binding := range multiBinding.Bindings {
+		if _, ok := runtime.providers.AdapterForBinding(multiBinding.ID, binding.ID); !ok {
+			t.Fatalf("binding adapter %q was not loaded", binding.ID)
+		}
 	}
 
 	providerResponse := performAdminMutation(t, runtime, cookie, csrf,
@@ -105,7 +164,7 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 		http.MethodPost, "/admin/api/v1/deployments", "",
 		map[string]any{
 			"name": "Invalid limits", "provider_id": instance.ID, "provider_model": "gpt-test",
-			"priority": 10, "weight": 1, "enabled": true,
+			"priority": 10, "weight": 1, "enabled": false,
 			"capabilities": map[string]any{
 				"chat": true, "streaming": true,
 				"max_context_tokens": int64(256), "max_output_tokens": int64(64),
@@ -115,13 +174,23 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 	if rejectedDeployment.Code != http.StatusBadRequest {
 		t.Fatalf("deployment exceeded provider capability status=%d body=%s", rejectedDeployment.Code, rejectedDeployment.Body.String())
 	}
+	rejectedEnabledDeployment := performAdminMutation(t, runtime, cookie, csrf,
+		http.MethodPost, "/admin/api/v1/deployments", "",
+		map[string]any{
+			"name": "Unsafe enabled", "provider_id": instance.ID, "provider_model": "gpt-test",
+			"priority": 10, "weight": 1, "enabled": true,
+		},
+	)
+	if rejectedEnabledDeployment.Code != http.StatusConflict {
+		t.Fatalf("enabled deployment create status=%d body=%s", rejectedEnabledDeployment.Code, rejectedEnabledDeployment.Body.String())
+	}
 
 	deploymentResponse := performAdminMutation(t, runtime, cookie, csrf,
 		http.MethodPost, "/admin/api/v1/deployments", "",
 		map[string]any{
 			"name": "GPT test", "provider_id": instance.ID, "provider_model": "gpt-test",
 			"input_micros_per_million": int64(1_000_000), "output_micros_per_million": int64(2_000_000),
-			"max_concurrency": int64(2), "priority": 10, "weight": 1, "enabled": true,
+			"max_concurrency": int64(2), "priority": 10, "weight": 1, "enabled": false,
 		},
 	)
 	if deploymentResponse.Code != http.StatusCreated {
@@ -132,14 +201,58 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 		Revision           uint64                       `json:"revision"`
 		AccessSurface      domain.AccessSurface         `json:"access_surface"`
 		ProfileID          domain.ProviderProfileID     `json:"profile_id"`
+		TargetKind         domain.DeploymentTargetKind  `json:"target_kind"`
 		CapabilityEvidence domain.CapabilityEvidenceSet `json:"capability_evidence"`
 	}
 	if err := json.Unmarshal(deploymentResponse.Body.Bytes(), &deployment); err != nil {
 		t.Fatal(err)
 	}
-	if deployment.AccessSurface != domain.SurfaceOpenAI || deployment.ProfileID != domain.ProfileOpenAIChatEmbeddings ||
+	if deployment.AccessSurface != domain.SurfaceOpenAI || deployment.ProfileID != domain.ProfileOpenAIChatEmbeddings || deployment.TargetKind != domain.TargetModelID ||
 		deployment.CapabilityEvidence["chat"] != domain.EvidenceDeclared {
 		t.Fatalf("unexpected deployment profile: %#v", deployment)
+	}
+	directEnable := performAdminMutation(t, runtime, cookie, csrf,
+		http.MethodPut, "/admin/api/v1/deployments/"+deployment.ID, `"1"`,
+		map[string]any{
+			"name": "GPT test", "provider_id": instance.ID, "provider_model": "gpt-test",
+			"input_micros_per_million": int64(1_000_000), "output_micros_per_million": int64(2_000_000),
+			"max_concurrency": int64(2), "priority": 10, "weight": 1, "enabled": true,
+		},
+	)
+	if directEnable.Code != http.StatusConflict {
+		t.Fatalf("untested deployment enable status=%d body=%s", directEnable.Code, directEnable.Body.String())
+	}
+	probe := &adminProbeAdapter{models: []provider.ModelDescriptor{{ID: "gpt-z"}, {ID: "gpt-a", OwnedBy: "openai"}, {ID: "gpt-a"}}}
+	probeRegistry := provider.NewRegistry()
+	if err := probeRegistry.RegisterAdapter(instance.ID, probe); err != nil {
+		t.Fatal(err)
+	}
+	runtime.providers.Replace(probeRegistry)
+	initialTest := performAdminMutation(t, runtime, cookie, csrf,
+		http.MethodPost, "/admin/api/v1/deployments/"+deployment.ID+"/test", "", nil,
+	)
+	if initialTest.Code != http.StatusOK || probe.probes != 1 {
+		t.Fatalf("initial deployment test status=%d probes=%d body=%s", initialTest.Code, probe.probes, initialTest.Body.String())
+	}
+	var testedDeployment struct {
+		Revision uint64 `json:"revision"`
+	}
+	if err := json.Unmarshal(initialTest.Body.Bytes(), &testedDeployment); err != nil {
+		t.Fatal(err)
+	}
+	enableDeployment := performAdminMutation(t, runtime, cookie, csrf,
+		http.MethodPut, "/admin/api/v1/deployments/"+deployment.ID, `"`+strconv.FormatUint(testedDeployment.Revision, 10)+`"`,
+		map[string]any{
+			"name": "GPT test", "provider_id": instance.ID, "provider_model": "gpt-test",
+			"input_micros_per_million": int64(1_000_000), "output_micros_per_million": int64(2_000_000),
+			"max_concurrency": int64(2), "priority": 10, "weight": 1, "enabled": true,
+		},
+	)
+	if enableDeployment.Code != http.StatusOK {
+		t.Fatalf("validated deployment enable status=%d body=%s", enableDeployment.Code, enableDeployment.Body.String())
+	}
+	if err := json.Unmarshal(enableDeployment.Body.Bytes(), &deployment); err != nil {
+		t.Fatal(err)
 	}
 	profileChange := performAdminMutation(t, runtime, cookie, csrf,
 		http.MethodPut, "/admin/api/v1/providers/"+instance.ID, `"1"`, map[string]any{
@@ -199,11 +312,22 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 			blockedProviderDelete.Code, blockedProviderDelete.Body.String())
 	}
 	blockedDeploymentDelete := performAdminMutation(t, runtime, cookie, csrf,
-		http.MethodDelete, "/admin/api/v1/deployments/"+deployment.ID, `"1"`, nil,
+		http.MethodDelete, "/admin/api/v1/deployments/"+deployment.ID, `"`+strconv.FormatUint(deployment.Revision, 10)+`"`, nil,
 	)
 	if blockedDeploymentDelete.Code != http.StatusConflict {
 		t.Fatalf("deployment delete with active route status=%d body=%s",
 			blockedDeploymentDelete.Code, blockedDeploymentDelete.Body.String())
+	}
+	blockedTargetChange := performAdminMutation(t, runtime, cookie, csrf,
+		http.MethodPut, "/admin/api/v1/deployments/"+deployment.ID, `"`+strconv.FormatUint(deployment.Revision, 10)+`"`,
+		map[string]any{
+			"name": "Changed target", "provider_id": instance.ID, "provider_model": "gpt-other",
+			"max_concurrency": int64(2), "priority": 10, "weight": 1, "enabled": true,
+		},
+	)
+	if blockedTargetChange.Code != http.StatusConflict {
+		t.Fatalf("deployment target change with active route status=%d body=%s",
+			blockedTargetChange.Code, blockedTargetChange.Body.String())
 	}
 
 	var route struct {
@@ -212,12 +336,51 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 	if err := json.Unmarshal(routeResponse.Body.Bytes(), &route); err != nil {
 		t.Fatal(err)
 	}
-	probe := &adminProbeAdapter{}
+	probe = &adminProbeAdapter{models: []provider.ModelDescriptor{{ID: "gpt-z"}, {ID: "gpt-a", OwnedBy: "openai"}, {ID: "gpt-a"}}}
 	nextRegistry := provider.NewRegistry()
-	if err := nextRegistry.RegisterAdapter(instance.ID, probe); err != nil {
+	storedInstance, err := runtime.store.GetProvider(context.Background(), instance.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selectedBinding := storedInstance.EffectiveProfileBindings()[0]
+	manifest, ok := provider.BuiltinProfile(selectedBinding.ProfileID)
+	if !ok {
+		t.Fatalf("profile %q is unavailable", selectedBinding.ProfileID)
+	}
+	profiledProbe, err := provider.NewLegacyAdapterBridge(probe, manifest, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := nextRegistry.RegisterBindingAdapter(instance.ID, selectedBinding.ID, profiledProbe); err != nil {
 		t.Fatal(err)
 	}
 	runtime.providers.Replace(nextRegistry)
+	for index, path := range []string{
+		"/admin/api/v1/providers/" + instance.ID + "/models",
+		"/admin/api/v1/providers/" + instance.ID + "/models",
+		"/admin/api/v1/providers/" + instance.ID + "/models?refresh=true",
+	} {
+		request := adminRequest(t, http.MethodGet, path, nil)
+		request.AddCookie(cookie)
+		response := httptest.NewRecorder()
+		runtime.adminRouter().ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("model catalog request %d status=%d body=%s", index, response.Code, response.Body.String())
+		}
+		var catalog providerModelCatalogResponse
+		if err := json.Unmarshal(response.Body.Bytes(), &catalog); err != nil {
+			t.Fatal(err)
+		}
+		if len(catalog.Items) != 2 || catalog.Items[0].ID != "gpt-a" || catalog.Items[1].ID != "gpt-z" {
+			t.Fatalf("model catalog=%#v", catalog)
+		}
+		if index == 1 && !catalog.Cached {
+			t.Fatal("second model catalog response was not cached")
+		}
+	}
+	if probe.modelLists != 2 {
+		t.Fatalf("model catalog upstream calls=%d", probe.modelLists)
+	}
 	routeTest := performAdminMutation(t, runtime, cookie, csrf,
 		http.MethodPost, "/admin/api/v1/routes/"+route.ID+"/test", "", nil,
 	)
@@ -225,8 +388,20 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 		t.Fatalf("route test status=%d probes=%d model=%q body=%s",
 			routeTest.Code, probe.probes, probe.model, routeTest.Body.String())
 	}
+	var testedRoute domain.Route
+	if err := json.Unmarshal(routeTest.Body.Bytes(), &testedRoute); err != nil {
+		t.Fatal(err)
+	}
+	persistedRoute, err := runtime.store.GetRoute(context.Background(), route.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persistedRoute.LastTestStatus != domain.DeploymentTestHealthy ||
+		persistedRoute.LastTestRevision != persistedRoute.Revision || persistedRoute.LastTestedAt == nil {
+		t.Fatalf("route validation was not persisted: %#v", persistedRoute)
+	}
 	deleteRoute := performAdminMutation(t, runtime, cookie, csrf,
-		http.MethodDelete, "/admin/api/v1/routes/"+route.ID, `"1"`, nil,
+		http.MethodDelete, "/admin/api/v1/routes/"+route.ID, `"`+strconv.FormatUint(testedRoute.Revision, 10)+`"`, nil,
 	)
 	if deleteRoute.Code != http.StatusNoContent {
 		t.Fatalf("route delete status=%d body=%s", deleteRoute.Code, deleteRoute.Body.String())
@@ -234,8 +409,56 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 	if _, ok := runtime.providers.Resolve("chat"); ok {
 		t.Fatal("deleted route remained active")
 	}
+	immutableTarget := performAdminMutation(t, runtime, cookie, csrf,
+		http.MethodPut, "/admin/api/v1/deployments/"+deployment.ID, `"`+strconv.FormatUint(deployment.Revision, 10)+`"`,
+		map[string]any{
+			"name": "Changed target", "provider_id": instance.ID, "provider_model": "gpt-other",
+			"target_kind": domain.TargetModelID, "max_concurrency": int64(2), "priority": 10, "weight": 1, "enabled": false,
+		},
+	)
+	if immutableTarget.Code != http.StatusConflict {
+		t.Fatalf("unreferenced deployment target mutation status=%d body=%s", immutableTarget.Code, immutableTarget.Body.String())
+	}
+	disableDeployment := performAdminMutation(t, runtime, cookie, csrf,
+		http.MethodPut, "/admin/api/v1/deployments/"+deployment.ID, `"`+strconv.FormatUint(deployment.Revision, 10)+`"`,
+		map[string]any{
+			"name": "GPT test", "provider_id": instance.ID, "provider_model": "gpt-test",
+			"input_micros_per_million": int64(1_000_000), "output_micros_per_million": int64(2_000_000),
+			"max_concurrency": int64(2), "priority": 10, "weight": 1, "enabled": false,
+		},
+	)
+	if disableDeployment.Code != http.StatusOK {
+		t.Fatalf("disable deployment status=%d body=%s", disableDeployment.Code, disableDeployment.Body.String())
+	}
+	var disabledDeployment struct {
+		Revision uint64 `json:"revision"`
+	}
+	if err := json.Unmarshal(disableDeployment.Body.Bytes(), &disabledDeployment); err != nil {
+		t.Fatal(err)
+	}
+	nextRegistry = provider.NewRegistry()
+	if err := nextRegistry.RegisterAdapter(instance.ID, probe); err != nil {
+		t.Fatal(err)
+	}
+	runtime.providers.Replace(nextRegistry)
+	disabledTest := performAdminMutation(t, runtime, cookie, csrf,
+		http.MethodPost, "/admin/api/v1/deployments/"+deployment.ID+"/test", "", nil,
+	)
+	if disabledTest.Code != http.StatusOK || probe.probes != 2 {
+		t.Fatalf("disabled deployment test status=%d probes=%d body=%s", disabledTest.Code, probe.probes, disabledTest.Body.String())
+	}
+	if err := json.Unmarshal(disabledTest.Body.Bytes(), &disabledDeployment); err != nil {
+		t.Fatal(err)
+	}
+	persistedTest, err := runtime.store.GetDeployment(context.Background(), deployment.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persistedTest.LastTestStatus != domain.DeploymentTestHealthy || persistedTest.LastTestRevision != persistedTest.Revision || persistedTest.LastTestedAt == nil {
+		t.Fatalf("deployment validation was not persisted: %#v", persistedTest)
+	}
 	deleteDeployment := performAdminMutation(t, runtime, cookie, csrf,
-		http.MethodDelete, "/admin/api/v1/deployments/"+deployment.ID, `"1"`, nil,
+		http.MethodDelete, "/admin/api/v1/deployments/"+deployment.ID, `"`+strconv.FormatUint(disabledDeployment.Revision, 10)+`"`, nil,
 	)
 	if deleteDeployment.Code != http.StatusNoContent {
 		t.Fatalf("deployment delete status=%d body=%s", deleteDeployment.Code, deleteDeployment.Body.String())
@@ -245,6 +468,18 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 	)
 	if deleteProvider.Code != http.StatusNoContent {
 		t.Fatalf("provider delete status=%d body=%s", deleteProvider.Code, deleteProvider.Body.String())
+	}
+	deleteMediaProvider := performAdminMutation(t, runtime, cookie, csrf,
+		http.MethodDelete, "/admin/api/v1/providers/"+mediaOnly.ID, `"1"`, nil,
+	)
+	if deleteMediaProvider.Code != http.StatusNoContent {
+		t.Fatalf("media provider delete status=%d body=%s", deleteMediaProvider.Code, deleteMediaProvider.Body.String())
+	}
+	deleteMultiBindingProvider := performAdminMutation(t, runtime, cookie, csrf,
+		http.MethodDelete, "/admin/api/v1/providers/"+multiBinding.ID, `"1"`, nil,
+	)
+	if deleteMultiBindingProvider.Code != http.StatusNoContent {
+		t.Fatalf("multi-binding provider delete status=%d body=%s", deleteMultiBindingProvider.Code, deleteMultiBindingProvider.Body.String())
 	}
 	deleteCredential := performAdminMutation(t, runtime, cookie, csrf,
 		http.MethodDelete, "/admin/api/v1/credentials/"+credential.ID,
@@ -341,14 +576,21 @@ func TestCapabilityEvidencePreservesLegacyAndDowngradesDisabledCapabilities(t *t
 
 type adminProbeAdapter struct {
 	canaryAdapter
-	probes int
-	model  string
+	probes     int
+	model      string
+	models     []provider.ModelDescriptor
+	modelLists int
 }
 
 func (a *adminProbeAdapter) Probe(_ context.Context, model string) error {
 	a.probes++
 	a.model = model
 	return nil
+}
+
+func (a *adminProbeAdapter) ListModels(context.Context) ([]provider.ModelDescriptor, error) {
+	a.modelLists++
+	return slices.Clone(a.models), nil
 }
 
 func TestAdminProviderRejectsCredentialAudienceMismatch(t *testing.T) {
@@ -435,7 +677,7 @@ func TestAdminBedrockProviderHotLoadsConverseCapabilities(t *testing.T) {
 	deploymentResponse := performAdminMutation(t, runtime, cookie, csrf,
 		http.MethodPost, "/admin/api/v1/deployments", "", map[string]any{
 			"name": "Claude", "provider_id": instance.ID, "provider_model": "anthropic.claude-test-v1:0",
-			"priority": 10, "weight": 1, "enabled": true,
+			"priority": 10, "weight": 1, "enabled": false,
 		})
 	if deploymentResponse.Code != http.StatusCreated {
 		t.Fatalf("deployment create status=%d body=%s", deploymentResponse.Code, deploymentResponse.Body.String())
@@ -446,6 +688,7 @@ func TestAdminBedrockProviderHotLoadsConverseCapabilities(t *testing.T) {
 	if err := json.Unmarshal(deploymentResponse.Body.Bytes(), &deployment); err != nil {
 		t.Fatal(err)
 	}
+	enableStoredDeploymentForTest(t, runtime, deployment.ID)
 	routeResponse := performAdminMutation(t, runtime, cookie, csrf,
 		http.MethodPost, "/admin/api/v1/routes", "", map[string]any{
 			"public_model": "bedrock-chat", "deployment_id": deployment.ID,
@@ -504,18 +747,19 @@ func TestAdminBedrockTitanEmbeddingProfilePinsModelFamily(t *testing.T) {
 		t.Fatalf("unexpected Titan capabilities: %#v", instance.Capabilities)
 	}
 	wrong := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost, "/admin/api/v1/deployments", "", map[string]any{
-		"name": "Wrong family", "provider_id": instance.ID, "provider_model": "cohere.embed-v4:0", "enabled": true,
+		"name": "Wrong family", "provider_id": instance.ID, "provider_model": "cohere.embed-v4:0", "enabled": false,
 	})
 	if wrong.Code != http.StatusBadRequest {
 		t.Fatalf("wrong model status=%d body=%s", wrong.Code, wrong.Body.String())
 	}
 	deploymentResponse := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost, "/admin/api/v1/deployments", "", map[string]any{
-		"name": "Titan V2", "provider_id": instance.ID, "provider_model": "amazon.titan-embed-text-v2:0", "enabled": true,
+		"name": "Titan V2", "provider_id": instance.ID, "provider_model": "amazon.titan-embed-text-v2:0", "enabled": false,
 	})
 	var deployment domain.Deployment
 	if deploymentResponse.Code != http.StatusCreated || json.Unmarshal(deploymentResponse.Body.Bytes(), &deployment) != nil {
 		t.Fatalf("deployment status=%d body=%s", deploymentResponse.Code, deploymentResponse.Body.String())
 	}
+	enableStoredDeploymentForTest(t, runtime, deployment.ID)
 	routeResponse := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost, "/admin/api/v1/routes", "", map[string]any{
 		"public_model": "embedding", "deployment_id": deployment.ID, "strategy": "ordered", "enabled": true,
 	})
@@ -617,4 +861,20 @@ func performAdminMutation(
 	response := httptest.NewRecorder()
 	runtime.adminRouter().ServeHTTP(response, request)
 	return response
+}
+
+func enableStoredDeploymentForTest(t *testing.T, runtime *Runtime, deploymentID string) {
+	t.Helper()
+	deployment, err := runtime.store.GetDeployment(context.Background(), deploymentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment.Enabled = true
+	deployment.UpdatedAt = time.Now().UTC()
+	if _, err := runtime.store.PutDeployment(context.Background(), deployment, deployment.Revision); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.reloadProviderRegistry(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 }

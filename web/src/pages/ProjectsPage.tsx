@@ -18,10 +18,11 @@ import { compactNumber, dateTime, money } from "../format";
 import type { CreatedGatewayKey, GatewayKey, Project } from "../types";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
+import { Link } from "../navigation";
 
 const projectSchema = (t: TFunction) => z.object({
   name: z.string().trim().min(1, t("projects.nameRequired")).max(128),
-  routes: z.string().trim().min(1, t("projects.routeRequired")),
+  routes: z.array(z.string()).min(1, t("projects.routeRequired")),
   rpm: z.coerce.number().int().min(0),
   tpm: z.coerce.number().int().min(0),
   concurrency: z.coerce.number().int().min(0),
@@ -179,9 +180,7 @@ function KeyRow({ project, value }: { project: Project; value: GatewayKey }) {
         <small>{t("projects.lastUsed", { date: dateTime(value.last_used_at) })}</small>
       </div>
       <div className="row-actions">
-        <button className="button ghost" disabled={mutation.isPending} onClick={() => mutation.mutate()}>
-          {value.enabled ? t("common.disable") : t("common.enable")}
-        </button>
+        {value.enabled ? <ConfirmButton className="button ghost" label={t("common.disable")} title={t("projects.keyDisableTitle")} confirmLabel={t("projects.keyDisableConfirm", { name: value.name })} disabled={mutation.isPending} onConfirm={() => mutation.mutate()} /> : <button className="button ghost" disabled={mutation.isPending} onClick={() => mutation.mutate()}>{t("common.enable")}</button>}
         <ConfirmButton
           label={t("common.delete")}
           confirmLabel={t("projects.keyDeleteConfirm", { name: value.name })}
@@ -205,6 +204,20 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
     queryKey: ["redaction-policies"],
     queryFn: api.redactionPolicies,
   });
+  const availableRoutes = useQuery({
+    queryKey: ["routes"],
+    queryFn: api.routes,
+  });
+  const routeOptions = useMemo(() => {
+    const options = new Map<string, { enabled: boolean; configured: boolean }>();
+    current?.allowed_routes.forEach((value) => options.set(value, { enabled: false, configured: false }));
+    availableRoutes.data?.items.forEach((route) => {
+      const existing = options.get(route.public_model);
+      if (!route.enabled && !existing) return;
+      options.set(route.public_model, { enabled: Boolean(existing?.enabled || route.enabled), configured: true });
+    });
+    return Array.from(options, ([value, state]) => ({ value, ...state })).sort((a, b) => a.value.localeCompare(b.value));
+  }, [availableRoutes.data?.items, current?.allowed_routes]);
   const {
     register,
     handleSubmit,
@@ -217,7 +230,7 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
       tpm: current?.tpm ?? 100_000,
       concurrency: current?.max_concurrency ?? 8,
       budget: (current?.daily_budget_micros_usd ?? 50_000_000) / 1_000_000,
-      routes: current?.allowed_routes.join(", ") ?? "chat",
+      routes: current?.allowed_routes ?? [],
       cidrs: (current?.allowed_cidrs ?? []).join(", "),
       tokenGuardPolicyID: current?.token_guard_policy_id ?? "",
       redactionPolicyID: current?.redaction_policy_id ?? "",
@@ -229,7 +242,7 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
       const body = {
       name: value.name,
       enabled: value.enabled,
-      allowed_routes: splitValues(value.routes),
+      allowed_routes: value.routes,
       rpm: value.rpm,
       tpm: value.tpm,
       max_concurrency: value.concurrency,
@@ -252,38 +265,40 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
     },
   });
   return (
-    <Modal title={current ? t("projects.edit") : t("projects.createTitle")} onClose={onClose}>
-      <form className="form-grid" onSubmit={handleSubmit((value) => mutation.mutate(value))}>
-        <Field label={t("projects.name")} error={errors.name?.message}><input autoFocus {...register("name")} /></Field>
-        <Field label={t("projects.aliases")} hint={t("projects.aliasesHint")} error={errors.routes?.message}>
-          <input {...register("routes")} />
-        </Field>
-        <Field label={t("projects.rpm")}><input type="number" {...register("rpm")} /></Field>
-        <Field label={t("projects.tpm")}><input type="number" {...register("tpm")} /></Field>
-        <Field label={t("projects.maxConcurrency")}><input type="number" {...register("concurrency")} /></Field>
-        <Field label={t("projects.dailyBudgetUSD")}><input type="number" step="0.01" {...register("budget")} /></Field>
-        <label className="check-row"><input type="checkbox" {...register("enabled")} />{t("projects.enable")}</label>
-        <Field label={t("projects.tokenGuardPolicy")}>
-          <select {...register("tokenGuardPolicyID")}>
-            <option value="">{t("projects.noBinding")}</option>
-            {policies.data?.items.filter((policy) => policy.enabled).map((policy) => (
-              <option value={policy.id} key={policy.id}>{policy.name} · {policy.action === "temporary_block" ? t("policies.temporaryBlock") : policy.action === "alert" ? t("policies.alert") : t("policies.observe")}</option>
-            ))}
-          </select>
-        </Field>
-        <Field label={t("projects.redactionPolicy")}>
-          <select {...register("redactionPolicyID")}>
-            <option value="">{t("projects.noBinding")}</option>
-            {redactionPolicies.data?.items.filter((policy) => policy.enabled).map((policy) => (
-              <option value={policy.id} key={policy.id}>{policy.name} · {policy.mode === "strict" ? t("redaction.strictBadge") : policy.mode === "bounded_stream" ? t("redaction.boundedBadge") : t("redaction.detectStreamBadge")}</option>
-            ))}
-          </select>
-        </Field>
-        <Field label={t("projects.allowedCIDR")} hint={t("projects.cidrHint")}>
-          <textarea rows={3} {...register("cidrs")} />
-        </Field>
+    <Modal wide title={current ? t("projects.edit") : t("projects.createTitle")} onClose={onClose}>
+      <form className="project-form" onSubmit={handleSubmit((value) => mutation.mutate(value))}>
+        <section className="project-form-section" aria-labelledby="project-basics-title">
+          <header><h3 id="project-basics-title">{t("projects.basicInfo")}</h3><p>{t("projects.basicInfoDescription")}</p></header>
+          <div className="form-grid">
+            <Field label={t("projects.name")} error={errors.name?.message}><input autoFocus {...register("name")} /></Field>
+            <fieldset className="model-picker" aria-describedby="project-model-help">
+              <legend>{t("projects.aliases")}</legend>
+              <p id="project-model-help">{t("projects.aliasesHint")}</p>
+              {availableRoutes.isPending ? <Loading label={t("projects.loadingModels")} /> : routeOptions.length ? <div className="model-option-grid">{routeOptions.map((route) => <label className="model-option" key={route.value}><input type="checkbox" value={route.value} {...register("routes")} /><span><strong>{route.value}</strong>{(!route.configured || !route.enabled) && <small>{t("projects.unavailableModel")}</small>}</span></label>)}</div> : <div className="notice warning"><strong>{t("projects.noConfiguredModels")}</strong><span>{t("projects.noConfiguredModelsDescription")}</span><Link className="notice-link" href="/admin/routes">{t("projects.openRoutes")}</Link></div>}
+              {errors.routes?.message && <small className="field-error" role="alert">{errors.routes.message}</small>}
+            </fieldset>
+          </div>
+        </section>
+        <section className="project-form-section" aria-labelledby="project-capacity-title">
+          <header><h3 id="project-capacity-title">{t("projects.capacityControls")}</h3><p>{t("projects.capacityControlsDescription")}</p></header>
+          <div className="form-grid compact-number-grid">
+            <Field label={t("projects.rpm")}><input type="number" {...register("rpm")} /></Field>
+            <Field label={t("projects.tpm")}><input type="number" {...register("tpm")} /></Field>
+            <Field label={t("projects.maxConcurrency")}><input type="number" {...register("concurrency")} /></Field>
+            <Field label={t("projects.dailyBudgetUSD")}><input type="number" step="0.01" {...register("budget")} /></Field>
+          </div>
+        </section>
+        <section className="project-form-section" aria-labelledby="project-security-title">
+          <header><h3 id="project-security-title">{t("projects.securityControls")}</h3><p>{t("projects.securityControlsDescription")}</p></header>
+          <label className="project-enable-row"><span><strong>{t("projects.enable")}</strong><small>{t("projects.enableDescription")}</small></span><input type="checkbox" {...register("enabled")} /></label>
+          <div className="form-grid">
+            <Field label={t("projects.tokenGuardPolicy")}><select {...register("tokenGuardPolicyID")}><option value="">{t("projects.noBinding")}</option>{policies.data?.items.filter((policy) => policy.enabled).map((policy) => <option value={policy.id} key={policy.id}>{policy.name} · {policy.action === "temporary_block" ? t("policies.temporaryBlock") : policy.action === "alert" ? t("policies.alert") : t("policies.observe")}</option>)}</select></Field>
+            <Field label={t("projects.redactionPolicy")}><select {...register("redactionPolicyID")}><option value="">{t("projects.noBinding")}</option>{redactionPolicies.data?.items.filter((policy) => policy.enabled).map((policy) => <option value={policy.id} key={policy.id}>{policy.name} · {policy.mode === "strict" ? t("redaction.strictBadge") : policy.mode === "bounded_stream" ? t("redaction.boundedBadge") : t("redaction.detectStreamBadge")}</option>)}</select></Field>
+            <Field label={t("projects.allowedCIDR")} hint={t("projects.cidrHint")}><textarea rows={3} placeholder={t("projects.cidrPlaceholder")} {...register("cidrs")} /></Field>
+          </div>
+        </section>
         {mutation.isError && <ErrorState error={mutation.error} />}
-        <div className="form-actions">
+        <div className="form-actions project-form-actions">
           <button type="button" className="button ghost" onClick={onClose}>{t("common.cancel")}</button>
           <button className="button primary" disabled={mutation.isPending}>{current ? t("projects.save") : t("projects.createSubmit")}</button>
         </div>

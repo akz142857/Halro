@@ -60,6 +60,8 @@ type Runtime struct {
 	auditBatchPending []adminAuditRequest
 	auditBatchRunning bool
 	adminTopologyMu   sync.Mutex
+	providerModelsMu  sync.Mutex
+	providerModels    map[string]providerModelCatalogCache
 	adminProjectMu    sync.Mutex
 	adminAlertMu      sync.Mutex
 	adminSettingsMu   sync.Mutex
@@ -816,6 +818,7 @@ func (r *Runtime) adminRouter() http.Handler {
 	router.With(r.requireAdmin).Get("/admin/api/v1/providers", r.listAdminProviders)
 	router.With(r.requireAdminMutation).Post("/admin/api/v1/providers", r.createAdminProvider)
 	router.With(r.requireAdmin).Get("/admin/api/v1/providers/{id}", r.getAdminProvider)
+	router.With(r.requireAdmin).Get("/admin/api/v1/providers/{id}/models", r.listAdminProviderModels)
 	router.With(r.requireAdminMutation).Put("/admin/api/v1/providers/{id}", r.updateAdminProvider)
 	router.With(r.requireAdminMutation).Delete("/admin/api/v1/providers/{id}", r.deleteAdminProvider)
 	router.With(r.requireAdminMutation).Post("/admin/api/v1/providers/{id}/test", r.testAdminProvider)

@@ -28,17 +28,18 @@ type credentialInput struct {
 }
 
 type providerInput struct {
-	Name             string                       `json:"name"`
-	Type             domain.ProviderType          `json:"type"`
-	BaseURL          string                       `json:"base_url"`
-	APIVersion       string                       `json:"api_version,omitempty"`
-	CredentialID     string                       `json:"credential_id"`
-	AccessSurface    domain.AccessSurface         `json:"access_surface,omitempty"`
-	ProfileID        domain.ProviderProfileID     `json:"profile_id,omitempty"`
-	CredentialScheme domain.CredentialScheme      `json:"credential_scheme,omitempty"`
-	Capabilities     *domain.ProviderCapabilities `json:"capabilities,omitempty"`
-	MaxConcurrency   int64                        `json:"max_concurrency"`
-	Enabled          bool                         `json:"enabled"`
+	Name             string                           `json:"name"`
+	Type             domain.ProviderType              `json:"type"`
+	BaseURL          string                           `json:"base_url"`
+	APIVersion       string                           `json:"api_version,omitempty"`
+	CredentialID     string                           `json:"credential_id"`
+	AccessSurface    domain.AccessSurface             `json:"access_surface,omitempty"`
+	ProfileID        domain.ProviderProfileID         `json:"profile_id,omitempty"`
+	CredentialScheme domain.CredentialScheme          `json:"credential_scheme,omitempty"`
+	Capabilities     *domain.ProviderCapabilities     `json:"capabilities,omitempty"`
+	Bindings         *[]domain.ProviderProfileBinding `json:"bindings,omitempty"`
+	MaxConcurrency   int64                            `json:"max_concurrency"`
+	Enabled          bool                             `json:"enabled"`
 }
 
 type routeInput struct {
@@ -168,7 +169,7 @@ func (r *Runtime) createAdminProvider(writer http.ResponseWriter, request *http.
 	now := time.Now().UTC()
 	r.adminTopologyMu.Lock()
 	defer r.adminTopologyMu.Unlock()
-	instance, err := r.providerFromInput(request, providerID, input, "", nil, now, now)
+	instance, err := r.providerFromInput(request, providerID, input, "", nil, nil, now, now)
 	if err != nil {
 		adminBadRequest(writer, err.Error())
 		return
@@ -211,6 +212,10 @@ func (r *Runtime) updateAdminProvider(writer http.ResponseWriter, request *http.
 		adminPreconditionFailed(writer)
 		return
 	}
+	if len(current.EffectiveProfileBindings()) > 1 && input.Bindings == nil {
+		adminBadRequest(writer, "bindings are required when updating a provider with multiple profile bindings")
+		return
+	}
 	if input.Type != current.Type {
 		deployments, listErr := r.store.ListDeployments(request.Context())
 		if listErr != nil {
@@ -228,7 +233,7 @@ func (r *Runtime) updateAdminProvider(writer http.ResponseWriter, request *http.
 	if input.Type != current.Type || input.ProfileID != "" && input.ProfileID != current.ProfileID {
 		currentEvidence = nil
 	}
-	instance, err := r.providerFromInput(request, current.ID, input, current.ProfileID, currentEvidence, current.CreatedAt, time.Now().UTC())
+	instance, err := r.providerFromInput(request, current.ID, input, current.ProfileID, currentEvidence, current.Bindings, current.CreatedAt, time.Now().UTC())
 	if err != nil {
 		adminBadRequest(writer, err.Error())
 		return
@@ -238,6 +243,13 @@ func (r *Runtime) updateAdminProvider(writer http.ResponseWriter, request *http.
 		return
 	}
 	instance.DeletedAt = current.DeletedAt
+	instance.LastTestStatus = current.LastTestStatus
+	instance.LastTestedAt = current.LastTestedAt
+	instance.LastTestLatencyMillis = current.LastTestLatencyMillis
+	instance.LastTestErrorClass = current.LastTestErrorClass
+	instance.LastTestRevision = current.LastTestRevision
+	instance.LastTestHealthyTargets = current.LastTestHealthyTargets
+	instance.LastTestTotalTargets = current.LastTestTotalTargets
 	instance, err = r.store.PutProvider(request.Context(), instance, expected)
 	if err != nil {
 		adminMutationError(writer, err)
@@ -247,6 +259,7 @@ func (r *Runtime) updateAdminProvider(writer http.ResponseWriter, request *http.
 		adminConfigurationError(writer, err)
 		return
 	}
+	r.clearProviderModelCatalog(instance.ID)
 	if err := r.auditAdminMutation(request, "provider.update", "provider", instance.ID); err != nil {
 		adminAuditError(writer)
 		return
@@ -288,6 +301,7 @@ func (r *Runtime) deleteAdminProvider(writer http.ResponseWriter, request *http.
 		adminConfigurationError(writer, err)
 		return
 	}
+	r.clearProviderModelCatalog(instance.ID)
 	if err := r.auditAdminMutation(request, "provider.delete", "provider", instance.ID); err != nil {
 		adminAuditError(writer)
 		return
@@ -307,14 +321,24 @@ func (r *Runtime) testAdminProvider(writer http.ResponseWriter, request *http.Re
 		adminBadRequest(writer, "provider is disabled")
 		return
 	}
-	adapter, ok := r.providers.AdapterForProvider(providerID)
-	if !ok {
-		adminBadRequest(writer, "provider requires an enabled route before connection testing")
-		return
+	bindingID := strings.TrimSpace(request.URL.Query().Get("binding_id"))
+	bindings := make([]domain.ProviderProfileBinding, 0, len(instance.EffectiveProfileBindings()))
+	if bindingID != "" {
+		selected, selectionErr := enabledProviderBinding(instance, bindingID)
+		if selectionErr != nil {
+			adminBadRequest(writer, selectionErr.Error())
+			return
+		}
+		bindings = append(bindings, selected)
+	} else {
+		for _, binding := range instance.EffectiveProfileBindings() {
+			if binding.Enabled {
+				bindings = append(bindings, binding)
+			}
+		}
 	}
-	prober, ok := adapter.(provider.Prober)
-	if !ok {
-		adminBadRequest(writer, "provider does not support connection testing")
+	if len(bindings) == 0 {
+		adminBadRequest(writer, "provider binding is unavailable")
 		return
 	}
 	deployments, err := r.store.ListDeployments(request.Context())
@@ -322,70 +346,144 @@ func (r *Runtime) testAdminProvider(writer http.ResponseWriter, request *http.Re
 		adminStoreError(writer)
 		return
 	}
-	providerModel := ""
-	for _, deployment := range deployments {
-		if deployment.ProviderID == providerID && deployment.Enabled && deployment.DeletedAt == nil {
-			providerModel = deployment.ProviderModel
-			break
-		}
+	routes, err := r.store.ListRoutes(request.Context())
+	if err != nil {
+		adminStoreError(writer)
+		return
 	}
-	if providerModel == "" {
-		routes, listErr := r.store.ListRoutes(request.Context())
-		if listErr != nil {
-			adminStoreError(writer)
-			return
-		}
-		for _, route := range routes {
-			if route.ProviderID == providerID && route.Enabled && route.DeletedAt == nil {
-				providerModel = route.ProviderModel
-				break
-			}
-		}
-	}
-	r.runAdminProbe(writer, request, prober, providerModel, "provider", providerID, normalizedProviderCapabilities(instance))
-}
-
-func (r *Runtime) runAdminProbe(
-	writer http.ResponseWriter,
-	request *http.Request,
-	prober provider.Prober,
-	providerModel string,
-	resourceType string,
-	resourceID string,
-	capabilities domain.ProviderCapabilities,
-) {
+	testedRevision := instance.Revision
 	timeout := r.config.Gateway.AttemptResponseHeaderTimeout.Value()
 	if timeout <= 0 {
 		timeout = 15 * time.Second
 	}
-	ctx, cancel := context.WithTimeout(request.Context(), timeout)
-	defer cancel()
-	started := time.Now()
-	err := prober.Probe(ctx, providerModel)
-	latencyMS := time.Since(started).Milliseconds()
-	action := resourceType + ".test.success"
-	if err != nil {
-		action = resourceType + ".test.failure"
+	testedAt := time.Now().UTC()
+	maxLatencyMS := int64(0)
+	healthyTargets := 0
+	errorClass := provider.ErrorUnknown
+	var probeErr error
+	for _, binding := range bindings {
+		adapter, ok := r.providers.AdapterForBinding(providerID, binding.ID)
+		if !ok && len(instance.Bindings) == 0 {
+			adapter, ok = r.providers.AdapterForProvider(providerID)
+		}
+		if !ok {
+			adminBadRequest(writer, "provider binding adapter is unavailable")
+			return
+		}
+		prober, ok := adapter.(provider.Prober)
+		if !ok {
+			adminBadRequest(writer, "provider does not support connection testing")
+			return
+		}
+		providerModel := providerProbeModel(instance, providerID, binding.ID, deployments, routes)
+		ctx, cancel := context.WithTimeout(request.Context(), timeout)
+		started := time.Now()
+		err := prober.Probe(ctx, providerModel)
+		latencyMS := time.Since(started).Milliseconds()
+		cancel()
+		if latencyMS > maxLatencyMS {
+			maxLatencyMS = latencyMS
+		}
+		if err == nil {
+			healthyTargets++
+			continue
+		}
+		if probeErr == nil {
+			probeErr = err
+			var classified *provider.Error
+			if errors.As(err, &classified) {
+				errorClass = classified.Class
+			}
+		}
 	}
-	if auditErr := r.auditAdminMutation(request, action, resourceType, resourceID); auditErr != nil {
+	status := domain.DeploymentTestHealthy
+	if probeErr != nil {
+		status = domain.DeploymentTestUnhealthy
+	}
+	testedAt = time.Now().UTC()
+	r.adminTopologyMu.Lock()
+	current, storeErr := r.store.GetProvider(request.Context(), providerID)
+	if storeErr != nil || current.DeletedAt != nil {
+		r.adminTopologyMu.Unlock()
+		adminNotFound(writer)
+		return
+	}
+	if current.Revision != testedRevision {
+		r.adminTopologyMu.Unlock()
+		writeJSON(writer, http.StatusConflict, map[string]string{"error": "provider changed during validation; test the current revision again"})
+		return
+	}
+	current.LastTestStatus = status
+	current.LastTestedAt = &testedAt
+	current.LastTestLatencyMillis = maxLatencyMS
+	current.LastTestRevision = current.Revision + 1
+	current.LastTestErrorClass = ""
+	current.LastTestHealthyTargets = healthyTargets
+	current.LastTestTotalTargets = len(bindings)
+	if probeErr != nil {
+		current.LastTestErrorClass = string(errorClass)
+	}
+	current.UpdatedAt = testedAt
+	current, storeErr = r.store.PutProvider(request.Context(), current, testedRevision)
+	r.adminTopologyMu.Unlock()
+	if storeErr != nil {
+		adminMutationError(writer, storeErr)
+		return
+	}
+	action := "provider.test.success"
+	if probeErr != nil {
+		action = "provider.test.failure"
+	}
+	if err := r.auditAdminMutation(request, action, "provider", providerID); err != nil {
 		adminAuditError(writer)
 		return
 	}
-	if err != nil {
-		errorClass := provider.ErrorUnknown
-		var classified *provider.Error
-		if errors.As(err, &classified) {
-			errorClass = classified.Class
-		}
-		writeJSON(writer, http.StatusBadGateway, map[string]any{
-			"status": "unhealthy", "latency_ms": latencyMS, "error_class": errorClass,
-		})
+	result := map[string]any{
+		"status": status, "latency_ms": maxLatencyMS, "tested_at": testedAt, "revision": current.Revision,
+		"healthy_targets": healthyTargets, "total_targets": len(bindings),
+	}
+	writer.Header().Set("ETag", revisionETag(current.Revision))
+	if probeErr != nil {
+		result["error_class"] = errorClass
+		writeJSON(writer, http.StatusBadGateway, result)
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{
-		"status": "healthy", "latency_ms": latencyMS,
-		"capabilities": capabilities,
-	})
+	writeJSON(writer, http.StatusOK, result)
+}
+
+func providerProbeModel(instance domain.ProviderInstance, providerID, bindingID string, deployments []domain.Deployment, routes []domain.Route) string {
+	for _, deployment := range deployments {
+		deploymentBindingID := deployment.BindingID
+		if deploymentBindingID == "" {
+			deploymentBindingID = matchingBindingID(instance, deployment.ProfileID)
+		}
+		if deployment.ProviderID == providerID && deploymentBindingID == bindingID && deployment.Enabled && deployment.DeletedAt == nil {
+			return deployment.ProviderModel
+		}
+	}
+	for _, route := range routes {
+		if route.ProviderID == providerID && route.Enabled && route.DeletedAt == nil {
+			return route.ProviderModel
+		}
+	}
+	return ""
+}
+
+func enabledProviderBinding(instance domain.ProviderInstance, bindingID string) (domain.ProviderProfileBinding, error) {
+	var selected domain.ProviderProfileBinding
+	for _, binding := range instance.EffectiveProfileBindings() {
+		if !binding.Enabled || bindingID != "" && binding.ID != bindingID {
+			continue
+		}
+		if selected.ID != "" {
+			return domain.ProviderProfileBinding{}, errors.New("provider has multiple enabled bindings; binding_id is required")
+		}
+		selected = binding
+	}
+	if selected.ID == "" {
+		return domain.ProviderProfileBinding{}, errors.New("provider binding is unavailable")
+	}
+	return selected, nil
 }
 
 func (r *Runtime) testAdminRoute(writer http.ResponseWriter, request *http.Request) {
@@ -400,9 +498,11 @@ func (r *Runtime) testAdminRoute(writer http.ResponseWriter, request *http.Reque
 	}
 	providerID := route.ProviderID
 	providerModel := route.ProviderModel
+	var deployment domain.Deployment
 	capabilities := domain.ProviderCapabilities{}
 	if route.DeploymentID != "" {
-		deployment, deploymentErr := r.store.GetDeployment(request.Context(), route.DeploymentID)
+		var deploymentErr error
+		deployment, deploymentErr = r.store.GetDeployment(request.Context(), route.DeploymentID)
 		if deploymentErr != nil || deployment.DeletedAt != nil || !deployment.Enabled {
 			adminBadRequest(writer, "route deployment is unavailable")
 			return
@@ -419,7 +519,13 @@ func (r *Runtime) testAdminRoute(writer http.ResponseWriter, request *http.Reque
 	if route.DeploymentID == "" {
 		capabilities = normalizedProviderCapabilities(instance)
 	}
-	adapter, ok := r.providers.AdapterForProvider(providerID)
+	var adapter provider.Adapter
+	var ok bool
+	if route.DeploymentID != "" {
+		adapter, ok = adapterForDeployment(r.providers, instance, deployment)
+	} else {
+		adapter, ok = r.providers.AdapterForProvider(providerID)
+	}
 	if !ok {
 		adminBadRequest(writer, "route provider adapter is unavailable")
 		return
@@ -429,7 +535,72 @@ func (r *Runtime) testAdminRoute(writer http.ResponseWriter, request *http.Reque
 		adminBadRequest(writer, "provider does not support connection testing")
 		return
 	}
-	r.runAdminProbe(writer, request, prober, providerModel, "route", route.ID, capabilities)
+	testedRevision := route.Revision
+	timeout := r.config.Gateway.AttemptResponseHeaderTimeout.Value()
+	if timeout <= 0 {
+		timeout = 15 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(request.Context(), timeout)
+	started := time.Now()
+	probeErr := prober.Probe(ctx, providerModel)
+	latencyMS := time.Since(started).Milliseconds()
+	cancel()
+	testedAt := time.Now().UTC()
+	errorClass := provider.ErrorUnknown
+	status := domain.DeploymentTestHealthy
+	if probeErr != nil {
+		status = domain.DeploymentTestUnhealthy
+		var classified *provider.Error
+		if errors.As(probeErr, &classified) {
+			errorClass = classified.Class
+		}
+	}
+	r.adminTopologyMu.Lock()
+	current, storeErr := r.store.GetRoute(request.Context(), route.ID)
+	if storeErr != nil || current.DeletedAt != nil {
+		r.adminTopologyMu.Unlock()
+		adminNotFound(writer)
+		return
+	}
+	if current.Revision != testedRevision {
+		r.adminTopologyMu.Unlock()
+		writeJSON(writer, http.StatusConflict, map[string]string{"error": "route changed during validation; test the current revision again"})
+		return
+	}
+	current.LastTestStatus = status
+	current.LastTestedAt = &testedAt
+	current.LastTestLatencyMillis = latencyMS
+	current.LastTestRevision = current.Revision + 1
+	current.LastTestErrorClass = ""
+	if probeErr != nil {
+		current.LastTestErrorClass = string(errorClass)
+	}
+	current.UpdatedAt = testedAt
+	current, storeErr = r.store.PutRoute(request.Context(), current, testedRevision)
+	r.adminTopologyMu.Unlock()
+	if storeErr != nil {
+		adminMutationError(writer, storeErr)
+		return
+	}
+	action := "route.test.success"
+	if probeErr != nil {
+		action = "route.test.failure"
+	}
+	if err := r.auditAdminMutation(request, action, "route", route.ID); err != nil {
+		adminAuditError(writer)
+		return
+	}
+	result := map[string]any{
+		"status": status, "latency_ms": latencyMS, "tested_at": testedAt, "revision": current.Revision,
+	}
+	writer.Header().Set("ETag", revisionETag(current.Revision))
+	if probeErr != nil {
+		result["error_class"] = errorClass
+		writeJSON(writer, http.StatusBadGateway, result)
+		return
+	}
+	result["capabilities"] = capabilities
+	writeJSON(writer, http.StatusOK, result)
 }
 
 func (r *Runtime) createAdminRoute(writer http.ResponseWriter, request *http.Request) {
@@ -495,6 +666,11 @@ func (r *Runtime) updateAdminRoute(writer http.ResponseWriter, request *http.Req
 	}
 	route := input.route(current.ID, current.CreatedAt, time.Now().UTC())
 	route.DeletedAt = current.DeletedAt
+	route.LastTestStatus = current.LastTestStatus
+	route.LastTestedAt = current.LastTestedAt
+	route.LastTestLatencyMillis = current.LastTestLatencyMillis
+	route.LastTestErrorClass = current.LastTestErrorClass
+	route.LastTestRevision = current.LastTestRevision
 	if err := route.Validate(); err != nil {
 		adminBadRequest(writer, err.Error())
 		return
@@ -637,6 +813,7 @@ func (r *Runtime) providerFromInput(
 	input providerInput,
 	currentProfile domain.ProviderProfileID,
 	currentEvidence domain.CapabilityEvidenceSet,
+	currentBindings []domain.ProviderProfileBinding,
 	createdAt time.Time,
 	updatedAt time.Time,
 ) (domain.ProviderInstance, error) {
@@ -705,6 +882,56 @@ func (r *Runtime) providerFromInput(
 		}
 	}
 	instance.CapabilityEvidence = preserveCapabilityEvidence(instance.Capabilities, currentEvidence)
+	if input.Bindings != nil {
+		if len(*input.Bindings) == 0 {
+			return domain.ProviderInstance{}, errors.New("provider must contain at least one profile binding")
+		}
+		instance.Bindings = append([]domain.ProviderProfileBinding(nil), (*input.Bindings)...)
+		for index := range instance.Bindings {
+			binding := &instance.Bindings[index]
+			binding.ProviderID = id
+			binding.ID = domain.DefaultProviderProfileBindingID(id, binding.ProfileID)
+			profile, ok := domain.ResolveProviderProfile(input.Type, binding.ProfileID)
+			if !ok {
+				return domain.ProviderInstance{}, errors.New("provider binding profile is not implemented")
+			}
+			binding.AccessSurface, binding.CredentialScheme = profile.AccessSurface, profile.CredentialScheme
+			if binding.CredentialScheme != credential.Scheme || binding.AccessSurface != credential.AccessSurface {
+				return domain.ProviderInstance{}, errors.New("provider binding credential profile does not match connection")
+			}
+			if isStrictOperationProfile(binding.ProfileID) &&
+				!domain.ProviderCapabilitiesSubset(binding.Capabilities, domain.DefaultProviderCapabilitiesForProfile(input.Type, binding.ProfileID)) {
+				return domain.ProviderInstance{}, errors.New("provider binding capabilities exceed the immutable operation profile")
+			}
+			var previous domain.CapabilityEvidenceSet
+			for _, current := range currentBindings {
+				if current.ID == binding.ID && current.ProfileID == binding.ProfileID {
+					previous = current.CapabilityEvidence
+					break
+				}
+			}
+			binding.CapabilityEvidence = preserveCapabilityEvidence(binding.Capabilities, previous)
+		}
+		for index, binding := range instance.Bindings {
+			if binding.Enabled {
+				if index != 0 {
+					instance.Bindings[0], instance.Bindings[index] = instance.Bindings[index], instance.Bindings[0]
+				}
+				break
+			}
+		}
+		primary := instance.Bindings[0]
+		instance.ProfileID, instance.AccessSurface, instance.CredentialScheme = primary.ProfileID, primary.AccessSurface, primary.CredentialScheme
+		instance.Capabilities, instance.CapabilityEvidence = domain.BindingsCapabilitiesSummary(instance.Bindings)
+	} else {
+		instance.Bindings = []domain.ProviderProfileBinding{{
+			ID: domain.DefaultProviderProfileBindingID(id, instance.ProfileID), ProviderID: id,
+			ProfileID: instance.ProfileID, AccessSurface: instance.AccessSurface,
+			CredentialScheme: instance.CredentialScheme, Capabilities: instance.Capabilities,
+			CapabilityEvidence: instance.CapabilityEvidence.Clone(), Enabled: instance.Enabled,
+		}}
+		instance.Capabilities, instance.CapabilityEvidence = domain.BindingsCapabilitiesSummary(instance.Bindings)
+	}
 	return instance, instance.Validate()
 }
 
@@ -756,6 +983,9 @@ func (r *Runtime) validateAdminRoute(request *http.Request, candidate domain.Rou
 		instance, err := r.store.GetProvider(request.Context(), candidate.ProviderID)
 		if err != nil || instance.DeletedAt != nil || (candidate.Enabled && !instance.Enabled) {
 			return errors.New("route provider is unavailable")
+		}
+		if len(instance.EffectiveProfileBindings()) != 1 {
+			return errors.New("deployment_id is required for a provider with multiple profile bindings")
 		}
 		if err := bedrockprovider.ValidateProfileModel(instance.ProfileID, candidate.ProviderModel); err != nil {
 			return err

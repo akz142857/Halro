@@ -190,7 +190,7 @@ func TestMetadataMigrationFromV1IsAtomicAndRecorded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(history) != 8 ||
+	if len(history) != 9 ||
 		history[0] != (MigrationRecord{Version: 1, Name: "initial_schema"}) ||
 		history[1] != (MigrationRecord{Version: 2, Name: "migration_history"}) ||
 		history[2] != (MigrationRecord{Version: 3, Name: "deployments"}) ||
@@ -198,7 +198,8 @@ func TestMetadataMigrationFromV1IsAtomicAndRecorded(t *testing.T) {
 		history[4] != (MigrationRecord{Version: 5, Name: "provider_resources"}) ||
 		history[5] != (MigrationRecord{Version: 6, Name: "phase2_capability_evidence"}) ||
 		history[6] != (MigrationRecord{Version: 7, Name: "provider_resource_creation_status"}) ||
-		history[7] != (MigrationRecord{Version: 8, Name: "admin_mfa"}) {
+		history[7] != (MigrationRecord{Version: 8, Name: "admin_mfa"}) ||
+		history[8] != (MigrationRecord{Version: 9, Name: "provider_profile_bindings"}) {
 		t.Fatalf("history=%#v", history)
 	}
 }
@@ -262,8 +263,117 @@ func TestProviderProfileMigrationFromV3IsAtomicAndConservative(t *testing.T) {
 			if credential.AccessSurface != domain.SurfaceBedrockRuntime || credential.Scheme != domain.CredentialAWSSigV4Explicit ||
 				instance.ProfileID != domain.ProfileBedrockConverseText || instance.CapabilityEvidence["chat"] != domain.EvidenceLegacy ||
 				instance.Capabilities.DeveloperRole || deployment.ProfileID != domain.ProfileBedrockConverseText ||
-				deployment.CapabilityEvidence["chat"] != domain.EvidenceLegacy || deployment.Capabilities.DeveloperRole {
+				deployment.CapabilityEvidence["chat"] != domain.EvidenceLegacy || deployment.Capabilities.DeveloperRole ||
+				len(instance.Bindings) != 1 || instance.Bindings[0].ProviderID != instance.ID ||
+				instance.Bindings[0].ID != domain.DefaultProviderProfileBindingID(instance.ID, instance.ProfileID) ||
+				deployment.BindingID != instance.Bindings[0].ID {
 				t.Fatalf("credential=%#v provider=%#v deployment=%#v", credential, instance, deployment)
+			}
+		})
+	}
+}
+
+func TestProviderProfileBindingMigrationFromV8IsAtomicAndIdempotent(t *testing.T) {
+	root := t.TempDir()
+	templatePath := filepath.Join(root, "metadata-v8.db")
+	createV3ProviderMetadata(t, templatePath)
+	store, err := Open(templatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := bbolt.Open(templatePath, 0o600, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = db.Update(func(tx *bbolt.Tx) error {
+		var instance domain.ProviderInstance
+		if err := json.Unmarshal(tx.Bucket(bucketProviders).Get([]byte("provider_v3")), &instance); err != nil {
+			return err
+		}
+		instance.Bindings = nil
+		encoded, _ := json.Marshal(instance)
+		if err := tx.Bucket(bucketProviders).Put([]byte(instance.ID), encoded); err != nil {
+			return err
+		}
+		var deployment domain.Deployment
+		if err := json.Unmarshal(tx.Bucket(bucketDeployments).Get([]byte("deployment_v3")), &deployment); err != nil {
+			return err
+		}
+		deployment.BindingID = ""
+		encoded, _ = json.Marshal(deployment)
+		if err := tx.Bucket(bucketDeployments).Put([]byte(deployment.ID), encoded); err != nil {
+			return err
+		}
+		var version [8]byte
+		binary.BigEndian.PutUint64(version[:], 8)
+		if err := tx.Bucket(bucketMeta).Put(keySchemaVersion, version[:]); err != nil {
+			return err
+		}
+		return tx.Bucket(bucketMigrationHistory).Delete(versionKey(9))
+	})
+	if closeErr := db.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	template, err := os.ReadFile(templatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, point := range []string{"before_migrate_provider_profile_bindings", "after_migrate_provider_profile_bindings"} {
+		t.Run(point, func(t *testing.T) {
+			path := filepath.Join(root, point+".db")
+			if err := os.WriteFile(path, template, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			injected := errors.New("injected v9 failure")
+			_, err := openWithMigrationStepHook(path, func(version uint64, step string) error {
+				if version == 9 && step == point {
+					return injected
+				}
+				return nil
+			})
+			if !errors.Is(err, injected) {
+				t.Fatalf("migration error=%v", err)
+			}
+			raw, err := bbolt.Open(path, 0o600, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = raw.View(func(tx *bbolt.Tx) error {
+				if got := binary.BigEndian.Uint64(tx.Bucket(bucketMeta).Get(keySchemaVersion)); got != 8 {
+					t.Fatalf("schema=%d", got)
+				}
+				var instance domain.ProviderInstance
+				if err := json.Unmarshal(tx.Bucket(bucketProviders).Get([]byte("provider_v3")), &instance); err != nil {
+					return err
+				}
+				if len(instance.Bindings) != 0 {
+					t.Fatalf("partial bindings survived rollback: %#v", instance.Bindings)
+				}
+				return nil
+			})
+			if closeErr := raw.Close(); err == nil {
+				err = closeErr
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			retried, err := Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			instance, _ := retried.GetProvider(context.Background(), "provider_v3")
+			deployment, _ := retried.GetDeployment(context.Background(), "deployment_v3")
+			if closeErr := retried.Close(); closeErr != nil {
+				t.Fatal(closeErr)
+			}
+			if len(instance.Bindings) != 1 || deployment.BindingID != instance.Bindings[0].ID {
+				t.Fatalf("provider=%#v deployment=%#v", instance, deployment)
 			}
 		})
 	}

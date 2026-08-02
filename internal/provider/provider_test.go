@@ -263,6 +263,40 @@ func TestRegistryReplaceIsAtomicAndReturnsRetiredAdapters(t *testing.T) {
 	}
 }
 
+func TestRegistryAddressesAdaptersByProviderBinding(t *testing.T) {
+	registry := NewRegistry()
+	chat := &registryAdapter{}
+	media := &registryAdapter{}
+	if err := registry.RegisterBindingAdapter("provider", "binding_chat", chat); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.RegisterBindingAdapter("provider", "binding_media", media); err != nil {
+		t.Fatal(err)
+	}
+	if adapter, ok := registry.AdapterForBinding("provider", "binding_chat"); !ok || adapter != chat {
+		t.Fatalf("chat binding adapter=%#v ok=%v", adapter, ok)
+	}
+	if _, ok := registry.AdapterForBinding("other", "binding_chat"); ok {
+		t.Fatal("binding was addressable through a different provider")
+	}
+	if _, ok := registry.AdapterForProvider("provider"); ok {
+		t.Fatal("ambiguous provider adapter lookup did not fail closed")
+	}
+	if ids := registry.ProviderIDs(); len(ids) != 1 || ids[0] != "provider" {
+		t.Fatalf("provider ids=%v", ids)
+	}
+}
+
+func TestRegistryRejectsDuplicateBindingIdentityAcrossProviders(t *testing.T) {
+	registry := NewRegistry()
+	if err := registry.RegisterBindingAdapter("first", "shared", &registryAdapter{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.RegisterBindingAdapter("second", "shared", &registryAdapter{}); err == nil {
+		t.Fatal("duplicate global binding identity was accepted")
+	}
+}
+
 func TestRegistryCapabilityEvidenceIsImmutableAcrossBoundaries(t *testing.T) {
 	evidence := domain.CapabilityEvidenceSet{"chat": domain.EvidenceVerified}
 	registry := NewRegistry()

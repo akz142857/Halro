@@ -9,6 +9,7 @@ import type {
   Page,
   Project,
   Provider,
+  ProviderModelCatalog,
   RedactionPolicy,
   RedactionTestResult,
   Route,
@@ -218,6 +219,13 @@ export const api = {
       `"${revision}"`,
     ),
   providers: () => request<Page<Provider>>("/providers").then((value) => value.data),
+  providerModels: (id: string, bindingID = "", refresh = false) => {
+    const query = new URLSearchParams();
+    if (bindingID) query.set("binding_id", bindingID);
+    if (refresh) query.set("refresh", "true");
+    const suffix = query.size ? `?${query.toString()}` : "";
+    return request<ProviderModelCatalog>(`/providers/${encodeURIComponent(id)}/models${suffix}`).then((value) => value.data);
+  },
   createProvider: (value: unknown) =>
     request<Provider>("/providers", json("POST", value)),
   updateProvider: (id: string, value: unknown, revision: number) =>
@@ -226,9 +234,9 @@ export const api = {
       json("PUT", value),
       `"${revision}"`,
     ),
-  testProvider: (id: string) =>
-    request<{ status: "healthy"; latency_ms: number }>(
-      `/providers/${encodeURIComponent(id)}/test`,
+  testProvider: (id: string, bindingID?: string) =>
+    request<{ status: "healthy"; latency_ms: number; tested_at: string; revision: number; healthy_targets: number; total_targets: number }>(
+      `/providers/${encodeURIComponent(id)}/test${bindingID ? `?binding_id=${encodeURIComponent(bindingID)}` : ""}`,
       json("POST"),
     ).then((value) => value.data),
   deleteProvider: (id: string, revision: number) =>
@@ -254,7 +262,7 @@ export const api = {
       `"${revision}"`,
     ),
   testDeployment: (id: string) =>
-    request<{ status: "healthy"; latency_ms: number }>(
+    request<{ status: "healthy"; latency_ms: number; tested_at: string; revision: number }>(
       `/deployments/${encodeURIComponent(id)}/test`,
       json("POST"),
     ).then((value) => value.data),
@@ -269,7 +277,7 @@ export const api = {
   deleteRoute: (id: string, revision: number) =>
     request<void>(`/routes/${encodeURIComponent(id)}`, json("DELETE"), `"${revision}"`),
   testRoute: (id: string) =>
-    request<{ status: "healthy"; latency_ms: number }>(
+    request<{ status: "healthy"; latency_ms: number; tested_at: string; revision: number }>(
       `/routes/${encodeURIComponent(id)}/test`,
       json("POST"),
     ).then((value) => value.data),

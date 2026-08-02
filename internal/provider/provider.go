@@ -122,6 +122,25 @@ type Prober interface {
 	Probe(context.Context, string) error
 }
 
+type ModelDescriptor struct {
+	ID      string `json:"id"`
+	OwnedBy string `json:"owned_by,omitempty"`
+}
+
+// ModelLister discovers invocation target IDs using the adapter's bound
+// credential and normalized endpoint. It intentionally returns no capability
+// claims because provider catalog responses do not establish operation support.
+type ModelLister interface {
+	ListModels(context.Context) ([]ModelDescriptor, error)
+}
+
+// AdapterUnwrapper exposes an adapter wrapped only to add profile metadata.
+// Optional extension interfaces such as ModelLister remain discoverable
+// without making every wrapper claim support for them.
+type AdapterUnwrapper interface {
+	UnwrapAdapter() Adapter
+}
+
 type Operation string
 
 const (
@@ -144,6 +163,7 @@ type Target struct {
 	ID                     string
 	DeploymentID           string
 	ProviderID             string
+	BindingID              string
 	PublicModel            string
 	ProviderModel          string
 	AccessSurface          domain.AccessSurface
@@ -167,33 +187,46 @@ type Target struct {
 }
 
 type Registry struct {
-	mu       sync.RWMutex
-	targets  map[string][]Target
-	next     map[string]uint64
-	adapters map[string]Adapter
-	health   map[string]bool
+	mu      sync.RWMutex
+	targets map[string][]Target
+	next    map[string]uint64
+	// adapters are keyed by binding identity. Legacy registrations use the
+	// Provider ID as their binding identity.
+	adapters         map[string]Adapter
+	providerBindings map[string][]string
+	health           map[string]bool
 }
 
 func NewRegistry() *Registry {
 	return &Registry{
 		targets: make(map[string][]Target), next: make(map[string]uint64),
-		adapters: make(map[string]Adapter),
-		health:   make(map[string]bool),
+		adapters:         make(map[string]Adapter),
+		providerBindings: make(map[string][]string),
+		health:           make(map[string]bool),
 	}
 }
 
 // RegisterAdapter makes an enabled provider independently addressable for
 // health probes, even when it is not referenced by a route yet.
 func (r *Registry) RegisterAdapter(providerID string, adapter Adapter) error {
-	if providerID == "" || adapter == nil {
-		return errors.New("provider id and adapter are required")
+	return r.RegisterBindingAdapter(providerID, providerID, adapter)
+}
+
+// RegisterBindingAdapter makes one immutable provider profile binding
+// independently addressable. Multiple bindings may share a Provider ID while
+// retaining distinct adapters and protocol contracts.
+func (r *Registry) RegisterBindingAdapter(providerID, bindingID string, adapter Adapter) error {
+	if providerID == "" || bindingID == "" || adapter == nil {
+		return errors.New("provider id, binding id, and adapter are required")
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if _, exists := r.adapters[providerID]; exists {
-		return errors.New("provider adapter is already registered")
+	if _, exists := r.adapters[bindingID]; exists {
+		return errors.New("provider binding adapter is already registered")
 	}
-	r.adapters[providerID] = adapter
+	r.adapters[bindingID] = adapter
+	r.providerBindings[providerID] = append(r.providerBindings[providerID], bindingID)
+	slices.Sort(r.providerBindings[providerID])
 	return nil
 }
 
@@ -489,7 +522,7 @@ func (r *Registry) ProviderIDs() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	seen := make(map[string]struct{})
-	for providerID := range r.adapters {
+	for providerID := range r.providerBindings {
 		seen[providerID] = struct{}{}
 	}
 	for _, targets := range r.targets {
@@ -510,8 +543,10 @@ func (r *Registry) ProviderIDs() []string {
 func (r *Registry) AdapterForProvider(providerID string) (Adapter, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	if adapter, ok := r.adapters[providerID]; ok {
-		return adapter, true
+	bindings := r.providerBindings[providerID]
+	if len(bindings) == 1 {
+		adapter, ok := r.adapters[bindings[0]]
+		return adapter, ok
 	}
 	for _, targets := range r.targets {
 		for _, target := range targets {
@@ -521,6 +556,19 @@ func (r *Registry) AdapterForProvider(providerID string) (Adapter, bool) {
 		}
 	}
 	return nil, false
+}
+
+func (r *Registry) AdapterForBinding(providerID, bindingID string) (Adapter, bool) {
+	if providerID == "" || bindingID == "" {
+		return nil, false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if !slices.Contains(r.providerBindings[providerID], bindingID) {
+		return nil, false
+	}
+	adapter, ok := r.adapters[bindingID]
+	return adapter, ok
 }
 
 // Replace atomically installs the targets from next and returns the adapters
@@ -534,10 +582,12 @@ func (r *Registry) Replace(next *Registry) []Adapter {
 	replacementTargets := next.targets
 	replacementNext := next.next
 	replacementAdapters := next.adapters
+	replacementProviderBindings := next.providerBindings
 	replacementHealth := next.health
 	next.targets = make(map[string][]Target)
 	next.next = make(map[string]uint64)
 	next.adapters = make(map[string]Adapter)
+	next.providerBindings = make(map[string][]string)
 	next.health = make(map[string]bool)
 	next.mu.Unlock()
 
@@ -548,6 +598,7 @@ func (r *Registry) Replace(next *Registry) []Adapter {
 	r.targets = replacementTargets
 	r.next = replacementNext
 	r.adapters = replacementAdapters
+	r.providerBindings = replacementProviderBindings
 	r.health = replacementHealth
 	for deploymentID, healthy := range oldHealth {
 		if _, exists := r.health[deploymentID]; !exists {
@@ -600,6 +651,7 @@ func (r *Registry) Close() {
 	r.targets = make(map[string][]Target)
 	r.next = make(map[string]uint64)
 	r.adapters = make(map[string]Adapter)
+	r.providerBindings = make(map[string][]string)
 	r.health = make(map[string]bool)
 	for adapter := range adapters {
 		adapter.Close()

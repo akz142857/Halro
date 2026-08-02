@@ -1,16 +1,16 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { api, clearSensitiveClientState } from "./api";
-import { Link, navigate, setNavigationBlocked, usePathname } from "./navigation";
+import { confirmNavigation, Link, navigate, setNavigationBlocked, usePathname } from "./navigation";
 import { useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 const navigation = [
   ["/admin", "overview", "M3 3h18v18H3zM8 8h8M8 12h5M8 16h7"],
-  ["/admin/projects", "projects", "M4 6h16v13H4zM8 6V4h8v2M8 11h8M8 15h5"],
   ["/admin/providers", "providers", "M12 3v4M6.5 5.5l2.8 2.8M17.5 5.5l-2.8 2.8M5 12h4m6 0h4M8 17h8v4H8z"],
   ["/admin/deployments", "deployments", "M12 3 4 7v10l8 4 8-4V7zM4 7l8 4 8-4M12 11v10"],
   ["/admin/routes", "routes", "M5 5h6a4 4 0 0 1 4 4v10M11 19h8M16 16l3 3-3 3"],
   ["/admin/policies", "policies", "M12 3 5 6v5c0 4.8 2.9 8.2 7 10 4.1-1.8 7-5.2 7-10V6zM9 12l2 2 4-4"],
+  ["/admin/projects", "projects", "M4 6h16v13H4zM8 6V4h8v2M8 11h8M8 15h5"],
   ["/admin/usage", "usage", "M4 19V9M10 19V5M16 19v-7M22 19H2"],
   ["/admin/operations", "operations", "M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"],
   ["/admin/settings", "settings", "M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM4 12H2m20 0h-2M12 4V2m0 20v-2M6.3 6.3 4.9 4.9m14.2 14.2-1.4-1.4M17.7 6.3l1.4-1.4M4.9 19.1l1.4-1.4"],
@@ -39,6 +39,7 @@ export function Layout({
   const [loggingOut, setLoggingOut] = useState(false);
   const logout = async () => {
     if (loggingOut) return;
+    if (!confirmNavigation()) return;
     setLoggingOut(true);
     try {
       await api.logout();

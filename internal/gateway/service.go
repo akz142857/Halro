@@ -107,6 +107,7 @@ type requestRun struct {
 	service         *Service
 	principal       auth.AuthResult
 	policyLease     *limiter.Lease
+	tokenGuardLease *tokenguard.Lease
 	requestLease    budget.Request
 	requestID       string
 	actualTPMTokens int64
@@ -156,16 +157,19 @@ func (s *Service) beginRequestRun(
 	targets []provider.Target,
 	totalTokens, inputTokens, outputTokens int64,
 ) (*requestRun, error) {
-	if err := s.admitTokenGuard(ctx, principal, targets, totalTokens, inputTokens, outputTokens); err != nil {
+	tokenGuardLease, err := s.admitTokenGuard(ctx, principal, targets, totalTokens, inputTokens, outputTokens)
+	if err != nil {
 		return nil, err
 	}
 	policyLease, err := s.limiter.Acquire(principal.Project, totalTokens, s.now())
 	if err != nil {
+		tokenGuardLease.Release()
 		return nil, s.mapLimitError(err)
 	}
 	requestID, err := id.New("req")
 	if err != nil {
 		policyLease.Release()
+		tokenGuardLease.Release()
 		return nil, gatewayError("internal_error", "unable to create request ID", 500, err)
 	}
 	requestLease, err := s.accounting.BeginRequestDetailed(
@@ -173,15 +177,17 @@ func (s *Service) beginRequestRun(
 	)
 	if err != nil {
 		policyLease.Release()
+		tokenGuardLease.Release()
 		return nil, gatewayError("accounting_unavailable", "accounting is unavailable", 503, err)
 	}
 	return &requestRun{
-		service: s, principal: principal, policyLease: policyLease,
+		service: s, principal: principal, policyLease: policyLease, tokenGuardLease: tokenGuardLease,
 		requestLease: requestLease, requestID: requestID,
 	}, nil
 }
 
 func (run *requestRun) close() {
+	run.tokenGuardLease.Release()
 	_ = run.policyLease.Reconcile(run.actualTPMTokens, run.service.now())
 	run.policyLease.Release()
 	if run.providerCalled {
@@ -1545,7 +1551,7 @@ func (s *Service) admitTokenGuard(
 	principal auth.AuthResult,
 	targets []provider.Target,
 	totalTokens, inputTokens, outputTokens int64,
-) error {
+) (*tokenguard.Lease, error) {
 	var maximumCost int64
 	for _, target := range targets {
 		cost, err := budget.EstimateCostMicros(
@@ -1570,17 +1576,17 @@ func (s *Service) admitTokenGuard(
 		copy(input.SourceHash[:], mac.Sum(nil))
 		input.HasSource = true
 	}
-	decision := s.tokenGuard.Admit(input)
+	decision, lease := s.tokenGuard.Acquire(input)
 	if !decision.Allowed {
 		s.rejections.tokenGuard.Add(1)
-		return gatewayError(
+		return nil, gatewayError(
 			"token_guard_blocked",
 			"gateway key is temporarily blocked due to anomalous token usage",
 			403,
 			nil,
 		)
 	}
-	return nil
+	return lease, nil
 }
 
 func filterSemanticCapabilities(targets []provider.Target, requirements semantic.Requirements) []provider.Target {

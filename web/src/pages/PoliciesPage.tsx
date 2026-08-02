@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState, type FormEvent } from "react";
+import { useState, type FormEvent, type InputHTMLAttributes } from "react";
 import { api } from "../api";
 import {
   ConfirmButton,
@@ -58,7 +58,7 @@ export function PoliciesPage() {
           {policies.data.items.map((policy) => (
             <article className="policy-card" key={policy.id}>
               <header>
-                <span><StatusDot ok={policy.enabled} /><strong>{policy.name}</strong></span>
+                <span><StatusDot ok={policy.enabled} /><strong>{policy.name}</strong><small>{policy.enabled ? t("common.enabled") : t("common.disabled")}</small></span>
                 <span className={`badge ${policy.action === "temporary_block" ? "warning" : ""}`}>
                   {policyActionLabel(t, policy.action)}
                 </span>
@@ -107,7 +107,8 @@ function PolicyForm({
   const { t } = useTranslation();
   const [name, setName] = useState(current?.name ?? "");
   const [action, setAction] = useState<TokenGuardPolicy["action"]>(current?.action ?? "alert");
-  const [enabled, setEnabled] = useState(current?.enabled ?? true);
+  const [enabled, setEnabled] = useState(current?.enabled ?? false);
+  const [errors, setErrors] = useState<Record<string, string>>({});
   const [requestTokens, setRequestTokens] = useState(current?.request_tokens ?? 32_000);
   const [tokensPerMinute, setTokensPerMinute] = useState(current?.tokens_per_minute ?? 200_000);
   const [costPerMinute, setCostPerMinute] = useState((current?.cost_micros_per_minute ?? 5_000_000) / 1_000_000);
@@ -164,12 +165,19 @@ function PolicyForm({
     },
   });
   return (
-    <Modal title={current ? t("policies.edit") : t("policies.createTitle")} onClose={onClose}>
+    <Modal title={current ? t("policies.edit") : t("policies.createTitle")} onClose={onClose} closeDisabled={mutation.isPending}>
       <form className="form-grid" onSubmit={(event) => {
         event.preventDefault();
-        if (name.trim()) mutation.mutate();
+        const nextErrors = validatePolicy({
+          name, requestTokens, tokensPerMinute, costPerMinute, concurrency, errorRate,
+          minimumSamples, uniqueIPs, action, violations, blockTTL, cooldown, ewmaEnabled,
+          ewmaAlpha, ewmaMultiplier, ewmaMinimumSamples, ewmaWarmup, ewmaWindow,
+          ewmaCooldown, ewmaRPMFloor, ewmaTPMFloor, ewmaTokensFloor, ewmaCostFloor,
+        });
+        setErrors(nextErrors);
+        if (!Object.keys(nextErrors).length) mutation.mutate();
       }}>
-        <Field label={t("policies.name")}><input autoFocus value={name} onChange={(event) => setName(event.target.value)} /></Field>
+        <Field label={t("policies.name")} error={errors.name}><input autoFocus value={name} onChange={(event) => setName(event.target.value)} /></Field>
         <Field label={t("policies.action")}>
           <select value={action} onChange={(event) => setAction(event.target.value as typeof action)}>
             <option value="observe">{t("policies.observe")}</option>
@@ -177,18 +185,18 @@ function PolicyForm({
             <option value="temporary_block">{t("policies.temporaryBlock")}</option>
           </select>
         </Field>
-        <Field label={t("policies.requestLimit")}><NumberInput value={requestTokens} set={setRequestTokens} /></Field>
-        <Field label={t("policies.minuteLimit")}><NumberInput value={tokensPerMinute} set={setTokensPerMinute} /></Field>
-        <Field label={t("policies.costLimit")}><NumberInput value={costPerMinute} set={setCostPerMinute} step=".01" /></Field>
-        <Field label={t("policies.concurrencyLimit")}><NumberInput value={concurrency} set={setConcurrency} /></Field>
-        <Field label={t("policies.errorThreshold")}><NumberInput value={errorRate} set={setErrorRate} step=".1" /></Field>
-        <Field label={t("policies.minimumSamples")}><NumberInput value={minimumSamples} set={setMinimumSamples} /></Field>
-        <Field label={t("policies.uniqueSources")}><NumberInput value={uniqueIPs} set={setUniqueIPs} /></Field>
+        <Field label={t("policies.requestLimit")} error={errors.requestTokens}><NumberInput value={requestTokens} set={setRequestTokens} /></Field>
+        <Field label={t("policies.minuteLimit")} error={errors.tokensPerMinute}><NumberInput value={tokensPerMinute} set={setTokensPerMinute} /></Field>
+        <Field label={t("policies.costLimit")} error={errors.costPerMinute}><NumberInput value={costPerMinute} set={setCostPerMinute} step=".01" /></Field>
+        <Field label={t("policies.concurrencyLimit")} error={errors.concurrency}><NumberInput value={concurrency} set={setConcurrency} /></Field>
+        <Field label={t("policies.errorThreshold")} error={errors.errorRate}><NumberInput value={errorRate} set={setErrorRate} step=".1" /></Field>
+        <Field label={t("policies.minimumSamples")} error={errors.minimumSamples}><NumberInput value={minimumSamples} set={setMinimumSamples} /></Field>
+        <Field label={t("policies.uniqueSources")} error={errors.uniqueIPs}><NumberInput value={uniqueIPs} set={setUniqueIPs} /></Field>
         {action === "temporary_block" && (
           <>
-            <Field label={t("policies.violations")}><NumberInput value={violations} set={setViolations} /></Field>
-            <Field label={t("policies.blockTTL")}><NumberInput value={blockTTL} set={setBlockTTL} /></Field>
-            <Field label={t("policies.cooldown")}><NumberInput value={cooldown} set={setCooldown} /></Field>
+            <Field label={t("policies.violations")} error={errors.violations}><NumberInput value={violations} set={setViolations} /></Field>
+            <Field label={t("policies.blockTTL")} error={errors.blockTTL}><NumberInput value={blockTTL} set={setBlockTTL} /></Field>
+            <Field label={t("policies.cooldown")} error={errors.cooldown}><NumberInput value={cooldown} set={setCooldown} /></Field>
           </>
         )}
         <label className="check-row">
@@ -198,16 +206,16 @@ function PolicyForm({
         {ewmaEnabled && (
           <>
             <p className="form-hint">{t("policies.ewmaHint")}</p>
-            <Field label={t("policies.ewmaAlpha")}><NumberInput value={ewmaAlpha} set={setEWMAAlpha} step=".05" /></Field>
-            <Field label={t("policies.multiplier")}><NumberInput value={ewmaMultiplier} set={setEWMAMultiplier} step=".1" /></Field>
-            <Field label={t("policies.baselineSamples")}><NumberInput value={ewmaMinimumSamples} set={setEWMAMinimumSamples} /></Field>
-            <Field label={t("policies.warmup")}><NumberInput value={ewmaWarmup} set={setEWMAWarmup} /></Field>
-            <Field label={t("policies.window")}><NumberInput value={ewmaWindow} set={setEWMAWindow} /></Field>
-            <Field label={t("policies.alertCooldown")}><NumberInput value={ewmaCooldown} set={setEWMACooldown} /></Field>
+            <Field label={t("policies.ewmaAlpha")} error={errors.ewmaAlpha}><NumberInput value={ewmaAlpha} set={setEWMAAlpha} step=".05" /></Field>
+            <Field label={t("policies.multiplier")} error={errors.ewmaMultiplier}><NumberInput value={ewmaMultiplier} set={setEWMAMultiplier} step=".1" /></Field>
+            <Field label={t("policies.baselineSamples")} error={errors.ewmaMinimumSamples}><NumberInput value={ewmaMinimumSamples} set={setEWMAMinimumSamples} /></Field>
+            <Field label={t("policies.warmup")} error={errors.ewmaWarmup}><NumberInput value={ewmaWarmup} set={setEWMAWarmup} /></Field>
+            <Field label={t("policies.window")} error={errors.ewmaWindow}><NumberInput value={ewmaWindow} set={setEWMAWindow} /></Field>
+            <Field label={t("policies.alertCooldown")} error={errors.ewmaCooldown}><NumberInput value={ewmaCooldown} set={setEWMACooldown} /></Field>
             <Field label={t("policies.rpmFloor")}><NumberInput value={ewmaRPMFloor} set={setEWMARPMFloor} /></Field>
             <Field label={t("policies.tpmFloor")}><NumberInput value={ewmaTPMFloor} set={setEWMATPMFloor} /></Field>
             <Field label={t("policies.tokenFloor")}><NumberInput value={ewmaTokensFloor} set={setEWMATokensFloor} step=".1" /></Field>
-            <Field label={t("policies.costFloor")}><NumberInput value={ewmaCostFloor} set={setEWMACostFloor} step=".01" /></Field>
+            <Field label={t("policies.costFloor")} error={errors.ewmaFloors}><NumberInput value={ewmaCostFloor} set={setEWMACostFloor} step=".01" /></Field>
           </>
         )}
         <label className="check-row">
@@ -216,7 +224,7 @@ function PolicyForm({
         </label>
         {mutation.isError && <ErrorState error={mutation.error} />}
         <div className="form-actions">
-          <button type="button" className="button ghost" onClick={onClose}>{t("common.cancel")}</button>
+          <button type="button" className="button ghost" disabled={mutation.isPending} onClick={onClose}>{t("common.cancel")}</button>
           <button className="button primary" disabled={mutation.isPending}>{t("policies.save")}</button>
         </div>
       </form>
@@ -227,28 +235,40 @@ function PolicyForm({
 function PolicyPreview({ policy, onClose }: { policy: TokenGuardPolicy; onClose: () => void }) {
   const { t } = useTranslation();
   const [tokens, setTokens] = useState(policy.request_tokens || 1_000);
+  const [estimatedCostUSD, setEstimatedCostUSD] = useState(0);
   const [windowTokens, setWindowTokens] = useState(0);
   const [concurrency, setConcurrency] = useState(1);
+  const [costUSD, setCostUSD] = useState(0);
+  const [requests, setRequests] = useState(10);
+  const [errors, setErrors] = useState(0);
+  const [uniqueIPs, setUniqueIPs] = useState(1);
+  const [hasNewSource, setHasNewSource] = useState(true);
   const [result, setResult] = useState<TokenGuardPreview | null>(null);
   const mutation = useMutation({
     mutationFn: () => api.previewTokenGuardPolicy(policy.id, {
       estimated_tokens: tokens,
-      estimated_cost_micros_usd: 0,
+      estimated_cost_micros_usd: Math.round(estimatedCostUSD * 1_000_000),
       concurrency,
-      has_new_source: true,
+      has_new_source: hasNewSource,
       window: {
-        requests: 10, tokens: windowTokens, cost_micros_usd: 0,
-        errors: 0, unique_ips: 1,
+        requests, tokens: windowTokens, cost_micros_usd: Math.round(costUSD * 1_000_000),
+        errors, unique_ips: uniqueIPs,
       },
     }),
     onSuccess: setResult,
   });
   return (
-    <Modal title={t("policies.previewTitle", { name: policy.name })} onClose={onClose}>
+    <Modal title={t("policies.previewTitle", { name: policy.name })} onClose={onClose} closeDisabled={mutation.isPending}>
       <form onSubmit={(event) => { event.preventDefault(); mutation.mutate(); }}>
         <Field label={t("policies.estimatedTokens")}><NumberInput value={tokens} set={setTokens} /></Field>
+        <Field label={t("policies.estimatedCost")}><NumberInput value={estimatedCostUSD} set={setEstimatedCostUSD} step=".01" /></Field>
         <Field label={t("policies.windowTokens")}><NumberInput value={windowTokens} set={setWindowTokens} /></Field>
         <Field label={t("policies.currentConcurrency")}><NumberInput value={concurrency} set={setConcurrency} /></Field>
+        <Field label={t("policies.windowCost")}><NumberInput value={costUSD} set={setCostUSD} step=".01" /></Field>
+        <Field label={t("policies.windowRequests")}><NumberInput value={requests} set={setRequests} /></Field>
+        <Field label={t("policies.windowErrors")}><NumberInput value={errors} set={setErrors} /></Field>
+        <Field label={t("policies.windowUniqueIPs")}><NumberInput value={uniqueIPs} set={setUniqueIPs} /></Field>
+        <label className="check-row"><input type="checkbox" checked={hasNewSource} onChange={(event) => setHasNewSource(event.target.checked)} /><span>{t("policies.newSource")}</span></label>
         {result && (
           <div className={`preview-result ${result.violated ? "violated" : ""}`}>
             <StatusDot ok={!result.violated} />
@@ -260,7 +280,7 @@ function PolicyPreview({ policy, onClose }: { policy: TokenGuardPolicy; onClose:
         )}
         {mutation.isError && <ErrorState error={mutation.error} />}
         <div className="form-actions">
-          <button type="button" className="button ghost" onClick={onClose}>{t("common.close")}</button>
+          <button type="button" className="button ghost" disabled={mutation.isPending} onClick={onClose}>{t("common.close")}</button>
           <button className="button primary" disabled={mutation.isPending}>{t("policies.run")}</button>
         </div>
       </form>
@@ -272,12 +292,55 @@ function NumberInput({
   value,
   set,
   step = "1",
+  ...inputProps
 }: {
   value: number;
   set: (value: number) => void;
   step?: string;
-}) {
-  return <input type="number" min="0" step={step} value={value} onChange={(event) => set(Number(event.target.value))} />;
+} & Omit<InputHTMLAttributes<HTMLInputElement>, "value" | "onChange" | "type" | "step">) {
+  return <input {...inputProps} type="number" min="0" step={step} value={value} onChange={(event) => set(Number(event.target.value))} />;
+}
+
+type PolicyValues = {
+  name: string;
+  action: TokenGuardPolicy["action"];
+  requestTokens: number; tokensPerMinute: number; costPerMinute: number;
+  concurrency: number; errorRate: number; minimumSamples: number; uniqueIPs: number;
+  violations: number; blockTTL: number; cooldown: number; ewmaEnabled: boolean;
+  ewmaAlpha: number; ewmaMultiplier: number; ewmaMinimumSamples: number;
+  ewmaWarmup: number; ewmaWindow: number; ewmaCooldown: number;
+  ewmaRPMFloor: number; ewmaTPMFloor: number; ewmaTokensFloor: number; ewmaCostFloor: number;
+};
+
+function validatePolicy(value: PolicyValues) {
+  const errors: Record<string, string> = {};
+  if (!value.name.trim()) errors.name = "Required";
+  const wholeNonNegative: Array<[keyof PolicyValues, number]> = [
+    ["requestTokens", value.requestTokens], ["tokensPerMinute", value.tokensPerMinute],
+    ["concurrency", value.concurrency], ["minimumSamples", value.minimumSamples],
+    ["uniqueIPs", value.uniqueIPs],
+  ];
+  for (const [key, number] of wholeNonNegative) {
+    if (!Number.isInteger(number) || number < 0) errors[key] = "Must be a non-negative integer";
+  }
+  if (!Number.isFinite(value.costPerMinute) || value.costPerMinute < 0) errors.costPerMinute = "Must be non-negative";
+  if (!Number.isFinite(value.errorRate) || value.errorRate < 0 || value.errorRate > 100) errors.errorRate = "Must be between 0 and 100";
+  if (value.action === "temporary_block") {
+    if (!Number.isInteger(value.violations) || value.violations < 2) errors.violations = "Must be at least 2";
+    if (!Number.isInteger(value.blockTTL) || value.blockTTL <= 0) errors.blockTTL = "Must be a positive integer";
+    if (!Number.isInteger(value.cooldown) || value.cooldown <= 0) errors.cooldown = "Must be a positive integer";
+  }
+  if (value.ewmaEnabled) {
+    if (!(value.ewmaAlpha > 0 && value.ewmaAlpha <= 1)) errors.ewmaAlpha = "Must be greater than 0 and at most 1";
+    if (!(value.ewmaMultiplier > 1)) errors.ewmaMultiplier = "Must be greater than 1";
+    if (!Number.isInteger(value.ewmaMinimumSamples) || value.ewmaMinimumSamples < 10) errors.ewmaMinimumSamples = "Must be an integer of at least 10";
+    if (!Number.isInteger(value.ewmaWindow) || value.ewmaWindow < 10 || value.ewmaWindow > 300 || value.ewmaWindow % 10 !== 0) errors.ewmaWindow = "Must be a 10-second multiple from 10 to 300";
+    if (!Number.isInteger(value.ewmaWarmup) || value.ewmaWarmup < value.ewmaWindow) errors.ewmaWarmup = "Must cover the evaluation window";
+    if (!Number.isInteger(value.ewmaCooldown) || value.ewmaCooldown <= 0) errors.ewmaCooldown = "Must be a positive integer";
+    const floors = [value.ewmaRPMFloor, value.ewmaTPMFloor, value.ewmaTokensFloor, value.ewmaCostFloor];
+    if (floors.some((floor) => !Number.isFinite(floor) || floor < 0) || floors.every((floor) => floor === 0)) errors.ewmaFloors = "At least one non-negative floor must be greater than 0";
+  }
+  return errors;
 }
 
 function Threshold({ label, value }: { label: string; value: string }) {

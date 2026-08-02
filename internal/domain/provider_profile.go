@@ -182,6 +182,37 @@ func capabilityEnabled(c ProviderCapabilities, name string) bool {
 	return values[name]
 }
 
+// ProviderCapabilitiesSubset is the single authoritative subset check used at
+// API and storage boundaries.
+func ProviderCapabilitiesSubset(candidate, available ProviderCapabilities) bool {
+	return (!candidate.Chat || available.Chat) &&
+		(!candidate.Streaming || available.Streaming) &&
+		(!candidate.Embeddings || available.Embeddings) &&
+		(!candidate.Moderations || available.Moderations) &&
+		(!candidate.Images || available.Images) &&
+		(!candidate.Transcriptions || available.Transcriptions) &&
+		(!candidate.Speech || available.Speech) &&
+		(!candidate.Files || available.Files) &&
+		(!candidate.Batches || available.Batches) &&
+		(!candidate.Rerank || available.Rerank) &&
+		(!candidate.AsyncGenerate || available.AsyncGenerate) &&
+		(!candidate.Tools || available.Tools) &&
+		(!candidate.Vision || available.Vision) &&
+		(!candidate.JSONMode || available.JSONMode) &&
+		(!candidate.DeveloperRole || available.DeveloperRole) &&
+		(!candidate.Reasoning || available.Reasoning) &&
+		(!candidate.StreamUsage || available.StreamUsage) &&
+		capabilityLimitSubset(candidate.MaxContextTokens, available.MaxContextTokens) &&
+		capabilityLimitSubset(candidate.MaxOutputTokens, available.MaxOutputTokens)
+}
+
+func capabilityLimitSubset(candidate, available int64) bool {
+	if available == 0 {
+		return candidate >= 0
+	}
+	return candidate > 0 && candidate <= available
+}
+
 func (e CapabilityEvidenceSet) Clone() CapabilityEvidenceSet {
 	result := make(CapabilityEvidenceSet, len(e))
 	for name, value := range e {

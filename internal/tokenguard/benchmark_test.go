@@ -39,3 +39,21 @@ func BenchmarkAdmit(b *testing.B) {
 		})
 	}
 }
+
+func BenchmarkAcquireReleaseContended(b *testing.B) {
+	manager, err := New([]domain.TokenGuardPolicy{{ID: "guard", Name: "guard", Enabled: true, Action: "alert", Concurrency: 10_000}})
+	if err != nil {
+		b.Fatal(err)
+	}
+	input := Input{PolicyID: "guard", ProjectID: "project", KeyID: "key", Now: time.Now()}
+	b.ReportAllocs()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			decision, lease := manager.Acquire(input)
+			if !decision.Allowed {
+				b.Fatal("unexpected rejection")
+			}
+			lease.Release()
+		}
+	})
+}

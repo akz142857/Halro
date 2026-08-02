@@ -1,17 +1,20 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent, type KeyboardEvent } from "react";
 import { api } from "../api";
 import {
   EmptyState,
   ErrorState,
   Field,
+  InlineTestControl,
   Loading,
   Modal,
   PageHeader,
   StatusDot,
   ConfirmButton,
+  OverflowMenu,
 } from "../components";
-import type { AccessSurface, Credential, CredentialScheme, Provider, ProviderCapabilities, ProviderType } from "../types";
+import type { InlineTestState } from "../components";
+import type { AccessSurface, Credential, CredentialScheme, Provider, ProviderBinding, ProviderCapabilities, ProviderType } from "../types";
 import { useTranslation } from "react-i18next";
 
 const providerTypes: ProviderType[] = [
@@ -44,6 +47,7 @@ type BedrockProfile = typeof bedrockProfiles[number];
 type BedrockCredentialSurface = "bedrock-runtime" | "bedrock-agent-runtime" | "bedrock-mantle";
 
 const openAIChatProfile = "openai.chat-embeddings.v1";
+const openAIMediaProfile = "openai.media-resources.v1";
 
 function bedrockProfileConfig(profile: BedrockProfile): { surface: AccessSurface; scheme: CredentialScheme; baseURL: string } {
   if (profile.startsWith("bedrock.agent-runtime.")) {
@@ -67,23 +71,63 @@ function isBedrockProfile(value: string): value is BedrockProfile {
 
 export function ProvidersPage() {
   const { t } = useTranslation();
+  const [activeView, setActiveView] = useState<"providers" | "credentials">(() => providerViewFromURL());
+  const [focusedCredentialID, setFocusedCredentialID] = useState("");
+  const [focusedProviderCredentialID, setFocusedProviderCredentialID] = useState("");
   const [credentialDialog, setCredentialDialog] = useState(false);
   const [providerDialog, setProviderDialog] = useState(false);
   const [editingProvider, setEditingProvider] = useState<Provider>();
+  const [providerQuery, setProviderQuery] = useState("");
+  const [providerStatus, setProviderStatus] = useState<"all" | "enabled" | "disabled">("all");
+  const [credentialQuery, setCredentialQuery] = useState("");
   const credentials = useQuery({ queryKey: ["credentials"], queryFn: api.credentials });
   const providers = useQuery({ queryKey: ["providers"], queryFn: api.providers });
   const pending = credentials.isPending || providers.isPending;
+  const credentialItems = credentials.data?.items ?? [];
+  const providerItems = providers.data?.items ?? [];
+  const filteredProviders = useMemo(() => {
+    const query = providerQuery.trim().toLocaleLowerCase();
+    return providerItems.filter((provider) => {
+      const matchesQuery = !query || [provider.name, provider.type, provider.base_url].some((value) => value.toLocaleLowerCase().includes(query));
+      const matchesStatus = providerStatus === "all" || (providerStatus === "enabled" ? provider.enabled : !provider.enabled);
+      return matchesQuery && matchesStatus;
+    });
+  }, [providerItems, providerQuery, providerStatus]);
+  const filteredCredentials = useMemo(() => {
+    const query = credentialQuery.trim().toLocaleLowerCase();
+    return credentialItems.filter((credential) => !query || [credential.name, credential.type, credential.bound_base_url].some((value) => value.toLocaleLowerCase().includes(query)));
+  }, [credentialItems, credentialQuery]);
+  const canCreateProvider = credentialItems.length > 0;
+  useEffect(() => {
+    const syncView = () => setActiveView(providerViewFromURL());
+    window.addEventListener("popstate", syncView);
+    return () => window.removeEventListener("popstate", syncView);
+  }, []);
+  const selectView = (view: "providers" | "credentials") => {
+    if (view === activeView) return;
+    setActiveView(view);
+    const url = new URL(window.location.href);
+    if (view === "providers") url.searchParams.delete("view");
+    else url.searchParams.set("view", view);
+    window.history.pushState({}, "", `${url.pathname}${url.search}${url.hash}`);
+  };
+  const handleTabKey = (event: KeyboardEvent<HTMLButtonElement>) => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const next = event.key === "Home" || event.key === "ArrowLeft" ? "providers" : "credentials";
+    selectView(next);
+    document.getElementById(`${next}-tab`)?.focus();
+  };
   return (
-    <>
+    <div className="providers-page">
       <PageHeader
         eyebrow={t("providers.eyebrow")}
         title={t("providers.title")}
         description={t("providers.description")}
         action={
-          <div className="button-group">
-            <button className="button secondary" onClick={() => setCredentialDialog(true)}>{t("providers.addCredential")}</button>
-            <button className="button primary" onClick={() => setProviderDialog(true)}>{t("providers.addProvider")}</button>
-          </div>
+          activeView === "providers"
+            ? <button className="button primary" disabled={!pending && !canCreateProvider} title={!pending && !canCreateProvider ? t("providers.createCredentialFirst") : undefined} onClick={() => setProviderDialog(true)}>{t("providers.addProvider")}</button>
+            : <button className="button primary" onClick={() => setCredentialDialog(true)}>{t("providers.addCredential")}</button>
         }
       />
       {pending && <Loading />}
@@ -91,31 +135,42 @@ export function ProvidersPage() {
         <ErrorState error={credentials.error || providers.error} />
       )}
       {!pending && (
-        <div className="provider-grid">
-          <section className="panel">
+        <div className="provider-tabs-shell">
+          <div className="provider-tabs" role="tablist" aria-label={t("providers.resourceViews")}>
+            <button id="providers-tab" role="tab" tabIndex={activeView === "providers" ? 0 : -1} aria-selected={activeView === "providers"} aria-controls="providers-panel" onKeyDown={handleTabKey} onClick={() => selectView("providers")}>{t("providers.providerConnections")} <span>{providerItems.length}</span></button>
+            <button id="credentials-tab" role="tab" tabIndex={activeView === "credentials" ? 0 : -1} aria-selected={activeView === "credentials"} aria-controls="credentials-panel" onKeyDown={handleTabKey} onClick={() => selectView("credentials")}>{t("providers.credentialVault")} <span>{credentialItems.length}</span></button>
+          </div>
+          {activeView === "providers" && <section id="providers-panel" role="tabpanel" aria-labelledby="providers-tab" className="panel provider-resource-panel">
             <header className="panel-header">
-              <div><p className="eyebrow">{t("providers.vault")}</p><h2>{t("providers.credentials")}</h2></div>
-              <span className="count">{credentials.data?.items.length ?? 0}</span>
+              <div><p className="eyebrow">{t("providers.upstreams")}</p><h2>{t("providers.providers")} <span className="section-count">{providerItems.length}</span></h2></div>
+              <small>{t("providers.providerSectionDescription")}</small>
             </header>
-            {credentials.data?.items.length === 0 && (
-              <EmptyState title={t("providers.noCredentials")}>{t("providers.noCredentialsDescription")}</EmptyState>
+            {!canCreateProvider && (
+              <div className="dependency-notice"><div><strong>{t("providers.credentialRequired")}</strong><span>{t("providers.providerDependencyHint")}</span></div><button className="button secondary" onClick={() => { selectView("credentials"); setCredentialDialog(true); }}>{t("providers.openCredentialVault")}</button></div>
             )}
-            {credentials.data?.items.map((credential) => (
-              <CredentialRow key={credential.id} credential={credential} />
-            ))}
-          </section>
-          <section className="panel">
-            <header className="panel-header">
-              <div><p className="eyebrow">{t("providers.upstreams")}</p><h2>{t("providers.providers")}</h2></div>
-              <span className="count">{providers.data?.items.length ?? 0}</span>
-            </header>
-            {providers.data?.items.length === 0 && (
+            {providerItems.length === 0 && canCreateProvider && (
               <EmptyState title={t("providers.noProviders")}>{t("providers.noProvidersDescription")}</EmptyState>
             )}
-            {providers.data?.items.map((provider) => (
-              <ProviderRow provider={provider} key={provider.id} onEdit={() => setEditingProvider(provider)} />
+            {!!providerItems.length && <ResourceToolbar query={providerQuery} onQueryChange={setProviderQuery} queryPlaceholder={t("providers.searchProviders")} count={t("providers.resultCount", { visible: filteredProviders.length, total: providerItems.length })} status={providerStatus} onStatusChange={setProviderStatus} />}
+            {!!providerItems.length && !filteredProviders.length && <EmptyState title={t("providers.noMatches")}>{t("providers.noMatchesDescription")}</EmptyState>}
+            {filteredProviders.map((provider) => (
+              <ProviderRow provider={provider} credential={credentialItems.find((credential) => credential.id === provider.credential_id)} highlighted={Boolean(focusedProviderCredentialID && provider.credential_id === focusedProviderCredentialID)} key={provider.id} onCredentialClick={() => { setFocusedCredentialID(provider.credential_id); selectView("credentials"); }} onEdit={() => setEditingProvider(provider)} />
             ))}
-          </section>
+          </section>}
+          {activeView === "credentials" && <section id="credentials-panel" role="tabpanel" aria-labelledby="credentials-tab" className="panel provider-resource-panel">
+            <header className="panel-header">
+              <div><p className="eyebrow">{t("providers.vault")}</p><h2>{t("providers.credentials")} <span className="section-count">{credentialItems.length}</span></h2></div>
+              <small>{t("providers.credentialSectionDescription")}</small>
+            </header>
+            {credentialItems.length === 0 && (
+              <EmptyState title={t("providers.noCredentials")}>{t("providers.noCredentialsDescription")}</EmptyState>
+            )}
+            {!!credentialItems.length && <ResourceToolbar query={credentialQuery} onQueryChange={setCredentialQuery} queryPlaceholder={t("providers.searchCredentials")} count={t("providers.resultCount", { visible: filteredCredentials.length, total: credentialItems.length })} />}
+            {!!credentialItems.length && !filteredCredentials.length && <EmptyState title={t("providers.noMatches")}>{t("providers.noMatchesDescription")}</EmptyState>}
+            {filteredCredentials.map((credential) => (
+              <CredentialRow key={credential.id} credential={credential} highlighted={focusedCredentialID === credential.id} useCount={providerItems.filter((provider) => provider.credential_id === credential.id).length} onUsageClick={() => { setFocusedProviderCredentialID(credential.id); selectView("providers"); }} />
+            ))}
+          </section>}
         </div>
       )}
       {credentialDialog && <CredentialForm onClose={() => setCredentialDialog(false)} />}
@@ -132,61 +187,114 @@ export function ProvidersPage() {
           onClose={() => setEditingProvider(undefined)}
         />
       )}
-    </>
+    </div>
   );
 }
 
-function ProviderRow({ provider, onEdit }: { provider: Provider; onEdit: () => void }) {
+function ResourceToolbar({ query, onQueryChange, queryPlaceholder, count, status, onStatusChange }: { query: string; onQueryChange: (value: string) => void; queryPlaceholder: string; count: string; status?: "all" | "enabled" | "disabled"; onStatusChange?: (value: "all" | "enabled" | "disabled") => void }) {
   const { t } = useTranslation();
-  const [result, setResult] = useState("");
+  return (
+    <div className="resource-toolbar" role="search" aria-label={t("providers.filters")}>
+      <label className="resource-search"><span>{t("providers.search")}</span><input value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder={queryPlaceholder} /></label>
+      {status !== undefined && onStatusChange && <label><span>{t("providers.status")}</span><select value={status} onChange={(event) => onStatusChange(event.target.value as typeof status)}><option value="all">{t("providers.allStatuses")}</option><option value="enabled">{t("common.enabled")}</option><option value="disabled">{t("common.disabled")}</option></select></label>}
+      <span className="resource-result-count" role="status">{count}</span>
+    </div>
+  );
+}
+
+function providerViewFromURL(): "providers" | "credentials" {
+  return new URLSearchParams(window.location.search).get("view") === "credentials" ? "credentials" : "providers";
+}
+
+function ProviderRow({ provider, credential, highlighted, onCredentialClick, onEdit }: { provider: Provider; credential?: Credential; highlighted: boolean; onCredentialClick: () => void; onEdit: () => void }) {
+  const { t } = useTranslation();
+  const [expanded, setExpanded] = useState(false);
   const queryClient = useQueryClient();
   const testMutation = useMutation({
     mutationFn: () => api.testProvider(provider.id),
-    onSuccess: (value) => setResult(t("providers.healthy", { latency: value.latency_ms })),
-    onError: () => setResult(t("providers.unhealthy")),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["providers"] }),
   });
   const deleteMutation = useMutation({
     mutationFn: () => api.deleteProvider(provider.id, provider.revision),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["providers"] }),
   });
+  const stateMutation = useMutation({
+    mutationFn: () => api.updateProvider(provider.id, {
+      name: provider.name,
+      type: provider.type,
+      base_url: provider.base_url,
+      ...(provider.api_version ? { api_version: provider.api_version } : {}),
+      credential_id: provider.credential_id,
+      access_surface: provider.access_surface,
+      profile_id: provider.profile_id,
+      credential_scheme: provider.credential_scheme,
+      capabilities: provider.capabilities,
+      ...(provider.bindings?.length ? { bindings: provider.bindings } : {}),
+      max_concurrency: provider.max_concurrency,
+      enabled: !provider.enabled,
+    }, provider.revision),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["providers"] }),
+  });
+  const persistedTestIsCurrent = provider.last_test_revision === provider.revision;
+  const testState: InlineTestState = testMutation.isPending
+    ? "running"
+    : testMutation.isError
+      ? "failure"
+      : testMutation.isSuccess || persistedTestIsCurrent && provider.last_test_status === "healthy"
+        ? "success"
+        : persistedTestIsCurrent && provider.last_test_status === "unhealthy"
+          ? "failure"
+          : provider.last_test_status
+            ? "stale"
+            : "idle";
+  const testLatency = testMutation.data?.latency_ms ?? provider.last_test_latency_millis;
+  const healthyTargets = testMutation.data?.healthy_targets ?? provider.last_test_healthy_targets;
+  const totalTargets = testMutation.data?.total_targets ?? provider.last_test_total_targets;
   return (
     <>
-      <div className="provider-row">
+      <article className={`provider-row ${highlighted ? "resource-highlight" : ""}`}>
         <span className="provider-icon">{provider.type === "openai" ? "OA" : "AI"}</span>
-        <div>
-          <span><StatusDot ok={provider.enabled} /><strong>{provider.name}</strong></span>
-          <small>{provider.base_url}</small>
-          <small>{t("providers.profile")}: <code>{provider.profile_id}</code></small>
-          <small>{t("providers.surface")}: {provider.access_surface} · {t("providers.evidence")}: {evidenceSummary(provider.capability_evidence)}</small>
-          <small>{t("providers.concurrency", { value: provider.max_concurrency || t("common.unlimited") })}</small>
-          <code>{provider.id}</code>
-        </div>
-        <div className="button-group">
+        <div className="provider-compact-identity"><span><StatusDot ok={provider.enabled} /><strong>{provider.name}</strong></span><small>{t(`providers.types.${provider.type}`)}</small></div>
+        <div className="provider-compact-fact"><small>{t("providers.endpoint")}</small><strong>{provider.base_url}</strong></div>
+        <div className="provider-compact-fact"><small>{t("providers.boundCredential")}</small>{credential ? <button className="resource-link" onClick={onCredentialClick}>{credential.name} →</button> : <strong>{t("providers.missingCredential")}</strong>}</div>
+        <div className="provider-compact-fact"><small>{t("providers.capabilities")}</small><strong>{t("providers.capabilityCount", { count: enabledCapabilities(provider).length })}</strong></div>
+        <div className="provider-compact-status"><span className={`resource-state ${provider.enabled ? "enabled" : ""}`}>{provider.enabled ? t("providers.enabled") : t("providers.off")}</span></div>
+        <div className="row-actions provider-compact-actions">
+          <InlineTestControl state={testState} latency={testLatency} disabled={!provider.enabled} title={totalTargets ? t("providers.testSummary", { healthy: healthyTargets ?? 0, total: totalTargets, latency: testLatency ?? 0 }) : undefined} onTest={() => testMutation.mutate()} />
           <button className="button ghost" onClick={onEdit}>{t("common.edit")}</button>
-          <button
-            className={`badge ${testMutation.isSuccess ? "good" : ""}`}
-            disabled={!provider.enabled || testMutation.isPending}
-            onClick={() => testMutation.mutate()}
-          >
-            {testMutation.isPending ? t("providers.testing") : result || (provider.enabled ? t("providers.test") : t("providers.off"))}
-          </button>
-          <ConfirmButton
-            label={t("common.delete")}
-            confirmLabel={t("providers.deleteProvider", { name: provider.name })}
-            disabled={deleteMutation.isPending}
-            onConfirm={() => deleteMutation.mutate()}
-          />
+          <button className="button ghost provider-expand" aria-expanded={expanded} aria-controls={`provider-details-${provider.id}`} onClick={() => setExpanded((value) => !value)}>{expanded ? t("providers.collapseDetails") : t("providers.expandDetails")}</button>
+          {provider.enabled ? <ConfirmButton className="button ghost" label={t("common.disable")} title={t("providers.disableTitle")} confirmLabel={t("providers.disableConfirm", { name: provider.name })} disabled={stateMutation.isPending} onConfirm={() => stateMutation.mutate()} /> : <button className="button ghost" disabled={stateMutation.isPending} onClick={() => stateMutation.mutate()}>{t("common.enable")}</button>}
+          <OverflowMenu label={t("providers.moreActions")}><ConfirmButton label={t("common.delete")} confirmLabel={t("providers.deleteProvider", { name: provider.name })} disabled={deleteMutation.isPending} onConfirm={() => deleteMutation.mutate()} /></OverflowMenu>
         </div>
-      </div>
+        {expanded && <div id={`provider-details-${provider.id}`} className="provider-row-content provider-expanded-content">
+          <div className="provider-facts">
+            <div><small>{t("providers.endpoint")}</small><strong>{provider.base_url}</strong></div>
+            <div><small>{t("providers.boundCredential")}</small>{credential ? <button className="resource-link" onClick={onCredentialClick}>{credential.name} →</button> : <strong>{t("providers.missingCredential")}</strong>}</div>
+            <div><small>{t("providers.capabilities")}</small><strong>{t("providers.capabilityCount", { count: enabledCapabilities(provider).length })}</strong></div>
+            <div><small>{t("providers.capacity")}</small><strong>{provider.max_concurrency || t("common.unlimited")}</strong></div>
+          </div>
+          <div className="capability-summary provider-capability-summary">{enabledCapabilities(provider).slice(0, 6).map((capability) => <span className="badge" key={capability}>{t(`capabilities.${capability}`)}</span>)}</div>
+          <div className="technical-details provider-technical-details">
+            <strong>{t("providers.technicalDetails")}</strong>
+            <dl>
+              <div><dt>{t("providers.capabilityInterfaces")}</dt><dd><code>{provider.bindings?.filter((binding) => binding.enabled).map((binding) => binding.profile_id).join(" · ") || provider.profile_id}</code></dd></div>
+              <div><dt>{t("providers.surface")}</dt><dd>{provider.access_surface}</dd></div>
+              <div><dt>{t("providers.evidence")}</dt><dd>{evidenceSummary(provider.capability_evidence)}</dd></div>
+              <div><dt>ID</dt><dd><code>{provider.id}</code></dd></div>
+            </dl>
+          </div>
+        </div>}
+      </article>
       {deleteMutation.isError && <ErrorState error={deleteMutation.error} />}
-      {testMutation.isError && <ErrorState error={testMutation.error} />}
+      {stateMutation.isError && <ErrorState error={stateMutation.error} />}
     </>
   );
 }
 
-function CredentialRow({ credential }: { credential: Credential }) {
+function CredentialRow({ credential, useCount, highlighted, onUsageClick }: { credential: Credential; useCount: number; highlighted: boolean; onUsageClick: () => void }) {
   const { t } = useTranslation();
   const [rotating, setRotating] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const queryClient = useQueryClient();
   const remove = useMutation({
     mutationFn: () => api.deleteCredential(credential.id, credential.revision),
@@ -194,24 +302,29 @@ function CredentialRow({ credential }: { credential: Credential }) {
   });
   return (
     <>
-      <div className="credential-row">
-        <span className="vault-lock" aria-hidden="true">◆</span>
-        <div>
-          <strong>{credential.name}</strong>
-          <small>{credential.type} · {credential.access_surface} · {credential.scheme}</small>
-          <small>{t("providers.keyGeneration", { version: credential.key_version })}</small>
-          <code>{credential.id}</code>
-        </div>
-        <div className="row-actions">
+      <article className={`credential-row ${highlighted ? "resource-highlight" : ""}`}>
+        <span className="provider-icon credential-icon" aria-hidden="true">K{credential.key_version}</span>
+        <div className="credential-compact-identity"><strong>{credential.name}</strong><small>{t(`providers.types.${credential.type}`)}</small><code className="credential-identity-endpoint">{credential.bound_base_url}</code></div>
+        <div className="credential-compact-fact credential-endpoint"><small>{t("providers.boundURL")}</small><strong>{credential.bound_base_url}</strong></div>
+        <div className="credential-compact-fact credential-usage"><small>{t("providers.usage")}</small>{useCount > 0 ? <button className="resource-link inline" onClick={onUsageClick}>{t("providers.credentialUsage", { count: useCount })} →</button> : <strong>{t("providers.credentialUsage", { count: useCount })}</strong>}</div>
+        <div className="credential-compact-fact credential-generation"><small>{t("providers.generation")}</small><strong>{t("providers.keyGeneration", { version: credential.key_version })}</strong></div>
+        <div className="row-actions credential-actions">
           <button className="button ghost" onClick={() => setRotating(true)}>{t("providers.rotate")}</button>
-          <ConfirmButton
-            label={t("common.delete")}
-            confirmLabel={t("providers.deleteCredential", { name: credential.name })}
-            disabled={remove.isPending}
-            onConfirm={() => remove.mutate()}
-          />
+          <button className="button ghost credential-expand" aria-expanded={expanded} aria-controls={`credential-details-${credential.id}`} onClick={() => setExpanded((value) => !value)}>{expanded ? t("providers.collapseDetails") : t("providers.expandDetails")}</button>
+          <OverflowMenu label={t("providers.moreActions")}><ConfirmButton label={t("common.delete")} confirmLabel={t("providers.deleteCredential", { name: credential.name })} disabled={remove.isPending} onConfirm={() => remove.mutate()} /></OverflowMenu>
         </div>
-      </div>
+        {expanded && <section id={`credential-details-${credential.id}`} className="credential-expanded-content" aria-label={t("providers.credentialDetailsTitle")}>
+          <header className="credential-detail-header">
+            <div><small>{t("providers.technicalDetails")}</small><strong>{t("providers.credentialDetailsTitle")}</strong></div>
+            <p>{t("providers.credentialDetailsDescription")}</p>
+          </header>
+          <dl className="credential-detail-grid">
+            <div><dt>{t("providers.surface")}</dt><dd><code>{credential.access_surface}</code></dd></div>
+            <div><dt>{t("providers.scheme")}</dt><dd><code>{credential.scheme}</code></dd></div>
+            <div><dt>{t("providers.credentialID")}</dt><dd><code>{credential.id}</code></dd></div>
+          </dl>
+        </section>}
+      </article>
       {remove.isError && <ErrorState error={remove.error} />}
       {rotating && <CredentialForm current={credential} onClose={() => setRotating(false)} />}
     </>
@@ -221,6 +334,10 @@ function CredentialRow({ credential }: { credential: Credential }) {
 function evidenceSummary(evidence: Record<string, string>) {
   const values = [...new Set(Object.values(evidence).filter((value) => value !== "unsupported"))];
   return values.length ? values.join(" / ") : "—";
+}
+
+function enabledCapabilities(provider: Provider) {
+  return capabilityNames.filter((capability) => provider.capabilities?.[capability]);
 }
 
 function CredentialForm({
@@ -342,12 +459,15 @@ function ProviderForm({
   const [type, setType] = useState<ProviderType>(initialType);
   const initialProfile = current?.profile_id && isBedrockProfile(current.profile_id) ? current.profile_id : "bedrock.runtime.converse.text.v1";
   const [profileID, setProfileID] = useState<BedrockProfile>(initialProfile);
-  const [openAIProfileID, setOpenAIProfileID] = useState(current?.profile_id === "openai.media-resources.v1" ? "openai.media-resources.v1" : openAIChatProfile);
   const [baseURL, setBaseURL] = useState(current?.base_url ?? defaultBaseURL(initialType));
   const [apiVersion, setAPIVersion] = useState(current?.api_version ?? "");
   const [maxConcurrency, setMaxConcurrency] = useState(current?.max_concurrency ?? 0);
   const [enabled, setEnabled] = useState(current?.enabled ?? true);
   const [capabilities, setCapabilities] = useState<ProviderCapabilities>(current?.capabilities ?? defaultProviderCapabilities(initialType));
+  const capabilityCeiling = defaultProviderCapabilities(type, profileID);
+  const fixedCapabilities = isStrictCapabilityProfile(type, profileID);
+  const visibleCapabilities = capabilityNames.filter((capability) => capabilities[capability]);
+  const configurableCapabilities = capabilityNames.filter((capability) => capabilityCeiling[capability] || capabilities[capability]);
   const selectedSurface = type === "bedrock" ? bedrockProfileConfig(profileID).surface : undefined;
   const matchingCredentials = credentials.filter((credential) => credential.type === type && (!selectedSurface || credential.access_surface === selectedSurface));
   const [credentialID, setCredentialID] = useState(current?.credential_id ?? credentials.find((credential) => credential.type === initialType && (initialType !== "bedrock" || credential.access_surface === bedrockProfileConfig(initialProfile).surface))?.id ?? "");
@@ -360,7 +480,12 @@ function ProviderForm({
         profile_id: profileID,
         access_surface: bedrockProfileConfig(profileID).surface,
         credential_scheme: bedrockProfileConfig(profileID).scheme,
-      } : type === "openai" ? { profile_id: openAIProfileID } : {}),
+      } : type === "openai" ? {
+        // profile_id remains during the rolling backend migration. New runtimes
+        // route each operation through the matching capability binding.
+        profile_id: openAIChatProfile,
+        bindings: openAIBindings(openAIChatProfile, capabilities),
+      } : {}),
       ...(type === "azure_openai" ? { api_version: apiVersion } : {}),
       credential_id: credentialID, capabilities, max_concurrency: maxConcurrency, enabled,
       };
@@ -374,19 +499,22 @@ function ProviderForm({
     },
   });
   return (
-    <Modal title={current ? t("providers.editProvider") : t("providers.createProvider")} onClose={onClose}>
+    <Modal wide title={current ? t("providers.editProvider") : t("providers.createProvider")} onClose={onClose}>
       {credentials.length === 0 ? (
         <div className="notice warning">
           <strong>{t("providers.credentialRequired")}</strong>
           <span>{t("providers.credentialRequiredDescription")}</span>
         </div>
       ) : (
-        <form
+        <form className="provider-form"
           onSubmit={(event) => {
             event.preventDefault();
             if (name && credentialID) mutation.mutate();
           }}
         >
+          <section className="provider-form-section" aria-labelledby="provider-connection-title">
+            <header><h3 id="provider-connection-title">{t("providers.connectionSection")}</h3><p>{t("providers.connectionSectionDescription")}</p></header>
+            <div className="form-grid">
           <Field label={t("providers.providerName")}><input autoFocus value={name} onChange={(event) => setName(event.target.value)} /></Field>
           <Field label={t("providers.type")}>
             <select value={type} onChange={(event) => {
@@ -394,7 +522,6 @@ function ProviderForm({
               setType(next);
               setBaseURL(defaultBaseURL(next));
               setProfileID("bedrock.runtime.converse.text.v1");
-              setOpenAIProfileID(openAIChatProfile);
               setCredentialID(credentials.find((credential) => credential.type === next && (next !== "bedrock" || credential.access_surface === "bedrock-runtime"))?.id ?? "");
               setCapabilities(defaultProviderCapabilities(next));
             }}>
@@ -402,7 +529,7 @@ function ProviderForm({
             </select>
           </Field>
           {type === "bedrock" && (
-            <Field label={t("providers.profile")} hint={t("providers.bedrockProfileHint")}>
+            <Field label={t("providers.capabilityImplementation")} hint={t("providers.bedrockProfileHint")}>
               <select value={profileID} onChange={(event) => {
                 const next = event.target.value as BedrockProfile;
                 const config = bedrockProfileConfig(next);
@@ -415,24 +542,31 @@ function ProviderForm({
               </select>
             </Field>
           )}
-          {type === "openai" && (
-            <Field label={t("providers.profile")}>
-              <select value={openAIProfileID} onChange={(event) => {
-                const next = event.target.value;
-                setOpenAIProfileID(next);
-                setCapabilities(defaultProviderCapabilities("openai", undefined, next));
-              }}>
-                <option value={openAIChatProfile}>{t("providers.openAIProfiles.chat")}</option>
-                <option value="openai.media-resources.v1">{t("providers.openAIProfiles.media")}</option>
-              </select>
-            </Field>
-          )}
           <Field label={t("providers.baseURL")}><input value={baseURL} onChange={(event) => setBaseURL(event.target.value)} /></Field>
           {type === "azure_openai" && (
             <Field label={t("providers.apiVersion")} hint={t("providers.apiVersionHint")}>
               <input value={apiVersion} onChange={(event) => setAPIVersion(event.target.value)} required />
             </Field>
           )}
+            </div>
+            <div className="provider-capabilities-group" aria-labelledby="provider-capabilities-title">
+              <header><h4 id="provider-capabilities-title">{t("providers.capabilitySummary")}</h4><p>{t(fixedCapabilities ? "providers.fixedCapabilityDescription" : "providers.capabilitySectionDescription")}</p></header>
+              <div className="capability-summary" aria-label={t("providers.capabilitySummary")}>
+                {visibleCapabilities.map((capability) => <span className="badge" key={capability}>{t(`capabilities.${capability}`)}</span>)}
+              </div>
+              {!fixedCapabilities && (
+                <div className="capability-disclosure capability-advanced">
+                  <header><span>{t("providers.advancedCapabilities")}</span><strong>{t("providers.selectedCapabilities", { count: visibleCapabilities.length })}</strong></header>
+                  <p className="capability-advanced-note">{t("providers.advancedCapabilitiesHint")}</p>
+                  <div className="capability-grid">{configurableCapabilities.map((capability) => { const unavailable = !capabilityCeiling[capability]; return <label className={`capability-option ${unavailable ? "unavailable" : ""}`} key={capability}><input type="checkbox" disabled={unavailable && !capabilities[capability]} checked={capabilities[capability]} onChange={(event) => setCapabilities(updateCapabilitySelection(capabilities, capability, event.target.checked))} /><span>{t(`capabilities.${capability}`)}{unavailable && <small>{t("providers.unsupportedByInterface")}</small>}</span></label>; })}</div>
+                  <div className="form-grid capability-limits"><Field label={t("providers.maxContext")} hint={t("providers.maxContextHint")}><input min="0" type="number" value={capabilities.max_context_tokens} onChange={(event) => setCapabilities({ ...capabilities, max_context_tokens: Number(event.target.value) })} /></Field><Field label={t("providers.maxOutput")} hint={t("providers.maxOutputHint")}><input min="0" type="number" value={capabilities.max_output_tokens} onChange={(event) => setCapabilities({ ...capabilities, max_output_tokens: Number(event.target.value) })} /></Field></div>
+                </div>
+              )}
+            </div>
+          </section>
+          <section className="provider-form-section" aria-labelledby="provider-capacity-title">
+            <header><h3 id="provider-capacity-title">{t("providers.capacitySection")}</h3><p>{t("providers.capacitySectionDescription")}</p></header>
+            <div className="form-grid">
           <Field label={t("providers.maxConcurrency")} hint={t("providers.maxConcurrencyHint")}>
             <input
               type="number"
@@ -441,25 +575,6 @@ function ProviderForm({
               onChange={(event) => setMaxConcurrency(Number(event.target.value))}
             />
           </Field>
-          <fieldset className="form-grid">
-            <legend>{t("providers.capabilityLimit")}</legend>
-            {capabilityNames.map((capability) => (
-              <label className="check-row" key={capability}>
-                <input
-                  type="checkbox"
-                  checked={capabilities[capability]}
-                  onChange={(event) => setCapabilities({ ...capabilities, [capability]: event.target.checked })}
-                />
-                <span>{t(`capabilities.${capability}`)}</span>
-              </label>
-            ))}
-            <Field label={t("providers.maxContext")} hint={t("providers.maxContextHint")}>
-              <input min="0" type="number" value={capabilities.max_context_tokens} onChange={(event) => setCapabilities({ ...capabilities, max_context_tokens: Number(event.target.value) })} />
-            </Field>
-            <Field label={t("providers.maxOutput")} hint={t("providers.maxOutputHint")}>
-              <input min="0" type="number" value={capabilities.max_output_tokens} onChange={(event) => setCapabilities({ ...capabilities, max_output_tokens: Number(event.target.value) })} />
-            </Field>
-          </fieldset>
           <Field label={t("providers.encryptedCredential")}>
             <select value={credentialID} onChange={(event) => setCredentialID(event.target.value)}>
               {matchingCredentials.map((credential) => (
@@ -467,11 +582,13 @@ function ProviderForm({
               ))}
             </select>
           </Field>
-          <label className="check-row"><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />{t("providers.enable")}</label>
+            </div>
+            <label className="project-enable-row"><span><strong>{t("providers.enable")}</strong><small>{t("providers.enableDescription")}</small></span><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} /></label>
+          </section>
           {mutation.isError && <ErrorState error={mutation.error} />}
-          <div className="form-actions">
+          <div className="form-actions provider-form-actions">
             <button type="button" className="button ghost" onClick={onClose}>{t("common.cancel")}</button>
-            <button className="button primary" disabled={mutation.isPending || !credentialID}>{current ? t("providers.save") : t("providers.createAndLoad")}</button>
+            <button className="button primary" disabled={mutation.isPending || !credentialID || !hasEnabledCapability(capabilities)}>{current ? t("providers.save") : t("providers.createAndLoad")}</button>
           </div>
         </form>
       )}
@@ -484,7 +601,29 @@ const capabilityNames = [
   "developer_role", "reasoning", "stream_usage",
 ] as const;
 
-function defaultProviderCapabilities(type: ProviderType, profileID: BedrockProfile = "bedrock.runtime.converse.text.v1", openAIProfileID = openAIChatProfile): ProviderCapabilities {
+function updateCapabilitySelection(current: ProviderCapabilities, capability: typeof capabilityNames[number], enabled: boolean): ProviderCapabilities {
+  const next = { ...current, [capability]: enabled };
+  const chatFeatures = ["streaming", "tools", "vision", "json_mode", "developer_role", "reasoning", "stream_usage"] as const;
+  if (capability === "chat" && !enabled) {
+    for (const feature of chatFeatures) next[feature] = false;
+  } else if (capability !== "chat" && chatFeatures.includes(capability as typeof chatFeatures[number]) && enabled) {
+    next.chat = true;
+  }
+  return next;
+}
+
+function isStrictCapabilityProfile(type: ProviderType, profileID: BedrockProfile) {
+  if (type === "openai") return false;
+  if (type !== "bedrock") return false;
+  return [
+    "bedrock.runtime.invoke.titan-embed-text-v2.v1",
+    "bedrock.runtime.invoke.titan-image-v2.v1",
+    "bedrock.agent-runtime.rerank.cohere-v3-5.v1",
+    "bedrock.runtime.async.nova-reel-v1.v1",
+  ].includes(profileID);
+}
+
+function defaultProviderCapabilities(type: ProviderType, profileID: BedrockProfile = "bedrock.runtime.converse.text.v1"): ProviderCapabilities {
   const value: ProviderCapabilities = {
     chat: true, streaming: true, embeddings: false, tools: false, vision: false,
     moderations: false, images: false, transcriptions: false, speech: false, files: false, batches: false, rerank: false, async_generate: false,
@@ -492,8 +631,9 @@ function defaultProviderCapabilities(type: ProviderType, profileID: BedrockProfi
     max_context_tokens: 0, max_output_tokens: 0,
   };
   if (type === "openai" || type === "azure_openai") {
-    if (type === "openai" && openAIProfileID === "openai.media-resources.v1") return { ...value, chat: false, streaming: false, moderations: true, images: true, transcriptions: true, speech: true, files: true, batches: true };
-    return { ...value, embeddings: true, tools: true, vision: true, json_mode: true, developer_role: true, reasoning: true, stream_usage: true };
+    const chat = { ...value, embeddings: true, tools: true, vision: true, json_mode: true, developer_role: true, reasoning: true, stream_usage: true };
+    if (type === "openai") return { ...chat, moderations: true, images: true, transcriptions: true, speech: true, files: true, batches: true };
+    return chat;
   }
   if (type === "anthropic") return { ...value, tools: true, vision: true, reasoning: true, stream_usage: true };
   if (type === "deepseek") return { ...value, tools: true, json_mode: true, reasoning: true, stream_usage: true };
@@ -509,4 +649,32 @@ function defaultProviderCapabilities(type: ProviderType, profileID: BedrockProfi
     return { ...value, tools: true, vision: true, json_mode: true, developer_role: true, reasoning: profileID === "bedrock.mantle.openai.chat.v1", stream_usage: true };
   }
   return value;
+}
+
+const openAIChatCapabilities = new Set<keyof ProviderCapabilities>([
+  "chat", "streaming", "embeddings", "tools", "vision", "json_mode", "developer_role", "reasoning", "stream_usage",
+  "max_context_tokens", "max_output_tokens",
+]);
+const openAIMediaCapabilities = new Set<keyof ProviderCapabilities>([
+  "moderations", "images", "transcriptions", "speech", "files", "batches",
+]);
+
+function bindingCapabilities(source: ProviderCapabilities, allowed: Set<keyof ProviderCapabilities>): ProviderCapabilities {
+  return Object.fromEntries(Object.entries(source).map(([name, value]) => [
+    name,
+    allowed.has(name as keyof ProviderCapabilities) ? value : (typeof value === "number" ? 0 : false),
+  ])) as unknown as ProviderCapabilities;
+}
+
+function hasEnabledCapability(capabilities: ProviderCapabilities) {
+  return capabilityNames.some((name) => capabilities[name]);
+}
+
+function openAIBindings(chatProfileID: string, capabilities: ProviderCapabilities): ProviderBinding[] {
+  const chat = bindingCapabilities(capabilities, openAIChatCapabilities);
+  const media = bindingCapabilities(capabilities, openAIMediaCapabilities);
+  return [
+    { profile_id: chatProfileID, enabled: hasEnabledCapability(chat), capabilities: chat },
+    { profile_id: openAIMediaProfile, enabled: hasEnabledCapability(media), capabilities: media },
+  ];
 }

@@ -1,6 +1,9 @@
 package domain
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestBedrockMantleCredentialProfileResolution(t *testing.T) {
 	profile, ok := ResolveCredentialProfile(ProviderBedrock, SurfaceBedrockMantle, CredentialBedrockAPIKey)
@@ -38,4 +41,102 @@ func TestBedrockAgentRuntimeIsOnlyResolvedForRegisteredRerankProfile(t *testing.
 	if _, ok := ResolveCredentialProfile(ProviderBedrock, SurfaceBedrockAgentRuntime, CredentialBedrockAPIKey); ok {
 		t.Fatal("agent runtime accepted the Mantle credential scheme")
 	}
+}
+
+func TestProviderCapabilitiesSubsetCoversEveryOperation(t *testing.T) {
+	available := ProviderCapabilities{}
+	cases := []ProviderCapabilities{
+		{Chat: true}, {Embeddings: true}, {Moderations: true}, {Images: true},
+		{Transcriptions: true}, {Speech: true}, {Files: true}, {Batches: true},
+		{Rerank: true}, {AsyncGenerate: true},
+	}
+	for _, candidate := range cases {
+		if ProviderCapabilitiesSubset(candidate, available) {
+			t.Fatalf("unsupported operation was accepted: %#v", candidate)
+		}
+	}
+}
+
+func TestDeploymentValidationRejectsDetachedChatFeatures(t *testing.T) {
+	deployment := Deployment{
+		ID: "dep_1", Name: "invalid", ProviderID: "prv_1", ProviderModel: "model",
+		AccessSurface: SurfaceOpenAI, ProfileID: ProfileOpenAIChatEmbeddings,
+		Capabilities:       ProviderCapabilities{Embeddings: true, Tools: true},
+		CapabilityEvidence: EvidenceForCapabilities(ProviderCapabilities{Embeddings: true, Tools: true}, EvidenceDeclared),
+		Weight:             1,
+	}
+	if err := deployment.Validate(); err == nil || !strings.Contains(err.Error(), "chat features require chat") {
+		t.Fatalf("detached chat feature accepted: %v", err)
+	}
+}
+
+func TestProviderProfileBindingIdentityAndLegacyProjection(t *testing.T) {
+	capabilities := DefaultProviderCapabilitiesForProfile(ProviderOpenAI, ProfileOpenAIChatEmbeddings)
+	evidence := EvidenceForCapabilities(capabilities, EvidenceDeclared)
+	provider := ProviderInstance{
+		ID: "prv_1", Type: ProviderOpenAI, ProfileID: ProfileOpenAIChatEmbeddings,
+		AccessSurface: SurfaceOpenAI, CredentialScheme: CredentialBearerStatic,
+		Capabilities: capabilities, CapabilityEvidence: evidence,
+	}
+	bindings := provider.EffectiveProfileBindings()
+	if len(bindings) != 1 || bindings[0].ProviderID != provider.ID ||
+		bindings[0].ID != DefaultProviderProfileBindingID(provider.ID, provider.ProfileID) {
+		t.Fatalf("legacy binding projection is unstable: %#v", bindings)
+	}
+}
+
+func TestBindingsCapabilitiesSummaryUnionsEnabledProfiles(t *testing.T) {
+	chat := DefaultProviderCapabilitiesForProfile(ProviderOpenAI, ProfileOpenAIChatEmbeddings)
+	media := DefaultProviderCapabilitiesForProfile(ProviderOpenAI, ProfileOpenAIPhase2)
+	bindings := []ProviderProfileBinding{
+		{Enabled: true, Capabilities: chat, CapabilityEvidence: EvidenceForCapabilities(chat, EvidenceDeclared)},
+		{Enabled: true, Capabilities: media, CapabilityEvidence: EvidenceForCapabilities(media, EvidenceDeclared)},
+	}
+	summary, evidence := BindingsCapabilitiesSummary(bindings)
+	if !summary.Chat || !summary.Embeddings || !summary.Images || !summary.Files || evidence["images"] != EvidenceDeclared {
+		t.Fatalf("binding summary lost operations: %#v %#v", summary, evidence)
+	}
+}
+
+func TestProviderBindingValidationRejectsDuplicateProfileAndMixedSurface(t *testing.T) {
+	chat := DefaultProviderCapabilitiesForProfile(ProviderOpenAI, ProfileOpenAIChatEmbeddings)
+	evidence := EvidenceForCapabilities(chat, EvidenceDeclared)
+	provider := validBoundProviderForTest(chat, evidence)
+	duplicate := provider.Bindings[0]
+	duplicate.ID = "different-id"
+	provider.Bindings = append(provider.Bindings, duplicate)
+	if err := provider.Validate(); err == nil || !strings.Contains(err.Error(), "must not repeat") {
+		t.Fatalf("duplicate profile was accepted: %v", err)
+	}
+	provider = validBoundProviderForTest(chat, evidence)
+	provider.Bindings[0].AccessSurface = SurfaceBedrockRuntime
+	if err := provider.Validate(); err == nil || !strings.Contains(err.Error(), "access surface") {
+		t.Fatalf("mixed surface was accepted: %v", err)
+	}
+}
+
+func TestMediaOnlyProviderAllowsDisabledZeroCapabilityBindingAndRejectsAllDisabled(t *testing.T) {
+	chatZero := ProviderCapabilities{}
+	media := DefaultProviderCapabilitiesForProfile(ProviderOpenAI, ProfileOpenAIPhase2)
+	provider := validBoundProviderForTest(media, EvidenceForCapabilities(media, EvidenceDeclared))
+	provider.ProfileID = ProfileOpenAIPhase2
+	provider.Bindings = []ProviderProfileBinding{
+		{ID: DefaultProviderProfileBindingID(provider.ID, ProfileOpenAIPhase2), ProviderID: provider.ID, ProfileID: ProfileOpenAIPhase2, AccessSurface: SurfaceOpenAI, CredentialScheme: CredentialBearerStatic, Capabilities: media, CapabilityEvidence: EvidenceForCapabilities(media, EvidenceDeclared), Enabled: true},
+		{ID: DefaultProviderProfileBindingID(provider.ID, ProfileOpenAIChatEmbeddings), ProviderID: provider.ID, ProfileID: ProfileOpenAIChatEmbeddings, AccessSurface: SurfaceOpenAI, CredentialScheme: CredentialBearerStatic, Capabilities: chatZero, CapabilityEvidence: EvidenceForCapabilities(chatZero, EvidenceDeclared), Enabled: false},
+	}
+	provider.Capabilities, provider.CapabilityEvidence = BindingsCapabilitiesSummary(provider.Bindings)
+	if err := provider.Validate(); err != nil {
+		t.Fatalf("media-only provider rejected: %v", err)
+	}
+	provider.Bindings[0].Enabled = false
+	provider.Capabilities, provider.CapabilityEvidence = BindingsCapabilitiesSummary(provider.Bindings)
+	if err := provider.Validate(); err == nil || !strings.Contains(err.Error(), "enabled profile binding") {
+		t.Fatalf("all-disabled provider accepted: %v", err)
+	}
+}
+
+func validBoundProviderForTest(capabilities ProviderCapabilities, evidence CapabilityEvidenceSet) ProviderInstance {
+	p := ProviderInstance{ID: "prv_1", Name: "OpenAI", Type: ProviderOpenAI, BaseURL: "https://api.openai.com", CredentialID: "cred_1", AccessSurface: SurfaceOpenAI, ProfileID: ProfileOpenAIChatEmbeddings, CredentialScheme: CredentialBearerStatic, AllowedHosts: []string{"api.openai.com"}, Capabilities: capabilities, CapabilityEvidence: evidence, Enabled: true}
+	p.Bindings = []ProviderProfileBinding{{ID: DefaultProviderProfileBindingID(p.ID, p.ProfileID), ProviderID: p.ID, ProfileID: p.ProfileID, AccessSurface: p.AccessSurface, CredentialScheme: p.CredentialScheme, Capabilities: capabilities, CapabilityEvidence: evidence.Clone(), Enabled: true}}
+	return p
 }
