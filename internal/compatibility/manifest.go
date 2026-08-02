@@ -23,6 +23,7 @@ const (
 // represented by that provider profile.
 type ProfileCoverage struct {
 	ProfileID                domain.ProviderProfileID `json:"profile_id"`
+	Status                   CompatibilityStatus      `json:"status"`
 	UnsupportedRequestFields []string                 `json:"unsupported_request_fields,omitempty"`
 	DeclaredTransforms       []string                 `json:"declared_transforms,omitempty"`
 }
@@ -104,6 +105,14 @@ func (manifest EndpointCompatibilityManifest) Validate() error {
 			return errors.New("endpoint compatibility manifest contains duplicate profile coverage")
 		}
 		covered[coverage.ProfileID] = struct{}{}
+		switch coverage.Status {
+		case StatusUnsupported, StatusExperimental, StatusCompatible, StatusNativePassThrough:
+		default:
+			return errors.New("endpoint compatibility profile coverage status is invalid")
+		}
+		if isPhase2ProviderProfile(coverage.ProfileID) && coverage.Status != StatusExperimental {
+			return errors.New("phase 2 provider profile must remain experimental until its release gates pass")
+		}
 		if hasEmptyOrDuplicate(coverage.UnsupportedRequestFields) || hasEmptyOrDuplicate(coverage.DeclaredTransforms) {
 			return errors.New("endpoint compatibility profile coverage contains empty or duplicate values")
 		}
@@ -172,6 +181,7 @@ func BuiltinEndpointManifests() []EndpointCompatibilityManifest {
 				{ProfileID: domain.ProfileBedrockMantleAnthropicMessages, DeclaredTransforms: []string{"native mode preserves validated Anthropic content blocks, thinking signatures, and events"}},
 			}},
 	}
+	setProfileCompatibilityStatuses(manifests)
 	return append(manifests, phase2EndpointManifests()...)
 }
 
@@ -213,7 +223,37 @@ func phase2EndpointManifests() []EndpointCompatibilityManifest {
 			manifests[index].DocumentedDeviations = append(manifests[index].DocumentedDeviations, "this is a Heimdall extension and has no OpenAI official SDK surface")
 		}
 	}
+	setProfileCompatibilityStatuses(manifests)
 	return manifests
+}
+
+func setProfileCompatibilityStatuses(manifests []EndpointCompatibilityManifest) {
+	for manifestIndex := range manifests {
+		for coverageIndex := range manifests[manifestIndex].ProfileCoverage {
+			coverage := &manifests[manifestIndex].ProfileCoverage[coverageIndex]
+			coverage.Status = providerProfileCompatibilityStatus(coverage.ProfileID, manifests[manifestIndex].Status)
+		}
+	}
+}
+
+func providerProfileCompatibilityStatus(profileID domain.ProviderProfileID, endpointStatus CompatibilityStatus) CompatibilityStatus {
+	if isPhase2ProviderProfile(profileID) {
+		return StatusExperimental
+	}
+	return endpointStatus
+}
+
+func isPhase2ProviderProfile(profileID domain.ProviderProfileID) bool {
+	switch profileID {
+	case domain.ProfileOpenAIPhase2,
+		domain.ProfileBedrockInvokeTitanEmbedV2,
+		domain.ProfileBedrockInvokeTitanImageV2,
+		domain.ProfileBedrockAgentRerankCohere35,
+		domain.ProfileBedrockAsyncNovaReel:
+		return true
+	default:
+		return false
+	}
 }
 
 func batchResponseFields() []string {
