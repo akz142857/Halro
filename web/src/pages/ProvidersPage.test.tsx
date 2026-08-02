@@ -30,7 +30,7 @@ describe("ProvidersPage profile and credential bindings", () => {
 
   it("uses the tabs as the only repeated resource headings", async () => {
     renderPage();
-    expect(await screen.findByRole("tab", { name: "服务商连接 0" })).toBeVisible();
+    expect(await screen.findByRole("tab", { name: "服务商 0" })).toBeVisible();
     expect(screen.queryByRole("heading", { name: "服务商 0" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "凭据库 1" }));
     expect(screen.queryByRole("heading", { name: "凭据 1" })).not.toBeInTheDocument();
@@ -81,7 +81,7 @@ describe("ProvidersPage profile and credential bindings", () => {
     fireEvent.click(boundCredential);
     expect(window.location.search).toBe("?view=credentials");
     expect(screen.getByText("被 1 个服务商使用", { exact: false })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("tab", { name: /服务商连接/ }));
+    fireEvent.click(screen.getByRole("tab", { name: /服务商/ }));
     fireEvent.click(await screen.findByRole("button", { name: "测试" }));
 
     await waitFor(() => expect(testProvider).toHaveBeenCalledOnce());
