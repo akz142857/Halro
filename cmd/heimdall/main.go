@@ -24,6 +24,7 @@ import (
 	"github.com/akz142857/Heimdall/internal/buildinfo"
 	"github.com/akz142857/Heimdall/internal/config"
 	"github.com/akz142857/Heimdall/internal/domain"
+	"github.com/akz142857/Heimdall/internal/masterkey"
 	"github.com/akz142857/Heimdall/internal/metricsauth"
 	"github.com/akz142857/Heimdall/internal/safelog"
 )
@@ -39,6 +40,8 @@ func main() {
 var (
 	initializeCommand     = app.Initialize
 	verifyRecoveryCommand = app.VerifyRecoverySlot
+	rotateKMSCommand      = app.RotateKMSMasterKey
+	rewrapKMSCommand      = app.RewrapKMSKey
 )
 
 func run(arguments []string, logger *slog.Logger) error {
@@ -214,7 +217,7 @@ func run(arguments []string, logger *slog.Logger) error {
 		return nil
 	case "key":
 		if len(arguments) < 2 {
-			return errors.New("usage: heimdall key <create|disable|rotate|recover>")
+			return errors.New("usage: heimdall key <create|disable|rotate|rewrap|recover>")
 		}
 		switch arguments[1] {
 		case "recover":
@@ -238,17 +241,47 @@ func run(arguments []string, logger *slog.Logger) error {
 			flags := flag.NewFlagSet("key rotate", flag.ContinueOnError)
 			configPath := flags.String("config", "config.yaml", "configuration file")
 			newKeyFile := flags.String("new-key-file", "", "existing 32-byte replacement master key file")
+			operationID := flags.String("operation-id", "", "stable non-secret operation ID required for key_slots retries")
 			if err := flags.Parse(arguments[2:]); err != nil {
 				return err
-			}
-			if *newKeyFile == "" {
-				return errors.New("key rotate requires --new-key-file")
 			}
 			cfg, err := config.Load(*configPath, config.LoadOptions{})
 			if err != nil {
 				return err
 			}
-			result, err := app.RotateMasterKey(context.Background(), cfg, *newKeyFile)
+			var result app.KeyRotationResult
+			if cfg.Storage.MasterKey.Mode == config.MasterKeyModeKeySlots {
+				if *newKeyFile != "" || *operationID == "" {
+					return errors.New("key_slots rotate requires --operation-id and does not accept --new-key-file")
+				}
+				result, err = rotateKMSCommand(context.Background(), cfg, *operationID)
+			} else {
+				if *newKeyFile == "" || *operationID != "" {
+					return errors.New("file rotate requires --new-key-file and does not accept --operation-id")
+				}
+				result, err = app.RotateMasterKey(context.Background(), cfg, *newKeyFile)
+			}
+			if err != nil {
+				return err
+			}
+			return json.NewEncoder(os.Stdout).Encode(result)
+		case "rewrap":
+			flags := flag.NewFlagSet("key rewrap", flag.ContinueOnError)
+			configPath := flags.String("config", "config.yaml", "configuration file")
+			purpose := flags.String("purpose", "", "Slot purpose: primary or recovery")
+			slotID := flags.String("slot-id", "", "new configured Slot ID")
+			keyReference := flags.String("key-reference", "", "new allowlisted KMS Key reference")
+			compromised := flags.Bool("compromised", false, "declare suspected KEK or Decrypt identity compromise (rewrap will fail closed and require DEK rotate)")
+			if err := flags.Parse(arguments[2:]); err != nil {
+				return err
+			}
+			cfg, err := config.Load(*configPath, config.LoadOptions{})
+			if err != nil {
+				return err
+			}
+			result, err := rewrapKMSCommand(context.Background(), cfg, app.KMSRewrapOptions{
+				Purpose: masterkey.KeySlotPurpose(*purpose), SlotID: *slotID, KeyReference: *keyReference, Compromised: *compromised,
+			})
 			if err != nil {
 				return err
 			}

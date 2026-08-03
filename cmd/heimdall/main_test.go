@@ -13,6 +13,7 @@ import (
 
 	"github.com/akz142857/Heimdall/internal/app"
 	"github.com/akz142857/Heimdall/internal/config"
+	"github.com/akz142857/Heimdall/internal/masterkey"
 	"gopkg.in/yaml.v3"
 )
 
@@ -76,9 +77,13 @@ func TestKeySlotInitAndRecoveryCLIUseExplicitOfflinePaths(t *testing.T) {
 	}
 	previousInitialize := initializeCommand
 	previousRecovery := verifyRecoveryCommand
+	previousRotateKMS := rotateKMSCommand
+	previousRewrapKMS := rewrapKMSCommand
 	t.Cleanup(func() {
 		initializeCommand = previousInitialize
 		verifyRecoveryCommand = previousRecovery
+		rotateKMSCommand = previousRotateKMS
+		rewrapKMSCommand = previousRewrapKMS
 	})
 	initialized := false
 	initializeCommand = func(loaded config.Config) error {
@@ -89,6 +94,17 @@ func TestKeySlotInitAndRecoveryCLIUseExplicitOfflinePaths(t *testing.T) {
 	verifyRecoveryCommand = func(_ context.Context, loaded config.Config, confirmed string) (app.RecoveryVerificationResult, error) {
 		recovered = loaded.Storage.MasterKey.Mode == config.MasterKeyModeKeySlots && confirmed == loaded.Storage.MasterKey.RecoverySlot
 		return app.RecoveryVerificationResult{SlotID: confirmed, VerifiedAt: time.Now().UTC()}, nil
+	}
+	rotated := false
+	rotateKMSCommand = func(_ context.Context, loaded config.Config, operationID string) (app.KeyRotationResult, error) {
+		rotated = loaded.Storage.MasterKey.Mode == config.MasterKeyModeKeySlots && operationID == "rotation-001"
+		return app.KeyRotationResult{OldKeyVersion: 1, NewKeyVersion: 2}, nil
+	}
+	rewrapped := false
+	rewrapKMSCommand = func(_ context.Context, loaded config.Config, options app.KMSRewrapOptions) (app.KMSRewrapResult, error) {
+		rewrapped = loaded.Storage.MasterKey.Mode == config.MasterKeyModeKeySlots && options.Purpose == masterkey.KeySlotPrimary &&
+			options.SlotID == "slot_aws_primary" && options.KeyReference == loaded.Storage.MasterKey.AllowedKMSKeys[0].KeyID
+		return app.KMSRewrapResult{Purpose: options.Purpose, ActiveSlot: options.SlotID}, nil
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	if err := run([]string{"init", "--config", path}, logger); err != nil {
@@ -102,6 +118,18 @@ func TestKeySlotInitAndRecoveryCLIUseExplicitOfflinePaths(t *testing.T) {
 	}
 	if !recovered {
 		t.Fatal("recovery CLI did not use the explicit configured Recovery Slot")
+	}
+	if err := run([]string{"key", "rotate", "--config", path, "--operation-id", "rotation-001"}, logger); err != nil {
+		t.Fatal(err)
+	}
+	if !rotated {
+		t.Fatal("rotate CLI did not preserve the explicit KMS operation ID")
+	}
+	if err := run([]string{"key", "rewrap", "--config", path, "--purpose", "primary", "--slot-id", "slot_aws_primary", "--key-reference", cfg.Storage.MasterKey.AllowedKMSKeys[0].KeyID}, logger); err != nil {
+		t.Fatal(err)
+	}
+	if !rewrapped {
+		t.Fatal("rewrap CLI did not preserve explicit Slot and allowlist selection")
 	}
 }
 

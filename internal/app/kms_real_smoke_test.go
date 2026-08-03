@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -98,6 +99,133 @@ func TestRealAWSDualSlotInitializeAndRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	fmt.Printf("M11_AWS_KMS_DUAL_SLOT_EVIDENCE=%s\n", encoded)
+}
+
+func TestRealAWSKMSKeyLifecycle(t *testing.T) {
+	if os.Getenv("HEIMDALL_AWS_KMS_LIFECYCLE_REAL") != "1" {
+		t.Skip("set HEIMDALL_AWS_KMS_LIFECYCLE_REAL=1 for real AWS KMS lifecycle evidence")
+	}
+	primaryARN := os.Getenv("HEIMDALL_AWS_KMS_PRIMARY_KEY_ARN")
+	recoveryARN := os.Getenv("HEIMDALL_AWS_KMS_RECOVERY_KEY_ARN")
+	replacementARN := os.Getenv("HEIMDALL_AWS_KMS_REPLACEMENT_PRIMARY_KEY_ARN")
+	primaryRegion, primaryAccount, primaryOK := awsKeyIdentityForAppTest(primaryARN)
+	recoveryRegion, recoveryAccount, recoveryOK := awsKeyIdentityForAppTest(recoveryARN)
+	replacementRegion, replacementAccount, replacementOK := awsKeyIdentityForAppTest(replacementARN)
+	if !primaryOK || !recoveryOK || !replacementOK || primaryARN == recoveryARN ||
+		primaryARN == replacementARN || recoveryARN == replacementARN {
+		t.Fatal("lifecycle smoke requires three distinct full customer-managed KMS Key ARNs")
+	}
+	cfg := testConfig(t)
+	cfg.Storage.MasterKey = config.MasterKey{
+		Mode: config.MasterKeyModeKeySlots, PrimarySlot: "slot_aws_primary", RecoverySlot: "slot_aws_recovery",
+		StartupDeadline: config.Duration(time.Minute), CallTimeout: config.Duration(5 * time.Second),
+		AllowedKMSKeys: []config.AllowedKMSKey{
+			{Purpose: "primary", Provider: awskms.Provider, Region: primaryRegion, Account: primaryAccount, KeyID: primaryARN, Algorithm: awskms.SymmetricDefaultAlgorithm},
+			{Purpose: "recovery", Provider: awskms.Provider, Region: recoveryRegion, Account: recoveryAccount, KeyID: recoveryARN, Algorithm: awskms.SymmetricDefaultAlgorithm},
+		},
+	}
+	if err := cfg.Validate(config.LoadOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	if err := initializeKMS(ctx, cfg, kmsInitializationOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Bootstrap(ctx, cfg, BootstrapOptions{
+		ProviderName: "M11 lifecycle smoke", ProviderType: "openai", ProviderBaseURL: "https://api.openai.com",
+		ProviderModel: "smoke", PublicModel: "smoke", ProjectName: "M11 lifecycle",
+	}, []byte("ephemeral-lifecycle-smoke-secret")); err != nil {
+		t.Fatal(err)
+	}
+	store, err := boltstore.Open(cfg.MetadataPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentials, err := store.ListCredentials(ctx)
+	if err != nil || len(credentials) != 1 {
+		store.Close()
+		t.Fatalf("credentials=%d err=%v", len(credentials), err)
+	}
+	before := credentials[0]
+	beforeDescriptor, err := store.KeySlotDescriptor(ctx)
+	if closeErr := store.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rewrapCfg := cfg
+	rewrapCfg.Storage.MasterKey.PrimarySlot = "slot_aws_primary_rewrapped"
+	rewrapCfg.Storage.MasterKey.AllowedKMSKeys = append(append([]config.AllowedKMSKey(nil), cfg.Storage.MasterKey.AllowedKMSKeys...), config.AllowedKMSKey{
+		Purpose: "primary", Provider: awskms.Provider, Region: replacementRegion, Account: replacementAccount,
+		KeyID: replacementARN, Algorithm: awskms.SymmetricDefaultAlgorithm,
+	})
+	if _, err := RewrapKMSKey(ctx, rewrapCfg, KMSRewrapOptions{
+		Purpose: masterkey.KeySlotPrimary, SlotID: rewrapCfg.Storage.MasterKey.PrimarySlot, KeyReference: replacementARN,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	store, err = boltstore.Open(cfg.MetadataPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterRewrap, err := store.GetCredential(ctx, before.ID)
+	afterRewrapDescriptor, descriptorErr := store.KeySlotDescriptor(ctx)
+	closeErr := store.Close()
+	if err != nil || descriptorErr != nil || closeErr != nil {
+		t.Fatal(errors.Join(err, descriptorErr, closeErr))
+	}
+	if !bytes.Equal(before.Ciphertext, afterRewrap.Ciphertext) || before.KeyVersion != afterRewrap.KeyVersion ||
+		beforeDescriptor.MasterKeyFingerprint != afterRewrapDescriptor.MasterKeyFingerprint {
+		t.Fatal("real AWS rewrap changed the Vault data generation")
+	}
+
+	rotationCfg := rewrapCfg
+	rotationCfg.Storage.MasterKey.AllowedKMSKeys = []config.AllowedKMSKey{
+		rewrapCfg.Storage.MasterKey.AllowedKMSKeys[2], rewrapCfg.Storage.MasterKey.AllowedKMSKeys[1],
+	}
+	if err := rotationCfg.Validate(config.LoadOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	rotation, err := RotateKMSMasterKey(ctx, rotationCfg, "real-aws-lifecycle-smoke-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err = boltstore.Open(cfg.MetadataPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	afterRotate, err := store.GetCredential(ctx, before.ID)
+	rotatedDescriptor, descriptorErr := store.KeySlotDescriptor(ctx)
+	primaryKey, primaryErr := unlockKMSMasterKey(ctx, rotationCfg, store, masterkey.KeySlotPrimary, productionKMSWrapper)
+	recoveryKey, recoveryErr := unlockKMSMasterKey(ctx, rotationCfg, store, masterkey.KeySlotRecovery, productionKMSWrapper)
+	keysMatch := bytes.Equal(primaryKey, recoveryKey)
+	clear(primaryKey)
+	clear(recoveryKey)
+	if err != nil || descriptorErr != nil || primaryErr != nil || recoveryErr != nil || !keysMatch ||
+		afterRotate.KeyVersion != before.KeyVersion+1 || bytes.Equal(afterRotate.Ciphertext, before.Ciphertext) ||
+		rotatedDescriptor.ActiveGeneration != beforeDescriptor.ActiveGeneration+1 {
+		t.Fatalf("real AWS lifecycle verification failed: %v", errors.Join(err, descriptorErr, primaryErr, recoveryErr))
+	}
+	evidence := map[string]any{
+		"schema_version": 1, "recorded_at": time.Now().UTC(), "result": "success",
+		"old_primary_key_arn_sha256":  digestM11Value([]byte(primaryARN)),
+		"new_primary_key_arn_sha256":  digestM11Value([]byte(replacementARN)),
+		"recovery_key_arn_sha256":     digestM11Value([]byte(recoveryARN)),
+		"rewrap_preserved_ciphertext": true, "rewrap_preserved_key_version": true,
+		"rotation_key_version_advanced": true, "rotation_ciphertext_changed": true,
+		"descriptor_generation_advanced": true, "primary_recovery_match": keysMatch,
+		"workload_identity_enforced": true, "rotation_operation_id": "real-aws-lifecycle-smoke-001",
+		"new_master_key_fingerprint_sha256": digestM11Value([]byte(rotation.NewFingerprint)),
+	}
+	encoded, err := json.Marshal(evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Printf("M11_AWS_KMS_LIFECYCLE_EVIDENCE=%s\n", encoded)
 }
 
 func awsKeyIdentityForAppTest(value string) (region, account string, ok bool) {

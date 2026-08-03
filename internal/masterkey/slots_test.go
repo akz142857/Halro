@@ -241,6 +241,69 @@ func TestSlotTransitionAuditEvidenceExcludesProtectedMaterial(t *testing.T) {
 	}
 }
 
+func TestRotatedDescriptorRequiresCompleteMonotonicGeneration(t *testing.T) {
+	oldKey := bytes.Repeat([]byte{0x31}, 32)
+	newKey := bytes.Repeat([]byte{0x32}, 32)
+	previous := activeDescriptorForRotationTest(t, oldKey)
+	newFingerprint, err := MasterKeyFingerprint(newKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := NewRotatedKeySlotDescriptor(previous, newFingerprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.ActiveGeneration != previous.ActiveGeneration+1 || next.Revision != previous.Revision+1 || len(next.Slots) != 0 {
+		t.Fatalf("rotated seed=%#v previous=%#v", next, previous)
+	}
+	if err := next.ValidateRotationSuccessor(previous); err == nil {
+		t.Fatal("incomplete rotated generation was accepted")
+	}
+	next = addAndVerifyRotationSlot(t, next, newKey, "slot_primary", KeySlotPrimary)
+	next = addAndVerifyRotationSlot(t, next, newKey, "slot_recovery", KeySlotRecovery)
+	if err := next.ValidateRotationSuccessor(previous); err != nil {
+		t.Fatal(err)
+	}
+	tampered := next.Clone()
+	tampered.ActiveGeneration++
+	if err := tampered.ValidateRotationSuccessor(previous); err == nil {
+		t.Fatal("skipped descriptor generation was accepted")
+	}
+	if _, err := NewRotatedKeySlotDescriptor(previous, previous.MasterKeyFingerprint); err == nil {
+		t.Fatal("rotation accepted an unchanged Master Key fingerprint")
+	}
+}
+
+func activeDescriptorForRotationTest(t *testing.T, key []byte) KeySlotDescriptor {
+	t.Helper()
+	fingerprint, err := MasterKeyFingerprint(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor, err := NewKeySlotDescriptor(fingerprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor = addAndVerifyRotationSlot(t, descriptor, key, "slot_primary", KeySlotPrimary)
+	return addAndVerifyRotationSlot(t, descriptor, key, "slot_recovery", KeySlotRecovery)
+}
+
+func addAndVerifyRotationSlot(t *testing.T, descriptor KeySlotDescriptor, key []byte, id string, purpose KeySlotPurpose) KeySlotDescriptor {
+	t.Helper()
+	now := time.Now().UTC().Add(time.Duration(descriptor.Revision) * time.Second)
+	next, _, err := descriptor.AddSlot(pendingSlot(id, purpose, []byte("wrapped-"+id)), descriptor.Revision, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slot, _ := next.slot(id)
+	next, _, err = next.VerifySlot(context.Background(), id, next.Revision, slot.Revision,
+		&fakeSlotUnwrapper{key: bytes.Clone(key)}, &fakeCandidateVerifier{}, now.Add(time.Nanosecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return next
+}
+
 func descriptorWithPendingSlot(t *testing.T, key []byte, now time.Time) KeySlotDescriptor {
 	t.Helper()
 	fingerprint, err := MasterKeyFingerprint(key)
