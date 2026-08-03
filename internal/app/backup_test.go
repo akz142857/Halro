@@ -68,7 +68,7 @@ func TestOfflineEncryptedBackupCapturesConsistentManifestAndAudit(t *testing.T) 
 	if bytes.Contains(encrypted, []byte(configCanary)) {
 		t.Fatal("backup leaked config plaintext")
 	}
-	masterKey, err := os.ReadFile(cfg.Storage.MasterKeyFile)
+	masterKey, err := os.ReadFile(cfg.Storage.MasterKey.File)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestOfflineEncryptedBackupCapturesConsistentManifestAndAudit(t *testing.T) 
 	if summary.Records < 2 {
 		t.Fatalf("audit summary=%#v", summary)
 	}
-	masterKey, err = vault.LoadMasterKey(cfg.Storage.MasterKeyFile)
+	masterKey, err = vault.LoadMasterKey(cfg.Storage.MasterKey.File)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +183,7 @@ func TestBackupRestoreMatchesManifestDuringOneHundredConcurrentLedgerWrites(t *t
 			errorsByWriter <- err
 		}()
 	}
-	masterKey, err := vault.LoadMasterKey(cfg.Storage.MasterKeyFile)
+	masterKey, err := vault.LoadMasterKey(cfg.Storage.MasterKey.File)
 	if err != nil {
 		liveLedger.Close()
 		metadata.Close()

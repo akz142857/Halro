@@ -1,6 +1,6 @@
 # Implementation status
 
-Last updated: 2026-08-01
+Last updated: 2026-08-03
 
 This file records implementation evidence for the current source tree. Release
 scope is governed by reviewed release notes and release gates.
@@ -15,7 +15,7 @@ scope is governed by reviewed release notes and release gates.
 | Runtime lifecycle | three listener skeleton, readiness/liveness, signal drain and resource close |
 | Exclusive data ownership | `internal/store/lock`, second-process rejection test |
 | Metadata | copy-on-write bbolt schema migrations, migration history, 39 mutation/commit-boundary rollback injections with safe retry, and revision conflict tests |
-| Master key | atomic create/replace, `0600`, no-follow load, wrong-key startup check; persistent versioned keyring; offline COW rotation with per-Credential re-encryption, stable protected Audit key, Admin-session invalidation, compaction, idempotent crash bridge, repeated rotation, and nine kill-point recoveries |
+| Master key | provider-neutral `Unlocker` boundary across Runtime/init/bootstrap/Admin/Audit/Metrics/doctor/backup/restore/rotate; strict final `storage.master_key` File/Key-Slot schema with zero-I/O config check; File backend atomic create/replace, `0600`, no-follow load and wrong-key startup check; persistent versioned keyring; offline COW rotation with per-Credential re-encryption, stable protected Audit key, Admin-session invalidation, compaction, idempotent crash bridge, repeated rotation, and nine kill-point recoveries |
 | Credential vault | HKDF-SHA256 + AES-256-GCM + audience-bound AAD |
 | Gateway key | 256-bit random key, one-way SHA-256 representation |
 | Auth hot path | immutable in-memory key/project snapshot |

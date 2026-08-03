@@ -22,11 +22,11 @@ func TestInitializeIfNeededIsIdempotentAndFailClosed(t *testing.T) {
 	if err != nil || created {
 		t.Fatalf("second created=%v err=%v", created, err)
 	}
-	before, err := os.ReadFile(cfg.Storage.MasterKeyFile)
+	before, err := os.ReadFile(cfg.Storage.MasterKey.File)
 	if err != nil {
 		t.Fatal(err)
 	}
-	after, err := os.ReadFile(cfg.Storage.MasterKeyFile)
+	after, err := os.ReadFile(cfg.Storage.MasterKey.File)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,10 +35,10 @@ func TestInitializeIfNeededIsIdempotentAndFailClosed(t *testing.T) {
 	}
 
 	partial := testConfig(t)
-	if err := os.MkdirAll(filepath.Dir(partial.Storage.MasterKeyFile), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(partial.Storage.MasterKey.File), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(partial.Storage.MasterKeyFile, make([]byte, 32), 0o600); err != nil {
+	if err := os.WriteFile(partial.Storage.MasterKey.File, make([]byte, 32), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if state, err := InspectInitialization(partial); err != nil || state != InitializationInconsistent {

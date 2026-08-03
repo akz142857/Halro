@@ -49,9 +49,34 @@ type TLS struct {
 }
 
 type Storage struct {
-	DataDir       string `yaml:"data_dir"`
-	MetadataFile  string `yaml:"metadata_file"`
-	MasterKeyFile string `yaml:"master_key_file"`
+	DataDir      string    `yaml:"data_dir"`
+	MetadataFile string    `yaml:"metadata_file"`
+	MasterKey    MasterKey `yaml:"master_key"`
+}
+
+const (
+	MasterKeyModeFile     = "file"
+	MasterKeyModeKeySlots = "key_slots"
+)
+
+type MasterKey struct {
+	Mode            string          `yaml:"mode"`
+	File            string          `yaml:"file,omitempty"`
+	PrimarySlot     string          `yaml:"primary_slot,omitempty"`
+	RecoverySlot    string          `yaml:"recovery_slot,omitempty"`
+	StartupDeadline Duration        `yaml:"startup_deadline,omitempty"`
+	CallTimeout     Duration        `yaml:"call_timeout,omitempty"`
+	AllowedKMSKeys  []AllowedKMSKey `yaml:"allowed_kms_keys,omitempty"`
+}
+
+type AllowedKMSKey struct {
+	Purpose   string `yaml:"purpose"`
+	Provider  string `yaml:"provider"`
+	Region    string `yaml:"region,omitempty"`
+	Account   string `yaml:"account,omitempty"`
+	KeyID     string `yaml:"key_id"`
+	Endpoint  string `yaml:"endpoint,omitempty"`
+	Algorithm string `yaml:"algorithm,omitempty"`
 }
 
 type Usage struct {
@@ -201,9 +226,11 @@ func (c *Config) Normalize() error {
 	if err != nil {
 		return fmt.Errorf("storage.data_dir: %w", err)
 	}
-	c.Storage.MasterKeyFile, err = cleanAbsolutePath(c.Storage.MasterKeyFile)
-	if err != nil {
-		return fmt.Errorf("storage.master_key_file: %w", err)
+	if c.Storage.MasterKey.File != "" {
+		c.Storage.MasterKey.File, err = cleanAbsolutePath(c.Storage.MasterKey.File)
+		if err != nil {
+			return fmt.Errorf("storage.master_key.file: %w", err)
+		}
 	}
 	if c.TLS.CertFile != "" {
 		c.TLS.CertFile, err = cleanAbsolutePath(c.TLS.CertFile)
@@ -323,9 +350,7 @@ func (c Config) Validate(opts LoadOptions) error {
 	if c.Storage.DataDir == "" {
 		problems = append(problems, errors.New("storage.data_dir is required"))
 	}
-	if c.Storage.MasterKeyFile == "" {
-		problems = append(problems, errors.New("storage.master_key_file is required"))
-	}
+	problems = append(problems, validateMasterKey(c.Storage.MasterKey)...)
 	if c.Storage.MetadataFile == "" || filepath.Base(c.Storage.MetadataFile) != c.Storage.MetadataFile {
 		problems = append(problems, errors.New("storage.metadata_file must be a file name without path components"))
 	}
@@ -493,6 +518,78 @@ func (c Config) UsagePath() string {
 
 func (c Config) AuditPath() string {
 	return filepath.Join(c.Storage.DataDir, "audit", "audit.log")
+}
+
+func validateMasterKey(masterKey MasterKey) []error {
+	var problems []error
+	switch masterKey.Mode {
+	case MasterKeyModeFile:
+		if masterKey.File == "" {
+			problems = append(problems, errors.New("storage.master_key.file is required in file mode"))
+		}
+		if masterKey.PrimarySlot != "" || masterKey.RecoverySlot != "" ||
+			masterKey.StartupDeadline != 0 || masterKey.CallTimeout != 0 || len(masterKey.AllowedKMSKeys) != 0 {
+			problems = append(problems, errors.New("storage.master_key key_slots fields cannot be set in file mode"))
+		}
+	case MasterKeyModeKeySlots:
+		if masterKey.File != "" {
+			problems = append(problems, errors.New("storage.master_key.file cannot be set in key_slots mode"))
+		}
+		if strings.TrimSpace(masterKey.PrimarySlot) == "" || strings.TrimSpace(masterKey.RecoverySlot) == "" {
+			problems = append(problems, errors.New("storage.master_key primary_slot and recovery_slot are required in key_slots mode"))
+		} else if masterKey.PrimarySlot == masterKey.RecoverySlot {
+			problems = append(problems, errors.New("storage.master_key primary_slot and recovery_slot must be different"))
+		}
+		if masterKey.StartupDeadline <= 0 {
+			problems = append(problems, errors.New("storage.master_key.startup_deadline must be positive in key_slots mode"))
+		}
+		if masterKey.CallTimeout <= 0 || masterKey.CallTimeout >= masterKey.StartupDeadline {
+			problems = append(problems, errors.New("storage.master_key.call_timeout must be positive and less than startup_deadline"))
+		}
+		problems = append(problems, validateAllowedKMSKeys(masterKey.AllowedKMSKeys)...)
+	default:
+		problems = append(problems, errors.New("storage.master_key.mode must be file or key_slots"))
+	}
+	return problems
+}
+
+func validateAllowedKMSKeys(keys []AllowedKMSKey) []error {
+	var problems []error
+	purposes := map[string]bool{"primary": false, "recovery": false}
+	identities := make(map[string]string, len(keys))
+	for index, key := range keys {
+		prefix := fmt.Sprintf("storage.master_key.allowed_kms_keys[%d]", index)
+		if _, ok := purposes[key.Purpose]; !ok {
+			problems = append(problems, fmt.Errorf("%s.purpose must be primary or recovery", prefix))
+		} else {
+			purposes[key.Purpose] = true
+		}
+		if strings.TrimSpace(key.Provider) == "" {
+			problems = append(problems, fmt.Errorf("%s.provider is required", prefix))
+		}
+		if strings.TrimSpace(key.KeyID) == "" {
+			problems = append(problems, fmt.Errorf("%s.key_id is required", prefix))
+		}
+		if key.Endpoint != "" {
+			endpoint, err := url.Parse(key.Endpoint)
+			if err != nil || endpoint.Scheme != "https" || endpoint.Host == "" || endpoint.User != nil ||
+				(endpoint.Path != "" && endpoint.Path != "/") || endpoint.RawQuery != "" || endpoint.Fragment != "" {
+				problems = append(problems, fmt.Errorf("%s.endpoint must be an HTTPS origin without userinfo, path, query, or fragment", prefix))
+			}
+		}
+		identity := strings.Join([]string{key.Provider, key.Region, key.Account, key.KeyID}, "\x00")
+		if previousPurpose, exists := identities[identity]; exists && previousPurpose != key.Purpose {
+			problems = append(problems, errors.New("storage.master_key primary and recovery allowlists must not use the same KMS key"))
+		} else {
+			identities[identity] = key.Purpose
+		}
+	}
+	for purpose, present := range purposes {
+		if !present {
+			problems = append(problems, fmt.Errorf("storage.master_key.allowed_kms_keys requires a %s entry", purpose))
+		}
+	}
+	return problems
 }
 
 func cleanAbsolutePath(value string) (string, error) {

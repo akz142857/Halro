@@ -54,7 +54,7 @@ func CreateBackup(
 		return backup.Manifest{}, err
 	}
 	defer metadata.Close()
-	masterKey, err := vault.LoadMasterKey(cfg.Storage.MasterKeyFile)
+	masterKey, err := unlockMasterKey(ctx, cfg)
 	if err != nil {
 		return backup.Manifest{}, err
 	}
@@ -133,10 +133,10 @@ func RestoreBackup(
 	if confirmBackupID == "" || confirmBackupID != manifest.BackupID {
 		return RestoreResult{}, errors.New("restore confirmation must exactly match the verified backup id")
 	}
-	if pathWithin(cfg.Storage.MasterKeyFile, cfg.Storage.DataDir) {
-		return RestoreResult{}, errors.New("restore requires storage.master_key_file outside storage.data_dir")
+	if cfg.Storage.MasterKey.Mode == config.MasterKeyModeFile && pathWithin(cfg.Storage.MasterKey.File, cfg.Storage.DataDir) {
+		return RestoreResult{}, errors.New("restore requires storage.master_key.file outside storage.data_dir")
 	}
-	masterKey, err := vault.LoadMasterKey(cfg.Storage.MasterKeyFile)
+	masterKey, err := unlockMasterKey(ctx, cfg)
 	if err != nil {
 		return RestoreResult{}, err
 	}
@@ -217,7 +217,7 @@ func validateRestoreStage(ctx context.Context, cfg config.Config, stageData stri
 		return fmt.Errorf("open staged metadata: %w", err)
 	}
 	defer metadata.Close()
-	masterKey, err := vault.LoadMasterKey(cfg.Storage.MasterKeyFile)
+	masterKey, err := unlockMasterKey(ctx, cfg)
 	if err != nil {
 		return err
 	}

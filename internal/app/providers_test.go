@@ -44,7 +44,7 @@ func TestRuntimeRejectsCredentialAudienceMismatch(t *testing.T) {
 
 func seedProvider(t *testing.T, cfg config.Config, mismatch bool) {
 	t.Helper()
-	masterKey, err := vault.LoadMasterKey(cfg.Storage.MasterKeyFile)
+	masterKey, err := vault.LoadMasterKey(cfg.Storage.MasterKey.File)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -13,6 +13,7 @@ import (
 	"github.com/akz142857/Heimdall/internal/audit"
 	"github.com/akz142857/Heimdall/internal/config"
 	"github.com/akz142857/Heimdall/internal/domain"
+	"github.com/akz142857/Heimdall/internal/masterkey"
 	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
 	"github.com/akz142857/Heimdall/internal/store/lock"
 	"github.com/akz142857/Heimdall/internal/vault"
@@ -40,7 +41,11 @@ func rotateMasterKeyWithHook(
 	if err := ctx.Err(); err != nil {
 		return KeyRotationResult{}, err
 	}
-	currentPath, err := filepath.Abs(cfg.Storage.MasterKeyFile)
+	currentStore, err := fileMasterKeyStore(cfg)
+	if err != nil {
+		return KeyRotationResult{}, err
+	}
+	currentPath, err := filepath.Abs(currentStore.Path())
 	if err != nil {
 		return KeyRotationResult{}, err
 	}
@@ -57,12 +62,16 @@ func rotateMasterKeyWithHook(
 	}
 	defer dataLock.Close()
 
-	currentKey, err := vault.LoadMasterKey(currentPath)
+	currentKey, err := currentStore.Unlock(ctx)
 	if err != nil {
 		return KeyRotationResult{}, err
 	}
 	defer clear(currentKey)
-	newKey, err := vault.LoadMasterKey(newPath)
+	newStore, err := masterkey.NewFileStore(newPath)
+	if err != nil {
+		return KeyRotationResult{}, err
+	}
+	newKey, err := newStore.Unlock(ctx)
 	if err != nil {
 		return KeyRotationResult{}, fmt.Errorf("load new master key: %w", err)
 	}
@@ -152,7 +161,7 @@ func rotateMasterKeyWithHook(
 		if err := callRotationHook(hook, "before_master_key_publish"); err != nil {
 			return KeyRotationResult{}, err
 		}
-		if err := vault.ReplaceMasterKey(currentPath, newKey); err != nil {
+		if err := currentStore.Replace(ctx, newKey); err != nil {
 			return KeyRotationResult{}, err
 		}
 		if err := callRotationHook(hook, "after_master_key_publish"); err != nil {
@@ -314,7 +323,7 @@ func rotateMasterKeyWithHook(
 	if err := callRotationHook(hook, "before_master_key_publish"); err != nil {
 		return KeyRotationResult{}, err
 	}
-	if err := vault.ReplaceMasterKey(currentPath, newKey); err != nil {
+	if err := currentStore.Replace(ctx, newKey); err != nil {
 		return KeyRotationResult{}, err
 	}
 	if err := callRotationHook(hook, "after_master_key_publish"); err != nil {

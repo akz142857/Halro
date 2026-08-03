@@ -76,7 +76,7 @@ func TestMasterKeyRotationReencryptsCredentialsAndPreservesAuditChain(t *testing
 		t.Fatal(err)
 	}
 	defer clear(newKey)
-	activeKey, err := vault.LoadMasterKey(cfg.Storage.MasterKeyFile)
+	activeKey, err := vault.LoadMasterKey(cfg.Storage.MasterKey.File)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -343,7 +343,7 @@ func rotationFixture(t *testing.T) (config.Config, string, string, []byte, []byt
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	oldKey, err := vault.LoadMasterKey(cfg.Storage.MasterKeyFile)
+	oldKey, err := vault.LoadMasterKey(cfg.Storage.MasterKey.File)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -368,7 +368,7 @@ func assertCompletedRotation(t *testing.T, cfg config.Config, newKeyFile, creden
 		t.Fatal(err)
 	}
 	defer clear(newKey)
-	active, err := vault.LoadMasterKey(cfg.Storage.MasterKeyFile)
+	active, err := vault.LoadMasterKey(cfg.Storage.MasterKey.File)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -418,10 +418,10 @@ func TestReplaceMasterKeyRejectsSamePathAtAppBoundary(t *testing.T) {
 	if err := Initialize(cfg); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := RotateMasterKey(context.Background(), cfg, cfg.Storage.MasterKeyFile); err == nil {
+	if _, err := RotateMasterKey(context.Background(), cfg, cfg.Storage.MasterKey.File); err == nil {
 		t.Fatal("same master key path was accepted")
 	}
-	if _, err := os.Stat(cfg.Storage.MasterKeyFile); err != nil {
+	if _, err := os.Stat(cfg.Storage.MasterKey.File); err != nil {
 		t.Fatal(err)
 	}
 }

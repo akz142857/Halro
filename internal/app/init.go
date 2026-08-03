@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -24,7 +25,11 @@ const (
 // InspectInitialization distinguishes a new instance from an initialized one
 // without opening or modifying any persistent state.
 func InspectInitialization(cfg config.Config) (InitializationState, error) {
-	masterKeyExists, err := pathExists(cfg.Storage.MasterKeyFile)
+	keyStore, err := fileMasterKeyStore(cfg)
+	if err != nil {
+		return InitializationInconsistent, err
+	}
+	masterKeyExists, err := keyStore.Exists(context.Background())
 	if err != nil {
 		return InitializationInconsistent, err
 	}
@@ -105,14 +110,18 @@ func Initialize(cfg config.Config) error {
 	}
 	defer dataLock.Close()
 
-	if err := vault.InitMasterKey(cfg.Storage.MasterKeyFile); err != nil {
+	keyStore, err := fileMasterKeyStore(cfg)
+	if err != nil {
+		return err
+	}
+	if err := keyStore.Initialize(context.Background()); err != nil {
 		return err
 	}
 	metadata, err := boltstore.Open(cfg.MetadataPath())
 	if err != nil {
 		return fmt.Errorf("initialize metadata: %w", err)
 	}
-	masterKey, err := vault.LoadMasterKey(cfg.Storage.MasterKeyFile)
+	masterKey, err := keyStore.Unlock(context.Background())
 	if err != nil {
 		metadata.Close()
 		return err

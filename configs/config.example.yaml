@@ -17,7 +17,9 @@ tls:
 storage:
   data_dir: "./data"
   metadata_file: "heimdall.db"
-  master_key_file: "./master.key"
+  master_key:
+    mode: file
+    file: "./master.key"
 
 admin:
   session_ttl: "8h"

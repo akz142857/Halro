@@ -26,9 +26,12 @@ func Default() Config {
 			MaxRequestBytes:   10 << 20,
 		},
 		Storage: Storage{
-			DataDir:       "./data",
-			MetadataFile:  "heimdall.db",
-			MasterKeyFile: "./master.key",
+			DataDir:      "./data",
+			MetadataFile: "heimdall.db",
+			MasterKey: MasterKey{
+				Mode: MasterKeyModeFile,
+				File: "./master.key",
+			},
 		},
 		Admin: Admin{
 			SessionTTL:  Duration(8 * time.Hour),

@@ -2,6 +2,7 @@ package app
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"errors"
@@ -23,7 +24,7 @@ func MetricsToken(cfg config.Config) ([]byte, error) {
 	if cfg.Metrics.CredentialFile != "" {
 		return nil, errors.New("versioned metrics credentials are enabled; use metrics rotate")
 	}
-	masterKey, err := vault.LoadMasterKey(cfg.Storage.MasterKeyFile)
+	masterKey, err := unlockMasterKey(context.Background(), cfg)
 	if err != nil {
 		return nil, err
 	}

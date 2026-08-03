@@ -97,5 +97,5 @@ directories during an atomic directory rename.
 
 The old live directory is preserved as the `previous_data_dir` returned in the
 JSON result. Start and validate the restored server before deleting that
-rollback directory. `storage.master_key_file` must be outside `storage.data_dir`
+rollback directory. In File mode, `storage.master_key.file` must be outside `storage.data_dir`
 because the Master Key is intentionally never packaged in a backup.
