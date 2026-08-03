@@ -1,0 +1,38 @@
+[Unit]
+Description=Heimdall Gateway with AWS KMS Master Key custody
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=heimdall
+Group=heimdall
+ExecStart=/usr/local/bin/heimdall start --config /etc/heimdall/config.yaml
+Restart=on-failure
+RestartSec=15s
+TimeoutStartSec=120s
+TimeoutStopSec=60s
+LimitCORE=0
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/heimdall
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+ProtectProc=invisible
+ProcSubset=pid
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

@@ -136,14 +136,14 @@ Recovery Slot 至少在以下一个或多个维度与 Primary 隔离：
 - 泄露响应必须执行 DEK rotate、创建新备份并处置仍受旧 KEK 影响的历史备份；
 - DEK rotate 必须保留现有 Audit 连续性、Admin Session 失效、COW、crash bridge 和 compaction 不变量。
 
-### 4.3 SDK 与发布方式尚未冻结
+### 4.3 SDK 与发布方式已冻结
 
-ADR 0010 在 Phase 0 重新以测量结果决策，只比较当前真实需要的两种方案：
+ADR 0010 已根据 Phase 0 的可复现测量接受方案 A；本次决策只比较当前真实需要的两种方案：
 
 | 方案 | 描述 | 当前状态 |
 |---|---|---|
-| A | 主 Heimdall 二进制直接包含 AWS SDK；未启用时不访问 AWS | Pending spike |
-| B | `heimdall` 与 `heimdall-aws` 两个签名 artifact | Pending spike |
+| A | 主 Heimdall 二进制直接包含 AWS SDK；未启用时不访问 AWS | Accepted |
+| B | `heimdall` 与 `heimdall-aws` 两个签名 artifact | Rejected for M11 |
 
 Spike 必须测量：
 
@@ -154,7 +154,7 @@ Spike 必须测量：
 - Workload Identity 接入复杂度；
 - 一个与两个 artifact 的 CI、签名和发布成本。
 
-GCP/Azure artifact 不进入本次决策。未完成 spike 和 ADR 更新前不得引入 AWS SDK。
+GCP/Azure artifact 不进入本次决策。Spike 证据已归档，ADR 0010 已更新为 `Accepted`；生产 AWS SDK Adapter 只能建立在该冻结契约和单 artifact 发布布局之上。
 
 ## 5. 进度状态定义
 
@@ -172,14 +172,14 @@ GCP/Azure artifact 不进入本次决策。未完成 spike 和 ADR 更新前不�
 
 | ID | PR Slice | 状态 | 前置依赖 | Exit evidence | Issue / PR / Commit | 备注 |
 |---|---|---|---|---|---|---|
-| M11-PR1 | 统一 Master Key 核心与最终配置 | Complete | 无 | File 模式完整测试；所有直接文件调用收口；新 schema 严格校验；`config check` 零 KMS 调用 | [#56](https://github.com/akz142857/Heimdall/issues/56)；[PR #64](https://github.com/akz142857/Heimdall/pull/64)；`b1a6c3b` | 已合并；完整 Test、关键包 Race、Vet 通过；不引入 AWS SDK |
-| M11-PR2 | Key Slot descriptor 与状态机 | Complete | PR1 | pending/active/retiring/revoked 事务、revision/CAS、真实 Vault Key Check、COW kill points、compaction 和错误测试 | [#57](https://github.com/akz142857/Heimdall/issues/57)；[PR #65](https://github.com/akz142857/Heimdall/pull/65)；`1175885`、`5152c02` | 已合并；封闭 descriptor publication 绕过；完整 Test、定向 Race、Vet 与 provider-neutral 依赖检查通过 |
-| M11-PR3a | AWS SDK spike、契约评审与 ADR 决策 | Complete | PR1 | A/B module/binary/container/build/test/cold-start/SBOM/vuln 实测；KMSWrapper/错误分类；fake KMS fault tests；ADR 0010 Accepted | [#58](https://github.com/akz142857/Heimdall/issues/58)；[PR #66](https://github.com/akz142857/Heimdall/pull/66)；`25baaba`、`a964872` | 已合并；选择单 module/单 `heimdall` artifact；未知错误 fail closed；不含生产 AWS Adapter |
-| M11-PR3b | AWS KMS Adapter 实现 | In Review | PR3a | Workload Identity、wrap/unwrap、Context、allowlist、重试和真实 AWS smoke tests | [#59](https://github.com/akz142857/Heimdall/issues/59)；[PR #67](https://github.com/akz142857/Heimdall/pull/67)；`e2f148b`；`docs/evidence/m11-03b-aws-kms-adapter-2026-08-03.md` | 本地实现与门禁通过；真实 AWS/CloudTrail evidence 待有效 Workload Identity 与现有 KMS Key |
-| M11-PR4 | AWS KMS 初始化与双 Slot 恢复 | Not Started | PR2、PR3b | 新实例原子初始化；Primary/Recovery 独立验证；失败清理；CLI 测试 | [#60](https://github.com/akz142857/Heimdall/issues/60) | 不含 File→KMS 迁移 |
-| M11-PR5 | Rewrap、DEK Rotate 与崩溃恢复 | Not Started | PR2、PR4 | COW/bridge/Keyring/compaction；全部 publication kill points；幂等恢复 | [#61](https://github.com/akz142857/Heimdall/issues/61) | KEK 泄露语义纳入测试 |
-| M11-PR6 | Doctor、Backup、Restore 与 DR | Not Started | PR4、PR5 | 完整/静态 doctor；备份 manifest；KMS restore；真实 Recovery Slot 恢复演练 | [#62](https://github.com/akz142857/Heimdall/issues/62) | 不硬编码文件 Key |
-| M11-PR7 | 生产交付与发布门禁 | Not Started | PR1–PR6（含 PR3a/PR3b） | Audit/Metrics/alerts；主机加固；IAM/Key Policy；VM/K8s Runbook；SBOM、签名、安全评审 | [#63](https://github.com/akz142857/Heimdall/issues/63) | 完成后才可 production-ready |
+| M11-PR1 | 统一 Master Key 核心与最终配置 | In Review | 无 | File 模式完整测试；所有直接文件调用收口；新 schema 严格校验；`config check` 零 KMS 调用 | [#56](https://github.com/akz142857/Heimdall/issues/56)；[PR #64](https://github.com/akz142857/Heimdall/pull/64)；`3066541` | `go test ./...`、关键包 Race、Vet 已通过；不引入 AWS SDK |
+| M11-PR2 | Key Slot descriptor 与状态机 | In Review | PR1 | pending/active/retiring/revoked 事务、revision、Vault Key Check 和错误测试 | [#57](https://github.com/akz142857/Heimdall/issues/57)；[PR #65](https://github.com/akz142857/Heimdall/pull/65)；`510581a`、`eb8fc83` | provider-neutral 状态机与 CI 全部通过；待独立 review/merge |
+| M11-PR3a | AWS SDK spike、契约评审与 ADR 决策 | In Review | PR1 | A/B module/binary/container/build/test/cold-start/SBOM/vuln 实测；KMSWrapper/错误分类；fake KMS fault tests；ADR 0010 Accepted | [#58](https://github.com/akz142857/Heimdall/issues/58)；[PR #66](https://github.com/akz142857/Heimdall/pull/66)；`512d517`、`258c430` | 选择单 module/单 `heimdall` artifact；不含生产 AWS Adapter；完整 Test、Race、Vet、vuln 与边界检查通过 |
+| M11-PR3b | AWS KMS Adapter 实现 | In Progress | PR3a | Workload Identity、wrap/unwrap、Context、allowlist、重试和真实 AWS smoke tests | [#59](https://github.com/akz142857/Heimdall/issues/59)；[PR #67](https://github.com/akz142857/Heimdall/pull/67)；`docs/evidence/m11-03b-aws-kms-adapter-2026-08-03.md` | 本地实现与门禁通过；真实 AWS/CloudTrail evidence 待有效 Workload Identity 与现有 KMS Key |
+| M11-PR4 | AWS KMS 初始化与双 Slot 恢复 | In Progress | PR2、PR3b | 新实例原子初始化；Primary/Recovery 独立验证；失败清理；CLI 测试 | [#60](https://github.com/akz142857/Heimdall/issues/60)；[PR #69](https://github.com/akz142857/Heimdall/pull/69)；`docs/evidence/m11-04-dual-slot-initialization-2026-08-03.md` | 本地实现、Secret Canary 与 kill-point 门禁通过；真实 AWS 双 Key evidence 待有效身份和现有 Keys；不含 File→KMS 迁移 |
+| M11-PR5 | Rewrap、DEK Rotate 与崩溃恢复 | In Progress | PR2、PR4 | COW/bridge/Keyring/compaction；全部 publication kill points；幂等恢复 | [#61](https://github.com/akz142857/Heimdall/issues/61)；[Draft PR #71](https://github.com/akz142857/Heimdall/pull/71)；`docs/evidence/m11-05-key-lifecycle-2026-08-03.md` | 本地实现与 kill-point matrix 已落地；真实 AWS 证据待补 |
+| M11-PR6 | Doctor、Backup、Restore 与 DR | In Progress | PR4、PR5 | 完整/静态 doctor；备份 manifest；KMS restore；真实 Recovery Slot 恢复演练 | [#62](https://github.com/akz142857/Heimdall/issues/62)；[Draft PR #72](https://github.com/akz142857/Heimdall/pull/72)；`docs/evidence/m11-06-kms-dr-2026-08-03.md` | 本地实现与门禁通过；真实 AWS 与独立操作者证据待补 |
+| M11-PR7 | 生产交付与发布门禁 | In Progress | PR1–PR6（含 PR3a/PR3b） | Audit/Metrics/alerts；主机加固；IAM/Key Policy；VM/K8s Runbook；SBOM、签名、安全评审 | [#63](https://github.com/akz142857/Heimdall/issues/63)；[Draft PR #73](https://github.com/akz142857/Heimdall/pull/73)；`docs/evidence/m11-07-production-readiness-2026-08-03.md` | 本地生产基线与门禁通过；真实 AWS、RC artifact 与四方签署待补，尚不可 production-ready |
 
 ## 7. PR Slice 详细范围
 
@@ -314,22 +314,22 @@ storage:
 
 | Gate | 状态 | 必需证据 | Evidence link/commit |
 |---|---|---|---|
-| G1 File 模式保持云中立且完整可用 | Not Started | File init/start/rotate/backup/restore tests | — |
-| G2 最终配置 schema 冻结 | Not Started | 统一字段 config tests + reviewed example + `config check` zero-KMS-call test | — |
+| G1 File 模式保持云中立且完整可用 | In Review | File init/start/rotate/backup/restore tests | PR #64 起的全仓 File 回归与 KMS boundary 持续通过；待堆叠 PR review/merge |
+| G2 最终配置 schema 冻结 | In Review | 统一字段 config tests + reviewed example + `config check` zero-KMS-call test | PR #64；严格 schema 与 CLI zero-call test 已落地 |
 | G3 AWS SDK 发布决策冻结 | In Review | spike report + Accepted ADR 0010 | [M11-03A evidence](evidence/m11-03a-aws-sdk-spike-2026-08-03.md)；[PR #66](https://github.com/akz142857/Heimdall/pull/66) |
-| G4 Primary/Recovery 双 Slot | Not Started | 两个 Key 独立 unwrap + Vault Check | — |
-| G5 密钥材料不落盘且主机边界加固 | Not Started | filesystem/backup inspection；logs/errors/Audit/Metrics/bbolt/heap canary；core/pprof/RLIMIT/ptrace evidence | — |
-| G6 KMS 不进入请求热路径 | Not Started | request-path zero-call test | — |
-| G7 错误分类和有界重试 | Not Started | timeout/throttle/identity/IAM/key-state tests | — |
-| G8 KEK rewrap 正确 | Not Started | fingerprint/KeyVersion 不变证据 | — |
-| G9 DEK rotate 正确 | Not Started | 全量重加密 + session/audit/keyring evidence | — |
-| G10 Crash recovery 完整 | Not Started | 全 publication kill-point matrix | — |
-| G11 Doctor 完整/静态模式 | Not Started | local no-mutation hashes + KMS evidence | — |
-| G12 Backup/restore 完整 | Not Started | Primary 与 Recovery restore evidence | — |
-| G13 Recovery break-glass 可执行 | Not Started | 独立操作者按 Runbook 完成演练 | — |
-| G14 Audit/Metrics/Alerts 完整 | Not Started | contract tests + alert fixtures + observability secret-canary | — |
-| G15 AWS artifact 供应链通过 | Not Started | SBOM/vuln/checksum/signature evidence | — |
-| G16 四方发布评审通过 | Not Started | Security/Backend/SRE/Release sign-off | — |
+| G4 Primary/Recovery 双 Slot | In Progress | 两个 Key 独立 unwrap + Vault Check | 本地双独立 fake KMS、原子初始化和 Recovery Audit 通过；真实 AWS 双 Key 待执行 |
+| G5 密钥材料不落盘且主机边界加固 | In Progress | filesystem/backup inspection；logs/errors/Audit/Metrics/bbolt/heap canary；core/pprof/RLIMIT/ptrace evidence | Canary、`RLIMIT_CORE=0`、Linux non-dumpable 与 K8s/systemd 基线已落地；最终 RC/目标主机证据待补 |
+| G6 KMS 不进入请求热路径 | In Review | request-path zero-call test | `TestKMSBootstrapAndRuntimeUsePrimaryOnlyOutsideRequestPath` 与 boundary script 通过 |
+| G7 错误分类和有界重试 | In Review | timeout/throttle/identity/IAM/key-state tests | PR #66/#67 contract、retry、Adapter tests 通过；真实 AWS throttle/identity evidence 待补 |
+| G8 KEK rewrap 正确 | In Progress | fingerprint/KeyVersion 不变证据 | `docs/evidence/m11-05-key-lifecycle-2026-08-03.md`；真实 AWS 待补 |
+| G9 DEK rotate 正确 | In Progress | 全量重加密 + session/audit/keyring evidence | `docs/evidence/m11-05-key-lifecycle-2026-08-03.md`；真实 AWS 待补 |
+| G10 Crash recovery 完整 | In Progress | 全 publication kill-point matrix | `docs/evidence/m11-05-key-lifecycle-2026-08-03.md` |
+| G11 Doctor 完整/静态模式 | In Progress | local no-mutation hashes + KMS evidence | `docs/evidence/m11-06-kms-dr-2026-08-03.md`；真实 AWS 待补 |
+| G12 Backup/restore 完整 | In Progress | Primary 与 Recovery restore evidence | `docs/evidence/m11-06-kms-dr-2026-08-03.md`；真实 AWS 待补 |
+| G13 Recovery break-glass 可执行 | In Progress | 独立操作者按 Runbook 完成演练 | Runbook 已落地；独立操作者签署待补 |
+| G14 Audit/Metrics/Alerts 完整 | In Progress | contract tests + alert fixtures + observability secret-canary | `docs/evidence/m11-07-production-readiness-2026-08-03.md`；本地 contract/fixtures 已落地，真实关联待补 |
+| G15 AWS artifact 供应链通过 | In Progress | SBOM/vuln/checksum/signature evidence | release workflow 已具备 SBOM/checksum/Sigstore；最终 RC 产物审核待补 |
+| G16 四方发布评审通过 | Not Started | Security/Backend/SRE/Release sign-off | 签署模板已落地，禁止预签 |
 
 ## 9. 风险登记
 
@@ -368,22 +368,22 @@ storage:
 
 ## 11. Runbook 交付清单
 
-- [ ] AWS KMS 模式首次初始化；
-- [ ] IAM Role 与 Workload Identity 配置；
-- [ ] Primary/Recovery Key Policy；
-- [ ] 启动失败稳定错误排障；
-- [ ] Primary disabled/deleted break-glass；
-- [ ] Recovery 临时授权、使用和撤销；
-- [ ] KEK 正常 rewrap；
-- [ ] KEK/Decrypt 身份泄露后的 DEK rotate；
-- [ ] 历史备份受旧 KEK 影响的处置；
-- [ ] backup create/verify/restore；
-- [ ] `doctor` 完整与静态模式；
-- [ ] pending/崩溃轮换恢复；
-- [ ] K8s 单副本、`Recreate` 和身份就绪；
-- [ ] VM/systemd 部署；
-- [ ] Metrics、告警和 AWS Audit 关联排障；
-- [ ] 定期 Recovery Slot 和灾备恢复演练。
+- [x] AWS KMS 模式首次初始化；
+- [x] IAM Role 与 Workload Identity 配置；
+- [x] Primary/Recovery Key Policy；
+- [x] 启动失败稳定错误排障；
+- [x] Primary disabled/deleted break-glass；
+- [x] Recovery 临时授权、使用和撤销；
+- [x] KEK 正常 rewrap；
+- [x] KEK/Decrypt 身份泄露后的 DEK rotate；
+- [x] 历史备份受旧 KEK 影响的处置；
+- [x] backup create/verify/restore；
+- [x] `doctor` 完整与静态模式；
+- [x] pending/崩溃轮换恢复；
+- [x] K8s 单副本、`Recreate` 和身份就绪；
+- [x] VM/systemd 部署；
+- [x] Metrics、告警和 AWS Audit 关联排障；
+- [x] 定期 Recovery Slot 和灾备恢复演练。
 
 ## 12. 决策日志
 
@@ -395,7 +395,7 @@ storage:
 | 2026-08-03 | 不承担开发期旧配置和数据迁移 | Accepted | 直接实现最终 schema，无 Legacy/File→KMS 流程 |
 | 2026-08-03 | 不实现 Passphrase、助记词和钱包式恢复 | Accepted | 当前 Recovery 使用独立 KMS Slot |
 | 2026-08-03 | AWS KMS 生产模式必须有 Primary 和 Recovery | Accepted | 单 Slot 不能 production-ready |
-| 2026-08-03 | AWS SDK artifact 方案由实测 spike 后更新 ADR 0010 | Pending | 阻塞 AWS SDK 引入 |
+| 2026-08-03 | AWS SDK artifact 方案采用单 module、单签名 `heimdall` artifact，ADR 0010 已 Accepted | Accepted | AWS SDK 引入必须遵守冻结契约、File 零云调用和单 artifact 发布门禁 |
 | 2026-08-03 | PR3 拆为决策门 PR3a 与实现 PR3b | Accepted | G3/Accepted ADR 成为 AWS SDK 实现的显式前置 |
 | 2026-08-03 | Key Slot 配置统一为 Primary/Recovery + timeout 字段 | Accepted | 两份 PRD 使用同一最终 schema，`config check` 保持纯静态 |
 

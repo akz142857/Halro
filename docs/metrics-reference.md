@@ -67,6 +67,16 @@ an authentication boundary.
 | `heimdall_alert_delivery_total` | counter | `status` |
 | `heimdall_alert_queue_depth` | gauge | none |
 | `heimdall_token_guard_events_dropped_total` | counter | none |
+| `heimdall_kms_calls_total` | counter | `operation`, `status`, `error_class` |
+| `heimdall_kms_call_duration_seconds` | summary sum/count | `operation`, `status`, `error_class` |
+| `heimdall_kms_unlock_total` | counter | `purpose`, `status`, `error_class` |
+| `heimdall_kms_automatic_fallback_total` | counter | none |
+| `heimdall_kms_recovery_last_used_timestamp_seconds` | gauge | none |
+| `heimdall_kms_descriptor_valid` | gauge | none |
+| `heimdall_kms_recovery_ready` | gauge | none |
+| `heimdall_kms_pending_rotation_slots` | gauge | none |
+| `heimdall_kms_slot_state` | gauge | `purpose`, `state` |
+| `heimdall_kms_slot_verified_timestamp_seconds` | gauge | `purpose` |
 | `heimdall_provider_up` | gauge | `provider_type` |
 | `heimdall_policy_rejections_total` | counter | `reason` |
 | `heimdall_provider_active_requests` | gauge | `provider_id` |

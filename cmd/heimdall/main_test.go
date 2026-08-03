@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/akz142857/Heimdall/internal/app"
 	"github.com/akz142857/Heimdall/internal/config"
+	"github.com/akz142857/Heimdall/internal/hostsecurity"
 	"github.com/akz142857/Heimdall/internal/masterkey"
 	"gopkg.in/yaml.v3"
 )
@@ -21,6 +23,18 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (fn roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
 	return fn(request)
+}
+
+func TestRuntimeFailsClosedWhenHostHardeningFails(t *testing.T) {
+	previous := hardenRuntimeCommand
+	hardenRuntimeCommand = func() (hostsecurity.Report, error) {
+		return hostsecurity.Report{}, errors.New("simulated host hardening failure")
+	}
+	t.Cleanup(func() { hardenRuntimeCommand = previous })
+	err := runRuntime(config.Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)), false)
+	if err == nil || !strings.Contains(err.Error(), "before Master Key unlock") {
+		t.Fatalf("runRuntime error=%v", err)
+	}
 }
 
 func TestConfigCheckValidatesKeySlotsWithoutCallingKMS(t *testing.T) {

@@ -59,8 +59,11 @@ jobs:
           sh -n tools/m11/aws-sdk-spike/run.sh
           sh -n tools/m11/aws-kms-smoke/run.sh
           sh -n tools/m11/aws-kms-dual-slot-smoke/run.sh
+          sh -n tools/m11/aws-kms-lifecycle-smoke/run.sh
+          sh -n tools/m11/aws-kms-dr-smoke/run.sh
           python3 -m unittest tools/m11/aws-kms-smoke/test_verify_cloudtrail.py
           ./tools/m11/check-kms-boundaries.sh
+          ./tools/m11/check-production-assets.sh
       - name: Go vulnerability scan
         run: GOTOOLCHAIN=go1.26.5 go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
       - run: go build -trimpath ./cmd/heimdall ./cmd/heimdall-deadman

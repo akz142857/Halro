@@ -28,15 +28,16 @@ const (
 var ErrCorrupt = errors.New("audit log is corrupt")
 
 type Event struct {
-	EventID    string    `json:"event_id"`
-	OccurredAt time.Time `json:"occurred_at"`
-	ActorType  string    `json:"actor_type"`
-	ActorID    string    `json:"actor_id,omitempty"`
-	Action     string    `json:"action"`
-	TargetType string    `json:"target_type,omitempty"`
-	TargetID   string    `json:"target_id,omitempty"`
-	Outcome    string    `json:"outcome"`
-	ReasonCode string    `json:"reason_code,omitempty"`
+	EventID       string    `json:"event_id"`
+	OccurredAt    time.Time `json:"occurred_at"`
+	ActorType     string    `json:"actor_type"`
+	ActorID       string    `json:"actor_id,omitempty"`
+	Action        string    `json:"action"`
+	TargetType    string    `json:"target_type,omitempty"`
+	TargetID      string    `json:"target_id,omitempty"`
+	Outcome       string    `json:"outcome"`
+	ReasonCode    string    `json:"reason_code,omitempty"`
+	CorrelationID string    `json:"correlation_id,omitempty"`
 }
 
 func (e Event) Validate() error {
@@ -54,6 +55,9 @@ func (e Event) Validate() error {
 	}
 	if e.OccurredAt.Location() != time.UTC {
 		problems = append(problems, errors.New("occurred at must be UTC"))
+	}
+	if len(e.CorrelationID) > 256 {
+		problems = append(problems, errors.New("correlation ID exceeds maximum size"))
 	}
 	return errors.Join(problems...)
 }

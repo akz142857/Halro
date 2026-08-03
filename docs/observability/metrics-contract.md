@@ -13,7 +13,8 @@ exposition. `docs/metrics-reference.md` remains the operator-facing inventory.
   retain their ecosystem names.
 - Durations are seconds; byte quantities end in `_bytes`; counters end in
   `_total`.
-- `status`, `direction`, `reason`, and `provider_type` are finite enums.
+- `status`, `direction`, `reason`, `provider_type`, `operation`, `error_class`,
+  `purpose`, and Key Slot `state` are finite enums.
 - `provider_id` and `deployment_id` are managed opaque identifiers. They must
   not contain a hostname, customer name, credential fragment, URL, model name,
   request ID, key ID, project ID, or source address.
@@ -24,6 +25,10 @@ exposition. `docs/metrics-reference.md` remains the operator-facing inventory.
   it aggregates.
 - Metrics are derivative observations. Ledger remains authoritative for usage
   and accounting.
+- KMS metrics never label a Key ARN, account, Slot ID, request ID, ciphertext,
+  identity, error text, or Vault fingerprint. Recovery is explicit; therefore
+  `heimdall_kms_automatic_fallback_total` is an invariant-zero tripwire rather
+  than evidence that automatic failover exists.
 
 ## Compatibility
 

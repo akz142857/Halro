@@ -43,60 +43,61 @@ import (
 )
 
 type Runtime struct {
-	config            config.Config
-	logger            *slog.Logger
-	lock              *lock.Lock
-	store             *boltstore.Store
-	ledger            *ledger.Log
-	state             *ledger.State
-	status            *ledger.Status
-	vault             *vault.Vault
-	auth              *auth.Snapshot
-	providers         *provider.Registry
-	accounting        *budget.Manager
-	gateway           *gatewayapi.Handler
-	gatewayService    *gatewaycore.Service
-	tokenGuard        *tokenguard.Manager
-	redactor          *redaction.Engine
-	alerts            *alert.Dispatcher
-	audit             *audit.Log
-	auditBatchMu      sync.Mutex
-	auditBatchPending []adminAuditRequest
-	auditBatchRunning bool
-	adminTopologyMu   sync.Mutex
-	providerModelsMu  sync.Mutex
-	providerModels    map[string]providerModelCatalogCache
-	adminProjectMu    sync.Mutex
-	adminAlertMu      sync.Mutex
-	adminSettingsMu   sync.Mutex
-	adminIdentityMu   sync.Mutex
-	metricsTokenHash  [32]byte
-	metricsAuthorizer *metricsauth.Authorizer
-	metricsScrapes    chan struct{}
-	metricsAuthFailed atomic.Uint64
-	metricsBusy       atomic.Uint64
-	metricsRenderErrs atomic.Uint64
-	startedAt         time.Time
-	adminSessions     *adminauth.Manager
-	adminLoginMu      sync.Mutex
-	adminLogin        map[string]adminLoginWindow
-	adminSetupRateMu  sync.Mutex
-	adminSetupRate    map[string]adminLoginWindow
-	setupMu           sync.Mutex
-	setupToken        string
-	setupTokenNeeded  bool
-	backgroundCtx     context.Context
-	backgroundCancel  context.CancelFunc
-	backgroundWait    sync.WaitGroup
-	usage             *usage.Aggregate
-	usageCollector    *usage.Collector
-	usageExporter     *usage.Exporter
-	usageLocation     *time.Location
-	closeOnce         sync.Once
-	closeErr          error
-	draining          atomic.Bool
-	runtimeSettings   atomic.Pointer[domain.RuntimeSettings]
-	uiSettings        atomic.Pointer[domain.InstanceUISettings]
+	config              config.Config
+	logger              *slog.Logger
+	lock                *lock.Lock
+	store               *boltstore.Store
+	ledger              *ledger.Log
+	state               *ledger.State
+	status              *ledger.Status
+	vault               *vault.Vault
+	auth                *auth.Snapshot
+	providers           *provider.Registry
+	accounting          *budget.Manager
+	gateway             *gatewayapi.Handler
+	gatewayService      *gatewaycore.Service
+	tokenGuard          *tokenguard.Manager
+	redactor            *redaction.Engine
+	alerts              *alert.Dispatcher
+	audit               *audit.Log
+	auditBatchMu        sync.Mutex
+	auditBatchPending   []adminAuditRequest
+	auditBatchRunning   bool
+	adminTopologyMu     sync.Mutex
+	providerModelsMu    sync.Mutex
+	providerModels      map[string]providerModelCatalogCache
+	adminProjectMu      sync.Mutex
+	adminAlertMu        sync.Mutex
+	adminSettingsMu     sync.Mutex
+	adminIdentityMu     sync.Mutex
+	metricsTokenHash    [32]byte
+	metricsAuthorizer   *metricsauth.Authorizer
+	metricsScrapes      chan struct{}
+	metricsAuthFailed   atomic.Uint64
+	metricsBusy         atomic.Uint64
+	metricsRenderErrs   atomic.Uint64
+	startedAt           time.Time
+	kmsRecoveryLastUsed time.Time
+	adminSessions       *adminauth.Manager
+	adminLoginMu        sync.Mutex
+	adminLogin          map[string]adminLoginWindow
+	adminSetupRateMu    sync.Mutex
+	adminSetupRate      map[string]adminLoginWindow
+	setupMu             sync.Mutex
+	setupToken          string
+	setupTokenNeeded    bool
+	backgroundCtx       context.Context
+	backgroundCancel    context.CancelFunc
+	backgroundWait      sync.WaitGroup
+	usage               *usage.Aggregate
+	usageCollector      *usage.Collector
+	usageExporter       *usage.Exporter
+	usageLocation       *time.Location
+	closeOnce           sync.Once
+	closeErr            error
+	draining            atomic.Bool
+	runtimeSettings     atomic.Pointer[domain.RuntimeSettings]
+	uiSettings          atomic.Pointer[domain.InstanceUISettings]
 }
 
 func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime, error) {
@@ -108,7 +109,8 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		dataLock.Close()
 		return nil, err
 	}
-	masterKey, err := unlockMasterKey(ctx, cfg)
+	kmsAudit := &kmsAuditRecorder{}
+	masterKey, err := unlockMasterKey(withKMSAuditRecorder(ctx, kmsAudit), cfg)
 	if err != nil {
 		return fail(err)
 	}
@@ -348,6 +350,15 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		secretVault.Close()
 		return fail(err)
 	}
+	if err := appendKMSProviderAudit(ctx, auditLog, metadata, kmsAudit); err != nil {
+		auditLog.Close()
+		alertDispatcher.Close()
+		ledgerLog.Close()
+		metadata.Close()
+		providerRegistry.Close()
+		secretVault.Close()
+		return fail(fmt.Errorf("append KMS provider audit: %w", err))
+	}
 	if err := appendSystemAudit(auditLog, metadata, "system.startup"); err != nil {
 		auditLog.Close()
 		alertDispatcher.Close()
@@ -357,37 +368,48 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		secretVault.Close()
 		return fail(err)
 	}
+	kmsRecoveryLastUsed, err := lastKMSRecoveryUse(auditLog)
+	if err != nil {
+		auditLog.Close()
+		alertDispatcher.Close()
+		ledgerLog.Close()
+		metadata.Close()
+		providerRegistry.Close()
+		secretVault.Close()
+		return fail(fmt.Errorf("inspect Recovery Slot audit history: %w", err))
+	}
 	runtime := &Runtime{
-		config:            cfg,
-		logger:            logger,
-		lock:              dataLock,
-		store:             metadata,
-		ledger:            ledgerLog,
-		state:             ledgerState,
-		status:            accountingStatus,
-		vault:             secretVault,
-		auth:              authSnapshot,
-		providers:         providerRegistry,
-		accounting:        accounting,
-		gateway:           gatewayHandler,
-		gatewayService:    gatewayService,
-		tokenGuard:        tokenGuard,
-		redactor:          redactor,
-		alerts:            alertDispatcher,
-		audit:             auditLog,
-		metricsTokenHash:  metricsTokenHash,
-		metricsAuthorizer: metricsAuthorizer,
-		metricsScrapes:    make(chan struct{}, cfg.Metrics.MaxConcurrentScrapes),
-		startedAt:         time.Now(),
-		adminSessions:     adminSessions,
-		adminLogin:        make(map[string]adminLoginWindow),
-		adminSetupRate:    make(map[string]adminLoginWindow),
-		setupToken:        setupToken,
-		setupTokenNeeded:  setupRequiresToken(cfg),
-		usage:             usageAggregate,
-		usageCollector:    usageCollector,
-		usageExporter:     usageExporter,
-		usageLocation:     location,
+		config:              cfg,
+		logger:              logger,
+		lock:                dataLock,
+		store:               metadata,
+		ledger:              ledgerLog,
+		state:               ledgerState,
+		status:              accountingStatus,
+		vault:               secretVault,
+		auth:                authSnapshot,
+		providers:           providerRegistry,
+		accounting:          accounting,
+		gateway:             gatewayHandler,
+		gatewayService:      gatewayService,
+		tokenGuard:          tokenGuard,
+		redactor:            redactor,
+		alerts:              alertDispatcher,
+		audit:               auditLog,
+		metricsTokenHash:    metricsTokenHash,
+		metricsAuthorizer:   metricsAuthorizer,
+		metricsScrapes:      make(chan struct{}, cfg.Metrics.MaxConcurrentScrapes),
+		startedAt:           time.Now(),
+		kmsRecoveryLastUsed: kmsRecoveryLastUsed,
+		adminSessions:       adminSessions,
+		adminLogin:          make(map[string]adminLoginWindow),
+		adminSetupRate:      make(map[string]adminLoginWindow),
+		setupToken:          setupToken,
+		setupTokenNeeded:    setupRequiresToken(cfg),
+		usage:               usageAggregate,
+		usageCollector:      usageCollector,
+		usageExporter:       usageExporter,
+		usageLocation:       location,
 	}
 	if err := runtime.drainAdminMFAAuditIntents(ctx); err != nil {
 		auditLog.Close()

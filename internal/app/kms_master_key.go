@@ -101,6 +101,7 @@ func (u kmsSlotUnwrapper) Unwrap(ctx context.Context, slot masterkey.KeySlot) ([
 	if wrapper.Provider() != slot.Provider {
 		return nil, corekms.NewError(corekms.ErrorConfigInvalid, slot.Provider, corekms.OperationUnwrap, 0, errors.New("KMS wrapper provider mismatch"))
 	}
+	wrapper = observeKMSWrapper(wrapper)
 	policy, err := kmsRetryPolicy(u.masterKey)
 	if err != nil {
 		return nil, corekms.NewError(corekms.ErrorConfigInvalid, slot.Provider, corekms.OperationUnwrap, 0, err)
@@ -227,6 +228,7 @@ func wrapPendingSlotWithKey(
 	if wrapper.Provider() != allowed.Provider {
 		return masterkey.PendingKeySlot{}, errors.New("KMS wrapper provider mismatch")
 	}
+	wrapper = observeKMSWrapper(wrapper)
 	policy, err := kmsRetryPolicy(masterKeyConfig)
 	if err != nil {
 		return masterkey.PendingKeySlot{}, err
@@ -311,13 +313,17 @@ func unlockKMSMasterKey(
 	unwrapper := kmsSlotUnwrapper{masterKey: cfg.Storage.MasterKey, factory: factory}
 	key, err := unwrapper.Unwrap(ctx, *selected)
 	if err != nil {
+		observeKMSUnlock(purpose, err)
 		return nil, err
 	}
 	fingerprint, err := masterkey.MasterKeyFingerprint(key)
 	if err != nil || fingerprint != descriptor.MasterKeyFingerprint {
 		clear(key)
-		return nil, corekms.NewError(corekms.ErrorVaultMismatch, selected.Provider, corekms.OperationUnwrap, 0, masterkey.ErrVaultKeyMismatch)
+		mismatch := corekms.NewError(corekms.ErrorVaultMismatch, selected.Provider, corekms.OperationUnwrap, 0, masterkey.ErrVaultKeyMismatch)
+		observeKMSUnlock(purpose, mismatch)
+		return nil, mismatch
 	}
+	observeKMSUnlock(purpose, nil)
 	if err := (vaultCandidateVerifier{store: store}).VerifyCandidate(ctx, key); err != nil {
 		clear(key)
 		return nil, corekms.NewError(corekms.ErrorVaultMismatch, selected.Provider, corekms.OperationUnwrap, 0, err)

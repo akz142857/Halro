@@ -7,7 +7,10 @@ Heimdall v1.0.0 is the first release of a single-binary, self-hosted LLM
 Gateway focused on unified OpenAI-compatible access, secure Provider credential
 custody, internal Gateway Key distribution, usage controls, anomaly protection,
 and sensitive-data redaction. Runtime deployment requires one binary, one YAML
-configuration, one Master Key file, and one data directory. Redis, PostgreSQL,
+configuration, one explicitly selected Master Key custody mode, and one data
+directory. File mode uses a private 32-byte key file; Key Slot mode uses AWS
+KMS-wrapped Primary/Recovery descriptors and Workload Identity without a
+plaintext Master Key file. Redis, PostgreSQL,
 and other external services are not required.
 
 ## Highlights
@@ -80,6 +83,11 @@ credentials, IMDS, or the default credential chain.
   committed Ledger prefix, validate checksums/schema/Master-Key fingerprint,
   and restore through a same-filesystem atomic directory switch while retaining
   the previous directory.
+- AWS KMS Key Slot mode includes explicit Primary/Recovery paths, Encryption
+  Context, Vault Key Check, KMS-aware doctor/backup/restore, rewrap versus DEK
+  rotate separation, crash-safe generations, low-cardinality Metrics and
+  correlated Audit. It remains release-blocked until the M11 real-account
+  matrix, independent recovery drill, and four-party sign-off are complete.
 
 Deterministic recovery evidence includes every-byte WAL truncation, 10,000
 random crash cuts, ENOSPC/partial-write/fsync EIO, 126 checkpoint boundaries,

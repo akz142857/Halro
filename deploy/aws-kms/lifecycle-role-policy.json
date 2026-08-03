@@ -1,0 +1,51 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "WrapAndVerifyApprovedPrimaryKey",
+      "Effect": "Allow",
+      "Action": ["kms:Encrypt", "kms:Decrypt"],
+      "Resource": "arn:aws:kms:${PRIMARY_REGION}:${PRIMARY_ACCOUNT_ID}:key/${PRIMARY_KEY_ID}",
+      "Condition": {
+        "StringEquals": {
+          "kms:EncryptionContext:heimdall.context_version": "1",
+          "kms:EncryptionContext:heimdall.payload_version": "1",
+          "kms:EncryptionContext:heimdall.purpose": "primary",
+          "kms:EncryptionContext:heimdall.instance_sha256": "${INSTANCE_ID_SHA256}"
+        },
+        "ForAllValues:StringEquals": {
+          "kms:EncryptionContextKeys": [
+            "heimdall.context_version",
+            "heimdall.payload_version",
+            "heimdall.purpose",
+            "heimdall.instance_sha256",
+            "heimdall.slot_sha256"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "WrapAndVerifyApprovedRecoveryKey",
+      "Effect": "Allow",
+      "Action": ["kms:Encrypt", "kms:Decrypt"],
+      "Resource": "arn:aws:kms:${RECOVERY_REGION}:${RECOVERY_ACCOUNT_ID}:key/${RECOVERY_KEY_ID}",
+      "Condition": {
+        "StringEquals": {
+          "kms:EncryptionContext:heimdall.context_version": "1",
+          "kms:EncryptionContext:heimdall.payload_version": "1",
+          "kms:EncryptionContext:heimdall.purpose": "recovery",
+          "kms:EncryptionContext:heimdall.instance_sha256": "${INSTANCE_ID_SHA256}"
+        },
+        "ForAllValues:StringEquals": {
+          "kms:EncryptionContextKeys": [
+            "heimdall.context_version",
+            "heimdall.payload_version",
+            "heimdall.purpose",
+            "heimdall.instance_sha256",
+            "heimdall.slot_sha256"
+          ]
+        }
+      }
+    }
+  ]
+}

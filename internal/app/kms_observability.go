@@ -1,0 +1,190 @@
+package app
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"time"
+
+	"github.com/akz142857/Heimdall/internal/audit"
+	"github.com/akz142857/Heimdall/internal/id"
+	corekms "github.com/akz142857/Heimdall/internal/kms"
+	"github.com/akz142857/Heimdall/internal/masterkey"
+	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
+)
+
+type kmsCallMetricKey struct {
+	Operation  corekms.Operation
+	Status     string
+	ErrorClass string
+}
+
+type kmsUnlockMetricKey struct {
+	Purpose    masterkey.KeySlotPurpose
+	Status     string
+	ErrorClass string
+}
+
+type kmsProcessMetrics struct {
+	mu            sync.Mutex
+	calls         map[kmsCallMetricKey]uint64
+	durationNanos map[kmsCallMetricKey]uint64
+	unlocks       map[kmsUnlockMetricKey]uint64
+}
+
+type kmsMetricsSnapshot struct {
+	Calls         map[kmsCallMetricKey]uint64
+	DurationNanos map[kmsCallMetricKey]uint64
+	Unlocks       map[kmsUnlockMetricKey]uint64
+}
+
+var processKMSMetrics = kmsProcessMetrics{
+	calls:         make(map[kmsCallMetricKey]uint64),
+	durationNanos: make(map[kmsCallMetricKey]uint64),
+	unlocks:       make(map[kmsUnlockMetricKey]uint64),
+}
+
+func observeKMSCall(operation corekms.Operation, started time.Time, err error) {
+	key := kmsCallMetricKey{Operation: operation, Status: "success", ErrorClass: "none"}
+	if err != nil {
+		key.Status = "error"
+		key.ErrorClass = string(corekms.Classify(err))
+	}
+	processKMSMetrics.mu.Lock()
+	processKMSMetrics.calls[key]++
+	processKMSMetrics.durationNanos[key] += uint64(time.Since(started))
+	processKMSMetrics.mu.Unlock()
+}
+
+func observeKMSUnlock(purpose masterkey.KeySlotPurpose, err error) {
+	key := kmsUnlockMetricKey{Purpose: purpose, Status: "success", ErrorClass: "none"}
+	if err != nil {
+		key.Status = "error"
+		key.ErrorClass = string(corekms.Classify(err))
+	}
+	processKMSMetrics.mu.Lock()
+	processKMSMetrics.unlocks[key]++
+	processKMSMetrics.mu.Unlock()
+}
+
+func snapshotKMSMetrics() kmsMetricsSnapshot {
+	processKMSMetrics.mu.Lock()
+	defer processKMSMetrics.mu.Unlock()
+	snapshot := kmsMetricsSnapshot{
+		Calls:         make(map[kmsCallMetricKey]uint64, len(processKMSMetrics.calls)),
+		DurationNanos: make(map[kmsCallMetricKey]uint64, len(processKMSMetrics.durationNanos)),
+		Unlocks:       make(map[kmsUnlockMetricKey]uint64, len(processKMSMetrics.unlocks)),
+	}
+	for key, value := range processKMSMetrics.calls {
+		snapshot.Calls[key] = value
+	}
+	for key, value := range processKMSMetrics.durationNanos {
+		snapshot.DurationNanos[key] = value
+	}
+	for key, value := range processKMSMetrics.unlocks {
+		snapshot.Unlocks[key] = value
+	}
+	return snapshot
+}
+
+type observedKMSWrapper struct{ wrapped corekms.Wrapper }
+
+func (w observedKMSWrapper) Provider() string { return w.wrapped.Provider() }
+
+func (w observedKMSWrapper) Wrap(ctx context.Context, request corekms.WrapRequest) (corekms.WrapResult, error) {
+	started := time.Now()
+	result, err := w.wrapped.Wrap(ctx, request)
+	observeKMSCall(corekms.OperationWrap, started, err)
+	recordKMSProviderAudit(ctx, corekms.OperationWrap, result.ProviderRequestID, err)
+	return result, err
+}
+
+func (w observedKMSWrapper) Unwrap(ctx context.Context, request corekms.UnwrapRequest) (corekms.UnwrapResult, error) {
+	started := time.Now()
+	result, err := w.wrapped.Unwrap(ctx, request)
+	observeKMSCall(corekms.OperationUnwrap, started, err)
+	recordKMSProviderAudit(ctx, corekms.OperationUnwrap, result.ProviderRequestID, err)
+	return result, err
+}
+
+func observeKMSWrapper(wrapper corekms.Wrapper) corekms.Wrapper {
+	if _, observed := wrapper.(observedKMSWrapper); observed {
+		return wrapper
+	}
+	return observedKMSWrapper{wrapped: wrapper}
+}
+
+type kmsProviderAudit struct {
+	OccurredAt        time.Time
+	Operation         corekms.Operation
+	Outcome           string
+	ErrorClass        string
+	ProviderRequestID string
+}
+
+type kmsAuditRecorder struct {
+	mu     sync.Mutex
+	events []kmsProviderAudit
+}
+
+type kmsAuditContextKey struct{}
+
+func withKMSAuditRecorder(ctx context.Context, recorder *kmsAuditRecorder) context.Context {
+	return context.WithValue(ctx, kmsAuditContextKey{}, recorder)
+}
+
+func recordKMSProviderAudit(ctx context.Context, operation corekms.Operation, requestID string, err error) {
+	recorder, _ := ctx.Value(kmsAuditContextKey{}).(*kmsAuditRecorder)
+	if recorder == nil {
+		return
+	}
+	event := kmsProviderAudit{
+		OccurredAt: time.Now().UTC(), Operation: operation, Outcome: "success",
+		ErrorClass: "none", ProviderRequestID: requestID,
+	}
+	if err != nil {
+		event.Outcome = "error"
+		event.ErrorClass = string(corekms.Classify(err))
+		var classified *corekms.Error
+		if errors.As(err, &classified) {
+			event.ProviderRequestID = classified.ProviderRequestID
+		}
+	}
+	recorder.mu.Lock()
+	recorder.events = append(recorder.events, event)
+	recorder.mu.Unlock()
+}
+
+func (r *kmsAuditRecorder) snapshot() []kmsProviderAudit {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]kmsProviderAudit(nil), r.events...)
+}
+
+func appendKMSProviderAudit(ctx context.Context, log *audit.Log, store *boltstore.Store, recorder *kmsAuditRecorder) error {
+	for _, observed := range recorder.snapshot() {
+		eventID, err := id.New("aud")
+		if err != nil {
+			return err
+		}
+		if _, err := log.Append(ctx, audit.Event{
+			EventID: eventID, OccurredAt: observed.OccurredAt, ActorType: "system",
+			Action: "security.kms.call", TargetType: "kms_operation", TargetID: string(observed.Operation),
+			Outcome: observed.Outcome, ReasonCode: observed.ErrorClass, CorrelationID: observed.ProviderRequestID,
+		}); err != nil {
+			return err
+		}
+	}
+	return checkpointAudit(store, log.Summary())
+}
+
+func lastKMSRecoveryUse(log *audit.Log) (time.Time, error) {
+	var latest time.Time
+	_, err := log.Replay(func(record audit.Record) error {
+		if record.Event.Action == "security.master_key.recovery_used" && record.Event.Outcome == "success" && record.Event.OccurredAt.After(latest) {
+			latest = record.Event.OccurredAt
+		}
+		return nil
+	})
+	return latest, err
+}

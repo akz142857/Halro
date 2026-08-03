@@ -170,6 +170,9 @@ change the Master Key or Vault ciphertext. Suspected KMS Key, Grant, policy, or
 Decrypt-identity compromise must use DEK rotation, not rewrap. The complete
 procedure, interruption matrix, and historical-backup disposition checklist
 are in [the M11 KMS key lifecycle runbook](runbooks/m11-kms-key-lifecycle.md).
+AWS IAM/Key Policy、Kubernetes/systemd 加固、KMS Audit/Metrics/告警和事故响应见
+[M11 生产运行 Runbook](runbooks/m11-production-operations.md)。AWS KMS 模式只有在
+M11 真实 AWS 矩阵、独立恢复演练和四方发布签署完成后才能标记为 production-ready。
 
 Rotation is an offline operation. First create and verify an encrypted backup,
 stop Heimdall, retain the old Master Key with backups created under it, and

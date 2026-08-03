@@ -22,6 +22,7 @@ func assertMetricsExpositionContract(t *testing.T, body string) {
 	allowedLabels := map[string]struct{}{
 		"le": {}, "status": {}, "direction": {}, "reason": {}, "provider_type": {},
 		"provider_id": {}, "deployment_id": {}, "version": {}, "commit": {},
+		"operation": {}, "error_class": {}, "purpose": {}, "state": {},
 	}
 	scanner := bufio.NewScanner(strings.NewReader(body))
 	for scanner.Scan() {

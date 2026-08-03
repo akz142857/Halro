@@ -72,6 +72,45 @@ groups:
         annotations:
           summary: Heimdall request error rate is elevated
           runbook_url: /docs/observability/operations-runbook.md
+      - alert: HeimdallKMSPrimaryUnlockFailure
+        expr: increase(heimdall_kms_calls_total{operation="unwrap",status="error"}[5m]) > 0
+        labels: {severity: critical, service: heimdall, owner: sre, category: key-custody}
+        annotations:
+          summary: Heimdall Primary KMS unlock failed
+          runbook_url: /docs/runbooks/m11-production-operations.md
+      - alert: HeimdallKMSRecoveryNotReady
+        expr: heimdall_kms_recovery_ready == 0
+        for: 5m
+        labels: {severity: critical, service: heimdall, owner: sre, category: key-custody}
+        annotations:
+          summary: Heimdall Recovery Slot is not active and verified
+          runbook_url: /docs/runbooks/m11-production-operations.md
+      - alert: HeimdallKMSRecoveryVerificationExpired
+        expr: time() - heimdall_kms_slot_verified_timestamp_seconds{purpose="recovery"} > 7776000
+        for: 5m
+        labels: {severity: warning, service: heimdall, owner: sre, category: key-custody}
+        annotations:
+          summary: Heimdall Recovery Slot verification is older than 90 days
+          runbook_url: /docs/runbooks/m11-production-operations.md
+      - alert: HeimdallKMSRecoveryUsed
+        expr: heimdall_kms_recovery_last_used_timestamp_seconds > 0 and time() - heimdall_kms_recovery_last_used_timestamp_seconds < 900
+        labels: {severity: critical, service: heimdall, owner: sre, category: key-custody}
+        annotations:
+          summary: Heimdall Recovery Slot was used
+          runbook_url: /docs/runbooks/m11-production-operations.md
+      - alert: HeimdallKMSVaultMismatch
+        expr: increase(heimdall_kms_unlock_total{error_class="kms_vault_mismatch",status="error"}[5m]) > 0
+        labels: {severity: critical, service: heimdall, owner: security, category: key-custody}
+        annotations:
+          summary: KMS returned a key that does not match the Heimdall Vault
+          runbook_url: /docs/runbooks/m11-production-operations.md
+      - alert: HeimdallKMSPendingRotation
+        expr: heimdall_kms_pending_rotation_slots > 0
+        for: 15m
+        labels: {severity: warning, service: heimdall, owner: sre, category: key-custody}
+        annotations:
+          summary: Heimdall Key Slot rotation remains pending
+          runbook_url: /docs/runbooks/m11-production-operations.md
       - alert: Watchdog
         expr: vector(1)
         labels: {severity: none, service: heimdall, owner: sre, category: deadman}
