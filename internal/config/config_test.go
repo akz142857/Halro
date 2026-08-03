@@ -135,8 +135,8 @@ func TestKeySlotsConfigurationRejectsUnsafeCombinations(t *testing.T) {
 		StartupDeadline: Duration(time.Minute),
 		CallTimeout:     Duration(5 * time.Second),
 		AllowedKMSKeys: []AllowedKMSKey{
-			{Purpose: "primary", Provider: "aws-kms", Region: "a", Account: "1", KeyID: "primary"},
-			{Purpose: "recovery", Provider: "aws-kms", Region: "b", Account: "2", KeyID: "recovery"},
+			{Purpose: "primary", Provider: "aws-kms", Region: "ap-southeast-1", Account: "123456789012", KeyID: "arn:aws:kms:ap-southeast-1:123456789012:key/11111111-1111-4111-8111-111111111111"},
+			{Purpose: "recovery", Provider: "aws-kms", Region: "ap-southeast-2", Account: "210987654321", KeyID: "arn:aws:kms:ap-southeast-2:210987654321:key/22222222-2222-4222-8222-222222222222"},
 		},
 	}
 	tests := []struct {
@@ -154,7 +154,8 @@ func TestKeySlotsConfigurationRejectsUnsafeCombinations(t *testing.T) {
 		},
 		{
 			name: "same KMS key", mutate: func(value *MasterKey) {
-				value.AllowedKMSKeys[1] = AllowedKMSKey{Purpose: "recovery", Provider: "aws-kms", Region: "a", Account: "1", KeyID: "primary"}
+				value.AllowedKMSKeys[1] = value.AllowedKMSKeys[0]
+				value.AllowedKMSKeys[1].Purpose = "recovery"
 			},
 			want: "primary and recovery allowlists must not use the same KMS key",
 		},
@@ -163,6 +164,28 @@ func TestKeySlotsConfigurationRejectsUnsafeCombinations(t *testing.T) {
 				value.AllowedKMSKeys[0].Endpoint = "https://kms.example.test?credential=forbidden"
 			},
 			want: "endpoint must be an HTTPS origin without userinfo, path, query, or fragment",
+		},
+		{
+			name: "unknown provider", mutate: func(value *MasterKey) { value.AllowedKMSKeys[0].Provider = "future-kms" },
+			want: "provider is not available in this release",
+		},
+		{
+			name: "account mismatch", mutate: func(value *MasterKey) { value.AllowedKMSKeys[0].Account = "999999999999" },
+			want: "full KMS Key ARN matching region and account",
+		},
+		{
+			name: "region mismatch", mutate: func(value *MasterKey) { value.AllowedKMSKeys[0].Region = "us-east-1" },
+			want: "full KMS Key ARN matching region and account",
+		},
+		{
+			name: "alias not key", mutate: func(value *MasterKey) {
+				value.AllowedKMSKeys[0].KeyID = "arn:aws:kms:ap-southeast-1:123456789012:alias/primary"
+			},
+			want: "full KMS Key ARN matching region and account",
+		},
+		{
+			name: "asymmetric algorithm", mutate: func(value *MasterKey) { value.AllowedKMSKeys[0].Algorithm = "RSAES_OAEP_SHA_256" },
+			want: "algorithm must be SYMMETRIC_DEFAULT",
 		},
 	}
 	for _, test := range tests {

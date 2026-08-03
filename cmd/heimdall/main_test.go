@@ -31,11 +31,11 @@ func TestConfigCheckValidatesKeySlotsWithoutCallingKMS(t *testing.T) {
 		AllowedKMSKeys: []config.AllowedKMSKey{
 			{
 				Purpose: "primary", Provider: "aws-kms", Region: "ap-southeast-1",
-				Account: "123456789012", KeyID: "primary", Endpoint: "https://kms.invalid.example",
+				Account: "123456789012", KeyID: "arn:aws:kms:ap-southeast-1:123456789012:key/11111111-1111-4111-8111-111111111111", Endpoint: "https://kms.invalid.example",
 			},
 			{
 				Purpose: "recovery", Provider: "aws-kms", Region: "ap-southeast-2",
-				Account: "210987654321", KeyID: "recovery", Endpoint: "https://kms.invalid.example",
+				Account: "210987654321", KeyID: "arn:aws:kms:ap-southeast-2:210987654321:key/22222222-2222-4222-8222-222222222222", Endpoint: "https://kms.invalid.example",
 			},
 		},
 	}
