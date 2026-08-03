@@ -341,6 +341,22 @@ func TestVaultRewritePublishesRotatedDescriptorWithVaultGeneration(t *testing.T)
 		KeySlotDescriptor: &rotated,
 		Transform:         func(value domain.Credential) (domain.Credential, error) { return value, nil },
 		TransformAdminMFA: func(value domain.AdminMFAAuthenticator) (domain.AdminMFAAuthenticator, error) { return value, nil },
+	}); err == nil {
+		t.Fatal("rotated descriptor published without unwrap and candidate verification")
+	}
+	unchanged, err := store.KeySlotDescriptor(context.Background())
+	if err != nil || unchanged.ActiveGeneration != state.Descriptor.ActiveGeneration {
+		t.Fatalf("rejected rotation changed descriptor: %#v err=%v", unchanged, err)
+	}
+	if err := store.RewriteVaultMaterial(VaultRewrite{
+		Context:       context.Background(),
+		VaultKeyCheck: []byte("new-check"), AuditHMACEnvelope: []byte("new-audit"),
+		Keyring: VaultKeyring{FormatVersion: 1, ActiveKeyVersion: 2, ActiveFingerprint: newFingerprint,
+			PreviousFingerprint: state.Descriptor.MasterKeyFingerprint, RecoveryEnvelope: []byte("bridge")},
+		KeySlotDescriptor: &rotated,
+		Unwrapper:         boltTestSlotUnwrapper{key: newKey}, Verifier: boltTestCandidateVerifier{},
+		Transform:         func(value domain.Credential) (domain.Credential, error) { return value, nil },
+		TransformAdminMFA: func(value domain.AdminMFAAuthenticator) (domain.AdminMFAAuthenticator, error) { return value, nil },
 	}); err != nil {
 		t.Fatal(err)
 	}
