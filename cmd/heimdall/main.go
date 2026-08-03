@@ -42,6 +42,8 @@ var (
 	verifyRecoveryCommand = app.VerifyRecoverySlot
 	rotateKMSCommand      = app.RotateKMSMasterKey
 	rewrapKMSCommand      = app.RewrapKMSKey
+	doctorCommand         = app.DoctorWithOptions
+	restoreBackupCommand  = app.RestoreBackupWithOptions
 )
 
 func run(arguments []string, logger *slog.Logger) error {
@@ -387,6 +389,8 @@ func run(arguments []string, logger *slog.Logger) error {
 			backupPath := flags.String("file", "", "encrypted backup file")
 			keyPath := flags.String("key-file", "", "32-byte backup key file with mode 0600")
 			confirmation := flags.String("confirm-backup-id", "", "exact verified backup ID")
+			useRecovery := flags.Bool("use-recovery-slot", false, "explicitly unlock the staged backup with the configured Recovery Slot")
+			confirmRecovery := flags.String("confirm-recovery-slot", "", "exact configured Recovery Slot ID")
 			if err := flags.Parse(arguments[2:]); err != nil {
 				return err
 			}
@@ -402,8 +406,9 @@ func run(arguments []string, logger *slog.Logger) error {
 				return err
 			}
 			defer clear(key)
-			result, err := app.RestoreBackup(
+			result, err := restoreBackupCommand(
 				context.Background(), cfg, *backupPath, key, *confirmation,
+				app.RestoreOptions{UseRecoverySlot: *useRecovery, ConfirmRecoverySlot: *confirmRecovery},
 			)
 			if err != nil {
 				return err
@@ -478,6 +483,7 @@ func run(arguments []string, logger *slog.Logger) error {
 	case "doctor":
 		flags := flag.NewFlagSet("doctor", flag.ContinueOnError)
 		configPath := flags.String("config", "config.yaml", "configuration file")
+		noKMS := flags.Bool("no-kms", false, "perform static Key Slot checks without KMS unwrap")
 		if err := flags.Parse(arguments[1:]); err != nil {
 			return err
 		}
@@ -485,7 +491,7 @@ func run(arguments []string, logger *slog.Logger) error {
 		if err != nil {
 			return err
 		}
-		report, doctorErr := app.Doctor(context.Background(), cfg)
+		report, doctorErr := doctorCommand(context.Background(), cfg, app.DoctorOptions{NoKMS: *noKMS})
 		encodeErr := json.NewEncoder(os.Stdout).Encode(report)
 		return errors.Join(doctorErr, encodeErr)
 	case "metrics":

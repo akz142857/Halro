@@ -10,6 +10,7 @@ import (
 
 	"github.com/akz142857/Heimdall/internal/config"
 	"github.com/akz142857/Heimdall/internal/ledger"
+	"github.com/akz142857/Heimdall/internal/masterkey"
 	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
 	"github.com/akz142857/Heimdall/internal/store/lock"
 	"github.com/akz142857/Heimdall/internal/usage"
@@ -23,20 +24,32 @@ type DoctorCheck struct {
 }
 
 type DoctorReport struct {
-	Healthy   bool          `json:"healthy"`
-	CheckedAt time.Time     `json:"checked_at"`
-	Checks    []DoctorCheck `json:"checks"`
+	Healthy             bool          `json:"healthy"`
+	VaultStatus         string        `json:"vault_status"`
+	ExternalAuditEvents bool          `json:"external_audit_events"`
+	CheckedAt           time.Time     `json:"checked_at"`
+	Checks              []DoctorCheck `json:"checks"`
+}
+
+type DoctorOptions struct {
+	NoKMS bool
 }
 
 // Doctor performs only read operations against application data. It acquires
 // the normal data lock to obtain one consistent offline view, but never opens
 // bbolt or the Ledger in repair/write mode.
 func Doctor(ctx context.Context, cfg config.Config) (DoctorReport, error) {
-	report := DoctorReport{Healthy: true, CheckedAt: time.Now().UTC()}
+	return DoctorWithOptions(ctx, cfg, DoctorOptions{})
+}
+
+func DoctorWithOptions(ctx context.Context, cfg config.Config, options DoctorOptions) (DoctorReport, error) {
+	report := DoctorReport{Healthy: true, VaultStatus: "unknown", CheckedAt: time.Now().UTC()}
+	failedChecks := 0
 	add := func(name, status, detail string) {
 		report.Checks = append(report.Checks, DoctorCheck{Name: name, Status: status, Detail: detail})
 		if status == "fail" {
 			report.Healthy = false
+			failedChecks++
 		}
 	}
 	if err := ctx.Err(); err != nil {
@@ -81,22 +94,40 @@ func Doctor(ctx context.Context, cfg config.Config) (DoctorReport, error) {
 		defer store.Close()
 		add("metadata", "pass", fmt.Sprintf("bbolt schema v%d", boltstore.CurrentSchemaVersion()))
 	}
-	masterKey, keyErr := unlockMasterKey(ctx, cfg, store)
-	if keyErr != nil {
-		add("master_key", "fail", keyErr.Error())
-	} else {
-		defer clear(masterKey)
+	staticKMS := options.NoKMS && cfg.Storage.MasterKey.Mode == config.MasterKeyModeKeySlots
+	if staticKMS {
 		if store == nil {
-			add("master_key", "warn", "key file is valid; metadata key check was skipped")
-		} else if secretVault, vaultErr := vault.New(masterKey); vaultErr != nil {
-			add("master_key", "fail", vaultErr.Error())
+			add("key_slots", "fail", "metadata is unavailable for static Key Slot validation")
+		} else if staticErr := validateDoctorKeySlots(ctx, cfg, store); staticErr != nil {
+			add("key_slots", "fail", staticErr.Error())
 		} else {
-			if verifyErr := verifyVaultKeyCheck(store, secretVault); verifyErr != nil {
-				add("master_key", "fail", "master key does not decrypt the metadata key check")
+			add("key_slots", "pass", "descriptor, Keyring, configured Slots, and KMS allowlist references are structurally valid")
+		}
+		report.Healthy = false
+		report.VaultStatus = "vault_unverified"
+		add("master_key", "unverified", "KMS unwrap was explicitly disabled; Vault recovery is not verified")
+	} else {
+		if cfg.Storage.MasterKey.Mode == config.MasterKeyModeKeySlots {
+			report.ExternalAuditEvents = true
+		}
+		masterKey, keyErr := unlockMasterKey(ctx, cfg, store)
+		if keyErr != nil {
+			add("master_key", "fail", keyErr.Error())
+		} else {
+			defer clear(masterKey)
+			if store == nil {
+				add("master_key", "warn", "key file is valid; metadata key check was skipped")
+			} else if secretVault, vaultErr := vault.New(masterKey); vaultErr != nil {
+				add("master_key", "fail", vaultErr.Error())
 			} else {
-				add("master_key", "pass", "mode and encrypted metadata key check are valid")
+				if verifyErr := verifyVaultKeyCheck(store, secretVault); verifyErr != nil {
+					add("master_key", "fail", "master key does not decrypt the metadata key check")
+				} else {
+					report.VaultStatus = "verified"
+					add("master_key", "pass", "mode and encrypted metadata key check are valid")
+				}
+				secretVault.Close()
 			}
-			secretVault.Close()
 		}
 	}
 
@@ -144,10 +175,43 @@ func Doctor(ctx context.Context, cfg config.Config) (DoctorReport, error) {
 		checkDoctorTopology(ctx, store, add)
 	}
 	add("provider_connectivity", "warn", "network probes skipped by read-only offline doctor; use Admin connection tests")
-	if !report.Healthy {
+	if failedChecks > 0 {
 		return report, errors.New("doctor found one or more failed checks")
 	}
 	return report, nil
+}
+
+func validateDoctorKeySlots(ctx context.Context, cfg config.Config, store *boltstore.Store) error {
+	descriptor, err := store.KeySlotDescriptor(ctx)
+	if err != nil {
+		return err
+	}
+	if !descriptor.ProductionReady() {
+		return errors.New("Key Slot descriptor is not production-ready")
+	}
+	keyring, err := store.VaultKeyring()
+	if err != nil {
+		return err
+	}
+	if keyring.ActiveFingerprint != descriptor.MasterKeyFingerprint {
+		return errors.New("Key Slot descriptor and Vault Keyring fingerprints differ")
+	}
+	for _, target := range []struct {
+		id      string
+		purpose masterkey.KeySlotPurpose
+	}{
+		{id: cfg.Storage.MasterKey.PrimarySlot, purpose: masterkey.KeySlotPrimary},
+		{id: cfg.Storage.MasterKey.RecoverySlot, purpose: masterkey.KeySlotRecovery},
+	} {
+		slot, ok := keySlotByID(descriptor, target.id)
+		if !ok || slot.Purpose != target.purpose || slot.State != masterkey.KeySlotActive || slot.VerifiedAt == nil {
+			return fmt.Errorf("configured %s Slot is not active and verified", target.purpose)
+		}
+		if _, err := trustedAllowedKMSKey(cfg.Storage.MasterKey, slot); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func checkDoctorTopology(ctx context.Context, store *boltstore.Store, add func(string, string, string)) {

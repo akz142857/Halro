@@ -79,11 +79,15 @@ func TestKeySlotInitAndRecoveryCLIUseExplicitOfflinePaths(t *testing.T) {
 	previousRecovery := verifyRecoveryCommand
 	previousRotateKMS := rotateKMSCommand
 	previousRewrapKMS := rewrapKMSCommand
+	previousDoctor := doctorCommand
+	previousRestore := restoreBackupCommand
 	t.Cleanup(func() {
 		initializeCommand = previousInitialize
 		verifyRecoveryCommand = previousRecovery
 		rotateKMSCommand = previousRotateKMS
 		rewrapKMSCommand = previousRewrapKMS
+		doctorCommand = previousDoctor
+		restoreBackupCommand = previousRestore
 	})
 	initialized := false
 	initializeCommand = func(loaded config.Config) error {
@@ -105,6 +109,17 @@ func TestKeySlotInitAndRecoveryCLIUseExplicitOfflinePaths(t *testing.T) {
 		rewrapped = loaded.Storage.MasterKey.Mode == config.MasterKeyModeKeySlots && options.Purpose == masterkey.KeySlotPrimary &&
 			options.SlotID == "slot_aws_primary" && options.KeyReference == loaded.Storage.MasterKey.AllowedKMSKeys[0].KeyID
 		return app.KMSRewrapResult{Purpose: options.Purpose, ActiveSlot: options.SlotID}, nil
+	}
+	staticDoctor := false
+	doctorCommand = func(_ context.Context, loaded config.Config, options app.DoctorOptions) (app.DoctorReport, error) {
+		staticDoctor = loaded.Storage.MasterKey.Mode == config.MasterKeyModeKeySlots && options.NoKMS
+		return app.DoctorReport{VaultStatus: "vault_unverified"}, nil
+	}
+	recoveryRestore := false
+	restoreBackupCommand = func(_ context.Context, loaded config.Config, _ string, key []byte, backupID string, options app.RestoreOptions) (app.RestoreResult, error) {
+		recoveryRestore = loaded.Storage.MasterKey.Mode == config.MasterKeyModeKeySlots && len(key) == 32 && backupID == "backup_test" &&
+			options.UseRecoverySlot && options.ConfirmRecoverySlot == loaded.Storage.MasterKey.RecoverySlot
+		return app.RestoreResult{BackupID: backupID, UnlockPath: "recovery", VaultVerified: true, RecoveryAudited: true}, nil
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	if err := run([]string{"init", "--config", path}, logger); err != nil {
@@ -130,6 +145,23 @@ func TestKeySlotInitAndRecoveryCLIUseExplicitOfflinePaths(t *testing.T) {
 	}
 	if !rewrapped {
 		t.Fatal("rewrap CLI did not preserve explicit Slot and allowlist selection")
+	}
+	if err := run([]string{"doctor", "--config", path, "--no-kms"}, logger); err != nil {
+		t.Fatal(err)
+	}
+	if !staticDoctor {
+		t.Fatal("doctor CLI did not preserve --no-kms")
+	}
+	backupKeyPath := filepath.Join(t.TempDir(), "backup.key")
+	if err := os.WriteFile(backupKeyPath, make([]byte, 32), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"backup", "restore", "--config", path, "--file", filepath.Join(t.TempDir(), "backup.hmbk"),
+		"--key-file", backupKeyPath, "--confirm-backup-id", "backup_test", "--use-recovery-slot", "--confirm-recovery-slot", "slot_aws_recovery"}, logger); err != nil {
+		t.Fatal(err)
+	}
+	if !recoveryRestore {
+		t.Fatal("restore CLI did not preserve explicit Recovery selection")
 	}
 }
 

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"io"
@@ -12,6 +13,44 @@ import (
 	"reflect"
 	"testing"
 )
+
+func TestKMSDoctorStaticAndFullModesAreReadOnly(t *testing.T) {
+	cfg := kmsAppTestConfig(t)
+	harness := newKMSAppHarness(t)
+	if err := initializeKMS(context.Background(), cfg, kmsInitializationOptions{
+		factory: harness.factory, random: bytes.NewReader(bytes.Repeat([]byte{0x55}, 32)),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	previousFactory := defaultKMSWrapperFactory
+	defaultKMSWrapperFactory = harness.factory
+	t.Cleanup(func() { defaultKMSWrapperFactory = previousFactory })
+	beforeTree := doctorTree(t, cfg.Storage.DataDir)
+	beforeCalls := harness.callCount()
+	staticReport, err := DoctorWithOptions(context.Background(), cfg, DoctorOptions{NoKMS: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if staticReport.Healthy || staticReport.VaultStatus != "vault_unverified" || staticReport.ExternalAuditEvents {
+		t.Fatalf("static report=%#v", staticReport)
+	}
+	if harness.callCount() != beforeCalls {
+		t.Fatal("doctor --no-kms reached a KMS adapter")
+	}
+	if afterTree := doctorTree(t, cfg.Storage.DataDir); !reflect.DeepEqual(afterTree, beforeTree) {
+		t.Fatal("static KMS doctor changed application files")
+	}
+	fullReport, err := Doctor(context.Background(), cfg)
+	if err != nil || !fullReport.Healthy || fullReport.VaultStatus != "verified" || !fullReport.ExternalAuditEvents {
+		t.Fatalf("full report=%#v err=%v", fullReport, err)
+	}
+	if harness.callCount() == beforeCalls {
+		t.Fatal("full KMS doctor did not perform a read-only unwrap")
+	}
+	if afterTree := doctorTree(t, cfg.Storage.DataDir); !reflect.DeepEqual(afterTree, beforeTree) {
+		t.Fatal("full KMS doctor changed application files")
+	}
+}
 
 func TestDoctorIsReadOnlyAndDetectsPartialWALTail(t *testing.T) {
 	cfg := testConfig(t)

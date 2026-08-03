@@ -513,6 +513,12 @@ func initializeKMS(ctx context.Context, cfg config.Config, options kmsInitializa
 	if err := os.Chmod(stageRoot, 0o700); err != nil {
 		return err
 	}
+	// Read-only offline tools coordinate through the same lock inode without
+	// creating or rewriting it. Publish that coordination file with the rest of
+	// the initialized data tree.
+	if err := os.WriteFile(filepath.Join(stageRoot, ".heimdall.lock"), nil, 0o600); err != nil {
+		return fmt.Errorf("create staged data lock: %w", err)
+	}
 	stageConfig := cfg
 	stageConfig.Storage.DataDir = stageRoot
 	metadata, err := boltstore.Open(stageConfig.MetadataPath())

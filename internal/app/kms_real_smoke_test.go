@@ -3,12 +3,14 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +19,7 @@ import (
 	"github.com/akz142857/Heimdall/internal/kms/awskms"
 	"github.com/akz142857/Heimdall/internal/masterkey"
 	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
+	"gopkg.in/yaml.v3"
 )
 
 func TestRealAWSDualSlotInitializeAndRecovery(t *testing.T) {
@@ -226,6 +229,104 @@ func TestRealAWSKMSKeyLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	fmt.Printf("M11_AWS_KMS_LIFECYCLE_EVIDENCE=%s\n", encoded)
+}
+
+func TestRealAWSKMSDisasterRecovery(t *testing.T) {
+	if os.Getenv("HEIMDALL_AWS_KMS_DR_REAL") != "1" {
+		t.Skip("set HEIMDALL_AWS_KMS_DR_REAL=1 for real AWS KMS disaster-recovery evidence")
+	}
+	primaryARN := os.Getenv("HEIMDALL_AWS_KMS_PRIMARY_KEY_ARN")
+	recoveryARN := os.Getenv("HEIMDALL_AWS_KMS_RECOVERY_KEY_ARN")
+	primaryRegion, primaryAccount, primaryOK := awsKeyIdentityForAppTest(primaryARN)
+	recoveryRegion, recoveryAccount, recoveryOK := awsKeyIdentityForAppTest(recoveryARN)
+	if !primaryOK || !recoveryOK || primaryARN == recoveryARN {
+		t.Fatal("DR smoke requires two distinct full customer-managed KMS Key ARNs")
+	}
+	cfg := testConfig(t)
+	cfg.Storage.MasterKey = config.MasterKey{
+		Mode: config.MasterKeyModeKeySlots, PrimarySlot: "slot_aws_primary", RecoverySlot: "slot_aws_recovery",
+		StartupDeadline: config.Duration(time.Minute), CallTimeout: config.Duration(5 * time.Second),
+		AllowedKMSKeys: []config.AllowedKMSKey{
+			{Purpose: "primary", Provider: awskms.Provider, Region: primaryRegion, Account: primaryAccount, KeyID: primaryARN, Algorithm: awskms.SymmetricDefaultAlgorithm},
+			{Purpose: "recovery", Provider: awskms.Provider, Region: recoveryRegion, Account: recoveryAccount, KeyID: recoveryARN, Algorithm: awskms.SymmetricDefaultAlgorithm},
+		},
+	}
+	if err := cfg.Validate(config.LoadOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	defer cancel()
+	if err := initializeKMS(ctx, cfg, kmsInitializationOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Bootstrap(ctx, cfg, BootstrapOptions{
+		ProviderName: "M11 DR smoke", ProviderType: "openai", ProviderBaseURL: "https://api.openai.com",
+		ProviderModel: "smoke", PublicModel: "smoke", ProjectName: "M11 DR",
+	}, []byte("ephemeral-dr-smoke-secret")); err != nil {
+		t.Fatal(err)
+	}
+	configPayload, err := yaml.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Dir(cfg.Storage.DataDir)
+	configPath := filepath.Join(root, "config.yaml")
+	if err := os.WriteFile(configPath, configPayload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	backupKey := make([]byte, 32)
+	if _, err := rand.Read(backupKey); err != nil {
+		t.Fatal(err)
+	}
+	defer clear(backupKey)
+	archivePath := filepath.Join(root, "dr-smoke.hmbk")
+	manifest, err := CreateBackup(ctx, cfg, configPath, archivePath, backupKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.KeySlotDescriptorSHA256 == "" || manifest.RestoreDrillVerified {
+		t.Fatalf("manifest=%#v", manifest)
+	}
+	if err := os.WriteFile(filepath.Join(cfg.Storage.DataDir, "primary-restore-sentinel"), []byte("sentinel"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	primaryResult, err := RestoreBackupWithOptions(ctx, cfg, archivePath, backupKey, manifest.BackupID, RestoreOptions{})
+	if err != nil || !primaryResult.VaultVerified || primaryResult.UnlockPath != "primary" {
+		t.Fatalf("Primary restore=%#v err=%v", primaryResult, err)
+	}
+	if err := os.WriteFile(filepath.Join(cfg.Storage.DataDir, "recovery-restore-sentinel"), []byte("sentinel"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	recoveryResult, err := RestoreBackupWithOptions(ctx, cfg, archivePath, backupKey, manifest.BackupID, RestoreOptions{
+		UseRecoverySlot: true, ConfirmRecoverySlot: cfg.Storage.MasterKey.RecoverySlot,
+	})
+	if err != nil || !recoveryResult.VaultVerified || !recoveryResult.RecoveryAudited || recoveryResult.UnlockPath != "recovery" {
+		t.Fatalf("Recovery restore=%#v err=%v", recoveryResult, err)
+	}
+	store, err := boltstore.Open(cfg.MetadataPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor, descriptorErr := store.KeySlotDescriptor(ctx)
+	closeErr := store.Close()
+	if descriptorErr != nil || closeErr != nil || !descriptor.ProductionReady() {
+		t.Fatal(errors.Join(descriptorErr, closeErr))
+	}
+	evidence := map[string]any{
+		"schema_version": 1, "recorded_at": time.Now().UTC(), "result": "success",
+		"backup_id_sha256":         digestM11Value([]byte(manifest.BackupID)),
+		"descriptor_digest_sha256": digestM11Value([]byte(manifest.KeySlotDescriptorSHA256)),
+		"primary_key_arn_sha256":   digestM11Value([]byte(primaryARN)),
+		"recovery_key_arn_sha256":  digestM11Value([]byte(recoveryARN)),
+		"outer_integrity_verified": true, "manifest_claimed_restore_drill": false,
+		"primary_restore_verified": true, "recovery_restore_verified": true,
+		"recovery_audited": true, "workload_identity_enforced": true,
+	}
+	encoded, err := json.Marshal(evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Printf("M11_AWS_KMS_DR_EVIDENCE=%s\n", encoded)
 }
 
 func awsKeyIdentityForAppTest(value string) (region, account string, ok bool) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"github.com/akz142857/Heimdall/internal/config"
 	"github.com/akz142857/Heimdall/internal/id"
 	"github.com/akz142857/Heimdall/internal/ledger"
+	"github.com/akz142857/Heimdall/internal/masterkey"
 	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
 	"github.com/akz142857/Heimdall/internal/store/lock"
 	"github.com/akz142857/Heimdall/internal/usage"
@@ -114,6 +116,14 @@ type RestoreResult struct {
 	DataDir         string `json:"data_dir"`
 	PreviousDataDir string `json:"previous_data_dir"`
 	LedgerSequence  uint64 `json:"ledger_sequence"`
+	UnlockPath      string `json:"unlock_path"`
+	VaultVerified   bool   `json:"vault_verified"`
+	RecoveryAudited bool   `json:"recovery_audited"`
+}
+
+type RestoreOptions struct {
+	UseRecoverySlot     bool
+	ConfirmRecoverySlot string
 }
 
 func RestoreBackup(
@@ -122,6 +132,29 @@ func RestoreBackup(
 	archivePath string,
 	backupKey []byte,
 	confirmBackupID string,
+) (RestoreResult, error) {
+	return RestoreBackupWithOptions(ctx, cfg, archivePath, backupKey, confirmBackupID, RestoreOptions{})
+}
+
+func RestoreBackupWithOptions(
+	ctx context.Context,
+	cfg config.Config,
+	archivePath string,
+	backupKey []byte,
+	confirmBackupID string,
+	options RestoreOptions,
+) (RestoreResult, error) {
+	return restoreBackupWithFactory(ctx, cfg, archivePath, backupKey, confirmBackupID, options, defaultKMSWrapperFactory)
+}
+
+func restoreBackupWithFactory(
+	ctx context.Context,
+	cfg config.Config,
+	archivePath string,
+	backupKey []byte,
+	confirmBackupID string,
+	options RestoreOptions,
+	factory kmsWrapperFactory,
 ) (RestoreResult, error) {
 	if err := ctx.Err(); err != nil {
 		return RestoreResult{}, err
@@ -136,16 +169,18 @@ func RestoreBackup(
 	if cfg.Storage.MasterKey.Mode == config.MasterKeyModeFile && pathWithin(cfg.Storage.MasterKey.File, cfg.Storage.DataDir) {
 		return RestoreResult{}, errors.New("restore requires storage.master_key.file outside storage.data_dir")
 	}
-	masterKey, err := unlockMasterKey(ctx, cfg)
-	if err != nil {
-		return RestoreResult{}, err
+	purpose := masterkey.KeySlotPrimary
+	unlockPath := "primary"
+	if options.UseRecoverySlot {
+		if cfg.Storage.MasterKey.Mode != config.MasterKeyModeKeySlots ||
+			options.ConfirmRecoverySlot == "" || options.ConfirmRecoverySlot != cfg.Storage.MasterKey.RecoverySlot {
+			return RestoreResult{}, errors.New("Recovery restore requires exact confirmation of storage.master_key.recovery_slot")
+		}
+		purpose = masterkey.KeySlotRecovery
+		unlockPath = "recovery"
+	} else if options.ConfirmRecoverySlot != "" {
+		return RestoreResult{}, errors.New("Recovery Slot confirmation requires explicit Recovery restore mode")
 	}
-	fingerprint := sha256.Sum256(masterKey)
-	if "sha256:"+hex.EncodeToString(fingerprint[:]) != manifest.MasterKeyFingerprint {
-		clear(masterKey)
-		return RestoreResult{}, errors.New("backup belongs to a different Master Key")
-	}
-	clear(masterKey)
 
 	dataParent := filepath.Dir(cfg.Storage.DataDir)
 	stagingRoot, err := os.MkdirTemp(dataParent, ".heimdall-restore-stage-*")
@@ -168,7 +203,7 @@ func RestoreBackup(
 			return RestoreResult{}, err
 		}
 	}
-	if err := validateRestoreStage(ctx, cfg, stageData, manifest); err != nil {
+	if err := validateRestoreStage(ctx, cfg, stageData, manifest, purpose, factory); err != nil {
 		return RestoreResult{}, err
 	}
 	stageStore, err := boltstore.Open(stageMetadata)
@@ -208,18 +243,54 @@ func RestoreBackup(
 	return RestoreResult{
 		BackupID: manifest.BackupID, DataDir: cfg.Storage.DataDir,
 		PreviousDataDir: previousDataDir, LedgerSequence: manifest.LedgerWatermark.Sequence,
+		UnlockPath: unlockPath, VaultVerified: true, RecoveryAudited: options.UseRecoverySlot,
 	}, nil
 }
 
-func validateRestoreStage(ctx context.Context, cfg config.Config, stageData string, manifest backup.Manifest) error {
+func validateRestoreStage(
+	ctx context.Context,
+	cfg config.Config,
+	stageData string,
+	manifest backup.Manifest,
+	purpose masterkey.KeySlotPurpose,
+	factory kmsWrapperFactory,
+) error {
 	metadata, err := boltstore.Open(filepath.Join(stageData, cfg.Storage.MetadataFile))
 	if err != nil {
 		return fmt.Errorf("open staged metadata: %w", err)
 	}
 	defer metadata.Close()
-	masterKey, err := unlockMasterKey(ctx, cfg, metadata)
+	var masterKey []byte
+	if cfg.Storage.MasterKey.Mode == config.MasterKeyModeKeySlots {
+		descriptor, descriptorErr := metadata.KeySlotDescriptor(ctx)
+		if descriptorErr != nil {
+			return descriptorErr
+		}
+		if !descriptor.ProductionReady() || manifest.KeySlotDescriptorSHA256 == "" {
+			return errors.New("staged Key Slot descriptor or backup descriptor digest is incomplete")
+		}
+		encodedDescriptor, encodeErr := json.Marshal(descriptor)
+		if encodeErr != nil {
+			return encodeErr
+		}
+		digest := sha256.Sum256(encodedDescriptor)
+		if hex.EncodeToString(digest[:]) != manifest.KeySlotDescriptorSHA256 {
+			return errors.New("staged Key Slot descriptor does not match the backup manifest")
+		}
+		if staticErr := validateDoctorKeySlots(ctx, cfg, metadata); staticErr != nil {
+			return fmt.Errorf("validate staged Key Slots against target allowlist: %w", staticErr)
+		}
+		masterKey, err = unlockKMSMasterKey(ctx, cfg, metadata, purpose, factory)
+	} else {
+		masterKey, err = unlockMasterKey(ctx, cfg, metadata)
+	}
 	if err != nil {
 		return err
+	}
+	fingerprint := sha256.Sum256(masterKey)
+	if "sha256:"+hex.EncodeToString(fingerprint[:]) != manifest.MasterKeyFingerprint {
+		clear(masterKey)
+		return errors.New("staged Vault belongs to a different Master Key than the backup manifest")
 	}
 	secretVault, err := vault.New(masterKey)
 	if err != nil {
@@ -272,10 +343,30 @@ func validateRestoreStage(ctx context.Context, cfg config.Config, stageData stri
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
+	if purpose == masterkey.KeySlotRecovery {
+		if err := appendRecoveryRestoreAudit(ctx, metadata, auditLog, cfg.Storage.MasterKey.RecoverySlot); err != nil {
+			return err
+		}
+	}
 	if err := appendRestoreAudit(ctx, metadata, auditLog, manifest.BackupID); err != nil {
 		return err
 	}
 	return nil
+}
+
+func appendRecoveryRestoreAudit(ctx context.Context, store *boltstore.Store, log *audit.Log, slotID string) error {
+	eventID, err := id.New("aud")
+	if err != nil {
+		return err
+	}
+	if _, err := log.Append(ctx, audit.Event{
+		EventID: eventID, OccurredAt: time.Now().UTC(), ActorType: "local_cli",
+		Action: "security.master_key.recovery_used", TargetType: "master_key_slot",
+		TargetID: slotID, Outcome: "success", ReasonCode: "break_glass_restore",
+	}); err != nil {
+		return err
+	}
+	return checkpointAudit(store, log.Summary())
 }
 
 func appendRestoreAudit(ctx context.Context, store *boltstore.Store, log *audit.Log, backupID string) error {
@@ -394,6 +485,22 @@ func createBackupSnapshotWithLedger(
 		return backup.Manifest{}, errors.New("usage checkpoint is ahead of the Ledger")
 	}
 	usageManifestVersion := 0
+	descriptorDigest := ""
+	if cfg.Storage.MasterKey.Mode == config.MasterKeyModeKeySlots {
+		descriptor, err := metadata.KeySlotDescriptor(ctx)
+		if err != nil {
+			return backup.Manifest{}, err
+		}
+		if descriptor.MasterKeyFingerprint != masterFingerprint || !descriptor.ProductionReady() {
+			return backup.Manifest{}, errors.New("backup Key Slot descriptor does not match the verified Master Key")
+		}
+		encodedDescriptor, err := json.Marshal(descriptor)
+		if err != nil {
+			return backup.Manifest{}, err
+		}
+		digest := sha256.Sum256(encodedDescriptor)
+		descriptorDigest = hex.EncodeToString(digest[:])
+	}
 	var usageManifest *usage.Manifest
 	exporter, err := usage.NewExporter(cfg.UsagePath())
 	if err != nil {
@@ -424,6 +531,7 @@ func createBackupSnapshotWithLedger(
 		Metadata: metadataInfo, LedgerWatermark: ledgerWatermark,
 		CheckpointWatermark: checkpoint, UsageManifestVersion: usageManifestVersion,
 		MasterKeyFingerprint: masterFingerprint, Build: buildinfo.Current(),
+		KeySlotDescriptorSHA256: descriptorDigest,
 	})
 }
 

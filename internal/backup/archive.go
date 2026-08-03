@@ -35,30 +35,33 @@ type File struct {
 }
 
 type Manifest struct {
-	FormatVersion        int                    `json:"format_version"`
-	BackupID             string                 `json:"backup_id"`
-	CreatedAt            time.Time              `json:"created_at"`
-	Encrypted            bool                   `json:"encrypted"`
-	Metadata             boltstore.MetadataInfo `json:"metadata"`
-	LedgerWatermark      ledger.Watermark       `json:"ledger_watermark"`
-	CheckpointWatermark  ledger.Watermark       `json:"checkpoint_watermark"`
-	UsageManifestVersion int                    `json:"usage_manifest_version"`
-	MasterKeyFingerprint string                 `json:"master_key_fingerprint"`
-	Build                buildinfo.Info         `json:"build"`
-	Files                []File                 `json:"files"`
+	FormatVersion           int                    `json:"format_version"`
+	BackupID                string                 `json:"backup_id"`
+	CreatedAt               time.Time              `json:"created_at"`
+	Encrypted               bool                   `json:"encrypted"`
+	Metadata                boltstore.MetadataInfo `json:"metadata"`
+	LedgerWatermark         ledger.Watermark       `json:"ledger_watermark"`
+	CheckpointWatermark     ledger.Watermark       `json:"checkpoint_watermark"`
+	UsageManifestVersion    int                    `json:"usage_manifest_version"`
+	MasterKeyFingerprint    string                 `json:"master_key_fingerprint"`
+	KeySlotDescriptorSHA256 string                 `json:"key_slot_descriptor_sha256,omitempty"`
+	RestoreDrillVerified    bool                   `json:"restore_drill_verified"`
+	Build                   buildinfo.Info         `json:"build"`
+	Files                   []File                 `json:"files"`
 }
 
 type CreateOptions struct {
-	OutputPath           string
-	BackupKey            []byte
-	Files                []SourceFile
-	Metadata             boltstore.MetadataInfo
-	LedgerWatermark      ledger.Watermark
-	CheckpointWatermark  ledger.Watermark
-	UsageManifestVersion int
-	MasterKeyFingerprint string
-	Build                buildinfo.Info
-	Now                  func() time.Time
+	OutputPath              string
+	BackupKey               []byte
+	Files                   []SourceFile
+	Metadata                boltstore.MetadataInfo
+	LedgerWatermark         ledger.Watermark
+	CheckpointWatermark     ledger.Watermark
+	UsageManifestVersion    int
+	MasterKeyFingerprint    string
+	KeySlotDescriptorSHA256 string
+	Build                   buildinfo.Info
+	Now                     func() time.Time
 }
 
 func Create(options CreateOptions) (Manifest, error) {
@@ -106,10 +109,12 @@ func Create(options CreateOptions) (Manifest, error) {
 		FormatVersion: manifestVersion, BackupID: backupID,
 		CreatedAt: options.Now().UTC(), Encrypted: true,
 		Metadata: options.Metadata, LedgerWatermark: options.LedgerWatermark,
-		CheckpointWatermark:  options.CheckpointWatermark,
-		UsageManifestVersion: options.UsageManifestVersion,
-		MasterKeyFingerprint: options.MasterKeyFingerprint,
-		Build:                options.Build,
+		CheckpointWatermark:     options.CheckpointWatermark,
+		UsageManifestVersion:    options.UsageManifestVersion,
+		MasterKeyFingerprint:    options.MasterKeyFingerprint,
+		KeySlotDescriptorSHA256: options.KeySlotDescriptorSHA256,
+		RestoreDrillVerified:    false,
+		Build:                   options.Build,
 	}
 	temp, err := os.CreateTemp(filepath.Dir(options.OutputPath), ".heimdall-backup-*.tmp")
 	if err != nil {
@@ -244,6 +249,9 @@ func Verify(archivePath string, backupKey []byte) (Manifest, error) {
 		!validFingerprint(manifest.MasterKeyFingerprint) {
 		return Manifest{}, errors.New("backup manifest is invalid")
 	}
+	if manifest.KeySlotDescriptorSHA256 != "" && !validSHA256(manifest.KeySlotDescriptorSHA256) {
+		return Manifest{}, errors.New("backup manifest Key Slot descriptor digest is invalid")
+	}
 	if len(observed) != len(manifest.Files) {
 		return Manifest{}, errors.New("backup file set does not match manifest")
 	}
@@ -266,6 +274,18 @@ func Verify(archivePath string, backupKey []byte) (Manifest, error) {
 		}
 	}
 	return manifest, nil
+}
+
+func validSHA256(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	for _, character := range value {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // Extract verifies the complete authenticated archive before writing regular

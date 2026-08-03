@@ -363,6 +363,14 @@ func TestKMSBackupContainsDescriptorsButNoPlaintextMasterKey(t *testing.T) {
 	cfg := kmsAppTestConfig(t)
 	harness := newKMSAppHarness(t)
 	masterKey := bytes.Repeat([]byte{0x57}, 32)
+	workloadToken := []byte("m11-workload-identity-token-must-not-enter-backup")
+	recoveryCredential := []byte("m11-recovery-credential-must-not-enter-backup")
+	tokenPath := filepath.Join(t.TempDir(), "web-identity-token")
+	if err := os.WriteFile(tokenPath, workloadToken, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AWS_WEB_IDENTITY_TOKEN_FILE", tokenPath)
+	t.Setenv("AWS_SECRET_ACCESS_KEY", string(recoveryCredential))
 	previousFactory := defaultKMSWrapperFactory
 	defaultKMSWrapperFactory = harness.factory
 	t.Cleanup(func() { defaultKMSWrapperFactory = previousFactory })
@@ -378,8 +386,12 @@ func TestKMSBackupContainsDescriptorsButNoPlaintextMasterKey(t *testing.T) {
 	}
 	archivePath := filepath.Join(root, "kms-backup.hmbk")
 	backupKey := bytes.Repeat([]byte{0x22}, 32)
-	if _, err := CreateBackup(context.Background(), cfg, configPath, archivePath, backupKey); err != nil {
+	manifest, err := CreateBackup(context.Background(), cfg, configPath, archivePath, backupKey)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if manifest.KeySlotDescriptorSHA256 == "" || manifest.RestoreDrillVerified {
+		t.Fatalf("KMS backup manifest=%#v", manifest)
 	}
 	extracted := filepath.Join(root, "extracted")
 	if _, err := backuppkg.Extract(archivePath, backupKey, extracted); err != nil {
@@ -394,8 +406,8 @@ func TestKMSBackupContainsDescriptorsButNoPlaintextMasterKey(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if bytes.Contains(contents, masterKey) {
-			t.Fatalf("plaintext Master Key appeared in extracted backup file %s", path)
+		if bytes.Contains(contents, masterKey) || bytes.Contains(contents, workloadToken) || bytes.Contains(contents, recoveryCredential) {
+			t.Fatalf("plaintext Master Key or cloud identity material appeared in extracted backup file %s", path)
 		}
 		if filepath.Base(path) == "metadata.db" {
 			metadataFound = true
