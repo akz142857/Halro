@@ -649,6 +649,8 @@ type KeySlotInitialization struct {
 	VaultKeyCheck     []byte
 	AuditHMACEnvelope []byte
 	AuditCheckpoint   AuditCheckpoint
+	Unwrapper         masterkey.SlotUnwrapper
+	Verifier          masterkey.CandidateVerifier
 }
 
 func (s *Store) InitializeKeySlotState(ctx context.Context, state KeySlotInitialization) error {
@@ -670,6 +672,30 @@ func (s *Store) initializeKeySlotStateWithHook(ctx context.Context, state KeySlo
 	}
 	if state.Keyring.ActiveFingerprint != state.Descriptor.MasterKeyFingerprint {
 		return errors.New("keyring fingerprint does not match key slot descriptor")
+	}
+	if state.Unwrapper == nil || state.Verifier == nil {
+		return errors.New("key slot initialization requires unwrap and candidate verification")
+	}
+	for _, slot := range state.Descriptor.Slots {
+		if slot.State != masterkey.KeySlotActive || slot.VerifiedAt == nil {
+			return errors.New("initial key slot descriptor contains an unverified slot")
+		}
+		candidate, err := state.Unwrapper.Unwrap(ctx, slot)
+		if err != nil {
+			return fmt.Errorf("verify initial key slot %q: %w", slot.ID, err)
+		}
+		fingerprint, fingerprintErr := masterkey.MasterKeyFingerprint(candidate)
+		verifyErr := state.Verifier.VerifyCandidate(ctx, candidate)
+		clear(candidate)
+		if fingerprintErr != nil {
+			return fmt.Errorf("verify initial key slot %q fingerprint: %w", slot.ID, fingerprintErr)
+		}
+		if fingerprint != state.Descriptor.MasterKeyFingerprint {
+			return fmt.Errorf("verify initial key slot %q: %w", slot.ID, masterkey.ErrVaultKeyMismatch)
+		}
+		if verifyErr != nil {
+			return fmt.Errorf("verify initial key slot %q candidate: %w", slot.ID, verifyErr)
+		}
 	}
 	if len(state.VaultKeyCheck) == 0 || len(state.AuditHMACEnvelope) == 0 || state.AuditCheckpoint.Bytes < 0 {
 		return errors.New("complete Vault and Audit initialization material is required")

@@ -25,6 +25,12 @@ type boltTestCandidateVerifier struct{}
 
 func (boltTestCandidateVerifier) VerifyCandidate(context.Context, []byte) error { return nil }
 
+type rejectingBoltTestCandidateVerifier struct{ err error }
+
+func (v rejectingBoltTestCandidateVerifier) VerifyCandidate(context.Context, []byte) error {
+	return v.err
+}
+
 func TestKeySlotDescriptorPersistenceUsesRevisionedCOW(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
@@ -157,6 +163,23 @@ func TestKeySlotInitializationPublishesCompleteStateAtomically(t *testing.T) {
 	}
 	if err := store.InitializeKeySlotState(context.Background(), state); !errors.Is(err, ErrAlreadyExists) {
 		t.Fatalf("duplicate initialization error=%v", err)
+	}
+}
+
+func TestKeySlotInitializationRejectsUnverifiedDescriptor(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	state := newTestKeySlotInitialization(t)
+	rejected := errors.New("Vault Key Check rejected candidate")
+	state.Verifier = rejectingBoltTestCandidateVerifier{err: rejected}
+	if err := store.InitializeKeySlotState(context.Background(), state); !errors.Is(err, rejected) {
+		t.Fatalf("forged initialization error=%v", err)
+	}
+	if _, err := store.KeySlotDescriptor(context.Background()); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("rejected descriptor was persisted: %v", err)
 	}
 }
 
@@ -332,6 +355,7 @@ func newTestKeySlotInitialization(t *testing.T) KeySlotInitialization {
 		},
 		VaultKeyCheck: []byte("encrypted-vault-key-check"), AuditHMACEnvelope: []byte("encrypted-audit-key"),
 		AuditCheckpoint: AuditCheckpoint{Records: 1, Bytes: 128},
+		Unwrapper:       boltTestSlotUnwrapper{key: key}, Verifier: boltTestCandidateVerifier{},
 	}
 }
 
