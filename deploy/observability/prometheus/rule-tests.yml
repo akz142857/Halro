@@ -60,6 +60,52 @@ tests:
         exp_alerts: []
 
   - interval: 1m
+    input_series:
+      - series: 'heimdall_kms_calls_total{environment="test",region="local",cluster="standalone",operation="unwrap",status="error",error_class="kms_permission_denied"}'
+        values: '0+1x20'
+      - series: 'heimdall_kms_recovery_last_used_timestamp_seconds{environment="test",region="local",cluster="standalone"}'
+        values: '0 60x20'
+      - series: 'heimdall_kms_unlock_total{environment="test",region="local",cluster="standalone",purpose="primary",status="error",error_class="kms_vault_mismatch"}'
+        values: '0+1x20'
+      - series: 'heimdall_kms_recovery_ready{environment="test",region="local",cluster="standalone"}'
+        values: '0x20'
+      - series: 'heimdall_kms_slot_verified_timestamp_seconds{environment="test",region="local",cluster="standalone",purpose="recovery"}'
+        values: '-8000000x20'
+      - series: 'heimdall_kms_pending_rotation_slots{environment="test",region="local",cluster="standalone"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: HeimdallKMSPrimaryUnlockFailure
+        exp_alerts:
+          - exp_labels: {alertname: HeimdallKMSPrimaryUnlockFailure, category: key-custody, cluster: standalone, environment: test, error_class: kms_permission_denied, operation: unwrap, owner: sre, region: local, service: heimdall, severity: critical, status: error}
+            exp_annotations: {summary: Heimdall Primary KMS unlock failed, runbook_url: /docs/runbooks/m11-production-operations.md}
+      - eval_time: 6m
+        alertname: HeimdallKMSRecoveryUsed
+        exp_alerts:
+          - exp_labels: {alertname: HeimdallKMSRecoveryUsed, category: key-custody, cluster: standalone, environment: test, owner: sre, region: local, service: heimdall, severity: critical}
+            exp_annotations: {summary: Heimdall Recovery Slot was used, runbook_url: /docs/runbooks/m11-production-operations.md}
+      - eval_time: 6m
+        alertname: HeimdallKMSVaultMismatch
+        exp_alerts:
+          - exp_labels: {alertname: HeimdallKMSVaultMismatch, category: key-custody, cluster: standalone, environment: test, error_class: kms_vault_mismatch, owner: security, purpose: primary, region: local, service: heimdall, severity: critical, status: error}
+            exp_annotations: {summary: KMS returned a key that does not match the Heimdall Vault, runbook_url: /docs/runbooks/m11-production-operations.md}
+      - eval_time: 6m
+        alertname: HeimdallKMSRecoveryNotReady
+        exp_alerts:
+          - exp_labels: {alertname: HeimdallKMSRecoveryNotReady, category: key-custody, cluster: standalone, environment: test, owner: sre, region: local, service: heimdall, severity: critical}
+            exp_annotations: {summary: Heimdall Recovery Slot is not active and verified, runbook_url: /docs/runbooks/m11-production-operations.md}
+      - eval_time: 6m
+        alertname: HeimdallKMSRecoveryVerificationExpired
+        exp_alerts:
+          - exp_labels: {alertname: HeimdallKMSRecoveryVerificationExpired, category: key-custody, cluster: standalone, environment: test, owner: sre, purpose: recovery, region: local, service: heimdall, severity: warning}
+            exp_annotations: {summary: Heimdall Recovery Slot verification is older than 90 days, runbook_url: /docs/runbooks/m11-production-operations.md}
+      - eval_time: 16m
+        alertname: HeimdallKMSPendingRotation
+        exp_alerts:
+          - exp_labels: {alertname: HeimdallKMSPendingRotation, category: key-custody, cluster: standalone, environment: test, owner: sre, region: local, service: heimdall, severity: warning}
+            exp_annotations: {summary: Heimdall Key Slot rotation remains pending, runbook_url: /docs/runbooks/m11-production-operations.md}
+
+  - interval: 1m
     alert_rule_test:
       - eval_time: 3m
         alertname: HeimdallTargetDown

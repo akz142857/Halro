@@ -15,6 +15,9 @@ Owner: SRE
    to distinguish upstream degradation from gateway saturation.
 5. Check Prometheus rule evaluation, Alertmanager notification, TSDB disk, and
    the independent dead-man monitor.
+6. For AWS KMS/Key Slot alerts, follow the
+   [M11 production operations runbook](../runbooks/m11-production-operations.md)
+   and correlate the bounded Heimdall Audit `correlation_id` with CloudTrail.
 
 Use the authenticated, audited Prometheus query path to inspect `up`, the
 `heimdall:*` recording rules and the source `heimdall_*` series. Do not enable

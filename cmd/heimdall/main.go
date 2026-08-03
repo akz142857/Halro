@@ -24,6 +24,7 @@ import (
 	"github.com/akz142857/Heimdall/internal/buildinfo"
 	"github.com/akz142857/Heimdall/internal/config"
 	"github.com/akz142857/Heimdall/internal/domain"
+	"github.com/akz142857/Heimdall/internal/hostsecurity"
 	"github.com/akz142857/Heimdall/internal/masterkey"
 	"github.com/akz142857/Heimdall/internal/metricsauth"
 	"github.com/akz142857/Heimdall/internal/safelog"
@@ -44,6 +45,7 @@ var (
 	rewrapKMSCommand      = app.RewrapKMSKey
 	doctorCommand         = app.DoctorWithOptions
 	restoreBackupCommand  = app.RestoreBackupWithOptions
+	hardenRuntimeCommand  = hostsecurity.Harden
 )
 
 func run(arguments []string, logger *slog.Logger) error {
@@ -580,6 +582,15 @@ func run(arguments []string, logger *slog.Logger) error {
 }
 
 func runRuntime(cfg config.Config, logger *slog.Logger, printGuide bool) error {
+	hardening, err := hardenRuntimeCommand()
+	if err != nil {
+		return fmt.Errorf("apply runtime host hardening before Master Key unlock: %w", err)
+	}
+	logger.Info("runtime host hardening applied",
+		"core_dumps_disabled", hardening.CoreDumpsDisabled,
+		"process_dump_disabled", hardening.ProcessDumpDisabled,
+		"managed_heap_dontdump", hardening.ManagedHeapDontDump,
+	)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	runtime, err := app.Open(ctx, cfg, logger)

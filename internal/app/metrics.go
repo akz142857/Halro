@@ -10,12 +10,14 @@ import (
 	"net/http"
 	"runtime"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/akz142857/Heimdall/internal/buildinfo"
 	"github.com/akz142857/Heimdall/internal/config"
+	"github.com/akz142857/Heimdall/internal/masterkey"
 	"github.com/akz142857/Heimdall/internal/usage"
 	"github.com/akz142857/Heimdall/internal/vault"
 )
@@ -141,6 +143,7 @@ func (r *Runtime) writeMetrics(writer http.ResponseWriter) error {
 	fmt.Fprintf(output, "heimdall_alert_queue_depth %d\n", alertStats.Queued)
 	metricHeader(output, "heimdall_token_guard_events_dropped_total", "counter", "Token Guard security events dropped before alert dispatch.")
 	fmt.Fprintf(output, "heimdall_token_guard_events_dropped_total %d\n", r.tokenGuard.DroppedEvents())
+	r.writeKMSMetrics(output)
 	metricHeader(output, "heimdall_provider_up", "gauge", "Provider adapter loaded and available for passive routing.")
 	for _, providerType := range r.providers.ProviderTypes() {
 		fmt.Fprintf(output, "heimdall_provider_up{provider_type=%s} 1\n",
@@ -226,6 +229,100 @@ func (r *Runtime) writeMetrics(writer http.ResponseWriter) error {
 	return output.Flush()
 }
 
+func (r *Runtime) writeKMSMetrics(output *bufio.Writer) {
+	snapshot := snapshotKMSMetrics()
+	callKeys := make([]kmsCallMetricKey, 0, len(snapshot.Calls))
+	for key := range snapshot.Calls {
+		callKeys = append(callKeys, key)
+	}
+	sort.Slice(callKeys, func(left, right int) bool {
+		if callKeys[left].Operation != callKeys[right].Operation {
+			return callKeys[left].Operation < callKeys[right].Operation
+		}
+		if callKeys[left].Status != callKeys[right].Status {
+			return callKeys[left].Status < callKeys[right].Status
+		}
+		return callKeys[left].ErrorClass < callKeys[right].ErrorClass
+	})
+	metricHeader(output, "heimdall_kms_calls_total", "counter", "Cloud KMS provider calls by bounded operation and outcome.")
+	metricHeader(output, "heimdall_kms_call_duration_seconds", "summary", "Cloud KMS provider call duration by bounded operation and outcome.")
+	for _, key := range callKeys {
+		labels := fmt.Sprintf("operation=%s,status=%s,error_class=%s", strconv.Quote(string(key.Operation)), strconv.Quote(key.Status), strconv.Quote(key.ErrorClass))
+		fmt.Fprintf(output, "heimdall_kms_calls_total{%s} %d\n", labels, snapshot.Calls[key])
+		fmt.Fprintf(output, "heimdall_kms_call_duration_seconds_sum{%s} %s\n", labels, nanosecondsSeconds(snapshot.DurationNanos[key]))
+		fmt.Fprintf(output, "heimdall_kms_call_duration_seconds_count{%s} %d\n", labels, snapshot.Calls[key])
+	}
+	unlocks := make([]kmsUnlockMetricKey, 0, len(snapshot.Unlocks))
+	for key := range snapshot.Unlocks {
+		unlocks = append(unlocks, key)
+	}
+	sort.Slice(unlocks, func(left, right int) bool {
+		if unlocks[left].Purpose != unlocks[right].Purpose {
+			return unlocks[left].Purpose < unlocks[right].Purpose
+		}
+		if unlocks[left].Status != unlocks[right].Status {
+			return unlocks[left].Status < unlocks[right].Status
+		}
+		return unlocks[left].ErrorClass < unlocks[right].ErrorClass
+	})
+	metricHeader(output, "heimdall_kms_unlock_total", "counter", "Final Key Slot unlock outcomes; Recovery is always an explicit operator path.")
+	for _, key := range unlocks {
+		fmt.Fprintf(output, "heimdall_kms_unlock_total{purpose=%s,status=%s,error_class=%s} %d\n",
+			strconv.Quote(string(key.Purpose)), strconv.Quote(key.Status), strconv.Quote(key.ErrorClass), snapshot.Unlocks[key])
+	}
+	metricHeader(output, "heimdall_kms_automatic_fallback_total", "counter", "Automatic Primary-to-Recovery fallbacks; invariantly zero because fallback is forbidden.")
+	fmt.Fprintln(output, "heimdall_kms_automatic_fallback_total 0")
+	metricHeader(output, "heimdall_kms_recovery_last_used_timestamp_seconds", "gauge", "UTC timestamp of the latest audited Recovery Slot use; zero means none recorded.")
+	lastRecoveryUse := int64(0)
+	if !r.kmsRecoveryLastUsed.IsZero() {
+		lastRecoveryUse = r.kmsRecoveryLastUsed.Unix()
+	}
+	fmt.Fprintf(output, "heimdall_kms_recovery_last_used_timestamp_seconds %d\n", lastRecoveryUse)
+	if r.config.Storage.MasterKey.Mode != config.MasterKeyModeKeySlots {
+		return
+	}
+	metricHeader(output, "heimdall_kms_descriptor_valid", "gauge", "Whether the persisted Key Slot descriptor is structurally valid.")
+	metricHeader(output, "heimdall_kms_recovery_ready", "gauge", "Whether the configured Recovery Slot is active and independently verified.")
+	metricHeader(output, "heimdall_kms_pending_rotation_slots", "gauge", "Number of pending Key Slots in the current descriptor generation.")
+	metricHeader(output, "heimdall_kms_slot_state", "gauge", "Configured Key Slot state by bounded purpose and state.")
+	metricHeader(output, "heimdall_kms_slot_verified_timestamp_seconds", "gauge", "UTC verification timestamp for configured active Key Slots.")
+	descriptor, err := r.store.KeySlotDescriptor(context.Background())
+	if err != nil || descriptor.Validate() != nil {
+		fmt.Fprintln(output, "heimdall_kms_descriptor_valid 0")
+		fmt.Fprintln(output, "heimdall_kms_recovery_ready 0")
+		fmt.Fprintln(output, "heimdall_kms_pending_rotation_slots 0")
+		return
+	}
+	fmt.Fprintln(output, "heimdall_kms_descriptor_valid 1")
+	pending := 0
+	recoveryReady := false
+	for _, slot := range descriptor.Slots {
+		if slot.State == masterkey.KeySlotPending {
+			pending++
+		}
+		expectedID := r.config.Storage.MasterKey.PrimarySlot
+		if slot.Purpose == masterkey.KeySlotRecovery {
+			expectedID = r.config.Storage.MasterKey.RecoverySlot
+		}
+		if slot.ID != expectedID || (slot.Purpose != masterkey.KeySlotPrimary && slot.Purpose != masterkey.KeySlotRecovery) {
+			continue
+		}
+		fmt.Fprintf(output, "heimdall_kms_slot_state{purpose=%s,state=%s} 1\n", strconv.Quote(string(slot.Purpose)), strconv.Quote(string(slot.State)))
+		if slot.VerifiedAt != nil {
+			fmt.Fprintf(output, "heimdall_kms_slot_verified_timestamp_seconds{purpose=%s} %d\n", strconv.Quote(string(slot.Purpose)), slot.VerifiedAt.Unix())
+		}
+		if slot.Purpose == masterkey.KeySlotRecovery && slot.State == masterkey.KeySlotActive && slot.VerifiedAt != nil {
+			recoveryReady = true
+		}
+	}
+	fmt.Fprintf(output, "heimdall_kms_pending_rotation_slots %d\n", pending)
+	if recoveryReady {
+		fmt.Fprintln(output, "heimdall_kms_recovery_ready 1")
+	} else {
+		fmt.Fprintln(output, "heimdall_kms_recovery_ready 0")
+	}
+}
+
 func metricHeader(output *bufio.Writer, name, metricType, help string) {
 	fmt.Fprintf(output, "# HELP %s %s\n", name, help)
 	fmt.Fprintf(output, "# TYPE %s %s\n", name, metricType)
@@ -262,4 +359,8 @@ func millisecondsSeconds(value uint64) string {
 		return strconv.FormatUint(whole, 10)
 	}
 	return fmt.Sprintf("%d.%s", whole, fraction)
+}
+
+func nanosecondsSeconds(value uint64) string {
+	return strconv.FormatFloat(float64(value)/float64(time.Second), 'f', 9, 64)
 }

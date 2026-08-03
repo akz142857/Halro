@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	goruntime "runtime"
 	"runtime/pprof"
+	"strings"
 	"testing"
 
 	"github.com/akz142857/Heimdall/internal/config"
@@ -86,6 +87,16 @@ func TestKMSMasterKeyCanaryNeverReachesPersistenceTelemetryErrorsOrHeapProfile(t
 	if response.Code != http.StatusOK {
 		t.Fatalf("metrics status=%d body=%s", response.Code, response.Body.String())
 	}
+	assertMetricsExpositionContract(t, response.Body.String())
+	for _, metric := range []string{
+		"heimdall_kms_calls_total", "heimdall_kms_call_duration_seconds",
+		"heimdall_kms_unlock_total", "heimdall_kms_automatic_fallback_total 0",
+		"heimdall_kms_recovery_ready 1", "heimdall_kms_pending_rotation_slots 0",
+	} {
+		if !strings.Contains(response.Body.String(), metric) {
+			t.Fatalf("KMS Metrics output is missing %q", metric)
+		}
+	}
 
 	ciphertextText := base64.StdEncoding.EncodeToString(primary.WrappedKey)
 	publicSurfaceCanaries := []string{kmsMasterKeyCanary, primaryKMSKeyARN, recoveryKMSKeyARN, ciphertextText}
@@ -95,6 +106,10 @@ func TestKMSMasterKeyCanaryNeverReachesPersistenceTelemetryErrorsOrHeapProfile(t
 	auditBytes, err := os.ReadFile(cfg.AuditPath())
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !bytes.Contains(auditBytes, []byte(`"action":"security.kms.call"`)) ||
+		!bytes.Contains(auditBytes, []byte(`"correlation_id":"fake-unwrap-`)) {
+		t.Fatal("Heimdall Audit cannot be correlated with the provider KMS request ID")
 	}
 	assertNoCanaries(t, "KMS Audit", auditBytes, publicSurfaceCanaries)
 	var heapProfile bytes.Buffer

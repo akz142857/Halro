@@ -1,0 +1,42 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "IndependentKeyAdministration",
+      "Effect": "Allow",
+      "Principal": {"AWS": "arn:aws:iam::${RECOVERY_ACCOUNT_ID}:role/${RECOVERY_KMS_ADMIN_ROLE}"},
+      "Action": "kms:*",
+      "Resource": "*"
+    },
+    {
+      "Sid": "TemporaryBreakGlassDecrypt",
+      "Effect": "Allow",
+      "Principal": {"AWS": "arn:aws:iam::${RECOVERY_ACCOUNT_ID}:role/${HEIMDALL_RECOVERY_ROLE}"},
+      "Action": "kms:Decrypt",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "kms:EncryptionContext:heimdall.context_version": "1",
+          "kms:EncryptionContext:heimdall.payload_version": "1",
+          "kms:EncryptionContext:heimdall.purpose": "recovery",
+          "kms:EncryptionContext:heimdall.instance_sha256": "${INSTANCE_ID_SHA256}"
+        }
+      }
+    },
+    {
+      "Sid": "ApprovedLifecycleRole",
+      "Effect": "Allow",
+      "Principal": {"AWS": "arn:aws:iam::${RECOVERY_ACCOUNT_ID}:role/${HEIMDALL_LIFECYCLE_ROLE}"},
+      "Action": ["kms:Encrypt", "kms:Decrypt"],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "kms:EncryptionContext:heimdall.context_version": "1",
+          "kms:EncryptionContext:heimdall.payload_version": "1",
+          "kms:EncryptionContext:heimdall.purpose": "recovery",
+          "kms:EncryptionContext:heimdall.instance_sha256": "${INSTANCE_ID_SHA256}"
+        }
+      }
+    }
+  ]
+}

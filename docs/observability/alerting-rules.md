@@ -19,6 +19,10 @@ fields and controlled target labels only.
 - Providers: deployment unhealthy, multiple deployments unhealthy, fallback
   saturation and capacity pressure.
 - Traffic: sustained error rate with a minimum request count.
+- Key custody: KMS unwrap errors, Recovery readiness/verification/use, Vault
+  mismatch, and rotations left pending. Permanent cold-start failures are also
+  covered by expected-target loss because an unavailable process cannot expose
+  its own failure counter.
 - Platform: Prometheus rule/config failures and TSDB disk pressure, plus
   Alertmanager notification failures.
 
@@ -26,6 +30,8 @@ Aggregated critical provider alerts inhibit child deployment warnings with the
 same environment and cluster. Maintenance silences require owner, reason and
 expiry. `promtool test rules` fixtures cover firing, pending, recovery, low
 traffic, reset, absent target, not-yet-probed deployments and cascade cases.
+KMS response procedures are in
+[`docs/runbooks/m11-production-operations.md`](../runbooks/m11-production-operations.md).
 
 ## Formal dead-man contract
 

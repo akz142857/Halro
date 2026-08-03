@@ -179,7 +179,7 @@ GCP/Azure artifact 不进入本次决策。未完成 spike 和 ADR 更新前不�
 | M11-PR4 | AWS KMS 初始化与双 Slot 恢复 | In Progress | PR2、PR3b | 新实例原子初始化；Primary/Recovery 独立验证；失败清理；CLI 测试 | [#60](https://github.com/akz142857/Heimdall/issues/60)；[Draft PR #69](https://github.com/akz142857/Heimdall/pull/69)；`docs/evidence/m11-04-dual-slot-initialization-2026-08-03.md` | 本地实现、Secret Canary 与 kill-point 门禁通过；真实 AWS 双 Key evidence 待有效身份和现有 Keys；不含 File→KMS 迁移 |
 | M11-PR5 | Rewrap、DEK Rotate 与崩溃恢复 | In Progress | PR2、PR4 | COW/bridge/Keyring/compaction；全部 publication kill points；幂等恢复 | [#61](https://github.com/akz142857/Heimdall/issues/61)；[Draft PR #71](https://github.com/akz142857/Heimdall/pull/71)；`docs/evidence/m11-05-key-lifecycle-2026-08-03.md` | 本地实现与 kill-point matrix 已落地；真实 AWS 证据待补 |
 | M11-PR6 | Doctor、Backup、Restore 与 DR | In Progress | PR4、PR5 | 完整/静态 doctor；备份 manifest；KMS restore；真实 Recovery Slot 恢复演练 | [#62](https://github.com/akz142857/Heimdall/issues/62)；[Draft PR #72](https://github.com/akz142857/Heimdall/pull/72)；`docs/evidence/m11-06-kms-dr-2026-08-03.md` | 本地实现与门禁通过；真实 AWS 与独立操作者证据待补 |
-| M11-PR7 | 生产交付与发布门禁 | Not Started | PR1–PR6（含 PR3a/PR3b） | Audit/Metrics/alerts；主机加固；IAM/Key Policy；VM/K8s Runbook；SBOM、签名、安全评审 | [#63](https://github.com/akz142857/Heimdall/issues/63) | 完成后才可 production-ready |
+| M11-PR7 | 生产交付与发布门禁 | In Progress | PR1–PR6（含 PR3a/PR3b） | Audit/Metrics/alerts；主机加固；IAM/Key Policy；VM/K8s Runbook；SBOM、签名、安全评审 | [#63](https://github.com/akz142857/Heimdall/issues/63)；`docs/evidence/m11-07-production-readiness-2026-08-03.md` | 本地生产基线实现中；真实 AWS、RC artifact 与四方签署待补，尚不可 production-ready |
 
 ## 7. PR Slice 详细范围
 
@@ -314,22 +314,22 @@ storage:
 
 | Gate | 状态 | 必需证据 | Evidence link/commit |
 |---|---|---|---|
-| G1 File 模式保持云中立且完整可用 | Not Started | File init/start/rotate/backup/restore tests | — |
-| G2 最终配置 schema 冻结 | Not Started | 统一字段 config tests + reviewed example + `config check` zero-KMS-call test | — |
+| G1 File 模式保持云中立且完整可用 | In Review | File init/start/rotate/backup/restore tests | PR #64 起的全仓 File 回归与 KMS boundary 持续通过；待堆叠 PR review/merge |
+| G2 最终配置 schema 冻结 | In Review | 统一字段 config tests + reviewed example + `config check` zero-KMS-call test | PR #64；严格 schema 与 CLI zero-call test 已落地 |
 | G3 AWS SDK 发布决策冻结 | In Review | spike report + Accepted ADR 0010 | [M11-03A evidence](evidence/m11-03a-aws-sdk-spike-2026-08-03.md)；[PR #66](https://github.com/akz142857/Heimdall/pull/66) |
 | G4 Primary/Recovery 双 Slot | In Progress | 两个 Key 独立 unwrap + Vault Check | 本地双独立 fake KMS、原子初始化和 Recovery Audit 通过；真实 AWS 双 Key 待执行 |
-| G5 密钥材料不落盘且主机边界加固 | In Progress | filesystem/backup inspection；logs/errors/Audit/Metrics/bbolt/heap canary；core/pprof/RLIMIT/ptrace evidence | KMS filesystem/backup/bbolt/telemetry/heap Canary 通过；进程与部署加固归 M11-PR7 |
-| G6 KMS 不进入请求热路径 | Not Started | request-path zero-call test | — |
-| G7 错误分类和有界重试 | Not Started | timeout/throttle/identity/IAM/key-state tests | — |
+| G5 密钥材料不落盘且主机边界加固 | In Progress | filesystem/backup inspection；logs/errors/Audit/Metrics/bbolt/heap canary；core/pprof/RLIMIT/ptrace evidence | Canary、`RLIMIT_CORE=0`、Linux non-dumpable 与 K8s/systemd 基线已落地；最终 RC/目标主机证据待补 |
+| G6 KMS 不进入请求热路径 | In Review | request-path zero-call test | `TestKMSBootstrapAndRuntimeUsePrimaryOnlyOutsideRequestPath` 与 boundary script 通过 |
+| G7 错误分类和有界重试 | In Review | timeout/throttle/identity/IAM/key-state tests | PR #66/#67 contract、retry、Adapter tests 通过；真实 AWS throttle/identity evidence 待补 |
 | G8 KEK rewrap 正确 | In Progress | fingerprint/KeyVersion 不变证据 | `docs/evidence/m11-05-key-lifecycle-2026-08-03.md`；真实 AWS 待补 |
 | G9 DEK rotate 正确 | In Progress | 全量重加密 + session/audit/keyring evidence | `docs/evidence/m11-05-key-lifecycle-2026-08-03.md`；真实 AWS 待补 |
 | G10 Crash recovery 完整 | In Progress | 全 publication kill-point matrix | `docs/evidence/m11-05-key-lifecycle-2026-08-03.md` |
 | G11 Doctor 完整/静态模式 | In Progress | local no-mutation hashes + KMS evidence | `docs/evidence/m11-06-kms-dr-2026-08-03.md`；真实 AWS 待补 |
 | G12 Backup/restore 完整 | In Progress | Primary 与 Recovery restore evidence | `docs/evidence/m11-06-kms-dr-2026-08-03.md`；真实 AWS 待补 |
 | G13 Recovery break-glass 可执行 | In Progress | 独立操作者按 Runbook 完成演练 | Runbook 已落地；独立操作者签署待补 |
-| G14 Audit/Metrics/Alerts 完整 | Not Started | contract tests + alert fixtures + observability secret-canary | — |
-| G15 AWS artifact 供应链通过 | Not Started | SBOM/vuln/checksum/signature evidence | — |
-| G16 四方发布评审通过 | Not Started | Security/Backend/SRE/Release sign-off | — |
+| G14 Audit/Metrics/Alerts 完整 | In Progress | contract tests + alert fixtures + observability secret-canary | `docs/evidence/m11-07-production-readiness-2026-08-03.md`；本地 contract/fixtures 已落地，真实关联待补 |
+| G15 AWS artifact 供应链通过 | In Progress | SBOM/vuln/checksum/signature evidence | release workflow 已具备 SBOM/checksum/Sigstore；最终 RC 产物审核待补 |
+| G16 四方发布评审通过 | Not Started | Security/Backend/SRE/Release sign-off | 签署模板已落地，禁止预签 |
 
 ## 9. 风险登记
 
