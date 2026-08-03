@@ -29,6 +29,9 @@ type KeyRotationResult struct {
 }
 
 func RotateMasterKey(ctx context.Context, cfg config.Config, newKeyFile string) (KeyRotationResult, error) {
+	if cfg.Storage.MasterKey.Mode == config.MasterKeyModeKeySlots {
+		return KeyRotationResult{}, errors.New("key_slots rotation requires RotateKMSMasterKey with an explicit operation ID")
+	}
 	return rotateMasterKeyWithHook(ctx, cfg, newKeyFile, nil)
 }
 
@@ -419,6 +422,14 @@ func verifyRotatedMetadata(ctx context.Context, store *boltstore.Store, newVault
 	}
 	if keyring.ActiveFingerprint != keyFingerprint(newKey) {
 		return fmt.Errorf("rotated keyring fingerprint %s does not match new master key %s", keyring.ActiveFingerprint, keyFingerprint(newKey))
+	}
+	descriptor, descriptorErr := store.KeySlotDescriptor(ctx)
+	if descriptorErr == nil {
+		if !descriptor.ProductionReady() || descriptor.MasterKeyFingerprint != keyring.ActiveFingerprint {
+			return errors.New("rotated Key Slot descriptor does not match the active Vault generation")
+		}
+	} else if !errors.Is(descriptorErr, boltstore.ErrNotFound) {
+		return descriptorErr
 	}
 	if expectBridge != (len(keyring.RecoveryEnvelope) > 0) {
 		return errors.New("rotated keyring recovery state is inconsistent")

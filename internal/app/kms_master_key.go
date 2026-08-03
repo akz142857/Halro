@@ -168,6 +168,19 @@ func configuredKMSKey(masterKey config.MasterKey, purpose masterkey.KeySlotPurpo
 	return matches[0], nil
 }
 
+func configuredKMSKeyReference(masterKey config.MasterKey, purpose masterkey.KeySlotPurpose, keyReference string) (config.AllowedKMSKey, error) {
+	var matches []config.AllowedKMSKey
+	for _, allowed := range masterKey.AllowedKMSKeys {
+		if allowed.Purpose == string(purpose) && allowed.KeyID == keyReference {
+			matches = append(matches, allowed)
+		}
+	}
+	if len(matches) != 1 {
+		return config.AllowedKMSKey{}, fmt.Errorf("KMS lifecycle operation requires exactly one %s allowlist entry for the requested key reference", purpose)
+	}
+	return matches[0], nil
+}
+
 func wrapPendingSlot(
 	ctx context.Context,
 	masterKeyConfig config.MasterKey,
@@ -180,6 +193,22 @@ func wrapPendingSlot(
 	allowed, err := configuredKMSKey(masterKeyConfig, purpose)
 	if err != nil {
 		return masterkey.PendingKeySlot{}, err
+	}
+	return wrapPendingSlotWithKey(ctx, masterKeyConfig, factory, allowed, instanceID, slotID, purpose, masterKey)
+}
+
+func wrapPendingSlotWithKey(
+	ctx context.Context,
+	masterKeyConfig config.MasterKey,
+	factory kmsWrapperFactory,
+	allowed config.AllowedKMSKey,
+	instanceID string,
+	slotID string,
+	purpose masterkey.KeySlotPurpose,
+	masterKey []byte,
+) (masterkey.PendingKeySlot, error) {
+	if allowed.Purpose != string(purpose) {
+		return masterkey.PendingKeySlot{}, errors.New("KMS allowlist purpose does not match Key Slot purpose")
 	}
 	binding := corekms.PayloadBinding{InstanceID: instanceID, SlotID: slotID}
 	payload, err := corekms.EncodeProtectedPayload(binding, masterKey)
