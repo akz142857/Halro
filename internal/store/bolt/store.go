@@ -15,10 +15,11 @@ import (
 
 	"github.com/akz142857/Heimdall/internal/domain"
 	"github.com/akz142857/Heimdall/internal/ledger"
+	"github.com/akz142857/Heimdall/internal/masterkey"
 	bbolt "go.etcd.io/bbolt"
 )
 
-const schemaVersion uint64 = 9
+const schemaVersion uint64 = 10
 
 func CurrentSchemaVersion() uint64 { return schemaVersion }
 
@@ -61,6 +62,7 @@ var (
 	keyAuditCheckpoint           = []byte("audit_checkpoint")
 	keyAuditHMACEnvelope         = []byte("audit_hmac_envelope")
 	keyVaultKeyring              = []byte("vault_keyring")
+	keyKeySlotDescriptor         = []byte("key_slot_descriptor")
 	keyRuntimeSettings           = []byte("runtime_settings")
 	keyInstanceUISettings        = []byte("instance_ui_settings")
 )
@@ -169,6 +171,12 @@ var migrations = []migration{
 		return migrationStep(step, "after_create_admin_mfa_buckets")
 	}},
 	{version: 9, name: "provider_profile_bindings", up: migrateProviderProfileBindings},
+	{version: 10, name: "master_key_slots", up: func(_ *bbolt.Tx, step func(string) error) error {
+		if err := migrationStep(step, "before_reserve_key_slot_descriptor"); err != nil {
+			return err
+		}
+		return migrationStep(step, "after_reserve_key_slot_descriptor")
+	}},
 }
 
 func migrateProviderProfileBindings(tx *bbolt.Tx, step func(string) error) error {
@@ -478,6 +486,113 @@ func (s *Store) VaultKeyring() (VaultKeyring, error) {
 		return keyring, fmt.Errorf("decode vault keyring: %w", err)
 	}
 	return keyring, keyring.Validate()
+}
+
+func (s *Store) PutKeySlotDescriptor(ctx context.Context, descriptor masterkey.KeySlotDescriptor) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := descriptor.Validate(); err != nil {
+		return err
+	}
+	encoded, err := json.Marshal(descriptor)
+	if err != nil {
+		return err
+	}
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		meta := tx.Bucket(bucketMeta)
+		if meta.Get(keyKeySlotDescriptor) != nil {
+			return ErrAlreadyExists
+		}
+		return meta.Put(keyKeySlotDescriptor, encoded)
+	})
+}
+
+func (s *Store) KeySlotDescriptor(ctx context.Context) (masterkey.KeySlotDescriptor, error) {
+	var descriptor masterkey.KeySlotDescriptor
+	if err := ctx.Err(); err != nil {
+		return descriptor, err
+	}
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		raw := tx.Bucket(bucketMeta).Get(keyKeySlotDescriptor)
+		if raw == nil {
+			return ErrNotFound
+		}
+		if err := json.Unmarshal(raw, &descriptor); err != nil {
+			return fmt.Errorf("decode key slot descriptor: %w", err)
+		}
+		return descriptor.Validate()
+	})
+	return descriptor.Clone(), err
+}
+
+func (s *Store) ReplaceKeySlotDescriptor(
+	ctx context.Context,
+	expectedRevision uint64,
+	descriptor masterkey.KeySlotDescriptor,
+) error {
+	return s.replaceKeySlotDescriptorWithHook(ctx, expectedRevision, descriptor, nil)
+}
+
+func (s *Store) replaceKeySlotDescriptorWithHook(
+	ctx context.Context,
+	expectedRevision uint64,
+	descriptor masterkey.KeySlotDescriptor,
+	hook func(string) error,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if expectedRevision == 0 {
+		return errors.New("expected key slot descriptor revision is required")
+	}
+	if err := descriptor.Validate(); err != nil {
+		return err
+	}
+	encoded, err := json.Marshal(descriptor)
+	if err != nil {
+		return err
+	}
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		meta := tx.Bucket(bucketMeta)
+		raw := meta.Get(keyKeySlotDescriptor)
+		if raw == nil {
+			return ErrNotFound
+		}
+		var current masterkey.KeySlotDescriptor
+		if err := json.Unmarshal(raw, &current); err != nil {
+			return fmt.Errorf("decode current key slot descriptor: %w", err)
+		}
+		if err := current.Validate(); err != nil {
+			return err
+		}
+		if current.Revision != expectedRevision {
+			return ErrRevisionConflict
+		}
+		if err := descriptor.ValidateSuccessor(current); err != nil {
+			return err
+		}
+		if hook != nil {
+			if err := hook("before_put_key_slot_descriptor"); err != nil {
+				return err
+			}
+		}
+		if err := meta.Put(keyKeySlotDescriptor, encoded); err != nil {
+			return err
+		}
+		if hook != nil {
+			if err := hook("after_put_key_slot_descriptor"); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func (s *Store) VaultRotationBridge() ([]byte, error) {
