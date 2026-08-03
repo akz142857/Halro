@@ -1,6 +1,6 @@
 # ADR 0010: KMS SDK dependency and release isolation
 
-Status: Proposed — pending M11 AWS SDK spike (2026-08-03)
+Status: Accepted (2026-08-03)
 
 Milestone tracking: `docs/milestone-m11-master-key-custody-aws-kms.md`
 
@@ -56,12 +56,77 @@ or plaintext payload and stable metadata required for Audit. Adapters return
 typed error classes; they do not own retry loops, fallback, Slot selection,
 Vault validation, or persistence transactions.
 
-## Decision pending
+The reviewed production contract is implemented by `internal/kms` and freezes:
 
-M11 Phase 0 will compare only the two release models that are relevant to the
-current AWS production requirement:
+- exactly 112 plaintext bytes for the versioned `HKMSKEY1` protected payload;
+- at most 64 KiB provider-neutral ciphertext, with each Adapter enforcing its
+  smaller native limit (AWS Encrypt/Decrypt uses 6,144 bytes);
+- 2,048-byte key reference, 128-byte algorithm and bounded opaque binding
+  context fields;
+- cloned mutable request/result buffers at ownership boundaries;
+- stable classes `kms_transient`, `kms_throttled`,
+  `kms_identity_not_ready`, `kms_permission_denied`,
+  `kms_key_unavailable`, `kms_config_invalid`, `kms_ciphertext_invalid`,
+  `kms_payload_invalid`, `kms_vault_mismatch` and
+  `kms_adapter_unavailable`;
+- automatic retry eligibility only for transient, throttled and
+  identity-not-ready classes; all other classes fail fast at the current Slot;
+- secret-safe public error text while retaining the native cause only for
+  internal classification with `errors.Is`/`errors.As`.
 
-### Option A: one Heimdall artifact
+`internal/kms/fakekms` implements this contract using authenticated encryption,
+provider-binding tamper rejection, scripted typed faults, timeout and
+cancellation. It is not selectable by production configuration.
+
+## Decision
+
+Heimdall accepts Option A: one module and one signed `heimdall` artifact. The
+main binary and production container will include the official AWS SDK config
+and KMS packages after the production Adapter lands. File mode selects and
+constructs its backend before any AWS configuration, credential-chain or
+client initialization, so linking the SDK does not make AWS a premise of the
+core architecture or a runtime dependency of File mode.
+
+The accepted evidence is:
+
+- `docs/evidence/m11-03a-aws-sdk-spike-2026-08-03.md`;
+- reproducible harness `tools/m11/aws-sdk-spike/run.sh`;
+- provider-neutral contract and fake-KMS tests under `internal/kms`.
+
+The spike pinned `config@v1.32.34` and `service/kms@v1.55.3`. Relative to the
+cloud-neutral artifact it measured +15 modules, +3,132,416 binary bytes,
++3,145,728 production-container bytes and +15 SPDX packages, with zero new
+reachable vulnerability, zero File-mode metadata requests and zero AWS
+dependencies in the Gateway package graph. Clean test increased 0.27 seconds
+and 25-run cold-start mean increased 2.8 milliseconds on the recorded arm64
+host.
+
+Publishing both artifacts would require 86.3% more combined binary bytes and
+87.1% more combined container bytes per architecture, plus duplicate build,
+SBOM, provenance, signature, patch and operator-selection paths. The modest
+single-artifact increase is accepted to avoid that release and recovery risk.
+
+### Resulting module and release layout
+
+- one root Go module;
+- one `heimdall` binary/container for File and AWS KMS modes;
+- no `heimdall-aws` artifact, build tag, plugin or helper process;
+- official AWS SDK config/KMS packages isolated below the AWS Adapter package;
+- provider-neutral core and `internal/gateway` must not import AWS SDK types;
+- File-mode tests must keep a live metadata/identity probe at zero requests;
+- the existing single release pipeline remains responsible for test, Race,
+  vulnerability scan, SBOM, provenance, signing and release labels;
+- every release architecture repeats size/SBOM evidence at M11-07.
+
+GCP and Azure do not inherit this conclusion and require a new measured ADR if
+their implementation changes the release boundary.
+
+## Evaluated options
+
+M11 Phase 0 compared only the two release models relevant to the current AWS
+production requirement:
+
+### Option A: one Heimdall artifact — accepted
 
 The main `heimdall` binary includes the AWS SDK and AWS KMS Adapter. File mode
 does not initialize or call them unless AWS KMS is explicitly configured.
@@ -69,18 +134,16 @@ does not initialize or call them unless AWS KMS is explicitly configured.
 This option favors one installation and release path, at the cost of carrying
 the AWS dependency and SBOM surface for File-only operators.
 
-### Option B: core and AWS artifacts
+### Option B: core and AWS artifacts — rejected for M11
 
 The project publishes `heimdall` without the AWS SDK and `heimdall-aws` with
 the AWS SDK and Adapter. Both artifacts use the same source commit, core
 packages, configuration model, CLI semantics, tests, release version, signing
 process, and compatibility contract.
 
-This option preserves a smaller cloud-neutral artifact, at the cost of two CI,
-signing, distribution, documentation, and vulnerability-management paths.
-
-No default is selected in this ADR until the spike is complete. In particular,
-this ADR does not pre-authorize separate GCP or Azure artifacts.
+This option preserves a smaller cloud-neutral artifact, but its duplicate CI,
+signing, distribution, documentation and vulnerability-management paths cost
+more than the measured dependency reduction justifies. It is rejected for M11.
 
 ## Required spike evidence
 
@@ -95,9 +158,9 @@ The spike must record reproducible measurements for both options:
 7. proof that File mode performs no AWS initialization or network calls;
 8. proof that KMS remains outside the Gateway request hot path.
 
-After review, this ADR will be updated to `Accepted`, name the selected option,
-record the evidence location, and state the resulting module and release
-layout. AWS SDK implementation may not be merged before that update.
+The evidence items above are satisfied by the accepted spike report and
+contract tests. Production AWS SDK implementation may now proceed under this
+ADR, but cannot bypass its package, runtime or release constraints.
 
 ## Rejected alternatives
 
@@ -131,26 +194,31 @@ Rejected because reproducing workload identity, SigV4 signing, token refresh,
 endpoint selection, and retry semantics creates a security-sensitive parallel
 SDK with greater maintenance risk than the official client.
 
-## Consequences before the final decision
+## Consequences
 
-- The core/Adapter ownership boundary can be implemented and contract-tested
-  without choosing an artifact layout.
-- Release engineering cannot assume either a single artifact or a permanent
-  family of provider-specific artifacts yet.
+- AWS dependency updates affect the single module, SBOM and release artifact;
+  Dependabot/security review must treat config, KMS and their credential-chain
+  dependencies as production scope.
+- File-only operators carry approximately 3.1 MB and 15 SPDX packages that are
+  not exercised in their mode; the zero-initialization/no-network contract is
+  therefore a permanent regression gate.
+- Release engineering keeps one artifact, signature, provenance statement and
+  patch path rather than a provider-specific artifact matrix.
 - AWS remains the only cloud implementation admitted by M11.
-- No plugin framework is created, regardless of which packaging option wins.
-- The selected option must preserve identical security behavior and operator
-  semantics for AWS KMS; packaging must not fork the product model.
+- No plugin framework is created by the accepted in-process Adapter layout.
+- Provider-neutral core, Key Slot state, Vault validation and Gateway request
+  processing remain free of AWS SDK types and calls.
 
 ## Implementation gate
 
-No production AWS SDK implementation may merge before all of the following are
-present:
+Production AWS SDK implementation may merge only while all of the following
+remain true:
 
 1. the provider-neutral Master Key boundary and final `storage.master_key`
    configuration pass File-mode tests;
-2. the wrapper contract and typed error taxonomy are reviewed;
+2. the reviewed `internal/kms` wrapper contract and typed error taxonomy pass;
 3. fake-KMS contract, timeout, cancellation, and fault-injection tests pass;
-4. the Option A/Option B spike evidence is archived and reviewed;
-5. this ADR is updated to `Accepted` with the selected release model;
-6. release CI can build, test, scan, sign, and label the selected artifact set.
+4. the Option A/Option B spike evidence remains reproducible and archived;
+5. this ADR remains `Accepted` for the one-artifact release model;
+6. release CI builds, tests, scans, signs, proves and labels the single
+   selected artifact.
