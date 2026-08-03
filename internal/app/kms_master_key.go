@@ -573,6 +573,7 @@ func initializeKMS(ctx context.Context, cfg config.Config, options kmsInitializa
 		},
 		VaultKeyCheck: keyCheck, AuditHMACEnvelope: auditEnvelope,
 		AuditCheckpoint: boltstore.AuditCheckpoint{Records: auditSummary.Records, Bytes: auditSummary.Bytes, LastHash: auditSummary.LastHash},
+		Unwrapper:       unwrapper, Verifier: verifier,
 	}); err != nil {
 		return err
 	}

@@ -8,6 +8,7 @@
 - DEK rotate：随机内存 Master Key、双 Slot 预验证、descriptor/Keyring/Vault/Audit/Credential/MFA 的单一 bbolt COW 发布代。
 - crash bridge、compaction、持久化 Primary 二次解锁，以及显式 `operation-id` 的恢复/完成幂等语义。
 - KEK/Decrypt 身份疑似泄露时，rewrap 在 KMS I/O 前 fail closed，要求 DEK rotate 与历史备份处置。
+- rewrap 的 add/verify/retire 只通过操作级 Store API 发布；DEK rotate 的新 generation 在 COW 写入前再次逐 Slot unwrap、核对指纹并通过 Vault Key Check，通用 descriptor 写入口不会重新开放。
 
 ## 自动化证据
 
@@ -30,7 +31,7 @@ govulncheck v1.6.0 ./...  # 0 reachable vulnerabilities
 
 ## 待补真实 AWS 证据
 
-- 使用两个独立 customer-managed symmetric KMS Keys 和 Workload Identity 完成 rewrap/rotate/恢复演练。
+- 使用三个现有且不同的 customer-managed symmetric KMS Keys（Primary、Recovery、Replacement Primary）和 Workload Identity 完成 rewrap/rotate/恢复演练。
 - 归档 CloudTrail `Encrypt`/`Decrypt` 事件的非敏感 metadata，证明 Encryption Context 与 Key ARN 符合 allowlist。
 - 验证运行时身份无 Recovery `Decrypt`，临时恢复授权在演练后撤销。
 - 创建轮换后新备份并在目标恢复身份下完成 restore drill；归档历史备份处置清单。

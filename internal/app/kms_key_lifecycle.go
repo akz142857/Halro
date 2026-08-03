@@ -137,13 +137,19 @@ func rewrapKMSKeyWithOptions(
 			return KMSRewrapResult{}, err
 		}
 		next, transition, err := descriptor.AddSlot(pending, descriptor.Revision, now().UTC())
-		clear(pending.WrappedKey)
 		if err != nil {
+			clear(pending.WrappedKey)
 			return KMSRewrapResult{}, err
 		}
-		if err := publishSlotTransition(ctx, store, cfg.AuditPath(), auditKey, descriptor, next, transition); err != nil {
+		persist := func() error {
+			_, _, err := store.AddKeySlot(ctx, pending, descriptor.Revision, transition.OccurredAt)
+			return err
+		}
+		if err := publishSlotTransition(ctx, store, cfg.AuditPath(), auditKey, transition, persist); err != nil {
+			clear(pending.WrappedKey)
 			return KMSRewrapResult{}, err
 		}
+		clear(pending.WrappedKey)
 		descriptor = next
 		if err := callKMSLifecycleHook(hook, "after_pending_slot_published"); err != nil {
 			return KMSRewrapResult{}, err
@@ -157,15 +163,20 @@ func rewrapKMSKeyWithOptions(
 	}
 
 	if target.State == masterkey.KeySlotPending {
+		unwrapper := kmsSlotUnwrapper{masterKey: cfg.Storage.MasterKey, factory: factory}
+		verifier := envelopeCandidateVerifier{envelope: keyCheck}
 		next, transition, err := descriptor.VerifySlot(
 			ctx, target.ID, descriptor.Revision, target.Revision,
-			kmsSlotUnwrapper{masterKey: cfg.Storage.MasterKey, factory: factory},
-			envelopeCandidateVerifier{envelope: keyCheck}, now().UTC(),
+			unwrapper, verifier, now().UTC(),
 		)
 		if err != nil {
 			return KMSRewrapResult{}, err
 		}
-		if err := publishSlotTransition(ctx, store, cfg.AuditPath(), auditKey, descriptor, next, transition); err != nil {
+		persist := func() error {
+			_, _, err := store.VerifyKeySlot(ctx, target.ID, descriptor.Revision, target.Revision, unwrapper, verifier, transition.OccurredAt)
+			return err
+		}
+		if err := publishSlotTransition(ctx, store, cfg.AuditPath(), auditKey, transition, persist); err != nil {
 			return KMSRewrapResult{}, err
 		}
 		descriptor = next
@@ -196,7 +207,11 @@ func rewrapKMSKeyWithOptions(
 		if err != nil {
 			return KMSRewrapResult{}, err
 		}
-		if err := publishSlotTransition(ctx, store, cfg.AuditPath(), auditKey, descriptor, next, transition); err != nil {
+		persist := func() error {
+			_, _, err := store.RetireKeySlot(ctx, old.ID, descriptor.Revision, old.Revision, transition.OccurredAt)
+			return err
+		}
+		if err := publishSlotTransition(ctx, store, cfg.AuditPath(), auditKey, transition, persist); err != nil {
 			return KMSRewrapResult{}, err
 		}
 		descriptor = next
@@ -432,6 +447,7 @@ func rotateKMSMasterKeyWithOptions(ctx context.Context, cfg config.Config, optio
 		return KeyRotationResult{}, err
 	}
 	err = stage.RewriteVaultMaterial(boltstore.VaultRewrite{
+		Context:       ctx,
 		VaultKeyCheck: newKeyCheck, AuditHMACEnvelope: newAuditEnvelope,
 		Keyring: boltstore.VaultKeyring{
 			FormatVersion: 1, ActiveKeyVersion: keyring.ActiveKeyVersion + 1,
@@ -440,6 +456,7 @@ func rotateKMSMasterKeyWithOptions(ctx context.Context, cfg config.Config, optio
 			RotationOperationID: options.operationID,
 		},
 		KeySlotDescriptor: &rotatedDescriptor,
+		Unwrapper:         unwrapper, Verifier: verifier,
 		Transform: func(credential domain.Credential) (domain.Credential, error) {
 			plaintext, err := currentVault.DecryptCredential(credential.ID, string(credential.Type), credential.Audience, credential.Ciphertext)
 			if err != nil {
@@ -553,11 +570,10 @@ func publishSlotTransition(
 	store *boltstore.Store,
 	auditPath string,
 	auditKey []byte,
-	previous masterkey.KeySlotDescriptor,
-	next masterkey.KeySlotDescriptor,
 	transition *masterkey.SlotTransition,
+	persist func() error,
 ) error {
-	if transition == nil {
+	if transition == nil || persist == nil {
 		return nil
 	}
 	log, err := audit.Open(auditPath, auditKey)
@@ -582,7 +598,7 @@ func publishSlotTransition(
 	if err := checkpointAudit(store, log.Summary()); err != nil {
 		return err
 	}
-	return store.ReplaceKeySlotDescriptor(ctx, previous.Revision, next)
+	return persist()
 }
 
 func descriptorInstanceID(descriptor masterkey.KeySlotDescriptor) (string, error) {
