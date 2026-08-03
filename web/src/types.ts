@@ -23,6 +23,28 @@ export interface SetupStatus {
   token_required: boolean;
 }
 
+export interface MasterKeyCustody {
+  mode: "file" | "key_slots";
+  descriptor_ready: boolean;
+  custody_state: "healthy" | "degraded";
+  production_admission: "not_applicable" | "external_evidence_required";
+  rotation_incomplete: boolean;
+  lifecycle_operation: "none" | "kek_rewrap" | "dek_rotate";
+  pending_slots: number;
+  retiring_slots: number;
+  recovery_verified_at?: string;
+  recovery_verification_expired: boolean;
+  degraded_reasons: string[];
+  slots: Array<{
+    purpose: "primary" | "recovery";
+    state: "pending" | "active" | "retiring" | "revoked";
+    provider: string;
+    verified_at?: string;
+  }>;
+  lifecycle_runbook_url: string;
+  recovery_runbook_url: string;
+}
+
 export interface Bucket {
   hour: string;
   requests: number;

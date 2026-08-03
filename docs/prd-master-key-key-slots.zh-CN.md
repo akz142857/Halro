@@ -368,16 +368,17 @@ KMS 模式不能直接套用 `ReplaceMasterKey(path)`；实现前必须完成 de
 - 解锁和 Vault/Audit 校验完成前 readiness 为 false；
 - 不启动 Gateway 或 Admin Listener。
 
-### 12.2 Recovery 启动
+### 12.2 Recovery 离线修复（不提供 Recovery Runtime）
 
-Recovery Slot 默认不被日常 Runtime 身份自动尝试。恢复流程要求：
+Recovery Slot 永远不被 Runtime、Bootstrap 或 Admin 自动选择，也不提供“以 Recovery 启动”的 Listener 模式。恢复流程要求：
 
-- 操作者明确选择 Recovery Slot；
-- 使用受控恢复身份；
-- 记录恢复原因和 Audit；
-- 通过 Vault Key Check；
-- 启动后修复或创建新的 Primary Slot；
-- 完成恢复演练或真实事故后撤销临时权限。
+- 停止实例并由操作者明确选择 Recovery Slot；
+- 使用受控、临时恢复身份执行 `key recover` 或 Recovery restore；
+- 记录恢复原因、Vault Key Check 和高严重度 Audit；
+- 在 Listener 保持关闭时通过 `key rewrap --purpose primary` 修复或创建新的 Primary Slot；
+- 撤销临时 Recovery 权限；
+- 使用日常 Runtime 身份完成 Primary `doctor` 与冷启动；
+- Primary 仍不可用时在绑定 Gateway/Admin Listener 前 fail closed。
 
 如果未来需要自动 fallback，必须单独定义威胁模型，确保不会掩盖 Primary Slot 的权限篡改或 Key 异常。
 

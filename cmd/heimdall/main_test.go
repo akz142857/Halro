@@ -93,6 +93,8 @@ func TestKeySlotInitAndRecoveryCLIUseExplicitOfflinePaths(t *testing.T) {
 	previousRecovery := verifyRecoveryCommand
 	previousRotateKMS := rotateKMSCommand
 	previousRewrapKMS := rewrapKMSCommand
+	previousRevokeKMS := revokeKMSCommand
+	previousInspectSlots := inspectKMSSlotsCommand
 	previousDoctor := doctorCommand
 	previousRestore := restoreBackupCommand
 	t.Cleanup(func() {
@@ -100,6 +102,8 @@ func TestKeySlotInitAndRecoveryCLIUseExplicitOfflinePaths(t *testing.T) {
 		verifyRecoveryCommand = previousRecovery
 		rotateKMSCommand = previousRotateKMS
 		rewrapKMSCommand = previousRewrapKMS
+		revokeKMSCommand = previousRevokeKMS
+		inspectKMSSlotsCommand = previousInspectSlots
 		doctorCommand = previousDoctor
 		restoreBackupCommand = previousRestore
 	})
@@ -123,6 +127,17 @@ func TestKeySlotInitAndRecoveryCLIUseExplicitOfflinePaths(t *testing.T) {
 		rewrapped = loaded.Storage.MasterKey.Mode == config.MasterKeyModeKeySlots && options.Purpose == masterkey.KeySlotPrimary &&
 			options.SlotID == "slot_aws_primary" && options.KeyReference == loaded.Storage.MasterKey.AllowedKMSKeys[0].KeyID
 		return app.KMSRewrapResult{Purpose: options.Purpose, ActiveSlot: options.SlotID}, nil
+	}
+	revoked := false
+	revokeKMSCommand = func(_ context.Context, loaded config.Config, options app.KMSRevokeOptions) (app.KMSRevokeResult, error) {
+		revoked = loaded.Storage.MasterKey.Mode == config.MasterKeyModeKeySlots && options.SlotID == "slot_aws_primary_old" &&
+			options.ConfirmSlotID == options.SlotID && options.ExpectedDescriptorRevision == 4 && options.ExpectedSlotRevision == 3
+		return app.KMSRevokeResult{SlotID: options.SlotID, State: masterkey.KeySlotRevoked}, nil
+	}
+	inspected := false
+	inspectKMSSlotsCommand = func(_ context.Context, loaded config.Config) (app.KMSKeySlotStatusResult, error) {
+		inspected = loaded.Storage.MasterKey.Mode == config.MasterKeyModeKeySlots
+		return app.KMSKeySlotStatusResult{DescriptorRevision: 4, DescriptorReady: true}, nil
 	}
 	staticDoctor := false
 	doctorCommand = func(_ context.Context, loaded config.Config, options app.DoctorOptions) (app.DoctorReport, error) {
@@ -148,6 +163,15 @@ func TestKeySlotInitAndRecoveryCLIUseExplicitOfflinePaths(t *testing.T) {
 	if !recovered {
 		t.Fatal("recovery CLI did not use the explicit configured Recovery Slot")
 	}
+	if strings.Index(recoveryNextStepMessage, "rewrap") > strings.Index(recoveryNextStepMessage, "revoke") {
+		t.Fatal("Recovery CLI tells the operator to revoke authorization before Primary repair")
+	}
+	if err := run([]string{"key", "slot", "status", "--config", path}, logger); err != nil {
+		t.Fatal(err)
+	}
+	if !inspected {
+		t.Fatal("Slot status CLI did not inspect key_slots metadata")
+	}
 	if err := run([]string{"key", "rotate", "--config", path, "--operation-id", "rotation-001"}, logger); err != nil {
 		t.Fatal(err)
 	}
@@ -159,6 +183,12 @@ func TestKeySlotInitAndRecoveryCLIUseExplicitOfflinePaths(t *testing.T) {
 	}
 	if !rewrapped {
 		t.Fatal("rewrap CLI did not preserve explicit Slot and allowlist selection")
+	}
+	if err := run([]string{"key", "slot", "revoke", "--config", path, "--slot-id", "slot_aws_primary_old", "--expected-descriptor-revision", "4", "--expected-slot-revision", "3", "--confirm-slot-id", "slot_aws_primary_old"}, logger); err != nil {
+		t.Fatal(err)
+	}
+	if !revoked {
+		t.Fatal("revoke CLI did not preserve confirmation and optimistic revisions")
 	}
 	if err := run([]string{"doctor", "--config", path, "--no-kms"}, logger); err != nil {
 		t.Fatal(err)

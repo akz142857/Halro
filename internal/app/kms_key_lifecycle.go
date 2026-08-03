@@ -36,6 +36,42 @@ type KMSRewrapResult struct {
 	RecoveredPending     bool                     `json:"recovered_pending"`
 }
 
+type KMSRevokeOptions struct {
+	SlotID                     string
+	ConfirmSlotID              string
+	ExpectedDescriptorRevision uint64
+	ExpectedSlotRevision       uint64
+	ReasonCode                 string
+}
+
+type KMSRevokeResult struct {
+	SlotID             string                   `json:"slot_id"`
+	Purpose            masterkey.KeySlotPurpose `json:"purpose"`
+	State              masterkey.KeySlotState   `json:"state"`
+	DescriptorRevision uint64                   `json:"descriptor_revision"`
+	SlotRevision       uint64                   `json:"slot_revision"`
+	RevokedAt          time.Time                `json:"revoked_at"`
+	DescriptorReady    bool                     `json:"descriptor_ready"`
+	AlreadyRevoked     bool                     `json:"already_revoked"`
+}
+
+type KMSKeySlotStatus struct {
+	ID         string                   `json:"id"`
+	Purpose    masterkey.KeySlotPurpose `json:"purpose"`
+	State      masterkey.KeySlotState   `json:"state"`
+	Provider   string                   `json:"provider"`
+	Revision   uint64                   `json:"revision"`
+	VerifiedAt *time.Time               `json:"verified_at,omitempty"`
+	UpdatedAt  time.Time                `json:"updated_at"`
+}
+
+type KMSKeySlotStatusResult struct {
+	DescriptorRevision uint64             `json:"descriptor_revision"`
+	ActiveGeneration   uint64             `json:"active_generation"`
+	DescriptorReady    bool               `json:"descriptor_ready"`
+	Slots              []KMSKeySlotStatus `json:"slots"`
+}
+
 type kmsRotationOptions struct {
 	factory     kmsWrapperFactory
 	random      io.Reader
@@ -50,6 +86,312 @@ func RotateKMSMasterKey(ctx context.Context, cfg config.Config, operationID stri
 
 func RewrapKMSKey(ctx context.Context, cfg config.Config, options KMSRewrapOptions) (KMSRewrapResult, error) {
 	return rewrapKMSKeyWithOptions(ctx, cfg, options, defaultKMSWrapperFactory, time.Now, nil)
+}
+
+func RevokeKMSKeySlot(ctx context.Context, cfg config.Config, options KMSRevokeOptions) (KMSRevokeResult, error) {
+	return revokeKMSKeySlotWithOptions(ctx, cfg, options, defaultKMSWrapperFactory, time.Now, nil)
+}
+
+func InspectKMSKeySlots(ctx context.Context, cfg config.Config) (KMSKeySlotStatusResult, error) {
+	if cfg.Storage.MasterKey.Mode != config.MasterKeyModeKeySlots {
+		return KMSKeySlotStatusResult{}, errors.New("Slot status requires key_slots mode")
+	}
+	dataLock, err := lock.Acquire(cfg.Storage.DataDir)
+	if err != nil {
+		return KMSKeySlotStatusResult{}, fmt.Errorf("acquire offline Slot status lock: %w", err)
+	}
+	defer dataLock.Close()
+	store, err := boltstore.Open(cfg.MetadataPath())
+	if err != nil {
+		return KMSKeySlotStatusResult{}, err
+	}
+	defer store.Close()
+	descriptor, err := store.KeySlotDescriptor(ctx)
+	if err != nil {
+		return KMSKeySlotStatusResult{}, err
+	}
+	result := KMSKeySlotStatusResult{
+		DescriptorRevision: descriptor.Revision, ActiveGeneration: descriptor.ActiveGeneration,
+		DescriptorReady: descriptor.ProductionReady(), Slots: make([]KMSKeySlotStatus, 0, len(descriptor.Slots)),
+	}
+	for _, slot := range descriptor.Slots {
+		result.Slots = append(result.Slots, KMSKeySlotStatus{
+			ID: slot.ID, Purpose: slot.Purpose, State: slot.State, Provider: slot.Provider,
+			Revision: slot.Revision, VerifiedAt: slot.VerifiedAt, UpdatedAt: slot.UpdatedAt,
+		})
+	}
+	return result, nil
+}
+
+func revokeKMSKeySlotWithOptions(
+	ctx context.Context,
+	cfg config.Config,
+	options KMSRevokeOptions,
+	factory kmsWrapperFactory,
+	now func() time.Time,
+	hook func(string) error,
+) (KMSRevokeResult, error) {
+	if err := ctx.Err(); err != nil {
+		return KMSRevokeResult{}, err
+	}
+	if cfg.Storage.MasterKey.Mode != config.MasterKeyModeKeySlots {
+		return KMSRevokeResult{}, errors.New("Slot revoke requires key_slots mode")
+	}
+	if options.SlotID == "" || options.ConfirmSlotID != options.SlotID {
+		return KMSRevokeResult{}, errors.New("revoke confirmation must exactly match --slot-id")
+	}
+	if options.ExpectedDescriptorRevision == 0 || options.ExpectedSlotRevision == 0 {
+		return KMSRevokeResult{}, errors.New("expected descriptor and Slot revisions are required")
+	}
+	if options.ReasonCode == "" {
+		options.ReasonCode = "retirement_window_completed"
+	}
+	if options.ReasonCode != "retirement_window_completed" && options.ReasonCode != "incident_retirement" {
+		return KMSRevokeResult{}, errors.New("revoke reason must be retirement_window_completed or incident_retirement")
+	}
+	if factory == nil || now == nil {
+		return KMSRevokeResult{}, errors.New("Slot revoke dependencies are required")
+	}
+	dataLock, err := lock.Acquire(cfg.Storage.DataDir)
+	if err != nil {
+		return KMSRevokeResult{}, fmt.Errorf("acquire offline Slot revoke lock: %w", err)
+	}
+	defer dataLock.Close()
+	store, err := boltstore.Open(cfg.MetadataPath())
+	if err != nil {
+		return KMSRevokeResult{}, err
+	}
+	defer store.Close()
+	descriptor, err := store.KeySlotDescriptor(ctx)
+	if err != nil {
+		return KMSRevokeResult{}, err
+	}
+	target, ok := keySlotByID(descriptor, options.SlotID)
+	if !ok {
+		return KMSRevokeResult{}, masterkey.ErrSlotNotFound
+	}
+	if target.State == masterkey.KeySlotRevoked {
+		if descriptor.Revision != options.ExpectedDescriptorRevision+1 || target.Revision != options.ExpectedSlotRevision+1 {
+			return KMSRevokeResult{}, errors.New("already-revoked Slot does not match the requested optimistic revisions")
+		}
+		intent, err := store.KeySlotAuditIntent()
+		if err != nil {
+			return KMSRevokeResult{}, fmt.Errorf("load completed Slot revoke identity: %w", err)
+		}
+		if err := validateRevokeIntent(intent, options, descriptor, target); err != nil {
+			return KMSRevokeResult{}, err
+		}
+		key, err := unlockKMSMasterKey(ctx, cfg, store, target.Purpose, factory)
+		if err != nil {
+			return KMSRevokeResult{}, fmt.Errorf("unlock independent replacement Slot: %w", err)
+		}
+		defer clear(key)
+		secretVault, err := vault.New(key)
+		if err != nil {
+			return KMSRevokeResult{}, err
+		}
+		defer secretVault.Close()
+		auditKey, err := loadAuditHMACKey(store, secretVault, key)
+		if err != nil {
+			return KMSRevokeResult{}, err
+		}
+		defer clear(auditKey)
+		if err := deliverKeySlotAuditIntent(ctx, store, cfg.AuditPath(), auditKey, intent, hook); err != nil {
+			return KMSRevokeResult{}, err
+		}
+		return KMSRevokeResult{
+			SlotID: target.ID, Purpose: target.Purpose, State: target.State,
+			DescriptorRevision: descriptor.Revision, SlotRevision: target.Revision,
+			RevokedAt: target.UpdatedAt, DescriptorReady: descriptor.ProductionReady(), AlreadyRevoked: true,
+		}, nil
+	}
+	if target.State != masterkey.KeySlotRetiring {
+		return KMSRevokeResult{}, errors.New("only a retiring Slot can be revoked")
+	}
+	if descriptor.Revision != options.ExpectedDescriptorRevision || target.Revision != options.ExpectedSlotRevision {
+		return KMSRevokeResult{}, errors.New("revoke revisions do not match the current descriptor")
+	}
+	key, err := unlockKMSMasterKey(ctx, cfg, store, target.Purpose, factory)
+	if err != nil {
+		return KMSRevokeResult{}, fmt.Errorf("unlock independent replacement Slot: %w", err)
+	}
+	defer clear(key)
+	secretVault, err := vault.New(key)
+	if err != nil {
+		return KMSRevokeResult{}, err
+	}
+	defer secretVault.Close()
+	auditKey, err := loadAuditHMACKey(store, secretVault, key)
+	if err != nil {
+		return KMSRevokeResult{}, err
+	}
+	defer clear(auditKey)
+	stagePath, err := newMetadataStagePath(cfg.Storage.DataDir, "slot-revoke-stage")
+	if err != nil {
+		return KMSRevokeResult{}, err
+	}
+	defer os.Remove(stagePath)
+	if _, err := store.Snapshot(stagePath); err != nil {
+		return KMSRevokeResult{}, err
+	}
+	stage, err := boltstore.Open(stagePath)
+	if err != nil {
+		return KMSRevokeResult{}, err
+	}
+	next, intent, err := stage.RevokeKeySlotWithAuditIntent(
+		ctx, target.ID, descriptor.Revision, target.Revision, options.ReasonCode, now().UTC(),
+	)
+	if err != nil {
+		stage.Close()
+		return KMSRevokeResult{}, err
+	}
+	if !next.ProductionReady() {
+		stage.Close()
+		return KMSRevokeResult{}, errors.New("Slot revoke would leave the descriptor outside production-ready state")
+	}
+	if err := callKMSLifecycleHook(hook, "after_revoked_stage_persisted"); err != nil {
+		stage.Close()
+		return KMSRevokeResult{}, err
+	}
+	compactPath, err := newMetadataStagePath(cfg.Storage.DataDir, "slot-revoke-compact")
+	if err == nil {
+		err = stage.CompactSnapshot(compactPath)
+	}
+	if closeErr := stage.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		if compactPath != "" {
+			os.Remove(compactPath)
+		}
+		return KMSRevokeResult{}, err
+	}
+	defer os.Remove(compactPath)
+	compacted, err := boltstore.Open(compactPath)
+	if err != nil {
+		return KMSRevokeResult{}, err
+	}
+	compactedDescriptor, verifyErr := compacted.KeySlotDescriptor(ctx)
+	compactedIntent, intentErr := compacted.KeySlotAuditIntent()
+	if verifyErr == nil {
+		verifyErr = intentErr
+	}
+	if verifyErr == nil {
+		revoked, ok := keySlotByID(compactedDescriptor, target.ID)
+		if !ok || revoked.State != masterkey.KeySlotRevoked || len(revoked.WrappedKey) != 0 || revoked.KeyReference != "" || len(revoked.ProviderParameters) != 0 ||
+			!compactedDescriptor.ProductionReady() || compactedIntent != intent {
+			verifyErr = errors.New("compacted metadata did not preserve the safe revoked Slot and Audit intent")
+		}
+	}
+	if closeErr := compacted.Close(); verifyErr == nil {
+		verifyErr = closeErr
+	}
+	if verifyErr != nil {
+		return KMSRevokeResult{}, verifyErr
+	}
+	if err := callKMSLifecycleHook(hook, "after_revoked_slot_compacted"); err != nil {
+		return KMSRevokeResult{}, err
+	}
+	if err := callKMSLifecycleHook(hook, "before_revoked_metadata_publish"); err != nil {
+		return KMSRevokeResult{}, err
+	}
+	if err := store.Close(); err != nil {
+		return KMSRevokeResult{}, err
+	}
+	if err := publishMetadata(compactPath, cfg.MetadataPath()); err != nil {
+		return KMSRevokeResult{}, err
+	}
+	if err := callKMSLifecycleHook(hook, "after_revoked_metadata_publish"); err != nil {
+		return KMSRevokeResult{}, err
+	}
+	published, err := boltstore.Open(cfg.MetadataPath())
+	if err != nil {
+		return KMSRevokeResult{}, err
+	}
+	if err := deliverKeySlotAuditIntent(ctx, published, cfg.AuditPath(), auditKey, intent, hook); err != nil {
+		published.Close()
+		return KMSRevokeResult{}, err
+	}
+	if err := published.Close(); err != nil {
+		return KMSRevokeResult{}, err
+	}
+	if err := callKMSLifecycleHook(hook, "after_revoked_audit_delivered"); err != nil {
+		return KMSRevokeResult{}, err
+	}
+	revoked, _ := keySlotByID(next, target.ID)
+	return KMSRevokeResult{
+		SlotID: revoked.ID, Purpose: revoked.Purpose, State: revoked.State,
+		DescriptorRevision: next.Revision, SlotRevision: revoked.Revision,
+		RevokedAt: revoked.UpdatedAt, DescriptorReady: next.ProductionReady(),
+	}, nil
+}
+
+func validateRevokeIntent(intent masterkey.KeySlotAuditIntent, options KMSRevokeOptions, descriptor masterkey.KeySlotDescriptor, slot masterkey.KeySlot) error {
+	if err := intent.Validate(); err != nil {
+		return err
+	}
+	if intent.TargetID != options.SlotID || intent.Purpose != slot.Purpose || intent.ReasonCode != options.ReasonCode ||
+		intent.ExpectedDescriptorRevision != options.ExpectedDescriptorRevision || intent.ExpectedSlotRevision != options.ExpectedSlotRevision ||
+		intent.DescriptorRevision != descriptor.Revision || intent.SlotRevision != slot.Revision || intent.OccurredAt != slot.UpdatedAt {
+		return errors.New("already-revoked Slot does not match the durable operation identity")
+	}
+	return nil
+}
+
+func keySlotAuditEvent(intent masterkey.KeySlotAuditIntent) audit.Event {
+	return audit.Event{
+		EventID: intent.EventID, OccurredAt: intent.OccurredAt, ActorType: "local_cli",
+		Action: intent.Action, TargetType: "master_key_slot", TargetID: intent.TargetID,
+		Outcome: "success", ReasonCode: intent.ReasonCode,
+	}
+}
+
+func deliverKeySlotAuditIntent(ctx context.Context, store *boltstore.Store, auditPath string, auditKey []byte, intent masterkey.KeySlotAuditIntent, hook func(string) error) error {
+	if err := intent.Validate(); err != nil {
+		return err
+	}
+	log, err := audit.Open(auditPath, auditKey)
+	if err != nil {
+		return err
+	}
+	defer log.Close()
+	return deliverKeySlotAuditIntentToLog(ctx, store, log, intent, hook)
+}
+
+func deliverKeySlotAuditIntentToLog(ctx context.Context, store *boltstore.Store, log *audit.Log, intent masterkey.KeySlotAuditIntent, hook func(string) error) error {
+	if err := reconcileAuditCheckpoint(store, log.Summary()); err != nil {
+		return err
+	}
+	if _, err := log.Append(ctx, keySlotAuditEvent(intent)); err != nil {
+		return err
+	}
+	if err := callKMSLifecycleHook(hook, "after_revoked_audit_append"); err != nil {
+		return err
+	}
+	if err := checkpointAudit(store, log.Summary()); err != nil {
+		return err
+	}
+	if err := callKMSLifecycleHook(hook, "after_revoked_audit_checkpoint"); err != nil {
+		return err
+	}
+	if intent.Delivered {
+		return nil
+	}
+	if err := store.MarkKeySlotAuditDelivered(ctx, intent.EventID); err != nil {
+		return err
+	}
+	return callKMSLifecycleHook(hook, "after_revoked_audit_intent_delivered")
+}
+
+func drainKeySlotAuditIntent(ctx context.Context, store *boltstore.Store, log *audit.Log) error {
+	intent, err := store.KeySlotAuditIntent()
+	if errors.Is(err, boltstore.ErrNotFound) {
+		return nil
+	}
+	if err != nil || intent.Delivered {
+		return err
+	}
+	return deliverKeySlotAuditIntentToLog(ctx, store, log, intent, nil)
 }
 
 func rewrapKMSKeyWithOptions(
@@ -573,6 +915,18 @@ func publishSlotTransition(
 	transition *masterkey.SlotTransition,
 	persist func() error,
 ) error {
+	return publishSlotTransitionWithReason(ctx, store, auditPath, auditKey, transition, "", persist)
+}
+
+func publishSlotTransitionWithReason(
+	ctx context.Context,
+	store *boltstore.Store,
+	auditPath string,
+	auditKey []byte,
+	transition *masterkey.SlotTransition,
+	reasonCode string,
+	persist func() error,
+) error {
 	if transition == nil || persist == nil {
 		return nil
 	}
@@ -591,7 +945,7 @@ func publishSlotTransition(
 	if _, err := log.Append(ctx, audit.Event{
 		EventID: eventID, OccurredAt: transition.OccurredAt, ActorType: "local_cli",
 		Action: transition.AuditAction(), TargetType: "master_key_slot",
-		TargetID: transition.SlotID, Outcome: "success",
+		TargetID: transition.SlotID, Outcome: "success", ReasonCode: reasonCode,
 	}); err != nil {
 		return err
 	}

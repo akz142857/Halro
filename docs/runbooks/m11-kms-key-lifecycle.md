@@ -22,9 +22,25 @@
    ```
 
 4. 命令依次持久化 `pending → active`，只有新 Slot 独立 unwrap 并通过 Vault Key Check 后才把旧 Slot 置为 `retiring`。
-5. 验证 fingerprint、Credential ciphertext digest 和 KeyVersion 未改变；完成恢复窗口后，再通过单独审批流程 revoke 旧 Slot 与旧 AWS 权限。
-6. 恢复窗口结束后，从运行配置移除旧同用途 allowlist 条目；DEK rotate 要求 Primary、Recovery 各自只有一个明确的目标 KMS Key。
-7. rewrap 不修改历史备份。旧 KMS Key 只有在备份清单证明不再需要它后才能安排禁用或删除。
+5. 验证 fingerprint、Credential ciphertext digest 和 KeyVersion 未改变。实例保持停止，使用受支持的低敏离线查询取得 descriptor 与 retiring Slot revision；该结果不包含 ARN、ciphertext、provider parameters 或 fingerprint：
+
+   ```bash
+   heimdall key slot status --config /etc/heimdall/config.yaml
+   ```
+6. 恢复窗口与备份清单审批完成后，精确确认 retiring Slot 并执行：
+
+   ```bash
+   heimdall key slot revoke --config /etc/heimdall/config.yaml \
+     --slot-id slot_aws_primary_2026q2 \
+     --expected-descriptor-revision DESCRIPTOR_REVISION \
+     --expected-slot-revision SLOT_REVISION \
+     --confirm-slot-id slot_aws_primary_2026q2 \
+     --reason retirement_window_completed
+   ```
+
+   命令只接受 `retiring → revoked`，先用配置中的同用途 replacement active Slot 独立解锁并通过 Vault Key Check。revoke、持久化 Audit intent 和 compaction 在 stage 中完成并验证，随后一次 rename 发布无旧敏感页的 metadata，再交付最终 success Audit；启动会恢复未交付 intent。只有相同 revisions、确认和 reason 的重试才幂等，任何冲突 fail closed。事故退役可使用 `--reason incident_retirement`。
+7. revoke 成功后从运行配置移除旧同用途 allowlist 条目，再撤销旧 AWS Grant/Policy；DEK rotate 要求 Primary、Recovery 各自只有一个明确的目标 KMS Key。
+8. rewrap/revoke 不修改历史备份。旧 KMS Key 只有在备份清单证明不再需要它后才能安排禁用或删除。
 
 若怀疑泄露，可带 `--compromised` 验证防误操作门禁；命令会在任何 KMS 调用前失败并要求 DEK rotate。
 
@@ -76,6 +92,6 @@ heimdall key rotate --config /etc/heimdall/config.yaml \
 
 ## 6. 审核证据
 
-- `security.master_key_slot.added/verified/retiring` 只记录 Slot ID 与状态，不记录 ARN、wrapped bytes、provider parameters 或 fingerprint。
+- `security.master_key_slot.added/verified/retiring/revoked` 只记录 Slot ID、状态与受限 reason code，不记录 ARN、wrapped bytes、provider parameters 或 fingerprint。
 - `security.master_key_rotation.started/completed` 必须连续可验证。
 - 保存命令的非敏感 JSON 结果、CI kill-point matrix、CloudTrail event metadata 与备份清单；不得保存明文 Key、完整 ciphertext 或 Workload Identity token。

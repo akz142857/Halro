@@ -39,14 +39,18 @@ func main() {
 }
 
 var (
-	initializeCommand     = app.Initialize
-	verifyRecoveryCommand = app.VerifyRecoverySlot
-	rotateKMSCommand      = app.RotateKMSMasterKey
-	rewrapKMSCommand      = app.RewrapKMSKey
-	doctorCommand         = app.DoctorWithOptions
-	restoreBackupCommand  = app.RestoreBackupWithOptions
-	hardenRuntimeCommand  = hostsecurity.Harden
+	initializeCommand      = app.Initialize
+	verifyRecoveryCommand  = app.VerifyRecoverySlot
+	rotateKMSCommand       = app.RotateKMSMasterKey
+	rewrapKMSCommand       = app.RewrapKMSKey
+	revokeKMSCommand       = app.RevokeKMSKeySlot
+	inspectKMSSlotsCommand = app.InspectKMSKeySlots
+	doctorCommand          = app.DoctorWithOptions
+	restoreBackupCommand   = app.RestoreBackupWithOptions
+	hardenRuntimeCommand   = hostsecurity.Harden
 )
+
+const recoveryNextStepMessage = "Recovery Slot verified and audited; rewrap and verify a replacement Primary first, then revoke temporary AWS recovery authorization before cold start."
 
 func run(arguments []string, logger *slog.Logger) error {
 	if len(arguments) == 0 {
@@ -221,9 +225,55 @@ func run(arguments []string, logger *slog.Logger) error {
 		return nil
 	case "key":
 		if len(arguments) < 2 {
-			return errors.New("usage: heimdall key <create|disable|rotate|rewrap|recover>")
+			return errors.New("usage: heimdall key <create|disable|rotate|rewrap|recover|slot>")
 		}
 		switch arguments[1] {
+		case "slot":
+			if len(arguments) < 3 {
+				return errors.New("usage: heimdall key slot <status|revoke>")
+			}
+			if arguments[2] == "status" {
+				flags := flag.NewFlagSet("key slot status", flag.ContinueOnError)
+				configPath := flags.String("config", "config.yaml", "configuration file")
+				if err := flags.Parse(arguments[3:]); err != nil {
+					return err
+				}
+				cfg, err := config.Load(*configPath, config.LoadOptions{})
+				if err != nil {
+					return err
+				}
+				result, err := inspectKMSSlotsCommand(context.Background(), cfg)
+				if err != nil {
+					return err
+				}
+				return json.NewEncoder(os.Stdout).Encode(result)
+			}
+			if arguments[2] != "revoke" {
+				return errors.New("usage: heimdall key slot <status|revoke>")
+			}
+			flags := flag.NewFlagSet("key slot revoke", flag.ContinueOnError)
+			configPath := flags.String("config", "config.yaml", "configuration file")
+			slotID := flags.String("slot-id", "", "retiring Slot ID")
+			expectedDescriptorRevision := flags.Uint64("expected-descriptor-revision", 0, "current descriptor revision")
+			expectedSlotRevision := flags.Uint64("expected-slot-revision", 0, "current Slot revision")
+			confirmSlotID := flags.String("confirm-slot-id", "", "exact retiring Slot ID confirmation")
+			reason := flags.String("reason", "retirement_window_completed", "retirement_window_completed or incident_retirement")
+			if err := flags.Parse(arguments[3:]); err != nil {
+				return err
+			}
+			cfg, err := config.Load(*configPath, config.LoadOptions{})
+			if err != nil {
+				return err
+			}
+			result, err := revokeKMSCommand(context.Background(), cfg, app.KMSRevokeOptions{
+				SlotID: *slotID, ConfirmSlotID: *confirmSlotID,
+				ExpectedDescriptorRevision: *expectedDescriptorRevision,
+				ExpectedSlotRevision:       *expectedSlotRevision, ReasonCode: *reason,
+			})
+			if err != nil {
+				return err
+			}
+			return json.NewEncoder(os.Stdout).Encode(result)
 		case "recover":
 			flags := flag.NewFlagSet("key recover", flag.ContinueOnError)
 			configPath := flags.String("config", "config.yaml", "configuration file")
@@ -239,7 +289,7 @@ func run(arguments []string, logger *slog.Logger) error {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintln(os.Stderr, "Recovery Slot verified and audited; revoke temporary AWS recovery authorization now.")
+			fmt.Fprintln(os.Stderr, recoveryNextStepMessage)
 			return json.NewEncoder(os.Stdout).Encode(result)
 		case "rotate":
 			flags := flag.NewFlagSet("key rotate", flag.ContinueOnError)

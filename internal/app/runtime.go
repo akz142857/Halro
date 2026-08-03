@@ -350,6 +350,15 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		secretVault.Close()
 		return fail(err)
 	}
+	if err := drainKeySlotAuditIntent(ctx, metadata, auditLog); err != nil {
+		auditLog.Close()
+		alertDispatcher.Close()
+		ledgerLog.Close()
+		metadata.Close()
+		providerRegistry.Close()
+		secretVault.Close()
+		return fail(fmt.Errorf("recover pending Key Slot audit: %w", err))
+	}
 	if err := appendKMSProviderAudit(ctx, auditLog, metadata, kmsAudit); err != nil {
 		auditLog.Close()
 		alertDispatcher.Close()
@@ -872,6 +881,7 @@ func (r *Runtime) adminRouter() http.Handler {
 	router.With(r.requireAdminMutation).Post("/admin/api/v1/security/mfa/recovery-codes/regenerate", r.regenerateAdminMFARecoveryCodes)
 	router.With(r.requireAdminMutation).Delete("/admin/api/v1/security/mfa", r.disableAdminMFA)
 	router.With(r.requireAdmin).Get("/admin/api/v1/dashboard", r.adminDashboard)
+	router.With(r.requireAdmin).Get("/admin/api/v1/master-key/custody", r.adminMasterKeyCustody)
 	router.With(r.requireAdmin).Get("/admin/api/v1/usage", r.adminUsage)
 	router.With(r.requireAdmin).Get("/admin/api/v1/usage/requests/{requestID}", r.adminUsageRequest)
 	router.With(r.requireAdmin).Get("/admin/api/v1/system/status", r.adminSystemStatus)
