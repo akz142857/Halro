@@ -179,8 +179,8 @@ function PolicyForm({
             <div className="policy-status-field"><span>{t("policies.statusField")}</span><label className="policy-status-control"><input type="checkbox" aria-label={t("policies.enable")} checked={enabled} onChange={(event) => setEnabled(event.target.checked)} /><strong>{t("policies.enable")}</strong></label><small>{current?.bound_projects ? t("policies.boundImpact", { count: current.bound_projects }) : t("policies.unboundImpact")}</small></div>
           </div>
         </section>
-        <fieldset className="policy-form-section policy-action-section">
-          <legend>{t("policies.actionSection")}</legend>
+        <fieldset className="policy-form-section policy-action-section" aria-labelledby="policy-action-heading">
+          <h3 id="policy-action-heading">{t("policies.actionSection")}</h3>
           <p>{t("policies.actionDescription")}</p>
           <div className="policy-action-cards">
             {(["observe", "alert", "temporary_block"] as const).map((value) => <label className={`policy-action-card ${action === value ? "selected" : ""}`} key={value}><input type="radio" name="policy-action" value={value} checked={action === value} onChange={() => setAction(value)} /><span><strong>{policyActionLabel(t, value)}</strong><small>{t(`policies.${value}Description`)}</small></span></label>)}
