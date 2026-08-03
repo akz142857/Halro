@@ -6,7 +6,7 @@ usage() {
 usage: deploy/observability/smoke.sh
 
 Runs an isolated local Prometheus/Alertmanager Core runtime smoke. It requires
-docker compose, curl, jq, rg, and python3. The default
+docker compose, curl, jq, grep, and python3. The default
 loopback ports are 9090, 9091, 9093, and 19094; override them with
 HEIMDALL_SMOKE_METRICS_PORT, HEIMDALL_SMOKE_PROMETHEUS_PORT,
 HEIMDALL_SMOKE_ALERTMANAGER_PORT, and HEIMDALL_SMOKE_WEBHOOK_PORT.
@@ -22,7 +22,7 @@ if [ "$#" -ne 0 ]; then
   exit 2
 fi
 
-for command in docker curl jq rg python3; do
+for command in docker curl jq grep python3; do
   if ! command -v "$command" >/dev/null 2>&1; then
     echo "required command not found: $command" >&2
     exit 1
@@ -130,9 +130,9 @@ path.write_text(text, encoding="utf-8")
 PY
 runtime_prometheus=$(unset CDPATH; cd -- "$runtime_prometheus" && pwd -P)
 runtime_alertmanager=$(unset CDPATH; cd -- "$runtime_alertmanager" && pwd -P)
-rg -q "targets: \[127\.0\.0\.1:$metrics_port\]" "$runtime_prometheus/prometheus.yml"
-rg -q "targets: \[127\.0\.0\.1:$prometheus_port\]" "$runtime_prometheus/prometheus.yml"
-test "$(rg -c "127\.0\.0\.1:$alertmanager_port" "$runtime_prometheus/prometheus.yml")" -eq 2
+grep -Eq "targets: \[127\.0\.0\.1:$metrics_port\]" "$runtime_prometheus/prometheus.yml"
+grep -Eq "targets: \[127\.0\.0\.1:$prometheus_port\]" "$runtime_prometheus/prometheus.yml"
+test "$(grep -Ec "127\.0\.0\.1:$alertmanager_port" "$runtime_prometheus/prometheus.yml")" -eq 2
 
 cat >"$override" <<EOF
 services:
