@@ -32,8 +32,43 @@ export interface Bucket {
   estimated_input_tokens?: number;
   estimated_output_tokens?: number;
   cost_micros_usd: number;
+  estimated_cost_micros_usd?: number;
   errors: number;
   latency_millis: number;
+}
+
+export interface UsageBreakdown {
+  key: string;
+  calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  cost_micros_usd: number;
+  estimated_cost_micros_usd?: number;
+  errors: number;
+}
+
+export interface UsageAnomaly {
+  completed_at: string;
+  project_id: string;
+  provider_id?: string;
+  requested_model?: string;
+  provider_model?: string;
+  status: string;
+  error_class?: string;
+  http_status?: number;
+  retry_count: number;
+  fallback_count: number;
+}
+
+export interface GovernancePressureItem {
+  scope: "project" | "provider" | "deployment";
+  id: string;
+  name: string;
+  current: number;
+  limit: number;
+  utilization: number;
+  committed_micros_usd?: number;
+  reserved_micros_usd?: number;
 }
 
 export interface Dashboard {
@@ -42,10 +77,43 @@ export interface Dashboard {
     hourly: Bucket[];
     active_requests: number;
     watermark_sequence: number;
+    breakdowns: Record<"project" | "provider" | "requested_model" | "provider_model", UsageBreakdown[]>;
+    recent_anomalies: UsageAnomaly[];
   };
+  governance: {
+    policy_rejections: {
+      rpm: number;
+      tpm: number;
+      project_concurrency: number;
+      provider_concurrency: number;
+      deployment_concurrency: number;
+      budget: number;
+      token_guard: number;
+      total: number;
+    };
+    budget: { at_risk: number; items: GovernancePressureItem[] };
+    capacity: { at_risk: number; items: GovernancePressureItem[] };
+  };
+  resource_labels: Record<string, string>;
   accounting_status: number;
-  wal: Record<string, number>;
-  alerts: Record<string, number>;
+  wal: WALStats;
+  alerts: AlertStats;
+}
+
+export interface WALStats {
+  Batches: number;
+  Records: number;
+  Errors: number;
+  QueueDepth: number;
+  QueueCapacity: number;
+}
+
+export interface AlertStats {
+  Accepted: number;
+  Delivered: number;
+  Failed: number;
+  Dropped: number;
+  Queued: number;
 }
 
 export interface Project {

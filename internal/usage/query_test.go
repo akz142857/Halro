@@ -106,3 +106,44 @@ func TestDashboardSeparatesConservativeTokenEstimates(t *testing.T) {
 		t.Fatalf("hourly estimated totals not separated: %#v", dashboard.Hourly)
 	}
 }
+
+func TestDashboardBuildsTodayBreakdownsAndRecentAnomalies(t *testing.T) {
+	aggregate := NewAggregate()
+	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
+	events := []ledger.Event{
+		{EventID: "failed", Kind: ledger.EventAttemptSettled, RequestID: "req_failed",
+			AttemptID: "attempt_failed", ProjectID: "project_a", ProviderID: "provider_a",
+			RequestedModel: "chat", ProviderModel: "model_a", PeriodID: "period",
+			OccurredAt: now, ProviderInputTokens: 10, ProviderOutputTokens: 4,
+			CommittedMicrosUSD: 2_000, CostEstimated: true, Outcome: "provider_error",
+			ErrorClass: "rate_limited", HTTPStatus: 429, RetryCount: 1},
+		{EventID: "success", Kind: ledger.EventAttemptSettled, RequestID: "req_success",
+			AttemptID: "attempt_success", ProjectID: "project_a", ProviderID: "provider_b",
+			RequestedModel: "chat", ProviderModel: "model_b", PeriodID: "period",
+			OccurredAt: now.Add(time.Minute), ProviderInputTokens: 8, ProviderOutputTokens: 3,
+			CommittedMicrosUSD: 1_000, Outcome: "success", FallbackCount: 1},
+	}
+	for index, event := range events {
+		if err := aggregate.Apply(ledger.Record{Sequence: uint64(index + 1), Offset: int64(index + 1), Event: event}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	dashboard := aggregate.Dashboard(now.Add(time.Hour), time.UTC)
+	projects := dashboard.Breakdowns["project"]
+	if len(projects) != 1 || projects[0].Key != "project_a" || projects[0].Calls != 2 ||
+		projects[0].Errors != 1 || projects[0].CostMicrosUSD != 3_000 || projects[0].EstimatedCostMicros != 2_000 {
+		t.Fatalf("project breakdown=%#v", projects)
+	}
+	providers := dashboard.Breakdowns["provider"]
+	if len(providers) != 2 || providers[0].Key != "provider_a" {
+		t.Fatalf("provider breakdown=%#v", providers)
+	}
+	if dashboard.Today.EstimatedCostMicrosUSD != 2_000 {
+		t.Fatalf("estimated cost=%d", dashboard.Today.EstimatedCostMicrosUSD)
+	}
+	if len(dashboard.RecentAnomalies) != 2 || dashboard.RecentAnomalies[0].FallbackCount != 1 ||
+		dashboard.RecentAnomalies[1].HTTPStatus != 429 {
+		t.Fatalf("recent anomalies=%#v", dashboard.RecentAnomalies)
+	}
+}

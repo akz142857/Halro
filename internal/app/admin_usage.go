@@ -2,10 +2,14 @@ package app
 
 import (
 	"net/http"
+	"sort"
 	"strconv"
 	"time"
 
 	"github.com/akz142857/Heimdall/internal/buildinfo"
+	"github.com/akz142857/Heimdall/internal/domain"
+	gatewaycore "github.com/akz142857/Heimdall/internal/gateway"
+	"github.com/akz142857/Heimdall/internal/ledger"
 	"github.com/akz142857/Heimdall/internal/usage"
 	"github.com/go-chi/chi/v5"
 )
@@ -14,13 +18,171 @@ func (r *Runtime) adminDashboard(writer http.ResponseWriter, request *http.Reque
 	if !r.syncUsageAdmin(writer, request) {
 		return
 	}
-	dashboard := r.usage.Dashboard(time.Now(), r.usageLocation)
+	now := time.Now()
+	dashboard := r.usage.Dashboard(now, r.usageLocation)
+	governance, labels, err := r.dashboardGovernance(request, now)
+	if err != nil {
+		adminStoreError(writer)
+		return
+	}
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"usage":             dashboard,
+		"governance":        governance,
+		"resource_labels":   labels,
 		"accounting_status": r.status.Load(),
 		"wal":               r.ledger.Stats(),
 		"alerts":            r.alerts.Stats(),
 	})
+}
+
+type dashboardGovernance struct {
+	PolicyRejections policyRejectionSummary `json:"policy_rejections"`
+	Budget           pressureSummary        `json:"budget"`
+	Capacity         pressureSummary        `json:"capacity"`
+}
+
+type policyRejectionSummary struct {
+	RPM                   uint64 `json:"rpm"`
+	TPM                   uint64 `json:"tpm"`
+	ProjectConcurrency    uint64 `json:"project_concurrency"`
+	ProviderConcurrency   uint64 `json:"provider_concurrency"`
+	DeploymentConcurrency uint64 `json:"deployment_concurrency"`
+	Budget                uint64 `json:"budget"`
+	TokenGuard            uint64 `json:"token_guard"`
+	Total                 uint64 `json:"total"`
+}
+
+type pressureSummary struct {
+	AtRisk int            `json:"at_risk"`
+	Items  []pressureItem `json:"items"`
+}
+
+type pressureItem struct {
+	Scope              string  `json:"scope"`
+	ID                 string  `json:"id"`
+	Name               string  `json:"name"`
+	Current            int64   `json:"current"`
+	Limit              int64   `json:"limit"`
+	Utilization        float64 `json:"utilization"`
+	CommittedMicrosUSD int64   `json:"committed_micros_usd,omitempty"`
+	ReservedMicrosUSD  int64   `json:"reserved_micros_usd,omitempty"`
+}
+
+func (r *Runtime) dashboardGovernance(request *http.Request, now time.Time) (dashboardGovernance, map[string]string, error) {
+	projects, err := r.store.ListProjects(request.Context())
+	if err != nil {
+		return dashboardGovernance{}, nil, err
+	}
+	providers, err := r.store.ListProviders(request.Context())
+	if err != nil {
+		return dashboardGovernance{}, nil, err
+	}
+	deployments, err := r.store.ListDeployments(request.Context())
+	if err != nil {
+		return dashboardGovernance{}, nil, err
+	}
+	labels := make(map[string]string, len(projects)+len(providers)+len(deployments))
+	for _, project := range projects {
+		labels[project.ID] = project.Name
+	}
+	for _, provider := range providers {
+		labels[provider.ID] = provider.Name
+	}
+	for _, deployment := range deployments {
+		labels[deployment.ID] = deployment.Name
+	}
+	rejections := r.gatewayService.RejectionMetrics()
+	governance := dashboardGovernance{
+		PolicyRejections: summarizeRejections(rejections),
+		Budget:           budgetPressure(projects, r.state, now.In(r.usageLocation).Format("2006-01-02")),
+		Capacity: capacityPressure(
+			providers, deployments,
+			r.gatewayService.ActiveProviderRequests(), r.providers.ProviderConcurrencyLimits(),
+			r.gatewayService.ActiveDeploymentRequests(), r.providers.DeploymentConcurrencyLimits(),
+		),
+	}
+	return governance, labels, nil
+}
+
+func summarizeRejections(source gatewaycore.RejectionMetrics) policyRejectionSummary {
+	result := policyRejectionSummary{
+		RPM: source.RPM, TPM: source.TPM, ProjectConcurrency: source.ProjectConcurrency,
+		ProviderConcurrency:   source.ProviderConcurrency,
+		DeploymentConcurrency: source.DeploymentConcurrency,
+		Budget:                source.Budget, TokenGuard: source.TokenGuard,
+	}
+	result.Total = result.RPM + result.TPM + result.ProjectConcurrency +
+		result.ProviderConcurrency + result.DeploymentConcurrency + result.Budget + result.TokenGuard
+	return result
+}
+
+func budgetPressure(projects []domain.Project, state interface {
+	Balance(string, string) ledger.Balance
+}, periodID string) pressureSummary {
+	result := pressureSummary{Items: make([]pressureItem, 0, len(projects))}
+	for _, project := range projects {
+		if !project.Enabled || project.DailyBudgetMicrosUSD <= 0 {
+			continue
+		}
+		balance := state.Balance(project.ID, periodID)
+		current := balance.CommittedMicrosUSD + balance.ReservedMicrosUSD
+		utilization := float64(current) / float64(project.DailyBudgetMicrosUSD)
+		if utilization >= .8 {
+			result.AtRisk++
+		}
+		result.Items = append(result.Items, pressureItem{
+			Scope: "project", ID: project.ID, Name: project.Name,
+			Current: current, Limit: project.DailyBudgetMicrosUSD, Utilization: utilization,
+			CommittedMicrosUSD: balance.CommittedMicrosUSD, ReservedMicrosUSD: balance.ReservedMicrosUSD,
+		})
+	}
+	result.Items = topPressure(result.Items, 5)
+	return result
+}
+
+func capacityPressure(
+	providers []domain.ProviderInstance,
+	deployments []domain.Deployment,
+	activeProviders, providerLimits, activeDeployments, deploymentLimits map[string]int64,
+) pressureSummary {
+	result := pressureSummary{Items: make([]pressureItem, 0, len(providers)+len(deployments))}
+	for _, provider := range providers {
+		if limit := providerLimits[provider.ID]; provider.Enabled && limit > 0 {
+			result.Items = append(result.Items, newCapacityPressure("provider", provider.ID, provider.Name, activeProviders[provider.ID], limit))
+		}
+	}
+	for _, deployment := range deployments {
+		if limit := deploymentLimits[deployment.ID]; deployment.Enabled && limit > 0 {
+			result.Items = append(result.Items, newCapacityPressure("deployment", deployment.ID, deployment.Name, activeDeployments[deployment.ID], limit))
+		}
+	}
+	for _, item := range result.Items {
+		if item.Utilization >= .8 {
+			result.AtRisk++
+		}
+	}
+	result.Items = topPressure(result.Items, 5)
+	return result
+}
+
+func newCapacityPressure(scope, id, name string, current, limit int64) pressureItem {
+	return pressureItem{
+		Scope: scope, ID: id, Name: name, Current: current, Limit: limit,
+		Utilization: float64(current) / float64(limit),
+	}
+}
+
+func topPressure(items []pressureItem, limit int) []pressureItem {
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Utilization != items[j].Utilization {
+			return items[i].Utilization > items[j].Utilization
+		}
+		return items[i].ID < items[j].ID
+	})
+	if len(items) > limit {
+		return items[:limit]
+	}
+	return items
 }
 
 func (r *Runtime) adminUsage(writer http.ResponseWriter, request *http.Request) {
