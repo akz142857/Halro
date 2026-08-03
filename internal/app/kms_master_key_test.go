@@ -269,6 +269,12 @@ func TestKMSBootstrapAndRuntimeUsePrimaryOnlyOutsideRequestPath(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	recoveryUnwrapsAfterInitialization := 0
+	for _, call := range harness.wrappers[recoveryKMSKeyARN].Calls() {
+		if call.Operation == corekms.OperationUnwrap {
+			recoveryUnwrapsAfterInitialization++
+		}
+	}
 	result, err := Bootstrap(context.Background(), cfg, BootstrapOptions{
 		ProviderName: "OpenAI", ProviderType: domain.ProviderOpenAI,
 		ProviderBaseURL: "https://api.openai.com", ProviderModel: "gpt-test", PublicModel: "chat", ProjectName: "Default",
@@ -294,10 +300,14 @@ func TestKMSBootstrapAndRuntimeUsePrimaryOnlyOutsideRequestPath(t *testing.T) {
 	if harness.callCount() != callsAfterStartup {
 		t.Fatal("Gateway request-path operation called KMS")
 	}
+	recoveryUnwrapsAfterStartup := 0
 	for _, call := range harness.wrappers[recoveryKMSKeyARN].Calls() {
-		if call.Operation == corekms.OperationUnwrap && call.Sequence > 1 {
-			t.Fatalf("normal Bootstrap/Runtime reused Recovery Slot: %#v", harness.wrappers[recoveryKMSKeyARN].Calls())
+		if call.Operation == corekms.OperationUnwrap {
+			recoveryUnwrapsAfterStartup++
 		}
+	}
+	if recoveryUnwrapsAfterStartup != recoveryUnwrapsAfterInitialization {
+		t.Fatalf("normal Bootstrap/Runtime reused Recovery Slot: %#v", harness.wrappers[recoveryKMSKeyARN].Calls())
 	}
 }
 

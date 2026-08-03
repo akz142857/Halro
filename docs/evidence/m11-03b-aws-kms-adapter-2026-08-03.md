@@ -11,9 +11,12 @@ sanitized smoke record.
 
 - Official AWS SDK for Go v2 config and KMS modules at the versions pinned in
   `go.mod`; AWS SDK retry attempts are fixed at one.
-- Workload Identity only: Web Identity/IRSA, ECS/EKS credential endpoint,
-  EC2 instance profile, or explicit AssumeRole. Static environment/shared-file
-  credentials, SSO and credential-process sources are rejected by the Adapter.
+- Workload Identity only: Web Identity/IRSA, ECS/EKS credential endpoint, or
+  EC2 instance profile. Generic `AssumeRoleProvider` is rejected because its
+  source credentials may be a static shared-file profile and the SDK result
+  does not retain enough provenance to prove otherwise. Static
+  environment/shared-file credentials, SSO and credential-process sources are
+  rejected by the Adapter.
 - AWS KMS symmetric Encrypt/Decrypt using a full customer-managed Key ARN and
   `SYMMETRIC_DEFAULT`.
 - Exact region, account, Key ARN, HTTPS endpoint and algorithm allowlists are

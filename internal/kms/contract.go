@@ -285,7 +285,10 @@ func Classify(err error) ErrorClass {
 	if errors.As(err, &classified) && classified != nil && ValidErrorClass(classified.Class) {
 		return classified.Class
 	}
-	return ErrorTransient
+	// Unknown and malformed Adapter errors must fail closed. Treating them as
+	// transient would authorize a blind retry without evidence that the
+	// provider did not execute the operation or that retry is safe.
+	return ErrorAdapterUnavailable
 }
 
 func Retryable(class ErrorClass) bool {

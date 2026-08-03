@@ -340,6 +340,7 @@ func TestAWSErrorMappingAndSecretSafeOutput(t *testing.T) {
 		{code: "InvalidCiphertextException", class: corekms.ErrorCiphertextInvalid},
 		{code: "ValidationException", class: corekms.ErrorConfigInvalid},
 		{code: "DependencyTimeoutException", class: corekms.ErrorTransient},
+		{code: "FutureUnknownException", class: corekms.ErrorAdapterUnavailable},
 	}
 	for _, test := range tests {
 		t.Run(test.code, func(t *testing.T) {
@@ -367,6 +368,17 @@ func TestAWSErrorMappingAndSecretSafeOutput(t *testing.T) {
 	if corekms.Classify(identity) != corekms.ErrorIdentityNotReady || strings.Contains(identity.Error(), "token path secret") {
 		t.Fatalf("identity error=%v", identity)
 	}
+	unknown := classifyAWSError(errors.New("unknown SDK failure"), corekms.OperationWrap)
+	if class := corekms.Classify(unknown); class != corekms.ErrorAdapterUnavailable || corekms.Retryable(class) {
+		t.Fatalf("unknown SDK failure class=%q retryable=%v", class, corekms.Retryable(class))
+	}
+	unknownHTTP := &awshttp.ResponseError{
+		ResponseError: &smithyhttp.ResponseError{Response: &smithyhttp.Response{Response: &http.Response{StatusCode: http.StatusTeapot}}, Err: errors.New("unexpected status")},
+	}
+	classifiedHTTP := classifyAWSError(unknownHTTP, corekms.OperationUnwrap)
+	if class := corekms.Classify(classifiedHTTP); class != corekms.ErrorAdapterUnavailable || corekms.Retryable(class) {
+		t.Fatalf("unknown HTTP status class=%q retryable=%v", class, corekms.Retryable(class))
+	}
 }
 
 type credentialsProviderFunc func(context.Context) (aws.Credentials, error)
@@ -376,7 +388,7 @@ func (f credentialsProviderFunc) Retrieve(ctx context.Context) (aws.Credentials,
 }
 
 func TestWorkloadIdentityProviderPreservesSuccessAndClassifiesNotReady(t *testing.T) {
-	for _, source := range []string{"WebIdentityCredentials", "CredentialsEndpointProvider", "EC2RoleProvider", "AssumeRoleProvider"} {
+	for _, source := range []string{"WebIdentityCredentials", "CredentialsEndpointProvider", "EC2RoleProvider"} {
 		t.Run(source, func(t *testing.T) {
 			provider := identityProvider{delegate: credentialsProviderFunc(func(context.Context) (aws.Credentials, error) {
 				return aws.Credentials{AccessKeyID: "temporary", SecretAccessKey: "temporary", SessionToken: "temporary", CanExpire: true, Source: source}, nil
@@ -402,6 +414,14 @@ func TestWorkloadIdentityProviderPreservesSuccessAndClassifiesNotReady(t *testin
 	classified = classifyAWSError(err, corekms.OperationUnwrap)
 	if corekms.Classify(classified) != corekms.ErrorIdentityNotReady || strings.Contains(classified.Error(), "EnvConfigCredentials") {
 		t.Fatalf("static credential class=%q err=%v", corekms.Classify(classified), classified)
+	}
+	provider = identityProvider{delegate: credentialsProviderFunc(func(context.Context) (aws.Credentials, error) {
+		return aws.Credentials{AccessKeyID: "temporary", SecretAccessKey: "temporary", SessionToken: "temporary", CanExpire: true, Source: "AssumeRoleProvider"}, nil
+	})}
+	_, err = provider.Retrieve(context.Background())
+	classified = classifyAWSError(err, corekms.OperationUnwrap)
+	if corekms.Classify(classified) != corekms.ErrorIdentityNotReady {
+		t.Fatalf("unproven AssumeRole source class=%q err=%v", corekms.Classify(classified), classified)
 	}
 }
 
