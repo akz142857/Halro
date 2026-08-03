@@ -330,7 +330,7 @@ export const zhCN = {
     violations: "触发次数", blockTTL: "封禁时长（秒）", cooldown: "冷却时间（秒）", enableEWMA: "启用实验性 EWMA 相对基线（仅检测）",
     ewmaHint: "EWMA 命中只产生告警；硬阈值仍优先，且只有硬阈值允许临时封禁。", ewmaAlpha: "EWMA 平滑系数", multiplier: "相对基线倍数", baselineSamples: "基线最少样本", warmup: "预热（秒）", window: "评估窗口（秒，10 秒倍数）", alertCooldown: "告警冷却时间（秒）",
     rpmFloor: "RPM 绝对下限", tpmFloor: "TPM 绝对下限", tokenFloor: "平均令牌/请求下限", costFloor: "成本速率下限（USD/min）", enable: "启用此策略", save: "保存策略", saveAndApply: "保存并立即应用",
-    identitySection: "基本信息与发布状态", identityDescription: "策略启用后仍需绑定项目才会实际生效。", boundImpact: "保存后将热加载到 {{count}} 个项目", unboundImpact: "当前未绑定项目，不影响网关流量",
+    identitySection: "基本信息与发布状态", identityDescription: "策略启用后仍需绑定项目才会实际生效。", statusField: "策略状态", boundImpact: "保存后将热加载到 {{count}} 个项目", unboundImpact: "当前未绑定项目，不影响网关流量",
     actionSection: "命中后的处置方式", actionDescription: "固定阈值命中后按此方式处理；EWMA 始终仅检测。", observeDescription: "放行请求并记录安全事件。", alertDescription: "放行请求并发送告警。", temporary_blockDescription: "先放行并累计违规，达到升级条件后临时拒绝。",
     fixedLimitsSection: "固定阈值", zeroDisables: "每个数值为 0 时关闭对应检测维度。", trafficLimits: "请求与吞吐", capacityLimits: "成本与容量", qualityLimits: "质量与来源", tokensUnit: "令牌；0 表示关闭", tpmUnit: "令牌/分钟；0 表示关闭", perMinuteUnit: "来源 IP/分钟；0 表示关闭", minimumSamplesHint: "错误率与临时封禁升级共享此样本门槛",
     blockSection: "封禁升级条件", blockCondition: "窗口至少 {{samples}} 个请求且累计违规 {{violations}} 次后，封禁 {{ttl}} 秒。", notImmediate: "非立即拒绝", blockWarning: "临时封禁不是硬限流器；达到样本和违规双门槛前，请求仍会放行。", secondsUnit: "秒", cooldownMeaning: "超过该间隔后，连续违规计数会重置",
