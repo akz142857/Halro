@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 
+import hashlib
 import importlib.util
 import json
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -149,6 +151,32 @@ class VerifyTests(unittest.TestCase):
         with self.assertRaises(VERIFY.EvidenceError):
             VERIFY.verify(template)
 
+    def test_expected_commit_and_tag_are_bound(self):
+        bundle = valid_bundle()
+        VERIFY.verify(
+            bundle,
+            expected_commit=bundle["release"]["commit"],
+            expected_tag=bundle["release"]["tag"],
+        )
+        with self.assertRaises(VERIFY.EvidenceError):
+            VERIFY.verify(bundle, expected_commit="f" * 40)
+        with self.assertRaises(VERIFY.EvidenceError):
+            VERIFY.verify(bundle, expected_tag="v1.0.0-rc.2")
+
+    def test_artifact_files_are_bound_to_bundle_digests(self):
+        bundle = valid_bundle()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            artifacts_dir = Path(temporary_directory)
+            for artifact in bundle["supply_chain"]["artifacts"]:
+                content = f"artifact:{artifact['name']}".encode()
+                (artifacts_dir / artifact["name"]).write_bytes(content)
+                artifact["sha256"] = hashlib.sha256(content).hexdigest()
+                (artifacts_dir / f"{artifact['name']}.sigstore.json").write_text("{}", encoding="utf-8")
+            VERIFY.verify(bundle, artifacts_dir=artifacts_dir)
+            (artifacts_dir / "heimdall-linux-amd64.tar.gz").write_bytes(b"tampered")
+            with self.assertRaises(VERIFY.EvidenceError):
+                VERIFY.verify(bundle, artifacts_dir=artifacts_dir)
+
     def test_missing_scenario_fails(self):
         self.assert_invalid(lambda bundle: bundle["aws_scenarios"].pop())
 
@@ -205,6 +233,12 @@ class VerifyTests(unittest.TestCase):
                 "arn:aws:kms:us-east-1:111122223333:key/example"
             )
         )
+
+    def test_extra_sensitive_field_fails(self):
+        self.assert_invalid(lambda bundle: bundle["release"].update(aws_session_token="must-not-be-retained"))
+
+    def test_unknown_top_level_field_fails(self):
+        self.assert_invalid(lambda bundle: bundle.update(notes="not part of the reviewed schema"))
 
     def test_placeholder_reviewer_fails(self):
         self.assert_invalid(lambda bundle: bundle["signoffs"][0].update(reviewer="pending"))

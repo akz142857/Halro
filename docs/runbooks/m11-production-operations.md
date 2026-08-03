@@ -62,4 +62,6 @@
 
 ## 7. 发布证据与签署
 
-Release Candidate 必须归档：精确 commit/tag、CI/race/vet、0 reachable vulnerability 报告、KMS boundary、Secret Canary、kill-point matrix、14 项真实 AWS 测试、Primary/Recovery 独立恢复、SBOM、checksums、每个 artifact 的 Sigstore bundle，以及 Security/Backend/SRE/Release 四方签署。使用 `python3 tools/m11/release-evidence/verify.py /secure/evidence/m11-release-evidence.json` 校验最终脱敏 bundle；只有输出 `M11_RELEASE_EVIDENCE=PASS` 才能进入发布审批。任何一项待补时保持 Draft/Not production-ready。
+Release Candidate 必须归档：精确 commit/tag、CI/race/vet、0 reachable vulnerability 报告、KMS boundary、Secret Canary、kill-point matrix、14 项真实 AWS 测试、Primary/Recovery 独立恢复、SBOM、checksums、每个 artifact 的 Sigstore bundle，以及 Security/Backend/SRE/Release 四方签署。使用 `tools/m11/release-evidence/README.md` 中的完整命令，以 expected commit/tag、实际 release-assets 目录校验最终脱敏 bundle；只有输出 `M11_RELEASE_EVIDENCE=PASS` 才能进入发布审批。任何一项待补时保持 Draft/Not production-ready。
+
+GitHub 发布时，四方 reviewer 必须先下载 `provenance` job 的 `release-assets`，完成 SBOM、checksum、Sigstore 与 bundle 审核，再把脱敏 JSON 设置为 `v1-release` Environment 的 `M11_RELEASE_EVIDENCE_JSON` secret 并批准环境。`publish` job 会再次绑定 signed tag 的 commit/tag、重算每个 artifact SHA-256、执行 `sha256sum --check` 并独立执行 `cosign verify-blob`；缺 secret、跨 commit/tag、摘要不一致或签名验证失败都会阻止创建 Release。

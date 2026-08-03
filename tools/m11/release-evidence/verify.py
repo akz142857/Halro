@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -72,6 +73,24 @@ RAW_SECRET_PATTERNS = (
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
 )
 
+SENSITIVE_FIELD_RE = re.compile(
+    r"(?:^|_)(?:access_key|credential|ciphertext|master_key|plaintext|private_key|secret|session_token|token)(?:$|_)",
+    re.IGNORECASE,
+)
+
+TOP_LEVEL_FIELDS = {
+    "schema_version",
+    "release",
+    "design_reviews",
+    "aws_environment",
+    "aws_scenarios",
+    "secret_canary",
+    "deployments",
+    "recovery_drill",
+    "supply_chain",
+    "signoffs",
+}
+
 
 class EvidenceError(ValueError):
     pass
@@ -130,6 +149,17 @@ def walk_strings(value: Any) -> list[str]:
 
 
 def reject_raw_secrets(bundle: dict[str, Any]) -> None:
+    def check_keys(value: Any) -> None:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key != "secret_canary":
+                    require(SENSITIVE_FIELD_RE.search(key) is None, f"bundle contains forbidden sensitive field: {key}")
+                check_keys(item)
+        elif isinstance(value, list):
+            for item in value:
+                check_keys(item)
+
+    check_keys(bundle)
     for text in walk_strings(bundle):
         for pattern in RAW_SECRET_PATTERNS:
             require(pattern.search(text) is None, "bundle contains a raw AWS ARN, credential, or private key")
@@ -276,10 +306,35 @@ def verify_signoffs(bundle: dict[str, Any], commit: str) -> None:
     require(len(set(reviewers)) == len(SIGNOFF_ROLES), "Security, Backend, SRE and Release reviewers must be distinct")
 
 
-def verify(bundle: dict[str, Any]) -> None:
+def verify_artifact_files(bundle: dict[str, Any], artifacts_dir: Path) -> None:
+    artifacts = require_list(require_object(bundle.get("supply_chain"), "supply_chain").get("artifacts"), "supply_chain.artifacts")
+    for index, raw in enumerate(artifacts):
+        artifact = require_object(raw, f"supply_chain.artifacts[{index}]")
+        name = require_nonempty_string(artifact.get("name"), f"supply_chain.artifacts[{index}].name")
+        path = artifacts_dir / name
+        require(path.is_file(), f"release artifact is missing: {name}")
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        require(digest == artifact.get("sha256"), f"release artifact digest does not match bundle: {name}")
+        bundle_path = artifacts_dir / f"{name}.sigstore.json"
+        require(bundle_path.is_file() and bundle_path.stat().st_size > 0, f"Sigstore bundle is missing: {name}.sigstore.json")
+
+
+def verify(
+    bundle: dict[str, Any],
+    *,
+    expected_commit: str | None = None,
+    expected_tag: str | None = None,
+    artifacts_dir: Path | None = None,
+) -> None:
     require(bundle.get("schema_version") == 1, "schema_version must be 1")
+    require(set(bundle) == TOP_LEVEL_FIELDS, f"bundle must contain exactly: {', '.join(sorted(TOP_LEVEL_FIELDS))}")
     reject_raw_secrets(bundle)
     commit, implementation_authors = verify_release(bundle)
+    release = require_object(bundle.get("release"), "release")
+    if expected_commit is not None:
+        require(commit == expected_commit, "release.commit does not match the expected release commit")
+    if expected_tag is not None:
+        require(release.get("tag") == expected_tag, "release.tag does not match the expected release tag")
     verify_design_reviews(bundle)
     verify_aws_environment(bundle)
     verify_scenarios(bundle)
@@ -288,15 +343,25 @@ def verify(bundle: dict[str, Any]) -> None:
     verify_recovery(bundle, implementation_authors)
     verify_supply_chain(bundle)
     verify_signoffs(bundle, commit)
+    if artifacts_dir is not None:
+        verify_artifact_files(bundle, artifacts_dir)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("bundle", type=Path, help="sanitized M11 release evidence JSON")
+    parser.add_argument("--expected-commit", required=True, help="full commit SHA selected by the signed release tag")
+    parser.add_argument("--expected-tag", required=True, help="exact release tag")
+    parser.add_argument("--artifacts-dir", required=True, type=Path, help="downloaded release artifact directory")
     args = parser.parse_args()
     try:
         bundle = json.loads(args.bundle.read_text(encoding="utf-8"))
-        verify(require_object(bundle, "bundle"))
+        verify(
+            require_object(bundle, "bundle"),
+            expected_commit=args.expected_commit,
+            expected_tag=args.expected_tag,
+            artifacts_dir=args.artifacts_dir,
+        )
     except (OSError, json.JSONDecodeError, EvidenceError) as exc:
         print(f"M11_RELEASE_EVIDENCE=FAIL: {exc}", file=sys.stderr)
         return 1

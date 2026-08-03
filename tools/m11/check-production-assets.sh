@@ -24,6 +24,9 @@ grep -q 'Generate SPDX SBOM' .github/workflows/release.yml
 grep -q 'Generate checksums' .github/workflows/release.yml
 grep -q 'Keyless sign release blobs' .github/workflows/release.yml
 grep -q 'cosign sign-blob' .github/workflows/release.yml
+grep -q 'M11_RELEASE_EVIDENCE_JSON' .github/workflows/release.yml
+grep -q 'release-evidence/verify.py' .github/workflows/release.yml
+grep -q 'cosign verify-blob' .github/workflows/release.yml
 
 ! grep -R --include='*.go' --exclude='*_test.go' -q '"net/http/pprof"' cmd internal
 

@@ -10,6 +10,7 @@
 - 启动前 `RLIMIT_CORE=0` fail-closed；Linux `PR_SET_DUMPABLE=0`；无 pprof/crash uploader；明确 Go managed heap 无法保证 mlock、确定性擦除或安全的 per-slice `MADV_DONTDUMP`。
 - AWS IAM/Primary/Recovery Key Policy、Recovery/Lifecycle Role 模板；Kubernetes `replicas=1`/`Recreate` 与 systemd hardening 基线。
 - 现有 release workflow 构建 Accepted ADR 的单 artifact，执行 Test/Race/Vet/vulnerability scan，并生成 SPDX SBOM、checksums 和每个 blob 的 keyless Sigstore bundle。
+- `publish` job 在 `v1-release` Environment approval 后仍 fail closed：要求 `M11_RELEASE_EVIDENCE_JSON`，绑定 signed tag 的 commit/tag 和实际 artifact SHA-256，执行 checksum 与每个 blob 的 Sigstore verification 后才允许创建 GitHub Release。
 
 本地门禁（2026-08-03）：
 

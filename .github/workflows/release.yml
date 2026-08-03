@@ -258,6 +258,34 @@ jobs:
         with:
           name: release-assets
           path: release
+      - uses: sigstore/cosign-installer@v4.1.2
+      - name: Verify final M11 evidence and release blobs
+        env:
+          M11_RELEASE_EVIDENCE_JSON: ${{ secrets.M11_RELEASE_EVIDENCE_JSON }}
+        run: |
+          set -euo pipefail
+          test -n "${M11_RELEASE_EVIDENCE_JSON}"
+          umask 077
+          evidence_file=$(mktemp "${RUNNER_TEMP}/m11-release-evidence.XXXXXX.json")
+          trap 'rm -f "${evidence_file}"' EXIT
+          printf '%s' "${M11_RELEASE_EVIDENCE_JSON}" >"${evidence_file}"
+          release_commit=$(git rev-list -n 1 "${GITHUB_REF_NAME}")
+          python3 tools/m11/release-evidence/verify.py \
+            --expected-commit "${release_commit}" \
+            --expected-tag "${GITHUB_REF_NAME}" \
+            --artifacts-dir release \
+            "${evidence_file}"
+          (cd release && sha256sum --check checksums.txt)
+          for artifact in release/heimdall-* release/heimdall.spdx.json release/checksums.txt; do
+            case "${artifact}" in
+              *.sigstore.json) continue ;;
+            esac
+            cosign verify-blob \
+              --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@${GITHUB_REF}" \
+              --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+              --bundle "${artifact}.sigstore.json" \
+              "${artifact}"
+          done
       - name: Publish immutable GitHub release after evidence approval
         if: startsWith(github.ref, 'refs/tags/v')
         env:
