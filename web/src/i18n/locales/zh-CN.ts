@@ -70,10 +70,15 @@ export const zhCN = {
   },
 	custody: {
 		eyebrow: "密钥托管", title: "Master Key 托管", description: "只读展示运行态势，不显示密钥材料或云端标识符。",
-		posture: "托管态势", ready: "满足生产条件", notReady: "不满足生产条件", stable: "当前没有待完成的生命周期变更。",
+		posture: "托管态势", descriptorReady: "本地 descriptor 就绪", descriptorNotReady: "本地 descriptor 未就绪", stable: "当前没有待完成的生命周期变更。",
 		rotationIncomplete: "仍有生命周期工作：{{pending}} 个 pending，{{retiring}} 个 retiring。", mode: "模式", slots: "Key Slot",
 		redaction: "仅展示用途、生命周期状态、Provider 与验证时间。", primary: "Primary", recovery: "Recovery",
 		provider: "Provider", lastVerified: "最后验证", runbooks: "离线 Runbook", offlineOnly: "变更与恢复只能通过离线 CLI 执行。",
+		externalAdmission: "生产准入仍需真实 AWS 证据、独立恢复演练、最终 RC 证据和四方签署。", admissionNotApplicable: "File 模式不适用外部 KMS 生产准入。",
+		reviewRequired: "需要检查托管状态", lifecycle: "生命周期状态", operation: "未完成操作", recoveryExpiry: "Recovery 验证", expired: "已过期", current: "有效",
+		lifecycleRunbook: "打开生命周期 Runbook", recoveryRunbook: "打开灾备 Runbook",
+		operations: { none: "无", kek_rewrap: "KEK rewrap", dek_rotate: "Master Key / DEK rotate" },
+		reasons: { descriptor_not_ready: "Descriptor 未就绪", pending_slots: "存在 pending Slot", retiring_slots: "存在 retiring Slot", recovery_verification_missing: "Recovery 从未验证", recovery_verification_expired: "Recovery 验证已超过 90 天", dek_rotation_incomplete: "DEK rotate 恢复尚未完成" },
 		states: { pending: "待验证", active: "生效", retiring: "退役中", revoked: "已撤销" },
 	},
   auth: {

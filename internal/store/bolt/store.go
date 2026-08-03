@@ -63,6 +63,7 @@ var (
 	keyAuditHMACEnvelope         = []byte("audit_hmac_envelope")
 	keyVaultKeyring              = []byte("vault_keyring")
 	keyKeySlotDescriptor         = []byte("key_slot_descriptor")
+	keyKeySlotAuditIntent        = []byte("key_slot_audit_intent")
 	keyRuntimeSettings           = []byte("runtime_settings")
 	keyInstanceUISettings        = []byte("instance_ui_settings")
 )
@@ -616,6 +617,120 @@ func (s *Store) RevokeKeySlot(
 	now time.Time,
 ) (masterkey.KeySlotDescriptor, *masterkey.SlotTransition, error) {
 	return s.transitionKeySlot(ctx, slotID, expectedDescriptorRevision, expectedSlotRevision, masterkey.KeySlotRevoked, now)
+}
+
+func (s *Store) RevokeKeySlotWithAuditIntent(
+	ctx context.Context,
+	slotID string,
+	expectedDescriptorRevision uint64,
+	expectedSlotRevision uint64,
+	reasonCode string,
+	now time.Time,
+) (masterkey.KeySlotDescriptor, masterkey.KeySlotAuditIntent, error) {
+	var next masterkey.KeySlotDescriptor
+	var intent masterkey.KeySlotAuditIntent
+	err := s.db.Update(func(tx *bbolt.Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		meta := tx.Bucket(bucketMeta)
+		if raw := meta.Get(keyKeySlotAuditIntent); raw != nil {
+			var previous masterkey.KeySlotAuditIntent
+			if err := json.Unmarshal(raw, &previous); err != nil {
+				return err
+			}
+			if err := previous.Validate(); err != nil {
+				return err
+			}
+			if !previous.Delivered {
+				return errors.New("a previous Key Slot audit event is still pending delivery")
+			}
+		}
+		raw := meta.Get(keyKeySlotDescriptor)
+		if raw == nil {
+			return ErrNotFound
+		}
+		var current masterkey.KeySlotDescriptor
+		if err := json.Unmarshal(raw, &current); err != nil {
+			return err
+		}
+		var transition *masterkey.SlotTransition
+		var err error
+		next, transition, err = current.RevokeSlot(slotID, expectedDescriptorRevision, expectedSlotRevision, now)
+		if err != nil {
+			return err
+		}
+		if transition == nil {
+			return errors.New("Key Slot revoke produced no transition")
+		}
+		intent = masterkey.KeySlotAuditIntent{
+			EventID:    fmt.Sprintf("aud-slot-%s-%d-%d", transition.SlotID, transition.DescriptorRevision, transition.SlotRevision),
+			OccurredAt: transition.OccurredAt, Action: transition.AuditAction(), TargetID: transition.SlotID,
+			Purpose: transition.Purpose, ReasonCode: reasonCode,
+			ExpectedDescriptorRevision: expectedDescriptorRevision, ExpectedSlotRevision: expectedSlotRevision,
+			DescriptorRevision: transition.DescriptorRevision, SlotRevision: transition.SlotRevision,
+		}
+		if err := intent.Validate(); err != nil {
+			return err
+		}
+		descriptorPayload, err := json.Marshal(next)
+		if err != nil {
+			return err
+		}
+		intentPayload, err := json.Marshal(intent)
+		if err != nil {
+			return err
+		}
+		if err := meta.Put(keyKeySlotDescriptor, descriptorPayload); err != nil {
+			return err
+		}
+		return meta.Put(keyKeySlotAuditIntent, intentPayload)
+	})
+	return next, intent, err
+}
+
+func (s *Store) KeySlotAuditIntent() (masterkey.KeySlotAuditIntent, error) {
+	var intent masterkey.KeySlotAuditIntent
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		raw := tx.Bucket(bucketMeta).Get(keyKeySlotAuditIntent)
+		if raw == nil {
+			return ErrNotFound
+		}
+		if err := json.Unmarshal(raw, &intent); err != nil {
+			return err
+		}
+		return intent.Validate()
+	})
+	return intent, err
+}
+
+func (s *Store) MarkKeySlotAuditDelivered(ctx context.Context, eventID string) error {
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		meta := tx.Bucket(bucketMeta)
+		raw := meta.Get(keyKeySlotAuditIntent)
+		if raw == nil {
+			return ErrNotFound
+		}
+		var intent masterkey.KeySlotAuditIntent
+		if err := json.Unmarshal(raw, &intent); err != nil {
+			return err
+		}
+		if err := intent.Validate(); err != nil {
+			return err
+		}
+		if intent.EventID != eventID {
+			return ErrRevisionConflict
+		}
+		intent.Delivered = true
+		payload, err := json.Marshal(intent)
+		if err != nil {
+			return err
+		}
+		return meta.Put(keyKeySlotAuditIntent, payload)
+	})
 }
 
 func (s *Store) transitionKeySlot(

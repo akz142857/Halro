@@ -22,7 +22,11 @@
    ```
 
 4. 命令依次持久化 `pending → active`，只有新 Slot 独立 unwrap 并通过 Vault Key Check 后才把旧 Slot 置为 `retiring`。
-5. 验证 fingerprint、Credential ciphertext digest 和 KeyVersion 未改变；记录 JSON 中的 `descriptor_revision`，并从只读 Custody 页面或离线 descriptor 检查取得 retiring Slot 的当前 revision。
+5. 验证 fingerprint、Credential ciphertext digest 和 KeyVersion 未改变。实例保持停止，使用受支持的低敏离线查询取得 descriptor 与 retiring Slot revision；该结果不包含 ARN、ciphertext、provider parameters 或 fingerprint：
+
+   ```bash
+   heimdall key slot status --config /etc/heimdall/config.yaml
+   ```
 6. 恢复窗口与备份清单审批完成后，精确确认 retiring Slot 并执行：
 
    ```bash
@@ -34,7 +38,7 @@
      --reason retirement_window_completed
    ```
 
-   命令只接受 `retiring → revoked`，先用配置中的同用途 replacement active Slot 独立解锁并通过 Vault Key Check，再写 Audit、清除 wrapped/provider material、compact metadata。相同确认重复执行为幂等；revision 不匹配、确认不一致或会破坏 production-ready 时 fail closed。事故退役可使用 `--reason incident_retirement`。
+   命令只接受 `retiring → revoked`，先用配置中的同用途 replacement active Slot 独立解锁并通过 Vault Key Check。revoke、持久化 Audit intent 和 compaction 在 stage 中完成并验证，随后一次 rename 发布无旧敏感页的 metadata，再交付最终 success Audit；启动会恢复未交付 intent。只有相同 revisions、确认和 reason 的重试才幂等，任何冲突 fail closed。事故退役可使用 `--reason incident_retirement`。
 7. revoke 成功后从运行配置移除旧同用途 allowlist 条目，再撤销旧 AWS Grant/Policy；DEK rotate 要求 Primary、Recovery 各自只有一个明确的目标 KMS Key。
 8. rewrap/revoke 不修改历史备份。旧 KMS Key 只有在备份清单证明不再需要它后才能安排禁用或删除。
 

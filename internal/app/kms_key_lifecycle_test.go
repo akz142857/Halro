@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -156,7 +158,7 @@ func TestKMSRevokeRequiresConfirmationAndIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.State != masterkey.KeySlotRevoked || !result.ProductionReady || result.AlreadyRevoked {
+	if result.State != masterkey.KeySlotRevoked || !result.DescriptorReady || result.AlreadyRevoked {
 		t.Fatalf("result=%#v", result)
 	}
 	auditKey, err := vault.DeriveAuditHMACKey(bytes.Repeat([]byte{0x61}, 32))
@@ -167,6 +169,16 @@ func TestKMSRevokeRequiresConfirmationAndIsIdempotent(t *testing.T) {
 	beforeRetry, err := audit.Verify(cfg.AuditPath(), auditKey)
 	if err != nil {
 		t.Fatal(err)
+	}
+	wrongRevision := options
+	wrongRevision.ExpectedDescriptorRevision--
+	if _, err := revokeKMSKeySlotWithOptions(context.Background(), cfg, wrongRevision, harness.factory, time.Now, nil); err == nil {
+		t.Fatal("already-revoked retry accepted unrelated revisions")
+	}
+	wrongReason := options
+	wrongReason.ReasonCode = "incident_retirement"
+	if _, err := revokeKMSKeySlotWithOptions(context.Background(), cfg, wrongReason, harness.factory, time.Now, nil); err == nil {
+		t.Fatal("already-revoked retry accepted a conflicting reason")
 	}
 	again, err := revokeKMSKeySlotWithOptions(context.Background(), cfg, options, harness.factory, time.Now, nil)
 	if err != nil || !again.AlreadyRevoked {
@@ -198,8 +210,33 @@ func TestKMSRevokeRequiresConfirmationAndIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestKMSKeySlotStatusProvidesRevisionsWithoutKMSOrProviderMaterial(t *testing.T) {
+	cfg, _, harness, _ := kmsRewrapFixture(t)
+	before := harness.callCount()
+	status, err := InspectKMSKeySlots(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if harness.callCount() != before {
+		t.Fatal("Slot status called KMS")
+	}
+	if status.DescriptorRevision == 0 || !status.DescriptorReady || len(status.Slots) != 2 {
+		t.Fatalf("status=%#v", status)
+	}
+	payload, err := json.Marshal(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(payload)
+	for _, forbidden := range []string{"arn:aws:kms", "wrapped_key", "key_reference", "provider_parameters", "fingerprint"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("Slot status leaked %q: %s", forbidden, text)
+		}
+	}
+}
+
 func TestKMSRevokeRecoversAtEveryPublicationPoint(t *testing.T) {
-	for _, point := range []string{"before_revoked_slot_published", "after_revoked_slot_published", "after_revoked_slot_compacted", "after_revoked_compaction_published"} {
+	for _, point := range []string{"after_revoked_stage_persisted", "after_revoked_slot_compacted", "before_revoked_metadata_publish", "after_revoked_metadata_publish", "after_revoked_audit_append", "after_revoked_audit_checkpoint", "after_revoked_audit_intent_delivered", "after_revoked_audit_delivered"} {
 		t.Run(point, func(t *testing.T) {
 			baseCfg, cfg, harness, _ := kmsRewrapFixture(t)
 			if _, err := rewrapKMSKeyWithOptions(context.Background(), cfg, KMSRewrapOptions{
@@ -229,44 +266,94 @@ func TestKMSRevokeRecoversAtEveryPublicationPoint(t *testing.T) {
 				t.Fatalf("point=%s err=%v", point, err)
 			}
 			result, err := revokeKMSKeySlotWithOptions(context.Background(), cfg, options, harness.factory, time.Now, nil)
-			if err != nil || !result.ProductionReady || (point != "before_revoked_slot_published" && !result.AlreadyRevoked) {
+			published := point == "after_revoked_metadata_publish" || strings.HasPrefix(point, "after_revoked_audit")
+			if err != nil || !result.DescriptorReady || (published && !result.AlreadyRevoked) || (!published && result.AlreadyRevoked) {
 				t.Fatalf("recover %s result=%#v err=%v", point, result, err)
 			}
 		})
 	}
 }
 
-func TestSlotTransitionAuditIsIdempotentAcrossMetadataFailure(t *testing.T) {
-	cfg, _, _, _ := kmsRewrapFixture(t)
+func TestKMSRevokePublishesCleanMetadataBeforeFinalSuccessAudit(t *testing.T) {
+	baseCfg, cfg, harness, _ := kmsRewrapFixture(t)
+	if _, err := rewrapKMSKeyWithOptions(context.Background(), cfg, KMSRewrapOptions{
+		Purpose: masterkey.KeySlotPrimary, SlotID: cfg.Storage.MasterKey.PrimarySlot, KeyReference: replacementPrimaryKMSKeyARN,
+	}, harness.factory, time.Now, nil); err != nil {
+		t.Fatal(err)
+	}
 	store, err := boltstore.Open(cfg.MetadataPath())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	descriptor, err := store.KeySlotDescriptor(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := keySlotForAppTest(t, descriptor, baseCfg.Storage.MasterKey.PrimarySlot)
+	oldCiphertext := bytes.Clone(old.WrappedKey)
+	store.Close()
 	auditKey, err := vault.DeriveAuditHMACKey(bytes.Repeat([]byte{0x61}, 32))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer clear(auditKey)
-	transition := &masterkey.SlotTransition{
-		SlotID: "slot_retry", Purpose: masterkey.KeySlotPrimary,
-		From: masterkey.KeySlotRetiring, To: masterkey.KeySlotRevoked,
-		DescriptorRevision: 9, SlotRevision: 4, OccurredAt: time.Now().UTC(),
-	}
-	injected := errors.New("metadata fsync failed")
-	if err := publishSlotTransitionWithReason(context.Background(), store, cfg.AuditPath(), auditKey, transition, "retirement_window_completed", func() error { return injected }); !errors.Is(err, injected) {
-		t.Fatalf("first publish err=%v", err)
-	}
 	before, err := audit.Verify(cfg.AuditPath(), auditKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := publishSlotTransitionWithReason(context.Background(), store, cfg.AuditPath(), auditKey, transition, "retirement_window_completed", func() error { return nil }); err != nil {
+	options := KMSRevokeOptions{SlotID: old.ID, ConfirmSlotID: old.ID, ExpectedDescriptorRevision: descriptor.Revision, ExpectedSlotRevision: old.Revision, ReasonCode: "retirement_window_completed"}
+	injected := errors.New("process died after metadata rename")
+	_, err = revokeKMSKeySlotWithOptions(context.Background(), cfg, options, harness.factory, time.Now, func(point string) error {
+		if point == "after_revoked_metadata_publish" {
+			return injected
+		}
+		return nil
+	})
+	if !errors.Is(err, injected) {
+		t.Fatalf("err=%v", err)
+	}
+	afterFailure, err := audit.Verify(cfg.AuditPath(), auditKey)
+	if err != nil || afterFailure.Records != before.Records {
+		t.Fatalf("final success Audit was written before delivery: before=%d after=%d err=%v", before.Records, afterFailure.Records, err)
+	}
+	raw, err := os.ReadFile(cfg.MetadataPath())
+	if err != nil {
 		t.Fatal(err)
 	}
-	after, err := audit.Verify(cfg.AuditPath(), auditKey)
-	if err != nil || after.Records != before.Records {
-		t.Fatalf("metadata retry duplicated Audit: before=%d after=%d err=%v", before.Records, after.Records, err)
+	if bytes.Contains(raw, oldCiphertext) {
+		t.Fatal("published revoked metadata retained old wrapped ciphertext")
+	}
+	store, err = boltstore.Open(cfg.MetadataPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, err := store.KeySlotAuditIntent()
+	if err != nil || intent.Delivered {
+		store.Close()
+		t.Fatalf("pending intent=%#v err=%v", intent, err)
+	}
+	auditLog, err := audit.Open(cfg.AuditPath(), auditKey)
+	if err != nil {
+		store.Close()
+		t.Fatal(err)
+	}
+	if err := drainKeySlotAuditIntent(context.Background(), store, auditLog); err != nil {
+		auditLog.Close()
+		store.Close()
+		t.Fatal(err)
+	}
+	auditLog.Close()
+	delivered, err := store.KeySlotAuditIntent()
+	store.Close()
+	if err != nil || !delivered.Delivered {
+		t.Fatalf("startup did not deliver pending intent=%#v err=%v", delivered, err)
+	}
+	if result, err := revokeKMSKeySlotWithOptions(context.Background(), cfg, options, harness.factory, time.Now, nil); err != nil || !result.AlreadyRevoked {
+		t.Fatalf("idempotent retry result=%#v err=%v", result, err)
+	}
+	afterRecovery, err := audit.Verify(cfg.AuditPath(), auditKey)
+	if err != nil || afterRecovery.Records != before.Records+1 {
+		t.Fatalf("recovered Audit summary=%#v err=%v", afterRecovery, err)
 	}
 }
 

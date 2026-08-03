@@ -182,6 +182,9 @@ func (l *Log) AppendBatch(ctx context.Context, events []Event) ([]Record, error)
 	sequence, offset, previous := l.sequence, l.offset, l.lastHash
 	for index, payload := range payloads {
 		if existing, ok := l.recordsByEventID[events[index].EventID]; ok {
+			if existing.Event != events[index] {
+				return nil, errors.New("audit event ID conflicts with a different payload")
+			}
 			records[index] = existing
 			continue
 		}

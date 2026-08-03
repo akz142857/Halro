@@ -101,6 +101,35 @@ func TestAppendIsIdempotentByEventIDAcrossReopen(t *testing.T) {
 	}
 }
 
+func TestAppendRejectsConflictingPayloadForEventID(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.log")
+	key := randomKey(t)
+	log, err := Open(path, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := validEvent(8, "security.master_key_slot.revoked")
+	if _, err := log.Append(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	if err := log.Close(); err != nil {
+		t.Fatal(err)
+	}
+	log, err = Open(path, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer log.Close()
+	conflict := event
+	conflict.ReasonCode = "incident_retirement"
+	if _, err := log.Append(context.Background(), conflict); err == nil {
+		t.Fatal("duplicate event ID accepted a different payload")
+	}
+	if log.Summary().Records != 1 {
+		t.Fatalf("conflicting event changed Audit summary: %#v", log.Summary())
+	}
+}
+
 func TestAuditDetectsTamperingAndWrongKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.log")
 	key := randomKey(t)

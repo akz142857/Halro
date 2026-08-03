@@ -350,6 +350,15 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		secretVault.Close()
 		return fail(err)
 	}
+	if err := drainKeySlotAuditIntent(ctx, metadata, auditLog); err != nil {
+		auditLog.Close()
+		alertDispatcher.Close()
+		ledgerLog.Close()
+		metadata.Close()
+		providerRegistry.Close()
+		secretVault.Close()
+		return fail(fmt.Errorf("recover pending Key Slot audit: %w", err))
+	}
 	if err := appendKMSProviderAudit(ctx, auditLog, metadata, kmsAudit); err != nil {
 		auditLog.Close()
 		alertDispatcher.Close()

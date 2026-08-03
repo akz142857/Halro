@@ -70,10 +70,15 @@ export const enUS = {
   },
 	custody: {
 		eyebrow: "Key custody", title: "Master Key Custody", description: "Read-only runtime posture. Key material and cloud identifiers are never displayed.",
-		posture: "Custody posture", ready: "Production-ready", notReady: "Not production-ready", stable: "No pending lifecycle transition.",
+		posture: "Custody posture", descriptorReady: "Local descriptor ready", descriptorNotReady: "Local descriptor not ready", stable: "No pending lifecycle transition.",
 		rotationIncomplete: "Lifecycle work remains: {{pending}} pending, {{retiring}} retiring.", mode: "Mode", slots: "Key slots",
 		redaction: "Only purpose, lifecycle state, provider, and verification time are exposed.", primary: "Primary", recovery: "Recovery",
 		provider: "Provider", lastVerified: "Last verified", runbooks: "Offline runbooks", offlineOnly: "Mutations and recovery remain offline CLI operations.",
+		externalAdmission: "Production admission still requires real AWS evidence, an independent recovery exercise, final RC evidence, and four-party approval.", admissionNotApplicable: "External KMS production admission does not apply to file mode.",
+		reviewRequired: "Custody review required", lifecycle: "Lifecycle status", operation: "Incomplete operation", recoveryExpiry: "Recovery verification", expired: "Expired", current: "Current",
+		lifecycleRunbook: "Open lifecycle runbook", recoveryRunbook: "Open recovery runbook",
+		operations: { none: "None", kek_rewrap: "KEK rewrap", dek_rotate: "Master Key / DEK rotate" },
+		reasons: { descriptor_not_ready: "Descriptor is not ready", pending_slots: "Pending Slot exists", retiring_slots: "Retiring Slot exists", recovery_verification_missing: "Recovery has never been verified", recovery_verification_expired: "Recovery verification is older than 90 days", dek_rotation_incomplete: "DEK rotation recovery is incomplete" },
 		states: { pending: "Pending", active: "Active", retiring: "Retiring", revoked: "Revoked" },
 	},
   auth: {

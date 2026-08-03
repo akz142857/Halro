@@ -94,6 +94,7 @@ func TestKeySlotInitAndRecoveryCLIUseExplicitOfflinePaths(t *testing.T) {
 	previousRotateKMS := rotateKMSCommand
 	previousRewrapKMS := rewrapKMSCommand
 	previousRevokeKMS := revokeKMSCommand
+	previousInspectSlots := inspectKMSSlotsCommand
 	previousDoctor := doctorCommand
 	previousRestore := restoreBackupCommand
 	t.Cleanup(func() {
@@ -102,6 +103,7 @@ func TestKeySlotInitAndRecoveryCLIUseExplicitOfflinePaths(t *testing.T) {
 		rotateKMSCommand = previousRotateKMS
 		rewrapKMSCommand = previousRewrapKMS
 		revokeKMSCommand = previousRevokeKMS
+		inspectKMSSlotsCommand = previousInspectSlots
 		doctorCommand = previousDoctor
 		restoreBackupCommand = previousRestore
 	})
@@ -132,6 +134,11 @@ func TestKeySlotInitAndRecoveryCLIUseExplicitOfflinePaths(t *testing.T) {
 			options.ConfirmSlotID == options.SlotID && options.ExpectedDescriptorRevision == 4 && options.ExpectedSlotRevision == 3
 		return app.KMSRevokeResult{SlotID: options.SlotID, State: masterkey.KeySlotRevoked}, nil
 	}
+	inspected := false
+	inspectKMSSlotsCommand = func(_ context.Context, loaded config.Config) (app.KMSKeySlotStatusResult, error) {
+		inspected = loaded.Storage.MasterKey.Mode == config.MasterKeyModeKeySlots
+		return app.KMSKeySlotStatusResult{DescriptorRevision: 4, DescriptorReady: true}, nil
+	}
 	staticDoctor := false
 	doctorCommand = func(_ context.Context, loaded config.Config, options app.DoctorOptions) (app.DoctorReport, error) {
 		staticDoctor = loaded.Storage.MasterKey.Mode == config.MasterKeyModeKeySlots && options.NoKMS
@@ -155,6 +162,15 @@ func TestKeySlotInitAndRecoveryCLIUseExplicitOfflinePaths(t *testing.T) {
 	}
 	if !recovered {
 		t.Fatal("recovery CLI did not use the explicit configured Recovery Slot")
+	}
+	if strings.Index(recoveryNextStepMessage, "rewrap") > strings.Index(recoveryNextStepMessage, "revoke") {
+		t.Fatal("Recovery CLI tells the operator to revoke authorization before Primary repair")
+	}
+	if err := run([]string{"key", "slot", "status", "--config", path}, logger); err != nil {
+		t.Fatal(err)
+	}
+	if !inspected {
+		t.Fatal("Slot status CLI did not inspect key_slots metadata")
 	}
 	if err := run([]string{"key", "rotate", "--config", path, "--operation-id", "rotation-001"}, logger); err != nil {
 		t.Fatal(err)

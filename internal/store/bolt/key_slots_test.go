@@ -275,11 +275,17 @@ func TestKeySlotCompactionExcludesRevokedProviderMaterial(t *testing.T) {
 	}
 	descriptor = next
 	old = slotByIDForBoltTest(t, descriptor, primary.ID)
-	next, _, err = store.RevokeKeySlot(ctx, old.ID, descriptor.Revision, old.Revision, now.Add(7*time.Minute))
+	next, intent, err := store.RevokeKeySlotWithAuditIntent(ctx, old.ID, descriptor.Revision, old.Revision, "retirement_window_completed", now.Add(7*time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
-
+	if intent.Delivered || intent.TargetID != old.ID || intent.ExpectedDescriptorRevision != descriptor.Revision || intent.ExpectedSlotRevision != old.Revision {
+		t.Fatalf("intent=%#v", intent)
+	}
+	storedIntent, err := store.KeySlotAuditIntent()
+	if err != nil || storedIntent != intent {
+		t.Fatalf("stored intent=%#v err=%v", storedIntent, err)
+	}
 	liveBytes, err := os.ReadFile(livePath)
 	if err != nil {
 		t.Fatal(err)
@@ -310,6 +316,13 @@ func TestKeySlotCompactionExcludesRevokedProviderMaterial(t *testing.T) {
 	revoked := slotByIDForBoltTest(t, stored, primary.ID)
 	if revoked.State != masterkey.KeySlotRevoked || revoked.KeyReference != "" || len(revoked.WrappedKey) != 0 {
 		t.Fatalf("unexpected compacted revoked slot: %#v", revoked)
+	}
+	if err := store.MarkKeySlotAuditDelivered(ctx, intent.EventID); err != nil {
+		t.Fatal(err)
+	}
+	storedIntent, err = store.KeySlotAuditIntent()
+	if err != nil || !storedIntent.Delivered {
+		t.Fatalf("delivered intent=%#v err=%v", storedIntent, err)
 	}
 }
 

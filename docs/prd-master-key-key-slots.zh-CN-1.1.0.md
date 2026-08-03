@@ -222,7 +222,7 @@ Master Key 是启动 Admin API 之前的根信任，因此 Admin UI 不负责初
 允许展示：
 
 - 当前模式：`file` 或 `key_slots`；
-- production-ready 状态；
+- descriptor/local custody ready 状态；生产准入必须单独显示且不得替代真实 AWS、独立演练、RC 和签署门禁；
 - Primary/Recovery 的 purpose、state 和脱敏 provider；
 - 最近独立验证时间；
 - 是否存在 pending/retiring Slot；
@@ -409,14 +409,14 @@ Master Key 是启动 Admin API 之前的根信任，因此 Admin UI 不负责初
 - [x] revoke 要求 exact confirmation、descriptor revision 和 Slot revision。
 - [x] revoke 前使用独立 active Slot 解锁并通过 Vault Key Check。
 - [x] revoke 后仍有 active、verified Primary 和 Recovery。
-- [x] revoke 清除 wrapped ciphertext 和 provider material，写入 Audit 并 compact metadata。
+- [x] revoke 在 stage 中原子写 descriptor 与 Audit intent、清除 wrapped/provider material、compact 后一次发布，并可恢复交付最终 Audit。
 - [x] revoke 的 publication kill points 和幂等重试通过本地 fake KMS 回归。
 - [x] Recovery 契约明确为离线修复 Primary 后正常启动，不提供自动 fallback。
 - [x] Recovery 身份不用于长期运行 Gateway/Admin。
 - [x] Primary 永久不可用时可通过 Recovery 修复新 Primary 并冷启动的命令链与 fake KMS 路径已覆盖。
 - [x] 生命周期 Runbook 包含可复制但不含秘密的完整 revoke/Recovery 命令。
-- [x] Admin UI 边界冻结为只读 Custody 页面。
-- [x] 只读 UI/API 不触发 KMS 调用且不返回敏感 descriptor 字段。
+- [x] Admin UI 边界冻结为只读 Custody 页面，明确区分本地 descriptor ready 与外部生产准入。
+- [x] 只读 UI/API 不触发 KMS 调用且不返回敏感 descriptor 字段，并展示 Recovery 过期、KEK rewrap/DEK rotate 及可访问 Runbook。
 - [ ] 真实 AWS 14 项矩阵全部绑定最终 RC commit 并通过。
 - [ ] 独立操作者完成 Primary 失败、Recovery restore、Primary 修复和撤权。
 - [ ] 最终 RC Secret Canary、SBOM、checksum 和 Sigstore verification 全部通过。

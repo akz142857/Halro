@@ -52,7 +52,7 @@ heimdall backup restore --config /etc/heimdall/config.yaml \
 
 1. 不要修改备份或手工编辑 descriptor。
 2. 记录 Primary 的 AWS 错误分类和 CloudTrail 证据。
-3. 通过审批临时授予独立恢复身份对 Recovery KMS Key 的最小 `Decrypt` 权限。
+3. 通过审批临时授予独立恢复身份对 Recovery KMS Key 的最小 `Decrypt` 权限。该身份只完成 Recovery 验证/restore，不足以执行 Primary rewrap。
 4. 明确输入 Recovery Slot ID：
 
    ```bash
@@ -73,7 +73,7 @@ heimdall backup restore --config /etc/heimdall/config.yaml \
    ```
 
    成功 JSON 必须包含 `vault_verified: true`、`recovery_audited: true` 与修复 Primary 的 `next_action`。
-7. 在配置中加入新的 Primary Key allowlist 项并把 `primary_slot` 指向新的 Slot ID，然后仍使用临时 Recovery 身份离线修复 Primary：
+7. 在配置中加入新的 Primary Key allowlist 项并把 `primary_slot` 指向新的 Slot ID。经第二次审批切换到临时 Lifecycle 身份（或组合会话）：它必须同时具备 Recovery Key `Decrypt`，以及 replacement Primary Key 的 `Encrypt` 和 `Decrypt`，除此之外不得扩大权限。使用该身份离线修复并独立验证 Primary：
 
    ```bash
    heimdall key rewrap --config /etc/heimdall/config.yaml \
@@ -82,7 +82,7 @@ heimdall backup restore --config /etc/heimdall/config.yaml \
      --key-reference arn:aws:kms:REGION:ACCOUNT:key/KEY_ID
    ```
 
-8. 撤销临时 Recovery Grant/Role session，使用日常 Runtime 身份执行完整 `doctor`，再冷启动 Heimdall。Primary 仍不可用时必须在绑定 Listener 前 fail closed；不得用 Recovery 身份长期运行 Gateway/Admin。
+8. 分别撤销临时 Recovery 与 Lifecycle Grant/Role session，并记录撤权证据。使用日常 Runtime 身份执行完整 `doctor`，再冷启动 Heimdall。Primary 仍不可用时必须在绑定 Listener 前 fail closed；不得用 Recovery/Lifecycle 身份长期运行 Gateway/Admin。
 9. 创建并验证新备份，按 Key 生命周期 Runbook 审批并 revoke 旧 retiring Primary Slot。Recovery 不会自动 fallback，以免掩盖权限篡改或 Key 异常。
 
 ## 5. 发布与回滚
