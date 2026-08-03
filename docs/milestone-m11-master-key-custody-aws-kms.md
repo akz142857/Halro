@@ -368,22 +368,22 @@ storage:
 
 ## 11. Runbook 交付清单
 
-- [ ] AWS KMS 模式首次初始化；
-- [ ] IAM Role 与 Workload Identity 配置；
-- [ ] Primary/Recovery Key Policy；
-- [ ] 启动失败稳定错误排障；
-- [ ] Primary disabled/deleted break-glass；
-- [ ] Recovery 临时授权、使用和撤销；
-- [ ] KEK 正常 rewrap；
-- [ ] KEK/Decrypt 身份泄露后的 DEK rotate；
-- [ ] 历史备份受旧 KEK 影响的处置；
-- [ ] backup create/verify/restore；
-- [ ] `doctor` 完整与静态模式；
-- [ ] pending/崩溃轮换恢复；
-- [ ] K8s 单副本、`Recreate` 和身份就绪；
-- [ ] VM/systemd 部署；
-- [ ] Metrics、告警和 AWS Audit 关联排障；
-- [ ] 定期 Recovery Slot 和灾备恢复演练。
+- [x] AWS KMS 模式首次初始化；
+- [x] IAM Role 与 Workload Identity 配置；
+- [x] Primary/Recovery Key Policy；
+- [x] 启动失败稳定错误排障；
+- [x] Primary disabled/deleted break-glass；
+- [x] Recovery 临时授权、使用和撤销；
+- [x] KEK 正常 rewrap；
+- [x] KEK/Decrypt 身份泄露后的 DEK rotate；
+- [x] 历史备份受旧 KEK 影响的处置；
+- [x] backup create/verify/restore；
+- [x] `doctor` 完整与静态模式；
+- [x] pending/崩溃轮换恢复；
+- [x] K8s 单副本、`Recreate` 和身份就绪；
+- [x] VM/systemd 部署；
+- [x] Metrics、告警和 AWS Audit 关联排障；
+- [x] 定期 Recovery Slot 和灾备恢复演练。
 
 ## 12. 决策日志
 
