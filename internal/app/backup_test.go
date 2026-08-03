@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -15,11 +17,220 @@ import (
 	"time"
 
 	"github.com/akz142857/Heimdall/internal/audit"
+	backuppkg "github.com/akz142857/Heimdall/internal/backup"
+	"github.com/akz142857/Heimdall/internal/config"
 	"github.com/akz142857/Heimdall/internal/domain"
+	corekms "github.com/akz142857/Heimdall/internal/kms"
+	"github.com/akz142857/Heimdall/internal/kms/awskms"
 	"github.com/akz142857/Heimdall/internal/ledger"
+	"github.com/akz142857/Heimdall/internal/masterkey"
 	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
 	"github.com/akz142857/Heimdall/internal/vault"
 )
+
+func TestKMSBackupManifestAndHistoricalDescriptorRemainImmutableAfterRewrap(t *testing.T) {
+	cfg, archivePath, backupKey, manifest, harness, _ := kmsBackupFixture(t)
+	if manifest.KeySlotDescriptorSHA256 == "" || manifest.RestoreDrillVerified {
+		t.Fatalf("manifest=%#v", manifest)
+	}
+	archiveBefore, err := os.ReadFile(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	addKMSHarnessRoot(t, harness, replacementPrimaryKMSKeyARN, 0x33)
+	rewrapCfg := cfg
+	rewrapCfg.Storage.MasterKey.PrimarySlot = "slot_aws_primary_backup_rewrap"
+	rewrapCfg.Storage.MasterKey.AllowedKMSKeys = append(append([]config.AllowedKMSKey(nil), cfg.Storage.MasterKey.AllowedKMSKeys...), config.AllowedKMSKey{
+		Purpose: "primary", Provider: "aws-kms", Region: "eu-west-1", Account: "345678901234",
+		KeyID: replacementPrimaryKMSKeyARN, Algorithm: "SYMMETRIC_DEFAULT",
+	})
+	if _, err := rewrapKMSKeyWithOptions(context.Background(), rewrapCfg, KMSRewrapOptions{
+		Purpose: masterkey.KeySlotPrimary, SlotID: rewrapCfg.Storage.MasterKey.PrimarySlot,
+		KeyReference: replacementPrimaryKMSKeyARN,
+	}, harness.factory, time.Now, nil); err != nil {
+		t.Fatal(err)
+	}
+	store, err := boltstore.Open(cfg.MetadataPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor, err := store.KeySlotDescriptor(context.Background())
+	store.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if descriptorDigestForBackupTest(t, descriptor) == manifest.KeySlotDescriptorSHA256 {
+		t.Fatal("rewrap did not produce a new current descriptor digest")
+	}
+	verified, err := VerifyBackup(archivePath, backupKey)
+	if err != nil || verified.KeySlotDescriptorSHA256 != manifest.KeySlotDescriptorSHA256 || verified.RestoreDrillVerified {
+		t.Fatalf("verified=%#v err=%v", verified, err)
+	}
+	archiveAfter, err := os.ReadFile(archivePath)
+	if err != nil || !bytes.Equal(archiveBefore, archiveAfter) {
+		t.Fatalf("rewrap changed historical backup: %v", err)
+	}
+}
+
+func TestKMSRestoreUsesStagedDescriptorForPrimaryAndExplicitRecovery(t *testing.T) {
+	for _, useRecovery := range []bool{false, true} {
+		name := "primary"
+		if useRecovery {
+			name = "recovery"
+		}
+		t.Run(name, func(t *testing.T) {
+			cfg, archivePath, backupKey, manifest, harness, masterKey := kmsBackupFixture(t)
+			defer clear(masterKey)
+			sentinel := filepath.Join(cfg.Storage.DataDir, "post-backup-sentinel")
+			if err := os.WriteFile(sentinel, []byte("preserve in rollback"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			options := RestoreOptions{}
+			if useRecovery {
+				options.UseRecoverySlot = true
+				options.ConfirmRecoverySlot = cfg.Storage.MasterKey.RecoverySlot
+			}
+			result, err := restoreBackupWithFactory(context.Background(), cfg, archivePath, backupKey, manifest.BackupID, options, harness.factory)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.UnlockPath != name || result.PreviousDataDir == "" {
+				t.Fatalf("result=%#v", result)
+			}
+			if _, err := os.Stat(sentinel); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("restored data retained post-backup sentinel: %v", err)
+			}
+			if payload, err := os.ReadFile(filepath.Join(result.PreviousDataDir, "post-backup-sentinel")); err != nil || string(payload) != "preserve in rollback" {
+				t.Fatalf("rollback payload=%q err=%v", payload, err)
+			}
+			store, err := boltstore.Open(cfg.MetadataPath())
+			if err != nil {
+				t.Fatal(err)
+			}
+			key, err := unlockKMSMasterKey(context.Background(), cfg, store, masterkey.KeySlotPurpose(name), harness.factory)
+			store.Close()
+			if err != nil || !bytes.Equal(key, masterKey) {
+				t.Fatalf("restored Vault key mismatch=%t err=%v", bytes.Equal(key, masterKey), err)
+			}
+			clear(key)
+			if useRecovery {
+				auditKey, err := vault.DeriveAuditHMACKey(masterKey)
+				if err != nil {
+					t.Fatal(err)
+				}
+				log, err := audit.Open(cfg.AuditPath(), auditKey)
+				clear(auditKey)
+				if err != nil {
+					t.Fatal(err)
+				}
+				found := false
+				if _, err := log.Replay(func(record audit.Record) error {
+					if record.Event.Action == "security.master_key.recovery_used" && record.Event.ReasonCode == "break_glass_restore" {
+						found = record.Event.TargetID == cfg.Storage.MasterKey.RecoverySlot
+					}
+					return nil
+				}); err != nil {
+					log.Close()
+					t.Fatal(err)
+				}
+				log.Close()
+				if !found {
+					t.Fatal("Recovery restore did not append high-severity Audit evidence")
+				}
+			}
+		})
+	}
+}
+
+func TestKMSRestoreRejectsWrongAllowlistAndRecoveryConfirmationBeforeKMS(t *testing.T) {
+	cfg, archivePath, backupKey, manifest, harness, _ := kmsBackupFixture(t)
+	beforeCalls := harness.callCount()
+	if _, err := restoreBackupWithFactory(context.Background(), cfg, archivePath, backupKey, manifest.BackupID,
+		RestoreOptions{UseRecoverySlot: true, ConfirmRecoverySlot: "wrong-slot"}, harness.factory); err == nil {
+		t.Fatal("wrong Recovery confirmation was accepted")
+	}
+	if harness.callCount() != beforeCalls {
+		t.Fatal("wrong Recovery confirmation reached KMS")
+	}
+	wrong := cfg
+	wrong.Storage.MasterKey.AllowedKMSKeys = append([]config.AllowedKMSKey(nil), cfg.Storage.MasterKey.AllowedKMSKeys...)
+	wrong.Storage.MasterKey.AllowedKMSKeys[0].KeyID = "arn:aws:kms:ap-southeast-1:123456789012:key/99999999-9999-4999-8999-999999999999"
+	if _, err := restoreBackupWithFactory(context.Background(), wrong, archivePath, backupKey, manifest.BackupID, RestoreOptions{}, harness.factory); err == nil {
+		t.Fatal("wrong target allowlist was accepted")
+	}
+	if harness.callCount() != beforeCalls {
+		t.Fatal("wrong target allowlist reached KMS")
+	}
+}
+
+func TestKMSRestoreRecoversWithExplicitRecoveryWhenPrimaryIsDisabled(t *testing.T) {
+	cfg, archivePath, backupKey, manifest, harness, _ := kmsBackupFixture(t)
+	sentinel := filepath.Join(cfg.Storage.DataDir, "primary-disabled-sentinel")
+	if err := os.WriteFile(sentinel, []byte("live state"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	factory := func(ctx context.Context, allowed config.AllowedKMSKey) (corekms.Wrapper, error) {
+		if allowed.Purpose == string(masterkey.KeySlotPrimary) {
+			return nil, corekms.NewError(corekms.ErrorKeyUnavailable, awskms.Provider, corekms.OperationUnwrap, 0, errors.New("simulated disabled Primary KMS Key"))
+		}
+		return harness.factory(ctx, allowed)
+	}
+	if _, err := restoreBackupWithFactory(context.Background(), cfg, archivePath, backupKey, manifest.BackupID, RestoreOptions{}, factory); corekms.Classify(err) != corekms.ErrorKeyUnavailable {
+		t.Fatalf("Primary disabled class=%q err=%v", corekms.Classify(err), err)
+	}
+	if payload, err := os.ReadFile(sentinel); err != nil || string(payload) != "live state" {
+		t.Fatalf("failed Primary restore changed live state: payload=%q err=%v", payload, err)
+	}
+	result, err := restoreBackupWithFactory(context.Background(), cfg, archivePath, backupKey, manifest.BackupID, RestoreOptions{
+		UseRecoverySlot: true, ConfirmRecoverySlot: cfg.Storage.MasterKey.RecoverySlot,
+	}, factory)
+	if err != nil || result.UnlockPath != "recovery" {
+		t.Fatalf("Recovery result=%#v err=%v", result, err)
+	}
+}
+
+func kmsBackupFixture(t *testing.T) (config.Config, string, []byte, backuppkg.Manifest, *kmsAppHarness, []byte) {
+	t.Helper()
+	cfg := kmsAppTestConfig(t)
+	harness := newKMSAppHarness(t)
+	masterKey := bytes.Repeat([]byte{0x6a}, 32)
+	if err := initializeKMS(context.Background(), cfg, kmsInitializationOptions{
+		factory: harness.factory, random: bytes.NewReader(masterKey),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	previousFactory := defaultKMSWrapperFactory
+	defaultKMSWrapperFactory = harness.factory
+	t.Cleanup(func() { defaultKMSWrapperFactory = previousFactory })
+	if _, err := Bootstrap(context.Background(), cfg, BootstrapOptions{
+		ProviderName: "OpenAI", ProviderType: domain.ProviderOpenAI, ProviderBaseURL: "https://api.openai.com",
+		ProviderModel: "gpt-test", PublicModel: "chat", ProjectName: "Backup",
+	}, []byte("kms-backup-provider-secret")); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Dir(cfg.Storage.DataDir)
+	configPath := filepath.Join(root, "config.yaml")
+	if err := os.WriteFile(configPath, []byte("version: 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	archivePath := filepath.Join(root, "kms-backup.hmbk")
+	backupKey := bytes.Repeat([]byte{0x4b}, 32)
+	manifest, err := CreateBackup(context.Background(), cfg, configPath, archivePath, backupKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg, archivePath, backupKey, manifest, harness, bytes.Clone(masterKey)
+}
+
+func descriptorDigestForBackupTest(t *testing.T, descriptor masterkey.KeySlotDescriptor) string {
+	t.Helper()
+	encoded, err := json.Marshal(descriptor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(encoded)
+	return hex.EncodeToString(digest[:])
+}
 
 func TestOfflineEncryptedBackupCapturesConsistentManifestAndAudit(t *testing.T) {
 	cfg := testConfig(t)
