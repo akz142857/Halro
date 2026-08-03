@@ -133,6 +133,32 @@ func NewKeySlotDescriptor(masterKeyFingerprint string) (KeySlotDescriptor, error
 	return descriptor, nil
 }
 
+// NewRotatedKeySlotDescriptor starts a new, empty descriptor generation for a
+// different Master Key. Callers must add and independently verify the required
+// Primary and Recovery Slots before the generation can be published.
+func NewRotatedKeySlotDescriptor(previous KeySlotDescriptor, masterKeyFingerprint string) (KeySlotDescriptor, error) {
+	if err := previous.Validate(); err != nil {
+		return KeySlotDescriptor{}, err
+	}
+	if !validKeyFingerprint(masterKeyFingerprint) || fingerprintsEqual(masterKeyFingerprint, previous.MasterKeyFingerprint) {
+		return KeySlotDescriptor{}, fmt.Errorf("%w: rotated master key fingerprint must be valid and different", ErrInvalidDescriptor)
+	}
+	if previous.ActiveGeneration == ^uint64(0) || previous.Revision == ^uint64(0) {
+		return KeySlotDescriptor{}, fmt.Errorf("%w: descriptor generation or revision is exhausted", ErrInvalidDescriptor)
+	}
+	descriptor := KeySlotDescriptor{
+		FormatVersion:        KeySlotDescriptorFormatVersion,
+		MasterKeyFingerprint: masterKeyFingerprint,
+		ActiveGeneration:     previous.ActiveGeneration + 1,
+		Revision:             previous.Revision + 1,
+		Slots:                []KeySlot{},
+	}
+	if err := descriptor.Validate(); err != nil {
+		return KeySlotDescriptor{}, err
+	}
+	return descriptor, nil
+}
+
 func MasterKeyFingerprint(key []byte) (string, error) {
 	if len(key) != vault.MasterKeySize {
 		return "", fmt.Errorf("master key must be exactly %d bytes", vault.MasterKeySize)
@@ -255,6 +281,26 @@ func (d KeySlotDescriptor) ValidateSuccessor(previous KeySlotDescriptor) error {
 	}
 	if changes != 1 {
 		return fmt.Errorf("%w: successor must contain exactly one logical slot change", ErrInvalidDescriptor)
+	}
+	return nil
+}
+
+// ValidateRotationSuccessor protects the atomic Vault rewrite boundary. A
+// rotated generation changes the Master Key identity, but must advance the
+// generation/revision monotonically and already contain independently verified
+// Primary and Recovery Slots before it can replace the previous descriptor.
+func (d KeySlotDescriptor) ValidateRotationSuccessor(previous KeySlotDescriptor) error {
+	if err := previous.Validate(); err != nil {
+		return err
+	}
+	if err := d.Validate(); err != nil {
+		return err
+	}
+	if d.FormatVersion != previous.FormatVersion ||
+		fingerprintsEqual(d.MasterKeyFingerprint, previous.MasterKeyFingerprint) ||
+		previous.ActiveGeneration == ^uint64(0) || d.ActiveGeneration != previous.ActiveGeneration+1 ||
+		d.Revision <= previous.Revision || !d.ProductionReady() {
+		return fmt.Errorf("%w: rotated descriptor is not a complete monotonic generation", ErrInvalidDescriptor)
 	}
 	return nil
 }

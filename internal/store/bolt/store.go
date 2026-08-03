@@ -436,15 +436,33 @@ type VaultKeyring struct {
 	ActiveFingerprint   string `json:"active_fingerprint"`
 	PreviousFingerprint string `json:"previous_fingerprint,omitempty"`
 	RecoveryEnvelope    []byte `json:"recovery_envelope,omitempty"`
+	RotationOperationID string `json:"rotation_operation_id,omitempty"`
 }
 
 func (k VaultKeyring) Validate() error {
 	if k.FormatVersion != 1 || k.ActiveKeyVersion == 0 ||
 		!validKeyFingerprint(k.ActiveFingerprint) ||
-		(k.PreviousFingerprint != "" && !validKeyFingerprint(k.PreviousFingerprint)) {
+		(k.PreviousFingerprint != "" && !validKeyFingerprint(k.PreviousFingerprint)) ||
+		!validOperationID(k.RotationOperationID) {
 		return errors.New("vault keyring is invalid")
 	}
 	return nil
+}
+
+func validOperationID(value string) bool {
+	if value == "" {
+		return true
+	}
+	if len(value) > 128 {
+		return false
+	}
+	for _, character := range value {
+		if (character < 'a' || character > 'z') && (character < 'A' || character > 'Z') &&
+			(character < '0' || character > '9') && character != '.' && character != '_' && character != '-' {
+			return false
+		}
+	}
+	return true
 }
 
 func validKeyFingerprint(value string) bool {
@@ -714,6 +732,7 @@ type VaultRewrite struct {
 	VaultKeyCheck     []byte
 	AuditHMACEnvelope []byte
 	Keyring           VaultKeyring
+	KeySlotDescriptor *masterkey.KeySlotDescriptor
 	Transform         func(domain.Credential) (domain.Credential, error)
 	TransformAdminMFA func(domain.AdminMFAAuthenticator) (domain.AdminMFAAuthenticator, error)
 }
@@ -726,7 +745,28 @@ func (s *Store) RewriteVaultMaterial(options VaultRewrite) error {
 		len(options.Keyring.RecoveryEnvelope) == 0 {
 		return errors.New("complete vault rewrite material is required")
 	}
+	if options.KeySlotDescriptor != nil {
+		if err := options.KeySlotDescriptor.Validate(); err != nil {
+			return err
+		}
+		if options.KeySlotDescriptor.MasterKeyFingerprint != options.Keyring.ActiveFingerprint {
+			return errors.New("rotated descriptor and keyring fingerprints do not match")
+		}
+	}
 	return s.db.Update(func(tx *bbolt.Tx) error {
+		if options.KeySlotDescriptor != nil {
+			raw := tx.Bucket(bucketMeta).Get(keyKeySlotDescriptor)
+			if raw == nil {
+				return ErrNotFound
+			}
+			var previous masterkey.KeySlotDescriptor
+			if err := json.Unmarshal(raw, &previous); err != nil {
+				return fmt.Errorf("decode previous key slot descriptor: %w", err)
+			}
+			if err := options.KeySlotDescriptor.ValidateRotationSuccessor(previous); err != nil {
+				return err
+			}
+		}
 		credentials := tx.Bucket(bucketCredentials)
 		cursor := credentials.Cursor()
 		for key, raw := cursor.First(); key != nil; key, raw = cursor.Next() {
@@ -790,6 +830,15 @@ func (s *Store) RewriteVaultMaterial(options VaultRewrite) error {
 		}
 		if err := meta.Put(keyVaultKeyring, encodedKeyring); err != nil {
 			return err
+		}
+		if options.KeySlotDescriptor != nil {
+			encodedDescriptor, err := json.Marshal(options.KeySlotDescriptor)
+			if err != nil {
+				return err
+			}
+			if err := meta.Put(keyKeySlotDescriptor, encodedDescriptor); err != nil {
+				return err
+			}
 		}
 		// Master-key rotation invalidates every active Admin identity and
 		// pre-auth challenge in the same transaction as the ciphertext rewrite.

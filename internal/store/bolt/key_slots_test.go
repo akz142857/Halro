@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akz142857/Heimdall/internal/domain"
 	"github.com/akz142857/Heimdall/internal/masterkey"
 )
 
@@ -296,6 +297,65 @@ func TestKeySlotCompactionExcludesRevokedProviderMaterial(t *testing.T) {
 	if revoked.State != masterkey.KeySlotRevoked || revoked.KeyReference != "" || len(revoked.WrappedKey) != 0 {
 		t.Fatalf("unexpected compacted revoked slot: %#v", revoked)
 	}
+}
+
+func TestVaultRewritePublishesRotatedDescriptorWithVaultGeneration(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	state := newTestKeySlotInitialization(t)
+	if err := store.InitializeKeySlotState(context.Background(), state); err != nil {
+		t.Fatal(err)
+	}
+	newKey := bytes.Repeat([]byte{0x44}, 32)
+	newFingerprint, err := masterkey.MasterKeyFingerprint(newKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotated, err := masterkey.NewRotatedKeySlotDescriptor(state.Descriptor, newFingerprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotated = addAndVerifyBoltRotationSlot(t, rotated, newKey, "slot_primary", masterkey.KeySlotPrimary)
+	rotated = addAndVerifyBoltRotationSlot(t, rotated, newKey, "slot_recovery", masterkey.KeySlotRecovery)
+	if err := store.RewriteVaultMaterial(VaultRewrite{
+		VaultKeyCheck: []byte("new-check"), AuditHMACEnvelope: []byte("new-audit"),
+		Keyring: VaultKeyring{FormatVersion: 1, ActiveKeyVersion: 2, ActiveFingerprint: newFingerprint,
+			PreviousFingerprint: state.Descriptor.MasterKeyFingerprint, RecoveryEnvelope: []byte("bridge")},
+		KeySlotDescriptor: &rotated,
+		Transform:         func(value domain.Credential) (domain.Credential, error) { return value, nil },
+		TransformAdminMFA: func(value domain.AdminMFAAuthenticator) (domain.AdminMFAAuthenticator, error) { return value, nil },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	persisted, err := store.KeySlotDescriptor(context.Background())
+	if err != nil || persisted.ActiveGeneration != state.Descriptor.ActiveGeneration+1 ||
+		persisted.MasterKeyFingerprint != newFingerprint || !persisted.ProductionReady() {
+		t.Fatalf("persisted=%#v err=%v", persisted, err)
+	}
+	keyring, err := store.VaultKeyring()
+	if err != nil || keyring.ActiveFingerprint != persisted.MasterKeyFingerprint {
+		t.Fatalf("keyring=%#v err=%v", keyring, err)
+	}
+}
+
+func addAndVerifyBoltRotationSlot(t *testing.T, descriptor masterkey.KeySlotDescriptor, key []byte, id string, purpose masterkey.KeySlotPurpose) masterkey.KeySlotDescriptor {
+	t.Helper()
+	now := time.Now().UTC().Add(time.Duration(descriptor.Revision) * time.Second)
+	pending := testPendingSlot(id, purpose)
+	next, _, err := descriptor.AddSlot(pending, descriptor.Revision, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slot := slotByIDForBoltTest(t, next, id)
+	next, _, err = next.VerifySlot(context.Background(), id, next.Revision, slot.Revision,
+		boltTestSlotUnwrapper{key: bytes.Clone(key)}, boltTestCandidateVerifier{}, now.Add(time.Nanosecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return next
 }
 
 func newTestKeySlotDescriptor(t *testing.T) masterkey.KeySlotDescriptor {
