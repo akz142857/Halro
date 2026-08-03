@@ -222,6 +222,15 @@ func Decode(r io.Reader) (Config, error) {
 
 func (c *Config) Normalize() error {
 	var err error
+	for index := range c.Storage.MasterKey.AllowedKMSKeys {
+		key := &c.Storage.MasterKey.AllowedKMSKeys[index]
+		if key.Provider == "aws-kms" && key.Algorithm == "" {
+			key.Algorithm = "SYMMETRIC_DEFAULT"
+		}
+		if strings.HasSuffix(key.Endpoint, "/") {
+			key.Endpoint = strings.TrimSuffix(key.Endpoint, "/")
+		}
+	}
 	c.Storage.DataDir, err = cleanAbsolutePath(c.Storage.DataDir)
 	if err != nil {
 		return fmt.Errorf("storage.data_dir: %w", err)
@@ -566,9 +575,27 @@ func validateAllowedKMSKeys(keys []AllowedKMSKey) []error {
 		}
 		if strings.TrimSpace(key.Provider) == "" {
 			problems = append(problems, fmt.Errorf("%s.provider is required", prefix))
+		} else if key.Provider != "aws-kms" {
+			problems = append(problems, fmt.Errorf("%s.provider is not available in this release", prefix))
 		}
 		if strings.TrimSpace(key.KeyID) == "" {
 			problems = append(problems, fmt.Errorf("%s.key_id is required", prefix))
+		}
+		if key.Provider == "aws-kms" {
+			partition, region, account, resource, ok := parseAWSKMSKeyARN(key.KeyID)
+			if !ok || !strings.HasPrefix(partition, "aws") || region != key.Region || account != key.Account ||
+				!strings.HasPrefix(resource, "key/") || strings.TrimPrefix(resource, "key/") == "" {
+				problems = append(problems, fmt.Errorf("%s.key_id must be a full KMS Key ARN matching region and account", prefix))
+			}
+			if !validAWSRegion(key.Region) {
+				problems = append(problems, fmt.Errorf("%s.region is invalid", prefix))
+			}
+			if !validAWSAccount(key.Account) {
+				problems = append(problems, fmt.Errorf("%s.account must contain exactly 12 digits", prefix))
+			}
+			if key.Algorithm != "" && key.Algorithm != "SYMMETRIC_DEFAULT" {
+				problems = append(problems, fmt.Errorf("%s.algorithm must be SYMMETRIC_DEFAULT", prefix))
+			}
 		}
 		if key.Endpoint != "" {
 			endpoint, err := url.Parse(key.Endpoint)
@@ -590,6 +617,38 @@ func validateAllowedKMSKeys(keys []AllowedKMSKey) []error {
 		}
 	}
 	return problems
+}
+
+func parseAWSKMSKeyARN(value string) (partition, region, account, resource string, ok bool) {
+	parts := strings.SplitN(value, ":", 6)
+	if len(parts) != 6 || parts[0] != "arn" || parts[2] != "kms" {
+		return "", "", "", "", false
+	}
+	return parts[1], parts[3], parts[4], parts[5], true
+}
+
+func validAWSRegion(value string) bool {
+	if len(value) < 3 || len(value) > 63 {
+		return false
+	}
+	for _, character := range value {
+		if (character < 'a' || character > 'z') && (character < '0' || character > '9') && character != '-' {
+			return false
+		}
+	}
+	return value[0] != '-' && value[len(value)-1] != '-'
+}
+
+func validAWSAccount(value string) bool {
+	if len(value) != 12 {
+		return false
+	}
+	for _, character := range value {
+		if character < '0' || character > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func cleanAbsolutePath(value string) (string, error) {

@@ -206,11 +206,12 @@ const (
 )
 
 type Error struct {
-	Class      ErrorClass
-	Provider   string
-	Operation  Operation
-	RetryAfter time.Duration
-	cause      error
+	Class             ErrorClass
+	Provider          string
+	Operation         Operation
+	RetryAfter        time.Duration
+	ProviderRequestID string
+	cause             error
 }
 
 func NewError(class ErrorClass, provider string, operation Operation, retryAfter time.Duration, cause error) *Error {
@@ -261,6 +262,9 @@ func (e *Error) Validate() error {
 	}
 	if e.RetryAfter < 0 {
 		return errors.New("KMS retry-after cannot be negative")
+	}
+	if err := validateProviderRequestID(e.ProviderRequestID); err != nil {
+		return err
 	}
 	return nil
 }

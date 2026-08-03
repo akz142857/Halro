@@ -15,3 +15,10 @@ for package in ./internal/gateway ./internal/masterkey ./internal/kms; do
 		exit 1
 	fi
 done
+
+output="$CHECK_ROOT/aws-adapter-dependencies.txt"
+go list -deps ./internal/kms/awskms >"$output"
+if grep -E 'go\.etcd\.io/bbolt|github\.com/akz142857/Heimdall/internal/(app|audit|backup|domain|gateway|store|vault)' "$output"; then
+	echo "AWS KMS adapter crossed persistence, Vault, Admin, Audit, or request-path boundary" >&2
+	exit 1
+fi

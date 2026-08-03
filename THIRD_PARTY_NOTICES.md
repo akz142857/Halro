@@ -8,6 +8,8 @@ property of their respective owners.
 
 | Component | License |
 |---|---|
+| github.com/aws/aws-sdk-go-v2 and service modules | Apache-2.0 |
+| github.com/aws/smithy-go | Apache-2.0 |
 | github.com/go-chi/chi/v5 | MIT |
 | github.com/parquet-go/parquet-go | Apache-2.0 |
 | go.etcd.io/bbolt | MIT |
