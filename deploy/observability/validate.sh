@@ -5,7 +5,6 @@ root=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 observability="$root/deploy/observability"
 core_compose="$observability/compose.example.yaml"
 macos_compose="$observability/compose.macos.example.yaml"
-sh -n "$observability/external-probe/probe.sh"
 jq -e . "$observability/external-probe/config.schema.json" >/dev/null
 jq -e . "$observability/external-probe/event.schema.json" >/dev/null
 grep -Eq 'scalar%28max%28timestamp%28up' \

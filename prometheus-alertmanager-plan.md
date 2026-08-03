@@ -139,7 +139,6 @@ deploy/observability/
     config.schema.json
     event.schema.json
     heimdall-deadman.service
-    probe.sh
 cmd/heimdall-deadman/
 internal/deadman/
 docs/observability/
