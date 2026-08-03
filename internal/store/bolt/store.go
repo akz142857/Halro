@@ -495,6 +495,12 @@ func (s *Store) PutKeySlotDescriptor(ctx context.Context, descriptor masterkey.K
 	if err := descriptor.Validate(); err != nil {
 		return err
 	}
+	// Only a pristine descriptor may be created directly. Every subsequent
+	// mutation must pass through the operation-specific methods below so an
+	// active slot cannot be fabricated without unwrap and candidate verification.
+	if descriptor.Revision != 1 || descriptor.ActiveGeneration != 1 || len(descriptor.Slots) != 0 {
+		return errors.New("initial key slot descriptor must be pristine")
+	}
 	encoded, err := json.Marshal(descriptor)
 	if err != nil {
 		return err
@@ -529,7 +535,103 @@ func (s *Store) KeySlotDescriptor(ctx context.Context) (masterkey.KeySlotDescrip
 	return descriptor.Clone(), err
 }
 
-func (s *Store) ReplaceKeySlotDescriptor(
+func (s *Store) AddKeySlot(
+	ctx context.Context,
+	pending masterkey.PendingKeySlot,
+	expectedRevision uint64,
+	now time.Time,
+) (masterkey.KeySlotDescriptor, *masterkey.SlotTransition, error) {
+	current, err := s.KeySlotDescriptor(ctx)
+	if err != nil {
+		return masterkey.KeySlotDescriptor{}, nil, err
+	}
+	next, transition, err := current.AddSlot(pending, expectedRevision, now)
+	if err != nil || transition == nil {
+		return next, transition, err
+	}
+	if err := s.replaceKeySlotDescriptor(ctx, current.Revision, next); err != nil {
+		return masterkey.KeySlotDescriptor{}, nil, err
+	}
+	return next, transition, nil
+}
+
+func (s *Store) VerifyKeySlot(
+	ctx context.Context,
+	slotID string,
+	expectedDescriptorRevision uint64,
+	expectedSlotRevision uint64,
+	unwrapper masterkey.SlotUnwrapper,
+	verifier masterkey.CandidateVerifier,
+	now time.Time,
+) (masterkey.KeySlotDescriptor, *masterkey.SlotTransition, error) {
+	current, err := s.KeySlotDescriptor(ctx)
+	if err != nil {
+		return masterkey.KeySlotDescriptor{}, nil, err
+	}
+	next, transition, err := current.VerifySlot(
+		ctx, slotID, expectedDescriptorRevision, expectedSlotRevision, unwrapper, verifier, now,
+	)
+	if err != nil || transition == nil {
+		return next, transition, err
+	}
+	if err := s.replaceKeySlotDescriptor(ctx, current.Revision, next); err != nil {
+		return masterkey.KeySlotDescriptor{}, nil, err
+	}
+	return next, transition, nil
+}
+
+func (s *Store) RetireKeySlot(
+	ctx context.Context,
+	slotID string,
+	expectedDescriptorRevision uint64,
+	expectedSlotRevision uint64,
+	now time.Time,
+) (masterkey.KeySlotDescriptor, *masterkey.SlotTransition, error) {
+	return s.transitionKeySlot(ctx, slotID, expectedDescriptorRevision, expectedSlotRevision, masterkey.KeySlotRetiring, now)
+}
+
+func (s *Store) RevokeKeySlot(
+	ctx context.Context,
+	slotID string,
+	expectedDescriptorRevision uint64,
+	expectedSlotRevision uint64,
+	now time.Time,
+) (masterkey.KeySlotDescriptor, *masterkey.SlotTransition, error) {
+	return s.transitionKeySlot(ctx, slotID, expectedDescriptorRevision, expectedSlotRevision, masterkey.KeySlotRevoked, now)
+}
+
+func (s *Store) transitionKeySlot(
+	ctx context.Context,
+	slotID string,
+	expectedDescriptorRevision uint64,
+	expectedSlotRevision uint64,
+	target masterkey.KeySlotState,
+	now time.Time,
+) (masterkey.KeySlotDescriptor, *masterkey.SlotTransition, error) {
+	current, err := s.KeySlotDescriptor(ctx)
+	if err != nil {
+		return masterkey.KeySlotDescriptor{}, nil, err
+	}
+	var next masterkey.KeySlotDescriptor
+	var transition *masterkey.SlotTransition
+	switch target {
+	case masterkey.KeySlotRetiring:
+		next, transition, err = current.RetireSlot(slotID, expectedDescriptorRevision, expectedSlotRevision, now)
+	case masterkey.KeySlotRevoked:
+		next, transition, err = current.RevokeSlot(slotID, expectedDescriptorRevision, expectedSlotRevision, now)
+	default:
+		return masterkey.KeySlotDescriptor{}, nil, masterkey.ErrInvalidTransition
+	}
+	if err != nil || transition == nil {
+		return next, transition, err
+	}
+	if err := s.replaceKeySlotDescriptor(ctx, current.Revision, next); err != nil {
+		return masterkey.KeySlotDescriptor{}, nil, err
+	}
+	return next, transition, nil
+}
+
+func (s *Store) replaceKeySlotDescriptor(
 	ctx context.Context,
 	expectedRevision uint64,
 	descriptor masterkey.KeySlotDescriptor,
@@ -553,11 +655,7 @@ func (s *Store) InitializeKeySlotState(ctx context.Context, state KeySlotInitial
 	return s.initializeKeySlotStateWithHook(ctx, state, nil)
 }
 
-func (s *Store) initializeKeySlotStateWithHook(
-	ctx context.Context,
-	state KeySlotInitialization,
-	hook func(string) error,
-) error {
+func (s *Store) initializeKeySlotStateWithHook(ctx context.Context, state KeySlotInitialization, hook func(string) error) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}

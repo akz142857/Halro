@@ -45,14 +45,11 @@ func TestKeySlotDescriptorPersistenceUsesRevisionedCOW(t *testing.T) {
 		t.Fatalf("stored=%#v err=%v", stored, err)
 	}
 
-	added, _, err := stored.AddSlot(testPendingSlot("slot_primary", masterkey.KeySlotPrimary), stored.Revision, now)
+	added, _, err := store.AddKeySlot(ctx, testPendingSlot("slot_primary", masterkey.KeySlotPrimary), stored.Revision, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.ReplaceKeySlotDescriptor(ctx, stored.Revision, added); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.ReplaceKeySlotDescriptor(ctx, stored.Revision, added); !errors.Is(err, ErrRevisionConflict) {
+	if err := store.replaceKeySlotDescriptor(ctx, stored.Revision, added); !errors.Is(err, ErrRevisionConflict) {
 		t.Fatalf("stale replacement error=%v", err)
 	}
 	stored, err = store.KeySlotDescriptor(ctx)
@@ -172,11 +169,11 @@ func TestKeySlotDescriptorStoreRejectsSkippedStateAndRemovedMetadata(t *testing.
 	ctx := context.Background()
 	now := time.Date(2026, 8, 3, 15, 0, 0, 0, time.UTC)
 	descriptor := newTestKeySlotDescriptor(t)
-	descriptor, _, err = descriptor.AddSlot(testPendingSlot("slot_primary", masterkey.KeySlotPrimary), descriptor.Revision, now)
-	if err != nil {
+	if err := store.PutKeySlotDescriptor(ctx, descriptor); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.PutKeySlotDescriptor(ctx, descriptor); err != nil {
+	descriptor, _, err = store.AddKeySlot(ctx, testPendingSlot("slot_primary", masterkey.KeySlotPrimary), descriptor.Revision, now)
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -189,14 +186,14 @@ func TestKeySlotDescriptorStoreRejectsSkippedStateAndRemovedMetadata(t *testing.
 	if err := skipped.Validate(); err != nil {
 		t.Fatalf("test successor must be structurally valid: %v", err)
 	}
-	if err := store.ReplaceKeySlotDescriptor(ctx, descriptor.Revision, skipped); !errors.Is(err, masterkey.ErrInvalidTransition) {
+	if err := store.replaceKeySlotDescriptor(ctx, descriptor.Revision, skipped); !errors.Is(err, masterkey.ErrInvalidTransition) {
 		t.Fatalf("skipped transition error=%v", err)
 	}
 
 	removed := descriptor.Clone()
 	removed.Revision++
 	removed.Slots = nil
-	if err := store.ReplaceKeySlotDescriptor(ctx, descriptor.Revision, removed); !errors.Is(err, masterkey.ErrInvalidDescriptor) {
+	if err := store.replaceKeySlotDescriptor(ctx, descriptor.Revision, removed); !errors.Is(err, masterkey.ErrInvalidDescriptor) {
 		t.Fatalf("removed slot metadata error=%v", err)
 	}
 	unchanged, err := store.KeySlotDescriptor(ctx)
@@ -248,20 +245,14 @@ func TestKeySlotCompactionExcludesRevokedProviderMaterial(t *testing.T) {
 	descriptor = persistVerifiedBoltTestSlot(t, store, descriptor, "slot_primary_new", key, now.Add(5*time.Minute))
 
 	old := slotByIDForBoltTest(t, descriptor, primary.ID)
-	next, _, err := descriptor.RetireSlot(old.ID, descriptor.Revision, old.Revision, now.Add(6*time.Minute))
+	next, _, err := store.RetireKeySlot(ctx, old.ID, descriptor.Revision, old.Revision, now.Add(6*time.Minute))
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.ReplaceKeySlotDescriptor(ctx, descriptor.Revision, next); err != nil {
 		t.Fatal(err)
 	}
 	descriptor = next
 	old = slotByIDForBoltTest(t, descriptor, primary.ID)
-	next, _, err = descriptor.RevokeSlot(old.ID, descriptor.Revision, old.Revision, now.Add(7*time.Minute))
+	next, _, err = store.RevokeKeySlot(ctx, old.ID, descriptor.Revision, old.Revision, now.Add(7*time.Minute))
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.ReplaceKeySlotDescriptor(ctx, descriptor.Revision, next); err != nil {
 		t.Fatal(err)
 	}
 
@@ -363,11 +354,8 @@ func persistAddedBoltTestSlot(
 	now time.Time,
 ) masterkey.KeySlotDescriptor {
 	t.Helper()
-	next, _, err := descriptor.AddSlot(pending, descriptor.Revision, now)
+	next, _, err := store.AddKeySlot(context.Background(), pending, descriptor.Revision, now)
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.ReplaceKeySlotDescriptor(context.Background(), descriptor.Revision, next); err != nil {
 		t.Fatal(err)
 	}
 	return next
@@ -383,14 +371,11 @@ func persistVerifiedBoltTestSlot(
 ) masterkey.KeySlotDescriptor {
 	t.Helper()
 	slot := slotByIDForBoltTest(t, descriptor, slotID)
-	next, _, err := descriptor.VerifySlot(
+	next, _, err := store.VerifyKeySlot(
 		context.Background(), slotID, descriptor.Revision, slot.Revision,
 		boltTestSlotUnwrapper{key: key}, boltTestCandidateVerifier{}, now,
 	)
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.ReplaceKeySlotDescriptor(context.Background(), descriptor.Revision, next); err != nil {
 		t.Fatal(err)
 	}
 	return next

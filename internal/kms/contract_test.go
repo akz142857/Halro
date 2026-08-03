@@ -113,4 +113,16 @@ func TestTypedErrorTaxonomyIsStableAndSecretSafe(t *testing.T) {
 			t.Fatalf("invalid typed error leaked %q: %s", secret, invalid)
 		}
 	}
+	for name, unknown := range map[string]error{
+		"plain error":     errors.New("unclassified provider failure"),
+		"nil error":       nil,
+		"malformed typed": invalid,
+	} {
+		t.Run("fail closed "+name, func(t *testing.T) {
+			class := Classify(unknown)
+			if class != ErrorAdapterUnavailable || Retryable(class) {
+				t.Fatalf("unknown error class=%q retryable=%v", class, Retryable(class))
+			}
+		})
+	}
 }
