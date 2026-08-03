@@ -552,4 +552,3 @@ Audit 可包含：Admin 用户名、验证器稳定 ID、动作结果、受控�
 3. bbolt 中 revoked 验证器非敏感元数据的保留周期；Secret 密文必须立即清除。
 4. `required` 策略从 optional 切换时，是否在配置检查之外增加启动期显式告警 Metric。
 
-
