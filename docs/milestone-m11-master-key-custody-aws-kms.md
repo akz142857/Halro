@@ -174,7 +174,7 @@ GCP/Azure artifact 不进入本次决策。未完成 spike 和 ADR 更新前不�
 |---|---|---|---|---|---|---|
 | M11-PR1 | 统一 Master Key 核心与最终配置 | In Review | 无 | File 模式完整测试；所有直接文件调用收口；新 schema 严格校验；`config check` 零 KMS 调用 | [#56](https://github.com/akz142857/Heimdall/issues/56)；[PR #64](https://github.com/akz142857/Heimdall/pull/64)；`3066541` | `go test ./...`、关键包 Race、Vet 已通过；不引入 AWS SDK |
 | M11-PR2 | Key Slot descriptor 与状态机 | Not Started | PR1 | pending/active/retiring/revoked 事务、revision、Vault Key Check 和错误测试 | [#57](https://github.com/akz142857/Heimdall/issues/57) | 核心保持 provider-neutral |
-| M11-PR3a | AWS SDK spike、契约评审与 ADR 决策 | Not Started | PR1 | A/B 测量报告；KMSWrapper/错误分类评审；fake KMS contract；ADR 0010 Accepted | [#58](https://github.com/akz142857/Heimdall/issues/58) | 合并内容不含生产 AWS SDK 实现 |
+| M11-PR3a | AWS SDK spike、契约评审与 ADR 决策 | In Review | PR1 | A/B module/binary/container/build/test/cold-start/SBOM/vuln 实测；KMSWrapper/错误分类；fake KMS fault tests；ADR 0010 Accepted | [#58](https://github.com/akz142857/Heimdall/issues/58)；[PR #66](https://github.com/akz142857/Heimdall/pull/66)；`512d517`、`258c430` | 选择单 module/单 `heimdall` artifact；不含生产 AWS Adapter；完整 Test、Race、Vet、vuln 与边界检查通过 |
 | M11-PR3b | AWS KMS Adapter 实现 | Not Started | PR3a | Workload Identity、wrap/unwrap、Context、allowlist、重试和真实 AWS smoke tests | [#59](https://github.com/akz142857/Heimdall/issues/59) | 与 PR2 正交，可并行开发 |
 | M11-PR4 | AWS KMS 初始化与双 Slot 恢复 | Not Started | PR2、PR3b | 新实例原子初始化；Primary/Recovery 独立验证；失败清理；CLI 测试 | [#60](https://github.com/akz142857/Heimdall/issues/60) | 不含 File→KMS 迁移 |
 | M11-PR5 | Rewrap、DEK Rotate 与崩溃恢复 | Not Started | PR2、PR4 | COW/bridge/Keyring/compaction；全部 publication kill points；幂等恢复 | [#61](https://github.com/akz142857/Heimdall/issues/61) | KEK 泄露语义纳入测试 |
@@ -316,7 +316,7 @@ storage:
 |---|---|---|---|
 | G1 File 模式保持云中立且完整可用 | Not Started | File init/start/rotate/backup/restore tests | — |
 | G2 最终配置 schema 冻结 | Not Started | 统一字段 config tests + reviewed example + `config check` zero-KMS-call test | — |
-| G3 AWS SDK 发布决策冻结 | Not Started | spike report + Accepted ADR 0010 | — |
+| G3 AWS SDK 发布决策冻结 | In Review | spike report + Accepted ADR 0010 | [M11-03A evidence](evidence/m11-03a-aws-sdk-spike-2026-08-03.md)；[PR #66](https://github.com/akz142857/Heimdall/pull/66) |
 | G4 Primary/Recovery 双 Slot | Not Started | 两个 Key 独立 unwrap + Vault Check | — |
 | G5 密钥材料不落盘且主机边界加固 | Not Started | filesystem/backup inspection；logs/errors/Audit/Metrics/bbolt/heap canary；core/pprof/RLIMIT/ptrace evidence | — |
 | G6 KMS 不进入请求热路径 | Not Started | request-path zero-call test | — |
