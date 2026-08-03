@@ -1,33 +1,52 @@
 # Alerting contract
 
-Status: Accepted for Phase A1
+Status: Accepted
 Owner: SRE
 
 Prometheus rule files under `deploy/observability/prometheus/` are the only
-alert evaluation source. Grafana displays alert state but does not load an
-equivalent second rule set.
+alert evaluation authority.
 
 Every alert includes `severity`, `service`, `owner`, and `category`, plus a
 stable summary and authenticated runbook URL. Notifications allowlist those
 fields and controlled target labels only.
 
-## Groups
+## Core groups
 
-- Availability: expected target absent/down and dead-man failure.
-- Accounting: WAL append errors, Ledger queue pressure, analytics lag.
-- Delivery: alert failures and drops.
+- Availability: expected Heimdall target absent/down and the continuous
+  `Watchdog` dead-man signal.
+- Accounting: WAL append errors, Ledger queue pressure and analytics lag.
+- Delivery: application alert failures and drops.
 - Providers: deployment unhealthy, multiple deployments unhealthy, fallback
-  saturation, and capacity pressure.
+  saturation and capacity pressure.
 - Traffic: sustained error rate with a minimum request count.
-- Platform: Prometheus rule/config failures and TSDB disk pressure,
-  Alertmanager notification failures, and Grafana target health.
+- Platform: Prometheus rule/config failures and TSDB disk pressure, plus
+  Alertmanager notification failures.
 
 Aggregated critical provider alerts inhibit child deployment warnings with the
-same environment and cluster. Maintenance silences require owner, reason, and
+same environment and cluster. Maintenance silences require owner, reason and
 expiry. `promtool test rules` fixtures cover firing, pending, recovery, low
-traffic, reset, absent target, not-yet-probed deployments, and cascade cases.
+traffic, reset, absent target, not-yet-probed deployments and cascade cases.
 
-An external monitor, outside the Prometheus/Alertmanager failure domain and
-using a distinct notification path, must observe the `Watchdog` signal. The
-production admission drill stops Prometheus and Alertmanager independently and
-makes the TSDB read-only/full.
+## Formal dead-man contract
+
+The production dead-man has two complementary signals outside the
+Prometheus/Alertmanager failure domain:
+
+1. Prometheus continuously evaluates `Watchdog`; Alertmanager routes it to a
+   dedicated external receiver. The receiver alarms when the signal is absent
+   beyond its approved grace window and reports recovery when it resumes.
+2. An independently deployed synthetic probe directly checks authenticated
+   Prometheus and Alertmanager readiness, emits down/up state transitions, and
+   emits its own heartbeat. Its receiver alarms if the probe heartbeat stops.
+
+The grace window must be longer than expected evaluation, grouping, delivery
+and retry jitter but shorter than the approved detection objective. Probe and
+receiver clocks must be monitored. The probe host/process, state, credentials,
+network path, receiver and final Contact Point must not share Core's process,
+storage, identity, only network path, or only notification channel.
+
+Production admission stops and restores Prometheus and Alertmanager
+separately, then stops the probe, and records each firing, delivery and recovery
+through the independent path. A versioned probe artifact or a successful
+repository test proves behavior, not failure-domain independence; the latter
+requires target-environment evidence.

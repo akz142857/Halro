@@ -29,16 +29,16 @@ exposition. `docs/metrics-reference.md` remains the operator-facing inventory.
 
 Metric name, type, HELP, and label names are a versioned public operations
 contract. Additive series are compatible. Renaming, deleting, changing a type,
-or changing a label set requires release notes, a dashboard/rule migration,
+or changing a label set requires release notes and a rule migration,
 and one release of overlap where technically possible.
 
 CI parses representative exposition and rejects unknown labels and sensitive
-canaries. Dashboard and alert queries must select `environment` and `cluster`.
+canaries. Alert queries must select `environment` and `cluster`.
 
 ## Histogram decision
 
 Classic histograms are the Phase C compatibility baseline. Native histograms
-remain deferred until the supported Prometheus, Grafana, remote-write, and
+remain deferred until the supported Prometheus, remote-write, and
 long-term storage matrix is proven. Request and attempt histograms are derived
 from Ledger events in the Usage aggregate, use the aggregate watermark for
 exactly-once replay, and persist bucket counts in the Usage checkpoint.

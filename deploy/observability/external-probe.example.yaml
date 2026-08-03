@@ -1,18 +1,28 @@
+# Run this stack only on an independently operated host/failure domain.
 services:
-  heimdall-independent-probe:
-    image: curlimages/curl@sha256:463eaf6072688fe96ac64fa623fe73e1dbe25d8ad6c34404a669ad3ce1f104b6
-    user: curl_user
+  heimdall-independent-deadman:
+    build:
+      context: ../..
+      dockerfile: deploy/observability/external-probe/Dockerfile
+    image: heimdall-deadman:local
+    user: "65532:65532"
     read_only: true
     cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
-    entrypoint: [/bin/sh, /opt/heimdall/probe.sh]
-    command:
-      - https://heimdall.internal.example/health/live
-      - https://prometheus.internal.example/-/ready
-      - "30"
+    security_opt: ["no-new-privileges:true"]
+    command: [-config, /etc/heimdall-deadman/config.yaml]
     volumes:
-      - ./external-probe/probe.sh:/opt/heimdall/probe.sh:ro
-      - /run/heimdall-deadman:/run/secrets:ro
-    tmpfs:
-      - /tmp:mode=0700,size=1m
-    restart: unless-stopped
+      - ./external-probe/config.example.yaml:/etc/heimdall-deadman/config.yaml:ro
+      - /run/heimdall-deadman:/run/heimdall-deadman:ro
+      - deadman-state:/var/lib/heimdall-deadman
+      - deadman-audit:/var/log/heimdall-deadman
+    restart: always
+    mem_limit: 128m
+    cpus: 0.50
+    pids_limit: 64
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
+
+volumes:
+  deadman-state: {}
+  deadman-audit: {}

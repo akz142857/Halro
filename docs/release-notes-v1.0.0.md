@@ -63,6 +63,11 @@ credentials, IMDS, or the default credential chain.
 - Admin sessions use Argon2id password verification, hash-only server-side
   tokens, Secure/HttpOnly/SameSite cookies, origin checks, CSRF, and bounded
   login attempts.
+- The administrator password minimum deliberately changes from 12 UTF-8 bytes
+  to 8 Unicode code points. This lowers the minimum for ASCII-only passwords
+  from 12 to 8 characters, raises it for short multibyte passwords such as
+  CJK, and is a product-policy change rather than a behavior-preserving refactor.
+  A substantially longer passphrase remains recommended.
 - Admin accounts can bind multiple independent standard TOTP authenticators.
   Two-stage login, encrypted seeds, replay protection, one-time recovery codes,
   optional/required policy, and audited offline MFA reset are included.

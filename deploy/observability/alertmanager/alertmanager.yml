@@ -10,11 +10,17 @@ route:
   routes:
     - receiver: independent-deadman-webhook
       matchers: [alertname="Watchdog"]
+      group_wait: 0s
+      group_interval: 1m
+      repeat_interval: 1m
 
 inhibit_rules:
   - source_matchers: [alertname="HeimdallMultipleDeploymentsUnhealthy", severity="critical"]
     target_matchers: [alertname="HeimdallDeploymentUnhealthy", severity="warning"]
     equal: [environment, cluster]
+  - source_matchers: [alertname="PrometheusTSDBDiskCritical", severity="critical"]
+    target_matchers: [alertname="PrometheusTSDBDiskHigh", severity="warning"]
+    equal: [environment, region, cluster, job, instance]
 
 receivers:
   - name: operations-webhook
@@ -24,4 +30,7 @@ receivers:
   - name: independent-deadman-webhook
     webhook_configs:
       - url_file: /run/secrets/alertmanager-watchdog-url
-        send_resolved: true
+        # Watchdog firing notifications are check-ins. Prometheus disappearing
+        # must produce silence, not a synthetic resolved check-in; the external
+        # receiver resolves only after a new firing notification arrives.
+        send_resolved: false

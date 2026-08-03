@@ -4,6 +4,9 @@ global:
   evaluation_interval: 15s
   external_labels:
     prometheus_replica: standalone
+    environment: local
+    region: local
+    cluster: standalone
 
 rule_files:
   - /etc/prometheus/recording-rules.yml
@@ -44,15 +47,6 @@ scrape_configs:
   - job_name: alertmanager
     static_configs:
       - targets: [127.0.0.1:9093]
-        labels:
-          environment: local
-          region: local
-          cluster: standalone
-
-  - job_name: grafana
-    metrics_path: /metrics
-    static_configs:
-      - targets: [127.0.0.1:3000]
         labels:
           environment: local
           region: local

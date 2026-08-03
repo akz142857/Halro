@@ -15,7 +15,7 @@ per_instance = fixed_application
 
 per_environment = per_instance * instance_count
                 + recording_rule_series
-                + platform_series
+                + core_platform_series
 ```
 
 Classic histogram cost includes every `_bucket` plus `_sum` and `_count`.
@@ -53,3 +53,14 @@ replace the expression with filesystem capacity metrics from the platform.
 Warn at 80% of admitted series. Reject an unreviewed cardinality increase at
 100%. Disk alerts fire at 70% warning and 85% critical. Capacity lead time must
 exceed on-call response plus storage expansion time.
+
+## Core and dead-man budgets
+
+The Core admission budget includes Heimdall scrape series, recording/alert rule
+series, Prometheus and Alertmanager self-monitoring, rule-evaluation/query cost,
+TSDB/WAL growth and retention headroom. The independent dead-man has its own
+host, network, receiver retention and notification-rate budget; it is not
+counted as spare capacity on the Core host.
+
+Core and the independently deployed dead-man must each test their own worst
+case. The dead-man result cannot replace the Core 24-hour soak.

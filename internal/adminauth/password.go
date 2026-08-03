@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"errors"
 	"time"
+	"unicode/utf8"
 
 	"github.com/akz142857/Heimdall/internal/domain"
 	"golang.org/x/crypto/argon2"
@@ -17,13 +18,18 @@ const (
 	argonParallelism = 2
 	passwordSaltSize = 16
 	passwordHashSize = 32
+	minPasswordChars = 8
+	maxPasswordBytes = 1024
 )
 
 func NewUser(username string, password []byte, now time.Time) (domain.AdminUser, error) {
-	if len(password) < 12 {
-		return domain.AdminUser{}, errors.New("admin password must contain at least 12 bytes")
+	if !utf8.Valid(password) {
+		return domain.AdminUser{}, errors.New("admin password must be valid UTF-8")
 	}
-	if len(password) > 1024 {
+	if utf8.RuneCount(password) < minPasswordChars {
+		return domain.AdminUser{}, errors.New("admin password must contain at least 8 characters")
+	}
+	if len(password) > maxPasswordBytes {
 		return domain.AdminUser{}, errors.New("admin password is too long")
 	}
 	salt := make([]byte, passwordSaltSize)

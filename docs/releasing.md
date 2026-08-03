@@ -7,6 +7,11 @@ a v1 target because the exclusive data-directory lock currently uses Unix
 
 Every release run produces:
 
+- `heimdall-deadman` in every supported binary archive together with its
+  versioned config/event schemas, receiver contract, and systemd unit;
+- a non-root `heimdall-deadman-container.tar.gz` image archive built from
+  digest-pinned base images;
+
 - four version-stamped, stripped binary archives, each containing `LICENSE`,
   `NOTICE`, `THIRD_PARTY_NOTICES.md`, and `README.md`;
 - a non-root distroless container image exported as `heimdall-container.tar.gz`;

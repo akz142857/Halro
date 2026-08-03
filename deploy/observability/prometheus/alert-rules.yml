@@ -81,11 +81,6 @@ groups:
 
   - name: observability-platform
     rules:
-      - alert: GrafanaTargetDown
-        expr: up{job="grafana"} == 0
-        for: 2m
-        labels: {severity: warning, service: grafana, owner: sre, category: platform}
-        annotations: {summary: Grafana Metrics target is down}
       - alert: AlertmanagerNotificationFailing
         expr: increase(alertmanager_notifications_failed_total[5m]) > 0
         for: 2m
@@ -108,3 +103,10 @@ groups:
         for: 10m
         labels: {severity: warning, service: prometheus, owner: sre, category: platform}
         annotations: {summary: Prometheus TSDB and WAL exceed the local 3.5 GiB warning budget}
+      - alert: PrometheusTSDBDiskCritical
+        expr: >-
+          prometheus_tsdb_storage_blocks_bytes
+          + prometheus_tsdb_wal_storage_size_bytes > 4563402752
+        for: 5m
+        labels: {severity: critical, service: prometheus, owner: sre, category: platform}
+        annotations: {summary: Prometheus TSDB and WAL exceed the local 4.25 GiB critical budget}

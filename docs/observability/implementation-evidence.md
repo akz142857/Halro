@@ -17,26 +17,30 @@ not mark target-environment Phase D gates as passed.
 | Histogram idempotency | Usage checkpoint schema v3 | checkpoint/replay equality over request and attempt buckets |
 | Runtime/build metrics | exporter contract | parser test protects family/type/labels and forbidden labels |
 | Provider capacity | registry concurrency limits | capacity recording rule and firing fixture |
-| Rules | repository Prometheus rules | pinned `promtool` validates 8 recording and 16 alert rules plus fixtures |
-| Dashboard provisioning | four fixed-UID dashboards | pinned Grafana 12.1.0 started empty; API returned all four dashboards |
-| Local topology | Compose and validation script | loopback profile, no published management ports, secret scan, container hardening |
-| Independent probe artifact | separate probe Compose profile and heartbeat/state-transition script | HTTPS-only targets, dedicated curl-config credential, shell/Compose validation |
-| Supply chain | digest-pinned images and CI SBOM job | CI emits SPDX JSON for all three monitoring images |
+| Core rules | repository Prometheus rules | pinned `promtool` validates 8 recording and 16 alert rules plus semantic fixtures |
+| Local topology | Prometheus/Alertmanager Compose plus Linux and macOS Secret mounts | service inventory is exactly Prometheus and Alertmanager; no management ports are published |
+| Core runtime smoke asset | `deploy/observability/smoke.sh` | starts authenticated mock Metrics/webhook endpoints and verifies targets, rules, `Watchdog` firing delivery and Alertmanager firing/resolved state lifecycle; real Contact Point delivery remains Phase D evidence |
+| Independent probe artifact | `cmd/heimdall-deadman`, `internal/deadman`, hardened systemd unit, schema and example configuration | behavior tests cover authenticated Prometheus and Alertmanager down/up transitions, durable heartbeat/retry state, recovery, freshness and invalid configuration |
+| Supply chain | digest-pinned images and CI SBOM job | CI emits SPDX JSON for Prometheus, Alertmanager and the dead-man image |
 
 ## Local verification commands
 
 ```text
 go test ./...
 go test -race ./internal/metricsauth ./internal/app ./internal/usage ./internal/provider
+go test -race ./internal/deadman
 go vet ./...
-go build ./cmd/heimdall
+go build ./cmd/heimdall ./cmd/heimdall-deadman
 ./deploy/observability/validate.sh
+./deploy/observability/smoke.sh
 docker compose -f deploy/observability/compose.example.yaml config --quiet
+go run ./cmd/heimdall-deadman -config deploy/observability/external-probe/config.example.yaml -check-config
 ```
 
 ## Not repository-verifiable
 
-Target PKI rotation, organization SSO/RBAC, independent dead-man notification,
-immutable external audit anchoring, encrypted backup restore, production-sized
-24-hour soak, approved RPO/RTO, and four-party sign-off remain No-Go until their
+Target PKI rotation, Core management identity/RBAC, real Contact Points,
+dead-man failure-domain independence and missing-heartbeat delivery, immutable
+external audit anchoring, encrypted backup restore, production-sized 24-hour
+soak, approved RPO/RTO and four-party sign-off remain Core No-Go until their
 evidence IDs are recorded in `admission-checklist.md`.

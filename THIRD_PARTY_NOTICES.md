@@ -19,6 +19,12 @@ property of their respective owners.
 | github.com/pierrec/lz4/v4 | BSD-2-Clause |
 | golang.org/x/sys | BSD-3-Clause |
 
+## Go test dependencies
+
+| Component | License |
+|---|---|
+| github.com/google/jsonschema-go | MIT |
+
 ## Embedded Admin UI runtime dependencies
 
 | Component | License |

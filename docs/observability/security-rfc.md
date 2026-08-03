@@ -44,19 +44,34 @@ configured and the Metrics listener is loopback. It is not production-admitted.
 
 ## Management and egress
 
-- Grafana anonymous access is disabled. Ordinary viewers cannot use Explore,
-  arbitrary datasource queries, datasource proxying, or raw export.
-- Prometheus admin/lifecycle APIs are disabled unless a separately authorized
-  automation path requires them.
-- Datasources, webhooks, plugins, service discovery, remote write, and panel
-  links use explicit allowlists and restricted egress. Link-local, cloud
-  metadata, loopback, Unix sockets, and management networks are denied unless
-  explicitly approved.
+- Core does not expose Prometheus or Alertmanager UI/API directly. Prometheus
+  admin/lifecycle APIs are disabled unless a separately authenticated,
+  least-privilege automation path requires them. Alertmanager silence,
+  configuration and reload operations require authorization; every silence
+  records owner, reason and expiry.
+- Core service discovery, remote write and Alertmanager webhook destinations
+  use explicit allowlists and restricted egress. Link-local, cloud metadata,
+  unapproved loopback/Unix sockets, management networks, redirects and DNS
+  changes are denied.
 - Administrative audit events are forwarded to independent append-only or
   immutable storage. A monitoring administrator cannot delete that evidence.
 
+## Independent dead-man identity
+
+The external dead-man authenticates Prometheus and Alertmanager readiness
+endpoints over TLS and validates server identity. Probe client identity, its
+webhook credential and the external receiver's missing-heartbeat state are not
+stored in Core. The Alertmanager `Watchdog` receiver uses a dedicated
+credential distinct from operational alerts and from the direct probe.
+
+The probe host/process, storage, network route, credential authority, receiver
+and final Contact Point must survive loss or compromise of the Core host and
+its only notification route. The receiver treats missing `Watchdog` and
+missing probe heartbeat as stateful alarms and audits firing and recovery.
+
 ## Sign-off evidence
 
-Security sign-off requires credential rotation/revocation, expired and wrong
-certificate, local unauthorized process, SSRF, privilege, restore, and audit
-tamper tests.
+Core Security sign-off requires credential rotation/revocation, expired and
+wrong certificate, management authorization, local unauthorized process, Core
+SSRF, independent dead-man identity/failure-domain, restore and audit-tamper
+tests.

@@ -181,8 +181,6 @@ tests:
 
   - interval: 1m
     input_series:
-      - series: 'up{job="grafana",environment="test",region="local",cluster="standalone",instance="grafana"}'
-        values: '0x15'
       - series: 'alertmanager_notifications_failed_total{environment="test",region="local",cluster="standalone",instance="alertmanager"}'
         values: '0 1x15'
       - series: 'prometheus_rule_evaluation_failures_total{instance="prometheus"}'
@@ -194,11 +192,6 @@ tests:
       - series: 'prometheus_tsdb_wal_storage_size_bytes{instance="prometheus"}'
         values: '100000000x15'
     alert_rule_test:
-      - eval_time: 3m
-        alertname: GrafanaTargetDown
-        exp_alerts:
-          - exp_labels: {alertname: GrafanaTargetDown, category: platform, cluster: standalone, environment: test, instance: grafana, job: grafana, owner: sre, region: local, service: grafana, severity: warning}
-            exp_annotations: {summary: Grafana Metrics target is down}
       - eval_time: 4m
         alertname: AlertmanagerNotificationFailing
         exp_alerts:
@@ -219,6 +212,22 @@ tests:
         exp_alerts:
           - exp_labels: {alertname: PrometheusTSDBDiskHigh, category: platform, instance: prometheus, owner: sre, service: prometheus, severity: warning}
             exp_annotations: {summary: Prometheus TSDB and WAL exceed the local 3.5 GiB warning budget}
+
+  - interval: 1m
+    input_series:
+      - series: 'prometheus_tsdb_storage_blocks_bytes{environment="test",region="local",cluster="standalone",job="prometheus",instance="prometheus-critical"}'
+        values: '4300000000x10'
+      - series: 'prometheus_tsdb_wal_storage_size_bytes{environment="test",region="local",cluster="standalone",job="prometheus",instance="prometheus-critical"}'
+        values: '300000000x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: PrometheusTSDBDiskCritical
+        exp_alerts:
+          - exp_labels: {alertname: PrometheusTSDBDiskCritical, category: platform, cluster: standalone, environment: test, instance: prometheus-critical, job: prometheus, owner: sre, region: local, service: prometheus, severity: critical}
+            exp_annotations: {summary: Prometheus TSDB and WAL exceed the local 4.25 GiB critical budget}
+      - eval_time: 6m
+        alertname: PrometheusTSDBDiskHigh
+        exp_alerts: []
 
   - interval: 1m
     alert_rule_test:

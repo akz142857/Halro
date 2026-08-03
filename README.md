@@ -150,7 +150,7 @@ future, gated design—not a statement of current runtime support.
 - [Operator Guide](docs/operator-guide.md)
 - [Backup and restore](docs/backup-restore.md)
 - [Metrics reference](docs/metrics-reference.md)
-- [Prometheus/Grafana deployment](deploy/observability/README.md)
+- [Prometheus/Alertmanager deployment](deploy/observability/README.md)
 - [Observability operations runbook](docs/observability/operations-runbook.md)
 - [Webhook payloads](docs/webhook-payloads.md)
 
