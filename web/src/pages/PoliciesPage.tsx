@@ -176,7 +176,7 @@ function PolicyForm({
           <header><div><h3>{t("policies.identitySection")}</h3><p>{t("policies.identityDescription")}</p></div><span className={`badge ${enabled ? "" : "warning"}`}>{enabled ? t("common.enabled") : t("common.disabled")}</span></header>
           <div className="policy-section-grid">
             <Field label={t("policies.name")} error={errors.name}><input autoFocus data-modal-initial value={name} onChange={(event) => setName(event.target.value)} /></Field>
-            <label className="policy-status-control"><input type="checkbox" aria-label={t("policies.enable")} checked={enabled} onChange={(event) => setEnabled(event.target.checked)} /><span><strong>{t("policies.enable")}</strong><small>{current?.bound_projects ? t("policies.boundImpact", { count: current.bound_projects }) : t("policies.unboundImpact")}</small></span></label>
+            <div className="policy-status-field"><span>{t("policies.statusField")}</span><label className="policy-status-control"><input type="checkbox" aria-label={t("policies.enable")} checked={enabled} onChange={(event) => setEnabled(event.target.checked)} /><span><strong>{t("policies.enable")}</strong><small>{current?.bound_projects ? t("policies.boundImpact", { count: current.bound_projects }) : t("policies.unboundImpact")}</small></span></label></div>
           </div>
         </section>
         <fieldset className="policy-form-section policy-action-section">

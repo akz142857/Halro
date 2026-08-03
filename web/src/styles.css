@@ -721,7 +721,9 @@ textarea { resize: vertical; }
 .policy-action-card strong, .policy-action-card small, .policy-status-control strong, .policy-status-control small { display: block; }
 .policy-action-card strong { color: var(--text); font-size: 12px; }
 .policy-action-card small { margin-top: 6px; color: var(--muted); font-size: 10px; line-height: 1.45; }
-.policy-status-control { display: flex; align-items: center; gap: 12px; min-height: 72px; padding: 12px 14px; background: rgba(7,18,15,.55); border: 1px solid var(--line); }
+.policy-status-field > span { display: block; margin-bottom: 8px; color: #b6c8c2; font-size: 11px; font-weight: 700; }
+.policy-status-control { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 9px 11px; background: #07120f; border: 1px solid var(--line-strong); border-radius: 3px; cursor: pointer; }
+.policy-status-control:focus-within { border-color: var(--lime); box-shadow: 0 0 0 2px var(--lime); }
 .policy-status-control input, .policy-switch input { width: auto; min-height: 0; }
 .policy-status-control strong { color: var(--text); font-size: 12px; }
 .policy-status-control small { margin-top: 5px; color: var(--muted); font-size: 10px; line-height: 1.45; }
