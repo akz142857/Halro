@@ -36,6 +36,11 @@ func main() {
 	}
 }
 
+var (
+	initializeCommand     = app.Initialize
+	verifyRecoveryCommand = app.VerifyRecoverySlot
+)
+
 func run(arguments []string, logger *slog.Logger) error {
 	if len(arguments) == 0 {
 		return errors.New("usage: heimdall <start|init|bootstrap|admin|key|backup|restore|usage|audit|metrics|doctor|serve|healthcheck|config|version>")
@@ -95,7 +100,7 @@ func run(arguments []string, logger *slog.Logger) error {
 		if err != nil {
 			return err
 		}
-		if err := app.Initialize(cfg); err != nil {
+		if err := initializeCommand(cfg); err != nil {
 			return err
 		}
 		fmt.Fprintln(os.Stdout, "Heimdall initialized")
@@ -209,9 +214,26 @@ func run(arguments []string, logger *slog.Logger) error {
 		return nil
 	case "key":
 		if len(arguments) < 2 {
-			return errors.New("usage: heimdall key <create|disable|rotate>")
+			return errors.New("usage: heimdall key <create|disable|rotate|recover>")
 		}
 		switch arguments[1] {
+		case "recover":
+			flags := flag.NewFlagSet("key recover", flag.ContinueOnError)
+			configPath := flags.String("config", "config.yaml", "configuration file")
+			confirmedSlot := flags.String("confirm-recovery-slot", "", "exact configured Recovery Slot ID")
+			if err := flags.Parse(arguments[2:]); err != nil {
+				return err
+			}
+			cfg, err := config.Load(*configPath, config.LoadOptions{})
+			if err != nil {
+				return err
+			}
+			result, err := verifyRecoveryCommand(context.Background(), cfg, *confirmedSlot)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintln(os.Stderr, "Recovery Slot verified and audited; revoke temporary AWS recovery authorization now.")
+			return json.NewEncoder(os.Stdout).Encode(result)
 		case "rotate":
 			flags := flag.NewFlagSet("key rotate", flag.ContinueOnError)
 			configPath := flags.String("config", "config.yaml", "configuration file")

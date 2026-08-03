@@ -54,7 +54,7 @@ func CreateBackup(
 		return backup.Manifest{}, err
 	}
 	defer metadata.Close()
-	masterKey, err := unlockMasterKey(ctx, cfg)
+	masterKey, err := unlockMasterKey(ctx, cfg, metadata)
 	if err != nil {
 		return backup.Manifest{}, err
 	}
@@ -217,7 +217,7 @@ func validateRestoreStage(ctx context.Context, cfg config.Config, stageData stri
 		return fmt.Errorf("open staged metadata: %w", err)
 	}
 	defer metadata.Close()
-	masterKey, err := unlockMasterKey(ctx, cfg)
+	masterKey, err := unlockMasterKey(ctx, cfg, metadata)
 	if err != nil {
 		return err
 	}

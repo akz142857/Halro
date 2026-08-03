@@ -33,6 +33,21 @@ func TestExclusiveLock(t *testing.T) {
 	}
 }
 
+func TestInitializationLockBlocksWritersWithoutCreatingDataDirectory(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "new-data")
+	initialization, err := AcquireInitialization(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer initialization.Close()
+	if _, err := os.Stat(directory); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("initialization lock created live data directory: %v", err)
+	}
+	if _, err := Acquire(directory); !errors.Is(err, ErrAlreadyLocked) {
+		t.Fatalf("writer raced initialization publication: %v", err)
+	}
+}
+
 func TestReadOnlyLockDoesNotRewriteOwnerMetadata(t *testing.T) {
 	directory := t.TempDir()
 	initial, err := Acquire(directory)

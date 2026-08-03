@@ -10,12 +10,29 @@ import (
 	"github.com/akz142857/Heimdall/internal/vault"
 )
 
-func unlockMasterKey(ctx context.Context, cfg config.Config) ([]byte, error) {
-	unlocker, err := masterkey.NewUnlocker(cfg.Storage.MasterKey)
+func unlockMasterKey(ctx context.Context, cfg config.Config, stores ...*boltstore.Store) ([]byte, error) {
+	if cfg.Storage.MasterKey.Mode == config.MasterKeyModeFile {
+		unlocker, err := masterkey.NewUnlocker(cfg.Storage.MasterKey)
+		if err != nil {
+			return nil, err
+		}
+		return unlocker.Unlock(ctx)
+	}
+	if cfg.Storage.MasterKey.Mode != config.MasterKeyModeKeySlots {
+		return nil, errors.New("unsupported Master Key mode")
+	}
+	if len(stores) > 1 {
+		return nil, errors.New("at most one metadata store may be supplied")
+	}
+	if len(stores) == 1 && stores[0] != nil {
+		return unlockKMSMasterKey(ctx, cfg, stores[0], masterkey.KeySlotPrimary, defaultKMSWrapperFactory)
+	}
+	store, err := boltstore.Open(cfg.MetadataPath())
 	if err != nil {
 		return nil, err
 	}
-	return unlocker.Unlock(ctx)
+	defer store.Close()
+	return unlockKMSMasterKey(ctx, cfg, store, masterkey.KeySlotPrimary, defaultKMSWrapperFactory)
 }
 
 func fileMasterKeyStore(cfg config.Config) (*masterkey.FileStore, error) {

@@ -81,7 +81,7 @@ func Doctor(ctx context.Context, cfg config.Config) (DoctorReport, error) {
 		defer store.Close()
 		add("metadata", "pass", fmt.Sprintf("bbolt schema v%d", boltstore.CurrentSchemaVersion()))
 	}
-	masterKey, keyErr := unlockMasterKey(ctx, cfg)
+	masterKey, keyErr := unlockMasterKey(ctx, cfg, store)
 	if keyErr != nil {
 		add("master_key", "fail", keyErr.Error())
 	} else {

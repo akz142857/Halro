@@ -64,7 +64,7 @@ func Bootstrap(ctx context.Context, cfg config.Config, options BootstrapOptions,
 		return BootstrapResult{}, err
 	}
 	defer store.Close()
-	masterKey, err := unlockMasterKey(ctx, cfg)
+	masterKey, err := unlockMasterKey(ctx, cfg, store)
 	if err != nil {
 		return BootstrapResult{}, err
 	}
