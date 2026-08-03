@@ -23,6 +23,23 @@ export interface SetupStatus {
   token_required: boolean;
 }
 
+export interface MasterKeyCustody {
+  mode: "file" | "key_slots";
+  production_ready: boolean;
+  rotation_incomplete: boolean;
+  pending_slots: number;
+  retiring_slots: number;
+  recovery_verified_at?: string;
+  slots: Array<{
+    purpose: "primary" | "recovery";
+    state: "pending" | "active" | "retiring" | "revoked";
+    provider: string;
+    verified_at?: string;
+  }>;
+  lifecycle_runbook: string;
+  recovery_runbook: string;
+}
+
 export interface Bucket {
   hour: string;
   requests: number;

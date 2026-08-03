@@ -2,9 +2,11 @@
 
 状态：In Progress
 
-最后更新：2026-08-03
+最后更新：2026-08-04
 
 当前完成度：0/8 PR slices，0/16 release gates
+
+1.1.0 本地实现状态：KS-1 Slot revoke、KS-2 Recovery 离线修复契约、KS-3 只读 Custody API/UI 已完成；KS-4 真实 AWS、独立操作者、最终 RC 供应链证据与四方签署仍 blocked。该本地实现状态不改变下面的 PR merge/reviewer 和 release gate 计数。
 
 ## 1. 里程碑目标
 
@@ -398,6 +400,8 @@ storage:
 | 2026-08-03 | AWS SDK artifact 方案采用单 module、单签名 `heimdall` artifact，ADR 0010 已 Accepted | Accepted | AWS SDK 引入必须遵守冻结契约、File 零云调用和单 artifact 发布门禁 |
 | 2026-08-03 | PR3 拆为决策门 PR3a 与实现 PR3b | Accepted | G3/Accepted ADR 成为 AWS SDK 实现的显式前置 |
 | 2026-08-03 | Key Slot 配置统一为 Primary/Recovery + timeout 字段 | Accepted | 两份 PRD 使用同一最终 schema，`config check` 保持纯静态 |
+| 2026-08-04 | Recovery 收敛为离线修复 Primary 后冷启动，不提供 Recovery Runtime | Accepted | Runtime/Bootstrap/Admin 永不选择 Recovery；恢复身份不得长期运行 Listener |
+| 2026-08-04 | 增加离线 Slot revoke 与只读 Custody 页面 | Implemented locally | revoke 使用 exact confirmation/revisions/compaction；UI 不返回 ARN、ciphertext、fingerprint 或 Slot ID，不执行 KMS 调用 |
 
 ## 13. 更新规则
 

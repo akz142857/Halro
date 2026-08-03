@@ -51,6 +51,7 @@ export const enUS = {
     policies: "Policies",
     usage: "Usage",
     operations: "Operations",
+	masterKey: "Master Key",
     settings: "Settings",
     localAdmin: "Local admin",
     logout: "Sign out",
@@ -67,6 +68,14 @@ export const enUS = {
     notFound: "This console page does not exist.",
     backOverview: "Back to overview",
   },
+	custody: {
+		eyebrow: "Key custody", title: "Master Key Custody", description: "Read-only runtime posture. Key material and cloud identifiers are never displayed.",
+		posture: "Custody posture", ready: "Production-ready", notReady: "Not production-ready", stable: "No pending lifecycle transition.",
+		rotationIncomplete: "Lifecycle work remains: {{pending}} pending, {{retiring}} retiring.", mode: "Mode", slots: "Key slots",
+		redaction: "Only purpose, lifecycle state, provider, and verification time are exposed.", primary: "Primary", recovery: "Recovery",
+		provider: "Provider", lastVerified: "Last verified", runbooks: "Offline runbooks", offlineOnly: "Mutations and recovery remain offline CLI operations.",
+		states: { pending: "Pending", active: "Active", retiring: "Retiring", revoked: "Revoked" },
+	},
   auth: {
     languageLabel: "Interface language",
     productIntro: "Product introduction",

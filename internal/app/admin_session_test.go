@@ -225,6 +225,7 @@ func TestAdminReadAPIUsesSecretSafeViews(t *testing.T) {
 		"/admin/api/v1/projects",
 		"/admin/api/v1/projects/" + bootstrap.ProjectID + "/keys",
 		"/admin/api/v1/routes",
+		"/admin/api/v1/master-key/custody",
 	} {
 		request := adminRequest(t, http.MethodGet, path, nil)
 		request.AddCookie(cookie)

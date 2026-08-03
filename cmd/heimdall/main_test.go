@@ -93,6 +93,7 @@ func TestKeySlotInitAndRecoveryCLIUseExplicitOfflinePaths(t *testing.T) {
 	previousRecovery := verifyRecoveryCommand
 	previousRotateKMS := rotateKMSCommand
 	previousRewrapKMS := rewrapKMSCommand
+	previousRevokeKMS := revokeKMSCommand
 	previousDoctor := doctorCommand
 	previousRestore := restoreBackupCommand
 	t.Cleanup(func() {
@@ -100,6 +101,7 @@ func TestKeySlotInitAndRecoveryCLIUseExplicitOfflinePaths(t *testing.T) {
 		verifyRecoveryCommand = previousRecovery
 		rotateKMSCommand = previousRotateKMS
 		rewrapKMSCommand = previousRewrapKMS
+		revokeKMSCommand = previousRevokeKMS
 		doctorCommand = previousDoctor
 		restoreBackupCommand = previousRestore
 	})
@@ -123,6 +125,12 @@ func TestKeySlotInitAndRecoveryCLIUseExplicitOfflinePaths(t *testing.T) {
 		rewrapped = loaded.Storage.MasterKey.Mode == config.MasterKeyModeKeySlots && options.Purpose == masterkey.KeySlotPrimary &&
 			options.SlotID == "slot_aws_primary" && options.KeyReference == loaded.Storage.MasterKey.AllowedKMSKeys[0].KeyID
 		return app.KMSRewrapResult{Purpose: options.Purpose, ActiveSlot: options.SlotID}, nil
+	}
+	revoked := false
+	revokeKMSCommand = func(_ context.Context, loaded config.Config, options app.KMSRevokeOptions) (app.KMSRevokeResult, error) {
+		revoked = loaded.Storage.MasterKey.Mode == config.MasterKeyModeKeySlots && options.SlotID == "slot_aws_primary_old" &&
+			options.ConfirmSlotID == options.SlotID && options.ExpectedDescriptorRevision == 4 && options.ExpectedSlotRevision == 3
+		return app.KMSRevokeResult{SlotID: options.SlotID, State: masterkey.KeySlotRevoked}, nil
 	}
 	staticDoctor := false
 	doctorCommand = func(_ context.Context, loaded config.Config, options app.DoctorOptions) (app.DoctorReport, error) {
@@ -159,6 +167,12 @@ func TestKeySlotInitAndRecoveryCLIUseExplicitOfflinePaths(t *testing.T) {
 	}
 	if !rewrapped {
 		t.Fatal("rewrap CLI did not preserve explicit Slot and allowlist selection")
+	}
+	if err := run([]string{"key", "slot", "revoke", "--config", path, "--slot-id", "slot_aws_primary_old", "--expected-descriptor-revision", "4", "--expected-slot-revision", "3", "--confirm-slot-id", "slot_aws_primary_old"}, logger); err != nil {
+		t.Fatal(err)
+	}
+	if !revoked {
+		t.Fatal("revoke CLI did not preserve confirmation and optimistic revisions")
 	}
 	if err := run([]string{"doctor", "--config", path, "--no-kms"}, logger); err != nil {
 		t.Fatal(err)

@@ -1,6 +1,6 @@
 # Heimdall Master Key Key Slots PRD 1.1.0：未完成项收口
 
-状态：Draft — 待实现与生产验收
+状态：Implementation complete — 外部生产验收仍 blocked
 
 日期：2026-08-04
 
@@ -405,18 +405,18 @@ Master Key 是启动 Admin API 之前的根信任，因此 Admin UI 不负责初
 
 ## 11. 验收标准
 
-- [ ] 提供受支持的离线 Slot revoke CLI 和 App Service。
-- [ ] revoke 要求 exact confirmation、descriptor revision 和 Slot revision。
-- [ ] revoke 前使用独立 active Slot 解锁并通过 Vault Key Check。
-- [ ] revoke 后仍有 active、verified Primary 和 Recovery。
-- [ ] revoke 清除 wrapped ciphertext 和 provider material，并写入原子 Audit。
-- [ ] revoke 的所有 publication kill points 和幂等重试通过。
-- [ ] Recovery 契约明确为离线修复 Primary 后正常启动，不提供自动 fallback。
-- [ ] Recovery 身份不用于长期运行 Gateway/Admin。
-- [ ] Primary 永久不可用时可通过 Recovery 修复新 Primary 并冷启动。
-- [ ] 生命周期 Runbook 包含可复制但不含秘密的完整 revoke/Recovery 命令。
-- [ ] Admin UI 边界冻结为只读 Custody 页面；如不进入本版本，必须从基线 PRD 的交付措辞中删除。
-- [ ] 只读 UI/API 不触发 KMS 调用且不返回敏感 descriptor 字段。
+- [x] 提供受支持的离线 Slot revoke CLI 和 App Service。
+- [x] revoke 要求 exact confirmation、descriptor revision 和 Slot revision。
+- [x] revoke 前使用独立 active Slot 解锁并通过 Vault Key Check。
+- [x] revoke 后仍有 active、verified Primary 和 Recovery。
+- [x] revoke 清除 wrapped ciphertext 和 provider material，写入 Audit 并 compact metadata。
+- [x] revoke 的 publication kill points 和幂等重试通过本地 fake KMS 回归。
+- [x] Recovery 契约明确为离线修复 Primary 后正常启动，不提供自动 fallback。
+- [x] Recovery 身份不用于长期运行 Gateway/Admin。
+- [x] Primary 永久不可用时可通过 Recovery 修复新 Primary 并冷启动的命令链与 fake KMS 路径已覆盖。
+- [x] 生命周期 Runbook 包含可复制但不含秘密的完整 revoke/Recovery 命令。
+- [x] Admin UI 边界冻结为只读 Custody 页面。
+- [x] 只读 UI/API 不触发 KMS 调用且不返回敏感 descriptor 字段。
 - [ ] 真实 AWS 14 项矩阵全部绑定最终 RC commit 并通过。
 - [ ] 独立操作者完成 Primary 失败、Recovery restore、Primary 修复和撤权。
 - [ ] 最终 RC Secret Canary、SBOM、checksum 和 Sigstore verification 全部通过。

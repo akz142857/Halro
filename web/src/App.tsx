@@ -16,6 +16,7 @@ import { ProvidersPage } from "./pages/ProvidersPage";
 import { RoutesPage } from "./pages/RoutesPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { UsagePage } from "./pages/UsagePage";
+import { MasterKeyCustodyPage } from "./pages/MasterKeyCustodyPage";
 import { applyLocale, applyPreference, resolveLocale } from "./i18n";
 
 export function App() {
@@ -117,6 +118,7 @@ function Route({ path }: { path: string }) {
     return <OperationsPage />;
   }
   if (path.startsWith("/admin/settings")) return <SettingsPage />;
+	if (path.startsWith("/admin/master-key")) return <MasterKeyCustodyPage />;
   return (
     <section className="not-found">
       <p className="eyebrow">{t("app.notFoundEyebrow")}</p>

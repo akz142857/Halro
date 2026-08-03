@@ -123,6 +123,153 @@ func TestKMSRewrapRecoversIdempotentlyAtEveryPublicationPoint(t *testing.T) {
 	}
 }
 
+func TestKMSRevokeRequiresConfirmationAndIsIdempotent(t *testing.T) {
+	baseCfg, cfg, harness, _ := kmsRewrapFixture(t)
+	if _, err := rewrapKMSKeyWithOptions(context.Background(), cfg, KMSRewrapOptions{
+		Purpose: masterkey.KeySlotPrimary, SlotID: cfg.Storage.MasterKey.PrimarySlot,
+		KeyReference: replacementPrimaryKMSKeyARN,
+	}, harness.factory, time.Now, nil); err != nil {
+		t.Fatal(err)
+	}
+	store, err := boltstore.Open(cfg.MetadataPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor, err := store.KeySlotDescriptor(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := keySlotForAppTest(t, descriptor, baseCfg.Storage.MasterKey.PrimarySlot)
+	oldCiphertext := bytes.Clone(old.WrappedKey)
+	store.Close()
+	options := KMSRevokeOptions{
+		SlotID: old.ID, ConfirmSlotID: old.ID,
+		ExpectedDescriptorRevision: descriptor.Revision, ExpectedSlotRevision: old.Revision,
+		ReasonCode: "retirement_window_completed",
+	}
+	wrong := options
+	wrong.ConfirmSlotID = "wrong"
+	if _, err := revokeKMSKeySlotWithOptions(context.Background(), cfg, wrong, harness.factory, time.Now, nil); err == nil {
+		t.Fatal("revoke accepted an inexact confirmation")
+	}
+	result, err := revokeKMSKeySlotWithOptions(context.Background(), cfg, options, harness.factory, time.Now, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.State != masterkey.KeySlotRevoked || !result.ProductionReady || result.AlreadyRevoked {
+		t.Fatalf("result=%#v", result)
+	}
+	auditKey, err := vault.DeriveAuditHMACKey(bytes.Repeat([]byte{0x61}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(auditKey)
+	beforeRetry, err := audit.Verify(cfg.AuditPath(), auditKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := revokeKMSKeySlotWithOptions(context.Background(), cfg, options, harness.factory, time.Now, nil)
+	if err != nil || !again.AlreadyRevoked {
+		t.Fatalf("idempotent retry result=%#v err=%v", again, err)
+	}
+	afterRetry, err := audit.Verify(cfg.AuditPath(), auditKey)
+	if err != nil || afterRetry.Records != beforeRetry.Records {
+		t.Fatalf("retry appended duplicate audit event: before=%d after=%d err=%v", beforeRetry.Records, afterRetry.Records, err)
+	}
+	store, err = boltstore.Open(cfg.MetadataPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := store.KeySlotDescriptor(context.Background())
+	store.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	revoked := keySlotForAppTest(t, after, old.ID)
+	if len(revoked.WrappedKey) != 0 || revoked.KeyReference != "" || len(revoked.ProviderParameters) != 0 {
+		t.Fatalf("revoked Slot retained protected provider material: %#v", revoked)
+	}
+	raw, err := os.ReadFile(cfg.MetadataPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(oldCiphertext) > 0 && bytes.Contains(raw, oldCiphertext) {
+		t.Fatal("compacted metadata retained revoked Slot ciphertext")
+	}
+}
+
+func TestKMSRevokeRecoversAtEveryPublicationPoint(t *testing.T) {
+	for _, point := range []string{"before_revoked_slot_published", "after_revoked_slot_published", "after_revoked_slot_compacted", "after_revoked_compaction_published"} {
+		t.Run(point, func(t *testing.T) {
+			baseCfg, cfg, harness, _ := kmsRewrapFixture(t)
+			if _, err := rewrapKMSKeyWithOptions(context.Background(), cfg, KMSRewrapOptions{
+				Purpose: masterkey.KeySlotPrimary, SlotID: cfg.Storage.MasterKey.PrimarySlot, KeyReference: replacementPrimaryKMSKeyARN,
+			}, harness.factory, time.Now, nil); err != nil {
+				t.Fatal(err)
+			}
+			store, err := boltstore.Open(cfg.MetadataPath())
+			if err != nil {
+				t.Fatal(err)
+			}
+			descriptor, err := store.KeySlotDescriptor(context.Background())
+			store.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+			old := keySlotForAppTest(t, descriptor, baseCfg.Storage.MasterKey.PrimarySlot)
+			options := KMSRevokeOptions{SlotID: old.ID, ConfirmSlotID: old.ID, ExpectedDescriptorRevision: descriptor.Revision, ExpectedSlotRevision: old.Revision}
+			injected := errors.New("injected revoke process death")
+			_, err = revokeKMSKeySlotWithOptions(context.Background(), cfg, options, harness.factory, time.Now, func(current string) error {
+				if current == point {
+					return injected
+				}
+				return nil
+			})
+			if !errors.Is(err, injected) {
+				t.Fatalf("point=%s err=%v", point, err)
+			}
+			result, err := revokeKMSKeySlotWithOptions(context.Background(), cfg, options, harness.factory, time.Now, nil)
+			if err != nil || !result.ProductionReady || (point != "before_revoked_slot_published" && !result.AlreadyRevoked) {
+				t.Fatalf("recover %s result=%#v err=%v", point, result, err)
+			}
+		})
+	}
+}
+
+func TestSlotTransitionAuditIsIdempotentAcrossMetadataFailure(t *testing.T) {
+	cfg, _, _, _ := kmsRewrapFixture(t)
+	store, err := boltstore.Open(cfg.MetadataPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	auditKey, err := vault.DeriveAuditHMACKey(bytes.Repeat([]byte{0x61}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(auditKey)
+	transition := &masterkey.SlotTransition{
+		SlotID: "slot_retry", Purpose: masterkey.KeySlotPrimary,
+		From: masterkey.KeySlotRetiring, To: masterkey.KeySlotRevoked,
+		DescriptorRevision: 9, SlotRevision: 4, OccurredAt: time.Now().UTC(),
+	}
+	injected := errors.New("metadata fsync failed")
+	if err := publishSlotTransitionWithReason(context.Background(), store, cfg.AuditPath(), auditKey, transition, "retirement_window_completed", func() error { return injected }); !errors.Is(err, injected) {
+		t.Fatalf("first publish err=%v", err)
+	}
+	before, err := audit.Verify(cfg.AuditPath(), auditKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := publishSlotTransitionWithReason(context.Background(), store, cfg.AuditPath(), auditKey, transition, "retirement_window_completed", func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	after, err := audit.Verify(cfg.AuditPath(), auditKey)
+	if err != nil || after.Records != before.Records {
+		t.Fatalf("metadata retry duplicated Audit: before=%d after=%d err=%v", before.Records, after.Records, err)
+	}
+}
+
 func TestKMSRecoveryRewrapUsesPrimaryAsIndependentSource(t *testing.T) {
 	cfg := kmsAppTestConfig(t)
 	harness := newKMSAppHarness(t)
@@ -166,6 +313,49 @@ func TestKMSRecoveryRewrapUsesPrimaryAsIndependentSource(t *testing.T) {
 		keySlotForAppTest(t, descriptor, cfg.Storage.MasterKey.PrimarySlot).State != masterkey.KeySlotActive {
 		t.Fatalf("descriptor=%#v", descriptor)
 	}
+}
+
+func TestRecoveryRepairsPermanentlyUnavailablePrimaryBeforeColdStart(t *testing.T) {
+	baseCfg, cfg, harness, _ := kmsRewrapFixture(t)
+	brokenPrimary, err := fakekms.New(bytes.Repeat([]byte{0xee}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	harness.wrappers[primaryKMSKeyARN] = brokenPrimary
+	store, err := boltstore.Open(cfg.MetadataPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if key, err := unlockKMSMasterKey(context.Background(), baseCfg, store, masterkey.KeySlotPrimary, harness.factory); err == nil {
+		clear(key)
+		store.Close()
+		t.Fatal("permanently unavailable Primary unexpectedly unlocked")
+	}
+	store.Close()
+	recovery, err := VerifyRecoverySlot(context.Background(), baseCfg, baseCfg.Storage.MasterKey.RecoverySlot)
+	if err != nil || !recovery.VaultVerified || !recovery.RecoveryAudited {
+		t.Fatalf("recovery=%#v err=%v", recovery, err)
+	}
+	if _, err := rewrapKMSKeyWithOptions(context.Background(), cfg, KMSRewrapOptions{
+		Purpose: masterkey.KeySlotPrimary, SlotID: cfg.Storage.MasterKey.PrimarySlot, KeyReference: replacementPrimaryKMSKeyARN,
+	}, harness.factory, time.Now, nil); err != nil {
+		t.Fatal(err)
+	}
+	brokenRecovery, err := fakekms.New(bytes.Repeat([]byte{0xdd}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	harness.wrappers[recoveryKMSKeyARN] = brokenRecovery
+	store, err = boltstore.Open(cfg.MetadataPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	key, err := unlockKMSMasterKey(context.Background(), cfg, store, masterkey.KeySlotPrimary, harness.factory)
+	if err != nil {
+		t.Fatalf("repaired Primary cold-start unlock failed: %v", err)
+	}
+	clear(key)
 }
 
 func TestKMSRewrapFailsClosedForSuspectedCompromise(t *testing.T) {

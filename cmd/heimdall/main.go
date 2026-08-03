@@ -43,6 +43,7 @@ var (
 	verifyRecoveryCommand = app.VerifyRecoverySlot
 	rotateKMSCommand      = app.RotateKMSMasterKey
 	rewrapKMSCommand      = app.RewrapKMSKey
+	revokeKMSCommand      = app.RevokeKMSKeySlot
 	doctorCommand         = app.DoctorWithOptions
 	restoreBackupCommand  = app.RestoreBackupWithOptions
 	hardenRuntimeCommand  = hostsecurity.Harden
@@ -221,9 +222,36 @@ func run(arguments []string, logger *slog.Logger) error {
 		return nil
 	case "key":
 		if len(arguments) < 2 {
-			return errors.New("usage: heimdall key <create|disable|rotate|rewrap|recover>")
+			return errors.New("usage: heimdall key <create|disable|rotate|rewrap|recover|slot>")
 		}
 		switch arguments[1] {
+		case "slot":
+			if len(arguments) < 3 || arguments[2] != "revoke" {
+				return errors.New("usage: heimdall key slot revoke --slot-id <id> --expected-descriptor-revision <n> --expected-slot-revision <n> --confirm-slot-id <id>")
+			}
+			flags := flag.NewFlagSet("key slot revoke", flag.ContinueOnError)
+			configPath := flags.String("config", "config.yaml", "configuration file")
+			slotID := flags.String("slot-id", "", "retiring Slot ID")
+			expectedDescriptorRevision := flags.Uint64("expected-descriptor-revision", 0, "current descriptor revision")
+			expectedSlotRevision := flags.Uint64("expected-slot-revision", 0, "current Slot revision")
+			confirmSlotID := flags.String("confirm-slot-id", "", "exact retiring Slot ID confirmation")
+			reason := flags.String("reason", "retirement_window_completed", "retirement_window_completed or incident_retirement")
+			if err := flags.Parse(arguments[3:]); err != nil {
+				return err
+			}
+			cfg, err := config.Load(*configPath, config.LoadOptions{})
+			if err != nil {
+				return err
+			}
+			result, err := revokeKMSCommand(context.Background(), cfg, app.KMSRevokeOptions{
+				SlotID: *slotID, ConfirmSlotID: *confirmSlotID,
+				ExpectedDescriptorRevision: *expectedDescriptorRevision,
+				ExpectedSlotRevision:       *expectedSlotRevision, ReasonCode: *reason,
+			})
+			if err != nil {
+				return err
+			}
+			return json.NewEncoder(os.Stdout).Encode(result)
 		case "recover":
 			flags := flag.NewFlagSet("key recover", flag.ContinueOnError)
 			configPath := flags.String("config", "config.yaml", "configuration file")

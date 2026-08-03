@@ -51,6 +51,7 @@ export const zhCN = {
     policies: "安全策略",
     usage: "用量",
     operations: "运维",
+	masterKey: "主密钥",
     settings: "设置",
     localAdmin: "本地管理员",
     logout: "退出登录",
@@ -67,6 +68,14 @@ export const zhCN = {
     notFound: "这个控制台页面不存在。",
     backOverview: "返回总览",
   },
+	custody: {
+		eyebrow: "密钥托管", title: "Master Key 托管", description: "只读展示运行态势，不显示密钥材料或云端标识符。",
+		posture: "托管态势", ready: "满足生产条件", notReady: "不满足生产条件", stable: "当前没有待完成的生命周期变更。",
+		rotationIncomplete: "仍有生命周期工作：{{pending}} 个 pending，{{retiring}} 个 retiring。", mode: "模式", slots: "Key Slot",
+		redaction: "仅展示用途、生命周期状态、Provider 与验证时间。", primary: "Primary", recovery: "Recovery",
+		provider: "Provider", lastVerified: "最后验证", runbooks: "离线 Runbook", offlineOnly: "变更与恢复只能通过离线 CLI 执行。",
+		states: { pending: "待验证", active: "生效", retiring: "退役中", revoked: "已撤销" },
+	},
   auth: {
     languageLabel: "界面语言",
     productIntro: "产品介绍",

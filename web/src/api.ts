@@ -23,6 +23,7 @@ import type {
   MFAChallenge,
   MFAStatus,
   MFAEnrollment,
+	MasterKeyCustody,
   SetupStatus,
   SystemStatus,
   TokenGuardPolicy,
@@ -153,6 +154,7 @@ export const api = {
     return result.data;
   },
   dashboard: () => request<Dashboard>("/dashboard").then((value) => value.data),
+	masterKeyCustody: () => request<MasterKeyCustody>("/master-key/custody").then((value) => value.data),
   systemStatus: () =>
     request<SystemStatus>("/system/status").then((value) => value.data),
   settings: () => request<RuntimeSettings>("/settings"),

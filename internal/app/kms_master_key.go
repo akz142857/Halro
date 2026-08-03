@@ -41,8 +41,11 @@ type kmsInitializationOptions struct {
 }
 
 type RecoveryVerificationResult struct {
-	SlotID     string    `json:"slot_id"`
-	VerifiedAt time.Time `json:"verified_at"`
+	SlotID          string    `json:"slot_id"`
+	VerifiedAt      time.Time `json:"verified_at"`
+	VaultVerified   bool      `json:"vault_verified"`
+	RecoveryAudited bool      `json:"recovery_audited"`
+	NextAction      string    `json:"next_action"`
 }
 
 type kmsSlotUnwrapper struct {
@@ -389,7 +392,10 @@ func VerifyRecoverySlot(ctx context.Context, cfg config.Config, confirmedSlot st
 	if err := checkpointAudit(store, auditLog.Summary()); err != nil {
 		return RecoveryVerificationResult{}, err
 	}
-	return RecoveryVerificationResult{SlotID: confirmedSlot, VerifiedAt: now}, nil
+	return RecoveryVerificationResult{
+		SlotID: confirmedSlot, VerifiedAt: now, VaultVerified: true, RecoveryAudited: true,
+		NextAction: "rewrap_primary_then_revoke_temporary_recovery_authorization",
+	}, nil
 }
 
 func initializeKMS(ctx context.Context, cfg config.Config, options kmsInitializationOptions) error {
