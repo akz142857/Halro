@@ -155,6 +155,22 @@ With `mfa_policy: required`, the next password login is restricted to setup.
 
 ## Master Key rotation
 
+The `--new-key-file` procedure below applies to `storage.master_key.mode: file`.
+For `key_slots`, Heimdall generates the new Master Key only in memory and
+requires a stable, non-secret operation ID so a command interrupted after
+publication can be retried without accidentally creating another generation:
+
+```bash
+./heimdall key rotate --config ./config.yaml \
+  --operation-id change-2026-08-03-001
+```
+
+Normal KMS KEK replacement is a distinct `key rewrap` operation and does not
+change the Master Key or Vault ciphertext. Suspected KMS Key, Grant, policy, or
+Decrypt-identity compromise must use DEK rotation, not rewrap. The complete
+procedure, interruption matrix, and historical-backup disposition checklist
+are in [the M11 KMS key lifecycle runbook](runbooks/m11-kms-key-lifecycle.md).
+
 Rotation is an offline operation. First create and verify an encrypted backup,
 stop Heimdall, retain the old Master Key with backups created under it, and
 generate a separate replacement key with mode `0600`:
