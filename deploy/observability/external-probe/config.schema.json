@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://heimdall.example/schemas/deadman-config-v1.json",
+  "title": "Heimdall independent dead-man configuration",
+  "description": "Structural validation for the v1 configuration. Use heimdall-deadman -check-config for cross-field and semantic validation.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["probe_id", "environment", "region", "cluster", "interval", "timeout", "heartbeat_ttl", "failures_to_down", "successes_to_up", "outbox_limit", "delivery_batch", "state_file", "audit_file", "notification", "targets"],
+  "properties": {
+    "probe_id": {"type": "string", "minLength": 1},
+    "environment": {"type": "string", "minLength": 1},
+    "region": {"type": "string", "minLength": 1},
+    "cluster": {"type": "string", "minLength": 1},
+    "interval": {"$ref": "#/$defs/duration"},
+    "timeout": {"$ref": "#/$defs/duration"},
+    "heartbeat_ttl": {"$ref": "#/$defs/duration"},
+    "failures_to_down": {"type": "integer", "minimum": 1},
+    "successes_to_up": {"type": "integer", "minimum": 1},
+    "outbox_limit": {"type": "integer", "minimum": 16, "maximum": 65536},
+    "delivery_batch": {"type": "integer", "minimum": 1, "maximum": 65536},
+    "state_file": {"type": "string", "minLength": 1},
+    "audit_file": {"type": "string", "minLength": 1},
+    "notification": {"$ref": "#/$defs/notification"},
+    "targets": {
+      "type": "array",
+      "minItems": 3,
+      "items": {"$ref": "#/$defs/target"},
+      "allOf": [
+        {"contains": {"type": "object", "required": ["kind"], "properties": {"kind": {"const": "heimdall"}}}},
+        {"contains": {"type": "object", "required": ["kind"], "properties": {"kind": {"const": "prometheus"}}}},
+        {"contains": {"type": "object", "required": ["kind"], "properties": {"kind": {"const": "alertmanager"}}}}
+      ]
+    }
+  },
+  "$defs": {
+    "duration": {
+      "type": "string",
+      "pattern": "^(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:ns|us|µs|μs|ms|s|m|h)(?:(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:ns|us|µs|μs|ms|s|m|h))*$"
+    },
+    "https_url": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https://[^/?#@\\s]+(?:[/?#].*)?$"
+    },
+    "tls": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ca_file"],
+      "dependentRequired": {
+        "client_cert_file": ["client_key_file"],
+        "client_key_file": ["client_cert_file"]
+      },
+      "properties": {
+        "ca_file": {"type": "string", "minLength": 1},
+        "client_cert_file": {"type": "string"},
+        "client_key_file": {"type": "string"},
+        "server_name": {"type": "string"}
+      }
+    },
+    "authenticated_endpoint": {
+      "anyOf": [
+        {"required": ["bearer_token_file"], "properties": {"bearer_token_file": {"type": "string", "minLength": 1}}},
+        {
+          "required": ["tls"],
+          "properties": {
+            "tls": {
+              "type": "object",
+              "required": ["client_cert_file", "client_key_file"],
+              "properties": {
+                "client_cert_file": {"type": "string", "minLength": 1},
+                "client_key_file": {"type": "string", "minLength": 1}
+              }
+            }
+          }
+        }
+      ]
+    },
+    "notification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url", "timeout", "retry_min", "retry_max", "tls"],
+      "allOf": [{"$ref": "#/$defs/authenticated_endpoint"}],
+      "properties": {
+        "url": {"$ref": "#/$defs/https_url"},
+        "bearer_token_file": {"type": "string"},
+        "timeout": {"$ref": "#/$defs/duration"},
+        "retry_min": {"$ref": "#/$defs/duration"},
+        "retry_max": {"$ref": "#/$defs/duration"},
+        "tls": {"$ref": "#/$defs/tls"}
+      }
+    },
+    "freshness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url", "max_age", "mode"],
+      "properties": {
+        "url": {"$ref": "#/$defs/https_url"},
+        "max_age": {"$ref": "#/$defs/duration"},
+        "mode": {"const": "prometheus_scalar_age"}
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "url", "tls"],
+      "allOf": [
+        {"$ref": "#/$defs/authenticated_endpoint"},
+        {
+          "if": {
+            "required": ["kind"],
+            "properties": {"kind": {"const": "prometheus"}}
+          },
+          "then": {"required": ["freshness"]}
+        }
+      ],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "kind": {"enum": ["heimdall", "prometheus", "alertmanager"]},
+        "url": {"$ref": "#/$defs/https_url"},
+        "bearer_token_file": {"type": "string"},
+        "tls": {"$ref": "#/$defs/tls"},
+        "freshness": {"$ref": "#/$defs/freshness"}
+      }
+    }
+  }
+}

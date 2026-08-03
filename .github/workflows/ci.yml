@@ -56,7 +56,7 @@ jobs:
       - run: go vet ./...
       - name: Go vulnerability scan
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
-      - run: go build -trimpath ./cmd/heimdall
+      - run: go build -trimpath ./cmd/heimdall ./cmd/heimdall-deadman
 
   container:
     runs-on: ubuntu-latest
@@ -74,6 +74,89 @@ jobs:
           docker run --rm --entrypoint /usr/local/bin/heimdall heimdall:ci version
           test "$(docker image inspect heimdall:ci --format '{{.Config.User}}')" = "65532:65532"
           test "$(docker image inspect heimdall:ci --format '{{json .Config.Healthcheck.Test}}')" = '["CMD","/usr/local/bin/heimdall","healthcheck"]'
+
+  observability:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Validate Prometheus and Alertmanager provisioning
+        run: ./deploy/observability/validate.sh
+      - name: Validate Core Compose topology
+        run: |
+          docker compose -f deploy/observability/compose.example.yaml config --quiet
+          test "$(docker compose -f deploy/observability/compose.example.yaml config --services | sort | tr '\n' ' ')" = "alertmanager prometheus "
+      - name: Validate macOS local Core override
+        run: |
+          docker compose \
+            -f deploy/observability/compose.example.yaml \
+            -f deploy/observability/compose.macos.example.yaml \
+            config --quiet
+          test "$(docker compose -f deploy/observability/compose.example.yaml -f deploy/observability/compose.macos.example.yaml config --services | sort | tr '\n' ' ')" = "alertmanager prometheus "
+      - name: Validate independent probe topology
+        run: |
+          docker compose -f deploy/observability/external-probe.example.yaml config --quiet
+      - name: Run Core runtime smoke
+        run: ./deploy/observability/smoke.sh
+      - name: Build and verify independent dead-man image
+        run: |
+          docker build \
+            -f deploy/observability/external-probe/Dockerfile \
+            -t heimdall-deadman:ci .
+          test "$(docker image inspect heimdall-deadman:ci --format '{{.Config.User}}')" = "65532:65532"
+      - name: Scan independent dead-man image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: heimdall-deadman:ci
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+          scanners: vuln,secret,misconfig
+
+  observability-sbom:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - name: prometheus
+            image: prom/prometheus@sha256:63805ebb8d2b3920190daf1cb14a60871b16fd38bed42b857a3182bc621f4996
+          - name: alertmanager
+            image: prom/alertmanager@sha256:27c475db5fb156cab31d5c18a4251ac7ed567746a2483ff264516437a39b15ba
+    steps:
+      - uses: actions/checkout@v7
+      - name: Generate SPDX SBOM with digest-pinned Syft
+        run: >-
+          docker run --rm
+          -v "$PWD:/output"
+          anchore/syft@sha256:bd5357d2cd087f03af748dac24df48bfbc1723080d78f75f69aca1f2d429060e
+          "registry:${{ matrix.image }}"
+          -o "spdx-json=/output/${{ matrix.name }}.spdx.json"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: observability-sbom-${{ matrix.name }}
+          path: ${{ matrix.name }}.spdx.json
+
+  deadman-sbom:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build independent dead-man image
+        run: >-
+          docker build
+          -f deploy/observability/external-probe/Dockerfile
+          -t heimdall-deadman:ci .
+      - name: Generate independent dead-man SPDX SBOM
+        run: >-
+          docker run --rm
+          -v "$PWD:/output"
+          -v /var/run/docker.sock:/var/run/docker.sock
+          anchore/syft@sha256:bd5357d2cd087f03af748dac24df48bfbc1723080d78f75f69aca1f2d429060e
+          docker:heimdall-deadman:ci
+          -o spdx-json=/output/independent-deadman.spdx.json
+      - uses: actions/upload-artifact@v6
+        with:
+          name: observability-sbom-independent-deadman
+          path: independent-deadman.spdx.json
 
   sdk-compatibility:
     runs-on: ubuntu-latest

@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://heimdall.example/schemas/deadman-event-v1.json",
+  "title": "Heimdall independent dead-man event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "event_id", "sequence", "probe_id", "environment", "region", "cluster", "kind", "observed_at", "heartbeat_ttl", "attempt"],
+  "properties": {
+    "schema_version": {"const": "heimdall.deadman.event/v1"},
+    "event_id": {"type": "string", "minLength": 1},
+    "sequence": {"type": "integer", "minimum": 1},
+    "probe_id": {"type": "string", "minLength": 1},
+    "environment": {"type": "string", "minLength": 1},
+    "region": {"type": "string", "minLength": 1},
+    "cluster": {"type": "string", "minLength": 1},
+    "kind": {"enum": ["heartbeat", "state_transition"]},
+    "target_id": {"type": "string"},
+    "target_kind": {"enum": ["", "heimdall", "prometheus", "alertmanager"]},
+    "state": {"enum": ["", "up", "down"]},
+    "observed_at": {"type": "string", "format": "date-time"},
+    "heartbeat_ttl": {"type": "string", "minLength": 1},
+    "reason_code": {"type": "string"},
+    "latency_ms": {"type": "integer", "minimum": 0},
+    "attempt": {"type": "integer", "minimum": 1}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"kind": {"const": "state_transition"}}},
+      "then": {
+        "required": ["target_id", "target_kind", "state"],
+        "properties": {
+          "target_id": {"type": "string", "minLength": 1},
+          "target_kind": {"enum": ["heimdall", "prometheus", "alertmanager"]},
+          "state": {"enum": ["up", "down"]}
+        }
+      },
+      "else": {
+        "not": {
+          "anyOf": [
+            {"required": ["target_id"]},
+            {"required": ["target_kind"]},
+            {"required": ["state"]}
+          ]
+        }
+      }
+    }
+  ]
+}

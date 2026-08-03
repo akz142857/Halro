@@ -76,7 +76,10 @@ func Default() Config {
 			MaxDelay:      Duration(5 * time.Second),
 			DedupCooldown: Duration(time.Minute),
 		},
-		Metrics: Metrics{Enabled: true, RequireAuth: true},
+		Metrics: Metrics{
+			Enabled: true, RequireAuth: true, MaxConcurrentScrapes: 2,
+			WriteTimeout: Duration(5 * time.Second),
+		},
 	}
 }
 

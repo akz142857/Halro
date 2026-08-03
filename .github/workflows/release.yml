@@ -146,6 +146,15 @@ jobs:
           go build -trimpath \
             -ldflags "-s -w -X github.com/akz142857/Heimdall/internal/buildinfo.Version=${RELEASE_VERSION} -X github.com/akz142857/Heimdall/internal/buildinfo.Commit=${RELEASE_COMMIT} -X github.com/akz142857/Heimdall/internal/buildinfo.Date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             -o "${package_dir}/heimdall" ./cmd/heimdall
+          go build -trimpath \
+            -ldflags "-s -w" \
+            -o "${package_dir}/heimdall-deadman" ./cmd/heimdall-deadman
+          cp deploy/observability/external-probe/config.example.yaml \
+            deploy/observability/external-probe/config.schema.json \
+            deploy/observability/external-probe/event.schema.json \
+            deploy/observability/external-probe/RECEIVER-CONTRACT.md \
+            deploy/observability/external-probe/heimdall-deadman.service \
+            "${package_dir}/"
           cp LICENSE NOTICE THIRD_PARTY_NOTICES.md README.md "${package_dir}/"
           tar -C release -czf "release/heimdall-${GOOS}-${GOARCH}.tar.gz" \
             "heimdall-${GOOS}-${GOARCH}"
@@ -174,10 +183,27 @@ jobs:
           docker run --rm --entrypoint /usr/local/bin/heimdall heimdall:${IMAGE_TAG} version
           test "$(docker image inspect heimdall:${IMAGE_TAG} --format '{{.Config.User}}')" = "65532:65532"
           docker save heimdall:${IMAGE_TAG} | gzip -n > heimdall-container.tar.gz
+          docker build \
+            -f deploy/observability/external-probe/Dockerfile \
+            --tag heimdall-deadman:${IMAGE_TAG} \
+            --tag heimdall-deadman:release .
+          test "$(docker image inspect heimdall-deadman:${IMAGE_TAG} --format '{{.Config.User}}')" = "65532:65532"
+          docker save heimdall-deadman:${IMAGE_TAG} | gzip -n > heimdall-deadman-container.tar.gz
+      - name: Scan release dead-man image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: heimdall-deadman:release
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+          scanners: vuln,secret,misconfig
       - uses: actions/upload-artifact@v4
         with:
           name: heimdall-container
-          path: heimdall-container.tar.gz
+          path: |
+            heimdall-container.tar.gz
+            heimdall-deadman-container.tar.gz
 
   provenance:
     needs: [binaries, container]

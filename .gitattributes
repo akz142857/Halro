@@ -2,5 +2,6 @@
 *.go text eol=lf
 *.{js,mjs,ts,tsx,json,yaml,yml,md} text eol=lf
 internal/webui/dist/** linguist-generated=true
+internal/webui/dist/** whitespace=-blank-at-eol
 web/package-lock.json linguist-generated=true
 tests/compatibility/node/package-lock.json linguist-generated=true

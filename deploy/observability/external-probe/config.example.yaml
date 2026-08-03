@@ -1,0 +1,63 @@
+# Install this file as /etc/heimdall-deadman/config.yaml on an independently
+# operated host. Replace every example hostname and secret/PKI path.
+probe_id: heimdall-prod-probe-a
+environment: production
+region: example-region-1
+cluster: heimdall-primary
+interval: 30s
+timeout: 5s
+heartbeat_ttl: 90s
+failures_to_down: 3
+successes_to_up: 2
+outbox_limit: 4096
+delivery_batch: 16
+state_file: /var/lib/heimdall-deadman/state.json
+audit_file: /var/log/heimdall-deadman/audit.jsonl
+
+notification:
+  url: https://deadman-receiver.independent.example/v1/events
+  bearer_token_file: /run/heimdall-deadman/notification-token
+  timeout: 10s
+  retry_min: 5s
+  retry_max: 5m
+  tls:
+    ca_file: /run/heimdall-deadman/notification-ca.pem
+    client_cert_file: /run/heimdall-deadman/notification-client.pem
+    client_key_file: /run/heimdall-deadman/notification-client.key
+    server_name: deadman-receiver.independent.example
+
+targets:
+  - id: heimdall-primary
+    kind: heimdall
+    url: https://heimdall-probe.internal.example/health/ready
+    bearer_token_file: /run/heimdall-deadman/heimdall-token
+    tls:
+      ca_file: /run/heimdall-deadman/target-ca.pem
+      client_cert_file: /run/heimdall-deadman/target-client.pem
+      client_key_file: /run/heimdall-deadman/target-client.key
+      server_name: heimdall-probe.internal.example
+  - id: prometheus-primary
+    kind: prometheus
+    url: https://prometheus-probe.internal.example/-/ready
+    bearer_token_file: /run/heimdall-deadman/prometheus-token
+    tls:
+      ca_file: /run/heimdall-deadman/target-ca.pem
+      client_cert_file: /run/heimdall-deadman/target-client.pem
+      client_key_file: /run/heimdall-deadman/target-client.key
+      server_name: prometheus-probe.internal.example
+    freshness:
+      mode: prometheus_scalar_age
+      # The API must return the finite age of a currently successful raw
+      # Heimdall scrape. No series, up != 1, NaN and infinities are failures.
+      # Keep the PromQL series stable; never place a timestamp in a label.
+      url: https://prometheus-probe.internal.example/api/v1/query?query=time%28%29-scalar%28max%28timestamp%28up%7Bjob%3D%22heimdall%22%7D%20%3D%3D%201%29%29%29
+      max_age: 2m
+  - id: alertmanager-primary
+    kind: alertmanager
+    url: https://alertmanager-probe.internal.example/-/ready
+    bearer_token_file: /run/heimdall-deadman/alertmanager-token
+    tls:
+      ca_file: /run/heimdall-deadman/target-ca.pem
+      client_cert_file: /run/heimdall-deadman/target-client.pem
+      client_key_file: /run/heimdall-deadman/target-client.key
+      server_name: alertmanager-probe.internal.example

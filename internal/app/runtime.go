@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -27,6 +30,7 @@ import (
 	"github.com/akz142857/Heimdall/internal/gatewayapi"
 	"github.com/akz142857/Heimdall/internal/id"
 	"github.com/akz142857/Heimdall/internal/ledger"
+	"github.com/akz142857/Heimdall/internal/metricsauth"
 	"github.com/akz142857/Heimdall/internal/provider"
 	"github.com/akz142857/Heimdall/internal/redaction"
 	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
@@ -67,6 +71,12 @@ type Runtime struct {
 	adminSettingsMu   sync.Mutex
 	adminIdentityMu   sync.Mutex
 	metricsTokenHash  [32]byte
+	metricsAuthorizer *metricsauth.Authorizer
+	metricsScrapes    chan struct{}
+	metricsAuthFailed atomic.Uint64
+	metricsBusy       atomic.Uint64
+	metricsRenderErrs atomic.Uint64
+	startedAt         time.Time
 	adminSessions     *adminauth.Manager
 	adminLoginMu      sync.Mutex
 	adminLogin        map[string]adminLoginWindow
@@ -110,14 +120,22 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 	}
 	defer clear(adminSessionKey)
 	var metricsTokenHash [32]byte
+	var metricsAuthorizer *metricsauth.Authorizer
 	if cfg.Metrics.Enabled && cfg.Metrics.RequireAuth {
-		metricsToken, err := vault.DeriveMetricsBearerToken(masterKey)
-		if err != nil {
-			clear(masterKey)
-			return fail(err)
+		if cfg.Metrics.CredentialFile != "" {
+			metricsAuthorizer, err = metricsauth.NewAuthorizer(cfg.Metrics.CredentialFile)
+			if err != nil {
+				return fail(fmt.Errorf("load metrics credentials: %w", err))
+			}
+		} else {
+			metricsToken, err := vault.DeriveMetricsBearerToken(masterKey)
+			if err != nil {
+				clear(masterKey)
+				return fail(err)
+			}
+			metricsTokenHash = sha256.Sum256(metricsToken)
+			clear(metricsToken)
 		}
-		metricsTokenHash = sha256.Sum256(metricsToken)
-		clear(metricsToken)
 	}
 	secretVault, err := vault.New(masterKey)
 	if err != nil {
@@ -340,33 +358,36 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		return fail(err)
 	}
 	runtime := &Runtime{
-		config:           cfg,
-		logger:           logger,
-		lock:             dataLock,
-		store:            metadata,
-		ledger:           ledgerLog,
-		state:            ledgerState,
-		status:           accountingStatus,
-		vault:            secretVault,
-		auth:             authSnapshot,
-		providers:        providerRegistry,
-		accounting:       accounting,
-		gateway:          gatewayHandler,
-		gatewayService:   gatewayService,
-		tokenGuard:       tokenGuard,
-		redactor:         redactor,
-		alerts:           alertDispatcher,
-		audit:            auditLog,
-		metricsTokenHash: metricsTokenHash,
-		adminSessions:    adminSessions,
-		adminLogin:       make(map[string]adminLoginWindow),
-		adminSetupRate:   make(map[string]adminLoginWindow),
-		setupToken:       setupToken,
-		setupTokenNeeded: setupRequiresToken(cfg),
-		usage:            usageAggregate,
-		usageCollector:   usageCollector,
-		usageExporter:    usageExporter,
-		usageLocation:    location,
+		config:            cfg,
+		logger:            logger,
+		lock:              dataLock,
+		store:             metadata,
+		ledger:            ledgerLog,
+		state:             ledgerState,
+		status:            accountingStatus,
+		vault:             secretVault,
+		auth:              authSnapshot,
+		providers:         providerRegistry,
+		accounting:        accounting,
+		gateway:           gatewayHandler,
+		gatewayService:    gatewayService,
+		tokenGuard:        tokenGuard,
+		redactor:          redactor,
+		alerts:            alertDispatcher,
+		audit:             auditLog,
+		metricsTokenHash:  metricsTokenHash,
+		metricsAuthorizer: metricsAuthorizer,
+		metricsScrapes:    make(chan struct{}, cfg.Metrics.MaxConcurrentScrapes),
+		startedAt:         time.Now(),
+		adminSessions:     adminSessions,
+		adminLogin:        make(map[string]adminLoginWindow),
+		adminSetupRate:    make(map[string]adminLoginWindow),
+		setupToken:        setupToken,
+		setupTokenNeeded:  setupRequiresToken(cfg),
+		usage:             usageAggregate,
+		usageCollector:    usageCollector,
+		usageExporter:     usageExporter,
+		usageLocation:     location,
 	}
 	if err := runtime.drainAdminMFAAuditIntents(ctx); err != nil {
 		auditLog.Close()
@@ -573,6 +594,14 @@ func (r *Runtime) Run(ctx context.Context) error {
 // keeps startup guidance and service-manager readiness signals from claiming
 // success when one of the ports cannot actually be opened.
 func (r *Runtime) RunWithReady(ctx context.Context, ready func() error) error {
+	var metricsTLSConfig *tls.Config
+	if r.config.Metrics.Enabled && r.config.Metrics.TLS.Enabled {
+		var err error
+		metricsTLSConfig, err = r.metricsTLSConfig()
+		if err != nil {
+			return err
+		}
+	}
 	servers := []*http.Server{
 		r.server("gateway", r.config.Server.GatewayListen, r.gatewayRouter()),
 		r.server("admin", r.config.Server.AdminListen, r.adminRouter()),
@@ -582,6 +611,7 @@ func (r *Runtime) RunWithReady(ctx context.Context, ready func() error) error {
 	}
 
 	type boundServer struct {
+		name     string
 		server   *http.Server
 		listener net.Listener
 	}
@@ -594,7 +624,13 @@ func (r *Runtime) RunWithReady(ctx context.Context, ready func() error) error {
 			}
 			return fmt.Errorf("bind listener %s: %w", server.Addr, err)
 		}
-		bound = append(bound, boundServer{server: server, listener: listener})
+		name := "gateway"
+		if server.Addr == r.config.Server.AdminListen {
+			name = "admin"
+		} else if server.Addr == r.config.Server.MetricsListen {
+			name = "metrics"
+		}
+		bound = append(bound, boundServer{name: name, server: server, listener: listener})
 	}
 	if ready != nil {
 		if err := ready(); err != nil {
@@ -611,7 +647,9 @@ func (r *Runtime) RunWithReady(ctx context.Context, ready func() error) error {
 		go func() {
 			r.logger.Info("listener started", "address", item.server.Addr)
 			var err error
-			if r.config.TLS.Enabled {
+			if item.name == "metrics" && r.config.Metrics.TLS.Enabled {
+				err = item.server.Serve(tls.NewListener(item.listener, metricsTLSConfig.Clone()))
+			} else if r.config.TLS.Enabled {
 				err = item.server.ServeTLS(item.listener, r.config.TLS.CertFile, r.config.TLS.KeyFile)
 			} else {
 				err = item.server.Serve(item.listener)
@@ -649,6 +687,28 @@ func (r *Runtime) RunWithReady(ctx context.Context, ready func() error) error {
 		}
 	}
 	return errors.Join(shutdownErrors...)
+}
+
+func (r *Runtime) metricsTLSConfig() (*tls.Config, error) {
+	certificate, err := tls.LoadX509KeyPair(r.config.Metrics.TLS.CertFile, r.config.Metrics.TLS.KeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("load metrics TLS keypair: %w", err)
+	}
+	caPayload, err := os.ReadFile(r.config.Metrics.TLS.ClientCAFile)
+	if err != nil {
+		return nil, fmt.Errorf("read metrics client CA: %w", err)
+	}
+	clientCAs := x509.NewCertPool()
+	if !clientCAs.AppendCertsFromPEM(caPayload) {
+		return nil, errors.New("metrics client CA contains no certificates")
+	}
+	return &tls.Config{
+		MinVersion:   tls.VersionTLS12,
+		Certificates: []tls.Certificate{certificate},
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientCAs:    clientCAs,
+		NextProtos:   []string{"h2", "http/1.1"},
+	}, nil
 }
 
 func (r *Runtime) Close() error {
@@ -881,13 +941,31 @@ func (r *Runtime) metricsRouter() http.Handler {
 	router.Get("/health/live", r.live)
 	router.Get("/metrics", func(writer http.ResponseWriter, request *http.Request) {
 		if r.config.Metrics.RequireAuth && !r.authorizeMetrics(request) {
+			r.metricsAuthFailed.Add(1)
 			writer.Header().Set("WWW-Authenticate", `Bearer realm="heimdall-metrics"`)
 			writeJSON(writer, http.StatusUnauthorized, map[string]any{
 				"error": "metrics authentication required",
 			})
 			return
 		}
-		r.writeMetrics(writer)
+		select {
+		case r.metricsScrapes <- struct{}{}:
+			defer func() { <-r.metricsScrapes }()
+		default:
+			r.metricsBusy.Add(1)
+			writeJSON(writer, http.StatusServiceUnavailable, map[string]any{
+				"error": "metrics scrape concurrency limit reached",
+			})
+			return
+		}
+		controller := http.NewResponseController(writer)
+		if err := controller.SetWriteDeadline(time.Now().Add(r.config.Metrics.WriteTimeout.Value())); err != nil {
+			r.logger.Warn("metrics response write deadline unavailable", "error", err)
+		}
+		if err := r.writeMetrics(writer); err != nil {
+			r.metricsRenderErrs.Add(1)
+			r.logger.Warn("metrics response write failed", "error", err)
+		}
 	})
 	return router
 }

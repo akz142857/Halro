@@ -1,0 +1,28 @@
+# Run this stack only on an independently operated host/failure domain.
+services:
+  heimdall-independent-deadman:
+    build:
+      context: ../..
+      dockerfile: deploy/observability/external-probe/Dockerfile
+    image: heimdall-deadman:local
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    command: [-config, /etc/heimdall-deadman/config.yaml]
+    volumes:
+      - ./external-probe/config.example.yaml:/etc/heimdall-deadman/config.yaml:ro
+      - /run/heimdall-deadman:/run/heimdall-deadman:ro
+      - deadman-state:/var/lib/heimdall-deadman
+      - deadman-audit:/var/log/heimdall-deadman
+    restart: always
+    mem_limit: 128m
+    cpus: 0.50
+    pids_limit: 64
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
+
+volumes:
+  deadman-state: {}
+  deadman-audit: {}

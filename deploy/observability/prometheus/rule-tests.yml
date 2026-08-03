@@ -1,0 +1,238 @@
+rule_files:
+  - recording-rules.yml
+  - alert-rules.yml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'heimdall_wal_append_errors_total{environment="test",region="local",cluster="standalone",instance="one"}'
+        values: '0 0 1 1 1'
+      - series: 'up{job="heimdall",expected_target="true",environment="test",region="local",cluster="standalone",instance="one"}'
+        values: '1 0 0 0 1'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: HeimdallTargetDown
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: HeimdallWALAppendErrors
+        exp_alerts:
+          - exp_labels:
+              alertname: HeimdallWALAppendErrors
+              category: accounting
+              cluster: standalone
+              environment: test
+              instance: one
+              owner: sre
+              region: local
+              service: heimdall
+              severity: critical
+            exp_annotations:
+              summary: Heimdall WAL append errors increased
+              runbook_url: /docs/observability/operations-runbook.md
+
+  - interval: 1m
+    input_series:
+      - series: 'up{job="heimdall",expected_target="true",environment="test",region="local",cluster="standalone",instance="one"}'
+        values: '1 0 0 0 1'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: HeimdallTargetDown
+        exp_alerts:
+          - exp_labels:
+              alertname: HeimdallTargetDown
+              category: availability
+              cluster: standalone
+              environment: test
+              expected_target: "true"
+              instance: one
+              job: heimdall
+              owner: sre
+              region: local
+              service: heimdall
+              severity: critical
+            exp_annotations:
+              summary: Heimdall Metrics target is down
+              runbook_url: /docs/observability/operations-runbook.md
+      - eval_time: 4m
+        alertname: HeimdallTargetDown
+        exp_alerts: []
+
+  - interval: 1m
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: HeimdallTargetDown
+        exp_alerts:
+          - exp_labels: {alertname: HeimdallTargetDown, category: availability, expected_target: "true", job: heimdall, owner: sre, service: heimdall, severity: critical}
+            exp_annotations: {summary: Heimdall Metrics target is down, runbook_url: /docs/observability/operations-runbook.md}
+      - eval_time: 3m
+        alertname: HeimdallDeploymentUnhealthy
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'heimdall_deployment_up{environment="test",region="local",cluster="standalone",deployment_id="a"}'
+        values: '0x10'
+      - series: 'heimdall_deployment_up{environment="test",region="local",cluster="standalone",deployment_id="b"}'
+        values: '0x10'
+      - series: 'heimdall_provider_active_requests{environment="test",region="local",cluster="standalone",provider_id="p"}'
+        values: '9x10'
+      - series: 'heimdall_provider_concurrency_limit{environment="test",region="local",cluster="standalone",provider_id="p"}'
+        values: '10x10'
+      - series: 'heimdall_provider_active_requests{environment="production",region="eu",cluster="primary",provider_id="q"}'
+        values: '18x10'
+      - series: 'heimdall_provider_concurrency_limit{environment="production",region="eu",cluster="primary",provider_id="q"}'
+        values: '20x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: HeimdallDeploymentUnhealthy
+        exp_alerts:
+          - exp_labels: {alertname: HeimdallDeploymentUnhealthy, category: provider, cluster: standalone, deployment_id: a, environment: test, owner: sre, region: local, service: heimdall, severity: warning}
+            exp_annotations: {summary: A probed Heimdall deployment is unhealthy, runbook_url: /docs/observability/operations-runbook.md}
+          - exp_labels: {alertname: HeimdallDeploymentUnhealthy, category: provider, cluster: standalone, deployment_id: b, environment: test, owner: sre, region: local, service: heimdall, severity: warning}
+            exp_annotations: {summary: A probed Heimdall deployment is unhealthy, runbook_url: /docs/observability/operations-runbook.md}
+      - eval_time: 6m
+        alertname: HeimdallMultipleDeploymentsUnhealthy
+        exp_alerts:
+          - exp_labels: {alertname: HeimdallMultipleDeploymentsUnhealthy, category: provider, cluster: standalone, environment: test, owner: sre, region: local, service: heimdall, severity: critical}
+            exp_annotations: {summary: Multiple Heimdall deployments are unhealthy, runbook_url: /docs/observability/operations-runbook.md}
+      - eval_time: 6m
+        alertname: HeimdallProviderCapacityPressure
+        exp_alerts:
+          - exp_labels: {alertname: HeimdallProviderCapacityPressure, category: provider, cluster: standalone, environment: test, owner: sre, provider_id: p, region: local, service: heimdall, severity: warning}
+            exp_annotations: {summary: Heimdall Provider concurrency capacity is nearly exhausted, runbook_url: /docs/observability/operations-runbook.md}
+          - exp_labels: {alertname: HeimdallProviderCapacityPressure, category: provider, cluster: primary, environment: production, owner: sre, provider_id: q, region: eu, service: heimdall, severity: warning}
+            exp_annotations: {summary: Heimdall Provider concurrency capacity is nearly exhausted, runbook_url: /docs/observability/operations-runbook.md}
+
+  - interval: 1m
+    input_series:
+      - series: 'heimdall_requests_total{environment="test",region="local",cluster="standalone",status="success"}'
+        values: '0+1x12'
+      - series: 'heimdall_requests_total{environment="test",region="local",cluster="standalone",status="error"}'
+        values: '0+1x12'
+      - series: 'heimdall_fallbacks_total{environment="test",region="local",cluster="standalone"}'
+        values: '0+1x12'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: HeimdallHighErrorRate
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: HeimdallFallbackSaturation
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'heimdall_requests_total{environment="test",region="local",cluster="standalone",status="success"}'
+        values: '0+10x5 0+10x12'
+      - series: 'heimdall_requests_total{environment="test",region="local",cluster="standalone",status="error"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: HeimdallHighErrorRate
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'heimdall_requests_total{environment="test",region="local",cluster="standalone",status="success"}'
+        values: '0+50x20'
+      - series: 'heimdall_requests_total{environment="test",region="local",cluster="standalone",status="error"}'
+        values: '0+10x20'
+      - series: 'heimdall_fallbacks_total{environment="test",region="local",cluster="standalone"}'
+        values: '0+20x20'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: HeimdallHighErrorRate
+        exp_alerts:
+          - exp_labels: {alertname: HeimdallHighErrorRate, category: traffic, cluster: standalone, environment: test, owner: sre, region: local, service: heimdall, severity: warning}
+            exp_annotations: {summary: Heimdall request error rate is elevated, runbook_url: /docs/observability/operations-runbook.md}
+      - eval_time: 11m
+        alertname: HeimdallFallbackSaturation
+        exp_alerts:
+          - exp_labels: {alertname: HeimdallFallbackSaturation, category: provider, cluster: standalone, environment: test, owner: sre, region: local, service: heimdall, severity: warning}
+            exp_annotations: {summary: Heimdall fallback rate is elevated, runbook_url: /docs/observability/operations-runbook.md}
+
+  - interval: 1m
+    input_series:
+      - series: 'heimdall_usage_analytics_lagging{environment="test",region="local",cluster="standalone",instance="one"}'
+        values: '1x20'
+      - series: 'heimdall_usage_queue_depth{environment="test",region="local",cluster="standalone",instance="one"}'
+        values: '90x20'
+      - series: 'heimdall_usage_queue_capacity{environment="test",region="local",cluster="standalone",instance="one"}'
+        values: '100x20'
+      - series: 'heimdall_alert_delivery_total{environment="test",region="local",cluster="standalone",status="failed"}'
+        values: '0+1x20'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: HeimdallUsageAnalyticsLagging
+        exp_alerts:
+          - exp_labels: {alertname: HeimdallUsageAnalyticsLagging, category: accounting, cluster: standalone, environment: test, instance: one, owner: sre, region: local, service: heimdall, severity: warning}
+            exp_annotations: {summary: Heimdall Usage analytics is behind the Ledger, runbook_url: /docs/observability/operations-runbook.md}
+      - eval_time: 6m
+        alertname: HeimdallLedgerQueueHigh
+        exp_alerts:
+          - exp_labels: {alertname: HeimdallLedgerQueueHigh, category: accounting, cluster: standalone, environment: test, instance: one, owner: sre, region: local, service: heimdall, severity: warning}
+            exp_annotations: {summary: Heimdall Ledger queue exceeds 75 percent, runbook_url: /docs/observability/operations-runbook.md}
+      - eval_time: 16m
+        alertname: HeimdallAlertDeliveryFailing
+        exp_alerts:
+          - exp_labels: {alertname: HeimdallAlertDeliveryFailing, category: delivery, cluster: standalone, environment: test, owner: sre, region: local, service: heimdall, severity: warning, status: failed}
+            exp_annotations: {summary: Heimdall alert delivery is failing, runbook_url: /docs/observability/operations-runbook.md}
+
+  - interval: 1m
+    input_series:
+      - series: 'alertmanager_notifications_failed_total{environment="test",region="local",cluster="standalone",instance="alertmanager"}'
+        values: '0 1x15'
+      - series: 'prometheus_rule_evaluation_failures_total{instance="prometheus"}'
+        values: '0 1x15'
+      - series: 'prometheus_config_last_reload_successful{instance="prometheus"}'
+        values: '0x15'
+      - series: 'prometheus_tsdb_storage_blocks_bytes{instance="prometheus"}'
+        values: '4000000000x15'
+      - series: 'prometheus_tsdb_wal_storage_size_bytes{instance="prometheus"}'
+        values: '100000000x15'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: AlertmanagerNotificationFailing
+        exp_alerts:
+          - exp_labels: {alertname: AlertmanagerNotificationFailing, category: platform, cluster: standalone, environment: test, instance: alertmanager, owner: sre, region: local, service: alertmanager, severity: critical}
+            exp_annotations: {summary: Alertmanager notifications are failing}
+      - eval_time: 4m
+        alertname: PrometheusRuleEvaluationFailing
+        exp_alerts:
+          - exp_labels: {alertname: PrometheusRuleEvaluationFailing, category: platform, instance: prometheus, owner: sre, service: prometheus, severity: warning}
+            exp_annotations: {summary: Prometheus rule evaluation is failing}
+      - eval_time: 3m
+        alertname: PrometheusConfigReloadFailing
+        exp_alerts:
+          - exp_labels: {alertname: PrometheusConfigReloadFailing, category: platform, instance: prometheus, owner: sre, service: prometheus, severity: critical}
+            exp_annotations: {summary: Prometheus configuration reload failed}
+      - eval_time: 11m
+        alertname: PrometheusTSDBDiskHigh
+        exp_alerts:
+          - exp_labels: {alertname: PrometheusTSDBDiskHigh, category: platform, instance: prometheus, owner: sre, service: prometheus, severity: warning}
+            exp_annotations: {summary: Prometheus TSDB and WAL exceed the local 3.5 GiB warning budget}
+
+  - interval: 1m
+    input_series:
+      - series: 'prometheus_tsdb_storage_blocks_bytes{environment="test",region="local",cluster="standalone",job="prometheus",instance="prometheus-critical"}'
+        values: '4300000000x10'
+      - series: 'prometheus_tsdb_wal_storage_size_bytes{environment="test",region="local",cluster="standalone",job="prometheus",instance="prometheus-critical"}'
+        values: '300000000x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: PrometheusTSDBDiskCritical
+        exp_alerts:
+          - exp_labels: {alertname: PrometheusTSDBDiskCritical, category: platform, cluster: standalone, environment: test, instance: prometheus-critical, job: prometheus, owner: sre, region: local, service: prometheus, severity: critical}
+            exp_annotations: {summary: Prometheus TSDB and WAL exceed the local 4.25 GiB critical budget}
+      - eval_time: 6m
+        alertname: PrometheusTSDBDiskHigh
+        exp_alerts: []
+
+  - interval: 1m
+    alert_rule_test:
+      - eval_time: 0m
+        alertname: Watchdog
+        exp_alerts:
+          - exp_labels: {alertname: Watchdog, category: deadman, owner: sre, service: heimdall, severity: none}
+            exp_annotations: {summary: Continuous signal for an independent dead-man monitor, runbook_url: /docs/observability/operations-runbook.md}

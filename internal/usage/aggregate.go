@@ -11,7 +11,13 @@ import (
 	"github.com/akz142857/Heimdall/internal/ledger"
 )
 
-const checkpointVersion = 2
+const checkpointVersion = 3
+
+const latencyBucketCount = 12
+
+var LatencyBucketsMillis = [latencyBucketCount]uint64{
+	10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000, 120000,
+}
 
 type AttemptEvent struct {
 	EventID              string    `json:"event_id"`
@@ -79,17 +85,19 @@ type Snapshot struct {
 }
 
 type Metrics struct {
-	RequestsSuccess      uint64
-	RequestsError        uint64
-	AttemptsSuccess      uint64
-	AttemptsError        uint64
-	InputTokens          uint64
-	OutputTokens         uint64
-	CostMicrosUSD        uint64
-	AttemptLatencyMillis uint64
-	RequestLatencyMillis uint64
-	Fallbacks            uint64
-	ActiveRequests       uint64
+	RequestsSuccess       uint64
+	RequestsError         uint64
+	AttemptsSuccess       uint64
+	AttemptsError         uint64
+	InputTokens           uint64
+	OutputTokens          uint64
+	CostMicrosUSD         uint64
+	AttemptLatencyMillis  uint64
+	RequestLatencyMillis  uint64
+	Fallbacks             uint64
+	ActiveRequests        uint64
+	AttemptLatencyBuckets [latencyBucketCount]uint64
+	RequestLatencyBuckets [latencyBucketCount]uint64
 }
 
 type requestAccumulator struct {
@@ -136,7 +144,7 @@ func RestoreCheckpoint(payload []byte) (*Aggregate, error) {
 	if err := json.Unmarshal(payload, &saved); err != nil {
 		return nil, fmt.Errorf("decode usage checkpoint: %w", err)
 	}
-	if saved.Version != checkpointVersion {
+	if saved.Version != 2 && saved.Version != checkpointVersion {
 		return nil, fmt.Errorf("usage checkpoint version %d is not supported", saved.Version)
 	}
 	if saved.Watermark.Sequence == 0 && (saved.Watermark.Offset != 0 || saved.Watermark.Generation != 0) {
@@ -264,6 +272,7 @@ func (a *Aggregate) Apply(record ledger.Record) error {
 		a.metrics.OutputTokens += uint64(event.ProviderOutputTokens)
 		a.metrics.CostMicrosUSD += uint64(event.CommittedMicrosUSD)
 		a.metrics.AttemptLatencyMillis += uint64(event.LatencyMillis)
+		recordLatency(&a.metrics.AttemptLatencyBuckets, uint64(event.LatencyMillis))
 		delete(a.started, event.AttemptID)
 	case ledger.EventRequestFinalized:
 		accumulator.summary.Outcome = event.Outcome
@@ -283,15 +292,26 @@ func (a *Aggregate) Apply(record ledger.Record) error {
 		}
 		if !accumulator.summary.AcceptedAt.IsZero() &&
 			event.OccurredAt.After(accumulator.summary.AcceptedAt) {
-			a.metrics.RequestLatencyMillis += uint64(event.OccurredAt.Sub(
+			latencyMillis := uint64(event.OccurredAt.Sub(
 				accumulator.summary.AcceptedAt,
 			).Milliseconds())
+			a.metrics.RequestLatencyMillis += latencyMillis
+			recordLatency(&a.metrics.RequestLatencyBuckets, latencyMillis)
 		}
 		a.metrics.Fallbacks += uint64(accumulator.summary.Fallbacks)
 	}
 	a.eventIDs[event.EventID] = struct{}{}
 	a.watermark = ledger.Watermark{Generation: 1, Offset: record.Offset, Sequence: record.Sequence}
 	return nil
+}
+
+func recordLatency(buckets *[latencyBucketCount]uint64, latencyMillis uint64) {
+	for index, upperBound := range LatencyBucketsMillis {
+		if latencyMillis <= upperBound {
+			buckets[index]++
+			return
+		}
+	}
 }
 
 func (a *Aggregate) Metrics() Metrics {

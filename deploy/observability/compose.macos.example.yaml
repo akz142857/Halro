@@ -1,0 +1,11 @@
+# Local macOS/OrbStack or Docker Desktop override. This changes only the host
+# Secret source; containers still receive files at /run/secrets. Do not use
+# this /private/tmp path as a production Secret Store.
+services:
+  prometheus:
+    volumes:
+      - /private/tmp/heimdall-observability:/run/secrets:ro
+
+  alertmanager:
+    volumes:
+      - /private/tmp/heimdall-observability:/run/secrets:ro

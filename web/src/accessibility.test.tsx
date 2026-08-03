@@ -68,6 +68,6 @@ describe("admin accessibility baseline", () => {
     const nextPassword = document.querySelector<HTMLInputElement>('input[autocomplete="new-password"]');
     expect(nextPassword).not.toBeNull();
     const description = nextPassword!.getAttribute("aria-describedby");
-    expect(document.getElementById(description!)).toHaveTextContent(/12/);
+    expect(document.getElementById(description!)).toHaveTextContent(/8/);
   });
 });

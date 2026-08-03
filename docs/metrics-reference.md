@@ -1,25 +1,50 @@
 # Metrics reference
 
 The dedicated Metrics listener exposes Prometheus text format at `/metrics`.
+It binds to loopback by default and enforces a bounded concurrent scrape count
+and write deadline.
 
-Derivative Usage lag is reported separately from the durable Ledger queue:
+## Authentication
 
-- `heimdall_usage_analytics_queue_depth` — records awaiting aggregation;
-- `heimdall_usage_analytics_dropped_total` — notifications dropped from the
-  bounded derivative queue (recoverable from Ledger);
-- `heimdall_usage_analytics_lagging` — `1` until watermark catch-up succeeds.
-It binds to loopback by default. When `metrics.require_auth` is true, obtain
-the deterministic, purpose-separated bearer token locally:
+Development and upgrade-compatible loopback installations may use the legacy,
+purpose-separated token derived from the Master Key:
 
 ```text
 heimdall metrics token --config ./config.yaml
 ```
 
-Configure Prometheus with `Authorization: Bearer <token>`. The token is derived
-from the master key under a metrics-only HKDF domain, is never stored in YAML,
-and is compared by SHA-256 in constant time. Treat it as a Secret.
+Production uses `metrics.credential_file`. Initialize or rotate it offline
+from shell history-safe automation and redirect stdout directly into the
+Prometheus secret store:
 
-Implemented metrics:
+```text
+heimdall metrics rotate --config ./config.yaml --overlap 10m
+heimdall metrics list --config ./config.yaml
+heimdall metrics revoke --config ./config.yaml --version 1
+heimdall metrics verify-audit --config ./config.yaml
+```
+
+The credential file stores SHA-256 hashes, version/epoch, lifecycle state, and
+timestamps, never plaintext tokens. Rotation permits one active token and
+bounded retiring tokens; revocation is independent of the Master Key and is
+enforced on the next request without restarting Heimdall. A separate append-only
+revocation ledger prevents an older credential-file restore from reauthorizing
+a revoked version. Credential, revocation, audit, and lock files are mode
+`0600`; the first three are backed up as security state. Rotation and
+revocation are serialized by an OS file lock and append secret-free hash-chained audit
+events; `verify-audit` detects local deletion, rewriting, truncation, reordering,
+and missing lifecycle events before the latest chain hash is anchored in an
+independent production audit platform.
+
+Configure Prometheus with an `Authorization: Bearer` credential file. Do not put
+the token in YAML, environment variables, process arguments, logs, screenshots,
+or artifacts.
+
+Non-loopback Metrics requires a versioned credential file and dedicated mutual
+TLS under `metrics.tls`, including a client CA. A private network alone is not
+an authentication boundary.
+
+## Exported metrics
 
 | Metric | Type | Labels |
 |---|---|---|
@@ -29,17 +54,42 @@ Implemented metrics:
 | `heimdall_cost_usd_total` | counter | none |
 | `heimdall_request_duration_seconds` | summary sum/count | none |
 | `heimdall_attempt_duration_seconds` | summary sum/count | none |
+| `heimdall_request_latency_seconds` | classic histogram | `le` |
+| `heimdall_attempt_latency_seconds` | classic histogram | `le` |
 | `heimdall_active_requests` | gauge | none |
-| `heimdall_process_goroutines` | gauge | none |
 | `heimdall_fallbacks_total` | counter | none |
 | `heimdall_usage_queue_depth` | gauge | none |
 | `heimdall_usage_queue_capacity` | gauge | none |
 | `heimdall_wal_append_errors_total` | counter | none |
+| `heimdall_usage_analytics_queue_depth` | gauge | none |
+| `heimdall_usage_analytics_dropped_total` | counter | none |
+| `heimdall_usage_analytics_lagging` | gauge | none |
 | `heimdall_alert_delivery_total` | counter | `status` |
 | `heimdall_alert_queue_depth` | gauge | none |
+| `heimdall_token_guard_events_dropped_total` | counter | none |
 | `heimdall_provider_up` | gauge | `provider_type` |
+| `heimdall_policy_rejections_total` | counter | `reason` |
+| `heimdall_provider_active_requests` | gauge | `provider_id` |
+| `heimdall_provider_concurrency_limit` | gauge | `provider_id` |
+| `heimdall_deployment_active_requests` | gauge | `deployment_id` |
+| `heimdall_deployment_concurrency_limit` | gauge | `deployment_id` |
+| `heimdall_deployment_up` | gauge | `deployment_id` |
+| `heimdall_build_info` | gauge | `version`, `commit` |
+| `heimdall_metrics_auth_failures_total` | counter | none |
+| `heimdall_metrics_scrape_rejected_total` | counter | none |
+| `heimdall_metrics_render_errors_total` | counter | none |
+| `heimdall_process_goroutines` | gauge | none |
+| `go_goroutines` | gauge | none |
+| `go_memstats_heap_alloc_bytes` | gauge | none |
+| `go_memstats_gc_cycles_total` | counter | none |
+| `process_start_time_seconds` | gauge | none |
+
+Histogram buckets are 10, 25, 50, 100, 250, and 500 milliseconds, then 1,
+2.5, 5, 10, 30, and 120 seconds plus `+Inf`. They are derived from Ledger
+events and persisted in the Usage checkpoint, so replay and catch-up preserve
+the exact distribution.
 
 User-controlled Project, Key, Route, model, request ID, source IP, and raw error
-values are deliberately excluded from labels. `provider_up` currently means
-that an adapter loaded successfully and remains eligible for passive routing;
-active health-probe semantics will be added separately.
+values are deliberately excluded. Provider/Deployment IDs are bounded managed
+identifiers. `heimdall_deployment_up` is absent until the first active probe;
+absence must not be interpreted as healthy.

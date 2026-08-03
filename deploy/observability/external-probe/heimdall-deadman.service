@@ -1,0 +1,40 @@
+[Unit]
+Description=Heimdall independent dead-man monitor
+Documentation=https://github.com/akz142857/Heimdall
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=heimdall-deadman
+Group=heimdall-deadman
+ExecStartPre=/usr/local/bin/heimdall-deadman -config /etc/heimdall-deadman/config.yaml -check-config
+ExecStart=/usr/local/bin/heimdall-deadman -config /etc/heimdall-deadman/config.yaml
+Restart=always
+RestartSec=5s
+RuntimeDirectory=heimdall-deadman
+RuntimeDirectoryMode=0700
+StateDirectory=heimdall-deadman
+StateDirectoryMode=0700
+LogsDirectory=heimdall-deadman
+LogsDirectoryMode=0700
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+ReadOnlyPaths=/etc/heimdall-deadman
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

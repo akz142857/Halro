@@ -51,9 +51,14 @@ make start
 Admin: http://127.0.0.1:8081/admin/setup
 ```
 
-打开页面并设置管理员用户名和至少 12 个字符的密码。密码只以 Argon2id 哈希
+打开页面并设置管理员用户名和至少 8 个字符的密码，建议使用易记的长密码短语。密码只以 Argon2id 哈希
 保存在本机元数据中，不会写入 `config.yaml`。成功后初始化入口永久关闭，
 浏览器会自动创建安全会话并进入控制台。
+
+兼容性说明：管理员密码下限由旧规则的 12 个 UTF-8 字节调整为 8 个
+Unicode 码点。这是明确的产品策略变更，不是等价重构：纯 ASCII 密码的
+最低字符数从 12 降为 8，而中文等多字节密码不再因编码字节数获得更低的
+字符要求。生产环境仍建议使用明显长于最低限制的密码短语。
 
 自动初始化会生成：
 
@@ -364,6 +369,16 @@ unset HEIMDALL_METRICS_TOKEN
 ```
 
 完整指标说明见 [Metrics reference](metrics-reference.md)。指标标签刻意排除 Project、Key、Request ID、原始模型和 IP 等高基数或敏感数据。
+
+生产环境应配置 `metrics.credential_file`，使用以下命令独立轮换和吊销指标凭据，而不旋转 Master Key：
+
+```bash
+./bin/heimdall metrics rotate --config ./config.yaml --overlap 10m
+./bin/heimdall metrics list --config ./config.yaml
+./bin/heimdall metrics revoke --config ./config.yaml --version 1
+```
+
+`rotate` 只在标准输出显示一次新 Token，应直接写入 Secret 文件，不能进入 shell history、环境变量或日志。非回环 Metrics listener 还必须配置 `metrics.tls` 双向 TLS 和 Client CA。
 
 ## 9. Key 生命周期
 

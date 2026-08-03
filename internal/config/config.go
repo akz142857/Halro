@@ -138,8 +138,19 @@ type Security struct {
 }
 
 type Metrics struct {
-	Enabled     bool `yaml:"enabled"`
-	RequireAuth bool `yaml:"require_auth"`
+	Enabled              bool       `yaml:"enabled"`
+	RequireAuth          bool       `yaml:"require_auth"`
+	CredentialFile       string     `yaml:"credential_file"`
+	MaxConcurrentScrapes int        `yaml:"max_concurrent_scrapes"`
+	WriteTimeout         Duration   `yaml:"write_timeout"`
+	TLS                  MetricsTLS `yaml:"tls"`
+}
+
+type MetricsTLS struct {
+	Enabled      bool   `yaml:"enabled"`
+	CertFile     string `yaml:"cert_file"`
+	KeyFile      string `yaml:"key_file"`
+	ClientCAFile string `yaml:"client_ca_file"`
 }
 
 type LoadOptions struct {
@@ -206,6 +217,20 @@ func (c *Config) Normalize() error {
 			return fmt.Errorf("tls.key_file: %w", err)
 		}
 	}
+	for name, value := range map[string]*string{
+		"metrics.credential_file":    &c.Metrics.CredentialFile,
+		"metrics.tls.cert_file":      &c.Metrics.TLS.CertFile,
+		"metrics.tls.key_file":       &c.Metrics.TLS.KeyFile,
+		"metrics.tls.client_ca_file": &c.Metrics.TLS.ClientCAFile,
+	} {
+		if *value == "" {
+			continue
+		}
+		*value, err = cleanAbsolutePath(*value)
+		if err != nil {
+			return fmt.Errorf("%s: %w", name, err)
+		}
+	}
 	if c.Retry.MaxAttemptsPerTarget == 0 {
 		c.Retry.MaxAttemptsPerTarget = 2
 	}
@@ -217,6 +242,12 @@ func (c *Config) Normalize() error {
 	}
 	if c.CircuitBreaker.ConsecutiveFailures == 0 {
 		c.CircuitBreaker.ConsecutiveFailures = 5
+	}
+	if c.Metrics.MaxConcurrentScrapes == 0 {
+		c.Metrics.MaxConcurrentScrapes = 2
+	}
+	if c.Metrics.WriteTimeout == 0 {
+		c.Metrics.WriteTimeout = Duration(5 * time.Second)
 	}
 	if c.Gateway.HealthProbeInterval == 0 {
 		c.Gateway.HealthProbeInterval = Duration(30 * time.Second)
@@ -309,7 +340,33 @@ func (c Config) Validate(opts LoadOptions) error {
 	problems = append(problems, validateListener("server.gateway_listen", c.Server.GatewayListen, c.TLS.Enabled, opts.AllowInsecurePublicGateway)...)
 	problems = append(problems, validateListener("server.admin_listen", c.Server.AdminListen, c.TLS.Enabled, false)...)
 	if c.Metrics.Enabled {
-		problems = append(problems, validateListener("server.metrics_listen", c.Server.MetricsListen, c.TLS.Enabled, false)...)
+		metricsTLSEnabled := c.Metrics.TLS.Enabled
+		problems = append(problems, validateListener("server.metrics_listen", c.Server.MetricsListen, metricsTLSEnabled, false)...)
+		metricsHost, _, metricsAddressErr := net.SplitHostPort(c.Server.MetricsListen)
+		if metricsAddressErr == nil && !listenerHostIsLoopback(metricsHost) {
+			if c.Metrics.CredentialFile == "" {
+				problems = append(problems, errors.New("non-loopback metrics listener requires metrics.credential_file"))
+			}
+			if !c.Metrics.TLS.Enabled {
+				problems = append(problems, errors.New("non-loopback metrics listener requires dedicated metrics.tls mutual authentication"))
+			}
+		}
+		if c.Metrics.CredentialFile != "" && !c.Metrics.RequireAuth {
+			problems = append(problems, errors.New("metrics.credential_file requires metrics.require_auth"))
+		}
+		if c.Metrics.MaxConcurrentScrapes < 1 || c.Metrics.MaxConcurrentScrapes > 32 {
+			problems = append(problems, errors.New("metrics.max_concurrent_scrapes must be between 1 and 32"))
+		}
+		if c.Metrics.WriteTimeout <= 0 || c.Metrics.WriteTimeout > Duration(30*time.Second) {
+			problems = append(problems, errors.New("metrics.write_timeout must be between zero and 30 seconds"))
+		}
+		if c.Metrics.TLS.Enabled {
+			if c.Metrics.TLS.CertFile == "" || c.Metrics.TLS.KeyFile == "" || c.Metrics.TLS.ClientCAFile == "" {
+				problems = append(problems, errors.New("metrics.tls cert_file, key_file, and client_ca_file are required when enabled"))
+			}
+		} else if c.Metrics.TLS.CertFile != "" || c.Metrics.TLS.KeyFile != "" || c.Metrics.TLS.ClientCAFile != "" {
+			problems = append(problems, errors.New("metrics.tls files cannot be set while metrics.tls is disabled"))
+		}
 	}
 	listeners := map[string]string{
 		"gateway": c.Server.GatewayListen,

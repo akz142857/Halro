@@ -8,6 +8,7 @@ import { Field } from "./components";
 import type { Session } from "./types";
 import { LanguageSelect } from "./LanguageSelect";
 import { localizedError } from "./i18n/errors";
+import { MAX_PASSWORD_BYTES, MIN_PASSWORD_CHARACTERS, passwordByteCount, passwordCharacterCount } from "./password";
 
 type SetupValue = { username: string; password: string; confirmation: string; setupToken: string };
 
@@ -24,10 +25,10 @@ export function Setup({
   const schema = useMemo(() => z.object({
     username: z.string().trim().min(1, t("auth.usernameRequired")).max(128),
     password: z.string()
-      .refine((value) => new TextEncoder().encode(value).length >= 12, t("auth.passwordMin"))
-      .refine((value) => new TextEncoder().encode(value).length <= 1024, t("auth.passwordMax")),
+      .refine((value) => passwordCharacterCount(value) >= MIN_PASSWORD_CHARACTERS, t("auth.passwordMin"))
+      .refine((value) => passwordByteCount(value) <= MAX_PASSWORD_BYTES, t("auth.passwordMax")),
     confirmation: z.string().min(1, t("auth.confirmRequired"))
-      .refine((value) => new TextEncoder().encode(value).length <= 1024, t("auth.passwordMax")),
+      .refine((value) => passwordByteCount(value) <= MAX_PASSWORD_BYTES, t("auth.passwordMax")),
     setupToken: z.string().max(128),
   }).refine((value) => value.password === value.confirmation, {
     path: ["confirmation"], message: t("auth.passwordMismatch"),

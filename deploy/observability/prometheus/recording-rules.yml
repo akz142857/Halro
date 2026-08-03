@@ -1,0 +1,52 @@
+groups:
+  - name: heimdall-recording
+    interval: 15s
+    rules:
+      - record: heimdall:requests:rate5m
+        expr: >-
+          sum by (environment, region, cluster)
+          (rate(heimdall_requests_total[5m]))
+      - record: heimdall:requests_errors:ratio5m
+        expr: >-
+          sum by (environment, region, cluster)
+          (rate(heimdall_requests_total{status="error"}[5m]))
+          /
+          clamp_min(sum by (environment, region, cluster)
+          (rate(heimdall_requests_total[5m])), 0.001)
+      - record: heimdall:request_duration:mean5m
+        expr: >-
+          sum by (environment, region, cluster)
+          (rate(heimdall_request_duration_seconds_sum[5m]))
+          /
+          clamp_min(sum by (environment, region, cluster)
+          (rate(heimdall_request_duration_seconds_count[5m])), 0.001)
+      - record: heimdall:request_duration_instance:mean5m
+        expr: >-
+          sum by (environment, region, cluster, instance)
+          (rate(heimdall_request_duration_seconds_sum[5m]))
+          /
+          clamp_min(sum by (environment, region, cluster, instance)
+          (rate(heimdall_request_duration_seconds_count[5m])), 0.001)
+      - record: heimdall:ledger_queue:ratio
+        expr: >-
+          (heimdall_usage_queue_depth / heimdall_usage_queue_capacity)
+          and on (environment, region, cluster, instance)
+          (heimdall_usage_queue_capacity > 0)
+      - record: heimdall:fallbacks:ratio5m
+        expr: >-
+          sum by (environment, region, cluster)
+          (rate(heimdall_fallbacks_total[5m]))
+          /
+          clamp_min(sum by (environment, region, cluster)
+          (rate(heimdall_requests_total[5m])), 0.001)
+      - record: heimdall:deployments_unhealthy:count
+        expr: >-
+          count by (environment, region, cluster)
+          (heimdall_deployment_up == 0)
+      - record: heimdall:provider_capacity:ratio
+        expr: >-
+          max by (environment, region, cluster, provider_id)
+          (heimdall_provider_active_requests
+          / heimdall_provider_concurrency_limit)
+          and on (environment, region, cluster, provider_id)
+          (heimdall_provider_concurrency_limit > 0)

@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import QRCode from "qrcode";
+import { MIN_PASSWORD_CHARACTERS, passwordCharacterCount } from "../password";
 import { api } from "../api";
 import { ErrorState, Field, Loading, Modal, PageHeader, StatusDot } from "../components";
 import { applyPreference } from "../i18n";
@@ -227,7 +228,7 @@ export function PasswordChangeForm() {
   const submit = (event: FormEvent) => {
     event.preventDefault();
     setValidationError("");
-    if (new TextEncoder().encode(newPassword).length < 12) {
+    if (passwordCharacterCount(newPassword) < MIN_PASSWORD_CHARACTERS) {
       setValidationError(t("settings.passwordTooShort"));
       return;
     }

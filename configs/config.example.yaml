@@ -76,3 +76,11 @@ security:
 metrics:
   enabled: true
   require_auth: true
+  credential_file: ""
+  max_concurrent_scrapes: 2
+  write_timeout: 5s
+  tls:
+    enabled: false
+    cert_file: ""
+    key_file: ""
+    client_ca_file: ""

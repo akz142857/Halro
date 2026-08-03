@@ -34,6 +34,28 @@ describe("first-run setup", () => {
     expect(complete).toHaveBeenCalledWith(session);
   });
 
+  it("counts Unicode characters instead of UTF-8 bytes", async () => {
+    const setup = vi.spyOn(api, "setupAdmin").mockResolvedValue({
+      username: "admin",
+      locale: "system",
+      csrf_token: "csrf",
+      absolute_expires_at: "2026-08-02T00:00:00Z",
+      idle_expires_at: "2026-08-01T01:00:00Z",
+    });
+    render(<Setup tokenRequired={false} onSuccess={vi.fn()} onAlreadyComplete={vi.fn()} />);
+
+    fireEvent.change(screen.getByLabelText(/^管理员密码/), { target: { value: "密密密密密密密" } });
+    fireEvent.change(screen.getByLabelText(/^确认密码/), { target: { value: "密密密密密密密" } });
+    fireEvent.click(screen.getByRole("button", { name: /创建管理员/ }));
+    expect(await screen.findByText("密码至少需要 8 个字符")).toBeInTheDocument();
+    expect(setup).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText(/^管理员密码/), { target: { value: "密密密密密密密密" } });
+    fireEvent.change(screen.getByLabelText(/^确认密码/), { target: { value: "密密密密密密密密" } });
+    fireEvent.click(screen.getByRole("button", { name: /创建管理员/ }));
+    await waitFor(() => expect(setup).toHaveBeenCalledWith("admin", "密密密密密密密密", "密密密密密密密密", ""));
+  });
+
   it("requires the transient token when the admin listener is public", async () => {
     const setup = vi.spyOn(api, "setupAdmin");
     render(<Setup tokenRequired onSuccess={vi.fn()} onAlreadyComplete={vi.fn()} />);

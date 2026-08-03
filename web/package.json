@@ -4,11 +4,11 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build && node scripts/check-bundle.mjs && node scripts/check-artifacts.mjs",
+    "dev": "vite --config vite.config.ts",
+    "build": "tsc -b && vite build --config vite.config.ts && node scripts/check-bundle.mjs && node scripts/check-artifacts.mjs",
     "typecheck": "tsc -b --pretty false",
-    "test": "vitest run",
-    "test:watch": "vitest",
+    "test": "vitest run --config vite.config.ts",
+    "test:watch": "vitest --config vite.config.ts",
     "check:bundle": "node scripts/check-bundle.mjs",
     "check:artifacts": "node scripts/check-artifacts.mjs"
   },
