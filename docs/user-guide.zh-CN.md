@@ -365,6 +365,16 @@ unset HEIMDALL_METRICS_TOKEN
 
 完整指标说明见 [Metrics reference](metrics-reference.md)。指标标签刻意排除 Project、Key、Request ID、原始模型和 IP 等高基数或敏感数据。
 
+生产环境应配置 `metrics.credential_file`，使用以下命令独立轮换和吊销指标凭据，而不旋转 Master Key：
+
+```bash
+./bin/heimdall metrics rotate --config ./config.yaml --overlap 10m
+./bin/heimdall metrics list --config ./config.yaml
+./bin/heimdall metrics revoke --config ./config.yaml --version 1
+```
+
+`rotate` 只在标准输出显示一次新 Token，应直接写入 Secret 文件，不能进入 shell history、环境变量或日志。非回环 Metrics listener 还必须配置 `metrics.tls` 双向 TLS 和 Client CA。
+
 ## 9. Key 生命周期
 
 - Provider Secret 只通过 Credential 管理，密文使用 audience-bound AEAD；

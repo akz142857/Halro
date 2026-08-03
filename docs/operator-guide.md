@@ -73,6 +73,14 @@ groups are:
 - `security`: private egress and trusted proxy policy;
 - `metrics`: exporter enablement and authentication requirement.
 
+Metrics also supports `credential_file`, bounded scrapes/write timeout, and a
+dedicated mutual-TLS listener. The legacy Master-Key-derived token is suitable
+only for loopback development and upgrade compatibility. Production must set a
+versioned credential file, initialize it with `heimdall metrics rotate`, and
+use `metrics.tls` for any non-loopback listener. Rotate by installing the new
+one-time token in Prometheus, verifying two successful scrape intervals, then
+revoking the retiring version. See `docs/observability/operations-runbook.md`.
+
 Retry limits do not override Heimdall's ambiguity boundary. If an upstream
 request might already have executed, Heimdall records a conservative estimated
 settlement and returns the failure without retrying or switching Provider. Safe

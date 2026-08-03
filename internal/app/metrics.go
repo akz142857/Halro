@@ -4,18 +4,25 @@ import (
 	"bufio"
 	"crypto/sha256"
 	"crypto/subtle"
+	"errors"
 	"fmt"
 	"net/http"
 	"runtime"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/akz142857/Heimdall/internal/buildinfo"
 	"github.com/akz142857/Heimdall/internal/config"
+	"github.com/akz142857/Heimdall/internal/usage"
 	"github.com/akz142857/Heimdall/internal/vault"
 )
 
 func MetricsToken(cfg config.Config) ([]byte, error) {
+	if cfg.Metrics.CredentialFile != "" {
+		return nil, errors.New("versioned metrics credentials are enabled; use metrics rotate")
+	}
 	masterKey, err := vault.LoadMasterKey(cfg.Storage.MasterKeyFile)
 	if err != nil {
 		return nil, err
@@ -33,11 +40,19 @@ func (r *Runtime) authorizeMetrics(request *http.Request) bool {
 	if token == "" {
 		return false
 	}
+	if r.config.Metrics.CredentialFile != "" {
+		authorized, err := r.metricsAuthorizer.Authorize(token, time.Now())
+		if err != nil {
+			r.logger.Error("metrics credential authorization failed", "error", err)
+			return false
+		}
+		return authorized
+	}
 	hash := sha256.Sum256([]byte(token))
 	return subtle.ConstantTimeCompare(hash[:], r.metricsTokenHash[:]) == 1
 }
 
-func (r *Runtime) writeMetrics(writer http.ResponseWriter) {
+func (r *Runtime) writeMetrics(writer http.ResponseWriter) error {
 	usageMetrics := r.usage.Metrics()
 	ledgerStats := r.ledger.Stats()
 	collectorStats := r.usageCollector.Stats()
@@ -47,7 +62,6 @@ func (r *Runtime) writeMetrics(writer http.ResponseWriter) {
 	writer.Header().Set("Cache-Control", "no-store")
 	writer.WriteHeader(http.StatusOK)
 	output := bufio.NewWriter(writer)
-	defer output.Flush()
 
 	metricHeader(output, "heimdall_requests_total", "counter", "Completed Gateway requests.")
 	fmt.Fprintf(output, "heimdall_requests_total{status=\"success\"} %d\n", usageMetrics.RequestsSuccess)
@@ -70,10 +84,36 @@ func (r *Runtime) writeMetrics(writer http.ResponseWriter) {
 	fmt.Fprintf(output, "heimdall_attempt_duration_seconds_sum %s\n",
 		millisecondsSeconds(usageMetrics.AttemptLatencyMillis))
 	fmt.Fprintf(output, "heimdall_attempt_duration_seconds_count %d\n", attemptCount)
+	writeLatencyHistogram(output, "heimdall_request_latency_seconds",
+		"Completed Gateway request latency distribution.", usageMetrics.RequestLatencyBuckets,
+		usageMetrics.RequestLatencyMillis, requestCount)
+	writeLatencyHistogram(output, "heimdall_attempt_latency_seconds",
+		"Completed Provider attempt latency distribution.", usageMetrics.AttemptLatencyBuckets,
+		usageMetrics.AttemptLatencyMillis, attemptCount)
 	metricHeader(output, "heimdall_active_requests", "gauge", "Requests accepted but not finalized.")
 	fmt.Fprintf(output, "heimdall_active_requests %d\n", usageMetrics.ActiveRequests)
 	metricHeader(output, "heimdall_process_goroutines", "gauge", "Current goroutines in the Heimdall process.")
 	fmt.Fprintf(output, "heimdall_process_goroutines %d\n", runtime.NumGoroutine())
+	metricHeader(output, "go_goroutines", "gauge", "Number of goroutines that currently exist.")
+	fmt.Fprintf(output, "go_goroutines %d\n", runtime.NumGoroutine())
+	var memory runtime.MemStats
+	runtime.ReadMemStats(&memory)
+	metricHeader(output, "go_memstats_heap_alloc_bytes", "gauge", "Bytes of allocated heap objects.")
+	fmt.Fprintf(output, "go_memstats_heap_alloc_bytes %d\n", memory.HeapAlloc)
+	metricHeader(output, "go_memstats_gc_cycles_total", "counter", "Completed garbage collection cycles.")
+	fmt.Fprintf(output, "go_memstats_gc_cycles_total %d\n", memory.NumGC)
+	metricHeader(output, "process_start_time_seconds", "gauge", "Start time of the process since unix epoch in seconds.")
+	fmt.Fprintf(output, "process_start_time_seconds %d\n", r.startedAt.Unix())
+	build := buildinfo.Current()
+	metricHeader(output, "heimdall_build_info", "gauge", "Heimdall build information.")
+	fmt.Fprintf(output, "heimdall_build_info{version=%s,commit=%s} 1\n",
+		strconv.Quote(build.Version), strconv.Quote(build.Commit))
+	metricHeader(output, "heimdall_metrics_auth_failures_total", "counter", "Rejected Metrics authentication attempts.")
+	fmt.Fprintf(output, "heimdall_metrics_auth_failures_total %d\n", r.metricsAuthFailed.Load())
+	metricHeader(output, "heimdall_metrics_scrape_rejected_total", "counter", "Metrics scrapes rejected by the concurrency bound.")
+	fmt.Fprintf(output, "heimdall_metrics_scrape_rejected_total %d\n", r.metricsBusy.Load())
+	metricHeader(output, "heimdall_metrics_render_errors_total", "counter", "Metrics responses that failed while flushing to the client.")
+	fmt.Fprintf(output, "heimdall_metrics_render_errors_total %d\n", r.metricsRenderErrs.Load())
 	metricHeader(output, "heimdall_fallbacks_total", "counter", "Provider fallback transitions.")
 	fmt.Fprintf(output, "heimdall_fallbacks_total %d\n", usageMetrics.Fallbacks)
 	metricHeader(output, "heimdall_usage_queue_depth", "gauge", "Current durable Ledger append queue depth.")
@@ -138,12 +178,30 @@ func (r *Runtime) writeMetrics(writer http.ResponseWriter) {
 		fmt.Fprintf(output, "heimdall_provider_active_requests{provider_id=%s} %d\n",
 			strconv.Quote(providerID), activeProviders[providerID])
 	}
+	metricHeader(output, "heimdall_provider_concurrency_limit", "gauge", "Configured Provider concurrency limit; absent or zero means unlimited.")
+	providerLimits := r.providers.ProviderConcurrencyLimits()
+	for _, providerID := range providerIDs {
+		limit := providerLimits[providerID]
+		if limit > 0 {
+			fmt.Fprintf(output, "heimdall_provider_concurrency_limit{provider_id=%s} %d\n",
+				strconv.Quote(providerID), limit)
+		}
+	}
 	metricHeader(output, "heimdall_deployment_active_requests", "gauge", "Current in-flight requests by Deployment.")
 	activeDeployments := r.gatewayService.ActiveDeploymentRequests()
 	deploymentIDs := r.providers.DeploymentIDs()
 	knownDeploymentIDs := make(map[string]struct{}, len(deploymentIDs))
 	for _, deploymentID := range deploymentIDs {
 		knownDeploymentIDs[deploymentID] = struct{}{}
+	}
+	metricHeader(output, "heimdall_deployment_concurrency_limit", "gauge", "Configured Deployment concurrency limit; absent or zero means unlimited.")
+	deploymentLimits := r.providers.DeploymentConcurrencyLimits()
+	for _, deploymentID := range deploymentIDs {
+		limit := deploymentLimits[deploymentID]
+		if limit > 0 {
+			fmt.Fprintf(output, "heimdall_deployment_concurrency_limit{deployment_id=%s} %d\n",
+				strconv.Quote(deploymentID), limit)
+		}
 	}
 	for deploymentID := range activeDeployments {
 		if _, known := knownDeploymentIDs[deploymentID]; !known {
@@ -164,11 +222,32 @@ func (r *Runtime) writeMetrics(writer http.ResponseWriter) {
 		fmt.Fprintf(output, "heimdall_deployment_up{deployment_id=%s} %d\n",
 			strconv.Quote(deploymentID), value)
 	}
+	return output.Flush()
 }
 
 func metricHeader(output *bufio.Writer, name, metricType, help string) {
 	fmt.Fprintf(output, "# HELP %s %s\n", name, help)
 	fmt.Fprintf(output, "# TYPE %s %s\n", name, metricType)
+}
+
+func writeLatencyHistogram(
+	output *bufio.Writer,
+	name string,
+	help string,
+	buckets [12]uint64,
+	sumMillis uint64,
+	count uint64,
+) {
+	metricHeader(output, name, "histogram", help)
+	var cumulative uint64
+	for index, bucketCount := range buckets {
+		cumulative += bucketCount
+		fmt.Fprintf(output, "%s_bucket{le=%s} %d\n", name,
+			strconv.Quote(millisecondsSeconds(usage.LatencyBucketsMillis[index])), cumulative)
+	}
+	fmt.Fprintf(output, "%s_bucket{le=\"+Inf\"} %d\n", name, count)
+	fmt.Fprintf(output, "%s_sum %s\n", name, millisecondsSeconds(sumMillis))
+	fmt.Fprintf(output, "%s_count %d\n", name, count)
 }
 
 func microsUSD(value uint64) string {

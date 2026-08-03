@@ -135,6 +135,9 @@ func TestAggregateBuildsAttemptAndRequestViewsIdempotently(t *testing.T) {
 		metrics.CostMicrosUSD != 7 || metrics.ActiveRequests != 0 {
 		t.Fatalf("metrics=%#v", metrics)
 	}
+	if metrics.AttemptLatencyBuckets[6] != 1 || metrics.RequestLatencyBuckets[6] != 1 {
+		t.Fatalf("histogram buckets=%#v %#v", metrics.AttemptLatencyBuckets, metrics.RequestLatencyBuckets)
+	}
 }
 
 func TestCheckpointRestoresActiveRequestAndContinuesMonotonically(t *testing.T) {

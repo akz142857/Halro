@@ -1,0 +1,59 @@
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  evaluation_interval: 15s
+  external_labels:
+    prometheus_replica: standalone
+
+rule_files:
+  - /etc/prometheus/recording-rules.yml
+  - /etc/prometheus/alert-rules.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: [127.0.0.1:9093]
+
+scrape_configs:
+  - job_name: heimdall
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /run/secrets/metrics-token
+    static_configs:
+      - targets: [127.0.0.1:9090]
+        labels:
+          environment: local
+          region: local
+          cluster: standalone
+          expected_target: "true"
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: >-
+          heimdall_.*|go_.*|process_.*
+        action: keep
+
+  - job_name: prometheus
+    static_configs:
+      - targets: [127.0.0.1:9091]
+        labels:
+          environment: local
+          region: local
+          cluster: standalone
+
+  - job_name: alertmanager
+    static_configs:
+      - targets: [127.0.0.1:9093]
+        labels:
+          environment: local
+          region: local
+          cluster: standalone
+
+  - job_name: grafana
+    metrics_path: /metrics
+    static_configs:
+      - targets: [127.0.0.1:3000]
+        labels:
+          environment: local
+          region: local
+          cluster: standalone

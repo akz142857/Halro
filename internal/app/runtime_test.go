@@ -17,6 +17,7 @@ import (
 	"github.com/akz142857/Heimdall/internal/budget"
 	"github.com/akz142857/Heimdall/internal/config"
 	"github.com/akz142857/Heimdall/internal/ledger"
+	"github.com/akz142857/Heimdall/internal/metricsauth"
 	"github.com/akz142857/Heimdall/internal/store/lock"
 )
 
@@ -177,6 +178,122 @@ func TestMetricsRequireDerivedBearerToken(t *testing.T) {
 		!strings.Contains(response.Body.String(), "heimdall_provider_active_requests") ||
 		strings.Contains(response.Body.String(), string(token)) {
 		t.Fatalf("metrics response status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestVersionedMetricsCredentialsRotateAndRevokeWithoutRestart(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Metrics.Enabled = true
+	cfg.Metrics.CredentialFile = filepath.Join(filepath.Dir(cfg.Storage.MasterKeyFile), "metrics-credentials.json")
+	now := time.Now().UTC()
+	first, err := metricsauth.Rotate(cfg.Metrics.CredentialFile, time.Minute, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(first.Token)
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := Open(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+
+	assertMetricsStatus := func(token []byte, want int) {
+		t.Helper()
+		request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+		request.Header.Set("Authorization", "Bearer "+string(token))
+		response := httptest.NewRecorder()
+		runtime.metricsRouter().ServeHTTP(response, request)
+		if response.Code != want {
+			t.Fatalf("metrics status=%d want=%d body=%s", response.Code, want, response.Body.String())
+		}
+	}
+	assertMetricsStatus(first.Token, http.StatusOK)
+	second, err := metricsauth.Rotate(cfg.Metrics.CredentialFile, time.Minute, now.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(second.Token)
+	assertMetricsStatus(first.Token, http.StatusOK)
+	assertMetricsStatus(second.Token, http.StatusOK)
+	if err := metricsauth.Revoke(cfg.Metrics.CredentialFile, first.Version, now.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	assertMetricsStatus(first.Token, http.StatusUnauthorized)
+	assertMetricsStatus(second.Token, http.StatusOK)
+}
+
+func TestMetricsContractHasTypesHistogramsAndNoForbiddenLabels(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Metrics.Enabled = true
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := Open(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	token, err := MetricsToken(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(token)
+	request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	request.Header.Set("Authorization", "Bearer "+string(token))
+	response := httptest.NewRecorder()
+	runtime.metricsRouter().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("metrics status=%d body=%s", response.Code, response.Body.String())
+	}
+	body := response.Body.String()
+	assertMetricsExpositionContract(t, body)
+	for _, required := range []string{
+		"# TYPE heimdall_request_latency_seconds histogram",
+		"heimdall_request_latency_seconds_bucket{le=\"+Inf\"}",
+		"# TYPE heimdall_attempt_latency_seconds histogram",
+		"# TYPE heimdall_build_info gauge",
+		"# TYPE go_goroutines gauge",
+		"# TYPE process_start_time_seconds gauge",
+	} {
+		if !strings.Contains(body, required) {
+			t.Fatalf("metrics contract missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{"project_id=", "key_id=", "route_id=", "request_id=", "source_ip=", "model="} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("metrics contract contains forbidden label %q", forbidden)
+		}
+	}
+}
+
+func TestMetricsScrapeConcurrencyIsBounded(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Metrics.Enabled = true
+	cfg.Metrics.MaxConcurrentScrapes = 1
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := Open(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	token, err := MetricsToken(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(token)
+	runtime.metricsScrapes <- struct{}{}
+	defer func() { <-runtime.metricsScrapes }()
+	request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	request.Header.Set("Authorization", "Bearer "+string(token))
+	response := httptest.NewRecorder()
+	runtime.metricsRouter().ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable || runtime.metricsBusy.Load() != 1 {
+		t.Fatalf("busy metrics response=%d rejected=%d", response.Code, runtime.metricsBusy.Load())
 	}
 }
 

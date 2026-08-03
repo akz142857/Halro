@@ -518,6 +518,34 @@ func (r *Registry) DeploymentIDs() []string {
 	return result
 }
 
+func (r *Registry) DeploymentConcurrencyLimits() map[string]int64 {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	result := make(map[string]int64)
+	for _, targets := range r.targets {
+		for _, target := range targets {
+			if target.DeploymentID != "" && target.DeploymentConcurrency > result[target.DeploymentID] {
+				result[target.DeploymentID] = target.DeploymentConcurrency
+			}
+		}
+	}
+	return result
+}
+
+func (r *Registry) ProviderConcurrencyLimits() map[string]int64 {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	result := make(map[string]int64)
+	for _, targets := range r.targets {
+		for _, target := range targets {
+			if target.ProviderID != "" && target.MaxConcurrency > result[target.ProviderID] {
+				result[target.ProviderID] = target.MaxConcurrency
+			}
+		}
+	}
+	return result
+}
+
 func (r *Registry) ProviderIDs() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

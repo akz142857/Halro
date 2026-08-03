@@ -1,0 +1,18 @@
+services:
+  heimdall-independent-probe:
+    image: curlimages/curl@sha256:463eaf6072688fe96ac64fa623fe73e1dbe25d8ad6c34404a669ad3ce1f104b6
+    user: curl_user
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    entrypoint: [/bin/sh, /opt/heimdall/probe.sh]
+    command:
+      - https://heimdall.internal.example/health/live
+      - https://prometheus.internal.example/-/ready
+      - "30"
+    volumes:
+      - ./external-probe/probe.sh:/opt/heimdall/probe.sh:ro
+      - /run/heimdall-deadman:/run/secrets:ro
+    tmpfs:
+      - /tmp:mode=0700,size=1m
+    restart: unless-stopped

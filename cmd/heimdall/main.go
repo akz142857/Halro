@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -23,6 +24,7 @@ import (
 	"github.com/akz142857/Heimdall/internal/buildinfo"
 	"github.com/akz142857/Heimdall/internal/config"
 	"github.com/akz142857/Heimdall/internal/domain"
+	"github.com/akz142857/Heimdall/internal/metricsauth"
 	"github.com/akz142857/Heimdall/internal/safelog"
 )
 
@@ -432,11 +434,13 @@ func run(arguments []string, logger *slog.Logger) error {
 		encodeErr := json.NewEncoder(os.Stdout).Encode(report)
 		return errors.Join(doctorErr, encodeErr)
 	case "metrics":
-		if len(arguments) < 2 || arguments[1] != "token" {
-			return errors.New("usage: heimdall metrics token --config <path>")
+		if len(arguments) < 2 {
+			return errors.New("usage: heimdall metrics <token|rotate|revoke|list|verify-audit> --config <path>")
 		}
-		flags := flag.NewFlagSet("metrics token", flag.ContinueOnError)
+		flags := flag.NewFlagSet("metrics "+arguments[1], flag.ContinueOnError)
 		configPath := flags.String("config", "config.yaml", "configuration file")
+		overlap := flags.Duration("overlap", 10*time.Minute, "old/new token overlap for rotate")
+		version := flags.Uint64("version", 0, "credential version for revoke")
 		if err := flags.Parse(arguments[2:]); err != nil {
 			return err
 		}
@@ -444,14 +448,71 @@ func run(arguments []string, logger *slog.Logger) error {
 		if err != nil {
 			return err
 		}
-		token, err := app.MetricsToken(cfg)
-		if err != nil {
+		switch arguments[1] {
+		case "token":
+			token, err := app.MetricsToken(cfg)
+			if err != nil {
+				return err
+			}
+			defer clear(token)
+			fmt.Fprintln(os.Stderr, "Metrics bearer token grants access to aggregate operational data.")
+			_, err = fmt.Fprintln(os.Stdout, string(token))
 			return err
+		case "rotate":
+			if cfg.Metrics.CredentialFile == "" {
+				return errors.New("metrics.credential_file is required for versioned rotation")
+			}
+			rotation, err := metricsauth.Rotate(cfg.Metrics.CredentialFile, *overlap, time.Now())
+			if err != nil {
+				return err
+			}
+			defer clear(rotation.Token)
+			fmt.Fprintln(os.Stderr, "Store this one-time Metrics bearer token directly in the Prometheus secret file.")
+			if _, err := fmt.Fprintln(os.Stdout, string(rotation.Token)); err != nil {
+				return err
+			}
+			fmt.Fprintln(os.Stderr, "credential_version="+strconv.FormatUint(rotation.Version, 10))
+			return nil
+		case "revoke":
+			if cfg.Metrics.CredentialFile == "" || *version == 0 {
+				return errors.New("metrics revoke requires metrics.credential_file and --version")
+			}
+			return metricsauth.Revoke(cfg.Metrics.CredentialFile, *version, time.Now())
+		case "list":
+			if cfg.Metrics.CredentialFile == "" {
+				return errors.New("metrics.credential_file is required for versioned credentials")
+			}
+			if err := metricsauth.VerifyAudit(cfg.Metrics.CredentialFile); err != nil {
+				return fmt.Errorf("verify metrics credential audit: %w", err)
+			}
+			file, err := metricsauth.Load(cfg.Metrics.CredentialFile)
+			if err != nil {
+				return err
+			}
+			type summary struct {
+				Version uint64            `json:"version"`
+				State   metricsauth.State `json:"state"`
+				Created time.Time         `json:"created_at"`
+				Retire  *time.Time        `json:"retire_at,omitempty"`
+				Revoked *time.Time        `json:"revoked_at,omitempty"`
+			}
+			result := make([]summary, 0, len(file.Credentials))
+			for _, credential := range file.Credentials {
+				result = append(result, summary{credential.Version, credential.State, credential.CreatedAt, credential.RetireAt, credential.RevokedAt})
+			}
+			return json.NewEncoder(os.Stdout).Encode(result)
+		case "verify-audit":
+			if cfg.Metrics.CredentialFile == "" {
+				return errors.New("metrics.credential_file is required for audit verification")
+			}
+			head, err := metricsauth.AuditStatus(cfg.Metrics.CredentialFile)
+			if err != nil {
+				return err
+			}
+			return json.NewEncoder(os.Stdout).Encode(head)
+		default:
+			return fmt.Errorf("unknown metrics command %q", arguments[1])
 		}
-		defer clear(token)
-		fmt.Fprintln(os.Stderr, "Metrics bearer token grants access to aggregate operational data.")
-		_, err = fmt.Fprintln(os.Stdout, string(token))
-		return err
 	default:
 		return fmt.Errorf("unknown command %q", arguments[0])
 	}

@@ -6,7 +6,7 @@ WEB_SOURCES := $(shell find web/src web/scripts -type f) \
 WEB_DEPS_STAMP := web/node_modules/.heimdall-install-stamp
 WEB_BUILD_STAMP := web/node_modules/.heimdall-build-stamp
 
-.PHONY: setup start dev build frontend frontend-test test race vet check clean
+.PHONY: setup start dev build frontend frontend-test test race vet observability-check check clean
 
 setup: build
 
@@ -44,7 +44,10 @@ race:
 vet:
 	go vet ./...
 
-check: test race vet frontend-test
+observability-check:
+	./deploy/observability/validate.sh
+
+check: test race vet frontend-test observability-check
 
 clean:
 	rm -rf bin

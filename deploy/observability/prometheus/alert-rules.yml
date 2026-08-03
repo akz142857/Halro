@@ -1,0 +1,110 @@
+groups:
+  - name: heimdall-alerts
+    interval: 15s
+    rules:
+      - alert: HeimdallTargetDown
+        expr: up{job="heimdall",expected_target="true"} == 0 or absent(up{job="heimdall",expected_target="true"})
+        for: 2m
+        labels: {severity: critical, service: heimdall, owner: sre, category: availability}
+        annotations:
+          summary: Heimdall Metrics target is down
+          runbook_url: /docs/observability/operations-runbook.md
+      - alert: HeimdallWALAppendErrors
+        expr: increase(heimdall_wal_append_errors_total[5m]) > 0
+        for: 0m
+        labels: {severity: critical, service: heimdall, owner: sre, category: accounting}
+        annotations:
+          summary: Heimdall WAL append errors increased
+          runbook_url: /docs/observability/operations-runbook.md
+      - alert: HeimdallUsageAnalyticsLagging
+        expr: heimdall_usage_analytics_lagging == 1
+        for: 10m
+        labels: {severity: warning, service: heimdall, owner: sre, category: accounting}
+        annotations:
+          summary: Heimdall Usage analytics is behind the Ledger
+          runbook_url: /docs/observability/operations-runbook.md
+      - alert: HeimdallLedgerQueueHigh
+        expr: heimdall:ledger_queue:ratio > 0.75
+        for: 5m
+        labels: {severity: warning, service: heimdall, owner: sre, category: accounting}
+        annotations:
+          summary: Heimdall Ledger queue exceeds 75 percent
+          runbook_url: /docs/observability/operations-runbook.md
+      - alert: HeimdallAlertDeliveryFailing
+        expr: increase(heimdall_alert_delivery_total{status=~"failed|dropped"}[10m]) > 0
+        for: 10m
+        labels: {severity: warning, service: heimdall, owner: sre, category: delivery}
+        annotations:
+          summary: Heimdall alert delivery is failing
+          runbook_url: /docs/observability/operations-runbook.md
+      - alert: HeimdallDeploymentUnhealthy
+        expr: heimdall_deployment_up == 0
+        for: 5m
+        labels: {severity: warning, service: heimdall, owner: sre, category: provider}
+        annotations:
+          summary: A probed Heimdall deployment is unhealthy
+          runbook_url: /docs/observability/operations-runbook.md
+      - alert: HeimdallMultipleDeploymentsUnhealthy
+        expr: heimdall:deployments_unhealthy:count >= 2
+        for: 3m
+        labels: {severity: critical, service: heimdall, owner: sre, category: provider}
+        annotations:
+          summary: Multiple Heimdall deployments are unhealthy
+          runbook_url: /docs/observability/operations-runbook.md
+      - alert: HeimdallFallbackSaturation
+        expr: heimdall:fallbacks:ratio5m > 0.25 and on (environment, region, cluster) increase(heimdall_requests_total[10m]) >= 20
+        for: 5m
+        labels: {severity: warning, service: heimdall, owner: sre, category: provider}
+        annotations:
+          summary: Heimdall fallback rate is elevated
+          runbook_url: /docs/observability/operations-runbook.md
+      - alert: HeimdallProviderCapacityPressure
+        expr: heimdall:provider_capacity:ratio > 0.85
+        for: 5m
+        labels: {severity: warning, service: heimdall, owner: sre, category: provider}
+        annotations:
+          summary: Heimdall Provider concurrency capacity is nearly exhausted
+          runbook_url: /docs/observability/operations-runbook.md
+      - alert: HeimdallHighErrorRate
+        expr: heimdall:requests_errors:ratio5m > 0.05 and on (environment, region, cluster) increase(heimdall_requests_total[10m]) >= 20
+        for: 10m
+        labels: {severity: warning, service: heimdall, owner: sre, category: traffic}
+        annotations:
+          summary: Heimdall request error rate is elevated
+          runbook_url: /docs/observability/operations-runbook.md
+      - alert: Watchdog
+        expr: vector(1)
+        labels: {severity: none, service: heimdall, owner: sre, category: deadman}
+        annotations:
+          summary: Continuous signal for an independent dead-man monitor
+          runbook_url: /docs/observability/operations-runbook.md
+
+  - name: observability-platform
+    rules:
+      - alert: GrafanaTargetDown
+        expr: up{job="grafana"} == 0
+        for: 2m
+        labels: {severity: warning, service: grafana, owner: sre, category: platform}
+        annotations: {summary: Grafana Metrics target is down}
+      - alert: AlertmanagerNotificationFailing
+        expr: increase(alertmanager_notifications_failed_total[5m]) > 0
+        for: 2m
+        labels: {severity: critical, service: alertmanager, owner: sre, category: platform}
+        annotations: {summary: Alertmanager notifications are failing}
+      - alert: PrometheusRuleEvaluationFailing
+        expr: increase(prometheus_rule_evaluation_failures_total[5m]) > 0
+        for: 2m
+        labels: {severity: warning, service: prometheus, owner: sre, category: platform}
+        annotations: {summary: Prometheus rule evaluation is failing}
+      - alert: PrometheusConfigReloadFailing
+        expr: prometheus_config_last_reload_successful == 0
+        for: 2m
+        labels: {severity: critical, service: prometheus, owner: sre, category: platform}
+        annotations: {summary: Prometheus configuration reload failed}
+      - alert: PrometheusTSDBDiskHigh
+        expr: >-
+          prometheus_tsdb_storage_blocks_bytes
+          + prometheus_tsdb_wal_storage_size_bytes > 3758096384
+        for: 10m
+        labels: {severity: warning, service: prometheus, owner: sre, category: platform}
+        annotations: {summary: Prometheus TSDB and WAL exceed the local 3.5 GiB warning budget}

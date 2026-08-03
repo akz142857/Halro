@@ -1,0 +1,22 @@
+{
+  "annotations": {"list": []},
+  "editable": false,
+  "graphTooltip": 1,
+  "panels": [
+    {"id": 1, "type": "stat", "title": "Requests / second", "datasource": {"type": "prometheus", "uid": "heimdall-prometheus"}, "targets": [{"refId": "A", "expr": "heimdall:requests:rate5m{environment=\"$environment\",cluster=\"$cluster\"}"}], "fieldConfig": {"defaults": {"unit": "reqps"}, "overrides": []}, "gridPos": {"x": 0, "y": 0, "w": 6, "h": 5}},
+    {"id": 2, "type": "stat", "title": "Error ratio", "datasource": {"type": "prometheus", "uid": "heimdall-prometheus"}, "targets": [{"refId": "A", "expr": "heimdall:requests_errors:ratio5m{environment=\"$environment\",cluster=\"$cluster\"}"}], "fieldConfig": {"defaults": {"unit": "percentunit", "noValue": "N/A"}, "overrides": []}, "gridPos": {"x": 6, "y": 0, "w": 6, "h": 5}},
+    {"id": 3, "type": "stat", "title": "Mean request latency", "description": "Scrape-window mean; use histogram panels for tail latency after Phase C.", "datasource": {"type": "prometheus", "uid": "heimdall-prometheus"}, "targets": [{"refId": "A", "expr": "heimdall:request_duration:mean5m{environment=\"$environment\",cluster=\"$cluster\"}"}], "fieldConfig": {"defaults": {"unit": "s", "noValue": "N/A"}, "overrides": []}, "gridPos": {"x": 12, "y": 0, "w": 6, "h": 5}},
+    {"id": 4, "type": "stat", "title": "Unhealthy deployments", "datasource": {"type": "prometheus", "uid": "heimdall-prometheus"}, "targets": [{"refId": "A", "expr": "heimdall:deployments_unhealthy:count{environment=\"$environment\",cluster=\"$cluster\"} or vector(0)"}], "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []}, "gridPos": {"x": 18, "y": 0, "w": 6, "h": 5}},
+    {"id": 5, "type": "timeseries", "title": "Requests, attempts and fallbacks", "datasource": {"type": "prometheus", "uid": "heimdall-prometheus"}, "targets": [{"refId": "A", "legendFormat": "requests {{status}}", "expr": "sum by (status) (rate(heimdall_requests_total{environment=\"$environment\",cluster=\"$cluster\"}[$__rate_interval]))"}, {"refId": "B", "legendFormat": "attempts {{status}}", "expr": "sum by (status) (rate(heimdall_attempts_total{environment=\"$environment\",cluster=\"$cluster\"}[$__rate_interval]))"}, {"refId": "C", "legendFormat": "fallbacks", "expr": "sum(rate(heimdall_fallbacks_total{environment=\"$environment\",cluster=\"$cluster\"}[$__rate_interval]))"}], "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []}, "gridPos": {"x": 0, "y": 5, "w": 12, "h": 8}},
+    {"id": 6, "type": "timeseries", "title": "Tokens and observed cost rate", "description": "Prometheus cost is observational and resets with process state; Ledger is authoritative.", "datasource": {"type": "prometheus", "uid": "heimdall-prometheus"}, "targets": [{"refId": "A", "legendFormat": "tokens {{direction}}", "expr": "sum by (direction) (rate(heimdall_tokens_total{environment=\"$environment\",cluster=\"$cluster\"}[$__rate_interval]))"}, {"refId": "B", "legendFormat": "USD/s", "expr": "sum(rate(heimdall_cost_usd_total{environment=\"$environment\",cluster=\"$cluster\"}[$__rate_interval]))"}], "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []}, "gridPos": {"x": 12, "y": 5, "w": 12, "h": 8}}
+  ],
+  "refresh": "15s",
+  "schemaVersion": 41,
+  "tags": ["heimdall"],
+  "templating": {"list": [{"name": "environment", "type": "query", "datasource": {"type": "prometheus", "uid": "heimdall-prometheus"}, "query": "label_values(heimdall_requests_total, environment)", "current": {}}, {"name": "cluster", "type": "query", "datasource": {"type": "prometheus", "uid": "heimdall-prometheus"}, "query": "label_values(heimdall_requests_total{environment=\"$environment\"}, cluster)", "current": {}}]},
+  "time": {"from": "now-6h", "to": "now"},
+  "timezone": "browser",
+  "title": "Heimdall Overview",
+  "uid": "heimdall-overview",
+  "version": 1
+}

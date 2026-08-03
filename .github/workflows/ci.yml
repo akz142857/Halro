@@ -75,6 +75,44 @@ jobs:
           test "$(docker image inspect heimdall:ci --format '{{.Config.User}}')" = "65532:65532"
           test "$(docker image inspect heimdall:ci --format '{{json .Config.Healthcheck.Test}}')" = '["CMD","/usr/local/bin/heimdall","healthcheck"]'
 
+  observability:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Validate Prometheus, Alertmanager and Grafana provisioning
+        run: ./deploy/observability/validate.sh
+      - name: Validate Compose topology
+        run: |
+          docker compose -f deploy/observability/compose.example.yaml config --quiet
+          docker compose -f deploy/observability/external-probe.example.yaml config --quiet
+
+  observability-sbom:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - name: prometheus
+            image: prom/prometheus@sha256:63805ebb8d2b3920190daf1cb14a60871b16fd38bed42b857a3182bc621f4996
+          - name: alertmanager
+            image: prom/alertmanager@sha256:27c475db5fb156cab31d5c18a4251ac7ed567746a2483ff264516437a39b15ba
+          - name: grafana
+            image: grafana/grafana@sha256:6ac590e7cabc2fbe8d7b8fc1ce9c9f0582177b334e0df9c927ebd9670469440f
+          - name: independent-probe
+            image: curlimages/curl@sha256:463eaf6072688fe96ac64fa623fe73e1dbe25d8ad6c34404a669ad3ce1f104b6
+    steps:
+      - uses: actions/checkout@v7
+      - name: Generate SPDX SBOM with digest-pinned Syft
+        run: >-
+          docker run --rm
+          -v "$PWD:/output"
+          anchore/syft@sha256:bd5357d2cd087f03af748dac24df48bfbc1723080d78f75f69aca1f2d429060e
+          "registry:${{ matrix.image }}"
+          -o "spdx-json=/output/${{ matrix.name }}.spdx.json"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: observability-sbom-${{ matrix.name }}
+          path: ${{ matrix.name }}.spdx.json
+
   sdk-compatibility:
     runs-on: ubuntu-latest
     steps:

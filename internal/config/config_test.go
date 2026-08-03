@@ -96,3 +96,39 @@ func TestPublicAdminCannotUseGatewayOverride(t *testing.T) {
 		t.Fatal("public plaintext admin must always fail")
 	}
 }
+
+func TestMetricsNonLoopbackRequiresDedicatedMutualTLS(t *testing.T) {
+	cfg, err := Decode(strings.NewReader(strings.Replace(validConfig, `127.0.0.1:9090`, `0.0.0.0:9090`, 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Validate(LoadOptions{}); err == nil {
+		t.Fatal("non-loopback plaintext Metrics listener was accepted")
+	}
+	cfg.TLS.Enabled = true
+	cfg.TLS.CertFile = "gateway.crt"
+	cfg.TLS.KeyFile = "gateway.key"
+	cfg.Metrics.CredentialFile = "metrics-credentials.json"
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Validate(LoadOptions{}); err == nil {
+		t.Fatal("global server-only TLS was accepted as Metrics mutual identity")
+	}
+	cfg.Metrics.TLS = MetricsTLS{
+		Enabled: true, CertFile: "metrics.crt", KeyFile: "metrics.key", ClientCAFile: "metrics-ca.crt",
+	}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Validate(LoadOptions{}); err != nil {
+		t.Fatalf("dedicated Metrics mTLS was rejected: %v", err)
+	}
+	cfg.Metrics.TLS.ClientCAFile = ""
+	if err := cfg.Validate(LoadOptions{}); err == nil {
+		t.Fatal("Metrics TLS without a client CA was accepted")
+	}
+}
