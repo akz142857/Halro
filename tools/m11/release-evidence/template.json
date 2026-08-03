@@ -1,0 +1,220 @@
+{
+  "schema_version": 1,
+  "release": {
+    "commit": "replace-with-full-lowercase-commit-sha",
+    "tag": "pending",
+    "ci_run": "pending",
+    "test": "pending",
+    "race": "pending",
+    "vet": "pending",
+    "vulnerability_scan": "pending",
+    "reachable_vulnerabilities": null,
+    "kms_boundary": "pending",
+    "kill_point_matrix": "pending",
+    "implementation_authors": []
+  },
+  "design_reviews": {
+    "kms_wrapper_engineering": {
+      "status": "pending",
+      "reviewer": "pending",
+      "approved_at": "pending",
+      "evidence": []
+    },
+    "error_taxonomy_security": {
+      "status": "pending",
+      "reviewer": "pending",
+      "approved_at": "pending",
+      "evidence": []
+    },
+    "adr_0010_accepted": {
+      "status": "pending",
+      "reviewer": "pending",
+      "approved_at": "pending",
+      "evidence": []
+    }
+  },
+  "aws_environment": {
+    "identity_source": "pending",
+    "region": "pending",
+    "account_sha256": "replace-with-sha256",
+    "key_sha256": {
+      "primary": "replace-with-sha256",
+      "recovery": "replace-with-sha256",
+      "replacement_primary": "replace-with-sha256"
+    },
+    "failure_domain_review": "pending",
+    "evidence": []
+  },
+  "aws_scenarios": [
+    {
+      "id": "primary_unwrap",
+      "status": "pending",
+      "performed_at": "pending",
+      "operator": "pending",
+      "evidence": [],
+      "cloudtrail_correlated": false
+    },
+    {
+      "id": "recovery_unwrap",
+      "status": "pending",
+      "performed_at": "pending",
+      "operator": "pending",
+      "evidence": [],
+      "cloudtrail_correlated": false
+    },
+    {
+      "id": "identity_not_ready",
+      "status": "pending",
+      "performed_at": "pending",
+      "operator": "pending",
+      "evidence": [],
+      "cloudtrail_correlated": false,
+      "cloudtrail_not_applicable_reason": "no KMS API request is expected"
+    },
+    {
+      "id": "permission_denied",
+      "status": "pending",
+      "performed_at": "pending",
+      "operator": "pending",
+      "evidence": [],
+      "cloudtrail_correlated": false
+    },
+    {
+      "id": "throttling",
+      "status": "pending",
+      "performed_at": "pending",
+      "operator": "pending",
+      "evidence": [],
+      "cloudtrail_correlated": false
+    },
+    {
+      "id": "primary_disabled",
+      "status": "pending",
+      "performed_at": "pending",
+      "operator": "pending",
+      "evidence": [],
+      "cloudtrail_correlated": false
+    },
+    {
+      "id": "primary_pending_deletion",
+      "status": "pending",
+      "performed_at": "pending",
+      "operator": "pending",
+      "evidence": [],
+      "cloudtrail_correlated": false
+    },
+    {
+      "id": "context_mismatch",
+      "status": "pending",
+      "performed_at": "pending",
+      "operator": "pending",
+      "evidence": [],
+      "cloudtrail_correlated": false
+    },
+    {
+      "id": "ciphertext_or_payload_tampered",
+      "status": "pending",
+      "performed_at": "pending",
+      "operator": "pending",
+      "evidence": [],
+      "cloudtrail_correlated": false
+    },
+    {
+      "id": "wrong_vault_valid_key",
+      "status": "pending",
+      "performed_at": "pending",
+      "operator": "pending",
+      "evidence": [],
+      "cloudtrail_correlated": false
+    },
+    {
+      "id": "running_after_kms_unavailable",
+      "status": "pending",
+      "performed_at": "pending",
+      "operator": "pending",
+      "evidence": [],
+      "cloudtrail_correlated": false,
+      "cloudtrail_not_applicable_reason": "the running Gateway must make no KMS request"
+    },
+    {
+      "id": "cold_restart",
+      "status": "pending",
+      "performed_at": "pending",
+      "operator": "pending",
+      "evidence": [],
+      "cloudtrail_correlated": false
+    },
+    {
+      "id": "rotate_kill_points",
+      "status": "pending",
+      "performed_at": "pending",
+      "operator": "pending",
+      "evidence": [],
+      "cloudtrail_correlated": false
+    },
+    {
+      "id": "primary_and_recovery_restore",
+      "status": "pending",
+      "performed_at": "pending",
+      "operator": "pending",
+      "evidence": [],
+      "cloudtrail_correlated": false
+    }
+  ],
+  "secret_canary": {
+    "logs": "pending",
+    "errors": "pending",
+    "audit": "pending",
+    "metrics": "pending",
+    "bbolt": "pending",
+    "backup": "pending",
+    "heap": "pending"
+  },
+  "deployments": {
+    "eks": {
+      "status": "pending",
+      "performed_at": "pending",
+      "evidence": [],
+      "crashloop": {
+        "identity_not_ready": "pending",
+        "permission_denied": "pending",
+        "primary_disabled": "pending"
+      }
+    },
+    "vm_systemd": {
+      "status": "pending",
+      "performed_at": "pending",
+      "evidence": []
+    }
+  },
+  "recovery_drill": {
+    "primary_restore": "pending",
+    "recovery_restore": "pending",
+    "disabled_or_deleted_primary": "pending",
+    "temporary_permission_revoked": "pending",
+    "independent_operator": "pending",
+    "performed_at": "pending",
+    "permission_revoked_at": "pending",
+    "evidence": []
+  },
+  "supply_chain": {
+    "sbom_review": "pending",
+    "checksums_verified": "pending",
+    "artifacts": [
+      {"name": "heimdall-linux-amd64.tar.gz", "sha256": "replace-with-sha256", "sigstore_verified": false, "sigstore_bundle": "pending"},
+      {"name": "heimdall-linux-arm64.tar.gz", "sha256": "replace-with-sha256", "sigstore_verified": false, "sigstore_bundle": "pending"},
+      {"name": "heimdall-darwin-amd64.tar.gz", "sha256": "replace-with-sha256", "sigstore_verified": false, "sigstore_bundle": "pending"},
+      {"name": "heimdall-darwin-arm64.tar.gz", "sha256": "replace-with-sha256", "sigstore_verified": false, "sigstore_bundle": "pending"},
+      {"name": "heimdall-container.tar.gz", "sha256": "replace-with-sha256", "sigstore_verified": false, "sigstore_bundle": "pending"},
+      {"name": "heimdall-deadman-container.tar.gz", "sha256": "replace-with-sha256", "sigstore_verified": false, "sigstore_bundle": "pending"},
+      {"name": "heimdall.spdx.json", "sha256": "replace-with-sha256", "sigstore_verified": false, "sigstore_bundle": "pending"},
+      {"name": "checksums.txt", "sha256": "replace-with-sha256", "sigstore_verified": false, "sigstore_bundle": "pending"}
+    ]
+  },
+  "signoffs": [
+    {"role": "Security", "reviewer": "pending", "approved_at": "pending", "conclusion": "pending", "commit": "pending", "evidence": []},
+    {"role": "Backend", "reviewer": "pending", "approved_at": "pending", "conclusion": "pending", "commit": "pending", "evidence": []},
+    {"role": "SRE", "reviewer": "pending", "approved_at": "pending", "conclusion": "pending", "commit": "pending", "evidence": []},
+    {"role": "Release", "reviewer": "pending", "approved_at": "pending", "conclusion": "pending", "commit": "pending", "evidence": []}
+  ]
+}

@@ -38,6 +38,11 @@ python3 tools/m11/release-evidence/verify.py \
   /secure/evidence/m11-release-evidence.json
 ```
 
+Start from `template.json`, but copy it into the restricted release evidence
+system before filling it. The repository template is intentionally incomplete
+and is covered by a test proving that the verifier rejects it. Never commit a
+completed production bundle to the public repository.
+
 Only `M11_RELEASE_EVIDENCE=PASS` permits G4–G16 and the milestone to be marked
 Complete. Store the actual bundle in the restricted release evidence system,
 not in the public repository.

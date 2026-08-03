@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
-import copy
 import importlib.util
+import json
 import unittest
 from pathlib import Path
 
@@ -143,6 +143,11 @@ class VerifyTests(unittest.TestCase):
 
     def test_complete_bundle_passes(self):
         VERIFY.verify(valid_bundle())
+
+    def test_repository_template_is_intentionally_incomplete(self):
+        template = json.loads(Path(__file__).with_name("template.json").read_text(encoding="utf-8"))
+        with self.assertRaises(VERIFY.EvidenceError):
+            VERIFY.verify(template)
 
     def test_missing_scenario_fails(self):
         self.assert_invalid(lambda bundle: bundle["aws_scenarios"].pop())
