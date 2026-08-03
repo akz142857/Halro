@@ -64,16 +64,17 @@ type RequestSummary struct {
 }
 
 type Bucket struct {
-	Hour                  time.Time `json:"hour"`
-	Requests              int64     `json:"requests"`
-	Attempts              int64     `json:"attempts"`
-	InputTokens           int64     `json:"input_tokens"`
-	OutputTokens          int64     `json:"output_tokens"`
-	EstimatedInputTokens  int64     `json:"estimated_input_tokens,omitempty"`
-	EstimatedOutputTokens int64     `json:"estimated_output_tokens,omitempty"`
-	CostMicrosUSD         int64     `json:"cost_micros_usd"`
-	Errors                int64     `json:"errors"`
-	LatencyMillis         int64     `json:"latency_millis"`
+	Hour                   time.Time `json:"hour"`
+	Requests               int64     `json:"requests"`
+	Attempts               int64     `json:"attempts"`
+	InputTokens            int64     `json:"input_tokens"`
+	OutputTokens           int64     `json:"output_tokens"`
+	EstimatedInputTokens   int64     `json:"estimated_input_tokens,omitempty"`
+	EstimatedOutputTokens  int64     `json:"estimated_output_tokens,omitempty"`
+	CostMicrosUSD          int64     `json:"cost_micros_usd"`
+	EstimatedCostMicrosUSD int64     `json:"estimated_cost_micros_usd,omitempty"`
+	Errors                 int64     `json:"errors"`
+	LatencyMillis          int64     `json:"latency_millis"`
 }
 
 type Snapshot struct {

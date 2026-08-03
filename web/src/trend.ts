@@ -8,7 +8,17 @@ export interface TrendSeries {
   range: [number, number];
 }
 
-export function buildTrendSeries(buckets: Bucket[], nowMillis = Date.now()): TrendSeries {
+export type TrendMetric = "requests" | "tokens" | "cost" | "errors";
+
+export interface TrendSummary {
+  value: number;
+}
+
+export function buildTrendSeries(
+  buckets: Bucket[],
+  metric: TrendMetric = "requests",
+  nowMillis = Date.now(),
+): TrendSeries {
   const end = Math.floor(nowMillis / 1000);
   const start = end - TREND_WINDOW_SECONDS;
   const points = buckets
@@ -17,17 +27,25 @@ export function buildTrendSeries(buckets: Bucket[], nowMillis = Date.now()): Tre
     .sort((left, right) => left.timestamp - right.timestamp);
 
   if (points.length === 0) {
-    return { data: [[start, end], [0, 0], [0, 0]], range: [start, end] };
+    return { data: [[start, end], [0, 0]], range: [start, end] };
   }
 
   return {
     data: [
       points.map(({ timestamp }) => timestamp),
-      points.map(({ bucket }) => bucket.requests),
-      points.map(({ bucket }) => reportedTokens(bucket)),
+      points.map(({ bucket }) => trendValue(bucket, metric)),
     ],
     range: [start, end],
   };
+}
+
+function trendValue(bucket: Bucket, metric: TrendMetric) {
+  switch (metric) {
+    case "tokens": return reportedTokens(bucket);
+    case "cost": return bucket.cost_micros_usd / 1_000_000;
+    case "errors": return bucket.attempts ? bucket.errors / bucket.attempts * 100 : 0;
+    default: return bucket.requests;
+  }
 }
 
 export function reportedTokens(bucket: Bucket) {
@@ -36,4 +54,15 @@ export function reportedTokens(bucket: Bucket) {
     bucket.input_tokens + bucket.output_tokens -
       (bucket.estimated_input_tokens ?? 0) - (bucket.estimated_output_tokens ?? 0),
   );
+}
+
+export function summarizeTrend(
+  buckets: Bucket[],
+  metric: TrendMetric,
+  nowMillis = Date.now(),
+): TrendSummary {
+  const { data } = buildTrendSeries(buckets, metric, nowMillis);
+  let value = 0;
+  for (const point of data[1]) value += point ?? 0;
+  return { value };
 }
