@@ -62,4 +62,4 @@
 
 ## 7. 发布证据与签署
 
-Release Candidate 必须归档：精确 commit/tag、CI/race/vet、0 reachable vulnerability 报告、KMS boundary、Secret Canary、kill-point matrix、14 项真实 AWS 测试、Primary/Recovery 独立恢复、SBOM、checksums、每个 artifact 的 Sigstore bundle，以及 Security/Backend/SRE/Release 四方签署。任何一项待补时保持 Draft/Not production-ready。
+Release Candidate 必须归档：精确 commit/tag、CI/race/vet、0 reachable vulnerability 报告、KMS boundary、Secret Canary、kill-point matrix、14 项真实 AWS 测试、Primary/Recovery 独立恢复、SBOM、checksums、每个 artifact 的 Sigstore bundle，以及 Security/Backend/SRE/Release 四方签署。使用 `python3 tools/m11/release-evidence/verify.py /secure/evidence/m11-release-evidence.json` 校验最终脱敏 bundle；只有输出 `M11_RELEASE_EVIDENCE=PASS` 才能进入发布审批。任何一项待补时保持 Draft/Not production-ready。

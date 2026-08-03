@@ -26,3 +26,5 @@ grep -q 'Keyless sign release blobs' .github/workflows/release.yml
 grep -q 'cosign sign-blob' .github/workflows/release.yml
 
 ! grep -R --include='*.go' --exclude='*_test.go' -q '"net/http/pprof"' cmd internal
+
+python3 -B -m unittest tools/m11/release-evidence/test_verify.py

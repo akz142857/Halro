@@ -20,6 +20,7 @@
 - `./deploy/observability/validate.sh`（22 条 alert rules 与 fixtures 通过）
 - `./tools/m11/check-kms-boundaries.sh`
 - `./tools/m11/check-production-assets.sh`
+- `python3 -B -m unittest tools/m11/release-evidence/test_verify.py`（最终 release-evidence bundle fail-closed gate）
 - Linux/amd64 `internal/hostsecurity` 交叉编译通过
 - `GOTOOLCHAIN=go1.26.5 go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...`：0 个 reachable vulnerability
 
@@ -31,6 +32,8 @@
 - logs/errors/Audit/Metrics/bbolt/backup/heap Secret Canary 在最终 RC commit 重跑；
 - 发布 RC 的 SBOM 审核、checksums 和 Sigstore verification 输出；
 - Security、Backend、SRE、Release 负责人、UTC 时间、结论与例外编号。
+
+最终脱敏 evidence bundle 使用 `tools/m11/release-evidence/verify.py` 验证。该 gate 要求同一完整 commit SHA 上的 14 项真实 AWS 场景、完整 Secret Canary、EKS/VM、独立操作者恢复、Recovery 撤权、全部 release artifacts/Sigstore verification 和四方签署；任何缺项、占位值、raw AWS ARN 或跨 commit 签署均 fail closed。
 
 ## 四方签署（待填写，禁止预签）
 
