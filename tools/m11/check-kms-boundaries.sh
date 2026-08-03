@@ -1,0 +1,17 @@
+#!/bin/sh
+set -eu
+
+CHECK_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/heimdall-kms-boundaries.XXXXXX")
+cleanup() {
+	rm -rf "$CHECK_ROOT"
+}
+trap cleanup EXIT INT TERM
+
+for package in ./internal/gateway ./internal/masterkey ./internal/kms; do
+	output="$CHECK_ROOT/dependencies.txt"
+	go list -deps "$package" >"$output"
+	if grep -E 'github.com/aws/aws-sdk-go|internal/kms/awskms' "$output"; then
+		echo "AWS SDK dependency crossed provider-neutral boundary: $package" >&2
+		exit 1
+	fi
+done

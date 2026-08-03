@@ -1,0 +1,25 @@
+package main
+
+// This file is copied into a temporary checkout by run.sh. It forces the
+// official AWS config and KMS packages into the linked Heimdall artifact while
+// preserving lazy initialization: without HEIMDALL_AWS_SPIKE_EXERCISE=1 no AWS
+// config, credential chain, metadata endpoint, or client is touched.
+
+import (
+	"context"
+	"os"
+
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	awskms "github.com/aws/aws-sdk-go-v2/service/kms"
+)
+
+func init() {
+	if os.Getenv("HEIMDALL_AWS_SPIKE_EXERCISE") != "1" {
+		return
+	}
+	config, err := awsconfig.LoadDefaultConfig(context.Background())
+	if err != nil {
+		return
+	}
+	_ = awskms.NewFromConfig(config)
+}
