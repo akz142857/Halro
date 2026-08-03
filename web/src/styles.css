@@ -718,7 +718,7 @@ textarea { resize: vertical; }
 .policy-action-card { display: flex; align-items: flex-start; gap: 10px; min-width: 0; padding: 15px; background: #07120f; border: 1px solid var(--line-strong); border-radius: 3px; cursor: pointer; }
 .policy-action-card.selected { background: rgba(216,255,97,.045); border-color: rgba(216,255,97,.48); }
 .policy-action-card input { width: auto; min-height: 0; margin-top: 2px; }
-.policy-action-card strong, .policy-action-card small, .policy-status-control strong, .policy-status-control small { display: block; }
+.policy-action-card strong, .policy-action-card small, .policy-status-control strong { display: block; }
 .policy-action-card strong { color: var(--text); font-size: 12px; }
 .policy-action-card small { margin-top: 6px; color: var(--muted); font-size: 10px; line-height: 1.45; }
 .policy-status-field > span { display: block; margin-bottom: 8px; color: #b6c8c2; font-size: 11px; font-weight: 700; }
@@ -726,7 +726,7 @@ textarea { resize: vertical; }
 .policy-status-control:focus-within { border-color: var(--lime); box-shadow: 0 0 0 2px var(--lime); }
 .policy-status-control input, .policy-switch input { width: auto; min-height: 0; }
 .policy-status-control strong { color: var(--text); font-size: 12px; }
-.policy-status-control small { margin-top: 5px; color: var(--muted); font-size: 10px; line-height: 1.45; }
+.policy-status-field > small { display: block; margin-top: 6px; color: var(--muted); font-size: 10px; line-height: 1.5; }
 .policy-block-section > .notice, .policy-ewma-section > .notice { margin: 0 0 18px; }
 .policy-switch { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: 11px; font-weight: 700; }
 .policy-ewma-fields { padding-top: 2px; }
@@ -737,9 +737,8 @@ textarea { resize: vertical; }
 .policy-save-summary strong { color: var(--text); font-size: 11px; }
 .policy-save-summary small { margin-top: 4px; color: var(--muted); font-size: 9px; }
 .modal:has(> .policy-form) > header { position: sticky; top: 0; z-index: 4; background: rgba(12,27,24,.98); }
-.modal:has(> .policy-form) { width: min(900px, 100%); scrollbar-width: thin; }
-.modal:has(> .policy-form)::-webkit-scrollbar { display: block; width: 8px; }
-.modal:has(> .policy-form)::-webkit-scrollbar-thumb { background: var(--line-strong); }
+.modal:has(> .policy-form) { width: min(900px, 100%); scrollbar-width: none; }
+.modal:has(> .policy-form)::-webkit-scrollbar { display: none; }
 .modal > .project-form { display: grid; gap: 0; margin: 0; padding: 0; }
 .project-form-section { padding: 22px 24px; border-bottom: 1px solid var(--line); }
 .project-form-section > header { margin-bottom: 18px; }
