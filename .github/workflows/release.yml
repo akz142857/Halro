@@ -58,9 +58,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          go run ./tests/compatibility/server --listen 127.0.0.1:18088 &
+          compat_server=$(mktemp "${RUNNER_TEMP}/heimdall-compat-server.XXXXXX")
+          go build -o "$compat_server" ./tests/compatibility/server
+          "$compat_server" --listen 127.0.0.1:18088 &
           compat_server_pid=$!
-          trap 'kill "$compat_server_pid" 2>/dev/null || true' EXIT
+          trap 'kill "$compat_server_pid" 2>/dev/null || true; rm -f "$compat_server"' EXIT
           for attempt in {1..60}; do
             if curl --fail --silent http://127.0.0.1:18088/healthz >/dev/null; then
               break

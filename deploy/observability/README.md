@@ -104,7 +104,7 @@ Deployment assets are under `external-probe/`:
   heartbeat expiry, firing and resolved behavior;
 - `heimdall-deadman.service` is the hardened systemd template;
 - `Dockerfile` and `external-probe.example.yaml` provide a separate container
-  deployment; `probe.sh` remains only as a compatibility wrapper.
+  deployment.
 
 Install the probe on a different host or failure domain, never beside the Core
 stack as production evidence. Replace every example endpoint and mount the

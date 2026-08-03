@@ -5,10 +5,9 @@ root=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 observability="$root/deploy/observability"
 core_compose="$observability/compose.example.yaml"
 macos_compose="$observability/compose.macos.example.yaml"
-sh -n "$observability/external-probe/probe.sh"
 jq -e . "$observability/external-probe/config.schema.json" >/dev/null
 jq -e . "$observability/external-probe/event.schema.json" >/dev/null
-rg -q 'scalar%28max%28timestamp%28up' \
+grep -Eq 'scalar%28max%28timestamp%28up' \
   "$observability/external-probe/config.example.yaml"
 (
   cd "$root"
@@ -22,23 +21,27 @@ rg -q 'scalar%28max%28timestamp%28up' \
 )
 temporary=$(mktemp -d)
 trap 'rm -rf "$temporary"' EXIT HUP INT TERM
+# The pinned containers run as 65534:65534, so this validation-only Secret
+# must be traversable and readable by that account. The fixed value below is
+# not a production credential and the directory is removed on exit.
+chmod 0755 "$temporary"
 printf 'validation-only-not-a-production-secret\n' >"$temporary/metrics-token"
-chmod 0400 "$temporary/metrics-token"
+chmod 0444 "$temporary/metrics-token"
 
 # The single-host example must not publish management ports or advertise a
 # non-loopback listener. Cross-namespace deployments use the mTLS listener.
-if rg -n '(^|[[:space:]])ports:|0\.0\.0\.0|host\.docker\.internal|169\.254\.169\.254' \
+if grep -En '(^|[[:space:]])ports:|0\.0\.0\.0|host\.docker\.internal|169\.254\.169\.254' \
   "$core_compose"; then
   echo "unsafe observability network target or published port" >&2
   exit 1
 fi
 
-rg -q 'repeat_interval: 1m' "$observability/alertmanager/alertmanager.yml"
+grep -Eq 'repeat_interval: 1m' "$observability/alertmanager/alertmanager.yml"
 for label in environment region cluster; do
-  rg -q "^[[:space:]]+$label:" "$observability/prometheus/prometheus.yml"
+  grep -Eq "^[[:space:]]+$label:" "$observability/prometheus/prometheus.yml"
 done
-rg -q -- '--storage.tsdb.retention.size=5368709120B' "$core_compose"
-rg -q -- '--cluster.listen-address=' "$core_compose"
+grep -Fq -- '--storage.tsdb.retention.size=5368709120B' "$core_compose"
+grep -Fq -- '--cluster.listen-address=' "$core_compose"
 
 core_services=$(docker compose -f "$core_compose" config --services | sort)
 expected_core_services=$(printf '%s\n' alertmanager prometheus)
@@ -65,8 +68,9 @@ docker compose -f "$core_compose" config --format json |
   jq -e '.services.alertmanager.volumes |
     any(.target == "/run/secrets" and .read_only == true)' >/dev/null
 
-if rg -n -i '(bearer[[:space:]]+[A-Za-z0-9._~-]{12,}|secureJsonData|authorization:[[:space:]]*Bearer|password:[[:space:]]*[^$<{])' \
-  "$observability" --glob '!validate.sh'; then
+if grep -REn -i --exclude=validate.sh \
+  '(bearer[[:space:]]+[A-Za-z0-9._~-]{12,}|secureJsonData|authorization:[[:space:]]*Bearer|password:[[:space:]]*[^$<{])' \
+  "$observability"; then
   echo "possible secret material in observability provisioning" >&2
   exit 1
 fi
