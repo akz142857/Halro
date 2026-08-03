@@ -22,8 +22,12 @@ grep -Eq 'scalar%28max%28timestamp%28up' \
 )
 temporary=$(mktemp -d)
 trap 'rm -rf "$temporary"' EXIT HUP INT TERM
+# The pinned containers run as 65534:65534, so this validation-only Secret
+# must be traversable and readable by that account. The fixed value below is
+# not a production credential and the directory is removed on exit.
+chmod 0755 "$temporary"
 printf 'validation-only-not-a-production-secret\n' >"$temporary/metrics-token"
-chmod 0400 "$temporary/metrics-token"
+chmod 0444 "$temporary/metrics-token"
 
 # The single-host example must not publish management ports or advertise a
 # non-loopback listener. Cross-namespace deployments use the mTLS listener.
