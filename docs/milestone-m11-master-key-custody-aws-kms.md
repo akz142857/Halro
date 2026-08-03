@@ -172,7 +172,7 @@ GCP/Azure artifact 不进入本次决策。未完成 spike 和 ADR 更新前不�
 
 | ID | PR Slice | 状态 | 前置依赖 | Exit evidence | Issue / PR / Commit | 备注 |
 |---|---|---|---|---|---|---|
-| M11-PR1 | 统一 Master Key 核心与最终配置 | In Review | 无 | File 模式完整测试；所有直接文件调用收口；新 schema 严格校验；`config check` 零 KMS 调用 | [#56](https://github.com/akz142857/Heimdall/issues/56)；`codex/m11-master-key-core` | `go test ./...`、关键包 Race、Vet 已通过；不引入 AWS SDK |
+| M11-PR1 | 统一 Master Key 核心与最终配置 | In Review | 无 | File 模式完整测试；所有直接文件调用收口；新 schema 严格校验；`config check` 零 KMS 调用 | [#56](https://github.com/akz142857/Heimdall/issues/56)；[PR #64](https://github.com/akz142857/Heimdall/pull/64)；`3066541` | `go test ./...`、关键包 Race、Vet 已通过；不引入 AWS SDK |
 | M11-PR2 | Key Slot descriptor 与状态机 | Not Started | PR1 | pending/active/retiring/revoked 事务、revision、Vault Key Check 和错误测试 | [#57](https://github.com/akz142857/Heimdall/issues/57) | 核心保持 provider-neutral |
 | M11-PR3a | AWS SDK spike、契约评审与 ADR 决策 | Not Started | PR1 | A/B 测量报告；KMSWrapper/错误分类评审；fake KMS contract；ADR 0010 Accepted | [#58](https://github.com/akz142857/Heimdall/issues/58) | 合并内容不含生产 AWS SDK 实现 |
 | M11-PR3b | AWS KMS Adapter 实现 | Not Started | PR3a | Workload Identity、wrap/unwrap、Context、allowlist、重试和真实 AWS smoke tests | [#59](https://github.com/akz142857/Heimdall/issues/59) | 与 PR2 正交，可并行开发 |
