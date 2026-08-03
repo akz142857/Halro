@@ -3,6 +3,7 @@
 package lock
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -17,6 +18,11 @@ type Lock struct {
 }
 
 func Acquire(dataDir string) (*Lock, error) {
+	publication, err := acquireFile(publicationLockPath(dataDir), "publication")
+	if err != nil {
+		return nil, err
+	}
+	defer publication.Close()
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create data directory: %w", err)
 	}
@@ -41,6 +47,37 @@ func Acquire(dataDir string) (*Lock, error) {
 		syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
 		file.Close()
 		return nil, fmt.Errorf("write data lock: %w", err)
+	}
+	return &Lock{file: file}, nil
+}
+
+// AcquireInitialization serializes creation and atomic publication of a new
+// data directory without creating that directory first. Normal writers briefly
+// take the same sibling guard before opening .heimdall.lock, so they cannot
+// race the final directory rename.
+func AcquireInitialization(dataDir string) (*Lock, error) {
+	return acquireFile(publicationLockPath(dataDir), "initialization publication")
+}
+
+func publicationLockPath(dataDir string) string {
+	digest := sha256.Sum256([]byte(filepath.Clean(dataDir)))
+	return filepath.Join(filepath.Dir(dataDir), fmt.Sprintf(".heimdall-publication-%x.lock", digest[:8]))
+}
+
+func acquireFile(path, purpose string) (*Lock, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, fmt.Errorf("create %s lock directory: %w", purpose, err)
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open %s lock: %w", purpose, err)
+	}
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		file.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, ErrAlreadyLocked
+		}
+		return nil, fmt.Errorf("acquire %s lock: %w", purpose, err)
 	}
 	return &Lock{file: file}, nil
 }

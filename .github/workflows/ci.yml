@@ -58,6 +58,7 @@ jobs:
         run: |
           sh -n tools/m11/aws-sdk-spike/run.sh
           sh -n tools/m11/aws-kms-smoke/run.sh
+          sh -n tools/m11/aws-kms-dual-slot-smoke/run.sh
           python3 -m unittest tools/m11/aws-kms-smoke/test_verify_cloudtrail.py
           ./tools/m11/check-kms-boundaries.sh
       - name: Go vulnerability scan

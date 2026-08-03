@@ -31,19 +31,20 @@ func BootstrapAdmin(
 		return err
 	}
 	defer store.Close()
+	adminCount, err := store.AdminUserCount(ctx)
+	if err != nil {
+		return err
+	}
+	if adminCount != 0 {
+		return errors.New("an admin user already exists")
+	}
 	user, err := adminauth.NewUser(username, password, time.Now().UTC())
 	if err != nil {
 		return err
 	}
 	defer clear(user.PasswordHash)
 	defer clear(user.PasswordSalt)
-	if _, err := store.CreateFirstAdmin(ctx, user); err != nil {
-		if errors.Is(err, boltstore.ErrAdminInitialized) {
-			return errors.New("an admin user already exists")
-		}
-		return fmt.Errorf("store admin user: %w", err)
-	}
-	masterKey, err := unlockMasterKey(ctx, cfg)
+	masterKey, err := unlockMasterKey(ctx, cfg, store)
 	if err != nil {
 		return err
 	}
@@ -68,6 +69,12 @@ func BootstrapAdmin(
 	defer auditLog.Close()
 	if err := reconcileAuditCheckpoint(store, auditLog.Summary()); err != nil {
 		return err
+	}
+	if _, err := store.CreateFirstAdmin(ctx, user); err != nil {
+		if errors.Is(err, boltstore.ErrAdminInitialized) {
+			return errors.New("an admin user already exists")
+		}
+		return fmt.Errorf("store admin user: %w", err)
 	}
 	eventID, err := id.New("aud")
 	if err != nil {
@@ -116,7 +123,7 @@ func ResetAdminPassword(
 	replacement.Locale = current.Locale
 	replacement.SessionGeneration = current.SessionGeneration + 1
 
-	masterKey, err := unlockMasterKey(ctx, cfg)
+	masterKey, err := unlockMasterKey(ctx, cfg, store)
 	if err != nil {
 		return err
 	}
@@ -178,7 +185,7 @@ func ResetAdminMFA(ctx context.Context, cfg config.Config, username string) erro
 	if _, err := store.GetAdminUser(ctx, username); err != nil {
 		return errors.New("admin user was not found")
 	}
-	masterKey, err := unlockMasterKey(ctx, cfg)
+	masterKey, err := unlockMasterKey(ctx, cfg, store)
 	if err != nil {
 		return err
 	}

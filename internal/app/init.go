@@ -23,15 +23,21 @@ const (
 )
 
 // InspectInitialization distinguishes a new instance from an initialized one
-// without opening or modifying any persistent state.
+// without modifying state or initializing a KMS Adapter. Key-Slot mode opens
+// metadata read-only so file presence alone can never imply production-ready.
 func InspectInitialization(cfg config.Config) (InitializationState, error) {
-	keyStore, err := fileMasterKeyStore(cfg)
-	if err != nil {
-		return InitializationInconsistent, err
-	}
-	masterKeyExists, err := keyStore.Exists(context.Background())
-	if err != nil {
-		return InitializationInconsistent, err
+	masterKeyExists := false
+	if cfg.Storage.MasterKey.Mode == config.MasterKeyModeFile {
+		keyStore, err := fileMasterKeyStore(cfg)
+		if err != nil {
+			return InitializationInconsistent, err
+		}
+		masterKeyExists, err = keyStore.Exists(context.Background())
+		if err != nil {
+			return InitializationInconsistent, err
+		}
+	} else if cfg.Storage.MasterKey.Mode != config.MasterKeyModeKeySlots {
+		return InitializationInconsistent, errors.New("unsupported Master Key mode")
 	}
 	metadataExists, err := pathExists(cfg.MetadataPath())
 	if err != nil {
@@ -45,10 +51,30 @@ func InspectInitialization(cfg config.Config) (InitializationState, error) {
 	if err != nil {
 		return InitializationInconsistent, err
 	}
-	if masterKeyExists && metadataExists && ledgerExists && auditExists {
+	rootExists := masterKeyExists
+	if cfg.Storage.MasterKey.Mode == config.MasterKeyModeKeySlots {
+		rootExists = metadataExists
+	}
+	if rootExists && metadataExists && ledgerExists && auditExists {
+		if cfg.Storage.MasterKey.Mode == config.MasterKeyModeKeySlots {
+			metadata, err := boltstore.OpenReadOnly(cfg.MetadataPath())
+			if err != nil {
+				return InitializationInconsistent, nil
+			}
+			descriptor, descriptorErr := metadata.KeySlotDescriptor(context.Background())
+			keyring, keyringErr := metadata.VaultKeyring()
+			_, keyCheckErr := metadata.VaultKeyCheck()
+			_, auditEnvelopeErr := metadata.AuditHMACEnvelope()
+			_, auditCheckpointErr := metadata.AuditCheckpoint()
+			closeErr := metadata.Close()
+			if descriptorErr != nil || keyringErr != nil || keyCheckErr != nil || auditEnvelopeErr != nil || auditCheckpointErr != nil || closeErr != nil ||
+				!descriptor.ProductionReady() || keyring.ActiveFingerprint != descriptor.MasterKeyFingerprint {
+				return InitializationInconsistent, nil
+			}
+		}
 		return InitializationSystemReady, nil
 	}
-	if masterKeyExists || metadataExists || ledgerExists || auditExists {
+	if rootExists || metadataExists || ledgerExists || auditExists {
 		return InitializationInconsistent, nil
 	}
 	entries, err := os.ReadDir(cfg.Storage.DataDir)
@@ -76,6 +102,9 @@ func InitializeIfNeeded(cfg config.Config) (bool, error) {
 	case InitializationInconsistent:
 		return false, errors.New("Heimdall initialization is incomplete; restore the matching master key and data directory or move the partial state aside")
 	case InitializationEmpty:
+		if cfg.Storage.MasterKey.Mode == config.MasterKeyModeKeySlots {
+			return false, errors.New("empty key_slots instance requires explicit offline `heimdall init`; automatic Runtime initialization is disabled")
+		}
 		if err := Initialize(cfg); err != nil {
 			return false, err
 		}
@@ -104,6 +133,17 @@ const (
 )
 
 func Initialize(cfg config.Config) error {
+	switch cfg.Storage.MasterKey.Mode {
+	case config.MasterKeyModeFile:
+		return initializeFile(cfg)
+	case config.MasterKeyModeKeySlots:
+		return initializeKMS(context.Background(), cfg, kmsInitializationOptions{})
+	default:
+		return errors.New("unsupported Master Key mode")
+	}
+}
+
+func initializeFile(cfg config.Config) error {
 	dataLock, err := lock.Acquire(cfg.Storage.DataDir)
 	if err != nil {
 		return err

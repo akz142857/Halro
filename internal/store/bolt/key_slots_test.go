@@ -106,6 +106,63 @@ func TestKeySlotDescriptorPublicationRollsBackAtEveryKillPoint(t *testing.T) {
 	}
 }
 
+func TestKeySlotInitializationPublishesCompleteStateAtomically(t *testing.T) {
+	state := newTestKeySlotInitialization(t)
+	points := []string{
+		"before_put_descriptor", "after_put_descriptor",
+		"before_put_keyring", "after_put_keyring",
+		"before_put_vault_key_check", "after_put_vault_key_check",
+		"before_put_audit_hmac_envelope", "after_put_audit_hmac_envelope",
+		"before_put_audit_checkpoint", "after_put_audit_checkpoint",
+	}
+	for _, point := range points {
+		t.Run(point, func(t *testing.T) {
+			store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			injected := errors.New("injected initialization failure")
+			err = store.initializeKeySlotStateWithHook(context.Background(), state, func(current string) error {
+				if current == point {
+					return injected
+				}
+				return nil
+			})
+			if !errors.Is(err, injected) {
+				t.Fatalf("kill point error=%v", err)
+			}
+			for name, load := range map[string]func() error{
+				"descriptor":       func() error { _, err := store.KeySlotDescriptor(context.Background()); return err },
+				"keyring":          func() error { _, err := store.VaultKeyring(); return err },
+				"vault key check":  func() error { _, err := store.VaultKeyCheck(); return err },
+				"audit envelope":   func() error { _, err := store.AuditHMACEnvelope(); return err },
+				"audit checkpoint": func() error { _, err := store.AuditCheckpoint(); return err },
+			} {
+				if err := load(); !errors.Is(err, ErrNotFound) {
+					t.Fatalf("%s was partially published: %v", name, err)
+				}
+			}
+		})
+	}
+
+	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.InitializeKeySlotState(context.Background(), state); err != nil {
+		t.Fatal(err)
+	}
+	descriptor, err := store.KeySlotDescriptor(context.Background())
+	if err != nil || !descriptor.ProductionReady() {
+		t.Fatalf("descriptor=%#v err=%v", descriptor, err)
+	}
+	if err := store.InitializeKeySlotState(context.Background(), state); !errors.Is(err, ErrAlreadyExists) {
+		t.Fatalf("duplicate initialization error=%v", err)
+	}
+}
+
 func TestKeySlotDescriptorStoreRejectsSkippedStateAndRemovedMetadata(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
@@ -252,6 +309,39 @@ func newTestKeySlotDescriptor(t *testing.T) masterkey.KeySlotDescriptor {
 		t.Fatal(err)
 	}
 	return descriptor
+}
+
+func newTestKeySlotInitialization(t *testing.T) KeySlotInitialization {
+	t.Helper()
+	key := bytes.Repeat([]byte{9}, 32)
+	descriptor := newTestKeySlotDescriptor(t)
+	now := time.Date(2026, 8, 3, 18, 0, 0, 0, time.UTC)
+	for index, pending := range []masterkey.PendingKeySlot{
+		testPendingSlot("slot_primary", masterkey.KeySlotPrimary),
+		testPendingSlot("slot_recovery", masterkey.KeySlotRecovery),
+	} {
+		var err error
+		descriptor, _, err = descriptor.AddSlot(pending, descriptor.Revision, now.Add(time.Duration(index*2)*time.Minute))
+		if err != nil {
+			t.Fatal(err)
+		}
+		slot := slotByIDForBoltTest(t, descriptor, pending.ID)
+		descriptor, _, err = descriptor.VerifySlot(
+			context.Background(), pending.ID, descriptor.Revision, slot.Revision,
+			boltTestSlotUnwrapper{key: key}, boltTestCandidateVerifier{}, now.Add(time.Duration(index*2+1)*time.Minute),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	return KeySlotInitialization{
+		Descriptor: descriptor,
+		Keyring: VaultKeyring{
+			FormatVersion: 1, ActiveKeyVersion: 1, ActiveFingerprint: descriptor.MasterKeyFingerprint,
+		},
+		VaultKeyCheck: []byte("encrypted-vault-key-check"), AuditHMACEnvelope: []byte("encrypted-audit-key"),
+		AuditCheckpoint: AuditCheckpoint{Records: 1, Bytes: 128},
+	}
 }
 
 func testPendingSlot(id string, purpose masterkey.KeySlotPurpose) masterkey.PendingKeySlot {

@@ -26,7 +26,7 @@ func VerifyAudit(ctx context.Context, cfg config.Config) (audit.Summary, error) 
 		return audit.Summary{}, err
 	}
 	defer store.Close()
-	masterKey, err := unlockMasterKey(ctx, cfg)
+	masterKey, err := unlockMasterKey(ctx, cfg, store)
 	if err != nil {
 		return audit.Summary{}, err
 	}

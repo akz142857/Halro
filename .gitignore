@@ -24,6 +24,7 @@ node_modules/
 /web/vite.config.js
 /web/vite.config.d.ts
 .DS_Store
+.heimdall-publication-*.lock
 __pycache__/
 *.test
 *.prof

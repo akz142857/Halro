@@ -537,6 +537,97 @@ func (s *Store) ReplaceKeySlotDescriptor(
 	return s.replaceKeySlotDescriptorWithHook(ctx, expectedRevision, descriptor, nil)
 }
 
+// KeySlotInitialization is the complete cryptographic root state for a new
+// external-KMS instance. It is published in one bbolt transaction so no reader
+// can observe a descriptor without its matching Vault Key Check, Keyring,
+// protected Audit key and Audit checkpoint.
+type KeySlotInitialization struct {
+	Descriptor        masterkey.KeySlotDescriptor
+	Keyring           VaultKeyring
+	VaultKeyCheck     []byte
+	AuditHMACEnvelope []byte
+	AuditCheckpoint   AuditCheckpoint
+}
+
+func (s *Store) InitializeKeySlotState(ctx context.Context, state KeySlotInitialization) error {
+	return s.initializeKeySlotStateWithHook(ctx, state, nil)
+}
+
+func (s *Store) initializeKeySlotStateWithHook(
+	ctx context.Context,
+	state KeySlotInitialization,
+	hook func(string) error,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := state.Descriptor.Validate(); err != nil {
+		return err
+	}
+	if !state.Descriptor.ProductionReady() {
+		return errors.New("initial key slot descriptor must be production-ready")
+	}
+	if err := state.Keyring.Validate(); err != nil {
+		return err
+	}
+	if state.Keyring.ActiveFingerprint != state.Descriptor.MasterKeyFingerprint {
+		return errors.New("keyring fingerprint does not match key slot descriptor")
+	}
+	if len(state.VaultKeyCheck) == 0 || len(state.AuditHMACEnvelope) == 0 || state.AuditCheckpoint.Bytes < 0 {
+		return errors.New("complete Vault and Audit initialization material is required")
+	}
+	descriptor, err := json.Marshal(state.Descriptor)
+	if err != nil {
+		return err
+	}
+	keyring, err := json.Marshal(state.Keyring)
+	if err != nil {
+		return err
+	}
+	checkpoint, err := json.Marshal(state.AuditCheckpoint)
+	if err != nil {
+		return err
+	}
+	values := []struct {
+		name  string
+		key   []byte
+		value []byte
+	}{
+		{name: "descriptor", key: keyKeySlotDescriptor, value: descriptor},
+		{name: "keyring", key: keyVaultKeyring, value: keyring},
+		{name: "vault_key_check", key: keyVaultCheck, value: state.VaultKeyCheck},
+		{name: "audit_hmac_envelope", key: keyAuditHMACEnvelope, value: state.AuditHMACEnvelope},
+		{name: "audit_checkpoint", key: keyAuditCheckpoint, value: checkpoint},
+	}
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		meta := tx.Bucket(bucketMeta)
+		for _, item := range values {
+			if meta.Get(item.key) != nil {
+				return ErrAlreadyExists
+			}
+		}
+		for _, item := range values {
+			if hook != nil {
+				if err := hook("before_put_" + item.name); err != nil {
+					return err
+				}
+			}
+			if err := meta.Put(item.key, item.value); err != nil {
+				return err
+			}
+			if hook != nil {
+				if err := hook("after_put_" + item.name); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
+}
+
 func (s *Store) replaceKeySlotDescriptorWithHook(
 	ctx context.Context,
 	expectedRevision uint64,
