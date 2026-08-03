@@ -16,7 +16,9 @@ import (
 const maxRetryAfter = 30 * time.Second
 
 func classifyAWSError(err error, operation corekms.Operation) error {
-	class := corekms.ErrorTransient
+	// Unknown SDK, API, and HTTP failures are not evidence that retry is safe.
+	// Start fail closed and opt in only explicitly classified transient cases.
+	class := corekms.ErrorAdapterUnavailable
 	var identity identityError
 	var api smithy.APIError
 	switch {
@@ -56,7 +58,7 @@ func classifyAPIError(code string) corekms.ErrorClass {
 	case "InvalidArnException", "InvalidKeyUsageException", "ValidationException", "UnsupportedOperationException":
 		return corekms.ErrorConfigInvalid
 	default:
-		return corekms.ErrorTransient
+		return corekms.ErrorAdapterUnavailable
 	}
 }
 
@@ -71,7 +73,7 @@ func classifyHTTPStatus(status int) corekms.ErrorClass {
 	case status == http.StatusRequestTimeout || status >= 500:
 		return corekms.ErrorTransient
 	default:
-		return corekms.ErrorTransient
+		return corekms.ErrorAdapterUnavailable
 	}
 }
 

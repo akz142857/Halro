@@ -18,8 +18,10 @@ rotation.
    Slot-specific `HKMSKEY1` payload and Encryption Context.
 5. Each pending Slot is independently unwrapped, checked against its payload
    binding and fingerprint, and authenticated by the same Vault Key Check.
-6. Only a production-ready descriptor containing active verified Primary and
-   Recovery Slots is accepted by the initialization transaction.
+6. The initialization transaction accepts only a production-ready descriptor
+   and requires every active Slot to be unwrapped again, match the descriptor
+   fingerprint and authenticate against the Vault Key Check before any record
+   is written. A caller cannot publish a fabricated active descriptor directly.
 7. Descriptor, Keyring, Vault Key Check, Audit HMAC envelope and Audit
    checkpoint are committed in one bbolt transaction in a staging data tree.
 8. Ledger and four secret-safe Slot transition Audit records are durable before

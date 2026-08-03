@@ -162,8 +162,7 @@ func workloadIdentitySource(source string) bool {
 	switch source {
 	case "WebIdentityCredentials", // EKS IRSA and other OIDC federation.
 		"CredentialsEndpointProvider", // ECS task role and EKS Pod Identity.
-		"EC2RoleProvider",             // EC2 instance profile.
-		"AssumeRoleProvider":          // Explicit IAM Role profiles/chains.
+		"EC2RoleProvider":             // EC2 instance profile.
 		return true
 	default:
 		return false
