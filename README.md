@@ -15,6 +15,8 @@ locally owned control boundary.
 - Anthropic-compatible Messages with portable and native routing
 - Versioned, capability-aware Provider Profiles and fail-closed transport
 - Durable accounting, audit integrity, anomaly containment, and redaction
+- Authenticated Prometheus metrics, Alertmanager rules, and an independent
+  dead-man monitor
 
 > [!IMPORTANT]
 > Chat, Embeddings, Stateless Responses, and Anthropic Messages have published
@@ -141,6 +143,29 @@ Heimdall currently runs as a standalone, single-writer system backed by bbolt
 metadata, an authoritative Ledger WAL, private local objects, and Parquet usage
 partitions. HA/Cluster and Realtime material in the architecture documents is
 future, gated design—not a statement of current runtime support.
+
+## Observability
+
+Heimdall exposes an authenticated Prometheus-format Metrics endpoint. The
+repository includes a versioned single-host Core reference deployment made up
+of Prometheus and Alertmanager, together with recording rules, alert rules,
+rule tests, configuration validation, and an isolated runtime smoke test.
+Prometheus is the metrics and alert authority.
+
+The `heimdall-deadman` binary is deployed in a separate failure domain. It
+checks Heimdall, Prometheus, and Alertmanager readiness, verifies Prometheus
+sample freshness, and sends durable heartbeat and down/up events to an
+independent receiver.
+
+Validate the repository-provided configuration before deployment:
+
+```bash
+make observability-check
+```
+
+Secret preparation, Linux and macOS Compose commands, the independent dead-man
+contract, and production boundaries are documented in the
+[Prometheus/Alertmanager deployment guide](deploy/observability/README.md).
 
 ## Documentation
 
