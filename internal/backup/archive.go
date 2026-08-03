@@ -176,7 +176,9 @@ func Create(options CreateOptions) (Manifest, error) {
 		return Manifest{}, err
 	}
 	if err := syncDirectory(filepath.Dir(options.OutputPath)); err != nil {
-		return Manifest{}, err
+		removeErr := os.Remove(options.OutputPath)
+		cleanupSyncErr := syncDirectory(filepath.Dir(options.OutputPath))
+		return Manifest{}, errors.Join(err, removeErr, cleanupSyncErr)
 	}
 	return manifest, nil
 }

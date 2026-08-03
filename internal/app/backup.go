@@ -238,7 +238,26 @@ func restoreBackupWithFactory(
 		return RestoreResult{}, errors.Join(fmt.Errorf("publish restored data directory: %w", err), rollbackErr)
 	}
 	if err := syncDirectoryPath(dataParent); err != nil {
-		return RestoreResult{}, fmt.Errorf("sync restored data directory publication: %w", err)
+		publicationErr := fmt.Errorf("sync restored data directory publication: %w", err)
+		removeCandidateErr := os.Rename(cfg.Storage.DataDir, stageData)
+		if removeCandidateErr != nil {
+			return RestoreResult{}, errors.Join(publicationErr, fmt.Errorf("remove unsynced restored data directory: %w", removeCandidateErr))
+		}
+		restorePreviousErr := os.Rename(previousDataDir, cfg.Storage.DataDir)
+		if restorePreviousErr != nil {
+			republishErr := os.Rename(stageData, cfg.Storage.DataDir)
+			var republishContext error
+			if republishErr != nil {
+				republishContext = fmt.Errorf("republish restored candidate after rollback failure: %w", republishErr)
+			}
+			return RestoreResult{}, errors.Join(
+				publicationErr,
+				fmt.Errorf("restore previous data directory: %w", restorePreviousErr),
+				republishContext,
+			)
+		}
+		rollbackSyncErr := syncDirectoryPath(dataParent)
+		return RestoreResult{}, errors.Join(publicationErr, rollbackSyncErr)
 	}
 	return RestoreResult{
 		BackupID: manifest.BackupID, DataDir: cfg.Storage.DataDir,
