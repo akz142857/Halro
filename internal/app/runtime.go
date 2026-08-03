@@ -108,7 +108,7 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		dataLock.Close()
 		return nil, err
 	}
-	masterKey, err := vault.LoadMasterKey(cfg.Storage.MasterKeyFile)
+	masterKey, err := unlockMasterKey(ctx, cfg)
 	if err != nil {
 		return fail(err)
 	}

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -23,7 +24,9 @@ tls:
 storage:
   data_dir: "./data"
   metadata_file: "heimdall.db"
-  master_key_file: "./master.key"
+  master_key:
+    mode: file
+    file: "./master.key"
 usage:
   durability: balanced
   timezone: UTC
@@ -65,6 +68,113 @@ func TestDecodeRejectsUnknownFields(t *testing.T) {
 	_, err := Decode(strings.NewReader(validConfig + "\nunknown: true\n"))
 	if err == nil {
 		t.Fatal("expected unknown field error")
+	}
+}
+
+func TestKeySlotsConfigurationIsValidatedStatically(t *testing.T) {
+	keySlots := strings.Replace(validConfig, `  master_key:
+    mode: file
+    file: "./master.key"`, `  master_key:
+    mode: key_slots
+    primary_slot: slot_aws_primary
+    recovery_slot: slot_aws_recovery
+    startup_deadline: 60s
+    call_timeout: 5s
+    allowed_kms_keys:
+      - purpose: primary
+        provider: aws-kms
+        region: ap-southeast-1
+        account: "123456789012"
+        key_id: arn:aws:kms:ap-southeast-1:123456789012:key/primary
+        endpoint: https://kms.invalid.example
+      - purpose: recovery
+        provider: aws-kms
+        region: ap-southeast-2
+        account: "210987654321"
+        key_id: arn:aws:kms:ap-southeast-2:210987654321:key/recovery`, 1)
+	cfg, err := Decode(strings.NewReader(keySlots))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Validate(LoadOptions{}); err != nil {
+		t.Fatalf("valid key_slots configuration was rejected: %v", err)
+	}
+}
+
+func TestMasterKeyConfigurationRejectsModeMixing(t *testing.T) {
+	cfg, err := Decode(strings.NewReader(strings.Replace(validConfig, `    file: "./master.key"`, `    file: "./master.key"
+    primary_slot: forbidden`, 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Validate(LoadOptions{}); err == nil || !strings.Contains(err.Error(), "key_slots fields cannot be set in file mode") {
+		t.Fatalf("expected mode-mixing error, got %v", err)
+	}
+}
+
+func TestDecodeRejectsLegacyMasterKeyFile(t *testing.T) {
+	legacy := strings.Replace(validConfig, `  master_key:
+    mode: file
+    file: "./master.key"`, `  master_key_file: "./master.key"`, 1)
+	if _, err := Decode(strings.NewReader(legacy)); err == nil {
+		t.Fatal("legacy storage.master_key_file was accepted")
+	}
+}
+
+func TestKeySlotsConfigurationRejectsUnsafeCombinations(t *testing.T) {
+	valid := MasterKey{
+		Mode:            MasterKeyModeKeySlots,
+		PrimarySlot:     "slot_primary",
+		RecoverySlot:    "slot_recovery",
+		StartupDeadline: Duration(time.Minute),
+		CallTimeout:     Duration(5 * time.Second),
+		AllowedKMSKeys: []AllowedKMSKey{
+			{Purpose: "primary", Provider: "aws-kms", Region: "a", Account: "1", KeyID: "primary"},
+			{Purpose: "recovery", Provider: "aws-kms", Region: "b", Account: "2", KeyID: "recovery"},
+		},
+	}
+	tests := []struct {
+		name   string
+		mutate func(*MasterKey)
+		want   string
+	}{
+		{
+			name: "same slot", mutate: func(value *MasterKey) { value.RecoverySlot = value.PrimarySlot },
+			want: "primary_slot and recovery_slot must be different",
+		},
+		{
+			name: "call timeout reaches total deadline", mutate: func(value *MasterKey) { value.CallTimeout = value.StartupDeadline },
+			want: "call_timeout must be positive and less than startup_deadline",
+		},
+		{
+			name: "same KMS key", mutate: func(value *MasterKey) {
+				value.AllowedKMSKeys[1] = AllowedKMSKey{Purpose: "recovery", Provider: "aws-kms", Region: "a", Account: "1", KeyID: "primary"}
+			},
+			want: "primary and recovery allowlists must not use the same KMS key",
+		},
+		{
+			name: "endpoint query", mutate: func(value *MasterKey) {
+				value.AllowedKMSKeys[0].Endpoint = "https://kms.example.test?credential=forbidden"
+			},
+			want: "endpoint must be an HTTPS origin without userinfo, path, query, or fragment",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := valid
+			candidate.AllowedKMSKeys = append([]AllowedKMSKey(nil), valid.AllowedKMSKeys...)
+			test.mutate(&candidate)
+			err := errors.Join(validateMasterKey(candidate)...)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("expected %q, got %v", test.want, err)
+			}
+		})
 	}
 }
 

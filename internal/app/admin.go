@@ -43,7 +43,7 @@ func BootstrapAdmin(
 		}
 		return fmt.Errorf("store admin user: %w", err)
 	}
-	masterKey, err := vault.LoadMasterKey(cfg.Storage.MasterKeyFile)
+	masterKey, err := unlockMasterKey(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -116,7 +116,7 @@ func ResetAdminPassword(
 	replacement.Locale = current.Locale
 	replacement.SessionGeneration = current.SessionGeneration + 1
 
-	masterKey, err := vault.LoadMasterKey(cfg.Storage.MasterKeyFile)
+	masterKey, err := unlockMasterKey(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -178,7 +178,7 @@ func ResetAdminMFA(ctx context.Context, cfg config.Config, username string) erro
 	if _, err := store.GetAdminUser(ctx, username); err != nil {
 		return errors.New("admin user was not found")
 	}
-	masterKey, err := vault.LoadMasterKey(cfg.Storage.MasterKeyFile)
+	masterKey, err := unlockMasterKey(ctx, cfg)
 	if err != nil {
 		return err
 	}

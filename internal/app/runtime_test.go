@@ -115,7 +115,7 @@ func TestOpenRejectsWrongMasterKey(t *testing.T) {
 	if _, err := rand.Read(replacement); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(cfg.Storage.MasterKeyFile, replacement, 0o600); err != nil {
+	if err := os.WriteFile(cfg.Storage.MasterKey.File, replacement, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	clear(replacement)
@@ -184,7 +184,7 @@ func TestMetricsRequireDerivedBearerToken(t *testing.T) {
 func TestVersionedMetricsCredentialsRotateAndRevokeWithoutRestart(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.Metrics.Enabled = true
-	cfg.Metrics.CredentialFile = filepath.Join(filepath.Dir(cfg.Storage.MasterKeyFile), "metrics-credentials.json")
+	cfg.Metrics.CredentialFile = filepath.Join(filepath.Dir(cfg.Storage.MasterKey.File), "metrics-credentials.json")
 	now := time.Now().UTC()
 	first, err := metricsauth.Rotate(cfg.Metrics.CredentialFile, time.Minute, now)
 	if err != nil {
@@ -391,9 +391,12 @@ func testConfig(t *testing.T) config.Config {
 			MaxRequestBytes:   10 << 20,
 		},
 		Storage: config.Storage{
-			DataDir:       filepath.Join(root, "data"),
-			MetadataFile:  "heimdall.db",
-			MasterKeyFile: filepath.Join(root, "master.key"),
+			DataDir:      filepath.Join(root, "data"),
+			MetadataFile: "heimdall.db",
+			MasterKey: config.MasterKey{
+				Mode: config.MasterKeyModeFile,
+				File: filepath.Join(root, "master.key"),
+			},
 		},
 		Usage: config.Usage{Durability: "balanced", Timezone: "UTC"},
 		Gateway: config.Gateway{

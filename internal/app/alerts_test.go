@@ -199,7 +199,7 @@ func openMetadataVault(t *testing.T, cfg config.Config) (*boltstore.Store, *vaul
 	if err != nil {
 		t.Fatal(err)
 	}
-	masterKey, err := vault.LoadMasterKey(cfg.Storage.MasterKeyFile)
+	masterKey, err := vault.LoadMasterKey(cfg.Storage.MasterKey.File)
 	if err != nil {
 		store.Close()
 		t.Fatal(err)
