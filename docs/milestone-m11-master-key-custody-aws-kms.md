@@ -136,14 +136,14 @@ Recovery Slot 至少在以下一个或多个维度与 Primary 隔离：
 - 泄露响应必须执行 DEK rotate、创建新备份并处置仍受旧 KEK 影响的历史备份；
 - DEK rotate 必须保留现有 Audit 连续性、Admin Session 失效、COW、crash bridge 和 compaction 不变量。
 
-### 4.3 SDK 与发布方式尚未冻结
+### 4.3 SDK 与发布方式已冻结
 
-ADR 0010 在 Phase 0 重新以测量结果决策，只比较当前真实需要的两种方案：
+ADR 0010 已根据 Phase 0 的可复现测量接受方案 A；本次决策只比较当前真实需要的两种方案：
 
 | 方案 | 描述 | 当前状态 |
 |---|---|---|
-| A | 主 Heimdall 二进制直接包含 AWS SDK；未启用时不访问 AWS | Pending spike |
-| B | `heimdall` 与 `heimdall-aws` 两个签名 artifact | Pending spike |
+| A | 主 Heimdall 二进制直接包含 AWS SDK；未启用时不访问 AWS | Accepted |
+| B | `heimdall` 与 `heimdall-aws` 两个签名 artifact | Rejected for M11 |
 
 Spike 必须测量：
 
@@ -154,7 +154,7 @@ Spike 必须测量：
 - Workload Identity 接入复杂度；
 - 一个与两个 artifact 的 CI、签名和发布成本。
 
-GCP/Azure artifact 不进入本次决策。未完成 spike 和 ADR 更新前不得引入 AWS SDK。
+GCP/Azure artifact 不进入本次决策。Spike 证据已归档，ADR 0010 已更新为 `Accepted`；生产 AWS SDK Adapter 只能建立在该冻结契约和单 artifact 发布布局之上。
 
 ## 5. 进度状态定义
 
@@ -395,7 +395,7 @@ storage:
 | 2026-08-03 | 不承担开发期旧配置和数据迁移 | Accepted | 直接实现最终 schema，无 Legacy/File→KMS 流程 |
 | 2026-08-03 | 不实现 Passphrase、助记词和钱包式恢复 | Accepted | 当前 Recovery 使用独立 KMS Slot |
 | 2026-08-03 | AWS KMS 生产模式必须有 Primary 和 Recovery | Accepted | 单 Slot 不能 production-ready |
-| 2026-08-03 | AWS SDK artifact 方案由实测 spike 后更新 ADR 0010 | Pending | 阻塞 AWS SDK 引入 |
+| 2026-08-03 | AWS SDK artifact 方案采用单 module、单签名 `heimdall` artifact，ADR 0010 已 Accepted | Accepted | AWS SDK 引入必须遵守冻结契约、File 零云调用和单 artifact 发布门禁 |
 | 2026-08-03 | PR3 拆为决策门 PR3a 与实现 PR3b | Accepted | G3/Accepted ADR 成为 AWS SDK 实现的显式前置 |
 | 2026-08-03 | Key Slot 配置统一为 Primary/Recovery + timeout 字段 | Accepted | 两份 PRD 使用同一最终 schema，`config check` 保持纯静态 |
 
