@@ -114,16 +114,16 @@ function PolicyForm({
   const [blockTTL, setBlockTTL] = useState(current?.block_ttl_seconds ?? 300);
   const [cooldown, setCooldown] = useState(current?.cooldown_seconds ?? 60);
   const [ewmaEnabled, setEWMAEnabled] = useState(current?.ewma_enabled ?? false);
-  const [ewmaAlpha, setEWMAAlpha] = useState(current?.ewma_alpha || 0.2);
-  const [ewmaMultiplier, setEWMAMultiplier] = useState(current?.ewma_multiplier || 3);
-  const [ewmaMinimumSamples, setEWMAMinimumSamples] = useState(current?.ewma_minimum_samples || 100);
-  const [ewmaWarmup, setEWMAWarmup] = useState(current?.ewma_warmup_seconds || 3600);
-  const [ewmaWindow, setEWMAWindow] = useState(current?.ewma_evaluation_window_seconds || 60);
-  const [ewmaCooldown, setEWMACooldown] = useState(current?.ewma_cooldown_seconds || 300);
-  const [ewmaRPMFloor, setEWMARPMFloor] = useState(current?.ewma_absolute_rpm || 60);
-  const [ewmaTPMFloor, setEWMATPMFloor] = useState(current?.ewma_absolute_tpm || 50_000);
-  const [ewmaTokensFloor, setEWMATokensFloor] = useState(current?.ewma_absolute_tokens_per_request || 4_000);
-  const [ewmaCostFloor, setEWMACostFloor] = useState((current?.ewma_absolute_cost_micros_per_minute || 1_000_000) / 1_000_000);
+  const [ewmaAlpha, setEWMAAlpha] = useState(current?.ewma_alpha ?? 0.2);
+  const [ewmaMultiplier, setEWMAMultiplier] = useState(current?.ewma_multiplier ?? 3);
+  const [ewmaMinimumSamples, setEWMAMinimumSamples] = useState(current?.ewma_minimum_samples ?? 100);
+  const [ewmaWarmup, setEWMAWarmup] = useState(current?.ewma_warmup_seconds ?? 3600);
+  const [ewmaWindow, setEWMAWindow] = useState(current?.ewma_evaluation_window_seconds ?? 60);
+  const [ewmaCooldown, setEWMACooldown] = useState(current?.ewma_cooldown_seconds ?? 300);
+  const [ewmaRPMFloor, setEWMARPMFloor] = useState(current?.ewma_absolute_rpm ?? 60);
+  const [ewmaTPMFloor, setEWMATPMFloor] = useState(current?.ewma_absolute_tpm ?? 50_000);
+  const [ewmaTokensFloor, setEWMATokensFloor] = useState(current?.ewma_absolute_tokens_per_request ?? 4_000);
+  const [ewmaCostFloor, setEWMACostFloor] = useState((current?.ewma_absolute_cost_micros_per_minute ?? 1_000_000) / 1_000_000);
   const queryClient = useQueryClient();
   const body = {
     name, enabled, action,
@@ -159,67 +159,76 @@ function PolicyForm({
     },
   });
   return (
-    <Modal title={current ? t("policies.edit") : t("policies.createTitle")} onClose={onClose} closeDisabled={mutation.isPending}>
-      <form className="form-grid" onSubmit={(event) => {
+    <Modal wide title={current ? t("policies.edit") : t("policies.createTitle")} onClose={onClose} closeDisabled={mutation.isPending}>
+      <form className="policy-form" aria-busy={mutation.isPending} onSubmit={(event) => {
         event.preventDefault();
         const nextErrors = validatePolicy({
           name, requestTokens, tokensPerMinute, costPerMinute, concurrency, errorRate,
           minimumSamples, uniqueIPs, action, violations, blockTTL, cooldown, ewmaEnabled,
           ewmaAlpha, ewmaMultiplier, ewmaMinimumSamples, ewmaWarmup, ewmaWindow,
           ewmaCooldown, ewmaRPMFloor, ewmaTPMFloor, ewmaTokensFloor, ewmaCostFloor,
-        });
+        }, t);
         setErrors(nextErrors);
         if (!Object.keys(nextErrors).length) mutation.mutate();
       }}>
-        <Field label={t("policies.name")} error={errors.name}><input autoFocus value={name} onChange={(event) => setName(event.target.value)} /></Field>
-        <Field label={t("policies.action")}>
-          <select value={action} onChange={(event) => setAction(event.target.value as typeof action)}>
-            <option value="observe">{t("policies.observe")}</option>
-            <option value="alert">{t("policies.alert")}</option>
-            <option value="temporary_block">{t("policies.temporaryBlock")}</option>
-          </select>
-        </Field>
-        <Field label={t("policies.requestLimit")} error={errors.requestTokens}><NumberInput value={requestTokens} set={setRequestTokens} /></Field>
-        <Field label={t("policies.minuteLimit")} error={errors.tokensPerMinute}><NumberInput value={tokensPerMinute} set={setTokensPerMinute} /></Field>
-        <Field label={t("policies.costLimit")} error={errors.costPerMinute}><NumberInput value={costPerMinute} set={setCostPerMinute} step=".01" /></Field>
-        <Field label={t("policies.concurrencyLimit")} error={errors.concurrency}><NumberInput value={concurrency} set={setConcurrency} /></Field>
-        <Field label={t("policies.errorThreshold")} error={errors.errorRate}><NumberInput value={errorRate} set={setErrorRate} step=".1" /></Field>
-        <Field label={t("policies.minimumSamples")} error={errors.minimumSamples}><NumberInput value={minimumSamples} set={setMinimumSamples} /></Field>
-        <Field label={t("policies.uniqueSources")} error={errors.uniqueIPs}><NumberInput value={uniqueIPs} set={setUniqueIPs} /></Field>
+        {!!Object.keys(errors).length && <div className="policy-error-summary" role="alert">{t("policies.errorSummary", { count: Object.keys(errors).length })}</div>}
+        <section className="policy-form-section">
+          <header><div><h3>{t("policies.identitySection")}</h3><p>{t("policies.identityDescription")}</p></div><span className={`badge ${enabled ? "" : "warning"}`}>{enabled ? t("common.enabled") : t("common.disabled")}</span></header>
+          <div className="policy-section-grid">
+            <Field label={t("policies.name")} error={errors.name}><input autoFocus data-modal-initial value={name} onChange={(event) => setName(event.target.value)} /></Field>
+            <label className="policy-status-control"><input type="checkbox" aria-label={t("policies.enable")} checked={enabled} onChange={(event) => setEnabled(event.target.checked)} /><span><strong>{t("policies.enable")}</strong><small>{current?.bound_projects ? t("policies.boundImpact", { count: current.bound_projects }) : t("policies.unboundImpact")}</small></span></label>
+          </div>
+        </section>
+        <fieldset className="policy-form-section policy-action-section">
+          <legend>{t("policies.actionSection")}</legend>
+          <p>{t("policies.actionDescription")}</p>
+          <div className="policy-action-cards">
+            {(["observe", "alert", "temporary_block"] as const).map((value) => <label className={`policy-action-card ${action === value ? "selected" : ""}`} key={value}><input type="radio" name="policy-action" value={value} checked={action === value} onChange={() => setAction(value)} /><span><strong>{policyActionLabel(t, value)}</strong><small>{t(`policies.${value}Description`)}</small></span></label>)}
+          </div>
+        </fieldset>
+        <section className="policy-form-section">
+          <header><div><h3>{t("policies.fixedLimitsSection")}</h3><p>{t("policies.zeroDisables")}</p></div></header>
+          <h4>{t("policies.trafficLimits")}</h4><div className="policy-section-grid">
+            <Field label={t("policies.requestLimit")} hint={t("policies.tokensUnit")} error={errors.requestTokens}><NumberInput value={requestTokens} set={setRequestTokens} /></Field>
+            <Field label={t("policies.minuteLimit")} hint={t("policies.tpmUnit")} error={errors.tokensPerMinute}><NumberInput value={tokensPerMinute} set={setTokensPerMinute} /></Field>
+          </div>
+          <h4>{t("policies.capacityLimits")}</h4><div className="policy-section-grid">
+            <Field label={t("policies.costLimit")} hint="USD/min" error={errors.costPerMinute}><NumberInput value={costPerMinute} set={setCostPerMinute} step=".01" /></Field>
+            <Field label={t("policies.concurrencyLimit")} error={errors.concurrency}><NumberInput value={concurrency} set={setConcurrency} /></Field>
+          </div>
+          <h4>{t("policies.qualityLimits")}</h4><div className="policy-section-grid">
+            <Field label={t("policies.errorThreshold")} hint="%" error={errors.errorRate}><NumberInput value={errorRate} set={setErrorRate} step=".1" /></Field>
+            <Field label={t("policies.minimumSamples")} hint={t("policies.minimumSamplesHint")} error={errors.minimumSamples}><NumberInput value={minimumSamples} set={setMinimumSamples} /></Field>
+            <Field label={t("policies.uniqueSources")} hint={t("policies.perMinuteUnit")} error={errors.uniqueIPs}><NumberInput value={uniqueIPs} set={setUniqueIPs} /></Field>
+          </div>
+        </section>
         {action === "temporary_block" && (
-          <>
-            <Field label={t("policies.violations")} error={errors.violations}><NumberInput value={violations} set={setViolations} /></Field>
-            <Field label={t("policies.blockTTL")} error={errors.blockTTL}><NumberInput value={blockTTL} set={setBlockTTL} /></Field>
-            <Field label={t("policies.cooldown")} error={errors.cooldown}><NumberInput value={cooldown} set={setCooldown} /></Field>
-          </>
+          <section className="policy-form-section policy-block-section">
+            <header><div><h3>{t("policies.blockSection")}</h3><p>{t("policies.blockCondition", { violations, samples: minimumSamples, ttl: blockTTL })}</p></div><span className="badge warning">{t("policies.notImmediate")}</span></header>
+            <div className="notice warning">{t("policies.blockWarning")}</div>
+            <div className="policy-section-grid">
+              <Field label={t("policies.violations")} error={errors.violations}><NumberInput value={violations} set={setViolations} /></Field>
+              <Field label={t("policies.blockTTL")} hint={t("policies.secondsUnit")} error={errors.blockTTL}><NumberInput value={blockTTL} set={setBlockTTL} /></Field>
+              <Field label={t("policies.cooldown")} hint={t("policies.cooldownMeaning")} error={errors.cooldown}><NumberInput value={cooldown} set={setCooldown} /></Field>
+            </div>
+          </section>
         )}
-        <label className="check-row">
-          <input type="checkbox" checked={ewmaEnabled} onChange={(event) => setEWMAEnabled(event.target.checked)} />
-          <span>{t("policies.enableEWMA")}</span>
-        </label>
+        <section className="policy-form-section policy-ewma-section">
+          <header><div><h3>{t("policies.ewmaSection")}</h3><p>{t("policies.ewmaSectionDescription")}</p></div><label className="policy-switch"><input type="checkbox" aria-label={t("policies.enableEWMA")} checked={ewmaEnabled} onChange={(event) => setEWMAEnabled(event.target.checked)} /><span>{ewmaEnabled ? t("common.enabled") : t("common.disabled")}</span></label></header>
+          <div className="notice"> <strong>{t("policies.detectOnlyBadge")}</strong>{t("policies.ewmaHint")}</div>
         {ewmaEnabled && (
-          <>
-            <p className="form-hint">{t("policies.ewmaHint")}</p>
-            <Field label={t("policies.ewmaAlpha")} error={errors.ewmaAlpha}><NumberInput value={ewmaAlpha} set={setEWMAAlpha} step=".05" /></Field>
-            <Field label={t("policies.multiplier")} error={errors.ewmaMultiplier}><NumberInput value={ewmaMultiplier} set={setEWMAMultiplier} step=".1" /></Field>
-            <Field label={t("policies.baselineSamples")} error={errors.ewmaMinimumSamples}><NumberInput value={ewmaMinimumSamples} set={setEWMAMinimumSamples} /></Field>
-            <Field label={t("policies.warmup")} error={errors.ewmaWarmup}><NumberInput value={ewmaWarmup} set={setEWMAWarmup} /></Field>
-            <Field label={t("policies.window")} error={errors.ewmaWindow}><NumberInput value={ewmaWindow} set={setEWMAWindow} /></Field>
-            <Field label={t("policies.alertCooldown")} error={errors.ewmaCooldown}><NumberInput value={ewmaCooldown} set={setEWMACooldown} /></Field>
-            <Field label={t("policies.rpmFloor")}><NumberInput value={ewmaRPMFloor} set={setEWMARPMFloor} /></Field>
-            <Field label={t("policies.tpmFloor")}><NumberInput value={ewmaTPMFloor} set={setEWMATPMFloor} /></Field>
-            <Field label={t("policies.tokenFloor")}><NumberInput value={ewmaTokensFloor} set={setEWMATokensFloor} step=".1" /></Field>
-            <Field label={t("policies.costFloor")} error={errors.ewmaFloors}><NumberInput value={ewmaCostFloor} set={setEWMACostFloor} step=".01" /></Field>
-          </>
+          <div className="policy-ewma-fields">
+            <h4>{t("policies.baselineModel")}</h4><div className="policy-section-grid"><Field label={t("policies.ewmaAlpha")} error={errors.ewmaAlpha}><NumberInput value={ewmaAlpha} set={setEWMAAlpha} step=".05" /></Field><Field label={t("policies.multiplier")} error={errors.ewmaMultiplier}><NumberInput value={ewmaMultiplier} set={setEWMAMultiplier} step=".1" /></Field><Field label={t("policies.baselineSamples")} error={errors.ewmaMinimumSamples}><NumberInput value={ewmaMinimumSamples} set={setEWMAMinimumSamples} /></Field></div>
+            <h4>{t("policies.timeControls")}</h4><div className="policy-section-grid"><Field label={t("policies.warmup")} error={errors.ewmaWarmup}><NumberInput value={ewmaWarmup} set={setEWMAWarmup} /></Field><Field label={t("policies.window")} error={errors.ewmaWindow}><NumberInput value={ewmaWindow} set={setEWMAWindow} /></Field><Field label={t("policies.alertCooldown")} error={errors.ewmaCooldown}><NumberInput value={ewmaCooldown} set={setEWMACooldown} /></Field></div>
+            <h4>{t("policies.absoluteFloors")}</h4><div className="policy-section-grid"><Field label={t("policies.rpmFloor")} error={errors.ewmaFloors}><NumberInput value={ewmaRPMFloor} set={setEWMARPMFloor} /></Field><Field label={t("policies.tpmFloor")} error={errors.ewmaFloors}><NumberInput value={ewmaTPMFloor} set={setEWMATPMFloor} /></Field><Field label={t("policies.tokenFloor")} error={errors.ewmaFloors}><NumberInput value={ewmaTokensFloor} set={setEWMATokensFloor} step=".1" /></Field><Field label={t("policies.costFloor")} error={errors.ewmaFloors}><NumberInput value={ewmaCostFloor} set={setEWMACostFloor} step=".01" /></Field></div>
+          </div>
         )}
-        <label className="check-row">
-          <input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />
-          <span>{t("policies.enable")}</span>
-        </label>
+        </section>
         {mutation.isError && <ErrorState error={mutation.error} />}
-        <div className="form-actions">
+        <div className="form-actions policy-form-actions">
+          <div className="policy-save-summary"><strong>{enabled ? t("common.enabled") : t("common.disabled")} · {policyActionLabel(t, action)}</strong><small>{ewmaEnabled ? t("policies.ewmaSummary", { multiplier: ewmaMultiplier, window: ewmaWindow }) : t("policies.ewmaDisabledSummary")}</small></div>
           <button type="button" className="button ghost" disabled={mutation.isPending} onClick={onClose}>{t("common.cancel")}</button>
-          <button className="button primary" disabled={mutation.isPending}>{t("policies.save")}</button>
+          <button className="button primary" disabled={mutation.isPending}>{mutation.isPending ? t("common.saving") : enabled && current ? t("policies.saveAndApply") : t("policies.save")}</button>
         </div>
       </form>
     </Modal>
@@ -306,33 +315,33 @@ type PolicyValues = {
   ewmaRPMFloor: number; ewmaTPMFloor: number; ewmaTokensFloor: number; ewmaCostFloor: number;
 };
 
-function validatePolicy(value: PolicyValues) {
+function validatePolicy(value: PolicyValues, t: ReturnType<typeof useTranslation>["t"]) {
   const errors: Record<string, string> = {};
-  if (!value.name.trim()) errors.name = "Required";
+  if (!value.name.trim()) errors.name = t("policies.validationRequired");
   const wholeNonNegative: Array<[keyof PolicyValues, number]> = [
     ["requestTokens", value.requestTokens], ["tokensPerMinute", value.tokensPerMinute],
     ["concurrency", value.concurrency], ["minimumSamples", value.minimumSamples],
     ["uniqueIPs", value.uniqueIPs],
   ];
   for (const [key, number] of wholeNonNegative) {
-    if (!Number.isInteger(number) || number < 0) errors[key] = "Must be a non-negative integer";
+    if (!Number.isInteger(number) || number < 0) errors[key] = t("policies.validationNonNegativeInteger");
   }
-  if (!Number.isFinite(value.costPerMinute) || value.costPerMinute < 0) errors.costPerMinute = "Must be non-negative";
-  if (!Number.isFinite(value.errorRate) || value.errorRate < 0 || value.errorRate > 100) errors.errorRate = "Must be between 0 and 100";
+  if (!Number.isFinite(value.costPerMinute) || value.costPerMinute < 0) errors.costPerMinute = t("policies.validationNonNegative");
+  if (!Number.isFinite(value.errorRate) || value.errorRate < 0 || value.errorRate > 100) errors.errorRate = t("policies.validationPercent");
   if (value.action === "temporary_block") {
-    if (!Number.isInteger(value.violations) || value.violations < 2) errors.violations = "Must be at least 2";
-    if (!Number.isInteger(value.blockTTL) || value.blockTTL <= 0) errors.blockTTL = "Must be a positive integer";
-    if (!Number.isInteger(value.cooldown) || value.cooldown <= 0) errors.cooldown = "Must be a positive integer";
+    if (!Number.isInteger(value.violations) || value.violations < 2) errors.violations = t("policies.validationAtLeastTwo");
+    if (!Number.isInteger(value.blockTTL) || value.blockTTL <= 0) errors.blockTTL = t("policies.validationPositiveInteger");
+    if (!Number.isInteger(value.cooldown) || value.cooldown <= 0) errors.cooldown = t("policies.validationPositiveInteger");
   }
   if (value.ewmaEnabled) {
-    if (!(value.ewmaAlpha > 0 && value.ewmaAlpha <= 1)) errors.ewmaAlpha = "Must be greater than 0 and at most 1";
-    if (!(value.ewmaMultiplier > 1)) errors.ewmaMultiplier = "Must be greater than 1";
-    if (!Number.isInteger(value.ewmaMinimumSamples) || value.ewmaMinimumSamples < 10) errors.ewmaMinimumSamples = "Must be an integer of at least 10";
-    if (!Number.isInteger(value.ewmaWindow) || value.ewmaWindow < 10 || value.ewmaWindow > 300 || value.ewmaWindow % 10 !== 0) errors.ewmaWindow = "Must be a 10-second multiple from 10 to 300";
-    if (!Number.isInteger(value.ewmaWarmup) || value.ewmaWarmup < value.ewmaWindow) errors.ewmaWarmup = "Must cover the evaluation window";
-    if (!Number.isInteger(value.ewmaCooldown) || value.ewmaCooldown <= 0) errors.ewmaCooldown = "Must be a positive integer";
+    if (!(value.ewmaAlpha > 0 && value.ewmaAlpha <= 1)) errors.ewmaAlpha = t("policies.validationAlpha");
+    if (!(value.ewmaMultiplier > 1)) errors.ewmaMultiplier = t("policies.validationMultiplier");
+    if (!Number.isInteger(value.ewmaMinimumSamples) || value.ewmaMinimumSamples < 10) errors.ewmaMinimumSamples = t("policies.validationBaselineSamples");
+    if (!Number.isInteger(value.ewmaWindow) || value.ewmaWindow < 10 || value.ewmaWindow > 300 || value.ewmaWindow % 10 !== 0) errors.ewmaWindow = t("policies.validationWindow");
+    if (!Number.isInteger(value.ewmaWarmup) || value.ewmaWarmup < value.ewmaWindow) errors.ewmaWarmup = t("policies.validationWarmup");
+    if (!Number.isInteger(value.ewmaCooldown) || value.ewmaCooldown <= 0) errors.ewmaCooldown = t("policies.validationPositiveInteger");
     const floors = [value.ewmaRPMFloor, value.ewmaTPMFloor, value.ewmaTokensFloor, value.ewmaCostFloor];
-    if (floors.some((floor) => !Number.isFinite(floor) || floor < 0) || floors.every((floor) => floor === 0)) errors.ewmaFloors = "At least one non-negative floor must be greater than 0";
+    if (floors.some((floor) => !Number.isFinite(floor) || floor < 0) || floors.every((floor) => floor === 0)) errors.ewmaFloors = t("policies.validationFloors");
   }
   return errors;
 }
