@@ -13,7 +13,6 @@ import (
 	"github.com/akz142857/Heimdall/internal/audit"
 	"github.com/akz142857/Heimdall/internal/config"
 	"github.com/akz142857/Heimdall/internal/domain"
-	"github.com/akz142857/Heimdall/internal/id"
 	"github.com/akz142857/Heimdall/internal/masterkey"
 	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
 	"github.com/akz142857/Heimdall/internal/store/lock"
@@ -81,15 +80,18 @@ type kmsRotationOptions struct {
 }
 
 func RotateKMSMasterKey(ctx context.Context, cfg config.Config, operationID string) (KeyRotationResult, error) {
-	return rotateKMSMasterKeyWithOptions(ctx, cfg, kmsRotationOptions{operationID: operationID})
+	recorder := &kmsAuditRecorder{}
+	return rotateKMSMasterKeyWithOptions(withKMSAuditRecorder(ctx, recorder), cfg, kmsRotationOptions{operationID: operationID})
 }
 
 func RewrapKMSKey(ctx context.Context, cfg config.Config, options KMSRewrapOptions) (KMSRewrapResult, error) {
-	return rewrapKMSKeyWithOptions(ctx, cfg, options, defaultKMSWrapperFactory, time.Now, nil)
+	recorder := &kmsAuditRecorder{}
+	return rewrapKMSKeyWithOptions(withKMSAuditRecorder(ctx, recorder), cfg, options, defaultKMSWrapperFactory, time.Now, nil)
 }
 
 func RevokeKMSKeySlot(ctx context.Context, cfg config.Config, options KMSRevokeOptions) (KMSRevokeResult, error) {
-	return revokeKMSKeySlotWithOptions(ctx, cfg, options, defaultKMSWrapperFactory, time.Now, nil)
+	recorder := &kmsAuditRecorder{}
+	return revokeKMSKeySlotWithOptions(withKMSAuditRecorder(ctx, recorder), cfg, options, defaultKMSWrapperFactory, time.Now, nil)
 }
 
 func InspectKMSKeySlots(ctx context.Context, cfg config.Config) (KMSKeySlotStatusResult, error) {
@@ -130,7 +132,7 @@ func revokeKMSKeySlotWithOptions(
 	factory kmsWrapperFactory,
 	now func() time.Time,
 	hook func(string) error,
-) (KMSRevokeResult, error) {
+) (result KMSRevokeResult, resultErr error) {
 	if err := ctx.Err(); err != nil {
 		return KMSRevokeResult{}, err
 	}
@@ -196,6 +198,9 @@ func revokeKMSKeySlotWithOptions(
 			return KMSRevokeResult{}, err
 		}
 		defer clear(auditKey)
+		defer func() {
+			resultErr = finishOfflineKMSProviderAuditToStore(cfg, auditKey, kmsAuditRecorderFromContext(ctx), store, resultErr)
+		}()
 		if err := deliverKeySlotAuditIntent(ctx, store, cfg.AuditPath(), auditKey, intent, hook); err != nil {
 			return KMSRevokeResult{}, err
 		}
@@ -226,6 +231,9 @@ func revokeKMSKeySlotWithOptions(
 		return KMSRevokeResult{}, err
 	}
 	defer clear(auditKey)
+	defer func() {
+		resultErr = finishOfflineKMSProviderAuditToStore(cfg, auditKey, kmsAuditRecorderFromContext(ctx), store, resultErr)
+	}()
 	stagePath, err := newMetadataStagePath(cfg.Storage.DataDir, "slot-revoke-stage")
 	if err != nil {
 		return KMSRevokeResult{}, err
@@ -365,13 +373,13 @@ func deliverKeySlotAuditIntentToLog(ctx context.Context, store *boltstore.Store,
 	if _, err := log.Append(ctx, keySlotAuditEvent(intent)); err != nil {
 		return err
 	}
-	if err := callKMSLifecycleHook(hook, "after_revoked_audit_append"); err != nil {
+	if err := callKMSLifecycleHook(hook, keySlotAuditHookPoint(intent, "audit_append")); err != nil {
 		return err
 	}
 	if err := checkpointAudit(store, log.Summary()); err != nil {
 		return err
 	}
-	if err := callKMSLifecycleHook(hook, "after_revoked_audit_checkpoint"); err != nil {
+	if err := callKMSLifecycleHook(hook, keySlotAuditHookPoint(intent, "audit_checkpoint")); err != nil {
 		return err
 	}
 	if intent.Delivered {
@@ -380,7 +388,22 @@ func deliverKeySlotAuditIntentToLog(ctx context.Context, store *boltstore.Store,
 	if err := store.MarkKeySlotAuditDelivered(ctx, intent.EventID); err != nil {
 		return err
 	}
-	return callKMSLifecycleHook(hook, "after_revoked_audit_intent_delivered")
+	return callKMSLifecycleHook(hook, keySlotAuditHookPoint(intent, "audit_intent_delivered"))
+}
+
+func keySlotAuditHookPoint(intent masterkey.KeySlotAuditIntent, phase string) string {
+	prefix := "slot"
+	switch intent.Action {
+	case "security.master_key_slot.added":
+		prefix = "added"
+	case "security.master_key_slot.verified":
+		prefix = "verified"
+	case "security.master_key_slot.retiring":
+		prefix = "retiring"
+	case "security.master_key_slot.revoked":
+		prefix = "revoked"
+	}
+	return "after_" + prefix + "_" + phase
 }
 
 func drainKeySlotAuditIntent(ctx context.Context, store *boltstore.Store, log *audit.Log) error {
@@ -394,6 +417,127 @@ func drainKeySlotAuditIntent(ctx context.Context, store *boltstore.Store, log *a
 	return deliverKeySlotAuditIntentToLog(ctx, store, log, intent, nil)
 }
 
+func drainKeySlotAuditIntentAtPath(ctx context.Context, store *boltstore.Store, auditPath string, auditKey []byte) error {
+	intent, err := store.KeySlotAuditIntent()
+	if errors.Is(err, boltstore.ErrNotFound) || (err == nil && intent.Delivered) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return deliverKeySlotAuditIntent(ctx, store, auditPath, auditKey, intent, nil)
+}
+
+func masterKeyRotationAuditEvent(intent masterkey.MasterKeyRotationAuditIntent, phase string) (audit.Event, error) {
+	if err := intent.Validate(); err != nil {
+		return audit.Event{}, err
+	}
+	event := audit.Event{
+		ActorType: "local_cli", TargetType: "master_key", TargetID: "local", Outcome: "success",
+		CorrelationID: intent.OperationID,
+	}
+	switch phase {
+	case "started":
+		event.EventID = intent.StartedEventID
+		event.OccurredAt = intent.StartedAt
+		event.Action = "security.master_key_rotation.started"
+	case "completed":
+		if intent.CompletedAt == nil || intent.CompletedEventID == "" {
+			return audit.Event{}, errors.New("Master Key rotation completion Audit is not prepared")
+		}
+		event.EventID = intent.CompletedEventID
+		event.OccurredAt = *intent.CompletedAt
+		event.Action = "security.master_key_rotation.completed"
+	default:
+		return audit.Event{}, errors.New("Master Key rotation Audit phase is invalid")
+	}
+	return event, nil
+}
+
+func deliverMasterKeyRotationAuditIntentAtPath(ctx context.Context, store *boltstore.Store, auditPath string, auditKey []byte, intent masterkey.MasterKeyRotationAuditIntent, phase string, hook func(string) error) error {
+	log, err := audit.Open(auditPath, auditKey)
+	if err != nil {
+		return err
+	}
+	defer log.Close()
+	return deliverMasterKeyRotationAuditIntent(ctx, store, log, intent, phase, hook)
+}
+
+func deliverMasterKeyRotationAuditIntent(ctx context.Context, store *boltstore.Store, log *audit.Log, intent masterkey.MasterKeyRotationAuditIntent, phase string, hook func(string) error) error {
+	event, err := masterKeyRotationAuditEvent(intent, phase)
+	if err != nil {
+		return err
+	}
+	if err := reconcileAuditCheckpoint(store, log.Summary()); err != nil {
+		return err
+	}
+	if _, err := log.Append(ctx, event); err != nil {
+		return err
+	}
+	if err := callKMSLifecycleHook(hook, "after_rotation_"+phase+"_audit_append"); err != nil {
+		return err
+	}
+	if err := checkpointAudit(store, log.Summary()); err != nil {
+		return err
+	}
+	if err := callKMSLifecycleHook(hook, "after_rotation_"+phase+"_audit_checkpoint"); err != nil {
+		return err
+	}
+	delivered := intent.StartedDelivered
+	if phase == "completed" {
+		delivered = intent.CompletedDelivered
+	}
+	if delivered {
+		return nil
+	}
+	if err := store.MarkMasterKeyRotationAuditDelivered(ctx, event.EventID); err != nil {
+		return err
+	}
+	return callKMSLifecycleHook(hook, "after_rotation_"+phase+"_audit_intent_delivered")
+}
+
+// drainMasterKeyRotationAuditIntent is called during Runtime startup after the
+// trusted Audit checkpoint has been reconciled. The Runtime caller lives in
+// runtime.go so listeners remain closed on any delivery or payload conflict.
+func drainMasterKeyRotationAuditIntent(ctx context.Context, store *boltstore.Store, log *audit.Log) error {
+	intent, err := store.MasterKeyRotationAuditIntent()
+	if errors.Is(err, boltstore.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !intent.StartedDelivered {
+		if err := deliverMasterKeyRotationAuditIntent(ctx, store, log, intent, "started", nil); err != nil {
+			return err
+		}
+		intent, err = store.MasterKeyRotationAuditIntent()
+		if err != nil {
+			return err
+		}
+	}
+	if intent.CompletedAt != nil && !intent.CompletedDelivered {
+		return deliverMasterKeyRotationAuditIntent(ctx, store, log, intent, "completed", nil)
+	}
+	return nil
+}
+
+func drainMasterKeyRotationAuditIntentAtPath(ctx context.Context, store *boltstore.Store, auditPath string, auditKey []byte) error {
+	intent, err := store.MasterKeyRotationAuditIntent()
+	if errors.Is(err, boltstore.ErrNotFound) || (err == nil && intent.StartedDelivered && (intent.CompletedAt == nil || intent.CompletedDelivered)) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	log, err := audit.Open(auditPath, auditKey)
+	if err != nil {
+		return err
+	}
+	defer log.Close()
+	return drainMasterKeyRotationAuditIntent(ctx, store, log)
+}
+
 func rewrapKMSKeyWithOptions(
 	ctx context.Context,
 	cfg config.Config,
@@ -401,7 +545,7 @@ func rewrapKMSKeyWithOptions(
 	factory kmsWrapperFactory,
 	now func() time.Time,
 	hook func(string) error,
-) (KMSRewrapResult, error) {
+) (result KMSRewrapResult, resultErr error) {
 	if err := ctx.Err(); err != nil {
 		return KMSRewrapResult{}, err
 	}
@@ -459,11 +603,17 @@ func rewrapKMSKeyWithOptions(
 		return KMSRewrapResult{}, err
 	}
 	defer clear(auditKey)
+	defer func() {
+		resultErr = finishOfflineKMSProviderAuditToStore(cfg, auditKey, kmsAuditRecorderFromContext(ctx), store, resultErr)
+	}()
+	if err := drainKeySlotAuditIntentAtPath(ctx, store, cfg.AuditPath(), auditKey); err != nil {
+		return KMSRewrapResult{}, fmt.Errorf("recover pending Key Slot audit: %w", err)
+	}
 	keyCheck, err := store.VaultKeyCheck()
 	if err != nil {
 		return KMSRewrapResult{}, err
 	}
-	result := KMSRewrapResult{
+	result = KMSRewrapResult{
 		Purpose: options.Purpose, ActiveSlot: options.SlotID,
 		MasterKeyFingerprint: descriptor.MasterKeyFingerprint,
 	}
@@ -478,21 +628,26 @@ func rewrapKMSKeyWithOptions(
 		if err != nil {
 			return KMSRewrapResult{}, err
 		}
-		next, transition, err := descriptor.AddSlot(pending, descriptor.Revision, now().UTC())
+		_, transition, err := descriptor.AddSlot(pending, descriptor.Revision, now().UTC())
 		if err != nil {
 			clear(pending.WrappedKey)
 			return KMSRewrapResult{}, err
 		}
-		persist := func() error {
-			_, _, err := store.AddKeySlot(ctx, pending, descriptor.Revision, transition.OccurredAt)
-			return err
+		persisted, intent, err := store.AddKeySlotWithAuditIntent(ctx, pending, descriptor.Revision, transition.OccurredAt)
+		if err != nil {
+			clear(pending.WrappedKey)
+			return KMSRewrapResult{}, err
 		}
-		if err := publishSlotTransition(ctx, store, cfg.AuditPath(), auditKey, transition, persist); err != nil {
+		if err := callKMSLifecycleHook(hook, "after_pending_slot_persisted"); err != nil {
+			clear(pending.WrappedKey)
+			return KMSRewrapResult{}, err
+		}
+		if err := deliverKeySlotAuditIntent(ctx, store, cfg.AuditPath(), auditKey, intent, hook); err != nil {
 			clear(pending.WrappedKey)
 			return KMSRewrapResult{}, err
 		}
 		clear(pending.WrappedKey)
-		descriptor = next
+		descriptor = persisted
 		if err := callKMSLifecycleHook(hook, "after_pending_slot_published"); err != nil {
 			return KMSRewrapResult{}, err
 		}
@@ -507,21 +662,24 @@ func rewrapKMSKeyWithOptions(
 	if target.State == masterkey.KeySlotPending {
 		unwrapper := kmsSlotUnwrapper{masterKey: cfg.Storage.MasterKey, factory: factory}
 		verifier := envelopeCandidateVerifier{envelope: keyCheck}
-		next, transition, err := descriptor.VerifySlot(
+		_, transition, err := descriptor.VerifySlot(
 			ctx, target.ID, descriptor.Revision, target.Revision,
 			unwrapper, verifier, now().UTC(),
 		)
 		if err != nil {
 			return KMSRewrapResult{}, err
 		}
-		persist := func() error {
-			_, _, err := store.VerifyKeySlot(ctx, target.ID, descriptor.Revision, target.Revision, unwrapper, verifier, transition.OccurredAt)
-			return err
-		}
-		if err := publishSlotTransition(ctx, store, cfg.AuditPath(), auditKey, transition, persist); err != nil {
+		persisted, intent, err := store.VerifyKeySlotWithAuditIntent(ctx, target.ID, descriptor.Revision, target.Revision, unwrapper, verifier, transition.OccurredAt)
+		if err != nil {
 			return KMSRewrapResult{}, err
 		}
-		descriptor = next
+		if err := callKMSLifecycleHook(hook, "after_active_slot_persisted"); err != nil {
+			return KMSRewrapResult{}, err
+		}
+		if err := deliverKeySlotAuditIntent(ctx, store, cfg.AuditPath(), auditKey, intent, hook); err != nil {
+			return KMSRewrapResult{}, err
+		}
+		descriptor = persisted
 		if err := callKMSLifecycleHook(hook, "after_active_slot_published"); err != nil {
 			return KMSRewrapResult{}, err
 		}
@@ -545,18 +703,21 @@ func rewrapKMSKeyWithOptions(
 	}
 	if len(oldActive) == 1 {
 		old := oldActive[0]
-		next, transition, err := descriptor.RetireSlot(old.ID, descriptor.Revision, old.Revision, now().UTC())
+		_, transition, err := descriptor.RetireSlot(old.ID, descriptor.Revision, old.Revision, now().UTC())
 		if err != nil {
 			return KMSRewrapResult{}, err
 		}
-		persist := func() error {
-			_, _, err := store.RetireKeySlot(ctx, old.ID, descriptor.Revision, old.Revision, transition.OccurredAt)
-			return err
-		}
-		if err := publishSlotTransition(ctx, store, cfg.AuditPath(), auditKey, transition, persist); err != nil {
+		persisted, intent, err := store.RetireKeySlotWithAuditIntent(ctx, old.ID, descriptor.Revision, old.Revision, transition.OccurredAt)
+		if err != nil {
 			return KMSRewrapResult{}, err
 		}
-		descriptor = next
+		if err := callKMSLifecycleHook(hook, "after_old_slot_retiring_persisted"); err != nil {
+			return KMSRewrapResult{}, err
+		}
+		if err := deliverKeySlotAuditIntent(ctx, store, cfg.AuditPath(), auditKey, intent, hook); err != nil {
+			return KMSRewrapResult{}, err
+		}
+		descriptor = persisted
 		result.RetiringSlot = old.ID
 		if err := callKMSLifecycleHook(hook, "after_old_slot_retired"); err != nil {
 			return KMSRewrapResult{}, err
@@ -569,7 +730,7 @@ func rewrapKMSKeyWithOptions(
 	return result, nil
 }
 
-func rotateKMSMasterKeyWithOptions(ctx context.Context, cfg config.Config, options kmsRotationOptions) (KeyRotationResult, error) {
+func rotateKMSMasterKeyWithOptions(ctx context.Context, cfg config.Config, options kmsRotationOptions) (result KeyRotationResult, resultErr error) {
 	if err := ctx.Err(); err != nil {
 		return KeyRotationResult{}, err
 	}
@@ -625,7 +786,20 @@ func rotateKMSMasterKeyWithOptions(ctx context.Context, cfg config.Config, optio
 		metadata.Close()
 		return KeyRotationResult{}, err
 	}
-	result := KeyRotationResult{
+	auditKey, err := loadAuditHMACKey(metadata, currentVault, currentKey)
+	if err != nil {
+		metadata.Close()
+		return KeyRotationResult{}, err
+	}
+	defer clear(auditKey)
+	defer func() {
+		resultErr = finishOfflineKMSProviderAudit(cfg, auditKey, kmsAuditRecorderFromContext(ctx), resultErr)
+	}()
+	if err := drainMasterKeyRotationAuditIntentAtPath(ctx, metadata, cfg.AuditPath(), auditKey); err != nil {
+		metadata.Close()
+		return KeyRotationResult{}, fmt.Errorf("recover pending Master Key rotation audit: %w", err)
+	}
+	result = KeyRotationResult{
 		OldFingerprint: descriptor.MasterKeyFingerprint,
 		NewFingerprint: descriptor.MasterKeyFingerprint,
 		OldKeyVersion:  keyring.ActiveKeyVersion,
@@ -656,7 +830,7 @@ func rotateKMSMasterKeyWithOptions(ctx context.Context, cfg config.Config, optio
 		if err := metadata.Close(); err != nil {
 			return KeyRotationResult{}, err
 		}
-		if err := finalizeMasterKeyRotation(ctx, cfg, currentVault, currentKey, options.hook); err != nil {
+		if err := finalizeKMSMasterKeyRotation(ctx, cfg, currentVault, currentKey, options.operationID, options.now, options.hook); err != nil {
 			return KeyRotationResult{}, err
 		}
 		return result, nil
@@ -689,12 +863,6 @@ func rotateKMSMasterKeyWithOptions(ctx context.Context, cfg config.Config, optio
 		metadata.Close()
 		return KeyRotationResult{}, err
 	}
-	auditKey, err := loadAuditHMACKey(metadata, currentVault, currentKey)
-	if err != nil {
-		metadata.Close()
-		return KeyRotationResult{}, err
-	}
-	defer clear(auditKey)
 	newAuditEnvelope, err := encryptAuditHMACKey(newVault, auditKey)
 	if err != nil {
 		metadata.Close()
@@ -760,7 +928,12 @@ func rotateKMSMasterKeyWithOptions(ctx context.Context, cfg config.Config, optio
 		metadata.Close()
 		return KeyRotationResult{}, err
 	}
-	if err := appendRotationAudit(metadata, cfg.AuditPath(), auditKey, "security.master_key_rotation.started"); err != nil {
+	rotationIntent, err := metadata.EnsureMasterKeyRotationAuditIntent(ctx, options.operationID, options.now().UTC())
+	if err != nil {
+		metadata.Close()
+		return KeyRotationResult{}, err
+	}
+	if err := deliverMasterKeyRotationAuditIntentAtPath(ctx, metadata, cfg.AuditPath(), auditKey, rotationIntent, "started", options.hook); err != nil {
 		metadata.Close()
 		return KeyRotationResult{}, err
 	}
@@ -886,12 +1059,121 @@ func rotateKMSMasterKeyWithOptions(ctx context.Context, cfg config.Config, optio
 	if err := callKMSLifecycleHook(options.hook, "after_persisted_primary_verified"); err != nil {
 		return KeyRotationResult{}, err
 	}
-	if err := finalizeMasterKeyRotation(ctx, cfg, newVault, newKey, options.hook); err != nil {
+	if err := finalizeKMSMasterKeyRotation(ctx, cfg, newVault, newKey, options.operationID, options.now, options.hook); err != nil {
 		return KeyRotationResult{}, err
 	}
 	result.NewFingerprint = newFingerprint
 	result.NewKeyVersion = keyring.ActiveKeyVersion + 1
 	return result, nil
+}
+
+func finalizeKMSMasterKeyRotation(ctx context.Context, cfg config.Config, newVault *vault.Vault, newKey []byte, operationID string, now func() time.Time, hook func(string) error) error {
+	metadata, err := boltstore.Open(cfg.MetadataPath())
+	if err != nil {
+		return err
+	}
+	if err := verifyVaultKeyCheck(metadata, newVault); err != nil {
+		metadata.Close()
+		return err
+	}
+	auditKey, err := loadAuditHMACKey(metadata, newVault, newKey)
+	if err != nil {
+		metadata.Close()
+		return err
+	}
+	defer clear(auditKey)
+	stagePath, err := newMetadataStagePath(cfg.Storage.DataDir, "kms-cleanup")
+	if err != nil {
+		metadata.Close()
+		return err
+	}
+	defer os.Remove(stagePath)
+	if _, err := metadata.Snapshot(stagePath); err != nil {
+		metadata.Close()
+		return err
+	}
+	if err := metadata.Close(); err != nil {
+		return err
+	}
+	stage, err := boltstore.Open(stagePath)
+	if err != nil {
+		return err
+	}
+	completionIntent, err := stage.ClearVaultRotationBridgeWithAuditIntent(ctx, operationID, now().UTC())
+	if err != nil {
+		stage.Close()
+		return err
+	}
+	if err := callKMSLifecycleHook(hook, "after_rotation_completed_intent_persisted"); err != nil {
+		stage.Close()
+		return err
+	}
+	compactPath, err := newMetadataStagePath(cfg.Storage.DataDir, "kms-cleanup-compact")
+	if err == nil {
+		err = stage.CompactSnapshot(compactPath)
+	}
+	if closeErr := stage.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		if compactPath != "" {
+			os.Remove(compactPath)
+		}
+		return err
+	}
+	defer os.Remove(compactPath)
+	compacted, err := boltstore.Open(compactPath)
+	if err != nil {
+		return err
+	}
+	err = verifyRotatedMetadata(ctx, compacted, newVault, nil, newKey, auditKey, false)
+	if err == nil {
+		persistedIntent, intentErr := compacted.MasterKeyRotationAuditIntent()
+		if intentErr != nil {
+			err = intentErr
+		} else if !masterKeyRotationAuditIntentsEqual(persistedIntent, completionIntent) {
+			err = errors.New("compacted metadata changed the Master Key rotation Audit intent")
+		}
+	}
+	if closeErr := compacted.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	if err := callRotationHook(hook, "before_bridge_cleanup_publish"); err != nil {
+		return err
+	}
+	if err := publishMetadata(compactPath, cfg.MetadataPath()); err != nil {
+		return err
+	}
+	if err := callRotationHook(hook, "after_bridge_cleanup_publish"); err != nil {
+		return err
+	}
+	published, err := boltstore.Open(cfg.MetadataPath())
+	if err != nil {
+		return err
+	}
+	if err := deliverMasterKeyRotationAuditIntentAtPath(ctx, published, cfg.AuditPath(), auditKey, completionIntent, "completed", hook); err != nil {
+		published.Close()
+		return err
+	}
+	if err := published.Close(); err != nil {
+		return err
+	}
+	return callKMSLifecycleHook(hook, "after_rotation_completed_audit_delivered")
+}
+
+func masterKeyRotationAuditIntentsEqual(left, right masterkey.MasterKeyRotationAuditIntent) bool {
+	if left.OperationID != right.OperationID || left.StartedEventID != right.StartedEventID ||
+		!left.StartedAt.Equal(right.StartedAt) || left.StartedDelivered != right.StartedDelivered ||
+		left.CompletedEventID != right.CompletedEventID || left.CompletedDelivered != right.CompletedDelivered {
+		return false
+	}
+	if left.CompletedAt == nil || right.CompletedAt == nil {
+		return left.CompletedAt == nil && right.CompletedAt == nil
+	}
+	return left.CompletedAt.Equal(*right.CompletedAt)
 }
 
 func validKMSOperationID(value string) bool {
@@ -905,54 +1187,6 @@ func validKMSOperationID(value string) bool {
 		}
 	}
 	return true
-}
-
-func publishSlotTransition(
-	ctx context.Context,
-	store *boltstore.Store,
-	auditPath string,
-	auditKey []byte,
-	transition *masterkey.SlotTransition,
-	persist func() error,
-) error {
-	return publishSlotTransitionWithReason(ctx, store, auditPath, auditKey, transition, "", persist)
-}
-
-func publishSlotTransitionWithReason(
-	ctx context.Context,
-	store *boltstore.Store,
-	auditPath string,
-	auditKey []byte,
-	transition *masterkey.SlotTransition,
-	reasonCode string,
-	persist func() error,
-) error {
-	if transition == nil || persist == nil {
-		return nil
-	}
-	log, err := audit.Open(auditPath, auditKey)
-	if err != nil {
-		return err
-	}
-	defer log.Close()
-	if err := reconcileAuditCheckpoint(store, log.Summary()); err != nil {
-		return err
-	}
-	eventID, err := id.New("aud")
-	if err != nil {
-		return err
-	}
-	if _, err := log.Append(ctx, audit.Event{
-		EventID: eventID, OccurredAt: transition.OccurredAt, ActorType: "local_cli",
-		Action: transition.AuditAction(), TargetType: "master_key_slot",
-		TargetID: transition.SlotID, Outcome: "success", ReasonCode: reasonCode,
-	}); err != nil {
-		return err
-	}
-	if err := checkpointAudit(store, log.Summary()); err != nil {
-		return err
-	}
-	return persist()
 }
 
 func descriptorInstanceID(descriptor masterkey.KeySlotDescriptor) (string, error) {

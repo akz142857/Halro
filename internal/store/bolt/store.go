@@ -37,35 +37,36 @@ var (
 )
 
 var (
-	bucketMeta                   = []byte("meta")
-	bucketCredentials            = []byte("credentials")
-	bucketProjects               = []byte("projects")
-	bucketGatewayKeys            = []byte("gateway_keys")
-	bucketGatewayKeyHash         = []byte("gateway_key_hash")
-	bucketProviders              = []byte("providers")
-	bucketDeployments            = []byte("deployments")
-	bucketRoutes                 = []byte("routes")
-	bucketRedactionPolicies      = []byte("redaction_policies")
-	bucketTokenGuardPolicies     = []byte("token_guard_policies")
-	bucketAlertWebhooks          = []byte("alert_webhooks")
-	bucketAdminUsers             = []byte("admin_users")
-	bucketAdminSessions          = []byte("admin_sessions")
-	bucketAdminMFAAuthenticators = []byte("admin_mfa_authenticators")
-	bucketAdminMFARecoveryCodes  = []byte("admin_mfa_recovery_codes")
-	bucketAdminMFAChallenges     = []byte("admin_mfa_challenges")
-	bucketMigrationHistory       = []byte("migration_history")
-	bucketProviderResources      = []byte("provider_resources")
-	keySchemaVersion             = []byte("schema_version")
-	keyVaultCheck                = []byte("vault_key_check")
-	keyUsageCheckpoint           = []byte("usage_checkpoint")
-	keyTokenGuardCheckpoint      = []byte("token_guard_checkpoint")
-	keyAuditCheckpoint           = []byte("audit_checkpoint")
-	keyAuditHMACEnvelope         = []byte("audit_hmac_envelope")
-	keyVaultKeyring              = []byte("vault_keyring")
-	keyKeySlotDescriptor         = []byte("key_slot_descriptor")
-	keyKeySlotAuditIntent        = []byte("key_slot_audit_intent")
-	keyRuntimeSettings           = []byte("runtime_settings")
-	keyInstanceUISettings        = []byte("instance_ui_settings")
+	bucketMeta                      = []byte("meta")
+	bucketCredentials               = []byte("credentials")
+	bucketProjects                  = []byte("projects")
+	bucketGatewayKeys               = []byte("gateway_keys")
+	bucketGatewayKeyHash            = []byte("gateway_key_hash")
+	bucketProviders                 = []byte("providers")
+	bucketDeployments               = []byte("deployments")
+	bucketRoutes                    = []byte("routes")
+	bucketRedactionPolicies         = []byte("redaction_policies")
+	bucketTokenGuardPolicies        = []byte("token_guard_policies")
+	bucketAlertWebhooks             = []byte("alert_webhooks")
+	bucketAdminUsers                = []byte("admin_users")
+	bucketAdminSessions             = []byte("admin_sessions")
+	bucketAdminMFAAuthenticators    = []byte("admin_mfa_authenticators")
+	bucketAdminMFARecoveryCodes     = []byte("admin_mfa_recovery_codes")
+	bucketAdminMFAChallenges        = []byte("admin_mfa_challenges")
+	bucketMigrationHistory          = []byte("migration_history")
+	bucketProviderResources         = []byte("provider_resources")
+	keySchemaVersion                = []byte("schema_version")
+	keyVaultCheck                   = []byte("vault_key_check")
+	keyUsageCheckpoint              = []byte("usage_checkpoint")
+	keyTokenGuardCheckpoint         = []byte("token_guard_checkpoint")
+	keyAuditCheckpoint              = []byte("audit_checkpoint")
+	keyAuditHMACEnvelope            = []byte("audit_hmac_envelope")
+	keyVaultKeyring                 = []byte("vault_keyring")
+	keyKeySlotDescriptor            = []byte("key_slot_descriptor")
+	keyKeySlotAuditIntent           = []byte("key_slot_audit_intent")
+	keyMasterKeyRotationAuditIntent = []byte("master_key_rotation_audit_intent")
+	keyRuntimeSettings              = []byte("runtime_settings")
+	keyInstanceUISettings           = []byte("instance_ui_settings")
 )
 
 type MigrationRecord struct {
@@ -574,6 +575,30 @@ func (s *Store) AddKeySlot(
 	return next, transition, nil
 }
 
+func (s *Store) AddKeySlotWithAuditIntent(
+	ctx context.Context,
+	pending masterkey.PendingKeySlot,
+	expectedRevision uint64,
+	now time.Time,
+) (masterkey.KeySlotDescriptor, masterkey.KeySlotAuditIntent, error) {
+	current, err := s.KeySlotDescriptor(ctx)
+	if err != nil {
+		return masterkey.KeySlotDescriptor{}, masterkey.KeySlotAuditIntent{}, err
+	}
+	next, transition, err := current.AddSlot(pending, expectedRevision, now)
+	if err != nil || transition == nil {
+		return next, masterkey.KeySlotAuditIntent{}, err
+	}
+	intent, err := newKeySlotAuditIntent(transition, expectedRevision, 0, "")
+	if err != nil {
+		return masterkey.KeySlotDescriptor{}, masterkey.KeySlotAuditIntent{}, err
+	}
+	if err := s.replaceKeySlotDescriptorWithAuditIntent(ctx, current, next, intent); err != nil {
+		return masterkey.KeySlotDescriptor{}, masterkey.KeySlotAuditIntent{}, err
+	}
+	return next, intent, nil
+}
+
 func (s *Store) VerifyKeySlot(
 	ctx context.Context,
 	slotID string,
@@ -599,6 +624,33 @@ func (s *Store) VerifyKeySlot(
 	return next, transition, nil
 }
 
+func (s *Store) VerifyKeySlotWithAuditIntent(
+	ctx context.Context,
+	slotID string,
+	expectedDescriptorRevision uint64,
+	expectedSlotRevision uint64,
+	unwrapper masterkey.SlotUnwrapper,
+	verifier masterkey.CandidateVerifier,
+	now time.Time,
+) (masterkey.KeySlotDescriptor, masterkey.KeySlotAuditIntent, error) {
+	current, err := s.KeySlotDescriptor(ctx)
+	if err != nil {
+		return masterkey.KeySlotDescriptor{}, masterkey.KeySlotAuditIntent{}, err
+	}
+	next, transition, err := current.VerifySlot(ctx, slotID, expectedDescriptorRevision, expectedSlotRevision, unwrapper, verifier, now)
+	if err != nil || transition == nil {
+		return next, masterkey.KeySlotAuditIntent{}, err
+	}
+	intent, err := newKeySlotAuditIntent(transition, expectedDescriptorRevision, expectedSlotRevision, "")
+	if err != nil {
+		return masterkey.KeySlotDescriptor{}, masterkey.KeySlotAuditIntent{}, err
+	}
+	if err := s.replaceKeySlotDescriptorWithAuditIntent(ctx, current, next, intent); err != nil {
+		return masterkey.KeySlotDescriptor{}, masterkey.KeySlotAuditIntent{}, err
+	}
+	return next, intent, nil
+}
+
 func (s *Store) RetireKeySlot(
 	ctx context.Context,
 	slotID string,
@@ -607,6 +659,31 @@ func (s *Store) RetireKeySlot(
 	now time.Time,
 ) (masterkey.KeySlotDescriptor, *masterkey.SlotTransition, error) {
 	return s.transitionKeySlot(ctx, slotID, expectedDescriptorRevision, expectedSlotRevision, masterkey.KeySlotRetiring, now)
+}
+
+func (s *Store) RetireKeySlotWithAuditIntent(
+	ctx context.Context,
+	slotID string,
+	expectedDescriptorRevision uint64,
+	expectedSlotRevision uint64,
+	now time.Time,
+) (masterkey.KeySlotDescriptor, masterkey.KeySlotAuditIntent, error) {
+	current, err := s.KeySlotDescriptor(ctx)
+	if err != nil {
+		return masterkey.KeySlotDescriptor{}, masterkey.KeySlotAuditIntent{}, err
+	}
+	next, transition, err := current.RetireSlot(slotID, expectedDescriptorRevision, expectedSlotRevision, now)
+	if err != nil || transition == nil {
+		return next, masterkey.KeySlotAuditIntent{}, err
+	}
+	intent, err := newKeySlotAuditIntent(transition, expectedDescriptorRevision, expectedSlotRevision, "")
+	if err != nil {
+		return masterkey.KeySlotDescriptor{}, masterkey.KeySlotAuditIntent{}, err
+	}
+	if err := s.replaceKeySlotDescriptorWithAuditIntent(ctx, current, next, intent); err != nil {
+		return masterkey.KeySlotDescriptor{}, masterkey.KeySlotAuditIntent{}, err
+	}
+	return next, intent, nil
 }
 
 func (s *Store) RevokeKeySlot(
@@ -627,9 +704,54 @@ func (s *Store) RevokeKeySlotWithAuditIntent(
 	reasonCode string,
 	now time.Time,
 ) (masterkey.KeySlotDescriptor, masterkey.KeySlotAuditIntent, error) {
-	var next masterkey.KeySlotDescriptor
-	var intent masterkey.KeySlotAuditIntent
-	err := s.db.Update(func(tx *bbolt.Tx) error {
+	current, err := s.KeySlotDescriptor(ctx)
+	if err != nil {
+		return masterkey.KeySlotDescriptor{}, masterkey.KeySlotAuditIntent{}, err
+	}
+	next, transition, err := current.RevokeSlot(slotID, expectedDescriptorRevision, expectedSlotRevision, now)
+	if err != nil || transition == nil {
+		return next, masterkey.KeySlotAuditIntent{}, err
+	}
+	intent, err := newKeySlotAuditIntent(transition, expectedDescriptorRevision, expectedSlotRevision, reasonCode)
+	if err != nil {
+		return masterkey.KeySlotDescriptor{}, masterkey.KeySlotAuditIntent{}, err
+	}
+	if err := s.replaceKeySlotDescriptorWithAuditIntent(ctx, current, next, intent); err != nil {
+		return masterkey.KeySlotDescriptor{}, masterkey.KeySlotAuditIntent{}, err
+	}
+	return next, intent, nil
+}
+
+func newKeySlotAuditIntent(transition *masterkey.SlotTransition, expectedDescriptorRevision, expectedSlotRevision uint64, reasonCode string) (masterkey.KeySlotAuditIntent, error) {
+	if transition == nil {
+		return masterkey.KeySlotAuditIntent{}, errors.New("Key Slot transition is required")
+	}
+	intent := masterkey.KeySlotAuditIntent{
+		EventID:    fmt.Sprintf("aud-slot-%s-%d-%d", transition.SlotID, transition.DescriptorRevision, transition.SlotRevision),
+		OccurredAt: transition.OccurredAt, Action: transition.AuditAction(), TargetID: transition.SlotID,
+		Purpose: transition.Purpose, ReasonCode: reasonCode,
+		ExpectedDescriptorRevision: expectedDescriptorRevision, ExpectedSlotRevision: expectedSlotRevision,
+		DescriptorRevision: transition.DescriptorRevision, SlotRevision: transition.SlotRevision,
+	}
+	return intent, intent.Validate()
+}
+
+func (s *Store) replaceKeySlotDescriptorWithAuditIntent(ctx context.Context, current, next masterkey.KeySlotDescriptor, intent masterkey.KeySlotAuditIntent) error {
+	if err := intent.Validate(); err != nil {
+		return err
+	}
+	if err := next.ValidateSuccessor(current); err != nil {
+		return err
+	}
+	descriptorPayload, err := json.Marshal(next)
+	if err != nil {
+		return err
+	}
+	intentPayload, err := json.Marshal(intent)
+	if err != nil {
+		return err
+	}
+	return s.db.Update(func(tx *bbolt.Tx) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -650,35 +772,17 @@ func (s *Store) RevokeKeySlotWithAuditIntent(
 		if raw == nil {
 			return ErrNotFound
 		}
-		var current masterkey.KeySlotDescriptor
-		if err := json.Unmarshal(raw, &current); err != nil {
+		var persisted masterkey.KeySlotDescriptor
+		if err := json.Unmarshal(raw, &persisted); err != nil {
 			return err
 		}
-		var transition *masterkey.SlotTransition
-		var err error
-		next, transition, err = current.RevokeSlot(slotID, expectedDescriptorRevision, expectedSlotRevision, now)
-		if err != nil {
+		if persisted.Revision != current.Revision {
+			return ErrRevisionConflict
+		}
+		if err := persisted.Validate(); err != nil {
 			return err
 		}
-		if transition == nil {
-			return errors.New("Key Slot revoke produced no transition")
-		}
-		intent = masterkey.KeySlotAuditIntent{
-			EventID:    fmt.Sprintf("aud-slot-%s-%d-%d", transition.SlotID, transition.DescriptorRevision, transition.SlotRevision),
-			OccurredAt: transition.OccurredAt, Action: transition.AuditAction(), TargetID: transition.SlotID,
-			Purpose: transition.Purpose, ReasonCode: reasonCode,
-			ExpectedDescriptorRevision: expectedDescriptorRevision, ExpectedSlotRevision: expectedSlotRevision,
-			DescriptorRevision: transition.DescriptorRevision, SlotRevision: transition.SlotRevision,
-		}
-		if err := intent.Validate(); err != nil {
-			return err
-		}
-		descriptorPayload, err := json.Marshal(next)
-		if err != nil {
-			return err
-		}
-		intentPayload, err := json.Marshal(intent)
-		if err != nil {
+		if err := next.ValidateSuccessor(persisted); err != nil {
 			return err
 		}
 		if err := meta.Put(keyKeySlotDescriptor, descriptorPayload); err != nil {
@@ -686,7 +790,6 @@ func (s *Store) RevokeKeySlotWithAuditIntent(
 		}
 		return meta.Put(keyKeySlotAuditIntent, intentPayload)
 	})
-	return next, intent, err
 }
 
 func (s *Store) KeySlotAuditIntent() (masterkey.KeySlotAuditIntent, error) {
@@ -1180,6 +1283,149 @@ func (s *Store) ClearVaultRotationBridge() error {
 		}
 		return meta.Put(keyVaultKeyring, encoded)
 	})
+}
+
+func (s *Store) EnsureMasterKeyRotationAuditIntent(ctx context.Context, operationID string, now time.Time) (masterkey.MasterKeyRotationAuditIntent, error) {
+	requested, err := masterkey.NewMasterKeyRotationAuditIntent(operationID, now)
+	if err != nil {
+		return masterkey.MasterKeyRotationAuditIntent{}, err
+	}
+	var result masterkey.MasterKeyRotationAuditIntent
+	err = s.db.Update(func(tx *bbolt.Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		meta := tx.Bucket(bucketMeta)
+		if raw := meta.Get(keyMasterKeyRotationAuditIntent); raw != nil {
+			if err := json.Unmarshal(raw, &result); err != nil {
+				return err
+			}
+			if err := result.Validate(); err != nil {
+				return err
+			}
+			if result.OperationID == operationID {
+				return nil
+			}
+			if !result.CompletedDelivered {
+				return errors.New("a different Master Key rotation Audit intent is still pending")
+			}
+		}
+		payload, err := json.Marshal(requested)
+		if err != nil {
+			return err
+		}
+		if err := meta.Put(keyMasterKeyRotationAuditIntent, payload); err != nil {
+			return err
+		}
+		result = requested
+		return nil
+	})
+	return result, err
+}
+
+func (s *Store) MasterKeyRotationAuditIntent() (masterkey.MasterKeyRotationAuditIntent, error) {
+	var intent masterkey.MasterKeyRotationAuditIntent
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		raw := tx.Bucket(bucketMeta).Get(keyMasterKeyRotationAuditIntent)
+		if raw == nil {
+			return ErrNotFound
+		}
+		if err := json.Unmarshal(raw, &intent); err != nil {
+			return err
+		}
+		return intent.Validate()
+	})
+	return intent, err
+}
+
+func (s *Store) MarkMasterKeyRotationAuditDelivered(ctx context.Context, eventID string) error {
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		meta := tx.Bucket(bucketMeta)
+		raw := meta.Get(keyMasterKeyRotationAuditIntent)
+		if raw == nil {
+			return ErrNotFound
+		}
+		var intent masterkey.MasterKeyRotationAuditIntent
+		if err := json.Unmarshal(raw, &intent); err != nil {
+			return err
+		}
+		if err := intent.Validate(); err != nil {
+			return err
+		}
+		switch eventID {
+		case intent.StartedEventID:
+			intent.StartedDelivered = true
+		case intent.CompletedEventID:
+			if intent.CompletedAt == nil || !intent.StartedDelivered {
+				return ErrRevisionConflict
+			}
+			intent.CompletedDelivered = true
+		default:
+			return ErrRevisionConflict
+		}
+		payload, err := json.Marshal(intent)
+		if err != nil {
+			return err
+		}
+		return meta.Put(keyMasterKeyRotationAuditIntent, payload)
+	})
+}
+
+func (s *Store) ClearVaultRotationBridgeWithAuditIntent(ctx context.Context, operationID string, now time.Time) (masterkey.MasterKeyRotationAuditIntent, error) {
+	var completed masterkey.MasterKeyRotationAuditIntent
+	err := s.db.Update(func(tx *bbolt.Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		meta := tx.Bucket(bucketMeta)
+		rawKeyring := meta.Get(keyVaultKeyring)
+		if rawKeyring == nil {
+			return ErrNotFound
+		}
+		var keyring VaultKeyring
+		if err := json.Unmarshal(rawKeyring, &keyring); err != nil {
+			return err
+		}
+		if err := keyring.Validate(); err != nil {
+			return err
+		}
+		if keyring.RotationOperationID != operationID || len(keyring.RecoveryEnvelope) == 0 {
+			return errors.New("Master Key rotation bridge does not match the requested operation")
+		}
+		rawIntent := meta.Get(keyMasterKeyRotationAuditIntent)
+		if rawIntent == nil {
+			return ErrNotFound
+		}
+		var intent masterkey.MasterKeyRotationAuditIntent
+		if err := json.Unmarshal(rawIntent, &intent); err != nil {
+			return err
+		}
+		if intent.OperationID != operationID {
+			return ErrRevisionConflict
+		}
+		var err error
+		completed, err = intent.WithCompletion(now)
+		if err != nil {
+			return err
+		}
+		keyring.RecoveryEnvelope = nil
+		encodedKeyring, err := json.Marshal(keyring)
+		if err != nil {
+			return err
+		}
+		encodedIntent, err := json.Marshal(completed)
+		if err != nil {
+			return err
+		}
+		if err := meta.Put(keyVaultKeyring, encodedKeyring); err != nil {
+			return err
+		}
+		return meta.Put(keyMasterKeyRotationAuditIntent, encodedIntent)
+	})
+	return completed, err
 }
 
 func (s *Store) PutUsageCheckpoint(watermark ledger.Watermark, payload []byte) error {

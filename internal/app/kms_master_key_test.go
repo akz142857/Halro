@@ -348,10 +348,14 @@ func TestRecoverySlotRequiresExactConfirmationAndWritesBreakGlassAudit(t *testin
 	}
 	defer log.Close()
 	found := false
+	foundProviderAudit := false
 	if _, err := log.Replay(func(record audit.Record) error {
 		if record.Event.Action == "security.master_key.recovery_used" {
 			found = record.Event.TargetID == cfg.Storage.MasterKey.RecoverySlot &&
 				record.Event.ReasonCode == "break_glass_recovery" && record.Event.ActorType == "local_cli"
+		}
+		if record.Event.Action == "security.kms.call" && record.Event.ActorType == "local_cli" && record.Event.TargetType == "kms_operation" {
+			foundProviderAudit = true
 		}
 		return nil
 	}); err != nil {
@@ -359,6 +363,9 @@ func TestRecoverySlotRequiresExactConfirmationAndWritesBreakGlassAudit(t *testin
 	}
 	if !found {
 		t.Fatal("successful Recovery use did not produce high-severity break-glass Audit evidence")
+	}
+	if !foundProviderAudit {
+		t.Fatal("offline Recovery KMS call did not produce redacted provider Audit evidence")
 	}
 	rawAudit, err := os.ReadFile(cfg.AuditPath())
 	if err != nil {

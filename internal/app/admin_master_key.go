@@ -2,16 +2,23 @@ package app
 
 import (
 	"net/http"
-	"strings"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/buildinfo"
 	"github.com/akz142857/Heimdall/internal/config"
 	"github.com/akz142857/Heimdall/internal/masterkey"
 	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
 )
 
-const recoveryVerificationMaxAge = 90 * 24 * time.Hour
+const (
+	recoveryVerificationMaxAge    = 90 * 24 * time.Hour
+	recoveryVerificationClockSkew = 5 * time.Minute
+
+	recoveryVerificationNotApplicable = "not_applicable"
+	recoveryVerificationMissing       = "missing"
+	recoveryVerificationCurrent       = "current"
+	recoveryVerificationExpired       = "expired"
+	recoveryVerificationInvalidFuture = "invalid_future"
+)
 
 type masterKeyCustodySlotView struct {
 	Purpose    masterkey.KeySlotPurpose `json:"purpose"`
@@ -21,20 +28,20 @@ type masterKeyCustodySlotView struct {
 }
 
 type masterKeyCustodyView struct {
-	Mode                        string                     `json:"mode"`
-	DescriptorReady             bool                       `json:"descriptor_ready"`
-	CustodyState                string                     `json:"custody_state"`
-	ProductionAdmission         string                     `json:"production_admission"`
-	RotationIncomplete          bool                       `json:"rotation_incomplete"`
-	LifecycleOperation          string                     `json:"lifecycle_operation"`
-	PendingSlots                int                        `json:"pending_slots"`
-	RetiringSlots               int                        `json:"retiring_slots"`
-	RecoveryVerifiedAt          *time.Time                 `json:"recovery_verified_at,omitempty"`
-	RecoveryVerificationExpired bool                       `json:"recovery_verification_expired"`
-	DegradedReasons             []string                   `json:"degraded_reasons"`
-	Slots                       []masterKeyCustodySlotView `json:"slots"`
-	LifecycleRunbookURL         string                     `json:"lifecycle_runbook_url"`
-	RecoveryRunbookURL          string                     `json:"recovery_runbook_url"`
+	Mode                       string                     `json:"mode"`
+	LocalCustodyReady          bool                       `json:"local_custody_ready"`
+	CustodyState               string                     `json:"custody_state"`
+	ProductionAdmission        string                     `json:"production_admission"`
+	RotationIncomplete         bool                       `json:"rotation_incomplete"`
+	LifecycleOperation         string                     `json:"lifecycle_operation"`
+	PendingSlots               int                        `json:"pending_slots"`
+	RetiringSlots              int                        `json:"retiring_slots"`
+	RecoveryVerifiedAt         *time.Time                 `json:"recovery_verified_at,omitempty"`
+	RecoveryVerificationStatus string                     `json:"recovery_verification_status"`
+	DegradedReasons            []string                   `json:"degraded_reasons"`
+	Slots                      []masterKeyCustodySlotView `json:"slots"`
+	LifecycleRunbookURL        string                     `json:"lifecycle_runbook_url,omitempty"`
+	RecoveryRunbookURL         string                     `json:"recovery_runbook_url,omitempty"`
 }
 
 func (r *Runtime) adminMasterKeyCustody(writer http.ResponseWriter, request *http.Request) {
@@ -60,21 +67,19 @@ func (r *Runtime) adminMasterKeyCustody(writer http.ResponseWriter, request *htt
 
 func buildFileMasterKeyCustodyView() masterKeyCustodyView {
 	return masterKeyCustodyView{
-		Mode: config.MasterKeyModeFile, DescriptorReady: true, CustodyState: "healthy",
-		ProductionAdmission: "not_applicable", LifecycleOperation: "none",
+		Mode: config.MasterKeyModeFile, LocalCustodyReady: true, CustodyState: "healthy",
+		ProductionAdmission: "not_applicable", LifecycleOperation: "none", RecoveryVerificationStatus: recoveryVerificationNotApplicable,
 		Slots: []masterKeyCustodySlotView{}, DegradedReasons: []string{},
-		LifecycleRunbookURL: custodyRunbookURL("docs/runbooks/m11-kms-key-lifecycle.md"),
-		RecoveryRunbookURL:  custodyRunbookURL("docs/runbooks/m11-kms-disaster-recovery.md"),
 	}
 }
 
 func buildMasterKeyCustodyView(mode string, descriptor masterkey.KeySlotDescriptor, keyring boltstore.VaultKeyring, recoveryLastUsed, now time.Time) masterKeyCustodyView {
 	view := masterKeyCustodyView{
-		Mode: mode, DescriptorReady: descriptor.ProductionReady(), CustodyState: "healthy",
-		ProductionAdmission: "external_evidence_required", LifecycleOperation: "none",
+		Mode: mode, LocalCustodyReady: descriptor.ProductionReady(), CustodyState: "healthy",
+		ProductionAdmission: "external_evidence_required", LifecycleOperation: "none", RecoveryVerificationStatus: recoveryVerificationMissing,
 		Slots: make([]masterKeyCustodySlotView, 0, len(descriptor.Slots)), DegradedReasons: []string{},
-		LifecycleRunbookURL: custodyRunbookURL("docs/runbooks/m11-kms-key-lifecycle.md"),
-		RecoveryRunbookURL:  custodyRunbookURL("docs/runbooks/m11-kms-disaster-recovery.md"),
+		LifecycleRunbookURL: "/admin/api/v1/master-key/runbooks/lifecycle",
+		RecoveryRunbookURL:  "/admin/api/v1/master-key/runbooks/recovery",
 	}
 	for _, slot := range descriptor.Slots {
 		view.Slots = append(view.Slots, masterKeyCustodySlotView{
@@ -105,7 +110,7 @@ func buildMasterKeyCustodyView(mode string, descriptor masterkey.KeySlotDescript
 	} else if view.RotationIncomplete {
 		view.LifecycleOperation = "kek_rewrap"
 	}
-	if !view.DescriptorReady {
+	if !view.LocalCustodyReady {
 		view.DegradedReasons = append(view.DegradedReasons, "descriptor_not_ready")
 	}
 	if view.PendingSlots > 0 {
@@ -114,22 +119,19 @@ func buildMasterKeyCustodyView(mode string, descriptor masterkey.KeySlotDescript
 	if view.RetiringSlots > 0 {
 		view.DegradedReasons = append(view.DegradedReasons, "retiring_slots")
 	}
-	view.RecoveryVerificationExpired = view.RecoveryVerifiedAt == nil || now.Sub(*view.RecoveryVerifiedAt) > recoveryVerificationMaxAge
 	if view.RecoveryVerifiedAt == nil {
 		view.DegradedReasons = append(view.DegradedReasons, "recovery_verification_missing")
-	} else if view.RecoveryVerificationExpired {
+	} else if view.RecoveryVerifiedAt.After(now.Add(recoveryVerificationClockSkew)) {
+		view.RecoveryVerificationStatus = recoveryVerificationInvalidFuture
+		view.DegradedReasons = append(view.DegradedReasons, "recovery_verification_invalid_future")
+	} else if now.Sub(*view.RecoveryVerifiedAt) >= recoveryVerificationMaxAge {
+		view.RecoveryVerificationStatus = recoveryVerificationExpired
 		view.DegradedReasons = append(view.DegradedReasons, "recovery_verification_expired")
+	} else {
+		view.RecoveryVerificationStatus = recoveryVerificationCurrent
 	}
 	if len(view.DegradedReasons) > 0 {
 		view.CustodyState = "degraded"
 	}
 	return view
-}
-
-func custodyRunbookURL(path string) string {
-	ref := buildinfo.Current().Commit
-	if ref == "" || ref == "unknown" || strings.ContainsAny(ref, "/?#") {
-		ref = "main"
-	}
-	return "https://github.com/akz142857/Heimdall/blob/" + ref + "/" + path
 }
