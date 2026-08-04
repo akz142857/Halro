@@ -3,14 +3,18 @@ package bolt
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/akz142857/Heimdall/internal/domain"
@@ -19,54 +23,74 @@ import (
 	bbolt "go.etcd.io/bbolt"
 )
 
-const schemaVersion uint64 = 10
+const schemaVersion uint64 = 14
+
+const (
+	maxPriceVersionsPerDeployment   = 10_000
+	maxScheduledPricesPerDeployment = 1_000
+	maxPricingIdempotencyRecords    = 100_000
+)
 
 func CurrentSchemaVersion() uint64 { return schemaVersion }
 
 var (
-	ErrNotFound         = errors.New("record not found")
-	ErrAlreadyExists    = errors.New("record already exists")
-	ErrRevisionConflict = errors.New("record revision conflict")
-	ErrKeyHashConflict  = errors.New("gateway key hash already exists")
-	ErrCredentialInUse  = errors.New("credential is still referenced")
-	ErrAdminInitialized = errors.New("an admin user already exists")
-	ErrMFARequired      = errors.New("MFA is required")
-	ErrMFALimit         = errors.New("MFA authenticator limit reached")
-	ErrMFAClaimed       = errors.New("MFA challenge is already claimed")
-	errStopIteration    = errors.New("stop iteration")
+	ErrNotFound            = errors.New("record not found")
+	ErrAlreadyExists       = errors.New("record already exists")
+	ErrRevisionConflict    = errors.New("record revision conflict")
+	ErrKeyHashConflict     = errors.New("gateway key hash already exists")
+	ErrCredentialInUse     = errors.New("credential is still referenced")
+	ErrAdminInitialized    = errors.New("an admin user already exists")
+	ErrMFARequired         = errors.New("MFA is required")
+	ErrMFALimit            = errors.New("MFA authenticator limit reached")
+	ErrMFAClaimed          = errors.New("MFA challenge is already claimed")
+	ErrIdempotencyConflict = errors.New("idempotency key conflicts with another request")
+	ErrPricingQuarantined  = errors.New("deployment pricing is quarantined")
+	errStopIteration       = errors.New("stop iteration")
 )
 
 var (
-	bucketMeta                      = []byte("meta")
-	bucketCredentials               = []byte("credentials")
-	bucketProjects                  = []byte("projects")
-	bucketGatewayKeys               = []byte("gateway_keys")
-	bucketGatewayKeyHash            = []byte("gateway_key_hash")
-	bucketProviders                 = []byte("providers")
-	bucketDeployments               = []byte("deployments")
-	bucketRoutes                    = []byte("routes")
-	bucketRedactionPolicies         = []byte("redaction_policies")
-	bucketTokenGuardPolicies        = []byte("token_guard_policies")
-	bucketAlertWebhooks             = []byte("alert_webhooks")
-	bucketAdminUsers                = []byte("admin_users")
-	bucketAdminSessions             = []byte("admin_sessions")
-	bucketAdminMFAAuthenticators    = []byte("admin_mfa_authenticators")
-	bucketAdminMFARecoveryCodes     = []byte("admin_mfa_recovery_codes")
-	bucketAdminMFAChallenges        = []byte("admin_mfa_challenges")
-	bucketMigrationHistory          = []byte("migration_history")
-	bucketProviderResources         = []byte("provider_resources")
-	keySchemaVersion                = []byte("schema_version")
-	keyVaultCheck                   = []byte("vault_key_check")
-	keyUsageCheckpoint              = []byte("usage_checkpoint")
-	keyTokenGuardCheckpoint         = []byte("token_guard_checkpoint")
-	keyAuditCheckpoint              = []byte("audit_checkpoint")
-	keyAuditHMACEnvelope            = []byte("audit_hmac_envelope")
-	keyVaultKeyring                 = []byte("vault_keyring")
-	keyKeySlotDescriptor            = []byte("key_slot_descriptor")
-	keyKeySlotAuditIntent           = []byte("key_slot_audit_intent")
-	keyMasterKeyRotationAuditIntent = []byte("master_key_rotation_audit_intent")
-	keyRuntimeSettings              = []byte("runtime_settings")
-	keyInstanceUISettings           = []byte("instance_ui_settings")
+	bucketMeta                       = []byte("meta")
+	bucketCredentials                = []byte("credentials")
+	bucketProjects                   = []byte("projects")
+	bucketGatewayKeys                = []byte("gateway_keys")
+	bucketGatewayKeyHash             = []byte("gateway_key_hash")
+	bucketProviders                  = []byte("providers")
+	bucketDeployments                = []byte("deployments")
+	bucketRoutes                     = []byte("routes")
+	bucketRedactionPolicies          = []byte("redaction_policies")
+	bucketTokenGuardPolicies         = []byte("token_guard_policies")
+	bucketAlertWebhooks              = []byte("alert_webhooks")
+	bucketAdminUsers                 = []byte("admin_users")
+	bucketAdminSessions              = []byte("admin_sessions")
+	bucketAdminMFAAuthenticators     = []byte("admin_mfa_authenticators")
+	bucketAdminMFARecoveryCodes      = []byte("admin_mfa_recovery_codes")
+	bucketAdminMFAChallenges         = []byte("admin_mfa_challenges")
+	bucketMigrationHistory           = []byte("migration_history")
+	bucketProviderResources          = []byte("provider_resources")
+	bucketDeploymentPriceVersions    = []byte("deployment_price_versions")
+	bucketDeploymentPriceTimeline    = []byte("deployment_price_timeline")
+	bucketDeploymentPriceNext        = []byte("deployment_price_next_version")
+	bucketDeploymentPricingHighWater = []byte("deployment_pricing_high_water")
+	bucketDeploymentPricePins        = []byte("deployment_price_pin_intents")
+	bucketPricingAuditIntents        = []byte("pricing_audit_intents")
+	bucketPricingIdempotency         = []byte("pricing_idempotency")
+	bucketDeploymentPriceProposals   = []byte("deployment_price_proposals")
+	bucketPricingProposalIdempotency = []byte("pricing_proposal_idempotency")
+	bucketCostAdjustmentIntents      = []byte("cost_adjustment_intents")
+	keySchemaVersion                 = []byte("schema_version")
+	keyVaultCheck                    = []byte("vault_key_check")
+	keyUsageCheckpoint               = []byte("usage_checkpoint")
+	keyTokenGuardCheckpoint          = []byte("token_guard_checkpoint")
+	keyAuditCheckpoint               = []byte("audit_checkpoint")
+	keyAuditHMACEnvelope             = []byte("audit_hmac_envelope")
+	keyVaultKeyring                  = []byte("vault_keyring")
+	keyKeySlotDescriptor             = []byte("key_slot_descriptor")
+	keyKeySlotAuditIntent            = []byte("key_slot_audit_intent")
+	keyMasterKeyRotationAuditIntent  = []byte("master_key_rotation_audit_intent")
+	keyRuntimeSettings               = []byte("runtime_settings")
+	keyInstanceUISettings            = []byte("instance_ui_settings")
+	keyMinimumLedgerReaderVersion    = []byte("minimum_ledger_reader_version")
+	keyLedgerFeatureEpoch            = []byte("ledger_feature_epoch")
 )
 
 type MigrationRecord struct {
@@ -179,6 +203,195 @@ var migrations = []migration{
 		}
 		return migrationStep(step, "after_reserve_key_slot_descriptor")
 	}},
+	{version: 11, name: "versioned_deployment_pricing", up: migrateVersionedDeploymentPricing},
+	{version: 12, name: "deployment_price_pin_intents", up: func(tx *bbolt.Tx, step func(string) error) error {
+		if err := migrationStep(step, "before_create_deployment_price_pin_intents"); err != nil {
+			return err
+		}
+		if _, err := tx.CreateBucketIfNotExists(bucketDeploymentPricePins); err != nil {
+			return err
+		}
+		highWaters := tx.Bucket(bucketDeploymentPricingHighWater)
+		if highWaters != nil {
+			if err := rewriteBucket(highWaters, func(raw []byte) ([]byte, error) {
+				var highWater domain.DeploymentPricingHighWater
+				if err := json.Unmarshal(raw, &highWater); err != nil {
+					return nil, err
+				}
+				if highWater.LatestObservedPriceVersionID == "" {
+					price, err := selectDeploymentPriceVersionTx(tx, highWater.DeploymentID, highWater.LatestSelectedAt)
+					if err != nil {
+						return nil, fmt.Errorf("backfill deployment %q pricing high-water: %w", highWater.DeploymentID, err)
+					}
+					highWater.LatestObservedPriceVersionID = price.ID
+				}
+				if err := highWater.Validate(); err != nil {
+					return nil, err
+				}
+				return json.Marshal(highWater)
+			}); err != nil {
+				return err
+			}
+		}
+		return migrationStep(step, "after_create_deployment_price_pin_intents")
+	}},
+	{version: 13, name: "cost_adjustment_intents", up: func(tx *bbolt.Tx, step func(string) error) error {
+		if err := migrationStep(step, "before_create_cost_adjustment_intents"); err != nil {
+			return err
+		}
+		if _, err := tx.CreateBucketIfNotExists(bucketCostAdjustmentIntents); err != nil {
+			return err
+		}
+		meta := tx.Bucket(bucketMeta)
+		if meta == nil {
+			return errors.New("metadata bucket is missing")
+		}
+		if err := meta.Put(keyMinimumLedgerReaderVersion, []byte("v2")); err != nil {
+			return err
+		}
+		if err := meta.Put(keyLedgerFeatureEpoch, []byte{2}); err != nil {
+			return err
+		}
+		return migrationStep(step, "after_create_cost_adjustment_intents")
+	}},
+	{version: 14, name: "pricing_proposals", up: func(tx *bbolt.Tx, step func(string) error) error {
+		for _, name := range [][]byte{bucketDeploymentPriceProposals, bucketPricingProposalIdempotency} {
+			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
+				return err
+			}
+		}
+		return migrationStep(step, "after_create_pricing_proposal_buckets")
+	}},
+}
+
+func migrateVersionedDeploymentPricing(tx *bbolt.Tx, step func(string) error) error {
+	for _, item := range []struct {
+		name  []byte
+		label string
+	}{
+		{bucketDeploymentPriceVersions, "deployment_price_versions"},
+		{bucketDeploymentPriceTimeline, "deployment_price_timeline"},
+		{bucketDeploymentPriceNext, "deployment_price_next_version"},
+		{bucketDeploymentPricingHighWater, "deployment_pricing_high_water"},
+		{bucketPricingAuditIntents, "pricing_audit_intents"},
+		{bucketPricingIdempotency, "pricing_idempotency"},
+	} {
+		if err := migrationStep(step, "before_create_"+item.label); err != nil {
+			return err
+		}
+		if _, err := tx.CreateBucketIfNotExists(item.name); err != nil {
+			return err
+		}
+		if err := migrationStep(step, "after_create_"+item.label); err != nil {
+			return err
+		}
+	}
+	deployments := tx.Bucket(bucketDeployments)
+	if deployments == nil {
+		return errors.New("deployment bucket is missing during pricing migration")
+	}
+	now := time.Now().UTC()
+	if err := deployments.ForEach(func(_, raw []byte) error {
+		if raw == nil {
+			return nil
+		}
+		var deployment domain.Deployment
+		if err := json.Unmarshal(raw, &deployment); err != nil {
+			return err
+		}
+		billingMode := domain.BillingModeMetered
+		var explicitResolution PricingMigrationResolution
+		if resolutions := tx.Bucket(bucketPricingMigrationResolutions); resolutions != nil {
+			if encoded := resolutions.Get([]byte(deployment.ID)); encoded != nil {
+				if err := json.Unmarshal(encoded, &explicitResolution); err != nil {
+					return err
+				}
+			}
+		}
+		if deployment.InputMicrosPerMillion == 0 && deployment.OutputMicrosPerMillion == 0 && deployment.FixedRequestMicrosUSD == 0 {
+			if explicitResolution.KeepDisabled {
+				return nil
+			}
+			if explicitResolution.Mode == domain.BillingModeFree {
+				billingMode = domain.BillingModeFree
+			} else if deployment.Enabled && deployment.DeletedAt == nil {
+				return fmt.Errorf("pricing migration readiness failed: enabled deployment %q has ambiguous zero legacy pricing; explicitly resolve it as free or metered before upgrading", deployment.ID)
+			} else {
+				return nil
+			}
+		}
+		if err := migrationStep(step, "before_seed_price_"+deployment.ID); err != nil {
+			return err
+		}
+		origin, err := json.Marshal(struct {
+			DeploymentID           string `json:"deployment_id"`
+			DeploymentRevision     uint64 `json:"deployment_revision"`
+			InputMicrosPerMillion  int64  `json:"input_micros_per_million"`
+			OutputMicrosPerMillion int64  `json:"output_micros_per_million"`
+			FixedRequestMicrosUSD  int64  `json:"fixed_request_micros_usd"`
+		}{deployment.ID, deployment.Revision, deployment.InputMicrosPerMillion, deployment.OutputMicrosPerMillion, deployment.FixedRequestMicrosUSD})
+		if err != nil {
+			return err
+		}
+		digest := sha256.Sum256(origin)
+		price := domain.DeploymentPriceVersion{
+			ID: fmt.Sprintf("price_migration_%x", digest[:12]), DeploymentID: deployment.ID,
+			Version: 1, BillingMode: billingMode, Currency: "USD",
+			FormulaVersion:         domain.PriceFormulaUSDTokensV1,
+			InputMicrosPerMillion:  deployment.InputMicrosPerMillion,
+			OutputMicrosPerMillion: deployment.OutputMicrosPerMillion,
+			FixedRequestMicrosUSD:  deployment.FixedRequestMicrosUSD,
+			EffectiveFrom:          now, CreatedBy: "system:migration:v11", CreatedAt: now, Revision: 1,
+			Source: domain.PriceSource{
+				Type: domain.PriceSourceMigration, Assurance: domain.PriceAssuranceAsserted,
+				ReceivedAt: now, ContentSHA256: fmt.Sprintf("sha256:%x", digest[:]),
+				Reference:        "metadata schema v10 deployment price",
+				MigrationVersion: 11, OriginalResourceID: deployment.ID, OriginalRevision: deployment.Revision,
+			},
+		}
+		if explicitResolution.SourceReference != "" {
+			price.Source.Reference, price.Source.ContentSHA256 = explicitResolution.SourceReference, explicitResolution.SourceContentSHA256
+		}
+		if err := price.Validate(); err != nil {
+			return fmt.Errorf("migrate deployment %q price: %w", deployment.ID, err)
+		}
+		if existingRaw := tx.Bucket(bucketDeploymentPriceVersions).Get([]byte(price.ID)); existingRaw != nil {
+			var existing domain.DeploymentPriceVersion
+			if err := json.Unmarshal(existingRaw, &existing); err != nil {
+				return err
+			}
+			if existing.DeploymentID != price.DeploymentID || existing.Version != 1 ||
+				existing.InputMicrosPerMillion != price.InputMicrosPerMillion || existing.OutputMicrosPerMillion != price.OutputMicrosPerMillion ||
+				existing.FixedRequestMicrosUSD != price.FixedRequestMicrosUSD || existing.Source.Type != domain.PriceSourceMigration ||
+				existing.Source.OriginalResourceID != deployment.ID || existing.Source.OriginalRevision != deployment.Revision {
+				return fmt.Errorf("existing migration price %q conflicts with deployment %q", price.ID, deployment.ID)
+			}
+			timeline, err := tx.Bucket(bucketDeploymentPriceTimeline).CreateBucketIfNotExists([]byte(deployment.ID))
+			if err != nil {
+				return err
+			}
+			if err := timeline.Put(deploymentPriceTimelineKey(existing.EffectiveFrom), []byte(existing.ID)); err != nil {
+				return err
+			}
+			if err := tx.Bucket(bucketDeploymentPriceNext).Put([]byte(deployment.ID), versionKey(1)); err != nil {
+				return err
+			}
+			return migrationStep(step, "after_seed_price_"+deployment.ID)
+		}
+		if err := putDeploymentPriceVersionTx(tx, price); err != nil {
+			return err
+		}
+		if err := tx.Bucket(bucketDeploymentPriceNext).Put([]byte(deployment.ID), versionKey(1)); err != nil {
+			return err
+		}
+		return migrationStep(step, "after_seed_price_"+deployment.ID)
+	}); err != nil {
+		return err
+	}
+	if tx.Bucket(bucketPricingMigrationResolutions) != nil {
+		return tx.DeleteBucket(bucketPricingMigrationResolutions)
+	}
+	return nil
 }
 
 func migrateProviderProfileBindings(tx *bbolt.Tx, step func(string) error) error {
@@ -221,6 +434,29 @@ type usageCheckpoint struct {
 	Payload   []byte           `json:"payload"`
 }
 
+type pricingIdempotencyRecord struct {
+	KeySHA256     string    `json:"key_sha256"`
+	RequestSHA256 string    `json:"request_sha256"`
+	PriceID       string    `json:"price_id"`
+	AuditEventID  string    `json:"audit_event_id"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+func (s *Store) PricingIdempotencyRequestSHA256(ctx context.Context, keySHA256 string) (string, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return "", false, err
+	}
+	var record pricingIdempotencyRecord
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		raw := tx.Bucket(bucketPricingIdempotency).Get([]byte(keySHA256))
+		if raw == nil {
+			return nil
+		}
+		return json.Unmarshal(raw, &record)
+	})
+	return record.RequestSHA256, record.KeySHA256 != "", err
+}
+
 type AuditCheckpoint struct {
 	Records  uint64   `json:"records"`
 	Bytes    int64    `json:"bytes"`
@@ -228,18 +464,49 @@ type AuditCheckpoint struct {
 }
 
 type Store struct {
-	db *bbolt.DB
+	db                       *bbolt.DB
+	pricingGates             sync.Map
+	pricingClockMu           sync.Mutex
+	pricingClockObservations map[string]pricingClockObservation
+}
+
+type pricingClockObservation struct {
+	SelectedAt time.Time
+	ObservedAt time.Time
 }
 
 type MetadataInfo struct {
-	SchemaVersion uint64 `json:"schema_version"`
-	TxID          uint64 `json:"txid"`
+	SchemaVersion              uint64 `json:"schema_version"`
+	TxID                       uint64 `json:"txid"`
+	MinimumLedgerReaderVersion string `json:"minimum_ledger_reader_version"`
+	LedgerFeatureEpoch         uint8  `json:"ledger_feature_epoch"`
+}
+
+type LedgerCompatibilityGate struct {
+	MinimumReaderVersion string `json:"minimum_reader_version"`
+	FeatureEpoch         uint8  `json:"feature_epoch"`
+}
+
+func (s *Store) LedgerCompatibilityGate() (LedgerCompatibilityGate, error) {
+	var gate LedgerCompatibilityGate
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		meta := tx.Bucket(bucketMeta)
+		gate.MinimumReaderVersion = string(meta.Get(keyMinimumLedgerReaderVersion))
+		raw := meta.Get(keyLedgerFeatureEpoch)
+		if gate.MinimumReaderVersion == "" || len(raw) != 1 {
+			return errors.New("metadata Ledger compatibility gate is missing")
+		}
+		gate.FeatureEpoch = raw[0]
+		return nil
+	})
+	return gate, err
 }
 
 type BootstrapRecords struct {
 	Credential domain.Credential
 	Provider   domain.ProviderInstance
 	Deployment domain.Deployment
+	Price      domain.DeploymentPriceVersion
 	Route      domain.Route
 	Project    domain.Project
 	GatewayKey domain.GatewayKey
@@ -1572,6 +1839,7 @@ func (s *Store) PutBootstrap(ctx context.Context, records *BootstrapRecords) err
 		records.Credential.Validate(),
 		records.Provider.Validate(),
 		records.Deployment.Validate(),
+		records.Price.Validate(),
 		records.Route.Validate(),
 		records.Project.Validate(),
 		records.GatewayKey.Validate(),
@@ -1580,6 +1848,7 @@ func (s *Store) PutBootstrap(ctx context.Context, records *BootstrapRecords) err
 	}
 	if records.Provider.CredentialID != records.Credential.ID ||
 		records.Deployment.ProviderID != records.Provider.ID ||
+		records.Price.DeploymentID != records.Deployment.ID || records.Price.Version != 1 || records.Price.Revision != 1 ||
 		records.Route.DeploymentID != records.Deployment.ID ||
 		records.GatewayKey.ProjectID != records.Project.ID {
 		return errors.New("bootstrap references are inconsistent")
@@ -1606,6 +1875,12 @@ func (s *Store) PutBootstrap(ctx context.Context, records *BootstrapRecords) err
 			},
 			func() error {
 				return putVersioned(tx.Bucket(bucketDeployments), records.Deployment.ID, 0, &records.Deployment)
+			},
+			func() error {
+				if err := putDeploymentPriceVersionTx(tx, records.Price); err != nil {
+					return err
+				}
+				return tx.Bucket(bucketDeploymentPriceNext).Put([]byte(records.Deployment.ID), versionKey(records.Price.Version))
 			},
 			func() error {
 				return putVersioned(tx.Bucket(bucketRoutes), records.Route.ID, 0, &records.Route)
@@ -2005,6 +2280,16 @@ func requiredBuckets() [][]byte {
 		bucketAdminMFAChallenges,
 		bucketMigrationHistory,
 		bucketProviderResources,
+		bucketDeploymentPriceVersions,
+		bucketDeploymentPriceTimeline,
+		bucketDeploymentPriceNext,
+		bucketDeploymentPricingHighWater,
+		bucketDeploymentPricePins,
+		bucketPricingAuditIntents,
+		bucketPricingIdempotency,
+		bucketDeploymentPriceProposals,
+		bucketPricingProposalIdempotency,
+		bucketCostAdjustmentIntents,
 	}
 }
 
@@ -2050,6 +2335,10 @@ func (s *Store) Snapshot(path string) (MetadataInfo, error) {
 		}
 		info = MetadataInfo{
 			SchemaVersion: binary.BigEndian.Uint64(raw), TxID: uint64(tx.ID()),
+			MinimumLedgerReaderVersion: string(tx.Bucket(bucketMeta).Get(keyMinimumLedgerReaderVersion)),
+		}
+		if epoch := tx.Bucket(bucketMeta).Get(keyLedgerFeatureEpoch); len(epoch) == 1 {
+			info.LedgerFeatureEpoch = epoch[0]
 		}
 		return tx.CopyFile(path, 0o600)
 	})
@@ -3362,6 +3651,985 @@ func (s *Store) ListDeployments(ctx context.Context) ([]domain.Deployment, error
 	return deployments, err
 }
 
+func (s *Store) CreateDeploymentPriceVersion(ctx context.Context, price domain.DeploymentPriceVersion) (domain.DeploymentPriceVersion, error) {
+	created, _, _, err := s.createDeploymentPriceVersion(ctx, price, nil, "")
+	return created, err
+}
+
+func (s *Store) CreateDeploymentPriceVersionWithAuditIntent(ctx context.Context, price domain.DeploymentPriceVersion, intent domain.PricingAuditIntent) (domain.DeploymentPriceVersion, error) {
+	if err := intent.Validate(); err != nil {
+		return domain.DeploymentPriceVersion{}, err
+	}
+	if intent.Action != "deployment_price.create" || intent.TargetID != price.ID {
+		return domain.DeploymentPriceVersion{}, errors.New("pricing audit intent does not match price creation")
+	}
+	created, _, _, err := s.createDeploymentPriceVersion(ctx, price, &intent, "")
+	return created, err
+}
+
+func (s *Store) CreateDeploymentPriceVersionIdempotent(ctx context.Context, price domain.DeploymentPriceVersion, intent domain.PricingAuditIntent, keySHA256 string) (domain.DeploymentPriceVersion, domain.PricingAuditIntent, bool, error) {
+	if err := intent.Validate(); err != nil {
+		return domain.DeploymentPriceVersion{}, domain.PricingAuditIntent{}, false, err
+	}
+	if intent.Action != "deployment_price.create" || intent.TargetID != price.ID || !validSHA256Label(keySHA256) {
+		return domain.DeploymentPriceVersion{}, domain.PricingAuditIntent{}, false, errors.New("invalid idempotent pricing mutation")
+	}
+	created, effectiveIntent, replayed, err := s.createDeploymentPriceVersion(ctx, price, &intent, keySHA256)
+	if effectiveIntent == nil {
+		return created, domain.PricingAuditIntent{}, replayed, err
+	}
+	return created, *effectiveIntent, replayed, err
+}
+
+func (s *Store) createDeploymentPriceVersion(ctx context.Context, price domain.DeploymentPriceVersion, intent *domain.PricingAuditIntent, keySHA256 string) (domain.DeploymentPriceVersion, *domain.PricingAuditIntent, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.DeploymentPriceVersion{}, nil, false, err
+	}
+	if strings.TrimSpace(price.ID) == "" || strings.TrimSpace(price.DeploymentID) == "" {
+		return domain.DeploymentPriceVersion{}, nil, false, errors.New("price version id and deployment id are required")
+	}
+	if price.Version != 0 || price.Revision != 0 || price.CancelledAt != nil || price.CancelledBy != "" {
+		return domain.DeploymentPriceVersion{}, nil, false, errors.New("new price version must not set version, revision, or cancellation metadata")
+	}
+	var effectiveIntent *domain.PricingAuditIntent
+	replayed := false
+	err := s.db.Update(func(tx *bbolt.Tx) error {
+		if keySHA256 != "" {
+			idempotency := tx.Bucket(bucketPricingIdempotency)
+			if raw := idempotency.Get([]byte(keySHA256)); raw != nil {
+				var previous pricingIdempotencyRecord
+				if err := json.Unmarshal(raw, &previous); err != nil {
+					return err
+				}
+				if intent == nil || previous.RequestSHA256 != intent.RequestSHA256 {
+					return ErrIdempotencyConflict
+				}
+				priceRaw := tx.Bucket(bucketDeploymentPriceVersions).Get([]byte(previous.PriceID))
+				intentRaw := tx.Bucket(bucketPricingAuditIntents).Get([]byte(previous.AuditEventID))
+				if priceRaw == nil || intentRaw == nil {
+					return errors.New("pricing idempotency record references missing state")
+				}
+				if err := json.Unmarshal(priceRaw, &price); err != nil {
+					return err
+				}
+				var storedIntent domain.PricingAuditIntent
+				if err := json.Unmarshal(intentRaw, &storedIntent); err != nil {
+					return err
+				}
+				effectiveIntent, replayed = &storedIntent, true
+				return nil
+			}
+		}
+		if tx.Bucket(bucketDeployments).Get([]byte(price.DeploymentID)) == nil {
+			return fmt.Errorf("deployment %q: %w", price.DeploymentID, ErrNotFound)
+		}
+		prices := tx.Bucket(bucketDeploymentPriceVersions)
+		if prices.Get([]byte(price.ID)) != nil {
+			return ErrAlreadyExists
+		}
+		nextVersions := tx.Bucket(bucketDeploymentPriceNext)
+		var current uint64
+		if raw := nextVersions.Get([]byte(price.DeploymentID)); raw != nil {
+			if len(raw) != 8 {
+				return errors.New("invalid deployment price next-version state")
+			}
+			current = binary.BigEndian.Uint64(raw)
+		}
+		if current == ^uint64(0) {
+			return errors.New("deployment price version overflow")
+		}
+		price.Version = current + 1
+		price.Revision = 1
+		if err := price.Validate(); err != nil {
+			return err
+		}
+		timelineRoot := tx.Bucket(bucketDeploymentPriceTimeline)
+		timeline, err := timelineRoot.CreateBucketIfNotExists([]byte(price.DeploymentID))
+		if err != nil {
+			return err
+		}
+		key := deploymentPriceTimelineKey(price.EffectiveFrom)
+		if timeline.Get(key) != nil {
+			return domain.ErrPriceTimelineConflict
+		}
+		var latest domain.DeploymentPriceVersion
+		if err := timeline.ForEach(func(_, priceID []byte) error {
+			if priceID == nil {
+				return nil
+			}
+			raw := prices.Get(priceID)
+			if raw == nil {
+				return errors.New("deployment price timeline references a missing record")
+			}
+			var existing domain.DeploymentPriceVersion
+			if err := json.Unmarshal(raw, &existing); err != nil {
+				return err
+			}
+			if existing.CancelledAt == nil && (latest.ID == "" || existing.EffectiveFrom.After(latest.EffectiveFrom)) {
+				latest = existing
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		if latest.ID != "" && !price.EffectiveFrom.After(latest.EffectiveFrom) {
+			return fmt.Errorf("%w: effective_from must follow all non-cancelled versions", domain.ErrPriceTimelineConflict)
+		}
+		versionCount, scheduledCount := 0, 0
+		if err := timeline.ForEach(func(_, priceID []byte) error {
+			if priceID == nil {
+				return nil
+			}
+			versionCount++
+			var existing domain.DeploymentPriceVersion
+			if err := json.Unmarshal(prices.Get(priceID), &existing); err != nil {
+				return err
+			}
+			if existing.CancelledAt == nil && existing.EffectiveFrom.After(price.CreatedAt) {
+				scheduledCount++
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		if versionCount >= maxPriceVersionsPerDeployment || (price.EffectiveFrom.After(price.CreatedAt) && scheduledCount >= maxScheduledPricesPerDeployment) {
+			return errors.New("deployment pricing retention capacity exceeded")
+		}
+		if err := putDeploymentPriceVersionTx(tx, price); err != nil {
+			return err
+		}
+		if err := nextVersions.Put([]byte(price.DeploymentID), versionKey(price.Version)); err != nil {
+			return err
+		}
+		if intent != nil {
+			effective := price.EffectiveFrom.UTC()
+			intent.DeploymentID, intent.PriceVersion, intent.EffectiveFrom = price.DeploymentID, price.Version, &effective
+			intent.SourceType, intent.SourceContentSHA256 = price.Source.Type, price.Source.ContentSHA256
+			intent.ChangeSummary = fmt.Sprintf("before=none after={billing:%s,input:%d,output:%d,fixed:%d}", price.BillingMode, price.InputMicrosPerMillion, price.OutputMicrosPerMillion, price.FixedRequestMicrosUSD)
+			if err := putPricingAuditIntentTx(tx, *intent); err != nil {
+				return err
+			}
+			copy := *intent
+			effectiveIntent = &copy
+		}
+		if keySHA256 != "" {
+			if tx.Bucket(bucketPricingIdempotency).Stats().KeyN >= maxPricingIdempotencyRecords {
+				return errors.New("pricing idempotency retention capacity exceeded")
+			}
+			record := pricingIdempotencyRecord{
+				KeySHA256: keySHA256, RequestSHA256: intent.RequestSHA256, PriceID: price.ID,
+				AuditEventID: intent.EventID, CreatedAt: intent.OccurredAt,
+			}
+			encoded, err := json.Marshal(record)
+			if err != nil {
+				return err
+			}
+			return tx.Bucket(bucketPricingIdempotency).Put([]byte(keySHA256), encoded)
+		}
+		return nil
+	})
+	return price, effectiveIntent, replayed, err
+}
+
+func (s *Store) GetDeploymentPriceVersion(ctx context.Context, deploymentID, priceID string) (domain.DeploymentPriceVersion, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.DeploymentPriceVersion{}, err
+	}
+	var price domain.DeploymentPriceVersion
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		raw := tx.Bucket(bucketDeploymentPriceVersions).Get([]byte(priceID))
+		if raw == nil {
+			return ErrNotFound
+		}
+		if err := json.Unmarshal(raw, &price); err != nil {
+			return err
+		}
+		if price.DeploymentID != deploymentID {
+			return ErrNotFound
+		}
+		return price.Validate()
+	})
+	return price, err
+}
+
+func (s *Store) ListDeploymentPriceVersions(ctx context.Context, deploymentID string) ([]domain.DeploymentPriceVersion, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	var prices []domain.DeploymentPriceVersion
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		timeline := tx.Bucket(bucketDeploymentPriceTimeline).Bucket([]byte(deploymentID))
+		if timeline == nil {
+			if tx.Bucket(bucketDeployments).Get([]byte(deploymentID)) == nil {
+				return ErrNotFound
+			}
+			return nil
+		}
+		return timeline.ForEach(func(_, priceID []byte) error {
+			if priceID == nil {
+				return nil
+			}
+			raw := tx.Bucket(bucketDeploymentPriceVersions).Get(priceID)
+			if raw == nil {
+				return errors.New("deployment price timeline references a missing record")
+			}
+			var price domain.DeploymentPriceVersion
+			if err := json.Unmarshal(raw, &price); err != nil {
+				return err
+			}
+			if price.DeploymentID != deploymentID {
+				return errors.New("deployment price timeline references another deployment")
+			}
+			if err := price.Validate(); err != nil {
+				return err
+			}
+			prices = append(prices, price)
+			return nil
+		})
+	})
+	return prices, err
+}
+
+func (s *Store) SelectDeploymentPriceVersion(ctx context.Context, deploymentID string, selectedAt time.Time) (domain.DeploymentPriceVersion, error) {
+	prices, err := s.ListDeploymentPriceVersions(ctx, deploymentID)
+	if err != nil {
+		return domain.DeploymentPriceVersion{}, err
+	}
+	return domain.SelectDeploymentPriceVersion(prices, deploymentID, selectedAt)
+}
+
+func (s *Store) LockDeploymentPricing(deploymentID string) func() {
+	value, _ := s.pricingGates.LoadOrStore(deploymentID, &sync.Mutex{})
+	lock := value.(*sync.Mutex)
+	lock.Lock()
+	return lock.Unlock
+}
+
+func (s *Store) PricingReadiness(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return s.db.View(func(tx *bbolt.Tx) error {
+		return tx.Bucket(bucketDeploymentPricingHighWater).ForEach(func(_, raw []byte) error {
+			if raw == nil {
+				return nil
+			}
+			var highWater domain.DeploymentPricingHighWater
+			if err := json.Unmarshal(raw, &highWater); err != nil {
+				return err
+			}
+			if err := highWater.Validate(); err != nil {
+				return err
+			}
+			if highWater.Quarantined {
+				return fmt.Errorf("deployment %q: %w", highWater.DeploymentID, ErrPricingQuarantined)
+			}
+			return nil
+		})
+	})
+}
+
+func (s *Store) PricingQuarantineCount(ctx context.Context) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	count := 0
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		return tx.Bucket(bucketDeploymentPricingHighWater).ForEach(func(_, raw []byte) error {
+			if raw == nil {
+				return nil
+			}
+			var highWater domain.DeploymentPricingHighWater
+			if err := json.Unmarshal(raw, &highWater); err != nil {
+				return err
+			}
+			if highWater.Quarantined {
+				count++
+			}
+			return nil
+		})
+	})
+	return count, err
+}
+
+func (s *Store) DeploymentPricingQuarantine(ctx context.Context, deploymentID string) (bool, string, error) {
+	if err := ctx.Err(); err != nil {
+		return false, "", err
+	}
+	var high domain.DeploymentPricingHighWater
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		raw := tx.Bucket(bucketDeploymentPricingHighWater).Get([]byte(deploymentID))
+		if raw == nil {
+			return nil
+		}
+		return json.Unmarshal(raw, &high)
+	})
+	return high.Quarantined, high.QuarantineReason, err
+}
+
+func (s *Store) QuarantineRestoredScheduledPrices(ctx context.Context, backupCreatedAt, restoredAt time.Time) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	backupCreatedAt, restoredAt = backupCreatedAt.UTC(), restoredAt.UTC()
+	if backupCreatedAt.IsZero() || !restoredAt.After(backupCreatedAt) {
+		return 0, nil
+	}
+	count := 0
+	err := s.db.Update(func(tx *bbolt.Tx) error {
+		due := make(map[string]domain.DeploymentPriceVersion)
+		if err := tx.Bucket(bucketDeploymentPriceVersions).ForEach(func(_, raw []byte) error {
+			var price domain.DeploymentPriceVersion
+			if err := json.Unmarshal(raw, &price); err != nil {
+				return err
+			}
+			if price.EffectiveFrom.After(backupCreatedAt) && !price.EffectiveFrom.After(restoredAt) &&
+				(price.CancelledAt == nil || price.CancelledAt.After(backupCreatedAt)) {
+				if current, ok := due[price.DeploymentID]; !ok || current.EffectiveFrom.Before(price.EffectiveFrom) {
+					due[price.DeploymentID] = price
+				}
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		highs := tx.Bucket(bucketDeploymentPricingHighWater)
+		for deploymentID, price := range due {
+			var high domain.DeploymentPricingHighWater
+			if raw := highs.Get([]byte(deploymentID)); raw != nil {
+				if err := json.Unmarshal(raw, &high); err != nil {
+					return err
+				}
+				if high.Quarantined {
+					continue
+				}
+				high.Quarantined = true
+				high.QuarantineReason = "restored_scheduled_price_requires_confirmation"
+				high.Revision++
+			} else {
+				high = domain.DeploymentPricingHighWater{
+					DeploymentID: deploymentID, LatestObservedPriceVersionID: price.ID,
+					LatestSelectedAt: restoredAt, LatestObservedEffectiveFrom: price.EffectiveFrom,
+					Quarantined: true, QuarantineReason: "restored_scheduled_price_requires_confirmation", Revision: 1,
+				}
+			}
+			if err := high.Validate(); err != nil {
+				return err
+			}
+			encoded, err := json.Marshal(high)
+			if err != nil {
+				return err
+			}
+			if err := highs.Put([]byte(deploymentID), encoded); err != nil {
+				return err
+			}
+			count++
+		}
+		return nil
+	})
+	return count, err
+}
+
+func (s *Store) ConfirmRestoredPricing(ctx context.Context, deploymentID string) error {
+	return s.confirmRestoredPricing(ctx, deploymentID, nil)
+
+}
+
+func (s *Store) ConfirmRestoredPricingWithAuditIntent(ctx context.Context, deploymentID string, intent domain.PricingAuditIntent) error {
+	if err := intent.Validate(); err != nil {
+		return err
+	}
+	if intent.Action != "deployment_price.restore_confirm" || intent.TargetID != deploymentID {
+		return errors.New("pricing audit intent does not match restore confirmation")
+	}
+	return s.confirmRestoredPricing(ctx, deploymentID, &intent)
+}
+
+func (s *Store) confirmRestoredPricing(ctx context.Context, deploymentID string, intent *domain.PricingAuditIntent) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(bucketDeploymentPricingHighWater)
+		raw := bucket.Get([]byte(deploymentID))
+		if raw == nil {
+			return ErrNotFound
+		}
+		var high domain.DeploymentPricingHighWater
+		if err := json.Unmarshal(raw, &high); err != nil {
+			return err
+		}
+		if !high.Quarantined || !strings.HasPrefix(high.QuarantineReason, "restored_") {
+			return ErrRevisionConflict
+		}
+		high.Quarantined = false
+		high.QuarantineReason = ""
+		high.Revision++
+		if err := high.Validate(); err != nil {
+			return err
+		}
+		encoded, err := json.Marshal(high)
+		if err != nil {
+			return err
+		}
+		if err := bucket.Put([]byte(deploymentID), encoded); err != nil {
+			return err
+		}
+		if intent != nil {
+			return putPricingAuditIntentTx(tx, *intent)
+		}
+		return nil
+	})
+}
+
+func (s *Store) PrepareDeploymentPricePin(ctx context.Context, deploymentID, attemptID string, selectedAt time.Time, rollbackTolerance, forwardTolerance time.Duration) (domain.DeploymentPriceVersion, domain.PriceSnapshot, domain.PricePinIntent, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.DeploymentPriceVersion{}, domain.PriceSnapshot{}, domain.PricePinIntent{}, err
+	}
+	selectedAt = selectedAt.UTC()
+	if deploymentID == "" || attemptID == "" || selectedAt.IsZero() || rollbackTolerance < 0 || forwardTolerance <= 0 {
+		return domain.DeploymentPriceVersion{}, domain.PriceSnapshot{}, domain.PricePinIntent{}, errors.New("deployment, attempt, UTC selection time, and valid clock tolerances are required")
+	}
+	observedAt := time.Now()
+	s.pricingClockMu.Lock()
+	defer s.pricingClockMu.Unlock()
+	if s.pricingClockObservations == nil {
+		s.pricingClockObservations = make(map[string]pricingClockObservation)
+	}
+	previousObservation, hasObservation := s.pricingClockObservations[deploymentID]
+	forwardJump := false
+	if hasObservation {
+		elapsed := observedAt.Sub(previousObservation.ObservedAt)
+		if elapsed < 0 {
+			elapsed = 0
+		}
+		forwardJump = selectedAt.After(previousObservation.SelectedAt.Add(elapsed).Add(forwardTolerance))
+	}
+	var price domain.DeploymentPriceVersion
+	var snapshot domain.PriceSnapshot
+	var intent domain.PricePinIntent
+	var quarantined bool
+	err := s.db.Update(func(tx *bbolt.Tx) error {
+		highWaterBucket := tx.Bucket(bucketDeploymentPricingHighWater)
+		var highWater domain.DeploymentPricingHighWater
+		if raw := highWaterBucket.Get([]byte(deploymentID)); raw != nil {
+			if err := json.Unmarshal(raw, &highWater); err != nil {
+				return err
+			}
+			if err := highWater.Validate(); err != nil {
+				return err
+			}
+			if highWater.Quarantined {
+				return ErrPricingQuarantined
+			}
+			if forwardJump {
+				highWater.Quarantined = true
+				highWater.QuarantineReason = "wall_clock_forward_jump"
+				highWater.Revision++
+				encoded, err := json.Marshal(highWater)
+				if err != nil {
+					return err
+				}
+				if err := highWaterBucket.Put([]byte(deploymentID), encoded); err != nil {
+					return err
+				}
+				quarantined = true
+				return nil
+			}
+			if selectedAt.Before(highWater.LatestSelectedAt) {
+				rollback := highWater.LatestSelectedAt.Sub(selectedAt)
+				if rollback > rollbackTolerance {
+					highWater.Quarantined = true
+					highWater.QuarantineReason = "wall_clock_rollback"
+					highWater.Revision++
+					encoded, err := json.Marshal(highWater)
+					if err != nil {
+						return err
+					}
+					if err := highWaterBucket.Put([]byte(deploymentID), encoded); err != nil {
+						return err
+					}
+					quarantined = true
+					return nil
+				}
+				selectedAt = highWater.LatestSelectedAt
+			}
+		}
+		var err error
+		price, err = selectDeploymentPriceVersionTx(tx, deploymentID, selectedAt)
+		if err != nil {
+			return err
+		}
+		snapshot, err = domain.NewVersionedPriceSnapshot(price, selectedAt)
+		if err != nil {
+			return err
+		}
+		digest, err := snapshot.Digest()
+		if err != nil {
+			return err
+		}
+		var deployment domain.Deployment
+		if raw := tx.Bucket(bucketDeployments).Get([]byte(deploymentID)); raw == nil {
+			return ErrNotFound
+		} else if err := json.Unmarshal(raw, &deployment); err != nil {
+			return err
+		}
+		pins := tx.Bucket(bucketDeploymentPricePins)
+		if raw := pins.Get([]byte(attemptID)); raw != nil {
+			if err := json.Unmarshal(raw, &intent); err != nil {
+				return err
+			}
+			if intent.DeploymentID != deploymentID || intent.PriceVersionID != price.ID || intent.SnapshotSHA256 != digest {
+				return ErrIdempotencyConflict
+			}
+			return nil
+		}
+		now := time.Now().UTC()
+		intent = domain.PricePinIntent{
+			AttemptID: attemptID, DeploymentID: deploymentID, PriceVersionID: price.ID, PriceVersion: price.Version,
+			SnapshotSHA256: digest, PricingSelectedAt: selectedAt, MetadataRevision: deployment.Revision,
+			State: domain.PricePinPrepared, CreatedAt: now,
+		}
+		if err := intent.Validate(); err != nil {
+			return err
+		}
+		encodedIntent, err := json.Marshal(intent)
+		if err != nil {
+			return err
+		}
+		if err := pins.Put([]byte(attemptID), encodedIntent); err != nil {
+			return err
+		}
+		if highWater.DeploymentID == "" {
+			highWater = domain.DeploymentPricingHighWater{DeploymentID: deploymentID, LatestObservedPriceVersionID: price.ID, LatestSelectedAt: selectedAt, LatestObservedEffectiveFrom: price.EffectiveFrom, Revision: 1}
+		} else {
+			highWater.LatestSelectedAt = selectedAt
+			if price.EffectiveFrom.After(highWater.LatestObservedEffectiveFrom) {
+				highWater.LatestObservedEffectiveFrom = price.EffectiveFrom
+				highWater.LatestObservedPriceVersionID = price.ID
+			}
+			highWater.Revision++
+		}
+		if err := highWater.Validate(); err != nil {
+			return err
+		}
+		encodedHighWater, err := json.Marshal(highWater)
+		if err != nil {
+			return err
+		}
+		return highWaterBucket.Put([]byte(deploymentID), encodedHighWater)
+	})
+	if err != nil {
+		return domain.DeploymentPriceVersion{}, domain.PriceSnapshot{}, domain.PricePinIntent{}, err
+	}
+	if quarantined {
+		return domain.DeploymentPriceVersion{}, domain.PriceSnapshot{}, domain.PricePinIntent{}, ErrPricingQuarantined
+	}
+	s.pricingClockObservations[deploymentID] = pricingClockObservation{SelectedAt: selectedAt, ObservedAt: observedAt}
+	return price, snapshot, intent, nil
+}
+
+func (s *Store) CommitDeploymentPricePin(ctx context.Context, attemptID, snapshotSHA256 string, ledgerSequence uint64, committedAt time.Time) (domain.PricePinIntent, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.PricePinIntent{}, err
+	}
+	var intent domain.PricePinIntent
+	err := s.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(bucketDeploymentPricePins)
+		raw := bucket.Get([]byte(attemptID))
+		if raw == nil {
+			return ErrNotFound
+		}
+		if err := json.Unmarshal(raw, &intent); err != nil {
+			return err
+		}
+		if intent.SnapshotSHA256 != snapshotSHA256 {
+			return ErrIdempotencyConflict
+		}
+		if intent.State == domain.PricePinCommitted {
+			if intent.LedgerSequence != ledgerSequence {
+				return ErrIdempotencyConflict
+			}
+			return nil
+		}
+		value := committedAt.UTC()
+		intent.State, intent.LedgerSequence, intent.CommittedAt = domain.PricePinCommitted, ledgerSequence, &value
+		if err := intent.Validate(); err != nil {
+			return err
+		}
+		encoded, err := json.Marshal(intent)
+		if err != nil {
+			return err
+		}
+		return bucket.Put([]byte(attemptID), encoded)
+	})
+	return intent, err
+}
+
+func (s *Store) DeletePreparedDeploymentPricePin(ctx context.Context, attemptID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(bucketDeploymentPricePins)
+		raw := bucket.Get([]byte(attemptID))
+		if raw == nil {
+			return nil
+		}
+		var intent domain.PricePinIntent
+		if err := json.Unmarshal(raw, &intent); err != nil {
+			return err
+		}
+		if intent.State != domain.PricePinPrepared {
+			return domain.ErrPriceVersionUnavailable
+		}
+		return bucket.Delete([]byte(attemptID))
+	})
+}
+
+func quarantineIncoherentPricingHighWatersTx(tx *bbolt.Tx) error {
+	highWaterBucket := tx.Bucket(bucketDeploymentPricingHighWater)
+	updates := make(map[string]domain.DeploymentPricingHighWater)
+	if err := highWaterBucket.ForEach(func(key, raw []byte) error {
+		if raw == nil {
+			return nil
+		}
+		var highWater domain.DeploymentPricingHighWater
+		if err := json.Unmarshal(raw, &highWater); err != nil {
+			return err
+		}
+		if err := highWater.Validate(); err != nil {
+			return err
+		}
+		if highWater.Quarantined {
+			return nil
+		}
+		var price domain.DeploymentPriceVersion
+		priceRaw := tx.Bucket(bucketDeploymentPriceVersions).Get([]byte(highWater.LatestObservedPriceVersionID))
+		incoherent := priceRaw == nil
+		if !incoherent {
+			if err := json.Unmarshal(priceRaw, &price); err != nil {
+				return err
+			}
+			incoherent = price.DeploymentID != highWater.DeploymentID ||
+				!price.EffectiveFrom.Equal(highWater.LatestObservedEffectiveFrom)
+		}
+		if incoherent {
+			highWater.Quarantined = true
+			highWater.QuarantineReason = "restored_high_water_incoherent"
+			highWater.Revision++
+			updates[string(key)] = highWater
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	for key, highWater := range updates {
+		encoded, err := json.Marshal(highWater)
+		if err != nil {
+			return err
+		}
+		if err := highWaterBucket.Put([]byte(key), encoded); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) RecoverDeploymentPricePins(ctx context.Context, state *ledger.State) error {
+	if state == nil {
+		return errors.New("ledger state is required for price pin recovery")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		if err := quarantineIncoherentPricingHighWatersTx(tx); err != nil {
+			return err
+		}
+		bucket := tx.Bucket(bucketDeploymentPricePins)
+		var deletes [][]byte
+		var updates = make(map[string]domain.PricePinIntent)
+		if err := bucket.ForEach(func(key, raw []byte) error {
+			if raw == nil {
+				return nil
+			}
+			var intent domain.PricePinIntent
+			if err := json.Unmarshal(raw, &intent); err != nil {
+				return err
+			}
+			if err := intent.Validate(); err != nil {
+				return err
+			}
+			lease, exists := state.AccountingLease(intent.AttemptID)
+			if !exists {
+				if intent.State == domain.PricePinPrepared {
+					deletes = append(deletes, bytes.Clone(key))
+					return nil
+				}
+				return fmt.Errorf("committed price pin %q has no Ledger lease", intent.AttemptID)
+			}
+			if lease.Event.PriceSnapshot == nil {
+				return fmt.Errorf("price pin %q Ledger lease has no snapshot", intent.AttemptID)
+			}
+			digest, err := lease.Event.PriceSnapshot.Digest()
+			if err != nil || digest != intent.SnapshotSHA256 {
+				return fmt.Errorf("price pin %q snapshot digest mismatch: %w", intent.AttemptID, err)
+			}
+			if intent.State == domain.PricePinPrepared {
+				now := time.Now().UTC()
+				intent.State, intent.LedgerSequence, intent.CommittedAt = domain.PricePinCommitted, lease.Sequence, &now
+				updates[string(key)] = intent
+			} else if intent.LedgerSequence != lease.Sequence {
+				return fmt.Errorf("price pin %q Ledger sequence mismatch", intent.AttemptID)
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		for _, key := range deletes {
+			if err := bucket.Delete(key); err != nil {
+				return err
+			}
+		}
+		for key, intent := range updates {
+			if err := intent.Validate(); err != nil {
+				return err
+			}
+			encoded, err := json.Marshal(intent)
+			if err != nil {
+				return err
+			}
+			if err := bucket.Put([]byte(key), encoded); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func selectDeploymentPriceVersionTx(tx *bbolt.Tx, deploymentID string, selectedAt time.Time) (domain.DeploymentPriceVersion, error) {
+	timeline := tx.Bucket(bucketDeploymentPriceTimeline).Bucket([]byte(deploymentID))
+	if timeline == nil {
+		return domain.DeploymentPriceVersion{}, domain.ErrPriceUnavailable
+	}
+	cursor := timeline.Cursor()
+	key, priceID := cursor.Seek(deploymentPriceTimelineKey(selectedAt))
+	if key == nil || bytes.Compare(key, deploymentPriceTimelineKey(selectedAt)) > 0 {
+		key, priceID = cursor.Prev()
+	}
+	for key != nil {
+		raw := tx.Bucket(bucketDeploymentPriceVersions).Get(priceID)
+		if raw == nil {
+			return domain.DeploymentPriceVersion{}, errors.New("deployment price timeline references a missing record")
+		}
+		var price domain.DeploymentPriceVersion
+		if err := json.Unmarshal(raw, &price); err != nil {
+			return domain.DeploymentPriceVersion{}, err
+		}
+		if price.CancelledAt == nil && !price.EffectiveFrom.After(selectedAt) {
+			return price, price.Validate()
+		}
+		key, priceID = cursor.Prev()
+	}
+	return domain.DeploymentPriceVersion{}, domain.ErrPriceUnavailable
+}
+
+func (s *Store) CancelDeploymentPriceVersion(ctx context.Context, deploymentID, priceID, actor string, cancelledAt time.Time, expectedRevision uint64) (domain.DeploymentPriceVersion, error) {
+	return s.cancelDeploymentPriceVersion(ctx, deploymentID, priceID, actor, cancelledAt, expectedRevision, nil)
+}
+
+func (s *Store) CancelDeploymentPriceVersionWithAuditIntent(ctx context.Context, deploymentID, priceID, actor string, cancelledAt time.Time, expectedRevision uint64, intent domain.PricingAuditIntent) (domain.DeploymentPriceVersion, error) {
+	if err := intent.Validate(); err != nil {
+		return domain.DeploymentPriceVersion{}, err
+	}
+	if intent.Action != "deployment_price.cancel" || intent.TargetID != priceID || intent.ActorID != strings.TrimSpace(actor) {
+		return domain.DeploymentPriceVersion{}, errors.New("pricing audit intent does not match price cancellation")
+	}
+	return s.cancelDeploymentPriceVersion(ctx, deploymentID, priceID, actor, cancelledAt, expectedRevision, &intent)
+}
+
+func (s *Store) cancelDeploymentPriceVersion(ctx context.Context, deploymentID, priceID, actor string, cancelledAt time.Time, expectedRevision uint64, intent *domain.PricingAuditIntent) (domain.DeploymentPriceVersion, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.DeploymentPriceVersion{}, err
+	}
+	var price domain.DeploymentPriceVersion
+	err := s.db.Update(func(tx *bbolt.Tx) error {
+		raw := tx.Bucket(bucketDeploymentPriceVersions).Get([]byte(priceID))
+		if raw == nil {
+			return ErrNotFound
+		}
+		if err := json.Unmarshal(raw, &price); err != nil {
+			return err
+		}
+		if price.DeploymentID != deploymentID {
+			return ErrNotFound
+		}
+		if price.Revision != expectedRevision {
+			return ErrRevisionConflict
+		}
+		if price.CancelledAt != nil || !cancelledAt.Before(price.EffectiveFrom) {
+			return domain.ErrPriceVersionUnavailable
+		}
+		if err := tx.Bucket(bucketDeploymentPricePins).ForEach(func(_, raw []byte) error {
+			if raw == nil {
+				return nil
+			}
+			var pin domain.PricePinIntent
+			if err := json.Unmarshal(raw, &pin); err != nil {
+				return err
+			}
+			if pin.DeploymentID == deploymentID && pin.PriceVersionID == priceID {
+				return domain.ErrPriceVersionUnavailable
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		price.CancelledAt = &cancelledAt
+		price.CancelledBy = strings.TrimSpace(actor)
+		price.Revision++
+		if err := price.Validate(); err != nil {
+			return err
+		}
+		encoded, err := json.Marshal(price)
+		if err != nil {
+			return err
+		}
+		if err := tx.Bucket(bucketDeploymentPriceVersions).Put([]byte(price.ID), encoded); err != nil {
+			return err
+		}
+		if intent != nil {
+			return putPricingAuditIntentTx(tx, *intent)
+		}
+		return nil
+	})
+	return price, err
+}
+
+func (s *Store) ListPendingPricingAuditIntents(ctx context.Context) ([]domain.PricingAuditIntent, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	var intents []domain.PricingAuditIntent
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		return tx.Bucket(bucketPricingAuditIntents).ForEach(func(_, raw []byte) error {
+			if raw == nil {
+				return nil
+			}
+			var intent domain.PricingAuditIntent
+			if err := json.Unmarshal(raw, &intent); err != nil {
+				return err
+			}
+			if err := intent.Validate(); err != nil {
+				return err
+			}
+			if !intent.Delivered {
+				intents = append(intents, intent)
+			}
+			return nil
+		})
+	})
+	sort.Slice(intents, func(i, j int) bool {
+		if intents[i].OccurredAt.Equal(intents[j].OccurredAt) {
+			return intents[i].EventID < intents[j].EventID
+		}
+		return intents[i].OccurredAt.Before(intents[j].OccurredAt)
+	})
+	return intents, err
+}
+
+func (s *Store) MarkPricingAuditIntentDelivered(ctx context.Context, eventID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(bucketPricingAuditIntents)
+		raw := bucket.Get([]byte(eventID))
+		if raw == nil {
+			return ErrNotFound
+		}
+		var intent domain.PricingAuditIntent
+		if err := json.Unmarshal(raw, &intent); err != nil {
+			return err
+		}
+		if intent.Delivered {
+			return nil
+		}
+		intent.Delivered = true
+		encoded, err := json.Marshal(intent)
+		if err != nil {
+			return err
+		}
+		return bucket.Put([]byte(eventID), encoded)
+	})
+}
+
+func putPricingAuditIntentTx(tx *bbolt.Tx, intent domain.PricingAuditIntent) error {
+	if err := intent.Validate(); err != nil {
+		return err
+	}
+	bucket := tx.Bucket(bucketPricingAuditIntents)
+	if raw := bucket.Get([]byte(intent.EventID)); raw != nil {
+		var existing domain.PricingAuditIntent
+		if err := json.Unmarshal(raw, &existing); err != nil {
+			return err
+		}
+		if existing != intent {
+			return errors.New("pricing audit event id conflicts with another intent")
+		}
+		return nil
+	}
+	encoded, err := json.Marshal(intent)
+	if err != nil {
+		return err
+	}
+	return bucket.Put([]byte(intent.EventID), encoded)
+}
+
+func putDeploymentPriceVersionTx(tx *bbolt.Tx, price domain.DeploymentPriceVersion) error {
+	if err := price.Validate(); err != nil {
+		return err
+	}
+	prices := tx.Bucket(bucketDeploymentPriceVersions)
+	if prices.Get([]byte(price.ID)) != nil {
+		return ErrAlreadyExists
+	}
+	timelineRoot := tx.Bucket(bucketDeploymentPriceTimeline)
+	timeline, err := timelineRoot.CreateBucketIfNotExists([]byte(price.DeploymentID))
+	if err != nil {
+		return err
+	}
+	key := deploymentPriceTimelineKey(price.EffectiveFrom)
+	if timeline.Get(key) != nil {
+		return domain.ErrPriceTimelineConflict
+	}
+	encoded, err := json.Marshal(price)
+	if err != nil {
+		return err
+	}
+	if err := prices.Put([]byte(price.ID), encoded); err != nil {
+		return err
+	}
+	return timeline.Put(key, []byte(price.ID))
+}
+
+func deploymentPriceTimelineKey(effectiveFrom time.Time) []byte {
+	var key [12]byte
+	seconds := effectiveFrom.UTC().Unix()
+	binary.BigEndian.PutUint64(key[:8], uint64(seconds)^(uint64(1)<<63))
+	binary.BigEndian.PutUint32(key[8:], uint32(effectiveFrom.UTC().Nanosecond()))
+	return key[:]
+}
+
+func validSHA256Label(value string) bool {
+	if len(value) != len("sha256:")+64 || !strings.HasPrefix(value, "sha256:") {
+		return false
+	}
+	_, err := hex.DecodeString(strings.TrimPrefix(value, "sha256:"))
+	return err == nil
+}
+
 func (s *Store) PutRoute(ctx context.Context, route domain.Route, expectedRevision uint64) (domain.Route, error) {
 	if err := route.Validate(); err != nil {
 		return domain.Route{}, err
@@ -3690,6 +4958,23 @@ func (s *Store) ProviderResource(ctx context.Context, projectID, id string) (dom
 		return domain.ProviderResource{}, ErrNotFound
 	}
 	return resource, nil
+}
+
+// ListProviderResources returns every persisted resource owner mapping. Backup
+// uses this while holding the data-directory lock so it can include exactly
+// the local objects referenced by the metadata snapshot and reject a missing
+// object instead of publishing an incomplete archive.
+func (s *Store) ListProviderResources(ctx context.Context) ([]domain.ProviderResource, error) {
+	var resources []domain.ProviderResource
+	err := s.listJSON(ctx, bucketProviderResources, func(raw []byte) error {
+		var resource domain.ProviderResource
+		if err := json.Unmarshal(raw, &resource); err != nil {
+			return err
+		}
+		resources = append(resources, resource)
+		return nil
+	})
+	return resources, err
 }
 
 func (s *Store) ProviderResourceByIdempotency(ctx context.Context, projectID string, kind domain.ProviderResourceKind, keyHash [32]byte) (domain.ProviderResource, error) {

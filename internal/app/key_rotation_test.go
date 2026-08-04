@@ -318,6 +318,7 @@ func rotationFixture(t *testing.T) (config.Config, string, string, []byte, []byt
 		ProviderName: "OpenAI", ProviderType: domain.ProviderOpenAI,
 		ProviderBaseURL: "https://api.openai.com", ProviderModel: "gpt-test",
 		PublicModel: "chat", ProjectName: "Rotation",
+		BillingMode: domain.BillingModeFree,
 	}, providerSecret)
 	if err != nil {
 		t.Fatal(err)

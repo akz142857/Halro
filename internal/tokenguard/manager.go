@@ -200,8 +200,12 @@ func (m *Manager) DroppedEvents() uint64 { return m.droppedEvents.Load() }
 // Lease represents one request counted atomically against a Token Guard
 // concurrency threshold. Release is idempotent.
 type Lease struct {
-	current *subject
-	once    sync.Once
+	current      *subject
+	policyID     string
+	policyRev    uint64
+	bucketStart  int64
+	admittedCost int64
+	once         sync.Once
 }
 
 func (l *Lease) Release() {
@@ -222,6 +226,56 @@ func (m *Manager) HasPolicy(id string) bool {
 	defer m.metadataMu.RUnlock()
 	_, ok := m.policies[id]
 	return ok
+}
+
+func (m *Manager) HasCostDimension(id string) bool {
+	m.metadataMu.RLock()
+	defer m.metadataMu.RUnlock()
+	policy, ok := m.policies[id]
+	return ok && (policy.CostMicrosPerMinute > 0 ||
+		(policy.EWMAEnabled && policy.EWMAAbsoluteCostMicrosPerMinute > 0))
+}
+
+// RecheckCost raises the cost recorded for an already-admitted request when a
+// later Attempt selects a newer price. Non-cost dimensions and concurrency are
+// deliberately not acquired twice. A newly exceeded cost guard fails before
+// provider I/O.
+func (m *Manager) RecheckCost(lease *Lease, estimatedCostMicrosUSD int64, now time.Time) Decision {
+	if lease == nil || lease.current == nil || estimatedCostMicrosUSD <= lease.admittedCost {
+		return Decision{Allowed: true, Status: StatusNormal}
+	}
+	m.metadataMu.RLock()
+	policy, ok := m.policies[lease.policyID]
+	m.metadataMu.RUnlock()
+	if !ok || policy.Revision != lease.policyRev {
+		return Decision{Allowed: false, Status: StatusSuspicious, Reason: "token_guard_policy_changed"}
+	}
+	current := lease.current
+	current.mu.Lock()
+	defer current.mu.Unlock()
+	if now.IsZero() {
+		now = time.Now()
+	}
+	m.expireBuckets(current, now)
+	delta := estimatedCostMicrosUSD - lease.admittedCost
+	stats := aggregate(current, now.Add(-time.Minute))
+	projected := saturatingAdd(stats.cost, delta)
+	if policy.CostMicrosPerMinute > 0 && projected > policy.CostMicrosPerMinute {
+		return Decision{Allowed: false, Status: StatusSuspicious, Reason: "cost_per_minute"}
+	}
+	if policy.EWMAEnabled && policy.EWMAAbsoluteCostMicrosPerMinute > 0 &&
+		projected > policy.EWMAAbsoluteCostMicrosPerMinute && current.baseline.Initialized &&
+		float64(projected) > current.baseline.CostPerMinute*policy.EWMAMultiplier {
+		return Decision{Allowed: false, Status: StatusSuspicious, Reason: "ewma_cost_per_minute"}
+	}
+	if bucket := current.buckets[lease.bucketStart]; bucket != nil {
+		bucket.cost = saturatingAdd(bucket.cost, delta)
+		if bucket.baselineRequests > 0 && !bucket.baselineTainted {
+			bucket.baselineCost = saturatingAdd(bucket.baselineCost, delta)
+		}
+	}
+	lease.admittedCost = estimatedCostMicrosUSD
+	return Decision{Allowed: true, Status: current.status}
 }
 
 func (m *Manager) Admit(input Input) Decision {
@@ -331,20 +385,23 @@ func (m *Manager) admit(input Input, holdConcurrency bool) (Decision, *Lease) {
 		if holdConcurrency {
 			current.inFlight++
 		}
-		return Decision{Allowed: true, Status: StatusSuspicious, Reason: ewmaReason}, leaseFor(current, holdConcurrency)
+		return Decision{Allowed: true, Status: StatusSuspicious, Reason: ewmaReason}, leaseFor(current, policy, input, holdConcurrency)
 	}
 	recordAccepted(current, input, reason == "" && (current.baseline.FrozenUntil.IsZero() || !input.Now.Before(current.baseline.FrozenUntil)))
 	if holdConcurrency {
 		current.inFlight++
 	}
-	return Decision{Allowed: true, Status: current.status, Reason: reason}, leaseFor(current, holdConcurrency)
+	return Decision{Allowed: true, Status: current.status, Reason: reason}, leaseFor(current, policy, input, holdConcurrency)
 }
 
-func leaseFor(current *subject, held bool) *Lease {
+func leaseFor(current *subject, policy domain.TokenGuardPolicy, input Input, held bool) *Lease {
 	if !held {
 		return nil
 	}
-	return &Lease{current: current}
+	return &Lease{
+		current: current, policyID: policy.ID, policyRev: policy.Revision,
+		bucketStart: input.Now.Truncate(10 * time.Second).Unix(), admittedCost: input.EstimatedCostMicrosUSD,
+	}
 }
 
 func (m *Manager) MarshalCheckpoint() ([]byte, error) {

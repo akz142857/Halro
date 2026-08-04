@@ -27,6 +27,7 @@ import (
 	"github.com/akz142857/Heimdall/internal/contentscan"
 	"github.com/akz142857/Heimdall/internal/domain"
 	"github.com/akz142857/Heimdall/internal/id"
+	"github.com/akz142857/Heimdall/internal/ledger"
 	"github.com/akz142857/Heimdall/internal/limiter"
 	"github.com/akz142857/Heimdall/internal/openaiapi"
 	"github.com/akz142857/Heimdall/internal/provider"
@@ -61,26 +62,42 @@ func (e *Error) Unwrap() error {
 }
 
 type Service struct {
-	auth                  *auth.Snapshot
-	registry              *provider.Registry
-	accounting            *budget.Manager
-	limiter               *limiter.Manager
-	redactor              *redaction.Engine
-	breakers              *circuit.Manager
-	maxAttempts           int
-	maxAttemptsPerTarget  int
-	retryBaseDelay        time.Duration
-	retryMaxDelay         time.Duration
-	retryJitter           bool
-	tokenGuard            *tokenguard.Manager
-	providerConcurrency   *provider.ConcurrencyManager
-	deploymentConcurrency *provider.ConcurrencyManager
-	rejections            rejectionCounters
-	sourceHashKey         [32]byte
-	now                   func() time.Time
-	resources             Phase2ResourceStore
-	resourceObjectDir     string
-	contentScanner        contentscan.Scanner
+	auth                          *auth.Snapshot
+	registry                      *provider.Registry
+	accounting                    *budget.Manager
+	limiter                       *limiter.Manager
+	redactor                      *redaction.Engine
+	breakers                      *circuit.Manager
+	maxAttempts                   int
+	maxAttemptsPerTarget          int
+	retryBaseDelay                time.Duration
+	retryMaxDelay                 time.Duration
+	retryJitter                   bool
+	tokenGuard                    *tokenguard.Manager
+	providerConcurrency           *provider.ConcurrencyManager
+	deploymentConcurrency         *provider.ConcurrencyManager
+	rejections                    rejectionCounters
+	sourceHashKey                 [32]byte
+	now                           func() time.Time
+	resources                     Phase2ResourceStore
+	resourceObjectDir             string
+	contentScanner                contentscan.Scanner
+	pricing                       PriceSelector
+	pricingClockRollbackTolerance time.Duration
+	pricingClockForwardTolerance  time.Duration
+	pricingUnknownPolicy          string
+}
+
+type PriceSelector interface {
+	SelectDeploymentPriceVersion(context.Context, string, time.Time) (domain.DeploymentPriceVersion, error)
+}
+
+type PricePinStore interface {
+	PriceSelector
+	LockDeploymentPricing(string) func()
+	PrepareDeploymentPricePin(context.Context, string, string, time.Time, time.Duration, time.Duration) (domain.DeploymentPriceVersion, domain.PriceSnapshot, domain.PricePinIntent, error)
+	CommitDeploymentPricePin(context.Context, string, string, uint64, time.Time) (domain.PricePinIntent, error)
+	DeletePreparedDeploymentPricePin(context.Context, string) error
 }
 
 func NewService(authSnapshot *auth.Snapshot, registry *provider.Registry, accounting *budget.Manager) (*Service, error) {
@@ -88,40 +105,46 @@ func NewService(authSnapshot *auth.Snapshot, registry *provider.Registry, accoun
 }
 
 type ServiceOptions struct {
-	MaxAttempts                int
-	CircuitFailureThreshold    int
-	CircuitOpenDuration        time.Duration
-	CircuitHalfOpenMaxRequests int
-	MaxAttemptsPerTarget       int
-	RetryBaseDelay             time.Duration
-	RetryMaxDelay              time.Duration
-	RetryJitter                bool
-	TokenGuard                 *tokenguard.Manager
-	Redactor                   *redaction.Engine
-	Resources                  Phase2ResourceStore
-	ResourceObjectDir          string
-	ContentScanner             contentscan.Scanner
+	MaxAttempts                   int
+	CircuitFailureThreshold       int
+	CircuitOpenDuration           time.Duration
+	CircuitHalfOpenMaxRequests    int
+	MaxAttemptsPerTarget          int
+	RetryBaseDelay                time.Duration
+	RetryMaxDelay                 time.Duration
+	RetryJitter                   bool
+	TokenGuard                    *tokenguard.Manager
+	Redactor                      *redaction.Engine
+	Resources                     Phase2ResourceStore
+	ResourceObjectDir             string
+	ContentScanner                contentscan.Scanner
+	Pricing                       PriceSelector
+	PricingClockRollbackTolerance time.Duration
+	PricingClockForwardTolerance  time.Duration
+	PricingUnknownPolicy          string
 }
 
 type requestRun struct {
-	service         *Service
-	principal       auth.AuthResult
-	policyLease     *limiter.Lease
-	tokenGuardLease *tokenguard.Lease
-	requestLease    budget.Request
-	requestID       string
-	actualTPMTokens int64
-	providerCalled  bool
-	providerFailed  bool
+	service                     *Service
+	principal                   auth.AuthResult
+	policyLease                 *limiter.Lease
+	tokenGuardLease             *tokenguard.Lease
+	requestLease                budget.Request
+	requestID                   string
+	actualTPMTokens             int64
+	providerCalled              bool
+	providerFailed              bool
+	tokenGuardPricingViewDigest string
 }
 
 type activeAttempt struct {
-	service     *Service
-	run         *requestRun
-	accounting  budget.Attempt
-	breaker     *circuit.Lease
-	concurrency *targetConcurrencyLease
-	startedAt   time.Time
+	service       *Service
+	run           *requestRun
+	accounting    budget.Attempt
+	breaker       *circuit.Lease
+	concurrency   *targetConcurrencyLease
+	startedAt     time.Time
+	pricingTarget provider.Target
 }
 
 func (s *Service) resolveRequest(
@@ -157,7 +180,7 @@ func (s *Service) beginRequestRun(
 	targets []provider.Target,
 	totalTokens, inputTokens, outputTokens int64,
 ) (*requestRun, error) {
-	tokenGuardLease, err := s.admitTokenGuard(ctx, principal, targets, totalTokens, inputTokens, outputTokens)
+	tokenGuardLease, pricingViewDigest, err := s.admitTokenGuard(ctx, principal, targets, totalTokens, inputTokens, outputTokens)
 	if err != nil {
 		return nil, err
 	}
@@ -182,7 +205,7 @@ func (s *Service) beginRequestRun(
 	}
 	return &requestRun{
 		service: s, principal: principal, policyLease: policyLease, tokenGuardLease: tokenGuardLease,
-		requestLease: requestLease, requestID: requestID,
+		requestLease: requestLease, requestID: requestID, tokenGuardPricingViewDigest: pricingViewDigest,
 	}, nil
 }
 
@@ -257,8 +280,43 @@ func (s *Service) startAttempt(
 		}
 		return nil, err
 	}
-	reservation, err := estimateReservation(inputTokens, outputTokens, target)
+	var pricingUnlock func()
+	var pinStore PricePinStore
+	var pinIntent *domain.PricePinIntent
+	var unknownPolicyEvidence *domain.UnknownPricePolicyEvidence
+	forcedAttemptID := ""
+	reservation, leaseMode, snapshot, pricedTarget := int64(0), ledger.LeaseMode(""), (*domain.PriceSnapshot)(nil), target
+	if candidate, ok := s.pricing.(PricePinStore); ok && target.DeploymentID != "" {
+		pinStore = candidate
+		pricingUnlock = pinStore.LockDeploymentPricing(target.DeploymentID)
+		forcedAttemptID, err = id.New("att")
+		if err == nil {
+			pricingSelectedAt := s.now().UTC()
+			var price domain.DeploymentPriceVersion
+			var captured domain.PriceSnapshot
+			var intent domain.PricePinIntent
+			price, captured, intent, err = pinStore.PrepareDeploymentPricePin(ctx, target.DeploymentID, forcedAttemptID, pricingSelectedAt, s.pricingClockRollbackTolerance, s.pricingClockForwardTolerance)
+			if err == nil {
+				reservation, leaseMode, snapshot, pricedTarget, err = accountingTermsFromSnapshot(price, captured, target, inputTokens, outputTokens)
+				pinIntent = &intent
+			} else if errors.Is(err, domain.ErrPriceUnavailable) {
+				unknownPolicyEvidence, err = s.unknownPricePolicyEvidence(run.principal)
+				if err == nil {
+					captured = domain.NewUnknownPriceSnapshot(pricingSelectedAt)
+					reservation, leaseMode, snapshot, pricedTarget = 0, ledger.LeaseModeUnknownAllowed, &captured, target
+				}
+			}
+		}
+	} else {
+		reservation, leaseMode, snapshot, pricedTarget, err = s.prepareAccountingLease(ctx, target, inputTokens, outputTokens)
+	}
 	if err != nil {
+		if pinIntent != nil {
+			_ = pinStore.DeletePreparedDeploymentPricePin(context.Background(), pinIntent.AttemptID)
+		}
+		if pricingUnlock != nil {
+			pricingUnlock()
+		}
 		providerLease.Release()
 		breakerLease.Done(nil, s.now())
 		finalizeErr := s.finalizeRequest(run.requestLease, "accounting_error")
@@ -267,15 +325,44 @@ func (s *Service) startAttempt(
 			errors.Join(err, finalizeErr),
 		)
 	}
-	attempt, err := s.accounting.ReserveAttemptDetailed(
-		ctx, run.requestLease, run.principal.Project.DailyBudgetMicrosUSD, reservation,
-		budget.AttemptMetadata{
-			RouteID: target.ID, DeploymentID: target.DeploymentID,
-			ProviderID: target.ProviderID, ProviderModel: target.ProviderModel,
-			AttemptNumber: attemptNumber, RetryCount: targetTry, FallbackCount: targetIndex,
-		},
-	)
+	if decision := s.tokenGuard.RecheckCost(run.tokenGuardLease, reservation, s.now()); !decision.Allowed {
+		if pinIntent != nil {
+			_ = pinStore.DeletePreparedDeploymentPricePin(context.Background(), pinIntent.AttemptID)
+		}
+		if pricingUnlock != nil {
+			pricingUnlock()
+		}
+		providerLease.Release()
+		breakerLease.Done(nil, s.now())
+		s.rejections.tokenGuard.Add(1)
+		finalizeErr := s.finalizeRequest(run.requestLease, "token_guard_rejected")
+		return nil, gatewayError("token_guard_blocked", "the current attempt price exceeds Token Guard cost limits", http.StatusForbidden, finalizeErr)
+	}
+	metadata := budget.AttemptMetadata{
+		RouteID: target.ID, DeploymentID: target.DeploymentID,
+		ProviderID: target.ProviderID, ProviderModel: target.ProviderModel,
+		AttemptNumber: attemptNumber, RetryCount: targetTry, FallbackCount: targetIndex,
+	}
+	var attempt budget.Attempt
+	if snapshot == nil {
+		attempt, err = s.accounting.ReserveAttemptDetailed(ctx, run.requestLease, run.principal.Project.DailyBudgetMicrosUSD, reservation, metadata)
+	} else {
+		attempt, err = s.accounting.ReserveLeaseDetailed(ctx, run.requestLease, run.principal.Project.DailyBudgetMicrosUSD, budget.LeaseSpec{
+			AttemptID: forcedAttemptID,
+			Mode:      leaseMode, ReservationMicrosUSD: reservation, PriceSnapshot: snapshot,
+			PreparedInputTokens: inputTokens, PreparedOutputTokens: outputTokens,
+			RecoveryKey:                 "accounting-recovery-v1",
+			UnknownPolicyEvidence:       unknownPolicyEvidence,
+			TokenGuardPricingViewDigest: run.tokenGuardPricingViewDigest,
+		}, metadata)
+	}
 	if err != nil {
+		if pinIntent != nil {
+			_ = pinStore.DeletePreparedDeploymentPricePin(context.Background(), pinIntent.AttemptID)
+		}
+		if pricingUnlock != nil {
+			pricingUnlock()
+		}
 		providerLease.Release()
 		breakerLease.Done(nil, s.now())
 		if errors.Is(err, budget.ErrExceeded) {
@@ -286,6 +373,19 @@ func (s *Service) startAttempt(
 			"accounting_unavailable", "accounting is unavailable", 503,
 			errors.Join(err, finalizeErr),
 		)
+	}
+	if pinIntent != nil {
+		if _, err := pinStore.CommitDeploymentPricePin(ctx, attempt.AttemptID, pinIntent.SnapshotSHA256, attempt.ReservationSequence, s.now().UTC()); err != nil {
+			pricingUnlock()
+			providerLease.Release()
+			breakerLease.Done(nil, s.now())
+			cleanupErr := s.settleAttempt(attempt, budget.Settlement{Outcome: "pin_commit_failed"})
+			finalizeErr := s.finalizeRequest(run.requestLease, "accounting_error")
+			return nil, gatewayError("accounting_unavailable", "accounting price pin could not be committed", 503, errors.Join(err, cleanupErr, finalizeErr))
+		}
+	}
+	if pricingUnlock != nil {
+		pricingUnlock()
 	}
 	if err := s.accounting.MarkStarted(ctx, attempt); err != nil {
 		providerLease.Release()
@@ -299,11 +399,60 @@ func (s *Service) startAttempt(
 	}
 	return &activeAttempt{
 		service: s, run: run, accounting: attempt, breaker: breakerLease,
-		concurrency: providerLease, startedAt: s.now(),
+		concurrency: providerLease, startedAt: s.now(), pricingTarget: pricedTarget,
 	}, nil
 }
 
+func accountingTermsFromSnapshot(price domain.DeploymentPriceVersion, snapshot domain.PriceSnapshot, target provider.Target, inputTokens, outputTokens int64) (int64, ledger.LeaseMode, *domain.PriceSnapshot, provider.Target, error) {
+	cost, err := snapshot.Calculate(inputTokens, outputTokens)
+	if err != nil {
+		return 0, "", nil, target, gatewayError("accounting_error", "unable to estimate request cost", http.StatusServiceUnavailable, err)
+	}
+	mode := ledger.LeaseModeMetered
+	if price.BillingMode == domain.BillingModeFree {
+		mode = ledger.LeaseModeFree
+	}
+	priced := target
+	priced.InputMicrosPerMillion = *snapshot.InputMicrosPerMillion
+	priced.OutputMicrosPerMillion = *snapshot.OutputMicrosPerMillion
+	priced.FixedRequestMicrosUSD = *snapshot.FixedRequestMicrosUSD
+	return cost.TotalCostMicrosUSD, mode, &snapshot, priced, nil
+}
+
+func (s *Service) prepareAccountingLease(ctx context.Context, target provider.Target, inputTokens, outputTokens int64) (int64, ledger.LeaseMode, *domain.PriceSnapshot, provider.Target, error) {
+	if s.pricing == nil || target.DeploymentID == "" {
+		reservation, err := estimateReservation(inputTokens, outputTokens, target)
+		return reservation, "", nil, target, err
+	}
+	selectedAt := s.now().UTC()
+	price, err := s.pricing.SelectDeploymentPriceVersion(ctx, target.DeploymentID, selectedAt)
+	if err != nil {
+		return 0, "", nil, target, gatewayError("price_unavailable", "an effective price is unavailable", http.StatusServiceUnavailable, err)
+	}
+	snapshot, err := domain.NewVersionedPriceSnapshot(price, selectedAt)
+	if err != nil {
+		return 0, "", nil, target, gatewayError("accounting_error", "unable to snapshot request price", http.StatusServiceUnavailable, err)
+	}
+	cost, err := snapshot.Calculate(inputTokens, outputTokens)
+	if err != nil {
+		return 0, "", nil, target, gatewayError("accounting_error", "unable to estimate request cost", http.StatusServiceUnavailable, err)
+	}
+	mode := ledger.LeaseModeMetered
+	if snapshot.BillingMode == domain.BillingModeFree {
+		mode = ledger.LeaseModeFree
+	}
+	priced := target
+	priced.InputMicrosPerMillion = *snapshot.InputMicrosPerMillion
+	priced.OutputMicrosPerMillion = *snapshot.OutputMicrosPerMillion
+	priced.FixedRequestMicrosUSD = *snapshot.FixedRequestMicrosUSD
+	return cost.TotalCostMicrosUSD, mode, &snapshot, priced, nil
+}
+
 func (attempt *activeAttempt) finish(providerErr error, settlement budget.Settlement) error {
+	if attempt.accounting.LeaseMode == ledger.LeaseModeUnknownAllowed {
+		settlement.CommittedMicrosUSD = 0
+		settlement.CostEstimated = false
+	}
 	attempt.concurrency.Release()
 	attempt.run.recordProviderResult(providerErr, settlement)
 	enrichSettlement(&settlement, providerErr, attempt.startedAt, attempt.service.now())
@@ -369,6 +518,18 @@ func NewServiceWithOptions(
 	if options.RetryMaxDelay < options.RetryBaseDelay {
 		options.RetryMaxDelay = 2 * time.Second
 	}
+	if options.PricingClockRollbackTolerance <= 0 {
+		options.PricingClockRollbackTolerance = 2 * time.Second
+	}
+	if options.PricingClockForwardTolerance <= 0 {
+		options.PricingClockForwardTolerance = 30 * time.Second
+	}
+	if options.PricingUnknownPolicy == "" {
+		options.PricingUnknownPolicy = "reject"
+	}
+	if options.PricingUnknownPolicy != "reject" && options.PricingUnknownPolicy != "allow_without_cost_governance" {
+		return nil, errors.New("pricing unknown policy must be reject or allow_without_cost_governance")
+	}
 	breakers, err := circuit.New(circuit.Config{
 		FailureThreshold:    options.CircuitFailureThreshold,
 		OpenDuration:        options.CircuitOpenDuration,
@@ -406,25 +567,29 @@ func NewServiceWithOptions(
 		return nil, errors.New("generate source hashing key")
 	}
 	return &Service{
-		auth:                  authSnapshot,
-		registry:              registry,
-		accounting:            accounting,
-		limiter:               limiter.New(),
-		redactor:              options.Redactor,
-		breakers:              breakers,
-		maxAttempts:           options.MaxAttempts,
-		maxAttemptsPerTarget:  options.MaxAttemptsPerTarget,
-		retryBaseDelay:        options.RetryBaseDelay,
-		retryMaxDelay:         options.RetryMaxDelay,
-		retryJitter:           options.RetryJitter,
-		tokenGuard:            options.TokenGuard,
-		providerConcurrency:   provider.NewConcurrencyManager(),
-		deploymentConcurrency: provider.NewConcurrencyManager(),
-		sourceHashKey:         sourceHashKey,
-		now:                   time.Now,
-		resources:             options.Resources,
-		resourceObjectDir:     options.ResourceObjectDir,
-		contentScanner:        options.ContentScanner,
+		auth:                          authSnapshot,
+		registry:                      registry,
+		accounting:                    accounting,
+		limiter:                       limiter.New(),
+		redactor:                      options.Redactor,
+		breakers:                      breakers,
+		maxAttempts:                   options.MaxAttempts,
+		maxAttemptsPerTarget:          options.MaxAttemptsPerTarget,
+		retryBaseDelay:                options.RetryBaseDelay,
+		retryMaxDelay:                 options.RetryMaxDelay,
+		retryJitter:                   options.RetryJitter,
+		tokenGuard:                    options.TokenGuard,
+		providerConcurrency:           provider.NewConcurrencyManager(),
+		deploymentConcurrency:         provider.NewConcurrencyManager(),
+		sourceHashKey:                 sourceHashKey,
+		now:                           time.Now,
+		resources:                     options.Resources,
+		resourceObjectDir:             options.ResourceObjectDir,
+		contentScanner:                options.ContentScanner,
+		pricing:                       options.Pricing,
+		pricingClockRollbackTolerance: options.PricingClockRollbackTolerance,
+		pricingClockForwardTolerance:  options.PricingClockForwardTolerance,
+		pricingUnknownPolicy:          options.PricingUnknownPolicy,
 	}, nil
 }
 
@@ -578,7 +743,7 @@ func (s *Service) Chat(
 				}
 			}
 			settlement := settlementForResult(
-				semanticResponse, providerErr, inputTokens, outputTokens, target, attempt.accounting.ReservationMicrosUSD,
+				semanticResponse, providerErr, inputTokens, outputTokens, attempt.pricingTarget, attempt.accounting.ReservationMicrosUSD,
 			)
 			if err := attempt.finish(providerErr, settlement); err != nil {
 				return openaiapi.ChatCompletionResponse{}, err
@@ -854,7 +1019,7 @@ func (s *Service) MessagesNative(ctx context.Context, plaintextKey, version stri
 		usage := semantic.Usage{InputTokens: message.Usage.InputTokens, OutputTokens: message.Usage.OutputTokens, TotalTokens: message.Usage.InputTokens + message.Usage.OutputTokens, Source: semantic.UsageProviderReported}
 		semanticResult.Usage = &usage
 	}
-	settlement := settlementForResult(semanticResult, providerErr, inputTokens, outputTokens, target, attempt.accounting.ReservationMicrosUSD)
+	settlement := settlementForResult(semanticResult, providerErr, inputTokens, outputTokens, attempt.pricingTarget, attempt.accounting.ReservationMicrosUSD)
 	if err := attempt.finish(providerErr, settlement); err != nil {
 		return anthropicapi.Message{}, err
 	}
@@ -938,7 +1103,7 @@ func (s *Service) MessagesNativeStream(ctx context.Context, plaintextKey, versio
 	if usage != nil {
 		semanticUsage = &semantic.Usage{InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, TotalTokens: usage.InputTokens + usage.OutputTokens, Source: semantic.UsageProviderReported}
 	}
-	settlement := streamSettlement(semanticUsage, providerErr, emitted, inputTokens, outputTokens, target, attempt.accounting.ReservationMicrosUSD)
+	settlement := streamSettlement(semanticUsage, providerErr, emitted, inputTokens, outputTokens, attempt.pricingTarget, attempt.accounting.ReservationMicrosUSD)
 	if err := attempt.finish(providerErr, settlement); err != nil {
 		return err
 	}
@@ -1285,7 +1450,7 @@ func (s *Service) ChatStream(
 			}
 			settlement := streamSettlement(
 				semanticUsage, providerErr, attemptEmitted, inputTokens, outputTokens,
-				target, attempt.accounting.ReservationMicrosUSD,
+				attempt.pricingTarget, attempt.accounting.ReservationMicrosUSD,
 			)
 			if err := attempt.finish(providerErr, settlement); err != nil {
 				return err
@@ -1405,7 +1570,7 @@ func (s *Service) Embeddings(
 				}
 			}
 			settlement := embeddingSettlement(
-				semanticResponse, providerErr, inputTokens, target, attempt.accounting.ReservationMicrosUSD,
+				semanticResponse, providerErr, inputTokens, attempt.pricingTarget, attempt.accounting.ReservationMicrosUSD,
 			)
 			if err := attempt.finish(providerErr, settlement); err != nil {
 				return openaiapi.EmbeddingResponse{}, err
@@ -1551,16 +1716,11 @@ func (s *Service) admitTokenGuard(
 	principal auth.AuthResult,
 	targets []provider.Target,
 	totalTokens, inputTokens, outputTokens int64,
-) (*tokenguard.Lease, error) {
-	var maximumCost int64
-	for _, target := range targets {
-		cost, err := budget.EstimateCostMicros(
-			inputTokens, outputTokens,
-			target.InputMicrosPerMillion, target.OutputMicrosPerMillion,
-		)
-		if err == nil && cost > maximumCost {
-			maximumCost = cost
-		}
+) (*tokenguard.Lease, string, error) {
+	selectedAt := s.now().UTC()
+	maximumCost, pricingViewDigest, err := s.captureTokenGuardPricingView(ctx, principal, targets, inputTokens, outputTokens, selectedAt)
+	if err != nil {
+		return nil, "", err
 	}
 	input := tokenguard.Input{
 		PolicyID:               principal.Project.TokenGuardPolicyID,
@@ -1579,14 +1739,104 @@ func (s *Service) admitTokenGuard(
 	decision, lease := s.tokenGuard.Acquire(input)
 	if !decision.Allowed {
 		s.rejections.tokenGuard.Add(1)
-		return nil, gatewayError(
+		return nil, "", gatewayError(
 			"token_guard_blocked",
 			"gateway key is temporarily blocked due to anomalous token usage",
 			403,
 			nil,
 		)
 	}
-	return lease, nil
+	return lease, pricingViewDigest, nil
+}
+
+type tokenGuardPriceViewEntry struct {
+	TargetID       string `json:"target_id"`
+	DeploymentID   string `json:"deployment_id,omitempty"`
+	EvidenceStatus string `json:"evidence_status"`
+	SnapshotSHA256 string `json:"snapshot_sha256,omitempty"`
+	LegacyCost     *int64 `json:"legacy_cost_micros_usd,omitempty"`
+}
+
+func (s *Service) captureTokenGuardPricingView(
+	ctx context.Context,
+	principal auth.AuthResult,
+	targets []provider.Target,
+	inputTokens, outputTokens int64,
+	selectedAt time.Time,
+) (int64, string, error) {
+	entries := make([]tokenGuardPriceViewEntry, 0, len(targets))
+	var maximumCost int64
+	for _, target := range targets {
+		entry := tokenGuardPriceViewEntry{TargetID: target.ID, DeploymentID: target.DeploymentID}
+		if s.pricing != nil && target.DeploymentID != "" {
+			price, err := s.pricing.SelectDeploymentPriceVersion(ctx, target.DeploymentID, selectedAt)
+			if errors.Is(err, domain.ErrPriceUnavailable) {
+				entry.EvidenceStatus = string(domain.PriceEvidenceUnknown)
+				entries = append(entries, entry)
+				if _, policyErr := s.unknownPricePolicyEvidence(principal); policyErr != nil {
+					return 0, "", policyErr
+				}
+				continue
+			}
+			if err != nil {
+				return 0, "", gatewayError("price_unavailable", "candidate pricing could not be selected", http.StatusConflict, err)
+			}
+			snapshot, err := domain.NewVersionedPriceSnapshot(price, selectedAt)
+			if err != nil {
+				return 0, "", gatewayError("accounting_error", "candidate pricing snapshot is invalid", http.StatusServiceUnavailable, err)
+			}
+			cost, err := snapshot.Calculate(inputTokens, outputTokens)
+			if err != nil {
+				return 0, "", gatewayError("accounting_error", "candidate cost could not be calculated", http.StatusServiceUnavailable, err)
+			}
+			digest, err := snapshot.Digest()
+			if err != nil {
+				return 0, "", err
+			}
+			entry.EvidenceStatus, entry.SnapshotSHA256 = string(domain.PriceEvidenceVersioned), digest
+			entries = append(entries, entry)
+			if cost.TotalCostMicrosUSD > maximumCost {
+				maximumCost = cost.TotalCostMicrosUSD
+			}
+			continue
+		}
+		cost, err := estimateReservation(inputTokens, outputTokens, target)
+		if err != nil {
+			return 0, "", err
+		}
+		entry.EvidenceStatus, entry.LegacyCost = "legacy_unversioned", &cost
+		entries = append(entries, entry)
+		if cost > maximumCost {
+			maximumCost = cost
+		}
+	}
+	payload := struct {
+		PricingSelectedAt time.Time                  `json:"pricing_selected_at"`
+		Entries           []tokenGuardPriceViewEntry `json:"entries"`
+	}{PricingSelectedAt: selectedAt, Entries: entries}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return 0, "", err
+	}
+	digest := sha256.Sum256(encoded)
+	return maximumCost, fmt.Sprintf("sha256:%x", digest[:]), nil
+}
+
+func (s *Service) unknownPricePolicyEvidence(principal auth.AuthResult) (*domain.UnknownPricePolicyEvidence, error) {
+	if s.pricingUnknownPolicy != "allow_without_cost_governance" || principal.Project.DailyBudgetMicrosUSD != 0 ||
+		s.tokenGuard.HasCostDimension(principal.Project.TokenGuardPolicyID) {
+		return nil, gatewayError("price_unavailable", "known pricing is required by instance or project cost governance", http.StatusConflict, domain.ErrPriceUnavailable)
+	}
+	status := "none"
+	if principal.Project.TokenGuardPolicyID != "" {
+		status = "non_cost_dimensions_only"
+	}
+	evidence := &domain.UnknownPricePolicyEvidence{
+		PolicyVersion: "pricing-unknown-policy-v1", ProjectID: principal.Project.ID,
+		TokenGuardStatus: status, ReasonCode: "cost_governance_disabled",
+		InstanceExplicitOptIn: true, CostGovernanceDisabled: true,
+	}
+	return evidence, evidence.Validate()
 }
 
 func filterSemanticCapabilities(targets []provider.Target, requirements semantic.Requirements) []provider.Target {

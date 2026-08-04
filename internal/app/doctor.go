@@ -131,13 +131,28 @@ func DoctorWithOptions(ctx context.Context, cfg config.Config, options DoctorOpt
 		}
 	}
 
-	watermark, partial, walErr := ledger.Inspect(cfg.LedgerPath())
+	ledgerState := ledger.NewState()
+	recoveredReleased, recoveredSettled := 0, 0
+	watermark, partial, walErr := ledger.InspectReplay(cfg.LedgerPath(), func(record ledger.Record) error {
+		if record.Event.Outcome == "recovered_not_started" {
+			recoveredReleased++
+		} else if record.Event.Outcome == "recovered_started_unknown_result" {
+			recoveredSettled++
+		}
+		return ledgerState.Apply(record)
+	})
 	if walErr != nil {
 		add("ledger", "fail", walErr.Error())
 	} else if partial {
 		add("ledger", "fail", fmt.Sprintf("partial WAL tail after committed offset %d; doctor did not truncate it", watermark.Offset))
 	} else {
 		add("ledger", "pass", fmt.Sprintf("committed sequence %d at offset %d", watermark.Sequence, watermark.Offset))
+		pending, oldestAge := ledgerState.PendingLeaseStats(time.Now())
+		status := "pass"
+		if pending > 0 {
+			status = "warn"
+		}
+		add("accounting_leases", status, fmt.Sprintf("pending=%d oldest_age=%s recovered_released=%d recovered_settled=%d", pending, oldestAge.Round(time.Second), recoveredReleased, recoveredSettled))
 	}
 
 	exporter, exportErr := usage.NewExporter(cfg.UsagePath())
@@ -173,6 +188,11 @@ func DoctorWithOptions(ctx context.Context, cfg config.Config, options DoctorOpt
 
 	if store != nil {
 		checkDoctorTopology(ctx, store, add)
+		if err := store.PricingReadiness(ctx); err != nil {
+			add("pricing_clock", "fail", err.Error())
+		} else {
+			add("pricing_clock", "pass", "pricing high-water marks are coherent and not quarantined")
+		}
 	}
 	add("provider_connectivity", "warn", "network probes skipped by read-only offline doctor; use Admin connection tests")
 	if failedChecks > 0 {
@@ -227,13 +247,17 @@ func checkDoctorTopology(ctx context.Context, store *boltstore.Store, add func(s
 		providerEnabled[item.ID] = item.Enabled && item.DeletedAt == nil
 	}
 	deploymentEnabled := make(map[string]bool, len(deployments))
-	warnings := 0
+	pricingSelectedAt := time.Now().UTC()
 	for _, item := range deployments {
 		deploymentEnabled[item.ID] = item.Enabled && item.DeletedAt == nil && providerEnabled[item.ProviderID]
-		if item.Enabled && item.DeletedAt == nil && item.InputMicrosPerMillion == 0 && item.OutputMicrosPerMillion == 0 {
-			warnings++
+		if item.Enabled && item.DeletedAt == nil {
+			if _, err := store.SelectDeploymentPriceVersion(ctx, item.ID, pricingSelectedAt); err != nil {
+				add("pricing_readiness", "fail", fmt.Sprintf("enabled deployment %q has no effective versioned price: %v", item.ID, err))
+				return
+			}
 		}
 	}
+	add("pricing_readiness", "pass", "all enabled deployments have an effective versioned price")
 	active := 0
 	for _, item := range routes {
 		if !item.Enabled || item.DeletedAt != nil {
@@ -249,11 +273,6 @@ func checkDoctorTopology(ctx context.Context, store *boltstore.Store, add func(s
 			return
 		}
 	}
-	status := "pass"
 	detail := fmt.Sprintf("%d active routes; all references are available", active)
-	if warnings > 0 {
-		status = "warn"
-		detail = fmt.Sprintf("%s; %d active or configured deployments have zero pricing", detail, warnings)
-	}
-	add("topology", status, detail)
+	add("topology", "pass", detail)
 }

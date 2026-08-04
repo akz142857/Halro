@@ -19,7 +19,15 @@ func (r *Runtime) adminDashboard(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 	now := time.Now()
-	dashboard := r.usage.Dashboard(now, r.usageLocation)
+	basis := request.URL.Query().Get("reporting_basis")
+	if basis == "" {
+		basis = "service_period_restated"
+	}
+	if basis != "service_period_restated" && basis != "adjustment_posted" {
+		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "invalid reporting_basis"})
+		return
+	}
+	dashboard := r.usage.DashboardForBasis(now, r.usageLocation, basis)
 	governance, labels, err := r.dashboardGovernance(request, now)
 	if err != nil {
 		adminStoreError(writer)
@@ -36,9 +44,16 @@ func (r *Runtime) adminDashboard(writer http.ResponseWriter, request *http.Reque
 }
 
 type dashboardGovernance struct {
-	PolicyRejections policyRejectionSummary `json:"policy_rejections"`
-	Budget           pressureSummary        `json:"budget"`
-	Capacity         pressureSummary        `json:"capacity"`
+	PolicyRejections policyRejectionSummary   `json:"policy_rejections"`
+	Budget           pressureSummary          `json:"budget"`
+	Capacity         pressureSummary          `json:"capacity"`
+	Pricing          pricingGovernanceSummary `json:"pricing"`
+}
+
+type pricingGovernanceSummary struct {
+	Quarantined          int `json:"quarantined"`
+	Unknown              int `json:"unknown"`
+	AdjustmentOverBudget int `json:"adjustment_over_budget"`
 }
 
 type policyRejectionSummary struct {
@@ -100,6 +115,25 @@ func (r *Runtime) dashboardGovernance(request *http.Request, now time.Time) (das
 			r.gatewayService.ActiveProviderRequests(), r.providers.ProviderConcurrencyLimits(),
 			r.gatewayService.ActiveDeploymentRequests(), r.providers.DeploymentConcurrencyLimits(),
 		),
+	}
+	governance.Pricing.Quarantined, err = r.store.PricingQuarantineCount(request.Context())
+	if err != nil {
+		return dashboardGovernance{}, nil, err
+	}
+	for _, deployment := range deployments {
+		if !deployment.Enabled || deployment.DeletedAt != nil {
+			continue
+		}
+		if _, priceErr := r.store.SelectDeploymentPriceVersion(request.Context(), deployment.ID, now.UTC()); priceErr != nil {
+			governance.Pricing.Unknown++
+		}
+	}
+	periodID := now.In(r.usageLocation).Format("2006-01-02")
+	for _, project := range projects {
+		balance := r.state.Balance(project.ID, periodID)
+		if project.DailyBudgetMicrosUSD > 0 && balance.AdjustmentDeltaMicrosUSD != 0 && balance.CommittedMicrosUSD > project.DailyBudgetMicrosUSD {
+			governance.Pricing.AdjustmentOverBudget++
+		}
 	}
 	return governance, labels, nil
 }
@@ -258,6 +292,18 @@ func (r *Runtime) adminUsageRequest(writer http.ResponseWriter, request *http.Re
 		return
 	}
 	writeJSON(writer, http.StatusOK, detail)
+}
+
+func (r *Runtime) adminUsageAttemptAdjustments(writer http.ResponseWriter, request *http.Request) {
+	if !r.syncUsageAdmin(writer, request) {
+		return
+	}
+	attemptID := chi.URLParam(request, "attemptID")
+	if attemptID == "" || len(attemptID) > 128 {
+		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "invalid attempt ID"})
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"items": r.usage.AttemptAdjustments(attemptID), "reporting_bases": []string{"service_period_restated", "adjustment_posted"}})
 }
 
 func (r *Runtime) adminSystemStatus(writer http.ResponseWriter, request *http.Request) {

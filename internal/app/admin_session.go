@@ -379,7 +379,7 @@ func (r *Runtime) appendAdminAudit(
 
 func (r *Runtime) appendAdminAuditWithMetadata(
 	actorType, actorID, action, targetType, targetID, outcome, reason string,
-	metadata map[string]string,
+	metadata map[string]any,
 ) error {
 	eventID, err := id.New("aud")
 	if err != nil {

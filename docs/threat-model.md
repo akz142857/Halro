@@ -41,6 +41,9 @@ The host root account is trusted for v1. Audit chaining detects offline record m
 | Public plaintext Admin | loopback default; never allowed by insecure Gateway override |
 | Budget overspend | per-attempt durable reservation and atomic settlement |
 | Crash undercount | one Ledger WAL and conservative orphan reconciliation |
+| Historical price drift or forged zero cost | immutable per-Attempt PriceSnapshot, fixed-point settlement, explicit free/unknown states, append-only adjustments |
+| LLM or automation silently changes production price | isolated expiring Proposal records, source digest and match evidence, recent re-authentication and audited human adoption |
+| Old backup reactivates a scheduled price | restore-time pricing quarantine and explicit audited confirmation before traffic |
 | Sensitive prompt/output leakage | inbound, outbound, and mandatory telemetry redaction modes |
 | Streaming boundary bypass | strict or compiler-bounded enforcement; detect-only is not a prevention claim |
 | Disk failure | accounting state machine, readiness false, stop new provider calls |
@@ -65,3 +68,4 @@ The host root account is trusted for v1. Audit chaining detects offline record m
 - stream redaction byte-boundary and Unicode fuzzing;
 - secret canary scanning across logs, errors, heap diagnostics, WAL, bbolt, Parquet, and browser artifacts;
 - WAL corruption, disk-full, backup tampering, and restore path tests.
+- price-boundary, WAL v1/v2 reader-gate, proposal non-activation, adjustment replay, and restored scheduled-price quarantine tests.

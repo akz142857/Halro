@@ -145,11 +145,16 @@ printf '%s' "$OPENAI_API_KEY" | ./bin/heimdall bootstrap \
   --provider-base-url https://api.openai.com \
   --provider-model gpt-5-mini \
   --public-model chat \
+  --billing-mode metered \
+  --input-micros-per-million "$INPUT_MICROS_PER_MILLION" \
+  --output-micros-per-million "$OUTPUT_MICROS_PER_MILLION" \
   --daily-budget-micros-usd 5000000
 unset OPENAI_API_KEY
 ```
 
 `5000000` micro-USD 等于每日 5 USD。命令返回的 `gateway_key` 只显示一次，必须立即保存到 Secret Manager，不要放入聊天、源码、日志或浏览器持久存储。
+
+Bootstrap 不会把两个零价字段自动解释为免费。只有确认该 Deployment 永久或按合同免费时才使用 `--billing-mode free`；计费模型必须传入经过核对的 micro-USD 单价。Bootstrap 会把这些条款原子保存为 Price Version 1。
 
 完成后重新执行 `serve`。
 
@@ -317,7 +322,7 @@ console.log(response.choices[0].message.content);
 - Token Guard Policy；
 - Redaction Policy。
 
-Deployment 中必须填写正确价格，否则成本会显示 `$0.00`，预算也无法体现真实美元成本。Web UI 的价格单位是 `USD / 1M tokens`。
+Deployment 与价格时间线分开管理。至少创建一个已经生效的 Price Version；输入、输出价格单位为 `USD / 1M tokens`，固定价格单位为 `USD / request`。历史 Attempt 会保存当时的完整价格快照，后续调价不会重算旧消费。没有有效价格默认返回 `409 price_unavailable`，不会再显示成已知 `$0.00`；只有显式 `free` 版本才表示已知零成本。
 
 网络超时或连接中断可能导致“Provider 是否已经处理请求”无法确定。Heimdall 会按请求允许的最大输出 Token 做保守结算，并标记为 `estimated`。Dashboard 主 Token 数只显示 Provider 报告量，估算上界单独显示；Usage 页面使用 `EST.` 标记。应用应合理设置 `max_completion_tokens` 和 Project 最大输出限制。
 
@@ -416,8 +421,8 @@ Files、Batches 与 Async 创建请求必须携带 `Idempotency-Key`；上传文
 Deployment、Profile 与 Region。Bedrock 异步任务当前不能取消；接口会明确返回
 `provider_cancel_unsupported`，而不是显示虚假的成功状态。
 
-部署页的“每请求固定 USD”用于媒体、重排和资源操作；请按上游价格配置，否则预算统计只会
-保留最小保守占位。文件内容保存在数据目录的私有对象目录，并随删除或 TTL 回收清理。
+Price Version 的“每请求固定 USD”用于媒体、重排和资源操作；请按上游价格配置。价格未知时
+默认在 Provider I/O 前拒绝，而不是写入最小保守占位。文件内容保存在数据目录的私有对象目录，并随删除或 TTL 回收清理。
 
 ## 11. 备份与恢复
 
@@ -463,12 +468,22 @@ openssl rand 32 > backup.key
 | `401 invalid_api_key` | Gateway Key 是否完整、启用、过期或已轮换 |
 | `403 model_not_allowed` | Project 的 Allowed Models 是否包含公开 Route 别名 |
 | `403 budget_exceeded` | 每日预算、Deployment 价格和保守估算上界 |
+| `409 price_unavailable` | Deployment 是否存在已生效 Price Version；unknown 是否被预算或成本型 Token Guard 禁止 |
 | `429` | Project RPM/TPM/并发、Provider/Deployment 并发、Token Guard 或上游限流 |
 | `502 provider_error` | Provider endpoint、Credential、模型名称、网络和连接测试 |
 | Dashboard 出现 `EST.` | Provider Usage 缺失或调用结果不明确；不是已确认的真实消耗 |
-| Cost 始终为 `$0.00` | Deployment 输入/输出价格尚未配置 |
+| Cost 为 `$0.00` | Price Version 是否明确配置为 `free`；未知价格不会计入已知成本合计 |
 | 数据目录 locked | 另一个 Heimdall 或离线命令正在持有数据目录；不要手工删除锁文件绕过 |
-| Readiness 失败 | 先检查 Accounting、WAL append error、磁盘空间和 Usage lag |
+| Readiness 失败 | 先检查 Accounting、pricing quarantine、WAL append error、磁盘空间和 Usage lag |
+
+### 12.1 价格版本、历史成本与价格建议
+
+- Deployment 的价格采用不可变版本和生效时间；修改当前价格会创建新版本，不会重算旧请求。
+- 每次 Provider Attempt 都在调用上游前绑定价格快照。Usage 中的原始成本、调整额和最终成本可展开查看；未知成本显示为空而不是 `$0`。
+- 历史错价通过追加“成本调整”纠正。原始 Settlement 不会被修改，并同时保留服务期与调整入账期口径。
+- “价格建议”是独立的待评审 Proposal。LLM 或导入工具只能提交带来源 digest、模型/地区匹配、警告和到期时间的建议，不能自动改价。
+- 管理员核验来源后，通过当前密码（已启用 MFA 时还需 TOTP）重新认证并显式采纳；系统随后创建新的不可变 Price Version 并写入 Audit。歧义或已过期建议不能采纳。
+- 恢复旧备份后若某个 scheduled 价格已经越过生效时间，Deployment 会进入 pricing quarantine；管理员复核并确认前不会恢复流量。
 
 ## 13. 安全注意事项
 

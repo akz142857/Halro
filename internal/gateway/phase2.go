@@ -48,7 +48,7 @@ func (s *Service) accountedPhase2(ctx context.Context, principal auth.AuthResult
 		providerErr = nil
 	}
 	settlement := budget.Settlement{ProviderInputTokens: inputUnits, TokenEstimated: true, CostEstimated: true}
-	setSettlementCost(&settlement, target, attempt.accounting.ReservationMicrosUSD)
+	setSettlementCost(&settlement, attempt.pricingTarget, attempt.accounting.ReservationMicrosUSD)
 	if err := attempt.finish(providerErr, settlement); err != nil {
 		return err
 	}

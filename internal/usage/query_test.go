@@ -24,7 +24,7 @@ func TestUsageCursorFilteringRequestDetailAndDashboard(t *testing.T) {
 				RequestID: requestID, AttemptID: attemptID, ProjectID: "project",
 				ProviderID: fmt.Sprintf("provider_%d", requestIndex), PeriodID: "period",
 				OccurredAt:          now.Add(time.Duration(requestIndex)*time.Minute + time.Second),
-				ProviderInputTokens: int64(requestIndex), CommittedMicrosUSD: int64(requestIndex),
+				ProviderInputTokens: int64(requestIndex), CommittedMicrosUSD: ledger.MicrosUSD(int64(requestIndex)),
 				Outcome: "success"},
 			{EventID: requestID + "_final", Kind: ledger.EventRequestFinalized,
 				RequestID: requestID, ProjectID: "project", PeriodID: "period",
@@ -81,10 +81,10 @@ func TestDashboardSeparatesConservativeTokenEstimates(t *testing.T) {
 		{EventID: "estimated", Kind: ledger.EventAttemptSettled, RequestID: "req_estimated",
 			AttemptID: "attempt_estimated", ProjectID: "project", PeriodID: "period",
 			OccurredAt: now, ProviderInputTokens: 9, ProviderOutputTokens: 16_384,
-			TokenEstimated: true, Outcome: "provider_error"},
+			CommittedMicrosUSD: ledger.MicrosUSD(0), TokenEstimated: true, Outcome: "provider_error"},
 		{EventID: "reported", Kind: ledger.EventAttemptSettled, RequestID: "req_reported",
 			AttemptID: "attempt_reported", ProjectID: "project", PeriodID: "period",
-			OccurredAt: now.Add(time.Minute), ProviderInputTokens: 7, ProviderOutputTokens: 167,
+			OccurredAt: now.Add(time.Minute), ProviderInputTokens: 7, ProviderOutputTokens: 167, CommittedMicrosUSD: ledger.MicrosUSD(0),
 			Outcome: "success"},
 	} {
 		if err := aggregate.Apply(ledger.Record{
@@ -115,13 +115,13 @@ func TestDashboardBuildsTodayBreakdownsAndRecentAnomalies(t *testing.T) {
 			AttemptID: "attempt_failed", ProjectID: "project_a", ProviderID: "provider_a",
 			RequestedModel: "chat", ProviderModel: "model_a", PeriodID: "period",
 			OccurredAt: now, ProviderInputTokens: 10, ProviderOutputTokens: 4,
-			CommittedMicrosUSD: 2_000, CostEstimated: true, Outcome: "provider_error",
+			CommittedMicrosUSD: ledger.MicrosUSD(2_000), CostEstimated: true, Outcome: "provider_error",
 			ErrorClass: "rate_limited", HTTPStatus: 429, RetryCount: 1},
 		{EventID: "success", Kind: ledger.EventAttemptSettled, RequestID: "req_success",
 			AttemptID: "attempt_success", ProjectID: "project_a", ProviderID: "provider_b",
 			RequestedModel: "chat", ProviderModel: "model_b", PeriodID: "period",
 			OccurredAt: now.Add(time.Minute), ProviderInputTokens: 8, ProviderOutputTokens: 3,
-			CommittedMicrosUSD: 1_000, Outcome: "success", FallbackCount: 1},
+			CommittedMicrosUSD: ledger.MicrosUSD(1_000), Outcome: "success", FallbackCount: 1},
 	}
 	for index, event := range events {
 		if err := aggregate.Apply(ledger.Record{Sequence: uint64(index + 1), Offset: int64(index + 1), Event: event}); err != nil {

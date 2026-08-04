@@ -87,7 +87,7 @@ func TestLedgerStateIsRebuiltDuringOpen(t *testing.T) {
 		ProjectID:            "prj_1",
 		PeriodID:             "prj_1:2026-07-31:tz1",
 		OccurredAt:           time.Now().UTC(),
-		ReservationMicrosUSD: 500,
+		ReservationMicrosUSD: ledger.MicrosUSD(500),
 	}
 	if _, err := runtime.ledger.Append(context.Background(), event); err != nil {
 		t.Fatal(err)
@@ -101,8 +101,8 @@ func TestLedgerStateIsRebuiltDuringOpen(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer runtime.Close()
-	if got := runtime.state.Balance(event.ProjectID, event.PeriodID).ReservedMicrosUSD; got != 500 {
-		t.Fatalf("unexpected rebuilt reservation: %d", got)
+	if got := runtime.state.Balance(event.ProjectID, event.PeriodID).ReservedMicrosUSD; got != 0 || runtime.state.PendingReservations() != 0 {
+		t.Fatalf("pending pre-I/O reservation was not recovered: reserved=%d pending=%d", got, runtime.state.PendingReservations())
 	}
 }
 

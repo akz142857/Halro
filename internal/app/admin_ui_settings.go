@@ -131,7 +131,7 @@ func (r *Runtime) updateAdminPreferences(writer http.ResponseWriter, request *ht
 	if domain.NormalizeAppearance(original.Appearance) != user.Appearance {
 		changed = append(changed, "appearance")
 	}
-	metadata := map[string]string{
+	metadata := map[string]any{
 		"appearance":     user.Appearance,
 		"changed_fields": strings.Join(changed, ","),
 		"locale":         user.Locale,

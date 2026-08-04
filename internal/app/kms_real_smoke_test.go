@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/akz142857/Heimdall/internal/config"
+	"github.com/akz142857/Heimdall/internal/domain"
 	"github.com/akz142857/Heimdall/internal/kms/awskms"
 	"github.com/akz142857/Heimdall/internal/masterkey"
 	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
@@ -138,6 +139,7 @@ func TestRealAWSKMSKeyLifecycle(t *testing.T) {
 	if _, err := Bootstrap(ctx, cfg, BootstrapOptions{
 		ProviderName: "M11 lifecycle smoke", ProviderType: "openai", ProviderBaseURL: "https://api.openai.com",
 		ProviderModel: "smoke", PublicModel: "smoke", ProjectName: "M11 lifecycle",
+		BillingMode: domain.BillingModeFree,
 	}, []byte("ephemeral-lifecycle-smoke-secret")); err != nil {
 		t.Fatal(err)
 	}
@@ -262,6 +264,7 @@ func TestRealAWSKMSDisasterRecovery(t *testing.T) {
 	if _, err := Bootstrap(ctx, cfg, BootstrapOptions{
 		ProviderName: "M11 DR smoke", ProviderType: "openai", ProviderBaseURL: "https://api.openai.com",
 		ProviderModel: "smoke", PublicModel: "smoke", ProjectName: "M11 DR",
+		BillingMode: domain.BillingModeFree,
 	}, []byte("ephemeral-dr-smoke-secret")); err != nil {
 		t.Fatal(err)
 	}

@@ -116,6 +116,7 @@ export interface Dashboard {
     };
     budget: { at_risk: number; items: GovernancePressureItem[] };
     capacity: { at_risk: number; items: GovernancePressureItem[] };
+		pricing?: { quarantined: number; unknown: number; adjustment_over_budget: number };
   };
   resource_labels: Record<string, string>;
   accounting_status: number;
@@ -315,6 +316,8 @@ export interface Deployment {
   revision: number;
   created_at: string;
   updated_at: string;
+	pricing_quarantined?: boolean;
+	pricing_quarantine_reason?: string;
 }
 
 export type DeploymentTargetKind =
@@ -361,13 +364,90 @@ export interface UsageAttempt {
   provider_model?: string;
   provider_input_tokens: number;
   provider_output_tokens: number;
-  cost_micros_usd: number;
+  cost_micros_usd: number | null;
+  original_cost_micros_usd: number | null;
+  adjustment_delta_micros_usd: number;
+  final_cost_micros_usd: number | null;
+  adjustment_sequence: number;
+  price_evidence_status: "versioned" | "legacy_unversioned" | "unknown";
+  cost_value_status: "known" | "unknown";
+  lease_mode?: "metered" | "free" | "unknown_allowed";
+  price_snapshot?: PriceSnapshot;
+  input_cost_micros_usd: number | null;
+  output_cost_micros_usd: number | null;
+  fixed_cost_micros_usd: number | null;
+  tags?: string[];
+  token_usage_source?: "provider_reported" | "gateway_estimated" | "none";
   cost_estimated: boolean;
   tokens_estimated: boolean;
   completed_at: string;
   status: string;
   error_class?: string;
   latency_millis: number;
+}
+
+export interface PriceSnapshot {
+  pricing_selected_at: string;
+  price_evidence_status: "versioned" | "unknown";
+  cost_value_status: "known" | "unknown";
+  price_version_id?: string;
+  price_version?: number;
+  billing_mode?: "metered" | "free";
+  currency?: string;
+  formula_version?: string;
+  input_micros_per_million?: number;
+  output_micros_per_million?: number;
+  fixed_request_micros_usd?: number;
+  effective_from?: string;
+  source_type?: string;
+  source_assurance?: string;
+  source_content_sha256?: string;
+}
+
+export interface DeploymentPriceVersion {
+  id: string;
+  deployment_id: string;
+  version: number;
+  revision: number;
+  billing_mode: "metered" | "free";
+  currency: "USD";
+  formula_version: string;
+  input_micros_per_million: number;
+  output_micros_per_million: number;
+  fixed_request_micros_usd: number;
+  effective_from: string;
+  source: { type: string; assurance: string; content_sha256: string; reference?: string; uri?: string };
+  status: "active" | "scheduled" | "superseded" | "cancelled";
+}
+
+export interface DeploymentPriceProposal {
+	id: string;
+	deployment_id: string;
+	provider_id: string;
+	provider_model: string;
+	region?: string;
+	tier?: string;
+	billing_mode: "metered" | "free";
+	currency: "USD";
+	input_micros_per_million: number;
+	output_micros_per_million: number;
+	fixed_request_micros_usd: number;
+	source: { type: string; assurance: string; content_sha256: string; reference?: string; uri?: string };
+	fetched_at: string;
+	warnings?: string[];
+	match: "exact" | "likely" | "ambiguous";
+	expires_at: string;
+	digest: string;
+	status: "pending" | "adopted" | "rejected";
+	adopted_price_version_id?: string;
+	revision: number;
+}
+
+export interface CostAdjustmentPreview {
+  event: { adjustment_sequence: number; adjustment_delta_micros_usd: number; net_cost_before_micros_usd: number; net_cost_after_micros_usd: number; service_period_id: string; posted_period_id: string };
+  budget_overage_micros_usd: number;
+  soft_limit_exceeded: boolean;
+  hard_limit_exceeded: boolean;
 }
 
 export interface AuditRecord {
