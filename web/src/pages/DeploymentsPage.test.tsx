@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { api } from "../api";
+import { ApiError, api } from "../api";
 import type { Deployment, Provider } from "../types";
 import { DeploymentsPage } from "./DeploymentsPage";
 
@@ -162,6 +162,32 @@ describe("deployment release workflow", () => {
     expect(update).toHaveBeenCalledWith(deployment.id, expect.objectContaining({ enabled: true }), 4);
   });
 
+  it("explains missing versioned pricing instead of reporting a revision conflict", async () => {
+    const deployment = {
+      id: "deployment_legacy", name: "Legacy GPT", provider_id: provider.id, provider_model: "gpt-5",
+      access_surface: provider.access_surface, profile_id: provider.profile_id, region: "",
+      capabilities, capability_evidence: {}, input_micros_per_million: 0,
+      output_micros_per_million: 0, fixed_request_micros_usd: 0, max_concurrency: 4,
+      priority: 0, weight: 1, enabled: false, revision: 4,
+      last_test_status: "healthy", last_test_revision: 4, last_tested_at: "2026-08-02T01:00:00Z",
+      created_at: "", updated_at: "",
+    } as Deployment;
+    vi.mocked(api.deployments).mockResolvedValue({ items: [deployment], next_cursor: "" });
+    vi.spyOn(api, "updateDeployment").mockRejectedValue(new ApiError(
+      409,
+      "deployment requires an effective versioned price before enable",
+      "deployment_price_unavailable",
+    ));
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "启用" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveClass("deployment-card-error");
+    expect(alert).toHaveTextContent("该部署没有已生效的价格版本");
+    expect(alert).not.toHaveTextContent("数据已被其他操作修改");
+  });
+
   it("requires confirmation before disabling an enabled deployment", async () => {
     const deployment = {
       id: "deployment_live", name: "Live GPT", provider_id: provider.id, provider_model: "gpt-5",
@@ -197,6 +223,10 @@ describe("deployment release workflow", () => {
       priority: 0, weight: 1, enabled: index % 2 === 0, revision: 1, created_at: "", updated_at: "",
     })) as Deployment[];
     vi.mocked(api.deployments).mockResolvedValue({ items, next_cursor: "" });
+    vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [], next_cursor: "" });
+    // Older servers serialized an empty nil slice as null. The details view
+    // must remain usable while clients and servers are upgraded independently.
+    vi.spyOn(api, "deploymentPriceProposals").mockResolvedValue({ items: null as never, next_cursor: "" });
     renderPage();
 
     expect(await screen.findByText("显示 20 / 20 个部署")).toBeVisible();
@@ -208,6 +238,11 @@ describe("deployment release workflow", () => {
     expect(screen.getByText("Special Vision")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "查看详情" }));
     expect(screen.getByText("输入价格")).toBeVisible();
+    expect(await screen.findByText("没有待处理建议。")).toBeVisible();
+    expect(screen.getByText("不可变价格时间线").closest("section")).toHaveClass("deployment-pricing-panel");
+    expect(screen.getByText("价格建议").closest("section")).toHaveClass("deployment-pricing-panel");
+    expect(screen.getByRole("button", { name: "＋ 新建价格版本" }).closest("header")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "导入建议" }).closest("header")).not.toBeNull();
     expect(screen.getByRole("button", { name: "收起详情" })).toHaveAttribute("aria-expanded", "true");
   });
 });

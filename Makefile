@@ -10,9 +10,12 @@ WEB_SOURCES := $(shell find web/src web/scripts -type f) \
 WEB_DEPS_STAMP := web/node_modules/.heimdall-install-stamp
 WEB_BUILD_STAMP := web/node_modules/.heimdall-build-stamp
 
-.PHONY: setup start dev build deadman frontend frontend-test backup test race vet observability-check check clean
+.PHONY: setup init start dev build deadman frontend frontend-test backup test race vet observability-check check clean
 
 setup: build
+
+init: bin/heimdall
+	./bin/heimdall init --config "$(CONFIG)"
 
 start: build
 	./bin/heimdall start --config "$(CONFIG)"

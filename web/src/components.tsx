@@ -66,11 +66,11 @@ export function EmptyState({
   );
 }
 
-export function ErrorState({ error }: { error: unknown }) {
+export function ErrorState({ error, className = "" }: { error: unknown; className?: string }) {
   const { t } = useTranslation();
   const message = error instanceof ApiError ? localizedError(t, error) : t("common.dataUnavailable");
   return (
-    <div className="notice error" role="alert">
+    <div className={`notice error${className ? ` ${className}` : ""}`} role="alert">
       <strong>{t("common.requestFailed")}</strong>
       <span>{message}</span>
     </div>
