@@ -402,6 +402,8 @@ export interface PriceSnapshot {
   source_type?: string;
   source_assurance?: string;
   source_content_sha256?: string;
+  source_reference?: string;
+  source_without_archive?: boolean;
 }
 
 export interface DeploymentPriceVersion {

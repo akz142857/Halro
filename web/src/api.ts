@@ -256,6 +256,8 @@ export const api = {
     ),
   deployments: () =>
     request<Page<Deployment>>("/deployments").then((value) => value.data),
+  developerConfig: () =>
+    request<{ gateway_base_url: string }>("/developer/config").then((value) => value.data),
   createDeployment: (value: unknown) =>
     request<Deployment>("/deployments", json("POST", value)),
   updateDeployment: (id: string, value: unknown, revision: number) =>

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import { api } from "../api";
+import { ApiError, api } from "../api";
 import {
   ConfirmButton,
   EmptyState,
@@ -305,16 +305,20 @@ function PriceVersionForm({ deployment, current, onClose }: { deployment: Deploy
   const [output, setOutput] = useState(current ? priceInputValue(current.output_micros_per_million) : "0");
   const [fixed, setFixed] = useState(current ? priceInputValue(current.fixed_request_micros_usd) : "0");
   const [effectiveMode, setEffectiveMode] = useState<"now" | "scheduled">("now");
-  const [effective, setEffective] = useState(new Date(Date.now() + 3_600_000).toISOString().slice(0, 16));
-  const [sourceKind, setSourceKind] = useState("official_public_price");
+  const [effective, setEffective] = useState(localDateTimeValue(new Date(Date.now() + 3_600_000)));
+  const [confirmedEffective, setConfirmedEffective] = useState("");
+  const [sourceKind, setSourceKind] = useState("temporary_estimate");
   const [sourceNote, setSourceNote] = useState("");
   const [password, setPassword] = useState("");
   const [totp, setTotp] = useState("");
   const idempotencyKey = useRef(crypto.randomUUID());
+  const confirmSummary = useRef<HTMLElement>(null);
   const validPrice = mode === "free" || ([input, output, fixed].every(validUSD) && [input, output, fixed].some((value) => Number(value) > 0));
   const scheduledTimestamp = Date.parse(effective);
   const validEffective = effectiveMode === "now" || (Number.isFinite(scheduledTimestamp) && scheduledTimestamp > Date.now());
-  const validDetails = validPrice && validEffective;
+  const sourceNeedsNote = sourceKind === "official_public_price" || sourceKind === "contract_price";
+  const validSource = !sourceNeedsNote || sourceNote.trim() !== "";
+  const validDetails = validPrice && validEffective && validSource;
   const exampleCost = mode === "free" ? 0 : Number(input) / 1000 + Number(output) / 2000 + Number(fixed);
   const effectiveLabel = effectiveMode === "now" ? t("deployments.effectiveNow") : validEffective ? dateTime(new Date(scheduledTimestamp).toISOString()) : "—";
   const mutation = useMutation({
@@ -323,16 +327,23 @@ function PriceVersionForm({ deployment, current, onClose }: { deployment: Deploy
       input_usd_per_million: mode === "free" ? "0" : input,
       output_usd_per_million: mode === "free" ? "0" : output,
       fixed_request_usd: mode === "free" ? "0" : fixed,
-      effective_from: effectiveMode === "now" ? new Date(Date.now() + 60_000).toISOString() : new Date(scheduledTimestamp).toISOString(),
+      effective_from: confirmedEffective,
       source: { type: "manual", reference: sourceKind, note: sourceNote.trim(), asserted_without_archive: true },
       current_password: password, totp_code: totp,
     }, idempotencyKey.current),
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["deployment-prices", deployment.id] }); onClose(); },
   });
+  const ambiguousResult = mutation.isError && (!(mutation.error instanceof ApiError) || mutation.error.status >= 500);
+  useEffect(() => {
+    if (step === "confirm") requestAnimationFrame(() => confirmSummary.current?.focus());
+  }, [step]);
   const submit = (event: FormEvent) => {
     event.preventDefault();
     if (step === "details") {
-      if (validDetails) setStep("confirm");
+      if (validDetails) {
+        setConfirmedEffective(effectiveMode === "now" ? new Date(Date.now() + 60_000).toISOString() : new Date(scheduledTimestamp).toISOString());
+        setStep("confirm");
+      }
       return;
     }
     mutation.mutate();
@@ -340,8 +351,8 @@ function PriceVersionForm({ deployment, current, onClose }: { deployment: Deploy
   return <Modal title={current ? t("deployments.adjustPrice") : t("deployments.setPrice")} onClose={onClose}>
     <form className="price-version-form" onSubmit={submit}>
       <ol className="price-form-steps" aria-label={t("deployments.priceSteps")}>
-        <li className={step === "details" ? "active" : "complete"}>1<span>{t("deployments.priceStepDetails")}</span></li>
-        <li className={step === "confirm" ? "active" : ""}>2<span>{t("deployments.priceStepConfirm")}</span></li>
+        <li className={step === "details" ? "active" : "complete"} aria-current={step === "details" ? "step" : undefined}>1<span>{t("deployments.priceStepDetails")}</span></li>
+        <li className={step === "confirm" ? "active" : ""} aria-current={step === "confirm" ? "step" : undefined}>2<span>{t("deployments.priceStepConfirm")}</span></li>
       </ol>
       {step === "details" ? <>
         <fieldset className="price-mode-options">
@@ -370,16 +381,18 @@ function PriceVersionForm({ deployment, current, onClose }: { deployment: Deploy
         {!validEffective && <p className="field-hint error">{t("deployments.invalidEffectiveTime")}</p>}
         <Field label={t("deployments.priceSourceKind")}><select value={sourceKind} onChange={(event) => setSourceKind(event.target.value)}><option value="official_public_price">{t("deployments.sourceKinds.officialPublicPrice")}</option><option value="contract_price">{t("deployments.sourceKinds.contractPrice")}</option><option value="internal_cost">{t("deployments.sourceKinds.internalCost")}</option><option value="temporary_estimate">{t("deployments.sourceKinds.temporaryEstimate")}</option></select></Field>
         <Field label={t("deployments.sourceNote")}><textarea value={sourceNote} onChange={(event) => setSourceNote(event.target.value)} placeholder={t("deployments.sourceNotePlaceholder")} /></Field>
+        {!validSource && <p className="field-hint error">{t("deployments.sourceEvidenceRequired")}</p>}
         {!validPrice && <p className="field-hint error">{t("deployments.invalidPrice")}</p>}
         <div className="form-actions"><button className="button primary" disabled={!validDetails}>{t("deployments.nextReview")}</button></div>
       </> : <>
-        <section className="price-confirm-summary">
+        <section className="price-confirm-summary" ref={confirmSummary} tabIndex={-1} aria-live="polite">
           <header><strong>{t("deployments.priceSummary")}</strong><small>{deployment.name} · {deployment.provider_model}</small></header>
           <dl>
             <div><dt>{t("deployments.billingMode")}</dt><dd>{mode === "free" ? t("deployments.freeLabel") : t("deployments.meteredLabel")}</dd></div>
             {mode === "metered" && <><div><dt>{t("deployments.inputUSD")}</dt><dd>${input}</dd></div><div><dt>{t("deployments.outputUSD")}</dt><dd>${output}</dd></div><div><dt>{t("deployments.fixedRequestUSD")}</dt><dd>${fixed}</dd></div></>}
             <div><dt>{t("deployments.effectiveFrom")}</dt><dd>{effectiveLabel}</dd></div>
             <div><dt>{t("deployments.priceSourceKind")}</dt><dd>{t(`deployments.sourceKinds.${sourceKind === "official_public_price" ? "officialPublicPrice" : sourceKind === "contract_price" ? "contractPrice" : sourceKind === "internal_cost" ? "internalCost" : "temporaryEstimate"}`)}</dd></div>
+            <div><dt>{t("deployments.sourceAssurance")}</dt><dd>{t("deployments.assertedSource")}</dd></div>
           </dl>
           <p>{t("deployments.priceExample", { cost: exampleCost.toFixed(6) })}</p>
         </section>
@@ -387,7 +400,8 @@ function PriceVersionForm({ deployment, current, onClose }: { deployment: Deploy
         <Field label={t("usage.currentPassword")}><input type="password" autoComplete="current-password" required value={password} onChange={(event) => setPassword(event.target.value)} /></Field>
         <Field label={t("usage.totpOptional")}><input inputMode="numeric" autoComplete="one-time-code" value={totp} onChange={(event) => setTotp(event.target.value)} /></Field>
         {mutation.isError && <ErrorState error={mutation.error} />}
-        <div className="form-actions"><button type="button" className="button ghost" onClick={() => setStep("details")}>{t("deployments.backToPrice")}</button><button className="button primary" disabled={mutation.isPending}>{t("deployments.confirmPrice")}</button></div>
+        {ambiguousResult && <p className="field-hint error">{t("deployments.ambiguousPriceRetry")}</p>}
+        <div className="form-actions">{!ambiguousResult && <button type="button" className="button ghost" onClick={() => { idempotencyKey.current = crypto.randomUUID(); setStep("details"); }}>{t("deployments.backToPrice")}</button>}<button className="button primary" disabled={mutation.isPending}>{ambiguousResult ? t("deployments.retryExactPrice") : t("deployments.confirmPrice")}</button></div>
       </>}
     </form>
   </Modal>;
@@ -399,6 +413,10 @@ function validUSD(value: string) {
 
 function priceInputValue(micros: number) {
   return String(micros / 1_000_000);
+}
+
+export function localDateTimeValue(date: Date) {
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
 }
 
 function evidenceSummary(evidence: Record<string, string>) {

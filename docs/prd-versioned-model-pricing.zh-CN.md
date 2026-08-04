@@ -352,7 +352,7 @@ Deployment
 | `billing_mode` | `metered` | `free` | `null` | `null` |
 | 单价字段 | 必填、至少一项大于零 | 必填且全零 | `null` | `null` |
 | `cost_micros_usd` | 整数 | `0` | `null` | 既有整数 |
-| `source_assurance/digest` | 按来源矩阵 | 按来源矩阵 | 可选 unknown reason | 不补造 |
+| `source_assurance/reference/without_archive/digest` | 按来源矩阵；无归档手工来源保留 reference 和标记，digest 为空 | 同 metered | 可选 unknown reason | 不补造 |
 | `pricing_selected_at` | 必填 | 必填 | 必填 | 旧事件不存在 |
 
 Go 领域模型必须使用显式 tagged union、指针或 option 类型表达 nullable，禁止让 `int64(0)` 同时代表免费、未知和字段缺失。
@@ -398,11 +398,13 @@ Go 领域模型必须使用显式 tagged union、指针或 option 类型表达 n
   "effective_from": "2026-09-01T00:00:00Z",
   "source_type": "official_url",
   "source_assurance": "asserted",
+  "source_reference": "official_public_price",
+  "source_without_archive": false,
   "source_content_sha256": "sha256:..."
 }
 ```
 
-Ledger 必须自包含足够字段完成成本复算，不能要求历史查询依赖仍然存在的 bbolt Price Version。`price_version_id` 用于导航和一致性校验，不能替代单价快照。free 和 unknown 使用第 7.4 节 nullable 矩阵定义的 tagged variant，不能强行填充示例中的 metered 字段。
+Ledger 必须自包含足够字段完成成本复算和来源判读，不能要求历史查询依赖仍然存在的 bbolt Price Version。`price_version_id` 用于导航和一致性校验，不能替代单价快照。手工且未归档的来源必须把 `source_reference`、`source_assurance=asserted` 和 `source_without_archive=true` 一并复制进快照，不得补造 digest。free 和 unknown 使用第 7.4 节 nullable 矩阵定义的 tagged variant，不能强行填充示例中的 metered 字段。
 
 ### 8.3 持久化时序
 
@@ -790,14 +792,14 @@ If-Match: "adjustment-sequence-or-net-revision"
 
 流程分成两个步骤：
 
-1. **价格信息**：选择按量计费或免费；按量计费填写输入、输出价格，可在高级项中填写每请求固定费用；选择尽快生效或指定时间；选择“官方公开价、合同价、内部成本价、临时估算”之一并可填写补充说明。
+1. **价格信息**：选择按量计费或免费；按量计费填写输入、输出价格，可在高级项中填写每请求固定费用；选择尽快生效或指定时间；价格依据默认“临时估算”，也可选择“官方公开价、合同价、内部成本价”。选择官方公开价或合同价时必须填写可供审计人员识别证据的来源说明；该说明不是 Heimdall 的验证结果。
 2. **确认生效**：集中展示 Deployment、计费方式、全部价格、生效时间、价格依据和示例成本；此时才要求当前密码和可选 TOTP，确认后创建不可变 Price Version。
 
 Admin UI 不要求手工填写来源 URL 或 SHA-256。手工录价提交 `source.type=manual`、结构化 reference 和 `asserted_without_archive=true`；未来可信导入流程由服务端计算 digest，不复用此表单。
 
 如果价格下降或上涨超过实例可配置阈值，UI 必须强调显示，但第一版不要求第二管理员审批。
 
-创建 free 版本或超过阈值的价格必须在确认前完成 recent re-auth。来源为 asserted 时显示“管理员声明，未经 Heimdall 独立验证”，不得使用“官方已验证”徽标。
+创建 free 版本或超过阈值的价格必须在确认前完成 recent re-auth。确认页始终显示来源保证等级；来源为 asserted 时显示“管理员声明 · Heimdall 未验证 · 未归档”，不得使用“官方已验证”徽标。
 
 ### 12.3 Usage 页面
 
@@ -838,7 +840,7 @@ Admin UI 不要求手工填写来源 URL 或 SHA-256。手工录价提交 `sourc
 - `pricing_import.preview`；
 - `pricing_import.apply`。
 
-Audit 记录资源 ID、Deployment ID、版本号、生效时间、来源类型、digest、变更前后摘要和操作者，不记录合同正文、Secret 或带 query 的 URL。
+Audit 记录资源 ID、Deployment ID、版本号、生效时间、请求 digest、来源类型、来源保证等级、结构化 reference、是否未归档、内容 digest、变更前后摘要和操作者。内容 digest 缺失时仍须仅凭 Audit 判断这是明确声明的未归档来源，而不能依赖可变 Price Version；Audit 不记录合同正文、Secret 或带 query 的 URL。
 
 价格版本到点生效是确定性时间选择，不要求每台 Runtime 在生效秒写 Audit。`activate_observed` 只在系统首次观察到新版本生效时幂等写入，不能成为选择正确性的前提。
 

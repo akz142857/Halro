@@ -110,7 +110,7 @@ func (s PriceSource) Validate() error {
 	} else if !isUTC(s.ReceivedAt) {
 		problems = append(problems, errors.New("price source received_at must use UTC"))
 	}
-	manualWithoutArchive := s.Type == PriceSourceManual && s.AssertedWithoutArchive && strings.TrimSpace(s.ContentSHA256) == ""
+	manualWithoutArchive := s.Type == PriceSourceManual && s.AssertedWithoutArchive && s.ContentSHA256 == ""
 	if !manualWithoutArchive && !validSHA256Label(s.ContentSHA256) {
 		problems = append(problems, errors.New("price source content_sha256 is invalid"))
 	}

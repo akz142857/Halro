@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -43,10 +44,7 @@ func TestAdminDeploymentPriceLifecycleUsesVersionedTimelineAndAuditIntent(t *tes
 		"input_usd_per_million": "0.40", "output_usd_per_million": "1.60", "fixed_request_usd": "0",
 		"effective_from": effective.Format(time.RFC3339),
 		"source": map[string]any{
-			"type": "official_url", "uri": "https://example.test/pricing",
-			"retrieved_at":   time.Now().UTC().Add(-time.Hour).Format(time.RFC3339),
-			"content_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-			"reference":      "standard tier",
+			"type": "manual", "reference": "official_public_price", "asserted_without_archive": true,
 		},
 	}
 	request := adminRequest(t, http.MethodPost, "/admin/api/v1/deployments/"+bootstrap.DeploymentID+"/prices", body)
@@ -64,6 +62,12 @@ func TestAdminDeploymentPriceLifecycleUsesVersionedTimelineAndAuditIntent(t *tes
 	}
 	if created.Version != 2 || created.InputMicrosPerMillion != 400_000 || created.OutputMicrosPerMillion != 1_600_000 {
 		t.Fatalf("created price=%#v", created)
+	}
+	if created.Source.ContentSHA256 != "" || !created.Source.AssertedWithoutArchive {
+		t.Fatalf("manual source was not stored without an invented digest: %#v", created.Source)
+	}
+	if _, err := domain.NewVersionedPriceSnapshot(created, effective.Add(time.Second)); err != nil {
+		t.Fatalf("manual price could not cross the PriceVersion to Snapshot boundary: %v", err)
 	}
 	retryRequest := adminRequest(t, http.MethodPost, "/admin/api/v1/deployments/"+bootstrap.DeploymentID+"/prices", body)
 	retryRequest.AddCookie(cookie)
@@ -93,6 +97,12 @@ func TestAdminDeploymentPriceLifecycleUsesVersionedTimelineAndAuditIntent(t *tes
 	pending, err := runtime.store.ListPendingPricingAuditIntents(context.Background())
 	if err != nil || len(pending) != 0 {
 		t.Fatalf("pricing audit was not delivered: %#v err=%v", pending, err)
+	}
+	auditResponse := authenticatedAdminGet(t, runtime, cookie, "/admin/api/v1/audit")
+	for _, evidence := range [][]byte{[]byte(`"request_sha256"`), []byte(`"source_assurance":"asserted"`), []byte(`"source_reference":"official_public_price"`), []byte(`"source_without_archive":true`)} {
+		if !bytes.Contains(auditResponse.Body.Bytes(), evidence) {
+			t.Fatalf("audit response omitted manual source evidence %s: %s", evidence, auditResponse.Body.String())
+		}
 	}
 
 	listed := authenticatedAdminGet(t, runtime, cookie, "/admin/api/v1/deployments/"+bootstrap.DeploymentID+"/prices")

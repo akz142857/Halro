@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError, api } from "../api";
 import type { Deployment, Provider } from "../types";
-import { DeploymentsPage } from "./DeploymentsPage";
+import { DeploymentsPage, localDateTimeValue } from "./DeploymentsPage";
 
 const capabilities = {
   chat: true, streaming: true, embeddings: true, moderations: false, images: false,
@@ -259,14 +259,20 @@ describe("deployment release workflow", () => {
     fireEvent.click(await screen.findByRole("button", { name: "设置价格" }));
     expect(screen.getByRole("heading", { name: "设置价格" })).toBeVisible();
     expect(screen.queryByText("来源内容 SHA-256")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("当前密码")).not.toBeInTheDocument();
+	expect(screen.queryByLabelText("当前密码")).not.toBeInTheDocument();
+	expect(screen.getByLabelText("价格依据")).toHaveValue("temporary_estimate");
+	fireEvent.change(screen.getByLabelText("价格依据"), { target: { value: "official_public_price" } });
+	expect(screen.getByText("选择官方公开价或合同价时，请填写可供复核的来源说明。")).toBeVisible();
+	expect(screen.getByRole("button", { name: "下一步：核对" })).toBeDisabled();
+	fireEvent.change(screen.getByLabelText("价格依据"), { target: { value: "temporary_estimate" } });
 
-    fireEvent.change(screen.getByLabelText("输入 USD / 百万令牌"), { target: { value: "2.5" } });
+	fireEvent.change(screen.getByLabelText("输入 USD / 百万令牌"), { target: { value: "2.5" } });
     fireEvent.change(screen.getByLabelText("输出 USD / 百万令牌"), { target: { value: "10" } });
-    fireEvent.change(screen.getByLabelText("补充说明（可选）"), { target: { value: "August provider price sheet" } });
     fireEvent.click(screen.getByRole("button", { name: "下一步：核对" }));
 
     expect(screen.getByText("请核对价格")).toBeVisible();
+    await waitFor(() => expect(screen.getByText("请核对价格").closest("section")).toHaveFocus());
+    expect(screen.getByText("管理员声明 · Heimdall 未验证 · 未归档")).toBeVisible();
     expect(screen.getByLabelText("当前密码")).toBeVisible();
     fireEvent.change(screen.getByLabelText("当前密码"), { target: { value: "admin-password" } });
     fireEvent.click(screen.getByRole("button", { name: "确认并创建价格版本" }));
@@ -278,13 +284,49 @@ describe("deployment release workflow", () => {
       output_usd_per_million: "10",
       source: {
         type: "manual",
-        reference: "official_public_price",
-        note: "August provider price sheet",
+        reference: "temporary_estimate",
+        note: "",
         asserted_without_archive: true,
       },
       current_password: "admin-password",
     }), expect.any(String));
     expect((createPrice.mock.calls[0][1] as { source: Record<string, unknown> }).source).not.toHaveProperty("content_sha256");
+  });
+
+  it("formats datetime-local defaults in the administrator's timezone", () => {
+    const singaporeDate = {
+      getTime: () => Date.UTC(2026, 7, 5, 12, 30),
+      getTimezoneOffset: () => -480,
+    } as Date;
+    expect(localDateTimeValue(singaporeDate)).toBe("2026-08-05T20:30");
+  });
+
+  it("retries an ambiguous price result with the exact payload and idempotency key", async () => {
+    const deployment = {
+      id: "deployment_ambiguous", name: "Ambiguous GPT", provider_id: provider.id, provider_model: "gpt-5",
+      access_surface: provider.access_surface, profile_id: provider.profile_id, region: "",
+      capabilities, capability_evidence: {}, input_micros_per_million: 0,
+      output_micros_per_million: 0, fixed_request_micros_usd: 0, max_concurrency: 4,
+      priority: 0, weight: 1, enabled: false, revision: 1, created_at: "", updated_at: "",
+    } as Deployment;
+    vi.mocked(api.deployments).mockResolvedValue({ items: [deployment], next_cursor: "" });
+    vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [], next_cursor: "" });
+    const createPrice = vi.spyOn(api, "createDeploymentPrice").mockRejectedValue(new ApiError(500, "ambiguous upstream result"));
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "查看详情" }));
+    fireEvent.click(await screen.findByRole("button", { name: "设置价格" }));
+    fireEvent.change(screen.getByLabelText("输入 USD / 百万令牌"), { target: { value: "1" } });
+    fireEvent.click(screen.getByRole("button", { name: "下一步：核对" }));
+    fireEvent.change(screen.getByLabelText("当前密码"), { target: { value: "admin-password" } });
+    fireEvent.click(screen.getByRole("button", { name: "确认并创建价格版本" }));
+
+    expect(await screen.findByText(/上次结果不明确/)).toBeVisible();
+    expect(screen.queryByRole("button", { name: "返回修改" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "按原内容重试" }));
+    await waitFor(() => expect(createPrice).toHaveBeenCalledTimes(2));
+    expect(createPrice.mock.calls[1][1]).toEqual(createPrice.mock.calls[0][1]);
+    expect(createPrice.mock.calls[1][2]).toBe(createPrice.mock.calls[0][2]);
   });
 });
 

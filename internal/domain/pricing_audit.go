@@ -7,21 +7,24 @@ import (
 )
 
 type PricingAuditIntent struct {
-	EventID             string          `json:"event_id"`
-	OccurredAt          time.Time       `json:"occurred_at"`
-	ActorID             string          `json:"actor_id"`
-	Action              string          `json:"action"`
-	TargetType          string          `json:"target_type"`
-	TargetID            string          `json:"target_id"`
-	CorrelationID       string          `json:"correlation_id,omitempty"`
-	RequestSHA256       string          `json:"request_sha256"`
-	Delivered           bool            `json:"delivered"`
-	DeploymentID        string          `json:"deployment_id,omitempty"`
-	PriceVersion        uint64          `json:"price_version,omitempty"`
-	EffectiveFrom       *time.Time      `json:"effective_from,omitempty"`
-	SourceType          PriceSourceType `json:"source_type,omitempty"`
-	SourceContentSHA256 string          `json:"source_content_sha256,omitempty"`
-	ChangeSummary       string          `json:"change_summary,omitempty"`
+	EventID              string               `json:"event_id"`
+	OccurredAt           time.Time            `json:"occurred_at"`
+	ActorID              string               `json:"actor_id"`
+	Action               string               `json:"action"`
+	TargetType           string               `json:"target_type"`
+	TargetID             string               `json:"target_id"`
+	CorrelationID        string               `json:"correlation_id,omitempty"`
+	RequestSHA256        string               `json:"request_sha256"`
+	Delivered            bool                 `json:"delivered"`
+	DeploymentID         string               `json:"deployment_id,omitempty"`
+	PriceVersion         uint64               `json:"price_version,omitempty"`
+	EffectiveFrom        *time.Time           `json:"effective_from,omitempty"`
+	SourceType           PriceSourceType      `json:"source_type,omitempty"`
+	SourceAssurance      PriceSourceAssurance `json:"source_assurance,omitempty"`
+	SourceContentSHA256  string               `json:"source_content_sha256,omitempty"`
+	SourceReference      string               `json:"source_reference,omitempty"`
+	SourceWithoutArchive bool                 `json:"source_without_archive,omitempty"`
+	ChangeSummary        string               `json:"change_summary,omitempty"`
 }
 
 func (i PricingAuditIntent) Validate() error {
@@ -42,7 +45,8 @@ func (i PricingAuditIntent) Validate() error {
 	if len(i.CorrelationID) > 256 {
 		return errors.New("pricing audit intent correlation id exceeds maximum size")
 	}
-	if len(i.ChangeSummary) > 2048 || (i.SourceContentSHA256 != "" && !validSHA256Label(i.SourceContentSHA256)) {
+	if len(i.ChangeSummary) > 2048 || len(i.SourceReference) > 256 ||
+		(i.SourceContentSHA256 != "" && !validSHA256Label(i.SourceContentSHA256)) {
 		return errors.New("pricing audit evidence is invalid")
 	}
 	return nil

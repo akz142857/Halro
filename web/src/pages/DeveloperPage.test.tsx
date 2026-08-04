@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { api } from "../api";
 import type { Project } from "../types";
@@ -29,11 +29,13 @@ const project: Project = {
 describe("DeveloperPage", () => {
   it("builds integration examples from project public routes without sending a request", async () => {
     vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
+    vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
 
     expect(await screen.findByRole("heading", { name: "开发者工作台" })).toBeVisible();
     expect(await screen.findByRole("option", { name: "support-chat" })).toBeVisible();
+    expect(screen.getByRole("textbox", { name: /Gateway 地址/ })).toHaveValue("http://127.0.0.1:8080");
     expect(screen.getByText("/v1/responses")).toBeVisible();
     expect(screen.getAllByText(/HEIMDALL_API_KEY/)).toHaveLength(2);
     expect(screen.getByRole("button", { name: "发送请求（待接入）" })).toBeDisabled();
@@ -46,6 +48,7 @@ describe("DeveloperPage", () => {
 
   it("exposes the complete first-phase UI without persisting the Gateway Key", async () => {
     vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
+    vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });
     const localWrite = vi.spyOn(Storage.prototype, "setItem");
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
@@ -60,6 +63,7 @@ describe("DeveloperPage", () => {
     const raw = screen.getByRole("textbox", { name: /原始请求 JSON/ });
     fireEvent.change(raw, { target: { value: "{" } });
     expect(screen.getByText("请输入有效的 JSON 对象。")).toBeVisible();
+    expect(screen.getByRole("button", { name: "复制代码" })).toBeDisabled();
     fireEvent.change(raw, { target: { value: '{"model":"raw-model","input":"hello","stream":false}' } });
     expect(screen.getAllByText(/raw-model/)).toHaveLength(2);
 
@@ -73,5 +77,43 @@ describe("DeveloperPage", () => {
     fireEvent.click(screen.getByRole("tab", { name: "表单模式" }));
     fireEvent.change(screen.getByLabelText("API 协议"), { target: { value: "embeddings" } });
     expect(screen.getByRole("button", { name: "SSE 流式" })).toBeDisabled();
+  });
+
+  it("resets raw JSON when the endpoint changes and supports keyboard tab navigation", async () => {
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
+    vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
+    await screen.findByRole("option", { name: "support-chat" });
+
+    const formTab = screen.getByRole("tab", { name: "表单模式" });
+    formTab.focus();
+    fireEvent.keyDown(formTab, { key: "ArrowRight" });
+    const jsonTab = screen.getByRole("tab", { name: "原始 JSON" });
+    await waitFor(() => expect(jsonTab).toHaveFocus());
+    const raw = screen.getByRole("textbox", { name: /原始请求 JSON/ });
+    fireEvent.change(raw, { target: { value: '{"model":"custom","input":"hello","stream":true}' } });
+    fireEvent.change(screen.getByLabelText("API 协议"), { target: { value: "chat" } });
+    expect((raw as HTMLTextAreaElement).value).toContain('"messages"');
+    expect((raw as HTMLTextAreaElement).value).not.toContain('"input"');
+  });
+
+  it("shell-quotes curl examples and keeps Python JSON strings intact", async () => {
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
+    vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const view = render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
+    await screen.findByRole("option", { name: "support-chat" });
+
+    fireEvent.change(screen.getByLabelText("输入内容"), { target: { value: "What's true?'; touch /tmp/pwned; #" } });
+    const curlCode = view.container.querySelector(".developer-code")?.textContent ?? "";
+    expect(curlCode).toContain("'\"'\"'");
+    expect(curlCode).toContain("--data-binary");
+
+    fireEvent.click(screen.getByRole("tab", { name: "Python" }));
+    const pythonCode = view.container.querySelector(".developer-code")?.textContent ?? "";
+    expect(pythonCode).toContain("json.loads");
+    expect(pythonCode).toContain("What's true?");
+    expect(pythonCode).not.toContain("What's True?");
   });
 });

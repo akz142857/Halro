@@ -555,6 +555,8 @@ func newPricingAuditIntent(action, targetID, actor, correlationID string, reques
 	switch value := request.(type) {
 	case domain.DeploymentPriceVersion:
 		intent.DeploymentID, intent.PriceVersion, intent.SourceType = value.DeploymentID, value.Version, value.Source.Type
+		intent.SourceAssurance, intent.SourceReference = value.Source.Assurance, value.Source.Reference
+		intent.SourceWithoutArchive = value.Source.AssertedWithoutArchive
 		intent.SourceContentSHA256 = value.Source.ContentSHA256
 		effective := value.EffectiveFrom.UTC()
 		intent.EffectiveFrom = &effective
@@ -575,7 +577,9 @@ func (r *Runtime) deliverPricingAuditIntent(ctx context.Context, intent domain.P
 		Action: intent.Action, TargetType: intent.TargetType, TargetID: intent.TargetID,
 		Outcome: "success", CorrelationID: intent.CorrelationID,
 		Metadata: map[string]any{"deployment_id": intent.DeploymentID, "price_version": intent.PriceVersion, "effective_from": intent.EffectiveFrom,
-			"source_type": intent.SourceType, "source_content_sha256": intent.SourceContentSHA256, "change_summary": intent.ChangeSummary},
+			"request_sha256": intent.RequestSHA256, "source_type": intent.SourceType, "source_assurance": intent.SourceAssurance,
+			"source_content_sha256": intent.SourceContentSHA256, "source_reference": intent.SourceReference,
+			"source_without_archive": intent.SourceWithoutArchive, "change_summary": intent.ChangeSummary},
 	}); err != nil {
 		return err
 	}

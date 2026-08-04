@@ -942,6 +942,7 @@ func (r *Runtime) adminRouter() http.Handler {
 	router.With(r.requireAdminMutation).Post("/admin/api/v1/usage/attempts/{attemptID}/cost-adjustments/preview", r.previewAdminCostAdjustment)
 	router.With(r.requireAdminMutation).Post("/admin/api/v1/usage/attempts/{attemptID}/cost-adjustments", r.createAdminCostAdjustment)
 	router.With(r.requireAdmin).Get("/admin/api/v1/system/status", r.adminSystemStatus)
+	router.With(r.requireAdmin).Get("/admin/api/v1/developer/config", r.getAdminDeveloperConfig)
 	router.With(r.requireAdmin).Get("/admin/api/v1/settings", r.getAdminSettings)
 	router.With(r.requireAdminMutation).Put("/admin/api/v1/settings", r.updateAdminSettings)
 	router.With(r.requireAdmin).Get("/admin/api/v1/settings/ui", r.getAdminUISettings)

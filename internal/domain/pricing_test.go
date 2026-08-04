@@ -44,6 +44,11 @@ func TestManualPriceSourceAllowsMissingDigestOnlyWithoutArchive(t *testing.T) {
 	if err := source.Validate(); err == nil {
 		t.Fatal("manual source without digest or explicit no-archive assertion was accepted")
 	}
+	source.AssertedWithoutArchive = true
+	source.ContentSHA256 = "   "
+	if err := source.Validate(); err == nil {
+		t.Fatal("manual source with a whitespace evidence digest was accepted")
+	}
 	retrieved := now
 	official := PriceSource{Type: PriceSourceOfficialURL, Assurance: PriceAssuranceAsserted, ReceivedAt: now, RetrievedAt: &retrieved, URI: "https://example.test/pricing", Reference: "standard"}
 	if err := official.Validate(); err == nil {

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"strings"
 	"time"
 )
 
@@ -29,6 +30,8 @@ type PriceSnapshot struct {
 	SourceType             PriceSourceType      `json:"source_type,omitempty"`
 	SourceAssurance        PriceSourceAssurance `json:"source_assurance,omitempty"`
 	SourceContentSHA256    string               `json:"source_content_sha256,omitempty"`
+	SourceReference        string               `json:"source_reference,omitempty"`
+	SourceWithoutArchive   bool                 `json:"source_without_archive,omitempty"`
 }
 
 // Clone returns a deep copy suitable for crossing an accounting/WAL boundary.
@@ -98,7 +101,8 @@ func NewVersionedPriceSnapshot(price DeploymentPriceVersion, selectedAt time.Tim
 		Currency: price.Currency, FormulaVersion: price.FormulaVersion,
 		InputMicrosPerMillion: &input, OutputMicrosPerMillion: &output, FixedRequestMicrosUSD: &fixed,
 		EffectiveFrom: &effective, SourceType: price.Source.Type, SourceAssurance: price.Source.Assurance,
-		SourceContentSHA256: price.Source.ContentSHA256,
+		SourceContentSHA256: price.Source.ContentSHA256, SourceReference: price.Source.Reference,
+		SourceWithoutArchive: price.Source.AssertedWithoutArchive,
 	}
 	return snapshot, snapshot.Validate()
 }
@@ -134,8 +138,16 @@ func (s PriceSnapshot) Validate() error {
 		if price.InputMicrosPerMillion < 0 || price.OutputMicrosPerMillion < 0 || price.FixedRequestMicrosUSD < 0 {
 			return errors.New("price snapshot amounts cannot be negative")
 		}
-		manualWithoutArchive := s.SourceType == PriceSourceManual && s.SourceAssurance == PriceAssuranceAsserted && s.SourceContentSHA256 == ""
-		if s.Currency != "USD" || s.FormulaVersion != PriceFormulaUSDTokensV1 || (!manualWithoutArchive && !validSHA256Label(s.SourceContentSHA256)) {
+		manualWithoutArchive := s.SourceType == PriceSourceManual && s.SourceAssurance == PriceAssuranceAsserted &&
+			s.SourceWithoutArchive && s.SourceContentSHA256 == "" && strings.TrimSpace(s.SourceReference) != ""
+		validSourceIdentity := (s.SourceType == PriceSourceManual && s.SourceAssurance == PriceAssuranceAsserted) ||
+			(s.SourceType == PriceSourceOfficialURL && s.SourceAssurance == PriceAssuranceAsserted) ||
+			(s.SourceType == PriceSourceProviderAPI && s.SourceAssurance == PriceAssuranceVerifiedAPI) ||
+			(s.SourceType == PriceSourceImport && s.SourceAssurance == PriceAssuranceSignedImport) ||
+			(s.SourceType == PriceSourceMigration && s.SourceAssurance == PriceAssuranceAsserted)
+		if s.Currency != "USD" || s.FormulaVersion != PriceFormulaUSDTokensV1 || !validSourceIdentity || len(s.SourceReference) > 256 ||
+			((s.SourceType == PriceSourceManual || s.SourceType == PriceSourceOfficialURL) && strings.TrimSpace(s.SourceReference) == "") ||
+			(!manualWithoutArchive && !validSHA256Label(s.SourceContentSHA256)) {
 			return errors.New("price snapshot currency, formula, or evidence digest is invalid")
 		}
 		switch s.BillingMode {
@@ -152,7 +164,8 @@ func (s PriceSnapshot) Validate() error {
 		}
 	case PriceEvidenceUnknown:
 		if s.CostValueStatus != CostValueUnknown || s.PriceVersion != nil || s.PriceVersionID != "" ||
-			s.InputMicrosPerMillion != nil || s.OutputMicrosPerMillion != nil || s.FixedRequestMicrosUSD != nil {
+			s.InputMicrosPerMillion != nil || s.OutputMicrosPerMillion != nil || s.FixedRequestMicrosUSD != nil ||
+			s.SourceType != "" || s.SourceAssurance != "" || s.SourceContentSHA256 != "" || s.SourceReference != "" || s.SourceWithoutArchive {
 			return errors.New("unknown price snapshot must not contain known price terms")
 		}
 	default:
