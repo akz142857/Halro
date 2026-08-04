@@ -94,8 +94,57 @@ func TestKMSRewrapPreservesMasterKeyCiphertextAndKeyVersion(t *testing.T) {
 	clear(key)
 }
 
+func TestKMSRewrapPersistsRedactedOfflineProviderAudit(t *testing.T) {
+	_, cfg, harness, _ := kmsRewrapFixture(t)
+	recorder := &kmsAuditRecorder{}
+	ctx := withKMSAuditRecorder(context.Background(), recorder)
+	if _, err := rewrapKMSKeyWithOptions(ctx, cfg, KMSRewrapOptions{
+		Purpose: masterkey.KeySlotPrimary, SlotID: cfg.Storage.MasterKey.PrimarySlot,
+		KeyReference: replacementPrimaryKMSKeyARN,
+	}, harness.factory, time.Now, nil); err != nil {
+		t.Fatal(err)
+	}
+	auditKey, err := vault.DeriveAuditHMACKey(bytes.Repeat([]byte{0x61}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(auditKey)
+	log, err := audit.Open(cfg.AuditPath(), auditKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer log.Close()
+	providerCalls := 0
+	_, err = log.Replay(func(record audit.Record) error {
+		if record.Event.Action == "security.kms.call" {
+			providerCalls++
+			if record.Event.ActorType != "local_cli" || record.Event.TargetType != "kms_operation" || record.Event.TargetID == "" {
+				t.Fatalf("provider event=%#v", record.Event)
+			}
+			payload, marshalErr := json.Marshal(record.Event)
+			if marshalErr != nil {
+				return marshalErr
+			}
+			if strings.Contains(string(payload), "arn:aws:kms") || strings.Contains(string(payload), replacementPrimaryKMSKeyARN) {
+				t.Fatalf("provider Audit leaked KMS identity: %s", payload)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if providerCalls < 3 {
+		t.Fatalf("providerCalls=%d want at least source unwrap, target wrap, and target verify", providerCalls)
+	}
+}
+
 func TestKMSRewrapRecoversIdempotentlyAtEveryPublicationPoint(t *testing.T) {
-	for _, point := range []string{"after_pending_slot_published", "after_active_slot_published", "after_old_slot_retired"} {
+	for _, point := range []string{
+		"after_pending_slot_persisted", "after_added_audit_append", "after_added_audit_checkpoint", "after_added_audit_intent_delivered", "after_pending_slot_published",
+		"after_active_slot_persisted", "after_verified_audit_append", "after_verified_audit_checkpoint", "after_verified_audit_intent_delivered", "after_active_slot_published",
+		"after_old_slot_retiring_persisted", "after_retiring_audit_append", "after_retiring_audit_checkpoint", "after_retiring_audit_intent_delivered", "after_old_slot_retired",
+	} {
 		t.Run(point, func(t *testing.T) {
 			_, cfg, harness, _ := kmsRewrapFixture(t)
 			options := KMSRewrapOptions{Purpose: masterkey.KeySlotPrimary, SlotID: cfg.Storage.MasterKey.PrimarySlot, KeyReference: replacementPrimaryKMSKeyARN}
@@ -121,7 +170,73 @@ func TestKMSRewrapRecoversIdempotentlyAtEveryPublicationPoint(t *testing.T) {
 			if err != nil || !descriptor.ProductionReady() || keySlotForAppTest(t, descriptor, cfg.Storage.MasterKey.PrimarySlot).State != masterkey.KeySlotActive {
 				t.Fatalf("point=%s descriptor=%#v err=%v", point, descriptor, err)
 			}
+			auditKey, err := vault.DeriveAuditHMACKey(bytes.Repeat([]byte{0x61}, 32))
+			if err != nil {
+				t.Fatal(err)
+			}
+			log, err := audit.Open(cfg.AuditPath(), auditKey)
+			clear(auditKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			counts := map[string]int{}
+			_, err = log.Replay(func(record audit.Record) error {
+				if record.Event.Action == "security.master_key_slot.retiring" ||
+					((record.Event.Action == "security.master_key_slot.added" || record.Event.Action == "security.master_key_slot.verified") && record.Event.TargetID == cfg.Storage.MasterKey.PrimarySlot) {
+					counts[record.Event.Action]++
+				}
+				return nil
+			})
+			log.Close()
+			for _, action := range []string{"security.master_key_slot.added", "security.master_key_slot.verified", "security.master_key_slot.retiring"} {
+				if err != nil || counts[action] != 1 {
+					t.Fatalf("point=%s action=%s count=%d replay=%v", point, action, counts[action], err)
+				}
+			}
 		})
+	}
+}
+
+func TestKMSRewrapRejectsConflictingDurableAuditPayload(t *testing.T) {
+	_, cfg, harness, _ := kmsRewrapFixture(t)
+	options := KMSRewrapOptions{Purpose: masterkey.KeySlotPrimary, SlotID: cfg.Storage.MasterKey.PrimarySlot, KeyReference: replacementPrimaryKMSKeyARN}
+	injected := errors.New("stop after durable transition")
+	_, err := rewrapKMSKeyWithOptions(context.Background(), cfg, options, harness.factory, time.Now, func(point string) error {
+		if point == "after_pending_slot_persisted" {
+			return injected
+		}
+		return nil
+	})
+	if !errors.Is(err, injected) {
+		t.Fatalf("err=%v", err)
+	}
+	store, err := boltstore.Open(cfg.MetadataPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, err := store.KeySlotAuditIntent()
+	store.Close()
+	if err != nil || intent.Delivered {
+		t.Fatalf("intent=%#v err=%v", intent, err)
+	}
+	auditKey, err := vault.DeriveAuditHMACKey(bytes.Repeat([]byte{0x61}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(auditKey)
+	log, err := audit.Open(cfg.AuditPath(), auditKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conflict := keySlotAuditEvent(intent)
+	conflict.ReasonCode = "conflicting-payload"
+	if _, err := log.Append(context.Background(), conflict); err != nil {
+		t.Fatal(err)
+	}
+	log.Close()
+	_, err = rewrapKMSKeyWithOptions(context.Background(), cfg, options, harness.factory, time.Now, nil)
+	if err == nil || !strings.Contains(err.Error(), "conflicts with a different payload") {
+		t.Fatalf("conflicting payload was accepted: %v", err)
 	}
 }
 
@@ -513,7 +628,8 @@ func TestKMSDEKRotationReencryptsAllMaterialAndPreservesAudit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := rotateKMSMasterKeyWithOptions(context.Background(), cfg, kmsRotationOptions{
+	recorder := &kmsAuditRecorder{}
+	result, err := rotateKMSMasterKeyWithOptions(withKMSAuditRecorder(context.Background(), recorder), cfg, kmsRotationOptions{
 		factory: harness.factory, random: bytes.NewReader(newKey), operationID: "rotate-production-001",
 	})
 	if err != nil {
@@ -588,13 +704,29 @@ func TestKMSDEKRotationReencryptsAllMaterialAndPreservesAudit(t *testing.T) {
 	if _, err := audit.Verify(cfg.AuditPath(), oldAuditKey); err != nil {
 		t.Fatalf("historical Audit chain failed: %v", err)
 	}
+	auditLog, err := audit.Open(cfg.AuditPath(), oldAuditKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	providerCalls := 0
+	_, err = auditLog.Replay(func(record audit.Record) error {
+		if record.Event.Action == "security.kms.call" && record.Event.ActorType == "local_cli" {
+			providerCalls++
+		}
+		return nil
+	})
+	auditLog.Close()
+	if err != nil || providerCalls == 0 {
+		t.Fatalf("rotation provider Audit calls=%d err=%v", providerCalls, err)
+	}
 }
 
 func TestKMSDEKRotationRecoversIdempotentlyAtEveryPublicationPoint(t *testing.T) {
 	points := []string{
-		"after_new_slots_verified", "after_started_audit", "after_metadata_snapshot",
+		"after_new_slots_verified", "after_rotation_started_audit_append", "after_rotation_started_audit_checkpoint", "after_rotation_started_audit_intent_delivered", "after_started_audit", "after_metadata_snapshot",
 		"after_rewrite_verification", "before_metadata_publish", "after_metadata_publish",
-		"after_persisted_primary_verified", "before_bridge_cleanup_publish", "after_bridge_cleanup_publish",
+		"after_persisted_primary_verified", "after_rotation_completed_intent_persisted", "before_bridge_cleanup_publish", "after_bridge_cleanup_publish",
+		"after_rotation_completed_audit_append", "after_rotation_completed_audit_checkpoint", "after_rotation_completed_audit_intent_delivered", "after_rotation_completed_audit_delivered",
 	}
 	for _, point := range points {
 		t.Run(point, func(t *testing.T) {
@@ -627,6 +759,24 @@ func TestKMSDEKRotationRecoversIdempotentlyAtEveryPublicationPoint(t *testing.T)
 			})
 			if err != nil || again.NewKeyVersion != 2 || !again.RecoveredPending {
 				t.Fatalf("idempotent retry %s result=%#v err=%v", point, again, err)
+			}
+			log, err := audit.Open(cfg.AuditPath(), oldAuditKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			counts := map[string]int{}
+			_, err = log.Replay(func(record audit.Record) error {
+				if record.Event.Action == "security.master_key_rotation.started" || record.Event.Action == "security.master_key_rotation.completed" {
+					counts[record.Event.Action]++
+					if record.Event.ActorType != "local_cli" || record.Event.CorrelationID != operationID {
+						t.Fatalf("point=%s event=%#v", point, record.Event)
+					}
+				}
+				return nil
+			})
+			log.Close()
+			if err != nil || counts["security.master_key_rotation.started"] != 1 || counts["security.master_key_rotation.completed"] != 1 {
+				t.Fatalf("point=%s counts=%v replay=%v", point, counts, err)
 			}
 		})
 	}

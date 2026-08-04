@@ -650,6 +650,21 @@ td small, td code { display: block; margin-top: 4px; color: var(--muted); }
 .settings-overview-copy { padding: 26px 28px; }
 .settings-overview-copy h2 { display: flex; align-items: center; gap: 11px; margin-bottom: 9px; font-size: 26px; }
 .settings-overview-copy p:last-child { max-width: 590px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.custody-mode-badge { align-self: center; justify-self: end; margin-right: 28px; }
+.custody-load-error > .button { margin-top: -8px; }
+.custody-stale-notice { align-items: center; justify-content: space-between; flex-direction: row; margin-bottom: 18px; }
+.custody-stale-notice > span { display: grid; gap: 5px; }
+.custody-slots-empty { display: grid; gap: 6px; padding: 20px 22px; color: var(--muted); font-size: 12px; line-height: 1.55; }
+.custody-slots-empty strong { color: var(--text); font-size: 13px; }
+.custody-slots-empty.warning { color: #dbc596; background: rgba(255,196,94,.04); border-color: rgba(255,196,94,.28); }
+.custody-lifecycle { margin-top: 28px; }
+.custody-lifecycle > h2 { margin: 0; padding: 18px 22px; border-bottom: 1px solid var(--line); font-size: 18px; }
+.custody-lifecycle > dl { margin: 0; }
+.custody-lifecycle > dl > div { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 14px 22px; border-bottom: 1px solid var(--line); }
+.custody-lifecycle > dl > div:last-child { border-bottom: 0; }
+.custody-lifecycle dt { color: var(--muted); }
+.custody-lifecycle dd { margin: 0; text-align: right; }
+.custody-runbook-actions { align-items: center; flex-wrap: wrap; padding: 12px; }
 .settings-overview > .button { align-self: center; justify-self: end; margin-right: 28px; }
 .settings-overview-facts { display: grid; grid-template-columns: repeat(3, 1fr); border-left: 1px solid var(--line); }
 .settings-overview-facts div { display: flex; min-width: 0; flex-direction: column; justify-content: center; gap: 12px; padding: 20px; border: 0; border-left: 1px solid var(--line); }
@@ -930,6 +945,7 @@ textarea { resize: vertical; }
   .internal-status-panel .panel-footnote { grid-column: 1 / -1; border-top: 1px solid var(--line); }
   .settings-grid { grid-template-columns: 1fr; }
   .settings-overview { grid-template-columns: 1fr; }
+  .custody-mode-badge { justify-self: start; margin: 0 28px 22px; }
   .settings-overview-facts { border-top: 1px solid var(--line); border-left: 0; }
   .settings-layout { grid-template-columns: 1fr; }
   .provider-row { grid-template-columns: 42px minmax(140px, 1fr) minmax(110px, .75fr) minmax(80px, .5fr) auto; }
@@ -1024,6 +1040,11 @@ textarea { resize: vertical; }
   .settings-overview-facts div { flex-direction: row; justify-content: space-between; gap: 16px; padding: 14px 20px; border-top: 1px solid var(--line); border-left: 0; }
   .settings-overview-facts div:first-child { border-top: 0; }
   .settings-overview > .button { justify-self: start; margin: 0 20px 20px; }
+  .custody-mode-badge { margin: 0 20px 20px; }
+  .custody-stale-notice { align-items: stretch; flex-direction: column; }
+  .custody-stale-notice > .button, .custody-runbook-actions > .button { width: 100%; }
+  .custody-lifecycle > dl > div { align-items: flex-start; flex-direction: column; gap: 6px; }
+  .custody-lifecycle dd { text-align: left; }
   .settings-group-header h2 { font-size: 24px; }
   .settings-card { width: 100%; }
   .compact-form, .runtime-form { grid-template-columns: 1fr; align-items: stretch; }

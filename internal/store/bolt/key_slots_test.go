@@ -326,6 +326,60 @@ func TestKeySlotCompactionExcludesRevokedProviderMaterial(t *testing.T) {
 	}
 }
 
+func TestMasterKeyRotationAuditIntentIsAtomicWithBridgeCleanup(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	now := time.Now().UTC()
+	fingerprint, err := masterkey.MasterKeyFingerprint(bytes.Repeat([]byte{0x41}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutVaultKeyring(VaultKeyring{
+		FormatVersion: 1, ActiveKeyVersion: 2, ActiveFingerprint: fingerprint,
+		PreviousFingerprint: fingerprint, RecoveryEnvelope: []byte("rotation-bridge"), RotationOperationID: "rotation-001",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	intent, err := store.EnsureMasterKeyRotationAuditIntent(ctx, "rotation-001", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ClearVaultRotationBridgeWithAuditIntent(ctx, "rotation-001", now.Add(time.Minute)); err == nil {
+		t.Fatal("bridge cleanup succeeded before started Audit delivery")
+	}
+	if _, err := store.VaultRotationBridge(); err != nil {
+		t.Fatalf("rejected completion removed bridge: %v", err)
+	}
+	if err := store.MarkMasterKeyRotationAuditDelivered(ctx, intent.StartedEventID); err != nil {
+		t.Fatal(err)
+	}
+	completed, err := store.ClearVaultRotationBridgeWithAuditIntent(ctx, "rotation-001", now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if completed.CompletedAt == nil || completed.CompletedDelivered {
+		t.Fatalf("completed=%#v", completed)
+	}
+	if _, err := store.VaultRotationBridge(); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("bridge survived completion intent transaction: %v", err)
+	}
+	persisted, err := store.MasterKeyRotationAuditIntent()
+	if err != nil || persisted.CompletedEventID != completed.CompletedEventID || persisted.CompletedAt == nil || !persisted.CompletedAt.Equal(*completed.CompletedAt) {
+		t.Fatalf("persisted=%#v err=%v", persisted, err)
+	}
+	if err := store.MarkMasterKeyRotationAuditDelivered(ctx, completed.CompletedEventID); err != nil {
+		t.Fatal(err)
+	}
+	delivered, err := store.MasterKeyRotationAuditIntent()
+	if err != nil || !delivered.StartedDelivered || !delivered.CompletedDelivered {
+		t.Fatalf("delivered=%#v err=%v", delivered, err)
+	}
+}
+
 func TestVaultRewritePublishesRotatedDescriptorWithVaultGeneration(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
