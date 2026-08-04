@@ -24,21 +24,19 @@ const client = () => new QueryClient({ defaultOptions: { queries: { retry: false
 it("renders only the redacted read-only custody contract", async () => {
   vi.spyOn(api, "masterKeyCustody").mockResolvedValue(keySlotsCustody());
   render(<QueryClientProvider client={client()}><MasterKeyCustodyPage /></QueryClientProvider>);
-  expect(await screen.findByRole("heading", { name: "Master Key 托管" })).toBeVisible();
+  expect(await screen.findByRole("heading", { name: "主密钥托管" })).toBeVisible();
   expect(await screen.findAllByText("aws-kms")).toHaveLength(2);
-  expect(screen.getByText(/1 个 retiring/)).toBeVisible();
-  expect(screen.getByText("最近 Recovery 验证").nextElementSibling).toHaveTextContent("2026");
+  expect(screen.getByText(/1 个退役中/)).toBeVisible();
+  expect(screen.getByText(/最近一次恢复验证：.*2026/)).toBeVisible();
   expect(screen.getByText(/证据包中核验/)).toBeVisible();
   expect(document.body.textContent).not.toContain("arn:aws:kms");
-  const runbook = screen.getByRole("link", { name: "打开生命周期 Runbook（在新窗口打开）" });
+  const runbook = screen.getByRole("link", { name: "打开生命周期手册（在新窗口打开）" });
   expect(runbook).toHaveAttribute("href", "/admin/api/v1/master-key/runbooks/lifecycle");
   expect(runbook).toHaveAttribute("target", "_blank");
   runbook.focus();
   expect(runbook).toHaveFocus();
-  const primaryDetails = screen.getByText("Primary").closest("details");
-  expect(primaryDetails).toHaveAttribute("open");
-  fireEvent.click(screen.getByText("Primary").closest("summary")!);
-  expect(primaryDetails).not.toHaveAttribute("open");
+  expect(screen.getByRole("heading", { name: "主槽位" })).toBeVisible();
+  expect(document.querySelector("details")).not.toBeInTheDocument();
   expect(screen.getByText("KEK rewrap")).toBeVisible();
 });
 
@@ -51,12 +49,11 @@ it("renders a truthful file-mode empty state without KMS runbooks", async () => 
   window.innerWidth = 390;
   window.dispatchEvent(new Event("resize"));
   render(<QueryClientProvider client={client()}><MasterKeyCustodyPage /></QueryClientProvider>);
-  expect(await screen.findByText("本地 File Key 已加载")).toBeVisible();
-  expect(screen.getByText("File 模式不使用 Key Slot")).toBeVisible();
-  expect(screen.getByText("不适用")).toBeVisible();
-  expect(screen.getByText("File 模式不适用外部 KMS 生产准入。")).toBeVisible();
-  expect(screen.queryByRole("link", { name: /Runbook/ })).not.toBeInTheDocument();
-  expect(screen.queryByText("本地 descriptor 就绪")).not.toBeInTheDocument();
+  expect(await screen.findByText("本地文件密钥已加载")).toBeVisible();
+  expect(screen.getByText("本地文件模式不适用外部 KMS 生产准入。")).toBeVisible();
+  expect(screen.queryByRole("link", { name: /手册/ })).not.toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "密钥槽位" })).not.toBeInTheDocument();
+  expect(screen.queryByText("恢复验证")).not.toBeInTheDocument();
 });
 
 it("treats an empty key-slots response as a degraded anomaly", async () => {
@@ -66,7 +63,7 @@ it("treats an empty key-slots response as a degraded anomaly", async () => {
     degraded_reasons: ["key_slots_missing", "recovery_verification_missing"], slots: [],
   }));
   render(<QueryClientProvider client={client()}><MasterKeyCustodyPage /></QueryClientProvider>);
-  expect(await screen.findByRole("alert")).toHaveTextContent("未读取到 Key Slot");
+  expect(await screen.findByRole("alert")).toHaveTextContent("未读取到密钥槽位");
   expect(screen.getByText("从未验证")).toBeVisible();
 });
 
@@ -77,7 +74,7 @@ it("supports retry after an initial API error", async () => {
   render(<QueryClientProvider client={client()}><MasterKeyCustodyPage /></QueryClientProvider>);
   expect(await screen.findByRole("alert")).toBeVisible();
   fireEvent.click(screen.getByRole("button", { name: "重试" }));
-  expect(await screen.findByText("本地 descriptor 就绪")).toBeVisible();
+  expect(await screen.findByText("KMS 托管需要检查")).toBeVisible();
   expect(spy).toHaveBeenCalledTimes(2);
 });
 
@@ -87,11 +84,18 @@ it("keeps cached data visibly marked stale after a refetch error", async () => {
     .mockRejectedValueOnce(new Error("offline"));
   const queryClient = client();
   render(<QueryClientProvider client={queryClient}><MasterKeyCustodyPage /></QueryClientProvider>);
-  expect(await screen.findByText("本地 descriptor 就绪")).toBeVisible();
+  expect(await screen.findByText("KMS 托管需要检查")).toBeVisible();
   await queryClient.invalidateQueries({ queryKey: ["master-key-custody"] });
   expect(await screen.findByText("当前展示的是缓存状态。")).toBeVisible();
   expect(screen.getByText(/最后成功更新于/)).toBeVisible();
   expect(spy).toHaveBeenCalledTimes(2);
+});
+
+it("offers an explicit refresh for read-only status", async () => {
+  const spy = vi.spyOn(api, "masterKeyCustody").mockResolvedValue(keySlotsCustody());
+  render(<QueryClientProvider client={client()}><MasterKeyCustodyPage /></QueryClientProvider>);
+  fireEvent.click(await screen.findByRole("button", { name: "刷新状态" }));
+  await waitFor(() => expect(spy).toHaveBeenCalledTimes(2));
 });
 
 it("renders invalid future Recovery timestamps without crashing", async () => {
@@ -101,6 +105,6 @@ it("renders invalid future Recovery timestamps without crashing", async () => {
   }));
   render(<QueryClientProvider client={client()}><MasterKeyCustodyPage /></QueryClientProvider>);
   expect(await screen.findByText("时间无效（位于未来）")).toBeVisible();
-  expect(screen.getByText("未知")).toBeVisible();
-  expect(screen.getByRole("status")).toHaveTextContent("Recovery 验证时间位于未来");
+  expect(screen.getByText("最近一次恢复验证：未知")).toBeVisible();
+  expect(screen.getByRole("status")).toHaveTextContent("恢复验证时间位于未来");
 });
