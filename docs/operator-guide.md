@@ -47,6 +47,11 @@ printf '%s' "$PROVIDER_SECRET" | ./heimdall bootstrap \
 ./heimdall serve --config ./config.yaml
 ```
 
+From a source checkout, the equivalent explicit initialization helper is
+`make init CONFIG=./config.yaml`. Initialization is offline and fail-closed:
+stop the running Heimdall process first, and do not use it to reset or overwrite
+an existing data directory.
+
 The bootstrap response contains the Gateway Key once. Move it directly to the
 workload secret store; do not put it in shell history, source control, logs, or
 browser storage. The generated Master Key must remain a regular `0600` file.
