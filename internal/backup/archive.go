@@ -21,7 +21,7 @@ import (
 	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
 )
 
-const manifestVersion = 1
+const manifestVersion = 2
 
 type SourceFile struct {
 	ArchivePath string
@@ -35,33 +35,47 @@ type File struct {
 }
 
 type Manifest struct {
-	FormatVersion           int                    `json:"format_version"`
-	BackupID                string                 `json:"backup_id"`
-	CreatedAt               time.Time              `json:"created_at"`
-	Encrypted               bool                   `json:"encrypted"`
-	Metadata                boltstore.MetadataInfo `json:"metadata"`
-	LedgerWatermark         ledger.Watermark       `json:"ledger_watermark"`
-	CheckpointWatermark     ledger.Watermark       `json:"checkpoint_watermark"`
-	UsageManifestVersion    int                    `json:"usage_manifest_version"`
-	MasterKeyFingerprint    string                 `json:"master_key_fingerprint"`
-	KeySlotDescriptorSHA256 string                 `json:"key_slot_descriptor_sha256,omitempty"`
-	RestoreDrillVerified    bool                   `json:"restore_drill_verified"`
-	Build                   buildinfo.Info         `json:"build"`
-	Files                   []File                 `json:"files"`
+	FormatVersion               int                    `json:"format_version"`
+	BackupID                    string                 `json:"backup_id"`
+	CreatedAt                   time.Time              `json:"created_at"`
+	Encrypted                   bool                   `json:"encrypted"`
+	Metadata                    boltstore.MetadataInfo `json:"metadata"`
+	LedgerWatermark             ledger.Watermark       `json:"ledger_watermark"`
+	CheckpointWatermark         ledger.Watermark       `json:"checkpoint_watermark"`
+	UsageManifestVersion        int                    `json:"usage_manifest_version"`
+	AdjustmentManifestVersion   int                    `json:"adjustment_manifest_version,omitempty"`
+	AdjustmentManifestWatermark uint64                 `json:"adjustment_manifest_watermark,omitempty"`
+	LedgerFeatureEpoch          uint8                  `json:"ledger_feature_epoch,omitempty"`
+	MinimumLedgerReaderVersion  string                 `json:"minimum_ledger_reader_version,omitempty"`
+	PricingStateSHA256          string                 `json:"pricing_state_sha256,omitempty"`
+	PendingIntentSHA256         string                 `json:"pending_intent_sha256,omitempty"`
+	PendingIntents              int                    `json:"pending_intents,omitempty"`
+	MasterKeyFingerprint        string                 `json:"master_key_fingerprint"`
+	KeySlotDescriptorSHA256     string                 `json:"key_slot_descriptor_sha256,omitempty"`
+	RestoreDrillVerified        bool                   `json:"restore_drill_verified"`
+	Build                       buildinfo.Info         `json:"build"`
+	Files                       []File                 `json:"files"`
 }
 
 type CreateOptions struct {
-	OutputPath              string
-	BackupKey               []byte
-	Files                   []SourceFile
-	Metadata                boltstore.MetadataInfo
-	LedgerWatermark         ledger.Watermark
-	CheckpointWatermark     ledger.Watermark
-	UsageManifestVersion    int
-	MasterKeyFingerprint    string
-	KeySlotDescriptorSHA256 string
-	Build                   buildinfo.Info
-	Now                     func() time.Time
+	OutputPath                  string
+	BackupKey                   []byte
+	Files                       []SourceFile
+	Metadata                    boltstore.MetadataInfo
+	LedgerWatermark             ledger.Watermark
+	CheckpointWatermark         ledger.Watermark
+	UsageManifestVersion        int
+	AdjustmentManifestVersion   int
+	AdjustmentManifestWatermark uint64
+	LedgerFeatureEpoch          uint8
+	MinimumLedgerReaderVersion  string
+	PricingStateSHA256          string
+	PendingIntentSHA256         string
+	PendingIntents              int
+	MasterKeyFingerprint        string
+	KeySlotDescriptorSHA256     string
+	Build                       buildinfo.Info
+	Now                         func() time.Time
 }
 
 func Create(options CreateOptions) (Manifest, error) {
@@ -109,8 +123,11 @@ func Create(options CreateOptions) (Manifest, error) {
 		FormatVersion: manifestVersion, BackupID: backupID,
 		CreatedAt: options.Now().UTC(), Encrypted: true,
 		Metadata: options.Metadata, LedgerWatermark: options.LedgerWatermark,
-		CheckpointWatermark:     options.CheckpointWatermark,
-		UsageManifestVersion:    options.UsageManifestVersion,
+		CheckpointWatermark:       options.CheckpointWatermark,
+		UsageManifestVersion:      options.UsageManifestVersion,
+		AdjustmentManifestVersion: options.AdjustmentManifestVersion, AdjustmentManifestWatermark: options.AdjustmentManifestWatermark,
+		LedgerFeatureEpoch: options.LedgerFeatureEpoch, MinimumLedgerReaderVersion: options.MinimumLedgerReaderVersion,
+		PricingStateSHA256: options.PricingStateSHA256, PendingIntentSHA256: options.PendingIntentSHA256, PendingIntents: options.PendingIntents,
 		MasterKeyFingerprint:    options.MasterKeyFingerprint,
 		KeySlotDescriptorSHA256: options.KeySlotDescriptorSHA256,
 		RestoreDrillVerified:    false,
@@ -241,7 +258,7 @@ func Verify(archivePath string, backupKey []byte) (Manifest, error) {
 	if _, err := io.Copy(io.Discard, decrypted); err != nil {
 		return Manifest{}, fmt.Errorf("verify authenticated backup ending: %w", err)
 	}
-	if !foundManifest || manifest.FormatVersion != manifestVersion || !manifest.Encrypted ||
+	if !foundManifest || (manifest.FormatVersion != 1 && manifest.FormatVersion != manifestVersion) || !manifest.Encrypted ||
 		manifest.BackupID == "" || manifest.CreatedAt.IsZero() ||
 		manifest.Metadata.SchemaVersion == 0 ||
 		manifest.Metadata.SchemaVersion > boltstore.CurrentSchemaVersion() ||
@@ -250,6 +267,9 @@ func Verify(archivePath string, backupKey []byte) (Manifest, error) {
 		manifest.CheckpointWatermark.Offset > manifest.LedgerWatermark.Offset ||
 		!validFingerprint(manifest.MasterKeyFingerprint) {
 		return Manifest{}, errors.New("backup manifest is invalid")
+	}
+	if manifest.FormatVersion >= 2 && (manifest.LedgerFeatureEpoch != 2 || manifest.MinimumLedgerReaderVersion != "v2" || !validSHA256Label(manifest.PricingStateSHA256) || !validSHA256Label(manifest.PendingIntentSHA256)) {
+		return Manifest{}, errors.New("backup compatibility manifest is invalid")
 	}
 	if manifest.KeySlotDescriptorSHA256 != "" && !validSHA256(manifest.KeySlotDescriptorSHA256) {
 		return Manifest{}, errors.New("backup manifest Key Slot descriptor digest is invalid")
@@ -288,6 +308,10 @@ func validSHA256(value string) bool {
 		}
 	}
 	return true
+}
+
+func validSHA256Label(value string) bool {
+	return strings.HasPrefix(value, "sha256:") && validSHA256(strings.TrimPrefix(value, "sha256:"))
 }
 
 // Extract verifies the complete authenticated archive before writing regular

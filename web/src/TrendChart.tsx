@@ -5,9 +5,28 @@ import type { Bucket } from "./types";
 import { buildTrendSeries, summarizeTrend, type TrendMetric } from "./trend";
 import { compactNumber } from "./format";
 import { useTranslation } from "react-i18next";
+import { useAppearance } from "./theme";
+
+/**
+ * Reads the semantic chart tokens from the design system. uPlot draws to a
+ * canvas, so it can't inherit CSS variables — we resolve them at build time and
+ * re-run when the appearance changes (PRD §8.3). Fallbacks keep charts legible
+ * if a token is ever missing.
+ */
+function readChartTokens(host: HTMLElement) {
+  const style = getComputedStyle(host);
+  const read = (name: string, fallback: string) => style.getPropertyValue(name).trim() || fallback;
+  return {
+    series: read("--color-chart-series-1", "currentColor"),
+    fill: read("--color-chart-series-1-fill", "transparent"),
+    grid: read("--color-chart-grid", "currentColor"),
+    axis: read("--color-chart-axis", "currentColor"),
+  };
+}
 
 export default function TrendChart({ buckets, metric }: { buckets: Bucket[]; metric: TrendMetric }) {
   const { t } = useTranslation();
+  const appearance = useAppearance();
   const host = useRef<HTMLDivElement>(null);
   const chartRef = useRef<uPlot | null>(null);
   const summary = summarizeTrend(buckets, metric);
@@ -18,6 +37,7 @@ export default function TrendChart({ buckets, metric }: { buckets: Bucket[]; met
   useEffect(() => {
     if (!host.current) return;
     const series = buildTrendSeries(buckets, metric);
+    const tokens = readChartTokens(host.current);
     const chart = new uPlot(
       {
         width: Math.max(Math.floor(host.current.clientWidth), 1),
@@ -26,12 +46,12 @@ export default function TrendChart({ buckets, metric }: { buckets: Bucket[]; met
         legend: { show: false },
         scales: { x: { time: true, range: series.range } },
         axes: [
-          { stroke: "#778985", grid: { stroke: "#1c302c" }, ticks: { stroke: "#1c302c" }, font: "11px ui-monospace" },
-          { stroke: "#778985", grid: { stroke: "#1c302c" }, ticks: { stroke: "#1c302c" }, font: "11px ui-monospace" },
+          { stroke: tokens.axis, grid: { stroke: tokens.grid }, ticks: { stroke: tokens.grid }, font: "11px ui-monospace" },
+          { stroke: tokens.axis, grid: { stroke: tokens.grid }, ticks: { stroke: tokens.grid }, font: "11px ui-monospace" },
         ],
         series: [
           {},
-          { label: t(`dashboard.trendMetrics.${metric}`), stroke: "#d8ff61", width: 2, fill: "rgba(216,255,97,.07)" },
+          { label: t(`dashboard.trendMetrics.${metric}`), stroke: tokens.series, width: 2, fill: tokens.fill },
         ],
       },
       series.data,
@@ -47,7 +67,7 @@ export default function TrendChart({ buckets, metric }: { buckets: Bucket[]; met
       resize.disconnect();
       chart.destroy();
     };
-  }, [t, metric]);
+  }, [t, metric, appearance]);
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart) return;

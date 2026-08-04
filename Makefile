@@ -1,4 +1,7 @@
 CONFIG ?= config.yaml
+BACKUP_DIR ?= backups
+BACKUP_KEY_FILE ?= backup.key
+BACKUP_NAME ?=
 
 GO_SOURCES := $(shell find cmd internal -type f -name '*.go')
 DEADMAN_SOURCES := $(shell find cmd/heimdall-deadman internal/deadman -type f -name '*.go')
@@ -7,7 +10,7 @@ WEB_SOURCES := $(shell find web/src web/scripts -type f) \
 WEB_DEPS_STAMP := web/node_modules/.heimdall-install-stamp
 WEB_BUILD_STAMP := web/node_modules/.heimdall-build-stamp
 
-.PHONY: setup start dev build deadman frontend frontend-test test race vet observability-check check clean
+.PHONY: setup start dev build deadman frontend frontend-test backup test race vet observability-check check clean
 
 setup: build
 
@@ -20,6 +23,13 @@ dev: frontend
 build: bin/heimdall bin/heimdall-deadman
 
 deadman: bin/heimdall-deadman
+
+backup: bin/heimdall
+	./scripts/backup.sh \
+		--binary "$(abspath bin/heimdall)" \
+		--config "$(abspath $(CONFIG))" \
+		--output-dir "$(abspath $(BACKUP_DIR))" \
+		--key-file "$(abspath $(BACKUP_KEY_FILE))" $(if $(BACKUP_NAME),--name "$(BACKUP_NAME)")
 
 bin/heimdall: $(GO_SOURCES) go.mod go.sum $(WEB_BUILD_STAMP)
 	mkdir -p bin

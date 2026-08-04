@@ -23,7 +23,6 @@ export function DashboardPage() {
   if (query.isPending) return <Loading />;
   if (query.isError) return <ErrorState error={query.error} />;
   const dashboard = query.data;
-  const recentAnomalies = dashboard.usage.recent_anomalies ?? [];
   const today = dashboard.usage.today;
   const estimatedInputTokens = today.estimated_input_tokens ?? 0;
   const estimatedOutputTokens = today.estimated_output_tokens ?? 0;
@@ -35,7 +34,12 @@ export function DashboardPage() {
   const errorRate = today.attempts ? today.errors / today.attempts : 0;
   const averageLatency = today.attempts ? today.latency_millis / today.attempts : 0;
   const accountingHealthy = dashboard.accounting_status === 0;
-  const breakdown = dashboard.usage.breakdowns[dimension] ?? [];
+  const breakdown = dashboard.usage.breakdowns?.[dimension] ?? [];
+  const recentAnomalies = dashboard.usage.recent_anomalies ?? [];
+  const hourly = dashboard.usage.hourly ?? [];
+  const budgetItems = dashboard.governance.budget.items ?? [];
+  const capacityItems = dashboard.governance.capacity.items ?? [];
+  const resourceLabels = dashboard.resource_labels ?? {};
   const rejectionTotal = dashboard.governance.policy_rejections.total;
   const alertIssues = dashboard.alerts.Failed + dashboard.alerts.Dropped;
   const alertHealthy = alertIssues === 0;
@@ -82,6 +86,9 @@ export function DashboardPage() {
         <GovernanceSignal label={t("dashboard.budgetRisk")} value={String(dashboard.governance.budget.at_risk)} detail={t("dashboard.projectsAtRisk")} alert={dashboard.governance.budget.at_risk > 0} />
         <GovernanceSignal label={t("dashboard.recentAnomalies")} value={String(recentAnomalies.length)} detail={t("dashboard.todayEvents")} alert={recentAnomalies.length > 0} />
         <GovernanceSignal label={t("dashboard.capacityRisk")} value={String(dashboard.governance.capacity.at_risk)} detail={t("dashboard.resourcesAtRisk")} alert={dashboard.governance.capacity.at_risk > 0} />
+		<GovernanceSignal label={t("dashboard.pricingQuarantine")} value={String(dashboard.governance.pricing?.quarantined ?? 0)} detail={t("dashboard.pricingQuarantineDetail")} alert={(dashboard.governance.pricing?.quarantined ?? 0) > 0} />
+		<GovernanceSignal label={t("dashboard.unknownPricing")} value={String(dashboard.governance.pricing?.unknown ?? 0)} detail={t("dashboard.unknownPricingDetail")} alert={(dashboard.governance.pricing?.unknown ?? 0) > 0} />
+		<GovernanceSignal label={t("dashboard.adjustmentOverBudget")} value={String(dashboard.governance.pricing?.adjustment_over_budget ?? 0)} detail={t("dashboard.adjustmentOverBudgetDetail")} alert={(dashboard.governance.pricing?.adjustment_over_budget ?? 0) > 0} />
       </section>
 
       <section className="dashboard-grid governance-main-grid">
@@ -96,7 +103,7 @@ export function DashboardPage() {
             />
           </header>
           <Suspense fallback={<Loading label={t("dashboard.loadingTrend")} />}>
-            <TrendChart buckets={dashboard.usage.hourly} metric={trendMetric} />
+            <TrendChart buckets={hourly} metric={trendMetric} />
           </Suspense>
           <div className="chart-caption">{t(`dashboard.trendDescriptions.${trendMetric}`)}</div>
         </article>
@@ -105,8 +112,8 @@ export function DashboardPage() {
           <header className="panel-header">
             <div><p className="eyebrow">{t("dashboard.controlPlane")}</p><h2>{t("dashboard.governanceExecution")}</h2></div>
           </header>
-          <PressureSection title={t("dashboard.budgetWatermark")} empty={t("dashboard.noLimitedProjects")} item={dashboard.governance.budget.items[0]} moneyValues />
-          <PressureSection title={t("dashboard.capacityWatermark")} empty={t("dashboard.noLimitedResources")} item={dashboard.governance.capacity.items[0]} />
+          <PressureSection title={t("dashboard.budgetWatermark")} empty={t("dashboard.noLimitedProjects")} item={budgetItems[0]} moneyValues />
+          <PressureSection title={t("dashboard.capacityWatermark")} empty={t("dashboard.noLimitedResources")} item={capacityItems[0]} />
           <div className="rejection-summary">
             <div className="governance-row-heading"><span>{t("dashboard.rejectionComposition")}</span><strong>{compactNumber(rejectionTotal)}</strong></div>
             <div className="rejection-tags">
@@ -132,7 +139,7 @@ export function DashboardPage() {
               onChange={setDimension}
             />
           </header>
-          <BreakdownList items={breakdown} labels={dashboard.resource_labels} empty={t("dashboard.noUsageToday")} />
+          <BreakdownList items={breakdown} labels={resourceLabels} empty={t("dashboard.noUsageToday")} />
           <div className="panel-footnote">{t("dashboard.breakdownFootnote")}</div>
         </article>
 
@@ -140,7 +147,7 @@ export function DashboardPage() {
           <header className="panel-header">
             <div><p className="eyebrow">{t("dashboard.anomalyChannel")}</p><h2>{t("dashboard.anomaliesAndGovernance")}</h2></div>
           </header>
-          <AnomalyList items={recentAnomalies} labels={dashboard.resource_labels} empty={t("dashboard.noAnomaliesToday")} />
+          <AnomalyList items={recentAnomalies} labels={resourceLabels} empty={t("dashboard.noAnomaliesToday")} />
         </article>
       </section>
 

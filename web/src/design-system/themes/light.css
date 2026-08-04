@@ -1,0 +1,104 @@
+/*
+ * Light theme — Semantic Tokens (design-system layer 2).
+ *
+ * Declares the SAME semantic token set as dark.css with light-tuned values
+ * (soft non-white canvas, darker accents/status for WCAG 2.2 AA). It is NOT a
+ * naive inversion of dark. Applied only under :root[data-appearance="light"].
+ */
+:root[data-appearance="light"] {
+  color-scheme: light;
+
+  /* Surfaces & canvas — soft paper, clear layering (PRD §8.2) */
+  --color-canvas: var(--p-paper-100);
+  --color-surface-default: var(--p-white);
+  --color-surface-subtle: var(--p-paper-50);
+  --color-surface-raised: var(--p-white);
+  --color-surface-overlay: var(--p-white);
+
+  /* Text — dark ink on light for high contrast */
+  --color-text-primary: var(--p-ink-950);
+  --color-text-secondary: var(--p-ink-400);
+  --color-text-tertiary: var(--p-ink-500);
+  --color-text-inverse: var(--p-ink-50);
+
+  /* Borders — subtle default, stronger variant meets ~3:1 for key boundaries */
+  --color-border-default: var(--p-paper-300);
+  --color-border-strong: var(--p-paper-500);
+
+  /* Actions & focus */
+  --color-action-primary: var(--p-lime-800);
+  --color-action-primary-hover: var(--p-lime-700);
+  --color-action-primary-foreground: var(--p-white);
+  --color-action-secondary: var(--p-paper-200);
+  --color-accent: var(--p-green-700);
+  --color-focus-ring: var(--p-green-600);
+  --color-shadow-base: var(--p-ink-950);
+
+  /* Status — darker hues for legible text/icons on light surfaces */
+  --color-status-success-text: var(--p-green-700);
+  --color-status-success-surface: rgba(28, 143, 116, 0.10);
+  --color-status-success-border: var(--p-green-700);
+  --color-status-success-icon: var(--p-green-700);
+  --color-status-warning-text: var(--p-amber-700);
+  --color-status-warning-surface: rgba(169, 112, 13, 0.12);
+  --color-status-warning-border: var(--p-amber-700);
+  --color-status-warning-icon: var(--p-amber-700);
+  --color-status-danger-text: var(--p-red-600);
+  --color-status-danger-surface: rgba(194, 58, 48, 0.10);
+  --color-status-danger-border: var(--p-red-600);
+  --color-status-danger-icon: var(--p-red-600);
+  --color-status-info-text: var(--p-blue-600);
+  --color-status-info-surface: rgba(47, 107, 194, 0.10);
+  --color-status-info-border: var(--p-blue-600);
+  --color-status-info-icon: var(--p-blue-600);
+
+  /* Charts — darker series so both are distinguishable on light */
+  --color-chart-series-1: var(--p-chart-1-light);
+  --color-chart-series-2: var(--p-chart-2-light);
+  --color-chart-series-1-fill: rgba(28, 143, 116, 0.12);
+  --color-chart-grid: rgba(7, 17, 15, 0.10);
+  --color-chart-axis: var(--p-ink-400);
+  --color-chart-tooltip: var(--p-white);
+
+  /* Elevation — softer, cooler shadows on light */
+  --shadow-raised: 0 1px 2px rgba(16, 35, 31, 0.06), 0 10px 28px rgba(16, 35, 31, 0.10);
+  --shadow-overlay: 0 24px 60px rgba(16, 35, 31, 0.20);
+  --shadow-focus: 0 0 0 3px rgba(28, 143, 116, 0.30);
+  --shadow-menu: 0 18px 44px rgba(16, 35, 31, 0.18);
+  --shadow-sticky: 0 -12px 30px rgba(16, 35, 31, 0.12);
+  --shadow-modal: 0 30px 90px rgba(16, 35, 31, 0.24);
+
+  --app-glow: rgba(47, 154, 131, 0.07);
+
+  /* Legacy alias layer (see dark.css) */
+  --bg: var(--color-canvas);
+  --surface: var(--color-surface-default);
+  --surface-2: var(--color-surface-subtle);
+  --line: var(--color-border-default);
+  --line-strong: var(--color-border-strong);
+  --text: var(--color-text-primary);
+  --muted: var(--color-text-secondary);
+  --muted-2: var(--color-text-tertiary);
+  --lime: var(--color-action-primary);
+  --mint: var(--color-accent);
+  --danger: var(--color-status-danger-icon);
+  --warning: var(--color-status-warning-icon);
+  --accent: var(--color-accent);
+  --border: var(--color-border-default);
+
+  /* Elevation aliases (see dark.css) — light surfaces + inverted overlays. */
+  --surface-panel: var(--p-white);
+  --surface-inset: var(--p-paper-50);
+  --surface-deep: var(--p-paper-100);
+  --surface-sidebar: var(--p-white);
+  --surface-overlay-solid: var(--p-white);
+  --overlay-hover: rgba(7, 17, 15, 0.05);
+  --overlay-subtle: rgba(7, 17, 15, 0.03);
+  --scrim: rgba(7, 17, 15, 0.45); /* dark scrim keeps modals legible over a dimmed page */
+  --accent-tint: rgba(95, 125, 22, 0.10);
+  --accent-border: var(--p-lime-800);
+  --accent-glow: rgba(79, 104, 16, 0.28);
+  --brand-glow: rgba(79, 104, 16, 0.18);
+  --danger-hover: rgba(194, 58, 48, 0.10);
+  --surface-secret: var(--p-paper-50);
+}

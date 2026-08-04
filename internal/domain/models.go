@@ -524,33 +524,35 @@ const (
 )
 
 type Deployment struct {
-	ID                     string                `json:"id"`
-	Name                   string                `json:"name"`
-	ProviderID             string                `json:"provider_id"`
-	ProviderModel          string                `json:"provider_model"`
-	TargetKind             DeploymentTargetKind  `json:"target_kind,omitempty"`
-	AccessSurface          AccessSurface         `json:"access_surface"`
-	ProfileID              ProviderProfileID     `json:"profile_id"`
-	BindingID              string                `json:"binding_id,omitempty"`
-	Region                 string                `json:"region"`
-	Capabilities           ProviderCapabilities  `json:"capabilities"`
-	CapabilityEvidence     CapabilityEvidenceSet `json:"capability_evidence"`
-	InputMicrosPerMillion  int64                 `json:"input_micros_per_million"`
-	OutputMicrosPerMillion int64                 `json:"output_micros_per_million"`
-	FixedRequestMicrosUSD  int64                 `json:"fixed_request_micros_usd"`
-	MaxConcurrency         int64                 `json:"max_concurrency"`
-	Priority               int                   `json:"priority"`
-	Weight                 int                   `json:"weight"`
-	Enabled                bool                  `json:"enabled"`
-	LastTestStatus         DeploymentTestStatus  `json:"last_test_status,omitempty"`
-	LastTestedAt           *time.Time            `json:"last_tested_at,omitempty"`
-	LastTestLatencyMillis  int64                 `json:"last_test_latency_millis,omitempty"`
-	LastTestErrorClass     string                `json:"last_test_error_class,omitempty"`
-	LastTestRevision       uint64                `json:"last_test_revision,omitempty"`
-	CreatedAt              time.Time             `json:"created_at"`
-	UpdatedAt              time.Time             `json:"updated_at"`
-	Revision               uint64                `json:"revision"`
-	DeletedAt              *time.Time            `json:"deleted_at,omitempty"`
+	ID                      string                `json:"id"`
+	Name                    string                `json:"name"`
+	ProviderID              string                `json:"provider_id"`
+	ProviderModel           string                `json:"provider_model"`
+	TargetKind              DeploymentTargetKind  `json:"target_kind,omitempty"`
+	AccessSurface           AccessSurface         `json:"access_surface"`
+	ProfileID               ProviderProfileID     `json:"profile_id"`
+	BindingID               string                `json:"binding_id,omitempty"`
+	Region                  string                `json:"region"`
+	Capabilities            ProviderCapabilities  `json:"capabilities"`
+	CapabilityEvidence      CapabilityEvidenceSet `json:"capability_evidence"`
+	InputMicrosPerMillion   int64                 `json:"input_micros_per_million"`
+	OutputMicrosPerMillion  int64                 `json:"output_micros_per_million"`
+	FixedRequestMicrosUSD   int64                 `json:"fixed_request_micros_usd"`
+	MaxConcurrency          int64                 `json:"max_concurrency"`
+	Priority                int                   `json:"priority"`
+	Weight                  int                   `json:"weight"`
+	Enabled                 bool                  `json:"enabled"`
+	LastTestStatus          DeploymentTestStatus  `json:"last_test_status,omitempty"`
+	LastTestedAt            *time.Time            `json:"last_tested_at,omitempty"`
+	LastTestLatencyMillis   int64                 `json:"last_test_latency_millis,omitempty"`
+	LastTestErrorClass      string                `json:"last_test_error_class,omitempty"`
+	LastTestRevision        uint64                `json:"last_test_revision,omitempty"`
+	CreatedAt               time.Time             `json:"created_at"`
+	UpdatedAt               time.Time             `json:"updated_at"`
+	Revision                uint64                `json:"revision"`
+	DeletedAt               *time.Time            `json:"deleted_at,omitempty"`
+	PricingQuarantined      bool                  `json:"pricing_quarantined,omitempty"`
+	PricingQuarantineReason string                `json:"pricing_quarantine_reason,omitempty"`
 }
 
 type DeploymentTestStatus string

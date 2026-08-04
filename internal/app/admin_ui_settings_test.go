@@ -71,15 +71,53 @@ func TestAdminUILocaleSettingsAndPreferencesPersist(t *testing.T) {
 	if preferences.Code != http.StatusOK || preferences.Header().Get("ETag") != `"1"` {
 		t.Fatalf("preferences status=%d etag=%q body=%s", preferences.Code, preferences.Header().Get("ETag"), preferences.Body.String())
 	}
+	// Legacy admins with no stored appearance read back as the default dark theme.
+	if !jsonBodyContains(t, preferences, `"appearance":"dark"`) {
+		t.Fatalf("preferences did not default appearance to dark: %s", preferences.Body.String())
+	}
 	preferenceUpdate := performAdminMutation(t, runtime, cookie, csrf, http.MethodPut,
-		"/admin/api/v1/preferences", `"1"`, map[string]string{"locale": domain.LocaleEnUS})
+		"/admin/api/v1/preferences", `"1"`, map[string]string{"locale": domain.LocaleEnUS, "appearance": domain.AppearanceLight})
 	if preferenceUpdate.Code != http.StatusOK || preferenceUpdate.Header().Get("ETag") != `"2"` {
 		t.Fatalf("preference update status=%d etag=%q body=%s", preferenceUpdate.Code, preferenceUpdate.Header().Get("ETag"), preferenceUpdate.Body.String())
 	}
+	if !jsonBodyContains(t, preferenceUpdate, `"appearance":"light"`) {
+		t.Fatalf("preference update did not echo appearance: %s", preferenceUpdate.Body.String())
+	}
+	stalePreference := performAdminMutation(t, runtime, cookie, csrf, http.MethodPut,
+		"/admin/api/v1/preferences", `"1"`, map[string]string{"locale": domain.LocaleZhCN, "appearance": domain.AppearanceDark})
+	if stalePreference.Code != http.StatusPreconditionFailed {
+		t.Fatalf("stale preference update status=%d body=%s", stalePreference.Code, stalePreference.Body.String())
+	}
+	missingLocale := performAdminMutation(t, runtime, cookie, csrf, http.MethodPut,
+		"/admin/api/v1/preferences", `"2"`, map[string]string{"appearance": domain.AppearanceDark})
+	if missingLocale.Code != http.StatusBadRequest || !jsonBodyContains(t, missingLocale, `"code":"invalid_locale_preference"`) {
+		t.Fatalf("missing locale status=%d body=%s", missingLocale.Code, missingLocale.Body.String())
+	}
+	missingAppearance := performAdminMutation(t, runtime, cookie, csrf, http.MethodPut,
+		"/admin/api/v1/preferences", `"2"`, map[string]string{"locale": domain.LocaleZhCN})
+	if missingAppearance.Code != http.StatusBadRequest || !jsonBodyContains(t, missingAppearance, `"code":"invalid_appearance_preference"`) {
+		t.Fatalf("missing appearance status=%d body=%s", missingAppearance.Code, missingAppearance.Body.String())
+	}
+	unknownField := performAdminMutation(t, runtime, cookie, csrf, http.MethodPut,
+		"/admin/api/v1/preferences", `"2"`, map[string]string{"locale": domain.LocaleEnUS, "appearance": domain.AppearanceLight, "unknown": "value"})
+	if unknownField.Code != http.StatusBadRequest || !jsonBodyContains(t, unknownField, `"code":"invalid_preferences"`) {
+		t.Fatalf("unknown preference field status=%d body=%s", unknownField.Code, unknownField.Body.String())
+	}
 	invalidPreference := performAdminMutation(t, runtime, cookie, csrf, http.MethodPut,
-		"/admin/api/v1/preferences", `"2"`, map[string]string{"locale": "xx-YY"})
-	if invalidPreference.Code != http.StatusBadRequest {
+		"/admin/api/v1/preferences", `"2"`, map[string]string{"locale": "xx-YY", "appearance": domain.AppearanceLight})
+	if invalidPreference.Code != http.StatusBadRequest || !jsonBodyContains(t, invalidPreference, `"code":"invalid_locale_preference"`) {
 		t.Fatalf("invalid preference status=%d body=%s", invalidPreference.Code, invalidPreference.Body.String())
+	}
+	emptyLocale := performAdminMutation(t, runtime, cookie, csrf, http.MethodPut,
+		"/admin/api/v1/preferences", `"2"`, map[string]string{"locale": "", "appearance": domain.AppearanceLight})
+	if emptyLocale.Code != http.StatusBadRequest || !jsonBodyContains(t, emptyLocale, `"code":"invalid_locale_preference"`) {
+		t.Fatalf("empty locale status=%d body=%s", emptyLocale.Code, emptyLocale.Body.String())
+	}
+	// An unsupported appearance is rejected and must not partially persist.
+	invalidAppearance := performAdminMutation(t, runtime, cookie, csrf, http.MethodPut,
+		"/admin/api/v1/preferences", `"2"`, map[string]string{"locale": domain.LocaleEnUS, "appearance": "sepia"})
+	if invalidAppearance.Code != http.StatusBadRequest {
+		t.Fatalf("invalid appearance status=%d body=%s", invalidAppearance.Code, invalidAppearance.Body.String())
 	}
 
 	uiSettings := authenticatedAdminGet(t, runtime, cookie, "/admin/api/v1/settings/ui")
@@ -101,9 +139,14 @@ func TestAdminUILocaleSettingsAndPreferencesPersist(t *testing.T) {
 	if session.Code != http.StatusOK || !jsonBodyContains(t, session, `"locale":"en-US"`) {
 		t.Fatalf("session did not expose locale: status=%d body=%s", session.Code, session.Body.String())
 	}
+	if !jsonBodyContains(t, session, `"appearance":"light"`) {
+		t.Fatalf("session did not expose appearance: status=%d body=%s", session.Code, session.Body.String())
+	}
 	audit := authenticatedAdminGet(t, runtime, cookie, "/admin/api/v1/audit")
 	if audit.Code != http.StatusOK ||
 		!bytes.Contains(audit.Body.Bytes(), []byte("admin.preferences.update")) ||
+		!bytes.Contains(audit.Body.Bytes(), []byte(`"changed_fields":"locale,appearance"`)) ||
+		!bytes.Contains(audit.Body.Bytes(), []byte(`"appearance":"light"`)) ||
 		!bytes.Contains(audit.Body.Bytes(), []byte("settings.ui.update")) {
 		t.Fatalf("locale mutations were not audited: status=%d body=%s", audit.Code, audit.Body.String())
 	}
@@ -121,8 +164,43 @@ func TestAdminUILocaleSettingsAndPreferencesPersist(t *testing.T) {
 		t.Fatalf("UI settings were not persisted: %#v", storedUI)
 	}
 	storedUser, err := reopened.store.GetAdminUser(context.Background(), "admin")
-	if err != nil || storedUser.Locale != domain.LocaleEnUS {
+	if err != nil || storedUser.Locale != domain.LocaleEnUS || storedUser.Appearance != domain.AppearanceLight {
 		t.Fatalf("admin preference was not persisted: %#v err=%v", storedUser, err)
+	}
+}
+
+func TestAdminPreferenceAuditFailureRollsBackServerState(t *testing.T) {
+	cfg := testConfig(t)
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := BootstrapAdmin(context.Background(), cfg, "admin", []byte("correct horse battery staple")); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := Open(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = runtime.Close() })
+	cookie, csrf := loginAdminForTest(t, runtime)
+	if err := runtime.audit.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	response := performAdminMutation(t, runtime, cookie, csrf, http.MethodPut,
+		"/admin/api/v1/preferences", `"1"`, map[string]string{
+			"locale": domain.LocaleEnUS, "appearance": domain.AppearanceLight,
+		})
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("audit failure status=%d body=%s", response.Code, response.Body.String())
+	}
+	stored, err := runtime.store.GetAdminUser(context.Background(), "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if domain.NormalizeLocalePreference(stored.Locale) != domain.LocaleSystem ||
+		domain.NormalizeAppearance(stored.Appearance) != domain.AppearanceDark {
+		t.Fatalf("audit failure left preference mutation persisted: %#v", stored)
 	}
 }
 

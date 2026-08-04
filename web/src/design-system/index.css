@@ -1,0 +1,12 @@
+/*
+ * Heimdall Admin Console design system entry point.
+ *
+ * Import order is the dependency order and must not change:
+ *   primitives → dark semantic tokens (also the bare-:root default) → light.
+ * Imported once from main.tsx BEFORE styles.css so the legacy alias layer is
+ * defined before component rules consume it.
+ */
+@import "./tokens.css";
+@import "./themes/dark.css";
+@import "./themes/light.css";
+@import "./components.css";

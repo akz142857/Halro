@@ -35,9 +35,21 @@ and other external services are not required.
 - The append-only Ledger is the accounting authority. Usage checkpoint,
   Parquet export, reconciliation, budget reservation, retry/fallback attempts,
   and conservative unknown-outcome settlement are crash tested.
+- Deployment prices are immutable, effective-dated versions. Every Provider
+  attempt durably pins its own price snapshot before upstream I/O, so later
+  price changes cannot rewrite historical spend. Corrections are append-only
+  adjustments, and unknown cost is never displayed as zero.
+- Pricing automation and LLM extraction create expiring Proposals only.
+  Provenance, model/region match, warnings and a digest are reviewed in Admin;
+  recent re-authentication is required before adoption creates a new audited
+  Price Version. Proposals never participate in Gateway price selection.
 - The embedded React Admin console covers Dashboard, Projects/Keys,
   Credentials, Providers, Deployments, Routes, Usage, Policies, Alerts, Audit,
   and Settings without a Node.js runtime dependency.
+- The Admin console uses a governed semantic-token design system and provides
+  server-persisted per-admin Light and Dark appearances. Dark remains the
+  unauthenticated default; switching is immediate, revision-safe, and does not
+  use browser persistence.
 - Prometheus metrics, generic webhook alerts, encrypted backup/restore, HMAC
   Audit chain verification, dependency/SBOM/signature release gates, and a
   complete operator guide are included.

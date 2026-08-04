@@ -1,6 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { api, clearSensitiveClientState } from "./api";
 import { confirmNavigation, Link, navigate, setNavigationBlocked, usePathname } from "./navigation";
+import { resetAppearance } from "./theme";
 import { useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -14,7 +15,7 @@ const navigation = [
   ["/admin/usage", "usage", "M4 19V9M10 19V5M16 19v-7M22 19H2"],
   ["/admin/operations", "operations", "M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"],
 	["/admin/master-key", "masterKey", "M7 10V7a5 5 0 0 1 10 0v3M5 10h14v11H5zM12 14v3"],
-  ["/admin/settings", "settings", "M4 7h10M18 7h2M14 4v6M4 17h2M10 17h10M6 14v6"],
+  ["/admin/settings", "settings", "M4 6h6m4 0h6M10 3v6M4 12h10m4 0h2M14 9v6M4 18h3m4 0h9M7 15v6"],
 ] as const;
 
 function NavIcon({ path }: { path: string }) {
@@ -46,6 +47,7 @@ export function Layout({
       await api.logout();
     } finally {
       clearSensitiveClientState();
+      resetAppearance();
       queryClient.clear();
       setNavigationBlocked(false);
       navigate("/admin/login");

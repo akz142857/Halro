@@ -797,6 +797,7 @@ func kmsRewrapFixture(t *testing.T) (config.Config, config.Config, *kmsAppHarnes
 	_, err := Bootstrap(context.Background(), cfg, BootstrapOptions{
 		ProviderName: "OpenAI", ProviderType: domain.ProviderOpenAI, ProviderBaseURL: "https://api.openai.com",
 		ProviderModel: "gpt-test", PublicModel: "chat", ProjectName: "Rewrap",
+		BillingMode: domain.BillingModeFree,
 	}, []byte("rewrap-provider-secret"))
 	if err != nil {
 		t.Fatal(err)
@@ -837,6 +838,7 @@ func kmsRotationFixture(t *testing.T) (config.Config, *kmsAppHarness, []byte, []
 	if _, err := Bootstrap(context.Background(), cfg, BootstrapOptions{
 		ProviderName: "OpenAI", ProviderType: domain.ProviderOpenAI, ProviderBaseURL: "https://api.openai.com",
 		ProviderModel: "gpt-test", PublicModel: "chat", ProjectName: "Rotate",
+		BillingMode: domain.BillingModeFree,
 	}, []byte("kms-rotation-provider-secret")); err != nil {
 		t.Fatal(err)
 	}

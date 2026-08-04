@@ -1,12 +1,13 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Layout } from "./Layout";
 import { Modal, OverflowMenu } from "./components";
 import { api } from "./api";
 import { SettingsPage } from "./pages/SettingsPage";
 
 describe("admin accessibility baseline", () => {
+  afterEach(() => document.documentElement.removeAttribute("data-appearance"));
   it("provides landmarks, a skip link, and current navigation context", () => {
     window.history.replaceState({}, "", "/admin/deployments");
     const client = new QueryClient();
@@ -33,6 +34,19 @@ describe("admin accessibility baseline", () => {
     expect(close).toHaveBeenCalledOnce();
   });
 
+  it("resets the personal appearance when the administrator logs out", async () => {
+    document.documentElement.setAttribute("data-appearance", "light");
+    vi.spyOn(api, "logout").mockResolvedValue(undefined);
+    const client = new QueryClient();
+    render(
+      <QueryClientProvider client={client}>
+        <Layout username="admin"><h1>Dashboard</h1></Layout>
+      </QueryClientProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /退出/ }));
+    await waitFor(() => expect(document.documentElement).toHaveAttribute("data-appearance", "dark"));
+  });
+
   it("closes overflow menus on outside interaction and Escape", () => {
     const { container } = render(<OverflowMenu label="更多操作"><button>删除</button></OverflowMenu>);
     const trigger = screen.getByLabelText("更多操作");
@@ -53,7 +67,7 @@ describe("admin accessibility baseline", () => {
     vi.spyOn(api, "systemStatus").mockResolvedValue({ build: { version: "dev", commit: "local", date: "" }, accounting_status: 0, draining: false, wal: {}, audit: {}, alerts: {}, usage_watermark: {} });
     vi.spyOn(api, "settings").mockResolvedValue({ data: { health_probe_interval_seconds: 30, revision: 1 }, etag: '"1"' });
     vi.spyOn(api, "uiSettings").mockResolvedValue({ data: { default_locale: "zh-CN", revision: 1 }, etag: '"1"' });
-    vi.spyOn(api, "preferences").mockResolvedValue({ data: { locale: "zh-CN", revision: 1 }, etag: '"1"' });
+    vi.spyOn(api, "preferences").mockResolvedValue({ data: { locale: "zh-CN", appearance: "dark", revision: 1 }, etag: '"1"' });
     vi.spyOn(api, "mfaStatus").mockResolvedValue({ enabled: false, policy: "optional", authenticators: [] });
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><Layout username="admin"><SettingsPage /></Layout></QueryClientProvider>);

@@ -9,6 +9,7 @@ import (
 type AdminUser struct {
 	Username          string               `json:"username"`
 	Locale            string               `json:"locale,omitempty"`
+	Appearance        string               `json:"appearance,omitempty"`
 	PasswordVersion   uint16               `json:"password_version"`
 	PasswordSalt      []byte               `json:"password_salt"`
 	PasswordHash      []byte               `json:"password_hash"`
@@ -44,6 +45,11 @@ func (u AdminUser) Validate() error {
 	}
 	if !IsSupportedLocalePreference(u.Locale) {
 		problems = append(problems, errors.New("admin locale preference is not supported"))
+	}
+	// Empty appearance is permitted for legacy records (read as dark); any
+	// stored non-empty value must be a supported appearance.
+	if u.Appearance != "" && !IsSupportedAppearance(u.Appearance) {
+		problems = append(problems, errors.New("admin appearance preference is not supported"))
 	}
 	if u.CreatedAt.IsZero() || u.UpdatedAt.IsZero() {
 		problems = append(problems, errors.New("admin timestamps are required"))

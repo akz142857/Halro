@@ -46,6 +46,32 @@ func testPolicy() domain.TokenGuardPolicy {
 	}
 }
 
+func TestAttemptCostRecheckDoesNotReacquireNonCostDimensions(t *testing.T) {
+	policy := domain.TokenGuardPolicy{
+		ID: "guard_cost", Name: "cost", Enabled: true, Action: "observe",
+		CostMicrosPerMinute: 100, Concurrency: 1, Revision: 1,
+	}
+	manager, err := New([]domain.TokenGuardPolicy{policy})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	decision, lease := manager.Acquire(Input{
+		PolicyID: policy.ID, ProjectID: "prj", KeyID: "key", EstimatedTokens: 10,
+		EstimatedCostMicrosUSD: 50, Now: now,
+	})
+	if !decision.Allowed || lease == nil || !manager.HasCostDimension(policy.ID) {
+		t.Fatalf("decision=%#v lease=%#v", decision, lease)
+	}
+	if decision := manager.RecheckCost(lease, 90, now.Add(time.Second)); !decision.Allowed {
+		t.Fatalf("safe recheck=%#v", decision)
+	}
+	if decision := manager.RecheckCost(lease, 101, now.Add(2*time.Second)); decision.Allowed || decision.Reason != "cost_per_minute" {
+		t.Fatalf("unsafe recheck=%#v", decision)
+	}
+	lease.Release()
+}
+
 func TestSingleViolationDoesNotBlockAndRepeatedViolationDoes(t *testing.T) {
 	manager, err := New([]domain.TokenGuardPolicy{testPolicy()})
 	if err != nil {

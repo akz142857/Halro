@@ -184,12 +184,21 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 	if rejectedEnabledDeployment.Code != http.StatusConflict {
 		t.Fatalf("enabled deployment create status=%d body=%s", rejectedEnabledDeployment.Code, rejectedEnabledDeployment.Body.String())
 	}
+	legacyPriceWrite := performAdminMutation(t, runtime, cookie, csrf,
+		http.MethodPost, "/admin/api/v1/deployments", "",
+		map[string]any{
+			"name": "Legacy price write", "provider_id": instance.ID, "provider_model": "gpt-test",
+			"input_micros_per_million": int64(1), "enabled": false,
+		},
+	)
+	if legacyPriceWrite.Code != http.StatusBadRequest {
+		t.Fatalf("legacy deployment price write status=%d body=%s", legacyPriceWrite.Code, legacyPriceWrite.Body.String())
+	}
 
 	deploymentResponse := performAdminMutation(t, runtime, cookie, csrf,
 		http.MethodPost, "/admin/api/v1/deployments", "",
 		map[string]any{
 			"name": "GPT test", "provider_id": instance.ID, "provider_model": "gpt-test",
-			"input_micros_per_million": int64(1_000_000), "output_micros_per_million": int64(2_000_000),
 			"max_concurrency": int64(2), "priority": 10, "weight": 1, "enabled": false,
 		},
 	)
@@ -211,11 +220,11 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 		deployment.CapabilityEvidence["chat"] != domain.EvidenceDeclared {
 		t.Fatalf("unexpected deployment profile: %#v", deployment)
 	}
+	createEffectiveMeteredPriceForTest(t, runtime, deployment.ID)
 	directEnable := performAdminMutation(t, runtime, cookie, csrf,
 		http.MethodPut, "/admin/api/v1/deployments/"+deployment.ID, `"1"`,
 		map[string]any{
 			"name": "GPT test", "provider_id": instance.ID, "provider_model": "gpt-test",
-			"input_micros_per_million": int64(1_000_000), "output_micros_per_million": int64(2_000_000),
 			"max_concurrency": int64(2), "priority": 10, "weight": 1, "enabled": true,
 		},
 	)
@@ -244,7 +253,6 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 		http.MethodPut, "/admin/api/v1/deployments/"+deployment.ID, `"`+strconv.FormatUint(testedDeployment.Revision, 10)+`"`,
 		map[string]any{
 			"name": "GPT test", "provider_id": instance.ID, "provider_model": "gpt-test",
-			"input_micros_per_million": int64(1_000_000), "output_micros_per_million": int64(2_000_000),
 			"max_concurrency": int64(2), "priority": 10, "weight": 1, "enabled": true,
 		},
 	)
@@ -423,7 +431,6 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 		http.MethodPut, "/admin/api/v1/deployments/"+deployment.ID, `"`+strconv.FormatUint(deployment.Revision, 10)+`"`,
 		map[string]any{
 			"name": "GPT test", "provider_id": instance.ID, "provider_model": "gpt-test",
-			"input_micros_per_million": int64(1_000_000), "output_micros_per_million": int64(2_000_000),
 			"max_concurrency": int64(2), "priority": 10, "weight": 1, "enabled": false,
 		},
 	)
@@ -865,6 +872,9 @@ func performAdminMutation(
 
 func enableStoredDeploymentForTest(t *testing.T, runtime *Runtime, deploymentID string) {
 	t.Helper()
+	if _, err := runtime.store.SelectDeploymentPriceVersion(context.Background(), deploymentID, time.Now().UTC()); err != nil {
+		createEffectiveFreePriceForTest(t, runtime, deploymentID)
+	}
 	deployment, err := runtime.store.GetDeployment(context.Background(), deploymentID)
 	if err != nil {
 		t.Fatal(err)
@@ -875,6 +885,43 @@ func enableStoredDeploymentForTest(t *testing.T, runtime *Runtime, deploymentID 
 		t.Fatal(err)
 	}
 	if err := runtime.reloadProviderRegistry(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func createEffectiveFreePriceForTest(t *testing.T, runtime *Runtime, deploymentID string) {
+	t.Helper()
+	now := time.Now().UTC().Add(-time.Second)
+	_, err := runtime.store.CreateDeploymentPriceVersion(context.Background(), domain.DeploymentPriceVersion{
+		ID: "price_free_" + deploymentID, DeploymentID: deploymentID,
+		BillingMode: domain.BillingModeFree, Currency: "USD", FormulaVersion: domain.PriceFormulaUSDTokensV1,
+		EffectiveFrom: now, CreatedBy: "test", CreatedAt: now,
+		Source: domain.PriceSource{
+			Type: domain.PriceSourceManual, Assurance: domain.PriceAssuranceAsserted, ReceivedAt: now,
+			ContentSHA256: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+			Reference:     "test fixture", AssertedWithoutArchive: true,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func createEffectiveMeteredPriceForTest(t *testing.T, runtime *Runtime, deploymentID string) {
+	t.Helper()
+	now := time.Now().UTC().Add(-time.Second)
+	_, err := runtime.store.CreateDeploymentPriceVersion(context.Background(), domain.DeploymentPriceVersion{
+		ID: "price_" + deploymentID, DeploymentID: deploymentID,
+		BillingMode: domain.BillingModeMetered, Currency: "USD", FormulaVersion: domain.PriceFormulaUSDTokensV1,
+		InputMicrosPerMillion: 1_000_000, OutputMicrosPerMillion: 2_000_000,
+		EffectiveFrom: now, CreatedBy: "test", CreatedAt: now,
+		Source: domain.PriceSource{
+			Type: domain.PriceSourceManual, Assurance: domain.PriceAssuranceAsserted, ReceivedAt: now,
+			ContentSHA256: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			Reference:     "test fixture", AssertedWithoutArchive: true,
+		},
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
 }

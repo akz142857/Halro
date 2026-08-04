@@ -319,7 +319,7 @@ func (r *Runtime) completeMFA(w http.ResponseWriter, req *http.Request, token, c
 		return
 	}
 	r.setAdminCookie(w, created.Token, created.Session.AbsoluteExpiresAt)
-	writeJSON(w, 200, map[string]any{"username": user.Username, "csrf_token": created.CSRFToken, "locale": domain.NormalizeLocalePreference(user.Locale), "absolute_expires_at": created.Session.AbsoluteExpiresAt, "idle_expires_at": created.Session.IdleExpiresAt, "recovery_codes_remaining": recoveryRemaining})
+	writeJSON(w, 200, map[string]any{"username": user.Username, "csrf_token": created.CSRFToken, "locale": domain.NormalizeLocalePreference(user.Locale), "appearance": domain.NormalizeAppearance(user.Appearance), "absolute_expires_at": created.Session.AbsoluteExpiresAt, "idle_expires_at": created.Session.IdleExpiresAt, "recovery_codes_remaining": recoveryRemaining})
 }
 
 func (r *Runtime) cancelPendingAdminMFAAuthenticator(w http.ResponseWriter, req *http.Request) {

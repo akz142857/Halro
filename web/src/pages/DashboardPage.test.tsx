@@ -36,10 +36,13 @@ describe("DashboardPage", () => {
     expect(walRow.querySelector(".status-dot")).toHaveClass("ok");
   });
 
-  it("treats a legacy null anomaly collection as empty", async () => {
-    const value = dashboard();
-    value.usage.recent_anomalies = null as unknown as Dashboard["usage"]["recent_anomalies"];
-    vi.spyOn(api, "dashboard").mockResolvedValue(value);
+  it("renders empty states when collection fields are null", async () => {
+    const empty = dashboard();
+    empty.usage.hourly = null as unknown as Dashboard["usage"]["hourly"];
+    empty.usage.recent_anomalies = null as unknown as Dashboard["usage"]["recent_anomalies"];
+    empty.governance.budget.items = null as unknown as Dashboard["governance"]["budget"]["items"];
+    empty.governance.capacity.items = null as unknown as Dashboard["governance"]["capacity"]["items"];
+    vi.spyOn(api, "dashboard").mockResolvedValue(empty);
     renderPage();
 
     expect(await screen.findByText("异常事件")).toBeInTheDocument();

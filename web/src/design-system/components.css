@@ -1,0 +1,13 @@
+/* Component tokens whose values intentionally do not follow the active theme. */
+:root {
+  --appearance-preview-dark-canvas: var(--p-ink-950);
+  --appearance-preview-dark-bar: var(--p-ink-850);
+  --appearance-preview-dark-border: var(--p-ink-700);
+  --appearance-preview-dark-surface: var(--p-ink-900);
+  --appearance-preview-dark-accent: var(--p-lime-400);
+  --appearance-preview-light-canvas: var(--p-paper-100);
+  --appearance-preview-light-bar: var(--p-white);
+  --appearance-preview-light-border: var(--p-paper-300);
+  --appearance-preview-light-surface: var(--p-paper-50);
+  --appearance-preview-light-accent: var(--p-lime-800);
+}

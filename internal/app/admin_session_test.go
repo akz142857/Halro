@@ -134,6 +134,14 @@ func TestAdminPasswordChangeRotatesEverySession(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer runtime.Close()
+	user, err := runtime.store.GetAdminUser(context.Background(), "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	user.Appearance = domain.AppearanceLight
+	if _, err := runtime.store.PutAdminUser(context.Background(), user, user.Revision); err != nil {
+		t.Fatal(err)
+	}
 	loginResponse := httptest.NewRecorder()
 	runtime.adminRouter().ServeHTTP(loginResponse, adminRequest(
 		t, http.MethodPost, "/admin/api/v1/session/login",
@@ -155,6 +163,9 @@ func TestAdminPasswordChangeRotatesEverySession(t *testing.T) {
 	runtime.adminRouter().ServeHTTP(changeResponse, change)
 	if changeResponse.Code != http.StatusOK {
 		t.Fatalf("password change status=%d body=%s", changeResponse.Code, changeResponse.Body.String())
+	}
+	if !jsonBodyContains(t, changeResponse, `"appearance":"light"`) {
+		t.Fatalf("password change did not preserve appearance: %s", changeResponse.Body.String())
 	}
 	newCookie := changeResponse.Result().Cookies()[0]
 	if newCookie.Value == oldCookie.Value {
@@ -183,6 +194,9 @@ func TestAdminPasswordChangeRotatesEverySession(t *testing.T) {
 	if newLoginResponse.Code != http.StatusOK {
 		t.Fatalf("new password login status=%d body=%s", newLoginResponse.Code, newLoginResponse.Body.String())
 	}
+	if !jsonBodyContains(t, newLoginResponse, `"appearance":"light"`) {
+		t.Fatalf("new login did not preserve appearance: %s", newLoginResponse.Body.String())
+	}
 }
 
 func TestAdminReadAPIUsesSecretSafeViews(t *testing.T) {
@@ -195,6 +209,7 @@ func TestAdminReadAPIUsesSecretSafeViews(t *testing.T) {
 		ProviderName: "OpenAI", ProviderType: domain.ProviderOpenAI,
 		ProviderBaseURL: "https://api.openai.com", ProviderModel: "gpt-test",
 		PublicModel: "chat", ProjectName: "Default",
+		BillingMode: domain.BillingModeFree,
 	}, providerSecret)
 	if err != nil {
 		t.Fatal(err)
