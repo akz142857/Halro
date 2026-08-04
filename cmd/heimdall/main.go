@@ -34,7 +34,7 @@ import (
 
 func main() {
 	logger := safelog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	if err := run(os.Args[1:], logger); err != nil {
+	if err := run(os.Args[1:], logger); err != nil && !errors.Is(err, flag.ErrHelp) {
 		logger.Error("command failed", "error", err)
 		os.Exit(1)
 	}

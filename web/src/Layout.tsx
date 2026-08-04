@@ -12,6 +12,7 @@ const navigation = [
   ["/admin/routes", "routes", "M5 5h6a4 4 0 0 1 4 4v10M11 19h8M16 16l3 3-3 3"],
   ["/admin/policies", "policies", "M12 3 5 6v5c0 4.8 2.9 8.2 7 10 4.1-1.8 7-5.2 7-10V6zM9 12l2 2 4-4"],
   ["/admin/projects", "projects", "M4 6h16v13H4zM8 6V4h8v2M8 11h8M8 15h5"],
+  ["/admin/developer", "developer", "M8 8 4 12l4 4M16 8l4 4-4 4M14 5l-4 14"],
   ["/admin/usage", "usage", "M4 19V9M10 19V5M16 19v-7M22 19H2"],
   ["/admin/operations", "operations", "M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"],
 	["/admin/master-key", "masterKey", "M7 10V7a5 5 0 0 1 10 0v3M5 10h14v11H5zM12 14v3"],

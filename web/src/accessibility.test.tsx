@@ -19,7 +19,7 @@ describe("admin accessibility baseline", () => {
     expect(screen.getByRole("link", { name: "跳到主要内容" })).toHaveAttribute("href", "#main-content");
     expect(screen.getByRole("navigation", { name: "主导航" })).toBeVisible();
     expect(Array.from(screen.getByRole("navigation", { name: "主导航" }).querySelectorAll("a")).map((link) => link.textContent)).toEqual([
-      "运行总览", "凭据与服务商", "模型部署", "模型路由", "安全策略", "项目与密钥", "用量与调用", "告警与审计", "根密钥状态", "设置与状态",
+      "运行总览", "凭据与服务商", "模型部署", "模型路由", "安全策略", "项目与密钥", "开发者工作台", "用量与调用", "告警与审计", "根密钥状态", "设置与状态",
     ]);
     expect(screen.getByRole("main")).toHaveAttribute("id", "main-content");
     expect(screen.getByRole("link", { name: "模型部署" })).toHaveAttribute("aria-current", "page");

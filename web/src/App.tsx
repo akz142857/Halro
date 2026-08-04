@@ -17,6 +17,7 @@ import { RoutesPage } from "./pages/RoutesPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { UsagePage } from "./pages/UsagePage";
 import { MasterKeyCustodyPage } from "./pages/MasterKeyCustodyPage";
+import { DeveloperPage } from "./pages/DeveloperPage";
 import { applyLocale, applyPreference, resolveLocale } from "./i18n";
 import { applyAppearance, normalizeAppearance, resetAppearance } from "./theme";
 
@@ -120,6 +121,7 @@ function Route({ path }: { path: string }) {
   const { t } = useTranslation();
   if (path === "/admin" || path === "/admin/") return <DashboardPage />;
   if (path.startsWith("/admin/projects")) return <ProjectsPage />;
+  if (path.startsWith("/admin/developer")) return <DeveloperPage />;
   if (path.startsWith("/admin/providers")) return <ProvidersPage />;
   if (path.startsWith("/admin/deployments")) return <DeploymentsPage />;
   if (path.startsWith("/admin/routes")) return <RoutesPage />;

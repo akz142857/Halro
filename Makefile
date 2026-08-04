@@ -2,6 +2,10 @@ CONFIG ?= config.yaml
 BACKUP_DIR ?= backups
 BACKUP_KEY_FILE ?= backup.key
 BACKUP_NAME ?=
+RESET_DATA_DIR ?= ./data
+RESET_MASTER_KEY_FILE ?= ./master.key
+
+.DEFAULT_GOAL := help
 
 GO_SOURCES := $(shell find cmd internal -type f -name '*.go')
 DEADMAN_SOURCES := $(shell find cmd/heimdall-deadman internal/deadman -type f -name '*.go')
@@ -10,12 +14,66 @@ WEB_SOURCES := $(shell find web/src web/scripts -type f) \
 WEB_DEPS_STAMP := web/node_modules/.heimdall-install-stamp
 WEB_BUILD_STAMP := web/node_modules/.heimdall-build-stamp
 
-.PHONY: setup init start dev build deadman frontend frontend-test backup test race vet observability-check check clean
+.PHONY: help init-help setup init reset start dev build deadman frontend frontend-test backup test race vet observability-check check clean
+
+help:
+	@echo "Heimdall Makefile commands:"
+	@echo "  help                 Show this help (default)"
+	@echo "  init-help            Show detailed help for Heimdall init"
+	@echo "  setup                Build Heimdall and dead-man"
+	@echo "  init                 Initialize Heimdall using CONFIG"
+	@echo "  reset                Reset data and Master Key (requires CONFIRM=RESET)"
+	@echo "  start                Build and start Heimdall using CONFIG"
+	@echo "  dev                  Build the frontend and start with go run"
+	@echo "  build                Build Heimdall and dead-man"
+	@echo "  deadman              Build only heimdall-deadman"
+	@echo "  frontend             Install dependencies and build the frontend"
+	@echo "  frontend-test        Run frontend tests"
+	@echo "  backup               Create an encrypted backup"
+	@echo "  test                 Run all Go tests"
+	@echo "  race                 Run all Go tests with the race detector"
+	@echo "  vet                  Run go vet"
+	@echo "  observability-check  Validate observability configuration"
+	@echo "  check                Run test, race, vet, frontend-test, and observability-check"
+	@echo "  clean                Remove binaries and frontend build stamps"
+	@echo ""
+	@echo "Variables:"
+	@echo "  CONFIG=$(CONFIG)"
+	@echo "  BACKUP_DIR=$(BACKUP_DIR)"
+	@echo "  BACKUP_KEY_FILE=$(BACKUP_KEY_FILE)"
+	@echo "  BACKUP_NAME=$(BACKUP_NAME)"
+	@echo "  RESET_DATA_DIR=$(RESET_DATA_DIR)"
+	@echo "  RESET_MASTER_KEY_FILE=$(RESET_MASTER_KEY_FILE)"
+
+init-help: bin/heimdall
+	@./bin/heimdall init --help
 
 setup: build
 
 init: bin/heimdall
 	./bin/heimdall init --config "$(CONFIG)"
+
+reset:
+	@confirm="$(CONFIRM)"; \
+	echo "This permanently resets the Heimdall system."; \
+	echo "Data directory: $(abspath $(RESET_DATA_DIR))"; \
+	echo "Master Key:    $(abspath $(RESET_MASTER_KEY_FILE))"; \
+	if [ -z "$$confirm" ] && [ -t 0 ]; then \
+		printf "Type RESET to continue: "; \
+		read -r confirm; \
+	fi; \
+	if [ "$$confirm" != "RESET" ]; then \
+		echo "Reset cancelled."; \
+		echo "For non-interactive use: make reset CONFIRM=RESET"; \
+		exit 2; \
+	fi
+	@test "$(abspath $(RESET_DATA_DIR))" != "/" && test "$(abspath $(RESET_MASTER_KEY_FILE))" != "/"
+	@test "$(abspath $(RESET_DATA_DIR))" != "$(abspath .)"
+	@test ! -e "$(RESET_DATA_DIR)/.heimdall.lock" || ! command -v lsof >/dev/null || ! lsof "$(RESET_DATA_DIR)/.heimdall.lock" >/dev/null 2>&1 || \
+		(echo "Refusing reset: Heimdall data directory is locked by a running process."; exit 1)
+	rm -rf -- "$(RESET_DATA_DIR)"
+	rm -f -- "$(RESET_MASTER_KEY_FILE)"
+	$(MAKE) init CONFIG="$(CONFIG)"
 
 start: build
 	./bin/heimdall start --config "$(CONFIG)"
