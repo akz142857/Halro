@@ -147,3 +147,18 @@ func TestDashboardBuildsTodayBreakdownsAndRecentAnomalies(t *testing.T) {
 		t.Fatalf("recent anomalies=%#v", dashboard.RecentAnomalies)
 	}
 }
+
+func TestDashboardEmptyCollectionsAreNonNil(t *testing.T) {
+	dashboard := NewAggregate().Dashboard(time.Now(), time.UTC)
+	if dashboard.Hourly == nil {
+		t.Fatal("hourly must be an empty array, not null")
+	}
+	if dashboard.RecentAnomalies == nil {
+		t.Fatal("recent anomalies must be an empty array, not null")
+	}
+	for _, dimension := range []string{"project", "provider", "requested_model", "provider_model"} {
+		if dashboard.Breakdowns[dimension] == nil {
+			t.Fatalf("%s breakdown must be an empty array, not null", dimension)
+		}
+	}
+}

@@ -126,7 +126,8 @@ func (a *Aggregate) Dashboard(now time.Time, location *time.Location) Dashboard 
 	since := now.Add(-7 * 24 * time.Hour).UTC().Truncate(time.Hour)
 	result := Dashboard{
 		Active: uint64(len(a.requests)), Watermark: a.watermark.Sequence,
-		Hourly: make([]Bucket, 0, 7*24),
+		Hourly:          make([]Bucket, 0, 7*24),
+		RecentAnomalies: make([]Anomaly, 0, 5),
 		Breakdowns: map[string][]Breakdown{
 			"project": {}, "provider": {}, "requested_model": {}, "provider_model": {},
 		},

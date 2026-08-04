@@ -35,6 +35,16 @@ describe("DashboardPage", () => {
     expect(alertRow.querySelector(".status-dot")).toHaveClass("ok");
     expect(walRow.querySelector(".status-dot")).toHaveClass("ok");
   });
+
+  it("treats a legacy null anomaly collection as empty", async () => {
+    const value = dashboard();
+    value.usage.recent_anomalies = null as unknown as Dashboard["usage"]["recent_anomalies"];
+    vi.spyOn(api, "dashboard").mockResolvedValue(value);
+    renderPage();
+
+    expect(await screen.findByText("异常事件")).toBeInTheDocument();
+    expect(screen.getByText("今天没有失败、重试或路由回退")).toBeInTheDocument();
+  });
 });
 
 function renderPage() {

@@ -23,6 +23,7 @@ export function DashboardPage() {
   if (query.isPending) return <Loading />;
   if (query.isError) return <ErrorState error={query.error} />;
   const dashboard = query.data;
+  const recentAnomalies = dashboard.usage.recent_anomalies ?? [];
   const today = dashboard.usage.today;
   const estimatedInputTokens = today.estimated_input_tokens ?? 0;
   const estimatedOutputTokens = today.estimated_output_tokens ?? 0;
@@ -79,7 +80,7 @@ export function DashboardPage() {
         </div>
         <GovernanceSignal label={t("dashboard.policyRejections")} value={compactNumber(rejectionTotal)} detail={t("dashboard.sinceStartup")} alert={rejectionTotal > 0} />
         <GovernanceSignal label={t("dashboard.budgetRisk")} value={String(dashboard.governance.budget.at_risk)} detail={t("dashboard.projectsAtRisk")} alert={dashboard.governance.budget.at_risk > 0} />
-        <GovernanceSignal label={t("dashboard.recentAnomalies")} value={String(dashboard.usage.recent_anomalies.length)} detail={t("dashboard.todayEvents")} alert={dashboard.usage.recent_anomalies.length > 0} />
+        <GovernanceSignal label={t("dashboard.recentAnomalies")} value={String(recentAnomalies.length)} detail={t("dashboard.todayEvents")} alert={recentAnomalies.length > 0} />
         <GovernanceSignal label={t("dashboard.capacityRisk")} value={String(dashboard.governance.capacity.at_risk)} detail={t("dashboard.resourcesAtRisk")} alert={dashboard.governance.capacity.at_risk > 0} />
       </section>
 
@@ -139,7 +140,7 @@ export function DashboardPage() {
           <header className="panel-header">
             <div><p className="eyebrow">{t("dashboard.anomalyChannel")}</p><h2>{t("dashboard.anomaliesAndGovernance")}</h2></div>
           </header>
-          <AnomalyList items={dashboard.usage.recent_anomalies} labels={dashboard.resource_labels} empty={t("dashboard.noAnomaliesToday")} />
+          <AnomalyList items={recentAnomalies} labels={dashboard.resource_labels} empty={t("dashboard.noAnomaliesToday")} />
         </article>
       </section>
 

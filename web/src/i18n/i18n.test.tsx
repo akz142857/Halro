@@ -24,14 +24,14 @@ describe("admin internationalization", () => {
         <Layout username="admin"><h1>content</h1></Layout>
       </QueryClientProvider>,
     );
-    expect(screen.getByRole("link", { name: "总览" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "运行总览" })).toBeVisible();
     expect(screen.getByRole("button", { name: "退出登录" })).toBeVisible();
     expect(screen.queryByRole("link", { name: "Overview" })).not.toBeInTheDocument();
 
     await i18n.changeLanguage("en-US");
     await waitFor(() => expect(screen.getByRole("link", { name: "Overview" })).toBeVisible());
     expect(screen.getByRole("button", { name: "Sign out" })).toBeVisible();
-    expect(screen.queryByRole("link", { name: "总览" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "运行总览" })).not.toBeInTheDocument();
     expect(document.documentElement).toHaveAttribute("lang", "en-US");
   });
 
