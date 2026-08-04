@@ -17,9 +17,80 @@ import (
 	"github.com/parquet-go/parquet-go"
 )
 
-const parquetSchemaVersion = 2
+const parquetSchemaVersion = 3
+const adjustmentParquetSchemaVersion = 2
+
+type parquetAdjustment struct {
+	SchemaVersion               int32  `parquet:"schema_version"`
+	EventID                     string `parquet:"event_id,dict"`
+	Sequence                    int64  `parquet:"sequence,delta"`
+	RequestID                   string `parquet:"request_id,dict"`
+	AttemptID                   string `parquet:"attempt_id,dict"`
+	ProjectID                   string `parquet:"project_id,dict"`
+	DeploymentID                string `parquet:"deployment_id,dict"`
+	ProviderID                  string `parquet:"provider_id,dict"`
+	Mode                        string `parquet:"mode,dict"`
+	AdjustmentSequence          int64  `parquet:"adjustment_sequence"`
+	IdempotencyKeyDigest        string `parquet:"idempotency_key_digest"`
+	BaseCostMicrosUSD           int64  `parquet:"base_cost_micros_usd"`
+	BaseCostKnown               bool   `parquet:"base_cost_known"`
+	NetCostBeforeMicrosUSD      int64  `parquet:"net_cost_before_micros_usd"`
+	DeltaMicrosUSD              int64  `parquet:"delta_micros_usd"`
+	NetCostAfterMicrosUSD       int64  `parquet:"net_cost_after_micros_usd"`
+	ServicePeriodID             string `parquet:"service_period_id,dict"`
+	OriginalCompletedAtMicros   int64  `parquet:"original_completed_at_utc,timestamp(microsecond)"`
+	PostedPeriodID              string `parquet:"posted_period_id,dict"`
+	PostedAtMicros              int64  `parquet:"posted_at_utc,timestamp(microsecond)"`
+	CorrectionPriceSnapshotJSON string `parquet:"correction_price_snapshot_json"`
+	ReasonCode                  string `parquet:"reason_code,dict"`
+	EvidenceDigest              string `parquet:"evidence_digest"`
+	CreatedBy                   string `parquet:"created_by,dict"`
+	Reason                      string `parquet:"reason"`
+	OriginalSettlementEventID   string `parquet:"original_settlement_event_id"`
+	OriginalSettlementDigest    string `parquet:"original_settlement_digest"`
+	AdjustmentRequestDigest     string `parquet:"adjustment_request_digest"`
+}
 
 type parquetAttempt struct {
+	SchemaVersion        int32  `parquet:"schema_version"`
+	EventID              string `parquet:"event_id,dict"`
+	RequestID            string `parquet:"request_id,dict"`
+	AttemptID            string `parquet:"attempt_id,dict"`
+	Sequence             int64  `parquet:"sequence,delta"`
+	AttemptNumber        int32  `parquet:"attempt_number"`
+	ProjectID            string `parquet:"project_id,dict"`
+	KeyID                string `parquet:"key_id,dict"`
+	RouteID              string `parquet:"route_id,dict"`
+	DeploymentID         string `parquet:"deployment_id,dict"`
+	ProviderID           string `parquet:"provider_id,dict"`
+	RequestedModel       string `parquet:"requested_model,dict"`
+	ProviderModel        string `parquet:"provider_model,dict"`
+	ProviderInputTokens  int64  `parquet:"provider_input_tokens"`
+	ProviderOutputTokens int64  `parquet:"provider_output_tokens"`
+	PreparedOutputTokens int64  `parquet:"prepared_output_tokens"`
+	CostMicrosUSD        int64  `parquet:"cost_micros_usd"`
+	CostKnown            bool   `parquet:"cost_known"`
+	PriceEvidenceStatus  string `parquet:"price_evidence_status,dict"`
+	CostValueStatus      string `parquet:"cost_value_status,dict"`
+	BillingMode          string `parquet:"billing_mode,dict"`
+	PriceSnapshotJSON    string `parquet:"price_snapshot_json"`
+	InputCostMicrosUSD   int64  `parquet:"input_cost_micros_usd"`
+	OutputCostMicrosUSD  int64  `parquet:"output_cost_micros_usd"`
+	FixedCostMicrosUSD   int64  `parquet:"fixed_cost_micros_usd"`
+	TokenUsageSource     string `parquet:"token_usage_source,dict"`
+	CostEstimated        bool   `parquet:"cost_estimated"`
+	TokensEstimated      bool   `parquet:"tokens_estimated"`
+	StartedAtMicros      int64  `parquet:"started_at_utc,timestamp(microsecond)"`
+	CompletedAtMicros    int64  `parquet:"completed_at_utc,timestamp(microsecond)"`
+	Status               string `parquet:"status,dict"`
+	ErrorClass           string `parquet:"error_class,dict"`
+	HTTPStatus           int32  `parquet:"http_status"`
+	LatencyMillis        int64  `parquet:"latency_millis"`
+	RetryCount           int32  `parquet:"retry_count"`
+	FallbackCount        int32  `parquet:"fallback_count"`
+}
+
+type parquetAttemptV2 struct {
 	SchemaVersion        int32  `parquet:"schema_version"`
 	EventID              string `parquet:"event_id,dict"`
 	RequestID            string `parquet:"request_id,dict"`
@@ -56,6 +127,7 @@ type Manifest struct {
 }
 
 type ManifestFile struct {
+	SchemaVersion int    `json:"schema_version,omitempty"`
 	Path          string `json:"path"`
 	Date          string `json:"date"`
 	SHA256        string `json:"sha256"`
@@ -65,6 +137,22 @@ type ManifestFile struct {
 	InputTokens   int64  `json:"input_tokens"`
 	OutputTokens  int64  `json:"output_tokens"`
 	CostMicrosUSD int64  `json:"cost_micros_usd"`
+}
+
+type AdjustmentManifest struct {
+	SchemaVersion int                      `json:"schema_version"`
+	LastSequence  uint64                   `json:"last_sequence"`
+	Files         []AdjustmentManifestFile `json:"files"`
+}
+
+type AdjustmentManifestFile struct {
+	Path           string `json:"path"`
+	Date           string `json:"date"`
+	SHA256         string `json:"sha256"`
+	MinSequence    uint64 `json:"min_sequence"`
+	MaxSequence    uint64 `json:"max_sequence"`
+	Records        int64  `json:"records"`
+	DeltaMicrosUSD int64  `json:"delta_micros_usd"`
 }
 
 type Exporter struct {
@@ -101,8 +189,15 @@ func (e *Exporter) Export(snapshot Snapshot) (Manifest, error) {
 	if manifestMissing {
 		manifest = Manifest{SchemaVersion: parquetSchemaVersion}
 	}
-	if manifest.SchemaVersion != parquetSchemaVersion {
+	if manifest.SchemaVersion != 2 && manifest.SchemaVersion != parquetSchemaVersion {
 		return Manifest{}, fmt.Errorf("usage manifest schema version %d is not supported", manifest.SchemaVersion)
+	}
+	manifestUpgraded := manifest.SchemaVersion == 2
+	if manifestUpgraded {
+		for index := range manifest.Files {
+			manifest.Files[index].SchemaVersion = 2
+		}
+		manifest.SchemaVersion = parquetSchemaVersion
 	}
 	pending := make([]AttemptEvent, 0)
 	for _, attempt := range snapshot.Attempts {
@@ -112,10 +207,13 @@ func (e *Exporter) Export(snapshot Snapshot) (Manifest, error) {
 	}
 	sort.Slice(pending, func(i, j int) bool { return pending[i].Sequence < pending[j].Sequence })
 	if len(pending) == 0 {
-		if manifestMissing {
+		if manifestMissing || manifestUpgraded {
 			if err := e.commitManifest(manifest); err != nil {
 				return Manifest{}, err
 			}
+		}
+		if err := e.exportAdjustments(snapshot.Adjustments); err != nil {
+			return Manifest{}, err
 		}
 		return manifest, nil
 	}
@@ -145,6 +243,70 @@ func (e *Exporter) Export(snapshot Snapshot) (Manifest, error) {
 	if err := e.commitManifest(manifest); err != nil {
 		return Manifest{}, err
 	}
+	if err := e.exportAdjustments(snapshot.Adjustments); err != nil {
+		return Manifest{}, err
+	}
+	return manifest, nil
+}
+
+func (e *Exporter) exportAdjustments(adjustments []CostAdjustmentEvent) error {
+	manifest, err := e.LoadAdjustmentManifest()
+	missing := errors.Is(err, os.ErrNotExist)
+	if err != nil && !missing {
+		return err
+	}
+	if missing {
+		manifest = AdjustmentManifest{SchemaVersion: adjustmentParquetSchemaVersion}
+	}
+	if manifest.SchemaVersion != adjustmentParquetSchemaVersion {
+		return fmt.Errorf("adjustment manifest schema version %d is not supported", manifest.SchemaVersion)
+	}
+	var pending []CostAdjustmentEvent
+	for _, adjustment := range adjustments {
+		if adjustment.Sequence > manifest.LastSequence {
+			pending = append(pending, adjustment)
+		}
+	}
+	sort.Slice(pending, func(i, j int) bool { return pending[i].Sequence < pending[j].Sequence })
+	if len(pending) == 0 {
+		if missing {
+			return e.commitAdjustmentManifest(manifest)
+		}
+		return nil
+	}
+	byDate := make(map[string][]CostAdjustmentEvent)
+	var dates []string
+	for _, adjustment := range pending {
+		date := adjustment.PostedAt.UTC().Format("2006-01-02")
+		if _, ok := byDate[date]; !ok {
+			dates = append(dates, date)
+		}
+		byDate[date] = append(byDate[date], adjustment)
+	}
+	sort.Strings(dates)
+	for _, date := range dates {
+		entry, err := e.publishAdjustmentPartition(date, byDate[date])
+		if err != nil {
+			return err
+		}
+		manifest.Files = append(manifest.Files, entry)
+		if entry.MaxSequence > manifest.LastSequence {
+			manifest.LastSequence = entry.MaxSequence
+		}
+	}
+	sort.Slice(manifest.Files, func(i, j int) bool { return manifest.Files[i].MinSequence < manifest.Files[j].MinSequence })
+	return e.commitAdjustmentManifest(manifest)
+}
+
+func (e *Exporter) LoadAdjustmentManifest() (AdjustmentManifest, error) {
+	payload, err := os.ReadFile(filepath.Join(e.root, "cost_adjustments", "manifest.json"))
+	if err != nil {
+		return AdjustmentManifest{}, err
+	}
+	var manifest AdjustmentManifest
+	if err := json.Unmarshal(payload, &manifest); err != nil {
+		return AdjustmentManifest{}, fmt.Errorf("decode adjustment manifest: %w", err)
+	}
 	return manifest, nil
 }
 
@@ -165,10 +327,11 @@ func (e *Exporter) Verify(snapshot *Snapshot) error {
 	if err != nil {
 		return err
 	}
-	if manifest.SchemaVersion != parquetSchemaVersion {
+	if manifest.SchemaVersion != 2 && manifest.SchemaVersion != parquetSchemaVersion {
 		return fmt.Errorf("usage manifest schema version %d is not supported", manifest.SchemaVersion)
 	}
 	seen := make(map[string]struct{})
+	canonicalRows := make(map[string]parquetAttempt)
 	var lastSequence uint64
 	var firstRetainedSequence uint64
 	for _, entry := range manifest.Files {
@@ -183,12 +346,26 @@ func (e *Exporter) Verify(snapshot *Snapshot) error {
 		if checksum != entry.SHA256 {
 			return fmt.Errorf("usage parquet checksum mismatch: %s", entry.Path)
 		}
-		rows, err := parquet.ReadFile[parquetAttempt](path)
-		if err != nil {
-			return fmt.Errorf("read usage parquet %s: %w", entry.Path, err)
+		entryVersion := entry.SchemaVersion
+		if entryVersion == 0 {
+			entryVersion = manifest.SchemaVersion
 		}
-		if err := verifyRows(rows, entry, seen); err != nil {
-			return fmt.Errorf("verify usage parquet %s: %w", entry.Path, err)
+		if entryVersion == 2 {
+			rows, readErr := parquet.ReadFile[parquetAttemptV2](path)
+			if readErr != nil {
+				return fmt.Errorf("read legacy usage parquet %s: %w", entry.Path, readErr)
+			}
+			if err := verifyRowsV2(rows, entry, seen); err != nil {
+				return fmt.Errorf("verify legacy usage parquet %s: %w", entry.Path, err)
+			}
+		} else {
+			rows, readErr := parquet.ReadFile[parquetAttempt](path)
+			if readErr != nil {
+				return fmt.Errorf("read usage parquet %s: %w", entry.Path, readErr)
+			}
+			if err := verifyRows(rows, entry, seen, canonicalRows); err != nil {
+				return fmt.Errorf("verify usage parquet %s: %w", entry.Path, err)
+			}
 		}
 		if entry.MaxSequence > lastSequence {
 			lastSequence = entry.MaxSequence
@@ -216,6 +393,75 @@ func (e *Exporter) Verify(snapshot *Snapshot) error {
 			if _, exists := seen[eventID]; !exists {
 				return fmt.Errorf("usage reconciliation missing event %s", eventID)
 			}
+			if row, exists := canonicalRows[eventID]; exists && row != toParquetAttempt(expected[eventID]) {
+				return fmt.Errorf("usage reconciliation content mismatch for event %s", eventID)
+			}
+		}
+	}
+	return e.verifyAdjustments(snapshot)
+}
+
+func (e *Exporter) verifyAdjustments(snapshot *Snapshot) error {
+	manifest, err := e.LoadAdjustmentManifest()
+	if errors.Is(err, os.ErrNotExist) && (snapshot == nil || len(snapshot.Adjustments) == 0) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if manifest.SchemaVersion != adjustmentParquetSchemaVersion {
+		return errors.New("unsupported adjustment manifest schema")
+	}
+	seen := make(map[string]parquetAdjustment)
+	for _, entry := range manifest.Files {
+		path, err := e.safeManifestPath(entry.Path)
+		if err != nil {
+			return err
+		}
+		checksum, err := fileSHA256(path)
+		if err != nil || checksum != entry.SHA256 {
+			return fmt.Errorf("adjustment parquet checksum mismatch: %s", entry.Path)
+		}
+		rows, err := parquet.ReadFile[parquetAdjustment](path)
+		if err != nil {
+			return err
+		}
+		if int64(len(rows)) != entry.Records || len(rows) == 0 {
+			return errors.New("adjustment record count mismatch")
+		}
+		var delta int64
+		for _, row := range rows {
+			if row.SchemaVersion != adjustmentParquetSchemaVersion || row.EventID == "" || row.Sequence <= 0 {
+				return errors.New("invalid adjustment row")
+			}
+			if _, ok := seen[row.EventID]; ok {
+				return errors.New("duplicate adjustment event")
+			}
+			seen[row.EventID] = row
+			if err := addInt64(&delta, row.DeltaMicrosUSD); err != nil {
+				return err
+			}
+		}
+		if delta != entry.DeltaMicrosUSD || uint64(rows[0].Sequence) != entry.MinSequence || uint64(rows[len(rows)-1].Sequence) != entry.MaxSequence {
+			return errors.New("adjustment partition summary mismatch")
+		}
+	}
+	if snapshot != nil {
+		expected := 0
+		for _, item := range snapshot.Adjustments {
+			if item.Sequence <= manifest.LastSequence {
+				expected++
+				row, ok := seen[item.EventID]
+				if !ok {
+					return fmt.Errorf("missing adjustment event %s", item.EventID)
+				}
+				if row != toParquetAdjustment(item) {
+					return fmt.Errorf("adjustment content mismatch for event %s", item.EventID)
+				}
+			}
+		}
+		if expected != len(seen) {
+			return errors.New("adjustment reconciliation mismatch")
 		}
 	}
 	return nil
@@ -235,7 +481,9 @@ func (e *Exporter) Reconcile(snapshot Snapshot) (ReconciliationReport, error) {
 	}
 	var firstRetained uint64
 	for _, entry := range manifest.Files {
-		report.ParquetRecords += entry.Records
+		if err := addInt64(&report.ParquetRecords, entry.Records); err != nil {
+			return report, err
+		}
 		if firstRetained == 0 || entry.MinSequence < firstRetained {
 			firstRetained = entry.MinSequence
 		}
@@ -255,7 +503,7 @@ func (e *Exporter) PruneBefore(cutoff time.Time) (RetentionReport, error) {
 	if err != nil {
 		return report, err
 	}
-	if manifest.SchemaVersion != parquetSchemaVersion {
+	if manifest.SchemaVersion != 2 && manifest.SchemaVersion != parquetSchemaVersion {
 		return report, fmt.Errorf("usage manifest schema version %d is not supported", manifest.SchemaVersion)
 	}
 	kept := make([]ManifestFile, 0, len(manifest.Files))
@@ -264,7 +512,9 @@ func (e *Exporter) PruneBefore(cutoff time.Time) (RetentionReport, error) {
 		if entry.Date < cutoffDate {
 			removed = append(removed, entry)
 			report.FilesRemoved++
-			report.RowsRemoved += entry.Records
+			if err := addInt64(&report.RowsRemoved, entry.Records); err != nil {
+				return report, err
+			}
 		} else {
 			kept = append(kept, entry)
 		}
@@ -307,14 +557,22 @@ func (e *Exporter) publishPartition(date string, attempts []AttemptEvent) (Manif
 	}
 	rows := make([]parquetAttempt, len(attempts))
 	entry := ManifestFile{
-		Date: date, MinSequence: attempts[0].Sequence,
+		SchemaVersion: parquetSchemaVersion, Date: date, MinSequence: attempts[0].Sequence,
 		MaxSequence: attempts[len(attempts)-1].Sequence, Records: int64(len(attempts)),
 	}
 	for index, attempt := range attempts {
 		rows[index] = toParquetAttempt(attempt)
-		entry.InputTokens += attempt.ProviderInputTokens
-		entry.OutputTokens += attempt.ProviderOutputTokens
-		entry.CostMicrosUSD += attempt.CostMicrosUSD
+		if err := addInt64(&entry.InputTokens, attempt.ProviderInputTokens); err != nil {
+			return ManifestFile{}, err
+		}
+		if err := addInt64(&entry.OutputTokens, attempt.ProviderOutputTokens); err != nil {
+			return ManifestFile{}, err
+		}
+		if cost, ok := originalAttemptCost(attempt); ok {
+			if err := addInt64(&entry.CostMicrosUSD, cost); err != nil {
+				return ManifestFile{}, err
+			}
+		}
 	}
 	relative := filepath.Join("date="+date,
 		fmt.Sprintf("usage-%020d-%020d.parquet", entry.MinSequence, entry.MaxSequence))
@@ -344,6 +602,133 @@ func (e *Exporter) publishPartition(date string, attempts []AttemptEvent) (Manif
 	}
 	entry.SHA256 = checksum
 	return entry, nil
+}
+
+func (e *Exporter) publishAdjustmentPartition(date string, adjustments []CostAdjustmentEvent) (AdjustmentManifestFile, error) {
+	if len(adjustments) == 0 {
+		return AdjustmentManifestFile{}, errors.New("cannot publish empty adjustment partition")
+	}
+	rows := make([]parquetAdjustment, len(adjustments))
+	entry := AdjustmentManifestFile{Date: date, MinSequence: adjustments[0].Sequence, MaxSequence: adjustments[len(adjustments)-1].Sequence, Records: int64(len(adjustments))}
+	for index, item := range adjustments {
+		rows[index] = toParquetAdjustment(item)
+		if err := addInt64(&entry.DeltaMicrosUSD, item.DeltaMicrosUSD); err != nil {
+			return AdjustmentManifestFile{}, err
+		}
+	}
+	relative := filepath.Join("cost_adjustments", "date="+date, fmt.Sprintf("adjustments-%020d-%020d.parquet", entry.MinSequence, entry.MaxSequence))
+	entry.Path = filepath.ToSlash(relative)
+	path := filepath.Join(e.root, relative)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return AdjustmentManifestFile{}, err
+	}
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		if err := writeAdjustmentParquetAtomic(path, rows); err != nil {
+			return AdjustmentManifestFile{}, err
+		}
+	} else if err != nil {
+		return AdjustmentManifestFile{}, err
+	} else {
+		existing, err := parquet.ReadFile[parquetAdjustment](path)
+		if err != nil {
+			return AdjustmentManifestFile{}, fmt.Errorf("read orphan adjustment parquet: %w", err)
+		}
+		if !sameAdjustmentRows(existing, rows) {
+			return AdjustmentManifestFile{}, fmt.Errorf("existing adjustment parquet conflicts with export: %s", relative)
+		}
+	}
+	checksum, err := fileSHA256(path)
+	if err != nil {
+		return AdjustmentManifestFile{}, err
+	}
+	entry.SHA256 = checksum
+	return entry, nil
+}
+
+func toParquetAdjustment(item CostAdjustmentEvent) parquetAdjustment {
+	var snapshotJSON string
+	if item.CorrectionPriceSnapshot != nil {
+		if encoded, err := json.Marshal(item.CorrectionPriceSnapshot); err == nil {
+			snapshotJSON = string(encoded)
+		}
+	}
+	return parquetAdjustment{SchemaVersion: adjustmentParquetSchemaVersion, EventID: item.EventID, Sequence: int64(item.Sequence), RequestID: item.RequestID, AttemptID: item.AttemptID, ProjectID: item.ProjectID,
+		DeploymentID: item.DeploymentID, ProviderID: item.ProviderID, Mode: string(item.Mode), AdjustmentSequence: int64(item.AdjustmentSequence), IdempotencyKeyDigest: item.IdempotencyKeyDigest,
+		BaseCostMicrosUSD: item.BaseCostMicrosUSD, BaseCostKnown: item.BaseCostKnown, NetCostBeforeMicrosUSD: item.NetCostBeforeMicrosUSD, DeltaMicrosUSD: item.DeltaMicrosUSD, NetCostAfterMicrosUSD: item.NetCostAfterMicrosUSD,
+		ServicePeriodID: item.ServicePeriodID, OriginalCompletedAtMicros: item.OriginalCompletedAt.UTC().UnixMicro(), PostedPeriodID: item.PostedPeriodID, PostedAtMicros: item.PostedAt.UTC().UnixMicro(),
+		CorrectionPriceSnapshotJSON: snapshotJSON, ReasonCode: item.ReasonCode, EvidenceDigest: item.EvidenceDigest, CreatedBy: item.CreatedBy,
+		Reason: item.Reason, OriginalSettlementEventID: item.OriginalSettlementEventID, OriginalSettlementDigest: item.OriginalSettlementDigest, AdjustmentRequestDigest: item.AdjustmentRequestDigest}
+}
+
+func writeAdjustmentParquetAtomic(path string, rows []parquetAdjustment) (err error) {
+	temp, err := os.CreateTemp(filepath.Dir(path), ".adjustments-*.parquet.tmp")
+	if err != nil {
+		return err
+	}
+	tempPath := temp.Name()
+	defer func() {
+		temp.Close()
+		if err != nil {
+			_ = os.Remove(tempPath)
+		}
+	}()
+	if err = temp.Chmod(0o600); err != nil {
+		return err
+	}
+	writer := parquet.NewGenericWriter[parquetAdjustment](temp)
+	if _, err = writer.Write(rows); err != nil {
+		_ = writer.Close()
+		return err
+	}
+	if err = writer.Close(); err != nil {
+		return err
+	}
+	if err = temp.Sync(); err != nil {
+		return err
+	}
+	if err = temp.Close(); err != nil {
+		return err
+	}
+	if err = os.Rename(tempPath, path); err != nil {
+		return err
+	}
+	return syncDirectory(filepath.Dir(path))
+}
+
+func (e *Exporter) commitAdjustmentManifest(manifest AdjustmentManifest) (err error) {
+	root := filepath.Join(e.root, "cost_adjustments")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return err
+	}
+	temp, err := os.CreateTemp(root, ".manifest-*.json.tmp")
+	if err != nil {
+		return err
+	}
+	tempPath := temp.Name()
+	defer func() {
+		temp.Close()
+		if err != nil {
+			_ = os.Remove(tempPath)
+		}
+	}()
+	if err = temp.Chmod(0o600); err != nil {
+		return err
+	}
+	encoder := json.NewEncoder(temp)
+	encoder.SetIndent("", "  ")
+	if err = encoder.Encode(manifest); err != nil {
+		return err
+	}
+	if err = temp.Sync(); err != nil {
+		return err
+	}
+	if err = temp.Close(); err != nil {
+		return err
+	}
+	if err = os.Rename(tempPath, filepath.Join(root, "manifest.json")); err != nil {
+		return err
+	}
+	return syncDirectory(root)
 }
 
 func writeParquetAtomic(path string, rows []parquetAttempt) (err error) {
@@ -431,7 +816,7 @@ func (e *Exporter) safeManifestPath(relative string) (string, error) {
 	return path, nil
 }
 
-func verifyRows(rows []parquetAttempt, entry ManifestFile, seen map[string]struct{}) error {
+func verifyRows(rows []parquetAttempt, entry ManifestFile, seen map[string]struct{}, canonical map[string]parquetAttempt) error {
 	if int64(len(rows)) != entry.Records || len(rows) == 0 {
 		return errors.New("record count mismatch")
 	}
@@ -444,9 +829,16 @@ func verifyRows(rows []parquetAttempt, entry ManifestFile, seen map[string]struc
 			return fmt.Errorf("duplicate event ID %s", row.EventID)
 		}
 		seen[row.EventID] = struct{}{}
-		inputTokens += row.ProviderInputTokens
-		outputTokens += row.ProviderOutputTokens
-		cost += row.CostMicrosUSD
+		canonical[row.EventID] = row
+		if err := addInt64(&inputTokens, row.ProviderInputTokens); err != nil {
+			return err
+		}
+		if err := addInt64(&outputTokens, row.ProviderOutputTokens); err != nil {
+			return err
+		}
+		if err := addInt64(&cost, row.CostMicrosUSD); err != nil {
+			return err
+		}
 	}
 	if uint64(rows[0].Sequence) != entry.MinSequence ||
 		uint64(rows[len(rows)-1].Sequence) != entry.MaxSequence ||
@@ -457,7 +849,53 @@ func verifyRows(rows []parquetAttempt, entry ManifestFile, seen map[string]struc
 	return nil
 }
 
+func verifyRowsV2(rows []parquetAttemptV2, entry ManifestFile, seen map[string]struct{}) error {
+	if int64(len(rows)) != entry.Records || len(rows) == 0 {
+		return errors.New("record count mismatch")
+	}
+	var inputTokens, outputTokens, cost int64
+	for _, row := range rows {
+		if row.SchemaVersion != 2 || row.Sequence <= 0 || row.EventID == "" {
+			return errors.New("invalid legacy row")
+		}
+		if _, exists := seen[row.EventID]; exists {
+			return fmt.Errorf("duplicate event ID %s", row.EventID)
+		}
+		seen[row.EventID] = struct{}{}
+		if err := addInt64(&inputTokens, row.ProviderInputTokens); err != nil {
+			return err
+		}
+		if err := addInt64(&outputTokens, row.ProviderOutputTokens); err != nil {
+			return err
+		}
+		if err := addInt64(&cost, row.CostMicrosUSD); err != nil {
+			return err
+		}
+	}
+	if uint64(rows[0].Sequence) != entry.MinSequence || uint64(rows[len(rows)-1].Sequence) != entry.MaxSequence || inputTokens != entry.InputTokens || outputTokens != entry.OutputTokens || cost != entry.CostMicrosUSD {
+		return errors.New("partition summary mismatch")
+	}
+	return nil
+}
+
 func toParquetAttempt(attempt AttemptEvent) parquetAttempt {
+	cost, costKnown := originalAttemptCost(attempt)
+	inputCost, outputCost, fixedCost := int64(0), int64(0), int64(0)
+	if attempt.InputCostMicrosUSD != nil {
+		inputCost = *attempt.InputCostMicrosUSD
+	}
+	if attempt.OutputCostMicrosUSD != nil {
+		outputCost = *attempt.OutputCostMicrosUSD
+	}
+	if attempt.FixedCostMicrosUSD != nil {
+		fixedCost = *attempt.FixedCostMicrosUSD
+	}
+	var snapshotJSON string
+	if attempt.PriceSnapshot != nil {
+		if encoded, err := json.Marshal(attempt.PriceSnapshot); err == nil {
+			snapshotJSON = string(encoded)
+		}
+	}
 	return parquetAttempt{
 		SchemaVersion: parquetSchemaVersion, EventID: attempt.EventID,
 		RequestID: attempt.RequestID, AttemptID: attempt.AttemptID,
@@ -468,7 +906,16 @@ func toParquetAttempt(attempt AttemptEvent) parquetAttempt {
 		ProviderModel: attempt.ProviderModel, ProviderInputTokens: attempt.ProviderInputTokens,
 		ProviderOutputTokens: attempt.ProviderOutputTokens,
 		PreparedOutputTokens: attempt.PreparedOutputTokens,
-		CostMicrosUSD:        attempt.CostMicrosUSD, CostEstimated: attempt.CostEstimated,
+		CostMicrosUSD:        cost, CostKnown: costKnown,
+		PriceEvidenceStatus: string(attempt.PriceEvidenceStatus), CostValueStatus: string(attempt.CostValueStatus),
+		BillingMode: func() string {
+			if attempt.PriceSnapshot != nil {
+				return string(attempt.PriceSnapshot.BillingMode)
+			}
+			return ""
+		}(),
+		PriceSnapshotJSON: snapshotJSON, InputCostMicrosUSD: inputCost, OutputCostMicrosUSD: outputCost, FixedCostMicrosUSD: fixedCost,
+		TokenUsageSource: string(attempt.TokenUsageSource), CostEstimated: attempt.CostEstimated,
 		TokensEstimated:   attempt.TokensEstimated,
 		StartedAtMicros:   attempt.StartedAt.UTC().UnixMicro(),
 		CompletedAtMicros: attempt.CompletedAt.UTC().UnixMicro(),
@@ -478,7 +925,29 @@ func toParquetAttempt(attempt AttemptEvent) parquetAttempt {
 	}
 }
 
+func originalAttemptCost(attempt AttemptEvent) (int64, bool) {
+	if attempt.OriginalCostMicrosUSD != nil {
+		return *attempt.OriginalCostMicrosUSD, true
+	}
+	if attempt.CostMicrosUSD != nil {
+		return *attempt.CostMicrosUSD, true
+	}
+	return 0, false
+}
+
 func sameRows(left, right []parquetAttempt) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func sameAdjustmentRows(left, right []parquetAdjustment) bool {
 	if len(left) != len(right) {
 		return false
 	}

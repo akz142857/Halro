@@ -192,6 +192,15 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		return fail(err)
 	}
 	defer clear(auditKey)
+	compatibilityGate, err := metadata.LedgerCompatibilityGate()
+	if err != nil || compatibilityGate.FeatureEpoch != 2 || compatibilityGate.MinimumReaderVersion != "v2" {
+		metadata.Close()
+		secretVault.Close()
+		if err == nil {
+			err = fmt.Errorf("unsupported Ledger compatibility gate: %#v", compatibilityGate)
+		}
+		return fail(err)
+	}
 	accountingStatus := ledger.NewStatus()
 	ledgerOptions := ledger.Options{
 		QueueCapacity: cfg.Usage.WALQueueCapacity,
@@ -258,6 +267,18 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		return fail(fmt.Errorf("create usage collector: %w", err))
 	}
 	accounting.AddObserver(usageCollector.Observe)
+	if err := metadata.RecoverDeploymentPricePins(ctx, ledgerState); err != nil {
+		ledgerLog.Close()
+		metadata.Close()
+		secretVault.Close()
+		return fail(fmt.Errorf("recover deployment price pins: %w", err))
+	}
+	if err := accounting.RecoverPendingLeases(ctx); err != nil {
+		ledgerLog.Close()
+		metadata.Close()
+		secretVault.Close()
+		return fail(fmt.Errorf("recover pending accounting leases: %w", err))
+	}
 	providerRegistry, err := loadProviderRegistry(ctx, cfg, metadata, secretVault)
 	if err != nil {
 		ledgerLog.Close()
@@ -294,18 +315,22 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		providerRegistry,
 		accounting,
 		gatewaycore.ServiceOptions{
-			MaxAttempts:                cfg.Gateway.MaxTotalAttempts,
-			MaxAttemptsPerTarget:       cfg.Retry.MaxAttemptsPerTarget,
-			RetryBaseDelay:             cfg.Retry.BaseDelay.Value(),
-			RetryMaxDelay:              cfg.Retry.MaxDelay.Value(),
-			RetryJitter:                cfg.Retry.Jitter,
-			CircuitFailureThreshold:    cfg.CircuitBreaker.ConsecutiveFailures,
-			CircuitOpenDuration:        cfg.CircuitBreaker.OpenDuration.Value(),
-			CircuitHalfOpenMaxRequests: cfg.CircuitBreaker.HalfOpenMaxRequests,
-			TokenGuard:                 tokenGuard,
-			Redactor:                   redactor,
-			Resources:                  metadata,
-			ResourceObjectDir:          filepath.Join(cfg.Storage.DataDir, "provider-objects"),
+			MaxAttempts:                   cfg.Gateway.MaxTotalAttempts,
+			MaxAttemptsPerTarget:          cfg.Retry.MaxAttemptsPerTarget,
+			RetryBaseDelay:                cfg.Retry.BaseDelay.Value(),
+			RetryMaxDelay:                 cfg.Retry.MaxDelay.Value(),
+			RetryJitter:                   cfg.Retry.Jitter,
+			CircuitFailureThreshold:       cfg.CircuitBreaker.ConsecutiveFailures,
+			CircuitOpenDuration:           cfg.CircuitBreaker.OpenDuration.Value(),
+			CircuitHalfOpenMaxRequests:    cfg.CircuitBreaker.HalfOpenMaxRequests,
+			TokenGuard:                    tokenGuard,
+			Redactor:                      redactor,
+			Resources:                     metadata,
+			ResourceObjectDir:             filepath.Join(cfg.Storage.DataDir, "provider-objects"),
+			Pricing:                       metadata,
+			PricingClockRollbackTolerance: cfg.Gateway.PricingClockRollbackTolerance.Value(),
+			PricingClockForwardTolerance:  cfg.Gateway.PricingClockForwardTolerance.Value(),
+			PricingUnknownPolicy:          cfg.Gateway.PricingUnknownPolicy,
 		},
 	)
 	if err != nil {
@@ -437,6 +462,24 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		providerRegistry.Close()
 		secretVault.Close()
 		return fail(fmt.Errorf("recover pending Admin MFA audit: %w", err))
+	}
+	if err := runtime.drainPricingAuditIntents(ctx); err != nil {
+		auditLog.Close()
+		alertDispatcher.Close()
+		ledgerLog.Close()
+		metadata.Close()
+		providerRegistry.Close()
+		secretVault.Close()
+		return fail(fmt.Errorf("recover pending pricing audit: %w", err))
+	}
+	if err := runtime.drainCostAdjustmentIntents(ctx); err != nil {
+		auditLog.Close()
+		alertDispatcher.Close()
+		ledgerLog.Close()
+		metadata.Close()
+		providerRegistry.Close()
+		secretVault.Close()
+		return fail(fmt.Errorf("recover pending cost adjustment: %w", err))
 	}
 	settings, err := metadata.RuntimeSettings()
 	if errors.Is(err, boltstore.ErrNotFound) {
@@ -895,6 +938,9 @@ func (r *Runtime) adminRouter() http.Handler {
 	router.With(r.requireAdmin).Get("/admin/api/v1/master-key/runbooks/recovery", r.adminMasterKeyRecoveryRunbook)
 	router.With(r.requireAdmin).Get("/admin/api/v1/usage", r.adminUsage)
 	router.With(r.requireAdmin).Get("/admin/api/v1/usage/requests/{requestID}", r.adminUsageRequest)
+	router.With(r.requireAdmin).Get("/admin/api/v1/usage/attempts/{attemptID}/cost-adjustments", r.adminUsageAttemptAdjustments)
+	router.With(r.requireAdminMutation).Post("/admin/api/v1/usage/attempts/{attemptID}/cost-adjustments/preview", r.previewAdminCostAdjustment)
+	router.With(r.requireAdminMutation).Post("/admin/api/v1/usage/attempts/{attemptID}/cost-adjustments", r.createAdminCostAdjustment)
 	router.With(r.requireAdmin).Get("/admin/api/v1/system/status", r.adminSystemStatus)
 	router.With(r.requireAdmin).Get("/admin/api/v1/settings", r.getAdminSettings)
 	router.With(r.requireAdminMutation).Put("/admin/api/v1/settings", r.updateAdminSettings)
@@ -931,6 +977,15 @@ func (r *Runtime) adminRouter() http.Handler {
 	router.With(r.requireAdminMutation).Put("/admin/api/v1/deployments/{id}", r.updateAdminDeployment)
 	router.With(r.requireAdminMutation).Delete("/admin/api/v1/deployments/{id}", r.deleteAdminDeployment)
 	router.With(r.requireAdminMutation).Post("/admin/api/v1/deployments/{id}/test", r.testAdminDeployment)
+	router.With(r.requireAdmin).Get("/admin/api/v1/deployments/{id}/prices", r.listAdminDeploymentPrices)
+	router.With(r.requireAdminMutation).Post("/admin/api/v1/deployments/{id}/prices", r.createAdminDeploymentPrice)
+	router.With(r.requireAdminMutation).Post("/admin/api/v1/deployments/{id}/prices/preview", r.previewAdminDeploymentPrice)
+	router.With(r.requireAdminMutation).Post("/admin/api/v1/deployments/{id}/prices/restore-confirm", r.confirmRestoredDeploymentPricing)
+	router.With(r.requireAdminMutation).Post("/admin/api/v1/deployments/{id}/prices/{priceID}/cancel", r.cancelAdminDeploymentPrice)
+	router.With(r.requireAdmin).Get("/admin/api/v1/deployments/{id}/price-proposals", r.listAdminDeploymentPriceProposals)
+	router.With(r.requireAdminMutation).Post("/admin/api/v1/deployments/{id}/price-proposals", r.createAdminDeploymentPriceProposal)
+	router.With(r.requireAdminMutation).Post("/admin/api/v1/deployments/{id}/price-proposals/{proposalID}/adopt", r.adoptAdminDeploymentPriceProposal)
+	router.With(r.requireAdminMutation).Post("/admin/api/v1/deployments/{id}/price-proposals/{proposalID}/reject", r.rejectAdminDeploymentPriceProposal)
 	router.With(r.requireAdmin).Get("/admin/api/v1/routes", r.listAdminRoutes)
 	router.With(r.requireAdminMutation).Post("/admin/api/v1/routes", r.createAdminRoute)
 	router.With(r.requireAdmin).Get("/admin/api/v1/routes/{id}", r.getAdminRoute)
@@ -1017,7 +1072,7 @@ func (r *Runtime) live(writer http.ResponseWriter, _ *http.Request) {
 	writeJSON(writer, http.StatusOK, map[string]string{"status": "live"})
 }
 
-func (r *Runtime) ready(writer http.ResponseWriter, _ *http.Request) {
+func (r *Runtime) ready(writer http.ResponseWriter, request *http.Request) {
 	if r.draining.Load() {
 		writeJSON(writer, http.StatusServiceUnavailable, map[string]string{
 			"status": "draining",
@@ -1028,6 +1083,12 @@ func (r *Runtime) ready(writer http.ResponseWriter, _ *http.Request) {
 		writeJSON(writer, http.StatusServiceUnavailable, map[string]any{
 			"status":     "not_ready",
 			"accounting": r.status.Load(),
+		})
+		return
+	}
+	if err := r.store.PricingReadiness(request.Context()); err != nil {
+		writeJSON(writer, http.StatusServiceUnavailable, map[string]any{
+			"status": "not_ready", "pricing": "quarantined",
 		})
 		return
 	}

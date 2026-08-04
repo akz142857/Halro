@@ -25,17 +25,21 @@ type AttemptPage struct {
 }
 
 type RequestDetail struct {
-	Summary  RequestSummary `json:"summary"`
-	Attempts []AttemptEvent `json:"attempts"`
+	Summary     RequestSummary        `json:"summary"`
+	Attempts    []AttemptEvent        `json:"attempts"`
+	Adjustments []CostAdjustmentEvent `json:"adjustments"`
 }
 
 type Dashboard struct {
-	Today           Bucket                 `json:"today"`
-	Hourly          []Bucket               `json:"hourly"`
-	Active          uint64                 `json:"active_requests"`
-	Watermark       uint64                 `json:"watermark_sequence"`
-	Breakdowns      map[string][]Breakdown `json:"breakdowns"`
-	RecentAnomalies []Anomaly              `json:"recent_anomalies"`
+	Today                          Bucket                 `json:"today"`
+	Hourly                         []Bucket               `json:"hourly"`
+	Active                         uint64                 `json:"active_requests"`
+	Watermark                      uint64                 `json:"watermark_sequence"`
+	Breakdowns                     map[string][]Breakdown `json:"breakdowns"`
+	RecentAnomalies                []Anomaly              `json:"recent_anomalies"`
+	ReportingBasis                 string                 `json:"reporting_basis"`
+	TodayPostedAdjustmentMicrosUSD int64                  `json:"today_posted_adjustment_micros_usd"`
+	HistoricalCostAdjusted         bool                   `json:"historical_cost_adjusted"`
 }
 
 type Breakdown struct {
@@ -45,6 +49,7 @@ type Breakdown struct {
 	OutputTokens        int64  `json:"output_tokens"`
 	CostMicrosUSD       int64  `json:"cost_micros_usd"`
 	EstimatedCostMicros int64  `json:"estimated_cost_micros_usd,omitempty"`
+	UnknownAttempts     int64  `json:"unknown_attempts"`
 	Errors              int64  `json:"errors"`
 }
 
@@ -91,6 +96,19 @@ func (a *Aggregate) QueryAttempts(query AttemptQuery) (AttemptPage, error) {
 	return page, nil
 }
 
+func addAdjustmentBreakdown(groups map[string]*Breakdown, key string, delta int64) {
+	if key == "" {
+		return
+	}
+	item := groups[key]
+	if item == nil {
+		item = &Breakdown{Key: key}
+		groups[key] = item
+	}
+	item.Calls++
+	item.CostMicrosUSD += delta
+}
+
 func (a *Aggregate) RequestDetail(requestID string) (RequestDetail, bool) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -115,10 +133,51 @@ func (a *Aggregate) RequestDetail(requestID string) (RequestDetail, bool) {
 			result.Attempts = append(result.Attempts, attempt)
 		}
 	}
+	for _, adjustment := range a.adjustments {
+		if adjustment.RequestID == requestID {
+			result.Adjustments = append(result.Adjustments, adjustment)
+		}
+	}
 	return result, true
 }
 
+func (a *Aggregate) AttemptAdjustments(attemptID string) []CostAdjustmentEvent {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	var result []CostAdjustmentEvent
+	for _, adjustment := range a.adjustments {
+		if adjustment.AttemptID == attemptID {
+			result = append(result, adjustment)
+		}
+	}
+	return result
+}
+
+func (a *Aggregate) PostedAdjustmentAbsoluteSince(projectID string, since time.Time) int64 {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	var total int64
+	for _, adjustment := range a.adjustments {
+		if adjustment.ProjectID != projectID || adjustment.PostedAt.Before(since) {
+			continue
+		}
+		delta := adjustment.DeltaMicrosUSD
+		if delta < 0 {
+			delta = -delta
+		}
+		if total > int64(^uint64(0)>>1)-delta {
+			return int64(^uint64(0) >> 1)
+		}
+		total += delta
+	}
+	return total
+}
+
 func (a *Aggregate) Dashboard(now time.Time, location *time.Location) Dashboard {
+	return a.DashboardForBasis(now, location, "service_period_restated")
+}
+
+func (a *Aggregate) DashboardForBasis(now time.Time, location *time.Location, reportingBasis string) Dashboard {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	now = now.In(location)
@@ -130,6 +189,7 @@ func (a *Aggregate) Dashboard(now time.Time, location *time.Location) Dashboard 
 		Breakdowns: map[string][]Breakdown{
 			"project": {}, "provider": {}, "requested_model": {}, "provider_model": {},
 		},
+		ReportingBasis: reportingBasis, HistoricalCostAdjusted: len(a.adjustments) > 0,
 	}
 	hourIndexes := make(map[int64]int, len(a.hourly))
 	for _, bucket := range a.hourly {
@@ -144,9 +204,34 @@ func (a *Aggregate) Dashboard(now time.Time, location *time.Location) Dashboard 
 			result.Today.InputTokens += bucket.InputTokens
 			result.Today.OutputTokens += bucket.OutputTokens
 			result.Today.CostMicrosUSD += bucket.CostMicrosUSD
+			result.Today.UnknownAttempts += bucket.UnknownAttempts
 			result.Today.Errors += bucket.Errors
 			result.Today.LatencyMillis += bucket.LatencyMillis
 		}
+	}
+	for _, bucket := range a.postedAdjustmentHourly {
+		localHour := bucket.Hour.In(location)
+		if localHour.Year() == todayYear && localHour.YearDay() == todayDay {
+			result.TodayPostedAdjustmentMicrosUSD += bucket.AdjustmentDeltaMicrosUSD
+		}
+	}
+	if reportingBasis == "adjustment_posted" {
+		result.Hourly = result.Hourly[:0]
+		result.Today = Bucket{}
+		for _, bucket := range a.postedAdjustmentHourly {
+			if !bucket.Hour.Before(since) {
+				copy := bucket
+				copy.CostMicrosUSD = copy.AdjustmentDeltaMicrosUSD
+				result.Hourly = append(result.Hourly, copy)
+			}
+			localHour := bucket.Hour.In(location)
+			if localHour.Year() == todayYear && localHour.YearDay() == todayDay {
+				result.Today.AdjustmentDeltaMicrosUSD += bucket.AdjustmentDeltaMicrosUSD
+				result.Today.CostMicrosUSD += bucket.AdjustmentDeltaMicrosUSD
+			}
+		}
+	} else if reportingBasis != "service_period_restated" {
+		result.ReportingBasis = "service_period_restated"
 	}
 	// Provider usage can be unavailable after an ambiguous failure. Such attempts
 	// are deliberately settled against a conservative token upper bound. Preserve
@@ -157,6 +242,9 @@ func (a *Aggregate) Dashboard(now time.Time, location *time.Location) Dashboard 
 	}
 	for index := len(a.attempts) - 1; index >= 0; index-- {
 		attempt := a.attempts[index]
+		if reportingBasis == "adjustment_posted" {
+			continue
+		}
 		hour := attempt.CompletedAt.UTC().Truncate(time.Hour)
 		if attempt.TokensEstimated {
 			if bucketIndex, ok := hourIndexes[hour.Unix()]; ok {
@@ -171,7 +259,9 @@ func (a *Aggregate) Dashboard(now time.Time, location *time.Location) Dashboard 
 				result.Today.EstimatedOutputTokens += attempt.ProviderOutputTokens
 			}
 			if attempt.CostEstimated {
-				result.Today.EstimatedCostMicrosUSD += attempt.CostMicrosUSD
+				if cost, ok := attempt.KnownCostMicrosUSD(); ok {
+					result.Today.EstimatedCostMicrosUSD += cost
+				}
 			}
 			addBreakdown(breakdowns["project"], attempt.ProjectID, attempt)
 			addBreakdown(breakdowns["provider"], attempt.ProviderID, attempt)
@@ -187,6 +277,16 @@ func (a *Aggregate) Dashboard(now time.Time, location *time.Location) Dashboard 
 					RetryCount: attempt.RetryCount, FallbackCount: attempt.FallbackCount,
 				})
 			}
+		}
+	}
+	if reportingBasis == "adjustment_posted" {
+		for _, adjustment := range a.adjustments {
+			local := adjustment.PostedAt.In(location)
+			if local.Year() != todayYear || local.YearDay() != todayDay {
+				continue
+			}
+			addAdjustmentBreakdown(breakdowns["project"], adjustment.ProjectID, adjustment.DeltaMicrosUSD)
+			addAdjustmentBreakdown(breakdowns["provider"], adjustment.ProviderID, adjustment.DeltaMicrosUSD)
 		}
 	}
 	for dimension, groups := range breakdowns {
@@ -208,9 +308,13 @@ func addBreakdown(groups map[string]*Breakdown, key string, attempt AttemptEvent
 	item.Calls++
 	item.InputTokens += attempt.ProviderInputTokens
 	item.OutputTokens += attempt.ProviderOutputTokens
-	item.CostMicrosUSD += attempt.CostMicrosUSD
-	if attempt.CostEstimated {
-		item.EstimatedCostMicros += attempt.CostMicrosUSD
+	if cost, ok := attempt.KnownCostMicrosUSD(); ok {
+		item.CostMicrosUSD += cost
+		if attempt.CostEstimated {
+			item.EstimatedCostMicros += cost
+		}
+	} else {
+		item.UnknownAttempts++
 	}
 	if attempt.Status != "success" {
 		item.Errors++

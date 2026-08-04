@@ -16,22 +16,19 @@ import (
 )
 
 type deploymentInput struct {
-	Name                   string                       `json:"name"`
-	ProviderID             string                       `json:"provider_id"`
-	ProviderModel          string                       `json:"provider_model"`
-	TargetKind             domain.DeploymentTargetKind  `json:"target_kind,omitempty"`
-	AccessSurface          domain.AccessSurface         `json:"access_surface,omitempty"`
-	ProfileID              domain.ProviderProfileID     `json:"profile_id,omitempty"`
-	BindingID              string                       `json:"binding_id,omitempty"`
-	Region                 string                       `json:"region"`
-	Capabilities           *domain.ProviderCapabilities `json:"capabilities,omitempty"`
-	InputMicrosPerMillion  int64                        `json:"input_micros_per_million"`
-	OutputMicrosPerMillion int64                        `json:"output_micros_per_million"`
-	FixedRequestMicrosUSD  int64                        `json:"fixed_request_micros_usd"`
-	MaxConcurrency         int64                        `json:"max_concurrency"`
-	Priority               int                          `json:"priority"`
-	Weight                 int                          `json:"weight"`
-	Enabled                bool                         `json:"enabled"`
+	Name           string                       `json:"name"`
+	ProviderID     string                       `json:"provider_id"`
+	ProviderModel  string                       `json:"provider_model"`
+	TargetKind     domain.DeploymentTargetKind  `json:"target_kind,omitempty"`
+	AccessSurface  domain.AccessSurface         `json:"access_surface,omitempty"`
+	ProfileID      domain.ProviderProfileID     `json:"profile_id,omitempty"`
+	BindingID      string                       `json:"binding_id,omitempty"`
+	Region         string                       `json:"region"`
+	Capabilities   *domain.ProviderCapabilities `json:"capabilities,omitempty"`
+	MaxConcurrency int64                        `json:"max_concurrency"`
+	Priority       int                          `json:"priority"`
+	Weight         int                          `json:"weight"`
+	Enabled        bool                         `json:"enabled"`
 }
 
 func (r *Runtime) createAdminDeployment(writer http.ResponseWriter, request *http.Request) {
@@ -122,10 +119,24 @@ func (r *Runtime) updateAdminDeployment(writer http.ResponseWriter, request *htt
 	deployment.LastTestLatencyMillis = current.LastTestLatencyMillis
 	deployment.LastTestErrorClass = current.LastTestErrorClass
 	deployment.LastTestRevision = current.LastTestRevision
+	// Legacy fields remain readable for migration compatibility, but price writes
+	// are exclusively handled by DeploymentPriceVersion endpoints.
+	deployment.InputMicrosPerMillion = current.InputMicrosPerMillion
+	deployment.OutputMicrosPerMillion = current.OutputMicrosPerMillion
+	deployment.FixedRequestMicrosUSD = current.FixedRequestMicrosUSD
 	if deployment.Enabled && !current.Enabled &&
 		(current.LastTestStatus != domain.DeploymentTestHealthy || current.LastTestRevision != current.Revision) {
 		writeJSON(writer, http.StatusConflict, map[string]string{"error": "deployment must pass a current validation test before enable"})
 		return
+	}
+	if deployment.Enabled {
+		if _, err := r.store.SelectDeploymentPriceVersion(request.Context(), deployment.ID, time.Now().UTC()); err != nil {
+			writeJSON(writer, http.StatusConflict, map[string]string{
+				"error": "deployment requires an effective versioned price before enable",
+				"code":  "deployment_price_unavailable",
+			})
+			return
+		}
 	}
 	if err := r.validateDeploymentCanDeactivate(request, deployment.ID, deployment.Enabled); err != nil {
 		writeJSON(writer, http.StatusConflict, map[string]string{"error": err.Error()})
@@ -332,12 +343,9 @@ func (r *Runtime) deploymentFromInput(request *http.Request, deploymentID string
 		ID: deploymentID, Name: strings.TrimSpace(input.Name), ProviderID: input.ProviderID,
 		ProviderModel: strings.TrimSpace(input.ProviderModel), TargetKind: targetKind, Capabilities: capabilities,
 		AccessSurface: binding.AccessSurface, ProfileID: binding.ProfileID, BindingID: binding.ID,
-		Region:                 region,
-		CapabilityEvidence:     evidence,
-		InputMicrosPerMillion:  input.InputMicrosPerMillion,
-		OutputMicrosPerMillion: input.OutputMicrosPerMillion,
-		FixedRequestMicrosUSD:  input.FixedRequestMicrosUSD,
-		MaxConcurrency:         input.MaxConcurrency, Priority: input.Priority, Weight: weight,
+		Region:             region,
+		CapabilityEvidence: evidence,
+		MaxConcurrency:     input.MaxConcurrency, Priority: input.Priority, Weight: weight,
 		Enabled: input.Enabled, CreatedAt: createdAt, UpdatedAt: updatedAt,
 	}
 	return deployment, deployment.Validate()

@@ -28,6 +28,8 @@ import (
 	"github.com/akz142857/Heimdall/internal/masterkey"
 	"github.com/akz142857/Heimdall/internal/metricsauth"
 	"github.com/akz142857/Heimdall/internal/safelog"
+	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
+	storelock "github.com/akz142857/Heimdall/internal/store/lock"
 )
 
 func main() {
@@ -54,9 +56,67 @@ const recoveryNextStepMessage = "Recovery Slot verified and audited; rewrap and 
 
 func run(arguments []string, logger *slog.Logger) error {
 	if len(arguments) == 0 {
-		return errors.New("usage: heimdall <start|init|bootstrap|admin|key|backup|restore|usage|audit|metrics|doctor|serve|healthcheck|config|version>")
+		return errors.New("usage: heimdall <start|init|bootstrap|admin|key|backup|restore|pricing|usage|audit|metrics|doctor|serve|healthcheck|config|version>")
 	}
 	switch arguments[0] {
+	case "pricing":
+		if len(arguments) < 2 || arguments[1] != "migrate" {
+			return errors.New("usage: heimdall pricing migrate --dry-run --report <path> | --resolution-file <path> --apply")
+		}
+		flags := flag.NewFlagSet("pricing migrate", flag.ContinueOnError)
+		configPath := flags.String("config", "config.yaml", "configuration file")
+		dryRun := flags.Bool("dry-run", false, "inspect migration readiness without writing")
+		reportPath := flags.String("report", "", "write the migration report as JSON")
+		resolutionPath := flags.String("resolution-file", "", "versioned JSON resolution file")
+		apply := flags.Bool("apply", false, "apply the migration from a staging copy")
+		if err := flags.Parse(arguments[2:]); err != nil {
+			return err
+		}
+		cfg, err := config.Load(*configPath, config.LoadOptions{})
+		if err != nil {
+			return err
+		}
+		metadataPath := filepath.Join(cfg.Storage.DataDir, cfg.Storage.MetadataFile)
+		offlineLock, err := storelock.Acquire(cfg.Storage.DataDir)
+		if err != nil {
+			return fmt.Errorf("pricing migration requires an offline data directory: %w", err)
+		}
+		defer offlineLock.Close()
+		if *dryRun {
+			if *apply || *resolutionPath != "" || *reportPath == "" {
+				return errors.New("dry-run requires --report and cannot be combined with --apply")
+			}
+			report, err := boltstore.DryRunPricingMigration(context.Background(), metadataPath)
+			if err != nil {
+				return err
+			}
+			payload, err := json.MarshalIndent(report, "", "  ")
+			if err != nil {
+				return err
+			}
+			if err := os.WriteFile(*reportPath, append(payload, '\n'), 0o600); err != nil {
+				return err
+			}
+			fmt.Fprintf(os.Stdout, "Pricing migration report written to %s; unresolved enabled deployments: %d\n", *reportPath, report.UnresolvedEnabled)
+			return nil
+		}
+		if !*apply || *resolutionPath == "" || *reportPath != "" {
+			return errors.New("apply requires --resolution-file and --apply")
+		}
+		payload, err := os.ReadFile(*resolutionPath)
+		if err != nil {
+			return err
+		}
+		var resolutions boltstore.PricingMigrationResolutionFile
+		if err := json.Unmarshal(payload, &resolutions); err != nil {
+			return fmt.Errorf("decode pricing migration resolution file: %w", err)
+		}
+		backupPath, err := boltstore.ApplyPricingMigrationDataDir(context.Background(), cfg.Storage.DataDir, cfg.Storage.MetadataFile, resolutions)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stdout, "Pricing migration applied; rollback metadata retained at %s\n", backupPath)
+		return nil
 	case "start":
 		flags := flag.NewFlagSet("start", flag.ContinueOnError)
 		configPath := flags.String("config", "config.yaml", "configuration file")
@@ -144,6 +204,7 @@ func run(arguments []string, logger *slog.Logger) error {
 		dailyBudget := flags.Int64("daily-budget-micros-usd", 0, "daily budget in micro-USD; zero is unlimited")
 		inputPrice := flags.Int64("input-micros-per-million", 0, "input price in micro-USD per million tokens")
 		outputPrice := flags.Int64("output-micros-per-million", 0, "output price in micro-USD per million tokens")
+		billingMode := flags.String("billing-mode", "", "billing mode: metered or free; required when both prices are zero")
 		if err := flags.Parse(arguments[1:]); err != nil {
 			return err
 		}
@@ -162,6 +223,7 @@ func run(arguments []string, logger *slog.Logger) error {
 			ProviderBaseURL: *providerBaseURL, ProviderAPIVersion: *providerAPIVersion,
 			ProviderModel: *providerModel, PublicModel: *publicModel,
 			ProjectName: *projectName, DailyBudgetMicrosUSD: *dailyBudget,
+			BillingMode:           domain.BillingMode(*billingMode),
 			InputMicrosPerMillion: *inputPrice, OutputMicrosPerMillion: *outputPrice,
 		}, secret)
 		if err != nil {

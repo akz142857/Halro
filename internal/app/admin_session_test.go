@@ -195,6 +195,7 @@ func TestAdminReadAPIUsesSecretSafeViews(t *testing.T) {
 		ProviderName: "OpenAI", ProviderType: domain.ProviderOpenAI,
 		ProviderBaseURL: "https://api.openai.com", ProviderModel: "gpt-test",
 		PublicModel: "chat", ProjectName: "Default",
+		BillingMode: domain.BillingModeFree,
 	}, providerSecret)
 	if err != nil {
 		t.Fatal(err)

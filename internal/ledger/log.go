@@ -17,13 +17,15 @@ import (
 )
 
 const (
-	frameMagic      = "HLDG"
-	frameVersion    = 1
-	frameHeaderSize = 24
-	maxPayloadSize  = 1 << 20
+	frameMagic          = "HLDG"
+	frameVersionLegacy  = 1
+	frameVersionCurrent = 2
+	frameHeaderSize     = 24
+	maxPayloadSize      = 1 << 20
 )
 
 var ErrCorrupt = errors.New("ledger is corrupt")
+var ErrUnsupportedVersion = errors.New("ledger version is unsupported")
 
 type Log struct {
 	mu             sync.Mutex
@@ -90,6 +92,17 @@ func Inspect(path string) (Watermark, bool, error) {
 	}
 	defer file.Close()
 	return scan(file, 0, 0, nil)
+}
+
+// InspectReplay verifies and visits the committed WAL prefix without opening
+// it for writes or repairing a partial tail.
+func InspectReplay(path string, visit func(Record) error) (Watermark, bool, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return Watermark{}, false, err
+	}
+	defer file.Close()
+	return scan(file, 0, 0, visit)
 }
 
 func OpenWithOptions(path string, status *Status, options Options) (*Log, error) {
@@ -353,7 +366,7 @@ func (l *Log) writeBatch(batch []appendRequest) {
 	var encoded bytes.Buffer
 	for index, request := range batch {
 		sequence++
-		frame := encodeFrame(sequence, request.event.Kind, request.payload)
+		frame := encodeFrameVersion(eventFrameVersion(request.event), sequence, request.event.Kind, request.payload)
 		if _, err := encoded.Write(frame); err != nil {
 			respondBatch(batch, nil, fmt.Errorf("encode ledger batch: %w", err))
 			return
@@ -391,9 +404,20 @@ func respondBatch(batch []appendRequest, watermarks []Watermark, err error) {
 }
 
 func encodeFrame(sequence uint64, kind EventKind, payload []byte) []byte {
+	return encodeFrameVersion(frameVersionLegacy, sequence, kind, payload)
+}
+
+func eventFrameVersion(event Event) byte {
+	if event.Kind == EventCostAdjusted || event.LeaseMode != "" || event.PriceSnapshot != nil {
+		return frameVersionCurrent
+	}
+	return frameVersionLegacy
+}
+
+func encodeFrameVersion(version byte, sequence uint64, kind EventKind, payload []byte) []byte {
 	frame := make([]byte, frameHeaderSize+len(payload))
 	copy(frame[:4], frameMagic)
-	frame[4] = frameVersion
+	frame[4] = version
 	frame[5] = byte(kind)
 	binary.BigEndian.PutUint64(frame[8:16], sequence)
 	binary.BigEndian.PutUint32(frame[16:20], uint32(len(payload)))
@@ -426,12 +450,16 @@ func scan(file io.ReadSeeker, fromOffset int64, initialSequence uint64, visit fu
 		if err != nil {
 			return Watermark{}, false, err
 		}
-		if string(header[:4]) != frameMagic || header[4] != frameVersion {
+		if string(header[:4]) != frameMagic {
 			return Watermark{}, false, fmt.Errorf("%w at offset %d: invalid frame header", ErrCorrupt, offset)
 		}
+		epoch := header[4]
+		if epoch != frameVersionLegacy && epoch != frameVersionCurrent {
+			return Watermark{}, false, fmt.Errorf("%w at offset %d: frame epoch %d", ErrUnsupportedVersion, offset, epoch)
+		}
 		kind := EventKind(header[5])
-		if !kind.Valid() {
-			return Watermark{}, false, fmt.Errorf("%w at offset %d: invalid event kind", ErrCorrupt, offset)
+		if !kind.Valid() || epoch == frameVersionLegacy && kind > EventRequestFinalized {
+			return Watermark{}, false, fmt.Errorf("%w at offset %d: event kind %d is not supported by epoch %d", ErrUnsupportedVersion, offset, kind, epoch)
 		}
 		sequence := binary.BigEndian.Uint64(header[8:16])
 		if sequence <= lastSequence {
@@ -461,9 +489,14 @@ func scan(file io.ReadSeeker, fromOffset int64, initialSequence uint64, visit fu
 		if event.Kind != kind {
 			return Watermark{}, false, fmt.Errorf("%w at offset %d: event kind mismatch", ErrCorrupt, offset)
 		}
+		if epoch == frameVersionCurrent {
+			if kind == EventReservationCreated && event.LeaseMode == "" || kind == EventAttemptSettled && event.LeaseMode == "" {
+				return Watermark{}, false, fmt.Errorf("%w at offset %d: v2 accounting event is missing its payload epoch fields", ErrCorrupt, offset)
+			}
+		}
 		nextOffset := offset + int64(frameHeaderSize) + int64(payloadLength)
 		if visit != nil {
-			if err := visit(Record{Sequence: sequence, Offset: nextOffset, Event: event}); err != nil {
+			if err := visit(Record{Sequence: sequence, Offset: nextOffset, Epoch: epoch, Event: event}); err != nil {
 				return Watermark{}, false, err
 			}
 		}

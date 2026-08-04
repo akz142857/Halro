@@ -63,6 +63,49 @@ For SDK examples and the complete Admin workflow, read the
 [中文使用手册](docs/user-guide.zh-CN.md). For deployment, upgrades, backup,
 recovery, and hardening, use the [Operator Guide](docs/operator-guide.md).
 
+## Data durability and encrypted backup
+
+Container or Pod replacement is safe only when the complete
+`storage.data_dir` remains on persistent storage. Heimdall is currently a
+single-writer service: Docker/Kubernetes deployments must run one instance,
+and Kubernetes must use `replicas: 1` with a `Recreate` strategy.
+
+File-mode `master.key` is not stored in the encrypted backup. Keep it outside
+the data directory and back it up independently from both the `.hmbk` archive
+and its dedicated 32-byte backup key. Never restore only `heimdall.db` or mix
+the database, Ledger, Audit, Usage, and Provider-object files from different
+snapshots.
+
+Backups are deliberately offline: stop Heimdall, create the archive, verify it,
+and regularly perform an isolated restore drill. For containers, mount the
+persistent parent directory and configure `storage.data_dir` as its child so
+restore can atomically rename the data directory on the same filesystem.
+
+With Heimdall stopped, the repository helper creates and immediately verifies
+an encrypted backup:
+
+```bash
+make backup
+```
+
+It defaults to `config.yaml`, `backups/`, and the git-ignored `backup.key`.
+Production operators should provide independent locations explicitly:
+
+```bash
+make backup \
+  CONFIG=/etc/heimdall/config.yaml \
+  BACKUP_DIR=/secure-backups \
+  BACKUP_KEY_FILE=/secure-secrets/heimdall-backup.key
+```
+
+The helper generates the Backup Key with mode `0600` when it is absent, runs
+offline `doctor`, creates the archive, and runs `backup verify`. Move or escrow
+the key independently; deleting it makes every archive encrypted with it
+unrecoverable.
+
+See [Encrypted backup and restore](docs/backup-restore.md) for Docker/Kubernetes
+layouts, upgrade sequencing, key custody, retention, and recovery commands.
+
 ## API status
 
 | API | Status | Notes |

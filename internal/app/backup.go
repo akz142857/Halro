@@ -112,13 +112,14 @@ func VerifyBackup(path string, backupKey []byte) (backup.Manifest, error) {
 }
 
 type RestoreResult struct {
-	BackupID        string `json:"backup_id"`
-	DataDir         string `json:"data_dir"`
-	PreviousDataDir string `json:"previous_data_dir"`
-	LedgerSequence  uint64 `json:"ledger_sequence"`
-	UnlockPath      string `json:"unlock_path"`
-	VaultVerified   bool   `json:"vault_verified"`
-	RecoveryAudited bool   `json:"recovery_audited"`
+	BackupID                   string `json:"backup_id"`
+	DataDir                    string `json:"data_dir"`
+	PreviousDataDir            string `json:"previous_data_dir"`
+	LedgerSequence             uint64 `json:"ledger_sequence"`
+	UnlockPath                 string `json:"unlock_path"`
+	VaultVerified              bool   `json:"vault_verified"`
+	RecoveryAudited            bool   `json:"recovery_audited"`
+	QuarantinedScheduledPrices int    `json:"quarantined_scheduled_prices"`
 }
 
 type RestoreOptions struct {
@@ -211,9 +212,10 @@ func restoreBackupWithFactory(
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("open staged metadata for authentication invalidation: %w", err)
 	}
+	quarantined, quarantineErr := stageStore.QuarantineRestoredScheduledPrices(ctx, manifest.CreatedAt.UTC(), time.Now().UTC())
 	invalidateErr := stageStore.InvalidateAdminAuthenticationForRestore(ctx)
 	closeErr := stageStore.Close()
-	if err := errors.Join(invalidateErr, closeErr); err != nil {
+	if err := errors.Join(quarantineErr, invalidateErr, closeErr); err != nil {
 		return RestoreResult{}, fmt.Errorf("invalidate restored admin authentication: %w", err)
 	}
 
@@ -264,6 +266,7 @@ func restoreBackupWithFactory(
 		BackupID: manifest.BackupID, DataDir: cfg.Storage.DataDir,
 		PreviousDataDir: previousDataDir, LedgerSequence: manifest.LedgerWatermark.Sequence,
 		UnlockPath: unlockPath, VaultVerified: true, RecoveryAudited: options.UseRecoverySlot,
+		QuarantinedScheduledPrices: quarantined,
 	}, nil
 }
 
@@ -275,11 +278,21 @@ func validateRestoreStage(
 	purpose masterkey.KeySlotPurpose,
 	factory kmsWrapperFactory,
 ) error {
+	legacyPricingState, legacyStateErr := boltstore.LegacyPricingBackupState(filepath.Join(stageData, cfg.Storage.MetadataFile))
 	metadata, err := boltstore.Open(filepath.Join(stageData, cfg.Storage.MetadataFile))
 	if err != nil {
 		return fmt.Errorf("open staged metadata: %w", err)
 	}
 	defer metadata.Close()
+	if manifest.FormatVersion >= 2 {
+		gate, gateErr := metadata.LedgerCompatibilityGate()
+		state, stateErr := metadata.PricingBackupState()
+		stateMatches := stateErr == nil && state.StateSHA256 == manifest.PricingStateSHA256 && state.PendingIntentSHA256 == manifest.PendingIntentSHA256 && state.PendingIntents == manifest.PendingIntents
+		legacyMatches := legacyStateErr == nil && legacyPricingState.StateSHA256 == manifest.PricingStateSHA256 && legacyPricingState.PendingIntentSHA256 == manifest.PendingIntentSHA256 && legacyPricingState.PendingIntents == manifest.PendingIntents
+		if gateErr != nil || gate.FeatureEpoch != manifest.LedgerFeatureEpoch || gate.MinimumReaderVersion != manifest.MinimumLedgerReaderVersion || (!stateMatches && !legacyMatches) {
+			return errors.New("staged pricing/accounting compatibility state does not match backup manifest")
+		}
+	}
 	var masterKey []byte
 	if cfg.Storage.MasterKey.Mode == config.MasterKeyModeKeySlots {
 		descriptor, descriptorErr := metadata.KeySlotDescriptor(ctx)
@@ -348,13 +361,22 @@ func validateRestoreStage(
 		return fmt.Errorf("open staged Ledger: %w", err)
 	}
 	aggregate := usage.NewAggregate()
-	watermark, replayErr := ledgerLog.Replay(ledger.Watermark{}, aggregate.Apply)
+	stagedLedgerState := ledger.NewState()
+	watermark, replayErr := ledgerLog.Replay(ledger.Watermark{}, func(record ledger.Record) error {
+		if err := stagedLedgerState.Apply(record); err != nil {
+			return err
+		}
+		return aggregate.Apply(record)
+	})
 	closeErr := ledgerLog.Close()
 	if err := errors.Join(replayErr, closeErr); err != nil {
 		return fmt.Errorf("replay staged Ledger: %w", err)
 	}
 	if watermark != manifest.LedgerWatermark {
 		return errors.New("staged Ledger watermark does not match backup manifest")
+	}
+	if err := metadata.ValidateDeploymentPriceReferences(stagedLedgerState); err != nil {
+		return fmt.Errorf("verify staged pricing references: %w", err)
 	}
 	exporter, err := usage.NewExporter(filepath.Join(stageData, "usage"))
 	if err != nil {
@@ -476,6 +498,10 @@ func createBackupSnapshotWithLedger(
 	if err != nil {
 		return backup.Manifest{}, err
 	}
+	pricingBackupState, err := metadata.PricingBackupState()
+	if err != nil {
+		return backup.Manifest{}, err
+	}
 	ledgerSnapshot := filepath.Join(staging, "ledger.wal")
 	ledgerWatermark, err := ledgerLog.Snapshot(ledgerSnapshot)
 	if err != nil {
@@ -486,13 +512,22 @@ func createBackupSnapshotWithLedger(
 		return backup.Manifest{}, err
 	}
 	ledgerAggregate := usage.NewAggregate()
-	replayedWatermark, replayErr := snapshotLog.Replay(ledger.Watermark{}, ledgerAggregate.Apply)
+	ledgerState := ledger.NewState()
+	replayedWatermark, replayErr := snapshotLog.Replay(ledger.Watermark{}, func(record ledger.Record) error {
+		if err := ledgerState.Apply(record); err != nil {
+			return err
+		}
+		return ledgerAggregate.Apply(record)
+	})
 	closeErr := snapshotLog.Close()
 	if err := errors.Join(replayErr, closeErr); err != nil {
 		return backup.Manifest{}, err
 	}
 	if replayedWatermark != ledgerWatermark {
 		return backup.Manifest{}, errors.New("ledger snapshot watermark changed during replay")
+	}
+	if err := metadata.ValidateDeploymentPriceReferences(ledgerState); err != nil {
+		return backup.Manifest{}, fmt.Errorf("validate pricing references before backup: %w", err)
 	}
 	checkpoint, checkpointPayload, err := metadata.UsageCheckpoint()
 	if errors.Is(err, boltstore.ErrNotFound) {
@@ -527,6 +562,7 @@ func createBackupSnapshotWithLedger(
 		descriptorDigest = hex.EncodeToString(digest[:])
 	}
 	var usageManifest *usage.Manifest
+	var adjustmentManifest *usage.AdjustmentManifest
 	exporter, err := usage.NewExporter(cfg.UsagePath())
 	if err != nil {
 		return backup.Manifest{}, err
@@ -537,6 +573,11 @@ func createBackupSnapshotWithLedger(
 		}
 		usageManifest = &loaded
 		usageManifestVersion = loaded.SchemaVersion
+		loadedAdjustments, adjustmentErr := exporter.LoadAdjustmentManifest()
+		if adjustmentErr != nil {
+			return backup.Manifest{}, fmt.Errorf("load adjustment manifest before backup: %w", adjustmentErr)
+		}
+		adjustmentManifest = &loadedAdjustments
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return backup.Manifest{}, err
 	}
@@ -546,27 +587,87 @@ func createBackupSnapshotWithLedger(
 		{ArchivePath: "data/ledger/ledger.wal", LocalPath: ledgerSnapshot},
 		{ArchivePath: "data/audit/audit.log", LocalPath: cfg.AuditPath()},
 	}
-	usageFiles, err := backupUsageFiles(cfg.UsagePath(), usageManifest)
+	usageFiles, err := backupUsageFiles(cfg.UsagePath(), usageManifest, adjustmentManifest)
 	if err != nil {
 		return backup.Manifest{}, err
 	}
 	files = append(files, usageFiles...)
+	objectFiles, err := backupProviderObjectFiles(ctx, metadata, filepath.Join(cfg.Storage.DataDir, "provider-objects"))
+	if err != nil {
+		return backup.Manifest{}, err
+	}
+	files = append(files, objectFiles...)
 	return backup.Create(backup.CreateOptions{
 		OutputPath: outputPath, BackupKey: backupKey, Files: files,
 		Metadata: metadataInfo, LedgerWatermark: ledgerWatermark,
 		CheckpointWatermark: checkpoint, UsageManifestVersion: usageManifestVersion,
+		AdjustmentManifestVersion: func() int {
+			if adjustmentManifest != nil {
+				return adjustmentManifest.SchemaVersion
+			}
+			return 0
+		}(),
+		AdjustmentManifestWatermark: func() uint64 {
+			if adjustmentManifest != nil {
+				return adjustmentManifest.LastSequence
+			}
+			return 0
+		}(),
+		LedgerFeatureEpoch: metadataInfo.LedgerFeatureEpoch, MinimumLedgerReaderVersion: metadataInfo.MinimumLedgerReaderVersion,
+		PricingStateSHA256: pricingBackupState.StateSHA256, PendingIntentSHA256: pricingBackupState.PendingIntentSHA256, PendingIntents: pricingBackupState.PendingIntents,
 		MasterKeyFingerprint: masterFingerprint, Build: buildinfo.Current(),
 		KeySlotDescriptorSHA256: descriptorDigest,
 	})
 }
 
-func backupUsageFiles(root string, manifest *usage.Manifest) ([]backup.SourceFile, error) {
+func backupProviderObjectFiles(ctx context.Context, metadata *boltstore.Store, root string) ([]backup.SourceFile, error) {
+	resources, err := metadata.ListProviderResources(ctx)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]struct{}, len(resources))
+	files := make([]backup.SourceFile, 0, len(resources))
+	for _, resource := range resources {
+		if resource.ObjectPath == "" {
+			continue
+		}
+		if filepath.IsAbs(resource.ObjectPath) || filepath.Base(resource.ObjectPath) != resource.ObjectPath ||
+			filepath.Clean(resource.ObjectPath) != resource.ObjectPath {
+			return nil, fmt.Errorf("provider resource %q has an unsafe object path", resource.ID)
+		}
+		if _, exists := seen[resource.ObjectPath]; exists {
+			continue
+		}
+		localPath := filepath.Join(root, resource.ObjectPath)
+		info, err := os.Lstat(localPath)
+		if err != nil {
+			return nil, fmt.Errorf("inspect provider resource object %q: %w", resource.ID, err)
+		}
+		if !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("provider resource object %q is not a regular file", resource.ID)
+		}
+		seen[resource.ObjectPath] = struct{}{}
+		files = append(files, backup.SourceFile{
+			ArchivePath: "data/provider-objects/" + filepath.ToSlash(resource.ObjectPath),
+			LocalPath:   localPath,
+		})
+	}
+	return files, nil
+}
+
+func backupUsageFiles(root string, manifest *usage.Manifest, adjustments *usage.AdjustmentManifest) ([]backup.SourceFile, error) {
 	if manifest == nil {
 		return nil, nil
 	}
 	relativePaths := []string{"manifest.json"}
 	for _, entry := range manifest.Files {
 		relativePaths = append(relativePaths, entry.Path)
+	}
+	if adjustments != nil {
+		relativePaths = append(relativePaths, "cost_adjustments/manifest.json")
+		for _, entry := range adjustments.Files {
+			relativePaths = append(relativePaths, entry.Path)
+		}
 	}
 	files := make([]backup.SourceFile, 0, len(relativePaths))
 	for _, relative := range relativePaths {

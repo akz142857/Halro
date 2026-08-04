@@ -205,6 +205,7 @@ func kmsBackupFixture(t *testing.T) (config.Config, string, []byte, backuppkg.Ma
 	if _, err := Bootstrap(context.Background(), cfg, BootstrapOptions{
 		ProviderName: "OpenAI", ProviderType: domain.ProviderOpenAI, ProviderBaseURL: "https://api.openai.com",
 		ProviderModel: "gpt-test", PublicModel: "chat", ProjectName: "Backup",
+		BillingMode: domain.BillingModeFree,
 	}, []byte("kms-backup-provider-secret")); err != nil {
 		t.Fatal(err)
 	}
@@ -237,6 +238,40 @@ func TestOfflineEncryptedBackupCapturesConsistentManifestAndAudit(t *testing.T) 
 	if err := Initialize(cfg); err != nil {
 		t.Fatal(err)
 	}
+	bootstrap, err := Bootstrap(context.Background(), cfg, BootstrapOptions{
+		ProviderName: "OpenAI", ProviderType: domain.ProviderOpenAI,
+		ProviderBaseURL: "https://api.openai.com", ProviderModel: "gpt-test",
+		PublicModel: "chat", ProjectName: "Backup", BillingMode: domain.BillingModeFree,
+	}, []byte("provider-secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const objectName = "file_backup.object"
+	const objectCanary = "provider-object-backup-canary"
+	objectDir := filepath.Join(cfg.Storage.DataDir, "provider-objects")
+	if err := os.MkdirAll(objectDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(objectDir, objectName), []byte(objectCanary), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := boltstore.Open(cfg.MetadataPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, _ := domain.DefaultProviderProfile(domain.ProviderOpenAI)
+	now := time.Now().UTC()
+	_, putErr := store.PutProviderResource(context.Background(), domain.ProviderResource{
+		ID: "file_backup", Kind: domain.ResourceFile, ProjectID: bootstrap.ProjectID,
+		ProviderID: bootstrap.ProviderID, DeploymentID: bootstrap.DeploymentID,
+		PublicModel: "chat", ProfileID: profile.ProfileID, ObjectPath: objectName,
+		CreationStatus: "completed", Status: "uploaded", CreatedAt: now,
+		UpdatedAt: now, ExpiresAt: now.Add(time.Hour),
+	}, 0)
+	closeErr := store.Close()
+	if err := errors.Join(putErr, closeErr); err != nil {
+		t.Fatal(err)
+	}
 	root := filepath.Dir(cfg.Storage.DataDir)
 	configPath := filepath.Join(root, "config.yaml")
 	const configCanary = "backup-config-canary"
@@ -267,10 +302,24 @@ func TestOfflineEncryptedBackupCapturesConsistentManifestAndAudit(t *testing.T) 
 		verified.MasterKeyFingerprint == "" {
 		t.Fatalf("manifest=%#v", verified)
 	}
+	foundObject := false
 	for _, file := range verified.Files {
 		if file.Path == "data/usage/orphan.tmp" {
 			t.Fatal("uncommitted usage orphan was included in backup")
 		}
+		if file.Path == "data/provider-objects/"+objectName {
+			foundObject = true
+		}
+	}
+	if !foundObject {
+		t.Fatal("referenced provider object was omitted from backup")
+	}
+	extracted := filepath.Join(root, "extracted-backup")
+	if _, err := backuppkg.Extract(output, key, extracted); err != nil {
+		t.Fatal(err)
+	}
+	if payload, err := os.ReadFile(filepath.Join(extracted, "data", "provider-objects", objectName)); err != nil || string(payload) != objectCanary {
+		t.Fatalf("restored provider object=%q err=%v", payload, err)
 	}
 	encrypted, err := os.ReadFile(output)
 	if err != nil {
@@ -278,6 +327,9 @@ func TestOfflineEncryptedBackupCapturesConsistentManifestAndAudit(t *testing.T) 
 	}
 	if bytes.Contains(encrypted, []byte(configCanary)) {
 		t.Fatal("backup leaked config plaintext")
+	}
+	if bytes.Contains(encrypted, []byte(objectCanary)) {
+		t.Fatal("backup leaked provider object plaintext")
 	}
 	masterKey, err := os.ReadFile(cfg.Storage.MasterKey.File)
 	if err != nil {
@@ -320,6 +372,50 @@ func TestOfflineEncryptedBackupCapturesConsistentManifestAndAudit(t *testing.T) 
 	}
 	if actions["requested"] != 1 || actions["success"] != 1 {
 		t.Fatalf("backup audit outcomes=%#v", actions)
+	}
+}
+
+func TestBackupRejectsMissingReferencedProviderObject(t *testing.T) {
+	cfg := testConfig(t)
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	bootstrap, err := Bootstrap(context.Background(), cfg, BootstrapOptions{
+		ProviderName: "OpenAI", ProviderType: domain.ProviderOpenAI,
+		ProviderBaseURL: "https://api.openai.com", ProviderModel: "gpt-test",
+		PublicModel: "chat", ProjectName: "Backup", BillingMode: domain.BillingModeFree,
+	}, []byte("provider-secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := boltstore.Open(cfg.MetadataPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, _ := domain.DefaultProviderProfile(domain.ProviderOpenAI)
+	now := time.Now().UTC()
+	_, putErr := store.PutProviderResource(context.Background(), domain.ProviderResource{
+		ID: "file_missing", Kind: domain.ResourceFile, ProjectID: bootstrap.ProjectID,
+		ProviderID: bootstrap.ProviderID, DeploymentID: bootstrap.DeploymentID,
+		PublicModel: "chat", ProfileID: profile.ProfileID, ObjectPath: "file_missing.object",
+		CreationStatus: "completed", Status: "uploaded", CreatedAt: now,
+		UpdatedAt: now, ExpiresAt: now.Add(time.Hour),
+	}, 0)
+	closeErr := store.Close()
+	if err := errors.Join(putErr, closeErr); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Dir(cfg.Storage.DataDir)
+	configPath := filepath.Join(root, "config.yaml")
+	if err := os.WriteFile(configPath, []byte("version: 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(root, "incomplete.hmbk")
+	if _, err := CreateBackup(context.Background(), cfg, configPath, output, bytes.Repeat([]byte{0x61}, 32)); err == nil {
+		t.Fatal("backup accepted a missing referenced provider object")
+	}
+	if _, err := os.Stat(output); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("incomplete backup was published: %v", err)
 	}
 }
 

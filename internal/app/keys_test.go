@@ -19,6 +19,7 @@ func TestCreateAndDisableProjectKeyOffline(t *testing.T) {
 		ProviderName: "OpenAI", ProviderType: domain.ProviderOpenAI,
 		ProviderBaseURL: "https://api.openai.com", ProviderModel: "gpt-test",
 		PublicModel: "chat", ProjectName: "Default",
+		BillingMode: domain.BillingModeFree,
 	}, []byte("provider-key"))
 	if err != nil {
 		t.Fatal(err)

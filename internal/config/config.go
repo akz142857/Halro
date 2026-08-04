@@ -92,22 +92,28 @@ type Usage struct {
 }
 
 type Admin struct {
-	SessionTTL     Duration `yaml:"session_ttl"`
-	IdleTimeout    Duration `yaml:"idle_timeout"`
-	LoginRPM       int      `yaml:"login_rpm"`
-	ExternalOrigin string   `yaml:"external_origin"`
-	MFAPolicy      string   `yaml:"mfa_policy"`
+	SessionTTL                        Duration `yaml:"session_ttl"`
+	IdleTimeout                       Duration `yaml:"idle_timeout"`
+	LoginRPM                          int      `yaml:"login_rpm"`
+	ExternalOrigin                    string   `yaml:"external_origin"`
+	MFAPolicy                         string   `yaml:"mfa_policy"`
+	AdjustmentSoftLimitMicrosUSD      int64    `yaml:"adjustment_soft_limit_micros_usd"`
+	AdjustmentHardLimitMicrosUSD      int64    `yaml:"adjustment_hard_limit_micros_usd"`
+	AdjustmentDailyHardLimitMicrosUSD int64    `yaml:"adjustment_daily_hard_limit_micros_usd"`
 }
 
 type Gateway struct {
-	RouteTotalTimeout            Duration `yaml:"route_total_timeout"`
-	AttemptConnectTimeout        Duration `yaml:"attempt_connect_timeout"`
-	AttemptResponseHeaderTimeout Duration `yaml:"attempt_response_header_timeout"`
-	StreamIdleTimeout            Duration `yaml:"stream_idle_timeout"`
-	DownstreamWriteTimeout       Duration `yaml:"downstream_write_timeout"`
-	StreamMaxDuration            Duration `yaml:"stream_max_duration"`
-	MaxTotalAttempts             int      `yaml:"max_total_attempts"`
-	HealthProbeInterval          Duration `yaml:"health_probe_interval"`
+	RouteTotalTimeout             Duration `yaml:"route_total_timeout"`
+	AttemptConnectTimeout         Duration `yaml:"attempt_connect_timeout"`
+	AttemptResponseHeaderTimeout  Duration `yaml:"attempt_response_header_timeout"`
+	StreamIdleTimeout             Duration `yaml:"stream_idle_timeout"`
+	DownstreamWriteTimeout        Duration `yaml:"downstream_write_timeout"`
+	StreamMaxDuration             Duration `yaml:"stream_max_duration"`
+	MaxTotalAttempts              int      `yaml:"max_total_attempts"`
+	HealthProbeInterval           Duration `yaml:"health_probe_interval"`
+	PricingClockRollbackTolerance Duration `yaml:"pricing_clock_rollback_tolerance"`
+	PricingClockForwardTolerance  Duration `yaml:"pricing_clock_forward_tolerance"`
+	PricingUnknownPolicy          string   `yaml:"pricing_unknown_policy"`
 }
 
 type Retry struct {
@@ -348,6 +354,15 @@ func (c *Config) Normalize() error {
 	if c.Admin.MFAPolicy == "" {
 		c.Admin.MFAPolicy = "optional"
 	}
+	if c.Admin.AdjustmentSoftLimitMicrosUSD == 0 {
+		c.Admin.AdjustmentSoftLimitMicrosUSD = 10_000_000
+	}
+	if c.Admin.AdjustmentHardLimitMicrosUSD == 0 {
+		c.Admin.AdjustmentHardLimitMicrosUSD = 100_000_000
+	}
+	if c.Admin.AdjustmentDailyHardLimitMicrosUSD == 0 {
+		c.Admin.AdjustmentDailyHardLimitMicrosUSD = 500_000_000
+	}
 	return nil
 }
 
@@ -442,8 +457,22 @@ func (c Config) Validate(opts LoadOptions) error {
 			problems = append(problems, fmt.Errorf("%s must be positive", name))
 		}
 	}
+	if c.Gateway.PricingClockRollbackTolerance < 0 {
+		problems = append(problems, errors.New("gateway.pricing_clock_rollback_tolerance cannot be negative"))
+	}
+	if c.Gateway.PricingClockForwardTolerance < 0 {
+		problems = append(problems, errors.New("gateway.pricing_clock_forward_tolerance cannot be negative"))
+	}
+	if c.Gateway.PricingUnknownPolicy != "" && c.Gateway.PricingUnknownPolicy != "reject" &&
+		c.Gateway.PricingUnknownPolicy != "allow_without_cost_governance" {
+		problems = append(problems, errors.New("gateway.pricing_unknown_policy must be reject or allow_without_cost_governance"))
+	}
 	if c.Gateway.MaxTotalAttempts < 1 {
 		problems = append(problems, errors.New("gateway.max_total_attempts must be at least 1"))
+	}
+	if c.Admin.AdjustmentSoftLimitMicrosUSD < 0 || c.Admin.AdjustmentHardLimitMicrosUSD <= 0 || c.Admin.AdjustmentDailyHardLimitMicrosUSD <= 0 ||
+		c.Admin.AdjustmentSoftLimitMicrosUSD > c.Admin.AdjustmentHardLimitMicrosUSD || c.Admin.AdjustmentHardLimitMicrosUSD > c.Admin.AdjustmentDailyHardLimitMicrosUSD {
+		problems = append(problems, errors.New("admin cost adjustment limits must satisfy 0 <= soft <= hard <= daily hard"))
 	}
 	if c.Retry.MaxAttemptsPerTarget < 1 {
 		problems = append(problems, errors.New("retry.max_attempts_per_target must be at least 1"))

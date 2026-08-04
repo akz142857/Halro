@@ -40,7 +40,10 @@ printf '%s' "$PROVIDER_SECRET" | ./heimdall bootstrap \
   --provider-type openai \
   --provider-base-url https://api.openai.com \
   --provider-model gpt-5-mini \
-  --public-model chat
+  --public-model chat \
+  --billing-mode metered \
+  --input-micros-per-million "$INPUT_MICROS_PER_MILLION" \
+  --output-micros-per-million "$OUTPUT_MICROS_PER_MILLION"
 ./heimdall serve --config ./config.yaml
 ```
 
@@ -48,6 +51,9 @@ The bootstrap response contains the Gateway Key once. Move it directly to the
 workload secret store; do not put it in shell history, source control, logs, or
 browser storage. The generated Master Key must remain a regular `0600` file.
 Back it up separately from both the data directory and encrypted backup key.
+Bootstrap never infers that zero prices mean free. Use `--billing-mode free`
+only for an intentionally free deployment; otherwise provide the reviewed
+metered prices shown above. Bootstrap stores those terms as Price Version 1.
 
 Default listeners are loopback-only. To expose Heimdall, use TLS and an
 authenticated reverse proxy with an explicitly configured origin/trusted proxy
@@ -273,13 +279,53 @@ examples.
 
 ## Upgrade and rollback
 
+Pricing selection uses a persisted per-Deployment high-water mark. Keep host
+time synchronized and configure `gateway.pricing_clock_rollback_tolerance` and
+`gateway.pricing_clock_forward_tolerance`; a material rollback, unexplained
+forward jump, or incoherent restored high-water enters pricing quarantine and
+blocks that Deployment. `gateway.pricing_unknown_policy` defaults to `reject`.
+The only opt-in value, `allow_without_cost_governance`, still rejects unknown
+pricing for Projects with a daily budget or a cost-dimension Token Guard. Watch
+`heimdall_pricing_quarantined_deployments`, Accounting Lease recovery metrics,
+readiness, and `heimdall doctor` after every restart or restore.
+
+Price changes create future-effective immutable versions; never edit old
+prices to correct history. Use Usage cost adjustments for historical
+corrections. Each adjustment records the original Settlement, signed delta,
+final cost, service period, posted period, actor, reason, and evidence. Unknown
+cost remains null until a reprice adjustment supplies complete correction
+evidence.
+
+Pricing Proposals are a separate review queue. The interactive Admin API accepts
+only asserted official-URL evidence; `verified_api` and `signed_import` are
+reserved for trusted adapters that verify transport or signatures before
+constructing a Proposal. Evidence retains model, region, tier, match status,
+warnings and expiry. A Proposal is inert: it cannot affect admission, budgets,
+settlement, or the Gateway. Adoption requires recent Admin re-authentication
+and creates a new immutable Price Version; ambiguous or expired Proposals
+cannot be adopted.
+
 1. Read release notes and verify the binary checksum and Sigstore bundle.
 2. Stop Heimdall and confirm the process released the data-directory lock.
 3. Create and verify an encrypted backup; preserve the current binary/config.
 4. Run the new binary's `config check` against a copy of the configuration.
-5. Start the new binary. Migrations are versioned and applied during open.
-6. Check `/health/live`, `/health/ready`, Admin system status, Metrics, a
+5. While the service is stopped, run
+   `heimdall pricing migrate --config <config> --dry-run --report <report.json>`.
+   Resolve every enabled zero-price Deployment in a schema-v1 resolution file
+   bound to the report's `metadata_sha256`, then run
+   `heimdall pricing migrate --config <config> --resolution-file <file> --apply`.
+   The tool migrates a consistent staging snapshot, atomically publishes it,
+   and retains the prior metadata path printed on success.
+6. Start the new binary. Remaining migrations are versioned and applied during open.
+7. Check `/health/live`, `/health/ready`, Admin system status, Metrics, a
    non-stream request, a stream request, and usage settlement.
+
+For a restore drill, also record the Backup ID, metadata schema, Ledger reader
+gate, Settlement/Adjustment Parquet watermarks and pricing-state digest. Test a
+future Price Version whose effective time passes after the backup: restoration
+must quarantine that Deployment. Review the restored source and current
+Provider terms, then use the Admin restore-confirm action with recent re-auth,
+or create a correct successor version. Traffic must remain blocked until then.
 
 Do not downgrade a migrated data directory in place. If validation fails, stop
 the new binary and follow `docs/backup-restore.md`; restore preserves the old

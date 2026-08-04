@@ -162,6 +162,12 @@ func (r *Runtime) listAdminDeployments(writer http.ResponseWriter, request *http
 	active := make([]domain.Deployment, 0, len(items))
 	for _, item := range items {
 		if item.DeletedAt == nil {
+			quarantined, reason, quarantineErr := r.store.DeploymentPricingQuarantine(request.Context(), item.ID)
+			if quarantineErr != nil {
+				adminStoreError(writer)
+				return
+			}
+			item.PricingQuarantined, item.PricingQuarantineReason = quarantined, reason
 			active = append(active, item)
 		}
 	}
@@ -172,6 +178,11 @@ func (r *Runtime) getAdminDeployment(writer http.ResponseWriter, request *http.R
 	item, err := r.store.GetDeployment(request.Context(), chi.URLParam(request, "id"))
 	if err != nil || item.DeletedAt != nil {
 		adminNotFound(writer)
+		return
+	}
+	item.PricingQuarantined, item.PricingQuarantineReason, err = r.store.DeploymentPricingQuarantine(request.Context(), item.ID)
+	if err != nil {
+		adminStoreError(writer)
 		return
 	}
 	writer.Header().Set("ETag", revisionETag(item.Revision))
