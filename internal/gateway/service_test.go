@@ -32,6 +32,192 @@ type source struct {
 	projects []domain.Project
 }
 
+type staticPriceSelector struct {
+	price domain.DeploymentPriceVersion
+}
+
+type fakePricePinStore struct {
+	mu             sync.Mutex
+	price          domain.DeploymentPriceVersion
+	admissionPrice domain.DeploymentPriceVersion
+	prepared       domain.PricePinIntent
+	committed      domain.PricePinIntent
+}
+
+func (s *fakePricePinStore) SelectDeploymentPriceVersion(ctx context.Context, deploymentID string, selectedAt time.Time) (domain.DeploymentPriceVersion, error) {
+	price := s.admissionPrice
+	if price.ID == "" {
+		price = s.price
+	}
+	return staticPriceSelector{price: price}.SelectDeploymentPriceVersion(ctx, deploymentID, selectedAt)
+}
+
+func (s *fakePricePinStore) LockDeploymentPricing(string) func() {
+	s.mu.Lock()
+	return s.mu.Unlock
+}
+
+func (s *fakePricePinStore) PrepareDeploymentPricePin(_ context.Context, deploymentID, attemptID string, selectedAt time.Time, _, _ time.Duration) (domain.DeploymentPriceVersion, domain.PriceSnapshot, domain.PricePinIntent, error) {
+	price, err := staticPriceSelector{price: s.price}.SelectDeploymentPriceVersion(context.Background(), deploymentID, selectedAt)
+	if err != nil {
+		return domain.DeploymentPriceVersion{}, domain.PriceSnapshot{}, domain.PricePinIntent{}, err
+	}
+	snapshot, err := domain.NewVersionedPriceSnapshot(price, selectedAt)
+	if err != nil {
+		return domain.DeploymentPriceVersion{}, domain.PriceSnapshot{}, domain.PricePinIntent{}, err
+	}
+	digest, _ := snapshot.Digest()
+	s.prepared = domain.PricePinIntent{AttemptID: attemptID, DeploymentID: deploymentID, PriceVersionID: price.ID,
+		PriceVersion: price.Version, SnapshotSHA256: digest, PricingSelectedAt: selectedAt,
+		MetadataRevision: 1, State: domain.PricePinPrepared, CreatedAt: selectedAt}
+	return price, snapshot, s.prepared, nil
+}
+
+func (s *fakePricePinStore) CommitDeploymentPricePin(_ context.Context, attemptID, digest string, sequence uint64, committedAt time.Time) (domain.PricePinIntent, error) {
+	if s.prepared.AttemptID != attemptID || s.prepared.SnapshotSHA256 != digest || sequence == 0 {
+		return domain.PricePinIntent{}, errors.New("invalid pin commit")
+	}
+	s.committed = s.prepared
+	s.committed.State, s.committed.LedgerSequence, s.committed.CommittedAt = domain.PricePinCommitted, sequence, &committedAt
+	return s.committed, nil
+}
+
+func (s *fakePricePinStore) DeletePreparedDeploymentPricePin(context.Context, string) error {
+	return nil
+}
+
+func (s staticPriceSelector) SelectDeploymentPriceVersion(_ context.Context, deploymentID string, selectedAt time.Time) (domain.DeploymentPriceVersion, error) {
+	if s.price.DeploymentID != deploymentID || s.price.EffectiveFrom.After(selectedAt) {
+		return domain.DeploymentPriceVersion{}, domain.ErrPriceUnavailable
+	}
+	return s.price, nil
+}
+
+func TestPrepareAccountingLeaseCapturesVersionedFreeSnapshotWithoutSyntheticReservation(t *testing.T) {
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	price := domain.DeploymentPriceVersion{
+		ID: "price_free", DeploymentID: "dep_free", Version: 1, Revision: 1,
+		BillingMode: domain.BillingModeFree, Currency: "USD", FormulaVersion: domain.PriceFormulaUSDTokensV1,
+		EffectiveFrom: now.Add(-time.Hour), CreatedBy: "test", CreatedAt: now.Add(-time.Hour),
+		Source: domain.PriceSource{Type: domain.PriceSourceManual, Assurance: domain.PriceAssuranceAsserted,
+			ReceivedAt: now.Add(-time.Hour), ContentSHA256: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			Reference: "test", AssertedWithoutArchive: true},
+	}
+	service := &Service{pricing: staticPriceSelector{price: price}, now: func() time.Time { return now }}
+	reservation, mode, snapshot, _, err := service.prepareAccountingLease(context.Background(), provider.Target{DeploymentID: "dep_free"}, 10, 20)
+	if err != nil || reservation != 0 || mode != ledger.LeaseModeFree || snapshot == nil || snapshot.CostValueStatus != domain.CostValueKnown {
+		t.Fatalf("reservation=%d mode=%q snapshot=%#v err=%v", reservation, mode, snapshot, err)
+	}
+}
+
+func TestGatewayCommitsPricePinBeforeProviderAttempt(t *testing.T) {
+	f := newFixture(t, 10_000)
+	defer f.close()
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	priceStore := &fakePricePinStore{price: domain.DeploymentPriceVersion{
+		ID: "price_gateway", DeploymentID: "dep_gateway", Version: 1, Revision: 1,
+		BillingMode: domain.BillingModeMetered, Currency: "USD", FormulaVersion: domain.PriceFormulaUSDTokensV1,
+		InputMicrosPerMillion: 1_000_000, OutputMicrosPerMillion: 2_000_000,
+		EffectiveFrom: now.Add(-time.Hour), CreatedBy: "test", CreatedAt: now.Add(-time.Hour),
+		Source: domain.PriceSource{Type: domain.PriceSourceManual, Assurance: domain.PriceAssuranceAsserted,
+			ReceivedAt: now.Add(-time.Hour), ContentSHA256: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			Reference: "test", AssertedWithoutArchive: true},
+	}}
+	registry := provider.NewRegistry()
+	if err := registry.Register(provider.Target{ID: "target_pin", DeploymentID: "dep_gateway", PublicModel: "chat",
+		ProviderModel: "provider-model", Adapter: f.adapter, InputMicrosPerMillion: 99, OutputMicrosPerMillion: 99}); err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewServiceWithOptions(f.service.auth, registry, f.accounting, ServiceOptions{Pricing: priceStore})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.now = func() time.Time { return now }
+	if _, err := service.Chat(context.Background(), f.plaintext, chatRequest()); err != nil {
+		t.Fatal(err)
+	}
+	if f.adapter.calls != 1 || priceStore.committed.State != domain.PricePinCommitted || priceStore.committed.LedgerSequence == 0 ||
+		priceStore.committed.AttemptID != priceStore.prepared.AttemptID {
+		t.Fatalf("provider calls=%d prepared=%#v committed=%#v", f.adapter.calls, priceStore.prepared, priceStore.committed)
+	}
+	lease, ok := f.state.AccountingLease(priceStore.prepared.AttemptID)
+	if !ok || !domain.ValidSHA256Label(lease.Event.TokenGuardPricingViewDigest) {
+		t.Fatalf("accounting lease pricing view digest=%q exists=%t", lease.Event.TokenGuardPricingViewDigest, ok)
+	}
+}
+
+func TestGatewayRechecksAttemptPriceAgainstTokenGuardBeforeProviderIO(t *testing.T) {
+	f := newFixture(t, 10_000)
+	defer f.close()
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	price := func(id string, version uint64, rate int64) domain.DeploymentPriceVersion {
+		return domain.DeploymentPriceVersion{
+			ID: id, DeploymentID: "dep_reprice", Version: version, Revision: 1,
+			BillingMode: domain.BillingModeMetered, Currency: "USD", FormulaVersion: domain.PriceFormulaUSDTokensV1,
+			InputMicrosPerMillion: rate, OutputMicrosPerMillion: rate,
+			EffectiveFrom: now.Add(-time.Hour), CreatedBy: "test", CreatedAt: now.Add(-time.Hour),
+			Source: domain.PriceSource{Type: domain.PriceSourceManual, Assurance: domain.PriceAssuranceAsserted,
+				ReceivedAt: now.Add(-time.Hour), ContentSHA256: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				Reference: "test", AssertedWithoutArchive: true},
+		}
+	}
+	prices := &fakePricePinStore{admissionPrice: price("price_low", 1, 1), price: price("price_high", 2, 1_000_000)}
+	project := f.project
+	project.TokenGuardPolicyID = "guard_cost"
+	snapshot := auth.NewSnapshot()
+	if err := snapshot.Refresh(context.Background(), source{keys: []domain.GatewayKey{f.key}, projects: []domain.Project{project}}); err != nil {
+		t.Fatal(err)
+	}
+	guard, err := tokenguard.New([]domain.TokenGuardPolicy{{
+		ID: "guard_cost", Name: "cost", Enabled: true, Action: "observe", CostMicrosPerMinute: 10, Revision: 1,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := provider.NewRegistry()
+	if err := registry.Register(provider.Target{ID: "target_reprice", DeploymentID: "dep_reprice", PublicModel: "chat", ProviderModel: "provider-model", Adapter: f.adapter}); err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewServiceWithOptions(snapshot, registry, f.accounting, ServiceOptions{Pricing: prices, TokenGuard: guard})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.now = func() time.Time { return now }
+	_, err = service.Chat(context.Background(), f.plaintext, chatRequest())
+	var gatewayErr *Error
+	if !errors.As(err, &gatewayErr) || gatewayErr.Code != "token_guard_blocked" {
+		t.Fatalf("error=%v", err)
+	}
+	if f.adapter.calls != 0 || f.state.PendingReservations() != 0 {
+		t.Fatalf("provider calls=%d pending=%d", f.adapter.calls, f.state.PendingReservations())
+	}
+}
+
+func TestGatewayUnknownPriceExplicitOptInPersistsUnknownCost(t *testing.T) {
+	f := newFixture(t, 0)
+	defer f.close()
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	prices := &fakePricePinStore{}
+	registry := provider.NewRegistry()
+	if err := registry.Register(provider.Target{ID: "target_unknown", DeploymentID: "dep_unknown", PublicModel: "chat", ProviderModel: "provider-model", Adapter: f.adapter}); err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewServiceWithOptions(f.service.auth, registry, f.accounting, ServiceOptions{
+		Pricing: prices, PricingUnknownPolicy: "allow_without_cost_governance",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.now = func() time.Time { return now }
+	if _, err := service.Chat(context.Background(), f.plaintext, chatRequest()); err != nil {
+		t.Fatal(err)
+	}
+	balance := f.state.Balance(f.project.ID, now.Format("2006-01-02"))
+	if f.adapter.calls != 1 || balance.CommittedMicrosUSD != 0 || balance.UnknownAttempts != 1 {
+		t.Fatalf("provider calls=%d balance=%#v", f.adapter.calls, balance)
+	}
+}
+
 func (s source) ListGatewayKeys(context.Context) ([]domain.GatewayKey, error) {
 	return s.keys, nil
 }

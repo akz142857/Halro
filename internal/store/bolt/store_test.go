@@ -190,7 +190,7 @@ func TestMetadataMigrationFromV1IsAtomicAndRecorded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(history) != 10 ||
+	if len(history) != 14 ||
 		history[0] != (MigrationRecord{Version: 1, Name: "initial_schema"}) ||
 		history[1] != (MigrationRecord{Version: 2, Name: "migration_history"}) ||
 		history[2] != (MigrationRecord{Version: 3, Name: "deployments"}) ||
@@ -200,7 +200,11 @@ func TestMetadataMigrationFromV1IsAtomicAndRecorded(t *testing.T) {
 		history[6] != (MigrationRecord{Version: 7, Name: "provider_resource_creation_status"}) ||
 		history[7] != (MigrationRecord{Version: 8, Name: "admin_mfa"}) ||
 		history[8] != (MigrationRecord{Version: 9, Name: "provider_profile_bindings"}) ||
-		history[9] != (MigrationRecord{Version: 10, Name: "master_key_slots"}) {
+		history[9] != (MigrationRecord{Version: 10, Name: "master_key_slots"}) ||
+		history[10] != (MigrationRecord{Version: 11, Name: "versioned_deployment_pricing"}) ||
+		history[11] != (MigrationRecord{Version: 12, Name: "deployment_price_pin_intents"}) ||
+		history[12] != (MigrationRecord{Version: 13, Name: "cost_adjustment_intents"}) ||
+		history[13] != (MigrationRecord{Version: 14, Name: "pricing_proposals"}) {
 		t.Fatalf("history=%#v", history)
 	}
 }
@@ -407,7 +411,8 @@ func createV3ProviderMetadata(t *testing.T, path string) {
 		}
 		deployment := domain.Deployment{
 			ID: "deployment_v3", Name: "Claude", ProviderID: instance.ID, ProviderModel: "model",
-			Capabilities: capabilities, Weight: 1, Enabled: true, CreatedAt: now, UpdatedAt: now, Revision: 1,
+			Capabilities: capabilities, InputMicrosPerMillion: 1, OutputMicrosPerMillion: 1,
+			Weight: 1, Enabled: true, CreatedAt: now, UpdatedAt: now, Revision: 1,
 		}
 		for _, record := range []struct {
 			bucket []byte

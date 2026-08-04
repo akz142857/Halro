@@ -9,12 +9,47 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/akz142857/Heimdall/internal/domain"
 )
+
+func TestMixedV1V2ReplayAndUnsupportedFutureEpoch(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mixed.wal")
+	log, err := Open(path, NewStatus())
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 4, 0, 0, 0, 0, time.UTC)
+	if _, err = log.Append(context.Background(), Event{EventID: "legacy", Kind: EventRequestAccepted, RequestID: "r", ProjectID: "p", PeriodID: "2026-08-04", OccurredAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	unknown := domain.NewUnknownPriceSnapshot(now)
+	if _, err = log.Append(context.Background(), Event{EventID: "v2", Kind: EventAttemptSettled, RequestID: "r", AttemptID: "a", ProjectID: "p", PeriodID: "2026-08-04", OccurredAt: now,
+		LeaseMode: LeaseModeUnknownAllowed, PriceSnapshot: &unknown, Outcome: "success", TokenUsageSource: TokenUsageSourceNone}); err != nil {
+		t.Fatal(err)
+	}
+	if err = log.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var epochs []uint8
+	if _, partial, err := InspectReplay(path, func(record Record) error { epochs = append(epochs, record.Epoch); return nil }); err != nil || partial || !slices.Equal(epochs, []uint8{1, 2}) {
+		t.Fatalf("epochs=%v partial=%t err=%v", epochs, partial, err)
+	}
+	payload, _ := json.Marshal(Event{EventID: "future", Kind: EventRequestAccepted, RequestID: "r", ProjectID: "p", PeriodID: "2026-08-04", OccurredAt: now})
+	future := filepath.Join(t.TempDir(), "future.wal")
+	if err := os.WriteFile(future, encodeFrameVersion(3, 1, EventRequestAccepted, payload), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Inspect(future); !errors.Is(err, ErrUnsupportedVersion) {
+		t.Fatalf("future epoch error=%v", err)
+	}
+}
 
 type faultDurability struct {
 	file     *os.File
@@ -217,7 +252,7 @@ func TestLedgerRoundTripAndAtomicSettlement(t *testing.T) {
 		ProjectID:            "prj_1",
 		PeriodID:             "prj_1:2026-07-31:tz1",
 		OccurredAt:           now,
-		ReservationMicrosUSD: 100,
+		ReservationMicrosUSD: MicrosUSD(100),
 	}
 	if _, err := log.Append(context.Background(), reservation); err != nil {
 		t.Fatal(err)
@@ -230,7 +265,7 @@ func TestLedgerRoundTripAndAtomicSettlement(t *testing.T) {
 		ProjectID:            "prj_1",
 		PeriodID:             reservation.PeriodID,
 		OccurredAt:           now.Add(time.Second),
-		CommittedMicrosUSD:   80,
+		CommittedMicrosUSD:   MicrosUSD(80),
 		ProviderInputTokens:  10,
 		ProviderOutputTokens: 20,
 		Outcome:              "success",
@@ -284,7 +319,7 @@ func TestPendingReservationSurvivesReopen(t *testing.T) {
 	if state.PendingReservations() != 1 {
 		t.Fatalf("expected one pending reservation, got %d", state.PendingReservations())
 	}
-	if got := state.Balance(event.ProjectID, event.PeriodID).ReservedMicrosUSD; got != event.ReservationMicrosUSD {
+	if got := state.Balance(event.ProjectID, event.PeriodID).ReservedMicrosUSD; got != *event.ReservationMicrosUSD {
 		t.Fatalf("unexpected reserved amount: %d", got)
 	}
 }
@@ -388,7 +423,7 @@ func TestTenThousandRandomCrashInjectionsRecoverCompleteRecordsWithoutDuplicateE
 			RequestID: reservation.RequestID, AttemptID: attemptID,
 			ProjectID: reservation.ProjectID, PeriodID: reservation.PeriodID,
 			OccurredAt:         reservation.OccurredAt.Add(time.Millisecond),
-			CommittedMicrosUSD: 80, ProviderInputTokens: 7, ProviderOutputTokens: 3,
+			CommittedMicrosUSD: MicrosUSD(80), ProviderInputTokens: 7, ProviderOutputTokens: 3,
 			Outcome: "success",
 		}
 		for _, event := range []Event{reservation, settlement} {
@@ -535,7 +570,7 @@ func TestDuplicateEventIDMustMatchContent(t *testing.T) {
 	if err := state.Apply(record); err != nil {
 		t.Fatalf("identical duplicate must be idempotent: %v", err)
 	}
-	event.ReservationMicrosUSD++
+	(*event.ReservationMicrosUSD)++
 	if err := state.Apply(Record{Sequence: 2, Offset: 200, Event: event}); err == nil {
 		t.Fatal("event id reuse with different content must fail")
 	}
@@ -550,7 +585,7 @@ func validReservation(eventID, attemptID string) Event {
 		ProjectID:            "prj_1",
 		PeriodID:             "prj_1:2026-07-31:tz1",
 		OccurredAt:           time.Now().UTC(),
-		ReservationMicrosUSD: 100,
+		ReservationMicrosUSD: MicrosUSD(100),
 	}
 }
 

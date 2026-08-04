@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -26,6 +28,7 @@ type BootstrapOptions struct {
 	PublicModel            string
 	ProjectName            string
 	DailyBudgetMicrosUSD   int64
+	BillingMode            domain.BillingMode
 	InputMicrosPerMillion  int64
 	OutputMicrosPerMillion int64
 }
@@ -89,6 +92,10 @@ func Bootstrap(ctx context.Context, cfg config.Config, options BootstrapOptions,
 	if err != nil {
 		return BootstrapResult{}, err
 	}
+	priceID, err := id.New("price")
+	if err != nil {
+		return BootstrapResult{}, err
+	}
 	routeID, err := id.New("rte")
 	if err != nil {
 		return BootstrapResult{}, err
@@ -111,6 +118,13 @@ func Bootstrap(ctx context.Context, cfg config.Config, options BootstrapOptions,
 		return BootstrapResult{}, err
 	}
 	now := time.Now().UTC()
+	billingMode := options.BillingMode
+	if billingMode == "" && (options.InputMicrosPerMillion > 0 || options.OutputMicrosPerMillion > 0) {
+		billingMode = domain.BillingModeMetered
+	}
+	if billingMode == "" {
+		return BootstrapResult{}, errors.New("billing mode is required when bootstrap prices are zero; explicitly choose free or metered")
+	}
 	profile, ok := domain.DefaultProviderProfile(options.ProviderType)
 	if !ok {
 		return BootstrapResult{}, fmt.Errorf("provider profile is not implemented for %q", options.ProviderType)
@@ -136,10 +150,9 @@ func Bootstrap(ctx context.Context, cfg config.Config, options BootstrapOptions,
 			ProviderID: providerID, ProviderModel: options.ProviderModel,
 			AccessSurface: profile.AccessSurface, ProfileID: profile.ProfileID,
 			Capabilities: capabilities, CapabilityEvidence: evidence.Clone(),
-			InputMicrosPerMillion:  options.InputMicrosPerMillion,
-			OutputMicrosPerMillion: options.OutputMicrosPerMillion,
-			Weight:                 1, Enabled: true, CreatedAt: now, UpdatedAt: now,
+			Weight: 1, Enabled: true, CreatedAt: now, UpdatedAt: now,
 		},
+		Price: bootstrapPriceVersion(priceID, deploymentID, billingMode, options, now),
 		Route: domain.Route{
 			ID: routeID, PublicModel: options.PublicModel, DeploymentID: deploymentID,
 			Enabled: true, CreatedAt: now, UpdatedAt: now,
@@ -160,4 +173,19 @@ func Bootstrap(ctx context.Context, cfg config.Config, options BootstrapOptions,
 		ProjectID: projectID, ProviderID: providerID, DeploymentID: deploymentID, RouteID: routeID,
 		KeyID: gatewayKey.ID, GatewayKey: gatewayPlaintext,
 	}, nil
+}
+
+func bootstrapPriceVersion(priceID, deploymentID string, billingMode domain.BillingMode, options BootstrapOptions, now time.Time) domain.DeploymentPriceVersion {
+	evidence := sha256.Sum256([]byte(fmt.Sprintf("heimdall:bootstrap-pricing:v1:%s:%d:%d", billingMode, options.InputMicrosPerMillion, options.OutputMicrosPerMillion)))
+	return domain.DeploymentPriceVersion{
+		ID: priceID, DeploymentID: deploymentID, Version: 1, Revision: 1,
+		BillingMode: billingMode, Currency: "USD", FormulaVersion: domain.PriceFormulaUSDTokensV1,
+		InputMicrosPerMillion: options.InputMicrosPerMillion, OutputMicrosPerMillion: options.OutputMicrosPerMillion,
+		EffectiveFrom: now, CreatedBy: "bootstrap", CreatedAt: now,
+		Source: domain.PriceSource{
+			Type: domain.PriceSourceManual, Assurance: domain.PriceAssuranceAsserted,
+			ReceivedAt: now, ContentSHA256: "sha256:" + hex.EncodeToString(evidence[:]),
+			Reference: "heimdall bootstrap CLI", AssertedWithoutArchive: true,
+		},
+	}
 }

@@ -76,6 +76,7 @@ func loadProviderRegistry(
 		instanceByID[instance.ID] = instance
 	}
 	registry := provider.NewRegistry()
+	pricingSelectedAt := time.Now().UTC()
 	adapters := make(map[string]provider.Adapter)
 	providerBindingIDs := make(map[string][]string)
 	providerLimits := make(map[string]int64)
@@ -169,9 +170,17 @@ func loadProviderRegistry(
 				bindingID = matchingBindingID(instanceByID[providerID], deployment.ProfileID)
 			}
 			providerModel = deployment.ProviderModel
-			inputPrice = deployment.InputMicrosPerMillion
-			outputPrice = deployment.OutputMicrosPerMillion
-			fixedPrice = deployment.FixedRequestMicrosUSD
+			price, priceErr := store.SelectDeploymentPriceVersion(ctx, deployment.ID, pricingSelectedAt)
+			if priceErr != nil && !errors.Is(priceErr, domain.ErrPriceUnavailable) {
+				return fail(fmt.Errorf("deployment %q has no effective versioned price at %s: %w", deployment.ID, pricingSelectedAt.Format(time.RFC3339Nano), priceErr))
+			}
+			if priceErr == nil {
+				inputPrice = price.InputMicrosPerMillion
+				outputPrice = price.OutputMicrosPerMillion
+				fixedPrice = price.FixedRequestMicrosUSD
+			} else {
+				inputPrice, outputPrice, fixedPrice = 0, 0, 0
+			}
 			deploymentLimit = deployment.MaxConcurrency
 			capabilities = deploymentCapabilities(deployment, adapters[bindingID])
 		}

@@ -29,6 +29,9 @@ import type {
   TokenGuardPolicy,
   TokenGuardPreview,
   UsageAttempt,
+  DeploymentPriceVersion,
+  DeploymentPriceProposal,
+  CostAdjustmentPreview,
 } from "./types";
 
 const API_ROOT = "/admin/api/v1";
@@ -268,6 +271,19 @@ export const api = {
       `/deployments/${encodeURIComponent(id)}/test`,
       json("POST"),
     ).then((value) => value.data),
+  deploymentPrices: (id: string) => request<Page<DeploymentPriceVersion>>(`/deployments/${encodeURIComponent(id)}/prices`).then((value) => value.data),
+  createDeploymentPrice: (id: string, value: unknown, idempotencyKey: string) =>
+    request<DeploymentPriceVersion>(`/deployments/${encodeURIComponent(id)}/prices`, { ...json("POST", value), headers: { "Idempotency-Key": idempotencyKey } }).then((result) => result.data),
+  cancelDeploymentPrice: (deploymentID: string, priceID: string, revision: number) =>
+    request<DeploymentPriceVersion>(`/deployments/${encodeURIComponent(deploymentID)}/prices/${encodeURIComponent(priceID)}/cancel`, json("POST"), `"${revision}"`).then((result) => result.data),
+	confirmRestoredDeploymentPricing: (deploymentID: string, value: unknown) => request<{ deployment_id: string; pricing_quarantine: false }>(`/deployments/${encodeURIComponent(deploymentID)}/prices/restore-confirm`, json("POST", value)).then((result) => result.data),
+  deploymentPriceProposals: (id: string) => request<Page<DeploymentPriceProposal>>(`/deployments/${encodeURIComponent(id)}/price-proposals`).then((value) => value.data),
+  createDeploymentPriceProposal: (id: string, value: unknown, idempotencyKey: string) =>
+    request<DeploymentPriceProposal>(`/deployments/${encodeURIComponent(id)}/price-proposals`, { ...json("POST", value), headers: { "Idempotency-Key": idempotencyKey } }).then((result) => result.data),
+  adoptDeploymentPriceProposal: (deploymentID: string, proposalID: string, revision: number, value: unknown) =>
+    request<{ proposal: DeploymentPriceProposal; price_version: DeploymentPriceVersion }>(`/deployments/${encodeURIComponent(deploymentID)}/price-proposals/${encodeURIComponent(proposalID)}/adopt`, json("POST", value), `"${revision}"`).then((result) => result.data),
+  rejectDeploymentPriceProposal: (deploymentID: string, proposalID: string, revision: number) =>
+    request<DeploymentPriceProposal>(`/deployments/${encodeURIComponent(deploymentID)}/price-proposals/${encodeURIComponent(proposalID)}/reject`, json("POST"), `"${revision}"`).then((result) => result.data),
   routes: () => request<Page<Route>>("/routes").then((value) => value.data),
   createRoute: (value: unknown) => request<Route>("/routes", json("POST", value)),
   updateRoute: (id: string, value: unknown, revision: number) =>
@@ -285,6 +301,8 @@ export const api = {
     ).then((value) => value.data),
   usage: (query = "") =>
     request<Page<UsageAttempt>>(`/usage${query}`).then((value) => value.data),
+  previewCostAdjustment: (attemptID: string, value: unknown) => request<CostAdjustmentPreview>(`/usage/attempts/${encodeURIComponent(attemptID)}/cost-adjustments/preview`, json("POST", value)).then((result) => result.data),
+  createCostAdjustment: (attemptID: string, value: unknown, idempotencyKey: string) => request<{ adjustment: unknown; budget_overage_micros_usd?: number }>(`/usage/attempts/${encodeURIComponent(attemptID)}/cost-adjustments`, { ...json("POST", value), headers: { "Idempotency-Key": idempotencyKey } }).then((result) => result.data),
   audit: (query = "") => request<Page<AuditRecord>>(`/audit${query}`).then((value) => value.data),
   tokenGuardPolicies: () =>
     request<Page<TokenGuardPolicy>>("/token-guard-policies").then((value) => value.data),

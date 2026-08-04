@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -28,16 +29,17 @@ const (
 var ErrCorrupt = errors.New("audit log is corrupt")
 
 type Event struct {
-	EventID       string    `json:"event_id"`
-	OccurredAt    time.Time `json:"occurred_at"`
-	ActorType     string    `json:"actor_type"`
-	ActorID       string    `json:"actor_id,omitempty"`
-	Action        string    `json:"action"`
-	TargetType    string    `json:"target_type,omitempty"`
-	TargetID      string    `json:"target_id,omitempty"`
-	Outcome       string    `json:"outcome"`
-	ReasonCode    string    `json:"reason_code,omitempty"`
-	CorrelationID string    `json:"correlation_id,omitempty"`
+	EventID       string         `json:"event_id"`
+	OccurredAt    time.Time      `json:"occurred_at"`
+	ActorType     string         `json:"actor_type"`
+	ActorID       string         `json:"actor_id,omitempty"`
+	Action        string         `json:"action"`
+	TargetType    string         `json:"target_type,omitempty"`
+	TargetID      string         `json:"target_id,omitempty"`
+	Outcome       string         `json:"outcome"`
+	ReasonCode    string         `json:"reason_code,omitempty"`
+	CorrelationID string         `json:"correlation_id,omitempty"`
+	Metadata      map[string]any `json:"metadata,omitempty"`
 }
 
 func (e Event) Validate() error {
@@ -58,6 +60,12 @@ func (e Event) Validate() error {
 	}
 	if len(e.CorrelationID) > 256 {
 		problems = append(problems, errors.New("correlation ID exceeds maximum size"))
+	}
+	if e.Metadata != nil {
+		encoded, err := json.Marshal(e.Metadata)
+		if err != nil || len(encoded) > 8<<10 {
+			problems = append(problems, errors.New("audit metadata is invalid or too large"))
+		}
 	}
 	return errors.Join(problems...)
 }
@@ -182,7 +190,7 @@ func (l *Log) AppendBatch(ctx context.Context, events []Event) ([]Record, error)
 	sequence, offset, previous := l.sequence, l.offset, l.lastHash
 	for index, payload := range payloads {
 		if existing, ok := l.recordsByEventID[events[index].EventID]; ok {
-			if existing.Event != events[index] {
+			if !reflect.DeepEqual(existing.Event, events[index]) {
 				return nil, errors.New("audit event ID conflicts with a different payload")
 			}
 			records[index] = existing

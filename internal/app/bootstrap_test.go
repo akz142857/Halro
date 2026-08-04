@@ -49,6 +49,18 @@ func TestBootstrapCreatesUsableConfigurationWithoutPersistingPlaintextSecrets(t 
 		t.Fatal(err)
 	}
 	defer runtime.Close()
+	deployment, err := runtime.store.GetDeployment(context.Background(), result.DeploymentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deployment.InputMicrosPerMillion != 0 || deployment.OutputMicrosPerMillion != 0 {
+		t.Fatalf("bootstrap persisted legacy deployment price fields: %#v", deployment)
+	}
+	price, err := runtime.store.SelectDeploymentPriceVersion(context.Background(), result.DeploymentID, time.Now().UTC())
+	if err != nil || price.Version != 1 || price.BillingMode != domain.BillingModeMetered ||
+		price.InputMicrosPerMillion != 1_000 || price.OutputMicrosPerMillion != 2_000 {
+		t.Fatalf("bootstrap versioned price=%#v err=%v", price, err)
+	}
 	principal, err := runtime.auth.Authenticate(result.GatewayKey, time.Now())
 	if err != nil {
 		t.Fatal(err)
@@ -58,5 +70,20 @@ func TestBootstrapCreatesUsableConfigurationWithoutPersistingPlaintextSecrets(t 
 	}
 	if _, ok := runtime.providers.Resolve("chat"); !ok {
 		t.Fatal("bootstrap route was not loaded")
+	}
+}
+
+func TestBootstrapRequiresExplicitFreeBillingModeForZeroPrices(t *testing.T) {
+	cfg := testConfig(t)
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Bootstrap(context.Background(), cfg, BootstrapOptions{
+		ProviderName: "OpenAI", ProviderType: domain.ProviderOpenAI,
+		ProviderBaseURL: "https://api.openai.com", ProviderModel: "gpt-test",
+		PublicModel: "chat", ProjectName: "Default",
+	}, []byte("provider-secret"))
+	if err == nil {
+		t.Fatal("bootstrap inferred free billing from zero prices")
 	}
 }

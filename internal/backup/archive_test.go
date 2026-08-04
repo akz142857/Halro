@@ -43,10 +43,11 @@ func TestEncryptedBackupCreateVerifyAndSecretConfidentiality(t *testing.T) {
 			{ArchivePath: "data/ledger/ledger.wal", LocalPath: wal},
 			{ArchivePath: "data/metadata.db", LocalPath: metadata},
 		},
-		Metadata:             boltstore.MetadataInfo{SchemaVersion: 2, TxID: 7},
+		Metadata:             boltstore.MetadataInfo{SchemaVersion: 2, TxID: 7, MinimumLedgerReaderVersion: "v2", LedgerFeatureEpoch: 2},
 		LedgerWatermark:      ledger.Watermark{Generation: 1, Offset: 123, Sequence: 4},
 		CheckpointWatermark:  ledger.Watermark{Generation: 1, Offset: 100, Sequence: 3},
 		UsageManifestVersion: 1,
+		LedgerFeatureEpoch:   2, MinimumLedgerReaderVersion: "v2", PricingStateSHA256: "sha256:" + strings.Repeat("1", 64), PendingIntentSHA256: "sha256:" + strings.Repeat("2", 64),
 		MasterKeyFingerprint: "sha256:" + strings.Repeat("0", 64),
 		Build:                buildinfo.Info{Version: "test"}, Now: func() time.Time { return now },
 	})

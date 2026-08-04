@@ -27,6 +27,9 @@ admin:
   login_rpm: 5
   mfa_policy: "optional"
   external_origin: ""
+  adjustment_soft_limit_micros_usd: 10000000
+  adjustment_hard_limit_micros_usd: 100000000
+  adjustment_daily_hard_limit_micros_usd: 500000000
 
 usage:
   durability: "balanced"
@@ -41,6 +44,9 @@ usage:
 
 gateway:
   route_total_timeout: 120s
+  pricing_clock_rollback_tolerance: 2s
+  pricing_clock_forward_tolerance: 30s
+  pricing_unknown_policy: reject
   attempt_connect_timeout: 5s
   attempt_response_header_timeout: 60s
   stream_idle_timeout: 60s

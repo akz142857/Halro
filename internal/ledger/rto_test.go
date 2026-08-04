@@ -35,7 +35,7 @@ func TestTenGiBWALRecoveryProfile(t *testing.T) {
 			RequestID: fmt.Sprintf("rto_req_%016x", records),
 			AttemptID: fmt.Sprintf("rto_attempt_%016x", records),
 			ProjectID: "rto_project", PeriodID: "rto_project:2026-07-31:UTC",
-			ProviderModel: filler, OccurredAt: now, ReservationMicrosUSD: 1,
+			ProviderModel: filler, OccurredAt: now, ReservationMicrosUSD: MicrosUSD(1),
 		}
 		payload, err := json.Marshal(event)
 		if err != nil {

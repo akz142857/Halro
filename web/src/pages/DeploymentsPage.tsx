@@ -15,7 +15,7 @@ import {
 } from "../components";
 import type { InlineTestState } from "../components";
 import { dateTime, money } from "../format";
-import type { Deployment, DeploymentTargetKind, Provider, ProviderBinding, ProviderCapabilities } from "../types";
+import type { Deployment, DeploymentPriceProposal, DeploymentPriceVersion, DeploymentTargetKind, Provider, ProviderBinding, ProviderCapabilities } from "../types";
 import { useTranslation } from "react-i18next";
 import { Link } from "../navigation";
 
@@ -130,7 +130,17 @@ function DeploymentCard({
 }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
+  const [pricing, setPricing] = useState(false);
+	const [suggesting, setSuggesting] = useState(false);
+	const [reviewing, setReviewing] = useState<DeploymentPriceProposal>();
+	const [confirmingRestore, setConfirmingRestore] = useState(false);
   const queryClient = useQueryClient();
+  const prices = useQuery({ queryKey: ["deployment-prices", deployment.id], queryFn: () => api.deploymentPrices(deployment.id), enabled: expanded });
+	const proposals = useQuery({ queryKey: ["deployment-price-proposals", deployment.id], queryFn: () => api.deploymentPriceProposals(deployment.id), enabled: expanded });
+  const activePrice = prices.data?.items.find((price) => price.status === "active");
+  const scheduledPrices = prices.data?.items.filter((price) => price.status === "scheduled") ?? [];
+  const cancelPrice = useMutation({ mutationFn: (price: DeploymentPriceVersion) => api.cancelDeploymentPrice(deployment.id, price.id, price.revision), onSuccess: () => queryClient.invalidateQueries({ queryKey: ["deployment-prices", deployment.id] }) });
+	const rejectProposal = useMutation({ mutationFn: (proposal: DeploymentPriceProposal) => api.rejectDeploymentPriceProposal(deployment.id, proposal.id, proposal.revision), onSuccess: () => queryClient.invalidateQueries({ queryKey: ["deployment-price-proposals", deployment.id] }) });
   const test = useMutation({
     mutationFn: () => api.testDeployment(deployment.id),
     onSettled: () => queryClient.invalidateQueries({ queryKey: ["deployments"] }),
@@ -147,9 +157,6 @@ function DeploymentCard({
       provider_model: deployment.provider_model,
       ...(deployment.target_kind ? { target_kind: deployment.target_kind } : {}),
       capabilities: deployment.capabilities,
-      input_micros_per_million: deployment.input_micros_per_million,
-      output_micros_per_million: deployment.output_micros_per_million,
-      fixed_request_micros_usd: deployment.fixed_request_micros_usd,
       region: deployment.region,
       max_concurrency: deployment.max_concurrency,
       priority: deployment.priority,
@@ -201,13 +208,33 @@ function DeploymentCard({
         </div>
       </div>
       <dl className="deployment-facts">
-        {(deployment.capabilities.chat || deployment.capabilities.embeddings) && <DeploymentFact label={t("deployments.inputPrice")} value={deployment.input_micros_per_million ? money(deployment.input_micros_per_million) : t("deployments.notConfigured")} meta={t("deployments.perMillionTokens")} unset={!deployment.input_micros_per_million} />}
-        {(deployment.capabilities.chat || deployment.capabilities.embeddings) && <DeploymentFact label={t("deployments.outputPrice")} value={deployment.output_micros_per_million ? money(deployment.output_micros_per_million) : t("deployments.notConfigured")} meta={t("deployments.perMillionTokens")} unset={!deployment.output_micros_per_million} />}
-        {!!deployment.fixed_request_micros_usd && <DeploymentFact label={t("deployments.fixedPrice")} value={money(deployment.fixed_request_micros_usd)} meta={t("deployments.perRequest")} />}
+        <DeploymentFact label={t("deployments.priceStatus")} value={activePrice ? activePrice.billing_mode === "free" ? t("deployments.freePrice") : t("deployments.versionedPrice") : prices.isPending ? t("common.loading") : t("deployments.unknownPrice")} meta={activePrice ? `v${activePrice.version} · ${dateTime(activePrice.effective_from)}` : t("deployments.priceRequired")} unset={!activePrice} />
+        {(deployment.capabilities.chat || deployment.capabilities.embeddings) && <DeploymentFact label={t("deployments.inputPrice")} value={activePrice ? money(activePrice.input_micros_per_million) : t("deployments.notConfigured")} meta={t("deployments.perMillionTokens")} unset={!activePrice} />}
+        {(deployment.capabilities.chat || deployment.capabilities.embeddings) && <DeploymentFact label={t("deployments.outputPrice")} value={activePrice ? money(activePrice.output_micros_per_million) : t("deployments.notConfigured")} meta={t("deployments.perMillionTokens")} unset={!activePrice} />}
+        {activePrice && <DeploymentFact label={t("deployments.fixedPrice")} value={money(activePrice.fixed_request_micros_usd)} meta={t("deployments.perRequest")} />}
         <DeploymentFact label={t("deployments.concurrency")} value={deployment.max_concurrency || t("deployments.unlimited")} meta={t("deployments.deploymentScope")} />
         <DeploymentFact label={t("deployments.context")} value={deployment.capabilities.max_context_tokens || t("deployments.upstreamApplies")} meta={deployment.capabilities.max_context_tokens ? t("deployments.tokens") : t("deployments.undeclared")} />
         <DeploymentFact label={t("deployments.maxOutput")} value={deployment.capabilities.max_output_tokens || t("deployments.upstreamApplies")} meta={deployment.capabilities.max_output_tokens ? t("deployments.tokens") : t("deployments.undeclared")} />
       </dl>
+      <section className="technical-details">
+        <strong>{t("deployments.priceTimeline")}</strong>
+        {activePrice && <small>{t("deployments.priceSourceSummary", { type: activePrice.source.type, assurance: activePrice.source.assurance, reference: activePrice.source.reference || "—" })}</small>}
+        {scheduledPrices.map((price) => <div key={price.id}><code>v{price.version}</code> · {dateTime(price.effective_from)} · {price.billing_mode} <button className="button ghost" disabled={cancelPrice.isPending} onClick={() => cancelPrice.mutate(price)}>{t("common.cancel")}</button></div>)}
+        <button className="button ghost" onClick={() => setPricing(true)}>{t("deployments.newPriceVersion")}</button>
+      </section>
+	  {deployment.pricing_quarantined && <div className="notice warning"><strong>{t("deployments.pricingQuarantined")}</strong><span>{deployment.pricing_quarantine_reason}</span><button className="button ghost" onClick={() => setConfirmingRestore(true)}>{t("deployments.confirmRestoredPricing")}</button></div>}
+	  <section className="technical-details">
+		<strong>{t("deployments.priceProposals")}</strong>
+		<p><small>{t("deployments.proposalSafety")}</small></p>
+		{proposals.data?.items.filter((proposal) => proposal.status === "pending").map((proposal) => <div key={proposal.id}>
+		  <code>{proposal.match}</code> · {proposal.source.assurance} · {proposal.source.reference || proposal.source.uri || "—"} · {t("deployments.proposalExpires", { time: dateTime(proposal.expires_at) })}
+		  {proposal.warnings?.map((warning) => <small key={warning}> ⚠ {warning}</small>)}
+		  <button className="button ghost" disabled={proposal.match === "ambiguous" || new Date(proposal.expires_at) <= new Date()} onClick={() => setReviewing(proposal)}>{t("deployments.reviewProposal")}</button>
+		  <ConfirmButton className="button ghost" label={t("deployments.rejectProposal")} confirmLabel={t("deployments.rejectProposalConfirm")} onConfirm={() => rejectProposal.mutate(proposal)} />
+		</div>)}
+		{!proposals.isPending && !proposals.data?.items.some((proposal) => proposal.status === "pending") && <small>{t("deployments.noPendingProposals")}</small>}
+		<button className="button ghost" onClick={() => setSuggesting(true)}>{t("deployments.importProposal")}</button>
+	  </section>
       <div className="deployment-capability-summary">
         <strong>{t("deployments.capabilityCount", { count: capabilities.length })}</strong>
         <div className="capability-list" aria-label={t("deployments.capabilities")}>
@@ -242,8 +269,81 @@ function DeploymentCard({
         </div>
       </footer>
       {(remove.isError || state.isError) && <ErrorState error={remove.error || state.error} />}
+      {pricing && <PriceVersionForm deployment={deployment} current={activePrice} onClose={() => setPricing(false)} />}
+	  {suggesting && <PriceProposalForm deployment={deployment} onClose={() => setSuggesting(false)} />}
+	  {reviewing && <PriceProposalReview deployment={deployment} proposal={reviewing} onClose={() => setReviewing(undefined)} />}
+	  {confirmingRestore && <RestorePricingConfirm deployment={deployment} onClose={() => setConfirmingRestore(false)} />}
     </article>
   );
+}
+
+function PriceProposalForm({ deployment, onClose }: { deployment: Deployment; onClose: () => void }) {
+	const { t } = useTranslation();
+	const queryClient = useQueryClient();
+	const [input, setInput] = useState("0");
+	const [output, setOutput] = useState("0");
+	const [fixed, setFixed] = useState("0");
+	const [uri, setURI] = useState("");
+	const [reference, setReference] = useState("");
+	const [digest, setDigest] = useState("");
+	const [match, setMatch] = useState<"exact" | "likely" | "ambiguous">("likely");
+	const idempotencyKey = useRef(crypto.randomUUID());
+	const mutation = useMutation({
+		mutationFn: () => api.createDeploymentPriceProposal(deployment.id, {
+			billing_mode: "metered", currency: "USD", input_usd_per_million: input, output_usd_per_million: output,
+			fixed_request_usd: fixed, match, expires_at: new Date(Date.now() + 7 * 86400_000).toISOString(),
+			warnings: [t("deployments.importedProposalWarning")], source: { type: "official_url", uri, reference, content_sha256: digest, retrieved_at: new Date().toISOString() },
+		}, idempotencyKey.current),
+		onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["deployment-price-proposals", deployment.id] }); onClose(); },
+	});
+	return <Modal title={t("deployments.importProposal")} onClose={onClose}><form onSubmit={(event) => { event.preventDefault(); mutation.mutate(); }}>
+		<Field label={t("deployments.inputUSD")}><input required value={input} onChange={(event) => setInput(event.target.value)} /></Field>
+		<Field label={t("deployments.outputUSD")}><input required value={output} onChange={(event) => setOutput(event.target.value)} /></Field>
+		<Field label={t("deployments.fixedRequestUSD")}><input required value={fixed} onChange={(event) => setFixed(event.target.value)} /></Field>
+		<Field label={t("deployments.proposalMatch")}><select value={match} onChange={(event) => setMatch(event.target.value as typeof match)}><option value="exact">exact</option><option value="likely">likely</option><option value="ambiguous">ambiguous</option></select></Field>
+		<Field label={t("deployments.sourceURL")}><input type="url" required value={uri} onChange={(event) => setURI(event.target.value)} /></Field>
+		<Field label={t("deployments.sourceReference")}><input required value={reference} onChange={(event) => setReference(event.target.value)} /></Field>
+		<Field label={t("deployments.sourceDigest")}><input required pattern="sha256:[a-fA-F0-9]{64}" value={digest} onChange={(event) => setDigest(event.target.value)} /></Field>
+		<p>{t("deployments.proposalSafety")}</p>{mutation.isError && <ErrorState error={mutation.error} />}
+		<button className="button primary" disabled={mutation.isPending}>{t("deployments.saveProposal")}</button>
+	</form></Modal>;
+}
+
+function PriceProposalReview({ deployment, proposal, onClose }: { deployment: Deployment; proposal: DeploymentPriceProposal; onClose: () => void }) {
+	const { t } = useTranslation();
+	const queryClient = useQueryClient();
+	const [effective, setEffective] = useState(new Date(Date.now() + 60_000).toISOString().slice(0, 16));
+	const [password, setPassword] = useState("");
+	const [totp, setTotp] = useState("");
+	const mutation = useMutation({
+		mutationFn: () => api.adoptDeploymentPriceProposal(deployment.id, proposal.id, proposal.revision, { effective_from: new Date(effective).toISOString(), confirm: true, current_password: password, totp_code: totp }),
+		onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["deployment-price-proposals", deployment.id] }); queryClient.invalidateQueries({ queryKey: ["deployment-prices", deployment.id] }); onClose(); },
+	});
+	return <Modal title={t("deployments.reviewProposal")} onClose={onClose}><form onSubmit={(event) => { event.preventDefault(); mutation.mutate(); }}>
+		<p><strong>{proposal.provider_model}</strong> · {proposal.region || "—"} · {proposal.tier || "—"} · {proposal.match}</p>
+		<p>{money(proposal.input_micros_per_million)} / {money(proposal.output_micros_per_million)} · {proposal.source.assurance}</p>
+		<p>{dateTime(proposal.fetched_at)} · {proposal.source.type} · {proposal.source.reference || proposal.source.uri || "—"}<br/><code>{proposal.source.content_sha256}</code></p>
+		<p><code>{proposal.digest}</code></p>
+		<Field label={t("deployments.effectiveFrom")}><input type="datetime-local" required value={effective} onChange={(event) => setEffective(event.target.value)} /></Field>
+		<Field label={t("usage.currentPassword")}><input type="password" required value={password} onChange={(event) => setPassword(event.target.value)} /></Field>
+		<Field label={t("usage.totpOptional")}><input inputMode="numeric" value={totp} onChange={(event) => setTotp(event.target.value)} /></Field>
+		<p>{t("deployments.adoptProposalWarning")}</p>{mutation.isError && <ErrorState error={mutation.error} />}
+		<button className="button primary" disabled={mutation.isPending}>{t("deployments.adoptProposal")}</button>
+	</form></Modal>;
+}
+
+function RestorePricingConfirm({ deployment, onClose }: { deployment: Deployment; onClose: () => void }) {
+	const { t } = useTranslation();
+	const queryClient = useQueryClient();
+	const [password, setPassword] = useState("");
+	const [totp, setTotp] = useState("");
+	const mutation = useMutation({ mutationFn: () => api.confirmRestoredDeploymentPricing(deployment.id, { current_password: password, totp_code: totp }), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["deployments"] }); queryClient.invalidateQueries({ queryKey: ["deployment-prices", deployment.id] }); onClose(); } });
+	return <Modal title={t("deployments.confirmRestoredPricing")} onClose={onClose}><form onSubmit={(event) => { event.preventDefault(); mutation.mutate(); }}>
+		<p>{t("deployments.restorePricingWarning")}</p>
+		<Field label={t("usage.currentPassword")}><input type="password" required value={password} onChange={(event) => setPassword(event.target.value)} /></Field>
+		<Field label={t("usage.totpOptional")}><input inputMode="numeric" value={totp} onChange={(event) => setTotp(event.target.value)} /></Field>
+		{mutation.isError && <ErrorState error={mutation.error} />}<button className="button primary" disabled={mutation.isPending}>{t("deployments.confirmRestoredPricing")}</button>
+	</form></Modal>;
 }
 
 function DeploymentFact({ label, value, meta, unset = false }: { label: string; value: string | number; meta: string; unset?: boolean }) {
@@ -253,6 +353,49 @@ function DeploymentFact({ label, value, meta, unset = false }: { label: string; 
       <dd className={unset ? "unset" : undefined}><span>{value}</span><small>{meta}</small></dd>
     </div>
   );
+}
+
+function PriceVersionForm({ deployment, current, onClose }: { deployment: Deployment; current?: DeploymentPriceVersion; onClose: () => void }) {
+  const { t } = useTranslation();
+  const queryClient = useQueryClient();
+  const [mode, setMode] = useState<"metered" | "free">("metered");
+  const [input, setInput] = useState("0");
+  const [output, setOutput] = useState("0");
+  const [fixed, setFixed] = useState("0");
+  const [effective, setEffective] = useState(new Date(Date.now() + 60_000).toISOString().slice(0, 16));
+  const [reference, setReference] = useState("");
+  const [digest, setDigest] = useState("");
+  const [password, setPassword] = useState("");
+	const [totp, setTotp] = useState("");
+  const idempotencyKey = useRef(crypto.randomUUID());
+  const mutation = useMutation({
+    mutationFn: () => api.createDeploymentPrice(deployment.id, {
+      billing_mode: mode, currency: "USD",
+      input_usd_per_million: mode === "free" ? "0" : input,
+      output_usd_per_million: mode === "free" ? "0" : output,
+      fixed_request_usd: mode === "free" ? "0" : fixed,
+      effective_from: new Date(effective).toISOString(),
+      source: { type: "manual", content_sha256: digest, reference, asserted_without_archive: true },
+		current_password: password, totp_code: totp,
+    }, idempotencyKey.current),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["deployment-prices", deployment.id] }); onClose(); },
+  });
+  const submit = (event: FormEvent) => { event.preventDefault(); mutation.mutate(); };
+  return <Modal title={t("deployments.newPriceVersion")} onClose={onClose}>
+    <form onSubmit={submit}>
+      {current && <p>{t("deployments.currentPriceVersion", { version: current.version })}</p>}
+      <Field label={t("deployments.billingMode")}><select value={mode} onChange={(event) => setMode(event.target.value as "metered" | "free")}><option value="metered">metered</option><option value="free">free</option></select></Field>
+      {mode === "metered" && <><Field label={t("deployments.inputUSD")}><input required value={input} onChange={(event) => setInput(event.target.value)} /></Field><Field label={t("deployments.outputUSD")}><input required value={output} onChange={(event) => setOutput(event.target.value)} /></Field><Field label={t("deployments.fixedRequestUSD")}><input required value={fixed} onChange={(event) => setFixed(event.target.value)} /></Field></>}
+      <Field label={t("deployments.effectiveFrom")}><input type="datetime-local" required value={effective} onChange={(event) => setEffective(event.target.value)} /></Field>
+      <Field label={t("deployments.sourceReference")}><input required value={reference} onChange={(event) => setReference(event.target.value)} /></Field>
+      <Field label={t("deployments.sourceDigest")}><input required pattern="sha256:[a-fA-F0-9]{64}" value={digest} onChange={(event) => setDigest(event.target.value)} placeholder="sha256:…" /></Field>
+		<Field label={t("usage.currentPassword")}><input type="password" required value={password} onChange={(event) => setPassword(event.target.value)} /></Field>
+		<Field label={t("usage.totpOptional")}><input inputMode="numeric" value={totp} onChange={(event) => setTotp(event.target.value)} /></Field>
+      <p>{t("deployments.immutablePriceWarning")}</p>
+      {mutation.isError && <ErrorState error={mutation.error} />}
+      <button className="button primary" disabled={mutation.isPending}>{t("deployments.createPriceVersion")}</button>
+    </form>
+  </Modal>;
 }
 
 function evidenceSummary(evidence: Record<string, string>) {
@@ -318,9 +461,6 @@ function DeploymentForm({
   const [bindingID, setBindingID] = useState(source?.binding_id ?? initialBindings[0]?.id ?? "");
   const initialBinding = initialBindings.find((binding) => binding.id === (source?.binding_id ?? initialBindings[0]?.id));
   const [capabilities, setCapabilities] = useState<ProviderCapabilities>(source?.capabilities ?? initialBinding?.capabilities ?? initialProvider?.capabilities ?? emptyCapabilities());
-  const [inputPrice, setInputPrice] = useState((source?.input_micros_per_million ?? 0) / 1_000_000);
-  const [outputPrice, setOutputPrice] = useState((source?.output_micros_per_million ?? 0) / 1_000_000);
-  const [fixedRequestPrice, setFixedRequestPrice] = useState((source?.fixed_request_micros_usd ?? 0) / 1_000_000);
   const [region, setRegion] = useState(source?.region ?? "");
   const [maxConcurrency, setMaxConcurrency] = useState(source?.max_concurrency ?? 0);
   const [targetKind, setTargetKind] = useState<DeploymentTargetKind>(source?.target_kind ?? defaultTargetKind(initialProvider));
@@ -332,9 +472,6 @@ function DeploymentForm({
     provider_model: providerModel.trim(),
     target_kind: targetKind,
     capabilities,
-    input_micros_per_million: Math.round(inputPrice * 1_000_000),
-    output_micros_per_million: Math.round(outputPrice * 1_000_000),
-    fixed_request_micros_usd: Math.round(fixedRequestPrice * 1_000_000),
     region: region.trim(),
     max_concurrency: maxConcurrency,
     priority: current?.priority ?? 0,
@@ -437,10 +574,9 @@ function DeploymentForm({
   };
   const selectedCapabilityNames = deploymentCapabilityNames.filter((name) => capabilities[name]);
   const regional = selectedProvider?.access_surface === "bedrock-runtime" || selectedProvider?.access_surface === "bedrock-agent-runtime";
-  const tokenPriced = capabilities.chat || capabilities.embeddings;
   const fixedPriced = capabilities.moderations || capabilities.images || capabilities.transcriptions || capabilities.speech || capabilities.files || capabilities.batches || capabilities.rerank || capabilities.async_generate;
   const anyOperation = capabilities.chat || capabilities.embeddings || fixedPriced;
-  const numericValues = [inputPrice, outputPrice, fixedRequestPrice, maxConcurrency, capabilities.max_context_tokens, capabilities.max_output_tokens];
+  const numericValues = [maxConcurrency, capabilities.max_context_tokens, capabilities.max_output_tokens];
   const tokenLimitsValid = capabilities.max_context_tokens === 0 || capabilities.max_output_tokens <= capabilities.max_context_tokens;
   const formValid = Boolean(name.trim() && providerID && providerModel.trim() && anyOperation && numericValues.every((value) => Number.isFinite(value) && value >= 0) && tokenLimitsValid);
   return (
@@ -465,9 +601,6 @@ function DeploymentForm({
                 setTargetKind(defaultTargetKind(provider));
                 setProviderModel("");
                 setRegion("");
-                setInputPrice(0);
-                setOutputPrice(0);
-                setFixedRequestPrice(0);
               }
             }}>
               {enabledProviders.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}
@@ -486,9 +619,6 @@ function DeploymentForm({
                     setCapabilities(binding.capabilities);
                     setProviderModel("");
                     setRegion("");
-                    setInputPrice(0);
-                    setOutputPrice(0);
-                    setFixedRequestPrice(0);
                   }
                 }}>
                   {bindings.map((binding) => <option value={binding.id} key={binding.id}>{bindingLabel(binding, t)}</option>)}
@@ -612,9 +742,6 @@ function DeploymentForm({
             <header><h3>{t("deployments.capacityCostSection")}</h3><p>{t("deployments.capacityCostSectionDescription")}</p></header>
             <div className="form-grid deployment-capacity-grid">
               <Field label={t("deployments.concurrencyLimit")} hint={t("deployments.concurrencyHint")}><input min="0" type="number" value={maxConcurrency} onChange={(event) => setMaxConcurrency(Number(event.target.value))} /></Field>
-              {tokenPriced && <Field label={t("deployments.inputUSD")}><input min="0" type="number" step="0.000001" value={inputPrice} onChange={(event) => setInputPrice(Number(event.target.value))} /></Field>}
-              {tokenPriced && <Field label={t("deployments.outputUSD")}><input min="0" type="number" step="0.000001" value={outputPrice} onChange={(event) => setOutputPrice(Number(event.target.value))} /></Field>}
-              {fixedPriced && <Field label={t("deployments.fixedRequestUSD")} hint={t("deployments.fixedRequestHint")}><input min="0" type="number" step="0.000001" value={fixedRequestPrice} onChange={(event) => setFixedRequestPrice(Number(event.target.value))} /></Field>}
             </div>
           </section>
           <div className="deployment-release-note"><strong>{current?.enabled ? t("deployments.updateLiveWarning") : t("deployments.savedDisabled")}</strong><span>{current?.enabled ? t("deployments.updateLiveDescription") : t("deployments.savedDisabledDescription")}</span></div>
