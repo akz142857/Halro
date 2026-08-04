@@ -28,6 +28,14 @@ func TestAdminMFALoginRequiresAndConsumesSecondFactor(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer runtime.Close()
+	user, err := runtime.store.GetAdminUser(context.Background(), "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	user.Appearance = domain.AppearanceLight
+	if _, err = runtime.store.PutAdminUser(context.Background(), user, user.Revision); err != nil {
+		t.Fatal(err)
+	}
 	secret := []byte("12345678901234567890")
 	ciphertext, err := runtime.vault.EncryptAdminMFA("mfa_test", "admin", secret)
 	if err != nil {
@@ -56,6 +64,12 @@ func TestAdminMFALoginRequiresAndConsumesSecondFactor(t *testing.T) {
 	runtime.adminRouter().ServeHTTP(completeResponse, complete)
 	if completeResponse.Code != http.StatusOK || len(completeResponse.Result().Cookies()) != 1 {
 		t.Fatalf("MFA status=%d body=%s", completeResponse.Code, completeResponse.Body.String())
+	}
+	var completedSession struct {
+		Appearance string `json:"appearance"`
+	}
+	if err = json.Unmarshal(completeResponse.Body.Bytes(), &completedSession); err != nil || completedSession.Appearance != domain.AppearanceLight {
+		t.Fatalf("MFA session appearance=%q error=%v body=%s", completedSession.Appearance, err, completeResponse.Body.String())
 	}
 	replay := adminRequest(t, http.MethodPost, "/admin/api/v1/session/mfa/totp", map[string]string{"challenge_token": challenge.ChallengeToken, "code": code})
 	replayResponse := httptest.NewRecorder()

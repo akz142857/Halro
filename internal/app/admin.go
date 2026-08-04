@@ -9,6 +9,7 @@ import (
 	"github.com/akz142857/Heimdall/internal/adminauth"
 	"github.com/akz142857/Heimdall/internal/audit"
 	"github.com/akz142857/Heimdall/internal/config"
+	"github.com/akz142857/Heimdall/internal/domain"
 	"github.com/akz142857/Heimdall/internal/id"
 	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
 	"github.com/akz142857/Heimdall/internal/store/lock"
@@ -121,6 +122,7 @@ func ResetAdminPassword(
 	defer clear(replacement.PasswordSalt)
 	replacement.CreatedAt = current.CreatedAt
 	replacement.Locale = current.Locale
+	replacement.Appearance = domain.NormalizeAppearance(current.Appearance)
 	replacement.SessionGeneration = current.SessionGeneration + 1
 
 	masterKey, err := unlockMasterKey(ctx, cfg, store)

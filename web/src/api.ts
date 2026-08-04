@@ -18,6 +18,7 @@ import type {
   InstanceUISettings,
   AdminPreferences,
   LocalePreference,
+  Appearance,
   SupportedLocale,
   Session,
   MFAChallenge,
@@ -167,8 +168,11 @@ export const api = {
   updateUISettings: (defaultLocale: SupportedLocale, revision: number) =>
     request<InstanceUISettings>("/settings/ui", json("PUT", { default_locale: defaultLocale }), `"${revision}"`),
   preferences: () => request<AdminPreferences>("/preferences"),
-  updatePreferences: (locale: LocalePreference, revision: number) =>
-    request<AdminPreferences>("/preferences", json("PUT", { locale }), `"${revision}"`),
+  // The complete writable preference resource must be sent so updating one
+  // field never clears another (PRD §4.4). Callers pass their current confirmed
+  // values for the fields they are not changing.
+  updatePreferences: (preferences: { locale: LocalePreference; appearance: Appearance }, revision: number) =>
+    request<AdminPreferences>("/preferences", json("PUT", preferences), `"${revision}"`),
   projects: () => request<Page<Project>>("/projects").then((value) => value.data),
   project: (id: string) => request<Project>(`/projects/${encodeURIComponent(id)}`),
   createProject: (value: unknown) =>

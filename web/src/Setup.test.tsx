@@ -12,6 +12,7 @@ describe("first-run setup", () => {
     const session = {
       username: "admin",
       locale: "system" as const,
+      appearance: "dark" as const,
       csrf_token: "csrf",
       absolute_expires_at: "2026-08-02T00:00:00Z",
       idle_expires_at: "2026-08-01T01:00:00Z",
@@ -38,6 +39,7 @@ describe("first-run setup", () => {
     const setup = vi.spyOn(api, "setupAdmin").mockResolvedValue({
       username: "admin",
       locale: "system",
+      appearance: "dark",
       csrf_token: "csrf",
       absolute_expires_at: "2026-08-02T00:00:00Z",
       idle_expires_at: "2026-08-01T01:00:00Z",

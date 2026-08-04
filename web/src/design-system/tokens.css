@@ -1,0 +1,108 @@
+/*
+ * Heimdall Admin Console — Primitive Tokens (design-system layer 1).
+ *
+ * Raw, theme-agnostic values: color scales, type, spacing, radius, shadow,
+ * motion and z-index. These are the ONLY place literal colors are allowed to
+ * live. Semantic tokens (themes/*.css) reference these; business CSS must never
+ * consume a primitive directly. See design-system/README.md.
+ */
+:root {
+  /* Neutral / green-tinted scale (brand-aligned, dark→light) */
+  --p-ink-950: #07110f;
+  --p-ink-900: #0b1916;
+  --p-ink-850: #10231f;
+  --p-ink-800: #16302a;
+  --p-ink-700: #1c332d;
+  --p-ink-600: #2c4b43;
+  --p-ink-500: #3d5f56;
+  --p-ink-400: #526a63;
+  --p-ink-300: #82958f;
+  --p-ink-200: #b7c6c0;
+  --p-ink-100: #d6e2dd;
+  --p-ink-50:  #eaf4f0;
+  --p-white:   #ffffff;
+  --p-black:   #000000;
+
+  /* Light-mode paper scale (soft, non-pure-white canvas & surfaces) */
+  --p-paper-50:  #f4f7f5;
+  --p-paper-100: #eef2f0;
+  --p-paper-200: #e2e9e5;
+  --p-paper-300: #cfdad4;
+  --p-paper-400: #aebbb4;
+  --p-paper-500: #7a8c83;
+
+  /* Brand accents */
+  --p-lime-400: #d8ff61;
+  --p-lime-500: #c2ee38;
+  --p-lime-700: #5f7d16; /* darker lime for light-mode fills / text-on-light */
+  --p-lime-800: #4f6810;
+  --p-mint-300: #7fe3cc;
+  --p-mint-400: #58d6bc;
+  --p-mint-600: #2f9a83;
+
+  /* Status hues (each provides a dark and light usable value) */
+  --p-green-400: #58d6bc;
+  --p-green-600: #1c8f74;
+  --p-green-700: #14745e;
+  --p-amber-400: #ffc45e;
+  --p-amber-600: #a9700d;
+  --p-amber-700: #855700;
+  --p-red-400:   #ff756c;
+  --p-red-600:   #c23a30;
+  --p-blue-400:  #74b9ff;
+  --p-blue-600:  #2f6bc2;
+
+  /* Chart series (distinct hue + intended for pairing with dash/marker) */
+  --p-chart-1: #58d6bc;
+  --p-chart-2: #d8ff61;
+  --p-chart-1-light: #1c8f74;
+  --p-chart-2-light: #5f7d16;
+
+  /* Typography */
+  --font-sans: Inter, "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --font-size-xs: 11px;
+  --font-size-sm: 13px;
+  --font-size-md: 15px;
+  --font-size-lg: 18px;
+  --font-size-xl: 22px;
+  --font-size-2xl: 32px;
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 800;
+  --line-height-tight: 1.15;
+  --line-height-normal: 1.5;
+  --line-height-relaxed: 1.7;
+
+  /* Spacing scale (4px base) */
+  --space-0: 0;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  /* Radius */
+  --radius-sm: 3px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-pill: 999px;
+
+  /* Motion */
+  --motion-duration-fast: 90ms;
+  --motion-duration-normal: 150ms;
+  --motion-easing-standard: cubic-bezier(0.2, 0, 0, 1);
+
+  /* Z-index */
+  --z-sticky: 10;
+  --z-dropdown: 100;
+  --z-modal: 500;
+  --z-toast: 800;
+  --z-skip-link: 1000;
+}

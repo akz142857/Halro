@@ -6,6 +6,7 @@ export interface Page<T> {
 export interface Session {
   username: string;
   locale: LocalePreference;
+  appearance: Appearance;
   csrf_token: string;
   absolute_expires_at: string;
   idle_expires_at: string;
@@ -560,6 +561,7 @@ export interface RuntimeSettings {
 
 export type SupportedLocale = "zh-CN" | "en-US";
 export type LocalePreference = SupportedLocale | "system";
+export type Appearance = "light" | "dark";
 
 export interface UIBootstrap {
   default_locale: SupportedLocale;
@@ -574,5 +576,6 @@ export interface InstanceUISettings {
 
 export interface AdminPreferences {
   locale: LocalePreference;
+  appearance: Appearance;
   revision: number;
 }

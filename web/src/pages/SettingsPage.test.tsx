@@ -2,7 +2,79 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
-import { LanguageSettingsForm, MFASettings, PasswordChangeForm } from "./SettingsPage";
+import { AppearanceForm, LanguageSettingsForm, MFASettings, PasswordChangeForm } from "./SettingsPage";
+
+function renderWithClient(node: React.ReactElement) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(<QueryClientProvider client={client}>{node}</QueryClientProvider>);
+}
+
+describe("AppearanceForm", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    document.documentElement.removeAttribute("data-appearance");
+  });
+
+  it("previews instantly, persists the full resource, and confirms", async () => {
+    const update = vi.spyOn(api, "updatePreferences").mockResolvedValue({
+      data: { locale: "system", appearance: "light", revision: 6 }, etag: '"6"',
+    });
+    renderWithClient(<AppearanceForm preferences={{ locale: "system", appearance: "dark", revision: 5 }} />);
+
+    fireEvent.click(screen.getByRole("radio", { name: /浅色/ }));
+    // Instant preview: theme is applied before the network settles.
+    expect(document.documentElement.getAttribute("data-appearance")).toBe("light");
+    expect(update).toHaveBeenCalledWith({ locale: "system", appearance: "light" }, 5);
+    await waitFor(() => expect(screen.getByText("外观设置已保存")).toBeInTheDocument());
+    expect(document.documentElement.getAttribute("data-appearance")).toBe("light");
+  });
+
+  it("rolls back to the confirmed theme when saving fails", async () => {
+    vi.spyOn(api, "updatePreferences").mockRejectedValue(new Error("network down"));
+    renderWithClient(<AppearanceForm preferences={{ locale: "system", appearance: "dark", revision: 5 }} />);
+
+    fireEvent.click(screen.getByRole("radio", { name: /浅色/ }));
+    expect(document.documentElement.getAttribute("data-appearance")).toBe("light");
+    await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
+    // Reverted to the last server-confirmed theme.
+    expect(document.documentElement.getAttribute("data-appearance")).toBe("dark");
+    expect(screen.getByRole("radio", { name: /深色/ })).toBeChecked();
+  });
+
+  it("retries the failed target after refreshing server truth", async () => {
+    const update = vi.spyOn(api, "updatePreferences")
+      .mockRejectedValueOnce(new Error("network down"))
+      .mockResolvedValueOnce({ data: { locale: "system", appearance: "light", revision: 7 }, etag: '"7"' });
+    renderWithClient(<AppearanceForm preferences={{ locale: "system", appearance: "dark", revision: 5 }} />);
+
+    fireEvent.click(screen.getByRole("radio", { name: /浅色/ }));
+    await screen.findByRole("alert");
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(2));
+    expect(update.mock.calls[1][0]).toEqual({ locale: "system", appearance: "light" });
+    expect(document.documentElement.getAttribute("data-appearance")).toBe("light");
+  });
+
+  it("serializes rapid changes so the last explicit choice wins", async () => {
+    let resolveFirst!: (value: Awaited<ReturnType<typeof api.updatePreferences>>) => void;
+    const first = new Promise<Awaited<ReturnType<typeof api.updatePreferences>>>((resolve) => { resolveFirst = resolve; });
+    const update = vi.spyOn(api, "updatePreferences")
+      .mockReturnValueOnce(first)
+      .mockResolvedValueOnce({ data: { locale: "system", appearance: "dark", revision: 7 }, etag: '"7"' });
+    renderWithClient(<AppearanceForm preferences={{ locale: "system", appearance: "dark", revision: 5 }} />);
+
+    fireEvent.click(screen.getByRole("radio", { name: /浅色/ }));
+    fireEvent.click(screen.getByRole("radio", { name: /深色/ }));
+    expect(document.documentElement.getAttribute("data-appearance")).toBe("dark");
+    resolveFirst({ data: { locale: "system", appearance: "light", revision: 6 }, etag: '"6"' });
+
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(2));
+    expect(update.mock.calls[1]).toEqual([{ locale: "system", appearance: "dark" }, 6]);
+    await screen.findByText("外观设置已保存");
+    expect(document.documentElement.getAttribute("data-appearance")).toBe("dark");
+  });
+});
 
 describe("PasswordChangeForm", () => {
   afterEach(() => vi.restoreAllMocks());
@@ -10,6 +82,7 @@ describe("PasswordChangeForm", () => {
     const change = vi.spyOn(api, "changePassword").mockResolvedValue({
       username: "admin",
       locale: "system",
+      appearance: "dark",
       csrf_token: "rotated",
       absolute_expires_at: "2026-01-01T00:00:00Z",
       idle_expires_at: "2026-01-01T00:00:00Z",
@@ -41,7 +114,7 @@ describe("LanguageSettingsForm", () => {
 
   it("applies administrator language immediately and saves instance language explicitly", async () => {
     const updatePreferences = vi.spyOn(api, "updatePreferences").mockResolvedValue({
-      data: { locale: "en-US", revision: 4 }, etag: '"4"',
+      data: { locale: "en-US", appearance: "dark", revision: 4 }, etag: '"4"',
     });
     const updateUISettings = vi.spyOn(api, "updateUISettings").mockResolvedValue({
       data: { default_locale: "en-US", revision: 8, updated_at: "2026-01-01T00:00:00Z" }, etag: '"8"',
@@ -50,7 +123,7 @@ describe("LanguageSettingsForm", () => {
     render(
       <QueryClientProvider client={client}>
         <LanguageSettingsForm
-          preferences={{ locale: "system", revision: 3 }}
+          preferences={{ locale: "system", appearance: "dark", revision: 3 }}
           ui={{ default_locale: "zh-CN", revision: 7, updated_at: "2026-01-01T00:00:00Z" }}
         />
       </QueryClientProvider>,
@@ -59,7 +132,7 @@ describe("LanguageSettingsForm", () => {
     const instanceLocale = screen.getByLabelText("实例默认语言");
     const saveInstance = screen.getByRole("button", { name: "保存实例默认语言" });
     fireEvent.change(screen.getByLabelText("界面语言"), { target: { value: "en-US" } });
-    await waitFor(() => expect(updatePreferences).toHaveBeenCalledWith("en-US", 3));
+    await waitFor(() => expect(updatePreferences).toHaveBeenCalledWith({ locale: "en-US", appearance: "dark" }, 3));
     fireEvent.change(instanceLocale, { target: { value: "en-US" } });
     expect(updateUISettings).not.toHaveBeenCalled();
 

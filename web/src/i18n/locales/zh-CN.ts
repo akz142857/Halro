@@ -135,6 +135,17 @@ export const zhCN = {
   settings: {
     panes: { general: "通用", security: "登录与安全", instance: "实例配置", diagnostics: "关于与诊断" },
     generalDescription: "当前管理员账户的个人界面偏好。",
+    appearance: {
+      title: "外观",
+      description: "只影响当前管理员的 Admin Console，不改变其他管理员或实例运行。",
+      legend: "外观模式",
+      light: "浅色",
+      dark: "深色",
+      saving: "正在保存外观…",
+      saved: "外观设置已保存",
+      error: "外观设置保存失败",
+      retry: "重试",
+    },
     eyebrow: "本地系统",
     title: "设置与状态",
     description: "界面偏好可即时生效；监听地址、TLS、数据目录和安全边界仍由 YAML 管理并需重启。",

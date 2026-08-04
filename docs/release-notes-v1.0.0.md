@@ -46,6 +46,10 @@ and other external services are not required.
 - The embedded React Admin console covers Dashboard, Projects/Keys,
   Credentials, Providers, Deployments, Routes, Usage, Policies, Alerts, Audit,
   and Settings without a Node.js runtime dependency.
+- The Admin console uses a governed semantic-token design system and provides
+  server-persisted per-admin Light and Dark appearances. Dark remains the
+  unauthenticated default; switching is immediate, revision-safe, and does not
+  use browser persistence.
 - Prometheus metrics, generic webhook alerts, encrypted backup/restore, HMAC
   Audit chain verification, dependency/SBOM/signature release gates, and a
   complete operator guide are included.

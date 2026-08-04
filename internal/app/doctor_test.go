@@ -12,6 +12,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
+
+	"github.com/akz142857/Heimdall/internal/domain"
 )
 
 func TestKMSDoctorStaticAndFullModesAreReadOnly(t *testing.T) {
@@ -130,6 +133,22 @@ func TestResetAdminPasswordInvalidatesOldCredential(t *testing.T) {
 	if err := BootstrapAdmin(context.Background(), cfg, "admin", oldPassword); err != nil {
 		t.Fatal(err)
 	}
+	before, err := Open(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, err := before.store.GetAdminUser(context.Background(), "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	user.Appearance = domain.AppearanceLight
+	user.UpdatedAt = time.Now().UTC()
+	if _, err := before.store.PutAdminUser(context.Background(), user, user.Revision); err != nil {
+		t.Fatal(err)
+	}
+	if err := before.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if err := ResetAdminPassword(context.Background(), cfg, "admin", newPassword); err != nil {
 		t.Fatal(err)
 	}
@@ -148,6 +167,10 @@ func TestResetAdminPasswordInvalidatesOldCredential(t *testing.T) {
 	}
 	if status := login(string(newPassword)); status != http.StatusOK {
 		t.Fatalf("new password status=%d", status)
+	}
+	resetUser, err := runtime.store.GetAdminUser(context.Background(), "admin")
+	if err != nil || resetUser.Appearance != domain.AppearanceLight {
+		t.Fatalf("reset password lost appearance: %#v err=%v", resetUser, err)
 	}
 	if err := runtime.Close(); err != nil {
 		t.Fatal(err)

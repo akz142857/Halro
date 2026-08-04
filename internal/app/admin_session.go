@@ -119,6 +119,7 @@ func (r *Runtime) loginAdmin(writer http.ResponseWriter, request *http.Request) 
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"username": user.Username, "csrf_token": created.CSRFToken,
 		"locale":              domain.NormalizeLocalePreference(user.Locale),
+		"appearance":          domain.NormalizeAppearance(user.Appearance),
 		"absolute_expires_at": created.Session.AbsoluteExpiresAt,
 		"idle_expires_at":     created.Session.IdleExpiresAt,
 	})
@@ -135,6 +136,7 @@ func (r *Runtime) getAdminSession(writer http.ResponseWriter, request *http.Requ
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"username":            admin.session.Username,
 		"locale":              domain.NormalizeLocalePreference(user.Locale),
+		"appearance":          domain.NormalizeAppearance(user.Appearance),
 		"csrf_token":          r.adminSessionsCSRF(admin.token),
 		"absolute_expires_at": admin.session.AbsoluteExpiresAt,
 		"idle_expires_at":     admin.session.IdleExpiresAt,
@@ -192,6 +194,7 @@ func (r *Runtime) changeAdminPassword(writer http.ResponseWriter, request *http.
 	defer clear(replacement.PasswordSalt)
 	replacement.CreatedAt = user.CreatedAt
 	replacement.Locale = user.Locale
+	replacement.Appearance = domain.NormalizeAppearance(user.Appearance)
 	replacement.SessionGeneration = user.SessionGeneration + 1
 	if _, err := r.store.PutAdminUser(request.Context(), replacement, user.Revision); err != nil {
 		writeJSON(writer, http.StatusConflict, map[string]string{"error": "password update conflict"})
@@ -218,6 +221,7 @@ func (r *Runtime) changeAdminPassword(writer http.ResponseWriter, request *http.
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"username": user.Username, "csrf_token": created.CSRFToken,
 		"locale":              domain.NormalizeLocalePreference(user.Locale),
+		"appearance":          domain.NormalizeAppearance(user.Appearance),
 		"absolute_expires_at": created.Session.AbsoluteExpiresAt,
 		"idle_expires_at":     created.Session.IdleExpiresAt,
 	})
@@ -370,6 +374,13 @@ func (r *Runtime) auditAdminLogin(username, outcome, reason string) {
 func (r *Runtime) appendAdminAudit(
 	actorType, actorID, action, targetType, targetID, outcome, reason string,
 ) error {
+	return r.appendAdminAuditWithMetadata(actorType, actorID, action, targetType, targetID, outcome, reason, nil)
+}
+
+func (r *Runtime) appendAdminAuditWithMetadata(
+	actorType, actorID, action, targetType, targetID, outcome, reason string,
+	metadata map[string]any,
+) error {
 	eventID, err := id.New("aud")
 	if err != nil {
 		return err
@@ -377,7 +388,7 @@ func (r *Runtime) appendAdminAudit(
 	request := adminAuditRequest{event: audit.Event{
 		EventID: eventID, OccurredAt: time.Now().UTC(), ActorType: actorType,
 		ActorID: actorID, Action: action, TargetType: targetType, TargetID: targetID,
-		Outcome: outcome, ReasonCode: reason,
+		Outcome: outcome, ReasonCode: reason, Metadata: metadata,
 	}, result: make(chan error, 1)}
 	r.auditBatchMu.Lock()
 	r.auditBatchPending = append(r.auditBatchPending, request)

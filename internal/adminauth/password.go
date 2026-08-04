@@ -38,7 +38,7 @@ func NewUser(username string, password []byte, now time.Time) (domain.AdminUser,
 	}
 	hash := argon2.IDKey(password, salt, argonIterations, argonMemoryKiB, argonParallelism, passwordHashSize)
 	user := domain.AdminUser{
-		Username: username, PasswordVersion: passwordVersion,
+		Username: username, Appearance: domain.AppearanceDark, PasswordVersion: passwordVersion,
 		PasswordSalt: salt, PasswordHash: hash, ArgonMemoryKiB: argonMemoryKiB,
 		ArgonIterations: argonIterations, ArgonParallelism: argonParallelism,
 		SessionGeneration: 1, CreatedAt: now.UTC(), UpdatedAt: now.UTC(),

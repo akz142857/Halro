@@ -1,7 +1,7 @@
 # Heimdall Admin Console 设计系统升级与 Appearance（Light / Dark）PRD
 
-- 状态：Draft
-- 目标版本：待排期
+- 状态：已实现并完成代码级验收
+- 目标版本：v1.0.0
 - 日期：2026-08-04
 - 文档语言：中文
 - 适用范围：Heimdall Web Admin Console

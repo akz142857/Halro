@@ -49,6 +49,9 @@ func TestAdminSetupCreatesFirstUserAndSessionOnce(t *testing.T) {
 	if setupResponse.Code != http.StatusCreated {
 		t.Fatalf("setup status=%d body=%s", setupResponse.Code, setupResponse.Body.String())
 	}
+	if !jsonBodyContains(t, setupResponse, `"appearance":"dark"`) {
+		t.Fatalf("setup response did not expose default appearance: %s", setupResponse.Body.String())
+	}
 	cookies := setupResponse.Result().Cookies()
 	if len(cookies) != 1 || cookies[0].Name != adminSessionCookie {
 		t.Fatalf("setup did not create a session: %#v", cookies)
@@ -59,6 +62,9 @@ func TestAdminSetupCreatesFirstUserAndSessionOnce(t *testing.T) {
 	runtime.adminRouter().ServeHTTP(sessionResponse, sessionRequest)
 	if sessionResponse.Code != http.StatusOK {
 		t.Fatalf("created session status=%d body=%s", sessionResponse.Code, sessionResponse.Body.String())
+	}
+	if !jsonBodyContains(t, sessionResponse, `"appearance":"dark"`) {
+		t.Fatalf("created session did not expose default appearance: %s", sessionResponse.Body.String())
 	}
 	foundBootstrapAudit := false
 	if _, err := runtime.audit.Replay(func(record audit.Record) error {

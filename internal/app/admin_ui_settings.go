@@ -2,14 +2,16 @@ package app
 
 import (
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/akz142857/Heimdall/internal/domain"
 )
 
 type adminPreferencesResponse struct {
-	Locale   string `json:"locale"`
-	Revision uint64 `json:"revision"`
+	Locale     string `json:"locale"`
+	Appearance string `json:"appearance"`
+	Revision   uint64 `json:"revision"`
 }
 
 func (r *Runtime) getAdminUIBootstrap(writer http.ResponseWriter, _ *http.Request) {
@@ -76,7 +78,9 @@ func (r *Runtime) getAdminPreferences(writer http.ResponseWriter, request *http.
 	}
 	writer.Header().Set("ETag", revisionETag(user.Revision))
 	writeJSON(writer, http.StatusOK, adminPreferencesResponse{
-		Locale: domain.NormalizeLocalePreference(user.Locale), Revision: user.Revision,
+		Locale:     domain.NormalizeLocalePreference(user.Locale),
+		Appearance: domain.NormalizeAppearance(user.Appearance),
+		Revision:   user.Revision,
 	})
 }
 
@@ -85,11 +89,22 @@ func (r *Runtime) updateAdminPreferences(writer http.ResponseWriter, request *ht
 	if !ok {
 		return
 	}
+	// The client must submit the complete writable preference resource so that
+	// updating one field never silently clears another (PRD §4.4, §9.2).
 	var input struct {
-		Locale string `json:"locale"`
+		Locale     *string `json:"locale"`
+		Appearance *string `json:"appearance"`
 	}
-	if err := decodeAdminJSON(request, &input); err != nil || !domain.IsSupportedLocalePreference(input.Locale) {
-		adminBadRequest(writer, "locale preference is not supported")
+	if err := decodeAdminJSON(request, &input); err != nil {
+		adminBadRequestCode(writer, "invalid_preferences", "invalid preference resource")
+		return
+	}
+	if input.Locale == nil || *input.Locale == "" || !domain.IsSupportedLocalePreference(*input.Locale) {
+		adminBadRequestCode(writer, "invalid_locale_preference", "locale preference is not supported")
+		return
+	}
+	if input.Appearance == nil || !domain.IsSupportedAppearance(*input.Appearance) {
+		adminBadRequestCode(writer, "invalid_appearance_preference", "appearance preference is not supported")
 		return
 	}
 	admin := request.Context().Value(adminContextKey{}).(adminRequestContext)
@@ -100,17 +115,45 @@ func (r *Runtime) updateAdminPreferences(writer http.ResponseWriter, request *ht
 		adminStoreError(writer)
 		return
 	}
-	user.Locale = domain.NormalizeLocalePreference(input.Locale)
+	original := user
+	user.Locale = domain.NormalizeLocalePreference(*input.Locale)
+	user.Appearance = domain.NormalizeAppearance(*input.Appearance)
 	user.UpdatedAt = time.Now().UTC()
 	user, err = r.store.PutAdminUser(request.Context(), user, expected)
 	if err != nil {
 		adminMutationError(writer, err)
 		return
 	}
-	if err := r.auditAdminMutation(request, "admin.preferences.update", "admin_user", user.Username); err != nil {
+	changed := make([]string, 0, 2)
+	if domain.NormalizeLocalePreference(original.Locale) != user.Locale {
+		changed = append(changed, "locale")
+	}
+	if domain.NormalizeAppearance(original.Appearance) != user.Appearance {
+		changed = append(changed, "appearance")
+	}
+	metadata := map[string]any{
+		"appearance":     user.Appearance,
+		"changed_fields": strings.Join(changed, ","),
+		"locale":         user.Locale,
+	}
+	if err := r.appendAdminAuditWithMetadata(
+		"admin_user", admin.session.Username, "admin.preferences.update", "admin_user", user.Username,
+		"success", "", metadata,
+	); err != nil {
+		// Keep the API and server truth aligned when the trusted Audit chain is
+		// unavailable. The settings mutex prevents another preference writer from
+		// racing this compensating write.
+		original.UpdatedAt = time.Now().UTC()
+		if _, rollbackErr := r.store.PutAdminUser(request.Context(), original, user.Revision); rollbackErr != nil {
+			r.logger.Error("admin preference audit rollback failed", "error", rollbackErr, "audit_error", err)
+		}
 		adminAuditError(writer)
 		return
 	}
 	writer.Header().Set("ETag", revisionETag(user.Revision))
-	writeJSON(writer, http.StatusOK, adminPreferencesResponse{Locale: user.Locale, Revision: user.Revision})
+	writeJSON(writer, http.StatusOK, adminPreferencesResponse{
+		Locale:     user.Locale,
+		Appearance: user.Appearance,
+		Revision:   user.Revision,
+	})
 }
