@@ -135,6 +135,17 @@ export const enUS = {
   settings: {
     panes: { general: "General", security: "Sign-in & Security", instance: "Instance", diagnostics: "About & Diagnostics" },
     generalDescription: "Personal interface preferences for this administrator account.",
+    appearance: {
+      title: "Appearance",
+      description: "Only affects your Admin Console — not other administrators or how the instance runs.",
+      legend: "Appearance mode",
+      light: "Light",
+      dark: "Dark",
+      saving: "Saving appearance…",
+      saved: "Appearance saved",
+      error: "Could not save appearance",
+      retry: "Retry",
+    },
     eyebrow: "Local system",
     title: "Settings & Status",
     description: "Interface preferences apply immediately; listeners, TLS, data directories, and security boundaries remain in YAML and require a restart.",

@@ -18,6 +18,7 @@ import { SettingsPage } from "./pages/SettingsPage";
 import { UsagePage } from "./pages/UsagePage";
 import { MasterKeyCustodyPage } from "./pages/MasterKeyCustodyPage";
 import { applyLocale, applyPreference, resolveLocale } from "./i18n";
+import { applyAppearance, normalizeAppearance, resetAppearance } from "./theme";
 
 export function App() {
   const { t } = useTranslation();
@@ -51,6 +52,16 @@ export function App() {
       void applyPreference(session.data.locale, uiBootstrap.data?.default_locale);
     }
   }, [session.data, uiBootstrap.data?.default_locale]);
+  useEffect(() => {
+    // Authenticated: apply the admin's server-confirmed appearance. Otherwise
+    // (login, setup, unauthenticated errors) fall back to the Dark default so
+    // no previous admin's preference leaks before authentication (PRD §4.3).
+    if (session.data) {
+      applyAppearance(normalizeAppearance(session.data.appearance));
+    } else {
+      resetAppearance();
+    }
+  }, [session.data]);
   useEffect(() => {
     if (session.data && path === "/admin/login") navigate(session.data.mfa_setup_required ? "/admin/settings" : "/admin");
   }, [path, session.data]);

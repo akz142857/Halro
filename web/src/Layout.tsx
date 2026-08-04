@@ -1,6 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { api, clearSensitiveClientState } from "./api";
 import { confirmNavigation, Link, navigate, setNavigationBlocked, usePathname } from "./navigation";
+import { resetAppearance } from "./theme";
 import { useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -46,6 +47,7 @@ export function Layout({
       await api.logout();
     } finally {
       clearSensitiveClientState();
+      resetAppearance();
       queryClient.clear();
       setNavigationBlocked(false);
       navigate("/admin/login");

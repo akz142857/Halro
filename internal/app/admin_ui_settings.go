@@ -8,8 +8,9 @@ import (
 )
 
 type adminPreferencesResponse struct {
-	Locale   string `json:"locale"`
-	Revision uint64 `json:"revision"`
+	Locale     string `json:"locale"`
+	Appearance string `json:"appearance"`
+	Revision   uint64 `json:"revision"`
 }
 
 func (r *Runtime) getAdminUIBootstrap(writer http.ResponseWriter, _ *http.Request) {
@@ -76,7 +77,9 @@ func (r *Runtime) getAdminPreferences(writer http.ResponseWriter, request *http.
 	}
 	writer.Header().Set("ETag", revisionETag(user.Revision))
 	writeJSON(writer, http.StatusOK, adminPreferencesResponse{
-		Locale: domain.NormalizeLocalePreference(user.Locale), Revision: user.Revision,
+		Locale:     domain.NormalizeLocalePreference(user.Locale),
+		Appearance: domain.NormalizeAppearance(user.Appearance),
+		Revision:   user.Revision,
 	})
 }
 
@@ -85,11 +88,18 @@ func (r *Runtime) updateAdminPreferences(writer http.ResponseWriter, request *ht
 	if !ok {
 		return
 	}
+	// The client must submit the complete writable preference resource so that
+	// updating one field never silently clears another (PRD §4.4, §9.2).
 	var input struct {
-		Locale string `json:"locale"`
+		Locale     string `json:"locale"`
+		Appearance string `json:"appearance"`
 	}
 	if err := decodeAdminJSON(request, &input); err != nil || !domain.IsSupportedLocalePreference(input.Locale) {
 		adminBadRequest(writer, "locale preference is not supported")
+		return
+	}
+	if !domain.IsSupportedAppearance(input.Appearance) {
+		adminBadRequest(writer, "appearance preference is not supported")
 		return
 	}
 	admin := request.Context().Value(adminContextKey{}).(adminRequestContext)
@@ -101,6 +111,7 @@ func (r *Runtime) updateAdminPreferences(writer http.ResponseWriter, request *ht
 		return
 	}
 	user.Locale = domain.NormalizeLocalePreference(input.Locale)
+	user.Appearance = domain.NormalizeAppearance(input.Appearance)
 	user.UpdatedAt = time.Now().UTC()
 	user, err = r.store.PutAdminUser(request.Context(), user, expected)
 	if err != nil {
@@ -112,5 +123,9 @@ func (r *Runtime) updateAdminPreferences(writer http.ResponseWriter, request *ht
 		return
 	}
 	writer.Header().Set("ETag", revisionETag(user.Revision))
-	writeJSON(writer, http.StatusOK, adminPreferencesResponse{Locale: user.Locale, Revision: user.Revision})
+	writeJSON(writer, http.StatusOK, adminPreferencesResponse{
+		Locale:     user.Locale,
+		Appearance: user.Appearance,
+		Revision:   user.Revision,
+	})
 }

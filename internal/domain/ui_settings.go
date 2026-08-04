@@ -12,7 +12,16 @@ const (
 	LocaleEnUS   = "en-US"
 )
 
+const (
+	AppearanceDark  = "dark"
+	AppearanceLight = "light"
+)
+
 var SupportedLocales = []string{LocaleZhCN, LocaleEnUS}
+
+// SupportedAppearances enumerates the Admin Console appearance modes shipped in
+// this release. System / Auto is intentionally excluded (see PRD §3, §4.2).
+var SupportedAppearances = []string{AppearanceLight, AppearanceDark}
 
 type InstanceUISettings struct {
 	DefaultLocale string    `json:"default_locale"`
@@ -43,4 +52,20 @@ func NormalizeLocalePreference(locale string) string {
 		return LocaleSystem
 	}
 	return locale
+}
+
+// IsSupportedAppearance reports whether value is an appearance we accept on
+// write. Empty is intentionally rejected here; use NormalizeAppearance for read
+// paths where legacy records may carry no appearance.
+func IsSupportedAppearance(value string) bool {
+	return slices.Contains(SupportedAppearances, value)
+}
+
+// NormalizeAppearance maps missing or unknown appearance values to the default
+// dark theme (PRD §4.3, §5.4). It is safe for lazy migration of existing admins.
+func NormalizeAppearance(value string) string {
+	if IsSupportedAppearance(value) {
+		return value
+	}
+	return AppearanceDark
 }

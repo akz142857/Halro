@@ -71,15 +71,28 @@ func TestAdminUILocaleSettingsAndPreferencesPersist(t *testing.T) {
 	if preferences.Code != http.StatusOK || preferences.Header().Get("ETag") != `"1"` {
 		t.Fatalf("preferences status=%d etag=%q body=%s", preferences.Code, preferences.Header().Get("ETag"), preferences.Body.String())
 	}
+	// Legacy admins with no stored appearance read back as the default dark theme.
+	if !jsonBodyContains(t, preferences, `"appearance":"dark"`) {
+		t.Fatalf("preferences did not default appearance to dark: %s", preferences.Body.String())
+	}
 	preferenceUpdate := performAdminMutation(t, runtime, cookie, csrf, http.MethodPut,
-		"/admin/api/v1/preferences", `"1"`, map[string]string{"locale": domain.LocaleEnUS})
+		"/admin/api/v1/preferences", `"1"`, map[string]string{"locale": domain.LocaleEnUS, "appearance": domain.AppearanceLight})
 	if preferenceUpdate.Code != http.StatusOK || preferenceUpdate.Header().Get("ETag") != `"2"` {
 		t.Fatalf("preference update status=%d etag=%q body=%s", preferenceUpdate.Code, preferenceUpdate.Header().Get("ETag"), preferenceUpdate.Body.String())
 	}
+	if !jsonBodyContains(t, preferenceUpdate, `"appearance":"light"`) {
+		t.Fatalf("preference update did not echo appearance: %s", preferenceUpdate.Body.String())
+	}
 	invalidPreference := performAdminMutation(t, runtime, cookie, csrf, http.MethodPut,
-		"/admin/api/v1/preferences", `"2"`, map[string]string{"locale": "xx-YY"})
+		"/admin/api/v1/preferences", `"2"`, map[string]string{"locale": "xx-YY", "appearance": domain.AppearanceLight})
 	if invalidPreference.Code != http.StatusBadRequest {
 		t.Fatalf("invalid preference status=%d body=%s", invalidPreference.Code, invalidPreference.Body.String())
+	}
+	// An unsupported appearance is rejected and must not partially persist.
+	invalidAppearance := performAdminMutation(t, runtime, cookie, csrf, http.MethodPut,
+		"/admin/api/v1/preferences", `"2"`, map[string]string{"locale": domain.LocaleEnUS, "appearance": "sepia"})
+	if invalidAppearance.Code != http.StatusBadRequest {
+		t.Fatalf("invalid appearance status=%d body=%s", invalidAppearance.Code, invalidAppearance.Body.String())
 	}
 
 	uiSettings := authenticatedAdminGet(t, runtime, cookie, "/admin/api/v1/settings/ui")
@@ -101,6 +114,9 @@ func TestAdminUILocaleSettingsAndPreferencesPersist(t *testing.T) {
 	if session.Code != http.StatusOK || !jsonBodyContains(t, session, `"locale":"en-US"`) {
 		t.Fatalf("session did not expose locale: status=%d body=%s", session.Code, session.Body.String())
 	}
+	if !jsonBodyContains(t, session, `"appearance":"light"`) {
+		t.Fatalf("session did not expose appearance: status=%d body=%s", session.Code, session.Body.String())
+	}
 	audit := authenticatedAdminGet(t, runtime, cookie, "/admin/api/v1/audit")
 	if audit.Code != http.StatusOK ||
 		!bytes.Contains(audit.Body.Bytes(), []byte("admin.preferences.update")) ||
@@ -121,7 +137,7 @@ func TestAdminUILocaleSettingsAndPreferencesPersist(t *testing.T) {
 		t.Fatalf("UI settings were not persisted: %#v", storedUI)
 	}
 	storedUser, err := reopened.store.GetAdminUser(context.Background(), "admin")
-	if err != nil || storedUser.Locale != domain.LocaleEnUS {
+	if err != nil || storedUser.Locale != domain.LocaleEnUS || storedUser.Appearance != domain.AppearanceLight {
 		t.Fatalf("admin preference was not persisted: %#v err=%v", storedUser, err)
 	}
 }

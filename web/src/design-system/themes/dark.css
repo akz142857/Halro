@@ -1,0 +1,91 @@
+/*
+ * Dark theme — Semantic Tokens (design-system layer 2).
+ *
+ * Applied to the bare :root (so first paint, login and unauthenticated pages
+ * are always Dark — PRD §4.3, §5.4) AND to :root[data-appearance="dark"].
+ * Every semantic token declared here MUST also be declared in light.css.
+ */
+:root,
+:root[data-appearance="dark"] {
+  color-scheme: dark;
+
+  /* Surfaces & canvas */
+  --color-canvas: var(--p-ink-950);
+  --color-surface-default: var(--p-ink-900);
+  --color-surface-subtle: var(--p-ink-850);
+  --color-surface-raised: var(--p-ink-800);
+  --color-surface-overlay: var(--p-ink-850);
+
+  /* Text */
+  --color-text-primary: var(--p-ink-50);
+  --color-text-secondary: var(--p-ink-300);
+  --color-text-tertiary: var(--p-ink-400);
+  --color-text-inverse: var(--p-ink-950);
+
+  /* Borders */
+  --color-border-default: var(--p-ink-700);
+  --color-border-strong: var(--p-ink-600);
+
+  /* Actions & focus */
+  --color-action-primary: var(--p-lime-400);
+  --color-action-primary-hover: var(--p-lime-500);
+  --color-action-secondary: var(--p-ink-850);
+  --color-accent: var(--p-mint-400);
+  --color-focus-ring: var(--p-lime-400);
+
+  /* Status — success */
+  --color-status-success-text: var(--p-mint-300);
+  --color-status-success-surface: rgba(88, 214, 188, 0.10);
+  --color-status-success-border: rgba(88, 214, 188, 0.38);
+  --color-status-success-icon: var(--p-mint-400);
+  /* Status — warning */
+  --color-status-warning-text: var(--p-amber-400);
+  --color-status-warning-surface: rgba(255, 196, 94, 0.10);
+  --color-status-warning-border: rgba(255, 196, 94, 0.38);
+  --color-status-warning-icon: var(--p-amber-400);
+  /* Status — danger */
+  --color-status-danger-text: var(--p-red-400);
+  --color-status-danger-surface: rgba(255, 117, 108, 0.10);
+  --color-status-danger-border: rgba(255, 117, 108, 0.40);
+  --color-status-danger-icon: var(--p-red-400);
+  /* Status — info */
+  --color-status-info-text: var(--p-blue-400);
+  --color-status-info-surface: rgba(116, 185, 255, 0.10);
+  --color-status-info-border: rgba(116, 185, 255, 0.38);
+  --color-status-info-icon: var(--p-blue-400);
+
+  /* Charts */
+  --color-chart-series-1: var(--p-chart-1);
+  --color-chart-series-2: var(--p-chart-2);
+  --color-chart-series-1-fill: rgba(88, 214, 188, 0.10);
+  --color-chart-grid: rgba(255, 255, 255, 0.07);
+  --color-chart-axis: var(--p-ink-400);
+  --color-chart-tooltip: var(--p-ink-850);
+
+  /* Elevation */
+  --shadow-raised: 0 1px 0 rgba(255, 255, 255, 0.02), 0 12px 32px rgba(0, 0, 0, 0.45);
+  --shadow-overlay: 0 24px 70px rgba(0, 0, 0, 0.55);
+  --shadow-focus: 0 0 0 3px rgba(216, 255, 97, 0.35);
+
+  /* Ambient brand glow used by the app background */
+  --app-glow: rgba(88, 214, 188, 0.09);
+
+  /* ---- Legacy alias layer -------------------------------------------------
+   * Existing styles.css routes most color through these names. Mapping them to
+   * semantic tokens means the bulk of the UI themes automatically. New CSS
+   * should prefer the --color-* semantic tokens above. */
+  --bg: var(--color-canvas);
+  --surface: var(--color-surface-default);
+  --surface-2: var(--color-surface-subtle);
+  --line: var(--color-border-default);
+  --line-strong: var(--color-border-strong);
+  --text: var(--color-text-primary);
+  --muted: var(--color-text-secondary);
+  --muted-2: var(--color-text-tertiary);
+  --lime: var(--color-action-primary);
+  --mint: var(--color-accent);
+  --danger: var(--color-status-danger-icon);
+  --warning: var(--color-status-warning-icon);
+  --accent: var(--color-accent);
+  --border: var(--color-border-default);
+}

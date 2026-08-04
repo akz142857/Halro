@@ -53,7 +53,7 @@ describe("admin accessibility baseline", () => {
     vi.spyOn(api, "systemStatus").mockResolvedValue({ build: { version: "dev", commit: "local", date: "" }, accounting_status: 0, draining: false, wal: {}, audit: {}, alerts: {}, usage_watermark: {} });
     vi.spyOn(api, "settings").mockResolvedValue({ data: { health_probe_interval_seconds: 30, revision: 1 }, etag: '"1"' });
     vi.spyOn(api, "uiSettings").mockResolvedValue({ data: { default_locale: "zh-CN", revision: 1 }, etag: '"1"' });
-    vi.spyOn(api, "preferences").mockResolvedValue({ data: { locale: "zh-CN", revision: 1 }, etag: '"1"' });
+    vi.spyOn(api, "preferences").mockResolvedValue({ data: { locale: "zh-CN", appearance: "dark", revision: 1 }, etag: '"1"' });
     vi.spyOn(api, "mfaStatus").mockResolvedValue({ enabled: false, policy: "optional", authenticators: [] });
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><Layout username="admin"><SettingsPage /></Layout></QueryClientProvider>);

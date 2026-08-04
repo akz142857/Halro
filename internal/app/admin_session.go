@@ -119,6 +119,7 @@ func (r *Runtime) loginAdmin(writer http.ResponseWriter, request *http.Request) 
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"username": user.Username, "csrf_token": created.CSRFToken,
 		"locale":              domain.NormalizeLocalePreference(user.Locale),
+		"appearance":          domain.NormalizeAppearance(user.Appearance),
 		"absolute_expires_at": created.Session.AbsoluteExpiresAt,
 		"idle_expires_at":     created.Session.IdleExpiresAt,
 	})
@@ -135,6 +136,7 @@ func (r *Runtime) getAdminSession(writer http.ResponseWriter, request *http.Requ
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"username":            admin.session.Username,
 		"locale":              domain.NormalizeLocalePreference(user.Locale),
+		"appearance":          domain.NormalizeAppearance(user.Appearance),
 		"csrf_token":          r.adminSessionsCSRF(admin.token),
 		"absolute_expires_at": admin.session.AbsoluteExpiresAt,
 		"idle_expires_at":     admin.session.IdleExpiresAt,
@@ -218,6 +220,7 @@ func (r *Runtime) changeAdminPassword(writer http.ResponseWriter, request *http.
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"username": user.Username, "csrf_token": created.CSRFToken,
 		"locale":              domain.NormalizeLocalePreference(user.Locale),
+		"appearance":          domain.NormalizeAppearance(user.Appearance),
 		"absolute_expires_at": created.Session.AbsoluteExpiresAt,
 		"idle_expires_at":     created.Session.IdleExpiresAt,
 	})
