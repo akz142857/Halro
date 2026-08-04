@@ -80,4 +80,15 @@
   --warning: var(--color-status-warning-icon);
   --accent: var(--color-accent);
   --border: var(--color-border-default);
+
+  /* Elevation aliases (see dark.css) — light surfaces + inverted overlays. */
+  --surface-panel: var(--p-white);
+  --surface-inset: var(--p-paper-50);
+  --surface-deep: var(--p-paper-100);
+  --surface-sidebar: var(--p-white);
+  --surface-overlay-solid: var(--p-white);
+  --overlay-hover: rgba(7, 17, 15, 0.05);
+  --overlay-subtle: rgba(7, 17, 15, 0.03);
+  --scrim: rgba(7, 17, 15, 0.45); /* dark scrim keeps modals legible over a dimmed page */
+  --accent-tint: rgba(95, 125, 22, 0.10);
 }

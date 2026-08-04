@@ -88,4 +88,16 @@
   --warning: var(--color-status-warning-icon);
   --accent: var(--color-accent);
   --border: var(--color-border-default);
+
+  /* Elevation aliases for legacy hardcoded surfaces (migrated from styles.css).
+   * These flip per theme so panels/sidebar/tables/modals theme correctly. */
+  --surface-panel: rgba(11, 25, 22, 0.7);
+  --surface-inset: rgba(7, 18, 15, 0.5);
+  --surface-deep: #07120f;
+  --surface-sidebar: rgba(7, 17, 15, 0.92);
+  --surface-overlay-solid: #0c1b18;
+  --overlay-hover: rgba(255, 255, 255, 0.035);
+  --overlay-subtle: rgba(255, 255, 255, 0.02);
+  --scrim: rgba(2, 8, 7, 0.82); /* modal backdrop — stays a dark scrim in both themes */
+  --accent-tint: rgba(216, 255, 97, 0.06);
 }
