@@ -56,7 +56,11 @@ type MessagesService interface {
 
 func (h *Handler) Responses(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Cache-Control", "no-store")
-	request, ok := h.withSourceIP(writer, request)
+	request, ok := withOpenAIRequestID(writer, request)
+	if !ok {
+		return
+	}
+	request, ok = h.withSourceIP(writer, request)
 	if !ok {
 		return
 	}
@@ -172,7 +176,11 @@ func (h *Handler) responsesStream(writer http.ResponseWriter, request *http.Requ
 
 func (h *Handler) Embeddings(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Cache-Control", "no-store")
-	request, ok := h.withSourceIP(writer, request)
+	request, ok := withOpenAIRequestID(writer, request)
+	if !ok {
+		return
+	}
+	request, ok = h.withSourceIP(writer, request)
 	if !ok {
 		return
 	}
@@ -594,7 +602,11 @@ func writeAnthropicError(writer http.ResponseWriter, status int, kind, message, 
 
 func (h *Handler) ChatCompletions(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Cache-Control", "no-store")
-	request, ok := h.withSourceIP(writer, request)
+	request, ok := withOpenAIRequestID(writer, request)
+	if !ok {
+		return
+	}
+	request, ok = h.withSourceIP(writer, request)
 	if !ok {
 		return
 	}
@@ -650,6 +662,16 @@ func setRetryAfter(writer http.ResponseWriter, duration time.Duration) {
 		seconds = 1
 	}
 	writer.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
+}
+
+func withOpenAIRequestID(writer http.ResponseWriter, request *http.Request) (*http.Request, bool) {
+	requestID, err := id.New("req")
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, "internal_error", "unable to create request ID", nil)
+		return request, false
+	}
+	writer.Header().Set("X-Request-ID", requestID)
+	return request.WithContext(requestmeta.WithRequestID(request.Context(), requestID)), true
 }
 
 func (h *Handler) withSourceIP(writer http.ResponseWriter, request *http.Request) (*http.Request, bool) {

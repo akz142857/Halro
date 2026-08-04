@@ -15,14 +15,16 @@ import (
 	"github.com/akz142857/Heimdall/internal/gateway"
 	"github.com/akz142857/Heimdall/internal/openaiapi"
 	"github.com/akz142857/Heimdall/internal/provider"
+	"github.com/akz142857/Heimdall/internal/requestmeta"
 )
 
 type fakeService struct {
-	key      string
-	request  openaiapi.ChatCompletionRequest
-	response openaiapi.ChatCompletionResponse
-	err      error
-	calls    int
+	key       string
+	request   openaiapi.ChatCompletionRequest
+	response  openaiapi.ChatCompletionResponse
+	err       error
+	calls     int
+	requestID string
 }
 
 func (s *fakeService) Messages(_ context.Context, key string, request anthropicapi.MessageRequest) (anthropicapi.Message, error) {
@@ -83,13 +85,14 @@ func (s *fakeService) ResponsesStream(_ context.Context, key string, request ope
 }
 
 func (s *fakeService) Chat(
-	_ context.Context,
+	ctx context.Context,
 	key string,
 	request openaiapi.ChatCompletionRequest,
 ) (openaiapi.ChatCompletionResponse, error) {
 	s.calls++
 	s.key = key
 	s.request = request
+	s.requestID, _ = requestmeta.RequestID(ctx)
 	return s.response, s.err
 }
 
@@ -153,6 +156,9 @@ func TestChatCompletionsContract(t *testing.T) {
 	}
 	if response.Header().Get("Cache-Control") != "no-store" {
 		t.Fatal("sensitive response was cacheable")
+	}
+	if response.Header().Get("X-Request-ID") == "" || response.Header().Get("X-Request-ID") != service.requestID {
+		t.Fatalf("response request ID=%q service request ID=%q", response.Header().Get("X-Request-ID"), service.requestID)
 	}
 }
 

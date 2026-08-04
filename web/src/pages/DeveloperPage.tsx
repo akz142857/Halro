@@ -1,15 +1,32 @@
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { EmptyState, ErrorState, Field, Loading, PageHeader } from "../components";
+import { navigate } from "../navigation";
 
 type Endpoint = "responses" | "chat" | "embeddings";
 type Language = "curl" | "javascript" | "python" | "go";
 type RequestMode = "form" | "json";
 type ResponseView = "body" | "headers";
+type ExecutionOutcome = "idle" | "running" | "completed" | "cancelled" | "failed" | "truncated";
+
+interface ExecutionState {
+  outcome: ExecutionOutcome;
+  status?: number;
+  statusText?: string;
+  headers: string;
+  body: string;
+  requestID: string;
+  usageAvailable?: boolean;
+  streaming?: boolean;
+  latency?: number;
+  error?: string;
+}
 
 const languages: Language[] = ["curl", "javascript", "python", "go"];
+const maxResponseCharacters = 1 << 20;
+const emptyExecution: ExecutionState = { outcome: "idle", headers: "", body: "", requestID: "" };
 
 export function DeveloperPage() {
   const { t } = useTranslation();
@@ -32,6 +49,8 @@ export function DeveloperPage() {
   const [language, setLanguage] = useState<Language>("curl");
   const [copyStatus, setCopyStatus] = useState("");
   const [responseView, setResponseView] = useState<ResponseView>("body");
+  const [execution, setExecution] = useState<ExecutionState>(emptyExecution);
+  const executionController = useRef<AbortController | null>(null);
 
   useEffect(() => {
     if (selectedProject && selectedProject.id !== projectID) setProjectID(selectedProject.id);
@@ -46,6 +65,7 @@ export function DeveloperPage() {
   useEffect(() => {
     if (!gatewayURL && developerConfig.data?.gateway_base_url) setGatewayURL(developerConfig.data.gateway_base_url);
   }, [developerConfig.data?.gateway_base_url, gatewayURL]);
+  useEffect(() => () => executionController.current?.abort(), []);
 
   const formBody = useMemo(() => requestBody(endpoint, model, input, stream), [endpoint, input, model, stream]);
   const [rawJSON, setRawJSON] = useState(() => JSON.stringify(requestBody("responses", "", "Explain how Heimdall routes this request in one sentence.", true), null, 2));
@@ -55,6 +75,14 @@ export function DeveloperPage() {
   const path = endpoint === "chat" ? "/v1/chat/completions" : `/v1/${endpoint}`;
   const gatewayURLValid = validGatewayBaseURL(gatewayURL);
   const code = useMemo(() => body && gatewayURLValid ? codeExample(language, gatewayURL, path, body) : "", [body, gatewayURL, gatewayURLValid, language, path]);
+  const running = execution.outcome === "running";
+  const responseStreaming = execution.outcome === "idle" ? isStreaming : execution.streaming === true;
+  const canSend = !!body && !!model && !!gatewayKey.trim() && gatewayURLValid;
+  const executionLabel = execution.outcome === "running" ? t("developer.requestRunning") :
+    execution.outcome === "completed" ? t("developer.requestCompleted") :
+      execution.outcome === "cancelled" ? t("developer.requestCancelled") :
+        execution.outcome === "truncated" ? t("developer.responseTruncated") :
+          execution.outcome === "failed" ? t("developer.requestFailed") : "";
   const copy = async () => {
     if (!code) return;
     try {
@@ -73,6 +101,66 @@ export function DeveloperPage() {
     setEndpoint(next);
     setStream(nextStream);
     if (requestMode === "json") setRawJSON(JSON.stringify(requestBody(next, model, input, nextStream), null, 2));
+  };
+  const cancelExecution = () => executionController.current?.abort();
+  const execute = async () => {
+    if (!body || !canSend || running) return;
+    const controller = new AbortController();
+    executionController.current = controller;
+    const startedAt = performance.now();
+    let correlatedRequestID = "";
+    setExecution({ ...emptyExecution, outcome: "running", streaming: isStreaming });
+    setResponseView("body");
+    try {
+      const response = await api.developerExecute(executionEndpoint(endpoint), gatewayKey.trim(), body, isStreaming, controller.signal);
+      const headers = responseHeaders(response.headers);
+      const requestID = response.headers.get("X-Request-ID") || response.headers.get("request-id") || "";
+      correlatedRequestID = requestID;
+      setExecution((current) => ({ ...current, status: response.status, statusText: response.statusText, headers, requestID }));
+      if (!response.body) throw new Error(t("developer.missingResponseBody"));
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let received = "";
+      let truncated = false;
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        received += decoder.decode(value, { stream: true });
+        if (received.length > maxResponseCharacters) {
+          received = received.slice(0, maxResponseCharacters);
+          truncated = true;
+          await reader.cancel();
+        }
+        const visibleBody = isStreaming ? received : formatResponseBody(received);
+        setExecution((current) => ({ ...current, body: visibleBody }));
+        if (truncated) break;
+      }
+      received += decoder.decode();
+      setExecution((current) => ({
+        ...current,
+        outcome: truncated ? "truncated" : "completed",
+        body: isStreaming ? received : formatResponseBody(received),
+        latency: Math.round(performance.now() - startedAt),
+      }));
+    } catch (error) {
+      const cancelled = controller.signal.aborted;
+      setExecution((current) => ({
+        ...current,
+        outcome: cancelled ? "cancelled" : "failed",
+        latency: Math.round(performance.now() - startedAt),
+        error: cancelled ? t("developer.requestCancelled") : error instanceof Error ? error.message : t("developer.requestFailed"),
+      }));
+    } finally {
+      if (executionController.current === controller) executionController.current = null;
+      if (correlatedRequestID) {
+        try {
+          await api.usageRequest(correlatedRequestID);
+          setExecution((current) => current.requestID === correlatedRequestID ? { ...current, usageAvailable: true } : current);
+        } catch {
+          // Authentication and request-validation failures legitimately have no Usage record.
+        }
+      }
+    }
   };
 
   return (
@@ -155,7 +243,9 @@ export function DeveloperPage() {
               <div><small>Endpoint</small><code>{path}</code></div>
               <div><small>{t("developer.auth")}</small><strong>{t("developer.authValue")}</strong></div>
             </div>
-            <button className="button primary developer-send" disabled>{t("developer.sendPending")}</button>
+            <button type="button" className={`button developer-send ${running ? "ghost" : "primary"}`} disabled={!running && !canSend} aria-busy={running} onClick={running ? cancelExecution : execute}>
+              {running ? t("developer.cancelRequest") : t("developer.sendRequest")}
+            </button>
             </div>
           </section>
 
@@ -179,23 +269,28 @@ export function DeveloperPage() {
             <section className="developer-response-panel" aria-labelledby="developer-response-heading">
               <header className="developer-panel-header compact">
                 <div><p className="eyebrow">03 / RESPONSE</p><h2 id="developer-response-heading">{t("developer.response")}</h2></div>
-                <button className="button ghost" disabled>{t("developer.openUsage")}</button>
+                <button className="button ghost" disabled={!execution.usageAvailable} onClick={() => navigate(`/admin/usage?request_id=${encodeURIComponent(execution.requestID)}`)}>{t("developer.openUsage")}</button>
               </header>
               <div className="developer-response-meta" aria-label={t("developer.responseMetadata")}>
-                <div><small>{t("developer.httpStatus")}</small><strong>—</strong></div>
-                <div><small>Request ID</small><code>—</code></div>
-                <div><small>{t("developer.latency")}</small><strong>— ms</strong></div>
-                <div><small>{t("developer.delivery")}</small><strong>{isStreaming ? "SSE" : t("developer.standardResponse")}</strong></div>
+                <div><small>{t("developer.httpStatus")}</small><strong>{execution.status ? `${execution.status} ${execution.statusText || ""}`.trim() : "—"}</strong></div>
+                <div><small>Request ID</small><code>{execution.requestID || "—"}</code></div>
+                <div><small>{t("developer.latency")}</small><strong>{execution.latency == null ? running ? "…" : "—" : execution.latency} ms</strong></div>
+                <div><small>{t("developer.delivery")}</small><strong>{responseStreaming ? "SSE" : t("developer.standardResponse")}</strong></div>
               </div>
               <div className="developer-response-tabs" role="tablist" aria-label={t("developer.responseViews")}>
                 <button id="developer-response-tab-body" type="button" role="tab" tabIndex={responseView === "body" ? 0 : -1} aria-selected={responseView === "body"} aria-controls="developer-response-panel-body" onKeyDown={(event) => moveTab(event, ["body", "headers"], responseView, setResponseView, "developer-response-tab")} onClick={() => setResponseView("body")}>{t("developer.responseBody")}</button>
                 <button id="developer-response-tab-headers" type="button" role="tab" tabIndex={responseView === "headers" ? 0 : -1} aria-selected={responseView === "headers"} aria-controls="developer-response-panel-headers" onKeyDown={(event) => moveTab(event, ["body", "headers"], responseView, setResponseView, "developer-response-tab")} onClick={() => setResponseView("headers")}>{t("developer.responseHeaders")}</button>
               </div>
               <div id={`developer-response-panel-${responseView}`} role="tabpanel" aria-labelledby={`developer-response-tab-${responseView}`}>
-                <div className="developer-response-empty" data-view={responseView}>
+                {execution.outcome === "idle" ? <div className="developer-response-empty" data-view={responseView}>
                   <span aria-hidden="true">{responseView === "body" ? "{ }" : "H"}</span>
                   <div><strong>{t("developer.awaitingResponse")}</strong><p>{responseView === "body" ? t("developer.awaitingBody") : t("developer.awaitingHeaders")}</p></div>
-                </div>
+                </div> : <div className="developer-response-result">
+                  <div className={`developer-execution-status ${execution.outcome}`} role="status" aria-live="polite">
+                    {executionLabel}{execution.error && execution.error !== executionLabel ? ` · ${execution.error}` : ""}
+                  </div>
+                  <pre tabIndex={0}><code>{responseView === "body" ? execution.body || (execution.outcome === "failed" ? execution.error : "") || t("developer.emptyResponseBody") : execution.headers || t("developer.awaitingHeaders")}</code></pre>
+                </div>}
               </div>
               <footer className="developer-response-footnote">{t("developer.responseDescription")}</footer>
             </section>
@@ -204,6 +299,27 @@ export function DeveloperPage() {
       )}
     </section>
   );
+}
+
+function executionEndpoint(endpoint: Endpoint) {
+  return endpoint === "chat" ? "chat-completions" : endpoint;
+}
+
+function responseHeaders(headers: Headers) {
+  const rows: string[] = [];
+  const adminEnvelopeHeaders = new Set(["content-security-policy", "permissions-policy", "referrer-policy", "x-content-type-options"]);
+  headers.forEach((value, name) => {
+    if (!adminEnvelopeHeaders.has(name.toLowerCase())) rows.push(`${name}: ${value}`);
+  });
+  return rows.sort((left, right) => left.localeCompare(right)).join("\n");
+}
+
+function formatResponseBody(value: string) {
+  try {
+    return JSON.stringify(JSON.parse(value), null, 2);
+  } catch {
+    return value;
+  }
 }
 
 function parseJSON(value: string): { value?: Record<string, unknown>; error: boolean } {

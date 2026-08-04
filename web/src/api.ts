@@ -258,6 +258,22 @@ export const api = {
     request<Page<Deployment>>("/deployments").then((value) => value.data),
   developerConfig: () =>
     request<{ gateway_base_url: string }>("/developer/config").then((value) => value.data),
+  developerExecute: (endpoint: string, gatewayKey: string, value: unknown, streaming: boolean, signal: AbortSignal) => {
+    const headers = new Headers({
+      "Accept": streaming ? "text/event-stream" : "application/json",
+      "Authorization": `Bearer ${gatewayKey}`,
+      "Content-Type": "application/json",
+    });
+    if (csrfToken) headers.set("X-CSRF-Token", csrfToken);
+    return fetch(`${API_ROOT}/developer/execute/${encodeURIComponent(endpoint)}`, {
+      method: "POST",
+      body: JSON.stringify(value),
+      headers,
+      credentials: "same-origin",
+      cache: "no-store",
+      signal,
+    });
+  },
   createDeployment: (value: unknown) =>
     request<Deployment>("/deployments", json("POST", value)),
   updateDeployment: (id: string, value: unknown, revision: number) =>
@@ -307,6 +323,8 @@ export const api = {
     ).then((value) => value.data),
   usage: (query = "") =>
     request<Page<UsageAttempt>>(`/usage${query}`).then((value) => value.data),
+  usageRequest: (requestID: string) =>
+    request<unknown>(`/usage/requests/${encodeURIComponent(requestID)}`).then((value) => value.data),
   previewCostAdjustment: (attemptID: string, value: unknown) => request<CostAdjustmentPreview>(`/usage/attempts/${encodeURIComponent(attemptID)}/cost-adjustments/preview`, json("POST", value)).then((result) => result.data),
   createCostAdjustment: (attemptID: string, value: unknown, idempotencyKey: string) => request<{ adjustment: unknown; budget_overage_micros_usd?: number }>(`/usage/attempts/${encodeURIComponent(attemptID)}/cost-adjustments`, { ...json("POST", value), headers: { "Idempotency-Key": idempotencyKey } }).then((result) => result.data),
   audit: (query = "") => request<Page<AuditRecord>>(`/audit${query}`).then((value) => value.data),

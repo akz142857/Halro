@@ -10,12 +10,13 @@ export function UsagePage() {
   const { t } = useTranslation();
   const [status, setStatus] = useState("");
   const [model, setModel] = useState("");
+  const [requestID, setRequestID] = useState(() => new URLSearchParams(window.location.search).get("request_id") ?? "");
   const [adjusting, setAdjusting] = useState<UsageAttempt | null>(null);
   const usage = useInfiniteQuery({
-    queryKey: ["usage", status, model],
+    queryKey: ["usage", status, model, requestID],
     initialPageParam: "",
     queryFn: ({ pageParam }) => api.usage(`?${new URLSearchParams({
-      limit: "100", ...(status ? { status } : {}), ...(model ? { model } : {}),
+      limit: "100", ...(status ? { status } : {}), ...(model ? { model } : {}), ...(requestID ? { request_id: requestID } : {}),
       ...(pageParam ? { cursor: pageParam } : {}),
     })}`),
     getNextPageParam: (page) => page.next_cursor || undefined,
@@ -29,6 +30,7 @@ export function UsagePage() {
         description={t("usage.description")}
       />
       <div className="filter-bar">
+        <label><span>Request ID</span><input value={requestID} onChange={(event) => setRequestID(event.target.value)} placeholder="req_…" /></label>
         <label><span>{t("usage.model")}</span><input value={model} onChange={(event) => setModel(event.target.value)} placeholder="chat" /></label>
         <label>
           <span>{t("usage.status")}</span>

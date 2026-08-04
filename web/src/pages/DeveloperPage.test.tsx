@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
 import type { Project } from "../types";
 import { DeveloperPage } from "./DeveloperPage";
@@ -27,6 +27,11 @@ const project: Project = {
 };
 
 describe("DeveloperPage", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    window.history.replaceState({}, "", "/admin/developer");
+  });
+
   it("builds integration examples from project public routes without sending a request", async () => {
     vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
     vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });
@@ -38,7 +43,7 @@ describe("DeveloperPage", () => {
     expect(screen.getByRole("textbox", { name: /Gateway 地址/ })).toHaveValue("http://127.0.0.1:8080");
     expect(screen.getByText("/v1/responses")).toBeVisible();
     expect(screen.getAllByText(/HEIMDALL_API_KEY/)).toHaveLength(2);
-    expect(screen.getByRole("button", { name: "发送请求（待接入）" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "发送请求" })).toBeDisabled();
     expect(screen.getByText("等待真实请求")).toBeVisible();
 
     fireEvent.change(screen.getByLabelText("API 协议"), { target: { value: "chat" } });
@@ -64,6 +69,7 @@ describe("DeveloperPage", () => {
     fireEvent.change(raw, { target: { value: "{" } });
     expect(screen.getByText("请输入有效的 JSON 对象。")).toBeVisible();
     expect(screen.getByRole("button", { name: "复制代码" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "发送请求" })).toBeDisabled();
     fireEvent.change(raw, { target: { value: '{"model":"raw-model","input":"hello","stream":false}' } });
     expect(screen.getAllByText(/raw-model/)).toHaveLength(2);
 
@@ -115,5 +121,59 @@ describe("DeveloperPage", () => {
     expect(pythonCode).toContain("json.loads");
     expect(pythonCode).toContain("What's true?");
     expect(pythonCode).not.toContain("What's True?");
+  });
+
+  it("executes a standard response and opens the correlated usage record", async () => {
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
+    vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });
+    const execute = vi.spyOn(api, "developerExecute").mockResolvedValue(new Response(
+      JSON.stringify({ id: "chatcmpl_1", choices: [{ message: { content: "hello" } }] }),
+      { status: 200, headers: { "Content-Type": "application/json", "X-Request-ID": "req_debug_1" } },
+    ));
+    vi.spyOn(api, "usageRequest").mockResolvedValue({});
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
+    await screen.findByRole("option", { name: "support-chat" });
+
+    fireEvent.change(screen.getByLabelText("Gateway Key"), { target: { value: "gw_debug_secret" } });
+    fireEvent.click(screen.getByRole("button", { name: "普通响应" }));
+    fireEvent.click(screen.getByRole("button", { name: "发送请求" }));
+
+    expect(await screen.findByText("请求已完成")).toBeVisible();
+    expect(screen.getByText("req_debug_1")).toBeVisible();
+    expect(screen.getByText(/chatcmpl_1/)).toBeVisible();
+    expect(execute).toHaveBeenCalledWith("responses", "gw_debug_secret", expect.objectContaining({ model: "support-chat", stream: false }), false, expect.any(AbortSignal));
+    fireEvent.click(screen.getByRole("tab", { name: "响应头" }));
+    expect(screen.getByText(/content-type: application\/json/)).toBeVisible();
+    await waitFor(() => expect(screen.getByRole("button", { name: "查看用量记录" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "查看用量记录" }));
+    expect(window.location.pathname).toBe("/admin/usage");
+    expect(new URLSearchParams(window.location.search).get("request_id")).toBe("req_debug_1");
+  });
+
+  it("renders SSE data and cancels an in-flight request", async () => {
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
+    vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });
+    const execute = vi.spyOn(api, "developerExecute")
+      .mockResolvedValueOnce(new Response("event: response.created\ndata: {\"type\":\"response.created\"}\n\n", {
+        status: 200, headers: { "Content-Type": "text/event-stream", "X-Request-ID": "req_stream_1" },
+      }))
+      .mockImplementationOnce((_endpoint, _key, _body, _streaming, signal) => new Promise((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+      }));
+    vi.spyOn(api, "usageRequest").mockResolvedValue({});
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
+    await screen.findByRole("option", { name: "support-chat" });
+    fireEvent.change(screen.getByLabelText("Gateway Key"), { target: { value: "gw_debug_secret" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "发送请求" }));
+    expect(await screen.findByText("请求已完成")).toBeVisible();
+    expect(screen.getByText(/event: response.created/)).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "发送请求" }));
+    fireEvent.click(await screen.findByRole("button", { name: "取消请求" }));
+    expect(await screen.findByText("请求已取消")).toBeVisible();
+    expect(execute).toHaveBeenCalledTimes(2);
   });
 });

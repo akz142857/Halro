@@ -133,7 +133,8 @@ func TestGatewayCommitsPricePinBeforeProviderAttempt(t *testing.T) {
 		t.Fatal(err)
 	}
 	service.now = func() time.Time { return now }
-	if _, err := service.Chat(context.Background(), f.plaintext, chatRequest()); err != nil {
+	ctx := requestmeta.WithRequestID(context.Background(), "req_developer_debug")
+	if _, err := service.Chat(ctx, f.plaintext, chatRequest()); err != nil {
 		t.Fatal(err)
 	}
 	if f.adapter.calls != 1 || priceStore.committed.State != domain.PricePinCommitted || priceStore.committed.LedgerSequence == 0 ||
@@ -141,7 +142,7 @@ func TestGatewayCommitsPricePinBeforeProviderAttempt(t *testing.T) {
 		t.Fatalf("provider calls=%d prepared=%#v committed=%#v", f.adapter.calls, priceStore.prepared, priceStore.committed)
 	}
 	lease, ok := f.state.AccountingLease(priceStore.prepared.AttemptID)
-	if !ok || !domain.ValidSHA256Label(lease.Event.TokenGuardPricingViewDigest) {
+	if !ok || !domain.ValidSHA256Label(lease.Event.TokenGuardPricingViewDigest) || lease.Event.RequestID != "req_developer_debug" {
 		t.Fatalf("accounting lease pricing view digest=%q exists=%t", lease.Event.TokenGuardPricingViewDigest, ok)
 	}
 }

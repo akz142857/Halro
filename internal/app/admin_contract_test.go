@@ -61,6 +61,7 @@ func TestFrozenV1AdminRoutesAreRegistered(t *testing.T) {
 		"GET /admin/api/v1/token-guard-policies/{}", "PUT /admin/api/v1/token-guard-policies/{}", "DELETE /admin/api/v1/token-guard-policies/{}", "POST /admin/api/v1/token-guard-policies/{}/test",
 		"GET /admin/api/v1/dashboard", "GET /admin/api/v1/usage", "GET /admin/api/v1/usage/requests/{}",
 		"GET /admin/api/v1/alerts", "POST /admin/api/v1/alerts/test", "GET /admin/api/v1/audit", "GET /admin/api/v1/system/status",
+		"GET /admin/api/v1/developer/config", "POST /admin/api/v1/developer/execute/{}",
 	}
 	for _, route := range expected {
 		if _, exists := registered[route]; !exists {

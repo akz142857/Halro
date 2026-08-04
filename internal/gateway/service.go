@@ -189,11 +189,14 @@ func (s *Service) beginRequestRun(
 		tokenGuardLease.Release()
 		return nil, s.mapLimitError(err)
 	}
-	requestID, err := id.New("req")
-	if err != nil {
-		policyLease.Release()
-		tokenGuardLease.Release()
-		return nil, gatewayError("internal_error", "unable to create request ID", 500, err)
+	requestID, supplied := requestmeta.RequestID(ctx)
+	if !supplied {
+		requestID, err = id.New("req")
+		if err != nil {
+			policyLease.Release()
+			tokenGuardLease.Release()
+			return nil, gatewayError("internal_error", "unable to create request ID", 500, err)
+		}
 	}
 	requestLease, err := s.accounting.BeginRequestDetailed(
 		ctx, principal.Project.ID, principal.Key.ID, requestID, model,

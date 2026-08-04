@@ -13,6 +13,7 @@ type AttemptQuery struct {
 	Limit          int
 	ProjectID      string
 	ProviderID     string
+	RequestID      string
 	RequestedModel string
 	Status         string
 	Start          time.Time
@@ -80,6 +81,7 @@ func (a *Aggregate) QueryAttempts(query AttemptQuery) (AttemptPage, error) {
 		}
 		if query.ProjectID != "" && attempt.ProjectID != query.ProjectID ||
 			query.ProviderID != "" && attempt.ProviderID != query.ProviderID ||
+			query.RequestID != "" && attempt.RequestID != query.RequestID ||
 			query.RequestedModel != "" && attempt.RequestedModel != query.RequestedModel ||
 			query.Status != "" && attempt.Status != query.Status ||
 			!query.Start.IsZero() && attempt.CompletedAt.Before(query.Start) ||

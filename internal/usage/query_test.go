@@ -63,6 +63,10 @@ func TestUsageCursorFilteringRequestDetailAndDashboard(t *testing.T) {
 	if err != nil || len(filtered.Attempts) != 1 || filtered.Attempts[0].RequestID != "req_2" {
 		t.Fatalf("filtered=%#v err=%v", filtered, err)
 	}
+	requestFiltered, err := aggregate.QueryAttempts(AttemptQuery{Limit: 10, RequestID: "req_1"})
+	if err != nil || len(requestFiltered.Attempts) != 1 || requestFiltered.Attempts[0].RequestID != "req_1" {
+		t.Fatalf("request filtered=%#v err=%v", requestFiltered, err)
+	}
 	detail, exists := aggregate.RequestDetail("req_2")
 	if !exists || len(detail.Attempts) != 1 || detail.Summary.RequestID != "req_2" {
 		t.Fatalf("detail=%#v exists=%v", detail, exists)

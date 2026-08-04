@@ -224,7 +224,7 @@ func (r *Runtime) adminUsage(writer http.ResponseWriter, request *http.Request) 
 		return
 	}
 	allowed := map[string]struct{}{
-		"cursor": {}, "limit": {}, "project_id": {}, "provider_id": {},
+		"cursor": {}, "limit": {}, "project_id": {}, "provider_id": {}, "request_id": {},
 		"model": {}, "status": {}, "start": {}, "end": {},
 	}
 	for name := range request.URL.Query() {
@@ -232,6 +232,10 @@ func (r *Runtime) adminUsage(writer http.ResponseWriter, request *http.Request) 
 			writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "unsupported usage filter"})
 			return
 		}
+	}
+	if len(request.URL.Query().Get("request_id")) > 128 {
+		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "invalid request ID"})
+		return
 	}
 	cursor, err := usage.DecodeCursor(request.URL.Query().Get("cursor"))
 	if err != nil {
@@ -250,6 +254,7 @@ func (r *Runtime) adminUsage(writer http.ResponseWriter, request *http.Request) 
 		BeforeSequence: cursor, Limit: limit,
 		ProjectID:      request.URL.Query().Get("project_id"),
 		ProviderID:     request.URL.Query().Get("provider_id"),
+		RequestID:      request.URL.Query().Get("request_id"),
 		RequestedModel: request.URL.Query().Get("model"),
 		Status:         request.URL.Query().Get("status"),
 	}

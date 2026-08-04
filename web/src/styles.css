@@ -1041,7 +1041,7 @@ textarea { resize: vertical; }
 .login-panel h2 { margin-bottom: 10px; font-size: 34px; }
 .login-note { display: block; margin-top: 15px; color: var(--muted-2); text-align: center; font: 9px var(--mono); }
 
-/* Developer console: frontend-only request composition preview. */
+/* Developer console: request composition and live Gateway execution. */
 .developer-page { max-width: 1500px; }
 .developer-preview-badge { padding: 8px 12px; border-color: color-mix(in srgb, var(--lime) 44%, var(--line)); color: var(--lime); font: 10px var(--mono); letter-spacing: .08em; text-transform: uppercase; }
 .developer-preview-notice { margin: -10px 0 20px; }
@@ -1093,6 +1093,11 @@ textarea { resize: vertical; }
 .developer-response-empty > span { display: grid; flex: 0 0 54px; width: 54px; height: 54px; place-items: center; border: 1px solid var(--line); border-radius: 10px; color: var(--lime); background: var(--surface); font: 15px var(--mono); }
 .developer-response-empty strong { font-size: 14px; }
 .developer-response-empty p { max-width: 560px; margin: 7px 0 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
+.developer-response-result { min-height: 220px; background: var(--surface-deep); }
+.developer-execution-status { min-height: 36px; padding: 11px 18px; border-bottom: 1px solid var(--line); color: var(--muted); background: var(--surface); font: 10px var(--mono); }
+.developer-execution-status.completed { color: var(--lime); }
+.developer-execution-status.failed, .developer-execution-status.cancelled, .developer-execution-status.truncated { color: var(--warning); }
+.developer-response-result pre { min-height: 184px; max-height: 520px; margin: 0; padding: 20px 22px; overflow: auto; color: var(--text); font: 11px/1.7 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .developer-response-footnote { padding: 12px 18px; color: var(--muted); border-top: 1px solid var(--line); background: var(--surface); font-size: 10px; line-height: 1.5; }
 
 @media (max-width: 1120px) {
