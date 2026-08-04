@@ -1,6 +1,6 @@
 # Implementation status
 
-Last updated: 2026-08-03
+Last updated: 2026-08-04
 
 This file records implementation evidence for the current source tree. Release
 scope is governed by reviewed release notes and release gates.
@@ -76,6 +76,7 @@ scope is governed by reviewed release notes and release gates.
 | Concurrent mutation and admission paths | Admin writes use dependency-scoped consistency domains and group-committed audit batches; limiter state is Project-local, Token Guard state is subject-local, and durable Budget operations use Project locks with globally ordered Ledger application |
 | Embedded Admin console | React/TypeScript/Vite SPA embedded with `go:embed`; login/logout, in-session password and CSRF/session rotation, Dashboard, Projects/Keys, Credentials/Providers, Deployments/Routes, Usage, merged Redaction/Token Guard Policies, Alerts/Audit Operations and status |
 | Admin localization | complete semantic-key `zh-CN`/`en-US` resources with parity test, single-language navigation, no-refresh switching, public bootstrap locale, separately saved revisioned instance default and per-admin server-side preference (no browser persistence), document language updates, localized display enums, and safe localized API errors |
+| Admin design system and Appearance | layered primitive/semantic/component tokens with exact Dark/Light parity; default Dark and per-admin Light/Dark server persistence across sessions; optimistic serialized switching with rollback/retry and revision conflict recovery; business-source color-literal/primitive-token gate; WCAG contrast, reduced-motion and forced-colors checks; all ten Admin areas verified at 320/768/1440 px in both themes |
 | Operations CLI | byte-verified read-only `doctor` using a non-rewriting existing lock plus read-only bbolt/WAL paths, offline audited Admin password reset/session invalidation, top-level restore alias, config/usage/audit/backup/key lifecycle commands |
 | First-run experience | `heimdall start` safe config generation, fail-closed idempotent system initialization, transactional first-Admin Web setup, transient public-listener setup token, and incremental `make start` build path |
 | Frozen API contract | route-registration regression covers every v1 Admin endpoint plus Chat, Embeddings, health and Metrics so a documented route cannot silently disappear |

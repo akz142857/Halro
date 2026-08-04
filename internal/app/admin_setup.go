@@ -12,6 +12,7 @@ import (
 
 	"github.com/akz142857/Heimdall/internal/adminauth"
 	"github.com/akz142857/Heimdall/internal/config"
+	"github.com/akz142857/Heimdall/internal/domain"
 	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
 )
 
@@ -142,6 +143,7 @@ func (r *Runtime) setupAdmin(writer http.ResponseWriter, request *http.Request) 
 	writeJSON(writer, http.StatusCreated, map[string]any{
 		"username": createdUser.Username, "csrf_token": created.CSRFToken,
 		"locale":              "system",
+		"appearance":          domain.NormalizeAppearance(createdUser.Appearance),
 		"absolute_expires_at": created.Session.AbsoluteExpiresAt,
 		"idle_expires_at":     created.Session.IdleExpiresAt,
 	})

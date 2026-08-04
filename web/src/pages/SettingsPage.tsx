@@ -310,6 +310,7 @@ export function AppearanceForm({ preferences }: { preferences: AdminPreferences 
   const seq = useRef(0); // monotonic request id; only the latest may win
   const saving = useRef(false);
   const queued = useRef<Appearance | null>(null); // last explicit choice while saving
+  const failedTarget = useRef<Appearance | null>(null);
 
   // Re-sync to server truth when the preferences query changes and we are idle.
   useEffect(() => {
@@ -320,12 +321,20 @@ export function AppearanceForm({ preferences }: { preferences: AdminPreferences 
     setSelected(preferences.appearance);
   }, [preferences.appearance, preferences.revision, preferences.locale]);
 
-  const rollback = (message: string) => {
+  const rollback = async (message: string, target: Appearance) => {
     saving.current = false;
     queued.current = null;
+    failedTarget.current = target;
     setSelected(confirmed.current);
     applyAppearance(confirmed.current);
     setErrorMessage(message);
+    // The server may have advanced its revision even when it returned an
+    // error (for example a compensated Audit failure), or another tab may have
+    // won a revision conflict. Re-fetch before enabling Retry.
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["preferences"] }),
+      queryClient.invalidateQueries({ queryKey: ["session"] }),
+    ]);
     setStatus("error");
   };
 
@@ -348,6 +357,7 @@ export function AppearanceForm({ preferences }: { preferences: AdminPreferences 
           return;
         }
         queued.current = null;
+        failedTarget.current = null;
         saving.current = false;
         setStatus("saved");
         void queryClient.invalidateQueries({ queryKey: ["preferences"] });
@@ -355,8 +365,17 @@ export function AppearanceForm({ preferences }: { preferences: AdminPreferences 
       })
       .catch((err) => {
         if (id !== seq.current && queued.current === null) return;
-        rollback(err instanceof Error ? err.message : t("settings.appearance.error"));
+        void rollback(err instanceof Error ? err.message : t("settings.appearance.error"), target);
       });
+  };
+
+  const retry = () => {
+    const target = failedTarget.current;
+    if (!target) return;
+    setSelected(target);
+    applyAppearance(target);
+    setErrorMessage("");
+    runSave(target);
   };
 
   const choose = (value: Appearance) => {
@@ -407,7 +426,7 @@ export function AppearanceForm({ preferences }: { preferences: AdminPreferences 
           <div className="notice error" role="alert">
             <strong>{t("settings.appearance.error")}</strong>
             {errorMessage && <span> — {errorMessage}</span>}
-            <button type="button" className="button ghost small" onClick={() => runSave(selected)}>{t("settings.appearance.retry")}</button>
+            <button type="button" className="button ghost small" onClick={retry}>{t("settings.appearance.retry")}</button>
           </div>
         )}
       </div>

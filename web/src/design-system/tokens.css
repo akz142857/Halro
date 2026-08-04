@@ -29,11 +29,13 @@
   --p-paper-200: #e2e9e5;
   --p-paper-300: #cfdad4;
   --p-paper-400: #aebbb4;
+  --p-paper-500: #7a8c83;
 
   /* Brand accents */
   --p-lime-400: #d8ff61;
   --p-lime-500: #c2ee38;
   --p-lime-700: #5f7d16; /* darker lime for light-mode fills / text-on-light */
+  --p-lime-800: #4f6810;
   --p-mint-300: #7fe3cc;
   --p-mint-400: #58d6bc;
   --p-mint-600: #2f9a83;
@@ -41,8 +43,10 @@
   /* Status hues (each provides a dark and light usable value) */
   --p-green-400: #58d6bc;
   --p-green-600: #1c8f74;
+  --p-green-700: #14745e;
   --p-amber-400: #ffc45e;
   --p-amber-600: #a9700d;
+  --p-amber-700: #855700;
   --p-red-400:   #ff756c;
   --p-red-600:   #c23a30;
   --p-blue-400:  #74b9ff;

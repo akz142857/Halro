@@ -11,6 +11,7 @@ describe("App first-run routing", () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
+    document.documentElement.removeAttribute("data-appearance");
   });
 
   it("shows setup before attempting a login session", async () => {
@@ -34,6 +35,25 @@ describe("App first-run routing", () => {
     vi.spyOn(api, "session").mockRejectedValue(new ApiError(401, "not authenticated"));
     renderApp();
     await waitFor(() => expect(screen.getByRole("heading", { name: "进入控制台" })).toBeVisible());
+  });
+
+  it("applies an authenticated Light preference and resets unauthenticated screens to Dark", async () => {
+    vi.spyOn(api, "setupStatus").mockResolvedValue({ instance_initialized: true, setup_required: false, token_required: false });
+    vi.spyOn(api, "session").mockResolvedValue({
+      username: "admin", locale: "system", appearance: "light", csrf_token: "csrf",
+      absolute_expires_at: "x", idle_expires_at: "x",
+    });
+    renderApp();
+    await waitFor(() => expect(document.documentElement).toHaveAttribute("data-appearance", "light"));
+
+    cleanup();
+    vi.restoreAllMocks();
+    vi.spyOn(api, "uiBootstrap").mockResolvedValue({ default_locale: "zh-CN", supported_locales: ["zh-CN", "en-US"] });
+    vi.spyOn(api, "setupStatus").mockResolvedValue({ instance_initialized: true, setup_required: false, token_required: false });
+    vi.spyOn(api, "session").mockRejectedValue(new ApiError(401, "not authenticated"));
+    renderApp();
+    await screen.findByRole("heading", { name: "进入控制台" });
+    expect(document.documentElement).toHaveAttribute("data-appearance", "dark");
   });
 
   it("renders only the restricted MFA setup surface when policy requires enrollment", async () => {

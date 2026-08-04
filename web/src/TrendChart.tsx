@@ -17,10 +17,10 @@ function readChartTokens(host: HTMLElement) {
   const style = getComputedStyle(host);
   const read = (name: string, fallback: string) => style.getPropertyValue(name).trim() || fallback;
   return {
-    series: read("--color-chart-series-1", "#58d6bc"),
-    fill: read("--color-chart-series-1-fill", "rgba(88, 214, 188, 0.10)"),
-    grid: read("--color-chart-grid", "#1c302c"),
-    axis: read("--color-chart-axis", "#778985"),
+    series: read("--color-chart-series-1", "currentColor"),
+    fill: read("--color-chart-series-1-fill", "transparent"),
+    grid: read("--color-chart-grid", "currentColor"),
+    axis: read("--color-chart-axis", "currentColor"),
   };
 }
 

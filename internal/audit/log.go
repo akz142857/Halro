@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -28,16 +29,17 @@ const (
 var ErrCorrupt = errors.New("audit log is corrupt")
 
 type Event struct {
-	EventID       string    `json:"event_id"`
-	OccurredAt    time.Time `json:"occurred_at"`
-	ActorType     string    `json:"actor_type"`
-	ActorID       string    `json:"actor_id,omitempty"`
-	Action        string    `json:"action"`
-	TargetType    string    `json:"target_type,omitempty"`
-	TargetID      string    `json:"target_id,omitempty"`
-	Outcome       string    `json:"outcome"`
-	ReasonCode    string    `json:"reason_code,omitempty"`
-	CorrelationID string    `json:"correlation_id,omitempty"`
+	EventID       string            `json:"event_id"`
+	OccurredAt    time.Time         `json:"occurred_at"`
+	ActorType     string            `json:"actor_type"`
+	ActorID       string            `json:"actor_id,omitempty"`
+	Action        string            `json:"action"`
+	TargetType    string            `json:"target_type,omitempty"`
+	TargetID      string            `json:"target_id,omitempty"`
+	Outcome       string            `json:"outcome"`
+	ReasonCode    string            `json:"reason_code,omitempty"`
+	CorrelationID string            `json:"correlation_id,omitempty"`
+	Metadata      map[string]string `json:"metadata,omitempty"`
 }
 
 func (e Event) Validate() error {
@@ -182,7 +184,7 @@ func (l *Log) AppendBatch(ctx context.Context, events []Event) ([]Record, error)
 	sequence, offset, previous := l.sequence, l.offset, l.lastHash
 	for index, payload := range payloads {
 		if existing, ok := l.recordsByEventID[events[index].EventID]; ok {
-			if existing.Event != events[index] {
+			if !reflect.DeepEqual(existing.Event, events[index]) {
 				return nil, errors.New("audit event ID conflicts with a different payload")
 			}
 			records[index] = existing

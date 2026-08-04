@@ -1,12 +1,13 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Layout } from "./Layout";
 import { Modal, OverflowMenu } from "./components";
 import { api } from "./api";
 import { SettingsPage } from "./pages/SettingsPage";
 
 describe("admin accessibility baseline", () => {
+  afterEach(() => document.documentElement.removeAttribute("data-appearance"));
   it("provides landmarks, a skip link, and current navigation context", () => {
     window.history.replaceState({}, "", "/admin/deployments");
     const client = new QueryClient();
@@ -31,6 +32,19 @@ describe("admin accessibility baseline", () => {
     expect(dialog).toHaveFocus();
     fireEvent.keyDown(document, { key: "Escape" });
     expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("resets the personal appearance when the administrator logs out", async () => {
+    document.documentElement.setAttribute("data-appearance", "light");
+    vi.spyOn(api, "logout").mockResolvedValue(undefined);
+    const client = new QueryClient();
+    render(
+      <QueryClientProvider client={client}>
+        <Layout username="admin"><h1>Dashboard</h1></Layout>
+      </QueryClientProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /退出/ }));
+    await waitFor(() => expect(document.documentElement).toHaveAttribute("data-appearance", "dark"));
   });
 
   it("closes overflow menus on outside interaction and Escape", () => {

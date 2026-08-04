@@ -18,20 +18,22 @@
 
   /* Text */
   --color-text-primary: var(--p-ink-50);
-  --color-text-secondary: var(--p-ink-300);
-  --color-text-tertiary: var(--p-ink-400);
+  --color-text-secondary: var(--p-ink-200);
+  --color-text-tertiary: var(--p-ink-300);
   --color-text-inverse: var(--p-ink-950);
 
   /* Borders */
   --color-border-default: var(--p-ink-700);
-  --color-border-strong: var(--p-ink-600);
+  --color-border-strong: var(--p-ink-400);
 
   /* Actions & focus */
   --color-action-primary: var(--p-lime-400);
   --color-action-primary-hover: var(--p-lime-500);
+  --color-action-primary-foreground: var(--p-ink-950);
   --color-action-secondary: var(--p-ink-850);
   --color-accent: var(--p-mint-400);
   --color-focus-ring: var(--p-lime-400);
+  --color-shadow-base: var(--p-black);
 
   /* Status — success */
   --color-status-success-text: var(--p-mint-300);
@@ -59,13 +61,16 @@
   --color-chart-series-2: var(--p-chart-2);
   --color-chart-series-1-fill: rgba(88, 214, 188, 0.10);
   --color-chart-grid: rgba(255, 255, 255, 0.07);
-  --color-chart-axis: var(--p-ink-400);
+  --color-chart-axis: var(--p-ink-300);
   --color-chart-tooltip: var(--p-ink-850);
 
   /* Elevation */
   --shadow-raised: 0 1px 0 rgba(255, 255, 255, 0.02), 0 12px 32px rgba(0, 0, 0, 0.45);
   --shadow-overlay: 0 24px 70px rgba(0, 0, 0, 0.55);
   --shadow-focus: 0 0 0 3px rgba(216, 255, 97, 0.35);
+  --shadow-menu: 0 18px 44px rgba(0, 0, 0, 0.48);
+  --shadow-sticky: 0 -12px 30px rgba(0, 0, 0, 0.24);
+  --shadow-modal: 0 30px 90px rgba(0, 0, 0, 0.50);
 
   /* Ambient brand glow used by the app background */
   --app-glow: rgba(88, 214, 188, 0.09);
@@ -100,4 +105,9 @@
   --overlay-subtle: rgba(255, 255, 255, 0.02);
   --scrim: rgba(2, 8, 7, 0.82); /* modal backdrop — stays a dark scrim in both themes */
   --accent-tint: rgba(216, 255, 97, 0.06);
+  --accent-border: rgba(216, 255, 97, 0.34);
+  --accent-glow: rgba(216, 255, 97, 0.40);
+  --brand-glow: rgba(216, 255, 97, 0.12);
+  --danger-hover: rgba(255, 117, 108, 0.08);
+  --surface-secret: var(--p-ink-950);
 }

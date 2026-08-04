@@ -405,6 +405,10 @@ func adminBadRequest(writer http.ResponseWriter, message string) {
 	writeJSON(writer, http.StatusBadRequest, map[string]string{"error": message})
 }
 
+func adminBadRequestCode(writer http.ResponseWriter, code, message string) {
+	writeJSON(writer, http.StatusBadRequest, map[string]string{"code": code, "error": message})
+}
+
 func adminPreconditionFailed(writer http.ResponseWriter) {
 	writeJSON(writer, http.StatusPreconditionFailed, map[string]string{"error": "resource revision conflict"})
 }

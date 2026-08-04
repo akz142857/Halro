@@ -40,6 +40,40 @@ describe("AppearanceForm", () => {
     expect(document.documentElement.getAttribute("data-appearance")).toBe("dark");
     expect(screen.getByRole("radio", { name: /深色/ })).toBeChecked();
   });
+
+  it("retries the failed target after refreshing server truth", async () => {
+    const update = vi.spyOn(api, "updatePreferences")
+      .mockRejectedValueOnce(new Error("network down"))
+      .mockResolvedValueOnce({ data: { locale: "system", appearance: "light", revision: 7 }, etag: '"7"' });
+    renderWithClient(<AppearanceForm preferences={{ locale: "system", appearance: "dark", revision: 5 }} />);
+
+    fireEvent.click(screen.getByRole("radio", { name: /浅色/ }));
+    await screen.findByRole("alert");
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(2));
+    expect(update.mock.calls[1][0]).toEqual({ locale: "system", appearance: "light" });
+    expect(document.documentElement.getAttribute("data-appearance")).toBe("light");
+  });
+
+  it("serializes rapid changes so the last explicit choice wins", async () => {
+    let resolveFirst!: (value: Awaited<ReturnType<typeof api.updatePreferences>>) => void;
+    const first = new Promise<Awaited<ReturnType<typeof api.updatePreferences>>>((resolve) => { resolveFirst = resolve; });
+    const update = vi.spyOn(api, "updatePreferences")
+      .mockReturnValueOnce(first)
+      .mockResolvedValueOnce({ data: { locale: "system", appearance: "dark", revision: 7 }, etag: '"7"' });
+    renderWithClient(<AppearanceForm preferences={{ locale: "system", appearance: "dark", revision: 5 }} />);
+
+    fireEvent.click(screen.getByRole("radio", { name: /浅色/ }));
+    fireEvent.click(screen.getByRole("radio", { name: /深色/ }));
+    expect(document.documentElement.getAttribute("data-appearance")).toBe("dark");
+    resolveFirst({ data: { locale: "system", appearance: "light", revision: 6 }, etag: '"6"' });
+
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(2));
+    expect(update.mock.calls[1]).toEqual([{ locale: "system", appearance: "dark" }, 6]);
+    await screen.findByText("外观设置已保存");
+    expect(document.documentElement.getAttribute("data-appearance")).toBe("dark");
+  });
 });
 
 describe("PasswordChangeForm", () => {

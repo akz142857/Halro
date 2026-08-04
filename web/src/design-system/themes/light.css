@@ -22,32 +22,34 @@
   --color-text-inverse: var(--p-ink-50);
 
   /* Borders — subtle default, stronger variant meets ~3:1 for key boundaries */
-  --color-border-default: #d2ddd7;
-  --color-border-strong: #9fb0a8;
+  --color-border-default: var(--p-paper-300);
+  --color-border-strong: var(--p-paper-500);
 
   /* Actions & focus */
-  --color-action-primary: var(--p-lime-400);
-  --color-action-primary-hover: var(--p-lime-500);
+  --color-action-primary: var(--p-lime-800);
+  --color-action-primary-hover: var(--p-lime-700);
+  --color-action-primary-foreground: var(--p-white);
   --color-action-secondary: var(--p-paper-200);
-  --color-accent: var(--p-mint-600);
+  --color-accent: var(--p-green-700);
   --color-focus-ring: var(--p-green-600);
+  --color-shadow-base: var(--p-ink-950);
 
   /* Status — darker hues for legible text/icons on light surfaces */
-  --color-status-success-text: var(--p-green-600);
+  --color-status-success-text: var(--p-green-700);
   --color-status-success-surface: rgba(28, 143, 116, 0.10);
-  --color-status-success-border: rgba(28, 143, 116, 0.42);
-  --color-status-success-icon: var(--p-green-600);
-  --color-status-warning-text: var(--p-amber-600);
+  --color-status-success-border: var(--p-green-700);
+  --color-status-success-icon: var(--p-green-700);
+  --color-status-warning-text: var(--p-amber-700);
   --color-status-warning-surface: rgba(169, 112, 13, 0.12);
-  --color-status-warning-border: rgba(169, 112, 13, 0.42);
-  --color-status-warning-icon: var(--p-amber-600);
+  --color-status-warning-border: var(--p-amber-700);
+  --color-status-warning-icon: var(--p-amber-700);
   --color-status-danger-text: var(--p-red-600);
   --color-status-danger-surface: rgba(194, 58, 48, 0.10);
-  --color-status-danger-border: rgba(194, 58, 48, 0.42);
+  --color-status-danger-border: var(--p-red-600);
   --color-status-danger-icon: var(--p-red-600);
   --color-status-info-text: var(--p-blue-600);
   --color-status-info-surface: rgba(47, 107, 194, 0.10);
-  --color-status-info-border: rgba(47, 107, 194, 0.42);
+  --color-status-info-border: var(--p-blue-600);
   --color-status-info-icon: var(--p-blue-600);
 
   /* Charts — darker series so both are distinguishable on light */
@@ -62,6 +64,9 @@
   --shadow-raised: 0 1px 2px rgba(16, 35, 31, 0.06), 0 10px 28px rgba(16, 35, 31, 0.10);
   --shadow-overlay: 0 24px 60px rgba(16, 35, 31, 0.20);
   --shadow-focus: 0 0 0 3px rgba(28, 143, 116, 0.30);
+  --shadow-menu: 0 18px 44px rgba(16, 35, 31, 0.18);
+  --shadow-sticky: 0 -12px 30px rgba(16, 35, 31, 0.12);
+  --shadow-modal: 0 30px 90px rgba(16, 35, 31, 0.24);
 
   --app-glow: rgba(47, 154, 131, 0.07);
 
@@ -91,4 +96,9 @@
   --overlay-subtle: rgba(7, 17, 15, 0.03);
   --scrim: rgba(7, 17, 15, 0.45); /* dark scrim keeps modals legible over a dimmed page */
   --accent-tint: rgba(95, 125, 22, 0.10);
+  --accent-border: var(--p-lime-800);
+  --accent-glow: rgba(79, 104, 16, 0.28);
+  --brand-glow: rgba(79, 104, 16, 0.18);
+  --danger-hover: rgba(194, 58, 48, 0.10);
+  --surface-secret: var(--p-paper-50);
 }

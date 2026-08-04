@@ -12,12 +12,14 @@ tokens.css            Layer 1 — Primitives: raw color scales, type, spacing,
                                  radius, shadow, motion, z-index. The only place
                                  literal color values may live.
 themes/dark.css       Layer 2 — Semantic tokens (color.*, shadow.*, …) for Dark.
-themes/light.css                 Also applied to the bare :root so first paint,
+                                 Also applied to the bare :root so first paint,
                                  login and unauthenticated pages are Dark.
-                                 Light values under :root[data-appearance="light"].
+themes/light.css                 Light values under
+                                 :root[data-appearance="light"].
 (legacy alias layer)  Layer 3 — --bg/--surface/--text/… mapped onto semantic
                                  tokens so existing styles.css themes for free.
-styles.css            Business/component CSS. Consumes semantic tokens (or the
+components.css        Shared design-system component contracts and previews.
+styles.css            Business/page CSS. Consumes semantic tokens (or the
                                  legacy aliases), never primitives.
 ```
 
@@ -57,10 +59,9 @@ Business pages/components may use **semantic tokens** (`--color-*`, `--shadow-*`
 :root[data-appearance="light"] .some-page { }  /* per-page theme patch */
 ```
 
-## Known follow-ups (phased migration)
+## Enforcement
 
-The legacy `styles.css` still contains hardcoded hex/rgba from before the token
-system. These are being migrated to semantic tokens in phases; a handful of
-lime-as-text accents need darker light-mode values. New code must not add to the
-backlog — the hardcoded-color guard (`design-system.test.ts`) fails the build if
-the count grows.
+`design-system.test.ts` requires exact Dark/Light semantic-token parity, checks
+the documented WCAG contrast thresholds, and recursively rejects color literals
+or primitive-token access outside the design-system directory. There is no
+business-CSS color-literal baseline or growth allowance.
