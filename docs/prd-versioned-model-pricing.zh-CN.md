@@ -1,7 +1,7 @@
 # Heimdall 版本化模型定价与历史成本可追溯升级 PRD
 
 - 状态：Implemented — Goal 0–6 已实现并通过自动化验收
-- 目标版本：metadata schema v14 / Ledger WAL v2 / backup format v2
+- 目标版本：metadata schema v15 / Ledger WAL v2 / backup format v2
 - 日期：2026-08-04
 - 文档语言：中文
 - 适用范围：Deployment 定价、Gateway 预算预留、Provider Attempt 结算、Usage、Dashboard、Audit、备份恢复
@@ -229,13 +229,15 @@ Dashboard 的日、项目、Provider 和模型成本都是已结算 Attempt 成�
 | `verified_api` | 由受支持的 Provider 官方 API 获取并由服务端记录接收时间 |
 | `signed_import` | 来自通过签名、schema version 和签名者 allowlist 验证的价格清单 |
 
-`manual`、`official_url` 和 `migration` 默认只能是 `asserted`。UI 不得仅因为 URL 域名看似官方就显示“已验证”。敏感合同不保存正文时，必须记录外部 WORM/文档系统中的不可变证据 ID、版本、custody owner 和 digest；只有 URL + 管理员输入 digest 的记录应准确称为“来源声明/指纹”，不能宣称完成独立取证。
+`manual`、`official_url` 和 `migration` 默认只能是 `asserted`。UI 不得仅因为 URL 域名看似官方就显示“已验证”。普通手工录价不要求管理员生成或填写内容 digest：没有被 Heimdall 实际接收的来源正文，就不存在可由产品验证其含义的内容摘要。此时必须明确记录 `asserted_without_archive=true`，来源只表示管理员声明；Price Version 自身仍由不可变记录、版本 digest 和 Audit 保护。只有服务端实际接收的文件、Provider API 响应或签名清单才生成并保存内容 digest。敏感合同不保存正文时，可记录外部 WORM/文档系统中的不可变证据 ID、版本、custody owner 和 digest。
 
 来源字段按类型定义必填矩阵，并统一限制长度、字符集和数量。`uri`、`reference`、`note`、URL path 和外部证据 ID 都必须通过 Secret Scanner；控制台外链使用安全转义与 `noopener noreferrer`，禁止自动预取。未来如启用抓取，只能复用 SafeTransport、重定向逐跳重校验和 egress allowlist。
 
 ### 6.7 LLM 只能生成价格建议
 
 未来如增加“获取价格建议”，其输出必须保存为独立 Proposal，不能直接成为 Price Version。Proposal 必须显示来源、抓取时间、模型/地区匹配信息和警告，经管理员确认后才能创建不可变价格版本。
+
+在官方 Adapter、受控文件上传或签名清单导入形成可信证据闭环之前，Admin UI 不展示“导入建议”入口。保留 Proposal 后端契约供后续受控来源使用，不向管理员暴露需要手填 URL、匹配置信度或 SHA-256 的半成品流程。
 
 Proposal 最小 schema 包含：Provider、模型/Deployment 身份、Region、服务等级/Tier、候选价格项、来源引用与 assurance、服务端抓取时间、解析警告、匹配置信状态、过期时间和 Proposal digest。Proposal 永不进入 Gateway 热路径，到期后不能确认；管理员确认只会以 Proposal 为输入新建 Price Version，并再次执行全部价格与来源验证。
 
@@ -716,7 +718,7 @@ API 金额使用十进制字符串，避免 JSON number/JavaScript 浮点产生�
 
 | 类型 | 必填字段 |
 |---|---|
-| `manual` | reference、note、外部证据 ID 或明确 `asserted_without_archive` |
+| `manual` | reference；并提供 note、外部证据 ID，或明确 `asserted_without_archive`。后者不要求内容 digest |
 | `official_url` | HTTPS URI、retrieved_at 声明、reference；默认 assurance=asserted |
 | `provider_api` | Adapter、服务端 received_at、响应 digest、provider request ID |
 | `import` | manifest ID、schema version、签名者、签名 digest；assurance=`signed_import` |
@@ -778,7 +780,7 @@ If-Match: "adjustment-sequence-or-net-revision"
 - 当前价格以只读卡片显示，不再直接编辑；
 - 显示状态：已定价、免费、未知、即将调价；
 - 显示 Price Version、输入/输出/固定价格、生效时间和来源；
-- 提供“新建价格版本”操作；
+- 未配置时提供“设置价格”，已有版本时提供“调整价格”；
 - scheduled 版本显示倒计时和取消操作；
 - 历史时间线显示 superseded 版本，但不提供修改或删除；
 - Deployment 启用但价格未知时显示高优先级警告；
@@ -786,13 +788,12 @@ If-Match: "adjustment-sequence-or-net-revision"
 
 ### 12.2 新建价格版本流程
 
-1. 选择 `metered` 或 `free`；
-2. 输入价格和生效时间；
-3. 填写来源类型、URL/digest/说明；
-4. 展示相对当前价格的百分比变化；
-5. 使用示例 Token 预览单次成本；
-6. 明确提示版本生效后不可修改或删除；
-7. 管理员二次确认后创建。
+流程分成两个步骤：
+
+1. **价格信息**：选择按量计费或免费；按量计费填写输入、输出价格，可在高级项中填写每请求固定费用；选择尽快生效或指定时间；选择“官方公开价、合同价、内部成本价、临时估算”之一并可填写补充说明。
+2. **确认生效**：集中展示 Deployment、计费方式、全部价格、生效时间、价格依据和示例成本；此时才要求当前密码和可选 TOTP，确认后创建不可变 Price Version。
+
+Admin UI 不要求手工填写来源 URL 或 SHA-256。手工录价提交 `source.type=manual`、结构化 reference 和 `asserted_without_archive=true`；未来可信导入流程由服务端计算 digest，不复用此表单。
 
 如果价格下降或上涨超过实例可配置阈值，UI 必须强调显示，但第一版不要求第二管理员审批。
 
@@ -890,6 +891,8 @@ Metrics 标签不得包含 Price ID、Deployment ID、Provider model、来源 UR
 ## 14. 升级与数据迁移
 
 ### 14.1 Schema 迁移
+
+metadata schema v15 将 `manual + asserted_without_archive` 的 `content_sha256` 调整为可空。当前环境尚无已保存价格，因此迁移只推进 schema version，不重写或补造历史数据；`official_url`、`provider_api`、`import` 等实际具有来源内容的类型仍按各自矩阵要求 digest。
 
 升级事务至少完成：
 

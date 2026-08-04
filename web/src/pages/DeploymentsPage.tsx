@@ -15,7 +15,7 @@ import {
 } from "../components";
 import type { InlineTestState } from "../components";
 import { dateTime, money } from "../format";
-import type { Deployment, DeploymentPriceProposal, DeploymentPriceVersion, DeploymentTargetKind, Provider, ProviderBinding, ProviderCapabilities } from "../types";
+import type { Deployment, DeploymentPriceVersion, DeploymentTargetKind, Provider, ProviderBinding, ProviderCapabilities } from "../types";
 import { useTranslation } from "react-i18next";
 import { Link } from "../navigation";
 
@@ -131,19 +131,13 @@ function DeploymentCard({
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const [pricing, setPricing] = useState(false);
-	const [suggesting, setSuggesting] = useState(false);
-	const [reviewing, setReviewing] = useState<DeploymentPriceProposal>();
 	const [confirmingRestore, setConfirmingRestore] = useState(false);
   const queryClient = useQueryClient();
   const prices = useQuery({ queryKey: ["deployment-prices", deployment.id], queryFn: () => api.deploymentPrices(deployment.id), enabled: expanded });
-	const proposals = useQuery({ queryKey: ["deployment-price-proposals", deployment.id], queryFn: () => api.deploymentPriceProposals(deployment.id), enabled: expanded });
   const priceItems = prices.data?.items ?? [];
-  const proposalItems = proposals.data?.items ?? [];
   const activePrice = priceItems.find((price) => price.status === "active");
   const scheduledPrices = priceItems.filter((price) => price.status === "scheduled");
-  const pendingProposals = proposalItems.filter((proposal) => proposal.status === "pending");
   const cancelPrice = useMutation({ mutationFn: (price: DeploymentPriceVersion) => api.cancelDeploymentPrice(deployment.id, price.id, price.revision), onSuccess: () => queryClient.invalidateQueries({ queryKey: ["deployment-prices", deployment.id] }) });
-	const rejectProposal = useMutation({ mutationFn: (proposal: DeploymentPriceProposal) => api.rejectDeploymentPriceProposal(deployment.id, proposal.id, proposal.revision), onSuccess: () => queryClient.invalidateQueries({ queryKey: ["deployment-price-proposals", deployment.id] }) });
   const test = useMutation({
     mutationFn: () => api.testDeployment(deployment.id),
     onSettled: () => queryClient.invalidateQueries({ queryKey: ["deployments"] }),
@@ -220,7 +214,7 @@ function DeploymentCard({
         <DeploymentFact label={t("deployments.maxOutput")} value={deployment.capabilities.max_output_tokens || t("deployments.upstreamApplies")} meta={deployment.capabilities.max_output_tokens ? t("deployments.tokens") : t("deployments.undeclared")} />
       </dl>
       {deployment.pricing_quarantined && <div className="notice warning deployment-pricing-warning"><strong>{t("deployments.pricingQuarantined")}</strong><span>{deployment.pricing_quarantine_reason}</span><button className="button ghost" onClick={() => setConfirmingRestore(true)}>{t("deployments.confirmRestoredPricing")}</button></div>}
-      <div className="deployment-pricing-grid">
+      <div className="deployment-pricing-grid single">
         <section className="deployment-pricing-panel">
           <header>
             <div>
@@ -229,7 +223,7 @@ function DeploymentCard({
                 ? t("deployments.priceSourceSummary", { type: activePrice.source.type, assurance: activePrice.source.assurance, reference: activePrice.source.reference || "—" })
                 : prices.isPending ? t("common.loading") : t("deployments.noPriceVersions")}</small>
             </div>
-            <button className="button secondary deployment-pricing-action" onClick={() => setPricing(true)}>{t("deployments.newPriceVersion")}</button>
+            <button className="button secondary deployment-pricing-action" onClick={() => setPricing(true)}>{activePrice ? t("deployments.adjustPrice") : t("deployments.setPrice")}</button>
           </header>
           {!!scheduledPrices.length && <div className="deployment-pricing-list">
             {scheduledPrices.map((price) => <div key={price.id}>
@@ -237,29 +231,6 @@ function DeploymentCard({
               <button className="button ghost" disabled={cancelPrice.isPending} onClick={() => cancelPrice.mutate(price)}>{t("common.cancel")}</button>
             </div>)}
           </div>}
-        </section>
-        <section className="deployment-pricing-panel">
-          <header>
-            <div>
-              <strong>{t("deployments.priceProposals")}</strong>
-              <small>{t("deployments.proposalSafety")}</small>
-            </div>
-            <button className="button secondary deployment-pricing-action" onClick={() => setSuggesting(true)}>{t("deployments.importProposal")}</button>
-          </header>
-          {!!pendingProposals.length && <div className="deployment-pricing-list">
-            {pendingProposals.map((proposal) => <div key={proposal.id}>
-              <span>
-                <code>{proposal.match}</code>
-                <small>{proposal.source.assurance} · {proposal.source.reference || proposal.source.uri || "—"} · {t("deployments.proposalExpires", { time: dateTime(proposal.expires_at) })}</small>
-                {proposal.warnings?.map((warning) => <small key={warning}>⚠ {warning}</small>)}
-              </span>
-              <span className="deployment-pricing-row-actions">
-                <button className="button ghost" disabled={proposal.match === "ambiguous" || new Date(proposal.expires_at) <= new Date()} onClick={() => setReviewing(proposal)}>{t("deployments.reviewProposal")}</button>
-                <ConfirmButton className="button ghost" label={t("deployments.rejectProposal")} confirmLabel={t("deployments.rejectProposalConfirm")} onConfirm={() => rejectProposal.mutate(proposal)} />
-              </span>
-            </div>)}
-          </div>}
-          {!proposals.isPending && !pendingProposals.length && <div className="deployment-pricing-empty">{t("deployments.noPendingProposals")}</div>}
         </section>
       </div>
       <div className="deployment-capability-summary">
@@ -297,66 +268,9 @@ function DeploymentCard({
       </footer>
       {(remove.isError || state.isError) && <ErrorState className="deployment-card-error" error={remove.error || state.error} />}
       {pricing && <PriceVersionForm deployment={deployment} current={activePrice} onClose={() => setPricing(false)} />}
-	  {suggesting && <PriceProposalForm deployment={deployment} onClose={() => setSuggesting(false)} />}
-	  {reviewing && <PriceProposalReview deployment={deployment} proposal={reviewing} onClose={() => setReviewing(undefined)} />}
 	  {confirmingRestore && <RestorePricingConfirm deployment={deployment} onClose={() => setConfirmingRestore(false)} />}
     </article>
   );
-}
-
-function PriceProposalForm({ deployment, onClose }: { deployment: Deployment; onClose: () => void }) {
-	const { t } = useTranslation();
-	const queryClient = useQueryClient();
-	const [input, setInput] = useState("0");
-	const [output, setOutput] = useState("0");
-	const [fixed, setFixed] = useState("0");
-	const [uri, setURI] = useState("");
-	const [reference, setReference] = useState("");
-	const [digest, setDigest] = useState("");
-	const [match, setMatch] = useState<"exact" | "likely" | "ambiguous">("likely");
-	const idempotencyKey = useRef(crypto.randomUUID());
-	const mutation = useMutation({
-		mutationFn: () => api.createDeploymentPriceProposal(deployment.id, {
-			billing_mode: "metered", currency: "USD", input_usd_per_million: input, output_usd_per_million: output,
-			fixed_request_usd: fixed, match, expires_at: new Date(Date.now() + 7 * 86400_000).toISOString(),
-			warnings: [t("deployments.importedProposalWarning")], source: { type: "official_url", uri, reference, content_sha256: digest, retrieved_at: new Date().toISOString() },
-		}, idempotencyKey.current),
-		onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["deployment-price-proposals", deployment.id] }); onClose(); },
-	});
-	return <Modal title={t("deployments.importProposal")} onClose={onClose}><form onSubmit={(event) => { event.preventDefault(); mutation.mutate(); }}>
-		<Field label={t("deployments.inputUSD")}><input required value={input} onChange={(event) => setInput(event.target.value)} /></Field>
-		<Field label={t("deployments.outputUSD")}><input required value={output} onChange={(event) => setOutput(event.target.value)} /></Field>
-		<Field label={t("deployments.fixedRequestUSD")}><input required value={fixed} onChange={(event) => setFixed(event.target.value)} /></Field>
-		<Field label={t("deployments.proposalMatch")}><select value={match} onChange={(event) => setMatch(event.target.value as typeof match)}><option value="exact">exact</option><option value="likely">likely</option><option value="ambiguous">ambiguous</option></select></Field>
-		<Field label={t("deployments.sourceURL")}><input type="url" required value={uri} onChange={(event) => setURI(event.target.value)} /></Field>
-		<Field label={t("deployments.sourceReference")}><input required value={reference} onChange={(event) => setReference(event.target.value)} /></Field>
-		<Field label={t("deployments.sourceDigest")}><input required pattern="sha256:[a-fA-F0-9]{64}" value={digest} onChange={(event) => setDigest(event.target.value)} /></Field>
-		<p>{t("deployments.proposalSafety")}</p>{mutation.isError && <ErrorState error={mutation.error} />}
-		<button className="button primary" disabled={mutation.isPending}>{t("deployments.saveProposal")}</button>
-	</form></Modal>;
-}
-
-function PriceProposalReview({ deployment, proposal, onClose }: { deployment: Deployment; proposal: DeploymentPriceProposal; onClose: () => void }) {
-	const { t } = useTranslation();
-	const queryClient = useQueryClient();
-	const [effective, setEffective] = useState(new Date(Date.now() + 60_000).toISOString().slice(0, 16));
-	const [password, setPassword] = useState("");
-	const [totp, setTotp] = useState("");
-	const mutation = useMutation({
-		mutationFn: () => api.adoptDeploymentPriceProposal(deployment.id, proposal.id, proposal.revision, { effective_from: new Date(effective).toISOString(), confirm: true, current_password: password, totp_code: totp }),
-		onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["deployment-price-proposals", deployment.id] }); queryClient.invalidateQueries({ queryKey: ["deployment-prices", deployment.id] }); onClose(); },
-	});
-	return <Modal title={t("deployments.reviewProposal")} onClose={onClose}><form onSubmit={(event) => { event.preventDefault(); mutation.mutate(); }}>
-		<p><strong>{proposal.provider_model}</strong> · {proposal.region || "—"} · {proposal.tier || "—"} · {proposal.match}</p>
-		<p>{money(proposal.input_micros_per_million)} / {money(proposal.output_micros_per_million)} · {proposal.source.assurance}</p>
-		<p>{dateTime(proposal.fetched_at)} · {proposal.source.type} · {proposal.source.reference || proposal.source.uri || "—"}<br/><code>{proposal.source.content_sha256}</code></p>
-		<p><code>{proposal.digest}</code></p>
-		<Field label={t("deployments.effectiveFrom")}><input type="datetime-local" required value={effective} onChange={(event) => setEffective(event.target.value)} /></Field>
-		<Field label={t("usage.currentPassword")}><input type="password" required value={password} onChange={(event) => setPassword(event.target.value)} /></Field>
-		<Field label={t("usage.totpOptional")}><input inputMode="numeric" value={totp} onChange={(event) => setTotp(event.target.value)} /></Field>
-		<p>{t("deployments.adoptProposalWarning")}</p>{mutation.isError && <ErrorState error={mutation.error} />}
-		<button className="button primary" disabled={mutation.isPending}>{t("deployments.adoptProposal")}</button>
-	</form></Modal>;
 }
 
 function RestorePricingConfirm({ deployment, onClose }: { deployment: Deployment; onClose: () => void }) {
@@ -385,44 +299,106 @@ function DeploymentFact({ label, value, meta, unset = false }: { label: string; 
 function PriceVersionForm({ deployment, current, onClose }: { deployment: Deployment; current?: DeploymentPriceVersion; onClose: () => void }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
-  const [mode, setMode] = useState<"metered" | "free">("metered");
-  const [input, setInput] = useState("0");
-  const [output, setOutput] = useState("0");
-  const [fixed, setFixed] = useState("0");
-  const [effective, setEffective] = useState(new Date(Date.now() + 60_000).toISOString().slice(0, 16));
-  const [reference, setReference] = useState("");
-  const [digest, setDigest] = useState("");
+  const [step, setStep] = useState<"details" | "confirm">("details");
+  const [mode, setMode] = useState<"metered" | "free">(current?.billing_mode ?? "metered");
+  const [input, setInput] = useState(current ? priceInputValue(current.input_micros_per_million) : "0");
+  const [output, setOutput] = useState(current ? priceInputValue(current.output_micros_per_million) : "0");
+  const [fixed, setFixed] = useState(current ? priceInputValue(current.fixed_request_micros_usd) : "0");
+  const [effectiveMode, setEffectiveMode] = useState<"now" | "scheduled">("now");
+  const [effective, setEffective] = useState(new Date(Date.now() + 3_600_000).toISOString().slice(0, 16));
+  const [sourceKind, setSourceKind] = useState("official_public_price");
+  const [sourceNote, setSourceNote] = useState("");
   const [password, setPassword] = useState("");
-	const [totp, setTotp] = useState("");
+  const [totp, setTotp] = useState("");
   const idempotencyKey = useRef(crypto.randomUUID());
+  const validPrice = mode === "free" || ([input, output, fixed].every(validUSD) && [input, output, fixed].some((value) => Number(value) > 0));
+  const scheduledTimestamp = Date.parse(effective);
+  const validEffective = effectiveMode === "now" || (Number.isFinite(scheduledTimestamp) && scheduledTimestamp > Date.now());
+  const validDetails = validPrice && validEffective;
+  const exampleCost = mode === "free" ? 0 : Number(input) / 1000 + Number(output) / 2000 + Number(fixed);
+  const effectiveLabel = effectiveMode === "now" ? t("deployments.effectiveNow") : validEffective ? dateTime(new Date(scheduledTimestamp).toISOString()) : "—";
   const mutation = useMutation({
     mutationFn: () => api.createDeploymentPrice(deployment.id, {
       billing_mode: mode, currency: "USD",
       input_usd_per_million: mode === "free" ? "0" : input,
       output_usd_per_million: mode === "free" ? "0" : output,
       fixed_request_usd: mode === "free" ? "0" : fixed,
-      effective_from: new Date(effective).toISOString(),
-      source: { type: "manual", content_sha256: digest, reference, asserted_without_archive: true },
-		current_password: password, totp_code: totp,
+      effective_from: effectiveMode === "now" ? new Date(Date.now() + 60_000).toISOString() : new Date(scheduledTimestamp).toISOString(),
+      source: { type: "manual", reference: sourceKind, note: sourceNote.trim(), asserted_without_archive: true },
+      current_password: password, totp_code: totp,
     }, idempotencyKey.current),
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["deployment-prices", deployment.id] }); onClose(); },
   });
-  const submit = (event: FormEvent) => { event.preventDefault(); mutation.mutate(); };
-  return <Modal title={t("deployments.newPriceVersion")} onClose={onClose}>
-    <form onSubmit={submit}>
-      {current && <p>{t("deployments.currentPriceVersion", { version: current.version })}</p>}
-      <Field label={t("deployments.billingMode")}><select value={mode} onChange={(event) => setMode(event.target.value as "metered" | "free")}><option value="metered">metered</option><option value="free">free</option></select></Field>
-      {mode === "metered" && <><Field label={t("deployments.inputUSD")}><input required value={input} onChange={(event) => setInput(event.target.value)} /></Field><Field label={t("deployments.outputUSD")}><input required value={output} onChange={(event) => setOutput(event.target.value)} /></Field><Field label={t("deployments.fixedRequestUSD")}><input required value={fixed} onChange={(event) => setFixed(event.target.value)} /></Field></>}
-      <Field label={t("deployments.effectiveFrom")}><input type="datetime-local" required value={effective} onChange={(event) => setEffective(event.target.value)} /></Field>
-      <Field label={t("deployments.sourceReference")}><input required value={reference} onChange={(event) => setReference(event.target.value)} /></Field>
-      <Field label={t("deployments.sourceDigest")}><input required pattern="sha256:[a-fA-F0-9]{64}" value={digest} onChange={(event) => setDigest(event.target.value)} placeholder="sha256:…" /></Field>
-		<Field label={t("usage.currentPassword")}><input type="password" required value={password} onChange={(event) => setPassword(event.target.value)} /></Field>
-		<Field label={t("usage.totpOptional")}><input inputMode="numeric" value={totp} onChange={(event) => setTotp(event.target.value)} /></Field>
-      <p>{t("deployments.immutablePriceWarning")}</p>
-      {mutation.isError && <ErrorState error={mutation.error} />}
-      <button className="button primary" disabled={mutation.isPending}>{t("deployments.createPriceVersion")}</button>
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    if (step === "details") {
+      if (validDetails) setStep("confirm");
+      return;
+    }
+    mutation.mutate();
+  };
+  return <Modal title={current ? t("deployments.adjustPrice") : t("deployments.setPrice")} onClose={onClose}>
+    <form className="price-version-form" onSubmit={submit}>
+      <ol className="price-form-steps" aria-label={t("deployments.priceSteps")}>
+        <li className={step === "details" ? "active" : "complete"}>1<span>{t("deployments.priceStepDetails")}</span></li>
+        <li className={step === "confirm" ? "active" : ""}>2<span>{t("deployments.priceStepConfirm")}</span></li>
+      </ol>
+      {step === "details" ? <>
+        <fieldset className="price-mode-options">
+          <legend>{t("deployments.billingMode")}</legend>
+          <label className={mode === "metered" ? "price-mode-option selected" : "price-mode-option"}>
+            <input type="radio" name="price-mode" checked={mode === "metered"} onChange={() => setMode("metered")} />
+            <span><strong>{t("deployments.meteredLabel")}</strong><small>{t("deployments.meteredDescription")}</small></span>
+          </label>
+          <label className={mode === "free" ? "price-mode-option selected" : "price-mode-option"}>
+            <input type="radio" name="price-mode" checked={mode === "free"} onChange={() => setMode("free")} />
+            <span><strong>{t("deployments.freeLabel")}</strong><small>{t("deployments.freeDescription")}</small></span>
+          </label>
+        </fieldset>
+        {mode === "metered" && <>
+          <div className="price-form-grid">
+            <Field label={t("deployments.inputUSD")}><input inputMode="decimal" required value={input} onChange={(event) => setInput(event.target.value)} /></Field>
+            <Field label={t("deployments.outputUSD")}><input inputMode="decimal" required value={output} onChange={(event) => setOutput(event.target.value)} /></Field>
+          </div>
+          <details className="price-advanced">
+            <summary>{t("deployments.advancedPricing")}</summary>
+            <Field label={t("deployments.fixedRequestUSD")}><input inputMode="decimal" required value={fixed} onChange={(event) => setFixed(event.target.value)} /></Field>
+          </details>
+        </>}
+        <Field label={t("deployments.effectiveMode")}><select value={effectiveMode} onChange={(event) => setEffectiveMode(event.target.value as "now" | "scheduled")}><option value="now">{t("deployments.effectiveNow")}</option><option value="scheduled">{t("deployments.effectiveScheduled")}</option></select></Field>
+        {effectiveMode === "scheduled" && <Field label={t("deployments.effectiveFrom")}><input type="datetime-local" required value={effective} onChange={(event) => setEffective(event.target.value)} /></Field>}
+        {!validEffective && <p className="field-hint error">{t("deployments.invalidEffectiveTime")}</p>}
+        <Field label={t("deployments.priceSourceKind")}><select value={sourceKind} onChange={(event) => setSourceKind(event.target.value)}><option value="official_public_price">{t("deployments.sourceKinds.officialPublicPrice")}</option><option value="contract_price">{t("deployments.sourceKinds.contractPrice")}</option><option value="internal_cost">{t("deployments.sourceKinds.internalCost")}</option><option value="temporary_estimate">{t("deployments.sourceKinds.temporaryEstimate")}</option></select></Field>
+        <Field label={t("deployments.sourceNote")}><textarea value={sourceNote} onChange={(event) => setSourceNote(event.target.value)} placeholder={t("deployments.sourceNotePlaceholder")} /></Field>
+        {!validPrice && <p className="field-hint error">{t("deployments.invalidPrice")}</p>}
+        <div className="form-actions"><button className="button primary" disabled={!validDetails}>{t("deployments.nextReview")}</button></div>
+      </> : <>
+        <section className="price-confirm-summary">
+          <header><strong>{t("deployments.priceSummary")}</strong><small>{deployment.name} · {deployment.provider_model}</small></header>
+          <dl>
+            <div><dt>{t("deployments.billingMode")}</dt><dd>{mode === "free" ? t("deployments.freeLabel") : t("deployments.meteredLabel")}</dd></div>
+            {mode === "metered" && <><div><dt>{t("deployments.inputUSD")}</dt><dd>${input}</dd></div><div><dt>{t("deployments.outputUSD")}</dt><dd>${output}</dd></div><div><dt>{t("deployments.fixedRequestUSD")}</dt><dd>${fixed}</dd></div></>}
+            <div><dt>{t("deployments.effectiveFrom")}</dt><dd>{effectiveLabel}</dd></div>
+            <div><dt>{t("deployments.priceSourceKind")}</dt><dd>{t(`deployments.sourceKinds.${sourceKind === "official_public_price" ? "officialPublicPrice" : sourceKind === "contract_price" ? "contractPrice" : sourceKind === "internal_cost" ? "internalCost" : "temporaryEstimate"}`)}</dd></div>
+          </dl>
+          <p>{t("deployments.priceExample", { cost: exampleCost.toFixed(6) })}</p>
+        </section>
+        <div className="notice warning"><strong>{t("deployments.priceWillTakeEffect")}</strong><span>{t("deployments.immutablePriceWarning")}</span></div>
+        <Field label={t("usage.currentPassword")}><input type="password" autoComplete="current-password" required value={password} onChange={(event) => setPassword(event.target.value)} /></Field>
+        <Field label={t("usage.totpOptional")}><input inputMode="numeric" autoComplete="one-time-code" value={totp} onChange={(event) => setTotp(event.target.value)} /></Field>
+        {mutation.isError && <ErrorState error={mutation.error} />}
+        <div className="form-actions"><button type="button" className="button ghost" onClick={() => setStep("details")}>{t("deployments.backToPrice")}</button><button className="button primary" disabled={mutation.isPending}>{t("deployments.confirmPrice")}</button></div>
+      </>}
     </form>
   </Modal>;
+}
+
+function validUSD(value: string) {
+  return /^(?:0|[1-9]\d*)(?:\.\d{1,6})?$/.test(value) && Number.isFinite(Number(value));
+}
+
+function priceInputValue(micros: number) {
+  return String(micros / 1_000_000);
 }
 
 function evidenceSummary(evidence: Record<string, string>) {

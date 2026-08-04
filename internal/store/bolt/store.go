@@ -23,7 +23,7 @@ import (
 	bbolt "go.etcd.io/bbolt"
 )
 
-const schemaVersion uint64 = 14
+const schemaVersion uint64 = 15
 
 const (
 	maxPriceVersionsPerDeployment   = 10_000
@@ -261,6 +261,12 @@ var migrations = []migration{
 			}
 		}
 		return migrationStep(step, "after_create_pricing_proposal_buckets")
+	}},
+	{version: 15, name: "optional_manual_price_evidence", up: func(_ *bbolt.Tx, step func(string) error) error {
+		if err := migrationStep(step, "before_optional_manual_price_evidence"); err != nil {
+			return err
+		}
+		return migrationStep(step, "after_optional_manual_price_evidence")
 	}},
 }
 

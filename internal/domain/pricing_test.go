@@ -34,6 +34,23 @@ func TestDeploymentPriceVersionValidationSeparatesFreeMeteredAndEvidence(t *test
 	}
 }
 
+func TestManualPriceSourceAllowsMissingDigestOnlyWithoutArchive(t *testing.T) {
+	now := time.Now().UTC()
+	source := PriceSource{Type: PriceSourceManual, Assurance: PriceAssuranceAsserted, ReceivedAt: now, Reference: "official_public_price", AssertedWithoutArchive: true}
+	if err := source.Validate(); err != nil {
+		t.Fatalf("manual source without archived evidence: %v", err)
+	}
+	source.AssertedWithoutArchive = false
+	if err := source.Validate(); err == nil {
+		t.Fatal("manual source without digest or explicit no-archive assertion was accepted")
+	}
+	retrieved := now
+	official := PriceSource{Type: PriceSourceOfficialURL, Assurance: PriceAssuranceAsserted, ReceivedAt: now, RetrievedAt: &retrieved, URI: "https://example.test/pricing", Reference: "standard"}
+	if err := official.Validate(); err == nil {
+		t.Fatal("official URL source without evidence digest was accepted")
+	}
+}
+
 func TestSelectDeploymentPriceVersionUsesEffectiveTimeNotCreationOrder(t *testing.T) {
 	first := validPriceVersion(t, "price_one", 1, "2026-08-04T00:00:00Z")
 	second := validPriceVersion(t, "price_two", 2, "2026-09-01T00:00:00Z")

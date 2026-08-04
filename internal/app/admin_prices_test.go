@@ -158,7 +158,7 @@ func TestAdminFreePriceRequiresReauthentication(t *testing.T) {
 	request := adminRequest(t, http.MethodPost, "/admin/api/v1/deployments/missing/prices", map[string]any{
 		"billing_mode": "free", "currency": "USD", "input_usd_per_million": "0", "output_usd_per_million": "0", "fixed_request_usd": "0",
 		"effective_from": time.Now().UTC().Add(time.Hour).Format(time.RFC3339),
-		"source":         map[string]any{"type": "manual", "content_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "reference": "free tier", "asserted_without_archive": true},
+		"source":         map[string]any{"type": "manual", "reference": "free tier", "asserted_without_archive": true},
 	})
 	request.AddCookie(cookie)
 	request.Header.Set("X-CSRF-Token", csrf)

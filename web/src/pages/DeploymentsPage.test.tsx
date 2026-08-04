@@ -224,9 +224,6 @@ describe("deployment release workflow", () => {
     })) as Deployment[];
     vi.mocked(api.deployments).mockResolvedValue({ items, next_cursor: "" });
     vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [], next_cursor: "" });
-    // Older servers serialized an empty nil slice as null. The details view
-    // must remain usable while clients and servers are upgraded independently.
-    vi.spyOn(api, "deploymentPriceProposals").mockResolvedValue({ items: null as never, next_cursor: "" });
     renderPage();
 
     expect(await screen.findByText("显示 20 / 20 个部署")).toBeVisible();
@@ -238,12 +235,56 @@ describe("deployment release workflow", () => {
     expect(screen.getByText("Special Vision")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "查看详情" }));
     expect(screen.getByText("输入价格")).toBeVisible();
-    expect(await screen.findByText("没有待处理建议。")).toBeVisible();
+    expect(await screen.findByText("不可变价格时间线")).toBeVisible();
     expect(screen.getByText("不可变价格时间线").closest("section")).toHaveClass("deployment-pricing-panel");
-    expect(screen.getByText("价格建议").closest("section")).toHaveClass("deployment-pricing-panel");
-    expect(screen.getByRole("button", { name: "＋ 新建价格版本" }).closest("header")).not.toBeNull();
-    expect(screen.getByRole("button", { name: "导入建议" }).closest("header")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "设置价格" }).closest("header")).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "导入建议" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "收起详情" })).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("sets a manual price in two steps without asking for or sending a content digest", async () => {
+    const deployment = {
+      id: "deployment_price", name: "Price GPT", provider_id: provider.id, provider_model: "gpt-5",
+      access_surface: provider.access_surface, profile_id: provider.profile_id, region: "",
+      capabilities, capability_evidence: {}, input_micros_per_million: 0,
+      output_micros_per_million: 0, fixed_request_micros_usd: 0, max_concurrency: 4,
+      priority: 0, weight: 1, enabled: false, revision: 1, created_at: "", updated_at: "",
+    } as Deployment;
+    vi.mocked(api.deployments).mockResolvedValue({ items: [deployment], next_cursor: "" });
+    vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [], next_cursor: "" });
+    const createPrice = vi.spyOn(api, "createDeploymentPrice").mockResolvedValue({} as never);
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "查看详情" }));
+    fireEvent.click(await screen.findByRole("button", { name: "设置价格" }));
+    expect(screen.getByRole("heading", { name: "设置价格" })).toBeVisible();
+    expect(screen.queryByText("来源内容 SHA-256")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("当前密码")).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("输入 USD / 百万令牌"), { target: { value: "2.5" } });
+    fireEvent.change(screen.getByLabelText("输出 USD / 百万令牌"), { target: { value: "10" } });
+    fireEvent.change(screen.getByLabelText("补充说明（可选）"), { target: { value: "August provider price sheet" } });
+    fireEvent.click(screen.getByRole("button", { name: "下一步：核对" }));
+
+    expect(screen.getByText("请核对价格")).toBeVisible();
+    expect(screen.getByLabelText("当前密码")).toBeVisible();
+    fireEvent.change(screen.getByLabelText("当前密码"), { target: { value: "admin-password" } });
+    fireEvent.click(screen.getByRole("button", { name: "确认并创建价格版本" }));
+
+    await waitFor(() => expect(createPrice).toHaveBeenCalledOnce());
+    expect(createPrice).toHaveBeenCalledWith(deployment.id, expect.objectContaining({
+      billing_mode: "metered",
+      input_usd_per_million: "2.5",
+      output_usd_per_million: "10",
+      source: {
+        type: "manual",
+        reference: "official_public_price",
+        note: "August provider price sheet",
+        asserted_without_archive: true,
+      },
+      current_password: "admin-password",
+    }), expect.any(String));
+    expect((createPrice.mock.calls[0][1] as { source: Record<string, unknown> }).source).not.toHaveProperty("content_sha256");
   });
 });
 

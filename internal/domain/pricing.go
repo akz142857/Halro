@@ -86,7 +86,7 @@ type PriceSource struct {
 	PublishedAt            *time.Time           `json:"published_at,omitempty"`
 	RetrievedAt            *time.Time           `json:"retrieved_at,omitempty"`
 	ReceivedAt             time.Time            `json:"received_at"`
-	ContentSHA256          string               `json:"content_sha256"`
+	ContentSHA256          string               `json:"content_sha256,omitempty"`
 	Reference              string               `json:"reference,omitempty"`
 	Note                   string               `json:"note,omitempty"`
 	ExternalEvidenceID     string               `json:"external_evidence_id,omitempty"`
@@ -110,7 +110,8 @@ func (s PriceSource) Validate() error {
 	} else if !isUTC(s.ReceivedAt) {
 		problems = append(problems, errors.New("price source received_at must use UTC"))
 	}
-	if !validSHA256Label(s.ContentSHA256) {
+	manualWithoutArchive := s.Type == PriceSourceManual && s.AssertedWithoutArchive && strings.TrimSpace(s.ContentSHA256) == ""
+	if !manualWithoutArchive && !validSHA256Label(s.ContentSHA256) {
 		problems = append(problems, errors.New("price source content_sha256 is invalid"))
 	}
 	for label, item := range map[string]struct {

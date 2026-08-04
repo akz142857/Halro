@@ -190,7 +190,7 @@ func TestMetadataMigrationFromV1IsAtomicAndRecorded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(history) != 14 ||
+	if len(history) != 15 ||
 		history[0] != (MigrationRecord{Version: 1, Name: "initial_schema"}) ||
 		history[1] != (MigrationRecord{Version: 2, Name: "migration_history"}) ||
 		history[2] != (MigrationRecord{Version: 3, Name: "deployments"}) ||
@@ -204,7 +204,8 @@ func TestMetadataMigrationFromV1IsAtomicAndRecorded(t *testing.T) {
 		history[10] != (MigrationRecord{Version: 11, Name: "versioned_deployment_pricing"}) ||
 		history[11] != (MigrationRecord{Version: 12, Name: "deployment_price_pin_intents"}) ||
 		history[12] != (MigrationRecord{Version: 13, Name: "cost_adjustment_intents"}) ||
-		history[13] != (MigrationRecord{Version: 14, Name: "pricing_proposals"}) {
+		history[13] != (MigrationRecord{Version: 14, Name: "pricing_proposals"}) ||
+		history[14] != (MigrationRecord{Version: 15, Name: "optional_manual_price_evidence"}) {
 		t.Fatalf("history=%#v", history)
 	}
 }

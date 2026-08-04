@@ -25,7 +25,7 @@ type priceSourceInput struct {
 	URI                    string                 `json:"uri,omitempty"`
 	PublishedAt            *time.Time             `json:"published_at,omitempty"`
 	RetrievedAt            *time.Time             `json:"retrieved_at,omitempty"`
-	ContentSHA256          string                 `json:"content_sha256"`
+	ContentSHA256          string                 `json:"content_sha256,omitempty"`
 	Reference              string                 `json:"reference,omitempty"`
 	Note                   string                 `json:"note,omitempty"`
 	ExternalEvidenceID     string                 `json:"external_evidence_id,omitempty"`

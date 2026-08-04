@@ -6,6 +6,8 @@ import { EmptyState, ErrorState, Field, Loading, PageHeader } from "../component
 
 type Endpoint = "responses" | "chat" | "embeddings";
 type Language = "curl" | "javascript" | "python" | "go";
+type RequestMode = "form" | "json";
+type ResponseView = "body" | "headers";
 
 const languages: Language[] = ["curl", "javascript", "python", "go"];
 
@@ -22,9 +24,13 @@ export function DeveloperPage() {
   const [endpoint, setEndpoint] = useState<Endpoint>("responses");
   const [input, setInput] = useState("Explain how Heimdall routes this request in one sentence.");
   const [stream, setStream] = useState(true);
+  const [requestMode, setRequestMode] = useState<RequestMode>("form");
+  const [gatewayKey, setGatewayKey] = useState("");
+  const [showGatewayKey, setShowGatewayKey] = useState(false);
   const [gatewayURL, setGatewayURL] = useState(() => typeof window === "undefined" ? "http://127.0.0.1:8080" : window.location.origin);
   const [language, setLanguage] = useState<Language>("curl");
   const [copyStatus, setCopyStatus] = useState("");
+  const [responseView, setResponseView] = useState<ResponseView>("body");
 
   useEffect(() => {
     if (selectedProject && selectedProject.id !== projectID) setProjectID(selectedProject.id);
@@ -37,9 +43,13 @@ export function DeveloperPage() {
     if (endpoint === "embeddings" && stream) setStream(false);
   }, [endpoint, stream]);
 
-  const body = useMemo(() => requestBody(endpoint, model, input, stream), [endpoint, input, model, stream]);
+  const formBody = useMemo(() => requestBody(endpoint, model, input, stream), [endpoint, input, model, stream]);
+  const [rawJSON, setRawJSON] = useState(() => JSON.stringify(requestBody("responses", "", "Explain how Heimdall routes this request in one sentence.", true), null, 2));
+  const parsedJSON = useMemo(() => parseJSON(rawJSON), [rawJSON]);
+  const body = requestMode === "json" && parsedJSON.value ? parsedJSON.value : formBody;
+  const isStreaming = endpoint !== "embeddings" && body.stream === true;
   const path = endpoint === "chat" ? "/v1/chat/completions" : `/v1/${endpoint}`;
-  const code = useMemo(() => codeExample(language, gatewayURL, path, body), [body, gatewayURL, language, path]);
+  const code = useMemo(() => codeExample(language, gatewayURL, path, body).replace(/\n\+/g, "\n"), [body, gatewayURL, language, path]);
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(code);
@@ -47,6 +57,10 @@ export function DeveloperPage() {
     } catch {
       setCopyStatus(t("developer.copyFailed"));
     }
+  };
+  const selectRequestMode = (mode: RequestMode) => {
+    if (mode === "json" && requestMode !== "json") setRawJSON(JSON.stringify(formBody, null, 2));
+    setRequestMode(mode);
   };
 
   return (
@@ -70,6 +84,10 @@ export function DeveloperPage() {
               <div><p className="eyebrow">01 / REQUEST</p><h2 id="developer-request-setup">{t("developer.requestSetup")}</h2></div>
               <p>{t("developer.requestSetupDescription")}</p>
             </header>
+            <div className="developer-mode-tabs" role="tablist" aria-label={t("developer.requestMode")}>
+              <button type="button" role="tab" aria-selected={requestMode === "form"} onClick={() => selectRequestMode("form")}>{t("developer.formMode")}</button>
+              <button type="button" role="tab" aria-selected={requestMode === "json"} onClick={() => selectRequestMode("json")}>{t("developer.jsonMode")}</button>
+            </div>
             <div className="developer-config-fields">
               <Field label={t("developer.project")}>
                 <select value={selectedProject.id} onChange={(event) => setProjectID(event.target.value)}>
@@ -91,13 +109,33 @@ export function DeveloperPage() {
               <Field label={t("developer.gatewayURL")} hint={t("developer.gatewayURLHint")}>
                 <input type="url" value={gatewayURL} onChange={(event) => setGatewayURL(event.target.value)} spellCheck={false} />
               </Field>
-              <Field label={t("developer.input")}>
-                <textarea rows={6} value={input} placeholder={t("developer.inputPlaceholder")} onChange={(event) => setInput(event.target.value)} />
-              </Field>
-              <label className={`developer-stream-toggle ${endpoint === "embeddings" ? "disabled" : ""}`}>
-                <input type="checkbox" checked={stream} disabled={endpoint === "embeddings"} onChange={(event) => setStream(event.target.checked)} />
-                <span><strong>{t("developer.streaming")}</strong><small>SSE</small></span>
-              </label>
+              <div className="field developer-key-field">
+                <label htmlFor="developer-gateway-key">{t("developer.gatewayKey")}</label>
+                <div className="developer-secret-input">
+                  <input id="developer-gateway-key" type={showGatewayKey ? "text" : "password"} value={gatewayKey} autoComplete="off" placeholder={t("developer.gatewayKeyPlaceholder")} onChange={(event) => setGatewayKey(event.target.value)} />
+                  <button type="button" className="button ghost" onClick={() => setShowGatewayKey((value) => !value)}>{showGatewayKey ? t("developer.hideKey") : t("developer.showKey")}</button>
+                </div>
+                <small>{t("developer.gatewayKeyHint")}</small>
+              </div>
+              {requestMode === "form" ? (
+                <>
+                  <Field label={t("developer.input")}>
+                    <textarea rows={6} value={input} placeholder={t("developer.inputPlaceholder")} onChange={(event) => setInput(event.target.value)} />
+                  </Field>
+                  <div className="developer-response-mode">
+                    <span>{t("developer.responseMode")}</span>
+                    <div role="group" aria-label={t("developer.responseMode")}>
+                      <button type="button" className={!stream ? "selected" : ""} onClick={() => setStream(false)}>{t("developer.standardResponse")}</button>
+                      <button type="button" className={stream ? "selected" : ""} disabled={endpoint === "embeddings"} onClick={() => setStream(true)}>{t("developer.sseResponse")}</button>
+                    </div>
+                    {endpoint === "embeddings" && <small>{t("developer.embeddingsNoStream")}</small>}
+                  </div>
+                </>
+              ) : (
+                <Field label={t("developer.rawJSON")} hint={t("developer.rawJSONHint")} error={parsedJSON.error ? t("developer.invalidJSON") : undefined}>
+                  <textarea className="developer-json-editor" rows={14} value={rawJSON} spellCheck={false} onChange={(event) => setRawJSON(event.target.value)} />
+                </Field>
+              )}
             </div>
             <div className="developer-request-summary" aria-label={t("developer.requestDetails")}>
               <div><small>{t("developer.method")}</small><strong>POST</strong></div>
@@ -125,18 +163,40 @@ export function DeveloperPage() {
             <section className="developer-response-panel" aria-labelledby="developer-response-heading">
               <header className="developer-panel-header compact">
                 <div><p className="eyebrow">03 / RESPONSE</p><h2 id="developer-response-heading">{t("developer.response")}</h2></div>
-                <p>{t("developer.responseDescription")}</p>
+                <button className="button ghost" disabled>{t("developer.openUsage")}</button>
               </header>
-              <div className="developer-response-empty">
-                <span aria-hidden="true">{"{ }"}</span>
-                <div><strong>{t("developer.awaitingResponse")}</strong><p>{t("developer.awaitingResponseDescription")}</p></div>
+              <div className="developer-response-meta" aria-label={t("developer.responseMetadata")}>
+                <div><small>{t("developer.httpStatus")}</small><strong>—</strong></div>
+                <div><small>Request ID</small><code>—</code></div>
+                <div><small>{t("developer.latency")}</small><strong>— ms</strong></div>
+                <div><small>{t("developer.delivery")}</small><strong>{isStreaming ? "SSE" : t("developer.standardResponse")}</strong></div>
               </div>
+              <div className="developer-response-tabs" role="tablist" aria-label={t("developer.responseViews")}>
+                <button type="button" role="tab" aria-selected={responseView === "body"} onClick={() => setResponseView("body")}>{t("developer.responseBody")}</button>
+                <button type="button" role="tab" aria-selected={responseView === "headers"} onClick={() => setResponseView("headers")}>{t("developer.responseHeaders")}</button>
+              </div>
+              <div className="developer-response-empty" data-view={responseView}>
+                <span aria-hidden="true">{responseView === "body" ? "{ }" : "H"}</span>
+                <div><strong>{t("developer.awaitingResponse")}</strong><p>{responseView === "body" ? t("developer.awaitingBody") : t("developer.awaitingHeaders")}</p></div>
+              </div>
+              <footer className="developer-response-footnote">{t("developer.responseDescription")}</footer>
             </section>
           </div>
         </div>
       )}
     </section>
   );
+}
+
+function parseJSON(value: string): { value?: Record<string, unknown>; error: boolean } {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? { value: parsed as Record<string, unknown>, error: false }
+      : { error: true };
+  } catch {
+    return { error: true };
+  }
 }
 
 function requestBody(endpoint: Endpoint, model: string, input: string, stream: boolean) {
@@ -155,6 +215,11 @@ function languageLabel(language: Language) {
 function codeExample(language: Language, baseURL: string, path: string, body: object) {
   const url = `${baseURL.replace(/\/$/, "")}${path}`;
   const json = JSON.stringify(body, null, 2);
+  const streaming = "stream" in body && body.stream === true;
+  if (language === "javascript" && streaming) return `const response = await fetch(${JSON.stringify(url)}, {\n  method: "POST",\n  headers: {\n    "Authorization": \`Bearer \${process.env.HEIMDALL_API_KEY}\`,\n    "Content-Type": "application/json",\n  },\n  body: JSON.stringify(${json.replace(/\n/g, "\n  ")}),\n});\n\nconst reader = response.body.getReader();\nconst decoder = new TextDecoder();\nwhile (true) {\n  const { value, done } = await reader.read();\n  if (done) break;\n  console.log(decoder.decode(value, { stream: true }));\n}`;
+  if (language === "python" && streaming) return `import json\nimport os\nimport requests\n\npayload = json.loads(${JSON.stringify(JSON.stringify(body))})\nresponse = requests.post(\n    ${JSON.stringify(url)},\n    headers={\n        "Authorization": f"Bearer {os.environ['HEIMDALL_API_KEY']}",\n        "Content-Type": "application/json",\n    },\n    json=payload,\n    stream=True,\n)\nresponse.raise_for_status()\nfor line in response.iter_lines():\n    if line:\n        print(line.decode("utf-8"))`;
+  if (language === "go" && streaming) return `payload := []byte(${JSON.stringify(JSON.stringify(body))})\nreq, _ := http.NewRequest(http.MethodPost, ${JSON.stringify(url)}, bytes.NewReader(payload))\nreq.Header.Set("Authorization", "Bearer "+os.Getenv("HEIMDALL_API_KEY"))\nreq.Header.Set("Content-Type", "application/json")\n\nresp, err := http.DefaultClient.Do(req)\nif err != nil { log.Fatal(err) }\ndefer resp.Body.Close()\n\nscanner := bufio.NewScanner(resp.Body)\nfor scanner.Scan() {\n    fmt.Println(scanner.Text())\n}`;
+  if (language === "curl" && streaming) return `curl -N ${JSON.stringify(url)} \\\n+  -H "Authorization: Bearer $HEIMDALL_API_KEY" \\\n+  -H "Content-Type: application/json" \\\n+  -d '${json}'`;
   if (language === "javascript") return `const response = await fetch(${JSON.stringify(url)}, {\n  method: "POST",\n  headers: {\n    "Authorization": \`Bearer \${process.env.HEIMDALL_API_KEY}\`,\n    "Content-Type": "application/json",\n  },\n  body: JSON.stringify(${json.replace(/\n/g, "\n  ")}),\n});\n\nconsole.log(await response.json());`;
   if (language === "python") return `import os\nimport requests\n\nresponse = requests.post(\n    ${JSON.stringify(url)},\n    headers={\n        "Authorization": f"Bearer {os.environ['HEIMDALL_API_KEY']}",\n        "Content-Type": "application/json",\n    },\n    json=${json.replace(/true/g, "True").replace(/false/g, "False")},\n)\nresponse.raise_for_status()\nprint(response.json())`;
   if (language === "go") return `payload := []byte(${JSON.stringify(JSON.stringify(body))})\nreq, _ := http.NewRequest(http.MethodPost, ${JSON.stringify(url)}, bytes.NewReader(payload))\nreq.Header.Set("Authorization", "Bearer "+os.Getenv("HEIMDALL_API_KEY"))\nreq.Header.Set("Content-Type", "application/json")\n\nresp, err := http.DefaultClient.Do(req)`;

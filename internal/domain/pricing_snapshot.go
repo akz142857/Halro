@@ -134,7 +134,8 @@ func (s PriceSnapshot) Validate() error {
 		if price.InputMicrosPerMillion < 0 || price.OutputMicrosPerMillion < 0 || price.FixedRequestMicrosUSD < 0 {
 			return errors.New("price snapshot amounts cannot be negative")
 		}
-		if s.Currency != "USD" || s.FormulaVersion != PriceFormulaUSDTokensV1 || !validSHA256Label(s.SourceContentSHA256) {
+		manualWithoutArchive := s.SourceType == PriceSourceManual && s.SourceAssurance == PriceAssuranceAsserted && s.SourceContentSHA256 == ""
+		if s.Currency != "USD" || s.FormulaVersion != PriceFormulaUSDTokensV1 || (!manualWithoutArchive && !validSHA256Label(s.SourceContentSHA256)) {
 			return errors.New("price snapshot currency, formula, or evidence digest is invalid")
 		}
 		switch s.BillingMode {

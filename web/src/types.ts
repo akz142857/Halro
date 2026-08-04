@@ -416,7 +416,7 @@ export interface DeploymentPriceVersion {
   output_micros_per_million: number;
   fixed_request_micros_usd: number;
   effective_from: string;
-  source: { type: string; assurance: string; content_sha256: string; reference?: string; uri?: string };
+  source: { type: string; assurance: string; content_sha256?: string; reference?: string; uri?: string };
   status: "active" | "scheduled" | "superseded" | "cancelled";
 }
 

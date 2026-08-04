@@ -43,4 +43,35 @@ describe("DeveloperPage", () => {
     expect(screen.getByText("/v1/chat/completions")).toBeVisible();
     expect(screen.getByText(/messages/)).toBeVisible();
   });
+
+  it("exposes the complete first-phase UI without persisting the Gateway Key", async () => {
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
+    const localWrite = vi.spyOn(Storage.prototype, "setItem");
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
+    await screen.findByRole("option", { name: "support-chat" });
+
+    const key = screen.getByLabelText("Gateway Key");
+    fireEvent.change(key, { target: { value: "hm_test_secret" } });
+    expect(key).toHaveAttribute("type", "password");
+    expect(localWrite).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("tab", { name: "原始 JSON" }));
+    const raw = screen.getByRole("textbox", { name: /原始请求 JSON/ });
+    fireEvent.change(raw, { target: { value: "{" } });
+    expect(screen.getByText("请输入有效的 JSON 对象。")).toBeVisible();
+    fireEvent.change(raw, { target: { value: '{"model":"raw-model","input":"hello","stream":false}' } });
+    expect(screen.getAllByText(/raw-model/)).toHaveLength(2);
+
+    expect(screen.getByText("HTTP 状态")).toBeVisible();
+    expect(screen.getByText("Request ID")).toBeVisible();
+    expect(screen.getByText("延迟")).toBeVisible();
+    expect(screen.getByRole("button", { name: "查看用量记录" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("tab", { name: "响应头" }));
+    expect(screen.getByText(/发送请求后.*Content-Type/)).toBeVisible();
+
+    fireEvent.click(screen.getByRole("tab", { name: "表单模式" }));
+    fireEvent.change(screen.getByLabelText("API 协议"), { target: { value: "embeddings" } });
+    expect(screen.getByRole("button", { name: "SSE 流式" })).toBeDisabled();
+  });
 });
