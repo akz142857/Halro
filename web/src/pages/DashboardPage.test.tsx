@@ -35,6 +35,19 @@ describe("DashboardPage", () => {
     expect(alertRow.querySelector(".status-dot")).toHaveClass("ok");
     expect(walRow.querySelector(".status-dot")).toHaveClass("ok");
   });
+
+  it("renders empty states when collection fields are null", async () => {
+    const empty = dashboard();
+    empty.usage.hourly = null as unknown as Dashboard["usage"]["hourly"];
+    empty.usage.recent_anomalies = null as unknown as Dashboard["usage"]["recent_anomalies"];
+    empty.governance.budget.items = null as unknown as Dashboard["governance"]["budget"]["items"];
+    empty.governance.capacity.items = null as unknown as Dashboard["governance"]["capacity"]["items"];
+    vi.spyOn(api, "dashboard").mockResolvedValue(empty);
+    renderPage();
+
+    expect(await screen.findByText("异常事件")).toBeInTheDocument();
+    expect(screen.getByText("今天没有失败、重试或路由回退")).toBeInTheDocument();
+  });
 });
 
 function renderPage() {

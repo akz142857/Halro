@@ -24,7 +24,7 @@ const client = () => new QueryClient({ defaultOptions: { queries: { retry: false
 it("renders only the redacted read-only custody contract", async () => {
   vi.spyOn(api, "masterKeyCustody").mockResolvedValue(keySlotsCustody());
   render(<QueryClientProvider client={client()}><MasterKeyCustodyPage /></QueryClientProvider>);
-  expect(await screen.findByRole("heading", { name: "主密钥托管" })).toBeVisible();
+  expect(await screen.findByRole("heading", { name: "根密钥状态" })).toBeVisible();
   expect(await screen.findAllByText("aws-kms")).toHaveLength(2);
   expect(screen.getByText(/1 个退役中/)).toBeVisible();
   expect(screen.getByText(/最近一次恢复验证：.*2026/)).toBeVisible();

@@ -147,3 +147,15 @@ func TestDashboardBuildsTodayBreakdownsAndRecentAnomalies(t *testing.T) {
 		t.Fatalf("recent anomalies=%#v", dashboard.RecentAnomalies)
 	}
 }
+
+func TestEmptyDashboardUsesEmptyCollections(t *testing.T) {
+	dashboard := NewAggregate().Dashboard(time.Now(), time.UTC)
+	if dashboard.Hourly == nil || dashboard.RecentAnomalies == nil {
+		t.Fatalf("empty dashboard collections must encode as arrays: %#v", dashboard)
+	}
+	for dimension, items := range dashboard.Breakdowns {
+		if items == nil {
+			t.Fatalf("breakdown %q must encode as an array", dimension)
+		}
+	}
+}
