@@ -3,6 +3,9 @@ import { ApiError } from "../api";
 
 export function localizedError(t: TFunction, error: unknown) {
   if (!(error instanceof ApiError)) return t("errors.network");
+  if (error.code === "deployment_price_unavailable") {
+    return t("errors.deploymentPriceUnavailable");
+  }
   if (error.status === 400 || error.status === 422) return t("errors.badRequest");
   if (error.status === 401) return t("errors.authentication");
   if (error.status === 403) return t("errors.forbidden");

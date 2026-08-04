@@ -137,8 +137,11 @@ function DeploymentCard({
   const queryClient = useQueryClient();
   const prices = useQuery({ queryKey: ["deployment-prices", deployment.id], queryFn: () => api.deploymentPrices(deployment.id), enabled: expanded });
 	const proposals = useQuery({ queryKey: ["deployment-price-proposals", deployment.id], queryFn: () => api.deploymentPriceProposals(deployment.id), enabled: expanded });
-  const activePrice = prices.data?.items.find((price) => price.status === "active");
-  const scheduledPrices = prices.data?.items.filter((price) => price.status === "scheduled") ?? [];
+  const priceItems = prices.data?.items ?? [];
+  const proposalItems = proposals.data?.items ?? [];
+  const activePrice = priceItems.find((price) => price.status === "active");
+  const scheduledPrices = priceItems.filter((price) => price.status === "scheduled");
+  const pendingProposals = proposalItems.filter((proposal) => proposal.status === "pending");
   const cancelPrice = useMutation({ mutationFn: (price: DeploymentPriceVersion) => api.cancelDeploymentPrice(deployment.id, price.id, price.revision), onSuccess: () => queryClient.invalidateQueries({ queryKey: ["deployment-prices", deployment.id] }) });
 	const rejectProposal = useMutation({ mutationFn: (proposal: DeploymentPriceProposal) => api.rejectDeploymentPriceProposal(deployment.id, proposal.id, proposal.revision), onSuccess: () => queryClient.invalidateQueries({ queryKey: ["deployment-price-proposals", deployment.id] }) });
   const test = useMutation({
@@ -216,25 +219,49 @@ function DeploymentCard({
         <DeploymentFact label={t("deployments.context")} value={deployment.capabilities.max_context_tokens || t("deployments.upstreamApplies")} meta={deployment.capabilities.max_context_tokens ? t("deployments.tokens") : t("deployments.undeclared")} />
         <DeploymentFact label={t("deployments.maxOutput")} value={deployment.capabilities.max_output_tokens || t("deployments.upstreamApplies")} meta={deployment.capabilities.max_output_tokens ? t("deployments.tokens") : t("deployments.undeclared")} />
       </dl>
-      <section className="technical-details">
-        <strong>{t("deployments.priceTimeline")}</strong>
-        {activePrice && <small>{t("deployments.priceSourceSummary", { type: activePrice.source.type, assurance: activePrice.source.assurance, reference: activePrice.source.reference || "—" })}</small>}
-        {scheduledPrices.map((price) => <div key={price.id}><code>v{price.version}</code> · {dateTime(price.effective_from)} · {price.billing_mode} <button className="button ghost" disabled={cancelPrice.isPending} onClick={() => cancelPrice.mutate(price)}>{t("common.cancel")}</button></div>)}
-        <button className="button ghost" onClick={() => setPricing(true)}>{t("deployments.newPriceVersion")}</button>
-      </section>
-	  {deployment.pricing_quarantined && <div className="notice warning"><strong>{t("deployments.pricingQuarantined")}</strong><span>{deployment.pricing_quarantine_reason}</span><button className="button ghost" onClick={() => setConfirmingRestore(true)}>{t("deployments.confirmRestoredPricing")}</button></div>}
-	  <section className="technical-details">
-		<strong>{t("deployments.priceProposals")}</strong>
-		<p><small>{t("deployments.proposalSafety")}</small></p>
-		{proposals.data?.items.filter((proposal) => proposal.status === "pending").map((proposal) => <div key={proposal.id}>
-		  <code>{proposal.match}</code> · {proposal.source.assurance} · {proposal.source.reference || proposal.source.uri || "—"} · {t("deployments.proposalExpires", { time: dateTime(proposal.expires_at) })}
-		  {proposal.warnings?.map((warning) => <small key={warning}> ⚠ {warning}</small>)}
-		  <button className="button ghost" disabled={proposal.match === "ambiguous" || new Date(proposal.expires_at) <= new Date()} onClick={() => setReviewing(proposal)}>{t("deployments.reviewProposal")}</button>
-		  <ConfirmButton className="button ghost" label={t("deployments.rejectProposal")} confirmLabel={t("deployments.rejectProposalConfirm")} onConfirm={() => rejectProposal.mutate(proposal)} />
-		</div>)}
-		{!proposals.isPending && !proposals.data?.items.some((proposal) => proposal.status === "pending") && <small>{t("deployments.noPendingProposals")}</small>}
-		<button className="button ghost" onClick={() => setSuggesting(true)}>{t("deployments.importProposal")}</button>
-	  </section>
+      {deployment.pricing_quarantined && <div className="notice warning deployment-pricing-warning"><strong>{t("deployments.pricingQuarantined")}</strong><span>{deployment.pricing_quarantine_reason}</span><button className="button ghost" onClick={() => setConfirmingRestore(true)}>{t("deployments.confirmRestoredPricing")}</button></div>}
+      <div className="deployment-pricing-grid">
+        <section className="deployment-pricing-panel">
+          <header>
+            <div>
+              <strong>{t("deployments.priceTimeline")}</strong>
+              <small>{activePrice
+                ? t("deployments.priceSourceSummary", { type: activePrice.source.type, assurance: activePrice.source.assurance, reference: activePrice.source.reference || "—" })
+                : prices.isPending ? t("common.loading") : t("deployments.noPriceVersions")}</small>
+            </div>
+            <button className="button secondary deployment-pricing-action" onClick={() => setPricing(true)}>{t("deployments.newPriceVersion")}</button>
+          </header>
+          {!!scheduledPrices.length && <div className="deployment-pricing-list">
+            {scheduledPrices.map((price) => <div key={price.id}>
+              <span><code>v{price.version}</code><small>{dateTime(price.effective_from)} · {price.billing_mode}</small></span>
+              <button className="button ghost" disabled={cancelPrice.isPending} onClick={() => cancelPrice.mutate(price)}>{t("common.cancel")}</button>
+            </div>)}
+          </div>}
+        </section>
+        <section className="deployment-pricing-panel">
+          <header>
+            <div>
+              <strong>{t("deployments.priceProposals")}</strong>
+              <small>{t("deployments.proposalSafety")}</small>
+            </div>
+            <button className="button secondary deployment-pricing-action" onClick={() => setSuggesting(true)}>{t("deployments.importProposal")}</button>
+          </header>
+          {!!pendingProposals.length && <div className="deployment-pricing-list">
+            {pendingProposals.map((proposal) => <div key={proposal.id}>
+              <span>
+                <code>{proposal.match}</code>
+                <small>{proposal.source.assurance} · {proposal.source.reference || proposal.source.uri || "—"} · {t("deployments.proposalExpires", { time: dateTime(proposal.expires_at) })}</small>
+                {proposal.warnings?.map((warning) => <small key={warning}>⚠ {warning}</small>)}
+              </span>
+              <span className="deployment-pricing-row-actions">
+                <button className="button ghost" disabled={proposal.match === "ambiguous" || new Date(proposal.expires_at) <= new Date()} onClick={() => setReviewing(proposal)}>{t("deployments.reviewProposal")}</button>
+                <ConfirmButton className="button ghost" label={t("deployments.rejectProposal")} confirmLabel={t("deployments.rejectProposalConfirm")} onConfirm={() => rejectProposal.mutate(proposal)} />
+              </span>
+            </div>)}
+          </div>}
+          {!proposals.isPending && !pendingProposals.length && <div className="deployment-pricing-empty">{t("deployments.noPendingProposals")}</div>}
+        </section>
+      </div>
       <div className="deployment-capability-summary">
         <strong>{t("deployments.capabilityCount", { count: capabilities.length })}</strong>
         <div className="capability-list" aria-label={t("deployments.capabilities")}>
@@ -268,7 +295,7 @@ function DeploymentCard({
           </OverflowMenu>
         </div>
       </footer>
-      {(remove.isError || state.isError) && <ErrorState error={remove.error || state.error} />}
+      {(remove.isError || state.isError) && <ErrorState className="deployment-card-error" error={remove.error || state.error} />}
       {pricing && <PriceVersionForm deployment={deployment} current={activePrice} onClose={() => setPricing(false)} />}
 	  {suggesting && <PriceProposalForm deployment={deployment} onClose={() => setSuggesting(false)} />}
 	  {reviewing && <PriceProposalReview deployment={deployment} proposal={reviewing} onClose={() => setReviewing(undefined)} />}

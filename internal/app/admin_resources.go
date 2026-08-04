@@ -328,8 +328,12 @@ func writeResourcePage[T any](
 	if end < len(items) && end > start {
 		nextCursor = encodeResourceCursor(id(items[end-1]))
 	}
+	pageItems := items[start:end]
+	if pageItems == nil {
+		pageItems = make([]T, 0)
+	}
 	writeJSON(writer, http.StatusOK, map[string]any{
-		"items": items[start:end], "next_cursor": nextCursor,
+		"items": pageItems, "next_cursor": nextCursor,
 	})
 }
 
