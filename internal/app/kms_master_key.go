@@ -337,7 +337,9 @@ func unlockKMSMasterKey(
 // VerifyRecoverySlot is an explicit offline break-glass operation. Normal
 // Runtime, Bootstrap and Admin paths never select the Recovery Slot. A
 // successful use is durably recorded before the command reports success.
-func VerifyRecoverySlot(ctx context.Context, cfg config.Config, confirmedSlot string) (RecoveryVerificationResult, error) {
+func VerifyRecoverySlot(ctx context.Context, cfg config.Config, confirmedSlot string) (result RecoveryVerificationResult, resultErr error) {
+	recorder := &kmsAuditRecorder{}
+	ctx = withKMSAuditRecorder(ctx, recorder)
 	if cfg.Storage.MasterKey.Mode != config.MasterKeyModeKeySlots {
 		return RecoveryVerificationResult{}, errors.New("Recovery Slot verification requires key_slots mode")
 	}
@@ -369,6 +371,7 @@ func VerifyRecoverySlot(ctx context.Context, cfg config.Config, confirmedSlot st
 		return RecoveryVerificationResult{}, err
 	}
 	defer clear(auditKey)
+	defer func() { resultErr = finishOfflineKMSProviderAuditToStore(cfg, auditKey, recorder, store, resultErr) }()
 	auditLog, err := audit.Open(cfg.AuditPath(), auditKey)
 	if err != nil {
 		return RecoveryVerificationResult{}, err

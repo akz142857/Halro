@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/akz142857/Heimdall/internal/audit"
+	"github.com/akz142857/Heimdall/internal/config"
 	"github.com/akz142857/Heimdall/internal/id"
 	corekms "github.com/akz142857/Heimdall/internal/kms"
 	"github.com/akz142857/Heimdall/internal/masterkey"
@@ -133,6 +134,11 @@ func withKMSAuditRecorder(ctx context.Context, recorder *kmsAuditRecorder) conte
 	return context.WithValue(ctx, kmsAuditContextKey{}, recorder)
 }
 
+func kmsAuditRecorderFromContext(ctx context.Context) *kmsAuditRecorder {
+	recorder, _ := ctx.Value(kmsAuditContextKey{}).(*kmsAuditRecorder)
+	return recorder
+}
+
 func recordKMSProviderAudit(ctx context.Context, operation corekms.Operation, requestID string, err error) {
 	recorder, _ := ctx.Value(kmsAuditContextKey{}).(*kmsAuditRecorder)
 	if recorder == nil {
@@ -162,13 +168,17 @@ func (r *kmsAuditRecorder) snapshot() []kmsProviderAudit {
 }
 
 func appendKMSProviderAudit(ctx context.Context, log *audit.Log, store *boltstore.Store, recorder *kmsAuditRecorder) error {
+	return appendKMSProviderAuditAs(ctx, log, store, recorder, "system")
+}
+
+func appendKMSProviderAuditAs(ctx context.Context, log *audit.Log, store *boltstore.Store, recorder *kmsAuditRecorder, actorType string) error {
 	for _, observed := range recorder.snapshot() {
 		eventID, err := id.New("aud")
 		if err != nil {
 			return err
 		}
 		if _, err := log.Append(ctx, audit.Event{
-			EventID: eventID, OccurredAt: observed.OccurredAt, ActorType: "system",
+			EventID: eventID, OccurredAt: observed.OccurredAt, ActorType: actorType,
 			Action: "security.kms.call", TargetType: "kms_operation", TargetID: string(observed.Operation),
 			Outcome: observed.Outcome, ReasonCode: observed.ErrorClass, CorrelationID: observed.ProviderRequestID,
 		}); err != nil {
@@ -178,10 +188,64 @@ func appendKMSProviderAudit(ctx context.Context, log *audit.Log, store *boltstor
 	return checkpointAudit(store, log.Summary())
 }
 
-func lastKMSRecoveryUse(log *audit.Log) (time.Time, error) {
+// appendOfflineKMSProviderAudit persists the provider calls observed by an
+// offline CLI operation once that operation has unlocked the Audit HMAC key.
+// Calls that cannot unlock any trusted Slot remain available in CloudTrail but
+// cannot be authenticated into the local Audit chain.
+func appendOfflineKMSProviderAudit(ctx context.Context, cfg config.Config, auditKey []byte, recorder *kmsAuditRecorder) error {
+	if recorder == nil || len(recorder.snapshot()) == 0 {
+		return nil
+	}
+	store, err := boltstore.Open(cfg.MetadataPath())
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	return appendOfflineKMSProviderAuditToStore(ctx, cfg, auditKey, recorder, store)
+}
+
+func appendOfflineKMSProviderAuditToStore(ctx context.Context, cfg config.Config, auditKey []byte, recorder *kmsAuditRecorder, store *boltstore.Store) error {
+	if recorder == nil || len(recorder.snapshot()) == 0 {
+		return nil
+	}
+	log, err := audit.Open(cfg.AuditPath(), auditKey)
+	if err != nil {
+		return err
+	}
+	defer log.Close()
+	if err := reconcileAuditCheckpoint(store, log.Summary()); err != nil {
+		return err
+	}
+	return appendKMSProviderAuditAs(ctx, log, store, recorder, "local_cli")
+}
+
+func finishOfflineKMSProviderAudit(cfg config.Config, auditKey []byte, recorder *kmsAuditRecorder, operationErr error) error {
+	auditErr := appendOfflineKMSProviderAudit(context.Background(), cfg, auditKey, recorder)
+	return joinOfflineKMSProviderAuditError(operationErr, auditErr)
+}
+
+func finishOfflineKMSProviderAuditToStore(cfg config.Config, auditKey []byte, recorder *kmsAuditRecorder, store *boltstore.Store, operationErr error) error {
+	auditErr := appendOfflineKMSProviderAuditToStore(context.Background(), cfg, auditKey, recorder, store)
+	return joinOfflineKMSProviderAuditError(operationErr, auditErr)
+}
+
+func joinOfflineKMSProviderAuditError(operationErr, auditErr error) error {
+	if auditErr == nil {
+		return operationErr
+	}
+	auditErr = errors.Join(errors.New("persist offline KMS provider Audit"), auditErr)
+	if operationErr != nil {
+		return errors.Join(operationErr, auditErr)
+	}
+	return auditErr
+}
+
+func lastKMSRecoveryUse(log *audit.Log, recoverySlotID string) (time.Time, error) {
 	var latest time.Time
 	_, err := log.Replay(func(record audit.Record) error {
-		if record.Event.Action == "security.master_key.recovery_used" && record.Event.Outcome == "success" && record.Event.OccurredAt.After(latest) {
+		reasonAllowed := record.Event.ReasonCode == "break_glass_recovery" || record.Event.ReasonCode == "break_glass_restore"
+		if recoverySlotID != "" && record.Event.Action == "security.master_key.recovery_used" && record.Event.Outcome == "success" &&
+			record.Event.TargetType == "master_key_slot" && record.Event.TargetID == recoverySlotID && reasonAllowed && record.Event.OccurredAt.After(latest) {
 			latest = record.Event.OccurredAt
 		}
 		return nil

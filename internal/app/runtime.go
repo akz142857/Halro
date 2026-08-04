@@ -359,6 +359,15 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		secretVault.Close()
 		return fail(fmt.Errorf("recover pending Key Slot audit: %w", err))
 	}
+	if err := drainMasterKeyRotationAuditIntent(ctx, metadata, auditLog); err != nil {
+		auditLog.Close()
+		alertDispatcher.Close()
+		ledgerLog.Close()
+		metadata.Close()
+		providerRegistry.Close()
+		secretVault.Close()
+		return fail(fmt.Errorf("recover pending Master Key rotation audit: %w", err))
+	}
 	if err := appendKMSProviderAudit(ctx, auditLog, metadata, kmsAudit); err != nil {
 		auditLog.Close()
 		alertDispatcher.Close()
@@ -377,7 +386,7 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		secretVault.Close()
 		return fail(err)
 	}
-	kmsRecoveryLastUsed, err := lastKMSRecoveryUse(auditLog)
+	kmsRecoveryLastUsed, err := lastKMSRecoveryUse(auditLog, cfg.Storage.MasterKey.RecoverySlot)
 	if err != nil {
 		auditLog.Close()
 		alertDispatcher.Close()
@@ -882,6 +891,8 @@ func (r *Runtime) adminRouter() http.Handler {
 	router.With(r.requireAdminMutation).Delete("/admin/api/v1/security/mfa", r.disableAdminMFA)
 	router.With(r.requireAdmin).Get("/admin/api/v1/dashboard", r.adminDashboard)
 	router.With(r.requireAdmin).Get("/admin/api/v1/master-key/custody", r.adminMasterKeyCustody)
+	router.With(r.requireAdmin).Get("/admin/api/v1/master-key/runbooks/lifecycle", r.adminMasterKeyLifecycleRunbook)
+	router.With(r.requireAdmin).Get("/admin/api/v1/master-key/runbooks/recovery", r.adminMasterKeyRecoveryRunbook)
 	router.With(r.requireAdmin).Get("/admin/api/v1/usage", r.adminUsage)
 	router.With(r.requireAdmin).Get("/admin/api/v1/usage/requests/{requestID}", r.adminUsageRequest)
 	router.With(r.requireAdmin).Get("/admin/api/v1/system/status", r.adminSystemStatus)

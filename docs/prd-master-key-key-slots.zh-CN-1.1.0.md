@@ -410,13 +410,17 @@ Master Key 是启动 Admin API 之前的根信任，因此 Admin UI 不负责初
 - [x] revoke 前使用独立 active Slot 解锁并通过 Vault Key Check。
 - [x] revoke 后仍有 active、verified Primary 和 Recovery。
 - [x] revoke 在 stage 中原子写 descriptor 与 Audit intent、清除 wrapped/provider material、compact 后一次发布，并可恢复交付最终 Audit。
+- [x] rewrap 的 added、verified、retiring 均先原子持久化 descriptor 与确定性 Audit intent，再交付 success Audit，并覆盖 CLI/Runtime 恢复。
+- [x] DEK rotate 的 started/completed 与 operation ID 绑定；completed 只在 crash bridge 清理、compact、验证和最终发布后交付，并支持启动恢复。
+- [x] 离线 rewrap、rotate、revoke、Recovery 在可取得受信 Audit key 时记录低敏 `security.kms.call`，可与 CloudTrail request ID 对账。
 - [x] revoke 的 publication kill points 和幂等重试通过本地 fake KMS 回归。
 - [x] Recovery 契约明确为离线修复 Primary 后正常启动，不提供自动 fallback。
 - [x] Recovery 身份不用于长期运行 Gateway/Admin。
 - [x] Primary 永久不可用时可通过 Recovery 修复新 Primary 并冷启动的命令链与 fake KMS 路径已覆盖。
 - [x] 生命周期 Runbook 包含可复制但不含秘密的完整 revoke/Recovery 命令。
-- [x] Admin UI 边界冻结为只读 Custody 页面，明确区分本地 descriptor ready 与外部生产准入。
-- [x] 只读 UI/API 不触发 KMS 调用且不返回敏感 descriptor 字段，并展示 Recovery 过期、KEK rewrap/DEK rotate 及可访问 Runbook。
+- [x] Admin UI 边界冻结为只读 Custody 页面，明确区分 File Key 本地可用、key_slots descriptor ready 与外部生产准入。
+- [x] 只读 UI/API 不触发 KMS 调用且不返回敏感 descriptor 字段，并以 not-applicable/missing/current/expired/invalid-future 展示 Recovery 状态。
+- [x] 生命周期与灾备 Runbook 随二进制嵌入、受 Admin 会话保护并按 mode 展示，不依赖 GitHub 或移动分支。
 - [ ] 真实 AWS 14 项矩阵全部绑定最终 RC commit 并通过。
 - [ ] 独立操作者完成 Primary 失败、Recovery restore、Primary 修复和撤权。
 - [ ] 最终 RC Secret Canary、SBOM、checksum 和 Sigstore verification 全部通过。

@@ -144,7 +144,8 @@ func RestoreBackupWithOptions(
 	confirmBackupID string,
 	options RestoreOptions,
 ) (RestoreResult, error) {
-	return restoreBackupWithFactory(ctx, cfg, archivePath, backupKey, confirmBackupID, options, defaultKMSWrapperFactory)
+	recorder := &kmsAuditRecorder{}
+	return restoreBackupWithFactory(withKMSAuditRecorder(ctx, recorder), cfg, archivePath, backupKey, confirmBackupID, options, defaultKMSWrapperFactory)
 }
 
 func restoreBackupWithFactory(
@@ -335,6 +336,11 @@ func validateRestoreStage(
 	defer auditLog.Close()
 	if err := reconcileAuditCheckpoint(metadata, auditLog.Summary()); err != nil {
 		return fmt.Errorf("verify staged Audit checkpoint: %w", err)
+	}
+	if recorder := kmsAuditRecorderFromContext(ctx); recorder != nil {
+		if err := appendKMSProviderAuditAs(ctx, auditLog, metadata, recorder, "local_cli"); err != nil {
+			return fmt.Errorf("append restore KMS provider Audit: %w", err)
+		}
 	}
 	status := ledger.NewStatus()
 	ledgerLog, err := ledger.Open(filepath.Join(stageData, "ledger", "ledger.wal"), status)

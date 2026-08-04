@@ -21,7 +21,7 @@
      --key-reference arn:aws:kms:REGION:ACCOUNT:key/KEY_ID
    ```
 
-4. 命令依次持久化 `pending → active`，只有新 Slot 独立 unwrap 并通过 Vault Key Check 后才把旧 Slot 置为 `retiring`。
+4. 命令依次持久化 `pending → active`，只有新 Slot 独立 unwrap 并通过 Vault Key Check 后才把旧 Slot 置为 `retiring`。每个 added、verified、retiring 变更都先在同一个 bbolt 事务写 descriptor 与确定性 Audit intent，再交付 success Audit；进程中断后由下一次 CLI 或 Runtime 启动恢复，Audit 不会先于状态宣称成功。
 5. 验证 fingerprint、Credential ciphertext digest 和 KeyVersion 未改变。实例保持停止，使用受支持的低敏离线查询取得 descriptor 与 retiring Slot revision；该结果不包含 ARN、ciphertext、provider parameters 或 fingerprint：
 
    ```bash
@@ -65,7 +65,7 @@ heimdall key rotate --config /etc/heimdall/config.yaml \
 ## 4. 中断恢复
 
 - metadata 发布前中断：当前完整旧代仍是信任源；用相同命令和 `operation-id` 重试。
-- metadata 发布后、bridge 清理前中断：新 descriptor 与新 Vault 代已原子发布；重试会发现 Keyring 中的 operation ID 和 bridge，验证新 Primary/Vault/Audit 后完成清理。
+- metadata 发布后、bridge 清理前中断：新 descriptor 与新 Vault 代已原子发布；重试会发现 Keyring 中的 operation ID 和 bridge，验证新 Primary/Vault/Audit 后完成清理。`security.master_key_rotation.completed` 仅在 bridge 清除、compaction、验证及最终 metadata 发布成功后交付；未交付的确定性 intent 会由 CLI 或 Runtime 启动恢复。
 - bridge 清理发布后中断：同一 operation ID 被识别为已完成，重试不创建下一代。
 - 若发现不同 operation ID 的 pending bridge，立即停止；不得启动第二次轮换或手工编辑 bbolt。
 - 恢复过程中任一候选 Key 未通过 protected payload、fingerprint 或 Vault Key Check 时 fail closed。
@@ -93,5 +93,6 @@ heimdall key rotate --config /etc/heimdall/config.yaml \
 ## 6. 审核证据
 
 - `security.master_key_slot.added/verified/retiring/revoked` 只记录 Slot ID、状态与受限 reason code，不记录 ARN、wrapped bytes、provider parameters 或 fingerprint。
+- 离线 rewrap、rotate、revoke 与 Recovery 在成功取得受信 Audit HMAC key 后，把本次 AWS KMS operation、稳定错误分类和 provider request ID 写为 `security.kms.call`；本地 Audit 不记录 ARN、ciphertext 或 native error。若没有任何受信 Slot 能解锁 Audit key，失败调用只能依赖 AWS CloudTrail 取证，命令仍 fail closed。
 - `security.master_key_rotation.started/completed` 必须连续可验证。
 - 保存命令的非敏感 JSON 结果、CI kill-point matrix、CloudTrail event metadata 与备份清单；不得保存明文 Key、完整 ciphertext 或 Workload Identity token。
