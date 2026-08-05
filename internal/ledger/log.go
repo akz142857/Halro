@@ -292,6 +292,13 @@ func (l *Log) Close() error {
 	return err
 }
 
+// Status exposes the accounting health this log already reports into. A caller
+// whose own state machine has failed can put the shared signal into the same
+// state instead of keeping a second, invisible one beside it.
+func (l *Log) Status() *Status {
+	return l.status
+}
+
 func (l *Log) Stats() AppendStats {
 	return AppendStats{
 		Batches: l.batches.Load(), Records: l.writtenRecords.Load(),
