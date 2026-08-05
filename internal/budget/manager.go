@@ -799,7 +799,23 @@ func (m *Manager) appendApply(ctx context.Context, event ledger.Event) error {
 	return err
 }
 
+// applyFailure reports the terminal apply error, if the state machine has hit
+// one.
+func (m *Manager) applyFailure() error {
+	m.applyMu.Lock()
+	defer m.applyMu.Unlock()
+	return m.applyErr
+}
+
 func (m *Manager) appendApplyRecord(ctx context.Context, event ledger.Event) (ledger.Record, error) {
+	// A failed apply is terminal: the state machine advances in sequence order
+	// and can never get past the event it choked on. Appending anyway would
+	// fsync a record that will never be applied, and leave it in the log for
+	// replay to choke on again at the next start — with a longer tail of
+	// unappliable records behind it every time. Refuse before the write.
+	if err := m.applyFailure(); err != nil {
+		return ledger.Record{}, err
+	}
 	watermark, err := m.log.Append(ctx, event)
 	if err != nil {
 		return ledger.Record{}, err
@@ -822,6 +838,10 @@ func (m *Manager) appendApplyRecord(ctx context.Context, event ledger.Event) (le
 		m.applyErr = fmt.Errorf("apply durable accounting event: %w", err)
 		m.applyCond.Broadcast()
 		m.applyMu.Unlock()
+		// Accounting is the gateway's fail-closed gate, and it reads the
+		// ledger's status. Leaving that healthy while this manager can no
+		// longer apply anything would give two answers to one question.
+		m.log.Status().MarkUnavailable()
 		return ledger.Record{}, fmt.Errorf("apply durable accounting event: %w", err)
 	}
 	m.observerMu.RLock()
