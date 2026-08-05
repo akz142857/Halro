@@ -690,7 +690,8 @@ td small, td code { display: block; margin-top: 4px; color: var(--muted); }
 .alert-reply code { display: block; margin-top: 5px; overflow-wrap: anywhere; color: var(--muted); font-size: 10px; }
 .alert-secret { text-align: right; }
 .alert-secret small { color: var(--muted-2); font: 8px var(--mono); letter-spacing: .08em; }
-.alert-secret > .badge { margin-top: 6px; }
+.alert-secret > strong { display: block; margin-top: 6px; color: var(--muted); font: 10px var(--mono); }
+.alert-secret > strong.configured { color: var(--color-status-success-text); }
 .policy-card-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
 .policy-tabs-shell { display: grid; }
 .policy-tabs { margin-bottom: 0; }

@@ -184,9 +184,11 @@ function AlertRow({
         </div>
         <div className="alert-secret">
           <small>{t("operations.secretHeader")}</small>
-          <span className={`badge ${webhook.secret_configured ? "good" : "muted"}`}>
+          {/* Same typography as the rest of the row; colour alone separates the two states.
+              Carrying no secret is a configuration fact, not a fault, so it stays neutral. */}
+          <strong className={webhook.secret_configured ? "configured" : ""}>
             {webhook.secret_configured ? webhook.header_name || t("operations.configured") : t("operations.none")}
-          </span>
+          </strong>
         </div>
         <div className="row-actions">
           <InlineTestControl
