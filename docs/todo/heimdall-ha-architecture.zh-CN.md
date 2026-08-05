@@ -165,8 +165,10 @@ HA 模式下，replicated mutation log 是权威修改顺序。现有持久状�
 - 不在回放期间重新生成时间、随机 ID 或 Provider 结果。
 
 时间、随机 ID、定价证据和外部返回值必须作为 mutation fact 写入规范化
-payload。现有 `internal/authority.Mutation` 是演进起点，但需新增 term、index、
-cluster identity 和 commit/apply 语义，并通过新的 ADR 冻结格式。
+payload。`internal/authority` 曾为此预留过一组 Mutation/Commit 类型，但它们在
+v1 期间没有任何调用方，长期以不可执行的形式留在树里，已经删除（提交历史中可查）。
+真正开工时应从本文与 ADR 0004 的契约出发重新定义，并新增 term、index、
+cluster identity 和 commit/apply 语义，通过新的 ADR 冻结格式。
 
 ## 7. 复制日志与多数派提交
 
