@@ -125,7 +125,9 @@ func (recorder *developerExecutionRecorder) Flush() {
 	}
 }
 
-func (recorder *developerExecutionRecorder) Unwrap() http.ResponseWriter { return recorder.ResponseWriter }
+func (recorder *developerExecutionRecorder) Unwrap() http.ResponseWriter {
+	return recorder.ResponseWriter
+}
 
 // withoutContextValues preserves cancellation and deadlines while preventing
 // the internally constructed Gateway request from inheriting Admin session data.
