@@ -157,7 +157,13 @@ function AlertRow({
   const { t } = useTranslation();
   // Per row, not per page: a page-wide mutation greys out every other row's buttons and
   // leaves one shared "delivered" notice that never says which endpoint it belongs to.
-  const test = useMutation({ mutationFn: () => api.testAlert(webhook.id), onSuccess: onMutated, onError: onMutated });
+  const [replyDismissed, setReplyDismissed] = useState(false);
+  const test = useMutation({
+    mutationFn: () => api.testAlert(webhook.id),
+    onMutate: () => setReplyDismissed(false),
+    onSuccess: onMutated,
+    onError: onMutated,
+  });
   const remove = useMutation({ mutationFn: () => api.deleteAlert(webhook.id, webhook.revision), onSuccess: onMutated });
   const toggle = useMutation({
     mutationFn: () => api.updateAlert(
@@ -221,11 +227,21 @@ function AlertRow({
       </div>
       {/* Several chat platforms answer 200 and reject the payload in the body. Showing the
           endpoint's own reply is the only way an operator can tell "delivered" from
-          "accepted the request and threw it away". */}
-      {test.isSuccess && test.data.response && (
-        <div className="notice" role="status">
-          <strong>{t("operations.endpointReply", { status: test.data.status_code })}</strong>
-          <small className="notice-detail">{test.data.response}</small>
+          "accepted the request and threw it away". Indented under its own row rather than
+          spanning the panel: it belongs to one webhook, not to the section. */}
+      {test.isSuccess && test.data.response && !replyDismissed && (
+        <div className="alert-reply" role="status">
+          <div>
+            <small>{t("operations.endpointReply", { status: test.data.status_code })}</small>
+            <code>{test.data.response}</code>
+          </div>
+          <button
+            className="icon-button"
+            aria-label={t("common.close")}
+            onClick={() => setReplyDismissed(true)}
+          >
+            ×
+          </button>
         </div>
       )}
       {/* A revocation or a disable that failed silently leaves the operator believing an
