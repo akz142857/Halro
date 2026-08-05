@@ -350,9 +350,15 @@ function PriceVersionForm({ deployment, current, onClose }: { deployment: Deploy
   };
   return <Modal title={current ? t("deployments.adjustPrice") : t("deployments.setPrice")} onClose={onClose}>
     <form className="price-version-form" onSubmit={submit}>
-      <ol className="price-form-steps" aria-label={t("deployments.priceSteps")}>
-        <li className={step === "details" ? "active" : "complete"} aria-current={step === "details" ? "step" : undefined}>1<span>{t("deployments.priceStepDetails")}</span></li>
-        <li className={step === "confirm" ? "active" : ""} aria-current={step === "confirm" ? "step" : undefined}>2<span>{t("deployments.priceStepConfirm")}</span></li>
+      <ol className={`price-form-steps ${step === "confirm" ? "on-confirm" : ""}`} aria-label={t("deployments.priceSteps")}>
+        <li className={step === "details" ? "active" : "complete"} aria-current={step === "details" ? "step" : undefined}>
+          <span className="price-step-number" aria-hidden="true">1</span>
+          <span className="price-step-label">{t("deployments.priceStepDetails")}</span>
+        </li>
+        <li className={step === "confirm" ? "active" : ""} aria-current={step === "confirm" ? "step" : undefined}>
+          <span className="price-step-number" aria-hidden="true">2</span>
+          <span className="price-step-label">{t("deployments.priceStepConfirm")}</span>
+        </li>
       </ol>
       {step === "details" ? <>
         <fieldset className="price-mode-options">
@@ -376,10 +382,12 @@ function PriceVersionForm({ deployment, current, onClose }: { deployment: Deploy
             <Field label={t("deployments.fixedRequestUSD")}><input inputMode="decimal" required value={fixed} onChange={(event) => setFixed(event.target.value)} /></Field>
           </details>
         </>}
-        <Field label={t("deployments.effectiveMode")}><select value={effectiveMode} onChange={(event) => setEffectiveMode(event.target.value as "now" | "scheduled")}><option value="now">{t("deployments.effectiveNow")}</option><option value="scheduled">{t("deployments.effectiveScheduled")}</option></select></Field>
+        <div className="price-form-grid">
+          <Field label={t("deployments.effectiveMode")}><select value={effectiveMode} onChange={(event) => setEffectiveMode(event.target.value as "now" | "scheduled")}><option value="now">{t("deployments.effectiveNow")}</option><option value="scheduled">{t("deployments.effectiveScheduled")}</option></select></Field>
+          <Field label={t("deployments.priceSourceKind")}><select value={sourceKind} onChange={(event) => setSourceKind(event.target.value)}><option value="official_public_price">{t("deployments.sourceKinds.officialPublicPrice")}</option><option value="contract_price">{t("deployments.sourceKinds.contractPrice")}</option><option value="internal_cost">{t("deployments.sourceKinds.internalCost")}</option><option value="temporary_estimate">{t("deployments.sourceKinds.temporaryEstimate")}</option></select></Field>
+        </div>
         {effectiveMode === "scheduled" && <Field label={t("deployments.effectiveFrom")}><input type="datetime-local" required value={effective} onChange={(event) => setEffective(event.target.value)} /></Field>}
         {!validEffective && <p className="field-hint error">{t("deployments.invalidEffectiveTime")}</p>}
-        <Field label={t("deployments.priceSourceKind")}><select value={sourceKind} onChange={(event) => setSourceKind(event.target.value)}><option value="official_public_price">{t("deployments.sourceKinds.officialPublicPrice")}</option><option value="contract_price">{t("deployments.sourceKinds.contractPrice")}</option><option value="internal_cost">{t("deployments.sourceKinds.internalCost")}</option><option value="temporary_estimate">{t("deployments.sourceKinds.temporaryEstimate")}</option></select></Field>
         <Field label={t("deployments.sourceNote")}><textarea value={sourceNote} onChange={(event) => setSourceNote(event.target.value)} placeholder={t("deployments.sourceNotePlaceholder")} /></Field>
         {!validSource && <p className="field-hint error">{t("deployments.sourceEvidenceRequired")}</p>}
         {!validPrice && <p className="field-hint error">{t("deployments.invalidPrice")}</p>}
