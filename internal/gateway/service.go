@@ -275,7 +275,7 @@ func (s *Service) startAttempt(
 	}
 	providerLease, err := s.acquireTargetConcurrency(target)
 	if err != nil {
-		breakerLease.Done(nil, s.now())
+		breakerLease.Abandon()
 		if errors.Is(err, errDeploymentConcurrency) {
 			s.rejections.deploymentConcurrency.Add(1)
 		} else {
@@ -321,7 +321,7 @@ func (s *Service) startAttempt(
 			pricingUnlock()
 		}
 		providerLease.Release()
-		breakerLease.Done(nil, s.now())
+		breakerLease.Abandon()
 		finalizeErr := s.finalizeRequest(run.requestLease, "accounting_error")
 		return nil, gatewayError(
 			"accounting_unavailable", "accounting is unavailable", 503,
@@ -336,7 +336,7 @@ func (s *Service) startAttempt(
 			pricingUnlock()
 		}
 		providerLease.Release()
-		breakerLease.Done(nil, s.now())
+		breakerLease.Abandon()
 		s.rejections.tokenGuard.Add(1)
 		finalizeErr := s.finalizeRequest(run.requestLease, "token_guard_rejected")
 		return nil, gatewayError("token_guard_blocked", "the current attempt price exceeds Token Guard cost limits", http.StatusForbidden, finalizeErr)
@@ -367,7 +367,7 @@ func (s *Service) startAttempt(
 			pricingUnlock()
 		}
 		providerLease.Release()
-		breakerLease.Done(nil, s.now())
+		breakerLease.Abandon()
 		if errors.Is(err, budget.ErrExceeded) {
 			return nil, err
 		}
@@ -381,7 +381,7 @@ func (s *Service) startAttempt(
 		if _, err := pinStore.CommitDeploymentPricePin(ctx, attempt.AttemptID, pinIntent.SnapshotSHA256, attempt.ReservationSequence, s.now().UTC()); err != nil {
 			pricingUnlock()
 			providerLease.Release()
-			breakerLease.Done(nil, s.now())
+			breakerLease.Abandon()
 			cleanupErr := s.settleAttempt(attempt, budget.Settlement{Outcome: "pin_commit_failed"})
 			finalizeErr := s.finalizeRequest(run.requestLease, "accounting_error")
 			return nil, gatewayError("accounting_unavailable", "accounting price pin could not be committed", 503, errors.Join(err, cleanupErr, finalizeErr))
@@ -392,7 +392,7 @@ func (s *Service) startAttempt(
 	}
 	if err := s.accounting.MarkStarted(ctx, attempt); err != nil {
 		providerLease.Release()
-		breakerLease.Done(nil, s.now())
+		breakerLease.Abandon()
 		cleanupErr := s.settleAttempt(attempt, budget.Settlement{Outcome: "start_failed"})
 		finalizeErr := s.finalizeRequest(run.requestLease, "accounting_error")
 		return nil, gatewayError(
@@ -460,15 +460,28 @@ func (attempt *activeAttempt) finish(providerErr error, settlement budget.Settle
 	attempt.run.recordProviderResult(providerErr, settlement)
 	enrichSettlement(&settlement, providerErr, attempt.startedAt, attempt.service.now())
 	if err := attempt.service.settleAttempt(attempt.accounting, settlement); err != nil {
-		attempt.breaker.Done(availabilityFailure(providerErr), attempt.service.now())
+		attempt.reportBreaker(providerErr)
 		finalizeErr := attempt.service.finalizeRequest(attempt.run.requestLease, "accounting_error")
 		return gatewayError(
 			"accounting_unavailable", "request accounting could not be finalized", 503,
 			errors.Join(err, finalizeErr),
 		)
 	}
-	attempt.breaker.Done(availabilityFailure(providerErr), attempt.service.now())
+	attempt.reportBreaker(providerErr)
 	return nil
+}
+
+// reportBreaker judges the target on the attempt's outcome, except when the
+// caller went away. A cancelled read surfaces from the transport as a truncated
+// response, which is indistinguishable from the provider cutting the stream, so
+// without this a wave of client disconnects — a frontend deploy, a gateway
+// restart — would open circuits on providers that never faltered.
+func (attempt *activeAttempt) reportBreaker(providerErr error) {
+	if providerErr != nil && errors.Is(providerErr, context.Canceled) {
+		attempt.breaker.Abandon()
+		return
+	}
+	attempt.breaker.Done(availabilityFailure(providerErr), attempt.service.now())
 }
 
 type RejectionMetrics struct {
@@ -1395,7 +1408,7 @@ func (s *Service) ChatStream(
 			)
 			if streamErr != nil {
 				attempt.concurrency.Release()
-				attempt.breaker.Done(nil, s.now())
+				attempt.breaker.Abandon()
 				cleanupErr := s.settleAttempt(attempt.accounting, budget.Settlement{Outcome: "policy_rejected"})
 				finalizeErr := s.finalizeRequest(requestLease, "policy_rejected")
 				return gatewayError(
