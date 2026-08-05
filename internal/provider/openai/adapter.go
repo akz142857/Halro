@@ -265,7 +265,7 @@ func (a *Adapter) Chat(ctx context.Context, call provider.ChatCall) (openaiapi.C
 		return openaiapi.ChatCompletionResponse{}, &provider.Error{
 			Class:     class,
 			Retryable: class == provider.ErrorConnect || class == provider.ErrorTimeout,
-			Ambiguous: true,
+			Ambiguous: !provider.Unsent(err),
 			Message:   "provider request failed",
 			Cause:     err,
 		}
@@ -327,7 +327,7 @@ func (a *Adapter) Embed(ctx context.Context, call provider.EmbeddingCall) (opena
 		return openaiapi.EmbeddingResponse{}, &provider.Error{
 			Class:     class,
 			Retryable: class == provider.ErrorConnect || class == provider.ErrorTimeout,
-			Ambiguous: true,
+			Ambiguous: !provider.Unsent(err),
 			Message:   "provider request failed",
 			Cause:     err,
 		}
@@ -399,7 +399,7 @@ func (a *Adapter) ChatStream(
 		}
 		return nil, &provider.Error{
 			Class: class, Retryable: class == provider.ErrorConnect || class == provider.ErrorTimeout,
-			Ambiguous: true, Message: "provider stream request failed", Cause: err,
+			Ambiguous: !provider.Unsent(err), Message: "provider stream request failed", Cause: err,
 		}
 	}
 	defer response.Body.Close()
