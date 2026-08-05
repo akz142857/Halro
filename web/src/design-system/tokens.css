@@ -59,9 +59,17 @@
   --p-chart-2-light: #5f7d16;
 
   /* Typography */
-  --font-sans: Inter, "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  --font-size-xs: 11px;
+  /*
+   * System fonts only — Heimdall ships as a single binary and bundles no
+   * webfont, so a family that is not installed is a silent fallback rather
+   * than a download. The CJK families are listed explicitly because the
+   * default interface language is Chinese: without them Windows falls back
+   * to SimSun, whose baseline and stroke weight do not match the Latin face.
+   */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", "Source Han Sans SC", sans-serif;
+  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", "Source Han Sans SC", monospace;
+  /* 12px is the floor: below it CJK glyphs lose stroke separation at 1x. */
+  --font-size-xs: 12px;
   --font-size-sm: 13px;
   --font-size-md: 15px;
   --font-size-lg: 18px;
