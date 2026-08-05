@@ -299,6 +299,7 @@ type Handler struct {
 	writeTimeout    time.Duration
 	trustProxy      bool
 	trustedProxies  []netip.Prefix
+	authorizeKey    func(string) error
 }
 
 func New(service Service, maxRequestBytes int64) (*Handler, error) {
@@ -312,6 +313,12 @@ type Options struct {
 	WriteTimeout      time.Duration
 	TrustProxyHeaders bool
 	TrustedProxyCIDRs []netip.Prefix
+
+	// AuthorizeKey, when supplied, is consulted before a request body is read.
+	// It must be cheap and must reject only what full authentication would also
+	// reject — it is a guard in front of the real check, never a substitute for
+	// it.
+	AuthorizeKey func(plaintextKey string) error
 }
 
 func NewWithOptions(service Service, options Options) (*Handler, error) {
@@ -336,6 +343,7 @@ func NewWithOptions(service Service, options Options) (*Handler, error) {
 		writeTimeout:   options.WriteTimeout,
 		trustProxy:     options.TrustProxyHeaders,
 		trustedProxies: append([]netip.Prefix(nil), options.TrustedProxyCIDRs...),
+		authorizeKey:   options.AuthorizeKey,
 	}
 	handler.responses, _ = service.(ResponsesService)
 	handler.messages, _ = service.(MessagesService)
@@ -726,6 +734,51 @@ func bearerToken(value string) (string, bool) {
 		return "", false
 	}
 	return token, true
+}
+
+// GuardOpenAI refuses a request whose key cannot authenticate before anything
+// expensive happens to its body, answering in the OpenAI envelope.
+//
+// Authentication ran inside the service, which the handler reaches only after
+// reading up to MaxRequestBytes and building a decoded request from it. An
+// unauthenticated caller therefore decided how much parsing the gateway did,
+// and the limiter that would have bounded it is keyed by project — that is, it
+// does not exist until authentication has already succeeded. A forged bearer
+// token and a large deeply nested body was the whole attack.
+func (h *Handler) GuardOpenAI(next http.Handler) http.Handler {
+	return h.guardKey(next, func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("WWW-Authenticate", `Bearer realm="heimdall"`)
+		writeError(writer, http.StatusUnauthorized, "invalid_api_key", "invalid API key", nil)
+	})
+}
+
+// GuardAnthropic is GuardOpenAI for the endpoint that answers in Anthropic's
+// envelope. A caller's SDK has to be able to parse the refusal.
+func (h *Handler) GuardAnthropic(next http.Handler) http.Handler {
+	return h.guardKey(next, func(writer http.ResponseWriter, request *http.Request) {
+		writeAnthropicError(writer, http.StatusUnauthorized, "authentication_error",
+			"invalid API key", request.Header.Get("X-Request-Id"))
+	})
+}
+
+func (h *Handler) guardKey(next http.Handler, deny http.HandlerFunc) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if h.authorizeKey == nil {
+			next.ServeHTTP(writer, request)
+			return
+		}
+		// Only a key that is present and definitely unknown is stopped here. A
+		// missing one falls through so the endpoint keeps ownership of that
+		// response, and anything this guard cannot settle is left to the
+		// authoritative check behind it.
+		key, present := anthropicGatewayKey(request.Header)
+		if !present || h.authorizeKey(key) == nil {
+			next.ServeHTTP(writer, request)
+			return
+		}
+		writer.Header().Set("Cache-Control", "no-store")
+		deny(writer, request)
+	})
 }
 
 // unimplementedHints name the endpoints callers most often probe for, so the

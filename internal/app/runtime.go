@@ -350,6 +350,12 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		WriteTimeout:      cfg.Gateway.DownstreamWriteTimeout.Value(),
 		TrustProxyHeaders: cfg.Security.TrustProxyHeaders,
 		TrustedProxyCIDRs: parsePrefixes(cfg.Security.TrustedProxyCIDRs),
+		// The same snapshot the service authenticates against, so the guard
+		// cannot turn away a request the service would have accepted.
+		AuthorizeKey: func(plaintextKey string) error {
+			_, err := authSnapshot.Authenticate(plaintextKey, time.Now())
+			return err
+		},
 	})
 	if err != nil {
 		alertDispatcher.Close()
@@ -889,25 +895,35 @@ func (r *Runtime) gatewayRouter() http.Handler {
 	router.Use(r.recoverPanics)
 	router.Get("/health/live", r.live)
 	router.Get("/health/ready", r.ready)
-	router.Post("/v1/chat/completions", r.gateway.ChatCompletions)
-	router.Post("/v1/responses", r.gateway.Responses)
-	router.Post("/v1/messages", r.gateway.Messages)
-	router.Post("/v1/embeddings", r.gateway.Embeddings)
-	router.Post("/v1/moderations", r.gateway.Moderations)
-	router.Post("/v1/images/generations", r.gateway.Images)
-	router.Post("/v1/audio/speech", r.gateway.Speech)
-	router.Post("/v1/audio/transcriptions", r.gateway.Transcriptions)
-	router.Post("/v1/rerank", r.gateway.Rerank)
-	router.Post("/v1/async/invocations", r.gateway.StartAsyncInvoke)
-	router.Get("/v1/async/invocations/{asyncID}", r.gateway.GetAsyncInvoke)
-	router.Post("/v1/async/invocations/{asyncID}/cancel", r.gateway.CancelAsyncInvoke)
-	router.Post("/v1/files", r.gateway.CreateFile)
-	router.Get("/v1/files/{fileID}", r.gateway.GetFile)
-	router.Get("/v1/files/{fileID}/content", r.gateway.DownloadFile)
-	router.Delete("/v1/files/{fileID}", r.gateway.DeleteFile)
-	router.Post("/v1/batches", r.gateway.CreateBatch)
-	router.Get("/v1/batches/{batchID}", r.gateway.GetBatch)
-	router.Post("/v1/batches/{batchID}/cancel", r.gateway.CancelBatch)
+	// A key that cannot authenticate is turned away before its body is read.
+	// Without this the request is parsed first and only then authenticated, so
+	// an anonymous caller sets the parsing cost and the per-project limiter
+	// that would bound it does not yet apply.
+	router.Group(func(guarded chi.Router) {
+		guarded.Use(r.gateway.GuardOpenAI)
+		guarded.Post("/v1/chat/completions", r.gateway.ChatCompletions)
+		guarded.Post("/v1/responses", r.gateway.Responses)
+		guarded.Post("/v1/embeddings", r.gateway.Embeddings)
+		guarded.Post("/v1/moderations", r.gateway.Moderations)
+		guarded.Post("/v1/images/generations", r.gateway.Images)
+		guarded.Post("/v1/audio/speech", r.gateway.Speech)
+		guarded.Post("/v1/audio/transcriptions", r.gateway.Transcriptions)
+		guarded.Post("/v1/rerank", r.gateway.Rerank)
+		guarded.Post("/v1/async/invocations", r.gateway.StartAsyncInvoke)
+		guarded.Get("/v1/async/invocations/{asyncID}", r.gateway.GetAsyncInvoke)
+		guarded.Post("/v1/async/invocations/{asyncID}/cancel", r.gateway.CancelAsyncInvoke)
+		guarded.Post("/v1/files", r.gateway.CreateFile)
+		guarded.Get("/v1/files/{fileID}", r.gateway.GetFile)
+		guarded.Get("/v1/files/{fileID}/content", r.gateway.DownloadFile)
+		guarded.Delete("/v1/files/{fileID}", r.gateway.DeleteFile)
+		guarded.Post("/v1/batches", r.gateway.CreateBatch)
+		guarded.Get("/v1/batches/{batchID}", r.gateway.GetBatch)
+		guarded.Post("/v1/batches/{batchID}/cancel", r.gateway.CancelBatch)
+	})
+	router.Group(func(guarded chi.Router) {
+		guarded.Use(r.gateway.GuardAnthropic)
+		guarded.Post("/v1/messages", r.gateway.Messages)
+	})
 	router.Get("/", func(writer http.ResponseWriter, _ *http.Request) {
 		writeJSON(writer, http.StatusOK, map[string]any{
 			"name":    "heimdall",
