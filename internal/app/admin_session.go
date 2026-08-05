@@ -20,8 +20,9 @@ import (
 const adminSessionCookie = "__Host-heimdall_session"
 
 type adminLoginWindow struct {
-	minute   time.Time
-	attempts int
+	minute        time.Time
+	attempts      int
+	rejectAudited bool
 }
 
 type adminAuditRequest struct {
@@ -37,15 +38,22 @@ type adminRequestContext struct {
 }
 
 func (r *Runtime) loginAdmin(writer http.ResponseWriter, request *http.Request) {
+	// The rate limiter runs before every other check, including the origin
+	// check, so that unauthenticated traffic cannot drive one audit append per
+	// request. A rejected source is recorded once per minute rather than once
+	// per attempt, which keeps the signal without letting it become the flood.
+	allowed, unrecordedReject := r.allowAdminLogin(request.RemoteAddr, time.Now())
+	if !allowed {
+		if unrecordedReject {
+			r.auditAdminLogin("", "failure", "rate_limited")
+		}
+		writer.Header().Set("Retry-After", "60")
+		writeJSON(writer, http.StatusTooManyRequests, map[string]string{"error": "login rate limit exceeded"})
+		return
+	}
 	if !r.adminSameOrigin(request) {
 		r.auditAdminLogin("", "failure", "origin_rejected")
 		writeJSON(writer, http.StatusForbidden, map[string]string{"error": "origin rejected"})
-		return
-	}
-	if !r.allowAdminLogin(request.RemoteAddr, time.Now()) {
-		r.auditAdminLogin("", "failure", "rate_limited")
-		writer.Header().Set("Retry-After", "60")
-		writeJSON(writer, http.StatusTooManyRequests, map[string]string{"error": "login rate limit exceeded"})
 		return
 	}
 	var input struct {
@@ -324,15 +332,20 @@ func (r *Runtime) adminSameOrigin(request *http.Request) bool {
 	return parsed.Scheme+"://"+parsed.Host == expected
 }
 
-func (r *Runtime) allowAdminLogin(remoteAddress string, now time.Time) bool {
+func (r *Runtime) allowAdminLogin(remoteAddress string, now time.Time) (bool, bool) {
 	return allowAdminRate(&r.adminLoginMu, r.adminLogin, remoteAddress, now, r.config.Admin.LoginRPM)
 }
 
 func (r *Runtime) allowAdminSetup(remoteAddress string, now time.Time) bool {
-	return allowAdminRate(&r.adminSetupRateMu, r.adminSetupRate, remoteAddress, now, r.config.Admin.LoginRPM)
+	allowed, _ := allowAdminRate(&r.adminSetupRateMu, r.adminSetupRate, remoteAddress, now, r.config.Admin.LoginRPM)
+	return allowed
 }
 
-func allowAdminRate(mu *sync.Mutex, windows map[string]adminLoginWindow, remoteAddress string, now time.Time, limit int) bool {
+// allowAdminRate reports whether the source may proceed, and whether this
+// rejection is the first one for that source in the current minute. Callers use
+// the second value to audit a throttled source once per minute instead of once
+// per request; without it the audit append itself becomes the amplifier.
+func allowAdminRate(mu *sync.Mutex, windows map[string]adminLoginWindow, remoteAddress string, now time.Time, limit int) (bool, bool) {
 	host, _, err := net.SplitHostPort(remoteAddress)
 	if err != nil {
 		host = remoteAddress
@@ -345,7 +358,10 @@ func allowAdminRate(mu *sync.Mutex, windows map[string]adminLoginWindow, remoteA
 		window = adminLoginWindow{minute: minute}
 	}
 	if window.attempts >= limit {
-		return false
+		firstReject := !window.rejectAudited
+		window.rejectAudited = true
+		windows[host] = window
+		return false, firstReject
 	}
 	window.attempts++
 	windows[host] = window
@@ -356,7 +372,7 @@ func allowAdminRate(mu *sync.Mutex, windows map[string]adminLoginWindow, remoteA
 			}
 		}
 	}
-	return true
+	return true, false
 }
 
 func (r *Runtime) auditAdminLogin(username, outcome, reason string) {

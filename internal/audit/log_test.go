@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -211,6 +212,73 @@ func randomKey(t *testing.T) []byte {
 		t.Fatal(err)
 	}
 	return key
+}
+
+// The dedup index answers "did I already append this event ID". Answering it
+// from every historical record turns an append-only log into unbounded resident
+// memory and pins every audited payload in the heap, so the index keeps a tail
+// window. This test pins both halves of that trade: the window stays bounded,
+// and it still covers the recent events duplicates actually arrive for.
+func TestDedupIndexKeepsABoundedTailWindow(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.log")
+	key := randomKey(t)
+	log, err := Open(path, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	total := maxTrackedEventIDs + 1024
+	for start := 0; start < total; start += 512 {
+		batch := make([]Event, 0, 512)
+		for index := start; index < start+512 && index < total; index++ {
+			batch = append(batch, sequencedEvent(index))
+		}
+		if _, err := log.AppendBatch(context.Background(), batch); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if tracked := len(log.recordsByEventID); tracked > maxTrackedEventIDs {
+		t.Fatalf("dedup index holds %d records after %d events, want at most %d",
+			tracked, total, maxTrackedEventIDs)
+	}
+	if ordered := len(log.trackedOrder); ordered != len(log.recordsByEventID) {
+		t.Fatalf("eviction order holds %d ids for %d indexed records", ordered, len(log.recordsByEventID))
+	}
+
+	sequenceBefore := log.sequence
+	record, err := log.Append(context.Background(), sequencedEvent(total-1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if log.sequence != sequenceBefore {
+		t.Fatalf("re-appending a tracked event wrote a new frame: sequence %d -> %d", sequenceBefore, log.sequence)
+	}
+	if record.Sequence != uint64(total) {
+		t.Fatalf("deduplicated record returned sequence %d, want %d", record.Sequence, total)
+	}
+
+	if err := log.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// Open rebuilds the index by scanning the whole file, so it has to apply the
+	// same bound the append path does.
+	reopened, err := Open(path, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if tracked := len(reopened.recordsByEventID); tracked > maxTrackedEventIDs {
+		t.Fatalf("reopening rebuilt an unbounded index: %d records, want at most %d",
+			tracked, maxTrackedEventIDs)
+	}
+}
+
+func sequencedEvent(index int) Event {
+	return Event{
+		EventID:    fmt.Sprintf("audit_%08d", index),
+		OccurredAt: time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC),
+		ActorType:  "system", Action: "system.probe", TargetType: "gateway",
+		TargetID: "local", Outcome: "success",
+	}
 }
 
 func validEvent(index int, action string) Event {

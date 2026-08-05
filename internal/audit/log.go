@@ -24,6 +24,15 @@ const (
 	frameMACSize     = sha256.Size
 	maxPayloadSize   = 64 << 10
 	auditHMACKeySize = 32
+
+	// maxTrackedEventIDs bounds the in-memory dedup index. An event ID is only
+	// ever re-appended within a short window of its first append — a retry
+	// inside one request, or the startup drain re-delivering an intent that was
+	// in flight when the process died — so a tail window answers every real
+	// duplicate. Retaining the whole log instead would let an append-only file
+	// pin every historical event, and its payload, in memory for the life of
+	// the process.
+	maxTrackedEventIDs = 4096
 )
 
 var ErrCorrupt = errors.New("audit log is corrupt")
@@ -90,6 +99,22 @@ type Log struct {
 	offset           int64
 	lastHash         [32]byte
 	recordsByEventID map[string]Record
+	trackedOrder     []string
+}
+
+// remember indexes a record for duplicate detection and evicts the oldest
+// entries past maxTrackedEventIDs. Callers must hold l.mu, or hold the only
+// reference to l as Open does while building it.
+func (l *Log) remember(record Record) {
+	eventID := record.Event.EventID
+	if _, tracked := l.recordsByEventID[eventID]; !tracked {
+		l.trackedOrder = append(l.trackedOrder, eventID)
+	}
+	l.recordsByEventID[eventID] = record
+	for len(l.trackedOrder) > maxTrackedEventIDs {
+		delete(l.recordsByEventID, l.trackedOrder[0])
+		l.trackedOrder = l.trackedOrder[1:]
+	}
 }
 
 func Open(path string, key []byte) (*Log, error) {
@@ -103,8 +128,8 @@ func Open(path string, key []byte) (*Log, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open audit log: %w", err)
 	}
-	recordsByEventID := make(map[string]Record)
-	summary, partial, err := scan(file, key, func(record Record) error { recordsByEventID[record.Event.EventID] = record; return nil })
+	log := &Log{file: file, recordsByEventID: make(map[string]Record)}
+	summary, partial, err := scan(file, key, func(record Record) error { log.remember(record); return nil })
 	if err != nil {
 		file.Close()
 		return nil, err
@@ -123,11 +148,11 @@ func Open(path string, key []byte) (*Log, error) {
 		file.Close()
 		return nil, err
 	}
-	keyCopy := append([]byte(nil), key...)
-	return &Log{
-		file: file, key: keyCopy, sequence: summary.Records,
-		offset: summary.Bytes, lastHash: summary.LastHash, recordsByEventID: recordsByEventID,
-	}, nil
+	log.key = append([]byte(nil), key...)
+	log.sequence = summary.Records
+	log.offset = summary.Bytes
+	log.lastHash = summary.LastHash
+	return log, nil
 }
 
 func Verify(path string, key []byte) (Summary, error) {
@@ -209,8 +234,8 @@ func (l *Log) AppendBatch(ctx context.Context, events []Event) ([]Record, error)
 		return nil, fmt.Errorf("sync audit log: %w", err)
 	}
 	l.sequence, l.offset, l.lastHash = sequence, offset, previous
-	for index, event := range events {
-		l.recordsByEventID[event.EventID] = records[index]
+	for index := range records {
+		l.remember(records[index])
 	}
 	return records, nil
 }
