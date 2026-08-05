@@ -195,9 +195,9 @@ func TestGatewayRechecksAttemptPriceAgainstTokenGuardBeforeProviderIO(t *testing
 }
 
 func TestGatewayUnknownPriceExplicitOptInPersistsUnknownCost(t *testing.T) {
-	f := newFixture(t, 0)
-	defer f.close()
 	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	f := newFixtureAt(t, 0, ledger.Options{}, func() time.Time { return now })
+	defer f.close()
 	prices := &fakePricePinStore{}
 	registry := provider.NewRegistry()
 	if err := registry.Register(provider.Target{ID: "target_unknown", DeploymentID: "dep_unknown", PublicModel: "chat", ProviderModel: "provider-model", Adapter: f.adapter}); err != nil {
@@ -213,10 +213,7 @@ func TestGatewayUnknownPriceExplicitOptInPersistsUnknownCost(t *testing.T) {
 	if _, err := service.Chat(context.Background(), f.plaintext, chatRequest()); err != nil {
 		t.Fatal(err)
 	}
-	// The period is bucketed by the accounting manager's own clock, which budget.New does
-	// not let a caller override, so service.now above does not move it. Reading the fixed
-	// date made this test pass only on 2026-08-04 and fail every day after.
-	balance := f.state.Balance(f.project.ID, time.Now().In(time.UTC).Format("2006-01-02"))
+	balance := f.state.Balance(f.project.ID, now.Format("2006-01-02"))
 	if f.adapter.calls != 1 || balance.CommittedMicrosUSD != 0 || balance.UnknownAttempts != 1 {
 		t.Fatalf("provider calls=%d balance=%#v", f.adapter.calls, balance)
 	}
@@ -322,6 +319,19 @@ func newFixture(t *testing.T, dailyBudget int64) fixture {
 }
 
 func newFixtureWithLedgerOptions(t *testing.T, dailyBudget int64, options ledger.Options) fixture {
+	return newFixtureAt(t, dailyBudget, options, nil)
+}
+
+// newFixtureAt wires one clock through both the accounting manager and the service. The
+// manager buckets a request into its accounting period using its own clock, so a test that
+// only overrode service.now would still write into the real current day and its assertion
+// would start failing the day after it was written.
+func newFixtureAt(
+	t *testing.T,
+	dailyBudget int64,
+	options ledger.Options,
+	clock func() time.Time,
+) fixture {
 	t.Helper()
 	project := domain.Project{
 		ID:                   "project_1",
@@ -349,7 +359,7 @@ func newFixtureWithLedgerOptions(t *testing.T, dailyBudget int64, options ledger
 		t.Fatal(err)
 	}
 	state := ledger.NewState()
-	accounting, err := budget.New(log, state, time.UTC)
+	accounting, err := budget.NewWithOptions(log, state, time.UTC, budget.Options{Now: clock})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -387,6 +397,9 @@ func newFixtureWithLedgerOptions(t *testing.T, dailyBudget int64, options ledger
 	service, err := NewService(snapshot, registry, accounting)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if clock != nil {
+		service.now = clock
 	}
 	return fixture{
 		service:    service,
