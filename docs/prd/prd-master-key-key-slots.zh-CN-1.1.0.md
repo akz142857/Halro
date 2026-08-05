@@ -4,15 +4,15 @@
 
 日期：2026-08-04
 
-基线文档：`docs/prd-master-key-key-slots.zh-CN.md`
+基线文档：`docs/prd/prd-master-key-key-slots.zh-CN.md`
 
 关联文档：
 
-- `docs/prd-kms-envelope-integration.zh-CN.md`
-- `docs/milestone-m11-master-key-custody-aws-kms.md`
+- `docs/prd/prd-kms-envelope-integration.zh-CN.md`
+- `docs/milestones/milestone-m11-master-key-custody-aws-kms.md`
 - `docs/runbooks/m11-kms-key-lifecycle.md`
 - `docs/runbooks/m11-kms-disaster-recovery.md`
-- `docs/evidence/m11-07-production-readiness-2026-08-03.md`
+- `docs/milestones/evidence/m11-07-production-readiness-2026-08-03.md`
 
 ## 1. 文档目的
 
@@ -425,7 +425,7 @@ Master Key 是启动 Admin API 之前的根信任，因此 Admin UI 不负责初
 - [ ] 独立操作者完成 Primary 失败、Recovery restore、Primary 修复和撤权。
 - [ ] 最终 RC Secret Canary、SBOM、checksum 和 Sigstore verification 全部通过。
 - [ ] Security、Backend、SRE、Release 四方完成同 commit/tag 签署。
-- [ ] `docs/milestone-m11-master-key-custody-aws-kms.md` 与实际 PR/证据状态一致。
+- [ ] `docs/milestones/milestone-m11-master-key-custody-aws-kms.md` 与实际 PR/证据状态一致。
 - [ ] 在以上门禁全部满足前，AWS KMS/Key Slot 模式不标记 production-ready。
 
 ## 12. 完成定义

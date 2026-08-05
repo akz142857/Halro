@@ -378,7 +378,7 @@ curl http://127.0.0.1:9090/metrics \
 unset HEIMDALL_METRICS_TOKEN
 ```
 
-完整指标说明见 [Metrics reference](metrics-reference.md)。指标标签刻意排除 Project、Key、Request ID、原始模型和 IP 等高基数或敏感数据。
+完整指标说明见 [Metrics reference](../contracts/metrics-reference.md)。指标标签刻意排除 Project、Key、Request ID、原始模型和 IP 等高基数或敏感数据。
 
 生产环境应配置 `metrics.credential_file`，使用以下命令独立轮换和吊销指标凭据，而不旋转 Master Key：
 
@@ -499,8 +499,8 @@ openssl rand 32 > backup.key
 
 - [Operator Guide](operator-guide.md)
 - [Backup and restore](backup-restore.md)
-- [Usage storage](usage-storage.md)
-- [Metrics reference](metrics-reference.md)
-- [Webhook payloads](webhook-payloads.md)
-- [Token Guard EWMA](token-guard-ewma.md)
-- [Threat model](threat-model.md)
+- [Usage storage](../contracts/usage-storage.md)
+- [Metrics reference](../contracts/metrics-reference.md)
+- [Webhook payloads](../contracts/webhook-payloads.md)
+- [Token Guard EWMA](../architecture/token-guard-ewma.md)
+- [Threat model](../architecture/threat-model.md)

@@ -33,3 +33,5 @@ __pycache__/
 *.prof
 *.pprof
 /dist/*
+/.agents/
+/.augment/

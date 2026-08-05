@@ -39,13 +39,13 @@ M11 将以下三项作为一个不可拆分的生产里程碑交付：
 
 ## 2. 设计依据
 
-- `docs/prd-master-key-key-slots.zh-CN.md`
-- `docs/prd-kms-envelope-integration.zh-CN.md`
+- `docs/prd/prd-master-key-key-slots.zh-CN.md`
+- `docs/prd/prd-kms-envelope-integration.zh-CN.md`
 - `docs/adr/0010-kms-sdk-dependency-isolation.md`
 - `docs/adr/0001-single-process-architecture.md`
-- `docs/threat-model.md`
-- `docs/backup-restore.md`
-- `docs/operator-guide.md`
+- `docs/architecture/threat-model.md`
+- `docs/guides/backup-restore.md`
+- `docs/guides/operator-guide.md`
 
 三份 M11 设计文档保持独立职责，不合并成一个超大文档。实现也必须拆成多个可独立审核、测试和回退的 PR，不允许一次性大提交。
 
@@ -177,11 +177,11 @@ GCP/Azure artifact 不进入本次决策。Spike 证据已归档，ADR 0010 已�
 | M11-PR1 | 统一 Master Key 核心与最终配置 | In Review | 无 | File 模式完整测试；所有直接文件调用收口；新 schema 严格校验；`config check` 零 KMS 调用 | [#56](https://github.com/akz142857/Heimdall/issues/56)；[PR #64](https://github.com/akz142857/Heimdall/pull/64)；`3066541` | `go test ./...`、关键包 Race、Vet 已通过；不引入 AWS SDK |
 | M11-PR2 | Key Slot descriptor 与状态机 | In Review | PR1 | pending/active/retiring/revoked 事务、revision、Vault Key Check 和错误测试 | [#57](https://github.com/akz142857/Heimdall/issues/57)；[PR #65](https://github.com/akz142857/Heimdall/pull/65)；`510581a`、`eb8fc83` | provider-neutral 状态机与 CI 全部通过；待独立 review/merge |
 | M11-PR3a | AWS SDK spike、契约评审与 ADR 决策 | In Review | PR1 | A/B module/binary/container/build/test/cold-start/SBOM/vuln 实测；KMSWrapper/错误分类；fake KMS fault tests；ADR 0010 Accepted | [#58](https://github.com/akz142857/Heimdall/issues/58)；[PR #66](https://github.com/akz142857/Heimdall/pull/66)；`512d517`、`258c430` | 选择单 module/单 `heimdall` artifact；不含生产 AWS Adapter；完整 Test、Race、Vet、vuln 与边界检查通过 |
-| M11-PR3b | AWS KMS Adapter 实现 | In Progress | PR3a | Workload Identity、wrap/unwrap、Context、allowlist、重试和真实 AWS smoke tests | [#59](https://github.com/akz142857/Heimdall/issues/59)；[PR #67](https://github.com/akz142857/Heimdall/pull/67)；`docs/evidence/m11-03b-aws-kms-adapter-2026-08-03.md` | 本地实现与门禁通过；真实 AWS/CloudTrail evidence 待有效 Workload Identity 与现有 KMS Key |
-| M11-PR4 | AWS KMS 初始化与双 Slot 恢复 | In Progress | PR2、PR3b | 新实例原子初始化；Primary/Recovery 独立验证；失败清理；CLI 测试 | [#60](https://github.com/akz142857/Heimdall/issues/60)；[PR #69](https://github.com/akz142857/Heimdall/pull/69)；`docs/evidence/m11-04-dual-slot-initialization-2026-08-03.md` | 本地实现、Secret Canary 与 kill-point 门禁通过；真实 AWS 双 Key evidence 待有效身份和现有 Keys；不含 File→KMS 迁移 |
-| M11-PR5 | Rewrap、DEK Rotate 与崩溃恢复 | In Progress | PR2、PR4 | COW/bridge/Keyring/compaction；全部 publication kill points；幂等恢复 | [#61](https://github.com/akz142857/Heimdall/issues/61)；[Draft PR #71](https://github.com/akz142857/Heimdall/pull/71)；`docs/evidence/m11-05-key-lifecycle-2026-08-03.md` | 本地实现与 kill-point matrix 已落地；真实 AWS 证据待补 |
-| M11-PR6 | Doctor、Backup、Restore 与 DR | In Progress | PR4、PR5 | 完整/静态 doctor；备份 manifest；KMS restore；真实 Recovery Slot 恢复演练 | [#62](https://github.com/akz142857/Heimdall/issues/62)；[Draft PR #72](https://github.com/akz142857/Heimdall/pull/72)；`docs/evidence/m11-06-kms-dr-2026-08-03.md` | 本地实现与门禁通过；真实 AWS 与独立操作者证据待补 |
-| M11-PR7 | 生产交付与发布门禁 | In Progress | PR1–PR6（含 PR3a/PR3b） | Audit/Metrics/alerts；主机加固；IAM/Key Policy；VM/K8s Runbook；SBOM、签名、安全评审 | [#63](https://github.com/akz142857/Heimdall/issues/63)；[Draft PR #73](https://github.com/akz142857/Heimdall/pull/73)；`docs/evidence/m11-07-production-readiness-2026-08-03.md` | 本地生产基线与门禁通过；真实 AWS、RC artifact 与四方签署待补，尚不可 production-ready |
+| M11-PR3b | AWS KMS Adapter 实现 | In Progress | PR3a | Workload Identity、wrap/unwrap、Context、allowlist、重试和真实 AWS smoke tests | [#59](https://github.com/akz142857/Heimdall/issues/59)；[PR #67](https://github.com/akz142857/Heimdall/pull/67)；`docs/milestones/evidence/m11-03b-aws-kms-adapter-2026-08-03.md` | 本地实现与门禁通过；真实 AWS/CloudTrail evidence 待有效 Workload Identity 与现有 KMS Key |
+| M11-PR4 | AWS KMS 初始化与双 Slot 恢复 | In Progress | PR2、PR3b | 新实例原子初始化；Primary/Recovery 独立验证；失败清理；CLI 测试 | [#60](https://github.com/akz142857/Heimdall/issues/60)；[PR #69](https://github.com/akz142857/Heimdall/pull/69)；`docs/milestones/evidence/m11-04-dual-slot-initialization-2026-08-03.md` | 本地实现、Secret Canary 与 kill-point 门禁通过；真实 AWS 双 Key evidence 待有效身份和现有 Keys；不含 File→KMS 迁移 |
+| M11-PR5 | Rewrap、DEK Rotate 与崩溃恢复 | In Progress | PR2、PR4 | COW/bridge/Keyring/compaction；全部 publication kill points；幂等恢复 | [#61](https://github.com/akz142857/Heimdall/issues/61)；[Draft PR #71](https://github.com/akz142857/Heimdall/pull/71)；`docs/milestones/evidence/m11-05-key-lifecycle-2026-08-03.md` | 本地实现与 kill-point matrix 已落地；真实 AWS 证据待补 |
+| M11-PR6 | Doctor、Backup、Restore 与 DR | In Progress | PR4、PR5 | 完整/静态 doctor；备份 manifest；KMS restore；真实 Recovery Slot 恢复演练 | [#62](https://github.com/akz142857/Heimdall/issues/62)；[Draft PR #72](https://github.com/akz142857/Heimdall/pull/72)；`docs/milestones/evidence/m11-06-kms-dr-2026-08-03.md` | 本地实现与门禁通过；真实 AWS 与独立操作者证据待补 |
+| M11-PR7 | 生产交付与发布门禁 | In Progress | PR1–PR6（含 PR3a/PR3b） | Audit/Metrics/alerts；主机加固；IAM/Key Policy；VM/K8s Runbook；SBOM、签名、安全评审 | [#63](https://github.com/akz142857/Heimdall/issues/63)；[Draft PR #73](https://github.com/akz142857/Heimdall/pull/73)；`docs/milestones/evidence/m11-07-production-readiness-2026-08-03.md` | 本地生产基线与门禁通过；真实 AWS、RC artifact 与四方签署待补，尚不可 production-ready |
 
 ## 7. PR Slice 详细范围
 
@@ -323,13 +323,13 @@ storage:
 | G5 密钥材料不落盘且主机边界加固 | In Progress | filesystem/backup inspection；logs/errors/Audit/Metrics/bbolt/heap canary；core/pprof/RLIMIT/ptrace evidence | Canary、`RLIMIT_CORE=0`、Linux non-dumpable 与 K8s/systemd 基线已落地；最终 RC/目标主机证据待补 |
 | G6 KMS 不进入请求热路径 | In Review | request-path zero-call test | `TestKMSBootstrapAndRuntimeUsePrimaryOnlyOutsideRequestPath` 与 boundary script 通过 |
 | G7 错误分类和有界重试 | In Review | timeout/throttle/identity/IAM/key-state tests | PR #66/#67 contract、retry、Adapter tests 通过；真实 AWS throttle/identity evidence 待补 |
-| G8 KEK rewrap 正确 | In Progress | fingerprint/KeyVersion 不变证据 | `docs/evidence/m11-05-key-lifecycle-2026-08-03.md`；真实 AWS 待补 |
-| G9 DEK rotate 正确 | In Progress | 全量重加密 + session/audit/keyring evidence | `docs/evidence/m11-05-key-lifecycle-2026-08-03.md`；真实 AWS 待补 |
-| G10 Crash recovery 完整 | In Progress | 全 publication kill-point matrix | `docs/evidence/m11-05-key-lifecycle-2026-08-03.md` |
-| G11 Doctor 完整/静态模式 | In Progress | local no-mutation hashes + KMS evidence | `docs/evidence/m11-06-kms-dr-2026-08-03.md`；真实 AWS 待补 |
-| G12 Backup/restore 完整 | In Progress | Primary 与 Recovery restore evidence | `docs/evidence/m11-06-kms-dr-2026-08-03.md`；真实 AWS 待补 |
+| G8 KEK rewrap 正确 | In Progress | fingerprint/KeyVersion 不变证据 | `docs/milestones/evidence/m11-05-key-lifecycle-2026-08-03.md`；真实 AWS 待补 |
+| G9 DEK rotate 正确 | In Progress | 全量重加密 + session/audit/keyring evidence | `docs/milestones/evidence/m11-05-key-lifecycle-2026-08-03.md`；真实 AWS 待补 |
+| G10 Crash recovery 完整 | In Progress | 全 publication kill-point matrix | `docs/milestones/evidence/m11-05-key-lifecycle-2026-08-03.md` |
+| G11 Doctor 完整/静态模式 | In Progress | local no-mutation hashes + KMS evidence | `docs/milestones/evidence/m11-06-kms-dr-2026-08-03.md`；真实 AWS 待补 |
+| G12 Backup/restore 完整 | In Progress | Primary 与 Recovery restore evidence | `docs/milestones/evidence/m11-06-kms-dr-2026-08-03.md`；真实 AWS 待补 |
 | G13 Recovery break-glass 可执行 | In Progress | 独立操作者按 Runbook 完成演练 | Runbook 已落地；独立操作者签署待补 |
-| G14 Audit/Metrics/Alerts 完整 | In Progress | contract tests + alert fixtures + observability secret-canary | `docs/evidence/m11-07-production-readiness-2026-08-03.md`；本地 contract/fixtures 已落地，真实关联待补 |
+| G14 Audit/Metrics/Alerts 完整 | In Progress | contract tests + alert fixtures + observability secret-canary | `docs/milestones/evidence/m11-07-production-readiness-2026-08-03.md`；本地 contract/fixtures 已落地，真实关联待补 |
 | G15 AWS artifact 供应链通过 | In Progress | SBOM/vuln/checksum/signature evidence | release workflow 已具备 SBOM/checksum/Sigstore；最终 RC 产物审核待补 |
 | G16 四方发布评审通过 | Not Started | Security/Backend/SRE/Release sign-off | 签署模板已落地，禁止预签 |
 
@@ -426,5 +426,5 @@ M11 只有在以下条件全部成立时完成：
 - 独立于实现作者的操作者可以仅依照 Runbook 恢复服务；
 - File 模式仍然独立、自包含、无云调用；
 - AWS KMS 模式通过生产安全、供应链和运维评审；
-- `docs/implementation-status.md`、Operator Guide、Backup/Restore 和 Release Notes 已同步；
+- `docs/milestones/implementation-status.md`、Operator Guide、Backup/Restore 和 Release Notes 已同步；
 - 当前发布候选提交上的完整 CI、Race、Vet、漏洞扫描、Secret canary、kill-point 和真实 AWS evidence 通过。

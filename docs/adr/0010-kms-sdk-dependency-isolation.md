@@ -2,7 +2,7 @@
 
 Status: Accepted (2026-08-03)
 
-Milestone tracking: `docs/milestone-m11-master-key-custody-aws-kms.md`
+Milestone tracking: `docs/milestones/milestone-m11-master-key-custody-aws-kms.md`
 
 ## Context
 
@@ -89,7 +89,7 @@ core architecture or a runtime dependency of File mode.
 
 The accepted evidence is:
 
-- `docs/evidence/m11-03a-aws-sdk-spike-2026-08-03.md`;
+- `docs/milestones/evidence/m11-03a-aws-sdk-spike-2026-08-03.md`;
 - reproducible harness `tools/m11/aws-sdk-spike/run.sh`;
 - provider-neutral contract and fake-KMS tests under `internal/kms`.
 

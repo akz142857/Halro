@@ -121,7 +121,7 @@ Reference host: Apple M4 Pro, darwin/arm64, Go 1.24.
   60-second target.
 
 These values are regression evidence, not cross-host guarantees. See
-`docs/performance-baseline.md` for commands, workload shapes, and caveats.
+`docs/verification/performance-baseline.md` for commands, workload shapes, and caveats.
 
 ## Installation and upgrade
 
@@ -138,7 +138,7 @@ it with `gzip -dc heimdall-container.tar.gz | docker load`.
 For upgrades, stop Heimdall, create and verify an encrypted backup, preserve the
 current binary/config/Master Key, run `config check`, and start the new binary.
 Do not downgrade a migrated data directory in place. Follow
-`docs/operator-guide.md`, `docs/backup-restore.md`, and `docs/releasing.md`.
+`docs/guides/operator-guide.md`, `docs/guides/backup-restore.md`, and `docs/guides/releasing.md`.
 
 ## Intentional v1 limits
 

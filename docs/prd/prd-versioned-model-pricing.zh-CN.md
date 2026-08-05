@@ -1186,10 +1186,10 @@ bbolt metadata snapshot 与 Ledger snapshot 必须形成可解释的一致截面
 
 以下四份前置 ADR 已于 2026-08-04 接受，构成实现与验收的约束：
 
-1. [ADR 0011：Accounting Lease 与崩溃恢复](adr/0011-accounting-lease-crash-recovery.md)：metered/free/unknown tagged lease、PriceSnapshot 编码、AttemptStarted I/O 边界、pending recovery、deterministic event ID 和 Token Guard 重检。
-2. [ADR 0012：价格选择与跨存储一致性](adr/0012-pricing-selection-cross-store-consistency.md)：`pricing_selected_at`、时钟高水位、bbolt timeline、durable pin intent、scheduled 取消、Ledger/Audit mutation intent 和锁顺序。
-3. [ADR 0013：Adjustment 会计与读模型](adr/0013-adjustment-accounting-read-models.md)：CorrectionPriceSnapshot、signed delta、sequence/idempotency、服务期/入账期双时间轴、Budget Balance、checkpoint 和独立 Adjustment Parquet。
-4. [ADR 0014：WAL/备份兼容](adr/0014-ledger-wal-backup-compatibility.md)：frame/payload schema version、旧 reader `ErrUnsupportedVersion`、bbolt/WAL 一致截面、离线 backup barrier、restore pricing quarantine 和 orphan reference 规则。
+1. [ADR 0011：Accounting Lease 与崩溃恢复](../adr/0011-accounting-lease-crash-recovery.md)：metered/free/unknown tagged lease、PriceSnapshot 编码、AttemptStarted I/O 边界、pending recovery、deterministic event ID 和 Token Guard 重检。
+2. [ADR 0012：价格选择与跨存储一致性](../adr/0012-pricing-selection-cross-store-consistency.md)：`pricing_selected_at`、时钟高水位、bbolt timeline、durable pin intent、scheduled 取消、Ledger/Audit mutation intent 和锁顺序。
+3. [ADR 0013：Adjustment 会计与读模型](../adr/0013-adjustment-accounting-read-models.md)：CorrectionPriceSnapshot、signed delta、sequence/idempotency、服务期/入账期双时间轴、Budget Balance、checkpoint 和独立 Adjustment Parquet。
+4. [ADR 0014：WAL/备份兼容](../adr/0014-ledger-wal-backup-compatibility.md)：frame/payload schema version、旧 reader `ErrUnsupportedVersion`、bbolt/WAL 一致截面、离线 backup barrier、restore pricing quarantine 和 orphan reference 规则。
 
 以下演进项不阻塞 Phase 1 开工，但必须在对应功能合入前作出版本化决定：
 

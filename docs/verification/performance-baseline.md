@@ -103,5 +103,5 @@ Release benchmark policy:
 - keep correctness, bounded memory, and secret safety ahead of synthetic throughput.
 
 The exact-RC 24-hour workload, measurements, explicit limits, and artifact
-format are defined in `docs/soak-testing.md`. This baseline does not claim that
+format are defined in `docs/verification/soak-testing.md`. This baseline does not claim that
 gate has passed until its `release_24h` artifact is archived.

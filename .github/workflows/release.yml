@@ -294,7 +294,7 @@ jobs:
           tag_sha=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${GITHUB_REF_NAME}" --jq '.object | select(.type == "tag") | .sha')
           test -n "${tag_sha}"
           test "$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_sha}" --jq '.verification.verified')" = "true"
-          release_notes=(--notes-file docs/release-notes-v1.0.0.md)
+          release_notes=(--notes-file docs/milestones/release-notes-v1.0.0.md)
           if [[ "${GITHUB_REF_NAME}" == *-rc.* ]]; then
             release_notes=(--generate-notes --prerelease)
           fi

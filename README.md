@@ -60,8 +60,8 @@ curl http://127.0.0.1:8080/v1/chat/completions \
 ```
 
 For SDK examples and the complete Admin workflow, read the
-[中文使用手册](docs/user-guide.zh-CN.md). For deployment, upgrades, backup,
-recovery, and hardening, use the [Operator Guide](docs/operator-guide.md).
+[中文使用手册](docs/guides/user-guide.zh-CN.md). For deployment, upgrades, backup,
+recovery, and hardening, use the [Operator Guide](docs/guides/operator-guide.md).
 
 ## Data durability and encrypted backup
 
@@ -103,7 +103,7 @@ offline `doctor`, creates the archive, and runs `backup verify`. Move or escrow
 the key independently; deleting it makes every archive encrypted with it
 unrecoverable.
 
-See [Encrypted backup and restore](docs/backup-restore.md) for Docker/Kubernetes
+See [Encrypted backup and restore](docs/guides/backup-restore.md) for Docker/Kubernetes
 layouts, upgrade sequencing, key custody, retention, and recovery commands.
 
 ## API status
@@ -160,7 +160,7 @@ and capability evidence are not merged.
 - Admin secrets and CSRF state are never persisted in browser storage; the
   production bundle is scanned for secret canaries and persistence APIs.
 
-See the [Threat Model](docs/threat-model.md),
+See the [Threat Model](docs/architecture/threat-model.md),
 [Gateway correctness contract](docs/contracts/gateway-correctness.md), and
 [Security Policy](SECURITY.md) for the complete boundary.
 
@@ -214,31 +214,31 @@ contract, and production boundaries are documented in the
 
 ### Use and operations
 
-- [中文使用手册](docs/user-guide.zh-CN.md)
-- [Operator Guide](docs/operator-guide.md)
-- [Backup and restore](docs/backup-restore.md)
-- [Metrics reference](docs/metrics-reference.md)
+- [中文使用手册](docs/guides/user-guide.zh-CN.md)
+- [Operator Guide](docs/guides/operator-guide.md)
+- [Backup and restore](docs/guides/backup-restore.md)
+- [Metrics reference](docs/contracts/metrics-reference.md)
 - [Prometheus/Alertmanager deployment](deploy/observability/README.md)
 - [Observability operations runbook](docs/observability/operations-runbook.md)
-- [Webhook payloads](docs/webhook-payloads.md)
+- [Webhook payloads](docs/contracts/webhook-payloads.md)
 
 ### Contracts and implementation evidence
 
-- [Implementation status](docs/implementation-status.md)
+- [Implementation status](docs/milestones/implementation-status.md)
 - [Endpoint compatibility manifests](docs/compatibility/README.md)
 - [OpenAI compatibility contract](docs/contracts/openai-compatibility.md)
 - [Provider capability contract](docs/contracts/provider-capabilities.md)
-- [Gateway idempotency contract](docs/idempotency-contract.md)
-- [Crash recovery matrix](docs/crash-recovery-matrix.md)
-- [Provider real-test matrix](docs/provider-real-matrix.md)
+- [Gateway idempotency contract](docs/contracts/idempotency-contract.md)
+- [Crash recovery matrix](docs/verification/crash-recovery-matrix.md)
+- [Provider real-test matrix](docs/verification/provider-real-matrix.md)
 
 ### Architecture and governance
 
-- [多协议 LLM API、Provider 与 Realtime 架构设计](docs/api-provider-realtime-architecture.zh-CN.md)
-- [Distributed evolution and state ownership](docs/distributed-state-ownership.md)
+- [多协议 LLM API、Provider 与 Realtime 架构设计](docs/architecture/api-provider-realtime-architecture.zh-CN.md)
+- [Distributed evolution and state ownership](docs/architecture/distributed-state-ownership.md)
 - [Architecture Decision Records](docs/adr/)
-- [Threat Model](docs/threat-model.md)
-- [Audit integrity](docs/audit-integrity.md)
+- [Threat Model](docs/architecture/threat-model.md)
+- [Audit integrity](docs/contracts/audit-integrity.md)
 
 ## Development
 
@@ -269,10 +269,10 @@ go build -trimpath -o bin/heimdall ./cmd/heimdall
 
 Real Provider smoke tests are opt-in and may be billable. They require isolated
 test credentials, explicit environment flags, and hard account budgets; see
-the [Provider real-test matrix](docs/provider-real-matrix.md).
+the [Provider real-test matrix](docs/verification/provider-real-matrix.md).
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) before submitting changes. Release
-process and evidence gates are documented in [docs/releasing.md](docs/releasing.md).
+process and evidence gates are documented in [docs/guides/releasing.md](docs/guides/releasing.md).
 
 ## Community and license
 
