@@ -16,6 +16,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -35,9 +36,57 @@ import (
 func main() {
 	logger := safelog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	if err := run(os.Args[1:], logger); err != nil && !errors.Is(err, flag.ErrHelp) {
-		logger.Error("command failed", "error", err)
+		reportCommandFailure(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+// reportCommandFailure writes the exit reason for someone at a terminal. A
+// running instance keeps its structured logs, but this is the command's verdict
+// — and config validation reports every problem it found in one error, so
+// routing it through the JSON handler flattened twenty findings into a single
+// line of escaped newlines. That threw away the one thing the validator does
+// unusually well.
+//
+// Redaction still applies: it came free with the logger, and an error can quote
+// a value from the configuration it was reading.
+func reportCommandFailure(out io.Writer, err error) {
+	problems := strings.Split(strings.TrimSpace(safelog.Redact(err.Error())), "\n")
+	if len(problems) == 1 {
+		fmt.Fprintf(out, "heimdall: %s\n", problems[0])
+		return
+	}
+	fmt.Fprintf(out, "heimdall: %d problems found:\n", len(problems))
+	for _, problem := range problems {
+		fmt.Fprintf(out, "  - %s\n", strings.TrimSpace(problem))
+	}
+}
+
+// printMasterKeyCustodyNotice is the one moment this can usefully be said. The
+// key was just created, it is not in the encrypted backups, and losing it makes
+// every stored provider credential permanently unrecoverable — but until now
+// the first run said nothing about it at all, and the place that explains it
+// properly is a document the operator has no reason to open yet. The risk
+// window opens in the first minute; the warning belongs there.
+func printMasterKeyCustodyNotice(out io.Writer, cfg config.Config) {
+	if cfg.Storage.MasterKey.Mode != config.MasterKeyModeFile {
+		return
+	}
+	location := cfg.Storage.MasterKey.File
+	if absolute, err := filepath.Abs(location); err == nil {
+		location = absolute
+	}
+	fmt.Fprintf(out, `
+  Master key created at %s (permissions 0600).
+
+  Every provider credential is encrypted with it. Encrypted backups do NOT
+  contain it, by design, so a backup alone cannot restore this instance.
+  Copy it somewhere durable and separate from the data directory now; if it
+  is lost, the credentials it protects cannot be recovered by any means.
+
+  See docs/guides/backup-restore.md.
+
+`, location)
 }
 
 var (
@@ -145,6 +194,7 @@ func run(arguments []string, logger *slog.Logger) error {
 		}
 		if initialized {
 			fmt.Fprintln(os.Stdout, "Initialized Heimdall system storage")
+			printMasterKeyCustodyNotice(os.Stdout, cfg)
 		}
 		return runRuntime(cfg, logger, true)
 	case "healthcheck":
