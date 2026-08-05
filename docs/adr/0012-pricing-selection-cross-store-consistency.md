@@ -3,7 +3,7 @@
 - Status: Accepted
 - Date: 2026-08-04
 - Tracking: GitHub Issue #76
-- PRD: `docs/prd-versioned-model-pricing.zh-CN.md`
+- PRD: `docs/prd/prd-versioned-model-pricing.zh-CN.md`
 
 ## Context
 

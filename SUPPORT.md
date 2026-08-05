@@ -11,8 +11,8 @@ provide a commercial support SLA.
 - General usage question: use GitHub Discussions when enabled; otherwise open a
   question issue with sanitized configuration and logs.
 
-Before asking, read the [Chinese user guide](docs/user-guide.zh-CN.md),
-[Operator Guide](docs/operator-guide.md), and troubleshooting section. Include
+Before asking, read the [Chinese user guide](docs/guides/user-guide.zh-CN.md),
+[Operator Guide](docs/guides/operator-guide.md), and troubleshooting section. Include
 the Heimdall version, operating system/architecture, Provider type, sanitized
 configuration, exact error code, and minimal reproduction.
 

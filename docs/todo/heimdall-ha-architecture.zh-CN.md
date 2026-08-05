@@ -4,7 +4,7 @@
 - 生产就绪：否
 - 适用范围：Standalone 向 Primary/Replica HA 的演进
 - 当前实现：仅 Standalone；本文出现的 `cluster` 配置和命令均未实现
-- 相关决策：[ADR 0001](adr/0001-single-process-architecture.md)、[ADR 0004](adr/0004-distributed-evolution.md)、[Distributed State Ownership](distributed-state-ownership.md)
+- 相关决策：[ADR 0001](../adr/0001-single-process-architecture.md)、[ADR 0004](../adr/0004-distributed-evolution.md)、[Distributed State Ownership](../architecture/distributed-state-ownership.md)
 
 ## 1. 目标与设计 DNA
 

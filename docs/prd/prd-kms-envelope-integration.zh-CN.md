@@ -4,11 +4,11 @@
 
 日期：2026-08-03
 
-里程碑跟踪：`docs/milestone-m11-master-key-custody-aws-kms.md`
+里程碑跟踪：`docs/milestones/milestone-m11-master-key-custody-aws-kms.md`
 
 ## 1. 文档定位
 
-本 PRD 是 `docs/prd-master-key-key-slots.zh-CN.md` 的 KMS Slot 子方案，定义云 KMS 如何包装并解锁 Heimdall Master Key。M11 只实现并验收 AWS KMS；GCP Cloud KMS 和 Azure Key Vault Keys 仅保留为未来适配时必须重新评审的能力差异，不进入当前发布范围。
+本 PRD 是 `docs/prd/prd-master-key-key-slots.zh-CN.md` 的 KMS Slot 子方案，定义云 KMS 如何包装并解锁 Heimdall Master Key。M11 只实现并验收 AWS KMS；GCP Cloud KMS 和 Azure Key Vault Keys 仅保留为未来适配时必须重新评审的能力差异，不进入当前发布范围。
 
 总体模型、File Slot、Master Key 生命周期和共同安全边界由上层 Key Slot PRD 负责。本 PRD 不再定义单一 `wrapped_master_key` 模式；任何生产 KMS 部署都必须服从多 Slot 与独立恢复路径要求。
 

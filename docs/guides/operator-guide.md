@@ -146,6 +146,18 @@ increments the session generation, invalidates every existing session, and
 appends `admin.password.reset` to the trusted Audit chain. The password is not
 accepted as a command-line argument.
 
+### Developer workbench
+
+Set `admin.developer_workbench` to `enabled` (default) or `disabled`. While
+enabled, the Admin listener also serves real Gateway calls: an administrator can
+send billed inference requests through `/admin/api/v1/developer/execute` using a
+Gateway Key. Authentication is unchanged — the Gateway Key still decides the
+project, and project budgets, rate limits, redaction, and Token Guard all still
+apply — but network controls that are applied only to the Gateway listener do
+not cover this path. Set `disabled` when the two listeners are isolated at the
+network layer. Every execution appends `developer.execute` to the Audit chain
+with the acting administrator, endpoint, HTTP status, and Request ID.
+
 ### Authenticator two-factor authentication
 
 Set `admin.mfa_policy` to `optional` (the upgrade-compatible default) or
@@ -180,9 +192,9 @@ Normal KMS KEK replacement is a distinct `key rewrap` operation and does not
 change the Master Key or Vault ciphertext. Suspected KMS Key, Grant, policy, or
 Decrypt-identity compromise must use DEK rotation, not rewrap. The complete
 procedure, interruption matrix, and historical-backup disposition checklist
-are in [the M11 KMS key lifecycle runbook](runbooks/m11-kms-key-lifecycle.md).
+are in [the M11 KMS key lifecycle runbook](../runbooks/m11-kms-key-lifecycle.md).
 AWS IAM/Key Policy、Kubernetes/systemd 加固、KMS Audit/Metrics/告警和事故响应见
-[M11 生产运行 Runbook](runbooks/m11-production-operations.md)。AWS KMS 模式只有在
+[M11 生产运行 Runbook](../runbooks/m11-production-operations.md)。AWS KMS 模式只有在
 M11 真实 AWS 矩阵、独立恢复演练和四方发布签署完成后才能标记为 production-ready。
 
 Rotation is an offline operation. First create and verify an encrypted backup,
@@ -279,7 +291,7 @@ then configure a Generic JSON endpoint and test it from Operations. Delivery is
 bounded, retried with jitter, deduplicated, and routed through SafeTransport.
 Webhook payloads are telemetry-redacted and intentionally omit prompts,
 responses, credentials, raw IPs, and detailed provider topology. See
-`docs/webhook-payloads.md` for Slack, Discord, Feishu, and WeCom receiver
+`docs/contracts/webhook-payloads.md` for Slack, Discord, Feishu, and WeCom receiver
 examples.
 
 ## Upgrade and rollback
@@ -333,7 +345,7 @@ Provider terms, then use the Admin restore-confirm action with recent re-auth,
 or create a correct successor version. Traffic must remain blocked until then.
 
 Do not downgrade a migrated data directory in place. If validation fails, stop
-the new binary and follow `docs/backup-restore.md`; restore preserves the old
+the new binary and follow `docs/guides/backup-restore.md`; restore preserves the old
 live directory as a rollback directory. Never replace only bbolt while keeping
 a WAL/Audit/Parquet set from another epoch.
 
@@ -353,12 +365,12 @@ a WAL/Audit/Parquet set from another epoch.
 - Restore fails before switch: use the exact backup key, live Master Key, and
   verified Backup ID. The live directory remains unchanged on preflight failure.
 - Disk usage grows: inspect retention settings, Parquet manifest verification,
-  WAL/checkpoint progress, and backup copies. See `docs/usage-storage.md`.
+  WAL/checkpoint progress, and backup copies. See `docs/contracts/usage-storage.md`.
 
-Operational references: `docs/metrics-reference.md`, `docs/backup-restore.md`,
-`docs/crash-recovery-matrix.md`, `docs/usage-storage.md`,
-`docs/token-guard-ewma.md`, `docs/security-review-v1.md`, and
-`docs/releasing.md`.
+Operational references: `docs/contracts/metrics-reference.md`, `docs/guides/backup-restore.md`,
+`docs/verification/crash-recovery-matrix.md`, `docs/contracts/usage-storage.md`,
+`docs/architecture/token-guard-ewma.md`, `docs/verification/security-review-v1.md`, and
+`docs/guides/releasing.md`.
 
 ## Optional container image
 

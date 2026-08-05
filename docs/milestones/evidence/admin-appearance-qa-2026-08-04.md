@@ -1,7 +1,7 @@
 # Admin Design System and Appearance QA Evidence
 
 Date: 2026-08-04
-Scope: `docs/prd-admin-design-system-appearance.zh-CN.md` implementation and
+Scope: `docs/prd/prd-admin-design-system-appearance.zh-CN.md` implementation and
 code-level release gates.
 
 ## Automated evidence

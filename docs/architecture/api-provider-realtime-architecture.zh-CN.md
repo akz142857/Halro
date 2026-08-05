@@ -320,8 +320,8 @@ Reasoning 输出和流式 Function Call 均在 Provider I/O 前拒绝。该 Tier
 不可检索、不可持久化的 Gateway 关联 ID，不是 Provider Resource ID。可移植子集映射到
 Canonical `generate` 后复用现有版本化 ProviderPrimitive，因此认证、路由、预算、计费、
 脱敏、Retry/歧义边界和模型别名仍由原热路径负责。事件顺序、终止语义与资源所有权见
-[ADR 0005](adr/0005-stateless-responses-facade.md)，逐字段/事件/Profile 契约见
-[Endpoint Compatibility Manifest](compatibility/endpoint-manifests.json)。
+[ADR 0005](../adr/0005-stateless-responses-facade.md)，逐字段/事件/Profile 契约见
+[Endpoint Compatibility Manifest](../compatibility/endpoint-manifests.json)。
 
 ### 5.3 Anthropic 原生 Facade
 
@@ -344,7 +344,7 @@ Anthropic SSE Facade。请求必须携带 `anthropic-version: 2023-06-01`；默�
 通过 NativeEnvelope 保留 Tool Use/Tool Result、Thinking/Redacted Thinking 以及签名事件的顺序和
 不透明值。上游 Header、错误类型、Request ID、Retry-After 与 SSE 生命周期均有独立契约；
 OpenAI、Anthropic、Gemini 的 Tool Choice 差异由 Golden Matrix 校验。`count_tokens` 尚未实现，
-因此不在当前 Manifest 中。执行模式和不支持项见 [ADR 0006](adr/0006-anthropic-messages-facade.md)。
+因此不在当前 Manifest 中。执行模式和不支持项见 [ADR 0006](../adr/0006-anthropic-messages-facade.md)。
 
 ### 5.4 Portable 与 Native 模式
 
@@ -1645,7 +1645,7 @@ Endpoint 的机器可读 Compatibility Manifest、Semantic 依赖与导出 Canon
 当前 `POST /v1/chat/completions`、SSE 和 `POST /v1/embeddings` 热路径已经由 OpenAI Facade
 解码成 Canonical Request，再通过 Profile Operation Registry 解析 Provider Primitive；旧
 OpenAI-typed Adapter 只由 LegacyAdapterBridge 在南向边界调用。机器可读兼容声明发布在
-[`docs/compatibility/endpoint-manifests.json`](compatibility/endpoint-manifests.json)。
+[`docs/compatibility/endpoint-manifests.json`](../compatibility/endpoint-manifests.json)。
 NativeEnvelope 提供经过 Schema、Header allowlist、大小和目标 Profile 校验的基础契约，并已由
 Phase 1B 的 Anthropic Messages Native 模式首次用于公开北向 Endpoint；它仍不表示 Provider 任意
 JSON 透传已经实现。
@@ -1794,10 +1794,10 @@ Manifest；其余记录在对应 Phase 获得真实需求、负责人和预算�
 | ADR/设计 | 最晚完成时间 | 核心决策 |
 |---|---|---|
 | Protocol/Semantic/Primitive 与 Portable/Native | Phase 0 | 三层抽象、Access Surface、Operation Registry、Credential Scheme、NativeEnvelope、GovernanceView、转换损失 |
-| [ADR 0005：Stateless Responses Facade](adr/0005-stateless-responses-facade.md) | Phase 1 | Stateless Tier 或完整对象状态、Provider Resource ID 和后续路由 |
-| [ADR 0007：Bedrock Mantle Profile 隔离](adr/0007-bedrock-mantle-profiles.md) | Phase 1C | Mantle Access Surface、Credential、Profile 与 Runtime 隔离 |
-| [ADR 0008：Bedrock InvokeModel 模型族 Schema](adr/0008-bedrock-invoke-model-family-schemas.md) | Phase 2 | 模型锁定、严格 Schema 与禁止任意 JSON 透传 |
-| [ADR 0009：Phase 2 资源所有权](adr/0009-phase2-resource-ownership.md) | Phase 2 | Files/Batches/Async 数据驻留、删除、Provider 绑定、异步状态和 Idempotency |
+| [ADR 0005：Stateless Responses Facade](../adr/0005-stateless-responses-facade.md) | Phase 1 | Stateless Tier 或完整对象状态、Provider Resource ID 和后续路由 |
+| [ADR 0007：Bedrock Mantle Profile 隔离](../adr/0007-bedrock-mantle-profiles.md) | Phase 1C | Mantle Access Surface、Credential、Profile 与 Runtime 隔离 |
+| [ADR 0008：Bedrock InvokeModel 模型族 Schema](../adr/0008-bedrock-invoke-model-family-schemas.md) | Phase 2 | 模型锁定、严格 Schema 与禁止任意 JSON 透传 |
+| [ADR 0009：Phase 2 资源所有权](../adr/0009-phase2-resource-ownership.md) | Phase 2 | Files/Batches/Async 数据驻留、删除、Provider 绑定、异步状态和 Idempotency |
 | Realtime Accounting | Phase 3 | 单一 Ledger WAL、Reservation Extension、Usage Watermark、Reaper、Unknown Tail |
 | Realtime Ownership/Lease | Phase 3H | Project/Session 权威层级、双 Epoch、租约、HA/Cluster |
 | Realtime Credential | Phase 3 | Token Claim、原子 Consume、轮换、撤销、Audience、TURN Credential |
@@ -1881,13 +1881,13 @@ Manifest；其余记录在对应 Phase 获得真实需求、负责人和预算�
 - [AWS Bedrock API Keys](https://docs.aws.amazon.com/bedrock/latest/userguide/api-keys-reference.html)
 - [WebRTC 1.0](https://www.w3.org/TR/webrtc/)
 - [WebRTC Security Architecture](https://datatracker.ietf.org/doc/html/rfc8827)
-- [ADR 0002：单一 Ledger WAL 权威](adr/0002-ledger-authority.md)
-- [ADR 0004：Project Ownership 分布式演进](adr/0004-distributed-evolution.md)
-- [ADR 0005：Stateless Responses Facade](adr/0005-stateless-responses-facade.md)
-- [ADR 0006：Anthropic Messages Facade](adr/0006-anthropic-messages-facade.md)
-- [ADR 0007：Bedrock Mantle Profile 隔离](adr/0007-bedrock-mantle-profiles.md)
-- [ADR 0008：Bedrock InvokeModel 模型族 Schema](adr/0008-bedrock-invoke-model-family-schemas.md)
-- [ADR 0009：Phase 2 资源所有权](adr/0009-phase2-resource-ownership.md)
+- [ADR 0002：单一 Ledger WAL 权威](../adr/0002-ledger-authority.md)
+- [ADR 0004：Project Ownership 分布式演进](../adr/0004-distributed-evolution.md)
+- [ADR 0005：Stateless Responses Facade](../adr/0005-stateless-responses-facade.md)
+- [ADR 0006：Anthropic Messages Facade](../adr/0006-anthropic-messages-facade.md)
+- [ADR 0007：Bedrock Mantle Profile 隔离](../adr/0007-bedrock-mantle-profiles.md)
+- [ADR 0008：Bedrock InvokeModel 模型族 Schema](../adr/0008-bedrock-invoke-model-family-schemas.md)
+- [ADR 0009：Phase 2 资源所有权](../adr/0009-phase2-resource-ownership.md)
 - [Distributed State Ownership](distributed-state-ownership.md)
 - [Threat Model](threat-model.md)
 

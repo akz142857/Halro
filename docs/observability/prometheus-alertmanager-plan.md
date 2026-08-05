@@ -58,7 +58,7 @@ Application、Security、SRE、Platform 四方签字齐全，才能声明
 - histogram 使用 classic buckets，checkpoint/replay 保证幂等。
 
 详细契约维护在 `docs/observability/metrics-contract.md` 和
-`docs/metrics-reference.md`。
+`docs/contracts/metrics-reference.md`。
 
 ## 4. 网络与身份
 

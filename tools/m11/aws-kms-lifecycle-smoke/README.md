@@ -20,4 +20,4 @@ booleans only; it never prints ARNs, ciphertext, tokens, or plaintext keys.
 After the run, archive matching CloudTrail event metadata using the existing
 M11 verifier, revoke any temporary Recovery permission, and record backup
 disposition/restore-drill evidence in
-`docs/evidence/m11-05-key-lifecycle-2026-08-03.md`.
+`docs/milestones/evidence/m11-05-key-lifecycle-2026-08-03.md`.

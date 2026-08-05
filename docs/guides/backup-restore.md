@@ -302,4 +302,4 @@ The confirmation is appended to Audit.
 
 Key Slot 模式的 manifest 额外记录 `key_slot_descriptor_sha256`。`backup verify` 只验证外层认证和 manifest checksum，`restore_drill_verified` 固定为 `false`；只有在目标 Workload Identity 下完成 staging descriptor/allowlist、KMS unwrap、Vault Key Check 和全部域验证，才能声明可恢复。
 
-Primary 与 Recovery 的完整操作顺序、CloudTrail 副作用和 break-glass 撤权要求见 [M11 AWS KMS 灾备 Runbook](runbooks/m11-kms-disaster-recovery.md)。
+Primary 与 Recovery 的完整操作顺序、CloudTrail 副作用和 break-glass 撤权要求见 [M11 AWS KMS 灾备 Runbook](../runbooks/m11-kms-disaster-recovery.md)。

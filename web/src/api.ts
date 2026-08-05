@@ -43,6 +43,9 @@ export class ApiError extends Error {
     public readonly status: number,
     message: string,
     public readonly code = "",
+    // What the far side actually answered, when a handler forwards it. A webhook endpoint
+    // that rejects a payload explains itself in its body, not in our error string.
+    public readonly detail = "",
   ) {
     super(message);
   }
@@ -81,11 +84,12 @@ async function request<T>(
     }
   }
   if (!response.ok) {
-    const error = payload as { error?: string; code?: string } | undefined;
+    const error = payload as { error?: string; code?: string; response?: string } | undefined;
     throw new ApiError(
       response.status,
       error?.error || `request failed (${response.status})`,
       error?.code,
+      error?.response,
     );
   }
   return { data: payload as T, etag: response.headers.get("ETag") || "" };
@@ -174,6 +178,8 @@ export const api = {
   updatePreferences: (preferences: { locale: LocalePreference; appearance: Appearance }, revision: number) =>
     request<AdminPreferences>("/preferences", json("PUT", preferences), `"${revision}"`),
   projects: () => request<Page<Project>>("/projects").then((value) => value.data),
+  projectsPage: (query = "") =>
+    request<Page<Project>>(`/projects${query}`).then((value) => value.data),
   project: (id: string) => request<Project>(`/projects/${encodeURIComponent(id)}`),
   createProject: (value: unknown) =>
     request<Project>("/projects", json("POST", value)),
@@ -189,10 +195,18 @@ export const api = {
   keys: (projectID: string) =>
     request<Page<GatewayKey>>(`/projects/${encodeURIComponent(projectID)}/keys`)
       .then((value) => value.data),
-  createKey: (projectID: string, name: string, expiresAt?: string) =>
+  keysPage: (projectID: string, query = "") =>
+    request<Page<GatewayKey>>(`/projects/${encodeURIComponent(projectID)}/keys${query}`)
+      .then((value) => value.data),
+  // The plaintext is returned once and never again, so a retried create must carry the
+  // same idempotency key: the server then refuses to mint a second unaccounted credential.
+  createKey: (projectID: string, name: string, idempotencyKey: string, expiresAt?: string) =>
     request<CreatedGatewayKey>(
       `/projects/${encodeURIComponent(projectID)}/keys`,
-      json("POST", { name, ...(expiresAt ? { expires_at: expiresAt } : {}) }),
+      {
+        ...json("POST", { name, ...(expiresAt ? { expires_at: expiresAt } : {}) }),
+        headers: { "Idempotency-Key": idempotencyKey },
+      },
     ),
   updateKey: (
     projectID: string,
@@ -257,7 +271,7 @@ export const api = {
   deployments: () =>
     request<Page<Deployment>>("/deployments").then((value) => value.data),
   developerConfig: () =>
-    request<{ gateway_base_url: string }>("/developer/config").then((value) => value.data),
+    request<{ gateway_base_url: string; enabled?: boolean }>("/developer/config").then((value) => value.data),
   developerExecute: (endpoint: string, gatewayKey: string, value: unknown, streaming: boolean, signal: AbortSignal) => {
     const headers = new Headers({
       "Accept": streaming ? "text/event-stream" : "application/json",
@@ -375,6 +389,8 @@ export const api = {
       json("POST", value),
     ).then((result) => result.data),
   alerts: () => request<Page<AlertWebhook>>("/alerts").then((value) => value.data),
+  alertsPage: (query = "") =>
+    request<Page<AlertWebhook>>(`/alerts${query}`).then((value) => value.data),
   createAlert: (value: unknown) =>
     request<AlertWebhook>("/alerts", json("POST", value)),
   updateAlert: (id: string, value: unknown, revision: number) =>
@@ -386,7 +402,10 @@ export const api = {
   deleteAlert: (id: string, revision: number) =>
     request<void>(`/alerts/${encodeURIComponent(id)}`, json("DELETE"), `"${revision}"`),
   testAlert: (id: string) =>
-    request<{ status: string }>(`/alerts/${encodeURIComponent(id)}/test`, json("POST")),
+    request<{ status: string; latency_ms: number; status_code: number; response: string }>(
+      `/alerts/${encodeURIComponent(id)}/test`,
+      json("POST"),
+    ).then((result) => result.data),
 };
 
 export function clearSensitiveClientState() {

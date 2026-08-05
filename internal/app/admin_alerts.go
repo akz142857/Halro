@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -48,7 +49,7 @@ func (r *Runtime) createAdminAlert(writer http.ResponseWriter, request *http.Req
 	defer r.adminAlertMu.Unlock()
 	now := time.Now().UTC()
 	webhook, credential, credentialRevision, err := r.prepareAlertWebhook(
-		request, webhookID, input, nil, now, now,
+		request.Context(), webhookID, input, nil, now, now,
 	)
 	if err != nil {
 		adminBadRequest(writer, err.Error())
@@ -62,11 +63,14 @@ func (r *Runtime) createAdminAlert(writer http.ResponseWriter, request *http.Req
 		adminMutationError(writer, err)
 		return
 	}
-	if !r.reloadAlerts(writer, request) {
-		return
-	}
+	// Audited before the dispatcher reload: the change is already durable at this point,
+	// and a reload failure caused by some *other* webhook must not erase the record that
+	// this one was written.
 	if err := r.auditAdminMutation(request, "alert_webhook.create", "alert_webhook", webhook.ID); err != nil {
 		adminAuditError(writer)
+		return
+	}
+	if !r.reloadAlerts(writer, request) {
 		return
 	}
 	writer.Header().Set("ETag", revisionETag(webhook.Revision))
@@ -97,7 +101,7 @@ func (r *Runtime) updateAdminAlert(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	webhook, credential, credentialRevision, err := r.prepareAlertWebhook(
-		request, current.ID, input, &current, current.CreatedAt, time.Now().UTC(),
+		request.Context(), current.ID, input, &current, current.CreatedAt, time.Now().UTC(),
 	)
 	if err != nil {
 		adminBadRequest(writer, err.Error())
@@ -114,11 +118,14 @@ func (r *Runtime) updateAdminAlert(writer http.ResponseWriter, request *http.Req
 		adminMutationError(writer, err)
 		return
 	}
-	if !r.reloadAlerts(writer, request) {
-		return
-	}
+	// Audited before the dispatcher reload: the change is already durable at this point,
+	// and a reload failure caused by some *other* webhook must not erase the record that
+	// this one was written.
 	if err := r.auditAdminMutation(request, "alert_webhook.update", "alert_webhook", webhook.ID); err != nil {
 		adminAuditError(writer)
+		return
+	}
+	if !r.reloadAlerts(writer, request) {
 		return
 	}
 	writer.Header().Set("ETag", revisionETag(webhook.Revision))
@@ -157,11 +164,14 @@ func (r *Runtime) deleteAdminAlert(writer http.ResponseWriter, request *http.Req
 		adminMutationError(writer, err)
 		return
 	}
-	if !r.reloadAlerts(writer, request) {
-		return
-	}
+	// Audited before the dispatcher reload: the change is already durable at this point,
+	// and a reload failure caused by some *other* webhook must not erase the record that
+	// this one was written.
 	if err := r.auditAdminMutation(request, "alert_webhook.delete", "alert_webhook", webhook.ID); err != nil {
 		adminAuditError(writer)
+		return
+	}
+	if !r.reloadAlerts(writer, request) {
 		return
 	}
 	writer.Header().Set("ETag", revisionETag(webhook.Revision))
@@ -198,7 +208,7 @@ func (r *Runtime) testAdminAlertID(writer http.ResponseWriter, request *http.Req
 		adminStoreError(writer)
 		return
 	}
-	err = r.alerts.TestEndpoint(webhook.ID, alert.Event{
+	result, err := r.alerts.TestEndpoint(webhook.ID, alert.Event{
 		ID: eventID, Type: "admin_test", Severity: "info",
 		DedupKey: "", Summary: "Heimdall alert connection test",
 		Timestamp: time.Now().UTC(), Details: map[string]any{"source": "admin"},
@@ -207,7 +217,12 @@ func (r *Runtime) testAdminAlertID(writer http.ResponseWriter, request *http.Req
 	reason := ""
 	if err != nil {
 		outcome = "failure"
-		reason = "delivery_failed"
+		// The dispatcher already classified the failure. Collapsing every cause into one
+		// string leaves the operator unable to tell a bad credential from a dead host.
+		reason = result.Reason
+		if reason == "" {
+			reason = "delivery_failed"
+		}
 	}
 	if auditErr := r.appendAdminAudit(
 		"admin_user",
@@ -218,23 +233,30 @@ func (r *Runtime) testAdminAlertID(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	if err != nil {
-		writeJSON(writer, http.StatusBadGateway, map[string]string{"error": "alert delivery test failed"})
+		writeJSON(writer, http.StatusBadGateway, map[string]any{
+			"error": "alert delivery test failed", "code": reason,
+			"status_code": result.StatusCode, "response": result.ResponseSnippet,
+		})
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]string{"status": "delivered"})
+	// The endpoint's own reply travels back with the success. Chat platforms routinely
+	// answer 200 and reject the payload in the body; without this the console reports a
+	// delivery nobody received.
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"status": "delivered", "latency_ms": result.LatencyMillis,
+		"status_code": result.StatusCode, "response": result.ResponseSnippet,
+	})
 }
 
 func (r *Runtime) prepareAlertWebhook(
-	request *http.Request,
+	ctx context.Context,
 	webhookID string,
 	input alertWebhookInput,
 	current *domain.AlertWebhook,
 	createdAt time.Time,
 	updatedAt time.Time,
 ) (domain.AlertWebhook, *domain.Credential, uint64, error) {
-	endpoint, err := safetransport.ValidateURL(input.URL, safetransport.Policy{
-		RequireHTTPS: true, AllowPrivate: r.config.Security.AllowPrivateWebhooks,
-	})
+	endpoint, err := safetransport.ValidateURL(input.URL, webhookPolicy(r.config, nil))
 	if err != nil {
 		return domain.AlertWebhook{}, nil, 0, err
 	}
@@ -247,7 +269,7 @@ func (r *Runtime) prepareAlertWebhook(
 	}
 	var existingCredential *domain.Credential
 	if current != nil && current.CredentialID != "" {
-		value, err := r.store.GetCredential(request.Context(), current.CredentialID)
+		value, err := r.store.GetCredential(ctx, current.CredentialID)
 		if err != nil {
 			return domain.AlertWebhook{}, nil, 0, errors.New("stored webhook credential is unavailable")
 		}
@@ -264,13 +286,18 @@ func (r *Runtime) prepareAlertWebhook(
 	if webhook.HeaderName == "" {
 		return domain.AlertWebhook{}, nil, 0, errors.New("secret header name is required")
 	}
+	// The console never reveals a stored secret, so silently re-binding it to a new
+	// destination would let an operator who has never seen the plaintext post it to a host
+	// they control. Re-pointing a webhook means re-entering the secret.
+	if input.Secret == nil && current != nil &&
+		(!strings.EqualFold(current.URL, input.URL) || current.HeaderName != webhook.HeaderName) {
+		return domain.AlertWebhook{}, nil, 0, errors.New(
+			"changing the endpoint or header requires the secret to be entered again")
+	}
 	audience, err := safetransport.AudienceWithPolicy(
 		input.URL,
-		webhookCredentialType+":"+webhook.HeaderName,
-		safetransport.Policy{
-			RequireHTTPS: true, AllowPrivate: r.config.Security.AllowPrivateWebhooks,
-			AllowedHosts: webhook.AllowedHosts,
-		},
+		webhookAudienceSubject(webhook),
+		webhookPolicy(r.config, webhook.AllowedHosts),
 	)
 	if err != nil {
 		return domain.AlertWebhook{}, nil, 0, err

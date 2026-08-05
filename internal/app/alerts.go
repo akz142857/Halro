@@ -6,6 +6,7 @@ import (
 
 	"github.com/akz142857/Heimdall/internal/alert"
 	"github.com/akz142857/Heimdall/internal/config"
+	"github.com/akz142857/Heimdall/internal/domain"
 	"github.com/akz142857/Heimdall/internal/id"
 	"github.com/akz142857/Heimdall/internal/safetransport"
 	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
@@ -14,6 +15,22 @@ import (
 )
 
 const webhookCredentialType = "webhook"
+
+// webhookPolicy and webhookAudienceSubject are the single definition of how a webhook is
+// validated and how its credential is bound. Both the admin handlers and the dispatcher
+// loader derive from these: if the two drifted apart, a secret sealed at write time would
+// no longer decrypt at load time.
+func webhookPolicy(cfg config.Config, allowedHosts []string) safetransport.Policy {
+	return safetransport.Policy{
+		RequireHTTPS: true,
+		AllowPrivate: cfg.Security.AllowPrivateWebhooks,
+		AllowedHosts: allowedHosts,
+	}
+}
+
+func webhookAudienceSubject(webhook domain.AlertWebhook) string {
+	return webhookCredentialType + ":" + webhook.HeaderName
+}
 
 func loadAlertDispatcher(
 	ctx context.Context,
@@ -64,11 +81,7 @@ func loadAlertEndpoints(
 		if !webhook.Enabled || webhook.DeletedAt != nil {
 			continue
 		}
-		policy := safetransport.Policy{
-			RequireHTTPS: true,
-			AllowPrivate: cfg.Security.AllowPrivateWebhooks,
-			AllowedHosts: webhook.AllowedHosts,
-		}
+		policy := webhookPolicy(cfg, webhook.AllowedHosts)
 		endpointURL, err := safetransport.ValidateURL(webhook.URL, policy)
 		if err != nil {
 			return fail(fmt.Errorf("alert webhook %q URL: %w", webhook.ID, err))
@@ -92,7 +105,7 @@ func loadAlertEndpoints(
 				return fail(fmt.Errorf("alert webhook %q credential type mismatch", webhook.ID))
 			}
 			audience, err := safetransport.AudienceWithPolicy(
-				webhook.URL, webhookCredentialType+":"+webhook.HeaderName, policy,
+				webhook.URL, webhookAudienceSubject(webhook), policy,
 			)
 			if err != nil || credential.Audience != audience {
 				client.CloseIdleConnections()

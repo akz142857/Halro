@@ -42,6 +42,11 @@ describe("DeveloperPage", () => {
     expect(await screen.findByRole("option", { name: "support-chat" })).toBeVisible();
     expect(screen.getByRole("textbox", { name: /Gateway 地址/ })).toHaveValue("http://127.0.0.1:8080");
     expect(screen.getByText("/v1/responses")).toBeVisible();
+
+    // The code area ships collapsed, so only the footnote mentions the variable until
+    // the sample is opened.
+    expect(screen.getAllByText(/HEIMDALL_API_KEY/)).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "展开代码" }));
     expect(screen.getAllByText(/HEIMDALL_API_KEY/)).toHaveLength(2);
     expect(screen.getByRole("button", { name: "发送请求" })).toBeDisabled();
     expect(screen.getByText("等待真实请求")).toBeVisible();
@@ -71,6 +76,7 @@ describe("DeveloperPage", () => {
     expect(screen.getByRole("button", { name: "复制代码" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "发送请求" })).toBeDisabled();
     fireEvent.change(raw, { target: { value: '{"model":"raw-model","input":"hello","stream":false}' } });
+    fireEvent.click(screen.getByRole("button", { name: "展开代码" }));
     expect(screen.getAllByText(/raw-model/)).toHaveLength(2);
 
     expect(screen.getByText("HTTP 状态")).toBeVisible();
@@ -112,6 +118,7 @@ describe("DeveloperPage", () => {
     await screen.findByRole("option", { name: "support-chat" });
 
     fireEvent.change(screen.getByLabelText("输入内容"), { target: { value: "What's true?'; touch /tmp/pwned; #" } });
+    fireEvent.click(screen.getByRole("button", { name: "展开代码" }));
     const curlCode = view.container.querySelector(".developer-code")?.textContent ?? "";
     expect(curlCode).toContain("'\"'\"'");
     expect(curlCode).toContain("--data-binary");
@@ -175,5 +182,156 @@ describe("DeveloperPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: "取消请求" }));
     expect(await screen.findByText("请求已取消")).toBeVisible();
     expect(execute).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports a 4xx as a failure instead of a completed request", async () => {
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
+    vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });
+    vi.spyOn(api, "developerExecute").mockResolvedValue(new Response(
+      JSON.stringify({ error: { message: "missing or invalid bearer token" } }),
+      { status: 401, statusText: "Unauthorized", headers: { "Content-Type": "application/json" } },
+    ));
+    const usage = vi.spyOn(api, "usageRequest").mockResolvedValue({});
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
+    await screen.findByRole("option", { name: "support-chat" });
+    fireEvent.change(screen.getByLabelText("Gateway Key"), { target: { value: "wrong-key" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "发送请求" }));
+
+    expect(await screen.findByText(/网关返回 401，请求未成功/)).toBeVisible();
+    expect(screen.getByText(/请检查 Gateway Key 是否属于所选项目/)).toBeVisible();
+    expect(screen.queryByText("请求已完成")).not.toBeInTheDocument();
+    expect(usage).not.toHaveBeenCalled();
+  });
+
+  it("keeps sending available when the Gateway URL is unusable and never refills it", async () => {
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
+    vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
+    await screen.findByRole("option", { name: "support-chat" });
+
+    // Missing key is the real blocker, and the page must say so.
+    expect(screen.getByRole("button", { name: "发送请求" })).toBeDisabled();
+    expect(screen.getByText(/还需要填写：.*Gateway Key/)).toBeVisible();
+
+    fireEvent.change(screen.getByRole("textbox", { name: /Gateway 地址/ }), { target: { value: "" } });
+    expect(screen.getByRole("textbox", { name: /Gateway 地址/ })).toHaveValue("");
+
+    fireEvent.change(screen.getByLabelText("Gateway Key"), { target: { value: "gw_debug_secret" } });
+    expect(screen.getByRole("button", { name: "发送请求" })).toBeEnabled();
+  });
+
+  it("locks the model picker in JSON mode so the sent body always matches the screen", async () => {
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
+    vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
+    await screen.findByRole("option", { name: "support-chat" });
+
+    expect(screen.getByLabelText(/^公共模型/)).toBeEnabled();
+    fireEvent.click(screen.getByRole("tab", { name: "原始 JSON" }));
+
+    expect(screen.getByLabelText(/^公共模型/)).toBeDisabled();
+    expect(screen.getByText("JSON 模式下，模型与参数以下方 JSON 为准。")).toBeVisible();
+  });
+
+  it("does not expose cancel until a request is running", async () => {
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
+    vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
+    await screen.findByRole("option", { name: "support-chat" });
+    fireEvent.change(screen.getByLabelText("Gateway Key"), { target: { value: "gw_debug_secret" } });
+
+    // A single toggling button turned a double click into "send, then abort what was billed".
+    expect(screen.queryByRole("button", { name: "取消请求" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "发送请求" })).toBeEnabled();
+  });
+
+  it("fills the field from a freshly created debug key without persisting it", async () => {
+    // Existing keys are stored as SHA-256 hashes, so creation is the only moment the
+    // plaintext exists. It goes straight into the field and nowhere else.
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
+    vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });
+    const createKey = vi.spyOn(api, "createKey").mockResolvedValue({
+      data: { key: "hm_created_secret", metadata: { name: "工作台调试 2026-08-05 10:00:00" } },
+      etag: '"1"',
+    } as never);
+    const localWrite = vi.spyOn(Storage.prototype, "setItem");
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
+    await screen.findByRole("option", { name: "support-chat" });
+    expect(screen.getByLabelText("Gateway Key")).toHaveValue("");
+
+    fireEvent.click(screen.getByRole("button", { name: "新建调试 Key" }));
+
+    await waitFor(() => expect(screen.getByLabelText("Gateway Key")).toHaveValue("hm_created_secret"));
+    // The key expires on its own so a forgotten debug key cannot stay usable.
+    expect(createKey).toHaveBeenCalledWith(
+      project.id, expect.stringContaining("工作台调试"), expect.any(String), expect.any(String),
+    );
+    const expiresAt = Date.parse(createKey.mock.calls[0][3] as string);
+    expect(expiresAt).toBeGreaterThan(Date.now() + 23 * 60 * 60 * 1000);
+    expect(expiresAt).toBeLessThanOrEqual(Date.now() + 24 * 60 * 60 * 1000);
+    expect(screen.getByLabelText("Gateway Key")).toHaveAttribute("type", "password");
+    expect(screen.getByText(/已创建/)).toBeVisible();
+    expect(localWrite).not.toHaveBeenCalled();
+  });
+
+  it("opens the collapsed code area when a language tab is picked", async () => {
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
+    vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const view = render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
+    await screen.findByRole("option", { name: "support-chat" });
+    expect(view.container.querySelector(".developer-code")).toBeNull();
+
+    // Choosing a language only makes sense if the sample becomes visible.
+    fireEvent.click(screen.getByRole("tab", { name: "Python" }));
+
+    expect(view.container.querySelector(".developer-code")?.textContent).toContain("requests.post");
+    expect(screen.getByRole("button", { name: "收起代码" })).toBeVisible();
+  });
+
+  it("generates a Java example that reads the key from the environment", async () => {
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
+    vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const view = render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
+    await screen.findByRole("option", { name: "support-chat" });
+    fireEvent.click(screen.getByRole("button", { name: "展开代码" }));
+
+    fireEvent.click(screen.getByRole("tab", { name: "Java" }));
+
+    const javaCode = view.container.querySelector(".developer-code")?.textContent ?? "";
+    expect(javaCode).toContain("HttpRequest.newBuilder()");
+    expect(javaCode).toContain('System.getenv("HEIMDALL_API_KEY")');
+    expect(javaCode).toContain("http://127.0.0.1:8080/v1/responses");
+    expect(javaCode).toContain("BodyHandlers.ofString()");
+    expect(javaCode).not.toContain("support-chat\\\"");
+
+    // Streaming has to be read line by line rather than buffered whole.
+    fireEvent.click(screen.getByRole("button", { name: "SSE 流式" }));
+    const streamingJava = view.container.querySelector(".developer-code")?.textContent ?? "";
+    expect(streamingJava).toContain("BodyHandlers.ofLines()");
+    expect(streamingJava).toContain("HttpResponse<Stream<String>>");
+  });
+
+  it("survives a project whose allowed_routes came back as null", async () => {
+    // The admin API accepts projects without allowed_routes and serialises them as null;
+    // dereferencing it used to throw during render and blank the whole console.
+    vi.spyOn(api, "projects").mockResolvedValue({
+      items: [{ ...project, id: "project_null", name: "NoRoutes", allowed_routes: null as never }, project],
+      next_cursor: "",
+    });
+    vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
+
+    expect(await screen.findByRole("option", { name: "support-chat" })).toBeVisible();
+    expect(screen.queryByRole("option", { name: "NoRoutes" })).not.toBeInTheDocument();
   });
 });

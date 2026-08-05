@@ -69,7 +69,7 @@ func assertMetricsExpositionContract(t *testing.T, body string) {
 		}
 	}
 
-	reference, err := os.ReadFile("../../docs/metrics-reference.md")
+	reference, err := os.ReadFile("../../docs/contracts/metrics-reference.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func assertMetricsExpositionContract(t *testing.T, body string) {
 			continue
 		}
 		if !strings.Contains(string(reference), fmt.Sprintf("`%s`", family)) {
-			t.Fatalf("exported metric %s is missing from docs/metrics-reference.md", family)
+			t.Fatalf("exported metric %s is missing from docs/contracts/metrics-reference.md", family)
 		}
 	}
 }

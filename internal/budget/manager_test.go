@@ -479,3 +479,44 @@ func TestBudgetPeriodUsesConfiguredTimezoneAcrossDST(t *testing.T) {
 		t.Fatalf("periods=%q,%q,%q", first.PeriodID, second.PeriodID, third.PeriodID)
 	}
 }
+
+// The manager buckets a request into its accounting period with its own clock. Callers in
+// other packages cannot reach the unexported field, so without this option a test that
+// pins some other clock still writes into the real current day and its assertion starts
+// failing the next day. Guard the injection point.
+func TestNewWithOptionsBucketsTheRequestByTheSuppliedClock(t *testing.T) {
+	open := func(options Options) *Manager {
+		t.Helper()
+		// A manager owns its log: two of them applying to one file with separate states
+		// wait on each other's sequence forever.
+		log, err := ledger.Open(filepath.Join(t.TempDir(), "usage.wal"), ledger.NewStatus())
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = log.Close() })
+		manager, err := NewWithOptions(log, ledger.NewState(), time.UTC, options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return manager
+	}
+	fixed := time.Date(2021, 3, 4, 5, 6, 7, 0, time.UTC)
+
+	pinned, err := open(Options{Now: func() time.Time { return fixed }}).
+		BeginRequest(context.Background(), "project_clock", "req_clock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pinned.PeriodID != "2021-03-04" {
+		t.Fatalf("period bucketed by the wrong clock: %q", pinned.PeriodID)
+	}
+
+	// Omitting the option keeps the wall clock, so production behaviour is untouched.
+	live, err := open(Options{}).BeginRequest(context.Background(), "project_live", "req_live")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if live.PeriodID != time.Now().In(time.UTC).Format("2006-01-02") {
+		t.Fatalf("default clock was replaced: %q", live.PeriodID)
+	}
+}

@@ -24,14 +24,17 @@ export function PoliciesPage() {
   const [action, setAction] = useState("");
   const [editing, setEditing] = useState<TokenGuardPolicy | "new" | null>(null);
   const [previewing, setPreviewing] = useState<TokenGuardPolicy | null>(null);
+  // Paged keys stay distinct from the plain list queries other pages run under the same
+  // prefix: sharing a key would hand one observer the other's data shape. The shared
+  // prefix keeps invalidateQueries(["token-guard-policies"]) refreshing both.
   const policies = useInfiniteQuery({
-    queryKey: ["token-guard-policies"],
+    queryKey: ["token-guard-policies", "paged"],
     initialPageParam: "",
     queryFn: ({ pageParam }) => api.tokenGuardPoliciesPage(`?${new URLSearchParams({ limit: "50", ...(pageParam ? { cursor: pageParam } : {}) })}`),
     getNextPageParam: (page) => page.next_cursor || undefined,
   });
   const redactionPolicies = useInfiniteQuery({
-    queryKey: ["redaction-policies"],
+    queryKey: ["redaction-policies", "paged"],
     initialPageParam: "",
     queryFn: ({ pageParam }) => api.redactionPoliciesPage(`?${new URLSearchParams({ limit: "50", ...(pageParam ? { cursor: pageParam } : {}) })}`),
     getNextPageParam: (page) => page.next_cursor || undefined,

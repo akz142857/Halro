@@ -156,13 +156,19 @@ type Project struct {
 func (p *Project) GetRevision() uint64      { return p.Revision }
 func (p *Project) SetRevision(value uint64) { p.Revision = value }
 
+// MaxProjectNameLength bounds the stored name so every caller — console, script, or
+// future front end — hits the same limit. The web form mirrors this value.
+const MaxProjectNameLength = 128
+
 func (p Project) Validate() error {
 	var problems []error
 	if p.ID == "" {
 		problems = append(problems, errors.New("project id is required"))
 	}
-	if strings.TrimSpace(p.Name) == "" {
+	if name := strings.TrimSpace(p.Name); name == "" {
 		problems = append(problems, errors.New("project name is required"))
+	} else if len([]rune(name)) > MaxProjectNameLength {
+		problems = append(problems, errors.New("project name is too long"))
 	}
 	for name, value := range map[string]int64{
 		"rpm":                     p.RPM,
@@ -180,6 +186,10 @@ func (p Project) Validate() error {
 	return errors.Join(problems...)
 }
 
+// GatewayKey is a persistence model, not a response model: the metadata store encodes it
+// with encoding/json, so KeyHash cannot be tagged json:"-" without dropping the hash on
+// write. Admin handlers must serialise gatewayKeyView instead of this struct — the
+// TestAdminKeyResponsesNeverExposeKeyHash regression test enforces that.
 type GatewayKey struct {
 	ID          string     `json:"id"`
 	ProjectID   string     `json:"project_id"`

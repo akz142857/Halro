@@ -5,7 +5,7 @@ Owner: Application Architecture
 Reviewers: SRE, Security
 
 This document is the compatibility contract for Heimdall's Prometheus
-exposition. `docs/metrics-reference.md` remains the operator-facing inventory.
+exposition. `docs/contracts/metrics-reference.md` remains the operator-facing inventory.
 
 ## Invariants
 
@@ -52,4 +52,4 @@ exactly-once replay, and persist bucket counts in the Usage checkpoint.
 
 - Contract tests parse TYPE, HELP, names, and labels.
 - Replay/checkpoint tests prove histogram equality.
-- `docs/metrics-reference.md` exactly lists exported application metrics.
+- `docs/contracts/metrics-reference.md` exactly lists exported application metrics.

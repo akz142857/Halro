@@ -4,7 +4,7 @@
 
 日期：2026-08-03
 
-里程碑跟踪：`docs/milestone-m11-master-key-custody-aws-kms.md`
+里程碑跟踪：`docs/milestones/milestone-m11-master-key-custody-aws-kms.md`
 
 ## 1. 文档定位
 
@@ -12,7 +12,7 @@
 
 Heimdall 的核心仍然是独立、自包含、云中立的系统。File 模式是完整的一等运行模式，不安装或启用任何云扩展时不得产生外部服务依赖。
 
-AWS 是当前实际使用环境和第一个计划实现的可选 KMS 扩展，但不是 Heimdall 核心架构前提。AWS KMS 的 protected payload、Encryption Context、启动错误、备份恢复、可观测性和真实云验收由 `docs/prd-kms-envelope-integration.zh-CN.md` 进一步约束。云 SDK 的依赖与发布方式由 `docs/adr/0010-kms-sdk-dependency-isolation.md` 决定。
+AWS 是当前实际使用环境和第一个计划实现的可选 KMS 扩展，但不是 Heimdall 核心架构前提。AWS KMS 的 protected payload、Encryption Context、启动错误、备份恢复、可观测性和真实云验收由 `docs/prd/prd-kms-envelope-integration.zh-CN.md` 进一步约束。云 SDK 的依赖与发布方式由 `docs/adr/0010-kms-sdk-dependency-isolation.md` 决定。
 
 ## 2. 背景
 

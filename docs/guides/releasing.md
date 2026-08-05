@@ -29,7 +29,7 @@ separate environment-gated job.
 The publish job additionally requires an annotated tag whose GitHub verification
 object reports a valid GPG, SSH, or S/MIME signature; a lightweight or
 unverified tag cannot publish assets. RC tags are marked prerelease, while the
-reviewed `docs/release-notes-v1.0.0.md` is used only for the final tag.
+reviewed `docs/milestones/release-notes-v1.0.0.md` is used only for the final tag.
 
 Before creating an RC tag:
 
@@ -37,15 +37,15 @@ Before creating an RC tag:
 2. build from a clean tree and verify embedded UI has no diff;
 3. review dependency/license and security reports;
 4. run and archive the GA real-account Provider matrix described in
-   `docs/provider-real-matrix.md`;
+   `docs/verification/provider-real-matrix.md`;
 5. run and archive the 24-hour soak on the exact commit as documented in
-   `docs/soak-testing.md`;
+   `docs/verification/soak-testing.md`;
 6. create and push a signed annotated tag;
 7. verify every downloaded blob, including the container tarball, against
    `checksums.txt` and its Sigstore bundle;
 8. run `heimdall version`, `config check`, backup verify/restore, and a Gateway smoke test on each supported architecture.
 
-The reviewed release description is `docs/release-notes-v1.0.0.md`. Keep its
+The reviewed release description is `docs/milestones/release-notes-v1.0.0.md`. Keep its
 status and measured-limit section synchronized with the exact tagged commit;
 do not remove unresolved RC, Provider-matrix, or soak conditions before they
 have archived evidence.

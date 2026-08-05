@@ -156,15 +156,38 @@ func (m *Manager) AddObserver(observer func(ledger.Record)) {
 	m.observerMu.Unlock()
 }
 
+// Options carries the dependencies a caller may substitute. Everything here has a working
+// default, so New remains the normal entry point.
+type Options struct {
+	// Now supplies the clock that buckets a request into its accounting period. Tests that
+	// assert on a specific period must set it: the manager derives PeriodID itself, so a
+	// clock injected anywhere else — the gateway service, for instance — does not move the
+	// bucket, and an assertion written against a fixed date silently starts failing the
+	// next day.
+	Now func() time.Time
+}
+
 func New(log *ledger.Log, state *ledger.State, location *time.Location) (*Manager, error) {
+	return NewWithOptions(log, state, location, Options{})
+}
+
+func NewWithOptions(
+	log *ledger.Log,
+	state *ledger.State,
+	location *time.Location,
+	options Options,
+) (*Manager, error) {
 	if log == nil || state == nil || location == nil {
 		return nil, errors.New("ledger log, state, and location are required")
+	}
+	if options.Now == nil {
+		options.Now = time.Now
 	}
 	manager := &Manager{
 		log:      log,
 		state:    state,
 		location: location,
-		now:      time.Now,
+		now:      options.Now,
 	}
 	manager.applyCond = sync.NewCond(&manager.applyMu)
 	return manager, nil

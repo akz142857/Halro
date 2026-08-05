@@ -12,6 +12,7 @@ import {
   StatusDot,
   ConfirmButton,
   OverflowMenu,
+  ResourceToolbar,
 } from "../components";
 import type { InlineTestState } from "../components";
 import type { AccessSurface, Credential, CredentialScheme, Provider, ProviderBinding, ProviderCapabilities, ProviderType } from "../types";
@@ -179,17 +180,6 @@ export function ProvidersPage() {
           onClose={() => setEditingProvider(undefined)}
         />
       )}
-    </div>
-  );
-}
-
-function ResourceToolbar({ query, onQueryChange, queryPlaceholder, count, status, onStatusChange }: { query: string; onQueryChange: (value: string) => void; queryPlaceholder: string; count: string; status?: "all" | "enabled" | "disabled"; onStatusChange?: (value: "all" | "enabled" | "disabled") => void }) {
-  const { t } = useTranslation();
-  return (
-    <div className="resource-toolbar" role="search" aria-label={t("providers.filters")}>
-      <label className="resource-search"><span>{t("providers.search")}</span><input value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder={queryPlaceholder} /></label>
-      {status !== undefined && onStatusChange && <label><span>{t("providers.status")}</span><select value={status} onChange={(event) => onStatusChange(event.target.value as typeof status)}><option value="all">{t("providers.allStatuses")}</option><option value="enabled">{t("common.enabled")}</option><option value="disabled">{t("common.disabled")}</option></select></label>}
-      <span className="resource-result-count" role="status">{count}</span>
     </div>
   );
 }
