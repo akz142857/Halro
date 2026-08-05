@@ -92,7 +92,12 @@ backup: bin/heimdall
 		--output-dir "$(abspath $(BACKUP_DIR))" \
 		--key-file "$(abspath $(BACKUP_KEY_FILE))" $(if $(BACKUP_NAME),--name "$(BACKUP_NAME)")
 
-bin/heimdall: $(GO_SOURCES) go.mod go.sum $(WEB_BUILD_STAMP)
+# The console bundle is committed under internal/webui/dist and embedded from
+# there, so building the binary needs Go and nothing else — which is what the
+# README promises. Rebuild the bundle explicitly with `make frontend` after
+# changing anything under web/; CI fails on a stale one (`git diff --exit-code
+# -- internal/webui/dist`), so it cannot drift unnoticed.
+bin/heimdall: $(GO_SOURCES) go.mod go.sum
 	mkdir -p bin
 	go build -trimpath -o $@ ./cmd/heimdall
 
