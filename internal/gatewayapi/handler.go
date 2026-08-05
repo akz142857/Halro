@@ -74,13 +74,12 @@ func (h *Handler) Responses(writer http.ResponseWriter, request *http.Request) {
 	decoded, err := openaiapi.DecodeResponseRequest(json.NewDecoder(request.Body))
 	if err != nil {
 		code := "invalid_request_error"
-		message := "invalid request body"
+		message, param := decodeProblem(err)
 		var maxBytesError *http.MaxBytesError
 		if errors.As(err, &maxBytesError) {
-			code = "request_too_large"
-			message = "request body exceeds the configured limit"
+			code, message, param = "request_too_large", "request body exceeds the configured limit", nil
 		}
-		writeError(writer, http.StatusBadRequest, code, message, nil)
+		writeError(writer, http.StatusBadRequest, code, message, param)
 		return
 	}
 	if decoded.Stream {
@@ -194,13 +193,12 @@ func (h *Handler) Embeddings(writer http.ResponseWriter, request *http.Request) 
 	decoded, err := openaiapi.DecodeEmbeddingRequest(json.NewDecoder(request.Body))
 	if err != nil {
 		code := "invalid_request_error"
-		message := "invalid request body"
+		message, param := decodeProblem(err)
 		var maxBytesError *http.MaxBytesError
 		if errors.As(err, &maxBytesError) {
-			code = "request_too_large"
-			message = "request body exceeds the configured limit"
+			code, message, param = "request_too_large", "request body exceeds the configured limit", nil
 		}
-		writeError(writer, http.StatusBadRequest, code, message, nil)
+		writeError(writer, http.StatusBadRequest, code, message, param)
 		return
 	}
 	ctx, cancel := context.WithTimeout(request.Context(), h.routeTimeout)
@@ -384,7 +382,8 @@ func (h *Handler) Messages(writer http.ResponseWriter, request *http.Request) {
 	request.Body = http.MaxBytesReader(writer, request.Body, h.maxRequestBytes)
 	decoded, err := anthropicapi.DecodeMessageRequest(request.Body)
 	if err != nil {
-		status, kind, message := http.StatusBadRequest, "invalid_request_error", "invalid request body"
+		message, _ := decodeProblem(err)
+		status, kind := http.StatusBadRequest, "invalid_request_error"
 		var maxBytesError *http.MaxBytesError
 		if errors.As(err, &maxBytesError) || strings.Contains(err.Error(), "exceeds limit") {
 			status, kind, message = http.StatusRequestEntityTooLarge, "request_too_large", "request body exceeds the configured limit"
@@ -620,13 +619,12 @@ func (h *Handler) ChatCompletions(writer http.ResponseWriter, request *http.Requ
 	decoded, err := openaiapi.DecodeChatCompletionRequest(json.NewDecoder(request.Body))
 	if err != nil {
 		code := "invalid_request_error"
-		message := "invalid request body"
+		message, param := decodeProblem(err)
 		var maxBytesError *http.MaxBytesError
 		if errors.As(err, &maxBytesError) {
-			code = "request_too_large"
-			message = "request body exceeds the configured limit"
+			code, message, param = "request_too_large", "request body exceeds the configured limit", nil
 		}
-		writeError(writer, http.StatusBadRequest, code, message, nil)
+		writeError(writer, http.StatusBadRequest, code, message, param)
 		return
 	}
 	if decoded.Stream {
@@ -728,6 +726,110 @@ func bearerToken(value string) (string, bool) {
 		return "", false
 	}
 	return token, true
+}
+
+// unimplementedHints name the endpoints callers most often probe for, so the
+// answer says what to reach for instead of only what is missing. An SDK calling
+// models.list() is the common case: it is the first thing many clients do, and
+// a bare 404 tells the operator nothing about why their model list is empty.
+var unimplementedHints = map[string]string{
+	"/v1/models": "Heimdall does not implement /v1/models. " +
+		"Applications address models by the public alias configured on their Project.",
+	"/v1/messages/count_tokens": "Heimdall does not implement Anthropic count_tokens.",
+}
+
+// NotFound answers an unrouted path with the envelope every other error uses.
+// The router's default is plain text, which an SDK's error type cannot parse,
+// so a caller probing an endpoint Heimdall does not serve gets an opaque
+// transport failure rather than the reason for it.
+func (h *Handler) NotFound(writer http.ResponseWriter, request *http.Request) {
+	writer.Header().Set("Cache-Control", "no-store")
+	message := "this endpoint is not implemented by Heimdall; " +
+		"see docs/compatibility for the supported surface"
+	if hint, ok := unimplementedHints[strings.TrimSuffix(request.URL.Path, "/")]; ok {
+		message = hint
+	}
+	writeError(writer, http.StatusNotFound, "endpoint_not_implemented", message, nil)
+}
+
+// MethodNotAllowed answers a known path reached with the wrong verb, for the
+// same reason NotFound exists.
+func (h *Handler) MethodNotAllowed(writer http.ResponseWriter, request *http.Request) {
+	writer.Header().Set("Cache-Control", "no-store")
+	writeError(writer, http.StatusMethodNotAllowed, "method_not_allowed",
+		"this endpoint does not accept "+request.Method, nil)
+}
+
+// maxDecodeProblemBytes bounds what a rejection echoes back. One decoder
+// problem quotes the content block type the caller sent, and a caller should
+// not be able to size the response by sending a long one.
+const maxDecodeProblemBytes = 512
+
+// decodeProblem turns a decoder rejection into something the caller can act on.
+//
+// The decoders already say exactly what is wrong and where — "messages[3].role
+// is invalid", "tools[2].strict=true cannot be represented losslessly" — but
+// every one of those was being collapsed into "invalid request body" at the
+// HTTP boundary. That reduced the compatibility promise, that unsupported
+// fields are rejected rather than silently dropped, to a rejection the caller
+// cannot act on without bisecting their payload field by field.
+//
+// The text is built from constants and indices, so passing it through leaks
+// nothing the caller did not send.
+func decodeProblem(err error) (string, *string) {
+	message := strings.TrimSpace(err.Error())
+	if message == "" {
+		return "invalid request body", nil
+	}
+	if len(message) > maxDecodeProblemBytes {
+		message = message[:maxDecodeProblemBytes] + "…"
+	}
+	if param := decodeParam(message); param != "" {
+		return message, &param
+	}
+	return message, nil
+}
+
+// decodeParam recovers the field path a problem points at, so SDKs that surface
+// error.param land the caller on the offending field. Problems are written as
+// "<path> <what is wrong>", sometimes with the value attached as "<path>=<v>".
+//
+// Naming the wrong field is worse than naming none, because it sends the caller
+// looking somewhere the problem is not. So a bare leading word only counts when
+// something marks it as a reference rather than the opening of a sentence:
+// either an attached value, or the dots and brackets of a path. Without one of
+// those, "invalid character 'x' ..." would announce a field called "invalid".
+func decodeParam(message string) string {
+	head, _, _ := strings.Cut(message, " ")
+	if head == "" {
+		return ""
+	}
+	if field, _, valued := strings.Cut(head, "="); valued {
+		if isFieldPath(field) {
+			return field
+		}
+		return ""
+	}
+	if !strings.ContainsAny(head, ".[") || !isFieldPath(head) {
+		return ""
+	}
+	return head
+}
+
+func isFieldPath(candidate string) bool {
+	if candidate[0] < 'a' || candidate[0] > 'z' {
+		return false
+	}
+	for _, symbol := range candidate {
+		switch {
+		case symbol >= 'a' && symbol <= 'z', symbol >= 'A' && symbol <= 'Z',
+			symbol >= '0' && symbol <= '9',
+			symbol == '_', symbol == '.', symbol == '[', symbol == ']':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func writeError(writer http.ResponseWriter, status int, code, message string, param *string) {

@@ -914,6 +914,8 @@ func (r *Runtime) gatewayRouter() http.Handler {
 			"version": buildinfo.Current(),
 		})
 	})
+	router.NotFound(r.gateway.NotFound)
+	router.MethodNotAllowed(r.gateway.MethodNotAllowed)
 	return router
 }
 

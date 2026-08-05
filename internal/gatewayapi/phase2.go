@@ -78,7 +78,8 @@ func (h *Handler) phase2JSON(writer http.ResponseWriter, request *http.Request, 
 	request.Body = http.MaxBytesReader(writer, request.Body, h.maxRequestBytes)
 	decoded, err := decode(json.NewDecoder(request.Body))
 	if err != nil {
-		writeError(writer, 400, "invalid_request_error", "invalid request body", nil)
+		message, param := decodeProblem(err)
+		writeError(writer, 400, "invalid_request_error", message, param)
 		return
 	}
 	ctx, cancel := context.WithTimeout(request.Context(), h.routeTimeout)
@@ -175,7 +176,8 @@ func (h *Handler) Speech(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, h.maxRequestBytes)
 	decoded, err := openaiapi.DecodeSpeechRequest(json.NewDecoder(r.Body))
 	if err != nil {
-		writeError(w, 400, "invalid_request_error", "invalid request body", nil)
+		message, param := decodeProblem(err)
+		writeError(w, 400, "invalid_request_error", message, param)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), h.routeTimeout)
