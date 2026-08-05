@@ -376,32 +376,29 @@ h3 { margin-bottom: 0; font-size: 18px; }
 .deployment-search { flex: 1 1 320px; max-width: 520px; }
 .deployment-result-count { margin-left: auto; padding: 9px 4px; color: var(--muted); font: var(--font-size-xs) var(--mono); white-space: nowrap; }
 .deployment-list > .empty-state { border: 0; }
-.deployment-row, .alert-row {
+.deployment-row {
   overflow: visible; padding: 12px 18px; border-bottom: 1px solid var(--line);
   font-size: var(--font-size-sm); line-height: var(--line-height-normal);
 }
-.deployment-row:last-child, .alert-row:last-child { border-bottom: 0; }
+.deployment-row:last-child { border-bottom: 0; }
 /* The details block stays outside this grid so expanding never resizes the columns. */
 .deployment-row-main {
   display: grid; align-items: center;
   grid-template-columns: minmax(140px, .9fr) minmax(150px, 1.1fr) minmax(84px, .45fr) minmax(100px, .55fr) minmax(70px, .4fr) auto;
   gap: 16px; min-height: 54px;
 }
-.deployment-compact-identity, .deployment-compact-fact, .deployment-compact-status,
-.alert-compact-identity, .alert-compact-fact, .alert-compact-status { display: grid; min-width: 0; gap: 5px; }
-.deployment-compact-identity > span, .alert-compact-identity > span { display: flex; align-items: center; min-width: 0; gap: 8px; }
-.deployment-compact-identity strong, .alert-compact-identity strong { overflow: hidden; color: var(--text); font-size: 13px; font-weight: 700; line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }
-.deployment-compact-identity small, .deployment-compact-fact small, .deployment-compact-status small,
-.alert-compact-identity small, .alert-compact-fact small, .alert-compact-status small, .alert-row-reply small { margin: 0; color: var(--color-text-tertiary); font: 10px var(--mono); letter-spacing: .03em; line-height: 1.3; }
-.deployment-compact-fact > strong, .deployment-compact-fact > code, .deployment-compact-fact > .resource-link,
-.alert-compact-fact > strong, .alert-compact-fact > code {
+.deployment-compact-identity, .deployment-compact-fact, .deployment-compact-status { display: grid; min-width: 0; gap: 5px; }
+.deployment-compact-identity > span { display: flex; align-items: center; min-width: 0; gap: 8px; }
+.deployment-compact-identity strong { overflow: hidden; color: var(--text); font-size: 13px; font-weight: 700; line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }
+.deployment-compact-identity small, .deployment-compact-fact small, .deployment-compact-status small { margin: 0; color: var(--color-text-tertiary); font: 10px var(--mono); letter-spacing: .03em; line-height: 1.3; }
+.deployment-compact-fact > strong, .deployment-compact-fact > code, .deployment-compact-fact > .resource-link {
   overflow: hidden; color: var(--color-text-primary); font-size: 13px; font-weight: 650; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap;
 }
-.deployment-compact-fact > code, .alert-compact-fact > code { font: 13px var(--mono); }
-.deployment-compact-status .resource-state, .alert-compact-status .resource-state { font: 13px var(--mono); }
-.deployment-compact-actions, .alert-compact-actions { justify-content: flex-end; align-items: center; flex-wrap: nowrap; }
-.deployment-compact-actions .button, .alert-compact-actions .button { flex: 0 0 auto; min-height: 36px; padding-right: 10px; padding-left: 10px; white-space: nowrap; }
-.deployment-compact-actions > .inline-test-control, .alert-compact-actions > .inline-test-control { margin-right: 14px; }
+.deployment-compact-fact > code { font: 13px var(--mono); }
+.deployment-compact-status .resource-state { font: 13px var(--mono); }
+.deployment-compact-actions { justify-content: flex-end; align-items: center; flex-wrap: nowrap; }
+.deployment-compact-actions .button { flex: 0 0 auto; min-height: 36px; padding-right: 10px; padding-left: 10px; white-space: nowrap; }
+.deployment-compact-actions > .inline-test-control { margin-right: 14px; }
 .deployment-state-toggle { display: grid; flex: 0 0 auto; align-items: center; justify-items: center; }
 .deployment-state-toggle > * { grid-area: 1 / 1; }
 .deployment-state-sizer { display: grid; place-items: center; visibility: hidden; white-space: nowrap; }
@@ -681,18 +678,19 @@ td small, td code { display: block; margin-top: 4px; color: var(--muted); }
 .alert-row > div { min-width: 0; }
 .alert-row > div:nth-child(2) > span { display: flex; align-items: center; gap: 8px; }
 .alert-row small, .alert-row code { display: block; margin-top: 5px; overflow-wrap: anywhere; color: var(--muted); font-size: 10px; }
-/* Mirrors .deployment-row-main so both resource lists read as one system. */
-.alert-row-main {
-  display: grid; align-items: center;
-  grid-template-columns: minmax(140px, .9fr) minmax(190px, 1.5fr) minmax(96px, .5fr) minmax(70px, .4fr) auto;
-  gap: 16px; min-height: 54px;
+/* A cell in the row's own grid, spanning every column. Positioned outside the row it had
+   nothing to align to and read as a stray box; here it sits inside the row's padding and
+   above its border, so it can only ever line up with the webhook it reports on. */
+.alert-reply {
+  grid-column: 1 / -1; min-width: 0; margin-top: 4px; padding: 8px 11px;
+  background: var(--surface-inset); border: 1px solid var(--line); border-radius: 4px;
 }
-.alert-compact-fact > code { overflow: hidden; text-overflow: ellipsis; }
-/* Inside the row, below a hairline: the reply belongs to this webhook, and floating it
-   outside made one endpoint's answer read as a banner for the whole section. */
-.alert-row-reply { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
-.alert-row-reply code { display: block; margin-top: 5px; overflow-wrap: anywhere; color: var(--muted); font: 12px var(--mono); }
-.alert-row > .alert-row-error { margin: 12px 0 0; }
+.alert-reply small { display: block; color: var(--muted-2); font: 9px var(--mono); letter-spacing: .06em; }
+.alert-reply code { display: block; margin-top: 5px; overflow-wrap: anywhere; color: var(--muted); font-size: 10px; }
+.alert-secret { text-align: right; }
+.alert-secret small { color: var(--muted-2); font: 8px var(--mono); letter-spacing: .08em; }
+.alert-secret > strong { display: block; margin-top: 6px; color: var(--muted); font: 10px var(--mono); }
+.alert-secret > strong.configured { color: var(--color-status-success-text); }
 .policy-card-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
 .policy-tabs-shell { display: grid; }
 .policy-tabs { margin-bottom: 0; }
@@ -1253,8 +1251,6 @@ textarea { resize: vertical; }
   .provider-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .provider-facts > div:nth-child(2) { border-right: 0; }
   .deployment-row-main { grid-template-columns: minmax(130px, .9fr) minmax(140px, 1.1fr) minmax(96px, .5fr) minmax(64px, .35fr) auto; }
-  .alert-row-main { grid-template-columns: minmax(130px, .9fr) minmax(150px, 1.2fr) minmax(80px, .45fr) auto; }
-  .alert-compact-status { display: none; }
   .deployment-fact-concurrency { display: none; }
   .developer-workbench { grid-template-columns: 1fr; }
 }
@@ -1283,11 +1279,11 @@ textarea { resize: vertical; }
   .governance-lower-grid { grid-template-columns: 1fr; }
   .deployment-row-main { grid-template-columns: minmax(130px, 1fr) minmax(130px, .9fr) minmax(60px, .35fr) auto; }
   .deployment-fact-routes { display: none; }
-  .deployment-compact-actions, .alert-compact-actions { min-width: 0; overflow-x: auto; overflow-y: hidden; }
-  .deployment-compact-actions::-webkit-scrollbar, .alert-compact-actions::-webkit-scrollbar { height: 0; }
-  .deployment-compact-actions .button, .alert-compact-actions .button { min-height: 34px; }
-  .deployment-compact-actions > .inline-test-control, .alert-compact-actions > .inline-test-control { width: auto; flex: 0 0 auto; grid-template-columns: 56px; margin-right: 10px; }
-  .deployment-compact-actions > .inline-test-control .inline-test-result, .alert-compact-actions > .inline-test-control .inline-test-result { display: none; }
+  .deployment-compact-actions { min-width: 0; overflow-x: auto; overflow-y: hidden; }
+  .deployment-compact-actions::-webkit-scrollbar { height: 0; }
+  .deployment-compact-actions .button { min-height: 34px; }
+  .deployment-compact-actions > .inline-test-control { width: auto; flex: 0 0 auto; grid-template-columns: 56px; margin-right: 10px; }
+  .deployment-compact-actions > .inline-test-control .inline-test-result { display: none; }
   .deployment-pricing-grid { grid-template-columns: 1fr; }
   .deployment-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .deployment-facts > div { border-right: 0; border-bottom: 1px solid var(--line); }
@@ -1323,7 +1319,7 @@ textarea { resize: vertical; }
   .deployment-fact-target { display: none; }
   .deployment-compact-actions { grid-column: 1 / -1; justify-content: flex-start; }
   .deployment-compact-actions .button { width: auto; }
-  .deployment-compact-actions > .inline-test-control, .alert-compact-actions > .inline-test-control { margin-right: 8px; }
+  .deployment-compact-actions > .inline-test-control { margin-right: 8px; }
   .deployment-facts > div, .deployment-facts > div:nth-child(odd), .deployment-facts > div:last-child { grid-column: auto; border-right: 0; }
   .price-mode-options, .price-form-grid { grid-template-columns: 1fr; }
   .price-form-steps li { align-items: center; gap: 8px; }
@@ -1441,9 +1437,9 @@ textarea { resize: vertical; }
   .developer-response-meta > div:nth-child(2) { border-right: 0; }
   .developer-response-meta > div:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
   .operations-panel-header { align-items: flex-start; flex-direction: column; gap: 12px; }
-  .alert-row-main { grid-template-columns: minmax(0, 1fr) auto; row-gap: 10px; }
-  .alert-compact-fact:nth-of-type(2) { display: none; }
-  .alert-compact-actions { grid-column: 1 / -1; justify-content: flex-start; }
+  .alert-row { grid-template-columns: auto 1fr; }
+  .alert-secret { text-align: left; }
+  .alert-row .row-actions { grid-column: 1 / -1; }
   .filter-bar { align-items: stretch; flex-direction: column; }
   .filter-count { margin-left: 0; }
   .policy-filter-bar > .button { align-self: flex-start; margin-left: 0; }

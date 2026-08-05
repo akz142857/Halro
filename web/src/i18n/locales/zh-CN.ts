@@ -417,7 +417,6 @@ export const zhCN = {
     urlInvalid: "请输入以 https:// 开头的完整地址",
     secretRequiredForNewDestination: "更换地址或请求头时必须重新输入密钥；已保存的密钥不会被重新绑定到新目标。",
     discardChanges: "有未保存的修改，确定放弃吗？",
-    endpoint: "Webhook 地址", moreActions: "更多操作",
     endpointReply: "接收端返回 HTTP {{status}}",
     editWebhook: "编辑告警 Webhook", createWebhook: "创建告警 Webhook", name: "名称", url: "HTTPS Webhook 地址", urlHint: "运行时禁用代理和跳转，并校验所有 DNS 结果",
     header: "密钥请求头", newSecret: "新密钥（留空保持不变）", optionalSecret: "Webhook 密钥（可选）", secretHint: "密钥绑定 Webhook 地址和请求头受众，永不回显",
