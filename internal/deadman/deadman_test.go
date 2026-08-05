@@ -462,6 +462,11 @@ func TestSlowReceiverDoesNotBlockProbeTick(t *testing.T) {
 	receiver.TLS = &tls.Config{Certificates: []tls.Certificate{pki.serverCertificate}, MinVersion: tls.VersionTLS12}
 	receiver.StartTLS()
 	defer receiver.Close()
+	// Registered after receiver.Close so LIFO unblocks the handler first: Close
+	// waits for outstanding requests, and a bare t.Fatal below would deadlock.
+	var releaseOnce sync.Once
+	releaseReceiver := func() { releaseOnce.Do(func() { close(release) }) }
+	defer releaseReceiver()
 	cfg := validConfig(t.TempDir(), receiver.URL, pki.caFile, tokenPath)
 	engine, err := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
@@ -471,9 +476,18 @@ func TestSlowReceiverDoesNotBlockProbeTick(t *testing.T) {
 	if err := engine.Tick(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	// Tick stamps NextAttempt from the wall clock, which drainOne re-reads. A
+	// backwards clock step between the two would make drainOne return without
+	// sending, and the test would then wait on a receiver that never runs.
+	engine.state.Outbox[0].NextAttempt = time.Now().UTC().Add(-time.Minute)
 	done := make(chan struct{})
 	go func() { engine.drainOne(context.Background()); close(done) }()
-	<-entered
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		releaseReceiver()
+		t.Fatal("delivery never reached the receiver")
+	}
 	started := time.Now()
 	if err := engine.Tick(context.Background()); err != nil {
 		t.Fatal(err)
@@ -481,7 +495,7 @@ func TestSlowReceiverDoesNotBlockProbeTick(t *testing.T) {
 	if elapsed := time.Since(started); elapsed > 250*time.Millisecond {
 		t.Fatalf("slow receiver blocked probe tick for %s", elapsed)
 	}
-	close(release)
+	releaseReceiver()
 	<-done
 }
 
