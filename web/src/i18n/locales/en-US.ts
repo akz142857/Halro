@@ -417,6 +417,7 @@ export const enUS = {
     urlInvalid: "Enter a full address starting with https://",
     secretRequiredForNewDestination: "Changing the endpoint or header requires the secret again. A stored secret is never rebound to a new destination.",
     discardChanges: "You have unsaved changes. Discard them?",
+    endpoint: "Endpoint", moreActions: "More actions",
     endpointReply: "The endpoint answered HTTP {{status}}",
     editWebhook: "Edit alert webhook", createWebhook: "Create alert webhook", name: "Name", url: "HTTPS webhook URL", urlHint: "Proxies and redirects are disabled at runtime, and every DNS result is validated",
     header: "Secret header", newSecret: "New secret (leave blank to keep current)", optionalSecret: "Webhook secret (optional)", secretHint: "The secret is bound to the webhook URL and header audience and is never returned",

@@ -10,6 +10,7 @@ import {
   Loading,
   LoadMore,
   Modal,
+  OverflowMenu,
   PageHeader,
   StatusDot,
   type InlineTestState,
@@ -171,26 +172,30 @@ function AlertRow({
     ? "running"
     : test.isSuccess ? "success" : test.isError ? "failure" : "idle";
   return (
-    <>
-      <div className="alert-row">
-        <span className="provider-icon">WH</span>
-        <div>
+    <article className="alert-row">
+      <div className="alert-row-main">
+        <div className="alert-compact-identity">
           <span>
             <StatusDot ok={webhook.enabled} label={webhook.enabled ? t("common.enabled") : t("common.disabled")} />
             <strong>{webhook.name}</strong>
           </span>
-          <small>{webhook.url}</small>
-          <code>{webhook.id}</code>
+          <small>{webhook.id}</small>
         </div>
-        <div className="alert-secret">
+        <div className="alert-compact-fact">
+          <small>{t("operations.endpoint")}</small>
+          <code title={webhook.url}>{webhook.url}</code>
+        </div>
+        <div className="alert-compact-fact">
           <small>{t("operations.secretHeader")}</small>
-          {/* Same typography as the rest of the row; colour alone separates the two states.
-              Carrying no secret is a configuration fact, not a fault, so it stays neutral. */}
-          <strong className={webhook.secret_configured ? "configured" : ""}>
-            {webhook.secret_configured ? webhook.header_name || t("operations.configured") : t("operations.none")}
-          </strong>
+          <strong>{webhook.secret_configured ? webhook.header_name || t("operations.configured") : t("operations.none")}</strong>
         </div>
-        <div className="row-actions">
+        <div className="alert-compact-status">
+          <small>{t("common.status")}</small>
+          <span className={`resource-state ${webhook.enabled ? "enabled" : ""}`}>
+            {webhook.enabled ? t("common.enabled") : t("common.disabled")}
+          </span>
+        </div>
+        <div className="row-actions alert-compact-actions">
           <InlineTestControl
             state={testState}
             latency={test.data?.latency_ms}
@@ -198,45 +203,53 @@ function AlertRow({
             title={webhook.enabled ? undefined : t("operations.testDisabledHint")}
             onTest={() => test.mutate()}
           />
-          {webhook.enabled ? (
-            <ConfirmButton
-              className="button ghost"
-              label={t("common.disable")}
-              title={t("operations.disableTitle")}
-              confirmLabel={t("operations.disableConfirm", { name: webhook.name })}
-              disabled={toggle.isPending}
-              onConfirm={() => toggle.mutate()}
-            />
-          ) : (
-            <button className="button ghost" disabled={toggle.isPending} onClick={() => toggle.mutate()}>
-              {toggle.isPending ? t("common.working") : t("common.enable")}
-            </button>
-          )}
           <button className="button ghost" onClick={onEdit}>{t("common.edit")}</button>
-          <ConfirmButton
-            label={t("common.delete")}
-            confirmLabel={t("operations.deleteConfirm", { name: webhook.name })}
-            disabled={remove.isPending}
-            onConfirm={() => remove.mutate()}
-          />
+          {/* The sizer keeps enable and disable rows equally wide so columns line up. */}
+          <span className="deployment-state-toggle">
+            {webhook.enabled ? (
+              <ConfirmButton
+                className="button ghost"
+                label={t("common.disable")}
+                title={t("operations.disableTitle")}
+                confirmLabel={t("operations.disableConfirm", { name: webhook.name })}
+                disabled={toggle.isPending}
+                onConfirm={() => toggle.mutate()}
+              />
+            ) : (
+              <button className="button ghost" disabled={toggle.isPending} onClick={() => toggle.mutate()}>
+                {toggle.isPending ? t("common.working") : t("common.enable")}
+              </button>
+            )}
+            <span className="button ghost deployment-state-sizer" aria-hidden="true">
+              {webhook.enabled ? t("common.enable") : t("common.disable")}
+            </span>
+          </span>
+          <OverflowMenu label={t("operations.moreActions")}>
+            <ConfirmButton
+              label={t("common.delete")}
+              confirmLabel={t("operations.deleteConfirm", { name: webhook.name })}
+              disabled={remove.isPending}
+              onConfirm={() => remove.mutate()}
+            />
+          </OverflowMenu>
         </div>
       </div>
       {/* Several chat platforms answer 200 and reject the payload in the body. Showing the
           endpoint's own reply is the only way an operator can tell "delivered" from
-          "accepted the request and threw it away". Indented under its own row rather than
-          spanning the panel: it belongs to one webhook, not to the section. */}
+          "accepted the request and threw it away". It belongs to this row, so it lives
+          inside it, below a hairline, the way a deployment's details do. */}
       {test.isSuccess && test.data.response && (
-        <div className="alert-reply" role="status">
+        <div className="alert-row-reply" role="status">
           <small>{t("operations.endpointReply", { status: test.data.status_code })}</small>
           <code>{test.data.response}</code>
         </div>
       )}
       {/* A revocation or a disable that failed silently leaves the operator believing an
           endpoint stopped receiving events when it has not. */}
-      {remove.isError && <ErrorState error={remove.error} />}
-      {toggle.isError && <ErrorState error={toggle.error} />}
-      {test.isError && <ErrorState error={test.error} />}
-    </>
+      {remove.isError && <ErrorState error={remove.error} className="alert-row-error" />}
+      {toggle.isError && <ErrorState error={toggle.error} className="alert-row-error" />}
+      {test.isError && <ErrorState error={test.error} className="alert-row-error" />}
+    </article>
   );
 }
 
