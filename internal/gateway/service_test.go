@@ -213,7 +213,10 @@ func TestGatewayUnknownPriceExplicitOptInPersistsUnknownCost(t *testing.T) {
 	if _, err := service.Chat(context.Background(), f.plaintext, chatRequest()); err != nil {
 		t.Fatal(err)
 	}
-	balance := f.state.Balance(f.project.ID, now.Format("2006-01-02"))
+	// The period is bucketed by the accounting manager's own clock, which budget.New does
+	// not let a caller override, so service.now above does not move it. Reading the fixed
+	// date made this test pass only on 2026-08-04 and fail every day after.
+	balance := f.state.Balance(f.project.ID, time.Now().In(time.UTC).Format("2006-01-02"))
 	if f.adapter.calls != 1 || balance.CommittedMicrosUSD != 0 || balance.UnknownAttempts != 1 {
 		t.Fatalf("provider calls=%d balance=%#v", f.adapter.calls, balance)
 	}
