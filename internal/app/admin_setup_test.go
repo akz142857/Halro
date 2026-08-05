@@ -116,7 +116,7 @@ func TestAdminSetupRequiresTransientTokenForPublicAdmin(t *testing.T) {
 	// Login spray must not lock an operator holding the high-entropy one-time
 	// token out of completing a public-listener setup.
 	for i := 0; i < cfg.Admin.LoginRPM; i++ {
-		if !runtime.allowAdminLogin("192.0.2.10:1234", time.Now()) {
+		if allowed, _ := runtime.allowAdminLogin("192.0.2.10:1234", time.Now()); !allowed {
 			t.Fatal("failed to populate login rate limit")
 		}
 	}

@@ -9,8 +9,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/akz142857/Heimdall/internal/audit"
 	"github.com/akz142857/Heimdall/internal/domain"
 )
 
@@ -262,6 +265,93 @@ func TestAdminReadAPIUsesSecretSafeViews(t *testing.T) {
 	if !strings.Contains(payload, `"secret_configured":true`) {
 		t.Fatalf("credential view did not report secret presence: %s", payload)
 	}
+}
+
+// Login is unauthenticated, and every audit append fsyncs and indexes a record.
+// If a rejected request can still reach the audit path, anonymous traffic sets
+// its own append rate — and because audit failures are fail-closed, filling the
+// disk that way takes every administrative action down with it. Rate limiting
+// therefore has to run ahead of the origin check rather than behind it.
+func TestRejectedLoginSprayCannotSetTheAuditAppendRate(t *testing.T) {
+	cfg := testConfig(t)
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := BootstrapAdmin(context.Background(), cfg, "admin", []byte("correct horse battery staple")); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := Open(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+
+	before := countLoginAudits(t, runtime)
+	const spray = 200
+	throttled := 0
+	for i := 0; i < spray; i++ {
+		request := adminRequest(t, http.MethodPost, "/admin/api/v1/session/login", map[string]string{
+			"username": "admin", "password": "wrong",
+		})
+		request.Header.Set("Origin", "https://attacker.example")
+		request.RemoteAddr = "192.0.2.50:9000"
+		response := httptest.NewRecorder()
+		runtime.adminRouter().ServeHTTP(response, request)
+		if response.Code == http.StatusTooManyRequests {
+			throttled++
+		}
+	}
+	if throttled == 0 {
+		t.Fatal("a 200-request spray from one source was never throttled")
+	}
+	// At most one audited attempt per allowed request, plus a single
+	// rate_limited record covering the rest of the minute.
+	appended := countLoginAudits(t, runtime) - before
+	if ceiling := cfg.Admin.LoginRPM + 1; appended > ceiling {
+		t.Fatalf("%d rejected requests appended %d audit records, want at most %d",
+			spray, appended, ceiling)
+	}
+}
+
+// A throttled source still has to be visible in the audit trail; the fix is to
+// record it once per window, not to stop recording it.
+func TestAdminRateLimiterReportsEachThrottledWindowOnce(t *testing.T) {
+	var mu sync.Mutex
+	windows := map[string]adminLoginWindow{}
+	now := time.Date(2026, 8, 5, 9, 30, 0, 0, time.UTC)
+	const limit = 3
+	for i := 0; i < limit; i++ {
+		if allowed, _ := allowAdminRate(&mu, windows, "203.0.113.7:1234", now, limit); !allowed {
+			t.Fatalf("attempt %d rejected below the limit", i+1)
+		}
+	}
+	allowed, report := allowAdminRate(&mu, windows, "203.0.113.7:1234", now, limit)
+	if allowed || !report {
+		t.Fatalf("first rejection: allowed=%v report=%v, want false/true", allowed, report)
+	}
+	for i := 0; i < 100; i++ {
+		allowed, repeat := allowAdminRate(&mu, windows, "203.0.113.7:1234", now, limit)
+		if allowed || repeat {
+			t.Fatalf("sustained rejection %d: allowed=%v report=%v, want false/false", i+1, allowed, repeat)
+		}
+	}
+	if allowed, _ := allowAdminRate(&mu, windows, "203.0.113.7:1234", now.Add(time.Minute), limit); !allowed {
+		t.Fatal("a new minute did not reset the window")
+	}
+}
+
+func countLoginAudits(t *testing.T, runtime *Runtime) int {
+	t.Helper()
+	count := 0
+	if _, err := runtime.audit.Replay(func(record audit.Record) error {
+		if record.Event.Action == "admin.login" {
+			count++
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return count
 }
 
 func adminRequest(
