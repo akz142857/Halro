@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"github.com/akz142857/Heimdall/internal/deadman"
+	"github.com/akz142857/Heimdall/internal/safelog"
 )
 
 func main() {
@@ -34,7 +35,9 @@ func run(arguments []string) error {
 	if *check {
 		return nil
 	}
-	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	// The dead-man holds bearer tokens for every target it probes, so its logs
+	// need the same scrubbing the gateway's do.
+	logger := safelog.New(slog.NewJSONHandler(os.Stderr, nil))
 	engine, err := deadman.New(cfg, logger)
 	if err != nil {
 		return err
