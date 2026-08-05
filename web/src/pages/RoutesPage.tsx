@@ -17,6 +17,7 @@ import {
   Modal,
   PageHeader,
   StatusDot,
+  useDirty,
 } from "../components";
 import type { InlineTestState } from "../components";
 import type { Deployment, Provider, Route } from "../types";
@@ -205,8 +206,9 @@ function RouteForm({ current, deployments, onClose }: { current?: Route; deploym
     event.preventDefault();
     if (publicModel.trim() && deploymentID) mutation.mutate();
   };
+  const dirty = useDirty({ publicModel, deploymentID, priority, strategy, routeEnabled });
   return (
-    <Modal title={current ? t("routes.edit") : t("routes.createTitle")} onClose={onClose}>
+    <Modal title={current ? t("routes.edit") : t("routes.createTitle")} dirty={dirty} onClose={onClose}>
       {enabled.length === 0 ? (
         <div className="notice warning"><strong>{t("routes.deploymentRequired")}</strong><span>{t("routes.deploymentRequiredDescription")}</span><Link className="notice-link" href="/admin/deployments">{t("routes.openDeployments")}</Link></div>
       ) : (

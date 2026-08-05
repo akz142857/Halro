@@ -301,6 +301,33 @@ describe("deployment release workflow", () => {
     expect(localDateTimeValue(singaporeDate)).toBe("2026-08-05T20:30");
   });
 
+  it("says why disable and delete are blocked while an enabled route references the deployment", async () => {
+    const deployment = {
+      id: "deployment_referenced", name: "Referenced GPT", provider_id: provider.id, provider_model: "gpt-5",
+      access_surface: provider.access_surface, profile_id: provider.profile_id, region: "",
+      capabilities, capability_evidence: {}, input_micros_per_million: 0,
+      output_micros_per_million: 0, fixed_request_micros_usd: 0, max_concurrency: 4,
+      priority: 0, weight: 1, enabled: true, revision: 1, created_at: "", updated_at: "",
+    } as Deployment;
+    vi.mocked(api.deployments).mockResolvedValue({ items: [deployment], next_cursor: "" });
+    vi.mocked(api.routes).mockResolvedValue({
+      items: [{
+        id: "route_gpt", public_model: "gpt", deployment_id: deployment.id, priority: 0,
+        strategy: "ordered", enabled: true, revision: 1, created_at: "", updated_at: "",
+      }],
+      next_cursor: "",
+    });
+    renderPage();
+
+    const disable = await screen.findByRole("button", { name: "禁用" });
+    expect(disable).toBeDisabled();
+    expect(disable).toHaveAccessibleDescription("请先停用引用该部署的模型路由");
+    fireEvent.click(screen.getByLabelText("更多操作"));
+    const remove = screen.getByRole("button", { name: "删除" });
+    expect(remove).toBeDisabled();
+    expect(remove).toHaveAccessibleDescription("请先停用引用该部署的模型路由");
+  });
+
   it("retries an ambiguous price result with the exact payload and idempotency key", async () => {
     const deployment = {
       id: "deployment_ambiguous", name: "Ambiguous GPT", provider_id: provider.id, provider_model: "gpt-5",

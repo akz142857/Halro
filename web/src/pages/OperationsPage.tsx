@@ -12,6 +12,7 @@ import {
   Modal,
   PageHeader,
   StatusDot,
+  useDirty,
   type InlineTestState,
 } from "../components";
 import { dateTime } from "../format";
@@ -280,11 +281,7 @@ function AlertForm({
     current?.secret_configured && !removeSecret &&
     (current.url.toLowerCase() !== url.toLowerCase() || (current.header_name ?? "") !== header),
   );
-  const dirty = Boolean(
-    name !== (current?.name ?? "") || url !== (current?.url ?? "") ||
-    header !== (current?.header_name || "authorization") ||
-    enabled !== (current?.enabled ?? false) || secret || removeSecret,
-  );
+  const dirty = useDirty({ name, url, header, enabled, secret, removeSecret });
   const submit = (event: FormEvent) => {
     event.preventDefault();
     if (mutation.isPending) return;
@@ -294,16 +291,12 @@ function AlertForm({
     setProblem("");
     mutation.mutate();
   };
-  const requestClose = () => {
-    if (mutation.isPending) return;
-    if (dirty && !window.confirm(t("operations.discardChanges"))) return;
-    onClose();
-  };
   return (
     <Modal
       title={current ? t("operations.editWebhook") : t("operations.createWebhook")}
       closeDisabled={mutation.isPending}
-      onClose={requestClose}
+      dirty={dirty}
+      onClose={onClose}
     >
       <form onSubmit={submit} autoComplete="off">
         <Field label={t("operations.name")}><input data-modal-initial value={name} onChange={(event) => setName(event.target.value)} /></Field>
@@ -341,7 +334,7 @@ function AlertForm({
         {problem && <div className="notice error" role="alert"><strong>{problem}</strong></div>}
         {mutation.isError && <ErrorState error={mutation.error} />}
         <div className="form-actions">
-          <button type="button" className="button ghost" disabled={mutation.isPending} onClick={requestClose}>{t("common.cancel")}</button>
+          <button type="button" className="button ghost" disabled={mutation.isPending} data-modal-close>{t("common.cancel")}</button>
           <button className="button primary" disabled={mutation.isPending}>
             {mutation.isPending ? t("common.working") : t("operations.saveWebhook")}
           </button>

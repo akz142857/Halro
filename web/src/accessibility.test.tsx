@@ -34,6 +34,39 @@ describe("admin accessibility baseline", () => {
     expect(close).toHaveBeenCalledOnce();
   });
 
+  it("asks before Escape, the backdrop or Cancel discards a dirty form, and keeps the fields", () => {
+    const close = vi.fn();
+    render(
+      <Modal title="创建 Deployment" dirty onClose={close}>
+        <form><input aria-label="部署名称" defaultValue="填了一半" /><button type="button" data-modal-close>取消</button></form>
+      </Modal>,
+    );
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(close).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert")).toHaveTextContent("关闭会丢弃此处已填写的内容");
+    fireEvent.click(screen.getByRole("button", { name: "继续编辑" }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("部署名称")).toHaveValue("填了一半");
+
+    fireEvent.mouseDown(document.querySelector(".modal-backdrop")!);
+    expect(close).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "继续编辑" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(screen.getByRole("alert")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "放弃填写的内容" }));
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("closes a modal with nothing filled in without asking", () => {
+    const close = vi.fn();
+    render(<Modal title="创建 Deployment" onClose={close}><button>保存</button></Modal>);
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(close).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("resets the personal appearance when the administrator logs out", async () => {
     document.documentElement.setAttribute("data-appearance", "light");
     vi.spyOn(api, "logout").mockResolvedValue(undefined);

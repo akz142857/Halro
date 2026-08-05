@@ -957,6 +957,9 @@ dd { margin: 0; font: 10px var(--mono); text-align: right; overflow-wrap: anywhe
 .modal > header h2 { margin: 0; font-size: 22px; }
 .modal > form, .modal > .one-time-secret, .modal > .notice { margin: 24px; }
 .modal > .confirmation-dialog { margin: 0; padding: 24px; }
+/* The discard prompt covers the body instead of replacing it: the form stays in the
+   DOM so "keep editing" returns every field exactly as the operator left it. */
+.modal.discarding > :not(header):not(.discard-prompt) { display: none; }
 .confirmation-dialog > p { margin: 0; color: var(--color-text-secondary); font-size: 13px; line-height: 1.7; }
 .confirmation-dialog > .form-actions { margin-top: 24px; }
 .modal .danger-panel { padding: 0; background: transparent; border: 0 !important; }
