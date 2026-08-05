@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"errors"
+	"net"
 	"slices"
 	"sync"
 	"time"
@@ -47,6 +48,31 @@ func (e *Error) Error() string {
 
 func (e *Error) Unwrap() error {
 	return e.Cause
+}
+
+// Unsent reports whether a transport error happened before any byte of the
+// request could have reached the provider.
+//
+// Ambiguity and retryability answer different questions, and connection setup
+// is where they come apart. Name resolution and dialling fail with the provider
+// never having seen the request: nothing ran, nothing is owed, and another
+// deployment can serve it. Everything after that point — including a timeout
+// waiting for the response — may already have been executed upstream, so it
+// stays ambiguous and neither retries nor settles as free.
+//
+// The test is deliberately narrow. Treating an ambiguous failure as unsent
+// would retry a completion the provider already billed, so anything this
+// cannot positively identify as a setup failure keeps the conservative answer.
+func Unsent(err error) bool {
+	if err == nil {
+		return false
+	}
+	var resolution *net.DNSError
+	if errors.As(err, &resolution) {
+		return true
+	}
+	var operation *net.OpError
+	return errors.As(err, &operation) && operation.Op == "dial"
 }
 
 type ChatCall struct {

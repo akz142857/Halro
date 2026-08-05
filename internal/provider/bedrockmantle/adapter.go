@@ -349,5 +349,7 @@ func transportError(message string, err error, ambiguous bool) error {
 	if errors.Is(err, context.DeadlineExceeded) {
 		class = provider.ErrorTimeout
 	}
-	return &provider.Error{Class: class, Retryable: true, Ambiguous: ambiguous, Message: message, Cause: err}
+	// A caller claiming ambiguity is still bounded by whether the request could
+	// have reached Mantle at all; a failed dial ran nothing.
+	return &provider.Error{Class: class, Retryable: true, Ambiguous: ambiguous && !provider.Unsent(err), Message: message, Cause: err}
 }

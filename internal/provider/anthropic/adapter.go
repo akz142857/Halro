@@ -310,7 +310,7 @@ func transportError(err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {
 		class = provider.ErrorTimeout
 	}
-	return &provider.Error{Class: class, Retryable: true, Ambiguous: true, Message: "Anthropic request failed", Cause: err}
+	return &provider.Error{Class: class, Retryable: true, Ambiguous: !provider.Unsent(err), Message: "Anthropic request failed", Cause: err}
 }
 func badRequest(message string, cause error) error {
 	return &provider.Error{Class: provider.ErrorBadRequest, Message: message, Cause: cause}

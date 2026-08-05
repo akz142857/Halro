@@ -523,7 +523,7 @@ func transportError(message string, err error) *provider.Error {
 	if errors.Is(err, context.DeadlineExceeded) {
 		class = provider.ErrorTimeout
 	}
-	return &provider.Error{Class: class, Retryable: true, Ambiguous: true, Message: message, Cause: err}
+	return &provider.Error{Class: class, Retryable: true, Ambiguous: !provider.Unsent(err), Message: message, Cause: err}
 }
 
 func httpError(status int, body io.Reader) *provider.Error {
