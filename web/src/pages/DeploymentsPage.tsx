@@ -13,7 +13,6 @@ import {
   PageHeader,
   StatusDot,
 } from "../components";
-import type { InlineTestState } from "../components";
 import { dateTime, money } from "../format";
 import type { Deployment, DeploymentPriceVersion, DeploymentTargetKind, Provider, ProviderBinding, ProviderCapabilities } from "../types";
 import { useTranslation } from "react-i18next";
@@ -70,7 +69,7 @@ export function DeploymentsPage() {
         <EmptyState title={t("deployments.emptyTitle")}>{t("deployments.emptyDescription")}</EmptyState>
       )}
       {!!deployments.data?.items.length && (
-        <>
+        <section className="deployment-list" aria-label={t("deployments.list")}>
           <div className="deployment-toolbar" role="search" aria-label={t("deployments.filters")}>
             <label className="deployment-search">
               <span>{t("deployments.search")}</span>
@@ -88,20 +87,18 @@ export function DeploymentsPage() {
             <span className="deployment-result-count" role="status">{t("deployments.resultCount", { visible: filteredDeployments.length, total: deployments.data.items.length })}</span>
           </div>
           {filteredDeployments.length ? (
-            <section className="deployment-grid" aria-label={t("deployments.list")}>
-              {filteredDeployments.map((deployment) => (
-                <DeploymentCard
-                  key={deployment.id}
-                  deployment={deployment}
-                  providerName={providerNames.get(deployment.provider_id) || deployment.provider_id}
-                  activeRouteCount={activeRouteCounts.get(deployment.id) ?? 0}
-                  onEdit={() => setEditing(deployment)}
-                  onReplace={() => { setReplacement(deployment); setEditing("new"); }}
-                />
-              ))}
-            </section>
+            filteredDeployments.map((deployment) => (
+              <DeploymentRow
+                key={deployment.id}
+                deployment={deployment}
+                providerName={providerNames.get(deployment.provider_id) || deployment.provider_id}
+                activeRouteCount={activeRouteCounts.get(deployment.id) ?? 0}
+                onEdit={() => setEditing(deployment)}
+                onReplace={() => { setReplacement(deployment); setEditing("new"); }}
+              />
+            ))
           ) : <EmptyState title={t("deployments.noMatches")}>{t("deployments.noMatchesDescription")}</EmptyState>}
-        </>
+        </section>
       )}
       {editing && (
         <DeploymentForm
@@ -115,7 +112,7 @@ export function DeploymentsPage() {
   );
 }
 
-function DeploymentCard({
+function DeploymentRow({
   deployment,
   providerName,
   activeRouteCount,
@@ -167,105 +164,114 @@ function DeploymentCard({
     .map(([name]) => name);
   const testIsCurrent = deployment.last_test_status === "healthy" && deployment.last_test_revision === deployment.revision;
   const testFailed = deployment.last_test_status === "unhealthy" && deployment.last_test_revision === deployment.revision;
-  const testState: InlineTestState = test.isPending
+  const testState = test.isPending
     ? "running"
     : testFailed
       ? "failure"
       : testIsCurrent
         ? "success"
         : deployment.last_test_status === "healthy"
-          ? "stale"
-          : "idle";
+        ? "stale"
+        : "idle";
   const evidence = evidenceSummary(deployment.capability_evidence).map((value) => t(`deployments.evidenceValues.${value}`));
   const routeBlocked = activeRouteCount > 0;
   return (
-    <article className="deployment-card">
-      <header className="deployment-compact-row">
-        <span className="deployment-identity"><StatusDot ok={deployment.enabled} /><span><strong>{deployment.name}</strong><small>{providerName}</small></span></span>
-        <span className="deployment-compact-target"><small>{t("deployments.upstreamTarget")}</small><code>{deployment.provider_model}</code></span>
-        <span className="deployment-compact-metric"><small>{t("deployments.concurrency")}</small><strong>{deployment.max_concurrency || t("deployments.unlimited")}</strong></span>
-        <span className="deployment-compact-metric"><small>{t("deployments.routeDependency")}</small><Link href="/admin/routes">{activeRouteCount ? t("deployments.activeRoutesCompact", { count: activeRouteCount }) : t("deployments.noActiveRoutes")}</Link></span>
-        <span className="deployment-status-stack">
-          <span className={`resource-state ${deployment.enabled ? "enabled" : ""}`}>{deployment.enabled ? t("common.enabled") : t("common.disabled")}</span>
-        </span>
-        <button className="button ghost deployment-expand" aria-expanded={expanded} aria-controls={`deployment-details-${deployment.id}`} onClick={() => setExpanded((value) => !value)}>
-          {expanded ? t("deployments.collapseDetails") : t("deployments.expandDetails")}
-        </button>
-      </header>
-      {expanded && <div id={`deployment-details-${deployment.id}`} className="deployment-details">
-      <div className="deployment-summary">
-        <div className="deployment-model">
-        <small>{t("deployments.upstreamTarget")}</small>
-        <strong>{deployment.provider_model}</strong>
-        {deployment.region && <small>{deployment.region}</small>}
+    <article className="deployment-row">
+      <div className="deployment-row-main">
+        <div className="deployment-compact-identity">
+          <span><StatusDot ok={deployment.enabled} /><strong>{deployment.name}</strong></span>
+          <small>{providerName}</small>
         </div>
-        <div className="deployment-route-dependency">
+        <div className="deployment-compact-fact deployment-fact-target">
+          <small>{t("deployments.upstreamTarget")}</small>
+          <code>{deployment.provider_model}</code>
+        </div>
+        <div className="deployment-compact-fact deployment-fact-concurrency">
+          <small>{t("deployments.concurrency")}</small>
+          <strong>{deployment.max_concurrency || t("deployments.unlimited")}</strong>
+        </div>
+        <div className="deployment-compact-fact deployment-fact-routes">
           <small>{t("deployments.routeDependency")}</small>
-          <Link href="/admin/routes">{activeRouteCount ? t("deployments.activeRoutes", { count: activeRouteCount }) : t("deployments.noActiveRoutes")}</Link>
+          {activeRouteCount
+            ? <Link className="resource-link" href="/admin/routes">{t("deployments.activeRoutesCompact", { count: activeRouteCount })} →</Link>
+            : <strong>{t("deployments.noActiveRoutes")}</strong>}
         </div>
-      </div>
-      <dl className="deployment-facts">
-        <DeploymentFact label={t("deployments.priceStatus")} value={activePrice ? activePrice.billing_mode === "free" ? t("deployments.freePrice") : t("deployments.versionedPrice") : prices.isPending ? t("common.loading") : t("deployments.unknownPrice")} meta={activePrice ? `v${activePrice.version} · ${dateTime(activePrice.effective_from)}` : t("deployments.priceRequired")} unset={!activePrice} />
-        {(deployment.capabilities.chat || deployment.capabilities.embeddings) && <DeploymentFact label={t("deployments.inputPrice")} value={activePrice ? money(activePrice.input_micros_per_million) : t("deployments.notConfigured")} meta={t("deployments.perMillionTokens")} unset={!activePrice} />}
-        {(deployment.capabilities.chat || deployment.capabilities.embeddings) && <DeploymentFact label={t("deployments.outputPrice")} value={activePrice ? money(activePrice.output_micros_per_million) : t("deployments.notConfigured")} meta={t("deployments.perMillionTokens")} unset={!activePrice} />}
-        {activePrice && <DeploymentFact label={t("deployments.fixedPrice")} value={money(activePrice.fixed_request_micros_usd)} meta={t("deployments.perRequest")} />}
-        <DeploymentFact label={t("deployments.concurrency")} value={deployment.max_concurrency || t("deployments.unlimited")} meta={t("deployments.deploymentScope")} />
-        <DeploymentFact label={t("deployments.context")} value={deployment.capabilities.max_context_tokens || t("deployments.upstreamApplies")} meta={deployment.capabilities.max_context_tokens ? t("deployments.tokens") : t("deployments.undeclared")} />
-        <DeploymentFact label={t("deployments.maxOutput")} value={deployment.capabilities.max_output_tokens || t("deployments.upstreamApplies")} meta={deployment.capabilities.max_output_tokens ? t("deployments.tokens") : t("deployments.undeclared")} />
-      </dl>
-      {deployment.pricing_quarantined && <div className="notice warning deployment-pricing-warning"><strong>{t("deployments.pricingQuarantined")}</strong><span>{deployment.pricing_quarantine_reason}</span><button className="button ghost" onClick={() => setConfirmingRestore(true)}>{t("deployments.confirmRestoredPricing")}</button></div>}
-      <div className="deployment-pricing-grid single">
-        <section className="deployment-pricing-panel">
-          <header>
-            <div>
-              <strong>{t("deployments.priceTimeline")}</strong>
-              <small>{activePrice
-                ? t("deployments.priceSourceSummary", { type: activePrice.source.type, assurance: activePrice.source.assurance, reference: activePrice.source.reference || "—" })
-                : prices.isPending ? t("common.loading") : t("deployments.noPriceVersions")}</small>
-            </div>
-            <button className="button secondary deployment-pricing-action" onClick={() => setPricing(true)}>{activePrice ? t("deployments.adjustPrice") : t("deployments.setPrice")}</button>
-          </header>
-          {!!scheduledPrices.length && <div className="deployment-pricing-list">
-            {scheduledPrices.map((price) => <div key={price.id}>
-              <span><code>v{price.version}</code><small>{dateTime(price.effective_from)} · {price.billing_mode}</small></span>
-              <button className="button ghost" disabled={cancelPrice.isPending} onClick={() => cancelPrice.mutate(price)}>{t("common.cancel")}</button>
-            </div>)}
-          </div>}
-        </section>
-      </div>
-      <div className="deployment-capability-summary">
-        <strong>{t("deployments.capabilityCount", { count: capabilities.length })}</strong>
-        <div className="capability-list" aria-label={t("deployments.capabilities")}>
-          {capabilities.slice(0, 5).map((capability) => <span className="badge" key={capability}>{t(`capabilities.${capability}`)}</span>)}
-          {capabilities.length > 5 && <span className="badge">+{capabilities.length - 5}</span>}
+        <div className="deployment-compact-status">
+          <small>{t("deployments.status")}</small>
+          <span className={`resource-state ${deployment.enabled ? "enabled" : ""}`}>{deployment.enabled ? t("common.enabled") : t("common.disabled")}</span>
         </div>
-      </div>
-      <details className="technical-details deployment-technical-details">
-        <summary>{t("deployments.technicalDetails")}</summary>
-        <dl>
-          <div><dt>{t("deployments.accessSurface")}</dt><dd><code>{deployment.access_surface}</code></dd></div>
-          <div><dt>{t("deployments.profile")}</dt><dd><code>{deployment.profile_id}</code></dd></div>
-          <div><dt>{t("deployments.deploymentID")}</dt><dd><code>{deployment.id}</code></dd></div>
-          {deployment.binding_id && <div><dt>{t("deployments.bindingID")}</dt><dd><code>{deployment.binding_id}</code></dd></div>}
-          <div><dt>{t("deployments.evidence")}</dt><dd>{evidence.length ? evidence.join(" / ") : "—"}</dd></div>
-        </dl>
-      </details>
-      </div>}
-      <footer>
-        <InlineTestControl state={testState} latency={deployment.last_test_latency_millis} title={deployment.last_tested_at ? t("deployments.lastTest", { time: dateTime(deployment.last_tested_at), latency: deployment.last_test_latency_millis ?? 0 }) : undefined} onTest={() => test.mutate()} />
-        <div className="row-actions">
-          {deployment.enabled ? (
-            <ConfirmButton className="button ghost" label={t("common.disable")} title={t("deployments.disableTitle")} confirmLabel={t("deployments.disableConfirm", { name: deployment.name })} disabled={state.isPending || routeBlocked} onConfirm={() => state.mutate()} />
-          ) : (
-            <button className="button primary" title={!testIsCurrent ? t("deployments.testRequired") : undefined} disabled={state.isPending || !testIsCurrent} onClick={() => state.mutate()}>{t("common.enable")}</button>
-          )}
+        <div className="row-actions deployment-compact-actions">
+          <InlineTestControl state={testState} latency={deployment.last_test_latency_millis} onTest={() => test.mutate()} />
           <button className="button ghost" onClick={onEdit}>{t("common.edit")}</button>
+          <button className="button ghost deployment-expand" aria-expanded={expanded} aria-controls={`deployment-details-${deployment.id}`} onClick={() => setExpanded((value) => !value)}>
+            <span>{expanded ? t("deployments.collapseDetails") : t("deployments.expandDetails")}</span>
+            {/* Reserves the width of the other label so toggling never resizes the row. */}
+            <span aria-hidden="true">{expanded ? t("deployments.expandDetails") : t("deployments.collapseDetails")}</span>
+          </button>
+          {/* The sizer keeps enable and disable rows equally wide so columns line up across the list. */}
+          <span className="deployment-state-toggle">
+            {deployment.enabled ? (
+              <ConfirmButton className="button ghost" label={t("common.disable")} title={t("deployments.disableTitle")} confirmLabel={t("deployments.disableConfirm", { name: deployment.name })} disabled={state.isPending || routeBlocked} onConfirm={() => state.mutate()} />
+            ) : (
+              <button className="button ghost" title={!testIsCurrent ? t("deployments.testRequired") : undefined} disabled={state.isPending || !testIsCurrent} onClick={() => state.mutate()}>{t("common.enable")}</button>
+            )}
+            <span className="button ghost deployment-state-sizer" aria-hidden="true">{deployment.enabled ? t("common.enable") : t("common.disable")}</span>
+          </span>
           <OverflowMenu label={t("deployments.moreActions")}>
             <button className="button ghost" onClick={onReplace}>{t("deployments.createReplacement")}</button>
             <ConfirmButton label={t("common.delete")} confirmLabel={t("deployments.deleteConfirm", { name: deployment.name })} onConfirm={() => remove.mutate()} disabled={remove.isPending || routeBlocked} />
           </OverflowMenu>
         </div>
-      </footer>
+      </div>
+      {expanded && <div id={`deployment-details-${deployment.id}`} className="deployment-details">
+        <dl className="deployment-facts">
+          <DeploymentFact label={t("deployments.priceStatus")} value={activePrice ? activePrice.billing_mode === "free" ? t("deployments.freePrice") : t("deployments.versionedPrice") : prices.isPending ? t("common.loading") : t("deployments.unknownPrice")} meta={activePrice ? `v${activePrice.version} · ${dateTime(activePrice.effective_from)}` : t("deployments.priceRequired")} unset={!activePrice} />
+          {(deployment.capabilities.chat || deployment.capabilities.embeddings) && <DeploymentFact label={t("deployments.inputPrice")} value={activePrice ? money(activePrice.input_micros_per_million) : t("deployments.notConfigured")} meta={t("deployments.perMillionTokens")} unset={!activePrice} />}
+          {(deployment.capabilities.chat || deployment.capabilities.embeddings) && <DeploymentFact label={t("deployments.outputPrice")} value={activePrice ? money(activePrice.output_micros_per_million) : t("deployments.notConfigured")} meta={t("deployments.perMillionTokens")} unset={!activePrice} />}
+          {activePrice && <DeploymentFact label={t("deployments.fixedPrice")} value={money(activePrice.fixed_request_micros_usd)} meta={t("deployments.perRequest")} />}
+          <DeploymentFact label={t("deployments.concurrency")} value={deployment.max_concurrency || t("deployments.unlimited")} meta={t("deployments.deploymentScope")} />
+          {deployment.region && <DeploymentFact label={t("deployments.region")} value={deployment.region} meta={t("deployments.deploymentScope")} />}
+          <DeploymentFact label={t("deployments.context")} value={deployment.capabilities.max_context_tokens || t("deployments.upstreamApplies")} meta={deployment.capabilities.max_context_tokens ? t("deployments.tokens") : t("deployments.undeclared")} />
+          <DeploymentFact label={t("deployments.maxOutput")} value={deployment.capabilities.max_output_tokens || t("deployments.upstreamApplies")} meta={deployment.capabilities.max_output_tokens ? t("deployments.tokens") : t("deployments.undeclared")} />
+        </dl>
+        {deployment.pricing_quarantined && <div className="notice warning deployment-pricing-warning"><strong>{t("deployments.pricingQuarantined")}</strong><span>{deployment.pricing_quarantine_reason}</span><button className="button ghost" onClick={() => setConfirmingRestore(true)}>{t("deployments.confirmRestoredPricing")}</button></div>}
+        <div className="deployment-pricing-grid single">
+          <section className="deployment-pricing-panel">
+            <header>
+              <div>
+                <strong>{t("deployments.priceTimeline")}</strong>
+                <small>{activePrice
+                  ? t("deployments.priceSourceSummary", { type: activePrice.source.type, assurance: activePrice.source.assurance, reference: activePrice.source.reference || "—" })
+                  : prices.isPending ? t("common.loading") : t("deployments.noPriceVersions")}</small>
+              </div>
+              <button className="button secondary deployment-pricing-action" onClick={() => setPricing(true)}>{activePrice ? t("deployments.adjustPrice") : t("deployments.setPrice")}</button>
+            </header>
+            {!!scheduledPrices.length && <div className="deployment-pricing-list">
+              {scheduledPrices.map((price) => <div key={price.id}>
+                <span><code>v{price.version}</code><small>{dateTime(price.effective_from)} · {price.billing_mode}</small></span>
+                <button className="button ghost" disabled={cancelPrice.isPending} onClick={() => cancelPrice.mutate(price)}>{t("common.cancel")}</button>
+              </div>)}
+            </div>}
+          </section>
+        </div>
+        <div className="deployment-capability-summary">
+          <strong>{t("deployments.capabilityCount", { count: capabilities.length })}</strong>
+          <div className="capability-list" aria-label={t("deployments.capabilities")}>
+            {capabilities.slice(0, 5).map((capability) => <span className="badge" key={capability}>{t(`capabilities.${capability}`)}</span>)}
+            {capabilities.length > 5 && <span className="badge">+{capabilities.length - 5}</span>}
+          </div>
+        </div>
+        <details className="technical-details deployment-technical-details">
+          <summary>{t("deployments.technicalDetails")}</summary>
+          <dl>
+            <div><dt>{t("deployments.accessSurface")}</dt><dd><code>{deployment.access_surface}</code></dd></div>
+            <div><dt>{t("deployments.profile")}</dt><dd><code>{deployment.profile_id}</code></dd></div>
+            <div><dt>{t("deployments.deploymentID")}</dt><dd><code>{deployment.id}</code></dd></div>
+            {deployment.binding_id && <div><dt>{t("deployments.bindingID")}</dt><dd><code>{deployment.binding_id}</code></dd></div>}
+            <div><dt>{t("deployments.evidence")}</dt><dd>{evidence.length ? evidence.join(" / ") : "—"}</dd></div>
+          </dl>
+        </details>
+      </div>}
       {(remove.isError || state.isError) && <ErrorState className="deployment-card-error" error={remove.error || state.error} />}
       {pricing && <PriceVersionForm deployment={deployment} current={activePrice} onClose={() => setPricing(false)} />}
 	  {confirmingRestore && <RestorePricingConfirm deployment={deployment} onClose={() => setConfirmingRestore(false)} />}

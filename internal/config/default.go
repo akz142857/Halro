@@ -37,6 +37,8 @@ func Default() Config {
 			SessionTTL:                        Duration(8 * time.Hour),
 			IdleTimeout:                       Duration(30 * time.Minute),
 			LoginRPM:                          5,
+			MFAPolicy:                         "optional",
+			DeveloperWorkbench:                "enabled",
 			AdjustmentSoftLimitMicrosUSD:      10_000_000,
 			AdjustmentHardLimitMicrosUSD:      100_000_000,
 			AdjustmentDailyHardLimitMicrosUSD: 500_000_000,

@@ -63,6 +63,8 @@ type Runtime struct {
 	auditBatchMu        sync.Mutex
 	auditBatchPending   []adminAuditRequest
 	auditBatchRunning   bool
+	gatewayHandlerOnce  sync.Once
+	gatewayHandlerValue http.Handler
 	adminTopologyMu     sync.Mutex
 	providerModelsMu    sync.Mutex
 	providerModels      map[string]providerModelCatalogCache
@@ -873,6 +875,13 @@ func (r *Runtime) server(name, address string, handler http.Handler) *http.Serve
 		MaxHeaderBytes:    r.config.Server.MaxHeaderBytes,
 		ErrorLog:          slog.NewLogLogger(r.logger.Handler(), slog.LevelError),
 	}
+}
+
+// gatewayHandler reuses one route tree. gatewayRouter builds a fresh one, which is fine
+// at startup but wasteful on the per-request developer proxy path.
+func (r *Runtime) gatewayHandler() http.Handler {
+	r.gatewayHandlerOnce.Do(func() { r.gatewayHandlerValue = r.gatewayRouter() })
+	return r.gatewayHandlerValue
 }
 
 func (r *Runtime) gatewayRouter() http.Handler {

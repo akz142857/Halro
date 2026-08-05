@@ -110,7 +110,9 @@ func TestDispatcherDeduplicatesAndDropsWhenQueueIsFull(t *testing.T) {
 	dispatcher.Close()
 	select {
 	case result := <-results:
-		if result.Outcome != "failure" || result.Reason != "retry_exhausted" ||
+		// An unreachable host is reported as a transport failure, not as an exhausted
+		// retry budget: the operator has to be able to tell those apart.
+		if result.Outcome != "failure" || result.Reason != "transport_error" ||
 			result.Attempts != 1 {
 			t.Fatalf("unexpected failure result: %#v", result)
 		}
@@ -153,8 +155,12 @@ func TestDispatcherReplacesEndpointsAndTestsOneDestination(t *testing.T) {
 	if len(retired) != 1 || retired[0].ID != "old" {
 		t.Fatalf("unexpected retired endpoints: %#v", retired)
 	}
-	if err := dispatcher.TestEndpoint("new", Event{ID: "test", Type: "admin_test"}); err != nil {
+	result, err := dispatcher.TestEndpoint("new", Event{ID: "test", Type: "admin_test"})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if result.Reason != "delivered" {
+		t.Fatalf("test delivery reason=%q", result.Reason)
 	}
 	if newCalls.Load() != 1 || oldCalls.Load() != 0 {
 		t.Fatalf("old=%d new=%d", oldCalls.Load(), newCalls.Load())

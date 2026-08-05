@@ -1,8 +1,8 @@
-import { cloneElement, isValidElement, useEffect, useId, useRef, useState, type ReactElement, type ReactNode } from "react";
+import { cloneElement, Component, isValidElement, useEffect, useId, useRef, useState, type ReactElement, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { ApiError } from "./api";
 import { useTranslation } from "react-i18next";
-import { localizedError } from "./i18n/errors";
+import { errorDetail, localizedError } from "./i18n/errors";
 
 export function PageHeader({
   eyebrow,
@@ -27,8 +27,15 @@ export function PageHeader({
   );
 }
 
-export function StatusDot({ ok = true }: { ok?: boolean }) {
-  return <span className={`status-dot ${ok ? "ok" : "bad"}`} aria-hidden="true" />;
+// The dot carries state through colour alone, which neither a screen reader nor a
+// colour-blind reader can resolve. Callers pass `label` to add the text equivalent.
+export function StatusDot({ ok = true, label }: { ok?: boolean; label?: string }) {
+  return (
+    <>
+      <span className={`status-dot ${ok ? "ok" : "bad"}`} aria-hidden="true" />
+      {label && <span className="sr-only">{label}</span>}
+    </>
+  );
 }
 
 export type InlineTestState = "idle" | "running" | "success" | "failure" | "stale";
@@ -36,8 +43,9 @@ export type InlineTestState = "idle" | "running" | "success" | "failure" | "stal
 export function InlineTestControl({ state, latency, onTest, disabled = false, title }: { state: InlineTestState; latency?: number; onTest: () => void; disabled?: boolean; title?: string }) {
   const { t } = useTranslation();
   const statusID = useId();
-  const status = state === "success" && latency !== undefined
-    ? t("testControl.success", { latency })
+  // Without a measured latency the interpolated label would render "{{latency}}ms".
+  const status = state === "success"
+    ? latency === undefined ? t("testControl.successPlain") : t("testControl.success", { latency })
     : t(`testControl.${state}`);
   return (
     <div className="inline-test-control" aria-busy={state === "running"} title={title}>
@@ -69,11 +77,68 @@ export function EmptyState({
 export function ErrorState({ error, className = "" }: { error: unknown; className?: string }) {
   const { t } = useTranslation();
   const message = error instanceof ApiError ? localizedError(t, error) : t("common.dataUnavailable");
+  const detail = errorDetail(error);
   return (
     <div className={`notice error${className ? ` ${className}` : ""}`} role="alert">
       <strong>{t("common.requestFailed")}</strong>
       <span>{message}</span>
+      {detail && <small className="notice-detail">{detail}</small>}
     </div>
+  );
+}
+
+interface CrashLabels {
+  title: string;
+  description: string;
+  details: string;
+  retry: string;
+  reload: string;
+}
+
+class CrashBoundary extends Component<{ labels: CrashLabels; children: ReactNode }, { error: Error | null }> {
+  state: { error: Error | null } = { error: null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  render() {
+    const { error } = this.state;
+    if (!error) return this.props.children;
+    const { labels } = this.props;
+    return (
+      <section className="crash-panel" role="alert">
+        <strong>{labels.title}</strong>
+        <p>{labels.description}</p>
+        <details>
+          <summary>{labels.details}</summary>
+          <pre>{error.stack || `${error.name}: ${error.message}`}</pre>
+        </details>
+        <div className="row-actions">
+          <button className="button ghost" onClick={() => this.setState({ error: null })}>{labels.retry}</button>
+          <button className="button primary" onClick={() => window.location.reload()}>{labels.reload}</button>
+        </div>
+      </section>
+    );
+  }
+}
+
+// A render error used to unmount the whole console and leave a blank page. Keep the
+// surrounding chrome alive and show what threw, so the failure stays reportable.
+export function ErrorBoundary({ children }: { children: ReactNode }) {
+  const { t } = useTranslation();
+  return (
+    <CrashBoundary
+      labels={{
+        title: t("errors.crashTitle"),
+        description: t("errors.crashDescription"),
+        details: t("errors.crashDetails"),
+        retry: t("errors.crashRetry"),
+        reload: t("errors.crashReload"),
+      }}
+    >
+      {children}
+    </CrashBoundary>
   );
 }
 
@@ -94,6 +159,7 @@ export function Modal({
   dangerous = false,
   closeDisabled = false,
   wide = false,
+  describedBy,
 }: {
   title: string;
   children: ReactNode;
@@ -101,6 +167,7 @@ export function Modal({
   dangerous?: boolean;
   closeDisabled?: boolean;
   wide?: boolean;
+  describedBy?: string;
 }) {
   const { t } = useTranslation();
   const titleID = useId();
@@ -112,9 +179,15 @@ export function Modal({
   useEffect(() => {
     const previouslyFocused = document.activeElement as HTMLElement | null;
     const container = dialog.current;
-    (container?.querySelector<HTMLElement>("[data-modal-initial]") || container)?.focus();
+    // React applies autoFocus during commit, before this effect. Taking the focus back
+    // to the container would strand the caret outside the field the form asked for.
+    const initial = container?.querySelector<HTMLElement>("[data-modal-initial]");
+    if (initial) initial.focus();
+    else if (container && !container.contains(document.activeElement)) container.focus();
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !dangerous && !closeDisabledRef.current) onCloseRef.current();
+      // Escape means "cancel", never "confirm", so a dangerous dialog honours it too.
+      // Only a modal that must not be dismissed at all (closeDisabled) ignores it.
+      if (event.key === "Escape" && !closeDisabledRef.current) onCloseRef.current();
       if (event.key !== "Tab" || !container) return;
       const focusable = Array.from(container.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], [tabindex]:not([tabindex="-1"])')).filter((element) => !element.hasAttribute("hidden"));
       if (!focusable.length) { event.preventDefault(); container.focus(); return; }
@@ -136,6 +209,7 @@ export function Modal({
         role={dangerous ? "alertdialog" : "dialog"}
         aria-modal="true"
         aria-labelledby={titleID}
+        aria-describedby={describedBy}
         tabIndex={-1}
         ref={dialog}
         onMouseDown={(event) => event.stopPropagation()}
@@ -168,13 +242,14 @@ export function ConfirmButton({
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  const consequenceID = useId();
   return (
     <>
       <button className={className} disabled={disabled} onClick={() => setOpen(true)}>{label}</button>
       {open && (
-        <Modal dangerous title={title || t("common.confirmAction")} onClose={() => setOpen(false)}>
+        <Modal dangerous title={title || t("common.confirmAction")} describedBy={consequenceID} onClose={() => setOpen(false)}>
           <div className="confirmation-dialog">
-            <p>{confirmLabel}</p>
+            <p id={consequenceID}>{confirmLabel}</p>
             <div className="form-actions">
               <button type="button" className="button ghost" data-modal-initial onClick={() => setOpen(false)}>{t("common.cancel")}</button>
               <button type="button" className="button danger" onClick={() => { setOpen(false); onConfirm(); }}>{label}</button>
@@ -183,6 +258,59 @@ export function ConfirmButton({
         </Modal>
       )}
     </>
+  );
+}
+
+// A real button, so keyboard and assistive-tech users can page without scrolling, plus an
+// observer that pages automatically once it scrolls into view.
+export function LoadMore({ label, busy, onLoad }: { label: string; busy: boolean; onLoad: () => void }) {
+  const trigger = useRef<HTMLButtonElement>(null);
+  const onLoadRef = useRef(onLoad);
+  useEffect(() => { onLoadRef.current = onLoad; }, [onLoad]);
+  useEffect(() => {
+    const element = trigger.current;
+    // Absent in jsdom and older browsers; the button alone still pages the list.
+    if (!element || typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver(
+      (entries) => { if (entries.some((entry) => entry.isIntersecting)) onLoadRef.current(); },
+      { rootMargin: "200px" },
+    );
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  return (
+    <button ref={trigger} className="load-more" disabled={busy} onClick={() => onLoadRef.current()}>
+      {label}
+    </button>
+  );
+}
+
+export type ResourceStatusFilter = "all" | "enabled" | "disabled";
+
+// Shared by every list that can outgrow one screen. Kept here rather than per page so a
+// filter bar means the same thing wherever the operator meets one.
+export function ResourceToolbar({
+  query,
+  onQueryChange,
+  queryPlaceholder,
+  count,
+  status,
+  onStatusChange,
+}: {
+  query: string;
+  onQueryChange: (value: string) => void;
+  queryPlaceholder: string;
+  count: string;
+  status?: ResourceStatusFilter;
+  onStatusChange?: (value: ResourceStatusFilter) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="resource-toolbar" role="search" aria-label={t("common.filters")}>
+      <label className="resource-search"><span>{t("common.search")}</span><input type="search" value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder={queryPlaceholder} /></label>
+      {status !== undefined && onStatusChange && <label><span>{t("common.status")}</span><select value={status} onChange={(event) => onStatusChange(event.target.value as ResourceStatusFilter)}><option value="all">{t("common.allStatuses")}</option><option value="enabled">{t("common.enabled")}</option><option value="disabled">{t("common.disabled")}</option></select></label>}
+      <span className="resource-result-count" role="status">{count}</span>
+    </div>
   );
 }
 

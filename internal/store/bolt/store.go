@@ -3389,10 +3389,19 @@ func (s *Store) PutProject(ctx context.Context, project domain.Project, expected
 	return project, err
 }
 
+// normalizeProject keeps slices non-nil so records written before normalization
+// existed still marshal as JSON arrays rather than null.
+func normalizeProject(project domain.Project) domain.Project {
+	if project.AllowedRoutes == nil {
+		project.AllowedRoutes = []string{}
+	}
+	return project
+}
+
 func (s *Store) GetProject(ctx context.Context, id string) (domain.Project, error) {
 	var project domain.Project
 	err := s.getJSON(ctx, bucketProjects, id, &project)
-	return project, err
+	return normalizeProject(project), err
 }
 
 func (s *Store) ListProjects(ctx context.Context) ([]domain.Project, error) {
@@ -3402,7 +3411,7 @@ func (s *Store) ListProjects(ctx context.Context) ([]domain.Project, error) {
 		if err := json.Unmarshal(raw, &project); err != nil {
 			return err
 		}
-		projects = append(projects, project)
+		projects = append(projects, normalizeProject(project))
 		return nil
 	})
 	sort.Slice(projects, func(i, j int) bool { return projects[i].ID < projects[j].ID })

@@ -1,6 +1,8 @@
 package app
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"net/http"
 	"net/netip"
@@ -178,13 +180,23 @@ func (r *Runtime) unblockAdminProject(writer http.ResponseWriter, request *http.
 }
 
 func (r *Runtime) createAdminProjectKey(writer http.ResponseWriter, request *http.Request) {
+	idempotencyKey := strings.TrimSpace(request.Header.Get("Idempotency-Key"))
+	if idempotencyKey == "" || len(idempotencyKey) > 256 {
+		adminBadRequestCode(writer, "idempotency_key_required", "Idempotency-Key is required")
+		return
+	}
 	var input gatewayKeyInput
 	if err := decodeAdminJSON(request, &input); err != nil || strings.TrimSpace(input.Name) == "" {
 		adminBadRequest(writer, "invalid request")
 		return
 	}
 	projectID := chi.URLParam(request, "id")
-	plaintext, key, err := auth.GenerateGatewayKey(projectID, input.Name, input.ExpiresAt)
+	admin := request.Context().Value(adminContextKey{}).(adminRequestContext)
+	// The plaintext exists only in this response, so a retry can never replay it. Deriving
+	// the record ID from the idempotency key turns a retried create into a storage
+	// collision instead of a second live credential the operator never learns about.
+	keyID := deterministicMutationID("key", gatewayKeyIdempotencyDigest(admin.session.Username, projectID, idempotencyKey))
+	plaintext, key, err := auth.GenerateGatewayKeyWithID(keyID, projectID, input.Name, input.ExpiresAt)
 	if err != nil {
 		adminBadRequest(writer, err.Error())
 		return
@@ -197,6 +209,16 @@ func (r *Runtime) createAdminProjectKey(writer http.ResponseWriter, request *htt
 		return
 	}
 	key, err = r.store.PutGatewayKey(request.Context(), key, 0)
+	if errors.Is(err, boltstore.ErrAlreadyExists) {
+		// The first attempt already landed. Say so explicitly rather than minting a
+		// duplicate: the operator has to revoke and reissue to obtain a plaintext.
+		writeJSON(writer, http.StatusConflict, map[string]string{
+			"code":  "gateway_key_idempotency_replay",
+			"error": "this request already created gateway key " + keyID,
+			"id":    keyID,
+		})
+		return
+	}
 	if err != nil {
 		adminMutationError(writer, err)
 		return
@@ -316,7 +338,13 @@ func (input projectInput) project(id string, createdAt, updatedAt time.Time) (do
 	for _, raw := range input.AllowedCIDRs {
 		prefix, err := netip.ParsePrefix(raw)
 		if err != nil {
-			return domain.Project{}, errors.New("allowed_cidrs contains an invalid CIDR")
+			// The console offers "a single IPv4, IPv6 or CIDR range", so a bare address
+			// has to mean the host itself rather than being rejected as malformed.
+			address, addressErr := netip.ParseAddr(raw)
+			if addressErr != nil {
+				return domain.Project{}, errors.New("allowed_cidrs contains an invalid CIDR: " + raw)
+			}
+			prefix = netip.PrefixFrom(address, address.BitLen())
 		}
 		cidrs = append(cidrs, prefix.Masked())
 	}
@@ -325,7 +353,8 @@ func (input projectInput) project(id string, createdAt, updatedAt time.Time) (do
 	}
 	project := domain.Project{
 		ID: id, Name: input.Name, Enabled: input.Enabled,
-		AllowedRoutes: input.AllowedRoutes, RPM: input.RPM, TPM: input.TPM,
+		// Never nil: a nil slice marshals to JSON null, which clients cannot iterate.
+		AllowedRoutes: append([]string{}, input.AllowedRoutes...), RPM: input.RPM, TPM: input.TPM,
 		MaxConcurrency: input.MaxConcurrency, DailyBudgetMicrosUSD: input.DailyBudgetMicrosUSD,
 		MaxInputTokens: input.MaxInputTokens, MaxOutputTokens: input.MaxOutputTokens,
 		MaxRequestBytes:   input.MaxRequestBytes,
@@ -358,7 +387,37 @@ func (r *Runtime) validateProjectReferences(request *http.Request, project domai
 			return errors.New("redaction policy is unavailable")
 		}
 	}
+	if len(project.AllowedRoutes) > 0 {
+		routes, err := r.store.ListRoutes(request.Context())
+		if err != nil {
+			return errors.New("routes are unavailable")
+		}
+		known := make(map[string]struct{}, len(routes))
+		for _, route := range routes {
+			if route.DeletedAt == nil {
+				known[route.PublicModel] = struct{}{}
+			}
+		}
+		// A disabled route stays bindable — the console surfaces it as unavailable. An
+		// alias with no route at all only fails at request time, silently, so reject here.
+		for _, alias := range project.AllowedRoutes {
+			if _, ok := known[alias]; !ok {
+				return errors.New("allowed_routes references unknown model alias " + alias)
+			}
+		}
+	}
 	return nil
+}
+
+func gatewayKeyIdempotencyDigest(actor, projectID, key string) string {
+	digest := sha256.New()
+	digest.Write([]byte("heimdall:gateway-key-idempotency:v1\x00"))
+	digest.Write([]byte(actor))
+	digest.Write([]byte{0})
+	digest.Write([]byte(projectID))
+	digest.Write([]byte{0})
+	digest.Write([]byte(key))
+	return "sha256:" + hex.EncodeToString(digest.Sum(nil))
 }
 
 func (r *Runtime) refreshAdminAuth(writer http.ResponseWriter, request *http.Request) bool {

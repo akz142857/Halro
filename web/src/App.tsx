@@ -5,7 +5,7 @@ import { api, ApiError } from "./api";
 import { Layout } from "./Layout";
 import { Login } from "./Login";
 import { Setup } from "./Setup";
-import { Loading } from "./components";
+import { ErrorBoundary, Loading } from "./components";
 import { navigate, usePathname } from "./navigation";
 import { DashboardPage } from "./pages/DashboardPage";
 import { DeploymentsPage } from "./pages/DeploymentsPage";
@@ -114,7 +114,8 @@ export function App() {
   if (session.data.mfa_setup_required) {
     return <Layout username={session.data.username} restricted><SettingsPage mfaSetupRequired /></Layout>;
   }
-  return <Layout username={session.data.username}><Route path={path} /></Layout>;
+  // Keyed by path so navigating away from a crashed page recovers on its own.
+  return <Layout username={session.data.username}><ErrorBoundary key={path}><Route path={path} /></ErrorBoundary></Layout>;
 }
 
 function Route({ path }: { path: string }) {

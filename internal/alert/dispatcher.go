@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -117,7 +118,17 @@ type DeliveryResult struct {
 	Reason     string
 	Attempts   int
 	OccurredAt time.Time
+	// StatusCode and ResponseSnippet describe what the endpoint actually answered. Several
+	// chat platforms accept the request with 200 and reject the payload in the body, so a
+	// transport-level success alone cannot tell the operator the alert was received.
+	StatusCode      int
+	ResponseSnippet string
+	LatencyMillis   int64
 }
+
+// responseSnippetLimit keeps enough of the reply to carry an error code without turning
+// the audit trail or the console into a mirror for arbitrary remote content.
+const responseSnippetLimit = 300
 
 func (d *Dispatcher) SetObserver(observer func(DeliveryResult)) {
 	d.observerMu.Lock()
@@ -125,7 +136,9 @@ func (d *Dispatcher) SetObserver(observer func(DeliveryResult)) {
 	d.observerMu.Unlock()
 }
 
-func (d *Dispatcher) TestEndpoint(id string, event Event) error {
+// TestEndpoint reports the delivery reason alongside the error: an operator debugging a
+// webhook needs to tell "host unreachable" from "endpoint rejected the credential".
+func (d *Dispatcher) TestEndpoint(id string, event Event) (DeliveryResult, error) {
 	d.endpointsMu.RLock()
 	var selected *Endpoint
 	for index := range d.endpoints {
@@ -137,14 +150,15 @@ func (d *Dispatcher) TestEndpoint(id string, event Event) error {
 	}
 	d.endpointsMu.RUnlock()
 	if selected == nil {
-		return errors.New("alert endpoint is not active")
+		return DeliveryResult{Outcome: "failure", Reason: "endpoint_inactive"},
+			errors.New("alert endpoint is not active")
 	}
 	result := d.deliver(event, selected)
 	d.notify(result)
 	if result.Outcome != "success" {
-		return errors.New("alert endpoint delivery failed")
+		return result, errors.New("alert endpoint delivery failed")
 	}
-	return nil
+	return result, nil
 }
 
 func New(config Config, endpoints []Endpoint) (*Dispatcher, error) {
@@ -249,15 +263,24 @@ func (d *Dispatcher) worker() {
 		d.endpointsMu.RLock()
 		endpoints := append([]Endpoint(nil), d.endpoints...)
 		d.endpointsMu.RUnlock()
+		// Fan out rather than looping: delivered serially, one endpoint that stalls until
+		// its retry budget expires holds up every healthy endpoint behind it and blocks
+		// this worker from draining the queue, so real alerts get dropped on overflow.
+		var fanOut sync.WaitGroup
 		for index := range endpoints {
-			result := d.deliver(event, &endpoints[index])
-			if result.Outcome == "success" {
-				d.delivered.Add(1)
-			} else {
-				d.failed.Add(1)
-			}
-			d.notify(result)
+			fanOut.Add(1)
+			go func(endpoint *Endpoint) {
+				defer fanOut.Done()
+				result := d.deliver(event, endpoint)
+				if result.Outcome == "success" {
+					d.delivered.Add(1)
+				} else {
+					d.failed.Add(1)
+				}
+				d.notify(result)
+			}(&endpoints[index])
 		}
+		fanOut.Wait()
 	}
 }
 
@@ -272,6 +295,7 @@ func (d *Dispatcher) deliver(event Event, endpoint *Endpoint) DeliveryResult {
 		result.Reason = "encode_error"
 		return result
 	}
+	started := time.Now()
 	for attempt := 0; attempt < d.config.MaxAttempts; attempt++ {
 		result.Attempts = attempt + 1
 		ctx, cancel := context.WithTimeout(context.Background(), d.config.Timeout)
@@ -284,14 +308,23 @@ func (d *Dispatcher) deliver(event Event, endpoint *Endpoint) DeliveryResult {
 			}
 			var response *http.Response
 			response, err = endpoint.client.Do(request)
+			if err != nil {
+				// Separated from retry_exhausted so an unreachable host reads differently
+				// from an endpoint that answered and kept failing.
+				result.Reason = "transport_error"
+			}
 			if response != nil {
-				_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
+				body, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
+				_, _ = io.Copy(io.Discard, response.Body)
 				_ = response.Body.Close()
+				result.StatusCode = response.StatusCode
+				result.ResponseSnippet = snippet(body)
 				if response.StatusCode >= 200 && response.StatusCode < 300 {
 					cancel()
 					result.Outcome = "success"
 					result.Reason = "delivered"
 					result.OccurredAt = time.Now().UTC()
+					result.LatencyMillis = time.Since(started).Milliseconds()
 					return result
 				}
 				if response.StatusCode != http.StatusRequestTimeout &&
@@ -300,6 +333,7 @@ func (d *Dispatcher) deliver(event Event, endpoint *Endpoint) DeliveryResult {
 					cancel()
 					result.Reason = "http_client_error"
 					result.OccurredAt = time.Now().UTC()
+					result.LatencyMillis = time.Since(started).Milliseconds()
 					return result
 				}
 			}
@@ -308,11 +342,31 @@ func (d *Dispatcher) deliver(event Event, endpoint *Endpoint) DeliveryResult {
 		if attempt+1 < d.config.MaxAttempts && !sleepJitter(d.config.BaseDelay, d.config.MaxDelay, attempt) {
 			result.Reason = "retry_interrupted"
 			result.OccurredAt = time.Now().UTC()
+			result.LatencyMillis = time.Since(started).Milliseconds()
 			return result
 		}
 	}
 	result.OccurredAt = time.Now().UTC()
+	result.LatencyMillis = time.Since(started).Milliseconds()
 	return result
+}
+
+// snippet trims a reply to one printable line so it can be shown next to a test result.
+func snippet(body []byte) string {
+	text := strings.TrimSpace(string(body))
+	text = strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\r' || r == '\t' {
+			return ' '
+		}
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, text)
+	if len(text) > responseSnippetLimit {
+		return text[:responseSnippetLimit] + "…"
+	}
+	return text
 }
 
 func (d *Dispatcher) notify(result DeliveryResult) {

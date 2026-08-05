@@ -26,6 +26,8 @@ admin:
   idle_timeout: "30m"
   login_rpm: 5
   mfa_policy: "optional"
+  # "disabled" keeps the Admin listener free of data-plane traffic.
+  developer_workbench: "enabled"
   external_origin: ""
   adjustment_soft_limit_micros_usd: 10000000
   adjustment_hard_limit_micros_usd: 100000000

@@ -261,15 +261,46 @@ func (r *Runtime) listAdminAlerts(writer http.ResponseWriter, request *http.Requ
 	writeResourcePage(writer, request, views, func(item alertWebhookView) string { return item.ID })
 }
 
+// auditRecordView flattens audit.Record for the console. The stored record nests every
+// field under `event`, and serialising it directly leaves the timeline showing sequence
+// numbers beside blank rows. The per-frame hash stays out: it is verified server-side on
+// every replay and means nothing to a reader who cannot recompute the chain.
+type auditRecordView struct {
+	Sequence      uint64    `json:"sequence"`
+	EventID       string    `json:"event_id"`
+	OccurredAt    time.Time `json:"occurred_at"`
+	ActorType     string    `json:"actor_type"`
+	ActorID       string    `json:"actor_id"`
+	Action        string    `json:"action"`
+	TargetType    string    `json:"target_type"`
+	TargetID      string    `json:"target_id"`
+	Outcome       string    `json:"outcome"`
+	ReasonCode    string    `json:"reason_code,omitempty"`
+	CorrelationID string    `json:"correlation_id,omitempty"`
+	// Evidence some actions attach — pricing request digests, developer HTTP status.
+	Metadata map[string]any `json:"metadata,omitempty"`
+}
+
+func auditRecordFlatView(record audit.Record) auditRecordView {
+	return auditRecordView{
+		Sequence: record.Sequence, EventID: record.Event.EventID,
+		OccurredAt: record.Event.OccurredAt, ActorType: record.Event.ActorType,
+		ActorID: record.Event.ActorID, Action: record.Event.Action,
+		TargetType: record.Event.TargetType, TargetID: record.Event.TargetID,
+		Outcome: record.Event.Outcome, ReasonCode: record.Event.ReasonCode,
+		CorrelationID: record.Event.CorrelationID, Metadata: record.Event.Metadata,
+	}
+}
+
 func (r *Runtime) listAdminAudit(writer http.ResponseWriter, request *http.Request) {
 	allowed, limit, cursor, ok := parseSequencePage(writer, request)
 	if !ok || !allowed {
 		return
 	}
-	records := make([]audit.Record, 0)
+	records := make([]auditRecordView, 0)
 	if _, err := r.audit.Replay(func(record audit.Record) error {
 		if cursor == 0 || record.Sequence < cursor {
-			records = append(records, record)
+			records = append(records, auditRecordFlatView(record))
 		}
 		return nil
 	}); err != nil {

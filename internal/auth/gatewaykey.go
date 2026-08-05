@@ -21,6 +21,20 @@ const (
 )
 
 func GenerateGatewayKey(projectID, name string, expiresAt *time.Time) (string, domain.GatewayKey, error) {
+	keyID, err := id.New("key")
+	if err != nil {
+		return "", domain.GatewayKey{}, err
+	}
+	return GenerateGatewayKeyWithID(keyID, projectID, name, expiresAt)
+}
+
+// GenerateGatewayKeyWithID mints a key under a caller-supplied identifier. Callers that
+// derive the identifier from an idempotency key use this so a retried create collides
+// with the stored record instead of issuing a second live credential.
+func GenerateGatewayKeyWithID(keyID, projectID, name string, expiresAt *time.Time) (string, domain.GatewayKey, error) {
+	if keyID == "" {
+		return "", domain.GatewayKey{}, errors.New("gateway key id is required")
+	}
 	if projectID == "" {
 		return "", domain.GatewayKey{}, errors.New("project id is required")
 	}
@@ -33,10 +47,6 @@ func GenerateGatewayKey(projectID, name string, expiresAt *time.Time) (string, d
 	}
 	plaintext := GatewayKeyPrefix + base64.RawURLEncoding.EncodeToString(random)
 	clear(random)
-	keyID, err := id.New("key")
-	if err != nil {
-		return "", domain.GatewayKey{}, err
-	}
 	now := time.Now().UTC()
 	key := domain.GatewayKey{
 		ID:          keyID,

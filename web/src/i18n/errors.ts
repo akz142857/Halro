@@ -14,3 +14,16 @@ export function localizedError(t: TFunction, error: unknown) {
   if (error.status === 429) return t("errors.rateLimited");
   return t("errors.server");
 }
+
+// Validation and conflict responses name the field that failed. The localized headline
+// alone leaves the operator guessing between name, models, CIDR and policy bindings, so
+// the server's reason is surfaced verbatim underneath it.
+export function errorDetail(error: unknown) {
+  if (!(error instanceof ApiError)) return "";
+  // A forwarded upstream reply is the whole point of the message; show it at any status.
+  if (error.detail) return error.detail;
+  const detailed = error.status === 400 || error.status === 409 || error.status === 422;
+  if (!detailed) return "";
+  const message = error.message.trim();
+  return message.startsWith("request failed") ? "" : message;
+}

@@ -97,6 +97,7 @@ type Admin struct {
 	LoginRPM                          int      `yaml:"login_rpm"`
 	ExternalOrigin                    string   `yaml:"external_origin"`
 	MFAPolicy                         string   `yaml:"mfa_policy"`
+	DeveloperWorkbench                string   `yaml:"developer_workbench"`
 	AdjustmentSoftLimitMicrosUSD      int64    `yaml:"adjustment_soft_limit_micros_usd"`
 	AdjustmentHardLimitMicrosUSD      int64    `yaml:"adjustment_hard_limit_micros_usd"`
 	AdjustmentDailyHardLimitMicrosUSD int64    `yaml:"adjustment_daily_hard_limit_micros_usd"`
@@ -354,6 +355,9 @@ func (c *Config) Normalize() error {
 	if c.Admin.MFAPolicy == "" {
 		c.Admin.MFAPolicy = "optional"
 	}
+	if c.Admin.DeveloperWorkbench == "" {
+		c.Admin.DeveloperWorkbench = "enabled"
+	}
 	if c.Admin.AdjustmentSoftLimitMicrosUSD == 0 {
 		c.Admin.AdjustmentSoftLimitMicrosUSD = 10_000_000
 	}
@@ -518,6 +522,9 @@ func (c Config) Validate(opts LoadOptions) error {
 		problems = append(problems, errors.New(
 			"admin session TTL, idle timeout, and login RPM must be positive; idle timeout cannot exceed TTL",
 		))
+	}
+	if c.Admin.DeveloperWorkbench != "enabled" && c.Admin.DeveloperWorkbench != "disabled" {
+		return errors.New("admin.developer_workbench must be enabled or disabled")
 	}
 	if c.Admin.MFAPolicy != "optional" && c.Admin.MFAPolicy != "required" {
 		return errors.New("admin.mfa_policy must be optional or required")

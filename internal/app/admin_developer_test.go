@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -48,14 +49,24 @@ func (s *developerGatewayService) Embeddings(ctx context.Context, key string, re
 }
 
 func TestDeveloperGatewayBaseURLUsesGatewayListenerNotAdminOrigin(t *testing.T) {
+	// A loopback listener is unreachable under any other host, so the admin origin must not
+	// replace it: the integrating application runs alongside the Gateway by definition.
 	runtime := &Runtime{config: config.Config{Server: config.Server{GatewayListen: "127.0.0.1:8080", AdminListen: "127.0.0.1:8081"}}}
 	request := httptest.NewRequest("GET", "http://gateway.example:8081/admin/api/v1/developer/config", nil)
-	if got := runtime.developerGatewayBaseURL(request); got != "http://gateway.example:8080" {
+	if got := runtime.developerGatewayBaseURL(request); got != "http://127.0.0.1:8080" {
 		t.Fatalf("gateway base URL=%q", got)
 	}
 	runtime.config.TLS.Enabled = true
-	if got := runtime.developerGatewayBaseURL(request); got != "https://gateway.example:8080" {
+	if got := runtime.developerGatewayBaseURL(request); got != "https://127.0.0.1:8080" {
 		t.Fatalf("TLS gateway base URL=%q", got)
+	}
+
+	// An unspecified listener answers on every interface, so the admin host is the best
+	// address to hand to the caller.
+	runtime.config.TLS.Enabled = false
+	runtime.config.Server.GatewayListen = "0.0.0.0:8080"
+	if got := runtime.developerGatewayBaseURL(request); got != "http://gateway.example:8080" {
+		t.Fatalf("unspecified gateway base URL=%q", got)
 	}
 }
 
@@ -143,4 +154,96 @@ func developerExecutionRequest(t *testing.T, endpoint, body string) *http.Reques
 	routeContext := chi.NewRouteContext()
 	routeContext.URLParams.Add("endpoint", endpoint)
 	return request.WithContext(context.WithValue(request.Context(), chi.RouteCtxKey, routeContext))
+}
+
+// Executing through the workbench spends real money against a real project. It has to be
+// attributable to the admin who triggered it, like every other admin mutation.
+func TestAdminDeveloperExecutionIsAudited(t *testing.T) {
+	cfg := testConfig(t)
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := BootstrapAdmin(context.Background(), cfg, "admin", []byte("correct horse battery staple")); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := Open(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	cookie, csrf := loginAdminForTest(t, runtime)
+
+	execute := adminRequest(t, http.MethodPost, "/admin/api/v1/developer/execute/chat-completions", map[string]any{
+		"model": "support-chat", "messages": []map[string]string{{"role": "user", "content": "ping"}},
+	})
+	execute.AddCookie(cookie)
+	execute.Header.Set("X-CSRF-Token", csrf)
+	executed := httptest.NewRecorder()
+	runtime.adminRouter().ServeHTTP(executed, execute)
+
+	audits := adminRequest(t, http.MethodGet, "/admin/api/v1/audit", nil)
+	audits.AddCookie(cookie)
+	auditResponse := httptest.NewRecorder()
+	runtime.adminRouter().ServeHTTP(auditResponse, audits)
+	if auditResponse.Code != http.StatusOK {
+		t.Fatalf("audit list status=%d body=%s", auditResponse.Code, auditResponse.Body.String())
+	}
+	// The audit list is served flat: the console reads these fields directly.
+	var page struct {
+		Items []struct {
+			ActorType string         `json:"actor_type"`
+			ActorID   string         `json:"actor_id"`
+			Action    string         `json:"action"`
+			TargetID  string         `json:"target_id"`
+			Metadata  map[string]any `json:"metadata"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(auditResponse.Body.Bytes(), &page); err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range page.Items {
+		if event.Action != "developer.execute" {
+			continue
+		}
+		if event.ActorType != "admin_user" || event.ActorID != "admin" {
+			t.Fatalf("developer.execute actor=%s/%s", event.ActorType, event.ActorID)
+		}
+		if event.TargetID != "chat-completions" {
+			t.Fatalf("developer.execute target=%s", event.TargetID)
+		}
+		if _, recorded := event.Metadata["http_status"]; !recorded {
+			t.Fatalf("developer.execute metadata missing http_status: %v", event.Metadata)
+		}
+		return
+	}
+	t.Fatalf("no developer.execute audit event recorded in %d events", len(page.Items))
+}
+
+// Enabling the workbench makes the admin listener carry data-plane traffic. Deployments
+// that isolate the Gateway listener at the network layer must be able to refuse it.
+func TestAdminDeveloperExecutionRespectsDisabledWorkbench(t *testing.T) {
+	service := &developerGatewayService{}
+	handler, err := gatewayapi.New(service, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &Runtime{gateway: handler, config: config.Config{Admin: config.Admin{DeveloperWorkbench: "disabled"}}}
+	request := developerExecutionRequest(t, "chat-completions", `{"model":"chat","messages":[]}`)
+	request.Header.Set("Authorization", "Bearer gw_debug")
+	response := httptest.NewRecorder()
+
+	runtime.executeAdminDeveloperRequest(response, request)
+
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("disabled workbench status=%d body=%s", response.Code, response.Body.String())
+	}
+	if service.key != "" {
+		t.Fatalf("disabled workbench still reached the Gateway with key=%q", service.key)
+	}
+
+	configResponse := httptest.NewRecorder()
+	runtime.getAdminDeveloperConfig(configResponse, httptest.NewRequest("GET", "/admin/api/v1/developer/config", nil))
+	if !strings.Contains(configResponse.Body.String(), `"enabled":false`) {
+		t.Fatalf("config did not advertise the disabled workbench: %s", configResponse.Body.String())
+	}
 }
