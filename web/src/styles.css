@@ -678,12 +678,11 @@ td small, td code { display: block; margin-top: 4px; color: var(--muted); }
 .alert-row > div { min-width: 0; }
 .alert-row > div:nth-child(2) > span { display: flex; align-items: center; gap: 8px; }
 .alert-row small, .alert-row code { display: block; margin-top: 5px; overflow-wrap: anywhere; color: var(--muted); font-size: 10px; }
-/* Sized to its content and indented to the row's identity column (22px padding + 42px icon
-   + 18px gap). Stretching it edge to edge made one webhook's reply read as a banner
-   belonging to the whole section. */
+/* A cell in the row's own grid, spanning every column. Positioned outside the row it had
+   nothing to align to and read as a stray box; here it sits inside the row's padding and
+   above its border, so it can only ever line up with the webhook it reports on. */
 .alert-reply {
-  width: fit-content; max-width: calc(100% - 104px);
-  margin: -6px 22px 16px 82px; padding: 8px 11px;
+  grid-column: 1 / -1; min-width: 0; margin-top: 4px; padding: 8px 11px;
   background: var(--surface-inset); border: 1px solid var(--line); border-radius: 4px;
 }
 .alert-reply small { display: block; color: var(--muted-2); font: 9px var(--mono); letter-spacing: .06em; }
@@ -1438,8 +1437,6 @@ textarea { resize: vertical; }
   .developer-response-meta > div:nth-child(2) { border-right: 0; }
   .developer-response-meta > div:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
   .operations-panel-header { align-items: flex-start; flex-direction: column; gap: 12px; }
-  /* No icon column to align to at this width. */
-  .alert-reply { max-width: calc(100% - 36px); margin-left: 18px; margin-right: 18px; }
   .alert-row { grid-template-columns: auto 1fr; }
   .alert-secret { text-align: left; }
   .alert-row .row-actions { grid-column: 1 / -1; }

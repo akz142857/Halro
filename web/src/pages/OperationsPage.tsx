@@ -220,17 +220,17 @@ function AlertRow({
             onConfirm={() => remove.mutate()}
           />
         </div>
+        {/* Several chat platforms answer 200 and reject the payload in the body. Showing the
+            endpoint's own reply is the only way an operator can tell "delivered" from
+            "accepted the request and threw it away". It spans the row's own grid so it can
+            only ever align with the row it belongs to. */}
+        {test.isSuccess && test.data.response && (
+          <div className="alert-reply" role="status">
+            <small>{t("operations.endpointReply", { status: test.data.status_code })}</small>
+            <code>{test.data.response}</code>
+          </div>
+        )}
       </div>
-      {/* Several chat platforms answer 200 and reject the payload in the body. Showing the
-          endpoint's own reply is the only way an operator can tell "delivered" from
-          "accepted the request and threw it away". Indented under its own row rather than
-          spanning the panel: it belongs to one webhook, not to the section. */}
-      {test.isSuccess && test.data.response && (
-        <div className="alert-reply" role="status">
-          <small>{t("operations.endpointReply", { status: test.data.status_code })}</small>
-          <code>{test.data.response}</code>
-        </div>
-      )}
       {/* A revocation or a disable that failed silently leaves the operator believing an
           endpoint stopped receiving events when it has not. */}
       {remove.isError && <ErrorState error={remove.error} />}

@@ -176,9 +176,10 @@ describe("operations page", () => {
       expect(within(first as HTMLElement).getAllByRole("status")[0]).toHaveTextContent("通过 · 42ms"));
     // An endpoint that answers 200 and rejects the payload in its body must not read as a
     // clean delivery.
-    // Belongs to its own row, not a panel-wide banner.
+    // A cell in its own row's grid, not a panel-wide banner and not a stray box beside it.
     const reply = screen.getByText(/param invalid/).closest(".alert-reply")!;
     expect(reply).toBeVisible();
+    expect(reply.parentElement).toBe(first);
     expect(within(reply as HTMLElement).getByText("接收端返回 HTTP 200")).toBeVisible();
     expect(screen.queryByText(/param invalid/)?.closest(".notice")).toBeFalsy();
     expect(within(second as HTMLElement).getAllByRole("status")[0]).toHaveTextContent("尚未测试");
