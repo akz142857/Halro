@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { render, screen, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
 import type { Dashboard } from "../types";
 import { DashboardPage } from "./DashboardPage";
@@ -8,6 +8,47 @@ import { DashboardPage } from "./DashboardPage";
 vi.mock("../TrendChart", () => ({ default: () => <div role="img" aria-label="趋势图" /> }));
 
 describe("DashboardPage", () => {
+  beforeEach(() => {
+    vi.spyOn(api, "credentials").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "providers").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "deployments").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "routes").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [], next_cursor: "" });
+  });
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it("walks a never-used instance through the configuration chain", async () => {
+    vi.spyOn(api, "dashboard").mockResolvedValue(dashboard());
+    vi.mocked(api.credentials).mockResolvedValue({ items: [{ id: "credential_openai" }] as never, next_cursor: "" });
+    vi.mocked(api.projects).mockResolvedValue({ items: [{ id: "project_a" }] as never, next_cursor: "" });
+    vi.spyOn(api, "keys").mockResolvedValue({ items: [], next_cursor: "" });
+    renderPage();
+
+    const panel = (await screen.findByRole("heading", { name: "把第一条请求跑通" })).closest("section")!;
+    expect(panel).toHaveTextContent("2 / 6");
+    const credentialStep = within(panel).getByText("1. 保存服务商凭据").closest("li")!;
+    expect(credentialStep).toHaveTextContent("已创建 1 个");
+    expect(credentialStep.querySelector(".status-dot")).toHaveClass("ok");
+    expect(within(credentialStep).getByRole("link", { name: "打开凭据库" })).toHaveAttribute("href", "/admin/providers?view=credentials");
+    const routeStep = within(panel).getByText("4. 发布模型路由").closest("li")!;
+    expect(routeStep).toHaveTextContent("尚未创建");
+    expect(routeStep.querySelector(".status-dot")).toHaveClass("bad");
+    expect(panel).toHaveTextContent("六步全部完成后才能发出请求");
+    expect(within(panel).getByRole("link", { name: "打开开发者工作台" })).toHaveAttribute("href", "/admin/developer");
+  });
+
+  it("drops the checklist once the gateway has served traffic", async () => {
+    const used = dashboard();
+    used.usage.watermark_sequence = 42;
+    vi.spyOn(api, "dashboard").mockResolvedValue(used);
+    renderPage();
+
+    expect(await screen.findByText("告警投递")).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "把第一条请求跑通" })).not.toBeInTheDocument();
+    expect(api.credentials).not.toHaveBeenCalled();
+  });
+
   it("shows the real alert and WAL queue state and marks failures unhealthy", async () => {
     vi.spyOn(api, "dashboard").mockResolvedValue(dashboard({
       alerts: { Accepted: 12, Delivered: 8, Failed: 2, Dropped: 1, Queued: 4 },

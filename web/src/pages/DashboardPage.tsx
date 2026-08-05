@@ -2,6 +2,7 @@ import { lazy, Suspense, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api";
 import { ErrorState, Loading, PageHeader, StatusDot } from "../components";
+import { FirstRunChecklist } from "./FirstRunChecklist";
 import { compactNumber, dateTime, money } from "../format";
 import type { GovernancePressureItem, UsageAnomaly, UsageBreakdown } from "../types";
 import type { TrendMetric } from "../trend";
@@ -64,6 +65,9 @@ export function DashboardPage() {
           </div>
         }
       />
+      {/* Nothing has ever been served, so the panels below are all zeroes and "no data".
+          The chain that produces the first request is more useful than an empty chart. */}
+      {dashboard.usage.watermark_sequence === 0 && today.attempts === 0 && <FirstRunChecklist />}
       <section className="metric-grid" aria-label={t("dashboard.todayMetrics")}>
         <Metric label={t("dashboard.requests")} value={compactNumber(today.requests)} detail={t("dashboard.attempts", { count: today.attempts })} />
         <Metric
