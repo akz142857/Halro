@@ -487,9 +487,12 @@ export function ReauthFields({
   description?: string;
 }) {
   const { t } = useTranslation();
+  // A fragment, not a wrapper: these are two ordinary fields and they belong to
+  // the surrounding form's grid. Nesting them one level deeper takes them out
+  // of its gap and lines them up with nothing.
   return (
-    <div className="reauth-fields">
-      {description && <p className="reauth-description">{description}</p>}
+    <>
+      {description && <p className="form-note">{description}</p>}
       <Field label={t("auth.currentPassword")}>
         <input
           required
@@ -499,7 +502,10 @@ export function ReauthFields({
           onChange={(event) => onChange({ ...values, currentPassword: event.target.value })}
         />
       </Field>
-      <Field label={t("auth.authenticatorCodeOptional")}>
+      {/* The qualifier goes in the hint, where every other field in the console
+          puts one. Folding it into the label made this the only label on the
+          form carrying its own explanation. */}
+      <Field label={t("auth.authenticatorCode")} hint={t("auth.authenticatorCodeWhenEnabled")}>
         <input
           inputMode="numeric"
           pattern="[0-9]*"
@@ -509,6 +515,6 @@ export function ReauthFields({
           onChange={(event) => onChange({ ...values, totpCode: event.target.value })}
         />
       </Field>
-    </div>
+    </>
   );
 }

@@ -236,7 +236,7 @@ export const enUS = {
     setupSecurity: "Protected by origin checks, rate limits, Argon2id, and the trusted audit chain",
     currentPassword: "Current password",
     stepUpDestructive: "This cannot be undone. Re-confirm your identity to continue.",
-    authenticatorCodeOptional: "Authenticator code (required when MFA is enabled)",
+    authenticatorCodeWhenEnabled: "Required for accounts with a second factor enrolled; leave empty otherwise.",
     usernameRequired: "Enter a username",
     passwordRequired: "Enter a password",
     mfaEyebrow: "Second factor", mfaHeading: "Verify your identity", mfaPrompt: "Enter the current code from your authenticator app. Codes usually change every 30 seconds.", authenticatorCode: "Authenticator code", recoveryCode: "Recovery code", verify: "Verify", verifying: "Verifying…", useRecovery: "Use a recovery code", useAuthenticator: "Use an authenticator code", backToPassword: "Back to password",

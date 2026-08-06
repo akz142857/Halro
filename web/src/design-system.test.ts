@@ -179,3 +179,83 @@ describe("design system themes", () => {
     expect(offenders).toEqual([]);
   });
 });
+
+describe("component styling reaches the markup", () => {
+  // A status variant says what a message means. Where it sits is the
+  // container's business, because only the container knows its own header
+  // padding — .notice.success once carried one panel's 22px inset and, being
+  // declared later than every container rule, applied it in all of them. The
+  // result was a success box that lined up with nothing.
+  it("keeps horizontal insets out of the notice status variants", () => {
+    const styles = read("./styles.css");
+    // Every rule, not the first one that mentions the variant: the stylesheet
+    // has several, and checking only the first passes without ever reading the
+    // one that carries the colour.
+    let checked = 0;
+    for (const rule of styles.matchAll(/([^{}]+)\{([^}]*)\}/g)) {
+      const [, selector, body] = rule;
+      // A container qualifying the variant (".settings-form .notice.success")
+      // is the container deciding layout, which is the arrangement this is
+      // protecting. Only an unqualified variant rule is in scope.
+      if (!/^\s*\.notice\.(success|error|warning)\s*$/.test(selector)) continue;
+      checked++;
+      const name = selector.trim();
+      expect(body, `${name} sets a horizontal margin`).not.toMatch(/margin-(?:left|right)\s*:/);
+      const shorthand = body.match(/(?:^|;)\s*margin\s*:\s*([^;]+)/);
+      const values = shorthand ? shorthand[1].trim().split(/\s+/) : [];
+      // margin: A            -> all four sides, horizontal included
+      // margin: A B          -> B is horizontal
+      // margin: A B C[ D]    -> B (and D) are horizontal
+      const horizontal = values.length === 1 ? values[0] : values[1];
+      expect(
+        horizontal === undefined || horizontal === "0" || horizontal === "auto",
+        `${name} sets a horizontal margin of ${horizontal} — layout belongs to the container`,
+      ).toBe(true);
+    }
+    expect(checked, "no unqualified .notice status variant rules were found to check").toBe(3);
+  });
+
+  // A class name in the markup with no rule anywhere renders at whatever the
+  // cascade happens to give it, which is how an introductory sentence ended up
+  // outweighing the dialog heading above it. jsdom cannot see that, so this is
+  // a ratchet like the spacing one: the count may fall, never rise.
+  const unstyledClassBaseline = 12;
+
+  it("does not add class names the stylesheets never style", () => {
+    const cssFiles = ["./styles.css", "./design-system/index.css", "./design-system/components.css", "./design-system/tokens.css"];
+    let css = "";
+    for (const file of cssFiles) {
+      try {
+        css += read(file);
+      } catch {
+        // A stylesheet that does not exist contributes nothing.
+      }
+    }
+    const defined = new Set(Array.from(css.matchAll(/\.([a-zA-Z][\w-]*)/g), (match) => match[1]));
+
+    const used = new Set<string>();
+    const visit = (path: string) => {
+      for (const entry of readdirSync(path)) {
+        const full = join(path, entry);
+        if (statSync(full).isDirectory()) {
+          visit(full);
+          continue;
+        }
+        if (!entry.endsWith(".tsx") || entry.includes(".test.")) continue;
+        const source = readFileSync(full, "utf8");
+        for (const match of source.matchAll(/className=(?:"([^"]*)"|\{`([^`]*)`\})/g)) {
+          const raw = (match[1] ?? match[2] ?? "").replace(/\$\{[^}]*\}/g, " ");
+          for (const name of raw.split(/\s+/)) if (name) used.add(name);
+        }
+      }
+    };
+    // Held in a variable on purpose: Vite statically rewrites a literal
+    // new URL("./x", import.meta.url) into an asset URL, which is not a file
+    // path. The sibling test above resolves its root the same way.
+    const stylesPath = "./styles.css";
+    visit(dirname(fileURLToPath(new URL(stylesPath, import.meta.url))));
+
+    const unstyled = Array.from(used).filter((name) => !defined.has(name)).sort();
+    expect(unstyled.length, `unstyled classes: ${unstyled.join(", ")}`).toBeLessThanOrEqual(unstyledClassBaseline);
+  });
+});

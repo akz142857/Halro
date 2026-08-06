@@ -236,7 +236,7 @@ export const zhCN = {
     setupSecurity: "受来源校验、限速、Argon2id 与可信审计链保护",
     currentPassword: "当前密码",
     stepUpDestructive: "此操作不可撤销，请重新验证你的身份后继续。",
-    authenticatorCodeOptional: "身份验证器验证码（已启用 MFA 时必填）",
+    authenticatorCodeWhenEnabled: "启用了二次验证的账户必填，否则留空。",
     usernameRequired: "请输入用户名",
     passwordRequired: "请输入密码",
     mfaEyebrow: "二次验证", mfaHeading: "验证你的身份", mfaPrompt: "请输入身份验证器当前显示的动态验证码，验证码通常每 30 秒更新一次。", authenticatorCode: "身份验证器验证码", recoveryCode: "恢复码", verify: "验证", verifying: "正在验证…", useRecovery: "使用恢复码", useAuthenticator: "使用身份验证器验证码", backToPassword: "返回密码登录",
