@@ -331,10 +331,17 @@ export function AccountingTimezoneForm({ settings }: { settings: AccountingSetti
     <section className="panel settings-card">
       <header className="panel-header">
         <div><p className="eyebrow">{t("settings.accountingEyebrow")}</p><h3>{t("settings.accountingTitle")}</h3></div>
-        <span className="badge">{t("settings.accountingVersion", { version: settings.timezone_version })}</span>
+
       </header>
       <dl className="settings-facts">
         <div><dt>{t("settings.accountingCurrentZone")}</dt><dd><code>{settings.timezone}</code></dd></div>
+        <div>
+          <dt>{t("settings.accountingVersionLabel")}</dt>
+          <dd>
+            {settings.timezone_version}
+            <small>{t("settings.accountingVersionHint")}</small>
+          </dd>
+        </div>
         <div>
           <dt>{t("settings.accountingCurrentPeriod")}</dt>
           <dd>{t("settings.accountingPeriodRange", {
@@ -381,6 +388,9 @@ export function AccountingTimezoneForm({ settings }: { settings: AccountingSetti
       </form>
       {confirming && (
         <Modal title={t("settings.accountingConfirmTitle")} onClose={() => setConfirming(false)}>
+          {/* The modal only pads a child it recognises; bare content runs to
+              the edges. .confirmation-dialog is that child. */}
+          <div className="confirmation-dialog">
           <p>{t("settings.accountingConfirmLead", { from: settings.timezone, to: timezone.trim() })}</p>
           <ul className="settings-consequences">
             <li>{t("settings.accountingConfirmEffective", {
@@ -409,6 +419,7 @@ export function AccountingTimezoneForm({ settings }: { settings: AccountingSetti
             <button className="button primary" disabled={busy} onClick={() => schedule.mutate()}>
               {schedule.isPending ? t("settings.saving") : t("settings.accountingConfirmAction")}
             </button>
+          </div>
           </div>
         </Modal>
       )}

@@ -864,11 +864,27 @@ td small, td code { display: block; margin-top: 4px; color: var(--muted); }
 .diagnostic-details summary:focus-visible { outline: 2px solid var(--color-focus-ring); outline-offset: -3px; }
 .diagnostic-details summary strong { display: inline-flex; align-items: center; gap: 8px; font-size: .94rem; }
 .diagnostic-details dl { margin: 0; padding: 0 18px 14px; border-top: 1px solid var(--border); }
-/* Read-only facts about the accounting time zone, above the form that changes it. */
-.settings-facts { display: grid; gap: var(--space-3); margin: 0 0 var(--space-4); }
-.settings-facts > div { display: grid; gap: var(--space-1); }
-.settings-facts dt { color: var(--muted-2); font: var(--font-size-xs) var(--mono); letter-spacing: .1em; }
-.settings-facts dd { margin: 0; color: var(--text); font-size: .9rem; line-height: 1.5; overflow-wrap: anywhere; }
+/* Read-only facts about the accounting time zone, above the form that changes it.
+   The bare dl/dt/dd rules further down this file are written for the two-column
+   diagnostics cards and apply to every definition list on the page, so each
+   property they set has to be answered here — a value left unanswered arrives
+   right-aligned in 10px monospace with a stray separator above it. */
+.settings-facts { display: grid; gap: 0; margin: 0 0 var(--space-4); }
+.settings-facts > div {
+  display: grid; gap: var(--space-1);
+  padding: var(--space-3) 0; border-top: 1px solid var(--line);
+}
+.settings-facts > div:first-child { padding-top: 0; border-top: 0; }
+.settings-facts dt {
+  color: var(--muted-2); font: var(--font-size-xs) var(--mono);
+  letter-spacing: .1em; text-transform: none;
+}
+.settings-facts dd {
+  margin: 0; color: var(--text); font: var(--font-size-sm)/1.5 var(--font-sans);
+  text-align: left; overflow-wrap: anywhere;
+}
+.settings-facts dd code { font-family: var(--mono); }
+.settings-facts dd small { display: block; margin-top: var(--space-1); color: var(--muted); font-size: var(--font-size-xs); }
 /* The three consequences of a time zone change, stated before it is confirmed. */
 .settings-consequences { margin: var(--space-3) 0; padding-left: var(--space-5); display: grid; gap: var(--space-2); color: var(--muted); font-size: .88rem; line-height: 1.5; }
 .runtime-note { display: grid; gap: 4px; margin: 0; padding: 12px 0; color: var(--muted); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
