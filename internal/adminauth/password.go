@@ -22,7 +22,7 @@ const (
 	maxPasswordBytes = 1024
 )
 
-func NewUser(username string, password []byte, now time.Time) (domain.AdminUser, error) {
+func NewUser(username string, password []byte, role string, now time.Time) (domain.AdminUser, error) {
 	if !utf8.Valid(password) {
 		return domain.AdminUser{}, errors.New("admin password must be valid UTF-8")
 	}
@@ -38,7 +38,7 @@ func NewUser(username string, password []byte, now time.Time) (domain.AdminUser,
 	}
 	hash := argon2.IDKey(password, salt, argonIterations, argonMemoryKiB, argonParallelism, passwordHashSize)
 	user := domain.AdminUser{
-		Username: username, Appearance: domain.AppearanceDark, PasswordVersion: passwordVersion,
+		Username: username, Role: role, Appearance: domain.AppearanceDark, PasswordVersion: passwordVersion,
 		PasswordSalt: salt, PasswordHash: hash, ArgonMemoryKiB: argonMemoryKiB,
 		ArgonIterations: argonIterations, ArgonParallelism: argonParallelism,
 		SessionGeneration: 1, CreatedAt: now.UTC(), UpdatedAt: now.UTC(),

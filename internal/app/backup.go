@@ -73,27 +73,38 @@ func CreateBackup(
 		return backup.Manifest{}, err
 	}
 	auditKey, err := loadAuditHMACKey(metadata, secretVault, masterKey)
+	if err != nil {
+		secretVault.Close()
+		clear(masterKey)
+		return backup.Manifest{}, err
+	}
+	ledgerKey, err := loadLedgerHMACKey(metadata, secretVault, masterKey)
 	secretVault.Close()
 	clear(masterKey)
 	if err != nil {
+		clear(auditKey)
 		return backup.Manifest{}, err
 	}
 	auditLog, err := audit.Open(cfg.AuditPath(), auditKey)
 	clear(auditKey)
 	if err != nil {
+		clear(ledgerKey)
 		return backup.Manifest{}, err
 	}
 	defer auditLog.Close()
 	if err := reconcileAuditCheckpoint(metadata, auditLog.Summary()); err != nil {
+		clear(ledgerKey)
 		return backup.Manifest{}, err
 	}
 	if err := appendBackupAudit(ctx, metadata, auditLog, "requested", ""); err != nil {
+		clear(ledgerKey)
 		return backup.Manifest{}, err
 	}
 
 	manifest, createErr := createBackupSnapshot(
-		ctx, cfg, absoluteConfig, absoluteOutput, backupKey, metadata, fingerprintText,
+		ctx, cfg, absoluteConfig, absoluteOutput, backupKey, metadata, fingerprintText, ledgerKey,
 	)
+	clear(ledgerKey)
 	outcome := "success"
 	reason := ""
 	if createErr != nil {
@@ -336,9 +347,16 @@ func validateRestoreStage(
 		return fmt.Errorf("verify staged Vault: %w", err)
 	}
 	auditKey, err := loadAuditHMACKey(metadata, secretVault, masterKey)
+	if err != nil {
+		secretVault.Close()
+		clear(masterKey)
+		return err
+	}
+	ledgerKey, err := loadLedgerHMACKey(metadata, secretVault, masterKey)
 	secretVault.Close()
 	clear(masterKey)
 	if err != nil {
+		clear(auditKey)
 		return err
 	}
 	auditLog, err := audit.Open(filepath.Join(stageData, "audit", "audit.log"), auditKey)
@@ -356,10 +374,12 @@ func validateRestoreStage(
 		}
 	}
 	status := ledger.NewStatus()
-	ledgerLog, err := ledger.Open(filepath.Join(stageData, "ledger", "ledger.wal"), status)
+	ledgerLog, err := ledger.OpenWithOptions(filepath.Join(stageData, "ledger", "ledger.wal"), status, ledger.Options{ChainKey: ledgerKey})
+	clear(ledgerKey)
 	if err != nil {
 		return fmt.Errorf("open staged Ledger: %w", err)
 	}
+	chainSequence, chainOffset, chainHash, chainVerified := ledgerLog.ChainHead()
 	aggregate := usage.NewAggregate()
 	stagedLedgerState := ledger.NewState()
 	watermark, replayErr := ledgerLog.Replay(ledger.Watermark{}, func(record ledger.Record) error {
@@ -374,6 +394,16 @@ func validateRestoreStage(
 	}
 	if watermark != manifest.LedgerWatermark {
 		return errors.New("staged Ledger watermark does not match backup manifest")
+	}
+	// The chain-head comparison runs against what OpenWithOptions's own tail
+	// scan verified moments ago (MAC + hash-chain across the whole staged
+	// file), not merely against the manifest's say-so: a restored archive
+	// whose recorded head disagrees with the file it shipped with fails
+	// restore rather than starting on unverified history.
+	if manifest.LedgerChainVerified != chainVerified ||
+		(chainVerified && (chainSequence != manifest.LedgerChainHeadSequence ||
+			chainOffset != manifest.LedgerChainHeadOffset || chainHash != manifest.LedgerChainHeadHash)) {
+		return errors.New("staged Ledger chain head does not match backup manifest")
 	}
 	if err := metadata.ValidateDeploymentPriceReferences(stagedLedgerState); err != nil {
 		return fmt.Errorf("verify staged pricing references: %w", err)
@@ -457,6 +487,7 @@ func createBackupSnapshot(
 	backupKey []byte,
 	metadata *boltstore.Store,
 	masterFingerprint string,
+	ledgerKey []byte,
 ) (backup.Manifest, error) {
 	status := ledger.NewStatus()
 	ledgerLog, err := ledger.Open(cfg.LedgerPath(), status)
@@ -464,7 +495,7 @@ func createBackupSnapshot(
 		return backup.Manifest{}, err
 	}
 	manifest, createErr := createBackupSnapshotWithLedger(
-		ctx, cfg, configPath, outputPath, backupKey, metadata, masterFingerprint, ledgerLog,
+		ctx, cfg, configPath, outputPath, backupKey, metadata, masterFingerprint, ledgerLog, ledgerKey,
 	)
 	closeErr := ledgerLog.Close()
 	return manifest, errors.Join(createErr, closeErr)
@@ -478,6 +509,7 @@ func createBackupSnapshotWithLedger(
 	metadata *boltstore.Store,
 	masterFingerprint string,
 	ledgerLog *ledger.Log,
+	ledgerKey []byte,
 ) (backup.Manifest, error) {
 	if err := ctx.Err(); err != nil {
 		return backup.Manifest{}, err
@@ -507,10 +539,11 @@ func createBackupSnapshotWithLedger(
 	if err != nil {
 		return backup.Manifest{}, err
 	}
-	snapshotLog, err := ledger.Open(ledgerSnapshot, ledger.NewStatus())
+	snapshotLog, err := ledger.OpenWithOptions(ledgerSnapshot, ledger.NewStatus(), ledger.Options{ChainKey: ledgerKey})
 	if err != nil {
 		return backup.Manifest{}, err
 	}
+	chainSequence, chainOffset, chainHash, chainVerified := snapshotLog.ChainHead()
 	ledgerAggregate := usage.NewAggregate()
 	ledgerState := ledger.NewState()
 	replayedWatermark, replayErr := snapshotLog.Replay(ledger.Watermark{}, func(record ledger.Record) error {
@@ -600,6 +633,8 @@ func createBackupSnapshotWithLedger(
 	return backup.Create(backup.CreateOptions{
 		OutputPath: outputPath, BackupKey: backupKey, Files: files,
 		Metadata: metadataInfo, LedgerWatermark: ledgerWatermark,
+		LedgerChainHeadSequence: chainSequence, LedgerChainHeadOffset: chainOffset,
+		LedgerChainHeadHash: chainHash, LedgerChainVerified: chainVerified,
 		CheckpointWatermark: checkpoint, UsageManifestVersion: usageManifestVersion,
 		AdjustmentManifestVersion: func() int {
 			if adjustmentManifest != nil {

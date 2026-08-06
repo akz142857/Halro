@@ -659,10 +659,56 @@ func run(arguments []string, logger *slog.Logger) error {
 			return fmt.Errorf("unknown usage command %q", arguments[1])
 		}
 	case "audit":
-		if len(arguments) < 2 || arguments[1] != "verify" {
-			return errors.New("usage: heimdall audit verify --config <path>")
+		if len(arguments) < 2 {
+			return errors.New("usage: heimdall audit verify|verify-anchor --config <path> [--anchors <path>]")
 		}
-		flags := flag.NewFlagSet("audit verify", flag.ContinueOnError)
+		switch arguments[1] {
+		case "verify":
+			flags := flag.NewFlagSet("audit verify", flag.ContinueOnError)
+			configPath := flags.String("config", "config.yaml", "configuration file")
+			if err := flags.Parse(arguments[2:]); err != nil {
+				return err
+			}
+			cfg, err := config.Load(*configPath, config.LoadOptions{})
+			if err != nil {
+				return err
+			}
+			summary, err := app.VerifyAudit(context.Background(), cfg)
+			if err != nil {
+				return err
+			}
+			return json.NewEncoder(os.Stdout).Encode(summary)
+		case "verify-anchor":
+			flags := flag.NewFlagSet("audit verify-anchor", flag.ContinueOnError)
+			configPath := flags.String("config", "config.yaml", "configuration file")
+			anchorsPath := flags.String("anchors", "", "path to a JSON-lines file of anchors pulled off-host (e.g. by the dead-man probe)")
+			if err := flags.Parse(arguments[2:]); err != nil {
+				return err
+			}
+			if *anchorsPath == "" {
+				return errors.New("usage: heimdall audit verify-anchor --config <path> --anchors <path>")
+			}
+			cfg, err := config.Load(*configPath, config.LoadOptions{})
+			if err != nil {
+				return err
+			}
+			anchors, err := app.LoadAuditAnchorsFile(*anchorsPath)
+			if err != nil {
+				return err
+			}
+			verdicts, err := app.VerifyAuditAnchors(context.Background(), cfg, anchors)
+			if err != nil {
+				return err
+			}
+			return json.NewEncoder(os.Stdout).Encode(verdicts)
+		default:
+			return errors.New("usage: heimdall audit verify|verify-anchor --config <path> [--anchors <path>]")
+		}
+	case "ledger":
+		if len(arguments) < 2 || arguments[1] != "verify" {
+			return errors.New("usage: heimdall ledger verify --config <path>")
+		}
+		flags := flag.NewFlagSet("ledger verify", flag.ContinueOnError)
 		configPath := flags.String("config", "config.yaml", "configuration file")
 		if err := flags.Parse(arguments[2:]); err != nil {
 			return err
@@ -671,11 +717,11 @@ func run(arguments []string, logger *slog.Logger) error {
 		if err != nil {
 			return err
 		}
-		summary, err := app.VerifyAudit(context.Background(), cfg)
+		report, err := app.VerifyLedger(context.Background(), cfg)
 		if err != nil {
 			return err
 		}
-		return json.NewEncoder(os.Stdout).Encode(summary)
+		return json.NewEncoder(os.Stdout).Encode(report)
 	case "doctor":
 		flags := flag.NewFlagSet("doctor", flag.ContinueOnError)
 		configPath := flags.String("config", "config.yaml", "configuration file")

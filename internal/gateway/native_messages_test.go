@@ -77,7 +77,7 @@ func newNativeMessagesFixtureForProfile(t *testing.T, profileID domain.ProviderP
 		t.Fatal(err)
 	}
 	status := ledger.NewStatus()
-	log, err := ledger.Open(filepath.Join(t.TempDir(), "native.wal"), status)
+	log, err := ledger.OpenWithOptions(filepath.Join(t.TempDir(), "native.wal"), status, ledger.Options{ChainKey: testChainKey})
 	if err != nil {
 		t.Fatal(err)
 	}

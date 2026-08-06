@@ -118,6 +118,7 @@ func TestKeySlotInitializationPublishesCompleteStateAtomically(t *testing.T) {
 		"before_put_vault_key_check", "after_put_vault_key_check",
 		"before_put_audit_hmac_envelope", "after_put_audit_hmac_envelope",
 		"before_put_audit_checkpoint", "after_put_audit_checkpoint",
+		"before_put_ledger_hmac_envelope", "after_put_ledger_hmac_envelope",
 	}
 	for _, point := range points {
 		t.Run(point, func(t *testing.T) {
@@ -142,6 +143,7 @@ func TestKeySlotInitializationPublishesCompleteStateAtomically(t *testing.T) {
 				"vault key check":  func() error { _, err := store.VaultKeyCheck(); return err },
 				"audit envelope":   func() error { _, err := store.AuditHMACEnvelope(); return err },
 				"audit checkpoint": func() error { _, err := store.AuditCheckpoint(); return err },
+				"ledger envelope":  func() error { _, err := store.LedgerHMACEnvelope(); return err },
 			} {
 				if err := load(); !errors.Is(err, ErrNotFound) {
 					t.Fatalf("%s was partially published: %v", name, err)
@@ -402,7 +404,7 @@ func TestVaultRewritePublishesRotatedDescriptorWithVaultGeneration(t *testing.T)
 	rotated = addAndVerifyBoltRotationSlot(t, rotated, newKey, "slot_primary", masterkey.KeySlotPrimary)
 	rotated = addAndVerifyBoltRotationSlot(t, rotated, newKey, "slot_recovery", masterkey.KeySlotRecovery)
 	if err := store.RewriteVaultMaterial(VaultRewrite{
-		VaultKeyCheck: []byte("new-check"), AuditHMACEnvelope: []byte("new-audit"),
+		VaultKeyCheck: []byte("new-check"), AuditHMACEnvelope: []byte("new-audit"), LedgerHMACEnvelope: []byte("new-ledger"),
 		Keyring: VaultKeyring{FormatVersion: 1, ActiveKeyVersion: 2, ActiveFingerprint: newFingerprint,
 			PreviousFingerprint: state.Descriptor.MasterKeyFingerprint, RecoveryEnvelope: []byte("bridge")},
 		KeySlotDescriptor: &rotated,
@@ -417,7 +419,7 @@ func TestVaultRewritePublishesRotatedDescriptorWithVaultGeneration(t *testing.T)
 	}
 	if err := store.RewriteVaultMaterial(VaultRewrite{
 		Context:       context.Background(),
-		VaultKeyCheck: []byte("new-check"), AuditHMACEnvelope: []byte("new-audit"),
+		VaultKeyCheck: []byte("new-check"), AuditHMACEnvelope: []byte("new-audit"), LedgerHMACEnvelope: []byte("new-ledger"),
 		Keyring: VaultKeyring{FormatVersion: 1, ActiveKeyVersion: 2, ActiveFingerprint: newFingerprint,
 			PreviousFingerprint: state.Descriptor.MasterKeyFingerprint, RecoveryEnvelope: []byte("bridge")},
 		KeySlotDescriptor: &rotated,
@@ -496,7 +498,7 @@ func newTestKeySlotInitialization(t *testing.T) KeySlotInitialization {
 		Keyring: VaultKeyring{
 			FormatVersion: 1, ActiveKeyVersion: 1, ActiveFingerprint: descriptor.MasterKeyFingerprint,
 		},
-		VaultKeyCheck: []byte("encrypted-vault-key-check"), AuditHMACEnvelope: []byte("encrypted-audit-key"),
+		VaultKeyCheck: []byte("encrypted-vault-key-check"), AuditHMACEnvelope: []byte("encrypted-audit-key"), LedgerHMACEnvelope: []byte("encrypted-ledger-key"),
 		AuditCheckpoint: AuditCheckpoint{Records: 1, Bytes: 128},
 		Unwrapper:       boltTestSlotUnwrapper{key: key}, Verifier: boltTestCandidateVerifier{},
 	}

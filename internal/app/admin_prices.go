@@ -602,6 +602,12 @@ func (r *Runtime) drainPricingAuditIntents(ctx context.Context) error {
 	return nil
 }
 
+// verifyPricingReauthentication is the general step-up primitive (current
+// password + a fresh TOTP code resupplied in the request body, verified
+// per-request rather than a short-lived elevated session) — the name is
+// pricing's because pricing needed it first, but nothing in the body is
+// pricing-specific. Other high-risk mutations reuse it through the
+// verifyAdminReauthentication alias rather than duplicating it.
 func (r *Runtime) verifyPricingReauthentication(writer http.ResponseWriter, request *http.Request, username, passwordText, code string) bool {
 	if !r.verifyPricingPassword(writer, request, username, passwordText) {
 		return false

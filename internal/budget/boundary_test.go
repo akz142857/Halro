@@ -16,7 +16,7 @@ import (
 // and commit against another: the first day would look under-spent forever and
 // the second would absorb a charge it never authorised.
 func TestLongRequestSettlesInThePeriodItBeganIn(t *testing.T) {
-	log, err := ledger.Open(filepath.Join(t.TempDir(), "usage.wal"), ledger.NewStatus())
+	log, err := ledger.OpenWithOptions(filepath.Join(t.TempDir(), "usage.wal"), ledger.NewStatus(), ledger.Options{ChainKey: testChainKey})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestLongRequestSettlesInThePeriodItBeganIn(t *testing.T) {
 // balances, which silently disables budget enforcement for that request.
 func TestEveryEventOfARequestCarriesOnePeriod(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "usage.wal")
-	log, err := ledger.Open(path, ledger.NewStatus())
+	log, err := ledger.OpenWithOptions(path, ledger.NewStatus(), ledger.Options{ChainKey: testChainKey})
 	if err != nil {
 		t.Fatal(err)
 	}

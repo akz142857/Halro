@@ -1,6 +1,7 @@
 package usage
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"path/filepath"
@@ -11,8 +12,12 @@ import (
 	"github.com/akz142857/Heimdall/internal/ledger"
 )
 
+// testChainKey is a fixed 32-byte Ledger HMAC key: every event the ledger
+// package writes is promoted to epoch 4 (ADR 0016), which requires a key.
+var testChainKey = bytes.Repeat([]byte{0x24}, 32)
+
 func TestCollectorQueueSaturationDoesNotBlockLedgerAndCatchesUpExactly(t *testing.T) {
-	log, err := ledger.OpenWithOptions(filepath.Join(t.TempDir(), "ledger.wal"), nil, ledger.Options{MaxBatch: 1})
+	log, err := ledger.OpenWithOptions(filepath.Join(t.TempDir(), "ledger.wal"), nil, ledger.Options{MaxBatch: 1, ChainKey: testChainKey})
 	if err != nil {
 		t.Fatal(err)
 	}

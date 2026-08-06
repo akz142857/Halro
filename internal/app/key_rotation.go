@@ -196,6 +196,12 @@ func rotateMasterKeyWithHook(
 		return KeyRotationResult{}, err
 	}
 	defer clear(auditKey)
+	ledgerKey, err := loadLedgerHMACKey(metadata, currentVault, currentKey)
+	if err != nil {
+		metadata.Close()
+		return KeyRotationResult{}, err
+	}
+	defer clear(ledgerKey)
 	if err := appendRotationAudit(metadata, cfg.AuditPath(), auditKey, "security.master_key_rotation.started"); err != nil {
 		metadata.Close()
 		return KeyRotationResult{}, err
@@ -237,13 +243,18 @@ func rotateMasterKeyWithHook(
 		stage.Close()
 		return KeyRotationResult{}, err
 	}
+	ledgerEnvelope, err := encryptLedgerHMACKey(newVault, ledgerKey)
+	if err != nil {
+		stage.Close()
+		return KeyRotationResult{}, err
+	}
 	bridge, err := encryptRotationBridge(currentVault, newKey)
 	if err != nil {
 		stage.Close()
 		return KeyRotationResult{}, err
 	}
 	err = stage.RewriteVaultMaterial(boltstore.VaultRewrite{
-		VaultKeyCheck: keyCheck, AuditHMACEnvelope: auditEnvelope,
+		VaultKeyCheck: keyCheck, AuditHMACEnvelope: auditEnvelope, LedgerHMACEnvelope: ledgerEnvelope,
 		Keyring: boltstore.VaultKeyring{
 			FormatVersion: 1, ActiveKeyVersion: keyring.ActiveKeyVersion + 1,
 			ActiveFingerprint: keyFingerprint(newKey), PreviousFingerprint: keyFingerprint(currentKey),
@@ -304,7 +315,7 @@ func rotateMasterKeyWithHook(
 	if err != nil {
 		return KeyRotationResult{}, err
 	}
-	err = verifyRotatedMetadata(ctx, compacted, newVault, currentVault, newKey, auditKey, true)
+	err = verifyRotatedMetadata(ctx, compacted, newVault, currentVault, newKey, auditKey, ledgerKey, true)
 	if closeErr := compacted.Close(); err == nil {
 		err = closeErr
 	}
@@ -353,6 +364,12 @@ func finalizeMasterKeyRotation(ctx context.Context, cfg config.Config, newVault 
 		return err
 	}
 	defer clear(auditKey)
+	ledgerKey, err := loadLedgerHMACKey(metadata, newVault, newKey)
+	if err != nil {
+		metadata.Close()
+		return err
+	}
+	defer clear(ledgerKey)
 	if err := appendRotationAudit(metadata, cfg.AuditPath(), auditKey, "security.master_key_rotation.completed"); err != nil {
 		metadata.Close()
 		return err
@@ -396,7 +413,7 @@ func finalizeMasterKeyRotation(ctx context.Context, cfg config.Config, newVault 
 	if err != nil {
 		return err
 	}
-	err = verifyRotatedMetadata(ctx, compacted, newVault, nil, newKey, auditKey, false)
+	err = verifyRotatedMetadata(ctx, compacted, newVault, nil, newKey, auditKey, ledgerKey, false)
 	if closeErr := compacted.Close(); err == nil {
 		err = closeErr
 	}
@@ -412,7 +429,7 @@ func finalizeMasterKeyRotation(ctx context.Context, cfg config.Config, newVault 
 	return callRotationHook(hook, "after_bridge_cleanup_publish")
 }
 
-func verifyRotatedMetadata(ctx context.Context, store *boltstore.Store, newVault, oldVault *vault.Vault, newKey, auditKey []byte, expectBridge bool) error {
+func verifyRotatedMetadata(ctx context.Context, store *boltstore.Store, newVault, oldVault *vault.Vault, newKey, auditKey, ledgerKey []byte, expectBridge bool) error {
 	if err := verifyVaultKeyCheck(store, newVault); err != nil {
 		return err
 	}
@@ -468,6 +485,14 @@ func verifyRotatedMetadata(ctx context.Context, store *boltstore.Store, newVault
 	defer clear(loadedAuditKey)
 	if !bytes.Equal(loadedAuditKey, auditKey) {
 		return errors.New("rotated audit HMAC key changed unexpectedly")
+	}
+	loadedLedgerKey, err := loadLedgerHMACKey(store, newVault, newKey)
+	if err != nil {
+		return err
+	}
+	defer clear(loadedLedgerKey)
+	if !bytes.Equal(loadedLedgerKey, ledgerKey) {
+		return errors.New("rotated ledger HMAC key changed unexpectedly")
 	}
 	if expectBridge {
 		return verifyRotationBridge(store, oldVault, newKey)

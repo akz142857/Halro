@@ -35,6 +35,7 @@ type adminContextKey struct{}
 type adminRequestContext struct {
 	session domain.AdminSession
 	token   string
+	role    string
 }
 
 func (r *Runtime) loginAdmin(writer http.ResponseWriter, request *http.Request) {
@@ -193,7 +194,7 @@ func (r *Runtime) changeAdminPassword(writer http.ResponseWriter, request *http.
 		writeJSON(writer, http.StatusUnauthorized, map[string]string{"error": "invalid current password"})
 		return
 	}
-	replacement, err := adminauth.NewUser(user.Username, newPassword, time.Now())
+	replacement, err := adminauth.NewUser(user.Username, newPassword, user.Role, time.Now())
 	if err != nil {
 		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -262,14 +263,51 @@ func (r *Runtime) requireAdminBase(next http.Handler) http.Handler {
 			writeJSON(writer, http.StatusUnauthorized, map[string]string{"error": "admin authentication required"})
 			return
 		}
+		// Role travels with every request rather than living in the session
+		// record itself: a role change takes effect on the holder's very next
+		// request instead of waiting for their session to be reissued.
+		user, err := r.store.GetAdminUser(request.Context(), session.Username)
+		if err != nil {
+			adminStoreError(writer)
+			return
+		}
 		ctx := context.WithValue(request.Context(), adminContextKey{}, adminRequestContext{
-			session: session, token: cookie.Value,
+			session: session, token: cookie.Value, role: user.Role,
 		})
 		next.ServeHTTP(writer, request.WithContext(ctx))
 	})
 }
 
+// requireAdminSetupMutation and requireAdminMutation are the role-gated
+// tiers: session + CSRF + administrator role. This is the default for any
+// mutation route — a new write endpoint registered with either of these is
+// role-gated automatically, with no per-route permission list to remember to
+// update. requireAdminSelfMutation/requireAdminSelfSetupMutation (below) are
+// the deliberate, narrow exception for routes that act only on the caller's
+// own account (logout, own password, own MFA, own preferences) — read_only
+// is a restriction on touching system data and configuration, not a
+// restriction on managing one's own account security.
 func (r *Runtime) requireAdminSetupMutation(next http.Handler) http.Handler {
+	return r.requireAdminSelfSetupMutation(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		admin := request.Context().Value(adminContextKey{}).(adminRequestContext)
+		if !requireAdministratorRole(writer, admin) {
+			return
+		}
+		next.ServeHTTP(writer, request)
+	}))
+}
+
+func (r *Runtime) requireAdminMutation(next http.Handler) http.Handler {
+	return r.requireAdminSelfMutation(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		admin := request.Context().Value(adminContextKey{}).(adminRequestContext)
+		if !requireAdministratorRole(writer, admin) {
+			return
+		}
+		next.ServeHTTP(writer, request)
+	}))
+}
+
+func (r *Runtime) requireAdminSelfSetupMutation(next http.Handler) http.Handler {
 	return r.requireAdminBase(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		admin := request.Context().Value(adminContextKey{}).(adminRequestContext)
 		if !r.adminSameOrigin(request) || !r.adminSessions.VerifyCSRF(admin.token, request.Header.Get("X-CSRF-Token")) {
@@ -280,7 +318,7 @@ func (r *Runtime) requireAdminSetupMutation(next http.Handler) http.Handler {
 	}))
 }
 
-func (r *Runtime) requireAdminMutation(next http.Handler) http.Handler {
+func (r *Runtime) requireAdminSelfMutation(next http.Handler) http.Handler {
 	return r.requireAdmin(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		admin := request.Context().Value(adminContextKey{}).(adminRequestContext)
 		if !r.adminSameOrigin(request) ||
@@ -290,6 +328,14 @@ func (r *Runtime) requireAdminMutation(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(writer, request)
 	}))
+}
+
+func requireAdministratorRole(writer http.ResponseWriter, admin adminRequestContext) bool {
+	if admin.role != domain.AdminRoleAdministrator {
+		writeJSON(writer, http.StatusForbidden, map[string]string{"error": "administrator role required", "code": "read_only_role"})
+		return false
+	}
+	return true
 }
 
 func (r *Runtime) adminSessionsCSRF(token string) string {

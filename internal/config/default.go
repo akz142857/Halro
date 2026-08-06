@@ -60,6 +60,7 @@ func Default() Config {
 			CheckpointInterval:     Duration(time.Minute),
 			ParquetInterval:        Duration(time.Hour),
 			RetentionDays:          90,
+			ExportFormat:           UsageExportFormatParquet,
 		},
 		Gateway: Gateway{
 			RouteTotalTimeout:             Duration(2 * time.Minute),
@@ -97,6 +98,17 @@ func Default() Config {
 		Metrics: Metrics{
 			Enabled: true, RequireAuth: true, MaxConcurrentScrapes: 2,
 			WriteTimeout: Duration(5 * time.Second),
+		},
+		Audit: Audit{
+			Anchor: AuditAnchor{
+				// Off by default: enabling it takes a deliberate credential
+				// file and a dead-man probe configured to pull it. mode:file
+				// deployments get a startup warning instead (ADR 0015),
+				// which is enough to put the decision in front of an
+				// operator without breaking the out-of-the-box default.
+				Enabled: false, Sink: AuditAnchorSinkDeadManPull,
+				Interval: Duration(5 * time.Minute), RecordDelta: 500,
+			},
 		},
 	}
 }

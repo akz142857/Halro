@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akz142857/Heimdall/internal/domain"
 	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
 )
 
@@ -17,7 +18,7 @@ func TestSessionHashPersistenceCSRFAndExpiry(t *testing.T) {
 	}
 	defer store.Close()
 	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
-	user, err := NewUser("admin", []byte("correct horse battery staple"), now)
+	user, err := NewUser("admin", []byte("correct horse battery staple"), domain.AdminRoleAdministrator, now)
 	if err != nil {
 		t.Fatal(err)
 	}

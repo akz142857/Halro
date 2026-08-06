@@ -106,7 +106,9 @@ func (r *Runtime) setupAdmin(writer http.ResponseWriter, request *http.Request) 
 		return
 	}
 	input.SetupToken = ""
-	user, err := adminauth.NewUser(strings.TrimSpace(input.Username), password, time.Now().UTC())
+	// The first administrator created through setup is always full
+	// administrator — there is no one yet to have granted a lesser role.
+	user, err := adminauth.NewUser(strings.TrimSpace(input.Username), password, domain.AdminRoleAdministrator, time.Now().UTC())
 	if err != nil {
 		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return

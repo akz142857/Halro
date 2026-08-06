@@ -19,31 +19,75 @@ import (
 	"github.com/akz142857/Heimdall/internal/domain"
 )
 
-func TestMixedV1V2ReplayAndUnsupportedFutureEpoch(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "mixed.wal")
-	log, err := Open(path, NewStatus())
+// testChainKey is a fixed 32-byte HMAC key for exercising epoch-4 append and
+// verification paths in tests. Every event this build writes is promoted to
+// epoch 4 (eventFrameVersion), so any test that appends now needs one.
+var testChainKey = bytes.Repeat([]byte{0x24}, 32)
+
+func openChained(t *testing.T, path string, status *Status) *Log {
+	t.Helper()
+	log, err := OpenWithOptions(path, status, Options{ChainKey: testChainKey})
 	if err != nil {
 		t.Fatal(err)
 	}
+	return log
+}
+
+// TestMixedV1V2V3ReplayAndUnsupportedFutureEpoch builds every historical
+// epoch by hand (natural Append calls can no longer produce anything but
+// epoch 4, since eventFrameVersion collapsed to a single writer epoch per
+// ADR 0016) and checks that a reader still accepts all four in one file,
+// reports each correctly, and rejects an epoch beyond the newest one it
+// understands.
+func TestMixedV1V2V3ReplayAndUnsupportedFutureEpoch(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mixed.wal")
 	now := time.Date(2026, 8, 4, 0, 0, 0, 0, time.UTC)
-	if _, err = log.Append(context.Background(), Event{EventID: "legacy", Kind: EventRequestAccepted, RequestID: "r", ProjectID: "p", PeriodID: "2026-08-04", OccurredAt: now}); err != nil {
+	legacyPayload, err := json.Marshal(Event{EventID: "legacy", Kind: EventRequestAccepted, RequestID: "r", ProjectID: "p", PeriodID: "2026-08-04", OccurredAt: now})
+	if err != nil {
 		t.Fatal(err)
 	}
 	unknown := domain.NewUnknownPriceSnapshot(now)
-	if _, err = log.Append(context.Background(), Event{EventID: "v2", Kind: EventAttemptSettled, RequestID: "r", AttemptID: "a", ProjectID: "p", PeriodID: "2026-08-04", OccurredAt: now,
-		LeaseMode: LeaseModeUnknownAllowed, PriceSnapshot: &unknown, Outcome: "success", TokenUsageSource: TokenUsageSourceNone}); err != nil {
+	v2Payload, err := json.Marshal(Event{EventID: "v2", Kind: EventAttemptSettled, RequestID: "r", AttemptID: "a", ProjectID: "p", PeriodID: "2026-08-04", OccurredAt: now,
+		LeaseMode: LeaseModeUnknownAllowed, PriceSnapshot: &unknown, Outcome: "success", TokenUsageSource: TokenUsageSourceNone})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err = log.Close(); err != nil {
+	v3Payload, err := json.Marshal(Event{EventID: "v3", Kind: EventRequestAccepted, RequestID: "r", ProjectID: "p", PeriodID: "2026-08-04", OccurredAt: now,
+		PeriodTimezone: "UTC", PeriodTimezoneVersion: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v4Payload, err := json.Marshal(Event{EventID: "v4", Kind: EventRequestAccepted, RequestID: "r", ProjectID: "p", PeriodID: "2026-08-04", OccurredAt: now,
+		PeriodTimezone: "UTC", PeriodTimezoneVersion: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var frames bytes.Buffer
+	frames.Write(encodeFrameVersion(frameVersionLegacy, 1, EventRequestAccepted, legacyPayload))
+	frames.Write(encodeFrameVersion(frameVersionCurrent, 2, EventAttemptSettled, v2Payload))
+	frames.Write(encodeFrameVersion(frameVersionPeriod, 3, EventRequestAccepted, v3Payload))
+	v4Frame, _ := encodeChainFrame(testChainKey, 4, EventRequestAccepted, v4Payload, [32]byte{})
+	frames.Write(v4Frame)
+	if err := os.WriteFile(path, frames.Bytes(), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var epochs []uint8
-	if _, partial, err := InspectReplay(path, func(record Record) error { epochs = append(epochs, record.Epoch); return nil }); err != nil || partial || !slices.Equal(epochs, []uint8{1, 2}) {
+	if _, partial, err := InspectReplay(path, func(record Record) error { epochs = append(epochs, record.Epoch); return nil }); err != nil || partial || !slices.Equal(epochs, []uint8{1, 2, 3, 4}) {
 		t.Fatalf("epochs=%v partial=%t err=%v", epochs, partial, err)
+	}
+	report, partial, err := VerifyChain(path, testChainKey)
+	if err != nil || partial {
+		t.Fatalf("VerifyChain err=%v partial=%t", err, partial)
+	}
+	if report.Authenticated != 1 || report.ChecksumOnly != 3 {
+		t.Fatalf("report=%#v", report)
+	}
+	if !report.ChainVerified || report.ChainSequence != 4 {
+		t.Fatalf("chain head not established: %#v", report)
 	}
 	payload, _ := json.Marshal(Event{EventID: "future", Kind: EventRequestAccepted, RequestID: "r", ProjectID: "p", PeriodID: "2026-08-04", OccurredAt: now})
 	future := filepath.Join(t.TempDir(), "future.wal")
-	if err := os.WriteFile(future, encodeFrameVersion(frameVersionPeriod+1, 1, EventRequestAccepted, payload), 0o600); err != nil {
+	if err := os.WriteFile(future, encodeFrameVersion(frameVersionLedgerIntegrity+1, 1, EventRequestAccepted, payload), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := Inspect(future); !errors.Is(err, ErrUnsupportedVersion) {
@@ -83,7 +127,7 @@ func TestSnapshotIsExactDuringOneHundredConcurrentAppends(t *testing.T) {
 	root := t.TempDir()
 	var durability *snapshotBlockingDurability
 	log, err := OpenWithOptions(filepath.Join(root, "ledger.wal"), NewStatus(), Options{
-		QueueCapacity: 256, MaxBatch: 1,
+		QueueCapacity: 256, MaxBatch: 1, ChainKey: testChainKey,
 		WrapDurability: func(file *os.File) DurabilityWriter {
 			durability = &snapshotBlockingDurability{
 				file: file, entered: make(chan struct{}), release: make(chan struct{}),
@@ -200,7 +244,7 @@ func TestWriteAndSyncFailuresMakeAccountingUnavailable(t *testing.T) {
 			var injected *faultDurability
 			path := filepath.Join(t.TempDir(), "ledger.wal")
 			log, err := OpenWithOptions(path, status, Options{
-				MaxBatch: 1,
+				MaxBatch: 1, ChainKey: testChainKey,
 				WrapDurability: func(file *os.File) DurabilityWriter {
 					injected = &faultDurability{file: file, writeErr: test.writeErr, syncErr: test.syncErr, partial: test.partial}
 					return injected
@@ -239,36 +283,37 @@ func TestWriteAndSyncFailuresMakeAccountingUnavailable(t *testing.T) {
 func TestLedgerRoundTripAndAtomicSettlement(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ledger.wal")
 	status := NewStatus()
-	log, err := Open(path, status)
-	if err != nil {
-		t.Fatal(err)
-	}
+	log := openChained(t, path, status)
 	now := time.Now().UTC()
 	reservation := Event{
-		EventID:              "evt_reserve",
-		Kind:                 EventReservationCreated,
-		RequestID:            "req_1",
-		AttemptID:            "req_1:1",
-		ProjectID:            "prj_1",
-		PeriodID:             "prj_1:2026-07-31:tz1",
-		OccurredAt:           now,
-		ReservationMicrosUSD: MicrosUSD(100),
+		EventID:               "evt_reserve",
+		Kind:                  EventReservationCreated,
+		RequestID:             "req_1",
+		AttemptID:             "req_1:1",
+		ProjectID:             "prj_1",
+		PeriodID:              "prj_1:2026-07-31:tz1",
+		OccurredAt:            now,
+		ReservationMicrosUSD:  MicrosUSD(100),
+		PeriodTimezone:        "UTC",
+		PeriodTimezoneVersion: 1,
 	}
 	if _, err := log.Append(context.Background(), reservation); err != nil {
 		t.Fatal(err)
 	}
 	settlement := Event{
-		EventID:              "evt_settle",
-		Kind:                 EventAttemptSettled,
-		RequestID:            "req_1",
-		AttemptID:            "req_1:1",
-		ProjectID:            "prj_1",
-		PeriodID:             reservation.PeriodID,
-		OccurredAt:           now.Add(time.Second),
-		CommittedMicrosUSD:   MicrosUSD(80),
-		ProviderInputTokens:  10,
-		ProviderOutputTokens: 20,
-		Outcome:              "success",
+		EventID:               "evt_settle",
+		Kind:                  EventAttemptSettled,
+		RequestID:             "req_1",
+		AttemptID:             "req_1:1",
+		ProjectID:             "prj_1",
+		PeriodID:              reservation.PeriodID,
+		OccurredAt:            now.Add(time.Second),
+		CommittedMicrosUSD:    MicrosUSD(80),
+		ProviderInputTokens:   10,
+		ProviderOutputTokens:  20,
+		Outcome:               "success",
+		PeriodTimezone:        "UTC",
+		PeriodTimezoneVersion: 1,
 	}
 	if _, err := log.Append(context.Background(), settlement); err != nil {
 		t.Fatal(err)
@@ -277,7 +322,7 @@ func TestLedgerRoundTripAndAtomicSettlement(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	log, err = Open(path, status)
+	log, err := Open(path, status)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -297,17 +342,14 @@ func TestLedgerRoundTripAndAtomicSettlement(t *testing.T) {
 
 func TestPendingReservationSurvivesReopen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ledger.wal")
-	log, err := Open(path, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	log := openChained(t, path, nil)
 	event := validReservation("evt_1", "attempt_1")
 	if _, err := log.Append(context.Background(), event); err != nil {
 		t.Fatal(err)
 	}
 	log.Close()
 
-	log, err = Open(path, nil)
+	log, err := Open(path, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -326,10 +368,7 @@ func TestPendingReservationSurvivesReopen(t *testing.T) {
 
 func TestPartialTailIsTruncatedOnOpen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ledger.wal")
-	log, err := Open(path, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	log := openChained(t, path, nil)
 	first, err := log.Append(context.Background(), validReservation("evt_1", "attempt_1"))
 	if err != nil {
 		t.Fatal(err)
@@ -358,7 +397,7 @@ func TestPartialTailIsTruncatedOnOpen(t *testing.T) {
 
 func TestCrashRecoveryAcrossEveryByteTruncationPoint(t *testing.T) {
 	sourcePath := filepath.Join(t.TempDir(), "source.wal")
-	log, err := OpenWithOptions(sourcePath, nil, Options{MaxBatch: 1})
+	log, err := OpenWithOptions(sourcePath, nil, Options{MaxBatch: 1, ChainKey: testChainKey})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -382,7 +421,10 @@ func TestCrashRecoveryAcrossEveryByteTruncationPoint(t *testing.T) {
 		if err := os.WriteFile(path, source[:cut], 0o600); err != nil {
 			t.Fatal(err)
 		}
-		recovered, err := Open(path, nil)
+		// Reopening with the chain key exercises MAC/chain verification across
+		// every possible truncation point, not just CRC — a torn tail must
+		// still recover cleanly rather than being misreported as tampering.
+		recovered, err := OpenWithOptions(path, nil, Options{ChainKey: testChainKey})
 		if err != nil {
 			t.Fatalf("cut=%d: %v", cut, err)
 		}
@@ -424,7 +466,9 @@ func TestTenThousandRandomCrashInjectionsRecoverCompleteRecordsWithoutDuplicateE
 			ProjectID: reservation.ProjectID, PeriodID: reservation.PeriodID,
 			OccurredAt:         reservation.OccurredAt.Add(time.Millisecond),
 			CommittedMicrosUSD: MicrosUSD(80), ProviderInputTokens: 7, ProviderOutputTokens: 3,
-			Outcome: "success",
+			Outcome:               "success",
+			PeriodTimezone:        reservation.PeriodTimezone,
+			PeriodTimezoneVersion: reservation.PeriodTimezoneVersion,
 		}
 		for _, event := range []Event{reservation, settlement} {
 			payload, err := json.Marshal(event)
@@ -449,7 +493,7 @@ func TestTenThousandRandomCrashInjectionsRecoverCompleteRecordsWithoutDuplicateE
 			}
 			seen[record.Event.EventID] = struct{}{}
 			return state.Apply(record)
-		})
+		}, nil)
 		if err != nil {
 			t.Fatalf("injection=%d cut=%d: %v", injection, cut, err)
 		}
@@ -466,10 +510,7 @@ func TestTenThousandRandomCrashInjectionsRecoverCompleteRecordsWithoutDuplicateE
 
 func TestChecksumCorruptionRequiresRecovery(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ledger.wal")
-	log, err := Open(path, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	log := openChained(t, path, nil)
 	if _, err := log.Append(context.Background(), validReservation("evt_1", "attempt_1")); err != nil {
 		t.Fatal(err)
 	}
@@ -478,7 +519,10 @@ func TestChecksumCorruptionRequiresRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := file.WriteAt([]byte{0xff}, frameHeaderSize+5); err != nil {
+	// Every event this build writes is epoch 4, whose payload starts at
+	// chainHeaderSize (88), not frameHeaderSize (24) — the bytes in between
+	// are the previous-hash and MAC, not payload.
+	if _, err := file.WriteAt([]byte{0xff}, chainHeaderSize+5); err != nil {
 		t.Fatal(err)
 	}
 	file.Close()
@@ -496,7 +540,7 @@ func TestBalancedGroupCommitSharesFsyncAcrossConcurrentAppends(t *testing.T) {
 	log, err := OpenWithOptions(
 		filepath.Join(t.TempDir(), "ledger.wal"),
 		NewStatus(),
-		Options{QueueCapacity: 128, MaxBatch: 128, FlushInterval: 100 * time.Millisecond},
+		Options{QueueCapacity: 128, MaxBatch: 128, FlushInterval: 100 * time.Millisecond, ChainKey: testChainKey},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -578,14 +622,16 @@ func TestDuplicateEventIDMustMatchContent(t *testing.T) {
 
 func validReservation(eventID, attemptID string) Event {
 	return Event{
-		EventID:              eventID,
-		Kind:                 EventReservationCreated,
-		RequestID:            "req_1",
-		AttemptID:            attemptID,
-		ProjectID:            "prj_1",
-		PeriodID:             "prj_1:2026-07-31:tz1",
-		OccurredAt:           time.Now().UTC(),
-		ReservationMicrosUSD: MicrosUSD(100),
+		EventID:               eventID,
+		Kind:                  EventReservationCreated,
+		RequestID:             "req_1",
+		AttemptID:             attemptID,
+		ProjectID:             "prj_1",
+		PeriodID:              "prj_1:2026-07-31:tz1",
+		OccurredAt:            time.Now().UTC(),
+		ReservationMicrosUSD:  MicrosUSD(100),
+		PeriodTimezone:        "UTC",
+		PeriodTimezoneVersion: 1,
 	}
 }
 

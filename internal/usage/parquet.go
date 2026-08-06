@@ -20,104 +20,111 @@ import (
 const parquetSchemaVersion = 3
 const adjustmentParquetSchemaVersion = 2
 
+// Export format (ADR 0017): what new partitions are written as. Existing
+// partitions are never rewritten to a different format.
+const (
+	FormatParquet = "parquet"
+	FormatNDJSON  = "ndjson"
+)
+
 type parquetAdjustment struct {
-	SchemaVersion               int32  `parquet:"schema_version"`
-	EventID                     string `parquet:"event_id,dict"`
-	Sequence                    int64  `parquet:"sequence,delta"`
-	RequestID                   string `parquet:"request_id,dict"`
-	AttemptID                   string `parquet:"attempt_id,dict"`
-	ProjectID                   string `parquet:"project_id,dict"`
-	DeploymentID                string `parquet:"deployment_id,dict"`
-	ProviderID                  string `parquet:"provider_id,dict"`
-	Mode                        string `parquet:"mode,dict"`
-	AdjustmentSequence          int64  `parquet:"adjustment_sequence"`
-	IdempotencyKeyDigest        string `parquet:"idempotency_key_digest"`
-	BaseCostMicrosUSD           int64  `parquet:"base_cost_micros_usd"`
-	BaseCostKnown               bool   `parquet:"base_cost_known"`
-	NetCostBeforeMicrosUSD      int64  `parquet:"net_cost_before_micros_usd"`
-	DeltaMicrosUSD              int64  `parquet:"delta_micros_usd"`
-	NetCostAfterMicrosUSD       int64  `parquet:"net_cost_after_micros_usd"`
-	ServicePeriodID             string `parquet:"service_period_id,dict"`
-	OriginalCompletedAtMicros   int64  `parquet:"original_completed_at_utc,timestamp(microsecond)"`
-	PostedPeriodID              string `parquet:"posted_period_id,dict"`
-	PostedAtMicros              int64  `parquet:"posted_at_utc,timestamp(microsecond)"`
-	CorrectionPriceSnapshotJSON string `parquet:"correction_price_snapshot_json"`
-	ReasonCode                  string `parquet:"reason_code,dict"`
-	EvidenceDigest              string `parquet:"evidence_digest"`
-	CreatedBy                   string `parquet:"created_by,dict"`
-	Reason                      string `parquet:"reason"`
-	OriginalSettlementEventID   string `parquet:"original_settlement_event_id"`
-	OriginalSettlementDigest    string `parquet:"original_settlement_digest"`
-	AdjustmentRequestDigest     string `parquet:"adjustment_request_digest"`
+	SchemaVersion               int32  `parquet:"schema_version" json:"schema_version"`
+	EventID                     string `parquet:"event_id,dict" json:"event_id"`
+	Sequence                    int64  `parquet:"sequence,delta" json:"sequence"`
+	RequestID                   string `parquet:"request_id,dict" json:"request_id"`
+	AttemptID                   string `parquet:"attempt_id,dict" json:"attempt_id"`
+	ProjectID                   string `parquet:"project_id,dict" json:"project_id"`
+	DeploymentID                string `parquet:"deployment_id,dict" json:"deployment_id"`
+	ProviderID                  string `parquet:"provider_id,dict" json:"provider_id"`
+	Mode                        string `parquet:"mode,dict" json:"mode"`
+	AdjustmentSequence          int64  `parquet:"adjustment_sequence" json:"adjustment_sequence"`
+	IdempotencyKeyDigest        string `parquet:"idempotency_key_digest" json:"idempotency_key_digest"`
+	BaseCostMicrosUSD           int64  `parquet:"base_cost_micros_usd" json:"base_cost_micros_usd"`
+	BaseCostKnown               bool   `parquet:"base_cost_known" json:"base_cost_known"`
+	NetCostBeforeMicrosUSD      int64  `parquet:"net_cost_before_micros_usd" json:"net_cost_before_micros_usd"`
+	DeltaMicrosUSD              int64  `parquet:"delta_micros_usd" json:"delta_micros_usd"`
+	NetCostAfterMicrosUSD       int64  `parquet:"net_cost_after_micros_usd" json:"net_cost_after_micros_usd"`
+	ServicePeriodID             string `parquet:"service_period_id,dict" json:"service_period_id"`
+	OriginalCompletedAtMicros   int64  `parquet:"original_completed_at_utc,timestamp(microsecond)" json:"original_completed_at_utc"`
+	PostedPeriodID              string `parquet:"posted_period_id,dict" json:"posted_period_id"`
+	PostedAtMicros              int64  `parquet:"posted_at_utc,timestamp(microsecond)" json:"posted_at_utc"`
+	CorrectionPriceSnapshotJSON string `parquet:"correction_price_snapshot_json" json:"correction_price_snapshot_json"`
+	ReasonCode                  string `parquet:"reason_code,dict" json:"reason_code"`
+	EvidenceDigest              string `parquet:"evidence_digest" json:"evidence_digest"`
+	CreatedBy                   string `parquet:"created_by,dict" json:"created_by"`
+	Reason                      string `parquet:"reason" json:"reason"`
+	OriginalSettlementEventID   string `parquet:"original_settlement_event_id" json:"original_settlement_event_id"`
+	OriginalSettlementDigest    string `parquet:"original_settlement_digest" json:"original_settlement_digest"`
+	AdjustmentRequestDigest     string `parquet:"adjustment_request_digest" json:"adjustment_request_digest"`
 }
 
 type parquetAttempt struct {
-	SchemaVersion        int32  `parquet:"schema_version"`
-	EventID              string `parquet:"event_id,dict"`
-	RequestID            string `parquet:"request_id,dict"`
-	AttemptID            string `parquet:"attempt_id,dict"`
-	Sequence             int64  `parquet:"sequence,delta"`
-	AttemptNumber        int32  `parquet:"attempt_number"`
-	ProjectID            string `parquet:"project_id,dict"`
-	KeyID                string `parquet:"key_id,dict"`
-	RouteID              string `parquet:"route_id,dict"`
-	DeploymentID         string `parquet:"deployment_id,dict"`
-	ProviderID           string `parquet:"provider_id,dict"`
-	RequestedModel       string `parquet:"requested_model,dict"`
-	ProviderModel        string `parquet:"provider_model,dict"`
-	ProviderInputTokens  int64  `parquet:"provider_input_tokens"`
-	ProviderOutputTokens int64  `parquet:"provider_output_tokens"`
-	PreparedOutputTokens int64  `parquet:"prepared_output_tokens"`
-	CostMicrosUSD        int64  `parquet:"cost_micros_usd"`
-	CostKnown            bool   `parquet:"cost_known"`
-	PriceEvidenceStatus  string `parquet:"price_evidence_status,dict"`
-	CostValueStatus      string `parquet:"cost_value_status,dict"`
-	BillingMode          string `parquet:"billing_mode,dict"`
-	PriceSnapshotJSON    string `parquet:"price_snapshot_json"`
-	InputCostMicrosUSD   int64  `parquet:"input_cost_micros_usd"`
-	OutputCostMicrosUSD  int64  `parquet:"output_cost_micros_usd"`
-	FixedCostMicrosUSD   int64  `parquet:"fixed_cost_micros_usd"`
-	TokenUsageSource     string `parquet:"token_usage_source,dict"`
-	CostEstimated        bool   `parquet:"cost_estimated"`
-	TokensEstimated      bool   `parquet:"tokens_estimated"`
-	StartedAtMicros      int64  `parquet:"started_at_utc,timestamp(microsecond)"`
-	CompletedAtMicros    int64  `parquet:"completed_at_utc,timestamp(microsecond)"`
-	Status               string `parquet:"status,dict"`
-	ErrorClass           string `parquet:"error_class,dict"`
-	HTTPStatus           int32  `parquet:"http_status"`
-	LatencyMillis        int64  `parquet:"latency_millis"`
-	RetryCount           int32  `parquet:"retry_count"`
-	FallbackCount        int32  `parquet:"fallback_count"`
+	SchemaVersion        int32  `parquet:"schema_version" json:"schema_version"`
+	EventID              string `parquet:"event_id,dict" json:"event_id"`
+	RequestID            string `parquet:"request_id,dict" json:"request_id"`
+	AttemptID            string `parquet:"attempt_id,dict" json:"attempt_id"`
+	Sequence             int64  `parquet:"sequence,delta" json:"sequence"`
+	AttemptNumber        int32  `parquet:"attempt_number" json:"attempt_number"`
+	ProjectID            string `parquet:"project_id,dict" json:"project_id"`
+	KeyID                string `parquet:"key_id,dict" json:"key_id"`
+	RouteID              string `parquet:"route_id,dict" json:"route_id"`
+	DeploymentID         string `parquet:"deployment_id,dict" json:"deployment_id"`
+	ProviderID           string `parquet:"provider_id,dict" json:"provider_id"`
+	RequestedModel       string `parquet:"requested_model,dict" json:"requested_model"`
+	ProviderModel        string `parquet:"provider_model,dict" json:"provider_model"`
+	ProviderInputTokens  int64  `parquet:"provider_input_tokens" json:"provider_input_tokens"`
+	ProviderOutputTokens int64  `parquet:"provider_output_tokens" json:"provider_output_tokens"`
+	PreparedOutputTokens int64  `parquet:"prepared_output_tokens" json:"prepared_output_tokens"`
+	CostMicrosUSD        int64  `parquet:"cost_micros_usd" json:"cost_micros_usd"`
+	CostKnown            bool   `parquet:"cost_known" json:"cost_known"`
+	PriceEvidenceStatus  string `parquet:"price_evidence_status,dict" json:"price_evidence_status"`
+	CostValueStatus      string `parquet:"cost_value_status,dict" json:"cost_value_status"`
+	BillingMode          string `parquet:"billing_mode,dict" json:"billing_mode"`
+	PriceSnapshotJSON    string `parquet:"price_snapshot_json" json:"price_snapshot_json"`
+	InputCostMicrosUSD   int64  `parquet:"input_cost_micros_usd" json:"input_cost_micros_usd"`
+	OutputCostMicrosUSD  int64  `parquet:"output_cost_micros_usd" json:"output_cost_micros_usd"`
+	FixedCostMicrosUSD   int64  `parquet:"fixed_cost_micros_usd" json:"fixed_cost_micros_usd"`
+	TokenUsageSource     string `parquet:"token_usage_source,dict" json:"token_usage_source"`
+	CostEstimated        bool   `parquet:"cost_estimated" json:"cost_estimated"`
+	TokensEstimated      bool   `parquet:"tokens_estimated" json:"tokens_estimated"`
+	StartedAtMicros      int64  `parquet:"started_at_utc,timestamp(microsecond)" json:"started_at_utc"`
+	CompletedAtMicros    int64  `parquet:"completed_at_utc,timestamp(microsecond)" json:"completed_at_utc"`
+	Status               string `parquet:"status,dict" json:"status"`
+	ErrorClass           string `parquet:"error_class,dict" json:"error_class"`
+	HTTPStatus           int32  `parquet:"http_status" json:"http_status"`
+	LatencyMillis        int64  `parquet:"latency_millis" json:"latency_millis"`
+	RetryCount           int32  `parquet:"retry_count" json:"retry_count"`
+	FallbackCount        int32  `parquet:"fallback_count" json:"fallback_count"`
 }
 
 type parquetAttemptV2 struct {
-	SchemaVersion        int32  `parquet:"schema_version"`
-	EventID              string `parquet:"event_id,dict"`
-	RequestID            string `parquet:"request_id,dict"`
-	AttemptID            string `parquet:"attempt_id,dict"`
-	Sequence             int64  `parquet:"sequence,delta"`
-	AttemptNumber        int32  `parquet:"attempt_number"`
-	ProjectID            string `parquet:"project_id,dict"`
-	KeyID                string `parquet:"key_id,dict"`
-	RouteID              string `parquet:"route_id,dict"`
-	DeploymentID         string `parquet:"deployment_id,dict"`
-	ProviderID           string `parquet:"provider_id,dict"`
-	RequestedModel       string `parquet:"requested_model,dict"`
-	ProviderModel        string `parquet:"provider_model,dict"`
-	ProviderInputTokens  int64  `parquet:"provider_input_tokens"`
-	ProviderOutputTokens int64  `parquet:"provider_output_tokens"`
-	PreparedOutputTokens int64  `parquet:"prepared_output_tokens"`
-	CostMicrosUSD        int64  `parquet:"cost_micros_usd"`
-	CostEstimated        bool   `parquet:"cost_estimated"`
-	TokensEstimated      bool   `parquet:"tokens_estimated"`
-	StartedAtMicros      int64  `parquet:"started_at_utc,timestamp(microsecond)"`
-	CompletedAtMicros    int64  `parquet:"completed_at_utc,timestamp(microsecond)"`
-	Status               string `parquet:"status,dict"`
-	ErrorClass           string `parquet:"error_class,dict"`
-	HTTPStatus           int32  `parquet:"http_status"`
-	LatencyMillis        int64  `parquet:"latency_millis"`
-	RetryCount           int32  `parquet:"retry_count"`
-	FallbackCount        int32  `parquet:"fallback_count"`
+	SchemaVersion        int32  `parquet:"schema_version" json:"schema_version"`
+	EventID              string `parquet:"event_id,dict" json:"event_id"`
+	RequestID            string `parquet:"request_id,dict" json:"request_id"`
+	AttemptID            string `parquet:"attempt_id,dict" json:"attempt_id"`
+	Sequence             int64  `parquet:"sequence,delta" json:"sequence"`
+	AttemptNumber        int32  `parquet:"attempt_number" json:"attempt_number"`
+	ProjectID            string `parquet:"project_id,dict" json:"project_id"`
+	KeyID                string `parquet:"key_id,dict" json:"key_id"`
+	RouteID              string `parquet:"route_id,dict" json:"route_id"`
+	DeploymentID         string `parquet:"deployment_id,dict" json:"deployment_id"`
+	ProviderID           string `parquet:"provider_id,dict" json:"provider_id"`
+	RequestedModel       string `parquet:"requested_model,dict" json:"requested_model"`
+	ProviderModel        string `parquet:"provider_model,dict" json:"provider_model"`
+	ProviderInputTokens  int64  `parquet:"provider_input_tokens" json:"provider_input_tokens"`
+	ProviderOutputTokens int64  `parquet:"provider_output_tokens" json:"provider_output_tokens"`
+	PreparedOutputTokens int64  `parquet:"prepared_output_tokens" json:"prepared_output_tokens"`
+	CostMicrosUSD        int64  `parquet:"cost_micros_usd" json:"cost_micros_usd"`
+	CostEstimated        bool   `parquet:"cost_estimated" json:"cost_estimated"`
+	TokensEstimated      bool   `parquet:"tokens_estimated" json:"tokens_estimated"`
+	StartedAtMicros      int64  `parquet:"started_at_utc,timestamp(microsecond)" json:"started_at_utc"`
+	CompletedAtMicros    int64  `parquet:"completed_at_utc,timestamp(microsecond)" json:"completed_at_utc"`
+	Status               string `parquet:"status,dict" json:"status"`
+	ErrorClass           string `parquet:"error_class,dict" json:"error_class"`
+	HTTPStatus           int32  `parquet:"http_status" json:"http_status"`
+	LatencyMillis        int64  `parquet:"latency_millis" json:"latency_millis"`
+	RetryCount           int32  `parquet:"retry_count" json:"retry_count"`
+	FallbackCount        int32  `parquet:"fallback_count" json:"fallback_count"`
 }
 
 type Manifest struct {
@@ -137,6 +144,17 @@ type ManifestFile struct {
 	InputTokens   int64  `json:"input_tokens"`
 	OutputTokens  int64  `json:"output_tokens"`
 	CostMicrosUSD int64  `json:"cost_micros_usd"`
+	// Format is the physical container this partition is stored in (ADR
+	// 0017). Empty decodes as FormatParquet — every manifest written before
+	// this field existed only ever held Parquet partitions.
+	Format string `json:"format,omitempty"`
+}
+
+func (f ManifestFile) format() string {
+	if f.Format == "" {
+		return FormatParquet
+	}
+	return f.Format
 }
 
 type AdjustmentManifest struct {
@@ -153,10 +171,26 @@ type AdjustmentManifestFile struct {
 	MaxSequence    uint64 `json:"max_sequence"`
 	Records        int64  `json:"records"`
 	DeltaMicrosUSD int64  `json:"delta_micros_usd"`
+	// Format mirrors ManifestFile.Format; see FormatParquet/FormatNDJSON.
+	Format string `json:"format,omitempty"`
+}
+
+func (f AdjustmentManifestFile) format() string {
+	if f.Format == "" {
+		return FormatParquet
+	}
+	return f.Format
 }
 
 type Exporter struct {
-	root string
+	root   string
+	format string
+}
+
+// Options configures what NewExporterWithOptions writes new partitions as.
+// The zero value writes Parquet, matching NewExporter's historical behavior.
+type Options struct {
+	Format string
 }
 
 type RetentionReport struct {
@@ -174,10 +208,21 @@ type ReconciliationReport struct {
 }
 
 func NewExporter(root string) (*Exporter, error) {
+	return NewExporterWithOptions(root, Options{})
+}
+
+func NewExporterWithOptions(root string, options Options) (*Exporter, error) {
 	if !filepath.IsAbs(root) {
 		return nil, errors.New("usage export directory must be absolute")
 	}
-	return &Exporter{root: filepath.Clean(root)}, nil
+	format := options.Format
+	if format == "" {
+		format = FormatParquet
+	}
+	if format != FormatParquet && format != FormatNDJSON {
+		return nil, fmt.Errorf("usage export format %q is not supported", format)
+	}
+	return &Exporter{root: filepath.Clean(root), format: format}, nil
 }
 
 func (e *Exporter) Export(snapshot Snapshot) (Manifest, error) {
@@ -351,20 +396,26 @@ func (e *Exporter) Verify(snapshot *Snapshot) error {
 			entryVersion = manifest.SchemaVersion
 		}
 		if entryVersion == 2 {
-			rows, readErr := parquet.ReadFile[parquetAttemptV2](path)
+			var rows []parquetAttemptV2
+			var readErr error
+			if entry.format() == FormatNDJSON {
+				rows, readErr = readNDJSONFile[parquetAttemptV2](path)
+			} else {
+				rows, readErr = parquet.ReadFile[parquetAttemptV2](path)
+			}
 			if readErr != nil {
-				return fmt.Errorf("read legacy usage parquet %s: %w", entry.Path, readErr)
+				return fmt.Errorf("read legacy usage partition %s: %w", entry.Path, readErr)
 			}
 			if err := verifyRowsV2(rows, entry, seen); err != nil {
-				return fmt.Errorf("verify legacy usage parquet %s: %w", entry.Path, err)
+				return fmt.Errorf("verify legacy usage partition %s: %w", entry.Path, err)
 			}
 		} else {
-			rows, readErr := parquet.ReadFile[parquetAttempt](path)
+			rows, readErr := readAttemptRows(path, entry.format())
 			if readErr != nil {
-				return fmt.Errorf("read usage parquet %s: %w", entry.Path, readErr)
+				return fmt.Errorf("read usage partition %s: %w", entry.Path, readErr)
 			}
 			if err := verifyRows(rows, entry, seen, canonicalRows); err != nil {
-				return fmt.Errorf("verify usage parquet %s: %w", entry.Path, err)
+				return fmt.Errorf("verify usage partition %s: %w", entry.Path, err)
 			}
 		}
 		if entry.MaxSequence > lastSequence {
@@ -420,9 +471,9 @@ func (e *Exporter) verifyAdjustments(snapshot *Snapshot) error {
 		}
 		checksum, err := fileSHA256(path)
 		if err != nil || checksum != entry.SHA256 {
-			return fmt.Errorf("adjustment parquet checksum mismatch: %s", entry.Path)
+			return fmt.Errorf("adjustment partition checksum mismatch: %s", entry.Path)
 		}
-		rows, err := parquet.ReadFile[parquetAdjustment](path)
+		rows, err := readAdjustmentRows(path, entry.format())
 		if err != nil {
 			return err
 		}
@@ -559,6 +610,7 @@ func (e *Exporter) publishPartition(date string, attempts []AttemptEvent) (Manif
 	entry := ManifestFile{
 		SchemaVersion: parquetSchemaVersion, Date: date, MinSequence: attempts[0].Sequence,
 		MaxSequence: attempts[len(attempts)-1].Sequence, Records: int64(len(attempts)),
+		Format: e.format,
 	}
 	for index, attempt := range attempts {
 		rows[index] = toParquetAttempt(attempt)
@@ -575,25 +627,29 @@ func (e *Exporter) publishPartition(date string, attempts []AttemptEvent) (Manif
 		}
 	}
 	relative := filepath.Join("date="+date,
-		fmt.Sprintf("usage-%020d-%020d.parquet", entry.MinSequence, entry.MaxSequence))
+		fmt.Sprintf("usage-%020d-%020d.%s", entry.MinSequence, entry.MaxSequence, partitionExtension(e.format)))
 	entry.Path = filepath.ToSlash(relative)
 	path := filepath.Join(e.root, relative)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return ManifestFile{}, fmt.Errorf("create usage partition: %w", err)
 	}
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
-		if err := writeParquetAtomic(path, rows); err != nil {
+		if e.format == FormatNDJSON {
+			if err := writeNDJSONAtomic(path, rows); err != nil {
+				return ManifestFile{}, err
+			}
+		} else if err := writeParquetAtomic(path, rows); err != nil {
 			return ManifestFile{}, err
 		}
 	} else if err != nil {
 		return ManifestFile{}, err
 	} else {
-		existing, err := parquet.ReadFile[parquetAttempt](path)
+		existing, err := readAttemptRows(path, e.format)
 		if err != nil {
-			return ManifestFile{}, fmt.Errorf("read orphan usage parquet: %w", err)
+			return ManifestFile{}, fmt.Errorf("read orphan usage partition: %w", err)
 		}
 		if !sameRows(existing, rows) {
-			return ManifestFile{}, fmt.Errorf("existing usage parquet conflicts with export: %s", relative)
+			return ManifestFile{}, fmt.Errorf("existing usage partition conflicts with export: %s", relative)
 		}
 	}
 	checksum, err := fileSHA256(path)
@@ -604,37 +660,58 @@ func (e *Exporter) publishPartition(date string, attempts []AttemptEvent) (Manif
 	return entry, nil
 }
 
+func partitionExtension(format string) string {
+	if format == FormatNDJSON {
+		return "ndjson"
+	}
+	return "parquet"
+}
+
+func readAttemptRows(path, format string) ([]parquetAttempt, error) {
+	if format == FormatNDJSON {
+		return readNDJSONFile[parquetAttempt](path)
+	}
+	return parquet.ReadFile[parquetAttempt](path)
+}
+
 func (e *Exporter) publishAdjustmentPartition(date string, adjustments []CostAdjustmentEvent) (AdjustmentManifestFile, error) {
 	if len(adjustments) == 0 {
 		return AdjustmentManifestFile{}, errors.New("cannot publish empty adjustment partition")
 	}
 	rows := make([]parquetAdjustment, len(adjustments))
-	entry := AdjustmentManifestFile{Date: date, MinSequence: adjustments[0].Sequence, MaxSequence: adjustments[len(adjustments)-1].Sequence, Records: int64(len(adjustments))}
+	entry := AdjustmentManifestFile{
+		Date: date, MinSequence: adjustments[0].Sequence, MaxSequence: adjustments[len(adjustments)-1].Sequence,
+		Records: int64(len(adjustments)), Format: e.format,
+	}
 	for index, item := range adjustments {
 		rows[index] = toParquetAdjustment(item)
 		if err := addInt64(&entry.DeltaMicrosUSD, item.DeltaMicrosUSD); err != nil {
 			return AdjustmentManifestFile{}, err
 		}
 	}
-	relative := filepath.Join("cost_adjustments", "date="+date, fmt.Sprintf("adjustments-%020d-%020d.parquet", entry.MinSequence, entry.MaxSequence))
+	relative := filepath.Join("cost_adjustments", "date="+date, fmt.Sprintf("adjustments-%020d-%020d.%s", entry.MinSequence, entry.MaxSequence, partitionExtension(e.format)))
 	entry.Path = filepath.ToSlash(relative)
 	path := filepath.Join(e.root, relative)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return AdjustmentManifestFile{}, err
 	}
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
-		if err := writeAdjustmentParquetAtomic(path, rows); err != nil {
+		if e.format == FormatNDJSON {
+			if err := writeNDJSONAtomic(path, rows); err != nil {
+				return AdjustmentManifestFile{}, err
+			}
+		} else if err := writeAdjustmentParquetAtomic(path, rows); err != nil {
 			return AdjustmentManifestFile{}, err
 		}
 	} else if err != nil {
 		return AdjustmentManifestFile{}, err
 	} else {
-		existing, err := parquet.ReadFile[parquetAdjustment](path)
+		existing, err := readAdjustmentRows(path, e.format)
 		if err != nil {
-			return AdjustmentManifestFile{}, fmt.Errorf("read orphan adjustment parquet: %w", err)
+			return AdjustmentManifestFile{}, fmt.Errorf("read orphan adjustment partition: %w", err)
 		}
 		if !sameAdjustmentRows(existing, rows) {
-			return AdjustmentManifestFile{}, fmt.Errorf("existing adjustment parquet conflicts with export: %s", relative)
+			return AdjustmentManifestFile{}, fmt.Errorf("existing adjustment partition conflicts with export: %s", relative)
 		}
 	}
 	checksum, err := fileSHA256(path)
@@ -643,6 +720,13 @@ func (e *Exporter) publishAdjustmentPartition(date string, adjustments []CostAdj
 	}
 	entry.SHA256 = checksum
 	return entry, nil
+}
+
+func readAdjustmentRows(path, format string) ([]parquetAdjustment, error) {
+	if format == FormatNDJSON {
+		return readNDJSONFile[parquetAdjustment](path)
+	}
+	return parquet.ReadFile[parquetAdjustment](path)
 }
 
 func toParquetAdjustment(item CostAdjustmentEvent) parquetAdjustment {
@@ -729,6 +813,61 @@ func (e *Exporter) commitAdjustmentManifest(manifest AdjustmentManifest) (err er
 		return err
 	}
 	return syncDirectory(root)
+}
+
+// writeNDJSONAtomic follows the exact durability sequence writeParquetAtomic
+// and writeAdjustmentParquetAtomic already use — temp file in the target
+// directory, fsync, atomic rename, directory fsync. A partition's durability
+// story does not depend on what container is inside it.
+func writeNDJSONAtomic[T any](path string, rows []T) (err error) {
+	temp, err := os.CreateTemp(filepath.Dir(path), ".ndjson-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create usage ndjson temp file: %w", err)
+	}
+	tempPath := temp.Name()
+	defer func() {
+		temp.Close()
+		if err != nil {
+			_ = os.Remove(tempPath)
+		}
+	}()
+	if err = temp.Chmod(0o600); err != nil {
+		return err
+	}
+	encoder := json.NewEncoder(temp)
+	for _, row := range rows {
+		if err = encoder.Encode(row); err != nil {
+			return fmt.Errorf("write usage ndjson: %w", err)
+		}
+	}
+	if err = temp.Sync(); err != nil {
+		return fmt.Errorf("sync usage ndjson: %w", err)
+	}
+	if err = temp.Close(); err != nil {
+		return fmt.Errorf("close usage ndjson: %w", err)
+	}
+	if err = os.Rename(tempPath, path); err != nil {
+		return fmt.Errorf("publish usage ndjson: %w", err)
+	}
+	return syncDirectory(filepath.Dir(path))
+}
+
+func readNDJSONFile[T any](path string) ([]T, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	var rows []T
+	decoder := json.NewDecoder(file)
+	for decoder.More() {
+		var row T
+		if err := decoder.Decode(&row); err != nil {
+			return nil, fmt.Errorf("decode usage ndjson row: %w", err)
+		}
+		rows = append(rows, row)
+	}
+	return rows, nil
 }
 
 func writeParquetAtomic(path string, rows []parquetAttempt) (err error) {

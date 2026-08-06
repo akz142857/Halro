@@ -46,6 +46,8 @@ usage:
   checkpoint_interval: "1m"
   parquet_interval: "1h"
   retention_days: 90
+  # parquet (default) or ndjson (ADR 0017, docs/adr/0017-usage-export-format.md).
+  export_format: "parquet"
 
 gateway:
   route_total_timeout: 120s
@@ -97,3 +99,21 @@ metrics:
     cert_file: ""
     key_file: ""
     client_ca_file: ""
+
+audit:
+  anchor:
+    # Off by default (ADR 0015, docs/adr/0015-audit-chain-external-anchoring.md).
+    # In mode: file, master.key holder can rewrite audit history undetected by
+    # anyone else. Enabling this periodically publishes a payload-free summary
+    # of the audit chain (record count + hash, no event content) that a
+    # dead-man probe on a separate host pulls and keeps — a later rewrite then
+    # disagrees with a copy the operator does not control.
+    enabled: false
+    # dead_man_pull is the only implemented sink; it reuses the existing
+    # heimdall-deadman probe and its independent host/credentials/TLS.
+    sink: dead_man_pull
+    interval: 5m
+    record_delta: 500
+    # Required once enabled. Independent from metrics.credential_file — the
+    # two rotate on unrelated schedules and one must not authorize the other.
+    credential_file: ""

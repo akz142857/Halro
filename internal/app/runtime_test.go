@@ -80,14 +80,16 @@ func TestLedgerStateIsRebuiltDuringOpen(t *testing.T) {
 		t.Fatal(err)
 	}
 	event := ledger.Event{
-		EventID:              "evt_reservation",
-		Kind:                 ledger.EventReservationCreated,
-		RequestID:            "req_1",
-		AttemptID:            "req_1:1",
-		ProjectID:            "prj_1",
-		PeriodID:             "prj_1:2026-07-31:tz1",
-		OccurredAt:           time.Now().UTC(),
-		ReservationMicrosUSD: ledger.MicrosUSD(500),
+		EventID:               "evt_reservation",
+		Kind:                  ledger.EventReservationCreated,
+		RequestID:             "req_1",
+		AttemptID:             "req_1:1",
+		ProjectID:             "prj_1",
+		PeriodID:              "prj_1:2026-07-31:tz1",
+		OccurredAt:            time.Now().UTC(),
+		ReservationMicrosUSD:  ledger.MicrosUSD(500),
+		PeriodTimezone:        "UTC",
+		PeriodTimezoneVersion: 1,
 	}
 	if _, err := runtime.ledger.Append(context.Background(), event); err != nil {
 		t.Fatal(err)

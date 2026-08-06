@@ -93,7 +93,7 @@ func openUsageOffline(
 		closeResources()
 		return nil, nil, nil, fmt.Errorf("replay usage ledger: %w", err)
 	}
-	exporter, err := usage.NewExporter(cfg.UsagePath())
+	exporter, err := usage.NewExporterWithOptions(cfg.UsagePath(), usage.Options{Format: cfg.Usage.ExportFormat})
 	if err != nil {
 		closeResources()
 		return nil, nil, nil, err

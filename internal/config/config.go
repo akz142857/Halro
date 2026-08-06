@@ -30,6 +30,7 @@ type Config struct {
 	Alerts         Alerts         `yaml:"alerts"`
 	Security       Security       `yaml:"security"`
 	Metrics        Metrics        `yaml:"metrics"`
+	Audit          Audit          `yaml:"audit"`
 }
 
 type Server struct {
@@ -89,7 +90,16 @@ type Usage struct {
 	CheckpointInterval     Duration `yaml:"checkpoint_interval"`
 	ParquetInterval        Duration `yaml:"parquet_interval"`
 	RetentionDays          int      `yaml:"retention_days"`
+	// ExportFormat selects the container new Usage partitions are written in
+	// (ADR 0017): "parquet" (default) or "ndjson". Existing partitions are
+	// never rewritten — this only changes what gets written from here on.
+	ExportFormat string `yaml:"export_format"`
 }
+
+const (
+	UsageExportFormatParquet = "parquet"
+	UsageExportFormatNDJSON  = "ndjson"
+)
 
 type Admin struct {
 	SessionTTL                        Duration `yaml:"session_ttl"`
@@ -183,6 +193,27 @@ type MetricsTLS struct {
 	CertFile     string `yaml:"cert_file"`
 	KeyFile      string `yaml:"key_file"`
 	ClientCAFile string `yaml:"client_ca_file"`
+}
+
+// AuditAnchorSink identifies where anchors (ADR 0015) are sent. Only
+// AuditAnchorSinkDeadManPull is implemented; the others are reserved names so
+// a deployment's config does not need to change again when they land.
+const (
+	AuditAnchorSinkDeadManPull  = "dead_man_pull"
+	AuditAnchorSinkSyslog       = "syslog"
+	AuditAnchorSinkS3ObjectLock = "s3_object_lock"
+)
+
+type Audit struct {
+	Anchor AuditAnchor `yaml:"anchor"`
+}
+
+type AuditAnchor struct {
+	Enabled        bool     `yaml:"enabled"`
+	Sink           string   `yaml:"sink"`
+	Interval       Duration `yaml:"interval"`
+	RecordDelta    int      `yaml:"record_delta"`
+	CredentialFile string   `yaml:"credential_file"`
 }
 
 type LoadOptions struct {
@@ -343,6 +374,9 @@ func (c *Config) Normalize() error {
 	if c.Usage.RetentionDays == 0 {
 		c.Usage.RetentionDays = 90
 	}
+	if c.Usage.ExportFormat == "" {
+		c.Usage.ExportFormat = UsageExportFormatParquet
+	}
 	if c.Admin.SessionTTL == 0 {
 		c.Admin.SessionTTL = Duration(8 * time.Hour)
 	}
@@ -419,6 +453,32 @@ func (c Config) Validate(opts LoadOptions) error {
 			}
 		} else if c.Metrics.TLS.CertFile != "" || c.Metrics.TLS.KeyFile != "" || c.Metrics.TLS.ClientCAFile != "" {
 			problems = append(problems, errors.New("metrics.tls files cannot be set while metrics.tls is disabled"))
+		}
+	}
+	if c.Audit.Anchor.Enabled {
+		switch c.Audit.Anchor.Sink {
+		case AuditAnchorSinkDeadManPull:
+			// The anchor-pull endpoint is served on the metrics listener
+			// (ADR 0015): it is already an independent port with a
+			// bearer/mTLS story a probe-style caller needs, and standing up
+			// a second listener for one more endpoint would duplicate that
+			// story rather than reuse it.
+			if !c.Metrics.Enabled {
+				problems = append(problems, errors.New("audit.anchor.sink dead_man_pull requires metrics.enabled"))
+			}
+			if c.Audit.Anchor.CredentialFile == "" {
+				problems = append(problems, errors.New("audit.anchor.credential_file is required for sink dead_man_pull"))
+			}
+		case AuditAnchorSinkSyslog, AuditAnchorSinkS3ObjectLock:
+			problems = append(problems, fmt.Errorf("audit.anchor.sink %q is a reserved name and not implemented yet", c.Audit.Anchor.Sink))
+		default:
+			problems = append(problems, fmt.Errorf("audit.anchor.sink %q is not a recognized sink", c.Audit.Anchor.Sink))
+		}
+		if c.Audit.Anchor.Interval <= 0 || c.Audit.Anchor.Interval > Duration(time.Hour) {
+			problems = append(problems, errors.New("audit.anchor.interval must be between zero and one hour"))
+		}
+		if c.Audit.Anchor.RecordDelta < 1 {
+			problems = append(problems, errors.New("audit.anchor.record_delta must be at least 1"))
 		}
 	}
 	listeners := map[string]string{
@@ -516,6 +576,9 @@ func (c Config) Validate(opts LoadOptions) error {
 	}
 	if c.Usage.RetentionDays < 1 {
 		problems = append(problems, errors.New("usage.retention_days must be at least 1"))
+	}
+	if c.Usage.ExportFormat != UsageExportFormatParquet && c.Usage.ExportFormat != UsageExportFormatNDJSON {
+		problems = append(problems, errors.New("usage.export_format must be parquet or ndjson"))
 	}
 	if c.Admin.SessionTTL <= 0 || c.Admin.IdleTimeout <= 0 ||
 		c.Admin.IdleTimeout > c.Admin.SessionTTL || c.Admin.LoginRPM < 1 {

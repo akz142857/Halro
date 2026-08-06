@@ -1,6 +1,7 @@
 package budget
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -13,10 +14,15 @@ import (
 	"github.com/akz142857/Heimdall/internal/ledger"
 )
 
+// testChainKey is a fixed 32-byte Ledger HMAC key for tests that append.
+// Every event the ledger package writes is promoted to epoch 4 (ADR 0016),
+// which requires a key to compute the frame MAC.
+var testChainKey = bytes.Repeat([]byte{0x24}, 32)
+
 func newTestManager(t *testing.T) (*Manager, *ledger.State, func()) {
 	t.Helper()
 	status := ledger.NewStatus()
-	log, err := ledger.Open(filepath.Join(t.TempDir(), "usage.wal"), status)
+	log, err := ledger.OpenWithOptions(filepath.Join(t.TempDir(), "usage.wal"), status, ledger.Options{ChainKey: testChainKey})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -439,7 +445,7 @@ func TestZeroBudgetIsUnlimited(t *testing.T) {
 func TestBudgetPeriodUsesConfiguredTimezoneAcrossDST(t *testing.T) {
 	const zoneName = "America/New_York"
 	status := ledger.NewStatus()
-	log, err := ledger.Open(filepath.Join(t.TempDir(), "usage.wal"), status)
+	log, err := ledger.OpenWithOptions(filepath.Join(t.TempDir(), "usage.wal"), status, ledger.Options{ChainKey: testChainKey})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -491,7 +497,7 @@ func TestNewWithOptionsBucketsTheRequestByTheSuppliedClock(t *testing.T) {
 		t.Helper()
 		// A manager owns its log: two of them applying to one file with separate states
 		// wait on each other's sequence forever.
-		log, err := ledger.Open(filepath.Join(t.TempDir(), "usage.wal"), ledger.NewStatus())
+		log, err := ledger.OpenWithOptions(filepath.Join(t.TempDir(), "usage.wal"), ledger.NewStatus(), ledger.Options{ChainKey: testChainKey})
 		if err != nil {
 			t.Fatal(err)
 		}

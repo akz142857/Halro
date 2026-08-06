@@ -106,6 +106,9 @@ type Runtime struct {
 	draining            atomic.Bool
 	runtimeSettings     atomic.Pointer[domain.RuntimeSettings]
 	uiSettings          atomic.Pointer[domain.InstanceUISettings]
+	instanceID          string
+	anchorAuthorizer    *metricsauth.Authorizer
+	anchorAuthFailed    atomic.Uint64
 }
 
 func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime, error) {
@@ -145,6 +148,17 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 			}
 			metricsTokenHash = sha256.Sum256(metricsToken)
 			clear(metricsToken)
+		}
+	}
+	var anchorAuthorizer *metricsauth.Authorizer
+	if cfg.Audit.Anchor.Enabled && cfg.Audit.Anchor.Sink == config.AuditAnchorSinkDeadManPull {
+		// Config validation already requires a credential file here — unlike
+		// metrics, there is no zero-config derived-token fallback, since the
+		// anchor endpoint is off by default and turning it on is already a
+		// deliberate step.
+		anchorAuthorizer, err = metricsauth.NewAuthorizer(cfg.Audit.Anchor.CredentialFile)
+		if err != nil {
+			return fail(fmt.Errorf("load audit anchor credentials: %w", err))
 		}
 	}
 	secretVault, err := vault.New(masterKey)
@@ -200,8 +214,22 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		return fail(err)
 	}
 	defer clear(auditKey)
+	ledgerKey, err := loadLedgerHMACKey(metadata, secretVault, masterKey)
+	if err != nil {
+		metadata.Close()
+		secretVault.Close()
+		return fail(err)
+	}
+	defer clear(ledgerKey)
+	// The gate only guarantees "at least" a reader version, not an exact one:
+	// the accounting-timezone work (schema v16) shipped frame epoch 3 without
+	// ever moving this gate off epoch 2 (docs/review/progress.md P2-16), which
+	// is exactly the bug a strict equality check produces. Migration 17
+	// jumped straight to epoch 4 to retroactively cover that gap; requiring
+	// only a floor here means the next epoch bump does not need to repeat it.
 	compatibilityGate, err := metadata.LedgerCompatibilityGate()
-	if err != nil || compatibilityGate.FeatureEpoch != 2 || compatibilityGate.MinimumReaderVersion != "v2" {
+	if err != nil || compatibilityGate.FeatureEpoch < 4 ||
+		compatibilityGate.MinimumReaderVersion != fmt.Sprintf("v%d", compatibilityGate.FeatureEpoch) {
 		metadata.Close()
 		secretVault.Close()
 		if err == nil {
@@ -214,6 +242,7 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		QueueCapacity: cfg.Usage.WALQueueCapacity,
 		MaxBatch:      cfg.Usage.WALMaxBatch,
 		FlushInterval: cfg.Usage.WALFlushInterval.Value(),
+		ChainKey:      ledgerKey,
 	}
 	if cfg.Usage.Durability == "strict" {
 		ledgerOptions.MaxBatch = 1
@@ -232,6 +261,12 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		secretVault.Close()
 		return fail(fmt.Errorf("replay ledger: %w", err))
 	}
+	if err := reconcileLedgerChainCheckpoint(metadata, ledgerLog); err != nil {
+		ledgerLog.Close()
+		metadata.Close()
+		secretVault.Close()
+		return fail(err)
+	}
 	usageAggregate, usageWatermark := restoreUsageAggregate(metadata, logger)
 	if _, err := ledgerLog.Replay(usageWatermark, usageAggregate.Apply); err != nil {
 		ledgerLog.Close()
@@ -239,7 +274,7 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		secretVault.Close()
 		return fail(fmt.Errorf("replay usage aggregate: %w", err))
 	}
-	usageExporter, err := usage.NewExporter(cfg.UsagePath())
+	usageExporter, err := usage.NewExporterWithOptions(cfg.UsagePath(), usage.Options{Format: cfg.Usage.ExportFormat})
 	if err != nil {
 		ledgerLog.Close()
 		metadata.Close()
@@ -454,6 +489,32 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		secretVault.Close()
 		return fail(fmt.Errorf("inspect Recovery Slot audit history: %w", err))
 	}
+	// A candidate is generated on every start; SeedInstanceID only accepts it
+	// the first time and returns whatever is already stored on every call
+	// after that. An anchor names the instance that emitted it (ADR 0015),
+	// and generating that name here — rather than asking an operator to
+	// coordinate one across a fleet in config — costs nothing on instances
+	// that will never turn anchoring on.
+	instanceIDCandidate, err := id.New("ins")
+	if err != nil {
+		auditLog.Close()
+		alertDispatcher.Close()
+		ledgerLog.Close()
+		metadata.Close()
+		providerRegistry.Close()
+		secretVault.Close()
+		return fail(err)
+	}
+	instanceID, err := metadata.SeedInstanceID(instanceIDCandidate)
+	if err != nil {
+		auditLog.Close()
+		alertDispatcher.Close()
+		ledgerLog.Close()
+		metadata.Close()
+		providerRegistry.Close()
+		secretVault.Close()
+		return fail(fmt.Errorf("seed instance ID: %w", err))
+	}
 	runtime := &Runtime{
 		config:              cfg,
 		logger:              logger,
@@ -475,6 +536,8 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		metricsTokenHash:    metricsTokenHash,
 		metricsAuthorizer:   metricsAuthorizer,
 		metricsScrapes:      make(chan struct{}, cfg.Metrics.MaxConcurrentScrapes),
+		instanceID:          instanceID,
+		anchorAuthorizer:    anchorAuthorizer,
 		startedAt:           time.Now(),
 		kmsRecoveryLastUsed: kmsRecoveryLastUsed,
 		adminSessions:       adminSessions,
@@ -565,10 +628,14 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 	runtime.backgroundCancel = backgroundCancel
 	runtime.alerts.SetObserver(runtime.auditAlertDelivery)
 	runtime.alerts.Start()
-	runtime.backgroundWait.Add(5)
+	runtime.backgroundWait.Add(6)
 	go func() {
 		defer runtime.backgroundWait.Done()
 		runtime.usageCollector.Run(backgroundContext)
+	}()
+	go func() {
+		defer runtime.backgroundWait.Done()
+		runtime.runAuditAnchorMaintenance(backgroundContext)
 	}()
 	go func() {
 		defer runtime.backgroundWait.Done()
@@ -751,6 +818,7 @@ func (r *Runtime) warnAboutReachableWorkbench() {
 // success when one of the ports cannot actually be opened.
 func (r *Runtime) RunWithReady(ctx context.Context, ready func() error) error {
 	r.warnAboutReachableWorkbench()
+	r.warnAboutMissingAnchorSink()
 	var metricsTLSConfig *tls.Config
 	if r.config.Metrics.Enabled && r.config.Metrics.TLS.Enabled {
 		var err error
@@ -938,6 +1006,38 @@ func reconcileAuditCheckpoint(store *boltstore.Store, summary audit.Summary) err
 	return nil
 }
 
+// reconcileLedgerChainCheckpoint is the ledger's counterpart to
+// reconcileAuditCheckpoint: a chain that has gone backwards, or that
+// disagrees with a previously observed head at the same sequence, means the
+// WAL was truncated or rewritten since the last trusted checkpoint — exactly
+// the "log is shorter today" case per-frame MAC verification alone cannot
+// catch (ADR 0016). A ledger that has never written an epoch-4 frame (a
+// brand new instance, or one still entirely on legacy epochs) has nothing to
+// reconcile yet; the checkpoint stays at its seeded zero value until the
+// first epoch-4 append advances it.
+func reconcileLedgerChainCheckpoint(store *boltstore.Store, ledgerLog *ledger.Log) error {
+	sequence, offset, hash, ok := ledgerLog.ChainHead()
+	if !ok {
+		return nil
+	}
+	checkpoint, err := store.LedgerChainCheckpoint()
+	if err != nil {
+		return fmt.Errorf("load ledger chain checkpoint: %w", err)
+	}
+	if checkpoint.Sequence > sequence ||
+		(checkpoint.Sequence == sequence && (checkpoint.Offset != offset || checkpoint.Hash != hash)) {
+		return errors.New("ledger chain does not match its trusted checkpoint")
+	}
+	if checkpoint.Sequence < sequence {
+		if err := store.PutLedgerChainCheckpoint(boltstore.LedgerChainCheckpoint{
+			Sequence: sequence, Offset: offset, Hash: hash,
+		}); err != nil {
+			return fmt.Errorf("checkpoint ledger chain: %w", err)
+		}
+	}
+	return nil
+}
+
 func (r *Runtime) server(name, address string, handler http.Handler) *http.Server {
 	return &http.Server{
 		Addr:              address,
@@ -1016,16 +1116,19 @@ func (r *Runtime) adminRouter() http.Handler {
 	router.Post("/admin/api/v1/session/mfa/recovery-code", r.completeAdminMFARecovery)
 	router.Delete("/admin/api/v1/session/mfa/challenge", r.cancelAdminMFAChallenge)
 	router.With(r.requireAdminBase).Get("/admin/api/v1/session", r.getAdminSession)
-	router.With(r.requireAdminSetupMutation).Post("/admin/api/v1/session/logout", r.logoutAdmin)
-	router.With(r.requireAdminMutation).Post("/admin/api/v1/session/password", r.changeAdminPassword)
+	router.With(r.requireAdminSelfSetupMutation).Post("/admin/api/v1/session/logout", r.logoutAdmin)
+	router.With(r.requireAdminSelfMutation).Post("/admin/api/v1/session/password", r.changeAdminPassword)
 	router.With(r.requireAdminBase).Get("/admin/api/v1/security/mfa", r.getAdminMFA)
-	router.With(r.requireAdminSetupMutation).Post("/admin/api/v1/security/mfa/authenticators", r.createAdminMFAAuthenticator)
-	router.With(r.requireAdminSetupMutation).Post("/admin/api/v1/security/mfa/authenticators/{id}/confirm", r.confirmAdminMFAAuthenticator)
-	router.With(r.requireAdminSetupMutation).Delete("/admin/api/v1/security/mfa/authenticators/{id}/pending", r.cancelPendingAdminMFAAuthenticator)
-	router.With(r.requireAdminMutation).Patch("/admin/api/v1/security/mfa/authenticators/{id}", r.renameAdminMFAAuthenticator)
-	router.With(r.requireAdminMutation).Delete("/admin/api/v1/security/mfa/authenticators/{id}", r.deleteAdminMFAAuthenticator)
-	router.With(r.requireAdminMutation).Post("/admin/api/v1/security/mfa/recovery-codes/regenerate", r.regenerateAdminMFARecoveryCodes)
-	router.With(r.requireAdminMutation).Delete("/admin/api/v1/security/mfa", r.disableAdminMFA)
+	router.With(r.requireAdminSelfSetupMutation).Post("/admin/api/v1/security/mfa/authenticators", r.createAdminMFAAuthenticator)
+	router.With(r.requireAdminSelfSetupMutation).Post("/admin/api/v1/security/mfa/authenticators/{id}/confirm", r.confirmAdminMFAAuthenticator)
+	router.With(r.requireAdminSelfSetupMutation).Delete("/admin/api/v1/security/mfa/authenticators/{id}/pending", r.cancelPendingAdminMFAAuthenticator)
+	router.With(r.requireAdminSelfMutation).Patch("/admin/api/v1/security/mfa/authenticators/{id}", r.renameAdminMFAAuthenticator)
+	router.With(r.requireAdminSelfMutation).Delete("/admin/api/v1/security/mfa/authenticators/{id}", r.deleteAdminMFAAuthenticator)
+	router.With(r.requireAdminSelfMutation).Post("/admin/api/v1/security/mfa/recovery-codes/regenerate", r.regenerateAdminMFARecoveryCodes)
+	router.With(r.requireAdminSelfMutation).Delete("/admin/api/v1/security/mfa", r.disableAdminMFA)
+	router.With(r.requireAdmin).Get("/admin/api/v1/admin-users", r.listAdminUsers)
+	router.With(r.requireAdminMutation).Post("/admin/api/v1/admin-users", r.createAdminUser)
+	router.With(r.requireAdminMutation).Delete("/admin/api/v1/admin-users/{username}", r.deleteAdminUser)
 	router.With(r.requireAdmin).Get("/admin/api/v1/dashboard", r.adminDashboard)
 	router.With(r.requireAdmin).Get("/admin/api/v1/master-key/custody", r.adminMasterKeyCustody)
 	router.With(r.requireAdmin).Get("/admin/api/v1/master-key/runbooks/lifecycle", r.adminMasterKeyLifecycleRunbook)
@@ -1046,7 +1149,7 @@ func (r *Runtime) adminRouter() http.Handler {
 	router.With(r.requireAdminMutation).Put("/admin/api/v1/settings/accounting", r.updateAdminAccountingSettings)
 	router.With(r.requireAdminMutation).Delete("/admin/api/v1/settings/accounting/pending", r.cancelAdminAccountingTimezoneChange)
 	router.With(r.requireAdmin).Get("/admin/api/v1/preferences", r.getAdminPreferences)
-	router.With(r.requireAdminMutation).Put("/admin/api/v1/preferences", r.updateAdminPreferences)
+	router.With(r.requireAdminSelfMutation).Put("/admin/api/v1/preferences", r.updateAdminPreferences)
 	router.With(r.requireAdmin).Get("/admin/api/v1/projects", r.listAdminProjects)
 	router.With(r.requireAdminMutation).Post("/admin/api/v1/projects", r.createAdminProject)
 	router.With(r.requireAdmin).Get("/admin/api/v1/projects/{id}", r.getAdminProject)
@@ -1136,6 +1239,9 @@ func (r *Runtime) metricsRouter() http.Handler {
 	router := chi.NewRouter()
 	router.Use(r.recoverPanics)
 	router.Get("/health/live", r.live)
+	if r.config.Audit.Anchor.Enabled && r.config.Audit.Anchor.Sink == config.AuditAnchorSinkDeadManPull {
+		router.Get("/audit/anchors", r.adminAuditAnchors)
+	}
 	router.Get("/metrics", func(writer http.ResponseWriter, request *http.Request) {
 		if r.config.Metrics.RequireAuth && !r.authorizeMetrics(request) {
 			r.metricsAuthFailed.Add(1)

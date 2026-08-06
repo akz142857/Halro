@@ -1,8 +1,7 @@
 # ADR 0015: External anchoring for the audit chain
 
-- Status: Proposed — the mechanism is decided below; **which destination ships as
-  the supported default is not, and is left to the maintainers** (see "Open
-  decision").
+- Status: Accepted and implemented 2026-08-06 — default sink is A (dead-man
+  probe pull). See "Implementation notes" at the end for what shipped.
 - Date: 2026-08-06
 - Source: `docs/review/260805.md` §八 S-P0-2, adversarial verdict PARTIAL
   (file mode CONFIRMED, `key_slots` mode REFUTED); tracked as P1-7 in
@@ -79,15 +78,17 @@ tamper-*evident against the operator* once anchors are enabled and checked, and
 that `mode: key_slots` is the precondition for non-repudiation. This costs
 nothing and is the single highest-value part of this ADR.
 
-## Open decision
+## Decided: default sink
 
 Where anchors go is a deployment decision, not an implementation detail: each
 option below buys a different amount of independence at a different operational
-cost, and the answer depends on what the deployment already runs. **This ADR
-does not pick one.** The mechanism above is destination-agnostic; the sink is a
-small interface with one method.
+cost. The mechanism is destination-agnostic — the sink is a small interface with
+one method — so B and C stay available as configured alternatives; **A ships as
+the default** for the reason under "For" below: it is the only option that adds
+no new dependency and no new credential to a deployment that has installed
+nothing beyond the product itself.
 
-### A. Dead-man probe pulls the summary (recommended as the default)
+### A. Dead-man probe pulls the summary (decided default)
 
 Expose the anchor on an authenticated endpoint and let the existing
 `heimdall-deadman` probe record it in its own append-only audit file. The probe
@@ -123,13 +124,19 @@ root cannot delete before expiry.
   `mode: key_slots`, which already assumes a cloud KMS — a deployment that has
   accepted one has usually accepted the other.
 
-### What has to be decided
+### Decided
 
-1. Which of A/B/C ships enabled by default, and whether more than one sink may
-   be configured at once.
-2. The default anchor interval and record delta.
-3. Whether `mode: file` should *warn* at startup when no anchor sink is
-   configured, or stay silent.
+1. A ships enabled by default; B and C are configurable alternatives. More than
+   one sink may be configured at once — anchors are cheap and idempotent to
+   emit, and an operator moving from A to C during a migration needs both live
+   for the overlap.
+2. Default anchor interval: 5 minutes. Default record delta: 500 — chosen so a
+   burst of settlement traffic still anchors well inside the interval instead
+   of waiting for the tick. Both are operator-configurable.
+3. `mode: file` *warns* at startup when no anchor sink is configured, the same
+   posture as the Developer Workbench reachability warning this repo already
+   ships (P2-13/P1-10): the gap is real, the default stays usable, and the
+   person who can fix it gets told.
 
 ## Rejected alternatives
 
@@ -177,3 +184,52 @@ fix for the default.
   replay a stale anchor as current;
 - `mode: key_slots` documented and tested as the non-repudiation precondition,
   including that the audit key cannot be derived without KMS access.
+
+## Implementation notes (2026-08-06)
+
+- Instance identity: no such concept existed anywhere in the codebase before
+  this. Decided in favor of generating and persisting a UUID-shaped ID in
+  bbolt at first start (`Store.SeedInstanceID`) over asking the operator to
+  set one in config — it removes a cross-instance coordination burden for
+  fleets, at the cost of the ID being meaningless until an operator looks it
+  up (acceptable: it only has to disambiguate anchors, never be memorized).
+- Anchor storage: a bounded bbolt ring (`bucketAuditAnchors`, retains the most
+  recent 1000 — a little over three days at the default 5-minute interval)
+  serves two purposes at once — the endpoint reads it, and it is also where
+  local reconciliation *could* read from, though this ADR's local-startup
+  reconciliation was scoped down to nothing new: `reconcileAuditCheckpoint`
+  already provides a stronger local guarantee than comparing against
+  locally-stored anchors would (both live inside the same blast radius), so
+  the anchor ring's value is entirely in being read by an off-host puller.
+- Emission cadence: `runAuditAnchorMaintenance` polls every 10s (a fixed
+  `var`, not tied to config) and emits when the configured interval has
+  elapsed *or* the record delta has been crossed since the last emission —
+  an approximation of "immediately after a qualifying append" that does not
+  require hooking every audit append call site. 10s against a default 5m
+  interval is a fine enough grain that this reads as immediate in practice.
+- Endpoint: `GET /audit/anchors?since=<seq>` added to the existing metrics
+  listener (`internal/app/audit_anchor.go`), authenticated by a *new*
+  independent bearer-credential domain reusing `internal/metricsauth`
+  wholesale — a second file path is enough to get an independently rotated
+  credential without cloning the package; the rotation/audit/revocation
+  machinery is identical to metrics' own, just pointed at a different file.
+- Dead-man side: `TargetConfig.AnchorURL` (optional, `heimdall`-kind targets
+  only) reuses that target's existing `BearerTokenFile`/TLS — the operator
+  points the same credential file at both the health check and the anchor
+  endpoint, which means syncing the anchor credential's active token into
+  that file is an operational step this ADR does not automate.
+  `Engine.Checker`'s signature (latency + reason only) could not carry a
+  payload, so anchor pulling is a second, parallel unlocked step in `Tick`
+  (`pullAnchors`), not a reuse of the probe abstraction — matching what the
+  Explore phase flagged before implementation started. Pulled anchors persist
+  to a JSON-lines file (`anchorWriter`, mirroring the existing `auditWriter`
+  shape) and the per-target high-water mark lives in the same `TargetState`
+  the probe already persists, so a restart resumes exactly where it left off.
+- Verification: `heimdall audit verify-anchor --anchors <file>` decodes that
+  JSON-lines file and, for each anchor, replays the local audit chain and
+  compares the record at that historical sequence — agree / disagree
+  (tampering) / truncated (the anchor claims more records than exist now).
+- What shipped narrower than the open decision anticipated: sinks B (syslog)
+  and C (S3 Object Lock) are reserved config values that fail validation with
+  "not implemented yet" rather than working alternatives — the config schema
+  does not need to change again when they land, but only A exists today.

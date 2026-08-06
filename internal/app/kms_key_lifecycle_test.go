@@ -592,7 +592,7 @@ func TestKMSDEKRotationReencryptsAllMaterialAndPreservesAudit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	user, err := adminauth.NewUser("admin", []byte("correct horse battery staple"), time.Now().UTC())
+	user, err := adminauth.NewUser("admin", []byte("correct horse battery staple"), domain.AdminRoleAdministrator, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}

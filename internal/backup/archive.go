@@ -47,14 +47,23 @@ type Manifest struct {
 	AdjustmentManifestWatermark uint64                 `json:"adjustment_manifest_watermark,omitempty"`
 	LedgerFeatureEpoch          uint8                  `json:"ledger_feature_epoch,omitempty"`
 	MinimumLedgerReaderVersion  string                 `json:"minimum_ledger_reader_version,omitempty"`
-	PricingStateSHA256          string                 `json:"pricing_state_sha256,omitempty"`
-	PendingIntentSHA256         string                 `json:"pending_intent_sha256,omitempty"`
-	PendingIntents              int                    `json:"pending_intents,omitempty"`
-	MasterKeyFingerprint        string                 `json:"master_key_fingerprint"`
-	KeySlotDescriptorSHA256     string                 `json:"key_slot_descriptor_sha256,omitempty"`
-	RestoreDrillVerified        bool                   `json:"restore_drill_verified"`
-	Build                       buildinfo.Info         `json:"build"`
-	Files                       []File                 `json:"files"`
+	// LedgerChainHead is the epoch-4 chain head (ADR 0016) as of the moment
+	// this backup's Ledger snapshot was taken. LedgerChainVerified is false
+	// when the source Ledger had not yet written any epoch-4 frame — a chain
+	// head of all zeros in that case is "nothing to verify yet", not a
+	// tampered or empty chain, and restore must not confuse the two.
+	LedgerChainHeadSequence uint64         `json:"ledger_chain_head_sequence,omitempty"`
+	LedgerChainHeadOffset   int64          `json:"ledger_chain_head_offset,omitempty"`
+	LedgerChainHeadHash     [32]byte       `json:"ledger_chain_head_hash,omitempty"`
+	LedgerChainVerified     bool           `json:"ledger_chain_verified,omitempty"`
+	PricingStateSHA256      string         `json:"pricing_state_sha256,omitempty"`
+	PendingIntentSHA256     string         `json:"pending_intent_sha256,omitempty"`
+	PendingIntents          int            `json:"pending_intents,omitempty"`
+	MasterKeyFingerprint    string         `json:"master_key_fingerprint"`
+	KeySlotDescriptorSHA256 string         `json:"key_slot_descriptor_sha256,omitempty"`
+	RestoreDrillVerified    bool           `json:"restore_drill_verified"`
+	Build                   buildinfo.Info `json:"build"`
+	Files                   []File         `json:"files"`
 }
 
 type CreateOptions struct {
@@ -69,6 +78,10 @@ type CreateOptions struct {
 	AdjustmentManifestWatermark uint64
 	LedgerFeatureEpoch          uint8
 	MinimumLedgerReaderVersion  string
+	LedgerChainHeadSequence     uint64
+	LedgerChainHeadOffset       int64
+	LedgerChainHeadHash         [32]byte
+	LedgerChainVerified         bool
 	PricingStateSHA256          string
 	PendingIntentSHA256         string
 	PendingIntents              int
@@ -127,6 +140,8 @@ func Create(options CreateOptions) (Manifest, error) {
 		UsageManifestVersion:      options.UsageManifestVersion,
 		AdjustmentManifestVersion: options.AdjustmentManifestVersion, AdjustmentManifestWatermark: options.AdjustmentManifestWatermark,
 		LedgerFeatureEpoch: options.LedgerFeatureEpoch, MinimumLedgerReaderVersion: options.MinimumLedgerReaderVersion,
+		LedgerChainHeadSequence: options.LedgerChainHeadSequence, LedgerChainHeadOffset: options.LedgerChainHeadOffset,
+		LedgerChainHeadHash: options.LedgerChainHeadHash, LedgerChainVerified: options.LedgerChainVerified,
 		PricingStateSHA256: options.PricingStateSHA256, PendingIntentSHA256: options.PendingIntentSHA256, PendingIntents: options.PendingIntents,
 		MasterKeyFingerprint:    options.MasterKeyFingerprint,
 		KeySlotDescriptorSHA256: options.KeySlotDescriptorSHA256,
@@ -268,8 +283,14 @@ func Verify(archivePath string, backupKey []byte) (Manifest, error) {
 		!validFingerprint(manifest.MasterKeyFingerprint) {
 		return Manifest{}, errors.New("backup manifest is invalid")
 	}
-	if manifest.FormatVersion >= 2 && (manifest.LedgerFeatureEpoch != 2 || manifest.MinimumLedgerReaderVersion != "v2" || !validSHA256Label(manifest.PricingStateSHA256) || !validSHA256Label(manifest.PendingIntentSHA256)) {
+	if manifest.FormatVersion >= 2 && (manifest.LedgerFeatureEpoch < 4 ||
+		manifest.MinimumLedgerReaderVersion != fmt.Sprintf("v%d", manifest.LedgerFeatureEpoch) ||
+		!validSHA256Label(manifest.PricingStateSHA256) || !validSHA256Label(manifest.PendingIntentSHA256)) {
 		return Manifest{}, errors.New("backup compatibility manifest is invalid")
+	}
+	if manifest.LedgerChainVerified && (manifest.LedgerChainHeadSequence > manifest.LedgerWatermark.Sequence ||
+		manifest.LedgerChainHeadOffset > manifest.LedgerWatermark.Offset) {
+		return Manifest{}, errors.New("backup manifest ledger chain head is inconsistent with the ledger watermark")
 	}
 	if manifest.KeySlotDescriptorSHA256 != "" && !validSHA256(manifest.KeySlotDescriptorSHA256) {
 		return Manifest{}, errors.New("backup manifest Key Slot descriptor digest is invalid")

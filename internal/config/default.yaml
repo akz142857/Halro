@@ -80,6 +80,12 @@ usage:
   # in UTC, so pruning keeps one extra day and no timezone loses a day it was
   # promised. The accounting ledger itself is not trimmed by this.
   retention_days: 90
+  # parquet (default) or ndjson (ADR 0017). Usage is a rebuildable derivative
+  # of the Ledger, never a source of truth, so this only controls what new
+  # partitions are written as — existing ones are never rewritten. ndjson adds
+  # no dependency beyond the standard library, at the cost of larger files and
+  # no columnar compression.
+  export_format: parquet
 
 gateway:
   # The whole request, across retries and fallbacks.
@@ -146,3 +152,23 @@ metrics:
     cert_file: ""
     key_file: ""
     client_ca_file: ""
+
+audit:
+  anchor:
+    # Off by default. In storage.master_key.mode: file, the audit chain has no
+    # witness outside this host — an operator holding master.key can rewrite
+    # history undetected by anyone but themselves. Enabling this periodically
+    # publishes a small, payload-free summary of the chain (record count and
+    # hash) that a dead-man probe on a separate host can pull and keep, making
+    # a later rewrite detectable rather than invisible.
+    enabled: false
+    # dead_man_pull is the only implemented sink: it reuses the existing
+    # heimdall-deadman probe and its off-host, separately credentialed
+    # deployment rather than standing up a second witness path.
+    sink: dead_man_pull
+    interval: 5m
+    record_delta: 500
+    # Required once enabled — a bearer credential file distinct from
+    # metrics.credential_file, since the two are rotated on unrelated
+    # schedules.
+    credential_file: ""

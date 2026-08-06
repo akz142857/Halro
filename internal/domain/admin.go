@@ -6,8 +6,24 @@ import (
 	"time"
 )
 
+// Admin roles are deliberately just two: AdminRoleAdministrator (every
+// existing capability) and AdminRoleReadOnly (GET only, no exceptions per
+// endpoint). A per-endpoint permission matrix was considered and rejected —
+// see docs/review/progress.md's P2-23 record — in favor of one rule the
+// mutation middleware can enforce without a maintained list that a new
+// write endpoint could silently fall outside of.
+const (
+	AdminRoleAdministrator = "administrator"
+	AdminRoleReadOnly      = "read_only"
+)
+
+func ValidAdminRole(role string) bool {
+	return role == AdminRoleAdministrator || role == AdminRoleReadOnly
+}
+
 type AdminUser struct {
 	Username          string               `json:"username"`
+	Role              string               `json:"role"`
 	Locale            string               `json:"locale,omitempty"`
 	Appearance        string               `json:"appearance,omitempty"`
 	PasswordVersion   uint16               `json:"password_version"`
@@ -36,6 +52,9 @@ func (u AdminUser) Validate() error {
 	}
 	if u.PasswordVersion == 0 || len(u.PasswordSalt) < 16 || len(u.PasswordHash) < 32 {
 		problems = append(problems, errors.New("admin password hash is invalid"))
+	}
+	if !ValidAdminRole(u.Role) {
+		problems = append(problems, errors.New("admin role must be administrator or read_only"))
 	}
 	if u.ArgonMemoryKiB < 64*1024 || u.ArgonIterations < 3 || u.ArgonParallelism < 1 {
 		problems = append(problems, errors.New("admin Argon2id parameters are too weak"))

@@ -47,6 +47,12 @@ type TargetConfig struct {
 	BearerTokenFile string           `yaml:"bearer_token_file"`
 	TLS             TLSConfig        `yaml:"tls"`
 	Freshness       *FreshnessConfig `yaml:"freshness,omitempty"`
+	// AnchorURL, only meaningful on a "heimdall" target, is the audit-anchor
+	// pull endpoint (ADR 0015 default sink). Empty means this target does not
+	// participate in anchoring. It shares BearerTokenFile and TLS with the
+	// rest of the target — the operator points that credential at Heimdall's
+	// audit.anchor.credential_file, not at whatever authorizes /health/live.
+	AnchorURL string `yaml:"anchor_url,omitempty"`
 }
 
 type NotificationConfig struct {
@@ -59,21 +65,26 @@ type NotificationConfig struct {
 }
 
 type Config struct {
-	ProbeID        string             `yaml:"probe_id"`
-	Environment    string             `yaml:"environment"`
-	Region         string             `yaml:"region"`
-	Cluster        string             `yaml:"cluster"`
-	Interval       Duration           `yaml:"interval"`
-	Timeout        Duration           `yaml:"timeout"`
-	HeartbeatTTL   Duration           `yaml:"heartbeat_ttl"`
-	FailuresToDown int                `yaml:"failures_to_down"`
-	SuccessesToUp  int                `yaml:"successes_to_up"`
-	OutboxLimit    int                `yaml:"outbox_limit"`
-	DeliveryBatch  int                `yaml:"delivery_batch"`
-	StateFile      string             `yaml:"state_file"`
-	AuditFile      string             `yaml:"audit_file"`
-	Notification   NotificationConfig `yaml:"notification"`
-	Targets        []TargetConfig     `yaml:"targets"`
+	ProbeID        string   `yaml:"probe_id"`
+	Environment    string   `yaml:"environment"`
+	Region         string   `yaml:"region"`
+	Cluster        string   `yaml:"cluster"`
+	Interval       Duration `yaml:"interval"`
+	Timeout        Duration `yaml:"timeout"`
+	HeartbeatTTL   Duration `yaml:"heartbeat_ttl"`
+	FailuresToDown int      `yaml:"failures_to_down"`
+	SuccessesToUp  int      `yaml:"successes_to_up"`
+	OutboxLimit    int      `yaml:"outbox_limit"`
+	DeliveryBatch  int      `yaml:"delivery_batch"`
+	StateFile      string   `yaml:"state_file"`
+	AuditFile      string   `yaml:"audit_file"`
+	// AnchorFile is where pulled audit anchors (ADR 0015) are appended,
+	// JSON-lines, one per line — the file `heimdall audit verify-anchor
+	// --anchors` reads. Empty disables anchor pulling even if a target sets
+	// AnchorURL, the same way AuditFile is required unconditionally today.
+	AnchorFile   string             `yaml:"anchor_file,omitempty"`
+	Notification NotificationConfig `yaml:"notification"`
+	Targets      []TargetConfig     `yaml:"targets"`
 }
 
 func LoadConfig(path string) (Config, error) {
@@ -146,6 +157,17 @@ func (c Config) Validate() error {
 		}
 		if target.Kind == "prometheus" && target.Freshness == nil {
 			problems = append(problems, fmt.Errorf("target %q must configure a freshness query", target.ID))
+		}
+		if target.AnchorURL != "" {
+			if target.Kind != "heimdall" {
+				problems = append(problems, fmt.Errorf("target %q sets anchor_url but is not a heimdall target", target.ID))
+			}
+			if c.AnchorFile == "" {
+				problems = append(problems, fmt.Errorf("target %q sets anchor_url but anchor_file is not configured", target.ID))
+			}
+			if err := validateHTTPS(target.AnchorURL); err != nil {
+				problems = append(problems, fmt.Errorf("target %q anchor URL: %w", target.ID, err))
+			}
 		}
 	}
 	for kind, present := range wanted {

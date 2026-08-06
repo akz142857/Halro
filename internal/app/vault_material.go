@@ -14,6 +14,10 @@ const (
 	auditKeyProvider = "system"
 	auditKeyAudience = "heimdall:audit:v1"
 
+	ledgerKeyID       = "system:ledger-hmac"
+	ledgerKeyProvider = "system"
+	ledgerKeyAudience = "heimdall:ledger:v1"
+
 	rotationBridgeID       = "system:master-key-rotation"
 	rotationBridgeProvider = "system"
 	rotationBridgeAudience = "heimdall:master-key-rotation:v1"
@@ -42,6 +46,33 @@ func loadAuditHMACKey(store *boltstore.Store, secretVault *vault.Vault, masterKe
 	if err != nil || len(key) != 32 {
 		clear(key)
 		return nil, errors.New("audit HMAC envelope does not authenticate")
+	}
+	return key, nil
+}
+
+func encryptLedgerHMACKey(secretVault *vault.Vault, key []byte) ([]byte, error) {
+	if len(key) != 32 {
+		return nil, errors.New("ledger HMAC key must be 32 bytes")
+	}
+	return secretVault.EncryptCredential(
+		ledgerKeyID, ledgerKeyProvider, ledgerKeyAudience, key,
+	)
+}
+
+func loadLedgerHMACKey(store *boltstore.Store, secretVault *vault.Vault, masterKey []byte) ([]byte, error) {
+	envelope, err := store.LedgerHMACEnvelope()
+	if errors.Is(err, boltstore.ErrNotFound) {
+		return vault.DeriveLedgerHMACKey(masterKey)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load ledger HMAC envelope: %w", err)
+	}
+	key, err := secretVault.DecryptCredential(
+		ledgerKeyID, ledgerKeyProvider, ledgerKeyAudience, envelope,
+	)
+	if err != nil || len(key) != 32 {
+		clear(key)
+		return nil, errors.New("ledger HMAC envelope does not authenticate")
 	}
 	return key, nil
 }

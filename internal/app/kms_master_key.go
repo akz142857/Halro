@@ -459,6 +459,15 @@ func initializeKMS(ctx context.Context, cfg config.Config, options kmsInitializa
 	if err != nil {
 		return err
 	}
+	ledgerKey, err := vault.DeriveLedgerHMACKey(key)
+	if err != nil {
+		return err
+	}
+	defer clear(ledgerKey)
+	ledgerEnvelope, err := encryptLedgerHMACKey(secretVault, ledgerKey)
+	if err != nil {
+		return err
+	}
 	descriptor, err := masterkey.NewKeySlotDescriptor(fingerprint)
 	if err != nil {
 		return err
@@ -546,7 +555,7 @@ func initializeKMS(ctx context.Context, cfg config.Config, options kmsInitializa
 			metadata.Close()
 		}
 	}()
-	ledgerLog, err := ledger.Open(stageConfig.LedgerPath(), ledger.NewStatus())
+	ledgerLog, err := ledger.OpenWithOptions(stageConfig.LedgerPath(), ledger.NewStatus(), ledger.Options{ChainKey: ledgerKey})
 	if err != nil {
 		return err
 	}
@@ -580,7 +589,7 @@ func initializeKMS(ctx context.Context, cfg config.Config, options kmsInitializa
 		Keyring: boltstore.VaultKeyring{
 			FormatVersion: 1, ActiveKeyVersion: 1, ActiveFingerprint: fingerprint,
 		},
-		VaultKeyCheck: keyCheck, AuditHMACEnvelope: auditEnvelope,
+		VaultKeyCheck: keyCheck, AuditHMACEnvelope: auditEnvelope, LedgerHMACEnvelope: ledgerEnvelope,
 		AuditCheckpoint: boltstore.AuditCheckpoint{Records: auditSummary.Records, Bytes: auditSummary.Bytes, LastHash: auditSummary.LastHash},
 		Unwrapper:       unwrapper, Verifier: verifier,
 	}); err != nil {

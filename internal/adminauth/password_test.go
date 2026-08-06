@@ -4,11 +4,13 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/akz142857/Heimdall/internal/domain"
 )
 
 func TestArgon2IDPasswordVerification(t *testing.T) {
 	password := []byte("correct horse battery staple")
-	user, err := NewUser("admin", password, time.Now().UTC())
+	user, err := NewUser("admin", password, domain.AdminRoleAdministrator, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,11 +26,11 @@ func TestArgon2IDPasswordVerification(t *testing.T) {
 }
 
 func TestPasswordMinimumUsesUnicodeCharacters(t *testing.T) {
-	if _, err := NewUser("admin", []byte(strings.Repeat("密", 7)), time.Now().UTC()); err == nil {
+	if _, err := NewUser("admin", []byte(strings.Repeat("密", 7)), domain.AdminRoleAdministrator, time.Now().UTC()); err == nil {
 		t.Fatal("seven-character password was accepted")
 	}
 	password := []byte(strings.Repeat("密", 8))
-	user, err := NewUser("admin", password, time.Now().UTC())
+	user, err := NewUser("admin", password, domain.AdminRoleAdministrator, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("eight-character Unicode password was rejected: %v", err)
 	}

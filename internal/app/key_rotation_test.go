@@ -44,7 +44,7 @@ func TestMasterKeyRotationReencryptsCredentialsAndPreservesAuditChain(t *testing
 	if _, err = beforeStore.PutAdminMFAAuthenticator(context.Background(), domain.AdminMFAAuthenticator{ID: "mfa_rotation", Username: "admin", Name: "rotation phone", Type: domain.AdminMFATypeTOTP, SecretCiphertext: mfaCiphertext, Status: domain.AdminMFAStatusActive, CreatedAt: now, ConfirmedAt: &now}, 0); err != nil {
 		t.Fatal(err)
 	}
-	beforeUser, err := adminauth.NewUser("admin", []byte("correct horse battery staple"), now)
+	beforeUser, err := adminauth.NewUser("admin", []byte("correct horse battery staple"), domain.AdminRoleAdministrator, now)
 	if err != nil {
 		t.Fatal(err)
 	}

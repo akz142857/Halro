@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -27,6 +28,10 @@ import (
 	"github.com/akz142857/Heimdall/internal/semantic"
 	"github.com/akz142857/Heimdall/internal/tokenguard"
 )
+
+// testChainKey is a fixed 32-byte Ledger HMAC key: every event the ledger
+// package writes is promoted to epoch 4 (ADR 0016), which requires a key.
+var testChainKey = bytes.Repeat([]byte{0x24}, 32)
 
 type source struct {
 	keys     []domain.GatewayKey
@@ -359,6 +364,14 @@ func newFixtureAt(
 		t.Fatal(err)
 	}
 	status := ledger.NewStatus()
+	// Every event the ledger package writes is promoted to epoch 4 (ADR
+	// 0016), which requires a key to compute the frame MAC. Callers that
+	// don't care about durability fault injection pass a zero-value
+	// ledger.Options and rely on this default rather than repeating the key
+	// at every call site.
+	if len(options.ChainKey) == 0 {
+		options.ChainKey = testChainKey
+	}
 	log, err := ledger.OpenWithOptions(filepath.Join(t.TempDir(), "usage.wal"), status, options)
 	if err != nil {
 		t.Fatal(err)

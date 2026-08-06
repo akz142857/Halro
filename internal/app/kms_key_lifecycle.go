@@ -792,6 +792,12 @@ func rotateKMSMasterKeyWithOptions(ctx context.Context, cfg config.Config, optio
 		return KeyRotationResult{}, err
 	}
 	defer clear(auditKey)
+	ledgerKey, err := loadLedgerHMACKey(metadata, currentVault, currentKey)
+	if err != nil {
+		metadata.Close()
+		return KeyRotationResult{}, err
+	}
+	defer clear(ledgerKey)
 	defer func() {
 		resultErr = finishOfflineKMSProviderAudit(cfg, auditKey, kmsAuditRecorderFromContext(ctx), resultErr)
 	}()
@@ -864,6 +870,11 @@ func rotateKMSMasterKeyWithOptions(ctx context.Context, cfg config.Config, optio
 		return KeyRotationResult{}, err
 	}
 	newAuditEnvelope, err := encryptAuditHMACKey(newVault, auditKey)
+	if err != nil {
+		metadata.Close()
+		return KeyRotationResult{}, err
+	}
+	newLedgerEnvelope, err := encryptLedgerHMACKey(newVault, ledgerKey)
 	if err != nil {
 		metadata.Close()
 		return KeyRotationResult{}, err
@@ -963,7 +974,7 @@ func rotateKMSMasterKeyWithOptions(ctx context.Context, cfg config.Config, optio
 	}
 	err = stage.RewriteVaultMaterial(boltstore.VaultRewrite{
 		Context:       ctx,
-		VaultKeyCheck: newKeyCheck, AuditHMACEnvelope: newAuditEnvelope,
+		VaultKeyCheck: newKeyCheck, AuditHMACEnvelope: newAuditEnvelope, LedgerHMACEnvelope: newLedgerEnvelope,
 		Keyring: boltstore.VaultKeyring{
 			FormatVersion: 1, ActiveKeyVersion: keyring.ActiveKeyVersion + 1,
 			ActiveFingerprint: newFingerprint, PreviousFingerprint: descriptor.MasterKeyFingerprint,
@@ -1022,7 +1033,7 @@ func rotateKMSMasterKeyWithOptions(ctx context.Context, cfg config.Config, optio
 	if err != nil {
 		return KeyRotationResult{}, err
 	}
-	err = verifyRotatedMetadata(ctx, compacted, newVault, currentVault, newKey, auditKey, true)
+	err = verifyRotatedMetadata(ctx, compacted, newVault, currentVault, newKey, auditKey, ledgerKey, true)
 	if closeErr := compacted.Close(); err == nil {
 		err = closeErr
 	}
@@ -1082,6 +1093,12 @@ func finalizeKMSMasterKeyRotation(ctx context.Context, cfg config.Config, newVau
 		return err
 	}
 	defer clear(auditKey)
+	ledgerKey, err := loadLedgerHMACKey(metadata, newVault, newKey)
+	if err != nil {
+		metadata.Close()
+		return err
+	}
+	defer clear(ledgerKey)
 	stagePath, err := newMetadataStagePath(cfg.Storage.DataDir, "kms-cleanup")
 	if err != nil {
 		metadata.Close()
@@ -1126,7 +1143,7 @@ func finalizeKMSMasterKeyRotation(ctx context.Context, cfg config.Config, newVau
 	if err != nil {
 		return err
 	}
-	err = verifyRotatedMetadata(ctx, compacted, newVault, nil, newKey, auditKey, false)
+	err = verifyRotatedMetadata(ctx, compacted, newVault, nil, newKey, auditKey, ledgerKey, false)
 	if err == nil {
 		persistedIntent, intentErr := compacted.MasterKeyRotationAuditIntent()
 		if intentErr != nil {

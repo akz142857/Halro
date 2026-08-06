@@ -20,6 +20,11 @@ type TargetState struct {
 	ConsecutiveSuccesses int       `json:"consecutive_successes"`
 	LastCheckedAt        time.Time `json:"last_checked_at"`
 	LastReason           string    `json:"last_reason,omitempty"`
+	// LastAnchorSequence is the highest audit-anchor sequence (ADR 0015)
+	// already pulled and recorded from this target, persisted so a restart
+	// cannot be used to replay a stale anchor as if it were current — the
+	// next pull always asks for "since" this value, never since zero.
+	LastAnchorSequence uint64 `json:"last_anchor_sequence,omitempty"`
 }
 
 type Event struct {

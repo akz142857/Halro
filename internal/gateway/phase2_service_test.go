@@ -202,7 +202,7 @@ func newPhase2ServiceFixture(t *testing.T, profileID domain.ProviderProfileID, a
 	if err := snapshot.Refresh(context.Background(), source{keys: []domain.GatewayKey{key}, projects: []domain.Project{project}}); err != nil {
 		t.Fatal(err)
 	}
-	log, err := ledger.Open(filepath.Join(t.TempDir(), "phase2-usage.wal"), ledger.NewStatus())
+	log, err := ledger.OpenWithOptions(filepath.Join(t.TempDir(), "phase2-usage.wal"), ledger.NewStatus(), ledger.Options{ChainKey: testChainKey})
 	if err != nil {
 		t.Fatal(err)
 	}

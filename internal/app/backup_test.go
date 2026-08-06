@@ -466,10 +466,30 @@ func TestBackupRestoreMatchesManifestDuringOneHundredConcurrentLedgerWrites(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
+	masterKey, err := vault.LoadMasterKey(cfg.Storage.MasterKey.File)
+	if err != nil {
+		metadata.Close()
+		t.Fatal(err)
+	}
+	masterFingerprint := keyFingerprint(masterKey)
+	secretVault, err := vault.New(masterKey)
+	if err != nil {
+		clear(masterKey)
+		metadata.Close()
+		t.Fatal(err)
+	}
+	ledgerKey, err := loadLedgerHMACKey(metadata, secretVault, masterKey)
+	secretVault.Close()
+	clear(masterKey)
+	if err != nil {
+		metadata.Close()
+		t.Fatal(err)
+	}
 	liveLedger, err := ledger.OpenWithOptions(cfg.LedgerPath(), ledger.NewStatus(), ledger.Options{
-		QueueCapacity: 256, MaxBatch: 1,
+		QueueCapacity: 256, MaxBatch: 1, ChainKey: ledgerKey,
 	})
 	if err != nil {
+		clear(ledgerKey)
 		metadata.Close()
 		t.Fatal(err)
 	}
@@ -486,25 +506,19 @@ func TestBackupRestoreMatchesManifestDuringOneHundredConcurrentLedgerWrites(t *t
 				EventID: fmt.Sprintf("backup_evt_%03d", index), Kind: ledger.EventRequestAccepted,
 				RequestID: fmt.Sprintf("backup_req_%03d", index), ProjectID: "project_backup",
 				PeriodID: "project_backup:2026-07-31:UTC", OccurredAt: time.Now().UTC(),
+				PeriodTimezone: "UTC", PeriodTimezoneVersion: 1,
 			})
 			errorsByWriter <- err
 		}()
 	}
-	masterKey, err := vault.LoadMasterKey(cfg.Storage.MasterKey.File)
-	if err != nil {
-		liveLedger.Close()
-		metadata.Close()
-		t.Fatal(err)
-	}
-	masterFingerprint := keyFingerprint(masterKey)
-	clear(masterKey)
 	archivePath := filepath.Join(root, "concurrent.hmbk")
 	backupKey := bytes.Repeat([]byte{0x6c}, 32)
 	close(start)
 	manifest, snapshotErr := createBackupSnapshotWithLedger(
 		context.Background(), cfg, configPath, archivePath, backupKey,
-		metadata, masterFingerprint, liveLedger,
+		metadata, masterFingerprint, liveLedger, ledgerKey,
 	)
+	clear(ledgerKey)
 	writers.Wait()
 	close(errorsByWriter)
 	for writerErr := range errorsByWriter {

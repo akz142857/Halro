@@ -3,6 +3,8 @@ package ledger
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -24,12 +26,53 @@ const (
 	// identity — its zone, version and UTC bounds — so a reader can reconstruct
 	// the boundary a charge was filed against without consulting any setting.
 	frameVersionPeriod = 3
-	frameHeaderSize    = 24
-	maxPayloadSize     = 1 << 20
+	// frameVersionLedgerIntegrity (ADR 0016) is epoch 4, not 3: the
+	// accounting-timezone work already shipped epoch 3 for period identity
+	// before this guarantee existed, so the MAC/chain guarantee starts one
+	// epoch later than originally proposed. Every event this build writes is
+	// promoted to this epoch — eventFrameVersion no longer branches by event
+	// shape, so there is no window where some new frames are authenticated
+	// and others are not.
+	frameVersionLedgerIntegrity = 4
+	frameHeaderSize             = 24
+	// chainPreviousHashSize and chainMACSize are appended after the base
+	// 24-byte header for epoch 4 only. The CRC32 field keeps its original
+	// meaning and byte range (header[4:20]||payload) unchanged by their
+	// presence — it is the cheap check that distinguishes a torn tail from a
+	// corrupt frame, and it is evaluated before the MAC.
+	chainPreviousHashSize = 32
+	chainMACSize          = 32
+	chainHeaderSize       = frameHeaderSize + chainPreviousHashSize + chainMACSize
+	maxPayloadSize        = 1 << 20
 )
 
 var ErrCorrupt = errors.New("ledger is corrupt")
 var ErrUnsupportedVersion = errors.New("ledger version is unsupported")
+
+// ErrTampered is distinct from ErrCorrupt: a CRC failure in the tail
+// position is a partial write (recovery repairs it by truncation); a frame
+// that passes CRC and fails its MAC, or whose previous-hash does not match
+// the running chain, means bytes that were once durably committed no longer
+// match what the chain says they should be. That is not something an open
+// can silently truncate past.
+var ErrTampered = errors.New("ledger chain integrity check failed")
+
+// chainVerifier carries the running chain state across a full scan from the
+// start of the file. It is only meaningful when the scan begins at offset 0
+// with sequence 0 — the only case where "no prior frame" (a zero previous
+// hash) is a correct starting point. A verifier with no key present still
+// walks epoch-4 frames structurally (to compute correct offsets) but does not
+// check their MAC or chain link, matching the checksum-only treatment epochs
+// 1-3 always get.
+type chainVerifier struct {
+	key       []byte
+	hash      [32]byte
+	sequence  uint64
+	offset    int64
+	sawFrames bool
+}
+
+func (v *chainVerifier) verify() bool { return v != nil && len(v.key) == 32 }
 
 type Log struct {
 	mu             sync.Mutex
@@ -48,6 +91,19 @@ type Log struct {
 	batches        atomic.Uint64
 	writtenRecords atomic.Uint64
 	appendErrors   atomic.Uint64
+
+	// chainKey, chainHash and chainSequence carry the epoch-4 MAC/hash-chain
+	// state forward from whatever OpenWithOptions established (the verified
+	// tail of history, or the zero value for a brand new log) into every
+	// subsequently appended frame. chainKey is empty when the log was opened
+	// without Options.ChainKey; a nil-key log can still replay, but cannot
+	// Append, since every new frame this build writes is epoch 4 and epoch 4
+	// requires a MAC.
+	chainKey       []byte
+	chainHash      [32]byte
+	chainSequence  uint64
+	chainOffset    int64
+	chainSawFrames bool
 }
 
 type Options struct {
@@ -57,6 +113,22 @@ type Options struct {
 	// WrapDurability is an internal test/integration seam for deterministic
 	// write and fsync fault injection. Production callers leave it nil.
 	WrapDurability func(*os.File) DurabilityWriter
+	// ChainKey is the 32-byte Ledger frame HMAC key (ADR 0016). It is
+	// required to Append, since every event this build writes is epoch 4.
+	// Read-only callers (offline inspection, best-effort tooling) may open
+	// without it: epoch-4 frames are still decoded, just not authenticated —
+	// the same checksum-only treatment epochs 1-3 always get.
+	ChainKey []byte
+}
+
+// ChainHead reports the verified epoch-4 chain state as of the most recent
+// Append (or, immediately after OpenWithOptions, as of the last frame seen
+// during the initial tail scan). ok is false when no epoch-4 frame has ever
+// been observed — a brand new log, or one that predates this build.
+func (l *Log) ChainHead() (sequence uint64, offset int64, hash [32]byte, ok bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.chainSequence, l.chainOffset, l.chainHash, l.chainSawFrames
 }
 
 type DurabilityWriter interface {
@@ -95,7 +167,7 @@ func Inspect(path string) (Watermark, bool, error) {
 		return Watermark{}, false, err
 	}
 	defer file.Close()
-	return scan(file, 0, 0, nil)
+	return scan(file, 0, 0, nil, nil)
 }
 
 // InspectReplay verifies and visits the committed WAL prefix without opening
@@ -106,7 +178,52 @@ func InspectReplay(path string, visit func(Record) error) (Watermark, bool, erro
 		return Watermark{}, false, err
 	}
 	defer file.Close()
-	return scan(file, 0, 0, visit)
+	return scan(file, 0, 0, visit, nil)
+}
+
+// ChainReport summarizes epoch-4 MAC/chain verification of the committed WAL
+// prefix: three states, matching ADR 0016 — Authenticated frames (epoch 4,
+// MAC and chain link verified), ChecksumOnly frames (epoch 1-3, or any frame
+// read without a key: CRC32 checked, nothing cryptographic), and whether the
+// scan reached the end cleanly.
+type ChainReport struct {
+	Authenticated uint64
+	ChecksumOnly  uint64
+	Head          Watermark
+	ChainSequence uint64
+	ChainOffset   int64
+	ChainHash     [32]byte
+	ChainVerified bool
+}
+
+// VerifyChain walks the entire committed WAL prefix and authenticates every
+// epoch-4 frame against key. Unlike Inspect/InspectReplay (used on the hot
+// startup path without redoing work OpenWithOptions already did), this is
+// for offline tooling — the verify CLI/doctor path — that wants a dedicated,
+// on-demand deep check.
+func VerifyChain(path string, key []byte) (ChainReport, bool, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return ChainReport{}, false, err
+	}
+	defer file.Close()
+	verifier := &chainVerifier{key: key}
+	var report ChainReport
+	watermark, partial, err := scan(file, 0, 0, func(record Record) error {
+		if record.Epoch == frameVersionLedgerIntegrity && verifier.verify() {
+			report.Authenticated++
+		} else {
+			report.ChecksumOnly++
+		}
+		return nil
+	}, verifier)
+	if err != nil {
+		return ChainReport{}, false, err
+	}
+	report.Head = watermark
+	report.ChainSequence, report.ChainOffset, report.ChainHash, report.ChainVerified =
+		verifier.sequence, verifier.offset, verifier.hash, verifier.sawFrames
+	return report, partial, nil
 }
 
 func OpenWithOptions(path string, status *Status, options Options) (*Log, error) {
@@ -125,6 +242,9 @@ func OpenWithOptions(path string, status *Status, options Options) (*Log, error)
 	if options.FlushInterval < 0 {
 		return nil, errors.New("ledger flush interval cannot be negative")
 	}
+	if len(options.ChainKey) != 0 && len(options.ChainKey) != 32 {
+		return nil, errors.New("ledger chain key must be 32 bytes")
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("create ledger directory: %w", err)
 	}
@@ -133,7 +253,8 @@ func OpenWithOptions(path string, status *Status, options Options) (*Log, error)
 		status.MarkUnavailable()
 		return nil, fmt.Errorf("open ledger: %w", err)
 	}
-	last, partial, err := scan(file, 0, 0, nil)
+	verifier := &chainVerifier{key: options.ChainKey}
+	last, partial, err := scan(file, 0, 0, nil, verifier)
 	if err != nil {
 		file.Close()
 		status.RequireRecovery()
@@ -156,16 +277,21 @@ func OpenWithOptions(path string, status *Status, options Options) (*Log, error)
 		return nil, fmt.Errorf("seek ledger end: %w", err)
 	}
 	log := &Log{
-		file:        file,
-		durability:  file,
-		path:        path,
-		sequence:    last.Sequence,
-		offset:      last.Offset,
-		status:      status,
-		options:     options,
-		appendQueue: make(chan appendRequest, options.QueueCapacity),
-		closeSignal: make(chan struct{}),
-		writerDone:  make(chan struct{}),
+		file:           file,
+		durability:     file,
+		path:           path,
+		sequence:       last.Sequence,
+		offset:         last.Offset,
+		status:         status,
+		options:        options,
+		appendQueue:    make(chan appendRequest, options.QueueCapacity),
+		closeSignal:    make(chan struct{}),
+		writerDone:     make(chan struct{}),
+		chainKey:       append([]byte(nil), options.ChainKey...),
+		chainHash:      verifier.hash,
+		chainSequence:  verifier.sequence,
+		chainOffset:    verifier.offset,
+		chainSawFrames: verifier.sawFrames,
 	}
 	if options.WrapDurability != nil {
 		log.durability = options.WrapDurability(file)
@@ -231,7 +357,7 @@ func (l *Log) Replay(from Watermark, visit func(Record) error) (Watermark, error
 	if from.Generation != 0 && from.Generation != 1 {
 		return Watermark{}, fmt.Errorf("unsupported ledger generation %d", from.Generation)
 	}
-	last, partial, err := scan(l.file, from.Offset, from.Sequence, visit)
+	last, partial, err := scan(l.file, from.Offset, from.Sequence, visit, nil)
 	if err != nil {
 		l.status.RequireRecovery()
 		return Watermark{}, err
@@ -288,6 +414,8 @@ func (l *Log) Close() error {
 	<-l.writerDone
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	clear(l.chainKey)
+	l.chainKey = nil
 	if l.file == nil {
 		return nil
 	}
@@ -371,18 +499,24 @@ func (l *Log) writeBatch(batch []appendRequest) {
 		respondBatch(batch, nil, errors.New("accounting is not healthy"))
 		return
 	}
+	if len(l.chainKey) != 32 {
+		respondBatch(batch, nil, errors.New("ledger requires a chain key to append authenticated frames"))
+		return
+	}
 	sequence := l.sequence
 	offset := l.offset
+	previousHash := l.chainHash
 	watermarks := make([]Watermark, len(batch))
 	var encoded bytes.Buffer
 	for index, request := range batch {
 		sequence++
-		frame := encodeFrameVersion(eventFrameVersion(request.event), sequence, request.event.Kind, request.payload)
+		frame, nextHash := encodeChainFrame(l.chainKey, sequence, request.event.Kind, request.payload, previousHash)
 		if _, err := encoded.Write(frame); err != nil {
 			respondBatch(batch, nil, fmt.Errorf("encode ledger batch: %w", err))
 			return
 		}
 		offset += int64(len(frame))
+		previousHash = nextHash
 		watermarks[index] = Watermark{Generation: 1, Offset: offset, Sequence: sequence}
 	}
 	if err := writeFull(l.durability, encoded.Bytes()); err != nil {
@@ -399,6 +533,10 @@ func (l *Log) writeBatch(batch []appendRequest) {
 	}
 	l.sequence = sequence
 	l.offset = offset
+	l.chainHash = previousHash
+	l.chainSequence = sequence
+	l.chainOffset = offset
+	l.chainSawFrames = true
 	l.batches.Add(1)
 	l.writtenRecords.Add(uint64(len(batch)))
 	respondBatch(batch, watermarks, nil)
@@ -418,14 +556,13 @@ func encodeFrame(sequence uint64, kind EventKind, payload []byte) []byte {
 	return encodeFrameVersion(frameVersionLegacy, sequence, kind, payload)
 }
 
-func eventFrameVersion(event Event) byte {
-	if event.PeriodTimezone != "" {
-		return frameVersionPeriod
-	}
-	if event.Kind == EventCostAdjusted || event.LeaseMode != "" || event.PriceSnapshot != nil {
-		return frameVersionCurrent
-	}
-	return frameVersionLegacy
+// eventFrameVersion no longer branches by event shape (ADR 0016): every event
+// this build writes is promoted to the frame-integrity epoch, so there is no
+// window where some new frames are authenticated and others merely
+// checksummed. The function stays, rather than being inlined at its one call
+// site, because "what epoch does a fresh write use" is a fact worth a name.
+func eventFrameVersion(Event) byte {
+	return frameVersionLedgerIntegrity
 }
 
 func encodeFrameVersion(version byte, sequence uint64, kind EventKind, payload []byte) []byte {
@@ -443,7 +580,38 @@ func encodeFrameVersion(version byte, sequence uint64, kind EventKind, payload [
 	return frame
 }
 
-func scan(file io.ReadSeeker, fromOffset int64, initialSequence uint64, visit func(Record) error) (Watermark, bool, error) {
+// encodeChainFrame builds an epoch-4 frame: the original 24-byte header
+// (magic/version/kind/sequence/payload-length/CRC32, CRC32 covering
+// header[4:20]||payload exactly as every other epoch), followed by the
+// previous frame's chain hash and this frame's MAC, followed by the payload.
+// MAC = HMAC-SHA256(key, header[0:24] || previousHash || payload) — computed
+// after the CRC field is filled, so the MAC also authenticates the CRC.
+// nextHash = SHA256(MAC), becoming the next frame's previousHash: hashing the
+// MAC alone (not the whole frame) is cheaper and does not require re-reading
+// the payload to extend the chain.
+func encodeChainFrame(key []byte, sequence uint64, kind EventKind, payload []byte, previousHash [32]byte) ([]byte, [32]byte) {
+	frame := make([]byte, chainHeaderSize+len(payload))
+	copy(frame[:4], frameMagic)
+	frame[4] = frameVersionLedgerIntegrity
+	frame[5] = byte(kind)
+	binary.BigEndian.PutUint64(frame[8:16], sequence)
+	binary.BigEndian.PutUint32(frame[16:20], uint32(len(payload)))
+	copy(frame[frameHeaderSize+chainPreviousHashSize+chainMACSize:], payload)
+	checksum := crc32.NewIEEE()
+	checksum.Write(frame[4:20])
+	checksum.Write(payload)
+	binary.BigEndian.PutUint32(frame[20:24], checksum.Sum32())
+	copy(frame[frameHeaderSize:frameHeaderSize+chainPreviousHashSize], previousHash[:])
+	mac := hmac.New(sha256.New, key)
+	mac.Write(frame[:frameHeaderSize])
+	mac.Write(previousHash[:])
+	mac.Write(payload)
+	sum := mac.Sum(nil)
+	copy(frame[frameHeaderSize+chainPreviousHashSize:frameHeaderSize+chainPreviousHashSize+chainMACSize], sum)
+	return frame, sha256.Sum256(sum)
+}
+
+func scan(file io.ReadSeeker, fromOffset int64, initialSequence uint64, visit func(Record) error, verifier *chainVerifier) (Watermark, bool, error) {
 	if fromOffset < 0 {
 		return Watermark{}, false, errors.New("ledger offset cannot be negative")
 	}
@@ -468,7 +636,7 @@ func scan(file io.ReadSeeker, fromOffset int64, initialSequence uint64, visit fu
 			return Watermark{}, false, fmt.Errorf("%w at offset %d: invalid frame header", ErrCorrupt, offset)
 		}
 		epoch := header[4]
-		if epoch != frameVersionLegacy && epoch != frameVersionCurrent && epoch != frameVersionPeriod {
+		if epoch != frameVersionLegacy && epoch != frameVersionCurrent && epoch != frameVersionPeriod && epoch != frameVersionLedgerIntegrity {
 			return Watermark{}, false, fmt.Errorf("%w at offset %d: frame epoch %d", ErrUnsupportedVersion, offset, epoch)
 		}
 		kind := EventKind(header[5])
@@ -483,6 +651,23 @@ func scan(file io.ReadSeeker, fromOffset int64, initialSequence uint64, visit fu
 		if payloadLength > maxPayloadSize {
 			return Watermark{}, false, fmt.Errorf("%w at offset %d: payload too large", ErrCorrupt, offset)
 		}
+		// Epoch 4 carries a previous-hash and a MAC between the base header
+		// and the payload. They are read unconditionally (so offsets are
+		// always correct), but only checked when a key is available —
+		// callers without one get the same checksum-only treatment epochs
+		// 1-3 always get.
+		var previousHash, frameMAC [chainMACSize]byte
+		if epoch == frameVersionLedgerIntegrity {
+			chainTail := make([]byte, chainPreviousHashSize+chainMACSize)
+			if _, err := io.ReadFull(file, chainTail); err != nil {
+				if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+					return Watermark{Generation: 1, Offset: offset, Sequence: lastSequence}, true, nil
+				}
+				return Watermark{}, false, err
+			}
+			copy(previousHash[:], chainTail[:chainPreviousHashSize])
+			copy(frameMAC[:], chainTail[chainPreviousHashSize:])
+		}
 		payload := make([]byte, payloadLength)
 		if _, err := io.ReadFull(file, payload); err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
@@ -496,6 +681,22 @@ func scan(file io.ReadSeeker, fromOffset int64, initialSequence uint64, visit fu
 		if checksum.Sum32() != binary.BigEndian.Uint32(header[20:24]) {
 			return Watermark{}, false, fmt.Errorf("%w at offset %d: checksum mismatch", ErrCorrupt, offset)
 		}
+		if epoch == frameVersionLedgerIntegrity && verifier.verify() {
+			if previousHash != verifier.hash {
+				return Watermark{}, false, fmt.Errorf("%w at offset %d: chain link does not match the running hash", ErrTampered, offset)
+			}
+			mac := hmac.New(sha256.New, verifier.key)
+			mac.Write(header)
+			mac.Write(previousHash[:])
+			mac.Write(payload)
+			expected := mac.Sum(nil)
+			if !hmac.Equal(expected, frameMAC[:]) {
+				return Watermark{}, false, fmt.Errorf("%w at offset %d: MAC does not authenticate", ErrTampered, offset)
+			}
+			verifier.hash = sha256.Sum256(expected)
+			verifier.sequence = sequence
+			verifier.sawFrames = true
+		}
 		var event Event
 		if err := json.Unmarshal(payload, &event); err != nil {
 			return Watermark{}, false, fmt.Errorf("%w at offset %d: invalid event: %v", ErrCorrupt, offset, err)
@@ -504,7 +705,7 @@ func scan(file io.ReadSeeker, fromOffset int64, initialSequence uint64, visit fu
 			return Watermark{}, false, fmt.Errorf("%w at offset %d: event kind mismatch", ErrCorrupt, offset)
 		}
 		// Each epoch asserts only what its own writer promised. A v2 frame
-		// promised a lease mode on accounting events; a v3 frame promises the
+		// promised a lease mode on accounting events; v3 and v4 promise the
 		// period's identity, and may carry a reservation written through the
 		// older path that never had a lease mode to record.
 		if epoch == frameVersionCurrent {
@@ -512,10 +713,13 @@ func scan(file io.ReadSeeker, fromOffset int64, initialSequence uint64, visit fu
 				return Watermark{}, false, fmt.Errorf("%w at offset %d: v2 accounting event is missing its payload epoch fields", ErrCorrupt, offset)
 			}
 		}
-		if epoch == frameVersionPeriod && event.PeriodTimezone == "" {
-			return Watermark{}, false, fmt.Errorf("%w at offset %d: v3 event is missing its period identity", ErrCorrupt, offset)
+		if (epoch == frameVersionPeriod || epoch == frameVersionLedgerIntegrity) && event.PeriodTimezone == "" {
+			return Watermark{}, false, fmt.Errorf("%w at offset %d: v%d event is missing its period identity", ErrCorrupt, offset, epoch)
 		}
-		nextOffset := offset + int64(frameHeaderSize) + int64(payloadLength)
+		nextOffset := offset + int64(headerSizeForEpoch(epoch)) + int64(payloadLength)
+		if epoch == frameVersionLedgerIntegrity && verifier.verify() {
+			verifier.offset = nextOffset
+		}
 		if visit != nil {
 			if err := visit(Record{Sequence: sequence, Offset: nextOffset, Epoch: epoch, Event: event}); err != nil {
 				return Watermark{}, false, err
@@ -524,6 +728,13 @@ func scan(file io.ReadSeeker, fromOffset int64, initialSequence uint64, visit fu
 		offset = nextOffset
 		lastSequence = sequence
 	}
+}
+
+func headerSizeForEpoch(epoch byte) int {
+	if epoch == frameVersionLedgerIntegrity {
+		return chainHeaderSize
+	}
+	return frameHeaderSize
 }
 
 func writeFull(writer io.Writer, value []byte) error {

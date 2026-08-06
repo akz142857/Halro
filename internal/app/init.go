@@ -172,11 +172,19 @@ func initializeFile(cfg config.Config) error {
 		metadata.Close()
 		return err
 	}
+	ledgerKey, err := vault.DeriveLedgerHMACKey(masterKey)
+	if err != nil {
+		clear(masterKey)
+		clear(auditKey)
+		metadata.Close()
+		return err
+	}
 	masterKeyFingerprint := keyFingerprint(masterKey)
 	secretVault, err := vault.New(masterKey)
 	clear(masterKey)
 	if err != nil {
 		clear(auditKey)
+		clear(ledgerKey)
 		metadata.Close()
 		return err
 	}
@@ -189,39 +197,60 @@ func initializeFile(cfg config.Config) error {
 	if err != nil {
 		secretVault.Close()
 		clear(auditKey)
+		clear(ledgerKey)
 		metadata.Close()
 		return fmt.Errorf("create vault key check: %w", err)
 	}
 	auditEnvelope, err := encryptAuditHMACKey(secretVault, auditKey)
-	secretVault.Close()
 	if err != nil {
+		secretVault.Close()
 		clear(auditKey)
+		clear(ledgerKey)
 		metadata.Close()
 		return fmt.Errorf("protect audit HMAC key: %w", err)
 	}
+	ledgerEnvelope, err := encryptLedgerHMACKey(secretVault, ledgerKey)
+	secretVault.Close()
+	if err != nil {
+		clear(auditKey)
+		clear(ledgerKey)
+		metadata.Close()
+		return fmt.Errorf("protect ledger HMAC key: %w", err)
+	}
 	if err := metadata.PutVaultKeyCheck(envelope); err != nil {
 		clear(auditKey)
+		clear(ledgerKey)
 		metadata.Close()
 		return fmt.Errorf("store vault key check: %w", err)
 	}
 	if err := metadata.PutAuditHMACEnvelope(auditEnvelope); err != nil {
 		clear(auditKey)
+		clear(ledgerKey)
 		metadata.Close()
 		return fmt.Errorf("store audit HMAC envelope: %w", err)
+	}
+	if err := metadata.PutLedgerHMACEnvelope(ledgerEnvelope); err != nil {
+		clear(auditKey)
+		clear(ledgerKey)
+		metadata.Close()
+		return fmt.Errorf("store ledger HMAC envelope: %w", err)
 	}
 	if err := metadata.PutVaultKeyring(boltstore.VaultKeyring{
 		FormatVersion: 1, ActiveKeyVersion: 1, ActiveFingerprint: masterKeyFingerprint,
 	}); err != nil {
 		clear(auditKey)
+		clear(ledgerKey)
 		metadata.Close()
 		return fmt.Errorf("store vault keyring: %w", err)
 	}
 	if err := metadata.PutAuditCheckpoint(boltstore.AuditCheckpoint{}); err != nil {
 		clear(auditKey)
+		clear(ledgerKey)
 		metadata.Close()
 		return fmt.Errorf("store initial audit checkpoint: %w", err)
 	}
-	ledgerLog, ledgerErr := ledger.Open(cfg.LedgerPath(), ledger.NewStatus())
+	ledgerLog, ledgerErr := ledger.OpenWithOptions(cfg.LedgerPath(), ledger.NewStatus(), ledger.Options{ChainKey: ledgerKey})
+	clear(ledgerKey)
 	auditLog, auditErr := audit.Open(cfg.AuditPath(), auditKey)
 	clear(auditKey)
 	return errors.Join(ledgerErr, func() error {

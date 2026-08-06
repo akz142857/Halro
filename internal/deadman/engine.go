@@ -27,6 +27,7 @@ type Engine struct {
 	check         Checker
 	now           func() time.Time
 	audit         auditSink
+	anchor        anchorSink
 	logger        *slog.Logger
 	notify        *http.Client
 	targetClients map[string]*http.Client
@@ -63,6 +64,7 @@ func New(cfg Config, logger *slog.Logger) (*Engine, error) {
 		state:         state,
 		now:           func() time.Time { return time.Now().UTC() },
 		audit:         &auditWriter{path: cfg.AuditFile},
+		anchor:        &anchorWriter{path: cfg.AnchorFile},
 		logger:        logger,
 		notify:        notificationClient,
 		targetClients: targetClients,
@@ -137,6 +139,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	default:
 	}
 	results := e.probeTargets(ctx)
+	e.pullAnchors(ctx)
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	for index, target := range e.cfg.Targets {

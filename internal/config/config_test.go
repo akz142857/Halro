@@ -268,6 +268,83 @@ func TestMetricsNonLoopbackRequiresDedicatedMutualTLS(t *testing.T) {
 	}
 }
 
+func TestAuditAnchorRequiresMetricsAndCredentialFile(t *testing.T) {
+	cfg, err := Decode(strings.NewReader(validConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Audit.Anchor = AuditAnchor{
+		Enabled: true, Sink: AuditAnchorSinkDeadManPull,
+		Interval: Duration(5 * time.Minute), RecordDelta: 500,
+	}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Validate(LoadOptions{}); err == nil {
+		t.Fatal("dead_man_pull sink without a credential file was accepted")
+	}
+	cfg.Audit.Anchor.CredentialFile = "anchor-credentials.json"
+	if err := cfg.Validate(LoadOptions{}); err != nil {
+		t.Fatalf("valid audit.anchor configuration was rejected: %v", err)
+	}
+	cfg.Metrics.Enabled = false
+	if err := cfg.Validate(LoadOptions{}); err == nil {
+		t.Fatal("dead_man_pull sink without metrics.enabled was accepted — the anchor endpoint has nowhere to be served")
+	}
+}
+
+func TestAuditAnchorRejectsUnimplementedAndUnknownSinks(t *testing.T) {
+	for _, sink := range []string{AuditAnchorSinkSyslog, AuditAnchorSinkS3ObjectLock, "not_a_sink"} {
+		cfg, err := Decode(strings.NewReader(validConfig))
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg.Audit.Anchor = AuditAnchor{
+			Enabled: true, Sink: sink, Interval: Duration(5 * time.Minute), RecordDelta: 500,
+			CredentialFile: "anchor-credentials.json",
+		}
+		if err := cfg.Normalize(); err != nil {
+			t.Fatal(err)
+		}
+		if err := cfg.Validate(LoadOptions{}); err == nil {
+			t.Fatalf("sink %q was accepted", sink)
+		}
+	}
+}
+
+func TestAuditAnchorRejectsInvalidIntervalAndRecordDelta(t *testing.T) {
+	base := func(t *testing.T) Config {
+		t.Helper()
+		cfg, err := Decode(strings.NewReader(validConfig))
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg.Audit.Anchor = AuditAnchor{
+			Enabled: true, Sink: AuditAnchorSinkDeadManPull, Interval: Duration(5 * time.Minute),
+			RecordDelta: 500, CredentialFile: "anchor-credentials.json",
+		}
+		if err := cfg.Normalize(); err != nil {
+			t.Fatal(err)
+		}
+		return cfg
+	}
+	cfg := base(t)
+	cfg.Audit.Anchor.Interval = 0
+	if err := cfg.Validate(LoadOptions{}); err == nil {
+		t.Fatal("zero interval was accepted")
+	}
+	cfg = base(t)
+	cfg.Audit.Anchor.Interval = Duration(2 * time.Hour)
+	if err := cfg.Validate(LoadOptions{}); err == nil {
+		t.Fatal("interval beyond one hour was accepted")
+	}
+	cfg = base(t)
+	cfg.Audit.Anchor.RecordDelta = 0
+	if err := cfg.Validate(LoadOptions{}); err == nil {
+		t.Fatal("zero record_delta was accepted")
+	}
+}
+
 // The template is the annotated form of Default(), and an annotated copy of a
 // struct is a copy that drifts. Changing a default without updating the file an
 // operator actually receives would leave the two disagreeing silently — and the

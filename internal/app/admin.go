@@ -39,7 +39,7 @@ func BootstrapAdmin(
 	if adminCount != 0 {
 		return errors.New("an admin user already exists")
 	}
-	user, err := adminauth.NewUser(username, password, time.Now().UTC())
+	user, err := adminauth.NewUser(username, password, domain.AdminRoleAdministrator, time.Now().UTC())
 	if err != nil {
 		return err
 	}
@@ -114,7 +114,7 @@ func ResetAdminPassword(
 	if err != nil {
 		return errors.New("admin user was not found")
 	}
-	replacement, err := adminauth.NewUser(current.Username, password, time.Now().UTC())
+	replacement, err := adminauth.NewUser(current.Username, password, current.Role, time.Now().UTC())
 	if err != nil {
 		return err
 	}

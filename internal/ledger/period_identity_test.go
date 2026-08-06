@@ -96,8 +96,8 @@ func TestBalanceKeepsUnversionedEventsApart(t *testing.T) {
 // charged against, without access to any setting.
 func TestPeriodIdentitySurvivesEncoding(t *testing.T) {
 	record := settledEvent(1, "2026-08-06", "Asia/Shanghai", 3, 100)
-	if record.Epoch != frameVersionPeriod {
-		t.Fatalf("epoch = %d, want %d", record.Epoch, frameVersionPeriod)
+	if record.Epoch != frameVersionLedgerIntegrity {
+		t.Fatalf("epoch = %d, want %d", record.Epoch, frameVersionLedgerIntegrity)
 	}
 	event := record.Event
 	if event.PeriodTimezone != "Asia/Shanghai" || event.PeriodTimezoneVersion != 3 {
@@ -110,32 +110,29 @@ func TestPeriodIdentitySurvivesEncoding(t *testing.T) {
 	}
 }
 
-// An event with no period identity stays on its old epoch, so a log written
-// before this change still replays.
-func TestFrameVersionTracksPeriodIdentity(t *testing.T) {
-	withoutPeriod := Event{Kind: EventAttemptSettled, LeaseMode: LeaseModeMetered}
-	if got := eventFrameVersion(withoutPeriod); got != frameVersionCurrent {
-		t.Fatalf("lease event without a period = epoch %d, want %d", got, frameVersionCurrent)
-	}
-	legacy := Event{Kind: EventRequestAccepted}
-	if got := eventFrameVersion(legacy); got != frameVersionLegacy {
-		t.Fatalf("plain event = epoch %d, want %d", got, frameVersionLegacy)
-	}
-	withPeriod := Event{Kind: EventRequestAccepted, PeriodTimezone: "UTC"}
-	if got := eventFrameVersion(withPeriod); got != frameVersionPeriod {
-		t.Fatalf("event with a period = epoch %d, want %d", got, frameVersionPeriod)
+// eventFrameVersion no longer branches by event shape (ADR 0016): every
+// event this build writes — with or without period identity, lease mode, a
+// price snapshot — is promoted to the same epoch, so there is no event shape
+// that produces a lesser-authenticated frame.
+func TestFrameVersionIsUnconditionallyLedgerIntegrity(t *testing.T) {
+	for _, event := range []Event{
+		{Kind: EventAttemptSettled, LeaseMode: LeaseModeMetered},
+		{Kind: EventRequestAccepted},
+		{Kind: EventRequestAccepted, PeriodTimezone: "UTC"},
+	} {
+		if got := eventFrameVersion(event); got != frameVersionLedgerIntegrity {
+			t.Fatalf("event %#v = epoch %d, want %d", event, got, frameVersionLedgerIntegrity)
+		}
 	}
 }
 
-// The reader was taught to accept epoch 3 and to reject a v3 frame missing its
-// period identity. Neither branch means anything until a v3 frame has actually
-// been through a file: the in-memory checks above never touch encoding.
+// The reader was taught to accept epoch 4 and to reject a frame missing its
+// period identity. Neither branch means anything until a real frame has
+// actually been through a file: the in-memory checks above never touch
+// encoding.
 func TestPeriodIdentitySurvivesTheWAL(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "period.wal")
-	log, err := Open(path, NewStatus())
-	if err != nil {
-		t.Fatal(err)
-	}
+	log := openChained(t, path, NewStatus())
 	start := time.Date(2026, time.August, 6, 0, 0, 0, 0, time.UTC)
 	written := Event{
 		EventID: "evt_period", Kind: EventRequestAccepted, RequestID: "req_1", ProjectID: "prj_1",
@@ -144,14 +141,6 @@ func TestPeriodIdentitySurvivesTheWAL(t *testing.T) {
 		OccurredAt: start,
 	}
 	if _, err := log.Append(context.Background(), written); err != nil {
-		t.Fatal(err)
-	}
-	// A legacy event in the same file, so the reader is exercised on a mixed log
-	// rather than a uniformly v3 one.
-	if _, err := log.Append(context.Background(), Event{
-		EventID: "evt_legacy", Kind: EventRequestAccepted, RequestID: "req_2", ProjectID: "prj_1",
-		PeriodID: "2026-08-06", OccurredAt: start,
-	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := log.Close(); err != nil {
@@ -165,14 +154,11 @@ func TestPeriodIdentitySurvivesTheWAL(t *testing.T) {
 	}); err != nil || partial {
 		t.Fatalf("replay partial=%t err=%v", partial, err)
 	}
-	if len(records) != 2 {
-		t.Fatalf("replayed %d records, want 2", len(records))
+	if len(records) != 1 {
+		t.Fatalf("replayed %d records, want 1", len(records))
 	}
-	if records[0].Epoch != frameVersionPeriod {
-		t.Fatalf("period event replayed at epoch %d, want %d", records[0].Epoch, frameVersionPeriod)
-	}
-	if records[1].Epoch != frameVersionLegacy {
-		t.Fatalf("legacy event replayed at epoch %d, want %d", records[1].Epoch, frameVersionLegacy)
+	if records[0].Epoch != frameVersionLedgerIntegrity {
+		t.Fatalf("period event replayed at epoch %d, want %d", records[0].Epoch, frameVersionLedgerIntegrity)
 	}
 	replayed := records[0].Event
 	if replayed.PeriodTimezone != written.PeriodTimezone ||
