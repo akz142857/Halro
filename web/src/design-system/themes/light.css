@@ -15,10 +15,14 @@
   --color-surface-raised: var(--p-white);
   --color-surface-overlay: var(--p-white);
 
-  /* Text — dark ink on light for high contrast */
+  /* Text — dark ink on light for high contrast. On a light canvas the darker
+     ink is the more prominent one, so tertiary must be the lighter of the two:
+     these were the other way round, which made the third level outrank the
+     second. Both still clear AA, which is why a contrast floor alone did not
+     catch it — see the directional assertion in design-system.test.ts. */
   --color-text-primary: var(--p-ink-950);
-  --color-text-secondary: var(--p-ink-400);
-  --color-text-tertiary: var(--p-ink-500);
+  --color-text-secondary: var(--p-ink-500);
+  --color-text-tertiary: var(--p-ink-400);
   --color-text-inverse: var(--p-ink-50);
 
   /* Borders — subtle default, stronger variant meets ~3:1 for key boundaries */
