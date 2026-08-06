@@ -152,6 +152,14 @@ export function Loading({ label }: { label?: string }) {
   );
 }
 
+// Compares the live field values against whatever they were on first render. A form then
+// declares dirtiness by listing its fields once, rather than restating every default a
+// second time — two copies of the same knowledge is exactly what drifts apart.
+export function useDirty(values: Record<string, unknown>): boolean {
+  const initial = useRef(values);
+  return Object.keys(values).some((key) => values[key] !== initial.current[key]);
+}
+
 export function Modal({
   title,
   children,
@@ -160,6 +168,7 @@ export function Modal({
   closeDisabled = false,
   wide = false,
   describedBy,
+  dirty = false,
 }: {
   title: string;
   children: ReactNode;
@@ -168,14 +177,39 @@ export function Modal({
   closeDisabled?: boolean;
   wide?: boolean;
   describedBy?: string;
+  dirty?: boolean;
 }) {
   const { t } = useTranslation();
   const titleID = useId();
   const dialog = useRef<HTMLElement>(null);
   const onCloseRef = useRef(onClose);
   const closeDisabledRef = useRef(closeDisabled);
+  // Escape, the backdrop and × all mean "close". A modal that declares itself dirty
+  // turns each of them into a question first, so half-filled forms are never
+  // discarded without a word. The children stay mounted behind the prompt: cancelling
+  // has to give the operator back every field exactly as they left it.
+  const [confirmingDiscard, setConfirmingDiscard] = useState(false);
+  const confirmingRef = useRef(false);
+  const requestClose = () => {
+    if (closeDisabled) return;
+    if (confirmingDiscard) return setConfirmingDiscard(false);
+    if (dirty) return setConfirmingDiscard(true);
+    onClose();
+  };
+  const requestCloseRef = useRef(requestClose);
   useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
   useEffect(() => { closeDisabledRef.current = closeDisabled; }, [closeDisabled]);
+  useEffect(() => { requestCloseRef.current = requestClose; });
+  useEffect(() => { confirmingRef.current = confirmingDiscard; }, [confirmingDiscard]);
+  const initialRender = useRef(true);
+  useEffect(() => {
+    if (initialRender.current) { initialRender.current = false; return; }
+    const container = dialog.current;
+    if (!container) return;
+    // Opening the prompt moves focus onto it; cancelling puts it back in the form.
+    const selector = confirmingDiscard ? "[data-discard-initial]" : "[data-modal-initial]";
+    container.querySelector<HTMLElement>(selector)?.focus();
+  }, [confirmingDiscard]);
   useEffect(() => {
     const previouslyFocused = document.activeElement as HTMLElement | null;
     const container = dialog.current;
@@ -187,9 +221,12 @@ export function Modal({
     const onKeyDown = (event: KeyboardEvent) => {
       // Escape means "cancel", never "confirm", so a dangerous dialog honours it too.
       // Only a modal that must not be dismissed at all (closeDisabled) ignores it.
-      if (event.key === "Escape" && !closeDisabledRef.current) onCloseRef.current();
+      if (event.key === "Escape" && !closeDisabledRef.current) requestCloseRef.current();
       if (event.key !== "Tab" || !container) return;
-      const focusable = Array.from(container.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], [tabindex]:not([tabindex="-1"])')).filter((element) => !element.hasAttribute("hidden"));
+      // While the discard prompt is up the form behind it is inert, so the trap
+      // narrows to the prompt rather than tabbing through fields nobody can see.
+      const scope = (confirmingRef.current && container.querySelector<HTMLElement>(".discard-prompt")) || container;
+      const focusable = Array.from(scope.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], [tabindex]:not([tabindex="-1"])')).filter((element) => !element.hasAttribute("hidden"));
       if (!focusable.length) { event.preventDefault(); container.focus(); return; }
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
@@ -203,9 +240,9 @@ export function Modal({
     };
   }, []);
   return createPortal(
-    <div className="modal-backdrop" role="presentation" onMouseDown={() => { if (!dangerous && !closeDisabled) onClose(); }}>
+    <div className="modal-backdrop" role="presentation" onMouseDown={() => { if (!dangerous && !closeDisabled) requestClose(); }}>
       <section
-        className={`modal ${dangerous ? "dangerous" : ""} ${wide ? "wide" : ""}`}
+        className={`modal ${dangerous ? "dangerous" : ""} ${wide ? "wide" : ""} ${confirmingDiscard ? "discarding" : ""}`}
         role={dangerous ? "alertdialog" : "dialog"}
         aria-modal="true"
         aria-labelledby={titleID}
@@ -213,11 +250,24 @@ export function Modal({
         tabIndex={-1}
         ref={dialog}
         onMouseDown={(event) => event.stopPropagation()}
+        // A form's own Cancel button lives inside children, below this component, so it
+        // cannot reach the dirty guard through props. Marking it data-modal-close routes
+        // it through the same question Escape and the backdrop ask.
+        onClick={(event) => { if ((event.target as HTMLElement).closest?.("[data-modal-close]")) requestClose(); }}
       >
         <header>
           <h2 id={titleID}>{title}</h2>
-          <button className="icon-button" disabled={closeDisabled} onClick={onClose} aria-label={t("common.close")}>×</button>
+          <button className="icon-button" disabled={closeDisabled} onClick={requestClose} aria-label={t("common.close")}>×</button>
         </header>
+        {confirmingDiscard && (
+          <div className="confirmation-dialog discard-prompt" role="alert">
+            <p>{t("common.discardChangesPrompt")}</p>
+            <div className="form-actions">
+              <button type="button" className="button ghost" data-discard-initial onClick={() => setConfirmingDiscard(false)}>{t("common.keepEditing")}</button>
+              <button type="button" className="button danger" onClick={() => { setConfirmingDiscard(false); onClose(); }}>{t("common.discardChanges")}</button>
+            </div>
+          </div>
+        )}
         {children}
       </section>
     </div>,
@@ -232,6 +282,7 @@ export function ConfirmButton({
   className = "button danger",
   onConfirm,
   disabled,
+  disabledReason,
 }: {
   label: string;
   confirmLabel: string;
@@ -239,13 +290,19 @@ export function ConfirmButton({
   className?: string;
   onConfirm: () => void;
   disabled?: boolean;
+  disabledReason?: string;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const consequenceID = useId();
+  const reasonID = useId();
+  // A disabled button carries no tooltip in some browsers and is skipped by screen
+  // reader tab order, so the reason is also stated in the accessibility tree.
+  const blocked = Boolean(disabled && disabledReason);
   return (
     <>
-      <button className={className} disabled={disabled} onClick={() => setOpen(true)}>{label}</button>
+      <button className={className} disabled={disabled} title={blocked ? disabledReason : undefined} aria-describedby={blocked ? reasonID : undefined} onClick={() => setOpen(true)}>{label}</button>
+      {blocked && <span id={reasonID} className="sr-only">{disabledReason}</span>}
       {open && (
         <Modal dangerous title={title || t("common.confirmAction")} describedBy={consequenceID} onClose={() => setOpen(false)}>
           <div className="confirmation-dialog">

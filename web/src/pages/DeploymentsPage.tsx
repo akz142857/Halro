@@ -12,6 +12,7 @@ import {
   OverflowMenu,
   PageHeader,
   StatusDot,
+  useDirty,
 } from "../components";
 import { dateTime, money } from "../format";
 import type { Deployment, DeploymentPriceVersion, DeploymentTargetKind, Provider, ProviderBinding, ProviderCapabilities } from "../types";
@@ -211,7 +212,7 @@ function DeploymentRow({
           {/* The sizer keeps enable and disable rows equally wide so columns line up across the list. */}
           <span className="deployment-state-toggle">
             {deployment.enabled ? (
-              <ConfirmButton className="button ghost" label={t("common.disable")} title={t("deployments.disableTitle")} confirmLabel={t("deployments.disableConfirm", { name: deployment.name })} disabled={state.isPending || routeBlocked} onConfirm={() => state.mutate()} />
+              <ConfirmButton className="button ghost" label={t("common.disable")} title={t("deployments.disableTitle")} confirmLabel={t("deployments.disableConfirm", { name: deployment.name })} disabled={state.isPending || routeBlocked} disabledReason={routeBlocked ? t("deployments.routeBlocked") : undefined} onConfirm={() => state.mutate()} />
             ) : (
               <button className="button ghost" title={!testIsCurrent ? t("deployments.testRequired") : undefined} disabled={state.isPending || !testIsCurrent} onClick={() => state.mutate()}>{t("common.enable")}</button>
             )}
@@ -219,7 +220,7 @@ function DeploymentRow({
           </span>
           <OverflowMenu label={t("deployments.moreActions")}>
             <button className="button ghost" onClick={onReplace}>{t("deployments.createReplacement")}</button>
-            <ConfirmButton label={t("common.delete")} confirmLabel={t("deployments.deleteConfirm", { name: deployment.name })} onConfirm={() => remove.mutate()} disabled={remove.isPending || routeBlocked} />
+            <ConfirmButton label={t("common.delete")} confirmLabel={t("deployments.deleteConfirm", { name: deployment.name })} onConfirm={() => remove.mutate()} disabled={remove.isPending || routeBlocked} disabledReason={routeBlocked ? t("deployments.routeBlocked") : undefined} />
           </OverflowMenu>
         </div>
       </div>
@@ -614,8 +615,9 @@ function DeploymentForm({
   const numericValues = [maxConcurrency, capabilities.max_context_tokens, capabilities.max_output_tokens];
   const tokenLimitsValid = capabilities.max_context_tokens === 0 || capabilities.max_output_tokens <= capabilities.max_context_tokens;
   const formValid = Boolean(name.trim() && providerID && providerModel.trim() && anyOperation && numericValues.every((value) => Number.isFinite(value) && value >= 0) && tokenLimitsValid);
+  const dirty = useDirty({ name, providerID, providerModel, bindingID, capabilities, region, maxConcurrency, targetKind });
   return (
-    <Modal wide title={current ? t("deployments.edit") : template ? t("deployments.createReplacementTitle") : t("deployments.createTitle")} onClose={onClose}>
+    <Modal wide title={current ? t("deployments.edit") : template ? t("deployments.createReplacementTitle") : t("deployments.createTitle")} dirty={dirty} onClose={onClose}>
       {enabledProviders.length === 0 ? (
         <div className="notice warning"><strong>{t("deployments.providerRequired")}</strong><span>{t("deployments.providerRequiredDescription")}</span><Link className="notice-link" href="/admin/providers">{t("deployments.openProviders")}</Link></div>
       ) : (

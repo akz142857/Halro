@@ -340,7 +340,7 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
   const {
     register,
     handleSubmit,
-    formState: { errors },
+    formState: { errors, isDirty },
   } = useForm<ProjectInput, unknown, ProjectValue>({
     resolver: zodResolver(schema),
     defaultValues: {
@@ -386,7 +386,7 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
   return (
     // Dismissing the dialog mid-flight would unmount the mutation before its success
     // handler refreshes the list, leaving the console showing stale server state.
-    <Modal wide closeDisabled={mutation.isPending} title={current ? t("projects.edit") : t("projects.createTitle")} onClose={onClose}>
+    <Modal wide closeDisabled={mutation.isPending} dirty={isDirty} title={current ? t("projects.edit") : t("projects.createTitle")} onClose={onClose}>
       <form
         className="project-form"
         onSubmit={handleSubmit((value) => {

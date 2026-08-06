@@ -13,6 +13,7 @@ import {
   ConfirmButton,
   OverflowMenu,
   ResourceToolbar,
+  useDirty,
 } from "../components";
 import type { InlineTestState } from "../components";
 import type { AccessSurface, Credential, CredentialScheme, Provider, ProviderBinding, ProviderCapabilities, ProviderType } from "../types";
@@ -366,8 +367,9 @@ function CredentialForm({
     event.preventDefault();
     if (name.trim() && baseURL.trim() && (current || secret)) mutation.mutate();
   };
+  const dirty = useDirty({ name, type, baseURL, bedrockSurface, secret });
   return (
-    <Modal title={current ? t("providers.rotateCredential") : t("providers.saveCredential")} onClose={onClose}>
+    <Modal title={current ? t("providers.rotateCredential") : t("providers.saveCredential")} dirty={dirty} onClose={onClose}>
       <form onSubmit={submit} autoComplete="off">
         <Field label={t("providers.credentialName")}><input autoFocus value={name} onChange={(event) => setName(event.target.value)} /></Field>
         <Field label={t("providers.providerType")}>
@@ -480,8 +482,9 @@ function ProviderForm({
       onClose();
     },
   });
+  const dirty = useDirty({ name, type, profileID, baseURL, apiVersion, maxConcurrency, enabled, capabilities, credentialID });
   return (
-    <Modal wide title={current ? t("providers.editProvider") : t("providers.createProvider")} onClose={onClose}>
+    <Modal wide title={current ? t("providers.editProvider") : t("providers.createProvider")} dirty={dirty} onClose={onClose}>
       {credentials.length === 0 ? (
         <div className="notice warning">
           <strong>{t("providers.credentialRequired")}</strong>

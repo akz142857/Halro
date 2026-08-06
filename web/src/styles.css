@@ -229,6 +229,15 @@ h3 { margin-bottom: 0; font-size: 18px; }
 .anomaly-row strong { margin-bottom: 5px; font-size: 11px; }
 .anomaly-row small, .anomaly-row time { color: var(--muted); font: var(--font-size-xs) var(--mono); }
 .dashboard-empty { display: grid; min-height: 180px; place-items: center; padding: 24px; color: var(--muted-2); font: 10px var(--mono); text-align: center; }
+.first-run-panel { margin-bottom: 18px; }
+.first-run-progress { font: var(--font-size-xs) var(--mono); letter-spacing: .08em; }
+.first-run-description { margin: 18px 22px 0; color: var(--muted); font-size: 13px; line-height: 1.7; }
+.first-run-steps { margin: 14px 0 0; padding: 0; list-style: none; }
+.first-run-step, .first-run-verify { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 14px 22px; border-top: 1px solid var(--line); }
+.first-run-step-copy strong { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+.first-run-step-copy small { display: block; margin-top: 5px; margin-left: 18px; color: var(--muted); font: var(--font-size-xs) var(--mono); }
+.first-run-verify { background: var(--surface-sidebar); }
+.first-run-verify .first-run-step-copy small { margin-left: 0; }
 .internal-status-panel { display: grid; grid-template-columns: 1.15fr repeat(4, minmax(130px, 1fr)) auto; align-items: stretch; margin-top: 18px; }
 .internal-status-title { display: flex; justify-content: center; flex-direction: column; padding: 15px 22px; border-right: 1px solid var(--line); }
 .internal-status-title .eyebrow { margin: 0 0 6px; }
@@ -957,6 +966,9 @@ dd { margin: 0; font: 10px var(--mono); text-align: right; overflow-wrap: anywhe
 .modal > header h2 { margin: 0; font-size: 22px; }
 .modal > form, .modal > .one-time-secret, .modal > .notice { margin: 24px; }
 .modal > .confirmation-dialog { margin: 0; padding: 24px; }
+/* The discard prompt covers the body instead of replacing it: the form stays in the
+   DOM so "keep editing" returns every field exactly as the operator left it. */
+.modal.discarding > :not(header):not(.discard-prompt) { display: none; }
 .confirmation-dialog > p { margin: 0; color: var(--color-text-secondary); font-size: 13px; line-height: 1.7; }
 .confirmation-dialog > .form-actions { margin-top: 24px; }
 .modal .danger-panel { padding: 0; background: transparent; border: 0 !important; }
