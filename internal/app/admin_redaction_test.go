@@ -96,6 +96,36 @@ func TestAdminRedactionPolicyLifecycleTestAndReferenceProtection(t *testing.T) {
 	if blocked.Code != http.StatusConflict {
 		t.Fatalf("referenced delete status=%d body=%s", blocked.Code, blocked.Body.String())
 	}
+
+	// Switching the project off does not release the reference: the ID stays on
+	// the project, so deleting the policy now would leave a dangling reference
+	// for whoever switches it back on.
+	project, err := runtime.store.GetProject(context.Background(), "prj_redacted")
+	if err != nil {
+		t.Fatal(err)
+	}
+	project.Enabled = false
+	project, err = runtime.store.PutProject(context.Background(), project, project.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stillBlocked := performAdminMutation(t, runtime, cookie, csrf,
+		http.MethodDelete, "/admin/api/v1/redaction-policies/"+policy.ID, `"1"`, nil)
+	if stillBlocked.Code != http.StatusConflict {
+		t.Fatalf("disabled project released the reference: status=%d body=%s",
+			stillBlocked.Code, stillBlocked.Body.String())
+	}
+
+	project.RedactionPolicyID = ""
+	if _, err := runtime.store.PutProject(context.Background(), project, project.Revision); err != nil {
+		t.Fatal(err)
+	}
+	released := performAdminMutation(t, runtime, cookie, csrf,
+		http.MethodDelete, "/admin/api/v1/redaction-policies/"+policy.ID, `"1"`, nil)
+	if released.Code != http.StatusNoContent {
+		t.Fatalf("delete after the reference was removed: status=%d body=%s",
+			released.Code, released.Body.String())
+	}
 }
 
 func TestAdminRedactionPolicyRejectsUnsafeBoundedRuleBeforePersistence(t *testing.T) {
