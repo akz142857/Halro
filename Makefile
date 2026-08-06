@@ -7,6 +7,17 @@ RESET_MASTER_KEY_FILE ?= ./master.key
 
 .DEFAULT_GOAL := help
 
+# Release identity. The Dockerfile already injects these; a binary from `make
+# build` reported "dev/unknown/unknown", so the version an operator read back
+# from `heimdall version` depended on how it had been built. Overridable, so a
+# release pipeline can pin all three rather than infer them from the checkout.
+RELEASE_VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+RELEASE_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+# SOURCE_DATE_EPOCH, when set, keeps the stamp reproducible.
+RELEASE_DATE ?= $(shell date -u -r "$${SOURCE_DATE_EPOCH:-$$(date +%s)}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)
+BUILDINFO := github.com/akz142857/Heimdall/internal/buildinfo
+GO_LDFLAGS := -X $(BUILDINFO).Version=$(RELEASE_VERSION) -X $(BUILDINFO).Commit=$(RELEASE_COMMIT) -X $(BUILDINFO).Date=$(RELEASE_DATE)
+
 GO_SOURCES := $(shell find cmd internal -type f -name '*.go')
 DEADMAN_SOURCES := $(shell find cmd/heimdall-deadman internal/deadman -type f -name '*.go')
 WEB_SOURCES := $(shell find web/src web/scripts -type f) \
@@ -14,7 +25,7 @@ WEB_SOURCES := $(shell find web/src web/scripts -type f) \
 WEB_DEPS_STAMP := web/node_modules/.heimdall-install-stamp
 WEB_BUILD_STAMP := web/node_modules/.heimdall-build-stamp
 
-.PHONY: help init-help setup init reset start dev build deadman frontend frontend-test backup test race vet observability-check check clean
+.PHONY: help init-help setup init reset start dev build deadman frontend frontend-test backup test race vet observability-check check clean version
 
 help:
 	@echo "Heimdall Makefile commands:"
@@ -36,6 +47,7 @@ help:
 	@echo "  observability-check  Validate observability configuration"
 	@echo "  check                Run test, race, vet, frontend-test, and observability-check"
 	@echo "  clean                Remove binaries and frontend build stamps"
+	@echo "  version              Show the release identity this build would carry"
 	@echo ""
 	@echo "Variables:"
 	@echo "  CONFIG=$(CONFIG)"
@@ -99,11 +111,11 @@ backup: bin/heimdall
 # -- internal/webui/dist`), so it cannot drift unnoticed.
 bin/heimdall: $(GO_SOURCES) go.mod go.sum
 	mkdir -p bin
-	go build -trimpath -o $@ ./cmd/heimdall
+	go build -trimpath -ldflags "$(GO_LDFLAGS)" -o $@ ./cmd/heimdall
 
 bin/heimdall-deadman: $(DEADMAN_SOURCES) go.mod go.sum
 	mkdir -p bin
-	go build -trimpath -o $@ ./cmd/heimdall-deadman
+	go build -trimpath -ldflags "$(GO_LDFLAGS)" -o $@ ./cmd/heimdall-deadman
 
 frontend: $(WEB_BUILD_STAMP)
 
@@ -135,3 +147,8 @@ check: test race vet frontend-test observability-check
 clean:
 	rm -rf bin
 	rm -f $(WEB_DEPS_STAMP) $(WEB_BUILD_STAMP)
+
+version:
+	@echo "version: $(RELEASE_VERSION)"
+	@echo "commit:  $(RELEASE_COMMIT)"
+	@echo "date:    $(RELEASE_DATE)"

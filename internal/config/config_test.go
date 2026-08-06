@@ -1,7 +1,9 @@
 package config
 
 import (
+	"bytes"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -263,5 +265,32 @@ func TestMetricsNonLoopbackRequiresDedicatedMutualTLS(t *testing.T) {
 	cfg.Metrics.TLS.ClientCAFile = ""
 	if err := cfg.Validate(LoadOptions{}); err == nil {
 		t.Fatal("Metrics TLS without a client CA was accepted")
+	}
+}
+
+// The template is the annotated form of Default(), and an annotated copy of a
+// struct is a copy that drifts. Changing a default without updating the file an
+// operator actually receives would leave the two disagreeing silently — and the
+// file is the one that wins, because it is what gets loaded.
+func TestDefaultTemplateMatchesDefault(t *testing.T) {
+	written, err := Decode(bytes.NewReader(defaultTemplate))
+	if err != nil {
+		t.Fatalf("the first-run template does not decode: %v", err)
+	}
+	if err := written.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	expected := Default()
+	if err := expected.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(written, expected) {
+		t.Fatalf("the first-run template no longer matches Default()\n template: %#v\n default:  %#v", written, expected)
+	}
+	if err := written.Validate(LoadOptions{}); err != nil {
+		t.Fatalf("the config written on first run does not validate: %v", err)
+	}
+	if !bytes.Contains(defaultTemplate, []byte("#")) {
+		t.Fatal("the first-run template carries no comments, which is the whole point of it")
 	}
 }

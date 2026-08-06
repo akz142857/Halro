@@ -1,14 +1,21 @@
 package config
 
 import (
+	_ "embed"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"time"
-
-	"gopkg.in/yaml.v3"
 )
+
+// defaultTemplate is what `heimdall start` writes when no config exists. It is
+// the annotated form of Default(): the first file an operator ever opens should
+// explain what it is offering to change, not hand them a marshalled struct.
+// TestDefaultTemplateMatchesDefault keeps the two from drifting.
+//
+//go:embed default.yaml
+var defaultTemplate []byte
 
 // Default returns the safe, loopback-only configuration used by `heimdall start`.
 // Relative storage paths intentionally remain relative to the process working
@@ -115,13 +122,10 @@ func WriteDefault(path string) error {
 		temporary.Close()
 		return fmt.Errorf("protect temporary config: %w", err)
 	}
-	encoder := yaml.NewEncoder(temporary)
-	encoder.SetIndent(2)
-	encodeErr := encoder.Encode(Default())
-	closeEncoderErr := encoder.Close()
+	_, writeErr := temporary.Write(defaultTemplate)
 	syncErr := temporary.Sync()
 	closeErr := temporary.Close()
-	if err := errors.Join(encodeErr, closeEncoderErr, syncErr, closeErr); err != nil {
+	if err := errors.Join(writeErr, syncErr, closeErr); err != nil {
 		return fmt.Errorf("write default config: %w", err)
 	}
 	if err := os.Link(temporaryPath, absolute); err != nil {
