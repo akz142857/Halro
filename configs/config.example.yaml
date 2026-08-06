@@ -26,7 +26,10 @@ admin:
   idle_timeout: "30m"
   login_rpm: 5
   mfa_policy: "optional"
-  # "disabled" keeps the Admin listener free of data-plane traffic.
+  # "disabled" keeps the Admin listener free of data-plane traffic. Leave it
+  # enabled for a loopback-only Admin listener; set "disabled" once that
+  # listener is reachable from elsewhere, because network controls applied to
+  # the Gateway listener do not cover this path. Startup warns when it matters.
   developer_workbench: "enabled"
   external_origin: ""
   adjustment_soft_limit_micros_usd: 10000000
