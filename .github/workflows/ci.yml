@@ -68,6 +68,46 @@ jobs:
         run: GOTOOLCHAIN=go1.26.5 go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
       - run: go build -trimpath ./cmd/heimdall ./cmd/heimdall-deadman
 
+  # Seeded corpora and regression inputs live in testdata and run with every
+  # `go test`; this job is the part that looks for inputs nobody has thought of
+  # yet. It is deliberately short — a few minutes per push, not an overnight
+  # campaign — because its job here is to catch a regression in a parser that
+  # sits in front of authenticated traffic, not to exhaust the input space.
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Fuzz the parsers on the request path
+        run: |
+          set -eu
+          # package:target, one -fuzz run each; go test accepts a single target.
+          for entry in \
+            ./internal/sse:FuzzEncodeDecodeRoundTrip \
+            ./internal/sse:FuzzDecoderNeverPanics \
+            ./internal/openaiapi:FuzzDecodeRequestsNeverPanic \
+            ./internal/openaiapi:FuzzDecodePhase2RequestsNeverPanic \
+            ./internal/safelog:FuzzRedactNeverLeaksSeededSecret \
+            ./internal/redaction:FuzzBoundedStreamMatchesNonStream \
+            ./internal/tokenguard:FuzzRestoreCheckpointNeverPanics
+          do
+            package="${entry%%:*}"
+            target="${entry##*:}"
+            echo "::group::${package} ${target}"
+            go test "${package}" -run '^$' -fuzz "^${target}$" -fuzztime 40s
+            echo "::endgroup::"
+          done
+      - name: Preserve any failing input
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-failures
+          path: internal/**/testdata/fuzz/**
+          if-no-files-found: ignore
+
   container:
     runs-on: ubuntu-latest
     steps:
