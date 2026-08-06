@@ -158,6 +158,19 @@ not cover this path. Set `disabled` when the two listeners are isolated at the
 network layer. Every execution appends `developer.execute` to the Audit chain
 with the acting administrator, endpoint, HTTP status, and Request ID.
 
+The default stays `enabled` because a loopback-only Admin listener — the
+quickstart, and where the first-run checklist sends you to prove the chain end
+to end — exposes it to nobody else. On an Admin listener bound to a routable
+address the trade is real, and Heimdall says so at startup:
+
+```
+WARN developer workbench serves Gateway calls on a non-loopback Admin listener;
+     network controls applied only to the Gateway listener do not cover this path
+```
+
+Treat that warning as a decision to make, not noise: either isolate the Admin
+listener or set `developer_workbench: "disabled"`.
+
 ### Authenticator two-factor authentication
 
 Set `admin.mfa_policy` to `optional` (the upgrade-compatible default) or

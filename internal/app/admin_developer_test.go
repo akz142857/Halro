@@ -247,3 +247,34 @@ func TestAdminDeveloperExecutionRespectsDisabledWorkbench(t *testing.T) {
 		t.Fatalf("config did not advertise the disabled workbench: %s", configResponse.Body.String())
 	}
 }
+
+// A workbench on a loopback-only listener is the quickstart, and the first-run
+// guidance sends people to it. One bound to a routable address is a data-plane
+// entrance that the Gateway listener's network controls do not cover, and the
+// operator has to be told so at startup rather than discover it in a review.
+func TestWorkbenchWarnsOnlyWhenTheAdminListenerIsReachable(t *testing.T) {
+	warned := func(listen, workbench string) bool {
+		var buffer strings.Builder
+		runtime := &Runtime{
+			logger: slog.New(slog.NewTextHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelWarn})),
+			config: config.Config{
+				Server: config.Server{AdminListen: listen},
+				Admin:  config.Admin{DeveloperWorkbench: workbench},
+			},
+		}
+		runtime.warnAboutReachableWorkbench()
+		return strings.Contains(buffer.String(), "developer workbench")
+	}
+	if warned("127.0.0.1:8081", "enabled") {
+		t.Fatal("a loopback admin listener does not expose the workbench to anyone else")
+	}
+	if warned("0.0.0.0:8081", "disabled") {
+		t.Fatal("warned about a workbench that is switched off")
+	}
+	if !warned("0.0.0.0:8081", "enabled") {
+		t.Fatal("a workbench on a routable admin listener was not reported")
+	}
+	if !warned("[::]:8081", "enabled") {
+		t.Fatal("an unspecified IPv6 admin listener was not reported")
+	}
+}

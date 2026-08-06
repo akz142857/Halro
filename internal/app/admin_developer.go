@@ -59,7 +59,9 @@ func (r *Runtime) executeAdminDeveloperRequest(writer http.ResponseWriter, reque
 	}
 	// Behind a trusted proxy the Gateway requires a forwarded chain and rejects the
 	// request without one. The admin caller is the real source, so state it explicitly.
-	if forwarded := strings.TrimSpace(request.Header.Get("X-Forwarded-For")); forwarded != "" {
+	// Every line of the incoming header, joined: the Gateway reads the chain the
+	// same way, and forwarding only the first line would hand it a shorter one.
+	if forwarded := strings.TrimSpace(strings.Join(request.Header.Values("X-Forwarded-For"), ",")); forwarded != "" {
 		upstream.Header.Set("X-Forwarded-For", forwarded)
 	} else if host, _, splitErr := net.SplitHostPort(request.RemoteAddr); splitErr == nil {
 		upstream.Header.Set("X-Forwarded-For", host)

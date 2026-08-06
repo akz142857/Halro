@@ -698,10 +698,16 @@ func (h *Handler) sourceIP(request *http.Request) (netip.Addr, bool) {
 	if !h.trustProxy || !prefixContains(h.trustedProxies, current) {
 		return current, true
 	}
-	if strings.TrimSpace(request.Header.Get("X-Forwarded-For")) == "" {
+	// Repeated field lines are one list in order (RFC 9110 §5.3), and a proxy that
+	// appends rather than rewrites produces exactly that. Reading only the first
+	// line let a client send its own X-Forwarded-For and have the proxy's
+	// truthful, appended line ignored: the forged hop then looked like the
+	// rightmost untrusted address, which is the one this function trusts.
+	forwarded := strings.Join(request.Header.Values("X-Forwarded-For"), ",")
+	if strings.TrimSpace(forwarded) == "" {
 		return netip.Addr{}, false
 	}
-	parts := strings.Split(request.Header.Get("X-Forwarded-For"), ",")
+	parts := strings.Split(forwarded, ",")
 	for index := len(parts) - 1; index >= 0; index-- {
 		candidate, err := netip.ParseAddr(strings.TrimSpace(parts[index]))
 		if err != nil {

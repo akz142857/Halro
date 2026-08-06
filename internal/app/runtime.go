@@ -681,10 +681,36 @@ func (r *Runtime) Run(ctx context.Context) error {
 	return r.RunWithReady(ctx, nil)
 }
 
+// warnAboutReachableWorkbench says once, at startup, that the Admin listener is
+// carrying data-plane traffic on an address other machines can reach. The
+// workbench costs nothing on a loopback-only instance — that is the quickstart,
+// and it is where the first-run guidance sends people — but on a listener bound
+// to a routable address it means whatever network controls guard the Gateway
+// listener (firewall, WAF, mTLS, IP allowlists) do not cover this path. It is
+// still an authenticated administrator holding a valid Gateway Key on the other
+// end; this is a lateral capability, not an open door, so it warns rather than
+// refuses.
+func (r *Runtime) warnAboutReachableWorkbench() {
+	if !r.developerWorkbenchEnabled() {
+		return
+	}
+	host, _, err := net.SplitHostPort(r.config.Server.AdminListen)
+	if err != nil || config.ListenerHostIsLoopback(host) {
+		return
+	}
+	r.logger.Warn(
+		"developer workbench serves Gateway calls on a non-loopback Admin listener; "+
+			"network controls applied only to the Gateway listener do not cover this path",
+		"admin_listen", r.config.Server.AdminListen,
+		"remedy", "set admin.developer_workbench to disabled",
+	)
+}
+
 // RunWithReady binds every configured listener before calling ready. This
 // keeps startup guidance and service-manager readiness signals from claiming
 // success when one of the ports cannot actually be opened.
 func (r *Runtime) RunWithReady(ctx context.Context, ready func() error) error {
+	r.warnAboutReachableWorkbench()
 	var metricsTLSConfig *tls.Config
 	if r.config.Metrics.Enabled && r.config.Metrics.TLS.Enabled {
 		var err error

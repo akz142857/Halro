@@ -476,6 +476,17 @@ func TestSourceIPTrustsForwardedChainOnlyFromConfiguredProxy(t *testing.T) {
 	if got, ok := handler.sourceIP(request); !ok || got != netip.MustParseAddr("203.0.113.7") {
 		t.Fatalf("spoofed forwarded header was trusted: %s", got)
 	}
+
+	// The client sent its own header line; the proxy appended the address it
+	// actually saw as a second line. Both lines are one chain, so the truth the
+	// proxy added is what the rightmost-untrusted walk has to find.
+	request.RemoteAddr = "10.0.0.1:1234"
+	request.Header.Del("X-Forwarded-For")
+	request.Header.Add("X-Forwarded-For", "203.0.113.9")
+	request.Header.Add("X-Forwarded-For", "198.51.100.7")
+	if got, ok := handler.sourceIP(request); !ok || got != netip.MustParseAddr("198.51.100.7") {
+		t.Fatalf("a second forwarded header line was ignored: source=%s", got)
+	}
 }
 
 func TestTrustedProxyRejectsMalformedForwardedFor(t *testing.T) {

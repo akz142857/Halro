@@ -715,6 +715,11 @@ func validateListener(name, address string, tlsEnabled, allowInsecurePublic bool
 	return []error{fmt.Errorf("%s must bind loopback unless TLS is enabled", name)}
 }
 
+// ListenerHostIsLoopback reports whether a listener host is reachable only from
+// this machine. Exported because deployment warnings elsewhere need the same
+// answer this package's validation uses, and two implementations would drift.
+func ListenerHostIsLoopback(host string) bool { return listenerHostIsLoopback(host) }
+
 func listenerHostIsLoopback(host string) bool {
 	host = strings.Trim(host, "[]")
 	if host == "localhost" {
