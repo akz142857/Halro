@@ -105,11 +105,13 @@
 | 5 个 admin 互斥锁（`adminTopologyMu`/`adminProjectMu`/`adminSettingsMu`/`adminIdentityMu`/`adminAlertMu`）在 `admin_*.go` 之外**零引用**（只有 struct 里的声明） | 状态可以整体搬走，不存在"锁粒度在搬迁中被意外改变"这一类编译器兜不住的风险 |
 | `auditBatch*`、`providerModels`、`setupMu`/`setupToken`、`adminLogin`/`adminSetupRate`、`adminStepUp` 同样零外部引用 | 同上 |
 | `admin_*.go` 触及的 Runtime 字段约 25 个（`r.store` 占 200 次） | 依赖面可枚举，不是无限发散 |
-| **跨界的只有两个符号**：`appendAdminAudit`（被 `alerts.go` 用 3 次）、`reloadProviderRegistry`（定义在 `providers.go`） | 真正的耦合只有两处，不是"十几个文件互相纠缠" |
+| 跨界符号约 11 个：`appendAdminAudit`（被 `alerts.go` 用）、`reloadProviderRegistry`/`adapterForDeployment`/`matchingBindingID`/`normalizedProviderCapabilities`（`providers.go`）、`loadAlertEndpoints`/`webhookPolicy`/`webhookAudienceSubject`/`webhookCredentialType`（`alerts.go`）、`checkpointAudit`、`writeTimeContext`、`writeJSON` | **这一格是修正过的**：最初只抽查了几个符号就写成"只有两个"，全量扫描后是约 11 个。仍然可枚举、仍然不是"十几个文件互相纠缠"，但比第一次记的要多，据此定计划的人应当按 11 个算 |
 | 08-06 说"通用助手长在最容易搬的文件里" | 属实，但那 5 个助手（`admin_projects.go:436-480`）**只有 57 行、全是无状态自由函数**，搬进新包做导出函数是机械操作 |
 | 已有 `TestFrozenV1AdminRoutesAreRegistered` + 48 路由 `chi.Walk` 只读扫描 + 本轮新增的破坏性删除 step-up 扫描 | 路由接线、角色校验、step-by-step 覆盖三张回归网，正好覆盖搬迁最怕出错的地方 |
 
-建议的做法（四个各自可编译、可全绿的提交）：① 57 行助手外提到 `internal/app/adminapi/errors.go`；② 定义 `adminapi.Deps` + `New()`，把审计批处理整体搬进去并导出 `Server.AppendAudit`，`alerts.go` 改为通过它调用——这一步就解决了两个跨界符号里的一个；③ 按域搬（alerts → usage/resources → prices/adjustments → providers/credentials/deployments/routes → projects/keys → session/mfa/setup/users），每域一次提交、搬完立刻跑三张回归网，不攒到最后；④ 20 个 `admin_*_test.go`（4699 行）跟迁。
+搬迁本身有一个让编译器全程兜底的写法：让 `adminapi.Server` 的字段**沿用 Runtime 里同名的字段名**，这样 `func (r *Runtime)` → `func (s *Server)` 加 `r.` → `s.` 就是纯文本替换，任何漏搬的字段都是编译错误而不是行为漂移。
+
+建议的做法（四个各自可编译、可全绿的提交）：① 57 行助手外提——**已完成**（`9ee0fc3`，先在同包内独立成 `internal/app/admin_errors.go`，跨包那一步留给 ②）；② 定义 `adminapi.Deps` + `New()`，把审计批处理整体搬进去并导出 `Server.AppendAudit`，`alerts.go` 改为通过它调用——这一步就解决了两个跨界符号里的一个；③ 按域搬（alerts → usage/resources → prices/adjustments → providers/credentials/deployments/routes → projects/keys → session/mfa/setup/users），每域一次提交、搬完立刻跑三张回归网，不攒到最后；④ 20 个 `admin_*_test.go`（4699 行）跟迁。
 
 **硬性纪律**：全程不得夹带任何行为修改。任何"顺手改改"都要另开提交，否则 review 无法把"移动"和"改动"分开看——而这正是 08-06 判断风险高的根源。
 
