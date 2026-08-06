@@ -3,6 +3,7 @@ import { render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
 import type { Dashboard } from "../types";
+import { timeContext } from "../test/fixtures";
 import { DashboardPage } from "./DashboardPage";
 
 vi.mock("../TrendChart", () => ({ default: () => <div role="img" aria-label="趋势图" /> }));
@@ -77,6 +78,44 @@ describe("DashboardPage", () => {
     expect(walRow.querySelector(".status-dot")).toHaveClass("ok");
   });
 
+  // The figures are summed over the server's accounting day. An administrator
+  // whose own day starts at a different hour cannot interpret them without
+  // being told which day they cover.
+  it("names the accounting time zone and period the today metrics cover", async () => {
+    const data = dashboard();
+    data.time_context = timeContext({
+      accounting_timezone: "America/New_York",
+      period_start: "2026-08-06T04:00:00Z",
+      period_end: "2026-08-07T04:00:00Z",
+    });
+    vi.spyOn(api, "dashboard").mockResolvedValue(data);
+    renderPage();
+
+    expect(await screen.findByText("按 America/New_York 计算")).toBeInTheDocument();
+    expect(screen.getByText(/2026-08-06T04:00:00Z 至 2026-08-07T04:00:00Z/)).toBeInTheDocument();
+  });
+
+  // Anomaly timestamps are rendered in that same zone, not the browser's, so
+  // they line up with the totals above them.
+  it("renders anomaly timestamps in the accounting zone", async () => {
+    const data = dashboard();
+    data.time_context = timeContext({ accounting_timezone: "Asia/Shanghai" });
+    data.usage.recent_anomalies = [{
+      completed_at: "2026-08-05T17:30:00Z",
+      project_id: "project_a",
+      status: "error",
+      error_class: "upstream_timeout",
+      retry_count: 0,
+      fallback_count: 0,
+    }];
+    vi.spyOn(api, "dashboard").mockResolvedValue(data);
+    renderPage();
+
+    // 17:30Z is 01:30 the next day in Shanghai; in UTC it would read 08-05 17:30.
+    const stamp = await screen.findByText(/08\/06 01:30/);
+    expect(stamp).toBeInTheDocument();
+  });
+
   it("renders empty states when collection fields are null", async () => {
     const empty = dashboard();
     empty.usage.hourly = null as unknown as Dashboard["usage"]["hourly"];
@@ -111,6 +150,7 @@ function dashboard(overrides: Partial<Dashboard> = {}): Dashboard {
     },
     resource_labels: {},
     accounting_status: 0,
+    time_context: timeContext(),
     alerts: { Accepted: 0, Delivered: 0, Failed: 0, Dropped: 0, Queued: 0 },
     wal: { Batches: 0, Records: 0, Errors: 0, QueueDepth: 0, QueueCapacity: 16 },
     ...overrides,

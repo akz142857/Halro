@@ -5,10 +5,11 @@ import QRCode from "qrcode";
 import { MIN_PASSWORD_CHARACTERS, passwordCharacterCount } from "../password";
 import { api } from "../api";
 import { ErrorState, Field, Loading, Modal, PageHeader, StatusDot } from "../components";
+import { useInstantFormatter } from "../format";
 import { applyPreference } from "../i18n";
 import { applyAppearance } from "../theme";
 import { navigate, setNavigationBlocked, usePathname } from "../navigation";
-import type { AdminPreferences, Appearance, InstanceUISettings, LocalePreference, SupportedLocale } from "../types";
+import type { AccountingSettings, AdminPreferences, Appearance, InstanceUISettings, LocalePreference, SupportedLocale } from "../types";
 
 type SettingsPane = "general" | "security" | "instance" | "diagnostics";
 
@@ -28,9 +29,10 @@ export function SettingsPage({ mfaSetupRequired = false }: { mfaSetupRequired?: 
     enabled: !mfaSetupRequired && pane === "diagnostics",
   });
   const settings = useQuery({ queryKey: ["settings"], queryFn: api.settings, enabled: !mfaSetupRequired && pane === "instance" });
+  const accounting = useQuery({ queryKey: ["accounting-settings"], queryFn: api.accountingSettings, enabled: !mfaSetupRequired && pane === "instance" });
   const uiSettings = useQuery({ queryKey: ["ui-settings"], queryFn: api.uiSettings, enabled: !mfaSetupRequired && (pane === "general" || pane === "instance") });
   const preferences = useQuery({ queryKey: ["preferences"], queryFn: api.preferences, enabled: !mfaSetupRequired && (pane === "general" || pane === "instance") });
-  const queries = pane === "diagnostics" ? [status] : pane === "instance" ? [settings, uiSettings, preferences] : pane === "general" ? [uiSettings, preferences] : [];
+  const queries = pane === "diagnostics" ? [status] : pane === "instance" ? [settings, uiSettings, preferences, accounting] : pane === "general" ? [uiSettings, preferences] : [];
   const pending = queries.some((query) => query.isPending);
   const error = queries.find((query) => query.error)?.error;
   const accountingLabels = [t("settings.healthy"), t("settings.degraded"), t("settings.unavailable"), t("settings.recoveryRequired")];
@@ -62,7 +64,7 @@ export function SettingsPage({ mfaSetupRequired = false }: { mfaSetupRequired?: 
             {error && <ErrorState error={error} />}
             {!pending && !error && pane === "general" && uiSettings.data && preferences.data && <section aria-labelledby="general-title"><SettingsGroupHeader title={t("settings.panes.general")} description={t("settings.generalDescription")} id="general-title" /><AppearanceForm preferences={preferences.data.data} /><PersonalLanguageForm ui={uiSettings.data.data} preferences={preferences.data.data} /></section>}
             {pane === "security" && <section aria-labelledby="security-title"><SettingsGroupHeader title={t("settings.panes.security")} description={t("settings.securityDescription")} id="security-title" /><PasswordChangeForm /><MFASettings /></section>}
-            {!pending && !error && pane === "instance" && uiSettings.data && preferences.data && settings.data && <section aria-labelledby="instance-title"><SettingsGroupHeader title={t("settings.panes.instance")} description={t("settings.instanceDescription")} id="instance-title" /><InstanceLanguageForm ui={uiSettings.data.data} preferences={preferences.data.data} /><RuntimeSettingsForm settings={settings.data.data} /></section>}
+            {!pending && !error && pane === "instance" && uiSettings.data && preferences.data && settings.data && <section aria-labelledby="instance-title"><SettingsGroupHeader title={t("settings.panes.instance")} description={t("settings.instanceDescription")} id="instance-title" /><InstanceLanguageForm ui={uiSettings.data.data} preferences={preferences.data.data} />{accounting.data && <AccountingTimezoneForm settings={accounting.data.data} />}<RuntimeSettingsForm settings={settings.data.data} /></section>}
             {!pending && !error && pane === "diagnostics" && status.data && <DiagnosticsPane status={status.data} accountingLabels={accountingLabels} metricLabels={metricLabels} />}
           </div>
         </div>
@@ -125,7 +127,8 @@ function SettingsOverview({ status }: { status: Awaited<ReturnType<typeof api.sy
 }
 
 export function MFASettings() {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
+  const formatInstant = useInstantFormatter();
   const queryClient = useQueryClient();
   const status = useQuery({ queryKey: ["mfa"], queryFn: api.mfaStatus });
   const [name, setName] = useState("");
@@ -176,7 +179,7 @@ export function MFASettings() {
   const disable = useMutation({ mutationFn: () => api.disableMFA(disableState.password, disableState.code), onSuccess: async () => { setDisableState({ open: false, password: "", code: "", confirmed: false }); await refresh(); restoreActionFocus(); } });
   const rename = useMutation({ mutationFn: () => api.renameMFAAuthenticator(renameState.id, renameState.name, renameState.revision), onSuccess: async () => { setRenameState({ id: "", name: "", revision: 0 }); await queryClient.invalidateQueries({ queryKey: ["mfa"] }); restoreActionFocus(); } });
   const copyRecovery = async () => { try { await navigator.clipboard.writeText(recovery.join("\n")); setRecoverySaved(true); setCopyStatus(t("settings.recoveryCopied")); } catch { setCopyStatus(t("settings.recoveryCopyFailed")); } };
-  const formatDate = (value?: string) => value ? new Intl.DateTimeFormat(i18n.language, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value)) : t("common.never");
+  const formatDate = (value?: string) => value ? formatInstant(value, "full") : t("common.never");
 
   const actionOpen = Boolean(addingAuthenticator || enrollment || recovery.length || renameState.id || revokeState.id || regenerateState.open || disableState.open);
   useEffect(() => {
@@ -286,6 +289,129 @@ function RuntimeSettingsForm({ settings }: { settings: { health_probe_interval_s
         {mutation.isSuccess && <div className="notice success" role="status"><strong>{t("settings.runtimeSaved")}</strong></div>}
         <div className="form-actions"><button className="button primary" disabled={mutation.isPending || interval === settings.health_probe_interval_seconds}>{mutation.isPending ? t("settings.saving") : t("settings.saveRuntime")}</button></div>
       </form>
+    </section>
+  );
+}
+
+/**
+ * The accounting timezone: where a day ends for daily budgets and for every
+ * "today" figure in the console.
+ *
+ * Deliberately verbose about consequences. A change here moves money between
+ * days, so the confirmation states the exact instant it takes effect, that the
+ * period in progress is untouched, and that nothing already recorded is
+ * recomputed — an administrator should not have to infer any of that.
+ */
+export function AccountingTimezoneForm({ settings }: { settings: AccountingSettings }) {
+  const { t } = useTranslation();
+  const formatInstant = useInstantFormatter();
+  const queryClient = useQueryClient();
+  const [timezone, setTimezone] = useState(settings.pending_timezone || settings.timezone);
+  const [confirming, setConfirming] = useState(false);
+  // Fetched only once the administrator opens the confirmation, so the warning
+  // describes the zone actually about to be committed.
+  const preview = useQuery({
+    queryKey: ["accounting-preview", timezone.trim()],
+    queryFn: () => api.previewAccountingTimezone(timezone.trim()),
+    enabled: confirming && timezone.trim() !== "" && timezone.trim() !== settings.timezone,
+  });
+  useEffect(() => setTimezone(settings.pending_timezone || settings.timezone), [settings.pending_timezone, settings.timezone]);
+  const refresh = () => queryClient.invalidateQueries({ queryKey: ["accounting-settings"] });
+  const schedule = useMutation({
+    mutationFn: () => api.scheduleAccountingTimezone(timezone.trim(), settings.revision),
+    onSuccess: () => { setConfirming(false); return refresh(); },
+  });
+  const cancel = useMutation({
+    mutationFn: () => api.cancelAccountingTimezoneChange(settings.revision),
+    onSuccess: refresh,
+  });
+  const changed = timezone.trim() !== "" && timezone.trim() !== settings.timezone;
+  const busy = schedule.isPending || cancel.isPending;
+  return (
+    <section className="panel settings-card">
+      <header className="panel-header">
+        <div><p className="eyebrow">{t("settings.accountingEyebrow")}</p><h3>{t("settings.accountingTitle")}</h3></div>
+        <span className="badge">{t("settings.accountingVersion", { version: settings.timezone_version })}</span>
+      </header>
+      <dl className="settings-facts">
+        <div><dt>{t("settings.accountingCurrentZone")}</dt><dd><code>{settings.timezone}</code></dd></div>
+        <div>
+          <dt>{t("settings.accountingCurrentPeriod")}</dt>
+          <dd>{t("settings.accountingPeriodRange", {
+            start: formatInstant(settings.current_period.period_start, "full"),
+            end: formatInstant(settings.current_period.period_end, "full"),
+          })}</dd>
+        </div>
+        {settings.tzdata && (
+          <div>
+            <dt>{t("settings.accountingRules")}</dt>
+            <dd>{t("settings.accountingRulesValue", { source: settings.tzdata.source, version: settings.tzdata.version })}<br /><code>{settings.tzdata.fingerprint}</code></dd>
+          </div>
+        )}
+      </dl>
+      {/* config.yaml seeds the zone once; after that the stored setting decides.
+          Saying so prevents an operator editing the file and assuming it took. */}
+      {!settings.config_file_in_effect && (
+        <div className="notice warning" role="status">
+          <strong>{t("settings.accountingConfigIgnoredTitle")}</strong>
+          <span>{t("settings.accountingConfigIgnored", { timezone: settings.config_file_timezone })}</span>
+        </div>
+      )}
+      {settings.pending_timezone && settings.pending_effective_at && (
+        <div className="notice" role="status">
+          <strong>{t("settings.accountingPendingTitle", { timezone: settings.pending_timezone })}</strong>
+          <span>{t("settings.accountingPendingDetail", { at: formatInstant(settings.pending_effective_at, "full") })}</span>
+          <button className="button ghost" disabled={busy} onClick={() => cancel.mutate()}>{t("settings.accountingCancelPending")}</button>
+        </div>
+      )}
+      <form className="settings-form" aria-busy={busy} onSubmit={(event) => { event.preventDefault(); setConfirming(true); }}>
+        <Field label={t("settings.accountingZoneLabel")} hint={t("settings.accountingZoneHint")}>
+          <input
+            required
+            value={timezone}
+            spellCheck={false}
+            onChange={(event) => { schedule.reset(); setTimezone(event.target.value); }}
+          />
+        </Field>
+        {schedule.isError && <ErrorState error={schedule.error} />}
+        {cancel.isError && <ErrorState error={cancel.error} />}
+        <div className="form-actions">
+          <button className="button primary" disabled={busy || !changed}>{t("settings.accountingSchedule")}</button>
+        </div>
+      </form>
+      {confirming && (
+        <Modal title={t("settings.accountingConfirmTitle")} onClose={() => setConfirming(false)}>
+          <p>{t("settings.accountingConfirmLead", { from: settings.timezone, to: timezone.trim() })}</p>
+          <ul className="settings-consequences">
+            <li>{t("settings.accountingConfirmEffective", {
+              at: formatInstant(settings.current_period.period_end, "full"),
+              utc: settings.current_period.period_end,
+            })}</li>
+            <li>{t("settings.accountingConfirmInProgress")}</li>
+            <li>{t("settings.accountingConfirmNoRecompute")}</li>
+          </ul>
+          {/* The switch starts a fresh balance, so the daily budget resets again
+              this soon afterwards — often well under a day. Nobody works that
+              out from the zone names alone. */}
+          {preview.data?.data.switch_preview && (
+            <div className="notice warning" role="status">
+              <strong>{t("settings.accountingResetWindowTitle", {
+                hours: Math.round(preview.data.data.switch_preview.next_reset_in_hours),
+              })}</strong>
+              <span>{t("settings.accountingResetWindowDetail", {
+                at: formatInstant(preview.data.data.switch_preview.next_reset_at, "full"),
+                utc: preview.data.data.switch_preview.next_reset_at,
+              })}</span>
+            </div>
+          )}
+          <div className="form-actions">
+            <button className="button" onClick={() => setConfirming(false)}>{t("common.cancel")}</button>
+            <button className="button primary" disabled={busy} onClick={() => schedule.mutate()}>
+              {schedule.isPending ? t("settings.saving") : t("settings.accountingConfirmAction")}
+            </button>
+          </div>
+        </Modal>
+      )}
     </section>
   );
 }

@@ -218,7 +218,7 @@ func TestGatewayUnknownPriceExplicitOptInPersistsUnknownCost(t *testing.T) {
 	if _, err := service.Chat(context.Background(), f.plaintext, chatRequest()); err != nil {
 		t.Fatal(err)
 	}
-	balance := f.state.Balance(f.project.ID, now.Format("2006-01-02"))
+	balance := f.state.Balance(f.project.ID, now.Format("2006-01-02"), testTimezoneVersion)
 	if f.adapter.calls != 1 || balance.CommittedMicrosUSD != 0 || balance.UnknownAttempts != 1 {
 		t.Fatalf("provider calls=%d balance=%#v", f.adapter.calls, balance)
 	}
@@ -364,7 +364,7 @@ func newFixtureAt(
 		t.Fatal(err)
 	}
 	state := ledger.NewState()
-	accounting, err := budget.NewWithOptions(log, state, time.UTC, budget.Options{Now: clock})
+	accounting, err := budget.NewWithOptions(log, state, mustResolver(t, "UTC"), budget.Options{Now: clock})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -826,7 +826,7 @@ func TestChatAuthenticatesRoutesReservesAndSettles(t *testing.T) {
 		t.Fatalf("calls=%d", f.adapter.calls)
 	}
 	period := time.Now().UTC().Format("2006-01-02")
-	balance := f.state.Balance(f.project.ID, period)
+	balance := f.state.Balance(f.project.ID, period, testTimezoneVersion)
 	if balance.ReservedMicrosUSD != 0 || balance.CommittedMicrosUSD != 20 ||
 		balance.InputTokens != 10 || balance.OutputTokens != 5 {
 		t.Fatalf("unexpected balance: %#v", balance)
@@ -914,7 +914,7 @@ func TestAmbiguousProviderFailureIsEstimatedAndSettled(t *testing.T) {
 		t.Fatal("expected provider error")
 	}
 	period := time.Now().UTC().Format("2006-01-02")
-	balance := f.state.Balance(f.project.ID, period)
+	balance := f.state.Balance(f.project.ID, period, testTimezoneVersion)
 	if balance.ReservedMicrosUSD != 0 || balance.CommittedMicrosUSD == 0 {
 		t.Fatalf("ambiguous attempt was not conservatively settled: %#v", balance)
 	}
@@ -959,7 +959,7 @@ func TestEmbeddingsUsesSameAuthorizationAndAccounting(t *testing.T) {
 		t.Fatalf("unexpected response or calls: %#v calls=%d", response, f.adapter.calls)
 	}
 	period := time.Now().UTC().Format("2006-01-02")
-	balance := f.state.Balance(f.project.ID, period)
+	balance := f.state.Balance(f.project.ID, period, testTimezoneVersion)
 	if balance.ReservedMicrosUSD != 0 || balance.CommittedMicrosUSD != 4 ||
 		balance.InputTokens != 4 {
 		t.Fatalf("unexpected embedding balance: %#v", balance)
@@ -1313,7 +1313,7 @@ func TestChatStreamUsesPublicModelAndSettlesUsage(t *testing.T) {
 		t.Fatalf("unexpected chunks: %#v", chunks)
 	}
 	period := time.Now().UTC().Format("2006-01-02")
-	balance := f.state.Balance(f.project.ID, period)
+	balance := f.state.Balance(f.project.ID, period, testTimezoneVersion)
 	if balance.ReservedMicrosUSD != 0 || balance.CommittedMicrosUSD != 20 ||
 		balance.InputTokens != 10 || balance.OutputTokens != 5 {
 		t.Fatalf("unexpected stream balance: %#v", balance)
@@ -1551,7 +1551,7 @@ func TestInterruptedStreamIsBilledForWhatItDelivered(t *testing.T) {
 		if err := f.service.ChatStream(context.Background(), f.plaintext, request, func(openaiapi.ChatCompletionResponse) error { return nil }); err == nil {
 			t.Fatal("expected the interrupted stream to fail")
 		}
-		balance := f.state.Balance(f.project.ID, time.Now().UTC().Format("2006-01-02"))
+		balance := f.state.Balance(f.project.ID, time.Now().UTC().Format("2006-01-02"), testTimezoneVersion)
 		if balance.CommittedMicrosUSD <= 0 {
 			t.Fatalf("nothing was settled: %#v", balance)
 		}
@@ -1564,3 +1564,8 @@ func TestInterruptedStreamIsBilledForWhatItDelivered(t *testing.T) {
 		t.Fatalf("the delivered amount did not reach the bill: short=%d long=%d", short, long)
 	}
 }
+
+// testTimezoneVersion matches the version the fixtures' fixed period resolver
+// stamps onto events. Balances are keyed by it, so a lookup that omitted it
+// would read an empty balance and quietly assert nothing.
+const testTimezoneVersion = 1

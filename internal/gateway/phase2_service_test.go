@@ -207,7 +207,7 @@ func newPhase2ServiceFixture(t *testing.T, profileID domain.ProviderProfileID, a
 		t.Fatal(err)
 	}
 	state := ledger.NewState()
-	accounting, err := budget.New(log, state, time.UTC)
+	accounting, err := budget.New(log, state, mustResolver(t, "UTC"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -387,7 +387,7 @@ func TestPhase2FixedRequestPriceIsAccounted(t *testing.T) {
 	if _, err := f.service.Images(context.Background(), f.plaintext, openaiapi.ImageGenerationRequest{Model: "image", Prompt: "owl", N: 1}); err != nil {
 		t.Fatal(err)
 	}
-	balance := f.state.Balance(f.project.ID, time.Now().In(time.UTC).Format("2006-01-02"))
+	balance := f.state.Balance(f.project.ID, time.Now().In(time.UTC).Format("2006-01-02"), testTimezoneVersion)
 	if balance.CommittedMicrosUSD != target.FixedRequestMicrosUSD || balance.ReservedMicrosUSD != 0 {
 		t.Fatalf("balance=%#v, want committed=%d", balance, target.FixedRequestMicrosUSD)
 	}

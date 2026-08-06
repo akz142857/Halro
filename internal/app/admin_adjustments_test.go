@@ -82,7 +82,7 @@ func TestAdminCostAdjustmentPreviewCreateAndIdempotentReplay(t *testing.T) {
 	if retry.Code != http.StatusCreated || retry.Header().Get("Idempotent-Replayed") != "true" {
 		t.Fatalf("retry status=%d headers=%v body=%s", retry.Code, retry.Header(), retry.Body.String())
 	}
-	balance := runtime.state.Balance(bootstrap.ProjectID, request.PeriodID)
+	balance := runtime.state.Balance(bootstrap.ProjectID, request.Period.ID, request.Period.TimezoneVersion)
 	if balance.OriginalCommittedMicrosUSD != 0 || balance.AdjustmentDeltaMicrosUSD != 7 || balance.CommittedMicrosUSD != 7 {
 		t.Fatalf("balance=%#v", balance)
 	}

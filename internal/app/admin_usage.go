@@ -6,10 +6,12 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/akz142857/Heimdall/internal/budget"
 	"github.com/akz142857/Heimdall/internal/buildinfo"
 	"github.com/akz142857/Heimdall/internal/domain"
 	gatewaycore "github.com/akz142857/Heimdall/internal/gateway"
 	"github.com/akz142857/Heimdall/internal/ledger"
+	"github.com/akz142857/Heimdall/internal/timezone"
 	"github.com/akz142857/Heimdall/internal/usage"
 	"github.com/go-chi/chi/v5"
 )
@@ -27,8 +29,19 @@ func (r *Runtime) adminDashboard(writer http.ResponseWriter, request *http.Reque
 		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "invalid reporting_basis"})
 		return
 	}
-	dashboard := r.usage.DashboardForBasis(now, r.usageLocation, basis)
-	governance, labels, err := r.dashboardGovernance(request, now)
+	timing, ok := r.writeTimeContext(writer, now)
+	if !ok {
+		return
+	}
+	period, err := r.periods.PeriodAt(now)
+	if err != nil {
+		adminStoreError(writer)
+		return
+	}
+	// The same interval the response advertises in time_context, so the totals
+	// and the window they claim to cover cannot disagree.
+	dashboard := r.usage.DashboardForBasis(now, usage.Period{Start: period.Start, End: period.End}, basis)
+	governance, labels, err := r.dashboardGovernance(request, now, period)
 	if err != nil {
 		adminStoreError(writer)
 		return
@@ -40,6 +53,7 @@ func (r *Runtime) adminDashboard(writer http.ResponseWriter, request *http.Reque
 		"accounting_status": r.status.Load(),
 		"wal":               r.ledger.Stats(),
 		"alerts":            r.alerts.Stats(),
+		"time_context":      timing,
 	})
 }
 
@@ -83,7 +97,7 @@ type pressureItem struct {
 	ReservedMicrosUSD  int64   `json:"reserved_micros_usd,omitempty"`
 }
 
-func (r *Runtime) dashboardGovernance(request *http.Request, now time.Time) (dashboardGovernance, map[string]string, error) {
+func (r *Runtime) dashboardGovernance(request *http.Request, now time.Time, period budget.Period) (dashboardGovernance, map[string]string, error) {
 	projects, err := r.store.ListProjects(request.Context())
 	if err != nil {
 		return dashboardGovernance{}, nil, err
@@ -109,7 +123,7 @@ func (r *Runtime) dashboardGovernance(request *http.Request, now time.Time) (das
 	rejections := r.gatewayService.RejectionMetrics()
 	governance := dashboardGovernance{
 		PolicyRejections: summarizeRejections(rejections),
-		Budget:           budgetPressure(projects, r.state, now.In(r.usageLocation).Format("2006-01-02")),
+		Budget:           budgetPressure(projects, r.state, period),
 		Capacity: capacityPressure(
 			providers, deployments,
 			r.gatewayService.ActiveProviderRequests(), r.providers.ProviderConcurrencyLimits(),
@@ -128,9 +142,8 @@ func (r *Runtime) dashboardGovernance(request *http.Request, now time.Time) (das
 			governance.Pricing.Unknown++
 		}
 	}
-	periodID := now.In(r.usageLocation).Format("2006-01-02")
 	for _, project := range projects {
-		balance := r.state.Balance(project.ID, periodID)
+		balance := r.state.Balance(project.ID, period.ID, period.TimezoneVersion)
 		if project.DailyBudgetMicrosUSD > 0 && balance.AdjustmentDeltaMicrosUSD != 0 && balance.CommittedMicrosUSD > project.DailyBudgetMicrosUSD {
 			governance.Pricing.AdjustmentOverBudget++
 		}
@@ -151,14 +164,14 @@ func summarizeRejections(source gatewaycore.RejectionMetrics) policyRejectionSum
 }
 
 func budgetPressure(projects []domain.Project, state interface {
-	Balance(string, string) ledger.Balance
-}, periodID string) pressureSummary {
+	Balance(string, string, uint64) ledger.Balance
+}, period budget.Period) pressureSummary {
 	result := pressureSummary{Items: make([]pressureItem, 0, len(projects))}
 	for _, project := range projects {
 		if !project.Enabled || project.DailyBudgetMicrosUSD <= 0 {
 			continue
 		}
-		balance := state.Balance(project.ID, periodID)
+		balance := state.Balance(project.ID, period.ID, period.TimezoneVersion)
 		current := balance.CommittedMicrosUSD + balance.ReservedMicrosUSD
 		utilization := float64(current) / float64(project.DailyBudgetMicrosUSD)
 		if utilization >= .8 {
@@ -272,13 +285,17 @@ func (r *Runtime) adminUsage(writer http.ResponseWriter, request *http.Request) 
 			return
 		}
 	}
+	timing, ok := r.writeTimeContext(writer, time.Now())
+	if !ok {
+		return
+	}
 	page, err := r.usage.QueryAttempts(query)
 	if err != nil {
 		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{
-		"items": page.Attempts, "next_cursor": page.NextCursor,
+		"items": page.Attempts, "next_cursor": page.NextCursor, "time_context": timing,
 	})
 }
 
@@ -315,8 +332,12 @@ func (r *Runtime) adminSystemStatus(writer http.ResponseWriter, request *http.Re
 	if !r.syncUsageAdmin(writer, request) {
 		return
 	}
+	timing, ok := r.writeTimeContext(writer, time.Now())
+	if !ok {
+		return
+	}
 	auditSummary := r.audit.Summary()
-	writeJSON(writer, http.StatusOK, map[string]any{
+	payload := map[string]any{
 		"build":             buildinfo.Current(),
 		"accounting_status": r.status.Load(),
 		"draining":          r.draining.Load(),
@@ -324,7 +345,15 @@ func (r *Runtime) adminSystemStatus(writer http.ResponseWriter, request *http.Re
 		"audit":             auditSummary,
 		"alerts":            r.alerts.Stats(),
 		"usage_watermark":   r.usage.Watermark(),
-	})
+		"time_context":      timing,
+	}
+	// Reported here so an operator can compare it against another node without
+	// shell access: divergent rules place the same instant in different
+	// accounting periods.
+	if database, err := timezone.Describe(r.config.Usage.Timezone); err == nil {
+		payload["tzdata"] = database
+	}
+	writeJSON(writer, http.StatusOK, payload)
 }
 
 func (r *Runtime) syncUsageAdmin(writer http.ResponseWriter, request *http.Request) bool {

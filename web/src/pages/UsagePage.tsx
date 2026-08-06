@@ -2,12 +2,13 @@ import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-q
 import { useRef, useState, type FormEvent } from "react";
 import { api } from "../api";
 import { ErrorState, Field, Loading, Modal, PageHeader, StatusDot } from "../components";
-import { compactNumber, dateTime, money } from "../format";
+import { compactNumber, money, useInstantFormatter } from "../format";
 import { useTranslation } from "react-i18next";
 import type { UsageAttempt } from "../types";
 
 export function UsagePage() {
   const { t } = useTranslation();
+  const dateTime = useInstantFormatter();
   const [status, setStatus] = useState("");
   const [model, setModel] = useState("");
   const [requestID, setRequestID] = useState(() => new URLSearchParams(window.location.search).get("request_id") ?? "");

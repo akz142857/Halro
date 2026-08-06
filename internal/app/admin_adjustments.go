@@ -56,7 +56,13 @@ func (r *Runtime) previewAdminCostAdjustment(writer http.ResponseWriter, request
 		writeAdjustmentError(writer, err)
 		return
 	}
-	preview, err := r.accounting.PreviewAdjustment(spec, time.Now().In(r.usageLocation), project.DailyBudgetMicrosUSD)
+	now := time.Now()
+	location, err := r.periods.LocationAt(now)
+	if err != nil {
+		writeAdjustmentError(writer, err)
+		return
+	}
+	preview, err := r.accounting.PreviewAdjustment(spec, now.In(location), project.DailyBudgetMicrosUSD)
 	if err != nil {
 		writeAdjustmentError(writer, err)
 		return

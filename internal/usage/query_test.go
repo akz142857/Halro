@@ -71,7 +71,7 @@ func TestUsageCursorFilteringRequestDetailAndDashboard(t *testing.T) {
 	if !exists || len(detail.Attempts) != 1 || detail.Summary.RequestID != "req_2" {
 		t.Fatalf("detail=%#v exists=%v", detail, exists)
 	}
-	dashboard := aggregate.Dashboard(now.Add(time.Hour), time.UTC)
+	dashboard := aggregate.Dashboard(now.Add(time.Hour), utcDay(now.Add(time.Hour)))
 	if dashboard.Today.Requests != 3 || dashboard.Today.Attempts != 3 ||
 		dashboard.Today.InputTokens != 6 {
 		t.Fatalf("dashboard=%#v", dashboard)
@@ -98,7 +98,7 @@ func TestDashboardSeparatesConservativeTokenEstimates(t *testing.T) {
 		}
 	}
 
-	dashboard := aggregate.Dashboard(now.Add(time.Hour), time.UTC)
+	dashboard := aggregate.Dashboard(now.Add(time.Hour), utcDay(now.Add(time.Hour)))
 	if dashboard.Today.InputTokens != 16 || dashboard.Today.OutputTokens != 16_551 {
 		t.Fatalf("accounting totals changed: %#v", dashboard.Today)
 	}
@@ -133,7 +133,7 @@ func TestDashboardBuildsTodayBreakdownsAndRecentAnomalies(t *testing.T) {
 		}
 	}
 
-	dashboard := aggregate.Dashboard(now.Add(time.Hour), time.UTC)
+	dashboard := aggregate.Dashboard(now.Add(time.Hour), utcDay(now.Add(time.Hour)))
 	projects := dashboard.Breakdowns["project"]
 	if len(projects) != 1 || projects[0].Key != "project_a" || projects[0].Calls != 2 ||
 		projects[0].Errors != 1 || projects[0].CostMicrosUSD != 3_000 || projects[0].EstimatedCostMicros != 2_000 {
@@ -153,7 +153,7 @@ func TestDashboardBuildsTodayBreakdownsAndRecentAnomalies(t *testing.T) {
 }
 
 func TestEmptyDashboardUsesEmptyCollections(t *testing.T) {
-	dashboard := NewAggregate().Dashboard(time.Now(), time.UTC)
+	dashboard := NewAggregate().Dashboard(time.Now(), utcDay(time.Now()))
 	if dashboard.Hourly == nil || dashboard.RecentAnomalies == nil {
 		t.Fatalf("empty dashboard collections must encode as arrays: %#v", dashboard)
 	}
@@ -162,4 +162,11 @@ func TestEmptyDashboardUsesEmptyCollections(t *testing.T) {
 			t.Fatalf("breakdown %q must encode as an array", dimension)
 		}
 	}
+}
+
+// utcDay is the UTC calendar day containing instant — the period these tests
+// previously got implicitly by passing time.UTC.
+func utcDay(instant time.Time) Period {
+	start := instant.UTC().Truncate(24 * time.Hour)
+	return Period{Start: start, End: start.Add(24 * time.Hour)}
 }

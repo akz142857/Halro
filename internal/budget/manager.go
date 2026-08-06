@@ -27,7 +27,7 @@ type Attempt struct {
 	RequestID                   string
 	AttemptID                   string
 	ProjectID                   string
-	PeriodID                    string
+	Period                      Period
 	ReservationMicrosUSD        int64
 	KeyID                       string
 	RouteID                     string
@@ -49,9 +49,12 @@ type Attempt struct {
 }
 
 type Request struct {
-	RequestID      string
-	ProjectID      string
-	PeriodID       string
+	RequestID string
+	ProjectID string
+	// Period is fixed when the request is accepted and inherited by every
+	// event that follows it. A request that outlives a period boundary settles
+	// in the period it began in, matching how its price snapshot is pinned.
+	Period         Period
 	KeyID          string
 	RequestedModel string
 }
@@ -126,7 +129,7 @@ type Manager struct {
 	observerMu   sync.RWMutex
 	log          *ledger.Log
 	state        *ledger.State
-	location     *time.Location
+	periods      *PeriodResolver
 	now          func() time.Time
 	observers    []func(ledger.Record)
 	recoveryMu   sync.RWMutex
@@ -167,30 +170,50 @@ type Options struct {
 	Now func() time.Time
 }
 
-func New(log *ledger.Log, state *ledger.State, location *time.Location) (*Manager, error) {
-	return NewWithOptions(log, state, location, Options{})
+func New(log *ledger.Log, state *ledger.State, periods *PeriodResolver) (*Manager, error) {
+	return NewWithOptions(log, state, periods, Options{})
 }
 
 func NewWithOptions(
 	log *ledger.Log,
 	state *ledger.State,
-	location *time.Location,
+	periods *PeriodResolver,
 	options Options,
 ) (*Manager, error) {
-	if log == nil || state == nil || location == nil {
-		return nil, errors.New("ledger log, state, and location are required")
+	if log == nil || state == nil || periods == nil {
+		return nil, errors.New("ledger log, state, and period resolver are required")
 	}
 	if options.Now == nil {
 		options.Now = time.Now
 	}
 	manager := &Manager{
-		log:      log,
-		state:    state,
-		location: location,
-		now:      options.Now,
+		log:     log,
+		state:   state,
+		periods: periods,
+		now:     options.Now,
 	}
 	manager.applyCond = sync.NewCond(&manager.applyMu)
 	return manager, nil
+}
+
+// Periods exposes the resolver so callers that must report a period — the
+// Admin API, diagnostics — read the same one the ledger is written with.
+func (m *Manager) Periods() *PeriodResolver { return m.periods }
+
+// inAccountingZone renders an instant in the accounting zone. The instant is
+// unchanged; only the offset a ledger event serializes with is. Falling back to
+// the value as given is deliberate: a zone that cannot be loaded must not
+// silently reinterpret a timestamp.
+func (m *Manager) inAccountingZone(instant time.Time) time.Time {
+	location, err := m.periods.LocationAt(instant)
+	if err != nil {
+		return instant
+	}
+	return instant.In(location)
+}
+
+func (m *Manager) localNow() time.Time {
+	return m.inAccountingZone(m.now())
 }
 
 func (m *Manager) lockProject(projectID string) func() {
@@ -214,9 +237,18 @@ func (m *Manager) PreviewAdjustment(spec AdjustmentSpec, postedAt time.Time, dai
 	if !domain.ValidSHA256Label(spec.IdempotencyKeyDigest) || !domain.ValidSHA256Label(spec.RequestDigest) || !domain.ValidSHA256Label(spec.EvidenceDigest) || spec.CreatedBy == "" || spec.ReasonCode == "" || len(spec.Reason) > 1024 {
 		return AdjustmentPreview{}, errors.New("adjustment evidence is incomplete")
 	}
-	postedAt = postedAt.In(m.location)
+	postedAt = m.inAccountingZone(postedAt)
 	if postedAt.IsZero() {
 		return AdjustmentPreview{}, errors.New("adjustment posting time is required")
+	}
+	// An adjustment belongs to two periods at once: the one the original call
+	// was served in, whose balance it moves, and the one it is being posted in.
+	// The service period is inherited from the settlement rather than recomputed,
+	// so correcting an old charge cannot silently refile it under today.
+	servicePeriod := PeriodFromEvent(settled.Settlement)
+	postedPeriod, err := m.periods.PeriodAt(postedAt)
+	if err != nil {
+		return AdjustmentPreview{}, err
 	}
 	base, before := settled.BaseCostMicrosUSD, settled.NetCostMicrosUSD
 	after, delta := int64(0), spec.ExplicitDeltaMicrosUSD
@@ -253,7 +285,7 @@ func (m *Manager) PreviewAdjustment(spec AdjustmentSpec, postedAt time.Time, dai
 		EventID: eventID, Kind: ledger.EventCostAdjusted, RequestID: settled.Settlement.RequestID, AttemptID: spec.AttemptID,
 		ProjectID: settled.Settlement.ProjectID, KeyID: settled.Settlement.KeyID, RouteID: settled.Settlement.RouteID, DeploymentID: settled.Settlement.DeploymentID,
 		ProviderID: settled.Settlement.ProviderID, RequestedModel: settled.Settlement.RequestedModel, ProviderModel: settled.Settlement.ProviderModel,
-		PeriodID: settled.Settlement.PeriodID, OccurredAt: postedAt, OriginalSettlementEventID: settled.Settlement.EventID, OriginalSettlementDigest: settled.SettlementDigest,
+		OccurredAt: postedAt, OriginalSettlementEventID: settled.Settlement.EventID, OriginalSettlementDigest: settled.SettlementDigest,
 		AdjustmentMode: spec.Mode, AdjustmentSequence: settled.AdjustmentSequence + 1, IdempotencyKeyDigest: spec.IdempotencyKeyDigest, AdjustmentRequestDigest: spec.RequestDigest,
 		BaseSettlementMicrosUSD: func() *int64 {
 			if settled.CostKnown {
@@ -267,10 +299,11 @@ func (m *Manager) PreviewAdjustment(spec AdjustmentSpec, postedAt time.Time, dai
 			}
 			return nil
 		}(), AdjustmentDeltaMicrosUSD: delta, NetCostAfterMicrosUSD: ledger.MicrosUSD(after),
-		ServicePeriodID: settled.Settlement.PeriodID, OriginalCompletedAt: settled.Settlement.OccurredAt, PostedPeriodID: postedAt.Format("2006-01-02"), PostedAt: postedAt,
+		ServicePeriodID: servicePeriod.ID, OriginalCompletedAt: settled.Settlement.OccurredAt, PostedPeriodID: postedPeriod.ID, PostedAt: postedAt,
 		CorrectionPriceSnapshot: spec.CorrectionPriceSnapshot, AdjustmentInputCostMicrosUSD: inputCost, AdjustmentOutputCostMicrosUSD: outputCost, AdjustmentFixedCostMicrosUSD: fixedCost,
 		AdjustmentReasonCode: spec.ReasonCode, AdjustmentReason: spec.Reason, AdjustmentEvidenceDigest: spec.EvidenceDigest, AdjustmentCreatedBy: spec.CreatedBy,
 	}
+	servicePeriod.Stamp(&event)
 	if spec.CorrectionPriceSnapshot != nil {
 		snapshot := spec.CorrectionPriceSnapshot.Clone()
 		event.CorrectionPriceSnapshot = &snapshot
@@ -279,8 +312,10 @@ func (m *Manager) PreviewAdjustment(spec AdjustmentSpec, postedAt time.Time, dai
 		return AdjustmentPreview{}, err
 	}
 	overage := int64(0)
-	if dailyBudgetMicrosUSD > 0 && event.ServicePeriodID == postedAt.Format("2006-01-02") {
-		balance := m.state.Balance(event.ProjectID, event.ServicePeriodID)
+	// Only a correction posted inside the period it affects can push that
+	// period's budget over; a correction to an earlier day cannot.
+	if dailyBudgetMicrosUSD > 0 && event.ServicePeriodID == postedPeriod.ID && servicePeriod.TimezoneVersion == postedPeriod.TimezoneVersion {
+		balance := m.state.Balance(event.ProjectID, event.ServicePeriodID, servicePeriod.TimezoneVersion)
 		current, err := checkedSignedAdd(balance.CommittedMicrosUSD, balance.ReservedMicrosUSD)
 		if err != nil {
 			return AdjustmentPreview{}, err
@@ -310,7 +345,7 @@ func (m *Manager) CommitAdjustmentWithIntent(ctx context.Context, spec Adjustmen
 		}
 		return AdjustmentPreview{Event: prior.Event}, true, nil
 	}
-	preview, err := m.PreviewAdjustment(spec, m.now().In(m.location), dailyBudgetMicrosUSD)
+	preview, err := m.PreviewAdjustment(spec, m.localNow(), dailyBudgetMicrosUSD)
 	if err != nil {
 		return AdjustmentPreview{}, false, err
 	}
@@ -438,18 +473,24 @@ func (m *Manager) BeginRequestDetailed(
 	if err != nil {
 		return Request{}, err
 	}
-	now := m.now().In(m.location)
+	now := m.localNow()
+	period, err := m.periods.PeriodAt(now)
+	if err != nil {
+		return Request{}, err
+	}
 	request := Request{
-		RequestID: requestID, ProjectID: projectID, PeriodID: now.Format("2006-01-02"),
+		RequestID: requestID, ProjectID: projectID, Period: period,
 		KeyID: keyID, RequestedModel: requestedModel,
 	}
 	defer m.lockProject(projectID)()
-	if err := m.appendApply(ctx, ledger.Event{
+	event := ledger.Event{
 		EventID: eventID, Kind: ledger.EventRequestAccepted,
 		RequestID: request.RequestID, ProjectID: request.ProjectID,
 		KeyID: request.KeyID, RequestedModel: request.RequestedModel,
-		PeriodID: request.PeriodID, OccurredAt: now,
-	}); err != nil {
+		OccurredAt: now,
+	}
+	period.Stamp(&event)
+	if err := m.appendApply(ctx, event); err != nil {
 		return Request{}, err
 	}
 	return request, nil
@@ -502,7 +543,7 @@ func (m *Manager) reserveAttemptDetailed(
 	spec LeaseSpec,
 	metadata AttemptMetadata,
 ) (Attempt, error) {
-	if request.RequestID == "" || request.ProjectID == "" || request.PeriodID == "" {
+	if request.RequestID == "" || request.ProjectID == "" || request.Period.ID == "" {
 		return Attempt{}, errors.New("request lease is invalid")
 	}
 	if dailyBudgetMicrosUSD < 0 || spec.ReservationMicrosUSD < 0 || (spec.Mode == "" && spec.ReservationMicrosUSD <= 0) {
@@ -522,7 +563,7 @@ func (m *Manager) reserveAttemptDetailed(
 	}
 	attempt := Attempt{
 		RequestID: request.RequestID, AttemptID: attemptID, ProjectID: request.ProjectID,
-		PeriodID: request.PeriodID, ReservationMicrosUSD: spec.ReservationMicrosUSD,
+		Period: request.Period, ReservationMicrosUSD: spec.ReservationMicrosUSD,
 		KeyID: request.KeyID, RequestedModel: request.RequestedModel,
 		RouteID: metadata.RouteID, DeploymentID: metadata.DeploymentID,
 		ProviderID: metadata.ProviderID, ProviderModel: metadata.ProviderModel,
@@ -539,7 +580,7 @@ func (m *Manager) reserveAttemptDetailed(
 		attempt.PriceSnapshot = &snapshot
 	}
 	defer m.lockProject(request.ProjectID)()
-	balance := m.state.Balance(request.ProjectID, request.PeriodID)
+	balance := m.state.Balance(request.ProjectID, request.Period.ID, request.Period.TimezoneVersion)
 	total, err := checkedAdd(balance.CommittedMicrosUSD, balance.ReservedMicrosUSD)
 	if err != nil {
 		return Attempt{}, err
@@ -563,7 +604,7 @@ func (m *Manager) reserveAttemptDetailed(
 		snapshot := attempt.PriceSnapshot.Clone()
 		eventPriceSnapshot = &snapshot
 	}
-	record, err := m.appendApplyRecord(ctx, ledger.Event{
+	reserved := ledger.Event{
 		EventID:              eventID,
 		Kind:                 ledger.EventReservationCreated,
 		RequestID:            request.RequestID,
@@ -578,14 +619,15 @@ func (m *Manager) reserveAttemptDetailed(
 		AttemptNumber:        metadata.AttemptNumber,
 		RetryCount:           metadata.RetryCount,
 		FallbackCount:        metadata.FallbackCount,
-		PeriodID:             request.PeriodID,
-		OccurredAt:           m.now().In(m.location),
+		OccurredAt:           m.localNow(),
 		ReservationMicrosUSD: reservationValue,
 		LeaseMode:            spec.Mode, PriceSnapshot: eventPriceSnapshot,
 		PreparedInputTokens: spec.PreparedInputTokens, PreparedOutputTokens: spec.PreparedOutputTokens,
 		RecoveryKey: spec.RecoveryKey, UnknownPolicyEvidence: spec.UnknownPolicyEvidence,
 		TokenGuardPricingViewDigest: spec.TokenGuardPricingViewDigest,
-	})
+	}
+	request.Period.Stamp(&reserved)
+	record, err := m.appendApplyRecord(ctx, reserved)
 	if err != nil {
 		return Attempt{}, err
 	}
@@ -595,7 +637,7 @@ func (m *Manager) reserveAttemptDetailed(
 
 func (a Attempt) Request() Request {
 	return Request{
-		RequestID: a.RequestID, ProjectID: a.ProjectID, PeriodID: a.PeriodID,
+		RequestID: a.RequestID, ProjectID: a.ProjectID, Period: a.Period,
 		KeyID: a.KeyID, RequestedModel: a.RequestedModel,
 	}
 }
@@ -606,7 +648,7 @@ func (m *Manager) MarkStarted(ctx context.Context, attempt Attempt) error {
 		return err
 	}
 	defer m.lockProject(attempt.ProjectID)()
-	return m.appendApply(ctx, ledger.Event{
+	started := ledger.Event{
 		EventID:   eventID,
 		Kind:      ledger.EventAttemptStarted,
 		RequestID: attempt.RequestID,
@@ -616,9 +658,10 @@ func (m *Manager) MarkStarted(ctx context.Context, attempt Attempt) error {
 		RequestedModel: attempt.RequestedModel, ProviderModel: attempt.ProviderModel,
 		AttemptNumber: attempt.AttemptNumber, RetryCount: attempt.RetryCount,
 		FallbackCount: attempt.FallbackCount,
-		PeriodID:      attempt.PeriodID,
-		OccurredAt:    m.now().In(m.location),
-	})
+		OccurredAt:    m.localNow(),
+	}
+	attempt.Period.Stamp(&started)
+	return m.appendApply(ctx, started)
 }
 
 // Settle releases the reservation and commits usage and cost in one durable
@@ -656,9 +699,9 @@ func (m *Manager) settle(ctx context.Context, eventID string, attempt Attempt, s
 	}
 	occurredAt := settlement.OccurredAt
 	if occurredAt.IsZero() {
-		occurredAt = m.now().In(m.location)
+		occurredAt = m.localNow()
 	} else {
-		occurredAt = occurredAt.In(m.location)
+		occurredAt = m.inAccountingZone(occurredAt)
 	}
 	var committedValue *int64
 	if attempt.LeaseMode != ledger.LeaseModeUnknownAllowed {
@@ -673,7 +716,7 @@ func (m *Manager) settle(ctx context.Context, eventID string, attempt Attempt, s
 		}
 	}
 	defer m.lockProject(attempt.ProjectID)()
-	return m.appendApply(ctx, ledger.Event{
+	settled := ledger.Event{
 		EventID:            eventID,
 		Kind:               ledger.EventAttemptSettled,
 		RequestID:          attempt.RequestID,
@@ -688,7 +731,6 @@ func (m *Manager) settle(ctx context.Context, eventID string, attempt Attempt, s
 		AttemptNumber:      attempt.AttemptNumber,
 		RetryCount:         attempt.RetryCount,
 		FallbackCount:      attempt.FallbackCount,
-		PeriodID:           attempt.PeriodID,
 		OccurredAt:         occurredAt,
 		CommittedMicrosUSD: committedValue,
 		LeaseMode:          attempt.LeaseMode, PriceSnapshot: priceSnapshot,
@@ -703,7 +745,9 @@ func (m *Manager) settle(ctx context.Context, eventID string, attempt Attempt, s
 		ErrorClass:           settlement.ErrorClass,
 		HTTPStatus:           settlement.HTTPStatus,
 		LatencyMillis:        settlement.LatencyMillis,
-	})
+	}
+	attempt.Period.Stamp(&settled)
+	return m.appendApply(ctx, settled)
 }
 
 // RecoverPendingLeases resolves every durable lease before listeners become
@@ -729,7 +773,7 @@ func (m *Manager) RecoverPendingLeases(ctx context.Context) error {
 		}
 		attempt := Attempt{
 			RequestID: event.RequestID, AttemptID: event.AttemptID, ProjectID: event.ProjectID,
-			PeriodID: event.PeriodID, ReservationMicrosUSD: reservation,
+			Period: PeriodFromEvent(event), ReservationMicrosUSD: reservation,
 			KeyID: event.KeyID, RouteID: event.RouteID, DeploymentID: event.DeploymentID,
 			ProviderID: event.ProviderID, RequestedModel: event.RequestedModel, ProviderModel: event.ProviderModel,
 			AttemptNumber: event.AttemptNumber, RetryCount: event.RetryCount, FallbackCount: event.FallbackCount,
@@ -782,16 +826,17 @@ func (m *Manager) Finalize(ctx context.Context, request Request, outcome string)
 		return err
 	}
 	defer m.lockProject(request.ProjectID)()
-	return m.appendApply(ctx, ledger.Event{
+	finalized := ledger.Event{
 		EventID:   eventID,
 		Kind:      ledger.EventRequestFinalized,
 		RequestID: request.RequestID,
 		ProjectID: request.ProjectID,
 		KeyID:     request.KeyID, RequestedModel: request.RequestedModel,
-		PeriodID:   request.PeriodID,
-		OccurredAt: m.now().In(m.location),
+		OccurredAt: m.localNow(),
 		Outcome:    outcome,
-	})
+	}
+	request.Period.Stamp(&finalized)
+	return m.appendApply(ctx, finalized)
 }
 
 func (m *Manager) appendApply(ctx context.Context, event ledger.Event) error {

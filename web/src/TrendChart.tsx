@@ -6,6 +6,7 @@ import { buildTrendSeries, summarizeTrend, type TrendMetric } from "./trend";
 import { compactNumber } from "./format";
 import { useTranslation } from "react-i18next";
 import { useAppearance } from "./theme";
+import { useAccountingTimeZone } from "./timezone";
 
 /**
  * Reads the semantic chart tokens from the design system. uPlot draws to a
@@ -27,6 +28,7 @@ function readChartTokens(host: HTMLElement) {
 export default function TrendChart({ buckets, metric }: { buckets: Bucket[]; metric: TrendMetric }) {
   const { t } = useTranslation();
   const appearance = useAppearance();
+  const timeZone = useAccountingTimeZone();
   const host = useRef<HTMLDivElement>(null);
   const chartRef = useRef<uPlot | null>(null);
   const summary = summarizeTrend(buckets, metric);
@@ -44,6 +46,11 @@ export default function TrendChart({ buckets, metric }: { buckets: Bucket[]; met
         height: 280,
         cursor: { drag: { x: false, y: false } },
         legend: { show: false },
+        // uPlot renders a time axis in the browser's zone unless told
+        // otherwise. That default is what put this chart on a different day
+        // from the totals printed above it: those are summed over the server's
+        // accounting day. Both now read the same zone.
+        tzDate: (timestamp) => uPlot.tzDate(new Date(timestamp * 1000), timeZone),
         scales: { x: { time: true, range: series.range } },
         axes: [
           { stroke: tokens.axis, grid: { stroke: tokens.grid }, ticks: { stroke: tokens.grid }, font: "11px ui-monospace" },
@@ -67,7 +74,7 @@ export default function TrendChart({ buckets, metric }: { buckets: Bucket[]; met
       resize.disconnect();
       chart.destroy();
     };
-  }, [t, metric, appearance]);
+  }, [t, metric, appearance, timeZone]);
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart) return;

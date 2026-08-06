@@ -93,6 +93,9 @@ an authentication boundary.
 | `heimdall_deployment_concurrency_limit` | gauge | `deployment_id` |
 | `heimdall_deployment_up` | gauge | `deployment_id` |
 | `heimdall_build_info` | gauge | `version`, `commit` |
+| `heimdall_tzdata_info` | gauge | `source`, `version`, `fingerprint` |
+| `heimdall_accounting_timezone_version` | gauge | none |
+| `heimdall_accounting_period_end_seconds` | gauge | none |
 | `heimdall_metrics_auth_failures_total` | counter | none |
 | `heimdall_metrics_scrape_rejected_total` | counter | none |
 | `heimdall_metrics_render_errors_total` | counter | none |

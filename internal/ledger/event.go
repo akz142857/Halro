@@ -62,6 +62,10 @@ type Event struct {
 	RetryCount                    int                                `json:"retry_count,omitempty"`
 	FallbackCount                 int                                `json:"fallback_count,omitempty"`
 	PeriodID                      string                             `json:"period_id"`
+	PeriodTimezone                string                             `json:"period_timezone,omitempty"`
+	PeriodTimezoneVersion         uint64                             `json:"period_timezone_version,omitempty"`
+	PeriodStartMicros             int64                              `json:"period_start_micros,omitempty"`
+	PeriodEndMicros               int64                              `json:"period_end_micros,omitempty"`
 	OccurredAt                    time.Time                          `json:"occurred_at"`
 	ReservationMicrosUSD          *int64                             `json:"reservation_micros_usd"`
 	CommittedMicrosUSD            *int64                             `json:"committed_micros_usd"`
@@ -274,9 +278,21 @@ type Watermark struct {
 	Sequence   uint64 `json:"sequence"`
 }
 
+// BalanceKey identifies the balance a charge accumulates into.
+//
+// TimezoneVersion is part of the key, not decoration. The date string alone
+// means different UTC intervals under different accounting zones, so without
+// the version a zone change would let charges measured against the old
+// boundary and the new one land in the same balance — overspending or wiping a
+// budget with nothing in the ledger to show for it. Keyed this way, a change
+// mints a fresh period instead of contaminating one.
+//
+// Events written before the accounting timezone became a governed setting carry
+// version 0 and stay in their own keys.
 type BalanceKey struct {
-	ProjectID string
-	PeriodID  string
+	ProjectID       string
+	PeriodID        string
+	TimezoneVersion uint64
 }
 
 type Balance struct {
@@ -368,7 +384,7 @@ func (s *State) Apply(record Record) error {
 	}
 
 	event := record.Event
-	key := BalanceKey{ProjectID: event.ProjectID, PeriodID: event.PeriodID}
+	key := BalanceKey{ProjectID: event.ProjectID, PeriodID: event.PeriodID, TimezoneVersion: event.PeriodTimezoneVersion}
 	balance := s.balances[key]
 
 	switch event.Kind {
@@ -523,10 +539,10 @@ func (e Event) KnownCommittedMicrosUSD() (int64, bool) {
 	return *e.CommittedMicrosUSD, true
 }
 
-func (s *State) Balance(projectID, periodID string) Balance {
+func (s *State) Balance(projectID, periodID string, timezoneVersion uint64) Balance {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.balances[BalanceKey{ProjectID: projectID, PeriodID: periodID}]
+	return s.balances[BalanceKey{ProjectID: projectID, PeriodID: periodID, TimezoneVersion: timezoneVersion}]
 }
 
 func (s *State) PendingReservations() int {

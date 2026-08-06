@@ -43,7 +43,7 @@ func TestMixedV1V2ReplayAndUnsupportedFutureEpoch(t *testing.T) {
 	}
 	payload, _ := json.Marshal(Event{EventID: "future", Kind: EventRequestAccepted, RequestID: "r", ProjectID: "p", PeriodID: "2026-08-04", OccurredAt: now})
 	future := filepath.Join(t.TempDir(), "future.wal")
-	if err := os.WriteFile(future, encodeFrameVersion(3, 1, EventRequestAccepted, payload), 0o600); err != nil {
+	if err := os.WriteFile(future, encodeFrameVersion(frameVersionPeriod+1, 1, EventRequestAccepted, payload), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := Inspect(future); !errors.Is(err, ErrUnsupportedVersion) {
@@ -286,7 +286,7 @@ func TestLedgerRoundTripAndAtomicSettlement(t *testing.T) {
 	if _, err := log.Replay(Watermark{}, state.Apply); err != nil {
 		t.Fatal(err)
 	}
-	balance := state.Balance("prj_1", reservation.PeriodID)
+	balance := state.Balance("prj_1", reservation.PeriodID, reservation.PeriodTimezoneVersion)
 	if balance.ReservedMicrosUSD != 0 || balance.CommittedMicrosUSD != 80 {
 		t.Fatalf("unexpected balance: %#v", balance)
 	}
@@ -319,7 +319,7 @@ func TestPendingReservationSurvivesReopen(t *testing.T) {
 	if state.PendingReservations() != 1 {
 		t.Fatalf("expected one pending reservation, got %d", state.PendingReservations())
 	}
-	if got := state.Balance(event.ProjectID, event.PeriodID).ReservedMicrosUSD; got != *event.ReservationMicrosUSD {
+	if got := state.Balance(event.ProjectID, event.PeriodID, event.PeriodTimezoneVersion).ReservedMicrosUSD; got != *event.ReservationMicrosUSD {
 		t.Fatalf("unexpected reserved amount: %d", got)
 	}
 }

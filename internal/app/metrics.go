@@ -18,6 +18,7 @@ import (
 	"github.com/akz142857/Heimdall/internal/buildinfo"
 	"github.com/akz142857/Heimdall/internal/config"
 	"github.com/akz142857/Heimdall/internal/masterkey"
+	"github.com/akz142857/Heimdall/internal/timezone"
 	"github.com/akz142857/Heimdall/internal/usage"
 	"github.com/akz142857/Heimdall/internal/vault"
 )
@@ -114,6 +115,22 @@ func (r *Runtime) writeMetrics(writer http.ResponseWriter) error {
 	metricHeader(output, "heimdall_build_info", "gauge", "Heimdall build information.")
 	fmt.Fprintf(output, "heimdall_build_info{version=%s,commit=%s} 1\n",
 		strconv.Quote(build.Version), strconv.Quote(build.Commit))
+	// Alert on disagreement across the fleet: nodes resolving different rules
+	// place the same instant in different accounting periods.
+	if database, err := timezone.Describe(r.config.Usage.Timezone); err == nil {
+		metricHeader(output, "heimdall_tzdata_info", "gauge", "IANA time zone database this node resolves accounting periods against.")
+		fmt.Fprintf(output, "heimdall_tzdata_info{source=%s,version=%s,fingerprint=%s} 1\n",
+			strconv.Quote(database.Source), strconv.Quote(database.Version), strconv.Quote(database.Fingerprint))
+	}
+	// Every node in a fleet must agree on both, or the same instant lands in
+	// different accounting periods on different nodes.
+	settings := r.periods.Settings()
+	metricHeader(output, "heimdall_accounting_timezone_version", "gauge", "Generation of the accounting timezone setting periods are derived from.")
+	fmt.Fprintf(output, "heimdall_accounting_timezone_version %d\n", settings.TimezoneVersion)
+	if period, err := r.periods.PeriodAt(time.Now()); err == nil {
+		metricHeader(output, "heimdall_accounting_period_end_seconds", "gauge", "Unix time at which the accounting period in progress ends.")
+		fmt.Fprintf(output, "heimdall_accounting_period_end_seconds %d\n", period.End.Unix())
+	}
 	metricHeader(output, "heimdall_metrics_auth_failures_total", "counter", "Rejected Metrics authentication attempts.")
 	fmt.Fprintf(output, "heimdall_metrics_auth_failures_total %d\n", r.metricsAuthFailed.Load())
 	metricHeader(output, "heimdall_metrics_scrape_rejected_total", "counter", "Metrics scrapes rejected by the concurrency bound.")

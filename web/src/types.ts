@@ -3,6 +3,58 @@ export interface Page<T> {
   next_cursor: string;
 }
 
+/**
+ * Which day a per-day figure covers, decided by the server.
+ *
+ * The accounting time zone lives in the server's configuration and sets when a
+ * daily budget resets, so the browser cannot derive these bounds — it must
+ * render against them.
+ */
+export interface TimeContext {
+  accounting_timezone: string;
+  timezone_version: number;
+  period_id: string;
+  period_start: string;
+  period_end: string;
+  generated_at: string;
+}
+
+/**
+ * The governed accounting timezone: the setting that decides when a day ends,
+ * and so when a daily budget resets and which day a call is billed to.
+ *
+ * A change never applies immediately. It is scheduled for the end of the period
+ * in progress, because moving the boundary of a day that is already
+ * accumulating would redefine what budgets already enforced against it meant.
+ */
+export interface AccountingSettings {
+  timezone: string;
+  timezone_version: number;
+  pending_timezone?: string;
+  pending_effective_at?: string;
+  current_period: { period_id: string; period_start: string; period_end: string };
+  /** What config.yaml says, and whether it is still what takes effect. */
+  config_file_timezone: string;
+  config_file_in_effect: boolean;
+  tzdata?: { source: string; version: string; fingerprint: string };
+  /**
+   * What a proposed change would do, returned only when asked for with
+   * `preview_timezone`. The switch mints a period in the new zone that can
+   * begin before the switch itself, and that period is a fresh balance — so the
+   * daily budget starts over `next_reset_in_hours` after the change, which can
+   * be as little as an hour.
+   */
+  switch_preview?: {
+    timezone: string;
+    effective_at: string;
+    first_period: { period_id: string; period_start: string; period_end: string };
+    next_reset_at: string;
+    next_reset_in_hours: number;
+  };
+  updated_at: string;
+  revision: number;
+}
+
 export interface Session {
   username: string;
   locale: LocalePreference;
@@ -122,6 +174,7 @@ export interface Dashboard {
   accounting_status: number;
   wal: WALStats;
   alerts: AlertStats;
+  time_context: TimeContext;
 }
 
 export interface WALStats {
@@ -553,6 +606,8 @@ export interface SystemStatus {
   audit: Record<string, number | string>;
   alerts: Record<string, number>;
   usage_watermark: Record<string, number>;
+  time_context: TimeContext;
+  tzdata?: { source: string; path?: string; version: string; fingerprint: string; zones: string[] };
 }
 
 export interface RuntimeSettings {
