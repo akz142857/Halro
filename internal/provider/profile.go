@@ -76,7 +76,7 @@ func profileAllowsPrimitive(profileID domain.ProviderProfileID, operation Operat
 		domain.ProfileGeminiText:                     {OperationChat: PrimitiveGeminiGenerateContent, OperationChatStream: PrimitiveGeminiStreamGenerateContent, OperationEmbeddings: PrimitiveGeminiEmbedContent},
 		domain.ProfileBedrockConverseText:            {OperationChat: PrimitiveBedrockConverse, OperationChatStream: PrimitiveBedrockConverseStream},
 		domain.ProfileBedrockInvokeTitanEmbedV2:      {OperationEmbeddings: PrimitiveBedrockInvokeTitanEmbedV2},
-		domain.ProfileOpenAIPhase2:                   {OperationModerations: PrimitiveOpenAIModerations, OperationImages: PrimitiveOpenAIImages, OperationTranscriptions: PrimitiveOpenAIAudioTranscriptions, OperationSpeech: PrimitiveOpenAIAudioSpeech, OperationFiles: PrimitiveOpenAIFiles, OperationBatches: PrimitiveOpenAIBatches},
+		domain.ProfileOpenAIMediaResources:           {OperationModerations: PrimitiveOpenAIModerations, OperationImages: PrimitiveOpenAIImages, OperationTranscriptions: PrimitiveOpenAIAudioTranscriptions, OperationSpeech: PrimitiveOpenAIAudioSpeech, OperationFiles: PrimitiveOpenAIFiles, OperationBatches: PrimitiveOpenAIBatches},
 		domain.ProfileBedrockInvokeTitanImageV2:      {OperationImages: PrimitiveBedrockTitanImageV2},
 		domain.ProfileBedrockAgentRerankCohere35:     {OperationRerank: PrimitiveBedrockAgentRerankCohere35},
 		domain.ProfileBedrockAsyncNovaReel:           {OperationAsyncInvoke: PrimitiveBedrockAsyncNovaReel},
@@ -123,21 +123,23 @@ func (s operationSet) Resolve(operation Operation) (OperationAdapter, bool) {
 		case semantic.OperationEmbed:
 			return legacyEmbeddingPrimitive{adapter: s.adapter, primitive: binding.Primitive, operation: binding.LegacyOperation}, true
 		default:
-			return phase2OperationPrimitive{operation: binding.LegacyOperation, semantic: binding.SemanticOperation, primitive: binding.Primitive}, true
+			return inferenceResourcesOperationPrimitive{operation: binding.LegacyOperation, semantic: binding.SemanticOperation, primitive: binding.Primitive}, true
 		}
 	}
 	return nil, false
 }
 
-type phase2OperationPrimitive struct {
+type inferenceResourcesOperationPrimitive struct {
 	operation Operation
 	semantic  semantic.Operation
 	primitive Primitive
 }
 
-func (p phase2OperationPrimitive) LegacyOperation() Operation            { return p.operation }
-func (p phase2OperationPrimitive) SemanticOperation() semantic.Operation { return p.semantic }
-func (p phase2OperationPrimitive) ProviderPrimitive() Primitive          { return p.primitive }
+func (p inferenceResourcesOperationPrimitive) LegacyOperation() Operation { return p.operation }
+func (p inferenceResourcesOperationPrimitive) SemanticOperation() semantic.Operation {
+	return p.semantic
+}
+func (p inferenceResourcesOperationPrimitive) ProviderPrimitive() Primitive { return p.primitive }
 
 type ProfiledAdapter interface {
 	Adapter
@@ -216,105 +218,105 @@ func (b *LegacyAdapterBridge) Capabilities() Capabilities {
 }
 
 func (b *LegacyAdapterBridge) Moderate(ctx context.Context, call ModerationCall) (ModerationResult, error) {
-	a, ok := b.Adapter.(StatelessPhase2Adapter)
+	a, ok := b.Adapter.(StatelessInferenceResourcesAdapter)
 	if !ok {
 		return ModerationResult{}, errors.New("moderation is unavailable")
 	}
 	return a.Moderate(ctx, call)
 }
 func (b *LegacyAdapterBridge) GenerateImage(ctx context.Context, call ImageCall) (ImageResult, error) {
-	a, ok := b.Adapter.(StatelessPhase2Adapter)
+	a, ok := b.Adapter.(StatelessInferenceResourcesAdapter)
 	if !ok {
 		return ImageResult{}, errors.New("image generation is unavailable")
 	}
 	return a.GenerateImage(ctx, call)
 }
 func (b *LegacyAdapterBridge) Transcribe(ctx context.Context, call TranscriptionCall) (TranscriptionResult, error) {
-	a, ok := b.Adapter.(StatelessPhase2Adapter)
+	a, ok := b.Adapter.(StatelessInferenceResourcesAdapter)
 	if !ok {
 		return TranscriptionResult{}, errors.New("transcription is unavailable")
 	}
 	return a.Transcribe(ctx, call)
 }
 func (b *LegacyAdapterBridge) Synthesize(ctx context.Context, call SpeechCall) (SpeechResult, error) {
-	a, ok := b.Adapter.(StatelessPhase2Adapter)
+	a, ok := b.Adapter.(StatelessInferenceResourcesAdapter)
 	if !ok {
 		return SpeechResult{}, errors.New("speech is unavailable")
 	}
 	return a.Synthesize(ctx, call)
 }
 func (b *LegacyAdapterBridge) CreateFile(ctx context.Context, call FileCreateCall) (FileObject, error) {
-	a, ok := b.Adapter.(ResourcePhase2Adapter)
+	a, ok := b.Adapter.(ResourceInferenceResourcesAdapter)
 	if !ok {
 		return FileObject{}, errors.New("files are unavailable")
 	}
 	return a.CreateFile(ctx, call)
 }
 func (b *LegacyAdapterBridge) GetFile(ctx context.Context, requestID, id string) (FileObject, error) {
-	a, ok := b.Adapter.(ResourcePhase2Adapter)
+	a, ok := b.Adapter.(ResourceInferenceResourcesAdapter)
 	if !ok {
 		return FileObject{}, errors.New("files are unavailable")
 	}
 	return a.GetFile(ctx, requestID, id)
 }
 func (b *LegacyAdapterBridge) DownloadFile(ctx context.Context, requestID, id string) (FileContent, error) {
-	a, ok := b.Adapter.(ResourcePhase2Adapter)
+	a, ok := b.Adapter.(ResourceInferenceResourcesAdapter)
 	if !ok {
 		return FileContent{}, errors.New("files are unavailable")
 	}
 	return a.DownloadFile(ctx, requestID, id)
 }
 func (b *LegacyAdapterBridge) DeleteFile(ctx context.Context, requestID, id string) (FileDeleteResult, error) {
-	a, ok := b.Adapter.(ResourcePhase2Adapter)
+	a, ok := b.Adapter.(ResourceInferenceResourcesAdapter)
 	if !ok {
 		return FileDeleteResult{}, errors.New("files are unavailable")
 	}
 	return a.DeleteFile(ctx, requestID, id)
 }
 func (b *LegacyAdapterBridge) CreateBatch(ctx context.Context, call BatchCreateCall) (BatchObject, error) {
-	a, ok := b.Adapter.(ResourcePhase2Adapter)
+	a, ok := b.Adapter.(ResourceInferenceResourcesAdapter)
 	if !ok {
 		return BatchObject{}, errors.New("batches are unavailable")
 	}
 	return a.CreateBatch(ctx, call)
 }
 func (b *LegacyAdapterBridge) GetBatch(ctx context.Context, requestID, id string) (BatchObject, error) {
-	a, ok := b.Adapter.(ResourcePhase2Adapter)
+	a, ok := b.Adapter.(ResourceInferenceResourcesAdapter)
 	if !ok {
 		return BatchObject{}, errors.New("batches are unavailable")
 	}
 	return a.GetBatch(ctx, requestID, id)
 }
 func (b *LegacyAdapterBridge) CancelBatch(ctx context.Context, requestID, id string) (BatchObject, error) {
-	a, ok := b.Adapter.(ResourcePhase2Adapter)
+	a, ok := b.Adapter.(ResourceInferenceResourcesAdapter)
 	if !ok {
 		return BatchObject{}, errors.New("batches are unavailable")
 	}
 	return a.CancelBatch(ctx, requestID, id)
 }
 func (b *LegacyAdapterBridge) Rerank(ctx context.Context, call RerankCall) (RerankResult, error) {
-	a, ok := b.Adapter.(BedrockPhase2Adapter)
+	a, ok := b.Adapter.(BedrockInferenceResourcesAdapter)
 	if !ok {
 		return RerankResult{}, errors.New("rerank is unavailable")
 	}
 	return a.Rerank(ctx, call)
 }
 func (b *LegacyAdapterBridge) StartAsyncInvoke(ctx context.Context, call AsyncInvokeCall) (AsyncInvokeObject, error) {
-	a, ok := b.Adapter.(BedrockPhase2Adapter)
+	a, ok := b.Adapter.(BedrockInferenceResourcesAdapter)
 	if !ok {
 		return AsyncInvokeObject{}, errors.New("async invoke is unavailable")
 	}
 	return a.StartAsyncInvoke(ctx, call)
 }
 func (b *LegacyAdapterBridge) GetAsyncInvoke(ctx context.Context, requestID, id string) (AsyncInvokeObject, error) {
-	a, ok := b.Adapter.(BedrockPhase2Adapter)
+	a, ok := b.Adapter.(BedrockInferenceResourcesAdapter)
 	if !ok {
 		return AsyncInvokeObject{}, errors.New("async invoke is unavailable")
 	}
 	return a.GetAsyncInvoke(ctx, requestID, id)
 }
 func (b *LegacyAdapterBridge) GenerateBedrockImage(ctx context.Context, call ImageCall) (ImageResult, error) {
-	a, ok := b.Adapter.(BedrockPhase2Adapter)
+	a, ok := b.Adapter.(BedrockInferenceResourcesAdapter)
 	if !ok {
 		return ImageResult{}, errors.New("Bedrock image generation is unavailable")
 	}
@@ -394,8 +396,8 @@ func BuiltinProfile(id domain.ProviderProfileID) (ProfileManifest, bool) {
 			Operations:        []Operation{OperationEmbeddings},
 			PrimitiveBindings: []PrimitiveBinding{{OperationEmbeddings, semantic.OperationEmbed, PrimitiveBedrockInvokeTitanEmbedV2}},
 		},
-		domain.ProfileOpenAIPhase2: {
-			ID: domain.ProfileOpenAIPhase2, Revision: 1, ProviderType: domain.ProviderOpenAI, AccessSurface: domain.SurfaceOpenAI, CredentialScheme: domain.CredentialBearerStatic,
+		domain.ProfileOpenAIMediaResources: {
+			ID: domain.ProfileOpenAIMediaResources, Revision: 1, ProviderType: domain.ProviderOpenAI, AccessSurface: domain.SurfaceOpenAI, CredentialScheme: domain.CredentialBearerStatic,
 			Operations:        []Operation{OperationModerations, OperationImages, OperationTranscriptions, OperationSpeech, OperationFiles, OperationBatches},
 			PrimitiveBindings: []PrimitiveBinding{{OperationModerations, semantic.OperationModerate, PrimitiveOpenAIModerations}, {OperationImages, semantic.OperationImage, PrimitiveOpenAIImages}, {OperationTranscriptions, semantic.OperationTranscribe, PrimitiveOpenAIAudioTranscriptions}, {OperationSpeech, semantic.OperationSynthesize, PrimitiveOpenAIAudioSpeech}, {OperationFiles, semantic.OperationFile, PrimitiveOpenAIFiles}, {OperationBatches, semantic.OperationBatch, PrimitiveOpenAIBatches}},
 		},

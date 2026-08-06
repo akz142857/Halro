@@ -32,7 +32,7 @@ const (
 	ProfileGeminiText                     ProviderProfileID = "gemini.generate-content.text.v1beta"
 	ProfileBedrockConverseText            ProviderProfileID = "bedrock.runtime.converse.text.v1"
 	ProfileBedrockInvokeTitanEmbedV2      ProviderProfileID = "bedrock.runtime.invoke.titan-embed-text-v2.v1"
-	ProfileOpenAIPhase2                   ProviderProfileID = "openai.media-resources.v1"
+	ProfileOpenAIMediaResources           ProviderProfileID = "openai.media-resources.v1"
 	ProfileBedrockInvokeTitanImageV2      ProviderProfileID = "bedrock.runtime.invoke.titan-image-v2.v1"
 	ProfileBedrockAgentRerankCohere35     ProviderProfileID = "bedrock.agent-runtime.rerank.cohere-v3-5.v1"
 	ProfileBedrockAsyncNovaReel           ProviderProfileID = "bedrock.runtime.async.nova-reel-v1.v1"
@@ -93,7 +93,7 @@ func DefaultProviderProfile(providerType ProviderType) (ProviderProfileDefaults,
 
 func RegisteredProviderProfile(profile ProviderProfileID) (ProviderType, ProviderProfileDefaults, bool) {
 	switch profile {
-	case ProfileOpenAIChatEmbeddings, ProfileOpenAIPhase2:
+	case ProfileOpenAIChatEmbeddings, ProfileOpenAIMediaResources:
 		return ProviderOpenAI, ProviderProfileDefaults{SurfaceOpenAI, profile, CredentialBearerStatic}, true
 	case ProfileAnthropicMessages:
 		return ProviderAnthropic, ProviderProfileDefaults{SurfaceAnthropic, profile, CredentialAnthropicAPIKey}, true
@@ -132,7 +132,7 @@ func ResolveCredentialProfile(providerType ProviderType, surface AccessSurface, 
 		ProfileOpenAIChatEmbeddings, ProfileAnthropicMessages, ProfileAzureChatEmbeddings,
 		ProfileDeepSeekChat, ProfileOpenAICompatible, ProfileGeminiText, ProfileBedrockConverseText,
 		ProfileBedrockInvokeTitanEmbedV2,
-		ProfileOpenAIPhase2, ProfileBedrockInvokeTitanImageV2, ProfileBedrockAgentRerankCohere35, ProfileBedrockAsyncNovaReel,
+		ProfileOpenAIMediaResources, ProfileBedrockInvokeTitanImageV2, ProfileBedrockAgentRerankCohere35, ProfileBedrockAsyncNovaReel,
 		ProfileBedrockMantleOpenAIChat, ProfileBedrockMantleOpenAIResponses, ProfileBedrockMantleAnthropicMessages,
 	} {
 		registeredType, profile, ok := RegisteredProviderProfile(profileID)

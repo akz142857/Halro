@@ -13,7 +13,7 @@ import (
 	"github.com/akz142857/Heimdall/internal/provider"
 )
 
-func phase2TestAdapter(t *testing.T, transport roundTripFunc) *Adapter {
+func inferenceResourcesTestAdapter(t *testing.T, transport roundTripFunc) *Adapter {
 	t.Helper()
 	endpoint, _ := url.Parse("https://api.openai.com")
 	adapter, err := New(endpoint, []byte("secret"), &http.Client{Transport: transport})
@@ -24,8 +24,8 @@ func phase2TestAdapter(t *testing.T, transport roundTripFunc) *Adapter {
 	return adapter
 }
 
-func TestModerationPhase2UsesTypedWireContract(t *testing.T) {
-	adapter := phase2TestAdapter(t, func(request *http.Request) (*http.Response, error) {
+func TestModerationInferenceResourcesUsesTypedWireContract(t *testing.T) {
+	adapter := inferenceResourcesTestAdapter(t, func(request *http.Request) (*http.Response, error) {
 		if request.URL.String() != "https://api.openai.com/v1/moderations" || request.Header.Get("Authorization") != "Bearer secret" {
 			t.Fatalf("request=%s headers=%v", request.URL, request.Header)
 		}
@@ -47,8 +47,8 @@ func TestModerationPhase2UsesTypedWireContract(t *testing.T) {
 	}
 }
 
-func TestImagePhase2RejectsAmbiguousPayload(t *testing.T) {
-	adapter := phase2TestAdapter(t, func(request *http.Request) (*http.Response, error) {
+func TestImageInferenceResourcesRejectsAmbiguousPayload(t *testing.T) {
+	adapter := inferenceResourcesTestAdapter(t, func(request *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"created":1,"data":[{"url":"https://x","b64_json":"also"}]}`)), Request: request}, nil
 	})
 	_, err := adapter.GenerateImage(context.Background(), provider.ImageCall{ProviderModel: "gpt-image-1", Prompt: "test", Count: 1})
@@ -58,8 +58,8 @@ func TestImagePhase2RejectsAmbiguousPayload(t *testing.T) {
 	}
 }
 
-func TestSpeechPhase2ReturnsBoundedBinary(t *testing.T) {
-	adapter := phase2TestAdapter(t, func(request *http.Request) (*http.Response, error) {
+func TestSpeechInferenceResourcesReturnsBoundedBinary(t *testing.T) {
+	adapter := inferenceResourcesTestAdapter(t, func(request *http.Request) (*http.Response, error) {
 		if request.URL.Path != "/v1/audio/speech" || request.Header.Get("Content-Type") != "application/json" {
 			t.Fatalf("request=%#v", request)
 		}
@@ -73,7 +73,7 @@ func TestSpeechPhase2ReturnsBoundedBinary(t *testing.T) {
 
 func TestFileLifecycleUsesEscapedFixedResourcePaths(t *testing.T) {
 	calls := 0
-	adapter := phase2TestAdapter(t, func(request *http.Request) (*http.Response, error) {
+	adapter := inferenceResourcesTestAdapter(t, func(request *http.Request) (*http.Response, error) {
 		calls++
 		if request.URL.Path != "/v1/files/file-abc" || request.Method != http.MethodGet {
 			t.Fatalf("request=%s %s", request.Method, request.URL)
@@ -91,7 +91,7 @@ func TestFileLifecycleUsesEscapedFixedResourcePaths(t *testing.T) {
 
 func TestBatchCreationIsLimitedToDeclaredEndpoints(t *testing.T) {
 	calls := 0
-	adapter := phase2TestAdapter(t, func(request *http.Request) (*http.Response, error) {
+	adapter := inferenceResourcesTestAdapter(t, func(request *http.Request) (*http.Response, error) {
 		calls++
 		return nil, errors.New("should not be called")
 	})

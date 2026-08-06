@@ -82,7 +82,7 @@ type Service struct {
 	// behind by a crash apart from one another request is holding right now.
 	instanceID                    string
 	now                           func() time.Time
-	resources                     Phase2ResourceStore
+	resources                     InferenceResourcesResourceStore
 	resourceObjectDir             string
 	contentScanner                contentscan.Scanner
 	pricing                       PriceSelector
@@ -118,7 +118,7 @@ type ServiceOptions struct {
 	RetryJitter                   bool
 	TokenGuard                    *tokenguard.Manager
 	Redactor                      *redaction.Engine
-	Resources                     Phase2ResourceStore
+	Resources                     InferenceResourcesResourceStore
 	ResourceObjectDir             string
 	ContentScanner                contentscan.Scanner
 	Pricing                       PriceSelector

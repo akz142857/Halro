@@ -14,14 +14,14 @@ import (
 	"github.com/akz142857/Heimdall/internal/provider"
 )
 
-const maxPhase2ResponseBytes = 32 << 20
+const maxInferenceResourcesResponseBytes = 32 << 20
 
 func (a *Adapter) Moderate(ctx context.Context, call provider.ModerationCall) (provider.ModerationResult, error) {
 	if a.azure || a.providerType != "openai" {
-		return provider.ModerationResult{}, phase2Unsupported("moderations")
+		return provider.ModerationResult{}, inferenceResourcesUnsupported("moderations")
 	}
 	if strings.TrimSpace(call.ProviderModel) == "" || len(call.Input) == 0 || !json.Valid(call.Input) {
-		return provider.ModerationResult{}, phase2BadRequest("model and valid input are required")
+		return provider.ModerationResult{}, inferenceResourcesBadRequest("model and valid input are required")
 	}
 	payload := struct {
 		Model string          `json:"model"`
@@ -32,22 +32,22 @@ func (a *Adapter) Moderate(ctx context.Context, call provider.ModerationCall) (p
 		Model   string          `json:"model"`
 		Results json.RawMessage `json:"results"`
 	}
-	requestID, _, err := a.phase2JSON(ctx, http.MethodPost, "moderations", call.RequestID, payload, &response)
+	requestID, _, err := a.inferenceResourcesJSON(ctx, http.MethodPost, "moderations", call.RequestID, payload, &response)
 	if err != nil {
 		return provider.ModerationResult{}, err
 	}
 	if response.ID == "" || response.Model == "" || len(response.Results) == 0 || !json.Valid(response.Results) {
-		return provider.ModerationResult{}, phase2Malformed("moderation response is invalid")
+		return provider.ModerationResult{}, inferenceResourcesMalformed("moderation response is invalid")
 	}
 	return provider.ModerationResult{ID: response.ID, Model: response.Model, Results: response.Results, ProviderRequestID: requestID}, nil
 }
 
 func (a *Adapter) GenerateImage(ctx context.Context, call provider.ImageCall) (provider.ImageResult, error) {
 	if a.azure || a.providerType != "openai" {
-		return provider.ImageResult{}, phase2Unsupported("images")
+		return provider.ImageResult{}, inferenceResourcesUnsupported("images")
 	}
 	if strings.TrimSpace(call.Prompt) == "" || len(call.Prompt) > 32000 || call.Count < 1 || call.Count > 10 {
-		return provider.ImageResult{}, phase2BadRequest("image prompt and n between 1 and 10 are required")
+		return provider.ImageResult{}, inferenceResourcesBadRequest("image prompt and n between 1 and 10 are required")
 	}
 	payload := struct {
 		Model          string `json:"model"`
@@ -62,16 +62,16 @@ func (a *Adapter) GenerateImage(ctx context.Context, call provider.ImageCall) (p
 		Created int64                `json:"created"`
 		Data    []provider.ImageData `json:"data"`
 	}
-	requestID, _, err := a.phase2JSON(ctx, http.MethodPost, "images/generations", call.RequestID, payload, &response)
+	requestID, _, err := a.inferenceResourcesJSON(ctx, http.MethodPost, "images/generations", call.RequestID, payload, &response)
 	if err != nil {
 		return provider.ImageResult{}, err
 	}
 	if response.Created <= 0 || len(response.Data) == 0 {
-		return provider.ImageResult{}, phase2Malformed("image response is invalid")
+		return provider.ImageResult{}, inferenceResourcesMalformed("image response is invalid")
 	}
 	for _, item := range response.Data {
 		if (item.URL == "") == (item.Base64JSON == "") {
-			return provider.ImageResult{}, phase2Malformed("image response must contain exactly one payload")
+			return provider.ImageResult{}, inferenceResourcesMalformed("image response must contain exactly one payload")
 		}
 	}
 	return provider.ImageResult{Created: response.Created, Data: response.Data, ProviderRequestID: requestID}, nil
@@ -79,10 +79,10 @@ func (a *Adapter) GenerateImage(ctx context.Context, call provider.ImageCall) (p
 
 func (a *Adapter) Transcribe(ctx context.Context, call provider.TranscriptionCall) (provider.TranscriptionResult, error) {
 	if a.azure || a.providerType != "openai" {
-		return provider.TranscriptionResult{}, phase2Unsupported("audio transcription")
+		return provider.TranscriptionResult{}, inferenceResourcesUnsupported("audio transcription")
 	}
 	if len(call.Data) == 0 || len(call.Data) > 25<<20 || strings.TrimSpace(call.Filename) == "" {
-		return provider.TranscriptionResult{}, phase2BadRequest("audio file is required and must not exceed 25 MiB")
+		return provider.TranscriptionResult{}, inferenceResourcesBadRequest("audio file is required and must not exceed 25 MiB")
 	}
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
@@ -91,7 +91,7 @@ func (a *Adapter) Transcribe(ctx context.Context, call provider.TranscriptionCal
 	partHeader["Content-Type"] = []string{call.ContentType}
 	part, err := writer.CreatePart(textprotoHeader(partHeader))
 	if err != nil {
-		return provider.TranscriptionResult{}, phase2BadRequest("create audio multipart")
+		return provider.TranscriptionResult{}, inferenceResourcesBadRequest("create audio multipart")
 	}
 	if _, err = part.Write(call.Data); err != nil {
 		return provider.TranscriptionResult{}, err
@@ -106,15 +106,15 @@ func (a *Adapter) Transcribe(ctx context.Context, call provider.TranscriptionCal
 		}
 	}
 	_ = writer.Close()
-	return a.phase2BinaryRequest(ctx, "audio/transcriptions", call.RequestID, writer.FormDataContentType(), body.Bytes())
+	return a.inferenceResourcesBinaryRequest(ctx, "audio/transcriptions", call.RequestID, writer.FormDataContentType(), body.Bytes())
 }
 
 func (a *Adapter) Synthesize(ctx context.Context, call provider.SpeechCall) (provider.SpeechResult, error) {
 	if a.azure || a.providerType != "openai" {
-		return provider.SpeechResult{}, phase2Unsupported("audio speech")
+		return provider.SpeechResult{}, inferenceResourcesUnsupported("audio speech")
 	}
 	if strings.TrimSpace(call.Input) == "" || len(call.Input) > 4096 || strings.TrimSpace(call.Voice) == "" {
-		return provider.SpeechResult{}, phase2BadRequest("speech input and voice are required")
+		return provider.SpeechResult{}, inferenceResourcesBadRequest("speech input and voice are required")
 	}
 	payload := struct {
 		Model          string   `json:"model"`
@@ -124,7 +124,7 @@ func (a *Adapter) Synthesize(ctx context.Context, call provider.SpeechCall) (pro
 		Speed          *float64 `json:"speed,omitempty"`
 	}{call.ProviderModel, call.Input, call.Voice, call.ResponseFormat, call.Speed}
 	encoded, _ := json.Marshal(payload)
-	result, err := a.phase2BinaryRequest(ctx, "audio/speech", call.RequestID, "application/json", encoded)
+	result, err := a.inferenceResourcesBinaryRequest(ctx, "audio/speech", call.RequestID, "application/json", encoded)
 	if err != nil {
 		return provider.SpeechResult{}, err
 	}
@@ -133,10 +133,10 @@ func (a *Adapter) Synthesize(ctx context.Context, call provider.SpeechCall) (pro
 
 func (a *Adapter) CreateFile(ctx context.Context, call provider.FileCreateCall) (provider.FileObject, error) {
 	if a.azure || a.providerType != "openai" {
-		return provider.FileObject{}, phase2Unsupported("files")
+		return provider.FileObject{}, inferenceResourcesUnsupported("files")
 	}
 	if len(call.Data) == 0 || len(call.Data) > 512<<20 || strings.TrimSpace(call.Filename) == "" || strings.TrimSpace(call.Purpose) == "" {
-		return provider.FileObject{}, phase2BadRequest("file, filename, and purpose are required")
+		return provider.FileObject{}, inferenceResourcesBadRequest("file, filename, and purpose are required")
 	}
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
@@ -145,7 +145,7 @@ func (a *Adapter) CreateFile(ctx context.Context, call provider.FileCreateCall) 
 	partHeader.Set("Content-Type", call.ContentType)
 	part, err := writer.CreatePart(partHeader)
 	if err != nil {
-		return provider.FileObject{}, phase2BadRequest("create file multipart")
+		return provider.FileObject{}, inferenceResourcesBadRequest("create file multipart")
 	}
 	if _, err := part.Write(call.Data); err != nil {
 		return provider.FileObject{}, err
@@ -156,7 +156,7 @@ func (a *Adapter) CreateFile(ctx context.Context, call provider.FileCreateCall) 
 	if err := writer.Close(); err != nil {
 		return provider.FileObject{}, err
 	}
-	result, err := a.phase2Do(ctx, http.MethodPost, "files", call.RequestID, writer.FormDataContentType(), body.Bytes())
+	result, err := a.inferenceResourcesDo(ctx, http.MethodPost, "files", call.RequestID, writer.FormDataContentType(), body.Bytes())
 	if err != nil {
 		return provider.FileObject{}, err
 	}
@@ -164,9 +164,9 @@ func (a *Adapter) CreateFile(ctx context.Context, call provider.FileCreateCall) 
 }
 func (a *Adapter) GetFile(ctx context.Context, requestID, id string) (provider.FileObject, error) {
 	if !validResourceID(id, "file-") {
-		return provider.FileObject{}, phase2BadRequest("invalid file id")
+		return provider.FileObject{}, inferenceResourcesBadRequest("invalid file id")
 	}
-	result, err := a.phase2Do(ctx, http.MethodGet, "files/"+id, requestID, "", nil)
+	result, err := a.inferenceResourcesDo(ctx, http.MethodGet, "files/"+id, requestID, "", nil)
 	if err != nil {
 		return provider.FileObject{}, err
 	}
@@ -174,9 +174,9 @@ func (a *Adapter) GetFile(ctx context.Context, requestID, id string) (provider.F
 }
 func (a *Adapter) DownloadFile(ctx context.Context, requestID, id string) (provider.FileContent, error) {
 	if !validResourceID(id, "file-") {
-		return provider.FileContent{}, phase2BadRequest("invalid file id")
+		return provider.FileContent{}, inferenceResourcesBadRequest("invalid file id")
 	}
-	result, err := a.phase2Do(ctx, http.MethodGet, "files/"+id+"/content", requestID, "", nil)
+	result, err := a.inferenceResourcesDo(ctx, http.MethodGet, "files/"+id+"/content", requestID, "", nil)
 	if err != nil {
 		return provider.FileContent{}, err
 	}
@@ -184,15 +184,15 @@ func (a *Adapter) DownloadFile(ctx context.Context, requestID, id string) (provi
 }
 func (a *Adapter) DeleteFile(ctx context.Context, requestID, id string) (provider.FileDeleteResult, error) {
 	if !validResourceID(id, "file-") {
-		return provider.FileDeleteResult{}, phase2BadRequest("invalid file id")
+		return provider.FileDeleteResult{}, inferenceResourcesBadRequest("invalid file id")
 	}
-	result, err := a.phase2Do(ctx, http.MethodDelete, "files/"+id, requestID, "", nil)
+	result, err := a.inferenceResourcesDo(ctx, http.MethodDelete, "files/"+id, requestID, "", nil)
 	if err != nil {
 		return provider.FileDeleteResult{}, err
 	}
 	var output provider.FileDeleteResult
 	if err := json.Unmarshal(result.Data, &output); err != nil || output.ID != id || !output.Deleted {
-		return provider.FileDeleteResult{}, phase2Malformed("file deletion response is invalid")
+		return provider.FileDeleteResult{}, inferenceResourcesMalformed("file deletion response is invalid")
 	}
 	output.ProviderRequestID = result.ProviderRequestID
 	return output, nil
@@ -200,7 +200,7 @@ func (a *Adapter) DeleteFile(ctx context.Context, requestID, id string) (provide
 
 func (a *Adapter) CreateBatch(ctx context.Context, call provider.BatchCreateCall) (provider.BatchObject, error) {
 	if !validResourceID(call.InputFileID, "file-") || call.Endpoint != "/v1/chat/completions" && call.Endpoint != "/v1/responses" && call.Endpoint != "/v1/embeddings" || call.CompletionWindow != "24h" {
-		return provider.BatchObject{}, phase2BadRequest("batch input file, endpoint, and 24h completion window are required")
+		return provider.BatchObject{}, inferenceResourcesBadRequest("batch input file, endpoint, and 24h completion window are required")
 	}
 	payload := struct {
 		InputFileID      string            `json:"input_file_id"`
@@ -209,12 +209,12 @@ func (a *Adapter) CreateBatch(ctx context.Context, call provider.BatchCreateCall
 		Metadata         map[string]string `json:"metadata,omitempty"`
 	}{call.InputFileID, call.Endpoint, call.CompletionWindow, call.Metadata}
 	var output provider.BatchObject
-	requestID, _, err := a.phase2JSON(ctx, http.MethodPost, "batches", call.RequestID, payload, &output)
+	requestID, _, err := a.inferenceResourcesJSON(ctx, http.MethodPost, "batches", call.RequestID, payload, &output)
 	if err != nil {
 		return output, err
 	}
 	if !validResourceID(output.ID, "batch_") || output.InputFileID != call.InputFileID {
-		return provider.BatchObject{}, phase2Malformed("batch response is invalid")
+		return provider.BatchObject{}, inferenceResourcesMalformed("batch response is invalid")
 	}
 	_ = requestID
 	return output, nil
@@ -227,22 +227,22 @@ func (a *Adapter) CancelBatch(ctx context.Context, requestID, id string) (provid
 }
 func (a *Adapter) batchAction(ctx context.Context, method, requestID, id, suffix string) (provider.BatchObject, error) {
 	if !validResourceID(id, "batch_") {
-		return provider.BatchObject{}, phase2BadRequest("invalid batch id")
+		return provider.BatchObject{}, inferenceResourcesBadRequest("invalid batch id")
 	}
-	result, err := a.phase2Do(ctx, method, "batches/"+id+suffix, requestID, "application/json", nil)
+	result, err := a.inferenceResourcesDo(ctx, method, "batches/"+id+suffix, requestID, "application/json", nil)
 	if err != nil {
 		return provider.BatchObject{}, err
 	}
 	var output provider.BatchObject
 	if err := json.Unmarshal(result.Data, &output); err != nil || output.ID != id || output.Status == "" {
-		return provider.BatchObject{}, phase2Malformed("batch response is invalid")
+		return provider.BatchObject{}, inferenceResourcesMalformed("batch response is invalid")
 	}
 	return output, nil
 }
-func decodeFileObject(result phase2HTTPResult) (provider.FileObject, error) {
+func decodeFileObject(result inferenceResourcesHTTPResult) (provider.FileObject, error) {
 	var output provider.FileObject
 	if err := json.Unmarshal(result.Data, &output); err != nil || !validResourceID(output.ID, "file-") || output.Filename == "" || output.Purpose == "" || output.Bytes < 0 {
-		return provider.FileObject{}, phase2Malformed("file response is invalid")
+		return provider.FileObject{}, inferenceResourcesMalformed("file response is invalid")
 	}
 	return output, nil
 }
@@ -259,39 +259,39 @@ func validResourceID(value, prefix string) bool {
 	return true
 }
 
-func (a *Adapter) phase2JSON(ctx context.Context, method, operation, requestID string, input, output any) (string, string, error) {
+func (a *Adapter) inferenceResourcesJSON(ctx context.Context, method, operation, requestID string, input, output any) (string, string, error) {
 	body, err := json.Marshal(input)
 	if err != nil {
-		return "", "", phase2BadRequest("encode request")
+		return "", "", inferenceResourcesBadRequest("encode request")
 	}
-	result, err := a.phase2Do(ctx, method, operation, requestID, "application/json", body)
+	result, err := a.inferenceResourcesDo(ctx, method, operation, requestID, "application/json", body)
 	if err != nil {
 		return "", "", err
 	}
 	if err := json.Unmarshal(result.Data, output); err != nil {
-		return "", "", phase2Malformed("provider returned malformed JSON")
+		return "", "", inferenceResourcesMalformed("provider returned malformed JSON")
 	}
 	return result.ProviderRequestID, result.ContentType, nil
 }
 
-func (a *Adapter) phase2BinaryRequest(ctx context.Context, operation, requestID, contentType string, body []byte) (provider.TranscriptionResult, error) {
-	result, err := a.phase2Do(ctx, http.MethodPost, operation, requestID, contentType, body)
+func (a *Adapter) inferenceResourcesBinaryRequest(ctx context.Context, operation, requestID, contentType string, body []byte) (provider.TranscriptionResult, error) {
+	result, err := a.inferenceResourcesDo(ctx, http.MethodPost, operation, requestID, contentType, body)
 	if err != nil {
 		return provider.TranscriptionResult{}, err
 	}
 	return provider.TranscriptionResult{ContentType: result.ContentType, Data: result.Data, ProviderRequestID: result.ProviderRequestID}, nil
 }
 
-type phase2HTTPResult struct {
+type inferenceResourcesHTTPResult struct {
 	ContentType, ProviderRequestID string
 	Data                           []byte
 }
 
-func (a *Adapter) phase2Do(ctx context.Context, method, operation, requestID, contentType string, body []byte) (phase2HTTPResult, error) {
+func (a *Adapter) inferenceResourcesDo(ctx context.Context, method, operation, requestID, contentType string, body []byte) (inferenceResourcesHTTPResult, error) {
 	endpoint := a.operationURL("", operation)
 	request, err := http.NewRequestWithContext(ctx, method, endpoint.String(), bytes.NewReader(body))
 	if err != nil {
-		return phase2HTTPResult{}, phase2BadRequest("create provider request")
+		return inferenceResourcesHTTPResult{}, inferenceResourcesBadRequest("create provider request")
 	}
 	request.Header.Set("Content-Type", contentType)
 	request.Header.Set("Accept", "*/*")
@@ -299,32 +299,32 @@ func (a *Adapter) phase2Do(ctx context.Context, method, operation, requestID, co
 		request.Header.Set("X-Request-ID", requestID)
 	}
 	if err := a.authorize(request); err != nil {
-		return phase2HTTPResult{}, &provider.Error{Class: provider.ErrorAuthentication, Message: "authorize provider request", Cause: err}
+		return inferenceResourcesHTTPResult{}, &provider.Error{Class: provider.ErrorAuthentication, Message: "authorize provider request", Cause: err}
 	}
 	response, err := a.client.Do(request)
 	if err != nil {
-		return phase2HTTPResult{}, &provider.Error{Class: provider.ErrorConnect, Retryable: true, Message: "provider request failed", Cause: err}
+		return inferenceResourcesHTTPResult{}, &provider.Error{Class: provider.ErrorConnect, Retryable: true, Message: "provider request failed", Cause: err}
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return phase2HTTPResult{}, classifyHTTPError(response.StatusCode, limitedErrorMessage(response.Body))
+		return inferenceResourcesHTTPResult{}, classifyHTTPError(response.StatusCode, limitedErrorMessage(response.Body))
 	}
-	data, err := io.ReadAll(io.LimitReader(response.Body, maxPhase2ResponseBytes+1))
+	data, err := io.ReadAll(io.LimitReader(response.Body, maxInferenceResourcesResponseBytes+1))
 	if err != nil {
-		return phase2HTTPResult{}, &provider.Error{Class: provider.ErrorMalformed, Ambiguous: true, Message: "read provider response", Cause: err}
+		return inferenceResourcesHTTPResult{}, &provider.Error{Class: provider.ErrorMalformed, Ambiguous: true, Message: "read provider response", Cause: err}
 	}
-	if len(data) > maxPhase2ResponseBytes {
-		return phase2HTTPResult{}, phase2Malformed("provider response exceeds limit")
+	if len(data) > maxInferenceResourcesResponseBytes {
+		return inferenceResourcesHTTPResult{}, inferenceResourcesMalformed("provider response exceeds limit")
 	}
-	return phase2HTTPResult{ContentType: response.Header.Get("Content-Type"), ProviderRequestID: response.Header.Get("x-request-id"), Data: data}, nil
+	return inferenceResourcesHTTPResult{ContentType: response.Header.Get("Content-Type"), ProviderRequestID: response.Header.Get("x-request-id"), Data: data}, nil
 }
-func phase2BadRequest(message string) error {
+func inferenceResourcesBadRequest(message string) error {
 	return &provider.Error{Class: provider.ErrorBadRequest, Message: message}
 }
-func phase2Unsupported(name string) error {
+func inferenceResourcesUnsupported(name string) error {
 	return &provider.Error{Class: provider.ErrorBadRequest, Message: name + " is not declared by this provider profile"}
 }
-func phase2Malformed(message string) error {
+func inferenceResourcesMalformed(message string) error {
 	return &provider.Error{Class: provider.ErrorMalformed, Ambiguous: true, Message: message}
 }
 func textprotoHeader(value map[string][]string) textproto.MIMEHeader {

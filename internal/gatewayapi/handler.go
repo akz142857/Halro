@@ -289,18 +289,18 @@ func (h *Handler) chatCompletionsStream(
 }
 
 type Handler struct {
-	service         Service
-	responses       ResponsesService
-	messages        MessagesService
-	phase2          Phase2Service
-	maxRequestBytes int64
-	routeTimeout    time.Duration
-	streamTimeout   time.Duration
-	writeTimeout    time.Duration
-	trustProxy      bool
-	trustedProxies  []netip.Prefix
-	authorizeKey    func(string) error
-	sourceLimit     SourceLimiter
+	service            Service
+	responses          ResponsesService
+	messages           MessagesService
+	inferenceResources InferenceResourcesService
+	maxRequestBytes    int64
+	routeTimeout       time.Duration
+	streamTimeout      time.Duration
+	writeTimeout       time.Duration
+	trustProxy         bool
+	trustedProxies     []netip.Prefix
+	authorizeKey       func(string) error
+	sourceLimit        SourceLimiter
 }
 
 // SourceLimiter bounds how many requests one source address may start per
@@ -362,7 +362,7 @@ func NewWithOptions(service Service, options Options) (*Handler, error) {
 	}
 	handler.responses, _ = service.(ResponsesService)
 	handler.messages, _ = service.(MessagesService)
-	handler.phase2, _ = service.(Phase2Service)
+	handler.inferenceResources, _ = service.(InferenceResourcesService)
 	return handler, nil
 }
 

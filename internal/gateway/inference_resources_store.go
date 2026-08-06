@@ -20,7 +20,7 @@ import (
 	"github.com/akz142857/Heimdall/internal/provider"
 )
 
-type Phase2ResourceStore interface {
+type InferenceResourcesResourceStore interface {
 	PutProviderResource(context.Context, domain.ProviderResource, uint64) (domain.ProviderResource, error)
 	ProviderResource(context.Context, string, string) (domain.ProviderResource, error)
 	DeleteProviderResource(context.Context, string, string) error
@@ -208,7 +208,7 @@ func (s *Service) CreateFile(ctx context.Context, key, route, idempotencyKey str
 		return provider.FileObject{}, gatewayError("ambiguous_resource_route", "file creation requires exactly one eligible deployment", 409, nil)
 	}
 	target := targets[0]
-	adapter, ok := target.Adapter.(provider.ResourcePhase2Adapter)
+	adapter, ok := target.Adapter.(provider.ResourceInferenceResourcesAdapter)
 	if !ok {
 		return provider.FileObject{}, gatewayError("unsupported_feature", "file adapter is unavailable", 400, nil)
 	}
@@ -245,7 +245,7 @@ func (s *Service) CreateFile(ctx context.Context, key, route, idempotencyKey str
 	requestID := ""
 	call.RequestID = requestID
 	var upstream provider.FileObject
-	err = s.accountedPhase2(ctx, principal, route, target, int64(len(call.Data))/4+1, &requestID, func() error {
+	err = s.accountedInferenceResources(ctx, principal, route, target, int64(len(call.Data))/4+1, &requestID, func() error {
 		call.RequestID = requestID
 		var callErr error
 		upstream, callErr = adapter.CreateFile(ctx, call)
@@ -282,7 +282,7 @@ func (s *Service) CreateFile(ctx context.Context, key, route, idempotencyKey str
 	upstream.ID = externalID
 	return upstream, nil
 }
-func (s *Service) fileOwner(ctx context.Context, key, idValue string) (auth.AuthResult, domain.ProviderResource, provider.ResourcePhase2Adapter, error) {
+func (s *Service) fileOwner(ctx context.Context, key, idValue string) (auth.AuthResult, domain.ProviderResource, provider.ResourceInferenceResourcesAdapter, error) {
 	principal, err := s.resourcePrincipal(ctx, key)
 	if err != nil {
 		return principal, domain.ProviderResource{}, nil, err
@@ -298,7 +298,7 @@ func (s *Service) fileOwner(ctx context.Context, key, idValue string) (auth.Auth
 	if err != nil {
 		return principal, resource, nil, err
 	}
-	adapter, ok := target.Adapter.(provider.ResourcePhase2Adapter)
+	adapter, ok := target.Adapter.(provider.ResourceInferenceResourcesAdapter)
 	if !ok {
 		return principal, resource, nil, gatewayError("resource_owner_unavailable", "file owner adapter is unavailable", 409, nil)
 	}
@@ -313,7 +313,7 @@ func (s *Service) GetFile(ctx context.Context, key, idValue string) (provider.Fi
 	target.FixedRequestMicrosUSD = 0
 	requestID := ""
 	var result provider.FileObject
-	err = s.accountedPhase2(ctx, principal, resource.PublicModel, target, 1, &requestID, func() error {
+	err = s.accountedInferenceResources(ctx, principal, resource.PublicModel, target, 1, &requestID, func() error {
 		var callErr error
 		result, callErr = adapter.GetFile(ctx, requestID, resource.UpstreamID)
 		if callErr == nil {
@@ -340,7 +340,7 @@ func (s *Service) DownloadFile(ctx context.Context, key, idValue string) (provid
 	target.FixedRequestMicrosUSD = 0
 	requestID := ""
 	var data []byte
-	err = s.accountedPhase2(ctx, principal, resource.PublicModel, target, 1, &requestID, func() error {
+	err = s.accountedInferenceResources(ctx, principal, resource.PublicModel, target, 1, &requestID, func() error {
 		var readErr error
 		data, readErr = os.ReadFile(path)
 		return readErr
@@ -382,7 +382,7 @@ func (s *Service) DeleteFile(ctx context.Context, key, idValue string) (provider
 		if !freshDelete {
 			requestID := ""
 			var lookupErr error
-			accountingErr := s.accountedPhase2(ctx, principal, resource.PublicModel, target, 1, &requestID, func() error {
+			accountingErr := s.accountedInferenceResources(ctx, principal, resource.PublicModel, target, 1, &requestID, func() error {
 				_, lookupErr = adapter.GetFile(ctx, requestID, resource.UpstreamID)
 				return lookupErr
 			})
@@ -398,7 +398,7 @@ func (s *Service) DeleteFile(ctx context.Context, key, idValue string) (provider
 		if shouldDelete {
 			requestID := ""
 			var deleteErr error
-			accountingErr := s.accountedPhase2(ctx, principal, resource.PublicModel, target, 1, &requestID, func() error {
+			accountingErr := s.accountedInferenceResources(ctx, principal, resource.PublicModel, target, 1, &requestID, func() error {
 				result, deleteErr = adapter.DeleteFile(ctx, requestID, resource.UpstreamID)
 				return deleteErr
 			})
@@ -446,7 +446,7 @@ func (s *Service) CleanupExpiredProviderResource(ctx context.Context, resource d
 	if err != nil {
 		return err
 	}
-	adapter, ok := target.Adapter.(provider.ResourcePhase2Adapter)
+	adapter, ok := target.Adapter.(provider.ResourceInferenceResourcesAdapter)
 	if !ok {
 		return gatewayError("resource_owner_unavailable", "file owner adapter is unavailable", 409, nil)
 	}
@@ -548,7 +548,7 @@ func (s *Service) CreateBatch(ctx context.Context, key, idempotencyKey string, c
 	call.RequestID = requestID
 	var upstream provider.BatchObject
 	target, _ := s.ownedTarget(file)
-	err = s.accountedPhase2(ctx, principal, file.PublicModel, target, 1, &requestID, func() error {
+	err = s.accountedInferenceResources(ctx, principal, file.PublicModel, target, 1, &requestID, func() error {
 		call.RequestID = requestID
 		var callErr error
 		upstream, callErr = adapter.CreateBatch(ctx, call)
@@ -574,7 +574,7 @@ func (s *Service) CreateBatch(ctx context.Context, key, idempotencyKey string, c
 	upstream.InputFileID = file.ID
 	return upstream, nil
 }
-func (s *Service) batchOwner(ctx context.Context, key, idValue string) (auth.AuthResult, domain.ProviderResource, provider.ResourcePhase2Adapter, error) {
+func (s *Service) batchOwner(ctx context.Context, key, idValue string) (auth.AuthResult, domain.ProviderResource, provider.ResourceInferenceResourcesAdapter, error) {
 	principal, err := s.resourcePrincipal(ctx, key)
 	if err != nil {
 		return principal, domain.ProviderResource{}, nil, err
@@ -587,7 +587,7 @@ func (s *Service) batchOwner(ctx context.Context, key, idValue string) (auth.Aut
 	if err != nil {
 		return principal, resource, nil, err
 	}
-	adapter, ok := target.Adapter.(provider.ResourcePhase2Adapter)
+	adapter, ok := target.Adapter.(provider.ResourceInferenceResourcesAdapter)
 	if !ok {
 		return principal, resource, nil, gatewayError("resource_owner_unavailable", "batch owner adapter is unavailable", 409, nil)
 	}
@@ -602,7 +602,7 @@ func (s *Service) GetBatch(ctx context.Context, key, idValue string) (provider.B
 	target.FixedRequestMicrosUSD = 0
 	requestID := ""
 	var result provider.BatchObject
-	err = s.accountedPhase2(ctx, principal, resource.PublicModel, target, 1, &requestID, func() error {
+	err = s.accountedInferenceResources(ctx, principal, resource.PublicModel, target, 1, &requestID, func() error {
 		var callErr error
 		result, callErr = adapter.GetBatch(ctx, requestID, resource.UpstreamID)
 		if callErr == nil {
@@ -628,7 +628,7 @@ func (s *Service) CancelBatch(ctx context.Context, key, idValue string) (provide
 	target.FixedRequestMicrosUSD = 0
 	requestID := ""
 	var result provider.BatchObject
-	err = s.accountedPhase2(ctx, principal, resource.PublicModel, target, 1, &requestID, func() error {
+	err = s.accountedInferenceResources(ctx, principal, resource.PublicModel, target, 1, &requestID, func() error {
 		var callErr error
 		result, callErr = adapter.CancelBatch(ctx, requestID, resource.UpstreamID)
 		if callErr == nil {
@@ -682,7 +682,7 @@ func (s *Service) StartAsyncInvoke(ctx context.Context, key, idempotencyKey stri
 		return provider.AsyncInvokeObject{}, gatewayError("ambiguous_resource_route", "async invocation requires exactly one eligible deployment", 409, nil)
 	}
 	target := targets[0]
-	adapter, ok := target.Adapter.(provider.BedrockPhase2Adapter)
+	adapter, ok := target.Adapter.(provider.BedrockInferenceResourcesAdapter)
 	if !ok {
 		return provider.AsyncInvokeObject{}, gatewayError("unsupported_feature", "async adapter is unavailable", 400, nil)
 	}
@@ -719,7 +719,7 @@ func (s *Service) StartAsyncInvoke(ctx context.Context, key, idempotencyKey stri
 	}
 	requestID := ""
 	var upstream provider.AsyncInvokeObject
-	err = s.accountedPhase2(ctx, principal, request.Model, target, int64(len(request.Prompt))/4+1, &requestID, func() error {
+	err = s.accountedInferenceResources(ctx, principal, request.Model, target, int64(len(request.Prompt))/4+1, &requestID, func() error {
 		var callErr error
 		upstream, callErr = adapter.StartAsyncInvoke(ctx, provider.AsyncInvokeCall{RequestID: requestID, ProviderModel: target.ProviderModel, Prompt: request.Prompt, S3OutputURI: request.S3OutputURI, DurationSeconds: request.DurationSeconds, Dimension: request.Dimension, FPS: request.FPS, Seed: request.Seed})
 		return callErr
@@ -753,14 +753,14 @@ func (s *Service) GetAsyncInvoke(ctx context.Context, key, idValue string) (prov
 	if err != nil {
 		return provider.AsyncInvokeObject{}, err
 	}
-	adapter, ok := target.Adapter.(provider.BedrockPhase2Adapter)
+	adapter, ok := target.Adapter.(provider.BedrockInferenceResourcesAdapter)
 	if !ok {
 		return provider.AsyncInvokeObject{}, gatewayError("resource_owner_unavailable", "async owner adapter is unavailable", 409, nil)
 	}
 	target.FixedRequestMicrosUSD = 0
 	requestID := ""
 	var result provider.AsyncInvokeObject
-	err = s.accountedPhase2(ctx, principal, resource.PublicModel, target, 1, &requestID, func() error {
+	err = s.accountedInferenceResources(ctx, principal, resource.PublicModel, target, 1, &requestID, func() error {
 		var callErr error
 		result, callErr = adapter.GetAsyncInvoke(ctx, requestID, resource.UpstreamID)
 		return callErr
@@ -787,7 +787,7 @@ func (s *Service) CancelAsyncInvoke(ctx context.Context, key, idValue string) (p
 	if err != nil {
 		return provider.AsyncInvokeObject{}, err
 	}
-	if _, ok := target.Adapter.(provider.BedrockPhase2Adapter); !ok {
+	if _, ok := target.Adapter.(provider.BedrockInferenceResourcesAdapter); !ok {
 		return provider.AsyncInvokeObject{}, gatewayError("resource_owner_unavailable", "async owner adapter is unavailable", 409, nil)
 	}
 	return provider.AsyncInvokeObject{}, gatewayError("provider_cancel_unsupported", "Amazon Bedrock Runtime does not provide cancellation for accepted async invocations", 409, nil)

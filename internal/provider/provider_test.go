@@ -134,7 +134,7 @@ func TestRegistryFiltersCandidatesByDeclaredCapability(t *testing.T) {
 	}
 }
 
-func TestRegistryRoutesEveryPhase2Capability(t *testing.T) {
+func TestRegistryRoutesEveryInferenceResourcesCapability(t *testing.T) {
 	operations := []Operation{OperationModerations, OperationImages, OperationTranscriptions, OperationSpeech, OperationFiles, OperationBatches, OperationRerank, OperationAsyncInvoke}
 	bindings := make([]PrimitiveBinding, 0, len(operations))
 	for _, operation := range operations {
@@ -142,7 +142,7 @@ func TestRegistryRoutesEveryPhase2Capability(t *testing.T) {
 	}
 	adapter := &registryAdapter{}
 	registry := NewRegistry()
-	target := Target{ID: "phase2", PublicModel: "phase2", ProviderModel: "provider-model", Adapter: adapter,
+	target := Target{ID: "inferenceResources", PublicModel: "inferenceResources", ProviderModel: "provider-model", Adapter: adapter,
 		Capabilities: Capabilities{Moderations: true, Images: true, Transcriptions: true, Speech: true, Files: true, Batches: true, Rerank: true, AsyncGenerate: true},
 		operations:   operationSet{operations: operations, bindings: bindings, adapter: adapter},
 	}
@@ -150,7 +150,7 @@ func TestRegistryRoutesEveryPhase2Capability(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, operation := range operations {
-		if candidates := registry.ResolveCandidatesFor("phase2", operation); len(candidates) != 1 {
+		if candidates := registry.ResolveCandidatesFor("inferenceResources", operation); len(candidates) != 1 {
 			t.Fatalf("operation=%s candidates=%d", operation, len(candidates))
 		}
 	}

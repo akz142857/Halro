@@ -142,6 +142,11 @@ var migrations = []migration{
 		}
 		return migrationStep(step, "after_create_provider_resources")
 	}},
+	// The "phase2" in this migration's name and in its two step names is a
+	// recorded fact about deployments that already ran, not a description of
+	// anything. The identifiers that once shared the name are now
+	// InferenceResources; these three strings must not follow, or an upgraded
+	// instance stops matching its own migration history.
 	{version: 6, name: "phase2_capability_evidence", up: func(tx *bbolt.Tx, step func(string) error) error {
 		if err := migrationStep(step, "before_phase2_capability_evidence"); err != nil {
 			return err

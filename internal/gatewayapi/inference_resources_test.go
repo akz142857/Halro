@@ -15,62 +15,62 @@ import (
 	"github.com/akz142857/Heimdall/internal/provider"
 )
 
-type phase2FakeService struct {
+type inferenceResourcesFakeService struct {
 	fakeService
 	route string
 	file  provider.FileCreateCall
 }
 
-func (s *phase2FakeService) Moderations(_ context.Context, _ string, r openaiapi.ModerationRequest) (openaiapi.ModerationResponse, error) {
+func (s *inferenceResourcesFakeService) Moderations(_ context.Context, _ string, r openaiapi.ModerationRequest) (openaiapi.ModerationResponse, error) {
 	return openaiapi.ModerationResponse{ID: "modr_1", Model: r.Model, Results: json.RawMessage(`[{"flagged":false}]`)}, nil
 }
-func (s *phase2FakeService) Images(context.Context, string, openaiapi.ImageGenerationRequest) (openaiapi.ImageGenerationResponse, error) {
+func (s *inferenceResourcesFakeService) Images(context.Context, string, openaiapi.ImageGenerationRequest) (openaiapi.ImageGenerationResponse, error) {
 	return openaiapi.ImageGenerationResponse{}, nil
 }
-func (s *phase2FakeService) Speech(context.Context, string, openaiapi.SpeechRequest) (provider.SpeechResult, error) {
+func (s *inferenceResourcesFakeService) Speech(context.Context, string, openaiapi.SpeechRequest) (provider.SpeechResult, error) {
 	return provider.SpeechResult{ContentType: "audio/mpeg", Data: []byte("audio")}, nil
 }
-func (s *phase2FakeService) Transcription(context.Context, string, string, provider.TranscriptionCall) (provider.TranscriptionResult, error) {
+func (s *inferenceResourcesFakeService) Transcription(context.Context, string, string, provider.TranscriptionCall) (provider.TranscriptionResult, error) {
 	return provider.TranscriptionResult{ContentType: "application/json", Data: []byte(`{"text":"ok"}`)}, nil
 }
-func (s *phase2FakeService) Rerank(context.Context, string, openaiapi.RerankRequest) (provider.RerankResult, error) {
+func (s *inferenceResourcesFakeService) Rerank(context.Context, string, openaiapi.RerankRequest) (provider.RerankResult, error) {
 	return provider.RerankResult{Results: []provider.RerankItem{{Index: 1, RelevanceScore: 0.75}}, ProviderRequestID: "provider-secret"}, nil
 }
-func (s *phase2FakeService) StartAsyncInvoke(context.Context, string, string, openaiapi.AsyncInvokeRequest) (provider.AsyncInvokeObject, error) {
+func (s *inferenceResourcesFakeService) StartAsyncInvoke(context.Context, string, string, openaiapi.AsyncInvokeRequest) (provider.AsyncInvokeObject, error) {
 	return provider.AsyncInvokeObject{InvocationARN: "async_1", Status: "InProgress", S3OutputURI: "s3://bucket/output", ProviderRequestID: "provider-secret", SubmittedAt: time.Date(2026, 8, 2, 1, 2, 3, 0, time.FixedZone("offset", 3600))}, nil
 }
-func (s *phase2FakeService) GetAsyncInvoke(context.Context, string, string) (provider.AsyncInvokeObject, error) {
+func (s *inferenceResourcesFakeService) GetAsyncInvoke(context.Context, string, string) (provider.AsyncInvokeObject, error) {
 	return provider.AsyncInvokeObject{}, nil
 }
-func (s *phase2FakeService) CancelAsyncInvoke(context.Context, string, string) (provider.AsyncInvokeObject, error) {
+func (s *inferenceResourcesFakeService) CancelAsyncInvoke(context.Context, string, string) (provider.AsyncInvokeObject, error) {
 	return provider.AsyncInvokeObject{}, nil
 }
-func (s *phase2FakeService) CreateFile(_ context.Context, _ string, route, _ string, call provider.FileCreateCall) (provider.FileObject, error) {
+func (s *inferenceResourcesFakeService) CreateFile(_ context.Context, _ string, route, _ string, call provider.FileCreateCall) (provider.FileObject, error) {
 	s.route = route
 	s.file = call
 	return provider.FileObject{ID: "file_1", Object: "file", Bytes: int64(len(call.Data)), Filename: call.Filename, Purpose: call.Purpose}, nil
 }
-func (s *phase2FakeService) GetFile(context.Context, string, string) (provider.FileObject, error) {
+func (s *inferenceResourcesFakeService) GetFile(context.Context, string, string) (provider.FileObject, error) {
 	return provider.FileObject{}, nil
 }
-func (s *phase2FakeService) DownloadFile(context.Context, string, string) (provider.FileContent, error) {
+func (s *inferenceResourcesFakeService) DownloadFile(context.Context, string, string) (provider.FileContent, error) {
 	return provider.FileContent{}, nil
 }
-func (s *phase2FakeService) DeleteFile(context.Context, string, string) (provider.FileDeleteResult, error) {
+func (s *inferenceResourcesFakeService) DeleteFile(context.Context, string, string) (provider.FileDeleteResult, error) {
 	return provider.FileDeleteResult{}, nil
 }
-func (s *phase2FakeService) CreateBatch(context.Context, string, string, provider.BatchCreateCall) (provider.BatchObject, error) {
+func (s *inferenceResourcesFakeService) CreateBatch(context.Context, string, string, provider.BatchCreateCall) (provider.BatchObject, error) {
 	return provider.BatchObject{}, nil
 }
-func (s *phase2FakeService) GetBatch(context.Context, string, string) (provider.BatchObject, error) {
+func (s *inferenceResourcesFakeService) GetBatch(context.Context, string, string) (provider.BatchObject, error) {
 	return provider.BatchObject{}, nil
 }
-func (s *phase2FakeService) CancelBatch(context.Context, string, string) (provider.BatchObject, error) {
+func (s *inferenceResourcesFakeService) CancelBatch(context.Context, string, string) (provider.BatchObject, error) {
 	return provider.BatchObject{}, nil
 }
 
 func TestModerationsNorthboundRejectsUnknownFields(t *testing.T) {
-	handler, _ := New(&phase2FakeService{}, 1024)
+	handler, _ := New(&inferenceResourcesFakeService{}, 1024)
 	request := httptest.NewRequest(http.MethodPost, "/v1/moderations", strings.NewReader(`{"input":"hi","unknown":true}`))
 	request.Header.Set("Authorization", "Bearer gw")
 	response := httptest.NewRecorder()
@@ -80,7 +80,7 @@ func TestModerationsNorthboundRejectsUnknownFields(t *testing.T) {
 	}
 }
 func TestModerationsNorthboundUsesDefaultModel(t *testing.T) {
-	handler, _ := New(&phase2FakeService{}, 1024)
+	handler, _ := New(&inferenceResourcesFakeService{}, 1024)
 	request := httptest.NewRequest(http.MethodPost, "/v1/moderations", strings.NewReader(`{"input":"hi"}`))
 	request.Header.Set("Authorization", "Bearer gw")
 	response := httptest.NewRecorder()
@@ -90,7 +90,7 @@ func TestModerationsNorthboundUsesDefaultModel(t *testing.T) {
 	}
 }
 func TestFileUploadRequiresExplicitRouteAndPreservesBytes(t *testing.T) {
-	service := &phase2FakeService{}
+	service := &inferenceResourcesFakeService{}
 	handler, _ := New(service, 1<<20)
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
@@ -111,7 +111,7 @@ func TestFileUploadRequiresExplicitRouteAndPreservesBytes(t *testing.T) {
 }
 
 func TestRerankResponseUsesDeclaredWireShape(t *testing.T) {
-	handler, _ := New(&phase2FakeService{}, 1024)
+	handler, _ := New(&inferenceResourcesFakeService{}, 1024)
 	request := httptest.NewRequest(http.MethodPost, "/v1/rerank", strings.NewReader(`{"model":"rerank","query":"q","documents":["a","b"],"top_n":1}`))
 	request.Header.Set("Authorization", "Bearer gw")
 	response := httptest.NewRecorder()
@@ -129,7 +129,7 @@ func TestRerankResponseUsesDeclaredWireShape(t *testing.T) {
 }
 
 func TestAsyncResponseUsesDeclaredWireShapeAndHidesProviderRequestID(t *testing.T) {
-	handler, _ := New(&phase2FakeService{}, 1024)
+	handler, _ := New(&inferenceResourcesFakeService{}, 1024)
 	request := httptest.NewRequest(http.MethodPost, "/v1/async/invocations", strings.NewReader(`{"model":"video","prompt":"scene","s3_output_uri":"s3://bucket/output","duration_seconds":6}`))
 	request.Header.Set("Authorization", "Bearer gw")
 	request.Header.Set("Idempotency-Key", "async-1")

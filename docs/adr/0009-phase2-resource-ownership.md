@@ -2,6 +2,15 @@
 
 Status: Accepted (2026-08-01)
 
+> Naming note (2026-08-07): "Phase 2" was a delivery phase, not a description of
+> anything, and the Go identifiers that carried it are now named after what they
+> serve — `InferenceResources`, matching the northbound profile
+> `heimdall.inference-resources.v1`, with the OpenAI provider profile named for
+> its own value `openai.media-resources.v1`. This file keeps its name so
+> existing links resolve. The one thing that must never be renamed is the bbolt
+> migration `phase2_capability_evidence` and its two step names: those are
+> recorded history in every instance that has run them.
+
 ## Decision
 
 Files, batches, and asynchronous invocations are Gateway resources. Every record

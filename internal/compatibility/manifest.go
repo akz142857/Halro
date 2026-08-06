@@ -110,7 +110,7 @@ func (manifest EndpointCompatibilityManifest) Validate() error {
 		default:
 			return errors.New("endpoint compatibility profile coverage status is invalid")
 		}
-		if isPhase2ProviderProfile(coverage.ProfileID) && coverage.Status != StatusExperimental {
+		if isInferenceResourcesProviderProfile(coverage.ProfileID) && coverage.Status != StatusExperimental {
 			return errors.New("phase 2 provider profile must remain experimental until its release gates pass")
 		}
 		if hasEmptyOrDuplicate(coverage.UnsupportedRequestFields) || hasEmptyOrDuplicate(coverage.DeclaredTransforms) {
@@ -182,18 +182,18 @@ func BuiltinEndpointManifests() []EndpointCompatibilityManifest {
 			}},
 	}
 	setProfileCompatibilityStatuses(manifests)
-	return append(manifests, phase2EndpointManifests()...)
+	return append(manifests, inferenceResourcesEndpointManifests()...)
 }
 
-func phase2EndpointManifests() []EndpointCompatibilityManifest {
-	openAI := domain.ProfileOpenAIPhase2
+func inferenceResourcesEndpointManifests() []EndpointCompatibilityManifest {
+	openAI := domain.ProfileOpenAIMediaResources
 	imageProfiles := []domain.ProviderProfileID{openAI, domain.ProfileBedrockInvokeTitanImageV2}
 	makeManifest := func(id, method, path string, operation semantic.Operation, requestFields, responseFields []string, profiles []domain.ProviderProfileID, state string) EndpointCompatibilityManifest {
 		coverage := make([]ProfileCoverage, len(profiles))
 		for index, profileID := range profiles {
 			coverage[index] = ProfileCoverage{ProfileID: profileID}
 		}
-		return EndpointCompatibilityManifest{ID: id, NorthboundProfile: ProfileOpenAIPhase2, ProfileRevision: 1, Protocol: "openai", Method: method, Path: path, SemanticOperation: operation, RequestFields: requestFields, RequestHeaders: []string{"Authorization", "Content-Type", "Idempotency-Key when creating a resource"}, ResponseFields: responseFields, StateSemantics: state, Status: StatusExperimental, DocumentedDeviations: []string{"official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures", "unknown fields and unsupported profile fields are rejected before provider I/O", "resource identifiers are opaque Heimdall identifiers scoped to one project"}, ProviderProfiles: profiles, ProfileCoverage: coverage}
+		return EndpointCompatibilityManifest{ID: id, NorthboundProfile: ProfileOpenAIMediaResources, ProfileRevision: 1, Protocol: "openai", Method: method, Path: path, SemanticOperation: operation, RequestFields: requestFields, RequestHeaders: []string{"Authorization", "Content-Type", "Idempotency-Key when creating a resource"}, ResponseFields: responseFields, StateSemantics: state, Status: StatusExperimental, DocumentedDeviations: []string{"official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures", "unknown fields and unsupported profile fields are rejected before provider I/O", "resource identifiers are opaque Heimdall identifiers scoped to one project"}, ProviderProfiles: profiles, ProfileCoverage: coverage}
 	}
 	manifests := []EndpointCompatibilityManifest{
 		makeManifest("openai.moderations.v1", "POST", "/v1/moderations", semantic.OperationModerate, []string{"model", "input"}, []string{"id", "model", "results"}, []domain.ProviderProfileID{openAI}, "stateless"),
@@ -219,7 +219,7 @@ func phase2EndpointManifests() []EndpointCompatibilityManifest {
 		}
 		if strings.HasPrefix(manifests[index].ID, "heimdall.") {
 			manifests[index].Protocol = "heimdall"
-			manifests[index].NorthboundProfile = ProfileHeimdallPhase2
+			manifests[index].NorthboundProfile = ProfileHeimdallInferenceResources
 			manifests[index].DocumentedDeviations = append(manifests[index].DocumentedDeviations, "this is a Heimdall extension and has no OpenAI official SDK surface")
 		}
 	}
@@ -237,15 +237,15 @@ func setProfileCompatibilityStatuses(manifests []EndpointCompatibilityManifest) 
 }
 
 func providerProfileCompatibilityStatus(profileID domain.ProviderProfileID, endpointStatus CompatibilityStatus) CompatibilityStatus {
-	if isPhase2ProviderProfile(profileID) {
+	if isInferenceResourcesProviderProfile(profileID) {
 		return StatusExperimental
 	}
 	return endpointStatus
 }
 
-func isPhase2ProviderProfile(profileID domain.ProviderProfileID) bool {
+func isInferenceResourcesProviderProfile(profileID domain.ProviderProfileID) bool {
 	switch profileID {
-	case domain.ProfileOpenAIPhase2,
+	case domain.ProfileOpenAIMediaResources,
 		domain.ProfileBedrockInvokeTitanEmbedV2,
 		domain.ProfileBedrockInvokeTitanImageV2,
 		domain.ProfileBedrockAgentRerankCohere35,

@@ -500,7 +500,7 @@ func DefaultProviderCapabilities(providerType ProviderType) ProviderCapabilities
 
 func DefaultProviderCapabilitiesForProfile(providerType ProviderType, profileID ProviderProfileID) ProviderCapabilities {
 	switch profileID {
-	case ProfileOpenAIPhase2:
+	case ProfileOpenAIMediaResources:
 		return ProviderCapabilities{Moderations: true, Images: true, Transcriptions: true, Speech: true, Files: true, Batches: true}
 	case ProfileBedrockInvokeTitanEmbedV2:
 		return ProviderCapabilities{Embeddings: true, MaxContextTokens: 8192}

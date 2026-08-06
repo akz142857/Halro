@@ -87,7 +87,7 @@ func TestProviderProfileBindingIdentityAndLegacyProjection(t *testing.T) {
 
 func TestBindingsCapabilitiesSummaryUnionsEnabledProfiles(t *testing.T) {
 	chat := DefaultProviderCapabilitiesForProfile(ProviderOpenAI, ProfileOpenAIChatEmbeddings)
-	media := DefaultProviderCapabilitiesForProfile(ProviderOpenAI, ProfileOpenAIPhase2)
+	media := DefaultProviderCapabilitiesForProfile(ProviderOpenAI, ProfileOpenAIMediaResources)
 	bindings := []ProviderProfileBinding{
 		{Enabled: true, Capabilities: chat, CapabilityEvidence: EvidenceForCapabilities(chat, EvidenceDeclared)},
 		{Enabled: true, Capabilities: media, CapabilityEvidence: EvidenceForCapabilities(media, EvidenceDeclared)},
@@ -117,11 +117,11 @@ func TestProviderBindingValidationRejectsDuplicateProfileAndMixedSurface(t *test
 
 func TestMediaOnlyProviderAllowsDisabledZeroCapabilityBindingAndRejectsAllDisabled(t *testing.T) {
 	chatZero := ProviderCapabilities{}
-	media := DefaultProviderCapabilitiesForProfile(ProviderOpenAI, ProfileOpenAIPhase2)
+	media := DefaultProviderCapabilitiesForProfile(ProviderOpenAI, ProfileOpenAIMediaResources)
 	provider := validBoundProviderForTest(media, EvidenceForCapabilities(media, EvidenceDeclared))
-	provider.ProfileID = ProfileOpenAIPhase2
+	provider.ProfileID = ProfileOpenAIMediaResources
 	provider.Bindings = []ProviderProfileBinding{
-		{ID: DefaultProviderProfileBindingID(provider.ID, ProfileOpenAIPhase2), ProviderID: provider.ID, ProfileID: ProfileOpenAIPhase2, AccessSurface: SurfaceOpenAI, CredentialScheme: CredentialBearerStatic, Capabilities: media, CapabilityEvidence: EvidenceForCapabilities(media, EvidenceDeclared), Enabled: true},
+		{ID: DefaultProviderProfileBindingID(provider.ID, ProfileOpenAIMediaResources), ProviderID: provider.ID, ProfileID: ProfileOpenAIMediaResources, AccessSurface: SurfaceOpenAI, CredentialScheme: CredentialBearerStatic, Capabilities: media, CapabilityEvidence: EvidenceForCapabilities(media, EvidenceDeclared), Enabled: true},
 		{ID: DefaultProviderProfileBindingID(provider.ID, ProfileOpenAIChatEmbeddings), ProviderID: provider.ID, ProfileID: ProfileOpenAIChatEmbeddings, AccessSurface: SurfaceOpenAI, CredentialScheme: CredentialBearerStatic, Capabilities: chatZero, CapabilityEvidence: EvidenceForCapabilities(chatZero, EvidenceDeclared), Enabled: false},
 	}
 	provider.Capabilities, provider.CapabilityEvidence = BindingsCapabilitiesSummary(provider.Bindings)

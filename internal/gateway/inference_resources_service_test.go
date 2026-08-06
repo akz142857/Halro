@@ -19,9 +19,9 @@ import (
 	"github.com/akz142857/Heimdall/internal/semantic"
 )
 
-var errPhase2ResourceNotFound = errors.New("phase2 resource not found")
+var errInferenceResourcesResourceNotFound = errors.New("inferenceResources resource not found")
 
-type phase2MemoryStore struct {
+type inferenceResourcesMemoryStore struct {
 	mu                      sync.Mutex
 	resources               map[string]domain.ProviderResource
 	failCleanupPendingWrite bool
@@ -29,15 +29,15 @@ type phase2MemoryStore struct {
 	failOutcomeWrite        bool
 }
 
-func newPhase2MemoryStore(resources ...domain.ProviderResource) *phase2MemoryStore {
-	store := &phase2MemoryStore{resources: make(map[string]domain.ProviderResource)}
+func newInferenceResourcesMemoryStore(resources ...domain.ProviderResource) *inferenceResourcesMemoryStore {
+	store := &inferenceResourcesMemoryStore{resources: make(map[string]domain.ProviderResource)}
 	for _, resource := range resources {
 		store.resources[resource.ID] = resource
 	}
 	return store
 }
 
-func (s *phase2MemoryStore) PutProviderResource(_ context.Context, resource domain.ProviderResource, expected uint64) (domain.ProviderResource, error) {
+func (s *inferenceResourcesMemoryStore) PutProviderResource(_ context.Context, resource domain.ProviderResource, expected uint64) (domain.ProviderResource, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	current, exists := s.resources[resource.ID]
@@ -75,28 +75,28 @@ func (s *phase2MemoryStore) PutProviderResource(_ context.Context, resource doma
 	return resource, nil
 }
 
-func (s *phase2MemoryStore) ProviderResource(_ context.Context, projectID, id string) (domain.ProviderResource, error) {
+func (s *inferenceResourcesMemoryStore) ProviderResource(_ context.Context, projectID, id string) (domain.ProviderResource, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	resource, ok := s.resources[id]
 	if !ok || resource.ProjectID != projectID {
-		return domain.ProviderResource{}, errPhase2ResourceNotFound
+		return domain.ProviderResource{}, errInferenceResourcesResourceNotFound
 	}
 	return resource, nil
 }
 
-func (s *phase2MemoryStore) DeleteProviderResource(_ context.Context, projectID, id string) error {
+func (s *inferenceResourcesMemoryStore) DeleteProviderResource(_ context.Context, projectID, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	resource, ok := s.resources[id]
 	if !ok || resource.ProjectID != projectID {
-		return errPhase2ResourceNotFound
+		return errInferenceResourcesResourceNotFound
 	}
 	delete(s.resources, id)
 	return nil
 }
 
-func (s *phase2MemoryStore) ProviderResourceByIdempotency(_ context.Context, projectID string, kind domain.ProviderResourceKind, hash [32]byte) (domain.ProviderResource, error) {
+func (s *inferenceResourcesMemoryStore) ProviderResourceByIdempotency(_ context.Context, projectID string, kind domain.ProviderResourceKind, hash [32]byte) (domain.ProviderResource, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, resource := range s.resources {
@@ -104,10 +104,10 @@ func (s *phase2MemoryStore) ProviderResourceByIdempotency(_ context.Context, pro
 			return resource, nil
 		}
 	}
-	return domain.ProviderResource{}, errPhase2ResourceNotFound
+	return domain.ProviderResource{}, errInferenceResourcesResourceNotFound
 }
 
-type phase2Adapter struct {
+type inferenceResourcesAdapter struct {
 	providerType string
 	fileCalls    int
 	getFileCalls int
@@ -121,30 +121,30 @@ type phase2Adapter struct {
 	image        provider.ImageResult
 }
 
-func (a *phase2Adapter) Type() string { return a.providerType }
-func (a *phase2Adapter) Close()       {}
-func (a *phase2Adapter) Chat(context.Context, provider.ChatCall) (openaiapi.ChatCompletionResponse, error) {
+func (a *inferenceResourcesAdapter) Type() string { return a.providerType }
+func (a *inferenceResourcesAdapter) Close()       {}
+func (a *inferenceResourcesAdapter) Chat(context.Context, provider.ChatCall) (openaiapi.ChatCompletionResponse, error) {
 	return openaiapi.ChatCompletionResponse{}, errors.New("unused")
 }
-func (a *phase2Adapter) ChatStream(context.Context, provider.ChatCall, func(semantic.Event) error) (*openaiapi.Usage, error) {
+func (a *inferenceResourcesAdapter) ChatStream(context.Context, provider.ChatCall, func(semantic.Event) error) (*openaiapi.Usage, error) {
 	return nil, errors.New("unused")
 }
-func (a *phase2Adapter) Embed(context.Context, provider.EmbeddingCall) (openaiapi.EmbeddingResponse, error) {
+func (a *inferenceResourcesAdapter) Embed(context.Context, provider.EmbeddingCall) (openaiapi.EmbeddingResponse, error) {
 	return openaiapi.EmbeddingResponse{}, errors.New("unused")
 }
-func (a *phase2Adapter) Moderate(context.Context, provider.ModerationCall) (provider.ModerationResult, error) {
+func (a *inferenceResourcesAdapter) Moderate(context.Context, provider.ModerationCall) (provider.ModerationResult, error) {
 	return provider.ModerationResult{}, nil
 }
-func (a *phase2Adapter) GenerateImage(context.Context, provider.ImageCall) (provider.ImageResult, error) {
+func (a *inferenceResourcesAdapter) GenerateImage(context.Context, provider.ImageCall) (provider.ImageResult, error) {
 	return a.image, nil
 }
-func (a *phase2Adapter) Transcribe(context.Context, provider.TranscriptionCall) (provider.TranscriptionResult, error) {
+func (a *inferenceResourcesAdapter) Transcribe(context.Context, provider.TranscriptionCall) (provider.TranscriptionResult, error) {
 	return a.transcript, nil
 }
-func (a *phase2Adapter) Synthesize(context.Context, provider.SpeechCall) (provider.SpeechResult, error) {
+func (a *inferenceResourcesAdapter) Synthesize(context.Context, provider.SpeechCall) (provider.SpeechResult, error) {
 	return provider.SpeechResult{}, nil
 }
-func (a *phase2Adapter) CreateFile(_ context.Context, call provider.FileCreateCall) (provider.FileObject, error) {
+func (a *inferenceResourcesAdapter) CreateFile(_ context.Context, call provider.FileCreateCall) (provider.FileObject, error) {
 	a.fileCalls++
 	if a.fileErr != nil {
 		return provider.FileObject{}, a.fileErr
@@ -155,46 +155,46 @@ func (a *phase2Adapter) CreateFile(_ context.Context, call provider.FileCreateCa
 	}
 	return result, nil
 }
-func (a *phase2Adapter) GetFile(context.Context, string, string) (provider.FileObject, error) {
+func (a *inferenceResourcesAdapter) GetFile(context.Context, string, string) (provider.FileObject, error) {
 	a.getFileCalls++
 	return a.file, a.getFileErr
 }
-func (a *phase2Adapter) DownloadFile(context.Context, string, string) (provider.FileContent, error) {
+func (a *inferenceResourcesAdapter) DownloadFile(context.Context, string, string) (provider.FileContent, error) {
 	return provider.FileContent{}, nil
 }
-func (a *phase2Adapter) DeleteFile(_ context.Context, _, id string) (provider.FileDeleteResult, error) {
+func (a *inferenceResourcesAdapter) DeleteFile(_ context.Context, _, id string) (provider.FileDeleteResult, error) {
 	a.deleteCalls++
 	if a.deleteErr != nil {
 		return provider.FileDeleteResult{}, a.deleteErr
 	}
 	return provider.FileDeleteResult{ID: id, Object: "file", Deleted: true}, nil
 }
-func (a *phase2Adapter) CreateBatch(context.Context, provider.BatchCreateCall) (provider.BatchObject, error) {
+func (a *inferenceResourcesAdapter) CreateBatch(context.Context, provider.BatchCreateCall) (provider.BatchObject, error) {
 	return provider.BatchObject{}, nil
 }
-func (a *phase2Adapter) GetBatch(context.Context, string, string) (provider.BatchObject, error) {
+func (a *inferenceResourcesAdapter) GetBatch(context.Context, string, string) (provider.BatchObject, error) {
 	return a.batch, nil
 }
-func (a *phase2Adapter) CancelBatch(context.Context, string, string) (provider.BatchObject, error) {
+func (a *inferenceResourcesAdapter) CancelBatch(context.Context, string, string) (provider.BatchObject, error) {
 	return provider.BatchObject{}, nil
 }
 
-type phase2ServiceFixture struct {
+type inferenceResourcesServiceFixture struct {
 	service   *Service
 	plaintext string
 	project   domain.Project
 	state     *ledger.State
-	store     *phase2MemoryStore
+	store     *inferenceResourcesMemoryStore
 	close     func()
 }
 
-func newPhase2ServiceFixture(t *testing.T, profileID domain.ProviderProfileID, adapter provider.Adapter, target provider.Target, policies []domain.RedactionPolicy) phase2ServiceFixture {
+func newInferenceResourcesServiceFixture(t *testing.T, profileID domain.ProviderProfileID, adapter provider.Adapter, target provider.Target, policies []domain.RedactionPolicy) inferenceResourcesServiceFixture {
 	t.Helper()
-	project := domain.Project{ID: "phase2-project", Name: "Phase 2", Enabled: true, AllowedRoutes: []string{target.PublicModel}, DailyBudgetMicrosUSD: 1_000_000, MaxInputTokens: 100_000, MaxOutputTokens: 100_000}
+	project := domain.Project{ID: "inferenceResources-project", Name: "Phase 2", Enabled: true, AllowedRoutes: []string{target.PublicModel}, DailyBudgetMicrosUSD: 1_000_000, MaxInputTokens: 100_000, MaxOutputTokens: 100_000}
 	if len(policies) > 0 {
 		project.RedactionPolicyID = policies[0].ID
 	}
-	plaintext, key, err := auth.GenerateGatewayKey(project.ID, "phase2", nil)
+	plaintext, key, err := auth.GenerateGatewayKey(project.ID, "inferenceResources", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +202,7 @@ func newPhase2ServiceFixture(t *testing.T, profileID domain.ProviderProfileID, a
 	if err := snapshot.Refresh(context.Background(), source{keys: []domain.GatewayKey{key}, projects: []domain.Project{project}}); err != nil {
 		t.Fatal(err)
 	}
-	log, err := ledger.OpenWithOptions(filepath.Join(t.TempDir(), "phase2-usage.wal"), ledger.NewStatus(), ledger.Options{ChainKey: testChainKey})
+	log, err := ledger.OpenWithOptions(filepath.Join(t.TempDir(), "inferenceResources-usage.wal"), ledger.NewStatus(), ledger.Options{ChainKey: testChainKey})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,24 +237,24 @@ func newPhase2ServiceFixture(t *testing.T, profileID domain.ProviderProfileID, a
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := newPhase2MemoryStore()
+	store := newInferenceResourcesMemoryStore()
 	objectDir := filepath.Join(t.TempDir(), "objects")
 	service, err := NewServiceWithOptions(snapshot, registry, accounting, ServiceOptions{Resources: store, ResourceObjectDir: objectDir, Redactor: redactor})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return phase2ServiceFixture{service: service, plaintext: plaintext, project: project, state: state, store: store, close: func() { _ = log.Close() }}
+	return inferenceResourcesServiceFixture{service: service, plaintext: plaintext, project: project, state: state, store: store, close: func() { _ = log.Close() }}
 }
 
-func phase2TargetFor(model string, adapter provider.Adapter) provider.Target {
-	return provider.Target{ID: "phase2-target", DeploymentID: "phase2-deployment", ProviderID: "phase2-provider", PublicModel: model, ProviderModel: "provider-model", Region: "us-east-1", Adapter: adapter, FixedRequestMicrosUSD: 250}
+func inferenceResourcesTargetFor(model string, adapter provider.Adapter) provider.Target {
+	return provider.Target{ID: "inferenceResources-target", DeploymentID: "inferenceResources-deployment", ProviderID: "inferenceResources-provider", PublicModel: model, ProviderModel: "provider-model", Region: "us-east-1", Adapter: adapter, FixedRequestMicrosUSD: 250}
 }
 
-func TestPhase2OwnerRegionMismatchFailsClosed(t *testing.T) {
-	adapter := &phase2Adapter{providerType: string(domain.ProviderOpenAI)}
-	f := newPhase2ServiceFixture(t, domain.ProfileOpenAIPhase2, adapter, phase2TargetFor("media", adapter), nil)
+func TestInferenceResourcesOwnerRegionMismatchFailsClosed(t *testing.T) {
+	adapter := &inferenceResourcesAdapter{providerType: string(domain.ProviderOpenAI)}
+	f := newInferenceResourcesServiceFixture(t, domain.ProfileOpenAIMediaResources, adapter, inferenceResourcesTargetFor("media", adapter), nil)
 	defer f.close()
-	resource := domain.ProviderResource{ProviderID: "phase2-provider", DeploymentID: "phase2-deployment", ProfileID: domain.ProfileOpenAIPhase2, PublicModel: "media", Region: "us-east-1"}
+	resource := domain.ProviderResource{ProviderID: "inferenceResources-provider", DeploymentID: "inferenceResources-deployment", ProfileID: domain.ProfileOpenAIMediaResources, PublicModel: "media", Region: "us-east-1"}
 	if _, err := f.service.ownedTarget(resource); err != nil {
 		t.Fatalf("matching owner did not resolve: %v", err)
 	}
@@ -265,10 +265,10 @@ func TestPhase2OwnerRegionMismatchFailsClosed(t *testing.T) {
 	}
 }
 
-func TestPhase2AsyncCancelRequiresRecordedOwner(t *testing.T) {
-	adapter := &phase2Adapter{providerType: string(domain.ProviderBedrock)}
-	target := phase2TargetFor("video", adapter)
-	f := newPhase2ServiceFixture(t, domain.ProfileBedrockAsyncNovaReel, adapter, target, nil)
+func TestInferenceResourcesAsyncCancelRequiresRecordedOwner(t *testing.T) {
+	adapter := &inferenceResourcesAdapter{providerType: string(domain.ProviderBedrock)}
+	target := inferenceResourcesTargetFor("video", adapter)
+	f := newInferenceResourcesServiceFixture(t, domain.ProfileBedrockAsyncNovaReel, adapter, target, nil)
 	defer f.close()
 	resource := domain.ProviderResource{ID: "async-owned", Kind: domain.ResourceAsyncInvoke, ProjectID: f.project.ID, ProviderID: "missing-provider", DeploymentID: "missing-deployment", PublicModel: "video", ProfileID: domain.ProfileBedrockAsyncNovaReel, Region: "us-east-1", CreationStatus: "completed", Status: "in_progress", CreatedAt: time.Now().Add(-time.Hour), UpdatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour), Revision: 1}
 	f.store.resources[resource.ID] = resource
@@ -276,10 +276,10 @@ func TestPhase2AsyncCancelRequiresRecordedOwner(t *testing.T) {
 	assertGatewayCode(t, err, "resource_owner_unavailable")
 }
 
-func TestPhase2TranscriptionAppliesOutboundRedaction(t *testing.T) {
-	policy := domain.RedactionPolicy{ID: "phase2-redaction", Name: "outbound", Enabled: true, Mode: "strict", Rules: []domain.RedactionRule{{ID: "email-out", Name: "email", Kind: "builtin", Builtin: "email", Scopes: []string{"outbound"}, Action: "reject", Enabled: true}}}
-	adapter := &phase2Adapter{providerType: string(domain.ProviderOpenAI), transcript: provider.TranscriptionResult{ContentType: "application/json", Data: []byte(`{"text":"private@example.com"}`)}}
-	f := newPhase2ServiceFixture(t, domain.ProfileOpenAIPhase2, adapter, phase2TargetFor("audio", adapter), []domain.RedactionPolicy{policy})
+func TestInferenceResourcesTranscriptionAppliesOutboundRedaction(t *testing.T) {
+	policy := domain.RedactionPolicy{ID: "inferenceResources-redaction", Name: "outbound", Enabled: true, Mode: "strict", Rules: []domain.RedactionRule{{ID: "email-out", Name: "email", Kind: "builtin", Builtin: "email", Scopes: []string{"outbound"}, Action: "reject", Enabled: true}}}
+	adapter := &inferenceResourcesAdapter{providerType: string(domain.ProviderOpenAI), transcript: provider.TranscriptionResult{ContentType: "application/json", Data: []byte(`{"text":"private@example.com"}`)}}
+	f := newInferenceResourcesServiceFixture(t, domain.ProfileOpenAIMediaResources, adapter, inferenceResourcesTargetFor("audio", adapter), []domain.RedactionPolicy{policy})
 	defer f.close()
 	audio := make([]byte, 512)
 	copy(audio, []byte("ID3\x04\x00\x00\x00\x00\x00\x15"))
@@ -287,9 +287,9 @@ func TestPhase2TranscriptionAppliesOutboundRedaction(t *testing.T) {
 	assertGatewayCode(t, err, "sensitive_data_detected")
 }
 
-func TestPhase2UnknownFileCreationBlocksRetry(t *testing.T) {
-	adapter := &phase2Adapter{providerType: string(domain.ProviderOpenAI), fileErr: &provider.Error{Class: provider.ErrorTimeout, Ambiguous: true, Message: "timeout"}}
-	f := newPhase2ServiceFixture(t, domain.ProfileOpenAIPhase2, adapter, phase2TargetFor("files", adapter), nil)
+func TestInferenceResourcesUnknownFileCreationBlocksRetry(t *testing.T) {
+	adapter := &inferenceResourcesAdapter{providerType: string(domain.ProviderOpenAI), fileErr: &provider.Error{Class: provider.ErrorTimeout, Ambiguous: true, Message: "timeout"}}
+	f := newInferenceResourcesServiceFixture(t, domain.ProfileOpenAIMediaResources, adapter, inferenceResourcesTargetFor("files", adapter), nil)
 	defer f.close()
 	call := provider.FileCreateCall{Filename: "batch.jsonl", ContentType: "application/json", Purpose: "batch", Data: []byte(`{"x":1}`)}
 	if _, err := f.service.CreateFile(context.Background(), f.plaintext, "files", "same-key", call); err == nil {
@@ -305,9 +305,9 @@ func TestPhase2UnknownFileCreationBlocksRetry(t *testing.T) {
 	}
 }
 
-func TestPhase2FileRedactionCannotBeBypassedWithOctetStream(t *testing.T) {
-	adapter := &phase2Adapter{providerType: string(domain.ProviderOpenAI)}
-	f := newPhase2ServiceFixture(t, domain.ProfileOpenAIPhase2, adapter, phase2TargetFor("files", adapter), nil)
+func TestInferenceResourcesFileRedactionCannotBeBypassedWithOctetStream(t *testing.T) {
+	adapter := &inferenceResourcesAdapter{providerType: string(domain.ProviderOpenAI)}
+	f := newInferenceResourcesServiceFixture(t, domain.ProfileOpenAIMediaResources, adapter, inferenceResourcesTargetFor("files", adapter), nil)
 	defer f.close()
 	_, err := f.service.CreateFile(context.Background(), f.plaintext, "files", "disguised-text", provider.FileCreateCall{
 		Filename: "batch.bin", ContentType: "application/octet-stream", Purpose: "batch",
@@ -319,18 +319,18 @@ func TestPhase2FileRedactionCannotBeBypassedWithOctetStream(t *testing.T) {
 	}
 }
 
-func TestPhase2ResourceMetadataAppliesOutboundRedaction(t *testing.T) {
+func TestInferenceResourcesResourceMetadataAppliesOutboundRedaction(t *testing.T) {
 	policy := domain.RedactionPolicy{ID: "resource-outbound", Name: "outbound", Enabled: true, Mode: "strict", Rules: []domain.RedactionRule{{ID: "email-out", Name: "email", Kind: "builtin", Builtin: "email", Scopes: []string{"outbound"}, Action: "reject", Enabled: true}}}
-	adapter := &phase2Adapter{
+	adapter := &inferenceResourcesAdapter{
 		providerType: string(domain.ProviderOpenAI),
 		file:         provider.FileObject{ID: "upstream-file", Object: "file", Filename: "private@example.com", Purpose: "batch", Status: "uploaded"},
 		batch:        provider.BatchObject{ID: "upstream-batch", Object: "batch", Status: "in_progress", Metadata: map[string]string{"owner": "private@example.com"}},
 	}
-	f := newPhase2ServiceFixture(t, domain.ProfileOpenAIPhase2, adapter, phase2TargetFor("resources", adapter), []domain.RedactionPolicy{policy})
+	f := newInferenceResourcesServiceFixture(t, domain.ProfileOpenAIMediaResources, adapter, inferenceResourcesTargetFor("resources", adapter), []domain.RedactionPolicy{policy})
 	defer f.close()
 	now := time.Now()
-	file := domain.ProviderResource{ID: "file-owned", Kind: domain.ResourceFile, ProjectID: f.project.ID, ProviderID: "phase2-provider", DeploymentID: "phase2-deployment", PublicModel: "resources", ProfileID: domain.ProfileOpenAIPhase2, Region: "us-east-1", UpstreamID: "upstream-file", CreationStatus: "completed", Status: "uploaded", CreatedAt: now.Add(-time.Hour), UpdatedAt: now, ExpiresAt: now.Add(time.Hour), Revision: 1}
-	batch := domain.ProviderResource{ID: "batch-owned", Kind: domain.ResourceBatch, ProjectID: f.project.ID, ProviderID: "phase2-provider", DeploymentID: "phase2-deployment", PublicModel: "resources", ProfileID: domain.ProfileOpenAIPhase2, Region: "us-east-1", UpstreamID: "upstream-batch", CreationStatus: "completed", Status: "in_progress", CreatedAt: now.Add(-time.Hour), UpdatedAt: now, ExpiresAt: now.Add(time.Hour), Revision: 1}
+	file := domain.ProviderResource{ID: "file-owned", Kind: domain.ResourceFile, ProjectID: f.project.ID, ProviderID: "inferenceResources-provider", DeploymentID: "inferenceResources-deployment", PublicModel: "resources", ProfileID: domain.ProfileOpenAIMediaResources, Region: "us-east-1", UpstreamID: "upstream-file", CreationStatus: "completed", Status: "uploaded", CreatedAt: now.Add(-time.Hour), UpdatedAt: now, ExpiresAt: now.Add(time.Hour), Revision: 1}
+	batch := domain.ProviderResource{ID: "batch-owned", Kind: domain.ResourceBatch, ProjectID: f.project.ID, ProviderID: "inferenceResources-provider", DeploymentID: "inferenceResources-deployment", PublicModel: "resources", ProfileID: domain.ProfileOpenAIMediaResources, Region: "us-east-1", UpstreamID: "upstream-batch", CreationStatus: "completed", Status: "in_progress", CreatedAt: now.Add(-time.Hour), UpdatedAt: now, ExpiresAt: now.Add(time.Hour), Revision: 1}
 	f.store.resources[file.ID] = file
 	f.store.resources[batch.ID] = batch
 	if _, err := f.service.GetFile(context.Background(), f.plaintext, file.ID); err == nil {
@@ -345,9 +345,9 @@ func TestPhase2ResourceMetadataAppliesOutboundRedaction(t *testing.T) {
 	}
 }
 
-func TestPhase2FileFingerprintConflictAndPrivateObjectLifecycle(t *testing.T) {
-	adapter := &phase2Adapter{providerType: string(domain.ProviderOpenAI)}
-	f := newPhase2ServiceFixture(t, domain.ProfileOpenAIPhase2, adapter, phase2TargetFor("files", adapter), nil)
+func TestInferenceResourcesFileFingerprintConflictAndPrivateObjectLifecycle(t *testing.T) {
+	adapter := &inferenceResourcesAdapter{providerType: string(domain.ProviderOpenAI)}
+	f := newInferenceResourcesServiceFixture(t, domain.ProfileOpenAIMediaResources, adapter, inferenceResourcesTargetFor("files", adapter), nil)
 	defer f.close()
 	first, err := f.service.CreateFile(context.Background(), f.plaintext, "files", "stable-key", provider.FileCreateCall{Filename: "batch.jsonl", ContentType: "application/json", Purpose: "batch", Data: []byte(`{"x":1}`)})
 	if err != nil {
@@ -378,11 +378,11 @@ func TestPhase2FileFingerprintConflictAndPrivateObjectLifecycle(t *testing.T) {
 	}
 }
 
-func TestPhase2FixedRequestPriceIsAccounted(t *testing.T) {
-	adapter := &phase2Adapter{providerType: string(domain.ProviderOpenAI), image: provider.ImageResult{Data: []provider.ImageData{{URL: "https://example.invalid/image"}}}}
-	target := phase2TargetFor("image", adapter)
+func TestInferenceResourcesFixedRequestPriceIsAccounted(t *testing.T) {
+	adapter := &inferenceResourcesAdapter{providerType: string(domain.ProviderOpenAI), image: provider.ImageResult{Data: []provider.ImageData{{URL: "https://example.invalid/image"}}}}
+	target := inferenceResourcesTargetFor("image", adapter)
 	target.InputMicrosPerMillion = 0
-	f := newPhase2ServiceFixture(t, domain.ProfileOpenAIPhase2, adapter, target, nil)
+	f := newInferenceResourcesServiceFixture(t, domain.ProfileOpenAIMediaResources, adapter, target, nil)
 	defer f.close()
 	if _, err := f.service.Images(context.Background(), f.plaintext, openaiapi.ImageGenerationRequest{Model: "image", Prompt: "owl", N: 1}); err != nil {
 		t.Fatal(err)
@@ -393,9 +393,9 @@ func TestPhase2FixedRequestPriceIsAccounted(t *testing.T) {
 	}
 }
 
-func TestPhase2FileCleanupFailureKeepsRetryState(t *testing.T) {
-	adapter := &phase2Adapter{providerType: string(domain.ProviderOpenAI)}
-	f := newPhase2ServiceFixture(t, domain.ProfileOpenAIPhase2, adapter, phase2TargetFor("files", adapter), nil)
+func TestInferenceResourcesFileCleanupFailureKeepsRetryState(t *testing.T) {
+	adapter := &inferenceResourcesAdapter{providerType: string(domain.ProviderOpenAI)}
+	f := newInferenceResourcesServiceFixture(t, domain.ProfileOpenAIMediaResources, adapter, inferenceResourcesTargetFor("files", adapter), nil)
 	defer f.close()
 	created, err := f.service.CreateFile(context.Background(), f.plaintext, "files", "cleanup-key", provider.FileCreateCall{Filename: "batch.jsonl", ContentType: "application/json", Purpose: "batch", Data: []byte(`{"x":1}`)})
 	if err != nil {
@@ -437,9 +437,9 @@ func TestPhase2FileCleanupFailureKeepsRetryState(t *testing.T) {
 	}
 }
 
-func TestPhase2FileDeleteRecoversAfterCleanupStateWriteFailure(t *testing.T) {
-	adapter := &phase2Adapter{providerType: string(domain.ProviderOpenAI)}
-	f := newPhase2ServiceFixture(t, domain.ProfileOpenAIPhase2, adapter, phase2TargetFor("files", adapter), nil)
+func TestInferenceResourcesFileDeleteRecoversAfterCleanupStateWriteFailure(t *testing.T) {
+	adapter := &inferenceResourcesAdapter{providerType: string(domain.ProviderOpenAI)}
+	f := newInferenceResourcesServiceFixture(t, domain.ProfileOpenAIMediaResources, adapter, inferenceResourcesTargetFor("files", adapter), nil)
 	defer f.close()
 	created, err := f.service.CreateFile(context.Background(), f.plaintext, "files", "delete-recovery", provider.FileCreateCall{Filename: "batch.jsonl", ContentType: "application/json", Purpose: "batch", Data: []byte(`{"x":1}`)})
 	if err != nil {
@@ -460,14 +460,14 @@ func TestPhase2FileDeleteRecoversAfterCleanupStateWriteFailure(t *testing.T) {
 	if adapter.deleteCalls != 1 || adapter.getFileCalls != 1 {
 		t.Fatalf("delete calls=%d lookup calls=%d, want 1/1", adapter.deleteCalls, adapter.getFileCalls)
 	}
-	if _, err := f.store.ProviderResource(context.Background(), f.project.ID, created.ID); !errors.Is(err, errPhase2ResourceNotFound) {
+	if _, err := f.store.ProviderResource(context.Background(), f.project.ID, created.ID); !errors.Is(err, errInferenceResourcesResourceNotFound) {
 		t.Fatalf("resource metadata remained after recovery: %v", err)
 	}
 }
 
-func TestPhase2ExpiredFileCleansPinnedUpstreamBeforeOwnerMapping(t *testing.T) {
-	adapter := &phase2Adapter{providerType: string(domain.ProviderOpenAI)}
-	f := newPhase2ServiceFixture(t, domain.ProfileOpenAIPhase2, adapter, phase2TargetFor("files", adapter), nil)
+func TestInferenceResourcesExpiredFileCleansPinnedUpstreamBeforeOwnerMapping(t *testing.T) {
+	adapter := &inferenceResourcesAdapter{providerType: string(domain.ProviderOpenAI)}
+	f := newInferenceResourcesServiceFixture(t, domain.ProfileOpenAIMediaResources, adapter, inferenceResourcesTargetFor("files", adapter), nil)
 	defer f.close()
 	created, err := f.service.CreateFile(context.Background(), f.plaintext, "files", "ttl-cleanup", provider.FileCreateCall{Filename: "batch.jsonl", ContentType: "application/json", Purpose: "batch", Data: []byte(`{"x":1}`)})
 	if err != nil {
@@ -493,7 +493,7 @@ func TestPhase2ExpiredFileCleansPinnedUpstreamBeforeOwnerMapping(t *testing.T) {
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expired local object remained: %v", err)
 	}
-	if _, err := f.store.ProviderResource(context.Background(), f.project.ID, created.ID); !errors.Is(err, errPhase2ResourceNotFound) {
+	if _, err := f.store.ProviderResource(context.Background(), f.project.ID, created.ID); !errors.Is(err, errInferenceResourcesResourceNotFound) {
 		t.Fatalf("expired owner mapping remained after complete cleanup: %v", err)
 	}
 }
@@ -515,9 +515,9 @@ func assertGatewayCode(t *testing.T, err error, code string) {
 // for the next seven to thirty days — the caller could neither complete nor
 // retry that request. A reservation owned by an instance that is gone never
 // reached the provider, and can be taken over.
-func TestPhase2ReservationLeftByACrashIsReclaimed(t *testing.T) {
-	adapter := &phase2Adapter{providerType: string(domain.ProviderOpenAI)}
-	f := newPhase2ServiceFixture(t, domain.ProfileOpenAIPhase2, adapter, phase2TargetFor("files", adapter), nil)
+func TestInferenceResourcesReservationLeftByACrashIsReclaimed(t *testing.T) {
+	adapter := &inferenceResourcesAdapter{providerType: string(domain.ProviderOpenAI)}
+	f := newInferenceResourcesServiceFixture(t, domain.ProfileOpenAIMediaResources, adapter, inferenceResourcesTargetFor("files", adapter), nil)
 	defer f.close()
 	call := provider.FileCreateCall{Filename: "batch.jsonl", ContentType: "application/json", Purpose: "batch", Data: []byte(`{"x":1}`)}
 
@@ -561,9 +561,9 @@ func TestPhase2ReservationLeftByACrashIsReclaimed(t *testing.T) {
 
 // The other half of the same split: once the provider has been called, a crash
 // leaves an outcome nobody can determine, and that stays refused.
-func TestPhase2InFlightCrashIsNotReclaimed(t *testing.T) {
-	adapter := &phase2Adapter{providerType: string(domain.ProviderOpenAI), fileErr: &provider.Error{Class: provider.ErrorTimeout, Ambiguous: true, Message: "timeout"}}
-	f := newPhase2ServiceFixture(t, domain.ProfileOpenAIPhase2, adapter, phase2TargetFor("files", adapter), nil)
+func TestInferenceResourcesInFlightCrashIsNotReclaimed(t *testing.T) {
+	adapter := &inferenceResourcesAdapter{providerType: string(domain.ProviderOpenAI), fileErr: &provider.Error{Class: provider.ErrorTimeout, Ambiguous: true, Message: "timeout"}}
+	f := newInferenceResourcesServiceFixture(t, domain.ProfileOpenAIMediaResources, adapter, inferenceResourcesTargetFor("files", adapter), nil)
 	defer f.close()
 	call := provider.FileCreateCall{Filename: "batch.jsonl", ContentType: "application/json", Purpose: "batch", Data: []byte(`{"x":1}`)}
 

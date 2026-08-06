@@ -17,7 +17,7 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-type Phase2Service interface {
+type InferenceResourcesService interface {
 	Moderations(context.Context, string, openaiapi.ModerationRequest) (openaiapi.ModerationResponse, error)
 	Images(context.Context, string, openaiapi.ImageGenerationRequest) (openaiapi.ImageGenerationResponse, error)
 	Speech(context.Context, string, openaiapi.SpeechRequest) (provider.SpeechResult, error)
@@ -59,7 +59,7 @@ func renderAsyncInvoke(value provider.AsyncInvokeObject) asyncInvokeResponse {
 	return response
 }
 
-func (h *Handler) phase2JSON(writer http.ResponseWriter, request *http.Request, decode func(*json.Decoder) (any, error), invoke func(context.Context, string, any) (any, error)) {
+func (h *Handler) inferenceResourcesJSON(writer http.ResponseWriter, request *http.Request, decode func(*json.Decoder) (any, error), invoke func(context.Context, string, any) (any, error)) {
 	writer.Header().Set("Cache-Control", "no-store")
 	request, ok := h.withSourceIP(writer, request)
 	if !ok {
@@ -71,7 +71,7 @@ func (h *Handler) phase2JSON(writer http.ResponseWriter, request *http.Request, 
 		writeError(writer, 401, "invalid_api_key", "missing or invalid bearer token", nil)
 		return
 	}
-	if h.phase2 == nil {
+	if h.inferenceResources == nil {
 		writeError(writer, 501, "unsupported_feature", "Phase 2 API is unavailable", nil)
 		return
 	}
@@ -86,13 +86,13 @@ func (h *Handler) phase2JSON(writer http.ResponseWriter, request *http.Request, 
 	defer cancel()
 	response, err := invoke(ctx, key, decoded)
 	if err != nil {
-		h.phase2Error(writer, err)
+		h.inferenceResourcesError(writer, err)
 		return
 	}
 	writer.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(writer).Encode(response)
 }
-func (h *Handler) phase2Error(writer http.ResponseWriter, err error) {
+func (h *Handler) inferenceResourcesError(writer http.ResponseWriter, err error) {
 	var gatewayError *gateway.Error
 	if errors.As(err, &gatewayError) {
 		setRetryAfter(writer, gatewayError.RetryAfter)
@@ -102,24 +102,24 @@ func (h *Handler) phase2Error(writer http.ResponseWriter, err error) {
 	writeError(writer, 500, "internal_error", "internal server error", nil)
 }
 func (h *Handler) Moderations(w http.ResponseWriter, r *http.Request) {
-	h.phase2JSON(w, r, func(d *json.Decoder) (any, error) { return openaiapi.DecodeModerationRequest(d) }, func(ctx context.Context, key string, v any) (any, error) {
-		return h.phase2.Moderations(ctx, key, v.(openaiapi.ModerationRequest))
+	h.inferenceResourcesJSON(w, r, func(d *json.Decoder) (any, error) { return openaiapi.DecodeModerationRequest(d) }, func(ctx context.Context, key string, v any) (any, error) {
+		return h.inferenceResources.Moderations(ctx, key, v.(openaiapi.ModerationRequest))
 	})
 }
 func (h *Handler) Images(w http.ResponseWriter, r *http.Request) {
-	h.phase2JSON(w, r, func(d *json.Decoder) (any, error) { return openaiapi.DecodeImageGenerationRequest(d) }, func(ctx context.Context, key string, v any) (any, error) {
-		return h.phase2.Images(ctx, key, v.(openaiapi.ImageGenerationRequest))
+	h.inferenceResourcesJSON(w, r, func(d *json.Decoder) (any, error) { return openaiapi.DecodeImageGenerationRequest(d) }, func(ctx context.Context, key string, v any) (any, error) {
+		return h.inferenceResources.Images(ctx, key, v.(openaiapi.ImageGenerationRequest))
 	})
 }
 func (h *Handler) Rerank(w http.ResponseWriter, r *http.Request) {
-	h.phase2JSON(w, r, func(d *json.Decoder) (any, error) { return openaiapi.DecodeRerankRequest(d) }, func(ctx context.Context, key string, v any) (any, error) {
-		result, err := h.phase2.Rerank(ctx, key, v.(openaiapi.RerankRequest))
+	h.inferenceResourcesJSON(w, r, func(d *json.Decoder) (any, error) { return openaiapi.DecodeRerankRequest(d) }, func(ctx context.Context, key string, v any) (any, error) {
+		result, err := h.inferenceResources.Rerank(ctx, key, v.(openaiapi.RerankRequest))
 		return rerankResponse{Results: result.Results}, err
 	})
 }
 func (h *Handler) StartAsyncInvoke(w http.ResponseWriter, r *http.Request) {
-	h.phase2JSON(w, r, func(d *json.Decoder) (any, error) { return openaiapi.DecodeAsyncInvokeRequest(d) }, func(ctx context.Context, key string, v any) (any, error) {
-		result, err := h.phase2.StartAsyncInvoke(ctx, key, strings.TrimSpace(r.Header.Get("Idempotency-Key")), v.(openaiapi.AsyncInvokeRequest))
+	h.inferenceResourcesJSON(w, r, func(d *json.Decoder) (any, error) { return openaiapi.DecodeAsyncInvokeRequest(d) }, func(ctx context.Context, key string, v any) (any, error) {
+		result, err := h.inferenceResources.StartAsyncInvoke(ctx, key, strings.TrimSpace(r.Header.Get("Idempotency-Key")), v.(openaiapi.AsyncInvokeRequest))
 		return renderAsyncInvoke(result), err
 	})
 }
@@ -129,7 +129,7 @@ func (h *Handler) CancelAsyncInvoke(w http.ResponseWriter, r *http.Request) {
 }
 func (h *Handler) asyncAction(w http.ResponseWriter, r *http.Request, cancelAsync bool) {
 	w.Header().Set("Cache-Control", "no-store")
-	if h.phase2 == nil {
+	if h.inferenceResources == nil {
 		writeError(w, 501, "unsupported_feature", "Phase 2 API is unavailable", nil)
 		return
 	}
@@ -147,12 +147,12 @@ func (h *Handler) asyncAction(w http.ResponseWriter, r *http.Request, cancelAsyn
 	var result provider.AsyncInvokeObject
 	var err error
 	if cancelAsync {
-		result, err = h.phase2.CancelAsyncInvoke(ctx, key, chi.URLParam(r, "asyncID"))
+		result, err = h.inferenceResources.CancelAsyncInvoke(ctx, key, chi.URLParam(r, "asyncID"))
 	} else {
-		result, err = h.phase2.GetAsyncInvoke(ctx, key, chi.URLParam(r, "asyncID"))
+		result, err = h.inferenceResources.GetAsyncInvoke(ctx, key, chi.URLParam(r, "asyncID"))
 	}
 	if err != nil {
-		h.phase2Error(w, err)
+		h.inferenceResourcesError(w, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -160,7 +160,7 @@ func (h *Handler) asyncAction(w http.ResponseWriter, r *http.Request, cancelAsyn
 }
 func (h *Handler) Speech(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	if h.phase2 == nil {
+	if h.inferenceResources == nil {
 		writeError(w, 501, "unsupported_feature", "Phase 2 API is unavailable", nil)
 		return
 	}
@@ -182,9 +182,9 @@ func (h *Handler) Speech(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), h.routeTimeout)
 	defer cancel()
-	result, err := h.phase2.Speech(ctx, key, decoded)
+	result, err := h.inferenceResources.Speech(ctx, key, decoded)
 	if err != nil {
-		h.phase2Error(w, err)
+		h.inferenceResourcesError(w, err)
 		return
 	}
 	contentType := result.ContentType
@@ -197,7 +197,7 @@ func (h *Handler) Speech(w http.ResponseWriter, r *http.Request) {
 }
 func (h *Handler) Transcriptions(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	if h.phase2 == nil {
+	if h.inferenceResources == nil {
 		writeError(w, 501, "unsupported_feature", "Phase 2 API is unavailable", nil)
 		return
 	}
@@ -273,9 +273,9 @@ func (h *Handler) Transcriptions(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), h.routeTimeout)
 	defer cancel()
-	result, err := h.phase2.Transcription(ctx, key, model, call)
+	result, err := h.inferenceResources.Transcription(ctx, key, model, call)
 	if err != nil {
-		h.phase2Error(w, err)
+		h.inferenceResourcesError(w, err)
 		return
 	}
 	w.Header().Set("Content-Type", result.ContentType)
@@ -284,7 +284,7 @@ func (h *Handler) Transcriptions(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) CreateFile(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	if h.phase2 == nil {
+	if h.inferenceResources == nil {
 		writeError(w, 501, "unsupported_feature", "Phase 2 API is unavailable", nil)
 		return
 	}
@@ -341,9 +341,9 @@ func (h *Handler) CreateFile(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), h.routeTimeout)
 	defer cancel()
-	result, err := h.phase2.CreateFile(ctx, key, route, strings.TrimSpace(r.Header.Get("Idempotency-Key")), call)
+	result, err := h.inferenceResources.CreateFile(ctx, key, route, strings.TrimSpace(r.Header.Get("Idempotency-Key")), call)
 	if err != nil {
-		h.phase2Error(w, err)
+		h.inferenceResourcesError(w, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -354,7 +354,7 @@ func (h *Handler) DownloadFile(w http.ResponseWriter, r *http.Request) { h.fileA
 func (h *Handler) DeleteFile(w http.ResponseWriter, r *http.Request)   { h.fileAction(w, r, "delete") }
 func (h *Handler) fileAction(w http.ResponseWriter, r *http.Request, action string) {
 	w.Header().Set("Cache-Control", "no-store")
-	if h.phase2 == nil {
+	if h.inferenceResources == nil {
 		writeError(w, 501, "unsupported_feature", "Phase 2 API is unavailable", nil)
 		return
 	}
@@ -372,25 +372,25 @@ func (h *Handler) fileAction(w http.ResponseWriter, r *http.Request, action stri
 	defer cancel()
 	switch action {
 	case "get":
-		result, err := h.phase2.GetFile(ctx, key, resourceID)
+		result, err := h.inferenceResources.GetFile(ctx, key, resourceID)
 		if err != nil {
-			h.phase2Error(w, err)
+			h.inferenceResourcesError(w, err)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(result)
 	case "content":
-		result, err := h.phase2.DownloadFile(ctx, key, resourceID)
+		result, err := h.inferenceResources.DownloadFile(ctx, key, resourceID)
 		if err != nil {
-			h.phase2Error(w, err)
+			h.inferenceResourcesError(w, err)
 			return
 		}
 		w.Header().Set("Content-Type", result.ContentType)
 		_, _ = w.Write(result.Data)
 	case "delete":
-		result, err := h.phase2.DeleteFile(ctx, key, resourceID)
+		result, err := h.inferenceResources.DeleteFile(ctx, key, resourceID)
 		if err != nil {
-			h.phase2Error(w, err)
+			h.inferenceResourcesError(w, err)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -398,16 +398,16 @@ func (h *Handler) fileAction(w http.ResponseWriter, r *http.Request, action stri
 	}
 }
 func (h *Handler) CreateBatch(w http.ResponseWriter, r *http.Request) {
-	h.phase2JSON(w, r, func(d *json.Decoder) (any, error) { return openaiapi.DecodeBatchCreateRequest(d) }, func(ctx context.Context, key string, v any) (any, error) {
+	h.inferenceResourcesJSON(w, r, func(d *json.Decoder) (any, error) { return openaiapi.DecodeBatchCreateRequest(d) }, func(ctx context.Context, key string, v any) (any, error) {
 		request := v.(openaiapi.BatchCreateRequest)
-		return h.phase2.CreateBatch(ctx, key, strings.TrimSpace(r.Header.Get("Idempotency-Key")), provider.BatchCreateCall{InputFileID: request.InputFileID, Endpoint: request.Endpoint, CompletionWindow: request.CompletionWindow, Metadata: request.Metadata})
+		return h.inferenceResources.CreateBatch(ctx, key, strings.TrimSpace(r.Header.Get("Idempotency-Key")), provider.BatchCreateCall{InputFileID: request.InputFileID, Endpoint: request.Endpoint, CompletionWindow: request.CompletionWindow, Metadata: request.Metadata})
 	})
 }
 func (h *Handler) GetBatch(w http.ResponseWriter, r *http.Request)    { h.batchAction(w, r, false) }
 func (h *Handler) CancelBatch(w http.ResponseWriter, r *http.Request) { h.batchAction(w, r, true) }
 func (h *Handler) batchAction(w http.ResponseWriter, r *http.Request, cancelBatch bool) {
 	w.Header().Set("Cache-Control", "no-store")
-	if h.phase2 == nil {
+	if h.inferenceResources == nil {
 		writeError(w, 501, "unsupported_feature", "Phase 2 API is unavailable", nil)
 		return
 	}
@@ -425,12 +425,12 @@ func (h *Handler) batchAction(w http.ResponseWriter, r *http.Request, cancelBatc
 	var result provider.BatchObject
 	var err error
 	if cancelBatch {
-		result, err = h.phase2.CancelBatch(ctx, key, chi.URLParam(r, "batchID"))
+		result, err = h.inferenceResources.CancelBatch(ctx, key, chi.URLParam(r, "batchID"))
 	} else {
-		result, err = h.phase2.GetBatch(ctx, key, chi.URLParam(r, "batchID"))
+		result, err = h.inferenceResources.GetBatch(ctx, key, chi.URLParam(r, "batchID"))
 	}
 	if err != nil {
-		h.phase2Error(w, err)
+		h.inferenceResourcesError(w, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

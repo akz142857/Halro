@@ -80,14 +80,14 @@ func TestBedrockTitanEmbeddingProfileUsesInvokePrimitiveOnly(t *testing.T) {
 	}
 }
 
-func TestPhase2ProfilesKeepAccessSurfacesAndPrimitivesIsolated(t *testing.T) {
+func TestInferenceResourcesProfilesKeepAccessSurfacesAndPrimitivesIsolated(t *testing.T) {
 	cases := []struct {
 		id        domain.ProviderProfileID
 		surface   domain.AccessSurface
 		operation Operation
 		primitive Primitive
 	}{
-		{domain.ProfileOpenAIPhase2, domain.SurfaceOpenAI, OperationFiles, PrimitiveOpenAIFiles},
+		{domain.ProfileOpenAIMediaResources, domain.SurfaceOpenAI, OperationFiles, PrimitiveOpenAIFiles},
 		{domain.ProfileBedrockInvokeTitanImageV2, domain.SurfaceBedrockRuntime, OperationImages, PrimitiveBedrockTitanImageV2},
 		{domain.ProfileBedrockAgentRerankCohere35, domain.SurfaceBedrockAgentRuntime, OperationRerank, PrimitiveBedrockAgentRerankCohere35},
 		{domain.ProfileBedrockAsyncNovaReel, domain.SurfaceBedrockRuntime, OperationAsyncInvoke, PrimitiveBedrockAsyncNovaReel},

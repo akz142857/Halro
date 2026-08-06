@@ -958,7 +958,7 @@ func (r *Runtime) providerFromInput(
 
 func isStrictOperationProfile(id domain.ProviderProfileID) bool {
 	switch id {
-	case domain.ProfileOpenAIPhase2, domain.ProfileBedrockInvokeTitanEmbedV2, domain.ProfileBedrockInvokeTitanImageV2, domain.ProfileBedrockAgentRerankCohere35, domain.ProfileBedrockAsyncNovaReel:
+	case domain.ProfileOpenAIMediaResources, domain.ProfileBedrockInvokeTitanEmbedV2, domain.ProfileBedrockInvokeTitanImageV2, domain.ProfileBedrockAgentRerankCohere35, domain.ProfileBedrockAsyncNovaReel:
 		return true
 	default:
 		return false

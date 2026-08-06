@@ -63,7 +63,7 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 			"credential_id": credential.ID, "enabled": true,
 			"bindings": []map[string]any{
 				{"id": "forged-chat", "profile_id": domain.ProfileOpenAIChatEmbeddings, "enabled": false, "capabilities": map[string]any{}},
-				{"id": "forged-media", "profile_id": domain.ProfileOpenAIPhase2, "enabled": true,
+				{"id": "forged-media", "profile_id": domain.ProfileOpenAIMediaResources, "enabled": true,
 					"capabilities":        map[string]any{"images": true, "files": true},
 					"capability_evidence": map[string]any{"images": domain.EvidenceVerified}},
 			},
@@ -75,8 +75,8 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 	if err := json.Unmarshal(mediaOnlyResponse.Body.Bytes(), &mediaOnly); err != nil {
 		t.Fatal(err)
 	}
-	if mediaOnly.ProfileID != domain.ProfileOpenAIPhase2 || !mediaOnly.Capabilities.Images || !mediaOnly.Capabilities.Files ||
-		len(mediaOnly.Bindings) != 2 || mediaOnly.Bindings[0].ID != domain.DefaultProviderProfileBindingID(mediaOnly.ID, domain.ProfileOpenAIPhase2) ||
+	if mediaOnly.ProfileID != domain.ProfileOpenAIMediaResources || !mediaOnly.Capabilities.Images || !mediaOnly.Capabilities.Files ||
+		len(mediaOnly.Bindings) != 2 || mediaOnly.Bindings[0].ID != domain.DefaultProviderProfileBindingID(mediaOnly.ID, domain.ProfileOpenAIMediaResources) ||
 		mediaOnly.Bindings[0].CapabilityEvidence["images"] != domain.EvidenceDeclared {
 		t.Fatalf("media-only provider was not canonicalized: %#v", mediaOnly)
 	}
@@ -95,7 +95,7 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 			"credential_id": credential.ID, "enabled": true,
 			"bindings": []map[string]any{
 				{"profile_id": domain.ProfileOpenAIChatEmbeddings, "enabled": true, "capabilities": map[string]any{"chat": true, "streaming": true, "embeddings": true}},
-				{"profile_id": domain.ProfileOpenAIPhase2, "enabled": true, "capabilities": map[string]any{"images": true, "files": true, "batches": true}},
+				{"profile_id": domain.ProfileOpenAIMediaResources, "enabled": true, "capabilities": map[string]any{"images": true, "files": true, "batches": true}},
 			},
 		})
 	if multiBindingResponse.Code != http.StatusCreated {

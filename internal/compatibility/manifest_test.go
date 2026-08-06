@@ -41,8 +41,8 @@ func TestBuiltinEndpointManifestsAreValidImmutableAndGolden(t *testing.T) {
 	}
 }
 
-func TestPhase2MaturityDoesNotClaimUnvalidatedSDKCompatibility(t *testing.T) {
-	for _, manifest := range phase2EndpointManifests() {
+func TestInferenceResourcesMaturityDoesNotClaimUnvalidatedSDKCompatibility(t *testing.T) {
+	for _, manifest := range inferenceResourcesEndpointManifests() {
 		if manifest.Status != StatusExperimental {
 			t.Fatalf("%s status = %q, want experimental until its official SDK matrix passes", manifest.ID, manifest.Status)
 		}
@@ -52,8 +52,8 @@ func TestPhase2MaturityDoesNotClaimUnvalidatedSDKCompatibility(t *testing.T) {
 		if strings.HasPrefix(manifest.ID, "heimdall.") && manifest.Protocol != "heimdall" {
 			t.Fatalf("%s protocol = %q, want heimdall", manifest.ID, manifest.Protocol)
 		}
-		if strings.HasPrefix(manifest.ID, "heimdall.") && manifest.NorthboundProfile != ProfileHeimdallPhase2 {
-			t.Fatalf("%s northbound profile = %q, want %q", manifest.ID, manifest.NorthboundProfile, ProfileHeimdallPhase2)
+		if strings.HasPrefix(manifest.ID, "heimdall.") && manifest.NorthboundProfile != ProfileHeimdallInferenceResources {
+			t.Fatalf("%s northbound profile = %q, want %q", manifest.ID, manifest.NorthboundProfile, ProfileHeimdallInferenceResources)
 		}
 	}
 }
@@ -88,7 +88,7 @@ func TestManifestRejectsMissingProfileMaturity(t *testing.T) {
 	}
 }
 
-func TestManifestRejectsPhase2ProfilePromotion(t *testing.T) {
+func TestManifestRejectsInferenceResourcesProfilePromotion(t *testing.T) {
 	var manifest EndpointCompatibilityManifest
 	for _, candidate := range BuiltinEndpointManifests() {
 		if candidate.ID == "openai.embeddings.v1" {
@@ -129,9 +129,9 @@ func TestManifestRejectsNorthboundProfileDrift(t *testing.T) {
 	}
 }
 
-func TestPhase2ManifestMatchesImplementedRequestAndResponseFields(t *testing.T) {
+func TestInferenceResourcesManifestMatchesImplementedRequestAndResponseFields(t *testing.T) {
 	byID := make(map[string]EndpointCompatibilityManifest)
-	for _, manifest := range phase2EndpointManifests() {
+	for _, manifest := range inferenceResourcesEndpointManifests() {
 		byID[manifest.ID] = manifest
 	}
 	image := byID["openai.images.generations.v1"]

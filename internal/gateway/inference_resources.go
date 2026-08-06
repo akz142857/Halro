@@ -14,7 +14,7 @@ import (
 	"github.com/akz142857/Heimdall/internal/redaction"
 )
 
-func (s *Service) phase2Target(ctx context.Context, key, model string, operation provider.Operation) (auth.AuthResult, provider.Target, string, error) {
+func (s *Service) inferenceResourcesTarget(ctx context.Context, key, model string, operation provider.Operation) (auth.AuthResult, provider.Target, string, error) {
 	principal, targets, err := s.resolveRequest(ctx, key, model, operation, "requested operation is unsupported")
 	if err != nil {
 		return auth.AuthResult{}, provider.Target{}, "", err
@@ -25,7 +25,7 @@ func (s *Service) phase2Target(ctx context.Context, key, model string, operation
 	return principal, targets[0], "", nil
 }
 
-func (s *Service) accountedPhase2(ctx context.Context, principal auth.AuthResult, model string, target provider.Target, inputUnits int64, requestID *string, invoke func() error) error {
+func (s *Service) accountedInferenceResources(ctx context.Context, principal auth.AuthResult, model string, target provider.Target, inputUnits int64, requestID *string, invoke func() error) error {
 	if inputUnits < 1 {
 		inputUnits = 1
 	}
@@ -71,11 +71,11 @@ func (s *Service) accountedPhase2(ctx context.Context, principal auth.AuthResult
 }
 
 func (s *Service) Moderations(ctx context.Context, key string, request openaiapi.ModerationRequest) (openaiapi.ModerationResponse, error) {
-	principal, target, requestID, err := s.phase2Target(ctx, key, request.Model, provider.OperationModerations)
+	principal, target, requestID, err := s.inferenceResourcesTarget(ctx, key, request.Model, provider.OperationModerations)
 	if err != nil {
 		return openaiapi.ModerationResponse{}, err
 	}
-	adapter, ok := target.Adapter.(provider.StatelessPhase2Adapter)
+	adapter, ok := target.Adapter.(provider.StatelessInferenceResourcesAdapter)
 	if !ok {
 		return openaiapi.ModerationResponse{}, gatewayError("unsupported_feature", "moderation adapter is unavailable", 400, nil)
 	}
@@ -84,7 +84,7 @@ func (s *Service) Moderations(ctx context.Context, key string, request openaiapi
 		return openaiapi.ModerationResponse{}, gatewayError("sensitive_data_detected", "request contains secret material", 400, err)
 	}
 	var result provider.ModerationResult
-	err = s.accountedPhase2(ctx, principal, request.Model, target, int64(len(request.Input))/4+1, &requestID, func() error {
+	err = s.accountedInferenceResources(ctx, principal, request.Model, target, int64(len(request.Input))/4+1, &requestID, func() error {
 		var callErr error
 		result, callErr = adapter.Moderate(ctx, provider.ModerationCall{RequestID: requestID, ProviderModel: target.ProviderModel, Input: request.Input})
 		if callErr == nil {
@@ -98,7 +98,7 @@ func (s *Service) Moderations(ctx context.Context, key string, request openaiapi
 	return openaiapi.ModerationResponse{ID: result.ID, Model: request.Model, Results: result.Results}, nil
 }
 func (s *Service) Images(ctx context.Context, key string, request openaiapi.ImageGenerationRequest) (openaiapi.ImageGenerationResponse, error) {
-	principal, target, requestID, err := s.phase2Target(ctx, key, request.Model, provider.OperationImages)
+	principal, target, requestID, err := s.inferenceResourcesTarget(ctx, key, request.Model, provider.OperationImages)
 	if err != nil {
 		return openaiapi.ImageGenerationResponse{}, err
 	}
@@ -107,8 +107,8 @@ func (s *Service) Images(ctx context.Context, key string, request openaiapi.Imag
 	if err != nil {
 		return openaiapi.ImageGenerationResponse{}, gatewayError("sensitive_data_detected", "request contains secret material", 400, err)
 	}
-	if adapter, ok := target.Adapter.(provider.BedrockPhase2Adapter); ok && target.ProfileID != domain.ProfileOpenAIPhase2 {
-		err = s.accountedPhase2(ctx, principal, request.Model, target, int64(len(request.Prompt))/4+1, &requestID, func() error {
+	if adapter, ok := target.Adapter.(provider.BedrockInferenceResourcesAdapter); ok && target.ProfileID != domain.ProfileOpenAIMediaResources {
+		err = s.accountedInferenceResources(ctx, principal, request.Model, target, int64(len(request.Prompt))/4+1, &requestID, func() error {
 			var callErr error
 			result, callErr = adapter.GenerateBedrockImage(ctx, provider.ImageCall{RequestID: requestID, ProviderModel: target.ProviderModel, Prompt: request.Prompt, Count: request.N, Quality: request.Quality, Size: request.Size, ResponseFormat: request.ResponseFormat, Style: request.Style})
 			if callErr == nil {
@@ -116,8 +116,8 @@ func (s *Service) Images(ctx context.Context, key string, request openaiapi.Imag
 			}
 			return callErr
 		})
-	} else if adapter, ok := target.Adapter.(provider.StatelessPhase2Adapter); ok {
-		err = s.accountedPhase2(ctx, principal, request.Model, target, int64(len(request.Prompt))/4+1, &requestID, func() error {
+	} else if adapter, ok := target.Adapter.(provider.StatelessInferenceResourcesAdapter); ok {
+		err = s.accountedInferenceResources(ctx, principal, request.Model, target, int64(len(request.Prompt))/4+1, &requestID, func() error {
 			var callErr error
 			result, callErr = adapter.GenerateImage(ctx, provider.ImageCall{RequestID: requestID, ProviderModel: target.ProviderModel, Prompt: request.Prompt, Count: request.N, Quality: request.Quality, Size: request.Size, ResponseFormat: request.ResponseFormat, Style: request.Style})
 			if callErr == nil {
@@ -138,11 +138,11 @@ func (s *Service) Images(ctx context.Context, key string, request openaiapi.Imag
 	return openaiapi.ImageGenerationResponse{Created: result.Created, Data: data}, nil
 }
 func (s *Service) Speech(ctx context.Context, key string, request openaiapi.SpeechRequest) (provider.SpeechResult, error) {
-	principal, target, requestID, err := s.phase2Target(ctx, key, request.Model, provider.OperationSpeech)
+	principal, target, requestID, err := s.inferenceResourcesTarget(ctx, key, request.Model, provider.OperationSpeech)
 	if err != nil {
 		return provider.SpeechResult{}, err
 	}
-	adapter, ok := target.Adapter.(provider.StatelessPhase2Adapter)
+	adapter, ok := target.Adapter.(provider.StatelessInferenceResourcesAdapter)
 	if !ok {
 		return provider.SpeechResult{}, gatewayError("unsupported_feature", "speech adapter is unavailable", 400, nil)
 	}
@@ -151,7 +151,7 @@ func (s *Service) Speech(ctx context.Context, key string, request openaiapi.Spee
 		return provider.SpeechResult{}, gatewayError("sensitive_data_detected", "request contains secret material", 400, err)
 	}
 	var result provider.SpeechResult
-	err = s.accountedPhase2(ctx, principal, request.Model, target, int64(len(request.Input))/4+1, &requestID, func() error {
+	err = s.accountedInferenceResources(ctx, principal, request.Model, target, int64(len(request.Input))/4+1, &requestID, func() error {
 		var callErr error
 		result, callErr = adapter.Synthesize(ctx, provider.SpeechCall{RequestID: requestID, ProviderModel: target.ProviderModel, Input: request.Input, Voice: request.Voice, ResponseFormat: request.ResponseFormat, Speed: request.Speed})
 		return callErr
@@ -162,11 +162,11 @@ func (s *Service) Speech(ctx context.Context, key string, request openaiapi.Spee
 	return result, nil
 }
 func (s *Service) Transcription(ctx context.Context, key, model string, call provider.TranscriptionCall) (provider.TranscriptionResult, error) {
-	principal, target, requestID, err := s.phase2Target(ctx, key, model, provider.OperationTranscriptions)
+	principal, target, requestID, err := s.inferenceResourcesTarget(ctx, key, model, provider.OperationTranscriptions)
 	if err != nil {
 		return provider.TranscriptionResult{}, err
 	}
-	adapter, ok := target.Adapter.(provider.StatelessPhase2Adapter)
+	adapter, ok := target.Adapter.(provider.StatelessInferenceResourcesAdapter)
 	if !ok {
 		return provider.TranscriptionResult{}, gatewayError("unsupported_feature", "transcription adapter is unavailable", 400, nil)
 	}
@@ -179,7 +179,7 @@ func (s *Service) Transcription(ctx context.Context, key, model string, call pro
 		return provider.TranscriptionResult{}, gatewayError("sensitive_data_detected", "request contains secret material", 400, err)
 	}
 	var result provider.TranscriptionResult
-	err = s.accountedPhase2(ctx, principal, model, target, int64(len(call.Data))/4+1, &requestID, func() error {
+	err = s.accountedInferenceResources(ctx, principal, model, target, int64(len(call.Data))/4+1, &requestID, func() error {
 		call.RequestID = requestID
 		var callErr error
 		result, callErr = adapter.Transcribe(ctx, call)
@@ -222,11 +222,11 @@ func (s *Service) redactTranscriptionResult(policyID string, result *provider.Tr
 	return nil
 }
 func (s *Service) Rerank(ctx context.Context, key string, request openaiapi.RerankRequest) (provider.RerankResult, error) {
-	principal, target, requestID, err := s.phase2Target(ctx, key, request.Model, provider.OperationRerank)
+	principal, target, requestID, err := s.inferenceResourcesTarget(ctx, key, request.Model, provider.OperationRerank)
 	if err != nil {
 		return provider.RerankResult{}, err
 	}
-	adapter, ok := target.Adapter.(provider.BedrockPhase2Adapter)
+	adapter, ok := target.Adapter.(provider.BedrockInferenceResourcesAdapter)
 	if !ok {
 		return provider.RerankResult{}, gatewayError("unsupported_feature", "rerank adapter is unavailable", 400, nil)
 	}
@@ -245,7 +245,7 @@ func (s *Service) Rerank(ctx context.Context, key string, request openaiapi.Rera
 		units += len(doc)
 	}
 	var result provider.RerankResult
-	err = s.accountedPhase2(ctx, principal, request.Model, target, int64(units)/4+1, &requestID, func() error {
+	err = s.accountedInferenceResources(ctx, principal, request.Model, target, int64(units)/4+1, &requestID, func() error {
 		var callErr error
 		result, callErr = adapter.Rerank(ctx, provider.RerankCall{RequestID: requestID, ProviderModel: target.ProviderModel, Query: request.Query, Documents: request.Documents, TopN: request.TopN})
 		return callErr

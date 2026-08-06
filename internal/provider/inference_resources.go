@@ -49,7 +49,7 @@ type SpeechResult struct {
 	ProviderRequestID string
 }
 
-type StatelessPhase2Adapter interface {
+type StatelessInferenceResourcesAdapter interface {
 	Moderate(context.Context, ModerationCall) (ModerationResult, error)
 	GenerateImage(context.Context, ImageCall) (ImageResult, error)
 	Transcribe(context.Context, TranscriptionCall) (TranscriptionResult, error)
@@ -104,7 +104,7 @@ type BatchObject struct {
 	RawErrors        json.RawMessage   `json:"errors,omitempty"`
 }
 
-type ResourcePhase2Adapter interface {
+type ResourceInferenceResourcesAdapter interface {
 	CreateFile(context.Context, FileCreateCall) (FileObject, error)
 	GetFile(context.Context, string, string) (FileObject, error)
 	DownloadFile(context.Context, string, string) (FileContent, error)
@@ -137,7 +137,7 @@ type AsyncInvokeObject struct {
 	InvocationARN, Status, S3OutputURI, FailureMessage, ProviderRequestID string
 	SubmittedAt, LastModifiedAt                                           time.Time
 }
-type BedrockPhase2Adapter interface {
+type BedrockInferenceResourcesAdapter interface {
 	Rerank(context.Context, RerankCall) (RerankResult, error)
 	StartAsyncInvoke(context.Context, AsyncInvokeCall) (AsyncInvokeObject, error)
 	GetAsyncInvoke(context.Context, string, string) (AsyncInvokeObject, error)

@@ -52,10 +52,10 @@ func FuzzDecodeRequestsNeverPanic(f *testing.F) {
 	})
 }
 
-// FuzzDecodePhase2RequestsNeverPanic covers the strict decoders behind the
+// FuzzDecodeInferenceResourcesRequestsNeverPanic covers the strict decoders behind the
 // non-chat endpoints. They share the reject-unknown-fields, reject-trailing
 // contract and had no test file of their own.
-func FuzzDecodePhase2RequestsNeverPanic(f *testing.F) {
+func FuzzDecodeInferenceResourcesRequestsNeverPanic(f *testing.F) {
 	for _, seed := range []string{
 		`{"model":"mod","input":"text"}`,
 		`{"model":"img","prompt":"a cat","n":1}`,
