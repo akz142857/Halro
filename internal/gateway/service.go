@@ -62,22 +62,25 @@ func (e *Error) Unwrap() error {
 }
 
 type Service struct {
-	auth                          *auth.Snapshot
-	registry                      *provider.Registry
-	accounting                    *budget.Manager
-	limiter                       *limiter.Manager
-	redactor                      *redaction.Engine
-	breakers                      *circuit.Manager
-	maxAttempts                   int
-	maxAttemptsPerTarget          int
-	retryBaseDelay                time.Duration
-	retryMaxDelay                 time.Duration
-	retryJitter                   bool
-	tokenGuard                    *tokenguard.Manager
-	providerConcurrency           *provider.ConcurrencyManager
-	deploymentConcurrency         *provider.ConcurrencyManager
-	rejections                    rejectionCounters
-	sourceHashKey                 [32]byte
+	auth                  *auth.Snapshot
+	registry              *provider.Registry
+	accounting            *budget.Manager
+	limiter               *limiter.Manager
+	redactor              *redaction.Engine
+	breakers              *circuit.Manager
+	maxAttempts           int
+	maxAttemptsPerTarget  int
+	retryBaseDelay        time.Duration
+	retryMaxDelay         time.Duration
+	retryJitter           bool
+	tokenGuard            *tokenguard.Manager
+	providerConcurrency   *provider.ConcurrencyManager
+	deploymentConcurrency *provider.ConcurrencyManager
+	rejections            rejectionCounters
+	sourceHashKey         [32]byte
+	// instanceID identifies this process. It is what tells a reservation left
+	// behind by a crash apart from one another request is holding right now.
+	instanceID                    string
 	now                           func() time.Time
 	resources                     Phase2ResourceStore
 	resourceObjectDir             string
@@ -613,6 +616,10 @@ func NewServiceWithOptions(
 	if _, err := cryptorand.Read(sourceHashKey[:]); err != nil {
 		return nil, errors.New("generate source hashing key")
 	}
+	instanceID, err := id.New("inst")
+	if err != nil {
+		return nil, errors.New("generate service instance ID")
+	}
 	clock := options.Now
 	if clock == nil {
 		clock = time.Now
@@ -633,6 +640,7 @@ func NewServiceWithOptions(
 		providerConcurrency:           provider.NewConcurrencyManager(),
 		deploymentConcurrency:         provider.NewConcurrencyManager(),
 		sourceHashKey:                 sourceHashKey,
+		instanceID:                    instanceID,
 		now:                           clock,
 		resources:                     options.Resources,
 		resourceObjectDir:             options.ResourceObjectDir,
