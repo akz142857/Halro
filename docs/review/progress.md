@@ -2,15 +2,19 @@
 
 > [260805.md](260805.md) 是一份有日期的发现记录，不改动。本文件是它的**活的对照表**：哪些做了、哪些没做、以及做的过程中改变了对原结论的判断。
 >
-> 编号沿用 260805.md 第十章的修复清单。最后更新：2026-08-06（P2-16、P1-7、P2-19（部分）、P2-23 全部完成，本轮未提交）。
+> 编号沿用 260805.md 第十章的修复清单。最后更新：2026-08-07（清单 23 项全部完成并推送；P2-19、P2-23 两项推迟子项已补做，剩 `internal/app` 拆 adminapi 一项）。
 
 ## 一句话状态
 
-清单共 23 项，已完成 23 项——**清单本身全部做完**。P0 四项、P1 八项、P2 十一项。前 21 项**已合并进 main 并推送到 origin，没有悬空分支**；P2-16、P1-7、P2-19、P2-23（本轮完成）改动还在本地工作树，未提交。四项实现计划见 `.claude/plans/gleaming-squishing-flame.md`，Phase 1-4 已按顺序全部推进完。**两项刻意推迟、写清楚了原因**：P2-19 的 `internal/app` 拆 adminapi 子包、"phase2" 改名（`store.go` 按数据域拆已完成）；P2-23 里把 step-up 从"管理员账户创建/删除"推广到其余既有破坏性端点（详见下方"P2-23 验证记录"）。整改过程中原报告的四条结论被修正，另外发现六项报告里没有的问题（其中五项已修完，含本轮的 v3 gate 缺口和 RBAC 前置缺口）。
+清单共 23 项，已完成 23 项——**清单本身全部做完，且全部已合并进 main，没有悬空分支、没有未提交改动**。P0 四项、P1 八项、P2 十一项。2026-08-06 那一轮记录的"本轮未提交"已经过时：P2-16、P1-7、P2-19、P2-23 的改动在 `5d4936e` 一并提交。
+
+2026-08-07 这一轮把此前**刻意推迟的两项和一项拆出来的新发现**做完了：数据面全局按源限流（`b4c8235`）、Admin 只读角色的前端落地（`817f7d9`）、step-up 推广到 9 个破坏性删除端点（`ca26a3c`）、`phase2` 标识符改名（`956c06b`）。
+
+**仍未做的只剩一项**：`internal/app` 拆 adminapi 子包（[#86](https://github.com/akz142857/Heimdall/issues/86) 的前半，纯组织性重构，零功能收益，理由见下方"P2-19 验证记录"）。整改过程中原报告的四条结论被修正，另外发现七项报告里没有的问题（六项已修完）。
 
 ## 已完成
 
-每项都按同一套流程验证：写测试 → **把代码改回缺陷状态确认测试真的失败** → 恢复 → 目标包 race 检测 → 全仓无缓存套件。反向验证是必需步骤，不是可选的——它是唯一能证明"测试守护的是真问题"的手段。前端项另加 `make frontend` 重建 + `npx tsc --noEmit` + 全量 vitest。
+每项都按同一套流程验证：写测试 → **把代码改回缺陷状态确认测试真的失败** → 恢复 → 目标包 race 检测 → 全仓无缓存套件。反向验证是必需步骤，不是可选的——它是唯一能证明"测试守护的是真问题"的手段。前端项另加 `make frontend` 重建 + `npm run typecheck` + 全量 vitest。**注意是 `npm run typecheck`（即 `tsc -b`）而不是 `npx tsc --noEmit`**——后者不检查测试文件，2026-08-07 这一轮它对一个"函数作用域里没有 `readOnly` 变量"的错误一声不吭，直到 vitest 运行时才炸。
 
 | 编号 | 内容 | 提交 |
 |---|---|---|
@@ -42,12 +46,11 @@
 
 ### P2
 
-剩两项组织性重构（外加 P2-20 的最后四分之一），详见 260805.md 第十章：
+只剩一项组织性重构：
 
 | 编号 | 内容 | 备注 |
 |---|---|---|
-| P2-19 | `internal/app` 拆 adminapi 子包、"phase2" 重命名未做，见下"P2-19 验证记录" | `store.go` 按数据域拆已完成，风险已不对等，见记录里的理由；跟踪 [#86](https://github.com/akz142857/Heimdall/issues/86) |
-| P2-23 | step-up 从"管理员账户创建/删除"推广到其余既有破坏性端点（project/credential/provider/route/deployment/redaction-policy/token-guard-policy/alert 的 delete）、Admin 前端 UI（角色选择、只读态提示、按角色禁用写操作按钮） | 首个 tag 也没打，见下"P2-23 验证记录"里的推迟理由；跟踪 [#87](https://github.com/akz142857/Heimdall/issues/87) |
+| P2-19 | `internal/app` 拆 adminapi 子包 | `store.go` 按数据域拆、`phase2` 改名均已完成；跟踪 [#86](https://github.com/akz142857/Heimdall/issues/86)。2026-08-07 重新量过边界，结论比 08-06 乐观，见下方"P2-19 验证记录（2026-08-07 复量）" |
 
 ## P2-16 验证记录（2026-08-06，本轮完成）
 
@@ -79,6 +82,8 @@
 
 ## P2-19 验证记录（2026-08-06，一项完成两项未完成）
 
+> 后续：`phase2` 改名已于 2026-08-07 完成（`956c06b`）；拆 adminapi 的边界已在同日重新量过，结论见上方"P2-19 验证记录（2026-08-07 复量）"。以下保留 08-06 当时的判断原文。
+
 三个子项风险不对等，分开处理：
 
 **`store.go` 按数据域拆（已完成）。** `internal/store/bolt/store.go` 从 5340 行拆到 1025 行，新增 8 个同包文件（`store_admin.go`/`store_audit.go`/`store_keys.go`/`store_pricing.go`/`store_projects.go`/`store_providers.go`/`store_settings.go`/`store_usage.go`），按方法名关键词分域。用 `go/parser` 抓每个顶层声明的精确字节范围（含 doc 注释）按名字分桶写出，全部类型/变量/常量（含 `migrations` 迁移表）留在 `store.go` 本体不动，只搬方法体；`goimports` 收尾清理每个新文件的 import。这样做安全性有保证：同包内符号搬到哪个文件不影响可见性，唯一能出错的地方是脚本本身的字节切分，而这一步会被编译器立刻捕获（漏了/多了/重复了都是编译错误）。验证：`go build ./...`、`go vet ./...`、`gofmt -l` 全干净，`go test ./...` 全绿，`go test -race ./internal/store/bolt/...` 绿。过程中脚本第一版有个 bug（import 块被写了两次导致 `store.go` 语法错误），发现后从备份恢复重跑，不是留着让编译器"以后"发现。
@@ -90,6 +95,25 @@
 这类改动一旦做错，编译器不一定能兜底——比如把 `adminMutationError` 错误分类的一个分支漏调，或者把某个 mutex 的粒度在搬迁中意外改变，这些是编译通过、测试如果没覆盖到那条分支也通过、但实际行为悄悄变了的那类 bug。CLAUDE.md 把这个仓库的优先级写得很直白："Security, accounting correctness, and backward-compatible API behavior take priority over feature count"——admin mutation 路径正是这句话点名要保护的东西。用剩余时间去做一次仓促的、零功能收益的重构去冒这个风险，划不来；这些时间挪去做 Phase 4（RBAC、Parquet）更值——那两项是这轮唯一有真实功能/安全价值的剩余工作。
 
 **"phase2" 改名**同理但风险构成不同：命中 `internal/domain`、`internal/compatibility`、`internal/provider`（+`openai`）、`internal/gateway`、`internal/gatewayapi` 共 5+ 个包，24 个文件（含测试）。相比 adminapi 拆分，这个改动确实可以完全被编译器兜底（改名不对会直接报 undefined），风险主要是纯体力活的规模，以及一个必须手工守住、编译器管不到的硬约束——`internal/store/bolt/store_admin.go`（原 store.go）里 `{version: 6, name: "phase2_capability_evidence", ...}` 这个已经在真实部署上跑过的迁移历史字符串字面量绝对不能碰。本轮评估后判断和 adminapi 拆分一样优先级最低，一并推迟，留给下一轮单独执行——这项风险低，适合作为一个独立、专注的小改动去做，不该和其它工作混在一起仓促收尾。两项一并跟踪于 [#86](https://github.com/akz142857/Heimdall/issues/86)。
+
+## P2-19 验证记录（2026-08-07 复量）
+
+08-06 的判断是"拆 adminapi 代价太大、编译器兜不住"。2026-08-07 重新量了一次边界，结论**比当时乐观**，理由如下——记在这里是为了下一轮不必重新量：
+
+| 量到的事实 | 含义 |
+|---|---|
+| 5 个 admin 互斥锁（`adminTopologyMu`/`adminProjectMu`/`adminSettingsMu`/`adminIdentityMu`/`adminAlertMu`）在 `admin_*.go` 之外**零引用**（只有 struct 里的声明） | 状态可以整体搬走，不存在"锁粒度在搬迁中被意外改变"这一类编译器兜不住的风险 |
+| `auditBatch*`、`providerModels`、`setupMu`/`setupToken`、`adminLogin`/`adminSetupRate`、`adminStepUp` 同样零外部引用 | 同上 |
+| `admin_*.go` 触及的 Runtime 字段约 25 个（`r.store` 占 200 次） | 依赖面可枚举，不是无限发散 |
+| **跨界的只有两个符号**：`appendAdminAudit`（被 `alerts.go` 用 3 次）、`reloadProviderRegistry`（定义在 `providers.go`） | 真正的耦合只有两处，不是"十几个文件互相纠缠" |
+| 08-06 说"通用助手长在最容易搬的文件里" | 属实，但那 5 个助手（`admin_projects.go:436-480`）**只有 57 行、全是无状态自由函数**，搬进新包做导出函数是机械操作 |
+| 已有 `TestFrozenV1AdminRoutesAreRegistered` + 48 路由 `chi.Walk` 只读扫描 + 本轮新增的破坏性删除 step-up 扫描 | 路由接线、角色校验、step-by-step 覆盖三张回归网，正好覆盖搬迁最怕出错的地方 |
+
+建议的做法（四个各自可编译、可全绿的提交）：① 57 行助手外提到 `internal/app/adminapi/errors.go`；② 定义 `adminapi.Deps` + `New()`，把审计批处理整体搬进去并导出 `Server.AppendAudit`，`alerts.go` 改为通过它调用——这一步就解决了两个跨界符号里的一个；③ 按域搬（alerts → usage/resources → prices/adjustments → providers/credentials/deployments/routes → projects/keys → session/mfa/setup/users），每域一次提交、搬完立刻跑三张回归网，不攒到最后；④ 20 个 `admin_*_test.go`（4699 行）跟迁。
+
+**硬性纪律**：全程不得夹带任何行为修改。任何"顺手改改"都要另开提交，否则 review 无法把"移动"和"改动"分开看——而这正是 08-06 判断风险高的根源。
+
+这一项仍然是零功能收益，**不做也是一个可以辩护的结论**；上面这些是为了让"做"的那次不必从头摸边界。
 
 ## P2-23 验证记录（2026-08-06，Parquet 完成；RBAC 完成，step-up 覆盖面部分推迟）
 
@@ -110,6 +134,20 @@
 
 - **把 step-up 从"管理员账户创建/删除"推广到 project/credential/provider/route/deployment/redaction-policy/token-guard-policy/alert 的 delete。** 计划里原话是"复用同一函数模式"，但摸了这 8 个 handler 后发现前提不成立：它们全部走 `requireRevision`（`If-Match` header 表达乐观锁），**没有请求体**——不是"复用模式"，是要把这些端点从"无 body 的 DELETE"改成"要求 JSON body 携带 current_password/totp_code"，这是一处破坏性的 API 契约变更。Admin 前端现在发的 DELETE 请求不带 body，backend-only 上线这个改动会让现有的删除按钮当场变成 401——这不是"功能没做全"，是会让已经在用的功能倒退。CLAUDE.md 把"backward-compatible API behavior"列为优先于功能数量的第一条，前端改动又明确排除在本轮范围外（见下）——两者叠加，做这件事的唯一负责任方式是连前端一起改，但那超出了本轮"仅后端"的既定范围。MFA 相关的两个破坏性端点（`deleteAdminMFAAuthenticator`、`disableAdminMFA`）核查后确认**已经**各自内联了等价的密码+TOTP 校验，不需要额外补；`executeAdminDeveloperRequest` 的请求体是要透传给上游 LLM 的实际请求负载，结构上塞不进 step-up 字段，且它的风险已经在"整改过程中新发现的问题"里按"可达时告警"处理过，不属于同一类缺口。
 - **Admin 前端 UI**（角色选择器、只读态提示、按角色禁用写操作按钮）：整轮延续此前"仅后端"的既定范围，没有对应前端改动计划，此处如实记录而不是留空不提。
+
+## 2026-08-07 这一轮（四项，全部已提交）
+
+同样按"写测试 → 把代码改回缺陷状态确认测试真的失败 → 恢复 → race → 全仓无缓存套件"验证，前端项另加 `npm run typecheck`、全量 vitest、`make frontend` 重建并提交 `internal/webui/dist`。
+
+**数据面全局按源限流（`b4c8235`）。** 这是 P1-5 拆出来的最后一项，也是三项未完成里唯一没有 issue 跟踪的。新增 `internal/sourcelimit` + `gateway.source_rate_limit` 配置（默认 600/min/源），中间件 `LimitOpenAI`/`LimitAnthropic` 挂在 guard **之前**——顺序本身是不变量，用组装好的 router 断言（伪造 key 的第三次请求必须是 429 而不是 guard 的 401），单元测试看不到这个顺序。设计要点三条：① 计数 map 有界，超过 `max_tracked_sources` 的地址共用一个溢出预算并单独计量，否则限流器自己就是它要防的放大器；② 解析不出来的来源记到零地址而不是放行，否则畸形 XFF 就是绕过限流最省事的办法；③ 健康检查**刻意**不限流——编排器从单一地址定频探测，按源限流只会把健康实例标成 unready。`Decode` 不与 `Default()` 合并，所以缺失的配置段不能拒绝启动：校验放行、`Normalize` 补追踪上限、`doctor` 对"限流器被关掉"报 warn。
+
+**Admin 只读角色的前端落地（`817f7d9`，#87 的一半）。** 实现前发现一个比 issue 描述更靠前的缺口：**五条签发会话的路径没有一条返回 `role`**，前端根本无从得知自己是不是只读。补齐五条并用一个测试同时覆盖（登录、MFA 完成、会话回读、改密、首启 setup），而不是只测登录。写操作按流程**入口**收口而不是逐个控件——弹不出的表单不需要禁用提交按钮；`ConfirmButton` 承载全部破坏性操作，这一处就是"下一个破坏性按钮默认不会漏网"的保证。自服务保持可用（改自己的密码、自己的 MFA、自己的外观与语言），与服务端 `requireAdminSelfMutation` 对齐；实例级设置（运行时、记账时区、默认语言）照常禁用。Settings 新增"管理员账户"面板，新账户默认 `read_only`。
+
+**step-up 推广到 9 个破坏性删除端点（`ca26a3c`，#87 的另一半）。** 08-06 推迟的理由是"这是破坏性 API 变更、前端会当场 401"。理由本身没错，但两个事实改变了它的分量：本仓库**已有** DELETE 带 body 的先例（MFA 的两个端点，前端在用），且**至今没有任何 git tag**——首个 tag 之前这只是改默认，之后才是要写迁移说明的破坏性变更。所以正确的时间窗口就是现在，且必须在 `v1.0.0-rc.1` 之前。前后端同批改：`ConfirmButton` 在"说明后果"的同一个对话框里收凭据。
+
+推广过程中暴露了原语自身的缺口（不在原报告内）：`verifyPricingReauthentication` **既不限流也不审计失败**。在一个已认证会话背后，这是个离线速度的口令 oracle——cookie 是有效的，请求路径上没有任何东西会拖慢一次猜测，Argon2id 只是让每次猜测对服务端更贵。改为每账户每分钟 5 次失败、按窗口审计一次（不是按次，否则审计追加本身成了放大器），**只计失败不计成功**——预算是用来限制猜测的，而证明了自己身份的操作员没有在猜；按次计会让清理六个资源的操作员做对事情却被锁在半路。原语改名 `verifyReauthenticationMaterial` 且不再是任何人的入口，pricing/adjustment 四个调用点一并挪到有界路径上（按端点各给一份预算，等于让攻击者在每个端点重新猜一遍）。覆盖面从 router 扫出来而不是手写清单，以后新增的删除端点注册当天就在范围内。
+
+**`phase2` 标识符改名（`956c06b`，#86 的一半）。** 55 个标识符、25 个文件。新名字不是起的，是代码自己早就公布了的：北向 profile 是 `heimdall.inference-resources.v1`，所以门面与机器件叫 `InferenceResources`；OpenAI 服务商 profile 自己的值是 `openai.media-resources.v1`，所以那个常量叫 `ProfileOpenAIMediaResources`——按 wire 值 grep 现在能找到符号。**不跨线也不落盘**：profile ID 从来没有以 `phase2` 的形式持久化或发布过，`docs/compatibility/endpoint-manifests.json` 里这个字符串命中数为 0。三处字面量刻意保留旧名——bbolt 迁移 `phase2_capability_evidence` 及其两个 step 名，那是每个已经跑过它的实例里的历史记录，改了会让升级实例与自己的迁移日志对不上；现在有测试钉住，下一次"顺手清理最后几处"会失败而不是悄悄成功。
 
 ## 时区升级影响核查（2026-08-06）
 
@@ -143,7 +181,10 @@
 | deadman 测试偶发挂死 10 分钟 | `internal/deadman/deadman_test.go` | **已修** `c1b814d`。根因不是"排队心跳未到期"这么简单：`NextAttempt` 与比较它的 `e.now()` 都取 `time.Now().UTC()`，丢掉了单调钟，墙钟回拨就会让 `drainOne` 早返回、接收端 handler 永不进入。修法两条：把队头 `NextAttempt` 显式打到过去让投递路径确定发生，再给 `<-entered` 加 10 秒兜底——兜底里必须先放开接收端再 `t.Fatal`，否则 `httptest.Close` 等待在途请求会二次死锁 |
 | 非流式响应无写超时 | `internal/gatewayapi/handler.go` | **已修** `df05301`。见上方 P1-5 修正 |
 | `admin_developer.go` 未通过 gofmt | `internal/app/admin_developer.go` | **已修** `655678d`。CI 跑 `go vet` 但不跑 gofmt，所以没人拦住它 |
-| 数据面无全局按源限流 | `internal/app/runtime.go` `gatewayRouter` | 未做。从 P1-5 拆出，需新增配置项 |
+| 数据面无全局按源限流 | `internal/app/runtime.go` `gatewayRouter` | **已修** `b4c8235`。从 P1-5 拆出，新增 `internal/sourcelimit` 与 `gateway.source_rate_limit` |
+| step-up 原语对失败既不限流也不审计 | `internal/app/admin_prices.go` `verifyPricingReauthentication` | **已修** `ca26a3c`。已认证会话背后的离线速度口令 oracle；推广到 13 个端点前必须先补上。只计失败不计成功 |
+| 会话响应不含 `role`，前端无从得知自己只读 | `internal/app/admin_session.go` 等五条签发路径 | **已修** `817f7d9`。做"两级 RBAC 的前端"时才发现的前置缺口 |
+| `npx tsc --noEmit` 不检查测试文件 | `web/` 验证流程 | **已修**（流程）。改用 `npm run typecheck`，见上方说明 |
 
 ## 顺带修正的既有问题
 
@@ -171,6 +212,6 @@ P1-10、P1-12 都是纯视觉/交互改动，**没有在真实浏览器里逐页
 
 ## 推送状态
 
-前 55 个提交已推送到 `origin/main`；此后的提交仍在本地。
+截至 2026-08-07，`main` 与 `origin/main` 的关系需要在推送后复核：2026-08-06 那一轮之前的 55 提交之说早已过时，`5d4936e` 起的所有提交都已推送，本轮 `b4c8235`/`817f7d9`/`ca26a3c`/`956c06b` 四个提交在本地。
 
-仓库仍无任何 git tag。改默认值这件事在首个 tag 之前只是改默认，之后就成了需要迁移说明的破坏性变更——Developer Workbench 的默认已按上文决定保持 enabled 并改为可达时告警，metrics 端口与 KMS 推荐仍未动。
+仓库仍无任何 git tag。**首个 tag 之前是改默认，之后就是需要迁移说明的破坏性变更**——本轮的 step-up 推广正是踩着这个窗口做的（`ca26a3c`）。Developer Workbench 的默认已按上文决定保持 enabled 并改为可达时告警；metrics 端口与 KMS 推荐仍未动。
