@@ -25,6 +25,8 @@ type phase2MemoryStore struct {
 	mu                      sync.Mutex
 	resources               map[string]domain.ProviderResource
 	failCleanupPendingWrite bool
+	failInFlightWrite       bool
+	failOutcomeWrite        bool
 }
 
 func newPhase2MemoryStore(resources ...domain.ProviderResource) *phase2MemoryStore {
@@ -42,6 +44,18 @@ func (s *phase2MemoryStore) PutProviderResource(_ context.Context, resource doma
 	if s.failCleanupPendingWrite && resource.CleanupStatus == "pending" {
 		s.failCleanupPendingWrite = false
 		return domain.ProviderResource{}, errors.New("injected cleanup state write failure")
+	}
+	// Stops a request between reserving the key and calling the provider, which
+	// is the window a crash used to make unrecoverable.
+	if s.failInFlightWrite && resource.CreationStatus == creationInFlight {
+		s.failInFlightWrite = false
+		return domain.ProviderResource{}, errors.New("injected in-flight state write failure")
+	}
+	// Leaves the record exactly as a crash during the provider call would: the
+	// outcome was never recorded, so the stored state is still in_flight.
+	if s.failOutcomeWrite && resource.CreationStatus == creationUnknown {
+		s.failOutcomeWrite = false
+		return domain.ProviderResource{}, errors.New("injected outcome write failure")
 	}
 	if exists && current.Revision != expected {
 		return domain.ProviderResource{}, errors.New("revision conflict")
@@ -492,5 +506,78 @@ func assertGatewayCode(t *testing.T, err error, code string) {
 	}
 	if gatewayErr.Code != code {
 		t.Fatalf("error=%v code=%q, want %q", err, gatewayErr.Code, code)
+	}
+}
+
+// A reservation is written before the provider is called, so a process that dies
+// in between leaves one behind. It used to be indistinguishable from a call that
+// might already have reached the provider, so the idempotency key was refused
+// for the next seven to thirty days — the caller could neither complete nor
+// retry that request. A reservation owned by an instance that is gone never
+// reached the provider, and can be taken over.
+func TestPhase2ReservationLeftByACrashIsReclaimed(t *testing.T) {
+	adapter := &phase2Adapter{providerType: string(domain.ProviderOpenAI)}
+	f := newPhase2ServiceFixture(t, domain.ProfileOpenAIPhase2, adapter, phase2TargetFor("files", adapter), nil)
+	defer f.close()
+	call := provider.FileCreateCall{Filename: "batch.jsonl", ContentType: "application/json", Purpose: "batch", Data: []byte(`{"x":1}`)}
+
+	f.store.failInFlightWrite = true
+	if _, err := f.service.CreateFile(context.Background(), f.plaintext, "files", "crash-key", call); err == nil {
+		t.Fatal("the interrupted reservation reported success")
+	}
+	if adapter.fileCalls != 0 {
+		t.Fatalf("the provider was called despite the interruption: calls=%d", adapter.fileCalls)
+	}
+
+	// The same process still owns that reservation, so a retry here is a
+	// concurrent duplicate and must be refused.
+	if _, err := f.service.CreateFile(context.Background(), f.plaintext, "files", "crash-key", call); err == nil {
+		t.Fatal("a live reservation was taken over by its own process")
+	} else {
+		assertGatewayCode(t, err, "idempotency_in_progress")
+	}
+
+	// Restart: same data directory, new process. The reservation is now owned by
+	// nobody and provably never reached the provider.
+	f.service.instanceID = "inst_after_restart"
+	created, err := f.service.CreateFile(context.Background(), f.plaintext, "files", "crash-key", call)
+	if err != nil {
+		t.Fatalf("the abandoned reservation was not reclaimed: %v", err)
+	}
+	if adapter.fileCalls != 1 {
+		t.Fatalf("provider calls=%d, want 1", adapter.fileCalls)
+	}
+
+	// And it is a normal completed resource afterwards: the same key returns it
+	// rather than creating a second one upstream.
+	repeated, err := f.service.CreateFile(context.Background(), f.plaintext, "files", "crash-key", call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repeated.ID != created.ID || adapter.fileCalls != 1 {
+		t.Fatalf("repeat created a second upstream resource: id=%s want=%s calls=%d", repeated.ID, created.ID, adapter.fileCalls)
+	}
+}
+
+// The other half of the same split: once the provider has been called, a crash
+// leaves an outcome nobody can determine, and that stays refused.
+func TestPhase2InFlightCrashIsNotReclaimed(t *testing.T) {
+	adapter := &phase2Adapter{providerType: string(domain.ProviderOpenAI), fileErr: &provider.Error{Class: provider.ErrorTimeout, Ambiguous: true, Message: "timeout"}}
+	f := newPhase2ServiceFixture(t, domain.ProfileOpenAIPhase2, adapter, phase2TargetFor("files", adapter), nil)
+	defer f.close()
+	call := provider.FileCreateCall{Filename: "batch.jsonl", ContentType: "application/json", Purpose: "batch", Data: []byte(`{"x":1}`)}
+
+	f.store.failOutcomeWrite = true
+	if _, err := f.service.CreateFile(context.Background(), f.plaintext, "files", "ambiguous-key", call); err == nil {
+		t.Fatal("an ambiguous provider result reported success")
+	}
+	f.service.instanceID = "inst_after_restart"
+	if _, err := f.service.CreateFile(context.Background(), f.plaintext, "files", "ambiguous-key", call); err == nil {
+		t.Fatal("a restart retried a call that may already have reached the provider")
+	} else {
+		assertGatewayCode(t, err, "idempotency_in_progress")
+	}
+	if adapter.fileCalls != 1 {
+		t.Fatalf("provider calls=%d, want 1", adapter.fileCalls)
 	}
 }

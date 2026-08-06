@@ -40,14 +40,19 @@ type ProviderResource struct {
 	IdempotencyKeyHash [32]byte             `json:"idempotency_key_hash"`
 	RequestFingerprint [32]byte             `json:"request_fingerprint"`
 	CreationStatus     string               `json:"creation_status"`
-	CleanupStatus      string               `json:"cleanup_status,omitempty"`
-	Status             string               `json:"status"`
-	ObjectPath         string               `json:"object_path,omitempty"`
-	ObjectContentType  string               `json:"object_content_type,omitempty"`
-	CreatedAt          time.Time            `json:"created_at"`
-	UpdatedAt          time.Time            `json:"updated_at"`
-	ExpiresAt          time.Time            `json:"expires_at"`
-	Revision           uint64               `json:"revision"`
+	// ReservedBy names the process that wrote the reservation. A reservation
+	// still held by a process that is gone can never complete on its own, and
+	// the data directory is exclusive, so a value other than the running
+	// instance's means the request that made it died.
+	ReservedBy        string    `json:"reserved_by,omitempty"`
+	CleanupStatus     string    `json:"cleanup_status,omitempty"`
+	Status            string    `json:"status"`
+	ObjectPath        string    `json:"object_path,omitempty"`
+	ObjectContentType string    `json:"object_content_type,omitempty"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
+	ExpiresAt         time.Time `json:"expires_at"`
+	Revision          uint64    `json:"revision"`
 }
 
 func (r *ProviderResource) GetRevision() uint64  { return r.Revision }

@@ -27,6 +27,80 @@ type Phase2ResourceStore interface {
 	ProviderResourceByIdempotency(context.Context, string, domain.ProviderResourceKind, [32]byte) (domain.ProviderResource, error)
 }
 
+// Creation states for a resource whose upstream twin is created once and must
+// never be created twice.
+//
+//	reserved  — the owner record exists; the provider has not been called yet
+//	in_flight — the provider call has been made and its outcome is not known
+//	unknown   — the call was made and failed in a way that leaves it ambiguous
+//	completed — the upstream resource exists and its ID is recorded
+//
+// reserved and in_flight used to be the same state, which is what made a crash
+// unrecoverable: a reservation left behind by a dead process is indistinguishable
+// from a call that may have already reached the provider, so the only safe answer
+// was to refuse the idempotency key until it expired seven to thirty days later.
+// Splitting them makes the safe half recoverable and leaves the unsafe half
+// exactly as closed as it was.
+const (
+	creationReserved  = "reserved"
+	creationInFlight  = "in_flight"
+	creationUnknown   = "unknown"
+	creationCompleted = "completed"
+)
+
+type idempotencyVerdict int
+
+const (
+	// idempotencyFresh: no record for this key.
+	idempotencyFresh idempotencyVerdict = iota
+	// idempotencyCompleted: the resource exists; return it.
+	idempotencyCompleted
+	// idempotencyInProgress: another request holds it, or its outcome is unknown.
+	idempotencyInProgress
+	// idempotencyReclaim: a reservation from a process that is gone, made before
+	// the provider was ever called. Safe to take over and retry.
+	idempotencyReclaim
+)
+
+func (s *Service) classifyIdempotency(
+	ctx context.Context,
+	projectID string,
+	kind domain.ProviderResourceKind,
+	keyHash, fingerprint [32]byte,
+) (domain.ProviderResource, idempotencyVerdict, error) {
+	existing, err := s.resources.ProviderResourceByIdempotency(ctx, projectID, kind, keyHash)
+	if err != nil {
+		return domain.ProviderResource{}, idempotencyFresh, nil
+	}
+	if existing.RequestFingerprint != fingerprint {
+		return existing, idempotencyInProgress,
+			gatewayError("idempotency_conflict", "idempotency key was reused with a different request", 409, nil)
+	}
+	switch {
+	case existing.CreationStatus == creationCompleted:
+		return existing, idempotencyCompleted, nil
+	case existing.CreationStatus == creationReserved && existing.ReservedBy != s.instanceID:
+		// The data directory is held exclusively, so a reservation owned by any
+		// other instance belongs to a process that is no longer running. It never
+		// reached the provider, so nothing upstream can be duplicated by retrying.
+		return existing, idempotencyReclaim, nil
+	default:
+		return existing, idempotencyInProgress, nil
+	}
+}
+
+// markInFlight records that the provider is about to be called, so a crash from
+// here on is remembered as ambiguous rather than as a reservation to reclaim.
+func (s *Service) markInFlight(ctx context.Context, record domain.ProviderResource) (domain.ProviderResource, error) {
+	record.CreationStatus = creationInFlight
+	record.UpdatedAt = s.now()
+	updated, err := s.resources.PutProviderResource(ctx, record, record.Revision)
+	if err != nil {
+		return record, gatewayError("resource_store_unavailable", "resource creation could not be recorded", 503, err)
+	}
+	return updated, nil
+}
+
 func (s *Service) updateResourceStatus(ctx context.Context, resource domain.ProviderResource, status string) error {
 	if status == "" || status == resource.Status {
 		return nil
@@ -140,24 +214,33 @@ func (s *Service) CreateFile(ctx context.Context, key, route, idempotencyKey str
 	}
 	keyHash := sha256.Sum256([]byte(idempotencyKey))
 	fingerprint := sha256.Sum256(append(append([]byte(route+"\x00"+call.Purpose+"\x00"+call.Filename+"\x00"), call.Data...), []byte(call.ContentType)...))
-	if existing, e := s.resources.ProviderResourceByIdempotency(ctx, principal.Project.ID, domain.ResourceFile, keyHash); e == nil {
-		if existing.RequestFingerprint != fingerprint {
-			return provider.FileObject{}, gatewayError("idempotency_conflict", "idempotency key was reused with a different request", 409, nil)
-		}
-		if existing.CreationStatus == "completed" {
-			return s.GetFile(ctx, key, existing.ID)
-		}
+	existing, verdict, err := s.classifyIdempotency(ctx, principal.Project.ID, domain.ResourceFile, keyHash, fingerprint)
+	if err != nil {
+		return provider.FileObject{}, err
+	}
+	switch verdict {
+	case idempotencyCompleted:
+		return s.GetFile(ctx, key, existing.ID)
+	case idempotencyInProgress:
 		return provider.FileObject{}, gatewayError("idempotency_in_progress", "resource creation is already in progress or has unknown outcome", 409, nil)
 	}
-	externalID, err := id.New("file")
-	if err != nil {
-		return provider.FileObject{}, gatewayError("internal_error", "unable to create resource ID", 500, err)
+	externalID := existing.ID
+	expectedRevision := existing.Revision
+	if verdict != idempotencyReclaim {
+		externalID, err = id.New("file")
+		if err != nil {
+			return provider.FileObject{}, gatewayError("internal_error", "unable to create resource ID", 500, err)
+		}
+		expectedRevision = 0
 	}
 	now := s.now()
-	record := domain.ProviderResource{ID: externalID, Kind: domain.ResourceFile, ProjectID: principal.Project.ID, ProviderID: target.ProviderID, DeploymentID: target.DeploymentID, PublicModel: route, ProfileID: target.ProfileID, Region: target.Region, IdempotencyKeyHash: keyHash, RequestFingerprint: fingerprint, CreationStatus: "reserved", Status: "pending", CreatedAt: now, UpdatedAt: now, ExpiresAt: now.Add(30 * 24 * time.Hour)}
-	record, err = s.resources.PutProviderResource(ctx, record, 0)
+	record := domain.ProviderResource{ID: externalID, Kind: domain.ResourceFile, ProjectID: principal.Project.ID, ProviderID: target.ProviderID, DeploymentID: target.DeploymentID, PublicModel: route, ProfileID: target.ProfileID, Region: target.Region, IdempotencyKeyHash: keyHash, RequestFingerprint: fingerprint, CreationStatus: creationReserved, ReservedBy: s.instanceID, Status: "pending", CreatedAt: now, UpdatedAt: now, ExpiresAt: now.Add(30 * 24 * time.Hour)}
+	record, err = s.resources.PutProviderResource(ctx, record, expectedRevision)
 	if err != nil {
 		return provider.FileObject{}, gatewayError("idempotency_in_progress", "resource creation is already reserved", 409, err)
+	}
+	if record, err = s.markInFlight(ctx, record); err != nil {
+		return provider.FileObject{}, err
 	}
 	requestID := ""
 	call.RequestID = requestID
@@ -172,7 +255,7 @@ func (s *Service) CreateFile(ctx context.Context, key, route, idempotencyKey str
 		return callErr
 	})
 	if err != nil {
-		record.CreationStatus = "unknown"
+		record.CreationStatus = creationUnknown
 		record.UpdatedAt = s.now()
 		_, _ = s.resources.PutProviderResource(ctx, record, record.Revision)
 		return provider.FileObject{}, err
@@ -180,14 +263,14 @@ func (s *Service) CreateFile(ctx context.Context, key, route, idempotencyKey str
 	record.UpstreamID = upstream.ID
 	objectPath, objectErr := s.writeResourceObject(record.ID, call.Data)
 	if objectErr != nil {
-		record.CreationStatus = "unknown"
+		record.CreationStatus = creationUnknown
 		record.UpdatedAt = s.now()
 		_, _ = s.resources.PutProviderResource(ctx, record, record.Revision)
 		return provider.FileObject{}, gatewayError("resource_store_unavailable", "file content could not be stored", 503, objectErr)
 	}
 	record.ObjectPath = objectPath
 	record.ObjectContentType = call.ContentType
-	record.CreationStatus = "completed"
+	record.CreationStatus = creationCompleted
 	record.Status = upstream.Status
 	if record.Status == "" {
 		record.Status = "uploaded"
@@ -433,24 +516,33 @@ func (s *Service) CreateBatch(ctx context.Context, key, idempotencyKey string, c
 	encoded, _ := json.Marshal(call)
 	keyHash := sha256.Sum256([]byte(idempotencyKey))
 	fingerprint := sha256.Sum256(encoded)
-	if existing, e := s.resources.ProviderResourceByIdempotency(ctx, principal.Project.ID, domain.ResourceBatch, keyHash); e == nil {
-		if existing.RequestFingerprint != fingerprint {
-			return provider.BatchObject{}, gatewayError("idempotency_conflict", "idempotency key was reused with a different request", 409, nil)
-		}
-		if existing.CreationStatus == "completed" {
-			return s.GetBatch(ctx, key, existing.ID)
-		}
+	existing, verdict, err := s.classifyIdempotency(ctx, principal.Project.ID, domain.ResourceBatch, keyHash, fingerprint)
+	if err != nil {
+		return provider.BatchObject{}, err
+	}
+	switch verdict {
+	case idempotencyCompleted:
+		return s.GetBatch(ctx, key, existing.ID)
+	case idempotencyInProgress:
 		return provider.BatchObject{}, gatewayError("idempotency_in_progress", "batch creation is already in progress or unknown", 409, nil)
 	}
-	externalID, err := id.New("batch")
-	if err != nil {
-		return provider.BatchObject{}, gatewayError("internal_error", "unable to create resource ID", 500, err)
+	externalID := existing.ID
+	expectedRevision := existing.Revision
+	if verdict != idempotencyReclaim {
+		externalID, err = id.New("batch")
+		if err != nil {
+			return provider.BatchObject{}, gatewayError("internal_error", "unable to create resource ID", 500, err)
+		}
+		expectedRevision = 0
 	}
 	now := s.now()
-	record := domain.ProviderResource{ID: externalID, Kind: domain.ResourceBatch, ProjectID: principal.Project.ID, ProviderID: file.ProviderID, DeploymentID: file.DeploymentID, PublicModel: file.PublicModel, ProfileID: file.ProfileID, Region: file.Region, IdempotencyKeyHash: keyHash, RequestFingerprint: fingerprint, CreationStatus: "reserved", Status: "pending", CreatedAt: now, UpdatedAt: now, ExpiresAt: now.Add(7 * 24 * time.Hour)}
-	record, err = s.resources.PutProviderResource(ctx, record, 0)
+	record := domain.ProviderResource{ID: externalID, Kind: domain.ResourceBatch, ProjectID: principal.Project.ID, ProviderID: file.ProviderID, DeploymentID: file.DeploymentID, PublicModel: file.PublicModel, ProfileID: file.ProfileID, Region: file.Region, IdempotencyKeyHash: keyHash, RequestFingerprint: fingerprint, CreationStatus: creationReserved, ReservedBy: s.instanceID, Status: "pending", CreatedAt: now, UpdatedAt: now, ExpiresAt: now.Add(7 * 24 * time.Hour)}
+	record, err = s.resources.PutProviderResource(ctx, record, expectedRevision)
 	if err != nil {
 		return provider.BatchObject{}, gatewayError("idempotency_in_progress", "batch creation is already reserved", 409, err)
+	}
+	if record, err = s.markInFlight(ctx, record); err != nil {
+		return provider.BatchObject{}, err
 	}
 	requestID := ""
 	call.RequestID = requestID
@@ -466,13 +558,13 @@ func (s *Service) CreateBatch(ctx context.Context, key, idempotencyKey string, c
 		return callErr
 	})
 	if err != nil {
-		record.CreationStatus = "unknown"
+		record.CreationStatus = creationUnknown
 		record.UpdatedAt = s.now()
 		_, _ = s.resources.PutProviderResource(ctx, record, record.Revision)
 		return provider.BatchObject{}, err
 	}
 	record.UpstreamID = upstream.ID
-	record.CreationStatus = "completed"
+	record.CreationStatus = creationCompleted
 	record.Status = upstream.Status
 	record.UpdatedAt = s.now()
 	if _, err := s.resources.PutProviderResource(ctx, record, record.Revision); err != nil {
@@ -597,24 +689,33 @@ func (s *Service) StartAsyncInvoke(ctx context.Context, key, idempotencyKey stri
 	encoded, _ := json.Marshal(request)
 	keyHash := sha256.Sum256([]byte(idempotencyKey))
 	fingerprint := sha256.Sum256(encoded)
-	if existing, e := s.resources.ProviderResourceByIdempotency(ctx, principal.Project.ID, domain.ResourceAsyncInvoke, keyHash); e == nil {
-		if existing.RequestFingerprint != fingerprint {
-			return provider.AsyncInvokeObject{}, gatewayError("idempotency_conflict", "idempotency key was reused with a different request", 409, nil)
-		}
-		if existing.CreationStatus == "completed" {
-			return s.GetAsyncInvoke(ctx, key, existing.ID)
-		}
+	existing, verdict, err := s.classifyIdempotency(ctx, principal.Project.ID, domain.ResourceAsyncInvoke, keyHash, fingerprint)
+	if err != nil {
+		return provider.AsyncInvokeObject{}, err
+	}
+	switch verdict {
+	case idempotencyCompleted:
+		return s.GetAsyncInvoke(ctx, key, existing.ID)
+	case idempotencyInProgress:
 		return provider.AsyncInvokeObject{}, gatewayError("idempotency_in_progress", "async invocation is already in progress or unknown", 409, nil)
 	}
-	externalID, err := id.New("async")
-	if err != nil {
-		return provider.AsyncInvokeObject{}, gatewayError("internal_error", "unable to create resource ID", 500, err)
+	externalID := existing.ID
+	expectedRevision := existing.Revision
+	if verdict != idempotencyReclaim {
+		externalID, err = id.New("async")
+		if err != nil {
+			return provider.AsyncInvokeObject{}, gatewayError("internal_error", "unable to create resource ID", 500, err)
+		}
+		expectedRevision = 0
 	}
 	now := s.now()
-	record := domain.ProviderResource{ID: externalID, Kind: domain.ResourceAsyncInvoke, ProjectID: principal.Project.ID, ProviderID: target.ProviderID, DeploymentID: target.DeploymentID, PublicModel: request.Model, ProfileID: target.ProfileID, Region: target.Region, IdempotencyKeyHash: keyHash, RequestFingerprint: fingerprint, CreationStatus: "reserved", Status: "pending", CreatedAt: now, UpdatedAt: now, ExpiresAt: now.Add(7 * 24 * time.Hour)}
-	record, err = s.resources.PutProviderResource(ctx, record, 0)
+	record := domain.ProviderResource{ID: externalID, Kind: domain.ResourceAsyncInvoke, ProjectID: principal.Project.ID, ProviderID: target.ProviderID, DeploymentID: target.DeploymentID, PublicModel: request.Model, ProfileID: target.ProfileID, Region: target.Region, IdempotencyKeyHash: keyHash, RequestFingerprint: fingerprint, CreationStatus: creationReserved, ReservedBy: s.instanceID, Status: "pending", CreatedAt: now, UpdatedAt: now, ExpiresAt: now.Add(7 * 24 * time.Hour)}
+	record, err = s.resources.PutProviderResource(ctx, record, expectedRevision)
 	if err != nil {
 		return provider.AsyncInvokeObject{}, gatewayError("idempotency_in_progress", "async invocation is already reserved", 409, err)
+	}
+	if record, err = s.markInFlight(ctx, record); err != nil {
+		return provider.AsyncInvokeObject{}, err
 	}
 	requestID := ""
 	var upstream provider.AsyncInvokeObject
@@ -624,13 +725,13 @@ func (s *Service) StartAsyncInvoke(ctx context.Context, key, idempotencyKey stri
 		return callErr
 	})
 	if err != nil {
-		record.CreationStatus = "unknown"
+		record.CreationStatus = creationUnknown
 		record.UpdatedAt = s.now()
 		_, _ = s.resources.PutProviderResource(ctx, record, record.Revision)
 		return provider.AsyncInvokeObject{}, err
 	}
 	record.UpstreamID = upstream.InvocationARN
-	record.CreationStatus = "completed"
+	record.CreationStatus = creationCompleted
 	record.Status = upstream.Status
 	record.UpdatedAt = s.now()
 	if _, err := s.resources.PutProviderResource(ctx, record, record.Revision); err != nil {
