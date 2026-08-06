@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net/http"
 	"net/netip"
-	"strconv"
 	"strings"
 	"time"
 
@@ -445,47 +444,4 @@ func (r *Runtime) refreshAdminAuth(writer http.ResponseWriter, request *http.Req
 func (r *Runtime) auditAdminMutation(request *http.Request, action, targetType, targetID string) error {
 	admin := request.Context().Value(adminContextKey{}).(adminRequestContext)
 	return r.appendAdminAudit("admin_user", admin.session.Username, action, targetType, targetID, "success", "")
-}
-
-func requireRevision(writer http.ResponseWriter, request *http.Request) (uint64, bool) {
-	raw := request.Header.Get("If-Match")
-	if len(raw) < 3 || raw[0] != '"' || raw[len(raw)-1] != '"' || strings.Contains(raw[1:len(raw)-1], `"`) {
-		writeJSON(writer, http.StatusPreconditionRequired, map[string]string{"error": "If-Match revision is required"})
-		return 0, false
-	}
-	revision, err := strconv.ParseUint(raw[1:len(raw)-1], 10, 64)
-	if err != nil || revision == 0 {
-		writeJSON(writer, http.StatusPreconditionRequired, map[string]string{"error": "If-Match revision is required"})
-		return 0, false
-	}
-	return revision, true
-}
-
-func adminMutationError(writer http.ResponseWriter, err error) {
-	switch {
-	case errors.Is(err, boltstore.ErrNotFound):
-		adminNotFound(writer)
-	case errors.Is(err, boltstore.ErrRevisionConflict):
-		adminPreconditionFailed(writer)
-	case errors.Is(err, boltstore.ErrAlreadyExists), errors.Is(err, boltstore.ErrKeyHashConflict):
-		writeJSON(writer, http.StatusConflict, map[string]string{"error": "resource conflict"})
-	default:
-		adminBadRequest(writer, err.Error())
-	}
-}
-
-func adminBadRequest(writer http.ResponseWriter, message string) {
-	writeJSON(writer, http.StatusBadRequest, map[string]string{"error": message})
-}
-
-func adminBadRequestCode(writer http.ResponseWriter, code, message string) {
-	writeJSON(writer, http.StatusBadRequest, map[string]string{"code": code, "error": message})
-}
-
-func adminPreconditionFailed(writer http.ResponseWriter) {
-	writeJSON(writer, http.StatusPreconditionFailed, map[string]string{"error": "resource revision conflict"})
-}
-
-func adminAuditError(writer http.ResponseWriter) {
-	writeJSON(writer, http.StatusServiceUnavailable, map[string]string{"error": "audit unavailable"})
 }

@@ -413,11 +413,3 @@ func decodeResourceCursor(cursor string) (string, error) {
 func revisionETag(revision uint64) string {
 	return `"` + strconv.FormatUint(revision, 10) + `"`
 }
-
-func adminNotFound(writer http.ResponseWriter) {
-	writeJSON(writer, http.StatusNotFound, map[string]string{"error": "resource not found"})
-}
-
-func adminStoreError(writer http.ResponseWriter) {
-	writeJSON(writer, http.StatusServiceUnavailable, map[string]string{"error": "metadata unavailable"})
-}
