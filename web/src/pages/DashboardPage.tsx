@@ -15,7 +15,6 @@ type BreakdownDimension = "project" | "provider" | "requested_model" | "provider
 
 export function DashboardPage() {
   const { t } = useTranslation();
-  const formatInstant = useInstantFormatter();
   const [trendMetric, setTrendMetric] = useState<TrendMetric>("requests");
   const [dimension, setDimension] = useState<BreakdownDimension>("project");
   const query = useQuery({
@@ -73,26 +72,6 @@ export function DashboardPage() {
       {/* Nothing has ever been served, so the panels below are all zeroes and "no data".
           The chain that produces the first request is more useful than an empty chart. */}
       {dashboard.usage.watermark_sequence === 0 && today.attempts === 0 && <FirstRunChecklist />}
-      {/* A boundary about to move belongs where people actually look. The
-          settings page shows it too, but nobody visits settings to read
-          today's numbers. */}
-      {dashboard.time_context.pending_timezone && dashboard.time_context.pending_effective_at && (
-        <div className="notice warning" role="status">
-          <strong>{t("dashboard.pendingTimezoneTitle", { timezone: dashboard.time_context.pending_timezone })}</strong>
-          <span>{t("dashboard.pendingTimezoneDetail", {
-            at: formatInstant(dashboard.time_context.pending_effective_at, "full"),
-          })}</span>
-        </div>
-      )}
-      {/* Which day these figures cover. Without it the numbers are ambiguous
-          to anyone whose own day starts at a different hour than the server's. */}
-      <p className="metric-grid-scope" title={t("dashboard.accountingTimezoneHint")}>
-        <span>{t("dashboard.accountingTimezone", { timezone: dashboard.time_context.accounting_timezone })}</span>
-        <small>{t("dashboard.accountingPeriod", {
-          start: dashboard.time_context.period_start,
-          end: dashboard.time_context.period_end,
-        })}</small>
-      </p>
       <section className="metric-grid" aria-label={t("dashboard.todayMetrics")}>
         <Metric label={t("dashboard.requests")} value={compactNumber(today.requests)} detail={t("dashboard.attempts", { count: today.attempts })} />
         <Metric

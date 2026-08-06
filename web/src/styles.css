@@ -153,12 +153,6 @@ h3 { margin-bottom: 0; font-size: 18px; }
 .inline-test-result.stale > span { background: var(--warning); }
 @keyframes test-pulse { 50% { opacity: .35; } }
 
-/* Names the day the metrics below cover; sits tight above the grid so the two read as one unit. */
-.metric-grid-scope {
-  display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1) var(--space-3);
-  margin: 0 0 var(--space-2); color: var(--muted-2); font: var(--font-size-xs) var(--mono); letter-spacing: .08em;
-}
-.metric-grid-scope small { color: var(--muted-3, var(--muted-2)); letter-spacing: .04em; }
 .metric-grid { display: grid; grid-template-columns: repeat(6, 1fr); border: 1px solid var(--line); }
 .metric {
   min-width: 0; padding: 20px 18px; background: var(--surface-panel);
@@ -884,6 +878,7 @@ td small, td code { display: block; margin-top: 4px; color: var(--muted); }
   text-align: left; overflow-wrap: anywhere;
 }
 .settings-facts dd code { font-family: var(--mono); }
+.topline-timezone { color: var(--muted-2); font-family: var(--mono); }
 .settings-facts dd small { display: block; margin-top: var(--space-1); color: var(--muted); font-size: var(--font-size-xs); }
 /* The three consequences of a time zone change, stated before it is confirmed. */
 .settings-consequences { margin: var(--space-3) 0; padding-left: var(--space-5); display: grid; gap: var(--space-2); color: var(--muted); font-size: .88rem; line-height: 1.5; }

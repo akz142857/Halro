@@ -78,22 +78,6 @@ describe("DashboardPage", () => {
     expect(walRow.querySelector(".status-dot")).toHaveClass("ok");
   });
 
-  // The figures are summed over the server's accounting day. An administrator
-  // whose own day starts at a different hour cannot interpret them without
-  // being told which day they cover.
-  it("names the accounting time zone and period the today metrics cover", async () => {
-    const data = dashboard();
-    data.time_context = timeContext({
-      accounting_timezone: "America/New_York",
-      period_start: "2026-08-06T04:00:00Z",
-      period_end: "2026-08-07T04:00:00Z",
-    });
-    vi.spyOn(api, "dashboard").mockResolvedValue(data);
-    renderPage();
-
-    expect(await screen.findByText("按 America/New_York 计算")).toBeInTheDocument();
-    expect(screen.getByText(/2026-08-06T04:00:00Z 至 2026-08-07T04:00:00Z/)).toBeInTheDocument();
-  });
 
   // Anomaly timestamps are rendered in that same zone, not the browser's, so
   // they line up with the totals above them.
@@ -116,29 +100,7 @@ describe("DashboardPage", () => {
     expect(stamp).toBeInTheDocument();
   });
 
-  // Settings shows this too, but nobody opens settings to read today's
-  // numbers — and this is the page whose numbers are about to mean something
-  // different.
-  it("announces a scheduled accounting timezone change", async () => {
-    const data = dashboard();
-    data.time_context = timeContext({
-      pending_timezone: "Europe/Berlin",
-      pending_effective_at: "2026-08-06T16:00:00Z",
-    });
-    vi.spyOn(api, "dashboard").mockResolvedValue(data);
-    renderPage();
 
-    expect(await screen.findByText("记账时区将切换为 Europe/Berlin")).toBeInTheDocument();
-    expect(screen.getByText(/日预算也会按新时区重新划分自然日/)).toBeInTheDocument();
-  });
-
-  it("says nothing about a timezone change when none is scheduled", async () => {
-    vi.spyOn(api, "dashboard").mockResolvedValue(dashboard());
-    renderPage();
-
-    expect(await screen.findByText(/按 Asia\/Shanghai 计算/)).toBeInTheDocument();
-    expect(screen.queryByText(/记账时区将切换为/)).not.toBeInTheDocument();
-  });
 
   it("renders empty states when collection fields are null", async () => {
     const empty = dashboard();
