@@ -2,11 +2,11 @@
 
 > [260805.md](260805.md) 是一份有日期的发现记录，不改动。本文件是它的**活的对照表**：哪些做了、哪些没做、以及做的过程中改变了对原结论的判断。
 >
-> 编号沿用 260805.md 第十章的修复清单。最后更新：2026-08-06（P2 第二批合并后）。
+> 编号沿用 260805.md 第十章的修复清单。最后更新：2026-08-06（P2 第三批合并、已 push）。
 
 ## 一句话状态
 
-清单共 23 项，已完成 19 项（P2-20 完成四分之三）。P0 四项全部完成；P1 八项完成七项，剩下的 P1-7 卡在一个部署决策上、ADR 已写好；P2 十一项完成七项半。**全部已合并进 main，没有悬空分支。** 剩下的四项都是大件：改磁盘格式、大重构、发版工程、一个需要设计的对账器。整改过程中原报告的四条结论被修正，另外发现四项报告里没有的问题，其中三项已修完。
+清单共 23 项，已完成 21 项。P0 四项、P1 七项（P1-7 只差一个部署决策，ADR 已写好）、P2 十项。**全部已合并进 main 并推送到 origin，没有悬空分支。** 只剩两项：P2-19（拆 `internal/app`，纯大重构）和 P2-23 的两个子项（Parquet 依赖降级、Admin 两级 RBAC）。整改过程中原报告的四条结论被修正，另外发现四项报告里没有的问题，其中三项已修完。
 
 ## 已完成
 
@@ -32,7 +32,9 @@
 | P2-22 | dead-man 探测移出状态锁 + 告警退避可取消 + SSE 裸 `\r` | `7dd39c3` |
 | P2-17 | sse/openaiapi/safelog 三处 fuzz 目标 + 语料入库 + CI fuzz 作业 | `8c61229` |
 | P2-21 | 焦点环收敛到一个 token、Light 二三级层级对调、尺寸 ratchet（见下） | `4cf84d6` |
-| P2-20 | 网关时钟可注入、预算超限首次即短路、流式中断按已投递量计费（3/4，见下） | `d6601dc` `a7c905f` |
+| P2-20 | 网关时钟可注入、预算超限首次即短路、流式中断按已投递量计费、`reserved` 崩溃后可回收 | `d6601dc` `a7c905f` `4b61b49` |
+| P2-16 | ledger 完整性 [ADR 0016](../adr/0016-ledger-frame-integrity.md)（Proposed，见下） | `f1df548` |
+| P2-23 | 版本注入 + `make version`、首启配置带注释、CHANGELOG 收敛、英文 user-guide（4/6，见下） | `f503d9c` `e0922dd` |
 
 ## 未完成
 
@@ -48,10 +50,9 @@
 
 | 编号 | 内容 | 备注 |
 |---|---|---|
-| P2-20 | 仅剩 `reserved` 幂等状态的恢复路径 | 进程在"写 reserved → 调上游"之间崩溃，幂等键锁死 7~30 天。需要一个对账器，是设计题不是补丁。另一半（`internal/idempotency` 死代码）已随 P1-11 删除 |
-| P2-16 | ledger 帧升级为 HMAC + hash 链 | **改格式，风险最大**。要和 [adr/0014](../adr/0014-ledger-wal-backup-compatibility.md) 的 v1/v2 帧版本约定对齐，需要迁移路径和备份 manifest 联动，应先写 ADR |
-| P2-19 | 拆分 `internal/app`、`store.go` 按数据域拆、"phase2" 重命名 | 大重构 |
-| P2-23 | 首个 git tag + CHANGELOG + 版本注入、config 注释模板、英文 user-guide、Parquet 降级、Admin 两级 RBAC | 多子项，RBAC 单独最大 |
+| P2-16 | ledger 帧升级为 HMAC + hash 链 | **ADR 已写：[adr/0016](../adr/0016-ledger-frame-integrity.md)，状态 Proposed**。机制已定（帧 epoch 3、链而非逐帧 MAC、密钥沿用 audit 的存法）；**三件事待定**：首个 tag 之前是否值得再开一个格式 epoch、链校验失败是否像 audit 那样拒绝启动、CRC-only 前缀怎么报告。决定后才动代码 |
+| P2-19 | 拆分 `internal/app`、`store.go` 按数据域拆、"phase2" 重命名 | 大重构，没做 |
+| P2-23 | 剩：Parquet 依赖降级、Admin 两级 RBAC + 高危操作 step-up | 首个 tag 也没打，见下 |
 
 ## 整改过程中对原结论的修正
 
@@ -91,6 +92,9 @@
 
 - **P2-21 的 `.data-row` 基类没抽。** 行家族已经实质分化——不同的 grid、min-height、padding，`provider-row`/`credential-row` 各自被声明两次——把它们折到一个基类会改动真实布局数值，而唯一的验证手段是 jsdom。两个工具栏合并了，因为字号地板落地之后它们已经逐字节相同。
 - **P2-21 的尺寸 token 用 ratchet 而不是转换。** `--space-*`/`--radius-*` 声明了几乎没人消费，styles.css 里有 758 处手写间距/圆角。一次性换掉等于重写每一处布局且无法验证；改成"只许降不许升"的基线，转换一批就把基线调低一次。
+- **首个 git tag 没打。** `docs/milestones/implementation-status.md` 定了一条有门禁的 RC 序列（`v1.0.0-rc.1` → `rc.2` → `v1.0.0`，每一步都要核验 release 资产、校验和、SBOM、Sigstore 签名），推 tag 会触发 release workflow。这是发版决定，不是收尾杂活。版本注入、`make version`、CHANGELOG 都已就绪，打 tag 只差决定。
+- **Parquet 依赖降级没做。** 它不只是删依赖：ADR 0014 的备份 manifest 固定了两个 Parquet manifest 版本与水位，restore 会校验这两个数据集。改成可选导出或 NDJSON 会连带改动备份/恢复契约，应该走 ADR 而不是顺手改。
+- **`jsonschema-go` 的 SBOM 范围没动。** 它只被 `deploy/observability/schema_test.go` 用到。想把它移出主模块要建嵌套模块，但发版 SBOM 用 `anchore/sbom-action` 扫 `path: .`，嵌套 go.mod 一样会被收录——机制达不到目的，先不做。
 - **流式中断计费的 ambiguous 分支没动。** 那条分支一个字节都没投递过，没有可用来封顶的量；ambiguous 的语义是"上游可能已经完整服务过"，预留正是为此存在的。
 
 ## 已知的未验证面
@@ -101,8 +105,8 @@ P1-10、P1-12 都是纯视觉/交互改动，**没有在真实浏览器里逐页
 - 首启 checklist 只在"用量水位从未推进过"的实例上出现，jsdom 测了显示/隐藏与链接目标，没测过真实布局；
 - Modal 脏检查用 `.modal.discarding > :not(header):not(.discard-prompt) { display: none }` 遮住表单，靠的是 CSS 而不是卸载子树——这是"取消后每个字段原样还在"的前提，但也意味着任何绕开这条选择器的子元素会漏出来。
 
-## 仍未推送
+## 推送状态
 
-main 领先 `origin/main` 55 个提交，全部是本地合并，尚未 push。这些工作要同步到远端需要显式决定。
+前 55 个提交已推送到 `origin/main`；此后的提交仍在本地。
 
-仓库仍无任何 git tag（P2 第 23 项）。这一项越早做越便宜：改默认值——Developer Workbench 关闭、metrics 端口避开 9090、推荐 KMS 托管——在首个 tag 之前只是改默认，之后就成了需要迁移说明的破坏性变更。
+仓库仍无任何 git tag。改默认值这件事在首个 tag 之前只是改默认，之后就成了需要迁移说明的破坏性变更——Developer Workbench 的默认已按上文决定保持 enabled 并改为可达时告警，metrics 端口与 KMS 推荐仍未动。
