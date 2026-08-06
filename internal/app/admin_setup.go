@@ -92,7 +92,7 @@ func (r *Runtime) setupAdmin(writer http.ResponseWriter, request *http.Request) 
 	}
 	if r.setupTokenNeeded {
 		if !r.verifySetupToken(input.SetupToken) {
-			if !r.allowAdminSetup(request.RemoteAddr, time.Now()) {
+			if !r.allowAdminSetup(request.RemoteAddr, r.clockNow()) {
 				writer.Header().Set("Retry-After", "60")
 				writeJSON(writer, http.StatusTooManyRequests, map[string]string{"error": "setup rate limit exceeded"})
 				return
@@ -100,7 +100,7 @@ func (r *Runtime) setupAdmin(writer http.ResponseWriter, request *http.Request) 
 			writeJSON(writer, http.StatusForbidden, map[string]string{"error": "invalid setup token"})
 			return
 		}
-	} else if !r.allowAdminSetup(request.RemoteAddr, time.Now()) {
+	} else if !r.allowAdminSetup(request.RemoteAddr, r.clockNow()) {
 		writer.Header().Set("Retry-After", "60")
 		writeJSON(writer, http.StatusTooManyRequests, map[string]string{"error": "setup rate limit exceeded"})
 		return
