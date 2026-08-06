@@ -517,3 +517,85 @@ func (s *postPayloadFailureService) ChatStream(
 	}
 	return errors.New("upstream failed")
 }
+
+// deadlineRecorder is an httptest.ResponseRecorder that also answers the
+// SetWriteDeadline half of http.ResponseController, which the recorder alone
+// does not implement.
+type deadlineRecorder struct {
+	*httptest.ResponseRecorder
+	deadlines []time.Time
+	flushes   int
+}
+
+func (r *deadlineRecorder) SetWriteDeadline(deadline time.Time) error {
+	r.deadlines = append(r.deadlines, deadline)
+	return nil
+}
+
+func (r *deadlineRecorder) Flush() { r.flushes++; r.ResponseRecorder.Flush() }
+
+func TestNonStreamingResponsesArmAWriteDeadlineWhenTheyStart(t *testing.T) {
+	service := &fakeService{}
+	handler, _ := NewWithOptions(service, Options{MaxRequestBytes: 1024, WriteTimeout: 3 * time.Second})
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/embeddings",
+		strings.NewReader(`{"model":"embedding","input":["hello"]}`),
+	)
+	request.Header.Set("Authorization", "Bearer gw_test")
+	response := &deadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+	before := time.Now()
+	handler.WithWriteDeadline(http.HandlerFunc(handler.Embeddings)).ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if len(response.deadlines) != 1 {
+		t.Fatalf("expected exactly one armed deadline, got %d", len(response.deadlines))
+	}
+	// Armed at the response, not at the request: a slow provider must not consume
+	// the client's read budget before a single byte has been sent.
+	if elapsed := response.deadlines[0].Sub(before); elapsed < 3*time.Second {
+		t.Fatalf("deadline %s is shorter than the configured write timeout", elapsed)
+	}
+}
+
+func TestRejectedRequestsAlsoArmAWriteDeadline(t *testing.T) {
+	service := &fakeService{}
+	handler, _ := NewWithOptions(service, Options{MaxRequestBytes: 1024, WriteTimeout: 3 * time.Second})
+	request := httptest.NewRequest(http.MethodPost, "/v1/embeddings", strings.NewReader(`{`))
+	request.Header.Set("Authorization", "Bearer gw_test")
+	response := &deadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+	handler.WithWriteDeadline(http.HandlerFunc(handler.Embeddings)).ServeHTTP(response, request)
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if len(response.deadlines) != 1 {
+		t.Fatalf("an error envelope is a response too: deadlines=%d", len(response.deadlines))
+	}
+}
+
+func TestStreamingKeepsFlushingAndExtendsThroughTheWrapper(t *testing.T) {
+	service := &fakeService{}
+	handler, _ := NewWithOptions(service, Options{MaxRequestBytes: 1024, WriteTimeout: 3 * time.Second})
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/chat/completions",
+		strings.NewReader(`{"model":"chat","stream":true,"messages":[{"role":"user","content":"hello"}]}`),
+	)
+	request.Header.Set("Authorization", "Bearer gw_test")
+	response := &deadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+	handler.WithWriteDeadline(http.HandlerFunc(handler.ChatCompletions)).ServeHTTP(response, request)
+
+	if !strings.HasSuffix(response.Body.String(), "data: [DONE]\n\n") {
+		t.Fatalf("stream did not complete through the wrapper: %q", response.Body.String())
+	}
+	if response.flushes == 0 {
+		t.Fatal("the wrapper swallowed Flush, so events would sit in the buffer")
+	}
+	// One per event, so a stalled reader costs a single write rather than the stream.
+	if len(response.deadlines) < 2 {
+		t.Fatalf("expected the stream to keep extending the deadline, got %d", len(response.deadlines))
+	}
+}
