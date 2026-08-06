@@ -471,6 +471,22 @@ func (attempt *activeAttempt) finish(providerErr error, settlement budget.Settle
 	return nil
 }
 
+// abort releases everything startAttempt took, for a request that fails after
+// the attempt exists but before the provider is ever called. finish is the wrong
+// tool there: it judges the target, and a local failure says nothing about the
+// upstream's health — so the breaker is abandoned, which returns a half-open
+// probe slot without counting as either a success or a failure.
+//
+// Every caller of startAttempt needs this on its local-failure paths. Writing it
+// out five times is how three of them came to be missing it.
+func (attempt *activeAttempt) abort(outcome string) error {
+	attempt.concurrency.Release()
+	attempt.breaker.Abandon()
+	cleanupErr := attempt.service.settleAttempt(attempt.accounting, budget.Settlement{Outcome: outcome})
+	finalizeErr := attempt.service.finalizeRequest(attempt.run.requestLease, outcome)
+	return errors.Join(cleanupErr, finalizeErr)
+}
+
 // reportBreaker judges the target on the attempt's outcome, except when the
 // caller went away. A cancelled read surfaces from the transport as a truncated
 // response, which is indistinguishable from the provider cutting the stream, so
@@ -748,7 +764,8 @@ func (s *Service) Chat(
 			attemptCount++
 			generation, resolveErr := target.Generation(provider.OperationChat)
 			if resolveErr != nil {
-				return openaiapi.ChatCompletionResponse{}, gatewayError("unsupported_feature", "generation primitive is unavailable", 400, resolveErr)
+				abortErr := attempt.abort("unsupported_feature")
+				return openaiapi.ChatCompletionResponse{}, gatewayError("unsupported_feature", "generation primitive is unavailable", 400, errors.Join(resolveErr, abortErr))
 			}
 			semanticResponse, providerErr := generation.Generate(ctx, provider.GenerateCall{RequestID: requestID, ProviderModel: target.ProviderModel, Request: canonical})
 			response := openaiapi.ChatCompletionResponse{}
@@ -1011,7 +1028,8 @@ func (s *Service) MessagesNative(ctx context.Context, plaintextKey, version stri
 	}
 	adapter, err := target.NativeMessages(false)
 	if err != nil {
-		return anthropicapi.Message{}, gatewayError("unsupported_feature", "native Messages primitive is unavailable", 400, err)
+		abortErr := attempt.abort("unsupported_feature")
+		return anthropicapi.Message{}, gatewayError("unsupported_feature", "native Messages primitive is unavailable", 400, errors.Join(err, abortErr))
 	}
 	payload, _ := envelope.PayloadFor(target.ProfileID, 1, compatibility.NativeRequest)
 	result, providerErr := adapter.MessagesNative(ctx, provider.NativeMessageCall{RequestID: run.requestID, ProviderModel: target.ProviderModel, Version: version, Payload: payload})
@@ -1086,7 +1104,8 @@ func (s *Service) MessagesNativeStream(ctx context.Context, plaintextKey, versio
 	}
 	adapter, err := target.NativeMessages(true)
 	if err != nil {
-		return gatewayError("unsupported_feature", "native Messages stream primitive is unavailable", 400, err)
+		abortErr := attempt.abort("unsupported_feature")
+		return gatewayError("unsupported_feature", "native Messages stream primitive is unavailable", 400, errors.Join(err, abortErr))
 	}
 	payload, _ := envelope.PayloadFor(target.ProfileID, 1, compatibility.NativeRequest)
 	registry, _ := anthropicwire.NewNativeSchemaRegistry()
@@ -1407,20 +1426,18 @@ func (s *Service) ChatStream(
 				principal.Project.RedactionPolicyID,
 			)
 			if streamErr != nil {
-				attempt.concurrency.Release()
-				attempt.breaker.Abandon()
-				cleanupErr := s.settleAttempt(attempt.accounting, budget.Settlement{Outcome: "policy_rejected"})
-				finalizeErr := s.finalizeRequest(requestLease, "policy_rejected")
+				abortErr := attempt.abort("policy_rejected")
 				return gatewayError(
 					"streaming_redaction_incompatible",
 					"streaming is disabled by the Project redaction policy",
-					400, errors.Join(streamErr, cleanupErr, finalizeErr),
+					400, errors.Join(streamErr, abortErr),
 				)
 			}
 			semanticStream := semantic.NewStreamValidator()
 			generation, resolveErr := target.Generation(provider.OperationChatStream)
 			if resolveErr != nil {
-				return gatewayError("unsupported_feature", "generation primitive is unavailable", 400, resolveErr)
+				abortErr := attempt.abort("unsupported_feature")
+				return gatewayError("unsupported_feature", "generation primitive is unavailable", 400, errors.Join(resolveErr, abortErr))
 			}
 			semanticUsage, providerErr := generation.GenerateStream(ctx, provider.GenerateCall{
 				RequestID: requestID, ProviderModel: target.ProviderModel, Request: canonical,
@@ -1575,7 +1592,8 @@ func (s *Service) Embeddings(
 			attemptCount++
 			embedding, resolveErr := target.Embedding()
 			if resolveErr != nil {
-				return openaiapi.EmbeddingResponse{}, gatewayError("unsupported_feature", "embedding primitive is unavailable", 400, resolveErr)
+				abortErr := attempt.abort("unsupported_feature")
+				return openaiapi.EmbeddingResponse{}, gatewayError("unsupported_feature", "embedding primitive is unavailable", 400, errors.Join(resolveErr, abortErr))
 			}
 			semanticResponse, providerErr := embedding.EmbedSemantic(ctx, provider.EmbedCall{RequestID: requestID, ProviderModel: target.ProviderModel, Request: canonical})
 			response := openaiapi.EmbeddingResponse{}

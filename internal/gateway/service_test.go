@@ -1395,3 +1395,62 @@ func TestProviderRetryAfterPropagatesAndDelaysRetry(t *testing.T) {
 		t.Fatalf("provider retry-after was ignored: %v", err)
 	}
 }
+
+// A request that fails after its attempt exists but before the provider is
+// called has to give back everything the attempt took. Every such path is a
+// local failure behind adapter resolution, which no adapter in the tree can
+// currently produce — so the helper they all share is tested directly, and a
+// future adapter that makes one of those branches reachable inherits the
+// cleanup instead of having to rediscover it.
+func TestAbortReleasesEverythingTheAttemptTook(t *testing.T) {
+	f := newFixture(t, 1_000_000)
+	defer f.close()
+	// One slot, so a lease that is not returned is the difference between the
+	// next attempt starting and being turned away.
+	limited := provider.NewRegistry()
+	if err := limited.Register(provider.Target{
+		ID:                     "target_1",
+		PublicModel:            "chat",
+		ProviderModel:          "provider-model",
+		Adapter:                f.adapter,
+		MaxConcurrency:         1,
+		InputMicrosPerMillion:  1_000_000,
+		OutputMicrosPerMillion: 2_000_000,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f.registry.Replace(limited)
+
+	ctx := context.Background()
+	principal, targets, err := f.service.resolveRequest(ctx, f.plaintext, "chat", provider.OperationChat, "chat is unavailable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := targets[0]
+	run, err := f.service.beginRequestRun(ctx, principal, "chat", targets, 15, 10, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer run.close()
+	attempt, err := f.service.startAttempt(ctx, run, target, 10, 5, 0, 0, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := f.service.startAttempt(ctx, run, target, 10, 5, 0, 0, 2)
+	if err == nil {
+		_ = second.abort("test_cleanup")
+		t.Fatal("the fixture does not actually bound concurrency, so this proves nothing")
+	}
+
+	if abortErr := attempt.abort("unsupported_feature"); abortErr != nil {
+		t.Fatalf("abort could not settle the attempt: %v", abortErr)
+	}
+	replacement, err := f.service.startAttempt(ctx, run, target, 10, 5, 0, 0, 3)
+	if err != nil {
+		t.Fatalf("the aborted attempt held its concurrency slot: %v", err)
+	}
+	if abortErr := replacement.abort("unsupported_feature"); abortErr != nil {
+		t.Fatalf("second abort: %v", abortErr)
+	}
+}
