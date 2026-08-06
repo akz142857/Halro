@@ -547,3 +547,57 @@ func newTestPKI(t *testing.T, client bool) testPKI {
 	}
 	return result
 }
+
+// A probe is a network call with a timeout. Holding the state lock across it
+// stopped the delivery worker from sending the heartbeat that had already been
+// queued — the probe's own liveness signal waited on the probe.
+func TestSlowProbeDoesNotBlockHeartbeatDelivery(t *testing.T) {
+	pki := newTestPKI(t, false)
+	tokenPath := filepath.Join(t.TempDir(), "token")
+	os.WriteFile(tokenPath, []byte("notify-secret"), 0o600)
+	receiver := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	receiver.TLS = &tls.Config{Certificates: []tls.Certificate{pki.serverCertificate}, MinVersion: tls.VersionTLS12}
+	receiver.StartTLS()
+	defer receiver.Close()
+	cfg := validConfig(t.TempDir(), receiver.URL, pki.caFile, tokenPath)
+	engine, err := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	probing, releaseProbe := make(chan struct{}), make(chan struct{})
+	var probeOnce sync.Once
+	engine.check = func(context.Context, Config, TargetConfig) (time.Duration, string) {
+		probeOnce.Do(func() { close(probing) })
+		<-releaseProbe
+		return 0, ""
+	}
+	ticked := make(chan error, 1)
+	go func() { ticked <- engine.Tick(context.Background()) }()
+	select {
+	case <-probing:
+	case <-time.After(10 * time.Second):
+		close(releaseProbe)
+		t.Fatal("the probe never started")
+	}
+
+	delivered := make(chan bool, 1)
+	go func() {
+		progressed, err := engine.drainOne(context.Background())
+		delivered <- progressed && err == nil
+	}()
+	select {
+	case ok := <-delivered:
+		if !ok {
+			close(releaseProbe)
+			t.Fatal("the queued heartbeat was not delivered")
+		}
+	case <-time.After(10 * time.Second):
+		close(releaseProbe)
+		t.Fatal("delivery waited on the in-flight probe")
+	}
+
+	close(releaseProbe)
+	if err := <-ticked; err != nil {
+		t.Fatal(err)
+	}
+}

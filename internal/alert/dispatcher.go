@@ -83,6 +83,10 @@ type Dispatcher struct {
 	endpointsMu sync.RWMutex
 	endpoints   []Endpoint
 	queue       chan Event
+	// shutdown is closed by Close before it waits for workers, so a delivery
+	// sitting in its retry backoff gives up instead of holding shutdown for the
+	// rest of its budget.
+	shutdown chan struct{}
 	// deliverySlots is the fan-out bound; a token is held for the whole of one
 	// endpoint delivery, retries included.
 	deliverySlots chan struct{}
@@ -187,6 +191,7 @@ func New(config Config, endpoints []Endpoint) (*Dispatcher, error) {
 	return &Dispatcher{
 		config: config, endpoints: endpoints,
 		queue:         make(chan Event, config.QueueCapacity),
+		shutdown:      make(chan struct{}),
 		deliverySlots: make(chan struct{}, config.MaxConcurrentDeliveries),
 		lastSent:      make(map[string]time.Time),
 	}, nil
@@ -247,6 +252,7 @@ func (d *Dispatcher) Close() {
 		d.closed = true
 		close(d.queue)
 		d.submitMu.Unlock()
+		close(d.shutdown)
 		d.wait.Wait()
 		d.endpointsMu.Lock()
 		endpoints := d.endpoints
@@ -362,7 +368,7 @@ func (d *Dispatcher) deliver(event Event, endpoint *Endpoint) DeliveryResult {
 			}
 		}
 		cancel()
-		if attempt+1 < d.config.MaxAttempts && !sleepJitter(d.config.BaseDelay, d.config.MaxDelay, attempt) {
+		if attempt+1 < d.config.MaxAttempts && !d.sleepJitter(d.config.BaseDelay, d.config.MaxDelay, attempt) {
 			result.Reason = "retry_interrupted"
 			result.OccurredAt = time.Now().UTC()
 			result.LatencyMillis = time.Since(started).Milliseconds()
@@ -401,7 +407,11 @@ func (d *Dispatcher) notify(result DeliveryResult) {
 	}
 }
 
-func sleepJitter(base, maximum time.Duration, attempt int) bool {
+// sleepJitter reports whether the backoff completed. It returns false when the
+// dispatcher is shutting down, which is what makes retry_interrupted reachable:
+// the previous version always slept the full delay and always returned true, so
+// Close waited out every in-flight retry budget and the reason was dead code.
+func (d *Dispatcher) sleepJitter(base, maximum time.Duration, attempt int) bool {
 	delay := base
 	for index := 0; index < attempt && delay < maximum; index++ {
 		if delay > maximum/2 {
@@ -419,6 +429,10 @@ func sleepJitter(base, maximum time.Duration, attempt int) bool {
 	}
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
-	<-timer.C
-	return true
+	select {
+	case <-timer.C:
+		return true
+	case <-d.shutdown:
+		return false
+	}
 }
