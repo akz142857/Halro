@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
+import { useIsReadOnly } from "../session";
 import { api } from "../api";
 import { EmptyState, ErrorState, Field, Loading, PageHeader } from "../components";
 import { navigate } from "../navigation";
@@ -36,6 +37,7 @@ const emptyExecution: ExecutionState = { outcome: "idle", headers: "", body: "",
 
 export function DeveloperPage() {
   const { t } = useTranslation();
+  const readOnly = useIsReadOnly();
   const projects = useQuery({ queryKey: ["projects"], queryFn: api.projects });
   const developerConfig = useQuery({ queryKey: ["developer-config"], queryFn: api.developerConfig });
   const availableProjects = useMemo(
@@ -351,7 +353,7 @@ export function DeveloperPage() {
               {/* Send and cancel are separate controls: a double click on one toggling button
                   used to abort a request the gateway had already begun billing. */}
               <div className="developer-send-actions">
-                <button type="button" className="button primary developer-send" disabled={!canSend || running} aria-busy={running} onClick={execute}>
+                <button type="button" className="button primary developer-send" disabled={readOnly || !canSend || running} aria-busy={running} onClick={execute}>
                   {t("developer.sendRequest")}
                 </button>
                 {running && (

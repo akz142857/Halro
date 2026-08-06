@@ -16,6 +16,7 @@ import type {
   RedactionTestResult,
 } from "../types";
 import { useTranslation } from "react-i18next";
+import { useIsReadOnly } from "../session";
 
 const builtins = [
   "china_phone", "email", "china_id", "bank_card_candidate",
@@ -59,6 +60,7 @@ export function RedactionPoliciesSection({
   onLoadMore?: () => void;
 }) {
   const { t } = useTranslation();
+  const readOnly = useIsReadOnly();
   const [editing, setEditing] = useState<RedactionPolicy | "new" | null>(null);
   const [testing, setTesting] = useState<RedactionPolicy | null>(null);
   const [search, setSearch] = useState("");
@@ -83,14 +85,14 @@ export function RedactionPoliciesSection({
         <label><span>{t("policyManagement.search")}</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("policyManagement.searchPlaceholder")} /></label>
         <label><span>{t("policyManagement.status")}</span><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">{t("policyManagement.all")}</option><option value="enabled">{t("common.enabled")}</option><option value="disabled">{t("common.disabled")}</option></select></label>
         <label><span>{t("policyManagement.mode")}</span><select value={mode} onChange={(event) => setMode(event.target.value)}><option value="">{t("policyManagement.all")}</option><option value="strict">{t("redaction.strictBadge")}</option><option value="bounded_stream">{t("redaction.boundedBadge")}</option><option value="detect_only_stream">{t("redaction.detectStreamBadge")}</option></select></label>
-        <button className="button primary" onClick={() => setEditing("new")}>{t("redaction.create")}</button>
+        <button className="button primary" disabled={readOnly} onClick={() => setEditing("new")}>{t("redaction.create")}</button>
       </div>
       {isPending && <Loading />}
       {error !== undefined && <ErrorState error={error} />}
       {!isPending && policies.length === 0 && (
         <EmptyState
           title={t("redaction.emptyTitle")}
-          action={<button className="button primary" onClick={() => setEditing("new")}>{t("redaction.baseline")}</button>}
+          action={<button className="button primary" disabled={readOnly} onClick={() => setEditing("new")}>{t("redaction.baseline")}</button>}
         >
           {t("redaction.emptyDescription")}
         </EmptyState>
@@ -107,7 +109,7 @@ export function RedactionPoliciesSection({
               <td><span className="badge">{policy.mode === "strict" ? t("redaction.strictBadge") : policy.mode === "bounded_stream" ? t("redaction.boundedBadge") : t("redaction.detectStreamBadge")}</span></td>
               <td><strong>{t("redaction.rules", { count: policy.rules.length })}</strong><small>{t("policyManagement.enabledRules", { count: enabledRules.length })} · {t(`redaction.${strongest === "detect_only" ? "detect" : strongest}`)}</small></td>
               <td>{t("policyManagement.projectCount", { count: policy.bound_projects ?? 0 })}</td>
-              <td><div className="row-actions policy-row-actions"><button className="button ghost" onClick={() => setTesting(policy)}>{t("common.test")}</button><button className="button ghost" onClick={() => setEditing(policy)}>{t("common.edit")}</button><ConfirmButton label={t("common.delete")} confirmLabel={t("redaction.deleteConfirm", { name: policy.name })} disabled={remove.isPending} onConfirm={() => remove.mutate(policy)} /></div></td>
+              <td><div className="row-actions policy-row-actions"><button className="button ghost" onClick={() => setTesting(policy)}>{t("common.test")}</button><button className="button ghost" disabled={readOnly} onClick={() => setEditing(policy)}>{t("common.edit")}</button><ConfirmButton label={t("common.delete")} confirmLabel={t("redaction.deleteConfirm", { name: policy.name })} disabled={remove.isPending} onConfirm={() => remove.mutate(policy)} /></div></td>
             </tr>;
           })}</tbody></table>
           {remove.isError && <ErrorState error={remove.error} />}

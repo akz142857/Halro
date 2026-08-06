@@ -1,0 +1,143 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { api } from "../api";
+import { AdminUsersSection } from "./AdminUsersSection";
+import { ProjectsPage } from "./ProjectsPage";
+import { RoutesPage } from "./RoutesPage";
+import type { AdminRole, Deployment, Project, Provider, Route, Session } from "../types";
+
+function session(role: AdminRole): Session {
+  return {
+    username: "admin",
+    role,
+    locale: "system",
+    appearance: "dark",
+    csrf_token: "csrf",
+    absolute_expires_at: "2026-08-08T00:00:00Z",
+    idle_expires_at: "2026-08-07T01:00:00Z",
+  };
+}
+
+function renderAs(role: AdminRole, element: React.ReactElement) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  // Seeded rather than fetched: App holds this query open in the real console,
+  // and the read-only decision has to come from the same cache entry.
+  client.setQueryData(["session"], session(role));
+  return render(<QueryClientProvider client={client}>{element}</QueryClientProvider>);
+}
+
+describe("read-only role", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("offers no write action a read-only session cannot complete", async () => {
+    const project = {
+      id: "project_a", name: "Alpha", enabled: true, revision: 1,
+      created_at: "", updated_at: "",
+    } as Project;
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
+    renderAs("read_only", <ProjectsPage />);
+
+    const create = await screen.findByRole("button", { name: "＋ 新建项目" });
+    expect(create).toBeDisabled();
+  });
+
+  it("leaves the same action available to an administrator", async () => {
+    const project = {
+      id: "project_a", name: "Alpha", enabled: true, revision: 1,
+      created_at: "", updated_at: "",
+    } as Project;
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
+    renderAs("administrator", <ProjectsPage />);
+
+    expect(await screen.findByRole("button", { name: "＋ 新建项目" })).toBeEnabled();
+  });
+
+  // ConfirmButton backs every destructive action in the console, so honouring
+  // the role there is what keeps a new destructive button from shipping
+  // ungated by default.
+  it("disables destructive row actions through the shared confirm button", async () => {
+    const route = {
+      id: "route_chat", public_model: "chat", deployment_id: "deployment_gpt",
+      priority: 10, strategy: "ordered", enabled: true, revision: 1, created_at: "", updated_at: "",
+    } as Route;
+    vi.spyOn(api, "routes").mockResolvedValue({ items: [route], next_cursor: "" });
+    vi.spyOn(api, "deployments").mockResolvedValue({
+      items: [{ id: "deployment_gpt", name: "GPT", provider_id: "provider_openai", provider_model: "gpt-5.1" } as Deployment],
+      next_cursor: "",
+    });
+    vi.spyOn(api, "providers").mockResolvedValue({ items: [{ id: "provider_openai", name: "OpenAI" } as Provider], next_cursor: "" });
+    renderAs("read_only", <RoutesPage />);
+
+    const row = (await screen.findByText("chat")).closest("tr");
+    expect(row).not.toBeNull();
+    expect(within(row!).getByRole("button", { name: "删除" })).toBeDisabled();
+    expect(within(row!).getByRole("button", { name: "编辑" })).toBeDisabled();
+    // Reading has to stay unimpeded — a read-only console that cannot test a
+    // route is not read-only, it is broken.
+    expect(within(row!).getByRole("button", { name: "测试" })).toBeEnabled();
+  });
+
+  it("hides account administration from a read-only session", async () => {
+    vi.spyOn(api, "listAdminUsers").mockResolvedValue([
+      { username: "admin", role: "administrator" },
+      { username: "viewer", role: "read_only" },
+    ]);
+    renderAs("read_only", <AdminUsersSection />);
+
+    expect(await screen.findByText("viewer")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "新建账户" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "删除" })).toBeNull();
+  });
+});
+
+describe("admin accounts", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("requires step-up credentials before creating an account", async () => {
+    vi.spyOn(api, "listAdminUsers").mockResolvedValue([{ username: "admin", role: "administrator" }]);
+    const create = vi.spyOn(api, "createAdminUser").mockResolvedValue({ username: "viewer", role: "read_only" });
+    renderAs("administrator", <AdminUsersSection />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "新建账户" }));
+    fireEvent.change(screen.getByLabelText("用户名"), { target: { value: "viewer" } });
+    fireEvent.change(screen.getByLabelText(/初始密码/), { target: { value: "another correct horse" } });
+
+    const submit = screen.getByRole("button", { name: "创建账户" });
+    // Without the caller's own password this cannot be submitted at all, so a
+    // step-up request is never sent half-filled.
+    expect(submit).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText("当前密码"), { target: { value: "correct horse battery staple" } });
+    expect(submit).toBeEnabled();
+    fireEvent.click(submit);
+
+    await waitFor(() => expect(create).toHaveBeenCalledWith(
+      "viewer", "another correct horse", "read_only", "correct horse battery staple", "",
+    ));
+  });
+
+  // The server refuses both of these; saying so up front spares an operator a
+  // password and a TOTP code spent on a request that cannot succeed.
+  it("blocks deleting yourself and the last administrator before any request", async () => {
+    vi.spyOn(api, "listAdminUsers").mockResolvedValue([
+      { username: "admin", role: "administrator" },
+      { username: "viewer", role: "read_only" },
+    ]);
+    renderAs("administrator", <AdminUsersSection />);
+
+    const rows = await screen.findAllByRole("listitem");
+    const self = rows.find((row) => within(row).queryByText("admin"));
+    const other = rows.find((row) => within(row).queryByText("viewer"));
+    expect(within(self!).getByRole("button", { name: "删除" })).toBeDisabled();
+    expect(within(other!).getByRole("button", { name: "删除" })).toBeEnabled();
+  });
+
+  it("defaults a new account to the smaller capability", async () => {
+    vi.spyOn(api, "listAdminUsers").mockResolvedValue([{ username: "admin", role: "administrator" }]);
+    renderAs("administrator", <AdminUsersSection />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "新建账户" }));
+    expect(screen.getByLabelText(/权限档位/)).toHaveValue("read_only");
+  });
+});

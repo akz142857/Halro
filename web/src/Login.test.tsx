@@ -9,6 +9,7 @@ describe("Login", () => {
       username: "admin",
       locale: "system",
       appearance: "dark",
+      role: "administrator",
       csrf_token: "csrf",
       absolute_expires_at: "2026-01-01T00:00:00Z",
       idle_expires_at: "2026-01-01T00:00:00Z",
@@ -60,6 +61,6 @@ describe("Login", () => {
     fireEvent.click(verify); fireEvent.click(verify);
     expect(complete).toHaveBeenCalledOnce();
     expect(await screen.findByRole("button", { name: "正在验证…" })).toBeDisabled();
-    resolve({ username: "admin", locale: "system", appearance: "dark", csrf_token: "csrf", absolute_expires_at: "x", idle_expires_at: "x" });
+    resolve({ username: "admin", role: "administrator", locale: "system", appearance: "dark", csrf_token: "csrf", absolute_expires_at: "x", idle_expires_at: "x" });
   });
 });

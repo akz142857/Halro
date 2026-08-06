@@ -127,6 +127,7 @@ func (r *Runtime) loginAdmin(writer http.ResponseWriter, request *http.Request) 
 	r.setAdminCookie(writer, created.Token, created.Session.AbsoluteExpiresAt)
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"username": user.Username, "csrf_token": created.CSRFToken,
+		"role":                user.Role,
 		"locale":              domain.NormalizeLocalePreference(user.Locale),
 		"appearance":          domain.NormalizeAppearance(user.Appearance),
 		"absolute_expires_at": created.Session.AbsoluteExpiresAt,
@@ -143,7 +144,12 @@ func (r *Runtime) getAdminSession(writer http.ResponseWriter, request *http.Requ
 	}
 	active, _ := r.activeAdminMFA(request.Context(), admin.session.Username)
 	writeJSON(writer, http.StatusOK, map[string]any{
-		"username":            admin.session.Username,
+		"username": admin.session.Username,
+		// The console needs the role to stop offering what the server will
+		// refuse. It is presentation only — authorization stays server-side,
+		// where requireAdministratorRole reads it per request rather than
+		// trusting anything the session was handed at login.
+		"role":                user.Role,
 		"locale":              domain.NormalizeLocalePreference(user.Locale),
 		"appearance":          domain.NormalizeAppearance(user.Appearance),
 		"csrf_token":          r.adminSessionsCSRF(admin.token),
@@ -229,6 +235,7 @@ func (r *Runtime) changeAdminPassword(writer http.ResponseWriter, request *http.
 	r.setAdminCookie(writer, created.Token, created.Session.AbsoluteExpiresAt)
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"username": user.Username, "csrf_token": created.CSRFToken,
+		"role":                user.Role,
 		"locale":              domain.NormalizeLocalePreference(user.Locale),
 		"appearance":          domain.NormalizeAppearance(user.Appearance),
 		"absolute_expires_at": created.Session.AbsoluteExpiresAt,

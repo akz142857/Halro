@@ -18,6 +18,7 @@ import {
 import { useInstantFormatter } from "../format";
 import type { AlertWebhook } from "../types";
 import { useTranslation } from "react-i18next";
+import { useIsReadOnly } from "../session";
 
 const PAGE_SIZE = "100";
 
@@ -35,6 +36,7 @@ function outcomeTone(outcome: string) {
 
 export function OperationsPage() {
   const { t } = useTranslation();
+  const readOnly = useIsReadOnly();
   const dateTime = useInstantFormatter();
   const [editing, setEditing] = useState<AlertWebhook | "new" | null>(null);
   const queryClient = useQueryClient();
@@ -67,7 +69,7 @@ export function OperationsPage() {
         eyebrow={t("operations.eyebrow")}
         title={t("operations.title")}
         description={t("operations.description")}
-        action={<button className="button primary" onClick={() => setEditing("new")}>{t("operations.addWebhook")}</button>}
+        action={<button className="button primary" disabled={readOnly} onClick={() => setEditing("new")}>{t("operations.addWebhook")}</button>}
       />
       <section className="panel operations-alerts">
         <header className="panel-header operations-panel-header">
@@ -157,6 +159,7 @@ function AlertRow({
   onMutated: () => void;
 }) {
   const { t } = useTranslation();
+  const readOnly = useIsReadOnly();
   // Per row, not per page: a page-wide mutation greys out every other row's buttons and
   // leaves one shared "delivered" notice that never says which endpoint it belongs to.
   const test = useMutation({ mutationFn: () => api.testAlert(webhook.id), onSuccess: onMutated, onError: onMutated });
@@ -214,7 +217,7 @@ function AlertRow({
               {toggle.isPending ? t("common.working") : t("common.enable")}
             </button>
           )}
-          <button className="button ghost" onClick={onEdit}>{t("common.edit")}</button>
+          <button className="button ghost" disabled={readOnly} onClick={onEdit}>{t("common.edit")}</button>
           <ConfirmButton
             label={t("common.delete")}
             confirmLabel={t("operations.deleteConfirm", { name: webhook.name })}

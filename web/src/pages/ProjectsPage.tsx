@@ -20,6 +20,7 @@ import {
 import { compactNumber, money, useInstantFormatter } from "../format";
 import type { CreatedGatewayKey, GatewayKey, Project } from "../types";
 import { useTranslation } from "react-i18next";
+import { useIsReadOnly } from "../session";
 import type { TFunction } from "i18next";
 import { Link } from "../navigation";
 
@@ -52,6 +53,7 @@ function pageQuery(cursor: string) {
 
 export function ProjectsPage() {
   const { t } = useTranslation();
+  const readOnly = useIsReadOnly();
   const [selected, setSelected] = useState<string>("");
   const [creating, setCreating] = useState(false);
   const [query, setQuery] = useState("");
@@ -89,14 +91,14 @@ export function ProjectsPage() {
         eyebrow={t("projects.eyebrow")}
         title={t("projects.title")}
         description={t("projects.description")}
-        action={<button className="button primary" onClick={() => setCreating(true)}>{t("projects.create")}</button>}
+        action={<button className="button primary" disabled={readOnly} onClick={() => setCreating(true)}>{t("projects.create")}</button>}
       />
       {projects.isPending && <Loading />}
       {projects.isError && <ErrorState error={projects.error} />}
       {projects.isSuccess && items.length === 0 && (
         <EmptyState
           title={t("projects.emptyTitle")}
-          action={<button className="button primary" onClick={() => setCreating(true)}>{t("projects.first")}</button>}
+          action={<button className="button primary" disabled={readOnly} onClick={() => setCreating(true)}>{t("projects.first")}</button>}
         >
           {t("projects.emptyDescription")}
         </EmptyState>
@@ -152,6 +154,7 @@ export function ProjectsPage() {
 
 function ProjectDetail({ project }: { project: Project }) {
   const { t } = useTranslation();
+  const readOnly = useIsReadOnly();
   const [keyDialog, setKeyDialog] = useState(false);
   const [editing, setEditing] = useState(false);
   const [unblockResult, setUnblockResult] = useState("");
@@ -185,8 +188,8 @@ function ProjectDetail({ project }: { project: Project }) {
           <code>{project.id}</code>
         </div>
         <div className="row-actions">
-          <button className="button ghost" disabled={unblock.isPending} onClick={() => unblock.mutate()}>{unblock.isPending ? t("common.working") : t("projects.unblock")}</button>
-          <button className="button ghost" onClick={() => setEditing(true)}>{t("common.edit")}</button>
+          <button className="button ghost" disabled={readOnly || unblock.isPending} onClick={() => unblock.mutate()}>{unblock.isPending ? t("common.working") : t("projects.unblock")}</button>
+          <button className="button ghost" disabled={readOnly} onClick={() => setEditing(true)}>{t("common.edit")}</button>
           <ConfirmButton
             label={t("common.delete")}
             confirmLabel={t("projects.deleteConfirm", { name: project.name })}
@@ -229,14 +232,14 @@ function ProjectDetail({ project }: { project: Project }) {
       {remove.isError && <ErrorState error={remove.error} />}
       <header className="section-header">
         <div><p className="eyebrow">{t("projects.credentials")}</p><h3>{t("projects.gatewayKeys")}</h3></div>
-        <button className="button secondary" onClick={() => setKeyDialog(true)}>{t("projects.createKey")}</button>
+        <button className="button secondary" disabled={readOnly} onClick={() => setKeyDialog(true)}>{t("projects.createKey")}</button>
       </header>
       {keys.isPending && <Loading label={t("projects.loadingKeys")} />}
       {keys.isError && <ErrorState error={keys.error} />}
       {keys.isSuccess && keyItems.length === 0 && (
         <EmptyState
           title={t("projects.noKeysTitle")}
-          action={<button className="button secondary" onClick={() => setKeyDialog(true)}>{t("projects.createKey")}</button>}
+          action={<button className="button secondary" disabled={readOnly} onClick={() => setKeyDialog(true)}>{t("projects.createKey")}</button>}
         >
           {t("projects.noKeys")}
         </EmptyState>
@@ -257,6 +260,7 @@ function ProjectDetail({ project }: { project: Project }) {
 
 function KeyRow({ project, value }: { project: Project; value: GatewayKey }) {
   const { t } = useTranslation();
+  const readOnly = useIsReadOnly();
   const dateTime = useInstantFormatter();
   const queryClient = useQueryClient();
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["project-keys", project.id] });
@@ -295,7 +299,7 @@ function KeyRow({ project, value }: { project: Project; value: GatewayKey }) {
           </small>
         </div>
         <div className="row-actions">
-          {value.enabled ? <ConfirmButton className="button ghost" label={t("common.disable")} title={t("projects.keyDisableTitle")} confirmLabel={t("projects.keyDisableConfirm", { name: value.name })} disabled={mutation.isPending} onConfirm={() => mutation.mutate()} /> : <button className="button ghost" disabled={mutation.isPending} onClick={() => mutation.mutate()}>{mutation.isPending ? t("common.working") : t("common.enable")}</button>}
+          {value.enabled ? <ConfirmButton className="button ghost" label={t("common.disable")} title={t("projects.keyDisableTitle")} confirmLabel={t("projects.keyDisableConfirm", { name: value.name })} disabled={mutation.isPending} onConfirm={() => mutation.mutate()} /> : <button className="button ghost" disabled={readOnly || mutation.isPending} onClick={() => mutation.mutate()}>{mutation.isPending ? t("common.working") : t("common.enable")}</button>}
           <ConfirmButton
             label={t("common.delete")}
             confirmLabel={t("projects.keyDeleteConfirm", { name: value.name })}

@@ -17,10 +17,12 @@ import {
 import { money, useInstantFormatter } from "../format";
 import type { Deployment, DeploymentPriceVersion, DeploymentTargetKind, Provider, ProviderBinding, ProviderCapabilities } from "../types";
 import { useTranslation } from "react-i18next";
+import { useIsReadOnly } from "../session";
 import { Link } from "../navigation";
 
 export function DeploymentsPage() {
   const { t } = useTranslation();
+  const readOnly = useIsReadOnly();
   const [editing, setEditing] = useState<Deployment | null | "new">(null);
   const [replacement, setReplacement] = useState<Deployment>();
   const [query, setQuery] = useState("");
@@ -62,7 +64,7 @@ export function DeploymentsPage() {
         eyebrow={t("deployments.eyebrow")}
         title={t("deployments.title")}
         description={t("deployments.description")}
-        action={<button className="button primary" onClick={() => { setReplacement(undefined); setEditing("new"); }}>{t("deployments.create")}</button>}
+        action={<button className="button primary" disabled={readOnly} onClick={() => { setReplacement(undefined); setEditing("new"); }}>{t("deployments.create")}</button>}
       />
       {(deployments.isPending || providers.isPending || routes.isPending) && <Loading />}
       {(deployments.isError || providers.isError || routes.isError) && <ErrorState error={deployments.error || providers.error || routes.error} />}
@@ -127,6 +129,7 @@ function DeploymentRow({
   onReplace: () => void;
 }) {
   const { t } = useTranslation();
+  const readOnly = useIsReadOnly();
   const dateTime = useInstantFormatter();
   const [expanded, setExpanded] = useState(false);
   const [pricing, setPricing] = useState(false);
@@ -204,7 +207,7 @@ function DeploymentRow({
         </div>
         <div className="row-actions deployment-compact-actions">
           <InlineTestControl state={testState} latency={deployment.last_test_latency_millis} onTest={() => test.mutate()} />
-          <button className="button ghost" onClick={onEdit}>{t("common.edit")}</button>
+          <button className="button ghost" disabled={readOnly} onClick={onEdit}>{t("common.edit")}</button>
           <button className="button ghost deployment-expand" aria-expanded={expanded} aria-controls={`deployment-details-${deployment.id}`} onClick={() => setExpanded((value) => !value)}>
             <span>{expanded ? t("deployments.collapseDetails") : t("deployments.expandDetails")}</span>
             {/* Reserves the width of the other label so toggling never resizes the row. */}

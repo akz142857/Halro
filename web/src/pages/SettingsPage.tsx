@@ -9,13 +9,15 @@ import { useInstantFormatter } from "../format";
 import { applyPreference } from "../i18n";
 import { applyAppearance } from "../theme";
 import { navigate, setNavigationBlocked, usePathname } from "../navigation";
+import { useIsReadOnly } from "../session";
+import { AdminUsersSection } from "./AdminUsersSection";
 import type { AccountingSettings, AdminPreferences, Appearance, InstanceUISettings, LocalePreference, SupportedLocale } from "../types";
 
-type SettingsPane = "general" | "security" | "instance" | "diagnostics";
+type SettingsPane = "general" | "security" | "accounts" | "instance" | "diagnostics";
 
 function paneFromPath(path: string): SettingsPane {
   const pane = path.split("/")[3];
-  return pane === "security" || pane === "instance" || pane === "diagnostics" ? pane : "general";
+  return pane === "security" || pane === "accounts" || pane === "instance" || pane === "diagnostics" ? pane : "general";
 }
 
 export function SettingsPage({ mfaSetupRequired = false }: { mfaSetupRequired?: boolean }) {
@@ -60,7 +62,7 @@ export function SettingsPage({ mfaSetupRequired = false }: { mfaSetupRequired?: 
       {mfaSetupRequired ? <div className="settings-pane"><MFASettings /></div> : (
         <div className="settings-shell">
           <nav className="settings-nav" aria-label={t("settings.sectionNavigation")}>
-            {(["general", "security", "instance", "diagnostics"] as const).map((item) => (
+            {(["general", "security", "accounts", "instance", "diagnostics"] as const).map((item) => (
               <a key={item} href={`/admin/settings/${item}`} className={pane === item ? "active" : ""} aria-current={pane === item ? "page" : undefined} onClick={(event) => { event.preventDefault(); navigate(`/admin/settings/${item}`); }}>{t(`settings.panes.${item}`)}</a>
             ))}
           </nav>
@@ -69,6 +71,7 @@ export function SettingsPage({ mfaSetupRequired = false }: { mfaSetupRequired?: 
             {error && <ErrorState error={error} />}
             {!pending && !error && pane === "general" && uiSettings.data && preferences.data && <section aria-labelledby="general-title"><SettingsGroupHeader title={t("settings.panes.general")} description={t("settings.generalDescription")} id="general-title" /><AppearanceForm preferences={preferences.data.data} /><PersonalLanguageForm ui={uiSettings.data.data} preferences={preferences.data.data} /></section>}
             {pane === "security" && <section aria-labelledby="security-title"><SettingsGroupHeader title={t("settings.panes.security")} description={t("settings.securityDescription")} id="security-title" /><PasswordChangeForm /><MFASettings /></section>}
+            {pane === "accounts" && <section aria-labelledby="accounts-title"><SettingsGroupHeader title={t("settings.panes.accounts")} description={t("settings.accountsDescription")} id="accounts-title" /><AdminUsersSection /></section>}
             {!pending && !error && pane === "instance" && uiSettings.data && preferences.data && settings.data && <section aria-labelledby="instance-title"><SettingsGroupHeader title={t("settings.panes.instance")} description={t("settings.instanceDescription")} id="instance-title" /><InstanceLanguageForm ui={uiSettings.data.data} preferences={preferences.data.data} />{accounting.data && <AccountingTimezoneForm settings={accounting.data.data} />}<RuntimeSettingsForm settings={settings.data.data} /></section>}
             {!pending && !error && pane === "diagnostics" && status.data && config.data && <DiagnosticsPane status={status.data} config={config.data} accountingLabels={accountingLabels} metricLabels={metricLabels} />}
           </div>
@@ -293,6 +296,7 @@ export function PasswordChangeForm() {
 
 function RuntimeSettingsForm({ settings }: { settings: { health_probe_interval_seconds: number; revision: number; updated_at?: string } }) {
   const { t } = useTranslation();
+  const readOnly = useIsReadOnly();
   const [interval, setInterval] = useState(settings.health_probe_interval_seconds);
   const queryClient = useQueryClient();
   useEffect(() => setInterval(settings.health_probe_interval_seconds), [settings.health_probe_interval_seconds]);
@@ -317,7 +321,7 @@ function RuntimeSettingsForm({ settings }: { settings: { health_probe_interval_s
         <p className="runtime-note"><strong>{t("settings.startupLocked")}</strong><span>{t("settings.startupDescription")}</span></p>
         {mutation.isError && <ErrorState error={mutation.error} />}
         {mutation.isSuccess && <div className="notice success" role="status"><strong>{t("settings.runtimeSaved")}</strong></div>}
-        <div className="form-actions"><button className="button primary" disabled={mutation.isPending || interval === settings.health_probe_interval_seconds}>{mutation.isPending ? t("settings.saving") : t("settings.saveRuntime")}</button></div>
+        <div className="form-actions"><button className="button primary" disabled={readOnly || mutation.isPending || interval === settings.health_probe_interval_seconds}>{mutation.isPending ? t("settings.saving") : t("settings.saveRuntime")}</button></div>
       </form>
     </section>
   );
@@ -334,6 +338,7 @@ function RuntimeSettingsForm({ settings }: { settings: { health_probe_interval_s
  */
 export function AccountingTimezoneForm({ settings }: { settings: AccountingSettings }) {
   const { t } = useTranslation();
+  const readOnly = useIsReadOnly();
   const formatInstant = useInstantFormatter();
   const queryClient = useQueryClient();
   const [timezone, setTimezone] = useState(settings.pending_timezone || settings.timezone);
@@ -413,7 +418,7 @@ export function AccountingTimezoneForm({ settings }: { settings: AccountingSetti
         {schedule.isError && <ErrorState error={schedule.error} />}
         {cancel.isError && <ErrorState error={cancel.error} />}
         <div className="form-actions">
-          <button className="button primary" disabled={busy || !changed}>{t("settings.accountingSchedule")}</button>
+          <button className="button primary" disabled={readOnly || busy || !changed}>{t("settings.accountingSchedule")}</button>
         </div>
       </form>
       {confirming && (
@@ -446,7 +451,7 @@ export function AccountingTimezoneForm({ settings }: { settings: AccountingSetti
           )}
           <div className="form-actions">
             <button className="button" onClick={() => setConfirming(false)}>{t("common.cancel")}</button>
-            <button className="button primary" disabled={busy} onClick={() => schedule.mutate()}>
+            <button className="button primary" disabled={readOnly || busy} onClick={() => schedule.mutate()}>
               {schedule.isPending ? t("settings.saving") : t("settings.accountingConfirmAction")}
             </button>
           </div>
@@ -640,6 +645,7 @@ function PersonalLanguageForm({ ui, preferences }: { ui: InstanceUISettings; pre
 
 function InstanceLanguageForm({ ui, preferences }: { ui: InstanceUISettings; preferences: AdminPreferences }) {
   const { t } = useTranslation();
+  const readOnly = useIsReadOnly();
   const queryClient = useQueryClient();
   const [defaultLocale, setDefaultLocale] = useState<SupportedLocale>(ui.default_locale);
   useEffect(() => setDefaultLocale(ui.default_locale), [ui.default_locale]);
@@ -662,7 +668,7 @@ function InstanceLanguageForm({ ui, preferences }: { ui: InstanceUISettings; pre
         </Field>
         {instanceMutation.isError && <ErrorState error={instanceMutation.error} />}
         {instanceMutation.isSuccess && <div className="notice success" role="status"><strong>{t("settings.instanceLanguageSaved")}</strong></div>}
-        <div className="form-actions"><button className="button primary" disabled={instanceMutation.isPending || !instanceChanged}>{instanceMutation.isPending ? t("settings.saving") : t("settings.saveInstanceLanguage")}</button></div>
+        <div className="form-actions"><button className="button primary" disabled={readOnly || instanceMutation.isPending || !instanceChanged}>{instanceMutation.isPending ? t("settings.saving") : t("settings.saveInstanceLanguage")}</button></div>
       </form>
     </section>
   );

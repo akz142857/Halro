@@ -25,6 +25,10 @@ semantic versioning.
 - Startup warns when the developer workbench is enabled on an Admin listener
   bound to a routable address, where network controls applied to the Gateway
   listener do not cover it.
+- The Admin console honours the read-only role: Settings gained an Admin
+  accounts pane for creating and removing accounts (both step-up gated), and
+  every write control a read-only account cannot use is disabled rather than
+  left to fail with a 403.
 - `gateway.source_rate_limit` bounds how many requests one source address may
   start per minute, applied before authentication — the per-project limits
   cannot bound the cost of deciding which project a request belongs to. Default

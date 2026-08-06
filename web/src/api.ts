@@ -1,4 +1,5 @@
 import type {
+  AdminUser,
   AuditRecord,
   AlertWebhook,
   CreatedGatewayKey,
@@ -151,6 +152,15 @@ export const api = {
     csrfToken = result.data.csrf_token;
     return result.data;
   },
+  listAdminUsers: () => request<{ users: AdminUser[] }>("/admin-users").then((v) => v.data.users),
+  createAdminUser: (username: string, password: string, role: AdminUser["role"], currentPassword: string, totpCode: string) =>
+    request<AdminUser>("/admin-users", json("POST", {
+      username, password, role, current_password: currentPassword, totp_code: totpCode,
+    })).then((v) => v.data),
+  deleteAdminUser: (username: string, currentPassword: string, totpCode: string) =>
+    request<void>(`/admin-users/${encodeURIComponent(username)}`, json("DELETE", {
+      current_password: currentPassword, totp_code: totpCode,
+    })).then((v) => v.data),
   async logout() {
     await request<{ status: string }>("/session/logout", json("POST"));
     csrfToken = "";

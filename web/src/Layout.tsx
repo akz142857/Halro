@@ -1,6 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { api, clearSensitiveClientState } from "./api";
 import { confirmNavigation, Link, navigate, setNavigationBlocked, usePathname } from "./navigation";
+import { useIsReadOnly } from "./session";
 import { resetAppearance } from "./theme";
 import { useAccountingTimeZone } from "./timezone";
 import { useState, type ReactNode } from "react";
@@ -40,6 +41,7 @@ export function Layout({
   const { t } = useTranslation();
   const path = usePathname();
   const timeZone = useAccountingTimeZone();
+  const readOnly = useIsReadOnly();
   const queryClient = useQueryClient();
   const [loggingOut, setLoggingOut] = useState(false);
   const logout = async () => {
@@ -84,7 +86,7 @@ export function Layout({
           <div className="account-card">
             <div className="operator">
               <span className="avatar">{username.slice(0, 1).toUpperCase()}</span>
-              <span className="operator-copy"><small>{t("navigation.localAdmin")}</small><strong title={username}>{username}</strong></span>
+              <span className="operator-copy"><small>{readOnly ? t("navigation.readOnlyAdmin") : t("navigation.localAdmin")}</small><strong title={username}>{username}</strong></span>
             </div>
             <button className="logout-button" onClick={logout} disabled={loggingOut}>
               <span>{loggingOut ? t("navigation.loggingOut") : t("navigation.logout")}</span>
@@ -101,6 +103,9 @@ export function Layout({
               that happens to report a daily total. */}
           <span>{t("navigation.localControl")} / <span className="topline-timezone">{timeZone}</span></span>
         </div>
+        {/* Stated once, where it is always visible. A read-only admin who is
+            not told will read every disabled control as a broken console. */}
+        {readOnly ? <div className="notice" role="status">{t("navigation.readOnlyNotice")}</div> : null}
         {children}
       </main>
     </div>

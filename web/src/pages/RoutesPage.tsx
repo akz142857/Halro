@@ -22,12 +22,14 @@ import {
 import type { InlineTestState } from "../components";
 import type { Deployment, Provider, Route } from "../types";
 import { useTranslation } from "react-i18next";
+import { useIsReadOnly } from "../session";
 import { Link } from "../navigation";
 
 const column = createColumnHelper<Route>();
 
 export function RoutesPage() {
   const { t } = useTranslation();
+  const readOnly = useIsReadOnly();
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<Route>();
   const routes = useQuery({ queryKey: ["routes"], queryFn: api.routes });
@@ -90,7 +92,7 @@ export function RoutesPage() {
         <div className="row-actions route-row-actions">
           <RouteTestAction route={row.original} />
           <div className="row-actions route-management-actions">
-            <button className="button ghost" onClick={() => setEditing(row.original)}>{t("common.edit")}</button>
+            <button className="button ghost" disabled={readOnly} onClick={() => setEditing(row.original)}>{t("common.edit")}</button>
             <ConfirmButton
               label={t("common.delete")}
               confirmLabel={t("routes.deleteConfirm", { name: row.original.public_model })}
@@ -115,7 +117,7 @@ export function RoutesPage() {
         eyebrow={t("routes.eyebrow")}
         title={t("routes.title")}
         description={t("routes.description")}
-        action={<button className="button primary" onClick={() => setCreating(true)}>{t("routes.create")}</button>}
+        action={<button className="button primary" disabled={readOnly} onClick={() => setCreating(true)}>{t("routes.create")}</button>}
       />
       {pending && <Loading />}
       {error && <ErrorState error={error} />}

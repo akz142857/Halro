@@ -4,10 +4,12 @@ import { api } from "../api";
 import { ErrorState, Field, Loading, Modal, PageHeader, StatusDot } from "../components";
 import { compactNumber, money, useInstantFormatter } from "../format";
 import { useTranslation } from "react-i18next";
+import { useIsReadOnly } from "../session";
 import type { UsageAttempt } from "../types";
 
 export function UsagePage() {
   const { t } = useTranslation();
+  const readOnly = useIsReadOnly();
   const dateTime = useInstantFormatter();
   const [status, setStatus] = useState("");
   const [model, setModel] = useState("");
@@ -63,7 +65,7 @@ export function UsagePage() {
                       {attempt.price_snapshot?.price_version_id ? `${attempt.price_snapshot.price_version_id} · v${attempt.price_snapshot.price_version}` : attempt.price_evidence_status}<br />
                       {attempt.input_cost_micros_usd == null ? "" : t("usage.formulaComponents", { input: money(attempt.input_cost_micros_usd), output: money(attempt.output_cost_micros_usd ?? 0), fixed: money(attempt.fixed_cost_micros_usd ?? 0) })}
                     </small></details>
-                    {attempt.final_cost_micros_usd != null && <button className="button ghost" onClick={() => setAdjusting(attempt)}>{t("usage.adjustCost")}</button>}
+                    {attempt.final_cost_micros_usd != null && <button className="button ghost" disabled={readOnly} onClick={() => setAdjusting(attempt)}>{t("usage.adjustCost")}</button>}
                   </td>
                   <td>{attempt.latency_millis} ms</td>
                   <td><span className="inline-status"><StatusDot ok={attempt.status === "success"} />{attempt.status === "success" ? t("usage.success") : t("usage.error")}</span></td>

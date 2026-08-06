@@ -2,6 +2,7 @@ import { cloneElement, Component, isValidElement, useEffect, useId, useRef, useS
 import { createPortal } from "react-dom";
 import { ApiError } from "./api";
 import { useTranslation } from "react-i18next";
+import { useIsReadOnly } from "./session";
 import { errorDetail, localizedError } from "./i18n/errors";
 
 export function PageHeader({
@@ -296,13 +297,20 @@ export function ConfirmButton({
   const [open, setOpen] = useState(false);
   const consequenceID = useId();
   const reasonID = useId();
+  // Every destructive action in the console routes through this button, which
+  // makes it the one place a read-only session has to be honoured rather than
+  // twenty. The server refuses these calls regardless; this only stops offering
+  // them.
+  const readOnly = useIsReadOnly();
+  const unavailable = disabled || readOnly;
+  const reason = readOnly ? t("navigation.readOnlyAction") : disabledReason;
   // A disabled button carries no tooltip in some browsers and is skipped by screen
   // reader tab order, so the reason is also stated in the accessibility tree.
-  const blocked = Boolean(disabled && disabledReason);
+  const blocked = Boolean(unavailable && reason);
   return (
     <>
-      <button className={className} disabled={disabled} title={blocked ? disabledReason : undefined} aria-describedby={blocked ? reasonID : undefined} onClick={() => setOpen(true)}>{label}</button>
-      {blocked && <span id={reasonID} className="sr-only">{disabledReason}</span>}
+      <button className={className} disabled={unavailable} title={blocked ? reason : undefined} aria-describedby={blocked ? reasonID : undefined} onClick={() => setOpen(true)}>{label}</button>
+      {blocked && <span id={reasonID} className="sr-only">{reason}</span>}
       {open && (
         <Modal dangerous title={title || t("common.confirmAction")} describedBy={consequenceID} onClose={() => setOpen(false)}>
           <div className="confirmation-dialog">
@@ -432,5 +440,54 @@ export function Field({
       {hint && !error && <small id={descriptionID}>{hint}</small>}
       {error && <small id={descriptionID} className="field-error">{error}</small>}
     </label>
+  );
+}
+
+export interface ReauthValues {
+  currentPassword: string;
+  totpCode: string;
+}
+
+// Step-up re-authentication: the caller resupplies their own password and a
+// fresh TOTP code with the request itself, rather than being handed a
+// short-lived elevated session. Every destructive Admin action that asks for it
+// asks with these same two fields, so the operator learns the shape once.
+//
+// The TOTP field is optional in the markup because the server only demands a
+// code from an account that actually has an authenticator enrolled; requiring
+// it here would lock out an instance where MFA is still optional.
+export function ReauthFields({
+  values,
+  onChange,
+  description,
+}: {
+  values: ReauthValues;
+  onChange: (values: ReauthValues) => void;
+  description?: string;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="reauth-fields">
+      {description && <p className="reauth-description">{description}</p>}
+      <Field label={t("auth.currentPassword")}>
+        <input
+          required
+          type="password"
+          autoComplete="current-password"
+          value={values.currentPassword}
+          onChange={(event) => onChange({ ...values, currentPassword: event.target.value })}
+        />
+      </Field>
+      <Field label={t("auth.authenticatorCodeOptional")}>
+        <input
+          inputMode="numeric"
+          pattern="[0-9]*"
+          maxLength={8}
+          autoComplete="one-time-code"
+          value={values.totpCode}
+          onChange={(event) => onChange({ ...values, totpCode: event.target.value })}
+        />
+      </Field>
+    </div>
   );
 }

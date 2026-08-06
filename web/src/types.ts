@@ -58,8 +58,19 @@ export interface AccountingSettings {
   revision: number;
 }
 
+// Two roles, no third. read_only is GET-only server-side; the console reads
+// this only to stop offering what the server would refuse, never to decide
+// anything on its own.
+export type AdminRole = "administrator" | "read_only";
+
+export interface AdminUser {
+  username: string;
+  role: AdminRole;
+}
+
 export interface Session {
   username: string;
+  role: AdminRole;
   locale: LocalePreference;
   appearance: Appearance;
   csrf_token: string;

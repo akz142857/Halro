@@ -15,9 +15,11 @@ import { compactNumber, money } from "../format";
 import type { TokenGuardPolicy, TokenGuardPreview } from "../types";
 import { RedactionPoliciesSection } from "./RedactionPoliciesSection";
 import { useTranslation } from "react-i18next";
+import { useIsReadOnly } from "../session";
 
 export function PoliciesPage() {
   const { t } = useTranslation();
+  const readOnly = useIsReadOnly();
   const [tab, setTab] = useState<"token" | "redaction">("token");
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
@@ -71,18 +73,18 @@ export function PoliciesPage() {
           <label><span>{t("policyManagement.search")}</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("policyManagement.searchPlaceholder")} /></label>
           <label><span>{t("policyManagement.status")}</span><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">{t("policyManagement.all")}</option><option value="enabled">{t("common.enabled")}</option><option value="disabled">{t("common.disabled")}</option></select></label>
           <label><span>{t("policies.action")}</span><select value={action} onChange={(event) => setAction(event.target.value)}><option value="">{t("policyManagement.all")}</option><option value="observe">{t("policies.observe")}</option><option value="alert">{t("policies.alert")}</option><option value="temporary_block">{t("policies.temporaryBlock")}</option></select></label>
-          <button className="button primary" onClick={() => setEditing("new")}>{t("policies.create")}</button>
+          <button className="button primary" disabled={readOnly} onClick={() => setEditing("new")}>{t("policies.create")}</button>
         </div>
         {policies.isPending && <Loading />}
         {policies.isError && <ErrorState error={policies.error} />}
-        {!policies.isPending && tokenItems.length === 0 && <EmptyState title={t("policies.emptyTitle")} action={<button className="button primary" onClick={() => setEditing("new")}>{t("policies.baseline")}</button>}>{t("policies.emptyDescription")}</EmptyState>}
+        {!policies.isPending && tokenItems.length === 0 && <EmptyState title={t("policies.emptyTitle")} action={<button className="button primary" disabled={readOnly} onClick={() => setEditing("new")}>{t("policies.baseline")}</button>}>{t("policies.emptyDescription")}</EmptyState>}
         {!!tokenItems.length && <div className="table-shell policy-table-shell"><table className="policy-table"><thead><tr><th>{t("policyManagement.policy")}</th><th>{t("policyManagement.status")}</th><th>{t("policies.action")}</th><th>{t("policyManagement.summary")}</th><th>{t("policyManagement.bindings")}</th><th>{t("policyManagement.actions")}</th></tr></thead><tbody>{visible.map((policy) => <tr key={policy.id}>
           <td><strong>{policy.name}</strong><code>{policy.id}</code></td>
           <td><span className="inline-status"><StatusDot ok={policy.enabled} />{policy.enabled ? t("common.enabled") : t("common.disabled")}</span></td>
           <td><span className={`badge ${policy.action === "temporary_block" ? "warning" : ""}`}>{policyActionLabel(t, policy.action)}</span></td>
           <td><strong>{compactNumber(policy.request_tokens)} / {compactNumber(policy.tokens_per_minute)} TPM</strong><small>{money(policy.cost_micros_per_minute)} · {policy.concurrency} {t("policies.concurrency")} · {policy.ewma_enabled ? `${policy.ewma_multiplier}× EWMA` : t("policies.ewmaOff")}</small></td>
           <td>{t("policyManagement.projectCount", { count: policy.bound_projects ?? 0 })}</td>
-          <td><div className="row-actions policy-row-actions"><button className="button ghost" onClick={() => setPreviewing(policy)}>{t("policies.simulate")}</button><button className="button ghost" onClick={() => setEditing(policy)}>{t("common.edit")}</button><ConfirmButton label={t("common.delete")} confirmLabel={t("policies.deleteConfirm", { name: policy.name })} disabled={remove.isPending} onConfirm={() => remove.mutate(policy)} /></div></td>
+          <td><div className="row-actions policy-row-actions"><button className="button ghost" onClick={() => setPreviewing(policy)}>{t("policies.simulate")}</button><button className="button ghost" disabled={readOnly} onClick={() => setEditing(policy)}>{t("common.edit")}</button><ConfirmButton label={t("common.delete")} confirmLabel={t("policies.deleteConfirm", { name: policy.name })} disabled={remove.isPending} onConfirm={() => remove.mutate(policy)} /></div></td>
         </tr>)}</tbody></table>{remove.isError && <ErrorState error={remove.error} />}</div>}
         {policies.hasNextPage && <button className="button ghost policy-load-more" disabled={policies.isFetchingNextPage} onClick={() => policies.fetchNextPage()}>{policies.isFetchingNextPage ? t("common.loading") : t("common.loadMore")}</button>}
       </section>}

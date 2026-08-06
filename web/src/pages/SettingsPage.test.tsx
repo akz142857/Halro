@@ -83,6 +83,7 @@ describe("PasswordChangeForm", () => {
       username: "admin",
       locale: "system",
       appearance: "dark",
+      role: "administrator",
       csrf_token: "rotated",
       absolute_expires_at: "2026-01-01T00:00:00Z",
       idle_expires_at: "2026-01-01T00:00:00Z",

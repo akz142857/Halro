@@ -18,6 +18,7 @@ import {
 import type { InlineTestState } from "../components";
 import type { AccessSurface, Credential, CredentialScheme, Provider, ProviderBinding, ProviderCapabilities, ProviderType } from "../types";
 import { useTranslation } from "react-i18next";
+import { useIsReadOnly } from "../session";
 
 const providerTypes: ProviderType[] = [
   "openai", "anthropic", "azure_openai", "deepseek", "gemini", "bedrock", "openai_compatible",
@@ -73,6 +74,7 @@ function isBedrockProfile(value: string): value is BedrockProfile {
 
 export function ProvidersPage() {
   const { t } = useTranslation();
+  const readOnly = useIsReadOnly();
   const [activeView, setActiveView] = useState<"providers" | "credentials">(() => providerViewFromURL());
   const [focusedCredentialID, setFocusedCredentialID] = useState("");
   const [focusedProviderCredentialID, setFocusedProviderCredentialID] = useState("");
@@ -128,8 +130,8 @@ export function ProvidersPage() {
         description={t("providers.description")}
         action={
           activeView === "providers"
-            ? <button className="button primary" disabled={!pending && !canCreateProvider} title={!pending && !canCreateProvider ? t("providers.createCredentialFirst") : undefined} onClick={() => setProviderDialog(true)}>{t("providers.addProvider")}</button>
-            : <button className="button primary" onClick={() => setCredentialDialog(true)}>{t("providers.addCredential")}</button>
+            ? <button className="button primary" disabled={readOnly || (!pending && !canCreateProvider)} title={!pending && !canCreateProvider ? t("providers.createCredentialFirst") : undefined} onClick={() => setProviderDialog(true)}>{t("providers.addProvider")}</button>
+            : <button className="button primary" disabled={readOnly} onClick={() => setCredentialDialog(true)}>{t("providers.addCredential")}</button>
         }
       />
       {pending && <Loading />}
@@ -191,6 +193,7 @@ function providerViewFromURL(): "providers" | "credentials" {
 
 function ProviderRow({ provider, credential, highlighted, onCredentialClick, onEdit }: { provider: Provider; credential?: Credential; highlighted: boolean; onCredentialClick: () => void; onEdit: () => void }) {
   const { t } = useTranslation();
+  const readOnly = useIsReadOnly();
   const [expanded, setExpanded] = useState(false);
   const queryClient = useQueryClient();
   const testMutation = useMutation({
@@ -244,7 +247,7 @@ function ProviderRow({ provider, credential, highlighted, onCredentialClick, onE
         <div className="provider-compact-status"><span className={`resource-state ${provider.enabled ? "enabled" : ""}`}>{provider.enabled ? t("providers.enabled") : t("providers.off")}</span></div>
         <div className="row-actions provider-compact-actions">
           <InlineTestControl state={testState} latency={testLatency} disabled={!provider.enabled} title={totalTargets ? t("providers.testSummary", { healthy: healthyTargets ?? 0, total: totalTargets, latency: testLatency ?? 0 }) : undefined} onTest={() => testMutation.mutate()} />
-          <button className="button ghost" onClick={onEdit}>{t("common.edit")}</button>
+          <button className="button ghost" disabled={readOnly} onClick={onEdit}>{t("common.edit")}</button>
           <button className="button ghost provider-expand" aria-expanded={expanded} aria-controls={`provider-details-${provider.id}`} onClick={() => setExpanded((value) => !value)}>{expanded ? t("providers.collapseDetails") : t("providers.expandDetails")}</button>
           {provider.enabled ? <ConfirmButton className="button ghost" label={t("common.disable")} title={t("providers.disableTitle")} confirmLabel={t("providers.disableConfirm", { name: provider.name })} disabled={stateMutation.isPending} onConfirm={() => stateMutation.mutate()} /> : <button className="button ghost" disabled={stateMutation.isPending} onClick={() => stateMutation.mutate()}>{t("common.enable")}</button>}
           <OverflowMenu label={t("providers.moreActions")}><ConfirmButton label={t("common.delete")} confirmLabel={t("providers.deleteProvider", { name: provider.name })} disabled={deleteMutation.isPending} onConfirm={() => deleteMutation.mutate()} /></OverflowMenu>
