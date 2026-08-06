@@ -891,7 +891,7 @@ td small, td code { display: block; margin-top: 4px; color: var(--muted); }
 /* A notice sitting directly in the card, outside any form, still has to line up
    with the header above it and the form below. */
 .settings-card > .notice { margin: 0 var(--card-inset) var(--space-4); }
-.settings-card > .notice > button { align-self: start; padding-left: 0; }
+.settings-card > .notice > button { align-self: start; }
 
 /* Accessible visually-hidden helper (kept in the a11y tree). */
 .sr-only {
