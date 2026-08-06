@@ -65,26 +65,40 @@ type Config struct {
 	BaseDelay     time.Duration
 	MaxDelay      time.Duration
 	DedupCooldown time.Duration
+
+	// MaxConcurrentDeliveries bounds in-flight endpoint deliveries across the
+	// whole dispatcher. Zero selects defaultMaxConcurrentDeliveries.
+	MaxConcurrentDeliveries int
 }
+
+// defaultMaxConcurrentDeliveries bounds the fan-out below. Fan-out exists so one
+// stalled endpoint cannot hold up the others, but unbounded it turns a burst of
+// events across many endpoints into an unbounded goroutine and socket count,
+// each holding an entire retry budget's worth of time. The bound is on in-flight
+// deliveries rather than per worker, because that is the resource.
+const defaultMaxConcurrentDeliveries = 32
 
 type Dispatcher struct {
 	config      Config
 	endpointsMu sync.RWMutex
 	endpoints   []Endpoint
 	queue       chan Event
-	submitMu    sync.RWMutex
-	closed      bool
-	mu          sync.Mutex
-	lastSent    map[string]time.Time
-	startOnce   sync.Once
-	closeOnce   sync.Once
-	wait        sync.WaitGroup
-	accepted    atomic.Uint64
-	delivered   atomic.Uint64
-	failed      atomic.Uint64
-	dropped     atomic.Uint64
-	observerMu  sync.RWMutex
-	observer    func(DeliveryResult)
+	// deliverySlots is the fan-out bound; a token is held for the whole of one
+	// endpoint delivery, retries included.
+	deliverySlots chan struct{}
+	submitMu      sync.RWMutex
+	closed        bool
+	mu            sync.Mutex
+	lastSent      map[string]time.Time
+	startOnce     sync.Once
+	closeOnce     sync.Once
+	wait          sync.WaitGroup
+	accepted      atomic.Uint64
+	delivered     atomic.Uint64
+	failed        atomic.Uint64
+	dropped       atomic.Uint64
+	observerMu    sync.RWMutex
+	observer      func(DeliveryResult)
 }
 
 type Stats struct {
@@ -167,9 +181,14 @@ func New(config Config, endpoints []Endpoint) (*Dispatcher, error) {
 		config.MaxDelay < config.BaseDelay || config.DedupCooldown <= 0 {
 		return nil, errors.New("invalid alert dispatcher configuration")
 	}
+	if config.MaxConcurrentDeliveries < 1 {
+		config.MaxConcurrentDeliveries = defaultMaxConcurrentDeliveries
+	}
 	return &Dispatcher{
 		config: config, endpoints: endpoints,
-		queue: make(chan Event, config.QueueCapacity), lastSent: make(map[string]time.Time),
+		queue:         make(chan Event, config.QueueCapacity),
+		deliverySlots: make(chan struct{}, config.MaxConcurrentDeliveries),
+		lastSent:      make(map[string]time.Time),
 	}, nil
 }
 
@@ -269,8 +288,12 @@ func (d *Dispatcher) worker() {
 		var fanOut sync.WaitGroup
 		for index := range endpoints {
 			fanOut.Add(1)
+			// Acquired before the goroutine starts, so a saturated dispatcher
+			// makes this worker wait rather than pile up goroutines that will.
+			d.deliverySlots <- struct{}{}
 			go func(endpoint *Endpoint) {
 				defer fanOut.Done()
+				defer func() { <-d.deliverySlots }()
 				result := d.deliver(event, endpoint)
 				if result.Outcome == "success" {
 					d.delivered.Add(1)

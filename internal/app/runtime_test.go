@@ -418,3 +418,21 @@ func testConfig(t *testing.T) config.Config {
 	}
 	return cfg
 }
+
+// A malformed CIDR is rejected by configuration validation, so the runtime is
+// not supposed to see one. If it ever does, the answer has to be "refuse to
+// start", not "trust a smaller set of proxies than the operator wrote down":
+// that set decides whose X-Forwarded-For the Gateway believes.
+func TestTrustedProxyCIDRsAreAllOrNothing(t *testing.T) {
+	parsed, err := parsePrefixes([]string{"10.0.0.0/8", "192.168.0.0/16"})
+	if err != nil || len(parsed) != 2 {
+		t.Fatalf("valid prefixes: parsed=%v err=%v", parsed, err)
+	}
+	parsed, err = parsePrefixes([]string{"10.0.0.0/8", "not-a-cidr"})
+	if err == nil {
+		t.Fatalf("a malformed CIDR was silently dropped: parsed=%v", parsed)
+	}
+	if parsed != nil {
+		t.Fatalf("a partial prefix set was returned alongside the error: %v", parsed)
+	}
+}

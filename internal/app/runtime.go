@@ -343,13 +343,22 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		secretVault.Close()
 		return fail(fmt.Errorf("create gateway service: %w", err))
 	}
+	trustedProxies, err := parsePrefixes(cfg.Security.TrustedProxyCIDRs)
+	if err != nil {
+		alertDispatcher.Close()
+		ledgerLog.Close()
+		metadata.Close()
+		providerRegistry.Close()
+		secretVault.Close()
+		return fail(err)
+	}
 	gatewayHandler, err := gatewayapi.NewWithOptions(gatewayService, gatewayapi.Options{
 		MaxRequestBytes:   cfg.Server.MaxRequestBytes,
 		RouteTimeout:      cfg.Gateway.RouteTotalTimeout.Value(),
 		StreamTimeout:     cfg.Gateway.StreamMaxDuration.Value(),
 		WriteTimeout:      cfg.Gateway.DownstreamWriteTimeout.Value(),
 		TrustProxyHeaders: cfg.Security.TrustProxyHeaders,
-		TrustedProxyCIDRs: parsePrefixes(cfg.Security.TrustedProxyCIDRs),
+		TrustedProxyCIDRs: trustedProxies,
 		// The same snapshot the service authenticates against, so the guard
 		// cannot turn away a request the service would have accepted.
 		AuthorizeKey: func(plaintextKey string) error {
@@ -651,14 +660,21 @@ func (r *Runtime) exportUsageParquet() {
 	}
 }
 
-func parsePrefixes(raw []string) []netip.Prefix {
+// parsePrefixes refuses the whole list rather than skipping what it cannot
+// parse. Configuration validation rejects a malformed CIDR before this runs, but
+// silently dropping one here would mean the set of addresses Heimdall trusts as
+// proxies differs from the set the operator wrote down — and the difference
+// decides whose X-Forwarded-For is believed.
+func parsePrefixes(raw []string) ([]netip.Prefix, error) {
 	result := make([]netip.Prefix, 0, len(raw))
 	for _, value := range raw {
-		if prefix, err := netip.ParsePrefix(value); err == nil {
-			result = append(result, prefix)
+		prefix, err := netip.ParsePrefix(value)
+		if err != nil {
+			return nil, fmt.Errorf("trusted proxy CIDR %q: %w", value, err)
 		}
+		result = append(result, prefix)
 	}
-	return result
+	return result, nil
 }
 
 func verifyVaultKeyCheck(store *boltstore.Store, secretVault *vault.Vault) error {

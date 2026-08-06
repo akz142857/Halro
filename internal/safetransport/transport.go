@@ -164,6 +164,33 @@ func pinnedDialContext(policy Policy, resolver Resolver, dialer Dialer) func(con
 	}
 }
 
+// deniedPrefixes are ranges no upstream provider is reachable at, and that the
+// address classes Go exposes do not cover. Three of them are reserved or
+// special-purpose; the last three are tunnels that carry an arbitrary IPv4
+// address inside an IPv6 one, which would otherwise walk straight past every
+// check above (2002:7f00:1:: is 127.0.0.1 wearing a different hat).
+var deniedPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),      // "this network"; IsUnspecified only covers 0.0.0.0 itself
+	netip.MustParsePrefix("192.0.0.0/24"),   // IETF protocol assignments
+	netip.MustParsePrefix("198.18.0.0/15"),  // benchmarking
+	netip.MustParsePrefix("240.0.0.0/4"),    // reserved, and the broadcast address
+	netip.MustParsePrefix("64:ff9b::/96"),   // NAT64 well-known
+	netip.MustParsePrefix("64:ff9b:1::/48"), // NAT64 local-use
+	netip.MustParsePrefix("2002::/16"),      // 6to4
+	netip.MustParsePrefix("2001::/32"),      // Teredo
+}
+
+// carrierGradeNAT hosts Alibaba Cloud's metadata service, so it is refused for
+// the same reason 169.254.169.254 is. It is also a common Kubernetes pod range,
+// which is a legitimate place for an internal provider to live, so it follows
+// AllowPrivate rather than being refused outright — except for the metadata
+// address itself, which is never a provider.
+var (
+	carrierGradeNAT   = netip.MustParsePrefix("100.64.0.0/10")
+	alibabaMetadata   = netip.MustParseAddr("100.100.100.200")
+	googleGCEMetadata = netip.MustParseAddr("169.254.169.254") // also link-local; named for the reader
+)
+
 func validateAddress(address netip.Addr, allowPrivate bool) error {
 	address = address.Unmap()
 	if !address.IsValid() {
@@ -171,6 +198,17 @@ func validateAddress(address netip.Addr, allowPrivate bool) error {
 	}
 	if address.IsUnspecified() || address.IsLoopback() || address.IsMulticast() || address.IsLinkLocalUnicast() || address.IsLinkLocalMulticast() {
 		return fmt.Errorf("address %s is not allowed", address)
+	}
+	if address == alibabaMetadata || address == googleGCEMetadata {
+		return fmt.Errorf("cloud metadata address %s is not allowed", address)
+	}
+	for _, prefix := range deniedPrefixes {
+		if prefix.Contains(address) {
+			return fmt.Errorf("reserved address %s is not allowed", address)
+		}
+	}
+	if carrierGradeNAT.Contains(address) && !allowPrivate {
+		return fmt.Errorf("carrier-grade NAT address %s is not allowed", address)
 	}
 	if address.IsPrivate() && !allowPrivate {
 		return fmt.Errorf("private address %s is not allowed", address)

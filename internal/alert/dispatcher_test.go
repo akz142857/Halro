@@ -1,6 +1,7 @@
 package alert
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -194,5 +195,68 @@ func TestDispatcherConcurrentSubmitAndCloseNeverPanics(t *testing.T) {
 	wait.Wait()
 	if result := dispatcher.SubmitWithResult(Event{ID: "after-close"}); result.Status != SubmissionClosed {
 		t.Fatalf("post-close submission result=%#v", result)
+	}
+}
+
+// Fan-out exists so one stalled endpoint cannot hold up the others. Unbounded,
+// it turns an event addressed to many endpoints into as many simultaneous
+// goroutines and sockets, each holding a full retry budget's worth of time.
+func TestFanOutIsBounded(t *testing.T) {
+	var inFlight, peak atomic.Int64
+	release := make(chan struct{})
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		current := inFlight.Add(1)
+		for {
+			observed := peak.Load()
+			if current <= observed || peak.CompareAndSwap(observed, current) {
+				break
+			}
+		}
+		<-release
+		inFlight.Add(-1)
+		return &http.Response{
+			StatusCode: http.StatusNoContent, Body: io.NopCloser(strings.NewReader("")),
+			Header: make(http.Header), Request: request,
+		}, nil
+	})}
+	endpointURL, _ := url.Parse("https://hooks.example/alert")
+	endpoints := make([]Endpoint, 0, 12)
+	for index := 0; index < 12; index++ {
+		endpoint, err := NewEndpoint(fmt.Sprintf("webhook_%d", index), endpointURL, "", nil, client)
+		if err != nil {
+			t.Fatal(err)
+		}
+		endpoints = append(endpoints, endpoint)
+	}
+	dispatcher, err := New(Config{
+		QueueCapacity: 4, Workers: 1, Timeout: time.Second, MaxAttempts: 1,
+		BaseDelay: time.Millisecond, MaxDelay: 2 * time.Millisecond, DedupCooldown: time.Minute,
+		MaxConcurrentDeliveries: 3,
+	}, endpoints)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatcher.Start()
+	if !dispatcher.Submit(Event{ID: "alert_fanout", Type: "test", Timestamp: time.Now()}) {
+		t.Fatal("event was not queued")
+	}
+	deadline := time.After(2 * time.Second)
+	for peak.Load() < 3 {
+		select {
+		case <-deadline:
+			t.Fatalf("fan-out never reached the bound: peak=%d", peak.Load())
+		default:
+		}
+		time.Sleep(time.Millisecond)
+	}
+	// Held long enough that anything unbounded would have piled up by now.
+	time.Sleep(20 * time.Millisecond)
+	if observed := peak.Load(); observed > 3 {
+		t.Fatalf("fan-out exceeded its bound: peak=%d", observed)
+	}
+	close(release)
+	dispatcher.Close()
+	if delivered := dispatcher.Stats().Delivered; delivered != 12 {
+		t.Fatalf("bounded fan-out lost deliveries: delivered=%d", delivered)
 	}
 }

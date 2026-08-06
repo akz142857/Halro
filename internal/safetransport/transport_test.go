@@ -106,3 +106,48 @@ func TestAudienceIsCanonical(t *testing.T) {
 		t.Fatalf("unexpected audience: %q", audience)
 	}
 }
+
+// The address classes Go exposes miss several ranges that are never an upstream
+// provider and are reachable enough to matter: carrier-grade NAT carries
+// Alibaba Cloud's metadata service, and the IPv6 tunnel prefixes re-encode an
+// arbitrary IPv4 address inside an address that passes every other check.
+func TestReservedAndTunnelAddressesAreRefused(t *testing.T) {
+	refused := []struct {
+		address string
+		reason  string
+	}{
+		{"100.100.100.200", "Alibaba Cloud metadata"},
+		{"169.254.169.254", "EC2 and GCE metadata"},
+		{"100.64.0.1", "carrier-grade NAT"},
+		{"0.1.2.3", "this network"},
+		{"192.0.0.8", "IETF protocol assignments"},
+		{"198.18.0.1", "benchmarking"},
+		{"240.0.0.1", "reserved"},
+		{"255.255.255.255", "broadcast"},
+		{"64:ff9b::7f00:1", "NAT64 well-known"},
+		{"64:ff9b:1::1", "NAT64 local-use"},
+		{"2002:7f00:1::", "6to4 wrapping 127.0.0.1"},
+		{"2001::1", "Teredo"},
+	}
+	for _, item := range refused {
+		if err := validateAddress(netip.MustParseAddr(item.address), false); err == nil {
+			t.Errorf("%s (%s) was allowed", item.address, item.reason)
+		}
+	}
+
+	// AllowPrivate is how an operator points Heimdall at an internal provider,
+	// and a Kubernetes pod in 100.64/10 is a real place for one to live. The
+	// metadata address inside that range is not, and stays refused.
+	if err := validateAddress(netip.MustParseAddr("100.64.0.1"), true); err != nil {
+		t.Errorf("carrier-grade NAT refused even with private addresses allowed: %v", err)
+	}
+	if err := validateAddress(netip.MustParseAddr("100.100.100.200"), true); err == nil {
+		t.Error("cloud metadata was allowed once private addresses were")
+	}
+
+	for _, allowed := range []string{"203.0.113.10", "8.8.8.8", "2606:4700:4700::1111"} {
+		if err := validateAddress(netip.MustParseAddr(allowed), false); err != nil {
+			t.Errorf("ordinary public address %s was refused: %v", allowed, err)
+		}
+	}
+}
