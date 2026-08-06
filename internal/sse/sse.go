@@ -18,6 +18,10 @@ type Event struct {
 type Decoder struct {
 	reader   *bufio.Reader
 	maxBytes int
+	// pending holds the lines a single LF-terminated chunk split into. The SSE
+	// grammar terminates a line on CR, LF or CRLF; bufio only knows LF, so a
+	// bare CR arrives inside a chunk and has to be split out here.
+	pending [][]byte
 }
 
 func NewDecoder(reader io.Reader, maxBytes int) *Decoder {
@@ -70,20 +74,48 @@ func (d *Decoder) Next() (Event, error) {
 }
 
 func (d *Decoder) readLine() ([]byte, error) {
-	var line []byte
-	for {
-		fragment, prefix, err := d.reader.ReadLine()
-		if err != nil {
+	for len(d.pending) == 0 {
+		if err := d.fill(); err != nil {
 			return nil, err
 		}
-		if len(line)+len(fragment) > d.maxBytes {
-			return nil, fmt.Errorf("SSE line exceeds %d bytes", d.maxBytes)
-		}
-		line = append(line, fragment...)
-		if !prefix {
-			return line, nil
-		}
 	}
+	line := d.pending[0]
+	d.pending = d.pending[1:]
+	return line, nil
+}
+
+// fill reads one LF-terminated chunk and splits it into lines. A trailing CR
+// belongs to the CRLF that ended the chunk; every other CR is a line terminator
+// in its own right, which is what a spec-compliant client does with it and why
+// the encoder must never emit one inside a payload.
+func (d *Decoder) fill() error {
+	var chunk []byte
+	for {
+		fragment, err := d.reader.ReadSlice('\n')
+		if len(chunk)+len(fragment) > d.maxBytes {
+			return fmt.Errorf("SSE line exceeds %d bytes", d.maxBytes)
+		}
+		chunk = append(chunk, fragment...)
+		if err == nil {
+			break
+		}
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		if errors.Is(err, io.EOF) {
+			if len(chunk) == 0 {
+				return io.EOF
+			}
+			break
+		}
+		return err
+	}
+	if bytes.HasSuffix(chunk, []byte{'\n'}) {
+		chunk = bytes.TrimSuffix(chunk, []byte{'\n'})
+		chunk = bytes.TrimSuffix(chunk, []byte{'\r'})
+	}
+	d.pending = bytes.Split(chunk, []byte{'\r'})
+	return nil
 }
 
 type Encoder struct {
@@ -100,8 +132,14 @@ func (e *Encoder) Write(event Event) error {
 			return err
 		}
 	}
-	lines := bytes.Split(event.Data, []byte{'\n'})
-	for _, line := range lines {
+	// A bare CR ends a line for any spec-compliant client, so a payload carrying
+	// one would otherwise inject a field — or, with a second CR, an entire event
+	// boundary — into the stream. Native pass-through is where this bites: JSON
+	// escapes CR, raw upstream bytes do not. Every CRLF, CR and LF becomes its
+	// own data: line, which is the only thing this wire format can express.
+	normalized := bytes.ReplaceAll(event.Data, []byte("\r\n"), []byte{'\n'})
+	normalized = bytes.ReplaceAll(normalized, []byte{'\r'}, []byte{'\n'})
+	for _, line := range bytes.Split(normalized, []byte{'\n'}) {
 		if _, err := e.writer.Write(append(append([]byte("data: "), line...), '\n')); err != nil {
 			return err
 		}

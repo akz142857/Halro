@@ -260,3 +260,57 @@ func TestFanOutIsBounded(t *testing.T) {
 		t.Fatalf("bounded fan-out lost deliveries: delivered=%d", delivered)
 	}
 }
+
+// Close used to wait out every in-flight retry budget, because the backoff slept
+// on a bare timer and reported success unconditionally — which also left
+// retry_interrupted unreachable. Shutdown now cuts the backoff short.
+func TestCloseInterruptsRetryBackoff(t *testing.T) {
+	var attempts atomic.Int64
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		attempts.Add(1)
+		return &http.Response{
+			StatusCode: http.StatusInternalServerError, Body: io.NopCloser(strings.NewReader("nope")),
+			Header: make(http.Header), Request: request,
+		}, nil
+	})}
+	endpointURL, _ := url.Parse("https://hooks.example/alert")
+	endpoint, err := NewEndpoint("webhook_slow", endpointURL, "", nil, client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatcher, err := New(Config{
+		QueueCapacity: 4, Workers: 1, Timeout: time.Second, MaxAttempts: 5,
+		BaseDelay: 30 * time.Second, MaxDelay: time.Minute, DedupCooldown: time.Minute,
+	}, []Endpoint{endpoint})
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := make(chan DeliveryResult, 1)
+	dispatcher.SetObserver(func(result DeliveryResult) { results <- result })
+	dispatcher.Start()
+	if !dispatcher.Submit(Event{ID: "alert_slow", Type: "test", Timestamp: time.Now()}) {
+		t.Fatal("event was not queued")
+	}
+	for attempts.Load() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+
+	closed := make(chan struct{})
+	go func() { dispatcher.Close(); close(closed) }()
+	select {
+	case <-closed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Close waited for the retry backoff")
+	}
+	select {
+	case result := <-results:
+		if result.Reason != "retry_interrupted" {
+			t.Fatalf("unexpected shutdown reason: %#v", result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no delivery result was reported for the interrupted retry")
+	}
+	if delivered := attempts.Load(); delivered != 1 {
+		t.Fatalf("the backoff was not cut short: attempts=%d", delivered)
+	}
+}

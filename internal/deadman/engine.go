@@ -16,6 +16,11 @@ import (
 type Checker func(context.Context, Config, TargetConfig) (time.Duration, string)
 
 type Engine struct {
+	// tickMu serializes whole ticks; mu guards the state a tick and the delivery
+	// worker share. Keeping them apart is the point: a probe is a network call
+	// with a timeout, and holding the state lock across it stopped the delivery
+	// worker from sending the heartbeat that says this probe is alive.
+	tickMu        sync.Mutex
 	mu            sync.Mutex
 	cfg           Config
 	state         persistedState
@@ -110,27 +115,30 @@ func (e *Engine) closeIdleConnections() {
 	}
 }
 
+type probeResult struct {
+	latency time.Duration
+	reason  string
+}
+
 func (e *Engine) Tick(ctx context.Context) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	// Serialized against other ticks, but not against delivery: the heartbeat is
+	// queued and released immediately so the worker can send it while the probes
+	// below are still waiting on the network.
+	e.tickMu.Lock()
+	defer e.tickMu.Unlock()
 	now := e.now()
+	e.mu.Lock()
 	if err := e.enqueue("heartbeat", TargetConfig{}, "", "", 0, now); err != nil {
 		e.logger.Error("dead-man heartbeat was not queued", "error", err)
 	}
-	type probeResult struct {
-		latency time.Duration
-		reason  string
+	e.mu.Unlock()
+	select {
+	case e.wake <- struct{}{}:
+	default:
 	}
-	results := make([]probeResult, len(e.cfg.Targets))
-	var probes sync.WaitGroup
-	for index, target := range e.cfg.Targets {
-		probes.Add(1)
-		go func() {
-			defer probes.Done()
-			results[index].latency, results[index].reason = e.check(ctx, e.cfg, target)
-		}()
-	}
-	probes.Wait()
+	results := e.probeTargets(ctx)
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	for index, target := range e.cfg.Targets {
 		latency, reason := results[index].latency, results[index].reason
 		success := reason == ""
@@ -159,6 +167,22 @@ func (e *Engine) Tick(ctx context.Context) error {
 	default:
 	}
 	return nil
+}
+
+// probeTargets runs every configured probe without holding any lock. The config
+// and the checker are fixed once the engine is built, so nothing here needs one.
+func (e *Engine) probeTargets(ctx context.Context) []probeResult {
+	results := make([]probeResult, len(e.cfg.Targets))
+	var probes sync.WaitGroup
+	for index, target := range e.cfg.Targets {
+		probes.Add(1)
+		go func() {
+			defer probes.Done()
+			results[index].latency, results[index].reason = e.check(ctx, e.cfg, target)
+		}()
+	}
+	probes.Wait()
+	return results
 }
 
 func transition(state TargetState, success bool, reason string, now time.Time, failures, successes int) (TargetState, bool) {
