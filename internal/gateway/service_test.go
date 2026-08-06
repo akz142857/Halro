@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -42,6 +43,8 @@ type fakePricePinStore struct {
 	admissionPrice domain.DeploymentPriceVersion
 	prepared       domain.PricePinIntent
 	committed      domain.PricePinIntent
+	prepares       atomic.Int64
+	deletes        atomic.Int64
 }
 
 func (s *fakePricePinStore) SelectDeploymentPriceVersion(ctx context.Context, deploymentID string, selectedAt time.Time) (domain.DeploymentPriceVersion, error) {
@@ -58,6 +61,7 @@ func (s *fakePricePinStore) LockDeploymentPricing(string) func() {
 }
 
 func (s *fakePricePinStore) PrepareDeploymentPricePin(_ context.Context, deploymentID, attemptID string, selectedAt time.Time, _, _ time.Duration) (domain.DeploymentPriceVersion, domain.PriceSnapshot, domain.PricePinIntent, error) {
+	s.prepares.Add(1)
 	price, err := staticPriceSelector{price: s.price}.SelectDeploymentPriceVersion(context.Background(), deploymentID, selectedAt)
 	if err != nil {
 		return domain.DeploymentPriceVersion{}, domain.PriceSnapshot{}, domain.PricePinIntent{}, err
@@ -83,6 +87,7 @@ func (s *fakePricePinStore) CommitDeploymentPricePin(_ context.Context, attemptI
 }
 
 func (s *fakePricePinStore) DeletePreparedDeploymentPricePin(context.Context, string) error {
+	s.deletes.Add(1)
 	return nil
 }
 
@@ -394,12 +399,9 @@ func newFixtureAt(
 	}); err != nil {
 		t.Fatal(err)
 	}
-	service, err := NewService(snapshot, registry, accounting)
+	service, err := NewServiceWithOptions(snapshot, registry, accounting, ServiceOptions{Now: clock})
 	if err != nil {
 		t.Fatal(err)
-	}
-	if clock != nil {
-		service.now = clock
 	}
 	return fixture{
 		service:    service,
@@ -1452,5 +1454,73 @@ func TestAbortReleasesEverythingTheAttemptTook(t *testing.T) {
 	}
 	if abortErr := replacement.abort("unsupported_feature"); abortErr != nil {
 		t.Fatalf("second abort: %v", abortErr)
+	}
+}
+
+// The gateway's clock decides authentication timestamps, price selection,
+// rate-limit buckets and Token Guard windows. It was hard-wired to time.Now, so
+// a test in any other package could pin the accounting clock and still have the
+// gateway disagree with it about what day it is.
+func TestGatewayClockComesFromOptions(t *testing.T) {
+	fixed := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+	f := newFixtureAt(t, 1_000_000, ledger.Options{}, func() time.Time { return fixed })
+	defer f.close()
+	if got := f.service.now(); !got.Equal(fixed) {
+		t.Fatalf("the service kept its own clock: %s", got)
+	}
+	if _, err := f.service.Chat(context.Background(), f.plaintext, chatRequest()); err != nil {
+		t.Fatalf("a fixed clock broke an ordinary request: %v", err)
+	}
+}
+
+// The daily budget belongs to the project, so no other candidate can change the
+// answer. Every extra candidate the gateway tried anyway took the pricing lock,
+// selected a price, wrote a pin, failed the same check and deleted the pin —
+// disk writes multiplied by the number of deployments, on every request, for as
+// long as the budget stayed spent.
+func TestBudgetExceededStopsAtTheFirstCandidate(t *testing.T) {
+	f := newFixture(t, 10)
+	defer f.close()
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	price := domain.DeploymentPriceVersion{
+		ID: "price_budget", DeploymentID: "dep_budget", Version: 1, Revision: 1,
+		BillingMode: domain.BillingModeMetered, Currency: "USD", FormulaVersion: domain.PriceFormulaUSDTokensV1,
+		InputMicrosPerMillion: 1_000_000, OutputMicrosPerMillion: 2_000_000,
+		EffectiveFrom: now.Add(-time.Hour), CreatedBy: "test", CreatedAt: now.Add(-time.Hour),
+		Source: domain.PriceSource{Type: domain.PriceSourceManual, Assurance: domain.PriceAssuranceAsserted,
+			ReceivedAt: now.Add(-time.Hour), ContentSHA256: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			Reference: "test", AssertedWithoutArchive: true},
+	}
+	priceStore := &fakePricePinStore{price: price}
+	registry := provider.NewRegistry()
+	for index, id := range []string{"target_a", "target_b", "target_c"} {
+		if err := registry.Register(provider.Target{
+			ID: id, DeploymentID: "dep_budget", PublicModel: "chat", ProviderModel: "provider-model",
+			Adapter: f.adapter, Priority: index, InputMicrosPerMillion: 99, OutputMicrosPerMillion: 99,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	service, err := NewServiceWithOptions(f.service.auth, registry, f.accounting, ServiceOptions{
+		Pricing: priceStore,
+		Now:     func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = service.Chat(context.Background(), f.plaintext, chatRequest())
+	var gatewayErr *Error
+	if !errors.As(err, &gatewayErr) || gatewayErr.Code != "budget_exceeded" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if f.adapter.calls != 0 {
+		t.Fatalf("provider was called for an over-budget request: calls=%d", f.adapter.calls)
+	}
+	if prepares := priceStore.prepares.Load(); prepares != 1 {
+		t.Fatalf("the pricing dance ran once per candidate: prepares=%d", prepares)
+	}
+	if deletes := priceStore.deletes.Load(); deletes != 1 {
+		t.Fatalf("pins written and deleted per candidate: deletes=%d", deletes)
 	}
 }

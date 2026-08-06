@@ -122,6 +122,13 @@ type ServiceOptions struct {
 	PricingClockRollbackTolerance time.Duration
 	PricingClockForwardTolerance  time.Duration
 	PricingUnknownPolicy          string
+
+	// Now overrides the clock the whole service reads: authentication
+	// timestamps, price selection, rate-limit buckets and Token Guard windows
+	// all come from it. Without it a test in another package cannot fix the
+	// gateway's idea of the time, which is how a "passes today, fails tomorrow"
+	// test gets written. Nil selects time.Now.
+	Now func() time.Time
 }
 
 type requestRun struct {
@@ -233,6 +240,14 @@ func (run *requestRun) recordProviderResult(providerErr error, settlement budget
 	run.actualTPMTokens = accumulateTPMTokens(run.actualTPMTokens, settlement)
 }
 
+// exhaustedAttemptsError maps whatever stopped the last attempt onto a response.
+//
+// One of its cases never has to wait for the attempts to be exhausted: the daily
+// budget belongs to the project, not to a target, so no other candidate can
+// change the answer. Walking the rest of them re-runs price selection, takes the
+// pricing lock, writes a pin, fails the same check and deletes the pin again —
+// once per candidate, on every request, for as long as the budget stays spent.
+// The callers return on budget.ErrExceeded rather than continuing.
 func (s *Service) exhaustedAttemptsError(lastErr error) error {
 	switch {
 	case errors.Is(lastErr, budget.ErrExceeded):
@@ -598,6 +613,10 @@ func NewServiceWithOptions(
 	if _, err := cryptorand.Read(sourceHashKey[:]); err != nil {
 		return nil, errors.New("generate source hashing key")
 	}
+	clock := options.Now
+	if clock == nil {
+		clock = time.Now
+	}
 	return &Service{
 		auth:                          authSnapshot,
 		registry:                      registry,
@@ -614,7 +633,7 @@ func NewServiceWithOptions(
 		providerConcurrency:           provider.NewConcurrencyManager(),
 		deploymentConcurrency:         provider.NewConcurrencyManager(),
 		sourceHashKey:                 sourceHashKey,
-		now:                           time.Now,
+		now:                           clock,
 		resources:                     options.Resources,
 		resourceObjectDir:             options.ResourceObjectDir,
 		contentScanner:                options.ContentScanner,
@@ -757,6 +776,9 @@ func (s *Service) Chat(
 				var fatal *Error
 				if errors.As(err, &fatal) {
 					return openaiapi.ChatCompletionResponse{}, fatal
+				}
+				if errors.Is(err, budget.ErrExceeded) {
+					return openaiapi.ChatCompletionResponse{}, s.exhaustedAttemptsError(err)
 				}
 				lastErr = err
 				break
@@ -1417,6 +1439,9 @@ func (s *Service) ChatStream(
 				if errors.As(err, &fatal) {
 					return fatal
 				}
+				if errors.Is(err, budget.ErrExceeded) {
+					return s.exhaustedAttemptsError(err)
+				}
 				lastErr = err
 				break
 			}
@@ -1585,6 +1610,9 @@ func (s *Service) Embeddings(
 				var fatal *Error
 				if errors.As(err, &fatal) {
 					return openaiapi.EmbeddingResponse{}, fatal
+				}
+				if errors.Is(err, budget.ErrExceeded) {
+					return openaiapi.EmbeddingResponse{}, s.exhaustedAttemptsError(err)
 				}
 				lastErr = err
 				break

@@ -497,3 +497,41 @@ func TestFixedThresholdAnomalyCannotPoisonEWMABaseline(t *testing.T) {
 		t.Fatalf("tainted fixed-threshold window changed baseline samples: before=%d after=%d", baselineSamples, got)
 	}
 }
+
+// MarshalCheckpoint decides what is still worth persisting — a block that has
+// expired and a cooldown that has passed are deliberately dropped rather than
+// written out to be revived at the next start. That decision read the wall
+// clock, so the "still live" and "already expired" branches were the same
+// branch as far as any test could tell.
+func TestCheckpointOmitsStateThatHasAlreadyExpired(t *testing.T) {
+	policy := testPolicy()
+	now := time.Now().UTC()
+	clock := now
+	manager, err := NewWithClock([]domain.TokenGuardPolicy{policy}, func() time.Time { return clock })
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := Input{PolicyID: policy.ID, ProjectID: "p", KeyID: "k", EstimatedTokens: 101, Now: now}
+	manager.Admit(input)
+	input.Now = now.Add(time.Second)
+	if decision := manager.Admit(input); decision.Allowed {
+		t.Fatal("expected the second violation to block")
+	}
+
+	live, err := manager.MarshalCheckpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(live), `"key_id":"k"`) {
+		t.Fatalf("a live block was left out of the checkpoint: %s", live)
+	}
+
+	clock = now.Add(policy.BlockTTL).Add(policy.Cooldown).Add(time.Hour)
+	expired, err := manager.MarshalCheckpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(expired), `"key_id":"k"`) {
+		t.Fatalf("expired state was persisted to be revived at the next start: %s", expired)
+	}
+}
