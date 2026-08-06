@@ -220,6 +220,7 @@ P1-10、P1-12 都是纯视觉/交互改动，**没有在真实浏览器里逐页
 
 - **窗口关了。** 首个 tag 之前是改默认，之后就是需要迁移说明的破坏性变更。本轮的 step-up 推广（`ca26a3c`）正是踩着窗口关闭前做的，CHANGELOG 里那条 `Breaking (Admin API, pre-1.0)` 也写明了这一点。往后 Admin API 的同类改动都要按破坏性变更处理。
 - **RC 前置的 24 小时 soak 没跑。** milestone 文档的临界路径第 1 步是"在确切的 RC commit 上跑并归档 24 小时 soak"，打 tag 时它没有完成——tag 是先打的，soak 属于 RC 门禁里仍欠的一项。
-- **release workflow 的 publish 作业有三道外部门禁**：tag 必须被 GitHub 验证为签名 tag、仓库 secret `M11_RELEASE_EVIDENCE_JSON` 要能对上这个 tag 与 commit、`v1-release` environment 要审批。任何一道没就绪，前面的构建/SBOM/Sigstore 作业照常跑完，产物留在 Actions artifacts 里，publish 会失败而不会误发正式 release。
+- **release workflow 跑完了，publish 停在 M11 evidence 门禁上——这是它该有的行为。** quality / sdk-compatibility / stress / web / 四个平台的 binaries / container / provenance 全部成功，产物、SPDX SBOM、checksums、Sigstore bundle 都已生成并签名；publish 在第一行 `test -n "${M11_RELEASE_EVIDENCE_JSON}"` 上失败，因为 `v1-release` environment 还没有那份 secret。tag 的签名本身已被 GitHub 验证（`verified: true`），三道门禁里只剩 evidence bundle 与 environment 审批。
+  这份 bundle 不是配置项，是 `tools/m11/release-evidence/` 定义的人工证据：14 个真实 AWS KMS 场景、EKS 与 VM/systemd 两套部署（含三种 CrashLoop）、由非实现作者的操作员做的主/恢复还原演练与随后的权限回收、七处 Secret Canary、以及四位不同评审人对同一个完整 commit SHA 的签署。仓库里的 `template.json` **故意是不完整的**，且有测试钉住"verifier 必须拒绝它"——所以它没法被"顺手填一下"，只能由真正做过这些事的人在受控系统里填。没有它就没有 GitHub Release，这正是这道门禁存在的意义。
 
 Developer Workbench 的默认已按上文决定保持 enabled 并改为可达时告警；metrics 端口与 KMS 推荐仍未动。
