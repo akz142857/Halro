@@ -61,6 +61,12 @@ gateway:
   stream_max_duration: 10m
   max_total_attempts: 3
   health_probe_interval: 30s
+  # Per-source admission, applied before authentication. Set requests_per_minute
+  # to 0 to disable; addresses beyond max_tracked_sources share a single budget
+  # so the limiter itself stays bounded.
+  source_rate_limit:
+    requests_per_minute: 600
+    max_tracked_sources: 16384
 
 retry:
   max_attempts_per_target: 2

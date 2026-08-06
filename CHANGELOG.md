@@ -25,6 +25,10 @@ semantic versioning.
 - Startup warns when the developer workbench is enabled on an Admin listener
   bound to a routable address, where network controls applied to the Gateway
   listener do not cover it.
+- `gateway.source_rate_limit` bounds how many requests one source address may
+  start per minute, applied before authentication — the per-project limits
+  cannot bound the cost of deciding which project a request belongs to. Default
+  600 per minute; `doctor` reports it when a configuration leaves it disabled.
 
 ### Changed
 

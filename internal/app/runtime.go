@@ -33,6 +33,7 @@ import (
 	"github.com/akz142857/Heimdall/internal/metricsauth"
 	"github.com/akz142857/Heimdall/internal/provider"
 	"github.com/akz142857/Heimdall/internal/redaction"
+	"github.com/akz142857/Heimdall/internal/sourcelimit"
 	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
 	"github.com/akz142857/Heimdall/internal/store/lock"
 	"github.com/akz142857/Heimdall/internal/tokenguard"
@@ -56,6 +57,7 @@ type Runtime struct {
 	accounting          *budget.Manager
 	gateway             *gatewayapi.Handler
 	gatewayService      *gatewaycore.Service
+	sourceLimiter       *sourcelimit.Limiter
 	tokenGuard          *tokenguard.Manager
 	redactor            *redaction.Engine
 	alerts              *alert.Dispatcher
@@ -403,6 +405,10 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		secretVault.Close()
 		return fail(err)
 	}
+	sourceLimiter := sourcelimit.New(
+		cfg.Gateway.SourceRateLimit.RequestsPerMinute,
+		cfg.Gateway.SourceRateLimit.MaxTrackedSources,
+	)
 	gatewayHandler, err := gatewayapi.NewWithOptions(gatewayService, gatewayapi.Options{
 		MaxRequestBytes:   cfg.Server.MaxRequestBytes,
 		RouteTimeout:      cfg.Gateway.RouteTotalTimeout.Value(),
@@ -410,6 +416,7 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		WriteTimeout:      cfg.Gateway.DownstreamWriteTimeout.Value(),
 		TrustProxyHeaders: cfg.Security.TrustProxyHeaders,
 		TrustedProxyCIDRs: trustedProxies,
+		SourceLimiter:     sourceLimiter,
 		// The same snapshot the service authenticates against, so the guard
 		// cannot turn away a request the service would have accepted.
 		AuthorizeKey: func(plaintextKey string) error {
@@ -529,6 +536,7 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		accounting:          accounting,
 		gateway:             gatewayHandler,
 		gatewayService:      gatewayService,
+		sourceLimiter:       sourceLimiter,
 		tokenGuard:          tokenGuard,
 		redactor:            redactor,
 		alerts:              alertDispatcher,
@@ -1060,6 +1068,9 @@ func (r *Runtime) gatewayRouter() http.Handler {
 	router := chi.NewRouter()
 	router.Use(r.recoverPanics)
 	router.Use(r.gateway.WithWriteDeadline)
+	// Health stays outside the per-source limiter on purpose: an orchestrator
+	// probes from one address on a fixed interval, so limiting by source would
+	// eventually mark a healthy instance unready rather than shed any load.
 	router.Get("/health/live", r.live)
 	router.Get("/health/ready", r.ready)
 	// A key that cannot authenticate is turned away before its body is read.
@@ -1067,6 +1078,7 @@ func (r *Runtime) gatewayRouter() http.Handler {
 	// an anonymous caller sets the parsing cost and the per-project limiter
 	// that would bound it does not yet apply.
 	router.Group(func(guarded chi.Router) {
+		guarded.Use(r.gateway.LimitOpenAI)
 		guarded.Use(r.gateway.GuardOpenAI)
 		guarded.Post("/v1/chat/completions", r.gateway.ChatCompletions)
 		guarded.Post("/v1/responses", r.gateway.Responses)
@@ -1088,6 +1100,7 @@ func (r *Runtime) gatewayRouter() http.Handler {
 		guarded.Post("/v1/batches/{batchID}/cancel", r.gateway.CancelBatch)
 	})
 	router.Group(func(guarded chi.Router) {
+		guarded.Use(r.gateway.LimitAnthropic)
 		guarded.Use(r.gateway.GuardAnthropic)
 		guarded.Post("/v1/messages", r.gateway.Messages)
 	})

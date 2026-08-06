@@ -99,6 +99,15 @@ func (r *Runtime) writeMetrics(writer http.ResponseWriter) error {
 		usageMetrics.AttemptLatencyMillis, attemptCount)
 	metricHeader(output, "heimdall_active_requests", "gauge", "Requests accepted but not finalized.")
 	fmt.Fprintf(output, "heimdall_active_requests %d\n", usageMetrics.ActiveRequests)
+	// Deliberately unlabelled: the interesting dimension here is the source
+	// address, and that is exactly the label that would make this series
+	// unbounded — and would publish caller addresses through the metrics port.
+	metricHeader(output, "heimdall_source_rate_limited_total", "counter",
+		"Gateway requests shed by the per-source rate limiter.")
+	fmt.Fprintf(output, "heimdall_source_rate_limited_total %d\n", r.sourceLimiter.Rejected())
+	metricHeader(output, "heimdall_source_rate_limit_overflow_total", "counter",
+		"Gateway requests charged to the shared budget because distinct sources outgrew the tracking ceiling.")
+	fmt.Fprintf(output, "heimdall_source_rate_limit_overflow_total %d\n", r.sourceLimiter.Overflows())
 	metricHeader(output, "heimdall_process_goroutines", "gauge", "Current goroutines in the Heimdall process.")
 	fmt.Fprintf(output, "heimdall_process_goroutines %d\n", runtime.NumGoroutine())
 	metricHeader(output, "go_goroutines", "gauge", "Number of goroutines that currently exist.")

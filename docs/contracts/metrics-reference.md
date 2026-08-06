@@ -57,6 +57,8 @@ an authentication boundary.
 | `heimdall_request_latency_seconds` | classic histogram | `le` |
 | `heimdall_attempt_latency_seconds` | classic histogram | `le` |
 | `heimdall_active_requests` | gauge | none |
+| `heimdall_source_rate_limited_total` | counter | none |
+| `heimdall_source_rate_limit_overflow_total` | counter | none |
 | `heimdall_fallbacks_total` | counter | none |
 | `heimdall_usage_queue_depth` | gauge | none |
 | `heimdall_usage_queue_capacity` | gauge | none |
@@ -109,6 +111,15 @@ Histogram buckets are 10, 25, 50, 100, 250, and 500 milliseconds, then 1,
 2.5, 5, 10, 30, and 120 seconds plus `+Inf`. They are derived from Ledger
 events and persisted in the Usage checkpoint, so replay and catch-up preserve
 the exact distribution.
+
+`heimdall_source_rate_limited_total` counts requests shed by the per-source
+Gateway limiter. It carries no source label for the same reason a source IP is
+excluded everywhere else here: that label is both unbounded and a disclosure of
+caller addresses through the Metrics port. A rising
+`heimdall_source_rate_limit_overflow_total` means distinct sources per minute
+have outgrown `gateway.source_rate_limit.max_tracked_sources`, so callers past
+the ceiling are sharing one budget and may be shed while inside their own —
+raise the ceiling rather than the budget.
 
 User-controlled Project, Key, Route, model, request ID, source IP, and raw error
 values are deliberately excluded. Provider/Deployment IDs are bounded managed

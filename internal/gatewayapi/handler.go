@@ -300,6 +300,15 @@ type Handler struct {
 	trustProxy      bool
 	trustedProxies  []netip.Prefix
 	authorizeKey    func(string) error
+	sourceLimit     SourceLimiter
+}
+
+// SourceLimiter bounds how many requests one source address may start per
+// window. It is consulted before the guard and before any body is read, so it
+// must be cheap and must never block. A false result carries how long the
+// caller should wait.
+type SourceLimiter interface {
+	Allow(source netip.Addr, now time.Time) (bool, time.Duration)
 }
 
 func New(service Service, maxRequestBytes int64) (*Handler, error) {
@@ -319,6 +328,11 @@ type Options struct {
 	// reject — it is a guard in front of the real check, never a substitute for
 	// it.
 	AuthorizeKey func(plaintextKey string) error
+
+	// SourceLimiter, when supplied, bounds request starts per source address
+	// ahead of authentication. Leaving it nil leaves the data plane unbounded
+	// for anonymous callers.
+	SourceLimiter SourceLimiter
 }
 
 func NewWithOptions(service Service, options Options) (*Handler, error) {
@@ -344,6 +358,7 @@ func NewWithOptions(service Service, options Options) (*Handler, error) {
 		trustProxy:     options.TrustProxyHeaders,
 		trustedProxies: append([]netip.Prefix(nil), options.TrustedProxyCIDRs...),
 		authorizeKey:   options.AuthorizeKey,
+		sourceLimit:    options.SourceLimiter,
 	}
 	handler.responses, _ = service.(ResponsesService)
 	handler.messages, _ = service.(MessagesService)
@@ -799,6 +814,47 @@ func (w *deadlineWriter) arm() {
 	// A writer without deadline support (httptest, a test double) is not an error:
 	// the deadline is a defence, and its absence must not fail the response.
 	_ = http.NewResponseController(w.ResponseWriter).SetWriteDeadline(time.Now().Add(w.timeout))
+}
+
+// LimitOpenAI sheds requests from a source that has outrun its per-minute
+// budget. It runs ahead of GuardOpenAI, so the work an anonymous caller can
+// demand — the authentication attempt included — is itself bounded.
+func (h *Handler) LimitOpenAI(next http.Handler) http.Handler {
+	return h.limitBySource(next, func(writer http.ResponseWriter, _ *http.Request, retryAfter time.Duration) {
+		setRetryAfter(writer, retryAfter)
+		writeError(writer, http.StatusTooManyRequests, "rate_limit_exceeded",
+			"too many requests from this source address", nil)
+	})
+}
+
+// LimitAnthropic is LimitOpenAI in the envelope an Anthropic SDK can parse.
+func (h *Handler) LimitAnthropic(next http.Handler) http.Handler {
+	return h.limitBySource(next, func(writer http.ResponseWriter, request *http.Request, retryAfter time.Duration) {
+		setRetryAfter(writer, retryAfter)
+		writeAnthropicError(writer, http.StatusTooManyRequests, "rate_limit_error",
+			"too many requests from this source address", request.Header.Get("X-Request-Id"))
+	})
+}
+
+func (h *Handler) limitBySource(next http.Handler, deny func(http.ResponseWriter, *http.Request, time.Duration)) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if h.sourceLimit == nil {
+			next.ServeHTTP(writer, request)
+			return
+		}
+		// An address this cannot resolve is charged to the zero Addr rather
+		// than waved through. The endpoint behind still answers such a request
+		// with 400 invalid_forwarded_for — but it has to be reachable at a
+		// bounded rate, or a malformed header is a way around the bound.
+		source, _ := h.sourceIP(request)
+		allowed, retryAfter := h.sourceLimit.Allow(source, time.Now())
+		if !allowed {
+			writer.Header().Set("Cache-Control", "no-store")
+			deny(writer, request, retryAfter)
+			return
+		}
+		next.ServeHTTP(writer, request)
+	})
 }
 
 func (h *Handler) GuardOpenAI(next http.Handler) http.Handler {

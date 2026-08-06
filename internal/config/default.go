@@ -74,6 +74,15 @@ func Default() Config {
 			PricingClockRollbackTolerance: Duration(2 * time.Second),
 			PricingClockForwardTolerance:  Duration(30 * time.Second),
 			PricingUnknownPolicy:          "reject",
+			SourceRateLimit: SourceRateLimit{
+				// Generous enough that a busy application never notices, small
+				// enough that one address cannot occupy the gateway. This
+				// package stays free of internal imports, so the tracking
+				// ceiling is repeated from sourcelimit.DefaultMaxTrackedSources
+				// rather than referenced.
+				RequestsPerMinute: 600,
+				MaxTrackedSources: 16384,
+			},
 		},
 		Retry: Retry{
 			MaxAttemptsPerTarget: 2,

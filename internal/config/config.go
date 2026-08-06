@@ -114,17 +114,31 @@ type Admin struct {
 }
 
 type Gateway struct {
-	RouteTotalTimeout             Duration `yaml:"route_total_timeout"`
-	AttemptConnectTimeout         Duration `yaml:"attempt_connect_timeout"`
-	AttemptResponseHeaderTimeout  Duration `yaml:"attempt_response_header_timeout"`
-	StreamIdleTimeout             Duration `yaml:"stream_idle_timeout"`
-	DownstreamWriteTimeout        Duration `yaml:"downstream_write_timeout"`
-	StreamMaxDuration             Duration `yaml:"stream_max_duration"`
-	MaxTotalAttempts              int      `yaml:"max_total_attempts"`
-	HealthProbeInterval           Duration `yaml:"health_probe_interval"`
-	PricingClockRollbackTolerance Duration `yaml:"pricing_clock_rollback_tolerance"`
-	PricingClockForwardTolerance  Duration `yaml:"pricing_clock_forward_tolerance"`
-	PricingUnknownPolicy          string   `yaml:"pricing_unknown_policy"`
+	RouteTotalTimeout             Duration        `yaml:"route_total_timeout"`
+	AttemptConnectTimeout         Duration        `yaml:"attempt_connect_timeout"`
+	AttemptResponseHeaderTimeout  Duration        `yaml:"attempt_response_header_timeout"`
+	StreamIdleTimeout             Duration        `yaml:"stream_idle_timeout"`
+	DownstreamWriteTimeout        Duration        `yaml:"downstream_write_timeout"`
+	StreamMaxDuration             Duration        `yaml:"stream_max_duration"`
+	MaxTotalAttempts              int             `yaml:"max_total_attempts"`
+	HealthProbeInterval           Duration        `yaml:"health_probe_interval"`
+	PricingClockRollbackTolerance Duration        `yaml:"pricing_clock_rollback_tolerance"`
+	PricingClockForwardTolerance  Duration        `yaml:"pricing_clock_forward_tolerance"`
+	PricingUnknownPolicy          string          `yaml:"pricing_unknown_policy"`
+	SourceRateLimit               SourceRateLimit `yaml:"source_rate_limit"`
+}
+
+// SourceRateLimit bounds anonymous data-plane work per source address, ahead of
+// the per-project limiter — which cannot apply until a request has been
+// authenticated, and so cannot bound the cost of authenticating it.
+type SourceRateLimit struct {
+	// RequestsPerMinute is the per-source budget. Zero disables the limiter,
+	// which leaves that work unbounded.
+	RequestsPerMinute int `yaml:"requests_per_minute"`
+	// MaxTrackedSources caps distinct addresses remembered within one minute so
+	// the limiter cannot itself be grown without bound. Addresses past the cap
+	// share one budget.
+	MaxTrackedSources int `yaml:"max_tracked_sources"`
 }
 
 type Retry struct {
@@ -260,6 +274,12 @@ func Decode(r io.Reader) (Config, error) {
 
 func (c *Config) Normalize() error {
 	var err error
+	if c.Gateway.SourceRateLimit.MaxTrackedSources == 0 {
+		// Omitting the ceiling means "whatever is sane", not "track nothing".
+		// Kept in step with sourcelimit.DefaultMaxTrackedSources by
+		// TestSourceRateLimitCeilingMatchesLimiterDefault.
+		c.Gateway.SourceRateLimit.MaxTrackedSources = 16384
+	}
 	for index := range c.Storage.MasterKey.AllowedKMSKeys {
 		key := &c.Storage.MasterKey.AllowedKMSKeys[index]
 		if key.Provider == "aws-kms" && key.Algorithm == "" {
@@ -533,6 +553,17 @@ func (c Config) Validate(opts LoadOptions) error {
 	}
 	if c.Gateway.MaxTotalAttempts < 1 {
 		problems = append(problems, errors.New("gateway.max_total_attempts must be at least 1"))
+	}
+	// An absent source_rate_limit block is not rejected: Decode does not merge
+	// onto Default(), so requiring the key would refuse to start every config
+	// file written before this setting existed. Normalize supplies the tracking
+	// ceiling, and a zero budget — the limiter disabled — is reported by doctor
+	// rather than being silently accepted as intended.
+	if c.Gateway.SourceRateLimit.RequestsPerMinute < 0 {
+		problems = append(problems, errors.New("gateway.source_rate_limit.requests_per_minute cannot be negative"))
+	}
+	if c.Gateway.SourceRateLimit.MaxTrackedSources < 0 {
+		problems = append(problems, errors.New("gateway.source_rate_limit.max_tracked_sources cannot be negative"))
 	}
 	if c.Admin.AdjustmentSoftLimitMicrosUSD < 0 || c.Admin.AdjustmentHardLimitMicrosUSD <= 0 || c.Admin.AdjustmentDailyHardLimitMicrosUSD <= 0 ||
 		c.Admin.AdjustmentSoftLimitMicrosUSD > c.Admin.AdjustmentHardLimitMicrosUSD || c.Admin.AdjustmentHardLimitMicrosUSD > c.Admin.AdjustmentDailyHardLimitMicrosUSD {

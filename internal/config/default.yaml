@@ -104,6 +104,15 @@ gateway:
   # What to do when no price is known for a model: "reject" refuses the request
   # rather than serving traffic it cannot account for.
   pricing_unknown_policy: reject
+  # Bounds what one source address can ask of the gateway before it has
+  # authenticated — the per-project limits cannot apply until a request is
+  # attributed to a project, so they cannot bound the cost of attributing it.
+  # Set requests_per_minute to 0 to disable; addresses beyond
+  # max_tracked_sources share a single budget so this cannot be grown without
+  # bound.
+  source_rate_limit:
+    requests_per_minute: 600
+    max_tracked_sources: 16384
 
 retry:
   max_attempts_per_target: 2
