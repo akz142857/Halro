@@ -122,6 +122,38 @@ describe("design system themes", () => {
       const background = resolveColor(backgroundToken, values);
       expect(contrast(border, background), `strong border on ${backgroundToken}`).toBeGreaterThanOrEqual(3);
     }
+    // A floor says every level is legible; it does not say they are in order.
+    // Light had tertiary darker than secondary — both above 4.5, so the floor
+    // passed while the third level of the hierarchy outranked the second.
+    for (const backgroundToken of surfaces) {
+      const background = resolveColor(backgroundToken, values);
+      const primary = contrast(resolveColor("--color-text-primary", values), background);
+      const secondary = contrast(resolveColor("--color-text-secondary", values), background);
+      const tertiary = contrast(resolveColor("--color-text-tertiary", values), background);
+      expect(secondary, `secondary vs primary on ${backgroundToken}`).toBeLessThanOrEqual(primary);
+      expect(tertiary, `tertiary vs secondary on ${backgroundToken}`).toBeLessThanOrEqual(secondary);
+    }
+  });
+
+  // The colour layer is a contract the tests enforce; the size layer is not.
+  // --space-* and --radius-* are declared and almost never consumed, so spacing
+  // is decided by hand at every call site. Converting 758 values in one change
+  // would be a rewrite of every layout with no way to verify it, so this is a
+  // ratchet instead: the count may fall, never rise. Lower the baseline as you
+  // convert; a rise means a new hand-picked value went in beside a token that
+  // already says the same thing.
+  const bareSizeValueBaseline = 758;
+
+  it("does not add bare spacing or radius values beyond the current baseline", () => {
+    const styles = read("./styles.css");
+    const declarations = styles.matchAll(
+      /\b(?:gap|row-gap|column-gap|padding|padding-top|padding-right|padding-bottom|padding-left|margin|margin-top|margin-right|margin-bottom|margin-left|border-radius|inset)\s*:\s*([^;{}]*)/g,
+    );
+    const bare: string[] = [];
+    for (const declaration of declarations) {
+      bare.push(...(declaration[1].match(/(?<![\w.-])\d+px/g) ?? []));
+    }
+    expect(bare.length).toBeLessThanOrEqual(bareSizeValueBaseline);
   });
 
   it("keeps literal colors and primitive-token consumption inside the design-system layer", () => {
