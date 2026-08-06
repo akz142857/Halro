@@ -2,6 +2,8 @@
 
 本文面向本地体验、管理员配置和应用接入。生产部署、升级、备份恢复与安全加固请同时阅读 [Operator Guide](operator-guide.md)。
 
+英文版见 [user-guide.md](user-guide.md)。
+
 ## 1. 系统中的几个核心对象
 
 一次请求从内部 Gateway Key 到真实模型的关系如下：

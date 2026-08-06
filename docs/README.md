@@ -4,7 +4,8 @@
 
 | 文档 | 内容 |
 | --- | --- |
-| [中文使用手册](guides/user-guide.zh-CN.md) | 面向使用者的完整操作说明 |
+| [User Guide](guides/user-guide.md) | 面向使用者的完整操作说明（英文） |
+| [中文使用手册](guides/user-guide.zh-CN.md) | 同一份手册的简体中文版 |
 | [Operator Guide](guides/operator-guide.md) | 部署、升级、备份、恢复、加固 |
 | [Encrypted backup and restore](guides/backup-restore.md) | 加密备份与恢复流程（含 Docker / Kubernetes） |
 | [Release Process](guides/releasing.md) | 发版流程与证据门禁 |
