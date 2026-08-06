@@ -3,9 +3,9 @@
 - Status: Accepted and implemented 2026-08-06 — default sink is A (dead-man
   probe pull). See "Implementation notes" at the end for what shipped.
 - Date: 2026-08-06
-- Source: `docs/review/260805.md` §八 S-P0-2, adversarial verdict PARTIAL
+- Source: `docs/review/260805/260805.md` §八 S-P0-2, adversarial verdict PARTIAL
   (file mode CONFIRMED, `key_slots` mode REFUTED); tracked as P1-7 in
-  `docs/review/progress.md`.
+  `docs/review/260805/progress.md`.
 
 ## Context
 

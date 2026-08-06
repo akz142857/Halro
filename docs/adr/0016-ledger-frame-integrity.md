@@ -4,14 +4,14 @@
   failure is fail-closed; the v1/v2/v3 prefix reports as checksum-only and
   continues. Decided 2026-08-06.
 - Date: 2026-08-06
-- Source: `docs/review/260805.md` §八 中低危 ("ledger 只有 CRC32 无密码学完整性");
-  tracked as P2-16 in `docs/review/progress.md`.
+- Source: `docs/review/260805/260805.md` §八 中低危 ("ledger 只有 CRC32 无密码学完整性");
+  tracked as P2-16 in `docs/review/260805/progress.md`.
 - Builds on: [ADR 0014](0014-ledger-wal-backup-compatibility.md) (frame epochs,
   backup manifest), [ADR 0015](0015-audit-chain-external-anchoring.md) (what a
   local integrity guarantee can and cannot claim).
 - Amended 2026-08-06: `feat/timezone-governance` shipped the same day and took
-  frame epoch 3 for an unrelated purpose (period identity, `docs/review/progress.md`
-  P2-16 tracking). This ADR originally proposed epoch 3 for the MAC/chain; every
+  frame epoch 3 for an unrelated purpose (period identity, P2-16 tracking in
+  `docs/review/260805/progress.md`). This ADR originally proposed epoch 3 for the MAC/chain; every
   epoch reference below now reads 4, and v3 joins v1/v2 as permanently
   checksum-only. No other part of the mechanism changed.
 

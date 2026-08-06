@@ -38,9 +38,9 @@
 | P2-21 | 焦点环收敛到一个 token、Light 二三级层级对调、尺寸 ratchet（见下） | `4cf84d6` |
 | P2-20 | 网关时钟可注入、预算超限首次即短路、流式中断按已投递量计费、`reserved` 崩溃后可回收 | `d6601dc` `a7c905f` `4b61b49` |
 | P2-23 | 版本注入 + `make version`、首启配置带注释、CHANGELOG 收敛、英文 user-guide（4/6，见下） | `f503d9c` `e0922dd` |
-| P2-16 | ledger 帧 epoch 4：HMAC + hash 链，[ADR 0016](../adr/0016-ledger-frame-integrity.md) Accepted。fail-closed 启动门禁、v3 gate 缺口一并补齐、backup manifest 链头字段、`heimdall ledger verify` 三态报告（见下） | `5d4936e` |
-| P1-7 | 审计外部锚点，[ADR 0015](../adr/0015-audit-chain-external-anchoring.md) Accepted。默认 sink = dead-man 拉取；bbolt 实例身份、有界锚点环、metrics 监听器上独立凭证端点、deadman 侧增量拉取+持久化高水位、`heimdall audit verify-anchor` 三态报告（见下） | `5d4936e` |
-| P2-23 | Parquet 降级为可选格式（[ADR 0017](../adr/0017-usage-export-format.md) Accepted）+ Admin 多用户登录、管理员/只读两级权限、管理员账户创建/删除的 step-up（见下"P2-23 验证记录"） | `5d4936e` |
+| P2-16 | ledger 帧 epoch 4：HMAC + hash 链，[ADR 0016](../../adr/0016-ledger-frame-integrity.md) Accepted。fail-closed 启动门禁、v3 gate 缺口一并补齐、backup manifest 链头字段、`heimdall ledger verify` 三态报告（见下） | `5d4936e` |
+| P1-7 | 审计外部锚点，[ADR 0015](../../adr/0015-audit-chain-external-anchoring.md) Accepted。默认 sink = dead-man 拉取；bbolt 实例身份、有界锚点环、metrics 监听器上独立凭证端点、deadman 侧增量拉取+持久化高水位、`heimdall audit verify-anchor` 三态报告（见下） | `5d4936e` |
+| P2-23 | Parquet 降级为可选格式（[ADR 0017](../../adr/0017-usage-export-format.md) Accepted）+ Admin 多用户登录、管理员/只读两级权限、管理员账户创建/删除的 step-up（见下"P2-23 验证记录"） | `5d4936e` |
 
 ## 决定不做（清单唯一一项）
 
@@ -119,7 +119,7 @@
 
 两个子项风险构成完全不同，分开记：
 
-**Parquet 依赖降级（已完成）。** [ADR 0017](../adr/0017-usage-export-format.md) 状态 Accepted：NDJSON 作为*新增*可选格式而不是替换——`usage.export_format` 配置项选新分区写成什么，已写的 `.parquet` 分区永不重写（跟 ledger/audit"已有字节不重写"是同一条纪律）。`ManifestFile`/`AdjustmentManifestFile` 新增按文件记录的 `Format` 字段，空值向后解读为 `parquet`（跟 `SchemaVersion` 现有的向后读约定一致）。`parquetAttempt`/`parquetAdjustment` 系列结构体加 `json:` tag 跟现有 `parquet:` tag 并存，`writeNDJSONAtomic`/`readNDJSONFile[T]` 复刻 `writeParquetAtomic` 的临时文件+fsync+原子改名+目录fsync 序列。`internal/app/backup.go` 的 restore 路径不需要改——它只调用 `exporter.LoadManifest()`/`exporter.Verify()`，格式判断已经封在 manifest 内部。测试：`internal/usage/ndjson_test.go`——NDJSON 分区可发布可验证可幂等重导出、篡改可被发现、Parquet+NDJSON 混合 manifest 能对着同一次 ledger 重放一起验证/对账、无 `Format` 字段的旧 manifest 条目仍按 legacy 解读为 parquet 并能正常验证（本轮补的第 4 个测试，覆盖 ADR"必需验证"清单里原本没有直接测试守护的一条）。**反向验证做了**：把 `format()` 的空值兜底从 `FormatParquet` 改成 `FormatNDJSON`，确认新测试失败，再改回。`go build`/`go vet`/`gofmt -l` 干净，`go test ./internal/usage/...`、`-race` 覆盖 usage/backup/config 三包全绿。ADR"必需验证"清单里的 crash-injection（部分写入/漏 fsync/改名中断）没有补——现有 `writeParquetAtomic` 本身也没有这类测试先例，NDJSON 不比 Parquet 更缺，不是这轮引入的新缺口；单独的"归档目录混合格式 restore 演练"也没做成独立测试，因为读代码已经确认 `internal/app/backup.go` 不需要为格式改动任何一行——这条本身就是设计能立住的证明,量级上不值得为一个已知不会分支的路径新写一个全链路集成测试。
+**Parquet 依赖降级（已完成）。** [ADR 0017](../../adr/0017-usage-export-format.md) 状态 Accepted：NDJSON 作为*新增*可选格式而不是替换——`usage.export_format` 配置项选新分区写成什么，已写的 `.parquet` 分区永不重写（跟 ledger/audit"已有字节不重写"是同一条纪律）。`ManifestFile`/`AdjustmentManifestFile` 新增按文件记录的 `Format` 字段，空值向后解读为 `parquet`（跟 `SchemaVersion` 现有的向后读约定一致）。`parquetAttempt`/`parquetAdjustment` 系列结构体加 `json:` tag 跟现有 `parquet:` tag 并存，`writeNDJSONAtomic`/`readNDJSONFile[T]` 复刻 `writeParquetAtomic` 的临时文件+fsync+原子改名+目录fsync 序列。`internal/app/backup.go` 的 restore 路径不需要改——它只调用 `exporter.LoadManifest()`/`exporter.Verify()`，格式判断已经封在 manifest 内部。测试：`internal/usage/ndjson_test.go`——NDJSON 分区可发布可验证可幂等重导出、篡改可被发现、Parquet+NDJSON 混合 manifest 能对着同一次 ledger 重放一起验证/对账、无 `Format` 字段的旧 manifest 条目仍按 legacy 解读为 parquet 并能正常验证（本轮补的第 4 个测试，覆盖 ADR"必需验证"清单里原本没有直接测试守护的一条）。**反向验证做了**：把 `format()` 的空值兜底从 `FormatParquet` 改成 `FormatNDJSON`，确认新测试失败，再改回。`go build`/`go vet`/`gofmt -l` 干净，`go test ./internal/usage/...`、`-race` 覆盖 usage/backup/config 三包全绿。ADR"必需验证"清单里的 crash-injection（部分写入/漏 fsync/改名中断）没有补——现有 `writeParquetAtomic` 本身也没有这类测试先例，NDJSON 不比 Parquet 更缺，不是这轮引入的新缺口；单独的"归档目录混合格式 restore 演练"也没做成独立测试，因为读代码已经确认 `internal/app/backup.go` 不需要为格式改动任何一行——这条本身就是设计能立住的证明,量级上不值得为一个已知不会分支的路径新写一个全链路集成测试。
 
 **Admin 多用户登录 + 两级权限（已完成，范围按用户明确要求收窄为"多用户登录 + 管理员/只读两档，不做细粒度权限矩阵"）。**
 
@@ -200,7 +200,7 @@
 
 - **P2-21 的 `.data-row` 基类没抽。** 行家族已经实质分化——不同的 grid、min-height、padding，`provider-row`/`credential-row` 各自被声明两次——把它们折到一个基类会改动真实布局数值，而唯一的验证手段是 jsdom。两个工具栏合并了，因为字号地板落地之后它们已经逐字节相同。
 - **P2-21 的尺寸 token 用 ratchet 而不是转换。** `--space-*`/`--radius-*` 声明了几乎没人消费，styles.css 里有 758 处手写间距/圆角。一次性换掉等于重写每一处布局且无法验证；改成"只许降不许升"的基线，转换一批就把基线调低一次。
-- **`parquet-go` 依赖本身没删，是 ADR 决定的，不是漏做。** [ADR 0017](../adr/0017-usage-export-format.md) 把 NDJSON 定为**并列的可选格式而不是替换**：`usage.export_format` 只决定*新*分区写成什么，默认仍是 `parquet`，已写的 `.parquet` 分区永不重写——所以依赖必须留着，否则老实例的历史分区就读不了了。想真正甩掉这个依赖，前提是某个部署从第一天起就只写 NDJSON，那是部署侧的选择，不是代码里能一刀切的事。（这条此前与上方"Parquet 依赖降级（已完成）"并存，读起来像自相矛盾，现改写为两者实际描述的同一件事。）
+- **`parquet-go` 依赖本身没删，是 ADR 决定的，不是漏做。** [ADR 0017](../../adr/0017-usage-export-format.md) 把 NDJSON 定为**并列的可选格式而不是替换**：`usage.export_format` 只决定*新*分区写成什么，默认仍是 `parquet`，已写的 `.parquet` 分区永不重写——所以依赖必须留着，否则老实例的历史分区就读不了了。想真正甩掉这个依赖，前提是某个部署从第一天起就只写 NDJSON，那是部署侧的选择，不是代码里能一刀切的事。（这条此前与上方"Parquet 依赖降级（已完成）"并存，读起来像自相矛盾，现改写为两者实际描述的同一件事。）
 - **`jsonschema-go` 的 SBOM 范围没动。** 它只被 `deploy/observability/schema_test.go` 用到。想把它移出主模块要建嵌套模块，但发版 SBOM 用 `anchore/sbom-action` 扫 `path: .`，嵌套 go.mod 一样会被收录——机制达不到目的，先不做。
 - **流式中断计费的 ambiguous 分支没动。** 那条分支一个字节都没投递过，没有可用来封顶的量；ambiguous 的语义是"上游可能已经完整服务过"，预留正是为此存在的。
 

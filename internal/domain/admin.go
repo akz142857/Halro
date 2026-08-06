@@ -9,8 +9,8 @@ import (
 // Admin roles are deliberately just two: AdminRoleAdministrator (every
 // existing capability) and AdminRoleReadOnly (GET only, no exceptions per
 // endpoint). A per-endpoint permission matrix was considered and rejected —
-// see docs/review/progress.md's P2-23 record — in favor of one rule the
-// mutation middleware can enforce without a maintained list that a new
+// see docs/review/260805/progress.md's P2-23 record — in favor of one
+// rule the mutation middleware can enforce without a maintained list that a new
 // write endpoint could silently fall outside of.
 const (
 	AdminRoleAdministrator = "administrator"

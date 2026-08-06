@@ -2,10 +2,11 @@
 
 - Status: Accepted
 - Date: 2026-08-06
-- Source: `docs/review/260805.md` §八「【建议】Parquet 导出为"可丢弃派生态"引入 6 个间接
+- Source: `docs/review/260805/260805.md` §八「【建议】Parquet 导出为"可丢弃派生态"引入 6 个间接
   依赖，包括地理几何库 `twpayne/go-geom`… `internal/usage/parquet.go`（986
   行）。全项目投入产出比最差的一处依赖。建议降级为可选导出或改为无依赖的
-  NDJSON。」; tracked as the Parquet half of P2-23 in `docs/review/progress.md`.
+  NDJSON。」; tracked as the Parquet half of P2-23 in
+  `docs/review/260805/progress.md`.
 - Builds on: [ADR 0014](0014-ledger-wal-backup-compatibility.md) (the backup
   manifest fields this decision must not disturb).
 
@@ -87,8 +88,8 @@ story for a partition file does not depend on what is inside it.
 
 ### Replace Parquet outright
 
-Rejected. `docs/review/progress.md` already recorded why a flag-day rewrite is
-the wrong shape for this: "它不只是删依赖：ADR 0014 的备份 manifest 固定了两个
+Rejected. `docs/review/260805/progress.md` already recorded why a flag-day
+rewrite is the wrong shape for this: "它不只是删依赖：ADR 0014 的备份 manifest 固定了两个
 Parquet manifest 版本与水位，restore 会校验这两个数据集" — a deployment that
 has already published Parquet partitions must keep being able to read and
 restore them. A second format that new writes can opt into, without

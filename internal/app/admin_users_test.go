@@ -197,8 +197,9 @@ func TestDeleteAdminUserRejectsSelfAndLastAdministrator(t *testing.T) {
 // TestReadOnlyRoleCannotReachAnyRegisteredMutationRoute is a table-driven
 // sweep across every mutation route the admin router has registered, rather
 // than a maintained per-endpoint list — the two-tier RBAC decision
-// (docs/review/progress.md P2-23) was specifically to avoid a permission
-// matrix that a new write endpoint could be added without updating. Routes
+// (docs/review/260805/progress.md P2-23) was specifically to avoid a
+// permission matrix that a new write endpoint could be added without
+// updating. Routes
 // that act on the caller's own account (logout, own password, own MFA, own
 // preferences, listing users) are the deliberate, narrow exception.
 func TestReadOnlyRoleCannotReachAnyRegisteredMutationRoute(t *testing.T) {

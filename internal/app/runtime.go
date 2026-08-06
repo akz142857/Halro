@@ -227,8 +227,8 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 	defer clear(ledgerKey)
 	// The gate only guarantees "at least" a reader version, not an exact one:
 	// the accounting-timezone work (schema v16) shipped frame epoch 3 without
-	// ever moving this gate off epoch 2 (docs/review/progress.md P2-16), which
-	// is exactly the bug a strict equality check produces. Migration 17
+	// ever moving this gate off epoch 2 (docs/review/260805/progress.md
+	// P2-16), which is exactly the bug a strict equality check produces. Migration 17
 	// jumped straight to epoch 4 to retroactively cover that gap; requiring
 	// only a floor here means the next epoch bump does not need to repeat it.
 	compatibilityGate, err := metadata.LedgerCompatibilityGate()
