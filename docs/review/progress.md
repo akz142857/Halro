@@ -46,8 +46,8 @@
 
 | 编号 | 内容 | 备注 |
 |---|---|---|
-| P2-19 | `internal/app` 拆 adminapi 子包、"phase2" 重命名未做，见下"P2-19 验证记录" | `store.go` 按数据域拆已完成，风险已不对等，见记录里的理由 |
-| P2-23 | step-up 从"管理员账户创建/删除"推广到其余既有破坏性端点（project/credential/provider/route/deployment/redaction-policy/token-guard-policy/alert 的 delete）、Admin 前端 UI（角色选择、只读态提示、按角色禁用写操作按钮） | 首个 tag 也没打，见下"P2-23 验证记录"里的推迟理由 |
+| P2-19 | `internal/app` 拆 adminapi 子包、"phase2" 重命名未做，见下"P2-19 验证记录" | `store.go` 按数据域拆已完成，风险已不对等，见记录里的理由；跟踪 [#86](https://github.com/akz142857/Heimdall/issues/86) |
+| P2-23 | step-up 从"管理员账户创建/删除"推广到其余既有破坏性端点（project/credential/provider/route/deployment/redaction-policy/token-guard-policy/alert 的 delete）、Admin 前端 UI（角色选择、只读态提示、按角色禁用写操作按钮） | 首个 tag 也没打，见下"P2-23 验证记录"里的推迟理由；跟踪 [#87](https://github.com/akz142857/Heimdall/issues/87) |
 
 ## P2-16 验证记录（2026-08-06，本轮完成）
 
@@ -89,7 +89,7 @@
 
 这类改动一旦做错，编译器不一定能兜底——比如把 `adminMutationError` 错误分类的一个分支漏调，或者把某个 mutex 的粒度在搬迁中意外改变，这些是编译通过、测试如果没覆盖到那条分支也通过、但实际行为悄悄变了的那类 bug。CLAUDE.md 把这个仓库的优先级写得很直白："Security, accounting correctness, and backward-compatible API behavior take priority over feature count"——admin mutation 路径正是这句话点名要保护的东西。用剩余时间去做一次仓促的、零功能收益的重构去冒这个风险，划不来；这些时间挪去做 Phase 4（RBAC、Parquet）更值——那两项是这轮唯一有真实功能/安全价值的剩余工作。
 
-**"phase2" 改名**同理但风险构成不同：命中 `internal/domain`、`internal/compatibility`、`internal/provider`（+`openai`）、`internal/gateway`、`internal/gatewayapi` 共 5+ 个包，24 个文件（含测试）。相比 adminapi 拆分，这个改动确实可以完全被编译器兜底（改名不对会直接报 undefined），风险主要是纯体力活的规模，以及一个必须手工守住、编译器管不到的硬约束——`internal/store/bolt/store_admin.go`（原 store.go）里 `{version: 6, name: "phase2_capability_evidence", ...}` 这个已经在真实部署上跑过的迁移历史字符串字面量绝对不能碰。本轮评估后判断和 adminapi 拆分一样优先级最低，一并推迟，留给下一轮单独执行——这项风险低，适合作为一个独立、专注的小改动去做，不该和其它工作混在一起仓促收尾。
+**"phase2" 改名**同理但风险构成不同：命中 `internal/domain`、`internal/compatibility`、`internal/provider`（+`openai`）、`internal/gateway`、`internal/gatewayapi` 共 5+ 个包，24 个文件（含测试）。相比 adminapi 拆分，这个改动确实可以完全被编译器兜底（改名不对会直接报 undefined），风险主要是纯体力活的规模，以及一个必须手工守住、编译器管不到的硬约束——`internal/store/bolt/store_admin.go`（原 store.go）里 `{version: 6, name: "phase2_capability_evidence", ...}` 这个已经在真实部署上跑过的迁移历史字符串字面量绝对不能碰。本轮评估后判断和 adminapi 拆分一样优先级最低，一并推迟，留给下一轮单独执行——这项风险低，适合作为一个独立、专注的小改动去做，不该和其它工作混在一起仓促收尾。两项一并跟踪于 [#86](https://github.com/akz142857/Heimdall/issues/86)。
 
 ## P2-23 验证记录（2026-08-06，Parquet 完成；RBAC 完成，step-up 覆盖面部分推迟）
 
@@ -106,7 +106,7 @@
 - 新端点：`GET/POST /admin/api/v1/admin-users`（`administrator` 权限 + step-up：创建新用户要求重新提交当前密码+新鲜 TOTP，逐请求校验，不发短期提权 token——跟 `admin_prices.go` 已有的 `verifyPricingReauthentication` 是同一个函数，只是换了个更贴合语义的调用名）、`DELETE /admin/api/v1/admin-users/{username}`（同样 step-up；拒绝自删——用 session/logout 结束自己的访问；拒绝删掉最后一个 administrator，否则系统会陷入"零管理员，只能靠离线 CLI 破窗"的更大故障）。
 - 测试（`internal/store/bolt/admin_users_test.go` 三个 + `internal/app/admin_users_test.go` 三个）：`ListAdminUsers` 排序正确、`DeleteAdminUser` 清掉会话与 MFA 状态但不影响其他管理员、revision 冲突和用户不存在两种失败路径；HTTP 层创建/删除的 step-up 正确路径与错密码/无效角色拒绝路径、新用户能实际登录、自删/删最后管理员被拒；**表驱动 read_only 全路由扫描**——用 `chi.Walk` 遍历 `adminRouter()` 全部已注册路由而不是手写清单（这样以后新增写接口默认就在覆盖范围内，不会漏），对每条非 GET/HEAD/OPTIONS 且不在"自服务"白名单里的路由，read_only 会话必须拿到 `403` 且 `code` 精确等于 `read_only_role`（不是被 CSRF 或别的校验先挡住而误判通过）。扫到 48 条真实挂载的写路由（已排除 chi mount 点自带的 405/404 兜底桩和白名单内的自服务路由）。**反向验证做了**：把 `requireAdministratorRole` 的判断临时改成 `if false && ...`，确认表驱动测试和 `TestDeleteAdminUserRejectsSelfAndLastAdministrator` 都会失败（48 条路由全部报"read_only 到达了 handler"），再改回。`go build`/`go vet`/`gofmt -l` 干净，`go test ./...` 全绿，`go test -race` 覆盖 app/domain/adminauth/store/bolt 四包。既有的 `TestFrozenV1AdminRoutesAreRegistered`（只断言列出的路由存在，不检查"仅此而已"）未受影响，跑了一遍确认仍绿。
 
-**推迟未做，原因写清楚：**
+**推迟未做，原因写清楚（跟踪于 [#87](https://github.com/akz142857/Heimdall/issues/87)）：**
 
 - **把 step-up 从"管理员账户创建/删除"推广到 project/credential/provider/route/deployment/redaction-policy/token-guard-policy/alert 的 delete。** 计划里原话是"复用同一函数模式"，但摸了这 8 个 handler 后发现前提不成立：它们全部走 `requireRevision`（`If-Match` header 表达乐观锁），**没有请求体**——不是"复用模式"，是要把这些端点从"无 body 的 DELETE"改成"要求 JSON body 携带 current_password/totp_code"，这是一处破坏性的 API 契约变更。Admin 前端现在发的 DELETE 请求不带 body，backend-only 上线这个改动会让现有的删除按钮当场变成 401——这不是"功能没做全"，是会让已经在用的功能倒退。CLAUDE.md 把"backward-compatible API behavior"列为优先于功能数量的第一条，前端改动又明确排除在本轮范围外（见下）——两者叠加，做这件事的唯一负责任方式是连前端一起改，但那超出了本轮"仅后端"的既定范围。MFA 相关的两个破坏性端点（`deleteAdminMFAAuthenticator`、`disableAdminMFA`）核查后确认**已经**各自内联了等价的密码+TOTP 校验，不需要额外补；`executeAdminDeveloperRequest` 的请求体是要透传给上游 LLM 的实际请求负载，结构上塞不进 step-up 字段，且它的风险已经在"整改过程中新发现的问题"里按"可达时告警"处理过，不属于同一类缺口。
 - **Admin 前端 UI**（角色选择器、只读态提示、按角色禁用写操作按钮）：整轮延续此前"仅后端"的既定范围，没有对应前端改动计划，此处如实记录而不是留空不提。
