@@ -2,15 +2,15 @@
 
 > [260805.md](260805.md) 是一份有日期的发现记录，不改动。本文件是它的**活的对照表**：哪些做了、哪些没做、以及做的过程中改变了对原结论的判断。
 >
-> 编号沿用 260805.md 第十章的修复清单。最后更新：2026-08-07（清单 23 项全部完成并推送；P2-19、P2-23 两项推迟子项已补做，剩 `internal/app` 拆 adminapi 一项）。
+> 编号沿用 260805.md 第十章的修复清单。最后更新：2026-08-07 收尾（清单结项；`internal/app` 拆 adminapi 决定不做，#86/#87 已关闭；首个 tag `v1.0.0-rc.1` 已打并推送）。
 
 ## 一句话状态
 
-清单共 23 项，已完成 23 项——**清单本身全部做完，且全部已合并进 main，没有悬空分支、没有未提交改动**。P0 四项、P1 八项、P2 十一项。2026-08-06 那一轮记录的"本轮未提交"已经过时：P2-16、P1-7、P2-19、P2-23 的改动在 `5d4936e` 一并提交。
+清单共 23 项，**已结项**：22 项做完，1 项（P2-19 拆 adminapi）经两次量化边界后决定**不做**并已关闭 issue。P0 四项、P1 八项、P2 十一项。全部改动已合并进 main 并推送，工作区干净。
 
-2026-08-07 这一轮把此前**刻意推迟的两项和一项拆出来的新发现**做完了：数据面全局按源限流（`b4c8235`）、Admin 只读角色的前端落地（`817f7d9`）、step-up 推广到 9 个破坏性删除端点（`ca26a3c`）、`phase2` 标识符改名（`956c06b`）。
+2026-08-07 这一轮把此前**刻意推迟的两项和一项拆出来的新发现**做完了：数据面全局按源限流（`b4c8235`）、Admin 只读角色的前端落地（`817f7d9`）、step-up 推广到 9 个破坏性删除端点（`ca26a3c`）、`phase2` 标识符改名（`956c06b`）；随后修掉了 RBAC 落地暴露的历史数据缺口与两处面板布局问题（`1b33357`、`782b1ef`、`af08694`）。
 
-**仍未做的只剩一项**：`internal/app` 拆 adminapi 子包（[#86](https://github.com/akz142857/Heimdall/issues/86) 的前半，纯组织性重构，零功能收益，理由见下方"P2-19 验证记录"）。整改过程中原报告的四条结论被修正，另外发现七项报告里没有的问题（六项已修完）。
+整改过程中原报告的四条结论被修正，另外发现**八项**报告里没有的问题（全部已修完）。
 
 ## 已完成
 
@@ -38,19 +38,15 @@
 | P2-21 | 焦点环收敛到一个 token、Light 二三级层级对调、尺寸 ratchet（见下） | `4cf84d6` |
 | P2-20 | 网关时钟可注入、预算超限首次即短路、流式中断按已投递量计费、`reserved` 崩溃后可回收 | `d6601dc` `a7c905f` `4b61b49` |
 | P2-23 | 版本注入 + `make version`、首启配置带注释、CHANGELOG 收敛、英文 user-guide（4/6，见下） | `f503d9c` `e0922dd` |
-| P2-16 | ledger 帧 epoch 4：HMAC + hash 链，[ADR 0016](../adr/0016-ledger-frame-integrity.md) Accepted。fail-closed 启动门禁、v3 gate 缺口一并补齐、backup manifest 链头字段、`heimdall ledger verify` 三态报告（见下） | 本轮（未提交，见"验证记录"） |
-| P1-7 | 审计外部锚点，[ADR 0015](../adr/0015-audit-chain-external-anchoring.md) Accepted。默认 sink = dead-man 拉取；bbolt 实例身份、有界锚点环、metrics 监听器上独立凭证端点、deadman 侧增量拉取+持久化高水位、`heimdall audit verify-anchor` 三态报告（见下） | 本轮（未提交，见"验证记录"） |
-| P2-23 | Parquet 降级为可选格式（[ADR 0017](../adr/0017-usage-export-format.md) Accepted）+ Admin 多用户登录、管理员/只读两级权限、管理员账户创建/删除的 step-up（见下"P2-23 验证记录"） | 本轮（未提交，见"验证记录"） |
+| P2-16 | ledger 帧 epoch 4：HMAC + hash 链，[ADR 0016](../adr/0016-ledger-frame-integrity.md) Accepted。fail-closed 启动门禁、v3 gate 缺口一并补齐、backup manifest 链头字段、`heimdall ledger verify` 三态报告（见下） | `5d4936e` |
+| P1-7 | 审计外部锚点，[ADR 0015](../adr/0015-audit-chain-external-anchoring.md) Accepted。默认 sink = dead-man 拉取；bbolt 实例身份、有界锚点环、metrics 监听器上独立凭证端点、deadman 侧增量拉取+持久化高水位、`heimdall audit verify-anchor` 三态报告（见下） | `5d4936e` |
+| P2-23 | Parquet 降级为可选格式（[ADR 0017](../adr/0017-usage-export-format.md) Accepted）+ Admin 多用户登录、管理员/只读两级权限、管理员账户创建/删除的 step-up（见下"P2-23 验证记录"） | `5d4936e` |
 
-## 未完成
+## 决定不做（清单唯一一项）
 
-### P2
-
-只剩一项组织性重构：
-
-| 编号 | 内容 | 备注 |
+| 编号 | 内容 | 结论 |
 |---|---|---|
-| P2-19 | `internal/app` 拆 adminapi 子包 | `store.go` 按数据域拆、`phase2` 改名均已完成；跟踪 [#86](https://github.com/akz142857/Heimdall/issues/86)。2026-08-07 重新量过边界，结论比 08-06 乐观，见下方"P2-19 验证记录（2026-08-07 复量）" |
+| P2-19 | `internal/app` 拆 adminapi 子包 | **不做，issue 已关闭。** 同项下的 `store.go` 按数据域拆（5340→1025 行）、`phase2` 改名（`956c06b`）、57 行公共助手外提（`9ee0fc3`）三个子项都已完成，剩下的只有拆包本身：41 个文件、12062 行非测试代码 + 4699 行测试，全部落在 CLAUDE.md 点名要保护的 admin mutation 路径上，收益是零功能零安全。边界已量清并记在下方"P2-19 验证记录（2026-08-07 复量）"，将来若要做不必重新摸 |
 
 ## P2-16 验证记录（2026-08-06，本轮完成）
 
@@ -117,7 +113,7 @@
 
 这一项仍然是零功能收益，**不做也是一个可以辩护的结论**；上面这些是为了让"做"的那次不必从头摸边界。
 
-**2026-08-07 的决定：暂不做。** 边界量清楚之后重新权衡的结果——改动面是 41 个文件、12062 行非测试代码加 4699 行测试，全部落在 CLAUDE.md 点名要保护的 admin mutation 路径上，而收益是零功能、零安全。阶段一（57 行助手外提）已经单独完成（`9ee0fc3`），它本身就有价值，不依赖后续是否拆包。剩下的三个阶段保持开放，跟踪于 [#86](https://github.com/akz142857/Heimdall/issues/86)。
+**2026-08-07 的决定：不做，[#86](https://github.com/akz142857/Heimdall/issues/86) 已关闭。** 边界量清楚之后重新权衡的结果——改动面是 41 个文件、12062 行非测试代码加 4699 行测试，全部落在 CLAUDE.md 点名要保护的 admin mutation 路径上，而收益是零功能、零安全。阶段一（57 行助手外提）已经单独完成（`9ee0fc3`），它本身就有价值，不依赖后续是否拆包。关闭而不是挂着：一个永远排不到的 issue 只会让人误以为这里还欠着东西——真要做，上面那张边界表和四步做法就是完整的起点，重开一个新 issue 即可。
 
 ## P2-23 验证记录（2026-08-06，Parquet 完成；RBAC 完成，step-up 覆盖面部分推迟）
 
@@ -134,7 +130,7 @@
 - 新端点：`GET/POST /admin/api/v1/admin-users`（`administrator` 权限 + step-up：创建新用户要求重新提交当前密码+新鲜 TOTP，逐请求校验，不发短期提权 token——跟 `admin_prices.go` 已有的 `verifyPricingReauthentication` 是同一个函数，只是换了个更贴合语义的调用名）、`DELETE /admin/api/v1/admin-users/{username}`（同样 step-up；拒绝自删——用 session/logout 结束自己的访问；拒绝删掉最后一个 administrator，否则系统会陷入"零管理员，只能靠离线 CLI 破窗"的更大故障）。
 - 测试（`internal/store/bolt/admin_users_test.go` 三个 + `internal/app/admin_users_test.go` 三个）：`ListAdminUsers` 排序正确、`DeleteAdminUser` 清掉会话与 MFA 状态但不影响其他管理员、revision 冲突和用户不存在两种失败路径；HTTP 层创建/删除的 step-up 正确路径与错密码/无效角色拒绝路径、新用户能实际登录、自删/删最后管理员被拒；**表驱动 read_only 全路由扫描**——用 `chi.Walk` 遍历 `adminRouter()` 全部已注册路由而不是手写清单（这样以后新增写接口默认就在覆盖范围内，不会漏），对每条非 GET/HEAD/OPTIONS 且不在"自服务"白名单里的路由，read_only 会话必须拿到 `403` 且 `code` 精确等于 `read_only_role`（不是被 CSRF 或别的校验先挡住而误判通过）。扫到 48 条真实挂载的写路由（已排除 chi mount 点自带的 405/404 兜底桩和白名单内的自服务路由）。**反向验证做了**：把 `requireAdministratorRole` 的判断临时改成 `if false && ...`，确认表驱动测试和 `TestDeleteAdminUserRejectsSelfAndLastAdministrator` 都会失败（48 条路由全部报"read_only 到达了 handler"），再改回。`go build`/`go vet`/`gofmt -l` 干净，`go test ./...` 全绿，`go test -race` 覆盖 app/domain/adminauth/store/bolt 四包。既有的 `TestFrozenV1AdminRoutesAreRegistered`（只断言列出的路由存在，不检查"仅此而已"）未受影响，跑了一遍确认仍绿。
 
-**推迟未做，原因写清楚（跟踪于 [#87](https://github.com/akz142857/Heimdall/issues/87)）：**
+**推迟未做，原因写清楚（跟踪于 [#87](https://github.com/akz142857/Heimdall/issues/87)）——以下两条都已在次日（2026-08-07）做完，`ca26a3c` + `817f7d9`，#87 已关闭；保留原文是因为"当时为什么先不做"本身是这份记录要留住的东西：**
 
 - **把 step-up 从"管理员账户创建/删除"推广到 project/credential/provider/route/deployment/redaction-policy/token-guard-policy/alert 的 delete。** 计划里原话是"复用同一函数模式"，但摸了这 8 个 handler 后发现前提不成立：它们全部走 `requireRevision`（`If-Match` header 表达乐观锁），**没有请求体**——不是"复用模式"，是要把这些端点从"无 body 的 DELETE"改成"要求 JSON body 携带 current_password/totp_code"，这是一处破坏性的 API 契约变更。Admin 前端现在发的 DELETE 请求不带 body，backend-only 上线这个改动会让现有的删除按钮当场变成 401——这不是"功能没做全"，是会让已经在用的功能倒退。CLAUDE.md 把"backward-compatible API behavior"列为优先于功能数量的第一条，前端改动又明确排除在本轮范围外（见下）——两者叠加，做这件事的唯一负责任方式是连前端一起改，但那超出了本轮"仅后端"的既定范围。MFA 相关的两个破坏性端点（`deleteAdminMFAAuthenticator`、`disableAdminMFA`）核查后确认**已经**各自内联了等价的密码+TOTP 校验，不需要额外补；`executeAdminDeveloperRequest` 的请求体是要透传给上游 LLM 的实际请求负载，结构上塞不进 step-up 字段，且它的风险已经在"整改过程中新发现的问题"里按"可达时告警"处理过，不属于同一类缺口。
 - **Admin 前端 UI**（角色选择器、只读态提示、按角色禁用写操作按钮）：整轮延续此前"仅后端"的既定范围，没有对应前端改动计划，此处如实记录而不是留空不提。
@@ -150,6 +146,8 @@
 **step-up 推广到 9 个破坏性删除端点（`ca26a3c`，#87 的另一半）。** 08-06 推迟的理由是"这是破坏性 API 变更、前端会当场 401"。理由本身没错，但两个事实改变了它的分量：本仓库**已有** DELETE 带 body 的先例（MFA 的两个端点，前端在用），且**至今没有任何 git tag**——首个 tag 之前这只是改默认，之后才是要写迁移说明的破坏性变更。所以正确的时间窗口就是现在，且必须在 `v1.0.0-rc.1` 之前。前后端同批改：`ConfirmButton` 在"说明后果"的同一个对话框里收凭据。
 
 推广过程中暴露了原语自身的缺口（不在原报告内）：`verifyPricingReauthentication` **既不限流也不审计失败**。在一个已认证会话背后，这是个离线速度的口令 oracle——cookie 是有效的，请求路径上没有任何东西会拖慢一次猜测，Argon2id 只是让每次猜测对服务端更贵。改为每账户每分钟 5 次失败、按窗口审计一次（不是按次，否则审计追加本身成了放大器），**只计失败不计成功**——预算是用来限制猜测的，而证明了自己身份的操作员没有在猜；按次计会让清理六个资源的操作员做对事情却被锁在半路。原语改名 `verifyReauthenticationMaterial` 且不再是任何人的入口，pricing/adjustment 四个调用点一并挪到有界路径上（按端点各给一份预算，等于让攻击者在每个端点重新猜一遍）。覆盖面从 router 扫出来而不是手写清单，以后新增的删除端点注册当天就在范围内。
+
+**收尾三个提交（`1b33357`、`782b1ef`、`af08694`）。** 都是上面四项落地后自己暴露出来的，不是新工作：老账户 role 回填（见"新发现的问题"表最后一行），以及新增的"管理员账户"面板两处布局——状态提示与 step-up 字段各自成行、账户列表与面板标题对齐。前端项按同样的流程验证并重建了 `internal/webui/dist`。
 
 **`phase2` 标识符改名（`956c06b`，#86 的一半）。** 55 个标识符、25 个文件。新名字不是起的，是代码自己早就公布了的：北向 profile 是 `heimdall.inference-resources.v1`，所以门面与机器件叫 `InferenceResources`；OpenAI 服务商 profile 自己的值是 `openai.media-resources.v1`，所以那个常量叫 `ProfileOpenAIMediaResources`——按 wire 值 grep 现在能找到符号。**不跨线也不落盘**：profile ID 从来没有以 `phase2` 的形式持久化或发布过，`docs/compatibility/endpoint-manifests.json` 里这个字符串命中数为 0。三处字面量刻意保留旧名——bbolt 迁移 `phase2_capability_evidence` 及其两个 step 名，那是每个已经跑过它的实例里的历史记录，改了会让升级实例与自己的迁移日志对不上；现在有测试钉住，下一次"顺手清理最后几处"会失败而不是悄悄成功。
 
@@ -189,6 +187,7 @@
 | step-up 原语对失败既不限流也不审计 | `internal/app/admin_prices.go` `verifyPricingReauthentication` | **已修** `ca26a3c`。已认证会话背后的离线速度口令 oracle；推广到 13 个端点前必须先补上。只计失败不计成功 |
 | 会话响应不含 `role`，前端无从得知自己只读 | `internal/app/admin_session.go` 等五条签发路径 | **已修** `817f7d9`。做"两级 RBAC 的前端"时才发现的前置缺口 |
 | `npx tsc --noEmit` 不检查测试文件 | `web/` 验证流程 | **已修**（流程）。改用 `npm run typecheck`，见上方说明 |
+| 角色枚举落地前创建的 Admin 账户 role 为空，被自己的实例拒绝 | `internal/domain` 校验 + bbolt 记录 | **已修** `1b33357`。两级 RBAC 的收尾缺口：老账户存的 role 是空串，而校验是严格的——存偏好设置报校验失败、所有 administrator 写操作被当成 read_only 拒绝。迁移只回填空值为 `administrator`（它们本来就有的权限），其它无法识别的值继续大声失败，不做"归一化到最高权限"这种事 |
 
 ## 顺带修正的既有问题
 
@@ -201,8 +200,7 @@
 
 - **P2-21 的 `.data-row` 基类没抽。** 行家族已经实质分化——不同的 grid、min-height、padding，`provider-row`/`credential-row` 各自被声明两次——把它们折到一个基类会改动真实布局数值，而唯一的验证手段是 jsdom。两个工具栏合并了，因为字号地板落地之后它们已经逐字节相同。
 - **P2-21 的尺寸 token 用 ratchet 而不是转换。** `--space-*`/`--radius-*` 声明了几乎没人消费，styles.css 里有 758 处手写间距/圆角。一次性换掉等于重写每一处布局且无法验证；改成"只许降不许升"的基线，转换一批就把基线调低一次。
-- **首个 git tag 没打。** `docs/milestones/implementation-status.md` 定了一条有门禁的 RC 序列（`v1.0.0-rc.1` → `rc.2` → `v1.0.0`，每一步都要核验 release 资产、校验和、SBOM、Sigstore 签名），推 tag 会触发 release workflow。这是发版决定，不是收尾杂活。版本注入、`make version`、CHANGELOG 都已就绪，打 tag 只差决定。
-- **Parquet 依赖降级没做。** 它不只是删依赖：ADR 0014 的备份 manifest 固定了两个 Parquet manifest 版本与水位，restore 会校验这两个数据集。改成可选导出或 NDJSON 会连带改动备份/恢复契约，应该走 ADR 而不是顺手改。
+- **`parquet-go` 依赖本身没删，是 ADR 决定的，不是漏做。** [ADR 0017](../adr/0017-usage-export-format.md) 把 NDJSON 定为**并列的可选格式而不是替换**：`usage.export_format` 只决定*新*分区写成什么，默认仍是 `parquet`，已写的 `.parquet` 分区永不重写——所以依赖必须留着，否则老实例的历史分区就读不了了。想真正甩掉这个依赖，前提是某个部署从第一天起就只写 NDJSON，那是部署侧的选择，不是代码里能一刀切的事。（这条此前与上方"Parquet 依赖降级（已完成）"并存，读起来像自相矛盾，现改写为两者实际描述的同一件事。）
 - **`jsonschema-go` 的 SBOM 范围没动。** 它只被 `deploy/observability/schema_test.go` 用到。想把它移出主模块要建嵌套模块，但发版 SBOM 用 `anchore/sbom-action` 扫 `path: .`，嵌套 go.mod 一样会被收录——机制达不到目的，先不做。
 - **流式中断计费的 ambiguous 分支没动。** 那条分支一个字节都没投递过，没有可用来封顶的量；ambiguous 的语义是"上游可能已经完整服务过"，预留正是为此存在的。
 
@@ -214,8 +212,14 @@ P1-10、P1-12 都是纯视觉/交互改动，**没有在真实浏览器里逐页
 - 首启 checklist 只在"用量水位从未推进过"的实例上出现，jsdom 测了显示/隐藏与链接目标，没测过真实布局；
 - Modal 脏检查用 `.modal.discarding > :not(header):not(.discard-prompt) { display: none }` 遮住表单，靠的是 CSS 而不是卸载子树——这是"取消后每个字段原样还在"的前提，但也意味着任何绕开这条选择器的子元素会漏出来。
 
-## 推送状态
+## 推送与发版状态
 
-截至 2026-08-07，`main` 与 `origin/main` 的关系需要在推送后复核：2026-08-06 那一轮之前的 55 提交之说早已过时，`5d4936e` 起的所有提交都已推送，本轮 `b4c8235`/`817f7d9`/`ca26a3c`/`956c06b` 四个提交在本地。
+截至 2026-08-07 收尾，`main` 与 `origin/main` **同步**，工作区干净，没有悬空分支。此前记录里"某某提交还在本地"的说法一并作废——`b4c8235` 起的全部提交（含本次文档收尾）都已推送。
 
-仓库仍无任何 git tag。**首个 tag 之前是改默认，之后就是需要迁移说明的破坏性变更**——本轮的 step-up 推广正是踩着这个窗口做的（`ca26a3c`）。Developer Workbench 的默认已按上文决定保持 enabled 并改为可达时告警；metrics 端口与 KMS 推荐仍未动。
+**首个 tag `v1.0.0-rc.1` 已打并推送**（签名 annotated tag），走的是 `docs/milestones/implementation-status.md` 的 RC 序列第一步。此前"打 tag 只差一个发版决定"的记录到此为止。三件事要在读这份记录时同时知道：
+
+- **窗口关了。** 首个 tag 之前是改默认，之后就是需要迁移说明的破坏性变更。本轮的 step-up 推广（`ca26a3c`）正是踩着窗口关闭前做的，CHANGELOG 里那条 `Breaking (Admin API, pre-1.0)` 也写明了这一点。往后 Admin API 的同类改动都要按破坏性变更处理。
+- **RC 前置的 24 小时 soak 没跑。** milestone 文档的临界路径第 1 步是"在确切的 RC commit 上跑并归档 24 小时 soak"，打 tag 时它没有完成——tag 是先打的，soak 属于 RC 门禁里仍欠的一项。
+- **release workflow 的 publish 作业有三道外部门禁**：tag 必须被 GitHub 验证为签名 tag、仓库 secret `M11_RELEASE_EVIDENCE_JSON` 要能对上这个 tag 与 commit、`v1-release` environment 要审批。任何一道没就绪，前面的构建/SBOM/Sigstore 作业照常跑完，产物留在 Actions artifacts 里，publish 会失败而不会误发正式 release。
+
+Developer Workbench 的默认已按上文决定保持 enabled 并改为可达时告警；metrics 端口与 KMS 推荐仍未动。

@@ -6,6 +6,13 @@ semantic versioning.
 
 ## [Unreleased]
 
+## [1.0.0-rc.1] - 2026-08-07
+
+First release candidate. Everything below is the initial v1 surface; the entries
+kept under `Changed` and `Fixed` record where that surface departs from what a
+pre-tag deployment ran, because those are the differences an early operator has
+to act on.
+
 ### Added
 
 - Single-binary OpenAI-compatible LLM Gateway with embedded Admin console.
@@ -74,7 +81,6 @@ semantic versioning.
   refused everywhere at runtime. Only the empty role is backfilled; any other
   unrecognised value is left to keep failing loudly rather than being
   normalised into the highest privilege.
-
 - Pin the Dashboard trend to the actual seven-day window when only one data
   point exists.
 - Separate Provider-reported Token usage from conservative estimates recorded
@@ -97,4 +103,5 @@ semantic versioning.
 - A file, batch or async creation interrupted before the provider was called can
   be retried after a restart, instead of holding its idempotency key for days.
 
-[Unreleased]: https://github.com/akz142857/Heimdall/commits/main
+[Unreleased]: https://github.com/akz142857/Heimdall/compare/v1.0.0-rc.1...main
+[1.0.0-rc.1]: https://github.com/akz142857/Heimdall/releases/tag/v1.0.0-rc.1
