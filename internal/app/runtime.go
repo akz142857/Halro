@@ -79,6 +79,12 @@ type Runtime struct {
 	metricsBusy         atomic.Uint64
 	metricsRenderErrs   atomic.Uint64
 	startedAt           time.Time
+	// now is the clock the admin rate limiter buckets requests into. Its window
+	// is a wall-clock minute, so a test that sprays requests without pinning
+	// this depends on whether the spray happens to straddle a minute boundary —
+	// which is how the login-spray test failed roughly once in a hundred CI
+	// runs while passing every time locally.
+	now                 func() time.Time
 	kmsRecoveryLastUsed time.Time
 	adminSessions       *adminauth.Manager
 	adminLoginMu        sync.Mutex
@@ -480,6 +486,7 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		usageCollector:      usageCollector,
 		usageExporter:       usageExporter,
 		periods:             periods,
+		now:                 time.Now,
 	}
 	if err := runtime.drainAdminMFAAuditIntents(ctx); err != nil {
 		auditLog.Close()

@@ -42,7 +42,7 @@ func (r *Runtime) loginAdmin(writer http.ResponseWriter, request *http.Request) 
 	// check, so that unauthenticated traffic cannot drive one audit append per
 	// request. A rejected source is recorded once per minute rather than once
 	// per attempt, which keeps the signal without letting it become the flood.
-	allowed, unrecordedReject := r.allowAdminLogin(request.RemoteAddr, time.Now())
+	allowed, unrecordedReject := r.allowAdminLogin(request.RemoteAddr, r.clockNow())
 	if !allowed {
 		if unrecordedReject {
 			r.auditAdminLogin("", "failure", "rate_limited")
@@ -330,6 +330,15 @@ func (r *Runtime) adminSameOrigin(request *http.Request) bool {
 		return false
 	}
 	return parsed.Scheme+"://"+parsed.Host == expected
+}
+
+// clockNow is the runtime's clock. Rate-limit windows are derived from it, so
+// tests that assert on window behaviour pin it rather than racing the wall.
+func (r *Runtime) clockNow() time.Time {
+	if r.now == nil {
+		return time.Now()
+	}
+	return r.now()
 }
 
 func (r *Runtime) allowAdminLogin(remoteAddress string, now time.Time) (bool, bool) {

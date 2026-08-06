@@ -266,7 +266,7 @@ func (r *Runtime) cancelAdminMFAChallenge(w http.ResponseWriter, req *http.Reque
 }
 
 func (r *Runtime) completeMFA(w http.ResponseWriter, req *http.Request, token, code string, recovery bool) {
-	allowed, _ := r.allowAdminLogin(req.RemoteAddr, time.Now())
+	allowed, _ := r.allowAdminLogin(req.RemoteAddr, r.clockNow())
 	if !allowed || !r.adminSameOrigin(req) {
 		writeJSON(w, 403, map[string]string{"error": "authentication failed"})
 		return

@@ -286,6 +286,15 @@ func TestRejectedLoginSprayCannotSetTheAuditAppendRate(t *testing.T) {
 	}
 	defer runtime.Close()
 
+	// The rate-limit window is a wall-clock minute, so an unpinned spray that
+	// happens to cross a minute boundary gets a second window's allowance and
+	// audits twice the records this asserts. That made the test fail about once
+	// in a hundred CI runs — always looking like a regression in whatever change
+	// happened to be under test. Pinning the clock is what makes the assertion
+	// about the limiter rather than about how fast the machine ran.
+	pinned := time.Date(2026, time.August, 6, 12, 0, 30, 0, time.UTC)
+	runtime.now = func() time.Time { return pinned }
+
 	before := countLoginAudits(t, runtime)
 	const spray = 200
 	throttled := 0
@@ -310,6 +319,58 @@ func TestRejectedLoginSprayCannotSetTheAuditAppendRate(t *testing.T) {
 	if ceiling := cfg.Admin.LoginRPM + 1; appended > ceiling {
 		t.Fatalf("%d rejected requests appended %d audit records, want at most %d",
 			spray, appended, ceiling)
+	}
+}
+
+// The window resetting each minute is the intended design, not a leak: a
+// throttled source is meant to regain its allowance, and the audit record that
+// says it was throttled is meant to appear once per window rather than once.
+// Stating that here keeps the ceiling above readable as "per window" — the
+// number it produces across a boundary is exactly what an unpinned clock used
+// to hand back as a mysterious failure.
+func TestLoginRateWindowRenewsEachMinute(t *testing.T) {
+	cfg := testConfig(t)
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := BootstrapAdmin(context.Background(), cfg, "admin", []byte("correct horse battery staple")); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := Open(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+
+	minute := time.Date(2026, time.August, 6, 12, 0, 30, 0, time.UTC)
+	runtime.now = func() time.Time { return minute }
+	before := countLoginAudits(t, runtime)
+
+	spray := func() {
+		for i := 0; i < 50; i++ {
+			request := adminRequest(t, http.MethodPost, "/admin/api/v1/session/login", map[string]string{
+				"username": "admin", "password": "wrong",
+			})
+			request.Header.Set("Origin", "https://attacker.example")
+			request.RemoteAddr = "192.0.2.51:9000"
+			runtime.adminRouter().ServeHTTP(httptest.NewRecorder(), request)
+		}
+	}
+	spray()
+	first := countLoginAudits(t, runtime) - before
+	ceiling := cfg.Admin.LoginRPM + 1
+	if first > ceiling {
+		t.Fatalf("first window appended %d audit records, want at most %d", first, ceiling)
+	}
+
+	minute = minute.Add(time.Minute)
+	spray()
+	total := countLoginAudits(t, runtime) - before
+	if total <= first {
+		t.Fatal("a new minute granted no fresh allowance; the window never resets")
+	}
+	if total > 2*ceiling {
+		t.Fatalf("two windows appended %d audit records, want at most %d", total, 2*ceiling)
 	}
 }
 
