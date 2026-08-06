@@ -1524,3 +1524,43 @@ func TestBudgetExceededStopsAtTheFirstCandidate(t *testing.T) {
 		t.Fatalf("pins written and deleted per candidate: deletes=%d", deletes)
 	}
 }
+
+// A stream that breaks after a few tokens used to settle at the project's
+// output ceiling, because that is what an unspecified max_tokens estimates to.
+// The gateway knows how much it actually wrote out, and that is a real upper
+// bound on what the provider produced.
+func TestInterruptedStreamIsBilledForWhatItDelivered(t *testing.T) {
+	billedFor := func(t *testing.T, text string) int64 {
+		t.Helper()
+		f := newFixture(t, 1_000_000)
+		defer f.close()
+		f.adapter.streamChunks = []openaiapi.ChatCompletionResponse{{
+			ID: "chunk_1", Object: "chat.completion.chunk", Model: "provider-model",
+			Choices: []openaiapi.Choice{{Index: 0, Delta: &openaiapi.Message{
+				Role: "assistant", Content: openaiapi.TextContent(text),
+			}}},
+		}}
+		// No usage from the provider and a stream that ends in failure: the
+		// settlement has nothing to go on but the estimate.
+		f.adapter.streamUsage = nil
+		f.adapter.err = errors.New("upstream cut the stream")
+
+		request := chatRequest()
+		request.Stream = true
+		request.MaxTokens = nil
+		if err := f.service.ChatStream(context.Background(), f.plaintext, request, func(openaiapi.ChatCompletionResponse) error { return nil }); err == nil {
+			t.Fatal("expected the interrupted stream to fail")
+		}
+		balance := f.state.Balance(f.project.ID, time.Now().UTC().Format("2006-01-02"))
+		if balance.CommittedMicrosUSD <= 0 {
+			t.Fatalf("nothing was settled: %#v", balance)
+		}
+		return balance.CommittedMicrosUSD
+	}
+
+	short := billedFor(t, "twenty bytes of text")
+	long := billedFor(t, strings.Repeat("x", 200))
+	if short >= long {
+		t.Fatalf("the delivered amount did not reach the bill: short=%d long=%d", short, long)
+	}
+}

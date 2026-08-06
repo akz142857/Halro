@@ -1133,6 +1133,7 @@ func (s *Service) MessagesNativeStream(ctx context.Context, plaintextKey, versio
 	registry, _ := anthropicwire.NewNativeSchemaRegistry()
 	identity := nativeIdentity(principal, target, request.Model)
 	emitted := false
+	deliveredBytes := int64(0)
 	providerErrorEvent := false
 	usage, providerErr := adapter.MessagesNativeStream(ctx, provider.NativeMessageCall{RequestID: run.requestID, ProviderModel: target.ProviderModel, Version: version, Payload: payload}, func(event anthropicapi.RawStreamEvent) error {
 		eventEnvelope, envelopeErr := compatibility.NewNativeEventEnvelope(registry, target.ProfileID, 1, http.Header{}, event.Data, identity)
@@ -1152,6 +1153,7 @@ func (s *Service) MessagesNativeStream(ctx context.Context, plaintextKey, versio
 		if emitErr := emit(anthropicapi.RawStreamEvent{Type: event.Type, Data: safePayload}); emitErr != nil {
 			return emitErr
 		}
+		deliveredBytes += int64(len(safePayload))
 		emitted = true
 		providerErrorEvent = providerErrorEvent || event.Type == "error"
 		return nil
@@ -1160,7 +1162,8 @@ func (s *Service) MessagesNativeStream(ctx context.Context, plaintextKey, versio
 	if usage != nil {
 		semanticUsage = &semantic.Usage{InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, TotalTokens: usage.InputTokens + usage.OutputTokens, Source: semantic.UsageProviderReported}
 	}
-	settlement := streamSettlement(semanticUsage, providerErr, emitted, inputTokens, outputTokens, attempt.pricingTarget, attempt.accounting.ReservationMicrosUSD)
+	settlement := streamSettlement(semanticUsage, providerErr, emitted, inputTokens, outputTokens,
+		estimateInputTokens(deliveredBytes), attempt.pricingTarget, attempt.accounting.ReservationMicrosUSD)
 	if err := attempt.finish(providerErr, settlement); err != nil {
 		return err
 	}
@@ -1447,6 +1450,7 @@ func (s *Service) ChatStream(
 			}
 			totalAttempts++
 			attemptEmitted := false
+			attemptDeliveredBytes := int64(0)
 			streamRedactor, streamErr := s.redactor.NewStream(
 				principal.Project.RedactionPolicyID,
 			)
@@ -1483,6 +1487,7 @@ func (s *Service) ChatStream(
 					if err := emit(safeChunk); err != nil {
 						return err
 					}
+					attemptDeliveredBytes += deliveredChunkBytes(safeChunk)
 					attemptEmitted = true
 					emitted = true
 				}
@@ -1501,6 +1506,7 @@ func (s *Service) ChatStream(
 					safeChunk.Model = request.Model
 					providerErr = emit(safeChunk)
 					if providerErr == nil {
+						attemptDeliveredBytes += deliveredChunkBytes(safeChunk)
 						attemptEmitted = true
 						emitted = true
 					}
@@ -1508,6 +1514,7 @@ func (s *Service) ChatStream(
 			}
 			settlement := streamSettlement(
 				semanticUsage, providerErr, attemptEmitted, inputTokens, outputTokens,
+				estimateInputTokens(attemptDeliveredBytes),
 				attempt.pricingTarget, attempt.accounting.ReservationMicrosUSD,
 			)
 			if err := attempt.finish(providerErr, settlement); err != nil {
@@ -2130,6 +2137,7 @@ func streamSettlement(
 	emitted bool,
 	estimatedInputTokens int64,
 	estimatedOutputTokens int64,
+	deliveredOutputTokens int64,
 	target provider.Target,
 	reservationMicrosUSD int64,
 ) budget.Settlement {
@@ -2141,14 +2149,18 @@ func streamSettlement(
 		result.ProviderInputTokens = usage.InputTokens
 		result.ProviderOutputTokens = usage.OutputTokens
 	} else if providerErr == nil || emitted {
+		estimate := cappedOutputEstimate(estimatedOutputTokens, deliveredOutputTokens)
 		result.ProviderInputTokens = estimatedInputTokens
-		result.ProviderOutputTokens = estimatedOutputTokens
-		result.PreparedOutputTokens = estimatedOutputTokens
+		result.ProviderOutputTokens = estimate
+		result.PreparedOutputTokens = estimate
 		result.TokenEstimated = true
 		result.CostEstimated = true
 	} else {
 		var classified *provider.Error
 		if errors.As(providerErr, &classified) && classified.Ambiguous {
+			// Nothing was delivered, so there is nothing to bound the estimate
+			// with: an ambiguous failure means the request may have been served
+			// in full upstream, and that is what the reservation covers.
 			result.ProviderInputTokens = estimatedInputTokens
 			result.ProviderOutputTokens = estimatedOutputTokens
 			result.PreparedOutputTokens = estimatedOutputTokens
@@ -2158,6 +2170,36 @@ func streamSettlement(
 	}
 	setSettlementCost(&result, target, reservationMicrosUSD)
 	return result
+}
+
+// deliveredChunkBytes measures the assistant text a chunk carried. Everything
+// else in the frame is protocol the provider was not asked to generate.
+func deliveredChunkBytes(chunk openaiapi.ChatCompletionResponse) int64 {
+	total := int64(0)
+	for _, choice := range chunk.Choices {
+		if choice.Delta == nil {
+			continue
+		}
+		if text, ok := openaiapi.DecodeTextContent(choice.Delta.Content); ok {
+			total += int64(len(text))
+			continue
+		}
+		total += int64(len(choice.Delta.Content))
+	}
+	return total
+}
+
+// cappedOutputEstimate bounds an output estimate by what the gateway actually
+// wrote to the caller. Without max_tokens the estimate is the project's output
+// ceiling, which can be tens of thousands of tokens, so a stream that delivered
+// twenty and then broke was billed for the ceiling. The delivered byte count is
+// a real upper bound on what the provider produced for this request, and the
+// gateway is the one holding it.
+func cappedOutputEstimate(estimated, delivered int64) int64 {
+	if delivered > 0 && delivered < estimated {
+		return delivered
+	}
+	return estimated
 }
 
 func validSemanticUsage(usage *semantic.Usage) bool {
