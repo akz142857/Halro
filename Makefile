@@ -20,6 +20,7 @@ GO_LDFLAGS := -X $(BUILDINFO).Version=$(RELEASE_VERSION) -X $(BUILDINFO).Commit=
 
 GO_SOURCES := $(shell find cmd internal -type f -name '*.go')
 DEADMAN_SOURCES := $(shell find cmd/heimdall-deadman internal/deadman -type f -name '*.go')
+WEBUI_DIST_SOURCES := $(shell find internal/webui/dist -type f)
 WEB_SOURCES := $(shell find web/src web/scripts -type f) \
 	web/index.html web/tsconfig.json web/tsconfig.app.json web/tsconfig.node.json web/vite.config.ts
 WEB_DEPS_STAMP := web/node_modules/.heimdall-install-stamp
@@ -109,7 +110,7 @@ backup: bin/heimdall
 # README promises. Rebuild the bundle explicitly with `make frontend` after
 # changing anything under web/; CI fails on a stale one (`git diff --exit-code
 # -- internal/webui/dist`), so it cannot drift unnoticed.
-bin/heimdall: $(GO_SOURCES) go.mod go.sum
+bin/heimdall: $(GO_SOURCES) $(WEBUI_DIST_SOURCES) go.mod go.sum
 	mkdir -p bin
 	go build -trimpath -ldflags "$(GO_LDFLAGS)" -o $@ ./cmd/heimdall
 
