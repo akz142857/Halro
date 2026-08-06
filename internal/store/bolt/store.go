@@ -20,7 +20,7 @@ import (
 	bbolt "go.etcd.io/bbolt"
 )
 
-const schemaVersion uint64 = 18
+const schemaVersion uint64 = 19
 
 const (
 	maxPriceVersionsPerDeployment   = 10_000
@@ -329,6 +329,43 @@ var migrations = []migration{
 			return err
 		}
 		return migrationStep(step, "after_create_audit_anchors")
+	}},
+	// domain.AdminUser.Role arrived with the two-level Admin roles and is
+	// required by Validate, but every account created before it exists on disk
+	// with an empty role. Nothing backfilled them, which left an upgraded
+	// instance in a state its own validation rejects: the account cannot save
+	// its own preferences, and requireAdministratorRole reads the empty string
+	// as "not an administrator" and refuses every administrator-gated write.
+	//
+	// Administrator is the faithful backfill, not a lenient one. Before roles
+	// existed there was exactly one kind of admin account and it could do
+	// everything; recording anything else here would take capability away from
+	// an operator who never gave it up.
+	{version: 19, name: "admin_role_backfill", up: func(tx *bbolt.Tx, step func(string) error) error {
+		if err := migrationStep(step, "before_admin_role_backfill"); err != nil {
+			return err
+		}
+		if err := rewriteBucket(tx.Bucket(bucketAdminUsers), func(raw []byte) ([]byte, error) {
+			var value domain.AdminUser
+			if err := json.Unmarshal(raw, &value); err != nil {
+				return nil, err
+			}
+			// Only the empty role is backfilled — the exact shape a record
+			// written before the field existed has. Any other unrecognised
+			// value is left alone so it keeps failing validation loudly:
+			// normalising an unexpected role would turn "this record is not
+			// what we think it is" into a silent grant of the highest
+			// privilege, which is the wrong direction for a value that no
+			// supported write path can produce.
+			if value.Role != "" {
+				return raw, nil
+			}
+			value.Role = domain.AdminRoleAdministrator
+			return json.Marshal(value)
+		}); err != nil {
+			return err
+		}
+		return migrationStep(step, "after_admin_role_backfill")
 	}},
 }
 

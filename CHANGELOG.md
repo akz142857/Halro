@@ -66,6 +66,15 @@ semantic versioning.
 
 ### Fixed
 
+- An Admin account created before the two-level roles existed had no role
+  stored, which its own instance then rejected: saving a preference failed
+  validation, and every administrator-gated write was refused as read-only.
+  A schema migration backfills those records as administrators — the capability
+  they already had — while validation stays strict, so an empty role is still
+  refused everywhere at runtime. Only the empty role is backfilled; any other
+  unrecognised value is left to keep failing loudly rather than being
+  normalised into the highest privilege.
+
 - Pin the Dashboard trend to the actual seven-day window when only one data
   point exists.
 - Separate Provider-reported Token usage from conservative estimates recorded
