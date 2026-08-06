@@ -417,6 +417,8 @@ export const enUS = {
     },
     eyebrow: "Live gateway pulse", title: "Overview", description: "Today's model traffic, cost, and operational health from the local durable ledger.",
     ledgerHealthy: "Ledger healthy", ledgerWarning: "Ledger needs attention", todayMetrics: "Today's key metrics",
+    pendingTimezoneTitle: "The accounting time zone will change to {{timezone}}",
+    pendingTimezoneDetail: "It takes effect at {{at}}. The boundary of \"today\" moves then, and daily budgets follow the new zone's calendar day.",
     accountingTimezone: "Measured in {{timezone}}", accountingPeriod: "This period: {{start}} to {{end}} (UTC)",
     accountingTimezoneHint: "\"Today\" follows the server's accounting time zone; daily budgets reset at midnight there.",
     requests: "Requests", tokens: "Tokens", cost: "Cost", errorRate: "Error rate", attemptErrorRate: "Attempt error rate", active: "Active", averageLatency: "Average latency",

@@ -417,6 +417,8 @@ export const zhCN = {
     },
     eyebrow: "实时网关脉搏", title: "运行总览", description: "今天的模型流量、成本与运行健康度。数据来自本机持久化账本。",
     ledgerHealthy: "账本健康", ledgerWarning: "账本需要关注", todayMetrics: "今日关键指标",
+    pendingTimezoneTitle: "记账时区将切换为 {{timezone}}",
+    pendingTimezoneDetail: "生效时刻 {{at}}。届时“今天”的边界会改变，日预算也会按新时区重新划分自然日。",
     accountingTimezone: "按 {{timezone}} 计算", accountingPeriod: "本期：{{start}} 至 {{end}}（UTC）",
     accountingTimezoneHint: "“今天”按服务端的记账时区划分，日预算也在该时区的零点重置。",
     requests: "请求", tokens: "令牌", cost: "成本", errorRate: "错误率", attemptErrorRate: "尝试错误率", active: "处理中", averageLatency: "平均延迟",

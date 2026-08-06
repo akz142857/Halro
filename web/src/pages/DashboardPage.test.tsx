@@ -116,6 +116,30 @@ describe("DashboardPage", () => {
     expect(stamp).toBeInTheDocument();
   });
 
+  // Settings shows this too, but nobody opens settings to read today's
+  // numbers — and this is the page whose numbers are about to mean something
+  // different.
+  it("announces a scheduled accounting timezone change", async () => {
+    const data = dashboard();
+    data.time_context = timeContext({
+      pending_timezone: "Europe/Berlin",
+      pending_effective_at: "2026-08-06T16:00:00Z",
+    });
+    vi.spyOn(api, "dashboard").mockResolvedValue(data);
+    renderPage();
+
+    expect(await screen.findByText("记账时区将切换为 Europe/Berlin")).toBeInTheDocument();
+    expect(screen.getByText(/日预算也会按新时区重新划分自然日/)).toBeInTheDocument();
+  });
+
+  it("says nothing about a timezone change when none is scheduled", async () => {
+    vi.spyOn(api, "dashboard").mockResolvedValue(dashboard());
+    renderPage();
+
+    expect(await screen.findByText(/按 Asia\/Shanghai 计算/)).toBeInTheDocument();
+    expect(screen.queryByText(/记账时区将切换为/)).not.toBeInTheDocument();
+  });
+
   it("renders empty states when collection fields are null", async () => {
     const empty = dashboard();
     empty.usage.hourly = null as unknown as Dashboard["usage"]["hourly"];

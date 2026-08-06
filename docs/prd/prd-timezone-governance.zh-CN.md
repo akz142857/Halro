@@ -441,7 +441,7 @@ export function formatInstant(value: string, timeZone: string, style?: InstantSt
 
 - "今天"指标区域标题旁展示会计时区名；
 - 悬停展示当前周期的完整 UTC 区间；
-- 存在待生效时区变更时，`time_context` 的 `pending_*` 字段已随响应下发；总览页的提示条尚未实现，当前只在设置页展示（见 §11.4）。
+- 存在待生效时区变更时，总览页顶部展示提示条，说明新时区与生效时刻。设置页同样展示并提供撤销入口（§11.4）；提示条放在总览页是因为这里正是"今天"的数字即将改变含义的地方。
 
 ### 11.4 设置页
 
@@ -602,7 +602,7 @@ metadata schema 从 v15 升至 v16（当前值见 `internal/store/bolt/store.go:
 1. `time_context` 在全部按日聚合的接口（`/dashboard`、`/usage`、`/system/status`）中存在且自洽（`period_start < period_end`，`generated_at` 落在区间内）。单条记录详情接口不按日聚合，不携带该对象；
 2. 周期边界为半开区间：起点计入、终点不计入，边界两侧各一条记录验证不重不漏；
 3. DST 日的"今天"聚合覆盖完整的 23 或 25 小时，且区间外相邻记录被排除；
-4. `PruneBefore` 的分区裁剪行为（`internal/usage/parquet_test.go`）。CLI 层 `N + 1` 天的 cutoff 算术目前无独立测试；
+4. `PruneBefore` 的分区裁剪行为（`internal/usage/parquet_test.go`）；另有独立测试断言 cutoff 恰好比精确年龄多保留一天，且 UTC−12 至 UTC+14 各时区下运维被承诺的最旧一天都不会被裁掉；
 5. §10.4 的三个错误码均可复现，断言 `code` 字段而非仅状态码。
 
 ### 17.5 前端测试
@@ -611,17 +611,17 @@ metadata schema 从 v15 升至 v16（当前值见 `internal/store/bolt/store.go:
 2. 图表刻度使用服务端会计时区绘制，会计时区变化时图表重建；
 3. 不存在未指定 `timeZone` 的 `Intl.DateTimeFormat` 调用，且 `format.ts` 内每处构造都携带 `timeZone`；
 4. 设置页：待生效变更提示与撤销、配置文件失效警示、切换后重置窗口告警、当前时区规则指纹可见；
-5. 总览页：会计时区名与周期 UTC 区间可见，异常时间戳按会计时区渲染（以非本机时区的夹具验证）；
+5. 总览页：会计时区名与周期 UTC 区间可见，异常时间戳按会计时区渲染（以非本机时区的夹具验证），待生效变更提示条在有变更时出现、无变更时不出现；
 6. `zh-CN` 与 `en-US` 文案键完整对齐。
 
 ### 17.6 完成定义
 
 1. §17.1–§17.5 全部通过；
-2. `heimdall doctor` 输出会计时区、周期区间与 tzdata 信息（代码已实现，尚无断言测试）；
+2. `heimdall doctor` 输出会计时区、周期区间与 tzdata 指纹，并在配置文件与存储不一致时 `warn`，均有断言测试；
 3. 已有开发库可无 panic 打开并完成 v16 迁移；
 4. `docs/guides/operator-guide.md` 与两份 user-guide 更新完毕。
 
 ## 18. 待实现阶段确认的问题
 
 1. 是否为会计时区提供 CLI 变更入口。倾向：提供只读查询（`heimdall doctor` 已输出），变更只走 Admin API，保证审计链完整。
-2. 总览页是否需要待生效变更提示条。`time_context` 已下发 `pending_*`，实现成本很低；当前只在设置页提示。
+

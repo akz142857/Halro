@@ -68,6 +68,18 @@ func reportCommandFailure(out io.Writer, err error) {
 	}
 }
 
+// usageRetentionCutoff is the oldest partition date a prune may keep.
+//
+// Partitions are dated in UTC while a retention promise is read in the
+// operator's own day. An instance east of UTC reaches its local "N days ago"
+// while the UTC partition for that day is still current, so pruning at exactly
+// N would delete a day the operator was told they still had. retention_days is
+// therefore a floor — at least N days — bought with one extra partition of
+// storage.
+func usageRetentionCutoff(now time.Time, retentionDays int) time.Time {
+	return now.UTC().AddDate(0, 0, -(retentionDays + 1))
+}
+
 // versionReport extends the build stamp with the time zone rules this process
 // resolves against. Both belong to the same question — "which artefact is this
 // node running" — and tzdata drift between nodes is otherwise invisible.
@@ -630,13 +642,7 @@ func run(arguments []string, logger *slog.Logger) error {
 			}
 			return json.NewEncoder(os.Stdout).Encode(report)
 		case "prune":
-			// Partitions are dated in UTC while a retention promise is read in
-			// the operator's own day. An instance east of UTC reaches its local
-			// "N days ago" while the UTC partition for that day is still
-			// current, so pruning at exactly N would delete a day the operator
-			// was told they still had. retention_days is therefore a floor —
-			// at least N days — bought with one extra partition of storage.
-			cutoff := time.Now().UTC().AddDate(0, 0, -(cfg.Usage.RetentionDays + 1))
+			cutoff := usageRetentionCutoff(time.Now(), cfg.Usage.RetentionDays)
 			if *before != "" {
 				parsed, err := time.Parse("2006-01-02", *before)
 				if err != nil {

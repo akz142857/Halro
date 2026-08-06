@@ -16,6 +16,9 @@ export interface TimeContext {
   period_id: string;
   period_start: string;
   period_end: string;
+  /** A scheduled change that has not taken effect. Absent when none is due. */
+  pending_timezone?: string;
+  pending_effective_at?: string;
   generated_at: string;
 }
 
