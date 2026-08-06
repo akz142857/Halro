@@ -118,6 +118,61 @@ through `/admin/api/v1/preferences`; the instance default uses
 Existing databases are initialized with `zh-CN`; older administrator records
 without a locale are interpreted as `system`.
 
+### Time zones
+
+The accounting time zone decides one thing: where a day ends. It takes an IANA
+name, and two surfaces follow it — only two:
+
+- daily budgets — a project's `daily_budget_micros_usd` resets at midnight in
+  this zone, and the period a call is charged to is that zone's calendar date;
+- the "today" figures on the Admin Console overview, which are summed over the
+  same period. Every response reporting one carries a `time_context` naming the
+  zone and the exact UTC interval, and the console renders every timestamp in
+  that zone so the charts and the totals describe the same day.
+
+Everything else is UTC and stays UTC regardless of this setting: Parquet
+partition dates, retention pruning, price-version effective times, audit
+records, backup manifests, and authenticator codes. Storage layout is not an
+accounting judgement — partitioning by a configurable zone would move a single
+attempt between partitions whenever the setting changed.
+
+`usage.retention_days` is therefore a floor rather than an exact age. Partitions
+are dated in UTC while the promise is read in the operator's own day, so pruning
+keeps one extra day; an instance at UTC+8 never loses a local day it was told it
+still had.
+
+Only IANA names are accepted; a fixed offset such as `UTC+08:00` cannot express
+summer time and would make the days on either side of a transition the wrong
+length. A day is 23 or 25 hours where summer time applies, and the daily budget
+covers that whole calendar day rather than a fixed 24 hours.
+
+`usage.timezone` in config.yaml **seeds** this setting on an instance's first
+start and has no say afterwards. The stored value is versioned and audited;
+editing the file later does not move the boundary. `heimdall doctor` reports the
+drift as an `accounting_timezone` warning when the two disagree.
+
+Change it under Settings → Instance, or through
+`PUT /admin/api/v1/settings/accounting`. A change never applies immediately: it
+is scheduled for the end of the period in progress, because redefining a day
+that is already being billed would change what budgets already enforced against
+it meant. Until then it shows as pending and can be cancelled. Nothing already
+recorded is recomputed — every ledger event carries the zone, the version and
+the exact UTC interval it was filed under, so a charge can be re-derived from
+the record alone.
+
+Each applied change increments a timezone version that forms part of the ledger
+balance key, so periods either side of a change are separate balances and can
+never merge. A request that outlives a boundary settles in the period it began
+in, matching how its price snapshot is pinned.
+
+The rules themselves come from the IANA database embedded in the binary, so zone
+resolution does not depend on what the host ships. `heimdall version` and the
+`tzdata` check in `heimdall doctor` report the source, release, and a
+fingerprint of the transition table; the same values are exported as
+`heimdall_tzdata_info`. Across a fleet those fingerprints must match — nodes
+resolving different rules would place the same instant in different accounting
+periods, and nothing else would reveal it.
+
 ## Offline diagnostics and break-glass access
 
 Stop Heimdall, then run the read-only diagnostic before upgrades, restores, or
@@ -129,8 +184,9 @@ when startup fails:
 
 The JSON report verifies configuration safety, exclusive data ownership, file
 permissions, the exact bbolt schema, Master Key/Vault binding, the WAL checksum
-and complete tail, Parquet manifests/checksums, usage timezone, free disk space,
-and Provider/Deployment/Route references. A partial WAL is reported as a
+and complete tail, Parquet manifests/checksums, the accounting timezone and the
+time zone database behind it, free disk space, and Provider/Deployment/Route
+references. A partial WAL is reported as a
 failure but is never truncated or repaired. Network Provider probes are
 intentionally skipped; run audited connection tests in Admin after startup.
 The diagnostic acquires the already initialized lock file through a read-only
