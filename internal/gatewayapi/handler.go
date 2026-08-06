@@ -745,6 +745,56 @@ func bearerToken(value string) (string, bool) {
 // and the limiter that would have bounded it is keyed by project — that is, it
 // does not exist until authentication has already succeeded. A forged bearer
 // token and a large deeply nested body was the whole attack.
+// WithWriteDeadline bounds how long a client may take to read a response it asked
+// for. The streaming paths arm a deadline before every event, so a stalled reader
+// costs one write; every other response — a completion, an embedding, an error
+// envelope — had no write deadline at all, and a client that opened a connection
+// and never read held the serving goroutine and its connection for as long as it
+// liked. http.Server.WriteTimeout is not the instrument for this: it starts
+// counting at the request header and would sever every SSE stream on the gateway.
+func (h *Handler) WithWriteDeadline(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		next.ServeHTTP(&deadlineWriter{ResponseWriter: writer, timeout: h.writeTimeout}, request)
+	})
+}
+
+// deadlineWriter arms the deadline when the response starts rather than when the
+// request arrives. A provider is allowed to take routeTimeout to answer, which is
+// far longer than the write budget; arming early would abort responses that only
+// took a slow upstream, not a slow client. Streaming handlers re-arm per event and
+// so simply overwrite what this set.
+type deadlineWriter struct {
+	http.ResponseWriter
+	timeout time.Duration
+	armed   bool
+}
+
+// Unwrap lets http.NewResponseController reach the real writer, which is how the
+// streaming paths keep extending the deadline through this wrapper.
+func (w *deadlineWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+func (w *deadlineWriter) Flush() { _ = http.NewResponseController(w.ResponseWriter).Flush() }
+
+func (w *deadlineWriter) WriteHeader(status int) {
+	w.arm()
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *deadlineWriter) Write(payload []byte) (int, error) {
+	w.arm()
+	return w.ResponseWriter.Write(payload)
+}
+
+func (w *deadlineWriter) arm() {
+	if w.armed {
+		return
+	}
+	w.armed = true
+	// A writer without deadline support (httptest, a test double) is not an error:
+	// the deadline is a defence, and its absence must not fail the response.
+	_ = http.NewResponseController(w.ResponseWriter).SetWriteDeadline(time.Now().Add(w.timeout))
+}
+
 func (h *Handler) GuardOpenAI(next http.Handler) http.Handler {
 	return h.guardKey(next, func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("WWW-Authenticate", `Bearer realm="heimdall"`)

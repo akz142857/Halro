@@ -893,6 +893,7 @@ func (r *Runtime) gatewayHandler() http.Handler {
 func (r *Runtime) gatewayRouter() http.Handler {
 	router := chi.NewRouter()
 	router.Use(r.recoverPanics)
+	router.Use(r.gateway.WithWriteDeadline)
 	router.Get("/health/live", r.live)
 	router.Get("/health/ready", r.ready)
 	// A key that cannot authenticate is turned away before its body is read.
