@@ -613,6 +613,11 @@ export interface SystemStatus {
   tzdata?: { source: string; path?: string; version: string; fingerprint: string; zones: string[] };
 }
 
+export interface SystemConfig {
+  yaml: string;
+  time_context: TimeContext;
+}
+
 export interface RuntimeSettings {
   health_probe_interval_seconds: number;
   updated_at?: string;

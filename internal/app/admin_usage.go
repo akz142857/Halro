@@ -14,6 +14,7 @@ import (
 	"github.com/akz142857/Heimdall/internal/timezone"
 	"github.com/akz142857/Heimdall/internal/usage"
 	"github.com/go-chi/chi/v5"
+	"gopkg.in/yaml.v3"
 )
 
 func (r *Runtime) adminDashboard(writer http.ResponseWriter, request *http.Request) {
@@ -354,6 +355,27 @@ func (r *Runtime) adminSystemStatus(writer http.ResponseWriter, request *http.Re
 		payload["tzdata"] = database
 	}
 	writeJSON(writer, http.StatusOK, payload)
+}
+
+// adminSystemConfig renders the effective, normalized config.yaml back as
+// YAML for the Settings > Diagnostics preview. It re-marshals the in-memory
+// Config rather than reading the file from disk: the struct is the schema
+// boundary (config.Decode rejects unknown fields), so nothing can end up in
+// this response that wasn't already validated into a known, non-secret field.
+func (r *Runtime) adminSystemConfig(writer http.ResponseWriter, request *http.Request) {
+	timing, ok := r.writeTimeContext(writer, time.Now())
+	if !ok {
+		return
+	}
+	rendered, err := yaml.Marshal(r.config)
+	if err != nil {
+		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": "config render failed"})
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"yaml":         string(rendered),
+		"time_context": timing,
+	})
 }
 
 func (r *Runtime) syncUsageAdmin(writer http.ResponseWriter, request *http.Request) bool {

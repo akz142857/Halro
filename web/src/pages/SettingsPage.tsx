@@ -28,11 +28,16 @@ export function SettingsPage({ mfaSetupRequired = false }: { mfaSetupRequired?: 
     refetchInterval: 15_000,
     enabled: !mfaSetupRequired && pane === "diagnostics",
   });
+  const config = useQuery({
+    queryKey: ["system-config"],
+    queryFn: api.systemConfig,
+    enabled: !mfaSetupRequired && pane === "diagnostics",
+  });
   const settings = useQuery({ queryKey: ["settings"], queryFn: api.settings, enabled: !mfaSetupRequired && pane === "instance" });
   const accounting = useQuery({ queryKey: ["accounting-settings"], queryFn: api.accountingSettings, enabled: !mfaSetupRequired && pane === "instance" });
   const uiSettings = useQuery({ queryKey: ["ui-settings"], queryFn: api.uiSettings, enabled: !mfaSetupRequired && (pane === "general" || pane === "instance") });
   const preferences = useQuery({ queryKey: ["preferences"], queryFn: api.preferences, enabled: !mfaSetupRequired && (pane === "general" || pane === "instance") });
-  const queries = pane === "diagnostics" ? [status] : pane === "instance" ? [settings, uiSettings, preferences, accounting] : pane === "general" ? [uiSettings, preferences] : [];
+  const queries = pane === "diagnostics" ? [status, config] : pane === "instance" ? [settings, uiSettings, preferences, accounting] : pane === "general" ? [uiSettings, preferences] : [];
   const pending = queries.some((query) => query.isPending);
   const error = queries.find((query) => query.error)?.error;
   const accountingLabels = [t("settings.healthy"), t("settings.degraded"), t("settings.unavailable"), t("settings.recoveryRequired")];
@@ -65,7 +70,7 @@ export function SettingsPage({ mfaSetupRequired = false }: { mfaSetupRequired?: 
             {!pending && !error && pane === "general" && uiSettings.data && preferences.data && <section aria-labelledby="general-title"><SettingsGroupHeader title={t("settings.panes.general")} description={t("settings.generalDescription")} id="general-title" /><AppearanceForm preferences={preferences.data.data} /><PersonalLanguageForm ui={uiSettings.data.data} preferences={preferences.data.data} /></section>}
             {pane === "security" && <section aria-labelledby="security-title"><SettingsGroupHeader title={t("settings.panes.security")} description={t("settings.securityDescription")} id="security-title" /><PasswordChangeForm /><MFASettings /></section>}
             {!pending && !error && pane === "instance" && uiSettings.data && preferences.data && settings.data && <section aria-labelledby="instance-title"><SettingsGroupHeader title={t("settings.panes.instance")} description={t("settings.instanceDescription")} id="instance-title" /><InstanceLanguageForm ui={uiSettings.data.data} preferences={preferences.data.data} />{accounting.data && <AccountingTimezoneForm settings={accounting.data.data} />}<RuntimeSettingsForm settings={settings.data.data} /></section>}
-            {!pending && !error && pane === "diagnostics" && status.data && <DiagnosticsPane status={status.data} accountingLabels={accountingLabels} metricLabels={metricLabels} />}
+            {!pending && !error && pane === "diagnostics" && status.data && config.data && <DiagnosticsPane status={status.data} config={config.data} accountingLabels={accountingLabels} metricLabels={metricLabels} />}
           </div>
         </div>
       )}
@@ -73,7 +78,7 @@ export function SettingsPage({ mfaSetupRequired = false }: { mfaSetupRequired?: 
   );
 }
 
-function DiagnosticsPane({ status, accountingLabels, metricLabels }: { status: Awaited<ReturnType<typeof api.systemStatus>>; accountingLabels: string[]; metricLabels: Record<string, string> }) {
+function DiagnosticsPane({ status, config, accountingLabels, metricLabels }: { status: Awaited<ReturnType<typeof api.systemStatus>>; config: Awaited<ReturnType<typeof api.systemConfig>>; accountingLabels: string[]; metricLabels: Record<string, string> }) {
   const { t } = useTranslation();
   return <section aria-labelledby="diagnostics-title">
     <SettingsGroupHeader title={t("settings.panes.diagnostics")} description={t("settings.systemDescription")} id="diagnostics-title" />
@@ -104,7 +109,32 @@ function DiagnosticsPane({ status, accountingLabels, metricLabels }: { status: A
             </dl>
           </details>
     </div>
+    <ConfigPreviewCard yaml={config.yaml} />
   </section>;
+}
+
+function ConfigPreviewCard({ yaml }: { yaml: string }) {
+  const { t } = useTranslation();
+  const [copyStatus, setCopyStatus] = useState("");
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(yaml);
+      setCopyStatus(t("settings.configPreviewCopied"));
+    } catch {
+      setCopyStatus(t("settings.configPreviewCopyFailed"));
+    }
+  };
+  return (
+    <details className="panel system-card diagnostic-details config-preview">
+      <summary><span>{t("settings.configPreviewTitle")}</span><strong>config.yaml</strong></summary>
+      <p className="panel-description">{t("settings.configPreviewDescription")}</p>
+      <pre className="config-preview-body"><code>{yaml}</code></pre>
+      <div className="form-actions">
+        <button type="button" className="button ghost" onClick={() => void copy()}>{t("common.copy")}</button>
+        <span aria-live="polite">{copyStatus}</span>
+      </div>
+    </details>
+  );
 }
 
 function SettingsGroupHeader({ title, description, id }: { title: string; description: string; id: string }) {

@@ -28,6 +28,7 @@ import type {
 	MasterKeyCustody,
   SetupStatus,
   SystemStatus,
+  SystemConfig,
   TokenGuardPolicy,
   TokenGuardPreview,
   UsageAttempt,
@@ -166,6 +167,8 @@ export const api = {
 	masterKeyCustody: () => request<MasterKeyCustody>("/master-key/custody").then((value) => value.data),
   systemStatus: () =>
     request<SystemStatus>("/system/status").then((value) => value.data),
+  systemConfig: () =>
+    request<SystemConfig>("/system/config").then((value) => value.data),
   settings: () => request<RuntimeSettings>("/settings"),
   updateSettings: (value: unknown, revision: number) =>
     request<RuntimeSettings>("/settings", json("PUT", value), `"${revision}"`),
