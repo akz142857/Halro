@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
-	"time"
 
 	"github.com/akz142857/Heimdall/internal/budget"
 	"github.com/akz142857/Heimdall/internal/ledger"
@@ -19,7 +18,7 @@ func TestCollectorQueueSaturationDoesNotBlockLedgerAndCatchesUpExactly(t *testin
 	}
 	defer log.Close()
 	state := ledger.NewState()
-	accounting, err := budget.New(log, state, time.UTC)
+	accounting, err := budget.New(log, state, mustResolver(t, "UTC"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,4 +54,16 @@ func TestCollectorQueueSaturationDoesNotBlockLedgerAndCatchesUpExactly(t *testin
 	if !reflect.DeepEqual(aggregate.Snapshot(), expected.Snapshot()) || aggregate.Metrics() != expected.Metrics() {
 		t.Fatalf("catch-up differs from authoritative replay\nactual=%#v\nexpected=%#v", aggregate.Snapshot(), expected.Snapshot())
 	}
+}
+
+// mustResolver pins the accounting timezone for a test. Period boundaries are
+// the subject of the assertions here, so the zone is stated rather than
+// inherited from whatever the host is set to.
+func mustResolver(t *testing.T, timezone string) *budget.PeriodResolver {
+	t.Helper()
+	resolver, err := budget.NewFixedPeriodResolver(timezone)
+	if err != nil {
+		t.Fatalf("resolver for %s: %v", timezone, err)
+	}
+	return resolver
 }

@@ -67,7 +67,8 @@ usage:
   # "balanced" batches accounting writes; "strict" fsyncs every one of them,
   # which costs throughput and loses nothing on a crash.
   durability: balanced
-  # Decides where a day ends for daily budgets and usage reporting.
+  # Decides where a day ends for daily budgets and usage reporting. IANA name.
+  # Storage is unaffected: Parquet partitions and retention are always UTC.
   timezone: UTC
   wal_queue_capacity: 4096
   wal_max_batch: 128
@@ -75,7 +76,9 @@ usage:
   analytics_queue_capacity: 4096
   checkpoint_interval: 1m0s
   parquet_interval: 1h0m0s
-  # Analytics retention. The accounting ledger itself is not trimmed by this.
+  # Analytics retention, a floor rather than an exact age: partitions are dated
+  # in UTC, so pruning keeps one extra day and no timezone loses a day it was
+  # promised. The accounting ledger itself is not trimmed by this.
   retention_days: 90
 
 gateway:

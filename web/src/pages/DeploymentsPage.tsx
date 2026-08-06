@@ -14,7 +14,7 @@ import {
   StatusDot,
   useDirty,
 } from "../components";
-import { dateTime, money } from "../format";
+import { money, useInstantFormatter } from "../format";
 import type { Deployment, DeploymentPriceVersion, DeploymentTargetKind, Provider, ProviderBinding, ProviderCapabilities } from "../types";
 import { useTranslation } from "react-i18next";
 import { Link } from "../navigation";
@@ -127,6 +127,7 @@ function DeploymentRow({
   onReplace: () => void;
 }) {
   const { t } = useTranslation();
+  const dateTime = useInstantFormatter();
   const [expanded, setExpanded] = useState(false);
   const [pricing, setPricing] = useState(false);
 	const [confirmingRestore, setConfirmingRestore] = useState(false);
@@ -305,6 +306,7 @@ function DeploymentFact({ label, value, meta, unset = false }: { label: string; 
 
 function PriceVersionForm({ deployment, current, onClose }: { deployment: Deployment; current?: DeploymentPriceVersion; onClose: () => void }) {
   const { t } = useTranslation();
+  const dateTime = useInstantFormatter();
   const queryClient = useQueryClient();
   const [step, setStep] = useState<"details" | "confirm">("details");
   const [mode, setMode] = useState<"metered" | "free">(current?.billing_mode ?? "metered");

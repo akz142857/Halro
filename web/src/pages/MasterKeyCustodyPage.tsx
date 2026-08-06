@@ -2,14 +2,16 @@ import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { ErrorState, Loading, PageHeader, StatusDot } from "../components";
+import { useInstantFormatter } from "../format";
 
 export function MasterKeyCustodyPage() {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const custody = useQuery({ queryKey: ["master-key-custody"], queryFn: api.masterKeyCustody });
+  const formatInstant = useInstantFormatter();
   const date = (value?: string) => {
     if (!value) return t("common.never");
-    const parsed = new Date(value);
-    return Number.isNaN(parsed.getTime()) ? t("common.unknown") : new Intl.DateTimeFormat(i18n.language, { dateStyle: "medium", timeStyle: "short" }).format(parsed);
+    const formatted = formatInstant(value, "full");
+    return formatted === "—" ? t("common.unknown") : formatted;
   };
   const retry = () => { void custody.refetch(); };
   const data = custody.data;

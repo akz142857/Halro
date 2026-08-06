@@ -7,7 +7,6 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/akz142857/Heimdall/internal/anthropicapi"
 	"github.com/akz142857/Heimdall/internal/auth"
@@ -83,7 +82,7 @@ func newNativeMessagesFixtureForProfile(t *testing.T, profileID domain.ProviderP
 		t.Fatal(err)
 	}
 	state := ledger.NewState()
-	accounting, err := budget.New(log, state, time.UTC)
+	accounting, err := budget.New(log, state, mustResolver(t, "UTC"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,4 +160,16 @@ func TestNativeMessagesStreamPreservesRawSignatureEvent(t *testing.T) {
 	if !signature || !publicModel {
 		t.Fatalf("signature=%v public_model=%v", signature, publicModel)
 	}
+}
+
+// mustResolver pins the accounting timezone for a test. Period boundaries are
+// the subject of the assertions here, so the zone is stated rather than
+// inherited from whatever the host is set to.
+func mustResolver(t *testing.T, timezone string) *budget.PeriodResolver {
+	t.Helper()
+	resolver, err := budget.NewFixedPeriodResolver(timezone)
+	if err != nil {
+		t.Fatalf("resolver for %s: %v", timezone, err)
+	}
+	return resolver
 }

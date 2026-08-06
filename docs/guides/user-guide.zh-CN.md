@@ -324,6 +324,8 @@ console.log(response.choices[0].message.content);
 - Token Guard Policy；
 - Redaction Policy。
 
+预算日在哪里结束由记账时区决定（在 **设置 → 实例** 中查看与变更，`config.yaml` 的 `usage.timezone` 仅用于首次启动时初始化），运行总览的“今日”指标覆盖同一个周期：页面会在指标上方标出该时区与对应的 UTC 区间，并按该时区渲染所有时间戳，因此图表与旁边的汇总数字始终描述同一天。在实行夏令时的地区，一个自然日为 23 或 25 小时，日预算覆盖完整自然日，而不是固定 24 小时。变更记账时区不会立即生效，而是安排在当前周期结束时切换，进行中的那一天不受影响，历史消费也不会重算。该设置不影响其他任何部分：用量导出、保留期、价格生效时刻与审计链恒为 UTC。
+
 Deployment 与价格时间线分开管理。至少创建一个已经生效的 Price Version；输入、输出价格单位为 `USD / 1M tokens`，固定价格单位为 `USD / request`。历史 Attempt 会保存当时的完整价格快照，后续调价不会重算旧消费。没有有效价格默认返回 `409 price_unavailable`，不会再显示成已知 `$0.00`；只有显式 `free` 版本才表示已知零成本。
 
 网络超时或连接中断可能导致“Provider 是否已经处理请求”无法确定。Heimdall 会按请求允许的最大输出 Token 做保守结算，并标记为 `estimated`。Dashboard 主 Token 数只显示 Provider 报告量，估算上界单独显示；Usage 页面使用 `EST.` 标记。应用应合理设置 `max_completion_tokens` 和 Project 最大输出限制。

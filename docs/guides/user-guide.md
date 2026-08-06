@@ -385,6 +385,18 @@ Each Project sets its own:
 - a Token Guard policy;
 - a Redaction policy.
 
+The accounting time zone decides when that budget day ends, and the Overview's
+"today" figures cover the same period — the page names the zone and the exact UTC
+interval above the metrics, and renders every timestamp in it, so the chart and
+the totals beside it always describe the same day. Where summer time applies a
+day is 23 or 25 hours; the budget covers that whole calendar day rather than a
+fixed 24 hours. Change it under Settings → Instance;
+`usage.timezone` in config.yaml only seeds it on an instance's first start. A
+change is scheduled for the end of the period in progress rather than applied at
+once, so the day being billed is never redefined underneath you, and nothing
+already recorded is recomputed. The setting moves nothing else: usage exports,
+retention, price effective times, and the audit trail are always UTC.
+
 Deployments and their price timelines are managed separately. Create at least
 one price version that has taken effect; input and output prices are `USD / 1M
 tokens` and a fixed price is `USD / request`. Every historical attempt keeps the

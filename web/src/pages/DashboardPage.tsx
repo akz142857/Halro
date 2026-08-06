@@ -3,7 +3,8 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "../api";
 import { ErrorState, Loading, PageHeader, StatusDot } from "../components";
 import { FirstRunChecklist } from "./FirstRunChecklist";
-import { compactNumber, dateTime, money } from "../format";
+import { compactNumber, money, useInstantFormatter } from "../format";
+import { adoptTimeContext } from "../timezone";
 import type { GovernancePressureItem, UsageAnomaly, UsageBreakdown } from "../types";
 import type { TrendMetric } from "../trend";
 import { useTranslation } from "react-i18next";
@@ -14,6 +15,7 @@ type BreakdownDimension = "project" | "provider" | "requested_model" | "provider
 
 export function DashboardPage() {
   const { t } = useTranslation();
+  const formatInstant = useInstantFormatter();
   const [trendMetric, setTrendMetric] = useState<TrendMetric>("requests");
   const [dimension, setDimension] = useState<BreakdownDimension>("project");
   const query = useQuery({
@@ -24,6 +26,9 @@ export function DashboardPage() {
   if (query.isPending) return <Loading />;
   if (query.isError) return <ErrorState error={query.error} />;
   const dashboard = query.data;
+  // Adopted here as well as at startup so a change to the server's accounting
+  // zone reaches the page that is most sensitive to it without a reload.
+  adoptTimeContext(dashboard.time_context);
   const today = dashboard.usage.today;
   const estimatedInputTokens = today.estimated_input_tokens ?? 0;
   const estimatedOutputTokens = today.estimated_output_tokens ?? 0;
@@ -68,6 +73,26 @@ export function DashboardPage() {
       {/* Nothing has ever been served, so the panels below are all zeroes and "no data".
           The chain that produces the first request is more useful than an empty chart. */}
       {dashboard.usage.watermark_sequence === 0 && today.attempts === 0 && <FirstRunChecklist />}
+      {/* A boundary about to move belongs where people actually look. The
+          settings page shows it too, but nobody visits settings to read
+          today's numbers. */}
+      {dashboard.time_context.pending_timezone && dashboard.time_context.pending_effective_at && (
+        <div className="notice warning" role="status">
+          <strong>{t("dashboard.pendingTimezoneTitle", { timezone: dashboard.time_context.pending_timezone })}</strong>
+          <span>{t("dashboard.pendingTimezoneDetail", {
+            at: formatInstant(dashboard.time_context.pending_effective_at, "full"),
+          })}</span>
+        </div>
+      )}
+      {/* Which day these figures cover. Without it the numbers are ambiguous
+          to anyone whose own day starts at a different hour than the server's. */}
+      <p className="metric-grid-scope" title={t("dashboard.accountingTimezoneHint")}>
+        <span>{t("dashboard.accountingTimezone", { timezone: dashboard.time_context.accounting_timezone })}</span>
+        <small>{t("dashboard.accountingPeriod", {
+          start: dashboard.time_context.period_start,
+          end: dashboard.time_context.period_end,
+        })}</small>
+      </p>
       <section className="metric-grid" aria-label={t("dashboard.todayMetrics")}>
         <Metric label={t("dashboard.requests")} value={compactNumber(today.requests)} detail={t("dashboard.attempts", { count: today.attempts })} />
         <Metric
@@ -206,6 +231,7 @@ function BreakdownList({ items, labels, empty }: { items: UsageBreakdown[]; labe
 
 function AnomalyList({ items, labels, empty }: { items: UsageAnomaly[]; labels: Record<string, string>; empty: string }) {
   const { t } = useTranslation();
+  const dateTime = useInstantFormatter();
   if (!items.length) return <div className="dashboard-empty">{empty}</div>;
   return <div className="anomaly-list">{items.map((item, index) => {
     const title = item.status !== "success" ? item.error_class || `${t("dashboard.httpError")} ${item.http_status || "—"}` : item.fallback_count > 0 ? t("dashboard.routeFallback") : t("dashboard.requestRetry");

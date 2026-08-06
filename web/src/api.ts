@@ -16,6 +16,7 @@ import type {
   RuntimeSettings,
   UIBootstrap,
   InstanceUISettings,
+  AccountingSettings,
   AdminPreferences,
   LocalePreference,
   Appearance,
@@ -171,6 +172,17 @@ export const api = {
   uiSettings: () => request<InstanceUISettings>("/settings/ui"),
   updateUISettings: (defaultLocale: SupportedLocale, revision: number) =>
     request<InstanceUISettings>("/settings/ui", json("PUT", { default_locale: defaultLocale }), `"${revision}"`),
+  accountingSettings: () => request<AccountingSettings>("/settings/accounting"),
+  // The reset window after a switch is a server judgement: the client must
+  // never derive a period boundary of its own.
+  previewAccountingTimezone: (timezone: string) =>
+    request<AccountingSettings>(`/settings/accounting?preview_timezone=${encodeURIComponent(timezone)}`),
+  // Scheduling a timezone change, not applying one: the server pins it to the
+  // end of the period in progress so a day already being billed never moves.
+  scheduleAccountingTimezone: (timezone: string, revision: number) =>
+    request<AccountingSettings>("/settings/accounting", json("PUT", { timezone }), `"${revision}"`),
+  cancelAccountingTimezoneChange: (revision: number) =>
+    request<AccountingSettings>("/settings/accounting/pending", { method: "DELETE" }, `"${revision}"`),
   preferences: () => request<AdminPreferences>("/preferences"),
   // The complete writable preference resource must be sent so updating one
   // field never clears another (PRD §4.4). Callers pass their current confirmed

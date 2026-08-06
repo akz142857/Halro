@@ -19,6 +19,11 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	// Embeds the IANA database so zone resolution is a property of this binary
+	// rather than of whatever the host happens to ship. Daily budget periods are
+	// derived from these rules; nodes disagreeing on them would place the same
+	// instant in different periods without anything surfacing the divergence.
+	_ "time/tzdata"
 
 	"github.com/akz142857/Heimdall/internal/app"
 	backuppkg "github.com/akz142857/Heimdall/internal/backup"
@@ -31,6 +36,7 @@ import (
 	"github.com/akz142857/Heimdall/internal/safelog"
 	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
 	storelock "github.com/akz142857/Heimdall/internal/store/lock"
+	"github.com/akz142857/Heimdall/internal/timezone"
 )
 
 func main() {
@@ -60,6 +66,32 @@ func reportCommandFailure(out io.Writer, err error) {
 	for _, problem := range problems {
 		fmt.Fprintf(out, "  - %s\n", strings.TrimSpace(problem))
 	}
+}
+
+// usageRetentionCutoff is the oldest partition date a prune may keep.
+//
+// Partitions are dated in UTC while a retention promise is read in the
+// operator's own day. An instance east of UTC reaches its local "N days ago"
+// while the UTC partition for that day is still current, so pruning at exactly
+// N would delete a day the operator was told they still had. retention_days is
+// therefore a floor — at least N days — bought with one extra partition of
+// storage.
+func usageRetentionCutoff(now time.Time, retentionDays int) time.Time {
+	return now.UTC().AddDate(0, 0, -(retentionDays + 1))
+}
+
+// versionReport extends the build stamp with the time zone rules this process
+// resolves against. Both belong to the same question — "which artefact is this
+// node running" — and tzdata drift between nodes is otherwise invisible.
+func versionReport() map[string]any {
+	report := map[string]any{"build": buildinfo.Current()}
+	database, err := timezone.Describe()
+	if err != nil {
+		report["tzdata"] = map[string]string{"error": err.Error()}
+		return report
+	}
+	report["tzdata"] = database
+	return report
 }
 
 // printMasterKeyCustodyNotice is the one moment this can usefully be said. The
@@ -210,7 +242,7 @@ func run(arguments []string, logger *slog.Logger) error {
 		}
 		return runHealthcheck(*healthURL, *timeout)
 	case "version":
-		return json.NewEncoder(os.Stdout).Encode(buildinfo.Current())
+		return json.NewEncoder(os.Stdout).Encode(versionReport())
 	case "init":
 		flags := flag.NewFlagSet("init", flag.ContinueOnError)
 		configPath := flags.String("config", "config.yaml", "configuration file")
@@ -610,7 +642,7 @@ func run(arguments []string, logger *slog.Logger) error {
 			}
 			return json.NewEncoder(os.Stdout).Encode(report)
 		case "prune":
-			cutoff := time.Now().UTC().AddDate(0, 0, -cfg.Usage.RetentionDays)
+			cutoff := usageRetentionCutoff(time.Now(), cfg.Usage.RetentionDays)
 			if *before != "" {
 				parsed, err := time.Parse("2006-01-02", *before)
 				if err != nil {

@@ -8,11 +8,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/akz142857/Heimdall/internal/budget"
 	"github.com/akz142857/Heimdall/internal/config"
 	"github.com/akz142857/Heimdall/internal/ledger"
 	"github.com/akz142857/Heimdall/internal/masterkey"
 	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
 	"github.com/akz142857/Heimdall/internal/store/lock"
+	"github.com/akz142857/Heimdall/internal/timezone"
 	"github.com/akz142857/Heimdall/internal/usage"
 	"github.com/akz142857/Heimdall/internal/vault"
 )
@@ -168,11 +170,54 @@ func DoctorWithOptions(ctx context.Context, cfg config.Config, options DoctorOpt
 		add("parquet", "pass", "manifest, checksums, schemas, and summaries are valid")
 	}
 
-	zone, zoneErr := time.LoadLocation(cfg.Usage.Timezone)
+	// The stored setting decides the boundary; config.yaml only seeded it. An
+	// operator who edited the file and restarted would otherwise have no way to
+	// discover that the edit did nothing.
+	accountingZone := cfg.Usage.Timezone
+	configInEffect := true
+	if store != nil {
+		switch settings, settingsErr := store.InstanceAccountingSettings(); {
+		case errors.Is(settingsErr, boltstore.ErrNotFound):
+			add("accounting_timezone", "warn", "no stored accounting timezone yet; the next start seeds it from usage.timezone")
+		case settingsErr != nil:
+			add("accounting_timezone", "fail", settingsErr.Error())
+		default:
+			accountingZone = settings.Timezone
+			configInEffect = settings.Timezone == cfg.Usage.Timezone
+			detail := fmt.Sprintf("stored=%s version=%d", settings.Timezone, settings.TimezoneVersion)
+			if settings.HasPendingChange() {
+				detail += fmt.Sprintf(" pending=%s effective=%s",
+					settings.PendingTimezone, settings.PendingEffectiveAt.UTC().Format(time.RFC3339))
+			}
+			if configInEffect {
+				add("accounting_timezone", "pass", detail)
+			} else {
+				add("accounting_timezone", "warn", detail+fmt.Sprintf(
+					"; config.yaml says %s and is no longer applied", cfg.Usage.Timezone))
+			}
+		}
+	}
+	zone, zoneErr := time.LoadLocation(accountingZone)
 	if zoneErr != nil {
 		add("clock", "fail", zoneErr.Error())
 	} else {
-		add("clock", "pass", fmt.Sprintf("system UTC=%s usage timezone=%s", time.Now().UTC().Format(time.RFC3339), zone.String()))
+		now := time.Now()
+		period, periodErr := budget.PeriodAt(now, zone)
+		if periodErr != nil {
+			add("clock", "fail", periodErr.Error())
+		} else {
+			add("clock", "pass", fmt.Sprintf("system UTC=%s accounting timezone=%s current period %s=[%s,%s)",
+				now.UTC().Format(time.RFC3339), zone.String(), period.ID,
+				period.Start.Format(time.RFC3339), period.End.Format(time.RFC3339)))
+		}
+	}
+	// tzdata drift between nodes moves period boundaries without any other
+	// symptom, so the fingerprint is reported whether or not it looks healthy —
+	// it only means something when compared against another node.
+	if database, tzErr := timezone.Describe(accountingZone); tzErr != nil {
+		add("tzdata", "fail", tzErr.Error())
+	} else {
+		add("tzdata", "pass", fmt.Sprintf("source=%s version=%s fingerprint=%s", database.Source, database.Version, database.Fingerprint))
 	}
 	var stats syscall.Statfs_t
 	if statErr := syscall.Statfs(cfg.Storage.DataDir, &stats); statErr != nil {

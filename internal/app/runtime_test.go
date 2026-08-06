@@ -101,7 +101,7 @@ func TestLedgerStateIsRebuiltDuringOpen(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer runtime.Close()
-	if got := runtime.state.Balance(event.ProjectID, event.PeriodID).ReservedMicrosUSD; got != 0 || runtime.state.PendingReservations() != 0 {
+	if got := runtime.state.Balance(event.ProjectID, event.PeriodID, event.PeriodTimezoneVersion).ReservedMicrosUSD; got != 0 || runtime.state.PendingReservations() != 0 {
 		t.Fatalf("pending pre-I/O reservation was not recovered: reserved=%d pending=%d", got, runtime.state.PendingReservations())
 	}
 }

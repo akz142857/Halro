@@ -175,15 +175,30 @@ func (a *Aggregate) PostedAdjustmentAbsoluteSince(projectID string, since time.T
 	return total
 }
 
-func (a *Aggregate) Dashboard(now time.Time, location *time.Location) Dashboard {
-	return a.DashboardForBasis(now, location, "service_period_restated")
+// Period is the accounting day a dashboard reports on, as a half-open UTC
+// interval.
+//
+// It is supplied by the caller rather than derived here. The boundary is a
+// governed setting that only the caller can resolve, and the figures must cover
+// exactly the interval the response advertises alongside them — deriving it
+// twice is how the totals and the interval drift apart.
+type Period struct {
+	Start time.Time
+	End   time.Time
 }
 
-func (a *Aggregate) DashboardForBasis(now time.Time, location *time.Location, reportingBasis string) Dashboard {
+// Contains reports whether an instant falls inside the period.
+func (p Period) Contains(instant time.Time) bool {
+	return !instant.Before(p.Start) && instant.Before(p.End)
+}
+
+func (a *Aggregate) Dashboard(now time.Time, period Period) Dashboard {
+	return a.DashboardForBasis(now, period, "service_period_restated")
+}
+
+func (a *Aggregate) DashboardForBasis(now time.Time, period Period, reportingBasis string) Dashboard {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	now = now.In(location)
-	todayYear, todayDay := now.Year(), now.YearDay()
 	since := now.Add(-7 * 24 * time.Hour).UTC().Truncate(time.Hour)
 	result := Dashboard{
 		Active: uint64(len(a.requests)), Watermark: a.watermark.Sequence,
@@ -200,8 +215,7 @@ func (a *Aggregate) DashboardForBasis(now time.Time, location *time.Location, re
 			hourIndexes[bucket.Hour.UTC().Truncate(time.Hour).Unix()] = len(result.Hourly)
 			result.Hourly = append(result.Hourly, bucket)
 		}
-		localHour := bucket.Hour.In(location)
-		if localHour.Year() == todayYear && localHour.YearDay() == todayDay {
+		if period.Contains(bucket.Hour) {
 			result.Today.Requests += bucket.Requests
 			result.Today.Attempts += bucket.Attempts
 			result.Today.InputTokens += bucket.InputTokens
@@ -213,8 +227,7 @@ func (a *Aggregate) DashboardForBasis(now time.Time, location *time.Location, re
 		}
 	}
 	for _, bucket := range a.postedAdjustmentHourly {
-		localHour := bucket.Hour.In(location)
-		if localHour.Year() == todayYear && localHour.YearDay() == todayDay {
+		if period.Contains(bucket.Hour) {
 			result.TodayPostedAdjustmentMicrosUSD += bucket.AdjustmentDeltaMicrosUSD
 		}
 	}
@@ -227,8 +240,7 @@ func (a *Aggregate) DashboardForBasis(now time.Time, location *time.Location, re
 				copy.CostMicrosUSD = copy.AdjustmentDeltaMicrosUSD
 				result.Hourly = append(result.Hourly, copy)
 			}
-			localHour := bucket.Hour.In(location)
-			if localHour.Year() == todayYear && localHour.YearDay() == todayDay {
+			if period.Contains(bucket.Hour) {
 				result.Today.AdjustmentDeltaMicrosUSD += bucket.AdjustmentDeltaMicrosUSD
 				result.Today.CostMicrosUSD += bucket.AdjustmentDeltaMicrosUSD
 			}
@@ -255,8 +267,7 @@ func (a *Aggregate) DashboardForBasis(now time.Time, location *time.Location, re
 				result.Hourly[bucketIndex].EstimatedOutputTokens += attempt.ProviderOutputTokens
 			}
 		}
-		localHour := attempt.CompletedAt.In(location)
-		if localHour.Year() == todayYear && localHour.YearDay() == todayDay {
+		if period.Contains(attempt.CompletedAt) {
 			if attempt.TokensEstimated {
 				result.Today.EstimatedInputTokens += attempt.ProviderInputTokens
 				result.Today.EstimatedOutputTokens += attempt.ProviderOutputTokens
@@ -284,8 +295,7 @@ func (a *Aggregate) DashboardForBasis(now time.Time, location *time.Location, re
 	}
 	if reportingBasis == "adjustment_posted" {
 		for _, adjustment := range a.adjustments {
-			local := adjustment.PostedAt.In(location)
-			if local.Year() != todayYear || local.YearDay() != todayDay {
+			if !period.Contains(adjustment.PostedAt) {
 				continue
 			}
 			addAdjustmentBreakdown(breakdowns["project"], adjustment.ProjectID, adjustment.DeltaMicrosUSD)

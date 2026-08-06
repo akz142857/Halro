@@ -20,6 +20,7 @@ import { MasterKeyCustodyPage } from "./pages/MasterKeyCustodyPage";
 import { DeveloperPage } from "./pages/DeveloperPage";
 import { applyLocale, applyPreference, resolveLocale } from "./i18n";
 import { applyAppearance, normalizeAppearance, resetAppearance } from "./theme";
+import { adoptTimeContext, resetAccountingTimeZone } from "./timezone";
 
 export function App() {
   const { t } = useTranslation();
@@ -63,6 +64,20 @@ export function App() {
       resetAppearance();
     }
   }, [session.data]);
+  // Every timestamp in the console renders in the server's accounting zone, so
+  // it has to be known before any page draws — not just on the pages that
+  // happen to fetch a dashboard. Signing out returns to the UTC default rather
+  // than leaving the previous instance's zone on screen.
+  const accounting = useQuery({
+    queryKey: ["system-status"],
+    queryFn: api.systemStatus,
+    enabled: Boolean(session.data),
+    staleTime: 60_000,
+  });
+  useEffect(() => {
+    if (session.data) adoptTimeContext(accounting.data?.time_context);
+    else resetAccountingTimeZone();
+  }, [session.data, accounting.data]);
   useEffect(() => {
     if (session.data && path === "/admin/login") navigate(session.data.mfa_setup_required ? "/admin/settings" : "/admin");
   }, [path, session.data]);

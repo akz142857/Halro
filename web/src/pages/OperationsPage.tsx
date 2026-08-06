@@ -15,7 +15,7 @@ import {
   useDirty,
   type InlineTestState,
 } from "../components";
-import { dateTime } from "../format";
+import { useInstantFormatter } from "../format";
 import type { AlertWebhook } from "../types";
 import { useTranslation } from "react-i18next";
 
@@ -35,6 +35,7 @@ function outcomeTone(outcome: string) {
 
 export function OperationsPage() {
   const { t } = useTranslation();
+  const dateTime = useInstantFormatter();
   const [editing, setEditing] = useState<AlertWebhook | "new" | null>(null);
   const queryClient = useQueryClient();
   const audit = useInfiniteQuery({

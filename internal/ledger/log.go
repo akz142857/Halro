@@ -20,8 +20,12 @@ const (
 	frameMagic          = "HLDG"
 	frameVersionLegacy  = 1
 	frameVersionCurrent = 2
-	frameHeaderSize     = 24
-	maxPayloadSize      = 1 << 20
+	// frameVersionPeriod marks events that carry the accounting period's own
+	// identity — its zone, version and UTC bounds — so a reader can reconstruct
+	// the boundary a charge was filed against without consulting any setting.
+	frameVersionPeriod = 3
+	frameHeaderSize    = 24
+	maxPayloadSize     = 1 << 20
 )
 
 var ErrCorrupt = errors.New("ledger is corrupt")
@@ -415,6 +419,9 @@ func encodeFrame(sequence uint64, kind EventKind, payload []byte) []byte {
 }
 
 func eventFrameVersion(event Event) byte {
+	if event.PeriodTimezone != "" {
+		return frameVersionPeriod
+	}
 	if event.Kind == EventCostAdjusted || event.LeaseMode != "" || event.PriceSnapshot != nil {
 		return frameVersionCurrent
 	}
@@ -461,7 +468,7 @@ func scan(file io.ReadSeeker, fromOffset int64, initialSequence uint64, visit fu
 			return Watermark{}, false, fmt.Errorf("%w at offset %d: invalid frame header", ErrCorrupt, offset)
 		}
 		epoch := header[4]
-		if epoch != frameVersionLegacy && epoch != frameVersionCurrent {
+		if epoch != frameVersionLegacy && epoch != frameVersionCurrent && epoch != frameVersionPeriod {
 			return Watermark{}, false, fmt.Errorf("%w at offset %d: frame epoch %d", ErrUnsupportedVersion, offset, epoch)
 		}
 		kind := EventKind(header[5])
@@ -496,10 +503,17 @@ func scan(file io.ReadSeeker, fromOffset int64, initialSequence uint64, visit fu
 		if event.Kind != kind {
 			return Watermark{}, false, fmt.Errorf("%w at offset %d: event kind mismatch", ErrCorrupt, offset)
 		}
+		// Each epoch asserts only what its own writer promised. A v2 frame
+		// promised a lease mode on accounting events; a v3 frame promises the
+		// period's identity, and may carry a reservation written through the
+		// older path that never had a lease mode to record.
 		if epoch == frameVersionCurrent {
 			if kind == EventReservationCreated && event.LeaseMode == "" || kind == EventAttemptSettled && event.LeaseMode == "" {
 				return Watermark{}, false, fmt.Errorf("%w at offset %d: v2 accounting event is missing its payload epoch fields", ErrCorrupt, offset)
 			}
+		}
+		if epoch == frameVersionPeriod && event.PeriodTimezone == "" {
+			return Watermark{}, false, fmt.Errorf("%w at offset %d: v3 event is missing its period identity", ErrCorrupt, offset)
 		}
 		nextOffset := offset + int64(frameHeaderSize) + int64(payloadLength)
 		if visit != nil {

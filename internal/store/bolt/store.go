@@ -23,7 +23,7 @@ import (
 	bbolt "go.etcd.io/bbolt"
 )
 
-const schemaVersion uint64 = 15
+const schemaVersion uint64 = 16
 
 const (
 	maxPriceVersionsPerDeployment   = 10_000
@@ -89,6 +89,7 @@ var (
 	keyMasterKeyRotationAuditIntent  = []byte("master_key_rotation_audit_intent")
 	keyRuntimeSettings               = []byte("runtime_settings")
 	keyInstanceUISettings            = []byte("instance_ui_settings")
+	keyInstanceAccountingSettings    = []byte("instance_accounting_settings")
 	keyMinimumLedgerReaderVersion    = []byte("minimum_ledger_reader_version")
 	keyLedgerFeatureEpoch            = []byte("ledger_feature_epoch")
 )
@@ -267,6 +268,16 @@ var migrations = []migration{
 			return err
 		}
 		return migrationStep(step, "after_optional_manual_price_evidence")
+	}},
+	// The record itself is written on first open from the configured zone
+	// (SeedInstanceAccountingSettings), not here: config.yaml is the seed, and
+	// this layer has no access to it. The step marks the version at which the
+	// accounting timezone stopped being read from configuration on every start.
+	{version: 16, name: "instance_accounting_settings", up: func(_ *bbolt.Tx, step func(string) error) error {
+		if err := migrationStep(step, "before_instance_accounting_settings"); err != nil {
+			return err
+		}
+		return migrationStep(step, "after_instance_accounting_settings")
 	}},
 }
 
@@ -598,6 +609,85 @@ func (s *Store) PutInstanceUISettings(settings domain.InstanceUISettings, expect
 			return err
 		}
 		return bucket.Put(keyInstanceUISettings, encoded)
+	})
+	return settings, err
+}
+
+func (s *Store) InstanceAccountingSettings() (domain.InstanceAccountingSettings, error) {
+	var settings domain.InstanceAccountingSettings
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		raw := tx.Bucket(bucketMeta).Get(keyInstanceAccountingSettings)
+		if raw == nil {
+			return ErrNotFound
+		}
+		if err := json.Unmarshal(raw, &settings); err != nil {
+			return fmt.Errorf("decode instance accounting settings: %w", err)
+		}
+		return settings.Validate()
+	})
+	return settings, err
+}
+
+func (s *Store) PutInstanceAccountingSettings(settings domain.InstanceAccountingSettings, expectedRevision uint64) (domain.InstanceAccountingSettings, error) {
+	if err := settings.Validate(); err != nil {
+		return domain.InstanceAccountingSettings{}, err
+	}
+	err := s.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(bucketMeta)
+		currentRevision := uint64(0)
+		if raw := bucket.Get(keyInstanceAccountingSettings); raw != nil {
+			var current domain.InstanceAccountingSettings
+			if err := json.Unmarshal(raw, &current); err != nil {
+				return fmt.Errorf("decode instance accounting settings: %w", err)
+			}
+			currentRevision = current.Revision
+			// The version is the ledger's, not the caller's: it advances only
+			// when a change is applied, and a client must never be able to
+			// rewind it and merge two periods that were kept apart.
+			if settings.TimezoneVersion < current.TimezoneVersion {
+				return fmt.Errorf("accounting timezone version cannot move backwards from %d to %d",
+					current.TimezoneVersion, settings.TimezoneVersion)
+			}
+		}
+		if currentRevision != expectedRevision {
+			return ErrRevisionConflict
+		}
+		settings.Revision = currentRevision + 1
+		encoded, err := json.Marshal(settings)
+		if err != nil {
+			return err
+		}
+		return bucket.Put(keyInstanceAccountingSettings, encoded)
+	})
+	return settings, err
+}
+
+// SeedInstanceAccountingSettings writes the configured zone the first time an
+// instance starts and does nothing afterwards.
+//
+// This is the whole of config.yaml's remaining authority over the accounting
+// timezone (PRD §6.2). Keeping the seed lets an unattended first deployment be
+// configured from a file; refusing to reapply it keeps a later edit of that
+// file from silently moving a boundary the administrator changed deliberately.
+func (s *Store) SeedInstanceAccountingSettings(timezone string, now time.Time) (domain.InstanceAccountingSettings, error) {
+	settings := domain.InstanceAccountingSettings{Timezone: timezone, TimezoneVersion: 1, UpdatedAt: now.UTC()}
+	if err := settings.Validate(); err != nil {
+		return domain.InstanceAccountingSettings{}, err
+	}
+	err := s.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(bucketMeta)
+		if raw := bucket.Get(keyInstanceAccountingSettings); raw != nil {
+			if err := json.Unmarshal(raw, &settings); err != nil {
+				return fmt.Errorf("decode instance accounting settings: %w", err)
+			}
+			return settings.Validate()
+		}
+		settings.Revision = 1
+		encoded, err := json.Marshal(settings)
+		if err != nil {
+			return err
+		}
+		return bucket.Put(keyInstanceAccountingSettings, encoded)
 	})
 	return settings, err
 }

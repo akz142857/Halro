@@ -17,7 +17,7 @@ import {
   StatusDot,
   type ResourceStatusFilter,
 } from "../components";
-import { compactNumber, dateTime, money } from "../format";
+import { compactNumber, money, useInstantFormatter } from "../format";
 import type { CreatedGatewayKey, GatewayKey, Project } from "../types";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
@@ -257,6 +257,7 @@ function ProjectDetail({ project }: { project: Project }) {
 
 function KeyRow({ project, value }: { project: Project; value: GatewayKey }) {
   const { t } = useTranslation();
+  const dateTime = useInstantFormatter();
   const queryClient = useQueryClient();
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["project-keys", project.id] });
   const mutation = useMutation({

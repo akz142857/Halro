@@ -94,7 +94,7 @@ type Runtime struct {
 	usage               *usage.Aggregate
 	usageCollector      *usage.Collector
 	usageExporter       *usage.Exporter
-	usageLocation       *time.Location
+	periods             *budget.PeriodResolver
 	closeOnce           sync.Once
 	closeErr            error
 	draining            atomic.Bool
@@ -247,14 +247,24 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		secretVault.Close()
 		return fail(fmt.Errorf("load auth snapshot: %w", err))
 	}
-	location, err := time.LoadLocation(cfg.Usage.Timezone)
+	// config.yaml seeds the accounting timezone the first time and has no say
+	// afterwards: the stored setting is versioned and audited, and a later edit
+	// of the file must not move a boundary out from under a deliberate change.
+	accountingSettings, err := metadata.SeedInstanceAccountingSettings(cfg.Usage.Timezone, time.Now())
 	if err != nil {
 		ledgerLog.Close()
 		metadata.Close()
 		secretVault.Close()
-		return fail(fmt.Errorf("load usage timezone: %w", err))
+		return fail(fmt.Errorf("load accounting settings: %w", err))
 	}
-	accounting, err := budget.New(ledgerLog, ledgerState, location)
+	periods, err := budget.NewPeriodResolver(accountingSettings)
+	if err != nil {
+		ledgerLog.Close()
+		metadata.Close()
+		secretVault.Close()
+		return fail(fmt.Errorf("resolve accounting timezone: %w", err))
+	}
+	accounting, err := budget.New(ledgerLog, ledgerState, periods)
 	if err != nil {
 		ledgerLog.Close()
 		metadata.Close()
@@ -469,7 +479,7 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		usage:               usageAggregate,
 		usageCollector:      usageCollector,
 		usageExporter:       usageExporter,
-		usageLocation:       location,
+		periods:             periods,
 	}
 	if err := runtime.drainAdminMFAAuditIntents(ctx); err != nil {
 		auditLog.Close()
@@ -606,6 +616,13 @@ func (r *Runtime) runUsageMaintenance(ctx context.Context) {
 		case <-checkpointTicker.C:
 			r.saveUsageCheckpoint()
 			r.saveTokenGuardCheckpoint()
+			// Settles the stored record once a scheduled timezone change is
+			// due. The resolver already reports the new zone from the effective
+			// instant, so lateness here changes no boundary — only when the
+			// audit event lands.
+			if err := r.applyDueAccountingTimezoneChange(time.Now()); err != nil {
+				r.logger.Warn("scheduled accounting timezone change not applied", "error", err)
+			}
 		case <-parquetTicker.C:
 			r.exportUsageParquet()
 		case <-ctx.Done():
@@ -1018,6 +1035,9 @@ func (r *Runtime) adminRouter() http.Handler {
 	router.With(r.requireAdminMutation).Put("/admin/api/v1/settings", r.updateAdminSettings)
 	router.With(r.requireAdmin).Get("/admin/api/v1/settings/ui", r.getAdminUISettings)
 	router.With(r.requireAdminMutation).Put("/admin/api/v1/settings/ui", r.updateAdminUISettings)
+	router.With(r.requireAdmin).Get("/admin/api/v1/settings/accounting", r.getAdminAccountingSettings)
+	router.With(r.requireAdminMutation).Put("/admin/api/v1/settings/accounting", r.updateAdminAccountingSettings)
+	router.With(r.requireAdminMutation).Delete("/admin/api/v1/settings/accounting/pending", r.cancelAdminAccountingTimezoneChange)
 	router.With(r.requireAdmin).Get("/admin/api/v1/preferences", r.getAdminPreferences)
 	router.With(r.requireAdminMutation).Put("/admin/api/v1/preferences", r.updateAdminPreferences)
 	router.With(r.requireAdmin).Get("/admin/api/v1/projects", r.listAdminProjects)
