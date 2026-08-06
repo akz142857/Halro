@@ -1,0 +1,145 @@
+# Heimdall configuration — written on first run, safe for a single host.
+#
+# Every value below is the built-in default; deleting a key restores it. A
+# config-driven setting is one that cannot change while the gateway is serving:
+# listeners, TLS, storage, key custody, security boundaries. Everything an
+# operator tunes day to day — providers, budgets, limits, policies — lives in
+# the Admin console, not here.
+#
+# The complete annotated reference is configs/config.example.yaml.
+# Restart Heimdall after editing this file.
+
+version: 1
+
+server:
+  # Loopback by default: nothing here is exposed to the network until you say
+  # so, and a non-loopback listener is refused unless TLS is enabled.
+  gateway_listen: 127.0.0.1:8080
+  admin_listen: 127.0.0.1:8081
+  metrics_listen: 127.0.0.1:9090
+  read_header_timeout: 5s
+  read_body_timeout: 15s
+  max_header_bytes: 32768
+  # Bounds one request body. Callers above this get 413 rather than the gateway
+  # deciding how much memory an unauthenticated body may cost.
+  max_request_bytes: 10485760
+
+tls:
+  # Required before any listener may bind a routable address.
+  enabled: false
+  cert_file: ""
+  key_file: ""
+
+storage:
+  data_dir: ./data
+  metadata_file: heimdall.db
+  master_key:
+    # "file" keeps the key on this host: simplest, and it means whoever holds
+    # the file holds everything the vault protects. "key_slots" wraps it with a
+    # cloud KMS instead — see docs/guides/operator-guide.md before switching,
+    # and note that non-repudiation of the audit chain assumes it.
+    mode: file
+    file: ./master.key
+
+admin:
+  session_ttl: 8h0m0s
+  idle_timeout: 30m0s
+  # Failed logins per minute, per source, before the gateway starts refusing.
+  login_rpm: 5
+  # Set when the console is reached through a proxy under a different origin;
+  # it is what CSRF checks compare against.
+  external_origin: ""
+  # "required" forces every administrator through an authenticator. Remote Admin
+  # deployments should use it.
+  mfa_policy: optional
+  # While enabled, the Admin listener also serves real Gateway calls so an
+  # administrator can send a billed request from the console. Harmless on a
+  # loopback-only Admin listener; on a reachable one it means network controls
+  # applied to the Gateway listener do not cover this path, and startup warns.
+  developer_workbench: enabled
+  # Manual cost adjustments: soft limit warns, hard limit refuses, daily limit
+  # caps the total one administrator can move in a day.
+  adjustment_soft_limit_micros_usd: 10000000
+  adjustment_hard_limit_micros_usd: 100000000
+  adjustment_daily_hard_limit_micros_usd: 500000000
+
+usage:
+  # "balanced" batches accounting writes; "strict" fsyncs every one of them,
+  # which costs throughput and loses nothing on a crash.
+  durability: balanced
+  # Decides where a day ends for daily budgets and usage reporting.
+  timezone: UTC
+  wal_queue_capacity: 4096
+  wal_max_batch: 128
+  wal_flush_interval: 2ms
+  analytics_queue_capacity: 4096
+  checkpoint_interval: 1m0s
+  parquet_interval: 1h0m0s
+  # Analytics retention. The accounting ledger itself is not trimmed by this.
+  retention_days: 90
+
+gateway:
+  # The whole request, across retries and fallbacks.
+  route_total_timeout: 2m0s
+  attempt_connect_timeout: 5s
+  attempt_response_header_timeout: 1m0s
+  stream_idle_timeout: 1m0s
+  # How long a client may take to accept what the gateway is writing. Applied
+  # per write, so it bounds a stalled reader without cutting a long stream.
+  downstream_write_timeout: 15s
+  stream_max_duration: 10m0s
+  max_total_attempts: 3
+  health_probe_interval: 30s
+  pricing_clock_rollback_tolerance: 2s
+  pricing_clock_forward_tolerance: 30s
+  # What to do when no price is known for a model: "reject" refuses the request
+  # rather than serving traffic it cannot account for.
+  pricing_unknown_policy: reject
+
+retry:
+  max_attempts_per_target: 2
+  base_delay: 100ms
+  max_delay: 2s
+  jitter: true
+
+circuit_breaker:
+  consecutive_failures: 5
+  open_duration: 30s
+  half_open_max_requests: 1
+
+alerts:
+  queue_capacity: 1024
+  workers: 2
+  timeout: 5s
+  max_attempts: 3
+  base_delay: 250ms
+  max_delay: 5s
+  # Repeats of the same alert inside this window are dropped.
+  dedup_cooldown: 1m0s
+
+security:
+  # Provider endpoints and webhooks resolving to private, loopback, link-local,
+  # carrier-grade NAT or reserved addresses are refused unless allowed here.
+  # Cloud metadata addresses stay refused either way.
+  allow_private_provider_endpoints: false
+  allow_private_webhooks: false
+  # Only enable behind a proxy you control, and list its addresses below:
+  # without them a forwarded header is a client-supplied source IP.
+  trust_proxy_headers: false
+  # Required as soon as trust_proxy_headers is on, and it is the whole of the
+  # trust: only a hop inside one of these ranges may state a client's address.
+  # trusted_proxy_cidrs: ["10.0.0.0/8"]
+
+metrics:
+  enabled: true
+  require_auth: true
+  # Empty means the bearer token is derived from the Master Key; point this at
+  # a credential file to manage it yourself.
+  credential_file: ""
+  max_concurrent_scrapes: 2
+  write_timeout: 5s
+  tls:
+    enabled: false
+    cert_file: ""
+    key_file: ""
+    client_ca_file: ""

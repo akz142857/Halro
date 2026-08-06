@@ -70,8 +70,12 @@ Guard cannot silently lose their source-IP signal.
 
 ## Configuration reference
 
-`configs/config.example.yaml` is the canonical complete v1 example. Important
-groups are:
+`heimdall start` writes an annotated `config.yaml` when none exists, carrying
+the built-in defaults with a comment on each setting that has a consequence.
+Deleting a key restores its default; a test keeps that file and the built-in
+defaults from drifting apart. `configs/config.example.yaml` remains the
+canonical complete v1 example, including the settings the default file leaves
+out. Important groups are:
 
 - `server`: three listener addresses and HTTP size/time limits;
 - `tls`: certificate and private-key paths shared by enabled listeners;
