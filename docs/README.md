@@ -28,7 +28,7 @@
 
 | 文档 | 内容 |
 | --- | --- |
-| [Architecture Decision Records](adr/) | 编号决策记录（0001–0015） |
+| [Architecture Decision Records](adr/) | 编号决策记录（0001–0016） |
 | [多协议 LLM API、Provider 与 Realtime 架构设计](architecture/api-provider-realtime-architecture.zh-CN.md) | 主架构设计 |
 | [Distributed state ownership](architecture/distributed-state-ownership.md) | 分布式演进与状态归属 |
 | [Threat model](architecture/threat-model.md) | v1 威胁模型 |
