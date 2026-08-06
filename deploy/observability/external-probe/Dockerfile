@@ -2,8 +2,13 @@ FROM golang:1.26.5-bookworm@sha256:1ecb7edf62a0408027bd5729dfd6b1b8766e578e8df93
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
+# Only what the dead-man itself imports. The narrow list is the point: this
+# image exists to keep watching when the gateway cannot, so it must not
+# silently acquire the gateway's dependencies. A test asserts this list still
+# matches the binary's actual import graph.
 COPY cmd/heimdall-deadman ./cmd/heimdall-deadman
 COPY internal/deadman ./internal/deadman
+COPY internal/safelog ./internal/safelog
 RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/heimdall-deadman ./cmd/heimdall-deadman
 RUN mkdir -p /rootfs/var/lib/heimdall-deadman /rootfs/var/log/heimdall-deadman
 
