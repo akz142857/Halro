@@ -183,7 +183,7 @@ func (r *Runtime) deleteAdminTokenGuardPolicy(writer http.ResponseWriter, reques
 		adminPreconditionFailed(writer)
 		return
 	}
-	if err := r.validateTokenGuardCanDeactivate(request, policy.ID, false); err != nil {
+	if err := r.validateTokenGuardCanDelete(request, policy.ID); err != nil {
 		writeJSON(writer, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
 	}
@@ -289,13 +289,30 @@ func (r *Runtime) validateTokenGuardCanDeactivate(request *http.Request, id stri
 	if enabled {
 		return nil
 	}
+	return r.validateNoTokenGuardReference(request, id, func(project domain.Project) bool {
+		return project.Enabled
+	})
+}
+
+// validateTokenGuardCanDelete consults disabled projects as well; see
+// validateRedactionCanDelete for why a reference held by a switched-off project
+// is still a reference.
+func (r *Runtime) validateTokenGuardCanDelete(request *http.Request, id string) error {
+	return r.validateNoTokenGuardReference(request, id, func(domain.Project) bool { return true })
+}
+
+func (r *Runtime) validateNoTokenGuardReference(
+	request *http.Request,
+	id string,
+	consider func(domain.Project) bool,
+) error {
 	projects, err := r.store.ListProjects(request.Context())
 	if err != nil {
 		return errors.New("projects are unavailable")
 	}
 	for _, project := range projects {
-		if project.DeletedAt == nil && project.Enabled && project.TokenGuardPolicyID == id {
-			return errors.New("remove this policy from active projects first")
+		if project.DeletedAt == nil && consider(project) && project.TokenGuardPolicyID == id {
+			return errors.New("remove this policy from the projects that reference it first")
 		}
 	}
 	return nil

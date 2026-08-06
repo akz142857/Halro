@@ -99,4 +99,21 @@ func TestAdminTokenGuardPolicyLifecycleAndPreview(t *testing.T) {
 	if blocked.Code != http.StatusConflict {
 		t.Fatalf("referenced delete status=%d body=%s", blocked.Code, blocked.Body.String())
 	}
+
+	// A switched-off project still holds the reference, so the policy still
+	// cannot go: re-enabling it later would find nothing behind the ID.
+	project, err := runtime.store.GetProject(context.Background(), "prj_guard")
+	if err != nil {
+		t.Fatal(err)
+	}
+	project.Enabled = false
+	if _, err := runtime.store.PutProject(context.Background(), project, project.Revision); err != nil {
+		t.Fatal(err)
+	}
+	stillBlocked := performAdminMutation(t, runtime, cookie, csrf,
+		http.MethodDelete, "/admin/api/v1/token-guard-policies/"+policy.ID, `"1"`, nil)
+	if stillBlocked.Code != http.StatusConflict {
+		t.Fatalf("disabled project released the reference: status=%d body=%s",
+			stillBlocked.Code, stillBlocked.Body.String())
+	}
 }

@@ -175,7 +175,7 @@ func (r *Runtime) deleteAdminRedactionPolicy(writer http.ResponseWriter, request
 		adminPreconditionFailed(writer)
 		return
 	}
-	if err := r.validateRedactionCanDeactivate(request, policy.ID, false); err != nil {
+	if err := r.validateRedactionCanDelete(request, policy.ID); err != nil {
 		writeJSON(writer, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
 	}
@@ -253,6 +253,10 @@ func (input redactionPolicyInput) policy(
 	return redaction.CompilePolicy(policy)
 }
 
+// validateRedactionCanDeactivate refuses to switch a policy off while a project
+// that is serving traffic still routes through it. A project that is itself
+// switched off is not consulted: nothing flows through it, and the policy it
+// names still exists.
 func (r *Runtime) validateRedactionCanDeactivate(
 	request *http.Request,
 	id string,
@@ -261,13 +265,33 @@ func (r *Runtime) validateRedactionCanDeactivate(
 	if enabled {
 		return nil
 	}
+	return r.validateNoRedactionReference(request, id, func(project domain.Project) bool {
+		return project.Enabled
+	})
+}
+
+// validateRedactionCanDelete is the stricter half: a disabled project keeps its
+// policy reference and can be switched back on at any time, so removing the
+// policy it names leaves a dangling ID in the store — and the engine's lookup
+// miss is fail-open. The re-enable path does refuse the project later, but by
+// then the deletion has happened and the operator is left with a project they
+// can no longer switch on.
+func (r *Runtime) validateRedactionCanDelete(request *http.Request, id string) error {
+	return r.validateNoRedactionReference(request, id, func(domain.Project) bool { return true })
+}
+
+func (r *Runtime) validateNoRedactionReference(
+	request *http.Request,
+	id string,
+	consider func(domain.Project) bool,
+) error {
 	projects, err := r.store.ListProjects(request.Context())
 	if err != nil {
 		return errors.New("projects are unavailable")
 	}
 	for _, project := range projects {
-		if project.DeletedAt == nil && project.Enabled && project.RedactionPolicyID == id {
-			return errors.New("remove this policy from active projects first")
+		if project.DeletedAt == nil && consider(project) && project.RedactionPolicyID == id {
+			return errors.New("remove this policy from the projects that reference it first")
 		}
 	}
 	return nil
