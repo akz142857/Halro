@@ -2,6 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { api, clearSensitiveClientState } from "./api";
 import { confirmNavigation, Link, navigate, setNavigationBlocked, usePathname } from "./navigation";
 import { resetAppearance } from "./theme";
+import { useAccountingTimeZone } from "./timezone";
 import { useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -38,6 +39,7 @@ export function Layout({
 }) {
   const { t } = useTranslation();
   const path = usePathname();
+  const timeZone = useAccountingTimeZone();
   const queryClient = useQueryClient();
   const [loggingOut, setLoggingOut] = useState(false);
   const logout = async () => {
@@ -94,7 +96,10 @@ export function Layout({
       <main className="main" id="main-content" tabIndex={-1}>
         <div className="topline">
           <span><i className="pulse" /> {t("navigation.gatewayOnline")}</span>
-          <span>{t("navigation.localControl")}</span>
+          {/* Every figure in the console is measured against this zone, so it
+              belongs where it is always visible rather than on the one page
+              that happens to report a daily total. */}
+          <span>{t("navigation.localControl")} / <span className="topline-timezone">{timeZone}</span></span>
         </div>
         {children}
       </main>
