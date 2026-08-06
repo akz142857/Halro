@@ -14,6 +14,7 @@ import {
   OverflowMenu,
   ResourceToolbar,
   useDirty,
+  type ReauthValues,
 } from "../components";
 import type { InlineTestState } from "../components";
 import type { AccessSurface, Credential, CredentialScheme, Provider, ProviderBinding, ProviderCapabilities, ProviderType } from "../types";
@@ -201,7 +202,7 @@ function ProviderRow({ provider, credential, highlighted, onCredentialClick, onE
     onSettled: () => queryClient.invalidateQueries({ queryKey: ["providers"] }),
   });
   const deleteMutation = useMutation({
-    mutationFn: () => api.deleteProvider(provider.id, provider.revision),
+    mutationFn: (reauth: ReauthValues) => api.deleteProvider(provider.id, provider.revision, reauth),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["providers"] }),
   });
   const stateMutation = useMutation({
@@ -250,7 +251,7 @@ function ProviderRow({ provider, credential, highlighted, onCredentialClick, onE
           <button className="button ghost" disabled={readOnly} onClick={onEdit}>{t("common.edit")}</button>
           <button className="button ghost provider-expand" aria-expanded={expanded} aria-controls={`provider-details-${provider.id}`} onClick={() => setExpanded((value) => !value)}>{expanded ? t("providers.collapseDetails") : t("providers.expandDetails")}</button>
           {provider.enabled ? <ConfirmButton className="button ghost" label={t("common.disable")} title={t("providers.disableTitle")} confirmLabel={t("providers.disableConfirm", { name: provider.name })} disabled={stateMutation.isPending} onConfirm={() => stateMutation.mutate()} /> : <button className="button ghost" disabled={stateMutation.isPending} onClick={() => stateMutation.mutate()}>{t("common.enable")}</button>}
-          <OverflowMenu label={t("providers.moreActions")}><ConfirmButton label={t("common.delete")} confirmLabel={t("providers.deleteProvider", { name: provider.name })} disabled={deleteMutation.isPending} onConfirm={() => deleteMutation.mutate()} /></OverflowMenu>
+          <OverflowMenu label={t("providers.moreActions")}><ConfirmButton label={t("common.delete")} confirmLabel={t("providers.deleteProvider", { name: provider.name })} disabled={deleteMutation.isPending} requireStepUp onConfirm={(reauth) => deleteMutation.mutate(reauth)} /></OverflowMenu>
         </div>
         {expanded && <div id={`provider-details-${provider.id}`} className="provider-row-content provider-expanded-content">
           <div className="provider-facts">
@@ -283,7 +284,7 @@ function CredentialRow({ credential, useCount, highlighted, onUsageClick }: { cr
   const [expanded, setExpanded] = useState(false);
   const queryClient = useQueryClient();
   const remove = useMutation({
-    mutationFn: () => api.deleteCredential(credential.id, credential.revision),
+    mutationFn: (reauth: ReauthValues) => api.deleteCredential(credential.id, credential.revision, reauth),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["credentials"] }),
   });
   return (
@@ -297,7 +298,7 @@ function CredentialRow({ credential, useCount, highlighted, onUsageClick }: { cr
         <div className="row-actions credential-actions">
           <button className="button ghost" onClick={() => setRotating(true)}>{t("providers.rotate")}</button>
           <button className="button ghost credential-expand" aria-expanded={expanded} aria-controls={`credential-details-${credential.id}`} onClick={() => setExpanded((value) => !value)}>{expanded ? t("providers.collapseDetails") : t("providers.expandDetails")}</button>
-          <OverflowMenu label={t("providers.moreActions")}><ConfirmButton label={t("common.delete")} confirmLabel={t("providers.deleteCredential", { name: credential.name })} disabled={remove.isPending} onConfirm={() => remove.mutate()} /></OverflowMenu>
+          <OverflowMenu label={t("providers.moreActions")}><ConfirmButton label={t("common.delete")} confirmLabel={t("providers.deleteCredential", { name: credential.name })} disabled={remove.isPending} requireStepUp onConfirm={(reauth) => remove.mutate(reauth)} /></OverflowMenu>
         </div>
         {expanded && <section id={`credential-details-${credential.id}`} className="credential-expanded-content" aria-label={t("providers.credentialDetailsTitle")}>
           <header className="credential-detail-header">

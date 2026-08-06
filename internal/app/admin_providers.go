@@ -137,6 +137,13 @@ func (r *Runtime) deleteAdminCredential(writer http.ResponseWriter, request *htt
 	if !ok {
 		return
 	}
+	// Deleting is not undoable and a stolen session should not be enough to do
+	// it. The revision precondition is checked first: it costs a header parse,
+	// while the step-up costs an Argon2id verification, and a request that
+	// cannot succeed anyway should not buy one.
+	if !r.requireDestructiveStepUp(writer, request) {
+		return
+	}
 	credentialID := chi.URLParam(request, "id")
 	r.adminTopologyMu.Lock()
 	defer r.adminTopologyMu.Unlock()
@@ -271,6 +278,13 @@ func (r *Runtime) updateAdminProvider(writer http.ResponseWriter, request *http.
 func (r *Runtime) deleteAdminProvider(writer http.ResponseWriter, request *http.Request) {
 	expected, ok := requireRevision(writer, request)
 	if !ok {
+		return
+	}
+	// Deleting is not undoable and a stolen session should not be enough to do
+	// it. The revision precondition is checked first: it costs a header parse,
+	// while the step-up costs an Argon2id verification, and a request that
+	// cannot succeed anyway should not buy one.
+	if !r.requireDestructiveStepUp(writer, request) {
 		return
 	}
 	r.adminTopologyMu.Lock()
@@ -699,6 +713,13 @@ func (r *Runtime) updateAdminRoute(writer http.ResponseWriter, request *http.Req
 func (r *Runtime) deleteAdminRoute(writer http.ResponseWriter, request *http.Request) {
 	expected, ok := requireRevision(writer, request)
 	if !ok {
+		return
+	}
+	// Deleting is not undoable and a stolen session should not be enough to do
+	// it. The revision precondition is checked first: it costs a header parse,
+	// while the step-up costs an Argon2id verification, and a request that
+	// cannot succeed anyway should not buy one.
+	if !r.requireDestructiveStepUp(writer, request) {
 		return
 	}
 	r.adminTopologyMu.Lock()

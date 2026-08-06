@@ -93,6 +93,8 @@ type Runtime struct {
 	adminLogin          map[string]adminLoginWindow
 	adminSetupRateMu    sync.Mutex
 	adminSetupRate      map[string]adminLoginWindow
+	adminStepUpMu       sync.Mutex
+	adminStepUp         map[string]adminLoginWindow
 	setupMu             sync.Mutex
 	setupToken          string
 	setupTokenNeeded    bool
@@ -551,6 +553,7 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		adminSessions:       adminSessions,
 		adminLogin:          make(map[string]adminLoginWindow),
 		adminSetupRate:      make(map[string]adminLoginWindow),
+		adminStepUp:         make(map[string]adminLoginWindow),
 		setupToken:          setupToken,
 		setupTokenNeeded:    setupRequiresToken(cfg),
 		usage:               usageAggregate,

@@ -235,6 +235,7 @@ export const zhCN = {
     settingUp: "正在安全初始化…",
     setupSecurity: "受来源校验、限速、Argon2id 与可信审计链保护",
     currentPassword: "当前密码",
+    stepUpDestructive: "此操作不可撤销，请重新验证你的身份后继续。",
     authenticatorCodeOptional: "身份验证器验证码（已启用 MFA 时必填）",
     usernameRequired: "请输入用户名",
     passwordRequired: "请输入密码",

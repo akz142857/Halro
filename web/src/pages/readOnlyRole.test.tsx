@@ -141,3 +141,41 @@ describe("admin accounts", () => {
     expect(screen.getByLabelText(/权限档位/)).toHaveValue("read_only");
   });
 });
+
+describe("destructive step-up", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  // The credentials have to reach the call, not just appear in the dialog: a
+  // prompt that collects a password and then sends the old bodiless request
+  // looks correct and protects nothing.
+  it("sends the operator's own credentials with the delete", async () => {
+    const route = {
+      id: "route_chat", public_model: "chat", deployment_id: "deployment_gpt",
+      priority: 10, strategy: "ordered", enabled: true, revision: 3, created_at: "", updated_at: "",
+    } as Route;
+    vi.spyOn(api, "routes").mockResolvedValue({ items: [route], next_cursor: "" });
+    vi.spyOn(api, "deployments").mockResolvedValue({
+      items: [{ id: "deployment_gpt", name: "GPT", provider_id: "provider_openai", provider_model: "gpt-5.1" } as Deployment],
+      next_cursor: "",
+    });
+    vi.spyOn(api, "providers").mockResolvedValue({ items: [{ id: "provider_openai", name: "OpenAI" } as Provider], next_cursor: "" });
+    const remove = vi.spyOn(api, "deleteRoute").mockResolvedValue(undefined as never);
+    renderAs("administrator", <RoutesPage />);
+
+    const row = (await screen.findByText("chat")).closest("tr");
+    fireEvent.click(within(row!).getByRole("button", { name: "删除" }));
+    const dialog = await screen.findByRole("alertdialog");
+
+    // Nothing is deleted until the operator has proved who they are.
+    expect(within(dialog).getByRole("button", { name: "删除" })).toBeDisabled();
+
+    fireEvent.change(within(dialog).getByLabelText(/当前密码/), { target: { value: "correct horse battery staple" } });
+    fireEvent.change(within(dialog).getByLabelText(/身份验证器验证码/), { target: { value: "123456" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "删除" }));
+
+    await waitFor(() => expect(remove).toHaveBeenCalledWith("route_chat", 3, {
+      currentPassword: "correct horse battery staple",
+      totpCode: "123456",
+    }));
+  });
+});

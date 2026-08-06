@@ -114,7 +114,7 @@ func (r *Runtime) createAdminCostAdjustment(writer http.ResponseWriter, request 
 		writeJSON(writer, http.StatusCreated, map[string]any{"adjustment": prior.Event})
 		return
 	}
-	if !r.verifyPricingReauthentication(writer, request, admin.session.Username, password, totpCode) {
+	if !r.verifyAdminStepUp(writer, request, admin.session.Username, password, totpCode) {
 		return
 	}
 	settled, ok := r.state.SettledAttempt(spec.AttemptID)

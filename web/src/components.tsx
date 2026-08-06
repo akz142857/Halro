@@ -284,14 +284,19 @@ export function ConfirmButton({
   onConfirm,
   disabled,
   disabledReason,
+  requireStepUp = false,
 }: {
   label: string;
   confirmLabel: string;
   title?: string;
   className?: string;
-  onConfirm: () => void;
+  onConfirm: (reauth: ReauthValues) => void;
   disabled?: boolean;
   disabledReason?: string;
+  // Actions the server step-up gates ask for the credentials here, in the same
+  // dialog that states the consequence — an operator confirms and proves who
+  // they are in one step rather than being sent to a second prompt.
+  requireStepUp?: boolean;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -303,6 +308,10 @@ export function ConfirmButton({
   // them.
   const readOnly = useIsReadOnly();
   const unavailable = disabled || readOnly;
+  const [reauth, setReauth] = useState<ReauthValues>({ currentPassword: "", totpCode: "" });
+  // Cleared on the way out rather than left in state: the password must not
+  // survive a dialog the operator closed.
+  const close = () => { setReauth({ currentPassword: "", totpCode: "" }); setOpen(false); };
   const reason = readOnly ? t("navigation.readOnlyAction") : disabledReason;
   // A disabled button carries no tooltip in some browsers and is skipped by screen
   // reader tab order, so the reason is also stated in the accessibility tree.
@@ -312,12 +321,24 @@ export function ConfirmButton({
       <button className={className} disabled={unavailable} title={blocked ? reason : undefined} aria-describedby={blocked ? reasonID : undefined} onClick={() => setOpen(true)}>{label}</button>
       {blocked && <span id={reasonID} className="sr-only">{reason}</span>}
       {open && (
-        <Modal dangerous title={title || t("common.confirmAction")} describedBy={consequenceID} onClose={() => setOpen(false)}>
+        <Modal
+          dangerous
+          title={title || t("common.confirmAction")}
+          describedBy={consequenceID}
+          dirty={Boolean(reauth.currentPassword)}
+          onClose={close}
+        >
           <div className="confirmation-dialog">
             <p id={consequenceID}>{confirmLabel}</p>
+            {requireStepUp && <ReauthFields values={reauth} onChange={setReauth} description={t("auth.stepUpDestructive")} />}
             <div className="form-actions">
-              <button type="button" className="button ghost" data-modal-initial onClick={() => setOpen(false)}>{t("common.cancel")}</button>
-              <button type="button" className="button danger" onClick={() => { setOpen(false); onConfirm(); }}>{label}</button>
+              <button type="button" className="button ghost" data-modal-initial onClick={close}>{t("common.cancel")}</button>
+              <button
+                type="button"
+                className="button danger"
+                disabled={requireStepUp && !reauth.currentPassword}
+                onClick={() => { const material = reauth; close(); onConfirm(material); }}
+              >{label}</button>
             </div>
           </div>
         </Modal>

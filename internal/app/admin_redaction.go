@@ -164,6 +164,13 @@ func (r *Runtime) deleteAdminRedactionPolicy(writer http.ResponseWriter, request
 	if !ok {
 		return
 	}
+	// Deleting is not undoable and a stolen session should not be enough to do
+	// it. The revision precondition is checked first: it costs a header parse,
+	// while the step-up costs an Argon2id verification, and a request that
+	// cannot succeed anyway should not buy one.
+	if !r.requireDestructiveStepUp(writer, request) {
+		return
+	}
 	r.adminProjectMu.Lock()
 	defer r.adminProjectMu.Unlock()
 	policy, err := r.store.GetRedactionPolicy(request.Context(), chi.URLParam(request, "id"))

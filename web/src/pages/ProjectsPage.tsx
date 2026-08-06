@@ -16,6 +16,7 @@ import {
   ResourceToolbar,
   StatusDot,
   type ResourceStatusFilter,
+  type ReauthValues,
 } from "../components";
 import { compactNumber, money, useInstantFormatter } from "../format";
 import type { CreatedGatewayKey, GatewayKey, Project } from "../types";
@@ -171,7 +172,7 @@ function ProjectDetail({ project }: { project: Project }) {
   });
   const queryClient = useQueryClient();
   const remove = useMutation({
-    mutationFn: () => api.deleteProject(project.id, `"${project.revision}"`),
+    mutationFn: (reauth: ReauthValues) => api.deleteProject(project.id, `"${project.revision}"`, reauth),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["projects"] }),
   });
   return (
@@ -194,7 +195,8 @@ function ProjectDetail({ project }: { project: Project }) {
             label={t("common.delete")}
             confirmLabel={t("projects.deleteConfirm", { name: project.name })}
             disabled={remove.isPending}
-            onConfirm={() => remove.mutate()}
+            requireStepUp
+            onConfirm={(reauth) => remove.mutate(reauth)}
           />
         </div>
       </header>
@@ -274,7 +276,7 @@ function KeyRow({ project, value }: { project: Project; value: GatewayKey }) {
     onSuccess: refresh,
   });
   const remove = useMutation({
-    mutationFn: () => api.deleteKey(project.id, value.id, value.revision),
+    mutationFn: (reauth: ReauthValues) => api.deleteKey(project.id, value.id, value.revision, reauth),
     onSuccess: refresh,
   });
   const expired = Boolean(value.expires_at && new Date(value.expires_at).getTime() <= Date.now());
@@ -304,7 +306,8 @@ function KeyRow({ project, value }: { project: Project; value: GatewayKey }) {
             label={t("common.delete")}
             confirmLabel={t("projects.keyDeleteConfirm", { name: value.name })}
             disabled={remove.isPending}
-            onConfirm={() => remove.mutate()}
+            requireStepUp
+            onConfirm={(reauth) => remove.mutate(reauth)}
           />
         </div>
       </div>

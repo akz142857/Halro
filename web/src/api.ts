@@ -102,6 +102,18 @@ function json(method: string, value?: unknown): RequestInit {
   return { method, body: value === undefined ? undefined : JSON.stringify(value) };
 }
 
+// Reauth is the step-up material every destructive Admin delete carries. The
+// server verifies it per request rather than issuing an elevated session, so it
+// travels with the call rather than being held anywhere.
+export interface Reauth {
+  currentPassword: string;
+  totpCode: string;
+}
+
+function stepUpBody(reauth: Reauth) {
+  return { current_password: reauth.currentPassword, totp_code: reauth.totpCode };
+}
+
 export const api = {
   uiBootstrap: () => request<UIBootstrap>("/ui/bootstrap").then((result) => result.data),
   setupStatus: () =>
@@ -210,8 +222,8 @@ export const api = {
     request<Project>("/projects", json("POST", value)),
   updateProject: (id: string, value: unknown, etag: string) =>
     request<Project>(`/projects/${encodeURIComponent(id)}`, json("PUT", value), etag),
-  deleteProject: (id: string, etag: string) =>
-    request<void>(`/projects/${encodeURIComponent(id)}`, json("DELETE"), etag),
+  deleteProject: (id: string, etag: string, reauth: Reauth) =>
+    request<void>(`/projects/${encodeURIComponent(id)}`, json("DELETE", stepUpBody(reauth)), etag),
   unblockProject: (id: string) =>
     request<{ status: "unblocked"; subjects: number }>(
       `/projects/${encodeURIComponent(id)}/unblock`,
@@ -244,10 +256,10 @@ export const api = {
       json("PUT", value),
       `"${revision}"`,
     ),
-  deleteKey: (projectID: string, keyID: string, revision: number) =>
+  deleteKey: (projectID: string, keyID: string, revision: number, reauth: Reauth) =>
     request<void>(
       `/projects/${encodeURIComponent(projectID)}/keys/${encodeURIComponent(keyID)}`,
-      json("DELETE"),
+      json("DELETE", stepUpBody(reauth)),
       `"${revision}"`,
     ),
   credentials: () =>
@@ -260,10 +272,10 @@ export const api = {
       json("PUT", value),
       `"${revision}"`,
     ),
-  deleteCredential: (id: string, revision: number) =>
+  deleteCredential: (id: string, revision: number, reauth: Reauth) =>
     request<void>(
       `/credentials/${encodeURIComponent(id)}`,
-      json("DELETE"),
+      json("DELETE", stepUpBody(reauth)),
       `"${revision}"`,
     ),
   providers: () => request<Page<Provider>>("/providers").then((value) => value.data),
@@ -287,10 +299,10 @@ export const api = {
       `/providers/${encodeURIComponent(id)}/test${bindingID ? `?binding_id=${encodeURIComponent(bindingID)}` : ""}`,
       json("POST"),
     ).then((value) => value.data),
-  deleteProvider: (id: string, revision: number) =>
+  deleteProvider: (id: string, revision: number, reauth: Reauth) =>
     request<void>(
       `/providers/${encodeURIComponent(id)}`,
-      json("DELETE"),
+      json("DELETE", stepUpBody(reauth)),
       `"${revision}"`,
     ),
   deployments: () =>
@@ -321,10 +333,10 @@ export const api = {
       json("PUT", value),
       `"${revision}"`,
     ),
-  deleteDeployment: (id: string, revision: number) =>
+  deleteDeployment: (id: string, revision: number, reauth: Reauth) =>
     request<void>(
       `/deployments/${encodeURIComponent(id)}`,
-      json("DELETE"),
+      json("DELETE", stepUpBody(reauth)),
       `"${revision}"`,
     ),
   testDeployment: (id: string) =>
@@ -353,8 +365,8 @@ export const api = {
       json("PUT", value),
       `"${revision}"`,
     ),
-  deleteRoute: (id: string, revision: number) =>
-    request<void>(`/routes/${encodeURIComponent(id)}`, json("DELETE"), `"${revision}"`),
+  deleteRoute: (id: string, revision: number, reauth: Reauth) =>
+    request<void>(`/routes/${encodeURIComponent(id)}`, json("DELETE", stepUpBody(reauth)), `"${revision}"`),
   testRoute: (id: string) =>
     request<{ status: "healthy"; latency_ms: number; tested_at: string; revision: number }>(
       `/routes/${encodeURIComponent(id)}/test`,
@@ -379,10 +391,10 @@ export const api = {
       json("PUT", value),
       `"${revision}"`,
     ),
-  deleteTokenGuardPolicy: (id: string, revision: number) =>
+  deleteTokenGuardPolicy: (id: string, revision: number, reauth: Reauth) =>
     request<void>(
       `/token-guard-policies/${encodeURIComponent(id)}`,
-      json("DELETE"),
+      json("DELETE", stepUpBody(reauth)),
       `"${revision}"`,
     ),
   previewTokenGuardPolicy: (id: string, value: unknown) =>
@@ -402,10 +414,10 @@ export const api = {
       json("PUT", value),
       `"${revision}"`,
     ),
-  deleteRedactionPolicy: (id: string, revision: number) =>
+  deleteRedactionPolicy: (id: string, revision: number, reauth: Reauth) =>
     request<void>(
       `/redaction-policies/${encodeURIComponent(id)}`,
-      json("DELETE"),
+      json("DELETE", stepUpBody(reauth)),
       `"${revision}"`,
     ),
   testRedactionPolicy: (id: string, value: unknown) =>
@@ -424,8 +436,8 @@ export const api = {
       json("PUT", value),
       `"${revision}"`,
     ),
-  deleteAlert: (id: string, revision: number) =>
-    request<void>(`/alerts/${encodeURIComponent(id)}`, json("DELETE"), `"${revision}"`),
+  deleteAlert: (id: string, revision: number, reauth: Reauth) =>
+    request<void>(`/alerts/${encodeURIComponent(id)}`, json("DELETE", stepUpBody(reauth)), `"${revision}"`),
   testAlert: (id: string) =>
     request<{ status: string; latency_ms: number; status_code: number; response: string }>(
       `/alerts/${encodeURIComponent(id)}/test`,

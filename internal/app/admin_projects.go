@@ -131,6 +131,13 @@ func (r *Runtime) deleteAdminProject(writer http.ResponseWriter, request *http.R
 	if !ok {
 		return
 	}
+	// Deleting is not undoable and a stolen session should not be enough to do
+	// it. The revision precondition is checked first: it costs a header parse,
+	// while the step-up costs an Argon2id verification, and a request that
+	// cannot succeed anyway should not buy one.
+	if !r.requireDestructiveStepUp(writer, request) {
+		return
+	}
 	r.adminProjectMu.Lock()
 	defer r.adminProjectMu.Unlock()
 	project, err := r.store.GetProject(request.Context(), chi.URLParam(request, "id"))
@@ -302,6 +309,13 @@ func (r *Runtime) updateAdminProjectKey(writer http.ResponseWriter, request *htt
 func (r *Runtime) deleteAdminProjectKey(writer http.ResponseWriter, request *http.Request) {
 	expected, ok := requireRevision(writer, request)
 	if !ok {
+		return
+	}
+	// Deleting is not undoable and a stolen session should not be enough to do
+	// it. The revision precondition is checked first: it costs a header parse,
+	// while the step-up costs an Argon2id verification, and a request that
+	// cannot succeed anyway should not buy one.
+	if !r.requireDestructiveStepUp(writer, request) {
 		return
 	}
 	r.adminProjectMu.Lock()

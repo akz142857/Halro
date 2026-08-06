@@ -14,6 +14,7 @@ import {
   StatusDot,
   useDirty,
   type InlineTestState,
+  type ReauthValues,
 } from "../components";
 import { useInstantFormatter } from "../format";
 import type { AlertWebhook } from "../types";
@@ -163,7 +164,7 @@ function AlertRow({
   // Per row, not per page: a page-wide mutation greys out every other row's buttons and
   // leaves one shared "delivered" notice that never says which endpoint it belongs to.
   const test = useMutation({ mutationFn: () => api.testAlert(webhook.id), onSuccess: onMutated, onError: onMutated });
-  const remove = useMutation({ mutationFn: () => api.deleteAlert(webhook.id, webhook.revision), onSuccess: onMutated });
+  const remove = useMutation({ mutationFn: (reauth: ReauthValues) => api.deleteAlert(webhook.id, webhook.revision, reauth), onSuccess: onMutated });
   const toggle = useMutation({
     mutationFn: () => api.updateAlert(
       webhook.id,
@@ -222,7 +223,8 @@ function AlertRow({
             label={t("common.delete")}
             confirmLabel={t("operations.deleteConfirm", { name: webhook.name })}
             disabled={remove.isPending}
-            onConfirm={() => remove.mutate()}
+            requireStepUp
+            onConfirm={(reauth) => remove.mutate(reauth)}
           />
         </div>
         {/* Several chat platforms answer 200 and reject the payload in the body. Showing the

@@ -92,7 +92,7 @@ func TestAdminRedactionPolicyLifecycleTestAndReferenceProtection(t *testing.T) {
 		t.Fatalf("unexpected policy bindings: %#v", page.Items)
 	}
 	blocked := performAdminMutation(t, runtime, cookie, csrf,
-		http.MethodDelete, "/admin/api/v1/redaction-policies/"+policy.ID, `"1"`, nil)
+		http.MethodDelete, "/admin/api/v1/redaction-policies/"+policy.ID, `"1"`, stepUp())
 	if blocked.Code != http.StatusConflict {
 		t.Fatalf("referenced delete status=%d body=%s", blocked.Code, blocked.Body.String())
 	}
@@ -110,7 +110,7 @@ func TestAdminRedactionPolicyLifecycleTestAndReferenceProtection(t *testing.T) {
 		t.Fatal(err)
 	}
 	stillBlocked := performAdminMutation(t, runtime, cookie, csrf,
-		http.MethodDelete, "/admin/api/v1/redaction-policies/"+policy.ID, `"1"`, nil)
+		http.MethodDelete, "/admin/api/v1/redaction-policies/"+policy.ID, `"1"`, stepUp())
 	if stillBlocked.Code != http.StatusConflict {
 		t.Fatalf("disabled project released the reference: status=%d body=%s",
 			stillBlocked.Code, stillBlocked.Body.String())
@@ -121,7 +121,7 @@ func TestAdminRedactionPolicyLifecycleTestAndReferenceProtection(t *testing.T) {
 		t.Fatal(err)
 	}
 	released := performAdminMutation(t, runtime, cookie, csrf,
-		http.MethodDelete, "/admin/api/v1/redaction-policies/"+policy.ID, `"1"`, nil)
+		http.MethodDelete, "/admin/api/v1/redaction-policies/"+policy.ID, `"1"`, stepUp())
 	if released.Code != http.StatusNoContent {
 		t.Fatalf("delete after the reference was removed: status=%d body=%s",
 			released.Code, released.Body.String())

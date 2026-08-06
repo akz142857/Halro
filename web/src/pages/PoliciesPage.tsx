@@ -10,6 +10,7 @@ import {
   Modal,
   PageHeader,
   StatusDot,
+  type ReauthValues,
 } from "../components";
 import { compactNumber, money } from "../format";
 import type { TokenGuardPolicy, TokenGuardPreview } from "../types";
@@ -51,8 +52,8 @@ export function PoliciesPage() {
   );
   const queryClient = useQueryClient();
   const remove = useMutation({
-    mutationFn: (policy: TokenGuardPolicy) =>
-      api.deleteTokenGuardPolicy(policy.id, policy.revision),
+    mutationFn: ({ policy, reauth }: { policy: TokenGuardPolicy; reauth: ReauthValues }) =>
+      api.deleteTokenGuardPolicy(policy.id, policy.revision, reauth),
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: ["token-guard-policies"] }),
   });
@@ -84,7 +85,7 @@ export function PoliciesPage() {
           <td><span className={`badge ${policy.action === "temporary_block" ? "warning" : ""}`}>{policyActionLabel(t, policy.action)}</span></td>
           <td><strong>{compactNumber(policy.request_tokens)} / {compactNumber(policy.tokens_per_minute)} TPM</strong><small>{money(policy.cost_micros_per_minute)} · {policy.concurrency} {t("policies.concurrency")} · {policy.ewma_enabled ? `${policy.ewma_multiplier}× EWMA` : t("policies.ewmaOff")}</small></td>
           <td>{t("policyManagement.projectCount", { count: policy.bound_projects ?? 0 })}</td>
-          <td><div className="row-actions policy-row-actions"><button className="button ghost" onClick={() => setPreviewing(policy)}>{t("policies.simulate")}</button><button className="button ghost" disabled={readOnly} onClick={() => setEditing(policy)}>{t("common.edit")}</button><ConfirmButton label={t("common.delete")} confirmLabel={t("policies.deleteConfirm", { name: policy.name })} disabled={remove.isPending} onConfirm={() => remove.mutate(policy)} /></div></td>
+          <td><div className="row-actions policy-row-actions"><button className="button ghost" onClick={() => setPreviewing(policy)}>{t("policies.simulate")}</button><button className="button ghost" disabled={readOnly} onClick={() => setEditing(policy)}>{t("common.edit")}</button><ConfirmButton label={t("common.delete")} confirmLabel={t("policies.deleteConfirm", { name: policy.name })} disabled={remove.isPending} requireStepUp onConfirm={(reauth) => remove.mutate({ policy, reauth })} /></div></td>
         </tr>)}</tbody></table>{remove.isError && <ErrorState error={remove.error} />}</div>}
         {policies.hasNextPage && <button className="button ghost policy-load-more" disabled={policies.isFetchingNextPage} onClick={() => policies.fetchNextPage()}>{policies.isFetchingNextPage ? t("common.loading") : t("common.loadMore")}</button>}
       </section>}

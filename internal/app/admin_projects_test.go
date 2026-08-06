@@ -182,7 +182,7 @@ func TestAdminProjectAndKeyLifecycle(t *testing.T) {
 	if missingRevision.Code != http.StatusPreconditionRequired {
 		t.Fatalf("delete without If-Match status=%d", missingRevision.Code)
 	}
-	deleteProject = adminRequest(t, http.MethodDelete, "/admin/api/v1/projects/"+project.ID, nil)
+	deleteProject = adminRequest(t, http.MethodDelete, "/admin/api/v1/projects/"+project.ID, stepUp())
 	deleteProject.AddCookie(cookie)
 	deleteProject.Header.Set("X-CSRF-Token", csrf)
 	deleteProject.Header.Set("If-Match", `"1"`)
@@ -360,7 +360,7 @@ func TestAdminGatewayKeyDeleteRevokesImmediately(t *testing.T) {
 		t.Fatalf("key delete without If-Match status=%d", missingRevisionResponse.Code)
 	}
 
-	remove := adminRequest(t, http.MethodDelete, keyPath, nil)
+	remove := adminRequest(t, http.MethodDelete, keyPath, stepUp())
 	remove.AddCookie(cookie)
 	remove.Header.Set("X-CSRF-Token", csrf)
 	remove.Header.Set("If-Match", `"1"`)

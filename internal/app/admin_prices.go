@@ -125,7 +125,7 @@ func (r *Runtime) createAdminDeploymentPrice(writer http.ResponseWriter, request
 		if !r.verifyPricingPassword(writer, request, admin.session.Username, password) {
 			return
 		}
-	} else if !r.verifyPricingReauthentication(writer, request, admin.session.Username, password, totpCode) {
+	} else if !r.verifyAdminStepUp(writer, request, admin.session.Username, password, totpCode) {
 		return
 	}
 	r.adminTopologyMu.Lock()
@@ -237,7 +237,7 @@ func (r *Runtime) confirmRestoredDeploymentPricing(writer http.ResponseWriter, r
 		return
 	}
 	admin := request.Context().Value(adminContextKey{}).(adminRequestContext)
-	if !r.verifyPricingReauthentication(writer, request, admin.session.Username, input.CurrentPassword, input.TOTPCode) {
+	if !r.verifyAdminStepUp(writer, request, admin.session.Username, input.CurrentPassword, input.TOTPCode) {
 		return
 	}
 	clear([]byte(input.CurrentPassword))
@@ -396,7 +396,7 @@ func (r *Runtime) adoptAdminDeploymentPriceProposal(writer http.ResponseWriter, 
 		return
 	}
 	admin := request.Context().Value(adminContextKey{}).(adminRequestContext)
-	if !r.verifyPricingReauthentication(writer, request, admin.session.Username, input.CurrentPassword, input.TOTPCode) {
+	if !r.verifyAdminStepUp(writer, request, admin.session.Username, input.CurrentPassword, input.TOTPCode) {
 		return
 	}
 	clear([]byte(input.CurrentPassword))
@@ -602,13 +602,14 @@ func (r *Runtime) drainPricingAuditIntents(ctx context.Context) error {
 	return nil
 }
 
-// verifyPricingReauthentication is the general step-up primitive (current
-// password + a fresh TOTP code resupplied in the request body, verified
-// per-request rather than a short-lived elevated session) — the name is
-// pricing's because pricing needed it first, but nothing in the body is
-// pricing-specific. Other high-risk mutations reuse it through the
-// verifyAdminReauthentication alias rather than duplicating it.
-func (r *Runtime) verifyPricingReauthentication(writer http.ResponseWriter, request *http.Request, username, passwordText, code string) bool {
+// verifyReauthenticationMaterial checks step-up material: the caller's current
+// password plus a fresh TOTP code, resupplied in the request body and verified
+// per request rather than exchanged for a short-lived elevated session.
+//
+// It is deliberately not the entry point. On its own it is unbounded and
+// silent, which is an offline-speed password oracle behind a stolen session.
+// Call verifyAdminStepUp, which adds the rate limit and the audit record.
+func (r *Runtime) verifyReauthenticationMaterial(writer http.ResponseWriter, request *http.Request, username, passwordText, code string) bool {
 	if !r.verifyPricingPassword(writer, request, username, passwordText) {
 		return false
 	}

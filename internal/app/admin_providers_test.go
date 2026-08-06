@@ -154,7 +154,7 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 		t.Fatalf("admin accepted forged capability evidence: %d %s", forgedEvidence.Code, forgedEvidence.Body.String())
 	}
 	blockedCredentialDelete := performAdminMutation(t, runtime, cookie, csrf,
-		http.MethodDelete, "/admin/api/v1/credentials/"+credential.ID, `"1"`, nil,
+		http.MethodDelete, "/admin/api/v1/credentials/"+credential.ID, `"1"`, stepUp(),
 	)
 	if blockedCredentialDelete.Code != http.StatusConflict {
 		t.Fatalf("credential delete with provider reference status=%d body=%s",
@@ -313,14 +313,14 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 	}
 
 	blockedProviderDelete := performAdminMutation(t, runtime, cookie, csrf,
-		http.MethodDelete, "/admin/api/v1/providers/"+instance.ID, `"1"`, nil,
+		http.MethodDelete, "/admin/api/v1/providers/"+instance.ID, `"1"`, stepUp(),
 	)
 	if blockedProviderDelete.Code != http.StatusConflict {
 		t.Fatalf("provider delete with active deployment status=%d body=%s",
 			blockedProviderDelete.Code, blockedProviderDelete.Body.String())
 	}
 	blockedDeploymentDelete := performAdminMutation(t, runtime, cookie, csrf,
-		http.MethodDelete, "/admin/api/v1/deployments/"+deployment.ID, `"`+strconv.FormatUint(deployment.Revision, 10)+`"`, nil,
+		http.MethodDelete, "/admin/api/v1/deployments/"+deployment.ID, `"`+strconv.FormatUint(deployment.Revision, 10)+`"`, stepUp(),
 	)
 	if blockedDeploymentDelete.Code != http.StatusConflict {
 		t.Fatalf("deployment delete with active route status=%d body=%s",
@@ -409,7 +409,7 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 		t.Fatalf("route validation was not persisted: %#v", persistedRoute)
 	}
 	deleteRoute := performAdminMutation(t, runtime, cookie, csrf,
-		http.MethodDelete, "/admin/api/v1/routes/"+route.ID, `"`+strconv.FormatUint(testedRoute.Revision, 10)+`"`, nil,
+		http.MethodDelete, "/admin/api/v1/routes/"+route.ID, `"`+strconv.FormatUint(testedRoute.Revision, 10)+`"`, stepUp(),
 	)
 	if deleteRoute.Code != http.StatusNoContent {
 		t.Fatalf("route delete status=%d body=%s", deleteRoute.Code, deleteRoute.Body.String())
@@ -465,32 +465,32 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 		t.Fatalf("deployment validation was not persisted: %#v", persistedTest)
 	}
 	deleteDeployment := performAdminMutation(t, runtime, cookie, csrf,
-		http.MethodDelete, "/admin/api/v1/deployments/"+deployment.ID, `"`+strconv.FormatUint(disabledDeployment.Revision, 10)+`"`, nil,
+		http.MethodDelete, "/admin/api/v1/deployments/"+deployment.ID, `"`+strconv.FormatUint(disabledDeployment.Revision, 10)+`"`, stepUp(),
 	)
 	if deleteDeployment.Code != http.StatusNoContent {
 		t.Fatalf("deployment delete status=%d body=%s", deleteDeployment.Code, deleteDeployment.Body.String())
 	}
 	deleteProvider := performAdminMutation(t, runtime, cookie, csrf,
-		http.MethodDelete, "/admin/api/v1/providers/"+instance.ID, `"1"`, nil,
+		http.MethodDelete, "/admin/api/v1/providers/"+instance.ID, `"1"`, stepUp(),
 	)
 	if deleteProvider.Code != http.StatusNoContent {
 		t.Fatalf("provider delete status=%d body=%s", deleteProvider.Code, deleteProvider.Body.String())
 	}
 	deleteMediaProvider := performAdminMutation(t, runtime, cookie, csrf,
-		http.MethodDelete, "/admin/api/v1/providers/"+mediaOnly.ID, `"1"`, nil,
+		http.MethodDelete, "/admin/api/v1/providers/"+mediaOnly.ID, `"1"`, stepUp(),
 	)
 	if deleteMediaProvider.Code != http.StatusNoContent {
 		t.Fatalf("media provider delete status=%d body=%s", deleteMediaProvider.Code, deleteMediaProvider.Body.String())
 	}
 	deleteMultiBindingProvider := performAdminMutation(t, runtime, cookie, csrf,
-		http.MethodDelete, "/admin/api/v1/providers/"+multiBinding.ID, `"1"`, nil,
+		http.MethodDelete, "/admin/api/v1/providers/"+multiBinding.ID, `"1"`, stepUp(),
 	)
 	if deleteMultiBindingProvider.Code != http.StatusNoContent {
 		t.Fatalf("multi-binding provider delete status=%d body=%s", deleteMultiBindingProvider.Code, deleteMultiBindingProvider.Body.String())
 	}
 	deleteCredential := performAdminMutation(t, runtime, cookie, csrf,
 		http.MethodDelete, "/admin/api/v1/credentials/"+credential.ID,
-		`"`+strconv.FormatUint(credential.Revision, 10)+`"`, nil,
+		`"`+strconv.FormatUint(credential.Revision, 10)+`"`, stepUp(),
 	)
 	if deleteCredential.Code != http.StatusNoContent {
 		t.Fatalf("credential delete status=%d body=%s", deleteCredential.Code, deleteCredential.Body.String())

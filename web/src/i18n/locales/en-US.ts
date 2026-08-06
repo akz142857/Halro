@@ -235,6 +235,7 @@ export const enUS = {
     settingUp: "Initializing securely…",
     setupSecurity: "Protected by origin checks, rate limits, Argon2id, and the trusted audit chain",
     currentPassword: "Current password",
+    stepUpDestructive: "This cannot be undone. Re-confirm your identity to continue.",
     authenticatorCodeOptional: "Authenticator code (required when MFA is enabled)",
     usernameRequired: "Enter a username",
     passwordRequired: "Enter a password",

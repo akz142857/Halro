@@ -164,6 +164,13 @@ func (r *Runtime) deleteAdminDeployment(writer http.ResponseWriter, request *htt
 	if !ok {
 		return
 	}
+	// Deleting is not undoable and a stolen session should not be enough to do
+	// it. The revision precondition is checked first: it costs a header parse,
+	// while the step-up costs an Argon2id verification, and a request that
+	// cannot succeed anyway should not buy one.
+	if !r.requireDestructiveStepUp(writer, request) {
+		return
+	}
 	r.adminTopologyMu.Lock()
 	defer r.adminTopologyMu.Unlock()
 	deployment, err := r.store.GetDeployment(request.Context(), chi.URLParam(request, "id"))

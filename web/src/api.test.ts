@@ -67,3 +67,42 @@ function response(payload: unknown, status = 200) {
     headers: { "Content-Type": "application/json" },
   });
 }
+
+describe("destructive deletes carry step-up material", () => {
+  afterEach(() => {
+    clearSensitiveClientState();
+    vi.unstubAllGlobals();
+  });
+
+  // One case per endpoint rather than one representative: the body is written
+  // per method, so a method that forgets it is exactly what this has to catch.
+  const deletes: Array<[string, (reauth: { currentPassword: string; totpCode: string }) => Promise<unknown>]> = [
+    ["/projects/prj_1", (r) => api.deleteProject("prj_1", '"1"', r)],
+    ["/projects/prj_1/keys/key_1", (r) => api.deleteKey("prj_1", "key_1", 1, r)],
+    ["/credentials/cred_1", (r) => api.deleteCredential("cred_1", 1, r)],
+    ["/providers/prov_1", (r) => api.deleteProvider("prov_1", 1, r)],
+    ["/deployments/dep_1", (r) => api.deleteDeployment("dep_1", 1, r)],
+    ["/routes/route_1", (r) => api.deleteRoute("route_1", 1, r)],
+    ["/token-guard-policies/tg_1", (r) => api.deleteTokenGuardPolicy("tg_1", 1, r)],
+    ["/redaction-policies/red_1", (r) => api.deleteRedactionPolicy("red_1", 1, r)],
+    ["/alerts/alert_1", (r) => api.deleteAlert("alert_1", 1, r)],
+  ];
+
+  it.each(deletes)("sends the operator's credentials when deleting %s", async (path, call) => {
+    let sent: RequestInit | undefined;
+    vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      sent = init;
+      return new Response(null, { status: 204 });
+    }));
+
+    await call({ currentPassword: "correct horse battery staple", totpCode: "123456" });
+
+    expect(sent?.method).toBe("DELETE");
+    expect(sent?.body).toBeTruthy();
+    expect(JSON.parse(String(sent?.body))).toEqual({
+      current_password: "correct horse battery staple",
+      totp_code: "123456",
+    });
+    expect(path).toBeTruthy();
+  });
+});

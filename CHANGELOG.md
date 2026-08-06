@@ -36,6 +36,21 @@ semantic versioning.
 
 ### Changed
 
+- **Breaking (Admin API, pre-1.0).** Deleting a project, gateway key,
+  credential, provider, deployment, route, Token Guard policy, redaction policy
+  or alert now requires step-up re-authentication: the caller resupplies their
+  own current password, plus a TOTP code when they have MFA enrolled, in a JSON
+  body on the DELETE. A request without that body is refused with 401
+  `recent_reauth_required`. The console asks for it in the same dialog that
+  states the consequence. Any other API client of these endpoints must be
+  updated. This lands before the first tag deliberately — afterwards it would
+  need a migration rather than a default.
+- Step-up re-authentication is bounded and audited. Five failures per account
+  per minute, after which further attempts are refused with 429
+  `reauth_rate_limited`; successes do not consume the budget, so an operator
+  cleaning up several resources is not locked out for doing nothing wrong.
+  Previously an authenticated session could try passwords without limit or
+  record.
 - Closing a form with unsaved input asks first. Escape, the backdrop and Cancel
   all go through the same question, and keeping the form keeps every field.
 - The interface declares CJK font families and no longer renders labels below

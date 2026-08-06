@@ -95,7 +95,7 @@ func TestAdminTokenGuardPolicyLifecycleAndPreview(t *testing.T) {
 		t.Fatalf("unexpected policy bindings: %#v", page.Items)
 	}
 	blocked := performAdminMutation(t, runtime, cookie, csrf,
-		http.MethodDelete, "/admin/api/v1/token-guard-policies/"+policy.ID, `"1"`, nil)
+		http.MethodDelete, "/admin/api/v1/token-guard-policies/"+policy.ID, `"1"`, stepUp())
 	if blocked.Code != http.StatusConflict {
 		t.Fatalf("referenced delete status=%d body=%s", blocked.Code, blocked.Body.String())
 	}
@@ -111,7 +111,7 @@ func TestAdminTokenGuardPolicyLifecycleAndPreview(t *testing.T) {
 		t.Fatal(err)
 	}
 	stillBlocked := performAdminMutation(t, runtime, cookie, csrf,
-		http.MethodDelete, "/admin/api/v1/token-guard-policies/"+policy.ID, `"1"`, nil)
+		http.MethodDelete, "/admin/api/v1/token-guard-policies/"+policy.ID, `"1"`, stepUp())
 	if stillBlocked.Code != http.StatusConflict {
 		t.Fatalf("disabled project released the reference: status=%d body=%s",
 			stillBlocked.Code, stillBlocked.Body.String())

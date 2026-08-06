@@ -18,6 +18,7 @@ import {
   PageHeader,
   StatusDot,
   useDirty,
+  type ReauthValues,
 } from "../components";
 import type { InlineTestState } from "../components";
 import type { Deployment, Provider, Route } from "../types";
@@ -37,7 +38,7 @@ export function RoutesPage() {
   const providers = useQuery({ queryKey: ["providers"], queryFn: api.providers });
   const queryClient = useQueryClient();
   const remove = useMutation({
-    mutationFn: (route: Route) => api.deleteRoute(route.id, route.revision),
+    mutationFn: ({ route, reauth }: { route: Route; reauth: ReauthValues }) => api.deleteRoute(route.id, route.revision, reauth),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["routes"] }),
   });
   const deploymentByID = useMemo(
@@ -96,7 +97,8 @@ export function RoutesPage() {
             <ConfirmButton
               label={t("common.delete")}
               confirmLabel={t("routes.deleteConfirm", { name: row.original.public_model })}
-              onConfirm={() => remove.mutate(row.original)}
+              requireStepUp
+              onConfirm={(reauth) => remove.mutate({ route: row.original, reauth })}
               disabled={remove.isPending}
             />
           </div>

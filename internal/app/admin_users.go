@@ -10,11 +10,12 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// verifyAdminReauthentication is verifyPricingReauthentication under the
-// name that matches what it is used for here — see that function's comment
-// for why there is only one implementation.
+// verifyAdminReauthentication is verifyAdminStepUp under the name that matches
+// what it is used for here. It shares the rate limit and the audit trail with
+// every other step-up in the console: a per-endpoint budget would let an
+// attacker take the same number of guesses again at each endpoint.
 func (r *Runtime) verifyAdminReauthentication(writer http.ResponseWriter, request *http.Request, username, passwordText, code string) bool {
-	return r.verifyPricingReauthentication(writer, request, username, passwordText, code)
+	return r.verifyAdminStepUp(writer, request, username, passwordText, code)
 }
 
 type adminUserView struct {

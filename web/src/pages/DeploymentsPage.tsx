@@ -13,6 +13,7 @@ import {
   PageHeader,
   StatusDot,
   useDirty,
+  type ReauthValues,
 } from "../components";
 import { money, useInstantFormatter } from "../format";
 import type { Deployment, DeploymentPriceVersion, DeploymentTargetKind, Provider, ProviderBinding, ProviderCapabilities } from "../types";
@@ -145,7 +146,7 @@ function DeploymentRow({
     onSettled: () => queryClient.invalidateQueries({ queryKey: ["deployments"] }),
   });
   const remove = useMutation({
-    mutationFn: () => api.deleteDeployment(deployment.id, deployment.revision),
+    mutationFn: (reauth: ReauthValues) => api.deleteDeployment(deployment.id, deployment.revision, reauth),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["deployments"] }),
   });
   const state = useMutation({
@@ -224,7 +225,7 @@ function DeploymentRow({
           </span>
           <OverflowMenu label={t("deployments.moreActions")}>
             <button className="button ghost" onClick={onReplace}>{t("deployments.createReplacement")}</button>
-            <ConfirmButton label={t("common.delete")} confirmLabel={t("deployments.deleteConfirm", { name: deployment.name })} onConfirm={() => remove.mutate()} disabled={remove.isPending || routeBlocked} disabledReason={routeBlocked ? t("deployments.routeBlocked") : undefined} />
+            <ConfirmButton label={t("common.delete")} confirmLabel={t("deployments.deleteConfirm", { name: deployment.name })} requireStepUp onConfirm={(reauth) => remove.mutate(reauth)} disabled={remove.isPending || routeBlocked} disabledReason={routeBlocked ? t("deployments.routeBlocked") : undefined} />
           </OverflowMenu>
         </div>
       </div>
