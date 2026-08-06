@@ -60,7 +60,8 @@ curl http://127.0.0.1:8080/v1/chat/completions \
 ```
 
 For SDK examples and the complete Admin workflow, read the
-[中文使用手册](docs/guides/user-guide.zh-CN.md). For deployment, upgrades, backup,
+[User Guide](docs/guides/user-guide.md), also available in
+[简体中文](docs/guides/user-guide.zh-CN.md). For deployment, upgrades, backup,
 recovery, and hardening, use the [Operator Guide](docs/guides/operator-guide.md).
 
 ## Data durability and encrypted backup
@@ -214,7 +215,7 @@ contract, and production boundaries are documented in the
 
 ### Use and operations
 
-- [中文使用手册](docs/guides/user-guide.zh-CN.md)
+- [User Guide](docs/guides/user-guide.md) · [中文使用手册](docs/guides/user-guide.zh-CN.md)
 - [Operator Guide](docs/guides/operator-guide.md)
 - [Backup and restore](docs/guides/backup-restore.md)
 - [Metrics reference](docs/contracts/metrics-reference.md)
