@@ -151,13 +151,26 @@ type Manager struct {
 	events         chan Event
 	droppedEvents  atomic.Uint64
 	subjectCreates atomic.Uint64
+	// now is the clock the checkpoint paths read. Admission takes its time from
+	// the caller, but restore decides whether a persisted block has expired, and
+	// that decision was unreachable from a test.
+	now func() time.Time
 }
 
 func New(policies []domain.TokenGuardPolicy) (*Manager, error) {
+	return NewWithClock(policies, nil)
+}
+
+// NewWithClock builds a Manager reading the supplied clock. Nil selects time.Now.
+func NewWithClock(policies []domain.TokenGuardPolicy, now func() time.Time) (*Manager, error) {
+	if now == nil {
+		now = time.Now
+	}
 	manager := &Manager{
 		policies: make(map[string]domain.TokenGuardPolicy),
 		subjects: make(map[string]*subject),
 		events:   make(chan Event, 256),
+		now:      now,
 	}
 	if err := manager.ReplacePolicies(policies); err != nil {
 		return nil, err
@@ -405,7 +418,7 @@ func leaseFor(current *subject, policy domain.TokenGuardPolicy, input Input, hel
 }
 
 func (m *Manager) MarshalCheckpoint() ([]byte, error) {
-	now := time.Now()
+	now := m.now()
 	m.metadataMu.RLock()
 	subjects := make([]*subject, 0, len(m.subjects))
 	for _, current := range m.subjects {
@@ -483,7 +496,7 @@ func (m *Manager) RestoreCheckpoint(payload []byte) error {
 			if item.Violations < 0 || (item.Status != "" && item.Status != StatusNormal && item.Status != StatusSuspicious && item.Status != StatusTemporarilyBlocked) {
 				return errors.New("invalid Token Guard checkpoint runtime state")
 			}
-			now := time.Now()
+			now := m.now()
 			runtimePresent := item.Violations > 0 || item.Status == StatusSuspicious || item.Status == StatusTemporarilyBlocked ||
 				!item.LastViolation.IsZero() || !item.BlockedUntil.IsZero()
 			if !item.Baseline.Initialized && !runtimePresent {
@@ -512,7 +525,7 @@ func (m *Manager) RestoreCheckpoint(payload []byte) error {
 			projectID: item.ProjectID, keyID: item.KeyID,
 			status: status, violations: violations, lastViolation: lastViolation, blockedUntil: blockedUntil,
 			buckets: make(map[int64]*bucket), lastEvent: make(map[string]time.Time), baseline: item.Baseline,
-			lastSeen: time.Now(),
+			lastSeen: m.now(),
 		}
 	}
 	for key, current := range next {
