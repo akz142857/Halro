@@ -146,6 +146,18 @@ func (r *Runtime) writeMetrics(writer http.ResponseWriter) error {
 	fmt.Fprintf(output, "heimdall_metrics_scrape_rejected_total %d\n", r.metricsBusy.Load())
 	metricHeader(output, "heimdall_metrics_render_errors_total", "counter", "Metrics responses that failed while flushing to the client.")
 	fmt.Fprintf(output, "heimdall_metrics_render_errors_total %d\n", r.metricsRenderErrs.Load())
+	if r.config.Audit.Anchor.Enabled {
+		// Emission is fail-open, so silence is what a broken witness looks
+		// like. Alert on staleness against Audit.Anchor.Interval rather than
+		// on the failure counter alone: an anchor that stopped being emitted
+		// at all increments nothing.
+		metricHeader(output, "heimdall_audit_anchor_last_emit_timestamp_seconds", "gauge", "Unix time of the most recent audit anchor emission, or 0 if none has been emitted.")
+		fmt.Fprintf(output, "heimdall_audit_anchor_last_emit_timestamp_seconds %d\n", r.anchorLastEmitUnix.Load())
+		metricHeader(output, "heimdall_audit_anchor_emit_failures_total", "counter", "Audit anchor emissions that failed and were dropped.")
+		fmt.Fprintf(output, "heimdall_audit_anchor_emit_failures_total %d\n", r.anchorEmitFailures.Load())
+		metricHeader(output, "heimdall_audit_anchor_auth_failures_total", "counter", "Rejected audit anchor authentication attempts.")
+		fmt.Fprintf(output, "heimdall_audit_anchor_auth_failures_total %d\n", r.anchorAuthFailed.Load())
+	}
 	metricHeader(output, "heimdall_fallbacks_total", "counter", "Provider fallback transitions.")
 	fmt.Fprintf(output, "heimdall_fallbacks_total %d\n", usageMetrics.Fallbacks)
 	metricHeader(output, "heimdall_usage_queue_depth", "gauge", "Current durable Ledger append queue depth.")

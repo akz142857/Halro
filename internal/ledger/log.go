@@ -57,6 +57,21 @@ var ErrUnsupportedVersion = errors.New("ledger version is unsupported")
 // can silently truncate past.
 var ErrTampered = errors.New("ledger chain integrity check failed")
 
+// visitError tags an error as the caller's, raised by the visit callback,
+// rather than the log's own. scan cannot tell the two apart once it returns a
+// bare error, and the distinction decides whether a failed replay condemns the
+// ledger. Unwrap is preserved, so callers still match on their own sentinels
+// (context.Canceled above all) exactly as before.
+type visitError struct{ err error }
+
+func (e visitError) Error() string { return e.err.Error() }
+func (e visitError) Unwrap() error { return e.err }
+
+func isCallerVisitError(err error) bool {
+	var visit visitError
+	return errors.As(err, &visit)
+}
+
 // chainVerifier carries the running chain state across a full scan from the
 // start of the file. It is only meaningful when the scan begins at offset 0
 // with sequence 0 — the only case where "no prior frame" (a zero previous
@@ -359,7 +374,15 @@ func (l *Log) Replay(from Watermark, visit func(Record) error) (Watermark, error
 	}
 	last, partial, err := scan(l.file, from.Offset, from.Sequence, visit, nil)
 	if err != nil {
-		l.status.RequireRecovery()
+		// Only the log's own integrity condemns the log. visit is a caller
+		// callback replaying into a derived read model, and its failures —
+		// above all a canceled request context — say nothing about the WAL.
+		// Letting those latch the accounting status would let a derivative
+		// take down the authority it is derived from, which is exactly what
+		// the ledger is not allowed to permit.
+		if !isCallerVisitError(err) {
+			l.status.RequireRecovery()
+		}
 		return Watermark{}, err
 	}
 	if partial {
@@ -620,6 +643,15 @@ func scan(file io.ReadSeeker, fromOffset int64, initialSequence uint64, visit fu
 	}
 	offset := fromOffset
 	lastSequence := initialSequence
+	// A writer only ever moves the frame epoch forward: a given build writes
+	// one epoch, and an upgraded build never goes back. So within any scanned
+	// range the epoch is non-decreasing, and a frame that drops to an older
+	// epoch was rewritten. That matters because the older epochs carry no MAC:
+	// re-encoding an epoch-4 frame as epoch 3 (drop the chain tail, recompute
+	// the keyless CRC32) would otherwise strip authentication from history
+	// without needing the chain key at all. The check deliberately does not
+	// depend on the verifier — it must hold for keyless readers too.
+	var highestEpoch byte
 	for {
 		header := make([]byte, frameHeaderSize)
 		n, err := io.ReadFull(file, header)
@@ -639,6 +671,10 @@ func scan(file io.ReadSeeker, fromOffset int64, initialSequence uint64, visit fu
 		if epoch != frameVersionLegacy && epoch != frameVersionCurrent && epoch != frameVersionPeriod && epoch != frameVersionLedgerIntegrity {
 			return Watermark{}, false, fmt.Errorf("%w at offset %d: frame epoch %d", ErrUnsupportedVersion, offset, epoch)
 		}
+		if epoch < highestEpoch {
+			return Watermark{}, false, fmt.Errorf("%w at offset %d: frame epoch %d follows epoch %d", ErrTampered, offset, epoch, highestEpoch)
+		}
+		highestEpoch = epoch
 		kind := EventKind(header[5])
 		if !kind.Valid() || epoch == frameVersionLegacy && kind > EventRequestFinalized {
 			return Watermark{}, false, fmt.Errorf("%w at offset %d: event kind %d is not supported by epoch %d", ErrUnsupportedVersion, offset, kind, epoch)
@@ -722,7 +758,7 @@ func scan(file io.ReadSeeker, fromOffset int64, initialSequence uint64, visit fu
 		}
 		if visit != nil {
 			if err := visit(Record{Sequence: sequence, Offset: nextOffset, Epoch: epoch, Event: event}); err != nil {
-				return Watermark{}, false, err
+				return Watermark{}, false, visitError{err}
 			}
 		}
 		offset = nextOffset

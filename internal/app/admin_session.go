@@ -196,8 +196,13 @@ func (r *Runtime) changeAdminPassword(writer http.ResponseWriter, request *http.
 	defer clear(newPassword)
 	input.CurrentPassword, input.NewPassword = "", ""
 	user, err := r.store.GetAdminUser(request.Context(), admin.session.Username)
-	if err != nil || !adminauth.VerifyPassword(user, currentPassword) {
-		writeJSON(writer, http.StatusUnauthorized, map[string]string{"error": "invalid current password"})
+	ok, answered := r.guardAdminCredentialCheck(writer, admin.session.Username, "password_change", func() bool {
+		return err == nil && adminauth.VerifyPassword(user, currentPassword)
+	})
+	if !ok {
+		if !answered {
+			writeJSON(writer, http.StatusUnauthorized, map[string]string{"error": "invalid current password"})
+		}
 		return
 	}
 	replacement, err := adminauth.NewUser(user.Username, newPassword, user.Role, time.Now())

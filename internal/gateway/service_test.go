@@ -322,6 +322,7 @@ type fixture struct {
 	key        domain.GatewayKey
 	accounting *budget.Manager
 	status     *ledger.Status
+	log        *ledger.Log
 }
 
 func newFixture(t *testing.T, dailyBudget int64) fixture {
@@ -427,6 +428,7 @@ func newFixtureAt(
 		key:        key,
 		accounting: accounting,
 		status:     status,
+		log:        log,
 	}
 }
 

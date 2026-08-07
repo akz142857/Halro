@@ -57,12 +57,19 @@ func VerifyLedger(ctx context.Context, cfg config.Config) (ledger.ChainReport, e
 	if partial {
 		return ledger.ChainReport{}, errors.New("ledger has a partial tail; run `heimdall doctor` or start Heimdall to repair it before verifying")
 	}
-	if !report.ChainVerified {
-		return report, nil
-	}
 	checkpoint, err := store.LedgerChainCheckpoint()
 	if err != nil {
 		return ledger.ChainReport{}, fmt.Errorf("load ledger chain checkpoint: %w", err)
+	}
+	// An unverified chain is only benign on a ledger that never had one. Once
+	// the checkpoint is non-zero, "no authenticated frames" is the signature of
+	// a wiped or downgraded WAL, and reporting it as a clean result would make
+	// this command certify exactly what it exists to detect.
+	if !report.ChainVerified {
+		if checkpoint.Sequence > 0 {
+			return ledger.ChainReport{}, errors.New("ledger chain does not match its trusted checkpoint")
+		}
+		return report, nil
 	}
 	// The checkpoint only advances at startup reconciliation, so a clean
 	// shutdown after a long session leaves the on-disk chain well ahead of

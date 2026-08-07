@@ -58,7 +58,7 @@ func (s *Service) accountedInferenceResources(ctx context.Context, principal aut
 	} else if providerErr != nil {
 		outcome = "provider_error"
 	}
-	if err := s.finalizeRequest(run.requestLease, outcome); err != nil {
+	if err := run.finalize(outcome); err != nil {
 		return gatewayError("accounting_unavailable", "request accounting could not be finalized", 503, err)
 	}
 	if policyRejected {

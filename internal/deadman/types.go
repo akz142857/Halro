@@ -25,6 +25,11 @@ type TargetState struct {
 	// cannot be used to replay a stale anchor as if it were current — the
 	// next pull always asks for "since" this value, never since zero.
 	LastAnchorSequence uint64 `json:"last_anchor_sequence,omitempty"`
+	// AnchorReason is the last anchor-pull problem observed for this target,
+	// empty when the last pull was clean. It is persisted so a restart does
+	// not read as a recovery: the witness going quiet is precisely the state
+	// an attacker would want to look like a fresh start.
+	AnchorReason string `json:"anchor_reason,omitempty"`
 }
 
 type Event struct {
