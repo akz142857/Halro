@@ -1,4 +1,4 @@
-import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState, type FormEvent } from "react";
 import { api } from "../api";
 import { ErrorState, Field, Loading, Modal, PageHeader, StatusDot } from "../components";
@@ -57,16 +57,7 @@ export function UsagePage() {
                   <td><code>{attempt.request_id}</code><small>{t("usage.attempt", { count: attempt.attempt })}</small></td>
                   <td><strong>{attempt.requested_model || "—"}</strong><small>{attempt.provider_model}</small></td>
                   <td>{attempt.tokens_estimated ? t("usage.estimated") : ""}{compactNumber(attempt.provider_input_tokens + attempt.provider_output_tokens)}<small>{t("usage.inputOutput", { input: compactNumber(attempt.provider_input_tokens), output: compactNumber(attempt.provider_output_tokens) })} · {attempt.tokens_estimated ? t("usage.conservative") : t("usage.reported")}</small></td>
-                  <td>
-                    <strong>{attempt.final_cost_micros_usd == null ? t("usage.unknownCost") : money(attempt.final_cost_micros_usd)}</strong>
-                    {!!attempt.tags?.length && <small>{attempt.tags.map((tag) => <span className="badge" key={tag}>{tag}</span>)}</small>}
-                    <details><summary>{t("usage.costEvidence")}</summary><small>
-                      {t("usage.originalAdjustmentFinal", { original: attempt.original_cost_micros_usd == null ? "—" : money(attempt.original_cost_micros_usd), adjustment: money(attempt.adjustment_delta_micros_usd), final: attempt.final_cost_micros_usd == null ? "—" : money(attempt.final_cost_micros_usd) })}<br />
-                      {attempt.price_snapshot?.price_version_id ? `${attempt.price_snapshot.price_version_id} · v${attempt.price_snapshot.price_version}` : attempt.price_evidence_status}<br />
-                      {attempt.input_cost_micros_usd == null ? "" : t("usage.formulaComponents", { input: money(attempt.input_cost_micros_usd), output: money(attempt.output_cost_micros_usd ?? 0), fixed: money(attempt.fixed_cost_micros_usd ?? 0) })}
-                    </small></details>
-                    {attempt.final_cost_micros_usd != null && <button className="button ghost" disabled={readOnly} onClick={() => setAdjusting(attempt)}>{t("usage.adjustCost")}</button>}
-                  </td>
+                  <td><CostCell attempt={attempt} readOnly={readOnly} onAdjust={() => setAdjusting(attempt)} /></td>
                   <td>{attempt.latency_millis} ms</td>
                   <td><span className="inline-status"><StatusDot ok={attempt.status === "success"} />{attempt.status === "success" ? t("usage.success") : t("usage.error")}</span></td>
                   <td>{dateTime(attempt.completed_at)}</td>
@@ -84,6 +75,57 @@ export function UsagePage() {
   );
 }
 
+// Correcting one attempt's cost is an exception path, not a routine one: it wants a
+// reason, an evidence digest and step-up re-authentication before it appends to the
+// Ledger. Keeping its button in the row gave every line the look of an editable cell
+// when the list is a log. It lives inside the pricing evidence disclosure instead —
+// where the reader is already looking at how the number was reached, which is the
+// only state from which correcting it is a considered act. The adjustment history
+// loads with the same disclosure rather than per row, so a page of 100 attempts
+// costs one query per attempt the operator actually opens.
+function CostCell({ attempt, readOnly, onAdjust }: { attempt: UsageAttempt; readOnly: boolean; onAdjust: () => void }) {
+  const { t } = useTranslation();
+  const dateTime = useInstantFormatter();
+  const [opened, setOpened] = useState(false);
+  const adjustments = useQuery({
+    queryKey: ["usage-adjustments", attempt.attempt_id],
+    queryFn: () => api.usageAttemptAdjustments(attempt.attempt_id),
+    enabled: opened,
+  });
+  return (
+    <>
+      <strong>{attempt.final_cost_micros_usd == null ? t("usage.unknownCost") : money(attempt.final_cost_micros_usd)}</strong>
+      {!!attempt.tags?.length && <small>{attempt.tags.map((tag) => <span className="badge" key={tag}>{tag}</span>)}</small>}
+      <details onToggle={(event) => setOpened(event.currentTarget.open)}>
+        <summary>{t("usage.costEvidence")}</summary>
+        <small>
+          {t("usage.originalAdjustmentFinal", { original: attempt.original_cost_micros_usd == null ? "—" : money(attempt.original_cost_micros_usd), adjustment: money(attempt.adjustment_delta_micros_usd), final: attempt.final_cost_micros_usd == null ? "—" : money(attempt.final_cost_micros_usd) })}<br />
+          {attempt.price_snapshot?.price_version_id ? `${attempt.price_snapshot.price_version_id} · v${attempt.price_snapshot.price_version}` : attempt.price_evidence_status}<br />
+          {attempt.input_cost_micros_usd == null ? "" : t("usage.formulaComponents", { input: money(attempt.input_cost_micros_usd), output: money(attempt.output_cost_micros_usd ?? 0), fixed: money(attempt.fixed_cost_micros_usd ?? 0) })}
+        </small>
+        <small>
+          <strong>{t("usage.adjustmentHistory")}</strong><br />
+          {adjustments.isPending && opened && t("common.loading")}
+          {adjustments.isError && t("usage.adjustmentHistoryUnavailable")}
+          {adjustments.data?.length === 0 && t("usage.noAdjustments")}
+          {adjustments.data?.map((adjustment) => (
+            <span key={adjustment.event_id}>
+              {t("usage.adjustmentEntry", {
+                delta: money(adjustment.delta_micros_usd),
+                after: money(adjustment.net_cost_after_micros_usd),
+                actor: adjustment.created_by,
+                at: dateTime(adjustment.posted_at),
+              })}
+              {adjustment.reason ? ` · ${adjustment.reason}` : ""}<br />
+            </span>
+          ))}
+        </small>
+        {attempt.final_cost_micros_usd != null && <button className="button ghost" disabled={readOnly} onClick={onAdjust}>{t("usage.adjustCost")}</button>}
+      </details>
+    </>
+  );
+}
+
 function CostAdjustmentModal({ attempt, onClose }: { attempt: UsageAttempt; onClose: () => void }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -97,7 +139,11 @@ function CostAdjustmentModal({ attempt, onClose }: { attempt: UsageAttempt; onCl
     expected_net_cost_micros_usd: attempt.final_cost_micros_usd, reason_code: "invoice_difference", reason, evidence_digest: evidence });
   const preview = useMutation({ mutationFn: () => api.previewCostAdjustment(attempt.attempt_id, base()) });
   const create = useMutation({ mutationFn: () => api.createCostAdjustment(attempt.attempt_id, { ...base(), confirm: true, current_password: password, totp_code: totp }, idempotencyKey.current),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["usage"] }); onClose(); } });
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["usage"] });
+      queryClient.invalidateQueries({ queryKey: ["usage-adjustments", attempt.attempt_id] });
+      onClose();
+    } });
   const submit = (event: FormEvent) => { event.preventDefault(); create.mutate(); };
   return <Modal title={t("usage.adjustCost")} onClose={onClose}>
     <form onSubmit={submit}>

@@ -483,7 +483,7 @@ export const zhCN = {
     request: "请求", tokens: "令牌", cost: "成本", latency: "延迟", time: "时间", attempt: "尝试 {{count}}",
     estimated: "估算 ", inputOutput: "{{input}} 输入 / {{output}} 输出", conservative: "保守上限", reported: "服务商报告",
     unknownCost: "未知", costEvidence: "计价证据", originalAdjustmentFinal: "原始 {{original}} · 调整 {{adjustment}} · 最终 {{final}}", formulaComponents: "输入 {{input}} + 输出 {{output}} + 固定 {{fixed}}",
-    adjustCost: "调整成本", adjustmentImmutableWarning: "此操作会向账本追加纠正事件，原始结算保持不可变。", deltaMicros: "有符号差额（微美元）", reason: "原因", evidenceDigest: "证据 SHA-256", previewAdjustment: "预览调整", adjustmentPeriods: "服务期 {{service}} · 入账期 {{posted}}", currentPassword: "当前密码", totpOptional: "TOTP（启用 MFA 时必填）", confirmAdjustment: "确认并追加调整",
+    adjustmentHistory: "调整历史", noAdjustments: "无调整", adjustmentHistoryUnavailable: "调整历史读取失败", adjustmentEntry: "{{delta}} → {{after}} · {{actor}} · {{at}}", adjustCost: "调整成本", adjustmentImmutableWarning: "此操作会向账本追加纠正事件，原始结算保持不可变。", deltaMicros: "有符号差额（微美元）", reason: "原因", evidenceDigest: "证据 SHA-256", previewAdjustment: "预览调整", adjustmentPeriods: "服务期 {{service}} · 入账期 {{posted}}", currentPassword: "当前密码", totpOptional: "TOTP（启用 MFA 时必填）", confirmAdjustment: "确认并追加调整",
   },
   operations: {
     eyebrow: "安全运维", title: "告警与审计", description: "异常状态推送到受控 Webhook；所有配置、测试和管理动作进入 HMAC 链式审计日志。",

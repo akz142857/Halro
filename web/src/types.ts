@@ -512,6 +512,17 @@ export interface DeploymentPriceProposal {
 	revision: number;
 }
 
+export interface CostAdjustmentEvent {
+  event_id: string;
+  adjustment_sequence: number;
+  delta_micros_usd: number;
+  net_cost_after_micros_usd: number;
+  posted_at: string;
+  reason_code: string;
+  reason?: string;
+  created_by: string;
+}
+
 export interface CostAdjustmentPreview {
   event: { adjustment_sequence: number; adjustment_delta_micros_usd: number; net_cost_before_micros_usd: number; net_cost_after_micros_usd: number; service_period_id: string; posted_period_id: string };
   budget_overage_micros_usd: number;
