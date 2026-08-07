@@ -50,6 +50,7 @@ func (r *Runtime) runAuditAnchorMaintenance(ctx context.Context) {
 			sequence = latest.Sequence + 1
 		} else if err != boltstore.ErrNotFound {
 			r.logger.Warn("audit anchor sequence lookup failed", "error", err)
+			r.anchorEmitFailures.Add(1)
 			return
 		}
 		now := time.Now().UTC()
@@ -58,9 +59,11 @@ func (r *Runtime) runAuditAnchorMaintenance(ctx context.Context) {
 			Bytes: summary.Bytes, InstanceID: r.instanceID, ObservedAt: now,
 		}); err != nil {
 			r.logger.Warn("audit anchor emission failed", "error", err)
+			r.anchorEmitFailures.Add(1)
 			return
 		}
 		lastEmittedAt, lastEmittedRecords = now, summary.Records
+		r.anchorLastEmitUnix.Store(now.Unix())
 	}
 	for {
 		select {

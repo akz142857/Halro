@@ -19,6 +19,17 @@ const (
 	AnchorVerdictAgree     = "agree"
 	AnchorVerdictDisagree  = "disagree"
 	AnchorVerdictTruncated = "truncated"
+	// AnchorVerdictMissing marks a sequence the series skips over. Judging
+	// only the anchors that are present lets whoever can edit the witness file
+	// delete the inconvenient ones and get a clean report back.
+	AnchorVerdictMissing = "missing"
+	// AnchorVerdictMisordered marks a sequence that repeats or goes backwards,
+	// which a single emitter cannot produce.
+	AnchorVerdictMisordered = "misordered"
+	// AnchorVerdictUnwitnessed marks the records appended since the newest
+	// anchor. It is normal in small amounts and is the window a truncation
+	// would aim for in large ones.
+	AnchorVerdictUnwitnessed = "unwitnessed"
 )
 
 // AnchorVerdict is the result of checking one previously emitted anchor
@@ -111,17 +122,49 @@ func VerifyAuditAnchors(ctx context.Context, cfg config.Config, anchors []boltst
 		return nil, fmt.Errorf("replay local audit chain: %w", err)
 	}
 	verdicts := make([]AnchorVerdict, 0, len(anchors))
+	expected := uint64(1)
+	var highestRecords uint64
 	for _, anchor := range anchors {
 		verdict := AnchorVerdict{Sequence: anchor.Sequence, Records: anchor.Records}
 		switch {
 		case anchor.Records > summary.Records:
 			verdict.Outcome = AnchorVerdictTruncated
+		case anchor.Sequence < expected:
+			// Sequences only ever go up. One that repeats or goes backwards
+			// means the file was edited or two instances were merged into it,
+			// and either way the anchors after it cannot be read as a series.
+			verdict.Outcome = AnchorVerdictMisordered
 		case hashBySequence[anchor.Records] == anchor.LastHash:
 			verdict.Outcome = AnchorVerdictAgree
 		default:
 			verdict.Outcome = AnchorVerdictDisagree
 		}
+		if anchor.Sequence > expected {
+			// Checking only the anchors present lets an attacker who can edit
+			// the witness file delete the ones that disagree: every line left
+			// agrees, and the report comes back clean. A gap is not proof of
+			// tampering — the emitter's ring drops old anchors, and a witness
+			// offline long enough will miss some — but it is the difference
+			// between "these anchors agree" and "the record is complete", and
+			// only the report can say which one the operator is looking at.
+			verdicts = append(verdicts, AnchorVerdict{
+				Sequence: expected, Outcome: AnchorVerdictMissing,
+			})
+		}
+		if anchor.Sequence >= expected {
+			expected = anchor.Sequence + 1
+		}
+		highestRecords = max(highestRecords, anchor.Records)
 		verdicts = append(verdicts, verdict)
+	}
+	// An anchor covering the current chain length is what makes the whole
+	// series meaningful. Without one, everything appended since the last
+	// anchor is unwitnessed, which is exactly the window a truncation would
+	// aim for.
+	if summary.Records > highestRecords {
+		verdicts = append(verdicts, AnchorVerdict{
+			Records: summary.Records, Outcome: AnchorVerdictUnwitnessed,
+		})
 	}
 	return verdicts, nil
 }

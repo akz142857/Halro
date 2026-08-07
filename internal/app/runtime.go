@@ -113,6 +113,12 @@ type Runtime struct {
 	instanceID          string
 	anchorAuthorizer    *metricsauth.Authorizer
 	anchorAuthFailed    atomic.Uint64
+	// Anchoring is fail-open on purpose: a witness that cannot be reached must
+	// not stop the gateway. That makes it the one subsystem whose total
+	// failure is indistinguishable from working, so these have to reach
+	// /metrics or nobody finds out for months.
+	anchorLastEmitUnix atomic.Int64
+	anchorEmitFailures atomic.Uint64
 }
 
 func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime, error) {

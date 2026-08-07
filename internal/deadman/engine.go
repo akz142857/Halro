@@ -139,9 +139,39 @@ func (e *Engine) Tick(ctx context.Context) error {
 	default:
 	}
 	results := e.probeTargets(ctx)
-	e.pullAnchors(ctx)
+	anchorReasons := e.pullAnchors(ctx)
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	for _, target := range e.cfg.Targets {
+		if target.Kind != "heimdall" || target.AnchorURL == "" {
+			continue
+		}
+		// The anchor is the one check whose failure is silent by design:
+		// pulling is fail-open so it cannot stall a heartbeat, which also
+		// means a witness that has stopped witnessing looks exactly like one
+		// that has nothing to report. Recording every tick and announcing the
+		// transitions is what turns that back into something observable.
+		reason := anchorReasons[target.ID]
+		outcome := "success"
+		if reason != "" {
+			outcome = "failure"
+		}
+		if err := e.audit.append(auditRecord{
+			OccurredAt: now, Action: "deadman.anchor", Outcome: outcome,
+			TargetID: target.ID, ReasonCode: reason,
+		}); err != nil {
+			return err
+		}
+		state := e.state.Targets[target.ID]
+		if state.AnchorReason != reason {
+			if err := e.enqueue("anchor_status", target, state.Phase, reason, 0, now); err != nil {
+				e.logger.Error("dead-man anchor status was not queued", "target_id", target.ID, "error", err)
+			} else {
+				state.AnchorReason = reason
+				e.state.Targets[target.ID] = state
+			}
+		}
+	}
 	for index, target := range e.cfg.Targets {
 		latency, reason := results[index].latency, results[index].reason
 		success := reason == ""
