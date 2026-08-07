@@ -58,11 +58,54 @@ P0 五项高度同源——全部是"完整性门禁与记账权威的 fail-open
 
 **2.（未修，建议纳入 P2）CI 和 `make check` 都没有 gofmt 门禁。** 上一条能在 `main` 上存活正是因为这个——CLAUDE.md 写了"run gofmt on changed files"，但没有任何东西强制。`make check` 现在跑 test/race/vet/frontend-test/observability-check，缺一条 `gofmt -l` 非空即失败。成本一行。
 
-### P1（发布前应修）
+### P1（发布前应修）— 五项完成，五项待办
 
-P1-6 ~ P1-15，见 [260807.md 第九章](260807.md#九修复清单)。全部未开始。
+| 编号 | 内容 | 状态 |
+|---|---|---|
+| P1-6 | 五处直接口令校验接入失败预算 + 失败审计（包装器方案） | **完成** `e41446a`（并发信号量部分未做，见下） |
+| P1-8 | MFA 登录失败审计 | **完成** `e41446a`（**原结论一半被证伪，见下**） |
+| P1-11 | chain checkpoint 周期推进 + 关闭时推进 | **完成** `8e373fb` |
+| P1-12 | `sourcelimit` IPv6 按 /64 聚合 | **完成** `8e373fb`（溢出预算缩放未做，见下） |
+| P1-13 | 信封缺失且已轮换时 fail-closed | **完成** `8e373fb` |
+| P1-7 | step-up 判据改为"发凭据/削弱安全控制/不可逆" | 未开始（**需前端改动**） |
+| P1-9 | 锚点三个指标 + 纳入 deadman down 判定 | 未开始 |
+| P1-10 | `VerifyAuditAnchors` 序号连续性 + 锚点文件加链 | 未开始 |
+| P1-14 | 路由删除错误渲染 + step-up 对话框成功后才关 | 未开始（前端） |
+| P1-15 | Usage 页筛选改用记账时区 | 未开始（前端） |
 
-**注意 P1-6 的修法已被对抗验证重写**——不要直接改走 `verifyAdminStepUp`，那会造成 4 处语义回归（`disableAdminMFA` 的恢复码分支会直接破功能）。正确做法是抽包装器 + 加并发信号量两件独立的事。
+前端三项（P1-7/14/15）攒成一批做，只重建一次 `internal/webui/dist`。
+
+新增测试（同样全部反向验证）：
+
+| 测试 | 缺陷态下的失败症状 |
+|---|---|
+| `admin_credential_guard_test.go` · 口令改动限流 | 第 6 次仍 401（预算用完不生效） |
+| `admin_credential_guard_test.go` · 与 step-up 共用预算 | 删除返回 204（两套独立计数器） |
+| `admin_mfa_guard_test.go` · MFA 失败审计 | `failures=0`（第二因子猜测零留痕） |
+| `sourcelimit/aggregation_test.go` · 三条 | 同 /64 拿到新预算；`overflows=24`（一个 /64 灌满表）；mapped 形式另算一份 |
+| `app/ledger_chain_advance_test.go` · 两条 | 启动后写入的帧未被 checkpoint 覆盖；轮换后仍重新派生 |
+
+### P1-8 的原结论一半被证伪（整改过程中发现）
+
+安全角色断言"MFA 无账号级限速，因为 challenge 可无限申请，每 challenge 5 次不构成上限"。**这一半不成立。** `internal/store/bolt/store_admin.go:432-435` 的 `PutAdminMFAChallenge` 在为同一 user+session generation 重发 challenge 时会**把 `AttemptsRemaining` 结转过去**：
+
+```go
+if value.CreatedAt.Before(existing.ExpiresAt) && existing.AttemptsRemaining < value.AttemptsRemaining {
+    value.AttemptsRemaining = existing.AttemptsRemaining
+}
+```
+
+所以重新申请 challenge 买不到新的尝试次数，事实上已经是账号级预算。攻击者只能等旧 challenge 过期才拿到新的 5 次，是低速率上限而非无上限。这条是写测试时发现的——测试怎么也测不出 429，追下去才看到第 6 次挂在 `ClaimAdminMFAChallenge: record not found`，走不到新加的守卫。
+
+**真正的缺口只有审计**：口令失败从一开始就留痕，而"口令已泄露后唯一还挡着的那个因子"猜测零留痕。已修。结转行为原本没有任何测试守护，一并钉住。
+
+### P1-6 未做的那半：argon2 并发信号量
+
+对抗验证建议的第二件事——在 `internal/adminauth` 给 argon2 加并发信号量（照抄 `runtime.go:548` 的 `metricsScrapes` 模式）——**未做**。它和限流是两个问题：限流挡的是猜测速率，信号量挡的是内存放大（实测单次 64 MiB 无复用，`deploy/kubernetes` 的 512Mi limit 意味着 8 并发即 OOMKill）。信号量需要定容量和排队超时两个数，且要覆盖未认证就能触达的 `loginAdmin`/`DummyVerify`，改动面比包装器大。移到 P2-32 一起处理。
+
+### P1-12 未做的那半：溢出预算
+
+"溢出预算随 `maxTracked` 缩放"未做。/64 聚合已经把"零成本灌满跟踪表"这条堵死了；剩下的公平性问题（表被合法流量占满后，新来的合法客户端共享一份预算）需要一个没人论证过的倍数，凭空定一个会把明确的上限换成任意的上限。留给产品决策。
 
 ### P2（可排期）
 
