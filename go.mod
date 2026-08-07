@@ -9,10 +9,11 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/kms v1.55.3
 	github.com/aws/smithy-go v1.27.6
 	github.com/go-chi/chi/v5 v5.3.1
-	github.com/google/jsonschema-go v0.3.0
+	github.com/google/jsonschema-go v0.4.3
 	github.com/parquet-go/parquet-go v0.30.1
 	go.etcd.io/bbolt v1.5.0
 	golang.org/x/crypto v0.54.0
+	golang.org/x/sys v0.47.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -34,6 +35,5 @@ require (
 	github.com/parquet-go/jsonlite v1.0.0 // indirect
 	github.com/pierrec/lz4/v4 v4.1.21 // indirect
 	github.com/twpayne/go-geom v1.6.1 // indirect
-	golang.org/x/sys v0.47.0 // indirect
 	google.golang.org/protobuf v1.34.2 // indirect
 )
