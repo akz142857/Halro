@@ -399,10 +399,27 @@ type LedgerChainCheckpoint struct {
 }
 
 type Store struct {
-	db                       *bbolt.DB
-	pricingGates             sync.Map
-	pricingClockMu           sync.Mutex
-	pricingClockObservations map[string]pricingClockObservation
+	db *bbolt.DB
+	// pricingStates holds deploymentID -> *deploymentPricingState. Entries are
+	// created on first use and never removed: one small struct per deployment
+	// that has been priced, which is bounded by the deployment count.
+	pricingStates sync.Map
+}
+
+// deploymentPricingState is the per-deployment concurrency state for pricing.
+// Both members are deliberately per-deployment rather than process-wide: a
+// global lock here serializes every deployment's price selection behind one
+// mutex, which was measured as the Gateway's throughput ceiling (ADR 0012,
+// "Amendment 2026-08-07").
+type deploymentPricingState struct {
+	// gate serializes price selection against timeline mutation. Selection
+	// takes it shared, Admin mutation exclusively; see ADR 0012.
+	gate sync.RWMutex
+	// clockMu guards clock, and is held only for the read and the merge — never
+	// across a bbolt transaction, or concurrent selections could not coalesce.
+	clockMu  sync.Mutex
+	clock    pricingClockObservation
+	hasClock bool
 }
 
 type pricingClockObservation struct {
@@ -479,6 +496,23 @@ func openWithMigrationStepHook(path string, stepHook func(uint64, string) error)
 	return openWithMigrationHooks(path, nil, stepHook)
 }
 
+// Batch tunables for the metadata store, measured rather than assumed with
+// BenchmarkMetadataBatchDelay — see ADR 0012, "Amendment 2026-08-07". bbolt's
+// 10ms default is the worst value on the sweep: it is on the order of a full
+// F_FULLFSYNC here, so a lone writer waits longer for its batch window than for
+// the durable write itself, and it costs more than half the throughput a wider
+// window is supposed to buy. Zero is no better — the batch timer then fires
+// before anyone can join, and the rate collapses to db.Update's.
+//
+// 250µs sits at the top of both curves on the reference host: an uncontended
+// write stays at parity with db.Update, and eight concurrent writers coalesce to
+// roughly 7.5x it. Re-run the sweep before changing this; the fsync cost it is
+// balanced against is host-specific.
+const (
+	metadataBatchDelay = 250 * time.Microsecond
+	metadataBatchSize  = 64
+)
+
 func openWithMigrationHooks(path string, afterUp func(uint64) error, stepHook func(uint64, string) error) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("create metadata directory: %w", err)
@@ -490,6 +524,7 @@ func openWithMigrationHooks(path string, afterUp func(uint64) error, stepHook fu
 	if err != nil {
 		return nil, fmt.Errorf("open metadata: %w", err)
 	}
+	db.MaxBatchDelay, db.MaxBatchSize = metadataBatchDelay, metadataBatchSize
 	store := &Store{db: db}
 	if err := store.initialize(afterUp, stepHook); err != nil {
 		db.Close()

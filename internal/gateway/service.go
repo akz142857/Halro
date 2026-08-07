@@ -97,7 +97,7 @@ type PriceSelector interface {
 
 type PricePinStore interface {
 	PriceSelector
-	LockDeploymentPricing(string) func()
+	LockDeploymentPricingShared(string) func()
 	PrepareDeploymentPricePin(context.Context, string, string, time.Time, time.Duration, time.Duration) (domain.DeploymentPriceVersion, domain.PriceSnapshot, domain.PricePinIntent, error)
 	CommitDeploymentPricePin(context.Context, string, string, uint64, time.Time) (domain.PricePinIntent, error)
 	DeletePreparedDeploymentPricePin(context.Context, string) error
@@ -333,7 +333,7 @@ func (s *Service) startAttempt(
 	reservation, leaseMode, snapshot, pricedTarget := int64(0), ledger.LeaseMode(""), (*domain.PriceSnapshot)(nil), target
 	if candidate, ok := s.pricing.(PricePinStore); ok && target.DeploymentID != "" {
 		pinStore = candidate
-		pricingUnlock = pinStore.LockDeploymentPricing(target.DeploymentID)
+		pricingUnlock = pinStore.LockDeploymentPricingShared(target.DeploymentID)
 		forcedAttemptID, err = id.New("att")
 		if err == nil {
 			pricingSelectedAt := s.now().UTC()

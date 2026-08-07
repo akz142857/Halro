@@ -19,7 +19,7 @@ import (
 // which requires a key to compute the frame MAC.
 var testChainKey = bytes.Repeat([]byte{0x24}, 32)
 
-func newTestManager(t *testing.T) (*Manager, *ledger.State, func()) {
+func newTestManager(t testing.TB) (*Manager, *ledger.State, func()) {
 	t.Helper()
 	status := ledger.NewStatus()
 	log, err := ledger.OpenWithOptions(filepath.Join(t.TempDir(), "usage.wal"), status, ledger.Options{ChainKey: testChainKey})
@@ -37,7 +37,7 @@ func newTestManager(t *testing.T) (*Manager, *ledger.State, func()) {
 	return manager, state, func() { _ = log.Close() }
 }
 
-func testPriceSnapshot(t *testing.T, mode domain.BillingMode) *domain.PriceSnapshot {
+func testPriceSnapshot(t testing.TB, mode domain.BillingMode) *domain.PriceSnapshot {
 	t.Helper()
 	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
 	price := domain.DeploymentPriceVersion{
@@ -426,7 +426,7 @@ func TestNewWithOptionsBucketsTheRequestByTheSuppliedClock(t *testing.T) {
 // mustResolver pins the accounting timezone for a test. Period boundaries are
 // the subject here, so the zone has to be stated rather than inherited from
 // whatever the host is set to.
-func mustResolver(t *testing.T, timezone string) *PeriodResolver {
+func mustResolver(t testing.TB, timezone string) *PeriodResolver {
 	t.Helper()
 	resolver, err := NewFixedPeriodResolver(timezone)
 	if err != nil {

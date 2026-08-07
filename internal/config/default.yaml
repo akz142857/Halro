@@ -94,6 +94,11 @@ gateway:
   stream_max_duration: 10m0s
   max_total_attempts: 3
   health_probe_interval: 30s
+  # How far the wall clock may disagree with a Deployment's pricing high-water
+  # mark before the Deployment is quarantined. The rollback tolerance has a 1s
+  # floor: concurrent price selections can reach their durable pin out of the
+  # order they read the clock, and a tighter setting would read that as a clock
+  # rollback.
   pricing_clock_rollback_tolerance: 2s
   pricing_clock_forward_tolerance: 30s
   # What to do when no price is known for a model: "reject" refuses the request

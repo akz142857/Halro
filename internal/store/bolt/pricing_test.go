@@ -436,7 +436,7 @@ func TestRestoreQuarantinesNewlyDueScheduledPriceUntilAuditedConfirmation(t *tes
 	}
 }
 
-func seedPricingDeployment(t *testing.T, store *Store, deploymentID string, input, output, fixed int64) {
+func seedPricingDeployment(t testing.TB, store *Store, deploymentID string, input, output, fixed int64) {
 	t.Helper()
 	ctx := context.Background()
 	now := time.Date(2026, 8, 4, 10, 0, 0, 0, time.UTC)

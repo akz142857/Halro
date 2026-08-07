@@ -68,8 +68,8 @@ func Default() Config {
 			StreamMaxDuration:             Duration(10 * time.Minute),
 			MaxTotalAttempts:              3,
 			HealthProbeInterval:           Duration(30 * time.Second),
-			PricingClockRollbackTolerance: Duration(2 * time.Second),
-			PricingClockForwardTolerance:  Duration(30 * time.Second),
+			PricingClockRollbackTolerance: Duration(DefaultPricingClockRollbackTolerance),
+			PricingClockForwardTolerance:  Duration(DefaultPricingClockForwardTolerance),
 			PricingUnknownPolicy:          "reject",
 			SourceRateLimit: SourceRateLimit{
 				// Generous enough that a busy application never notices, small

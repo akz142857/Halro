@@ -60,7 +60,7 @@ func (s *fakePricePinStore) SelectDeploymentPriceVersion(ctx context.Context, de
 	return staticPriceSelector{price: price}.SelectDeploymentPriceVersion(ctx, deploymentID, selectedAt)
 }
 
-func (s *fakePricePinStore) LockDeploymentPricing(string) func() {
+func (s *fakePricePinStore) LockDeploymentPricingShared(string) func() {
 	s.mu.Lock()
 	return s.mu.Unlock
 }
