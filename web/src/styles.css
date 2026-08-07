@@ -694,11 +694,21 @@ td small, td code { display: block; margin-top: 4px; color: var(--muted); }
   background: var(--surface); border: 1px solid var(--line);
 }
 .filter-bar label span { display: block; margin-bottom: 5px; color: var(--muted-2); font: var(--font-size-xs) var(--mono); }
-.filter-bar input, .filter-bar select { min-height: 34px; }
-/* datetime-local had a fixed height, its own padding and its own font size, so
-   it sat at a different height from the text inputs and selects beside it. It
-   now takes exactly what they take; only the native picker button needs saying,
-   since it is drawn by the browser in its own colour. */
+/* A height, because the min-height here never was one. The base control rule
+   pads 9px above and below and the button carries a 44px floor, so every
+   control in this bar was sized by its own content — text inputs and selects
+   landed near 40px, the buttons in the policy bars at 44px, and datetime-local
+   two pixels above its neighbours because the UA pads its inner field as well.
+   Three different heights in a row that declares one, and the 34px it declared
+   applied to nothing.
+   min-height goes to 0 first: it clamps height, so the button's 44px floor
+   would otherwise win. The vertical padding goes with it — at a fixed height it
+   is the content box's enemy, not its spacing. */
+.filter-bar input, .filter-bar select, .filter-bar .button { min-height: 0; height: 34px; }
+.filter-bar input, .filter-bar select { padding-block: 0; }
+/* The picker button is drawn by the browser in its own colour, so it is the one
+   part of datetime-local that still needs saying — its height no longer does,
+   now that the box above is pinned rather than grown from its contents. */
 .filter-bar input[type="datetime-local"]::-webkit-calendar-picker-indicator {
   padding: 0; opacity: .55; cursor: pointer; filter: grayscale(1);
 }

@@ -15,6 +15,11 @@ export function UsagePage() {
   // disabled or since-deleted one, so this list is unfiltered — narrowing it
   // to "currently enabled" would make an old project's calls unfindable.
   const projects = useQuery({ queryKey: ["projects"], queryFn: api.projects });
+  // The model filter matches the requested model exactly (internal/usage,
+  // query.go), so the free-text box it replaces answered every typo with an
+  // empty table and no way to tell that apart from "no calls yet". The public
+  // aliases come from the routes, which is what a caller is able to ask for.
+  const routes = useQuery({ queryKey: ["routes"], queryFn: api.routes });
   const projectNames = useMemo(
     () => Object.fromEntries((projects.data?.items ?? []).map((project) => [project.id, project.name])),
     [projects.data?.items],
@@ -39,6 +44,20 @@ export function UsagePage() {
     getNextPageParam: (page) => page.next_cursor || undefined,
   });
   const attempts = usage.data?.pages.flatMap((page) => page.items) ?? [];
+  // A route that has since been deleted still has history, and its alias would
+  // otherwise be unreachable from here — the same reason the project list above
+  // is left unfiltered. The models actually present in the loaded rows are
+  // folded in, and so is the current selection, because a select whose value is
+  // absent from its options renders blank and looks like no filter is applied.
+  const models = useMemo(() => {
+    const aliases = new Set<string>();
+    for (const route of routes.data?.items ?? []) if (route.public_model) aliases.add(route.public_model);
+    for (const page of usage.data?.pages ?? []) {
+      for (const attempt of page.items) if (attempt.requested_model) aliases.add(attempt.requested_model);
+    }
+    if (model) aliases.add(model);
+    return [...aliases].sort((left, right) => left.localeCompare(right));
+  }, [routes.data?.items, usage.data?.pages, model]);
   return (
     <>
       <PageHeader
@@ -55,7 +74,13 @@ export function UsagePage() {
             {(projects.data?.items ?? []).map((project) => <option key={project.id} value={project.id}>{project.name || project.id}</option>)}
           </select>
         </label>
-        <label><span>{t("usage.model")}</span><input value={model} onChange={(event) => setModel(event.target.value)} placeholder="chat" /></label>
+        <label>
+          <span>{t("usage.model")}</span>
+          <select value={model} onChange={(event) => setModel(event.target.value)}>
+            <option value="">{t("usage.all")}</option>
+            {models.map((alias) => <option key={alias} value={alias}>{alias}</option>)}
+          </select>
+        </label>
         <label>
           <span>{t("usage.status")}</span>
           <select value={status} onChange={(event) => setStatus(event.target.value)}>
