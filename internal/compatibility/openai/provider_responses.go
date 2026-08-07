@@ -158,5 +158,19 @@ func decodeProviderResponseUsage(usage *openaiapi.ResponseUsage) *semantic.Usage
 	if usage == nil {
 		return nil
 	}
-	return &semantic.Usage{InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, ReasoningTokens: usage.OutputTokensDetails.ReasoningTokens, TotalTokens: usage.TotalTokens, Source: semantic.UsageProviderReported}
+	// input_tokens already counts the cached span on the Responses API, so the
+	// cached detail is a subset and must not be added onto the total.
+	decoded := &semantic.Usage{
+		InputTokens:       usage.InputTokens,
+		CachedInputTokens: usage.InputTokensDetails.CachedTokens,
+		OutputTokens:      usage.OutputTokens,
+		ReasoningTokens:   usage.OutputTokensDetails.ReasoningTokens,
+		AudioTokens:       usage.InputTokensDetails.AudioTokens + usage.OutputTokensDetails.AudioTokens,
+		TotalTokens:       usage.TotalTokens,
+		Source:            semantic.UsageProviderReported,
+	}
+	if sum := decoded.InputTokens + decoded.OutputTokens; decoded.TotalTokens < sum {
+		decoded.TotalTokens = sum
+	}
+	return decoded
 }

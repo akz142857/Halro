@@ -127,7 +127,37 @@ func (adapter *Adapter) ChatStream(ctx context.Context, call provider.ChatCall, 
 	if usage == nil {
 		return nil, err
 	}
-	return &openaiapi.Usage{PromptTokens: usage.InputTokens, CompletionTokens: usage.OutputTokens, TotalTokens: usage.InputTokens + usage.OutputTokens}, err
+	return portableUsage(*usage), err
+}
+
+// portableUsage translates Anthropic's cache-exclusive token reporting into the
+// cache-inclusive subset convention the rest of the pipeline prices against.
+func portableUsage(usage anthropicapi.Usage) *openaiapi.Usage {
+	prompt := usage.PromptTokens()
+	portable := &openaiapi.Usage{
+		PromptTokens:     prompt,
+		CompletionTokens: usage.OutputTokens,
+		TotalTokens:      prompt + usage.OutputTokens,
+		CacheWriteTokens: usage.CacheCreationInputTokens,
+	}
+	portable.SetCachedPromptTokens(usage.CacheReadInputTokens)
+	portable.SetReasoningTokens(usage.ThinkingTokens)
+	return portable
+}
+
+// semanticUsage applies the same translation as portableUsage for the streaming
+// bridge, which emits semantic events directly instead of an OpenAI-shaped body.
+func semanticUsage(usage anthropicapi.Usage) *semantic.Usage {
+	prompt := usage.PromptTokens()
+	return &semantic.Usage{
+		InputTokens:           prompt,
+		CachedInputTokens:     usage.CacheReadInputTokens,
+		CacheWriteInputTokens: usage.CacheCreationInputTokens,
+		OutputTokens:          usage.OutputTokens,
+		ReasoningTokens:       usage.ThinkingTokens,
+		TotalTokens:           prompt + usage.OutputTokens,
+		Source:                semantic.UsageProviderReported,
+	}
 }
 
 func (adapter *Adapter) Embed(context.Context, provider.EmbeddingCall) (openaiapi.EmbeddingResponse, error) {
@@ -341,6 +371,16 @@ func updateUsage(current *anthropicapi.Usage, event anthropicapi.RawStreamEvent)
 			if value.Usage.InputTokens != 0 {
 				current.InputTokens = value.Usage.InputTokens
 			}
+			// message_start carries the cache tiers today and the full-struct copy
+			// above captures them, but a delta that restates them must win rather
+			// than be dropped — losing either tier here silently under-prices the
+			// whole stream.
+			if value.Usage.CacheReadInputTokens != 0 {
+				current.CacheReadInputTokens = value.Usage.CacheReadInputTokens
+			}
+			if value.Usage.CacheCreationInputTokens != 0 {
+				current.CacheCreationInputTokens = value.Usage.CacheCreationInputTokens
+			}
 			current.OutputTokens = value.Usage.OutputTokens
 			current.ThinkingTokens = value.Usage.ThinkingTokens
 		}
@@ -428,7 +468,7 @@ func (bridge *portableStreamBridge) Accept(event anthropicapi.RawStreamEvent) er
 			return err
 		}
 		if bridge.usage != nil {
-			return bridge.emit(semantic.Event{Kind: semantic.EventUsage, ID: bridge.id, Model: bridge.model, Usage: &semantic.Usage{InputTokens: bridge.usage.InputTokens, OutputTokens: bridge.usage.OutputTokens, TotalTokens: bridge.usage.InputTokens + bridge.usage.OutputTokens, Source: semantic.UsageProviderReported}, Translation: semantic.TranslationNone, MappingRevision: anthropicwire.MappingRevision})
+			return bridge.emit(semantic.Event{Kind: semantic.EventUsage, ID: bridge.id, Model: bridge.model, Usage: semanticUsage(*bridge.usage), Translation: semantic.TranslationNone, MappingRevision: anthropicwire.MappingRevision})
 		}
 	}
 	return nil

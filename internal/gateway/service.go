@@ -2037,6 +2037,7 @@ func settlementForResult(
 		if validSemanticUsage(response.Usage) {
 			result.ProviderInputTokens = response.Usage.InputTokens
 			result.ProviderOutputTokens = response.Usage.OutputTokens
+			recordUsageTiers(&result, *response.Usage)
 			setSettlementCost(&result, target, reservationMicrosUSD)
 			return result
 		}
@@ -2057,9 +2058,29 @@ func settlementForResult(
 	} else {
 		result.ProviderInputTokens = response.Usage.InputTokens
 		result.ProviderOutputTokens = response.Usage.OutputTokens
+		recordUsageTiers(&result, *response.Usage)
 	}
 	setSettlementCost(&result, target, reservationMicrosUSD)
 	return result
+}
+
+// recordUsageTiers copies the provider's token breakdown onto the settlement and
+// marks the cost estimated whenever a cache tier was reported.
+//
+// The tiers are priced very differently upstream — a cache read is a fraction of
+// the input rate and a cache write a premium on it — but a Deployment carries a
+// single input rate, so charging every prompt token at it is knowingly wrong for
+// the cached span. Flagging that is what keeps the ledger honest: the number is
+// an upper bound rather than a silent mis-charge, and CostEstimated is the
+// existing signal operators already filter on. Once a pricing version can express
+// the tiers, this flag is what identifies the rows worth re-rating.
+func recordUsageTiers(result *budget.Settlement, usage semantic.Usage) {
+	result.ProviderCachedInputTokens = usage.CachedInputTokens
+	result.ProviderCacheWriteInputTokens = usage.CacheWriteInputTokens
+	result.ProviderReasoningTokens = usage.ReasoningTokens
+	if usage.CachedInputTokens > 0 || usage.CacheWriteInputTokens > 0 {
+		result.CostEstimated = true
+	}
 }
 
 func setSettlementCost(result *budget.Settlement, target provider.Target, reservationMicrosUSD int64) {
@@ -2156,6 +2177,7 @@ func streamSettlement(
 	if validSemanticUsage(usage) {
 		result.ProviderInputTokens = usage.InputTokens
 		result.ProviderOutputTokens = usage.OutputTokens
+		recordUsageTiers(&result, *usage)
 	} else if providerErr == nil || emitted {
 		estimate := cappedOutputEstimate(estimatedOutputTokens, deliveredOutputTokens)
 		result.ProviderInputTokens = estimatedInputTokens

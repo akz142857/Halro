@@ -83,13 +83,19 @@ type Settlement struct {
 	CommittedMicrosUSD   int64
 	ProviderInputTokens  int64
 	ProviderOutputTokens int64
-	PreparedOutputTokens int64
-	CostEstimated        bool
-	TokenEstimated       bool
-	Outcome              string
-	ErrorClass           string
-	HTTPStatus           int
-	LatencyMillis        int64
+	// The cache tiers are breakdown subsets of ProviderInputTokens, recorded so
+	// the ledger can show why a request cost what it did and so a later pricing
+	// version can re-rate the span without replaying provider traffic.
+	ProviderCachedInputTokens     int64
+	ProviderCacheWriteInputTokens int64
+	ProviderReasoningTokens       int64
+	PreparedOutputTokens          int64
+	CostEstimated                 bool
+	TokenEstimated                bool
+	Outcome                       string
+	ErrorClass                    string
+	HTTPStatus                    int
+	LatencyMillis                 int64
 	// OccurredAt is reserved for deterministic recovery events. Normal
 	// callers leave it zero and the manager captures its clock at commit.
 	OccurredAt time.Time
@@ -436,7 +442,16 @@ func (m *Manager) settle(ctx context.Context, eventID string, attempt Attempt, s
 	if settlement.CommittedMicrosUSD < 0 ||
 		settlement.ProviderInputTokens < 0 ||
 		settlement.ProviderOutputTokens < 0 ||
+		settlement.ProviderCachedInputTokens < 0 ||
+		settlement.ProviderCacheWriteInputTokens < 0 ||
+		settlement.ProviderReasoningTokens < 0 ||
 		settlement.PreparedOutputTokens < 0 {
+		return ErrInvalidAmount
+	}
+	// The tiers partition the input total. A sum that overruns it means a caller
+	// added them on top instead of reporting a breakdown, which would let a
+	// later re-rating charge the cached span twice.
+	if settlement.ProviderCachedInputTokens+settlement.ProviderCacheWriteInputTokens > settlement.ProviderInputTokens {
 		return ErrInvalidAmount
 	}
 	var priceSnapshot *domain.PriceSnapshot
@@ -493,16 +508,19 @@ func (m *Manager) settle(ctx context.Context, eventID string, attempt Attempt, s
 		CommittedMicrosUSD: committedValue,
 		LeaseMode:          attempt.LeaseMode, PriceSnapshot: priceSnapshot,
 		InputCostMicrosUSD: inputCost, OutputCostMicrosUSD: outputCost, FixedCostMicrosUSD: fixedCost,
-		ProviderInputTokens:  settlement.ProviderInputTokens,
-		ProviderOutputTokens: settlement.ProviderOutputTokens,
-		PreparedOutputTokens: settlement.PreparedOutputTokens,
-		CostEstimated:        settlement.CostEstimated,
-		TokenEstimated:       settlement.TokenEstimated,
-		TokenUsageSource:     tokenSource,
-		Outcome:              settlement.Outcome,
-		ErrorClass:           settlement.ErrorClass,
-		HTTPStatus:           settlement.HTTPStatus,
-		LatencyMillis:        settlement.LatencyMillis,
+		ProviderInputTokens:           settlement.ProviderInputTokens,
+		ProviderOutputTokens:          settlement.ProviderOutputTokens,
+		ProviderCachedInputTokens:     settlement.ProviderCachedInputTokens,
+		ProviderCacheWriteInputTokens: settlement.ProviderCacheWriteInputTokens,
+		ProviderReasoningTokens:       settlement.ProviderReasoningTokens,
+		PreparedOutputTokens:          settlement.PreparedOutputTokens,
+		CostEstimated:                 settlement.CostEstimated,
+		TokenEstimated:                settlement.TokenEstimated,
+		TokenUsageSource:              tokenSource,
+		Outcome:                       settlement.Outcome,
+		ErrorClass:                    settlement.ErrorClass,
+		HTTPStatus:                    settlement.HTTPStatus,
+		LatencyMillis:                 settlement.LatencyMillis,
 	}
 	attempt.Period.Stamp(&settled)
 	return m.appendApply(ctx, settled)

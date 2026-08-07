@@ -197,11 +197,88 @@ func TestExporterDualReadsAndDeterministicallyUpgradesV2Manifest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if upgraded.SchemaVersion != 3 || upgraded.Files[0].SchemaVersion != 2 {
+	if upgraded.SchemaVersion != parquetSchemaVersion || upgraded.Files[0].SchemaVersion != 2 {
 		t.Fatalf("upgraded=%#v", upgraded)
 	}
 	if err = exporter.Verify(&snapshot); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Every install running the previous release carries a schema 3 manifest, so the
+// token-tier bump has to open and upgrade one rather than refuse it. Gating on
+// an explicit {2, current} pair would reject exactly the installs being upgraded,
+// and the failure would surface as a dead usage pipeline rather than a migration
+// error.
+func TestExporterUpgradesPreviousSchemaManifestRatherThanRejectingIt(t *testing.T) {
+	for previous := parquetSchemaMinReadable; previous < parquetSchemaVersion; previous++ {
+		root := filepath.Join(t.TempDir(), "usage")
+		exporter, err := NewExporter(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stale := Manifest{SchemaVersion: previous, LastSequence: 0}
+		if err := exporter.commitManifest(stale); err != nil {
+			t.Fatal(err)
+		}
+		snapshot := Snapshot{Attempts: []AttemptEvent{{
+			EventID: "tiered", Sequence: 1, AttemptID: "a", ProjectID: "p",
+			ProviderInputTokens: 100, ProviderOutputTokens: 10,
+			ProviderCachedInputTokens: 80, ProviderCacheWriteInputTokens: 5,
+			ProviderReasoningTokens: 4, CostMicrosUSD: ledger.MicrosUSD(7),
+		}}}
+		upgraded, err := exporter.Export(snapshot)
+		if err != nil {
+			t.Fatalf("schema %d manifest was rejected instead of upgraded: %v", previous, err)
+		}
+		if upgraded.SchemaVersion != parquetSchemaVersion {
+			t.Fatalf("schema %d manifest upgraded to %d", previous, upgraded.SchemaVersion)
+		}
+		if err := exporter.Verify(&snapshot); err != nil {
+			t.Fatalf("schema %d upgrade did not verify: %v", previous, err)
+		}
+	}
+}
+
+// The tiers are a breakdown of the totals, so a round trip must return them
+// intact rather than folding them in or dropping them.
+func TestExportedRowsPreserveProviderTokenTiers(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "usage")
+	exporter, err := NewExporter(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := Snapshot{Attempts: []AttemptEvent{{
+		EventID: "tiered", Sequence: 1, AttemptID: "a", ProjectID: "p",
+		ProviderInputTokens: 100, ProviderOutputTokens: 10,
+		ProviderCachedInputTokens: 80, ProviderCacheWriteInputTokens: 5,
+		ProviderReasoningTokens: 4, CostMicrosUSD: ledger.MicrosUSD(7),
+	}}}
+	manifest, err := exporter.Export(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(manifest.Files) != 1 {
+		t.Fatalf("manifest files=%d", len(manifest.Files))
+	}
+	rows, err := readAttemptRows(
+		filepath.Join(root, filepath.FromSlash(manifest.Files[0].Path)),
+		manifest.Files[0].Format,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows=%d", len(rows))
+	}
+	row := rows[0]
+	if row.ProviderCachedInputTokens != 80 || row.ProviderCacheWriteInputTokens != 5 || row.ProviderReasoningTokens != 4 {
+		t.Fatalf("tiers were not round-tripped: %#v", row)
+	}
+	// The tiers partition the input total; a reader that summed them onto it
+	// would double-count the cached span.
+	if row.ProviderInputTokens != 100 {
+		t.Fatalf("input total changed to %d", row.ProviderInputTokens)
 	}
 }
 
