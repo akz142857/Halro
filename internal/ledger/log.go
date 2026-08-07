@@ -643,15 +643,22 @@ func scan(file io.ReadSeeker, fromOffset int64, initialSequence uint64, visit fu
 	}
 	offset := fromOffset
 	lastSequence := initialSequence
-	// A writer only ever moves the frame epoch forward: a given build writes
-	// one epoch, and an upgraded build never goes back. So within any scanned
-	// range the epoch is non-decreasing, and a frame that drops to an older
-	// epoch was rewritten. That matters because the older epochs carry no MAC:
-	// re-encoding an epoch-4 frame as epoch 3 (drop the chain tail, recompute
-	// the keyless CRC32) would otherwise strip authentication from history
-	// without needing the chain key at all. The check deliberately does not
-	// depend on the verifier — it must hold for keyless readers too.
-	var highestEpoch byte
+	// Once a frame has been written at the authenticated epoch, no later frame
+	// may fall below it. Epoch 4 is the first that carries a MAC, so
+	// re-encoding one as epoch 3 — drop the chain tail, flip the version byte,
+	// recompute the keyless CRC32 — would otherwise strip authentication off
+	// history without needing the chain key at all, and appending a hand-built
+	// legacy frame after the chain would forge an event the verifier walks
+	// straight past. The check deliberately does not depend on the verifier:
+	// it must hold for keyless readers too.
+	//
+	// It says nothing about epochs 1-3 relative to each other. Before ADR 0016
+	// the epoch was chosen per event by its shape rather than by the build, so
+	// a real pre-upgrade log interleaves them — an accounting event carrying a
+	// lease mode wrote epoch 2 while the plain event beside it wrote epoch 1.
+	// Requiring a non-decreasing epoch across the whole file would reject
+	// exactly the histories that predate the guarantee.
+	var seenAuthenticatedEpoch bool
 	for {
 		header := make([]byte, frameHeaderSize)
 		n, err := io.ReadFull(file, header)
@@ -671,10 +678,12 @@ func scan(file io.ReadSeeker, fromOffset int64, initialSequence uint64, visit fu
 		if epoch != frameVersionLegacy && epoch != frameVersionCurrent && epoch != frameVersionPeriod && epoch != frameVersionLedgerIntegrity {
 			return Watermark{}, false, fmt.Errorf("%w at offset %d: frame epoch %d", ErrUnsupportedVersion, offset, epoch)
 		}
-		if epoch < highestEpoch {
-			return Watermark{}, false, fmt.Errorf("%w at offset %d: frame epoch %d follows epoch %d", ErrTampered, offset, epoch, highestEpoch)
+		if seenAuthenticatedEpoch && epoch != frameVersionLedgerIntegrity {
+			return Watermark{}, false, fmt.Errorf("%w at offset %d: frame epoch %d follows an authenticated frame", ErrTampered, offset, epoch)
 		}
-		highestEpoch = epoch
+		if epoch == frameVersionLedgerIntegrity {
+			seenAuthenticatedEpoch = true
+		}
 		kind := EventKind(header[5])
 		if !kind.Valid() || epoch == frameVersionLegacy && kind > EventRequestFinalized {
 			return Watermark{}, false, fmt.Errorf("%w at offset %d: event kind %d is not supported by epoch %d", ErrUnsupportedVersion, offset, kind, epoch)

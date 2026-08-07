@@ -18,8 +18,8 @@ import (
 // exactly the same bytes in both epochs, and an epoch-4 payload already
 // carries the period identity epoch 3 requires. That is the whole point: an
 // attacker with nothing but write access to the file can strip authentication
-// off history unless the reader refuses to accept a frame whose epoch went
-// backwards.
+// off history unless the reader refuses to accept an unauthenticated frame
+// once the authenticated epoch has started.
 func downgradeFrameToPeriodEpoch(t *testing.T, frame []byte) []byte {
 	t.Helper()
 	if frame[4] != frameVersionLedgerIntegrity {
@@ -42,8 +42,9 @@ func downgradeFrameToPeriodEpoch(t *testing.T, frame []byte) []byte {
 // chain link both miss. Both of those only run on epoch-4 frames, so rewriting
 // a frame as epoch 3 does not defeat them — it removes them from the picture
 // entirely, and the file that comes back reads as a legitimately old ledger
-// that predates ADR 0016. Only the epoch itself, which a writer never moves
-// backwards, distinguishes the two.
+// that predates ADR 0016. What distinguishes the two is that the rewrite
+// leaves an unauthenticated frame after an authenticated one, which no writer
+// produces.
 func TestEpochDowngradeIsRejected(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ledger.wal")
 	log := openChained(t, path, nil)
@@ -85,6 +86,53 @@ func TestEpochDowngradeIsRejected(t *testing.T) {
 	// tooling and any build without the key silently certifies the rewrite.
 	if _, _, err := Inspect(path); !errors.Is(err, ErrTampered) {
 		t.Fatalf("downgraded suffix read without a key: err=%v, want ErrTampered", err)
+	}
+}
+
+// TestInterleavedLegacyEpochsStillReplay is the shape a real pre-upgrade
+// ledger actually has, and the reason the epoch rule has to be narrow. Before
+// ADR 0016 the frame epoch was chosen per event by its shape rather than by
+// the build: an accounting event carrying a lease mode wrote epoch 2 while the
+// plain event beside it wrote epoch 1, so the two interleave throughout the
+// file. A rule that simply required a non-decreasing epoch would reject every
+// history that predates the guarantee — refusing to start on exactly the
+// installs the guarantee was added to protect.
+func TestInterleavedLegacyEpochsStillReplay(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ledger.wal")
+	now := time.Date(2026, 8, 4, 0, 0, 0, 0, time.UTC)
+	accepted, err := json.Marshal(Event{
+		EventID: "legacy_1", Kind: EventRequestAccepted, RequestID: "r",
+		ProjectID: "p", PeriodID: "2026-08-04", OccurredAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reservation, err := json.Marshal(Event{
+		EventID: "legacy_2", Kind: EventReservationCreated, RequestID: "r", AttemptID: "a",
+		ProjectID: "p", PeriodID: "2026-08-04", OccurredAt: now,
+		ReservationMicrosUSD: MicrosUSD(100), LeaseMode: LeaseModeMetered,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var frames []byte
+	// v1, v2, v1, v2 — the epoch goes backwards twice, and every one of these
+	// frames is honest.
+	frames = append(frames, encodeFrameVersion(frameVersionLegacy, 1, EventRequestAccepted, accepted)...)
+	frames = append(frames, encodeFrameVersion(frameVersionCurrent, 2, EventReservationCreated, reservation)...)
+	frames = append(frames, encodeFrameVersion(frameVersionLegacy, 3, EventRequestAccepted, accepted)...)
+	frames = append(frames, encodeFrameVersion(frameVersionCurrent, 4, EventReservationCreated, reservation)...)
+	if err := os.WriteFile(path, frames, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	watermark, partial, err := Inspect(path)
+	if err != nil || partial {
+		t.Fatalf("an interleaved legacy ledger must still replay: partial=%t err=%v", partial, err)
+	}
+	if watermark.Sequence != 4 {
+		t.Fatalf("watermark sequence=%d, want 4", watermark.Sequence)
 	}
 }
 

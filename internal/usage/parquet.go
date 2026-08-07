@@ -346,7 +346,7 @@ func (e *Exporter) Verify(snapshot *Snapshot) error {
 			if _, exists := seen[eventID]; !exists {
 				return fmt.Errorf("usage reconciliation missing event %s", eventID)
 			}
-			if row, exists := canonicalRows[eventID]; exists && row != toParquetAttempt(expected[eventID]) {
+			if row, exists := canonicalRows[eventID]; exists && row != narrowToSchema(toParquetAttempt(expected[eventID]), row.SchemaVersion) {
 				return fmt.Errorf("usage reconciliation content mismatch for event %s", eventID)
 			}
 		}
@@ -650,13 +650,39 @@ func (e *Exporter) safeManifestPath(relative string) (string, error) {
 	return path, nil
 }
 
+// narrowToSchema restates a freshly derived row as the given schema version
+// would have written it, so it can be compared against a partition that is
+// older than the current schema.
+//
+// Partitions are frozen once published. Reconciliation re-derives what a row
+// should contain from the Ledger, which necessarily produces the current
+// schema, so every column added after a partition was written would read as a
+// content mismatch — the row on disk is not wrong, it is just older. Only
+// columns the row's own schema could express take part in the comparison.
+func narrowToSchema(row parquetAttempt, version int32) parquetAttempt {
+	row.SchemaVersion = version
+	if version < 4 {
+		// Schema 4 introduced the provider token tiers.
+		row.ProviderCachedInputTokens = 0
+		row.ProviderCacheWriteInputTokens = 0
+		row.ProviderReasoningTokens = 0
+	}
+	return row
+}
+
 func verifyRows(rows []parquetAttempt, entry ManifestFile, seen map[string]struct{}, canonical map[string]parquetAttempt) error {
 	if int64(len(rows)) != entry.Records || len(rows) == 0 {
 		return errors.New("record count mismatch")
 	}
 	var inputTokens, outputTokens, cost int64
 	for _, row := range rows {
-		if row.SchemaVersion != parquetSchemaVersion || row.Sequence <= 0 || row.EventID == "" {
+		// The readable range, not the current version. Partitions are never
+		// rewritten, so a bump leaves every row already on disk at the older
+		// version; demanding the current one here fails verification for
+		// exactly the installs that have history. This is the same
+		// exact-equality trap the manifest gate above documents, one level
+		// further down.
+		if !supportedManifestSchema(int(row.SchemaVersion)) || row.Sequence <= 0 || row.EventID == "" {
 			return errors.New("invalid row")
 		}
 		if _, exists := seen[row.EventID]; exists {

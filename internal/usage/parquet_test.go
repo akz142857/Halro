@@ -315,3 +315,59 @@ func TestExporterPrunesOnlyExpiredPartitions(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestVerifyAcceptsRowsWrittenAtThePreviousSchema is the shape a real install
+// has and the shape the fixtures did not: partitions are never rewritten, so
+// after a schema bump every row already on disk still carries the version it
+// was written under. The upgrade test above starts from an empty manifest and
+// then writes fresh rows, so every row it verifies is at the current version —
+// it exercises the manifest gate and never the row check. Demanding the
+// current version per row turned a bump into a failed verification for exactly
+// the installs that have history, while a brand new one passed.
+func TestVerifyAcceptsRowsWrittenAtThePreviousSchema(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "usage")
+	exporter, err := NewExporter(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := Snapshot{Attempts: []AttemptEvent{{
+		EventID: "event_1", RequestID: "request_1", AttemptID: "attempt_1",
+		Sequence: 1, ProjectID: "project_1", StartedAt: time.Now().UTC(),
+		CompletedAt: time.Now().UTC(), Status: "success",
+		ProviderInputTokens: 100, ProviderOutputTokens: 10,
+	}}}
+	manifest, err := exporter.Export(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Rewrite the partition as the previous schema wrote it: same rows, older
+	// version stamp, and no tier columns populated.
+	path := filepath.Join(root, filepath.FromSlash(manifest.Files[0].Path))
+	rows, err := readAttemptRows(path, manifest.Files[0].format())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range rows {
+		rows[index].SchemaVersion = parquetSchemaVersion - 1
+		rows[index].ProviderCachedInputTokens = 0
+		rows[index].ProviderCacheWriteInputTokens = 0
+		rows[index].ProviderReasoningTokens = 0
+	}
+	if err := writeParquetAtomic(path, rows); err != nil {
+		t.Fatal(err)
+	}
+	checksum, err := fileSHA256(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest.Files[0].SHA256 = checksum
+	manifest.Files[0].SchemaVersion = parquetSchemaVersion - 1
+	if err := exporter.commitManifest(manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := exporter.Verify(&snapshot); err != nil {
+		t.Fatalf("rows written at schema %d must still verify: %v", parquetSchemaVersion-1, err)
+	}
+}
