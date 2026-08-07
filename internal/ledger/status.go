@@ -33,12 +33,18 @@ func (s *Status) MarkUnavailable() {
 	s.advance(AccountingUnavailable)
 }
 
+// RequireRecovery latches: nothing lowers the status again within the life of
+// the process.
+//
+// The reset is a restart, and deliberately so. A fresh process builds a fresh
+// Status and re-opens the WAL, which re-scans it, re-checks every frame's CRC,
+// and re-authenticates the chain against the trusted checkpoint — so the status
+// comes back healthy only because the log was examined again and found sound.
+// An in-process "mark healthy" would clear the flag without re-establishing any
+// of that, which is the shape of a fail-open: the one thing standing between a
+// corrupt ledger and continued accounting would be a call somebody could make.
 func (s *Status) RequireRecovery() {
 	s.advance(AccountingRecoveryRequired)
-}
-
-func (s *Status) MarkHealthyAfterVerifiedRecovery() {
-	s.value.Store(uint32(AccountingHealthy))
 }
 
 func (s *Status) advance(next AccountingStatus) {

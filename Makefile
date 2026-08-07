@@ -143,7 +143,15 @@ vet:
 observability-check:
 	./deploy/observability/validate.sh
 
-check: test race vet frontend-test observability-check
+check: fmt-check test race vet frontend-test observability-check
+
+# Nothing enforced gofmt, so an unformatted file reached main and stayed there.
+# The convention in CLAUDE.md is only a convention until something fails on it.
+fmt-check:
+	@unformatted=$$(gofmt -l ./cmd ./internal ./tools); \
+	if [ -n "$$unformatted" ]; then \
+		echo "gofmt needed:"; echo "$$unformatted"; exit 1; \
+	fi
 
 clean:
 	rm -rf bin
