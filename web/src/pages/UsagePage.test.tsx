@@ -34,6 +34,33 @@ describe("UsagePage request correlation", () => {
   });
 });
 
+// The far end of the Overview's adjustment-over-budget signal. A link that lands on
+// an unfiltered list repeats the same defect one level down.
+describe("UsagePage project deep link", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    window.history.replaceState({}, "", "/admin/usage?project_id=project_a");
+  });
+
+  it("filters to the project it was sent to and says so", async () => {
+    const usage = vi.spyOn(api, "usage").mockResolvedValue({ items: [], next_cursor: "" });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><UsagePage /></QueryClientProvider>);
+
+    await waitFor(() => expect(usage).toHaveBeenCalled());
+    expect(new URLSearchParams((usage.mock.calls[0][0] ?? "").slice(1)).get("project_id")).toBe("project_a");
+
+    const chip = screen.getByRole("button", { name: /项目 project_a/ });
+    fireEvent.click(chip);
+
+    await waitFor(() => expect(usage.mock.calls.length).toBeGreaterThan(1));
+    const latest = usage.mock.calls[usage.mock.calls.length - 1][0] ?? "";
+    expect(new URLSearchParams(latest.slice(1)).get("project_id")).toBeNull();
+    // The URL follows, so a reload does not silently restore the filter.
+    expect(window.location.search).toBe("");
+  });
+});
+
 // Correcting one attempt's cost is the exception path, not a routine one. It belongs
 // behind the pricing evidence disclosure so the list reads as the log it is; a button
 // sitting in every row made the table look editable.

@@ -198,6 +198,10 @@ h3 { margin-bottom: 0; font-size: 18px; }
 .governance-signal > span, .governance-signal small { display: block; color: var(--muted-2); font: var(--font-size-xs) var(--mono); }
 .governance-signal strong { display: block; margin: 6px 0 4px; font: 500 18px var(--mono); }
 .governance-signal.warning strong { color: var(--warning); }
+/* The resources a signal counted, each a way into its calls. Wraps rather than
+   overflowing: the tile is one column of a strip and the count is rarely large. */
+.governance-signal-links { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); margin-top: var(--space-1); }
+.governance-signal-links .resource-link { font: var(--font-size-xs) var(--mono); color: var(--color-action-primary); }
 .governance-main-grid { grid-template-columns: minmax(0, 1.65fr) minmax(300px, .75fr); }
 .governance-execution-panel { padding-bottom: 8px; }
 .pressure-section, .rejection-summary { margin: 0 22px; padding: 16px 0; border-bottom: 1px solid var(--line); }
@@ -676,8 +680,11 @@ td small, td code { display: block; margin-top: 4px; color: var(--muted); }
   background: var(--surface); border: 1px solid var(--line);
 }
 .filter-bar label span { display: block; margin-bottom: 5px; color: var(--muted-2); font: var(--font-size-xs) var(--mono); }
-.filter-bar input, .filter-bar select { min-height: 34px; }
+.filter-bar input, .filter-bar select, .filter-bar .filter-chip { min-height: 34px; }
 .filter-count { margin-left: auto; padding: 9px; color: var(--muted); font: var(--font-size-xs) var(--mono); }
+/* The filter a deep link arrived with, stated where the typed filters are, so the
+   narrowed list never passes for the whole one. */
+.filter-bar .filter-chip { font: var(--font-size-xs) var(--mono); }
 
 .timeline { padding: 5px 22px 18px; }
 .audit-panel { margin-top: 18px; }

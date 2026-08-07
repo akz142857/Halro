@@ -69,6 +69,11 @@ type pricingGovernanceSummary struct {
 	Quarantined          int `json:"quarantined"`
 	Unknown              int `json:"unknown"`
 	AdjustmentOverBudget int `json:"adjustment_over_budget"`
+	// Naming the projects, not just counting them: a signal an operator cannot
+	// follow to the accounts it is about tells them something is wrong and
+	// leaves them to find it by hand. Always an array, never null, so the
+	// console has one shape to render.
+	AdjustmentOverBudgetItems []pressureItem `json:"adjustment_over_budget_items"`
 }
 
 type policyRejectionSummary struct {
@@ -96,6 +101,10 @@ type pressureItem struct {
 	Utilization        float64 `json:"utilization"`
 	CommittedMicrosUSD int64   `json:"committed_micros_usd,omitempty"`
 	ReservedMicrosUSD  int64   `json:"reserved_micros_usd,omitempty"`
+	// Signed, and only set where an adjustment is what the item is about: it is
+	// the difference between "this project spent too much" and "this project was
+	// put over by a correction", which are acted on differently.
+	AdjustmentDeltaMicrosUSD int64 `json:"adjustment_delta_micros_usd,omitempty"`
 }
 
 func (r *Runtime) dashboardGovernance(request *http.Request, now time.Time, period budget.Period) (dashboardGovernance, map[string]string, error) {
@@ -143,10 +152,19 @@ func (r *Runtime) dashboardGovernance(request *http.Request, now time.Time, peri
 			governance.Pricing.Unknown++
 		}
 	}
+	governance.Pricing.AdjustmentOverBudgetItems = make([]pressureItem, 0)
 	for _, project := range projects {
 		balance := r.state.Balance(project.ID, period.ID, period.TimezoneVersion)
 		if project.DailyBudgetMicrosUSD > 0 && balance.AdjustmentDeltaMicrosUSD != 0 && balance.CommittedMicrosUSD > project.DailyBudgetMicrosUSD {
 			governance.Pricing.AdjustmentOverBudget++
+			governance.Pricing.AdjustmentOverBudgetItems = append(governance.Pricing.AdjustmentOverBudgetItems, pressureItem{
+				Scope: "project", ID: project.ID, Name: project.Name,
+				Current:                  balance.CommittedMicrosUSD,
+				Limit:                    project.DailyBudgetMicrosUSD,
+				Utilization:              float64(balance.CommittedMicrosUSD) / float64(project.DailyBudgetMicrosUSD),
+				CommittedMicrosUSD:       balance.CommittedMicrosUSD,
+				AdjustmentDeltaMicrosUSD: balance.AdjustmentDeltaMicrosUSD,
+			})
 		}
 	}
 	return governance, labels, nil

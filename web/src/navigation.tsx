@@ -20,7 +20,11 @@ export function confirmNavigation() {
 
 export function navigate(path: string) {
   if (!confirmNavigation()) return;
-  if (window.location.pathname === path) return;
+  // Compared against the query too, not the path alone. Several destinations carry
+  // their subject in the query — a request ID, a project — so comparing only the
+  // path made "go to this page filtered differently" a no-op whenever the reader
+  // was already on that page, including clearing a filter back to the plain list.
+  if (window.location.pathname + window.location.search === path) return;
   window.history.pushState({}, "", path);
   window.dispatchEvent(new Event(navigationEvent));
 }

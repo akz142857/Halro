@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
 import type { Dashboard } from "../types";
@@ -101,6 +101,27 @@ describe("DashboardPage", () => {
   });
 
 
+
+  // A governance signal that raises an alarm and names nothing leaves the operator
+  // to find the accounts by hand, which is where this one stopped.
+  it("leads from the adjustment-over-budget signal to the projects it counted", async () => {
+    const withOverage = dashboard();
+    withOverage.governance.pricing = {
+      quarantined: 0, unknown: 0, adjustment_over_budget: 1,
+      adjustment_over_budget_items: [{
+        scope: "project", id: "project_a", name: "Alpha",
+        current: 2_000, limit: 1_000, utilization: 2,
+        committed_micros_usd: 2_000, adjustment_delta_micros_usd: 2_000,
+      }],
+    };
+    vi.spyOn(api, "dashboard").mockResolvedValue(withOverage);
+    window.history.replaceState({}, "", "/admin");
+    renderPage();
+
+    const signal = (await screen.findByText("调整后超预算")).closest(".governance-signal")!;
+    fireEvent.click(within(signal as HTMLElement).getByRole("button", { name: "Alpha" }));
+    expect(window.location.pathname + window.location.search).toBe("/admin/usage?project_id=project_a");
+  });
 
   it("renders empty states when collection fields are null", async () => {
     const empty = dashboard();

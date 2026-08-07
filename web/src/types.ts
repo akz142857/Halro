@@ -158,6 +158,7 @@ export interface GovernancePressureItem {
   utilization: number;
   committed_micros_usd?: number;
   reserved_micros_usd?: number;
+  adjustment_delta_micros_usd?: number;
 }
 
 export interface Dashboard {
@@ -182,7 +183,7 @@ export interface Dashboard {
     };
     budget: { at_risk: number; items: GovernancePressureItem[] };
     capacity: { at_risk: number; items: GovernancePressureItem[] };
-		pricing?: { quarantined: number; unknown: number; adjustment_over_budget: number };
+		pricing?: { quarantined: number; unknown: number; adjustment_over_budget: number; adjustment_over_budget_items?: GovernancePressureItem[] };
   };
   resource_labels: Record<string, string>;
   accounting_status: number;

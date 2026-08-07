@@ -4,6 +4,7 @@ import { api } from "../api";
 import { ErrorState, Loading, PageHeader, StatusDot } from "../components";
 import { FirstRunChecklist } from "./FirstRunChecklist";
 import { compactNumber, money, useInstantFormatter } from "../format";
+import { navigate } from "../navigation";
 import { adoptTimeContext } from "../timezone";
 import type { GovernancePressureItem, UsageAnomaly, UsageBreakdown } from "../types";
 import type { TrendMetric } from "../trend";
@@ -96,7 +97,7 @@ export function DashboardPage() {
         <GovernanceSignal label={t("dashboard.capacityRisk")} value={String(dashboard.governance.capacity.at_risk)} detail={t("dashboard.resourcesAtRisk")} alert={dashboard.governance.capacity.at_risk > 0} />
 		<GovernanceSignal label={t("dashboard.pricingQuarantine")} value={String(dashboard.governance.pricing?.quarantined ?? 0)} detail={t("dashboard.pricingQuarantineDetail")} alert={(dashboard.governance.pricing?.quarantined ?? 0) > 0} />
 		<GovernanceSignal label={t("dashboard.unknownPricing")} value={String(dashboard.governance.pricing?.unknown ?? 0)} detail={t("dashboard.unknownPricingDetail")} alert={(dashboard.governance.pricing?.unknown ?? 0) > 0} />
-		<GovernanceSignal label={t("dashboard.adjustmentOverBudget")} value={String(dashboard.governance.pricing?.adjustment_over_budget ?? 0)} detail={t("dashboard.adjustmentOverBudgetDetail")} alert={(dashboard.governance.pricing?.adjustment_over_budget ?? 0) > 0} />
+		<GovernanceSignal label={t("dashboard.adjustmentOverBudget")} value={String(dashboard.governance.pricing?.adjustment_over_budget ?? 0)} detail={t("dashboard.adjustmentOverBudgetDetail")} alert={(dashboard.governance.pricing?.adjustment_over_budget ?? 0) > 0} links={dashboard.governance.pricing?.adjustment_over_budget_items ?? []} />
       </section>
 
       <section className="dashboard-grid governance-main-grid">
@@ -175,8 +176,26 @@ function Metric({ label, value, detail, alert = false }: { label: string; value:
   return <article className={`metric ${alert ? "alert" : ""}`}><span>{label}</span><strong>{value}</strong><small>{detail}</small></article>;
 }
 
-function GovernanceSignal({ label, value, detail, alert }: { label: string; value: string; detail: string; alert: boolean }) {
-  return <div className={`governance-signal ${alert ? "warning" : ""}`}><span>{label}</span><strong>{value}</strong><small>{detail}</small></div>;
+// A signal that raises an alarm and names nothing leaves the operator to find the
+// accounts by hand — so where the server can say which resources it counted, each
+// one is a way into its calls rather than a number to go looking for.
+function GovernanceSignal({ label, value, detail, alert, links = [] }: { label: string; value: string; detail: string; alert: boolean; links?: GovernancePressureItem[] }) {
+  return (
+    <div className={`governance-signal ${alert ? "warning" : ""}`}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+      <small>{detail}</small>
+      {links.length > 0 && (
+        <small className="governance-signal-links">
+          {links.map((item) => (
+            <button type="button" className="resource-link inline" key={item.id} onClick={() => navigate(`/admin/usage?project_id=${encodeURIComponent(item.id)}`)}>
+              {item.name || item.id}
+            </button>
+          ))}
+        </small>
+      )}
+    </div>
+  );
 }
 
 function DashboardTabs<T extends string>({ label, value, items, onChange }: { label: string; value: T; items: { key: T; label: string }[]; onChange: (value: T) => void }) {

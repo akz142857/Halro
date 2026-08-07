@@ -3,6 +3,7 @@ import { useRef, useState, type FormEvent } from "react";
 import { api } from "../api";
 import { ErrorState, Field, Loading, Modal, PageHeader, StatusDot } from "../components";
 import { compactNumber, money, useInstantFormatter } from "../format";
+import { navigate } from "../navigation";
 import { useTranslation } from "react-i18next";
 import { useIsReadOnly } from "../session";
 import type { UsageAttempt } from "../types";
@@ -14,12 +15,17 @@ export function UsagePage() {
   const [status, setStatus] = useState("");
   const [model, setModel] = useState("");
   const [requestID, setRequestID] = useState(() => new URLSearchParams(window.location.search).get("request_id") ?? "");
+  // Arrived at from a governance signal that named this project. It is shown as a
+  // clearable chip rather than a hidden filter: a list silently narrowed to one
+  // project reads as "these are all the calls", which is the wrong conclusion.
+  const [projectID, setProjectID] = useState(() => new URLSearchParams(window.location.search).get("project_id") ?? "");
   const [adjusting, setAdjusting] = useState<UsageAttempt | null>(null);
   const usage = useInfiniteQuery({
-    queryKey: ["usage", status, model, requestID],
+    queryKey: ["usage", status, model, requestID, projectID],
     initialPageParam: "",
     queryFn: ({ pageParam }) => api.usage(`?${new URLSearchParams({
       limit: "100", ...(status ? { status } : {}), ...(model ? { model } : {}), ...(requestID ? { request_id: requestID } : {}),
+      ...(projectID ? { project_id: projectID } : {}),
       ...(pageParam ? { cursor: pageParam } : {}),
     })}`),
     getNextPageParam: (page) => page.next_cursor || undefined,
@@ -43,6 +49,11 @@ export function UsagePage() {
             <option value="error">{t("usage.error")}</option>
           </select>
         </label>
+        {projectID && (
+          <button type="button" className="button ghost filter-chip" onClick={() => { setProjectID(""); navigate("/admin/usage"); }}>
+            {t("usage.projectFilter", { project: projectID })} ×
+          </button>
+        )}
         <span className="filter-count">{t("usage.records", { count: attempts.length })}</span>
       </div>
       {usage.isPending && <Loading />}
