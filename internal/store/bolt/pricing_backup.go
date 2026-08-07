@@ -139,20 +139,6 @@ func (s *Store) PricingBackupState() (PricingBackupState, error) {
 		}); err != nil {
 			return err
 		}
-		if err := tx.Bucket(bucketCostAdjustmentIntents).ForEach(func(key, value []byte) error {
-			var intent CostAdjustmentIntent
-			if err := json.Unmarshal(value, &intent); err != nil {
-				return err
-			}
-			if !intent.Delivered && !intent.Rejected {
-				result.PendingIntents++
-				pendingHash.Write(key)
-				pendingHash.Write(value)
-			}
-			return nil
-		}); err != nil {
-			return err
-		}
 		return nil
 	})
 	result.StateSHA256 = "sha256:" + hex.EncodeToString(stateHash.Sum(nil))
@@ -189,23 +175,6 @@ func LegacyPricingBackupState(path string) (PricingBackupState, error) {
 					return err
 				}
 				if !intent.Delivered {
-					result.PendingIntents++
-					pendingHash.Write(key)
-					pendingHash.Write(value)
-				}
-				return nil
-			}); err != nil {
-				return err
-			}
-		}
-		adjustments := tx.Bucket(bucketCostAdjustmentIntents)
-		if adjustments != nil {
-			if err := adjustments.ForEach(func(key, value []byte) error {
-				var intent CostAdjustmentIntent
-				if err := json.Unmarshal(value, &intent); err != nil {
-					return err
-				}
-				if !intent.Delivered && !intent.Rejected {
 					result.PendingIntents++
 					pendingHash.Write(key)
 					pendingHash.Write(value)

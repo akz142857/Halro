@@ -31,16 +31,6 @@ func TestExporterNDJSONPublishesVerifiableIdempotentPartitions(t *testing.T) {
 				StartedAt: now.Add(-time.Second), CompletedAt: now, Status: "success", HTTPStatus: 200,
 			},
 		},
-		Adjustments: []CostAdjustmentEvent{
-			{
-				EventID: "adjust_1", Sequence: 2, RequestID: "request_1", AttemptID: "attempt_1", ProjectID: "project_1",
-				Mode: ledger.AdjustmentModeExplicit, AdjustmentSequence: 1,
-				IdempotencyKeyDigest: "sha256:" + repeatDigit("a", 64), BaseCostMicrosUSD: 7,
-				NetCostBeforeMicrosUSD: 7, DeltaMicrosUSD: 2, NetCostAfterMicrosUSD: 9,
-				ServicePeriodID: "2026-08-06", OriginalCompletedAt: now, PostedPeriodID: "2026-08-06", PostedAt: now,
-				ReasonCode: "invoice_difference", EvidenceDigest: "sha256:" + repeatDigit("b", 64), CreatedBy: "admin",
-			},
-		},
 	}
 	manifest, err := exporter.Export(snapshot)
 	if err != nil {
@@ -62,10 +52,6 @@ func TestExporterNDJSONPublishesVerifiableIdempotentPartitions(t *testing.T) {
 	}
 	if report.Missing != 0 || report.Duplicates != 0 || report.Extra != 0 {
 		t.Fatalf("reconciliation=%#v", report)
-	}
-	adjustments, err := exporter.LoadAdjustmentManifest()
-	if err != nil || len(adjustments.Files) != 1 || adjustments.Files[0].Format != FormatNDJSON {
-		t.Fatalf("adjustments=%#v err=%v", adjustments, err)
 	}
 	// Idempotent re-export must not rewrite or duplicate the partition.
 	repeated, err := exporter.Export(snapshot)
@@ -193,12 +179,4 @@ func TestManifestEntryWithNoFormatFieldStillVerifiesAsParquet(t *testing.T) {
 	if err := exporter.Verify(&snapshot); err != nil {
 		t.Fatalf("Verify rejected a legacy no-Format manifest entry: %v", err)
 	}
-}
-
-func repeatDigit(digit string, n int) string {
-	out := make([]byte, 0, n)
-	for len(out) < n {
-		out = append(out, digit[0])
-	}
-	return string(out)
 }

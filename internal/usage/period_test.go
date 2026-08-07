@@ -81,7 +81,7 @@ func TestTodaySpansTheWholeDSTDay(t *testing.T) {
 			sequence++
 			settledAt(t, aggregate, sequence, period.End)
 
-			dashboard := aggregate.DashboardForBasis(period.Start.Add(time.Hour), period, "service_period_restated")
+			dashboard := aggregate.Dashboard(period.Start.Add(time.Hour), period)
 			if dashboard.Today.Attempts != int64(testCase.hours) {
 				t.Fatalf("today counted %d attempts over a %d hour day; the interval was not applied",
 					dashboard.Today.Attempts, testCase.hours)
@@ -100,7 +100,7 @@ func TestTodayBoundaryIsHalfOpen(t *testing.T) {
 	settledAt(t, aggregate, 2, period.End.Add(-time.Nanosecond))
 	settledAt(t, aggregate, 3, period.End)
 
-	dashboard := aggregate.DashboardForBasis(period.Start.Add(time.Hour), period, "service_period_restated")
+	dashboard := aggregate.Dashboard(period.Start.Add(time.Hour), period)
 	if dashboard.Today.Attempts != 2 {
 		t.Fatalf("today counted %d attempts, want 2 (start inclusive, end exclusive)", dashboard.Today.Attempts)
 	}

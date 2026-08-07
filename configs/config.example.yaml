@@ -32,9 +32,6 @@ admin:
   # the Gateway listener do not cover this path. Startup warns when it matters.
   developer_workbench: "enabled"
   external_origin: ""
-  adjustment_soft_limit_micros_usd: 10000000
-  adjustment_hard_limit_micros_usd: 100000000
-  adjustment_daily_hard_limit_micros_usd: 500000000
 
 usage:
   durability: "balanced"

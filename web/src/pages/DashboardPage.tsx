@@ -97,7 +97,6 @@ export function DashboardPage() {
         <GovernanceSignal label={t("dashboard.capacityRisk")} value={String(dashboard.governance.capacity.at_risk)} detail={t("dashboard.resourcesAtRisk")} alert={dashboard.governance.capacity.at_risk > 0} />
 		<GovernanceSignal label={t("dashboard.pricingQuarantine")} value={String(dashboard.governance.pricing?.quarantined ?? 0)} detail={t("dashboard.pricingQuarantineDetail")} alert={(dashboard.governance.pricing?.quarantined ?? 0) > 0} />
 		<GovernanceSignal label={t("dashboard.unknownPricing")} value={String(dashboard.governance.pricing?.unknown ?? 0)} detail={t("dashboard.unknownPricingDetail")} alert={(dashboard.governance.pricing?.unknown ?? 0) > 0} />
-		<GovernanceSignal label={t("dashboard.adjustmentOverBudget")} value={String(dashboard.governance.pricing?.adjustment_over_budget ?? 0)} detail={t("dashboard.adjustmentOverBudgetDetail")} alert={(dashboard.governance.pricing?.adjustment_over_budget ?? 0) > 0} links={dashboard.governance.pricing?.adjustment_over_budget_items ?? []} />
       </section>
 
       <section className="dashboard-grid governance-main-grid">

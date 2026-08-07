@@ -158,7 +158,6 @@ export interface GovernancePressureItem {
   utilization: number;
   committed_micros_usd?: number;
   reserved_micros_usd?: number;
-  adjustment_delta_micros_usd?: number;
 }
 
 export interface Dashboard {
@@ -183,7 +182,7 @@ export interface Dashboard {
     };
     budget: { at_risk: number; items: GovernancePressureItem[] };
     capacity: { at_risk: number; items: GovernancePressureItem[] };
-		pricing?: { quarantined: number; unknown: number; adjustment_over_budget: number; adjustment_over_budget_items?: GovernancePressureItem[] };
+    pricing?: { quarantined: number; unknown: number };
   };
   resource_labels: Record<string, string>;
   accounting_status: number;
@@ -434,9 +433,7 @@ export interface UsageAttempt {
   provider_output_tokens: number;
   cost_micros_usd: number | null;
   original_cost_micros_usd: number | null;
-  adjustment_delta_micros_usd: number;
   final_cost_micros_usd: number | null;
-  adjustment_sequence: number;
   price_evidence_status: "versioned" | "legacy_unversioned" | "unknown";
   cost_value_status: "known" | "unknown";
   lease_mode?: "metered" | "free" | "unknown_allowed";
@@ -511,24 +508,6 @@ export interface DeploymentPriceProposal {
 	status: "pending" | "adopted" | "rejected";
 	adopted_price_version_id?: string;
 	revision: number;
-}
-
-export interface CostAdjustmentEvent {
-  event_id: string;
-  adjustment_sequence: number;
-  delta_micros_usd: number;
-  net_cost_after_micros_usd: number;
-  posted_at: string;
-  reason_code: string;
-  reason?: string;
-  created_by: string;
-}
-
-export interface CostAdjustmentPreview {
-  event: { adjustment_sequence: number; adjustment_delta_micros_usd: number; net_cost_before_micros_usd: number; net_cost_after_micros_usd: number; service_period_id: string; posted_period_id: string };
-  budget_overage_micros_usd: number;
-  soft_limit_exceeded: boolean;
-  hard_limit_exceeded: boolean;
 }
 
 export interface AuditRecord {

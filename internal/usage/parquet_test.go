@@ -154,34 +154,6 @@ func TestExporterDetectsParquetTampering(t *testing.T) {
 	}
 }
 
-func TestExporterKeepsSettlementImmutableAndPublishesIndependentAdjustments(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "usage")
-	exporter, err := NewExporter(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
-	snapshot := Snapshot{Attempts: []AttemptEvent{{EventID: "settle_1", RequestID: "req_1", AttemptID: "att_1", Sequence: 1, ProjectID: "p",
-		OriginalCostMicrosUSD: ledger.MicrosUSD(7), FinalCostMicrosUSD: ledger.MicrosUSD(9), CostMicrosUSD: ledger.MicrosUSD(9), CompletedAt: now}},
-		Adjustments: []CostAdjustmentEvent{{EventID: "adjust_1", Sequence: 2, RequestID: "req_1", AttemptID: "att_1", ProjectID: "p", Mode: ledger.AdjustmentModeExplicit,
-			AdjustmentSequence: 1, IdempotencyKeyDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", BaseCostMicrosUSD: 7, NetCostBeforeMicrosUSD: 7, DeltaMicrosUSD: 2, NetCostAfterMicrosUSD: 9,
-			ServicePeriodID: "2026-08-04", OriginalCompletedAt: now, PostedPeriodID: "2026-08-05", PostedAt: now.Add(24 * time.Hour), ReasonCode: "invoice_difference", EvidenceDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", CreatedBy: "admin"}}}
-	manifest, err := exporter.Export(snapshot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(manifest.Files) != 1 || manifest.Files[0].CostMicrosUSD != 7 {
-		t.Fatalf("settlement manifest=%#v", manifest)
-	}
-	adjustments, err := exporter.LoadAdjustmentManifest()
-	if err != nil || len(adjustments.Files) != 1 || adjustments.Files[0].DeltaMicrosUSD != 2 || adjustments.LastSequence != 2 {
-		t.Fatalf("adjustments=%#v err=%v", adjustments, err)
-	}
-	if err := exporter.Verify(&snapshot); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestExporterDualReadsAndDeterministicallyUpgradesV2Manifest(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "usage")
 	exporter, err := NewExporter(root)

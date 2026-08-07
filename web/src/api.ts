@@ -35,8 +35,6 @@ import type {
   UsageAttempt,
   DeploymentPriceVersion,
   DeploymentPriceProposal,
-  CostAdjustmentEvent,
-  CostAdjustmentPreview,
 } from "./types";
 
 const API_ROOT = "/admin/api/v1";
@@ -377,10 +375,6 @@ export const api = {
     request<Page<UsageAttempt>>(`/usage${query}`).then((value) => value.data),
   usageRequest: (requestID: string) =>
     request<unknown>(`/usage/requests/${encodeURIComponent(requestID)}`).then((value) => value.data),
-  usageAttemptAdjustments: (attemptID: string) =>
-    request<{ items: CostAdjustmentEvent[] | null }>(`/usage/attempts/${encodeURIComponent(attemptID)}/cost-adjustments`).then((result) => result.data.items ?? []),
-  previewCostAdjustment: (attemptID: string, value: unknown) => request<CostAdjustmentPreview>(`/usage/attempts/${encodeURIComponent(attemptID)}/cost-adjustments/preview`, json("POST", value)).then((result) => result.data),
-  createCostAdjustment: (attemptID: string, value: unknown, idempotencyKey: string) => request<{ adjustment: unknown; budget_overage_micros_usd?: number }>(`/usage/attempts/${encodeURIComponent(attemptID)}/cost-adjustments`, { ...json("POST", value), headers: { "Idempotency-Key": idempotencyKey } }).then((result) => result.data),
   audit: (query = "") => request<Page<AuditRecord>>(`/audit${query}`).then((value) => value.data),
   tokenGuardPolicies: () =>
     request<Page<TokenGuardPolicy>>("/token-guard-policies").then((value) => value.data),

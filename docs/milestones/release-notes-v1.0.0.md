@@ -37,8 +37,8 @@ and other external services are not required.
   and conservative unknown-outcome settlement are crash tested.
 - Deployment prices are immutable, effective-dated versions. Every Provider
   attempt durably pins its own price snapshot before upstream I/O, so later
-  price changes cannot rewrite historical spend. Corrections are append-only
-  adjustments, and unknown cost is never displayed as zero.
+  price changes cannot rewrite historical spend. Unknown cost is never
+  displayed as zero.
 - Pricing automation and LLM extraction create expiring Proposals only.
   Provenance, model/region match, warnings and a digest are reviewed in Admin;
   recent re-authentication is required before adoption creates a new audited

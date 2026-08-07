@@ -57,11 +57,6 @@ admin:
   # loopback-only Admin listener; on a reachable one it means network controls
   # applied to the Gateway listener do not cover this path, and startup warns.
   developer_workbench: enabled
-  # Manual cost adjustments: soft limit warns, hard limit refuses, daily limit
-  # caps the total one administrator can move in a day.
-  adjustment_soft_limit_micros_usd: 10000000
-  adjustment_hard_limit_micros_usd: 100000000
-  adjustment_daily_hard_limit_micros_usd: 500000000
 
 usage:
   # "balanced" batches accounting writes; "strict" fsyncs every one of them,

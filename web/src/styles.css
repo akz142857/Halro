@@ -667,6 +667,14 @@ td { padding: 16px 15px; color: var(--color-text-primary); border-bottom: 1px so
 tbody tr:last-child td { border-bottom: 0; }
 tbody tr:hover { background: var(--overlay-subtle); }
 td small, td code { display: block; margin-top: 4px; color: var(--muted); }
+/* Fixed columns so opening a row's pricing evidence disclosure cannot resize
+   the Cost column and shift every other column out from under its header —
+   auto table layout resizes columns to the widest content across all rows. */
+.usage-table { table-layout: fixed; }
+.usage-table td { vertical-align: top; white-space: normal; overflow-wrap: anywhere; }
+.cost-evidence { max-width: 100%; margin-top: 4px; color: var(--color-text-tertiary); font-size: 11px; line-height: 1.5; white-space: normal; }
+.cost-evidence summary { width: max-content; cursor: pointer; color: var(--color-text-secondary); font-weight: 700; }
+.cost-evidence small { display: block; margin-top: 6px; color: inherit; font-size: inherit; white-space: normal; }
 .model-cell { display: grid; grid-template-columns: auto 1fr; column-gap: 8px; align-items: center; }
 .model-cell code { grid-column: 2; }
 .route-row-actions { width: 100%; min-width: 330px; align-items: center; }
@@ -680,11 +688,9 @@ td small, td code { display: block; margin-top: 4px; color: var(--muted); }
   background: var(--surface); border: 1px solid var(--line);
 }
 .filter-bar label span { display: block; margin-bottom: 5px; color: var(--muted-2); font: var(--font-size-xs) var(--mono); }
-.filter-bar input, .filter-bar select, .filter-bar .filter-chip { min-height: 34px; }
+.filter-bar input, .filter-bar select { min-height: 34px; }
+.filter-bar input[type="datetime-local"] { height: 34px; padding: 0 var(--space-3); font-size: 13px; }
 .filter-count { margin-left: auto; padding: 9px; color: var(--muted); font: var(--font-size-xs) var(--mono); }
-/* The filter a deep link arrived with, stated where the typed filters are, so the
-   narrowed list never passes for the whole one. */
-.filter-bar .filter-chip { font: var(--font-size-xs) var(--mono); }
 
 .timeline { padding: 5px 22px 18px; }
 .audit-panel { margin-top: 18px; }

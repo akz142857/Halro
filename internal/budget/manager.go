@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -18,9 +17,8 @@ import (
 )
 
 var (
-	ErrExceeded                    = errors.New("daily budget exceeded")
-	ErrInvalidAmount               = errors.New("invalid accounting amount")
-	ErrAdjustmentHardLimitExceeded = errors.New("adjustment exceeds rolling online hard limit")
+	ErrExceeded      = errors.New("daily budget exceeded")
+	ErrInvalidAmount = errors.New("invalid accounting amount")
 )
 
 type Attempt struct {
@@ -96,30 +94,6 @@ type Settlement struct {
 	// callers leave it zero and the manager captures its clock at commit.
 	OccurredAt time.Time
 }
-
-type AdjustmentSpec struct {
-	AttemptID                string
-	Mode                     ledger.AdjustmentMode
-	ExplicitDeltaMicrosUSD   int64
-	CorrectionPriceSnapshot  *domain.PriceSnapshot
-	ExpectedSequence         uint64
-	ExpectedNetCostMicrosUSD int64
-	IdempotencyKeyDigest     string
-	RequestDigest            string
-	ReasonCode               string
-	Reason                   string
-	EvidenceDigest           string
-	CreatedBy                string
-}
-
-type AdjustmentPreview struct {
-	Event                  ledger.Event `json:"event"`
-	BudgetOverageMicrosUSD int64        `json:"budget_overage_micros_usd"`
-	SoftLimitExceeded      bool         `json:"soft_limit_exceeded"`
-	HardLimitExceeded      bool         `json:"hard_limit_exceeded"`
-}
-
-type PersistAdjustmentIntent func(ledger.Event) error
 
 type Manager struct {
 	projectLocks sync.Map
@@ -221,222 +195,6 @@ func (m *Manager) lockProject(projectID string) func() {
 	lock := value.(*sync.Mutex)
 	lock.Lock()
 	return lock.Unlock
-}
-
-func (m *Manager) PreviewAdjustment(spec AdjustmentSpec, postedAt time.Time, dailyBudgetMicrosUSD int64) (AdjustmentPreview, error) {
-	settled, ok := m.state.SettledAttempt(spec.AttemptID)
-	if !ok {
-		return AdjustmentPreview{}, errors.New("settled attempt not found")
-	}
-	if !settled.CostKnown && spec.Mode != ledger.AdjustmentModeReprice {
-		return AdjustmentPreview{}, errors.New("unknown original cost requires a correction price snapshot")
-	}
-	if spec.ExpectedSequence != settled.AdjustmentSequence || settled.CostKnown && spec.ExpectedNetCostMicrosUSD != settled.NetCostMicrosUSD {
-		return AdjustmentPreview{}, errors.New("adjustment sequence or expected net cost conflicts")
-	}
-	if !domain.ValidSHA256Label(spec.IdempotencyKeyDigest) || !domain.ValidSHA256Label(spec.RequestDigest) || !domain.ValidSHA256Label(spec.EvidenceDigest) || spec.CreatedBy == "" || spec.ReasonCode == "" || len(spec.Reason) > 1024 {
-		return AdjustmentPreview{}, errors.New("adjustment evidence is incomplete")
-	}
-	postedAt = m.inAccountingZone(postedAt)
-	if postedAt.IsZero() {
-		return AdjustmentPreview{}, errors.New("adjustment posting time is required")
-	}
-	// An adjustment belongs to two periods at once: the one the original call
-	// was served in, whose balance it moves, and the one it is being posted in.
-	// The service period is inherited from the settlement rather than recomputed,
-	// so correcting an old charge cannot silently refile it under today.
-	servicePeriod := PeriodFromEvent(settled.Settlement)
-	postedPeriod, err := m.periods.PeriodAt(postedAt)
-	if err != nil {
-		return AdjustmentPreview{}, err
-	}
-	base, before := settled.BaseCostMicrosUSD, settled.NetCostMicrosUSD
-	after, delta := int64(0), spec.ExplicitDeltaMicrosUSD
-	inputCost, outputCost, fixedCost := int64(0), int64(0), int64(0)
-	switch spec.Mode {
-	case ledger.AdjustmentModeReprice:
-		if spec.CorrectionPriceSnapshot == nil {
-			return AdjustmentPreview{}, errors.New("correction price snapshot is required")
-		}
-		breakdown, err := spec.CorrectionPriceSnapshot.Calculate(settled.Settlement.ProviderInputTokens, settled.Settlement.ProviderOutputTokens)
-		if err != nil {
-			return AdjustmentPreview{}, err
-		}
-		after, inputCost, outputCost, fixedCost = breakdown.TotalCostMicrosUSD, breakdown.InputCostMicrosUSD, breakdown.OutputCostMicrosUSD, breakdown.FixedCostMicrosUSD
-		if settled.CostKnown {
-			delta = after - before
-		} else {
-			delta = after
-		}
-	case ledger.AdjustmentModeExplicit:
-		var err error
-		after, err = checkedSignedAdd(before, delta)
-		if err != nil {
-			return AdjustmentPreview{}, err
-		}
-	default:
-		return AdjustmentPreview{}, errors.New("invalid adjustment mode")
-	}
-	if after < 0 {
-		return AdjustmentPreview{}, errors.New("adjustment cannot make attempt cost negative")
-	}
-	eventID := "evt_adj_" + spec.IdempotencyKeyDigest[len("sha256:"):len("sha256:")+24]
-	event := ledger.Event{
-		EventID: eventID, Kind: ledger.EventCostAdjusted, RequestID: settled.Settlement.RequestID, AttemptID: spec.AttemptID,
-		ProjectID: settled.Settlement.ProjectID, KeyID: settled.Settlement.KeyID, RouteID: settled.Settlement.RouteID, DeploymentID: settled.Settlement.DeploymentID,
-		ProviderID: settled.Settlement.ProviderID, RequestedModel: settled.Settlement.RequestedModel, ProviderModel: settled.Settlement.ProviderModel,
-		OccurredAt: postedAt, OriginalSettlementEventID: settled.Settlement.EventID, OriginalSettlementDigest: settled.SettlementDigest,
-		AdjustmentMode: spec.Mode, AdjustmentSequence: settled.AdjustmentSequence + 1, IdempotencyKeyDigest: spec.IdempotencyKeyDigest, AdjustmentRequestDigest: spec.RequestDigest,
-		BaseSettlementMicrosUSD: func() *int64 {
-			if settled.CostKnown {
-				return ledger.MicrosUSD(base)
-			}
-			return nil
-		}(),
-		NetCostBeforeMicrosUSD: func() *int64 {
-			if settled.CostKnown {
-				return ledger.MicrosUSD(before)
-			}
-			return nil
-		}(), AdjustmentDeltaMicrosUSD: delta, NetCostAfterMicrosUSD: ledger.MicrosUSD(after),
-		ServicePeriodID: servicePeriod.ID, OriginalCompletedAt: settled.Settlement.OccurredAt, PostedPeriodID: postedPeriod.ID, PostedAt: postedAt,
-		CorrectionPriceSnapshot: spec.CorrectionPriceSnapshot, AdjustmentInputCostMicrosUSD: inputCost, AdjustmentOutputCostMicrosUSD: outputCost, AdjustmentFixedCostMicrosUSD: fixedCost,
-		AdjustmentReasonCode: spec.ReasonCode, AdjustmentReason: spec.Reason, AdjustmentEvidenceDigest: spec.EvidenceDigest, AdjustmentCreatedBy: spec.CreatedBy,
-	}
-	servicePeriod.Stamp(&event)
-	if spec.CorrectionPriceSnapshot != nil {
-		snapshot := spec.CorrectionPriceSnapshot.Clone()
-		event.CorrectionPriceSnapshot = &snapshot
-	}
-	if err := event.Validate(); err != nil {
-		return AdjustmentPreview{}, err
-	}
-	overage := int64(0)
-	// Only a correction posted inside the period it affects can push that
-	// period's budget over; a correction to an earlier day cannot.
-	if dailyBudgetMicrosUSD > 0 && event.ServicePeriodID == postedPeriod.ID && servicePeriod.TimezoneVersion == postedPeriod.TimezoneVersion {
-		balance := m.state.Balance(event.ProjectID, event.ServicePeriodID, servicePeriod.TimezoneVersion)
-		current, err := checkedSignedAdd(balance.CommittedMicrosUSD, balance.ReservedMicrosUSD)
-		if err != nil {
-			return AdjustmentPreview{}, err
-		}
-		adjusted, err := checkedSignedAdd(current, delta)
-		if err != nil {
-			return AdjustmentPreview{}, err
-		}
-		if adjusted > dailyBudgetMicrosUSD {
-			overage = adjusted - dailyBudgetMicrosUSD
-		}
-	}
-	return AdjustmentPreview{Event: event, BudgetOverageMicrosUSD: overage}, nil
-}
-
-// CommitAdjustmentWithIntent serializes the sequence check, rolling hard-limit
-// check, durable intent write and Ledger append under the project lock.
-func (m *Manager) CommitAdjustmentWithIntent(ctx context.Context, spec AdjustmentSpec, dailyBudgetMicrosUSD, rollingHardLimitMicrosUSD int64, persist PersistAdjustmentIntent) (AdjustmentPreview, bool, error) {
-	settled, ok := m.state.SettledAttempt(spec.AttemptID)
-	if !ok {
-		return AdjustmentPreview{}, false, errors.New("settled attempt not found")
-	}
-	defer m.lockProject(settled.Settlement.ProjectID)()
-	if prior, ok := m.state.AdjustmentByIdempotencyDigest(spec.IdempotencyKeyDigest); ok {
-		if prior.RequestDigest != spec.RequestDigest {
-			return AdjustmentPreview{}, false, errors.New("adjustment idempotency key conflict")
-		}
-		return AdjustmentPreview{Event: prior.Event}, true, nil
-	}
-	preview, err := m.PreviewAdjustment(spec, m.localNow(), dailyBudgetMicrosUSD)
-	if err != nil {
-		return AdjustmentPreview{}, false, err
-	}
-	magnitude := preview.Event.AdjustmentDeltaMicrosUSD
-	if magnitude == math.MinInt64 {
-		return AdjustmentPreview{}, false, errors.New("adjustment magnitude overflows int64")
-	}
-	if magnitude < 0 {
-		magnitude = -magnitude
-	}
-	if rollingHardLimitMicrosUSD > 0 {
-		posted, err := m.state.PostedAdjustmentAbsoluteSince(preview.Event.ProjectID, m.now().Add(-24*time.Hour))
-		if err != nil {
-			return AdjustmentPreview{}, false, err
-		}
-		if magnitude > rollingHardLimitMicrosUSD || posted > rollingHardLimitMicrosUSD-magnitude {
-			return AdjustmentPreview{}, false, ErrAdjustmentHardLimitExceeded
-		}
-	}
-	if persist == nil {
-		return AdjustmentPreview{}, false, errors.New("durable adjustment intent writer is required")
-	}
-	if err := persist(preview.Event); err != nil {
-		return AdjustmentPreview{}, false, err
-	}
-	if err := m.appendApply(ctx, preview.Event); err != nil {
-		return AdjustmentPreview{}, false, err
-	}
-	return preview, false, nil
-}
-
-func (m *Manager) AdjustCost(ctx context.Context, spec AdjustmentSpec, dailyBudgetMicrosUSD int64) (ledger.Event, bool, error) {
-	if prior, ok := m.state.AdjustmentByIdempotencyDigest(spec.IdempotencyKeyDigest); ok {
-		if prior.RequestDigest != spec.RequestDigest {
-			return ledger.Event{}, false, errors.New("adjustment idempotency key conflict")
-		}
-		return prior.Event, true, nil
-	}
-	settled, ok := m.state.SettledAttempt(spec.AttemptID)
-	if !ok {
-		return ledger.Event{}, false, errors.New("settled attempt not found")
-	}
-	defer m.lockProject(settled.Settlement.ProjectID)()
-	if prior, ok := m.state.AdjustmentByIdempotencyDigest(spec.IdempotencyKeyDigest); ok {
-		if prior.RequestDigest != spec.RequestDigest {
-			return ledger.Event{}, false, errors.New("adjustment idempotency key conflict")
-		}
-		return prior.Event, true, nil
-	}
-	preview, err := m.PreviewAdjustment(spec, m.now(), dailyBudgetMicrosUSD)
-	if err != nil {
-		return ledger.Event{}, false, err
-	}
-	if err := m.appendApply(ctx, preview.Event); err != nil {
-		return ledger.Event{}, false, err
-	}
-	return preview.Event, false, nil
-}
-
-// CommitPreparedAdjustment is the recovery-safe half of the durable Admin
-// intent protocol. The caller must persist the exact event before calling it.
-func (m *Manager) CommitPreparedAdjustment(ctx context.Context, event ledger.Event) (bool, error) {
-	if err := event.Validate(); err != nil || event.Kind != ledger.EventCostAdjusted {
-		if err != nil {
-			return false, err
-		}
-		return false, errors.New("prepared event is not a cost adjustment")
-	}
-	defer m.lockProject(event.ProjectID)()
-	if prior, ok := m.state.AdjustmentByIdempotencyDigest(event.IdempotencyKeyDigest); ok {
-		left, _ := json.Marshal(prior.Event)
-		right, _ := json.Marshal(event)
-		if string(left) != string(right) {
-			return false, errors.New("prepared adjustment conflicts with authoritative Ledger")
-		}
-		return true, nil
-	}
-	if err := m.appendApply(ctx, event); err != nil {
-		return false, err
-	}
-	return false, nil
-}
-
-func checkedSignedAdd(left, right int64) (int64, error) {
-	if right > 0 && left > math.MaxInt64-right {
-		return 0, errors.New("accounting integer overflow")
-	}
-	if right < 0 && left < math.MinInt64-right {
-		return 0, errors.New("accounting integer underflow")
-	}
-	return left + right, nil
 }
 
 // BeginAttempt checks the project budget and durably reserves spend before an

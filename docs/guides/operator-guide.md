@@ -380,11 +380,8 @@ pricing for Projects with a daily budget or a cost-dimension Token Guard. Watch
 readiness, and `heimdall doctor` after every restart or restore.
 
 Price changes create future-effective immutable versions; never edit old
-prices to correct history. Use Usage cost adjustments for historical
-corrections. Each adjustment records the original Settlement, signed delta,
-final cost, service period, posted period, actor, reason, and evidence. Unknown
-cost remains null until a reprice adjustment supplies complete correction
-evidence.
+prices to correct history. Unknown cost remains null — there is no historical
+correction path.
 
 Pricing Proposals are a separate review queue. The interactive Admin API accepts
 only asserted official-URL evidence; `verified_api` and `signed_import` are

@@ -580,15 +580,6 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		secretVault.Close()
 		return fail(fmt.Errorf("recover pending pricing audit: %w", err))
 	}
-	if err := runtime.drainCostAdjustmentIntents(ctx); err != nil {
-		auditLog.Close()
-		alertDispatcher.Close()
-		ledgerLog.Close()
-		metadata.Close()
-		providerRegistry.Close()
-		secretVault.Close()
-		return fail(fmt.Errorf("recover pending cost adjustment: %w", err))
-	}
 	settings, err := metadata.RuntimeSettings()
 	if errors.Is(err, boltstore.ErrNotFound) {
 		settings = domain.RuntimeSettings{
@@ -1151,9 +1142,6 @@ func (r *Runtime) adminRouter() http.Handler {
 	router.With(r.requireAdmin).Get("/admin/api/v1/master-key/runbooks/recovery", r.adminMasterKeyRecoveryRunbook)
 	router.With(r.requireAdmin).Get("/admin/api/v1/usage", r.adminUsage)
 	router.With(r.requireAdmin).Get("/admin/api/v1/usage/requests/{requestID}", r.adminUsageRequest)
-	router.With(r.requireAdmin).Get("/admin/api/v1/usage/attempts/{attemptID}/cost-adjustments", r.adminUsageAttemptAdjustments)
-	router.With(r.requireAdminMutation).Post("/admin/api/v1/usage/attempts/{attemptID}/cost-adjustments/preview", r.previewAdminCostAdjustment)
-	router.With(r.requireAdminMutation).Post("/admin/api/v1/usage/attempts/{attemptID}/cost-adjustments", r.createAdminCostAdjustment)
 	router.With(r.requireAdmin).Get("/admin/api/v1/system/status", r.adminSystemStatus)
 	router.With(r.requireAdmin).Get("/admin/api/v1/system/config", r.adminSystemConfig)
 	router.With(r.requireAdmin).Get("/admin/api/v1/developer/config", r.getAdminDeveloperConfig)

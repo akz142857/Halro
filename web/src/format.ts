@@ -18,10 +18,11 @@ export function money(micros: number) {
   }).format((micros || 0) / 1_000_000);
 }
 
-export type InstantStyle = "dateTime" | "date" | "full";
+export type InstantStyle = "dateTime" | "dateTimeYear" | "date" | "full";
 
 const INSTANT_STYLES: Record<InstantStyle, Intl.DateTimeFormatOptions> = {
   dateTime: { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" },
+  dateTimeYear: { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" },
   date: { year: "numeric", month: "2-digit", day: "2-digit" },
   full: { dateStyle: "medium", timeStyle: "short" },
 };

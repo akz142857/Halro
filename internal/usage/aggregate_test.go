@@ -59,26 +59,6 @@ func TestCheckpointRecoveryMatchesFullReplayAcrossOneHundredKillPoints(t *testin
 	}
 }
 
-func TestAdjustmentBeforeRequestFinalizedUpdatesActiveAccumulator(t *testing.T) {
-	aggregate := NewAggregate()
-	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
-	events := []ledger.Event{
-		{EventID: "accepted_active", Kind: ledger.EventRequestAccepted, RequestID: "req_active", ProjectID: "p", PeriodID: "2026-08-04", OccurredAt: now},
-		{EventID: "settled_active", Kind: ledger.EventAttemptSettled, RequestID: "req_active", AttemptID: "att_active", ProjectID: "p", PeriodID: "2026-08-04", OccurredAt: now.Add(time.Second), CommittedMicrosUSD: ledger.MicrosUSD(5), Outcome: "success"},
-		{EventID: "adjust_active", Kind: ledger.EventCostAdjusted, RequestID: "req_active", AttemptID: "att_active", ProjectID: "p", PeriodID: "2026-08-04", OccurredAt: now.Add(2 * time.Second), OriginalSettlementEventID: "settled_active", OriginalSettlementDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", AdjustmentMode: ledger.AdjustmentModeExplicit, AdjustmentSequence: 1, IdempotencyKeyDigest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", AdjustmentRequestDigest: "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", BaseSettlementMicrosUSD: ledger.MicrosUSD(5), NetCostBeforeMicrosUSD: ledger.MicrosUSD(5), AdjustmentDeltaMicrosUSD: 2, NetCostAfterMicrosUSD: ledger.MicrosUSD(7), ServicePeriodID: "2026-08-04", OriginalCompletedAt: now.Add(time.Second), PostedPeriodID: "2026-08-04", PostedAt: now.Add(2 * time.Second), AdjustmentReasonCode: "invoice_difference", AdjustmentEvidenceDigest: "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", AdjustmentCreatedBy: "admin"},
-		{EventID: "final_active", Kind: ledger.EventRequestFinalized, RequestID: "req_active", ProjectID: "p", PeriodID: "2026-08-04", OccurredAt: now.Add(3 * time.Second), Outcome: "success"},
-	}
-	for index, event := range events {
-		if err := aggregate.Apply(ledger.Record{Sequence: uint64(index + 1), Offset: int64(index + 1), Event: event}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	snapshot := aggregate.Snapshot()
-	if len(snapshot.Requests) != 1 || snapshot.Requests[0].CostMicrosUSD != 7 || snapshot.Requests[0].AdjustmentDeltaMicrosUSD != 2 {
-		t.Fatalf("request summaries=%#v", snapshot.Requests)
-	}
-}
-
 func TestAggregateRejectsInt64Overflow(t *testing.T) {
 	aggregate := NewAggregate()
 	aggregate.totals.CostMicrosUSD = math.MaxInt64
@@ -105,7 +85,7 @@ func usagePriceSnapshot(t *testing.T, mode domain.BillingMode, selectedAt time.T
 	return &snapshot
 }
 
-func TestAggregatePreservesKnownFreeUnknownLegacyAndAdjustmentSemantics(t *testing.T) {
+func TestAggregatePreservesKnownFreeUnknownAndLegacySemantics(t *testing.T) {
 	aggregate := NewAggregate()
 	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
 	free := usagePriceSnapshot(t, domain.BillingModeFree, now)
@@ -114,13 +94,6 @@ func TestAggregatePreservesKnownFreeUnknownLegacyAndAdjustmentSemantics(t *testi
 		{EventID: "legacy", Kind: ledger.EventAttemptSettled, RequestID: "req_legacy", AttemptID: "att_legacy", ProjectID: "p", PeriodID: "2026-08-04", OccurredAt: now, CommittedMicrosUSD: ledger.MicrosUSD(7), Outcome: "success"},
 		{EventID: "free", Kind: ledger.EventAttemptSettled, RequestID: "req_free", AttemptID: "att_free", ProjectID: "p", PeriodID: "2026-08-04", OccurredAt: now.Add(time.Minute), CommittedMicrosUSD: ledger.MicrosUSD(0), LeaseMode: ledger.LeaseModeFree, PriceSnapshot: free, Outcome: "success", TokenUsageSource: ledger.TokenUsageSourceProvider},
 		{EventID: "unknown", Kind: ledger.EventAttemptSettled, RequestID: "req_unknown", AttemptID: "att_unknown", ProjectID: "p", PeriodID: "2026-08-04", OccurredAt: now.Add(2 * time.Minute), LeaseMode: ledger.LeaseModeUnknownAllowed, PriceSnapshot: &unknown, Outcome: "success", TokenUsageSource: ledger.TokenUsageSourceProvider},
-		{EventID: "adjust", Kind: ledger.EventCostAdjusted, RequestID: "req_legacy", AttemptID: "att_legacy", ProjectID: "p", PeriodID: "2026-08-04", OccurredAt: now.Add(24 * time.Hour),
-			OriginalSettlementEventID: "legacy", OriginalSettlementDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-			AdjustmentMode: ledger.AdjustmentModeExplicit, AdjustmentSequence: 1,
-			IdempotencyKeyDigest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", AdjustmentRequestDigest: "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-			BaseSettlementMicrosUSD: ledger.MicrosUSD(7), NetCostBeforeMicrosUSD: ledger.MicrosUSD(7), AdjustmentDeltaMicrosUSD: 2, NetCostAfterMicrosUSD: ledger.MicrosUSD(9),
-			ServicePeriodID: "2026-08-04", OriginalCompletedAt: now, PostedPeriodID: "2026-08-05", PostedAt: now.Add(24 * time.Hour), AdjustmentReasonCode: "invoice_difference",
-			AdjustmentEvidenceDigest: "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", AdjustmentCreatedBy: "admin"},
 	}
 	for index, event := range events {
 		if err := aggregate.Apply(ledger.Record{Sequence: uint64(index + 1), Offset: int64(index + 1), Event: event}); err != nil {
@@ -128,17 +101,14 @@ func TestAggregatePreservesKnownFreeUnknownLegacyAndAdjustmentSemantics(t *testi
 		}
 	}
 	snapshot := aggregate.Snapshot()
-	if snapshot.Totals.OriginalCostMicrosUSD != 7 || snapshot.Totals.AdjustmentDeltaMicrosUSD != 2 || snapshot.Totals.CostMicrosUSD != 9 || snapshot.Totals.UnknownAttempts != 1 {
+	if snapshot.Totals.OriginalCostMicrosUSD != 7 || snapshot.Totals.CostMicrosUSD != 7 || snapshot.Totals.UnknownAttempts != 1 {
 		t.Fatalf("totals=%#v", snapshot.Totals)
-	}
-	if len(snapshot.Adjustments) != 1 || len(snapshot.PostedAdjustmentHourly) != 1 {
-		t.Fatalf("snapshot=%#v", snapshot)
 	}
 	byID := map[string]AttemptEvent{}
 	for _, attempt := range snapshot.Attempts {
 		byID[attempt.AttemptID] = attempt
 	}
-	if !containsTag(byID["att_legacy"].Tags, "LEGACY") || !containsTag(byID["att_legacy"].Tags, "ADJUSTED") || *byID["att_legacy"].FinalCostMicrosUSD != 9 ||
+	if !containsTag(byID["att_legacy"].Tags, "LEGACY") || *byID["att_legacy"].FinalCostMicrosUSD != 7 ||
 		!containsTag(byID["att_free"].Tags, "FREE") || !containsTag(byID["att_unknown"].Tags, "UNKNOWN") || byID["att_unknown"].FinalCostMicrosUSD != nil {
 		t.Fatalf("attempts=%#v", byID)
 	}

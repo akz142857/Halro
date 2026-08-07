@@ -119,11 +119,10 @@ The manifest stores only the Master Key SHA-256 fingerprint so a future restore
 can reject the wrong Master Key before switching data.
 
 Format v2 also records the WAL feature epoch/minimum reader, immutable pricing
-state digest, pending pricing/adjustment intent digest and count, and both
-Settlement and Adjustment Parquet watermarks. Restore rejects a cross-store
-mixture before publication. Metadata schema v14 includes inert pricing
-Proposals in the pricing snapshot digest; Proposal presence never changes the
-Gateway selection path.
+state digest, pending pricing intent digest and count, and the Settlement
+Parquet watermark. Restore rejects a cross-store mixture before publication.
+Metadata schema v14 includes inert pricing Proposals in the pricing snapshot
+digest; Proposal presence never changes the Gateway selection path.
 
 The snapshot primitive permits append callers to queue while the writer lock is
 held. A deterministic 100-writer test verifies that the backup contains only

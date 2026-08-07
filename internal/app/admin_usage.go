@@ -22,14 +22,6 @@ func (r *Runtime) adminDashboard(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 	now := time.Now()
-	basis := request.URL.Query().Get("reporting_basis")
-	if basis == "" {
-		basis = "service_period_restated"
-	}
-	if basis != "service_period_restated" && basis != "adjustment_posted" {
-		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "invalid reporting_basis"})
-		return
-	}
 	timing, ok := r.writeTimeContext(writer, now)
 	if !ok {
 		return
@@ -41,7 +33,7 @@ func (r *Runtime) adminDashboard(writer http.ResponseWriter, request *http.Reque
 	}
 	// The same interval the response advertises in time_context, so the totals
 	// and the window they claim to cover cannot disagree.
-	dashboard := r.usage.DashboardForBasis(now, usage.Period{Start: period.Start, End: period.End}, basis)
+	dashboard := r.usage.Dashboard(now, usage.Period{Start: period.Start, End: period.End})
 	governance, labels, err := r.dashboardGovernance(request, now, period)
 	if err != nil {
 		adminStoreError(writer)
@@ -66,14 +58,8 @@ type dashboardGovernance struct {
 }
 
 type pricingGovernanceSummary struct {
-	Quarantined          int `json:"quarantined"`
-	Unknown              int `json:"unknown"`
-	AdjustmentOverBudget int `json:"adjustment_over_budget"`
-	// Naming the projects, not just counting them: a signal an operator cannot
-	// follow to the accounts it is about tells them something is wrong and
-	// leaves them to find it by hand. Always an array, never null, so the
-	// console has one shape to render.
-	AdjustmentOverBudgetItems []pressureItem `json:"adjustment_over_budget_items"`
+	Quarantined int `json:"quarantined"`
+	Unknown     int `json:"unknown"`
 }
 
 type policyRejectionSummary struct {
@@ -101,10 +87,6 @@ type pressureItem struct {
 	Utilization        float64 `json:"utilization"`
 	CommittedMicrosUSD int64   `json:"committed_micros_usd,omitempty"`
 	ReservedMicrosUSD  int64   `json:"reserved_micros_usd,omitempty"`
-	// Signed, and only set where an adjustment is what the item is about: it is
-	// the difference between "this project spent too much" and "this project was
-	// put over by a correction", which are acted on differently.
-	AdjustmentDeltaMicrosUSD int64 `json:"adjustment_delta_micros_usd,omitempty"`
 }
 
 func (r *Runtime) dashboardGovernance(request *http.Request, now time.Time, period budget.Period) (dashboardGovernance, map[string]string, error) {
@@ -150,21 +132,6 @@ func (r *Runtime) dashboardGovernance(request *http.Request, now time.Time, peri
 		}
 		if _, priceErr := r.store.SelectDeploymentPriceVersion(request.Context(), deployment.ID, now.UTC()); priceErr != nil {
 			governance.Pricing.Unknown++
-		}
-	}
-	governance.Pricing.AdjustmentOverBudgetItems = make([]pressureItem, 0)
-	for _, project := range projects {
-		balance := r.state.Balance(project.ID, period.ID, period.TimezoneVersion)
-		if project.DailyBudgetMicrosUSD > 0 && balance.AdjustmentDeltaMicrosUSD != 0 && balance.CommittedMicrosUSD > project.DailyBudgetMicrosUSD {
-			governance.Pricing.AdjustmentOverBudget++
-			governance.Pricing.AdjustmentOverBudgetItems = append(governance.Pricing.AdjustmentOverBudgetItems, pressureItem{
-				Scope: "project", ID: project.ID, Name: project.Name,
-				Current:                  balance.CommittedMicrosUSD,
-				Limit:                    project.DailyBudgetMicrosUSD,
-				Utilization:              float64(balance.CommittedMicrosUSD) / float64(project.DailyBudgetMicrosUSD),
-				CommittedMicrosUSD:       balance.CommittedMicrosUSD,
-				AdjustmentDeltaMicrosUSD: balance.AdjustmentDeltaMicrosUSD,
-			})
 		}
 	}
 	return governance, labels, nil
@@ -333,18 +300,6 @@ func (r *Runtime) adminUsageRequest(writer http.ResponseWriter, request *http.Re
 		return
 	}
 	writeJSON(writer, http.StatusOK, detail)
-}
-
-func (r *Runtime) adminUsageAttemptAdjustments(writer http.ResponseWriter, request *http.Request) {
-	if !r.syncUsageAdmin(writer, request) {
-		return
-	}
-	attemptID := chi.URLParam(request, "attemptID")
-	if attemptID == "" || len(attemptID) > 128 {
-		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "invalid attempt ID"})
-		return
-	}
-	writeJSON(writer, http.StatusOK, map[string]any{"items": r.usage.AttemptAdjustments(attemptID), "reporting_bases": []string{"service_period_restated", "adjustment_posted"}})
 }
 
 func (r *Runtime) adminSystemStatus(writer http.ResponseWriter, request *http.Request) {

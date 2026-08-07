@@ -102,15 +102,12 @@ const (
 )
 
 type Admin struct {
-	SessionTTL                        Duration `yaml:"session_ttl"`
-	IdleTimeout                       Duration `yaml:"idle_timeout"`
-	LoginRPM                          int      `yaml:"login_rpm"`
-	ExternalOrigin                    string   `yaml:"external_origin"`
-	MFAPolicy                         string   `yaml:"mfa_policy"`
-	DeveloperWorkbench                string   `yaml:"developer_workbench"`
-	AdjustmentSoftLimitMicrosUSD      int64    `yaml:"adjustment_soft_limit_micros_usd"`
-	AdjustmentHardLimitMicrosUSD      int64    `yaml:"adjustment_hard_limit_micros_usd"`
-	AdjustmentDailyHardLimitMicrosUSD int64    `yaml:"adjustment_daily_hard_limit_micros_usd"`
+	SessionTTL         Duration `yaml:"session_ttl"`
+	IdleTimeout        Duration `yaml:"idle_timeout"`
+	LoginRPM           int      `yaml:"login_rpm"`
+	ExternalOrigin     string   `yaml:"external_origin"`
+	MFAPolicy          string   `yaml:"mfa_policy"`
+	DeveloperWorkbench string   `yaml:"developer_workbench"`
 }
 
 type Gateway struct {
@@ -412,15 +409,6 @@ func (c *Config) Normalize() error {
 	if c.Admin.DeveloperWorkbench == "" {
 		c.Admin.DeveloperWorkbench = "enabled"
 	}
-	if c.Admin.AdjustmentSoftLimitMicrosUSD == 0 {
-		c.Admin.AdjustmentSoftLimitMicrosUSD = 10_000_000
-	}
-	if c.Admin.AdjustmentHardLimitMicrosUSD == 0 {
-		c.Admin.AdjustmentHardLimitMicrosUSD = 100_000_000
-	}
-	if c.Admin.AdjustmentDailyHardLimitMicrosUSD == 0 {
-		c.Admin.AdjustmentDailyHardLimitMicrosUSD = 500_000_000
-	}
 	return nil
 }
 
@@ -564,10 +552,6 @@ func (c Config) Validate(opts LoadOptions) error {
 	}
 	if c.Gateway.SourceRateLimit.MaxTrackedSources < 0 {
 		problems = append(problems, errors.New("gateway.source_rate_limit.max_tracked_sources cannot be negative"))
-	}
-	if c.Admin.AdjustmentSoftLimitMicrosUSD < 0 || c.Admin.AdjustmentHardLimitMicrosUSD <= 0 || c.Admin.AdjustmentDailyHardLimitMicrosUSD <= 0 ||
-		c.Admin.AdjustmentSoftLimitMicrosUSD > c.Admin.AdjustmentHardLimitMicrosUSD || c.Admin.AdjustmentHardLimitMicrosUSD > c.Admin.AdjustmentDailyHardLimitMicrosUSD {
-		problems = append(problems, errors.New("admin cost adjustment limits must satisfy 0 <= soft <= hard <= daily hard"))
 	}
 	if c.Retry.MaxAttemptsPerTarget < 1 {
 		problems = append(problems, errors.New("retry.max_attempts_per_target must be at least 1"))

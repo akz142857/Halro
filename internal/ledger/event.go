@@ -18,8 +18,6 @@ type LeaseMode string
 
 type TokenUsageSource string
 
-type AdjustmentMode string
-
 const (
 	LeaseModeMetered         LeaseMode        = "metered"
 	LeaseModeFree            LeaseMode        = "free"
@@ -27,8 +25,6 @@ const (
 	TokenUsageSourceProvider TokenUsageSource = "provider_reported"
 	TokenUsageSourceEstimate TokenUsageSource = "gateway_estimated"
 	TokenUsageSourceNone     TokenUsageSource = "none"
-	AdjustmentModeReprice    AdjustmentMode   = "reprice"
-	AdjustmentModeExplicit   AdjustmentMode   = "explicit_delta"
 )
 
 func MicrosUSD(value int64) *int64 { return &value }
@@ -39,11 +35,10 @@ const (
 	EventAttemptStarted
 	EventAttemptSettled
 	EventRequestFinalized
-	EventCostAdjusted
 )
 
 func (k EventKind) Valid() bool {
-	return k >= EventRequestAccepted && k <= EventCostAdjusted
+	return k >= EventRequestAccepted && k <= EventRequestFinalized
 }
 
 type Event struct {
@@ -88,28 +83,6 @@ type Event struct {
 	ErrorClass                    string                             `json:"error_class,omitempty"`
 	HTTPStatus                    int                                `json:"http_status,omitempty"`
 	LatencyMillis                 int64                              `json:"latency_millis,omitempty"`
-	OriginalSettlementEventID     string                             `json:"original_settlement_event_id,omitempty"`
-	OriginalSettlementDigest      string                             `json:"original_settlement_digest,omitempty"`
-	AdjustmentMode                AdjustmentMode                     `json:"adjustment_mode,omitempty"`
-	AdjustmentSequence            uint64                             `json:"adjustment_sequence,omitempty"`
-	IdempotencyKeyDigest          string                             `json:"idempotency_key_digest,omitempty"`
-	AdjustmentRequestDigest       string                             `json:"adjustment_request_digest,omitempty"`
-	BaseSettlementMicrosUSD       *int64                             `json:"base_settlement_micros_usd,omitempty"`
-	NetCostBeforeMicrosUSD        *int64                             `json:"net_cost_before_micros_usd,omitempty"`
-	AdjustmentDeltaMicrosUSD      int64                              `json:"adjustment_delta_micros_usd,omitempty"`
-	NetCostAfterMicrosUSD         *int64                             `json:"net_cost_after_micros_usd,omitempty"`
-	ServicePeriodID               string                             `json:"service_period_id,omitempty"`
-	OriginalCompletedAt           time.Time                          `json:"original_completed_at,omitempty"`
-	PostedPeriodID                string                             `json:"posted_period_id,omitempty"`
-	PostedAt                      time.Time                          `json:"posted_at,omitempty"`
-	CorrectionPriceSnapshot       *domain.PriceSnapshot              `json:"correction_price_snapshot,omitempty"`
-	AdjustmentInputCostMicrosUSD  int64                              `json:"adjustment_input_cost_micros_usd,omitempty"`
-	AdjustmentOutputCostMicrosUSD int64                              `json:"adjustment_output_cost_micros_usd,omitempty"`
-	AdjustmentFixedCostMicrosUSD  int64                              `json:"adjustment_fixed_cost_micros_usd,omitempty"`
-	AdjustmentReasonCode          string                             `json:"adjustment_reason_code,omitempty"`
-	AdjustmentReason              string                             `json:"adjustment_reason,omitempty"`
-	AdjustmentEvidenceDigest      string                             `json:"adjustment_evidence_digest,omitempty"`
-	AdjustmentCreatedBy           string                             `json:"adjustment_created_by,omitempty"`
 }
 
 func (e Event) Validate() error {
@@ -132,9 +105,7 @@ func (e Event) Validate() error {
 	if e.OccurredAt.IsZero() {
 		problems = append(problems, errors.New("occurred_at is required"))
 	}
-	if (e.ReservationMicrosUSD != nil && *e.ReservationMicrosUSD < 0) || (e.CommittedMicrosUSD != nil && *e.CommittedMicrosUSD < 0) ||
-		(e.BaseSettlementMicrosUSD != nil && *e.BaseSettlementMicrosUSD < 0) || (e.NetCostBeforeMicrosUSD != nil && *e.NetCostBeforeMicrosUSD < 0) ||
-		(e.NetCostAfterMicrosUSD != nil && *e.NetCostAfterMicrosUSD < 0) {
+	if (e.ReservationMicrosUSD != nil && *e.ReservationMicrosUSD < 0) || (e.CommittedMicrosUSD != nil && *e.CommittedMicrosUSD < 0) {
 		problems = append(problems, errors.New("amounts cannot be negative"))
 	}
 	if e.ProviderInputTokens < 0 || e.ProviderOutputTokens < 0 || e.PreparedOutputTokens < 0 || e.PreparedInputTokens < 0 ||
@@ -154,48 +125,6 @@ func (e Event) Validate() error {
 	case EventReservationCreated, EventAttemptStarted, EventAttemptSettled:
 		if e.AttemptID == "" {
 			problems = append(problems, errors.New("attempt id is required for attempt events"))
-		}
-	}
-	if e.Kind == EventCostAdjusted {
-		if e.AttemptID == "" || e.OriginalSettlementEventID == "" || e.AdjustmentSequence == 0 ||
-			e.ServicePeriodID == "" || e.PostedPeriodID == "" || e.OriginalCompletedAt.IsZero() || e.PostedAt.IsZero() ||
-			e.AdjustmentCreatedBy == "" || e.AdjustmentReasonCode == "" || len(e.AdjustmentReason) > 1024 {
-			problems = append(problems, errors.New("cost adjustment identity, sequence, periods, actor, and reason are required"))
-		}
-		for _, digest := range []string{e.OriginalSettlementDigest, e.IdempotencyKeyDigest, e.AdjustmentRequestDigest, e.AdjustmentEvidenceDigest} {
-			if !domain.ValidSHA256Label(digest) {
-				problems = append(problems, errors.New("cost adjustment digests must be canonical SHA-256 labels"))
-				break
-			}
-		}
-		if e.PeriodID != e.ServicePeriodID || !e.OccurredAt.Equal(e.PostedAt) {
-			problems = append(problems, errors.New("cost adjustment Ledger period/time must match its service/posted evidence"))
-		}
-		switch e.AdjustmentMode {
-		case AdjustmentModeReprice:
-			if e.CorrectionPriceSnapshot == nil || e.CorrectionPriceSnapshot.CostValueStatus != domain.CostValueKnown {
-				problems = append(problems, errors.New("reprice adjustment requires a known correction price snapshot"))
-			}
-		case AdjustmentModeExplicit:
-			if e.CorrectionPriceSnapshot != nil {
-				problems = append(problems, errors.New("explicit delta adjustment cannot contain a correction price snapshot"))
-			}
-		default:
-			problems = append(problems, errors.New("cost adjustment mode is invalid"))
-		}
-		if e.CorrectionPriceSnapshot != nil {
-			if err := e.CorrectionPriceSnapshot.Validate(); err != nil {
-				problems = append(problems, err)
-			}
-		}
-		if e.NetCostAfterMicrosUSD == nil {
-			problems = append(problems, errors.New("cost adjustment requires a known after cost"))
-		} else if e.NetCostBeforeMicrosUSD == nil || e.BaseSettlementMicrosUSD == nil {
-			if e.NetCostBeforeMicrosUSD != nil || e.BaseSettlementMicrosUSD != nil || e.AdjustmentMode != AdjustmentModeReprice || e.AdjustmentDeltaMicrosUSD != *e.NetCostAfterMicrosUSD {
-				problems = append(problems, errors.New("unknown original cost can only be established by a complete reprice"))
-			}
-		} else if after, err := checkedAdd(*e.NetCostBeforeMicrosUSD, e.AdjustmentDeltaMicrosUSD); err != nil || after != *e.NetCostAfterMicrosUSD {
-			problems = append(problems, errors.New("cost adjustment after must equal before plus delta"))
 		}
 	}
 	if e.Kind == EventReservationCreated {
@@ -296,13 +225,11 @@ type BalanceKey struct {
 }
 
 type Balance struct {
-	ReservedMicrosUSD          int64
-	CommittedMicrosUSD         int64
-	OriginalCommittedMicrosUSD int64
-	AdjustmentDeltaMicrosUSD   int64
-	InputTokens                int64
-	OutputTokens               int64
-	UnknownAttempts            int64
+	ReservedMicrosUSD  int64
+	CommittedMicrosUSD int64
+	InputTokens        int64
+	OutputTokens       int64
+	UnknownAttempts    int64
 }
 
 type attemptReservation struct {
@@ -318,17 +245,11 @@ type PendingLease struct {
 }
 
 type SettledAttempt struct {
-	Settlement         Event
-	SettlementDigest   string
-	BaseCostMicrosUSD  int64
-	NetCostMicrosUSD   int64
-	AdjustmentSequence uint64
-	CostKnown          bool
-}
-
-type AppliedAdjustment struct {
-	Event         Event
-	RequestDigest string
+	Settlement        Event
+	SettlementDigest  string
+	BaseCostMicrosUSD int64
+	NetCostMicrosUSD  int64
+	CostKnown         bool
 }
 
 type State struct {
@@ -337,7 +258,6 @@ type State struct {
 	reservations map[string]attemptReservation
 	leaseRecords map[string]Record
 	settled      map[string]SettledAttempt
-	adjustments  map[string]AppliedAdjustment
 	eventDigests map[string][32]byte
 	watermark    Watermark
 }
@@ -348,7 +268,6 @@ func NewState() *State {
 		reservations: make(map[string]attemptReservation),
 		leaseRecords: make(map[string]Record),
 		settled:      make(map[string]SettledAttempt),
-		adjustments:  make(map[string]AppliedAdjustment),
 		eventDigests: make(map[string][32]byte),
 	}
 }
@@ -446,12 +365,6 @@ func (s *State) Apply(record Record) error {
 				return err
 			}
 		}
-		if event.CommittedMicrosUSD != nil {
-			balance.OriginalCommittedMicrosUSD, err = checkedAdd(balance.OriginalCommittedMicrosUSD, *event.CommittedMicrosUSD)
-			if err != nil {
-				return err
-			}
-		}
 		balance.InputTokens, err = checkedAdd(balance.InputTokens, event.ProviderInputTokens)
 		if err != nil {
 			return err
@@ -473,53 +386,6 @@ func (s *State) Apply(record Record) error {
 			base = *event.CommittedMicrosUSD
 		}
 		s.settled[event.AttemptID] = SettledAttempt{Settlement: event, SettlementDigest: settlementDigest, BaseCostMicrosUSD: base, NetCostMicrosUSD: base, CostKnown: event.CommittedMicrosUSD != nil}
-	case EventCostAdjusted:
-		settled, exists := s.settled[event.AttemptID]
-		if !exists {
-			return fmt.Errorf("attempt %q is not settled", event.AttemptID)
-		}
-		if prior, exists := s.adjustments[event.IdempotencyKeyDigest]; exists {
-			if prior.RequestDigest != event.AdjustmentRequestDigest {
-				return errors.New("adjustment idempotency key was reused with different content")
-			}
-			return fmt.Errorf("adjustment idempotency key already applied by event %q", prior.Event.EventID)
-		}
-		if settled.Settlement.EventID != event.OriginalSettlementEventID || settled.SettlementDigest != event.OriginalSettlementDigest ||
-			settled.Settlement.RequestID != event.RequestID || settled.Settlement.ProjectID != event.ProjectID || settled.Settlement.PeriodID != event.ServicePeriodID ||
-			settled.Settlement.OccurredAt != event.OriginalCompletedAt {
-			return errors.New("adjustment does not match its authoritative settlement")
-		}
-		if event.AdjustmentSequence != settled.AdjustmentSequence+1 ||
-			(settled.CostKnown && (event.BaseSettlementMicrosUSD == nil || *event.BaseSettlementMicrosUSD != settled.BaseCostMicrosUSD || event.NetCostBeforeMicrosUSD == nil || *event.NetCostBeforeMicrosUSD != settled.NetCostMicrosUSD)) ||
-			(!settled.CostKnown && (event.BaseSettlementMicrosUSD != nil || event.NetCostBeforeMicrosUSD != nil || event.AdjustmentMode != AdjustmentModeReprice)) {
-			return errors.New("adjustment sequence or expected net cost conflicts")
-		}
-		if event.AdjustmentMode == AdjustmentModeReprice {
-			breakdown, calcErr := event.CorrectionPriceSnapshot.Calculate(settled.Settlement.ProviderInputTokens, settled.Settlement.ProviderOutputTokens)
-			if calcErr != nil || event.NetCostAfterMicrosUSD == nil || breakdown.TotalCostMicrosUSD != *event.NetCostAfterMicrosUSD ||
-				breakdown.InputCostMicrosUSD != event.AdjustmentInputCostMicrosUSD || breakdown.OutputCostMicrosUSD != event.AdjustmentOutputCostMicrosUSD || breakdown.FixedCostMicrosUSD != event.AdjustmentFixedCostMicrosUSD {
-				return errors.New("reprice adjustment does not match authoritative tokens and correction snapshot")
-			}
-		}
-		balance.AdjustmentDeltaMicrosUSD, err = checkedAdd(balance.AdjustmentDeltaMicrosUSD, event.AdjustmentDeltaMicrosUSD)
-		if err != nil {
-			return err
-		}
-		balance.CommittedMicrosUSD, err = checkedAdd(balance.CommittedMicrosUSD, event.AdjustmentDeltaMicrosUSD)
-		if err != nil || balance.CommittedMicrosUSD < 0 {
-			return errors.New("adjustment makes project committed cost invalid")
-		}
-		settled.NetCostMicrosUSD = *event.NetCostAfterMicrosUSD
-		if !settled.CostKnown {
-			settled.BaseCostMicrosUSD = *event.NetCostAfterMicrosUSD
-			settled.CostKnown = true
-			if balance.UnknownAttempts > 0 {
-				balance.UnknownAttempts--
-			}
-		}
-		settled.AdjustmentSequence = event.AdjustmentSequence
-		s.settled[event.AttemptID] = settled
-		s.adjustments[event.IdempotencyKeyDigest] = AppliedAdjustment{Event: event, RequestDigest: event.AdjustmentRequestDigest}
 	}
 
 	s.balances[key] = balance
@@ -599,40 +465,6 @@ func (s *State) SettledAttempts() []SettledAttempt {
 		items = append(items, item)
 	}
 	return items
-}
-
-func (s *State) AdjustmentByIdempotencyDigest(digest string) (AppliedAdjustment, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	value, ok := s.adjustments[digest]
-	return value, ok
-}
-
-// PostedAdjustmentAbsoluteSince reads the authoritative Ledger projection,
-// rather than the eventually-consistent Usage projection.
-func (s *State) PostedAdjustmentAbsoluteSince(projectID string, since time.Time) (int64, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	var total int64
-	for _, adjustment := range s.adjustments {
-		event := adjustment.Event
-		if event.ProjectID != projectID || event.PostedAt.Before(since) {
-			continue
-		}
-		delta := event.AdjustmentDeltaMicrosUSD
-		if delta == math.MinInt64 {
-			return 0, errors.New("adjustment magnitude overflows int64")
-		}
-		if delta < 0 {
-			delta = -delta
-		}
-		var err error
-		total, err = checkedAdd(total, delta)
-		if err != nil {
-			return 0, err
-		}
-	}
-	return total, nil
 }
 
 func (s *State) Watermark() Watermark {

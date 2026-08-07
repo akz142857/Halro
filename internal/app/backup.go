@@ -595,7 +595,6 @@ func createBackupSnapshotWithLedger(
 		descriptorDigest = hex.EncodeToString(digest[:])
 	}
 	var usageManifest *usage.Manifest
-	var adjustmentManifest *usage.AdjustmentManifest
 	exporter, err := usage.NewExporter(cfg.UsagePath())
 	if err != nil {
 		return backup.Manifest{}, err
@@ -606,11 +605,6 @@ func createBackupSnapshotWithLedger(
 		}
 		usageManifest = &loaded
 		usageManifestVersion = loaded.SchemaVersion
-		loadedAdjustments, adjustmentErr := exporter.LoadAdjustmentManifest()
-		if adjustmentErr != nil {
-			return backup.Manifest{}, fmt.Errorf("load adjustment manifest before backup: %w", adjustmentErr)
-		}
-		adjustmentManifest = &loadedAdjustments
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return backup.Manifest{}, err
 	}
@@ -620,7 +614,7 @@ func createBackupSnapshotWithLedger(
 		{ArchivePath: "data/ledger/ledger.wal", LocalPath: ledgerSnapshot},
 		{ArchivePath: "data/audit/audit.log", LocalPath: cfg.AuditPath()},
 	}
-	usageFiles, err := backupUsageFiles(cfg.UsagePath(), usageManifest, adjustmentManifest)
+	usageFiles, err := backupUsageFiles(cfg.UsagePath(), usageManifest)
 	if err != nil {
 		return backup.Manifest{}, err
 	}
@@ -636,18 +630,6 @@ func createBackupSnapshotWithLedger(
 		LedgerChainHeadSequence: chainSequence, LedgerChainHeadOffset: chainOffset,
 		LedgerChainHeadHash: chainHash, LedgerChainVerified: chainVerified,
 		CheckpointWatermark: checkpoint, UsageManifestVersion: usageManifestVersion,
-		AdjustmentManifestVersion: func() int {
-			if adjustmentManifest != nil {
-				return adjustmentManifest.SchemaVersion
-			}
-			return 0
-		}(),
-		AdjustmentManifestWatermark: func() uint64 {
-			if adjustmentManifest != nil {
-				return adjustmentManifest.LastSequence
-			}
-			return 0
-		}(),
 		LedgerFeatureEpoch: metadataInfo.LedgerFeatureEpoch, MinimumLedgerReaderVersion: metadataInfo.MinimumLedgerReaderVersion,
 		PricingStateSHA256: pricingBackupState.StateSHA256, PendingIntentSHA256: pricingBackupState.PendingIntentSHA256, PendingIntents: pricingBackupState.PendingIntents,
 		MasterKeyFingerprint: masterFingerprint, Build: buildinfo.Current(),
@@ -690,19 +672,13 @@ func backupProviderObjectFiles(ctx context.Context, metadata *boltstore.Store, r
 	return files, nil
 }
 
-func backupUsageFiles(root string, manifest *usage.Manifest, adjustments *usage.AdjustmentManifest) ([]backup.SourceFile, error) {
+func backupUsageFiles(root string, manifest *usage.Manifest) ([]backup.SourceFile, error) {
 	if manifest == nil {
 		return nil, nil
 	}
 	relativePaths := []string{"manifest.json"}
 	for _, entry := range manifest.Files {
 		relativePaths = append(relativePaths, entry.Path)
-	}
-	if adjustments != nil {
-		relativePaths = append(relativePaths, "cost_adjustments/manifest.json")
-		for _, entry := range adjustments.Files {
-			relativePaths = append(relativePaths, entry.Path)
-		}
 	}
 	files := make([]backup.SourceFile, 0, len(relativePaths))
 	for _, relative := range relativePaths {

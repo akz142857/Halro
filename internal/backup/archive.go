@@ -35,18 +35,16 @@ type File struct {
 }
 
 type Manifest struct {
-	FormatVersion               int                    `json:"format_version"`
-	BackupID                    string                 `json:"backup_id"`
-	CreatedAt                   time.Time              `json:"created_at"`
-	Encrypted                   bool                   `json:"encrypted"`
-	Metadata                    boltstore.MetadataInfo `json:"metadata"`
-	LedgerWatermark             ledger.Watermark       `json:"ledger_watermark"`
-	CheckpointWatermark         ledger.Watermark       `json:"checkpoint_watermark"`
-	UsageManifestVersion        int                    `json:"usage_manifest_version"`
-	AdjustmentManifestVersion   int                    `json:"adjustment_manifest_version,omitempty"`
-	AdjustmentManifestWatermark uint64                 `json:"adjustment_manifest_watermark,omitempty"`
-	LedgerFeatureEpoch          uint8                  `json:"ledger_feature_epoch,omitempty"`
-	MinimumLedgerReaderVersion  string                 `json:"minimum_ledger_reader_version,omitempty"`
+	FormatVersion              int                    `json:"format_version"`
+	BackupID                   string                 `json:"backup_id"`
+	CreatedAt                  time.Time              `json:"created_at"`
+	Encrypted                  bool                   `json:"encrypted"`
+	Metadata                   boltstore.MetadataInfo `json:"metadata"`
+	LedgerWatermark            ledger.Watermark       `json:"ledger_watermark"`
+	CheckpointWatermark        ledger.Watermark       `json:"checkpoint_watermark"`
+	UsageManifestVersion       int                    `json:"usage_manifest_version"`
+	LedgerFeatureEpoch         uint8                  `json:"ledger_feature_epoch,omitempty"`
+	MinimumLedgerReaderVersion string                 `json:"minimum_ledger_reader_version,omitempty"`
 	// LedgerChainHead is the epoch-4 chain head (ADR 0016) as of the moment
 	// this backup's Ledger snapshot was taken. LedgerChainVerified is false
 	// when the source Ledger had not yet written any epoch-4 frame — a chain
@@ -67,28 +65,26 @@ type Manifest struct {
 }
 
 type CreateOptions struct {
-	OutputPath                  string
-	BackupKey                   []byte
-	Files                       []SourceFile
-	Metadata                    boltstore.MetadataInfo
-	LedgerWatermark             ledger.Watermark
-	CheckpointWatermark         ledger.Watermark
-	UsageManifestVersion        int
-	AdjustmentManifestVersion   int
-	AdjustmentManifestWatermark uint64
-	LedgerFeatureEpoch          uint8
-	MinimumLedgerReaderVersion  string
-	LedgerChainHeadSequence     uint64
-	LedgerChainHeadOffset       int64
-	LedgerChainHeadHash         [32]byte
-	LedgerChainVerified         bool
-	PricingStateSHA256          string
-	PendingIntentSHA256         string
-	PendingIntents              int
-	MasterKeyFingerprint        string
-	KeySlotDescriptorSHA256     string
-	Build                       buildinfo.Info
-	Now                         func() time.Time
+	OutputPath                 string
+	BackupKey                  []byte
+	Files                      []SourceFile
+	Metadata                   boltstore.MetadataInfo
+	LedgerWatermark            ledger.Watermark
+	CheckpointWatermark        ledger.Watermark
+	UsageManifestVersion       int
+	LedgerFeatureEpoch         uint8
+	MinimumLedgerReaderVersion string
+	LedgerChainHeadSequence    uint64
+	LedgerChainHeadOffset      int64
+	LedgerChainHeadHash        [32]byte
+	LedgerChainVerified        bool
+	PricingStateSHA256         string
+	PendingIntentSHA256        string
+	PendingIntents             int
+	MasterKeyFingerprint       string
+	KeySlotDescriptorSHA256    string
+	Build                      buildinfo.Info
+	Now                        func() time.Time
 }
 
 func Create(options CreateOptions) (Manifest, error) {
@@ -136,10 +132,9 @@ func Create(options CreateOptions) (Manifest, error) {
 		FormatVersion: manifestVersion, BackupID: backupID,
 		CreatedAt: options.Now().UTC(), Encrypted: true,
 		Metadata: options.Metadata, LedgerWatermark: options.LedgerWatermark,
-		CheckpointWatermark:       options.CheckpointWatermark,
-		UsageManifestVersion:      options.UsageManifestVersion,
-		AdjustmentManifestVersion: options.AdjustmentManifestVersion, AdjustmentManifestWatermark: options.AdjustmentManifestWatermark,
-		LedgerFeatureEpoch: options.LedgerFeatureEpoch, MinimumLedgerReaderVersion: options.MinimumLedgerReaderVersion,
+		CheckpointWatermark:  options.CheckpointWatermark,
+		UsageManifestVersion: options.UsageManifestVersion,
+		LedgerFeatureEpoch:   options.LedgerFeatureEpoch, MinimumLedgerReaderVersion: options.MinimumLedgerReaderVersion,
 		LedgerChainHeadSequence: options.LedgerChainHeadSequence, LedgerChainHeadOffset: options.LedgerChainHeadOffset,
 		LedgerChainHeadHash: options.LedgerChainHeadHash, LedgerChainVerified: options.LedgerChainVerified,
 		PricingStateSHA256: options.PricingStateSHA256, PendingIntentSHA256: options.PendingIntentSHA256, PendingIntents: options.PendingIntents,

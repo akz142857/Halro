@@ -13,7 +13,7 @@ import (
 	"github.com/akz142857/Heimdall/internal/ledger"
 )
 
-const checkpointVersion = 4
+const checkpointVersion = 5
 
 const latencyBucketCount = 12
 
@@ -22,45 +22,43 @@ var LatencyBucketsMillis = [latencyBucketCount]uint64{
 }
 
 type AttemptEvent struct {
-	EventID                  string                     `json:"event_id"`
-	RequestID                string                     `json:"request_id"`
-	AttemptID                string                     `json:"attempt_id"`
-	Sequence                 uint64                     `json:"sequence"`
-	AttemptNumber            int                        `json:"attempt"`
-	ProjectID                string                     `json:"project_id"`
-	KeyID                    string                     `json:"key_id,omitempty"`
-	RouteID                  string                     `json:"route_id,omitempty"`
-	DeploymentID             string                     `json:"deployment_id,omitempty"`
-	ProviderID               string                     `json:"provider_id,omitempty"`
-	RequestedModel           string                     `json:"requested_model,omitempty"`
-	ProviderModel            string                     `json:"provider_model,omitempty"`
-	ProviderInputTokens      int64                      `json:"provider_input_tokens"`
-	ProviderOutputTokens     int64                      `json:"provider_output_tokens"`
-	PreparedOutputTokens     int64                      `json:"prepared_output_tokens"`
-	CostMicrosUSD            *int64                     `json:"cost_micros_usd"`
-	OriginalCostMicrosUSD    *int64                     `json:"original_cost_micros_usd"`
-	AdjustmentDeltaMicrosUSD int64                      `json:"adjustment_delta_micros_usd"`
-	AdjustmentSequence       uint64                     `json:"adjustment_sequence"`
-	FinalCostMicrosUSD       *int64                     `json:"final_cost_micros_usd"`
-	LeaseMode                ledger.LeaseMode           `json:"lease_mode,omitempty"`
-	PriceEvidenceStatus      domain.PriceEvidenceStatus `json:"price_evidence_status"`
-	CostValueStatus          domain.CostValueStatus     `json:"cost_value_status"`
-	PriceSnapshot            *domain.PriceSnapshot      `json:"price_snapshot,omitempty"`
-	InputCostMicrosUSD       *int64                     `json:"input_cost_micros_usd"`
-	OutputCostMicrosUSD      *int64                     `json:"output_cost_micros_usd"`
-	FixedCostMicrosUSD       *int64                     `json:"fixed_cost_micros_usd"`
-	Tags                     []string                   `json:"tags,omitempty"`
-	CostEstimated            bool                       `json:"cost_estimated"`
-	TokensEstimated          bool                       `json:"tokens_estimated"`
-	TokenUsageSource         ledger.TokenUsageSource    `json:"token_usage_source,omitempty"`
-	StartedAt                time.Time                  `json:"started_at"`
-	CompletedAt              time.Time                  `json:"completed_at"`
-	Status                   string                     `json:"status"`
-	ErrorClass               string                     `json:"error_class,omitempty"`
-	HTTPStatus               int                        `json:"http_status,omitempty"`
-	LatencyMillis            int64                      `json:"latency_millis"`
-	RetryCount               int                        `json:"retry_count"`
-	FallbackCount            int                        `json:"fallback_count"`
+	EventID               string                     `json:"event_id"`
+	RequestID             string                     `json:"request_id"`
+	AttemptID             string                     `json:"attempt_id"`
+	Sequence              uint64                     `json:"sequence"`
+	AttemptNumber         int                        `json:"attempt"`
+	ProjectID             string                     `json:"project_id"`
+	KeyID                 string                     `json:"key_id,omitempty"`
+	RouteID               string                     `json:"route_id,omitempty"`
+	DeploymentID          string                     `json:"deployment_id,omitempty"`
+	ProviderID            string                     `json:"provider_id,omitempty"`
+	RequestedModel        string                     `json:"requested_model,omitempty"`
+	ProviderModel         string                     `json:"provider_model,omitempty"`
+	ProviderInputTokens   int64                      `json:"provider_input_tokens"`
+	ProviderOutputTokens  int64                      `json:"provider_output_tokens"`
+	PreparedOutputTokens  int64                      `json:"prepared_output_tokens"`
+	CostMicrosUSD         *int64                     `json:"cost_micros_usd"`
+	OriginalCostMicrosUSD *int64                     `json:"original_cost_micros_usd"`
+	FinalCostMicrosUSD    *int64                     `json:"final_cost_micros_usd"`
+	LeaseMode             ledger.LeaseMode           `json:"lease_mode,omitempty"`
+	PriceEvidenceStatus   domain.PriceEvidenceStatus `json:"price_evidence_status"`
+	CostValueStatus       domain.CostValueStatus     `json:"cost_value_status"`
+	PriceSnapshot         *domain.PriceSnapshot      `json:"price_snapshot,omitempty"`
+	InputCostMicrosUSD    *int64                     `json:"input_cost_micros_usd"`
+	OutputCostMicrosUSD   *int64                     `json:"output_cost_micros_usd"`
+	FixedCostMicrosUSD    *int64                     `json:"fixed_cost_micros_usd"`
+	Tags                  []string                   `json:"tags,omitempty"`
+	CostEstimated         bool                       `json:"cost_estimated"`
+	TokensEstimated       bool                       `json:"tokens_estimated"`
+	TokenUsageSource      ledger.TokenUsageSource    `json:"token_usage_source,omitempty"`
+	StartedAt             time.Time                  `json:"started_at"`
+	CompletedAt           time.Time                  `json:"completed_at"`
+	Status                string                     `json:"status"`
+	ErrorClass            string                     `json:"error_class,omitempty"`
+	HTTPStatus            int                        `json:"http_status,omitempty"`
+	LatencyMillis         int64                      `json:"latency_millis"`
+	RetryCount            int                        `json:"retry_count"`
+	FallbackCount         int                        `json:"fallback_count"`
 }
 
 func (a AttemptEvent) KnownCostMicrosUSD() (int64, bool) {
@@ -74,99 +72,61 @@ func (a AttemptEvent) KnownCostMicrosUSD() (int64, bool) {
 }
 
 type RequestSummary struct {
-	RequestID                string    `json:"request_id"`
-	ProjectID                string    `json:"project_id"`
-	KeyID                    string    `json:"key_id,omitempty"`
-	RequestedModel           string    `json:"requested_model,omitempty"`
-	Attempts                 int64     `json:"attempts"`
-	InputTokens              int64     `json:"input_tokens"`
-	OutputTokens             int64     `json:"output_tokens"`
-	CostMicrosUSD            int64     `json:"cost_micros_usd"`
-	OriginalCostMicrosUSD    int64     `json:"original_cost_micros_usd"`
-	AdjustmentDeltaMicrosUSD int64     `json:"adjustment_delta_micros_usd"`
-	UnknownAttempts          int64     `json:"unknown_attempts"`
-	Fallbacks                int64     `json:"fallbacks"`
-	Outcome                  string    `json:"outcome"`
-	AcceptedAt               time.Time `json:"accepted_at"`
-	CompletedAt              time.Time `json:"completed_at"`
+	RequestID             string    `json:"request_id"`
+	ProjectID             string    `json:"project_id"`
+	KeyID                 string    `json:"key_id,omitempty"`
+	RequestedModel        string    `json:"requested_model,omitempty"`
+	Attempts              int64     `json:"attempts"`
+	InputTokens           int64     `json:"input_tokens"`
+	OutputTokens          int64     `json:"output_tokens"`
+	CostMicrosUSD         int64     `json:"cost_micros_usd"`
+	OriginalCostMicrosUSD int64     `json:"original_cost_micros_usd"`
+	UnknownAttempts       int64     `json:"unknown_attempts"`
+	Fallbacks             int64     `json:"fallbacks"`
+	Outcome               string    `json:"outcome"`
+	AcceptedAt            time.Time `json:"accepted_at"`
+	CompletedAt           time.Time `json:"completed_at"`
 }
 
 type Bucket struct {
-	Hour                     time.Time `json:"hour"`
-	Requests                 int64     `json:"requests"`
-	Attempts                 int64     `json:"attempts"`
-	InputTokens              int64     `json:"input_tokens"`
-	OutputTokens             int64     `json:"output_tokens"`
-	EstimatedInputTokens     int64     `json:"estimated_input_tokens,omitempty"`
-	EstimatedOutputTokens    int64     `json:"estimated_output_tokens,omitempty"`
-	CostMicrosUSD            int64     `json:"cost_micros_usd"`
-	OriginalCostMicrosUSD    int64     `json:"original_cost_micros_usd"`
-	AdjustmentDeltaMicrosUSD int64     `json:"adjustment_delta_micros_usd"`
-	EstimatedCostMicrosUSD   int64     `json:"estimated_cost_micros_usd,omitempty"`
-	UnknownAttempts          int64     `json:"unknown_attempts"`
-	Errors                   int64     `json:"errors"`
-	LatencyMillis            int64     `json:"latency_millis"`
-}
-
-type CostAdjustmentEvent struct {
-	EventID                   string                `json:"event_id"`
-	Sequence                  uint64                `json:"sequence"`
-	RequestID                 string                `json:"request_id"`
-	AttemptID                 string                `json:"attempt_id"`
-	ProjectID                 string                `json:"project_id"`
-	DeploymentID              string                `json:"deployment_id,omitempty"`
-	ProviderID                string                `json:"provider_id,omitempty"`
-	Mode                      ledger.AdjustmentMode `json:"mode"`
-	AdjustmentSequence        uint64                `json:"adjustment_sequence"`
-	IdempotencyKeyDigest      string                `json:"idempotency_key_digest"`
-	BaseCostMicrosUSD         int64                 `json:"base_cost_micros_usd"`
-	BaseCostKnown             bool                  `json:"base_cost_known"`
-	NetCostBeforeMicrosUSD    int64                 `json:"net_cost_before_micros_usd"`
-	DeltaMicrosUSD            int64                 `json:"delta_micros_usd"`
-	NetCostAfterMicrosUSD     int64                 `json:"net_cost_after_micros_usd"`
-	ServicePeriodID           string                `json:"service_period_id"`
-	OriginalCompletedAt       time.Time             `json:"original_completed_at"`
-	PostedPeriodID            string                `json:"posted_period_id"`
-	PostedAt                  time.Time             `json:"posted_at"`
-	CorrectionPriceSnapshot   *domain.PriceSnapshot `json:"correction_price_snapshot,omitempty"`
-	ReasonCode                string                `json:"reason_code"`
-	Reason                    string                `json:"reason,omitempty"`
-	EvidenceDigest            string                `json:"evidence_digest"`
-	CreatedBy                 string                `json:"created_by"`
-	OriginalSettlementEventID string                `json:"original_settlement_event_id"`
-	OriginalSettlementDigest  string                `json:"original_settlement_digest"`
-	AdjustmentRequestDigest   string                `json:"adjustment_request_digest"`
+	Hour                   time.Time `json:"hour"`
+	Requests               int64     `json:"requests"`
+	Attempts               int64     `json:"attempts"`
+	InputTokens            int64     `json:"input_tokens"`
+	OutputTokens           int64     `json:"output_tokens"`
+	EstimatedInputTokens   int64     `json:"estimated_input_tokens,omitempty"`
+	EstimatedOutputTokens  int64     `json:"estimated_output_tokens,omitempty"`
+	CostMicrosUSD          int64     `json:"cost_micros_usd"`
+	OriginalCostMicrosUSD  int64     `json:"original_cost_micros_usd"`
+	EstimatedCostMicrosUSD int64     `json:"estimated_cost_micros_usd,omitempty"`
+	UnknownAttempts        int64     `json:"unknown_attempts"`
+	Errors                 int64     `json:"errors"`
+	LatencyMillis          int64     `json:"latency_millis"`
 }
 
 type Snapshot struct {
-	Watermark              ledger.Watermark      `json:"watermark"`
-	Totals                 Bucket                `json:"totals"`
-	Hourly                 []Bucket              `json:"hourly"`
-	Attempts               []AttemptEvent        `json:"attempts"`
-	Requests               []RequestSummary      `json:"requests"`
-	Adjustments            []CostAdjustmentEvent `json:"adjustments"`
-	PostedAdjustmentHourly []Bucket              `json:"posted_adjustment_hourly"`
+	Watermark ledger.Watermark `json:"watermark"`
+	Totals    Bucket           `json:"totals"`
+	Hourly    []Bucket         `json:"hourly"`
+	Attempts  []AttemptEvent   `json:"attempts"`
+	Requests  []RequestSummary `json:"requests"`
 }
 
 type Metrics struct {
-	RequestsSuccess             uint64
-	RequestsError               uint64
-	AttemptsSuccess             uint64
-	AttemptsError               uint64
-	InputTokens                 uint64
-	OutputTokens                uint64
-	CostMicrosUSD               uint64
-	AttemptLatencyMillis        uint64
-	RequestLatencyMillis        uint64
-	Fallbacks                   uint64
-	ActiveRequests              uint64
-	AttemptLatencyBuckets       [latencyBucketCount]uint64
-	RequestLatencyBuckets       [latencyBucketCount]uint64
-	UnknownAttempts             uint64
-	AdjustmentPositiveCount     uint64
-	AdjustmentNegativeCount     uint64
-	AdjustmentPositiveMicrosUSD uint64
-	AdjustmentNegativeMicrosUSD uint64
+	RequestsSuccess       uint64
+	RequestsError         uint64
+	AttemptsSuccess       uint64
+	AttemptsError         uint64
+	InputTokens           uint64
+	OutputTokens          uint64
+	CostMicrosUSD         uint64
+	AttemptLatencyMillis  uint64
+	RequestLatencyMillis  uint64
+	Fallbacks             uint64
+	ActiveRequests        uint64
+	AttemptLatencyBuckets [latencyBucketCount]uint64
+	RequestLatencyBuckets [latencyBucketCount]uint64
+	UnknownAttempts       uint64
 }
 
 type requestAccumulator struct {
@@ -174,41 +134,37 @@ type requestAccumulator struct {
 }
 
 type checkpoint struct {
-	Version                int                       `json:"version"`
-	Watermark              ledger.Watermark          `json:"watermark"`
-	Started                map[string]time.Time      `json:"started"`
-	Active                 map[string]RequestSummary `json:"active_requests"`
-	Attempts               []AttemptEvent            `json:"attempts"`
-	Summaries              []RequestSummary          `json:"request_summaries"`
-	Hourly                 map[int64]Bucket          `json:"hourly"`
-	Totals                 Bucket                    `json:"totals"`
-	Metrics                Metrics                   `json:"metrics"`
-	Adjustments            []CostAdjustmentEvent     `json:"adjustments"`
-	PostedAdjustmentHourly map[int64]Bucket          `json:"posted_adjustment_hourly"`
+	Version   int                       `json:"version"`
+	Watermark ledger.Watermark          `json:"watermark"`
+	Started   map[string]time.Time      `json:"started"`
+	Active    map[string]RequestSummary `json:"active_requests"`
+	Attempts  []AttemptEvent            `json:"attempts"`
+	Summaries []RequestSummary          `json:"request_summaries"`
+	Hourly    map[int64]Bucket          `json:"hourly"`
+	Totals    Bucket                    `json:"totals"`
+	Metrics   Metrics                   `json:"metrics"`
 }
 
 type Aggregate struct {
-	mu                     sync.RWMutex
-	watermark              ledger.Watermark
-	eventIDs               map[string]struct{}
-	started                map[string]time.Time
-	requests               map[string]*requestAccumulator
-	attempts               []AttemptEvent
-	summaries              []RequestSummary
-	hourly                 map[int64]Bucket
-	postedAdjustmentHourly map[int64]Bucket
-	attemptIndex           map[string]int
-	summaryIndex           map[string]int
-	adjustments            []CostAdjustmentEvent
-	totals                 Bucket
-	metrics                Metrics
+	mu           sync.RWMutex
+	watermark    ledger.Watermark
+	eventIDs     map[string]struct{}
+	started      map[string]time.Time
+	requests     map[string]*requestAccumulator
+	attempts     []AttemptEvent
+	summaries    []RequestSummary
+	hourly       map[int64]Bucket
+	attemptIndex map[string]int
+	summaryIndex map[string]int
+	totals       Bucket
+	metrics      Metrics
 }
 
 func NewAggregate() *Aggregate {
 	return &Aggregate{
 		eventIDs: make(map[string]struct{}), started: make(map[string]time.Time),
 		requests: make(map[string]*requestAccumulator), hourly: make(map[int64]Bucket),
-		postedAdjustmentHourly: make(map[int64]Bucket), attemptIndex: make(map[string]int), summaryIndex: make(map[string]int),
+		attemptIndex: make(map[string]int), summaryIndex: make(map[string]int),
 	}
 }
 
@@ -237,8 +193,6 @@ func RestoreCheckpoint(payload []byte) (*Aggregate, error) {
 	aggregate.hourly = cloneHourly(saved.Hourly)
 	aggregate.totals = saved.Totals
 	aggregate.metrics = saved.Metrics
-	aggregate.adjustments = append([]CostAdjustmentEvent(nil), saved.Adjustments...)
-	aggregate.postedAdjustmentHourly = cloneHourly(saved.PostedAdjustmentHourly)
 	for index, attempt := range aggregate.attempts {
 		aggregate.attemptIndex[attempt.AttemptID] = index
 	}
@@ -267,7 +221,6 @@ func (a *Aggregate) MarshalCheckpoint() (ledger.Watermark, []byte, error) {
 		Attempts:  append([]AttemptEvent(nil), a.attempts...),
 		Summaries: append([]RequestSummary(nil), a.summaries...),
 		Hourly:    cloneHourly(a.hourly), Totals: a.totals, Metrics: a.metrics,
-		Adjustments: append([]CostAdjustmentEvent(nil), a.adjustments...), PostedAdjustmentHourly: cloneHourly(a.postedAdjustmentHourly),
 	}
 	payload, err := json.Marshal(saved)
 	if err != nil {
@@ -290,7 +243,7 @@ func (a *Aggregate) Apply(record ledger.Record) error {
 	}
 	event := record.Event
 	accumulator := a.requests[event.RequestID]
-	if accumulator == nil && event.Kind != ledger.EventCostAdjusted {
+	if accumulator == nil {
 		accumulator = &requestAccumulator{summary: RequestSummary{
 			RequestID: event.RequestID, ProjectID: event.ProjectID, KeyID: event.KeyID,
 			RequestedModel: event.RequestedModel,
@@ -483,101 +436,6 @@ func (a *Aggregate) Apply(record ledger.Record) error {
 		if err := addUint64(&a.metrics.Fallbacks, uint64(accumulator.summary.Fallbacks)); err != nil {
 			return err
 		}
-	case ledger.EventCostAdjusted:
-		index, exists := a.attemptIndex[event.AttemptID]
-		if !exists {
-			return fmt.Errorf("adjustment references unknown attempt %q", event.AttemptID)
-		}
-		attempt := &a.attempts[index]
-		wasUnknown := attempt.FinalCostMicrosUSD == nil
-		if event.AdjustmentSequence != uint64(len(filterAttemptAdjustments(a.adjustments, event.AttemptID))+1) || event.NetCostAfterMicrosUSD == nil {
-			return errors.New("usage adjustment chain is not monotonic")
-		}
-		if err := addInt64(&attempt.AdjustmentDeltaMicrosUSD, event.AdjustmentDeltaMicrosUSD); err != nil {
-			return err
-		}
-		attempt.AdjustmentSequence = event.AdjustmentSequence
-		after := *event.NetCostAfterMicrosUSD
-		attempt.FinalCostMicrosUSD = &after
-		attempt.CostMicrosUSD = &after
-		attempt.CostValueStatus = domain.CostValueKnown
-		if !containsTag(attempt.Tags, "ADJUSTED") {
-			attempt.Tags = append(attempt.Tags, "ADJUSTED")
-		}
-		adjustment := CostAdjustmentEvent{EventID: event.EventID, Sequence: record.Sequence, RequestID: event.RequestID, AttemptID: event.AttemptID,
-			ProjectID: event.ProjectID, DeploymentID: event.DeploymentID, ProviderID: event.ProviderID, Mode: event.AdjustmentMode,
-			AdjustmentSequence: event.AdjustmentSequence, IdempotencyKeyDigest: event.IdempotencyKeyDigest,
-			BaseCostMicrosUSD: pointerValue(event.BaseSettlementMicrosUSD), BaseCostKnown: event.BaseSettlementMicrosUSD != nil, NetCostBeforeMicrosUSD: pointerValue(event.NetCostBeforeMicrosUSD), DeltaMicrosUSD: event.AdjustmentDeltaMicrosUSD,
-			NetCostAfterMicrosUSD: after, ServicePeriodID: event.ServicePeriodID, OriginalCompletedAt: event.OriginalCompletedAt,
-			PostedPeriodID: event.PostedPeriodID, PostedAt: event.PostedAt, CorrectionPriceSnapshot: event.CorrectionPriceSnapshot,
-			ReasonCode: event.AdjustmentReasonCode, Reason: event.AdjustmentReason, EvidenceDigest: event.AdjustmentEvidenceDigest, CreatedBy: event.AdjustmentCreatedBy,
-			OriginalSettlementEventID: event.OriginalSettlementEventID, OriginalSettlementDigest: event.OriginalSettlementDigest, AdjustmentRequestDigest: event.AdjustmentRequestDigest}
-		a.adjustments = append(a.adjustments, adjustment)
-		if event.AdjustmentDeltaMicrosUSD >= 0 {
-			a.metrics.AdjustmentPositiveCount++
-			if err := addUint64(&a.metrics.AdjustmentPositiveMicrosUSD, uint64(event.AdjustmentDeltaMicrosUSD)); err != nil {
-				return err
-			}
-		} else {
-			a.metrics.AdjustmentNegativeCount++
-			if event.AdjustmentDeltaMicrosUSD == math.MinInt64 {
-				return errors.New("usage adjustment magnitude overflows int64")
-			}
-			if err := addUint64(&a.metrics.AdjustmentNegativeMicrosUSD, uint64(-event.AdjustmentDeltaMicrosUSD)); err != nil {
-				return err
-			}
-		}
-		if err := addInt64(&a.totals.AdjustmentDeltaMicrosUSD, event.AdjustmentDeltaMicrosUSD); err != nil {
-			return err
-		}
-		if err := addInt64(&a.totals.CostMicrosUSD, event.AdjustmentDeltaMicrosUSD); err != nil {
-			return err
-		}
-		serviceHour := event.OriginalCompletedAt.UTC().Truncate(time.Hour)
-		serviceBucket := a.hourly[serviceHour.Unix()]
-		serviceBucket.Hour = serviceHour
-		if err := addInt64(&serviceBucket.AdjustmentDeltaMicrosUSD, event.AdjustmentDeltaMicrosUSD); err != nil {
-			return err
-		}
-		if err := addInt64(&serviceBucket.CostMicrosUSD, event.AdjustmentDeltaMicrosUSD); err != nil {
-			return err
-		}
-		if wasUnknown && serviceBucket.UnknownAttempts > 0 {
-			serviceBucket.UnknownAttempts--
-		}
-		a.hourly[serviceHour.Unix()] = serviceBucket
-		postedHour := event.PostedAt.UTC().Truncate(time.Hour)
-		postedBucket := a.postedAdjustmentHourly[postedHour.Unix()]
-		postedBucket.Hour = postedHour
-		if err := addInt64(&postedBucket.AdjustmentDeltaMicrosUSD, event.AdjustmentDeltaMicrosUSD); err != nil {
-			return err
-		}
-		a.postedAdjustmentHourly[postedHour.Unix()] = postedBucket
-		if summaryIndex, ok := a.summaryIndex[event.RequestID]; ok {
-			if err := addInt64(&a.summaries[summaryIndex].AdjustmentDeltaMicrosUSD, event.AdjustmentDeltaMicrosUSD); err != nil {
-				return err
-			}
-			if err := addInt64(&a.summaries[summaryIndex].CostMicrosUSD, event.AdjustmentDeltaMicrosUSD); err != nil {
-				return err
-			}
-			if wasUnknown && a.summaries[summaryIndex].UnknownAttempts > 0 {
-				a.summaries[summaryIndex].UnknownAttempts--
-			}
-		}
-		if active := a.requests[event.RequestID]; active != nil {
-			if err := addInt64(&active.summary.AdjustmentDeltaMicrosUSD, event.AdjustmentDeltaMicrosUSD); err != nil {
-				return err
-			}
-			if err := addInt64(&active.summary.CostMicrosUSD, event.AdjustmentDeltaMicrosUSD); err != nil {
-				return err
-			}
-			if wasUnknown && active.summary.UnknownAttempts > 0 {
-				active.summary.UnknownAttempts--
-			}
-		}
-		if wasUnknown && a.totals.UnknownAttempts > 0 {
-			a.totals.UnknownAttempts--
-		}
 	}
 	a.eventIDs[event.EventID] = struct{}{}
 	a.watermark = ledger.Watermark{Generation: 1, Offset: record.Offset, Sequence: record.Sequence}
@@ -649,23 +507,15 @@ func (a *Aggregate) Snapshot() Snapshot {
 	defer a.mu.RUnlock()
 	result := Snapshot{
 		Watermark: a.watermark, Totals: a.totals,
-		Attempts:               append([]AttemptEvent(nil), a.attempts...),
-		Requests:               append([]RequestSummary(nil), a.summaries...),
-		Adjustments:            append([]CostAdjustmentEvent(nil), a.adjustments...),
-		Hourly:                 make([]Bucket, 0, len(a.hourly)),
-		PostedAdjustmentHourly: make([]Bucket, 0, len(a.postedAdjustmentHourly)),
-	}
-	for _, bucket := range a.postedAdjustmentHourly {
-		result.PostedAdjustmentHourly = append(result.PostedAdjustmentHourly, bucket)
+		Attempts: append([]AttemptEvent(nil), a.attempts...),
+		Requests: append([]RequestSummary(nil), a.summaries...),
+		Hourly:   make([]Bucket, 0, len(a.hourly)),
 	}
 	for _, bucket := range a.hourly {
 		result.Hourly = append(result.Hourly, bucket)
 	}
 	sort.Slice(result.Hourly, func(i, j int) bool {
 		return result.Hourly[i].Hour.Before(result.Hourly[j].Hour)
-	})
-	sort.Slice(result.PostedAdjustmentHourly, func(i, j int) bool {
-		return result.PostedAdjustmentHourly[i].Hour.Before(result.PostedAdjustmentHourly[j].Hour)
 	})
 	return result
 }
@@ -677,23 +527,6 @@ func containsTag(tags []string, wanted string) bool {
 		}
 	}
 	return false
-}
-
-func pointerValue(value *int64) int64 {
-	if value == nil {
-		return 0
-	}
-	return *value
-}
-
-func filterAttemptAdjustments(items []CostAdjustmentEvent, attemptID string) []CostAdjustmentEvent {
-	result := make([]CostAdjustmentEvent, 0)
-	for _, item := range items {
-		if item.AttemptID == attemptID {
-			result = append(result, item)
-		}
-	}
-	return result
 }
 
 func cloneStarted(source map[string]time.Time) map[string]time.Time {

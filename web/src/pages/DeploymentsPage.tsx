@@ -26,7 +26,7 @@ export function DeploymentsPage() {
   const readOnly = useIsReadOnly();
   const [editing, setEditing] = useState<Deployment | null | "new">(null);
   const [replacement, setReplacement] = useState<Deployment>();
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(() => new URLSearchParams(window.location.search).get("q") ?? "");
   const [status, setStatus] = useState<"all" | "enabled" | "disabled" | "attention">("all");
   const deployments = useQuery({ queryKey: ["deployments"], queryFn: api.deployments });
   const providers = useQuery({ queryKey: ["providers"], queryFn: api.providers });
@@ -46,6 +46,7 @@ export function DeploymentsPage() {
     const normalizedQuery = query.trim().toLocaleLowerCase();
     return (deployments.data?.items ?? []).filter((deployment) => {
       const matchesQuery = !normalizedQuery || [
+        deployment.id,
         deployment.name,
         deployment.provider_model,
         providerNames.get(deployment.provider_id) || deployment.provider_id,

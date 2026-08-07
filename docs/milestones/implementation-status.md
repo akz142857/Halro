@@ -22,7 +22,7 @@ scope is governed by reviewed release notes and release gates.
 | Auth hot path | immutable in-memory key/project snapshot |
 | Ledger | framed WAL, checksum, partial-tail recovery, bounded group commit with per-batch fsync, writer-locked committed-prefix snapshots |
 | Accounting correctness | one atomic Attempt settlement contains reservation delta, cost, and tokens |
-| Versioned pricing and historical cost | immutable per-Deployment price timelines; fixed-point micro-USD snapshots pinned before Provider I/O; typed metered/free/unknown leases; append-only cost adjustments with service/posted periods; nullable Usage cost evidence; Settlement and Adjustment Parquet datasets; WAL v1/v2 dual-read and reader gate; backup pricing digests and restore quarantine; audited Proposal review/adoption that never enters the Gateway hot path before confirmation |
+| Versioned pricing and historical cost | immutable per-Deployment price timelines; fixed-point micro-USD snapshots pinned before Provider I/O; typed metered/free/unknown leases; nullable Usage cost evidence; Settlement Parquet dataset; WAL v1/v2 dual-read and reader gate; backup pricing digests and restore quarantine; audited Proposal review/adoption that never enters the Gateway hot path before confirmation |
 | Replay | monotonic sequence, stable Event ID idempotency, pending reservation recovery |
 | Accounting health | Healthy/Degraded/Unavailable/RecoveryRequired status and readiness behavior |
 | Safe logs | structured attribute and value redaction baseline |

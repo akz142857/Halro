@@ -18,7 +18,6 @@ import (
 )
 
 const parquetSchemaVersion = 3
-const adjustmentParquetSchemaVersion = 2
 
 // Export format (ADR 0017): what new partitions are written as. Existing
 // partitions are never rewritten to a different format.
@@ -26,37 +25,6 @@ const (
 	FormatParquet = "parquet"
 	FormatNDJSON  = "ndjson"
 )
-
-type parquetAdjustment struct {
-	SchemaVersion               int32  `parquet:"schema_version" json:"schema_version"`
-	EventID                     string `parquet:"event_id,dict" json:"event_id"`
-	Sequence                    int64  `parquet:"sequence,delta" json:"sequence"`
-	RequestID                   string `parquet:"request_id,dict" json:"request_id"`
-	AttemptID                   string `parquet:"attempt_id,dict" json:"attempt_id"`
-	ProjectID                   string `parquet:"project_id,dict" json:"project_id"`
-	DeploymentID                string `parquet:"deployment_id,dict" json:"deployment_id"`
-	ProviderID                  string `parquet:"provider_id,dict" json:"provider_id"`
-	Mode                        string `parquet:"mode,dict" json:"mode"`
-	AdjustmentSequence          int64  `parquet:"adjustment_sequence" json:"adjustment_sequence"`
-	IdempotencyKeyDigest        string `parquet:"idempotency_key_digest" json:"idempotency_key_digest"`
-	BaseCostMicrosUSD           int64  `parquet:"base_cost_micros_usd" json:"base_cost_micros_usd"`
-	BaseCostKnown               bool   `parquet:"base_cost_known" json:"base_cost_known"`
-	NetCostBeforeMicrosUSD      int64  `parquet:"net_cost_before_micros_usd" json:"net_cost_before_micros_usd"`
-	DeltaMicrosUSD              int64  `parquet:"delta_micros_usd" json:"delta_micros_usd"`
-	NetCostAfterMicrosUSD       int64  `parquet:"net_cost_after_micros_usd" json:"net_cost_after_micros_usd"`
-	ServicePeriodID             string `parquet:"service_period_id,dict" json:"service_period_id"`
-	OriginalCompletedAtMicros   int64  `parquet:"original_completed_at_utc,timestamp(microsecond)" json:"original_completed_at_utc"`
-	PostedPeriodID              string `parquet:"posted_period_id,dict" json:"posted_period_id"`
-	PostedAtMicros              int64  `parquet:"posted_at_utc,timestamp(microsecond)" json:"posted_at_utc"`
-	CorrectionPriceSnapshotJSON string `parquet:"correction_price_snapshot_json" json:"correction_price_snapshot_json"`
-	ReasonCode                  string `parquet:"reason_code,dict" json:"reason_code"`
-	EvidenceDigest              string `parquet:"evidence_digest" json:"evidence_digest"`
-	CreatedBy                   string `parquet:"created_by,dict" json:"created_by"`
-	Reason                      string `parquet:"reason" json:"reason"`
-	OriginalSettlementEventID   string `parquet:"original_settlement_event_id" json:"original_settlement_event_id"`
-	OriginalSettlementDigest    string `parquet:"original_settlement_digest" json:"original_settlement_digest"`
-	AdjustmentRequestDigest     string `parquet:"adjustment_request_digest" json:"adjustment_request_digest"`
-}
 
 type parquetAttempt struct {
 	SchemaVersion        int32  `parquet:"schema_version" json:"schema_version"`
@@ -157,31 +125,6 @@ func (f ManifestFile) format() string {
 	return f.Format
 }
 
-type AdjustmentManifest struct {
-	SchemaVersion int                      `json:"schema_version"`
-	LastSequence  uint64                   `json:"last_sequence"`
-	Files         []AdjustmentManifestFile `json:"files"`
-}
-
-type AdjustmentManifestFile struct {
-	Path           string `json:"path"`
-	Date           string `json:"date"`
-	SHA256         string `json:"sha256"`
-	MinSequence    uint64 `json:"min_sequence"`
-	MaxSequence    uint64 `json:"max_sequence"`
-	Records        int64  `json:"records"`
-	DeltaMicrosUSD int64  `json:"delta_micros_usd"`
-	// Format mirrors ManifestFile.Format; see FormatParquet/FormatNDJSON.
-	Format string `json:"format,omitempty"`
-}
-
-func (f AdjustmentManifestFile) format() string {
-	if f.Format == "" {
-		return FormatParquet
-	}
-	return f.Format
-}
-
 type Exporter struct {
 	root   string
 	format string
@@ -257,9 +200,6 @@ func (e *Exporter) Export(snapshot Snapshot) (Manifest, error) {
 				return Manifest{}, err
 			}
 		}
-		if err := e.exportAdjustments(snapshot.Adjustments); err != nil {
-			return Manifest{}, err
-		}
 		return manifest, nil
 	}
 	byDate := make(map[string][]AttemptEvent)
@@ -287,70 +227,6 @@ func (e *Exporter) Export(snapshot Snapshot) (Manifest, error) {
 	})
 	if err := e.commitManifest(manifest); err != nil {
 		return Manifest{}, err
-	}
-	if err := e.exportAdjustments(snapshot.Adjustments); err != nil {
-		return Manifest{}, err
-	}
-	return manifest, nil
-}
-
-func (e *Exporter) exportAdjustments(adjustments []CostAdjustmentEvent) error {
-	manifest, err := e.LoadAdjustmentManifest()
-	missing := errors.Is(err, os.ErrNotExist)
-	if err != nil && !missing {
-		return err
-	}
-	if missing {
-		manifest = AdjustmentManifest{SchemaVersion: adjustmentParquetSchemaVersion}
-	}
-	if manifest.SchemaVersion != adjustmentParquetSchemaVersion {
-		return fmt.Errorf("adjustment manifest schema version %d is not supported", manifest.SchemaVersion)
-	}
-	var pending []CostAdjustmentEvent
-	for _, adjustment := range adjustments {
-		if adjustment.Sequence > manifest.LastSequence {
-			pending = append(pending, adjustment)
-		}
-	}
-	sort.Slice(pending, func(i, j int) bool { return pending[i].Sequence < pending[j].Sequence })
-	if len(pending) == 0 {
-		if missing {
-			return e.commitAdjustmentManifest(manifest)
-		}
-		return nil
-	}
-	byDate := make(map[string][]CostAdjustmentEvent)
-	var dates []string
-	for _, adjustment := range pending {
-		date := adjustment.PostedAt.UTC().Format("2006-01-02")
-		if _, ok := byDate[date]; !ok {
-			dates = append(dates, date)
-		}
-		byDate[date] = append(byDate[date], adjustment)
-	}
-	sort.Strings(dates)
-	for _, date := range dates {
-		entry, err := e.publishAdjustmentPartition(date, byDate[date])
-		if err != nil {
-			return err
-		}
-		manifest.Files = append(manifest.Files, entry)
-		if entry.MaxSequence > manifest.LastSequence {
-			manifest.LastSequence = entry.MaxSequence
-		}
-	}
-	sort.Slice(manifest.Files, func(i, j int) bool { return manifest.Files[i].MinSequence < manifest.Files[j].MinSequence })
-	return e.commitAdjustmentManifest(manifest)
-}
-
-func (e *Exporter) LoadAdjustmentManifest() (AdjustmentManifest, error) {
-	payload, err := os.ReadFile(filepath.Join(e.root, "cost_adjustments", "manifest.json"))
-	if err != nil {
-		return AdjustmentManifest{}, err
-	}
-	var manifest AdjustmentManifest
-	if err := json.Unmarshal(payload, &manifest); err != nil {
-		return AdjustmentManifest{}, fmt.Errorf("decode adjustment manifest: %w", err)
 	}
 	return manifest, nil
 }
@@ -447,72 +323,6 @@ func (e *Exporter) Verify(snapshot *Snapshot) error {
 			if row, exists := canonicalRows[eventID]; exists && row != toParquetAttempt(expected[eventID]) {
 				return fmt.Errorf("usage reconciliation content mismatch for event %s", eventID)
 			}
-		}
-	}
-	return e.verifyAdjustments(snapshot)
-}
-
-func (e *Exporter) verifyAdjustments(snapshot *Snapshot) error {
-	manifest, err := e.LoadAdjustmentManifest()
-	if errors.Is(err, os.ErrNotExist) && (snapshot == nil || len(snapshot.Adjustments) == 0) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if manifest.SchemaVersion != adjustmentParquetSchemaVersion {
-		return errors.New("unsupported adjustment manifest schema")
-	}
-	seen := make(map[string]parquetAdjustment)
-	for _, entry := range manifest.Files {
-		path, err := e.safeManifestPath(entry.Path)
-		if err != nil {
-			return err
-		}
-		checksum, err := fileSHA256(path)
-		if err != nil || checksum != entry.SHA256 {
-			return fmt.Errorf("adjustment partition checksum mismatch: %s", entry.Path)
-		}
-		rows, err := readAdjustmentRows(path, entry.format())
-		if err != nil {
-			return err
-		}
-		if int64(len(rows)) != entry.Records || len(rows) == 0 {
-			return errors.New("adjustment record count mismatch")
-		}
-		var delta int64
-		for _, row := range rows {
-			if row.SchemaVersion != adjustmentParquetSchemaVersion || row.EventID == "" || row.Sequence <= 0 {
-				return errors.New("invalid adjustment row")
-			}
-			if _, ok := seen[row.EventID]; ok {
-				return errors.New("duplicate adjustment event")
-			}
-			seen[row.EventID] = row
-			if err := addInt64(&delta, row.DeltaMicrosUSD); err != nil {
-				return err
-			}
-		}
-		if delta != entry.DeltaMicrosUSD || uint64(rows[0].Sequence) != entry.MinSequence || uint64(rows[len(rows)-1].Sequence) != entry.MaxSequence {
-			return errors.New("adjustment partition summary mismatch")
-		}
-	}
-	if snapshot != nil {
-		expected := 0
-		for _, item := range snapshot.Adjustments {
-			if item.Sequence <= manifest.LastSequence {
-				expected++
-				row, ok := seen[item.EventID]
-				if !ok {
-					return fmt.Errorf("missing adjustment event %s", item.EventID)
-				}
-				if row != toParquetAdjustment(item) {
-					return fmt.Errorf("adjustment content mismatch for event %s", item.EventID)
-				}
-			}
-		}
-		if expected != len(seen) {
-			return errors.New("adjustment reconciliation mismatch")
 		}
 	}
 	return nil
@@ -674,151 +484,10 @@ func readAttemptRows(path, format string) ([]parquetAttempt, error) {
 	return parquet.ReadFile[parquetAttempt](path)
 }
 
-func (e *Exporter) publishAdjustmentPartition(date string, adjustments []CostAdjustmentEvent) (AdjustmentManifestFile, error) {
-	if len(adjustments) == 0 {
-		return AdjustmentManifestFile{}, errors.New("cannot publish empty adjustment partition")
-	}
-	rows := make([]parquetAdjustment, len(adjustments))
-	entry := AdjustmentManifestFile{
-		Date: date, MinSequence: adjustments[0].Sequence, MaxSequence: adjustments[len(adjustments)-1].Sequence,
-		Records: int64(len(adjustments)), Format: e.format,
-	}
-	for index, item := range adjustments {
-		rows[index] = toParquetAdjustment(item)
-		if err := addInt64(&entry.DeltaMicrosUSD, item.DeltaMicrosUSD); err != nil {
-			return AdjustmentManifestFile{}, err
-		}
-	}
-	relative := filepath.Join("cost_adjustments", "date="+date, fmt.Sprintf("adjustments-%020d-%020d.%s", entry.MinSequence, entry.MaxSequence, partitionExtension(e.format)))
-	entry.Path = filepath.ToSlash(relative)
-	path := filepath.Join(e.root, relative)
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return AdjustmentManifestFile{}, err
-	}
-	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
-		if e.format == FormatNDJSON {
-			if err := writeNDJSONAtomic(path, rows); err != nil {
-				return AdjustmentManifestFile{}, err
-			}
-		} else if err := writeAdjustmentParquetAtomic(path, rows); err != nil {
-			return AdjustmentManifestFile{}, err
-		}
-	} else if err != nil {
-		return AdjustmentManifestFile{}, err
-	} else {
-		existing, err := readAdjustmentRows(path, e.format)
-		if err != nil {
-			return AdjustmentManifestFile{}, fmt.Errorf("read orphan adjustment partition: %w", err)
-		}
-		if !sameAdjustmentRows(existing, rows) {
-			return AdjustmentManifestFile{}, fmt.Errorf("existing adjustment partition conflicts with export: %s", relative)
-		}
-	}
-	checksum, err := fileSHA256(path)
-	if err != nil {
-		return AdjustmentManifestFile{}, err
-	}
-	entry.SHA256 = checksum
-	return entry, nil
-}
-
-func readAdjustmentRows(path, format string) ([]parquetAdjustment, error) {
-	if format == FormatNDJSON {
-		return readNDJSONFile[parquetAdjustment](path)
-	}
-	return parquet.ReadFile[parquetAdjustment](path)
-}
-
-func toParquetAdjustment(item CostAdjustmentEvent) parquetAdjustment {
-	var snapshotJSON string
-	if item.CorrectionPriceSnapshot != nil {
-		if encoded, err := json.Marshal(item.CorrectionPriceSnapshot); err == nil {
-			snapshotJSON = string(encoded)
-		}
-	}
-	return parquetAdjustment{SchemaVersion: adjustmentParquetSchemaVersion, EventID: item.EventID, Sequence: int64(item.Sequence), RequestID: item.RequestID, AttemptID: item.AttemptID, ProjectID: item.ProjectID,
-		DeploymentID: item.DeploymentID, ProviderID: item.ProviderID, Mode: string(item.Mode), AdjustmentSequence: int64(item.AdjustmentSequence), IdempotencyKeyDigest: item.IdempotencyKeyDigest,
-		BaseCostMicrosUSD: item.BaseCostMicrosUSD, BaseCostKnown: item.BaseCostKnown, NetCostBeforeMicrosUSD: item.NetCostBeforeMicrosUSD, DeltaMicrosUSD: item.DeltaMicrosUSD, NetCostAfterMicrosUSD: item.NetCostAfterMicrosUSD,
-		ServicePeriodID: item.ServicePeriodID, OriginalCompletedAtMicros: item.OriginalCompletedAt.UTC().UnixMicro(), PostedPeriodID: item.PostedPeriodID, PostedAtMicros: item.PostedAt.UTC().UnixMicro(),
-		CorrectionPriceSnapshotJSON: snapshotJSON, ReasonCode: item.ReasonCode, EvidenceDigest: item.EvidenceDigest, CreatedBy: item.CreatedBy,
-		Reason: item.Reason, OriginalSettlementEventID: item.OriginalSettlementEventID, OriginalSettlementDigest: item.OriginalSettlementDigest, AdjustmentRequestDigest: item.AdjustmentRequestDigest}
-}
-
-func writeAdjustmentParquetAtomic(path string, rows []parquetAdjustment) (err error) {
-	temp, err := os.CreateTemp(filepath.Dir(path), ".adjustments-*.parquet.tmp")
-	if err != nil {
-		return err
-	}
-	tempPath := temp.Name()
-	defer func() {
-		temp.Close()
-		if err != nil {
-			_ = os.Remove(tempPath)
-		}
-	}()
-	if err = temp.Chmod(0o600); err != nil {
-		return err
-	}
-	writer := parquet.NewGenericWriter[parquetAdjustment](temp)
-	if _, err = writer.Write(rows); err != nil {
-		_ = writer.Close()
-		return err
-	}
-	if err = writer.Close(); err != nil {
-		return err
-	}
-	if err = temp.Sync(); err != nil {
-		return err
-	}
-	if err = temp.Close(); err != nil {
-		return err
-	}
-	if err = os.Rename(tempPath, path); err != nil {
-		return err
-	}
-	return syncDirectory(filepath.Dir(path))
-}
-
-func (e *Exporter) commitAdjustmentManifest(manifest AdjustmentManifest) (err error) {
-	root := filepath.Join(e.root, "cost_adjustments")
-	if err := os.MkdirAll(root, 0o700); err != nil {
-		return err
-	}
-	temp, err := os.CreateTemp(root, ".manifest-*.json.tmp")
-	if err != nil {
-		return err
-	}
-	tempPath := temp.Name()
-	defer func() {
-		temp.Close()
-		if err != nil {
-			_ = os.Remove(tempPath)
-		}
-	}()
-	if err = temp.Chmod(0o600); err != nil {
-		return err
-	}
-	encoder := json.NewEncoder(temp)
-	encoder.SetIndent("", "  ")
-	if err = encoder.Encode(manifest); err != nil {
-		return err
-	}
-	if err = temp.Sync(); err != nil {
-		return err
-	}
-	if err = temp.Close(); err != nil {
-		return err
-	}
-	if err = os.Rename(tempPath, filepath.Join(root, "manifest.json")); err != nil {
-		return err
-	}
-	return syncDirectory(root)
-}
-
 // writeNDJSONAtomic follows the exact durability sequence writeParquetAtomic
-// and writeAdjustmentParquetAtomic already use — temp file in the target
-// directory, fsync, atomic rename, directory fsync. A partition's durability
-// story does not depend on what container is inside it.
+// already uses — temp file in the target directory, fsync, atomic rename,
+// directory fsync. A partition's durability story does not depend on what
+// container is inside it.
 func writeNDJSONAtomic[T any](path string, rows []T) (err error) {
 	temp, err := os.CreateTemp(filepath.Dir(path), ".ndjson-*.tmp")
 	if err != nil {
@@ -1075,18 +744,6 @@ func originalAttemptCost(attempt AttemptEvent) (int64, bool) {
 }
 
 func sameRows(left, right []parquetAttempt) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for index := range left {
-		if left[index] != right[index] {
-			return false
-		}
-	}
-	return true
-}
-
-func sameAdjustmentRows(left, right []parquetAdjustment) bool {
 	if len(left) != len(right) {
 		return false
 	}

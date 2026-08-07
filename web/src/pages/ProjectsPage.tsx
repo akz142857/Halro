@@ -55,7 +55,7 @@ function pageQuery(cursor: string) {
 export function ProjectsPage() {
   const { t } = useTranslation();
   const readOnly = useIsReadOnly();
-  const [selected, setSelected] = useState<string>("");
+  const [selected, setSelected] = useState<string>(() => new URLSearchParams(window.location.search).get("project_id") ?? "");
   const [creating, setCreating] = useState(false);
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<ResourceStatusFilter>("all");

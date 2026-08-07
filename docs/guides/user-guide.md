@@ -615,11 +615,8 @@ Common errors:
 - Deployment prices are immutable versions with an effective time. Changing the
   current price creates a new version; it never recalculates old requests.
 - Every provider attempt binds a price snapshot before the upstream call. The
-  Usage page can expand to show original cost, adjustments, and final cost;
+  Usage page can expand to show the pricing evidence behind a call's cost;
   unknown cost is shown as blank rather than as `$0`.
-- A historical mispricing is corrected by appending a cost adjustment. The
-  original settlement is never modified, and both the service period and the
-  adjustment period are preserved.
 - A "price proposal" is a separate item awaiting review. An LLM or an import
   tool may only submit a proposal carrying a source digest, a model and region
   match, warnings, and an expiry — it cannot change a price.

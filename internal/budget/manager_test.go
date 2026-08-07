@@ -109,97 +109,6 @@ func TestLeaseDeepCopiesSnapshotAndFixedOnlySettlementIsValidated(t *testing.T) 
 	}
 }
 
-func TestConcurrentAdjustmentIntentCommitPersistsOnlyAuthoritativeSequence(t *testing.T) {
-	manager, state, closeLog := newTestManager(t)
-	defer closeLog()
-	request, _ := manager.BeginRequest(context.Background(), "project_serial", "request_serial")
-	snapshot := testPriceSnapshot(t, domain.BillingModeMetered)
-	attempt, err := manager.ReserveLeaseDetailed(context.Background(), request, 1_000, LeaseSpec{Mode: ledger.LeaseModeMetered, ReservationMicrosUSD: 3, PriceSnapshot: snapshot, PreparedInputTokens: 1, PreparedOutputTokens: 1, TokenGuardPricingViewDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, AttemptMetadata{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := manager.MarkStarted(context.Background(), attempt); err != nil {
-		t.Fatal(err)
-	}
-	if err := manager.Settle(context.Background(), attempt, Settlement{CommittedMicrosUSD: 3, ProviderInputTokens: 1, ProviderOutputTokens: 1, Outcome: "success"}); err != nil {
-		t.Fatal(err)
-	}
-	base := AdjustmentSpec{AttemptID: attempt.AttemptID, Mode: ledger.AdjustmentModeExplicit, ExplicitDeltaMicrosUSD: 1, ExpectedSequence: 0, ExpectedNetCostMicrosUSD: 3, EvidenceDigest: "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", ReasonCode: "invoice_difference", Reason: "concurrent", CreatedBy: "admin"}
-	var mu sync.Mutex
-	persisted := 0
-	failures := 0
-	var wait sync.WaitGroup
-	for index := 0; index < 2; index++ {
-		wait.Add(1)
-		go func(index int) {
-			defer wait.Done()
-			spec := base
-			fill := fmt.Sprintf("%064x", index+1)
-			spec.IdempotencyKeyDigest, spec.RequestDigest = "sha256:"+fill, "sha256:"+fill
-			_, _, err := manager.CommitAdjustmentWithIntent(context.Background(), spec, 0, 100, func(ledger.Event) error { mu.Lock(); persisted++; mu.Unlock(); return nil })
-			if err != nil {
-				mu.Lock()
-				failures++
-				mu.Unlock()
-			}
-		}(index)
-	}
-	wait.Wait()
-	if persisted != 1 || failures != 1 || state.Balance(request.ProjectID, request.Period.ID, request.Period.TimezoneVersion).CommittedMicrosUSD != 4 {
-		t.Fatalf("persisted=%d failures=%d balance=%#v", persisted, failures, state.Balance(request.ProjectID, request.Period.ID, request.Period.TimezoneVersion))
-	}
-}
-
-func TestAppendOnlyAdjustmentIsIdempotentAndUpdatesOriginalPeriodBalance(t *testing.T) {
-	manager, state, closeLog := newTestManager(t)
-	defer closeLog()
-	request, err := manager.BeginRequest(context.Background(), "project_adjust", "request_adjust")
-	if err != nil {
-		t.Fatal(err)
-	}
-	snapshot := testPriceSnapshot(t, domain.BillingModeMetered)
-	attempt, err := manager.ReserveLeaseDetailed(context.Background(), request, 1_000, LeaseSpec{
-		Mode: ledger.LeaseModeMetered, ReservationMicrosUSD: 100, PriceSnapshot: snapshot,
-		PreparedInputTokens: 10, PreparedOutputTokens: 20,
-		TokenGuardPricingViewDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-	}, AttemptMetadata{DeploymentID: "dep_test", ProviderID: "provider_test"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := manager.MarkStarted(context.Background(), attempt); err != nil {
-		t.Fatal(err)
-	}
-	if err := manager.Settle(context.Background(), attempt, Settlement{CommittedMicrosUSD: 50, ProviderInputTokens: 10, ProviderOutputTokens: 20, Outcome: "success"}); err != nil {
-		t.Fatal(err)
-	}
-	spec := AdjustmentSpec{AttemptID: attempt.AttemptID, Mode: ledger.AdjustmentModeExplicit, ExplicitDeltaMicrosUSD: 25,
-		ExpectedSequence: 0, ExpectedNetCostMicrosUSD: 50,
-		IdempotencyKeyDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-		RequestDigest:        "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-		EvidenceDigest:       "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-		ReasonCode:           "invoice_difference", Reason: "provider invoice correction", CreatedBy: "admin_test"}
-	event, replayed, err := manager.AdjustCost(context.Background(), spec, 60)
-	if err != nil || replayed {
-		t.Fatalf("adjust event=%#v replayed=%t err=%v", event, replayed, err)
-	}
-	if event.AdjustmentSequence != 1 || *event.NetCostBeforeMicrosUSD != 50 || event.AdjustmentDeltaMicrosUSD != 25 || *event.NetCostAfterMicrosUSD != 75 {
-		t.Fatalf("adjustment=%#v", event)
-	}
-	balance := state.Balance(request.ProjectID, request.Period.ID, request.Period.TimezoneVersion)
-	if balance.OriginalCommittedMicrosUSD != 50 || balance.AdjustmentDeltaMicrosUSD != 25 || balance.CommittedMicrosUSD != 75 {
-		t.Fatalf("balance=%#v", balance)
-	}
-	replayedEvent, replayed, err := manager.AdjustCost(context.Background(), spec, 60)
-	if err != nil || !replayed || replayedEvent.EventID != event.EventID || state.Balance(request.ProjectID, request.Period.ID, request.Period.TimezoneVersion).CommittedMicrosUSD != 75 {
-		t.Fatalf("idempotent event=%#v replayed=%t err=%v", replayedEvent, replayed, err)
-	}
-	conflict := spec
-	conflict.RequestDigest = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-	if _, _, err := manager.AdjustCost(context.Background(), conflict, 60); err == nil {
-		t.Fatal("expected idempotency collision")
-	}
-}
-
 func TestRecoverStartedLeaseUsesFrozenPriceAndPreparedBounds(t *testing.T) {
 	manager, state, closeLog := newTestManager(t)
 	defer closeLog()
@@ -262,21 +171,6 @@ func TestUnknownLeaseRequiresExplicitNoCostGovernanceEvidenceAndStaysUnknown(t *
 	balance := state.Balance(request.ProjectID, request.Period.ID, request.Period.TimezoneVersion)
 	if balance.ReservedMicrosUSD != 0 || balance.CommittedMicrosUSD != 0 || balance.UnknownAttempts != 1 {
 		t.Fatalf("unknown balance=%#v", balance)
-	}
-	correction := testPriceSnapshot(t, domain.BillingModeMetered)
-	event, _, err := manager.AdjustCost(context.Background(), AdjustmentSpec{AttemptID: attempt.AttemptID, Mode: ledger.AdjustmentModeReprice,
-		CorrectionPriceSnapshot: correction, ExpectedSequence: 0, ExpectedNetCostMicrosUSD: 0,
-		IdempotencyKeyDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", RequestDigest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-		EvidenceDigest: "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", ReasonCode: "late_price_evidence", Reason: "establish known cost", CreatedBy: "admin"}, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if event.BaseSettlementMicrosUSD != nil || event.NetCostBeforeMicrosUSD != nil || *event.NetCostAfterMicrosUSD != 25 || event.AdjustmentDeltaMicrosUSD != 25 {
-		t.Fatalf("unknown correction=%#v", event)
-	}
-	balance = state.Balance(request.ProjectID, request.Period.ID, request.Period.TimezoneVersion)
-	if balance.CommittedMicrosUSD != 25 || balance.AdjustmentDeltaMicrosUSD != 25 || balance.UnknownAttempts != 0 {
-		t.Fatalf("corrected balance=%#v", balance)
 	}
 }
 
