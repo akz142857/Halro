@@ -6,15 +6,15 @@
 
 ## 一句话状态
 
-清单共 32 项，**已完成 24 项**（逐条到代码里核实过，非仅凭本文件记录）：
+清单共 32 项，**已完成 27 项**（逐条到代码里核实过，非仅凭本文件记录）：
 
 | 档位 | 完成 / 总数 | 提交 |
 |---|---|---|
 | P0 | **5 / 5** | `897894e` |
 | P1 | **10 / 10** | `8e373fb`、`e41446a`、`9c038b5`、`4bb3fc2` |
-| P2 | **9 / 17** | `093ff1a`、`70d107d`、`c9528ab` |
+| P2 | **12 / 17** | `093ff1a`、`70d107d`、`c9528ab`、`18ff5d5` |
 
-P1 已全部完成。P2 完成九项，余八项（`P2-18/20/21/27/28/29/30` 与 P2-16 的 CLI 部分）。
+P1 已全部完成。P2 完成十二项，余五项：`P2-20`（`metricsauth` 改名）、`P2-27`（补测试）、`P2-28`（测试基础设施）、`P2-29`（视觉）、`P2-30`（交互）。
 
 P0 五项高度同源——全部是"完整性门禁与记账权威的 fail-open"——所以作为一个批次一起做、一起写测试、一起提交。
 
@@ -144,20 +144,26 @@ if value.CreatedAt.Before(existing.ExpiresAt) && existing.AttemptsRemaining < va
 | P2-16 | `doctor` 做链校验并对账 checkpoint | **完成** `093ff1a` |
 | P2-17 | `openUsageOffline` 改只读 | **完成** `093ff1a` |
 | P2-19 | ADR 0013 状态改 Superseded | **完成** `c9528ab` |
-| P2-22 | `allowAdminRate` 换有界策略 | 未开始 |
+| P2-22 | `allowAdminRate` 换有界策略 | **完成** `18ff5d5` |
 | P2-23 | 源限流默认开启 | **完成** `70d107d` |
 | P2-24 | checkpoint 携带去重窗口 | **完成** `093ff1a` |
 | P2-25 | ADR 0016 的信任边界摘进威胁模型 | **完成** `c9528ab` |
 | P2-26 | Workbench 不再转发调用方 XFF | **完成** `093ff1a` |
 | P2-31 | 恢复复位路径 | **完成** `c9528ab`（结论与清单不同，见下） |
 | P2-32 | k8s 内存与 argon2 的关系 | **完成** `c9528ab` |
-| P2-18/20/21/27/28/29/30 | 规模闸门、改名、锚点凭据、补测试、测试基础设施、视觉、交互 | 未开始 |
+| P2-18 | `internal/app` 规模闸门 | **完成** `18ff5d5` |
+| P2-21 | 锚点凭据独立 + 强制 TLS | **完成** `18ff5d5`（`heimdall audit anchor rotate` 与 deadman 独立 token 文件未做，见下） |
+| P2-20/27/28/29/30 | `metricsauth` 改名、补测试、测试基础设施、视觉、交互 | 未开始 |
 
 另完成一项清单外的：`make check` 加 gofmt 门禁（`c9528ab`），补上前面记录的第 2 条发现。
 
 **P2-3 不做。** 它要求保留 `EventCostAdjusted = 6` 作为"已退役但可读"的占位——正是 `CLAUDE.md` 现在明令禁止的"错的构件与替代品并存"。清单里同项的另外两半（钉住 kind 编号不可复用的契约、删掉退役后变成死代码的子句）仍成立，前者已写进 ADR 0013 的退役说明。
 
 **P2-31 的结论与清单不同。** 清单要求"给 `MarkHealthyAfterVerifiedRecovery` 补一条经审计的运维复位路径"。查下来它零调用者的原因是**重启本身就是复位路径**：新进程建新 `Status` 并重新扫描 WAL、重校每帧 CRC、对着 checkpoint 重新认证链——状态回到健康是因为日志被重新检查过。补一个"清标志位"的端点反而是真正的 fail-open（清了标志却没重新建立任何保证）。所以删掉死函数，把这个事实写进 `RequireRecovery` 的注释。
+
+**P2-21 做了配置校验两条，工具链两条未做。** 拒绝与 metrics 共用 `credential_file`、以及要求 `metrics.tls.enabled`，都已落到 `Validate`。清单里另外两条——补 `heimdall audit anchor rotate` 子命令、deadman 侧独立的 `anchor_bearer_token_file`——未做：现在配置**强制**两份凭据文件，但生成/轮换第二份仍得手工照着 metrics 的做，deadman 也仍共用一个 token 文件。也就是说约束已经立起来，配套的便利还没有；运维当下能做但不顺手。
+
+**整改中发现并修掉的一处测试脆弱性。** step-up 的失败预算读的是硬编码 `time.Now()`，而旁边的登录限流用的是可注入的 `r.clockNow()`——`runtime.go` 的注释说明登录限流当初正是因为这个问题才改成可注入的，step-up 漏了。后果是预算类测试单独跑必过、整包跑约每次一挂（取决于 5 次尝试是否跨过整分钟）。这轮全量门禁挂了一次才暴露出来。已改用可注入时钟并在测试里固定，连跑三遍全包确认。
 
 **P2-16 只做了 doctor 一半。** 清单还提到"不可用时报 unverified 而非 pass"——已做。三态（authenticated / unverified / failed）已用真实数据副本验证：现有账本报 `unverified`（15 帧全 checksum-only，原来报 pass），翻转一个 payload 字节后报 `fail` 且 `healthy: False`。
 
