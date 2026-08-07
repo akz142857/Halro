@@ -2,7 +2,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
-import { AppearanceForm, LanguageSettingsForm, MFASettings, PasswordChangeForm, SettingsPage } from "./SettingsPage";
+import { AppearanceForm } from "./AppearanceForm";
+import { LanguageSettingsForm } from "./LanguageSettingsForm";
+import { MFASettings } from "./MFASettings";
+import { PasswordChangeForm } from "./PasswordChangeForm";
+import { SettingsPage } from "./SettingsPage";
 
 function renderWithClient(node: React.ReactElement) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
