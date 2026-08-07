@@ -102,7 +102,7 @@ jobs:
           done
       - name: Preserve any failing input
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fuzz-failures
           path: internal/**/testdata/fuzz/**
@@ -181,7 +181,7 @@ jobs:
           anchore/syft@sha256:bd5357d2cd087f03af748dac24df48bfbc1723080d78f75f69aca1f2d429060e
           "registry:${{ matrix.image }}"
           -o "spdx-json=/output/${{ matrix.name }}.spdx.json"
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: observability-sbom-${{ matrix.name }}
           path: ${{ matrix.name }}.spdx.json
@@ -203,7 +203,7 @@ jobs:
           anchore/syft@sha256:bd5357d2cd087f03af748dac24df48bfbc1723080d78f75f69aca1f2d429060e
           docker:heimdall-deadman:ci
           -o spdx-json=/output/independent-deadman.spdx.json
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: observability-sbom-independent-deadman
           path: independent-deadman.spdx.json
