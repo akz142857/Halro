@@ -4,6 +4,8 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"testing"
 
 	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
@@ -109,4 +111,52 @@ func hasVerdict(verdicts []AnchorVerdict, outcome string) bool {
 		}
 	}
 	return false
+}
+
+// TestLoadAuditAnchorsFileToleratesATornTailButNotAGap covers the witness file
+// as it actually exists on disk. The dead-man appends one JSON object at a time
+// and is a separate process that can be killed, so a half-written final line is
+// an ordinary crash artifact — and refusing the whole file for it discarded
+// every intact anchor because of the one the crash interrupted, silencing the
+// witness through the same event that made it worth consulting. A malformed
+// line with data after it is a different thing entirely and must still be
+// refused, because skipping it quietly is how an attacker would remove the
+// anchors that disagree.
+func TestLoadAuditAnchorsFileToleratesATornTailButNotAGap(t *testing.T) {
+	write := func(t *testing.T, body string) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "anchors.jsonl")
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	const first = `{"sequence":1,"records":10,"instance_id":"ins_1"}`
+	const second = `{"sequence":2,"records":20,"instance_id":"ins_1"}`
+
+	anchors, err := LoadAuditAnchorsFile(write(t, first+"\n"+second+"\n"))
+	if err != nil || len(anchors) != 2 {
+		t.Fatalf("intact file: anchors=%d err=%v", len(anchors), err)
+	}
+
+	// Killed mid-Encode: the last line stops partway and the file has no
+	// trailing newline.
+	anchors, err = LoadAuditAnchorsFile(write(t, first+"\n"+second+"\n"+`{"sequence":3,"reco`))
+	if err != nil {
+		t.Fatalf("a torn final line must not discard the intact anchors: %v", err)
+	}
+	if len(anchors) != 2 {
+		t.Fatalf("torn tail: anchors=%d, want the 2 complete ones", len(anchors))
+	}
+
+	// Malformed with a complete line after it: not a crash, and not skippable.
+	if _, err := LoadAuditAnchorsFile(write(t, first+"\n"+`{"sequence":2,"reco`+"\n"+second+"\n")); err == nil {
+		t.Fatal("a malformed line in the middle of the file was accepted")
+	}
+
+	// Blank lines are formatting, not damage.
+	anchors, err = LoadAuditAnchorsFile(write(t, first+"\n\n"+second+"\n"))
+	if err != nil || len(anchors) != 2 {
+		t.Fatalf("blank lines: anchors=%d err=%v", len(anchors), err)
+	}
 }

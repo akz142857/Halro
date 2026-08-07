@@ -1,7 +1,6 @@
 package app
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -46,27 +45,34 @@ type AnchorVerdict struct {
 // dead-man probe's anchor sink writes (internal/deadman), one
 // boltstore.AuditAnchor per line, appended as they are pulled off-host.
 func LoadAuditAnchorsFile(path string) ([]boltstore.AuditAnchor, error) {
-	file, err := os.Open(path)
+	payload, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("open anchors file: %w", err)
 	}
-	defer file.Close()
+	// A torn final line is an expected artifact, not corruption: the witness
+	// appends one JSON object at a time and is a separate process that can be
+	// killed mid-write. Refusing the whole file for it threw away every intact
+	// anchor because of the one the crash interrupted — the witness silenced by
+	// the same event that made it worth consulting. A short tail is dropped;
+	// anything malformed with a line after it is not, because that is tampering
+	// or real damage, and quietly skipping it is exactly how someone removes the
+	// anchors that disagree.
+	tornTail := len(payload) > 0 && payload[len(payload)-1] != '\n'
+	lines := strings.Split(string(payload), "\n")
 	var anchors []boltstore.AuditAnchor
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
+	for index, raw := range lines {
+		line := strings.TrimSpace(raw)
 		if line == "" {
 			continue
 		}
 		var anchor boltstore.AuditAnchor
 		if err := json.Unmarshal([]byte(line), &anchor); err != nil {
-			return nil, fmt.Errorf("decode anchor line: %w", err)
+			if tornTail && index == len(lines)-1 {
+				break
+			}
+			return nil, fmt.Errorf("decode anchor line %d: %w", index+1, err)
 		}
 		anchors = append(anchors, anchor)
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read anchors file: %w", err)
 	}
 	return anchors, nil
 }
