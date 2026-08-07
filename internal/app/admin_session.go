@@ -19,6 +19,13 @@ import (
 
 const adminSessionCookie = "__Host-heimdall_session"
 
+// adminRateState is one fixed-minute window's worth of per-source counters.
+type adminRateState struct {
+	minute   time.Time
+	windows  map[string]adminLoginWindow
+	overflow adminLoginWindow
+}
+
 type adminLoginWindow struct {
 	minute        time.Time
 	attempts      int
@@ -400,11 +407,11 @@ func (r *Runtime) clockNow() time.Time {
 }
 
 func (r *Runtime) allowAdminLogin(remoteAddress string, now time.Time) (bool, bool) {
-	return allowAdminRate(&r.adminLoginMu, r.adminLogin, remoteAddress, now, r.config.Admin.LoginRPM)
+	return allowAdminRate(&r.adminLoginMu, &r.adminLogin, remoteAddress, now, r.config.Admin.LoginRPM)
 }
 
 func (r *Runtime) allowAdminSetup(remoteAddress string, now time.Time) bool {
-	allowed, _ := allowAdminRate(&r.adminSetupRateMu, r.adminSetupRate, remoteAddress, now, r.config.Admin.LoginRPM)
+	allowed, _ := allowAdminRate(&r.adminSetupRateMu, &r.adminSetupRate, remoteAddress, now, r.config.Admin.LoginRPM)
 	return allowed
 }
 
@@ -412,7 +419,18 @@ func (r *Runtime) allowAdminSetup(remoteAddress string, now time.Time) bool {
 // rejection is the first one for that source in the current minute. Callers use
 // the second value to audit a throttled source once per minute instead of once
 // per request; without it the audit append itself becomes the amplifier.
-func allowAdminRate(mu *sync.Mutex, windows map[string]adminLoginWindow, remoteAddress string, now time.Time, limit int) (bool, bool) {
+//
+// Two properties matter as much as the limit. The map is rebuilt when the
+// minute rolls over rather than pruned entry by entry: every entry in it
+// belongs to the current minute, so the old prune walked the whole map on
+// every request and deleted nothing, turning a flood of distinct addresses
+// into quadratic work while the map still grew without bound. And past
+// maxTrackedAdminSources, further addresses share one window instead of each
+// taking their own, so the limiter cannot be inflated by the traffic it exists
+// to bound — the same shape internal/sourcelimit uses on the data plane.
+const maxTrackedAdminSources = 4096
+
+func allowAdminRate(mu *sync.Mutex, state *adminRateState, remoteAddress string, now time.Time, limit int) (bool, bool) {
 	host, _, err := net.SplitHostPort(remoteAddress)
 	if err != nil {
 		host = remoteAddress
@@ -420,25 +438,37 @@ func allowAdminRate(mu *sync.Mutex, windows map[string]adminLoginWindow, remoteA
 	minute := now.UTC().Truncate(time.Minute)
 	mu.Lock()
 	defer mu.Unlock()
-	window := windows[host]
+	if !minute.Equal(state.minute) {
+		// A fresh map, not a clear: clearing keeps the backing array a flood
+		// grew, which is the memory this bound exists to give back.
+		state.minute = minute
+		state.windows = make(map[string]adminLoginWindow)
+		state.overflow = adminLoginWindow{minute: minute}
+	}
+	window, tracked := state.windows[host]
+	if !tracked && len(state.windows) >= maxTrackedAdminSources {
+		window = state.overflow
+		if window.attempts >= limit {
+			firstReject := !window.rejectAudited
+			window.rejectAudited = true
+			state.overflow = window
+			return false, firstReject
+		}
+		window.attempts++
+		state.overflow = window
+		return true, false
+	}
 	if window.minute != minute {
 		window = adminLoginWindow{minute: minute}
 	}
 	if window.attempts >= limit {
 		firstReject := !window.rejectAudited
 		window.rejectAudited = true
-		windows[host] = window
+		state.windows[host] = window
 		return false, firstReject
 	}
 	window.attempts++
-	windows[host] = window
-	if len(windows) > 4096 {
-		for key, value := range windows {
-			if value.minute.Before(minute) {
-				delete(windows, key)
-			}
-		}
-	}
+	state.windows[host] = window
 	return true, false
 }
 

@@ -90,9 +90,9 @@ type Runtime struct {
 	kmsRecoveryLastUsed time.Time
 	adminSessions       *adminauth.Manager
 	adminLoginMu        sync.Mutex
-	adminLogin          map[string]adminLoginWindow
+	adminLogin          adminRateState
 	adminSetupRateMu    sync.Mutex
-	adminSetupRate      map[string]adminLoginWindow
+	adminSetupRate      adminRateState
 	adminStepUpMu       sync.Mutex
 	adminStepUp         map[string]adminLoginWindow
 	setupMu             sync.Mutex
@@ -558,8 +558,8 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		startedAt:           time.Now(),
 		kmsRecoveryLastUsed: kmsRecoveryLastUsed,
 		adminSessions:       adminSessions,
-		adminLogin:          make(map[string]adminLoginWindow),
-		adminSetupRate:      make(map[string]adminLoginWindow),
+		adminLogin:          adminRateState{windows: make(map[string]adminLoginWindow)},
+		adminSetupRate:      adminRateState{windows: make(map[string]adminLoginWindow)},
 		adminStepUp:         make(map[string]adminLoginWindow),
 		setupToken:          setupToken,
 		setupTokenNeeded:    setupRequiresToken(cfg),

@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -36,6 +37,11 @@ func stepUpTestRuntime(t *testing.T) (*Runtime, loggedInAdmin) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { runtime.Close() })
+	// Pinned: the failure budget is a wall-clock minute, so a test that spends
+	// it depends on whether its attempts straddle a boundary. Unpinned, the
+	// budget tests passed alone and failed roughly once per full-package run.
+	pinned := time.Date(2026, 8, 7, 9, 30, 0, 0, time.UTC)
+	runtime.now = func() time.Time { return pinned }
 	return runtime, loginTestAdmin(t, runtime, "admin", stepUpTestPassword)
 }
 

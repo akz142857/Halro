@@ -489,6 +489,20 @@ func (c Config) Validate(opts LoadOptions) error {
 			if c.Audit.Anchor.CredentialFile == "" {
 				problems = append(problems, errors.New("audit.anchor.credential_file is required for sink dead_man_pull"))
 			}
+			// The anchor exists so a witness outside this host can contradict
+			// it. Sharing one credential with /metrics collapses that into one
+			// domain: whoever scrapes metrics can read the witness feed, and a
+			// leak on the scrape path takes the witness with it. The code
+			// already keeps two authorizers; nothing until now kept two files.
+			if c.Audit.Anchor.CredentialFile != "" && c.Audit.Anchor.CredentialFile == c.Metrics.CredentialFile {
+				problems = append(problems, errors.New("audit.anchor.credential_file must differ from metrics.credential_file; the anchor is a separate credential domain"))
+			}
+			// Anchors and the token that fetches them are the evidence of
+			// non-repudiation. Serving them in the clear lets anyone on the
+			// path read the chain heads and take the credential.
+			if !c.Metrics.TLS.Enabled {
+				problems = append(problems, errors.New("audit.anchor.sink dead_man_pull requires metrics.tls.enabled; the anchor feed must not be served in the clear"))
+			}
 		case AuditAnchorSinkSyslog, AuditAnchorSinkS3ObjectLock:
 			problems = append(problems, fmt.Errorf("audit.anchor.sink %q is a reserved name and not implemented yet", c.Audit.Anchor.Sink))
 		default:

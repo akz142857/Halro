@@ -284,8 +284,26 @@ func TestAuditAnchorRequiresMetricsAndCredentialFile(t *testing.T) {
 		t.Fatal("dead_man_pull sink without a credential file was accepted")
 	}
 	cfg.Audit.Anchor.CredentialFile = "anchor-credentials.json"
+	// The anchor feed carries chain heads and the credential that fetches them;
+	// in the clear, anyone on the path reads one and takes the other.
+	if err := cfg.Validate(LoadOptions{}); err == nil {
+		t.Fatal("dead_man_pull sink without metrics.tls was accepted")
+	}
+	cfg.Metrics.TLS = MetricsTLS{
+		Enabled: true, CertFile: "metrics.crt", KeyFile: "metrics.key", ClientCAFile: "metrics-ca.crt",
+	}
 	if err := cfg.Validate(LoadOptions{}); err != nil {
 		t.Fatalf("valid audit.anchor configuration was rejected: %v", err)
+	}
+	// One credential for both endpoints collapses the witness into the same
+	// domain as the thing it witnesses.
+	cfg.Metrics.CredentialFile = cfg.Audit.Anchor.CredentialFile
+	if err := cfg.Validate(LoadOptions{}); err == nil {
+		t.Fatal("an anchor credential shared with metrics was accepted")
+	}
+	cfg.Metrics.CredentialFile = "metrics-credentials.json"
+	if err := cfg.Validate(LoadOptions{}); err != nil {
+		t.Fatalf("distinct credential files were rejected: %v", err)
 	}
 	cfg.Metrics.Enabled = false
 	if err := cfg.Validate(LoadOptions{}); err == nil {

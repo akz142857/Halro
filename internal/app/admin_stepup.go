@@ -51,7 +51,12 @@ func (r *Runtime) requireDestructiveStepUp(writer http.ResponseWriter, request *
 // endpoints: a bound on how fast it can be attempted, and a record that it was.
 // It is the only entry point; the primitive underneath is unbounded and silent.
 func (r *Runtime) verifyAdminStepUp(writer http.ResponseWriter, request *http.Request, username, password, totpCode string) bool {
-	now := time.Now()
+	// The injectable clock, for the reason the login limiter already documents:
+	// the window is a wall-clock minute, so a test that spends its budget
+	// without pinning this depends on whether the attempts happen to straddle a
+	// minute boundary — which is how it failed roughly once per full-package run
+	// while passing every time on its own.
+	now := r.clockNow()
 	if locked, firstReject := r.stepUpExhausted(username, now); locked {
 		// Audited once per window rather than once per attempt, or the audit
 		// append becomes the amplifier the limit was added to remove.
@@ -93,7 +98,7 @@ func (r *Runtime) verifyAdminStepUp(writer http.ResponseWriter, request *http.Re
 func (r *Runtime) guardAdminCredentialCheck(
 	writer http.ResponseWriter, username, action string, verify func() bool,
 ) (ok bool, answered bool) {
-	now := time.Now()
+	now := r.clockNow()
 	if locked, firstReject := r.stepUpExhausted(username, now); locked {
 		if firstReject {
 			r.auditStepUp(username, "throttled", "rate_limited")
