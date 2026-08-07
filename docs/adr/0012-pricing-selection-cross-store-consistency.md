@@ -382,9 +382,12 @@ for.
 
 A second, independent ceiling exists in `budget.Manager`: `lockProject` is held
 across `appendApplyRecord`, so same-project requests cannot share a WAL batch.
-That belongs to the accounting protocol, not to pricing, and needs its own
-decision record. `BenchmarkRequestLifecycle` is committed here so that record
-starts from a measurement rather than a remark — five Ledger events per
+That belongs to the accounting protocol, not to pricing, and has its own decision
+record: `docs/adr/0018-project-admission-and-the-accounting-write-path.md`. Note
+that its fix is *not* the one applied here — the project lock is exactly as strong
+as its invariant, because two concurrent budget checks reading one balance really
+must exclude each other. `BenchmarkRequestLifecycle` is committed here so that
+record starts from a measurement rather than a remark — five Ledger events per
 lifecycle:
 
 | Projects | 1 worker | 8 workers | 64 workers |
