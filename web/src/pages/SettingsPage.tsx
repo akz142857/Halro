@@ -111,7 +111,7 @@ function DiagnosticsPane({ status, accountingLabels, metricLabels }: { status: A
               ))}
             </dl>
           </details>
-          <WritePathCard summary={status.write_path} />
+          <WritePathCard summary={status.write_path} batches={Number(status.wal?.batches ?? 0)} />
           <details className="panel system-card diagnostic-details" open>
             <summary><span>{t("settings.auditHead")}</span><strong>{t("settings.chainCheckpoint")}</strong></summary>
             <dl>
@@ -127,7 +127,7 @@ function DiagnosticsPane({ status, accountingLabels, metricLabels }: { status: A
 // The durable write path. This is the answer to "what is this instance doing
 // right now" for an operator who has not stood up Prometheus — the same numbers
 // the metrics endpoint exposes, already reduced to the means that matter.
-function WritePathCard({ summary }: { summary?: WritePathSummary }) {
+function WritePathCard({ summary, batches }: { summary?: WritePathSummary; batches: number }) {
   const { t } = useTranslation();
   // Optional even though the server always sends it: this is the card an
   // operator opens when the instance is misbehaving, so it must not be the thing
@@ -142,13 +142,23 @@ function WritePathCard({ summary }: { summary?: WritePathSummary }) {
     [t("settings.metadataBatchSize"), formatFactor(summary.metadata_batch_size)],
     [t("settings.metadataWriteSeconds"), formatMillis(summary.metadata_write_seconds)],
   ] : [];
+  // The reading that looks like a slow disk and is not. Only stated once there
+  // is enough traffic for the batch size to mean anything.
+  const notCoalescing = !!summary && batches >= 20 && summary.wal_batch_size > 0 && summary.wal_batch_size < 1.2;
   return (
     <details className="panel system-card diagnostic-details" open>
       <summary><span>{t("settings.writePathTitle")}</span><strong>{t("settings.writePathSummaryLabel")}</strong></summary>
       <p className="field-hint">{t("settings.writePathDescription")}</p>
       {idle
         ? <p className="field-hint">{t("settings.writePathIdle")}</p>
-        : <dl>{rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>}
+        : <>
+            <dl>{rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
+            {/* Said out loud because these are cumulative: read as "right now",
+                a lifetime average hides the slowdown that started a minute ago,
+                which is exactly when someone opens this card. */}
+            <p className="field-hint">{t("settings.writePathWindow")} {t("settings.writePathLive")}</p>
+            {notCoalescing && <p className="field-hint">{t("settings.writePathNotCoalescing")}</p>}
+          </>}
     </details>
   );
 }

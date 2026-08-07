@@ -4,6 +4,11 @@ BACKUP_KEY_FILE ?= backup.key
 BACKUP_NAME ?=
 RESET_DATA_DIR ?= ./data
 RESET_MASTER_KEY_FILE ?= ./master.key
+# Optional sampling window for `make stats`. The underlying counters are
+# cumulative since start, so an empty value reports a lifetime average and a
+# duration such as 10s reports just that window — which is the one that means
+# anything while an incident is in progress.
+STATS_INTERVAL ?=
 
 .DEFAULT_GOAL := help
 
@@ -26,7 +31,7 @@ WEB_SOURCES := $(shell find web/src web/scripts -type f) \
 WEB_DEPS_STAMP := web/node_modules/.heimdall-install-stamp
 WEB_BUILD_STAMP := web/node_modules/.heimdall-build-stamp
 
-.PHONY: help init-help setup init reset start dev build deadman frontend frontend-test backup test cover race vet fmt-check observability-check check clean version
+.PHONY: help init-help setup init reset start dev build deadman frontend frontend-test backup stats test cover race vet fmt-check observability-check check clean version
 
 help:
 	@echo "Heimdall Makefile commands:"
@@ -42,6 +47,7 @@ help:
 	@echo "  frontend             Install dependencies and build the frontend"
 	@echo "  frontend-test        Run frontend tests"
 	@echo "  backup               Create an encrypted backup"
+	@echo "  stats                Show the durable write path of a running instance"
 	@echo "  test                 Run all Go tests"
 	@echo "  race                 Run all Go tests with the race detector"
 	@echo "  vet                  Run go vet"
@@ -57,6 +63,7 @@ help:
 	@echo "  BACKUP_NAME=$(BACKUP_NAME)"
 	@echo "  RESET_DATA_DIR=$(RESET_DATA_DIR)"
 	@echo "  RESET_MASTER_KEY_FILE=$(RESET_MASTER_KEY_FILE)"
+	@echo "  STATS_INTERVAL=$(STATS_INTERVAL)"
 
 init-help: bin/heimdall
 	@./bin/heimdall init --help
@@ -104,6 +111,13 @@ backup: bin/heimdall
 		--config "$(abspath $(CONFIG))" \
 		--output-dir "$(abspath $(BACKUP_DIR))" \
 		--key-file "$(abspath $(BACKUP_KEY_FILE))" $(if $(BACKUP_NAME),--name "$(BACKUP_NAME)")
+
+# Reads a *running* instance over loopback, so unlike the offline targets this
+# one needs Heimdall up and `metrics.enabled` true. It answers what bounds this
+# instance's request rate without requiring a Prometheus install; the same
+# summary is on Settings > Diagnostics.
+stats: bin/heimdall
+	./bin/heimdall stats --config "$(CONFIG)" $(if $(STATS_INTERVAL),--interval "$(STATS_INTERVAL)")
 
 # The console bundle is committed under internal/webui/dist and embedded from
 # there, so building the binary needs Go and nothing else — which is what the
