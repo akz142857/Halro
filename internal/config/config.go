@@ -129,6 +129,27 @@ type Gateway struct {
 // gateway.source_rate_limit.requests_per_minute takes.
 const defaultSourceRequestsPerMinute = 600
 
+// Pricing clock tolerances an omitted gateway.pricing_clock_* key takes. Zero is
+// not a usable value for either — a zero forward tolerance makes every priced
+// attempt fail closed — so absence is filled rather than validated, the same way
+// gateway.source_rate_limit is. Kept in step with Default() and default.yaml by
+// TestDefaultTemplateMatchesDefault.
+const (
+	DefaultPricingClockRollbackTolerance = 2 * time.Second
+	DefaultPricingClockForwardTolerance  = 30 * time.Second
+)
+
+// MinPricingClockRollbackTolerance is a floor, not a default: price selections
+// on one deployment run concurrently, so they can reach their durable pin in the
+// reverse of the order they captured pricing_selected_at, and the later one then
+// reads a selection time behind the high-water mark. That backwards step is
+// caused by this process, not by the clock. The tolerance must therefore stay
+// above the span a selection can spend between capturing its time and committing
+// its pin — batch delay plus fsync plus scheduling — or ordinary concurrency
+// would quarantine a deployment for a wall-clock rollback that never happened.
+// See ADR 0012, "Amendment 2026-08-07".
+const MinPricingClockRollbackTolerance = time.Second
+
 // SourceRateLimit bounds anonymous data-plane work per source address, ahead of
 // the per-project limiter — which cannot apply until a request has been
 // authenticated, and so cannot bound the cost of authenticating it.
@@ -282,6 +303,12 @@ func (c *Config) Normalize() error {
 	if c.Gateway.SourceRateLimit.RequestsPerMinute == nil {
 		budget := defaultSourceRequestsPerMinute
 		c.Gateway.SourceRateLimit.RequestsPerMinute = &budget
+	}
+	if c.Gateway.PricingClockRollbackTolerance == 0 {
+		c.Gateway.PricingClockRollbackTolerance = Duration(DefaultPricingClockRollbackTolerance)
+	}
+	if c.Gateway.PricingClockForwardTolerance == 0 {
+		c.Gateway.PricingClockForwardTolerance = Duration(DefaultPricingClockForwardTolerance)
 	}
 	if c.Gateway.SourceRateLimit.MaxTrackedSources == 0 {
 		// Omitting the ceiling means "whatever is sane", not "track nothing".
@@ -555,8 +582,8 @@ func (c Config) Validate(opts LoadOptions) error {
 			problems = append(problems, fmt.Errorf("%s must be positive", name))
 		}
 	}
-	if c.Gateway.PricingClockRollbackTolerance < 0 {
-		problems = append(problems, errors.New("gateway.pricing_clock_rollback_tolerance cannot be negative"))
+	if c.Gateway.PricingClockRollbackTolerance.Value() < MinPricingClockRollbackTolerance {
+		problems = append(problems, fmt.Errorf("gateway.pricing_clock_rollback_tolerance must be at least %s, so concurrent price selections cannot be mistaken for a wall-clock rollback", MinPricingClockRollbackTolerance))
 	}
 	if c.Gateway.PricingClockForwardTolerance < 0 {
 		problems = append(problems, errors.New("gateway.pricing_clock_forward_tolerance cannot be negative"))

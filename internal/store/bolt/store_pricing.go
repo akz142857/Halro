@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/akz142857/Heimdall/internal/domain"
@@ -599,11 +598,61 @@ func (s *Store) SelectDeploymentPriceVersion(ctx context.Context, deploymentID s
 	return domain.SelectDeploymentPriceVersion(prices, deploymentID, selectedAt)
 }
 
-func (s *Store) LockDeploymentPricing(deploymentID string) func() {
-	value, _ := s.pricingGates.LoadOrStore(deploymentID, &sync.Mutex{})
-	lock := value.(*sync.Mutex)
-	lock.Lock()
-	return lock.Unlock
+func (s *Store) deploymentPricingState(deploymentID string) *deploymentPricingState {
+	if value, ok := s.pricingStates.Load(deploymentID); ok {
+		return value.(*deploymentPricingState)
+	}
+	value, _ := s.pricingStates.LoadOrStore(deploymentID, &deploymentPricingState{})
+	return value.(*deploymentPricingState)
+}
+
+// LockDeploymentPricingShared is taken by price selection and pin preparation.
+// It is shared because the invariant the gate exists for is that no timeline
+// mutation interleaves between a selection and its durable Lease — not that two
+// selections exclude each other. Holding it exclusively for selection made the
+// per-deployment attempt rate the Gateway's throughput ceiling; see ADR 0012,
+// "Amendment 2026-08-07".
+func (s *Store) LockDeploymentPricingShared(deploymentID string) func() {
+	state := s.deploymentPricingState(deploymentID)
+	state.gate.RLock()
+	return state.gate.RUnlock
+}
+
+// LockDeploymentPricingExclusive is taken by the Admin operations that mutate a
+// deployment's price timeline: creation, scheduled cancellation, restore
+// confirmation, and proposal adoption. An exclusive acquirer waits for every
+// in-flight shared holder, which is what keeps a scheduled cancellation from
+// landing between a selection and the Lease that makes it durable. The cost is
+// that these operator actions may now wait behind in-flight attempts, bounded by
+// one attempt's durable path.
+func (s *Store) LockDeploymentPricingExclusive(deploymentID string) func() {
+	state := s.deploymentPricingState(deploymentID)
+	state.gate.Lock()
+	return state.gate.Unlock
+}
+
+// clockAnchor returns the last trusted (selection time, observation instant)
+// pair for this deployment. Forward-jump detection needs an in-memory anchor
+// because the durable high-water mark only ever moves forward and so cannot
+// witness a clock that jumped ahead.
+func (state *deploymentPricingState) clockAnchor() (pricingClockObservation, bool) {
+	state.clockMu.Lock()
+	defer state.clockMu.Unlock()
+	return state.clock, state.hasClock
+}
+
+// mergeClockAnchor advances the anchor only when the candidate selection time is
+// newer. Concurrent selections on one deployment can commit in the reverse of
+// their capture order, and a plain assignment would let the anchor walk
+// backwards — turning ordinary reordering into a forward-jump verdict on a later
+// request. The pair is replaced together: an ObservedAt is only meaningful
+// beside the SelectedAt it was captured with.
+func (state *deploymentPricingState) mergeClockAnchor(candidate pricingClockObservation) {
+	state.clockMu.Lock()
+	defer state.clockMu.Unlock()
+	if !state.hasClock || candidate.SelectedAt.After(state.clock.SelectedAt) {
+		state.clock, state.hasClock = candidate, true
+	}
 }
 
 func (s *Store) PricingReadiness(ctx context.Context) error {
@@ -781,26 +830,43 @@ func (s *Store) PrepareDeploymentPricePin(ctx context.Context, deploymentID, att
 	if deploymentID == "" || attemptID == "" || selectedAt.IsZero() || rollbackTolerance < 0 || forwardTolerance <= 0 {
 		return domain.DeploymentPriceVersion{}, domain.PriceSnapshot{}, domain.PricePinIntent{}, errors.New("deployment, attempt, UTC selection time, and valid clock tolerances are required")
 	}
-	observedAt := time.Now()
-	s.pricingClockMu.Lock()
-	defer s.pricingClockMu.Unlock()
-	if s.pricingClockObservations == nil {
-		s.pricingClockObservations = make(map[string]pricingClockObservation)
-	}
-	previousObservation, hasObservation := s.pricingClockObservations[deploymentID]
-	forwardJump := false
-	if hasObservation {
-		elapsed := observedAt.Sub(previousObservation.ObservedAt)
-		if elapsed < 0 {
-			elapsed = 0
-		}
-		forwardJump = selectedAt.After(previousObservation.SelectedAt.Add(elapsed).Add(forwardTolerance))
-	}
+	state := s.deploymentPricingState(deploymentID)
+	requestedAt := selectedAt
 	var price domain.DeploymentPriceVersion
 	var snapshot domain.PriceSnapshot
 	var intent domain.PricePinIntent
 	var quarantined bool
-	err := s.db.Update(func(tx *bbolt.Tx) error {
+	var observedAt time.Time
+	// outcome carries the expected non-fault results — quarantined, no effective
+	// price, a conflicting pin — instead of returning them as transaction errors.
+	// Under db.Batch an error aborts the whole shared transaction, evicts this
+	// call, and re-runs every unrelated sibling from scratch; and both
+	// ErrPricingQuarantined and ErrPriceUnavailable are routine, not exceptional
+	// (a quarantined deployment keeps being retried, and a deployment with no
+	// price still serves under the unknown-price policy). Only genuine faults are
+	// returned as errors, so only they can spoil a batch.
+	var outcome error
+	err := s.db.Batch(func(tx *bbolt.Tx) error {
+		// Everything the caller reads is reset here, not accumulated across
+		// runs: this body may execute more than once for a single call, and a
+		// re-run happens in a fresh transaction that can observe state another
+		// writer committed in between — so it can legitimately take a different
+		// branch than the previous run did.
+		price, snapshot, intent, quarantined, outcome = domain.DeploymentPriceVersion{}, domain.PriceSnapshot{}, domain.PricePinIntent{}, false, nil
+		selectedAt = requestedAt
+		// The clock anchor is read per run for the same reason, so a retry can
+		// never decide a forward jump from an observation older than the
+		// transaction that ends up committing.
+		observedAt = time.Now()
+		previousObservation, hasObservation := state.clockAnchor()
+		forwardJump := false
+		if hasObservation {
+			elapsed := observedAt.Sub(previousObservation.ObservedAt)
+			if elapsed < 0 {
+				elapsed = 0
+			}
+			forwardJump = selectedAt.After(previousObservation.SelectedAt.Add(elapsed).Add(forwardTolerance))
+		}
 		highWaterBucket := tx.Bucket(bucketDeploymentPricingHighWater)
 		var highWater domain.DeploymentPricingHighWater
 		if raw := highWaterBucket.Get([]byte(deploymentID)); raw != nil {
@@ -811,7 +877,8 @@ func (s *Store) PrepareDeploymentPricePin(ctx context.Context, deploymentID, att
 				return err
 			}
 			if highWater.Quarantined {
-				return ErrPricingQuarantined
+				outcome = ErrPricingQuarantined
+				return nil
 			}
 			if forwardJump {
 				highWater.Quarantined = true
@@ -848,6 +915,10 @@ func (s *Store) PrepareDeploymentPricePin(ctx context.Context, deploymentID, att
 		}
 		var err error
 		price, err = selectDeploymentPriceVersionTx(tx, deploymentID, selectedAt)
+		if errors.Is(err, domain.ErrPriceUnavailable) {
+			outcome = err
+			return nil
+		}
 		if err != nil {
 			return err
 		}
@@ -861,7 +932,8 @@ func (s *Store) PrepareDeploymentPricePin(ctx context.Context, deploymentID, att
 		}
 		var deployment domain.Deployment
 		if raw := tx.Bucket(bucketDeployments).Get([]byte(deploymentID)); raw == nil {
-			return ErrNotFound
+			outcome = ErrNotFound
+			return nil
 		} else if err := json.Unmarshal(raw, &deployment); err != nil {
 			return err
 		}
@@ -871,7 +943,8 @@ func (s *Store) PrepareDeploymentPricePin(ctx context.Context, deploymentID, att
 				return err
 			}
 			if intent.DeploymentID != deploymentID || intent.PriceVersionID != price.ID || intent.SnapshotSHA256 != digest {
-				return ErrIdempotencyConflict
+				outcome = ErrIdempotencyConflict
+				return nil
 			}
 			return nil
 		}
@@ -916,7 +989,10 @@ func (s *Store) PrepareDeploymentPricePin(ctx context.Context, deploymentID, att
 	if quarantined {
 		return domain.DeploymentPriceVersion{}, domain.PriceSnapshot{}, domain.PricePinIntent{}, ErrPricingQuarantined
 	}
-	s.pricingClockObservations[deploymentID] = pricingClockObservation{SelectedAt: selectedAt, ObservedAt: observedAt}
+	if outcome != nil {
+		return domain.DeploymentPriceVersion{}, domain.PriceSnapshot{}, domain.PricePinIntent{}, outcome
+	}
+	state.mergeClockAnchor(pricingClockObservation{SelectedAt: selectedAt, ObservedAt: observedAt})
 	return price, snapshot, intent, nil
 }
 
@@ -925,21 +1001,27 @@ func (s *Store) CommitDeploymentPricePin(ctx context.Context, attemptID, snapsho
 		return domain.PricePinIntent{}, err
 	}
 	var intent domain.PricePinIntent
-	err := s.db.Update(func(tx *bbolt.Tx) error {
+	// See PrepareDeploymentPricePin: expected outcomes travel in outcome so they
+	// cannot abort a batch shared with unrelated deployments' commits.
+	var outcome error
+	err := s.db.Batch(func(tx *bbolt.Tx) error {
+		intent, outcome = domain.PricePinIntent{}, nil
 		bucket := tx.Bucket(bucketDeploymentPricePins)
 		raw := bucket.Get([]byte(attemptID))
 		if raw == nil {
-			return ErrNotFound
+			outcome = ErrNotFound
+			return nil
 		}
 		if err := json.Unmarshal(raw, &intent); err != nil {
 			return err
 		}
 		if intent.SnapshotSHA256 != snapshotSHA256 {
-			return ErrIdempotencyConflict
+			outcome = ErrIdempotencyConflict
+			return nil
 		}
 		if intent.State == domain.PricePinCommitted {
 			if intent.LedgerSequence != ledgerSequence {
-				return ErrIdempotencyConflict
+				outcome = ErrIdempotencyConflict
 			}
 			return nil
 		}
@@ -954,9 +1036,18 @@ func (s *Store) CommitDeploymentPricePin(ctx context.Context, attemptID, snapsho
 		}
 		return bucket.Put([]byte(attemptID), encoded)
 	})
-	return intent, err
+	if err != nil {
+		return domain.PricePinIntent{}, err
+	}
+	if outcome != nil {
+		return domain.PricePinIntent{}, outcome
+	}
+	return intent, nil
 }
 
+// DeletePreparedDeploymentPricePin stays on db.Update deliberately: it runs only
+// on an attempt's local-failure path, so it has nothing to coalesce with and
+// would only pay the batch delay.
 func (s *Store) DeletePreparedDeploymentPricePin(ctx context.Context, attemptID string) error {
 	if err := ctx.Err(); err != nil {
 		return err

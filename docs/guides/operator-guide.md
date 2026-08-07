@@ -373,7 +373,11 @@ Pricing selection uses a persisted per-Deployment high-water mark. Keep host
 time synchronized and configure `gateway.pricing_clock_rollback_tolerance` and
 `gateway.pricing_clock_forward_tolerance`; a material rollback, unexplained
 forward jump, or incoherent restored high-water enters pricing quarantine and
-blocks that Deployment. `gateway.pricing_unknown_policy` defaults to `reject`.
+blocks that Deployment. Both keys take their default when omitted, and the
+rollback tolerance has a 1s floor: concurrent selections on one Deployment can
+reach their durable pin out of the order they read the clock, so a tolerance
+tighter than that would quarantine a Deployment for a rollback the gateway itself
+caused. Tightening it below the floor is refused at startup. `gateway.pricing_unknown_policy` defaults to `reject`.
 The only opt-in value, `allow_without_cost_governance`, still rejects unknown
 pricing for Projects with a daily budget or a cost-dimension Token Guard. Watch
 `heimdall_pricing_quarantined_deployments`, Accounting Lease recovery metrics,

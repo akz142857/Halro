@@ -413,3 +413,49 @@ func TestAbsentSourceRateLimitTakesTheDefaultBudget(t *testing.T) {
 		t.Fatalf("an explicit zero resolved to %d, want 0", got)
 	}
 }
+
+// An omitted pricing clock tolerance used to survive Load as zero, because
+// nothing merges Default() into a decoded config. A zero forward tolerance is
+// rejected by the store on every priced attempt, so a config that simply did not
+// mention the key made the Gateway fail closed on all traffic to any deployment
+// with a price.
+func TestAbsentPricingClockTolerancesTakeTheirDefaults(t *testing.T) {
+	var absent Config
+	if err := absent.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if got := absent.Gateway.PricingClockRollbackTolerance.Value(); got != DefaultPricingClockRollbackTolerance {
+		t.Fatalf("absent rollback tolerance resolved to %s, want %s", got, DefaultPricingClockRollbackTolerance)
+	}
+	if got := absent.Gateway.PricingClockForwardTolerance.Value(); got != DefaultPricingClockForwardTolerance {
+		t.Fatalf("absent forward tolerance resolved to %s, want %s", got, DefaultPricingClockForwardTolerance)
+	}
+}
+
+// The rollback tolerance has a floor because concurrent price selections on one
+// deployment can reach their durable pin out of capture order, which reads as a
+// small backwards step against the high-water mark. Below the floor, ordinary
+// concurrency would quarantine a deployment for a clock rollback that never
+// happened. See ADR 0012, "Amendment 2026-08-07".
+func TestPricingClockRollbackToleranceHasAFloor(t *testing.T) {
+	cfg, err := Decode(strings.NewReader(validConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Gateway.PricingClockRollbackTolerance = Duration(MinPricingClockRollbackTolerance - time.Millisecond)
+	err = cfg.Validate(LoadOptions{})
+	if err == nil {
+		t.Fatal("a rollback tolerance below the floor was accepted")
+	}
+	if !strings.Contains(err.Error(), "pricing_clock_rollback_tolerance") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	cfg.Gateway.PricingClockRollbackTolerance = Duration(MinPricingClockRollbackTolerance)
+	if err := cfg.Validate(LoadOptions{}); err != nil {
+		t.Fatalf("the floor itself was rejected: %v", err)
+	}
+}

@@ -130,7 +130,7 @@ func (r *Runtime) createAdminDeploymentPrice(writer http.ResponseWriter, request
 	}
 	r.adminTopologyMu.Lock()
 	defer r.adminTopologyMu.Unlock()
-	pricingUnlock := r.store.LockDeploymentPricing(price.DeploymentID)
+	pricingUnlock := r.store.LockDeploymentPricingExclusive(price.DeploymentID)
 	defer pricingUnlock()
 	price, effectiveIntent, replayed, err := r.store.CreateDeploymentPriceVersionIdempotent(request.Context(), price, intent, keyDigest)
 	if err != nil {
@@ -182,7 +182,7 @@ func (r *Runtime) cancelAdminDeploymentPrice(writer http.ResponseWriter, request
 	intent.ChangeSummary = fmt.Sprintf("before={v:%d,status:scheduled,effective:%s} after={v:%d,status:cancelled}", currentPrice.Version, effective.Format(time.RFC3339Nano), currentPrice.Version)
 	r.adminTopologyMu.Lock()
 	defer r.adminTopologyMu.Unlock()
-	pricingUnlock := r.store.LockDeploymentPricing(deploymentID)
+	pricingUnlock := r.store.LockDeploymentPricingExclusive(deploymentID)
 	defer pricingUnlock()
 	price, err := r.store.CancelDeploymentPriceVersionWithAuditIntent(request.Context(), deploymentID, priceID, admin.session.Username, now, expected, intent)
 	if err != nil {
@@ -255,7 +255,7 @@ func (r *Runtime) confirmRestoredDeploymentPricing(writer http.ResponseWriter, r
 	intent.ChangeSummary = "before={pricing_quarantine:true} after={pricing_quarantine:false}"
 	r.adminTopologyMu.Lock()
 	defer r.adminTopologyMu.Unlock()
-	pricingUnlock := r.store.LockDeploymentPricing(deploymentID)
+	pricingUnlock := r.store.LockDeploymentPricingExclusive(deploymentID)
 	defer pricingUnlock()
 	if err := r.store.ConfirmRestoredPricingWithAuditIntent(request.Context(), deploymentID, intent); err != nil {
 		writePriceError(writer, err)
@@ -414,7 +414,7 @@ func (r *Runtime) adoptAdminDeploymentPriceProposal(writer http.ResponseWriter, 
 	now := time.Now().UTC()
 	r.adminTopologyMu.Lock()
 	defer r.adminTopologyMu.Unlock()
-	pricingUnlock := r.store.LockDeploymentPricing(chi.URLParam(request, "id"))
+	pricingUnlock := r.store.LockDeploymentPricingExclusive(chi.URLParam(request, "id"))
 	defer pricingUnlock()
 	proposal, price, err := r.store.AdoptDeploymentPriceProposal(request.Context(), chi.URLParam(request, "id"), proposalID, priceID, admin.session.Username, input.EffectiveFrom.UTC(), now, expected, intent)
 	if err != nil {
