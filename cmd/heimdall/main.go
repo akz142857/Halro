@@ -137,7 +137,7 @@ const recoveryNextStepMessage = "Recovery Slot verified and audited; rewrap and 
 
 func run(arguments []string, logger *slog.Logger) error {
 	if len(arguments) == 0 {
-		return errors.New("usage: heimdall <start|init|bootstrap|admin|key|backup|restore|pricing|usage|audit|metrics|doctor|serve|healthcheck|config|version>")
+		return errors.New("usage: heimdall <start|init|bootstrap|admin|key|backup|restore|pricing|usage|audit|metrics|stats|doctor|serve|healthcheck|config|version>")
 	}
 	switch arguments[0] {
 	case "pricing":
@@ -229,6 +229,39 @@ func run(arguments []string, logger *slog.Logger) error {
 			printMasterKeyCustodyNotice(os.Stdout, cfg)
 		}
 		return runRuntime(cfg, logger, true)
+	case "stats":
+		flags := flag.NewFlagSet("stats", flag.ContinueOnError)
+		configPath := flags.String("config", "config.yaml", "configuration file")
+		statsURL := flags.String("url", "", "metrics URL (defaults to the configured metrics listener over loopback)")
+		interval := flags.Duration("interval", 0, "sample twice this far apart and report the window instead of the lifetime average")
+		timeout := flags.Duration("timeout", 5*time.Second, "metrics request timeout")
+		if err := flags.Parse(arguments[1:]); err != nil {
+			return err
+		}
+		cfg, err := config.Load(*configPath, config.LoadOptions{})
+		if err != nil {
+			return err
+		}
+		if !cfg.Metrics.Enabled {
+			return errors.New("metrics are disabled; heimdall stats reads the metrics endpoint")
+		}
+		endpoint := *statsURL
+		if endpoint == "" {
+			endpoint, err = statsMetricsURL(cfg.Server.MetricsListen, cfg.TLS.Enabled)
+			if err != nil {
+				return err
+			}
+		}
+		token, err := app.MetricsToken(cfg)
+		if err != nil {
+			return err
+		}
+		defer clear(token)
+		fetch, err := metricsSampleFetcher(endpoint, token, *timeout)
+		if err != nil {
+			return err
+		}
+		return runStats(fetch, *interval, os.Stdout)
 	case "healthcheck":
 		flags := flag.NewFlagSet("healthcheck", flag.ContinueOnError)
 		defaultURL := os.Getenv("HEIMDALL_HEALTH_URL")

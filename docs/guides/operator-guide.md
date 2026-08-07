@@ -369,6 +369,16 @@ examples.
 
 ## Upgrade and rollback
 
+`heimdall stats` prints this instance's durable write path — mean Ledger fsync,
+records per fsync, per-project accounting lock wait and hold, metadata write
+coalescing — without requiring a Prometheus install; `-interval 10s` reports a
+window instead of the lifetime average. The same summary is on
+Settings → Diagnostics, and the underlying series are on the Metrics endpoint.
+Those numbers are what bound this instance's request rate, so read them before
+quoting any capacity figure measured on another host: fsync cost differs by one
+to two orders of magnitude between filesystems. See
+`docs/verification/standalone-capacity-baseline.md`.
+
 Pricing selection uses a persisted per-Deployment high-water mark. Keep host
 time synchronized and configure `gateway.pricing_clock_rollback_tolerance` and
 `gateway.pricing_clock_forward_tolerance`; a material rollback, unexplained

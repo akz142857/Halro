@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { ErrorState, Loading, PageHeader, StatusDot } from "../components";
 import { navigate, usePathname } from "../navigation";
+import type { WritePathSummary } from "../types";
 import { AdminUsersSection } from "./AdminUsersSection";
 import { AccountingTimezoneForm } from "./AccountingTimezoneForm";
 import { AppearanceForm } from "./AppearanceForm";
@@ -110,6 +111,7 @@ function DiagnosticsPane({ status, accountingLabels, metricLabels }: { status: A
               ))}
             </dl>
           </details>
+          <WritePathCard summary={status.write_path} />
           <details className="panel system-card diagnostic-details" open>
             <summary><span>{t("settings.auditHead")}</span><strong>{t("settings.chainCheckpoint")}</strong></summary>
             <dl>
@@ -120,6 +122,51 @@ function DiagnosticsPane({ status, accountingLabels, metricLabels }: { status: A
           </details>
     </div>
   </section>;
+}
+
+// The durable write path. This is the answer to "what is this instance doing
+// right now" for an operator who has not stood up Prometheus — the same numbers
+// the metrics endpoint exposes, already reduced to the means that matter.
+function WritePathCard({ summary }: { summary?: WritePathSummary }) {
+  const { t } = useTranslation();
+  // Optional even though the server always sends it: this is the card an
+  // operator opens when the instance is misbehaving, so it must not be the thing
+  // that blanks the page.
+  const idle = !summary || (summary.wal_sync_seconds === 0 && summary.project_lock_held_seconds === 0);
+  const rows: [string, string][] = summary ? [
+    [t("settings.walSyncSeconds"), formatMillis(summary.wal_sync_seconds)],
+    [t("settings.walBatchSize"), formatFactor(summary.wal_batch_size)],
+    [t("settings.projectLockWaitSeconds"), formatMillis(summary.project_lock_wait_seconds)],
+    [t("settings.projectLockHeldSeconds"), formatMillis(summary.project_lock_held_seconds)],
+    [t("settings.projectEventsPerSecond"), formatFactor(summary.project_events_per_second)],
+    [t("settings.metadataBatchSize"), formatFactor(summary.metadata_batch_size)],
+    [t("settings.metadataWriteSeconds"), formatMillis(summary.metadata_write_seconds)],
+  ] : [];
+  return (
+    <details className="panel system-card diagnostic-details" open>
+      <summary><span>{t("settings.writePathTitle")}</span><strong>{t("settings.writePathSummaryLabel")}</strong></summary>
+      <p className="field-hint">{t("settings.writePathDescription")}</p>
+      {idle
+        ? <p className="field-hint">{t("settings.writePathIdle")}</p>
+        : <dl>{rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>}
+    </details>
+  );
+}
+
+// Sub-millisecond fsyncs are normal on NVMe and tens of milliseconds are normal
+// on a laptop filesystem, so the unit has to stay readable across three orders
+// of magnitude rather than round everything to 0 ms.
+function formatMillis(seconds: number) {
+  const millis = seconds * 1000;
+  if (millis === 0) return "0 ms";
+  if (millis < 1) return `${millis.toFixed(3)} ms`;
+  if (millis < 10) return `${millis.toFixed(2)} ms`;
+  return `${millis.toFixed(1)} ms`;
+}
+
+function formatFactor(value: number) {
+  if (value === 0) return "—";
+  return value < 10 ? value.toFixed(2) : value.toFixed(1);
 }
 
 function ConfigPreviewCard({ yaml }: { yaml: string }) {

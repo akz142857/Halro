@@ -52,11 +52,11 @@ export function DashboardPage() {
   const alertStatus = alertHealthy && dashboard.alerts.Queued === 0
     ? t("dashboard.ready")
     : t("dashboard.alertStatus", { queued: compactNumber(dashboard.alerts.Queued), issues: compactNumber(alertIssues) });
-  const walAtCapacity = dashboard.wal.QueueCapacity > 0 && dashboard.wal.QueueDepth >= dashboard.wal.QueueCapacity;
-  const walHealthy = dashboard.wal.Errors === 0 && !walAtCapacity;
-  const walStatus = walHealthy && dashboard.wal.QueueDepth === 0
+  const walAtCapacity = dashboard.wal.queue_capacity > 0 && dashboard.wal.queue_depth >= dashboard.wal.queue_capacity;
+  const walHealthy = dashboard.wal.errors === 0 && !walAtCapacity;
+  const walStatus = walHealthy && dashboard.wal.queue_depth === 0
     ? t("dashboard.ready")
-    : t("dashboard.walStatus", { queued: compactNumber(dashboard.wal.QueueDepth), errors: compactNumber(dashboard.wal.Errors) });
+    : t("dashboard.walStatus", { queued: compactNumber(dashboard.wal.queue_depth), errors: compactNumber(dashboard.wal.errors) });
   return (
     <>
       <PageHeader

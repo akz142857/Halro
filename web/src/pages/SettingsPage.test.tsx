@@ -7,6 +7,7 @@ import { LanguageSettingsForm } from "./LanguageSettingsForm";
 import { MFASettings } from "./MFASettings";
 import { PasswordChangeForm } from "./PasswordChangeForm";
 import { SettingsPage } from "./SettingsPage";
+import { emptyWritePath } from "../test/fixtures";
 
 function renderWithClient(node: React.ReactElement) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -238,7 +239,7 @@ describe("SettingsPage system configuration pane", () => {
     const systemConfig = vi.spyOn(api, "systemConfig").mockResolvedValue({ yaml: "should not be fetched" } as never);
     vi.spyOn(api, "systemStatus").mockResolvedValue({
       build: { version: "1.0.0", commit: "abc", date: "2026-08-07" },
-      accounting_status: 0, draining: false, wal: {}, audit: {}, alerts: {}, usage_watermark: {},
+      accounting_status: 0, draining: false, wal: {}, write_path: emptyWritePath(), audit: {}, alerts: {}, usage_watermark: {},
     } as never);
     window.history.replaceState({}, "", "/admin/settings/diagnostics");
     renderWithClient(<SettingsPage />);
@@ -246,6 +247,49 @@ describe("SettingsPage system configuration pane", () => {
     await screen.findByText("Heimdall 1.0.0");
     expect(screen.queryByText("config.yaml")).not.toBeInTheDocument();
     expect(systemConfig).not.toHaveBeenCalled();
+  });
+
+  // The card exists so an operator can read this instance's ceiling without
+  // standing up Prometheus, so the assertion is on the rendered numbers rather
+  // than on the card being present.
+  it("reports the durable write path under diagnostics", async () => {
+    vi.spyOn(api, "systemConfig").mockResolvedValue({ yaml: "" } as never);
+    vi.spyOn(api, "systemStatus").mockResolvedValue({
+      build: { version: "1.0.0", commit: "abc", date: "2026-08-07" },
+      accounting_status: 0, draining: false, wal: {},
+      write_path: emptyWritePath({
+        wal_sync_seconds: 0.0043,
+        wal_batch_size: 8.25,
+        project_lock_held_seconds: 0.0221,
+        project_events_per_second: 45.2,
+      }),
+      audit: {}, alerts: {}, usage_watermark: {},
+    } as never);
+    window.history.replaceState({}, "", "/admin/settings/diagnostics");
+    renderWithClient(<SettingsPage />);
+
+    // Sub-millisecond and tens-of-milliseconds have to stay readable in the same
+    // table, so the unit keeps decimals rather than rounding an NVMe fsync to 0.
+    expect(await screen.findByText("4.30 ms")).toBeInTheDocument();
+    expect(screen.getByText("22.1 ms")).toBeInTheDocument();
+    expect(screen.getByText("8.25")).toBeInTheDocument();
+    expect(screen.getByText("45.2")).toBeInTheDocument();
+  });
+
+  // An instance that has served nothing has no means to report. Zero is what the
+  // server sends, and dividing by it must not reach the screen as NaN.
+  it("says so when no durable write has happened yet", async () => {
+    vi.spyOn(api, "systemConfig").mockResolvedValue({ yaml: "" } as never);
+    vi.spyOn(api, "systemStatus").mockResolvedValue({
+      build: { version: "1.0.0", commit: "abc", date: "2026-08-07" },
+      accounting_status: 0, draining: false, wal: {}, write_path: emptyWritePath(),
+      audit: {}, alerts: {}, usage_watermark: {},
+    } as never);
+    window.history.replaceState({}, "", "/admin/settings/diagnostics");
+    renderWithClient(<SettingsPage />);
+
+    await screen.findByText("Heimdall 1.0.0");
+    expect(screen.queryByText(/NaN/)).not.toBeInTheDocument();
   });
 
   it("keeps an unknown pane on general rather than blanking the page", () => {

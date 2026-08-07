@@ -192,11 +192,13 @@ export interface Dashboard {
 }
 
 export interface WALStats {
-  Batches: number;
-  Records: number;
-  Errors: number;
-  QueueDepth: number;
-  QueueCapacity: number;
+  batches: number;
+  records: number;
+  errors: number;
+  syncs: number;
+  sync_seconds: number;
+  queue_depth: number;
+  queue_capacity: number;
 }
 
 export interface AlertStats {
@@ -606,11 +608,25 @@ export interface SystemStatus {
   accounting_status: number;
   draining: boolean;
   wal: Record<string, number>;
+  write_path: WritePathSummary;
   audit: Record<string, number | string>;
   alerts: Record<string, number>;
   usage_watermark: Record<string, number>;
   time_context: TimeContext;
   tzdata?: { source: string; path?: string; version: string; fingerprint: string; zones: string[] };
+}
+
+// The durable write path reduced to the means that explain this instance's
+// throughput ceilings, so the console can answer "what is it doing right now"
+// without an operator standing up Prometheus first.
+export interface WritePathSummary {
+  wal_sync_seconds: number;
+  wal_batch_size: number;
+  project_lock_wait_seconds: number;
+  project_lock_held_seconds: number;
+  project_events_per_second: number;
+  metadata_batch_size: number;
+  metadata_write_seconds: number;
 }
 
 export interface SystemConfig {

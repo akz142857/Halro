@@ -157,18 +157,36 @@ type DurabilityWriter interface {
 	Sync() error
 }
 
+// AppendStats is serialized straight into the Admin API, so the tags are part
+// of that payload's contract rather than cosmetic.
 type AppendStats struct {
-	Batches uint64
-	Records uint64
-	Errors  uint64
+	Batches uint64 `json:"batches"`
+	Records uint64 `json:"records"`
+	Errors  uint64 `json:"errors"`
 	// Syncs and SyncDuration describe the durability barrier. Records/Batches is
 	// the mean group-commit size, which is what separates "this host's fsync is
 	// the ceiling" from "not enough concurrent appenders to coalesce" — two
 	// situations with the same symptom and opposite remedies.
-	Syncs         uint64
-	SyncDuration  time.Duration
-	QueueDepth    int
-	QueueCapacity int
+	Syncs uint64 `json:"syncs"`
+	// Carried as a duration in Go and as seconds on the wire: a time.Duration
+	// marshals to a bare nanosecond integer, which reaches an operator as an
+	// unreadable 11-digit number.
+	SyncDuration  time.Duration `json:"-"`
+	QueueDepth    int           `json:"queue_depth"`
+	QueueCapacity int           `json:"queue_capacity"`
+}
+
+// SyncSeconds reports the cumulative durability barrier cost for the wire and
+// for display.
+func (s AppendStats) SyncSeconds() float64 { return s.SyncDuration.Seconds() }
+
+// MarshalJSON adds the seconds form beside the counters.
+func (s AppendStats) MarshalJSON() ([]byte, error) {
+	type wire AppendStats
+	return json.Marshal(struct {
+		wire
+		SyncSeconds float64 `json:"sync_seconds"`
+	}{wire(s), s.SyncSeconds()})
 }
 
 type appendRequest struct {
