@@ -5,6 +5,7 @@ import { ErrorState, Loading, PageHeader, StatusDot } from "../components";
 import { compactNumber, money, useInstantFormatter } from "../format";
 import { Link } from "../navigation";
 import { useTranslation } from "react-i18next";
+import { useAccountingTimeZone, zonedInputToISO } from "../timezone";
 import type { UsageAttempt } from "../types";
 
 export function UsagePage() {
@@ -24,14 +25,15 @@ export function UsagePage() {
   const [projectID, setProjectID] = useState(() => new URLSearchParams(window.location.search).get("project_id") ?? "");
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
+  const timeZone = useAccountingTimeZone();
   const usage = useInfiniteQuery({
-    queryKey: ["usage", status, model, requestID, projectID, start, end],
+    queryKey: ["usage", status, model, requestID, projectID, start, end, timeZone],
     initialPageParam: "",
     queryFn: ({ pageParam }) => api.usage(`?${new URLSearchParams({
       limit: "100", ...(status ? { status } : {}), ...(model ? { model } : {}), ...(requestID ? { request_id: requestID } : {}),
       ...(projectID ? { project_id: projectID } : {}),
-      ...(start ? { start: new Date(start).toISOString() } : {}),
-      ...(end ? { end: new Date(end).toISOString() } : {}),
+      ...(start ? { start: zonedInputToISO(start, timeZone) } : {}),
+      ...(end ? { end: zonedInputToISO(end, timeZone) } : {}),
       ...(pageParam ? { cursor: pageParam } : {}),
     })}`),
     getNextPageParam: (page) => page.next_cursor || undefined,
@@ -64,6 +66,9 @@ export function UsagePage() {
         </label>
         <label><span>{t("usage.start")}</span><input type="datetime-local" value={start} onChange={(event) => setStart(event.target.value)} /></label>
         <label><span>{t("usage.end")}</span><input type="datetime-local" value={end} onChange={(event) => setEnd(event.target.value)} /></label>
+        {/* The control carries no zone, so the one it is read in has to be said
+            rather than assumed to match the viewer's. */}
+        <span className="filter-hint">{t("usage.rangeTimeZone", { zone: timeZone })}</span>
         <span className="filter-count">{t("usage.records", { count: attempts.length })}</span>
       </div>
       {usage.isPending && <Loading />}

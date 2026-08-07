@@ -37,6 +37,15 @@ type gatewayKeyInput struct {
 	Name      string     `json:"name"`
 	Enabled   *bool      `json:"enabled,omitempty"`
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+	// Minting a key is gated the same way a destructive delete is. A Gateway
+	// Key is returned in plaintext once and outlives the Admin session that
+	// asked for it, so a stolen session that cannot delete anything could still
+	// walk away with durable, billable access — a better outcome for the thief
+	// than any of the deletions step-up already covered. Carried on this struct
+	// rather than read by the shared middleware because the body is decoded
+	// here and can only be read once.
+	CurrentPassword string `json:"current_password,omitempty"`
+	TOTPCode        string `json:"totp_code,omitempty"`
 }
 
 func (r *Runtime) createAdminProject(writer http.ResponseWriter, request *http.Request) {
@@ -168,7 +177,13 @@ func (r *Runtime) deleteAdminProject(writer http.ResponseWriter, request *http.R
 	writer.WriteHeader(http.StatusNoContent)
 }
 
+// Lifting a Token Guard block is a security control being switched off, which
+// is the other half of the step-up criterion: not only what destroys state, but
+// what removes a protection that is currently in force.
 func (r *Runtime) unblockAdminProject(writer http.ResponseWriter, request *http.Request) {
+	if !r.requireDestructiveStepUp(writer, request) {
+		return
+	}
 	projectID := chi.URLParam(request, "id")
 	r.adminProjectMu.Lock()
 	defer r.adminProjectMu.Unlock()
@@ -196,8 +211,13 @@ func (r *Runtime) createAdminProjectKey(writer http.ResponseWriter, request *htt
 		adminBadRequest(writer, "invalid request")
 		return
 	}
+	password := input.CurrentPassword
+	input.CurrentPassword = ""
 	projectID := chi.URLParam(request, "id")
 	admin := request.Context().Value(adminContextKey{}).(adminRequestContext)
+	if !r.verifyAdminStepUp(writer, request, admin.session.Username, password, input.TOTPCode) {
+		return
+	}
 	// The plaintext exists only in this response, so a retry can never replay it. Deriving
 	// the record ID from the idempotency key turns a retried create into a storage
 	// collision instead of a second live credential the operator never learns about.

@@ -45,7 +45,7 @@ describe("typed admin API client", () => {
 
     await api.login("admin", "password-canary");
     await api.changePassword("password-canary", "new-password-canary");
-    await api.createKey("prj_1", "service", "idem-canary");
+    await api.createKey("prj_1", "service", "idem-canary", { currentPassword: "password-canary", totpCode: "" });
 
     const passwordMutation = calls[1][1]!;
     expect((passwordMutation.headers as Headers).get("X-CSRF-Token")).toBe("csrf-canary");

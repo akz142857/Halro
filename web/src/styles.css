@@ -691,6 +691,7 @@ td small, td code { display: block; margin-top: 4px; color: var(--muted); }
 .filter-bar input, .filter-bar select { min-height: 34px; }
 .filter-bar input[type="datetime-local"] { height: 34px; padding: 0 var(--space-3); font-size: 13px; }
 .filter-count { margin-left: auto; padding: 9px; color: var(--muted); font: var(--font-size-xs) var(--mono); }
+.filter-hint { align-self: center; color: var(--color-text-tertiary); font-size: var(--font-size-xs); }
 
 .timeline { padding: 5px 22px 18px; }
 .audit-panel { margin-top: 18px; }

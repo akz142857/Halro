@@ -13,6 +13,7 @@ import {
   LoadMore,
   Modal,
   PageHeader,
+  ReauthFields,
   ResourceToolbar,
   StatusDot,
   type ResourceStatusFilter,
@@ -167,7 +168,7 @@ function ProjectDetail({ project }: { project: Project }) {
   });
   const keyItems = keys.data?.pages.flatMap((page) => page.items) ?? [];
   const unblock = useMutation({
-    mutationFn: () => api.unblockProject(project.id),
+    mutationFn: (reauth: ReauthValues) => api.unblockProject(project.id, reauth),
     onSuccess: (value) => setUnblockResult(t("projects.unblocked", { count: value.subjects })),
   });
   const queryClient = useQueryClient();
@@ -189,14 +190,23 @@ function ProjectDetail({ project }: { project: Project }) {
           <code>{project.id}</code>
         </div>
         <div className="row-actions">
-          <button className="button ghost" disabled={readOnly || unblock.isPending} onClick={() => unblock.mutate()}>{unblock.isPending ? t("common.working") : t("projects.unblock")}</button>
+          {/* Lifting the block switches off a control that is currently in
+              force, so it asks for the same proof a deletion does. */}
+          <ConfirmButton
+            className="button ghost"
+            label={t("projects.unblock")}
+            confirmLabel={t("projects.unblockConfirm", { name: project.name })}
+            disabled={unblock.isPending}
+            requireStepUp
+            onConfirm={(reauth) => unblock.mutateAsync(reauth)}
+          />
           <button className="button ghost" disabled={readOnly} onClick={() => setEditing(true)}>{t("common.edit")}</button>
           <ConfirmButton
             label={t("common.delete")}
             confirmLabel={t("projects.deleteConfirm", { name: project.name })}
             disabled={remove.isPending}
             requireStepUp
-            onConfirm={(reauth) => remove.mutate(reauth)}
+            onConfirm={(reauth) => remove.mutateAsync(reauth)}
           />
         </div>
       </header>
@@ -301,13 +311,13 @@ function KeyRow({ project, value }: { project: Project; value: GatewayKey }) {
           </small>
         </div>
         <div className="row-actions">
-          {value.enabled ? <ConfirmButton className="button ghost" label={t("common.disable")} title={t("projects.keyDisableTitle")} confirmLabel={t("projects.keyDisableConfirm", { name: value.name })} disabled={mutation.isPending} onConfirm={() => mutation.mutate()} /> : <button className="button ghost" disabled={readOnly || mutation.isPending} onClick={() => mutation.mutate()}>{mutation.isPending ? t("common.working") : t("common.enable")}</button>}
+          {value.enabled ? <ConfirmButton className="button ghost" label={t("common.disable")} title={t("projects.keyDisableTitle")} confirmLabel={t("projects.keyDisableConfirm", { name: value.name })} disabled={mutation.isPending} onConfirm={() => mutation.mutateAsync()} /> : <button className="button ghost" disabled={readOnly || mutation.isPending} onClick={() => mutation.mutate()}>{mutation.isPending ? t("common.working") : t("common.enable")}</button>}
           <ConfirmButton
             label={t("common.delete")}
             confirmLabel={t("projects.keyDeleteConfirm", { name: value.name })}
             disabled={remove.isPending}
             requireStepUp
-            onConfirm={(reauth) => remove.mutate(reauth)}
+            onConfirm={(reauth) => remove.mutateAsync(reauth)}
           />
         </div>
       </div>
@@ -455,11 +465,16 @@ function CreateKey({ project, onClose }: { project: Project; onClose: () => void
   // recognise the second attempt instead of issuing a key the operator never sees.
   const idempotencyKey = useRef(crypto.randomUUID());
   const queryClient = useQueryClient();
+  // Minting a key asks for the same proof a deletion does: the plaintext is
+  // shown once and the key outlives this session, so a stolen session that
+  // could not delete anything could still leave with durable billable access.
+  const [reauth, setReauth] = useState<ReauthValues>({ currentPassword: "", totpCode: "" });
   const mutation = useMutation({
     mutationFn: () => api.createKey(
       project.id,
       name,
       idempotencyKey.current,
+      reauth,
       expiresAt ? new Date(expiresAt).toISOString() : undefined,
     ),
     onSuccess: (result) => {
@@ -528,10 +543,11 @@ function CreateKey({ project, onClose }: { project: Project; onClose: () => void
         <Field label={t("projects.keyExpiry")} hint={t("projects.keyExpiryHint")}>
           <input type="datetime-local" value={expiresAt} onChange={(event) => setExpiresAt(event.target.value)} />
         </Field>
+        <ReauthFields values={reauth} onChange={setReauth} description={t("auth.stepUpMintKey")} />
         {mutation.isError && <ErrorState error={mutation.error} />}
         <div className="form-actions">
           <button type="button" className="button ghost" disabled={mutation.isPending} onClick={onClose}>{t("common.cancel")}</button>
-          <button className="button primary" disabled={!name.trim() || mutation.isPending}>{mutation.isPending ? t("common.working") : t("projects.generateKey")}</button>
+          <button className="button primary" disabled={!name.trim() || !reauth.currentPassword || mutation.isPending}>{mutation.isPending ? t("common.working") : t("projects.generateKey")}</button>
         </div>
       </form>
     </Modal>

@@ -98,7 +98,7 @@ export function RoutesPage() {
               label={t("common.delete")}
               confirmLabel={t("routes.deleteConfirm", { name: row.original.public_model })}
               requireStepUp
-              onConfirm={(reauth) => remove.mutate({ route: row.original, reauth })}
+              onConfirm={(reauth) => remove.mutateAsync({ route: row.original, reauth })}
               disabled={remove.isPending}
             />
           </div>
@@ -123,6 +123,10 @@ export function RoutesPage() {
       />
       {pending && <Loading />}
       {error && <ErrorState error={error} />}
+      {/* Every other resource page surfaces its delete failure here. This one
+          did not, so a refused deletion left the route in the list with nothing
+          to explain why. */}
+      {remove.isError && <ErrorState error={remove.error} />}
       {routes.data?.items.length === 0 && (
         <EmptyState title={t("routes.emptyTitle")}>{t("routes.emptyDescription")}</EmptyState>
       )}
