@@ -13,12 +13,20 @@ import (
 	"github.com/akz142857/Heimdall/internal/ledger"
 )
 
-// Version 6 drops the duplicate cost columns. Retiring cost adjustments left
+// maxTrackedEventIDs bounds the dedup index, mirroring the audit log's. A
+// ledger event ID only repeats within a short window of its first append — the
+// crash-recovery path deliberately re-emits a deterministic event rather than
+// inventing a new one — so a tail window answers every real duplicate, while
+// retaining every ID ever seen would grow with the lifetime of the process and
+// still be absent after a restart.
+const maxTrackedEventIDs = 4096
+
+// Version 7 persists the dedup window. Version 6 dropped the duplicate cost columns. Retiring cost adjustments left
 // original/final/committed holding the same number on every row and in every
 // bucket, so a reader had three names for one value and no way to tell which
 // one was authoritative. A checkpoint written before this carries them, and
 // rebuilding from the Ledger is cheap, so it is refused rather than migrated.
-const checkpointVersion = 6
+const checkpointVersion = 7
 
 const latencyBucketCount = 12
 
@@ -145,12 +153,18 @@ type checkpoint struct {
 	Hourly    map[int64]Bucket          `json:"hourly"`
 	Totals    Bucket                    `json:"totals"`
 	Metrics   Metrics                   `json:"metrics"`
+	// EventIDs is the dedup window. Without it a checkpoint taken between the
+	// two physical frames of a re-emitted event resumed with an empty index and
+	// counted the second copy again — the aggregate then disagreed with a full
+	// replay of the same WAL.
+	EventIDs []string `json:"event_ids,omitempty"`
 }
 
 type Aggregate struct {
 	mu           sync.RWMutex
 	watermark    ledger.Watermark
 	eventIDs     map[string]struct{}
+	eventIDOrder []string
 	started      map[string]time.Time
 	requests     map[string]*requestAccumulator
 	attempts     []AttemptEvent
@@ -201,6 +215,9 @@ func RestoreCheckpoint(payload []byte) (*Aggregate, error) {
 	for index, summary := range aggregate.summaries {
 		aggregate.summaryIndex[summary.RequestID] = index
 	}
+	for _, eventID := range saved.EventIDs {
+		aggregate.rememberEventID(eventID)
+	}
 	for requestID, summary := range saved.Active {
 		if requestID == "" || summary.RequestID != requestID {
 			return nil, errors.New("usage checkpoint has an invalid active request")
@@ -223,6 +240,7 @@ func (a *Aggregate) MarshalCheckpoint() (ledger.Watermark, []byte, error) {
 		Attempts:  append([]AttemptEvent(nil), a.attempts...),
 		Summaries: append([]RequestSummary(nil), a.summaries...),
 		Hourly:    cloneHourly(a.hourly), Totals: a.totals, Metrics: a.metrics,
+		EventIDs: append([]string(nil), a.eventIDOrder...),
 	}
 	payload, err := json.Marshal(saved)
 	if err != nil {
@@ -432,9 +450,21 @@ func (a *Aggregate) Apply(record ledger.Record) error {
 			return err
 		}
 	}
-	a.eventIDs[event.EventID] = struct{}{}
+	a.rememberEventID(event.EventID)
 	a.watermark = ledger.Watermark{Generation: 1, Offset: record.Offset, Sequence: record.Sequence}
 	return nil
+}
+
+func (a *Aggregate) rememberEventID(eventID string) {
+	if _, exists := a.eventIDs[eventID]; exists {
+		return
+	}
+	a.eventIDs[eventID] = struct{}{}
+	a.eventIDOrder = append(a.eventIDOrder, eventID)
+	if len(a.eventIDOrder) > maxTrackedEventIDs {
+		delete(a.eventIDs, a.eventIDOrder[0])
+		a.eventIDOrder = a.eventIDOrder[1:]
+	}
 }
 
 func addInt64(target *int64, delta int64) error {

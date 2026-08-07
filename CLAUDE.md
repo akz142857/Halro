@@ -157,6 +157,11 @@ commit. This is not a style preference; it is where the expensive mistakes come 
 - Beware exact-equality version checks. This repo has been bitten by them more than once
   (the Ledger reader gate, the Parquet manifest gate, the Parquet row check); the right
   shape is almost always an accepted range.
+- **A reverse verification that does not fail is not evidence.** When backing a fix out
+  to confirm a test catches it, assert the edit actually applied — a scripted replacement
+  whose search string went stale (gofmt re-aligning a struct literal, say) silently
+  changes nothing, and the test then "passes in the defect state" because the defect was
+  never restored. Run it with `go test -count=1`; a cached `ok` proves nothing either.
 - When verification is genuinely impossible, say so — do not present the assumption as
   a finding.
 

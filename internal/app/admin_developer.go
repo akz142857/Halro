@@ -58,12 +58,17 @@ func (r *Runtime) executeAdminDeveloperRequest(writer http.ResponseWriter, reque
 		upstream.Header.Set("Accept", "application/json")
 	}
 	// Behind a trusted proxy the Gateway requires a forwarded chain and rejects the
-	// request without one. The admin caller is the real source, so state it explicitly.
-	// Every line of the incoming header, joined: the Gateway reads the chain the
-	// same way, and forwarding only the first line would hand it a shorter one.
-	if forwarded := strings.TrimSpace(strings.Join(request.Header.Values("X-Forwarded-For"), ",")); forwarded != "" {
-		upstream.Header.Set("X-Forwarded-For", forwarded)
-	} else if host, _, splitErr := net.SplitHostPort(request.RemoteAddr); splitErr == nil {
+	// request without one. The admin caller is the real source, so state it explicitly —
+	// and state only that.
+	//
+	// The caller's own X-Forwarded-For is deliberately not passed through. Where the
+	// Admin and Gateway listeners sit behind one ingress, the admin's address is inside
+	// trusted_proxy_cidrs, so a chain taken from the request body's sender would be
+	// believed verbatim: an authenticated administrator could then choose the source
+	// address that a project's CIDR allow-list is checked against, that Token Guard hashes
+	// into its block key, and that usage is attributed to. The data plane already refuses
+	// a client-supplied chain for that reason; this path must not be the way around it.
+	if host, _, splitErr := net.SplitHostPort(request.RemoteAddr); splitErr == nil {
 		upstream.Header.Set("X-Forwarded-For", host)
 	}
 	// This request spends real money against a real project, so it has to leave the same

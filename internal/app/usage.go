@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -74,17 +73,15 @@ func openUsageOffline(
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	status := ledger.NewStatus()
-	log, err := ledger.Open(cfg.LedgerPath(), status)
-	if err != nil {
-		dataLock.Close()
-		return nil, nil, nil, err
-	}
-	closeResources := func() error {
-		return errors.Join(log.Close(), dataLock.Close())
-	}
+	// InspectReplay rather than Open: these commands read a derived view and
+	// have no business holding a write handle on the accounting authority.
+	// Open repairs a partial tail by truncating it, so `usage export` on a WAL
+	// with a torn last frame would rewrite the Ledger as a side effect of
+	// producing a report — with no key, no chain verification, and no
+	// checkpoint reconciliation to catch it having done so.
+	closeResources := func() error { return dataLock.Close() }
 	aggregate := usage.NewAggregate()
-	if _, err := log.Replay(ledger.Watermark{}, func(record ledger.Record) error {
+	if _, _, err := ledger.InspectReplay(cfg.LedgerPath(), func(record ledger.Record) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}

@@ -264,3 +264,44 @@ func TestCheckpointRestoresActiveRequestAndContinuesMonotonically(t *testing.T) 
 		t.Fatalf("restored snapshot=%#v", snapshot)
 	}
 }
+
+// TestCheckpointCarriesTheDedupWindow covers a disagreement between the
+// aggregate and a full replay of the same WAL. Crash recovery deliberately
+// re-emits a deterministic event rather than inventing a new ID, so one event
+// ID can occupy two physical frames. Apply skips the second because it
+// remembers the first — but the checkpoint did not carry that memory, so an
+// aggregate restored between the two frames added the cost a second time.
+func TestCheckpointCarriesTheDedupWindow(t *testing.T) {
+	aggregate := NewAggregate()
+	settled := ledger.Record{Sequence: 1, Offset: 100, Event: ledger.Event{
+		EventID: "evt_settled", Kind: ledger.EventAttemptSettled,
+		RequestID: "req_1", AttemptID: "att_1", ProjectID: "prj_1",
+		PeriodID: "prj_1:2026-08-07", OccurredAt: time.Now().UTC(),
+		CommittedMicrosUSD: ledger.MicrosUSD(7), Outcome: "success",
+	}}
+	if err := aggregate.Apply(settled); err != nil {
+		t.Fatal(err)
+	}
+	before := aggregate.Snapshot().Totals
+
+	_, payload, err := aggregate.MarshalCheckpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored, err := RestoreCheckpoint(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The same event at a later sequence, exactly as the recovery path writes it.
+	duplicate := settled
+	duplicate.Sequence = 2
+	duplicate.Offset = 200
+	if err := restored.Apply(duplicate); err != nil {
+		t.Fatal(err)
+	}
+	after := restored.Snapshot().Totals
+	if after.CostMicrosUSD != before.CostMicrosUSD || after.Attempts != before.Attempts {
+		t.Fatalf("a re-emitted event was counted again after restore: cost=%d attempts=%d, want cost=%d attempts=%d",
+			after.CostMicrosUSD, after.Attempts, before.CostMicrosUSD, before.Attempts)
+	}
+}
