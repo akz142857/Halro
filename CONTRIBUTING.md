@@ -71,7 +71,14 @@ require isolated, budget-limited credentials.
 - Prefer standard-library primitives and small interfaces.
 - Wrap errors with operational context without exposing sensitive values.
 - Avoid high-cardinality Prometheus labels.
-- Keep durable event schemas backward compatible or provide a tested migration.
+- Durable schemas change in place while the project is pre-1.0.0: fix the wrong field
+  rather than keeping it beside a corrected one, and bump the format version so stale
+  state is refused and rebuilt instead of silently misread. Say so in the commit when a
+  change requires re-initialising the data directory. See `CLAUDE.md` for the boundary
+  and its two carve-outs.
+- Check assumptions about existing data against a real data directory — `heimdall doctor`,
+  `heimdall ledger verify`, an actual start — not only against fixtures. A check a real
+  `data/` rejects is a check that bricks every install.
 
 ## Frontend style
 
