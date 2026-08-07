@@ -3,7 +3,9 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"strings"
 
@@ -41,10 +43,33 @@ type AnchorVerdict struct {
 	Outcome  string `json:"outcome"`
 }
 
+// rotatedAnchorSuffix matches internal/deadman: the witness caps its live
+// anchor file and renames the full one aside rather than growing without
+// bound. Reading only the live file after a rotation would drop the older half
+// of the series and report all of it as a gap.
+const rotatedAnchorSuffix = ".1"
+
 // LoadAuditAnchorsFile reads a JSON-lines file of anchors — the format the
 // dead-man probe's anchor sink writes (internal/deadman), one
-// boltstore.AuditAnchor per line, appended as they are pulled off-host.
+// boltstore.AuditAnchor per line, appended as they are pulled off-host. If the
+// witness has rotated the file, the retired generation is read ahead of it so
+// the series stays in ascending order.
 func LoadAuditAnchorsFile(path string) ([]boltstore.AuditAnchor, error) {
+	// A missing rotated generation is the normal state — most witnesses never
+	// fill one file. A missing live file is not: that is the path the operator
+	// named, and it still fails.
+	rotated, err := readAnchorLines(path + rotatedAnchorSuffix)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, err
+	}
+	live, err := readAnchorLines(path)
+	if err != nil {
+		return nil, err
+	}
+	return append(rotated, live...), nil
+}
+
+func readAnchorLines(path string) ([]boltstore.AuditAnchor, error) {
 	payload, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("open anchors file: %w", err)
@@ -119,9 +144,19 @@ func VerifyAuditAnchors(ctx context.Context, cfg config.Config, anchors []boltst
 		return nil, fmt.Errorf("open local audit chain: %w", err)
 	}
 	defer log.Close()
-	hashBySequence := make(map[uint64][32]byte)
+	// Keep only the record hashes the anchors actually name. Retaining one
+	// entry per record made the memory a function of the audit log's length —
+	// unbounded, since the log has no cap but the disk — for a check whose
+	// inputs are the handful of anchors a witness holds.
+	wanted := make(map[uint64]struct{}, len(anchors))
+	for _, anchor := range anchors {
+		wanted[anchor.Records] = struct{}{}
+	}
+	hashBySequence := make(map[uint64][32]byte, len(wanted))
 	summary, err := log.Replay(func(record audit.Record) error {
-		hashBySequence[record.Sequence] = record.Hash
+		if _, ok := wanted[record.Sequence]; ok {
+			hashBySequence[record.Sequence] = record.Hash
+		}
 		return nil
 	})
 	if err != nil {
@@ -132,6 +167,13 @@ func VerifyAuditAnchors(ctx context.Context, cfg config.Config, anchors []boltst
 	var highestRecords uint64
 	for _, anchor := range anchors {
 		verdict := AnchorVerdict{Sequence: anchor.Sequence, Records: anchor.Records}
+		// Whether the chain has a record at that position at all, kept separate
+		// from what its hash is. A plain map read answers a missing key with the
+		// zero hash, so an anchor claiming Records: 0 and an all-zero LastHash
+		// compared equal against a position no record occupies and came back
+		// agree — a line anyone able to write the witness file could add, and the
+		// one verdict that is supposed to be unforgeable without the audit key.
+		hash, recorded := hashBySequence[anchor.Records]
 		switch {
 		case anchor.Records > summary.Records:
 			verdict.Outcome = AnchorVerdictTruncated
@@ -140,7 +182,7 @@ func VerifyAuditAnchors(ctx context.Context, cfg config.Config, anchors []boltst
 			// means the file was edited or two instances were merged into it,
 			// and either way the anchors after it cannot be read as a series.
 			verdict.Outcome = AnchorVerdictMisordered
-		case hashBySequence[anchor.Records] == anchor.LastHash:
+		case recorded && hash == anchor.LastHash:
 			verdict.Outcome = AnchorVerdictAgree
 		default:
 			verdict.Outcome = AnchorVerdictDisagree

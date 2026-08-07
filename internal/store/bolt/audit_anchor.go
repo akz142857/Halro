@@ -1,6 +1,7 @@
 package bolt
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -77,9 +78,25 @@ func (s *Store) AppendAuditAnchor(anchor AuditAnchor) error {
 		// when it observes the change.
 		if anchor.Sequence > auditAnchorRetention {
 			cutoff := anchor.Sequence - auditAnchorRetention
+			// Collect the whole range, then delete it — never Delete() through
+			// the cursor that is walking it. Cursor.Delete removes the inode
+			// from the leaf node, the elements after it shift down one index,
+			// and Next() advances the index anyway: the element that moved into
+			// the current slot is stepped over, leaving every second key behind.
+			// It bites only when the pruned keys sit on a leaf page the Put
+			// above already materialised into a node (the cursor reads the
+			// unchanged page otherwise), which is why the ring's ordinary
+			// one-key-per-append prune has never shown it.
+			//
+			// The keys point into the transaction's pages, so they are cloned:
+			// deleting rebalances the very memory they refer to.
+			var expired [][]byte
 			cursor := bucket.Cursor()
 			for key, _ := cursor.First(); key != nil && binary.BigEndian.Uint64(key) <= cutoff; key, _ = cursor.Next() {
-				if err := cursor.Delete(); err != nil {
+				expired = append(expired, bytes.Clone(key))
+			}
+			for _, key := range expired {
+				if err := bucket.Delete(key); err != nil {
 					return err
 				}
 			}

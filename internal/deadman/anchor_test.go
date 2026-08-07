@@ -173,6 +173,68 @@ func TestPullAnchorsUnreachableDoesNotBlockProbes(t *testing.T) {
 	}
 }
 
+// The witness writes to its own disk forever. Without a cap it eventually
+// fills the volume, and a probe that has filled its disk has stopped
+// witnessing — the failure it is deployed to detect, happening to itself.
+// Rotation has to keep the retired generation whole, because the value of the
+// series is its continuity.
+func TestAnchorWriterRotatesAtTheCapAndKeepsTheRetiredGeneration(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "anchors.jsonl")
+	writer := &anchorWriter{path: path}
+
+	// Exactly at the cap: the size is checked before writing, so this is the
+	// append that rotates.
+	if err := os.WriteFile(path, bytes.Repeat([]byte("x"), maxAnchorFileBytes), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.append(PulledAnchor{Sequence: 1, Records: 10, InstanceID: "ins_1", ObservedAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(path); err != nil || info.Size() >= maxAnchorFileBytes {
+		t.Fatalf("live file was not rotated: size=%v err=%v", info, err)
+	}
+	if _, err := os.Stat(path + rotatedAnchorSuffix); err != nil {
+		t.Fatalf("retired generation is missing: %v", err)
+	}
+
+	// The pre-rotation content is intact, not truncated in place.
+	retired, err := os.ReadFile(path + rotatedAnchorSuffix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(retired) != maxAnchorFileBytes {
+		t.Fatalf("retired generation size=%d, want %d — rotation lost data", len(retired), maxAnchorFileBytes)
+	}
+	live, err := LoadAnchorsFileForTest(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(live) != 1 || live[0].Sequence != 1 {
+		t.Fatalf("live file after rotation=%#v, want just the anchor that triggered it", live)
+	}
+
+	// A second rotation replaces the one retired generation rather than
+	// accumulating .2, .3 — the bound is two files, not a growing set.
+	if err := os.WriteFile(path, bytes.Repeat([]byte("y"), maxAnchorFileBytes), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.append(PulledAnchor{Sequence: 2, Records: 20, InstanceID: "ins_1", ObservedAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		names := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			names = append(names, entry.Name())
+		}
+		t.Fatalf("anchor files=%v, want exactly the live file and one retired generation", names)
+	}
+}
+
 // LoadAnchorsFileForTest reads back what anchorWriter wrote, mirroring
 // app.LoadAuditAnchorsFile's JSON-lines format without importing the app
 // package (which would be a layering inversion — internal/app depends on

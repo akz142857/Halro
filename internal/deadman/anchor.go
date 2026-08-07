@@ -29,6 +29,22 @@ type anchorSink interface {
 	append(PulledAnchor) error
 }
 
+// maxAnchorFileBytes caps the live anchor file. An anchor is about 200 bytes,
+// so this holds on the order of forty thousand of them — years at ADR 0015's
+// default emission rate. The cap exists because the witness had none: a file
+// that only grows eventually fills the volume it sits on, and a dead-man probe
+// that has filled its own disk stops witnessing, which is the failure the
+// probe is deployed to catch happening to the probe itself.
+const maxAnchorFileBytes = 8 << 20
+
+// rotatedAnchorSuffix names the one previous generation kept beside the live
+// file. Two generations, not many: the pulled anchors are a series whose value
+// is continuity, and holding a bounded window of it is the trade for a bounded
+// disk. verify-anchor reads both, and reports the sequences that fell off the
+// end as missing rather than passing over them (internal/app,
+// LoadAuditAnchorsFile) — an incomplete record says so.
+const rotatedAnchorSuffix = ".1"
+
 type anchorWriter struct {
 	mu   sync.Mutex
 	path string
@@ -38,6 +54,16 @@ func (a *anchorWriter) append(anchor PulledAnchor) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if err := os.MkdirAll(filepath.Dir(a.path), 0o700); err != nil {
+		return err
+	}
+	if info, err := os.Stat(a.path); err == nil && info.Size() >= maxAnchorFileBytes {
+		// Rename, never truncate: a reader holding the old path keeps reading a
+		// complete file, and the generation being retired stays whole until the
+		// next rotation replaces it.
+		if err := os.Rename(a.path, a.path+rotatedAnchorSuffix); err != nil {
+			return fmt.Errorf("rotate pulled anchor file: %w", err)
+		}
+	} else if err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	file, err := os.OpenFile(a.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
