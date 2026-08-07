@@ -254,11 +254,10 @@ type PendingLease struct {
 }
 
 type SettledAttempt struct {
-	Settlement        Event
-	SettlementDigest  string
-	BaseCostMicrosUSD int64
-	NetCostMicrosUSD  int64
-	CostKnown         bool
+	Settlement       Event
+	SettlementDigest string
+	CostMicrosUSD    int64
+	CostKnown        bool
 }
 
 type State struct {
@@ -394,7 +393,7 @@ func (s *State) Apply(record Record) error {
 		if event.CommittedMicrosUSD != nil {
 			base = *event.CommittedMicrosUSD
 		}
-		s.settled[event.AttemptID] = SettledAttempt{Settlement: event, SettlementDigest: settlementDigest, BaseCostMicrosUSD: base, NetCostMicrosUSD: base, CostKnown: event.CommittedMicrosUSD != nil}
+		s.settled[event.AttemptID] = SettledAttempt{Settlement: event, SettlementDigest: settlementDigest, CostMicrosUSD: base, CostKnown: event.CommittedMicrosUSD != nil}
 	}
 
 	s.balances[key] = balance

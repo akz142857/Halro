@@ -113,7 +113,7 @@ function CostCell({ attempt }: { attempt: UsageAttempt }) {
   const { t } = useTranslation();
   return (
     <>
-      <strong>{attempt.final_cost_micros_usd == null ? t("usage.unknownCost") : money(attempt.final_cost_micros_usd)}</strong>
+      <strong>{attempt.cost_micros_usd == null ? t("usage.unknownCost") : money(attempt.cost_micros_usd)}</strong>
       {!!attempt.tags?.length && <small>{attempt.tags.map((tag) => <span className="badge" key={tag}>{tag}</span>)}</small>}
       <details className="cost-evidence">
         <summary>{t("usage.costEvidence")}</summary>

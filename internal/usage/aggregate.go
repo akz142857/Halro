@@ -13,7 +13,12 @@ import (
 	"github.com/akz142857/Heimdall/internal/ledger"
 )
 
-const checkpointVersion = 5
+// Version 6 drops the duplicate cost columns. Retiring cost adjustments left
+// original/final/committed holding the same number on every row and in every
+// bucket, so a reader had three names for one value and no way to tell which
+// one was authoritative. A checkpoint written before this carries them, and
+// rebuilding from the Ledger is cheap, so it is refused rather than migrated.
+const checkpointVersion = 6
 
 const latencyBucketCount = 12
 
@@ -42,8 +47,6 @@ type AttemptEvent struct {
 	ProviderReasoningTokens       int64                      `json:"provider_reasoning_tokens,omitempty"`
 	PreparedOutputTokens          int64                      `json:"prepared_output_tokens"`
 	CostMicrosUSD                 *int64                     `json:"cost_micros_usd"`
-	OriginalCostMicrosUSD         *int64                     `json:"original_cost_micros_usd"`
-	FinalCostMicrosUSD            *int64                     `json:"final_cost_micros_usd"`
 	LeaseMode                     ledger.LeaseMode           `json:"lease_mode,omitempty"`
 	PriceEvidenceStatus           domain.PriceEvidenceStatus `json:"price_evidence_status"`
 	CostValueStatus               domain.CostValueStatus     `json:"cost_value_status"`
@@ -66,9 +69,6 @@ type AttemptEvent struct {
 }
 
 func (a AttemptEvent) KnownCostMicrosUSD() (int64, bool) {
-	if a.FinalCostMicrosUSD != nil {
-		return *a.FinalCostMicrosUSD, true
-	}
 	if a.CostMicrosUSD != nil {
 		return *a.CostMicrosUSD, true
 	}
@@ -76,20 +76,19 @@ func (a AttemptEvent) KnownCostMicrosUSD() (int64, bool) {
 }
 
 type RequestSummary struct {
-	RequestID             string    `json:"request_id"`
-	ProjectID             string    `json:"project_id"`
-	KeyID                 string    `json:"key_id,omitempty"`
-	RequestedModel        string    `json:"requested_model,omitempty"`
-	Attempts              int64     `json:"attempts"`
-	InputTokens           int64     `json:"input_tokens"`
-	OutputTokens          int64     `json:"output_tokens"`
-	CostMicrosUSD         int64     `json:"cost_micros_usd"`
-	OriginalCostMicrosUSD int64     `json:"original_cost_micros_usd"`
-	UnknownAttempts       int64     `json:"unknown_attempts"`
-	Fallbacks             int64     `json:"fallbacks"`
-	Outcome               string    `json:"outcome"`
-	AcceptedAt            time.Time `json:"accepted_at"`
-	CompletedAt           time.Time `json:"completed_at"`
+	RequestID       string    `json:"request_id"`
+	ProjectID       string    `json:"project_id"`
+	KeyID           string    `json:"key_id,omitempty"`
+	RequestedModel  string    `json:"requested_model,omitempty"`
+	Attempts        int64     `json:"attempts"`
+	InputTokens     int64     `json:"input_tokens"`
+	OutputTokens    int64     `json:"output_tokens"`
+	CostMicrosUSD   int64     `json:"cost_micros_usd"`
+	UnknownAttempts int64     `json:"unknown_attempts"`
+	Fallbacks       int64     `json:"fallbacks"`
+	Outcome         string    `json:"outcome"`
+	AcceptedAt      time.Time `json:"accepted_at"`
+	CompletedAt     time.Time `json:"completed_at"`
 }
 
 type Bucket struct {
@@ -101,7 +100,6 @@ type Bucket struct {
 	EstimatedInputTokens   int64     `json:"estimated_input_tokens,omitempty"`
 	EstimatedOutputTokens  int64     `json:"estimated_output_tokens,omitempty"`
 	CostMicrosUSD          int64     `json:"cost_micros_usd"`
-	OriginalCostMicrosUSD  int64     `json:"original_cost_micros_usd"`
 	EstimatedCostMicrosUSD int64     `json:"estimated_cost_micros_usd,omitempty"`
 	UnknownAttempts        int64     `json:"unknown_attempts"`
 	Errors                 int64     `json:"errors"`
@@ -295,7 +293,6 @@ func (a *Aggregate) Apply(record ledger.Record) error {
 			ProviderCacheWriteInputTokens: event.ProviderCacheWriteInputTokens,
 			ProviderReasoningTokens:       event.ProviderReasoningTokens,
 			PreparedOutputTokens:          event.PreparedOutputTokens, CostMicrosUSD: committedCostValue,
-			OriginalCostMicrosUSD: committedCostValue, FinalCostMicrosUSD: committedCostValue,
 			LeaseMode: event.LeaseMode, PriceEvidenceStatus: evidenceStatus, CostValueStatus: costStatus,
 			PriceSnapshot: priceSnapshot, InputCostMicrosUSD: inputCost, OutputCostMicrosUSD: outputCost, FixedCostMicrosUSD: fixedCost,
 			Tags:          tags,
@@ -320,9 +317,6 @@ func (a *Aggregate) Apply(record ledger.Record) error {
 		if err := addInt64(&accumulator.summary.CostMicrosUSD, committedCost); err != nil {
 			return err
 		}
-		if err := addInt64(&accumulator.summary.OriginalCostMicrosUSD, committedCost); err != nil {
-			return err
-		}
 		if !costKnown {
 			if err := addInt64(&accumulator.summary.UnknownAttempts, 1); err != nil {
 				return err
@@ -344,9 +338,6 @@ func (a *Aggregate) Apply(record ledger.Record) error {
 			return err
 		}
 		if err := addInt64(&bucket.CostMicrosUSD, committedCost); err != nil {
-			return err
-		}
-		if err := addInt64(&bucket.OriginalCostMicrosUSD, committedCost); err != nil {
 			return err
 		}
 		if !costKnown {
@@ -373,9 +364,6 @@ func (a *Aggregate) Apply(record ledger.Record) error {
 			return err
 		}
 		if err := addInt64(&a.totals.CostMicrosUSD, committedCost); err != nil {
-			return err
-		}
-		if err := addInt64(&a.totals.OriginalCostMicrosUSD, committedCost); err != nil {
 			return err
 		}
 		if !costKnown {

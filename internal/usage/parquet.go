@@ -456,7 +456,7 @@ func (e *Exporter) publishPartition(date string, attempts []AttemptEvent) (Manif
 		if err := addInt64(&entry.OutputTokens, attempt.ProviderOutputTokens); err != nil {
 			return ManifestFile{}, err
 		}
-		if cost, ok := originalAttemptCost(attempt); ok {
+		if cost, ok := attempt.KnownCostMicrosUSD(); ok {
 			if err := addInt64(&entry.CostMicrosUSD, cost); err != nil {
 				return ManifestFile{}, err
 			}
@@ -739,7 +739,7 @@ func verifyRowsV2(rows []parquetAttemptV2, entry ManifestFile, seen map[string]s
 }
 
 func toParquetAttempt(attempt AttemptEvent) parquetAttempt {
-	cost, costKnown := originalAttemptCost(attempt)
+	cost, costKnown := attempt.KnownCostMicrosUSD()
 	inputCost, outputCost, fixedCost := int64(0), int64(0), int64(0)
 	if attempt.InputCostMicrosUSD != nil {
 		inputCost = *attempt.InputCostMicrosUSD
@@ -786,16 +786,6 @@ func toParquetAttempt(attempt AttemptEvent) parquetAttempt {
 		HTTPStatus: int32(attempt.HTTPStatus), LatencyMillis: attempt.LatencyMillis,
 		RetryCount: int32(attempt.RetryCount), FallbackCount: int32(attempt.FallbackCount),
 	}
-}
-
-func originalAttemptCost(attempt AttemptEvent) (int64, bool) {
-	if attempt.OriginalCostMicrosUSD != nil {
-		return *attempt.OriginalCostMicrosUSD, true
-	}
-	if attempt.CostMicrosUSD != nil {
-		return *attempt.CostMicrosUSD, true
-	}
-	return 0, false
 }
 
 func sameRows(left, right []parquetAttempt) bool {

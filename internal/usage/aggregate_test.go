@@ -101,15 +101,15 @@ func TestAggregatePreservesKnownFreeUnknownAndLegacySemantics(t *testing.T) {
 		}
 	}
 	snapshot := aggregate.Snapshot()
-	if snapshot.Totals.OriginalCostMicrosUSD != 7 || snapshot.Totals.CostMicrosUSD != 7 || snapshot.Totals.UnknownAttempts != 1 {
+	if snapshot.Totals.CostMicrosUSD != 7 || snapshot.Totals.UnknownAttempts != 1 {
 		t.Fatalf("totals=%#v", snapshot.Totals)
 	}
 	byID := map[string]AttemptEvent{}
 	for _, attempt := range snapshot.Attempts {
 		byID[attempt.AttemptID] = attempt
 	}
-	if !containsTag(byID["att_legacy"].Tags, "LEGACY") || *byID["att_legacy"].FinalCostMicrosUSD != 7 ||
-		!containsTag(byID["att_free"].Tags, "FREE") || !containsTag(byID["att_unknown"].Tags, "UNKNOWN") || byID["att_unknown"].FinalCostMicrosUSD != nil {
+	if !containsTag(byID["att_legacy"].Tags, "LEGACY") || *byID["att_legacy"].CostMicrosUSD != 7 ||
+		!containsTag(byID["att_free"].Tags, "FREE") || !containsTag(byID["att_unknown"].Tags, "UNKNOWN") || byID["att_unknown"].CostMicrosUSD != nil {
 		t.Fatalf("attempts=%#v", byID)
 	}
 	encoded, err := json.Marshal(byID["att_unknown"])
