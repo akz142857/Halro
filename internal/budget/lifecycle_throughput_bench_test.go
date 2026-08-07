@@ -102,3 +102,45 @@ func runLifecycle(ctx context.Context, manager *Manager, snapshot *domain.PriceS
 	}
 	return nil
 }
+
+// The project lock counters are what make ADR 0018's per-project ceiling visible
+// in production, where the only other symptom is latency rising for no stated
+// reason. Assert they move, and that contention is actually observable: with
+// several workers on one project, waiting must dominate holding.
+func TestProjectLockStatsExposeContention(t *testing.T) {
+	manager, _, closeLog := newTestManager(t)
+	defer closeLog()
+	snapshot := testPriceSnapshot(t, domain.BillingModeMetered)
+	ctx := context.Background()
+
+	var group sync.WaitGroup
+	for worker := 0; worker < 8; worker++ {
+		group.Add(1)
+		go func(worker int) {
+			defer group.Done()
+			if err := runLifecycle(ctx, manager, snapshot, "project_contended", worker); err != nil {
+				t.Error(err)
+			}
+		}(worker)
+	}
+	group.Wait()
+
+	stats := manager.ProjectLockStats()
+	// Five events per lifecycle, eight lifecycles.
+	if stats.Acquisitions != 40 {
+		t.Fatalf("counted %d acquisitions, want 40", stats.Acquisitions)
+	}
+	if stats.HeldDuration <= 0 {
+		t.Fatal("lock hold time went unmeasured")
+	}
+	if stats.WaitDuration <= 0 {
+		t.Fatal("eight workers on one project produced no measured wait")
+	}
+	// Every acquisition but the first has to wait out a durable append, so the
+	// aggregate wait must exceed one hold. If this ever inverts, the metric has
+	// stopped describing contention.
+	if stats.WaitDuration <= stats.HeldDuration/time.Duration(stats.Acquisitions) {
+		t.Fatalf("wait=%s is not larger than a single mean hold of %s",
+			stats.WaitDuration, stats.HeldDuration/time.Duration(stats.Acquisitions))
+	}
+}

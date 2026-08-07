@@ -85,3 +85,50 @@ func benchChainKey() []byte {
 	}
 	return key
 }
+
+// The batch and sync counters exist so an operator can tell an fsync-bound host
+// from an under-concurrent one. A counter that silently stays at zero would be
+// worse than no counter at all, so this asserts they actually move, and that
+// records/batches really is a group-commit size rather than a per-record count.
+func TestAppendStatsRecordDurabilityWork(t *testing.T) {
+	status := NewStatus()
+	log, err := OpenWithOptions(filepath.Join(t.TempDir(), "usage.wal"), status, Options{ChainKey: benchChainKey()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer log.Close()
+	ctx := context.Background()
+
+	const appends = 24
+	var group sync.WaitGroup
+	for index := 0; index < appends; index++ {
+		group.Add(1)
+		go func(index int) {
+			defer group.Done()
+			event := validReservation(fmt.Sprintf("evt_stats_%d", index), fmt.Sprintf("att_stats_%d", index))
+			if _, err := log.Append(ctx, event); err != nil {
+				t.Error(err)
+			}
+		}(index)
+	}
+	group.Wait()
+
+	stats := log.Stats()
+	if stats.Records != appends {
+		t.Fatalf("recorded %d appends, want %d", stats.Records, appends)
+	}
+	if stats.Batches == 0 || stats.Batches > stats.Records {
+		t.Fatalf("batches=%d is not a group-commit count for %d records", stats.Batches, stats.Records)
+	}
+	if stats.Syncs == 0 {
+		t.Fatal("no durability barriers were counted")
+	}
+	if stats.SyncDuration <= 0 {
+		t.Fatalf("sync duration is %s; the fsync cost every ceiling here is bounded by went unmeasured", stats.SyncDuration)
+	}
+	// One barrier per committed batch: if these ever diverge, the mean derived in
+	// Prometheus from _sum/_count stops describing one fsync.
+	if stats.Syncs != stats.Batches {
+		t.Fatalf("syncs=%d batches=%d", stats.Syncs, stats.Batches)
+	}
+}

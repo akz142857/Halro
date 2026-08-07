@@ -846,7 +846,7 @@ func (s *Store) PrepareDeploymentPricePin(ctx context.Context, deploymentID, att
 	// price still serves under the unknown-price policy). Only genuine faults are
 	// returned as errors, so only they can spoil a batch.
 	var outcome error
-	err := s.db.Batch(func(tx *bbolt.Tx) error {
+	err := s.batch(func(tx *bbolt.Tx) error {
 		// Everything the caller reads is reset here, not accumulated across
 		// runs: this body may execute more than once for a single call, and a
 		// re-run happens in a fresh transaction that can observe state another
@@ -1004,7 +1004,7 @@ func (s *Store) CommitDeploymentPricePin(ctx context.Context, attemptID, snapsho
 	// See PrepareDeploymentPricePin: expected outcomes travel in outcome so they
 	// cannot abort a batch shared with unrelated deployments' commits.
 	var outcome error
-	err := s.db.Batch(func(tx *bbolt.Tx) error {
+	err := s.batch(func(tx *bbolt.Tx) error {
 		intent, outcome = domain.PricePinIntent{}, nil
 		bucket := tx.Bucket(bucketDeploymentPricePins)
 		raw := bucket.Get([]byte(attemptID))

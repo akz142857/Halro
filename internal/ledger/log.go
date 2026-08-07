@@ -106,6 +106,12 @@ type Log struct {
 	batches        atomic.Uint64
 	writtenRecords atomic.Uint64
 	appendErrors   atomic.Uint64
+	// syncs and syncNanos accumulate the cost of the one durability barrier per
+	// batch. Every throughput ceiling in this process is bounded by it, and its
+	// cost differs by orders of magnitude between an APFS laptop and an NVMe
+	// server, so a benchmark taken anywhere else is not transferable without it.
+	syncs     atomic.Uint64
+	syncNanos atomic.Int64
 
 	// chainKey, chainHash and chainSequence carry the epoch-4 MAC/hash-chain
 	// state forward from whatever OpenWithOptions established (the verified
@@ -152,9 +158,15 @@ type DurabilityWriter interface {
 }
 
 type AppendStats struct {
-	Batches       uint64
-	Records       uint64
-	Errors        uint64
+	Batches uint64
+	Records uint64
+	Errors  uint64
+	// Syncs and SyncDuration describe the durability barrier. Records/Batches is
+	// the mean group-commit size, which is what separates "this host's fsync is
+	// the ceiling" from "not enough concurrent appenders to coalesce" — two
+	// situations with the same symptom and opposite remedies.
+	Syncs         uint64
+	SyncDuration  time.Duration
 	QueueDepth    int
 	QueueCapacity int
 }
@@ -457,7 +469,9 @@ func (l *Log) Status() *Status {
 func (l *Log) Stats() AppendStats {
 	return AppendStats{
 		Batches: l.batches.Load(), Records: l.writtenRecords.Load(),
-		Errors: l.appendErrors.Load(), QueueDepth: len(l.appendQueue),
+		Errors: l.appendErrors.Load(),
+		Syncs:  l.syncs.Load(), SyncDuration: time.Duration(l.syncNanos.Load()),
+		QueueDepth:    len(l.appendQueue),
 		QueueCapacity: cap(l.appendQueue),
 	}
 }
@@ -548,10 +562,17 @@ func (l *Log) writeBatch(batch []appendRequest) {
 		respondBatch(batch, nil, fmt.Errorf("append ledger: %w", err))
 		return
 	}
-	if err := l.durability.Sync(); err != nil {
+	// Timed on both paths: a failing fsync is usually a slow one first, and a
+	// sum that silently excluded failures would understate exactly the incident
+	// an operator is trying to see.
+	syncStarted := time.Now()
+	syncErr := l.durability.Sync()
+	l.syncNanos.Add(int64(time.Since(syncStarted)))
+	l.syncs.Add(1)
+	if syncErr != nil {
 		l.status.MarkUnavailable()
 		l.appendErrors.Add(uint64(len(batch)))
-		respondBatch(batch, nil, fmt.Errorf("sync ledger: %w", err))
+		respondBatch(batch, nil, fmt.Errorf("sync ledger: %w", syncErr))
 		return
 	}
 	l.sequence = sequence

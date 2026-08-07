@@ -149,3 +149,20 @@ groups:
         for: 5m
         labels: {severity: critical, service: prometheus, owner: sre, category: platform}
         annotations: {summary: Prometheus TSDB and WAL exceed the local 4.25 GiB critical budget}
+      # Thresholds below are starting points, not universal truths: fsync cost
+      # spans orders of magnitude between filesystems, so re-baseline them per
+      # host from heimdall:wal_sync:mean5m before trusting them.
+      - alert: HeimdallWALSyncSlow
+        expr: heimdall:wal_sync:mean5m > 0.05
+        for: 10m
+        labels: {severity: warning, service: heimdall, owner: sre, category: accounting}
+        annotations:
+          summary: Heimdall Ledger fsync is slow enough to cap accounting throughput
+          runbook_url: /docs/observability/operations-runbook.md
+      - alert: HeimdallAccountingProjectLockSaturated
+        expr: heimdall:accounting_project_lock_wait:mean5m > 0.25
+        for: 15m
+        labels: {severity: warning, service: heimdall, owner: sre, category: accounting}
+        annotations:
+          summary: Heimdall requests are queueing on one project's accounting lock
+          runbook_url: /docs/observability/operations-runbook.md
