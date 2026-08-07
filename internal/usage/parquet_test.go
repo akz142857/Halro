@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/akz142857/Heimdall/internal/ledger"
-	"github.com/parquet-go/parquet-go"
 )
 
 func TestExporterPublishesVerifiableIdempotentPartitions(t *testing.T) {
@@ -154,54 +153,103 @@ func TestExporterDetectsParquetTampering(t *testing.T) {
 	}
 }
 
-func TestExporterDualReadsAndDeterministicallyUpgradesV2Manifest(t *testing.T) {
+func TestManifestBelowTheReadableRangeIsRefused(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "usage")
 	exporter, err := NewExporter(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	date := "2026-08-04"
-	relative := filepath.Join("date="+date, "usage-v2.parquet")
-	path := filepath.Join(root, relative)
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	// Schema 2 partitions used a different column set and were read through a
+	// second struct with its own verify path. Two shapes for one thing is the
+	// cost; refusing the older shape outright is what removes it. The refusal
+	// has to be explicit rather than a misparse, so that an operator who
+	// somehow has one is told why.
+	stale := Manifest{SchemaVersion: parquetSchemaMinReadable - 1, LastSequence: 0}
+	if err := exporter.commitManifest(stale); err != nil {
 		t.Fatal(err)
 	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o600)
+	if _, err := exporter.Export(Snapshot{}); err == nil {
+		t.Fatal("a manifest below the readable range must be refused, not upgraded")
+	}
+	if err := exporter.Verify(nil); err == nil {
+		t.Fatal("verification must refuse a manifest below the readable range")
+	}
+}
+
+// Every install running the previous release carries a schema 3 manifest, so the
+// token-tier bump has to open and upgrade one rather than refuse it. Gating on
+// an explicit {2, current} pair would reject exactly the installs being upgraded,
+// and the failure would surface as a dead usage pipeline rather than a migration
+// error.
+func TestExporterUpgradesPreviousSchemaManifestRatherThanRejectingIt(t *testing.T) {
+	for previous := parquetSchemaMinReadable; previous < parquetSchemaVersion; previous++ {
+		root := filepath.Join(t.TempDir(), "usage")
+		exporter, err := NewExporter(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stale := Manifest{SchemaVersion: previous, LastSequence: 0}
+		if err := exporter.commitManifest(stale); err != nil {
+			t.Fatal(err)
+		}
+		snapshot := Snapshot{Attempts: []AttemptEvent{{
+			EventID: "tiered", Sequence: 1, AttemptID: "a", ProjectID: "p",
+			ProviderInputTokens: 100, ProviderOutputTokens: 10,
+			ProviderCachedInputTokens: 80, ProviderCacheWriteInputTokens: 5,
+			ProviderReasoningTokens: 4, CostMicrosUSD: ledger.MicrosUSD(7),
+		}}}
+		upgraded, err := exporter.Export(snapshot)
+		if err != nil {
+			t.Fatalf("schema %d manifest was rejected instead of upgraded: %v", previous, err)
+		}
+		if upgraded.SchemaVersion != parquetSchemaVersion {
+			t.Fatalf("schema %d manifest upgraded to %d", previous, upgraded.SchemaVersion)
+		}
+		if err := exporter.Verify(&snapshot); err != nil {
+			t.Fatalf("schema %d upgrade did not verify: %v", previous, err)
+		}
+	}
+}
+
+// The tiers are a breakdown of the totals, so a round trip must return them
+// intact rather than folding them in or dropping them.
+func TestExportedRowsPreserveProviderTokenTiers(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "usage")
+	exporter, err := NewExporter(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	writer := parquet.NewGenericWriter[parquetAttemptV2](file)
-	row := parquetAttemptV2{SchemaVersion: 2, EventID: "legacy_v2", RequestID: "r", AttemptID: "a", Sequence: 1, ProjectID: "p", ProviderInputTokens: 3, ProviderOutputTokens: 2, CostMicrosUSD: 7, CompletedAtMicros: time.Now().UTC().UnixMicro()}
-	if _, err = writer.Write([]parquetAttemptV2{row}); err != nil {
-		t.Fatal(err)
-	}
-	if err = writer.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err = file.Close(); err != nil {
-		t.Fatal(err)
-	}
-	checksum, err := fileSHA256(path)
+	snapshot := Snapshot{Attempts: []AttemptEvent{{
+		EventID: "tiered", Sequence: 1, AttemptID: "a", ProjectID: "p",
+		ProviderInputTokens: 100, ProviderOutputTokens: 10,
+		ProviderCachedInputTokens: 80, ProviderCacheWriteInputTokens: 5,
+		ProviderReasoningTokens: 4, CostMicrosUSD: ledger.MicrosUSD(7),
+	}}}
+	manifest, err := exporter.Export(snapshot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacy := Manifest{SchemaVersion: 2, LastSequence: 1, Files: []ManifestFile{{Path: filepath.ToSlash(relative), Date: date, SHA256: checksum, MinSequence: 1, MaxSequence: 1, Records: 1, InputTokens: 3, OutputTokens: 2, CostMicrosUSD: 7}}}
-	if err = exporter.commitManifest(legacy); err != nil {
-		t.Fatal(err)
+	if len(manifest.Files) != 1 {
+		t.Fatalf("manifest files=%d", len(manifest.Files))
 	}
-	snapshot := Snapshot{Attempts: []AttemptEvent{{EventID: "legacy_v2", Sequence: 1, AttemptID: "a", ProjectID: "p", ProviderInputTokens: 3, ProviderOutputTokens: 2, CostMicrosUSD: ledger.MicrosUSD(7)}}}
-	if err = exporter.Verify(&snapshot); err != nil {
-		t.Fatal(err)
-	}
-	upgraded, err := exporter.Export(snapshot)
+	rows, err := readAttemptRows(
+		filepath.Join(root, filepath.FromSlash(manifest.Files[0].Path)),
+		manifest.Files[0].Format,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if upgraded.SchemaVersion != 3 || upgraded.Files[0].SchemaVersion != 2 {
-		t.Fatalf("upgraded=%#v", upgraded)
+	if len(rows) != 1 {
+		t.Fatalf("rows=%d", len(rows))
 	}
-	if err = exporter.Verify(&snapshot); err != nil {
-		t.Fatal(err)
+	row := rows[0]
+	if row.ProviderCachedInputTokens != 80 || row.ProviderCacheWriteInputTokens != 5 || row.ProviderReasoningTokens != 4 {
+		t.Fatalf("tiers were not round-tripped: %#v", row)
+	}
+	// The tiers partition the input total; a reader that summed them onto it
+	// would double-count the cached span.
+	if row.ProviderInputTokens != 100 {
+		t.Fatalf("input total changed to %d", row.ProviderInputTokens)
 	}
 }
 
@@ -236,5 +284,61 @@ func TestExporterPrunesOnlyExpiredPartitions(t *testing.T) {
 	}
 	if err := exporter.Verify(&snapshot); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestVerifyAcceptsRowsWrittenAtThePreviousSchema is the shape a real install
+// has and the shape the fixtures did not: partitions are never rewritten, so
+// after a schema bump every row already on disk still carries the version it
+// was written under. The upgrade test above starts from an empty manifest and
+// then writes fresh rows, so every row it verifies is at the current version —
+// it exercises the manifest gate and never the row check. Demanding the
+// current version per row turned a bump into a failed verification for exactly
+// the installs that have history, while a brand new one passed.
+func TestVerifyAcceptsRowsWrittenAtThePreviousSchema(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "usage")
+	exporter, err := NewExporter(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := Snapshot{Attempts: []AttemptEvent{{
+		EventID: "event_1", RequestID: "request_1", AttemptID: "attempt_1",
+		Sequence: 1, ProjectID: "project_1", StartedAt: time.Now().UTC(),
+		CompletedAt: time.Now().UTC(), Status: "success",
+		ProviderInputTokens: 100, ProviderOutputTokens: 10,
+	}}}
+	manifest, err := exporter.Export(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Rewrite the partition as the previous schema wrote it: same rows, older
+	// version stamp, and no tier columns populated.
+	path := filepath.Join(root, filepath.FromSlash(manifest.Files[0].Path))
+	rows, err := readAttemptRows(path, manifest.Files[0].format())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range rows {
+		rows[index].SchemaVersion = parquetSchemaVersion - 1
+		rows[index].ProviderCachedInputTokens = 0
+		rows[index].ProviderCacheWriteInputTokens = 0
+		rows[index].ProviderReasoningTokens = 0
+	}
+	if err := writeParquetAtomic(path, rows); err != nil {
+		t.Fatal(err)
+	}
+	checksum, err := fileSHA256(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest.Files[0].SHA256 = checksum
+	manifest.Files[0].SchemaVersion = parquetSchemaVersion - 1
+	if err := exporter.commitManifest(manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := exporter.Verify(&snapshot); err != nil {
+		t.Fatalf("rows written at schema %d must still verify: %v", parquetSchemaVersion-1, err)
 	}
 }

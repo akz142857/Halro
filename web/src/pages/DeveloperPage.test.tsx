@@ -266,13 +266,18 @@ describe("DeveloperPage", () => {
     expect(screen.getByLabelText("Gateway Key")).toHaveValue("");
 
     fireEvent.click(screen.getByRole("button", { name: "新建调试 Key" }));
+    // Minting is gated the same way a deletion is: the key is shown once and
+    // outlives this session, so the dialog asks who is asking.
+    fireEvent.change(screen.getByLabelText("当前密码"), { target: { value: "a passphrase" } });
+    fireEvent.click(screen.getAllByRole("button", { name: "新建调试 Key" }).at(-1)!);
 
     await waitFor(() => expect(screen.getByLabelText("Gateway Key")).toHaveValue("hm_created_secret"));
     // The key expires on its own so a forgotten debug key cannot stay usable.
     expect(createKey).toHaveBeenCalledWith(
-      project.id, expect.stringContaining("工作台调试"), expect.any(String), expect.any(String),
+      project.id, expect.stringContaining("工作台调试"), expect.any(String),
+      expect.objectContaining({ currentPassword: "a passphrase" }), expect.any(String),
     );
-    const expiresAt = Date.parse(createKey.mock.calls[0][3] as string);
+    const expiresAt = Date.parse(createKey.mock.calls[0][4] as string);
     expect(expiresAt).toBeGreaterThan(Date.now() + 23 * 60 * 60 * 1000);
     expect(expiresAt).toBeLessThanOrEqual(Date.now() + 24 * 60 * 60 * 1000);
     expect(screen.getByLabelText("Gateway Key")).toHaveAttribute("type", "password");

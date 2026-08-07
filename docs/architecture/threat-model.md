@@ -31,6 +31,15 @@ Process
 
 The host root account is trusted for v1. Audit chaining detects offline record mutation but is not non-repudiation against a root attacker.
 
+Ledger frame integrity (ADR 0016) draws the same boundary. The MAC and hash chain
+stop someone who can write to `ledger.wal` but does not hold the Master Key:
+offline edits, a truncated suffix, a file swapped in from elsewhere. They do not
+stop the holder of `master.key` in `mode: file`, who can derive the chain key and
+recompute anything they rewrite — the audited party and the auditor are the same
+principal there. `mode: key_slots` narrows this, since the key is not on disk and
+KMS use leaves its own record. The external anchor (ADR 0015) is what makes a
+rewrite detectable by someone other than the rewriter.
+
 ## Primary threats and controls
 
 | Threat | Primary controls |

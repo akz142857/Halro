@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -378,7 +379,7 @@ func TestLoginRateWindowRenewsEachMinute(t *testing.T) {
 // record it once per window, not to stop recording it.
 func TestAdminRateLimiterReportsEachThrottledWindowOnce(t *testing.T) {
 	var mu sync.Mutex
-	windows := map[string]adminLoginWindow{}
+	windows := &adminRateState{windows: map[string]adminLoginWindow{}}
 	now := time.Date(2026, 8, 5, 9, 30, 0, 0, time.UTC)
 	const limit = 3
 	for i := 0; i < limit; i++ {
@@ -436,4 +437,28 @@ func adminRequest(
 		request.Header.Set("Content-Type", "application/json")
 	}
 	return request
+}
+
+// TestAdminRateLimiterStaysBoundedUnderAddressFlood covers what the old prune
+// did not. Every entry in the map belongs to the current minute, so a prune
+// that deleted entries older than the minute walked the whole map on every
+// request and removed nothing — quadratic work while the map still grew for as
+// long as distinct addresses kept arriving, on a path reachable before
+// authentication.
+func TestAdminRateLimiterStaysBoundedUnderAddressFlood(t *testing.T) {
+	var mu sync.Mutex
+	state := &adminRateState{windows: map[string]adminLoginWindow{}}
+	now := time.Date(2026, 8, 5, 9, 30, 0, 0, time.UTC)
+	for attempt := range maxTrackedAdminSources * 3 {
+		allowAdminRate(&mu, state, fmt.Sprintf("198.51.100.%d:40000", attempt), now, 5)
+	}
+	if tracked := len(state.windows); tracked > maxTrackedAdminSources {
+		t.Fatalf("tracked %d sources, want at most %d", tracked, maxTrackedAdminSources)
+	}
+	// Rolling into a new minute hands the memory back rather than keeping the
+	// array the flood grew.
+	allowAdminRate(&mu, state, "203.0.113.1:1234", now.Add(time.Minute), 5)
+	if tracked := len(state.windows); tracked != 1 {
+		t.Fatalf("after the window rolled over, tracked=%d, want 1", tracked)
+	}
 }

@@ -74,6 +74,12 @@ type usageMetadata struct {
 	PromptTokenCount     int64 `json:"promptTokenCount"`
 	CandidatesTokenCount int64 `json:"candidatesTokenCount"`
 	TotalTokenCount      int64 `json:"totalTokenCount"`
+	// promptTokenCount already counts cachedContentTokenCount, so the cached
+	// figure is a subset. thoughtsTokenCount is not counted in
+	// candidatesTokenCount and is billed at the output rate, so it has to be
+	// added there rather than merely reported.
+	CachedContentTokenCount int64 `json:"cachedContentTokenCount,omitempty"`
+	ThoughtsTokenCount      int64 `json:"thoughtsTokenCount,omitempty"`
 }
 
 type embeddingResponse struct {
@@ -467,8 +473,18 @@ func openAIUsage(source usageMetadata) *openaiapi.Usage {
 	if source.PromptTokenCount == 0 && source.CandidatesTokenCount == 0 && source.TotalTokenCount == 0 {
 		return nil
 	}
-	total := max(source.TotalTokenCount, source.PromptTokenCount+source.CandidatesTokenCount)
-	return &openaiapi.Usage{PromptTokens: source.PromptTokenCount, CompletionTokens: source.CandidatesTokenCount, TotalTokens: total}
+	// Thinking tokens sit outside candidatesTokenCount but bill at the output
+	// rate, so folding them in is what makes the completion figure chargeable.
+	completion := source.CandidatesTokenCount + source.ThoughtsTokenCount
+	total := max(source.TotalTokenCount, source.PromptTokenCount+completion)
+	usage := &openaiapi.Usage{
+		PromptTokens:     source.PromptTokenCount,
+		CompletionTokens: completion,
+		TotalTokens:      total,
+	}
+	usage.SetCachedPromptTokens(source.CachedContentTokenCount)
+	usage.SetReasoningTokens(source.ThoughtsTokenCount)
+	return usage
 }
 
 func partsText(parts []part) string {

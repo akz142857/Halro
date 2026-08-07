@@ -26,7 +26,7 @@ WEB_SOURCES := $(shell find web/src web/scripts -type f) \
 WEB_DEPS_STAMP := web/node_modules/.heimdall-install-stamp
 WEB_BUILD_STAMP := web/node_modules/.heimdall-build-stamp
 
-.PHONY: help init-help setup init reset start dev build deadman frontend frontend-test backup test race vet observability-check check clean version
+.PHONY: help init-help setup init reset start dev build deadman frontend frontend-test backup test cover race vet fmt-check observability-check check clean version
 
 help:
 	@echo "Heimdall Makefile commands:"
@@ -131,8 +131,18 @@ $(WEB_BUILD_STAMP): $(WEB_DEPS_STAMP) $(WEB_SOURCES)
 frontend-test: $(WEB_DEPS_STAMP)
 	cd web && npm test
 
+# -shuffle catches the order dependencies a fixed order hides: shared global
+# state, one test leaving a clock or a directory another relies on. It found
+# nothing on the day it was added, which is the point at which to add it —
+# afterwards it stays cheap and only ever reports something new.
 test:
-	go test ./...
+	go test -shuffle=on ./...
+
+# Coverage is not gated on a number. It exists so "which branch has no test"
+# is a question the tooling answers rather than one somebody greps for by hand.
+cover:
+	go test -shuffle=on -coverprofile=coverage.out ./...
+	go tool cover -func=coverage.out | tail -1
 
 race:
 	go test -race ./...
@@ -143,11 +153,19 @@ vet:
 observability-check:
 	./deploy/observability/validate.sh
 
-check: test race vet frontend-test observability-check
+check: fmt-check test race vet frontend-test observability-check
+
+# Nothing enforced gofmt, so an unformatted file reached main and stayed there.
+# The convention in CLAUDE.md is only a convention until something fails on it.
+fmt-check:
+	@unformatted=$$(gofmt -l ./cmd ./internal ./tools); \
+	if [ -n "$$unformatted" ]; then \
+		echo "gofmt needed:"; echo "$$unformatted"; exit 1; \
+	fi
 
 clean:
 	rm -rf bin
-	rm -f $(WEB_DEPS_STAMP) $(WEB_BUILD_STAMP)
+	rm -f $(WEB_DEPS_STAMP) $(WEB_BUILD_STAMP) coverage.out
 
 version:
 	@echo "version: $(RELEASE_VERSION)"

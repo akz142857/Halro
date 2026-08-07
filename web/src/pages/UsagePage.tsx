@@ -1,10 +1,11 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { api } from "../api";
-import { ErrorState, Loading, PageHeader, StatusDot } from "../components";
+import { EmptyState, ErrorState, Loading, LoadMore, PageHeader, StatusDot } from "../components";
 import { compactNumber, money, useInstantFormatter } from "../format";
 import { Link } from "../navigation";
 import { useTranslation } from "react-i18next";
+import { useAccountingTimeZone, zonedInputToISO } from "../timezone";
 import type { UsageAttempt } from "../types";
 
 export function UsagePage() {
@@ -24,14 +25,15 @@ export function UsagePage() {
   const [projectID, setProjectID] = useState(() => new URLSearchParams(window.location.search).get("project_id") ?? "");
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
+  const timeZone = useAccountingTimeZone();
   const usage = useInfiniteQuery({
-    queryKey: ["usage", status, model, requestID, projectID, start, end],
+    queryKey: ["usage", status, model, requestID, projectID, start, end, timeZone],
     initialPageParam: "",
     queryFn: ({ pageParam }) => api.usage(`?${new URLSearchParams({
       limit: "100", ...(status ? { status } : {}), ...(model ? { model } : {}), ...(requestID ? { request_id: requestID } : {}),
       ...(projectID ? { project_id: projectID } : {}),
-      ...(start ? { start: new Date(start).toISOString() } : {}),
-      ...(end ? { end: new Date(end).toISOString() } : {}),
+      ...(start ? { start: zonedInputToISO(start, timeZone) } : {}),
+      ...(end ? { end: zonedInputToISO(end, timeZone) } : {}),
       ...(pageParam ? { cursor: pageParam } : {}),
     })}`),
     getNextPageParam: (page) => page.next_cursor || undefined,
@@ -68,7 +70,13 @@ export function UsagePage() {
       </div>
       {usage.isPending && <Loading />}
       {usage.isError && <ErrorState error={usage.error} />}
-      {usage.data && (
+      {/* Filtering to nothing rendered a table with only a header, which reads
+          as a broken page rather than as an answer. Every other list here says
+          so in words. */}
+      {usage.data && attempts.length === 0 && (
+        <EmptyState title={t("usage.emptyTitle")}>{t("usage.emptyDescription")}</EmptyState>
+      )}
+      {usage.data && attempts.length > 0 && (
         <div className="table-shell">
           <table className="usage-table">
             <colgroup>
@@ -97,9 +105,11 @@ export function UsagePage() {
               ))}
             </tbody>
           </table>
-          {usage.hasNextPage && <button className="button ghost load-more" disabled={usage.isFetchingNextPage} onClick={() => usage.fetchNextPage()}>
-            {usage.isFetchingNextPage ? t("common.loading") : t("common.loadMore")}
-          </button>}
+          {/* The shared control, so this list pages on scroll like the others
+              rather than only on a click. */}
+          {usage.hasNextPage && (
+            <LoadMore label={t("common.loadMore")} busy={usage.isFetchingNextPage} onLoad={() => usage.fetchNextPage()} />
+          )}
         </div>
       )}
     </>
@@ -113,7 +123,7 @@ function CostCell({ attempt }: { attempt: UsageAttempt }) {
   const { t } = useTranslation();
   return (
     <>
-      <strong>{attempt.final_cost_micros_usd == null ? t("usage.unknownCost") : money(attempt.final_cost_micros_usd)}</strong>
+      <strong>{attempt.cost_micros_usd == null ? t("usage.unknownCost") : money(attempt.cost_micros_usd)}</strong>
       {!!attempt.tags?.length && <small>{attempt.tags.map((tag) => <span className="badge" key={tag}>{tag}</span>)}</small>}
       <details className="cost-evidence">
         <summary>{t("usage.costEvidence")}</summary>

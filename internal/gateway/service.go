@@ -144,7 +144,20 @@ type requestRun struct {
 	actualTPMTokens             int64
 	providerCalled              bool
 	providerFailed              bool
+	finalized                   bool
 	tokenGuardPricingViewDigest string
+}
+
+// finalize closes out the request's accounting exactly once. Every exit path
+// that knows why the request ended calls this; close() covers the paths that
+// return before reaching one. Without the guard the two would double-append a
+// RequestFinalized event for the same request.
+func (run *requestRun) finalize(outcome string) error {
+	if run.finalized {
+		return nil
+	}
+	run.finalized = true
+	return run.service.finalizeRequest(run.requestLease, outcome)
 }
 
 type activeAttempt struct {
@@ -223,6 +236,17 @@ func (s *Service) beginRequestRun(
 }
 
 func (run *requestRun) close() {
+	// A request that was accepted into the ledger but never finalized stays
+	// "in flight" forever: the usage aggregate keeps its entry, the entry is
+	// checkpointed into bbolt, and heimdall_active_requests never comes back
+	// down. Rejections that never reach a provider — budget exhausted, breaker
+	// open, concurrency full — are the paths most likely to return before any
+	// caller thinks to finalize, and they are also the cheapest to trigger in
+	// bulk. Finalizing here makes "the run ended" the thing that closes the
+	// accounting, rather than every individual return statement remembering to.
+	if !run.finalized {
+		_ = run.finalize("rejected")
+	}
 	run.tokenGuardLease.Release()
 	_ = run.policyLease.Reconcile(run.actualTPMTokens, run.service.now())
 	run.policyLease.Release()
@@ -340,7 +364,7 @@ func (s *Service) startAttempt(
 		}
 		providerLease.Release()
 		breakerLease.Abandon()
-		finalizeErr := s.finalizeRequest(run.requestLease, "accounting_error")
+		finalizeErr := run.finalize("accounting_error")
 		return nil, gatewayError(
 			"accounting_unavailable", "accounting is unavailable", 503,
 			errors.Join(err, finalizeErr),
@@ -356,7 +380,7 @@ func (s *Service) startAttempt(
 		providerLease.Release()
 		breakerLease.Abandon()
 		s.rejections.tokenGuard.Add(1)
-		finalizeErr := s.finalizeRequest(run.requestLease, "token_guard_rejected")
+		finalizeErr := run.finalize("token_guard_rejected")
 		return nil, gatewayError("token_guard_blocked", "the current attempt price exceeds Token Guard cost limits", http.StatusForbidden, finalizeErr)
 	}
 	metadata := budget.AttemptMetadata{
@@ -389,7 +413,7 @@ func (s *Service) startAttempt(
 		if errors.Is(err, budget.ErrExceeded) {
 			return nil, err
 		}
-		finalizeErr := s.finalizeRequest(run.requestLease, "accounting_error")
+		finalizeErr := run.finalize("accounting_error")
 		return nil, gatewayError(
 			"accounting_unavailable", "accounting is unavailable", 503,
 			errors.Join(err, finalizeErr),
@@ -401,7 +425,7 @@ func (s *Service) startAttempt(
 			providerLease.Release()
 			breakerLease.Abandon()
 			cleanupErr := s.settleAttempt(attempt, budget.Settlement{Outcome: "pin_commit_failed"})
-			finalizeErr := s.finalizeRequest(run.requestLease, "accounting_error")
+			finalizeErr := run.finalize("accounting_error")
 			return nil, gatewayError("accounting_unavailable", "accounting price pin could not be committed", 503, errors.Join(err, cleanupErr, finalizeErr))
 		}
 	}
@@ -412,7 +436,7 @@ func (s *Service) startAttempt(
 		providerLease.Release()
 		breakerLease.Abandon()
 		cleanupErr := s.settleAttempt(attempt, budget.Settlement{Outcome: "start_failed"})
-		finalizeErr := s.finalizeRequest(run.requestLease, "accounting_error")
+		finalizeErr := run.finalize("accounting_error")
 		return nil, gatewayError(
 			"accounting_unavailable", "accounting is unavailable", 503,
 			errors.Join(err, cleanupErr, finalizeErr),
@@ -479,7 +503,7 @@ func (attempt *activeAttempt) finish(providerErr error, settlement budget.Settle
 	enrichSettlement(&settlement, providerErr, attempt.startedAt, attempt.service.now())
 	if err := attempt.service.settleAttempt(attempt.accounting, settlement); err != nil {
 		attempt.reportBreaker(providerErr)
-		finalizeErr := attempt.service.finalizeRequest(attempt.run.requestLease, "accounting_error")
+		finalizeErr := attempt.run.finalize("accounting_error")
 		return gatewayError(
 			"accounting_unavailable", "request accounting could not be finalized", 503,
 			errors.Join(err, finalizeErr),
@@ -501,7 +525,7 @@ func (attempt *activeAttempt) abort(outcome string) error {
 	attempt.concurrency.Release()
 	attempt.breaker.Abandon()
 	cleanupErr := attempt.service.settleAttempt(attempt.accounting, budget.Settlement{Outcome: outcome})
-	finalizeErr := attempt.service.finalizeRequest(attempt.run.requestLease, outcome)
+	finalizeErr := attempt.run.finalize(outcome)
 	return errors.Join(cleanupErr, finalizeErr)
 }
 
@@ -761,7 +785,7 @@ func (s *Service) Chat(
 		return openaiapi.ChatCompletionResponse{}, err
 	}
 	defer run.close()
-	requestID, requestLease := run.requestID, run.requestLease
+	requestID := run.requestID
 	var lastErr error
 	attemptCount := 0
 	for targetIndex, target := range targets {
@@ -819,7 +843,7 @@ func (s *Service) Chat(
 				if err != nil {
 					outcome = "policy_rejected"
 				}
-				if finalizeErr := s.finalizeRequest(requestLease, outcome); finalizeErr != nil {
+				if finalizeErr := run.finalize(outcome); finalizeErr != nil {
 					return openaiapi.ChatCompletionResponse{}, gatewayError(
 						"accounting_unavailable", "request accounting could not be finalized", 503, finalizeErr,
 					)
@@ -834,7 +858,7 @@ func (s *Service) Chat(
 			}
 			lastErr = providerErr
 			if !retryable(providerErr) {
-				if err := s.finalizeRequest(requestLease, "provider_error"); err != nil {
+				if err := run.finalize("provider_error"); err != nil {
 					return openaiapi.ChatCompletionResponse{}, gatewayError(
 						"accounting_unavailable", "request accounting could not be finalized", 503, err,
 					)
@@ -846,7 +870,7 @@ func (s *Service) Chat(
 			break
 		}
 	}
-	if err := s.finalizeRequest(requestLease, "provider_error"); err != nil {
+	if err := run.finalize("provider_error"); err != nil {
 		return openaiapi.ChatCompletionResponse{}, gatewayError(
 			"accounting_unavailable", "request accounting could not be finalized", 503, err,
 		)
@@ -1091,7 +1115,7 @@ func (s *Service) MessagesNative(ctx context.Context, plaintextKey, version stri
 	if providerErr != nil {
 		outcome = "provider_error"
 	}
-	if err := s.finalizeRequest(run.requestLease, outcome); err != nil {
+	if err := run.finalize(outcome); err != nil {
 		return anthropicapi.Message{}, gatewayError("accounting_unavailable", "request accounting could not be finalized", 503, err)
 	}
 	if providerErr != nil {
@@ -1182,7 +1206,7 @@ func (s *Service) MessagesNativeStream(ctx context.Context, plaintextKey, versio
 	if errors.Is(providerErr, redaction.ErrPolicyRejected) {
 		outcome = "policy_rejected"
 	}
-	if err := s.finalizeRequest(run.requestLease, outcome); err != nil {
+	if err := run.finalize(outcome); err != nil {
 		return gatewayError("accounting_unavailable", "request accounting could not be finalized", 503, err)
 	}
 	if providerErr != nil {
@@ -1425,7 +1449,7 @@ func (s *Service) ChatStream(
 		return err
 	}
 	defer run.close()
-	requestID, requestLease := run.requestID, run.requestLease
+	requestID := run.requestID
 	var lastErr error
 	totalAttempts := 0
 	emitted := false
@@ -1529,7 +1553,7 @@ func (s *Service) ChatStream(
 				return err
 			}
 			if providerErr == nil {
-				if err := s.finalizeRequest(requestLease, "success"); err != nil {
+				if err := run.finalize("success"); err != nil {
 					return gatewayError("accounting_unavailable", "request accounting could not be finalized", 503, err)
 				}
 				return nil
@@ -1540,7 +1564,7 @@ func (s *Service) ChatStream(
 				if errors.Is(providerErr, redaction.ErrPolicyRejected) {
 					outcome = "policy_rejected"
 				}
-				if err := s.finalizeRequest(requestLease, outcome); err != nil {
+				if err := run.finalize(outcome); err != nil {
 					return gatewayError("accounting_unavailable", "request accounting could not be finalized", 503, err)
 				}
 				if errors.Is(providerErr, redaction.ErrPolicyRejected) {
@@ -1556,7 +1580,7 @@ func (s *Service) ChatStream(
 			break
 		}
 	}
-	if err := s.finalizeRequest(requestLease, "provider_error"); err != nil {
+	if err := run.finalize("provider_error"); err != nil {
 		return gatewayError("accounting_unavailable", "request accounting could not be finalized", 503, err)
 	}
 	return s.exhaustedAttemptsError(lastErr)
@@ -1602,7 +1626,7 @@ func (s *Service) Embeddings(
 		return openaiapi.EmbeddingResponse{}, err
 	}
 	defer run.close()
-	requestID, requestLease := run.requestID, run.requestLease
+	requestID := run.requestID
 	var lastErr error
 	attemptCount := 0
 	for targetIndex, target := range targets {
@@ -1653,7 +1677,7 @@ func (s *Service) Embeddings(
 				return openaiapi.EmbeddingResponse{}, err
 			}
 			if providerErr == nil {
-				if err := s.finalizeRequest(requestLease, "success"); err != nil {
+				if err := run.finalize("success"); err != nil {
 					return openaiapi.EmbeddingResponse{}, gatewayError(
 						"accounting_unavailable", "request accounting could not be finalized", 503, err,
 					)
@@ -1663,7 +1687,7 @@ func (s *Service) Embeddings(
 			}
 			lastErr = providerErr
 			if !retryable(providerErr) {
-				if err := s.finalizeRequest(requestLease, "provider_error"); err != nil {
+				if err := run.finalize("provider_error"); err != nil {
 					return openaiapi.EmbeddingResponse{}, gatewayError(
 						"accounting_unavailable", "request accounting could not be finalized", 503, err,
 					)
@@ -1675,7 +1699,7 @@ func (s *Service) Embeddings(
 			break
 		}
 	}
-	if err := s.finalizeRequest(requestLease, "provider_error"); err != nil {
+	if err := run.finalize("provider_error"); err != nil {
 		return openaiapi.EmbeddingResponse{}, gatewayError(
 			"accounting_unavailable", "request accounting could not be finalized", 503, err,
 		)
@@ -2037,6 +2061,7 @@ func settlementForResult(
 		if validSemanticUsage(response.Usage) {
 			result.ProviderInputTokens = response.Usage.InputTokens
 			result.ProviderOutputTokens = response.Usage.OutputTokens
+			recordUsageTiers(&result, *response.Usage)
 			setSettlementCost(&result, target, reservationMicrosUSD)
 			return result
 		}
@@ -2057,9 +2082,29 @@ func settlementForResult(
 	} else {
 		result.ProviderInputTokens = response.Usage.InputTokens
 		result.ProviderOutputTokens = response.Usage.OutputTokens
+		recordUsageTiers(&result, *response.Usage)
 	}
 	setSettlementCost(&result, target, reservationMicrosUSD)
 	return result
+}
+
+// recordUsageTiers copies the provider's token breakdown onto the settlement and
+// marks the cost estimated whenever a cache tier was reported.
+//
+// The tiers are priced very differently upstream — a cache read is a fraction of
+// the input rate and a cache write a premium on it — but a Deployment carries a
+// single input rate, so charging every prompt token at it is knowingly wrong for
+// the cached span. Flagging that is what keeps the ledger honest: the number is
+// an upper bound rather than a silent mis-charge, and CostEstimated is the
+// existing signal operators already filter on. Once a pricing version can express
+// the tiers, this flag is what identifies the rows worth re-rating.
+func recordUsageTiers(result *budget.Settlement, usage semantic.Usage) {
+	result.ProviderCachedInputTokens = usage.CachedInputTokens
+	result.ProviderCacheWriteInputTokens = usage.CacheWriteInputTokens
+	result.ProviderReasoningTokens = usage.ReasoningTokens
+	if usage.CachedInputTokens > 0 || usage.CacheWriteInputTokens > 0 {
+		result.CostEstimated = true
+	}
 }
 
 func setSettlementCost(result *budget.Settlement, target provider.Target, reservationMicrosUSD int64) {
@@ -2156,6 +2201,7 @@ func streamSettlement(
 	if validSemanticUsage(usage) {
 		result.ProviderInputTokens = usage.InputTokens
 		result.ProviderOutputTokens = usage.OutputTokens
+		recordUsageTiers(&result, *usage)
 	} else if providerErr == nil || emitted {
 		estimate := cappedOutputEstimate(estimatedOutputTokens, deliveredOutputTokens)
 		result.ProviderInputTokens = estimatedInputTokens

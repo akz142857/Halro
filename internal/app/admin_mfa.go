@@ -102,8 +102,13 @@ func (r *Runtime) createAdminMFAAuthenticator(w http.ResponseWriter, req *http.R
 	user, err := r.store.GetAdminUser(req.Context(), admin.session.Username)
 	password := []byte(input.CurrentPassword)
 	defer clear(password)
-	if err != nil || !adminauth.VerifyPassword(user, password) {
-		writeJSON(w, 401, map[string]string{"error": "invalid credentials"})
+	ok, answered := r.guardAdminCredentialCheck(w, admin.session.Username, "mfa_authenticator_create", func() bool {
+		return err == nil && adminauth.VerifyPassword(user, password)
+	})
+	if !ok {
+		if !answered {
+			writeJSON(w, 401, map[string]string{"error": "invalid credentials"})
+		}
 		return
 	}
 	active, err := r.activeAdminMFA(req.Context(), user.Username)
@@ -287,18 +292,30 @@ func (r *Runtime) completeMFA(w http.ResponseWriter, req *http.Request, token, c
 		writeJSON(w, 401, map[string]string{"error": "invalid credentials"})
 		return
 	}
-	ok := false
 	recoveryRemaining := 0
-	if recovery {
-		recoveryRemaining, err = r.store.ConsumeAdminMFARecoveryCode(req.Context(), user.Username, adminauth.RecoveryCodeHash(code), time.Now())
-		ok = err == nil
-	} else {
+	// The second factor gets the same per-account budget and the same audit
+	// trail the password already has. Without them the challenge is the one
+	// credential in the system that can be guessed without leaving a trace:
+	// the per-challenge attempt counter is no bound at all when challenges are
+	// free to mint, and the only other limit is per source address, so a
+	// guesser spread across addresses was neither slowed nor recorded. Password
+	// failures were audited from the start; this is the factor that guards the
+	// account once the password is already known.
+	guarded, answered := r.guardAdminCredentialCheck(w, user.Username, "mfa_login", func() bool {
+		if recovery {
+			remaining, err := r.store.ConsumeAdminMFARecoveryCode(req.Context(), user.Username, adminauth.RecoveryCodeHash(code), time.Now())
+			recoveryRemaining = remaining
+			return err == nil
+		}
 		active, _ := r.activeAdminMFA(req.Context(), user.Username)
-		_, ok = r.verifyAnyTOTP(req.Context(), active, code, time.Now())
-	}
-	if !ok {
+		_, verified := r.verifyAnyTOTP(req.Context(), active, code, time.Now())
+		return verified
+	})
+	if !guarded {
 		_ = r.store.FailAdminMFAChallenge(context.Background(), hash)
-		writeJSON(w, 401, map[string]string{"error": "invalid credentials"})
+		if !answered {
+			writeJSON(w, 401, map[string]string{"error": "invalid credentials"})
+		}
 		return
 	}
 	if err = r.store.CompleteAdminMFAChallenge(req.Context(), hash); err != nil {
@@ -440,8 +457,13 @@ func (r *Runtime) deleteAdminMFAAuthenticator(w http.ResponseWriter, req *http.R
 	user, err := r.store.GetAdminUser(req.Context(), admin.session.Username)
 	p := []byte(in.CurrentPassword)
 	defer clear(p)
-	if err != nil || !adminauth.VerifyPassword(user, p) {
-		writeJSON(w, 401, map[string]string{"error": "invalid credentials"})
+	ok, answered := r.guardAdminCredentialCheck(w, admin.session.Username, "mfa_authenticator_delete", func() bool {
+		return err == nil && adminauth.VerifyPassword(user, p)
+	})
+	if !ok {
+		if !answered {
+			writeJSON(w, 401, map[string]string{"error": "invalid credentials"})
+		}
 		return
 	}
 	active, _ := r.activeAdminMFA(req.Context(), user.Username)
@@ -507,8 +529,13 @@ func (r *Runtime) regenerateAdminMFARecoveryCodes(w http.ResponseWriter, req *ht
 	p := []byte(in.CurrentPassword)
 	defer clear(p)
 	active, _ := r.activeAdminMFA(req.Context(), admin.session.Username)
-	if err != nil || !adminauth.VerifyPassword(user, p) {
-		writeJSON(w, 401, map[string]string{"error": "invalid credentials"})
+	ok, answered := r.guardAdminCredentialCheck(w, admin.session.Username, "mfa_recovery_codes_regenerate", func() bool {
+		return err == nil && adminauth.VerifyPassword(user, p)
+	})
+	if !ok {
+		if !answered {
+			writeJSON(w, 401, map[string]string{"error": "invalid credentials"})
+		}
 		return
 	}
 	if _, ok := r.verifyAnyTOTP(req.Context(), active, in.Code, time.Now()); !ok {
@@ -559,8 +586,13 @@ func (r *Runtime) disableAdminMFA(w http.ResponseWriter, req *http.Request) {
 	p := []byte(in.CurrentPassword)
 	defer clear(p)
 	active, _ := r.activeAdminMFA(req.Context(), user.Username)
-	if err != nil || !adminauth.VerifyPassword(user, p) {
-		writeJSON(w, 401, map[string]string{"error": "invalid credentials"})
+	ok, answered := r.guardAdminCredentialCheck(w, admin.session.Username, "mfa_disable", func() bool {
+		return err == nil && adminauth.VerifyPassword(user, p)
+	})
+	if !ok {
+		if !answered {
+			writeJSON(w, 401, map[string]string{"error": "invalid credentials"})
+		}
 		return
 	}
 	var recoveryHash *[32]byte

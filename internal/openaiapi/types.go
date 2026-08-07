@@ -190,6 +190,79 @@ type Usage struct {
 	PromptTokens     int64 `json:"prompt_tokens"`
 	CompletionTokens int64 `json:"completion_tokens"`
 	TotalTokens      int64 `json:"total_tokens"`
+	// The details objects mirror OpenAI's own schema, so parsing an upstream
+	// response fills them and rendering one back to a client stays wire-faithful.
+	// Both are omitted when empty, which keeps today's three-field response
+	// byte-identical for providers that report no breakdown.
+	PromptTokensDetails     *PromptTokenDetails     `json:"prompt_tokens_details,omitempty"`
+	CompletionTokensDetails *CompletionTokenDetails `json:"completion_tokens_details,omitempty"`
+	// CacheWriteTokens carries the cache-creation tier that Anthropic and Bedrock
+	// bill at a premium. OpenAI has no equivalent field, so it stays off the wire
+	// rather than inventing a non-standard key in an OpenAI-shaped response; the
+	// adapters that populate it construct this struct in process.
+	CacheWriteTokens int64 `json:"-"`
+}
+
+type PromptTokenDetails struct {
+	CachedTokens int64 `json:"cached_tokens,omitempty"`
+	AudioTokens  int64 `json:"audio_tokens,omitempty"`
+}
+
+type CompletionTokenDetails struct {
+	ReasoningTokens int64 `json:"reasoning_tokens,omitempty"`
+	AudioTokens     int64 `json:"audio_tokens,omitempty"`
+}
+
+// CachedPromptTokens reports the cache-read tier without the nil dance.
+func (u Usage) CachedPromptTokens() int64 {
+	if u.PromptTokensDetails == nil {
+		return 0
+	}
+	return u.PromptTokensDetails.CachedTokens
+}
+
+// ReasoningTokens reports the reasoning span of the completion, which providers
+// bill at the output rate and therefore already count inside CompletionTokens.
+func (u Usage) ReasoningTokens() int64 {
+	if u.CompletionTokensDetails == nil {
+		return 0
+	}
+	return u.CompletionTokensDetails.ReasoningTokens
+}
+
+// AudioTokens sums the audio spans reported on either side of the exchange.
+func (u Usage) AudioTokens() int64 {
+	var total int64
+	if u.PromptTokensDetails != nil {
+		total += u.PromptTokensDetails.AudioTokens
+	}
+	if u.CompletionTokensDetails != nil {
+		total += u.CompletionTokensDetails.AudioTokens
+	}
+	return total
+}
+
+// SetCachedPromptTokens records the cache-read tier, allocating the details
+// object only when there is something to report.
+func (u *Usage) SetCachedPromptTokens(tokens int64) {
+	if tokens == 0 {
+		return
+	}
+	if u.PromptTokensDetails == nil {
+		u.PromptTokensDetails = &PromptTokenDetails{}
+	}
+	u.PromptTokensDetails.CachedTokens = tokens
+}
+
+// SetReasoningTokens records the reasoning span of the completion.
+func (u *Usage) SetReasoningTokens(tokens int64) {
+	if tokens == 0 {
+		return
+	}
+	if u.CompletionTokensDetails == nil {
+		u.CompletionTokensDetails = &CompletionTokenDetails{}
+	}
+	u.CompletionTokensDetails.ReasoningTokens = tokens
 }
 
 type ErrorEnvelope struct {

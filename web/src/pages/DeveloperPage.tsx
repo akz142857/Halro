@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react"
 import { useTranslation } from "react-i18next";
 import { useIsReadOnly } from "../session";
 import { api } from "../api";
-import { EmptyState, ErrorState, Field, Loading, PageHeader } from "../components";
+import { ConfirmButton, EmptyState, ErrorState, Field, Loading, PageHeader, type ReauthValues } from "../components";
 import { navigate } from "../navigation";
 
 type Endpoint = "responses" | "chat" | "embeddings";
@@ -144,10 +144,13 @@ export function DeveloperPage() {
   // The console never holds an existing key's plaintext — it is stored as a SHA-256 hash.
   // Creating one is the only moment the secret exists, so fill it in straight from there.
   const createDebugKey = useMutation({
-    mutationFn: () => api.createKey(
+    // A debug key is a real Gateway Key: shown once, valid after this session
+    // ends, and billable. It asks for the same proof any other minting does.
+    mutationFn: (reauth: ReauthValues) => api.createKey(
       selectedProject!.id,
       t("developer.debugKeyName", { time: debugKeyTimestamp() }),
       crypto.randomUUID(),
+      reauth,
       new Date(Date.now() + debugKeyLifetimeMillis).toISOString(),
     ),
     onSuccess: (created) => {
@@ -303,14 +306,14 @@ export function DeveloperPage() {
                   <button type="button" className="button ghost" aria-pressed={showGatewayKey} aria-controls="developer-gateway-key" onClick={() => setShowGatewayKey((value) => !value)}>
                     {showGatewayKey ? t("developer.hideKey") : t("developer.showKey")}
                   </button>
-                  <button
-                    type="button"
+                  <ConfirmButton
                     className="button secondary developer-create-key"
+                    label={t("developer.createDebugKey")}
+                    confirmLabel={t("auth.stepUpMintKey")}
                     disabled={createDebugKey.isPending}
-                    onClick={() => createDebugKey.mutate()}
-                  >
-                    {createDebugKey.isPending ? t("developer.creatingDebugKey") : t("developer.createDebugKey")}
-                  </button>
+                    requireStepUp
+                    onConfirm={(reauth) => createDebugKey.mutateAsync(reauth)}
+                  />
                 </div>
                 <small id="developer-gateway-key-hint">{t("developer.gatewayKeyHint")}</small>
                 {createDebugKey.isError && <ErrorState error={createDebugKey.error} />}

@@ -42,47 +42,56 @@ func (k EventKind) Valid() bool {
 }
 
 type Event struct {
-	EventID                       string                             `json:"event_id"`
-	Kind                          EventKind                          `json:"kind"`
-	RequestID                     string                             `json:"request_id"`
-	AttemptID                     string                             `json:"attempt_id,omitempty"`
-	ProjectID                     string                             `json:"project_id"`
-	KeyID                         string                             `json:"key_id,omitempty"`
-	RouteID                       string                             `json:"route_id,omitempty"`
-	DeploymentID                  string                             `json:"deployment_id,omitempty"`
-	ProviderID                    string                             `json:"provider_id,omitempty"`
-	RequestedModel                string                             `json:"requested_model,omitempty"`
-	ProviderModel                 string                             `json:"provider_model,omitempty"`
-	AttemptNumber                 int                                `json:"attempt_number,omitempty"`
-	RetryCount                    int                                `json:"retry_count,omitempty"`
-	FallbackCount                 int                                `json:"fallback_count,omitempty"`
-	PeriodID                      string                             `json:"period_id"`
-	PeriodTimezone                string                             `json:"period_timezone,omitempty"`
-	PeriodTimezoneVersion         uint64                             `json:"period_timezone_version,omitempty"`
-	PeriodStartMicros             int64                              `json:"period_start_micros,omitempty"`
-	PeriodEndMicros               int64                              `json:"period_end_micros,omitempty"`
-	OccurredAt                    time.Time                          `json:"occurred_at"`
-	ReservationMicrosUSD          *int64                             `json:"reservation_micros_usd"`
-	CommittedMicrosUSD            *int64                             `json:"committed_micros_usd"`
-	LeaseMode                     LeaseMode                          `json:"lease_mode,omitempty"`
-	PriceSnapshot                 *domain.PriceSnapshot              `json:"price_snapshot,omitempty"`
-	PreparedInputTokens           int64                              `json:"prepared_input_tokens,omitempty"`
-	PreparedOutputTokens          int64                              `json:"prepared_output_tokens,omitempty"`
-	InputCostMicrosUSD            int64                              `json:"input_cost_micros_usd,omitempty"`
-	OutputCostMicrosUSD           int64                              `json:"output_cost_micros_usd,omitempty"`
-	FixedCostMicrosUSD            int64                              `json:"fixed_cost_micros_usd,omitempty"`
-	RecoveryKey                   string                             `json:"recovery_key,omitempty"`
-	UnknownPolicyEvidence         *domain.UnknownPricePolicyEvidence `json:"unknown_policy_evidence,omitempty"`
-	TokenGuardPricingViewDigest   string                             `json:"token_guard_pricing_view_digest,omitempty"`
-	ProviderInputTokens           int64                              `json:"provider_input_tokens,omitempty"`
-	ProviderOutputTokens          int64                              `json:"provider_output_tokens,omitempty"`
-	CostEstimated                 bool                               `json:"cost_estimated,omitempty"`
-	TokenEstimated                bool                               `json:"token_estimated,omitempty"`
-	TokenUsageSource              TokenUsageSource                   `json:"token_usage_source,omitempty"`
-	Outcome                       string                             `json:"outcome,omitempty"`
-	ErrorClass                    string                             `json:"error_class,omitempty"`
-	HTTPStatus                    int                                `json:"http_status,omitempty"`
-	LatencyMillis                 int64                              `json:"latency_millis,omitempty"`
+	EventID                     string                             `json:"event_id"`
+	Kind                        EventKind                          `json:"kind"`
+	RequestID                   string                             `json:"request_id"`
+	AttemptID                   string                             `json:"attempt_id,omitempty"`
+	ProjectID                   string                             `json:"project_id"`
+	KeyID                       string                             `json:"key_id,omitempty"`
+	RouteID                     string                             `json:"route_id,omitempty"`
+	DeploymentID                string                             `json:"deployment_id,omitempty"`
+	ProviderID                  string                             `json:"provider_id,omitempty"`
+	RequestedModel              string                             `json:"requested_model,omitempty"`
+	ProviderModel               string                             `json:"provider_model,omitempty"`
+	AttemptNumber               int                                `json:"attempt_number,omitempty"`
+	RetryCount                  int                                `json:"retry_count,omitempty"`
+	FallbackCount               int                                `json:"fallback_count,omitempty"`
+	PeriodID                    string                             `json:"period_id"`
+	PeriodTimezone              string                             `json:"period_timezone,omitempty"`
+	PeriodTimezoneVersion       uint64                             `json:"period_timezone_version,omitempty"`
+	PeriodStartMicros           int64                              `json:"period_start_micros,omitempty"`
+	PeriodEndMicros             int64                              `json:"period_end_micros,omitempty"`
+	OccurredAt                  time.Time                          `json:"occurred_at"`
+	ReservationMicrosUSD        *int64                             `json:"reservation_micros_usd"`
+	CommittedMicrosUSD          *int64                             `json:"committed_micros_usd"`
+	LeaseMode                   LeaseMode                          `json:"lease_mode,omitempty"`
+	PriceSnapshot               *domain.PriceSnapshot              `json:"price_snapshot,omitempty"`
+	PreparedInputTokens         int64                              `json:"prepared_input_tokens,omitempty"`
+	PreparedOutputTokens        int64                              `json:"prepared_output_tokens,omitempty"`
+	InputCostMicrosUSD          int64                              `json:"input_cost_micros_usd,omitempty"`
+	OutputCostMicrosUSD         int64                              `json:"output_cost_micros_usd,omitempty"`
+	FixedCostMicrosUSD          int64                              `json:"fixed_cost_micros_usd,omitempty"`
+	RecoveryKey                 string                             `json:"recovery_key,omitempty"`
+	UnknownPolicyEvidence       *domain.UnknownPricePolicyEvidence `json:"unknown_policy_evidence,omitempty"`
+	TokenGuardPricingViewDigest string                             `json:"token_guard_pricing_view_digest,omitempty"`
+	ProviderInputTokens         int64                              `json:"provider_input_tokens,omitempty"`
+	ProviderOutputTokens        int64                              `json:"provider_output_tokens,omitempty"`
+	// Cache tiers partition ProviderInputTokens; reasoning partitions
+	// ProviderOutputTokens. They are recorded rather than folded into the totals
+	// so a future pricing version can re-rate a span from the WAL alone, and so
+	// an operator can tell an expensive request from a cache-served one. Events
+	// written before this field existed decode to zero, which reads correctly as
+	// "no cache tier reported".
+	ProviderCachedInputTokens     int64            `json:"provider_cached_input_tokens,omitempty"`
+	ProviderCacheWriteInputTokens int64            `json:"provider_cache_write_input_tokens,omitempty"`
+	ProviderReasoningTokens       int64            `json:"provider_reasoning_tokens,omitempty"`
+	CostEstimated                 bool             `json:"cost_estimated,omitempty"`
+	TokenEstimated                bool             `json:"token_estimated,omitempty"`
+	TokenUsageSource              TokenUsageSource `json:"token_usage_source,omitempty"`
+	Outcome                       string           `json:"outcome,omitempty"`
+	ErrorClass                    string           `json:"error_class,omitempty"`
+	HTTPStatus                    int              `json:"http_status,omitempty"`
+	LatencyMillis                 int64            `json:"latency_millis,omitempty"`
 }
 
 func (e Event) Validate() error {
@@ -245,11 +254,10 @@ type PendingLease struct {
 }
 
 type SettledAttempt struct {
-	Settlement        Event
-	SettlementDigest  string
-	BaseCostMicrosUSD int64
-	NetCostMicrosUSD  int64
-	CostKnown         bool
+	Settlement       Event
+	SettlementDigest string
+	CostMicrosUSD    int64
+	CostKnown        bool
 }
 
 type State struct {
@@ -385,7 +393,7 @@ func (s *State) Apply(record Record) error {
 		if event.CommittedMicrosUSD != nil {
 			base = *event.CommittedMicrosUSD
 		}
-		s.settled[event.AttemptID] = SettledAttempt{Settlement: event, SettlementDigest: settlementDigest, BaseCostMicrosUSD: base, NetCostMicrosUSD: base, CostKnown: event.CommittedMicrosUSD != nil}
+		s.settled[event.AttemptID] = SettledAttempt{Settlement: event, SettlementDigest: settlementDigest, CostMicrosUSD: base, CostKnown: event.CommittedMicrosUSD != nil}
 	}
 
 	s.balances[key] = balance

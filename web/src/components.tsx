@@ -290,7 +290,11 @@ export function ConfirmButton({
   confirmLabel: string;
   title?: string;
   className?: string;
-  onConfirm: (reauth: ReauthValues) => void;
+  // Returning a promise keeps the dialog open until the action actually
+  // succeeds. Closing on click meant a rejected step-up left no dialog, no
+  // typed credentials, and — on pages that do not render the mutation error —
+  // no sign anything had happened at all.
+  onConfirm: (reauth: ReauthValues) => void | Promise<unknown>;
   disabled?: boolean;
   disabledReason?: string;
   // Actions the server step-up gates ask for the credentials here, in the same
@@ -309,9 +313,27 @@ export function ConfirmButton({
   const readOnly = useIsReadOnly();
   const unavailable = disabled || readOnly;
   const [reauth, setReauth] = useState<ReauthValues>({ currentPassword: "", totpCode: "" });
+  const [pending, setPending] = useState(false);
+  const [failure, setFailure] = useState<unknown>(null);
   // Cleared on the way out rather than left in state: the password must not
   // survive a dialog the operator closed.
-  const close = () => { setReauth({ currentPassword: "", totpCode: "" }); setOpen(false); };
+  const close = () => { setReauth({ currentPassword: "", totpCode: "" }); setFailure(null); setPending(false); setOpen(false); };
+  const submit = async () => {
+    setFailure(null);
+    setPending(true);
+    try {
+      await onConfirm(reauth);
+      close();
+    } catch (error) {
+      // The password stays typed; only the code is dropped, because a TOTP
+      // step is consumed once and the next attempt needs a fresh one. Leaving
+      // the spent code in the field invites retrying it and reading the second
+      // refusal as a wrong password.
+      setReauth((values) => ({ ...values, totpCode: "" }));
+      setFailure(error);
+      setPending(false);
+    }
+  };
   const reason = readOnly ? t("navigation.readOnlyAction") : disabledReason;
   // A disabled button carries no tooltip in some browsers and is skipped by screen
   // reader tab order, so the reason is also stated in the accessibility tree.
@@ -331,14 +353,16 @@ export function ConfirmButton({
           <div className="confirmation-dialog">
             <p id={consequenceID}>{confirmLabel}</p>
             {requireStepUp && <ReauthFields values={reauth} onChange={setReauth} description={t("auth.stepUpDestructive")} />}
+            {Boolean(failure) && <ErrorState error={failure} />}
+            {Boolean(failure) && requireStepUp && <p className="form-note">{t("auth.stepUpRetryNeedsNewCode")}</p>}
             <div className="form-actions">
-              <button type="button" className="button ghost" data-modal-initial onClick={close}>{t("common.cancel")}</button>
+              <button type="button" className="button ghost" data-modal-initial disabled={pending} onClick={close}>{t("common.cancel")}</button>
               <button
                 type="button"
                 className="button danger"
-                disabled={requireStepUp && !reauth.currentPassword}
-                onClick={() => { const material = reauth; close(); onConfirm(material); }}
-              >{label}</button>
+                disabled={pending || (requireStepUp && !reauth.currentPassword)}
+                onClick={submit}
+              >{pending ? t("common.working") : label}</button>
             </div>
           </div>
         </Modal>

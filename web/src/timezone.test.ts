@@ -3,6 +3,7 @@ import { formatInstant } from "./format";
 import {
   DEFAULT_TIME_ZONE,
   accountingTimeZone,
+  zonedInputToISO,
   adoptTimeContext,
   isSupportedTimeZone,
   resetAccountingTimeZone,
@@ -51,5 +52,31 @@ describe("formatInstant", () => {
     expect(formatInstant(undefined, "UTC")).toBe("—");
     expect(formatInstant("", "UTC")).toBe("—");
     expect(formatInstant("not a date", "UTC")).toBe("—");
+  });
+});
+
+describe("zonedInputToISO", () => {
+  // A datetime-local control has no zone, so the browser's Date constructor
+  // resolves its value against the viewer's. Every timestamp beside the filter
+  // is rendered in the accounting zone, so reading the input any other way asks
+  // for a window offset from the one on screen, silently.
+  it("reads the wall clock in the accounting zone, not the viewer's", () => {
+    expect(zonedInputToISO("2026-08-07T00:00", "Asia/Shanghai")).toBe("2026-08-06T16:00:00.000Z");
+    expect(zonedInputToISO("2026-08-07T00:00", "UTC")).toBe("2026-08-07T00:00:00.000Z");
+    expect(zonedInputToISO("2026-08-07T00:00", "America/New_York")).toBe("2026-08-07T04:00:00.000Z");
+  });
+
+  // The offset in force differs on either side of a transition, so resolving
+  // with the offset guessed from the wall-clock reading alone lands an hour out
+  // for readings near one.
+  it("resolves readings around a daylight-saving transition", () => {
+    // New York moves to -04:00 at 02:00 local on 2026-03-08.
+    expect(zonedInputToISO("2026-03-08T01:00", "America/New_York")).toBe("2026-03-08T06:00:00.000Z");
+    expect(zonedInputToISO("2026-03-08T03:00", "America/New_York")).toBe("2026-03-08T07:00:00.000Z");
+  });
+
+  it("returns an empty string for an incomplete value", () => {
+    expect(zonedInputToISO("", "UTC")).toBe("");
+    expect(zonedInputToISO("2026-08-07", "UTC")).toBe("");
   });
 });

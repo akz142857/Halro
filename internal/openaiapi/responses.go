@@ -231,6 +231,7 @@ type ResponseUsage struct {
 type ResponseTokenDetails struct {
 	CachedTokens    int64 `json:"cached_tokens,omitempty"`
 	ReasoningTokens int64 `json:"reasoning_tokens,omitempty"`
+	AudioTokens     int64 `json:"audio_tokens,omitempty"`
 }
 
 type ResponseStreamEvent struct {

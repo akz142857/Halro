@@ -57,6 +57,21 @@ var ErrUnsupportedVersion = errors.New("ledger version is unsupported")
 // can silently truncate past.
 var ErrTampered = errors.New("ledger chain integrity check failed")
 
+// visitError tags an error as the caller's, raised by the visit callback,
+// rather than the log's own. scan cannot tell the two apart once it returns a
+// bare error, and the distinction decides whether a failed replay condemns the
+// ledger. Unwrap is preserved, so callers still match on their own sentinels
+// (context.Canceled above all) exactly as before.
+type visitError struct{ err error }
+
+func (e visitError) Error() string { return e.err.Error() }
+func (e visitError) Unwrap() error { return e.err }
+
+func isCallerVisitError(err error) bool {
+	var visit visitError
+	return errors.As(err, &visit)
+}
+
 // chainVerifier carries the running chain state across a full scan from the
 // start of the file. It is only meaningful when the scan begins at offset 0
 // with sequence 0 — the only case where "no prior frame" (a zero previous
@@ -359,7 +374,15 @@ func (l *Log) Replay(from Watermark, visit func(Record) error) (Watermark, error
 	}
 	last, partial, err := scan(l.file, from.Offset, from.Sequence, visit, nil)
 	if err != nil {
-		l.status.RequireRecovery()
+		// Only the log's own integrity condemns the log. visit is a caller
+		// callback replaying into a derived read model, and its failures —
+		// above all a canceled request context — say nothing about the WAL.
+		// Letting those latch the accounting status would let a derivative
+		// take down the authority it is derived from, which is exactly what
+		// the ledger is not allowed to permit.
+		if !isCallerVisitError(err) {
+			l.status.RequireRecovery()
+		}
 		return Watermark{}, err
 	}
 	if partial {
@@ -620,6 +643,22 @@ func scan(file io.ReadSeeker, fromOffset int64, initialSequence uint64, visit fu
 	}
 	offset := fromOffset
 	lastSequence := initialSequence
+	// Once a frame has been written at the authenticated epoch, no later frame
+	// may fall below it. Epoch 4 is the first that carries a MAC, so
+	// re-encoding one as epoch 3 — drop the chain tail, flip the version byte,
+	// recompute the keyless CRC32 — would otherwise strip authentication off
+	// history without needing the chain key at all, and appending a hand-built
+	// legacy frame after the chain would forge an event the verifier walks
+	// straight past. The check deliberately does not depend on the verifier:
+	// it must hold for keyless readers too.
+	//
+	// It says nothing about epochs 1-3 relative to each other. Before ADR 0016
+	// the epoch was chosen per event by its shape rather than by the build, so
+	// a real pre-upgrade log interleaves them — an accounting event carrying a
+	// lease mode wrote epoch 2 while the plain event beside it wrote epoch 1.
+	// Requiring a non-decreasing epoch across the whole file would reject
+	// exactly the histories that predate the guarantee.
+	var seenAuthenticatedEpoch bool
 	for {
 		header := make([]byte, frameHeaderSize)
 		n, err := io.ReadFull(file, header)
@@ -638,6 +677,12 @@ func scan(file io.ReadSeeker, fromOffset int64, initialSequence uint64, visit fu
 		epoch := header[4]
 		if epoch != frameVersionLegacy && epoch != frameVersionCurrent && epoch != frameVersionPeriod && epoch != frameVersionLedgerIntegrity {
 			return Watermark{}, false, fmt.Errorf("%w at offset %d: frame epoch %d", ErrUnsupportedVersion, offset, epoch)
+		}
+		if seenAuthenticatedEpoch && epoch != frameVersionLedgerIntegrity {
+			return Watermark{}, false, fmt.Errorf("%w at offset %d: frame epoch %d follows an authenticated frame", ErrTampered, offset, epoch)
+		}
+		if epoch == frameVersionLedgerIntegrity {
+			seenAuthenticatedEpoch = true
 		}
 		kind := EventKind(header[5])
 		if !kind.Valid() || epoch == frameVersionLegacy && kind > EventRequestFinalized {
@@ -722,7 +767,7 @@ func scan(file io.ReadSeeker, fromOffset int64, initialSequence uint64, visit fu
 		}
 		if visit != nil {
 			if err := visit(Record{Sequence: sequence, Offset: nextOffset, Epoch: epoch, Event: event}); err != nil {
-				return Watermark{}, false, err
+				return Watermark{}, false, visitError{err}
 			}
 		}
 		offset = nextOffset

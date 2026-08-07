@@ -432,8 +432,6 @@ export interface UsageAttempt {
   provider_input_tokens: number;
   provider_output_tokens: number;
   cost_micros_usd: number | null;
-  original_cost_micros_usd: number | null;
-  final_cost_micros_usd: number | null;
   price_evidence_status: "versioned" | "legacy_unversioned" | "unknown";
   cost_value_status: "known" | "unknown";
   lease_mode?: "metered" | "free" | "unknown_allowed";

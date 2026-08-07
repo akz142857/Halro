@@ -13,7 +13,20 @@ import (
 	"github.com/akz142857/Heimdall/internal/ledger"
 )
 
-const checkpointVersion = 5
+// maxTrackedEventIDs bounds the dedup index, mirroring the audit log's. A
+// ledger event ID only repeats within a short window of its first append — the
+// crash-recovery path deliberately re-emits a deterministic event rather than
+// inventing a new one — so a tail window answers every real duplicate, while
+// retaining every ID ever seen would grow with the lifetime of the process and
+// still be absent after a restart.
+const maxTrackedEventIDs = 4096
+
+// Version 7 persists the dedup window. Version 6 dropped the duplicate cost columns. Retiring cost adjustments left
+// original/final/committed holding the same number on every row and in every
+// bucket, so a reader had three names for one value and no way to tell which
+// one was authoritative. A checkpoint written before this carries them, and
+// rebuilding from the Ledger is cheap, so it is refused rather than migrated.
+const checkpointVersion = 7
 
 const latencyBucketCount = 12
 
@@ -22,49 +35,48 @@ var LatencyBucketsMillis = [latencyBucketCount]uint64{
 }
 
 type AttemptEvent struct {
-	EventID               string                     `json:"event_id"`
-	RequestID             string                     `json:"request_id"`
-	AttemptID             string                     `json:"attempt_id"`
-	Sequence              uint64                     `json:"sequence"`
-	AttemptNumber         int                        `json:"attempt"`
-	ProjectID             string                     `json:"project_id"`
-	KeyID                 string                     `json:"key_id,omitempty"`
-	RouteID               string                     `json:"route_id,omitempty"`
-	DeploymentID          string                     `json:"deployment_id,omitempty"`
-	ProviderID            string                     `json:"provider_id,omitempty"`
-	RequestedModel        string                     `json:"requested_model,omitempty"`
-	ProviderModel         string                     `json:"provider_model,omitempty"`
-	ProviderInputTokens   int64                      `json:"provider_input_tokens"`
-	ProviderOutputTokens  int64                      `json:"provider_output_tokens"`
-	PreparedOutputTokens  int64                      `json:"prepared_output_tokens"`
-	CostMicrosUSD         *int64                     `json:"cost_micros_usd"`
-	OriginalCostMicrosUSD *int64                     `json:"original_cost_micros_usd"`
-	FinalCostMicrosUSD    *int64                     `json:"final_cost_micros_usd"`
-	LeaseMode             ledger.LeaseMode           `json:"lease_mode,omitempty"`
-	PriceEvidenceStatus   domain.PriceEvidenceStatus `json:"price_evidence_status"`
-	CostValueStatus       domain.CostValueStatus     `json:"cost_value_status"`
-	PriceSnapshot         *domain.PriceSnapshot      `json:"price_snapshot,omitempty"`
-	InputCostMicrosUSD    *int64                     `json:"input_cost_micros_usd"`
-	OutputCostMicrosUSD   *int64                     `json:"output_cost_micros_usd"`
-	FixedCostMicrosUSD    *int64                     `json:"fixed_cost_micros_usd"`
-	Tags                  []string                   `json:"tags,omitempty"`
-	CostEstimated         bool                       `json:"cost_estimated"`
-	TokensEstimated       bool                       `json:"tokens_estimated"`
-	TokenUsageSource      ledger.TokenUsageSource    `json:"token_usage_source,omitempty"`
-	StartedAt             time.Time                  `json:"started_at"`
-	CompletedAt           time.Time                  `json:"completed_at"`
-	Status                string                     `json:"status"`
-	ErrorClass            string                     `json:"error_class,omitempty"`
-	HTTPStatus            int                        `json:"http_status,omitempty"`
-	LatencyMillis         int64                      `json:"latency_millis"`
-	RetryCount            int                        `json:"retry_count"`
-	FallbackCount         int                        `json:"fallback_count"`
+	EventID              string `json:"event_id"`
+	RequestID            string `json:"request_id"`
+	AttemptID            string `json:"attempt_id"`
+	Sequence             uint64 `json:"sequence"`
+	AttemptNumber        int    `json:"attempt"`
+	ProjectID            string `json:"project_id"`
+	KeyID                string `json:"key_id,omitempty"`
+	RouteID              string `json:"route_id,omitempty"`
+	DeploymentID         string `json:"deployment_id,omitempty"`
+	ProviderID           string `json:"provider_id,omitempty"`
+	RequestedModel       string `json:"requested_model,omitempty"`
+	ProviderModel        string `json:"provider_model,omitempty"`
+	ProviderInputTokens  int64  `json:"provider_input_tokens"`
+	ProviderOutputTokens int64  `json:"provider_output_tokens"`
+	// Breakdown subsets of the two totals above, not additions to them.
+	ProviderCachedInputTokens     int64                      `json:"provider_cached_input_tokens,omitempty"`
+	ProviderCacheWriteInputTokens int64                      `json:"provider_cache_write_input_tokens,omitempty"`
+	ProviderReasoningTokens       int64                      `json:"provider_reasoning_tokens,omitempty"`
+	PreparedOutputTokens          int64                      `json:"prepared_output_tokens"`
+	CostMicrosUSD                 *int64                     `json:"cost_micros_usd"`
+	LeaseMode                     ledger.LeaseMode           `json:"lease_mode,omitempty"`
+	PriceEvidenceStatus           domain.PriceEvidenceStatus `json:"price_evidence_status"`
+	CostValueStatus               domain.CostValueStatus     `json:"cost_value_status"`
+	PriceSnapshot                 *domain.PriceSnapshot      `json:"price_snapshot,omitempty"`
+	InputCostMicrosUSD            *int64                     `json:"input_cost_micros_usd"`
+	OutputCostMicrosUSD           *int64                     `json:"output_cost_micros_usd"`
+	FixedCostMicrosUSD            *int64                     `json:"fixed_cost_micros_usd"`
+	Tags                          []string                   `json:"tags,omitempty"`
+	CostEstimated                 bool                       `json:"cost_estimated"`
+	TokensEstimated               bool                       `json:"tokens_estimated"`
+	TokenUsageSource              ledger.TokenUsageSource    `json:"token_usage_source,omitempty"`
+	StartedAt                     time.Time                  `json:"started_at"`
+	CompletedAt                   time.Time                  `json:"completed_at"`
+	Status                        string                     `json:"status"`
+	ErrorClass                    string                     `json:"error_class,omitempty"`
+	HTTPStatus                    int                        `json:"http_status,omitempty"`
+	LatencyMillis                 int64                      `json:"latency_millis"`
+	RetryCount                    int                        `json:"retry_count"`
+	FallbackCount                 int                        `json:"fallback_count"`
 }
 
 func (a AttemptEvent) KnownCostMicrosUSD() (int64, bool) {
-	if a.FinalCostMicrosUSD != nil {
-		return *a.FinalCostMicrosUSD, true
-	}
 	if a.CostMicrosUSD != nil {
 		return *a.CostMicrosUSD, true
 	}
@@ -72,20 +84,19 @@ func (a AttemptEvent) KnownCostMicrosUSD() (int64, bool) {
 }
 
 type RequestSummary struct {
-	RequestID             string    `json:"request_id"`
-	ProjectID             string    `json:"project_id"`
-	KeyID                 string    `json:"key_id,omitempty"`
-	RequestedModel        string    `json:"requested_model,omitempty"`
-	Attempts              int64     `json:"attempts"`
-	InputTokens           int64     `json:"input_tokens"`
-	OutputTokens          int64     `json:"output_tokens"`
-	CostMicrosUSD         int64     `json:"cost_micros_usd"`
-	OriginalCostMicrosUSD int64     `json:"original_cost_micros_usd"`
-	UnknownAttempts       int64     `json:"unknown_attempts"`
-	Fallbacks             int64     `json:"fallbacks"`
-	Outcome               string    `json:"outcome"`
-	AcceptedAt            time.Time `json:"accepted_at"`
-	CompletedAt           time.Time `json:"completed_at"`
+	RequestID       string    `json:"request_id"`
+	ProjectID       string    `json:"project_id"`
+	KeyID           string    `json:"key_id,omitempty"`
+	RequestedModel  string    `json:"requested_model,omitempty"`
+	Attempts        int64     `json:"attempts"`
+	InputTokens     int64     `json:"input_tokens"`
+	OutputTokens    int64     `json:"output_tokens"`
+	CostMicrosUSD   int64     `json:"cost_micros_usd"`
+	UnknownAttempts int64     `json:"unknown_attempts"`
+	Fallbacks       int64     `json:"fallbacks"`
+	Outcome         string    `json:"outcome"`
+	AcceptedAt      time.Time `json:"accepted_at"`
+	CompletedAt     time.Time `json:"completed_at"`
 }
 
 type Bucket struct {
@@ -97,7 +108,6 @@ type Bucket struct {
 	EstimatedInputTokens   int64     `json:"estimated_input_tokens,omitempty"`
 	EstimatedOutputTokens  int64     `json:"estimated_output_tokens,omitempty"`
 	CostMicrosUSD          int64     `json:"cost_micros_usd"`
-	OriginalCostMicrosUSD  int64     `json:"original_cost_micros_usd"`
 	EstimatedCostMicrosUSD int64     `json:"estimated_cost_micros_usd,omitempty"`
 	UnknownAttempts        int64     `json:"unknown_attempts"`
 	Errors                 int64     `json:"errors"`
@@ -143,12 +153,18 @@ type checkpoint struct {
 	Hourly    map[int64]Bucket          `json:"hourly"`
 	Totals    Bucket                    `json:"totals"`
 	Metrics   Metrics                   `json:"metrics"`
+	// EventIDs is the dedup window. Without it a checkpoint taken between the
+	// two physical frames of a re-emitted event resumed with an empty index and
+	// counted the second copy again — the aggregate then disagreed with a full
+	// replay of the same WAL.
+	EventIDs []string `json:"event_ids,omitempty"`
 }
 
 type Aggregate struct {
 	mu           sync.RWMutex
 	watermark    ledger.Watermark
 	eventIDs     map[string]struct{}
+	eventIDOrder []string
 	started      map[string]time.Time
 	requests     map[string]*requestAccumulator
 	attempts     []AttemptEvent
@@ -199,6 +215,9 @@ func RestoreCheckpoint(payload []byte) (*Aggregate, error) {
 	for index, summary := range aggregate.summaries {
 		aggregate.summaryIndex[summary.RequestID] = index
 	}
+	for _, eventID := range saved.EventIDs {
+		aggregate.rememberEventID(eventID)
+	}
 	for requestID, summary := range saved.Active {
 		if requestID == "" || summary.RequestID != requestID {
 			return nil, errors.New("usage checkpoint has an invalid active request")
@@ -221,6 +240,7 @@ func (a *Aggregate) MarshalCheckpoint() (ledger.Watermark, []byte, error) {
 		Attempts:  append([]AttemptEvent(nil), a.attempts...),
 		Summaries: append([]RequestSummary(nil), a.summaries...),
 		Hourly:    cloneHourly(a.hourly), Totals: a.totals, Metrics: a.metrics,
+		EventIDs: append([]string(nil), a.eventIDOrder...),
 	}
 	payload, err := json.Marshal(saved)
 	if err != nil {
@@ -286,9 +306,11 @@ func (a *Aggregate) Apply(record ledger.Record) error {
 			DeploymentID: event.DeploymentID,
 			ProviderID:   event.ProviderID, RequestedModel: event.RequestedModel,
 			ProviderModel: event.ProviderModel, ProviderInputTokens: event.ProviderInputTokens,
-			ProviderOutputTokens: event.ProviderOutputTokens,
-			PreparedOutputTokens: event.PreparedOutputTokens, CostMicrosUSD: committedCostValue,
-			OriginalCostMicrosUSD: committedCostValue, FinalCostMicrosUSD: committedCostValue,
+			ProviderOutputTokens:          event.ProviderOutputTokens,
+			ProviderCachedInputTokens:     event.ProviderCachedInputTokens,
+			ProviderCacheWriteInputTokens: event.ProviderCacheWriteInputTokens,
+			ProviderReasoningTokens:       event.ProviderReasoningTokens,
+			PreparedOutputTokens:          event.PreparedOutputTokens, CostMicrosUSD: committedCostValue,
 			LeaseMode: event.LeaseMode, PriceEvidenceStatus: evidenceStatus, CostValueStatus: costStatus,
 			PriceSnapshot: priceSnapshot, InputCostMicrosUSD: inputCost, OutputCostMicrosUSD: outputCost, FixedCostMicrosUSD: fixedCost,
 			Tags:          tags,
@@ -313,9 +335,6 @@ func (a *Aggregate) Apply(record ledger.Record) error {
 		if err := addInt64(&accumulator.summary.CostMicrosUSD, committedCost); err != nil {
 			return err
 		}
-		if err := addInt64(&accumulator.summary.OriginalCostMicrosUSD, committedCost); err != nil {
-			return err
-		}
 		if !costKnown {
 			if err := addInt64(&accumulator.summary.UnknownAttempts, 1); err != nil {
 				return err
@@ -337,9 +356,6 @@ func (a *Aggregate) Apply(record ledger.Record) error {
 			return err
 		}
 		if err := addInt64(&bucket.CostMicrosUSD, committedCost); err != nil {
-			return err
-		}
-		if err := addInt64(&bucket.OriginalCostMicrosUSD, committedCost); err != nil {
 			return err
 		}
 		if !costKnown {
@@ -366,9 +382,6 @@ func (a *Aggregate) Apply(record ledger.Record) error {
 			return err
 		}
 		if err := addInt64(&a.totals.CostMicrosUSD, committedCost); err != nil {
-			return err
-		}
-		if err := addInt64(&a.totals.OriginalCostMicrosUSD, committedCost); err != nil {
 			return err
 		}
 		if !costKnown {
@@ -437,9 +450,21 @@ func (a *Aggregate) Apply(record ledger.Record) error {
 			return err
 		}
 	}
-	a.eventIDs[event.EventID] = struct{}{}
+	a.rememberEventID(event.EventID)
 	a.watermark = ledger.Watermark{Generation: 1, Offset: record.Offset, Sequence: record.Sequence}
 	return nil
+}
+
+func (a *Aggregate) rememberEventID(eventID string) {
+	if _, exists := a.eventIDs[eventID]; exists {
+		return
+	}
+	a.eventIDs[eventID] = struct{}{}
+	a.eventIDOrder = append(a.eventIDOrder, eventID)
+	if len(a.eventIDOrder) > maxTrackedEventIDs {
+		delete(a.eventIDs, a.eventIDOrder[0])
+		a.eventIDOrder = a.eventIDOrder[1:]
+	}
 }
 
 func addInt64(target *int64, delta int64) error {

@@ -110,7 +110,7 @@ export function RedactionPoliciesSection({
               <td><span className="badge">{policy.mode === "strict" ? t("redaction.strictBadge") : policy.mode === "bounded_stream" ? t("redaction.boundedBadge") : t("redaction.detectStreamBadge")}</span></td>
               <td><strong>{t("redaction.rules", { count: policy.rules.length })}</strong><small>{t("policyManagement.enabledRules", { count: enabledRules.length })} · {t(`redaction.${strongest === "detect_only" ? "detect" : strongest}`)}</small></td>
               <td>{t("policyManagement.projectCount", { count: policy.bound_projects ?? 0 })}</td>
-              <td><div className="row-actions policy-row-actions"><button className="button ghost" onClick={() => setTesting(policy)}>{t("common.test")}</button><button className="button ghost" disabled={readOnly} onClick={() => setEditing(policy)}>{t("common.edit")}</button><ConfirmButton label={t("common.delete")} confirmLabel={t("redaction.deleteConfirm", { name: policy.name })} disabled={remove.isPending} requireStepUp onConfirm={(reauth) => remove.mutate({ policy, reauth })} /></div></td>
+              <td><div className="row-actions policy-row-actions"><button className="button ghost" onClick={() => setTesting(policy)}>{t("common.test")}</button><button className="button ghost" disabled={readOnly} onClick={() => setEditing(policy)}>{t("common.edit")}</button><ConfirmButton label={t("common.delete")} confirmLabel={t("redaction.deleteConfirm", { name: policy.name })} disabled={remove.isPending} requireStepUp onConfirm={(reauth) => remove.mutateAsync({ policy, reauth })} /></div></td>
             </tr>;
           })}</tbody></table>
           {remove.isError && <ErrorState error={remove.error} />}

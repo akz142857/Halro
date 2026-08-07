@@ -38,6 +38,12 @@ describe("AccountingTimezoneForm", () => {
       data: settings({ pending_timezone: "Europe/Berlin", pending_effective_at: "2026-08-06T16:00:00Z", revision: 5 }),
       etag: '"5"',
     });
+    // The dialog now waits for this before it will let anything be confirmed,
+    // so a test that does not answer it is testing a dialog the operator would
+    // never be allowed to submit either.
+    vi.spyOn(api, "previewAccountingTimezone").mockResolvedValue({
+      data: settings(), etag: '"4"',
+    } as never);
     renderWithClient(<AccountingTimezoneForm settings={settings()} />);
 
     fireEvent.change(screen.getByLabelText(/目标时区/), { target: { value: "Europe/Berlin" } });
@@ -49,7 +55,11 @@ describe("AccountingTimezoneForm", () => {
     // Nothing is sent until the consequences have been acknowledged.
     expect(schedule).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "确认并安排" }));
+    // Confirmation waits for the preview: the reset-window warning is the one
+    // consequence nobody can derive from the zone names, and confirming before
+    // it arrives is signing without having been shown it.
+    const confirm = await screen.findByRole("button", { name: "确认并安排" });
+    fireEvent.click(confirm);
     await waitFor(() => expect(schedule).toHaveBeenCalledWith("Europe/Berlin", 4));
   });
 

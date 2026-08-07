@@ -69,3 +69,40 @@ export function useAccountingTimeZone(): string {
 export function adoptTimeContext(context: TimeContext | undefined): void {
   if (context) setAccountingTimeZone(context.accounting_timezone);
 }
+
+function zoneOffsetMillis(instant: number, timeZone: string): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone, hour12: false,
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+  }).formatToParts(new Date(instant));
+  const value = (type: string) => Number(parts.find((part) => part.type === type)?.value);
+  // hour12:false renders midnight as 24 in some engines.
+  const asIfUTC = Date.UTC(
+    value("year"), value("month") - 1, value("day"),
+    value("hour") % 24, value("minute"), value("second"),
+  );
+  return asIfUTC - instant;
+}
+
+/**
+ * Read a `datetime-local` value as a wall-clock reading in the accounting zone.
+ *
+ * The control has no zone of its own — it yields "2026-08-07T00:00" and the
+ * browser's Date constructor resolves that against the viewer's zone. Every
+ * other timestamp on the console is rendered in the accounting zone, so a
+ * viewer in UTC filtering a Asia/Shanghai instance asked for a window eight
+ * hours away from the one the column beside it displays, with nothing on screen
+ * to say so. Returns "" for an incomplete value, which the caller omits.
+ */
+export function zonedInputToISO(value: string, timeZone: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(value);
+  if (!match) return "";
+  const [, year, month, day, hour, minute, second] = match;
+  const wall = Date.UTC(+year, +month - 1, +day, +hour, +minute, second ? +second : 0);
+  // Two passes: the first offset is the one in force at the guessed instant,
+  // which is the wrong side of a DST transition for readings near one.
+  let instant = wall - zoneOffsetMillis(wall, timeZone);
+  instant = wall - zoneOffsetMillis(instant, timeZone);
+  return new Date(instant).toISOString();
+}

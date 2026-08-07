@@ -330,7 +330,18 @@ func DecodeResult(message anthropicapi.Message) (semantic.GenerateResult, error)
 		}
 	}
 	termination := decodeStopReason(message.StopReason)
-	usage := &semantic.Usage{InputTokens: message.Usage.InputTokens, OutputTokens: message.Usage.OutputTokens, ReasoningTokens: message.Usage.ThinkingTokens, TotalTokens: message.Usage.InputTokens + message.Usage.OutputTokens, Source: semantic.UsageProviderReported}
+	// input_tokens excludes both cache tiers on this API, so the full prompt span
+	// has to be recovered before anything downstream prices it.
+	promptTokens := message.Usage.PromptTokens()
+	usage := &semantic.Usage{
+		InputTokens:           promptTokens,
+		CachedInputTokens:     message.Usage.CacheReadInputTokens,
+		CacheWriteInputTokens: message.Usage.CacheCreationInputTokens,
+		OutputTokens:          message.Usage.OutputTokens,
+		ReasoningTokens:       message.Usage.ThinkingTokens,
+		TotalTokens:           promptTokens + message.Usage.OutputTokens,
+		Source:                semantic.UsageProviderReported,
+	}
 	result := semantic.GenerateResult{ID: message.ID, Model: message.Model, Choices: []semantic.GenerateChoice{{Index: 0, Message: canonical, Termination: termination, NativeTermination: stringValue(message.StopReason)}}, Usage: usage, Translation: semantic.TranslationNone, MappingRevision: MappingRevision}
 	return result, result.Validate()
 }

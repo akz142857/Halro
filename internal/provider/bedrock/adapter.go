@@ -63,6 +63,15 @@ type tokenUsage struct {
 	InputTokens  int64 `json:"inputTokens"`
 	OutputTokens int64 `json:"outputTokens"`
 	TotalTokens  int64 `json:"totalTokens"`
+	// Converse reports the cache tiers alongside inputTokens rather than inside
+	// it, the same shape the underlying Anthropic models use.
+	CacheReadInputTokens  int64 `json:"cacheReadInputTokens,omitempty"`
+	CacheWriteInputTokens int64 `json:"cacheWriteInputTokens,omitempty"`
+}
+
+// promptTokens is every prompt token the request consumed, cache tiers included.
+func (u tokenUsage) promptTokens() int64 {
+	return u.InputTokens + u.CacheReadInputTokens + u.CacheWriteInputTokens
 }
 
 type credentialDocument struct {
@@ -638,13 +647,25 @@ func responseBlocksText(blocks []json.RawMessage) (string, error) {
 }
 
 func openAIUsage(value tokenUsage) (*openaiapi.Usage, error) {
-	if value.InputTokens < 0 || value.OutputTokens < 0 || value.TotalTokens < 0 {
+	if value.InputTokens < 0 || value.OutputTokens < 0 || value.TotalTokens < 0 ||
+		value.CacheReadInputTokens < 0 || value.CacheWriteInputTokens < 0 {
 		return nil, malformed("Bedrock usage contains negative tokens", nil)
 	}
-	if value.InputTokens == 0 && value.OutputTokens == 0 && value.TotalTokens == 0 {
+	// A fully cache-served request can report zero uncached input, so emptiness
+	// has to be judged on the cache tiers too or its usage is discarded and the
+	// attempt falls back to a local estimate.
+	if value.promptTokens() == 0 && value.OutputTokens == 0 && value.TotalTokens == 0 {
 		return nil, nil
 	}
-	return &openaiapi.Usage{PromptTokens: value.InputTokens, CompletionTokens: value.OutputTokens, TotalTokens: max(value.TotalTokens, value.InputTokens+value.OutputTokens)}, nil
+	prompt := value.promptTokens()
+	usage := &openaiapi.Usage{
+		PromptTokens:     prompt,
+		CompletionTokens: value.OutputTokens,
+		TotalTokens:      max(value.TotalTokens, prompt+value.OutputTokens),
+		CacheWriteTokens: value.CacheWriteInputTokens,
+	}
+	usage.SetCachedPromptTokens(value.CacheReadInputTokens)
+	return usage, nil
 }
 
 func mapFinishReason(value string) (*string, error) {

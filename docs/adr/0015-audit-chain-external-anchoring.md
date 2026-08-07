@@ -209,7 +209,7 @@ fix for the default.
   interval is a fine enough grain that this reads as immediate in practice.
 - Endpoint: `GET /audit/anchors?since=<seq>` added to the existing metrics
   listener (`internal/app/audit_anchor.go`), authenticated by a *new*
-  independent bearer-credential domain reusing `internal/metricsauth`
+  independent bearer-credential domain reusing `internal/bearercred`
   wholesale — a second file path is enough to get an independently rotated
   credential without cloning the package; the rotation/audit/revocation
   machinery is identical to metrics' own, just pointed at a different file.

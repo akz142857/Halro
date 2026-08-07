@@ -83,7 +83,7 @@ func TestAdminProjectAndKeyLifecycle(t *testing.T) {
 
 	createKey := adminRequest(t, http.MethodPost,
 		"/admin/api/v1/projects/"+project.ID+"/keys",
-		map[string]any{"name": "service-a"},
+		map[string]any{"name": "service-a", "current_password": "correct horse battery staple"},
 	)
 	createKey.AddCookie(cookie)
 	createKey.Header.Set("X-CSRF-Token", csrf)
@@ -99,7 +99,7 @@ func TestAdminProjectAndKeyLifecycle(t *testing.T) {
 	// first one is already gone, so a duplicate would be an unaccounted-for key.
 	replay := adminRequest(t, http.MethodPost,
 		"/admin/api/v1/projects/"+project.ID+"/keys",
-		map[string]any{"name": "service-a"},
+		map[string]any{"name": "service-a", "current_password": "correct horse battery staple"},
 	)
 	replay.AddCookie(cookie)
 	replay.Header.Set("X-CSRF-Token", csrf)
@@ -124,7 +124,8 @@ func TestAdminProjectAndKeyLifecycle(t *testing.T) {
 	if _, err := runtime.auth.Authenticate(keyResult.Key, time.Now()); err != nil {
 		t.Fatalf("new key is not active in auth snapshot: %v", err)
 	}
-	unblock := adminRequest(t, http.MethodPost, "/admin/api/v1/projects/"+project.ID+"/unblock", nil)
+	unblock := adminRequest(t, http.MethodPost, "/admin/api/v1/projects/"+project.ID+"/unblock",
+		map[string]any{"current_password": "correct horse battery staple"})
 	unblock.AddCookie(cookie)
 	unblock.Header.Set("X-CSRF-Token", csrf)
 	unblockResponse := httptest.NewRecorder()
@@ -330,7 +331,7 @@ func TestAdminGatewayKeyDeleteRevokesImmediately(t *testing.T) {
 	project := createProjectForTest(t, runtime, cookie, csrf, "Revocation", []string{"chat"})
 
 	createKey := adminRequest(t, http.MethodPost,
-		"/admin/api/v1/projects/"+project.ID+"/keys", map[string]any{"name": "doomed"})
+		"/admin/api/v1/projects/"+project.ID+"/keys", map[string]any{"name": "doomed", "current_password": "correct horse battery staple"})
 	createKey.AddCookie(cookie)
 	createKey.Header.Set("X-CSRF-Token", csrf)
 	createKey.Header.Set("Idempotency-Key", "doomed-1")
@@ -422,7 +423,7 @@ func TestAdminKeyResponsesNeverExposeKeyHash(t *testing.T) {
 	project := createProjectForTest(t, runtime, cookie, csrf, "Hashes", []string{"chat"})
 
 	createKey := adminRequest(t, http.MethodPost,
-		"/admin/api/v1/projects/"+project.ID+"/keys", map[string]any{"name": "reader"})
+		"/admin/api/v1/projects/"+project.ID+"/keys", map[string]any{"name": "reader", "current_password": "correct horse battery staple"})
 	createKey.AddCookie(cookie)
 	createKey.Header.Set("X-CSRF-Token", csrf)
 	createKey.Header.Set("Idempotency-Key", "reader-1")

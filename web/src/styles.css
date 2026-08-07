@@ -136,7 +136,10 @@ h3 { margin-bottom: 0; font-size: 18px; }
 .badge.warning { color: var(--color-status-warning-text); border-color: var(--color-status-warning-border); }
 /* A disabled project cannot serve traffic. Give it its own tone so it never reads as an
    informational tag sharing the neutral default. */
-.badge.muted { color: var(--color-status-danger-text); border-color: var(--color-status-danger-border); background: var(--color-status-danger-surface); }
+/* Muted means an administrator switched it off, which is a state, not a fault.
+   Wearing the full danger treatment made a deliberately disabled deployment
+   indistinguishable at a glance from one that is failing. */
+.badge.muted { color: var(--color-text-tertiary); border-color: var(--line-strong); background: var(--overlay-hover); }
 .status-dot { display: inline-block; width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--danger); }
 .status-dot.ok { background: var(--color-status-success-icon); box-shadow: 0 0 7px var(--accent-glow); }
 .inline-test-control { display: grid; grid-template-columns: 56px 132px; align-items: center; width: 196px; flex: 0 0 196px; gap: 8px; contain: layout; }
@@ -238,13 +241,13 @@ h3 { margin-bottom: 0; font-size: 18px; }
 .anomaly-row strong { margin-bottom: 5px; font-size: 11px; }
 .anomaly-row small, .anomaly-row time { color: var(--muted); font: var(--font-size-xs) var(--mono); }
 .dashboard-empty { display: grid; min-height: 180px; place-items: center; padding: 24px; color: var(--muted-2); font: 10px var(--mono); text-align: center; }
-.first-run-panel { margin-bottom: 18px; }
+.first-run-panel { margin-bottom: var(--space-4); }
 .first-run-progress { font: var(--font-size-xs) var(--mono); letter-spacing: .08em; }
-.first-run-description { margin: 18px 22px 0; color: var(--muted); font-size: 13px; line-height: 1.7; }
-.first-run-steps { margin: 14px 0 0; padding: 0; list-style: none; }
-.first-run-step, .first-run-verify { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 14px 22px; border-top: 1px solid var(--line); }
-.first-run-step-copy strong { display: flex; align-items: center; gap: 10px; font-size: 13px; }
-.first-run-step-copy small { display: block; margin-top: 5px; margin-left: 18px; color: var(--muted); font: var(--font-size-xs) var(--mono); }
+.first-run-description { margin: var(--space-4) var(--space-6) 0; color: var(--muted); font-size: 13px; line-height: 1.7; }
+.first-run-steps { margin: var(--space-3) 0 0; padding: 0; list-style: none; }
+.first-run-step, .first-run-verify { display: flex; align-items: center; justify-content: space-between; gap: var(--space-5); padding: var(--space-3) var(--space-6); border-top: 1px solid var(--line); }
+.first-run-step-copy strong { display: flex; align-items: center; gap: var(--space-2); font-size: 13px; }
+.first-run-step-copy small { display: block; margin-top: var(--space-1); margin-left: var(--space-4); color: var(--muted); font: var(--font-size-xs) var(--mono); }
 .first-run-verify { background: var(--surface-sidebar); }
 .first-run-verify .first-run-step-copy small { margin-left: 0; }
 .internal-status-panel { display: grid; grid-template-columns: 1.15fr repeat(4, minmax(130px, 1fr)) auto; align-items: stretch; margin-top: 18px; }
@@ -268,11 +271,14 @@ h3 { margin-bottom: 0; font-size: 18px; }
   border: 1px solid var(--line-strong); border-radius: 4px; font-size: 12px; font-weight: 700;
 }
 .button:hover:not(:disabled) { border-color: var(--color-border-strong); background: var(--overlay-hover); }
-.button:disabled { cursor: not-allowed; opacity: .42; filter: saturate(.45); }
+/* One rule, not two. A second .button:disabled below overrode the opacity and
+   left the saturate() in place, so the composite landed at 2.09:1 against the
+   Light canvas — below the 4.5:1 the rest of the palette is held to, on the
+   control a read-only operator sees most often. */
+.button:disabled { cursor: not-allowed; opacity: .62; }
 .button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, a:focus-visible {
   outline: 2px solid var(--lime); outline-offset: 2px;
 }
-.button:disabled { cursor: not-allowed; opacity: .45; }
 .button.primary { color: var(--color-action-primary-foreground); background: var(--color-action-primary); border-color: var(--color-action-primary); }
 .button.primary:hover:not(:disabled) { color: var(--color-action-primary-foreground); background: var(--color-action-primary-hover); border-color: var(--color-action-primary-hover); }
 .button.secondary { color: var(--color-action-primary); border-color: var(--accent-border); }
@@ -689,8 +695,16 @@ td small, td code { display: block; margin-top: 4px; color: var(--muted); }
 }
 .filter-bar label span { display: block; margin-bottom: 5px; color: var(--muted-2); font: var(--font-size-xs) var(--mono); }
 .filter-bar input, .filter-bar select { min-height: 34px; }
-.filter-bar input[type="datetime-local"] { height: 34px; padding: 0 var(--space-3); font-size: 13px; }
+/* datetime-local had a fixed height, its own padding and its own font size, so
+   it sat at a different height from the text inputs and selects beside it. It
+   now takes exactly what they take; only the native picker button needs saying,
+   since it is drawn by the browser in its own colour. */
+.filter-bar input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+  padding: 0; opacity: .55; cursor: pointer; filter: grayscale(1);
+}
+.filter-bar input[type="datetime-local"]:hover::-webkit-calendar-picker-indicator { opacity: .85; }
 .filter-count { margin-left: auto; padding: 9px; color: var(--muted); font: var(--font-size-xs) var(--mono); }
+.filter-hint { align-self: center; color: var(--color-text-tertiary); font-size: var(--font-size-xs); }
 
 .timeline { padding: 5px 22px 18px; }
 .audit-panel { margin-top: 18px; }
@@ -897,6 +911,7 @@ td small, td code { display: block; margin-top: 4px; color: var(--muted); }
 }
 .settings-facts dd code { font-family: var(--mono); }
 .topline-timezone { color: var(--muted-2); font-family: var(--mono); }
+.topline-separator { margin: 0 var(--space-1); color: var(--color-text-tertiary); }
 .settings-facts dd small { display: block; margin-top: var(--space-1); color: var(--muted); font-size: var(--font-size-xs); }
 /* The three consequences of a time zone change, stated before it is confirmed. */
 .settings-consequences { margin: var(--space-3) 0; padding-left: var(--space-5); display: grid; gap: var(--space-2); color: var(--muted); font-size: .88rem; line-height: 1.5; }
@@ -1056,7 +1071,11 @@ input, select, textarea {
 select {
   appearance: none;
   padding-right: 42px;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='8' viewBox='0 0 14 8' fill='none'%3E%3Cpath d='M1 1l6 6 6-6' stroke='%238da29b' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  /* The chevron's colour lives in the theme layer, not in this URL. A hex
+     inside a data URI is invisible to the colour lint and cannot vary by
+     theme, which made this the one colour on the console that stayed on the
+     dark palette in Light. */
+  background-image: var(--select-chevron);
   background-repeat: no-repeat;
   background-position: right 14px center;
   background-size: 14px 8px;
@@ -1169,6 +1188,12 @@ textarea { resize: vertical; }
 .notice-link:hover { text-decoration: underline; text-underline-offset: 3px; }
 .notice.error { margin-bottom: 18px; color: var(--color-status-danger-text); background: var(--color-status-danger-surface); border-color: var(--color-status-danger-border); }
 .notice.warning { color: var(--color-status-warning-text); background: var(--color-status-warning-surface); border-color: var(--color-status-warning-border); }
+/* The read-only banner is a session-wide statement about what this operator can
+   do, and it was rendered in the base .notice — muted grey at the smallest size
+   on the page, which reads as a footnote rather than as the reason every
+   destructive control is disabled. The info tokens existed in both themes and
+   were consumed nowhere. */
+.notice.info { margin-bottom: var(--space-4); color: var(--color-status-info-text); background: var(--color-status-info-surface); border-color: var(--color-status-info-border); font-size: var(--font-size-xs); }
 .notice.success { color: var(--color-status-success-text); background: var(--color-status-success-surface); border-color: var(--color-status-success-border); }
 .danger-check { color: var(--color-status-danger-text); }
 .one-time-secret { display: grid; gap: 15px; }

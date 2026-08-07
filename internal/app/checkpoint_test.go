@@ -111,8 +111,14 @@ func TestCheckpointWatermarkRejectsAlreadyAggregatedLedgerPrefix(t *testing.T) {
 	}) {
 		t.Fatalf("watermark=%#v", watermark)
 	}
-	if err := restored.Apply(records[0]); err == nil {
-		t.Fatal("checkpointed prefix was accepted a second time")
+	// Skipped rather than refused: the checkpoint now carries the dedup window,
+	// so a record already folded in is recognised by its event ID and ignored,
+	// which is how Apply has always treated a duplicate. The invariant worth
+	// asserting is that it changed nothing, not which of the two guards caught
+	// it — the monotonic-sequence check still refuses anything older than the
+	// window.
+	if err := restored.Apply(records[0]); err != nil {
+		t.Fatalf("re-applying a checkpointed record: %v", err)
 	}
 	if !reflect.DeepEqual(restored.Snapshot(), aggregate.Snapshot()) {
 		t.Fatal("replaying a checkpointed prefix changed the aggregate")

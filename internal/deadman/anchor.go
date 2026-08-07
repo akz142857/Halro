@@ -63,7 +63,8 @@ func (a *anchorWriter) append(anchor PulledAnchor) error {
 // fail-open (ADR 0015); the pull side matches that: an unreachable anchor
 // endpoint is logged and skipped, never allowed to stall or fail a Tick that
 // also carries the heartbeat.
-func (e *Engine) pullAnchors(ctx context.Context) {
+func (e *Engine) pullAnchors(ctx context.Context) map[string]string {
+	reasons := make(map[string]string)
 	for _, target := range e.cfg.Targets {
 		if target.Kind != "heimdall" || target.AnchorURL == "" || e.anchor == nil {
 			continue
@@ -74,29 +75,46 @@ func (e *Engine) pullAnchors(ctx context.Context) {
 		anchors, err := fetchAnchors(ctx, e.cfg, target, e.targetClients[target.ID], since)
 		if err != nil {
 			e.logger.Warn("audit anchor pull failed", "target_id", target.ID, "error", err)
+			reasons[target.ID] = "anchor_unreachable"
 			continue
 		}
+		expected := since + 1
+		reason := ""
 		for _, anchor := range anchors {
 			if anchor.Sequence <= since {
+				// The endpoint was asked for anchors after `since` and answered
+				// with ones at or before it. On a healthy instance that cannot
+				// happen; after a restore from an older backup it does, because
+				// the anchor sequence restarts. Skipping quietly is what made
+				// the witness fall silent exactly when the log it witnesses had
+				// been rolled back.
+				reason = "anchor_sequence_rewound"
 				continue
+			}
+			if anchor.Sequence != expected {
+				// Anchors the ring dropped before this pull reached them. The
+				// gap is permanent — nothing will re-serve those sequences — so
+				// it has to be reported rather than closed over.
+				reason = "anchor_sequence_gap"
 			}
 			if err := e.anchor.append(anchor); err != nil {
 				e.logger.Warn("audit anchor persist failed", "target_id", target.ID, "sequence", anchor.Sequence, "error", err)
+				reason = "anchor_persist_failed"
 				break
 			}
 			since = anchor.Sequence
+			expected = since + 1
 			e.mu.Lock()
 			state := e.state.Targets[target.ID]
 			state.LastAnchorSequence = since
 			e.state.Targets[target.ID] = state
 			e.mu.Unlock()
 		}
+		if reason != "" {
+			reasons[target.ID] = reason
+		}
 	}
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if err := saveState(e.cfg.StateFile, e.state); err != nil {
-		e.logger.Warn("audit anchor state persist failed", "error", err)
-	}
+	return reasons
 }
 
 func fetchAnchors(ctx context.Context, cfg Config, target TargetConfig, client *http.Client, since uint64) ([]PulledAnchor, error) {

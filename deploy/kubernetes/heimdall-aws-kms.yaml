@@ -50,9 +50,16 @@ spec:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities: {drop: ["ALL"]}
+          # Admin password verification runs Argon2id at 64 MiB per concurrent
+          # check, and nothing bounds how many run at once, so the memory limit
+          # is also a cap on how many simultaneous logins or step-ups the pod
+          # survives: at 512Mi, roughly eight. With replicas fixed at 1 and a
+          # Recreate strategy, an OOMKill here takes the gateway with it. Size
+          # this as (baseline + 64Mi x expected concurrent credential checks)
+          # rather than by steady-state usage, which is far lower.
           resources:
             requests: {cpu: 100m, memory: 128Mi}
-            limits: {memory: 512Mi}
+            limits: {memory: 1Gi}
           volumeMounts:
             - {name: config, mountPath: /etc/heimdall, readOnly: true}
             - {name: data, mountPath: /var/lib/heimdall}

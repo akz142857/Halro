@@ -78,7 +78,11 @@ describe("read-only role", () => {
     expect(within(row!).getByRole("button", { name: "测试" })).toBeEnabled();
   });
 
-  it("hides account administration from a read-only session", async () => {
+  // Disabled with a stated reason, not hidden. Every other page tells a
+  // read-only operator why a control is unavailable; hiding these meant they
+  // could not tell account management exists, and so could not tell whether to
+  // ask someone for it or report it missing.
+  it("shows account administration to a read-only session but refuses it", async () => {
     vi.spyOn(api, "listAdminUsers").mockResolvedValue([
       { username: "admin", role: "administrator" },
       { username: "viewer", role: "read_only" },
@@ -86,8 +90,12 @@ describe("read-only role", () => {
     renderAs("read_only", <AdminUsersSection />);
 
     expect(await screen.findByText("viewer")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "新建账户" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "删除" })).toBeNull();
+    const create = screen.getByRole("button", { name: "新建账户" });
+    expect(create).toBeDisabled();
+    expect(create).toHaveAttribute("title", "只读账户无法执行此操作。");
+    for (const remove of screen.getAllByRole("button", { name: "删除" })) {
+      expect(remove).toBeDisabled();
+    }
   });
 });
 

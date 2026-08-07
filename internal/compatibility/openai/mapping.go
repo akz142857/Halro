@@ -470,13 +470,39 @@ func decodeUsage(usage *openaiapi.Usage) *semantic.Usage {
 	if usage == nil {
 		return nil
 	}
-	return &semantic.Usage{InputTokens: usage.PromptTokens, OutputTokens: usage.CompletionTokens, TotalTokens: usage.TotalTokens, Source: semantic.UsageProviderReported}
+	// PromptTokens already counts the cached span on this wire shape, so the
+	// tiers map straight onto the subset convention semantic.Usage documents.
+	decoded := &semantic.Usage{
+		InputTokens:           usage.PromptTokens,
+		CachedInputTokens:     usage.CachedPromptTokens(),
+		CacheWriteInputTokens: usage.CacheWriteTokens,
+		OutputTokens:          usage.CompletionTokens,
+		ReasoningTokens:       usage.ReasoningTokens(),
+		AudioTokens:           usage.AudioTokens(),
+		TotalTokens:           usage.TotalTokens,
+		Source:                semantic.UsageProviderReported,
+	}
+	// A provider that under-reports its own total would otherwise fail semantic
+	// validation, which costs the request its provider-reported usage entirely
+	// and silently downgrades the attempt to an estimate.
+	if sum := decoded.InputTokens + decoded.OutputTokens; decoded.TotalTokens < sum {
+		decoded.TotalTokens = sum
+	}
+	return decoded
 }
 func renderUsage(usage *semantic.Usage) *openaiapi.Usage {
 	if usage == nil {
 		return nil
 	}
-	return &openaiapi.Usage{PromptTokens: usage.InputTokens, CompletionTokens: usage.OutputTokens, TotalTokens: usage.TotalTokens}
+	rendered := &openaiapi.Usage{
+		PromptTokens:     usage.InputTokens,
+		CompletionTokens: usage.OutputTokens,
+		TotalTokens:      usage.TotalTokens,
+		CacheWriteTokens: usage.CacheWriteInputTokens,
+	}
+	rendered.SetCachedPromptTokens(usage.CachedInputTokens)
+	rendered.SetReasoningTokens(usage.ReasoningTokens)
+	return rendered
 }
 func normalizeTermination(value string) string {
 	switch value {

@@ -17,7 +17,21 @@ import (
 	"github.com/parquet-go/parquet-go"
 )
 
-const parquetSchemaVersion = 3
+// Schema 4 adds the provider token tiers: the cache-read, cache-write, and
+// reasoning spans that partition the input and output totals. Rows written under
+// schema 3 decode with those columns zero, which reads correctly as "no tier
+// reported" rather than as a tier of size zero.
+const parquetSchemaVersion = 4
+
+// parquetSchemaMinReadable is the oldest manifest this build still opens. Every
+// version from here to parquetSchemaVersion is accepted and upgraded in place;
+// gating on an explicit pair instead is how a bump silently locks out the
+// installs written by the version before it.
+const parquetSchemaMinReadable = 3
+
+func supportedManifestSchema(version int) bool {
+	return version >= parquetSchemaMinReadable && version <= parquetSchemaVersion
+}
 
 // Export format (ADR 0017): what new partitions are written as. Existing
 // partitions are never rewritten to a different format.
@@ -27,72 +41,45 @@ const (
 )
 
 type parquetAttempt struct {
-	SchemaVersion        int32  `parquet:"schema_version" json:"schema_version"`
-	EventID              string `parquet:"event_id,dict" json:"event_id"`
-	RequestID            string `parquet:"request_id,dict" json:"request_id"`
-	AttemptID            string `parquet:"attempt_id,dict" json:"attempt_id"`
-	Sequence             int64  `parquet:"sequence,delta" json:"sequence"`
-	AttemptNumber        int32  `parquet:"attempt_number" json:"attempt_number"`
-	ProjectID            string `parquet:"project_id,dict" json:"project_id"`
-	KeyID                string `parquet:"key_id,dict" json:"key_id"`
-	RouteID              string `parquet:"route_id,dict" json:"route_id"`
-	DeploymentID         string `parquet:"deployment_id,dict" json:"deployment_id"`
-	ProviderID           string `parquet:"provider_id,dict" json:"provider_id"`
-	RequestedModel       string `parquet:"requested_model,dict" json:"requested_model"`
-	ProviderModel        string `parquet:"provider_model,dict" json:"provider_model"`
-	ProviderInputTokens  int64  `parquet:"provider_input_tokens" json:"provider_input_tokens"`
-	ProviderOutputTokens int64  `parquet:"provider_output_tokens" json:"provider_output_tokens"`
-	PreparedOutputTokens int64  `parquet:"prepared_output_tokens" json:"prepared_output_tokens"`
-	CostMicrosUSD        int64  `parquet:"cost_micros_usd" json:"cost_micros_usd"`
-	CostKnown            bool   `parquet:"cost_known" json:"cost_known"`
-	PriceEvidenceStatus  string `parquet:"price_evidence_status,dict" json:"price_evidence_status"`
-	CostValueStatus      string `parquet:"cost_value_status,dict" json:"cost_value_status"`
-	BillingMode          string `parquet:"billing_mode,dict" json:"billing_mode"`
-	PriceSnapshotJSON    string `parquet:"price_snapshot_json" json:"price_snapshot_json"`
-	InputCostMicrosUSD   int64  `parquet:"input_cost_micros_usd" json:"input_cost_micros_usd"`
-	OutputCostMicrosUSD  int64  `parquet:"output_cost_micros_usd" json:"output_cost_micros_usd"`
-	FixedCostMicrosUSD   int64  `parquet:"fixed_cost_micros_usd" json:"fixed_cost_micros_usd"`
-	TokenUsageSource     string `parquet:"token_usage_source,dict" json:"token_usage_source"`
-	CostEstimated        bool   `parquet:"cost_estimated" json:"cost_estimated"`
-	TokensEstimated      bool   `parquet:"tokens_estimated" json:"tokens_estimated"`
-	StartedAtMicros      int64  `parquet:"started_at_utc,timestamp(microsecond)" json:"started_at_utc"`
-	CompletedAtMicros    int64  `parquet:"completed_at_utc,timestamp(microsecond)" json:"completed_at_utc"`
-	Status               string `parquet:"status,dict" json:"status"`
-	ErrorClass           string `parquet:"error_class,dict" json:"error_class"`
-	HTTPStatus           int32  `parquet:"http_status" json:"http_status"`
-	LatencyMillis        int64  `parquet:"latency_millis" json:"latency_millis"`
-	RetryCount           int32  `parquet:"retry_count" json:"retry_count"`
-	FallbackCount        int32  `parquet:"fallback_count" json:"fallback_count"`
-}
-
-type parquetAttemptV2 struct {
-	SchemaVersion        int32  `parquet:"schema_version" json:"schema_version"`
-	EventID              string `parquet:"event_id,dict" json:"event_id"`
-	RequestID            string `parquet:"request_id,dict" json:"request_id"`
-	AttemptID            string `parquet:"attempt_id,dict" json:"attempt_id"`
-	Sequence             int64  `parquet:"sequence,delta" json:"sequence"`
-	AttemptNumber        int32  `parquet:"attempt_number" json:"attempt_number"`
-	ProjectID            string `parquet:"project_id,dict" json:"project_id"`
-	KeyID                string `parquet:"key_id,dict" json:"key_id"`
-	RouteID              string `parquet:"route_id,dict" json:"route_id"`
-	DeploymentID         string `parquet:"deployment_id,dict" json:"deployment_id"`
-	ProviderID           string `parquet:"provider_id,dict" json:"provider_id"`
-	RequestedModel       string `parquet:"requested_model,dict" json:"requested_model"`
-	ProviderModel        string `parquet:"provider_model,dict" json:"provider_model"`
-	ProviderInputTokens  int64  `parquet:"provider_input_tokens" json:"provider_input_tokens"`
-	ProviderOutputTokens int64  `parquet:"provider_output_tokens" json:"provider_output_tokens"`
-	PreparedOutputTokens int64  `parquet:"prepared_output_tokens" json:"prepared_output_tokens"`
-	CostMicrosUSD        int64  `parquet:"cost_micros_usd" json:"cost_micros_usd"`
-	CostEstimated        bool   `parquet:"cost_estimated" json:"cost_estimated"`
-	TokensEstimated      bool   `parquet:"tokens_estimated" json:"tokens_estimated"`
-	StartedAtMicros      int64  `parquet:"started_at_utc,timestamp(microsecond)" json:"started_at_utc"`
-	CompletedAtMicros    int64  `parquet:"completed_at_utc,timestamp(microsecond)" json:"completed_at_utc"`
-	Status               string `parquet:"status,dict" json:"status"`
-	ErrorClass           string `parquet:"error_class,dict" json:"error_class"`
-	HTTPStatus           int32  `parquet:"http_status" json:"http_status"`
-	LatencyMillis        int64  `parquet:"latency_millis" json:"latency_millis"`
-	RetryCount           int32  `parquet:"retry_count" json:"retry_count"`
-	FallbackCount        int32  `parquet:"fallback_count" json:"fallback_count"`
+	SchemaVersion                 int32  `parquet:"schema_version" json:"schema_version"`
+	EventID                       string `parquet:"event_id,dict" json:"event_id"`
+	RequestID                     string `parquet:"request_id,dict" json:"request_id"`
+	AttemptID                     string `parquet:"attempt_id,dict" json:"attempt_id"`
+	Sequence                      int64  `parquet:"sequence,delta" json:"sequence"`
+	AttemptNumber                 int32  `parquet:"attempt_number" json:"attempt_number"`
+	ProjectID                     string `parquet:"project_id,dict" json:"project_id"`
+	KeyID                         string `parquet:"key_id,dict" json:"key_id"`
+	RouteID                       string `parquet:"route_id,dict" json:"route_id"`
+	DeploymentID                  string `parquet:"deployment_id,dict" json:"deployment_id"`
+	ProviderID                    string `parquet:"provider_id,dict" json:"provider_id"`
+	RequestedModel                string `parquet:"requested_model,dict" json:"requested_model"`
+	ProviderModel                 string `parquet:"provider_model,dict" json:"provider_model"`
+	ProviderInputTokens           int64  `parquet:"provider_input_tokens" json:"provider_input_tokens"`
+	ProviderOutputTokens          int64  `parquet:"provider_output_tokens" json:"provider_output_tokens"`
+	ProviderCachedInputTokens     int64  `parquet:"provider_cached_input_tokens" json:"provider_cached_input_tokens"`
+	ProviderCacheWriteInputTokens int64  `parquet:"provider_cache_write_input_tokens" json:"provider_cache_write_input_tokens"`
+	ProviderReasoningTokens       int64  `parquet:"provider_reasoning_tokens" json:"provider_reasoning_tokens"`
+	PreparedOutputTokens          int64  `parquet:"prepared_output_tokens" json:"prepared_output_tokens"`
+	CostMicrosUSD                 int64  `parquet:"cost_micros_usd" json:"cost_micros_usd"`
+	CostKnown                     bool   `parquet:"cost_known" json:"cost_known"`
+	PriceEvidenceStatus           string `parquet:"price_evidence_status,dict" json:"price_evidence_status"`
+	CostValueStatus               string `parquet:"cost_value_status,dict" json:"cost_value_status"`
+	BillingMode                   string `parquet:"billing_mode,dict" json:"billing_mode"`
+	PriceSnapshotJSON             string `parquet:"price_snapshot_json" json:"price_snapshot_json"`
+	InputCostMicrosUSD            int64  `parquet:"input_cost_micros_usd" json:"input_cost_micros_usd"`
+	OutputCostMicrosUSD           int64  `parquet:"output_cost_micros_usd" json:"output_cost_micros_usd"`
+	FixedCostMicrosUSD            int64  `parquet:"fixed_cost_micros_usd" json:"fixed_cost_micros_usd"`
+	TokenUsageSource              string `parquet:"token_usage_source,dict" json:"token_usage_source"`
+	CostEstimated                 bool   `parquet:"cost_estimated" json:"cost_estimated"`
+	TokensEstimated               bool   `parquet:"tokens_estimated" json:"tokens_estimated"`
+	StartedAtMicros               int64  `parquet:"started_at_utc,timestamp(microsecond)" json:"started_at_utc"`
+	CompletedAtMicros             int64  `parquet:"completed_at_utc,timestamp(microsecond)" json:"completed_at_utc"`
+	Status                        string `parquet:"status,dict" json:"status"`
+	ErrorClass                    string `parquet:"error_class,dict" json:"error_class"`
+	HTTPStatus                    int32  `parquet:"http_status" json:"http_status"`
+	LatencyMillis                 int64  `parquet:"latency_millis" json:"latency_millis"`
+	RetryCount                    int32  `parquet:"retry_count" json:"retry_count"`
+	FallbackCount                 int32  `parquet:"fallback_count" json:"fallback_count"`
 }
 
 type Manifest struct {
@@ -177,13 +164,19 @@ func (e *Exporter) Export(snapshot Snapshot) (Manifest, error) {
 	if manifestMissing {
 		manifest = Manifest{SchemaVersion: parquetSchemaVersion}
 	}
-	if manifest.SchemaVersion != 2 && manifest.SchemaVersion != parquetSchemaVersion {
+	if !supportedManifestSchema(manifest.SchemaVersion) {
 		return Manifest{}, fmt.Errorf("usage manifest schema version %d is not supported", manifest.SchemaVersion)
 	}
-	manifestUpgraded := manifest.SchemaVersion == 2
+	manifestUpgraded := manifest.SchemaVersion != parquetSchemaVersion
 	if manifestUpgraded {
+		// Stamp the files with the version they were actually written under
+		// before the manifest moves forward, so a reader can still tell which
+		// columns a given partition is expected to carry.
+		previous := manifest.SchemaVersion
 		for index := range manifest.Files {
-			manifest.Files[index].SchemaVersion = 2
+			if manifest.Files[index].SchemaVersion == 0 {
+				manifest.Files[index].SchemaVersion = previous
+			}
 		}
 		manifest.SchemaVersion = parquetSchemaVersion
 	}
@@ -248,7 +241,7 @@ func (e *Exporter) Verify(snapshot *Snapshot) error {
 	if err != nil {
 		return err
 	}
-	if manifest.SchemaVersion != 2 && manifest.SchemaVersion != parquetSchemaVersion {
+	if !supportedManifestSchema(manifest.SchemaVersion) {
 		return fmt.Errorf("usage manifest schema version %d is not supported", manifest.SchemaVersion)
 	}
 	seen := make(map[string]struct{})
@@ -267,32 +260,12 @@ func (e *Exporter) Verify(snapshot *Snapshot) error {
 		if checksum != entry.SHA256 {
 			return fmt.Errorf("usage parquet checksum mismatch: %s", entry.Path)
 		}
-		entryVersion := entry.SchemaVersion
-		if entryVersion == 0 {
-			entryVersion = manifest.SchemaVersion
+		rows, readErr := readAttemptRows(path, entry.format())
+		if readErr != nil {
+			return fmt.Errorf("read usage partition %s: %w", entry.Path, readErr)
 		}
-		if entryVersion == 2 {
-			var rows []parquetAttemptV2
-			var readErr error
-			if entry.format() == FormatNDJSON {
-				rows, readErr = readNDJSONFile[parquetAttemptV2](path)
-			} else {
-				rows, readErr = parquet.ReadFile[parquetAttemptV2](path)
-			}
-			if readErr != nil {
-				return fmt.Errorf("read legacy usage partition %s: %w", entry.Path, readErr)
-			}
-			if err := verifyRowsV2(rows, entry, seen); err != nil {
-				return fmt.Errorf("verify legacy usage partition %s: %w", entry.Path, err)
-			}
-		} else {
-			rows, readErr := readAttemptRows(path, entry.format())
-			if readErr != nil {
-				return fmt.Errorf("read usage partition %s: %w", entry.Path, readErr)
-			}
-			if err := verifyRows(rows, entry, seen, canonicalRows); err != nil {
-				return fmt.Errorf("verify usage partition %s: %w", entry.Path, err)
-			}
+		if err := verifyRows(rows, entry, seen, canonicalRows); err != nil {
+			return fmt.Errorf("verify usage partition %s: %w", entry.Path, err)
 		}
 		if entry.MaxSequence > lastSequence {
 			lastSequence = entry.MaxSequence
@@ -320,7 +293,7 @@ func (e *Exporter) Verify(snapshot *Snapshot) error {
 			if _, exists := seen[eventID]; !exists {
 				return fmt.Errorf("usage reconciliation missing event %s", eventID)
 			}
-			if row, exists := canonicalRows[eventID]; exists && row != toParquetAttempt(expected[eventID]) {
+			if row, exists := canonicalRows[eventID]; exists && row != narrowToSchema(toParquetAttempt(expected[eventID]), row.SchemaVersion) {
 				return fmt.Errorf("usage reconciliation content mismatch for event %s", eventID)
 			}
 		}
@@ -364,7 +337,7 @@ func (e *Exporter) PruneBefore(cutoff time.Time) (RetentionReport, error) {
 	if err != nil {
 		return report, err
 	}
-	if manifest.SchemaVersion != 2 && manifest.SchemaVersion != parquetSchemaVersion {
+	if !supportedManifestSchema(manifest.SchemaVersion) {
 		return report, fmt.Errorf("usage manifest schema version %d is not supported", manifest.SchemaVersion)
 	}
 	kept := make([]ManifestFile, 0, len(manifest.Files))
@@ -430,7 +403,7 @@ func (e *Exporter) publishPartition(date string, attempts []AttemptEvent) (Manif
 		if err := addInt64(&entry.OutputTokens, attempt.ProviderOutputTokens); err != nil {
 			return ManifestFile{}, err
 		}
-		if cost, ok := originalAttemptCost(attempt); ok {
+		if cost, ok := attempt.KnownCostMicrosUSD(); ok {
 			if err := addInt64(&entry.CostMicrosUSD, cost); err != nil {
 				return ManifestFile{}, err
 			}
@@ -624,13 +597,39 @@ func (e *Exporter) safeManifestPath(relative string) (string, error) {
 	return path, nil
 }
 
+// narrowToSchema restates a freshly derived row as the given schema version
+// would have written it, so it can be compared against a partition that is
+// older than the current schema.
+//
+// Partitions are frozen once published. Reconciliation re-derives what a row
+// should contain from the Ledger, which necessarily produces the current
+// schema, so every column added after a partition was written would read as a
+// content mismatch — the row on disk is not wrong, it is just older. Only
+// columns the row's own schema could express take part in the comparison.
+func narrowToSchema(row parquetAttempt, version int32) parquetAttempt {
+	row.SchemaVersion = version
+	if version < 4 {
+		// Schema 4 introduced the provider token tiers.
+		row.ProviderCachedInputTokens = 0
+		row.ProviderCacheWriteInputTokens = 0
+		row.ProviderReasoningTokens = 0
+	}
+	return row
+}
+
 func verifyRows(rows []parquetAttempt, entry ManifestFile, seen map[string]struct{}, canonical map[string]parquetAttempt) error {
 	if int64(len(rows)) != entry.Records || len(rows) == 0 {
 		return errors.New("record count mismatch")
 	}
 	var inputTokens, outputTokens, cost int64
 	for _, row := range rows {
-		if row.SchemaVersion != parquetSchemaVersion || row.Sequence <= 0 || row.EventID == "" {
+		// The readable range, not the current version. Partitions are never
+		// rewritten, so a bump leaves every row already on disk at the older
+		// version; demanding the current one here fails verification for
+		// exactly the installs that have history. This is the same
+		// exact-equality trap the manifest gate above documents, one level
+		// further down.
+		if !supportedManifestSchema(int(row.SchemaVersion)) || row.Sequence <= 0 || row.EventID == "" {
 			return errors.New("invalid row")
 		}
 		if _, exists := seen[row.EventID]; exists {
@@ -657,37 +656,8 @@ func verifyRows(rows []parquetAttempt, entry ManifestFile, seen map[string]struc
 	return nil
 }
 
-func verifyRowsV2(rows []parquetAttemptV2, entry ManifestFile, seen map[string]struct{}) error {
-	if int64(len(rows)) != entry.Records || len(rows) == 0 {
-		return errors.New("record count mismatch")
-	}
-	var inputTokens, outputTokens, cost int64
-	for _, row := range rows {
-		if row.SchemaVersion != 2 || row.Sequence <= 0 || row.EventID == "" {
-			return errors.New("invalid legacy row")
-		}
-		if _, exists := seen[row.EventID]; exists {
-			return fmt.Errorf("duplicate event ID %s", row.EventID)
-		}
-		seen[row.EventID] = struct{}{}
-		if err := addInt64(&inputTokens, row.ProviderInputTokens); err != nil {
-			return err
-		}
-		if err := addInt64(&outputTokens, row.ProviderOutputTokens); err != nil {
-			return err
-		}
-		if err := addInt64(&cost, row.CostMicrosUSD); err != nil {
-			return err
-		}
-	}
-	if uint64(rows[0].Sequence) != entry.MinSequence || uint64(rows[len(rows)-1].Sequence) != entry.MaxSequence || inputTokens != entry.InputTokens || outputTokens != entry.OutputTokens || cost != entry.CostMicrosUSD {
-		return errors.New("partition summary mismatch")
-	}
-	return nil
-}
-
 func toParquetAttempt(attempt AttemptEvent) parquetAttempt {
-	cost, costKnown := originalAttemptCost(attempt)
+	cost, costKnown := attempt.KnownCostMicrosUSD()
 	inputCost, outputCost, fixedCost := int64(0), int64(0), int64(0)
 	if attempt.InputCostMicrosUSD != nil {
 		inputCost = *attempt.InputCostMicrosUSD
@@ -712,9 +682,12 @@ func toParquetAttempt(attempt AttemptEvent) parquetAttempt {
 		DeploymentID: attempt.DeploymentID,
 		ProviderID:   attempt.ProviderID, RequestedModel: attempt.RequestedModel,
 		ProviderModel: attempt.ProviderModel, ProviderInputTokens: attempt.ProviderInputTokens,
-		ProviderOutputTokens: attempt.ProviderOutputTokens,
-		PreparedOutputTokens: attempt.PreparedOutputTokens,
-		CostMicrosUSD:        cost, CostKnown: costKnown,
+		ProviderOutputTokens:          attempt.ProviderOutputTokens,
+		ProviderCachedInputTokens:     attempt.ProviderCachedInputTokens,
+		ProviderCacheWriteInputTokens: attempt.ProviderCacheWriteInputTokens,
+		ProviderReasoningTokens:       attempt.ProviderReasoningTokens,
+		PreparedOutputTokens:          attempt.PreparedOutputTokens,
+		CostMicrosUSD:                 cost, CostKnown: costKnown,
 		PriceEvidenceStatus: string(attempt.PriceEvidenceStatus), CostValueStatus: string(attempt.CostValueStatus),
 		BillingMode: func() string {
 			if attempt.PriceSnapshot != nil {
@@ -731,16 +704,6 @@ func toParquetAttempt(attempt AttemptEvent) parquetAttempt {
 		HTTPStatus: int32(attempt.HTTPStatus), LatencyMillis: attempt.LatencyMillis,
 		RetryCount: int32(attempt.RetryCount), FallbackCount: int32(attempt.FallbackCount),
 	}
-}
-
-func originalAttemptCost(attempt AttemptEvent) (int64, bool) {
-	if attempt.OriginalCostMicrosUSD != nil {
-		return *attempt.OriginalCostMicrosUSD, true
-	}
-	if attempt.CostMicrosUSD != nil {
-		return *attempt.CostMicrosUSD, true
-	}
-	return 0, false
 }
 
 func sameRows(left, right []parquetAttempt) bool {

@@ -12,18 +12,50 @@ const (
 	UsageLocallyEstimated UsageSource = "locally_estimated"
 )
 
+// Usage normalizes provider token reporting onto one convention, because the
+// upstreams disagree about what their own prompt-token field means: Anthropic
+// reports input_tokens *excluding* cache reads and writes, while OpenAI reports
+// prompt_tokens *including* them. Recording either shape verbatim makes the same
+// number mean different things per provider and mis-prices every cached request.
+//
+// The convention here: InputTokens is every prompt token the provider processed,
+// whatever tier it was billed at. CachedInputTokens and CacheWriteInputTokens are
+// breakdown *subsets* of InputTokens, never additions to it, so
+// InputTokens - CachedInputTokens - CacheWriteInputTokens is the span billed at
+// the ordinary input rate. Adapters translate into this shape; everything
+// downstream may assume it.
+//
+// ReasoningTokens is likewise a subset of OutputTokens wherever the provider
+// bills reasoning at the output rate, so it is reported for observability and
+// must not be added to OutputTokens when pricing.
 type Usage struct {
-	InputTokens     int64       `json:"input_tokens"`
-	OutputTokens    int64       `json:"output_tokens"`
-	ReasoningTokens int64       `json:"reasoning_tokens,omitempty"`
-	AudioTokens     int64       `json:"audio_tokens,omitempty"`
-	TotalTokens     int64       `json:"total_tokens"`
-	Source          UsageSource `json:"source,omitempty"`
+	InputTokens           int64       `json:"input_tokens"`
+	CachedInputTokens     int64       `json:"cached_input_tokens,omitempty"`
+	CacheWriteInputTokens int64       `json:"cache_write_input_tokens,omitempty"`
+	OutputTokens          int64       `json:"output_tokens"`
+	ReasoningTokens       int64       `json:"reasoning_tokens,omitempty"`
+	AudioTokens           int64       `json:"audio_tokens,omitempty"`
+	TotalTokens           int64       `json:"total_tokens"`
+	Source                UsageSource `json:"source,omitempty"`
+}
+
+// UncachedInputTokens is the prompt span billed at the ordinary input rate.
+func (usage Usage) UncachedInputTokens() int64 {
+	return usage.InputTokens - usage.CachedInputTokens - usage.CacheWriteInputTokens
 }
 
 func (usage Usage) Validate() error {
 	if usage.InputTokens < 0 || usage.OutputTokens < 0 || usage.ReasoningTokens < 0 || usage.AudioTokens < 0 || usage.TotalTokens < usage.InputTokens+usage.OutputTokens {
 		return errors.New("semantic usage is invalid")
+	}
+	if usage.CachedInputTokens < 0 || usage.CacheWriteInputTokens < 0 {
+		return errors.New("semantic usage cache tokens are invalid")
+	}
+	// The cache tiers partition InputTokens. A sum that overruns it means an
+	// adapter added the tiers on top instead of translating into the subset
+	// convention, which would double-count the cached span when pricing.
+	if usage.CachedInputTokens+usage.CacheWriteInputTokens > usage.InputTokens {
+		return errors.New("semantic usage cache tokens exceed input tokens")
 	}
 	if usage.Source != UsageProviderReported && usage.Source != UsageLocallyEstimated {
 		return errors.New("semantic usage source is invalid")

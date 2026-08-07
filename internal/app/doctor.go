@@ -66,9 +66,9 @@ func DoctorWithOptions(ctx context.Context, cfg config.Config, options DoctorOpt
 	// A config file written before this setting existed decodes to zero, which
 	// is a disabled limiter. That is a legitimate choice but a poor accident,
 	// so it is reported rather than assumed.
-	if cfg.Gateway.SourceRateLimit.RequestsPerMinute > 0 {
+	if cfg.Gateway.SourceRateLimit.SourceRequestsPerMinute() > 0 {
 		add("source_rate_limit", "pass", fmt.Sprintf("%d requests per minute per source, up to %d tracked sources",
-			cfg.Gateway.SourceRateLimit.RequestsPerMinute, cfg.Gateway.SourceRateLimit.MaxTrackedSources))
+			cfg.Gateway.SourceRateLimit.SourceRequestsPerMinute(), cfg.Gateway.SourceRateLimit.MaxTrackedSources))
 	} else {
 		add("source_rate_limit", "warn",
 			"gateway.source_rate_limit.requests_per_minute is 0, so anonymous request volume is unbounded before authentication")
@@ -107,6 +107,12 @@ func DoctorWithOptions(ctx context.Context, cfg config.Config, options DoctorOpt
 		defer store.Close()
 		add("metadata", "pass", fmt.Sprintf("bbolt schema v%d", boltstore.CurrentSchemaVersion()))
 	}
+	// Filled in below when the Ledger chain could actually be authenticated.
+	// Reported alongside the WAL scan rather than on its own, because "the frames
+	// parse" and "the frames are the ones we wrote" are the same question to an
+	// operator, and only one of them used to be answered.
+	chainStatus := "unverified"
+	chainDetail := "cryptographic verification was skipped; run `heimdall ledger verify`"
 	staticKMS := options.NoKMS && cfg.Storage.MasterKey.Mode == config.MasterKeyModeKeySlots
 	if staticKMS {
 		if store == nil {
@@ -138,6 +144,7 @@ func DoctorWithOptions(ctx context.Context, cfg config.Config, options DoctorOpt
 				} else {
 					report.VaultStatus = "verified"
 					add("master_key", "pass", "mode and encrypted metadata key check are valid")
+					chainStatus, chainDetail = inspectLedgerChain(store, secretVault, masterKey, cfg.LedgerPath())
 				}
 				secretVault.Close()
 			}
@@ -158,8 +165,10 @@ func DoctorWithOptions(ctx context.Context, cfg config.Config, options DoctorOpt
 		add("ledger", "fail", walErr.Error())
 	} else if partial {
 		add("ledger", "fail", fmt.Sprintf("partial WAL tail after committed offset %d; doctor did not truncate it", watermark.Offset))
+	} else if chainStatus == "fail" {
+		add("ledger", "fail", chainDetail)
 	} else {
-		add("ledger", "pass", fmt.Sprintf("committed sequence %d at offset %d", watermark.Sequence, watermark.Offset))
+		add("ledger", chainStatus, fmt.Sprintf("committed sequence %d at offset %d; %s", watermark.Sequence, watermark.Offset, chainDetail))
 		pending, oldestAge := ledgerState.PendingLeaseStats(time.Now())
 		status := "pass"
 		if pending > 0 {
@@ -331,4 +340,41 @@ func checkDoctorTopology(ctx context.Context, store *boltstore.Store, add func(s
 	}
 	detail := fmt.Sprintf("%d active routes; all references are available", active)
 	add("topology", "pass", detail)
+}
+
+// inspectLedgerChain authenticates the Ledger chain and reconciles it against
+// the trusted checkpoint, which is the check doctor was documented to perform
+// and did not: it scanned the WAL without a key, so a file whose frames had
+// been rewritten by anyone holding the data directory reported "pass". doctor
+// has already unlocked the Master Key by this point, so the only thing that was
+// missing is the call.
+func inspectLedgerChain(store *boltstore.Store, secretVault *vault.Vault, masterKey []byte, path string) (string, string) {
+	ledgerKey, err := loadLedgerHMACKey(store, secretVault, masterKey)
+	if err != nil {
+		return "unverified", "ledger chain key is unavailable: " + err.Error()
+	}
+	defer clear(ledgerKey)
+	report, partial, err := ledger.VerifyChain(path, ledgerKey)
+	if err != nil {
+		return "fail", "ledger chain verification failed: " + err.Error()
+	}
+	if partial {
+		return "unverified", "ledger has a partial tail; start Heimdall to repair it before verifying"
+	}
+	checkpoint, err := store.LedgerChainCheckpoint()
+	if err != nil {
+		return "unverified", "ledger chain checkpoint is unavailable: " + err.Error()
+	}
+	if checkpoint.Sequence > report.ChainSequence ||
+		(checkpoint.Sequence == report.ChainSequence &&
+			(checkpoint.Offset != report.ChainOffset || checkpoint.Hash != report.ChainHash)) {
+		return "fail", "ledger chain does not match its trusted checkpoint"
+	}
+	if !report.ChainVerified {
+		if checkpoint.Sequence > 0 {
+			return "fail", "ledger chain does not match its trusted checkpoint"
+		}
+		return "unverified", fmt.Sprintf("no authenticated frames yet (%d checksum-only)", report.ChecksumOnly)
+	}
+	return "pass", fmt.Sprintf("chain authenticated (%d frames, %d checksum-only)", report.Authenticated, report.ChecksumOnly)
 }

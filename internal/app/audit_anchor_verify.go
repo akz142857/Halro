@@ -1,7 +1,6 @@
 package app
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -19,6 +18,17 @@ const (
 	AnchorVerdictAgree     = "agree"
 	AnchorVerdictDisagree  = "disagree"
 	AnchorVerdictTruncated = "truncated"
+	// AnchorVerdictMissing marks a sequence the series skips over. Judging
+	// only the anchors that are present lets whoever can edit the witness file
+	// delete the inconvenient ones and get a clean report back.
+	AnchorVerdictMissing = "missing"
+	// AnchorVerdictMisordered marks a sequence that repeats or goes backwards,
+	// which a single emitter cannot produce.
+	AnchorVerdictMisordered = "misordered"
+	// AnchorVerdictUnwitnessed marks the records appended since the newest
+	// anchor. It is normal in small amounts and is the window a truncation
+	// would aim for in large ones.
+	AnchorVerdictUnwitnessed = "unwitnessed"
 )
 
 // AnchorVerdict is the result of checking one previously emitted anchor
@@ -35,27 +45,34 @@ type AnchorVerdict struct {
 // dead-man probe's anchor sink writes (internal/deadman), one
 // boltstore.AuditAnchor per line, appended as they are pulled off-host.
 func LoadAuditAnchorsFile(path string) ([]boltstore.AuditAnchor, error) {
-	file, err := os.Open(path)
+	payload, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("open anchors file: %w", err)
 	}
-	defer file.Close()
+	// A torn final line is an expected artifact, not corruption: the witness
+	// appends one JSON object at a time and is a separate process that can be
+	// killed mid-write. Refusing the whole file for it threw away every intact
+	// anchor because of the one the crash interrupted — the witness silenced by
+	// the same event that made it worth consulting. A short tail is dropped;
+	// anything malformed with a line after it is not, because that is tampering
+	// or real damage, and quietly skipping it is exactly how someone removes the
+	// anchors that disagree.
+	tornTail := len(payload) > 0 && payload[len(payload)-1] != '\n'
+	lines := strings.Split(string(payload), "\n")
 	var anchors []boltstore.AuditAnchor
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
+	for index, raw := range lines {
+		line := strings.TrimSpace(raw)
 		if line == "" {
 			continue
 		}
 		var anchor boltstore.AuditAnchor
 		if err := json.Unmarshal([]byte(line), &anchor); err != nil {
-			return nil, fmt.Errorf("decode anchor line: %w", err)
+			if tornTail && index == len(lines)-1 {
+				break
+			}
+			return nil, fmt.Errorf("decode anchor line %d: %w", index+1, err)
 		}
 		anchors = append(anchors, anchor)
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read anchors file: %w", err)
 	}
 	return anchors, nil
 }
@@ -111,17 +128,49 @@ func VerifyAuditAnchors(ctx context.Context, cfg config.Config, anchors []boltst
 		return nil, fmt.Errorf("replay local audit chain: %w", err)
 	}
 	verdicts := make([]AnchorVerdict, 0, len(anchors))
+	expected := uint64(1)
+	var highestRecords uint64
 	for _, anchor := range anchors {
 		verdict := AnchorVerdict{Sequence: anchor.Sequence, Records: anchor.Records}
 		switch {
 		case anchor.Records > summary.Records:
 			verdict.Outcome = AnchorVerdictTruncated
+		case anchor.Sequence < expected:
+			// Sequences only ever go up. One that repeats or goes backwards
+			// means the file was edited or two instances were merged into it,
+			// and either way the anchors after it cannot be read as a series.
+			verdict.Outcome = AnchorVerdictMisordered
 		case hashBySequence[anchor.Records] == anchor.LastHash:
 			verdict.Outcome = AnchorVerdictAgree
 		default:
 			verdict.Outcome = AnchorVerdictDisagree
 		}
+		if anchor.Sequence > expected {
+			// Checking only the anchors present lets an attacker who can edit
+			// the witness file delete the ones that disagree: every line left
+			// agrees, and the report comes back clean. A gap is not proof of
+			// tampering — the emitter's ring drops old anchors, and a witness
+			// offline long enough will miss some — but it is the difference
+			// between "these anchors agree" and "the record is complete", and
+			// only the report can say which one the operator is looking at.
+			verdicts = append(verdicts, AnchorVerdict{
+				Sequence: expected, Outcome: AnchorVerdictMissing,
+			})
+		}
+		if anchor.Sequence >= expected {
+			expected = anchor.Sequence + 1
+		}
+		highestRecords = max(highestRecords, anchor.Records)
 		verdicts = append(verdicts, verdict)
+	}
+	// An anchor covering the current chain length is what makes the whole
+	// series meaningful. Without one, everything appended since the last
+	// anchor is unwitnessed, which is exactly the window a truncation would
+	// aim for.
+	if summary.Records > highestRecords {
+		verdicts = append(verdicts, AnchorVerdict{
+			Records: summary.Records, Outcome: AnchorVerdictUnwitnessed,
+		})
 	}
 	return verdicts, nil
 }

@@ -1,9 +1,23 @@
 # ADR 0013: Append-only cost adjustments and dual-time read models
 
-- Status: Accepted
+- Status: Superseded — the feature was retired whole in `8868e85` (2026-08-07)
 - Date: 2026-08-04
 - Tracking: GitHub Issue #76
 - PRD: `docs/prd/prd-versioned-model-pricing.zh-CN.md`
+
+## Retirement (2026-08-07)
+
+Cost adjustments shipped and were withdrawn the same week, in `8868e85`. The
+decision was not that the design here was wrong but that the need was not real:
+nobody reconciles thousands of ledger rows one correction at a time, and the
+feature was the only one in the review window whose Source was a PRD rather
+than a finding — a PRD produces the capability matrix a complete product
+"should" have, which is a different question from what this threat model needs.
+Retiring it removed 2139 lines.
+
+What survives is the read-model reasoning below, which is worth keeping for
+whatever next needs to distinguish service time from accounting time. The event
+kind it defined is retired and its number must never be reused.
 
 ## Context
 

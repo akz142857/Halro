@@ -97,8 +97,11 @@ Pay particular attention to:
   commands.
 - Backups must use fixed, mutually consistent metadata, Ledger, Usage, and Audit
   watermarks. Restores must remain explicit, offline, and confirmation-gated.
-- Schema and mutation changes require backward-compatibility analysis, migration
-  tests, corrupt-input tests, and safe retry after interruption.
+- Schema and mutation changes require corrupt-input tests and safe retry after
+  interruption. While pre-1.0.0 they are fixed in place rather than kept compatible
+  (see `CLAUDE.md`): check that stale state is refused and rebuilt rather than
+  misread, and that the change was tried against a real data directory rather than
+  fixtures alone.
 - Metrics must be bounded-cardinality and must not expose Project secrets,
   request contents, credentials, or raw source addresses.
 

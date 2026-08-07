@@ -1,6 +1,7 @@
 # ADR 0012: Deterministic price selection and cross-store consistency
 
-- Status: Accepted
+- Status: Accepted; the concurrency protocol has a proposed amendment dated
+  2026-08-07, see "Amendment 2026-08-07"
 - Date: 2026-08-04
 - Tracking: GitHub Issue #76
 - PRD: `docs/prd/prd-versioned-model-pricing.zh-CN.md`
@@ -135,3 +136,139 @@ should have selected. Historical correction uses adjustment events instead.
 - clock rollback/forward-jump and restore-high-water quarantine tests;
 - deadlock tests enforcing the documented lock order;
 - stable conflict, missing-price, and quarantine API error tests.
+
+## Amendment 2026-08-07: the exclusive pricing gate is the Gateway throughput ceiling
+
+Status: Proposed. Not implemented. The protocol above is what the code does today.
+
+### What was measured
+
+Host: Apple M4 Pro, darwin/arm64, Go 1.24, APFS. On darwin, `os.File.Sync`
+issues `F_FULLFSYNC`, so every durability figure here is a pessimistic bound
+and no number in this section transfers to a Linux NVMe host. The benchmarks
+were written as throwaway harnesses and are not committed; reproducing them is
+listed under "Required verification" below.
+
+Raw Ledger WAL append, group commit working as designed:
+
+| Concurrent appenders | events/s | mean events per batch |
+|---:|---:|---:|
+| 1 | 79 | 1.0 |
+| 8 | 899 | 8.0 |
+| 64 | 5,511 | 63.8 |
+| 256 | 13,867 | 125.0 |
+
+One bbolt write transaction (`db.Update`, 512-byte value, `FreelistMapType`),
+which is the shape of both `PrepareDeploymentPricePin` and
+`CommitDeploymentPricePin`:
+
+| Concurrent writers | tx/s |
+|---:|---:|
+| 1 | 106 |
+| 8 | 121 |
+| 64 | 99 |
+
+The Ledger scales with offered concurrency; bbolt does not, because the pin
+writes use `db.Update` rather than `db.Batch` and therefore never coalesce.
+
+### The finding
+
+`Service.startAttempt` holds the deployment pricing gate across all three
+durable steps of the protocol — pin prepare (`db.Update`), Accounting Lease
+append and fsync, pin commit (a second `db.Update`). The gate is an exclusive
+mutex, so attempts against one deployment cannot overlap at all:
+
+```text
+per-deployment attempt ceiling ~= 1 / (2 * bbolt_fsync + 1 * wal_fsync)
+```
+
+On the reference host that is roughly 31 ms of exclusive critical section, or
+about 32 attempts per second for a single deployment, and it does not improve
+with added concurrency. Because the three steps are serialized by the gate, the
+Ledger's group commit cannot help either: same-deployment attempts are never in
+flight simultaneously, so they never share a WAL batch.
+
+`Store.PrepareDeploymentPricePin` additionally holds `pricingClockMu`, a single
+process-wide mutex, across its entire `db.Update`. That makes the prepare step
+serialize across *all* deployments, not just within one.
+
+This ceiling is a consequence of the concurrency protocol in this ADR, not of
+an implementation defect. The ADR argues that selection and scheduled
+cancellation must serialize against each other; it does not argue, anywhere,
+that two concurrent *selections* on the same deployment must serialize against
+each other. The exclusive mutex is stronger than the invariant requires.
+
+### Proposed change
+
+1. **The deployment pricing gate becomes shared/exclusive.** Gateway selection
+   and pin preparation take it shared; the Admin operations that mutate the
+   timeline — create, scheduled cancellation, restore confirmation, proposal
+   adoption, all four call sites in `internal/app/admin_prices.go` — take it
+   exclusive. The lock order in "Lock order and concurrency" is otherwise
+   unchanged.
+
+   The cancellation invariant survives: an exclusive acquirer waits for every
+   in-flight shared holder, so no cancellation can be interleaved between a
+   selection and its durable Lease. What changes is that Admin price mutations
+   may now wait behind in-flight attempts. That is acceptable — they are
+   low-frequency operator actions, and the availability they trade away is
+   bounded by one attempt's durable path.
+
+2. **Pin prepare and commit use `db.Batch` instead of `db.Update`,** giving the
+   metadata store the same group-commit property the Ledger already has. This
+   only pays off once change 1 lets same-deployment attempts run concurrently;
+   on its own it coalesces across deployments only.
+
+3. **`pricingClockMu` narrows to per-deployment.** The per-deployment gate map
+   (`Store.pricingGates`) already exists; the clock-observation map should be
+   keyed and locked the same way rather than behind one global mutex.
+
+Changes 2 and 3 are safe under the existing protocol and could land first.
+Change 1 amends the protocol and is the only one that raises the
+single-deployment ceiling.
+
+### Rejected during this analysis
+
+**Release the gate before the Ledger append.** This was considered and rejected:
+it reopens exactly the window the gate exists to close, letting a scheduled
+cancellation land between price selection and the durable Lease.
+
+**Delete the bbolt pin and rely on the Ledger snapshot alone.** Rejected. The
+pin is not a derivative of the Ledger. Recovery resolves a `prepared` pin by
+searching the Ledger for its attempt and digest, and scheduled cancellation
+needs the pin to know whether a durable attempt references a version. Removing
+it re-creates the crash window that "Use only an in-memory mutex" was rejected
+for.
+
+### Out of scope for this ADR
+
+A second, independent ceiling exists in `budget.Manager`: `lockProject` is held
+across `appendApplyRecord`, so same-project requests cannot share a WAL batch
+and a single project measures about 30 request lifecycles per second on the
+reference host regardless of concurrency (five Ledger events per lifecycle).
+That belongs to the accounting protocol, not to pricing, and needs its own
+decision record.
+
+### Required verification for this amendment
+
+- Reproduce the three measurements on Linux with an NVMe-backed data directory,
+  production build flags, and the race detector disabled. The reference-host
+  numbers above are a shape, not a budget.
+- Commit the benchmark harnesses so the ceiling is a regression gate rather than
+  a one-off observation: concurrent Ledger append with observed batch size,
+  concurrent bbolt write transactions, and the full five-event accounting
+  lifecycle parameterised by worker count and project count.
+- Confirm `PrepareDeploymentPricePin`'s transaction body is idempotent under
+  retry before adopting `db.Batch`. bbolt may invoke a batched function more
+  than once, and the body advances a high-water revision and can set the
+  quarantine flag.
+- Measure the added latency of `db.Batch`'s `MaxBatchDelay` (10 ms by default)
+  against the host's real fsync cost, and tune it rather than accepting the
+  default.
+- Extend the existing concurrent selection/cancellation tests to prove an
+  exclusive Admin acquirer still excludes every in-flight shared selection, and
+  add a starvation test so a steady stream of attempts cannot indefinitely
+  postpone a scheduled cancellation.
+- Add end-to-end evidence, not just package benchmarks: a deterministic local
+  upstream and a load generator, reporting p50/p95/p99 and the first observed
+  bottleneck, per `docs/verification/standalone-capacity-baseline.md`.

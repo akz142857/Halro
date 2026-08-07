@@ -322,6 +322,14 @@ type Usage struct {
 	ThinkingTokens           int64 `json:"thinking_tokens,omitempty"`
 }
 
+// PromptTokens is every prompt token the request consumed. Anthropic reports
+// input_tokens net of both cache tiers, so recovering the full prompt span means
+// adding them back — reading input_tokens alone under-counts a cached request by
+// whatever fraction the cache served, which on an agent workload is most of it.
+func (u Usage) PromptTokens() int64 {
+	return u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens
+}
+
 type Message struct {
 	ID           string          `json:"id"`
 	Type         string          `json:"type"`

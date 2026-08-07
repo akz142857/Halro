@@ -272,8 +272,20 @@ func (state *responseStreamState) accept(event openaiapi.ResponseStreamEvent) er
 			return err
 		}
 		if usage := event.Response.Usage; usage != nil {
+			// input_tokens already counts the cached span on the Responses shape,
+			// so the cached figure is a subset rather than an addition.
 			state.usage = &openaiapi.Usage{PromptTokens: usage.InputTokens, CompletionTokens: usage.OutputTokens, TotalTokens: usage.TotalTokens}
-			semanticUsage := semantic.Usage{InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, ReasoningTokens: usage.OutputTokensDetails.ReasoningTokens, TotalTokens: usage.TotalTokens, Source: semantic.UsageProviderReported}
+			state.usage.SetCachedPromptTokens(usage.InputTokensDetails.CachedTokens)
+			state.usage.SetReasoningTokens(usage.OutputTokensDetails.ReasoningTokens)
+			semanticUsage := semantic.Usage{
+				InputTokens:       usage.InputTokens,
+				CachedInputTokens: usage.InputTokensDetails.CachedTokens,
+				OutputTokens:      usage.OutputTokens,
+				ReasoningTokens:   usage.OutputTokensDetails.ReasoningTokens,
+				AudioTokens:       usage.InputTokensDetails.AudioTokens + usage.OutputTokensDetails.AudioTokens,
+				TotalTokens:       max(usage.TotalTokens, usage.InputTokens+usage.OutputTokens),
+				Source:            semantic.UsageProviderReported,
+			}
 			if err := state.emit(semantic.Event{Kind: semantic.EventUsage, ID: state.id, Created: state.created, Model: state.model, Usage: &semanticUsage, Translation: semantic.TranslationNone, MappingRevision: openaiwire.MappingRevision}); err != nil {
 				return err
 			}

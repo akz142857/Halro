@@ -125,13 +125,21 @@ type Gateway struct {
 	SourceRateLimit               SourceRateLimit `yaml:"source_rate_limit"`
 }
 
+// defaultSourceRequestsPerMinute is the budget an absent
+// gateway.source_rate_limit.requests_per_minute takes.
+const defaultSourceRequestsPerMinute = 600
+
 // SourceRateLimit bounds anonymous data-plane work per source address, ahead of
 // the per-project limiter — which cannot apply until a request has been
 // authenticated, and so cannot bound the cost of authenticating it.
 type SourceRateLimit struct {
-	// RequestsPerMinute is the per-source budget. Zero disables the limiter,
-	// which leaves that work unbounded.
-	RequestsPerMinute int `yaml:"requests_per_minute"`
+	// RequestsPerMinute is the per-source budget. A pointer so that "the key is
+	// absent" and "the operator wrote 0" are different answers: absent takes the
+	// default, because a security control that switches itself off for every
+	// config file written before it existed protects nobody, and an explicit 0
+	// disables the limiter for an operator who means it. Normalize resolves the
+	// absent case, so everything downstream reads a value.
+	RequestsPerMinute *int `yaml:"requests_per_minute"`
 	// MaxTrackedSources caps distinct addresses remembered within one minute so
 	// the limiter cannot itself be grown without bound. Addresses past the cap
 	// share one budget.
@@ -271,6 +279,10 @@ func Decode(r io.Reader) (Config, error) {
 
 func (c *Config) Normalize() error {
 	var err error
+	if c.Gateway.SourceRateLimit.RequestsPerMinute == nil {
+		budget := defaultSourceRequestsPerMinute
+		c.Gateway.SourceRateLimit.RequestsPerMinute = &budget
+	}
 	if c.Gateway.SourceRateLimit.MaxTrackedSources == 0 {
 		// Omitting the ceiling means "whatever is sane", not "track nothing".
 		// Kept in step with sourcelimit.DefaultMaxTrackedSources by
@@ -477,6 +489,20 @@ func (c Config) Validate(opts LoadOptions) error {
 			if c.Audit.Anchor.CredentialFile == "" {
 				problems = append(problems, errors.New("audit.anchor.credential_file is required for sink dead_man_pull"))
 			}
+			// The anchor exists so a witness outside this host can contradict
+			// it. Sharing one credential with /metrics collapses that into one
+			// domain: whoever scrapes metrics can read the witness feed, and a
+			// leak on the scrape path takes the witness with it. The code
+			// already keeps two authorizers; nothing until now kept two files.
+			if c.Audit.Anchor.CredentialFile != "" && c.Audit.Anchor.CredentialFile == c.Metrics.CredentialFile {
+				problems = append(problems, errors.New("audit.anchor.credential_file must differ from metrics.credential_file; the anchor is a separate credential domain"))
+			}
+			// Anchors and the token that fetches them are the evidence of
+			// non-repudiation. Serving them in the clear lets anyone on the
+			// path read the chain heads and take the credential.
+			if !c.Metrics.TLS.Enabled {
+				problems = append(problems, errors.New("audit.anchor.sink dead_man_pull requires metrics.tls.enabled; the anchor feed must not be served in the clear"))
+			}
 		case AuditAnchorSinkSyslog, AuditAnchorSinkS3ObjectLock:
 			problems = append(problems, fmt.Errorf("audit.anchor.sink %q is a reserved name and not implemented yet", c.Audit.Anchor.Sink))
 		default:
@@ -542,12 +568,7 @@ func (c Config) Validate(opts LoadOptions) error {
 	if c.Gateway.MaxTotalAttempts < 1 {
 		problems = append(problems, errors.New("gateway.max_total_attempts must be at least 1"))
 	}
-	// An absent source_rate_limit block is not rejected: Decode does not merge
-	// onto Default(), so requiring the key would refuse to start every config
-	// file written before this setting existed. Normalize supplies the tracking
-	// ceiling, and a zero budget — the limiter disabled — is reported by doctor
-	// rather than being silently accepted as intended.
-	if c.Gateway.SourceRateLimit.RequestsPerMinute < 0 {
+	if c.Gateway.SourceRateLimit.RequestsPerMinute != nil && *c.Gateway.SourceRateLimit.RequestsPerMinute < 0 {
 		problems = append(problems, errors.New("gateway.source_rate_limit.requests_per_minute cannot be negative"))
 	}
 	if c.Gateway.SourceRateLimit.MaxTrackedSources < 0 {
@@ -805,4 +826,15 @@ func listenerHostIsLoopback(host string) bool {
 	}
 	address, err := netip.ParseAddr(host)
 	return err == nil && address.IsLoopback()
+}
+
+func intPointer(value int) *int { return &value }
+
+// SourceRequestsPerMinute is the resolved per-source budget. Normalize fills the
+// absent case, so callers never have to decide what a missing key meant.
+func (s SourceRateLimit) SourceRequestsPerMinute() int {
+	if s.RequestsPerMinute == nil {
+		return defaultSourceRequestsPerMinute
+	}
+	return *s.RequestsPerMinute
 }

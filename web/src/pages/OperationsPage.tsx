@@ -211,7 +211,7 @@ function AlertRow({
               title={t("operations.disableTitle")}
               confirmLabel={t("operations.disableConfirm", { name: webhook.name })}
               disabled={toggle.isPending}
-              onConfirm={() => toggle.mutate()}
+              onConfirm={() => toggle.mutateAsync()}
             />
           ) : (
             <button className="button ghost" disabled={toggle.isPending} onClick={() => toggle.mutate()}>
@@ -224,7 +224,7 @@ function AlertRow({
             confirmLabel={t("operations.deleteConfirm", { name: webhook.name })}
             disabled={remove.isPending}
             requireStepUp
-            onConfirm={(reauth) => remove.mutate(reauth)}
+            onConfirm={(reauth) => remove.mutateAsync(reauth)}
           />
         </div>
         {/* Several chat platforms answer 200 and reject the payload in the body. Showing the

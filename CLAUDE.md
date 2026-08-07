@@ -138,11 +138,57 @@ Full detail: `.github/copilot-instructions.md` (review checklist used for this r
 `docs/architecture/threat-model.md`, `docs/contracts/gateway-correctness.md`,
 `docs/contracts/audit-integrity.md`.
 
+## Verify, never assume
+
+Every premise about existing artifacts is a hypothesis until checked against the real
+thing — the real WAL, the real `data/`, the real manifest, the real binary, the real
+commit. This is not a style preference; it is where the expensive mistakes come from.
+
+- **Before writing a validation, gate, or invariant, go read the data it judges.** A
+  fixture built from your own mental model tests the model, not the world. A check that
+  a real `data/` directory rejects is a check that bricks every install.
+- **Run the real binary against the real artifact**: `heimdall doctor`,
+  `heimdall ledger verify`, an actual `backup create`, an actual start. Unit tests passing
+  is not evidence that existing data still loads.
+- **To attribute a symptom to a change, build both sides and run them against the same
+  input.** Do not reason from the diff.
+- Fail-closed checks deserve the most scrutiny, because being wrong there means refusing
+  to start rather than degrading.
+- Beware exact-equality version checks. This repo has been bitten by them more than once
+  (the Ledger reader gate, the Parquet manifest gate, the Parquet row check); the right
+  shape is almost always an accepted range.
+- **A reverse verification that does not fail is not evidence.** When backing a fix out
+  to confirm a test catches it, assert the edit actually applied — a scripted replacement
+  whose search string went stale (gofmt re-aligning a struct literal, say) silently
+  changes nothing, and the test then "passes in the defect state" because the defect was
+  never restored. Run it with `go test -count=1`; a cached `ok` proves nothing either.
+- When verification is genuinely impossible, say so — do not present the assumption as
+  a finding.
+
+## Pre-1.0.0: fix in place, do not accumulate compatibility
+
+Nothing has been published (no GitHub Release; the `v1.0.0-rc.1` tag's publish job never
+shipped). Until a version above 1.0.0 exists there is no deployment in the wild to stay
+compatible with, and the operator re-initialises their own instance.
+
+- **A wrong construct must not survive beside its replacement.** If a field is wrong, fix
+  the field — do not keep it and add a corrected one. If a parameter is wrong, change it —
+  do not add a third. No `FooV2` beside `Foo`, no frozen legacy struct with a second read
+  path, no field kept identical to another so an older reader still finds it, no "retired
+  but still accepted" placeholder. That pairing *is* the technical debt.
+- **Say when a change requires re-initialising** the data directory, so it can be planned.
+- Two things this does **not** license: machinery designed to let a format evolve *after*
+  1.0.0 (a min-readable schema range, the frame epoch ladder) is a capability, not debt —
+  removing it is a separate design decision. And contracts against reusing identifiers
+  (event kind numbers, frame epochs, migration names) still hold, because they prevent
+  future ambiguity rather than serve old data.
+
 ## Conventions
 
 - Go: run `gofmt` on changed files; prefer stdlib primitives and small interfaces; wrap
   errors with operational context without leaking sensitive values; avoid high-cardinality
-  Prometheus labels; keep durable event schemas backward compatible or add a tested migration.
+  Prometheus labels. Durable schemas change in place while pre-1.0.0 (see above); bump the
+  format version so stale state is refused and rebuilt rather than silently misread.
 - Commits: short imperative subject, Conventional Commit prefixes encouraged (`feat:`,
   `fix:`, `docs:`, `test:`, `chore:`).
 - Never commit local `data/`, `master.key`, `.env`, generated Provider profiles, backups,

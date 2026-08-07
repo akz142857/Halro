@@ -284,8 +284,26 @@ func TestAuditAnchorRequiresMetricsAndCredentialFile(t *testing.T) {
 		t.Fatal("dead_man_pull sink without a credential file was accepted")
 	}
 	cfg.Audit.Anchor.CredentialFile = "anchor-credentials.json"
+	// The anchor feed carries chain heads and the credential that fetches them;
+	// in the clear, anyone on the path reads one and takes the other.
+	if err := cfg.Validate(LoadOptions{}); err == nil {
+		t.Fatal("dead_man_pull sink without metrics.tls was accepted")
+	}
+	cfg.Metrics.TLS = MetricsTLS{
+		Enabled: true, CertFile: "metrics.crt", KeyFile: "metrics.key", ClientCAFile: "metrics-ca.crt",
+	}
 	if err := cfg.Validate(LoadOptions{}); err != nil {
 		t.Fatalf("valid audit.anchor configuration was rejected: %v", err)
+	}
+	// One credential for both endpoints collapses the witness into the same
+	// domain as the thing it witnesses.
+	cfg.Metrics.CredentialFile = cfg.Audit.Anchor.CredentialFile
+	if err := cfg.Validate(LoadOptions{}); err == nil {
+		t.Fatal("an anchor credential shared with metrics was accepted")
+	}
+	cfg.Metrics.CredentialFile = "metrics-credentials.json"
+	if err := cfg.Validate(LoadOptions{}); err != nil {
+		t.Fatalf("distinct credential files were rejected: %v", err)
 	}
 	cfg.Metrics.Enabled = false
 	if err := cfg.Validate(LoadOptions{}); err == nil {
@@ -369,5 +387,29 @@ func TestDefaultTemplateMatchesDefault(t *testing.T) {
 	}
 	if !bytes.Contains(defaultTemplate, []byte("#")) {
 		t.Fatal("the first-run template carries no comments, which is the whole point of it")
+	}
+}
+
+// TestAbsentSourceRateLimitTakesTheDefaultBudget covers a security control that
+// used to switch itself off. Decode does not merge onto Default(), so a config
+// file written before this setting existed produced a zero budget — and zero
+// meant "disabled", leaving pre-authentication work unbounded on exactly the
+// installs nobody had revisited. Absent and explicitly-zero are now different
+// answers.
+func TestAbsentSourceRateLimitTakesTheDefaultBudget(t *testing.T) {
+	var absent Config
+	absent.Normalize()
+	if got := absent.Gateway.SourceRateLimit.SourceRequestsPerMinute(); got != defaultSourceRequestsPerMinute {
+		t.Fatalf("absent budget resolved to %d, want the default %d", got, defaultSourceRequestsPerMinute)
+	}
+
+	// An operator who writes 0 still gets the limiter disabled; the point is
+	// that they had to say so.
+	disabled := Config{}
+	zero := 0
+	disabled.Gateway.SourceRateLimit.RequestsPerMinute = &zero
+	disabled.Normalize()
+	if got := disabled.Gateway.SourceRateLimit.SourceRequestsPerMinute(); got != 0 {
+		t.Fatalf("an explicit zero resolved to %d, want 0", got)
 	}
 }

@@ -1,4 +1,14 @@
-package metricsauth
+// Package bearercred manages a rotatable bearer-token credential file: two
+// active tokens at a time so a rotation overlaps, SHA-256 comparison in
+// constant time, an append-only audit of every issue and revoke, and a file
+// lock so two rotations cannot race.
+//
+// It was named metricsauth when /metrics was its only caller. The audit anchor
+// endpoint (ADR 0015) then reused it — correctly, since a second credential
+// file is all an independently rotated domain needs — and the package name
+// stopped describing what it does. A name that has drifted from its job is how
+// a package quietly becomes the place everything lands.
+package bearercred
 
 import (
 	"crypto/rand"
@@ -21,7 +31,7 @@ import (
 
 const fileSchemaVersion = 1
 
-var errAuditMissing = errors.New("metrics credential audit ledger is missing")
+var errAuditMissing = errors.New("bearer credential audit ledger is missing")
 
 type State string
 
@@ -152,7 +162,7 @@ func Load(path string) (File, error) {
 		return File{}, err
 	}
 	if info.Mode().Perm()&0o077 != 0 {
-		return File{}, fmt.Errorf("metrics credential file permissions %04o are too broad", info.Mode().Perm())
+		return File{}, fmt.Errorf("bearer credential file permissions %04o are too broad", info.Mode().Perm())
 	}
 	payload, err := os.ReadFile(path)
 	if err != nil {
@@ -160,7 +170,7 @@ func Load(path string) (File, error) {
 	}
 	var file File
 	if err := json.Unmarshal(payload, &file); err != nil {
-		return File{}, fmt.Errorf("decode metrics credential file: %w", err)
+		return File{}, fmt.Errorf("decode bearer credential file: %w", err)
 	}
 	if err := file.Validate(); err != nil {
 		return File{}, err
@@ -170,42 +180,42 @@ func Load(path string) (File, error) {
 
 func (f File) Validate() error {
 	if f.SchemaVersion != fileSchemaVersion {
-		return fmt.Errorf("metrics credential schema version %d is not supported", f.SchemaVersion)
+		return fmt.Errorf("bearer credential schema version %d is not supported", f.SchemaVersion)
 	}
 	seen := make(map[uint64]struct{}, len(f.Credentials))
 	active := 0
 	for _, credential := range f.Credentials {
 		if credential.Version == 0 || credential.Version > f.Epoch {
-			return errors.New("metrics credential has an invalid version")
+			return errors.New("bearer credential has an invalid version")
 		}
 		if _, exists := seen[credential.Version]; exists {
-			return errors.New("metrics credential version is duplicated")
+			return errors.New("bearer credential version is duplicated")
 		}
 		seen[credential.Version] = struct{}{}
 		hash, err := hex.DecodeString(credential.TokenHash)
 		if err != nil || len(hash) != sha256.Size {
-			return errors.New("metrics credential has an invalid token hash")
+			return errors.New("bearer credential has an invalid token hash")
 		}
 		switch credential.State {
 		case StateActive:
 			active++
 			if credential.RetireAt != nil || credential.RevokedAt != nil {
-				return errors.New("active metrics credential has retirement metadata")
+				return errors.New("active bearer credential has retirement metadata")
 			}
 		case StateRetiring:
 			if credential.RetireAt == nil || credential.RevokedAt != nil {
-				return errors.New("retiring metrics credential has invalid metadata")
+				return errors.New("retiring bearer credential has invalid metadata")
 			}
 		case StateRevoked:
 			if credential.RevokedAt == nil {
-				return errors.New("revoked metrics credential is missing revoked_at")
+				return errors.New("revoked bearer credential is missing revoked_at")
 			}
 		default:
-			return errors.New("metrics credential has an invalid state")
+			return errors.New("bearer credential has an invalid state")
 		}
 	}
 	if active > 1 {
-		return errors.New("metrics credential file has multiple active credentials")
+		return errors.New("bearer credential file has multiple active credentials")
 	}
 	return nil
 }
@@ -249,7 +259,7 @@ func Rotate(path string, overlap time.Duration, now time.Time) (Rotation, error)
 
 func rotateLocked(path string, overlap time.Duration, now time.Time) (Rotation, error) {
 	if overlap < 0 || overlap > 24*time.Hour {
-		return Rotation{}, errors.New("metrics credential overlap must be between zero and 24 hours")
+		return Rotation{}, errors.New("bearer credential overlap must be between zero and 24 hours")
 	}
 	file, err := loadOrInitialize(path)
 	if err != nil {
@@ -282,7 +292,7 @@ func rotateLocked(path string, overlap time.Duration, now time.Time) (Rotation, 
 	}
 	token := make([]byte, 32)
 	if _, err := io.ReadFull(rand.Reader, token); err != nil {
-		return Rotation{}, fmt.Errorf("generate metrics credential: %w", err)
+		return Rotation{}, fmt.Errorf("generate bearer credential: %w", err)
 	}
 	encoded := []byte(base64.RawURLEncoding.EncodeToString(token))
 	clear(token)
@@ -315,7 +325,7 @@ func revokeLocked(path string, version uint64, now time.Time) error {
 		return err
 	}
 	if err := VerifyAudit(path); err != nil {
-		return fmt.Errorf("verify metrics credential audit before revoke: %w", err)
+		return fmt.Errorf("verify bearer credential audit before revoke: %w", err)
 	}
 	found := false
 	for index := range file.Credentials {
@@ -332,7 +342,7 @@ func revokeLocked(path string, version uint64, now time.Time) error {
 		file.Credentials[index].RevokedAt = &revokedAt
 	}
 	if !found {
-		return fmt.Errorf("metrics credential version %d was not found", version)
+		return fmt.Errorf("bearer credential version %d was not found", version)
 	}
 	if err := appendRevocation(path, version); err != nil {
 		return err
@@ -379,12 +389,12 @@ func AuditStatus(path string) (AuditHead, error) {
 	}
 	for _, credential := range file.Credentials {
 		if _, ok := rotated[credential.Version]; !ok {
-			return AuditHead{}, fmt.Errorf("metrics credential audit is missing rotate event for version %d", credential.Version)
+			return AuditHead{}, fmt.Errorf("bearer credential audit is missing rotate event for version %d", credential.Version)
 		}
 	}
 	for version := range permanentRevocations {
 		if _, ok := revoked[version]; !ok {
-			return AuditHead{}, fmt.Errorf("metrics credential audit is missing revoke event for version %d", version)
+			return AuditHead{}, fmt.Errorf("bearer credential audit is missing revoke event for version %d", version)
 		}
 	}
 	head := events[len(events)-1]
@@ -401,7 +411,7 @@ func loadAudit(path string) ([]AuditEvent, error) {
 		return nil, err
 	}
 	if info.Mode().Perm()&0o077 != 0 {
-		return nil, fmt.Errorf("metrics credential audit permissions %04o are too broad", info.Mode().Perm())
+		return nil, fmt.Errorf("bearer credential audit permissions %04o are too broad", info.Mode().Perm())
 	}
 	payload, err := os.ReadFile(path)
 	if err != nil {
@@ -416,21 +426,21 @@ func loadAudit(path string) ([]AuditEvent, error) {
 		}
 		var event AuditEvent
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
-			return nil, fmt.Errorf("decode metrics credential audit event: %w", err)
+			return nil, fmt.Errorf("decode bearer credential audit event: %w", err)
 		}
 		if event.Sequence != uint64(index+1) || event.Version == 0 ||
 			(event.Action != "rotate" && event.Action != "revoke") || event.PreviousHash != previous {
-			return nil, errors.New("metrics credential audit sequence is invalid")
+			return nil, errors.New("bearer credential audit sequence is invalid")
 		}
 		expected := auditHash(event.Sequence, event.At, event.Action, event.Version, event.PreviousHash)
 		if subtle.ConstantTimeCompare([]byte(event.Hash), []byte(expected)) != 1 {
-			return nil, errors.New("metrics credential audit hash is invalid")
+			return nil, errors.New("bearer credential audit hash is invalid")
 		}
 		previous = event.Hash
 		events = append(events, event)
 	}
 	if len(events) == 0 {
-		return nil, errors.New("metrics credential audit ledger is empty")
+		return nil, errors.New("bearer credential audit ledger is empty")
 	}
 	return events, nil
 }
@@ -499,7 +509,7 @@ func loadRevocations(path string) (map[uint64]struct{}, error) {
 		}
 		version, err := strconv.ParseUint(line, 10, 64)
 		if err != nil || version == 0 {
-			return nil, errors.New("metrics credential revocation ledger is invalid")
+			return nil, errors.New("bearer credential revocation ledger is invalid")
 		}
 		result[version] = struct{}{}
 	}

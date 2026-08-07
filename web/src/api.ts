@@ -223,10 +223,10 @@ export const api = {
     request<Project>(`/projects/${encodeURIComponent(id)}`, json("PUT", value), etag),
   deleteProject: (id: string, etag: string, reauth: Reauth) =>
     request<void>(`/projects/${encodeURIComponent(id)}`, json("DELETE", stepUpBody(reauth)), etag),
-  unblockProject: (id: string) =>
+  unblockProject: (id: string, reauth: Reauth) =>
     request<{ status: "unblocked"; subjects: number }>(
       `/projects/${encodeURIComponent(id)}/unblock`,
-      json("POST"),
+      json("POST", stepUpBody(reauth)),
     ).then((value) => value.data),
   keys: (projectID: string) =>
     request<Page<GatewayKey>>(`/projects/${encodeURIComponent(projectID)}/keys`)
@@ -236,11 +236,11 @@ export const api = {
       .then((value) => value.data),
   // The plaintext is returned once and never again, so a retried create must carry the
   // same idempotency key: the server then refuses to mint a second unaccounted credential.
-  createKey: (projectID: string, name: string, idempotencyKey: string, expiresAt?: string) =>
+  createKey: (projectID: string, name: string, idempotencyKey: string, reauth: Reauth, expiresAt?: string) =>
     request<CreatedGatewayKey>(
       `/projects/${encodeURIComponent(projectID)}/keys`,
       {
-        ...json("POST", { name, ...(expiresAt ? { expires_at: expiresAt } : {}) }),
+        ...json("POST", { name, ...stepUpBody(reauth), ...(expiresAt ? { expires_at: expiresAt } : {}) }),
         headers: { "Idempotency-Key": idempotencyKey },
       },
     ),

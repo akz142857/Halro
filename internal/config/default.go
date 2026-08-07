@@ -77,7 +77,7 @@ func Default() Config {
 				// package stays free of internal imports, so the tracking
 				// ceiling is repeated from sourcelimit.DefaultMaxTrackedSources
 				// rather than referenced.
-				RequestsPerMinute: 600,
+				RequestsPerMinute: intPointer(defaultSourceRequestsPerMinute),
 				MaxTrackedSources: 16384,
 			},
 		},

@@ -22,6 +22,7 @@ import (
 	"github.com/akz142857/Heimdall/internal/alert"
 	"github.com/akz142857/Heimdall/internal/audit"
 	"github.com/akz142857/Heimdall/internal/auth"
+	"github.com/akz142857/Heimdall/internal/bearercred"
 	"github.com/akz142857/Heimdall/internal/budget"
 	"github.com/akz142857/Heimdall/internal/buildinfo"
 	"github.com/akz142857/Heimdall/internal/config"
@@ -30,7 +31,6 @@ import (
 	"github.com/akz142857/Heimdall/internal/gatewayapi"
 	"github.com/akz142857/Heimdall/internal/id"
 	"github.com/akz142857/Heimdall/internal/ledger"
-	"github.com/akz142857/Heimdall/internal/metricsauth"
 	"github.com/akz142857/Heimdall/internal/provider"
 	"github.com/akz142857/Heimdall/internal/redaction"
 	"github.com/akz142857/Heimdall/internal/sourcelimit"
@@ -75,7 +75,7 @@ type Runtime struct {
 	adminSettingsMu     sync.Mutex
 	adminIdentityMu     sync.Mutex
 	metricsTokenHash    [32]byte
-	metricsAuthorizer   *metricsauth.Authorizer
+	metricsAuthorizer   *bearercred.Authorizer
 	metricsScrapes      chan struct{}
 	metricsAuthFailed   atomic.Uint64
 	metricsBusy         atomic.Uint64
@@ -90,9 +90,9 @@ type Runtime struct {
 	kmsRecoveryLastUsed time.Time
 	adminSessions       *adminauth.Manager
 	adminLoginMu        sync.Mutex
-	adminLogin          map[string]adminLoginWindow
+	adminLogin          adminRateState
 	adminSetupRateMu    sync.Mutex
-	adminSetupRate      map[string]adminLoginWindow
+	adminSetupRate      adminRateState
 	adminStepUpMu       sync.Mutex
 	adminStepUp         map[string]adminLoginWindow
 	setupMu             sync.Mutex
@@ -111,8 +111,14 @@ type Runtime struct {
 	runtimeSettings     atomic.Pointer[domain.RuntimeSettings]
 	uiSettings          atomic.Pointer[domain.InstanceUISettings]
 	instanceID          string
-	anchorAuthorizer    *metricsauth.Authorizer
+	anchorAuthorizer    *bearercred.Authorizer
 	anchorAuthFailed    atomic.Uint64
+	// Anchoring is fail-open on purpose: a witness that cannot be reached must
+	// not stop the gateway. That makes it the one subsystem whose total
+	// failure is indistinguishable from working, so these have to reach
+	// /metrics or nobody finds out for months.
+	anchorLastEmitUnix atomic.Int64
+	anchorEmitFailures atomic.Uint64
 }
 
 func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime, error) {
@@ -137,10 +143,10 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 	}
 	defer clear(adminSessionKey)
 	var metricsTokenHash [32]byte
-	var metricsAuthorizer *metricsauth.Authorizer
+	var metricsAuthorizer *bearercred.Authorizer
 	if cfg.Metrics.Enabled && cfg.Metrics.RequireAuth {
 		if cfg.Metrics.CredentialFile != "" {
-			metricsAuthorizer, err = metricsauth.NewAuthorizer(cfg.Metrics.CredentialFile)
+			metricsAuthorizer, err = bearercred.NewAuthorizer(cfg.Metrics.CredentialFile)
 			if err != nil {
 				return fail(fmt.Errorf("load metrics credentials: %w", err))
 			}
@@ -154,13 +160,13 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 			clear(metricsToken)
 		}
 	}
-	var anchorAuthorizer *metricsauth.Authorizer
+	var anchorAuthorizer *bearercred.Authorizer
 	if cfg.Audit.Anchor.Enabled && cfg.Audit.Anchor.Sink == config.AuditAnchorSinkDeadManPull {
 		// Config validation already requires a credential file here — unlike
 		// metrics, there is no zero-config derived-token fallback, since the
 		// anchor endpoint is off by default and turning it on is already a
 		// deliberate step.
-		anchorAuthorizer, err = metricsauth.NewAuthorizer(cfg.Audit.Anchor.CredentialFile)
+		anchorAuthorizer, err = bearercred.NewAuthorizer(cfg.Audit.Anchor.CredentialFile)
 		if err != nil {
 			return fail(fmt.Errorf("load audit anchor credentials: %w", err))
 		}
@@ -259,7 +265,8 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		return fail(err)
 	}
 	ledgerState := ledger.NewState()
-	if _, err := ledgerLog.Replay(ledger.Watermark{}, ledgerState.Apply); err != nil {
+	ledgerHead, err := ledgerLog.Replay(ledger.Watermark{}, ledgerState.Apply)
+	if err != nil {
 		ledgerLog.Close()
 		metadata.Close()
 		secretVault.Close()
@@ -271,7 +278,7 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		secretVault.Close()
 		return fail(err)
 	}
-	usageAggregate, usageWatermark := restoreUsageAggregate(metadata, logger)
+	usageAggregate, usageWatermark := restoreUsageAggregate(metadata, ledgerHead, logger)
 	if _, err := ledgerLog.Replay(usageWatermark, usageAggregate.Apply); err != nil {
 		ledgerLog.Close()
 		metadata.Close()
@@ -408,7 +415,7 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		return fail(err)
 	}
 	sourceLimiter := sourcelimit.New(
-		cfg.Gateway.SourceRateLimit.RequestsPerMinute,
+		cfg.Gateway.SourceRateLimit.SourceRequestsPerMinute(),
 		cfg.Gateway.SourceRateLimit.MaxTrackedSources,
 	)
 	gatewayHandler, err := gatewayapi.NewWithOptions(gatewayService, gatewayapi.Options{
@@ -551,8 +558,8 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		startedAt:           time.Now(),
 		kmsRecoveryLastUsed: kmsRecoveryLastUsed,
 		adminSessions:       adminSessions,
-		adminLogin:          make(map[string]adminLoginWindow),
-		adminSetupRate:      make(map[string]adminLoginWindow),
+		adminLogin:          adminRateState{windows: make(map[string]adminLoginWindow)},
+		adminSetupRate:      adminRateState{windows: make(map[string]adminLoginWindow)},
 		adminStepUp:         make(map[string]adminLoginWindow),
 		setupToken:          setupToken,
 		setupTokenNeeded:    setupRequiresToken(cfg),
@@ -661,7 +668,13 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 	return runtime, nil
 }
 
-func restoreUsageAggregate(store *boltstore.Store, logger *slog.Logger) (*usage.Aggregate, ledger.Watermark) {
+// head is the watermark the ledger actually replayed to. A checkpoint that
+// claims to have consumed more of the WAL than the WAL contains describes a
+// log that has since shrunk, and resuming from it would seek past the real
+// data and land mid-frame on whatever is written next — a corruption reported
+// minutes later, far from its cause. Rebuilding from scratch is always safe:
+// the aggregate is a derivative, and the WAL is the authority.
+func restoreUsageAggregate(store *boltstore.Store, head ledger.Watermark, logger *slog.Logger) (*usage.Aggregate, ledger.Watermark) {
 	watermark, payload, err := store.UsageCheckpoint()
 	if errors.Is(err, boltstore.ErrNotFound) {
 		return usage.NewAggregate(), ledger.Watermark{}
@@ -677,6 +690,10 @@ func restoreUsageAggregate(store *boltstore.Store, logger *slog.Logger) (*usage.
 	}
 	if aggregate.Snapshot().Watermark != watermark {
 		logger.Warn("usage checkpoint ignored", "error", "envelope watermark does not match payload")
+		return usage.NewAggregate(), ledger.Watermark{}
+	}
+	if watermark.Sequence > head.Sequence || watermark.Offset > head.Offset {
+		logger.Warn("usage checkpoint ignored", "error", "checkpoint is ahead of the ledger head")
 		return usage.NewAggregate(), ledger.Watermark{}
 	}
 	return aggregate, watermark
@@ -738,6 +755,34 @@ func (r *Runtime) saveUsageCheckpoint() {
 	}
 	if err := r.store.PutUsageCheckpoint(watermark, payload); err != nil {
 		r.logger.Warn("usage checkpoint save failed", "error", err)
+	}
+	r.advanceLedgerChainCheckpoint()
+}
+
+// advanceLedgerChainCheckpoint moves the trusted chain head forward while the
+// process runs. Startup reconciliation alone left the checkpoint pinned to
+// whatever the last restart saw, so an instance up for a month protected only
+// the frames written before it started: everything since could be truncated
+// back to that point and still reconcile cleanly on the next boot. Riding the
+// usage checkpoint's ticker bounds that window to one interval and costs a
+// small bbolt write on a path that already does a larger one.
+func (r *Runtime) advanceLedgerChainCheckpoint() {
+	sequence, offset, hash, ok := r.ledger.ChainHead()
+	if !ok {
+		return
+	}
+	checkpoint, err := r.store.LedgerChainCheckpoint()
+	if err != nil {
+		r.logger.Warn("ledger chain checkpoint load failed", "error", err)
+		return
+	}
+	if checkpoint.Sequence >= sequence {
+		return
+	}
+	if err := r.store.PutLedgerChainCheckpoint(boltstore.LedgerChainCheckpoint{
+		Sequence: sequence, Offset: offset, Hash: hash,
+	}); err != nil {
+		r.logger.Warn("ledger chain checkpoint save failed", "error", err)
 	}
 }
 
@@ -944,6 +989,10 @@ func (r *Runtime) Close() error {
 		r.backgroundCancel()
 		r.backgroundWait.Wait()
 		r.alerts.Close()
+		// Frames written since the last tick would otherwise sit outside the
+		// checkpoint until the next start, which is precisely the window a
+		// shutdown-then-truncate would use.
+		r.advanceLedgerChainCheckpoint()
 		auditErr := appendSystemAudit(r.audit, r.store, "system.shutdown")
 		r.closeErr = errors.Join(
 			auditErr,
@@ -1017,14 +1066,24 @@ func reconcileAuditCheckpoint(store *boltstore.Store, summary audit.Summary) err
 // brand new instance, or one still entirely on legacy epochs) has nothing to
 // reconcile yet; the checkpoint stays at its seeded zero value until the
 // first epoch-4 append advances it.
+//
+// The checkpoint is loaded unconditionally, mirroring reconcileAuditCheckpoint.
+// "No epoch-4 frame in the file" and "the file was deleted" are the same
+// observation from ChainHead, and only the checkpoint tells them apart: a
+// non-zero checkpoint against an empty chain is the most complete truncation
+// there is, not a fresh install. Returning early on ok == false read that
+// case as brand new and let a wiped WAL start clean.
 func reconcileLedgerChainCheckpoint(store *boltstore.Store, ledgerLog *ledger.Log) error {
 	sequence, offset, hash, ok := ledgerLog.ChainHead()
-	if !ok {
-		return nil
-	}
 	checkpoint, err := store.LedgerChainCheckpoint()
 	if err != nil {
 		return fmt.Errorf("load ledger chain checkpoint: %w", err)
+	}
+	if !ok {
+		if checkpoint.Sequence > 0 {
+			return errors.New("ledger chain does not match its trusted checkpoint")
+		}
+		return nil
 	}
 	if checkpoint.Sequence > sequence ||
 		(checkpoint.Sequence == sequence && (checkpoint.Offset != offset || checkpoint.Hash != hash)) {

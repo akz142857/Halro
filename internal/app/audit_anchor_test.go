@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akz142857/Heimdall/internal/bearercred"
 	"github.com/akz142857/Heimdall/internal/config"
-	"github.com/akz142857/Heimdall/internal/metricsauth"
 	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
 )
 
@@ -59,7 +59,7 @@ func anchorTestConfig(t *testing.T) config.Config {
 func TestAuditAnchorsEndpointRequiresItsOwnCredential(t *testing.T) {
 	cfg := anchorTestConfig(t)
 	now := time.Now().UTC()
-	rotation, err := metricsauth.Rotate(cfg.Audit.Anchor.CredentialFile, time.Minute, now)
+	rotation, err := bearercred.Rotate(cfg.Audit.Anchor.CredentialFile, time.Minute, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +116,7 @@ func TestAuditAnchorsEndpointRequiresItsOwnCredential(t *testing.T) {
 func TestAuditAnchorsEndpointReturnsOnlyNewerThanSince(t *testing.T) {
 	cfg := anchorTestConfig(t)
 	now := time.Now().UTC()
-	rotation, err := metricsauth.Rotate(cfg.Audit.Anchor.CredentialFile, time.Minute, now)
+	rotation, err := bearercred.Rotate(cfg.Audit.Anchor.CredentialFile, time.Minute, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +172,7 @@ func TestRunAuditAnchorMaintenanceEmitsOnRecordDelta(t *testing.T) {
 	cfg.Audit.Anchor.RecordDelta = 2
 	cfg.Audit.Anchor.Interval = config.Duration(time.Hour)
 	now := time.Now().UTC()
-	rotation, err := metricsauth.Rotate(cfg.Audit.Anchor.CredentialFile, time.Minute, now)
+	rotation, err := bearercred.Rotate(cfg.Audit.Anchor.CredentialFile, time.Minute, now)
 	if err != nil {
 		t.Fatal(err)
 	}
