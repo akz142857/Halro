@@ -29,7 +29,7 @@ import (
 // BenchmarkRequestLifecycle walks the five Ledger events of one request
 // lifecycle: request begin, lease reservation, start, settlement, finalize.
 func BenchmarkRequestLifecycle(b *testing.B) {
-	for _, projects := range []int{1, 8} {
+	for _, projects := range []int{1, 8, 64} {
 		for _, workers := range []int{1, 8, 64} {
 			b.Run(fmt.Sprintf("projects=%d/workers=%d", projects, workers), func(b *testing.B) {
 				manager, _, closeLog := newTestManager(b)
