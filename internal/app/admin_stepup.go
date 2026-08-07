@@ -73,6 +73,46 @@ func (r *Runtime) verifyAdminStepUp(writer http.ResponseWriter, request *http.Re
 	return true
 }
 
+// guardAdminCredentialCheck puts the failure budget and the audit record
+// around a credential check that keeps its own verification rules.
+//
+// Several endpoints ask for the account's password without going through
+// step-up, and they do so for reasons that are not interchangeable: changing a
+// password deliberately does not demand TOTP, deleting an authenticator must
+// verify against the *other* authenticators, and disabling MFA accepts a
+// recovery code in place of a code. Routing them through verifyAdminStepUp
+// would have replaced each of those rules with step-up's, weakening two of
+// them and breaking one outright. What they were actually missing is what
+// step-up adds around the check rather than inside it — so that is what this
+// lends them, leaving verify to decide what "correct" means.
+//
+// verify must not write to writer. answered reports whether this already sent
+// the response (it does so only for a throttled caller, whose 429 is the same
+// everywhere); on a plain verification failure the caller still writes the
+// wording its own endpoint owes.
+func (r *Runtime) guardAdminCredentialCheck(
+	writer http.ResponseWriter, username, action string, verify func() bool,
+) (ok bool, answered bool) {
+	now := time.Now()
+	if locked, firstReject := r.stepUpExhausted(username, now); locked {
+		if firstReject {
+			r.auditStepUp(username, "throttled", "rate_limited")
+		}
+		writer.Header().Set("Retry-After", "60")
+		writeJSON(writer, http.StatusTooManyRequests, map[string]string{
+			"error": "too many failed credential attempts",
+			"code":  "reauth_rate_limited",
+		})
+		return false, true
+	}
+	if !verify() {
+		r.recordStepUpFailure(username, now)
+		r.auditStepUp(username, "failure", action)
+		return false, false
+	}
+	return true, false
+}
+
 // stepUpExhausted reports whether this account has already spent its failure
 // budget for the current minute, and whether this is the first request refused
 // on that basis within the window.
