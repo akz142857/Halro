@@ -344,3 +344,52 @@ func TestPricePinPreparationSurvivesBatchSiblingFailures(t *testing.T) {
 		t.Fatalf("batch retries quarantined the deployment: quarantined=%v reason=%q err=%v", quarantined, reason, err)
 	}
 }
+
+// BatchCalls/BatchTransactions is the metadata store's coalescing factor, the
+// counterpart of the Ledger's records-per-batch. It is the only way to tell from
+// outside whether batching the pin writes does anything on a given host, so it
+// has to actually count coalescing rather than just count calls.
+func TestMetadataWriteStatsCountCoalescing(t *testing.T) {
+	base := time.Now().UTC()
+	store := newPricedStore(t, "dep_stats", base.Add(-time.Hour))
+	ctx := context.Background()
+	tolerance := config.MinPricingClockRollbackTolerance
+
+	const workers = 32
+	var group sync.WaitGroup
+	for worker := 0; worker < workers; worker++ {
+		group.Add(1)
+		go func(worker int) {
+			defer group.Done()
+			unlock := store.LockDeploymentPricingShared("dep_stats")
+			defer unlock()
+			attemptID := fmt.Sprintf("att_stats_%d", worker)
+			_, _, intent, err := store.PrepareDeploymentPricePin(ctx, "dep_stats", attemptID, base, tolerance, 30*time.Second)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			if _, err := store.CommitDeploymentPricePin(ctx, attemptID, intent.SnapshotSHA256, uint64(worker+1), time.Now().UTC()); err != nil {
+				t.Error(err)
+			}
+		}(worker)
+	}
+	group.Wait()
+
+	stats := store.MetadataWriteStats()
+	// One prepare and one commit per worker.
+	if stats.BatchCalls < 2*workers {
+		t.Fatalf("counted %d batched calls for %d workers", stats.BatchCalls, workers)
+	}
+	if stats.BatchTransactions == 0 {
+		t.Fatal("no write transactions were counted")
+	}
+	if stats.BatchTransactions > stats.BatchCalls {
+		t.Fatalf("transactions=%d exceeds calls=%d, so this is not a coalescing factor",
+			stats.BatchTransactions, stats.BatchCalls)
+	}
+	if stats.PageWrites <= 0 || stats.PageWriteDuration <= 0 {
+		t.Fatalf("metadata write cost went unmeasured: writes=%d duration=%s",
+			stats.PageWrites, stats.PageWriteDuration)
+	}
+}

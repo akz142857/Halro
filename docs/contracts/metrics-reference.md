@@ -69,6 +69,18 @@ an authentication boundary.
 | `heimdall_pricing_unknown_attempts_total` | counter | none |
 | `heimdall_pricing_recovery_pending_intents` | gauge | none |
 | `heimdall_wal_append_errors_total` | counter | none |
+| `heimdall_wal_append_records_total` | counter | none |
+| `heimdall_wal_append_batches_total` | counter | none |
+| `heimdall_wal_sync_seconds` | summary sum/count | none |
+| `heimdall_accounting_project_lock_acquisitions_total` | counter | none |
+| `heimdall_accounting_project_lock_wait_seconds` | summary sum/count | none |
+| `heimdall_accounting_project_lock_held_seconds` | summary sum/count | none |
+| `heimdall_metadata_batch_calls_total` | counter | none |
+| `heimdall_metadata_batch_transactions_total` | counter | none |
+| `heimdall_metadata_page_writes_total` | counter | none |
+| `heimdall_metadata_page_write_seconds_total` | counter | none |
+| `heimdall_metadata_free_pages` | gauge | none |
+| `heimdall_metadata_pending_pages` | gauge | none |
 | `heimdall_usage_analytics_queue_depth` | gauge | none |
 | `heimdall_usage_analytics_dropped_total` | counter | none |
 | `heimdall_usage_analytics_lagging` | gauge | none |

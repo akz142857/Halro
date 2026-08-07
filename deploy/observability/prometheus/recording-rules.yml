@@ -50,3 +50,39 @@ groups:
           / heimdall_provider_concurrency_limit)
           and on (environment, region, cluster, provider_id)
           (heimdall_provider_concurrency_limit > 0)
+      # Durable write path. These four are the capacity story for this process:
+      # every accounting ceiling is bounded by an fsync, and the group-commit
+      # sizes say whether the host or the offered concurrency is the limit.
+      - record: heimdall:wal_sync:mean5m
+        expr: >-
+          sum by (environment, region, cluster, instance)
+          (rate(heimdall_wal_sync_seconds_sum[5m]))
+          /
+          clamp_min(sum by (environment, region, cluster, instance)
+          (rate(heimdall_wal_sync_seconds_count[5m])), 0.001)
+      # Records per batch. Near 1.0 under load means appends are not coalescing:
+      # either too few concurrent appenders, or they are serialized upstream of
+      # the WAL — which is what the per-project accounting lock does (ADR 0018).
+      - record: heimdall:wal_batch_size:mean5m
+        expr: >-
+          sum by (environment, region, cluster, instance)
+          (rate(heimdall_wal_append_records_total[5m]))
+          /
+          clamp_min(sum by (environment, region, cluster, instance)
+          (rate(heimdall_wal_append_batches_total[5m])), 0.001)
+      - record: heimdall:accounting_project_lock_wait:mean5m
+        expr: >-
+          sum by (environment, region, cluster, instance)
+          (rate(heimdall_accounting_project_lock_wait_seconds_sum[5m]))
+          /
+          clamp_min(sum by (environment, region, cluster, instance)
+          (rate(heimdall_accounting_project_lock_wait_seconds_count[5m])), 0.001)
+      # Calls per metadata write transaction, the bbolt counterpart of
+      # wal_batch_size.
+      - record: heimdall:metadata_batch_size:mean5m
+        expr: >-
+          sum by (environment, region, cluster, instance)
+          (rate(heimdall_metadata_batch_calls_total[5m]))
+          /
+          clamp_min(sum by (environment, region, cluster, instance)
+          (rate(heimdall_metadata_batch_transactions_total[5m])), 0.001)
