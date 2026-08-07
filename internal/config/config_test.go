@@ -371,3 +371,27 @@ func TestDefaultTemplateMatchesDefault(t *testing.T) {
 		t.Fatal("the first-run template carries no comments, which is the whole point of it")
 	}
 }
+
+// TestAbsentSourceRateLimitTakesTheDefaultBudget covers a security control that
+// used to switch itself off. Decode does not merge onto Default(), so a config
+// file written before this setting existed produced a zero budget — and zero
+// meant "disabled", leaving pre-authentication work unbounded on exactly the
+// installs nobody had revisited. Absent and explicitly-zero are now different
+// answers.
+func TestAbsentSourceRateLimitTakesTheDefaultBudget(t *testing.T) {
+	var absent Config
+	absent.Normalize()
+	if got := absent.Gateway.SourceRateLimit.SourceRequestsPerMinute(); got != defaultSourceRequestsPerMinute {
+		t.Fatalf("absent budget resolved to %d, want the default %d", got, defaultSourceRequestsPerMinute)
+	}
+
+	// An operator who writes 0 still gets the limiter disabled; the point is
+	// that they had to say so.
+	disabled := Config{}
+	zero := 0
+	disabled.Gateway.SourceRateLimit.RequestsPerMinute = &zero
+	disabled.Normalize()
+	if got := disabled.Gateway.SourceRateLimit.SourceRequestsPerMinute(); got != 0 {
+		t.Fatalf("an explicit zero resolved to %d, want 0", got)
+	}
+}

@@ -34,7 +34,8 @@ func TestSourceRateLimitCeilingMatchesLimiterDefault(t *testing.T) {
 
 func TestGatewayRouterShedsAnOverBudgetSource(t *testing.T) {
 	cfg := testConfig(t)
-	cfg.Gateway.SourceRateLimit = config.SourceRateLimit{RequestsPerMinute: 2, MaxTrackedSources: 64}
+	budget := 2
+	cfg.Gateway.SourceRateLimit = config.SourceRateLimit{RequestsPerMinute: &budget, MaxTrackedSources: 64}
 	if err := Initialize(cfg); err != nil {
 		t.Fatal(err)
 	}

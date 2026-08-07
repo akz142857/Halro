@@ -415,7 +415,7 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		return fail(err)
 	}
 	sourceLimiter := sourcelimit.New(
-		cfg.Gateway.SourceRateLimit.RequestsPerMinute,
+		cfg.Gateway.SourceRateLimit.SourceRequestsPerMinute(),
 		cfg.Gateway.SourceRateLimit.MaxTrackedSources,
 	)
 	gatewayHandler, err := gatewayapi.NewWithOptions(gatewayService, gatewayapi.Options{

@@ -66,9 +66,9 @@ func DoctorWithOptions(ctx context.Context, cfg config.Config, options DoctorOpt
 	// A config file written before this setting existed decodes to zero, which
 	// is a disabled limiter. That is a legitimate choice but a poor accident,
 	// so it is reported rather than assumed.
-	if cfg.Gateway.SourceRateLimit.RequestsPerMinute > 0 {
+	if cfg.Gateway.SourceRateLimit.SourceRequestsPerMinute() > 0 {
 		add("source_rate_limit", "pass", fmt.Sprintf("%d requests per minute per source, up to %d tracked sources",
-			cfg.Gateway.SourceRateLimit.RequestsPerMinute, cfg.Gateway.SourceRateLimit.MaxTrackedSources))
+			cfg.Gateway.SourceRateLimit.SourceRequestsPerMinute(), cfg.Gateway.SourceRateLimit.MaxTrackedSources))
 	} else {
 		add("source_rate_limit", "warn",
 			"gateway.source_rate_limit.requests_per_minute is 0, so anonymous request volume is unbounded before authentication")
