@@ -105,7 +105,7 @@ jobs:
         working-directory: web
       - run: npm run build
         working-directory: web
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: admin-dist
           path: internal/webui/dist
@@ -161,7 +161,7 @@ jobs:
           tar -C release -czf "release/heimdall-${GOOS}-${GOARCH}.tar.gz" \
             "heimdall-${GOOS}-${GOARCH}"
           rm -r "${package_dir}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: heimdall-${{ matrix.goos }}-${{ matrix.goarch }}
           path: release/heimdall-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
@@ -200,7 +200,7 @@ jobs:
           ignore-unfixed: true
           severity: HIGH,CRITICAL
           scanners: vuln,secret,misconfig
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: heimdall-container
           path: |
@@ -239,7 +239,7 @@ jobs:
           for artifact in heimdall-* heimdall.spdx.json checksums.txt; do
             cosign sign-blob --yes --bundle "${artifact}.sigstore.json" "${artifact}"
           done
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-assets
           path: release
