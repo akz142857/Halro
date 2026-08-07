@@ -721,7 +721,16 @@ func run(arguments []string, logger *slog.Logger) error {
 		if err != nil {
 			return err
 		}
-		return json.NewEncoder(os.Stdout).Encode(report)
+		if err := json.NewEncoder(os.Stdout).Encode(report); err != nil {
+			return err
+		}
+		// The report is the answer; the exit status is what a monitor reads.
+		// A chain that could not be authenticated is not a pass, even when it
+		// is the honest state of a ledger that predates epoch 4.
+		if !report.ChainVerified {
+			return errors.New("ledger chain could not be authenticated")
+		}
+		return nil
 	case "doctor":
 		flags := flag.NewFlagSet("doctor", flag.ContinueOnError)
 		configPath := flags.String("config", "config.yaml", "configuration file")
