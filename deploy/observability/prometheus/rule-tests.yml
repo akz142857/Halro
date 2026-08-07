@@ -282,3 +282,34 @@ tests:
         exp_alerts:
           - exp_labels: {alertname: Watchdog, category: deadman, owner: sre, service: heimdall, severity: none}
             exp_annotations: {summary: Continuous signal for an independent dead-man monitor, runbook_url: /docs/observability/operations-runbook.md}
+
+  # Durable write path. A slow fsync and a saturated per-project accounting lock
+  # both present as "requests got slower"; these two series are what tell them
+  # apart, so they are worth pinning.
+  - interval: 1m
+    input_series:
+      - series: 'heimdall_wal_sync_seconds_sum{environment="test",region="local",cluster="standalone",instance="one"}'
+        values: '0+1x20'
+      - series: 'heimdall_wal_sync_seconds_count{environment="test",region="local",cluster="standalone",instance="one"}'
+        values: '0+10x20'
+      - series: 'heimdall_accounting_project_lock_wait_seconds_sum{environment="test",region="local",cluster="standalone",instance="one"}'
+        values: '0+3x20'
+      - series: 'heimdall_accounting_project_lock_wait_seconds_count{environment="test",region="local",cluster="standalone",instance="one"}'
+        values: '0+10x20'
+    alert_rule_test:
+      # 0.1s per fsync, sustained.
+      - eval_time: 17m
+        alertname: HeimdallWALSyncSlow
+        exp_alerts:
+          - exp_labels: {alertname: HeimdallWALSyncSlow, category: accounting, cluster: standalone, environment: test, instance: one, owner: sre, region: local, service: heimdall, severity: warning}
+            exp_annotations: {summary: Heimdall Ledger fsync is slow enough to cap accounting throughput, runbook_url: /docs/observability/operations-runbook.md}
+      # 0.3s mean wait per acquisition, sustained.
+      - eval_time: 21m
+        alertname: HeimdallAccountingProjectLockSaturated
+        exp_alerts:
+          - exp_labels: {alertname: HeimdallAccountingProjectLockSaturated, category: accounting, cluster: standalone, environment: test, instance: one, owner: sre, region: local, service: heimdall, severity: warning}
+            exp_annotations: {summary: Heimdall requests are queueing on one project's accounting lock, runbook_url: /docs/observability/operations-runbook.md}
+      # Neither has been true long enough yet at 6m.
+      - eval_time: 6m
+        alertname: HeimdallAccountingProjectLockSaturated
+        exp_alerts: []

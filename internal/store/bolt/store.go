@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/akz142857/Heimdall/internal/domain"
@@ -398,8 +399,56 @@ type LedgerChainCheckpoint struct {
 	Hash     [32]byte `json:"hash"`
 }
 
+// MetadataWriteStats describes the metadata store's durable write path.
+// BatchCalls/BatchTransactions is the mean coalescing factor — the bbolt
+// counterpart of the Ledger's records-per-batch, and the only way to tell from
+// outside whether batching the price pin writes (ADR 0012, "Amendment
+// 2026-08-07") is actually doing anything on a given host.
+type MetadataWriteStats struct {
+	BatchCalls        uint64
+	BatchTransactions uint64
+	PageWrites        int64
+	PageWriteDuration time.Duration
+	FreePages         int
+	PendingPages      int
+}
+
+func (s *Store) MetadataWriteStats() MetadataWriteStats {
+	stats := MetadataWriteStats{
+		BatchCalls:        s.batchCalls.Load(),
+		BatchTransactions: s.batchTransactions.Load(),
+	}
+	if s.db != nil {
+		dbStats := s.db.Stats()
+		stats.PageWrites = dbStats.TxStats.GetWrite()
+		stats.PageWriteDuration = dbStats.TxStats.GetWriteTime()
+		stats.FreePages, stats.PendingPages = dbStats.FreePageN, dbStats.PendingPageN
+	}
+	return stats
+}
+
+// batch is db.Batch plus the bookkeeping that makes coalescing observable. The
+// batched function may run more than once and several callers share one
+// transaction, so transactions are counted by watching tx.ID() change rather
+// than by counting calls: within one transaction bbolt runs the queued functions
+// sequentially on one goroutine, and separate write transactions are serialized,
+// so the swap below counts each transaction exactly once.
+func (s *Store) batch(fn func(*bbolt.Tx) error) error {
+	s.batchCalls.Add(1)
+	return s.db.Batch(func(tx *bbolt.Tx) error {
+		if id := uint64(tx.ID()); s.lastBatchTxID.Swap(id) != id {
+			s.batchTransactions.Add(1)
+		}
+		return fn(tx)
+	})
+}
+
 type Store struct {
 	db *bbolt.DB
+
+	batchCalls        atomic.Uint64
+	batchTransactions atomic.Uint64
+	lastBatchTxID     atomic.Uint64
 	// pricingStates holds deploymentID -> *deploymentPricingState. Entries are
 	// created on first use and never removed: one small struct per deployment
 	// that has been priced, which is bounded by the deployment count.

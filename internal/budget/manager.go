@@ -9,6 +9,7 @@ import (
 	"math"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/akz142857/Heimdall/internal/domain"
@@ -114,6 +115,10 @@ type Manager struct {
 	observers    []func(ledger.Record)
 	recoveryMu   sync.RWMutex
 	recovery     RecoveryStats
+
+	lockAcquisitions atomic.Uint64
+	lockWaitNanos    atomic.Int64
+	lockHeldNanos    atomic.Int64
 }
 
 type RecoveryStats struct {
@@ -196,11 +201,41 @@ func (m *Manager) localNow() time.Time {
 	return m.inAccountingZone(m.now())
 }
 
+// lockProject serializes one project's accounting writes. It is held across the
+// durable Ledger append, which makes it this process's per-project request-rate
+// ceiling — see ADR 0018. The wait and hold times are accumulated here because
+// that ceiling is otherwise invisible in production: an operator sees latency
+// rise with nothing to attribute it to. Deliberately aggregate, with no project
+// label, since project count is unbounded and high-cardinality labels are not
+// allowed.
 func (m *Manager) lockProject(projectID string) func() {
 	value, _ := m.projectLocks.LoadOrStore(projectID, &sync.Mutex{})
 	lock := value.(*sync.Mutex)
+	waitStarted := time.Now()
 	lock.Lock()
-	return lock.Unlock
+	held := time.Now()
+	m.lockWaitNanos.Add(int64(held.Sub(waitStarted)))
+	m.lockAcquisitions.Add(1)
+	return func() {
+		m.lockHeldNanos.Add(int64(time.Since(held)))
+		lock.Unlock()
+	}
+}
+
+// ProjectLockStats reports contention on the per-project accounting lock.
+// Acquisitions is the denominator for both durations.
+type ProjectLockStats struct {
+	Acquisitions uint64
+	WaitDuration time.Duration
+	HeldDuration time.Duration
+}
+
+func (m *Manager) ProjectLockStats() ProjectLockStats {
+	return ProjectLockStats{
+		Acquisitions: m.lockAcquisitions.Load(),
+		WaitDuration: time.Duration(m.lockWaitNanos.Load()),
+		HeldDuration: time.Duration(m.lockHeldNanos.Load()),
+	}
 }
 
 // BeginAttempt checks the project budget and durably reserves spend before an

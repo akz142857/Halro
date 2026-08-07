@@ -64,6 +64,8 @@ func (r *Runtime) writeMetrics(writer http.ResponseWriter) error {
 	rejections := r.gatewayService.RejectionMetrics()
 	pendingLeases, oldestPendingAge := r.state.PendingLeaseStats(time.Now())
 	recoveryStats := r.accounting.RecoveryStats()
+	projectLockStats := r.accounting.ProjectLockStats()
+	metadataWriteStats := r.store.MetadataWriteStats()
 	pricingQuarantines, _ := r.store.PricingQuarantineCount(context.Background())
 	writer.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	writer.Header().Set("Cache-Control", "no-store")
@@ -181,6 +183,45 @@ func (r *Runtime) writeMetrics(writer http.ResponseWriter) error {
 	fmt.Fprintf(output, "heimdall_pricing_recovery_pending_intents %d\n", len(pendingPricingIntents))
 	metricHeader(output, "heimdall_wal_append_errors_total", "counter", "Ledger records failed during write or fsync.")
 	fmt.Fprintf(output, "heimdall_wal_append_errors_total %d\n", ledgerStats.Errors)
+	// Records divided by batches is the mean group-commit size. It is the signal
+	// that separates "this host's fsync is the ceiling" from "too few concurrent
+	// appenders to coalesce" — identical symptoms, opposite remedies.
+	metricHeader(output, "heimdall_wal_append_records_total", "counter", "Ledger records durably appended.")
+	fmt.Fprintf(output, "heimdall_wal_append_records_total %d\n", ledgerStats.Records)
+	metricHeader(output, "heimdall_wal_append_batches_total", "counter", "Ledger group-commit batches durably appended.")
+	fmt.Fprintf(output, "heimdall_wal_append_batches_total %d\n", ledgerStats.Batches)
+	// The durability barrier every accounting ceiling in this process is bounded
+	// by. Its cost differs by orders of magnitude between filesystems, so no
+	// capacity figure measured elsewhere transfers without it.
+	metricHeader(output, "heimdall_wal_sync_seconds", "summary", "Cumulative time spent in Ledger durability barriers.")
+	fmt.Fprintf(output, "heimdall_wal_sync_seconds_sum %.6f\n", ledgerStats.SyncDuration.Seconds())
+	fmt.Fprintf(output, "heimdall_wal_sync_seconds_count %d\n", ledgerStats.Syncs)
+	// Per-project accounting serialization: the write path holds this lock across
+	// the durable append, which is the per-project request-rate ceiling (ADR
+	// 0018). Aggregate on purpose — project count is unbounded, so it cannot be a
+	// label.
+	metricHeader(output, "heimdall_accounting_project_lock_acquisitions_total", "counter", "Per-project accounting lock acquisitions.")
+	fmt.Fprintf(output, "heimdall_accounting_project_lock_acquisitions_total %d\n", projectLockStats.Acquisitions)
+	metricHeader(output, "heimdall_accounting_project_lock_wait_seconds", "summary", "Cumulative time waiting for the per-project accounting lock.")
+	fmt.Fprintf(output, "heimdall_accounting_project_lock_wait_seconds_sum %.6f\n", projectLockStats.WaitDuration.Seconds())
+	fmt.Fprintf(output, "heimdall_accounting_project_lock_wait_seconds_count %d\n", projectLockStats.Acquisitions)
+	metricHeader(output, "heimdall_accounting_project_lock_held_seconds", "summary", "Cumulative time holding the per-project accounting lock.")
+	fmt.Fprintf(output, "heimdall_accounting_project_lock_held_seconds_sum %.6f\n", projectLockStats.HeldDuration.Seconds())
+	fmt.Fprintf(output, "heimdall_accounting_project_lock_held_seconds_count %d\n", projectLockStats.Acquisitions)
+	// Metadata store durable writes. Calls divided by transactions is the
+	// coalescing factor for the batched price pin writes.
+	metricHeader(output, "heimdall_metadata_batch_calls_total", "counter", "Batched metadata write calls.")
+	fmt.Fprintf(output, "heimdall_metadata_batch_calls_total %d\n", metadataWriteStats.BatchCalls)
+	metricHeader(output, "heimdall_metadata_batch_transactions_total", "counter", "Write transactions those batched calls coalesced into.")
+	fmt.Fprintf(output, "heimdall_metadata_batch_transactions_total %d\n", metadataWriteStats.BatchTransactions)
+	metricHeader(output, "heimdall_metadata_page_writes_total", "counter", "Metadata store page writes.")
+	fmt.Fprintf(output, "heimdall_metadata_page_writes_total %d\n", metadataWriteStats.PageWrites)
+	metricHeader(output, "heimdall_metadata_page_write_seconds_total", "counter", "Cumulative metadata store page write time.")
+	fmt.Fprintf(output, "heimdall_metadata_page_write_seconds_total %.6f\n", metadataWriteStats.PageWriteDuration.Seconds())
+	metricHeader(output, "heimdall_metadata_free_pages", "gauge", "Metadata store freelist pages available for reuse.")
+	fmt.Fprintf(output, "heimdall_metadata_free_pages %d\n", metadataWriteStats.FreePages)
+	metricHeader(output, "heimdall_metadata_pending_pages", "gauge", "Metadata store pages pending release to the freelist.")
+	fmt.Fprintf(output, "heimdall_metadata_pending_pages %d\n", metadataWriteStats.PendingPages)
 	metricHeader(output, "heimdall_usage_analytics_queue_depth", "gauge", "Queued derivative Usage records awaiting aggregation.")
 	fmt.Fprintf(output, "heimdall_usage_analytics_queue_depth %d\n", collectorStats.QueueDepth)
 	metricHeader(output, "heimdall_usage_analytics_dropped_total", "counter", "Derivative Usage notifications dropped and recoverable from Ledger.")
