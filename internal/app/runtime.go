@@ -750,6 +750,34 @@ func (r *Runtime) saveUsageCheckpoint() {
 	if err := r.store.PutUsageCheckpoint(watermark, payload); err != nil {
 		r.logger.Warn("usage checkpoint save failed", "error", err)
 	}
+	r.advanceLedgerChainCheckpoint()
+}
+
+// advanceLedgerChainCheckpoint moves the trusted chain head forward while the
+// process runs. Startup reconciliation alone left the checkpoint pinned to
+// whatever the last restart saw, so an instance up for a month protected only
+// the frames written before it started: everything since could be truncated
+// back to that point and still reconcile cleanly on the next boot. Riding the
+// usage checkpoint's ticker bounds that window to one interval and costs a
+// small bbolt write on a path that already does a larger one.
+func (r *Runtime) advanceLedgerChainCheckpoint() {
+	sequence, offset, hash, ok := r.ledger.ChainHead()
+	if !ok {
+		return
+	}
+	checkpoint, err := r.store.LedgerChainCheckpoint()
+	if err != nil {
+		r.logger.Warn("ledger chain checkpoint load failed", "error", err)
+		return
+	}
+	if checkpoint.Sequence >= sequence {
+		return
+	}
+	if err := r.store.PutLedgerChainCheckpoint(boltstore.LedgerChainCheckpoint{
+		Sequence: sequence, Offset: offset, Hash: hash,
+	}); err != nil {
+		r.logger.Warn("ledger chain checkpoint save failed", "error", err)
+	}
 }
 
 func (r *Runtime) exportUsageParquet() {
@@ -955,6 +983,10 @@ func (r *Runtime) Close() error {
 		r.backgroundCancel()
 		r.backgroundWait.Wait()
 		r.alerts.Close()
+		// Frames written since the last tick would otherwise sit outside the
+		// checkpoint until the next start, which is precisely the window a
+		// shutdown-then-truncate would use.
+		r.advanceLedgerChainCheckpoint()
 		auditErr := appendSystemAudit(r.audit, r.store, "system.shutdown")
 		r.closeErr = errors.Join(
 			auditErr,

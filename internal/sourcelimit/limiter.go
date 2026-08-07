@@ -17,6 +17,31 @@ import (
 // window when the caller does not choose its own.
 const DefaultMaxTrackedSources = 16384
 
+// ipv6AggregationBits is the prefix length IPv6 sources are counted under.
+//
+// A single IPv6 host is routinely handed a /64, so keying on the full address
+// lets one machine present 2^64 distinct, genuinely routable sources — no
+// spoofing needed. That both multiplies its own budget without limit and fills
+// the tracking table, which pushes every source that appears afterwards into
+// the shared overflow budget. /64 is the smallest unit an operator is expected
+// to be able to allocate, so it is the unit worth counting.
+const ipv6AggregationBits = 64
+
+// bucketKey collapses a source address to the unit it is charged under: the
+// exact address for IPv4, where one address really is one allocation, and the
+// /64 prefix for IPv6.
+func bucketKey(source netip.Addr) netip.Addr {
+	source = source.Unmap()
+	if !source.Is6() {
+		return source
+	}
+	prefix, err := source.Prefix(ipv6AggregationBits)
+	if err != nil {
+		return source
+	}
+	return prefix.Addr()
+}
+
 // Limiter admits requests per source address in fixed one-minute windows.
 //
 // The counter map is bounded on purpose. An unbounded map keyed by source
@@ -79,6 +104,7 @@ func (l *Limiter) Allow(source netip.Addr, now time.Time) (bool, time.Duration) 
 	if wait < 0 {
 		wait = 0
 	}
+	source = bucketKey(source)
 	count, tracked := l.counts[source]
 	if !tracked && len(l.counts) >= l.maxTracked {
 		l.overflow++
