@@ -105,7 +105,7 @@ export function Layout({
         </div>
         {/* Stated once, where it is always visible. A read-only admin who is
             not told will read every disabled control as a broken console. */}
-        {readOnly ? <div className="notice" role="status">{t("navigation.readOnlyNotice")}</div> : null}
+        {readOnly ? <div className="notice info" role="status">{t("navigation.readOnlyNotice")}</div> : null}
         {children}
       </main>
     </div>

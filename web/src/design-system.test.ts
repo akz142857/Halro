@@ -137,12 +137,17 @@ describe("design system themes", () => {
 
   // The colour layer is a contract the tests enforce; the size layer is not.
   // --space-* and --radius-* are declared and almost never consumed, so spacing
-  // is decided by hand at every call site. Converting 758 values in one change
+  // is decided by hand at every call site. Converting 748 values in one change
   // would be a rewrite of every layout with no way to verify it, so this is a
   // ratchet instead: the count may fall, never rise. Lower the baseline as you
   // convert; a rise means a new hand-picked value went in beside a token that
   // already says the same thing.
-  const bareSizeValueBaseline = 758;
+  //
+  // The baseline was written as 758 when the ratchet was added, while the file
+  // actually held 754 — four units of slack that later commits spent without
+  // anyone deciding to. It is now the exact count, so any new hand-picked value
+  // fails and lowering it is a deliberate edit.
+  const bareSizeValueBaseline = 748;
 
   it("does not add bare spacing or radius values beyond the current baseline", () => {
     const styles = read("./styles.css");

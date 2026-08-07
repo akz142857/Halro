@@ -110,4 +110,9 @@
   --brand-glow: rgba(216, 255, 97, 0.12);
   --danger-hover: rgba(255, 117, 108, 0.08);
   --surface-secret: var(--p-ink-950);
+
+  /* An image cannot be built from --color-* at use time, so the chevron is
+     declared per theme. Leaving it in the primitive layer is what made it the
+     one colour on the console that ignored which theme was on. */
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='8' viewBox='0 0 14 8' fill='none'%3E%3Cpath d='M1 1l6 6 6-6' stroke='%238da29b' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 }
