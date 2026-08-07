@@ -449,10 +449,26 @@ export function AccountingTimezoneForm({ settings }: { settings: AccountingSetti
               })}</span>
             </div>
           )}
+          {/* The reset-window warning above is the one consequence nobody can
+              derive from the zone names, and it arrives asynchronously. Leaving
+              the button live while it is in flight let a confirmation land
+              before the warning rendered, and a failed preview looked exactly
+              like "no extra risk" — the operator signing without the sentence
+              the dialog exists to show them. */}
+          {preview.isError && (
+            <div className="notice error" role="alert">
+              <strong>{t("settings.accountingPreviewUnavailable")}</strong>
+              <span>{t("settings.accountingPreviewUnavailableDetail")}</span>
+            </div>
+          )}
           <div className="form-actions">
             <button className="button" onClick={() => setConfirming(false)}>{t("common.cancel")}</button>
-            <button className="button primary" disabled={readOnly || busy} onClick={() => schedule.mutate()}>
-              {schedule.isPending ? t("settings.saving") : t("settings.accountingConfirmAction")}
+            <button
+              className="button primary"
+              disabled={readOnly || busy || preview.isFetching || preview.isError}
+              onClick={() => schedule.mutate()}
+            >
+              {preview.isFetching ? t("common.loading") : schedule.isPending ? t("settings.saving") : t("settings.accountingConfirmAction")}
             </button>
           </div>
           </div>

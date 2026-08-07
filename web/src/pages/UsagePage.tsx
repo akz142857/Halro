@@ -1,7 +1,7 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { api } from "../api";
-import { ErrorState, Loading, PageHeader, StatusDot } from "../components";
+import { EmptyState, ErrorState, Loading, LoadMore, PageHeader, StatusDot } from "../components";
 import { compactNumber, money, useInstantFormatter } from "../format";
 import { Link } from "../navigation";
 import { useTranslation } from "react-i18next";
@@ -73,7 +73,13 @@ export function UsagePage() {
       </div>
       {usage.isPending && <Loading />}
       {usage.isError && <ErrorState error={usage.error} />}
-      {usage.data && (
+      {/* Filtering to nothing rendered a table with only a header, which reads
+          as a broken page rather than as an answer. Every other list here says
+          so in words. */}
+      {usage.data && attempts.length === 0 && (
+        <EmptyState title={t("usage.emptyTitle")}>{t("usage.emptyDescription")}</EmptyState>
+      )}
+      {usage.data && attempts.length > 0 && (
         <div className="table-shell">
           <table className="usage-table">
             <colgroup>
@@ -102,9 +108,11 @@ export function UsagePage() {
               ))}
             </tbody>
           </table>
-          {usage.hasNextPage && <button className="button ghost load-more" disabled={usage.isFetchingNextPage} onClick={() => usage.fetchNextPage()}>
-            {usage.isFetchingNextPage ? t("common.loading") : t("common.loadMore")}
-          </button>}
+          {/* The shared control, so this list pages on scroll like the others
+              rather than only on a click. */}
+          {usage.hasNextPage && (
+            <LoadMore label={t("common.loadMore")} busy={usage.isFetchingNextPage} onLoad={() => usage.fetchNextPage()} />
+          )}
         </div>
       )}
     </>

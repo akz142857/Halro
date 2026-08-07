@@ -30,7 +30,17 @@ export function AdminUsersSection() {
         <h3 id="admin-users-title">{t("adminUsers.title")}</h3>
         <p>{t("adminUsers.description")}</p>
       </div>
-      {!readOnly && <button type="button" className="button primary" onClick={() => setCreating(true)}>{t("adminUsers.create")}</button>}
+      {/* Disabled with a stated reason, not hidden. Everywhere else in the
+          console a read-only operator sees the control and is told why it is
+          unavailable; hiding it here meant they could not tell that account
+          management exists, let alone who to ask. */}
+      <button
+        type="button"
+        className="button primary"
+        disabled={readOnly}
+        title={readOnly ? t("navigation.readOnlyAction") : undefined}
+        onClick={() => setCreating(true)}
+      >{t("adminUsers.create")}</button>
     </header>
     {users.isPending && <Loading />}
     {users.isError && <ErrorState error={users.error} />}
@@ -44,13 +54,13 @@ export function AdminUsersSection() {
             <span className="badge">{t(`adminUsers.roles.${user.role}`)}</span>
             {isSelf && <span className="badge">{t("adminUsers.you")}</span>}
           </div>
-          {!readOnly && <button
+          <button
             type="button"
             className="button ghost"
-            disabled={isSelf || lastAdministrator}
-            title={isSelf ? t("adminUsers.cannotDeleteSelf") : lastAdministrator ? t("adminUsers.cannotDeleteLastAdministrator") : undefined}
+            disabled={readOnly || isSelf || lastAdministrator}
+            title={readOnly ? t("navigation.readOnlyAction") : isSelf ? t("adminUsers.cannotDeleteSelf") : lastAdministrator ? t("adminUsers.cannotDeleteLastAdministrator") : undefined}
             onClick={() => setDeleting(user.username)}
-          >{t("common.delete")}</button>}
+          >{t("common.delete")}</button>
         </li>;
       })}
     </ul>}

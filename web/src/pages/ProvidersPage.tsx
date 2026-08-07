@@ -298,7 +298,9 @@ function CredentialRow({ credential, useCount, highlighted, onUsageClick }: { cr
         <div className="row-actions credential-actions">
           <button className="button ghost" onClick={() => setRotating(true)}>{t("providers.rotate")}</button>
           <button className="button ghost credential-expand" aria-expanded={expanded} aria-controls={`credential-details-${credential.id}`} onClick={() => setExpanded((value) => !value)}>{expanded ? t("providers.collapseDetails") : t("providers.expandDetails")}</button>
-          <OverflowMenu label={t("providers.moreActions")}><ConfirmButton label={t("common.delete")} confirmLabel={t("providers.deleteCredential", { name: credential.name })} disabled={remove.isPending} requireStepUp onConfirm={(reauth) => remove.mutateAsync(reauth)} /></OverflowMenu>
+          <OverflowMenu label={t("providers.moreActions")}><ConfirmButton label={t("common.delete")} confirmLabel={useCount > 0
+              ? t("providers.deleteCredentialInUse", { name: credential.name, count: useCount })
+              : t("providers.deleteCredential", { name: credential.name })} disabled={remove.isPending} requireStepUp onConfirm={(reauth) => remove.mutateAsync(reauth)} /></OverflowMenu>
         </div>
         {expanded && <section id={`credential-details-${credential.id}`} className="credential-expanded-content" aria-label={t("providers.credentialDetailsTitle")}>
           <header className="credential-detail-header">
