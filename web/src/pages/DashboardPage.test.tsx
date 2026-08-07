@@ -53,7 +53,7 @@ describe("DashboardPage", () => {
   it("shows the real alert and WAL queue state and marks failures unhealthy", async () => {
     vi.spyOn(api, "dashboard").mockResolvedValue(dashboard({
       alerts: { Accepted: 12, Delivered: 8, Failed: 2, Dropped: 1, Queued: 4 },
-      wal: { Batches: 20, Records: 40, Errors: 1, QueueDepth: 3, QueueCapacity: 16 },
+      wal: { batches: 20, records: 40, errors: 1, syncs: 20, sync_seconds: 0.08, queue_depth: 3, queue_capacity: 16 },
     }));
     renderPage();
 
@@ -138,7 +138,7 @@ function dashboard(overrides: Partial<Dashboard> = {}): Dashboard {
     accounting_status: 0,
     time_context: timeContext(),
     alerts: { Accepted: 0, Delivered: 0, Failed: 0, Dropped: 0, Queued: 0 },
-    wal: { Batches: 0, Records: 0, Errors: 0, QueueDepth: 0, QueueCapacity: 16 },
+    wal: { batches: 0, records: 0, errors: 0, syncs: 0, sync_seconds: 0.08, queue_depth: 0, queue_capacity: 16 },
     ...overrides,
   };
 }

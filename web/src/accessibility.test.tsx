@@ -5,7 +5,7 @@ import { Layout } from "./Layout";
 import { Modal, OverflowMenu } from "./components";
 import { api } from "./api";
 import { SettingsPage } from "./pages/SettingsPage";
-import { timeContext } from "./test/fixtures";
+import { emptyWritePath, timeContext } from "./test/fixtures";
 
 describe("admin accessibility baseline", () => {
   afterEach(() => document.documentElement.removeAttribute("data-appearance"));
@@ -98,7 +98,7 @@ describe("admin accessibility baseline", () => {
   });
 
   it("keeps one main landmark and exposes settings sections and field descriptions", async () => {
-    vi.spyOn(api, "systemStatus").mockResolvedValue({ build: { version: "dev", commit: "local", date: "" }, accounting_status: 0, draining: false, wal: {}, audit: {}, alerts: {}, usage_watermark: {}, time_context: timeContext() });
+    vi.spyOn(api, "systemStatus").mockResolvedValue({ build: { version: "dev", commit: "local", date: "" }, accounting_status: 0, draining: false, wal: {}, write_path: emptyWritePath(), audit: {}, alerts: {}, usage_watermark: {}, time_context: timeContext() });
     vi.spyOn(api, "settings").mockResolvedValue({ data: { health_probe_interval_seconds: 30, revision: 1 }, etag: '"1"' });
     vi.spyOn(api, "uiSettings").mockResolvedValue({ data: { default_locale: "zh-CN", revision: 1 }, etag: '"1"' });
     vi.spyOn(api, "preferences").mockResolvedValue({ data: { locale: "zh-CN", appearance: "dark", revision: 1 }, etag: '"1"' });

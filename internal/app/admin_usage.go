@@ -45,9 +45,72 @@ func (r *Runtime) adminDashboard(writer http.ResponseWriter, request *http.Reque
 		"resource_labels":   labels,
 		"accounting_status": r.status.Load(),
 		"wal":               r.ledger.Stats(),
+		"write_path":        r.writePathSummary(),
 		"alerts":            r.alerts.Stats(),
 		"time_context":      timing,
 	})
+}
+
+// writePathSummary is the durable write path reduced to the handful of means that
+// explain this process's throughput ceilings. Counters answer "how much"; these
+// answer "why is that the limit", and they are derived once on the server so the
+// CLI and the console cannot disagree about them.
+//
+// It exists because a single-binary product should be able to answer "what is
+// this instance doing right now" without an operator standing up Prometheus
+// first. The same numbers are available as metrics for anyone who has.
+type writePathSummary struct {
+	// Mean cost of one Ledger durability barrier. Every ceiling here is bounded
+	// by it, and it spans orders of magnitude between filesystems.
+	WALSyncSeconds float64 `json:"wal_sync_seconds"`
+	// Mean records per barrier. Near 1.0 under load means appends are not
+	// coalescing — a concurrency problem, not a disk problem.
+	WALBatchSize float64 `json:"wal_batch_size"`
+	// Mean wait for, and hold of, the per-project accounting lock. The hold is
+	// the per-project serialization budget: one project cannot exceed
+	// 1/hold accounting events per second no matter how many requests it offers.
+	ProjectLockWaitSeconds float64 `json:"project_lock_wait_seconds"`
+	ProjectLockHeldSeconds float64 `json:"project_lock_held_seconds"`
+	// Ceiling implied by the hold above, in accounting events per second for a
+	// single project. Reported as observed rather than promised: it is a
+	// measurement of this instance's recent behaviour, not a rating.
+	ProjectEventsPerSecond float64 `json:"project_events_per_second"`
+	// Mean batched metadata calls per write transaction, the bbolt counterpart
+	// of WALBatchSize.
+	MetadataBatchSize    float64 `json:"metadata_batch_size"`
+	MetadataWriteSeconds float64 `json:"metadata_write_seconds"`
+}
+
+func (r *Runtime) writePathSummary() writePathSummary {
+	wal := r.ledger.Stats()
+	lock := r.accounting.ProjectLockStats()
+	metadata := r.store.MetadataWriteStats()
+	summary := writePathSummary{
+		WALSyncSeconds:         perOperationSeconds(wal.SyncDuration, wal.Syncs),
+		WALBatchSize:           ratio(float64(wal.Records), float64(wal.Batches)),
+		ProjectLockWaitSeconds: perOperationSeconds(lock.WaitDuration, lock.Acquisitions),
+		ProjectLockHeldSeconds: perOperationSeconds(lock.HeldDuration, lock.Acquisitions),
+		MetadataBatchSize:      ratio(float64(metadata.BatchCalls), float64(metadata.BatchTransactions)),
+		MetadataWriteSeconds:   perOperationSeconds(metadata.PageWriteDuration, uint64(max(metadata.PageWrites, 0))),
+	}
+	summary.ProjectEventsPerSecond = ratio(1, summary.ProjectLockHeldSeconds)
+	return summary
+}
+
+func perOperationSeconds(total time.Duration, operations uint64) float64 {
+	if operations == 0 {
+		return 0
+	}
+	return total.Seconds() / float64(operations)
+}
+
+// ratio keeps an idle instance reporting 0 rather than NaN, which would
+// serialize as invalid JSON and take the whole payload down with it.
+func ratio(numerator, denominator float64) float64 {
+	if denominator == 0 {
+		return 0
+	}
+	return numerator / denominator
 }
 
 type dashboardGovernance struct {
@@ -316,6 +379,7 @@ func (r *Runtime) adminSystemStatus(writer http.ResponseWriter, request *http.Re
 		"accounting_status": r.status.Load(),
 		"draining":          r.draining.Load(),
 		"wal":               r.ledger.Stats(),
+		"write_path":        r.writePathSummary(),
 		"audit":             auditSummary,
 		"alerts":            r.alerts.Stats(),
 		"usage_watermark":   r.usage.Watermark(),
