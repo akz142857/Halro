@@ -66,9 +66,6 @@ export function UsagePage() {
         </label>
         <label><span>{t("usage.start")}</span><input type="datetime-local" value={start} onChange={(event) => setStart(event.target.value)} /></label>
         <label><span>{t("usage.end")}</span><input type="datetime-local" value={end} onChange={(event) => setEnd(event.target.value)} /></label>
-        {/* The control carries no zone, so the one it is read in has to be said
-            rather than assumed to match the viewer's. */}
-        <span className="filter-hint">{t("usage.rangeTimeZone", { zone: timeZone })}</span>
         <span className="filter-count">{t("usage.records", { count: attempts.length })}</span>
       </div>
       {usage.isPending && <Loading />}

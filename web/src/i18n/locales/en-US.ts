@@ -82,6 +82,7 @@ export const enUS = {
     loggingOut: "Signing out…",
     gatewayOnline: "Gateway online",
     localControl: "Local control / no cloud dependency",
+    timeZoneLabel: "Time zone: ",
     productSubtitle: "LLM control plane",
   },
   app: {
@@ -481,7 +482,7 @@ export const enUS = {
   },
   usage: {
     eyebrow: "Durable accounting", title: "Usage & Requests", description: "Project, model, tokens, cost, and terminal state for every provider attempt, with filters across all of them.",
-    model: "Model", status: "Status", all: "All", success: "Success", error: "Error", records: "{{count}} records", start: "Start time", end: "End time", emptyTitle: "No matching calls", emptyDescription: "No records match these filters. Widen the time range or clear a filter and try again.", rangeTimeZone: "Time range is read in the accounting zone {{zone}}",
+    model: "Model", status: "Status", all: "All", success: "Success", error: "Error", records: "{{count}} records", start: "Start time", end: "End time", emptyTitle: "No matching calls", emptyDescription: "No records match these filters. Widen the time range or clear a filter and try again.",
     request: "Request", tokens: "Tokens", cost: "Cost", latency: "Latency", time: "Time", attempt: "Attempt {{count}}",
     estimated: "EST. ", inputOutput: "{{input}} in / {{output}} out", conservative: "Conservative upper bound", reported: "Provider reported",
     unknownCost: "Unknown", costEvidence: "Pricing evidence", formulaComponents: "Input {{input}} + output {{output}} + fixed {{fixed}}",

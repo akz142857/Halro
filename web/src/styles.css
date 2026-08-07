@@ -695,7 +695,14 @@ td small, td code { display: block; margin-top: 4px; color: var(--muted); }
 }
 .filter-bar label span { display: block; margin-bottom: 5px; color: var(--muted-2); font: var(--font-size-xs) var(--mono); }
 .filter-bar input, .filter-bar select { min-height: 34px; }
-.filter-bar input[type="datetime-local"] { height: 34px; padding: 0 var(--space-3); font-size: 13px; }
+/* datetime-local had a fixed height, its own padding and its own font size, so
+   it sat at a different height from the text inputs and selects beside it. It
+   now takes exactly what they take; only the native picker button needs saying,
+   since it is drawn by the browser in its own colour. */
+.filter-bar input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+  padding: 0; opacity: .55; cursor: pointer; filter: grayscale(1);
+}
+.filter-bar input[type="datetime-local"]:hover::-webkit-calendar-picker-indicator { opacity: .85; }
 .filter-count { margin-left: auto; padding: 9px; color: var(--muted); font: var(--font-size-xs) var(--mono); }
 .filter-hint { align-self: center; color: var(--color-text-tertiary); font-size: var(--font-size-xs); }
 
@@ -904,6 +911,7 @@ td small, td code { display: block; margin-top: 4px; color: var(--muted); }
 }
 .settings-facts dd code { font-family: var(--mono); }
 .topline-timezone { color: var(--muted-2); font-family: var(--mono); }
+.topline-separator { margin: 0 var(--space-1); color: var(--color-text-tertiary); }
 .settings-facts dd small { display: block; margin-top: var(--space-1); color: var(--muted); font-size: var(--font-size-xs); }
 /* The three consequences of a time zone change, stated before it is confirmed. */
 .settings-consequences { margin: var(--space-3) 0; padding-left: var(--space-5); display: grid; gap: var(--space-2); color: var(--muted); font-size: .88rem; line-height: 1.5; }

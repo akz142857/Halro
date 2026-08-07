@@ -82,6 +82,7 @@ export const zhCN = {
     loggingOut: "正在退出…",
     gatewayOnline: "网关在线",
     localControl: "本地控制 / 无云端依赖",
+    timeZoneLabel: "时区:",
     productSubtitle: "LLM 控制平面",
   },
   app: {
@@ -481,7 +482,7 @@ export const zhCN = {
   },
   usage: {
     eyebrow: "持久化计费", title: "用量与调用", description: "记录每次服务商尝试的项目、模型、令牌、成本与终态，支持多维度筛选。",
-    model: "模型", status: "状态", all: "全部", success: "成功", error: "错误", records: "{{count}} 条记录", start: "起始时间", end: "结束时间", emptyTitle: "没有匹配的调用", emptyDescription: "当前筛选条件下没有记录。放宽时间范围或清除筛选后再试。", rangeTimeZone: "时间范围按记账时区 {{zone}} 解释",
+    model: "模型", status: "状态", all: "全部", success: "成功", error: "错误", records: "{{count}} 条记录", start: "起始时间", end: "结束时间", emptyTitle: "没有匹配的调用", emptyDescription: "当前筛选条件下没有记录。放宽时间范围或清除筛选后再试。",
     request: "请求", tokens: "令牌", cost: "成本", latency: "延迟", time: "时间", attempt: "尝试 {{count}}",
     estimated: "估算 ", inputOutput: "{{input}} 输入 / {{output}} 输出", conservative: "保守上限", reported: "服务商报告",
     unknownCost: "未知", costEvidence: "计价证据", formulaComponents: "输入 {{input}} + 输出 {{output}} + 固定 {{fixed}}",
