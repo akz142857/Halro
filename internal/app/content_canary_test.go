@@ -77,16 +77,31 @@ func TestContentCanaryNeverPersistsOutsideTheResponsePath(t *testing.T) {
 		}
 	}()
 
+	// Tool calls and tool results travel content paths of their own, but an
+	// unprofiled adapter has its Tools capability forcibly cleared at
+	// registration — optional portable semantics fail closed without a profile
+	// contract. Bridging the fake onto the real OpenAI profile is what lets the
+	// tool-bearing request past the capability gate and into the provider.
 	fake := &contentCanaryAdapter{}
+	manifest, ok := provider.BuiltinProfile(domain.ProfileOpenAIChatEmbeddings)
+	if !ok {
+		t.Fatal("OpenAI chat/embeddings profile is missing from the builtin registry")
+	}
+	evidence := domain.EvidenceForCapabilities(domain.ProviderCapabilities{
+		Chat: true, Streaming: true, Embeddings: true, Tools: true,
+		StreamUsage: true,
+	}, domain.EvidenceDeclared)
+	profiled, err := provider.NewLegacyAdapterBridge(fake, manifest, evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
 	replacement := provider.NewRegistry()
 	if err := replacement.Register(provider.Target{
 		ID: bootstrap.RouteID, ProviderID: bootstrap.ProviderID,
-		PublicModel: "chat", ProviderModel: "canary-model", Adapter: fake,
+		PublicModel: "chat", ProviderModel: "canary-model", Adapter: profiled,
+		ProfileID: manifest.ID, AccessSurface: manifest.AccessSurface,
 		InputMicrosPerMillion: 1_000_000, OutputMicrosPerMillion: 2_000_000,
 		Strategy: "ordered",
-		// Tool calls and tool results are content paths of their own, so the
-		// target must declare tool support or the capability gate rejects the
-		// request before any of it reaches the provider.
 		Capabilities: provider.Capabilities{
 			Chat: true, Streaming: true, Tools: true, StreamUsage: true,
 		},
@@ -336,17 +351,23 @@ func (a *contentCanaryAdapter) ChatStream(
 ) (*openaiapi.Usage, error) {
 	a.observe(call.Request)
 	// Split across two deltas so the canary straddles a chunk boundary — the
-	// case where a streaming rewriter is most likely to buffer content.
+	// case where a streaming rewriter is most likely to buffer content. The
+	// second delta terminates the output; without a termination the semantic
+	// stream validator rejects the whole stream at Finalize.
 	head, tail := streamContentCanary[:20], streamContentCanary[20:]
-	for _, fragment := range []string{"answer: " + head, tail} {
+	for index, fragment := range []string{"answer: " + head, tail} {
+		output := semantic.OutputDelta{
+			Index: 0, Role: semantic.RoleAssistant,
+			Content: []semantic.ContentDelta{{
+				Kind: semantic.ContentText, Text: fragment,
+			}},
+		}
+		if index == 1 {
+			output.Termination = "stop"
+		}
 		if err := emit(semantic.Event{
 			Kind: semantic.EventDelta, ID: "canary-stream", Model: "canary-model",
-			Outputs: []semantic.OutputDelta{{
-				Index: 0, Role: semantic.RoleAssistant,
-				Content: []semantic.ContentDelta{{
-					Kind: semantic.ContentText, Text: fragment,
-				}},
-			}},
+			Outputs: []semantic.OutputDelta{output},
 		}); err != nil {
 			return nil, err
 		}
