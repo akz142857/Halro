@@ -84,6 +84,12 @@ func TestContentCanaryNeverPersistsOutsideTheResponsePath(t *testing.T) {
 		PublicModel: "chat", ProviderModel: "canary-model", Adapter: fake,
 		InputMicrosPerMillion: 1_000_000, OutputMicrosPerMillion: 2_000_000,
 		Strategy: "ordered",
+		// Tool calls and tool results are content paths of their own, so the
+		// target must declare tool support or the capability gate rejects the
+		// request before any of it reaches the provider.
+		Capabilities: provider.Capabilities{
+			Chat: true, Streaming: true, Tools: true, StreamUsage: true,
+		},
 	}); err != nil {
 		t.Fatal(err)
 	}
