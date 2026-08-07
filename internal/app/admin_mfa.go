@@ -101,7 +101,6 @@ func (r *Runtime) createAdminMFAAuthenticator(w http.ResponseWriter, req *http.R
 	}
 	user, err := r.store.GetAdminUser(req.Context(), admin.session.Username)
 	password := []byte(input.CurrentPassword)
-	defer clear(password)
 	ok, answered := r.guardAdminCredentialCheck(w, admin.session.Username, "mfa_authenticator_create", func() bool {
 		return err == nil && adminauth.VerifyPassword(user, password)
 	})
@@ -456,7 +455,6 @@ func (r *Runtime) deleteAdminMFAAuthenticator(w http.ResponseWriter, req *http.R
 	}
 	user, err := r.store.GetAdminUser(req.Context(), admin.session.Username)
 	p := []byte(in.CurrentPassword)
-	defer clear(p)
 	ok, answered := r.guardAdminCredentialCheck(w, admin.session.Username, "mfa_authenticator_delete", func() bool {
 		return err == nil && adminauth.VerifyPassword(user, p)
 	})
@@ -527,7 +525,6 @@ func (r *Runtime) regenerateAdminMFARecoveryCodes(w http.ResponseWriter, req *ht
 	}
 	user, err := r.store.GetAdminUser(req.Context(), admin.session.Username)
 	p := []byte(in.CurrentPassword)
-	defer clear(p)
 	active, _ := r.activeAdminMFA(req.Context(), admin.session.Username)
 	ok, answered := r.guardAdminCredentialCheck(w, admin.session.Username, "mfa_recovery_codes_regenerate", func() bool {
 		return err == nil && adminauth.VerifyPassword(user, p)
@@ -584,7 +581,6 @@ func (r *Runtime) disableAdminMFA(w http.ResponseWriter, req *http.Request) {
 	}
 	user, err := r.store.GetAdminUser(req.Context(), admin.session.Username)
 	p := []byte(in.CurrentPassword)
-	defer clear(p)
 	active, _ := r.activeAdminMFA(req.Context(), user.Username)
 	ok, answered := r.guardAdminCredentialCheck(w, admin.session.Username, "mfa_disable", func() bool {
 		return err == nil && adminauth.VerifyPassword(user, p)

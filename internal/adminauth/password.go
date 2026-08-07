@@ -51,6 +51,21 @@ func NewUser(username string, password []byte, role string, now time.Time) (doma
 	return user, nil
 }
 
+// VerifyPassword reports whether password matches the user's stored hash.
+//
+// The []byte parameter is argon2's shape, not a scrubbing boundary, and the
+// callers deliberately do not treat it as one. An admin password arrives in a
+// JSON body: by the time a handler sees it the plaintext is in net/http's read
+// buffer, in the decoder's buffer, and in the immutable string the decoder
+// produced, none of which the handler owns or can overwrite. Copying that
+// string into a []byte so the copy could be clear()ed — which several handlers
+// used to do — zeroed the one instance that was about to become garbage while
+// the unreachable ones stayed exactly as long, so it shortened nothing and
+// read as though the secret had been scrubbed from the process. What bounds
+// this material is that it is never logged, persisted, or echoed.
+//
+// The candidate hash below is the opposite case: this function derives it, so
+// it is the only holder and clearing it is real.
 func VerifyPassword(user domain.AdminUser, password []byte) bool {
 	if user.PasswordVersion != passwordVersion || len(password) == 0 ||
 		len(user.PasswordSalt) < passwordSaltSize || len(user.PasswordHash) != passwordHashSize {

@@ -40,10 +40,16 @@ func (r *Runtime) requireDestructiveStepUp(writer http.ResponseWriter, request *
 		})
 		return false
 	}
-	password := []byte(input.CurrentPassword)
-	defer clear(password)
-	input.CurrentPassword = ""
-	return r.verifyAdminStepUp(writer, request, admin.session.Username, string(password), input.TOTPCode)
+	// No scrubbing here, deliberately. The password arrives inside a JSON body,
+	// so by the time this runs the process holds it in net/http's read buffer,
+	// in the decoder's buffer, and in the immutable string the decoder produced
+	// — none of which this code owns or can overwrite. Copying it into a []byte
+	// so that copy could be clear()ed zeroed the one instance that was about to
+	// become garbage anyway, and left a line that reads like the secret had been
+	// scrubbed from the process. What actually bounds this material is
+	// everything around it: it is never logged, never persisted, never echoed,
+	// and never leaves this call.
+	return r.verifyAdminStepUp(writer, request, admin.session.Username, input.CurrentPassword, input.TOTPCode)
 }
 
 // verifyAdminStepUp is verifyReauthenticationMaterial with the two things a
