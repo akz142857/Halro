@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
-import { AppearanceForm, LanguageSettingsForm, MFASettings, PasswordChangeForm } from "./SettingsPage";
+import { AppearanceForm, LanguageSettingsForm, MFASettings, PasswordChangeForm, SettingsPage } from "./SettingsPage";
 
 function renderWithClient(node: React.ReactElement) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -201,5 +201,58 @@ describe("MFASettings", () => {
     fireEvent.click(trigger);
     fireEvent.click(screen.getByRole("button", { name: "取消" }));
     await waitFor(() => expect(trigger).toHaveFocus());
+  });
+});
+
+// The effective config.yaml describes the instance, which is what the 实例配置
+// pane is for; it sat under 关于与诊断, whose question is whether the instance
+// is well. Moving it means the query that feeds it moves too — left enabled on
+// the old pane it would fetch for a pane that no longer renders it, and not
+// fetch for the one that does.
+describe("SettingsPage config placement", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    window.history.replaceState({}, "", "/");
+  });
+
+  function stubInstanceQueries() {
+    vi.spyOn(api, "settings").mockResolvedValue({ data: { health_probe_interval_seconds: 30, revision: 1 }, etag: '"1"' });
+    vi.spyOn(api, "uiSettings").mockResolvedValue({ data: { default_locale: "zh-CN", revision: 1 }, etag: '"1"' });
+    vi.spyOn(api, "preferences").mockResolvedValue({ data: { locale: "system", appearance: "dark", revision: 1 }, etag: '"1"' });
+    vi.spyOn(api, "accountingSettings").mockResolvedValue({
+      data: {
+        timezone: "UTC", timezone_version: 1,
+        current_period: { period_id: "2026-08-06", period_start: "2026-08-06T00:00:00Z", period_end: "2026-08-07T00:00:00Z" },
+        config_file_timezone: "UTC", config_file_in_effect: true,
+        tzdata: { source: "system", version: "2026b", fingerprint: "sha256:a19daa" },
+        updated_at: "2026-08-01T00:00:00Z", revision: 1,
+      },
+      etag: '"1"',
+    });
+    return vi.spyOn(api, "systemConfig").mockResolvedValue({ yaml: "server:\n  address: 127.0.0.1\n" } as never);
+  }
+
+  it("renders the configuration card in the instance pane", async () => {
+    const systemConfig = stubInstanceQueries();
+    window.history.replaceState({}, "", "/admin/settings/instance");
+    renderWithClient(<SettingsPage />);
+
+    expect(await screen.findByText("config.yaml")).toBeInTheDocument();
+    expect(screen.getByText(/server:/)).toBeInTheDocument();
+    expect(systemConfig).toHaveBeenCalled();
+  });
+
+  it("no longer renders it, or fetches it, under diagnostics", async () => {
+    const systemConfig = vi.spyOn(api, "systemConfig").mockResolvedValue({ yaml: "should not be fetched" } as never);
+    vi.spyOn(api, "systemStatus").mockResolvedValue({
+      build: { version: "1.0.0", commit: "abc", date: "2026-08-07" },
+      accounting_status: 0, draining: false, wal: {}, audit: {}, alerts: {}, usage_watermark: {},
+    } as never);
+    window.history.replaceState({}, "", "/admin/settings/diagnostics");
+    renderWithClient(<SettingsPage />);
+
+    await screen.findByText("Heimdall 1.0.0");
+    expect(screen.queryByText("config.yaml")).not.toBeInTheDocument();
+    expect(systemConfig).not.toHaveBeenCalled();
   });
 });
