@@ -257,7 +257,7 @@ export const enUS = {
     serviceUnavailable: "The setup service is temporarily unavailable",
   },
   settings: {
-    panes: { general: "General", security: "Sign-in & Security", accounts: "Admin accounts", instance: "Instance", diagnostics: "About & Diagnostics" },
+    panes: { general: "General", security: "Sign-in & Security", accounts: "Admin accounts", instance: "Instance", config: "System configuration", diagnostics: "About & Diagnostics" },
     accountsDescription: "The accounts that can sign in to this console, and what each one is allowed to do.",
     generalDescription: "Personal interface preferences for this administrator account.",
     appearance: {

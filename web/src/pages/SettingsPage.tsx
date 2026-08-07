@@ -13,11 +13,15 @@ import { useIsReadOnly } from "../session";
 import { AdminUsersSection } from "./AdminUsersSection";
 import type { AccountingSettings, AdminPreferences, Appearance, InstanceUISettings, LocalePreference, SupportedLocale } from "../types";
 
-type SettingsPane = "general" | "security" | "accounts" | "instance" | "diagnostics";
+// One list, in the order the nav renders them. The routing used to repeat the
+// names in a chain of comparisons and the nav in its own array, so a pane could
+// be reachable by URL and absent from the menu, or the reverse.
+const SETTINGS_PANES = ["general", "security", "accounts", "instance", "config", "diagnostics"] as const;
+type SettingsPane = (typeof SETTINGS_PANES)[number];
 
 function paneFromPath(path: string): SettingsPane {
   const pane = path.split("/")[3];
-  return pane === "security" || pane === "accounts" || pane === "instance" || pane === "diagnostics" ? pane : "general";
+  return SETTINGS_PANES.find((candidate) => candidate === pane) ?? "general";
 }
 
 export function SettingsPage({ mfaSetupRequired = false }: { mfaSetupRequired?: boolean }) {
@@ -30,20 +34,20 @@ export function SettingsPage({ mfaSetupRequired = false }: { mfaSetupRequired?: 
     refetchInterval: 15_000,
     enabled: !mfaSetupRequired && pane === "diagnostics",
   });
-  // The effective config.yaml belongs with the instance settings, not with the
-  // diagnostics: it is the same subject those forms are editing, read back as
-  // the process actually resolved it. Diagnostics answers "is this instance
-  // well", which is a different question and no longer needs this.
+  // The effective config.yaml gets its own pane rather than riding along with
+  // the diagnostics, whose question is whether the instance is well right now.
+  // This one answers what the instance is running with, which is a subject
+  // large enough to be its own place and not a card at the bottom of another.
   const config = useQuery({
     queryKey: ["system-config"],
     queryFn: api.systemConfig,
-    enabled: !mfaSetupRequired && pane === "instance",
+    enabled: !mfaSetupRequired && pane === "config",
   });
   const settings = useQuery({ queryKey: ["settings"], queryFn: api.settings, enabled: !mfaSetupRequired && pane === "instance" });
   const accounting = useQuery({ queryKey: ["accounting-settings"], queryFn: api.accountingSettings, enabled: !mfaSetupRequired && pane === "instance" });
   const uiSettings = useQuery({ queryKey: ["ui-settings"], queryFn: api.uiSettings, enabled: !mfaSetupRequired && (pane === "general" || pane === "instance") });
   const preferences = useQuery({ queryKey: ["preferences"], queryFn: api.preferences, enabled: !mfaSetupRequired && (pane === "general" || pane === "instance") });
-  const queries = pane === "diagnostics" ? [status] : pane === "instance" ? [settings, uiSettings, preferences, accounting, config] : pane === "general" ? [uiSettings, preferences] : [];
+  const queries = pane === "diagnostics" ? [status] : pane === "config" ? [config] : pane === "instance" ? [settings, uiSettings, preferences, accounting] : pane === "general" ? [uiSettings, preferences] : [];
   const pending = queries.some((query) => query.isPending);
   const error = queries.find((query) => query.error)?.error;
   const accountingLabels = [t("settings.healthy"), t("settings.degraded"), t("settings.unavailable"), t("settings.recoveryRequired")];
@@ -66,7 +70,7 @@ export function SettingsPage({ mfaSetupRequired = false }: { mfaSetupRequired?: 
       {mfaSetupRequired ? <div className="settings-pane"><MFASettings /></div> : (
         <div className="settings-shell">
           <nav className="settings-nav" aria-label={t("settings.sectionNavigation")}>
-            {(["general", "security", "accounts", "instance", "diagnostics"] as const).map((item) => (
+            {SETTINGS_PANES.map((item) => (
               <a key={item} href={`/admin/settings/${item}`} className={pane === item ? "active" : ""} aria-current={pane === item ? "page" : undefined} onClick={(event) => { event.preventDefault(); navigate(`/admin/settings/${item}`); }}>{t(`settings.panes.${item}`)}</a>
             ))}
           </nav>
@@ -76,7 +80,8 @@ export function SettingsPage({ mfaSetupRequired = false }: { mfaSetupRequired?: 
             {!pending && !error && pane === "general" && uiSettings.data && preferences.data && <section aria-labelledby="general-title"><SettingsGroupHeader title={t("settings.panes.general")} description={t("settings.generalDescription")} id="general-title" /><AppearanceForm preferences={preferences.data.data} /><PersonalLanguageForm ui={uiSettings.data.data} preferences={preferences.data.data} /></section>}
             {pane === "security" && <section aria-labelledby="security-title"><SettingsGroupHeader title={t("settings.panes.security")} description={t("settings.securityDescription")} id="security-title" /><PasswordChangeForm /><MFASettings /></section>}
             {pane === "accounts" && <section aria-labelledby="accounts-title"><SettingsGroupHeader title={t("settings.panes.accounts")} description={t("settings.accountsDescription")} id="accounts-title" /><AdminUsersSection /></section>}
-            {!pending && !error && pane === "instance" && uiSettings.data && preferences.data && settings.data && <section aria-labelledby="instance-title"><SettingsGroupHeader title={t("settings.panes.instance")} description={t("settings.instanceDescription")} id="instance-title" /><InstanceLanguageForm ui={uiSettings.data.data} preferences={preferences.data.data} />{accounting.data && <AccountingTimezoneForm settings={accounting.data.data} />}<RuntimeSettingsForm settings={settings.data.data} />{config.data && <ConfigPreviewCard yaml={config.data.yaml} />}</section>}
+            {!pending && !error && pane === "instance" && uiSettings.data && preferences.data && settings.data && <section aria-labelledby="instance-title"><SettingsGroupHeader title={t("settings.panes.instance")} description={t("settings.instanceDescription")} id="instance-title" /><InstanceLanguageForm ui={uiSettings.data.data} preferences={preferences.data.data} />{accounting.data && <AccountingTimezoneForm settings={accounting.data.data} />}<RuntimeSettingsForm settings={settings.data.data} /></section>}
+            {!pending && !error && pane === "config" && config.data && <section aria-labelledby="config-title"><SettingsGroupHeader title={t("settings.panes.config")} description={t("settings.configPreviewDescription")} id="config-title" /><ConfigPreviewCard yaml={config.data.yaml} /></section>}
             {!pending && !error && pane === "diagnostics" && status.data && <DiagnosticsPane status={status.data} accountingLabels={accountingLabels} metricLabels={metricLabels} />}
           </div>
         </div>
@@ -131,9 +136,13 @@ function ConfigPreviewCard({ yaml }: { yaml: string }) {
     }
   };
   return (
-    <details className="panel system-card diagnostic-details config-preview">
+    // Open, because it is now the whole point of the pane it sits on rather
+    // than one card among the diagnostics — arriving at a page whose only
+    // content is folded away reads as an empty page. The description moved to
+    // the pane header; repeating it here said the same sentence twice on one
+    // screen.
+    <details className="panel system-card diagnostic-details config-preview" open>
       <summary><span>{t("settings.configPreviewTitle")}</span><strong>config.yaml</strong></summary>
-      <p className="panel-description">{t("settings.configPreviewDescription")}</p>
       <pre className="config-preview-body"><code>{yaml}</code></pre>
       <div className="form-actions">
         <button type="button" className="button ghost" onClick={() => void copy()}>{t("common.copy")}</button>

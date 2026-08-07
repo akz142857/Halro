@@ -204,41 +204,29 @@ describe("MFASettings", () => {
   });
 });
 
-// The effective config.yaml describes the instance, which is what the 实例配置
-// pane is for; it sat under 关于与诊断, whose question is whether the instance
-// is well. Moving it means the query that feeds it moves too — left enabled on
-// the old pane it would fetch for a pane that no longer renders it, and not
-// fetch for the one that does.
-describe("SettingsPage config placement", () => {
+// 系统配置 is its own pane, a sibling of the others in the settings nav, not a
+// card at the bottom of one. Moving it means the query moves too: left enabled
+// on a pane that no longer renders the card it would fetch for nobody, and the
+// pane that does render it would never fetch.
+describe("SettingsPage system configuration pane", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     window.history.replaceState({}, "", "/");
   });
 
-  function stubInstanceQueries() {
-    vi.spyOn(api, "settings").mockResolvedValue({ data: { health_probe_interval_seconds: 30, revision: 1 }, etag: '"1"' });
-    vi.spyOn(api, "uiSettings").mockResolvedValue({ data: { default_locale: "zh-CN", revision: 1 }, etag: '"1"' });
-    vi.spyOn(api, "preferences").mockResolvedValue({ data: { locale: "system", appearance: "dark", revision: 1 }, etag: '"1"' });
-    vi.spyOn(api, "accountingSettings").mockResolvedValue({
-      data: {
-        timezone: "UTC", timezone_version: 1,
-        current_period: { period_id: "2026-08-06", period_start: "2026-08-06T00:00:00Z", period_end: "2026-08-07T00:00:00Z" },
-        config_file_timezone: "UTC", config_file_in_effect: true,
-        tzdata: { source: "system", version: "2026b", fingerprint: "sha256:a19daa" },
-        updated_at: "2026-08-01T00:00:00Z", revision: 1,
-      },
-      etag: '"1"',
-    });
-    return vi.spyOn(api, "systemConfig").mockResolvedValue({ yaml: "server:\n  address: 127.0.0.1\n" } as never);
-  }
-
-  it("renders the configuration card in the instance pane", async () => {
-    const systemConfig = stubInstanceQueries();
-    window.history.replaceState({}, "", "/admin/settings/instance");
+  it("is reachable as its own menu entry and renders config.yaml open", async () => {
+    const systemConfig = vi.spyOn(api, "systemConfig").mockResolvedValue({ yaml: "server:\n  address: 127.0.0.1\n" } as never);
+    window.history.replaceState({}, "", "/admin/settings/config");
     renderWithClient(<SettingsPage />);
+
+    // The nav entry sits between the instance pane and the diagnostics pane.
+    const entries = [...screen.getByRole("navigation", { name: "设置分区" }).querySelectorAll("a")].map((a) => a.textContent);
+    expect(entries).toEqual(["通用", "登录与安全", "管理员账户", "实例配置", "系统配置", "关于与诊断"]);
 
     expect(await screen.findByText("config.yaml")).toBeInTheDocument();
     expect(screen.getByText(/server:/)).toBeInTheDocument();
+    // The pane's only content must not arrive folded away.
+    expect(document.querySelector(".config-preview")).toHaveAttribute("open");
     expect(systemConfig).toHaveBeenCalled();
   });
 
@@ -254,5 +242,14 @@ describe("SettingsPage config placement", () => {
     await screen.findByText("Heimdall 1.0.0");
     expect(screen.queryByText("config.yaml")).not.toBeInTheDocument();
     expect(systemConfig).not.toHaveBeenCalled();
+  });
+
+  it("keeps an unknown pane on general rather than blanking the page", () => {
+    window.history.replaceState({}, "", "/admin/settings/not-a-pane");
+    vi.spyOn(api, "uiSettings").mockResolvedValue({ data: { default_locale: "zh-CN", revision: 1 }, etag: '"1"' });
+    vi.spyOn(api, "preferences").mockResolvedValue({ data: { locale: "system", appearance: "dark", revision: 1 }, etag: '"1"' });
+    renderWithClient(<SettingsPage />);
+
+    expect(screen.getByRole("link", { name: "通用" })).toHaveAttribute("aria-current", "page");
   });
 });
