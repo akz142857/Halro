@@ -40,3 +40,37 @@ describe("UsagePage project deep link", () => {
     expect(new URLSearchParams((usage.mock.calls[0][0] ?? "").slice(1)).get("project_id")).toBe("project_a");
   });
 });
+
+// The model filter matches exactly, so the free-text box it replaces turned a
+// typo into an empty table that looked like "no calls yet". The options have to
+// cover more than the current routes: history outlives a route, and a select
+// whose value is not among its options renders blank.
+describe("UsagePage model filter", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    window.history.replaceState({}, "", "/admin/usage");
+  });
+
+  it("offers the route aliases and the models present in history, not a free-text box", async () => {
+    vi.spyOn(api, "usage").mockResolvedValue({
+      items: [{ event_id: "e1", request_id: "req_1", attempt: 1, project_id: "p", requested_model: "retired-alias",
+        provider_model: "gpt-4o", provider_input_tokens: 1, provider_output_tokens: 1, latency_millis: 5,
+        status: "success", completed_at: "2026-08-06T00:00:00Z" }] as never,
+      next_cursor: "",
+    });
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "routes").mockResolvedValue({
+      items: [{ id: "r1", public_model: "chat" }, { id: "r2", public_model: "embed" }] as never,
+      next_cursor: "",
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><UsagePage /></QueryClientProvider>);
+
+    const select = await screen.findByRole("combobox", { name: "模型" });
+    await waitFor(() => {
+      const options = [...select.querySelectorAll("option")].map((option) => option.value);
+      // "" is the all-models option; the alias only history knows about is kept.
+      expect(options).toEqual(["", "chat", "embed", "retired-alias"]);
+    });
+  });
+});

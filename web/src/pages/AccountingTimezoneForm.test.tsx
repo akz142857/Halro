@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
 import type { AccountingSettings } from "../types";
-import { AccountingTimezoneForm } from "./SettingsPage";
+import { AccountingTimezoneForm } from "./AccountingTimezoneForm";
 
 function renderWithClient(node: React.ReactElement) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });

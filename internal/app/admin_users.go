@@ -59,12 +59,10 @@ func (r *Runtime) createAdminUser(writer http.ResponseWriter, request *http.Requ
 		adminBadRequest(writer, "invalid request")
 		return
 	}
-	currentPassword := []byte(input.CurrentPassword)
+	// []byte only where NewUser needs one; not scrubbed, see
+	// adminauth.VerifyPassword for why nothing here can be.
 	newPassword := []byte(input.Password)
-	defer clear(currentPassword)
-	defer clear(newPassword)
-	input.CurrentPassword, input.Password = "", ""
-	if !r.verifyAdminReauthentication(writer, request, admin.session.Username, string(currentPassword), input.TOTPCode) {
+	if !r.verifyAdminReauthentication(writer, request, admin.session.Username, input.CurrentPassword, input.TOTPCode) {
 		return
 	}
 	if !domain.ValidAdminRole(input.Role) {
@@ -114,10 +112,7 @@ func (r *Runtime) deleteAdminUser(writer http.ResponseWriter, request *http.Requ
 		adminBadRequest(writer, "invalid request")
 		return
 	}
-	currentPassword := []byte(input.CurrentPassword)
-	defer clear(currentPassword)
-	input.CurrentPassword = ""
-	if !r.verifyAdminReauthentication(writer, request, admin.session.Username, string(currentPassword), input.TOTPCode) {
+	if !r.verifyAdminReauthentication(writer, request, admin.session.Username, input.CurrentPassword, input.TOTPCode) {
 		return
 	}
 	if username == admin.session.Username {

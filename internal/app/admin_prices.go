@@ -628,10 +628,12 @@ func (r *Runtime) verifyReauthenticationMaterial(writer http.ResponseWriter, req
 }
 
 func (r *Runtime) verifyPricingPassword(writer http.ResponseWriter, request *http.Request, username, passwordText string) bool {
-	password := []byte(passwordText)
-	defer clear(password)
+	// The []byte is the shape VerifyPassword takes, not a scrubbing boundary:
+	// the password reached here as a JSON-decoded string and cannot be
+	// overwritten. See requireDestructiveStepUp for why nothing here pretends
+	// otherwise.
 	user, err := r.store.GetAdminUser(request.Context(), username)
-	if err != nil || !adminauth.VerifyPassword(user, password) {
+	if err != nil || !adminauth.VerifyPassword(user, []byte(passwordText)) {
 		writeJSON(writer, http.StatusUnauthorized, map[string]string{"error": "recent re-authentication required", "code": "recent_reauth_required"})
 		return false
 	}

@@ -81,11 +81,10 @@ func (r *Runtime) setupAdmin(writer http.ResponseWriter, request *http.Request) 
 		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "invalid request"})
 		return
 	}
+	// []byte for the comparison and the hash below; not scrubbed, see
+	// adminauth.VerifyPassword for why nothing here can be.
 	password := []byte(input.Password)
 	confirmation := []byte(input.PasswordConfirmation)
-	defer clear(password)
-	defer clear(confirmation)
-	input.Password, input.PasswordConfirmation = "", ""
 	if subtle.ConstantTimeCompare(password, confirmation) != 1 {
 		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "password confirmation does not match"})
 		return

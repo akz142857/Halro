@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
@@ -52,6 +53,35 @@ func TestVerifyAuditAnchorsAgreesDisagreesAndReportsTruncation(t *testing.T) {
 	}
 	if verdicts[2].Outcome != AnchorVerdictTruncated {
 		t.Fatalf("over-claiming anchor verdict=%q, want %q", verdicts[2].Outcome, AnchorVerdictTruncated)
+	}
+}
+
+// An anchor is meant to be the one claim about the chain that cannot be
+// manufactured on the host: producing an agreeing one requires the audit key.
+// Records: 0 with an all-zero LastHash needed neither — it named a position no
+// record occupies, the hash lookup returned the zero value for the absent key,
+// and the two compared equal. Anyone able to append a line to the witness file
+// could mint an "agree" and pad a report with them.
+func TestVerifyAuditAnchorsRefusesAnAnchorAtAPositionNoRecordOccupies(t *testing.T) {
+	cfg := testConfig(t)
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := Open(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	forged := boltstore.AuditAnchor{Sequence: 1, Records: 0, InstanceID: "ins_test"}
+	verdicts, err := VerifyAuditAnchors(context.Background(), cfg, []boltstore.AuditAnchor{forged})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(verdicts) == 0 || verdicts[0].Outcome != AnchorVerdictDisagree {
+		t.Fatalf("forged zero-record anchor verdict=%#v, want the first to be %q", verdicts, AnchorVerdictDisagree)
 	}
 }
 
@@ -119,5 +149,43 @@ func TestLoadAuditAnchorsFileParsesJSONLines(t *testing.T) {
 	}
 	if len(anchors) != 2 || anchors[0].Sequence != 1 || anchors[1].Records != 20 {
 		t.Fatalf("anchors=%#v", anchors)
+	}
+}
+
+// The witness rotates its file once it reaches its cap. Reading only the live
+// half would report every sequence in the retired half as a gap — the report
+// would call a complete record incomplete, which is the same wrong answer as
+// calling an incomplete one complete.
+func TestLoadAuditAnchorsFileReadsTheRotatedGenerationFirst(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "anchors.jsonl")
+	retired := `{"sequence":1,"records":10,"instance_id":"ins_1","observed_at":"2026-08-06T00:00:00Z"}
+{"sequence":2,"records":20,"instance_id":"ins_1","observed_at":"2026-08-06T00:05:00Z"}
+`
+	live := `{"sequence":3,"records":30,"instance_id":"ins_1","observed_at":"2026-08-06T00:10:00Z"}
+`
+	if err := os.WriteFile(path+rotatedAnchorSuffix, []byte(retired), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(live), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	anchors, err := LoadAuditAnchorsFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make([]uint64, 0, len(anchors))
+	for _, anchor := range anchors {
+		got = append(got, anchor.Sequence)
+	}
+	if !slices.Equal(got, []uint64{1, 2, 3}) {
+		t.Fatalf("sequences=%v, want [1 2 3] — the retired generation must come first", got)
+	}
+
+	// A missing live file is still an error: it is the path the operator named.
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadAuditAnchorsFile(path); err == nil {
+		t.Fatal("a missing live anchors file was accepted because a rotated one existed")
 	}
 }

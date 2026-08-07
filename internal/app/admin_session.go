@@ -74,8 +74,6 @@ func (r *Runtime) loginAdmin(writer http.ResponseWriter, request *http.Request) 
 		return
 	}
 	password := []byte(input.Password)
-	defer clear(password)
-	input.Password = ""
 	if input.Username == "" || len(input.Username) > 128 || len(password) > 1024 {
 		adminauth.DummyVerify(password)
 		r.auditAdminLogin(input.Username, "failure", "invalid_credentials")
@@ -199,9 +197,6 @@ func (r *Runtime) changeAdminPassword(writer http.ResponseWriter, request *http.
 	}
 	currentPassword := []byte(input.CurrentPassword)
 	newPassword := []byte(input.NewPassword)
-	defer clear(currentPassword)
-	defer clear(newPassword)
-	input.CurrentPassword, input.NewPassword = "", ""
 	user, err := r.store.GetAdminUser(request.Context(), admin.session.Username)
 	ok, answered := r.guardAdminCredentialCheck(writer, admin.session.Username, "password_change", func() bool {
 		return err == nil && adminauth.VerifyPassword(user, currentPassword)

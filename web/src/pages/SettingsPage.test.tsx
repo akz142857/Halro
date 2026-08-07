@@ -2,7 +2,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
-import { AppearanceForm, LanguageSettingsForm, MFASettings, PasswordChangeForm } from "./SettingsPage";
+import { AppearanceForm } from "./AppearanceForm";
+import { LanguageSettingsForm } from "./LanguageSettingsForm";
+import { MFASettings } from "./MFASettings";
+import { PasswordChangeForm } from "./PasswordChangeForm";
+import { SettingsPage } from "./SettingsPage";
 
 function renderWithClient(node: React.ReactElement) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -201,5 +205,55 @@ describe("MFASettings", () => {
     fireEvent.click(trigger);
     fireEvent.click(screen.getByRole("button", { name: "取消" }));
     await waitFor(() => expect(trigger).toHaveFocus());
+  });
+});
+
+// 系统配置 is its own pane, a sibling of the others in the settings nav, not a
+// card at the bottom of one. Moving it means the query moves too: left enabled
+// on a pane that no longer renders the card it would fetch for nobody, and the
+// pane that does render it would never fetch.
+describe("SettingsPage system configuration pane", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    window.history.replaceState({}, "", "/");
+  });
+
+  it("is reachable as its own menu entry and renders config.yaml open", async () => {
+    const systemConfig = vi.spyOn(api, "systemConfig").mockResolvedValue({ yaml: "server:\n  address: 127.0.0.1\n" } as never);
+    window.history.replaceState({}, "", "/admin/settings/config");
+    renderWithClient(<SettingsPage />);
+
+    // The nav entry sits between the instance pane and the diagnostics pane.
+    const entries = [...screen.getByRole("navigation", { name: "设置分区" }).querySelectorAll("a")].map((a) => a.textContent);
+    expect(entries).toEqual(["通用", "登录与安全", "管理员账户", "实例配置", "系统配置", "关于与诊断"]);
+
+    expect(await screen.findByText("config.yaml")).toBeInTheDocument();
+    expect(screen.getByText(/server:/)).toBeInTheDocument();
+    // The pane's only content must not arrive folded away.
+    expect(document.querySelector(".config-preview")).toHaveAttribute("open");
+    expect(systemConfig).toHaveBeenCalled();
+  });
+
+  it("no longer renders it, or fetches it, under diagnostics", async () => {
+    const systemConfig = vi.spyOn(api, "systemConfig").mockResolvedValue({ yaml: "should not be fetched" } as never);
+    vi.spyOn(api, "systemStatus").mockResolvedValue({
+      build: { version: "1.0.0", commit: "abc", date: "2026-08-07" },
+      accounting_status: 0, draining: false, wal: {}, audit: {}, alerts: {}, usage_watermark: {},
+    } as never);
+    window.history.replaceState({}, "", "/admin/settings/diagnostics");
+    renderWithClient(<SettingsPage />);
+
+    await screen.findByText("Heimdall 1.0.0");
+    expect(screen.queryByText("config.yaml")).not.toBeInTheDocument();
+    expect(systemConfig).not.toHaveBeenCalled();
+  });
+
+  it("keeps an unknown pane on general rather than blanking the page", () => {
+    window.history.replaceState({}, "", "/admin/settings/not-a-pane");
+    vi.spyOn(api, "uiSettings").mockResolvedValue({ data: { default_locale: "zh-CN", revision: 1 }, etag: '"1"' });
+    vi.spyOn(api, "preferences").mockResolvedValue({ data: { locale: "system", appearance: "dark", revision: 1 }, etag: '"1"' });
+    renderWithClient(<SettingsPage />);
+
+    expect(screen.getByRole("link", { name: "通用" })).toHaveAttribute("aria-current", "page");
   });
 });

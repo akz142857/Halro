@@ -257,7 +257,7 @@ export const zhCN = {
     serviceUnavailable: "初始化服务暂时不可用",
   },
   settings: {
-    panes: { general: "通用", security: "登录与安全", accounts: "管理员账户", instance: "实例配置", diagnostics: "关于与诊断" },
+    panes: { general: "通用", security: "登录与安全", accounts: "管理员账户", instance: "实例配置", config: "系统配置", diagnostics: "关于与诊断" },
     accountsDescription: "管理可以登录本控制台的管理员账户及其权限档位。",
     generalDescription: "当前管理员账户的个人界面偏好。",
     appearance: {
