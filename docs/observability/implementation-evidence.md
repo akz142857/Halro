@@ -10,7 +10,7 @@ not mark target-environment Phase D gates as passed.
 | Requirement | Implementation evidence | Verification |
 |---|---|---|
 | Metrics contract and label policy | `metrics-contract.md`, `metrics-reference.md`, `metrics_contract_test.go` | parsed exposition, unique HELP/TYPE, allowlisted labels, documentation inventory |
-| Versioned credential lifecycle | `internal/metricsauth` and Metrics CLI | overlap, expiry, immediate revoke, hot reload, restore non-revival |
+| Versioned credential lifecycle | `internal/bearercred` and Metrics CLI | overlap, expiry, immediate revoke, hot reload, restore non-revival |
 | Credential audit integrity | `.audit` hash chain and `verify-audit` | deletion, rewrite, truncation, reorder and version-reuse tests |
 | Concurrent administration | per-credential OS file lock | concurrent race test proves unique epochs and valid chain |
 | Mutual workload identity | dedicated Metrics TLS config | real handshake accepts trusted client and rejects missing identity |
@@ -27,7 +27,7 @@ not mark target-environment Phase D gates as passed.
 
 ```text
 go test ./...
-go test -race ./internal/metricsauth ./internal/app ./internal/usage ./internal/provider
+go test -race ./internal/bearercred ./internal/app ./internal/usage ./internal/provider
 go test -race ./internal/deadman
 go vet ./...
 go build ./cmd/heimdall ./cmd/heimdall-deadman

@@ -22,6 +22,7 @@ import (
 	"github.com/akz142857/Heimdall/internal/alert"
 	"github.com/akz142857/Heimdall/internal/audit"
 	"github.com/akz142857/Heimdall/internal/auth"
+	"github.com/akz142857/Heimdall/internal/bearercred"
 	"github.com/akz142857/Heimdall/internal/budget"
 	"github.com/akz142857/Heimdall/internal/buildinfo"
 	"github.com/akz142857/Heimdall/internal/config"
@@ -30,7 +31,6 @@ import (
 	"github.com/akz142857/Heimdall/internal/gatewayapi"
 	"github.com/akz142857/Heimdall/internal/id"
 	"github.com/akz142857/Heimdall/internal/ledger"
-	"github.com/akz142857/Heimdall/internal/metricsauth"
 	"github.com/akz142857/Heimdall/internal/provider"
 	"github.com/akz142857/Heimdall/internal/redaction"
 	"github.com/akz142857/Heimdall/internal/sourcelimit"
@@ -75,7 +75,7 @@ type Runtime struct {
 	adminSettingsMu     sync.Mutex
 	adminIdentityMu     sync.Mutex
 	metricsTokenHash    [32]byte
-	metricsAuthorizer   *metricsauth.Authorizer
+	metricsAuthorizer   *bearercred.Authorizer
 	metricsScrapes      chan struct{}
 	metricsAuthFailed   atomic.Uint64
 	metricsBusy         atomic.Uint64
@@ -111,7 +111,7 @@ type Runtime struct {
 	runtimeSettings     atomic.Pointer[domain.RuntimeSettings]
 	uiSettings          atomic.Pointer[domain.InstanceUISettings]
 	instanceID          string
-	anchorAuthorizer    *metricsauth.Authorizer
+	anchorAuthorizer    *bearercred.Authorizer
 	anchorAuthFailed    atomic.Uint64
 	// Anchoring is fail-open on purpose: a witness that cannot be reached must
 	// not stop the gateway. That makes it the one subsystem whose total
@@ -143,10 +143,10 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 	}
 	defer clear(adminSessionKey)
 	var metricsTokenHash [32]byte
-	var metricsAuthorizer *metricsauth.Authorizer
+	var metricsAuthorizer *bearercred.Authorizer
 	if cfg.Metrics.Enabled && cfg.Metrics.RequireAuth {
 		if cfg.Metrics.CredentialFile != "" {
-			metricsAuthorizer, err = metricsauth.NewAuthorizer(cfg.Metrics.CredentialFile)
+			metricsAuthorizer, err = bearercred.NewAuthorizer(cfg.Metrics.CredentialFile)
 			if err != nil {
 				return fail(fmt.Errorf("load metrics credentials: %w", err))
 			}
@@ -160,13 +160,13 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 			clear(metricsToken)
 		}
 	}
-	var anchorAuthorizer *metricsauth.Authorizer
+	var anchorAuthorizer *bearercred.Authorizer
 	if cfg.Audit.Anchor.Enabled && cfg.Audit.Anchor.Sink == config.AuditAnchorSinkDeadManPull {
 		// Config validation already requires a credential file here — unlike
 		// metrics, there is no zero-config derived-token fallback, since the
 		// anchor endpoint is off by default and turning it on is already a
 		// deliberate step.
-		anchorAuthorizer, err = metricsauth.NewAuthorizer(cfg.Audit.Anchor.CredentialFile)
+		anchorAuthorizer, err = bearercred.NewAuthorizer(cfg.Audit.Anchor.CredentialFile)
 		if err != nil {
 			return fail(fmt.Errorf("load audit anchor credentials: %w", err))
 		}

@@ -14,10 +14,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akz142857/Heimdall/internal/bearercred"
 	"github.com/akz142857/Heimdall/internal/budget"
 	"github.com/akz142857/Heimdall/internal/config"
 	"github.com/akz142857/Heimdall/internal/ledger"
-	"github.com/akz142857/Heimdall/internal/metricsauth"
 	"github.com/akz142857/Heimdall/internal/store/lock"
 )
 
@@ -188,7 +188,7 @@ func TestVersionedMetricsCredentialsRotateAndRevokeWithoutRestart(t *testing.T) 
 	cfg.Metrics.Enabled = true
 	cfg.Metrics.CredentialFile = filepath.Join(filepath.Dir(cfg.Storage.MasterKey.File), "metrics-credentials.json")
 	now := time.Now().UTC()
-	first, err := metricsauth.Rotate(cfg.Metrics.CredentialFile, time.Minute, now)
+	first, err := bearercred.Rotate(cfg.Metrics.CredentialFile, time.Minute, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,14 +213,14 @@ func TestVersionedMetricsCredentialsRotateAndRevokeWithoutRestart(t *testing.T) 
 		}
 	}
 	assertMetricsStatus(first.Token, http.StatusOK)
-	second, err := metricsauth.Rotate(cfg.Metrics.CredentialFile, time.Minute, now.Add(time.Second))
+	second, err := bearercred.Rotate(cfg.Metrics.CredentialFile, time.Minute, now.Add(time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer clear(second.Token)
 	assertMetricsStatus(first.Token, http.StatusOK)
 	assertMetricsStatus(second.Token, http.StatusOK)
-	if err := metricsauth.Revoke(cfg.Metrics.CredentialFile, first.Version, now.Add(2*time.Second)); err != nil {
+	if err := bearercred.Revoke(cfg.Metrics.CredentialFile, first.Version, now.Add(2*time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	assertMetricsStatus(first.Token, http.StatusUnauthorized)

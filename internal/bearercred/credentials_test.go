@@ -1,4 +1,4 @@
-package metricsauth
+package bearercred
 
 import (
 	"bytes"

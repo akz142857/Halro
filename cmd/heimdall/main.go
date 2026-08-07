@@ -27,12 +27,12 @@ import (
 
 	"github.com/akz142857/Heimdall/internal/app"
 	backuppkg "github.com/akz142857/Heimdall/internal/backup"
+	"github.com/akz142857/Heimdall/internal/bearercred"
 	"github.com/akz142857/Heimdall/internal/buildinfo"
 	"github.com/akz142857/Heimdall/internal/config"
 	"github.com/akz142857/Heimdall/internal/domain"
 	"github.com/akz142857/Heimdall/internal/hostsecurity"
 	"github.com/akz142857/Heimdall/internal/masterkey"
-	"github.com/akz142857/Heimdall/internal/metricsauth"
 	"github.com/akz142857/Heimdall/internal/safelog"
 	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
 	storelock "github.com/akz142857/Heimdall/internal/store/lock"
@@ -774,7 +774,7 @@ func run(arguments []string, logger *slog.Logger) error {
 			if cfg.Metrics.CredentialFile == "" {
 				return errors.New("metrics.credential_file is required for versioned rotation")
 			}
-			rotation, err := metricsauth.Rotate(cfg.Metrics.CredentialFile, *overlap, time.Now())
+			rotation, err := bearercred.Rotate(cfg.Metrics.CredentialFile, *overlap, time.Now())
 			if err != nil {
 				return err
 			}
@@ -789,24 +789,24 @@ func run(arguments []string, logger *slog.Logger) error {
 			if cfg.Metrics.CredentialFile == "" || *version == 0 {
 				return errors.New("metrics revoke requires metrics.credential_file and --version")
 			}
-			return metricsauth.Revoke(cfg.Metrics.CredentialFile, *version, time.Now())
+			return bearercred.Revoke(cfg.Metrics.CredentialFile, *version, time.Now())
 		case "list":
 			if cfg.Metrics.CredentialFile == "" {
 				return errors.New("metrics.credential_file is required for versioned credentials")
 			}
-			if err := metricsauth.VerifyAudit(cfg.Metrics.CredentialFile); err != nil {
+			if err := bearercred.VerifyAudit(cfg.Metrics.CredentialFile); err != nil {
 				return fmt.Errorf("verify metrics credential audit: %w", err)
 			}
-			file, err := metricsauth.Load(cfg.Metrics.CredentialFile)
+			file, err := bearercred.Load(cfg.Metrics.CredentialFile)
 			if err != nil {
 				return err
 			}
 			type summary struct {
-				Version uint64            `json:"version"`
-				State   metricsauth.State `json:"state"`
-				Created time.Time         `json:"created_at"`
-				Retire  *time.Time        `json:"retire_at,omitempty"`
-				Revoked *time.Time        `json:"revoked_at,omitempty"`
+				Version uint64           `json:"version"`
+				State   bearercred.State `json:"state"`
+				Created time.Time        `json:"created_at"`
+				Retire  *time.Time       `json:"retire_at,omitempty"`
+				Revoked *time.Time       `json:"revoked_at,omitempty"`
 			}
 			result := make([]summary, 0, len(file.Credentials))
 			for _, credential := range file.Credentials {
@@ -817,7 +817,7 @@ func run(arguments []string, logger *slog.Logger) error {
 			if cfg.Metrics.CredentialFile == "" {
 				return errors.New("metrics.credential_file is required for audit verification")
 			}
-			head, err := metricsauth.AuditStatus(cfg.Metrics.CredentialFile)
+			head, err := bearercred.AuditStatus(cfg.Metrics.CredentialFile)
 			if err != nil {
 				return err
 			}
