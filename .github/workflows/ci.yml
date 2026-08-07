@@ -89,7 +89,8 @@ jobs:
             ./internal/sse:FuzzEncodeDecodeRoundTrip \
             ./internal/sse:FuzzDecoderNeverPanics \
             ./internal/openaiapi:FuzzDecodeRequestsNeverPanic \
-            ./internal/openaiapi:FuzzDecodePhase2RequestsNeverPanic \
+            ./internal/openaiapi:FuzzDecodeInferenceResourcesRequestsNeverPanic \
+            ./internal/redaction:FuzzRuleCompilerNeverPanics \
             ./internal/safelog:FuzzRedactNeverLeaksSeededSecret \
             ./internal/redaction:FuzzBoundedStreamMatchesNonStream \
             ./internal/tokenguard:FuzzRestoreCheckpointNeverPanics
@@ -97,9 +98,35 @@ jobs:
             package="${entry%%:*}"
             target="${entry##*:}"
             echo "::group::${package} ${target}"
+            # `go test -fuzz` prints "no fuzz tests to fuzz" and exits 0 when the
+            # pattern matches nothing, so a renamed target silently stops being
+            # fuzzed while the job stays green. That is what happened to the
+            # Phase 2 decoder: it was renamed and nothing ran it for a week.
+            if ! grep -rq "func ${target}(" "${package#./}"; then
+              echo "::error::${target} does not exist in ${package}; the fuzz list is stale"
+              exit 1
+            fi
             go test "${package}" -run '^$' -fuzz "^${target}$" -fuzztime 40s
             echo "::endgroup::"
           done
+      # A crash that only exists as an expiring artifact is found once and then
+      # forgotten. Printing the input inline means the reproducer survives in
+      # the job log, and committing the file it names turns the crash into a
+      # regression test — which is the whole point of a seed corpus.
+      - name: Show any failing input so it can be committed as a seed
+        if: failure()
+        run: |
+          set -eu
+          found=0
+          while IFS= read -r file; do
+            found=1
+            echo "::group::${file}"
+            cat "${file}"
+            echo "::endgroup::"
+          done < <(find internal -path '*/testdata/fuzz/*' -type f -newer go.mod)
+          if [ "${found}" -eq 1 ]; then
+            echo "::notice::Commit the files above under testdata/fuzz to pin these as regression seeds."
+          fi
       - name: Preserve any failing input
         if: failure()
         uses: actions/upload-artifact@v7
