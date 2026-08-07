@@ -27,7 +27,7 @@ const parquetSchemaVersion = 4
 // version from here to parquetSchemaVersion is accepted and upgraded in place;
 // gating on an explicit pair instead is how a bump silently locks out the
 // installs written by the version before it.
-const parquetSchemaMinReadable = 2
+const parquetSchemaMinReadable = 3
 
 func supportedManifestSchema(version int) bool {
 	return version >= parquetSchemaMinReadable && version <= parquetSchemaVersion
@@ -80,39 +80,6 @@ type parquetAttempt struct {
 	LatencyMillis                 int64  `parquet:"latency_millis" json:"latency_millis"`
 	RetryCount                    int32  `parquet:"retry_count" json:"retry_count"`
 	FallbackCount                 int32  `parquet:"fallback_count" json:"fallback_count"`
-}
-
-// parquetAttemptV2 is frozen: it describes partitions already on disk, so it
-// must never gain columns. Adding the token tiers here would change how an
-// existing schema-2 file is interpreted, and those files are never rewritten.
-type parquetAttemptV2 struct {
-	SchemaVersion        int32  `parquet:"schema_version" json:"schema_version"`
-	EventID              string `parquet:"event_id,dict" json:"event_id"`
-	RequestID            string `parquet:"request_id,dict" json:"request_id"`
-	AttemptID            string `parquet:"attempt_id,dict" json:"attempt_id"`
-	Sequence             int64  `parquet:"sequence,delta" json:"sequence"`
-	AttemptNumber        int32  `parquet:"attempt_number" json:"attempt_number"`
-	ProjectID            string `parquet:"project_id,dict" json:"project_id"`
-	KeyID                string `parquet:"key_id,dict" json:"key_id"`
-	RouteID              string `parquet:"route_id,dict" json:"route_id"`
-	DeploymentID         string `parquet:"deployment_id,dict" json:"deployment_id"`
-	ProviderID           string `parquet:"provider_id,dict" json:"provider_id"`
-	RequestedModel       string `parquet:"requested_model,dict" json:"requested_model"`
-	ProviderModel        string `parquet:"provider_model,dict" json:"provider_model"`
-	ProviderInputTokens  int64  `parquet:"provider_input_tokens" json:"provider_input_tokens"`
-	ProviderOutputTokens int64  `parquet:"provider_output_tokens" json:"provider_output_tokens"`
-	PreparedOutputTokens int64  `parquet:"prepared_output_tokens" json:"prepared_output_tokens"`
-	CostMicrosUSD        int64  `parquet:"cost_micros_usd" json:"cost_micros_usd"`
-	CostEstimated        bool   `parquet:"cost_estimated" json:"cost_estimated"`
-	TokensEstimated      bool   `parquet:"tokens_estimated" json:"tokens_estimated"`
-	StartedAtMicros      int64  `parquet:"started_at_utc,timestamp(microsecond)" json:"started_at_utc"`
-	CompletedAtMicros    int64  `parquet:"completed_at_utc,timestamp(microsecond)" json:"completed_at_utc"`
-	Status               string `parquet:"status,dict" json:"status"`
-	ErrorClass           string `parquet:"error_class,dict" json:"error_class"`
-	HTTPStatus           int32  `parquet:"http_status" json:"http_status"`
-	LatencyMillis        int64  `parquet:"latency_millis" json:"latency_millis"`
-	RetryCount           int32  `parquet:"retry_count" json:"retry_count"`
-	FallbackCount        int32  `parquet:"fallback_count" json:"fallback_count"`
 }
 
 type Manifest struct {
@@ -293,32 +260,12 @@ func (e *Exporter) Verify(snapshot *Snapshot) error {
 		if checksum != entry.SHA256 {
 			return fmt.Errorf("usage parquet checksum mismatch: %s", entry.Path)
 		}
-		entryVersion := entry.SchemaVersion
-		if entryVersion == 0 {
-			entryVersion = manifest.SchemaVersion
+		rows, readErr := readAttemptRows(path, entry.format())
+		if readErr != nil {
+			return fmt.Errorf("read usage partition %s: %w", entry.Path, readErr)
 		}
-		if entryVersion == 2 {
-			var rows []parquetAttemptV2
-			var readErr error
-			if entry.format() == FormatNDJSON {
-				rows, readErr = readNDJSONFile[parquetAttemptV2](path)
-			} else {
-				rows, readErr = parquet.ReadFile[parquetAttemptV2](path)
-			}
-			if readErr != nil {
-				return fmt.Errorf("read legacy usage partition %s: %w", entry.Path, readErr)
-			}
-			if err := verifyRowsV2(rows, entry, seen); err != nil {
-				return fmt.Errorf("verify legacy usage partition %s: %w", entry.Path, err)
-			}
-		} else {
-			rows, readErr := readAttemptRows(path, entry.format())
-			if readErr != nil {
-				return fmt.Errorf("read usage partition %s: %w", entry.Path, readErr)
-			}
-			if err := verifyRows(rows, entry, seen, canonicalRows); err != nil {
-				return fmt.Errorf("verify usage partition %s: %w", entry.Path, err)
-			}
+		if err := verifyRows(rows, entry, seen, canonicalRows); err != nil {
+			return fmt.Errorf("verify usage partition %s: %w", entry.Path, err)
 		}
 		if entry.MaxSequence > lastSequence {
 			lastSequence = entry.MaxSequence
@@ -704,35 +651,6 @@ func verifyRows(rows []parquetAttempt, entry ManifestFile, seen map[string]struc
 		uint64(rows[len(rows)-1].Sequence) != entry.MaxSequence ||
 		inputTokens != entry.InputTokens || outputTokens != entry.OutputTokens ||
 		cost != entry.CostMicrosUSD {
-		return errors.New("partition summary mismatch")
-	}
-	return nil
-}
-
-func verifyRowsV2(rows []parquetAttemptV2, entry ManifestFile, seen map[string]struct{}) error {
-	if int64(len(rows)) != entry.Records || len(rows) == 0 {
-		return errors.New("record count mismatch")
-	}
-	var inputTokens, outputTokens, cost int64
-	for _, row := range rows {
-		if row.SchemaVersion != 2 || row.Sequence <= 0 || row.EventID == "" {
-			return errors.New("invalid legacy row")
-		}
-		if _, exists := seen[row.EventID]; exists {
-			return fmt.Errorf("duplicate event ID %s", row.EventID)
-		}
-		seen[row.EventID] = struct{}{}
-		if err := addInt64(&inputTokens, row.ProviderInputTokens); err != nil {
-			return err
-		}
-		if err := addInt64(&outputTokens, row.ProviderOutputTokens); err != nil {
-			return err
-		}
-		if err := addInt64(&cost, row.CostMicrosUSD); err != nil {
-			return err
-		}
-	}
-	if uint64(rows[0].Sequence) != entry.MinSequence || uint64(rows[len(rows)-1].Sequence) != entry.MaxSequence || inputTokens != entry.InputTokens || outputTokens != entry.OutputTokens || cost != entry.CostMicrosUSD {
 		return errors.New("partition summary mismatch")
 	}
 	return nil

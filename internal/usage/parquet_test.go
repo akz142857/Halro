@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/akz142857/Heimdall/internal/ledger"
-	"github.com/parquet-go/parquet-go"
 )
 
 func TestExporterPublishesVerifiableIdempotentPartitions(t *testing.T) {
@@ -154,54 +153,26 @@ func TestExporterDetectsParquetTampering(t *testing.T) {
 	}
 }
 
-func TestExporterDualReadsAndDeterministicallyUpgradesV2Manifest(t *testing.T) {
+func TestManifestBelowTheReadableRangeIsRefused(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "usage")
 	exporter, err := NewExporter(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	date := "2026-08-04"
-	relative := filepath.Join("date="+date, "usage-v2.parquet")
-	path := filepath.Join(root, relative)
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	// Schema 2 partitions used a different column set and were read through a
+	// second struct with its own verify path. Two shapes for one thing is the
+	// cost; refusing the older shape outright is what removes it. The refusal
+	// has to be explicit rather than a misparse, so that an operator who
+	// somehow has one is told why.
+	stale := Manifest{SchemaVersion: parquetSchemaMinReadable - 1, LastSequence: 0}
+	if err := exporter.commitManifest(stale); err != nil {
 		t.Fatal(err)
 	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o600)
-	if err != nil {
-		t.Fatal(err)
+	if _, err := exporter.Export(Snapshot{}); err == nil {
+		t.Fatal("a manifest below the readable range must be refused, not upgraded")
 	}
-	writer := parquet.NewGenericWriter[parquetAttemptV2](file)
-	row := parquetAttemptV2{SchemaVersion: 2, EventID: "legacy_v2", RequestID: "r", AttemptID: "a", Sequence: 1, ProjectID: "p", ProviderInputTokens: 3, ProviderOutputTokens: 2, CostMicrosUSD: 7, CompletedAtMicros: time.Now().UTC().UnixMicro()}
-	if _, err = writer.Write([]parquetAttemptV2{row}); err != nil {
-		t.Fatal(err)
-	}
-	if err = writer.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err = file.Close(); err != nil {
-		t.Fatal(err)
-	}
-	checksum, err := fileSHA256(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	legacy := Manifest{SchemaVersion: 2, LastSequence: 1, Files: []ManifestFile{{Path: filepath.ToSlash(relative), Date: date, SHA256: checksum, MinSequence: 1, MaxSequence: 1, Records: 1, InputTokens: 3, OutputTokens: 2, CostMicrosUSD: 7}}}
-	if err = exporter.commitManifest(legacy); err != nil {
-		t.Fatal(err)
-	}
-	snapshot := Snapshot{Attempts: []AttemptEvent{{EventID: "legacy_v2", Sequence: 1, AttemptID: "a", ProjectID: "p", ProviderInputTokens: 3, ProviderOutputTokens: 2, CostMicrosUSD: ledger.MicrosUSD(7)}}}
-	if err = exporter.Verify(&snapshot); err != nil {
-		t.Fatal(err)
-	}
-	upgraded, err := exporter.Export(snapshot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if upgraded.SchemaVersion != parquetSchemaVersion || upgraded.Files[0].SchemaVersion != 2 {
-		t.Fatalf("upgraded=%#v", upgraded)
-	}
-	if err = exporter.Verify(&snapshot); err != nil {
-		t.Fatal(err)
+	if err := exporter.Verify(nil); err == nil {
+		t.Fatal("verification must refuse a manifest below the readable range")
 	}
 }
 
