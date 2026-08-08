@@ -1,9 +1,10 @@
 # 基于服务商与模型的能力选择升级方案
 
-- 状态：Proposed / 待评审
+- 状态：Reviewed / 待实施（评审意见已并入正文，不单列评审章节）
 - 生产就绪：否
-- 范围：Provider 模型目录、Deployment 能力快照、Profile Binding 自动映射、Admin 创建流程、测试与迁移
+- 范围：Provider 模型目录、Deployment 能力快照、Profile Binding 自动映射、Admin 创建流程、测试与重新初始化
 - 当前实现：仍由管理员先选择内部“能力接口”，再填写模型 ID；本文描述的模型级能力目录与自动映射尚未实现
+- 数据影响：**需要重新初始化数据目录**。项目处于 pre-1.0.0，无已发布实例需要兼容，因此不提供迁移路径、不保留 legacy 能力来源与 legacy 创建路径（见 §10）
 - 相关契约：[Provider capability contract](../contracts/provider-capabilities.md)、[ADR 0009](../adr/0009-phase2-resource-ownership.md)、[Compatibility manifests](../compatibility/README.md)
 
 ## 0. 决策摘要
@@ -29,6 +30,8 @@ effective capabilities
 - 未知能力默认不启用，不能从模型名称进行宽松猜测。
 - 模型目录刷新不能静默扩张或改变已启用 Deployment。
 - 请求路径只读取已经验证并持久化的不可变 Deployment 能力快照，不实时依赖外部模型目录。
+- 只有 Halro 内置目录可以让能力默认处于勾选状态；服务商返回的元数据一律需要管理员显式确认（见 §4.1）。
+- 目录与上游元数据都不得放宽 Beta Profile（Gemini、Bedrock、Bedrock Mantle）被刻意钉死的能力上限，即使上游声称支持。
 
 本文中的 `gpt-5.4-mini`、`gpt-image-2` 仅作为交互示例，不构成模型能力事实；实际能力必须由版本化目录和证据决定。
 
@@ -148,16 +151,17 @@ UI 和 API 必须继续区分“支持什么操作”和“该操作的容量/�
 
 每项有效能力必须带来源和证据：
 
-| 来源 | 含义 | 是否可扩张 Deployment |
-| --- | --- | --- |
-| `builtin_catalog` | Halro 内置、版本化且经过评审的模型目录 | 是，但仅在创建或显式复核时 |
-| `provider_metadata` | 服务商 API 返回的结构化能力元数据 | 是，前提是 Adapter 对字段语义有明确契约 |
-| `verified_probe` | 明确的无副作用或用户触发验证结果 | 是，受探测覆盖范围限制 |
-| `operator_declared` | 管理员对未知模型的显式声明 | 是，但证据保持 Declared，不能伪装成 Verified |
-| `legacy_snapshot` | 迁移前 Deployment 的既有声明 | 仅保持现状，不能自动扩张 |
-| `unsupported` | 已知不支持或无法证明 | 否 |
+| 来源 | 含义 | 是否可扩张 Deployment | 是否可默认勾选 |
+| --- | --- | --- | --- |
+| `builtin_catalog` | Halro 内置、版本化且经过评审的模型目录 | 是，但仅在创建或显式复核时 | 是 |
+| `provider_metadata` | 服务商 API 返回的结构化能力元数据 | 是，前提是 Adapter 对字段语义有明确契约 | 否 |
+| `verified_probe` | 明确的无副作用或用户触发验证结果 | 是，受探测覆盖范围限制 | 否 |
+| `operator_declared` | 管理员对未知模型的显式声明 | 是，但证据保持 Declared，不能伪装成 Verified | 否 |
+| `unsupported` | 已知不支持或无法证明 | 否 | 否 |
 
-证据等级沿用现有 `verified / declared / legacy / unsupported`，但增加来源与目录版本，避免只看一个布尔值。
+`provider_metadata` 是**外部输入**：上游返回什么，Halro 就会据此展示什么。如果它既能扩张能力又默认勾选，等于把“默认启用哪些能力”的决定权交给上游。因此它只能渲染为“可用 · 待确认”，必须由管理员显式勾选，且写入 Snapshot 的证据等级不得高于 `declared`。只有 `builtin_catalog` 允许默认勾选。
+
+证据等级沿用现有 `verified / declared / unsupported`（见 `internal/domain/provider_profile.go`）。既有的 `legacy` 等级随本方案一并删除，不保留为占位；`internal/gateway/service.go` 中的 `LegacyUnprofiled` 分支需在实施时一并评估去留，避免出现两套互不相同的 legacy 语义。除布尔值外，Snapshot 还必须记录来源与目录版本。
 
 ### 4.2 有效能力计算
 
@@ -169,13 +173,14 @@ effective = provider_ceiling
          && operator_retains
 ```
 
-对数值限制：
+数值限制**不做静默钳制，而是拒绝**。现有实现（`internal/domain/provider_profile.go` 的 `capabilityLimitSubset`）的语义是：
 
 ```text
-effective_limit = minimum(all non-zero limits declared by provider, model, and operator)
+上游 available == 0  → 该层未声明上限，候选取任意非负值
+上游 available >  0  → 候选必须 > 0 且 <= available，否则拒绝保存
 ```
 
-`0` 继续表示“该层没有声明上限”，不能用于擦除上游已经声明的非零限制。
+`0` 表示“该层没有声明上限”，不能用于擦除上游已经声明的非零限制。模型目录层沿用同一条规则：管理员填写的限制超出模型目录或 Provider 上限时返回校验错误，**不要改写成 `min()` 自动取小** —— 静默钳制会把管理员的越界输入藏起来，事后无法区分“他就想要这个值”和“系统替他改小了”。
 
 ### 4.3 不可变快照
 
@@ -194,6 +199,18 @@ Deployment 创建时保存能力快照。目录刷新只产生比较结果：
 4. 经显式启用后才进入路由候选；
 5. 写入审计事件。
 
+第 2 步复用既有机制，不要新造状态：`Deployment` 已有 `LastTestRevision`，与 `Revision` 比较即可判定测试是否过期（见 `internal/domain/models.go`）。再引入一个独立的 stale 标志会产生两套判定，且必然在某个路径上不一致。
+
+### 4.4 Profile 收窄的启动期核对
+
+能力漂移不只来自上游目录，也来自 Halro 自身：二进制升级可能收窄某个 Provider Profile 的上限，而已持久化的 Snapshot 仍声称支持。若只按 §11.1 在请求路径拦截，这类问题会以“线上每个请求返回 400”的形式被发现，而不是在启动时。
+
+因此启动与热加载时必须对所有已启用 Deployment 执行一次核对：
+
+- Snapshot 能力 ⊄ 当前 Profile 上限时，置为 `drifted` 并阻止其进入路由候选；
+- 结果计入 `halro doctor` 输出与审计，不是只写一行日志；
+- 核对失败本身不得阻止进程启动，但受影响 Deployment 一律 fail-closed。
+
 ## 5. 数据模型提案
 
 ### 5.1 模型目录描述
@@ -208,7 +225,8 @@ type ProviderModelDescriptor struct {
     Capabilities    ProviderCapabilities
     Evidence        CapabilityEvidenceSet
     CapabilitySource string
-    CatalogRevision string
+    ModelRevision    string // (provider type, profile, model, region) 的单模型 digest
+    CatalogRevision  string // 整个目录的 digest，仅用于诊断与缓存观察
     ProfileCandidates []ModelProfileCandidate
 }
 
@@ -221,10 +239,11 @@ type ModelProfileCandidate struct {
 
 约束：
 
-- 上游 `/models` 只提供模型存在性，不自动产生能力布尔值；
+- 上游 `/models` 只提供模型存在性，不自动产生能力布尔值（现有 `provider.ModelLister` 的注释已经写明这一点，本方案不改变它）；
 - 能力由 Adapter 的目录解析器合并；
 - 同一能力出现冲突时状态为 `conflicting`，该能力 fail-closed；
-- 响应上限继续保持 10,000 项和 5 分钟缓存，但能力目录版本必须进入缓存键或响应元数据；
+- 响应上限继续保持 10,000 项和 5 分钟缓存（见 `internal/app/admin_provider_models.go`），但能力目录版本必须进入缓存键或响应元数据；
+- **冲突检查以 `ModelRevision` 为准，不用整个目录的 digest**。目录级 digest 会因任何一个无关模型上下线而 rotate，叠加 5 分钟 TTL 后，管理员会在完全没有触碰自己那个模型的情况下反复收到 409；
 - 刷新只访问 Provider 已绑定、已验证的模型目录地址，不接受用户控制的任意 Admin URL。
 
 ### 5.2 Deployment 能力快照
@@ -234,7 +253,8 @@ type ModelProfileCandidate struct {
 ```go
 type ModelCapabilitySnapshot struct {
     ProviderModel     string
-    CatalogRevision   string
+    ModelRevision     string // 冲突检查与漂移比较的基准
+    CatalogRevision   string // 诊断用
     Source            string
     CapturedAt        time.Time
     Capabilities      ProviderCapabilities
@@ -246,7 +266,7 @@ type Deployment struct {
     // existing fields...
     ModelCapabilitySnapshot ModelCapabilitySnapshot
     OperatorDisabled        []string
-    CapabilityReviewState   string // current | review_available | drifted | legacy
+    CapabilityReviewState   string // current | review_available | drifted
 }
 ```
 
@@ -345,7 +365,7 @@ provider type
 #### 步骤三：确认能力
 
 - 只渲染模型目录支持的能力；
-- 默认选中已知核心操作和已知增强特性；
+- **仅 `builtin_catalog` 来源的核心操作与增强特性默认选中**；来自 `provider_metadata` 或 `verified_probe` 的能力渲染为“可用 · 待确认”，默认不选中，需管理员逐项勾选；
 - 管理员可以关闭，但不能添加目录外能力；
 - 精确区分“视觉输入”与“图像生成”；
 - 显示能力证据与目录版本，但 Profile ID 只放在高级详情中。
@@ -358,14 +378,25 @@ provider type
 - 执行与所选能力一致的测试后才能启用；
 - 首次引导根据权威 readiness 自动推进。
 
-### 7.2 模型变化
+### 7.2 模型变化与编辑态
 
 Provider、模型目标、区域或核心 Operation 发生变化时，不允许在现有 Deployment 上就地修改；沿用“创建替代 → 测试 → 切换路由”的流程。
+
+增强特性的编辑按方向区分，不能一概而论：
+
+| 操作 | 是否允许就地修改 | 后续要求 |
+| --- | --- | --- |
+| 关闭一项已启用能力（收窄） | 是 | 推进 Deployment revision、写审计；不要求重新测试，可保持启用 |
+| 开启一项目录支持但此前未启用的能力（扩张） | 是 | 推进 revision、使测试 stale、重新测试、显式重新启用 |
+| 修改核心 Operation、Provider、模型目标、区域 | 否 | 创建替代 Deployment |
+
+**收窄能力必须先做路由预检。** `internal/gateway/service.go` 的 `filterSemanticCapabilities` 直接按 Deployment 能力过滤候选，候选集为空时请求返回 `400 unsupported_feature`。因此“关闭能力”与“采用目录能力后能力集变化”这两个动作，在提交前必须返回受影响的 Route 列表，明确指出哪些 Route 会因此失去唯一候选，由管理员确认后才执行。
 
 ### 7.3 错误与加载状态
 
 - 模型目录加载前不挂载依赖目录数据的表单状态，避免深链竞态；
-- 目录失败时保留手动模型 ID 入口，但进入未知模型 fail-closed 流程；
+- 目录失败时保留手动模型 ID 入口，但进入未知模型 fail-closed 流程。这条兜底是本方案的 kill-switch：**目录解析整体不可用时，管理员仍必须能够只凭模型 ID 完成部署**，不允许把能力目录做成创建流程的唯一入口；
+- Profile ID 与 Binding ID 收进“高级详情”是**永久设计**，不是过渡安排。它们是运维诊断所需的稳定字段，读接口必须长期提供（与 §10.2 一致）；
 - 禁用操作必须显示具体原因，不允许下拉框视觉上有值而内部状态为空；
 - 深链与页面“新增”必须共享相同的 query key、初始化函数和组件；
 - 只读管理员可查看能力与来源，但不能创建或调整。
@@ -402,7 +433,7 @@ GET /admin/api/v1/providers/{provider_id}/models
         "images": "unsupported"
       },
       "capability_source": "builtin_catalog",
-      "catalog_revision": "sha256:...",
+      "model_revision": "sha256:...",
       "profile_candidates": [
         {
           "binding_id": "...",
@@ -413,11 +444,21 @@ GET /admin/api/v1/providers/{provider_id}/models
     }
   ],
   "catalog_revision": "sha256:...",
+  "degraded_bindings": [
+    { "binding_id": "...", "error_class": "provider_unavailable" }
+  ],
   "fetched_at": "...",
   "expires_at": "...",
   "cached": false
 }
 ```
+
+聚合的失败与延迟语义必须显式定义，不能沿用单 Binding 的隐含行为：
+
+- **并发获取，不串行。** 现状是单 Binding 一次上游调用，超时取 `AttemptResponseHeaderTimeout`（缺省 15s）。聚合 N 个 Binding 若串行，最坏耗时 N×15s，会把 Admin 页面拖死。需要设定并发上限与单 Binding 超时。
+- **部分失败降级，不整体 502。** 任一 Binding 失败时，返回其余 Binding 的模型并在 `degraded_bindings` 中标明缺失来源与错误分类，UI 明确提示“该服务商部分能力接口未返回目录”。只有全部 Binding 都失败才整体报错。
+- **缓存仍按 Binding 粒度存储**（沿用现有 `provider_id + binding_id` 缓存键），聚合在读取时完成，避免一个 Binding 的刷新使整份聚合结果失效。
+- 降级结果**不得**被当作“该能力不存在”的证据：缺失来源只产生 `unknown`，不产生 `unsupported`。
 
 ### 8.2 Deployment 创建
 
@@ -427,7 +468,7 @@ GET /admin/api/v1/providers/{provider_id}/models
 {
   "provider_id": "...",
   "provider_model": "example-model",
-  "catalog_revision": "sha256:...",
+  "model_revision": "sha256:...",
   "retained_capabilities": {
     "chat": true,
     "streaming": true,
@@ -438,11 +479,13 @@ GET /admin/api/v1/providers/{provider_id}/models
 
 后端重新解析目录并生成 Binding、Profile、Access Surface、Evidence 和完整 Snapshot。客户端提交的 Profile/Binding 不能作为权威值。
 
-如果目录 revision 已变化，返回稳定冲突：
+如果**所选模型的** `model_revision` 已变化，返回稳定冲突：
 
 ```text
-409 model_capability_catalog_changed
+409 model_capability_changed
 ```
+
+冲突判定只比较所选模型的 digest。目录中其他模型的增减、排序或 `owned_by` 变化不构成冲突 —— 否则在 5 分钟 TTL 下，服务商每上线一个无关模型都会让正在创建的 Deployment 收到 409，管理员会迅速学会无脑重试，冲突检查就此失去意义。
 
 客户端刷新模型能力后由管理员重新确认，不能静默接受新目录。
 
@@ -468,11 +511,12 @@ GET /admin/api/v1/providers/{provider_id}/models
 - 明确核心操作、增强特性和规格限制；
 - 定义目录来源、证据等级、冲突和未知状态；
 - 为 OpenAI、Azure OpenAI、Anthropic、DeepSeek、Gemini、Bedrock 各建立最小可信目录策略；
-- 给模型目录生成稳定 revision/digest；
+- 给模型目录生成稳定的单模型 digest 与目录 digest；
+- **确定目录的载体与发布节奏**：内置目录随二进制发布，意味着服务商上线新模型后，管理员必须等 Halro 发版才能获得“已知能力”。Phase 0 必须回答：目录以 Go 源码还是嵌入式 JSON 形式存在、如何评审、发版节奏，以及是否与既有的定价目录（`halro pricing migrate` 那一套）合并为同一套“目录发布”流程。若不合并，需说明理由 —— 两套版本化目录各自演进是长期维护成本；
 - 更新 `docs/contracts/provider-capabilities.md` 和兼容性 manifest 规则；
 - 不改变运行时。
 
-门禁：不能依赖宽泛名称猜测；每个目录条目有来源、状态和测试。
+门禁：不能依赖宽泛名称猜测；每个目录条目有来源、状态和测试；目录发布方式已确定并写入契约文档。
 
 ### Phase 1：模型目录能力化与单 Binding 自动选择
 
@@ -486,17 +530,19 @@ GET /admin/api/v1/providers/{provider_id}/models
 
 门禁：已知单 Binding 模型可完整创建、测试、定价、启用、路由；未知模型不能获得隐式能力。
 
-### Phase 2：能力快照、漂移与迁移
+### Phase 2：能力快照与漂移
 
 - 给 Deployment 持久化 Model Capability Snapshot；
-- 增加 catalog revision 冲突检查；
-- 增加 `current / review_available / drifted / legacy` 状态；
+- 增加单模型 revision 冲突检查；
+- 增加 `current / review_available / drifted` 状态；
 - 目录变化触发复核，而非修改在线 Deployment；
-- 任何能力变更推进 Deployment revision 并使测试 stale；
+- 任何能力变更推进 Deployment revision，并通过 `LastTestRevision` 使测试 stale；
+- 增加启动与热加载时的 Profile 收窄核对（§4.4），结果进入 `halro doctor`；
+- 能力收窄前返回受影响 Route 预检结果（§7.2）；
 - Admin 增加能力来源、差异和复核界面；
 - Backup/Restore、审计和导出包含快照字段。
 
-门禁：目录刷新、进程重启和备份恢复后，在线能力不发生静默变化。
+门禁：目录刷新、进程重启和备份恢复后，在线能力不发生静默变化；Profile 收窄在启动时被发现，而不是在请求路径上。
 
 ### Phase 3：多 Operation Binding Deployment
 
@@ -509,45 +555,42 @@ GET /admin/api/v1/providers/{provider_id}/models
 
 门禁：同一 Provider + Model 只有在目录明确支持时才能跨 Profile；任一 Operation 未通过验证时不得宣称整体 Ready。
 
-## 10. 迁移方案
+## 10. 数据影响与重新初始化
 
-### 10.1 既有 Provider
+项目处于 pre-1.0.0：没有已发布版本，没有需要保持兼容的在外部署，操作员自行重新初始化实例。CLAUDE.md 对这一阶段的要求是**就地修正，不积累兼容层** —— 错误的构造不得与其替代品并存。因此本方案**不提供迁移路径**。
+
+### 10.1 直接修改，不保留旧构造
+
+- Deployment 的能力结构直接改为“Provider 上限 ∩ 模型 Snapshot ∩ 管理员保留”，不保留旧的“从 Provider 上限继承”读路径；
+- 不引入 `legacy_snapshot` 能力来源，不引入 `review_state = legacy`；
+- 一并删除 `CapabilityEvidence` 中的 `legacy` 等级，并评估 `internal/gateway/service.go` 中 `LegacyUnprofiled` 分支的去留 —— 保留它就等于保留了第二套 legacy 语义；
+- 不保留“旧客户端 legacy 创建路径”。Admin API 的创建请求只有一种解析方式：服务端按目录解析，客户端提交的 Profile/Binding 一律不作为权威值。
+
+### 10.2 需要写明的操作影响
+
+- 本变更**需要重新初始化数据目录**（`make reset CONFIRM=RESET` 或重新 `init`）。这一点必须写进变更说明与发布说明，以便操作员提前安排；
+- 持久化结构版本号必须递增，使旧结构被**明确拒绝并重建**，而不是被静默误读为“未声明即继承 Provider 上限”；
+- 读接口长期提供 `binding_id / profile_id` 作为诊断字段。这不是过渡安排：UI 把它们收进高级详情之后，它们是排障时唯一能定位内部 Adapter 的线索（与 §7.3 一致）。
+
+### 10.3 既有 Provider 拓扑
 
 - 保留现有 Profile Bindings，不重新解释凭据或协议；
 - 新目录在现有 Binding 上构建；
 - Provider revision 不因只读目录刷新自动增加；
-- 修改 Binding 仍按现有拓扑 mutation 和热加载规则执行。
-
-### 10.2 既有 Deployment
-
-下一次 schema 迁移为每个 Deployment 生成：
-
-- `source = legacy_snapshot`；
-- `catalog_revision = ""`；
-- Snapshot capabilities = 当前 Deployment capabilities；
-- Operation Binding 从现有 `binding_id` 推导；
-- `review_state = legacy`。
-
-迁移不自动增加或删除能力，不自动启用/停用 Deployment。管理员后续显式“采用目录能力”时创建新 revision、重新测试并重新启用。
-
-如果项目在正式发布前决定允许重置数据，可简化迁移实现，但测试仍需覆盖旧结构拒绝被误读的情况；不能让未识别字段悄悄降级成 Provider 上限。
-
-### 10.3 API 兼容
-
-- 读取响应在过渡期保留 `binding_id/profile_id` 作为诊断字段；
-- 普通创建请求逐步从客户端指定 Binding 迁移为服务器解析；
-- 旧客户端请求必须显式进入 legacy 路径或被拒绝，不能与新目录解析混合后产生不同结果；
-- 契约冻结后再决定是否需要版本化 Admin API；Gateway 北向协议不因本升级改变。
+- 修改 Binding 仍按现有拓扑 mutation 和热加载规则执行；
+- Gateway 北向协议不因本升级改变。
 
 ## 11. 安全与正确性
 
 ### 11.1 Fail-closed
 
 - 未知、冲突、过期且无法复核的能力不进入新 Deployment；
-- 模型目录不可用不回退到 Provider 全能力；
+- 模型目录不可用不回退到 Provider 全能力；聚合目录部分失败时缺失来源只产生 `unknown`，不产生 `unsupported`；
 - 请求需要的能力必须同时存在于 Deployment Snapshot 和当前运行时 Adapter；
+- Snapshot 超出当前 Profile 上限时在**启动期**即被标记 `drifted` 并移出路由候选（§4.4），不把发现时机留到请求路径；
 - 无匹配 Adapter 时在 Provider I/O 前返回稳定 `unsupported_feature`；
-- 可能已经执行的 Provider 操作不能因另一个 Binding 可用而重试。
+- 可能已经执行的 Provider 操作不能因另一个 Binding 可用而重试；
+- **目录、上游元数据与管理员声明都不得放宽 Beta Profile 的能力上限。** Gemini、Bedrock、Bedrock Mantle 的能力边界是被刻意钉死的，放宽属于需要独立契约评审的决定，不能作为本方案的副作用发生。
 
 ### 11.2 SSRF 与凭据
 
@@ -581,14 +624,14 @@ GET /admin/api/v1/providers/{provider_id}/models
 - 模型目录 digest 的确定性；
 - Operation → Binding 自动解析。
 
-### 12.2 存储与迁移测试
+### 12.2 存储与重新初始化测试
 
-- 旧 Deployment 迁移为 Legacy Snapshot；
+- 旧结构被**明确拒绝**，不会被误读为“未声明即继承 Provider 上限”；
+- 持久化结构版本号未递增时拒绝启动，而不是降级读取；
 - 目录刷新不改变持久化能力；
-- 能力复核推进 revision；
-- stale ETag/目录 revision 被拒绝；
-- Backup/Restore 保留快照、来源和 Operation Bindings；
-- schema kill-point 不产生半迁移状态。
+- 能力复核推进 revision，并使 `LastTestRevision` 判定为 stale；
+- stale ETag / 单模型 revision 被拒绝；
+- Backup/Restore 保留快照、来源和 Operation Bindings。
 
 ### 12.3 Admin API 测试
 
@@ -596,8 +639,10 @@ GET /admin/api/v1/providers/{provider_id}/models
 - 已知模型自动选 Binding；
 - 未知模型普通创建被拒绝；
 - 手动声明保持 Declared；
-- 超出模型目录或 Provider 上限被拒绝；
-- catalog revision 变化返回稳定 409；
+- 超出模型目录或 Provider 上限**被拒绝**，而不是被静默钳制到上限；
+- 所选模型的 revision 变化返回稳定 409；目录中**无关模型**的增减不触发 409；
+- 部分 Binding 失败时返回其余模型并在 `degraded_bindings` 标注，不整体 502；全部失败才报错；
+- 聚合调用受并发上限与单 Binding 超时约束，不随 Binding 数量线性放大延迟；
 - 目录失败不回退到全能力。
 
 ### 12.4 Runtime 测试
@@ -606,7 +651,8 @@ GET /admin/api/v1/providers/{provider_id}/models
 - Operation 选择正确 Adapter；
 - 多 Binding 不跨操作盲重试；
 - 健康、价格、Usage 和资源 owner 使用相同 Operation Binding；
-- 模型能力快照在热加载和进程重启后保持一致。
+- 模型能力快照在热加载和进程重启后保持一致；
+- **Profile 收窄后启动**：Snapshot 超出新上限的已启用 Deployment 在启动核对中被置为 `drifted` 且不进入候选，`halro doctor` 能看到；核对本身不阻止进程启动。
 
 ### 12.5 前端测试
 
@@ -614,6 +660,9 @@ GET /admin/api/v1/providers/{provider_id}/models
 - 选择模型后只显示支持能力；
 - 不支持能力不渲染；
 - 管理员只能取消，不能添加；
+- 仅 `builtin_catalog` 能力默认勾选；`provider_metadata` 能力渲染为待确认且默认未勾选；
+- 收窄能力时展示受影响 Route 预检结果，管理员确认后才提交；
+- 目录整体不可用时手动输入模型 ID 的通道仍然可用；
 - 未知/冲突/目录失败有明确路径；
 - 深链和普通新增表单状态一致；
 - URL/request race 不把旧服务商目录应用到新选择；
@@ -633,12 +682,15 @@ GET /admin/api/v1/providers/{provider_id}/models
 
 建议增加低基数指标：
 
-- 模型目录刷新成功/失败次数，按 Provider type、Profile、结果分类；
-- `known / partial / unknown / conflicting` 模型数量；
-- capability drift 检测次数；
-- 手动声明 Deployment 数量；
-- catalog revision 冲突次数；
-- Operation Binding 测试成功/失败次数。
+- 模型目录刷新成功/失败次数（Counter），按 Provider type、Profile、结果分类；
+- 聚合目录部分降级次数（Counter），按 Provider type、错误分类；
+- `known / partial / unknown / conflicting` 模型数量（Gauge）；
+- capability drift 检测次数（Counter），区分“目录漂移”与“Profile 收窄”两个来源；
+- 手动声明 Deployment 数量（Gauge）；
+- 单模型 revision 冲突次数（Counter）；
+- Operation Binding 测试成功/失败次数（Counter）。
+
+Counter 与 Gauge 必须在设计阶段就定死，不能实现时临时决定 —— 两者的告警写法完全不同。新增指标需同步既有契约文档 `docs/contracts/metrics-reference.md`，否则指标契约与实现分叉。
 
 禁止把模型 ID、Provider ID、Deployment ID 或凭据相关值直接作为 Prometheus label。具体对象只进入审计和受控日志。
 
@@ -652,8 +704,13 @@ GET /admin/api/v1/providers/{provider_id}/models
 | 同名模型因区域/账户不同而变化 | 缓存污染 | 键包含 Provider、Profile、目标和区域 |
 | 多 Binding 增加调度复杂度 | 错 Adapter、错价格、错重试 | Phase 3 独立门禁，未完成前不伪装支持 |
 | 目录更新影响在线流量 | 非预期行为变化 | 不可变 Snapshot、显式复核、重新测试 |
-| UI 隐藏 Profile 后难以诊断 | 运维信息不足 | 高级详情显示 Profile、Binding、来源和证据 |
+| UI 隐藏 Profile 后难以诊断 | 运维信息不足 | 高级详情显示 Profile、Binding、来源和证据（永久字段，非过渡） |
 | 手动声明被当作已验证 | 能力过度承诺 | Evidence 保持 Declared；每项验证单独升级 |
+| 目录 digest 粒度过粗 | 409 频繁误伤，管理员学会无脑重试 | 冲突检查按单模型 digest，无关模型变化不触发 |
+| 内置目录随二进制发布 | 新模型要等发版才能“已知” | Phase 0 定死载体与发布节奏；手动声明通道始终可用 |
+| 聚合多 Binding 目录 | Admin 页面延迟放大、单点失败拖垮整页 | 并发上限、单 Binding 超时、部分失败降级为 `degraded_bindings` |
+| 上游元数据默认启用能力 | 上游变相决定 Halro 的启用项 | 仅内置目录可默认勾选；元数据一律待确认且证据不超过 Declared |
+| 二进制升级收窄 Profile | 线上按请求报 400 才被发现 | 启动与热加载核对，置 `drifted` 并进入 `halro doctor` |
 
 ## 15. 发布门禁
 
@@ -662,18 +719,27 @@ GET /admin/api/v1/providers/{provider_id}/models
 - [ ] 普通 Deployment 创建不要求理解或选择内部 Profile。
 - [ ] 已知模型只显示目录支持能力，管理员只能收窄。
 - [ ] 未知模型默认零能力并进入显式声明流程。
-- [ ] Deployment 保存模型能力快照、目录 revision、来源和证据。
-- [ ] 目录刷新不会静默改变在线 Deployment。
-- [ ] 能力变化使健康测试 stale，并要求重新验证。
-- [ ] Provider ceiling、模型目录和管理员收窄在后端权威校验。
+- [ ] 仅内置目录能力默认勾选，上游元数据能力默认待确认。
+- [ ] Deployment 保存模型能力快照、单模型 revision、来源和证据。
+- [ ] 目录刷新不会静默改变在线 Deployment；无关模型变化不产生 409。
+- [ ] 能力变化通过 `LastTestRevision` 使健康测试 stale，并要求重新验证。
+- [ ] Provider ceiling、模型目录和管理员收窄在后端权威校验；越界值被拒绝而非钳制。
+- [ ] Profile 收窄在启动核对中被发现，`halro doctor` 可见。
+- [ ] 能力收窄前给出受影响 Route 预检。
+- [ ] 目录整体不可用时，手动输入模型 ID 的通道仍可完成部署。
 - [ ] 深链与普通新增没有初始化差异或请求竞态。
 - [ ] Backup/Restore、审计、热加载和重启保持能力快照。
-- [ ] 多 Binding 若未完成全部运行时门禁，则明确保持不可用。
+- [ ] 代码中不存在 legacy 能力来源、legacy 复核状态或 legacy 创建路径。
+- [ ] 变更说明与发布说明已写明需要重新初始化数据目录。
+- [ ] 多 Binding 若未完成全部运行时门禁，则以**可断言的方式**保持不可用：提交 `operation_bindings` 的请求返回 400，并有对应测试用例；仅靠 UI 不暴露入口不算数。
+- [ ] 新增指标已同步 `docs/contracts/metrics-reference.md`。
 - [ ] 完整 Go、Race、Vet、前端测试、生产构建和浏览器验收通过。
 - [ ] 真实 Provider 能力证据已进入 `docs/verification/provider-real-matrix.md`。
 
 ## 16. 建议实施顺序
 
-优先执行 Phase 0、Phase 1 和 Phase 2。它们已经解决当前最重要的问题：模型能力不再由 Provider 上限默认推导，普通用户不再直接选择内部 Profile，在线 Deployment 不受目录漂移静默影响。
+优先执行 Phase 0、Phase 1 和 Phase 2。它们已经解决当前最重要的问题：模型能力不再由 Provider 上限默认推导，普通用户不再直接选择内部 Profile，在线 Deployment 不受目录漂移与 Profile 收窄的静默影响。
+
+由于不做迁移（§10），Phase 1 与 Phase 2 之间不存在“新旧结构并存”的中间态：结构版本号递增之后，旧数据目录被明确拒绝并重建。这也意味着这两个 Phase 应当在同一个可发布区间内完成，不要让主干长期停在“已改结构、未落快照”的状态。
 
 Phase 3 只在真实模型确实需要同一 Provider + Model 跨多个内部 Profile 时进入开发。不能为了界面上的“全选”提前扩大运行时；也不能因为 Phase 3 尚未完成，就继续让单模型错误继承 Provider 的全部能力。
