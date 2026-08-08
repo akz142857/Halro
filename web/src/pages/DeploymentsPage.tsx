@@ -620,6 +620,10 @@ function DeploymentForm({
   // capability, so a public model can lose its last one and start rejecting
   // requests that used to work. The server answers which routes those are.
   const narrowing = Boolean(current && deploymentCapabilityNames.some((name) => current.capabilities[name] && !capabilities[name]));
+  // Turning a capability on makes the deployment claim something no test has
+  // exercised, so the server drops it out of routing until it is retested and
+  // re-enabled. Saying so here means that is a decision, not a surprise.
+  const widening = Boolean(current && deploymentCapabilityNames.some((name) => !current.capabilities[name] && capabilities[name]));
   const preflight = useMutation({
     mutationFn: () => api.preflightDeploymentCapabilities(current!.id, capabilities),
     onSuccess: (result) => {
@@ -936,6 +940,10 @@ function DeploymentForm({
               <Field label={t("deployments.concurrencyLimit")} hint={t("deployments.concurrencyHint")}><input min="0" type="number" value={maxConcurrency} onChange={(event) => setMaxConcurrency(Number(event.target.value))} /></Field>
             </div>
           </section>
+          {widening && <div className="notice warning deployment-capability-expansion">
+            <strong>{t("deployments.expansionNeedsRevalidation")}</strong>
+            <span>{current?.enabled ? t("deployments.expansionWhileRouted") : t("deployments.expansionSavedDisabled")}</span>
+          </div>}
           {impact && <CapabilityImpactNotice impact={impact} />}
           <div className="deployment-release-note"><strong>{current?.enabled ? t("deployments.updateLiveWarning") : t("deployments.savedDisabled")}</strong><span>{current?.enabled ? t("deployments.updateLiveDescription") : t("deployments.savedDisabledDescription")}</span></div>
           {(mutation.isError || preflight.isError) && <ErrorState error={mutation.error || preflight.error} />}

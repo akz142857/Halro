@@ -619,6 +619,30 @@ describe("deployment release workflow", () => {
     await waitFor(() => expect(update).toHaveBeenCalledOnce());
     expect(preflight).not.toHaveBeenCalled();
   });
+
+  // Turning a capability on drops the deployment out of routing until it is
+  // retested, so the form has to say that before the operator saves.
+  it("warns that enabling a capability will take the deployment out of routing", async () => {
+    const narrow = { ...capabilities, vision: false };
+    const deployment = {
+      id: "deployment_expand", name: "Expanding GPT", provider_id: provider.id, provider_model: "gpt-5",
+      target_kind: "model_id", access_surface: provider.access_surface, profile_id: provider.profile_id, region: "",
+      capabilities: narrow, capability_evidence: {}, input_micros_per_million: 0,
+      output_micros_per_million: 0, fixed_request_micros_usd: 0, max_concurrency: 4,
+      priority: 0, weight: 1, enabled: true, revision: 9, created_at: "", updated_at: "",
+    } as Deployment;
+    vi.mocked(api.deployments).mockResolvedValue({ items: [deployment], next_cursor: "" });
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
+    expect(screen.queryByText("开启能力需要重新验证")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("checkbox", { name: /视觉/ }));
+
+    expect(await screen.findByText("开启能力需要重新验证")).toBeVisible();
+    // It is routed, so the console names the thing that has to happen first.
+    expect(screen.getByText(/请先停用这些路由/)).toBeVisible();
+  });
 });
 
 function renderPage() {

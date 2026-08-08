@@ -97,8 +97,31 @@ func (r *Runtime) createAdminDeployment(writer http.ResponseWriter, request *htt
 		adminAuditError(writer)
 		return
 	}
+	if err := r.auditCapabilitySnapshot(request, auditCapabilitySnapshotCreated, deployment,
+		capabilitySnapshotMetadata(deployment)); err != nil {
+		adminAuditError(writer)
+		return
+	}
 	writer.Header().Set("ETag", revisionETag(deployment.Revision))
 	writeJSON(writer, http.StatusCreated, deployment)
+}
+
+// auditCapabilitySnapshot writes the capability-specific record, and the
+// declaration record alongside it when the operator is the source. An operator
+// declaration is its own event because §8.3 wants the declarer, the claim and
+// the catalog state recorded together, which deployment.create does not carry.
+func (r *Runtime) auditCapabilitySnapshot(request *http.Request, action string,
+	deployment domain.Deployment, metadata map[string]any) error {
+	admin := request.Context().Value(adminContextKey{}).(adminRequestContext)
+	if err := r.appendAdminAuditWithMetadata("admin_user", admin.session.Username, action,
+		"deployment", deployment.ID, "success", "", metadata); err != nil {
+		return err
+	}
+	if deployment.ModelCapabilitySnapshot.Source != string(modelcatalog.SourceOperatorDeclared) {
+		return nil
+	}
+	return r.appendAdminAuditWithMetadata("admin_user", admin.session.Username,
+		auditOperatorCapabilitiesDeclared, "deployment", deployment.ID, "success", "", metadata)
 }
 
 func (r *Runtime) updateAdminDeployment(writer http.ResponseWriter, request *http.Request) {
@@ -154,6 +177,32 @@ func (r *Runtime) updateAdminDeployment(writer http.ResponseWriter, request *htt
 	deployment.InputMicrosPerMillion = current.InputMicrosPerMillion
 	deployment.OutputMicrosPerMillion = current.OutputMicrosPerMillion
 	deployment.FixedRequestMicrosUSD = current.FixedRequestMicrosUSD
+	// §7.2 treats the two edit directions differently, and the difference is not
+	// stylistic. Turning a capability off leaves the deployment doing strictly
+	// less than it was validated for, so it keeps serving. Turning one on makes
+	// it claim something no test has ever exercised against this provider —
+	// routing traffic on that claim is the fail-open this design exists to
+	// prevent. So a widening advances the revision (making the test stale) and
+	// drops the deployment to disabled, requiring an explicit re-enable, which
+	// the enable path already gates on a current healthy test.
+	//
+	// Token limits are deliberately not treated as a widening: they bound which
+	// requests fit, not what the deployment claims it can do.
+	widened := modelcatalog.GainedCapabilities(current.Capabilities, deployment.Capabilities)
+	if len(widened) != 0 {
+		// The deployment has to leave the candidate set to be re-enabled
+		// explicitly, and an enabled route may not point at a disabled
+		// deployment. Saying so is better than letting the operator hit the
+		// generic deactivation error and guess which edit caused it.
+		if err := r.validateDeploymentCanDeactivate(request, deployment.ID, false); err != nil {
+			writeJSON(writer, http.StatusConflict, map[string]string{
+				"error": "enabling additional capabilities requires revalidation, so the deployment must leave routing first; disable its active routes, or narrow capabilities instead",
+				"code":  "capability_expansion_requires_revalidation",
+			})
+			return
+		}
+		deployment.Enabled = false
+	}
 	if deployment.Enabled && !current.Enabled &&
 		(current.LastTestStatus != domain.DeploymentTestHealthy || current.LastTestRevision != current.Revision) {
 		writeJSON(writer, http.StatusConflict, map[string]string{"error": "deployment must pass a current validation test before enable"})
@@ -184,6 +233,16 @@ func (r *Runtime) updateAdminDeployment(writer http.ResponseWriter, request *htt
 	if err := r.auditAdminMutation(request, "deployment.update", "deployment", deployment.ID); err != nil {
 		adminAuditError(writer)
 		return
+	}
+	// A review is a change to what the deployment claims about its model. An
+	// edit to its name or concurrency is not one, and recording it as such
+	// would bury the events an operator actually reviews.
+	if capabilityChanged(current, deployment) {
+		if err := r.auditCapabilitySnapshot(request, auditCapabilitySnapshotReviewed, deployment,
+			capabilityChangeMetadata(current, deployment)); err != nil {
+			adminAuditError(writer)
+			return
+		}
 	}
 	writer.Header().Set("ETag", revisionETag(deployment.Revision))
 	writeJSON(writer, http.StatusOK, deployment)
