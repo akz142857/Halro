@@ -27,6 +27,7 @@ func (r *Runtime) reloadProviderRegistry(ctx context.Context) error {
 		return err
 	}
 	logCapabilityWithholdings(r.logger, withheld)
+	r.auditCapabilityWithholdings(ctx, withheld)
 	retired := r.providers.Replace(next)
 	if len(retired) == 0 {
 		return nil

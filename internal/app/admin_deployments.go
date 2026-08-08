@@ -97,8 +97,31 @@ func (r *Runtime) createAdminDeployment(writer http.ResponseWriter, request *htt
 		adminAuditError(writer)
 		return
 	}
+	if err := r.auditCapabilitySnapshot(request, auditCapabilitySnapshotCreated, deployment,
+		capabilitySnapshotMetadata(deployment)); err != nil {
+		adminAuditError(writer)
+		return
+	}
 	writer.Header().Set("ETag", revisionETag(deployment.Revision))
 	writeJSON(writer, http.StatusCreated, deployment)
+}
+
+// auditCapabilitySnapshot writes the capability-specific record, and the
+// declaration record alongside it when the operator is the source. An operator
+// declaration is its own event because §8.3 wants the declarer, the claim and
+// the catalog state recorded together, which deployment.create does not carry.
+func (r *Runtime) auditCapabilitySnapshot(request *http.Request, action string,
+	deployment domain.Deployment, metadata map[string]any) error {
+	admin := request.Context().Value(adminContextKey{}).(adminRequestContext)
+	if err := r.appendAdminAuditWithMetadata("admin_user", admin.session.Username, action,
+		"deployment", deployment.ID, "success", "", metadata); err != nil {
+		return err
+	}
+	if deployment.ModelCapabilitySnapshot.Source != string(modelcatalog.SourceOperatorDeclared) {
+		return nil
+	}
+	return r.appendAdminAuditWithMetadata("admin_user", admin.session.Username,
+		auditOperatorCapabilitiesDeclared, "deployment", deployment.ID, "success", "", metadata)
 }
 
 func (r *Runtime) updateAdminDeployment(writer http.ResponseWriter, request *http.Request) {
@@ -184,6 +207,16 @@ func (r *Runtime) updateAdminDeployment(writer http.ResponseWriter, request *htt
 	if err := r.auditAdminMutation(request, "deployment.update", "deployment", deployment.ID); err != nil {
 		adminAuditError(writer)
 		return
+	}
+	// A review is a change to what the deployment claims about its model. An
+	// edit to its name or concurrency is not one, and recording it as such
+	// would bury the events an operator actually reviews.
+	if capabilityChanged(current, deployment) {
+		if err := r.auditCapabilitySnapshot(request, auditCapabilitySnapshotReviewed, deployment,
+			capabilityChangeMetadata(current, deployment)); err != nil {
+			adminAuditError(writer)
+			return
+		}
 	}
 	writer.Header().Set("ETag", revisionETag(deployment.Revision))
 	writeJSON(writer, http.StatusOK, deployment)

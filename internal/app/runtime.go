@@ -591,6 +591,10 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		secretVault.Close()
 		return fail(fmt.Errorf("recover pending pricing audit: %w", err))
 	}
+	// Emitted here rather than at the load itself: the audit log only exists
+	// once the runtime is assembled, and a deployment that came up withheld is
+	// exactly the state §4.4 wants a durable record of.
+	runtime.auditCapabilityWithholdings(ctx, withheld)
 	settings, err := metadata.RuntimeSettings()
 	if errors.Is(err, boltstore.ErrNotFound) {
 		settings = domain.RuntimeSettings{
