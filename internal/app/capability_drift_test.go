@@ -1,6 +1,7 @@
 package app
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -88,5 +89,52 @@ func TestCatalogEntryDisappearingUnderABuiltinSnapshotIsDrift(t *testing.T) {
 	deployment.ModelCapabilitySnapshot.ProviderModel = deployment.ProviderModel
 	if state := evaluateCapabilityReview(deployment, binding, domain.ProviderBedrock); state != domain.CapabilityReviewDrifted {
 		t.Fatalf("state=%q", state)
+	}
+}
+
+// Doctor is where an operator finds out why a deployment stopped routing,
+// without having to read a start-up failure.
+func TestDoctorReportsDriftAsFailAndReviewAsWarn(t *testing.T) {
+	deployment, binding := catalogueDeployment(t)
+	instance := domain.ProviderInstance{
+		ID: "prov", Type: domain.ProviderBedrock, Enabled: true,
+		Bindings: []domain.ProviderProfileBinding{binding},
+	}
+	deployment.ProviderID = instance.ID
+	// A distinctive ID: the default "dep" is a substring of "deployment(s)" and
+	// would make the check below pass on the message's own wording.
+	deployment.ID = "dpl-7f21c9"
+
+	collect := func(providers []domain.ProviderInstance, deployments []domain.Deployment) (string, string) {
+		var status, detail string
+		checkDoctorCapabilityDrift(providers, deployments, func(name, gotStatus, gotDetail string) {
+			if name == "capability_drift" {
+				status, detail = gotStatus, gotDetail
+			}
+		})
+		return status, detail
+	}
+
+	if status, _ := collect([]domain.ProviderInstance{instance}, []domain.Deployment{deployment}); status != "pass" {
+		t.Fatalf("unchanged deployment status=%q", status)
+	}
+
+	narrowed := instance
+	narrowed.Bindings = []domain.ProviderProfileBinding{{
+		ID: binding.ID, ProfileID: binding.ProfileID, Capabilities: domain.ProviderCapabilities{}, Enabled: true,
+	}}
+	status, detail := collect([]domain.ProviderInstance{narrowed}, []domain.Deployment{deployment})
+	if status != "fail" {
+		t.Fatalf("drift status=%q", status)
+	}
+	if strings.Contains(detail, deployment.ID) {
+		t.Fatalf("detail names a specific deployment: %q", detail)
+	}
+
+	declared := deployment
+	declared.ModelCapabilitySnapshot.Source = string(modelcatalog.SourceOperatorDeclared)
+	declared.ModelCapabilitySnapshot.ModelRevision = "sha256:before-the-catalog-knew"
+	if status, _ := collect([]domain.ProviderInstance{instance}, []domain.Deployment{declared}); status != "warn" {
+		t.Fatalf("review status=%q", status)
 	}
 }
