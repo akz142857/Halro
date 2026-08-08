@@ -1086,7 +1086,10 @@ td small, td code { display: block; margin-top: 4px; color: var(--muted); }
 .compact-form { grid-template-columns: minmax(240px, 320px) auto; align-items: end; }
 .compact-form .notice { grid-column: 1 / -1; }
 .credential-form { max-width: 520px; }
-.runtime-form { max-width: none; gap: 0; padding: 0; }
+/* Single column so the editable controls are the content area and the
+   boundary note reads as a full-width band under them, rather than the
+   two competing for half a card each. */
+.runtime-form { max-width: none; grid-template-columns: 1fr; gap: 0; padding: 0; }
 .runtime-editable { display: grid; width: min(100%, 460px); gap: 0.875rem; padding: 1.25rem 1.375rem 1.375rem; }
 .runtime-editable .field, .runtime-editable .notice { margin: 0; }
 .runtime-editable .form-actions { justify-content: flex-start; padding: 0; }
