@@ -966,26 +966,29 @@ td small, td code { display: block; margin-top: 4px; color: var(--muted); }
 .write-path dl { margin-top: var(--space-3); }
 .write-path .write-path-meta { margin: 0; padding: 0 var(--space-4) var(--space-3); color: var(--muted-2); font-size: var(--font-size-xs); }
 .write-path > .notice { margin: 0 var(--space-4) var(--space-3); }
-.config-overview { display: grid; gap: 0.875rem; }
-.config-summary { overflow: hidden; }
-.config-summary-header { display: flex; align-items: center; justify-content: space-between; gap: 1.5rem; padding: 1.125rem 1.25rem; border-bottom: 1px solid var(--line); }
-.config-summary-header > div { min-width: 0; }
-.config-summary-header h3 { margin: 0 0 0.3125rem; font-size: 15px; }
-.config-summary-header p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
-.config-summary-header .badge { flex: 0 0 auto; }
-.config-section-list { display: grid; }
-.config-section { display: grid; grid-template-columns: 150px minmax(0, 1fr); border-bottom: 1px solid var(--line); }
-.config-section:last-child { border-bottom: 0; }
-.config-section h4 { margin: 0; padding: 1rem 1.25rem; color: var(--muted); background: var(--surface-inset); font-size: 12px; font-weight: 700; }
-.config-section dl { margin: 0; }
-.config-section dl > div { display: grid; grid-template-columns: minmax(160px, .9fr) minmax(0, 1.1fr); align-items: center; min-height: 48px; border-bottom: 1px solid var(--line); }
-.config-section dl > div:last-child { border-bottom: 0; }
-.config-section dt, .config-section dd { min-width: 0; margin: 0; padding: 0.625rem 1.125rem; text-align: left; }
-.config-section dt { color: var(--muted); font-size: 12px; }
-.config-section dd { color: var(--text); font-size: 12px; font-weight: 650; overflow-wrap: anywhere; }
-.config-section dd.technical { font-family: var(--mono); font-size: 11px; font-weight: 500; }
-.config-preview { margin: 0; }
-.config-preview-description { margin: 0; padding: var(--space-3) var(--space-4) 0; color: var(--muted); border-top: 1px solid var(--border); font-size: 11px; line-height: 1.55; }
+.config-overview { padding: var(--space-4) 0 0; background: var(--surface); border: 0.0625rem solid var(--line); }
+.config-overview-header { display: flex; align-items: baseline; justify-content: space-between; gap: 1.5rem; padding: 0 1.25rem var(--space-4); border-bottom: 0.0625rem solid var(--line); }
+.config-overview-header h3 { margin: 0 0 0.25rem; font-size: 15px; }
+.config-overview-header p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
+.config-overview-state { flex: 0 0 auto; color: var(--muted); font-size: 11px; }
+.config-group + .config-group { border-top: 0.0625rem solid var(--line); }
+.config-group h4 { margin: 0; padding: 1rem 1.25rem 0.375rem; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: 0.02em; }
+.config-group dl { margin: 0; }
+.config-group dl > div { display: grid; grid-template-columns: minmax(10rem, .9fr) minmax(0, 1.1fr); align-items: center; min-height: 3rem; padding: 0 1.25rem; }
+.config-group dl > div + div { border-top: 0.0625rem solid var(--line); }
+.config-group dt, .config-group dd { min-width: 0; margin: 0; padding: 0.625rem 0; }
+.config-group dt { color: var(--muted); font-size: 12px; }
+.config-group dd { color: var(--text); font-size: 12px; font-weight: 650; text-align: right; overflow-wrap: anywhere; }
+.config-group dd.technical { font-family: var(--mono); font-size: 11px; font-weight: 500; }
+.config-preview { border-top: 0.0625rem solid var(--line); }
+.config-preview > summary { padding: 0.875rem 1.25rem; color: var(--muted); font-size: 12px; cursor: pointer; }
+.config-preview-description { margin: 0; padding: 0 1.25rem 0.5rem; color: var(--muted); font-size: 11px; line-height: 1.55; }
+.config-preview[open] > summary { color: var(--text); }
+@media (max-width: 640px) {
+  .config-group dl > div { grid-template-columns: minmax(0, 1fr); align-items: start; min-height: 0; }
+  .config-group dd { text-align: left; }
+  .config-group dt { padding-bottom: 0; }
+}
 .config-preview .form-actions { padding: 0 var(--space-4) var(--space-3); align-items: center; }
 .config-preview-body { margin: var(--space-3) var(--space-4); padding: var(--space-3) var(--space-4); max-height: 360px; overflow: auto; background: color-mix(in srgb, var(--surface) 88%, var(--text) 6%); border: 1px solid var(--border); border-radius: var(--radius-md); font-size: .82rem; line-height: 1.5; white-space: pre; }
 .diagnostic-details dl { margin: 0; padding: 0 var(--space-4) var(--space-3); border-top: 1px solid var(--border); }
@@ -1083,7 +1086,10 @@ td small, td code { display: block; margin-top: 4px; color: var(--muted); }
 .compact-form { grid-template-columns: minmax(240px, 320px) auto; align-items: end; }
 .compact-form .notice { grid-column: 1 / -1; }
 .credential-form { max-width: 520px; }
-.runtime-form { max-width: none; gap: 0; padding: 0; }
+/* Single column so the editable controls are the content area and the
+   boundary note reads as a full-width band under them, rather than the
+   two competing for half a card each. */
+.runtime-form { max-width: none; grid-template-columns: 1fr; gap: 0; padding: 0; }
 .runtime-editable { display: grid; width: min(100%, 460px); gap: 0.875rem; padding: 1.25rem 1.375rem 1.375rem; }
 .runtime-editable .field, .runtime-editable .notice { margin: 0; }
 .runtime-editable .form-actions { justify-content: flex-start; padding: 0; }
