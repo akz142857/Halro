@@ -469,7 +469,6 @@ func seedPricingDeployment(t testing.TB, store *Store, deploymentID string, inpu
 		BindingID:    domain.DefaultProviderProfileBindingID(provider.ID, profile.ProfileID),
 		Capabilities: capabilities, CapabilityEvidence: domain.EvidenceForCapabilities(capabilities, domain.EvidenceDeclared),
 		ModelCapabilitySnapshot: domain.DeclaredCapabilitySnapshot("gpt-test", "sha256:test", capabilities, now),
-		CapabilityReviewState:   domain.CapabilityReviewCurrent,
 		InputMicrosPerMillion:   input, OutputMicrosPerMillion: output, FixedRequestMicrosUSD: fixed,
 		Weight: 1, Enabled: false, CreatedAt: now, UpdatedAt: now,
 	}, 0)

@@ -48,6 +48,7 @@ func TestFrozenV1AdminRoutesAreRegistered(t *testing.T) {
 		"GET /admin/api/v1/providers/{}", "PUT /admin/api/v1/providers/{}", "DELETE /admin/api/v1/providers/{}", "POST /admin/api/v1/providers/{}/test",
 		"GET /admin/api/v1/deployments", "POST /admin/api/v1/deployments",
 		"GET /admin/api/v1/deployments/{}", "PUT /admin/api/v1/deployments/{}", "DELETE /admin/api/v1/deployments/{}", "POST /admin/api/v1/deployments/{}/test",
+		"POST /admin/api/v1/deployments/{}/capabilities/preflight",
 		"GET /admin/api/v1/deployments/{}/prices", "POST /admin/api/v1/deployments/{}/prices", "POST /admin/api/v1/deployments/{}/prices/preview", "POST /admin/api/v1/deployments/{}/prices/restore-confirm", "POST /admin/api/v1/deployments/{}/prices/{}/cancel",
 		"GET /admin/api/v1/deployments/{}/price-proposals", "POST /admin/api/v1/deployments/{}/price-proposals", "POST /admin/api/v1/deployments/{}/price-proposals/{}/adopt", "POST /admin/api/v1/deployments/{}/price-proposals/{}/reject",
 		"GET /admin/api/v1/routes", "POST /admin/api/v1/routes",

@@ -424,6 +424,54 @@ export interface ProviderModelCatalog {
   cached: boolean;
 }
 
+/** Whether a deployment's saved capability snapshot still describes something
+ * that is supported now. Always derived by the server from a live comparison —
+ * it is never stored on the deployment, because both sides of the comparison
+ * move without the record being rewritten. */
+export type CapabilityReviewState = "current" | "review_available" | "drifted";
+
+export interface CapabilityReview {
+  state: CapabilityReviewState;
+  /** What the deployment saved. */
+  source: ModelCapabilitySource | string;
+  status: ModelCapabilityStatus | string;
+  model_revision: string;
+  /** What the catalog says now. `catalog_covered` distinguishes "the catalog no
+   * longer covers this model" from "it covers it and establishes nothing". */
+  catalog_covered: boolean;
+  catalog_source?: ModelCapabilitySource | string;
+  catalog_status?: ModelCapabilityStatus | string;
+  catalog_model_revision?: string;
+  /** Established now but not in use. Offered, never enabled. */
+  available_for_review?: string[];
+  /** Claimed by the snapshot but no longer established by profile or catalog. */
+  no_longer_supported?: string[];
+  reason?: CapabilityReviewReason | string;
+}
+
+export type CapabilityReviewReason =
+  | "profile_narrowed"
+  | "catalog_no_longer_covers_model"
+  | "catalog_establishes_less"
+  | "catalog_revision_advanced"
+  | "catalog_now_covers_model";
+
+export interface RouteCapabilityImpact {
+  route_id: string;
+  public_model: string;
+  capability: string;
+  /** No other enabled route on this public model is served by a deployment that
+   * still has the capability, so requests needing it start being rejected. */
+  sole_candidate: boolean;
+}
+
+export interface CapabilityPreflight {
+  removed_capabilities: string[];
+  added_capabilities: string[];
+  affected_routes: RouteCapabilityImpact[];
+  blocking: boolean;
+}
+
 export interface Deployment {
   id: string;
   name: string;
@@ -453,6 +501,7 @@ export interface Deployment {
   updated_at: string;
 	pricing_quarantined?: boolean;
 	pricing_quarantine_reason?: string;
+  capability_review: CapabilityReview;
 }
 
 export type DeploymentTargetKind =

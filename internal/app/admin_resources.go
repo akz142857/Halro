@@ -149,7 +149,12 @@ func (r *Runtime) listAdminDeployments(writer http.ResponseWriter, request *http
 		adminStoreError(writer)
 		return
 	}
-	active := make([]domain.Deployment, 0, len(items))
+	instances, err := r.providerInstancesByID(request.Context())
+	if err != nil {
+		adminStoreError(writer)
+		return
+	}
+	active := make([]adminDeploymentView, 0, len(items))
 	for _, item := range items {
 		if item.DeletedAt == nil {
 			quarantined, reason, quarantineErr := r.store.DeploymentPricingQuarantine(request.Context(), item.ID)
@@ -158,10 +163,12 @@ func (r *Runtime) listAdminDeployments(writer http.ResponseWriter, request *http
 				return
 			}
 			item.PricingQuarantined, item.PricingQuarantineReason = quarantined, reason
-			active = append(active, item)
+			active = append(active, adminDeploymentView{
+				Deployment: item, CapabilityReview: reviewForDeployment(instances, item),
+			})
 		}
 	}
-	writeResourcePage(writer, request, active, func(item domain.Deployment) string { return item.ID })
+	writeResourcePage(writer, request, active, func(item adminDeploymentView) string { return item.ID })
 }
 
 func (r *Runtime) getAdminDeployment(writer http.ResponseWriter, request *http.Request) {
@@ -175,8 +182,15 @@ func (r *Runtime) getAdminDeployment(writer http.ResponseWriter, request *http.R
 		adminStoreError(writer)
 		return
 	}
+	instances, err := r.providerInstancesByID(request.Context())
+	if err != nil {
+		adminStoreError(writer)
+		return
+	}
 	writer.Header().Set("ETag", revisionETag(item.Revision))
-	writeJSON(writer, http.StatusOK, item)
+	writeJSON(writer, http.StatusOK, adminDeploymentView{
+		Deployment: item, CapabilityReview: reviewForDeployment(instances, item),
+	})
 }
 
 func (r *Runtime) listAdminRoutes(writer http.ResponseWriter, request *http.Request) {

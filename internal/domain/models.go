@@ -539,7 +539,8 @@ const (
 )
 
 // CapabilityReviewState tracks whether a deployment's stored capability
-// snapshot still matches what the catalog and the running profile say.
+// snapshot still matches what the catalog and the running profile say. It is
+// always derived from a live comparison, never stored on the deployment.
 type CapabilityReviewState string
 
 const (
@@ -644,8 +645,11 @@ type Deployment struct {
 	PricingQuarantined      bool                  `json:"pricing_quarantined,omitempty"`
 	PricingQuarantineReason string                `json:"pricing_quarantine_reason,omitempty"`
 
+	// ModelCapabilitySnapshot is stored; the review state is not. Review state is
+	// a comparison against the catalog and the running profile, both of which can
+	// move without this record being rewritten, so persisting it would only ever
+	// record what was true at the last write. It is derived wherever it is needed.
 	ModelCapabilitySnapshot ModelCapabilitySnapshot `json:"model_capability_snapshot"`
-	CapabilityReviewState   CapabilityReviewState   `json:"capability_review_state"`
 }
 
 type DeploymentTestStatus string
@@ -722,9 +726,6 @@ func (d Deployment) Validate() error {
 	}
 	if err := d.ModelCapabilitySnapshot.Validate(d); err != nil {
 		problems = append(problems, err)
-	}
-	if !d.CapabilityReviewState.Valid() {
-		problems = append(problems, errors.New("deployment capability review state is invalid"))
 	}
 	if d.Priority < 0 {
 		problems = append(problems, errors.New("deployment priority cannot be negative"))

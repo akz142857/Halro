@@ -345,6 +345,77 @@ func Clamp(candidate, ceiling domain.ProviderCapabilities) domain.ProviderCapabi
 	return result
 }
 
+// Union is the dual of Clamp: booleans are disjunctions and the wider limit
+// wins. It exists to describe a combined claim when reporting what exceeds a
+// ceiling, never to grant capabilities — no path that decides what a deployment
+// may do calls it.
+func Union(first, second domain.ProviderCapabilities) domain.ProviderCapabilities {
+	result := domain.ProviderCapabilities{}
+	for _, name := range CapabilityNames {
+		if isLimit(name) {
+			setLimit(&result, name, widerLimit(limitValue(first, name), limitValue(second, name)))
+			continue
+		}
+		if booleanValue(first, name) || booleanValue(second, name) {
+			setBoolean(&result, name)
+		}
+	}
+	return result
+}
+
+func widerLimit(first, second int64) int64 {
+	// A zero limit means "none declared", which is the widest claim of all.
+	if first <= 0 || second <= 0 {
+		return 0
+	}
+	if first > second {
+		return first
+	}
+	return second
+}
+
+// GainedCapabilities reports the boolean capabilities present in after but not
+// in before, in CapabilityNames order.
+//
+// Limits are deliberately excluded. A boolean capability is what decides whether
+// a deployment is a candidate at all — both the operation filter in the registry
+// and filterSemanticCapabilities in the gateway work on these names — whereas a
+// token limit narrows which individual requests fit, which is a property of the
+// request rather than of the candidate set.
+func GainedCapabilities(before, after domain.ProviderCapabilities) []string {
+	return booleanDifference(after, before)
+}
+
+// LostCapabilities reports the boolean capabilities present in before but not in
+// after. This is the set a route preflight has to reason about: losing one can
+// leave a public model with no candidate for requests that need it.
+func LostCapabilities(before, after domain.ProviderCapabilities) []string {
+	return booleanDifference(before, after)
+}
+
+// HasCapability reports whether a boolean capability is held, by the same names
+// GainedCapabilities and LostCapabilities report. Limit names always answer
+// false: they are not something a candidate either has or lacks.
+func HasCapability(capabilities domain.ProviderCapabilities, name string) bool {
+	if isLimit(name) {
+		return false
+	}
+	return booleanValue(capabilities, name)
+}
+
+func booleanDifference(held, against domain.ProviderCapabilities) []string {
+	var names []string
+	for _, name := range CapabilityNames {
+		if isLimit(name) {
+			continue
+		}
+		if booleanValue(held, name) && !booleanValue(against, name) {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
 func narrowerLimit(candidate, ceiling int64) int64 {
 	switch {
 	case candidate <= 0:

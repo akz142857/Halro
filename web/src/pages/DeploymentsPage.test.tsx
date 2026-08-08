@@ -468,6 +468,157 @@ describe("deployment release workflow", () => {
     expect(createPrice.mock.calls[1][1]).toEqual(createPrice.mock.calls[0][1]);
     expect(createPrice.mock.calls[1][2]).toBe(createPrice.mock.calls[0][2]);
   });
+
+  // Capability state is derived by the server, so the console must show what the
+  // server says rather than assuming a saved deployment is still supported.
+  it("shows why a drifted deployment stopped routing, and which capabilities went", async () => {
+    const deployment = {
+      id: "deployment_drifted", name: "Drifted GPT", provider_id: provider.id, provider_model: "gpt-5",
+      access_surface: provider.access_surface, profile_id: provider.profile_id, region: "",
+      capabilities, capability_evidence: {}, input_micros_per_million: 0,
+      output_micros_per_million: 0, fixed_request_micros_usd: 0, max_concurrency: 4,
+      priority: 0, weight: 1, enabled: true, revision: 6, created_at: "", updated_at: "",
+      capability_review: {
+        state: "drifted", source: "builtin_catalog", status: "known", model_revision: "sha256:old",
+        catalog_covered: true, catalog_source: "builtin_catalog", catalog_status: "known",
+        catalog_model_revision: "sha256:new", no_longer_supported: ["vision"],
+        reason: "catalog_establishes_less",
+      },
+    } as Deployment;
+    vi.mocked(api.deployments).mockResolvedValue({ items: [deployment], next_cursor: "" });
+    vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [], next_cursor: "" });
+    renderPage();
+
+    // Visible without expanding: a drifted deployment is not routing, whatever
+    // the enabled column says.
+    expect(await screen.findByText("能力已不再受支持")).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: /查看详情/ }));
+    expect(await screen.findByText(/模型目录现在确立的能力少于/)).toBeVisible();
+    // Scoped to the review panel: the capability badge strip lists names too,
+    // and a match there would not prove the review named what it lost.
+    const facts = within(document.querySelector(".deployment-review-facts") as HTMLElement);
+    expect(facts.getByText("内置模型目录")).toBeVisible();
+    expect(facts.getByText("视觉")).toBeVisible();
+    expect(screen.getByText(/该部署已停止承接流量/)).toBeVisible();
+  });
+
+  it("keeps serving and offers the new capabilities when the catalog moved forward", async () => {
+    const deployment = {
+      id: "deployment_review", name: "Reviewable GPT", provider_id: provider.id, provider_model: "gpt-5",
+      access_surface: provider.access_surface, profile_id: provider.profile_id, region: "",
+      capabilities, capability_evidence: {}, input_micros_per_million: 0,
+      output_micros_per_million: 0, fixed_request_micros_usd: 0, max_concurrency: 4,
+      priority: 0, weight: 1, enabled: true, revision: 6, created_at: "", updated_at: "",
+      capability_review: {
+        state: "review_available", source: "operator_declared", status: "partial",
+        model_revision: "sha256:declared", catalog_covered: true, catalog_source: "builtin_catalog",
+        catalog_status: "known", catalog_model_revision: "sha256:new",
+        available_for_review: ["reasoning"], reason: "catalog_now_covers_model",
+      },
+    } as Deployment;
+    vi.mocked(api.deployments).mockResolvedValue({ items: [deployment], next_cursor: "" });
+    vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [], next_cursor: "" });
+    renderPage();
+
+    expect(await screen.findByText("有可复核的新能力")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: /查看详情/ }));
+    const facts = within(await waitFor(() => document.querySelector(".deployment-review-facts") as HTMLElement));
+    expect(facts.getByText("管理员声明")).toBeVisible();
+    expect(facts.getByText("推理")).toBeVisible();
+    // The offer must not read as something already in effect.
+    expect(screen.getByText(/它仍然只做今天在做的事/)).toBeVisible();
+  });
+
+  // Narrowing is allowed in place, so the console has to say which routes it
+  // would strand before it writes rather than after traffic starts failing.
+  it("preflights a capability narrowing and requires confirmation when a route loses its only candidate", async () => {
+    const deployment = {
+      id: "deployment_narrow", name: "Narrowing GPT", provider_id: provider.id, provider_model: "gpt-5",
+      target_kind: "model_id", access_surface: provider.access_surface, profile_id: provider.profile_id, region: "",
+      capabilities, capability_evidence: {}, input_micros_per_million: 0,
+      output_micros_per_million: 0, fixed_request_micros_usd: 0, max_concurrency: 4,
+      priority: 0, weight: 1, enabled: true, revision: 7, created_at: "", updated_at: "",
+    } as Deployment;
+    vi.mocked(api.deployments).mockResolvedValue({ items: [deployment], next_cursor: "" });
+    const preflight = vi.spyOn(api, "preflightDeploymentCapabilities").mockResolvedValue({
+      removed_capabilities: ["tools"],
+      added_capabilities: [],
+      affected_routes: [{ route_id: "route_1", public_model: "gpt-4o", capability: "tools", sole_candidate: true }],
+      blocking: true,
+    });
+    const update = vi.spyOn(api, "updateDeployment").mockResolvedValue({} as never);
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /工具调用/ }));
+
+    // The first submit asks the server, it does not write.
+    fireEvent.click(screen.getByRole("button", { name: "检查路由影响" }));
+    await waitFor(() => expect(preflight).toHaveBeenCalledOnce());
+    expect(update).not.toHaveBeenCalled();
+
+    expect(await screen.findByText("部分路由将失去唯一候选")).toBeVisible();
+    expect(screen.getByText("gpt-4o")).toBeVisible();
+    expect(screen.getByText("没有其他部署可以承接")).toBeVisible();
+
+    // Only an explicit confirmation writes.
+    fireEvent.click(screen.getByRole("button", { name: "仍然保存并热加载" }));
+    await waitFor(() => expect(update).toHaveBeenCalledOnce());
+    expect(update).toHaveBeenCalledWith(deployment.id, expect.objectContaining({
+      capabilities: expect.objectContaining({ tools: false }),
+    }), 7);
+  });
+
+  // Nothing is stranded, so there is nothing to confirm: the save goes through
+  // on the preflight's own answer rather than making the operator click twice.
+  it("saves a narrowing straight through when no route is affected", async () => {
+    const deployment = {
+      id: "deployment_safe", name: "Safe GPT", provider_id: provider.id, provider_model: "gpt-5",
+      target_kind: "model_id", access_surface: provider.access_surface, profile_id: provider.profile_id, region: "",
+      capabilities, capability_evidence: {}, input_micros_per_million: 0,
+      output_micros_per_million: 0, fixed_request_micros_usd: 0, max_concurrency: 4,
+      priority: 0, weight: 1, enabled: true, revision: 2, created_at: "", updated_at: "",
+    } as Deployment;
+    vi.mocked(api.deployments).mockResolvedValue({ items: [deployment], next_cursor: "" });
+    vi.spyOn(api, "preflightDeploymentCapabilities").mockResolvedValue({
+      removed_capabilities: ["tools"], added_capabilities: [], affected_routes: [], blocking: false,
+    });
+    const update = vi.spyOn(api, "updateDeployment").mockResolvedValue({} as never);
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /工具调用/ }));
+    fireEvent.click(screen.getByRole("button", { name: "检查路由影响" }));
+
+    await waitFor(() => expect(update).toHaveBeenCalledOnce());
+  });
+
+  // Widening does not remove a candidate from anything, so it must not pay the
+  // cost of a preflight round trip.
+  it("does not preflight when capabilities only widen", async () => {
+    const narrow = { ...capabilities, tools: false };
+    const deployment = {
+      id: "deployment_widen", name: "Widening GPT", provider_id: provider.id, provider_model: "gpt-5",
+      target_kind: "model_id", access_surface: provider.access_surface, profile_id: provider.profile_id, region: "",
+      capabilities: narrow, capability_evidence: {}, input_micros_per_million: 0,
+      output_micros_per_million: 0, fixed_request_micros_usd: 0, max_concurrency: 4,
+      priority: 0, weight: 1, enabled: true, revision: 3, created_at: "", updated_at: "",
+    } as Deployment;
+    vi.mocked(api.deployments).mockResolvedValue({ items: [deployment], next_cursor: "" });
+    const preflight = vi.spyOn(api, "preflightDeploymentCapabilities").mockResolvedValue({
+      removed_capabilities: [], added_capabilities: ["tools"], affected_routes: [], blocking: false,
+    });
+    const update = vi.spyOn(api, "updateDeployment").mockResolvedValue({} as never);
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /工具调用/ }));
+    fireEvent.click(screen.getByRole("button", { name: "保存并热加载" }));
+
+    await waitFor(() => expect(update).toHaveBeenCalledOnce());
+    expect(preflight).not.toHaveBeenCalled();
+  });
 });
 
 function renderPage() {

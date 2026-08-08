@@ -16,7 +16,7 @@ import {
   type ReauthValues,
 } from "../components";
 import { money, useInstantFormatter } from "../format";
-import type { Deployment, DeploymentPriceVersion, DeploymentTargetKind, Provider, ProviderBinding, ProviderCapabilities, ProviderModelDescriptor } from "../types";
+import type { CapabilityPreflight, CapabilityReview, Deployment, DeploymentPriceVersion, DeploymentTargetKind, Provider, ProviderBinding, ProviderCapabilities, ProviderModelDescriptor } from "../types";
 import { useTranslation } from "react-i18next";
 import { useIsReadOnly } from "../session";
 import { Link } from "../navigation";
@@ -183,6 +183,7 @@ function DeploymentRow({
         ? "stale"
         : "idle";
   const evidence = evidenceSummary(deployment.capability_evidence).map((value) => t(`deployments.evidenceValues.${value}`));
+  const review = deployment.capability_review;
   const routeBlocked = activeRouteCount > 0;
   return (
     <article className="deployment-row">
@@ -208,6 +209,13 @@ function DeploymentRow({
         <div className="deployment-compact-status">
           <small>{t("deployments.status")}</small>
           <span className={`resource-state ${deployment.enabled ? "enabled" : ""}`}>{deployment.enabled ? t("common.enabled") : t("common.disabled")}</span>
+          {/* A drifted deployment is not routing whatever the enabled flag says,
+              so the state that decides that has to be visible in the row. */}
+          {review && review.state !== "current" && (
+            <small className="capability-review-state" data-state={review.state}>
+              {review.state === "drifted" ? t("deployments.capabilitiesUnsupported") : t("deployments.capabilitiesToReview")}
+            </small>
+          )}
         </div>
         <div className="row-actions deployment-compact-actions">
           <InlineTestControl state={testState} latency={deployment.last_test_latency_millis} onTest={() => test.mutate()} />
@@ -243,6 +251,7 @@ function DeploymentRow({
           <DeploymentFact label={t("deployments.context")} value={deployment.capabilities.max_context_tokens || t("deployments.upstreamApplies")} meta={deployment.capabilities.max_context_tokens ? t("deployments.tokens") : t("deployments.undeclared")} />
           <DeploymentFact label={t("deployments.maxOutput")} value={deployment.capabilities.max_output_tokens || t("deployments.upstreamApplies")} meta={deployment.capabilities.max_output_tokens ? t("deployments.tokens") : t("deployments.undeclared")} />
         </dl>
+        <CapabilityReviewNotice review={review} />
         {deployment.pricing_quarantined && <div className="notice warning deployment-pricing-warning"><strong>{t("deployments.pricingQuarantined")}</strong><span>{deployment.pricing_quarantine_reason}</span><button className="button ghost" onClick={() => setConfirmingRestore(true)}>{t("deployments.confirmRestoredPricing")}</button></div>}
         <div className="deployment-pricing-grid single">
           <section className="deployment-pricing-panel">
@@ -285,6 +294,62 @@ function DeploymentRow({
       {pricing && <PriceVersionForm deployment={deployment} current={activePrice} onClose={() => setPricing(false)} />}
 	  {confirmingRestore && <RestorePricingConfirm deployment={deployment} onClose={() => setConfirmingRestore(false)} />}
     </article>
+  );
+}
+
+// The saved capability answer and what supports it now can diverge without the
+// deployment being touched, so the console states which it is rather than
+// leaving the operator to infer it from a deployment that stopped serving.
+function CapabilityReviewNotice({ review }: { review: CapabilityReview | undefined }) {
+  const { t } = useTranslation();
+  if (!review || review.state === "current") return null;
+  const drifted = review.state === "drifted";
+  const names = (values: string[] | undefined) =>
+    (values ?? []).map((name) => t(`capabilities.${name}`)).join(t("common.listSeparator"));
+  return (
+    <div className={`notice ${drifted ? "warning" : ""} deployment-capability-review`}>
+      <strong>{drifted ? t("deployments.capabilitiesUnsupported") : t("deployments.capabilitiesToReview")}</strong>
+      <span>{t(`deployments.reviewReasons.${review.reason ?? "catalog_revision_advanced"}`)}</span>
+      <dl className="deployment-review-facts">
+        <div>
+          <dt>{t("deployments.capabilitySource")}</dt>
+          <dd>{t(`deployments.capabilitySources.${review.source}`, { defaultValue: review.source })}</dd>
+        </div>
+        <div>
+          <dt>{t("deployments.noLongerSupported")}</dt>
+          <dd>{names(review.no_longer_supported) || "—"}</dd>
+        </div>
+        <div>
+          <dt>{t("deployments.availableForReview")}</dt>
+          <dd>{names(review.available_for_review) || "—"}</dd>
+        </div>
+      </dl>
+      <span className="deployment-review-consequence">
+        {drifted ? t("deployments.driftedConsequence") : t("deployments.reviewAvailableConsequence")}
+      </span>
+    </div>
+  );
+}
+
+// What the narrowing would do to live routing, listed per route so the operator
+// confirms against the actual consequence rather than a warning about one.
+function CapabilityImpactNotice({ impact }: { impact: CapabilityPreflight }) {
+  const { t } = useTranslation();
+  const removed = impact.removed_capabilities.map((name) => t(`capabilities.${name}`)).join(t("common.listSeparator"));
+  return (
+    <div className={`notice ${impact.blocking ? "warning" : ""} deployment-capability-impact`}>
+      <strong>{impact.blocking ? t("deployments.routesLoseTheirOnlyCandidate") : t("deployments.routesAffected")}</strong>
+      <span>{t("deployments.impactSummary", { capabilities: removed, count: impact.affected_routes.length })}</span>
+      <ul className="deployment-impact-list">
+        {impact.affected_routes.map((route) => (
+          <li key={`${route.route_id}-${route.capability}`} data-sole={route.sole_candidate}>
+            <code>{route.public_model}</code>
+            <span>{t(`capabilities.${route.capability}`)}</span>
+            <small>{route.sole_candidate ? t("deployments.soleCandidate") : t("deployments.otherCandidateRemains")}</small>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
@@ -550,9 +615,33 @@ function DeploymentForm({
       onClose();
     },
   });
+  // Turning a capability off is allowed in place, and that is exactly why it
+  // needs asking about first: the router drops candidates that lack a required
+  // capability, so a public model can lose its last one and start rejecting
+  // requests that used to work. The server answers which routes those are.
+  const narrowing = Boolean(current && deploymentCapabilityNames.some((name) => current.capabilities[name] && !capabilities[name]));
+  const preflight = useMutation({
+    mutationFn: () => api.preflightDeploymentCapabilities(current!.id, capabilities),
+    onSuccess: (result) => {
+      // Nothing would be stranded, so there is nothing to confirm.
+      if (!result.affected_routes.length) mutation.mutate();
+    },
+  });
+  const impact = preflight.data;
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (formValid) mutation.mutate();
+    if (!formValid) return;
+    if (narrowing && !impact) {
+      preflight.mutate();
+      return;
+    }
+    mutation.mutate();
+  };
+  // Editing the capabilities again invalidates the answer that was given about
+  // them; a stale confirmation must not carry over to a different change.
+  const changeCapabilities = (next: ProviderCapabilities) => {
+    if (preflight.data || preflight.isError) preflight.reset();
+    setCapabilities(next);
   };
   const selectedProvider = enabledProviders.find((item) => item.id === providerID);
   const selectableBindings = providerBindings(selectedProvider);
@@ -819,7 +908,7 @@ function DeploymentForm({
                       type="checkbox"
                       disabled={unavailable && !capabilities[name]}
                       checked={capabilities[name]}
-                      onChange={(event) => setCapabilities(updateDeploymentCapability(capabilities, name, event.target.checked))}
+                      onChange={(event) => changeCapabilities(updateDeploymentCapability(capabilities, name, event.target.checked))}
                     />
                     <span>{t(`capabilities.${name}`)}{unavailable && <small>{t("providers.unsupportedByInterface")}</small>}</span>
                   </label>
@@ -847,11 +936,20 @@ function DeploymentForm({
               <Field label={t("deployments.concurrencyLimit")} hint={t("deployments.concurrencyHint")}><input min="0" type="number" value={maxConcurrency} onChange={(event) => setMaxConcurrency(Number(event.target.value))} /></Field>
             </div>
           </section>
+          {impact && <CapabilityImpactNotice impact={impact} />}
           <div className="deployment-release-note"><strong>{current?.enabled ? t("deployments.updateLiveWarning") : t("deployments.savedDisabled")}</strong><span>{current?.enabled ? t("deployments.updateLiveDescription") : t("deployments.savedDisabledDescription")}</span></div>
-          {mutation.isError && <ErrorState error={mutation.error} />}
+          {(mutation.isError || preflight.isError) && <ErrorState error={mutation.error || preflight.error} />}
           <div className="form-actions deployment-form-actions">
             <button type="button" className="button ghost" onClick={onClose}>{t("common.cancel")}</button>
-            <button className="button primary" disabled={mutation.isPending || !formValid}>{current ? t("deployments.save") : template ? t("deployments.saveReplacement") : t("deployments.saveDisabled")}</button>
+            <button className={`button ${impact?.blocking ? "danger" : "primary"}`} disabled={mutation.isPending || preflight.isPending || !formValid}>
+              {preflight.isPending
+                ? t("deployments.checkingRouteImpact")
+                : impact
+                  ? t("deployments.saveDespiteImpact")
+                  : narrowing
+                    ? t("deployments.checkRouteImpact")
+                    : current ? t("deployments.save") : template ? t("deployments.saveReplacement") : t("deployments.saveDisabled")}
+            </button>
           </div>
         </form>
       )}
