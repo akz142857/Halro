@@ -455,7 +455,9 @@ func (c *Catalog) Lookup(key Key) (Entry, bool) {
 	agnostic := key
 	agnostic.Region = ""
 	if entry, ok := c.entries[agnostic.canonical()]; ok {
-		entry.Key = key
+		// The entry keeps its own identity rather than adopting the caller's
+		// region. Its revision identifies the claim, and a claim that holds in
+		// every region must not hash differently depending on who asked.
 		return entry, true
 	}
 	return Unknown(key), false

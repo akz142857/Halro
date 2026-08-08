@@ -376,13 +376,49 @@ export interface Provider {
   updated_at: string;
 }
 
+export type ModelCapabilityStatus = "known" | "partial" | "unknown" | "conflicting";
+
+export type ModelCapabilitySource =
+  | "builtin_catalog"
+  | "provider_metadata"
+  | "verified_probe"
+  | "operator_declared"
+  | "unsupported";
+
+export interface ModelProfileCandidate {
+  binding_id: string;
+  profile_id: string;
+  status: ModelCapabilityStatus;
+  selected: boolean;
+  capabilities: ProviderCapabilities;
+  profile_capabilities: ProviderCapabilities;
+}
+
 export interface ProviderModelDescriptor {
   id: string;
   owned_by?: string;
+  status: ModelCapabilityStatus;
+  capabilities: ProviderCapabilities;
+  capability_evidence: CapabilityEvidenceSet;
+  capability_source: ModelCapabilitySource;
+  /** Only a builtin catalog entry may arrive with capabilities pre-checked. */
+  preselect: boolean;
+  model_revision: string;
+  profile_candidates: ModelProfileCandidate[];
+}
+
+/** A binding whose catalog could not be read. Its models are absent from the
+ * list; that absence never means a capability is unsupported. */
+export interface DegradedBinding {
+  binding_id: string;
+  profile_id: string;
+  error_class: string;
 }
 
 export interface ProviderModelCatalog {
   items: ProviderModelDescriptor[];
+  catalog_revision: string;
+  degraded_bindings?: DegradedBinding[];
   fetched_at: string;
   expires_at: string;
   cached: boolean;
