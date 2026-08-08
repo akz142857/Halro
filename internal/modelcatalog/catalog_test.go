@@ -98,8 +98,15 @@ func TestRegionAgnosticEntryCoversAnyRegion(t *testing.T) {
 	if !ok {
 		t.Fatal("region-agnostic entry did not cover a regional key")
 	}
-	if entry.Key.Region != "us-east-1" {
-		t.Fatalf("resolved key region=%q", entry.Key.Region)
+	// The revision must identify the claim, not the question. A caller that
+	// knows the region and one that does not have to agree, or every create
+	// carrying a revision read from a region-less listing would conflict.
+	agnostic, _ := Builtin().Lookup(known)
+	if entry.Revision() != agnostic.Revision() {
+		t.Fatalf("revision changed with the caller's region: %q vs %q", entry.Revision(), agnostic.Revision())
+	}
+	if entry.Key.Region != "" {
+		t.Fatalf("entry adopted the caller's region: %q", entry.Key.Region)
 	}
 }
 

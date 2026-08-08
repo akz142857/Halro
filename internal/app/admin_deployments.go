@@ -5,30 +5,60 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/id"
+	"github.com/akz142857/Halro/internal/modelcatalog"
 	"github.com/akz142857/Halro/internal/provider"
 	bedrockprovider "github.com/akz142857/Halro/internal/provider/bedrock"
 	"github.com/go-chi/chi/v5"
 )
 
 type deploymentInput struct {
-	Name           string                       `json:"name"`
-	ProviderID     string                       `json:"provider_id"`
-	ProviderModel  string                       `json:"provider_model"`
-	TargetKind     domain.DeploymentTargetKind  `json:"target_kind,omitempty"`
-	AccessSurface  domain.AccessSurface         `json:"access_surface,omitempty"`
-	ProfileID      domain.ProviderProfileID     `json:"profile_id,omitempty"`
-	BindingID      string                       `json:"binding_id,omitempty"`
-	Region         string                       `json:"region"`
-	Capabilities   *domain.ProviderCapabilities `json:"capabilities,omitempty"`
-	MaxConcurrency int64                        `json:"max_concurrency"`
-	Priority       int                          `json:"priority"`
-	Weight         int                          `json:"weight"`
-	Enabled        bool                         `json:"enabled"`
+	Name          string                       `json:"name"`
+	ProviderID    string                       `json:"provider_id"`
+	ProviderModel string                       `json:"provider_model"`
+	TargetKind    domain.DeploymentTargetKind  `json:"target_kind,omitempty"`
+	AccessSurface domain.AccessSurface         `json:"access_surface,omitempty"`
+	ProfileID     domain.ProviderProfileID     `json:"profile_id,omitempty"`
+	BindingID     string                       `json:"binding_id,omitempty"`
+	Region        string                       `json:"region"`
+	Capabilities  *domain.ProviderCapabilities `json:"capabilities,omitempty"`
+	// ModelRevision is the per-model catalog revision the client read. An empty
+	// value skips the check; a stale one is a conflict, never a silent accept.
+	ModelRevision string `json:"model_revision,omitempty"`
+	// Mode must be operator_declared for a model the catalog does not cover.
+	// Requiring the word keeps "I know what this model does" an explicit act
+	// rather than something inferred from a filled-in form.
+	Mode           string `json:"mode,omitempty"`
+	MaxConcurrency int64  `json:"max_concurrency"`
+	Priority       int    `json:"priority"`
+	Weight         int    `json:"weight"`
+	Enabled        bool   `json:"enabled"`
+}
+
+const deploymentModeOperatorDeclared = "operator_declared"
+
+// adminDeploymentInputError separates "you asked for something impossible" from
+// "the catalog moved under you". The second is a conflict with a stable code:
+// the console refreshes the model and the operator re-confirms, rather than the
+// server quietly applying whatever the catalog says now.
+func adminDeploymentInputError(writer http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, errModelCapabilityChanged):
+		writeJSON(writer, http.StatusConflict, map[string]string{
+			"error": err.Error(), "code": "model_capability_changed",
+		})
+	case errors.Is(err, errModelCapabilitiesUnknown):
+		writeJSON(writer, http.StatusBadRequest, map[string]string{
+			"error": err.Error(), "code": "model_capabilities_unknown",
+		})
+	default:
+		adminBadRequest(writer, err.Error())
+	}
 }
 
 func (r *Runtime) createAdminDeployment(writer http.ResponseWriter, request *http.Request) {
@@ -49,9 +79,9 @@ func (r *Runtime) createAdminDeployment(writer http.ResponseWriter, request *htt
 	r.adminTopologyMu.Lock()
 	defer r.adminTopologyMu.Unlock()
 	now := time.Now().UTC()
-	deployment, err := r.deploymentFromInput(request, deploymentID, input, nil, now, now)
+	deployment, err := r.deploymentFromInput(request, deploymentID, input, nil, nil, now, now)
 	if err != nil {
-		adminBadRequest(writer, err.Error())
+		adminDeploymentInputError(writer, err)
 		return
 	}
 	deployment, err = r.store.PutDeployment(request.Context(), deployment, 0)
@@ -98,9 +128,9 @@ func (r *Runtime) updateAdminDeployment(writer http.ResponseWriter, request *htt
 		(input.ProfileID == "" || input.ProfileID == current.ProfileID) {
 		currentEvidence = current.CapabilityEvidence
 	}
-	deployment, err := r.deploymentFromInput(request, current.ID, input, currentEvidence, current.CreatedAt, time.Now().UTC())
+	deployment, err := r.deploymentFromInput(request, current.ID, input, currentEvidence, &current.Capabilities, current.CreatedAt, time.Now().UTC())
 	if err != nil {
-		adminBadRequest(writer, err.Error())
+		adminDeploymentInputError(writer, err)
 		return
 	}
 	targetChanged := deployment.ProviderID != current.ProviderID ||
@@ -297,24 +327,21 @@ func (r *Runtime) testAdminDeployment(writer http.ResponseWriter, request *http.
 	writeJSON(writer, http.StatusOK, result)
 }
 
-func (r *Runtime) deploymentFromInput(request *http.Request, deploymentID string, input deploymentInput, currentEvidence domain.CapabilityEvidenceSet, createdAt, updatedAt time.Time) (domain.Deployment, error) {
+func (r *Runtime) deploymentFromInput(request *http.Request, deploymentID string, input deploymentInput, currentEvidence domain.CapabilityEvidenceSet, priorCapabilities *domain.ProviderCapabilities, createdAt, updatedAt time.Time) (domain.Deployment, error) {
 	instance, err := r.store.GetProvider(request.Context(), input.ProviderID)
 	if err != nil || instance.DeletedAt != nil || (input.Enabled && !instance.Enabled) {
 		return domain.Deployment{}, errors.New("deployment provider is unavailable")
 	}
-	binding, err := resolveDeploymentBinding(instance, input.BindingID, input.ProfileID)
+	model := strings.TrimSpace(input.ProviderModel)
+	resolution, err := resolveDeploymentTarget(instance, input, model, deploymentRegion(instance, input), priorCapabilities)
 	if err != nil {
 		return domain.Deployment{}, err
 	}
-	capabilities := binding.Capabilities
-	if input.Capabilities != nil {
-		capabilities = *input.Capabilities
-		if !domain.ProviderCapabilitiesSubset(capabilities, binding.Capabilities) {
-			return domain.Deployment{}, errors.New("deployment capabilities exceed provider capabilities")
-		}
+	binding, capabilities := resolution.binding, resolution.capabilities
+	if !domain.ProviderCapabilitiesSubset(capabilities, binding.Capabilities) {
+		return domain.Deployment{}, errors.New("deployment capabilities exceed provider capabilities")
 	}
-	if input.AccessSurface != "" && input.AccessSurface != binding.AccessSurface ||
-		input.ProfileID != "" && input.ProfileID != binding.ProfileID {
+	if input.AccessSurface != "" && input.AccessSurface != binding.AccessSurface {
 		return domain.Deployment{}, errors.New("deployment access surface or profile does not match provider")
 	}
 	if err := bedrockprovider.ValidateProfileModel(binding.ProfileID, input.ProviderModel); err != nil {
@@ -337,18 +364,10 @@ func (r *Runtime) deploymentFromInput(request *http.Request, deploymentID string
 	if weight == 0 {
 		weight = 1
 	}
-	region := strings.TrimSpace(input.Region)
-	if region == "" && strings.HasPrefix(string(instance.AccessSurface), "bedrock-") {
-		if parsed, parseErr := url.Parse(instance.BaseURL); parseErr == nil {
-			parts := strings.Split(parsed.Hostname(), ".")
-			if len(parts) > 1 {
-				region = parts[1]
-			}
-		}
-	}
+	region := deploymentRegion(instance, input)
 	deployment := domain.Deployment{
 		ID: deploymentID, Name: strings.TrimSpace(input.Name), ProviderID: input.ProviderID,
-		ProviderModel: strings.TrimSpace(input.ProviderModel), TargetKind: targetKind, Capabilities: capabilities,
+		ProviderModel: model, TargetKind: targetKind, Capabilities: capabilities,
 		AccessSurface: binding.AccessSurface, ProfileID: binding.ProfileID, BindingID: binding.ID,
 		Region:             region,
 		CapabilityEvidence: evidence,
@@ -390,25 +409,150 @@ func deploymentTargetKind(providerType domain.ProviderType, surface domain.Acces
 	}
 }
 
-func resolveDeploymentBinding(instance domain.ProviderInstance, bindingID string, profileID domain.ProviderProfileID) (domain.ProviderProfileBinding, error) {
-	bindings := instance.EffectiveProfileBindings()
-	if bindingID != "" {
-		binding, ok := instance.ProfileBinding(bindingID)
-		if !ok || !binding.Enabled {
-			return domain.ProviderProfileBinding{}, errors.New("deployment provider profile binding is unavailable")
+// deploymentRegion is the region the deployment runs in, taken from the request
+// or derived from a regional provider's endpoint. The catalog is keyed on it
+// because the same identifier can behave differently per region.
+func deploymentRegion(instance domain.ProviderInstance, input deploymentInput) string {
+	if region := strings.TrimSpace(input.Region); region != "" {
+		return region
+	}
+	return providerRegion(instance)
+}
+
+// providerRegion derives the region a regional provider's endpoint points at.
+// Model discovery and deployment creation must agree on it: they key the same
+// catalog lookup, and a mismatch would make every create carrying a revision
+// read from the listing conflict.
+func providerRegion(instance domain.ProviderInstance) string {
+	if !strings.HasPrefix(string(instance.AccessSurface), "bedrock-") {
+		return ""
+	}
+	parsed, err := url.Parse(instance.BaseURL)
+	if err != nil {
+		return ""
+	}
+	parts := strings.Split(parsed.Hostname(), ".")
+	if len(parts) > 1 {
+		return parts[1]
+	}
+	return ""
+}
+
+// errModelCapabilityChanged is returned when the catalog moved under a client
+// that was mid-edit. It carries a distinct status so the console can refresh
+// and re-confirm rather than silently accepting whatever the catalog says now.
+var errModelCapabilityChanged = errors.New("model capabilities changed since they were read; refresh and confirm")
+
+// errModelCapabilitiesUnknown is returned when nothing establishes what a model
+// does. It is not an outage: the operator declares the model explicitly.
+var errModelCapabilitiesUnknown = errors.New("model capabilities are unknown; declare them explicitly with mode=operator_declared")
+
+// deploymentResolution is what the server decided, from the catalog and the
+// provider topology, rather than from what the client claimed.
+type deploymentResolution struct {
+	binding      domain.ProviderProfileBinding
+	capabilities domain.ProviderCapabilities
+	entry        modelcatalog.Entry
+	declared     bool
+}
+
+// resolveDeploymentTarget picks the binding a model should run through and the
+// capabilities it may keep.
+//
+// binding_id and profile_id from the client are treated as filters, never as
+// authority: a client cannot name a binding to obtain capabilities the catalog
+// does not support for that model.
+func resolveDeploymentTarget(instance domain.ProviderInstance, input deploymentInput, model, region string, prior *domain.ProviderCapabilities) (deploymentResolution, error) {
+	var candidates []domain.ProviderProfileBinding
+	for _, binding := range instance.EffectiveProfileBindings() {
+		if !binding.Enabled {
+			continue
 		}
-		return binding, nil
+		if input.BindingID != "" && binding.ID != input.BindingID {
+			continue
+		}
+		if input.ProfileID != "" && binding.ProfileID != input.ProfileID {
+			continue
+		}
+		candidates = append(candidates, binding)
 	}
-	var matches []domain.ProviderProfileBinding
-	for _, binding := range bindings {
-		if binding.Enabled && (profileID == "" || binding.ProfileID == profileID) {
-			matches = append(matches, binding)
+	if len(candidates) == 0 {
+		return deploymentResolution{}, errors.New("deployment provider profile binding is unavailable")
+	}
+	slices.SortFunc(candidates, func(left, right domain.ProviderProfileBinding) int {
+		return strings.Compare(string(left.ProfileID), string(right.ProfileID))
+	})
+
+	// Omitting capabilities on an edit means "leave them as they are". It used
+	// to mean "inherit the profile ceiling", which is the default this whole
+	// change exists to remove.
+	retained := input.Capabilities
+	if retained == nil {
+		retained = prior
+	}
+	var known, unknown []deploymentResolution
+	for _, binding := range candidates {
+		key := modelcatalog.Key{ProviderType: instance.Type, Profile: binding.ProfileID, Model: model, Region: region}
+		entry, found := modelcatalog.Builtin().Lookup(key)
+		resolution := deploymentResolution{
+			binding:      binding,
+			capabilities: modelcatalog.Clamp(entry.Capabilities, binding.Capabilities),
+			entry:        entry,
+		}
+		if found && entry.Status == modelcatalog.StatusKnown {
+			known = append(known, resolution)
+			continue
+		}
+		unknown = append(unknown, resolution)
+	}
+
+	// A known model narrows to what the catalog established for it.
+	for _, resolution := range known {
+		if retained == nil || domain.ProviderCapabilitiesSubset(*retained, resolution.capabilities) {
+			if retained != nil {
+				resolution.capabilities = *retained
+			}
+			return resolution, checkModelRevision(input.ModelRevision, resolution.entry)
 		}
 	}
-	if len(matches) != 1 {
-		return domain.ProviderProfileBinding{}, errors.New("binding_id is required when provider profile binding is ambiguous")
+	if len(known) > 0 {
+		return deploymentResolution{}, errors.New("deployment capabilities exceed what the catalog establishes for this model")
 	}
-	return matches[0], nil
+
+	// Nothing is established. The operator may still deploy the model, but the
+	// declaration has to be explicit and stays Declared evidence.
+	// Declaring is an act the operator performs once. An edit that stays inside
+	// an existing declaration is not a new claim, and narrowing one is a
+	// reduction — neither should demand the word again. Anything wider does.
+	covered := prior != nil && retained != nil && domain.ProviderCapabilitiesSubset(*retained, *prior)
+	if input.Mode != deploymentModeOperatorDeclared && !covered {
+		return deploymentResolution{}, errModelCapabilitiesUnknown
+	}
+	if retained == nil || !retained.AnyOperation() {
+		return deploymentResolution{}, errors.New("an operator-declared model must declare at least one core operation")
+	}
+	if err := modelcatalog.ValidateDependencies(*retained); err != nil {
+		return deploymentResolution{}, err
+	}
+	for _, resolution := range unknown {
+		if domain.ProviderCapabilitiesSubset(*retained, resolution.binding.Capabilities) {
+			resolution.capabilities = *retained
+			resolution.declared = true
+			return resolution, checkModelRevision(input.ModelRevision, resolution.entry)
+		}
+	}
+	return deploymentResolution{}, errors.New("no enabled provider binding supports the declared capabilities")
+}
+
+// checkModelRevision compares the revision the client read against the one that
+// applies now. It is per-model on purpose: a catalog-wide digest would rotate
+// whenever any unrelated model appeared, and operators would learn to retry
+// through the conflict until it meant nothing.
+func checkModelRevision(claimed string, entry modelcatalog.Entry) error {
+	if claimed == "" || claimed == entry.Revision() {
+		return nil
+	}
+	return errModelCapabilityChanged
 }
 
 func deploymentCapabilityEvidence(capabilities domain.ProviderCapabilities, providerEvidence, currentEvidence domain.CapabilityEvidenceSet) domain.CapabilityEvidenceSet {

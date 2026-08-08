@@ -310,8 +310,12 @@ func applySelectedCandidate(instance domain.ProviderInstance, model *adminProvid
 	model.ModelRevision = entry.Revision()
 }
 
+// modelCatalogKey uses the provider's own region so discovery resolves the same
+// entry — and therefore the same revision — that creating a deployment will.
 func modelCatalogKey(instance domain.ProviderInstance, binding domain.ProviderProfileBinding, model string) modelcatalog.Key {
-	return modelcatalog.Key{ProviderType: instance.Type, Profile: binding.ProfileID, Model: model}
+	return modelcatalog.Key{
+		ProviderType: instance.Type, Profile: binding.ProfileID, Model: model, Region: providerRegion(instance),
+	}
 }
 
 func candidateRank(candidate modelProfileCandidate) int {
