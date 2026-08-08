@@ -103,12 +103,7 @@ func (r *Runtime) listAdminCredentials(writer http.ResponseWriter, request *http
 		if string(item.Type) == webhookCredentialType {
 			continue
 		}
-		views = append(views, credentialView{
-			ID: item.ID, Name: item.Name, Type: item.Type,
-			AccessSurface: item.AccessSurface, Scheme: item.Scheme,
-			SecretConfigured: len(item.Ciphertext) > 0, KeyVersion: item.KeyVersion,
-			Revision: item.Revision,
-		})
+		views = append(views, credentialViewFrom(item))
 	}
 	writeResourcePage(writer, request, views, func(item credentialView) string { return item.ID })
 }
@@ -120,12 +115,7 @@ func (r *Runtime) getAdminCredential(writer http.ResponseWriter, request *http.R
 		return
 	}
 	writer.Header().Set("ETag", revisionETag(item.Revision))
-	writeJSON(writer, http.StatusOK, credentialView{
-		ID: item.ID, Name: item.Name, Type: item.Type,
-		AccessSurface: item.AccessSurface, Scheme: item.Scheme,
-		SecretConfigured: len(item.Ciphertext) > 0, KeyVersion: item.KeyVersion,
-		Revision: item.Revision,
-	})
+	writeJSON(writer, http.StatusOK, credentialViewFrom(item))
 }
 
 func (r *Runtime) listAdminProviders(writer http.ResponseWriter, request *http.Request) {

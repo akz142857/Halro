@@ -540,6 +540,31 @@ func TestAdminCredentialViewPreservesBedrockBoundBaseURLForRotation(t *testing.T
 			if view.BoundBaseURL != test.baseURL+":443" || view.AccessSurface != test.surface || view.Scheme != test.scheme {
 				t.Fatalf("credential view=%#v", view)
 			}
+			detail := performAdminMutation(t, runtime, cookie, csrf, http.MethodGet, "/admin/api/v1/credentials/"+view.ID, "", nil)
+			if detail.Code != http.StatusOK {
+				t.Fatalf("detail status=%d body=%s", detail.Code, detail.Body.String())
+			}
+			var detailView credentialView
+			if err := json.Unmarshal(detail.Body.Bytes(), &detailView); err != nil {
+				t.Fatal(err)
+			}
+			if detailView.BoundBaseURL != test.baseURL+":443" {
+				t.Fatalf("detail dropped bound base URL: %#v", detailView)
+			}
+			list := performAdminMutation(t, runtime, cookie, csrf, http.MethodGet, "/admin/api/v1/credentials", "", nil)
+			if list.Code != http.StatusOK {
+				t.Fatalf("list status=%d body=%s", list.Code, list.Body.String())
+			}
+			var page struct {
+				Items []credentialView `json:"items"`
+			}
+			if err := json.Unmarshal(list.Body.Bytes(), &page); err != nil {
+				t.Fatal(err)
+			}
+			listedIndex := slices.IndexFunc(page.Items, func(item credentialView) bool { return item.ID == view.ID })
+			if listedIndex < 0 || page.Items[listedIndex].BoundBaseURL != test.baseURL+":443" {
+				t.Fatalf("list dropped bound base URL: %#v", page.Items)
+			}
 			rotated := performAdminMutation(t, runtime, cookie, csrf, http.MethodPut, "/admin/api/v1/credentials/"+view.ID, `"1"`, map[string]any{
 				"name": test.name, "type": "bedrock", "base_url": view.BoundBaseURL,
 				"access_surface": test.surface, "scheme": test.scheme, "secret": "rotated-secret",

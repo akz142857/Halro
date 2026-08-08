@@ -38,6 +38,14 @@ function defaultBaseURL(type: ProviderType) {
   return "https://api.openai.com";
 }
 
+function displayBoundBaseURL(value: string) {
+  try {
+    return new URL(value).origin;
+  } catch {
+    return value;
+  }
+}
+
 const bedrockProfiles = [
   "bedrock.runtime.converse.text.v1",
   "bedrock.runtime.invoke.titan-embed-text-v2.v1",
@@ -286,6 +294,7 @@ function CredentialRow({ credential, useCount, highlighted, onUsageClick }: { cr
   const [rotating, setRotating] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const queryClient = useQueryClient();
+  const displayBaseURL = displayBoundBaseURL(credential.bound_base_url);
   const remove = useMutation({
     mutationFn: (reauth: ReauthValues) => api.deleteCredential(credential.id, credential.revision, reauth),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["credentials"] }),
@@ -294,8 +303,8 @@ function CredentialRow({ credential, useCount, highlighted, onUsageClick }: { cr
     <>
       <article className={`credential-row ${highlighted ? "resource-highlight" : ""}`}>
         <span className="provider-icon credential-icon" aria-hidden="true">K{credential.key_version}</span>
-        <div className="credential-compact-identity"><strong>{credential.name}</strong><small>{t(`providers.types.${credential.type}`)}</small><code className="credential-identity-endpoint">{credential.bound_base_url}</code></div>
-        <div className="credential-compact-fact credential-endpoint"><small>{t("providers.boundURL")}</small><strong>{credential.bound_base_url}</strong></div>
+        <div className="credential-compact-identity"><strong>{credential.name}</strong><small>{t(`providers.types.${credential.type}`)}</small><code className="credential-identity-endpoint">{displayBaseURL}</code></div>
+        <div className="credential-compact-fact credential-endpoint"><small>{t("providers.boundURL")}</small><strong>{displayBaseURL}</strong></div>
         <div className="credential-compact-fact credential-usage"><small>{t("providers.usage")}</small>{useCount > 0 ? <button className="resource-link inline" onClick={onUsageClick}>{t("providers.credentialUsage", { count: useCount })} →</button> : <strong>{t("providers.credentialUsage", { count: useCount })}</strong>}</div>
         <div className="credential-compact-fact credential-generation"><small>{t("providers.generation")}</small><strong>{t("providers.keyGeneration", { version: credential.key_version })}</strong></div>
         <div className="row-actions credential-actions">
@@ -311,6 +320,7 @@ function CredentialRow({ credential, useCount, highlighted, onUsageClick }: { cr
             <p>{t("providers.credentialDetailsDescription")}</p>
           </header>
           <dl className="credential-detail-grid">
+            <div><dt>{t("providers.normalizedBoundURL")}</dt><dd><code>{credential.bound_base_url}</code></dd></div>
             <div><dt>{t("providers.surface")}</dt><dd><code>{credential.access_surface}</code></dd></div>
             <div><dt>{t("providers.scheme")}</dt><dd><code>{credential.scheme}</code></dd></div>
             <div><dt>{t("providers.credentialID")}</dt><dd><code>{credential.id}</code></dd></div>
@@ -342,7 +352,7 @@ function CredentialForm({
   const { t } = useTranslation();
   const [name, setName] = useState(current?.name ?? "");
   const [type, setType] = useState<ProviderType>(current?.type ?? "openai");
-  const [baseURL, setBaseURL] = useState(current?.bound_base_url ?? defaultBaseURL(current?.type ?? "openai"));
+  const [baseURL, setBaseURL] = useState(current ? displayBoundBaseURL(current.bound_base_url) : defaultBaseURL("openai"));
   const [bedrockSurface, setBedrockSurface] = useState<BedrockCredentialSurface>(
     current?.access_surface === "bedrock-mantle" || current?.access_surface === "bedrock-agent-runtime"
       ? current.access_surface

@@ -183,9 +183,24 @@ describe("ProvidersPage profile and credential bindings", () => {
     expect(screen.getByText("没有匹配结果")).toBeVisible();
 
     fireEvent.click(screen.getByRole("tab", { name: /凭据库/ }));
+    expect(screen.getAllByText("https://api.openai.com").some((element) => element.textContent === "https://api.openai.com")).toBe(true);
+    expect(screen.queryByText("https://api.openai.com:443")).not.toBeInTheDocument();
     expect(screen.queryByText("凭据方案")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "查看详情" }));
     expect(screen.getByText("凭据方案")).toBeVisible();
+    expect(screen.getByText("规范化绑定端点")).toBeVisible();
+    expect(screen.getByText("https://api.openai.com:443")).toBeVisible();
+  });
+
+  it("keeps non-default ports visible in credential rows", async () => {
+    vi.mocked(api.credentials).mockResolvedValue({
+      items: [{ ...openAICredential, id: "credential_custom_port", bound_base_url: "https://gateway.example:8443" }],
+      next_cursor: "",
+    });
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("tab", { name: /凭据库/ }));
+    expect(screen.getAllByText("https://gateway.example:8443").length).toBeGreaterThan(0);
   });
 
   it("keeps dependent chat capabilities consistent in the provider form", async () => {
@@ -240,7 +255,7 @@ describe("ProvidersPage profile and credential bindings", () => {
       scheme: "aws.bedrock.api-key" as const,
       boundBaseURL: "https://bedrock-mantle.ap-southeast-1.api.aws:443",
     },
-  ])("preserves the bound Base URL when rotating a Bedrock $name credential", async ({ name, surface, scheme, boundBaseURL }) => {
+  ])("hides the default port while rotating a Bedrock $name credential", async ({ name, surface, scheme, boundBaseURL }) => {
     const credential: Credential = {
       id: `credential_${name}`,
       name,
@@ -259,7 +274,8 @@ describe("ProvidersPage profile and credential bindings", () => {
     fireEvent.click(await screen.findByRole("tab", { name: /凭据库/ }));
     fireEvent.click(await screen.findByRole("button", { name: "轮换" }));
     expect(screen.getByLabelText("服务商类型")).toBeDisabled();
-    expect(screen.getByLabelText(/^地址绑定/)).toHaveValue(boundBaseURL);
+    const displayBaseURL = boundBaseURL.replace(/:443$/, "");
+    expect(screen.getByLabelText(/^地址绑定/)).toHaveValue(displayBaseURL);
     fireEvent.change(screen.getByLabelText(/^新密钥/), { target: { value: "rotated-secret" } });
     fireEvent.click(screen.getByRole("button", { name: "安全轮换" }));
 
@@ -268,7 +284,7 @@ describe("ProvidersPage profile and credential bindings", () => {
       credential.id,
       expect.objectContaining({
         type: "bedrock",
-        base_url: boundBaseURL,
+        base_url: displayBaseURL,
         access_surface: surface,
         scheme,
         secret: "rotated-secret",
