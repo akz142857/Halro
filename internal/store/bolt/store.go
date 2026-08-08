@@ -21,7 +21,14 @@ import (
 	bbolt "go.etcd.io/bbolt"
 )
 
-const schemaVersion uint64 = 20
+const schemaVersion uint64 = 21
+
+// legacyCapabilityEvidence is the evidence tier this project used before
+// capability evidence was durable metadata. The domain no longer accepts it, so
+// no code path can produce it for new data. It survives here for one reason: the
+// migrations below wrote it, and migration 21 has to recognise those bytes on
+// disk in order to refuse the directory rather than misread it.
+const legacyCapabilityEvidence domain.CapabilityEvidence = "legacy"
 
 const (
 	maxPriceVersionsPerDeployment   = 10_000
@@ -159,14 +166,14 @@ var migrations = []migration{
 					if err := json.Unmarshal(raw, &value); err != nil {
 						return nil, err
 					}
-					value.CapabilityEvidence = domain.NormalizeCapabilityEvidence(value.Capabilities, value.CapabilityEvidence, domain.EvidenceLegacy)
+					value.CapabilityEvidence = domain.NormalizeCapabilityEvidence(value.Capabilities, value.CapabilityEvidence, legacyCapabilityEvidence)
 					return json.Marshal(value)
 				}
 				var value domain.Deployment
 				if err := json.Unmarshal(raw, &value); err != nil {
 					return nil, err
 				}
-				value.CapabilityEvidence = domain.NormalizeCapabilityEvidence(value.Capabilities, value.CapabilityEvidence, domain.EvidenceLegacy)
+				value.CapabilityEvidence = domain.NormalizeCapabilityEvidence(value.Capabilities, value.CapabilityEvidence, legacyCapabilityEvidence)
 				return json.Marshal(value)
 			}); err != nil {
 				return err
@@ -390,6 +397,67 @@ var migrations = []migration{
 			)
 		}
 		return migrationStep(step, "after_capability_snapshot_check")
+	}},
+	{version: 21, name: "refuse_legacy_capability_evidence", up: func(tx *bbolt.Tx, step func(string) error) error {
+		if err := migrationStep(step, "before_legacy_evidence_check"); err != nil {
+			return err
+		}
+		// The `legacy` evidence tier is gone. It meant "this bit came from a
+		// record written before capability evidence was durable metadata", and
+		// keeping it beside declared and verified meant three tiers where the
+		// design has two, with the third carrying no evidence at all.
+		//
+		// There is no rewrite. Promoting it to `declared` would assert that
+		// somebody declared these capabilities, which nobody did; demoting it to
+		// `unsupported` would turn capabilities off under a running deployment.
+		// Both invent an answer. Pre-1.0.0 there is nothing in the wild to
+		// preserve, so the directory is refused and rebuilt instead — the same
+		// choice migration 20 made, for the same reason.
+		affected := 0
+		for _, bucketName := range [][]byte{bucketProviders, bucketDeployments} {
+			bucket := tx.Bucket(bucketName)
+			if bucket == nil {
+				continue
+			}
+			if err := bucket.ForEach(func(_, raw []byte) error {
+				var record struct {
+					CapabilityEvidence map[string]string `json:"capability_evidence"`
+					Bindings           []struct {
+						CapabilityEvidence map[string]string `json:"capability_evidence"`
+					} `json:"bindings,omitempty"`
+				}
+				if err := json.Unmarshal(raw, &record); err != nil {
+					// Unreadable here means unreadable by the running build too.
+					// Counting it as affected keeps this fail-closed rather than
+					// letting a record slip through because it would not parse.
+					affected++
+					return nil
+				}
+				sets := []map[string]string{record.CapabilityEvidence}
+				for _, binding := range record.Bindings {
+					sets = append(sets, binding.CapabilityEvidence)
+				}
+				for _, set := range sets {
+					for _, value := range set {
+						if value == string(legacyCapabilityEvidence) {
+							affected++
+							return nil
+						}
+					}
+				}
+				return nil
+			}); err != nil {
+				return err
+			}
+		}
+		if affected > 0 {
+			return fmt.Errorf(
+				"this build removed the %q capability evidence tier and will not guess what %d existing provider/deployment record(s) meant by it; "+
+					"re-initialise the data directory (make reset CONFIRM=RESET) and recreate them, or keep running the previous build",
+				legacyCapabilityEvidence, affected,
+			)
+		}
+		return migrationStep(step, "after_legacy_evidence_check")
 	}},
 }
 
@@ -777,8 +845,8 @@ func (s *Store) PutBootstrap(ctx context.Context, records *BootstrapRecords) err
 	// provider profiles became durable metadata. The public bootstrap path writes
 	// declared evidence explicitly; omitted metadata is conservatively legacy.
 	normalizeCredentialProfile(&records.Credential)
-	normalizeProviderProfile(&records.Provider, domain.EvidenceLegacy)
-	normalizeDeploymentProfile(&records.Deployment, records.Provider, domain.EvidenceLegacy)
+	normalizeProviderProfile(&records.Provider, domain.EvidenceDeclared)
+	normalizeDeploymentProfile(&records.Deployment, records.Provider, domain.EvidenceDeclared)
 	if err := errors.Join(
 		records.Credential.Validate(),
 		records.Provider.Validate(),
@@ -1097,8 +1165,7 @@ func capabilityEvidenceRank(value domain.CapabilityEvidence) int {
 		return 3
 	case domain.EvidenceDeclared:
 		return 2
-	case domain.EvidenceLegacy:
-		return 1
+
 	default:
 		return 0
 	}

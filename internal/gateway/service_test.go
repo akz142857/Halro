@@ -250,8 +250,37 @@ type fakeAdapter struct {
 	release           <-chan struct{}
 }
 
-func (a *fakeAdapter) Type() string { return "fake" }
-func (a *fakeAdapter) Close()       {}
+// The registry only routes adapters that carry a profile contract, which is how
+// production wires every adapter (internal/app wraps each one in
+// LegacyAdapterBridge). The fake mirrors that instead of registering bare, so
+// these tests exercise the same shape the gateway actually serves.
+func (a *fakeAdapter) Type() string { return "openai" }
+
+func (a *fakeAdapter) Profile() provider.ProfileManifest {
+	manifest, _ := provider.BuiltinProfile(domain.ProfileOpenAIChatEmbeddings)
+	return manifest
+}
+
+func (a *fakeAdapter) Operations() provider.OperationRegistry {
+	bridge, err := provider.NewLegacyAdapterBridge(adapterOnly{a}, a.Profile(), a.CapabilityEvidence())
+	if err != nil {
+		panic(err)
+	}
+	return bridge.Operations()
+}
+
+func (a *fakeAdapter) CapabilityEvidence() domain.CapabilityEvidenceSet {
+	return domain.EvidenceForCapabilities(
+		domain.ProviderCapabilities{Chat: true, Streaming: true, Embeddings: true},
+		domain.EvidenceDeclared,
+	)
+}
+
+// adapterOnly hides the profile methods so the bridge wraps the plain adapter
+// rather than recursing into the fake's own Operations().
+type adapterOnly struct{ provider.Adapter }
+
+func (a *fakeAdapter) Close() {}
 
 func (a *fakeAdapter) Chat(_ context.Context, call provider.ChatCall) (openaiapi.ChatCompletionResponse, error) {
 	a.mu.Lock()
@@ -1100,26 +1129,31 @@ func TestProfileCompatibilityFilterRejectsFieldsThatWouldBeDropped(t *testing.T)
 	}
 }
 
-func TestSemanticCapabilityFilterRejectsOptionalSemanticsForUnprofiledLegacyTarget(t *testing.T) {
-	target := provider.Target{
-		ID: "legacy", LegacyUnprofiled: true,
-		Capabilities: provider.Capabilities{
-			Chat: true, Streaming: true, Embeddings: true, Tools: true, Vision: true,
-			JSONMode: true, DeveloperRole: true, Reasoning: true, StreamUsage: true,
-		},
-	}
-	requirements := []semantic.Requirements{
-		{Tools: true}, {ParallelTools: true}, {InputImage: true}, {StructuredJSON: true},
-		{DeveloperRole: true}, {Reasoning: true}, {StreamUsage: true}, {Seed: true},
-		{MultipleCandidates: true}, {EndUserReference: true},
-	}
-	for _, requirement := range requirements {
-		if filtered := filterSemanticCapabilities([]provider.Target{target}, requirement); len(filtered) != 0 {
-			t.Fatalf("legacy target accepted optional requirements %#v", requirement)
+// The unprofiled-target branch this test used to cover is gone: an adapter
+// without a profile contract can no longer be registered at all, so a target
+// carrying capability booleans nothing proves is unrepresentable. Registry
+// rejection is asserted in internal/provider (TestUnprofiledAdapterIsRejected).
+//
+// What remains here is the filter's own contract — that a requirement is only
+// satisfied by a capability the target actually holds.
+func TestSemanticCapabilityFilterRequiresTheCapabilityItFiltersOn(t *testing.T) {
+	capable := provider.Target{ID: "capable", Capabilities: provider.Capabilities{
+		Chat: true, Streaming: true, Tools: true, Vision: true,
+		JSONMode: true, DeveloperRole: true, Reasoning: true, StreamUsage: true,
+	}}
+	bare := provider.Target{ID: "bare", Capabilities: provider.Capabilities{Chat: true, Streaming: true}}
+
+	for _, requirement := range []semantic.Requirements{
+		{Tools: true}, {InputImage: true}, {StructuredJSON: true},
+		{DeveloperRole: true}, {Reasoning: true}, {StreamUsage: true},
+	} {
+		filtered := filterSemanticCapabilities([]provider.Target{capable, bare}, requirement)
+		if len(filtered) != 1 || filtered[0].ID != "capable" {
+			t.Fatalf("requirement %#v kept %d target(s)", requirement, len(filtered))
 		}
 	}
-	if filtered := filterSemanticCapabilities([]provider.Target{target}, semantic.Requirements{Streaming: true}); len(filtered) != 1 {
-		t.Fatal("legacy target lost basic streaming compatibility")
+	if filtered := filterSemanticCapabilities([]provider.Target{bare}, semantic.Requirements{Streaming: true}); len(filtered) != 1 {
+		t.Fatal("a plain streaming requirement dropped a chat target")
 	}
 }
 

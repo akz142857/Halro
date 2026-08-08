@@ -53,7 +53,6 @@ const (
 const (
 	EvidenceVerified    CapabilityEvidence = "verified"
 	EvidenceDeclared    CapabilityEvidence = "declared"
-	EvidenceLegacy      CapabilityEvidence = "legacy"
 	EvidenceUnsupported CapabilityEvidence = "unsupported"
 )
 
@@ -237,7 +236,7 @@ func (e CapabilityEvidenceSet) Validate(capabilities ProviderCapabilities) error
 			return fmt.Errorf("unknown capability evidence %q", name)
 		}
 		switch value {
-		case EvidenceVerified, EvidenceDeclared, EvidenceLegacy, EvidenceUnsupported:
+		case EvidenceVerified, EvidenceDeclared, EvidenceUnsupported:
 		default:
 			return fmt.Errorf("invalid capability evidence %q for %s", value, name)
 		}
@@ -272,14 +271,15 @@ func (e CapabilityEvidenceSet) Satisfies(name string, minimum CapabilityEvidence
 	return evidenceRank(actual) >= evidenceRank(minimum)
 }
 
+// evidenceRank orders the tiers. Unsupported and anything unrecognised are 0,
+// which Satisfies treats as "does not meet any minimum" — the fail-closed
+// reading, and the one an on-disk value from an older build now gets.
 func evidenceRank(value CapabilityEvidence) int {
 	switch value {
-	case EvidenceLegacy:
-		return 1
 	case EvidenceDeclared:
-		return 2
+		return 1
 	case EvidenceVerified:
-		return 3
+		return 2
 	default:
 		return 0
 	}

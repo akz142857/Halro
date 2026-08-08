@@ -191,7 +191,7 @@ func TestMetadataMigrationFromV1IsAtomicAndRecorded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(history) != 20 ||
+	if len(history) != 21 ||
 		history[0] != (MigrationRecord{Version: 1, Name: "initial_schema"}) ||
 		history[1] != (MigrationRecord{Version: 2, Name: "migration_history"}) ||
 		history[2] != (MigrationRecord{Version: 3, Name: "deployments"}) ||
@@ -211,7 +211,8 @@ func TestMetadataMigrationFromV1IsAtomicAndRecorded(t *testing.T) {
 		history[16] != (MigrationRecord{Version: 17, Name: "ledger_frame_integrity"}) ||
 		history[17] != (MigrationRecord{Version: 18, Name: "audit_anchors"}) ||
 		history[18] != (MigrationRecord{Version: 19, Name: "admin_role_backfill"}) ||
-		history[19] != (MigrationRecord{Version: 20, Name: "deployment_capability_snapshot"}) {
+		history[19] != (MigrationRecord{Version: 20, Name: "deployment_capability_snapshot"}) ||
+		history[20] != (MigrationRecord{Version: 21, Name: "refuse_legacy_capability_evidence"}) {
 		t.Fatalf("history=%#v", history)
 	}
 }
@@ -264,19 +265,17 @@ func TestProviderProfileMigrationFromV3IsAtomicAndConservative(t *testing.T) {
 				t.Fatal(err)
 			}
 
+			// A v3 directory reaches migration 6, which stamps the old
+			// `legacy` evidence tier, and then migration 21, which refuses it
+			// rather than guessing what that tier meant. Refusing to open is
+			// the intended outcome, and the message has to say what to do.
 			store, err := Open(path)
-			if err != nil {
-				t.Fatal(err)
+			if err == nil {
+				store.Close()
+				t.Fatal("a directory carrying legacy capability evidence was opened")
 			}
-			defer store.Close()
-			credential, _ := store.GetCredential(context.Background(), "credential_v3")
-			instance, _ := store.GetProvider(context.Background(), "provider_v3")
-			if credential.AccessSurface != domain.SurfaceBedrockRuntime || credential.Scheme != domain.CredentialAWSSigV4Explicit ||
-				instance.ProfileID != domain.ProfileBedrockConverseText || instance.CapabilityEvidence["chat"] != domain.EvidenceLegacy ||
-				instance.Capabilities.DeveloperRole ||
-				len(instance.Bindings) != 1 || instance.Bindings[0].ProviderID != instance.ID ||
-				instance.Bindings[0].ID != domain.DefaultProviderProfileBindingID(instance.ID, instance.ProfileID) {
-				t.Fatalf("credential=%#v provider=%#v", credential, instance)
+			if !strings.Contains(err.Error(), "legacy") || !strings.Contains(err.Error(), "make reset") {
+				t.Fatalf("refusal does not tell the operator what to do: %v", err)
 			}
 		})
 	}
@@ -285,7 +284,7 @@ func TestProviderProfileMigrationFromV3IsAtomicAndConservative(t *testing.T) {
 func TestProviderProfileBindingMigrationFromV8IsAtomicAndIdempotent(t *testing.T) {
 	root := t.TempDir()
 	templatePath := filepath.Join(root, "metadata-v8.db")
-	createV3ProviderMetadata(t, templatePath)
+	createV3ProviderMetadataWithEvidence(t, templatePath, true)
 	store, err := Open(templatePath)
 	if err != nil {
 		t.Fatal(err)
@@ -381,7 +380,18 @@ func TestProviderProfileBindingMigrationFromV8IsAtomicAndIdempotent(t *testing.T
 	}
 }
 
+// createV3ProviderMetadata writes a schema-3 directory.
+//
+// withEvidence decides whether the provider already carries complete capability
+// evidence. Without it, migration 6 fills the gaps with the retired `legacy`
+// tier and migration 21 then refuses the directory — which is the subject of
+// TestProviderProfileMigrationFromV3IsAtomicAndConservative, and merely in the
+// way of the binding-migration tests.
 func createV3ProviderMetadata(t *testing.T, path string) {
+	createV3ProviderMetadataWithEvidence(t, path, false)
+}
+
+func createV3ProviderMetadataWithEvidence(t *testing.T, path string, withEvidence bool) {
 	t.Helper()
 	db, err := bbolt.Open(path, 0o600, nil)
 	if err != nil {
@@ -405,6 +415,9 @@ func createV3ProviderMetadata(t *testing.T, path string) {
 			BaseURL: "https://bedrock-runtime.us-east-1.amazonaws.com", CredentialID: credential.ID,
 			AllowedHosts: []string{"bedrock-runtime.us-east-1.amazonaws.com"}, Capabilities: capabilities,
 			Enabled: true, CreatedAt: now, UpdatedAt: now, Revision: 1,
+		}
+		if withEvidence {
+			instance.CapabilityEvidence = domain.EvidenceForCapabilities(capabilities, domain.EvidenceDeclared)
 		}
 		for _, record := range []struct {
 			bucket []byte

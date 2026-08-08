@@ -205,11 +205,7 @@ type Target struct {
 	CapabilityEvidence     domain.CapabilityEvidenceSet
 	MaxConcurrency         int64
 	DeploymentConcurrency  int64
-	// LegacyUnprofiled marks adapters that have not crossed the versioned
-	// ProfiledAdapter boundary. They remain usable for the original core
-	// operations, but optional portable semantics must fail closed.
-	LegacyUnprofiled bool
-	operations       OperationRegistry
+	operations             OperationRegistry
 }
 
 type Registry struct {
@@ -276,10 +272,13 @@ func (r *Registry) Register(target Target) error {
 		}
 		target.operations = profiled.Operations()
 	} else {
-		if target.ProfileID != "" || target.AccessSurface != "" {
-			return errors.New("unprofiled adapter cannot claim a provider profile or access surface")
-		}
-		target.LegacyUnprofiled = true
+		// Registering an adapter with no immutable profile contract used to be
+		// allowed, with its optional semantics scrubbed to false afterwards.
+		// That made the fail-closed behaviour a property of a later branch
+		// rather than of the type, so anything that skipped the branch — a new
+		// requirement the scrub did not cover, a new call site — silently
+		// became fail-open. The state is now unrepresentable instead.
+		return errors.New("adapter must implement ProfiledAdapter; an unprofiled adapter has no capability contract to route on")
 	}
 	if target.Strategy == "" {
 		target.Strategy = "ordered"
@@ -296,26 +295,6 @@ func (r *Registry) Register(target Target) error {
 				Chat: true, Streaming: true, Embeddings: true,
 			}
 		}
-	}
-	if target.LegacyUnprofiled {
-		// A legacy adapter has no immutable profile contract proving optional
-		// semantic support. Preserve its core operations, while preventing old
-		// capability booleans from claiming richer portable semantics.
-		target.Capabilities.Tools = false
-		target.Capabilities.Vision = false
-		target.Capabilities.JSONMode = false
-		target.Capabilities.DeveloperRole = false
-		target.Capabilities.Reasoning = false
-		target.Capabilities.StreamUsage = false
-	}
-	if target.LegacyUnprofiled && len(target.CapabilityEvidence) == 0 {
-		target.CapabilityEvidence = domain.EvidenceForCapabilities(
-			domain.ProviderCapabilities{
-				Chat: target.Capabilities.Chat, Streaming: target.Capabilities.Streaming,
-				Embeddings: target.Capabilities.Embeddings,
-			},
-			domain.EvidenceLegacy,
-		)
 	}
 	target = cloneTarget(target)
 	r.mu.Lock()

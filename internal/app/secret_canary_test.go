@@ -67,7 +67,17 @@ func TestSecretCanaryNeverReachesTelemetryPersistenceOrAdminSurfaces(t *testing.
 		}
 	}()
 
-	fake := &canaryAdapter{}
+	// Registration requires a profile contract, the same as production, where
+	// every adapter is wrapped before it reaches the registry.
+	manifest, _ := provider.BuiltinProfile(domain.ProfileOpenAIChatEmbeddings)
+	fake, bridgeErr := provider.NewLegacyAdapterBridge(&canaryAdapter{}, manifest,
+		domain.EvidenceForCapabilities(
+			domain.ProviderCapabilities{Chat: true, Streaming: true, Embeddings: true},
+			domain.EvidenceDeclared,
+		))
+	if bridgeErr != nil {
+		t.Fatal(bridgeErr)
+	}
 	replacement := provider.NewRegistry()
 	if err := replacement.Register(provider.Target{
 		ID: bootstrap.RouteID, ProviderID: bootstrap.ProviderID,

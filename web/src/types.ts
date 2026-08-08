@@ -307,7 +307,7 @@ export type CredentialScheme =
   | "aws.sigv4.explicit-session"
   | "aws.bedrock.api-key";
 
-export type CapabilityEvidence = "verified" | "declared" | "legacy" | "unsupported";
+export type CapabilityEvidence = "verified" | "declared" | "unsupported";
 export type CapabilityEvidenceSet = Record<string, CapabilityEvidence>;
 
 export type ProviderType =
