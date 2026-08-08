@@ -30,6 +30,69 @@ boolean capabilities and token limits but cannot expand them. `0` means that no
 limit was declared at that layer; an inherited non-zero Provider limit cannot
 be erased by a Deployment.
 
+## Model capability catalog
+
+A profile ceiling states what a wire protocol can carry, not what one model
+behind it does. `internal/modelcatalog` holds the second claim: that a specific
+model, reached through a specific profile and region, supports a specific set of
+operations.
+
+Effective capabilities are an intersection, and every layer may only narrow:
+
+```text
+profile ceiling  ∩  model catalog entry  ∩  operator-retained subset
+```
+
+Rules the catalog holds to:
+
+- **A `/models` response is existence, not capability.** `provider.ModelLister`
+  returns identifiers and no capability claims; nothing in the catalog is
+  derived from one.
+- **Unknown means zero.** A model with no entry resolves to `unknown` with no
+  capabilities, never to the profile ceiling. The operator declares what it does
+  before it can serve.
+- **Exact model matching.** A prefix or family rule must never promote an
+  unknown future model to known capabilities. An entry with no region applies to
+  every region, which is itself a claim that the capability does not vary by
+  region.
+- **Disagreement fails closed.** When sources disagree about a capability it is
+  switched off and the model is marked `conflicting`. Silence is not denial: a
+  source that says nothing about a capability does not veto another's evidence,
+  which is why claims carry asserted-supported and asserted-unsupported
+  separately.
+- **Only the builtin catalog pre-selects.** Provider metadata is external input;
+  it may inform a claim but never arrives pre-checked, and no source but an
+  explicit probe may claim `verified` evidence.
+- **Nothing widens a profile.** Every merge is clamped to the ceiling, so
+  upstream metadata cannot loosen the deliberately pinned Gemini, Bedrock, or
+  Bedrock Mantle Beta limits.
+
+Sources are `builtin_catalog`, `provider_metadata`, `verified_probe`,
+`operator_declared`, and `unsupported`; statuses are `known`, `partial`,
+`unknown`, and `conflicting`.
+
+### Carrier and release cadence
+
+Catalog entries are Go source, reviewed like code and shipped with the binary,
+on the same release path as the profile ceilings they must stay under. There is
+no second embedded data format and no runtime catalog fetch.
+
+The consequence is deliberate: a model Halro has not shipped an entry for is
+`unknown` until either a release adds one or the operator declares it. The
+manual model-ID path therefore stays available permanently — it is the escape
+hatch for anything the catalog does not yet cover.
+
+An entry is added only against evidence. The shipped seed covers the four
+profiles that already pin exactly one model each — Titan Text Embeddings V2,
+Titan Image Generator V2, Cohere Rerank 3.5, and Nova Reel — where "profile
+implies model" is enforced in the adapter, so the model's capabilities are the
+profile's. Chat model line-ups are not seeded from names.
+
+Digests: each entry carries a per-model revision, and that is what conflict
+detection compares. The catalog-wide digest is diagnostic only, because it
+rotates whenever any unrelated model appears and would turn every concurrent
+edit into a spurious conflict.
+
 ## Shipped profiles
 
 | Profile | Stage | Chat | Stream | Embeddings | Tools/Vision/JSON | Authentication |
