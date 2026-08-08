@@ -199,6 +199,17 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 		http.MethodPost, "/admin/api/v1/deployments", "",
 		map[string]any{
 			"name": "GPT test", "provider_id": instance.ID, "provider_model": "gpt-test",
+			// gpt-test is not in the model catalog, so its capabilities are an
+			// explicit operator declaration rather than the profile ceiling.
+			"mode": "operator_declared",
+			"capabilities": map[string]any{
+				"chat": true, "streaming": true, "embeddings": true, "tools": true,
+				"vision": true, "json_mode": true, "developer_role": true,
+				"reasoning": true, "stream_usage": true,
+				// The provider declares 128/64; a deployment may narrow a
+				// non-zero limit but may not leave it undeclared.
+				"max_context_tokens": int64(128), "max_output_tokens": int64(64),
+			},
 			"max_concurrency": int64(2), "priority": 10, "weight": 1, "enabled": false,
 		},
 	)
@@ -709,7 +720,9 @@ func TestAdminBedrockProviderHotLoadsConverseCapabilities(t *testing.T) {
 	deploymentResponse := performAdminMutation(t, runtime, cookie, csrf,
 		http.MethodPost, "/admin/api/v1/deployments", "", map[string]any{
 			"name": "Claude", "provider_id": instance.ID, "provider_model": "anthropic.claude-test-v1:0",
-			"priority": 10, "weight": 1, "enabled": false,
+			"mode":         "operator_declared",
+			"capabilities": map[string]any{"chat": true, "streaming": true, "stream_usage": true},
+			"priority":     10, "weight": 1, "enabled": false,
 		})
 	if deploymentResponse.Code != http.StatusCreated {
 		t.Fatalf("deployment create status=%d body=%s", deploymentResponse.Code, deploymentResponse.Body.String())

@@ -580,6 +580,12 @@ h3 { margin-bottom: 0; font-size: 18px; }
 .deployment-model-catalog-status { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 34px; margin-top: 7px; }
 .deployment-model-catalog-status > span { color: var(--muted); font-size: var(--font-size-xs); line-height: 1.45; }
 .deployment-model-count { color: var(--lime); font: var(--font-weight-bold) var(--font-size-sm) var(--mono); }
+.deployment-model-declaration { margin-top: 0.4375rem; padding: 0.625rem 0.75rem; color: var(--muted); font-size: var(--font-size-xs); line-height: 1.5; border-left: 0.125rem solid var(--line); }
+.deployment-model-declaration.declared { color: var(--text); background: var(--accent-tint); border-left-color: var(--lime); }
+.deployment-model-degraded { margin-top: 0.4375rem; color: var(--muted); font-size: var(--font-size-xs); line-height: 1.5; }
+.model-status { color: var(--muted); font-size: var(--font-size-xs); }
+.model-status[data-status="known"] { color: var(--lime); }
+.model-status[data-status="conflicting"] { color: var(--text); }
 .deployment-model-refresh { min-height: 32px; padding: 0 8px; flex: 0 0 auto; font-size: var(--font-size-sm); }
 .deployment-capabilities.capability-grid { min-width: 0; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 0; border: 0; border-top: 1px solid var(--line); }
 .deployment-token-grid { gap: 16px; }

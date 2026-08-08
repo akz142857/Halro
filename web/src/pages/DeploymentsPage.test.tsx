@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError, api } from "../api";
-import type { Deployment, Provider } from "../types";
+import type { Deployment, Provider, ProviderCapabilities, ProviderModelDescriptor } from "../types";
 import { DeploymentsPage, localDateTimeValue } from "./DeploymentsPage";
 
 const capabilities = {
@@ -21,13 +21,44 @@ const provider = {
   created_at: "", updated_at: "",
 } as Provider;
 
+const noCapabilities: ProviderCapabilities = {
+  chat: false, streaming: false, embeddings: false, moderations: false, images: false,
+  transcriptions: false, speech: false, files: false, batches: false, rerank: false,
+  async_generate: false, tools: false, vision: false, json_mode: false,
+  developer_role: false, reasoning: false, stream_usage: false,
+  max_context_tokens: 0, max_output_tokens: 0,
+};
+
+// Unknown is the ordinary case: the builtin catalog does not seed chat model
+// line-ups, so a discovered OpenAI model carries no capabilities of its own.
+function unknownModel(id: string): ProviderModelDescriptor {
+  return {
+    id, owned_by: "openai", status: "unknown", capabilities: noCapabilities,
+    capability_evidence: {}, capability_source: "unsupported", preselect: false,
+    model_revision: `sha256:${id}`, profile_candidates: [],
+  };
+}
+
+function knownModel(id: string, capabilities: Partial<ProviderCapabilities>): ProviderModelDescriptor {
+  return {
+    id, owned_by: "openai", status: "known", capabilities: { ...noCapabilities, ...capabilities },
+    capability_evidence: { chat: "declared" }, capability_source: "builtin_catalog", preselect: true,
+    model_revision: `sha256:known-${id}`,
+    profile_candidates: [{
+      binding_id: "b-chat", profile_id: "openai.chat-embeddings.v1", status: "known", selected: true,
+      capabilities: { ...noCapabilities, ...capabilities }, profile_capabilities: { ...noCapabilities, ...capabilities },
+    }],
+  };
+}
+
 describe("deployment release workflow", () => {
   beforeEach(() => {
     vi.spyOn(api, "providers").mockResolvedValue({ items: [provider], next_cursor: "" });
     vi.spyOn(api, "deployments").mockResolvedValue({ items: [], next_cursor: "" });
     vi.spyOn(api, "routes").mockResolvedValue({ items: [], next_cursor: "" });
     vi.spyOn(api, "providerModels").mockResolvedValue({
-      items: [{ id: "gpt-5", owned_by: "openai" }, { id: "gpt-4.1", owned_by: "openai" }],
+      items: [unknownModel("gpt-5"), unknownModel("gpt-4.1")],
+      catalog_revision: "sha256:catalog",
       fetched_at: "2026-08-02T00:00:00Z",
       expires_at: "2026-08-02T00:05:00Z",
       cached: false,
@@ -50,7 +81,9 @@ describe("deployment release workflow", () => {
 
     const dialog = await screen.findByRole("dialog", { name: "创建模型部署" });
     expect(within(dialog).getByRole("heading", { name: "模型能力" })).toBeVisible();
-    expect(within(dialog).getByLabelText("对话")).toBeChecked();
+    // The deep-linked onboarding form is the same form: it opens with nothing
+    // declared rather than assuming the provider ceiling describes the model.
+    expect(within(dialog).getByLabelText("对话")).not.toBeChecked();
   });
 
   it("creates a deployment disabled and keeps route policy out of the form", async () => {
@@ -61,8 +94,10 @@ describe("deployment release workflow", () => {
     expect(screen.queryByLabelText("区域")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("默认优先级")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("权重")).not.toBeInTheDocument();
-    expect(screen.getByLabelText("对话")).toBeChecked();
-    expect(screen.getByText("已启用 9 项")).toBeVisible();
+    // A new deployment starts with nothing enabled: the provider ceiling is no
+    // longer an answer about what this model does.
+    expect(screen.getByLabelText("对话")).not.toBeChecked();
+    expect(screen.getByText("已启用 0 项")).toBeVisible();
     expect(screen.getByRole("heading", { name: "令牌限制" })).toBeVisible();
     expect(screen.getByLabelText(/^最大上下文令牌/)).toBeVisible();
     expect(screen.getByLabelText(/^最大输出令牌/)).toBeVisible();
@@ -70,6 +105,7 @@ describe("deployment release workflow", () => {
     expect(screen.queryByLabelText("内容审核")).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("部署名称"), { target: { value: "GPT production" } });
     fireEvent.change(screen.getByLabelText(/^模型 ID/), { target: { value: "gpt-5" } });
+    fireEvent.click(screen.getByLabelText("对话"));
     fireEvent.click(screen.getByRole("button", { name: "保存为停用" }));
 
     await waitFor(() => expect(create).toHaveBeenCalledOnce());
@@ -77,15 +113,75 @@ describe("deployment release workflow", () => {
       name: "GPT production",
       provider_model: "gpt-5",
       target_kind: "model_id",
+      // A hand-typed model is not catalogued, so what the operator ticked is a
+      // declaration and has to say so.
+      mode: "operator_declared",
       enabled: false,
       priority: 0,
       weight: 1,
     }));
   });
 
+  it("carries a catalogued model's capabilities and does not call it a declaration", async () => {
+    vi.mocked(api.providerModels).mockResolvedValue({
+      items: [knownModel("catalogued-embedder", { embeddings: true, max_context_tokens: 8192 })],
+      catalog_revision: "sha256:catalog",
+      fetched_at: "2026-08-02T00:00:00Z",
+      expires_at: "2026-08-02T00:05:00Z",
+      cached: false,
+    });
+    const create = vi.spyOn(api, "createDeployment").mockResolvedValue({} as never);
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 新建模型部署" }));
+    fireEvent.change(screen.getByLabelText("部署名称"), { target: { value: "Embedder" } });
+    const modelInput = screen.getByLabelText(/^模型 ID/);
+    fireEvent.focus(modelInput);
+    const listbox = await screen.findByRole("listbox", { name: "可用模型" });
+    fireEvent.click(await within(listbox).findByRole("option", { name: /catalogued-embedder/ }));
+
+    // The catalog answered, so the capability arrives checked and the notice
+    // says where it came from.
+    expect(screen.getByLabelText("向量嵌入")).toBeChecked();
+    expect(screen.getByText(/能力来自内置模型目录/)).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "保存为停用" }));
+    await waitFor(() => expect(create).toHaveBeenCalledOnce());
+    const payload = create.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload).not.toHaveProperty("mode");
+    expect(payload.model_revision).toBe("sha256:known-catalogued-embedder");
+    expect(payload.capabilities).toMatchObject({ embeddings: true, chat: false });
+  });
+
+  it("requires an explicit declaration for a model the catalog does not cover", async () => {
+    const create = vi.spyOn(api, "createDeployment").mockResolvedValue({} as never);
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 新建模型部署" }));
+    fireEvent.change(screen.getByLabelText("部署名称"), { target: { value: "GPT" } });
+    const modelInput = screen.getByLabelText(/^模型 ID/);
+    fireEvent.focus(modelInput);
+    const listbox = await screen.findByRole("listbox", { name: "可用模型" });
+    fireEvent.click(await within(listbox).findByRole("option", { name: /gpt-5/ }));
+
+    // Nothing is established about it, so nothing arrives checked and the form
+    // says the operator is the one making the claim.
+    expect(screen.getByLabelText("对话")).not.toBeChecked();
+    expect(screen.getByText(/该模型的能力未收录/)).toBeVisible();
+
+    fireEvent.click(screen.getByLabelText("对话"));
+    fireEvent.click(screen.getByRole("button", { name: "保存为停用" }));
+    await waitFor(() => expect(create).toHaveBeenCalledOnce());
+    const payload = create.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload.mode).toBe("operator_declared");
+    expect(payload.model_revision).toBe("sha256:gpt-5");
+    expect(payload.capabilities).toMatchObject({ chat: true });
+  });
+
   it("discovers OpenAI model IDs, refreshes the catalog, and preserves manual entry", async () => {
     vi.mocked(api.providerModels).mockResolvedValue({
-      items: Array.from({ length: 12 }, (_, index) => ({ id: `gpt-model-${index}`, owned_by: "openai" })),
+      items: Array.from({ length: 12 }, (_, index) => unknownModel(`gpt-model-${index}`)),
+      catalog_revision: "sha256:catalog",
       fetched_at: "2026-08-02T00:00:00Z",
       expires_at: "2026-08-02T00:05:00Z",
       cached: false,
