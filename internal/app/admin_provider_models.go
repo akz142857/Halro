@@ -110,7 +110,9 @@ func (r *Runtime) listAdminProviderModels(writer http.ResponseWriter, request *h
 	var degraded []degradedBinding
 	var reached int
 	for _, result := range results {
+		r.capabilityMetrics.recordCatalogRefresh(instance.Type, result.binding.ProfileID, !result.failed)
 		if result.failed {
+			r.capabilityMetrics.recordCatalogDegraded(instance.Type, string(result.errorClass))
 			degraded = append(degraded, degradedBinding{
 				BindingID: result.binding.ID, ProfileID: result.binding.ProfileID, ErrorClass: result.errorClass,
 			})

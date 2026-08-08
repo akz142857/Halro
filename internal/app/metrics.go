@@ -67,6 +67,10 @@ func (r *Runtime) writeMetrics(writer http.ResponseWriter) error {
 	projectLockStats := r.accounting.ProjectLockStats()
 	metadataWriteStats := r.store.MetadataWriteStats()
 	pricingQuarantines, _ := r.store.PricingQuarantineCount(context.Background())
+	// Current state, so it is read rather than tracked: a count that drifts
+	// from the records it describes is worse than one that costs a read.
+	storedDeployments, _ := r.store.ListDeployments(context.Background())
+	capabilityGauges := summariseDeploymentCapabilities(storedDeployments)
 	writer.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	writer.Header().Set("Cache-Control", "no-store")
 	writer.WriteHeader(http.StatusOK)
@@ -99,6 +103,7 @@ func (r *Runtime) writeMetrics(writer http.ResponseWriter) error {
 	writeLatencyHistogram(output, "halro_attempt_latency_seconds",
 		"Completed Provider attempt latency distribution.", usageMetrics.AttemptLatencyBuckets,
 		usageMetrics.AttemptLatencyMillis, attemptCount)
+	writeCapabilityMetrics(output, r.capabilityMetrics.snapshot(), capabilityGauges)
 	metricHeader(output, "halro_active_requests", "gauge", "Requests accepted but not finalized.")
 	fmt.Fprintf(output, "halro_active_requests %d\n", usageMetrics.ActiveRequests)
 	// Deliberately unlabelled: the interesting dimension here is the source
@@ -460,4 +465,52 @@ func millisecondsSeconds(value uint64) string {
 
 func nanosecondsSeconds(value uint64) string {
 	return strconv.FormatFloat(float64(value)/float64(time.Second), 'f', 9, 64)
+}
+
+// writeCapabilityMetrics renders the §13 model-capability observability series.
+//
+// Every label here is a bounded enum. Model IDs, provider IDs and deployment
+// IDs are deliberately absent: they are unbounded in principle and identify the
+// specific object, which belongs in the audit trail rather than on a metrics
+// port that is scraped and retained indefinitely.
+func writeCapabilityMetrics(output *bufio.Writer, snapshot capabilityMetricsSnapshot, gauges deploymentCapabilityGauges) {
+	metricHeader(output, "halro_model_catalog_refresh_total", "counter",
+		"Provider model catalog reads by capability profile and outcome.")
+	for _, sample := range snapshot.CatalogRefresh {
+		fmt.Fprintf(output, "halro_model_catalog_refresh_total{provider_type=%s,profile=%s,status=%s} %d\n",
+			strconv.Quote(sample.Key.ProviderType), strconv.Quote(sample.Key.Profile),
+			strconv.Quote(sample.Key.Status), sample.Count)
+	}
+	metricHeader(output, "halro_model_catalog_degraded_total", "counter",
+		"Aggregate model catalog reads that lost a binding and returned partial results.")
+	for _, sample := range snapshot.CatalogDegraded {
+		fmt.Fprintf(output, "halro_model_catalog_degraded_total{provider_type=%s,error_class=%s} %d\n",
+			strconv.Quote(sample.Key.ProviderType), strconv.Quote(sample.Key.ErrorClass), sample.Count)
+	}
+	metricHeader(output, "halro_capability_drift_total", "counter",
+		"Deployments withheld from routing because their capability snapshot no longer matches.")
+	// Both reasons are always emitted: `== 0` is the condition worth alerting
+	// on, and a series that only appears once it is non-zero cannot express it.
+	for _, reason := range []string{driftReasonCatalog, driftReasonProfile} {
+		fmt.Fprintf(output, "halro_capability_drift_total{reason=%s} %d\n",
+			strconv.Quote(reason), snapshot.Drift[reason])
+	}
+	metricHeader(output, "halro_model_revision_conflicts_total", "counter",
+		"Deployment writes refused because the model's catalog revision moved.")
+	fmt.Fprintf(output, "halro_model_revision_conflicts_total %d\n", snapshot.RevisionConflicts)
+	metricHeader(output, "halro_deployment_test_total", "counter",
+		"Deployment validation tests by outcome.")
+	for _, status := range []string{"success", "failure"} {
+		fmt.Fprintf(output, "halro_deployment_test_total{status=%s} %d\n",
+			strconv.Quote(status), snapshot.DeploymentTests[status])
+	}
+	metricHeader(output, "halro_deployment_capability_status", "gauge",
+		"Deployments by the status of the model capability snapshot they hold.")
+	for _, status := range capabilityStatuses {
+		fmt.Fprintf(output, "halro_deployment_capability_status{state=%s} %d\n",
+			strconv.Quote(status), gauges.ByStatus[status])
+	}
+	metricHeader(output, "halro_operator_declared_deployments", "gauge",
+		"Deployments whose capabilities an administrator declared rather than the catalog establishing them.")
+	fmt.Fprintf(output, "halro_operator_declared_deployments %d\n", gauges.OperatorDeclared)
 }

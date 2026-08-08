@@ -46,9 +46,12 @@ const deploymentModeOperatorDeclared = "operator_declared"
 // "the catalog moved under you". The second is a conflict with a stable code:
 // the console refreshes the model and the operator re-confirms, rather than the
 // server quietly applying whatever the catalog says now.
-func adminDeploymentInputError(writer http.ResponseWriter, err error) {
+func (r *Runtime) adminDeploymentInputError(writer http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, errModelCapabilityChanged):
+		// Counted here rather than at each caller: this is the single funnel
+		// every per-model revision conflict passes through.
+		r.capabilityMetrics.recordRevisionConflict()
 		writeJSON(writer, http.StatusConflict, map[string]string{
 			"error": err.Error(), "code": "model_capability_changed",
 		})
@@ -81,7 +84,7 @@ func (r *Runtime) createAdminDeployment(writer http.ResponseWriter, request *htt
 	now := time.Now().UTC()
 	deployment, err := r.deploymentFromInput(request, deploymentID, input, nil, nil, now, now)
 	if err != nil {
-		adminDeploymentInputError(writer, err)
+		r.adminDeploymentInputError(writer, err)
 		return
 	}
 	deployment, err = r.store.PutDeployment(request.Context(), deployment, 0)
@@ -153,7 +156,7 @@ func (r *Runtime) updateAdminDeployment(writer http.ResponseWriter, request *htt
 	}
 	deployment, err := r.deploymentFromInput(request, current.ID, input, currentEvidence, &current.Capabilities, current.CreatedAt, time.Now().UTC())
 	if err != nil {
-		adminDeploymentInputError(writer, err)
+		r.adminDeploymentInputError(writer, err)
 		return
 	}
 	targetChanged := deployment.ProviderID != current.ProviderID ||
@@ -330,6 +333,7 @@ func (r *Runtime) testAdminDeployment(writer http.ResponseWriter, request *http.
 	latencyMS := time.Since(started).Milliseconds()
 	errorClass := provider.ErrorUnknown
 	status := domain.DeploymentTestHealthy
+	r.capabilityMetrics.recordDeploymentTest(probeErr == nil)
 	if probeErr != nil {
 		status = domain.DeploymentTestUnhealthy
 		var classified *provider.Error
