@@ -147,7 +147,7 @@ describe("design system themes", () => {
   // actually held 754 — four units of slack that later commits spent without
   // anyone deciding to. It is now the exact count, so any new hand-picked value
   // fails and lowering it is a deliberate edit.
-  const bareSizeValueBaseline = 748;
+  const bareSizeValueBaseline = 743;
 
   it("does not add bare spacing or radius values beyond the current baseline", () => {
     const styles = read("./styles.css");

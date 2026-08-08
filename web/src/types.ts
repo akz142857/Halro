@@ -625,6 +625,7 @@ export interface WritePathSummary {
   project_lock_wait_seconds: number;
   project_lock_held_seconds: number;
   project_events_per_second: number;
+  project_requests_per_second: number;
   metadata_batch_size: number;
   metadata_write_seconds: number;
 }

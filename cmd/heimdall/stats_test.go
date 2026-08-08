@@ -46,9 +46,10 @@ func TestStatsReportsTheDerivedMeans(t *testing.T) {
 		"4.30 ms",
 		// 825 records in 100 batches.
 		"8.25",
-		// 11.05s held over 500 acquisitions, so one project tops out near 45/s.
+		// 11.05s held over 500 acquisitions: 45.2 records/s, or 9.05 requests/s
+		// at five records per request.
 		"22.1 ms",
-		"45.2",
+		"9.05",
 		// 64 batched calls coalesced into 20 transactions.
 		"3.20",
 		"3 / 4096",

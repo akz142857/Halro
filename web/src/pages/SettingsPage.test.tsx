@@ -262,6 +262,7 @@ describe("SettingsPage system configuration pane", () => {
         wal_batch_size: 8.25,
         project_lock_held_seconds: 0.0221,
         project_events_per_second: 45.2,
+        project_requests_per_second: 9.04,
       }),
       audit: {}, alerts: {}, usage_watermark: {},
     } as never);
@@ -274,6 +275,10 @@ describe("SettingsPage system configuration pane", () => {
     expect(screen.getByText("22.1 ms")).toBeInTheDocument();
     expect(screen.getByText("8.25")).toBeInTheDocument();
     expect(screen.getByText("45.2")).toBeInTheDocument();
+    // The answer belongs on the collapsed row: an operator asking "how many
+    // requests per second can this take" should not have to expand a card and
+    // divide by five to find out.
+    expect(screen.getByText("≈ 9.04 请求/秒")).toBeInTheDocument();
   });
 
   // A batch size of 1.0 and a saturated disk read the same from a latency graph,
@@ -289,7 +294,11 @@ describe("SettingsPage system configuration pane", () => {
     } as never);
     window.history.replaceState({}, "", "/admin/settings/diagnostics");
     renderWithClient(<SettingsPage />);
-    expect(await screen.findByText(/没有在合批/)).toBeInTheDocument();
+    const warning = await screen.findByText(/未合批/);
+    expect(warning).toBeInTheDocument();
+    // Rendered as the shared notice component rather than another paragraph, so
+    // a conditional warning does not read at the same weight as the table.
+    expect(warning).toHaveClass("notice", "warning");
   });
 
   it("stays quiet about coalescing on an instance with almost no traffic", async () => {
@@ -303,7 +312,7 @@ describe("SettingsPage system configuration pane", () => {
     window.history.replaceState({}, "", "/admin/settings/diagnostics");
     renderWithClient(<SettingsPage />);
     await screen.findByText("Heimdall 1.0.0");
-    expect(screen.queryByText(/没有在合批/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/未合批/)).not.toBeInTheDocument();
   });
 
   // An instance that has served nothing has no means to report. Zero is what the
@@ -324,7 +333,7 @@ describe("SettingsPage system configuration pane", () => {
     // this card a question should get "— over 0 barriers", which is an answer;
     // replacing the table with prose is what made the first reader ask what the
     // panel was for.
-    expect(screen.getByText("Ledger fsync 平均耗时")).toBeInTheDocument();
+    expect(screen.getByText("每次落盘耗时")).toBeInTheDocument();
     // An empty card that does not say what would fill it sends the reader to
     // ask someone. The Admin console never writes to the Ledger, so nothing
     // done on this page can populate these figures — say so here rather than

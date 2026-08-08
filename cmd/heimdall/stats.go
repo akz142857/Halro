@@ -91,6 +91,11 @@ func writeStatsReport(out io.Writer, sample statsSample, window string) {
 	fmt.Fprintf(writer, "  WAL queue             %s / %s\n",
 		statsCount(sample["heimdall_usage_queue_depth"]), statsCount(sample["heimdall_usage_queue_capacity"]))
 
+	// One request lifecycle is five accounting records (ADR 0018), so the
+	// per-project ceiling is reported in requests as well: that is the unit an
+	// operator plans in. Approximate — a request that retries spends more than
+	// five, so its real ceiling is lower.
+	const recordsPerRequest = 5
 	held := statsMean(sample["heimdall_accounting_project_lock_held_seconds_sum"], acquisitions)
 	fmt.Fprintf(writer, "  Project lock wait     %s\n",
 		statsMillis(sample["heimdall_accounting_project_lock_wait_seconds_sum"], acquisitions))
@@ -98,7 +103,7 @@ func writeStatsReport(out io.Writer, sample statsSample, window string) {
 	if held > 0 {
 		// One project's accounting writes serialize on this lock, so its
 		// reciprocal is that project's ceiling however many requests it offers.
-		fmt.Fprintf(writer, "   → one project ≈ %s accounting writes/s", statsFactor(1/held))
+		fmt.Fprintf(writer, "   → one project ≈ %s requests/s", statsFactor(1/held/recordsPerRequest))
 	}
 	fmt.Fprintln(writer)
 	fmt.Fprintf(writer, "  Metadata coalescing   %s   calls per write transaction\n",

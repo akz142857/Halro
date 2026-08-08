@@ -150,12 +150,17 @@ function WritePathCard({ summary, batches }: { summary?: WritePathSummary; batch
   // is enough traffic for the batch size to mean anything.
   const notCoalescing = !!summary && batches >= 20 && summary.wal_batch_size > 0 && summary.wal_batch_size < 1.2;
   return (
-    <details className="panel system-card diagnostic-details" open>
-      <summary><span>{t("settings.writePathTitle")}</span><strong>{t("settings.writePathSummaryLabel")}</strong></summary>
-      <p className="field-hint">{t("settings.writePathDescription")}</p>
+    <details className="panel system-card diagnostic-details write-path" open>
+      <summary>
+        <span>{t("settings.writePathTitle")}</span>
+        <strong>{idle || !summary?.project_requests_per_second
+          ? t("settings.writePathUnknownRate")
+          : t("settings.writePathRequestsPerSecond", { rate: formatFactor(summary.project_requests_per_second).trim() })}</strong>
+      </summary>
+      <p className="write-path-caption">{t("settings.writePathDescription")}</p>
       <dl>{rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
-      <p className="field-hint">{idle ? t("settings.writePathIdle") : t("settings.writePathWindow")}</p>
-      {notCoalescing && <p className="field-hint">{t("settings.writePathNotCoalescing")}</p>}
+      <p className="write-path-meta">{idle ? t("settings.writePathIdle") : t("settings.writePathWindow")}</p>
+      {notCoalescing && <p className="notice warning">{t("settings.writePathNotCoalescing")}</p>}
     </details>
   );
 }
