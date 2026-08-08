@@ -25,6 +25,7 @@ import { useTranslation } from "react-i18next";
 import { useIsReadOnly } from "../session";
 import type { TFunction } from "i18next";
 import { Link } from "../navigation";
+import { hasOnboardingCreateIntent, OnboardingContextBanner } from "../OnboardingContext";
 
 const PAGE_SIZE = "50";
 
@@ -57,7 +58,7 @@ export function ProjectsPage() {
   const { t } = useTranslation();
   const readOnly = useIsReadOnly();
   const [selected, setSelected] = useState<string>(() => new URLSearchParams(window.location.search).get("project_id") ?? "");
-  const [creating, setCreating] = useState(false);
+  const [creating, setCreating] = useState(() => !readOnly && hasOnboardingCreateIntent());
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<ResourceStatusFilter>("all");
   // The server truncates an unpaged list at 50. A silently missing project is a project
@@ -95,6 +96,7 @@ export function ProjectsPage() {
         description={t("projects.description")}
         action={<button className="button primary" disabled={readOnly} onClick={() => setCreating(true)}>{t("projects.create")}</button>}
       />
+      <OnboardingContextBanner />
       {projects.isPending && <Loading />}
       {projects.isError && <ErrorState error={projects.error} />}
       {projects.isSuccess && items.length === 0 && (

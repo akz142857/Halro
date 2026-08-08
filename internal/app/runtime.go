@@ -1196,6 +1196,7 @@ func (r *Runtime) adminRouter() http.Handler {
 	router.With(r.requireAdminMutation).Post("/admin/api/v1/admin-users", r.createAdminUser)
 	router.With(r.requireAdminMutation).Delete("/admin/api/v1/admin-users/{username}", r.deleteAdminUser)
 	router.With(r.requireAdmin).Get("/admin/api/v1/dashboard", r.adminDashboard)
+	router.With(r.requireAdmin).Get("/admin/api/v1/onboarding/readiness", r.getAdminOnboardingReadiness)
 	router.With(r.requireAdmin).Get("/admin/api/v1/master-key/custody", r.adminMasterKeyCustody)
 	router.With(r.requireAdmin).Get("/admin/api/v1/master-key/runbooks/lifecycle", r.adminMasterKeyLifecycleRunbook)
 	router.With(r.requireAdmin).Get("/admin/api/v1/master-key/runbooks/recovery", r.adminMasterKeyRecoveryRunbook)

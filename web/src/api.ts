@@ -5,6 +5,7 @@ import type {
   CreatedGatewayKey,
   Credential,
   Dashboard,
+  OnboardingReadiness,
   Deployment,
   GatewayKey,
   Page,
@@ -185,6 +186,7 @@ export const api = {
     return result.data;
   },
   dashboard: () => request<Dashboard>("/dashboard").then((value) => value.data),
+	onboardingReadiness: () => request<OnboardingReadiness>("/onboarding/readiness").then((value) => value.data),
 	masterKeyCustody: () => request<MasterKeyCustody>("/master-key/custody").then((value) => value.data),
   systemStatus: () =>
     request<SystemStatus>("/system/status").then((value) => value.data),

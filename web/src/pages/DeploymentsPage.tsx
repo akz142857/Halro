@@ -20,11 +20,12 @@ import type { Deployment, DeploymentPriceVersion, DeploymentTargetKind, Provider
 import { useTranslation } from "react-i18next";
 import { useIsReadOnly } from "../session";
 import { Link } from "../navigation";
+import { hasOnboardingCreateIntent, OnboardingContextBanner } from "../OnboardingContext";
 
 export function DeploymentsPage() {
   const { t } = useTranslation();
   const readOnly = useIsReadOnly();
-  const [editing, setEditing] = useState<Deployment | null | "new">(null);
+  const [editing, setEditing] = useState<Deployment | null | "new">(() => !readOnly && hasOnboardingCreateIntent() ? "new" : null);
   const [replacement, setReplacement] = useState<Deployment>();
   const [query, setQuery] = useState(() => new URLSearchParams(window.location.search).get("q") ?? "");
   const [status, setStatus] = useState<"all" | "enabled" | "disabled" | "attention">("all");
@@ -68,6 +69,7 @@ export function DeploymentsPage() {
         description={t("deployments.description")}
         action={<button className="button primary" disabled={readOnly} onClick={() => { setReplacement(undefined); setEditing("new"); }}>{t("deployments.create")}</button>}
       />
+      <OnboardingContextBanner />
       {(deployments.isPending || providers.isPending || routes.isPending) && <Loading />}
       {(deployments.isError || providers.isError || routes.isError) && <ErrorState error={deployments.error || providers.error || routes.error} />}
       {deployments.data?.items.length === 0 && (
@@ -105,7 +107,7 @@ export function DeploymentsPage() {
           ) : <EmptyState title={t("deployments.noMatches")}>{t("deployments.noMatchesDescription")}</EmptyState>}
         </section>
       )}
-      {editing && (
+      {editing && providers.isSuccess && (
         <DeploymentForm
           current={editing === "new" ? undefined : editing}
           template={editing === "new" ? replacement : undefined}

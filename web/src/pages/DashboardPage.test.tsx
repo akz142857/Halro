@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
-import type { Dashboard } from "../types";
+import type { Dashboard, OnboardingReadiness } from "../types";
 import { timeContext } from "../test/fixtures";
 import { DashboardPage } from "./DashboardPage";
 
@@ -10,44 +10,62 @@ vi.mock("../TrendChart", () => ({ default: () => <div role="img" aria-label="趋
 
 describe("DashboardPage", () => {
   beforeEach(() => {
-    vi.spyOn(api, "credentials").mockResolvedValue({ items: [], next_cursor: "" });
-    vi.spyOn(api, "providers").mockResolvedValue({ items: [], next_cursor: "" });
-    vi.spyOn(api, "deployments").mockResolvedValue({ items: [], next_cursor: "" });
-    vi.spyOn(api, "routes").mockResolvedValue({ items: [], next_cursor: "" });
-    vi.spyOn(api, "projects").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "onboardingReadiness").mockResolvedValue(onboarding());
   });
 
   afterEach(() => vi.restoreAllMocks());
 
   it("walks a never-used instance through the configuration chain", async () => {
-    vi.spyOn(api, "dashboard").mockResolvedValue(dashboard());
-    vi.mocked(api.credentials).mockResolvedValue({ items: [{ id: "credential_openai" }] as never, next_cursor: "" });
-    vi.mocked(api.projects).mockResolvedValue({ items: [{ id: "project_a" }] as never, next_cursor: "" });
-    vi.spyOn(api, "keys").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "dashboard").mockResolvedValue(dashboard({ first_value_reached: false }));
     renderPage();
 
-    const panel = (await screen.findByRole("heading", { name: "把第一条请求跑通" })).closest("section")!;
-    expect(panel).toHaveTextContent("2 / 6");
-    const credentialStep = within(panel).getByText("1. 保存服务商凭据").closest("li")!;
-    expect(credentialStep).toHaveTextContent("已创建 1 个");
-    expect(credentialStep.querySelector(".status-dot")).toHaveClass("ok");
-    expect(within(credentialStep).getByRole("link", { name: "打开凭据库" })).toHaveAttribute("href", "/admin/providers?view=credentials");
-    const routeStep = within(panel).getByText("4. 发布模型路由").closest("li")!;
-    expect(routeStep).toHaveTextContent("尚未创建");
-    expect(routeStep.querySelector(".status-dot")).toHaveClass("bad");
-    expect(panel).toHaveTextContent("六步全部完成后才能发出请求");
-    expect(within(panel).getByRole("link", { name: "打开开发者工作台" })).toHaveAttribute("href", "/admin/developer");
+    expect(await screen.findByRole("heading", { name: "开始使用 Halro" })).toBeVisible();
+    const panel = (await screen.findByRole("heading", { name: "完成第一条真实请求" })).closest("section")!;
+    expect(panel).toHaveTextContent("1 / 4");
+    expect(within(panel).getAllByRole("listitem")).toHaveLength(4);
+    expect(within(panel).getByRole("progressbar")).toHaveAttribute("aria-valuenow", "1");
+    expect(panel.querySelector('li[aria-current="step"]')).toHaveTextContent("发布可调用模型");
+    expect(within(panel).getByRole("link", { name: "配置模型与路由" })).toHaveAttribute("href", "/admin/deployments?intent=create&onboarding=first-request");
+    expect(screen.queryByLabelText("今日关键指标")).not.toBeInTheDocument();
   });
 
-  it("drops the checklist once the gateway has served traffic", async () => {
+  it("drops the checklist only after the first successful request", async () => {
     const used = dashboard();
     used.usage.watermark_sequence = 42;
     vi.spyOn(api, "dashboard").mockResolvedValue(used);
     renderPage();
 
     expect(await screen.findByText("告警投递")).toBeVisible();
-    expect(screen.queryByRole("heading", { name: "把第一条请求跑通" })).not.toBeInTheDocument();
-    expect(api.credentials).not.toHaveBeenCalled();
+    expect(screen.queryByRole("heading", { name: "完成第一条真实请求" })).not.toBeInTheDocument();
+    expect(api.onboardingReadiness).not.toHaveBeenCalled();
+  });
+
+  it("keeps a failed first request visible with recovery evidence", async () => {
+    const failed = dashboard({ first_value_reached: false });
+    failed.usage.watermark_sequence = 42;
+    failed.usage.today.attempts = 1;
+    vi.spyOn(api, "dashboard").mockResolvedValue(failed);
+    vi.mocked(api.onboardingReadiness).mockResolvedValue(onboarding({
+      state: "verify_failed",
+      completed_goals: 3,
+      goals: [
+        { key: "connect_provider", state: "complete", detail_code: "provider_ready", action_href: "/admin/providers" },
+        { key: "publish_model", state: "complete", detail_code: "model_ready", action_href: "/admin/deployments" },
+        { key: "grant_access", state: "complete", detail_code: "access_ready", action_href: "/admin/projects" },
+        { key: "verify_request", state: "error", detail_code: "request_failed", action_href: "/admin/developer?onboarding=first-request" },
+      ],
+      last_verification: {
+        outcome: "provider_error", request_id: "request_failed", http_status: 502,
+        error_class: "upstream_timeout", completed_at: "2026-08-08T10:00:00Z",
+      },
+    }));
+    renderPage();
+
+    const panel = (await screen.findByRole("heading", { name: "完成第一条真实请求" })).closest("section")!;
+    expect(panel).toHaveTextContent("上一条验证请求未成功");
+    expect(panel).toHaveTextContent("request_failed");
+    expect(panel).toHaveTextContent("upstream_timeout");
+    expect(within(panel).getByRole("link", { name: "打开开发者工作台" })).toBeVisible();
   });
 
   it("shows the real alert and WAL queue state and marks failures unhealthy", async () => {
@@ -118,11 +136,16 @@ describe("DashboardPage", () => {
 
 function renderPage() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  client.setQueryData(["session"], {
+    username: "admin", role: "administrator", locale: "system", appearance: "dark",
+    csrf_token: "csrf", absolute_expires_at: "x", idle_expires_at: "x",
+  });
   return render(<QueryClientProvider client={client}><DashboardPage /></QueryClientProvider>);
 }
 
 function dashboard(overrides: Partial<Dashboard> = {}): Dashboard {
   return {
+    first_value_reached: true,
     usage: {
       today: { hour: "2026-08-03T00:00:00Z", requests: 0, attempts: 0, input_tokens: 0, output_tokens: 0, cost_micros_usd: 0, errors: 0, latency_millis: 0 },
       hourly: [], active_requests: 0, watermark_sequence: 0,
@@ -139,6 +162,23 @@ function dashboard(overrides: Partial<Dashboard> = {}): Dashboard {
     time_context: timeContext(),
     alerts: { Accepted: 0, Delivered: 0, Failed: 0, Dropped: 0, Queued: 0 },
     wal: { batches: 0, records: 0, errors: 0, syncs: 0, sync_seconds: 0.08, queue_depth: 0, queue_capacity: 16 },
+    ...overrides,
+  };
+}
+
+function onboarding(overrides: Partial<OnboardingReadiness> = {}): OnboardingReadiness {
+  return {
+    version: 1,
+    state: "configuring",
+    completed_goals: 1,
+    total_goals: 4,
+    evaluated_at: "2026-08-08T10:00:00Z",
+    goals: [
+      { key: "connect_provider", state: "complete", detail_code: "provider_ready", action_href: "/admin/providers" },
+      { key: "publish_model", state: "current", detail_code: "deployment_missing", action_href: "/admin/deployments?intent=create&onboarding=first-request" },
+      { key: "grant_access", state: "blocked", detail_code: "model_blocking_access", action_href: "/admin/projects" },
+      { key: "verify_request", state: "blocked", detail_code: "request_ready", action_href: "/admin/developer?onboarding=first-request" },
+    ],
     ...overrides,
   };
 }

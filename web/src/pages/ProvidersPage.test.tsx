@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
 import type { Credential } from "../types";
@@ -140,6 +140,20 @@ describe("ProvidersPage profile and credential bindings", () => {
     const addProvider = await screen.findByRole("button", { name: "＋ 服务商" });
     await waitFor(() => expect(addProvider).toBeDisabled());
     expect(screen.getByText("服务商连接必须绑定一个加密凭据；创建后才能继续配置上游。")).toBeInTheDocument();
+  });
+
+  it("waits for credentials before mounting the onboarding provider form", async () => {
+    window.history.replaceState({}, "", "/admin/providers?intent=create&onboarding=first-request");
+    let resolveCredentials!: (value: Awaited<ReturnType<typeof api.credentials>>) => void;
+    vi.mocked(api.credentials).mockImplementation(() => new Promise((resolve) => { resolveCredentials = resolve; }));
+    renderPage();
+
+    expect(screen.queryByRole("dialog", { name: "创建服务商" })).not.toBeInTheDocument();
+    await act(async () => resolveCredentials({ items: [openAICredential], next_cursor: "" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "创建服务商" });
+    expect(within(dialog).getByLabelText("加密凭据")).toHaveValue(openAICredential.id);
+    expect(within(dialog).getByRole("button", { name: "创建并热加载" })).toBeEnabled();
   });
 
   it("restores the active resource tab from the URL and exposes its contextual action", async () => {

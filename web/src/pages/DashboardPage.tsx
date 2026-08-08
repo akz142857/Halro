@@ -57,12 +57,13 @@ export function DashboardPage() {
   const walStatus = walHealthy && dashboard.wal.queue_depth === 0
     ? t("dashboard.ready")
     : t("dashboard.walStatus", { queued: compactNumber(dashboard.wal.queue_depth), errors: compactNumber(dashboard.wal.errors) });
+  const firstValueReached = dashboard.first_value_reached ?? false;
   return (
     <>
       <PageHeader
-        eyebrow={t("dashboard.eyebrow")}
-        title={t("dashboard.title")}
-        description={t("dashboard.description")}
+        eyebrow={t(firstValueReached ? "dashboard.eyebrow" : "dashboard.firstRun.pageEyebrow")}
+        title={t(firstValueReached ? "dashboard.title" : "dashboard.firstRun.pageTitle")}
+        description={t(firstValueReached ? "dashboard.description" : "dashboard.firstRun.pageDescription")}
         action={
           <div className={`health-pill ${accountingHealthy ? "" : "warning"}`}>
             <StatusDot ok={accountingHealthy} />
@@ -70,9 +71,8 @@ export function DashboardPage() {
           </div>
         }
       />
-      {/* Nothing has ever been served, so the panels below are all zeroes and "no data".
-          The chain that produces the first request is more useful than an empty chart. */}
-      {dashboard.usage.watermark_sequence === 0 && today.attempts === 0 && <FirstRunChecklist />}
+      {!firstValueReached && <FirstRunChecklist />}
+      {firstValueReached && <>
       <section className="metric-grid" aria-label={t("dashboard.todayMetrics")}>
         <Metric label={t("dashboard.requests")} value={compactNumber(today.requests)} detail={t("dashboard.attempts", { count: today.attempts })} />
         <Metric
@@ -167,6 +167,7 @@ export function DashboardPage() {
         <StatusRow label={t("dashboard.walQueue")} ok={walHealthy} value={walStatus} />
         <div className="panel-footnote">{t("dashboard.autoRefresh")}</div>
       </section>
+      </>}
     </>
   );
 }

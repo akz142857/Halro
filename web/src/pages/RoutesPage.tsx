@@ -25,13 +25,14 @@ import type { Deployment, Provider, Route } from "../types";
 import { useTranslation } from "react-i18next";
 import { useIsReadOnly } from "../session";
 import { Link } from "../navigation";
+import { hasOnboardingCreateIntent, OnboardingContextBanner } from "../OnboardingContext";
 
 const column = createColumnHelper<Route>();
 
 export function RoutesPage() {
   const { t } = useTranslation();
   const readOnly = useIsReadOnly();
-  const [creating, setCreating] = useState(false);
+  const [creating, setCreating] = useState(() => !readOnly && hasOnboardingCreateIntent());
   const [editing, setEditing] = useState<Route>();
   const routes = useQuery({ queryKey: ["routes"], queryFn: api.routes });
   const deployments = useQuery({ queryKey: ["deployments"], queryFn: api.deployments });
@@ -121,6 +122,7 @@ export function RoutesPage() {
         description={t("routes.description")}
         action={<button className="button primary" disabled={readOnly} onClick={() => setCreating(true)}>{t("routes.create")}</button>}
       />
+      <OnboardingContextBanner />
       {pending && <Loading />}
       {error && <ErrorState error={error} />}
       {/* Every other resource page surfaces its delete failure here. This one

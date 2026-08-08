@@ -161,6 +161,7 @@ export interface GovernancePressureItem {
 }
 
 export interface Dashboard {
+  first_value_reached: boolean;
   usage: {
     today: Bucket;
     hourly: Bucket[];
@@ -189,6 +190,35 @@ export interface Dashboard {
   wal: WALStats;
   alerts: AlertStats;
   time_context: TimeContext;
+}
+
+export type OnboardingState = "configuring" | "ready_to_verify" | "verify_failed" | "first_value_reached";
+export type OnboardingGoalState = "complete" | "current" | "blocked" | "error";
+
+export interface OnboardingGoal {
+  key: "connect_provider" | "publish_model" | "grant_access" | "verify_request";
+  state: OnboardingGoalState;
+  detail_code: string;
+  action_href: string;
+}
+
+export interface OnboardingVerification {
+  outcome: string;
+  request_id: string;
+  http_status?: number;
+  error_class?: string;
+  requested_model?: string;
+  completed_at: string;
+}
+
+export interface OnboardingReadiness {
+  version: number;
+  state: OnboardingState;
+  completed_goals: number;
+  total_goals: number;
+  goals: OnboardingGoal[];
+  last_verification?: OnboardingVerification;
+  evaluated_at: string;
 }
 
 export interface WALStats {
