@@ -164,6 +164,18 @@ func loadProviderRegistry(
 			if !exists || !deployment.Enabled || deployment.DeletedAt != nil {
 				return fail(fmt.Errorf("route %q references an unavailable deployment", route.ID))
 			}
+			// Drift is resolved here rather than on the request path, so a
+			// profile this build narrowed is a state an operator can see instead
+			// of production traffic failing one request at a time.
+			if instance, ok := instanceByID[deployment.ProviderID]; ok {
+				binding, bound := instance.ProfileBinding(deployment.BindingID)
+				if !bound {
+					binding = domain.ProviderProfileBinding{ProfileID: deployment.ProfileID, Capabilities: instance.Capabilities}
+				}
+				if !capabilityReviewAdmitsTraffic(evaluateCapabilityReview(deployment, binding, instance.Type)) {
+					return fail(fmt.Errorf("route %q references deployment %q whose capability snapshot no longer matches its profile or the catalog; review and retest it", route.ID, deployment.ID))
+				}
+			}
 			providerID = deployment.ProviderID
 			bindingID = deployment.BindingID
 			if bindingID == "" {
