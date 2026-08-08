@@ -343,13 +343,17 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		secretVault.Close()
 		return fail(fmt.Errorf("recover pending accounting leases: %w", err))
 	}
-	providerRegistry, err := loadProviderRegistry(ctx, cfg, metadata, secretVault)
+	providerRegistry, withheld, err := loadProviderRegistry(ctx, cfg, metadata, secretVault)
 	if err != nil {
 		ledgerLog.Close()
 		metadata.Close()
 		secretVault.Close()
 		return fail(err)
 	}
+	// Starting with a route withheld is a state an operator has to be told
+	// about: the process is up and every other route works, so nothing else
+	// would say that this one is gone.
+	logCapabilityWithholdings(logger, withheld)
 	tokenGuard, err := loadTokenGuard(ctx, metadata, logger)
 	if err != nil {
 		providerRegistry.Close()
@@ -587,6 +591,10 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		secretVault.Close()
 		return fail(fmt.Errorf("recover pending pricing audit: %w", err))
 	}
+	// Emitted here rather than at the load itself: the audit log only exists
+	// once the runtime is assembled, and a deployment that came up withheld is
+	// exactly the state §4.4 wants a durable record of.
+	runtime.auditCapabilityWithholdings(ctx, withheld)
 	settings, err := metadata.RuntimeSettings()
 	if errors.Is(err, boltstore.ErrNotFound) {
 		settings = domain.RuntimeSettings{
