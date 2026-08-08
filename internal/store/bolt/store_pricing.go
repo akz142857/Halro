@@ -3,7 +3,6 @@ package bolt
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -39,111 +38,15 @@ func migrateVersionedDeploymentPricing(tx *bbolt.Tx, step func(string) error) er
 			return err
 		}
 	}
-	deployments := tx.Bucket(bucketDeployments)
-	if deployments == nil {
-		return errors.New("deployment bucket is missing during pricing migration")
-	}
-	now := time.Now().UTC()
-	if err := deployments.ForEach(func(_, raw []byte) error {
-		if raw == nil {
-			return nil
-		}
-		var deployment domain.Deployment
-		if err := json.Unmarshal(raw, &deployment); err != nil {
-			return err
-		}
-		billingMode := domain.BillingModeMetered
-		var explicitResolution PricingMigrationResolution
-		if resolutions := tx.Bucket(bucketPricingMigrationResolutions); resolutions != nil {
-			if encoded := resolutions.Get([]byte(deployment.ID)); encoded != nil {
-				if err := json.Unmarshal(encoded, &explicitResolution); err != nil {
-					return err
-				}
-			}
-		}
-		if deployment.InputMicrosPerMillion == 0 && deployment.OutputMicrosPerMillion == 0 && deployment.FixedRequestMicrosUSD == 0 {
-			if explicitResolution.KeepDisabled {
-				return nil
-			}
-			if explicitResolution.Mode == domain.BillingModeFree {
-				billingMode = domain.BillingModeFree
-			} else if deployment.Enabled && deployment.DeletedAt == nil {
-				return fmt.Errorf("pricing migration readiness failed: enabled deployment %q has ambiguous zero legacy pricing; explicitly resolve it as free or metered before upgrading", deployment.ID)
-			} else {
-				return nil
-			}
-		}
-		if err := migrationStep(step, "before_seed_price_"+deployment.ID); err != nil {
-			return err
-		}
-		origin, err := json.Marshal(struct {
-			DeploymentID           string `json:"deployment_id"`
-			DeploymentRevision     uint64 `json:"deployment_revision"`
-			InputMicrosPerMillion  int64  `json:"input_micros_per_million"`
-			OutputMicrosPerMillion int64  `json:"output_micros_per_million"`
-			FixedRequestMicrosUSD  int64  `json:"fixed_request_micros_usd"`
-		}{deployment.ID, deployment.Revision, deployment.InputMicrosPerMillion, deployment.OutputMicrosPerMillion, deployment.FixedRequestMicrosUSD})
-		if err != nil {
-			return err
-		}
-		digest := sha256.Sum256(origin)
-		price := domain.DeploymentPriceVersion{
-			ID: fmt.Sprintf("price_migration_%x", digest[:12]), DeploymentID: deployment.ID,
-			Version: 1, BillingMode: billingMode, Currency: "USD",
-			FormulaVersion:         domain.PriceFormulaUSDTokensV1,
-			InputMicrosPerMillion:  deployment.InputMicrosPerMillion,
-			OutputMicrosPerMillion: deployment.OutputMicrosPerMillion,
-			FixedRequestMicrosUSD:  deployment.FixedRequestMicrosUSD,
-			EffectiveFrom:          now, CreatedBy: "system:migration:v11", CreatedAt: now, Revision: 1,
-			Source: domain.PriceSource{
-				Type: domain.PriceSourceMigration, Assurance: domain.PriceAssuranceAsserted,
-				ReceivedAt: now, ContentSHA256: fmt.Sprintf("sha256:%x", digest[:]),
-				Reference:        "metadata schema v10 deployment price",
-				MigrationVersion: 11, OriginalResourceID: deployment.ID, OriginalRevision: deployment.Revision,
-			},
-		}
-		if explicitResolution.SourceReference != "" {
-			price.Source.Reference, price.Source.ContentSHA256 = explicitResolution.SourceReference, explicitResolution.SourceContentSHA256
-		}
-		if err := price.Validate(); err != nil {
-			return fmt.Errorf("migrate deployment %q price: %w", deployment.ID, err)
-		}
-		if existingRaw := tx.Bucket(bucketDeploymentPriceVersions).Get([]byte(price.ID)); existingRaw != nil {
-			var existing domain.DeploymentPriceVersion
-			if err := json.Unmarshal(existingRaw, &existing); err != nil {
-				return err
-			}
-			if existing.DeploymentID != price.DeploymentID || existing.Version != 1 ||
-				existing.InputMicrosPerMillion != price.InputMicrosPerMillion || existing.OutputMicrosPerMillion != price.OutputMicrosPerMillion ||
-				existing.FixedRequestMicrosUSD != price.FixedRequestMicrosUSD || existing.Source.Type != domain.PriceSourceMigration ||
-				existing.Source.OriginalResourceID != deployment.ID || existing.Source.OriginalRevision != deployment.Revision {
-				return fmt.Errorf("existing migration price %q conflicts with deployment %q", price.ID, deployment.ID)
-			}
-			timeline, err := tx.Bucket(bucketDeploymentPriceTimeline).CreateBucketIfNotExists([]byte(deployment.ID))
-			if err != nil {
-				return err
-			}
-			if err := timeline.Put(deploymentPriceTimelineKey(existing.EffectiveFrom), []byte(existing.ID)); err != nil {
-				return err
-			}
-			if err := tx.Bucket(bucketDeploymentPriceNext).Put([]byte(deployment.ID), versionKey(1)); err != nil {
-				return err
-			}
-			return migrationStep(step, "after_seed_price_"+deployment.ID)
-		}
-		if err := putDeploymentPriceVersionTx(tx, price); err != nil {
-			return err
-		}
-		if err := tx.Bucket(bucketDeploymentPriceNext).Put([]byte(deployment.ID), versionKey(1)); err != nil {
-			return err
-		}
-		return migrationStep(step, "after_seed_price_"+deployment.ID)
-	}); err != nil {
-		return err
-	}
-	if tx.Bucket(bucketPricingMigrationResolutions) != nil {
-		return tx.DeleteBucket(bucketPricingMigrationResolutions)
-	}
+	// The legacy-price backfill that used to run here is gone. It could only act
+	// on deployments carrying pre-versioned price fields, and since schema 20 a
+	// data directory holding deployments is refused rather than upgraded — so
+	// the loop could never see one again. Bucket creation above stays: an empty
+	// directory still passes through this rung on its way to the current schema.
+	//
+	// The rung keeps its version and name. Renumbering to close the gap would
+	// reuse migration identifiers, which is what makes an upgrade history
+	// unambiguous.
 	return nil
 }
 

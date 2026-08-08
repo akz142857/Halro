@@ -154,7 +154,12 @@ func TestVersionedPricingMigrationRejectsEnabledAmbiguousZeroPrice(t *testing.T)
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Open(path); err == nil || !strings.Contains(err.Error(), "pricing migration readiness failed") {
+	// The readiness gate this used to assert lived in the legacy-price backfill,
+	// which was removed as unreachable: a directory holding deployments is now
+	// refused at schema 20 before any pricing decision arises. The ambiguity it
+	// guarded against can no longer be reached, so the refusal is what upgrading
+	// this fixture produces.
+	if _, err := Open(path); err == nil || !strings.Contains(err.Error(), "re-initialise the data directory") {
 		t.Fatalf("upgrade error=%v", err)
 	}
 }
