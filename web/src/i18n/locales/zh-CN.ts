@@ -650,6 +650,9 @@ export const zhCN = {
     checkRouteImpact: "检查路由影响",
     checkingRouteImpact: "正在检查路由……",
     saveDespiteImpact: "仍然保存并热加载",
+    expansionNeedsRevalidation: "开启能力需要重新验证",
+    expansionWhileRouted: "该部署仍有启用中的路由。请先停用这些路由，或取消开启该能力 —— 有路由依赖时，部署无法退出路由候选。",
+    expansionSavedDisabled: "保存后将处于停用状态。重新测试并启用后，它才能提供这项能力。",
   },
   routes: {
     eyebrow: "模型网络", title: "模型路由", description: "公共模型别名只引用模型部署；模型、价格、能力和并发策略由部署独立维护。",

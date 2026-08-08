@@ -177,6 +177,32 @@ func (r *Runtime) updateAdminDeployment(writer http.ResponseWriter, request *htt
 	deployment.InputMicrosPerMillion = current.InputMicrosPerMillion
 	deployment.OutputMicrosPerMillion = current.OutputMicrosPerMillion
 	deployment.FixedRequestMicrosUSD = current.FixedRequestMicrosUSD
+	// §7.2 treats the two edit directions differently, and the difference is not
+	// stylistic. Turning a capability off leaves the deployment doing strictly
+	// less than it was validated for, so it keeps serving. Turning one on makes
+	// it claim something no test has ever exercised against this provider —
+	// routing traffic on that claim is the fail-open this design exists to
+	// prevent. So a widening advances the revision (making the test stale) and
+	// drops the deployment to disabled, requiring an explicit re-enable, which
+	// the enable path already gates on a current healthy test.
+	//
+	// Token limits are deliberately not treated as a widening: they bound which
+	// requests fit, not what the deployment claims it can do.
+	widened := modelcatalog.GainedCapabilities(current.Capabilities, deployment.Capabilities)
+	if len(widened) != 0 {
+		// The deployment has to leave the candidate set to be re-enabled
+		// explicitly, and an enabled route may not point at a disabled
+		// deployment. Saying so is better than letting the operator hit the
+		// generic deactivation error and guess which edit caused it.
+		if err := r.validateDeploymentCanDeactivate(request, deployment.ID, false); err != nil {
+			writeJSON(writer, http.StatusConflict, map[string]string{
+				"error": "enabling additional capabilities requires revalidation, so the deployment must leave routing first; disable its active routes, or narrow capabilities instead",
+				"code":  "capability_expansion_requires_revalidation",
+			})
+			return
+		}
+		deployment.Enabled = false
+	}
 	if deployment.Enabled && !current.Enabled &&
 		(current.LastTestStatus != domain.DeploymentTestHealthy || current.LastTestRevision != current.Revision) {
 		writeJSON(writer, http.StatusConflict, map[string]string{"error": "deployment must pass a current validation test before enable"})

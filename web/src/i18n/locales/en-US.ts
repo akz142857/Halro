@@ -650,6 +650,9 @@ export const enUS = {
     checkRouteImpact: "Check route impact",
     checkingRouteImpact: "Checking routes…",
     saveDespiteImpact: "Save anyway and hot-reload",
+    expansionNeedsRevalidation: "Enabling a capability requires revalidation",
+    expansionWhileRouted: "This deployment has active routes. Disable them first, or turn the capability off again — a deployment cannot leave routing while a route depends on it.",
+    expansionSavedDisabled: "It will be saved disabled. Test it again, then enable it, before it can serve this capability.",
   },
   routes: {
     eyebrow: "Model fabric", title: "Routes", description: "Public model aliases reference deployments only; model identity, pricing, capabilities, and concurrency policy are maintained by each deployment.",

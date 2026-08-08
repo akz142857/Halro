@@ -197,3 +197,100 @@ func TestCapabilityAuditCarriesNoSecret(t *testing.T) {
 		}
 	}
 }
+
+// §7.2: turning a capability on makes the deployment claim something no test
+// has exercised, so it must drop out of routing and be re-enabled explicitly.
+// Turning one off leaves it doing strictly less than it was validated for, so
+// it keeps serving.
+//
+// The sequence narrows first and then widens back, so every capability involved
+// is known to sit inside the profile ceiling.
+func TestWideningDisablesTheDeploymentAndNarrowingDoesNot(t *testing.T) {
+	runtime, bootstrap := bootstrapForCapabilityTest(t)
+	cookie, csrf := loginAdminForTest(t, runtime)
+
+	deployment, err := runtime.store.GetDeployment(context.Background(), bootstrap.DeploymentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := func(capabilities map[string]any, enabled bool) map[string]any {
+		return map[string]any{
+			"name": deployment.Name, "provider_id": deployment.ProviderID,
+			"provider_model": deployment.ProviderModel, "target_kind": string(deployment.TargetKind),
+			"capabilities": capabilities, "weight": 1, "enabled": enabled,
+			// The bootstrap model is not in the catalog, so claiming a
+			// capability back has to be re-declared; narrowing does not,
+			// because it stays inside what was already established.
+			"mode": "operator_declared",
+		}
+	}
+	full := map[string]any{}
+	for _, name := range enabledCapabilityNames(deployment.Capabilities) {
+		full[name] = true
+	}
+	if _, on := full["stream_usage"]; !on {
+		t.Fatal("bootstrap did not enable stream_usage, so this cannot narrow then widen")
+	}
+	narrowed := map[string]any{}
+	for name := range full {
+		if name == "stream_usage" {
+			continue
+		}
+		narrowed[name] = true
+	}
+
+	// Narrowing a live, routed deployment is allowed and keeps it serving.
+	response := performAdminMutation(t, runtime, cookie, csrf, http.MethodPut,
+		"/admin/api/v1/deployments/"+deployment.ID, revisionETag(deployment.Revision), body(narrowed, true))
+	if response.Code != http.StatusOK {
+		t.Fatalf("narrow status=%d body=%s", response.Code, response.Body.String())
+	}
+	after, err := runtime.store.GetDeployment(context.Background(), deployment.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !after.Enabled {
+		t.Fatal("narrowing disabled a deployment that was doing strictly less, not more")
+	}
+
+	// Widening it back while the route is live is refused with a reason, rather
+	// than stranding the route behind a deployment that silently went away.
+	routed := performAdminMutation(t, runtime, cookie, csrf, http.MethodPut,
+		"/admin/api/v1/deployments/"+deployment.ID, revisionETag(after.Revision), body(full, true))
+	if routed.Code != http.StatusConflict {
+		t.Fatalf("widening a routed deployment status=%d body=%s", routed.Code, routed.Body.String())
+	}
+	if !bytes.Contains(routed.Body.Bytes(), []byte("capability_expansion_requires_revalidation")) {
+		t.Fatalf("the refusal did not say why: %s", routed.Body.String())
+	}
+
+	// With the route out of the way the widening lands, but the deployment is
+	// left disabled so nothing routes to an unvalidated claim.
+	route, err := runtime.store.GetRoute(context.Background(), bootstrap.RouteID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	route.Enabled = false
+	if _, err := runtime.store.PutRoute(context.Background(), route, route.Revision); err != nil {
+		t.Fatal(err)
+	}
+	final := performAdminMutation(t, runtime, cookie, csrf, http.MethodPut,
+		"/admin/api/v1/deployments/"+deployment.ID, revisionETag(after.Revision), body(full, true))
+	if final.Code != http.StatusOK {
+		t.Fatalf("widen status=%d body=%s", final.Code, final.Body.String())
+	}
+	widened, err := runtime.store.GetDeployment(context.Background(), deployment.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if widened.Enabled {
+		t.Fatal("a widened deployment stayed enabled without revalidation")
+	}
+	if !widened.Capabilities.StreamUsage {
+		t.Fatal("the widening was not applied")
+	}
+	// The test must read stale, so the enable path demands a fresh one.
+	if widened.LastTestRevision == widened.Revision {
+		t.Fatal("the existing test did not go stale after a capability change")
+	}
+}
