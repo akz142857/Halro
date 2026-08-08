@@ -8,6 +8,7 @@ import (
 
 	"github.com/akz142857/Halro/internal/budget"
 	"github.com/akz142857/Halro/internal/buildinfo"
+	"github.com/akz142857/Halro/internal/config"
 	"github.com/akz142857/Halro/internal/domain"
 	gatewaycore "github.com/akz142857/Halro/internal/gateway"
 	"github.com/akz142857/Halro/internal/ledger"
@@ -425,8 +426,56 @@ func (r *Runtime) adminSystemConfig(writer http.ResponseWriter, request *http.Re
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"yaml":         string(rendered),
+		"summary":      summarizeSystemConfig(r.config),
 		"time_context": timing,
 	})
+}
+
+// systemConfigSection is intentionally a small presentation contract rather
+// than a JSON rendering of config.Config. The typed Config remains the schema
+// boundary, while this list identifies the startup facts an operator most often
+// needs. New config fields still appear in the complete YAML immediately; they
+// enter this summary only after their operator meaning is deliberately named.
+type systemConfigSection struct {
+	ID    string             `json:"id"`
+	Facts []systemConfigFact `json:"facts"`
+}
+
+type systemConfigFact struct {
+	ID    string `json:"id"`
+	Value string `json:"value"`
+	Kind  string `json:"kind"`
+}
+
+func summarizeSystemConfig(cfg config.Config) []systemConfigSection {
+	boolean := func(value bool) string { return strconv.FormatBool(value) }
+	return []systemConfigSection{
+		{ID: "network", Facts: []systemConfigFact{
+			{ID: "gateway_listen", Value: cfg.Server.GatewayListen, Kind: "address"},
+			{ID: "admin_listen", Value: cfg.Server.AdminListen, Kind: "address"},
+			{ID: "metrics_listen", Value: cfg.Server.MetricsListen, Kind: "address"},
+		}},
+		{ID: "transport", Facts: []systemConfigFact{
+			{ID: "tls_enabled", Value: boolean(cfg.TLS.Enabled), Kind: "boolean"},
+			{ID: "tls_cert_file", Value: cfg.TLS.CertFile, Kind: "path"},
+			{ID: "tls_key_file", Value: cfg.TLS.KeyFile, Kind: "path"},
+		}},
+		{ID: "storage", Facts: []systemConfigFact{
+			{ID: "data_dir", Value: cfg.Storage.DataDir, Kind: "path"},
+			{ID: "metadata_file", Value: cfg.Storage.MetadataFile, Kind: "path"},
+			{ID: "master_key_mode", Value: cfg.Storage.MasterKey.Mode, Kind: "text"},
+		}},
+		{ID: "security", Facts: []systemConfigFact{
+			{ID: "private_provider_endpoints", Value: boolean(cfg.Security.AllowPrivateProviderEndpoints), Kind: "boolean"},
+			{ID: "private_webhooks", Value: boolean(cfg.Security.AllowPrivateWebhooks), Kind: "boolean"},
+			{ID: "trust_proxy_headers", Value: boolean(cfg.Security.TrustProxyHeaders), Kind: "boolean"},
+		}},
+		{ID: "metrics", Facts: []systemConfigFact{
+			{ID: "metrics_enabled", Value: boolean(cfg.Metrics.Enabled), Kind: "boolean"},
+			{ID: "metrics_require_auth", Value: boolean(cfg.Metrics.RequireAuth), Kind: "boolean"},
+			{ID: "metrics_tls_enabled", Value: boolean(cfg.Metrics.TLS.Enabled), Kind: "boolean"},
+		}},
+	}
 }
 
 func (r *Runtime) syncUsageAdmin(writer http.ResponseWriter, request *http.Request) bool {

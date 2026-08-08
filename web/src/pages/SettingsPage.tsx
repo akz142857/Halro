@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { ErrorState, Loading, PageHeader, StatusDot } from "../components";
 import { navigate, usePathname } from "../navigation";
-import type { WritePathSummary } from "../types";
+import type { SystemConfigFact, SystemConfigSection, WritePathSummary } from "../types";
 import { AdminUsersSection } from "./AdminUsersSection";
 import { AccountingTimezoneForm } from "./AccountingTimezoneForm";
 import { AppearanceForm } from "./AppearanceForm";
@@ -80,7 +80,7 @@ export function SettingsPage({ mfaSetupRequired = false }: { mfaSetupRequired?: 
             {pane === "security" && <section aria-labelledby="security-title"><SettingsGroupHeader title={t("settings.panes.security")} description={t("settings.securityDescription")} id="security-title" /><PasswordChangeForm /><MFASettings /></section>}
             {pane === "accounts" && <section aria-labelledby="accounts-title"><SettingsGroupHeader title={t("settings.panes.accounts")} description={t("settings.accountsDescription")} id="accounts-title" /><AdminUsersSection /></section>}
             {!pending && !error && pane === "instance" && uiSettings.data && preferences.data && settings.data && <section aria-labelledby="instance-title"><SettingsGroupHeader title={t("settings.panes.instance")} description={t("settings.instanceDescription")} id="instance-title" /><InstanceLanguageForm ui={uiSettings.data.data} preferences={preferences.data.data} />{accounting.data && <AccountingTimezoneForm settings={accounting.data.data} />}<RuntimeSettingsForm settings={settings.data.data} /></section>}
-            {!pending && !error && pane === "config" && config.data && <section aria-labelledby="config-title"><SettingsGroupHeader title={t("settings.panes.config")} description={t("settings.configPreviewDescription")} id="config-title" /><ConfigPreviewCard yaml={config.data.yaml} /></section>}
+            {!pending && !error && pane === "config" && config.data && <section aria-labelledby="config-title"><SettingsGroupHeader title={t("settings.panes.config")} description={t("settings.configPreviewDescription")} id="config-title" /><ConfigPreviewCard yaml={config.data.yaml} summary={config.data.summary} /></section>}
             {!pending && !error && pane === "diagnostics" && status.data && <DiagnosticsPane status={status.data} accountingLabels={accountingLabels} metricLabels={metricLabels} />}
           </div>
         </div>
@@ -181,7 +181,7 @@ function formatFactor(value: number) {
   return value < 10 ? value.toFixed(2) : value.toFixed(1);
 }
 
-function ConfigPreviewCard({ yaml }: { yaml: string }) {
+function ConfigPreviewCard({ yaml, summary }: { yaml: string; summary: SystemConfigSection[] }) {
   const { t } = useTranslation();
   const [copyStatus, setCopyStatus] = useState("");
   const copy = async () => {
@@ -192,21 +192,46 @@ function ConfigPreviewCard({ yaml }: { yaml: string }) {
       setCopyStatus(t("settings.configPreviewCopyFailed"));
     }
   };
-  return (
-    // Open, because it is now the whole point of the pane it sits on rather
-    // than one card among the diagnostics — arriving at a page whose only
-    // content is folded away reads as an empty page. The description moved to
-    // the pane header; repeating it here said the same sentence twice on one
-    // screen.
-    <details className="panel system-card diagnostic-details config-preview" open>
-      <summary><span>{t("settings.configPreviewTitle")}</span><strong>config.yaml</strong></summary>
-      <pre className="config-preview-body"><code>{yaml}</code></pre>
+  return <div className="config-overview">
+    <section className="panel config-summary" aria-labelledby="effective-config-title">
+      <header className="config-summary-header">
+        <div>
+          <h3 id="effective-config-title">{t("settings.effectiveConfig")}</h3>
+          <p>{t("settings.effectiveConfigDescription")}</p>
+        </div>
+        <span className="badge">{t("settings.readOnlyRestart")}</span>
+      </header>
+      <div className="config-section-list">
+        {summary.map((section) => <ConfigSummarySection key={section.id} section={section} />)}
+      </div>
+    </section>
+    <details className="panel system-card diagnostic-details config-preview">
+      <summary><span>{t("settings.effectiveConfigYaml")}</span><strong>{t("settings.advancedDetails")}</strong></summary>
+      <p className="config-preview-description">{t("settings.effectiveConfigYamlDescription")}</p>
+      <pre className="config-preview-body" tabIndex={0} aria-label={t("settings.effectiveConfigYaml")}><code>{yaml}</code></pre>
       <div className="form-actions">
-        <button type="button" className="button ghost" onClick={() => void copy()}>{t("common.copy")}</button>
+        <button type="button" className="button ghost" onClick={() => void copy()}>{t("settings.copyYaml")}</button>
         <span aria-live="polite">{copyStatus}</span>
       </div>
     </details>
-  );
+  </div>;
+}
+
+function ConfigSummarySection({ section }: { section: SystemConfigSection }) {
+  const { t } = useTranslation();
+  return <section className="config-section" aria-labelledby={`config-section-${section.id}`}>
+    <h4 id={`config-section-${section.id}`}>{t(`settings.configSections.${section.id}`)}</h4>
+    <dl>
+      {section.facts.map((fact) => <div key={fact.id}><dt>{t(`settings.configFacts.${fact.id}`)}</dt><dd className={fact.kind === "path" || fact.kind === "address" ? "technical" : undefined}>{formatConfigFact(fact, t)}</dd></div>)}
+    </dl>
+  </section>;
+}
+
+function formatConfigFact(fact: SystemConfigFact, t: (key: string, options?: Record<string, unknown>) => string) {
+  if (!fact.value) return t("settings.notConfigured");
+  if (fact.kind === "boolean") return t(fact.value === "true" ? "settings.enabled" : "settings.disabled");
+  if (fact.id === "master_key_mode") return t(`settings.masterKeyModes.${fact.value}`, { defaultValue: fact.value });
+  return fact.value;
 }
 
 function SettingsGroupHeader({ title, description, id }: { title: string; description: string; id: string }) {

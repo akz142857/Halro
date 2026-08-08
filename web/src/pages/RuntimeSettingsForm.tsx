@@ -26,13 +26,18 @@ export function RuntimeSettingsForm({ settings }: { settings: { health_probe_int
         <span className="badge">{t("settings.hotApplied")}</span>
       </header>
       <form className="settings-form runtime-form" aria-busy={mutation.isPending} onSubmit={submit}>
-        <Field label={t("settings.probeInterval")} hint={t("settings.probeHint")}>
-          <input type="number" min="10" max="3600" required value={interval} onChange={(event) => { mutation.reset(); setInterval(Number(event.target.value)); }} />
-        </Field>
-        <p className="runtime-note"><strong>{t("settings.startupLocked")}</strong><span>{t("settings.startupDescription")}</span></p>
-        {mutation.isError && <ErrorState error={mutation.error} />}
-        {mutation.isSuccess && <div className="notice success" role="status"><strong>{t("settings.runtimeSaved")}</strong></div>}
-        <div className="form-actions"><button className="button primary" disabled={readOnly || mutation.isPending || interval === settings.health_probe_interval_seconds}>{mutation.isPending ? t("settings.saving") : t("settings.saveRuntime")}</button></div>
+        <div className="runtime-editable">
+          <Field label={t("settings.probeInterval")} hint={t("settings.probeHint")}>
+            <input type="number" min="10" max="3600" required value={interval} onChange={(event) => { mutation.reset(); setInterval(Number(event.target.value)); }} />
+          </Field>
+          {mutation.isError && <ErrorState error={mutation.error} />}
+          {mutation.isSuccess && <div className="notice success" role="status"><strong>{t("settings.runtimeSaved")}</strong></div>}
+          <div className="form-actions"><button className="button primary" disabled={readOnly || mutation.isPending || interval === settings.health_probe_interval_seconds}>{mutation.isPending ? t("settings.saving") : t("settings.saveRuntime")}</button></div>
+        </div>
+        <aside className="runtime-startup-boundary" aria-labelledby="runtime-startup-title">
+          <span className="runtime-boundary-label">{t("settings.startupBoundary")}</span>
+          <div><strong id="runtime-startup-title">{t("settings.startupLocked")}</strong><span>{t("settings.startupDescription")}</span></div>
+        </aside>
       </form>
     </section>
   );

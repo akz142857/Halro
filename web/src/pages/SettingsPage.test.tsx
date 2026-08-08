@@ -6,6 +6,7 @@ import { AppearanceForm } from "./AppearanceForm";
 import { LanguageSettingsForm } from "./LanguageSettingsForm";
 import { MFASettings } from "./MFASettings";
 import { PasswordChangeForm } from "./PasswordChangeForm";
+import { RuntimeSettingsForm } from "./RuntimeSettingsForm";
 import { SettingsPage } from "./SettingsPage";
 import { emptyWritePath } from "../test/fixtures";
 
@@ -147,6 +148,28 @@ describe("LanguageSettingsForm", () => {
   });
 });
 
+describe("RuntimeSettingsForm", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("keeps editable runtime controls separate from the startup configuration boundary", async () => {
+    const update = vi.spyOn(api, "updateSettings").mockResolvedValue({
+      data: { health_probe_interval_seconds: 60, revision: 2 }, etag: '"2"',
+    });
+    const { container } = renderWithClient(<RuntimeSettingsForm settings={{ health_probe_interval_seconds: 30, revision: 1 }} />);
+
+    const editable = container.querySelector<HTMLElement>(".runtime-editable");
+    const boundary = container.querySelector<HTMLElement>(".runtime-startup-boundary");
+    expect(editable).toContainElement(screen.getByLabelText(/模型部署主动探测周期/));
+    expect(boundary).toHaveTextContent("配置边界");
+    expect(boundary).toHaveTextContent("启动配置由 config.yaml 管理");
+    expect(editable).not.toContainElement(boundary);
+
+    fireEvent.change(screen.getByLabelText(/模型部署主动探测周期/), { target: { value: "60" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存运行时设置" }));
+    await waitFor(() => expect(update).toHaveBeenCalledWith({ health_probe_interval_seconds: 60 }, 1));
+  });
+});
+
 describe("MFASettings", () => {
   afterEach(() => vi.restoreAllMocks());
 
@@ -219,8 +242,20 @@ describe("SettingsPage system configuration pane", () => {
     window.history.replaceState({}, "", "/");
   });
 
-  it("is reachable as its own menu entry and renders config.yaml open", async () => {
-    const systemConfig = vi.spyOn(api, "systemConfig").mockResolvedValue({ yaml: "server:\n  address: 127.0.0.1\n" } as never);
+  it("shows semantic effective values and keeps the complete YAML collapsed", async () => {
+    const systemConfig = vi.spyOn(api, "systemConfig").mockResolvedValue({
+      yaml: "server:\n  gateway_listen: 127.0.0.1:8080\n",
+      summary: [
+        { id: "network", facts: [
+          { id: "gateway_listen", value: "127.0.0.1:8080", kind: "address" },
+          { id: "admin_listen", value: "127.0.0.1:8081", kind: "address" },
+        ] },
+        { id: "transport", facts: [
+          { id: "tls_enabled", value: "false", kind: "boolean" },
+          { id: "tls_cert_file", value: "", kind: "path" },
+        ] },
+      ],
+    } as never);
     window.history.replaceState({}, "", "/admin/settings/config");
     renderWithClient(<SettingsPage />);
 
@@ -228,10 +263,15 @@ describe("SettingsPage system configuration pane", () => {
     const entries = [...screen.getByRole("navigation", { name: "设置分区" }).querySelectorAll("a")].map((a) => a.textContent);
     expect(entries).toEqual(["通用", "登录与安全", "管理员账户", "实例配置", "系统配置", "关于与诊断"]);
 
-    expect(await screen.findByText("config.yaml")).toBeInTheDocument();
-    expect(screen.getByText(/server:/)).toBeInTheDocument();
-    // The pane's only content must not arrive folded away.
-    expect(document.querySelector(".config-preview")).toHaveAttribute("open");
+    expect(await screen.findByText("有效启动配置")).toBeInTheDocument();
+    expect(screen.getByText("127.0.0.1:8080")).toBeInTheDocument();
+    expect(screen.getByText("未启用")).toBeInTheDocument();
+    expect(screen.getByText("未配置")).toBeInTheDocument();
+    const yamlDetails = document.querySelector(".config-preview");
+    expect(yamlDetails).not.toHaveAttribute("open");
+    fireEvent.click(screen.getByText("查看有效配置 YAML"));
+    expect(yamlDetails).toHaveAttribute("open");
+    expect(screen.getByText(/gateway_listen:/)).toBeInTheDocument();
     expect(systemConfig).toHaveBeenCalled();
   });
 
