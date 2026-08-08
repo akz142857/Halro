@@ -13,6 +13,7 @@ import (
 	"github.com/akz142857/Halro/internal/config"
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/id"
+	"github.com/akz142857/Halro/internal/modelcatalog"
 	"github.com/akz142857/Halro/internal/safetransport"
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 	"github.com/akz142857/Halro/internal/store/lock"
@@ -150,7 +151,15 @@ func Bootstrap(ctx context.Context, cfg config.Config, options BootstrapOptions,
 			ProviderID: providerID, ProviderModel: options.ProviderModel,
 			AccessSurface: profile.AccessSurface, ProfileID: profile.ProfileID,
 			Capabilities: capabilities, CapabilityEvidence: evidence.Clone(),
-			Weight: 1, Enabled: true, CreatedAt: now, UpdatedAt: now,
+			// Bootstrap is the operator naming a provider and a model and asking
+			// for it to work. That is a declaration, and the snapshot records it
+			// as one rather than dressing it up as catalog evidence.
+			ModelCapabilitySnapshot: domain.DeclaredCapabilitySnapshot(
+				options.ProviderModel, bootstrapModelRevision(options.ProviderType, profile.ProfileID, options.ProviderModel),
+				capabilities, now,
+			),
+			CapabilityReviewState: domain.CapabilityReviewCurrent,
+			Weight:                1, Enabled: true, CreatedAt: now, UpdatedAt: now,
 		},
 		Price: bootstrapPriceVersion(priceID, deploymentID, billingMode, options, now),
 		Route: domain.Route{
@@ -188,4 +197,14 @@ func bootstrapPriceVersion(priceID, deploymentID string, billingMode domain.Bill
 			Reference: "halro bootstrap CLI", AssertedWithoutArchive: true,
 		},
 	}
+}
+
+// bootstrapModelRevision is the catalog digest for the model being bootstrapped,
+// including when the catalog establishes nothing about it: that digest is what
+// later reveals the catalog has started covering the model.
+func bootstrapModelRevision(providerType domain.ProviderType, profileID domain.ProviderProfileID, model string) string {
+	entry, _ := modelcatalog.Builtin().Lookup(modelcatalog.Key{
+		ProviderType: providerType, Profile: profileID, Model: model,
+	})
+	return entry.Revision()
 }
