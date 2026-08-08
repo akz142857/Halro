@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -190,7 +191,7 @@ func TestMetadataMigrationFromV1IsAtomicAndRecorded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(history) != 19 ||
+	if len(history) != 20 ||
 		history[0] != (MigrationRecord{Version: 1, Name: "initial_schema"}) ||
 		history[1] != (MigrationRecord{Version: 2, Name: "migration_history"}) ||
 		history[2] != (MigrationRecord{Version: 3, Name: "deployments"}) ||
@@ -209,7 +210,8 @@ func TestMetadataMigrationFromV1IsAtomicAndRecorded(t *testing.T) {
 		history[15] != (MigrationRecord{Version: 16, Name: "instance_accounting_settings"}) ||
 		history[16] != (MigrationRecord{Version: 17, Name: "ledger_frame_integrity"}) ||
 		history[17] != (MigrationRecord{Version: 18, Name: "audit_anchors"}) ||
-		history[18] != (MigrationRecord{Version: 19, Name: "admin_role_backfill"}) {
+		history[18] != (MigrationRecord{Version: 19, Name: "admin_role_backfill"}) ||
+		history[19] != (MigrationRecord{Version: 20, Name: "deployment_capability_snapshot"}) {
 		t.Fatalf("history=%#v", history)
 	}
 }
@@ -269,15 +271,12 @@ func TestProviderProfileMigrationFromV3IsAtomicAndConservative(t *testing.T) {
 			defer store.Close()
 			credential, _ := store.GetCredential(context.Background(), "credential_v3")
 			instance, _ := store.GetProvider(context.Background(), "provider_v3")
-			deployment, _ := store.GetDeployment(context.Background(), "deployment_v3")
 			if credential.AccessSurface != domain.SurfaceBedrockRuntime || credential.Scheme != domain.CredentialAWSSigV4Explicit ||
 				instance.ProfileID != domain.ProfileBedrockConverseText || instance.CapabilityEvidence["chat"] != domain.EvidenceLegacy ||
-				instance.Capabilities.DeveloperRole || deployment.ProfileID != domain.ProfileBedrockConverseText ||
-				deployment.CapabilityEvidence["chat"] != domain.EvidenceLegacy || deployment.Capabilities.DeveloperRole ||
+				instance.Capabilities.DeveloperRole ||
 				len(instance.Bindings) != 1 || instance.Bindings[0].ProviderID != instance.ID ||
-				instance.Bindings[0].ID != domain.DefaultProviderProfileBindingID(instance.ID, instance.ProfileID) ||
-				deployment.BindingID != instance.Bindings[0].ID {
-				t.Fatalf("credential=%#v provider=%#v deployment=%#v", credential, instance, deployment)
+				instance.Bindings[0].ID != domain.DefaultProviderProfileBindingID(instance.ID, instance.ProfileID) {
+				t.Fatalf("credential=%#v provider=%#v", credential, instance)
 			}
 		})
 	}
@@ -306,15 +305,6 @@ func TestProviderProfileBindingMigrationFromV8IsAtomicAndIdempotent(t *testing.T
 		instance.Bindings = nil
 		encoded, _ := json.Marshal(instance)
 		if err := tx.Bucket(bucketProviders).Put([]byte(instance.ID), encoded); err != nil {
-			return err
-		}
-		var deployment domain.Deployment
-		if err := json.Unmarshal(tx.Bucket(bucketDeployments).Get([]byte("deployment_v3")), &deployment); err != nil {
-			return err
-		}
-		deployment.BindingID = ""
-		encoded, _ = json.Marshal(deployment)
-		if err := tx.Bucket(bucketDeployments).Put([]byte(deployment.ID), encoded); err != nil {
 			return err
 		}
 		var version [8]byte
@@ -378,12 +368,14 @@ func TestProviderProfileBindingMigrationFromV8IsAtomicAndIdempotent(t *testing.T
 				t.Fatal(err)
 			}
 			instance, _ := retried.GetProvider(context.Background(), "provider_v3")
-			deployment, _ := retried.GetDeployment(context.Background(), "deployment_v3")
 			if closeErr := retried.Close(); closeErr != nil {
 				t.Fatal(closeErr)
 			}
-			if len(instance.Bindings) != 1 || deployment.BindingID != instance.Bindings[0].ID {
-				t.Fatalf("provider=%#v deployment=%#v", instance, deployment)
+			// The deployment side of this backfill is no longer reachable from an
+			// old fixture: schema 20 refuses a directory that holds deployments.
+			if len(instance.Bindings) != 1 ||
+				instance.Bindings[0].ID != domain.DefaultProviderProfileBindingID(instance.ID, instance.ProfileID) {
+				t.Fatalf("provider=%#v", instance)
 			}
 		})
 	}
@@ -414,11 +406,6 @@ func createV3ProviderMetadata(t *testing.T, path string) {
 			AllowedHosts: []string{"bedrock-runtime.us-east-1.amazonaws.com"}, Capabilities: capabilities,
 			Enabled: true, CreatedAt: now, UpdatedAt: now, Revision: 1,
 		}
-		deployment := domain.Deployment{
-			ID: "deployment_v3", Name: "Claude", ProviderID: instance.ID, ProviderModel: "model",
-			Capabilities: capabilities, InputMicrosPerMillion: 1, OutputMicrosPerMillion: 1,
-			Weight: 1, Enabled: true, CreatedAt: now, UpdatedAt: now, Revision: 1,
-		}
 		for _, record := range []struct {
 			bucket []byte
 			id     string
@@ -426,7 +413,6 @@ func createV3ProviderMetadata(t *testing.T, path string) {
 		}{
 			{bucketCredentials, credential.ID, credential},
 			{bucketProviders, instance.ID, instance},
-			{bucketDeployments, deployment.ID, deployment},
 		} {
 			encoded, err := json.Marshal(record.value)
 			if err != nil {
@@ -1092,8 +1078,10 @@ func TestStoreRejectsProfileAwareDefaultGrantsAndDeploymentEscalation(t *testing
 	validDeployment, err := store.PutDeployment(ctx, domain.Deployment{
 		ID: "deployment_valid", Name: "Valid", ProviderID: instance.ID, ProviderModel: "model",
 		AccessSurface: instance.AccessSurface, ProfileID: instance.ProfileID, Capabilities: providerCapabilities,
-		CapabilityEvidence: domain.EvidenceForCapabilities(providerCapabilities, domain.EvidenceDeclared),
-		Weight:             1, CreatedAt: now, UpdatedAt: now,
+		CapabilityEvidence:      domain.EvidenceForCapabilities(providerCapabilities, domain.EvidenceDeclared),
+		ModelCapabilitySnapshot: domain.DeclaredCapabilitySnapshot("model", "sha256:test", providerCapabilities, now),
+		CapabilityReviewState:   domain.CapabilityReviewCurrent,
+		Weight:                  1, CreatedAt: now, UpdatedAt: now,
 	}, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -1140,5 +1128,39 @@ func TestStoreRejectsProfileAwareDefaultGrantsAndDeploymentEscalation(t *testing
 	reduced.CapabilityEvidence = domain.EvidenceForCapabilities(reduced.Capabilities, domain.EvidenceDeclared)
 	if _, err := store.PutProvider(ctx, reduced, instance.Revision); err == nil {
 		t.Fatal("provider update invalidated an existing deployment")
+	}
+}
+
+// Schema 20 stores a capability snapshot on every deployment and will not
+// invent one: the only value it could infer is the provider ceiling, which is
+// the guess the snapshot exists to replace. A directory holding deployments is
+// refused with an actionable message rather than reinterpreted.
+func TestSchema20RefusesADataDirectoryHoldingDeployments(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "metadata.db")
+	createV3ProviderMetadata(t, path)
+	db, err := bbolt.Open(path, 0o600, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	encoded, err := json.Marshal(domain.Deployment{
+		ID: "deployment_v3", Name: "Claude", ProviderID: "provider_v3", ProviderModel: "model",
+		Weight: 1, CreatedAt: now, UpdatedAt: now, Revision: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Update(func(tx *bbolt.Tx) error {
+		return tx.Bucket(bucketDeployments).Put([]byte("deployment_v3"), encoded)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(path); err == nil {
+		t.Fatal("a data directory with deployments upgraded to schema 20")
+	} else if !strings.Contains(err.Error(), "re-initialise the data directory") {
+		t.Fatalf("refusal is not actionable: %v", err)
 	}
 }
