@@ -198,7 +198,13 @@ func metricsSampleFetcher(rawURL string, token []byte, timeout time.Duration) (s
 		request.Header.Set("Authorization", "Bearer "+string(token))
 		response, err := client.Do(request)
 		if err != nil {
-			return nil, errors.New("metrics endpoint is unavailable")
+			// Naming the endpoint matters more here than the usual terseness:
+			// this command reads a *running* instance, and the failure an
+			// operator actually hits is that it is not up. "unavailable" alone
+			// sends them looking at credentials and listeners instead. The URL
+			// is loopback and operator-supplied, and userinfo is rejected above,
+			// so there is nothing here to leak.
+			return nil, fmt.Errorf("metrics endpoint %s is unavailable; is Heimdall running with metrics enabled?", parsed.Redacted())
 		}
 		defer response.Body.Close()
 		if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden {

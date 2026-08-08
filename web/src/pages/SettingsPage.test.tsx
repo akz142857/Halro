@@ -325,6 +325,11 @@ describe("SettingsPage system configuration pane", () => {
     // done on this page can populate these figures — say so here rather than
     // leaving "no data" to be interpreted as a fault.
     expect(screen.getByText(/Gateway/)).toBeInTheDocument();
+    // "this instance" was ambiguous between the data directory and the current
+    // run: a restarted instance reports thousands of requests_total (replayed
+    // from the Ledger) beside zero here, and the first reader to hit that asked
+    // whether the card was broken.
+    expect(screen.getByText(/本次启动/)).toBeInTheDocument();
   });
 
   it("keeps an unknown pane on general rather than blanking the page", () => {

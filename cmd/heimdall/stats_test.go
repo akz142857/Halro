@@ -227,6 +227,36 @@ func TestStatsFetcherReportsRejectedCredentials(t *testing.T) {
 	}
 }
 
+// The failure an operator actually hits is "the instance is not up", and the
+// error has to point there. A bare "unavailable" sends them to check
+// credentials and listeners first — which is what happened the first time this
+// command was run for real.
+func TestStatsFetcherNamesTheEndpointWhenNothingAnswers(t *testing.T) {
+	// A port that accepted a connection and then closed, so nothing is listening.
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	endpoint := server.URL + "/metrics"
+	server.Close()
+
+	fetch, err := metricsSampleFetcher(endpoint, []byte("token"), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = fetch(context.Background())
+	if err == nil {
+		t.Fatal("a closed endpoint was reported as reachable")
+	}
+	if !strings.Contains(err.Error(), "127.0.0.1") {
+		t.Fatalf("error does not name the endpoint it tried: %v", err)
+	}
+	if !strings.Contains(err.Error(), "running") {
+		t.Fatalf("error does not point at the likely cause: %v", err)
+	}
+	// The bearer token must not appear in an error an operator will paste.
+	if strings.Contains(err.Error(), "token") {
+		t.Fatalf("error leaked the credential: %v", err)
+	}
+}
+
 func TestStatsMetricsURLFromListener(t *testing.T) {
 	for _, testCase := range []struct {
 		listen string

@@ -361,7 +361,7 @@ export const enUS = {
     projectEventsPerSecond: "Single-project accounting writes/s",
     metadataBatchSize: "Metadata writes per transaction",
     metadataWriteSeconds: "Mean metadata page write",
-    writePathIdle: "No durable writes yet. These figures appear once this instance has served Gateway requests — Admin console activity does not produce accounting writes, so browsing here will never fill them in.",
+    writePathIdle: "No durable writes since this process started. These figures cover the current run only, so a restart clears them; earlier traffic still counts toward heimdall_requests_total, which is rebuilt from the Ledger. They fill in once this run serves a Gateway request — Admin console activity does not produce accounting writes.",
     writePathWindow: "Averages since this instance started",
     writePathNotCoalescing: "Appends are not coalescing. At this batch size the limit is offered concurrency or upstream serialization, not disk speed.",
     writePathLive: "For a recent window rather than a lifetime average, run heimdall stats -interval 10s.",
