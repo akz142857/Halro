@@ -5,6 +5,7 @@ import { api } from "../api";
 import { AdminUsersSection } from "./AdminUsersSection";
 import { ProjectsPage } from "./ProjectsPage";
 import { RoutesPage } from "./RoutesPage";
+import { DeploymentsPage } from "./DeploymentsPage";
 import type { AdminRole, Deployment, Project, Provider, Route, Session } from "../types";
 
 function session(role: AdminRole): Session {
@@ -185,5 +186,45 @@ describe("destructive step-up", () => {
       currentPassword: "correct horse battery staple",
       totpCode: "123456",
     }));
+  });
+
+  // Deployments had three write controls that were never role-gated — test,
+  // enable and create-replacement — so a read-only session was shown buttons
+  // that would 403 on click. §7.3 also requires a disabled control to say why.
+  it("offers no live write control on the deployments page", async () => {
+    const capabilities = {
+      chat: true, streaming: true, embeddings: false, moderations: false, images: false,
+      transcriptions: false, speech: false, files: false, batches: false, rerank: false,
+      async_generate: false, tools: false, vision: false, json_mode: false,
+      developer_role: false, reasoning: false, stream_usage: false,
+      max_context_tokens: 0, max_output_tokens: 0,
+    };
+    const provider = {
+      id: "provider_openai", name: "OpenAI", type: "openai", enabled: true, capabilities,
+      capability_evidence: {}, revision: 1, created_at: "", updated_at: "",
+    } as Provider;
+    const deployment = {
+      id: "deployment_a", name: "GPT", provider_id: provider.id, provider_model: "gpt-5",
+      capabilities, capability_evidence: {}, enabled: false, revision: 2,
+      last_test_status: "healthy", last_test_revision: 2,
+      created_at: "", updated_at: "",
+    } as Deployment;
+    vi.spyOn(api, "providers").mockResolvedValue({ items: [provider], next_cursor: "" });
+    vi.spyOn(api, "deployments").mockResolvedValue({ items: [deployment], next_cursor: "" });
+    vi.spyOn(api, "routes").mockResolvedValue({ items: [], next_cursor: "" });
+
+    renderAs("read_only", <DeploymentsPage />);
+
+    // The test is healthy and current, so nothing but the role should be
+    // holding these back.
+    for (const name of ["测试", "启用", "编辑", "＋ 新建模型部署"]) {
+      expect(await screen.findByRole("button", { name })).toBeDisabled();
+    }
+    fireEvent.click(screen.getByLabelText("更多操作"));
+    expect(screen.getByRole("button", { name: "创建替代" })).toBeDisabled();
+
+    // A disabled control has to say why it is disabled.
+    expect(screen.getByRole("button", { name: "编辑" })).toHaveAttribute(
+      "title", "只读账户无法执行此操作。");
   });
 });

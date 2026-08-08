@@ -67,7 +67,7 @@ export function DeploymentsPage() {
         eyebrow={t("deployments.eyebrow")}
         title={t("deployments.title")}
         description={t("deployments.description")}
-        action={<button className="button primary" disabled={readOnly} onClick={() => { setReplacement(undefined); setEditing("new"); }}>{t("deployments.create")}</button>}
+        action={<button className="button primary" disabled={readOnly} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={() => { setReplacement(undefined); setEditing("new"); }}>{t("deployments.create")}</button>}
       />
       <OnboardingContextBanner />
       {(deployments.isPending || providers.isPending || routes.isPending) && <Loading />}
@@ -218,8 +218,12 @@ function DeploymentRow({
           )}
         </div>
         <div className="row-actions deployment-compact-actions">
-          <InlineTestControl state={testState} latency={deployment.last_test_latency_millis} onTest={() => test.mutate()} />
-          <button className="button ghost" disabled={readOnly} onClick={onEdit}>{t("common.edit")}</button>
+          {/* Test, enable and create-replacement are writes. ConfirmButton
+              gates itself; these three did not, so a read-only session was
+              shown three controls that would 403 on click. §7.3 also requires a
+              disabled control to say why, so each carries the reason. */}
+          <InlineTestControl state={testState} latency={deployment.last_test_latency_millis} onTest={() => test.mutate()} disabled={readOnly} title={readOnly ? t("navigation.readOnlyAction") : undefined} />
+          <button className="button ghost" disabled={readOnly} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={onEdit}>{t("common.edit")}</button>
           <button className="button ghost deployment-expand" aria-expanded={expanded} aria-controls={`deployment-details-${deployment.id}`} onClick={() => setExpanded((value) => !value)}>
             <span>{expanded ? t("deployments.collapseDetails") : t("deployments.expandDetails")}</span>
             {/* Reserves the width of the other label so toggling never resizes the row. */}
@@ -230,12 +234,12 @@ function DeploymentRow({
             {deployment.enabled ? (
               <ConfirmButton className="button ghost" label={t("common.disable")} title={t("deployments.disableTitle")} confirmLabel={t("deployments.disableConfirm", { name: deployment.name })} disabled={state.isPending || routeBlocked} disabledReason={routeBlocked ? t("deployments.routeBlocked") : undefined} onConfirm={() => state.mutateAsync()} />
             ) : (
-              <button className="button ghost" title={!testIsCurrent ? t("deployments.testRequired") : undefined} disabled={state.isPending || !testIsCurrent} onClick={() => state.mutate()}>{t("common.enable")}</button>
+              <button className="button ghost" title={readOnly ? t("navigation.readOnlyAction") : !testIsCurrent ? t("deployments.testRequired") : undefined} disabled={readOnly || state.isPending || !testIsCurrent} onClick={() => state.mutate()}>{t("common.enable")}</button>
             )}
             <span className="button ghost deployment-state-sizer" aria-hidden="true">{deployment.enabled ? t("common.enable") : t("common.disable")}</span>
           </span>
           <OverflowMenu label={t("deployments.moreActions")}>
-            <button className="button ghost" onClick={onReplace}>{t("deployments.createReplacement")}</button>
+            <button className="button ghost" disabled={readOnly} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={onReplace}>{t("deployments.createReplacement")}</button>
             <ConfirmButton label={t("common.delete")} confirmLabel={t("deployments.deleteConfirm", { name: deployment.name })} requireStepUp onConfirm={(reauth) => remove.mutateAsync(reauth)} disabled={remove.isPending || routeBlocked} disabledReason={routeBlocked ? t("deployments.routeBlocked") : undefined} />
           </OverflowMenu>
         </div>
