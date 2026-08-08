@@ -1244,6 +1244,7 @@ func (r *Runtime) adminRouter() http.Handler {
 	router.With(r.requireAdminMutation).Put("/admin/api/v1/deployments/{id}", r.updateAdminDeployment)
 	router.With(r.requireAdminMutation).Delete("/admin/api/v1/deployments/{id}", r.deleteAdminDeployment)
 	router.With(r.requireAdminMutation).Post("/admin/api/v1/deployments/{id}/test", r.testAdminDeployment)
+	router.With(r.requireAdminMutation).Post("/admin/api/v1/deployments/{id}/capabilities/preflight", r.preflightAdminDeploymentCapabilities)
 	router.With(r.requireAdmin).Get("/admin/api/v1/deployments/{id}/prices", r.listAdminDeploymentPrices)
 	router.With(r.requireAdminMutation).Post("/admin/api/v1/deployments/{id}/prices", r.createAdminDeploymentPrice)
 	router.With(r.requireAdminMutation).Post("/admin/api/v1/deployments/{id}/prices/preview", r.previewAdminDeploymentPrice)

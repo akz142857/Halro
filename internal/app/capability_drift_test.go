@@ -26,7 +26,6 @@ func catalogueDeployment(t *testing.T) (domain.Deployment, domain.ProviderProfil
 			Source: string(entry.Source), Status: string(entry.Status),
 			CapturedAt: time.Now().UTC(), Capabilities: entry.Capabilities,
 		},
-		CapabilityReviewState: domain.CapabilityReviewCurrent,
 	}
 	return deployment, binding
 }

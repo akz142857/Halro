@@ -1080,7 +1080,6 @@ func TestStoreRejectsProfileAwareDefaultGrantsAndDeploymentEscalation(t *testing
 		AccessSurface: instance.AccessSurface, ProfileID: instance.ProfileID, Capabilities: providerCapabilities,
 		CapabilityEvidence:      domain.EvidenceForCapabilities(providerCapabilities, domain.EvidenceDeclared),
 		ModelCapabilitySnapshot: domain.DeclaredCapabilitySnapshot("model", "sha256:test", providerCapabilities, now),
-		CapabilityReviewState:   domain.CapabilityReviewCurrent,
 		Weight:                  1, CreatedAt: now, UpdatedAt: now,
 	}, 0)
 	if err != nil {

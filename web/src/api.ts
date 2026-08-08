@@ -2,6 +2,7 @@ import type {
   AdminUser,
   AuditRecord,
   AlertWebhook,
+  CapabilityPreflight,
   CreatedGatewayKey,
   Credential,
   Dashboard,
@@ -11,6 +12,7 @@ import type {
   Page,
   Project,
   Provider,
+  ProviderCapabilities,
   ProviderModelCatalog,
   RedactionPolicy,
   RedactionTestResult,
@@ -344,6 +346,13 @@ export const api = {
     request<{ status: "healthy"; latency_ms: number; tested_at: string; revision: number }>(
       `/deployments/${encodeURIComponent(id)}/test`,
       json("POST"),
+    ).then((value) => value.data),
+  /** Asks which routes a proposed capability set would strand, before saving it.
+   * Writes nothing, so it carries no revision precondition. */
+  preflightDeploymentCapabilities: (id: string, capabilities: ProviderCapabilities) =>
+    request<CapabilityPreflight>(
+      `/deployments/${encodeURIComponent(id)}/capabilities/preflight`,
+      json("POST", { capabilities }),
     ).then((value) => value.data),
   deploymentPrices: (id: string) => request<Page<DeploymentPriceVersion>>(`/deployments/${encodeURIComponent(id)}/prices`).then((value) => value.data),
   createDeploymentPrice: (id: string, value: unknown, idempotencyKey: string) =>

@@ -491,6 +491,25 @@ h3 { margin-bottom: 0; font-size: 18px; }
 .deployment-facts dd > small { color: var(--muted-2); font: var(--font-size-xs) var(--mono); }
 .deployment-facts dd.unset > span { color: var(--color-status-warning-text); }
 .deployment-pricing-warning { margin: 14px 0 0; }
+/* Capability review: the saved answer versus what supports it now. */
+.capability-review-state { font-size: var(--font-size-xs); font-weight: var(--font-weight-semibold); letter-spacing: .02em; }
+.capability-review-state[data-state="drifted"] { color: var(--color-status-warning-text); }
+.capability-review-state[data-state="review_available"] { color: var(--muted); }
+.deployment-capability-review { margin: var(--space-4) 0 0; }
+.deployment-review-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--space-3); margin: var(--space-3) 0 0; }
+.deployment-review-facts > div { display: grid; align-content: start; gap: var(--space-1); min-width: 0; }
+.deployment-review-facts dt { color: var(--muted); font-size: var(--font-size-xs); font-weight: var(--font-weight-semibold); letter-spacing: .02em; }
+.deployment-review-facts dd { margin: 0; color: var(--text); font-size: var(--font-size-sm); overflow-wrap: anywhere; }
+.deployment-review-consequence { margin-top: var(--space-3); color: var(--muted); font-size: var(--font-size-xs); line-height: 1.5; }
+/* Route impact of a narrowing, listed per route before it is saved. */
+.deployment-capability-impact { margin: var(--space-4) 0 0; }
+.deployment-impact-list { display: grid; gap: var(--space-2); margin: var(--space-3) 0 0; padding: 0; list-style: none; }
+.deployment-impact-list > li { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-3); padding: var(--space-2) var(--space-3); background: var(--surface-inset); border: 1px solid var(--line); }
+.deployment-impact-list > li > code { color: var(--text); font-size: var(--font-size-sm); }
+.deployment-impact-list > li > span { color: var(--muted); font-size: var(--font-size-xs); }
+.deployment-impact-list > li > small { margin-left: auto; color: var(--muted-2); font-size: var(--font-size-xs); }
+.deployment-impact-list > li[data-sole="true"] { border-color: var(--color-status-warning-border); }
+.deployment-impact-list > li[data-sole="true"] > small { color: var(--color-status-warning-text); }
 .deployment-pricing-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 14px 0 0; }
 .deployment-pricing-grid.single { grid-template-columns: 1fr; }
 .deployment-pricing-panel { min-width: 0; background: var(--surface-inset); border: 1px solid var(--line); }

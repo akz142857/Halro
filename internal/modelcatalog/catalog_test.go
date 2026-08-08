@@ -316,3 +316,70 @@ func TestCapabilityNamesCoverTheDomainStruct(t *testing.T) {
 		t.Fatalf("unexpected encoding %s", encoded)
 	}
 }
+
+func TestGainedAndLostReportBooleanNamesOnly(t *testing.T) {
+	before := domain.ProviderCapabilities{
+		Chat: true, Tools: true, MaxContextTokens: 8000, MaxOutputTokens: 2000,
+	}
+	after := domain.ProviderCapabilities{
+		Chat: true, Vision: true, MaxContextTokens: 4000, MaxOutputTokens: 1000,
+	}
+
+	lost := LostCapabilities(before, after)
+	if !slices.Equal(lost, []string{"tools"}) {
+		t.Fatalf("lost=%v", lost)
+	}
+	gained := GainedCapabilities(before, after)
+	if !slices.Equal(gained, []string{"vision"}) {
+		t.Fatalf("gained=%v", gained)
+	}
+	// The limits halved, but a narrowed limit does not remove a candidate from a
+	// route; it narrows which requests fit. Reporting it as a lost capability
+	// would make every limit edit look like it strands routes.
+	for _, name := range append(lost, gained...) {
+		if name == "max_context_tokens" || name == "max_output_tokens" {
+			t.Fatalf("a token limit was reported as a capability change: %v", name)
+		}
+	}
+}
+
+func TestGainedAndLostFollowCapabilityNameOrder(t *testing.T) {
+	// Both names are set, so the result order comes from CapabilityNames rather
+	// than from the struct field order or map iteration.
+	gained := GainedCapabilities(domain.ProviderCapabilities{},
+		domain.ProviderCapabilities{Vision: true, Chat: true})
+	if !slices.Equal(gained, []string{"chat", "vision"}) {
+		t.Fatalf("gained=%v", gained)
+	}
+}
+
+func TestHasCapabilityAnswersFalseForLimits(t *testing.T) {
+	capabilities := domain.ProviderCapabilities{Tools: true, MaxContextTokens: 8000}
+	if !HasCapability(capabilities, "tools") {
+		t.Fatal("a held capability answered false")
+	}
+	if HasCapability(capabilities, "max_context_tokens") {
+		t.Fatal("a token limit answered true; it is not something a candidate has or lacks")
+	}
+}
+
+// Union is the dual of Clamp. It exists only to describe a combined claim when
+// reporting what exceeds a ceiling, so it must never be narrower than either side.
+func TestUnionIsWiderThanBothSides(t *testing.T) {
+	first := domain.ProviderCapabilities{Chat: true, MaxContextTokens: 8000, MaxOutputTokens: 2000}
+	second := domain.ProviderCapabilities{Tools: true, MaxContextTokens: 4000, MaxOutputTokens: 1000}
+
+	union := Union(first, second)
+
+	if !union.Chat || !union.Tools {
+		t.Fatalf("union dropped a boolean: %+v", union)
+	}
+	if union.MaxContextTokens != 8000 || union.MaxOutputTokens != 2000 {
+		t.Fatalf("union took the narrower limit: %+v", union)
+	}
+	// An undeclared limit is the widest claim of all, so it must win.
+	widest := Union(first, domain.ProviderCapabilities{Chat: true})
+	if widest.MaxContextTokens != 0 || widest.MaxOutputTokens != 0 {
+		t.Fatalf("an undeclared limit was bounded by the other side: %+v", widest)
+	}
+}

@@ -385,8 +385,8 @@ func (r *Runtime) deploymentFromInput(request *http.Request, deploymentID string
 	deployment := domain.Deployment{
 		ID: deploymentID, Name: strings.TrimSpace(input.Name), ProviderID: input.ProviderID,
 		ProviderModel: model, TargetKind: targetKind, Capabilities: capabilities,
-		ModelCapabilitySnapshot: snapshot, CapabilityReviewState: domain.CapabilityReviewCurrent,
-		AccessSurface: binding.AccessSurface, ProfileID: binding.ProfileID, BindingID: binding.ID,
+		ModelCapabilitySnapshot: snapshot,
+		AccessSurface:           binding.AccessSurface, ProfileID: binding.ProfileID, BindingID: binding.ID,
 		Region:             region,
 		CapabilityEvidence: evidence,
 		MaxConcurrency:     input.MaxConcurrency, Priority: input.Priority, Weight: weight,
