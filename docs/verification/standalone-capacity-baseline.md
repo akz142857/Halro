@@ -42,9 +42,11 @@ Measured on Apple M4 Pro, darwin/arm64, APFS, where `os.File.Sync` issues
 where fsync is typically one to two orders of magnitude cheaper. The shapes —
 flat versus scaling — are the transferable part.
 
-Accounting throughput is governed by `min(in-flight requests, distinct
-projects)`, because one project's five events serialize on `lockProject` and so
-contribute exactly one concurrent WAL appender:
+Accounting throughput is governed by offered concurrency alone. It was governed
+by `min(in-flight requests, distinct projects)` until ADR 0018: one project's
+five events serialized on `lockProject`, so a project contributed exactly one
+concurrent WAL appender however many requests it had in flight. The table below
+is that earlier shape, kept because it is what the ADR argues from:
 
 | Projects \ workers | 1 | 8 | 64 |
 |---|---:|---:|---:|
@@ -52,22 +54,34 @@ contribute exactly one concurrent WAL appender:
 | 8 | 44 | 182 | 181 |
 | 64 | 43 | 167 | 1252 |
 
-Request lifecycles per second. At `min` = 1/8/64 the path achieves 227/910/6261
-Ledger events per second against 232/946/7034 for a raw concurrent append — 89
-to 98 percent of the WAL's own group-commit rate. The accounting path is
-therefore already at the WAL's efficiency frontier for a given number of
-concurrently appending projects; the open item is that one project cannot be
-more than one of them, which is ADR 0018.
+Request lifecycles per second, **before ADR 0018**. At `min` = 1/8/64 the path
+achieved 227/910/6261 Ledger events per second against 232/946/7034 for a raw
+concurrent append — 89 to 98 percent of the WAL's own group-commit rate, but
+only reachable by adding projects.
+
+After ADR 0018 the project axis is gone:
+
+| Projects \ workers | 1 | 8 | 64 |
+|---|---:|---:|---:|
+| 1 | 46 | 166 | **1011** |
+| 8 | 40 | 170 | 1068 |
+| 64 | 44 | 165 | 1021 |
+
+A single project went from flat at ~45 to 1011 lifecycles per second, and the
+rows now agree within noise. The remaining gap to a raw append (about 5,100
+events per second at 64 workers against 7,034) is apply serialization, not a
+lock.
 
 Two consequences worth stating before quoting any number from this table:
 
-- **The per-project ceiling is independent of upstream latency.** The lock is
-  held only across the durable append, not across the Provider call, so a single
-  project cannot exceed it however many requests are in flight.
-- **A single-project load cannot observe the pricing gate improvement** in ADR
-  0012's amendment, because the accounting ceiling binds first at a nearly
-  identical rate. A load matrix without multiple projects will report that
-  change as ineffective.
+- **The per-project ceiling described above is gone** (ADR 0018), so a
+  single-project load can now observe ADR 0012's pricing-gate improvement. Before
+  that change the accounting ceiling bound first at a nearly identical rate and
+  reported the pricing work as ineffective.
+- **Vary the project count anyway.** The multi-project row is what caught a data
+  race in ADR 0018's first implementation: state guarded by a per-project lock
+  had been stored per *manager*, which only two projects running at once can
+  expose.
 
 ## Reading the same numbers on a real host
 
