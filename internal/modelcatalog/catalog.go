@@ -1,0 +1,594 @@
+// Package modelcatalog holds Halro's versioned model capability catalog: the
+// claim that one provider model, reached through one profile, supports one set
+// of operations.
+//
+// A provider's /models response proves only that an identifier exists; it does
+// not establish operation support, so no capability here is derived from it.
+// Entries are declared in Go source (builtin.go) and reviewed like code, which
+// keeps the catalog on the same release path as the profiles whose ceilings it
+// must stay under. An unknown model resolves to zero capabilities rather than to
+// the profile ceiling: the operator declares what it does before it can serve.
+//
+// Phase 0 of docs/todo/model-aware-capability-selection.zh-CN.md. Nothing in
+// this package is wired into the request path yet.
+package modelcatalog
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"slices"
+	"strconv"
+	"strings"
+
+	"github.com/akz142857/Halro/internal/domain"
+)
+
+// Source records where a capability claim came from. The zero value is invalid.
+type Source string
+
+const (
+	// SourceBuiltin is this package's reviewed, versioned catalog.
+	SourceBuiltin Source = "builtin_catalog"
+	// SourceProviderMetadata is structured capability metadata returned by a
+	// provider API. It is external input: it may inform a claim but never
+	// pre-selects one, because that would let an upstream decide what Halro
+	// enables by default.
+	SourceProviderMetadata Source = "provider_metadata"
+	// SourceVerifiedProbe is the result of an explicit side-effect-free or
+	// operator-triggered verification.
+	SourceVerifiedProbe Source = "verified_probe"
+	// SourceOperatorDeclared is an operator's explicit declaration for a model
+	// the catalog does not know.
+	SourceOperatorDeclared Source = "operator_declared"
+	// SourceUnsupported marks a capability that is known not to be supported or
+	// that no source could establish.
+	SourceUnsupported Source = "unsupported"
+)
+
+func (s Source) Valid() bool {
+	switch s {
+	case SourceBuiltin, SourceProviderMetadata, SourceVerifiedProbe, SourceOperatorDeclared, SourceUnsupported:
+		return true
+	default:
+		return false
+	}
+}
+
+// PreselectsCapabilities reports whether the console may render a capability
+// from this source as checked by default. Only the builtin catalog may.
+func (s Source) PreselectsCapabilities() bool { return s == SourceBuiltin }
+
+// MaxEvidence caps the evidence level a claim from this source may carry. A
+// declaration never becomes verified by being written down confidently.
+func (s Source) MaxEvidence() domain.CapabilityEvidence {
+	switch s {
+	case SourceVerifiedProbe:
+		return domain.EvidenceVerified
+	case SourceBuiltin, SourceProviderMetadata, SourceOperatorDeclared:
+		return domain.EvidenceDeclared
+	default:
+		return domain.EvidenceUnsupported
+	}
+}
+
+// Status describes how well a model's capabilities are established.
+type Status string
+
+const (
+	// StatusKnown means the builtin catalog covers the model.
+	StatusKnown Status = "known"
+	// StatusPartial means only non-builtin sources contributed.
+	StatusPartial Status = "partial"
+	// StatusUnknown means no source claimed anything.
+	StatusUnknown Status = "unknown"
+	// StatusConflicting means sources disagreed. Disputed capabilities are off.
+	StatusConflicting Status = "conflicting"
+)
+
+func (s Status) Valid() bool {
+	switch s {
+	case StatusKnown, StatusPartial, StatusUnknown, StatusConflicting:
+		return true
+	default:
+		return false
+	}
+}
+
+// Key identifies a catalog entry. Capabilities are not a property of a model
+// name alone: the same name reached through a different profile, or in a
+// different region, can behave differently.
+//
+// Region is empty when the claim holds regardless of region. Lookup prefers an
+// exact region match and falls back to the region-agnostic entry; it never
+// widens a model name.
+type Key struct {
+	ProviderType domain.ProviderType
+	Profile      domain.ProviderProfileID
+	Model        string
+	Region       string
+}
+
+func (k Key) Validate() error {
+	var problems []error
+	if strings.TrimSpace(string(k.ProviderType)) == "" {
+		problems = append(problems, errors.New("catalog key requires a provider type"))
+	}
+	if strings.TrimSpace(string(k.Profile)) == "" {
+		problems = append(problems, errors.New("catalog key requires a profile"))
+	}
+	if strings.TrimSpace(k.Model) == "" {
+		problems = append(problems, errors.New("catalog key requires a model"))
+	}
+	if k.Model != strings.TrimSpace(k.Model) || len(k.Model) > 512 {
+		problems = append(problems, errors.New("catalog model must be trimmed and at most 512 bytes"))
+	}
+	if len(problems) > 0 {
+		return errors.Join(problems...)
+	}
+	providerType, _, ok := domain.RegisteredProviderProfile(k.Profile)
+	if !ok {
+		return fmt.Errorf("catalog profile %q is not registered", k.Profile)
+	}
+	if providerType != k.ProviderType {
+		return fmt.Errorf("catalog profile %q belongs to provider type %q, not %q", k.Profile, providerType, k.ProviderType)
+	}
+	return nil
+}
+
+func (k Key) canonical() string {
+	return strings.Join([]string{string(k.ProviderType), string(k.Profile), k.Model, k.Region}, "\x00")
+}
+
+// Ceiling returns the profile capability ceiling a claim for this key may not
+// exceed.
+func (k Key) Ceiling() domain.ProviderCapabilities {
+	return domain.DefaultProviderCapabilitiesForProfile(k.ProviderType, k.Profile)
+}
+
+// Entry is a resolved capability claim for one key.
+type Entry struct {
+	Key          Key
+	Status       Status
+	Source       Source
+	Capabilities domain.ProviderCapabilities
+	// Conflicts lists capability names sources disagreed about. Each is forced
+	// off in Capabilities.
+	Conflicts []string
+}
+
+// Unknown returns the fail-closed entry for a model no source covers: zero
+// capabilities, never the profile ceiling.
+func Unknown(key Key) Entry {
+	return Entry{Key: key, Status: StatusUnknown, Source: SourceUnsupported}
+}
+
+// Evidence renders the entry's capabilities as an evidence set bounded by what
+// its source is allowed to claim.
+func (e Entry) Evidence() domain.CapabilityEvidenceSet {
+	return domain.EvidenceForCapabilities(e.Capabilities, e.Source.MaxEvidence())
+}
+
+// Revision is the per-model digest. Conflict detection compares this, not the
+// catalog digest: a catalog-wide digest rotates whenever any unrelated model
+// appears, and operators would learn to retry through the resulting conflicts
+// until they meant nothing.
+func (e Entry) Revision() string {
+	sum := sha256.Sum256([]byte(e.canonical()))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func (e Entry) canonical() string {
+	fields := []string{e.Key.canonical(), string(e.Status), string(e.Source)}
+	for _, name := range CapabilityNames {
+		fields = append(fields, name+"="+capabilityValue(e.Capabilities, name))
+	}
+	conflicts := slices.Clone(e.Conflicts)
+	slices.Sort(conflicts)
+	fields = append(fields, "conflicts="+strings.Join(conflicts, ","))
+	return strings.Join(fields, "\x00")
+}
+
+func (e Entry) Validate() error {
+	var problems []error
+	if err := e.Key.Validate(); err != nil {
+		problems = append(problems, err)
+	}
+	if !e.Status.Valid() {
+		problems = append(problems, fmt.Errorf("catalog status %q is invalid", e.Status))
+	}
+	if !e.Source.Valid() {
+		problems = append(problems, fmt.Errorf("catalog source %q is invalid", e.Source))
+	}
+	if err := ValidateDependencies(e.Capabilities); err != nil {
+		problems = append(problems, err)
+	}
+	if !domain.ProviderCapabilitiesSubset(e.Capabilities, e.Key.Ceiling()) {
+		problems = append(problems, fmt.Errorf("catalog entry for %q exceeds the %q profile ceiling", e.Key.Model, e.Key.Profile))
+	}
+	for _, name := range e.Conflicts {
+		if !slices.Contains(CapabilityNames, name) {
+			problems = append(problems, fmt.Errorf("catalog conflict names unknown capability %q", name))
+		}
+	}
+	return errors.Join(problems...)
+}
+
+// Claim is one source's assertion about a model. Supported carries what the
+// source asserts is available; Unsupported names what it asserts is not.
+// Keeping them apart matters: a false boolean in Supported is indistinguishable
+// from "this source said nothing", and treating silence as denial would let one
+// incomplete source veto another's evidence.
+type Claim struct {
+	Source      Source
+	Supported   domain.ProviderCapabilities
+	Unsupported []string
+}
+
+// Merge folds claims for one key into a single entry. Disagreement fails
+// closed: a capability asserted both supported and unsupported is switched off
+// and recorded in Conflicts. The result is always clamped to the profile
+// ceiling, so no source can widen a profile — including a Beta profile whose
+// limits are pinned deliberately.
+func Merge(key Key, claims ...Claim) Entry {
+	if len(claims) == 0 {
+		return Unknown(key)
+	}
+	supported := make(map[string]bool, len(CapabilityNames))
+	denied := make(map[string]bool, len(CapabilityNames))
+	limits := map[string]int64{}
+	builtin := false
+	for _, claim := range claims {
+		if claim.Source == SourceBuiltin {
+			builtin = true
+		}
+		for _, name := range CapabilityNames {
+			if isLimit(name) {
+				if value := limitValue(claim.Supported, name); value > 0 {
+					// Lowest declared limit wins across sources. This narrows a
+					// derivation, not operator input: an operator value above
+					// the resulting limit is rejected, never clamped.
+					if current, ok := limits[name]; !ok || value < current {
+						limits[name] = value
+					}
+				}
+				continue
+			}
+			if booleanValue(claim.Supported, name) {
+				supported[name] = true
+			}
+		}
+		for _, name := range claim.Unsupported {
+			denied[name] = true
+		}
+	}
+
+	var conflicts []string
+	for name := range supported {
+		if denied[name] {
+			conflicts = append(conflicts, name)
+		}
+	}
+	slices.Sort(conflicts)
+	for _, name := range conflicts {
+		delete(supported, name)
+	}
+
+	capabilities := domain.ProviderCapabilities{}
+	for name := range supported {
+		setBoolean(&capabilities, name)
+	}
+	for name, value := range limits {
+		setLimit(&capabilities, name, value)
+	}
+	capabilities = Clamp(capabilities, key.Ceiling())
+
+	entry := Entry{Key: key, Source: primarySource(claims), Capabilities: capabilities, Conflicts: conflicts}
+	switch {
+	case len(conflicts) > 0:
+		entry.Status = StatusConflicting
+	case !capabilities.AnyOperation():
+		entry.Status = StatusUnknown
+		entry.Source = SourceUnsupported
+	case builtin:
+		entry.Status = StatusKnown
+	default:
+		entry.Status = StatusPartial
+	}
+	return entry
+}
+
+// primarySource reports the source that carries the entry, preferring the one
+// allowed to claim the most.
+func primarySource(claims []Claim) Source {
+	best := SourceUnsupported
+	for _, claim := range claims {
+		if claim.Source == SourceBuiltin {
+			return SourceBuiltin
+		}
+		if rank(claim.Source) > rank(best) {
+			best = claim.Source
+		}
+	}
+	return best
+}
+
+func rank(source Source) int {
+	switch source {
+	case SourceBuiltin:
+		return 4
+	case SourceVerifiedProbe:
+		return 3
+	case SourceOperatorDeclared:
+		return 2
+	case SourceProviderMetadata:
+		return 1
+	default:
+		return 0
+	}
+}
+
+// Clamp intersects capabilities with a ceiling. Booleans are conjunctions;
+// a zero limit means the layer declared none, so the other layer's limit stands.
+func Clamp(candidate, ceiling domain.ProviderCapabilities) domain.ProviderCapabilities {
+	result := domain.ProviderCapabilities{}
+	for _, name := range CapabilityNames {
+		if isLimit(name) {
+			setLimit(&result, name, narrowerLimit(limitValue(candidate, name), limitValue(ceiling, name)))
+			continue
+		}
+		if booleanValue(candidate, name) && booleanValue(ceiling, name) {
+			setBoolean(&result, name)
+		}
+	}
+	return result
+}
+
+func narrowerLimit(candidate, ceiling int64) int64 {
+	switch {
+	case candidate <= 0:
+		return ceiling
+	case ceiling <= 0:
+		return candidate
+	case candidate < ceiling:
+		return candidate
+	default:
+		return ceiling
+	}
+}
+
+// ValidateDependencies enforces that enhancements ride on the core operation
+// they modify.
+//
+// domain.Deployment currently enforces only streaming -> chat. The catalog holds
+// the full rule so a catalog entry cannot declare, say, tools without chat;
+// reconciling the two lives in Phase 1, because tightening domain validation
+// rejects configurations that exist today.
+func ValidateDependencies(capabilities domain.ProviderCapabilities) error {
+	var problems []error
+	for _, dependent := range []struct {
+		name    string
+		enabled bool
+	}{
+		{"streaming", capabilities.Streaming},
+		{"tools", capabilities.Tools},
+		{"vision", capabilities.Vision},
+		{"json_mode", capabilities.JSONMode},
+		{"developer_role", capabilities.DeveloperRole},
+		{"reasoning", capabilities.Reasoning},
+	} {
+		if dependent.enabled && !capabilities.Chat {
+			problems = append(problems, fmt.Errorf("%s capability requires chat capability", dependent.name))
+		}
+	}
+	if capabilities.StreamUsage && !capabilities.Streaming {
+		problems = append(problems, errors.New("stream_usage capability requires streaming capability"))
+	}
+	if capabilities.MaxContextTokens < 0 || capabilities.MaxOutputTokens < 0 {
+		problems = append(problems, errors.New("capability token limits cannot be negative"))
+	}
+	if capabilities.MaxContextTokens > 0 && capabilities.MaxOutputTokens > capabilities.MaxContextTokens {
+		problems = append(problems, errors.New("max output tokens cannot exceed max context tokens"))
+	}
+	return errors.Join(problems...)
+}
+
+// Catalog is an immutable set of entries.
+type Catalog struct {
+	entries  map[string]Entry
+	ordered  []Entry
+	revision string
+}
+
+// New validates entries and computes the catalog digest.
+func New(entries ...Entry) (*Catalog, error) {
+	catalog := &Catalog{entries: make(map[string]Entry, len(entries))}
+	var problems []error
+	for _, entry := range entries {
+		if err := entry.Validate(); err != nil {
+			problems = append(problems, err)
+			continue
+		}
+		if entry.Status == StatusUnknown {
+			problems = append(problems, fmt.Errorf("catalog entry for %q claims nothing", entry.Key.Model))
+			continue
+		}
+		if !entry.Capabilities.AnyOperation() {
+			problems = append(problems, fmt.Errorf("catalog entry for %q declares no core operation", entry.Key.Model))
+			continue
+		}
+		key := entry.Key.canonical()
+		if _, exists := catalog.entries[key]; exists {
+			problems = append(problems, fmt.Errorf("catalog has duplicate entry for %q", entry.Key.Model))
+			continue
+		}
+		catalog.entries[key] = entry
+		catalog.ordered = append(catalog.ordered, entry)
+	}
+	if len(problems) > 0 {
+		return nil, errors.Join(problems...)
+	}
+	slices.SortFunc(catalog.ordered, func(left, right Entry) int {
+		return strings.Compare(left.Key.canonical(), right.Key.canonical())
+	})
+	digest := sha256.New()
+	for _, entry := range catalog.ordered {
+		digest.Write([]byte(entry.Revision()))
+		digest.Write([]byte{0})
+	}
+	catalog.revision = "sha256:" + hex.EncodeToString(digest.Sum(nil))
+	return catalog, nil
+}
+
+// Lookup resolves a key to an entry. Matching is exact on the model: a prefix
+// must never promote an unknown future model to known capabilities. A key whose
+// region is not covered falls back to a region-agnostic entry for the same
+// model, which is an explicit claim that the capability does not vary by region.
+func (c *Catalog) Lookup(key Key) (Entry, bool) {
+	if entry, ok := c.entries[key.canonical()]; ok {
+		return entry, true
+	}
+	if key.Region == "" {
+		return Unknown(key), false
+	}
+	agnostic := key
+	agnostic.Region = ""
+	if entry, ok := c.entries[agnostic.canonical()]; ok {
+		entry.Key = key
+		return entry, true
+	}
+	return Unknown(key), false
+}
+
+// Revision is the digest of the whole catalog. It is diagnostic only.
+func (c *Catalog) Revision() string { return c.revision }
+
+// Entries returns the catalog in a stable order.
+func (c *Catalog) Entries() []Entry { return slices.Clone(c.ordered) }
+
+func (c *Catalog) Len() int { return len(c.ordered) }
+
+// CapabilityNames is the ordered set of capability fields the catalog encodes.
+// The order is fixed because entry digests depend on it; a test asserts it
+// still covers every field of domain.ProviderCapabilities.
+var CapabilityNames = []string{
+	"chat", "embeddings", "moderations", "images", "transcriptions", "speech",
+	"files", "batches", "rerank", "async_generate",
+	"streaming", "tools", "vision", "json_mode", "developer_role", "reasoning", "stream_usage",
+	"max_context_tokens", "max_output_tokens",
+}
+
+func isLimit(name string) bool {
+	return name == "max_context_tokens" || name == "max_output_tokens"
+}
+
+func capabilityValue(capabilities domain.ProviderCapabilities, name string) string {
+	if isLimit(name) {
+		return strconv.FormatInt(limitValue(capabilities, name), 10)
+	}
+	if booleanValue(capabilities, name) {
+		return "1"
+	}
+	return "0"
+}
+
+func booleanValue(capabilities domain.ProviderCapabilities, name string) bool {
+	switch name {
+	case "chat":
+		return capabilities.Chat
+	case "embeddings":
+		return capabilities.Embeddings
+	case "moderations":
+		return capabilities.Moderations
+	case "images":
+		return capabilities.Images
+	case "transcriptions":
+		return capabilities.Transcriptions
+	case "speech":
+		return capabilities.Speech
+	case "files":
+		return capabilities.Files
+	case "batches":
+		return capabilities.Batches
+	case "rerank":
+		return capabilities.Rerank
+	case "async_generate":
+		return capabilities.AsyncGenerate
+	case "streaming":
+		return capabilities.Streaming
+	case "tools":
+		return capabilities.Tools
+	case "vision":
+		return capabilities.Vision
+	case "json_mode":
+		return capabilities.JSONMode
+	case "developer_role":
+		return capabilities.DeveloperRole
+	case "reasoning":
+		return capabilities.Reasoning
+	case "stream_usage":
+		return capabilities.StreamUsage
+	default:
+		return false
+	}
+}
+
+func setBoolean(capabilities *domain.ProviderCapabilities, name string) {
+	switch name {
+	case "chat":
+		capabilities.Chat = true
+	case "embeddings":
+		capabilities.Embeddings = true
+	case "moderations":
+		capabilities.Moderations = true
+	case "images":
+		capabilities.Images = true
+	case "transcriptions":
+		capabilities.Transcriptions = true
+	case "speech":
+		capabilities.Speech = true
+	case "files":
+		capabilities.Files = true
+	case "batches":
+		capabilities.Batches = true
+	case "rerank":
+		capabilities.Rerank = true
+	case "async_generate":
+		capabilities.AsyncGenerate = true
+	case "streaming":
+		capabilities.Streaming = true
+	case "tools":
+		capabilities.Tools = true
+	case "vision":
+		capabilities.Vision = true
+	case "json_mode":
+		capabilities.JSONMode = true
+	case "developer_role":
+		capabilities.DeveloperRole = true
+	case "reasoning":
+		capabilities.Reasoning = true
+	case "stream_usage":
+		capabilities.StreamUsage = true
+	}
+}
+
+func limitValue(capabilities domain.ProviderCapabilities, name string) int64 {
+	switch name {
+	case "max_context_tokens":
+		return capabilities.MaxContextTokens
+	case "max_output_tokens":
+		return capabilities.MaxOutputTokens
+	default:
+		return 0
+	}
+}
+
+func setLimit(capabilities *domain.ProviderCapabilities, name string, value int64) {
+	switch name {
+	case "max_context_tokens":
+		capabilities.MaxContextTokens = value
+	case "max_output_tokens":
+		capabilities.MaxOutputTokens = value
+	}
+}
