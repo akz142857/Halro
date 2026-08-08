@@ -1,10 +1,28 @@
 # Heimdall Redis-like HA 架构提案
 
-- 状态：Proposed / Future
+- 状态：Proposed / 目标版本 1.1.0
 - 生产就绪：否
 - 适用范围：Standalone 向 Primary/Replica HA 的演进
 - 当前实现：仅 Standalone；本文出现的 `cluster` 配置和命令均未实现
-- 相关决策：[ADR 0001](../adr/0001-single-process-architecture.md)、[ADR 0004](../adr/0004-distributed-evolution.md)、[Distributed State Ownership](../architecture/distributed-state-ownership.md)
+- 相关决策：[ADR 0001](../adr/0001-single-process-architecture.md)、[ADR 0004](../adr/0004-distributed-evolution.md)、
+  [ADR 0012](../adr/0012-pricing-selection-cross-store-consistency.md)、
+  [ADR 0018](../adr/0018-project-admission-and-the-accounting-write-path.md)、
+  [Distributed State Ownership](../architecture/distributed-state-ownership.md)
+
+## 0. 版本定位
+
+**1.0.0 先发布并在生产环境验证，HA 属于 1.1.0。**
+
+这个顺序不是排期偏好，而是这份文档自己的要求决定的：§19 的发布门禁要证明"已确认的权威 mutation 不丢失"和"至多一个节点有资格启动 Provider 副作用"，
+而这两条的判据都来自 Standalone 已经建立的账务不变量。没有真实负载跑过的 Standalone，
+HA 的故障注入只能证明副本之间彼此一致，不能证明它们一致地保持了正确的账。
+
+1.0.0 期间要从生产用量中收集、并作为 1.1.0 输入的：
+
+- 单实例真实吞吐与 fsync 成本（`heimdall stats`、`heimdall_wal_sync_seconds`）；
+- 峰值并发与在飞请求数——它决定多数派提交的额外延迟是否可接受；
+- 实际的 Project 数与每 Project 速率分布；
+- 崩溃/重启后 `RecoverPendingLeases` 的真实发生率与保守结算比例。
 
 ## 1. 目标与设计 DNA
 
@@ -21,8 +39,31 @@ Redis-like 对齐的是单二进制、本地持久化和 Primary/Replica 运维�
 不是照搬 Redis 异步复制的数据丢失语义。Heimdall 会在调用外部 Provider
 前产生预算和费用副作用，因此权威状态必须使用多数派提交。
 
-HA 只提高可用性，不增加单个 Project 的权威写吞吐。多分片 Cluster、
-active-active、多 Primary 和按 Project 横向扩容不属于本文范围。
+HA 只提高可用性，不增加单个 Project 的权威写吞吐；并且**会降低它**——见 §1.1。
+多分片 Cluster、active-active、多 Primary 和按 Project 横向扩容不属于本文范围。
+
+### 1.1 吞吐预算
+
+多数派提交把每条权威 mutation 的成本从"一次本地 fsync"变成
+"一次本地 fsync + 一次网络往返 + 多数派远端 fsync"。这必须在 Phase 0 就作为设计预算，
+而不是等 Phase 3 压测时才发现。
+
+参考主机（Apple M4 Pro / APFS，`F_FULLFSYNC`，属悲观下界）当前的 Standalone 实测：
+
+| 量 | 值 | 来源 |
+|---|---:|---|
+| 单次 Ledger fsync | ~4.7 ms | 运行实例的 `heimdall_wal_sync_seconds` |
+| 每请求账务记录数 | 5 | 实测三次独立确认 |
+| 单 Project 上限（1 个在飞） | ~28 请求/秒 | 串行实测 |
+| 单 Project 上限（64 个在飞） | ~1011 请求/秒 | [ADR 0018](../adr/0018-project-admission-and-the-accounting-write-path.md) 落地后 |
+
+ADR 0018 之前，单 Project 无论多少并发都恒定在 ~45 请求/秒。**那时 HA 是不可行的**：
+多数派提交会把它压到十几，而那已经低于很多单应用的需求。现在有了 22 倍的余量，
+HA 的额外延迟才有地方可吃。
+
+因此本文必须回答而尚未回答的问题是：**每条 mutation 增加一次 RTT + 远端 fsync 之后，
+上表最后一行还剩多少。** §18 的目标表只有 RPO/RTO，没有吞吐行；发布前必须补上，
+并且和 RPO/RTO 一样，未验证的数字只能标记为目标。
 
 ## 2. 非目标
 
@@ -115,6 +156,13 @@ Primary/Replica 是运行时角色，不能固定绑定到 StatefulSet ordinal�
 2. 在经过证明的 lease 安全裕量内，至多一个节点有资格启动新的 Provider
    副作用；检查到系统调用之间的残余竞态必须由 fencing token、Provider
    幂等键和 `provider_unknown_outcome` 协议收敛。
+
+   > **前置缺口（2026-08-08 核实）**：Heimdall 目前**不向任何 Provider 发送幂等键**。
+   > `internal/provider/` 中没有 `Idempotency-Key`；`internal/idempotency` 处理的是
+   > *调用方发给 Heimdall* 的头，方向相反。各 Provider 的支持程度也不一致。
+   > 因此这条不变量的三个收敛机制里，第二个对部分 Provider 不可用，残余竞态只能
+   > 落到保守结算。发布前必须按 Provider 逐一限定这条的措辞，或先补齐上游幂等键；
+   > 笼统假设它可用会让故障切换时的重复消费无人负责。
 3. Budget Reservation 和 `attempt_started` 在 Provider I/O 前完成多数派提交。
 4. 已向客户端或管理员确认成功的权威 mutation 不会在合法故障切换后丢失。
 5. 只有日志足够新、完成当前任期领导权确认、追平已知 `commit index`，且本地
@@ -652,7 +700,11 @@ partition 或 `OnDelete` 策略，不能让默认滚动更新首先杀死当前 
 
 ## 18. 可观测性与目标
 
-至少提供以下有限基数指标和告警：
+至少提供以下有限基数指标和告警。**其中与持久化写入路径相关的部分已在 Standalone 落地**
+（`heimdall_wal_sync_seconds`、`heimdall_wal_append_{records,batches}_total`、
+`heimdall_accounting_project_lock_{wait,held}_seconds`、`heimdall_metadata_*`，以及
+`heimdall stats` 与控制台的"请求速率上限"卡片）；HA 阶段是在其上增加 term/index 维度，
+而不是从零开始。剩余项：
 
 - runtime role、term、ownership epoch；
 - received/durable/commit/applied index；
@@ -717,9 +769,14 @@ HA 不得只通过普通单元测试宣称完成。发布门禁至少覆盖：
 
 ### Phase 0：规范与 Standalone 基础
 
+进入条件：1.0.0 已发布并在生产环境运行过一段时间，§0 列出的四类数据已经收集到。
+
+0. 补齐 Provider 幂等键，或按 Provider 限定 §5 不变量 2 的措辞（见该处的前置缺口）。
 1. 冻结 mutation、term/index、commit/apply 和状态分类 ADR。
 2. 保持 Standalone 部署契约与默认配置不变。
 3. 让权威 mutation 可确定性重放并完成 crash-point 测试。
+   （账务写入路径的并发结构已由 [ADR 0018](../adr/0018-project-admission-and-the-accounting-write-path.md) 定型，
+   预留何时变持久相对于准入决策的时序已经冻结，不会在 Phase 0 之后再变。）
 4. 定义内部认证协议、版本协商和 cluster identity。
 
 ### Phase 1：固定成员复制
@@ -748,6 +805,22 @@ HA 不得只通过普通单元测试宣称完成。发布门禁至少覆盖：
 2. 实现具有量化时钟/暂停边界的 write lease 和旧 Primary 内部 fencing。
 3. 完成网络分区、进程暂停、Provider 幂等和 `provider_unknown_outcome` 门禁。
 4. 达到并发布经过验证的 RPO/RTO。
+
+## 20.1 1.1.0 的范围决定点
+
+Phase 1 结束时必须做一次显式决定，而不是默认走完 Phase 3。
+
+Phase 1 自己的注写着：没有安全自动选举时，那个阶段"只能称为 replicated warm
+standby"。对 1.1.0 来说，**带明确 RPO 的 warm standby 有可能就是终点**：
+
+- Phase 2–3 是自研 Raft + 对象复制 + 在线备份 + 写租约 fencing，
+  §19 的门禁本身就是数月量级的验证工程；
+- 绝大多数自托管 LLM 网关部署会接受一个文档化的 RPO，换取现在就能拿到的可用性；
+- 而"人工提升 + 外部 fencing"的运维复杂度，远低于"自动故障切换但边界未经证明"。
+
+判据(在 1.0.0 的生产数据里找)：真实发生过几次需要故障切换的事件、
+每次的人工响应时间是多少、以及那段时间的业务损失是否大于 Phase 2–3 的工程成本与
+新增的失败模式。这三个数字拿不到之前，不要开始 Phase 2。
 
 ## 21. 最终边界
 
