@@ -43,15 +43,15 @@ type providerInput struct {
 }
 
 type routeInput struct {
-	PublicModel            string `json:"public_model"`
-	DeploymentID           string `json:"deployment_id,omitempty"`
-	ProviderID             string `json:"provider_id"`
-	ProviderModel          string `json:"provider_model"`
-	InputMicrosPerMillion  int64  `json:"input_micros_per_million"`
-	OutputMicrosPerMillion int64  `json:"output_micros_per_million"`
-	Priority               int    `json:"priority"`
-	Strategy               string `json:"strategy"`
-	Enabled                bool   `json:"enabled"`
+	PublicModel string `json:"public_model"`
+	// Required. A route names a deployment; provider, model and price all come
+	// from it. decodeAdminJSON rejects unknown fields, so a client still
+	// sending the old provider_id/provider_model shape gets a 400 rather than a
+	// route that silently drops them.
+	DeploymentID string `json:"deployment_id"`
+	Priority     int    `json:"priority"`
+	Strategy     string `json:"strategy"`
+	Enabled      bool   `json:"enabled"`
 }
 
 func (r *Runtime) createAdminCredential(writer http.ResponseWriter, request *http.Request) {
@@ -475,11 +475,6 @@ func providerProbeModel(instance domain.ProviderInstance, providerID, bindingID 
 			return deployment.ProviderModel
 		}
 	}
-	for _, route := range routes {
-		if route.ProviderID == providerID && route.Enabled && route.DeletedAt == nil {
-			return route.ProviderModel
-		}
-	}
 	return ""
 }
 
@@ -510,36 +505,20 @@ func (r *Runtime) testAdminRoute(writer http.ResponseWriter, request *http.Reque
 		adminBadRequest(writer, "route is disabled")
 		return
 	}
-	providerID := route.ProviderID
-	providerModel := route.ProviderModel
-	var deployment domain.Deployment
-	capabilities := domain.ProviderCapabilities{}
-	if route.DeploymentID != "" {
-		var deploymentErr error
-		deployment, deploymentErr = r.store.GetDeployment(request.Context(), route.DeploymentID)
-		if deploymentErr != nil || deployment.DeletedAt != nil || !deployment.Enabled {
-			adminBadRequest(writer, "route deployment is unavailable")
-			return
-		}
-		providerID = deployment.ProviderID
-		providerModel = deployment.ProviderModel
-		capabilities = deployment.Capabilities
+	deployment, deploymentErr := r.store.GetDeployment(request.Context(), route.DeploymentID)
+	if deploymentErr != nil || deployment.DeletedAt != nil || !deployment.Enabled {
+		adminBadRequest(writer, "route deployment is unavailable")
+		return
 	}
+	providerID := deployment.ProviderID
+	providerModel := deployment.ProviderModel
+	capabilities := deployment.Capabilities
 	instance, err := r.store.GetProvider(request.Context(), providerID)
 	if err != nil || instance.DeletedAt != nil || !instance.Enabled {
 		adminBadRequest(writer, "route provider is unavailable")
 		return
 	}
-	if route.DeploymentID == "" {
-		capabilities = normalizedProviderCapabilities(instance)
-	}
-	var adapter provider.Adapter
-	var ok bool
-	if route.DeploymentID != "" {
-		adapter, ok = adapterForDeployment(r.providers, instance, deployment)
-	} else {
-		adapter, ok = r.providers.AdapterForProvider(providerID)
-	}
+	adapter, ok := adapterForDeployment(r.providers, instance, deployment)
 	if !ok {
 		adminBadRequest(writer, "route provider adapter is unavailable")
 		return
@@ -980,37 +959,23 @@ func preserveCapabilityEvidence(capabilities domain.ProviderCapabilities, curren
 
 func (input routeInput) route(id string, createdAt, updatedAt time.Time) domain.Route {
 	return domain.Route{
-		ID: id, PublicModel: input.PublicModel, DeploymentID: input.DeploymentID, ProviderID: input.ProviderID,
-		ProviderModel: input.ProviderModel, InputMicrosPerMillion: input.InputMicrosPerMillion,
-		OutputMicrosPerMillion: input.OutputMicrosPerMillion, Priority: input.Priority,
+		ID: id, PublicModel: input.PublicModel, DeploymentID: input.DeploymentID,
+		Priority: input.Priority,
 		Strategy: input.Strategy, Enabled: input.Enabled, CreatedAt: createdAt, UpdatedAt: updatedAt,
 	}
 }
 
 func (r *Runtime) validateAdminRoute(request *http.Request, candidate domain.Route, replacingID string) error {
-	if candidate.DeploymentID != "" {
-		deployment, err := r.store.GetDeployment(request.Context(), candidate.DeploymentID)
-		if err != nil || deployment.DeletedAt != nil || (candidate.Enabled && !deployment.Enabled) {
-			return errors.New("route deployment is unavailable")
-		}
-		instance, err := r.store.GetProvider(request.Context(), deployment.ProviderID)
-		if err != nil || instance.DeletedAt != nil || (candidate.Enabled && !instance.Enabled) {
-			return errors.New("route deployment provider is unavailable")
-		}
-		if err := bedrockprovider.ValidateProfileModel(instance.ProfileID, deployment.ProviderModel); err != nil {
-			return err
-		}
-	} else {
-		instance, err := r.store.GetProvider(request.Context(), candidate.ProviderID)
-		if err != nil || instance.DeletedAt != nil || (candidate.Enabled && !instance.Enabled) {
-			return errors.New("route provider is unavailable")
-		}
-		if len(instance.EffectiveProfileBindings()) != 1 {
-			return errors.New("deployment_id is required for a provider with multiple profile bindings")
-		}
-		if err := bedrockprovider.ValidateProfileModel(instance.ProfileID, candidate.ProviderModel); err != nil {
-			return err
-		}
+	deployment, err := r.store.GetDeployment(request.Context(), candidate.DeploymentID)
+	if err != nil || deployment.DeletedAt != nil || (candidate.Enabled && !deployment.Enabled) {
+		return errors.New("route deployment is unavailable")
+	}
+	instance, err := r.store.GetProvider(request.Context(), deployment.ProviderID)
+	if err != nil || instance.DeletedAt != nil || (candidate.Enabled && !instance.Enabled) {
+		return errors.New("route deployment provider is unavailable")
+	}
+	if err := bedrockprovider.ValidateProfileModel(instance.ProfileID, deployment.ProviderModel); err != nil {
+		return err
 	}
 	routes, err := r.store.ListRoutes(request.Context())
 	if err != nil {
@@ -1071,15 +1036,6 @@ func (r *Runtime) validateProviderCanDeactivate(
 	for _, deployment := range deployments {
 		if deployment.ProviderID == providerID && deployment.Enabled && deployment.DeletedAt == nil {
 			return errors.New("disable or delete the provider's active deployments first")
-		}
-	}
-	routes, err := r.store.ListRoutes(request.Context())
-	if err != nil {
-		return errors.New("routes are unavailable")
-	}
-	for _, route := range routes {
-		if route.DeploymentID == "" && route.ProviderID == providerID && route.Enabled && route.DeletedAt == nil {
-			return errors.New("disable or delete the provider's active routes first")
 		}
 	}
 	return nil

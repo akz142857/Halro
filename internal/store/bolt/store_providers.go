@@ -313,23 +313,8 @@ func (s *Store) PutRoute(ctx context.Context, route domain.Route, expectedRevisi
 		return domain.Route{}, err
 	}
 	err := s.db.Update(func(tx *bbolt.Tx) error {
-		if route.DeploymentID != "" {
-			if tx.Bucket(bucketDeployments).Get([]byte(route.DeploymentID)) == nil {
-				return fmt.Errorf("deployment %q: %w", route.DeploymentID, ErrNotFound)
-			}
-		} else {
-			raw := tx.Bucket(bucketProviders).Get([]byte(route.ProviderID))
-			if raw == nil {
-				return fmt.Errorf("provider %q: %w", route.ProviderID, ErrNotFound)
-			}
-			var instance domain.ProviderInstance
-			if err := json.Unmarshal(raw, &instance); err != nil {
-				return err
-			}
-			normalizeProviderBindings(&instance)
-			if len(instance.Bindings) != 1 {
-				return errors.New("deployment is required for a provider with multiple profile bindings")
-			}
+		if tx.Bucket(bucketDeployments).Get([]byte(route.DeploymentID)) == nil {
+			return fmt.Errorf("deployment %q: %w", route.DeploymentID, ErrNotFound)
 		}
 		return putVersioned(tx.Bucket(bucketRoutes), route.ID, expectedRevision, &route)
 	})

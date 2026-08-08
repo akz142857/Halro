@@ -253,8 +253,14 @@ func (r *Registry) RegisterBindingAdapter(providerID, bindingID string, adapter 
 }
 
 func (r *Registry) Register(target Target) error {
-	if target.ID == "" || target.PublicModel == "" || target.ProviderModel == "" || target.Adapter == nil {
-		return errors.New("target id, public model, provider model, and adapter are required")
+	// DeploymentID is required. Everything governed about a target — its
+	// versioned price, health probe, capability snapshot and concurrency limit
+	// — is keyed on the deployment, so a target without one silently opts out
+	// of all four. Requiring it here makes that unrepresentable rather than
+	// leaving each consumer to remember a fallback.
+	if target.ID == "" || target.PublicModel == "" || target.ProviderModel == "" ||
+		target.DeploymentID == "" || target.Adapter == nil {
+		return errors.New("target id, deployment id, public model, provider model, and adapter are required")
 	}
 	if profiled, ok := target.Adapter.(ProfiledAdapter); ok {
 		manifest := profiled.Profile()

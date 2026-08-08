@@ -433,7 +433,7 @@ func newFixtureAt(
 	}}
 	registry := provider.NewRegistry()
 	if err := registry.Register(provider.Target{
-		ID:                     "target_1",
+		ID: "target_1", DeploymentID: "dep_target_1",
 		PublicModel:            "chat",
 		ProviderModel:          "provider-model",
 		Adapter:                adapter,
@@ -562,7 +562,7 @@ func TestChatRetriesThenFallsBackInPriorityOrder(t *testing.T) {
 		Usage:   &openaiapi.Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15},
 	}}
 	if err := f.registry.Register(provider.Target{
-		ID: "target_2", PublicModel: "chat", ProviderModel: "provider-model",
+		ID: "target_2", DeploymentID: "dep_target_2", PublicModel: "chat", ProviderModel: "provider-model",
 		Adapter: fallback, Priority: 1,
 		InputMicrosPerMillion: 1_000_000, OutputMicrosPerMillion: 2_000_000,
 	}); err != nil {
@@ -588,7 +588,7 @@ func TestChatDoesNotFallbackForNonRetryableProviderError(t *testing.T) {
 	}
 	fallback := &fakeAdapter{response: f.adapter.response}
 	if err := f.registry.Register(provider.Target{
-		ID: "target_2", PublicModel: "chat", ProviderModel: "provider-model",
+		ID: "target_2", DeploymentID: "dep_target_2", PublicModel: "chat", ProviderModel: "provider-model",
 		Adapter: fallback, Priority: 1,
 	}); err != nil {
 		t.Fatal(err)
@@ -605,7 +605,7 @@ func TestOpenCircuitSkipsFailedTarget(t *testing.T) {
 	f.adapter.err = &provider.Error{Class: provider.ErrorProvider5xx, Retryable: true, Message: "down"}
 	fallback := &fakeAdapter{response: f.adapter.response}
 	if err := f.registry.Register(provider.Target{
-		ID: "target_2", PublicModel: "chat", ProviderModel: "provider-model",
+		ID: "target_2", DeploymentID: "dep_target_2", PublicModel: "chat", ProviderModel: "provider-model",
 		Adapter: fallback, Priority: 1,
 		InputMicrosPerMillion: 1_000_000, OutputMicrosPerMillion: 2_000_000,
 	}); err != nil {
@@ -948,7 +948,7 @@ func TestAmbiguousProviderFailureIsEstimatedAndSettled(t *testing.T) {
 	}
 	fallback := &fakeAdapter{response: f.adapter.response}
 	if err := f.registry.Register(provider.Target{
-		ID: "target_2", PublicModel: "chat", ProviderModel: "provider-model",
+		ID: "target_2", DeploymentID: "dep_target_2", PublicModel: "chat", ProviderModel: "provider-model",
 		Adapter: fallback, Priority: 1,
 	}); err != nil {
 		t.Fatal(err)
@@ -1015,7 +1015,7 @@ func TestEmbeddingsRejectsRouteWithoutCapabilityBeforeProviderCall(t *testing.T)
 	defer f.close()
 	replacement := provider.NewRegistry()
 	if err := replacement.Register(provider.Target{
-		ID: "target_1", PublicModel: "chat", ProviderModel: "provider-model",
+		ID: "target_1", DeploymentID: "dep_target_1", PublicModel: "chat", ProviderModel: "provider-model",
 		Adapter: f.adapter, Capabilities: provider.Capabilities{Chat: true, Streaming: true},
 	}); err != nil {
 		t.Fatal(err)
@@ -1137,11 +1137,11 @@ func TestProfileCompatibilityFilterRejectsFieldsThatWouldBeDropped(t *testing.T)
 // What remains here is the filter's own contract — that a requirement is only
 // satisfied by a capability the target actually holds.
 func TestSemanticCapabilityFilterRequiresTheCapabilityItFiltersOn(t *testing.T) {
-	capable := provider.Target{ID: "capable", Capabilities: provider.Capabilities{
+	capable := provider.Target{ID: "capable", DeploymentID: "dep_capable", Capabilities: provider.Capabilities{
 		Chat: true, Streaming: true, Tools: true, Vision: true,
 		JSONMode: true, DeveloperRole: true, Reasoning: true, StreamUsage: true,
 	}}
-	bare := provider.Target{ID: "bare", Capabilities: provider.Capabilities{Chat: true, Streaming: true}}
+	bare := provider.Target{ID: "bare", DeploymentID: "dep_bare", Capabilities: provider.Capabilities{Chat: true, Streaming: true}}
 
 	for _, requirement := range []semantic.Requirements{
 		{Tools: true}, {InputImage: true}, {StructuredJSON: true},
@@ -1184,7 +1184,7 @@ func TestProviderConcurrencyRejectsBeforeReservationAndReleasesLease(t *testing.
 	f.adapter.release = release
 	replacement := provider.NewRegistry()
 	if err := replacement.Register(provider.Target{
-		ID: "target_1", ProviderID: "provider_1", PublicModel: "chat",
+		ID: "target_1", DeploymentID: "dep_target_1", ProviderID: "provider_1", PublicModel: "chat",
 		ProviderModel: "provider-model", Adapter: f.adapter,
 		InputMicrosPerMillion: 1_000_000, OutputMicrosPerMillion: 2_000_000,
 		MaxConcurrency: 1,
@@ -1225,13 +1225,13 @@ func TestProviderConcurrencyFallsBackToAvailableProvider(t *testing.T) {
 	replacement := provider.NewRegistry()
 	for _, target := range []provider.Target{
 		{
-			ID: "target_1", ProviderID: "provider_1", PublicModel: "chat",
+			ID: "target_1", DeploymentID: "dep_target_1", ProviderID: "provider_1", PublicModel: "chat",
 			ProviderModel: "provider-model", Adapter: f.adapter,
 			InputMicrosPerMillion: 1_000_000, OutputMicrosPerMillion: 2_000_000,
 			MaxConcurrency: 1, Priority: 0,
 		},
 		{
-			ID: "target_2", ProviderID: "provider_2", PublicModel: "chat",
+			ID: "target_2", DeploymentID: "dep_target_2", ProviderID: "provider_2", PublicModel: "chat",
 			ProviderModel: "provider-model", Adapter: fallback,
 			InputMicrosPerMillion: 1_000_000, OutputMicrosPerMillion: 2_000_000,
 			MaxConcurrency: 1, Priority: 1,
@@ -1329,7 +1329,7 @@ func TestEmbeddingsRetriesAndFallsBack(t *testing.T) {
 		Usage: &openaiapi.Usage{PromptTokens: 4, TotalTokens: 4},
 	}}
 	if err := f.registry.Register(provider.Target{
-		ID: "target_2", PublicModel: "chat", ProviderModel: "provider-model",
+		ID: "target_2", DeploymentID: "dep_target_2", PublicModel: "chat", ProviderModel: "provider-model",
 		Adapter: fallback, Priority: 1, InputMicrosPerMillion: 1_000_000,
 	}); err != nil {
 		t.Fatal(err)
@@ -1387,7 +1387,7 @@ func TestChatStreamFallsBackOnlyBeforeFirstPayload(t *testing.T) {
 		streamUsage: &openaiapi.Usage{PromptTokens: 4, CompletionTokens: 2, TotalTokens: 6},
 	}
 	if err := f.registry.Register(provider.Target{
-		ID: "target_2", PublicModel: "chat", ProviderModel: "provider-model",
+		ID: "target_2", DeploymentID: "dep_target_2", PublicModel: "chat", ProviderModel: "provider-model",
 		Adapter: fallback, Priority: 1,
 		InputMicrosPerMillion: 1_000_000, OutputMicrosPerMillion: 2_000_000,
 	}); err != nil {
@@ -1415,7 +1415,7 @@ func TestChatStreamNeverFallsBackAfterPayload(t *testing.T) {
 	}
 	fallback := &fakeAdapter{streamChunks: f.adapter.streamChunks, streamUsage: f.adapter.streamUsage}
 	if err := f.registry.Register(provider.Target{
-		ID: "target_2", PublicModel: "chat", ProviderModel: "provider-model",
+		ID: "target_2", DeploymentID: "dep_target_2", PublicModel: "chat", ProviderModel: "provider-model",
 		Adapter: fallback, Priority: 1,
 	}); err != nil {
 		t.Fatal(err)
@@ -1460,7 +1460,7 @@ func TestAbortReleasesEverythingTheAttemptTook(t *testing.T) {
 	// next attempt starting and being turned away.
 	limited := provider.NewRegistry()
 	if err := limited.Register(provider.Target{
-		ID:                     "target_1",
+		ID: "target_1", DeploymentID: "dep_target_1",
 		PublicModel:            "chat",
 		ProviderModel:          "provider-model",
 		Adapter:                f.adapter,

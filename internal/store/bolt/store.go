@@ -21,7 +21,7 @@ import (
 	bbolt "go.etcd.io/bbolt"
 )
 
-const schemaVersion uint64 = 21
+const schemaVersion uint64 = 22
 
 // legacyCapabilityEvidence is the evidence tier this project used before
 // capability evidence was durable metadata. The domain no longer accepts it, so
@@ -458,6 +458,54 @@ var migrations = []migration{
 			)
 		}
 		return migrationStep(step, "after_legacy_evidence_check")
+	}},
+	{version: 22, name: "refuse_deployment_less_routes", up: func(tx *bbolt.Tx, step func(string) error) error {
+		if err := migrationStep(step, "before_deployment_less_route_check"); err != nil {
+			return err
+		}
+		// A route now names a deployment and nothing else. The old shape could
+		// reach a provider directly, which meant it bypassed the deployment's
+		// versioned price, health probe, capability snapshot and concurrency
+		// limit — four governed things, silently absent.
+		//
+		// ForEach, not Stats(): migration 3 used to synthesise deployments in
+		// this same transaction, and Stats() does not observe uncommitted writes
+		// made earlier in it. That is exactly how an invalid deployment slipped
+		// past migration 20's guard. ForEach does see them.
+		routes := tx.Bucket(bucketRoutes)
+		if routes == nil {
+			return migrationStep(step, "after_deployment_less_route_check")
+		}
+		affected := 0
+		if err := routes.ForEach(func(_, raw []byte) error {
+			if raw == nil {
+				return nil
+			}
+			var route struct {
+				DeploymentID string `json:"deployment_id"`
+			}
+			if err := json.Unmarshal(raw, &route); err != nil {
+				// Unreadable here is unreadable by the running build too.
+				affected++
+				return nil
+			}
+			if route.DeploymentID == "" {
+				affected++
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		if affected > 0 {
+			return fmt.Errorf(
+				"this build requires every route to name a deployment and found %d route(s) without one; "+
+					"a route that reaches a provider directly has no versioned price, health probe, capability snapshot or concurrency limit behind it, "+
+					"and none of those can be inferred; re-initialise the data directory (make reset CONFIRM=RESET) and recreate the topology, "+
+					"or keep running the previous build",
+				affected,
+			)
+		}
+		return migrationStep(step, "after_deployment_less_route_check")
 	}},
 }
 

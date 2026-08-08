@@ -331,11 +331,7 @@ func checkDoctorTopology(ctx context.Context, store *boltstore.Store, add func(s
 			continue
 		}
 		active++
-		available := deploymentEnabled[item.DeploymentID]
-		if item.DeploymentID == "" {
-			available = providerEnabled[item.ProviderID]
-		}
-		if !available {
+		if !deploymentEnabled[item.DeploymentID] {
 			add("topology", "fail", "an enabled route references an unavailable deployment or provider")
 			return
 		}

@@ -107,8 +107,8 @@ func TestRegistryOrdersTargetsAndRoundRobinsStartingTarget(t *testing.T) {
 	registry := NewRegistry()
 	adapter := &registryAdapter{}
 	for _, target := range []Target{
-		{ID: "second", PublicModel: "chat", ProviderModel: "b", Adapter: adapter, Priority: 20, Strategy: "round_robin"},
-		{ID: "first", PublicModel: "chat", ProviderModel: "a", Adapter: adapter, Priority: 10, Strategy: "round_robin"},
+		{ID: "second", DeploymentID: "dep_second", PublicModel: "chat", ProviderModel: "b", Adapter: adapter, Priority: 20, Strategy: "round_robin"},
+		{ID: "first", DeploymentID: "dep_first", PublicModel: "chat", ProviderModel: "a", Adapter: adapter, Priority: 10, Strategy: "round_robin"},
 	} {
 		if err := registry.Register(target); err != nil {
 			t.Fatal(err)
@@ -126,12 +126,12 @@ func TestRegistryRejectsMixedStrategies(t *testing.T) {
 	registry := NewRegistry()
 	adapter := &registryAdapter{}
 	if err := registry.Register(Target{
-		ID: "first", PublicModel: "chat", ProviderModel: "a", Adapter: adapter, Strategy: "ordered",
+		ID: "first", DeploymentID: "dep_first", PublicModel: "chat", ProviderModel: "a", Adapter: adapter, Strategy: "ordered",
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := registry.Register(Target{
-		ID: "second", PublicModel: "chat", ProviderModel: "b", Adapter: adapter, Strategy: "round_robin",
+		ID: "second", DeploymentID: "dep_second", PublicModel: "chat", ProviderModel: "b", Adapter: adapter, Strategy: "round_robin",
 	}); err == nil {
 		t.Fatal("mixed route strategies were accepted")
 	}
@@ -142,11 +142,11 @@ func TestRegistryFiltersCandidatesByDeclaredCapability(t *testing.T) {
 	adapter := &registryAdapter{}
 	for _, target := range []Target{
 		{
-			ID: "chat", PublicModel: "shared", ProviderModel: "chat",
+			ID: "chat", DeploymentID: "dep_chat", PublicModel: "shared", ProviderModel: "chat",
 			Adapter: adapter, Capabilities: Capabilities{Chat: true, Streaming: true},
 		},
 		{
-			ID: "embedding", PublicModel: "shared", ProviderModel: "embedding",
+			ID: "embedding", DeploymentID: "dep_embedding", PublicModel: "shared", ProviderModel: "embedding",
 			Adapter: adapter, Capabilities: Capabilities{Embeddings: true},
 		},
 	} {
@@ -177,7 +177,7 @@ func TestRegistryRoutesEveryInferenceResourcesCapability(t *testing.T) {
 	manifest.Operations, manifest.PrimitiveBindings = operations, bindings
 	adapter := &registryAdapter{manifest: &manifest}
 	registry := NewRegistry()
-	target := Target{ID: "inferenceResources", PublicModel: "inferenceResources", ProviderModel: "provider-model", Adapter: adapter,
+	target := Target{ID: "inferenceResources", DeploymentID: "dep_inferenceResources", PublicModel: "inferenceResources", ProviderModel: "provider-model", Adapter: adapter,
 		AccessSurface: manifest.AccessSurface, ProfileID: manifest.ID,
 		Capabilities: Capabilities{Moderations: true, Images: true, Transcriptions: true, Speech: true, Files: true, Batches: true, Rerank: true, AsyncGenerate: true},
 	}
@@ -196,14 +196,14 @@ func TestRegistryCanRequireMinimumCapabilityEvidence(t *testing.T) {
 	adapter := &registryAdapter{}
 	for _, target := range []Target{
 		{
-			ID: "declared", PublicModel: "shared", ProviderModel: "declared", Adapter: adapter,
+			ID: "declared", DeploymentID: "dep_declared", PublicModel: "shared", ProviderModel: "declared", Adapter: adapter,
 			Capabilities: Capabilities{Chat: true},
 			CapabilityEvidence: domain.EvidenceForCapabilities(
 				domain.ProviderCapabilities{Chat: true}, domain.EvidenceDeclared,
 			),
 		},
 		{
-			ID: "verified", PublicModel: "shared", ProviderModel: "verified", Adapter: adapter,
+			ID: "verified", DeploymentID: "dep_verified", PublicModel: "shared", ProviderModel: "verified", Adapter: adapter,
 			Capabilities: Capabilities{Chat: true}, Priority: 10,
 			CapabilityEvidence: domain.EvidenceForCapabilities(
 				domain.ProviderCapabilities{Chat: true}, domain.EvidenceVerified,
@@ -229,7 +229,7 @@ func TestRegistryEvidenceFilteringFailsClosedAndRequiresChatForStreaming(t *test
 	)
 	evidence["chat"] = domain.EvidenceDeclared
 	if err := registry.Register(Target{
-		ID: "mixed", PublicModel: "stream", ProviderModel: "model", Adapter: &registryAdapter{},
+		ID: "mixed", DeploymentID: "dep_mixed", PublicModel: "stream", ProviderModel: "model", Adapter: &registryAdapter{},
 		Capabilities: Capabilities{Chat: true, Streaming: true}, CapabilityEvidence: evidence,
 	}); err != nil {
 		t.Fatal(err)
@@ -275,14 +275,14 @@ func TestRegistryReplaceIsAtomicAndReturnsRetiredAdapters(t *testing.T) {
 	current := NewRegistry()
 	oldAdapter := &closingRegistryAdapter{}
 	if err := current.Register(Target{
-		ID: "old", PublicModel: "chat", ProviderModel: "old", Adapter: oldAdapter,
+		ID: "old", DeploymentID: "dep_old", PublicModel: "chat", ProviderModel: "old", Adapter: oldAdapter,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	next := NewRegistry()
 	newAdapter := &closingRegistryAdapter{}
 	if err := next.Register(Target{
-		ID: "new", PublicModel: "chat", ProviderModel: "new", Adapter: newAdapter,
+		ID: "new", DeploymentID: "dep_new", PublicModel: "chat", ProviderModel: "new", Adapter: newAdapter,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -337,7 +337,7 @@ func TestRegistryRejectsDuplicateBindingIdentityAcrossProviders(t *testing.T) {
 func TestRegistryCapabilityEvidenceIsImmutableAcrossBoundaries(t *testing.T) {
 	evidence := domain.CapabilityEvidenceSet{"chat": domain.EvidenceVerified}
 	registry := NewRegistry()
-	if err := registry.Register(Target{ID: "target", PublicModel: "chat", ProviderModel: "model", Adapter: &registryAdapter{}, CapabilityEvidence: evidence}); err != nil {
+	if err := registry.Register(Target{ID: "target", DeploymentID: "dep_target", PublicModel: "chat", ProviderModel: "model", Adapter: &registryAdapter{}, CapabilityEvidence: evidence}); err != nil {
 		t.Fatal(err)
 	}
 	evidence["chat"] = domain.EvidenceUnsupported
@@ -369,7 +369,7 @@ func TestRegistryCandidateResolutionUsesCapturedOperationSnapshot(t *testing.T) 
 	adapter := &mutableProfileAdapter{manifest: manifest, enabled: true}
 	registry := NewRegistry()
 	if err := registry.Register(Target{
-		ID: "target", PublicModel: "chat", ProviderModel: "model", Adapter: adapter,
+		ID: "target", DeploymentID: "dep_target", PublicModel: "chat", ProviderModel: "model", Adapter: adapter,
 		Capabilities: Capabilities{Chat: true},
 	}); err != nil {
 		t.Fatal(err)
@@ -392,7 +392,7 @@ func TestUnprofiledAdapterIsRejected(t *testing.T) {
 	// rather than of the type, so anything the branch did not cover became
 	// fail-open. The state is unrepresentable now.
 	err := registry.Register(Target{
-		ID: "legacy", PublicModel: "chat", ProviderModel: "model", Adapter: &bareAdapter{},
+		ID: "legacy", DeploymentID: "dep_legacy", PublicModel: "chat", ProviderModel: "model", Adapter: &bareAdapter{},
 		Capabilities: Capabilities{
 			Chat: true, Streaming: true, Embeddings: true, Tools: true, Vision: true,
 			JSONMode: true, DeveloperRole: true, Reasoning: true, StreamUsage: true,

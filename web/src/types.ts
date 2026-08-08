@@ -515,11 +515,9 @@ export type DeploymentTargetKind =
 export interface Route {
   id: string;
   public_model: string;
+  /** A route names a deployment and nothing else about the upstream; provider,
+   * model and price all come from it. */
   deployment_id: string;
-  provider_id?: string;
-  provider_model?: string;
-  input_micros_per_million?: number;
-  output_micros_per_million?: number;
   priority: number;
   strategy: "ordered" | "round_robin" | "";
   enabled: boolean;
