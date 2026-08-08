@@ -714,27 +714,29 @@ Counter 与 Gauge 必须在设计阶段就定死，不能实现时临时决定 �
 
 ## 15. 发布门禁
 
-全部满足后才能宣布完成：
+全部满足后才能宣布完成。状态核对于 2026-08-09，逐条对照代码验证，依据见 §17。
 
-- [ ] 普通 Deployment 创建不要求理解或选择内部 Profile。
-- [ ] 已知模型只显示目录支持能力，管理员只能收窄。
-- [ ] 未知模型默认零能力并进入显式声明流程。
-- [ ] 仅内置目录能力默认勾选，上游元数据能力默认待确认。
-- [ ] Deployment 保存模型能力快照、单模型 revision、来源和证据。
-- [ ] 目录刷新不会静默改变在线 Deployment；无关模型变化不产生 409。
-- [ ] 能力变化通过 `LastTestRevision` 使健康测试 stale，并要求重新验证。
-- [ ] Provider ceiling、模型目录和管理员收窄在后端权威校验；越界值被拒绝而非钳制。
-- [ ] Profile 收窄在启动核对中被发现，`halro doctor` 可见。
-- [ ] 能力收窄前给出受影响 Route 预检。
-- [ ] 目录整体不可用时，手动输入模型 ID 的通道仍可完成部署。
-- [ ] 深链与普通新增没有初始化差异或请求竞态。
-- [ ] Backup/Restore、审计、热加载和重启保持能力快照。
-- [ ] 代码中不存在 legacy 能力来源、legacy 复核状态或 legacy 创建路径。
-- [ ] 变更说明与发布说明已写明需要重新初始化数据目录。
-- [ ] 多 Binding 若未完成全部运行时门禁，则以**可断言的方式**保持不可用：提交 `operation_bindings` 的请求返回 400，并有对应测试用例；仅靠 UI 不暴露入口不算数。
-- [ ] 新增指标已同步 `docs/contracts/metrics-reference.md`。
-- [ ] 完整 Go、Race、Vet、前端测试、生产构建和浏览器验收通过。
-- [ ] 真实 Provider 能力证据已进入 `docs/verification/provider-real-matrix.md`。
+- [ ] 普通 Deployment 创建不要求理解或选择内部 Profile。**未达成** —— 创建表单仍渲染「能力接口」选择器。
+- [ ] 已知模型只显示目录支持能力，管理员只能收窄。**部分** —— 后端拒绝超集，但 UI 的勾选框来自 Profile 上限而非目录。
+- [x] 未知模型默认零能力并进入显式声明流程。
+- [ ] 仅内置目录能力默认勾选，上游元数据能力默认待确认。**部分** —— 前半达成；`provider_metadata` 来源无生产调用点，后半无从演示。
+- [ ] Deployment 保存模型能力快照、单模型 revision、来源和证据。**部分** —— §5.2 要求的 `Evidence`、`OperatorDisabled`、`OperationBindings` 三个字段均未实现。
+- [x] 目录刷新不会静默改变在线 Deployment；无关模型变化不产生 409。
+- [x] 能力变化通过 `LastTestRevision` 使健康测试 stale，并要求重新验证。
+- [x] Provider ceiling、模型目录和管理员收窄在后端权威校验；越界值被拒绝而非钳制。
+- [x] Profile 收窄在启动核对中被发现，`halro doctor` 可见。
+- [x] 能力收窄前给出受影响 Route 预检。
+- [x] 目录整体不可用时，手动输入模型 ID 的通道仍可完成部署。
+- [x] 深链与普通新增没有初始化差异或请求竞态。
+- [x] Backup/Restore、审计、热加载和重启保持能力快照。
+- [ ] 代码中不存在 legacy 能力来源、legacy 复核状态或 legacy 创建路径。**基本达成，有一处残留** —— 见 §17.2 D4。
+- [ ] 变更说明与发布说明已写明需要重新初始化数据目录。**部分** —— schema 21、22 已写明，schema 20（能力快照本身）从未被单独宣告。
+- [x] 多 Binding 若未完成全部运行时门禁，则以**可断言的方式**保持不可用：提交 `operation_bindings` 的请求返回 400，并有对应测试用例；仅靠 UI 不暴露入口不算数。
+- [x] 新增指标已同步 `docs/contracts/metrics-reference.md`。
+- [ ] 完整 Go、Race、Vet、前端测试、生产构建和浏览器验收通过。**部分** —— 自动化部分通过；浏览器验收未做。
+- [ ] 真实 Provider 能力证据已进入 `docs/verification/provider-real-matrix.md`。**未达成**。
+
+计数：11 达成、6 部分、2 未达成。
 
 ## 16. 建议实施顺序
 
@@ -743,3 +745,76 @@ Counter 与 Gauge 必须在设计阶段就定死，不能实现时临时决定 �
 由于不做迁移（§10），Phase 1 与 Phase 2 之间不存在“新旧结构并存”的中间态：结构版本号递增之后，旧数据目录被明确拒绝并重建。这也意味着这两个 Phase 应当在同一个可发布区间内完成，不要让主干长期停在“已改结构、未落快照”的状态。
 
 Phase 3 只在真实模型确实需要同一 Provider + Model 跨多个内部 Profile 时进入开发。不能为了界面上的“全选”提前扩大运行时；也不能因为 Phase 3 尚未完成，就继续让单模型错误继承 Provider 的全部能力。
+
+## 17. 实施现状与剩余工作（2026-08-09）
+
+本节记录截至 2026-08-09 的落地情况和尚未完成的工作。所有结论都逐条对照代码验证过，行号为验证时的位置。
+
+### 17.1 已落地
+
+Phase 0、Phase 1、Phase 2 的**执行机制**已经完成并有测试覆盖，对应 PR #114–#130：
+
+| 切片 | PR |
+| --- | --- |
+| Phase 0 目录种子与契约冻结 | #114 |
+| Phase 1 聚合发现、后端解析 Binding、控制台流程 | #115、#116 |
+| Phase 2 快照持久化（schema 20） | #117、#119 |
+| Phase 2 漂移在加载期核对、进入 `halro doctor` | #121、#122 |
+| Phase 2 复核状态派生化、Route 预检 | #124、#126 |
+| Phase 2 漂移改为扣留而非拒绝启动、能力审计事件、扩张需重新验证 | #125、#126 |
+| §13 可观测性指标 | #127 |
+| 移除 legacy 能力证据与 unprofiled adapter（schema 21） | #128 |
+| 路由必须指向部署（schema 22） | #129 |
+| `operation_bindings` 不可用断言、只读角色门禁、备份保留快照断言 | #130 |
+
+最强的部分是漂移核对、Route 预检、审计、指标，以及三道 fail-closed 迁移（schema 20/21/22）。这些都对真实数据目录验证过，不只是 fixture。
+
+### 17.2 剩余工作
+
+按建议顺序排列。A 组是本方案存在的理由，应当优先。
+
+#### A. 用户流程 —— 本方案的核心承诺尚未兑现
+
+§1.1 开篇陈述的问题是「当前流程暴露了内部实现」，而这一点目前仍然成立。
+
+- **A1. 创建表单仍要求选择「能力接口」。** `web/src/pages/DeploymentsPage.tsx:790` 渲染 `Field label={t("deployments.binding")}`，中文标签即「能力接口」，提示语为「选择该模型实际使用的能力接口和协议」。只要服务商有多于一个启用的 Binding 就会显示，而这是 OpenAI 的常态。按 §7.3，Profile ID 与 Binding ID 应当收进「高级详情」，不出现在普通创建路径上。
+- **A2. 能力勾选框来自 Profile 上限而非模型目录。** `DeploymentsPage.tsx:658` 的 `configurableCapabilityNames` 由 `capabilityCeiling` 推导。§7.1 步骤三要求只渲染模型目录支持的能力；目前不支持的能力仍会渲染且可勾选，管理员要到保存时才被服务端拒绝。
+- **A3. 控制台始终发送 `binding_id`，架空了后端的聚合。** §8.1 规定 `binding_id` 仅作为高级诊断过滤条件，但 `DeploymentsPage.tsx:668` 无条件带上 `selectedBinding?.id`，于是「正常情况」和「诊断情况」颠倒了。
+- **A4. 内置目录与模型选择器没有交集。** 内置目录只有 4 条，全部是 Bedrock（`internal/modelcatalog/builtin.go:27-30`）；而模型选择器只对 `openai / deepseek / openai_compatible` 启用（`DeploymentsPage.tsx:665`）。因此**没有任何目录覆盖的模型能在控制台里被选到**，所有路径都走 §6.3 的未知模型兜底。这使门禁 2、4 目前是「空真」而非被证明。需要决定：给这三类服务商补种子，还是把 Bedrock 纳入选择器，或两者都做。
+
+#### B. §5.2 缺失的快照字段
+
+- **B1. `Evidence`** —— 快照未保存证据等级。当前证据取自 Binding 而非目录条目来源，其上界靠 `admin_deployments.go` 中一次无条件的 verified→declared 降级实现，而不是 `entry.Source.MaxEvidence()`。
+- **B2. `OperatorDisabled`** —— 未实现。只存保留集的后果是：「管理员主动关掉」与「目录本来就没有」无法区分，而这正是该字段存在的理由。
+- **B3. `OperationBindings`** —— 属于 Phase 3，见 E。
+
+#### C. 与文档措辞的偏差（已实现但形态不同，需确认是否接受）
+
+- **C1. 复核状态改为派生，不持久化。** §5.2 将其列为 `Deployment` 字段。改动理由记录在 `internal/app/capability_drift.go` 顶部：比较的两侧都会在记录不被改写的情况下变化，存下来只能记录上次写入时的状态。**建议接受并回改文档。**
+- **C2. §13 第 3 项指标统计的是 Deployment 而非 Model**，第 7 项统计的是 Deployment 测试而非 Operation Binding 测试（后者属 Phase 3）。**建议接受并回改文档。**
+- **C3. `Clamp`/`Merge` 对数值上限取 `min()`**，而 §4.2 写的是「不要改写成 `min()`」。代码的区分是「派生层之间取窄」与「管理员输入越界则拒绝」，后者确实是拒绝而非钳制。**建议澄清文档措辞。**
+
+#### D. 欠账
+
+- **D1. CHANGELOG 未宣告 schema 20。** `[Unreleased]` 有 schema 21、22 的重置说明，但能力快照本身——本方案的主题——从未被单独宣告为需要重新初始化的原因。§10.2 要求写进变更说明。
+- **D2. Phase 0 遗留两问未答**：目录是否与定价目录（`halro pricing migrate`）合并为同一套发布流程、若不合并的理由；以及兼容性 manifest 规则（`docs/compatibility/`）未更新。
+- **D3. §12 缺失的测试**：聚合的并发上限与单 Binding 超时无任何测试；全部 Binding 失败时的 502 路径无测试；「无关模型增减不触发 409」只测了正向；§6.2 的日期别名映射既无实现也无测试。
+- **D4. legacy 残留一处**：`internal/app/providers.go` 中，当部署未声明任何操作时仍会退回 Adapter 全量上限。该分支不可达（`Deployment.Validate` 会拒绝这种记录），但它正是 §10.1 要求消除的「未声明即继承 Provider 上限」形态。
+
+#### E. Phase 3：多 Operation Binding Deployment
+
+整体未开始，与 §16 一致。按 2026-08-09 的决定，**纳入 1.0.0 范围**。
+
+#### F. 发布前人工项
+
+- **F1. 真实 Provider 能力证据**进入 `docs/verification/provider-real-matrix.md`（§12.6，计费、opt-in）。
+- **F2. 浏览器验收**（门禁 18 的最后一项）。
+
+### 17.3 超出本方案范围的改动
+
+诚实记录：以下改动在实施期间完成，但并非本文档要求，评审时应按独立变更看待。
+
+- **路由必须指向部署（#129，schema 22）。** 本文档只谈 Deployment 的创建路径，未提及 legacy Route。该改动源于实施中发现的真实缺陷：不带 `deployment_id` 的路由会绕过版本化定价、健康探测、能力快照与部署级并发限制。同时修正了一个既有缺陷 —— 迁移 3 在同一未提交事务内合成部署，而迁移 20 的守卫读 `Stats().KeyN`，看不见同事务写入，导致 schema-2 目录可以一路迁移到当前版本并留下一个 `Deployment.Validate()` 拒绝的记录。
+- **`Registry.Register` 硬拒绝非 `ProfiledAdapter`（#128）。** §4.1/§10.1 只要求「评估 `LegacyUnprofiled` 的去留」，实际做法更强：让该状态不可表示，因为原先的 fail-closed 是靠注册之后的一个分支擦除可选语义实现的，分支没覆盖到的需求会静默变成 fail-open。
+- **只读角色对「测试/启用/创建替代」的门禁（#130）。** §7.3 要求只读管理员可查看但不能创建或调整，这一项算在范围内，但修正面比文档所述更广。
+- **系统配置面板改版（#118、#120）** 与本方案无关。
