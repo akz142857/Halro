@@ -895,6 +895,11 @@ td small, td code { display: block; margin-top: 4px; color: var(--muted); }
 .diagnostic-details summary:focus-visible { outline: 2px solid var(--color-focus-ring); outline-offset: -3px; }
 .diagnostic-details summary strong { display: inline-flex; align-items: center; gap: 8px; font-size: .94rem; }
 .diagnostic-details dl { margin: 0; padding: 0 var(--space-4) var(--space-3); border-top: 1px solid var(--border); }
+/* Every dl row draws its own top border (see the bare `dl div` rule below), and
+   the list container draws the line under the header. On the first row the two
+   land on top of each other and read as one thick or doubled rule, so the row
+   yields to the container. */
+.diagnostic-details dl > div:first-child { border-top: 0; }
 /* The write-path card carries three lines of context around its table. They are
    annotation, not content: at body weight they read as paragraphs and bury the
    numbers the card exists to show, which is how the first version of this card
