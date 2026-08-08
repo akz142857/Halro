@@ -698,8 +698,6 @@ func evidenceRank(value domain.CapabilityEvidence) int {
 		return 3
 	case domain.EvidenceDeclared:
 		return 2
-	case domain.EvidenceLegacy:
-		return 1
 	default:
 		return 0
 	}

@@ -1943,12 +1943,6 @@ func (s *Service) unknownPricePolicyEvidence(principal auth.AuthResult) (*domain
 func filterSemanticCapabilities(targets []provider.Target, requirements semantic.Requirements) []provider.Target {
 	return slices.DeleteFunc(slices.Clone(targets), func(target provider.Target) bool {
 		capabilities := target.Capabilities
-		if target.LegacyUnprofiled && (requirements.Tools || requirements.ParallelTools ||
-			requirements.InputImage || requirements.StructuredJSON || requirements.DeveloperRole ||
-			requirements.Reasoning || requirements.StreamUsage || requirements.Seed ||
-			requirements.MultipleCandidates || requirements.EndUserReference) {
-			return true
-		}
 		return (requirements.Tools && !capabilities.Tools) ||
 			(requirements.InputImage && !capabilities.Vision) ||
 			(requirements.StructuredJSON && !capabilities.JSONMode) ||

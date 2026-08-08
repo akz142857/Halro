@@ -6,6 +6,25 @@ semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- The `legacy` capability evidence tier is removed. It meant "this came from a
+  record written before capability evidence was durable metadata", which is not
+  evidence, and keeping it beside `declared` and `verified` gave the design a
+  third tier that asserted nothing.
+
+### Operator impact
+
+- **Re-initialising the data directory is required** for an instance whose
+  providers or deployments still carry `legacy` capability evidence — that is
+  any instance migrated through schema 6 or earlier. Storage schema 21 refuses
+  such a directory at start-up and names the record count. There is no rewrite:
+  promoting the value to `declared` would assert a declaration nobody made, and
+  demoting it to `unsupported` would turn capabilities off under a running
+  deployment. Run `make reset CONFIRM=RESET` and recreate the topology, or stay
+  on the previous build. A directory created at schema 20 or later is
+  unaffected and upgrades in place.
+
 ## [1.0.0-rc.1] - 2026-08-07
 
 First release candidate. Everything below is the initial v1 surface; the entries

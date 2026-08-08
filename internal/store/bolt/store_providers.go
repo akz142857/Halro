@@ -73,7 +73,7 @@ func migrateProviderProfiles(tx *bbolt.Tx, step func(string) error) error {
 		if err := json.Unmarshal(raw, &instance); err != nil {
 			return nil, err
 		}
-		normalizeProviderProfile(&instance, domain.EvidenceLegacy)
+		normalizeProviderProfile(&instance, legacyCapabilityEvidence)
 		providerByID[instance.ID] = instance
 		return json.Marshal(instance)
 	}); err != nil {
@@ -92,7 +92,7 @@ func migrateProviderProfiles(tx *bbolt.Tx, step func(string) error) error {
 			// continue to reject these records if they are used.
 			return raw, nil
 		}
-		normalizeDeploymentProfile(&deployment, instance, domain.EvidenceLegacy)
+		normalizeDeploymentProfile(&deployment, instance, legacyCapabilityEvidence)
 		return json.Marshal(deployment)
 	}); err != nil {
 		return fmt.Errorf("migrate deployment profiles: %w", err)

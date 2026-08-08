@@ -117,7 +117,7 @@ func TestInferenceResourcesProfilesKeepAccessSurfacesAndPrimitivesIsolated(t *te
 
 func TestLegacyAdapterBridgeExposesProfileOperationsAndEvidenceCopies(t *testing.T) {
 	manifest, _ := BuiltinProfile(domain.ProfileOpenAIChatEmbeddings)
-	evidence := domain.EvidenceForCapabilities(domain.DefaultProviderCapabilities(domain.ProviderOpenAI), domain.EvidenceLegacy)
+	evidence := domain.EvidenceForCapabilities(domain.DefaultProviderCapabilities(domain.ProviderOpenAI), domain.EvidenceDeclared)
 	bridge, err := NewLegacyAdapterBridge(&typedRegistryAdapter{providerType: "openai"}, manifest, evidence)
 	if err != nil {
 		t.Fatal(err)
@@ -133,7 +133,7 @@ func TestLegacyAdapterBridgeExposesProfileOperationsAndEvidenceCopies(t *testing
 	}
 	copy := bridge.CapabilityEvidence()
 	copy["chat"] = domain.EvidenceVerified
-	if bridge.CapabilityEvidence()["chat"] != domain.EvidenceLegacy {
+	if bridge.CapabilityEvidence()["chat"] != domain.EvidenceDeclared {
 		t.Fatal("bridge returned mutable capability evidence")
 	}
 }

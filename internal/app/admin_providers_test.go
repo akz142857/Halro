@@ -593,17 +593,17 @@ func TestAdminCredentialViewPreservesBedrockBoundBaseURLForRotation(t *testing.T
 	}
 }
 
-func TestCapabilityEvidencePreservesLegacyAndDowngradesDisabledCapabilities(t *testing.T) {
+func TestCapabilityEvidenceIsNotSilentlyUpgradedAndDisabledCapabilitiesDowngrade(t *testing.T) {
 	providerCapabilities := domain.ProviderCapabilities{Chat: true, Streaming: true, Tools: true}
-	legacy := domain.EvidenceForCapabilities(providerCapabilities, domain.EvidenceLegacy)
-	updated := preserveCapabilityEvidence(providerCapabilities, legacy)
-	if updated["chat"] != domain.EvidenceLegacy || updated["tools"] != domain.EvidenceLegacy {
+	declared := domain.EvidenceForCapabilities(providerCapabilities, domain.EvidenceDeclared)
+	updated := preserveCapabilityEvidence(providerCapabilities, declared)
+	if updated["chat"] != domain.EvidenceDeclared || updated["tools"] != domain.EvidenceDeclared {
 		t.Fatalf("provider evidence was silently upgraded: %#v", updated)
 	}
 
 	deploymentCapabilities := domain.ProviderCapabilities{Chat: true, Streaming: true}
-	deployment := deploymentCapabilityEvidence(deploymentCapabilities, legacy, nil)
-	if deployment["chat"] != domain.EvidenceLegacy || deployment["tools"] != domain.EvidenceUnsupported {
+	deployment := deploymentCapabilityEvidence(deploymentCapabilities, declared, nil)
+	if deployment["chat"] != domain.EvidenceDeclared || deployment["tools"] != domain.EvidenceUnsupported {
 		t.Fatalf("deployment subset evidence=%#v", deployment)
 	}
 	verified := domain.EvidenceForCapabilities(deploymentCapabilities, domain.EvidenceVerified)

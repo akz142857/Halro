@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/akz142857/Halro/internal/domain"
@@ -10,10 +11,39 @@ import (
 	"github.com/akz142857/Halro/internal/semantic"
 )
 
-type registryAdapter struct{}
+type registryAdapter struct{ manifest *ProfileManifest }
 
-func (*registryAdapter) Type() string { return "test" }
-func (*registryAdapter) Close()       {}
+// registryAdapter carries a profile contract, because that is the only kind of
+// adapter the registry routes — production wraps every adapter in
+// LegacyAdapterBridge before registering it. bareAdapter below is the
+// deliberately contract-less one, used only to assert it is refused.
+func (*registryAdapter) Type() string { return "openai" }
+
+func (a *registryAdapter) Profile() ProfileManifest {
+	if a.manifest != nil {
+		return *a.manifest
+	}
+	manifest, _ := BuiltinProfile(domain.ProfileOpenAIChatEmbeddings)
+	return manifest
+}
+
+func (a *registryAdapter) Operations() OperationRegistry {
+	manifest := a.Profile()
+	return operationSet{operations: manifest.Operations, bindings: manifest.PrimitiveBindings, adapter: a}
+}
+
+func (*registryAdapter) CapabilityEvidence() domain.CapabilityEvidenceSet {
+	return domain.EvidenceForCapabilities(
+		domain.ProviderCapabilities{Chat: true, Streaming: true, Embeddings: true},
+		domain.EvidenceDeclared,
+	)
+}
+
+// bareAdapter implements Adapter and nothing else.
+type bareAdapter struct{ registryAdapter }
+
+func (*bareAdapter) Profile()   {}
+func (*registryAdapter) Close() {}
 func (*registryAdapter) Chat(context.Context, ChatCall) (openaiapi.ChatCompletionResponse, error) {
 	return openaiapi.ChatCompletionResponse{}, nil
 }
@@ -140,11 +170,16 @@ func TestRegistryRoutesEveryInferenceResourcesCapability(t *testing.T) {
 	for _, operation := range operations {
 		bindings = append(bindings, PrimitiveBinding{LegacyOperation: operation, SemanticOperation: semanticOperationFor(operation), Primitive: Primitive("test." + string(operation))})
 	}
-	adapter := &registryAdapter{}
+	// The operations now come from the adapter's profile, because that is the
+	// contract the registry routes on — a target can no longer assert
+	// operations its adapter does not publish.
+	manifest, _ := BuiltinProfile(domain.ProfileOpenAIMediaResources)
+	manifest.Operations, manifest.PrimitiveBindings = operations, bindings
+	adapter := &registryAdapter{manifest: &manifest}
 	registry := NewRegistry()
 	target := Target{ID: "inferenceResources", PublicModel: "inferenceResources", ProviderModel: "provider-model", Adapter: adapter,
+		AccessSurface: manifest.AccessSurface, ProfileID: manifest.ID,
 		Capabilities: Capabilities{Moderations: true, Images: true, Transcriptions: true, Speech: true, Files: true, Batches: true, Rerank: true, AsyncGenerate: true},
-		operations:   operationSet{operations: operations, bindings: bindings, adapter: adapter},
 	}
 	if err := registry.Register(target); err != nil {
 		t.Fatal(err)
@@ -161,10 +196,10 @@ func TestRegistryCanRequireMinimumCapabilityEvidence(t *testing.T) {
 	adapter := &registryAdapter{}
 	for _, target := range []Target{
 		{
-			ID: "legacy", PublicModel: "shared", ProviderModel: "legacy", Adapter: adapter,
+			ID: "declared", PublicModel: "shared", ProviderModel: "declared", Adapter: adapter,
 			Capabilities: Capabilities{Chat: true},
 			CapabilityEvidence: domain.EvidenceForCapabilities(
-				domain.ProviderCapabilities{Chat: true}, domain.EvidenceLegacy,
+				domain.ProviderCapabilities{Chat: true}, domain.EvidenceDeclared,
 			),
 		},
 		{
@@ -179,7 +214,9 @@ func TestRegistryCanRequireMinimumCapabilityEvidence(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	candidates := registry.ResolveCandidatesForEvidence("shared", OperationChat, domain.EvidenceDeclared)
+	// Verified is the higher of the two remaining tiers, so requiring it must
+	// drop the merely declared candidate.
+	candidates := registry.ResolveCandidatesForEvidence("shared", OperationChat, domain.EvidenceVerified)
 	if len(candidates) != 1 || candidates[0].ID != "verified" {
 		t.Fatalf("evidence-filtered candidates=%#v", candidates)
 	}
@@ -190,7 +227,7 @@ func TestRegistryEvidenceFilteringFailsClosedAndRequiresChatForStreaming(t *test
 	evidence := domain.EvidenceForCapabilities(
 		domain.ProviderCapabilities{Chat: true, Streaming: true}, domain.EvidenceVerified,
 	)
-	evidence["chat"] = domain.EvidenceLegacy
+	evidence["chat"] = domain.EvidenceDeclared
 	if err := registry.Register(Target{
 		ID: "mixed", PublicModel: "stream", ProviderModel: "model", Adapter: &registryAdapter{},
 		Capabilities: Capabilities{Chat: true, Streaming: true}, CapabilityEvidence: evidence,
@@ -310,7 +347,7 @@ func TestRegistryCapabilityEvidenceIsImmutableAcrossBoundaries(t *testing.T) {
 	}
 	resolved.CapabilityEvidence["chat"] = domain.EvidenceUnsupported
 	all := registry.ResolveAll("chat")
-	all[0].CapabilityEvidence["chat"] = domain.EvidenceLegacy
+	all[0].CapabilityEvidence["chat"] = domain.EvidenceDeclared
 	candidates := registry.ResolveCandidates("chat")
 	candidates[0].CapabilityEvidence["chat"] = domain.EvidenceDeclared
 	fresh, _ := registry.Resolve("chat")
@@ -348,40 +385,26 @@ func TestRegistryCandidateResolutionUsesCapturedOperationSnapshot(t *testing.T) 
 	}
 }
 
-func TestUnprofiledAdapterIsConservativeAndCannotClaimProfile(t *testing.T) {
+func TestUnprofiledAdapterIsRejected(t *testing.T) {
 	registry := NewRegistry()
-	if err := registry.Register(Target{
-		ID: "legacy", PublicModel: "chat", ProviderModel: "model", Adapter: &registryAdapter{},
+	// Previously this registered, and the optional semantics were scrubbed to
+	// false afterwards. That made fail-closed a property of a later branch
+	// rather than of the type, so anything the branch did not cover became
+	// fail-open. The state is unrepresentable now.
+	err := registry.Register(Target{
+		ID: "legacy", PublicModel: "chat", ProviderModel: "model", Adapter: &bareAdapter{},
 		Capabilities: Capabilities{
 			Chat: true, Streaming: true, Embeddings: true, Tools: true, Vision: true,
 			JSONMode: true, DeveloperRole: true, Reasoning: true, StreamUsage: true,
 		},
-	}); err != nil {
-		t.Fatal(err)
+	})
+	if err == nil {
+		t.Fatal("an adapter with no profile contract was accepted for routing")
 	}
-	target, ok := registry.Resolve("chat")
-	if !ok || !target.LegacyUnprofiled {
-		t.Fatalf("legacy target was not marked conservatively: %#v", target)
+	if !strings.Contains(err.Error(), "ProfiledAdapter") {
+		t.Fatalf("rejection does not name what is missing: %v", err)
 	}
-	if target.Capabilities.Tools || target.Capabilities.Vision || target.Capabilities.JSONMode ||
-		target.Capabilities.DeveloperRole || target.Capabilities.Reasoning || target.Capabilities.StreamUsage {
-		t.Fatalf("legacy target retained unproved optional capabilities: %#v", target.Capabilities)
-	}
-	if target.CapabilityEvidence["chat"] != domain.EvidenceLegacy ||
-		target.CapabilityEvidence["tools"] != domain.EvidenceUnsupported {
-		t.Fatalf("legacy evidence is not conservative: %#v", target.CapabilityEvidence)
-	}
-	generation, err := target.Generation(OperationChat)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loss := translationForPrimitive(generation.ProviderPrimitive()); loss != semantic.TranslationDeclared {
-		t.Fatalf("legacy primitive claimed lossless translation: %s", loss)
-	}
-	if err := NewRegistry().Register(Target{
-		ID: "false-profile", PublicModel: "chat", ProviderModel: "model", Adapter: &registryAdapter{},
-		ProfileID: domain.ProfileOpenAIChatEmbeddings,
-	}); err == nil {
-		t.Fatal("unprofiled adapter claimed a registered profile")
+	if _, ok := registry.Resolve("chat"); ok {
+		t.Fatal("the rejected target still became a routing candidate")
 	}
 }
