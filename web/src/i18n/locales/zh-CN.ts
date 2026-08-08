@@ -361,7 +361,7 @@ export const zhCN = {
     projectEventsPerSecond: "单 Project 账务写入/秒",
     metadataBatchSize: "每个事务的元数据写入数",
     metadataWriteSeconds: "元数据页写入平均耗时",
-    writePathIdle: "尚未观测到持久化写入。",
+    writePathIdle: "尚无持久化写入。这些数值在本实例处理过 Gateway 请求之后出现——管理控制台自身的操作不产生账务写入,所以在这里点击不会让它们出现。",
     writePathWindow: "自实例启动以来的平均值",
     writePathNotCoalescing: "append 没有在合批。在这个批大小下,瓶颈是可用并发或上游串行化,不是磁盘速度。",
     writePathLive: "需要近期窗口而非终身平均值时,执行 heimdall stats -interval 10s。",

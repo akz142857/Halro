@@ -320,6 +320,11 @@ describe("SettingsPage system configuration pane", () => {
 
     await screen.findByText("Heimdall 1.0.0");
     expect(screen.queryByText(/NaN/)).not.toBeInTheDocument();
+    // An empty card that does not say what would fill it sends the reader to
+    // ask someone. The Admin console never writes to the Ledger, so nothing
+    // done on this page can populate these figures — say so here rather than
+    // leaving "no data" to be interpreted as a fault.
+    expect(screen.getByText(/Gateway/)).toBeInTheDocument();
   });
 
   it("keeps an unknown pane on general rather than blanking the page", () => {
