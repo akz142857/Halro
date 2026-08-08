@@ -10,6 +10,7 @@ import (
 
 	"github.com/akz142857/Halro/internal/budget"
 	"github.com/akz142857/Halro/internal/config"
+	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/ledger"
 	"github.com/akz142857/Halro/internal/masterkey"
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
@@ -323,6 +324,7 @@ func checkDoctorTopology(ctx context.Context, store *boltstore.Store, add func(s
 		}
 	}
 	add("pricing_readiness", "pass", "all enabled deployments have an effective versioned price")
+	checkDoctorCapabilityDrift(providers, deployments, add)
 	active := 0
 	for _, item := range routes {
 		if !item.Enabled || item.DeletedAt != nil {
@@ -377,4 +379,48 @@ func inspectLedgerChain(store *boltstore.Store, secretVault *vault.Vault, master
 		return "unverified", fmt.Sprintf("no authenticated frames yet (%d checksum-only)", report.ChecksumOnly)
 	}
 	return "pass", fmt.Sprintf("chain authenticated (%d frames, %d checksum-only)", report.Authenticated, report.ChecksumOnly)
+}
+
+// checkDoctorCapabilityDrift reports deployments whose stored capability
+// snapshot no longer matches the running profile or the catalog. The registry
+// already refuses to route them; doctor is where an operator finds out why
+// without having to read a start-up failure.
+func checkDoctorCapabilityDrift(providers []domain.ProviderInstance, deployments []domain.Deployment, add func(string, string, string)) {
+	instances := make(map[string]domain.ProviderInstance, len(providers))
+	for _, item := range providers {
+		instances[item.ID] = item
+	}
+	drifted, review := 0, 0
+	for _, deployment := range deployments {
+		if deployment.DeletedAt != nil {
+			continue
+		}
+		instance, ok := instances[deployment.ProviderID]
+		if !ok {
+			continue
+		}
+		binding, bound := instance.ProfileBinding(deployment.BindingID)
+		if !bound {
+			binding = domain.ProviderProfileBinding{ProfileID: deployment.ProfileID, Capabilities: instance.Capabilities}
+		}
+		switch evaluateCapabilityReview(deployment, binding, instance.Type) {
+		case domain.CapabilityReviewDrifted:
+			drifted++
+		case domain.CapabilityReviewAvailable:
+			review++
+		}
+	}
+	switch {
+	case drifted > 0:
+		// Named as a count rather than a list: deployment IDs are the kind of
+		// specific object that belongs in audit and controlled logs.
+		add("capability_drift", "fail", fmt.Sprintf(
+			"%d deployment(s) claim capabilities their profile or the catalog no longer supports and will not serve; review and retest them (%d more have capabilities available for review)",
+			drifted, review))
+	case review > 0:
+		add("capability_drift", "warn", fmt.Sprintf(
+			"%d deployment(s) have catalog capabilities available for review; they keep serving what they already declare", review))
+	default:
+		add("capability_drift", "pass", "every deployment matches its capability snapshot")
+	}
 }
