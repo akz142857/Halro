@@ -320,6 +320,11 @@ describe("SettingsPage system configuration pane", () => {
 
     await screen.findByText("Heimdall 1.0.0");
     expect(screen.queryByText(/NaN/)).not.toBeInTheDocument();
+    // The rows stay on screen with no data behind them. An idle instance asking
+    // this card a question should get "— over 0 barriers", which is an answer;
+    // replacing the table with prose is what made the first reader ask what the
+    // panel was for.
+    expect(screen.getByText("Ledger fsync 平均耗时")).toBeInTheDocument();
     // An empty card that does not say what would fill it sends the reader to
     // ask someone. The Admin console never writes to the Ledger, so nothing
     // done on this page can populate these figures — say so here rather than

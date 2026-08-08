@@ -133,6 +133,10 @@ function WritePathCard({ summary, batches }: { summary?: WritePathSummary; batch
   // operator opens when the instance is misbehaving, so it must not be the thing
   // that blanks the page.
   const idle = !summary || (summary.wal_sync_seconds === 0 && summary.project_lock_held_seconds === 0);
+  // Rows always render. Zero is data — "over 0 barriers" answers the question
+  // this card exists for — and hiding the table behind an idle branch is what
+  // turned a diagnostics panel into three paragraphs of prose. The CLI never
+  // hid it either.
   const rows: [string, string][] = summary ? [
     [t("settings.walSyncSeconds"), formatMillis(summary.wal_sync_seconds)],
     [t("settings.walBatchSize"), formatFactor(summary.wal_batch_size)],
@@ -149,16 +153,9 @@ function WritePathCard({ summary, batches }: { summary?: WritePathSummary; batch
     <details className="panel system-card diagnostic-details" open>
       <summary><span>{t("settings.writePathTitle")}</span><strong>{t("settings.writePathSummaryLabel")}</strong></summary>
       <p className="field-hint">{t("settings.writePathDescription")}</p>
-      {idle
-        ? <p className="field-hint">{t("settings.writePathIdle")}</p>
-        : <>
-            <dl>{rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
-            {/* Said out loud because these are cumulative: read as "right now",
-                a lifetime average hides the slowdown that started a minute ago,
-                which is exactly when someone opens this card. */}
-            <p className="field-hint">{t("settings.writePathWindow")} {t("settings.writePathLive")}</p>
-            {notCoalescing && <p className="field-hint">{t("settings.writePathNotCoalescing")}</p>}
-          </>}
+      <dl>{rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
+      <p className="field-hint">{idle ? t("settings.writePathIdle") : t("settings.writePathWindow")}</p>
+      {notCoalescing && <p className="field-hint">{t("settings.writePathNotCoalescing")}</p>}
     </details>
   );
 }
