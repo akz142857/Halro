@@ -263,13 +263,15 @@ describe("SettingsPage system configuration pane", () => {
     const entries = [...screen.getByRole("navigation", { name: "设置分区" }).querySelectorAll("a")].map((a) => a.textContent);
     expect(entries).toEqual(["通用", "登录与安全", "管理员账户", "实例配置", "系统配置", "关于与诊断"]);
 
-    expect(await screen.findByText("有效启动配置")).toBeInTheDocument();
-    expect(screen.getByText("127.0.0.1:8080")).toBeInTheDocument();
+    // The pane heading and the nav entry share a name, so wait on something
+    // only the pane can produce rather than on the label.
+    expect(await screen.findByText("127.0.0.1:8080")).toBeInTheDocument();
+    expect(document.querySelector("#effective-config-title")).toHaveTextContent("系统配置");
     expect(screen.getByText("未启用")).toBeInTheDocument();
     expect(screen.getByText("未配置")).toBeInTheDocument();
     const yamlDetails = document.querySelector(".config-preview");
     expect(yamlDetails).not.toHaveAttribute("open");
-    fireEvent.click(screen.getByText("查看有效配置 YAML"));
+    fireEvent.click(screen.getByText("有效配置 YAML"));
     expect(yamlDetails).toHaveAttribute("open");
     expect(screen.getByText(/gateway_listen:/)).toBeInTheDocument();
     expect(systemConfig).toHaveBeenCalled();

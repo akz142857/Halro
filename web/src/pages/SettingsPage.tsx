@@ -181,9 +181,16 @@ function formatFactor(value: number) {
   return value < 10 ? value.toFixed(2) : value.toFixed(1);
 }
 
+// The disclosure state lives for the session rather than in storage: an
+// operator who opened the YAML once is usually still debugging, and reopening
+// it on every visit to the pane is the kind of small friction that makes people
+// stop using the summary above it.
+let yamlDisclosureOpen = false;
+
 function ConfigPreviewCard({ yaml, summary }: { yaml: string; summary: SystemConfigSection[] }) {
   const { t } = useTranslation();
   const [copyStatus, setCopyStatus] = useState("");
+  const [yamlOpen, setYamlOpen] = useState(yamlDisclosureOpen);
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(yaml);
@@ -192,21 +199,25 @@ function ConfigPreviewCard({ yaml, summary }: { yaml: string; summary: SystemCon
       setCopyStatus(t("settings.configPreviewCopyFailed"));
     }
   };
-  return <div className="config-overview">
-    <section className="panel config-summary" aria-labelledby="effective-config-title">
-      <header className="config-summary-header">
-        <div>
-          <h3 id="effective-config-title">{t("settings.effectiveConfig")}</h3>
-          <p>{t("settings.effectiveConfigDescription")}</p>
-        </div>
-        <span className="badge">{t("settings.readOnlyRestart")}</span>
-      </header>
-      <div className="config-section-list">
-        {summary.map((section) => <ConfigSummarySection key={section.id} section={section} />)}
+  return <section className="config-overview" aria-labelledby="effective-config-title">
+    <header className="config-overview-header">
+      <div>
+        <h3 id="effective-config-title">{t("settings.effectiveConfig")}</h3>
+        <p>{t("settings.effectiveConfigDescription")}</p>
       </div>
-    </section>
-    <details className="panel system-card diagnostic-details config-preview">
-      <summary><span>{t("settings.effectiveConfigYaml")}</span><strong>{t("settings.advancedDetails")}</strong></summary>
+      <span className="config-overview-state">{t("settings.readOnlyRestart")}</span>
+    </header>
+    {summary.map((section) => <ConfigSummarySection key={section.id} section={section} />)}
+    <details
+      className="config-preview"
+      open={yamlOpen}
+      onToggle={(event) => {
+        const open = (event.currentTarget as HTMLDetailsElement).open;
+        yamlDisclosureOpen = open;
+        setYamlOpen(open);
+      }}
+    >
+      <summary>{t("settings.effectiveConfigYaml")}</summary>
       <p className="config-preview-description">{t("settings.effectiveConfigYamlDescription")}</p>
       <pre className="config-preview-body" tabIndex={0} aria-label={t("settings.effectiveConfigYaml")}><code>{yaml}</code></pre>
       <div className="form-actions">
@@ -214,17 +225,23 @@ function ConfigPreviewCard({ yaml, summary }: { yaml: string; summary: SystemCon
         <span aria-live="polite">{copyStatus}</span>
       </div>
     </details>
-  </div>;
+  </section>;
 }
 
 function ConfigSummarySection({ section }: { section: SystemConfigSection }) {
   const { t } = useTranslation();
-  return <section className="config-section" aria-labelledby={`config-section-${section.id}`}>
+  // Title above its rows on one plane, rather than a second column: the label
+  // column is the scan path, and a group heading competing for it breaks the
+  // line the eye follows down the values.
+  return <div className="config-group">
     <h4 id={`config-section-${section.id}`}>{t(`settings.configSections.${section.id}`)}</h4>
-    <dl>
-      {section.facts.map((fact) => <div key={fact.id}><dt>{t(`settings.configFacts.${fact.id}`)}</dt><dd className={fact.kind === "path" || fact.kind === "address" ? "technical" : undefined}>{formatConfigFact(fact, t)}</dd></div>)}
+    <dl aria-labelledby={`config-section-${section.id}`}>
+      {section.facts.map((fact) => <div key={fact.id}>
+        <dt>{t(`settings.configFacts.${fact.id}`)}</dt>
+        <dd className={fact.kind === "path" || fact.kind === "address" ? "technical" : undefined}>{formatConfigFact(fact, t)}</dd>
+      </div>)}
     </dl>
-  </section>;
+  </div>;
 }
 
 function formatConfigFact(fact: SystemConfigFact, t: (key: string, options?: Record<string, unknown>) => string) {
