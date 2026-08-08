@@ -77,6 +77,7 @@ type Runtime struct {
 	metricsTokenHash    [32]byte
 	metricsAuthorizer   *bearercred.Authorizer
 	metricsScrapes      chan struct{}
+	capabilityMetrics   *capabilityMetrics
 	metricsAuthFailed   atomic.Uint64
 	metricsBusy         atomic.Uint64
 	metricsRenderErrs   atomic.Uint64
@@ -557,6 +558,7 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		metricsTokenHash:    metricsTokenHash,
 		metricsAuthorizer:   metricsAuthorizer,
 		metricsScrapes:      make(chan struct{}, cfg.Metrics.MaxConcurrentScrapes),
+		capabilityMetrics:   newCapabilityMetrics(),
 		instanceID:          instanceID,
 		anchorAuthorizer:    anchorAuthorizer,
 		startedAt:           time.Now(),

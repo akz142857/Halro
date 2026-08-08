@@ -95,6 +95,7 @@ func (r *Runtime) auditCapabilityWithholdings(ctx context.Context, withheld []ca
 			"route_id":                item.RouteID,
 			"capability_review_state": string(item.State),
 		}
+		recorded := false
 		if deployment, err := r.store.GetDeployment(ctx, item.DeploymentID); err == nil {
 			for key, value := range capabilitySnapshotMetadata(deployment) {
 				metadata[key] = value
@@ -105,7 +106,16 @@ func (r *Runtime) auditCapabilityWithholdings(ctx context.Context, withheld []ca
 				if len(review.NoLongerSupported) != 0 {
 					metadata["no_longer_supported"] = review.NoLongerSupported
 				}
+				r.capabilityMetrics.recordDrift(driftMetricReason(review.Reason))
+				recorded = true
 			}
+		}
+		// The reason is only knowable with the deployment and its provider in
+		// hand. When either read fails the drift still happened, so it is
+		// counted rather than dropped — a metric that silently undercounts the
+		// exact case it exists to catch would be worse than a coarse one.
+		if !recorded {
+			r.capabilityMetrics.recordDrift(driftReasonProfile)
 		}
 		// A failed audit append must not take the process down: the deployment
 		// is already fail-closed, and refusing to start over an audit write

@@ -168,7 +168,7 @@ func TestResolveRejectsStaleModelRevision(t *testing.T) {
 		t.Fatal("a stale revision was accepted")
 	}
 	recorder := httptest.NewRecorder()
-	adminDeploymentInputError(recorder, err)
+	(&Runtime{capabilityMetrics: newCapabilityMetrics()}).adminDeploymentInputError(recorder, err)
 	if recorder.Code != 409 {
 		t.Fatalf("status=%d", recorder.Code)
 	}
@@ -211,7 +211,7 @@ func TestDiscoveryAndCreateAgreeOnTheModelRevision(t *testing.T) {
 
 func isUnknownCapabilityError(err error) bool {
 	recorder := httptest.NewRecorder()
-	adminDeploymentInputError(recorder, err)
+	(&Runtime{capabilityMetrics: newCapabilityMetrics()}).adminDeploymentInputError(recorder, err)
 	var body map[string]string
 	if json.Unmarshal(recorder.Body.Bytes(), &body) != nil {
 		return false

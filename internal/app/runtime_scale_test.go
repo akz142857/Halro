@@ -27,7 +27,12 @@ import (
 // internal/app is otherwise the only package in the repository under no
 // executable architectural constraint, and the one that needs one most.
 const (
-	runtimeFieldBudget = 66
+	// 67: capabilityMetrics. Raised deliberately. It is per-instance mutable
+	// state written by the admin handlers and the registry loader and read by
+	// the metrics renderer — the same shape as usage, ledger and alerts. The
+	// alternative shape available here is a process global, as the KMS metrics
+	// use, and that one leaks across Runtime lifecycles and across tests.
+	runtimeFieldBudget = 67
 	runtimeMutexBudget = 11
 )
 

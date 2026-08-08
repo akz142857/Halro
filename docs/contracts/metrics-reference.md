@@ -108,6 +108,13 @@ an authentication boundary.
 | `halro_tzdata_info` | gauge | `source`, `version`, `fingerprint` |
 | `halro_accounting_timezone_version` | gauge | none |
 | `halro_accounting_period_end_seconds` | gauge | none |
+| `halro_model_catalog_refresh_total` | counter | `provider_type`, `profile`, `status` |
+| `halro_model_catalog_degraded_total` | counter | `provider_type`, `error_class` |
+| `halro_capability_drift_total` | counter | `reason` |
+| `halro_model_revision_conflicts_total` | counter | none |
+| `halro_deployment_test_total` | counter | `status` |
+| `halro_deployment_capability_status` | gauge | `state` |
+| `halro_operator_declared_deployments` | gauge | none |
 | `halro_metrics_auth_failures_total` | counter | none |
 | `halro_metrics_scrape_rejected_total` | counter | none |
 | `halro_metrics_render_errors_total` | counter | none |
