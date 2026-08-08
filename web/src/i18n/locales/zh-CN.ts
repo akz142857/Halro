@@ -621,7 +621,7 @@ export const zhCN = {
     noCredentials: "没有服务商凭据", noCredentialsDescription: "先保存加密凭据，再创建服务商实例。", noProviders: "没有服务商", noProvidersDescription: "创建一个上游连接后，模型部署才能选择它。",
     healthy: "健康 · {{latency}}ms", healthyStatus: "健康", unhealthy: "不健康", notTested: "尚未检测", testSummary: "{{healthy}}/{{total}} 个接口正常 · {{latency}}ms", testConnection: "测试连接", enabled: "已启用",
     endpoint: "API 地址", boundCredential: "绑定凭据", missingCredential: "凭据不可用", capabilities: "开放能力", capabilityCount: "{{count}} 项", capacity: "并发上限", credentialUsage: "被 {{count}} 个服务商使用", technicalDetails: "技术详情", moreActions: "更多操作", runtimeControls: "运行控制",
-    capabilityInterfaces: "能力接口", capabilityImplementation: "能力实现", surface: "访问面", evidence: "能力证据", concurrency: "并发：{{value}}", testing: "测试中", test: "测试", off: "停用", credentialDetailsTitle: "凭据绑定信息", credentialDetailsDescription: "仅展示非敏感元数据；密钥内容始终加密保存且永不回显。", credentialID: "凭据 ID",
+    capabilityInterfaces: "能力接口", capabilityImplementation: "能力实现", surface: "访问面", evidence: "能力证据", concurrency: "并发：{{value}}", testing: "测试中", test: "测试", off: "停用", credentialDetailsTitle: "凭据绑定信息", credentialDetailsDescription: "仅展示非敏感元数据；密钥内容始终加密保存且永不回显。", normalizedBoundURL: "规范化绑定端点", credentialID: "凭据 ID",
     deleteProvider: "删除服务商“{{name}}”？仍被模型部署引用时操作会被拒绝。", disableTitle: "禁用服务商？", disableConfirm: "确认禁用服务商“{{name}}”？依赖该连接的模型部署将无法继续调用上游。", keyGeneration: "第 {{version}} 代密钥", rotate: "轮换",
     deleteCredentialInUse: "删除凭据“{{name}}”？{{count}} 个服务商连接正在使用它，删除后这些连接将立即无法访问上游。", deleteCredential: "删除凭据“{{name}}”？仍被服务商引用时操作会被拒绝。", rotateCredential: "轮换服务商凭据", saveCredential: "保存服务商凭据",
     credentialName: "凭据名称", providerType: "服务商类型", boundURL: "地址绑定", boundURLHint: "密钥将与规范化后的协议、主机、端口和服务商类型绑定",
