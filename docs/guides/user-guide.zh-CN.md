@@ -1,4 +1,4 @@
-# Heimdall 使用手册
+# Halro 使用手册
 
 本文面向本地体验、管理员配置和应用接入。生产部署、升级、备份恢复与安全加固请同时阅读 [Operator Guide](operator-guide.md)。
 
@@ -31,8 +31,8 @@ Application
 获取源码并进入项目目录：
 
 ```bash
-git clone https://github.com/akz142857/Heimdall.git
-cd Heimdall
+git clone https://github.com/akz142857/Halro.git
+cd Halro
 ```
 
 首次启动只需要：
@@ -41,7 +41,7 @@ cd Heimdall
 make start
 ```
 
-该命令会按需安装前端依赖、构建 `bin/heimdall`、创建只监听本机回环地址的
+该命令会按需安装前端依赖、构建 `bin/halro`、创建只监听本机回环地址的
 `config.yaml`、初始化本地加密存储并启动服务。React 静态资源嵌入二进制，
 运行时不需要单独启动前端服务。
 
@@ -65,14 +65,14 @@ Unicode 码点。这是明确的产品策略变更，不是等价重构：纯 AS
 自动初始化会生成：
 
 - `master.key`：本机 Master Key，权限为 `0600`；
-- `data/heimdall.db`：元数据；
+- `data/halro.db`：元数据；
 - `data/ledger/`：权威用量账本；
 - `data/audit/`：审计链；
 - 后续生成的 Usage checkpoint 与 Parquet 数据。
 
 Master Key 必须与数据目录分开备份。丢失 Master Key 后，Provider Credential 无法恢复。
 重复执行 `make start` 不会覆盖配置、Master Key 或数据。如果只剩 Master Key 或
-只剩元数据等残缺状态，Heimdall 会拒绝自动修复并要求人工恢复匹配的文件。
+只剩元数据等残缺状态，Halro 会拒绝自动修复并要求人工恢复匹配的文件。
 
 如果 Admin 通过 TLS 监听非回环地址，启动终端还会显示一次性 Setup Token，
 页面必须同时提交该 Token。它只保存在当前进程内，重启后自动轮换。
@@ -111,10 +111,10 @@ English，切换后无需刷新页面。
 ### 2.5 Headless 与自动化部署
 
 ```bash
-./bin/heimdall init --config ./configs/config.example.yaml
-printf '%s' "$ADMIN_PASSWORD" | ./bin/heimdall admin bootstrap \
+./bin/halro init --config ./configs/config.example.yaml
+printf '%s' "$ADMIN_PASSWORD" | ./bin/halro admin bootstrap \
   --config ./configs/config.example.yaml --username admin
-./bin/heimdall serve --config ./configs/config.example.yaml
+./bin/halro serve --config ./configs/config.example.yaml
 ```
 
 这些离线命令继续用于无浏览器服务器、CI、自动化部署与紧急密码恢复，运行时
@@ -141,7 +141,7 @@ printf '%s' "$ADMIN_PASSWORD" | ./bin/heimdall admin bootstrap \
 ```bash
 read -r -s OPENAI_API_KEY
 printf '\n'
-printf '%s' "$OPENAI_API_KEY" | ./bin/heimdall bootstrap \
+printf '%s' "$OPENAI_API_KEY" | ./bin/halro bootstrap \
   --config ./configs/config.example.yaml \
   --provider-type openai \
   --provider-base-url https://api.openai.com \
@@ -195,7 +195,7 @@ Bedrock Credential 是一个 JSON Secret：
 
 Mantle Credential 直接保存 Bedrock API Key，不使用上述 JSON。创建凭据时选择 Mantle 访问面，
 再为所需协议分别创建 Provider；一个 Provider 只绑定一个 Profile。Mantle Responses 始终以
-`store:false` 调用 AWS，不创建 Heimdall 无法管理的 30 天存储状态。Runtime 与 Mantle 的凭据、
+`store:false` 调用 AWS，不创建 Halro 无法管理的 30 天存储状态。Runtime 与 Mantle 的凭据、
 并发上限和能力证据相互隔离。
 
 ## 4. 调用 Gateway
@@ -205,15 +205,15 @@ Mantle Credential 直接保存 Bedrock API Key，不使用上述 JSON。创建�
 不要把 Key 直接写在 shell history 中：
 
 ```bash
-read -r -s HEIMDALL_GATEWAY_KEY
+read -r -s HALRO_GATEWAY_KEY
 printf '\n'
-export HEIMDALL_GATEWAY_KEY
+export HALRO_GATEWAY_KEY
 ```
 
 使用结束后清除：
 
 ```bash
-unset HEIMDALL_GATEWAY_KEY
+unset HALRO_GATEWAY_KEY
 ```
 
 ### 4.2 curl 非流式请求
@@ -222,13 +222,13 @@ unset HEIMDALL_GATEWAY_KEY
 
 ```bash
 curl http://127.0.0.1:8080/v1/chat/completions \
-  -H "Authorization: Bearer $HEIMDALL_GATEWAY_KEY" \
+  -H "Authorization: Bearer $HALRO_GATEWAY_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "chat",
     "max_completion_tokens": 256,
     "messages": [
-      {"role": "user", "content": "你好，请用一句话介绍 Heimdall"}
+      {"role": "user", "content": "你好，请用一句话介绍 Halro"}
     ]
   }'
 ```
@@ -237,7 +237,7 @@ curl http://127.0.0.1:8080/v1/chat/completions \
 
 ```bash
 curl -N http://127.0.0.1:8080/v1/chat/completions \
-  -H "Authorization: Bearer $HEIMDALL_GATEWAY_KEY" \
+  -H "Authorization: Bearer $HALRO_GATEWAY_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "chat",
@@ -258,9 +258,9 @@ curl -N http://127.0.0.1:8080/v1/chat/completions \
 
 ```bash
 curl http://127.0.0.1:8080/v1/embeddings \
-  -H "Authorization: Bearer $HEIMDALL_GATEWAY_KEY" \
+  -H "Authorization: Bearer $HALRO_GATEWAY_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"model":"embedding","input":"Heimdall Gateway"}'
+  -d '{"model":"embedding","input":"Halro Gateway"}'
 ```
 
 通常应为 Chat 与 Embedding 创建不同 Deployment 和公开 Route。
@@ -268,7 +268,7 @@ curl http://127.0.0.1:8080/v1/embeddings \
 Bedrock Runtime 的 `bedrock.runtime.invoke.titan-embed-text-v2.v1` Profile 固定使用
 `amazon.titan-embed-text-v2:0`，当前只接受单个字符串、Float 输出和 256/512/1024 维。
 数组、Token 数组、`base64`、`user` 与其他维度会在访问 AWS 前拒绝；需要批量时请由客户端逐条
-调用并自行控制并发，不要假设 Heimdall 会做隐藏 Fan-out。
+调用并自行控制并发，不要假设 Halro 会做隐藏 Fan-out。
 
 ### 4.5 Python OpenAI SDK
 
@@ -277,7 +277,7 @@ import os
 from openai import OpenAI
 
 client = OpenAI(
-    api_key=os.environ["HEIMDALL_GATEWAY_KEY"],
+    api_key=os.environ["HALRO_GATEWAY_KEY"],
     base_url="http://127.0.0.1:8080/v1",
     max_retries=0,
 )
@@ -296,7 +296,7 @@ print(response.choices[0].message.content)
 import OpenAI from "openai";
 
 const client = new OpenAI({
-  apiKey: process.env.HEIMDALL_GATEWAY_KEY,
+  apiKey: process.env.HALRO_GATEWAY_KEY,
   baseURL: "http://127.0.0.1:8080/v1",
   maxRetries: 0,
 });
@@ -328,7 +328,7 @@ console.log(response.choices[0].message.content);
 
 Deployment 与价格时间线分开管理。至少创建一个已经生效的 Price Version；输入、输出价格单位为 `USD / 1M tokens`，固定价格单位为 `USD / request`。历史 Attempt 会保存当时的完整价格快照，后续调价不会重算旧消费。没有有效价格默认返回 `409 price_unavailable`，不会再显示成已知 `$0.00`；只有显式 `free` 版本才表示已知零成本。
 
-网络超时或连接中断可能导致“Provider 是否已经处理请求”无法确定。Heimdall 会按请求允许的最大输出 Token 做保守结算，并标记为 `estimated`。Dashboard 主 Token 数只显示 Provider 报告量，估算上界单独显示；Usage 页面使用 `EST.` 标记。应用应合理设置 `max_completion_tokens` 和 Project 最大输出限制。
+网络超时或连接中断可能导致“Provider 是否已经处理请求”无法确定。Halro 会按请求允许的最大输出 Token 做保守结算，并标记为 `estimated`。Dashboard 主 Token 数只显示 Provider 报告量，估算上界单独显示；Usage 页面使用 `EST.` 标记。应用应合理设置 `max_completion_tokens` 和 Project 最大输出限制。
 
 ## 6. Token Guard 与脱敏
 
@@ -369,17 +369,17 @@ Redaction Policy 支持内置 PII/Secret、RE2 规则和字典。策略可以：
 默认要求 Bearer Token。令牌由 Master Key 派生，不保存在 YAML：
 
 ```bash
-./bin/heimdall metrics token --config ./configs/config.example.yaml
+./bin/halro metrics token --config ./configs/config.example.yaml
 ```
 
 调用：
 
 ```bash
-read -r -s HEIMDALL_METRICS_TOKEN
+read -r -s HALRO_METRICS_TOKEN
 printf '\n'
 curl http://127.0.0.1:9090/metrics \
-  -H "Authorization: Bearer $HEIMDALL_METRICS_TOKEN"
-unset HEIMDALL_METRICS_TOKEN
+  -H "Authorization: Bearer $HALRO_METRICS_TOKEN"
+unset HALRO_METRICS_TOKEN
 ```
 
 完整指标说明见 [Metrics reference](../contracts/metrics-reference.md)。指标标签刻意排除 Project、Key、Request ID、原始模型和 IP 等高基数或敏感数据。
@@ -387,9 +387,9 @@ unset HEIMDALL_METRICS_TOKEN
 生产环境应配置 `metrics.credential_file`，使用以下命令独立轮换和吊销指标凭据，而不旋转 Master Key：
 
 ```bash
-./bin/heimdall metrics rotate --config ./config.yaml --overlap 10m
-./bin/heimdall metrics list --config ./config.yaml
-./bin/heimdall metrics revoke --config ./config.yaml --version 1
+./bin/halro metrics rotate --config ./config.yaml --overlap 10m
+./bin/halro metrics list --config ./config.yaml
+./bin/halro metrics revoke --config ./config.yaml --version 1
 ```
 
 `rotate` 只在标准输出显示一次新 Token，应直接写入 Secret 文件，不能进入 shell history、环境变量或日志。非回环 Metrics listener 还必须配置 `metrics.tls` 双向 TLS 和 Client CA。
@@ -409,10 +409,10 @@ unset HEIMDALL_METRICS_TOKEN
 服务停止时，也可以使用离线命令创建或禁用内部 Key：
 
 ```bash
-./bin/heimdall key create --config ./configs/config.example.yaml \
+./bin/halro key create --config ./configs/config.example.yaml \
   --project-id prj_... --name team-a
 
-./bin/heimdall key disable --config ./configs/config.example.yaml \
+./bin/halro key disable --config ./configs/config.example.yaml \
   --key-id key_...
 ```
 
@@ -421,7 +421,7 @@ unset HEIMDALL_METRICS_TOKEN
 管理端可为 OpenAI 选择独立的“媒体与资源”Profile，并为 Bedrock 分别选择 Titan Image、
 Cohere Rerank 或 Nova Reel Async Profile。不要把多个协议能力合并到同一个 Provider。
 Files、Batches 与 Async 创建请求必须携带 `Idempotency-Key`；上传文件还必须携带
-`Heimdall-Route`。资源 ID 只在创建它的 Project 内可见，查询和删除始终回到原 Provider、
+`Halro-Route`。资源 ID 只在创建它的 Project 内可见，查询和删除始终回到原 Provider、
 Deployment、Profile 与 Region。Bedrock 异步任务当前不能取消；接口会明确返回
 `provider_cancel_unsupported`，而不是显示虚假的成功状态。
 
@@ -435,17 +435,17 @@ Price Version 的“每请求固定 USD”用于媒体、重排和资源操作�
 ```bash
 umask 077
 openssl rand 32 > backup.key
-./bin/heimdall backup create \
+./bin/halro backup create \
   --config ./configs/config.example.yaml \
-  --output ./heimdall.hmbk \
+  --output ./halro.hmbk \
   --key-file ./backup.key
 ```
 
 验证：
 
 ```bash
-./bin/heimdall backup verify \
-  --file ./heimdall.hmbk \
+./bin/halro backup verify \
+  --file ./halro.hmbk \
   --key-file ./backup.key
 ```
 
@@ -462,7 +462,7 @@ openssl rand 32 > backup.key
 服务停止后执行只读诊断：
 
 ```bash
-./bin/heimdall doctor --config ./configs/config.example.yaml
+./bin/halro doctor --config ./configs/config.example.yaml
 ```
 
 常见错误：
@@ -477,7 +477,7 @@ openssl rand 32 > backup.key
 | `502 provider_error` | Provider endpoint、Credential、模型名称、网络和连接测试 |
 | Dashboard 出现 `EST.` | Provider Usage 缺失或调用结果不明确；不是已确认的真实消耗 |
 | Cost 为 `$0.00` | Price Version 是否明确配置为 `free`；未知价格不会计入已知成本合计 |
-| 数据目录 locked | 另一个 Heimdall 或离线命令正在持有数据目录；不要手工删除锁文件绕过 |
+| 数据目录 locked | 另一个 Halro 或离线命令正在持有数据目录；不要手工删除锁文件绕过 |
 | Readiness 失败 | 先检查 Accounting、pricing quarantine、WAL append error、磁盘空间和 Usage lag |
 
 ### 12.1 价格版本、历史成本与价格建议

@@ -7,8 +7,8 @@ import (
 	"time"
 	_ "time/tzdata"
 
-	"github.com/akz142857/Heimdall/internal/domain"
-	"github.com/akz142857/Heimdall/internal/ledger"
+	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/ledger"
 )
 
 // A request that outlives the day it began in must still be charged to that

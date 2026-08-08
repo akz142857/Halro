@@ -1,22 +1,22 @@
 [Unit]
-Description=Heimdall independent dead-man monitor
-Documentation=https://github.com/akz142857/Heimdall
+Description=Halro independent dead-man monitor
+Documentation=https://github.com/akz142857/Halro
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=heimdall-deadman
-Group=heimdall-deadman
-ExecStartPre=/usr/local/bin/heimdall-deadman -config /etc/heimdall-deadman/config.yaml -check-config
-ExecStart=/usr/local/bin/heimdall-deadman -config /etc/heimdall-deadman/config.yaml
+User=halro-deadman
+Group=halro-deadman
+ExecStartPre=/usr/local/bin/halro-deadman -config /etc/halro-deadman/config.yaml -check-config
+ExecStart=/usr/local/bin/halro-deadman -config /etc/halro-deadman/config.yaml
 Restart=always
 RestartSec=5s
-RuntimeDirectory=heimdall-deadman
+RuntimeDirectory=halro-deadman
 RuntimeDirectoryMode=0700
-StateDirectory=heimdall-deadman
+StateDirectory=halro-deadman
 StateDirectoryMode=0700
-LogsDirectory=heimdall-deadman
+LogsDirectory=halro-deadman
 LogsDirectoryMode=0700
 NoNewPrivileges=true
 PrivateDevices=true
@@ -26,7 +26,7 @@ ProtectHome=true
 ProtectKernelModules=true
 ProtectKernelTunables=true
 ProtectSystem=strict
-ReadOnlyPaths=/etc/heimdall-deadman
+ReadOnlyPaths=/etc/halro-deadman
 RestrictAddressFamilies=AF_INET AF_INET6
 RestrictNamespaces=true
 RestrictRealtime=true

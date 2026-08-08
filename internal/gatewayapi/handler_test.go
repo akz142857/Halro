@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/anthropicapi"
-	"github.com/akz142857/Heimdall/internal/gateway"
-	"github.com/akz142857/Heimdall/internal/openaiapi"
-	"github.com/akz142857/Heimdall/internal/provider"
-	"github.com/akz142857/Heimdall/internal/requestmeta"
+	"github.com/akz142857/Halro/internal/anthropicapi"
+	"github.com/akz142857/Halro/internal/gateway"
+	"github.com/akz142857/Halro/internal/openaiapi"
+	"github.com/akz142857/Halro/internal/provider"
+	"github.com/akz142857/Halro/internal/requestmeta"
 )
 
 type fakeService struct {

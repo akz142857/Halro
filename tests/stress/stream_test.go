@@ -17,8 +17,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/gatewayapi"
-	"github.com/akz142857/Heimdall/internal/openaiapi"
+	"github.com/akz142857/Halro/internal/gatewayapi"
+	"github.com/akz142857/Halro/internal/openaiapi"
 )
 
 const concurrentStreams = 1000
@@ -59,8 +59,8 @@ func (*streamService) Embeddings(context.Context, string, openaiapi.EmbeddingReq
 }
 
 func TestThousandConcurrentSSEConnectionsCleanup(t *testing.T) {
-	if os.Getenv("HEIMDALL_STRESS") != "1" {
-		t.Skip("set HEIMDALL_STRESS=1 for the release stress gate")
+	if os.Getenv("HALRO_STRESS") != "1" {
+		t.Skip("set HALRO_STRESS=1 for the release stress gate")
 	}
 	release := make(chan struct{})
 	service := &streamService{started: make(chan struct{}, concurrentStreams), release: release}

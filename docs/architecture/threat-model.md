@@ -1,4 +1,4 @@
-# Heimdall v1 threat model
+# Halro v1 threat model
 
 ## Assets
 

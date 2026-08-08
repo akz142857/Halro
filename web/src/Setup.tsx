@@ -73,7 +73,7 @@ export function Setup({
       <section className="login-story" aria-label={t("auth.setupIntro")}>
         <div className="brand login-brand">
           <span className="brand-mark">H</span>
-          <span><strong>HEIMDALL</strong><small>{t("auth.firstRunSubtitle")}</small></span>
+          <span><strong>HALRO</strong><small>{t("auth.firstRunSubtitle")}</small></span>
         </div>
         <div>
           <p className="eyebrow">{t("auth.setupEyebrow")}</p>

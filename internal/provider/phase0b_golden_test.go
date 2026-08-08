@@ -6,10 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	openaiwire "github.com/akz142857/Heimdall/internal/compatibility/openai"
-	"github.com/akz142857/Heimdall/internal/domain"
-	"github.com/akz142857/Heimdall/internal/openaiapi"
-	"github.com/akz142857/Heimdall/internal/semantic"
+	openaiwire "github.com/akz142857/Halro/internal/compatibility/openai"
+	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/openaiapi"
+	"github.com/akz142857/Halro/internal/semantic"
 )
 
 type profileMatrixLegacy struct {

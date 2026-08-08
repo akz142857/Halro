@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/domain"
-	"github.com/akz142857/Heimdall/internal/id"
-	"github.com/akz142857/Heimdall/internal/provider"
-	bedrockprovider "github.com/akz142857/Heimdall/internal/provider/bedrock"
+	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/id"
+	"github.com/akz142857/Halro/internal/provider"
+	bedrockprovider "github.com/akz142857/Halro/internal/provider/bedrock"
 	"github.com/go-chi/chi/v5"
 )
 

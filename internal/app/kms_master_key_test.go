@@ -11,16 +11,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/audit"
-	backuppkg "github.com/akz142857/Heimdall/internal/backup"
-	"github.com/akz142857/Heimdall/internal/config"
-	"github.com/akz142857/Heimdall/internal/domain"
-	corekms "github.com/akz142857/Heimdall/internal/kms"
-	"github.com/akz142857/Heimdall/internal/kms/awskms"
-	"github.com/akz142857/Heimdall/internal/kms/fakekms"
-	"github.com/akz142857/Heimdall/internal/masterkey"
-	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
-	"github.com/akz142857/Heimdall/internal/vault"
+	"github.com/akz142857/Halro/internal/audit"
+	backuppkg "github.com/akz142857/Halro/internal/backup"
+	"github.com/akz142857/Halro/internal/config"
+	"github.com/akz142857/Halro/internal/domain"
+	corekms "github.com/akz142857/Halro/internal/kms"
+	"github.com/akz142857/Halro/internal/kms/awskms"
+	"github.com/akz142857/Halro/internal/kms/fakekms"
+	"github.com/akz142857/Halro/internal/masterkey"
+	boltstore "github.com/akz142857/Halro/internal/store/bolt"
+	"github.com/akz142857/Halro/internal/vault"
 )
 
 type awsAliasWrapper struct{ delegate *fakekms.Wrapper }
@@ -194,7 +194,7 @@ func TestKMSInitializationFailureNeverPublishesPartialInstance(t *testing.T) {
 			if _, err := os.Lstat(cfg.Storage.DataDir); !errors.Is(err, os.ErrNotExist) {
 				t.Fatalf("point=%s published partial live state: %v", point, err)
 			}
-			stages, err := filepath.Glob(filepath.Join(filepath.Dir(cfg.Storage.DataDir), ".heimdall-init-stage-*"))
+			stages, err := filepath.Glob(filepath.Join(filepath.Dir(cfg.Storage.DataDir), ".halro-init-stage-*"))
 			if err != nil || len(stages) != 0 {
 				t.Fatalf("point=%s retained staging state=%v err=%v", point, stages, err)
 			}

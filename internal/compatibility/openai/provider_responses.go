@@ -5,14 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 
-	"github.com/akz142857/Heimdall/internal/openaiapi"
-	"github.com/akz142857/Heimdall/internal/semantic"
+	"github.com/akz142857/Halro/internal/openaiapi"
+	"github.com/akz142857/Halro/internal/semantic"
 )
 
 // RenderProviderResponseRequest converts the canonical Generate subset to the
 // stateless Responses wire used by Provider primitives such as Bedrock Mantle.
 // Store is always explicit false so an upstream default can never create a
-// provider-owned resource behind Heimdall's stateless facade.
+// provider-owned resource behind Halro's stateless facade.
 func RenderProviderResponseRequest(request semantic.GenerateRequest, providerModel string) (openaiapi.ResponseRequest, error) {
 	if err := request.Validate(); err != nil {
 		return openaiapi.ResponseRequest{}, err

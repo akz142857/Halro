@@ -11,13 +11,13 @@ import (
 	"slices"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/auth"
-	"github.com/akz142857/Heimdall/internal/contentscan"
-	"github.com/akz142857/Heimdall/internal/domain"
-	"github.com/akz142857/Heimdall/internal/id"
-	"github.com/akz142857/Heimdall/internal/idempotency"
-	"github.com/akz142857/Heimdall/internal/openaiapi"
-	"github.com/akz142857/Heimdall/internal/provider"
+	"github.com/akz142857/Halro/internal/auth"
+	"github.com/akz142857/Halro/internal/contentscan"
+	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/id"
+	"github.com/akz142857/Halro/internal/idempotency"
+	"github.com/akz142857/Halro/internal/openaiapi"
+	"github.com/akz142857/Halro/internal/provider"
 )
 
 type InferenceResourcesResourceStore interface {
@@ -181,7 +181,7 @@ func (s *Service) CreateFile(ctx context.Context, key, route, idempotencyKey str
 		return provider.FileObject{}, err
 	}
 	if route == "" {
-		return provider.FileObject{}, gatewayError("route_required", "Heimdall-Route is required for file creation", 400, nil)
+		return provider.FileObject{}, gatewayError("route_required", "Halro-Route is required for file creation", 400, nil)
 	}
 	if err := idempotency.ValidateKey(idempotencyKey); err != nil {
 		return provider.FileObject{}, gatewayError("invalid_idempotency_key", err.Error(), 400, err)

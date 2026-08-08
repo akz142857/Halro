@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/domain"
-	"github.com/akz142857/Heimdall/internal/provider"
-	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
+	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/provider"
+	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 )
 
 func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {

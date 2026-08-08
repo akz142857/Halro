@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/budget"
-	"github.com/akz142857/Heimdall/internal/ledger"
-	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
-	"github.com/akz142857/Heimdall/internal/usage"
+	"github.com/akz142857/Halro/internal/budget"
+	"github.com/akz142857/Halro/internal/ledger"
+	boltstore "github.com/akz142857/Halro/internal/store/bolt"
+	"github.com/akz142857/Halro/internal/usage"
 )
 
 func TestDeletingUsageCheckpointRebuildsIdenticalAggregateFromLedger(t *testing.T) {

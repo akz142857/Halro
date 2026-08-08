@@ -10,21 +10,21 @@ import (
 	"time"
 )
 
-const statsExposition = `# HELP heimdall_wal_sync_seconds Cumulative time spent in Ledger durability barriers.
-# TYPE heimdall_wal_sync_seconds summary
-heimdall_wal_sync_seconds_sum 0.430000
-heimdall_wal_sync_seconds_count 100
-# TYPE heimdall_wal_append_records_total counter
-heimdall_wal_append_records_total 825
-heimdall_wal_append_batches_total 100
-heimdall_usage_queue_depth 3
-heimdall_usage_queue_capacity 4096
-heimdall_accounting_project_lock_acquisitions_total 500
-heimdall_accounting_project_lock_wait_seconds_sum 0.050000
-heimdall_accounting_project_lock_held_seconds_sum 11.050000
-heimdall_metadata_batch_calls_total 64
-heimdall_metadata_batch_transactions_total 20
-heimdall_requests_total{status="success"} 400
+const statsExposition = `# HELP halro_wal_sync_seconds Cumulative time spent in Ledger durability barriers.
+# TYPE halro_wal_sync_seconds summary
+halro_wal_sync_seconds_sum 0.430000
+halro_wal_sync_seconds_count 100
+# TYPE halro_wal_append_records_total counter
+halro_wal_append_records_total 825
+halro_wal_append_batches_total 100
+halro_usage_queue_depth 3
+halro_usage_queue_capacity 4096
+halro_accounting_project_lock_acquisitions_total 500
+halro_accounting_project_lock_wait_seconds_sum 0.050000
+halro_accounting_project_lock_held_seconds_sum 11.050000
+halro_metadata_batch_calls_total 64
+halro_metadata_batch_transactions_total 20
+halro_requests_total{status="success"} 400
 `
 
 func fixedFetcher(sample statsSample) statsFetcher {
@@ -68,7 +68,7 @@ func TestStatsIgnoresLabelledSeries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, present := sample["heimdall_requests_total"]; present {
+	if _, present := sample["halro_requests_total"]; present {
 		t.Fatal("a labelled series was recorded under its bare family name")
 	}
 }
@@ -77,7 +77,7 @@ func TestStatsIgnoresLabelledSeries(t *testing.T) {
 // by zero.
 func TestStatsOnAnIdleInstance(t *testing.T) {
 	var out strings.Builder
-	if err := runStats(fixedFetcher(statsSample{"heimdall_usage_queue_capacity": 4096}), 0, &out); err != nil {
+	if err := runStats(fixedFetcher(statsSample{"halro_usage_queue_capacity": 4096}), 0, &out); err != nil {
 		t.Fatal(err)
 	}
 	report := out.String()
@@ -93,24 +93,24 @@ func TestStatsOnAnIdleInstance(t *testing.T) {
 // counters dilute a slowdown that started a minute ago.
 func TestStatsWindowSubtractsTheEarlierSample(t *testing.T) {
 	first := statsSample{
-		"heimdall_wal_sync_seconds_sum":   1,
-		"heimdall_wal_sync_seconds_count": 100,
-		"heimdall_usage_queue_depth":      7,
+		"halro_wal_sync_seconds_sum":   1,
+		"halro_wal_sync_seconds_count": 100,
+		"halro_usage_queue_depth":      7,
 	}
 	second := statsSample{
 		// 10 further barriers costing 1s in total: 100 ms each, far worse than
 		// the 10 ms lifetime average would suggest.
-		"heimdall_wal_sync_seconds_sum":   2,
-		"heimdall_wal_sync_seconds_count": 110,
-		"heimdall_usage_queue_depth":      3,
+		"halro_wal_sync_seconds_sum":   2,
+		"halro_wal_sync_seconds_count": 110,
+		"halro_usage_queue_depth":      3,
 	}
 	delta := deltaSample(first, second)
-	if delta["heimdall_wal_sync_seconds_count"] != 10 {
-		t.Fatalf("counter delta=%v, want 10", delta["heimdall_wal_sync_seconds_count"])
+	if delta["halro_wal_sync_seconds_count"] != 10 {
+		t.Fatalf("counter delta=%v, want 10", delta["halro_wal_sync_seconds_count"])
 	}
 	// A gauge that fell is a level, not negative work.
-	if delta["heimdall_usage_queue_depth"] != 3 {
-		t.Fatalf("gauge delta=%v, want the newer level 3", delta["heimdall_usage_queue_depth"])
+	if delta["halro_usage_queue_depth"] != 3 {
+		t.Fatalf("gauge delta=%v, want the newer level 3", delta["halro_usage_queue_depth"])
 	}
 
 	var out strings.Builder
@@ -135,10 +135,10 @@ func TestStatsWindowSubtractsTheEarlierSample(t *testing.T) {
 func TestStatsCallsOutAppendsThatAreNotCoalescing(t *testing.T) {
 	var out strings.Builder
 	if err := runStats(fixedFetcher(statsSample{
-		"heimdall_wal_append_records_total": 100,
-		"heimdall_wal_append_batches_total": 100,
-		"heimdall_wal_sync_seconds_sum":     1,
-		"heimdall_wal_sync_seconds_count":   100,
+		"halro_wal_append_records_total": 100,
+		"halro_wal_append_batches_total": 100,
+		"halro_wal_sync_seconds_sum":     1,
+		"halro_wal_sync_seconds_count":   100,
 	}), 0, &out); err != nil {
 		t.Fatal(err)
 	}
@@ -149,8 +149,8 @@ func TestStatsCallsOutAppendsThatAreNotCoalescing(t *testing.T) {
 	// And it must stay quiet when appends are coalescing normally.
 	var healthy strings.Builder
 	if err := runStats(fixedFetcher(statsSample{
-		"heimdall_wal_append_records_total": 800,
-		"heimdall_wal_append_batches_total": 100,
+		"halro_wal_append_records_total": 800,
+		"halro_wal_append_batches_total": 100,
 	}), 0, &healthy); err != nil {
 		t.Fatal(err)
 	}
@@ -208,8 +208,8 @@ func TestStatsFetcherSendsTheTokenAndParsesTheBody(t *testing.T) {
 	if authorization != "Bearer derived-token" {
 		t.Fatalf("authorization header was %q", authorization)
 	}
-	if sample["heimdall_wal_append_records_total"] != 825 {
-		t.Fatalf("parsed sample = %v", sample["heimdall_wal_append_records_total"])
+	if sample["halro_wal_append_records_total"] != 825 {
+		t.Fatalf("parsed sample = %v", sample["halro_wal_append_records_total"])
 	}
 }
 

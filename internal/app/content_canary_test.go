@@ -15,11 +15,11 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/akz142857/Heimdall/internal/domain"
-	"github.com/akz142857/Heimdall/internal/openaiapi"
-	"github.com/akz142857/Heimdall/internal/provider"
-	"github.com/akz142857/Heimdall/internal/safelog"
-	"github.com/akz142857/Heimdall/internal/semantic"
+	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/openaiapi"
+	"github.com/akz142857/Halro/internal/provider"
+	"github.com/akz142857/Halro/internal/safelog"
+	"github.com/akz142857/Halro/internal/semantic"
 )
 
 // Content canaries are deliberately benign. The secret canaries in
@@ -34,12 +34,12 @@ import (
 // happened to match one of these strings would turn its absence on disk into a
 // silent pass.
 const (
-	promptContentCanary     = "HEIMDALL-CONTENT-CANARY-PROMPT-quokka-lamplight"
-	systemContentCanary     = "HEIMDALL-CONTENT-CANARY-SYSTEM-marmot-driftwood"
-	toolArgumentsCanary     = "HEIMDALL-CONTENT-CANARY-TOOLARGS-pangolin-ashfall"
-	toolResultContentCanary = "HEIMDALL-CONTENT-CANARY-TOOLRESULT-tapir-glasswing"
-	completionContentCanary = "HEIMDALL-CONTENT-CANARY-COMPLETION-vicuna-saltmarsh"
-	streamContentCanary     = "HEIMDALL-CONTENT-CANARY-STREAM-caracal-thornfield"
+	promptContentCanary     = "HALRO-CONTENT-CANARY-PROMPT-quokka-lamplight"
+	systemContentCanary     = "HALRO-CONTENT-CANARY-SYSTEM-marmot-driftwood"
+	toolArgumentsCanary     = "HALRO-CONTENT-CANARY-TOOLARGS-pangolin-ashfall"
+	toolResultContentCanary = "HALRO-CONTENT-CANARY-TOOLRESULT-tapir-glasswing"
+	completionContentCanary = "HALRO-CONTENT-CANARY-COMPLETION-vicuna-saltmarsh"
+	streamContentCanary     = "HALRO-CONTENT-CANARY-STREAM-caracal-thornfield"
 )
 
 func TestContentCanaryNeverPersistsOutsideTheResponsePath(t *testing.T) {

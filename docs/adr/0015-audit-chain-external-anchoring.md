@@ -42,7 +42,7 @@ proof of truncation.
 
 ### The anchor record
 
-Heimdall periodically emits an **anchor**: the current `Records`, `LastHash`,
+Halro periodically emits an **anchor**: the current `Records`, `LastHash`,
 `Bytes`, an anchor sequence that never decreases, the instance identity, and the
 wall-clock time of the observation. It is derived entirely from
 `audit.Log.Summary()`, contains no event payloads, and is therefore safe to send
@@ -53,12 +53,12 @@ two ticks.
 
 ### Verification is a first-class operation
 
-An anchor nobody checks is decoration. Heimdall ships a verification path that
+An anchor nobody checks is decoration. Halro ships a verification path that
 takes a set of previously emitted anchors and the current log, and reports, per
 anchor: the chain agrees, the chain disagrees at that sequence (tampering), or
 the chain is shorter than the anchor (truncation). Startup reconciliation gains
 the anchors it can reach locally; the full check is an explicit operator
-command, because the authoritative copy of an anchor lives somewhere Heimdall
+command, because the authoritative copy of an anchor lives somewhere Halro
 deliberately cannot rewrite and may not be able to read.
 
 ### Emission is fail-open, and says so
@@ -91,7 +91,7 @@ nothing beyond the product itself.
 ### A. Dead-man probe pulls the summary (decided default)
 
 Expose the anchor on an authenticated endpoint and let the existing
-`heimdall-deadman` probe record it in its own append-only audit file. The probe
+`halro-deadman` probe record it in its own append-only audit file. The probe
 already runs as a separate binary, on a separate host, with a separate token and
 a pinned CA, and already writes its own audit file — this reuses infrastructure
 the product ships and an operator following the runbook already deployed.
@@ -110,7 +110,7 @@ Emit each anchor to a remote syslog collector.
   collector, and it is usually already write-once from the sender's point of
   view.
 - **Against:** delivery is best-effort by nature; retention and immutability are
-  entirely the collector's business, and Heimdall cannot verify either.
+  entirely the collector's business, and Halro cannot verify either.
 
 ### C. S3 Object Lock in compliance mode
 
@@ -142,7 +142,7 @@ root cannot delete before expiry.
 
 ### Derive the audit HMAC key from something other than the master key
 
-Rejected. Any key material Heimdall can reach unaided is reachable by whoever
+Rejected. Any key material Halro can reach unaided is reachable by whoever
 holds the data directory; moving the derivation only moves the problem. What is
 missing is a second party, not a second key.
 
@@ -170,7 +170,7 @@ fix for the default.
 - Anchors are a new externally visible artifact whose format becomes a
   compatibility surface once a verifier reads historical ones.
 - Verification is an operator action with an operator's judgement attached: a
-  disagreeing anchor is evidence, not an automatic failure mode, and Heimdall
+  disagreeing anchor is evidence, not an automatic failure mode, and Halro
   will not refuse to start over one it cannot independently confirm.
 
 ## Required verification
@@ -213,7 +213,7 @@ fix for the default.
   wholesale — a second file path is enough to get an independently rotated
   credential without cloning the package; the rotation/audit/revocation
   machinery is identical to metrics' own, just pointed at a different file.
-- Dead-man side: `TargetConfig.AnchorURL` (optional, `heimdall`-kind targets
+- Dead-man side: `TargetConfig.AnchorURL` (optional, `halro`-kind targets
   only) reuses that target's existing `BearerTokenFile`/TLS — the operator
   points the same credential file at both the health check and the anchor
   endpoint, which means syncing the anchor credential's active token into
@@ -225,7 +225,7 @@ fix for the default.
   to a JSON-lines file (`anchorWriter`, mirroring the existing `auditWriter`
   shape) and the per-target high-water mark lives in the same `TargetState`
   the probe already persists, so a restart resumes exactly where it left off.
-- Verification: `heimdall audit verify-anchor --anchors <file>` decodes that
+- Verification: `halro audit verify-anchor --anchors <file>` decodes that
   JSON-lines file and, for each anchor, replays the local audit chain and
   compares the record at that historical sequence — agree / disagree
   (tampering) / truncated (the anchor claims more records than exist now).

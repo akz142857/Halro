@@ -1,15 +1,15 @@
-# Heimdall 身份验证器（TOTP）二次验证开发 PRD
+# Halro 身份验证器（TOTP）二次验证开发 PRD
 
 - 状态：Draft
 - 目标版本：待排期
 - 文档语言：中文
-- 适用范围：Heimdall Admin Console 与离线 Admin CLI
+- 适用范围：Halro Admin Console 与离线 Admin CLI
 
 ## 1. 背景
 
-Heimdall 当前使用本地 Admin 用户名与 Argon2id 密码完成身份验证，密码验证成功后直接创建服务端 Admin Session。现有实现已经具备登录限流、同源校验、Secure/HttpOnly/SameSite Cookie、CSRF、Session 绝对/空闲过期、密码变更后的 Session 轮换与全量失效，以及可信 Audit 链。
+Halro 当前使用本地 Admin 用户名与 Argon2id 密码完成身份验证，密码验证成功后直接创建服务端 Admin Session。现有实现已经具备登录限流、同源校验、Secure/HttpOnly/SameSite Cookie、CSRF、Session 绝对/空闲过期、密码变更后的 Session 轮换与全量失效，以及可信 Audit 链。
 
-Heimdall 管理面能够操作 Provider Credential、Gateway Key、备份及策略等高价值资产。仅依靠密码无法充分抵御密码泄露、撞库和终端凭据被窃取，因此需要增加基于开放标准 TOTP 的二次验证。
+Halro 管理面能够操作 Provider Credential、Gateway Key、备份及策略等高价值资产。仅依靠密码无法充分抵御密码泄露、撞库和终端凭据被窃取，因此需要增加基于开放标准 TOTP 的二次验证。
 
 本功能不绑定 Google 或 Microsoft 品牌。产品统一称为“身份验证器”，兼容 Microsoft Authenticator、Google Authenticator、1Password 及其他支持标准 TOTP 的应用。
 
@@ -19,7 +19,7 @@ Heimdall 管理面能够操作 Provider Credential、Gateway Key、备份及策�
 2. 同一个 Admin 账号支持绑定多个相互独立的身份验证器。
 3. 密码和任意一个有效身份验证器均验证成功后，才签发完整 Admin Session。
 4. 提供恢复码和服务停止状态下的离线 MFA 重置，避免管理员永久锁死。
-5. 保持 Heimdall 的本地优先、无外部身份服务依赖、敏感信息不落浏览器持久化的安全边界。
+5. 保持 Halro 的本地优先、无外部身份服务依赖、敏感信息不落浏览器持久化的安全边界。
 6. 所有 MFA 生命周期操作可审计，并支持单个验证器撤销与验证码防重放。
 
 ## 3. 非目标
@@ -45,8 +45,8 @@ WebAuthn/Passkey 可作为后续抗实时钓鱼能力，不影响本期 TOTP 数
 - 验证码位数：6 位；
 - 时间周期：30 秒；
 - 校验窗口：当前时间步及前后各一个时间步；
-- Issuer：`Heimdall`，可在后续版本支持实例显示名称；
-- Account label：Admin 用户名，展示形式为 `Heimdall:<username>`。
+- Issuer：`Halro`，可在后续版本支持实例显示名称；
+- Account label：Admin 用户名，展示形式为 `Halro:<username>`。
 
 SHA-1 在此处是 TOTP 兼容参数，不用于密码哈希或数据完整性保护。
 
@@ -177,10 +177,10 @@ pre-auth challenge：
 
 ### 5.9 丢失全部验证器
 
-运维人员停止 Heimdall 服务后，通过标准输入执行：
+运维人员停止 Halro 服务后，通过标准输入执行：
 
 ```bash
-./heimdall admin reset-mfa --config ./config.yaml --username admin
+./halro admin reset-mfa --config ./config.yaml --username admin
 ```
 
 命令行为：

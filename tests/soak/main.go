@@ -86,7 +86,7 @@ func run() error {
 	flag.StringVar(&opts.model, "model", "chat", "public route alias")
 	flag.StringVar(&opts.commit, "commit", "", "exact RC commit under test (required for a 24h release run)")
 	flag.StringVar(&opts.outputDir, "output", "soak-artifacts", "new artifact directory")
-	flag.IntVar(&opts.pid, "pid", 0, "Heimdall process PID")
+	flag.IntVar(&opts.pid, "pid", 0, "Halro process PID")
 	flag.DurationVar(&opts.duration, "duration", releaseDuration, "test duration")
 	flag.DurationVar(&opts.sampleInterval, "sample-interval", time.Minute, "resource sample interval")
 	flag.DurationVar(&opts.requestInterval, "request-interval", 10*time.Second, "interval between requests")
@@ -97,11 +97,11 @@ func run() error {
 	if opts.duration >= releaseDuration && strings.TrimSpace(opts.commit) == "" {
 		return errors.New("-commit is required for a 24-hour release run")
 	}
-	gatewayKey := os.Getenv("HEIMDALL_GATEWAY_KEY")
+	gatewayKey := os.Getenv("HALRO_GATEWAY_KEY")
 	if gatewayKey == "" {
-		return errors.New("HEIMDALL_GATEWAY_KEY is required")
+		return errors.New("HALRO_GATEWAY_KEY is required")
 	}
-	metricsToken := os.Getenv("HEIMDALL_METRICS_TOKEN")
+	metricsToken := os.Getenv("HALRO_METRICS_TOKEN")
 	if err := os.Mkdir(opts.outputDir, 0o700); err != nil {
 		return fmt.Errorf("create fresh output directory: %w", err)
 	}
@@ -257,12 +257,12 @@ func takeSample(ctx context.Context, client *http.Client, opts options, token st
 	}
 	metrics := parseMetrics(string(body))
 	for _, name := range []string{
-		"heimdall_process_goroutines",
-		"heimdall_usage_queue_depth",
-		"heimdall_usage_queue_capacity",
-		"heimdall_wal_append_errors_total",
-		"heimdall_usage_analytics_queue_depth",
-		"heimdall_usage_analytics_lagging",
+		"halro_process_goroutines",
+		"halro_usage_queue_depth",
+		"halro_usage_queue_capacity",
+		"halro_wal_append_errors_total",
+		"halro_usage_analytics_queue_depth",
+		"halro_usage_analytics_lagging",
 	} {
 		if _, ok := metrics[name]; !ok {
 			return sample{}, fmt.Errorf("required metric %s is absent", name)
@@ -278,12 +278,12 @@ func takeSample(ctx context.Context, client *http.Client, opts options, token st
 	}
 	return sample{
 		Time: time.Now().UTC(), RSSBytes: rss, OpenFDs: fds,
-		Goroutines:        metric(metrics, "heimdall_process_goroutines"),
-		WALQueueDepth:     metric(metrics, "heimdall_usage_queue_depth"),
-		WALQueueCapacity:  metric(metrics, "heimdall_usage_queue_capacity"),
-		WALAppendErrors:   metric(metrics, "heimdall_wal_append_errors_total"),
-		AnalyticsQueue:    metric(metrics, "heimdall_usage_analytics_queue_depth"),
-		AnalyticsLagging:  metric(metrics, "heimdall_usage_analytics_lagging"),
+		Goroutines:        metric(metrics, "halro_process_goroutines"),
+		WALQueueDepth:     metric(metrics, "halro_usage_queue_depth"),
+		WALQueueCapacity:  metric(metrics, "halro_usage_queue_capacity"),
+		WALAppendErrors:   metric(metrics, "halro_wal_append_errors_total"),
+		AnalyticsQueue:    metric(metrics, "halro_usage_analytics_queue_depth"),
+		AnalyticsLagging:  metric(metrics, "halro_usage_analytics_lagging"),
 		RequestsSucceeded: succeeded, RequestsFailed: failed,
 	}, nil
 }

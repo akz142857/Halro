@@ -17,7 +17,7 @@ explicit that it "must never be treated as a source of truth for balances."
 `internal/usage/parquet.go` (986 lines) is the only place in the module tree
 that pulls in `github.com/parquet-go/parquet-go`, which drags six indirect
 dependencies with it, including `twpayne/go-geom` — a geometry library with no
-relationship to anything Heimdall does. For a derived, discardable artifact,
+relationship to anything Halro does. For a derived, discardable artifact,
 that is the worst dependency-weight-to-value ratio anywhere in the project.
 
 The finding is about ROI, not correctness: nothing about the Parquet export is
@@ -117,7 +117,7 @@ the checksum/manifest design exists to avoid.
 
 - `go.mod` keeps the `parquet-go` dependency — this ADR does not remove it,
   since existing installations may hold Parquet partitions indefinitely.
-  Nothing here reduces the dependency footprint of a Heimdall binary; it gives
+  Nothing here reduces the dependency footprint of a Halro binary; it gives
   new deployments (or ones willing to let history age out under retention) a
   path to stop adding to it.
 - `Manifest`/`AdjustmentManifest` readers written against pre-ADR-0017 code

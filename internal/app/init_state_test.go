@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/akz142857/Heimdall/internal/config"
+	"github.com/akz142857/Halro/internal/config"
 )
 
 func TestInitializeIfNeededIsIdempotentAndFailClosed(t *testing.T) {

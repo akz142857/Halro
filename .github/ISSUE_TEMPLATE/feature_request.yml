@@ -7,7 +7,7 @@ body:
     id: problem
     attributes:
       label: Problem
-      description: What user or operator problem should Heimdall solve?
+      description: What user or operator problem should Halro solve?
     validations:
       required: true
   - type: textarea

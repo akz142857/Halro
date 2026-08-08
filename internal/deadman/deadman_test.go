@@ -81,11 +81,11 @@ func TestHeartbeatOutboxIsCoalescedAndBounded(t *testing.T) {
 		t.Fatalf("outbox was not coalesced: %#v", engine.state.Outbox)
 	}
 	for index := 0; index < 15; index++ {
-		if err := engine.enqueue("state_transition", TargetConfig{ID: "target", Kind: "heimdall"}, PhaseDown, "request_failed", 0, now); err != nil {
+		if err := engine.enqueue("state_transition", TargetConfig{ID: "target", Kind: "halro"}, PhaseDown, "request_failed", 0, now); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := engine.enqueue("state_transition", TargetConfig{ID: "target", Kind: "heimdall"}, PhaseDown, "request_failed", 0, now); err == nil {
+	if err := engine.enqueue("state_transition", TargetConfig{ID: "target", Kind: "halro"}, PhaseDown, "request_failed", 0, now); err == nil {
 		t.Fatal("full outbox accepted another transition")
 	}
 }
@@ -316,7 +316,7 @@ func TestEnginePersistsOutboxAndRetriesWithoutStoppingProbes(t *testing.T) {
 	heartbeats := 0
 	receivedMu.Lock()
 	for _, event := range received {
-		if event.SchemaVersion != "heimdall.deadman.event/v1" || event.EventID == "" || event.Sequence == 0 || event.ProbeID != "probe-a" || event.Environment != "test" || event.Region != "local" || event.Cluster != "one" || event.ObservedAt.IsZero() || event.HeartbeatTTL != "30s" || event.Attempt < 1 {
+		if event.SchemaVersion != "halro.deadman.event/v1" || event.EventID == "" || event.Sequence == 0 || event.ProbeID != "probe-a" || event.Environment != "test" || event.Region != "local" || event.Cluster != "one" || event.ObservedAt.IsZero() || event.HeartbeatTTL != "30s" || event.Attempt < 1 {
 			t.Fatalf("event does not satisfy the v1 payload contract: %#v", event)
 		}
 		if event.Kind == "heartbeat" {
@@ -335,7 +335,7 @@ func TestEnginePersistsOutboxAndRetriesWithoutStoppingProbes(t *testing.T) {
 	if heartbeats < 2 {
 		t.Fatalf("heartbeat payloads=%d", heartbeats)
 	}
-	for _, kind := range []string{"heimdall", "prometheus", "alertmanager"} {
+	for _, kind := range []string{"halro", "prometheus", "alertmanager"} {
 		if !states[kind][PhaseDown] || !states[kind][PhaseUp] {
 			t.Fatalf("%s transitions = %#v", kind, states[kind])
 		}
@@ -507,7 +507,7 @@ func validConfig(directory, notificationURL, caFile, tokenFile string) Config {
 		OutboxLimit: 64, DeliveryBatch: 8,
 		StateFile: filepath.Join(directory, "state.json"), AuditFile: filepath.Join(directory, "audit.jsonl"),
 		Notification: NotificationConfig{URL: notificationURL, BearerTokenFile: tokenFile, TLS: tlsConfig, Timeout: Duration(time.Second), RetryMin: Duration(time.Second), RetryMax: Duration(10 * time.Second)},
-		Targets:      []TargetConfig{{ID: "heimdall", Kind: "heimdall", URL: notificationURL, BearerTokenFile: tokenFile, TLS: tlsConfig}, {ID: "prometheus", Kind: "prometheus", URL: notificationURL, BearerTokenFile: tokenFile, TLS: tlsConfig, Freshness: &FreshnessConfig{URL: notificationURL, Mode: "prometheus_scalar_age", MaxAge: Duration(time.Minute)}}, {ID: "alertmanager", Kind: "alertmanager", URL: notificationURL, BearerTokenFile: tokenFile, TLS: tlsConfig}},
+		Targets:      []TargetConfig{{ID: "halro", Kind: "halro", URL: notificationURL, BearerTokenFile: tokenFile, TLS: tlsConfig}, {ID: "prometheus", Kind: "prometheus", URL: notificationURL, BearerTokenFile: tokenFile, TLS: tlsConfig, Freshness: &FreshnessConfig{URL: notificationURL, Mode: "prometheus_scalar_age", MaxAge: Duration(time.Minute)}}, {ID: "alertmanager", Kind: "alertmanager", URL: notificationURL, BearerTokenFile: tokenFile, TLS: tlsConfig}},
 	}
 }
 

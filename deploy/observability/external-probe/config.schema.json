@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://heimdall.example/schemas/deadman-config-v1.json",
-  "title": "Heimdall independent dead-man configuration",
-  "description": "Structural validation for the v1 configuration. Use heimdall-deadman -check-config for cross-field and semantic validation.",
+  "$id": "https://halro.example/schemas/deadman-config-v1.json",
+  "title": "Halro independent dead-man configuration",
+  "description": "Structural validation for the v1 configuration. Use halro-deadman -check-config for cross-field and semantic validation.",
   "type": "object",
   "additionalProperties": false,
   "required": ["probe_id", "environment", "region", "cluster", "interval", "timeout", "heartbeat_ttl", "failures_to_down", "successes_to_up", "outbox_limit", "delivery_batch", "state_file", "audit_file", "notification", "targets"],
@@ -26,7 +26,7 @@
       "minItems": 3,
       "items": {"$ref": "#/$defs/target"},
       "allOf": [
-        {"contains": {"type": "object", "required": ["kind"], "properties": {"kind": {"const": "heimdall"}}}},
+        {"contains": {"type": "object", "required": ["kind"], "properties": {"kind": {"const": "halro"}}}},
         {"contains": {"type": "object", "required": ["kind"], "properties": {"kind": {"const": "prometheus"}}}},
         {"contains": {"type": "object", "required": ["kind"], "properties": {"kind": {"const": "alertmanager"}}}}
       ]
@@ -115,7 +115,7 @@
       ],
       "properties": {
         "id": {"type": "string", "minLength": 1},
-        "kind": {"enum": ["heimdall", "prometheus", "alertmanager"]},
+        "kind": {"enum": ["halro", "prometheus", "alertmanager"]},
         "url": {"$ref": "#/$defs/https_url"},
         "bearer_token_file": {"type": "string"},
         "tls": {"$ref": "#/$defs/tls"},

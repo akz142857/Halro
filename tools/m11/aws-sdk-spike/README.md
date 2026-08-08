@@ -3,9 +3,9 @@
 This harness compares the two layouts admitted by ADR 0010 using the same
 source commit:
 
-- Option A: the `heimdall` artifact links the official AWS config and KMS SDK;
-- Option B: the cloud-neutral `heimdall` artifact stays unchanged and the
-  linked binary is released separately as `heimdall-aws`.
+- Option A: the `halro` artifact links the official AWS config and KMS SDK;
+- Option B: the cloud-neutral `halro` artifact stays unchanged and the
+  linked binary is released separately as `halro-aws`.
 
 The harness copies the repository into temporary worktrees and never changes
 the checked-in `go.mod`, `go.sum`, or production source. The overlay is an
@@ -34,6 +34,6 @@ The experiment pins:
 - `github.com/aws/aws-sdk-go-v2/service/kms@v1.55.3`
 - the same digest-pinned Syft image used by repository CI
 
-Do not set `HEIMDALL_AWS_SPIKE_EXERCISE=1` during the File-mode no-call test;
+Do not set `HALRO_AWS_SPIKE_EXERCISE=1` during the File-mode no-call test;
 that switch exists only to keep the SDK workload-identity path link-reachable
 for the packaging measurement.

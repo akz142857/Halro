@@ -9,10 +9,10 @@ reviewed OpenAI-compatible endpoint. It verifies non-stream chat, semantic SSE,
 and embeddings wherever the profile declares embeddings. Configure dedicated,
 budget-limited credentials through environment variables using these prefixes:
 
-- `HEIMDALL_MATRIX_OPENAI_...`
-- `HEIMDALL_MATRIX_AZURE_OPENAI_...`
-- `HEIMDALL_MATRIX_DEEPSEEK_...`
-- `HEIMDALL_MATRIX_OPENAI_COMPATIBLE_...`
+- `HALRO_MATRIX_OPENAI_...`
+- `HALRO_MATRIX_AZURE_OPENAI_...`
+- `HALRO_MATRIX_DEEPSEEK_...`
+- `HALRO_MATRIX_OPENAI_COMPATIBLE_...`
 
 Each prefix requires `BASE_URL`, `API_KEY`, and `MODEL`. OpenAI, Azure, and the
 reviewed compatible endpoint also require `EMBEDDING_MODEL`; Azure additionally

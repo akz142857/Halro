@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/domain"
+	"github.com/akz142857/Halro/internal/domain"
 )
 
 var (

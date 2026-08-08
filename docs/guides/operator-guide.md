@@ -1,6 +1,6 @@
 # Operator Guide
 
-This guide covers a single-node Heimdall installation. Run offline commands
+This guide covers a single-node Halro installation. Run offline commands
 with the server stopped: the data directory has one exclusive owner.
 
 ## Clean install
@@ -31,11 +31,11 @@ directory on persistent storage with different backup handling for the key.
 
 ```bash
 cp configs/config.example.yaml ./config.yaml
-./heimdall config check --config ./config.yaml
-./heimdall init --config ./config.yaml
-printf '%s' "$ADMIN_PASSWORD" | ./heimdall admin bootstrap \
+./halro config check --config ./config.yaml
+./halro init --config ./config.yaml
+printf '%s' "$ADMIN_PASSWORD" | ./halro admin bootstrap \
   --config ./config.yaml --username admin
-printf '%s' "$PROVIDER_SECRET" | ./heimdall bootstrap \
+printf '%s' "$PROVIDER_SECRET" | ./halro bootstrap \
   --config ./config.yaml \
   --provider-type openai \
   --provider-base-url https://api.openai.com \
@@ -44,12 +44,12 @@ printf '%s' "$PROVIDER_SECRET" | ./heimdall bootstrap \
   --billing-mode metered \
   --input-micros-per-million "$INPUT_MICROS_PER_MILLION" \
   --output-micros-per-million "$OUTPUT_MICROS_PER_MILLION"
-./heimdall serve --config ./config.yaml
+./halro serve --config ./config.yaml
 ```
 
 From a source checkout, the equivalent explicit initialization helper is
 `make init CONFIG=./config.yaml`. Initialization is offline and fail-closed:
-stop the running Heimdall process first, and do not use it to reset or overwrite
+stop the running Halro process first, and do not use it to reset or overwrite
 an existing data directory.
 
 The bootstrap response contains the Gateway Key once. Move it directly to the
@@ -60,7 +60,7 @@ Bootstrap never infers that zero prices mean free. Use `--billing-mode free`
 only for an intentionally free deployment; otherwise provide the reviewed
 metered prices shown above. Bootstrap stores those terms as Price Version 1.
 
-Default listeners are loopback-only. To expose Heimdall, use TLS and an
+Default listeners are loopback-only. To expose Halro, use TLS and an
 authenticated reverse proxy with an explicitly configured origin/trusted proxy
 boundary. Admin and Metrics must never use public plaintext listeners.
 When Gateway proxy headers are enabled, every request received from a trusted
@@ -70,7 +70,7 @@ Guard cannot silently lose their source-IP signal.
 
 ## Configuration reference
 
-`heimdall start` writes an annotated `config.yaml` when none exists, carrying
+`halro start` writes an annotated `config.yaml` when none exists, carrying
 the built-in defaults with a comment on each setting that has a consequence.
 Deleting a key restores its default; a test keeps that file and the built-in
 defaults from drifting apart. `configs/config.example.yaml` remains the
@@ -91,13 +91,13 @@ out. Important groups are:
 Metrics also supports `credential_file`, bounded scrapes/write timeout, and a
 dedicated mutual-TLS listener. The legacy Master-Key-derived token is suitable
 only for loopback development and upgrade compatibility. Production must set a
-versioned credential file, initialize it with `heimdall metrics rotate`, and
+versioned credential file, initialize it with `halro metrics rotate`, and
 use `metrics.tls` for any non-loopback listener. Rotate by installing the new
 one-time token in Prometheus, verifying two successful scrape intervals, then
 revoking the retiring version. See `docs/observability/operations-runbook.md`.
 
-Retry limits do not override Heimdall's ambiguity boundary. If an upstream
-request might already have executed, Heimdall records a conservative estimated
+Retry limits do not override Halro's ambiguity boundary. If an upstream
+request might already have executed, Halro records a conservative estimated
 settlement and returns the failure without retrying or switching Provider. Safe
 fallback remains available for explicitly classified non-ambiguous failures.
 This fail-closed behavior is not configurable in v1; changing it requires an
@@ -148,7 +148,7 @@ covers that whole calendar day rather than a fixed 24 hours.
 
 `usage.timezone` in config.yaml **seeds** this setting on an instance's first
 start and has no say afterwards. The stored value is versioned and audited;
-editing the file later does not move the boundary. `heimdall doctor` reports the
+editing the file later does not move the boundary. `halro doctor` reports the
 drift as an `accounting_timezone` warning when the two disagree.
 
 Change it under Settings → Instance, or through
@@ -166,20 +166,20 @@ never merge. A request that outlives a boundary settles in the period it began
 in, matching how its price snapshot is pinned.
 
 The rules themselves come from the IANA database embedded in the binary, so zone
-resolution does not depend on what the host ships. `heimdall version` and the
-`tzdata` check in `heimdall doctor` report the source, release, and a
+resolution does not depend on what the host ships. `halro version` and the
+`tzdata` check in `halro doctor` report the source, release, and a
 fingerprint of the transition table; the same values are exported as
-`heimdall_tzdata_info`. Across a fleet those fingerprints must match — nodes
+`halro_tzdata_info`. Across a fleet those fingerprints must match — nodes
 resolving different rules would place the same instant in different accounting
 periods, and nothing else would reveal it.
 
 ## Offline diagnostics and break-glass access
 
-Stop Heimdall, then run the read-only diagnostic before upgrades, restores, or
+Stop Halro, then run the read-only diagnostic before upgrades, restores, or
 when startup fails:
 
 ```bash
-./heimdall doctor --config ./config.yaml
+./halro doctor --config ./config.yaml
 ```
 
 The JSON report verifies configuration safety, exclusive data ownership, file
@@ -197,7 +197,7 @@ If the local Admin password is lost, keep the server stopped and pipe a new
 password through standard input:
 
 ```bash
-printf '%s' "$NEW_ADMIN_PASSWORD" | ./heimdall admin reset-password \
+printf '%s' "$NEW_ADMIN_PASSWORD" | ./halro admin reset-password \
   --config ./config.yaml --username admin
 ```
 
@@ -221,7 +221,7 @@ with the acting administrator, endpoint, HTTP status, and Request ID.
 The default stays `enabled` because a loopback-only Admin listener — the
 quickstart, and where the first-run checklist sends you to prove the chain end
 to end — exposes it to nobody else. On an Admin listener bound to a routable
-address the trade is real, and Heimdall says so at startup:
+address the trade is real, and Halro says so at startup:
 
 ```
 WARN developer workbench serves Gateway calls on a non-loopback Admin listener;
@@ -234,15 +234,15 @@ listener or set `developer_workbench: "disabled"`.
 ### Authenticator two-factor authentication
 
 Set `admin.mfa_policy` to `optional` (the upgrade-compatible default) or
-`required`. Remote Admin deployments should use `required`. Heimdall implements
+`required`. Remote Admin deployments should use `required`. Halro implements
 standard 6-digit, 30-second TOTP and works with Microsoft Authenticator, Google
 Authenticator, 1Password, and other compatible applications. Production hosts
 must keep UTC time synchronized.
 
-If every authenticator and recovery code is lost, stop Heimdall and run:
+If every authenticator and recovery code is lost, stop Halro and run:
 
 ```bash
-./heimdall admin reset-mfa --config ./config.yaml --username admin
+./halro admin reset-mfa --config ./config.yaml --username admin
 ```
 
 This removes all factors and recovery codes, invalidates sessions and pending
@@ -252,12 +252,12 @@ With `mfa_policy: required`, the next password login is restricted to setup.
 ## Master Key rotation
 
 The `--new-key-file` procedure below applies to `storage.master_key.mode: file`.
-For `key_slots`, Heimdall generates the new Master Key only in memory and
+For `key_slots`, Halro generates the new Master Key only in memory and
 requires a stable, non-secret operation ID so a command interrupted after
 publication can be retried without accidentally creating another generation:
 
 ```bash
-./heimdall key rotate --config ./config.yaml \
+./halro key rotate --config ./config.yaml \
   --operation-id change-2026-08-03-001
 ```
 
@@ -271,13 +271,13 @@ AWS IAM/Key Policy、Kubernetes/systemd 加固、KMS Audit/Metrics/告警和事�
 M11 真实 AWS 矩阵、独立恢复演练和四方发布签署完成后才能标记为 production-ready。
 
 Rotation is an offline operation. First create and verify an encrypted backup,
-stop Heimdall, retain the old Master Key with backups created under it, and
+stop Halro, retain the old Master Key with backups created under it, and
 generate a separate replacement key with mode `0600`:
 
 ```bash
 umask 077
 openssl rand 32 > /secure/path/new-master.key
-./heimdall key rotate --config ./config.yaml \
+./halro key rotate --config ./config.yaml \
   --new-key-file /secure/path/new-master.key
 ```
 
@@ -333,7 +333,7 @@ JSON or hidden batch fan-out. Connection tests are audited; they never return
 upstream response bodies or credentials.
 
 Phase 2 resource creation requires `Idempotency-Key`. Files also require the
-`Heimdall-Route` header because multipart file creation has no `model` field.
+`Halro-Route` header because multipart file creation has no `model` field.
 File bytes are kept under `storage.data_dir/provider-objects` with private
 permissions. TTL maintenance uses the recorded owner to remove an upstream file
 before deleting its local object and bbolt record; active batches and async jobs
@@ -346,8 +346,8 @@ The built-in content scanner is a format admission gate, not antivirus. A
 deployment that requires malware detection must provide a dedicated scanner and
 fail closed when that scanner is unavailable.
 
-The opt-in real-provider test accepts `HEIMDALL_SMOKE_OPERATION=embeddings` with
-`HEIMDALL_SMOKE_MODEL=amazon.titan-embed-text-v2:0`; it incurs one AWS inference
+The opt-in real-provider test accepts `HALRO_SMOKE_OPERATION=embeddings` with
+`HALRO_SMOKE_MODEL=amazon.titan-embed-text-v2:0`; it incurs one AWS inference
 request.
 
 For Mantle, select the Mantle access surface while creating the Credential and
@@ -369,7 +369,7 @@ examples.
 
 ## Upgrade and rollback
 
-`heimdall stats` prints this instance's durable write path — mean Ledger fsync,
+`halro stats` prints this instance's durable write path — mean Ledger fsync,
 records per fsync, per-project accounting lock wait and hold, metadata write
 coalescing — without requiring a Prometheus install; `-interval 10s` reports a
 window instead of the lifetime average. The same summary is on
@@ -390,8 +390,8 @@ tighter than that would quarantine a Deployment for a rollback the gateway itsel
 caused. Tightening it below the floor is refused at startup. `gateway.pricing_unknown_policy` defaults to `reject`.
 The only opt-in value, `allow_without_cost_governance`, still rejects unknown
 pricing for Projects with a daily budget or a cost-dimension Token Guard. Watch
-`heimdall_pricing_quarantined_deployments`, Accounting Lease recovery metrics,
-readiness, and `heimdall doctor` after every restart or restore.
+`halro_pricing_quarantined_deployments`, Accounting Lease recovery metrics,
+readiness, and `halro doctor` after every restart or restore.
 
 Price changes create future-effective immutable versions; never edit old
 prices to correct history. Unknown cost remains null — there is no historical
@@ -407,14 +407,14 @@ and creates a new immutable Price Version; ambiguous or expired Proposals
 cannot be adopted.
 
 1. Read release notes and verify the binary checksum and Sigstore bundle.
-2. Stop Heimdall and confirm the process released the data-directory lock.
+2. Stop Halro and confirm the process released the data-directory lock.
 3. Create and verify an encrypted backup; preserve the current binary/config.
 4. Run the new binary's `config check` against a copy of the configuration.
 5. While the service is stopped, run
-   `heimdall pricing migrate --config <config> --dry-run --report <report.json>`.
+   `halro pricing migrate --config <config> --dry-run --report <report.json>`.
    Resolve every enabled zero-price Deployment in a schema-v1 resolution file
    bound to the report's `metadata_sha256`, then run
-   `heimdall pricing migrate --config <config> --resolution-file <file> --apply`.
+   `halro pricing migrate --config <config> --resolution-file <file> --apply`.
    The tool migrates a consistent staging snapshot, atomically publishes it,
    and retains the prior metadata path printed on success.
 6. Start the new binary. Remaining migrations are versioned and applied during open.
@@ -435,9 +435,9 @@ a WAL/Audit/Parquet set from another epoch.
 
 ## Troubleshooting
 
-- Startup says the data directory is locked: another Heimdall or offline
+- Startup says the data directory is locked: another Halro or offline
   command owns it. Find the owner; do not delete lock files to bypass it.
-- Readiness is false: inspect accounting state and WAL errors first. Heimdall
+- Readiness is false: inspect accounting state and WAL errors first. Halro
   deliberately stops new provider calls when durable accounting is unsafe.
 - Provider test is unhealthy: verify HTTPS hostname, credential audience/type,
   model deployment, Azure API version, and Bedrock region. Upstream bodies are
@@ -464,22 +464,22 @@ No shell or package manager is present in the final image.
 
 The CI workflow rebuilds the image and verifies its version command, runtime
 UID/GID, and healthcheck metadata. Tagged releases also attach a signed,
-checksummed `heimdall-container.tar.gz`; load it with
-`gzip -dc heimdall-container.tar.gz | docker load`.
+checksummed `halro-container.tar.gz`; load it with
+`gzip -dc halro-container.tar.gz | docker load`.
 
 ```bash
-docker build -t heimdall:v1.0.0 .
+docker build -t halro:v1.0.0 .
 docker run --rm --user 65532:65532 \
-  -v "$PWD/config.yaml:/etc/heimdall/config.yaml:ro" \
-  -v "$PWD/master.key:/run/secrets/heimdall-master.key:ro" \
-  -v heimdall-data:/var/lib/heimdall \
-  -p 8080:8080 -p 8081:8081 heimdall:v1.0.0
+  -v "$PWD/config.yaml:/etc/halro/config.yaml:ro" \
+  -v "$PWD/master.key:/run/secrets/halro-master.key:ro" \
+  -v halro-data:/var/lib/halro \
+  -p 8080:8080 -p 8081:8081 halro:v1.0.0
 ```
 
-Container configuration must use `/var/lib/heimdall` for `storage.data_dir`
-and `/run/secrets/heimdall-master.key` for the Master Key. A listener exposed
+Container configuration must use `/var/lib/halro` for `storage.data_dir`
+and `/run/secrets/halro-master.key` for the Master Key. A listener exposed
 outside the container must follow the same TLS rules as a bare-metal install;
 do not weaken Admin/Metrics listener validation for Docker. The built-in
 healthcheck calls only a loopback HTTP(S) readiness URL, follows no redirects,
-and can be changed with `HEIMDALL_HEALTH_URL` when TLS is enabled. Ensure its
+and can be changed with `HALRO_HEALTH_URL` when TLS is enabled. Ensure its
 hostname is covered by the mounted certificate.

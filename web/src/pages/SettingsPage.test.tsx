@@ -244,7 +244,7 @@ describe("SettingsPage system configuration pane", () => {
     window.history.replaceState({}, "", "/admin/settings/diagnostics");
     renderWithClient(<SettingsPage />);
 
-    await screen.findByText("Heimdall 1.0.0");
+    await screen.findByText("Halro 1.0.0");
     expect(screen.queryByText("config.yaml")).not.toBeInTheDocument();
     expect(systemConfig).not.toHaveBeenCalled();
   });
@@ -311,7 +311,7 @@ describe("SettingsPage system configuration pane", () => {
     } as never);
     window.history.replaceState({}, "", "/admin/settings/diagnostics");
     renderWithClient(<SettingsPage />);
-    await screen.findByText("Heimdall 1.0.0");
+    await screen.findByText("Halro 1.0.0");
     expect(screen.queryByText(/未合批/)).not.toBeInTheDocument();
   });
 
@@ -327,7 +327,7 @@ describe("SettingsPage system configuration pane", () => {
     window.history.replaceState({}, "", "/admin/settings/diagnostics");
     renderWithClient(<SettingsPage />);
 
-    await screen.findByText("Heimdall 1.0.0");
+    await screen.findByText("Halro 1.0.0");
     expect(screen.queryByText(/NaN/)).not.toBeInTheDocument();
     // The rows stay on screen with no data behind them. An idle instance asking
     // this card a question should get "— over 0 barriers", which is an answer;

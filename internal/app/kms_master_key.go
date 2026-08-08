@@ -11,16 +11,16 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/audit"
-	"github.com/akz142857/Heimdall/internal/config"
-	"github.com/akz142857/Heimdall/internal/id"
-	corekms "github.com/akz142857/Heimdall/internal/kms"
-	"github.com/akz142857/Heimdall/internal/kms/awskms"
-	"github.com/akz142857/Heimdall/internal/ledger"
-	"github.com/akz142857/Heimdall/internal/masterkey"
-	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
-	"github.com/akz142857/Heimdall/internal/store/lock"
-	"github.com/akz142857/Heimdall/internal/vault"
+	"github.com/akz142857/Halro/internal/audit"
+	"github.com/akz142857/Halro/internal/config"
+	"github.com/akz142857/Halro/internal/id"
+	corekms "github.com/akz142857/Halro/internal/kms"
+	"github.com/akz142857/Halro/internal/kms/awskms"
+	"github.com/akz142857/Halro/internal/ledger"
+	"github.com/akz142857/Halro/internal/masterkey"
+	boltstore "github.com/akz142857/Halro/internal/store/bolt"
+	"github.com/akz142857/Halro/internal/store/lock"
+	"github.com/akz142857/Halro/internal/vault"
 )
 
 const (
@@ -529,7 +529,7 @@ func initializeKMS(ctx context.Context, cfg config.Config, options kmsInitializa
 	}
 
 	parent := filepath.Dir(cfg.Storage.DataDir)
-	stageRoot, err := os.MkdirTemp(parent, ".heimdall-init-stage-*")
+	stageRoot, err := os.MkdirTemp(parent, ".halro-init-stage-*")
 	if err != nil {
 		return err
 	}
@@ -540,7 +540,7 @@ func initializeKMS(ctx context.Context, cfg config.Config, options kmsInitializa
 	// Read-only offline tools coordinate through the same lock inode without
 	// creating or rewriting it. Publish that coordination file with the rest of
 	// the initialized data tree.
-	if err := os.WriteFile(filepath.Join(stageRoot, ".heimdall.lock"), nil, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(stageRoot, ".halro.lock"), nil, 0o600); err != nil {
 		return fmt.Errorf("create staged data lock: %w", err)
 	}
 	stageConfig := cfg

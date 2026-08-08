@@ -15,23 +15,23 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/config"
-	"github.com/akz142857/Heimdall/internal/domain"
-	"github.com/akz142857/Heimdall/internal/kms/awskms"
-	"github.com/akz142857/Heimdall/internal/masterkey"
-	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
+	"github.com/akz142857/Halro/internal/config"
+	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/kms/awskms"
+	"github.com/akz142857/Halro/internal/masterkey"
+	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 	"gopkg.in/yaml.v3"
 )
 
 func TestRealAWSDualSlotInitializeAndRecovery(t *testing.T) {
-	if os.Getenv("HEIMDALL_AWS_KMS_DUAL_REAL") != "1" {
-		t.Skip("set HEIMDALL_AWS_KMS_DUAL_REAL=1 for real dual-Slot AWS evidence")
+	if os.Getenv("HALRO_AWS_KMS_DUAL_REAL") != "1" {
+		t.Skip("set HALRO_AWS_KMS_DUAL_REAL=1 for real dual-Slot AWS evidence")
 	}
-	primaryARN := os.Getenv("HEIMDALL_AWS_KMS_PRIMARY_KEY_ARN")
-	recoveryARN := os.Getenv("HEIMDALL_AWS_KMS_RECOVERY_KEY_ARN")
+	primaryARN := os.Getenv("HALRO_AWS_KMS_PRIMARY_KEY_ARN")
+	recoveryARN := os.Getenv("HALRO_AWS_KMS_RECOVERY_KEY_ARN")
 	primaryRegion, primaryAccount, ok := awsKeyIdentityForAppTest(primaryARN)
 	if !ok {
-		t.Fatal("HEIMDALL_AWS_KMS_PRIMARY_KEY_ARN must be a full KMS Key ARN")
+		t.Fatal("HALRO_AWS_KMS_PRIMARY_KEY_ARN must be a full KMS Key ARN")
 	}
 	recoveryRegion, recoveryAccount, ok := awsKeyIdentityForAppTest(recoveryARN)
 	if !ok || recoveryARN == primaryARN {
@@ -106,12 +106,12 @@ func TestRealAWSDualSlotInitializeAndRecovery(t *testing.T) {
 }
 
 func TestRealAWSKMSKeyLifecycle(t *testing.T) {
-	if os.Getenv("HEIMDALL_AWS_KMS_LIFECYCLE_REAL") != "1" {
-		t.Skip("set HEIMDALL_AWS_KMS_LIFECYCLE_REAL=1 for real AWS KMS lifecycle evidence")
+	if os.Getenv("HALRO_AWS_KMS_LIFECYCLE_REAL") != "1" {
+		t.Skip("set HALRO_AWS_KMS_LIFECYCLE_REAL=1 for real AWS KMS lifecycle evidence")
 	}
-	primaryARN := os.Getenv("HEIMDALL_AWS_KMS_PRIMARY_KEY_ARN")
-	recoveryARN := os.Getenv("HEIMDALL_AWS_KMS_RECOVERY_KEY_ARN")
-	replacementARN := os.Getenv("HEIMDALL_AWS_KMS_REPLACEMENT_PRIMARY_KEY_ARN")
+	primaryARN := os.Getenv("HALRO_AWS_KMS_PRIMARY_KEY_ARN")
+	recoveryARN := os.Getenv("HALRO_AWS_KMS_RECOVERY_KEY_ARN")
+	replacementARN := os.Getenv("HALRO_AWS_KMS_REPLACEMENT_PRIMARY_KEY_ARN")
 	primaryRegion, primaryAccount, primaryOK := awsKeyIdentityForAppTest(primaryARN)
 	recoveryRegion, recoveryAccount, recoveryOK := awsKeyIdentityForAppTest(recoveryARN)
 	replacementRegion, replacementAccount, replacementOK := awsKeyIdentityForAppTest(replacementARN)
@@ -234,11 +234,11 @@ func TestRealAWSKMSKeyLifecycle(t *testing.T) {
 }
 
 func TestRealAWSKMSDisasterRecovery(t *testing.T) {
-	if os.Getenv("HEIMDALL_AWS_KMS_DR_REAL") != "1" {
-		t.Skip("set HEIMDALL_AWS_KMS_DR_REAL=1 for real AWS KMS disaster-recovery evidence")
+	if os.Getenv("HALRO_AWS_KMS_DR_REAL") != "1" {
+		t.Skip("set HALRO_AWS_KMS_DR_REAL=1 for real AWS KMS disaster-recovery evidence")
 	}
-	primaryARN := os.Getenv("HEIMDALL_AWS_KMS_PRIMARY_KEY_ARN")
-	recoveryARN := os.Getenv("HEIMDALL_AWS_KMS_RECOVERY_KEY_ARN")
+	primaryARN := os.Getenv("HALRO_AWS_KMS_PRIMARY_KEY_ARN")
+	recoveryARN := os.Getenv("HALRO_AWS_KMS_RECOVERY_KEY_ARN")
 	primaryRegion, primaryAccount, primaryOK := awsKeyIdentityForAppTest(primaryARN)
 	recoveryRegion, recoveryAccount, recoveryOK := awsKeyIdentityForAppTest(recoveryARN)
 	if !primaryOK || !recoveryOK || primaryARN == recoveryARN {

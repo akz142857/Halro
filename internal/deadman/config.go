@@ -36,7 +36,7 @@ type FreshnessConfig struct {
 	URL    string   `yaml:"url"`
 	MaxAge Duration `yaml:"max_age"`
 	// prometheus_scalar_age expects the Prometheus scalar response produced by
-	// a query such as time()-timestamp(up{job="heimdall"}).
+	// a query such as time()-timestamp(up{job="halro"}).
 	Mode string `yaml:"mode"`
 }
 
@@ -47,10 +47,10 @@ type TargetConfig struct {
 	BearerTokenFile string           `yaml:"bearer_token_file"`
 	TLS             TLSConfig        `yaml:"tls"`
 	Freshness       *FreshnessConfig `yaml:"freshness,omitempty"`
-	// AnchorURL, only meaningful on a "heimdall" target, is the audit-anchor
+	// AnchorURL, only meaningful on a "halro" target, is the audit-anchor
 	// pull endpoint (ADR 0015 default sink). Empty means this target does not
 	// participate in anchoring. It shares BearerTokenFile and TLS with the
-	// rest of the target — the operator points that credential at Heimdall's
+	// rest of the target — the operator points that credential at Halro's
 	// audit.anchor.credential_file, not at whatever authorizes /health/live.
 	AnchorURL string `yaml:"anchor_url,omitempty"`
 }
@@ -79,7 +79,7 @@ type Config struct {
 	StateFile      string   `yaml:"state_file"`
 	AuditFile      string   `yaml:"audit_file"`
 	// AnchorFile is where pulled audit anchors (ADR 0015) are appended,
-	// JSON-lines, one per line — the file `heimdall audit verify-anchor
+	// JSON-lines, one per line — the file `halro audit verify-anchor
 	// --anchors` reads. Empty disables anchor pulling even if a target sets
 	// AnchorURL, the same way AuditFile is required unconditionally today.
 	AnchorFile   string             `yaml:"anchor_file,omitempty"`
@@ -132,7 +132,7 @@ func (c Config) Validate() error {
 	if c.Notification.Timeout.Value() <= 0 || c.Notification.RetryMin.Value() <= 0 || c.Notification.RetryMax.Value() < c.Notification.RetryMin.Value() {
 		problems = append(problems, errors.New("notification timeout and retry bounds are invalid"))
 	}
-	wanted := map[string]bool{"heimdall": false, "prometheus": false, "alertmanager": false}
+	wanted := map[string]bool{"halro": false, "prometheus": false, "alertmanager": false}
 	seen := make(map[string]bool)
 	for _, target := range c.Targets {
 		if target.ID == "" || seen[target.ID] {
@@ -159,8 +159,8 @@ func (c Config) Validate() error {
 			problems = append(problems, fmt.Errorf("target %q must configure a freshness query", target.ID))
 		}
 		if target.AnchorURL != "" {
-			if target.Kind != "heimdall" {
-				problems = append(problems, fmt.Errorf("target %q sets anchor_url but is not a heimdall target", target.ID))
+			if target.Kind != "halro" {
+				problems = append(problems, fmt.Errorf("target %q sets anchor_url but is not a halro target", target.ID))
 			}
 			if c.AnchorFile == "" {
 				problems = append(problems, fmt.Errorf("target %q sets anchor_url but anchor_file is not configured", target.ID))

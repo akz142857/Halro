@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/akz142857/Heimdall/internal/anthropicapi"
-	"github.com/akz142857/Heimdall/internal/semantic"
+	"github.com/akz142857/Halro/internal/anthropicapi"
+	"github.com/akz142857/Halro/internal/semantic"
 )
 
 type StreamRenderer struct {

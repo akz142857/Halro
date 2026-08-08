@@ -10,13 +10,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/anthropicapi"
-	"github.com/akz142857/Heimdall/internal/gateway"
-	"github.com/akz142857/Heimdall/internal/id"
-	"github.com/akz142857/Heimdall/internal/openaiapi"
-	"github.com/akz142857/Heimdall/internal/provider"
-	"github.com/akz142857/Heimdall/internal/requestmeta"
-	"github.com/akz142857/Heimdall/internal/sse"
+	"github.com/akz142857/Halro/internal/anthropicapi"
+	"github.com/akz142857/Halro/internal/gateway"
+	"github.com/akz142857/Halro/internal/id"
+	"github.com/akz142857/Halro/internal/openaiapi"
+	"github.com/akz142857/Halro/internal/provider"
+	"github.com/akz142857/Halro/internal/requestmeta"
+	"github.com/akz142857/Halro/internal/sse"
 )
 
 const defaultMaxRequestBytes = 4 << 20
@@ -66,7 +66,7 @@ func (h *Handler) Responses(writer http.ResponseWriter, request *http.Request) {
 	}
 	key, ok := bearerToken(request.Header.Get("Authorization"))
 	if !ok {
-		writer.Header().Set("WWW-Authenticate", `Bearer realm="heimdall"`)
+		writer.Header().Set("WWW-Authenticate", `Bearer realm="halro"`)
 		writeError(writer, http.StatusUnauthorized, "invalid_api_key", "missing or invalid bearer token", nil)
 		return
 	}
@@ -185,7 +185,7 @@ func (h *Handler) Embeddings(writer http.ResponseWriter, request *http.Request) 
 	}
 	key, ok := bearerToken(request.Header.Get("Authorization"))
 	if !ok {
-		writer.Header().Set("WWW-Authenticate", `Bearer realm="heimdall"`)
+		writer.Header().Set("WWW-Authenticate", `Bearer realm="halro"`)
 		writeError(writer, http.StatusUnauthorized, "invalid_api_key", "missing or invalid bearer token", nil)
 		return
 	}
@@ -398,7 +398,7 @@ func (h *Handler) Messages(writer http.ResponseWriter, request *http.Request) {
 	}
 	key, ok := anthropicGatewayKey(request.Header)
 	if !ok {
-		writer.Header().Set("WWW-Authenticate", `Bearer realm="heimdall"`)
+		writer.Header().Set("WWW-Authenticate", `Bearer realm="halro"`)
 		writeAnthropicError(writer, http.StatusUnauthorized, "authentication_error", "missing or invalid gateway key", requestID)
 		return
 	}
@@ -634,7 +634,7 @@ func (h *Handler) ChatCompletions(writer http.ResponseWriter, request *http.Requ
 	}
 	key, ok := bearerToken(request.Header.Get("Authorization"))
 	if !ok {
-		writer.Header().Set("WWW-Authenticate", `Bearer realm="heimdall"`)
+		writer.Header().Set("WWW-Authenticate", `Bearer realm="halro"`)
 		writeError(writer, http.StatusUnauthorized, "invalid_api_key", "missing or invalid bearer token", nil)
 		return
 	}
@@ -859,7 +859,7 @@ func (h *Handler) limitBySource(next http.Handler, deny func(http.ResponseWriter
 
 func (h *Handler) GuardOpenAI(next http.Handler) http.Handler {
 	return h.guardKey(next, func(writer http.ResponseWriter, _ *http.Request) {
-		writer.Header().Set("WWW-Authenticate", `Bearer realm="heimdall"`)
+		writer.Header().Set("WWW-Authenticate", `Bearer realm="halro"`)
 		writeError(writer, http.StatusUnauthorized, "invalid_api_key", "invalid API key", nil)
 	})
 }
@@ -898,18 +898,18 @@ func (h *Handler) guardKey(next http.Handler, deny http.HandlerFunc) http.Handle
 // models.list() is the common case: it is the first thing many clients do, and
 // a bare 404 tells the operator nothing about why their model list is empty.
 var unimplementedHints = map[string]string{
-	"/v1/models": "Heimdall does not implement /v1/models. " +
+	"/v1/models": "Halro does not implement /v1/models. " +
 		"Applications address models by the public alias configured on their Project.",
-	"/v1/messages/count_tokens": "Heimdall does not implement Anthropic count_tokens.",
+	"/v1/messages/count_tokens": "Halro does not implement Anthropic count_tokens.",
 }
 
 // NotFound answers an unrouted path with the envelope every other error uses.
 // The router's default is plain text, which an SDK's error type cannot parse,
-// so a caller probing an endpoint Heimdall does not serve gets an opaque
+// so a caller probing an endpoint Halro does not serve gets an opaque
 // transport failure rather than the reason for it.
 func (h *Handler) NotFound(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Cache-Control", "no-store")
-	message := "this endpoint is not implemented by Heimdall; " +
+	message := "this endpoint is not implemented by Halro; " +
 		"see docs/compatibility for the supported surface"
 	if hint, ok := unimplementedHints[strings.TrimSuffix(request.URL.Path, "/")]; ok {
 		message = hint

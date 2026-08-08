@@ -4,8 +4,8 @@
 services:
   prometheus:
     volumes:
-      - /private/tmp/heimdall-observability:/run/secrets:ro
+      - /private/tmp/halro-observability:/run/secrets:ro
 
   alertmanager:
     volumes:
-      - /private/tmp/heimdall-observability:/run/secrets:ro
+      - /private/tmp/halro-observability:/run/secrets:ro

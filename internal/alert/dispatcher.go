@@ -331,7 +331,7 @@ func (d *Dispatcher) deliver(event Event, endpoint *Endpoint) DeliveryResult {
 		request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.URL.String(), bytes.NewReader(payload))
 		if err == nil {
 			request.Header.Set("Content-Type", "application/json")
-			request.Header.Set("User-Agent", "heimdall-alert/1")
+			request.Header.Set("User-Agent", "halro-alert/1")
 			if len(endpoint.secret) > 0 {
 				request.Header.Set(endpoint.HeaderName, string(endpoint.secret))
 			}

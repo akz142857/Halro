@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/akz142857/Heimdall/internal/audit"
-	"github.com/akz142857/Heimdall/internal/config"
-	"github.com/akz142857/Heimdall/internal/ledger"
-	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
-	"github.com/akz142857/Heimdall/internal/store/lock"
-	"github.com/akz142857/Heimdall/internal/vault"
+	"github.com/akz142857/Halro/internal/audit"
+	"github.com/akz142857/Halro/internal/config"
+	"github.com/akz142857/Halro/internal/ledger"
+	boltstore "github.com/akz142857/Halro/internal/store/bolt"
+	"github.com/akz142857/Halro/internal/store/lock"
+	"github.com/akz142857/Halro/internal/vault"
 )
 
 type InitializationState string
@@ -82,7 +82,7 @@ func InspectInitialization(cfg config.Config) (InitializationState, error) {
 		return InitializationInconsistent, fmt.Errorf("inspect data directory: %w", err)
 	}
 	for _, entry := range entries {
-		if entry.Name() != ".heimdall.lock" {
+		if entry.Name() != ".halro.lock" {
 			return InitializationInconsistent, nil
 		}
 	}
@@ -100,10 +100,10 @@ func InitializeIfNeeded(cfg config.Config) (bool, error) {
 	case InitializationSystemReady:
 		return false, nil
 	case InitializationInconsistent:
-		return false, errors.New("Heimdall initialization is incomplete; restore the matching master key and data directory or move the partial state aside")
+		return false, errors.New("Halro initialization is incomplete; restore the matching master key and data directory or move the partial state aside")
 	case InitializationEmpty:
 		if cfg.Storage.MasterKey.Mode == config.MasterKeyModeKeySlots {
-			return false, errors.New("empty key_slots instance requires explicit offline `heimdall init`; automatic Runtime initialization is disabled")
+			return false, errors.New("empty key_slots instance requires explicit offline `halro init`; automatic Runtime initialization is disabled")
 		}
 		if err := Initialize(cfg); err != nil {
 			return false, err
@@ -128,8 +128,8 @@ func pathExists(path string) (bool, error) {
 const (
 	vaultKeyCheckID        = "system:key-check"
 	vaultKeyCheckProvider  = "system"
-	vaultKeyCheckAudience  = "heimdall:metadata"
-	vaultKeyCheckPlaintext = "heimdall-key-check-v1"
+	vaultKeyCheckAudience  = "halro:metadata"
+	vaultKeyCheckPlaintext = "halro-key-check-v1"
 )
 
 func Initialize(cfg config.Config) error {

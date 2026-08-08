@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/openaiapi"
-	"github.com/akz142857/Heimdall/internal/provider"
-	"github.com/akz142857/Heimdall/internal/semantic"
+	"github.com/akz142857/Halro/internal/openaiapi"
+	"github.com/akz142857/Halro/internal/provider"
+	"github.com/akz142857/Halro/internal/semantic"
 )
 
 // TestRealProviderSmoke is intentionally inert unless the operator explicitly
@@ -19,22 +19,22 @@ import (
 //
 // Required:
 //
-//	HEIMDALL_REAL_PROVIDER_SMOKE=1
-//	HEIMDALL_SMOKE_PROFILE=openai|azure_openai|deepseek|openai_compatible
-//	HEIMDALL_SMOKE_BASE_URL=...
-//	HEIMDALL_SMOKE_API_KEY=...
-//	HEIMDALL_SMOKE_MODEL=...
+//	HALRO_REAL_PROVIDER_SMOKE=1
+//	HALRO_SMOKE_PROFILE=openai|azure_openai|deepseek|openai_compatible
+//	HALRO_SMOKE_BASE_URL=...
+//	HALRO_SMOKE_API_KEY=...
+//	HALRO_SMOKE_MODEL=...
 //
-// Azure also requires HEIMDALL_SMOKE_API_VERSION. Embeddings run only when
-// HEIMDALL_SMOKE_EMBEDDING_MODEL is set.
+// Azure also requires HALRO_SMOKE_API_VERSION. Embeddings run only when
+// HALRO_SMOKE_EMBEDDING_MODEL is set.
 func TestRealProviderSmoke(t *testing.T) {
-	if os.Getenv("HEIMDALL_REAL_PROVIDER_SMOKE") != "1" {
+	if os.Getenv("HALRO_REAL_PROVIDER_SMOKE") != "1" {
 		t.Skip("real provider smoke is opt-in")
 	}
-	profile := os.Getenv("HEIMDALL_SMOKE_PROFILE")
-	baseURL := os.Getenv("HEIMDALL_SMOKE_BASE_URL")
-	apiKey := os.Getenv("HEIMDALL_SMOKE_API_KEY")
-	model := os.Getenv("HEIMDALL_SMOKE_MODEL")
+	profile := os.Getenv("HALRO_SMOKE_PROFILE")
+	baseURL := os.Getenv("HALRO_SMOKE_BASE_URL")
+	apiKey := os.Getenv("HALRO_SMOKE_API_KEY")
+	model := os.Getenv("HALRO_SMOKE_MODEL")
 	if profile == "" || baseURL == "" || apiKey == "" || model == "" {
 		t.Fatal("real smoke requires profile, base URL, API key, and model")
 	}
@@ -59,7 +59,7 @@ func TestRealProviderSmoke(t *testing.T) {
 	client := &http.Client{Timeout: 45 * time.Second}
 	adapter, err := NewWithOptions(Options{
 		Endpoint: endpoint, APIKey: []byte(apiKey), Client: client,
-		ProviderType: profile, APIVersion: os.Getenv("HEIMDALL_SMOKE_API_VERSION"),
+		ProviderType: profile, APIVersion: os.Getenv("HALRO_SMOKE_API_VERSION"),
 		Azure: profile == "azure_openai", Capabilities: capabilities,
 	})
 	if err != nil {
@@ -104,7 +104,7 @@ func TestRealProviderSmoke(t *testing.T) {
 		t.Fatal("stream chat returned no semantic chunks")
 	}
 
-	embeddingModel := os.Getenv("HEIMDALL_SMOKE_EMBEDDING_MODEL")
+	embeddingModel := os.Getenv("HALRO_SMOKE_EMBEDDING_MODEL")
 	if embeddingModel == "" {
 		return
 	}

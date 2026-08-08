@@ -3,7 +3,7 @@ package anthropic
 import (
 	"testing"
 
-	"github.com/akz142857/Heimdall/internal/semantic"
+	"github.com/akz142857/Halro/internal/semantic"
 )
 
 func TestStreamRendererEmitsAnthropicLifecycle(t *testing.T) {

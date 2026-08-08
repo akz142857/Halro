@@ -1,10 +1,10 @@
-# Heimdall
+# Halro
 
-[![CI](https://github.com/akz142857/Heimdall/actions/workflows/ci.yml/badge.svg)](https://github.com/akz142857/Heimdall/actions/workflows/ci.yml)
-[![Go version](https://img.shields.io/github/go-mod/go-version/akz142857/Heimdall)](go.mod)
+[![CI](https://github.com/akz142857/Halro/actions/workflows/ci.yml/badge.svg)](https://github.com/akz142857/Halro/actions/workflows/ci.yml)
+[![Go version](https://img.shields.io/github/go-mod/go-version/akz142857/Halro)](go.mod)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-Heimdall is a single-binary, security-first LLM gateway. It gives applications
+Halro is a single-binary, security-first LLM gateway. It gives applications
 one governed API for multiple model providers while keeping upstream
 credentials, budgets, routing, redaction, audit, and usage accounting inside a
 locally owned control boundary.
@@ -37,7 +37,7 @@ Start a new loopback-only local instance:
 make start
 ```
 
-On first run, Heimdall creates `config.yaml`, initializes encrypted local
+On first run, Halro creates `config.yaml`, initializes encrypted local
 storage, and prints the Admin URL. Open `/admin/setup` to create the first
 administrator, then configure this path in the console:
 
@@ -51,7 +51,7 @@ model identifier.
 
 ```bash
 curl http://127.0.0.1:8080/v1/chat/completions \
-  -H "Authorization: Bearer $HEIMDALL_GATEWAY_KEY" \
+  -H "Authorization: Bearer $HALRO_GATEWAY_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "chat",
@@ -67,22 +67,22 @@ recovery, and hardening, use the [Operator Guide](docs/guides/operator-guide.md)
 ## Data durability and encrypted backup
 
 Container or Pod replacement is safe only when the complete
-`storage.data_dir` remains on persistent storage. Heimdall is currently a
+`storage.data_dir` remains on persistent storage. Halro is currently a
 single-writer service: Docker/Kubernetes deployments must run one instance,
 and Kubernetes must use `replicas: 1` with a `Recreate` strategy.
 
 File-mode `master.key` is not stored in the encrypted backup. Keep it outside
 the data directory and back it up independently from both the `.hmbk` archive
-and its dedicated 32-byte backup key. Never restore only `heimdall.db` or mix
+and its dedicated 32-byte backup key. Never restore only `halro.db` or mix
 the database, Ledger, Audit, Usage, and Provider-object files from different
 snapshots.
 
-Backups are deliberately offline: stop Heimdall, create the archive, verify it,
+Backups are deliberately offline: stop Halro, create the archive, verify it,
 and regularly perform an isolated restore drill. For containers, mount the
 persistent parent directory and configure `storage.data_dir` as its child so
 restore can atomically rename the data directory on the same filesystem.
 
-With Heimdall stopped, the repository helper creates and immediately verifies
+With Halro stopped, the repository helper creates and immediately verifies
 an encrypted backup:
 
 ```bash
@@ -94,9 +94,9 @@ Production operators should provide independent locations explicitly:
 
 ```bash
 make backup \
-  CONFIG=/etc/heimdall/config.yaml \
+  CONFIG=/etc/halro/config.yaml \
   BACKUP_DIR=/secure-backups \
-  BACKUP_KEY_FILE=/secure-secrets/heimdall-backup.key
+  BACKUP_KEY_FILE=/secure-secrets/halro-backup.key
 ```
 
 The helper generates the Backup Key with mode `0600` when it is absent, runs
@@ -117,7 +117,7 @@ layouts, upgrade sequencing, key custody, retention, and recovery commands.
 | `POST /v1/messages` | Compatible | Anthropic JSON/SSE; portable or exact native Profile routing |
 | Moderations, Images, Audio | Experimental | Strict Phase 2 endpoint and Provider Profile contracts |
 | Files and Batches | Experimental | Project-scoped opaque IDs, idempotency, ownership, private local objects |
-| `/v1/rerank` and Async Invoke | Experimental | Heimdall extensions backed by isolated Bedrock Profiles |
+| `/v1/rerank` and Async Invoke | Experimental | Halro extensions backed by isolated Bedrock Profiles |
 | Realtime WebSocket/WebRTC | Not implemented | Architecture only; no Realtime data plane is claimed |
 
 The authoritative machine-readable contract is
@@ -183,21 +183,21 @@ Capability-aware router ──► versioned Provider Primitive
 SafeTransport ──► OpenAI / Anthropic / Azure / DeepSeek / Gemini / Bedrock
 ```
 
-Heimdall currently runs as a standalone, single-writer system backed by bbolt
+Halro currently runs as a standalone, single-writer system backed by bbolt
 metadata, an authoritative Ledger WAL, private local objects, and Parquet usage
 partitions. HA/Cluster and Realtime material in the architecture documents is
 future, gated design—not a statement of current runtime support.
 
 ## Observability
 
-Heimdall exposes an authenticated Prometheus-format Metrics endpoint. The
+Halro exposes an authenticated Prometheus-format Metrics endpoint. The
 repository includes a versioned single-host Core reference deployment made up
 of Prometheus and Alertmanager, together with recording rules, alert rules,
 rule tests, configuration validation, and an isolated runtime smoke test.
 Prometheus is the metrics and alert authority.
 
-The `heimdall-deadman` binary is deployed in a separate failure domain. It
-checks Heimdall, Prometheus, and Alertmanager readiness, verifies Prometheus
+The `halro-deadman` binary is deployed in a separate failure domain. It
+checks Halro, Prometheus, and Alertmanager readiness, verifies Prometheus
 sample freshness, and sends durable heartbeat and down/up events to an
 independent receiver.
 
@@ -265,7 +265,7 @@ npm run typecheck
 npm test -- --run
 npm run build
 cd ..
-go build -trimpath -o bin/heimdall ./cmd/heimdall
+go build -trimpath -o bin/halro ./cmd/halro
 ```
 
 Real Provider smoke tests are opt-in and may be billable. They require isolated
@@ -283,6 +283,6 @@ a public issue. Community expectations are in
 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md), and support guidance is in
 [SUPPORT.md](SUPPORT.md).
 
-Heimdall is licensed under the [Apache License 2.0](LICENSE). Third-party
+Halro is licensed under the [Apache License 2.0](LICENSE). Third-party
 attributions are documented in [NOTICE](NOTICE) and
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

@@ -12,7 +12,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/vault"
+	"github.com/akz142857/Halro/internal/vault"
 )
 
 const (

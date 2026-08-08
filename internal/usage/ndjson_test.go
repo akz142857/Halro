@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/ledger"
+	"github.com/akz142857/Halro/internal/ledger"
 )
 
 func TestNewExporterWithOptionsRejectsUnknownFormat(t *testing.T) {

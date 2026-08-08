@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/akz142857/Heimdall/internal/ledger"
-	"github.com/akz142857/Heimdall/internal/openaiapi"
-	"github.com/akz142857/Heimdall/internal/usage"
+	"github.com/akz142857/Halro/internal/ledger"
+	"github.com/akz142857/Halro/internal/openaiapi"
+	"github.com/akz142857/Halro/internal/usage"
 )
 
 // activeRequestsAfterReplay rebuilds the usage aggregate the way a restart
@@ -28,7 +28,7 @@ func activeRequestsAfterReplay(t *testing.T, log *ledger.Log) uint64 {
 // an accepted-but-never-finalized request behind forever. The usage aggregate
 // keys in-flight requests off exactly that pair, and it gets checkpointed into
 // bbolt, so the leak survives restarts and grows with every rejected call —
-// while heimdall_active_requests climbs and no request ever appears in Usage.
+// while halro_active_requests climbs and no request ever appears in Usage.
 //
 // The path costs an attacker nothing: it never reaches a provider, so it is
 // not rate-limited by anything upstream, and a project whose budget is spent

@@ -55,13 +55,13 @@ WORKLOAD_IDENTITY_SOURCES = {
 }
 
 RELEASE_ARTIFACTS = {
-    "heimdall-linux-amd64.tar.gz",
-    "heimdall-linux-arm64.tar.gz",
-    "heimdall-darwin-amd64.tar.gz",
-    "heimdall-darwin-arm64.tar.gz",
-    "heimdall-container.tar.gz",
-    "heimdall-deadman-container.tar.gz",
-    "heimdall.spdx.json",
+    "halro-linux-amd64.tar.gz",
+    "halro-linux-arm64.tar.gz",
+    "halro-darwin-amd64.tar.gz",
+    "halro-darwin-arm64.tar.gz",
+    "halro-container.tar.gz",
+    "halro-deadman-container.tar.gz",
+    "halro.spdx.json",
     "checksums.txt",
 }
 

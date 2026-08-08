@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/config"
-	"github.com/akz142857/Heimdall/internal/ledger"
-	"github.com/akz142857/Heimdall/internal/store/lock"
-	"github.com/akz142857/Heimdall/internal/usage"
+	"github.com/akz142857/Halro/internal/config"
+	"github.com/akz142857/Halro/internal/ledger"
+	"github.com/akz142857/Halro/internal/store/lock"
+	"github.com/akz142857/Halro/internal/usage"
 )
 
 func CompactUsage(ctx context.Context, cfg config.Config) (usage.Manifest, error) {

@@ -6,7 +6,7 @@ import { OperationsPage } from "./OperationsPage";
 
 function webhook(overrides: Record<string, unknown> = {}) {
   return {
-    id: "whk_1", name: "Security operations", url: "https://hooks.example.com/heimdall",
+    id: "whk_1", name: "Security operations", url: "https://hooks.example.com/halro",
     header_name: "authorization", secret_configured: true, enabled: true, revision: 1,
     ...overrides,
   };

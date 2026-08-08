@@ -33,7 +33,7 @@ diagnostic artifacts, and backed up as security state. Restores must not use a
 snapshot older than the credential revocation watermark.
 
 Every rotation and revocation appends a secret-free, SHA-256 hash-chained event
-to `<credential_file>.audit`. `heimdall metrics verify-audit` detects deletion,
+to `<credential_file>.audit`. `halro metrics verify-audit` detects deletion,
 rewriting, truncation, reordering, or missing lifecycle events. Production must
 forward events and periodically anchor the latest chain hash in an independent
 immutable audit platform; the local chain is tamper-evident, not an independent

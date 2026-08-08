@@ -1,6 +1,6 @@
 # Alert webhook payloads
 
-Heimdall v1 sends one minimal generic JSON document. Provider credentials,
+Halro v1 sends one minimal generic JSON document. Provider credentials,
 Gateway keys, source IPs, prompts, response bodies, and raw errors are never
 included.
 
@@ -21,13 +21,13 @@ included.
 }
 ```
 
-Webhook URLs must use HTTPS and pass Heimdall's SSRF policy. Authentication
+Webhook URLs must use HTTPS and pass Halro's SSRF policy. Authentication
 belongs in an encrypted `Authorization` or `X-Webhook-Token` header, not in URL
 query parameters.
 
 ## Platform adapters
 
-Heimdall intentionally keeps platform-specific formatting outside the Gateway
+Halro intentionally keeps platform-specific formatting outside the Gateway
 process in v1. A small trusted relay can map the generic event as follows.
 
 Slack:

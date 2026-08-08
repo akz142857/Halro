@@ -143,7 +143,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	for _, target := range e.cfg.Targets {
-		if target.Kind != "heimdall" || target.AnchorURL == "" {
+		if target.Kind != "halro" || target.AnchorURL == "" {
 			continue
 		}
 		// The anchor is the one check whose failure is silent by design:
@@ -270,7 +270,7 @@ func (e *Engine) enqueue(kind string, target TargetConfig, state Phase, reason s
 	}
 	e.state.Sequence++
 	event := Event{
-		SchemaVersion: "heimdall.deadman.event/v1",
+		SchemaVersion: "halro.deadman.event/v1",
 		EventID:       fmt.Sprintf("%s-%020d", e.cfg.ProbeID, e.state.Sequence),
 		Sequence:      e.state.Sequence,
 		ProbeID:       e.cfg.ProbeID,

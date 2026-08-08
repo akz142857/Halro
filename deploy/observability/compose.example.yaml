@@ -14,7 +14,7 @@ services:
       - --web.listen-address=127.0.0.1:9091
     volumes:
       - ./prometheus:/etc/prometheus:ro
-      - /run/heimdall-observability:/run/secrets:ro
+      - /run/halro-observability:/run/secrets:ro
       - prometheus-data:/prometheus
     restart: unless-stopped
 
@@ -32,7 +32,7 @@ services:
       - --cluster.listen-address=
     volumes:
       - ./alertmanager:/etc/alertmanager:ro
-      - /run/heimdall-observability:/run/secrets:ro
+      - /run/halro-observability:/run/secrets:ro
       - alertmanager-data:/alertmanager
     restart: unless-stopped
 

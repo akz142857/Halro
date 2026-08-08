@@ -6,7 +6,7 @@ Milestone tracking: `docs/milestones/milestone-m11-master-key-custody-aws-kms.md
 
 ## Context
 
-Heimdall is intentionally self-contained and cloud-neutral. File mode must
+Halro is intentionally self-contained and cloud-neutral. File mode must
 remain a complete, first-class operating mode that neither configures nor calls
 a cloud service. AWS KMS is the first optional production extension because it
 matches the current deployment environment; it is not a premise of the core
@@ -28,7 +28,7 @@ mechanisms.
 
 The following decisions are independent of the packaging spike:
 
-- Heimdall core owns Key Slot state, trusted configuration, protected-payload
+- Halro core owns Key Slot state, trusted configuration, protected-payload
   validation, Vault Key Check, retry policy, Audit, Metrics, and persistence;
 - AWS support uses a narrow, explicit, in-process Adapter boundary;
 - the Adapter implements only provider authentication and wrap/unwrap calls;
@@ -80,7 +80,7 @@ cancellation. It is not selectable by production configuration.
 
 ## Decision
 
-Heimdall accepts Option A: one module and one signed `heimdall` artifact. The
+Halro accepts Option A: one module and one signed `halro` artifact. The
 main binary and production container will include the official AWS SDK config
 and KMS packages after the production Adapter lands. File mode selects and
 constructs its backend before any AWS configuration, credential-chain or
@@ -109,8 +109,8 @@ single-artifact increase is accepted to avoid that release and recovery risk.
 ### Resulting module and release layout
 
 - one root Go module;
-- one `heimdall` binary/container for File and AWS KMS modes;
-- no `heimdall-aws` artifact, build tag, plugin or helper process;
+- one `halro` binary/container for File and AWS KMS modes;
+- no `halro-aws` artifact, build tag, plugin or helper process;
 - official AWS SDK config/KMS packages isolated below the AWS Adapter package;
 - provider-neutral core and `internal/gateway` must not import AWS SDK types;
 - File-mode tests must keep a live metadata/identity probe at zero requests;
@@ -126,9 +126,9 @@ their implementation changes the release boundary.
 M11 Phase 0 compared only the two release models relevant to the current AWS
 production requirement:
 
-### Option A: one Heimdall artifact — accepted
+### Option A: one Halro artifact — accepted
 
-The main `heimdall` binary includes the AWS SDK and AWS KMS Adapter. File mode
+The main `halro` binary includes the AWS SDK and AWS KMS Adapter. File mode
 does not initialize or call them unless AWS KMS is explicitly configured.
 
 This option favors one installation and release path, at the cost of carrying
@@ -136,7 +136,7 @@ the AWS dependency and SBOM surface for File-only operators.
 
 ### Option B: core and AWS artifacts — rejected for M11
 
-The project publishes `heimdall` without the AWS SDK and `heimdall-aws` with
+The project publishes `halro` without the AWS SDK and `halro-aws` with
 the AWS SDK and Adapter. Both artifacts use the same source commit, core
 packages, configuration model, CLI semantics, tests, release version, signing
 process, and compatibility contract.

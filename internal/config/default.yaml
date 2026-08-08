@@ -1,4 +1,4 @@
-# Heimdall configuration — written on first run, safe for a single host.
+# Halro configuration — written on first run, safe for a single host.
 #
 # Every value below is the built-in default; deleting a key restores it. A
 # config-driven setting is one that cannot change while the gateway is serving:
@@ -7,7 +7,7 @@
 # the Admin console, not here.
 #
 # The complete annotated reference is configs/config.example.yaml.
-# Restart Heimdall after editing this file.
+# Restart Halro after editing this file.
 
 version: 1
 
@@ -32,7 +32,7 @@ tls:
 
 storage:
   data_dir: ./data
-  metadata_file: heimdall.db
+  metadata_file: halro.db
   master_key:
     # "file" keeps the key on this host: simplest, and it means whoever holds
     # the file holds everything the vault protects. "key_slots" wraps it with a
@@ -172,7 +172,7 @@ audit:
     # a later rewrite detectable rather than invisible.
     enabled: false
     # dead_man_pull is the only implemented sink: it reuses the existing
-    # heimdall-deadman probe and its off-host, separately credentialed
+    # halro-deadman probe and its off-host, separately credentialed
     # deployment rather than standing up a second witness path.
     sink: dead_man_pull
     interval: 5m

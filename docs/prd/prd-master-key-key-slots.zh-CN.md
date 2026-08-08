@@ -1,4 +1,4 @@
-# Heimdall Master Key 多 Key Slot 存储与解锁 PRD
+# Halro Master Key 多 Key Slot 存储与解锁 PRD
 
 状态：Draft — 云中立核心范围已收敛
 
@@ -8,15 +8,15 @@
 
 ## 1. 文档定位
 
-本 PRD 定义 Heimdall Master Key 的最小多 Key Slot 模型，以及当前生产发布必须实现的 Slot 类型、状态机、轮换和恢复要求。
+本 PRD 定义 Halro Master Key 的最小多 Key Slot 模型，以及当前生产发布必须实现的 Slot 类型、状态机、轮换和恢复要求。
 
-Heimdall 的核心仍然是独立、自包含、云中立的系统。File 模式是完整的一等运行模式，不安装或启用任何云扩展时不得产生外部服务依赖。
+Halro 的核心仍然是独立、自包含、云中立的系统。File 模式是完整的一等运行模式，不安装或启用任何云扩展时不得产生外部服务依赖。
 
-AWS 是当前实际使用环境和第一个计划实现的可选 KMS 扩展，但不是 Heimdall 核心架构前提。AWS KMS 的 protected payload、Encryption Context、启动错误、备份恢复、可观测性和真实云验收由 `docs/prd/prd-kms-envelope-integration.zh-CN.md` 进一步约束。云 SDK 的依赖与发布方式由 `docs/adr/0010-kms-sdk-dependency-isolation.md` 决定。
+AWS 是当前实际使用环境和第一个计划实现的可选 KMS 扩展，但不是 Halro 核心架构前提。AWS KMS 的 protected payload、Encryption Context、启动错误、备份恢复、可观测性和真实云验收由 `docs/prd/prd-kms-envelope-integration.zh-CN.md` 进一步约束。云 SDK 的依赖与发布方式由 `docs/adr/0010-kms-sdk-dependency-isolation.md` 决定。
 
 ## 2. 背景
 
-Heimdall 当前使用独立的 `master.key` 文件保存 32 字节随机 Master Key。Master Key 通过 HKDF 派生 Provider Credential、Admin MFA、Admin Session、Audit HMAC 等用途的独立子密钥。
+Halro 当前使用独立的 `master.key` 文件保存 32 字节随机 Master Key。Master Key 通过 HKDF 派生 Provider Credential、Admin MFA、Admin Session、Audit HMAC 等用途的独立子密钥。
 
 当前 Vault 密码学结构保持不变，但明文 `master.key` 长期存在于生产主机磁盘。数据库、主机快照和该文件同时泄露时，攻击者不需要破解 AES 即可解密 Vault。
 
@@ -28,7 +28,7 @@ Heimdall 当前使用独立的 `master.key` 文件保存 32 字节随机 Master 
 
 ```text
                        ┌─ File Slot（独立本地模式）
-随机 Heimdall Master Key
+随机 Halro Master Key
                        ├─ External KMS Primary Slot（日常启动）
                        └─ External KMS Recovery Slot（break-glass）
 ```
@@ -43,7 +43,7 @@ Heimdall 当前使用独立的 `master.key` 文件保存 32 字节随机 Master 
 - 使用独立管理边界的 KMS Recovery Slot 消除单 Key 永久数据丢失风险。
 - 直接采用统一 Master Key 配置和 Slot 模型，不保留开发期旧 schema 的兼容包袱。
 - 保持 provider-neutral 核心接口，AWS 作为首个扩展实现而非核心绑定。
-- 严格区分 KMS KEK rewrap 与 Heimdall Master Key/DEK rotate。
+- 严格区分 KMS KEK rewrap 与 Halro Master Key/DEK rotate。
 - 保持现有 COW、crash bridge、Keyring、Audit 和备份恢复不变量。
 - 解锁失败默认 fail closed，禁止生成新 Key 或静默切换到不受信来源。
 
@@ -81,7 +81,7 @@ wrapped Master Key
 32-byte Master Key
      │
      ▼
-现有 Heimdall Vault
+现有 Halro Vault
 ```
 
 ### 5.2 多 Slot 不等于多 Master Key
@@ -152,9 +152,9 @@ Recovery Slot 包装同一个 Master Key，但属于独立恢复管理边界。
 
 推荐安全边界：
 
-- 日常 Heimdall Runtime 身份不默认拥有 Recovery Key 的 Decrypt 权限；
+- 日常 Halro Runtime 身份不默认拥有 Recovery Key 的 Decrypt 权限；
 - break-glass 时由受控恢复角色临时取得权限；
-- 恢复操作要求加强确认并同时产生云平台和 Heimdall Audit；
+- 恢复操作要求加强确认并同时产生云平台和 Halro Audit；
 - Recovery Slot 必须定期执行隔离恢复演练；
 - Recovery Slot 长期未验证或 Key 不可用必须告警。
 
@@ -297,7 +297,7 @@ pending → active → retiring → revoked
 - 删除 Primary 前必须先指定和验证新的 Primary；
 - 删除 Recovery 前必须先创建和演练新的 Recovery；
 - 删除操作必须要求当前 revision 和加强确认；
-- KMS Key 的禁用/删除和 Heimdall Slot revoke 是两个独立操作，Runbook 必须规定顺序；
+- KMS Key 的禁用/删除和 Halro Slot revoke 是两个独立操作，Runbook 必须规定顺序；
 - 必须考虑历史备份仍保存旧 descriptor，删除当前 Slot 不会追溯修改历史备份。
 
 ## 11. KEK Rewrap 与 DEK Rotate
@@ -457,10 +457,10 @@ storage:
 最低 Metrics：
 
 ```text
-heimdall_kms_calls_total{operation,result}
-heimdall_kms_call_duration_seconds{operation}
-heimdall_kms_slot_last_verified_timestamp_seconds{purpose}
-heimdall_kms_recovery_uses_total{result}
+halro_kms_calls_total{operation,result}
+halro_kms_call_duration_seconds{operation}
+halro_kms_slot_last_verified_timestamp_seconds{purpose}
+halro_kms_recovery_uses_total{result}
 ```
 
 不得使用完整 ARN、账号、Slot ID 或 ciphertext 作为 label。
@@ -542,8 +542,8 @@ heimdall_kms_recovery_uses_total{result}
 ## 18. 验收标准
 
 - [ ] File 模式使用统一新配置完成初始化、启动、轮换、备份和恢复。
-- [ ] 不启用云扩展时，Heimdall 保持独立、自包含且不产生云网络调用。
-- [ ] 启用 AWS 扩展的生产主机和 Heimdall 备份中不存在明文 Master Key。
+- [ ] 不启用云扩展时，Halro 保持独立、自包含且不产生云网络调用。
+- [ ] 启用 AWS 扩展的生产主机和 Halro 备份中不存在明文 Master Key。
 - [ ] Primary 和 Recovery Slots 解出同一个 Master Key 并分别通过 Vault Key Check。
 - [ ] 启用外部 KMS 时，只有一个 active KMS Slot 不能标记 production-ready；纯 File 模式不受影响。
 - [ ] 日常 Runtime 身份不默认拥有 Recovery Slot Decrypt 权限。
@@ -561,7 +561,7 @@ heimdall_kms_recovery_uses_total{result}
 
 ## 19. 最终决策
 
-Heimdall 当前保留最小多 Key Slot 架构，但不实现数字货币钱包式密码和助记词系统。
+Halro 当前保留最小多 Key Slot 架构，但不实现数字货币钱包式密码和助记词系统。
 
 当前核心和首个扩展模型为：
 
@@ -572,4 +572,4 @@ External KMS Slot model   可选扩展边界
   └─ AWS Recovery Slot    首个扩展的独立 break-glass 恢复
 ```
 
-该范围保持 Heimdall 核心云中立和 File 模式完整可用，同时允许 AWS 作为当前第一个生产级扩展解决外部根密钥托管和单 KMS Key 恢复风险。未来 provider 可以复用通用 Slot 不变量，但不能使核心系统与 AWS 或任何云绑定。
+该范围保持 Halro 核心云中立和 File 模式完整可用，同时允许 AWS 作为当前第一个生产级扩展解决外部根密钥托管和单 KMS Key 恢复风险。未来 provider 可以复用通用 Slot 不变量，但不能使核心系统与 AWS 或任何云绑定。

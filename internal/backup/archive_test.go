@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/buildinfo"
-	"github.com/akz142857/Heimdall/internal/ledger"
-	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
+	"github.com/akz142857/Halro/internal/buildinfo"
+	"github.com/akz142857/Halro/internal/ledger"
+	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 )
 
 func TestEncryptedBackupCreateVerifyAndSecretConfidentiality(t *testing.T) {

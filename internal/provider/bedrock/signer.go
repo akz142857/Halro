@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/domain"
+	"github.com/akz142857/Halro/internal/domain"
 )
 
 type credentials struct {

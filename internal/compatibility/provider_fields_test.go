@@ -5,8 +5,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/akz142857/Heimdall/internal/domain"
-	"github.com/akz142857/Heimdall/internal/semantic"
+	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/semantic"
 )
 
 func TestProviderFieldCompatibilityRejectsSilentLoss(t *testing.T) {

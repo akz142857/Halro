@@ -1,6 +1,6 @@
 # Third-party notices
 
-Heimdall includes or links the dependencies listed below. The release SBOM is
+Halro includes or links the dependencies listed below. The release SBOM is
 the authoritative versioned inventory. Copyright and license terms remain the
 property of their respective owners.
 

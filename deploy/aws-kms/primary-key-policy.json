@@ -11,30 +11,30 @@
     {
       "Sid": "RuntimePrimaryDecrypt",
       "Effect": "Allow",
-      "Principal": {"AWS": "arn:aws:iam::${PRIMARY_ACCOUNT_ID}:role/${HEIMDALL_RUNTIME_ROLE}"},
+      "Principal": {"AWS": "arn:aws:iam::${PRIMARY_ACCOUNT_ID}:role/${HALRO_RUNTIME_ROLE}"},
       "Action": "kms:Decrypt",
       "Resource": "*",
       "Condition": {
         "StringEquals": {
-          "kms:EncryptionContext:heimdall.context_version": "1",
-          "kms:EncryptionContext:heimdall.payload_version": "1",
-          "kms:EncryptionContext:heimdall.purpose": "primary",
-          "kms:EncryptionContext:heimdall.instance_sha256": "${INSTANCE_ID_SHA256}"
+          "kms:EncryptionContext:halro.context_version": "1",
+          "kms:EncryptionContext:halro.payload_version": "1",
+          "kms:EncryptionContext:halro.purpose": "primary",
+          "kms:EncryptionContext:halro.instance_sha256": "${INSTANCE_ID_SHA256}"
         }
       }
     },
     {
       "Sid": "ApprovedLifecycleRole",
       "Effect": "Allow",
-      "Principal": {"AWS": "arn:aws:iam::${PRIMARY_ACCOUNT_ID}:role/${HEIMDALL_LIFECYCLE_ROLE}"},
+      "Principal": {"AWS": "arn:aws:iam::${PRIMARY_ACCOUNT_ID}:role/${HALRO_LIFECYCLE_ROLE}"},
       "Action": ["kms:Encrypt", "kms:Decrypt"],
       "Resource": "*",
       "Condition": {
         "StringEquals": {
-          "kms:EncryptionContext:heimdall.context_version": "1",
-          "kms:EncryptionContext:heimdall.payload_version": "1",
-          "kms:EncryptionContext:heimdall.purpose": "primary",
-          "kms:EncryptionContext:heimdall.instance_sha256": "${INSTANCE_ID_SHA256}"
+          "kms:EncryptionContext:halro.context_version": "1",
+          "kms:EncryptionContext:halro.payload_version": "1",
+          "kms:EncryptionContext:halro.purpose": "primary",
+          "kms:EncryptionContext:halro.instance_sha256": "${INSTANCE_ID_SHA256}"
         }
       }
     }

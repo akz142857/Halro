@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/domain"
+	"github.com/akz142857/Halro/internal/domain"
 )
 
 const (
@@ -153,7 +153,7 @@ func (m *Manager) Revoke(ctx context.Context, token string) error {
 
 func (m *Manager) csrfToken(sessionToken string) string {
 	mac := hmac.New(sha256.New, m.csrfKey)
-	mac.Write([]byte("heimdall:admin-csrf:v1:"))
+	mac.Write([]byte("halro:admin-csrf:v1:"))
 	mac.Write([]byte(sessionToken))
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }

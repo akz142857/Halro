@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Heimdall: single-binary, security-first LLM gateway (Go). One governed API for multiple
+Halro: single-binary, security-first LLM gateway (Go). One governed API for multiple
 model providers (OpenAI, Anthropic, Azure OpenAI, DeepSeek, Gemini Beta, AWS Bedrock
 Beta, AWS Bedrock Mantle Beta), with credentials, budgets, routing, redaction, audit, and
 usage accounting all owned locally — no external DB, cache, CDN, or browser-side secret
@@ -18,9 +18,9 @@ over feature count.
 
 Build/run:
 ```bash
-make build            # bin/heimdall + bin/heimdall-deadman
+make build            # bin/halro + bin/halro-deadman
 make start             # build + start using CONFIG=config.yaml (creates config/storage on first run)
-make dev               # build frontend, then `go run ./cmd/heimdall start`
+make dev               # build frontend, then `go run ./cmd/halro start`
 make frontend          # npm ci + npm run build for web/, output embedded at internal/webui/dist
 ```
 
@@ -42,7 +42,7 @@ cd web && npx vitest run <path/to/file.test.ts>
 
 Other:
 ```bash
-make backup            # offline encrypted backup (requires Heimdall stopped); see docs/guides/backup-restore.md
+make backup            # offline encrypted backup (requires Halro stopped); see docs/guides/backup-restore.md
 make observability-check   # validates deploy/observability/ Prometheus/Alertmanager config
 make reset CONFIRM=RESET   # destroys data dir + master key, then reinits — destructive, confirm before ever running
 ```
@@ -97,9 +97,9 @@ Key `internal/` packages and what owns what:
   (`docs/compatibility/endpoint-manifests.json`).
 - `app` — composition root wiring Admin HTTP handlers (`admin_*.go`) to the packages above.
 - `webui` — embeds the built `web/` bundle (`internal/webui/dist`) into the Go binary.
-- `deadman` (+ `cmd/heimdall-deadman`) — an independently deployed watchdog: checks
-  Heimdall/Prometheus/Alertmanager readiness and sample freshness, sends heartbeat and
-  down/up events to a separate receiver. Deliberately outside Heimdall's own failure domain.
+- `deadman` (+ `cmd/halro-deadman`) — an independently deployed watchdog: checks
+  Halro/Prometheus/Alertmanager readiness and sample freshness, sends heartbeat and
+  down/up events to a separate receiver. Deliberately outside Halro's own failure domain.
 - `backup` — offline encrypted backup/restore; `.hmbk` archives plus a dedicated backup
   key, independent from `master.key`.
 
@@ -147,8 +147,8 @@ commit. This is not a style preference; it is where the expensive mistakes come 
 - **Before writing a validation, gate, or invariant, go read the data it judges.** A
   fixture built from your own mental model tests the model, not the world. A check that
   a real `data/` directory rejects is a check that bricks every install.
-- **Run the real binary against the real artifact**: `heimdall doctor`,
-  `heimdall ledger verify`, an actual `backup create`, an actual start. Unit tests passing
+- **Run the real binary against the real artifact**: `halro doctor`,
+  `halro ledger verify`, an actual `backup create`, an actual start. Unit tests passing
   is not evidence that existing data still loads.
 - **To attribute a symptom to a change, build both sides and run them against the same
   input.** Do not reason from the diff.

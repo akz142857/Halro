@@ -1,5 +1,5 @@
 {
-  "name": "heimdall-openai-node-compatibility",
+  "name": "halro-openai-node-compatibility",
   "private": true,
   "type": "module",
   "dependencies": {

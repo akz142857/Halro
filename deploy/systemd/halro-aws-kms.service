@@ -1,13 +1,13 @@
 [Unit]
-Description=Heimdall Gateway with AWS KMS Master Key custody
+Description=Halro Gateway with AWS KMS Master Key custody
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=heimdall
-Group=heimdall
-ExecStart=/usr/local/bin/heimdall start --config /etc/heimdall/config.yaml
+User=halro
+Group=halro
+ExecStart=/usr/local/bin/halro start --config /etc/halro/config.yaml
 Restart=on-failure
 RestartSec=15s
 TimeoutStartSec=120s
@@ -24,7 +24,7 @@ ProtectKernelLogs=yes
 ProtectKernelModules=yes
 ProtectKernelTunables=yes
 ProtectSystem=strict
-ReadWritePaths=/var/lib/heimdall
+ReadWritePaths=/var/lib/halro
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 RestrictNamespaces=yes
 RestrictRealtime=yes

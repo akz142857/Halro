@@ -12,7 +12,7 @@ fields and controlled target labels only.
 
 ## Core groups
 
-- Availability: expected Heimdall target absent/down and the continuous
+- Availability: expected Halro target absent/down and the continuous
   `Watchdog` dead-man signal.
 - Accounting: WAL append errors, Ledger queue pressure and analytics lag.
 - Delivery: application alert failures and drops.

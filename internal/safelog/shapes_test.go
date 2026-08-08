@@ -113,7 +113,7 @@ func TestUnrecognisedCredentialFormatsAreCaughtByAttributeName(t *testing.T) {
 	}
 }
 
-// Heimdall mints these two itself, so nothing else will recognise them.
+// Halro mints these two itself, so nothing else will recognise them.
 func TestOwnIssuedTokenFormatsAreRedacted(t *testing.T) {
 	for _, token := range []string{
 		"hms_dGhpcy1pcy1hLTMyLWJ5dGUtc2Vzc2lvbi10b2tlbg",
@@ -130,13 +130,13 @@ func TestOwnIssuedTokenFormatsAreRedacted(t *testing.T) {
 func TestOrdinaryDiagnosticAttributesSurvive(t *testing.T) {
 	var output bytes.Buffer
 	New(slog.NewJSONHandler(&output, nil)).Info("probe finished",
-		slog.String("target_id", "heimdall-primary"),
+		slog.String("target_id", "halro-primary"),
 		slog.String("component", "deadman"),
 		slog.Int("status", 503),
 		slog.Bool("degraded", true),
 	)
 	got := output.String()
-	for _, expected := range []string{"heimdall-primary", "deadman", "503", "true"} {
+	for _, expected := range []string{"halro-primary", "deadman", "503", "true"} {
 		if !strings.Contains(got, expected) {
 			t.Fatalf("redaction swallowed the diagnostic %q: %s", expected, got)
 		}

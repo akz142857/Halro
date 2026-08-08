@@ -6,12 +6,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/audit"
-	"github.com/akz142857/Heimdall/internal/config"
-	"github.com/akz142857/Heimdall/internal/id"
-	corekms "github.com/akz142857/Heimdall/internal/kms"
-	"github.com/akz142857/Heimdall/internal/masterkey"
-	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
+	"github.com/akz142857/Halro/internal/audit"
+	"github.com/akz142857/Halro/internal/config"
+	"github.com/akz142857/Halro/internal/id"
+	corekms "github.com/akz142857/Halro/internal/kms"
+	"github.com/akz142857/Halro/internal/masterkey"
+	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 )
 
 type kmsCallMetricKey struct {

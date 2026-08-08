@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/provider"
+	"github.com/akz142857/Halro/internal/provider"
 	"github.com/go-chi/chi/v5"
 )
 

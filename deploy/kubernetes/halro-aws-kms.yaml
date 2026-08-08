@@ -1,26 +1,26 @@
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: heimdall
-  namespace: heimdall
+  name: halro
+  namespace: halro
 automountServiceAccountToken: false
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: heimdall
-  namespace: heimdall
+  name: halro
+  namespace: halro
 spec:
   replicas: 1
   strategy:
     type: Recreate
   selector:
-    matchLabels: {app.kubernetes.io/name: heimdall}
+    matchLabels: {app.kubernetes.io/name: halro}
   template:
     metadata:
-      labels: {app.kubernetes.io/name: heimdall}
+      labels: {app.kubernetes.io/name: halro}
     spec:
-      serviceAccountName: heimdall
+      serviceAccountName: halro
       automountServiceAccountToken: false
       enableServiceLinks: false
       terminationGracePeriodSeconds: 60
@@ -31,19 +31,19 @@ spec:
         fsGroup: 65532
         seccompProfile: {type: RuntimeDefault}
       containers:
-        - name: heimdall
-          image: ghcr.io/OWNER/heimdall@sha256:REPLACE_WITH_REVIEWED_DIGEST
-          args: ["start", "--config", "/etc/heimdall/config.yaml"]
+        - name: halro
+          image: ghcr.io/OWNER/halro@sha256:REPLACE_WITH_REVIEWED_DIGEST
+          args: ["start", "--config", "/etc/halro/config.yaml"]
           ports:
             - {name: gateway, containerPort: 8080}
             - {name: admin, containerPort: 8081}
             - {name: metrics, containerPort: 9090}
           readinessProbe:
-            exec: {command: ["/usr/local/bin/heimdall", "healthcheck", "--url", "http://127.0.0.1:8080/health/ready"]}
+            exec: {command: ["/usr/local/bin/halro", "healthcheck", "--url", "http://127.0.0.1:8080/health/ready"]}
             periodSeconds: 5
             failureThreshold: 12
           livenessProbe:
-            exec: {command: ["/usr/local/bin/heimdall", "healthcheck", "--url", "http://127.0.0.1:8080/health/live"]}
+            exec: {command: ["/usr/local/bin/halro", "healthcheck", "--url", "http://127.0.0.1:8080/health/live"]}
             periodSeconds: 10
             failureThreshold: 6
           securityContext:
@@ -61,13 +61,13 @@ spec:
             requests: {cpu: 100m, memory: 128Mi}
             limits: {memory: 1Gi}
           volumeMounts:
-            - {name: config, mountPath: /etc/heimdall, readOnly: true}
-            - {name: data, mountPath: /var/lib/heimdall}
+            - {name: config, mountPath: /etc/halro, readOnly: true}
+            - {name: data, mountPath: /var/lib/halro}
             - {name: tmp, mountPath: /tmp}
       volumes:
         - name: config
-          secret: {secretName: heimdall-config, defaultMode: 0400}
+          secret: {secretName: halro-config, defaultMode: 0400}
         - name: data
-          persistentVolumeClaim: {claimName: heimdall-data}
+          persistentVolumeClaim: {claimName: halro-data}
         - name: tmp
           emptyDir: {sizeLimit: 64Mi}

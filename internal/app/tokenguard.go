@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 
-	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
-	"github.com/akz142857/Heimdall/internal/tokenguard"
+	boltstore "github.com/akz142857/Halro/internal/store/bolt"
+	"github.com/akz142857/Halro/internal/tokenguard"
 )
 
 func loadTokenGuard(ctx context.Context, store *boltstore.Store, logger *slog.Logger) (*tokenguard.Manager, error) {

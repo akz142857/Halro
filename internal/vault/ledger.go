@@ -21,8 +21,8 @@ func DeriveLedgerHMACKey(masterKey []byte) ([]byte, error) {
 	key, err := hkdf.Key(
 		sha256.New,
 		masterKey,
-		[]byte("heimdall:ledger:v1"),
-		"heimdall:ledger-hmac-key:v1",
+		[]byte("halro:ledger:v1"),
+		"halro:ledger-hmac-key:v1",
 		32,
 	)
 	if err != nil {

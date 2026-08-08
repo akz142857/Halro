@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/auth"
-	"github.com/akz142857/Heimdall/internal/domain"
-	"github.com/akz142857/Heimdall/internal/id"
-	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
+	"github.com/akz142857/Halro/internal/auth"
+	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/id"
+	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -444,7 +444,7 @@ func (r *Runtime) validateProjectReferences(request *http.Request, project domai
 
 func gatewayKeyIdempotencyDigest(actor, projectID, key string) string {
 	digest := sha256.New()
-	digest.Write([]byte("heimdall:gateway-key-idempotency:v1\x00"))
+	digest.Write([]byte("halro:gateway-key-idempotency:v1\x00"))
 	digest.Write([]byte(actor))
 	digest.Write([]byte{0})
 	digest.Write([]byte(projectID))

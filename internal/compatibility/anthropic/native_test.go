@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/akz142857/Heimdall/internal/anthropicapi"
-	"github.com/akz142857/Heimdall/internal/compatibility"
-	"github.com/akz142857/Heimdall/internal/domain"
+	"github.com/akz142857/Halro/internal/anthropicapi"
+	"github.com/akz142857/Halro/internal/compatibility"
+	"github.com/akz142857/Halro/internal/domain"
 )
 
 func TestNativeEnvelopePreservesThinkingSignature(t *testing.T) {

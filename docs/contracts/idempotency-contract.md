@@ -14,7 +14,7 @@ and embeddings. Clients that omit it retain existing behavior.
 - `unknown` means the Provider may have executed but no final result is known.
   It is never silently converted to a retryable or refunded result.
 - Streaming response bodies are not retained by the Phase 0 primitive. A retry
-  may observe lifecycle state, but Heimdall does not promise replay of an SSE
+  may observe lifecycle state, but Halro does not promise replay of an SSE
   byte stream.
 
 The initial durable store is a Standalone primitive. Runtime endpoint adoption

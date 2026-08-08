@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-// heimdall stats answers "what is this instance doing right now" without an
+// halro stats answers "what is this instance doing right now" without an
 // operator standing up Prometheus first — the reason Redis ships INFO. It reads
 // the same metrics endpoint Prometheus would, and reduces it to the handful of
 // means that explain this process's throughput ceilings.
@@ -75,31 +75,31 @@ func writeStatsReport(out io.Writer, sample statsSample, window string) {
 	writer := bufio.NewWriter(out)
 	defer writer.Flush()
 
-	syncs := sample["heimdall_wal_sync_seconds_count"]
-	records := sample["heimdall_wal_append_records_total"]
-	batches := sample["heimdall_wal_append_batches_total"]
-	acquisitions := sample["heimdall_accounting_project_lock_acquisitions_total"]
-	calls := sample["heimdall_metadata_batch_calls_total"]
-	transactions := sample["heimdall_metadata_batch_transactions_total"]
+	syncs := sample["halro_wal_sync_seconds_count"]
+	records := sample["halro_wal_append_records_total"]
+	batches := sample["halro_wal_append_batches_total"]
+	acquisitions := sample["halro_accounting_project_lock_acquisitions_total"]
+	calls := sample["halro_metadata_batch_calls_total"]
+	transactions := sample["halro_metadata_batch_transactions_total"]
 
 	fmt.Fprintf(writer, "Durable write path (%s)\n", window)
 	fmt.Fprintf(writer, "  Ledger fsync          %s   over %s barriers\n",
-		statsMillis(sample["heimdall_wal_sync_seconds_sum"], syncs), statsCount(syncs))
+		statsMillis(sample["halro_wal_sync_seconds_sum"], syncs), statsCount(syncs))
 	batchSize := statsRatio(records, batches)
 	fmt.Fprintf(writer, "  Records per fsync     %s   over %s records\n",
 		statsFactor(batchSize), statsCount(records))
 	fmt.Fprintf(writer, "  WAL queue             %s / %s\n",
-		statsCount(sample["heimdall_usage_queue_depth"]), statsCount(sample["heimdall_usage_queue_capacity"]))
+		statsCount(sample["halro_usage_queue_depth"]), statsCount(sample["halro_usage_queue_capacity"]))
 
 	// One request lifecycle is five accounting records (ADR 0018), so the
 	// per-project ceiling is reported in requests as well: that is the unit an
 	// operator plans in. Approximate — a request that retries spends more than
 	// five, so its real ceiling is lower.
 	const recordsPerRequest = 5
-	held := statsMean(sample["heimdall_accounting_project_lock_held_seconds_sum"], acquisitions)
+	held := statsMean(sample["halro_accounting_project_lock_held_seconds_sum"], acquisitions)
 	fmt.Fprintf(writer, "  Project lock wait     %s\n",
-		statsMillis(sample["heimdall_accounting_project_lock_wait_seconds_sum"], acquisitions))
-	fmt.Fprintf(writer, "  Project lock hold     %s", statsMillis(sample["heimdall_accounting_project_lock_held_seconds_sum"], acquisitions))
+		statsMillis(sample["halro_accounting_project_lock_wait_seconds_sum"], acquisitions))
+	fmt.Fprintf(writer, "  Project lock hold     %s", statsMillis(sample["halro_accounting_project_lock_held_seconds_sum"], acquisitions))
 	if held > 0 {
 		// One project's accounting writes serialize on this lock, so its
 		// reciprocal is that project's ceiling however many requests it offers.
@@ -109,7 +109,7 @@ func writeStatsReport(out io.Writer, sample statsSample, window string) {
 	fmt.Fprintf(writer, "  Metadata coalescing   %s   calls per write transaction\n",
 		statsFactor(statsRatio(calls, transactions)))
 
-	if errorCount := sample["heimdall_wal_append_errors_total"]; errorCount > 0 {
+	if errorCount := sample["halro_wal_append_errors_total"]; errorCount > 0 {
 		fmt.Fprintf(writer, "\n  %s Ledger append errors — accounting is degraded\n", statsCount(errorCount))
 	}
 	// The two readings that look alike and are not: a full-looking batch means the
@@ -209,7 +209,7 @@ func metricsSampleFetcher(rawURL string, token []byte, timeout time.Duration) (s
 			// sends them looking at credentials and listeners instead. The URL
 			// is loopback and operator-supplied, and userinfo is rejected above,
 			// so there is nothing here to leak.
-			return nil, fmt.Errorf("metrics endpoint %s is unavailable; is Heimdall running with metrics enabled?", parsed.Redacted())
+			return nil, fmt.Errorf("metrics endpoint %s is unavailable; is Halro running with metrics enabled?", parsed.Redacted())
 		}
 		defer response.Body.Close()
 		if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden {

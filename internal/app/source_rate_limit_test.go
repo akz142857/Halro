@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akz142857/Heimdall/internal/config"
-	"github.com/akz142857/Heimdall/internal/sourcelimit"
+	"github.com/akz142857/Halro/internal/config"
+	"github.com/akz142857/Halro/internal/sourcelimit"
 )
 
 // internal/config keeps itself free of internal imports, so the tracking

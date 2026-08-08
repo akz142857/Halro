@@ -8,10 +8,10 @@ Build the production binary, start it with an isolated copy of production-like
 configuration and a bounded-cost Route, then run:
 
 ```bash
-export HEIMDALL_GATEWAY_KEY='gw_...'
-export HEIMDALL_METRICS_TOKEN='...'
+export HALRO_GATEWAY_KEY='gw_...'
+export HALRO_METRICS_TOKEN='...'
 go run ./tests/soak \
-  -pid "$(pgrep -n heimdall)" \
+  -pid "$(pgrep -n halro)" \
   -commit '<exact-40-character-RC-commit>' \
   -model chat \
   -duration 24h \

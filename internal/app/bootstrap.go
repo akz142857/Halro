@@ -9,14 +9,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/auth"
-	"github.com/akz142857/Heimdall/internal/config"
-	"github.com/akz142857/Heimdall/internal/domain"
-	"github.com/akz142857/Heimdall/internal/id"
-	"github.com/akz142857/Heimdall/internal/safetransport"
-	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
-	"github.com/akz142857/Heimdall/internal/store/lock"
-	"github.com/akz142857/Heimdall/internal/vault"
+	"github.com/akz142857/Halro/internal/auth"
+	"github.com/akz142857/Halro/internal/config"
+	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/id"
+	"github.com/akz142857/Halro/internal/safetransport"
+	boltstore "github.com/akz142857/Halro/internal/store/bolt"
+	"github.com/akz142857/Halro/internal/store/lock"
+	"github.com/akz142857/Halro/internal/vault"
 )
 
 type BootstrapOptions struct {
@@ -176,7 +176,7 @@ func Bootstrap(ctx context.Context, cfg config.Config, options BootstrapOptions,
 }
 
 func bootstrapPriceVersion(priceID, deploymentID string, billingMode domain.BillingMode, options BootstrapOptions, now time.Time) domain.DeploymentPriceVersion {
-	evidence := sha256.Sum256([]byte(fmt.Sprintf("heimdall:bootstrap-pricing:v1:%s:%d:%d", billingMode, options.InputMicrosPerMillion, options.OutputMicrosPerMillion)))
+	evidence := sha256.Sum256([]byte(fmt.Sprintf("halro:bootstrap-pricing:v1:%s:%d:%d", billingMode, options.InputMicrosPerMillion, options.OutputMicrosPerMillion)))
 	return domain.DeploymentPriceVersion{
 		ID: priceID, DeploymentID: deploymentID, Version: 1, Revision: 1,
 		BillingMode: billingMode, Currency: "USD", FormulaVersion: domain.PriceFormulaUSDTokensV1,
@@ -185,7 +185,7 @@ func bootstrapPriceVersion(priceID, deploymentID string, billingMode domain.Bill
 		Source: domain.PriceSource{
 			Type: domain.PriceSourceManual, Assurance: domain.PriceAssuranceAsserted,
 			ReceivedAt: now, ContentSHA256: "sha256:" + hex.EncodeToString(evidence[:]),
-			Reference: "heimdall bootstrap CLI", AssertedWithoutArchive: true,
+			Reference: "halro bootstrap CLI", AssertedWithoutArchive: true,
 		},
 	}
 }

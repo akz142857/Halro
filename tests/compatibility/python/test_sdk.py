@@ -7,7 +7,7 @@ import openai
 import anthropic
 
 
-BASE_URL = os.environ.get("HEIMDALL_COMPAT_BASE_URL", "http://127.0.0.1:18088/v1")
+BASE_URL = os.environ.get("HALRO_COMPAT_BASE_URL", "http://127.0.0.1:18088/v1")
 API_KEY = "gw_sdk_compatibility"
 
 

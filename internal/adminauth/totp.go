@@ -109,5 +109,5 @@ func NewRecoveryCode() (display string, hash [32]byte, err error) {
 
 func RecoveryCodeHash(code string) [32]byte {
 	normalized := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(code), "-", ""))
-	return sha256.Sum256([]byte("heimdall:admin-mfa-recovery:v1:" + normalized))
+	return sha256.Sum256([]byte("halro:admin-mfa-recovery:v1:" + normalized))
 }

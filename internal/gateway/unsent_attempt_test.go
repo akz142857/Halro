@@ -5,8 +5,8 @@ import (
 	"net"
 	"testing"
 
-	"github.com/akz142857/Heimdall/internal/provider"
-	"github.com/akz142857/Heimdall/internal/semantic"
+	"github.com/akz142857/Halro/internal/provider"
+	"github.com/akz142857/Halro/internal/semantic"
 )
 
 // refusedConnection builds the error an adapter now produces when the dial

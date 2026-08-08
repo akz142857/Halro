@@ -2,7 +2,7 @@
 
 ## 目标
 
-开发者工作台用于验证其他业务系统通过 Heimdall Gateway 发起请求时的真实行为。第一版执行闭环支持：
+开发者工作台用于验证其他业务系统通过 Halro Gateway 发起请求时的真实行为。第一版执行闭环支持：
 
 - Chat Completions、Responses、Embeddings；
 - 普通 JSON 响应和 SSE 流式响应；
@@ -13,7 +13,7 @@
 
 ## 安全边界
 
-工作台页面中的 Gateway 地址用于生成外部系统代码示例，不作为 Admin 服务端的网络访问目标。真实调试请求只允许进入当前 Heimdall Runtime 已配置的 Gateway Handler，不接受任意 URL、Host、重定向或上游 Provider 地址，避免新增 SSRF 和内网探测能力。
+工作台页面中的 Gateway 地址用于生成外部系统代码示例，不作为 Admin 服务端的网络访问目标。真实调试请求只允许进入当前 Halro Runtime 已配置的 Gateway Handler，不接受任意 URL、Host、重定向或上游 Provider 地址，避免新增 SSRF 和内网探测能力。
 
 Admin 执行入口必须同时满足 Admin Session、MFA policy、Same-Origin 和 CSRF 校验。Gateway Key 通过本次请求的 `Authorization: Bearer` 传入，执行入口不得记录、回显或持久化该值。执行请求随后使用独立构造的 Gateway Request，只复制允许的 Content-Type、Accept、正文和客户端地址，不复制 Admin Cookie、CSRF、转发链或其他 Admin Header。
 

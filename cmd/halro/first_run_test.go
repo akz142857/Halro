@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akz142857/Heimdall/internal/config"
+	"github.com/akz142857/Halro/internal/config"
 )
 
 // Config validation reports every problem it found in one error. Routing that
@@ -43,7 +43,7 @@ func TestSingleProblemIsReportedWithoutACount(t *testing.T) {
 	var out bytes.Buffer
 	reportCommandFailure(&out, errors.New("open config: no such file or directory"))
 	rendered := strings.TrimSpace(out.String())
-	if rendered != "heimdall: open config: no such file or directory" {
+	if rendered != "halro: open config: no such file or directory" {
 		t.Fatalf("unexpected rendering: %q", rendered)
 	}
 }

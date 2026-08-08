@@ -7,223 +7,223 @@ evaluation_interval: 1m
 tests:
   - interval: 1m
     input_series:
-      - series: 'heimdall_wal_append_errors_total{environment="test",region="local",cluster="standalone",instance="one"}'
+      - series: 'halro_wal_append_errors_total{environment="test",region="local",cluster="standalone",instance="one"}'
         values: '0 0 1 1 1'
-      - series: 'up{job="heimdall",expected_target="true",environment="test",region="local",cluster="standalone",instance="one"}'
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="standalone",instance="one"}'
         values: '1 0 0 0 1'
     alert_rule_test:
       - eval_time: 2m
-        alertname: HeimdallTargetDown
+        alertname: HalroTargetDown
         exp_alerts: []
       - eval_time: 3m
-        alertname: HeimdallWALAppendErrors
+        alertname: HalroWALAppendErrors
         exp_alerts:
           - exp_labels:
-              alertname: HeimdallWALAppendErrors
+              alertname: HalroWALAppendErrors
               category: accounting
               cluster: standalone
               environment: test
               instance: one
               owner: sre
               region: local
-              service: heimdall
+              service: halro
               severity: critical
             exp_annotations:
-              summary: Heimdall WAL append errors increased
+              summary: Halro WAL append errors increased
               runbook_url: /docs/observability/operations-runbook.md
 
   - interval: 1m
     input_series:
-      - series: 'up{job="heimdall",expected_target="true",environment="test",region="local",cluster="standalone",instance="one"}'
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="standalone",instance="one"}'
         values: '1 0 0 0 1'
     alert_rule_test:
       - eval_time: 3m
-        alertname: HeimdallTargetDown
+        alertname: HalroTargetDown
         exp_alerts:
           - exp_labels:
-              alertname: HeimdallTargetDown
+              alertname: HalroTargetDown
               category: availability
               cluster: standalone
               environment: test
               expected_target: "true"
               instance: one
-              job: heimdall
+              job: halro
               owner: sre
               region: local
-              service: heimdall
+              service: halro
               severity: critical
             exp_annotations:
-              summary: Heimdall Metrics target is down
+              summary: Halro Metrics target is down
               runbook_url: /docs/observability/operations-runbook.md
       - eval_time: 4m
-        alertname: HeimdallTargetDown
+        alertname: HalroTargetDown
         exp_alerts: []
 
   - interval: 1m
     input_series:
-      - series: 'heimdall_kms_calls_total{environment="test",region="local",cluster="standalone",operation="unwrap",status="error",error_class="kms_permission_denied"}'
+      - series: 'halro_kms_calls_total{environment="test",region="local",cluster="standalone",operation="unwrap",status="error",error_class="kms_permission_denied"}'
         values: '0+1x20'
-      - series: 'heimdall_kms_recovery_last_used_timestamp_seconds{environment="test",region="local",cluster="standalone"}'
+      - series: 'halro_kms_recovery_last_used_timestamp_seconds{environment="test",region="local",cluster="standalone"}'
         values: '0 60x20'
-      - series: 'heimdall_kms_unlock_total{environment="test",region="local",cluster="standalone",purpose="primary",status="error",error_class="kms_vault_mismatch"}'
+      - series: 'halro_kms_unlock_total{environment="test",region="local",cluster="standalone",purpose="primary",status="error",error_class="kms_vault_mismatch"}'
         values: '0+1x20'
-      - series: 'heimdall_kms_recovery_ready{environment="test",region="local",cluster="standalone"}'
+      - series: 'halro_kms_recovery_ready{environment="test",region="local",cluster="standalone"}'
         values: '0x20'
-      - series: 'heimdall_kms_slot_verified_timestamp_seconds{environment="test",region="local",cluster="standalone",purpose="recovery"}'
+      - series: 'halro_kms_slot_verified_timestamp_seconds{environment="test",region="local",cluster="standalone",purpose="recovery"}'
         values: '-8000000x20'
-      - series: 'heimdall_kms_pending_rotation_slots{environment="test",region="local",cluster="standalone"}'
+      - series: 'halro_kms_pending_rotation_slots{environment="test",region="local",cluster="standalone"}'
         values: '1x20'
     alert_rule_test:
       - eval_time: 6m
-        alertname: HeimdallKMSPrimaryUnlockFailure
+        alertname: HalroKMSPrimaryUnlockFailure
         exp_alerts:
-          - exp_labels: {alertname: HeimdallKMSPrimaryUnlockFailure, category: key-custody, cluster: standalone, environment: test, error_class: kms_permission_denied, operation: unwrap, owner: sre, region: local, service: heimdall, severity: critical, status: error}
-            exp_annotations: {summary: Heimdall Primary KMS unlock failed, runbook_url: /docs/runbooks/m11-production-operations.md}
+          - exp_labels: {alertname: HalroKMSPrimaryUnlockFailure, category: key-custody, cluster: standalone, environment: test, error_class: kms_permission_denied, operation: unwrap, owner: sre, region: local, service: halro, severity: critical, status: error}
+            exp_annotations: {summary: Halro Primary KMS unlock failed, runbook_url: /docs/runbooks/m11-production-operations.md}
       - eval_time: 6m
-        alertname: HeimdallKMSRecoveryUsed
+        alertname: HalroKMSRecoveryUsed
         exp_alerts:
-          - exp_labels: {alertname: HeimdallKMSRecoveryUsed, category: key-custody, cluster: standalone, environment: test, owner: sre, region: local, service: heimdall, severity: critical}
-            exp_annotations: {summary: Heimdall Recovery Slot was used, runbook_url: /docs/runbooks/m11-production-operations.md}
+          - exp_labels: {alertname: HalroKMSRecoveryUsed, category: key-custody, cluster: standalone, environment: test, owner: sre, region: local, service: halro, severity: critical}
+            exp_annotations: {summary: Halro Recovery Slot was used, runbook_url: /docs/runbooks/m11-production-operations.md}
       - eval_time: 6m
-        alertname: HeimdallKMSVaultMismatch
+        alertname: HalroKMSVaultMismatch
         exp_alerts:
-          - exp_labels: {alertname: HeimdallKMSVaultMismatch, category: key-custody, cluster: standalone, environment: test, error_class: kms_vault_mismatch, owner: security, purpose: primary, region: local, service: heimdall, severity: critical, status: error}
-            exp_annotations: {summary: KMS returned a key that does not match the Heimdall Vault, runbook_url: /docs/runbooks/m11-production-operations.md}
+          - exp_labels: {alertname: HalroKMSVaultMismatch, category: key-custody, cluster: standalone, environment: test, error_class: kms_vault_mismatch, owner: security, purpose: primary, region: local, service: halro, severity: critical, status: error}
+            exp_annotations: {summary: KMS returned a key that does not match the Halro Vault, runbook_url: /docs/runbooks/m11-production-operations.md}
       - eval_time: 6m
-        alertname: HeimdallKMSRecoveryNotReady
+        alertname: HalroKMSRecoveryNotReady
         exp_alerts:
-          - exp_labels: {alertname: HeimdallKMSRecoveryNotReady, category: key-custody, cluster: standalone, environment: test, owner: sre, region: local, service: heimdall, severity: critical}
-            exp_annotations: {summary: Heimdall Recovery Slot is not active and verified, runbook_url: /docs/runbooks/m11-production-operations.md}
+          - exp_labels: {alertname: HalroKMSRecoveryNotReady, category: key-custody, cluster: standalone, environment: test, owner: sre, region: local, service: halro, severity: critical}
+            exp_annotations: {summary: Halro Recovery Slot is not active and verified, runbook_url: /docs/runbooks/m11-production-operations.md}
       - eval_time: 6m
-        alertname: HeimdallKMSRecoveryVerificationExpired
+        alertname: HalroKMSRecoveryVerificationExpired
         exp_alerts:
-          - exp_labels: {alertname: HeimdallKMSRecoveryVerificationExpired, category: key-custody, cluster: standalone, environment: test, owner: sre, purpose: recovery, region: local, service: heimdall, severity: warning}
-            exp_annotations: {summary: Heimdall Recovery Slot verification is older than 90 days, runbook_url: /docs/runbooks/m11-production-operations.md}
+          - exp_labels: {alertname: HalroKMSRecoveryVerificationExpired, category: key-custody, cluster: standalone, environment: test, owner: sre, purpose: recovery, region: local, service: halro, severity: warning}
+            exp_annotations: {summary: Halro Recovery Slot verification is older than 90 days, runbook_url: /docs/runbooks/m11-production-operations.md}
       - eval_time: 16m
-        alertname: HeimdallKMSPendingRotation
+        alertname: HalroKMSPendingRotation
         exp_alerts:
-          - exp_labels: {alertname: HeimdallKMSPendingRotation, category: key-custody, cluster: standalone, environment: test, owner: sre, region: local, service: heimdall, severity: warning}
-            exp_annotations: {summary: Heimdall Key Slot rotation remains pending, runbook_url: /docs/runbooks/m11-production-operations.md}
+          - exp_labels: {alertname: HalroKMSPendingRotation, category: key-custody, cluster: standalone, environment: test, owner: sre, region: local, service: halro, severity: warning}
+            exp_annotations: {summary: Halro Key Slot rotation remains pending, runbook_url: /docs/runbooks/m11-production-operations.md}
 
   - interval: 1m
     alert_rule_test:
       - eval_time: 3m
-        alertname: HeimdallTargetDown
+        alertname: HalroTargetDown
         exp_alerts:
-          - exp_labels: {alertname: HeimdallTargetDown, category: availability, expected_target: "true", job: heimdall, owner: sre, service: heimdall, severity: critical}
-            exp_annotations: {summary: Heimdall Metrics target is down, runbook_url: /docs/observability/operations-runbook.md}
+          - exp_labels: {alertname: HalroTargetDown, category: availability, expected_target: "true", job: halro, owner: sre, service: halro, severity: critical}
+            exp_annotations: {summary: Halro Metrics target is down, runbook_url: /docs/observability/operations-runbook.md}
       - eval_time: 3m
-        alertname: HeimdallDeploymentUnhealthy
+        alertname: HalroDeploymentUnhealthy
         exp_alerts: []
 
   - interval: 1m
     input_series:
-      - series: 'heimdall_deployment_up{environment="test",region="local",cluster="standalone",deployment_id="a"}'
+      - series: 'halro_deployment_up{environment="test",region="local",cluster="standalone",deployment_id="a"}'
         values: '0x10'
-      - series: 'heimdall_deployment_up{environment="test",region="local",cluster="standalone",deployment_id="b"}'
+      - series: 'halro_deployment_up{environment="test",region="local",cluster="standalone",deployment_id="b"}'
         values: '0x10'
-      - series: 'heimdall_provider_active_requests{environment="test",region="local",cluster="standalone",provider_id="p"}'
+      - series: 'halro_provider_active_requests{environment="test",region="local",cluster="standalone",provider_id="p"}'
         values: '9x10'
-      - series: 'heimdall_provider_concurrency_limit{environment="test",region="local",cluster="standalone",provider_id="p"}'
+      - series: 'halro_provider_concurrency_limit{environment="test",region="local",cluster="standalone",provider_id="p"}'
         values: '10x10'
-      - series: 'heimdall_provider_active_requests{environment="production",region="eu",cluster="primary",provider_id="q"}'
+      - series: 'halro_provider_active_requests{environment="production",region="eu",cluster="primary",provider_id="q"}'
         values: '18x10'
-      - series: 'heimdall_provider_concurrency_limit{environment="production",region="eu",cluster="primary",provider_id="q"}'
+      - series: 'halro_provider_concurrency_limit{environment="production",region="eu",cluster="primary",provider_id="q"}'
         values: '20x10'
     alert_rule_test:
       - eval_time: 6m
-        alertname: HeimdallDeploymentUnhealthy
+        alertname: HalroDeploymentUnhealthy
         exp_alerts:
-          - exp_labels: {alertname: HeimdallDeploymentUnhealthy, category: provider, cluster: standalone, deployment_id: a, environment: test, owner: sre, region: local, service: heimdall, severity: warning}
-            exp_annotations: {summary: A probed Heimdall deployment is unhealthy, runbook_url: /docs/observability/operations-runbook.md}
-          - exp_labels: {alertname: HeimdallDeploymentUnhealthy, category: provider, cluster: standalone, deployment_id: b, environment: test, owner: sre, region: local, service: heimdall, severity: warning}
-            exp_annotations: {summary: A probed Heimdall deployment is unhealthy, runbook_url: /docs/observability/operations-runbook.md}
+          - exp_labels: {alertname: HalroDeploymentUnhealthy, category: provider, cluster: standalone, deployment_id: a, environment: test, owner: sre, region: local, service: halro, severity: warning}
+            exp_annotations: {summary: A probed Halro deployment is unhealthy, runbook_url: /docs/observability/operations-runbook.md}
+          - exp_labels: {alertname: HalroDeploymentUnhealthy, category: provider, cluster: standalone, deployment_id: b, environment: test, owner: sre, region: local, service: halro, severity: warning}
+            exp_annotations: {summary: A probed Halro deployment is unhealthy, runbook_url: /docs/observability/operations-runbook.md}
       - eval_time: 6m
-        alertname: HeimdallMultipleDeploymentsUnhealthy
+        alertname: HalroMultipleDeploymentsUnhealthy
         exp_alerts:
-          - exp_labels: {alertname: HeimdallMultipleDeploymentsUnhealthy, category: provider, cluster: standalone, environment: test, owner: sre, region: local, service: heimdall, severity: critical}
-            exp_annotations: {summary: Multiple Heimdall deployments are unhealthy, runbook_url: /docs/observability/operations-runbook.md}
+          - exp_labels: {alertname: HalroMultipleDeploymentsUnhealthy, category: provider, cluster: standalone, environment: test, owner: sre, region: local, service: halro, severity: critical}
+            exp_annotations: {summary: Multiple Halro deployments are unhealthy, runbook_url: /docs/observability/operations-runbook.md}
       - eval_time: 6m
-        alertname: HeimdallProviderCapacityPressure
+        alertname: HalroProviderCapacityPressure
         exp_alerts:
-          - exp_labels: {alertname: HeimdallProviderCapacityPressure, category: provider, cluster: standalone, environment: test, owner: sre, provider_id: p, region: local, service: heimdall, severity: warning}
-            exp_annotations: {summary: Heimdall Provider concurrency capacity is nearly exhausted, runbook_url: /docs/observability/operations-runbook.md}
-          - exp_labels: {alertname: HeimdallProviderCapacityPressure, category: provider, cluster: primary, environment: production, owner: sre, provider_id: q, region: eu, service: heimdall, severity: warning}
-            exp_annotations: {summary: Heimdall Provider concurrency capacity is nearly exhausted, runbook_url: /docs/observability/operations-runbook.md}
+          - exp_labels: {alertname: HalroProviderCapacityPressure, category: provider, cluster: standalone, environment: test, owner: sre, provider_id: p, region: local, service: halro, severity: warning}
+            exp_annotations: {summary: Halro Provider concurrency capacity is nearly exhausted, runbook_url: /docs/observability/operations-runbook.md}
+          - exp_labels: {alertname: HalroProviderCapacityPressure, category: provider, cluster: primary, environment: production, owner: sre, provider_id: q, region: eu, service: halro, severity: warning}
+            exp_annotations: {summary: Halro Provider concurrency capacity is nearly exhausted, runbook_url: /docs/observability/operations-runbook.md}
 
   - interval: 1m
     input_series:
-      - series: 'heimdall_requests_total{environment="test",region="local",cluster="standalone",status="success"}'
+      - series: 'halro_requests_total{environment="test",region="local",cluster="standalone",status="success"}'
         values: '0+1x12'
-      - series: 'heimdall_requests_total{environment="test",region="local",cluster="standalone",status="error"}'
+      - series: 'halro_requests_total{environment="test",region="local",cluster="standalone",status="error"}'
         values: '0+1x12'
-      - series: 'heimdall_fallbacks_total{environment="test",region="local",cluster="standalone"}'
+      - series: 'halro_fallbacks_total{environment="test",region="local",cluster="standalone"}'
         values: '0+1x12'
     alert_rule_test:
       - eval_time: 12m
-        alertname: HeimdallHighErrorRate
+        alertname: HalroHighErrorRate
         exp_alerts: []
       - eval_time: 12m
-        alertname: HeimdallFallbackSaturation
+        alertname: HalroFallbackSaturation
         exp_alerts: []
 
   - interval: 1m
     input_series:
-      - series: 'heimdall_requests_total{environment="test",region="local",cluster="standalone",status="success"}'
+      - series: 'halro_requests_total{environment="test",region="local",cluster="standalone",status="success"}'
         values: '0+10x5 0+10x12'
-      - series: 'heimdall_requests_total{environment="test",region="local",cluster="standalone",status="error"}'
+      - series: 'halro_requests_total{environment="test",region="local",cluster="standalone",status="error"}'
         values: '0x20'
     alert_rule_test:
       - eval_time: 16m
-        alertname: HeimdallHighErrorRate
+        alertname: HalroHighErrorRate
         exp_alerts: []
 
   - interval: 1m
     input_series:
-      - series: 'heimdall_requests_total{environment="test",region="local",cluster="standalone",status="success"}'
+      - series: 'halro_requests_total{environment="test",region="local",cluster="standalone",status="success"}'
         values: '0+50x20'
-      - series: 'heimdall_requests_total{environment="test",region="local",cluster="standalone",status="error"}'
+      - series: 'halro_requests_total{environment="test",region="local",cluster="standalone",status="error"}'
         values: '0+10x20'
-      - series: 'heimdall_fallbacks_total{environment="test",region="local",cluster="standalone"}'
+      - series: 'halro_fallbacks_total{environment="test",region="local",cluster="standalone"}'
         values: '0+20x20'
     alert_rule_test:
       - eval_time: 16m
-        alertname: HeimdallHighErrorRate
+        alertname: HalroHighErrorRate
         exp_alerts:
-          - exp_labels: {alertname: HeimdallHighErrorRate, category: traffic, cluster: standalone, environment: test, owner: sre, region: local, service: heimdall, severity: warning}
-            exp_annotations: {summary: Heimdall request error rate is elevated, runbook_url: /docs/observability/operations-runbook.md}
+          - exp_labels: {alertname: HalroHighErrorRate, category: traffic, cluster: standalone, environment: test, owner: sre, region: local, service: halro, severity: warning}
+            exp_annotations: {summary: Halro request error rate is elevated, runbook_url: /docs/observability/operations-runbook.md}
       - eval_time: 11m
-        alertname: HeimdallFallbackSaturation
+        alertname: HalroFallbackSaturation
         exp_alerts:
-          - exp_labels: {alertname: HeimdallFallbackSaturation, category: provider, cluster: standalone, environment: test, owner: sre, region: local, service: heimdall, severity: warning}
-            exp_annotations: {summary: Heimdall fallback rate is elevated, runbook_url: /docs/observability/operations-runbook.md}
+          - exp_labels: {alertname: HalroFallbackSaturation, category: provider, cluster: standalone, environment: test, owner: sre, region: local, service: halro, severity: warning}
+            exp_annotations: {summary: Halro fallback rate is elevated, runbook_url: /docs/observability/operations-runbook.md}
 
   - interval: 1m
     input_series:
-      - series: 'heimdall_usage_analytics_lagging{environment="test",region="local",cluster="standalone",instance="one"}'
+      - series: 'halro_usage_analytics_lagging{environment="test",region="local",cluster="standalone",instance="one"}'
         values: '1x20'
-      - series: 'heimdall_usage_queue_depth{environment="test",region="local",cluster="standalone",instance="one"}'
+      - series: 'halro_usage_queue_depth{environment="test",region="local",cluster="standalone",instance="one"}'
         values: '90x20'
-      - series: 'heimdall_usage_queue_capacity{environment="test",region="local",cluster="standalone",instance="one"}'
+      - series: 'halro_usage_queue_capacity{environment="test",region="local",cluster="standalone",instance="one"}'
         values: '100x20'
-      - series: 'heimdall_alert_delivery_total{environment="test",region="local",cluster="standalone",status="failed"}'
+      - series: 'halro_alert_delivery_total{environment="test",region="local",cluster="standalone",status="failed"}'
         values: '0+1x20'
     alert_rule_test:
       - eval_time: 11m
-        alertname: HeimdallUsageAnalyticsLagging
+        alertname: HalroUsageAnalyticsLagging
         exp_alerts:
-          - exp_labels: {alertname: HeimdallUsageAnalyticsLagging, category: accounting, cluster: standalone, environment: test, instance: one, owner: sre, region: local, service: heimdall, severity: warning}
-            exp_annotations: {summary: Heimdall Usage analytics is behind the Ledger, runbook_url: /docs/observability/operations-runbook.md}
+          - exp_labels: {alertname: HalroUsageAnalyticsLagging, category: accounting, cluster: standalone, environment: test, instance: one, owner: sre, region: local, service: halro, severity: warning}
+            exp_annotations: {summary: Halro Usage analytics is behind the Ledger, runbook_url: /docs/observability/operations-runbook.md}
       - eval_time: 6m
-        alertname: HeimdallLedgerQueueHigh
+        alertname: HalroLedgerQueueHigh
         exp_alerts:
-          - exp_labels: {alertname: HeimdallLedgerQueueHigh, category: accounting, cluster: standalone, environment: test, instance: one, owner: sre, region: local, service: heimdall, severity: warning}
-            exp_annotations: {summary: Heimdall Ledger queue exceeds 75 percent, runbook_url: /docs/observability/operations-runbook.md}
+          - exp_labels: {alertname: HalroLedgerQueueHigh, category: accounting, cluster: standalone, environment: test, instance: one, owner: sre, region: local, service: halro, severity: warning}
+            exp_annotations: {summary: Halro Ledger queue exceeds 75 percent, runbook_url: /docs/observability/operations-runbook.md}
       - eval_time: 16m
-        alertname: HeimdallAlertDeliveryFailing
+        alertname: HalroAlertDeliveryFailing
         exp_alerts:
-          - exp_labels: {alertname: HeimdallAlertDeliveryFailing, category: delivery, cluster: standalone, environment: test, owner: sre, region: local, service: heimdall, severity: warning, status: failed}
-            exp_annotations: {summary: Heimdall alert delivery is failing, runbook_url: /docs/observability/operations-runbook.md}
+          - exp_labels: {alertname: HalroAlertDeliveryFailing, category: delivery, cluster: standalone, environment: test, owner: sre, region: local, service: halro, severity: warning, status: failed}
+            exp_annotations: {summary: Halro alert delivery is failing, runbook_url: /docs/observability/operations-runbook.md}
 
   - interval: 1m
     input_series:
@@ -280,7 +280,7 @@ tests:
       - eval_time: 0m
         alertname: Watchdog
         exp_alerts:
-          - exp_labels: {alertname: Watchdog, category: deadman, owner: sre, service: heimdall, severity: none}
+          - exp_labels: {alertname: Watchdog, category: deadman, owner: sre, service: halro, severity: none}
             exp_annotations: {summary: Continuous signal for an independent dead-man monitor, runbook_url: /docs/observability/operations-runbook.md}
 
   # Durable write path. A slow fsync and a saturated per-project accounting lock
@@ -288,28 +288,28 @@ tests:
   # apart, so they are worth pinning.
   - interval: 1m
     input_series:
-      - series: 'heimdall_wal_sync_seconds_sum{environment="test",region="local",cluster="standalone",instance="one"}'
+      - series: 'halro_wal_sync_seconds_sum{environment="test",region="local",cluster="standalone",instance="one"}'
         values: '0+1x20'
-      - series: 'heimdall_wal_sync_seconds_count{environment="test",region="local",cluster="standalone",instance="one"}'
+      - series: 'halro_wal_sync_seconds_count{environment="test",region="local",cluster="standalone",instance="one"}'
         values: '0+10x20'
-      - series: 'heimdall_accounting_project_lock_wait_seconds_sum{environment="test",region="local",cluster="standalone",instance="one"}'
+      - series: 'halro_accounting_project_lock_wait_seconds_sum{environment="test",region="local",cluster="standalone",instance="one"}'
         values: '0+3x20'
-      - series: 'heimdall_accounting_project_lock_wait_seconds_count{environment="test",region="local",cluster="standalone",instance="one"}'
+      - series: 'halro_accounting_project_lock_wait_seconds_count{environment="test",region="local",cluster="standalone",instance="one"}'
         values: '0+10x20'
     alert_rule_test:
       # 0.1s per fsync, sustained.
       - eval_time: 17m
-        alertname: HeimdallWALSyncSlow
+        alertname: HalroWALSyncSlow
         exp_alerts:
-          - exp_labels: {alertname: HeimdallWALSyncSlow, category: accounting, cluster: standalone, environment: test, instance: one, owner: sre, region: local, service: heimdall, severity: warning}
-            exp_annotations: {summary: Heimdall Ledger fsync is slow enough to cap accounting throughput, runbook_url: /docs/observability/operations-runbook.md}
+          - exp_labels: {alertname: HalroWALSyncSlow, category: accounting, cluster: standalone, environment: test, instance: one, owner: sre, region: local, service: halro, severity: warning}
+            exp_annotations: {summary: Halro Ledger fsync is slow enough to cap accounting throughput, runbook_url: /docs/observability/operations-runbook.md}
       # 0.3s mean wait per acquisition, sustained.
       - eval_time: 21m
-        alertname: HeimdallAccountingProjectLockSaturated
+        alertname: HalroAccountingProjectLockSaturated
         exp_alerts:
-          - exp_labels: {alertname: HeimdallAccountingProjectLockSaturated, category: accounting, cluster: standalone, environment: test, instance: one, owner: sre, region: local, service: heimdall, severity: warning}
-            exp_annotations: {summary: Heimdall requests are queueing on one project's accounting lock, runbook_url: /docs/observability/operations-runbook.md}
+          - exp_labels: {alertname: HalroAccountingProjectLockSaturated, category: accounting, cluster: standalone, environment: test, instance: one, owner: sre, region: local, service: halro, severity: warning}
+            exp_annotations: {summary: Halro requests are queueing on one project's accounting lock, runbook_url: /docs/observability/operations-runbook.md}
       # Neither has been true long enough yet at 6m.
       - eval_time: 6m
-        alertname: HeimdallAccountingProjectLockSaturated
+        alertname: HalroAccountingProjectLockSaturated
         exp_alerts: []

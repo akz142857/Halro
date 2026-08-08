@@ -9,7 +9,7 @@ import (
 )
 
 // ResponseRequest is the deliberately small, stateless Responses API surface
-// implemented by Heimdall. Unknown fields are rejected by DecodeResponseRequest.
+// implemented by Halro. Unknown fields are rejected by DecodeResponseRequest.
 type ResponseRequest struct {
 	Model             string              `json:"model"`
 	Input             json.RawMessage     `json:"input"`

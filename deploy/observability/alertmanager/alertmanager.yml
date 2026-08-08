@@ -15,8 +15,8 @@ route:
       repeat_interval: 1m
 
 inhibit_rules:
-  - source_matchers: [alertname="HeimdallMultipleDeploymentsUnhealthy", severity="critical"]
-    target_matchers: [alertname="HeimdallDeploymentUnhealthy", severity="warning"]
+  - source_matchers: [alertname="HalroMultipleDeploymentsUnhealthy", severity="critical"]
+    target_matchers: [alertname="HalroDeploymentUnhealthy", severity="warning"]
     equal: [environment, cluster]
   - source_matchers: [alertname="PrometheusTSDBDiskCritical", severity="critical"]
     target_matchers: [alertname="PrometheusTSDBDiskHigh", severity="warning"]

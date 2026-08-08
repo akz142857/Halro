@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	corekms "github.com/akz142857/Heimdall/internal/kms"
+	corekms "github.com/akz142857/Halro/internal/kms"
 	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/smithy-go"
 )

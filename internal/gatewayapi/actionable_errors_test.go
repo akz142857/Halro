@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akz142857/Heimdall/internal/openaiapi"
+	"github.com/akz142857/Halro/internal/openaiapi"
 )
 
 // The decoders say exactly what is wrong and where. Collapsing that into
@@ -92,7 +92,7 @@ func TestDecodeProblemFallsBackWhenTheErrorSaysNothing(t *testing.T) {
 }
 
 func TestIsFieldPathAcceptsOnlyPathCharacters(t *testing.T) {
-	for _, candidate := range []string{"Heimdall", "'x'", "3", "a b", "föö"} {
+	for _, candidate := range []string{"Halro", "'x'", "3", "a b", "föö"} {
 		if isFieldPath(candidate) {
 			t.Fatalf("%q was accepted as a field path", candidate)
 		}

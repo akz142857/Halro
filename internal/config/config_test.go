@@ -25,7 +25,7 @@ tls:
   key_file: ""
 storage:
   data_dir: "./data"
-  metadata_file: "heimdall.db"
+  metadata_file: "halro.db"
   master_key:
     mode: file
     file: "./master.key"

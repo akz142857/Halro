@@ -26,8 +26,8 @@ func TestEvaluateDistinguishesSmokeFromReleaseAndEnforcesBounds(t *testing.T) {
 }
 
 func TestParseMetricsIgnoresLabels(t *testing.T) {
-	metrics := parseMetrics("# HELP x x\nheimdall_usage_queue_depth 3\nheimdall_requests_total{status=\"ok\"} 7\n")
-	if metrics["heimdall_usage_queue_depth"] != 3 || len(metrics) != 1 {
+	metrics := parseMetrics("# HELP x x\nhalro_usage_queue_depth 3\nhalro_requests_total{status=\"ok\"} 7\n")
+	if metrics["halro_usage_queue_depth"] != 3 || len(metrics) != 1 {
 		t.Fatalf("unexpected metrics: %#v", metrics)
 	}
 }

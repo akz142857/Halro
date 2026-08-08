@@ -7,17 +7,17 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/config"
-	"github.com/akz142857/Heimdall/internal/domain"
-	"github.com/akz142857/Heimdall/internal/provider"
-	anthropicprovider "github.com/akz142857/Heimdall/internal/provider/anthropic"
-	bedrockprovider "github.com/akz142857/Heimdall/internal/provider/bedrock"
-	bedrockmantleprovider "github.com/akz142857/Heimdall/internal/provider/bedrockmantle"
-	geminiprovider "github.com/akz142857/Heimdall/internal/provider/gemini"
-	openaiprovider "github.com/akz142857/Heimdall/internal/provider/openai"
-	"github.com/akz142857/Heimdall/internal/safetransport"
-	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
-	"github.com/akz142857/Heimdall/internal/vault"
+	"github.com/akz142857/Halro/internal/config"
+	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/provider"
+	anthropicprovider "github.com/akz142857/Halro/internal/provider/anthropic"
+	bedrockprovider "github.com/akz142857/Halro/internal/provider/bedrock"
+	bedrockmantleprovider "github.com/akz142857/Halro/internal/provider/bedrockmantle"
+	geminiprovider "github.com/akz142857/Halro/internal/provider/gemini"
+	openaiprovider "github.com/akz142857/Halro/internal/provider/openai"
+	"github.com/akz142857/Halro/internal/safetransport"
+	boltstore "github.com/akz142857/Halro/internal/store/bolt"
+	"github.com/akz142857/Halro/internal/vault"
 )
 
 func (r *Runtime) reloadProviderRegistry(ctx context.Context) error {

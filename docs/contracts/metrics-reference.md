@@ -10,7 +10,7 @@ Development and upgrade-compatible loopback installations may use the legacy,
 purpose-separated token derived from the Master Key:
 
 ```text
-heimdall metrics token --config ./config.yaml
+halro metrics token --config ./config.yaml
 ```
 
 Production uses `metrics.credential_file`. Initialize or rotate it offline
@@ -18,16 +18,16 @@ from shell history-safe automation and redirect stdout directly into the
 Prometheus secret store:
 
 ```text
-heimdall metrics rotate --config ./config.yaml --overlap 10m
-heimdall metrics list --config ./config.yaml
-heimdall metrics revoke --config ./config.yaml --version 1
-heimdall metrics verify-audit --config ./config.yaml
+halro metrics rotate --config ./config.yaml --overlap 10m
+halro metrics list --config ./config.yaml
+halro metrics revoke --config ./config.yaml --version 1
+halro metrics verify-audit --config ./config.yaml
 ```
 
 The credential file stores SHA-256 hashes, version/epoch, lifecycle state, and
 timestamps, never plaintext tokens. Rotation permits one active token and
 bounded retiring tokens; revocation is independent of the Master Key and is
-enforced on the next request without restarting Heimdall. A separate append-only
+enforced on the next request without restarting Halro. A separate append-only
 revocation ledger prevents an older credential-file restore from reauthorizing
 a revoked version. Credential, revocation, audit, and lock files are mode
 `0600`; the first three are backed up as security state. Rotation and
@@ -48,70 +48,70 @@ an authentication boundary.
 
 | Metric | Type | Labels |
 |---|---|---|
-| `heimdall_requests_total` | counter | `status` |
-| `heimdall_attempts_total` | counter | `status` |
-| `heimdall_tokens_total` | counter | `direction` |
-| `heimdall_cost_usd_total` | counter | none |
-| `heimdall_request_duration_seconds` | summary sum/count | none |
-| `heimdall_attempt_duration_seconds` | summary sum/count | none |
-| `heimdall_request_latency_seconds` | classic histogram | `le` |
-| `heimdall_attempt_latency_seconds` | classic histogram | `le` |
-| `heimdall_active_requests` | gauge | none |
-| `heimdall_source_rate_limited_total` | counter | none |
-| `heimdall_source_rate_limit_overflow_total` | counter | none |
-| `heimdall_fallbacks_total` | counter | none |
-| `heimdall_usage_queue_depth` | gauge | none |
-| `heimdall_usage_queue_capacity` | gauge | none |
-| `heimdall_accounting_pending_leases` | gauge | none |
-| `heimdall_accounting_oldest_pending_lease_age_seconds` | gauge | none |
-| `heimdall_accounting_recovery_total` | counter | `status` |
-| `heimdall_pricing_quarantined_deployments` | gauge | none |
-| `heimdall_pricing_unknown_attempts_total` | counter | none |
-| `heimdall_pricing_recovery_pending_intents` | gauge | none |
-| `heimdall_wal_append_errors_total` | counter | none |
-| `heimdall_wal_append_records_total` | counter | none |
-| `heimdall_wal_append_batches_total` | counter | none |
-| `heimdall_wal_sync_seconds` | summary sum/count | none |
-| `heimdall_accounting_project_lock_acquisitions_total` | counter | none |
-| `heimdall_accounting_project_lock_wait_seconds` | summary sum/count | none |
-| `heimdall_accounting_project_lock_held_seconds` | summary sum/count | none |
-| `heimdall_metadata_batch_calls_total` | counter | none |
-| `heimdall_metadata_batch_transactions_total` | counter | none |
-| `heimdall_metadata_page_writes_total` | counter | none |
-| `heimdall_metadata_page_write_seconds_total` | counter | none |
-| `heimdall_metadata_free_pages` | gauge | none |
-| `heimdall_metadata_pending_pages` | gauge | none |
-| `heimdall_usage_analytics_queue_depth` | gauge | none |
-| `heimdall_usage_analytics_dropped_total` | counter | none |
-| `heimdall_usage_analytics_lagging` | gauge | none |
-| `heimdall_alert_delivery_total` | counter | `status` |
-| `heimdall_alert_queue_depth` | gauge | none |
-| `heimdall_token_guard_events_dropped_total` | counter | none |
-| `heimdall_kms_calls_total` | counter | `operation`, `status`, `error_class` |
-| `heimdall_kms_call_duration_seconds` | summary sum/count | `operation`, `status`, `error_class` |
-| `heimdall_kms_unlock_total` | counter | `purpose`, `status`, `error_class` |
-| `heimdall_kms_automatic_fallback_total` | counter | none |
-| `heimdall_kms_recovery_last_used_timestamp_seconds` | gauge | none |
-| `heimdall_kms_descriptor_valid` | gauge | none |
-| `heimdall_kms_recovery_ready` | gauge | none |
-| `heimdall_kms_pending_rotation_slots` | gauge | none |
-| `heimdall_kms_slot_state` | gauge | `purpose`, `state` |
-| `heimdall_kms_slot_verified_timestamp_seconds` | gauge | `purpose` |
-| `heimdall_provider_up` | gauge | `provider_type` |
-| `heimdall_policy_rejections_total` | counter | `reason` |
-| `heimdall_provider_active_requests` | gauge | `provider_id` |
-| `heimdall_provider_concurrency_limit` | gauge | `provider_id` |
-| `heimdall_deployment_active_requests` | gauge | `deployment_id` |
-| `heimdall_deployment_concurrency_limit` | gauge | `deployment_id` |
-| `heimdall_deployment_up` | gauge | `deployment_id` |
-| `heimdall_build_info` | gauge | `version`, `commit` |
-| `heimdall_tzdata_info` | gauge | `source`, `version`, `fingerprint` |
-| `heimdall_accounting_timezone_version` | gauge | none |
-| `heimdall_accounting_period_end_seconds` | gauge | none |
-| `heimdall_metrics_auth_failures_total` | counter | none |
-| `heimdall_metrics_scrape_rejected_total` | counter | none |
-| `heimdall_metrics_render_errors_total` | counter | none |
-| `heimdall_process_goroutines` | gauge | none |
+| `halro_requests_total` | counter | `status` |
+| `halro_attempts_total` | counter | `status` |
+| `halro_tokens_total` | counter | `direction` |
+| `halro_cost_usd_total` | counter | none |
+| `halro_request_duration_seconds` | summary sum/count | none |
+| `halro_attempt_duration_seconds` | summary sum/count | none |
+| `halro_request_latency_seconds` | classic histogram | `le` |
+| `halro_attempt_latency_seconds` | classic histogram | `le` |
+| `halro_active_requests` | gauge | none |
+| `halro_source_rate_limited_total` | counter | none |
+| `halro_source_rate_limit_overflow_total` | counter | none |
+| `halro_fallbacks_total` | counter | none |
+| `halro_usage_queue_depth` | gauge | none |
+| `halro_usage_queue_capacity` | gauge | none |
+| `halro_accounting_pending_leases` | gauge | none |
+| `halro_accounting_oldest_pending_lease_age_seconds` | gauge | none |
+| `halro_accounting_recovery_total` | counter | `status` |
+| `halro_pricing_quarantined_deployments` | gauge | none |
+| `halro_pricing_unknown_attempts_total` | counter | none |
+| `halro_pricing_recovery_pending_intents` | gauge | none |
+| `halro_wal_append_errors_total` | counter | none |
+| `halro_wal_append_records_total` | counter | none |
+| `halro_wal_append_batches_total` | counter | none |
+| `halro_wal_sync_seconds` | summary sum/count | none |
+| `halro_accounting_project_lock_acquisitions_total` | counter | none |
+| `halro_accounting_project_lock_wait_seconds` | summary sum/count | none |
+| `halro_accounting_project_lock_held_seconds` | summary sum/count | none |
+| `halro_metadata_batch_calls_total` | counter | none |
+| `halro_metadata_batch_transactions_total` | counter | none |
+| `halro_metadata_page_writes_total` | counter | none |
+| `halro_metadata_page_write_seconds_total` | counter | none |
+| `halro_metadata_free_pages` | gauge | none |
+| `halro_metadata_pending_pages` | gauge | none |
+| `halro_usage_analytics_queue_depth` | gauge | none |
+| `halro_usage_analytics_dropped_total` | counter | none |
+| `halro_usage_analytics_lagging` | gauge | none |
+| `halro_alert_delivery_total` | counter | `status` |
+| `halro_alert_queue_depth` | gauge | none |
+| `halro_token_guard_events_dropped_total` | counter | none |
+| `halro_kms_calls_total` | counter | `operation`, `status`, `error_class` |
+| `halro_kms_call_duration_seconds` | summary sum/count | `operation`, `status`, `error_class` |
+| `halro_kms_unlock_total` | counter | `purpose`, `status`, `error_class` |
+| `halro_kms_automatic_fallback_total` | counter | none |
+| `halro_kms_recovery_last_used_timestamp_seconds` | gauge | none |
+| `halro_kms_descriptor_valid` | gauge | none |
+| `halro_kms_recovery_ready` | gauge | none |
+| `halro_kms_pending_rotation_slots` | gauge | none |
+| `halro_kms_slot_state` | gauge | `purpose`, `state` |
+| `halro_kms_slot_verified_timestamp_seconds` | gauge | `purpose` |
+| `halro_provider_up` | gauge | `provider_type` |
+| `halro_policy_rejections_total` | counter | `reason` |
+| `halro_provider_active_requests` | gauge | `provider_id` |
+| `halro_provider_concurrency_limit` | gauge | `provider_id` |
+| `halro_deployment_active_requests` | gauge | `deployment_id` |
+| `halro_deployment_concurrency_limit` | gauge | `deployment_id` |
+| `halro_deployment_up` | gauge | `deployment_id` |
+| `halro_build_info` | gauge | `version`, `commit` |
+| `halro_tzdata_info` | gauge | `source`, `version`, `fingerprint` |
+| `halro_accounting_timezone_version` | gauge | none |
+| `halro_accounting_period_end_seconds` | gauge | none |
+| `halro_metrics_auth_failures_total` | counter | none |
+| `halro_metrics_scrape_rejected_total` | counter | none |
+| `halro_metrics_render_errors_total` | counter | none |
+| `halro_process_goroutines` | gauge | none |
 | `go_goroutines` | gauge | none |
 | `go_memstats_heap_alloc_bytes` | gauge | none |
 | `go_memstats_gc_cycles_total` | counter | none |
@@ -121,13 +121,13 @@ an authentication boundary.
 
 Two kinds of counter are exported here and they do not reset together.
 
-`heimdall_requests_total`, `heimdall_attempts_total`, `heimdall_tokens_total` and
-`heimdall_cost_usd_total` are read-model totals: startup replays the Ledger into
+`halro_requests_total`, `halro_attempts_total`, `halro_tokens_total` and
+`halro_cost_usd_total` are read-model totals: startup replays the Ledger into
 the Usage aggregate, so they carry the whole history of the data directory
 across restarts.
 
-`heimdall_wal_append_*`, `heimdall_wal_sync_seconds`,
-`heimdall_accounting_project_lock_*` and `heimdall_metadata_*` count work this
+`halro_wal_append_*`, `halro_wal_sync_seconds`,
+`halro_accounting_project_lock_*` and `halro_metadata_*` count work this
 *process* performed, so they start at zero on every restart — replay appends
 nothing and takes no locks.
 
@@ -142,16 +142,16 @@ Histogram buckets are 10, 25, 50, 100, 250, and 500 milliseconds, then 1,
 events and persisted in the Usage checkpoint, so replay and catch-up preserve
 the exact distribution.
 
-`heimdall_source_rate_limited_total` counts requests shed by the per-source
+`halro_source_rate_limited_total` counts requests shed by the per-source
 Gateway limiter. It carries no source label for the same reason a source IP is
 excluded everywhere else here: that label is both unbounded and a disclosure of
 caller addresses through the Metrics port. A rising
-`heimdall_source_rate_limit_overflow_total` means distinct sources per minute
+`halro_source_rate_limit_overflow_total` means distinct sources per minute
 have outgrown `gateway.source_rate_limit.max_tracked_sources`, so callers past
 the ceiling are sharing one budget and may be shed while inside their own —
 raise the ceiling rather than the budget.
 
 User-controlled Project, Key, Route, model, request ID, source IP, and raw error
 values are deliberately excluded. Provider/Deployment IDs are bounded managed
-identifiers. `heimdall_deployment_up` is absent until the first active probe;
+identifiers. `halro_deployment_up` is absent until the first active probe;
 absence must not be interpreted as healthy.

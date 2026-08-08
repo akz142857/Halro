@@ -3,8 +3,8 @@ package app
 import (
 	"net/http"
 
-	"github.com/akz142857/Heimdall/docs/runbooks"
-	"github.com/akz142857/Heimdall/internal/config"
+	"github.com/akz142857/Halro/docs/runbooks"
+	"github.com/akz142857/Halro/internal/config"
 )
 
 func (r *Runtime) adminMasterKeyLifecycleRunbook(writer http.ResponseWriter, request *http.Request) {

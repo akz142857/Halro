@@ -13,7 +13,7 @@ const (
 	VersionHeader     = "anthropic-version"
 	BetaHeader        = "anthropic-beta"
 	SupportedVersion  = "2023-06-01"
-	RouteModeHeader   = "Heimdall-Route-Mode"
+	RouteModeHeader   = "Halro-Route-Mode"
 	MaxRequestBytes   = 4 << 20
 	MaxContentBlocks  = 4096
 	MaxMessages       = 100000
@@ -34,7 +34,7 @@ func ParseExecutionMode(value string) (ExecutionMode, error) {
 	case ModeNative:
 		return ModeNative, nil
 	default:
-		return "", errors.New("Heimdall-Route-Mode must be portable or native")
+		return "", errors.New("Halro-Route-Mode must be portable or native")
 	}
 }
 

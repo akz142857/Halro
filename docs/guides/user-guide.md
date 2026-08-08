@@ -1,6 +1,6 @@
-# Heimdall User Guide
+# Halro User Guide
 
-This guide covers trying Heimdall locally, configuring it as an administrator,
+This guide covers trying Halro locally, configuring it as an administrator,
 and connecting an application to it. For production deployment, upgrades, backup
 and restore, and security hardening, read the [Operator Guide](operator-guide.md)
 alongside it.
@@ -37,8 +37,8 @@ upstream model name.
 Get the source and enter the directory:
 
 ```bash
-git clone https://github.com/akz142857/Heimdall.git
-cd Heimdall
+git clone https://github.com/akz142857/Halro.git
+cd Halro
 ```
 
 First run needs one command:
@@ -47,7 +47,7 @@ First run needs one command:
 make start
 ```
 
-It installs the frontend dependencies if needed, builds `bin/heimdall`, writes a
+It installs the frontend dependencies if needed, builds `bin/halro`, writes a
 `config.yaml` that listens on the loopback address only, initializes encrypted
 local storage, and starts the service. The React assets are embedded in the
 binary, so there is no separate frontend process at runtime.
@@ -79,7 +79,7 @@ use a passphrase noticeably longer than the minimum.
 Automatic initialization creates:
 
 - `master.key`: the local Master Key, mode `0600`;
-- `data/heimdall.db`: metadata;
+- `data/halro.db`: metadata;
 - `data/ledger/`: the authoritative usage ledger;
 - `data/audit/`: the audit chain;
 - Usage checkpoints and Parquet data, written as the system runs.
@@ -87,7 +87,7 @@ Automatic initialization creates:
 Back up the Master Key separately from the data directory. If it is lost,
 Provider credentials cannot be recovered. Running `make start` again never
 overwrites configuration, the Master Key, or data. If the state is partial —
-only the Master Key, or only the metadata — Heimdall refuses to repair it
+only the Master Key, or only the metadata — Halro refuses to repair it
 automatically and asks for the matching files to be restored by hand.
 
 If Admin listens on a non-loopback address over TLS, startup also prints a
@@ -140,10 +140,10 @@ live in server-side metadata only, never in browser storage.
 ### 2.5 Headless and automated deployment
 
 ```bash
-./bin/heimdall init --config ./configs/config.example.yaml
-printf '%s' "$ADMIN_PASSWORD" | ./bin/heimdall admin bootstrap \
+./bin/halro init --config ./configs/config.example.yaml
+printf '%s' "$ADMIN_PASSWORD" | ./bin/halro admin bootstrap \
   --config ./configs/config.example.yaml --username admin
-./bin/heimdall serve --config ./configs/config.example.yaml
+./bin/halro serve --config ./configs/config.example.yaml
 ```
 
 These offline commands remain the path for browserless servers, CI, automated
@@ -173,7 +173,7 @@ Credential, Provider, Deployment, Route, Project, and one Gateway Key:
 ```bash
 read -r -s OPENAI_API_KEY
 printf '\n'
-printf '%s' "$OPENAI_API_KEY" | ./bin/heimdall bootstrap \
+printf '%s' "$OPENAI_API_KEY" | ./bin/halro bootstrap \
   --config ./configs/config.example.yaml \
   --provider-type openai \
   --provider-base-url https://api.openai.com \
@@ -238,14 +238,14 @@ A Bedrock credential is a JSON secret:
 {"access_key_id":"...","secret_access_key":"...","session_token":"...","region":"us-east-1"}
 ```
 
-`session_token` is optional and `region` must match the endpoint. Heimdall never
+`session_token` is optional and `region` must match the endpoint. Halro never
 reads IMDS and never falls back to the host's default AWS credential chain.
 
 A Mantle credential holds the Bedrock API key directly rather than that JSON.
 Choose the Mantle access surface when creating the credential, then create a
 separate Provider per protocol; one Provider binds one profile. Mantle Responses
 always calls AWS with `store:false`, so it never creates 30-day stored state
-that Heimdall cannot manage. Runtime and Mantle keep their credentials,
+that Halro cannot manage. Runtime and Mantle keep their credentials,
 concurrency ceilings, and capability evidence separate.
 
 ## 4. Calling the Gateway
@@ -255,32 +255,32 @@ concurrency ceilings, and capability evidence separate.
 Keep the key out of shell history:
 
 ```bash
-read -r -s HEIMDALL_GATEWAY_KEY
+read -r -s HALRO_GATEWAY_KEY
 printf '\n'
-export HEIMDALL_GATEWAY_KEY
+export HALRO_GATEWAY_KEY
 ```
 
 Clear it when you are done:
 
 ```bash
-unset HEIMDALL_GATEWAY_KEY
+unset HALRO_GATEWAY_KEY
 ```
 
 ### 4.2 A non-streaming request with curl
 
 Set `max_completion_tokens` explicitly. It bounds the upstream output, and it
-bounds the conservative estimate Heimdall settles at when a call's outcome is
+bounds the conservative estimate Halro settles at when a call's outcome is
 unclear:
 
 ```bash
 curl http://127.0.0.1:8080/v1/chat/completions \
-  -H "Authorization: Bearer $HEIMDALL_GATEWAY_KEY" \
+  -H "Authorization: Bearer $HALRO_GATEWAY_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "chat",
     "max_completion_tokens": 256,
     "messages": [
-      {"role": "user", "content": "Introduce Heimdall in one sentence."}
+      {"role": "user", "content": "Introduce Halro in one sentence."}
     ]
   }'
 ```
@@ -289,7 +289,7 @@ curl http://127.0.0.1:8080/v1/chat/completions \
 
 ```bash
 curl -N http://127.0.0.1:8080/v1/chat/completions \
-  -H "Authorization: Bearer $HEIMDALL_GATEWAY_KEY" \
+  -H "Authorization: Bearer $HALRO_GATEWAY_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "chat",
@@ -304,7 +304,7 @@ curl -N http://127.0.0.1:8080/v1/chat/completions \
 
 The stream is standard SSE and ends with `data: [DONE]`. Before the first
 content event, a retry or fallback is safe and may happen; once content has
-started reaching the client Heimdall will not switch providers, because that
+started reaching the client Halro will not switch providers, because that
 would splice two different answers together.
 
 ### 4.4 Embeddings
@@ -314,9 +314,9 @@ a real embedding model upstream:
 
 ```bash
 curl http://127.0.0.1:8080/v1/embeddings \
-  -H "Authorization: Bearer $HEIMDALL_GATEWAY_KEY" \
+  -H "Authorization: Bearer $HALRO_GATEWAY_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"model":"embedding","input":"Heimdall Gateway"}'
+  -d '{"model":"embedding","input":"Halro Gateway"}'
 ```
 
 Chat and embeddings normally want separate deployments and separate public
@@ -327,7 +327,7 @@ pinned to `amazon.titan-embed-text-v2:0` and currently accepts a single string,
 float output, and 256/512/1024 dimensions only. Arrays, token arrays, `base64`,
 `user`, and other dimensions are refused before AWS is contacted. For batches,
 call once per item from the client and control the concurrency yourself —
-Heimdall does not fan out behind your back.
+Halro does not fan out behind your back.
 
 ### 4.5 Python OpenAI SDK
 
@@ -336,7 +336,7 @@ import os
 from openai import OpenAI
 
 client = OpenAI(
-    api_key=os.environ["HEIMDALL_GATEWAY_KEY"],
+    api_key=os.environ["HALRO_GATEWAY_KEY"],
     base_url="http://127.0.0.1:8080/v1",
     max_retries=0,
 )
@@ -355,7 +355,7 @@ print(response.choices[0].message.content)
 import OpenAI from "openai";
 
 const client = new OpenAI({
-  apiKey: process.env.HEIMDALL_GATEWAY_KEY,
+  apiKey: process.env.HALRO_GATEWAY_KEY,
   baseURL: "http://127.0.0.1:8080/v1",
   maxRetries: 0,
 });
@@ -406,7 +406,7 @@ price_unavailable` rather than a confident `$0.00`; only an explicit `free`
 version means a known cost of zero.
 
 A network timeout or a dropped connection can leave it genuinely unknown whether
-the provider processed a request. Heimdall settles those conservatively, bounded
+the provider processed a request. Halro settles those conservatively, bounded
 by the request's maximum output tokens and by what it actually delivered, and
 marks the result `estimated`. The Dashboard's headline token count shows only
 provider-reported usage, with the estimated upper bound displayed separately;
@@ -470,17 +470,17 @@ A bearer token is required by default. It is derived from the Master Key and is
 never stored in YAML:
 
 ```bash
-./bin/heimdall metrics token --config ./configs/config.example.yaml
+./bin/halro metrics token --config ./configs/config.example.yaml
 ```
 
 Calling it:
 
 ```bash
-read -r -s HEIMDALL_METRICS_TOKEN
+read -r -s HALRO_METRICS_TOKEN
 printf '\n'
 curl http://127.0.0.1:9090/metrics \
-  -H "Authorization: Bearer $HEIMDALL_METRICS_TOKEN"
-unset HEIMDALL_METRICS_TOKEN
+  -H "Authorization: Bearer $HALRO_METRICS_TOKEN"
+unset HALRO_METRICS_TOKEN
 ```
 
 The full list is in the [Metrics reference](../contracts/metrics-reference.md).
@@ -491,9 +491,9 @@ In production, set `metrics.credential_file` so the metrics credential can be
 rotated and revoked independently of the Master Key:
 
 ```bash
-./bin/heimdall metrics rotate --config ./config.yaml --overlap 10m
-./bin/heimdall metrics list --config ./config.yaml
-./bin/heimdall metrics revoke --config ./config.yaml --version 1
+./bin/halro metrics rotate --config ./config.yaml --overlap 10m
+./bin/halro metrics list --config ./config.yaml
+./bin/halro metrics revoke --config ./config.yaml --version 1
 ```
 
 `rotate` prints the new token once on standard output; write it straight into
@@ -526,10 +526,10 @@ Internal keys can also be created or disabled offline while the service is
 stopped:
 
 ```bash
-./bin/heimdall key create --config ./configs/config.example.yaml \
+./bin/halro key create --config ./configs/config.example.yaml \
   --project-id prj_... --name team-a
 
-./bin/heimdall key disable --config ./configs/config.example.yaml \
+./bin/halro key disable --config ./configs/config.example.yaml \
   --key-id key_...
 ```
 
@@ -539,7 +539,7 @@ The console offers a separate "media and resources" profile for OpenAI, and
 Titan Image, Cohere Rerank, or Nova Reel Async profiles for Bedrock. Do not
 combine several protocol capabilities into one Provider. Files, Batches, and
 Async creation requests must carry an `Idempotency-Key`; file uploads must also
-carry `Heimdall-Route`. A resource ID is visible only inside the project that
+carry `Halro-Route`. A resource ID is visible only inside the project that
 created it, and reads and deletes always return to the original Provider,
 Deployment, profile, and region. Bedrock async jobs cannot currently be
 cancelled: the API answers `provider_cancel_unsupported` rather than reporting a
@@ -564,17 +564,17 @@ Create an encrypted backup offline:
 ```bash
 umask 077
 openssl rand 32 > backup.key
-./bin/heimdall backup create \
+./bin/halro backup create \
   --config ./configs/config.example.yaml \
-  --output ./heimdall.hmbk \
+  --output ./halro.hmbk \
   --key-file ./backup.key
 ```
 
 Verify it:
 
 ```bash
-./bin/heimdall backup verify \
-  --file ./heimdall.hmbk \
+./bin/halro backup verify \
+  --file ./halro.hmbk \
   --key-file ./backup.key
 ```
 
@@ -592,7 +592,7 @@ Stop the service before restoring, and follow
 Run the read-only diagnostic with the service stopped:
 
 ```bash
-./bin/heimdall doctor --config ./configs/config.example.yaml
+./bin/halro doctor --config ./configs/config.example.yaml
 ```
 
 Common errors:
@@ -607,7 +607,7 @@ Common errors:
 | `502 provider_error` | The provider endpoint, credential, model name, network, and the connection test |
 | `EST.` on the Dashboard | Provider usage was missing or the call's outcome was unclear; it is not confirmed consumption |
 | Cost shows `$0.00` | Whether the price version is explicitly `free`; unknown prices are not counted as known cost |
-| Data directory locked | Another Heimdall process or offline command holds it; do not delete the lock file to get around it |
+| Data directory locked | Another Halro process or offline command holds it; do not delete the lock file to get around it |
 | Readiness failing | Accounting, pricing quarantine, WAL append errors, disk space, and usage lag |
 
 ### 12.1 Price versions, historical cost, and price proposals
@@ -621,7 +621,7 @@ Common errors:
   tool may only submit a proposal carrying a source digest, a model and region
   match, warnings, and an expiry — it cannot change a price.
 - After checking the source, an administrator re-authenticates with the current
-  password (plus TOTP where MFA is enabled) and adopts it explicitly. Heimdall
+  password (plus TOTP where MFA is enabled) and adopts it explicitly. Halro
   then creates a new immutable price version and writes it to the audit chain.
   An ambiguous or expired proposal cannot be adopted.
 - If an old backup is restored after a scheduled price has passed its effective

@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/app"
-	"github.com/akz142857/Heimdall/internal/config"
-	"github.com/akz142857/Heimdall/internal/hostsecurity"
-	"github.com/akz142857/Heimdall/internal/masterkey"
+	"github.com/akz142857/Halro/internal/app"
+	"github.com/akz142857/Halro/internal/config"
+	"github.com/akz142857/Halro/internal/hostsecurity"
+	"github.com/akz142857/Halro/internal/masterkey"
 	"gopkg.in/yaml.v3"
 )
 

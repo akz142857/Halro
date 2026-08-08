@@ -4,28 +4,28 @@
 
 ## 1. 发布前基线
 
-- 使用单一 `heimdall` artifact；AWS SDK 仅存在于 `internal/kms/awskms` Adapter 边界。
+- 使用单一 `halro` artifact；AWS SDK 仅存在于 `internal/kms/awskms` Adapter 边界。
 - 生产配置使用 `storage.master_key.mode: key_slots`，Primary 与 Recovery 是两个独立 customer-managed symmetric KMS Keys，且至少在 Key、Policy/Role、账号、区域或管理边界之一隔离。
 - 日常 Runtime Role 仅有 Primary `kms:Decrypt`；Recovery Role 不与日常 workload 关联；Lifecycle Role 离线使用。
 - 先渲染并评审 `deploy/aws-kms/` 的 IAM/Key Policy 模板。必须使用精确 Key ARN 和 Encryption Context，禁止 `Resource: *` 的身份策略。
-- 运行 `heimdall config check`、`doctor --no-kms`，再在目标 Workload Identity 下运行完整 `doctor`。
+- 运行 `halro config check`、`doctor --no-kms`，再在目标 Workload Identity 下运行完整 `doctor`。
 - 主机/容器必须禁 core dump、pprof、自动 crash upload 和非必要调试能力。进程启动在解锁 Master Key 前验证 `RLIMIT_CORE=0`；Linux 同时设置 non-dumpable。任何加固失败都阻止启动。
-- Heimdall 没有注册 pprof endpoint，也没有 crash-upload client。Go managed heap 不能安全承诺 `mlock`、确定性擦除或按 slice 生命周期实施 `MADV_DONTDUMP`：对 Go heap 页直接 madvise 可能连带无关对象，因此当前明确不启用；这项剩余风险由禁 core、Linux non-dumpable、ptrace/capability 隔离、节点隔离和短生命周期 `clear()` 缓解。
+- Halro 没有注册 pprof endpoint，也没有 crash-upload client。Go managed heap 不能安全承诺 `mlock`、确定性擦除或按 slice 生命周期实施 `MADV_DONTDUMP`：对 Go heap 页直接 madvise 可能连带无关对象，因此当前明确不启用；这项剩余风险由禁 core、Linux non-dumpable、ptrace/capability 隔离、节点隔离和短生命周期 `clear()` 缓解。
 
 ## 2. Kubernetes / EKS
 
-以 `deploy/kubernetes/heimdall-aws-kms.yaml` 为起点：
+以 `deploy/kubernetes/halro-aws-kms.yaml` 为起点：
 
 - 必须 `replicas: 1`、`strategy: Recreate`，PVC 只能由一个 writer 挂载；不得配置 HPA。
 - 使用 digest-pinned image、non-root、read-only rootfs、`seccompProfile: RuntimeDefault`、drop all capabilities、禁止 privilege escalation/hostPID/hostPath。
 - 为 ServiceAccount 创建 EKS Pod Identity association；关联信息不写入 Kubernetes 对象。确认 Agent 已就绪、Pod 能得到目标 Runtime Role，且不能得到 node role。
 - readiness 使用容器内 loopback healthcheck。Workload Identity/KMS 尚未就绪时进程按有界 deadline 重试，Pod 不 Ready；超过 deadline 后退出，由有退避的控制器重启。
-- 发布前执行三项 CrashLoop 测试：身份未就绪、Primary Policy deny、Primary Key disabled。确认没有调用风暴、没有第二副本、没有 Recovery 自动 fallback，并验证 `HeimdallTargetDown`/KMS 告警。
+- 发布前执行三项 CrashLoop 测试：身份未就绪、Primary Policy deny、Primary Key disabled。确认没有调用风暴、没有第二副本、没有 Recovery 自动 fallback，并验证 `HalroTargetDown`/KMS 告警。
 - swap 由节点基线禁用或使用经安全评审的加密 swap；禁止在共享、可调试节点运行。
 
 ## 3. VM / systemd
 
-以 `deploy/systemd/heimdall-aws-kms.service` 为起点：
+以 `deploy/systemd/halro-aws-kms.service` 为起点：
 
 - 使用专用无登录用户，数据目录 `0700`，配置与 Metrics credential `0400/0600`；不要使用静态 AWS access key 环境变量。
 - 使用 EC2 Instance Profile/受控 Workload Identity，仅授予 Primary policy。`LimitCORE=0`、空 capabilities、`NoNewPrivileges`、`ProtectProc` 和只读系统目录不得被本地 override 放宽。
@@ -34,25 +34,25 @@
 
 ## 4. Audit 与 Metrics 关联
 
-每次 Runtime KMS provider 调用会记录 Heimdall `security.kms.call` Audit，`correlation_id` 是受长度限制的 AWS request ID，可与 CloudTrail request metadata 关联。Audit 不记录 Key ARN、Encryption Context、ciphertext、payload、身份 token、provider error body 或 Master Key fingerprint。
+每次 Runtime KMS provider 调用会记录 Halro `security.kms.call` Audit，`correlation_id` 是受长度限制的 AWS request ID，可与 CloudTrail request metadata 关联。Audit 不记录 Key ARN、Encryption Context、ciphertext、payload、身份 token、provider error body 或 Master Key fingerprint。
 
 低基数指标只使用固定枚举 `operation/status/error_class/purpose/state`，不含账号、ARN、Slot ID 或 request ID：
 
-- `heimdall_kms_calls_total` / `heimdall_kms_call_duration_seconds`；
-- `heimdall_kms_unlock_total`；
-- `heimdall_kms_automatic_fallback_total`（必须恒为 0）；
+- `halro_kms_calls_total` / `halro_kms_call_duration_seconds`；
+- `halro_kms_unlock_total`；
+- `halro_kms_automatic_fallback_total`（必须恒为 0）；
 - descriptor、Recovery readiness、pending rotation、Slot state/verification time；
-- 从可信 Audit 恢复的 `heimdall_kms_recovery_last_used_timestamp_seconds`。
+- 从可信 Audit 恢复的 `halro_kms_recovery_last_used_timestamp_seconds`。
 
-永久 KMS 启动失败时 Metrics endpoint 不会启动，因此必须把 `HeimdallTargetDown` 与结构化启动日志、CloudTrail 告警一起使用，不能只依赖进程内 counter。
+永久 KMS 启动失败时 Metrics endpoint 不会启动，因此必须把 `HalroTargetDown` 与结构化启动日志、CloudTrail 告警一起使用，不能只依赖进程内 counter。
 
 ## 5. 告警响应
 
-- `HeimdallKMSPrimaryUnlockFailure`：核对 Workload Identity、Policy explicit deny、Key state、区域和 Context；禁止自动改用 Recovery。
-- `HeimdallKMSRecoveryNotReady/VerificationExpired`：停止有风险的 Key 变更，安排受控 Recovery verify/restore drill。
-- `HeimdallKMSRecoveryUsed`：按最高优先级确认审批、操作者和原因；完成后撤销临时身份并检查 Audit/CloudTrail。
-- `HeimdallKMSVaultMismatch`：立即 fail closed，禁止手工替换 descriptor；保全 bbolt、Audit、备份和 CloudTrail，按安全事故处理。
-- `HeimdallKMSPendingRotation`：使用原 operation ID 恢复，不得开启第二次轮换。
+- `HalroKMSPrimaryUnlockFailure`：核对 Workload Identity、Policy explicit deny、Key state、区域和 Context；禁止自动改用 Recovery。
+- `HalroKMSRecoveryNotReady/VerificationExpired`：停止有风险的 Key 变更，安排受控 Recovery verify/restore drill。
+- `HalroKMSRecoveryUsed`：按最高优先级确认审批、操作者和原因；完成后撤销临时身份并检查 Audit/CloudTrail。
+- `HalroKMSVaultMismatch`：立即 fail closed，禁止手工替换 descriptor；保全 bbolt、Audit、备份和 CloudTrail，按安全事故处理。
+- `HalroKMSPendingRotation`：使用原 operation ID 恢复，不得开启第二次轮换。
 
 ## 6. Key/身份泄露
 

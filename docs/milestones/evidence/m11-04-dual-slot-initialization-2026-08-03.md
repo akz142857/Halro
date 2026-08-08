@@ -11,7 +11,7 @@ rotation.
 
 1. Static configuration and an initialization publication lock are checked
    before any KMS or persistent-state operation. Empty Key-Slot instances
-   require explicit offline `heimdall init`; Runtime never auto-initializes one.
+   require explicit offline `halro init`; Runtime never auto-initializes one.
 2. A 32-byte Master Key and instance ID are generated in memory.
 3. Vault Key Check, Keyring and protected Audit material are created in memory.
 4. Primary and Recovery use different allowlisted KMS Key ARNs. Each receives a
@@ -36,7 +36,7 @@ Normal Runtime, Bootstrap, Admin and backup paths select only the configured
 Primary Slot. Recovery is available only through the explicit offline command:
 
 ```text
-heimdall key recover --config CONFIG --confirm-recovery-slot SLOT_ID
+halro key recover --config CONFIG --confirm-recovery-slot SLOT_ID
 ```
 
 The confirmation must exactly match trusted configuration. Success appends
@@ -53,7 +53,7 @@ go test ./...
 go test -race ./...
 go vet ./...
 GOTOOLCHAIN=go1.26.5 go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
-go build -trimpath ./cmd/heimdall ./cmd/heimdall-deadman
+go build -trimpath ./cmd/halro ./cmd/halro-deadman
 ```
 
 Focused evidence includes:
@@ -84,12 +84,12 @@ Focused evidence includes:
 The opt-in gate is:
 
 ```text
-HEIMDALL_AWS_KMS_PRIMARY_KEY_ARN='arn:aws:kms:REGION:ACCOUNT:key/UUID' \
-HEIMDALL_AWS_KMS_RECOVERY_KEY_ARN='arn:aws:kms:REGION:ACCOUNT:key/UUID' \
+HALRO_AWS_KMS_PRIMARY_KEY_ARN='arn:aws:kms:REGION:ACCOUNT:key/UUID' \
+HALRO_AWS_KMS_RECOVERY_KEY_ARN='arn:aws:kms:REGION:ACCOUNT:key/UUID' \
   ./tools/m11/aws-kms-dual-slot-smoke/run.sh
 ```
 
-It uses existing Keys only, creates a temporary local Heimdall instance,
+It uses existing Keys only, creates a temporary local Halro instance,
 independently unlocks both Slots, executes the audited Recovery path and emits
 only hashes/booleans. The current machine cannot run it: STS reports
 `InvalidClientTokenId`, the credential source is a shared static test file, and

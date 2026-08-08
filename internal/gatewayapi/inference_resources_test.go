@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/openaiapi"
-	"github.com/akz142857/Heimdall/internal/provider"
+	"github.com/akz142857/Halro/internal/openaiapi"
+	"github.com/akz142857/Halro/internal/provider"
 )
 
 type inferenceResourcesFakeService struct {
@@ -101,7 +101,7 @@ func TestFileUploadRequiresExplicitRouteAndPreservesBytes(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/v1/files", &body)
 	request.Header.Set("Authorization", "Bearer gw")
 	request.Header.Set("Content-Type", writer.FormDataContentType())
-	request.Header.Set("Heimdall-Route", "batch-model")
+	request.Header.Set("Halro-Route", "batch-model")
 	request.Header.Set("Idempotency-Key", "upload-1")
 	response := httptest.NewRecorder()
 	handler.CreateFile(response, request)

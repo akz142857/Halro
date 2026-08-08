@@ -10,7 +10,7 @@ import (
 
 	"go.etcd.io/bbolt"
 
-	"github.com/akz142857/Heimdall/internal/domain"
+	"github.com/akz142857/Halro/internal/domain"
 )
 
 // legacyAdminUser is what an account created before domain.AdminUser.Role

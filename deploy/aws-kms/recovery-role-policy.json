@@ -2,24 +2,24 @@
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "BreakGlassDecryptOnlyTheRecoveryHeimdallKey",
+      "Sid": "BreakGlassDecryptOnlyTheRecoveryHalroKey",
       "Effect": "Allow",
       "Action": "kms:Decrypt",
       "Resource": "arn:aws:kms:${RECOVERY_REGION}:${RECOVERY_ACCOUNT_ID}:key/${RECOVERY_KEY_ID}",
       "Condition": {
         "StringEquals": {
-          "kms:EncryptionContext:heimdall.context_version": "1",
-          "kms:EncryptionContext:heimdall.payload_version": "1",
-          "kms:EncryptionContext:heimdall.purpose": "recovery",
-          "kms:EncryptionContext:heimdall.instance_sha256": "${INSTANCE_ID_SHA256}"
+          "kms:EncryptionContext:halro.context_version": "1",
+          "kms:EncryptionContext:halro.payload_version": "1",
+          "kms:EncryptionContext:halro.purpose": "recovery",
+          "kms:EncryptionContext:halro.instance_sha256": "${INSTANCE_ID_SHA256}"
         },
         "ForAllValues:StringEquals": {
           "kms:EncryptionContextKeys": [
-            "heimdall.context_version",
-            "heimdall.payload_version",
-            "heimdall.purpose",
-            "heimdall.instance_sha256",
-            "heimdall.slot_sha256"
+            "halro.context_version",
+            "halro.payload_version",
+            "halro.purpose",
+            "halro.instance_sha256",
+            "halro.slot_sha256"
           ]
         }
       }

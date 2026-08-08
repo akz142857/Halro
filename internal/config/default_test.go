@@ -36,7 +36,7 @@ func TestWriteDefaultDoesNotReplaceExistingConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Version != SchemaVersion || cfg.Storage.MetadataFile != "heimdall.db" {
+	if cfg.Version != SchemaVersion || cfg.Storage.MetadataFile != "halro.db" {
 		t.Fatalf("unexpected config: %#v", cfg)
 	}
 	before, err := os.ReadFile(path)

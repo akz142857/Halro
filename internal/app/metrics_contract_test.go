@@ -77,7 +77,7 @@ func assertMetricsExpositionContract(t *testing.T, body string) {
 		t.Fatal(err)
 	}
 	for family := range families {
-		if !strings.HasPrefix(family, "heimdall_") {
+		if !strings.HasPrefix(family, "halro_") {
 			continue
 		}
 		if !strings.Contains(string(reference), fmt.Sprintf("`%s`", family)) {

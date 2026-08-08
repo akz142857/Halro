@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/akz142857/Heimdall/internal/compatibility"
-	"github.com/akz142857/Heimdall/internal/openaiapi"
-	"github.com/akz142857/Heimdall/internal/semantic"
+	"github.com/akz142857/Halro/internal/compatibility"
+	"github.com/akz142857/Halro/internal/openaiapi"
+	"github.com/akz142857/Halro/internal/semantic"
 )
 
 const MappingRevision uint64 = 1

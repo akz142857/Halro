@@ -35,5 +35,5 @@ change the Standalone runtime described by ADR 0001.
 6. Ambiguous ownership, unsupported schema, lost quorum, and corrupt authority
    fail closed.
 7. Active streams terminate on owner loss; they are not transferred.
-8. Idempotency suppresses duplicate Heimdall execution where knowable, but does
+8. Idempotency suppresses duplicate Halro execution where knowable, but does
    not turn an upstream unknown outcome into exactly-once execution.

@@ -8,15 +8,15 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/budget"
-	"github.com/akz142857/Heimdall/internal/config"
-	"github.com/akz142857/Heimdall/internal/ledger"
-	"github.com/akz142857/Heimdall/internal/masterkey"
-	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
-	"github.com/akz142857/Heimdall/internal/store/lock"
-	"github.com/akz142857/Heimdall/internal/timezone"
-	"github.com/akz142857/Heimdall/internal/usage"
-	"github.com/akz142857/Heimdall/internal/vault"
+	"github.com/akz142857/Halro/internal/budget"
+	"github.com/akz142857/Halro/internal/config"
+	"github.com/akz142857/Halro/internal/ledger"
+	"github.com/akz142857/Halro/internal/masterkey"
+	boltstore "github.com/akz142857/Halro/internal/store/bolt"
+	"github.com/akz142857/Halro/internal/store/lock"
+	"github.com/akz142857/Halro/internal/timezone"
+	"github.com/akz142857/Halro/internal/usage"
+	"github.com/akz142857/Halro/internal/vault"
 )
 
 type DoctorCheck struct {
@@ -112,7 +112,7 @@ func DoctorWithOptions(ctx context.Context, cfg config.Config, options DoctorOpt
 	// parse" and "the frames are the ones we wrote" are the same question to an
 	// operator, and only one of them used to be answered.
 	chainStatus := "unverified"
-	chainDetail := "cryptographic verification was skipped; run `heimdall ledger verify`"
+	chainDetail := "cryptographic verification was skipped; run `halro ledger verify`"
 	staticKMS := options.NoKMS && cfg.Storage.MasterKey.Mode == config.MasterKeyModeKeySlots
 	if staticKMS {
 		if store == nil {
@@ -359,7 +359,7 @@ func inspectLedgerChain(store *boltstore.Store, secretVault *vault.Vault, master
 		return "fail", "ledger chain verification failed: " + err.Error()
 	}
 	if partial {
-		return "unverified", "ledger has a partial tail; start Heimdall to repair it before verifying"
+		return "unverified", "ledger has a partial tail; start Halro to repair it before verifying"
 	}
 	checkpoint, err := store.LedgerChainCheckpoint()
 	if err != nil {

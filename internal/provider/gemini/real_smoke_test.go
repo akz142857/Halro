@@ -9,33 +9,33 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/openaiapi"
-	"github.com/akz142857/Heimdall/internal/provider"
-	"github.com/akz142857/Heimdall/internal/semantic"
+	"github.com/akz142857/Halro/internal/openaiapi"
+	"github.com/akz142857/Halro/internal/provider"
+	"github.com/akz142857/Halro/internal/semantic"
 )
 
 // TestRealProviderSmoke is opt-in because it contacts Gemini and can incur
 // cost. It logs only stable error classes, never credentials or response bodies.
 //
-//	HEIMDALL_REAL_PROVIDER_SMOKE=1
-//	HEIMDALL_SMOKE_PROFILE=gemini
-//	HEIMDALL_SMOKE_BASE_URL=https://generativelanguage.googleapis.com
-//	HEIMDALL_SMOKE_API_KEY=...
-//	HEIMDALL_SMOKE_MODEL=gemini-...
+//	HALRO_REAL_PROVIDER_SMOKE=1
+//	HALRO_SMOKE_PROFILE=gemini
+//	HALRO_SMOKE_BASE_URL=https://generativelanguage.googleapis.com
+//	HALRO_SMOKE_API_KEY=...
+//	HALRO_SMOKE_MODEL=gemini-...
 //
-// Embeddings run only when HEIMDALL_SMOKE_EMBEDDING_MODEL is set.
+// Embeddings run only when HALRO_SMOKE_EMBEDDING_MODEL is set.
 func TestRealProviderSmoke(t *testing.T) {
-	if os.Getenv("HEIMDALL_REAL_PROVIDER_SMOKE") != "1" || os.Getenv("HEIMDALL_SMOKE_PROFILE") != "gemini" {
-		t.Skip("set HEIMDALL_REAL_PROVIDER_SMOKE=1 and HEIMDALL_SMOKE_PROFILE=gemini")
+	if os.Getenv("HALRO_REAL_PROVIDER_SMOKE") != "1" || os.Getenv("HALRO_SMOKE_PROFILE") != "gemini" {
+		t.Skip("set HALRO_REAL_PROVIDER_SMOKE=1 and HALRO_SMOKE_PROFILE=gemini")
 	}
-	endpoint, err := url.Parse(os.Getenv("HEIMDALL_SMOKE_BASE_URL"))
+	endpoint, err := url.Parse(os.Getenv("HALRO_SMOKE_BASE_URL"))
 	if err != nil || endpoint.Scheme != "https" || endpoint.Hostname() == "" {
-		t.Fatal("HEIMDALL_SMOKE_BASE_URL must be an absolute HTTPS URL")
+		t.Fatal("HALRO_SMOKE_BASE_URL must be an absolute HTTPS URL")
 	}
-	apiKey := os.Getenv("HEIMDALL_SMOKE_API_KEY")
-	model := os.Getenv("HEIMDALL_SMOKE_MODEL")
+	apiKey := os.Getenv("HALRO_SMOKE_API_KEY")
+	model := os.Getenv("HALRO_SMOKE_MODEL")
 	if apiKey == "" || model == "" {
-		t.Fatal("HEIMDALL_SMOKE_API_KEY and HEIMDALL_SMOKE_MODEL are required")
+		t.Fatal("HALRO_SMOKE_API_KEY and HALRO_SMOKE_MODEL are required")
 	}
 	adapter, err := New(Options{
 		Endpoint: endpoint,
@@ -80,7 +80,7 @@ func TestRealProviderSmoke(t *testing.T) {
 	if chunks == 0 {
 		t.Fatal("stream chat returned no semantic chunks")
 	}
-	embeddingModel := os.Getenv("HEIMDALL_SMOKE_EMBEDDING_MODEL")
+	embeddingModel := os.Getenv("HALRO_SMOKE_EMBEDDING_MODEL")
 	if embeddingModel == "" {
 		return
 	}

@@ -6,10 +6,10 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/akz142857/Heimdall/internal/anthropicapi"
-	"github.com/akz142857/Heimdall/internal/compatibility"
-	"github.com/akz142857/Heimdall/internal/domain"
-	"github.com/akz142857/Heimdall/internal/semantic"
+	"github.com/akz142857/Halro/internal/anthropicapi"
+	"github.com/akz142857/Halro/internal/compatibility"
+	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/semantic"
 )
 
 func NewNativeSchemaRegistry() (*compatibility.NativeSchemaRegistry, error) {

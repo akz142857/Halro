@@ -5,7 +5,7 @@
 
 ## Context
 
-Heimdall is intended to be the Redis-like LLM gateway: small operational surface, predictable performance, and no required external database, cache, queue, or frontend runtime.
+Halro is intended to be the Redis-like LLM gateway: small operational surface, predictable performance, and no required external database, cache, queue, or frontend runtime.
 
 ## Decision
 

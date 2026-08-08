@@ -15,7 +15,7 @@ grep -Eq 'scalar%28max%28timestamp%28up' \
 )
 (
   cd "$root"
-  go run ./cmd/heimdall-deadman \
+  go run ./cmd/halro-deadman \
     -config deploy/observability/external-probe/config.example.yaml \
     -check-config
 )
@@ -58,7 +58,7 @@ if [ "$macos_services" != "$expected_core_services" ]; then
 fi
 docker compose -f "$core_compose" -f "$macos_compose" config --format json |
   jq -e '[.services.prometheus, .services.alertmanager] | all(
-    .volumes | any(.source == "/private/tmp/heimdall-observability" and
+    .volumes | any(.source == "/private/tmp/halro-observability" and
       .target == "/run/secrets" and .read_only == true)
   )' >/dev/null
 

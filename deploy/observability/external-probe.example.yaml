@@ -1,20 +1,20 @@
 # Run this stack only on an independently operated host/failure domain.
 services:
-  heimdall-independent-deadman:
+  halro-independent-deadman:
     build:
       context: ../..
       dockerfile: deploy/observability/external-probe/Dockerfile
-    image: heimdall-deadman:local
+    image: halro-deadman:local
     user: "65532:65532"
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
-    command: [-config, /etc/heimdall-deadman/config.yaml]
+    command: [-config, /etc/halro-deadman/config.yaml]
     volumes:
-      - ./external-probe/config.example.yaml:/etc/heimdall-deadman/config.yaml:ro
-      - /run/heimdall-deadman:/run/heimdall-deadman:ro
-      - deadman-state:/var/lib/heimdall-deadman
-      - deadman-audit:/var/log/heimdall-deadman
+      - ./external-probe/config.example.yaml:/etc/halro-deadman/config.yaml:ro
+      - /run/halro-deadman:/run/halro-deadman:ro
+      - deadman-state:/var/lib/halro-deadman
+      - deadman-audit:/var/log/halro-deadman
     restart: always
     mem_limit: 128m
     cpus: 0.50

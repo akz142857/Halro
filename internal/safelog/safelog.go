@@ -11,7 +11,7 @@ import (
 var secretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)Bearer\s+[A-Za-z0-9._~+/=-]+`),
 	regexp.MustCompile(`gw_[A-Za-z0-9_-]{16,}`),
-	// Heimdall issues these itself: hms_ admin sessions, hmt_ metrics bearers.
+	// Halro issues these itself: hms_ admin sessions, hmt_ metrics bearers.
 	regexp.MustCompile(`hm[st]_[A-Za-z0-9_-]{20,}`),
 	regexp.MustCompile(`sk-[A-Za-z0-9_-]{8,}`),
 	regexp.MustCompile(`AIza[0-9A-Za-z_-]{20,}`),

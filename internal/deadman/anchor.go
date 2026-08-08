@@ -14,7 +14,7 @@ import (
 
 // PulledAnchor mirrors boltstore.AuditAnchor field-for-field (JSON tags, not
 // a shared Go type — deadman is a separate binary and does not import the
-// app's storage package). heimdall audit verify-anchor decodes the file
+// app's storage package). halro audit verify-anchor decodes the file
 // anchorWriter produces using its own matching type.
 type PulledAnchor struct {
 	Sequence   uint64    `json:"sequence"`
@@ -82,17 +82,17 @@ func (a *anchorWriter) append(anchor PulledAnchor) error {
 	return file.Close()
 }
 
-// pullAnchors fetches new anchors from every heimdall-kind target that
+// pullAnchors fetches new anchors from every halro-kind target that
 // configures AnchorURL. It runs unlocked like probeTargets — the network
 // calls here must not hold e.mu — and takes it only for the brief read/write
-// of each target's LastAnchorSequence. Emission on the Heimdall side is
+// of each target's LastAnchorSequence. Emission on the Halro side is
 // fail-open (ADR 0015); the pull side matches that: an unreachable anchor
 // endpoint is logged and skipped, never allowed to stall or fail a Tick that
 // also carries the heartbeat.
 func (e *Engine) pullAnchors(ctx context.Context) map[string]string {
 	reasons := make(map[string]string)
 	for _, target := range e.cfg.Targets {
-		if target.Kind != "heimdall" || target.AnchorURL == "" || e.anchor == nil {
+		if target.Kind != "halro" || target.AnchorURL == "" || e.anchor == nil {
 			continue
 		}
 		e.mu.Lock()

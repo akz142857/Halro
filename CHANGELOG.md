@@ -103,5 +103,5 @@ to act on.
 - A file, batch or async creation interrupted before the provider was called can
   be retried after a restart, instead of holding its idempotency key for days.
 
-[Unreleased]: https://github.com/akz142857/Heimdall/compare/v1.0.0-rc.1...main
-[1.0.0-rc.1]: https://github.com/akz142857/Heimdall/releases/tag/v1.0.0-rc.1
+[Unreleased]: https://github.com/akz142857/Halro/compare/v1.0.0-rc.1...main
+[1.0.0-rc.1]: https://github.com/akz142857/Halro/releases/tag/v1.0.0-rc.1

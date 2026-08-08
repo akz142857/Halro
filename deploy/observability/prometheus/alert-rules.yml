@@ -1,119 +1,119 @@
 groups:
-  - name: heimdall-alerts
+  - name: halro-alerts
     interval: 15s
     rules:
-      - alert: HeimdallTargetDown
-        expr: up{job="heimdall",expected_target="true"} == 0 or absent(up{job="heimdall",expected_target="true"})
+      - alert: HalroTargetDown
+        expr: up{job="halro",expected_target="true"} == 0 or absent(up{job="halro",expected_target="true"})
         for: 2m
-        labels: {severity: critical, service: heimdall, owner: sre, category: availability}
+        labels: {severity: critical, service: halro, owner: sre, category: availability}
         annotations:
-          summary: Heimdall Metrics target is down
+          summary: Halro Metrics target is down
           runbook_url: /docs/observability/operations-runbook.md
-      - alert: HeimdallWALAppendErrors
-        expr: increase(heimdall_wal_append_errors_total[5m]) > 0
+      - alert: HalroWALAppendErrors
+        expr: increase(halro_wal_append_errors_total[5m]) > 0
         for: 0m
-        labels: {severity: critical, service: heimdall, owner: sre, category: accounting}
+        labels: {severity: critical, service: halro, owner: sre, category: accounting}
         annotations:
-          summary: Heimdall WAL append errors increased
+          summary: Halro WAL append errors increased
           runbook_url: /docs/observability/operations-runbook.md
-      - alert: HeimdallUsageAnalyticsLagging
-        expr: heimdall_usage_analytics_lagging == 1
+      - alert: HalroUsageAnalyticsLagging
+        expr: halro_usage_analytics_lagging == 1
         for: 10m
-        labels: {severity: warning, service: heimdall, owner: sre, category: accounting}
+        labels: {severity: warning, service: halro, owner: sre, category: accounting}
         annotations:
-          summary: Heimdall Usage analytics is behind the Ledger
+          summary: Halro Usage analytics is behind the Ledger
           runbook_url: /docs/observability/operations-runbook.md
-      - alert: HeimdallLedgerQueueHigh
-        expr: heimdall:ledger_queue:ratio > 0.75
+      - alert: HalroLedgerQueueHigh
+        expr: halro:ledger_queue:ratio > 0.75
         for: 5m
-        labels: {severity: warning, service: heimdall, owner: sre, category: accounting}
+        labels: {severity: warning, service: halro, owner: sre, category: accounting}
         annotations:
-          summary: Heimdall Ledger queue exceeds 75 percent
+          summary: Halro Ledger queue exceeds 75 percent
           runbook_url: /docs/observability/operations-runbook.md
-      - alert: HeimdallAlertDeliveryFailing
-        expr: increase(heimdall_alert_delivery_total{status=~"failed|dropped"}[10m]) > 0
+      - alert: HalroAlertDeliveryFailing
+        expr: increase(halro_alert_delivery_total{status=~"failed|dropped"}[10m]) > 0
         for: 10m
-        labels: {severity: warning, service: heimdall, owner: sre, category: delivery}
+        labels: {severity: warning, service: halro, owner: sre, category: delivery}
         annotations:
-          summary: Heimdall alert delivery is failing
+          summary: Halro alert delivery is failing
           runbook_url: /docs/observability/operations-runbook.md
-      - alert: HeimdallDeploymentUnhealthy
-        expr: heimdall_deployment_up == 0
+      - alert: HalroDeploymentUnhealthy
+        expr: halro_deployment_up == 0
         for: 5m
-        labels: {severity: warning, service: heimdall, owner: sre, category: provider}
+        labels: {severity: warning, service: halro, owner: sre, category: provider}
         annotations:
-          summary: A probed Heimdall deployment is unhealthy
+          summary: A probed Halro deployment is unhealthy
           runbook_url: /docs/observability/operations-runbook.md
-      - alert: HeimdallMultipleDeploymentsUnhealthy
-        expr: heimdall:deployments_unhealthy:count >= 2
+      - alert: HalroMultipleDeploymentsUnhealthy
+        expr: halro:deployments_unhealthy:count >= 2
         for: 3m
-        labels: {severity: critical, service: heimdall, owner: sre, category: provider}
+        labels: {severity: critical, service: halro, owner: sre, category: provider}
         annotations:
-          summary: Multiple Heimdall deployments are unhealthy
+          summary: Multiple Halro deployments are unhealthy
           runbook_url: /docs/observability/operations-runbook.md
-      - alert: HeimdallFallbackSaturation
-        expr: heimdall:fallbacks:ratio5m > 0.25 and on (environment, region, cluster) increase(heimdall_requests_total[10m]) >= 20
+      - alert: HalroFallbackSaturation
+        expr: halro:fallbacks:ratio5m > 0.25 and on (environment, region, cluster) increase(halro_requests_total[10m]) >= 20
         for: 5m
-        labels: {severity: warning, service: heimdall, owner: sre, category: provider}
+        labels: {severity: warning, service: halro, owner: sre, category: provider}
         annotations:
-          summary: Heimdall fallback rate is elevated
+          summary: Halro fallback rate is elevated
           runbook_url: /docs/observability/operations-runbook.md
-      - alert: HeimdallProviderCapacityPressure
-        expr: heimdall:provider_capacity:ratio > 0.85
+      - alert: HalroProviderCapacityPressure
+        expr: halro:provider_capacity:ratio > 0.85
         for: 5m
-        labels: {severity: warning, service: heimdall, owner: sre, category: provider}
+        labels: {severity: warning, service: halro, owner: sre, category: provider}
         annotations:
-          summary: Heimdall Provider concurrency capacity is nearly exhausted
+          summary: Halro Provider concurrency capacity is nearly exhausted
           runbook_url: /docs/observability/operations-runbook.md
-      - alert: HeimdallHighErrorRate
-        expr: heimdall:requests_errors:ratio5m > 0.05 and on (environment, region, cluster) increase(heimdall_requests_total[10m]) >= 20
+      - alert: HalroHighErrorRate
+        expr: halro:requests_errors:ratio5m > 0.05 and on (environment, region, cluster) increase(halro_requests_total[10m]) >= 20
         for: 10m
-        labels: {severity: warning, service: heimdall, owner: sre, category: traffic}
+        labels: {severity: warning, service: halro, owner: sre, category: traffic}
         annotations:
-          summary: Heimdall request error rate is elevated
+          summary: Halro request error rate is elevated
           runbook_url: /docs/observability/operations-runbook.md
-      - alert: HeimdallKMSPrimaryUnlockFailure
-        expr: increase(heimdall_kms_calls_total{operation="unwrap",status="error"}[5m]) > 0
-        labels: {severity: critical, service: heimdall, owner: sre, category: key-custody}
+      - alert: HalroKMSPrimaryUnlockFailure
+        expr: increase(halro_kms_calls_total{operation="unwrap",status="error"}[5m]) > 0
+        labels: {severity: critical, service: halro, owner: sre, category: key-custody}
         annotations:
-          summary: Heimdall Primary KMS unlock failed
+          summary: Halro Primary KMS unlock failed
           runbook_url: /docs/runbooks/m11-production-operations.md
-      - alert: HeimdallKMSRecoveryNotReady
-        expr: heimdall_kms_recovery_ready == 0
+      - alert: HalroKMSRecoveryNotReady
+        expr: halro_kms_recovery_ready == 0
         for: 5m
-        labels: {severity: critical, service: heimdall, owner: sre, category: key-custody}
+        labels: {severity: critical, service: halro, owner: sre, category: key-custody}
         annotations:
-          summary: Heimdall Recovery Slot is not active and verified
+          summary: Halro Recovery Slot is not active and verified
           runbook_url: /docs/runbooks/m11-production-operations.md
-      - alert: HeimdallKMSRecoveryVerificationExpired
-        expr: time() - heimdall_kms_slot_verified_timestamp_seconds{purpose="recovery"} > 7776000
+      - alert: HalroKMSRecoveryVerificationExpired
+        expr: time() - halro_kms_slot_verified_timestamp_seconds{purpose="recovery"} > 7776000
         for: 5m
-        labels: {severity: warning, service: heimdall, owner: sre, category: key-custody}
+        labels: {severity: warning, service: halro, owner: sre, category: key-custody}
         annotations:
-          summary: Heimdall Recovery Slot verification is older than 90 days
+          summary: Halro Recovery Slot verification is older than 90 days
           runbook_url: /docs/runbooks/m11-production-operations.md
-      - alert: HeimdallKMSRecoveryUsed
-        expr: heimdall_kms_recovery_last_used_timestamp_seconds > 0 and time() - heimdall_kms_recovery_last_used_timestamp_seconds < 900
-        labels: {severity: critical, service: heimdall, owner: sre, category: key-custody}
+      - alert: HalroKMSRecoveryUsed
+        expr: halro_kms_recovery_last_used_timestamp_seconds > 0 and time() - halro_kms_recovery_last_used_timestamp_seconds < 900
+        labels: {severity: critical, service: halro, owner: sre, category: key-custody}
         annotations:
-          summary: Heimdall Recovery Slot was used
+          summary: Halro Recovery Slot was used
           runbook_url: /docs/runbooks/m11-production-operations.md
-      - alert: HeimdallKMSVaultMismatch
-        expr: increase(heimdall_kms_unlock_total{error_class="kms_vault_mismatch",status="error"}[5m]) > 0
-        labels: {severity: critical, service: heimdall, owner: security, category: key-custody}
+      - alert: HalroKMSVaultMismatch
+        expr: increase(halro_kms_unlock_total{error_class="kms_vault_mismatch",status="error"}[5m]) > 0
+        labels: {severity: critical, service: halro, owner: security, category: key-custody}
         annotations:
-          summary: KMS returned a key that does not match the Heimdall Vault
+          summary: KMS returned a key that does not match the Halro Vault
           runbook_url: /docs/runbooks/m11-production-operations.md
-      - alert: HeimdallKMSPendingRotation
-        expr: heimdall_kms_pending_rotation_slots > 0
+      - alert: HalroKMSPendingRotation
+        expr: halro_kms_pending_rotation_slots > 0
         for: 15m
-        labels: {severity: warning, service: heimdall, owner: sre, category: key-custody}
+        labels: {severity: warning, service: halro, owner: sre, category: key-custody}
         annotations:
-          summary: Heimdall Key Slot rotation remains pending
+          summary: Halro Key Slot rotation remains pending
           runbook_url: /docs/runbooks/m11-production-operations.md
       - alert: Watchdog
         expr: vector(1)
-        labels: {severity: none, service: heimdall, owner: sre, category: deadman}
+        labels: {severity: none, service: halro, owner: sre, category: deadman}
         annotations:
           summary: Continuous signal for an independent dead-man monitor
           runbook_url: /docs/observability/operations-runbook.md
@@ -151,18 +151,18 @@ groups:
         annotations: {summary: Prometheus TSDB and WAL exceed the local 4.25 GiB critical budget}
       # Thresholds below are starting points, not universal truths: fsync cost
       # spans orders of magnitude between filesystems, so re-baseline them per
-      # host from heimdall:wal_sync:mean5m before trusting them.
-      - alert: HeimdallWALSyncSlow
-        expr: heimdall:wal_sync:mean5m > 0.05
+      # host from halro:wal_sync:mean5m before trusting them.
+      - alert: HalroWALSyncSlow
+        expr: halro:wal_sync:mean5m > 0.05
         for: 10m
-        labels: {severity: warning, service: heimdall, owner: sre, category: accounting}
+        labels: {severity: warning, service: halro, owner: sre, category: accounting}
         annotations:
-          summary: Heimdall Ledger fsync is slow enough to cap accounting throughput
+          summary: Halro Ledger fsync is slow enough to cap accounting throughput
           runbook_url: /docs/observability/operations-runbook.md
-      - alert: HeimdallAccountingProjectLockSaturated
-        expr: heimdall:accounting_project_lock_wait:mean5m > 0.25
+      - alert: HalroAccountingProjectLockSaturated
+        expr: halro:accounting_project_lock_wait:mean5m > 0.25
         for: 15m
-        labels: {severity: warning, service: heimdall, owner: sre, category: accounting}
+        labels: {severity: warning, service: halro, owner: sre, category: accounting}
         annotations:
-          summary: Heimdall requests are queueing on one project's accounting lock
+          summary: Halro requests are queueing on one project's accounting lock
           runbook_url: /docs/observability/operations-runbook.md

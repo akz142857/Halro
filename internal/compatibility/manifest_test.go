@@ -30,7 +30,7 @@ func TestBuiltinEndpointManifestsAreValidImmutableAndGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if os.Getenv("HEIMDALL_UPDATE_GOLDEN") == "1" {
+	if os.Getenv("HALRO_UPDATE_GOLDEN") == "1" {
 		if err := os.WriteFile(goldenPath, encoded, 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -49,11 +49,11 @@ func TestInferenceResourcesMaturityDoesNotClaimUnvalidatedSDKCompatibility(t *te
 		if len(manifest.SDKMatrix) != 0 {
 			t.Fatalf("%s claims an unvalidated SDK matrix: %v", manifest.ID, manifest.SDKMatrix)
 		}
-		if strings.HasPrefix(manifest.ID, "heimdall.") && manifest.Protocol != "heimdall" {
-			t.Fatalf("%s protocol = %q, want heimdall", manifest.ID, manifest.Protocol)
+		if strings.HasPrefix(manifest.ID, "halro.") && manifest.Protocol != "halro" {
+			t.Fatalf("%s protocol = %q, want halro", manifest.ID, manifest.Protocol)
 		}
-		if strings.HasPrefix(manifest.ID, "heimdall.") && manifest.NorthboundProfile != ProfileHeimdallInferenceResources {
-			t.Fatalf("%s northbound profile = %q, want %q", manifest.ID, manifest.NorthboundProfile, ProfileHeimdallInferenceResources)
+		if strings.HasPrefix(manifest.ID, "halro.") && manifest.NorthboundProfile != ProfileHalroInferenceResources {
+			t.Fatalf("%s northbound profile = %q, want %q", manifest.ID, manifest.NorthboundProfile, ProfileHalroInferenceResources)
 		}
 	}
 }
@@ -113,7 +113,7 @@ func TestManifestRejectsNorthboundProfileDrift(t *testing.T) {
 		mutate func(*EndpointCompatibilityManifest)
 	}{
 		{name: "unknown profile", mutate: func(manifest *EndpointCompatibilityManifest) { manifest.NorthboundProfile = "missing.v1" }},
-		{name: "protocol mismatch", mutate: func(manifest *EndpointCompatibilityManifest) { manifest.Protocol = "heimdall" }},
+		{name: "protocol mismatch", mutate: func(manifest *EndpointCompatibilityManifest) { manifest.Protocol = "halro" }},
 		{name: "revision mismatch", mutate: func(manifest *EndpointCompatibilityManifest) { manifest.ProfileRevision++ }},
 		{name: "method mismatch", mutate: func(manifest *EndpointCompatibilityManifest) { manifest.Method = "GET" }},
 		{name: "path mismatch", mutate: func(manifest *EndpointCompatibilityManifest) { manifest.Path = "/v1/not-chat" }},
@@ -143,7 +143,7 @@ func TestInferenceResourcesManifestMatchesImplementedRequestAndResponseFields(t 
 			t.Fatalf("%s response fields drifted: %v", id, byID[id].ResponseFields)
 		}
 	}
-	for _, id := range []string{"heimdall.async.create.v1", "heimdall.async.get.v1"} {
+	for _, id := range []string{"halro.async.create.v1", "halro.async.get.v1"} {
 		if !slices.Equal(byID[id].ResponseFields, asyncResponseFields()) {
 			t.Fatalf("%s response fields drifted: %v", id, byID[id].ResponseFields)
 		}

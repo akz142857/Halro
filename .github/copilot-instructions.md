@@ -1,6 +1,6 @@
-# Heimdall Copilot instructions
+# Halro Copilot instructions
 
-Heimdall is a security-first, single-binary LLM gateway. Review changes against
+Halro is a security-first, single-binary LLM gateway. Review changes against
 the actual request, failure, persistence, and recovery paths rather than only
 the local function being edited.
 

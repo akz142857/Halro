@@ -1,20 +1,20 @@
 # Release Process
 
 The release workflow builds the embedded React UI once and cross-compiles
-static Heimdall binaries for Linux and macOS on amd64 and arm64. Windows is not
+static Halro binaries for Linux and macOS on amd64 and arm64. Windows is not
 a v1 target because the exclusive data-directory lock currently uses Unix
 `flock` semantics.
 
 Every release run produces:
 
-- `heimdall-deadman` in every supported binary archive together with its
+- `halro-deadman` in every supported binary archive together with its
   versioned config/event schemas, receiver contract, and systemd unit;
-- a non-root `heimdall-deadman-container.tar.gz` image archive built from
+- a non-root `halro-deadman-container.tar.gz` image archive built from
   digest-pinned base images;
 
 - four version-stamped, stripped binary archives, each containing `LICENSE`,
   `NOTICE`, `THIRD_PARTY_NOTICES.md`, and `README.md`;
-- a non-root distroless container image exported as `heimdall-container.tar.gz`;
+- a non-root distroless container image exported as `halro-container.tar.gz`;
 - an SPDX JSON SBOM;
 - SHA-256 checksums;
 - a Sigstore keyless bundle for each binary archive, the SBOM, and checksum file;
@@ -43,7 +43,7 @@ Before creating an RC tag:
 6. create and push a signed annotated tag;
 7. verify every downloaded blob, including the container tarball, against
    `checksums.txt` and its Sigstore bundle;
-8. run `heimdall version`, `config check`, backup verify/restore, and a Gateway smoke test on each supported architecture.
+8. run `halro version`, `config check`, backup verify/restore, and a Gateway smoke test on each supported architecture.
 
 The reviewed release description is `docs/milestones/release-notes-v1.0.0.md`. Keep its
 status and measured-limit section synchronized with the exact tagged commit;

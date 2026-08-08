@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akz142857/Heimdall/internal/provider"
+	"github.com/akz142857/Halro/internal/provider"
 )
 
 func inferenceResourcesTestAdapter(t *testing.T, transport roundTripFunc) *Adapter {

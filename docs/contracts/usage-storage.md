@@ -1,6 +1,6 @@
 # Usage storage and retention
 
-Heimdall treats the Ledger WAL as the accounting authority. The live aggregate,
+Halro treats the Ledger WAL as the accounting authority. The live aggregate,
 bbolt checkpoint, and Parquet files are rebuildable derivatives. Budget
 admission and recovery never depend on Parquet.
 
@@ -37,10 +37,10 @@ Run these while the server is stopped. The commands acquire the same exclusive
 data-directory lock as the server.
 
 ```text
-heimdall usage compact --config ./config.yaml
-heimdall usage verify --config ./config.yaml
-heimdall usage prune --config ./config.yaml
-heimdall usage prune --config ./config.yaml --before 2026-05-01
+halro usage compact --config ./config.yaml
+halro usage verify --config ./config.yaml
+halro usage prune --config ./config.yaml
+halro usage prune --config ./config.yaml --before 2026-05-01
 ```
 
 `compact` replays the Ledger, writes only attempts newer than the manifest
@@ -58,7 +58,7 @@ full cross-layer retention proofs are implemented.
 
 ## DuckDB examples
 
-DuckDB is optional and is not linked into the Heimdall binary.
+DuckDB is optional and is not linked into the Halro binary.
 
 ```sql
 SELECT provider_id, provider_model,

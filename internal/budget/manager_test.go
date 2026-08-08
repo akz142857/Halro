@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/domain"
-	"github.com/akz142857/Heimdall/internal/ledger"
+	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/ledger"
 )
 
 // testChainKey is a fixed 32-byte Ledger HMAC key for tests that append.

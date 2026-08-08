@@ -37,7 +37,7 @@ Unknown or unsupported parameters are rejected unless a deployment explicitly de
 - one `[DONE]` on normal completion;
 - defined malformed-event and disconnect handling.
 
-Compatibility is tested with the Python, Node, and Go OpenAI SDKs. A Heimdall stream error extension is not represented as a standard OpenAI guarantee.
+Compatibility is tested with the Python, Node, and Go OpenAI SDKs. A Halro stream error extension is not represented as a standard OpenAI guarantee.
 
 ## Stateless Responses tier
 

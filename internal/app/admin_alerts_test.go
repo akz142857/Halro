@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
+	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 )
 
 func TestAdminAlertWebhookStoresSecretEncryptedAndNeverReturnsIt(t *testing.T) {
@@ -32,7 +32,7 @@ func TestAdminAlertWebhookStoresSecretEncryptedAndNeverReturnsIt(t *testing.T) {
 	created := performAdminMutation(t, runtime, cookie, csrf,
 		http.MethodPost, "/admin/api/v1/alerts", "",
 		map[string]any{
-			"name": "Security operations", "url": "https://hooks.example.com/heimdall",
+			"name": "Security operations", "url": "https://hooks.example.com/halro",
 			"header_name": "Authorization", "secret": secret, "enabled": false,
 		})
 	if created.Code != http.StatusCreated || strings.Contains(created.Body.String(), secret) ||
@@ -81,7 +81,7 @@ func TestAdminAlertWebhookStoresSecretEncryptedAndNeverReturnsIt(t *testing.T) {
 	removed := performAdminMutation(t, runtime, cookie, csrf,
 		http.MethodPut, "/admin/api/v1/alerts/"+view.ID, `"1"`,
 		map[string]any{
-			"name": "Security operations", "url": "https://hooks.example.com/heimdall",
+			"name": "Security operations", "url": "https://hooks.example.com/halro",
 			"header_name": "authorization", "secret": "", "enabled": false,
 		})
 	if removed.Code != http.StatusOK || strings.Contains(removed.Body.String(), secret) {
@@ -119,7 +119,7 @@ func TestAdminAlertWebhookRefusesToReuseSecretForANewDestination(t *testing.T) {
 	created := performAdminMutation(t, runtime, cookie, csrf,
 		http.MethodPost, "/admin/api/v1/alerts", "",
 		map[string]any{
-			"name": "Security operations", "url": "https://hooks.example.com/heimdall",
+			"name": "Security operations", "url": "https://hooks.example.com/halro",
 			"header_name": "Authorization", "secret": "webhook-secret-canary", "enabled": false,
 		})
 	if created.Code != http.StatusCreated {
@@ -145,7 +145,7 @@ func TestAdminAlertWebhookRefusesToReuseSecretForANewDestination(t *testing.T) {
 	rehomedHeader := performAdminMutation(t, runtime, cookie, csrf,
 		http.MethodPut, "/admin/api/v1/alerts/"+view.ID, `"1"`,
 		map[string]any{
-			"name": "Security operations", "url": "https://hooks.example.com/heimdall",
+			"name": "Security operations", "url": "https://hooks.example.com/halro",
 			"header_name": "X-Webhook-Token", "enabled": false,
 		})
 	if rehomedHeader.Code != http.StatusBadRequest {
@@ -158,7 +158,7 @@ func TestAdminAlertWebhookRefusesToReuseSecretForANewDestination(t *testing.T) {
 	rename := performAdminMutation(t, runtime, cookie, csrf,
 		http.MethodPut, "/admin/api/v1/alerts/"+view.ID, `"1"`,
 		map[string]any{
-			"name": "Renamed", "url": "https://hooks.example.com/heimdall",
+			"name": "Renamed", "url": "https://hooks.example.com/halro",
 			"header_name": "Authorization", "enabled": false,
 		})
 	if rename.Code != http.StatusOK {
@@ -167,7 +167,7 @@ func TestAdminAlertWebhookRefusesToReuseSecretForANewDestination(t *testing.T) {
 	moved := performAdminMutation(t, runtime, cookie, csrf,
 		http.MethodPut, "/admin/api/v1/alerts/"+view.ID, `"2"`,
 		map[string]any{
-			"name": "Renamed", "url": "https://hooks2.example.com/heimdall",
+			"name": "Renamed", "url": "https://hooks2.example.com/halro",
 			"header_name": "Authorization", "secret": "new-secret-canary", "enabled": false,
 		})
 	if moved.Code != http.StatusOK {

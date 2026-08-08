@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/ledger"
+	"github.com/akz142857/Halro/internal/ledger"
 )
 
 // poisonState pushes the read model's watermark past anything the manager will

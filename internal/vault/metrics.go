@@ -15,8 +15,8 @@ func DeriveMetricsBearerToken(masterKey []byte) ([]byte, error) {
 	key, err := hkdf.Key(
 		sha256.New,
 		masterKey,
-		[]byte("heimdall:metrics:v1"),
-		"heimdall:metrics-bearer-token:v1",
+		[]byte("halro:metrics:v1"),
+		"halro:metrics-bearer-token:v1",
 		32,
 	)
 	if err != nil {

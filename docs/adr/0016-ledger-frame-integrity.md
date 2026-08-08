@@ -17,7 +17,7 @@
 
 ## Context
 
-Every accounting fact Heimdall has — what was reserved, what was committed,
+Every accounting fact Halro has — what was reserved, what was committed,
 which price snapshot applied, what a project spent today — is replayed from the
 Ledger WAL at startup. A frame is 24 bytes of header plus a JSON payload,
 protected by CRC32.
@@ -98,7 +98,7 @@ rotation changes the derivation input. An encrypted key that rotation re-wraps
 keeps old frames verifiable across a rotation, which is the whole point of
 retaining them.
 
-Domain separation: `heimdall:ledger:v1` / `heimdall:ledger-hmac-key:v1`, distinct
+Domain separation: `halro:ledger:v1` / `halro:ledger-hmac-key:v1`, distinct
 from the Audit strings, so one key can never verify the other's frames.
 
 ### The guarantee starts where v4 starts

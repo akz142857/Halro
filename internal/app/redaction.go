@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/akz142857/Heimdall/internal/redaction"
-	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
+	"github.com/akz142857/Halro/internal/redaction"
+	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 )
 
 func loadRedaction(

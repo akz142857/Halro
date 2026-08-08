@@ -9,7 +9,7 @@ import (
 	"slices"
 	"testing"
 
-	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
+	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 )
 
 func TestVerifyAuditAnchorsAgreesDisagreesAndReportsTruncation(t *testing.T) {

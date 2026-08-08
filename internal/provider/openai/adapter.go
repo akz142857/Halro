@@ -11,12 +11,12 @@ import (
 	"net/url"
 	"strings"
 
-	openaiwire "github.com/akz142857/Heimdall/internal/compatibility/openai"
-	"github.com/akz142857/Heimdall/internal/domain"
-	"github.com/akz142857/Heimdall/internal/openaiapi"
-	"github.com/akz142857/Heimdall/internal/provider"
-	"github.com/akz142857/Heimdall/internal/semantic"
-	"github.com/akz142857/Heimdall/internal/sse"
+	openaiwire "github.com/akz142857/Halro/internal/compatibility/openai"
+	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/openaiapi"
+	"github.com/akz142857/Halro/internal/provider"
+	"github.com/akz142857/Halro/internal/semantic"
+	"github.com/akz142857/Halro/internal/sse"
 )
 
 const maxResponseBytes = 16 << 20

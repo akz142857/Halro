@@ -14,11 +14,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/bearercred"
-	"github.com/akz142857/Heimdall/internal/budget"
-	"github.com/akz142857/Heimdall/internal/config"
-	"github.com/akz142857/Heimdall/internal/ledger"
-	"github.com/akz142857/Heimdall/internal/store/lock"
+	"github.com/akz142857/Halro/internal/bearercred"
+	"github.com/akz142857/Halro/internal/budget"
+	"github.com/akz142857/Halro/internal/config"
+	"github.com/akz142857/Halro/internal/ledger"
+	"github.com/akz142857/Halro/internal/store/lock"
 )
 
 func TestInitializeOpenAndReadiness(t *testing.T) {
@@ -174,10 +174,10 @@ func TestMetricsRequireDerivedBearerToken(t *testing.T) {
 	response = httptest.NewRecorder()
 	runtime.metricsRouter().ServeHTTP(response, request)
 	if response.Code != http.StatusOK ||
-		!strings.Contains(response.Body.String(), "heimdall_requests_total") ||
-		!strings.Contains(response.Body.String(), "heimdall_process_goroutines") ||
-		!strings.Contains(response.Body.String(), "heimdall_policy_rejections_total") ||
-		!strings.Contains(response.Body.String(), "heimdall_provider_active_requests") ||
+		!strings.Contains(response.Body.String(), "halro_requests_total") ||
+		!strings.Contains(response.Body.String(), "halro_process_goroutines") ||
+		!strings.Contains(response.Body.String(), "halro_policy_rejections_total") ||
+		!strings.Contains(response.Body.String(), "halro_provider_active_requests") ||
 		strings.Contains(response.Body.String(), string(token)) {
 		t.Fatalf("metrics response status=%d body=%s", response.Code, response.Body.String())
 	}
@@ -253,10 +253,10 @@ func TestMetricsContractHasTypesHistogramsAndNoForbiddenLabels(t *testing.T) {
 	body := response.Body.String()
 	assertMetricsExpositionContract(t, body)
 	for _, required := range []string{
-		"# TYPE heimdall_request_latency_seconds histogram",
-		"heimdall_request_latency_seconds_bucket{le=\"+Inf\"}",
-		"# TYPE heimdall_attempt_latency_seconds histogram",
-		"# TYPE heimdall_build_info gauge",
+		"# TYPE halro_request_latency_seconds histogram",
+		"halro_request_latency_seconds_bucket{le=\"+Inf\"}",
+		"# TYPE halro_attempt_latency_seconds histogram",
+		"# TYPE halro_build_info gauge",
 		"# TYPE go_goroutines gauge",
 		"# TYPE process_start_time_seconds gauge",
 	} {
@@ -394,7 +394,7 @@ func testConfig(t *testing.T) config.Config {
 		},
 		Storage: config.Storage{
 			DataDir:      filepath.Join(root, "data"),
-			MetadataFile: "heimdall.db",
+			MetadataFile: "halro.db",
 			MasterKey: config.MasterKey{
 				Mode: config.MasterKeyModeFile,
 				File: filepath.Join(root, "master.key"),

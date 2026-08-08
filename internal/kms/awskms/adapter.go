@@ -5,7 +5,7 @@ import (
 	"context"
 	"errors"
 
-	corekms "github.com/akz142857/Heimdall/internal/kms"
+	corekms "github.com/akz142857/Halro/internal/kms"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsmiddleware "github.com/aws/aws-sdk-go-v2/aws/middleware"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"

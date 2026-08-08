@@ -1,6 +1,6 @@
 # Support
 
-Heimdall is a community-maintained open-source project and does not currently
+Halro is a community-maintained open-source project and does not currently
 provide a commercial support SLA.
 
 ## Where to ask
@@ -13,7 +13,7 @@ provide a commercial support SLA.
 
 Before asking, read the [Chinese user guide](docs/guides/user-guide.zh-CN.md),
 [Operator Guide](docs/guides/operator-guide.md), and troubleshooting section. Include
-the Heimdall version, operating system/architecture, Provider type, sanitized
+the Halro version, operating system/architecture, Provider type, sanitized
 configuration, exact error code, and minimal reproduction.
 
 Never attach credentials, Master Keys, Gateway keys, databases, WAL files,

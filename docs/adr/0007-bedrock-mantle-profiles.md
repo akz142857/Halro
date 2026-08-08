@@ -34,8 +34,8 @@ hosts, redirects, ambient AWS credentials, or Runtime endpoints. SigV4 support
 requires a later profile revision with the Mantle signing name and authority
 rules independently reviewed.
 
-The Responses profile participates in Heimdall's existing stateless Responses
-tier. Heimdall always sends `store:false` and does not expose Mantle response
+The Responses profile participates in Halro's existing stateless Responses
+tier. Halro always sends `store:false` and does not expose Mantle response
 resource IDs, retrieval, deletion, background execution, Projects, or
 `previous_response_id`. This avoids accidentally importing AWS's default
 30-day stored-response ownership into the current gateway contract.

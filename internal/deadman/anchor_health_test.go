@@ -99,9 +99,9 @@ func TestAnchorSequenceRewindIsReported(t *testing.T) {
 	if !containsString(reasons, "anchor_sequence_rewound") {
 		t.Fatalf("a rewound anchor sequence must be recorded: %v", reasons)
 	}
-	if engine.state.Targets["heimdall"].AnchorReason != "anchor_sequence_rewound" {
+	if engine.state.Targets["halro"].AnchorReason != "anchor_sequence_rewound" {
 		t.Fatalf("anchor reason=%q, want it persisted so a restart does not read as recovery",
-			engine.state.Targets["heimdall"].AnchorReason)
+			engine.state.Targets["halro"].AnchorReason)
 	}
 }
 

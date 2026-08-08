@@ -8,11 +8,11 @@ SYFT_IMAGE='anchore/syft@sha256:bd5357d2cd087f03af748dac24df48bfbc1723080d78f75f
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 SOURCE_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../../.." && pwd)
 RESULT_ROOT=${1:-"$SOURCE_ROOT/.tmp/aws-sdk-spike"}
-WORK_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/heimdall-aws-sdk-spike.XXXXXX")
+WORK_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/halro-aws-sdk-spike.XXXXXX")
 CORE_ROOT="$WORK_ROOT/core"
 AWS_ROOT="$WORK_ROOT/aws"
-CORE_TAG=heimdall-m11-spike-core
-AWS_TAG=heimdall-m11-spike-aws
+CORE_TAG=halro-m11-spike-core
+AWS_TAG=halro-m11-spike-aws
 
 cleanup() {
 	docker image rm "$CORE_TAG" "$AWS_TAG" >/dev/null 2>&1 || true
@@ -25,7 +25,7 @@ tar -C "$SOURCE_ROOT" \
 	--exclude=.git --exclude=.tmp --exclude=bin --exclude=node_modules \
 	-cf - . | tar -C "$CORE_ROOT" -xf -
 tar -C "$CORE_ROOT" -cf - . | tar -C "$AWS_ROOT" -xf -
-cp "$SCRIPT_DIR/aws_spike.go.txt" "$AWS_ROOT/cmd/heimdall/aws_spike.go"
+cp "$SCRIPT_DIR/aws_spike.go.txt" "$AWS_ROOT/cmd/halro/aws_spike.go"
 
 (
 	cd "$AWS_ROOT"
@@ -49,9 +49,9 @@ measure() {
 
 mkdir -p "$WORK_ROOT/cache/core-build" "$WORK_ROOT/cache/aws-build"
 measure core-clean-build env GOCACHE="$WORK_ROOT/cache/core-build" \
-	go -C "$CORE_ROOT" build -trimpath -ldflags '-s -w' -o "$RESULT_ROOT/heimdall-core" ./cmd/heimdall
+	go -C "$CORE_ROOT" build -trimpath -ldflags '-s -w' -o "$RESULT_ROOT/halro-core" ./cmd/halro
 measure aws-clean-build env GOCACHE="$WORK_ROOT/cache/aws-build" \
-	go -C "$AWS_ROOT" build -trimpath -ldflags '-s -w' -o "$RESULT_ROOT/heimdall-aws" ./cmd/heimdall
+	go -C "$AWS_ROOT" build -trimpath -ldflags '-s -w' -o "$RESULT_ROOT/halro-aws" ./cmd/halro
 
 mkdir -p "$WORK_ROOT/cache/core-test" "$WORK_ROOT/cache/aws-test"
 measure core-clean-test env GOCACHE="$WORK_ROOT/cache/core-test" go -C "$CORE_ROOT" test ./...
@@ -82,8 +82,8 @@ cold_start_total() {
 	awk '/^real / { total += $2; count++ } END { if (count == 0) print "0"; else printf "%.6f", total/count }' "$output"
 }
 
-CORE_COLD_START=$(cold_start_total "$RESULT_ROOT/heimdall-core" "$RESULT_ROOT/core-cold-start.time")
-AWS_COLD_START=$(cold_start_total "$RESULT_ROOT/heimdall-aws" "$RESULT_ROOT/aws-cold-start.time")
+CORE_COLD_START=$(cold_start_total "$RESULT_ROOT/halro-core" "$RESULT_ROOT/core-cold-start.time")
+AWS_COLD_START=$(cold_start_total "$RESULT_ROOT/halro-aws" "$RESULT_ROOT/aws-cold-start.time")
 
 # A live metadata endpoint proves that the linked AWS artifact does not touch
 # workload identity or the network in File-mode static commands.
@@ -95,12 +95,12 @@ AWS_EC2_METADATA_SERVICE_ENDPOINT=http://127.0.0.1:18765 \
 AWS_EC2_METADATA_DISABLED=false \
 AWS_CONFIG_FILE="$WORK_ROOT/nonexistent-config" \
 AWS_SHARED_CREDENTIALS_FILE="$WORK_ROOT/nonexistent-credentials" \
-	"$RESULT_ROOT/heimdall-aws" version >/dev/null
+	"$RESULT_ROOT/halro-aws" version >/dev/null
 AWS_EC2_METADATA_SERVICE_ENDPOINT=http://127.0.0.1:18765 \
 AWS_EC2_METADATA_DISABLED=false \
 AWS_CONFIG_FILE="$WORK_ROOT/nonexistent-config" \
 AWS_SHARED_CREDENTIALS_FILE="$WORK_ROOT/nonexistent-credentials" \
-	"$RESULT_ROOT/heimdall-aws" config check --config "$AWS_ROOT/configs/config.example.yaml" >/dev/null
+	"$RESULT_ROOT/halro-aws" config check --config "$AWS_ROOT/configs/config.example.yaml" >/dev/null
 kill "$METADATA_PID"
 wait "$METADATA_PID" 2>/dev/null || true
 if [ -s "$METADATA_LOG" ]; then
@@ -141,8 +141,8 @@ aws_config_version=$AWS_CONFIG_VERSION
 aws_kms_version=$AWS_KMS_VERSION
 core_module_count=$(module_count "$CORE_ROOT")
 aws_module_count=$(module_count "$AWS_ROOT")
-core_binary_bytes=$(file_size "$RESULT_ROOT/heimdall-core")
-aws_binary_bytes=$(file_size "$RESULT_ROOT/heimdall-aws")
+core_binary_bytes=$(file_size "$RESULT_ROOT/halro-core")
+aws_binary_bytes=$(file_size "$RESULT_ROOT/halro-aws")
 core_container_bytes=$CORE_CONTAINER_SIZE
 aws_container_bytes=$AWS_CONTAINER_SIZE
 core_spdx_packages=$(spdx_package_count "$RESULT_ROOT/core.spdx.json")

@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 
-	openaiwire "github.com/akz142857/Heimdall/internal/compatibility/openai"
-	"github.com/akz142857/Heimdall/internal/semantic"
+	openaiwire "github.com/akz142857/Halro/internal/compatibility/openai"
+	"github.com/akz142857/Halro/internal/semantic"
 )
 
 // Primitive identifies the concrete provider API used southbound. It is

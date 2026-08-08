@@ -3,7 +3,7 @@
 Audit records are stored in `data/audit/audit.log` as append-only framed
 records. Each frame has a monotonic sequence, the SHA-256 hash of the previous
 frame, and an HMAC-SHA256 made with a key derived from the master key under the
-independent `heimdall:audit:v1` HKDF domain. Audit events have a fixed schema
+independent `halro:audit:v1` HKDF domain. Audit events have a fixed schema
 and do not accept arbitrary request bodies, credentials, Gateway keys, prompts,
 or model responses.
 
@@ -18,7 +18,7 @@ the checkpoint.
 Verify offline while the server is stopped:
 
 ```text
-heimdall audit verify --config ./config.yaml
+halro audit verify --config ./config.yaml
 ```
 
 The guarantee is tamper evidence, not non-repudiation. An attacker with root

@@ -7,7 +7,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/akz142857/Heimdall/internal/domain"
+	"github.com/akz142857/Halro/internal/domain"
 	"golang.org/x/crypto/argon2"
 )
 
@@ -92,7 +92,7 @@ func PasswordNeedsUpgrade(user domain.AdminUser) bool {
 }
 
 func DummyVerify(password []byte) {
-	salt := []byte("heimdall-dummy!!")
+	salt := []byte("halro-dummy!!")
 	candidate := argon2.IDKey(
 		password, salt, argonIterations, argonMemoryKiB, argonParallelism, passwordHashSize,
 	)

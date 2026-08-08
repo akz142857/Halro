@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/config"
-	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
+	"github.com/akz142857/Halro/internal/config"
+	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 )
 
 // auditAnchorPollInterval governs how often runAuditAnchorMaintenance checks
@@ -84,7 +84,7 @@ func (r *Runtime) runAuditAnchorMaintenance(ctx context.Context) {
 func (r *Runtime) adminAuditAnchors(writer http.ResponseWriter, request *http.Request) {
 	if !r.authorizeAuditAnchors(request) {
 		r.anchorAuthFailed.Add(1)
-		writer.Header().Set("WWW-Authenticate", `Bearer realm="heimdall-audit-anchors"`)
+		writer.Header().Set("WWW-Authenticate", `Bearer realm="halro-audit-anchors"`)
 		writeJSON(writer, http.StatusUnauthorized, map[string]any{
 			"error": "audit anchor authentication required",
 		})

@@ -1,4 +1,4 @@
-# Heimdall KMS Envelope Key Slot PRD
+# Halro KMS Envelope Key Slot PRD
 
 状态：Draft — 评审阻塞项已纳入，尚未进入实现排期
 
@@ -8,7 +8,7 @@
 
 ## 1. 文档定位
 
-本 PRD 是 `docs/prd/prd-master-key-key-slots.zh-CN.md` 的 KMS Slot 子方案，定义云 KMS 如何包装并解锁 Heimdall Master Key。M11 只实现并验收 AWS KMS；GCP Cloud KMS 和 Azure Key Vault Keys 仅保留为未来适配时必须重新评审的能力差异，不进入当前发布范围。
+本 PRD 是 `docs/prd/prd-master-key-key-slots.zh-CN.md` 的 KMS Slot 子方案，定义云 KMS 如何包装并解锁 Halro Master Key。M11 只实现并验收 AWS KMS；GCP Cloud KMS 和 Azure Key Vault Keys 仅保留为未来适配时必须重新评审的能力差异，不进入当前发布范围。
 
 总体模型、File Slot、Master Key 生命周期和共同安全边界由上层 Key Slot PRD 负责。本 PRD 不再定义单一 `wrapped_master_key` 模式；任何生产 KMS 部署都必须服从多 Slot 与独立恢复路径要求。
 
@@ -16,19 +16,19 @@
 
 ## 2. 问题陈述
 
-Heimdall 当前将 32 字节随机 Master Key 以明文 `master.key` 文件保存在本地。文件权限和 Vault 加密可以抵御数据库单独泄露，但数据库、主机快照和 Master Key 同时泄露时，攻击者无需破解 AES 即可解密 Provider Credential、MFA 等 Vault 数据。
+Halro 当前将 32 字节随机 Master Key 以明文 `master.key` 文件保存在本地。文件权限和 Vault 加密可以抵御数据库单独泄露，但数据库、主机快照和 Master Key 同时泄露时，攻击者无需破解 AES 即可解密 Provider Credential、MFA 等 Vault 数据。
 
 企业团队通常还要求：
 
 - 通过 IAM、Workload Identity、Key Policy 和云审计统一控制解锁权限；
 - 不在主机磁盘长期保存裸 Master Key；
-- 区分 KMS KEK rewrap 与 Heimdall DEK rotate；
+- 区分 KMS KEK rewrap 与 Halro DEK rotate；
 - 能在 KMS Key 误删、禁用、区域故障、账号隔离或策略错误时恢复；
-- 保持 Heimdall 核心云中立、File 模式无云行为，正常请求不依赖 KMS 可用性。
+- 保持 Halro 核心云中立、File 模式无云行为，正常请求不依赖 KMS 可用性。
 
 原始架构方向保持不变：
 
-> 外部 KMS 管理 KEK，Heimdall 保留随机 DEK 和现有 Vault。
+> 外部 KMS 管理 KEK，Halro 保留随机 DEK 和现有 Vault。
 
 ```text
 AWS KMS（M11）/ 未来经独立评审的其他 KMS
@@ -39,7 +39,7 @@ AWS KMS（M11）/ 未来经独立评审的其他 KMS
         unwrap protected key payload
                   │
                   ▼
-       32-byte Heimdall Master Key
+       32-byte Halro Master Key
                   │
                   ▼
   现有 HKDF + AES-GCM + AAD + bbolt Vault
@@ -49,14 +49,14 @@ AWS KMS（M11）/ 未来经独立评审的其他 KMS
 
 ### 3.1 目标用户
 
-- 当前在 AWS 运行单实例 Heimdall、未来可能选择其他托管环境的平台团队；
+- 当前在 AWS 运行单实例 Halro、未来可能选择其他托管环境的平台团队；
 - 需要 IAM/KMS 审计和职责分离的安全团队；
 - 负责冷启动、升级、备份、恢复和 DR 演练的 SRE；
 - 需要选择独立 File 模式或可选 KMS 扩展的部署操作者。
 
 ### 3.2 核心用户故事
 
-1. 作为平台管理员，我可以使用 Workload Identity 自动解锁 Heimdall，而不在磁盘或部署清单保存云静态凭据和裸 Master Key。
+1. 作为平台管理员，我可以使用 Workload Identity 自动解锁 Halro，而不在磁盘或部署清单保存云静态凭据和裸 Master Key。
 2. 作为安全管理员，我可以更换 KMS Key 并 rewrap 同一个 Master Key，而不触发 Credential 全量重加密。
 3. 作为 SRE，我可以在主 KMS Key、区域或账号不可用时，通过另一个已验证 Slot 恢复服务和备份。
 4. 作为审计人员，我可以确认谁在何时执行 unwrap、rewrap、Slot 变更和 DEK rotate，但任何日志都不包含密钥材料。
@@ -64,7 +64,7 @@ AWS KMS（M11）/ 未来经独立评审的其他 KMS
 
 ## 4. 目标
 
-- 使用云 KMS 包装随机 32 字节 Heimdall Master Key，明文 DEK 不落盘。
+- 使用云 KMS 包装随机 32 字节 Halro Master Key，明文 DEK 不落盘。
 - KMS 只进入启动、恢复、rewrap、rotate 和诊断控制面，不进入 Gateway 请求热路径。
 - 使用 Workload Identity/Managed Identity，生产路径不依赖静态云访问密钥。
 - 每个生产实例至少有两个独立、已验证的解锁路径。
@@ -80,9 +80,9 @@ AWS KMS（M11）/ 未来经独立评审的其他 KMS
 - 不在请求热路径按次调用 KMS。
 - 不把 Provider API Key 改为 Secrets Manager 外部引用；这是独立后续需求。
 - 不提供 active-active、多写者或 HPA 扩副本能力。
-- 不把 Kubernetes KMS Provider 当作 Heimdall 的通用 KMS API。
+- 不把 Kubernetes KMS Provider 当作 Halro 的通用 KMS API。
 - 不在本阶段承诺 FIPS 认证、SOC 2 认证或组织级多租户密钥隔离。
-- 不承诺抵御已控制宿主机 root、调试器或 Heimdall 进程内代码执行的攻击者。
+- 不承诺抵御已控制宿主机 root、调试器或 Halro 进程内代码执行的攻击者。
 - 不在根模块通过 build tag 隐藏实际仍存在于 `go.mod` 的云 SDK。
 - 不实现通用运行时插件系统或调用云 CLI。
 
@@ -185,7 +185,7 @@ KMS Slot 是上层 Key Slot descriptor 的一种，建议字段如下：
 
 注意：`algorithm` 是 provider-specific 字段，不能把 AWS 的 `SYMMETRIC_DEFAULT` 当作跨云统一值。Azure、GCP 的允许算法必须由对应 Adapter 和可信配置分别校验。
 
-descriptor 存入 bbolt 未加密系统元数据区域并包含在 Heimdall 加密备份中。它不是秘密，但必须受到：
+descriptor 存入 bbolt 未加密系统元数据区域并包含在 Halro 加密备份中。它不是秘密，但必须受到：
 
 - bbolt 事务和 revision 控制；
 - 配置 allowlist；
@@ -241,8 +241,8 @@ Azure 缺少等价 AAD 不得被描述为与 AWS/GCP 密码学能力完全一致
 version: 1
 
 storage:
-  data_dir: /var/lib/heimdall
-  metadata_file: heimdall.db
+  data_dir: /var/lib/halro
+  metadata_file: halro.db
 
   master_key:
     mode: key_slots
@@ -354,11 +354,11 @@ Recovery Seed、助记词和跨云 Slot 不属于 M11。要求自动区域恢复
 
 ## 14. Kubernetes 与单活部署
 
-Heimdall 保持一个 active writer 独占数据目录。KMS 支持不改变该约束。
+Halro 保持一个 active writer 独占数据目录。KMS 支持不改变该约束。
 
 - Kubernetes 工作负载默认 `replicas: 1`；
 - 使用 `Recreate`，不宣称 RollingUpdate/active-active；
-- 不使用 HPA 扩 Heimdall 副本；
+- 不使用 HPA 扩 Halro 副本；
 - 第二 Pod 无法取得数据锁时不得持续高频调用 KMS；锁和静态配置检查应尽可能在解包前完成；
 - IRSA、GCP Workload Identity、Azure Workload Identity 未就绪映射为 `kms_identity_not_ready` 并受总 deadline 限制；
 - CrashLoopBackOff、Pod disruption、节点驱逐和 KMS 限流必须进入部署测试；
@@ -410,7 +410,7 @@ rewrap：
 
 1. 隔离泄露身份并保全审计证据；
 2. 使用可信 Slot 解锁；
-3. 执行 Heimdall DEK rotate，全量重加密 Vault；
+3. 执行 Halro DEK rotate，全量重加密 Vault；
 4. 用未泄露 KMS Key 创建新 Slots；
 5. 创建新的可信备份；
 6. 按保留和合规策略隔离、重加密或销毁受影响历史备份；
@@ -498,13 +498,13 @@ KMS 保护静态 DEK，不保护运行中已解锁进程。PRD 不得把“KMS K
 建议增加：
 
 ```text
-heimdall_kms_calls_total{provider,operation,result}
-heimdall_kms_call_duration_seconds{provider,operation}
-heimdall_kms_unlock_attempts_total{provider,result}
-heimdall_kms_slot_fallbacks_total{from_type,to_type,result}
-heimdall_kms_rewrap_total{provider,result}
-heimdall_kms_dek_rotations_total{result}
-heimdall_kms_slot_last_verified_timestamp_seconds{slot_type}
+halro_kms_calls_total{provider,operation,result}
+halro_kms_call_duration_seconds{provider,operation}
+halro_kms_unlock_attempts_total{provider,result}
+halro_kms_slot_fallbacks_total{from_type,to_type,result}
+halro_kms_rewrap_total{provider,result}
+halro_kms_dek_rotations_total{result}
+halro_kms_slot_last_verified_timestamp_seconds{slot_type}
 ```
 
 禁止使用完整 key ID、ARN、项目、tenant、账号、Slot ID 或 ciphertext 作为 Metrics label，避免敏感信息和高基数。

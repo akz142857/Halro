@@ -5,8 +5,8 @@ Keys and the active Workload Identity. It creates no AWS resources and changes
 no Key, Grant, or Policy state.
 
 ```bash
-export HEIMDALL_AWS_KMS_PRIMARY_KEY_ARN='arn:aws:kms:...:key/...'
-export HEIMDALL_AWS_KMS_RECOVERY_KEY_ARN='arn:aws:kms:...:key/...'
+export HALRO_AWS_KMS_PRIMARY_KEY_ARN='arn:aws:kms:...:key/...'
+export HALRO_AWS_KMS_RECOVERY_KEY_ARN='arn:aws:kms:...:key/...'
 ./tools/m11/aws-kms-dr-smoke/run.sh
 ```
 

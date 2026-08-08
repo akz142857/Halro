@@ -16,16 +16,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/audit"
-	backuppkg "github.com/akz142857/Heimdall/internal/backup"
-	"github.com/akz142857/Heimdall/internal/config"
-	"github.com/akz142857/Heimdall/internal/domain"
-	corekms "github.com/akz142857/Heimdall/internal/kms"
-	"github.com/akz142857/Heimdall/internal/kms/awskms"
-	"github.com/akz142857/Heimdall/internal/ledger"
-	"github.com/akz142857/Heimdall/internal/masterkey"
-	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
-	"github.com/akz142857/Heimdall/internal/vault"
+	"github.com/akz142857/Halro/internal/audit"
+	backuppkg "github.com/akz142857/Halro/internal/backup"
+	"github.com/akz142857/Halro/internal/config"
+	"github.com/akz142857/Halro/internal/domain"
+	corekms "github.com/akz142857/Halro/internal/kms"
+	"github.com/akz142857/Halro/internal/kms/awskms"
+	"github.com/akz142857/Halro/internal/ledger"
+	"github.com/akz142857/Halro/internal/masterkey"
+	boltstore "github.com/akz142857/Halro/internal/store/bolt"
+	"github.com/akz142857/Halro/internal/vault"
 )
 
 func TestKMSBackupManifestAndHistoricalDescriptorRemainImmutableAfterRewrap(t *testing.T) {

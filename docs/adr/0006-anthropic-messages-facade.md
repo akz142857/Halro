@@ -6,7 +6,7 @@
 
 ## Context
 
-Heimdall needs an Anthropic-compatible `POST /v1/messages` facade without
+Halro needs an Anthropic-compatible `POST /v1/messages` facade without
 pretending that every Anthropic field has an equivalent OpenAI, Gemini, or
 Bedrock meaning. In particular, Anthropic tool selection and signed thinking
 blocks have provider-specific constraints. Signed `thinking` and
@@ -16,7 +16,7 @@ their original order and without changing their values.
 ## Decision
 
 The facade supports two explicit modes selected by the
-`Heimdall-Route-Mode` request header:
+`Halro-Route-Mode` request header:
 
 - `portable` is the default. The request is decoded into the approved
   Canonical `generate` subset. Only candidates whose versioned profile can

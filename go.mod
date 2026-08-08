@@ -1,4 +1,4 @@
-module github.com/akz142857/Heimdall
+module github.com/akz142857/Halro
 
 go 1.26.5
 

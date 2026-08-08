@@ -23,7 +23,7 @@ evaluation is deliberately off the per-request steady-state path.
 
 Date: 2026-07-31  
 Host: Apple M4 Pro, darwin/arm64, Go 1.24  
-Command: `HEIMDALL_10GIB_WAL_RTO=1 go test ./internal/ledger -run TestTenGiBWALRecoveryProfile -count=1 -v`
+Command: `HALRO_10GIB_WAL_RTO=1 go test ./internal/ledger -run TestTenGiBWALRecoveryProfile -count=1 -v`
 
 | WAL bytes | Records | Frame profile | Open/verify | State replay | Total RTO | Effective two-scan throughput |
 |---:|---:|---|---:|---:|---:|---:|
@@ -46,7 +46,7 @@ and measure their retained WAL distribution before setting restart SLOs.
 
 Date: 2026-07-31  
 Host: Apple M4 Pro, darwin/arm64, Go 1.24  
-Command: `HEIMDALL_STRESS=1 go test ./tests/stress -run TestThousandConcurrentSSEConnectionsCleanup -count=1 -v`
+Command: `HALRO_STRESS=1 go test ./tests/stress -run TestThousandConcurrentSSEConnectionsCleanup -count=1 -v`
 
 The test uses real loopback TCP connections. Each server stream sends one SSE event,
 then remains open while all 1,000 clients deliberately pause response-body reads.
@@ -89,7 +89,7 @@ An in-use heap profile captured after cleanup reported 8,203.81 KiB sampled:
 | `net/http.init` | 512.10 KiB | 6.24% |
 | runtime scavenger state | 512.05 KiB | 6.24% |
 
-No Heimdall handler, request, SSE chunk, or Provider object appeared as retained
+No Halro handler, request, SSE chunk, or Provider object appeared as retained
 in-use space. The retained profile is therefore explained by Go scheduler/thread
 structures, goroutine stacks, and fixed runtime/HTTP initialization rather than
 live connection ownership.

@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://heimdall.example/schemas/deadman-event-v1.json",
-  "title": "Heimdall independent dead-man event",
+  "$id": "https://halro.example/schemas/deadman-event-v1.json",
+  "title": "Halro independent dead-man event",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "event_id", "sequence", "probe_id", "environment", "region", "cluster", "kind", "observed_at", "heartbeat_ttl", "attempt"],
   "properties": {
-    "schema_version": {"const": "heimdall.deadman.event/v1"},
+    "schema_version": {"const": "halro.deadman.event/v1"},
     "event_id": {"type": "string", "minLength": 1},
     "sequence": {"type": "integer", "minimum": 1},
     "probe_id": {"type": "string", "minLength": 1},
@@ -15,7 +15,7 @@
     "cluster": {"type": "string", "minLength": 1},
     "kind": {"enum": ["heartbeat", "state_transition"]},
     "target_id": {"type": "string"},
-    "target_kind": {"enum": ["", "heimdall", "prometheus", "alertmanager"]},
+    "target_kind": {"enum": ["", "halro", "prometheus", "alertmanager"]},
     "state": {"enum": ["", "up", "down"]},
     "observed_at": {"type": "string", "format": "date-time"},
     "heartbeat_ttl": {"type": "string", "minLength": 1},
@@ -30,7 +30,7 @@
         "required": ["target_id", "target_kind", "state"],
         "properties": {
           "target_id": {"type": "string", "minLength": 1},
-          "target_kind": {"enum": ["heimdall", "prometheus", "alertmanager"]},
+          "target_kind": {"enum": ["halro", "prometheus", "alertmanager"]},
           "state": {"enum": ["up", "down"]}
         }
       },

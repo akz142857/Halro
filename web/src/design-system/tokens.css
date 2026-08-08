@@ -1,5 +1,5 @@
 /*
- * Heimdall Admin Console — Primitive Tokens (design-system layer 1).
+ * Halro Admin Console — Primitive Tokens (design-system layer 1).
  *
  * Raw, theme-agnostic values: color scales, type, spacing, radius, shadow,
  * motion and z-index. These are the ONLY place literal colors are allowed to
@@ -60,7 +60,7 @@
 
   /* Typography */
   /*
-   * System fonts only — Heimdall ships as a single binary and bundles no
+   * System fonts only — Halro ships as a single binary and bundles no
    * webfont, so a family that is not installed is a silent fallback rather
    * than a download. The CJK families are listed explicitly because the
    * default interface language is Chinese: without them Windows falls back

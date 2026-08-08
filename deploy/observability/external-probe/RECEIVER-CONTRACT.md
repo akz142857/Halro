@@ -1,6 +1,6 @@
 # Independent receiver contract (v1)
 
-The receiver is outside the Heimdall, Prometheus, Alertmanager, and probe
+The receiver is outside the Halro, Prometheus, Alertmanager, and probe
 failure domains. A successful HTTP response means the event is durably stored,
 not merely accepted into process memory.
 

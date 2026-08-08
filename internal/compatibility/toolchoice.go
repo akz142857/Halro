@@ -4,7 +4,7 @@ import (
 	"errors"
 	"slices"
 
-	"github.com/akz142857/Heimdall/internal/semantic"
+	"github.com/akz142857/Halro/internal/semantic"
 )
 
 type ToolChoiceProtocol string

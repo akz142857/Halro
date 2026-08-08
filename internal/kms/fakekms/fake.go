@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/kms"
+	"github.com/akz142857/Halro/internal/kms"
 )
 
 const Provider = "fake-kms"

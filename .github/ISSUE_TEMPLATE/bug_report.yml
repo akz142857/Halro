@@ -1,5 +1,5 @@
 name: Bug report
-description: Report a reproducible Heimdall defect without sensitive data
+description: Report a reproducible Halro defect without sensitive data
 title: "bug: "
 labels: ["bug", "triage"]
 body:

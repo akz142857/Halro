@@ -1,5 +1,5 @@
 /*
- * Heimdall Admin Console design system entry point.
+ * Halro Admin Console design system entry point.
  *
  * Import order is the dependency order and must not change:
  *   primitives → dark semantic tokens (also the bare-:root default) → light.

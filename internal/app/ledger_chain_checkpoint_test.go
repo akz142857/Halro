@@ -7,8 +7,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/akz142857/Heimdall/internal/ledger"
-	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
+	"github.com/akz142857/Halro/internal/ledger"
+	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 )
 
 // seedLedgerActivity writes one accepted request so the WAL holds at least one
@@ -72,7 +72,7 @@ func TestDeletedLedgerIsRejectedByChainCheckpoint(t *testing.T) {
 	// all, because it is the command someone runs precisely when they suspect
 	// this.
 	if _, err := VerifyLedger(context.Background(), cfg); err == nil {
-		t.Fatal("heimdall ledger verify must fail on a deleted ledger with a non-zero checkpoint")
+		t.Fatal("halro ledger verify must fail on a deleted ledger with a non-zero checkpoint")
 	}
 }
 

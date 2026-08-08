@@ -3,7 +3,7 @@ package app
 import (
 	"testing"
 
-	gatewaycore "github.com/akz142857/Heimdall/internal/gateway"
+	gatewaycore "github.com/akz142857/Halro/internal/gateway"
 )
 
 func TestDashboardGovernanceSummaries(t *testing.T) {

@@ -1,4 +1,4 @@
-# Heimdall 时区治理与周期身份版本化 PRD
+# Halro 时区治理与周期身份版本化 PRD
 
 - 状态：Implemented — §4 目标 1–7 已实现并通过自动化验收
 - 范围变更：项目级会计时区与管理员级显示时区均已移出范围，见 §5 第 5、9 条
@@ -9,9 +9,9 @@
 
 ## 1. 文档定位
 
-本 PRD 定义 Heimdall 从"单一静态配置时区"升级为"会计时区受治理、周期身份自描述且版本化"的产品与工程要求。
+本 PRD 定义 Halro 从"单一静态配置时区"升级为"会计时区受治理、周期身份自描述且版本化"的产品与工程要求。
 
-Heimdall 是面向国际化部署的 AI Gateway。它的日预算（`Daily Budget`）按自然日执行，Usage 与 Dashboard 按自然日汇总。"自然日"是一个必须被精确定义、可审计、且不会因配置变更而被追溯重解释的概念。当前实现把这个概念寄托在一个启动期读取的 YAML 字段上，既缺少版本化，也缺少与展示层的契约。
+Halro 是面向国际化部署的 AI Gateway。它的日预算（`Daily Budget`）按自然日执行，Usage 与 Dashboard 按自然日汇总。"自然日"是一个必须被精确定义、可审计、且不会因配置变更而被追溯重解释的概念。当前实现把这个概念寄托在一个启动期读取的 YAML 字段上，既缺少版本化，也缺少与展示层的契约。
 
 本升级不改变成本计量原则（Provider 返回的 Token Usage 优先），不改变价格时间线的 UTC 语义，也不引入用户级时区。它解决的是以下问题：
 
@@ -27,7 +27,7 @@ Heimdall 是面向国际化部署的 AI Gateway。它的日预算（`Daily Budge
 - Runtime 在启动时调用 `time.LoadLocation` 并在失败时拒绝启动（`internal/app/runtime.go:250`），该 `*time.Location` 注入 `budget.Manager` 与 Usage 查询；
 - 日预算周期由 `PeriodID: now.Format("2006-01-02")` 派生（`internal/budget/manager.go:443`），余额键为 `(projectID, periodID)`（`internal/ledger/event.go:526`）；
 - Dashboard 的"今天"由 `DashboardForBasis` 按 `now.In(location)` 的 `Year + YearDay` 归集（`internal/usage/query.go:182`）；
-- Parquet 分区日期与保留期裁剪固定使用 UTC（`internal/usage/parquet.go:223`、`internal/usage/parquet.go:500`、`cmd/heimdall/main.go:613`）；
+- Parquet 分区日期与保留期裁剪固定使用 UTC（`internal/usage/parquet.go:223`、`internal/usage/parquet.go:500`、`cmd/halro/main.go:613`）；
 - 价格时间线明确不使用 `usage.timezone`（见 `docs/prd/prd-versioned-model-pricing.zh-CN.md` §6.4），TOTP 校验明确只用 UTC（见 `docs/prd/prd-authenticator-totp.zh-CN.md` §9.3）；
 - Admin Console 的实例级设置已有 `InstanceUISettings` 领域对象与 `/admin/api/v1/settings/ui` 接口，管理员级偏好已有 `Locale` 与 `Appearance`（`internal/domain/admin.go:11`）。
 
@@ -52,7 +52,7 @@ Heimdall 是面向国际化部署的 AI Gateway。它的日预算（`Daily Budge
 
 ### 2.3 时区解析结果依赖运行环境
 
-`cmd/heimdall` 未导入 `time/tzdata`，`time.LoadLocation` 依赖运行环境的 `/usr/share/zoneinfo`。Dockerfile 使用 `gcr.io/distroless/static-debian12`，该镜像携带 tzdata，但那是镜像属性而非构建产物属性。同一版本 Heimdall 在不同宿主、不同基础镜像或非容器安装下，可能解析出不同 tzdata 版本。
+`cmd/halro` 未导入 `time/tzdata`，`time.LoadLocation` 依赖运行环境的 `/usr/share/zoneinfo`。Dockerfile 使用 `gcr.io/distroless/static-debian12`，该镜像携带 tzdata，但那是镜像属性而非构建产物属性。同一版本 Halro 在不同宿主、不同基础镜像或非容器安装下，可能解析出不同 tzdata 版本。
 
 IANA 时区数据库每年多次发布，历史与未来的 UTC 偏移规则会被修订。两个节点若使用不同 tzdata 版本，在某个受影响的 DST 切换日会算出不同的本地日边界，进而对同一时刻生成不同 `PeriodID`。这是账本层面的分叉，且没有任何现有机制能检测到它。
 
@@ -74,7 +74,7 @@ IANA 时区数据库每年多次发布，历史与未来的 UTC 偏移规则会�
 
 ### 3.1 目标用户
 
-- 在非 UTC 时区运营 Heimdall、依赖日预算控制成本的管理员；
+- 在非 UTC 时区运营 Halro、依赖日预算控制成本的管理员；
 - 需要与内部财务系统按自然日对账的平台或 FinOps 团队；
 - 需要从 Ledger 独立还原周期边界的审计人员；
 - 负责跨区域多节点部署、升级与账本验证的 SRE；
@@ -124,7 +124,7 @@ IANA 时区数据库每年多次发布，历史与未来的 UTC 偏移规则会�
 
 `config.yaml` 中的 `usage.timezone` 降级为**首次启动播种值**：仅在实例会计设置尚未存在时用于初始化。此后存储为唯一权威。
 
-不保留双活来源。`heimdall doctor` 在配置文件值与存储值不一致时输出 `warn`，提示管理员配置文件已不生效，避免运维修改 YAML 后误以为已生效。
+不保留双活来源。`halro doctor` 在配置文件值与存储值不一致时输出 `warn`，提示管理员配置文件已不生效，避免运维修改 YAML 后误以为已生效。
 
 理由：会计时区需要版本号、审计链和生效时点，这三者都无法由无状态的配置文件承载。同时保留配置文件作为播种入口，使无人值守首次部署仍可通过配置完成初始化。
 
@@ -180,7 +180,7 @@ Parquet 分区日期、保留期裁剪 cutoff 与备份时间戳恒用 UTC，且
 
 ### 6.9 时区数据库嵌入构建产物
 
-`cmd/heimdall` 导入 `_ "time/tzdata"`。构建产物自带 IANA 数据库副本，`time.LoadLocation` 不再依赖运行环境。
+`cmd/halro` 导入 `_ "time/tzdata"`。构建产物自带 IANA 数据库副本，`time.LoadLocation` 不再依赖运行环境。
 
 Go 的解析顺序为：`ZONEINFO` 环境变量、系统路径、嵌入数据库。为保证确定性，Runtime 启动时显式记录实际使用的来源与版本，并在 `doctor` 中输出。生产部署应确保未设置 `ZONEINFO`。
 
@@ -327,7 +327,7 @@ hourly bucket 保持 UTC 存储与 UTC 序列化，不做时区转换。转换�
 
 ### 9.3 保留期
 
-`cmd/heimdall/main.go:613` 的 cutoff 改为：
+`cmd/halro/main.go:613` 的 cutoff 改为：
 
 ```go
 cutoff := time.Now().UTC().AddDate(0, 0, -(cfg.Usage.RetentionDays + 1))
@@ -469,19 +469,19 @@ export function formatInstant(value: string, timeZone: string, style?: InstantSt
 
 ### 12.2 Metrics
 
-沿用 `heimdall_` 前缀：
+沿用 `halro_` 前缀：
 
 | 指标 | 类型 | 说明 |
 | --- | --- | --- |
-| `heimdall_accounting_timezone_version` | gauge | 当前时区版本，用于跨节点比对 |
-| `heimdall_accounting_period_end_seconds` | gauge | 当前周期结束的 Unix 时间，用于外部系统对齐 |
-| `heimdall_tzdata_info{source,version,fingerprint}` | gauge，值恒为 1 | tzdata 来源、版本与转换表指纹。版本号是打包者的声明，指纹是实际规则的证据——两个实例可能报告同一版本号却携带不同的转换表，跨实例一致性以指纹为准 |
+| `halro_accounting_timezone_version` | gauge | 当前时区版本，用于跨节点比对 |
+| `halro_accounting_period_end_seconds` | gauge | 当前周期结束的 Unix 时间，用于外部系统对齐 |
+| `halro_tzdata_info{source,version,fingerprint}` | gauge，值恒为 1 | tzdata 来源、版本与转换表指纹。版本号是打包者的声明，指纹是实际规则的证据——两个实例可能报告同一版本号却携带不同的转换表，跨实例一致性以指纹为准 |
 
 ### 12.3 告警与 doctor
 
-`heimdall doctor`（`internal/app/doctor.go:171`）的 `clock` 检查扩展为输出：系统 UTC 时刻、会计时区、当前周期 UTC 区间、tzdata 来源与版本、配置文件值是否与存储一致。
+`halro doctor`（`internal/app/doctor.go:171`）的 `clock` 检查扩展为输出：系统 UTC 时刻、会计时区、当前周期 UTC 区间、tzdata 来源与版本、配置文件值是否与存储一致。
 
-跨节点部署应基于 `heimdall_tzdata_info` 与 `heimdall_accounting_timezone_version` 配置一致性告警。tzdata 版本不一致时应视为高优先级，因为它可能导致账本分叉且不会自行暴露。
+跨节点部署应基于 `halro_tzdata_info` 与 `halro_accounting_timezone_version` 配置一致性告警。tzdata 版本不一致时应视为高优先级，因为它可能导致账本分叉且不会自行暴露。
 
 ## 13. 升级与数据迁移
 
@@ -516,7 +516,7 @@ metadata schema 从 v15 升至 v16（当前值见 `internal/store/bolt/store.go:
 
 无 schema 变更，无 WAL 变更，可独立发布与回滚。
 
-1. `cmd/heimdall` 导入 `_ "time/tzdata"`；新增 `internal/timezone` 报告来源、版本与**转换表指纹**；`heimdall version`、`doctor` 的 `tzdata` 检查与 `heimdall_tzdata_info` 指标输出三者；
+1. `cmd/halro` 导入 `_ "time/tzdata"`；新增 `internal/timezone` 报告来源、版本与**转换表指纹**；`halro version`、`doctor` 的 `tzdata` 检查与 `halro_tzdata_info` 指标输出三者；
 2. Admin API 增加 `time_context`（`internal/app/time_context.go`），覆盖 `/dashboard`、`/usage`、`/system/status`，此阶段由 `cfg.Usage.Timezone` 派生，`timezone_version` 恒为 `0`；
 3. `web/src/format.ts` 收口为必须显式传入时区的 `formatInstant`，`web/src/timezone.ts` 持有全站渲染时区，`web/src/TrendChart.tsx` 通过 `tzDate` 对齐；
 4. 运行总览页展示会计时区与周期 UTC 区间；
@@ -534,7 +534,7 @@ metadata schema 从 v15 升至 v16（当前值见 `internal/store/bolt/store.go:
 3. Ledger 事件新增四个周期字段，WAL frame v3（`internal/ledger/log.go`），`BalanceKey` 加入 `TimezoneVersion`；`Request`/`Attempt` 携带完整 `Period`，下游事件继承而不重算；
 4. 待生效变更：`PendingTimezone` + `PendingEffectiveAt`，生效时刻取当前周期 `PeriodEnd`；到期由 `runUsageMaintenance` 促成记录落定；
 5. Admin API `GET/PUT /admin/api/v1/settings/accounting` 与 `DELETE .../pending`，Console 新增记账时区面板（`AccountingTimezoneForm`）；
-6. Audit 三个事件（scheduled / cancelled / applied）与 `heimdall_accounting_timezone_version`、`heimdall_accounting_period_end_seconds` 指标；
+6. Audit 三个事件（scheduled / cancelled / applied）与 `halro_accounting_timezone_version`、`halro_accounting_period_end_seconds` 指标；
 7. `config.yaml` 降级为播种值，`doctor` 新增 `accounting_timezone` 检查，配置文件与存储不一致时 `warn`。
 
 实施期间补入 §7.1 的两条写入约束（空操作不推进版本、版本不可回退），以及 §16.2 的切换窗口告警——后者是评审发现的：切换会铸造一份全新余额，使日额度在一个自然日内接近翻倍，而初稿把这一后果写反了。
@@ -617,11 +617,11 @@ metadata schema 从 v15 升至 v16（当前值见 `internal/store/bolt/store.go:
 ### 17.6 完成定义
 
 1. §17.1–§17.5 全部通过；
-2. `heimdall doctor` 输出会计时区、周期区间与 tzdata 指纹，并在配置文件与存储不一致时 `warn`，均有断言测试；
+2. `halro doctor` 输出会计时区、周期区间与 tzdata 指纹，并在配置文件与存储不一致时 `warn`，均有断言测试；
 3. 已有开发库可无 panic 打开并完成 v16 迁移；
 4. `docs/guides/operator-guide.md` 与两份 user-guide 更新完毕。
 
 ## 18. 待实现阶段确认的问题
 
-1. 是否为会计时区提供 CLI 变更入口。倾向：提供只读查询（`heimdall doctor` 已输出），变更只走 Admin API，保证审计链完整。
+1. 是否为会计时区提供 CLI 变更入口。倾向：提供只读查询（`halro doctor` 已输出），变更只走 Admin API，保证审计链完整。
 

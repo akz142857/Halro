@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"unicode/utf8"
 
-	"github.com/akz142857/Heimdall/internal/openaiapi"
+	"github.com/akz142857/Halro/internal/openaiapi"
 )
 
 const (

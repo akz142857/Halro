@@ -10,10 +10,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akz142857/Heimdall/internal/config"
-	"github.com/akz142857/Heimdall/internal/gatewayapi"
-	"github.com/akz142857/Heimdall/internal/openaiapi"
-	"github.com/akz142857/Heimdall/internal/requestmeta"
+	"github.com/akz142857/Halro/internal/config"
+	"github.com/akz142857/Halro/internal/gatewayapi"
+	"github.com/akz142857/Halro/internal/openaiapi"
+	"github.com/akz142857/Halro/internal/requestmeta"
 	"github.com/go-chi/chi/v5"
 )
 

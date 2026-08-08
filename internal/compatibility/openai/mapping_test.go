@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akz142857/Heimdall/internal/openaiapi"
-	"github.com/akz142857/Heimdall/internal/semantic"
+	"github.com/akz142857/Halro/internal/openaiapi"
+	"github.com/akz142857/Halro/internal/semantic"
 )
 
 func TestEventRoundTripPreservesSemanticChannels(t *testing.T) {

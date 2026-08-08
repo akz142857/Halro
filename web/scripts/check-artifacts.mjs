@@ -14,10 +14,10 @@ async function walk(directory) {
 }
 
 const forbidden = [
-  "sk-HEIMDALL_",
-  "AIzaHEIMDALL",
+  "sk-HALRO_",
+  "AIzaHALRO",
   "ASIA0123456789ABCDEF",
-  "heimdall.canary.token",
+  "halro.canary.token",
   "provider-secret-canary",
   "gw_plaintext-canary",
   "csrf-canary",

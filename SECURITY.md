@@ -1,6 +1,6 @@
 # Security Policy
 
-Heimdall handles Provider credentials, internal Gateway keys, prompts, usage,
+Halro handles Provider credentials, internal Gateway keys, prompts, usage,
 and budget decisions. Please report vulnerabilities privately and responsibly.
 
 ## Supported versions
@@ -17,7 +17,7 @@ Before the first stable release, only the current `main` branch is supported.
 
 Use GitHub's private vulnerability reporting flow:
 
-<https://github.com/akz142857/Heimdall/security/advisories/new>
+<https://github.com/akz142857/Halro/security/advisories/new>
 
 Do not open a public issue and do not include a real Provider key, Gateway key,
 Master Key, prompt, response, backup, database, WAL, or production endpoint.

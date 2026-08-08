@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akz142857/Heimdall/internal/anthropicapi"
-	"github.com/akz142857/Heimdall/internal/domain"
-	"github.com/akz142857/Heimdall/internal/provider"
+	"github.com/akz142857/Halro/internal/anthropicapi"
+	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/provider"
 )
 
 func newTestAdapter(t *testing.T, handler http.HandlerFunc) *Adapter {

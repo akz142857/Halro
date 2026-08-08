@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/config"
-	"github.com/akz142857/Heimdall/internal/domain"
+	"github.com/akz142857/Halro/internal/config"
+	"github.com/akz142857/Halro/internal/domain"
 	bbolt "go.etcd.io/bbolt"
 )
 

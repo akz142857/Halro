@@ -541,7 +541,7 @@
     "request_headers": [
       "x-api-key or Authorization",
       "anthropic-version",
-      "Heimdall-Route-Mode",
+      "Halro-Route-Mode",
       "Content-Type"
     ],
     "response_fields": [
@@ -575,7 +575,7 @@
       "only anthropic-version 2023-06-01 is accepted",
       "anthropic-beta and hosted tools are unavailable",
       "Gateway Keys are accepted through x-api-key for official SDK compatibility and are never forwarded upstream",
-      "native mode is selected with Heimdall-Route-Mode and requires either the direct Anthropic or Bedrock Mantle Anthropic profile"
+      "native mode is selected with Halro-Route-Mode and requires either the direct Anthropic or Bedrock Mantle Anthropic profile"
     ],
     "provider_profiles": [
       "openai.chat-embeddings.v1",
@@ -744,7 +744,7 @@
     "documented_deviations": [
       "official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures",
       "unknown fields and unsupported profile fields are rejected before provider I/O",
-      "resource identifiers are opaque Heimdall identifiers scoped to one project"
+      "resource identifiers are opaque Halro identifiers scoped to one project"
     ],
     "provider_profiles": [
       "openai.media-resources.v1"
@@ -794,7 +794,7 @@
     "documented_deviations": [
       "official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures",
       "unknown fields and unsupported profile fields are rejected before provider I/O",
-      "resource identifiers are opaque Heimdall identifiers scoped to one project",
+      "resource identifiers are opaque Halro identifiers scoped to one project",
       "the OpenAI user field is not accepted by this experimental tier"
     ],
     "provider_profiles": [
@@ -842,7 +842,7 @@
     "documented_deviations": [
       "official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures",
       "unknown fields and unsupported profile fields are rejected before provider I/O",
-      "resource identifiers are opaque Heimdall identifiers scoped to one project"
+      "resource identifiers are opaque Halro identifiers scoped to one project"
     ],
     "provider_profiles": [
       "openai.media-resources.v1"
@@ -883,7 +883,7 @@
     "documented_deviations": [
       "official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures",
       "unknown fields and unsupported profile fields are rejected before provider I/O",
-      "resource identifiers are opaque Heimdall identifiers scoped to one project"
+      "resource identifiers are opaque Halro identifiers scoped to one project"
     ],
     "provider_profiles": [
       "openai.media-resources.v1"
@@ -906,7 +906,7 @@
     "request_fields": [
       "file",
       "purpose",
-      "Heimdall-Route"
+      "Halro-Route"
     ],
     "request_headers": [
       "Authorization",
@@ -929,7 +929,7 @@
     "documented_deviations": [
       "official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures",
       "unknown fields and unsupported profile fields are rejected before provider I/O",
-      "resource identifiers are opaque Heimdall identifiers scoped to one project"
+      "resource identifiers are opaque Halro identifiers scoped to one project"
     ],
     "provider_profiles": [
       "openai.media-resources.v1"
@@ -973,7 +973,7 @@
     "documented_deviations": [
       "official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures",
       "unknown fields and unsupported profile fields are rejected before provider I/O",
-      "resource identifiers are opaque Heimdall identifiers scoped to one project"
+      "resource identifiers are opaque Halro identifiers scoped to one project"
     ],
     "provider_profiles": [
       "openai.media-resources.v1"
@@ -1010,7 +1010,7 @@
     "documented_deviations": [
       "official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures",
       "unknown fields and unsupported profile fields are rejected before provider I/O",
-      "resource identifiers are opaque Heimdall identifiers scoped to one project"
+      "resource identifiers are opaque Halro identifiers scoped to one project"
     ],
     "provider_profiles": [
       "openai.media-resources.v1"
@@ -1049,7 +1049,7 @@
     "documented_deviations": [
       "official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures",
       "unknown fields and unsupported profile fields are rejected before provider I/O",
-      "resource identifiers are opaque Heimdall identifiers scoped to one project"
+      "resource identifiers are opaque Halro identifiers scoped to one project"
     ],
     "provider_profiles": [
       "openai.media-resources.v1"
@@ -1104,7 +1104,7 @@
     "documented_deviations": [
       "official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures",
       "unknown fields and unsupported profile fields are rejected before provider I/O",
-      "resource identifiers are opaque Heimdall identifiers scoped to one project"
+      "resource identifiers are opaque Halro identifiers scoped to one project"
     ],
     "provider_profiles": [
       "openai.media-resources.v1"
@@ -1156,7 +1156,7 @@
     "documented_deviations": [
       "official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures",
       "unknown fields and unsupported profile fields are rejected before provider I/O",
-      "resource identifiers are opaque Heimdall identifiers scoped to one project"
+      "resource identifiers are opaque Halro identifiers scoped to one project"
     ],
     "provider_profiles": [
       "openai.media-resources.v1"
@@ -1208,7 +1208,7 @@
     "documented_deviations": [
       "official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures",
       "unknown fields and unsupported profile fields are rejected before provider I/O",
-      "resource identifiers are opaque Heimdall identifiers scoped to one project"
+      "resource identifiers are opaque Halro identifiers scoped to one project"
     ],
     "provider_profiles": [
       "openai.media-resources.v1"
@@ -1221,10 +1221,10 @@
     ]
   },
   {
-    "id": "heimdall.rerank.v1",
-    "northbound_profile": "heimdall.inference-resources.v1",
+    "id": "halro.rerank.v1",
+    "northbound_profile": "halro.inference-resources.v1",
     "profile_revision": 1,
-    "protocol": "heimdall",
+    "protocol": "halro",
     "method": "POST",
     "path": "/v1/rerank",
     "semantic_operation": "rerank",
@@ -1242,14 +1242,14 @@
     "response_fields": [
       "results"
     ],
-    "state_semantics": "stateless Heimdall extension",
+    "state_semantics": "stateless Halro extension",
     "sdk_matrix": null,
     "status": "experimental",
     "documented_deviations": [
       "official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures",
       "unknown fields and unsupported profile fields are rejected before provider I/O",
-      "resource identifiers are opaque Heimdall identifiers scoped to one project",
-      "this is a Heimdall extension and has no OpenAI official SDK surface"
+      "resource identifiers are opaque Halro identifiers scoped to one project",
+      "this is a Halro extension and has no OpenAI official SDK surface"
     ],
     "provider_profiles": [
       "bedrock.agent-runtime.rerank.cohere-v3-5.v1"
@@ -1262,10 +1262,10 @@
     ]
   },
   {
-    "id": "heimdall.async.create.v1",
-    "northbound_profile": "heimdall.inference-resources.v1",
+    "id": "halro.async.create.v1",
+    "northbound_profile": "halro.inference-resources.v1",
     "profile_revision": 1,
-    "protocol": "heimdall",
+    "protocol": "halro",
     "method": "POST",
     "path": "/v1/async/invocations",
     "semantic_operation": "async_generate",
@@ -1297,8 +1297,8 @@
     "documented_deviations": [
       "official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures",
       "unknown fields and unsupported profile fields are rejected before provider I/O",
-      "resource identifiers are opaque Heimdall identifiers scoped to one project",
-      "this is a Heimdall extension and has no OpenAI official SDK surface"
+      "resource identifiers are opaque Halro identifiers scoped to one project",
+      "this is a Halro extension and has no OpenAI official SDK surface"
     ],
     "provider_profiles": [
       "bedrock.runtime.async.nova-reel-v1.v1"
@@ -1311,10 +1311,10 @@
     ]
   },
   {
-    "id": "heimdall.async.get.v1",
-    "northbound_profile": "heimdall.inference-resources.v1",
+    "id": "halro.async.get.v1",
+    "northbound_profile": "halro.inference-resources.v1",
     "profile_revision": 1,
-    "protocol": "heimdall",
+    "protocol": "halro",
     "method": "GET",
     "path": "/v1/async/invocations/{id}",
     "semantic_operation": "async_generate",
@@ -1340,8 +1340,8 @@
     "documented_deviations": [
       "official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures",
       "unknown fields and unsupported profile fields are rejected before provider I/O",
-      "resource identifiers are opaque Heimdall identifiers scoped to one project",
-      "this is a Heimdall extension and has no OpenAI official SDK surface"
+      "resource identifiers are opaque Halro identifiers scoped to one project",
+      "this is a Halro extension and has no OpenAI official SDK surface"
     ],
     "provider_profiles": [
       "bedrock.runtime.async.nova-reel-v1.v1"
@@ -1354,10 +1354,10 @@
     ]
   },
   {
-    "id": "heimdall.async.cancel.v1",
-    "northbound_profile": "heimdall.inference-resources.v1",
+    "id": "halro.async.cancel.v1",
+    "northbound_profile": "halro.inference-resources.v1",
     "profile_revision": 1,
-    "protocol": "heimdall",
+    "protocol": "halro",
     "method": "POST",
     "path": "/v1/async/invocations/{id}/cancel",
     "semantic_operation": "async_generate",
@@ -1378,8 +1378,8 @@
     "documented_deviations": [
       "official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures",
       "unknown fields and unsupported profile fields are rejected before provider I/O",
-      "resource identifiers are opaque Heimdall identifiers scoped to one project",
-      "this is a Heimdall extension and has no OpenAI official SDK surface"
+      "resource identifiers are opaque Halro identifiers scoped to one project",
+      "this is a Halro extension and has no OpenAI official SDK surface"
     ],
     "provider_profiles": [
       "bedrock.runtime.async.nova-reel-v1.v1"

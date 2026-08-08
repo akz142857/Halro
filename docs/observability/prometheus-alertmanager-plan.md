@@ -1,14 +1,14 @@
 # Prometheus、Alertmanager 与独立 dead-man 实施方案
 
 状态：仓库实现完成；本地运行验证完成；目标环境生产准入待执行
-适用范围：Heimdall Standalone；为后续 HA/Cluster 保留兼容边界
+适用范围：Halro Standalone；为后续 HA/Cluster 保留兼容边界
 
 ## 1. 结论
 
-Heimdall 的可观测性链路固定为：
+Halro 的可观测性链路固定为：
 
 ```text
-Heimdall Metrics listener
+Halro Metrics listener
   /metrics + authentication
             |
             v
@@ -18,8 +18,8 @@ Prometheus
             v
 Alertmanager -----------------> Operations Contact Point
 
-独立 heimdall-deadman --------> Independent Receiver/Contact Point
-  checks Heimdall, Prometheus and Alertmanager
+独立 halro-deadman --------> Independent Receiver/Contact Point
+  checks Halro, Prometheus and Alertmanager
 ```
 
 Prometheus rule files是唯一告警评估权威。Ledger 仍是账务权威；Metrics
@@ -39,7 +39,7 @@ Application、Security、SRE、Platform 四方签字齐全，才能声明
 - 7 天 retention、精确 5 GiB size limit、70% warning 和 85% critical；
 - `promtool`/`amtool` 配置与语义 fixtures；
 - 可配置回环端口的隔离 runtime smoke；
-- 正式 `heimdall-deadman` 二进制、Dockerfile、systemd unit、配置和事件
+- 正式 `halro-deadman` 二进制、Dockerfile、systemd unit、配置和事件
   schema、receiver contract、持久化状态/outbox、审计与重试；
 - digest 固定、SBOM、镜像扫描和 Release 产物；
 - Runbook、安全 RFC、容量模型、实现证据和生产准入清单；
@@ -47,7 +47,7 @@ Application、Security、SRE、Platform 四方签字齐全，才能声明
 
 ## 3. 指标与标签契约
 
-- 应用指标使用 `heimdall_` 前缀；标准 Go/process 指标保留生态名称；
+- 应用指标使用 `halro_` 前缀；标准 Go/process 指标保留生态名称；
 - duration 使用秒，byte 使用 `_bytes`，counter 使用 `_total`；
 - `status`、`direction`、`reason`、`provider_type` 是有限枚举；
 - 禁止提示词、响应、原始错误、Request ID、Key、Project、来源 IP 和
@@ -64,7 +64,7 @@ Application、Security、SRE、Platform 四方签字齐全，才能声明
 
 单机 MVP 使用 host network 保留 loopback listener：
 
-- Heimdall Metrics：`127.0.0.1:9090`；
+- Halro Metrics：`127.0.0.1:9090`；
 - Prometheus：`127.0.0.1:9091`；
 - Alertmanager：`127.0.0.1:9093`。
 
@@ -79,8 +79,8 @@ reload、admin、silence 或 config 端点时，必须经过认证代理或受�
 ## 5. Secret 与 credential
 
 - Secret 不进入 Git、YAML、环境变量、进程参数、日志、截图或 CI artifact；
-- Linux 从 `/run/heimdall-observability` 挂载；
-- macOS 本地开发使用 `/private/tmp/heimdall-observability` override；
+- Linux 从 `/run/halro-observability` 挂载；
+- macOS 本地开发使用 `/private/tmp/halro-observability` override；
 - 生产使用目标 Secret Store 和版本化 Metrics credential；
 - rotation 支持 active/retiring 有限重叠、热重载、立即吊销和恢复不复活；
 - credential 审计链必须锚定到独立不可变存储。
@@ -89,7 +89,7 @@ reload、admin、silence 或 config 端点时，必须经过认证代理或受�
 
 告警覆盖：
 
-- Heimdall target 缺失或不可用；
+- Halro target 缺失或不可用；
 - 请求错误率、Provider/Deployment 健康、fallback 与 capacity；
 - Ledger/WAL、Usage analytics 和应用告警投递；
 - Prometheus rule/config、TSDB/WAL 磁盘；
@@ -99,7 +99,7 @@ reload、admin、silence 或 config 端点时，必须经过认证代理或受�
 独立 dead-man 提供第二故障域：
 
 1. 外部 receiver 在 `Watchdog` 停止后报警并在新 check-in 后恢复；
-2. `heimdall-deadman` 通过 authenticated HTTPS 直接探测 Heimdall、
+2. `halro-deadman` 通过 authenticated HTTPS 直接探测 Halro、
    Prometheus 和 Alertmanager；
 3. Prometheus freshness 查询只接受有限的成功 `up == 1` 原始样本年龄；
 4. 探针发送 down/up transition 和带 TTL 的自身 heartbeat；
@@ -138,8 +138,8 @@ deploy/observability/
     config.example.yaml
     config.schema.json
     event.schema.json
-    heimdall-deadman.service
-cmd/heimdall-deadman/
+    halro-deadman.service
+cmd/halro-deadman/
 internal/deadman/
 docs/observability/
 ```
@@ -186,7 +186,7 @@ npm run build --prefix web
 ./deploy/observability/validate.sh
 ./deploy/observability/smoke.sh
 docker compose -f deploy/observability/compose.example.yaml config --quiet
-go run ./cmd/heimdall-deadman \
+go run ./cmd/halro-deadman \
   -config deploy/observability/external-probe/config.example.yaml \
   -check-config
 ```
@@ -197,7 +197,7 @@ go run ./cmd/heimdall-deadman \
 
 - 配置、规则、fixtures、dead-man、CI、SBOM、文档和 smoke 全部存在；
 - 自动测试、race、vet、Prometheus/Alertmanager 校验和 runtime smoke 通过；
-- 本地部署中 Heimdall、Prometheus、Alertmanager targets 全部为 `up`；
+- 本地部署中 Halro、Prometheus、Alertmanager targets 全部为 `up`；
 - Watchdog 到达 Alertmanager；
 - 安全、SRE 和验收评审无仓库级阻塞项。
 

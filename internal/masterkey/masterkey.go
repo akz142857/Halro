@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/akz142857/Heimdall/internal/config"
-	"github.com/akz142857/Heimdall/internal/vault"
+	"github.com/akz142857/Halro/internal/config"
+	"github.com/akz142857/Halro/internal/vault"
 )
 
 var ErrModeUnavailable = errors.New("master key mode is not available in this build")

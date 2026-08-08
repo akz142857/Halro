@@ -16,7 +16,7 @@ tls:
 
 storage:
   data_dir: "./data"
-  metadata_file: "heimdall.db"
+  metadata_file: "halro.db"
   master_key:
     mode: file
     file: "./master.key"
@@ -113,7 +113,7 @@ audit:
     # disagrees with a copy the operator does not control.
     enabled: false
     # dead_man_pull is the only implemented sink; it reuses the existing
-    # heimdall-deadman probe and its independent host/credentials/TLS.
+    # halro-deadman probe and its independent host/credentials/TLS.
     sink: dead_man_pull
     interval: 5m
     record_delta: 500

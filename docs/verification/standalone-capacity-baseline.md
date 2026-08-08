@@ -87,12 +87,12 @@ Two consequences worth stating before quoting any number from this table:
 
 The metrics endpoint exposes the durable write path directly, so a baseline run
 does not need to be re-derived from benchmarks:
-`heimdall_wal_sync_seconds`, `heimdall_wal_append_{records,batches}_total`,
-`heimdall_accounting_project_lock_{wait,held}_seconds`, and
-`heimdall_metadata_batch_{calls,transactions}_total`.
+`halro_wal_sync_seconds`, `halro_wal_append_{records,batches}_total`,
+`halro_accounting_project_lock_{wait,held}_seconds`, and
+`halro_metadata_batch_{calls,transactions}_total`.
 
-`heimdall stats` prints the derived means without a Prometheus install, and
-`heimdall stats -interval 10s` reports a window rather than the lifetime
+`halro stats` prints the derived means without a Prometheus install, and
+`halro stats -interval 10s` reports a window rather than the lifetime
 average — the distinction matters during an incident, since the counters are
 cumulative since start. The same summary appears under Settings → Diagnostics.
 

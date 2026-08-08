@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/anthropicapi"
-	"github.com/akz142857/Heimdall/internal/openaiapi"
+	"github.com/akz142857/Halro/internal/anthropicapi"
+	"github.com/akz142857/Halro/internal/openaiapi"
 )
 
 // countingLimiter records what the middleware charged so a test can assert on

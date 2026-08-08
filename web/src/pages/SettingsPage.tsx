@@ -96,7 +96,7 @@ function DiagnosticsPane({ status, accountingLabels, metricLabels }: { status: A
     {(status.accounting_status !== 0 || status.draining) && <SettingsOverview status={status} />}
     <div className="settings-grid">
           <details id="system" className="panel system-card diagnostic-details" open>
-            <summary><span>{t("settings.build")}</span><strong>Heimdall {status.build.version || "development"}</strong></summary>
+            <summary><span>{t("settings.build")}</span><strong>Halro {status.build.version || "development"}</strong></summary>
             <dl>
               <div><dt>{t("settings.commit")}</dt><dd><code>{status.build.commit || t("common.local")}</code></dd></div>
               <div><dt>{t("settings.buildDate")}</dt><dd>{status.build.date || "—"}</dd></div>

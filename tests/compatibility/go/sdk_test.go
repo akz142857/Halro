@@ -15,7 +15,7 @@ import (
 )
 
 func TestOfficialGoSDK(t *testing.T) {
-	baseURL := os.Getenv("HEIMDALL_COMPAT_BASE_URL")
+	baseURL := os.Getenv("HALRO_COMPAT_BASE_URL")
 	if baseURL == "" {
 		baseURL = "http://127.0.0.1:18088/v1"
 	}

@@ -16,9 +16,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/buildinfo"
-	"github.com/akz142857/Heimdall/internal/ledger"
-	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
+	"github.com/akz142857/Halro/internal/buildinfo"
+	"github.com/akz142857/Halro/internal/ledger"
+	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 )
 
 const manifestVersion = 2
@@ -143,7 +143,7 @@ func Create(options CreateOptions) (Manifest, error) {
 		RestoreDrillVerified:    false,
 		Build:                   options.Build,
 	}
-	temp, err := os.CreateTemp(filepath.Dir(options.OutputPath), ".heimdall-backup-*.tmp")
+	temp, err := os.CreateTemp(filepath.Dir(options.OutputPath), ".halro-backup-*.tmp")
 	if err != nil {
 		return Manifest{}, err
 	}

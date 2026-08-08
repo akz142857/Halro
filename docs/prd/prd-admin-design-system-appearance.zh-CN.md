@@ -1,14 +1,14 @@
-# Heimdall Admin Console 设计系统升级与 Appearance（Light / Dark）PRD
+# Halro Admin Console 设计系统升级与 Appearance（Light / Dark）PRD
 
 - 状态：已实现并完成代码级验收
 - 目标版本：v1.0.0
 - 日期：2026-08-04
 - 文档语言：中文
-- 适用范围：Heimdall Web Admin Console
+- 适用范围：Halro Web Admin Console
 
 ## 1. 背景
 
-Heimdall Admin Console 已形成明确的深色安全运维视觉风格，并具备响应式布局、中英文国际化、键盘焦点、语义化状态和一批可复用 React 组件。当前样式仍主要集中在单一 `web/src/styles.css` 中：虽然已经使用 `--bg`、`--surface`、`--text`、`--muted`、`--lime` 等基础变量，但组件样式仍混有大量硬编码十六进制色与 `rgba()`，颜色、间距、圆角、阴影、字号、层级和交互状态尚未形成完整、可治理的设计系统。
+Halro Admin Console 已形成明确的深色安全运维视觉风格，并具备响应式布局、中英文国际化、键盘焦点、语义化状态和一批可复用 React 组件。当前样式仍主要集中在单一 `web/src/styles.css` 中：虽然已经使用 `--bg`、`--surface`、`--text`、`--muted`、`--lime` 等基础变量，但组件样式仍混有大量硬编码十六进制色与 `rgba()`，颜色、间距、圆角、阴影、字号、层级和交互状态尚未形成完整、可治理的设计系统。
 
 现有页面通过 `:root { color-scheme: dark; }` 固定为 Dark。随着 Settings、MFA、Master Key Custody、用量分析和治理页面持续扩展，直接为每个组件追加 Light 覆盖会造成以下问题：
 
@@ -22,7 +22,7 @@ Heimdall Admin Console 已形成明确的深色安全运维视觉风格，并具
 
 ## 2. 目标
 
-1. 建立可版本化、可测试、可文档化的 Heimdall Admin Console 设计系统。
+1. 建立可版本化、可测试、可文档化的 Halro Admin Console 设计系统。
 2. 将现有 Dark 视觉迁移到语义化 Token，保持品牌识别和主要交互行为不变。
 3. 为已登录管理员提供 `Light` 与 `Dark` 两种 Appearance，并在整个 Admin Console 一致生效。
 4. 将 Appearance 作为管理员个人偏好持久化到服务端，不写入浏览器持久化存储。
@@ -302,7 +302,7 @@ web/src/design-system/
 
 ### 8.1 品牌连续性
 
-- 保留 Heimdall 的克制、技术化、安全运维视觉语言；
+- 保留 Halro 的克制、技术化、安全运维视觉语言；
 - 品牌强调色在 Light 中应调整明度或搭配深色前景，不能原样套用导致低对比；
 - 两种主题保持相同布局、组件尺寸、信息密度和图标，不因主题改变页面结构。
 
@@ -595,6 +595,6 @@ previewing/saving
 - `System` Appearance 与操作系统主题实时跟随；
 - 实例级未认证页面默认 Appearance；
 - 高对比度主题；
-- 设计 Token 导出给文档站或其他 Heimdall 管理界面；
+- 设计 Token 导出给文档站或其他 Halro 管理界面；
 - 独立组件展示与视觉评审环境；
 - 用户可选的信息密度与减少透明效果偏好。

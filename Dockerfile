@@ -17,20 +17,20 @@ ARG RELEASE_VERSION=dev
 ARG RELEASE_COMMIT=unknown
 ARG RELEASE_DATE=unknown
 RUN CGO_ENABLED=0 go build -trimpath \
-    -ldflags "-s -w -X github.com/akz142857/Heimdall/internal/buildinfo.Version=${RELEASE_VERSION} -X github.com/akz142857/Heimdall/internal/buildinfo.Commit=${RELEASE_COMMIT} -X github.com/akz142857/Heimdall/internal/buildinfo.Date=${RELEASE_DATE}" \
-    -o /out/heimdall ./cmd/heimdall
-RUN mkdir -p /rootfs/var/lib/heimdall
+    -ldflags "-s -w -X github.com/akz142857/Halro/internal/buildinfo.Version=${RELEASE_VERSION} -X github.com/akz142857/Halro/internal/buildinfo.Commit=${RELEASE_COMMIT} -X github.com/akz142857/Halro/internal/buildinfo.Date=${RELEASE_DATE}" \
+    -o /out/halro ./cmd/halro
+RUN mkdir -p /rootfs/var/lib/halro
 
 FROM gcr.io/distroless/static-debian12:nonroot
-COPY --from=build /out/heimdall /usr/local/bin/heimdall
-COPY --from=build --chown=65532:65532 /rootfs/var/lib/heimdall/ /var/lib/heimdall/
-COPY LICENSE NOTICE THIRD_PARTY_NOTICES.md /usr/share/licenses/heimdall/
-WORKDIR /var/lib/heimdall
+COPY --from=build /out/halro /usr/local/bin/halro
+COPY --from=build --chown=65532:65532 /rootfs/var/lib/halro/ /var/lib/halro/
+COPY LICENSE NOTICE THIRD_PARTY_NOTICES.md /usr/share/licenses/halro/
+WORKDIR /var/lib/halro
 USER 65532:65532
-VOLUME ["/var/lib/heimdall"]
+VOLUME ["/var/lib/halro"]
 EXPOSE 8080 8081 9090
-ENV HEIMDALL_HEALTH_URL=http://127.0.0.1:8080/health/ready
+ENV HALRO_HEALTH_URL=http://127.0.0.1:8080/health/ready
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-  CMD ["/usr/local/bin/heimdall", "healthcheck"]
-ENTRYPOINT ["/usr/local/bin/heimdall"]
-CMD ["serve", "--config", "/etc/heimdall/config.yaml"]
+  CMD ["/usr/local/bin/halro", "healthcheck"]
+ENTRYPOINT ["/usr/local/bin/halro"]
+CMD ["serve", "--config", "/etc/halro/config.yaml"]

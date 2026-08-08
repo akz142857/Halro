@@ -4,15 +4,15 @@ import (
 	"errors"
 	"regexp"
 
-	corekms "github.com/akz142857/Heimdall/internal/kms"
+	corekms "github.com/akz142857/Halro/internal/kms"
 )
 
 const (
-	contextKeyVersion        = "heimdall.context_version"
-	contextKeyInstanceSHA256 = "heimdall.instance_sha256"
-	contextKeySlotSHA256     = "heimdall.slot_sha256"
-	contextKeyPayloadVersion = "heimdall.payload_version"
-	contextKeyPurpose        = "heimdall.purpose"
+	contextKeyVersion        = "halro.context_version"
+	contextKeyInstanceSHA256 = "halro.instance_sha256"
+	contextKeySlotSHA256     = "halro.slot_sha256"
+	contextKeyPayloadVersion = "halro.payload_version"
+	contextKeyPurpose        = "halro.purpose"
 )
 
 var lowercaseSHA256 = regexp.MustCompile(`^[0-9a-f]{64}$`)

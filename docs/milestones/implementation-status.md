@@ -9,7 +9,7 @@ scope is governed by reviewed release notes and release gates.
 
 | Area | Evidence |
 |---|---|
-| Go module and build | `go.mod`, `cmd/heimdall`, successful `go build -trimpath` |
+| Go module and build | `go.mod`, `cmd/halro`, successful `go build -trimpath` |
 | Strict configuration | `internal/config`, unknown-field and listener-policy tests |
 | Safe listener defaults | public plaintext Gateway rejection; Admin cannot use the Gateway override |
 | Runtime lifecycle | three listener skeleton, readiness/liveness, signal drain and resource close |
@@ -79,7 +79,7 @@ scope is governed by reviewed release notes and release gates.
 | Admin localization | complete semantic-key `zh-CN`/`en-US` resources with parity test, single-language navigation, no-refresh switching, public bootstrap locale, separately saved revisioned instance default and per-admin server-side preference (no browser persistence), document language updates, localized display enums, and safe localized API errors |
 | Admin design system and Appearance | layered primitive/semantic/component tokens with exact Dark/Light parity; default Dark and per-admin Light/Dark server persistence across sessions; optimistic serialized switching with rollback/retry and revision conflict recovery; business-source color-literal/primitive-token gate; WCAG contrast, reduced-motion and forced-colors checks; all ten Admin areas verified at 320/768/1440 px in both themes |
 | Operations CLI | byte-verified read-only `doctor` using a non-rewriting existing lock plus read-only bbolt/WAL paths, offline audited Admin password reset/session invalidation, top-level restore alias, config/usage/audit/backup/key lifecycle commands |
-| First-run experience | `heimdall start` safe config generation, fail-closed idempotent system initialization, transactional first-Admin Web setup, transient public-listener setup token, and incremental `make start` build path |
+| First-run experience | `halro start` safe config generation, fail-closed idempotent system initialization, transactional first-Admin Web setup, transient public-listener setup token, and incremental `make start` build path |
 | Frozen API contract | route-registration regression covers every v1 Admin endpoint plus Chat, Embeddings, health and Metrics so a documented route cannot silently disappear |
 | Frontend security | in-memory CSRF, no browser persistence for secrets, one-time Key acknowledgement, destructive confirmations, no source maps/CDN/service worker |
 | Frontend quality gates | typed API client, TanStack Query/Table, lazy uPlot chart, Vitest component/API tests, 500 KiB gzip initial-bundle gate |
@@ -94,12 +94,12 @@ scope is governed by reviewed release notes and release gates.
 go test ./...
 go test -race ./...
 go vet ./...
-go build -trimpath -o bin/heimdall ./cmd/heimdall
-./bin/heimdall version
-./bin/heimdall config check --config ./configs/config.example.yaml
+go build -trimpath -o bin/halro ./cmd/halro
+./bin/halro version
+./bin/halro config check --config ./configs/config.example.yaml
 cd web && npm run typecheck && npm test -- --run && npm run build
-docker build -t heimdall:v1.0.0-dev .
-docker run --rm --entrypoint /usr/local/bin/heimdall heimdall:v1.0.0-dev version
+docker build -t halro:v1.0.0-dev .
+docker run --rm --entrypoint /usr/local/bin/halro halro:v1.0.0-dev version
 ```
 
 ## Next critical path

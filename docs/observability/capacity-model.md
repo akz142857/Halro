@@ -56,7 +56,7 @@ exceed on-call response plus storage expansion time.
 
 ## Core and dead-man budgets
 
-The Core admission budget includes Heimdall scrape series, recording/alert rule
+The Core admission budget includes Halro scrape series, recording/alert rule
 series, Prometheus and Alertmanager self-monitoring, rule-evaluation/query cost,
 TSDB/WAL growth and retention headroom. The independent dead-man has its own
 host, network, receiver retention and notification-rate budget; it is not

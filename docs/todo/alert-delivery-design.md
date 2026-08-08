@@ -13,7 +13,7 @@
 
 更重要的是，那份文档记录了 v1 的既定决策：
 
-> Heimdall intentionally keeps platform-specific formatting **outside** the Gateway
+> Halro intentionally keeps platform-specific formatting **outside** the Gateway
 > process in v1. A small trusted relay can map the generic event as follows.
 
 并给出了 Slack、飞书、企业微信、Discord 四个映射示例。
@@ -27,7 +27,7 @@ v1 路线。评审本提案时必须先回答一个前置问题：**是延续既
 
 ## 1. 问题
 
-Heimdall 目前向所有告警 Webhook 投递同一种 JSON：
+Halro 目前向所有告警 Webhook 投递同一种 JSON：
 
 ```json
 {
@@ -35,7 +35,7 @@ Heimdall 目前向所有告警 Webhook 投递同一种 JSON：
   "type": "admin_test",
   "severity": "info",
   "dedup_key": "",
-  "summary": "Heimdall alert connection test",
+  "summary": "Halro alert connection test",
   "timestamp": "2026-08-05T10:43:11Z",
   "details": { "source": "admin" }
 }
@@ -74,7 +74,7 @@ authModes()                    -> 该平台支持的凭据用法集合
 
 ### 1.2 B 类真正缺的不是适配器
 
-B 类客户控制自己的接收端，业界惯例是产品提供**契约**而非适配。Heimdall 已经在发自己的事件 JSON，方向是对的，但这份 payload 目前不够格当契约：
+B 类客户控制自己的接收端，业界惯例是产品提供**契约**而非适配。Halro 已经在发自己的事件 JSON，方向是对的，但这份 payload 目前不够格当契约：
 
 - **没有 schema 版本号**。以后加字段或改语义时，客户的 parser 会静默错位。
 - **没有对 body 的签名**。现在把密钥当 header 原样发出（`Authorization: <secret>`），接收端只能比对字符串。密钥每次投递都出网一次；TLS 中间设备或接收端访问日志都会留下明文。
@@ -195,7 +195,7 @@ type Formatter interface {
 
 ```json
 {
-  "schema": "heimdall.alert/v1",
+  "schema": "halro.alert/v1",
   "id": "alt_9km8trnc6mqheymeyfjdqq9xg8",
   "type": "token_guard.block",
   "severity": "warning",
@@ -207,17 +207,17 @@ type Formatter interface {
 }
 ```
 
-`schema` 是 payload 的第一个字段，取值形如 `heimdall.alert/v1`。版本策略：加可选字段不升版本；删字段、改字段语义、改类型才升版本。升版本时新旧并行至少一个大版本周期。
+`schema` 是 payload 的第一个字段，取值形如 `halro.alert/v1`。版本策略：加可选字段不升版本；删字段、改字段语义、改类型才升版本。升版本时新旧并行至少一个大版本周期。
 
 #### 1.2 HMAC 签名（新增 `auth_mode: signature`）
 
 请求头：
 
 ```
-X-Heimdall-Delivery:  dlv_01j...            每次投递唯一，重试时不变
-X-Heimdall-Event:     token_guard.block
-X-Heimdall-Timestamp: 1786012991            Unix 秒
-X-Heimdall-Signature: v1=<hex(hmac_sha256)>
+X-Halro-Delivery:  dlv_01j...            每次投递唯一，重试时不变
+X-Halro-Event:     token_guard.block
+X-Halro-Timestamp: 1786012991            Unix 秒
+X-Halro-Signature: v1=<hex(hmac_sha256)>
 ```
 
 签名基串（与 Slack / Stripe 的做法一致，便于客户复用现成实现）：
@@ -233,7 +233,7 @@ header = "v1=" + sig
 1. 拒绝 `|now - timestamp| > 300s`（防重放）。
 2. 用**原始字节**重算签名，不要先反序列化再序列化。
 3. 常量时间比较。
-4. 用 `X-Heimdall-Delivery` 去重；同一 delivery id 的重试必须幂等处理。
+4. 用 `X-Halro-Delivery` 去重；同一 delivery id 的重试必须幂等处理。
 
 相对现有 header 模式的改进：密钥不再出网；接收端能验证消息确实来自本实例且未被篡改；能拒绝重放。
 

@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/provider"
+	"github.com/akz142857/Halro/internal/provider"
 )
 
 func (r *Runtime) runActiveDeploymentProbes(ctx context.Context) {

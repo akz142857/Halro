@@ -6,11 +6,11 @@ usage() {
   cat <<'EOF'
 Usage: scripts/backup.sh [options]
 
-Create and immediately verify an offline encrypted Heimdall backup.
+Create and immediately verify an offline encrypted Halro backup.
 
 Options:
-  --binary PATH       Heimdall binary (default: ./bin/heimdall)
-  --config PATH       Heimdall config (default: ./config.yaml)
+  --binary PATH       Halro binary (default: ./bin/halro)
+  --config PATH       Halro config (default: ./config.yaml)
   --output-dir PATH   Backup archive directory (default: ./backups)
   --key-file PATH     Dedicated 32-byte Backup Key (default: ./backup.key)
   --name NAME         Archive filename without .hmbk (default: UTC timestamp)
@@ -21,7 +21,7 @@ it with mode 0600. Store that key independently from the archive and Master Key.
 EOF
 }
 
-binary=./bin/heimdall
+binary=./bin/halro
 config=./config.yaml
 output_dir=./backups
 key_file=./backup.key
@@ -57,11 +57,11 @@ while (($# > 0)); do
 done
 
 if [[ ! -x "$binary" ]]; then
-  echo "Heimdall binary is not executable: $binary" >&2
+  echo "Halro binary is not executable: $binary" >&2
   exit 1
 fi
 if [[ ! -f "$config" ]]; then
-  echo "Heimdall config does not exist: $config" >&2
+  echo "Halro config does not exist: $config" >&2
   exit 1
 fi
 if [[ -d "$key_file" ]]; then
@@ -87,7 +87,7 @@ if [[ ! -e "$key_file" ]]; then
 fi
 
 if [[ -z "$backup_name" ]]; then
-  backup_name="heimdall-$(date -u +%Y%m%dT%H%M%SZ)"
+  backup_name="halro-$(date -u +%Y%m%dT%H%M%SZ)"
 fi
 if [[ "$backup_name" == */* || "$backup_name" == "." || "$backup_name" == ".." ]]; then
   echo "Backup name must be a filename without path components" >&2

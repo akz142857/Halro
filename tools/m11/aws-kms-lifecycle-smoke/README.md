@@ -6,9 +6,9 @@ active Workload Identity must be allowlisted for the required `Encrypt` and
 `Decrypt` calls; static/shared-file credentials are rejected by the adapter.
 
 ```bash
-export HEIMDALL_AWS_KMS_PRIMARY_KEY_ARN='arn:aws:kms:...:key/...'
-export HEIMDALL_AWS_KMS_RECOVERY_KEY_ARN='arn:aws:kms:...:key/...'
-export HEIMDALL_AWS_KMS_REPLACEMENT_PRIMARY_KEY_ARN='arn:aws:kms:...:key/...'
+export HALRO_AWS_KMS_PRIMARY_KEY_ARN='arn:aws:kms:...:key/...'
+export HALRO_AWS_KMS_RECOVERY_KEY_ARN='arn:aws:kms:...:key/...'
+export HALRO_AWS_KMS_REPLACEMENT_PRIMARY_KEY_ARN='arn:aws:kms:...:key/...'
 ./tools/m11/aws-kms-lifecycle-smoke/run.sh
 ```
 

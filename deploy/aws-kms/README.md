@@ -28,4 +28,4 @@ cannot obtain the node role. AWS references:
 - https://docs.aws.amazon.com/kms/latest/developerguide/key-policies.html
 
 Do not run `PutKeyPolicy`, create a Grant, or schedule Key deletion from
-Heimdall. Those are external administrative operations with separate approval.
+Halro. Those are external administrative operations with separate approval.

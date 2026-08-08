@@ -135,7 +135,7 @@ func TestReservedAndTunnelAddressesAreRefused(t *testing.T) {
 		}
 	}
 
-	// AllowPrivate is how an operator points Heimdall at an internal provider,
+	// AllowPrivate is how an operator points Halro at an internal provider,
 	// and a Kubernetes pod in 100.64/10 is a real place for one to live. The
 	// metadata address inside that range is not, and stays refused.
 	if err := validateAddress(netip.MustParseAddr("100.64.0.1"), true); err != nil {

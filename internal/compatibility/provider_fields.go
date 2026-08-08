@@ -3,8 +3,8 @@ package compatibility
 import (
 	"encoding/json"
 
-	"github.com/akz142857/Heimdall/internal/domain"
-	"github.com/akz142857/Heimdall/internal/semantic"
+	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/semantic"
 )
 
 // UnsupportedGenerateFields returns northbound fields that the selected

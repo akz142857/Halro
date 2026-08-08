@@ -14,36 +14,36 @@ STATS_INTERVAL ?=
 
 # Release identity. The Dockerfile already injects these; a binary from `make
 # build` reported "dev/unknown/unknown", so the version an operator read back
-# from `heimdall version` depended on how it had been built. Overridable, so a
+# from `halro version` depended on how it had been built. Overridable, so a
 # release pipeline can pin all three rather than infer them from the checkout.
 RELEASE_VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 RELEASE_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 # SOURCE_DATE_EPOCH, when set, keeps the stamp reproducible.
 RELEASE_DATE ?= $(shell date -u -r "$${SOURCE_DATE_EPOCH:-$$(date +%s)}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)
-BUILDINFO := github.com/akz142857/Heimdall/internal/buildinfo
+BUILDINFO := github.com/akz142857/Halro/internal/buildinfo
 GO_LDFLAGS := -X $(BUILDINFO).Version=$(RELEASE_VERSION) -X $(BUILDINFO).Commit=$(RELEASE_COMMIT) -X $(BUILDINFO).Date=$(RELEASE_DATE)
 
 GO_SOURCES := $(shell find cmd internal -type f -name '*.go')
-DEADMAN_SOURCES := $(shell find cmd/heimdall-deadman internal/deadman -type f -name '*.go')
+DEADMAN_SOURCES := $(shell find cmd/halro-deadman internal/deadman -type f -name '*.go')
 WEBUI_DIST_SOURCES := $(shell find internal/webui/dist -type f)
 WEB_SOURCES := $(shell find web/src web/scripts -type f) \
 	web/index.html web/tsconfig.json web/tsconfig.app.json web/tsconfig.node.json web/vite.config.ts
-WEB_DEPS_STAMP := web/node_modules/.heimdall-install-stamp
-WEB_BUILD_STAMP := web/node_modules/.heimdall-build-stamp
+WEB_DEPS_STAMP := web/node_modules/.halro-install-stamp
+WEB_BUILD_STAMP := web/node_modules/.halro-build-stamp
 
 .PHONY: help init-help setup init reset start dev build deadman frontend frontend-test backup stats test cover race vet fmt-check observability-check check clean version
 
 help:
-	@echo "Heimdall Makefile commands:"
+	@echo "Halro Makefile commands:"
 	@echo "  help                 Show this help (default)"
-	@echo "  init-help            Show detailed help for Heimdall init"
-	@echo "  setup                Build Heimdall and dead-man"
-	@echo "  init                 Initialize Heimdall using CONFIG"
+	@echo "  init-help            Show detailed help for Halro init"
+	@echo "  setup                Build Halro and dead-man"
+	@echo "  init                 Initialize Halro using CONFIG"
 	@echo "  reset                Reset data and Master Key (requires CONFIRM=RESET)"
-	@echo "  start                Build and start Heimdall using CONFIG"
+	@echo "  start                Build and start Halro using CONFIG"
 	@echo "  dev                  Build the frontend and start with go run"
-	@echo "  build                Build Heimdall and dead-man"
-	@echo "  deadman              Build only heimdall-deadman"
+	@echo "  build                Build Halro and dead-man"
+	@echo "  deadman              Build only halro-deadman"
 	@echo "  frontend             Install dependencies and build the frontend"
 	@echo "  frontend-test        Run frontend tests"
 	@echo "  backup               Create an encrypted backup"
@@ -65,17 +65,17 @@ help:
 	@echo "  RESET_MASTER_KEY_FILE=$(RESET_MASTER_KEY_FILE)"
 	@echo "  STATS_INTERVAL=$(STATS_INTERVAL)"
 
-init-help: bin/heimdall
-	@./bin/heimdall init --help
+init-help: bin/halro
+	@./bin/halro init --help
 
 setup: build
 
-init: bin/heimdall
-	./bin/heimdall init --config "$(CONFIG)"
+init: bin/halro
+	./bin/halro init --config "$(CONFIG)"
 
 reset:
 	@confirm="$(CONFIRM)"; \
-	echo "This permanently resets the Heimdall system."; \
+	echo "This permanently resets the Halro system."; \
 	echo "Data directory: $(abspath $(RESET_DATA_DIR))"; \
 	echo "Master Key:    $(abspath $(RESET_MASTER_KEY_FILE))"; \
 	if [ -z "$$confirm" ] && [ -t 0 ]; then \
@@ -89,48 +89,48 @@ reset:
 	fi
 	@test "$(abspath $(RESET_DATA_DIR))" != "/" && test "$(abspath $(RESET_MASTER_KEY_FILE))" != "/"
 	@test "$(abspath $(RESET_DATA_DIR))" != "$(abspath .)"
-	@test ! -e "$(RESET_DATA_DIR)/.heimdall.lock" || ! command -v lsof >/dev/null || ! lsof "$(RESET_DATA_DIR)/.heimdall.lock" >/dev/null 2>&1 || \
-		(echo "Refusing reset: Heimdall data directory is locked by a running process."; exit 1)
+	@test ! -e "$(RESET_DATA_DIR)/.halro.lock" || ! command -v lsof >/dev/null || ! lsof "$(RESET_DATA_DIR)/.halro.lock" >/dev/null 2>&1 || \
+		(echo "Refusing reset: Halro data directory is locked by a running process."; exit 1)
 	rm -rf -- "$(RESET_DATA_DIR)"
 	rm -f -- "$(RESET_MASTER_KEY_FILE)"
 	$(MAKE) init CONFIG="$(CONFIG)"
 
 start: build
-	./bin/heimdall start --config "$(CONFIG)"
+	./bin/halro start --config "$(CONFIG)"
 
 dev: frontend
-	go run ./cmd/heimdall start --config "$(CONFIG)"
+	go run ./cmd/halro start --config "$(CONFIG)"
 
-build: bin/heimdall bin/heimdall-deadman
+build: bin/halro bin/halro-deadman
 
-deadman: bin/heimdall-deadman
+deadman: bin/halro-deadman
 
-backup: bin/heimdall
+backup: bin/halro
 	./scripts/backup.sh \
-		--binary "$(abspath bin/heimdall)" \
+		--binary "$(abspath bin/halro)" \
 		--config "$(abspath $(CONFIG))" \
 		--output-dir "$(abspath $(BACKUP_DIR))" \
 		--key-file "$(abspath $(BACKUP_KEY_FILE))" $(if $(BACKUP_NAME),--name "$(BACKUP_NAME)")
 
 # Reads a *running* instance over loopback, so unlike the offline targets this
-# one needs Heimdall up and `metrics.enabled` true. It answers what bounds this
+# one needs Halro up and `metrics.enabled` true. It answers what bounds this
 # instance's request rate without requiring a Prometheus install; the same
 # summary is on Settings > Diagnostics.
-stats: bin/heimdall
-	./bin/heimdall stats --config "$(CONFIG)" $(if $(STATS_INTERVAL),--interval "$(STATS_INTERVAL)")
+stats: bin/halro
+	./bin/halro stats --config "$(CONFIG)" $(if $(STATS_INTERVAL),--interval "$(STATS_INTERVAL)")
 
 # The console bundle is committed under internal/webui/dist and embedded from
 # there, so building the binary needs Go and nothing else — which is what the
 # README promises. Rebuild the bundle explicitly with `make frontend` after
 # changing anything under web/; CI fails on a stale one (`git diff --exit-code
 # -- internal/webui/dist`), so it cannot drift unnoticed.
-bin/heimdall: $(GO_SOURCES) $(WEBUI_DIST_SOURCES) go.mod go.sum
+bin/halro: $(GO_SOURCES) $(WEBUI_DIST_SOURCES) go.mod go.sum
 	mkdir -p bin
-	go build -trimpath -ldflags "$(GO_LDFLAGS)" -o $@ ./cmd/heimdall
+	go build -trimpath -ldflags "$(GO_LDFLAGS)" -o $@ ./cmd/halro
 
-bin/heimdall-deadman: $(DEADMAN_SOURCES) go.mod go.sum
+bin/halro-deadman: $(DEADMAN_SOURCES) go.mod go.sum
 	mkdir -p bin
-	go build -trimpath -ldflags "$(GO_LDFLAGS)" -o $@ ./cmd/heimdall-deadman
+	go build -trimpath -ldflags "$(GO_LDFLAGS)" -o $@ ./cmd/halro-deadman
 
 frontend: $(WEB_BUILD_STAMP)
 

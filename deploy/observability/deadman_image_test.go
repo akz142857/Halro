@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	modulePath        = "github.com/akz142857/Heimdall/"
-	deadmanCommand    = "./cmd/heimdall-deadman"
+	modulePath        = "github.com/akz142857/Halro/"
+	deadmanCommand    = "./cmd/halro-deadman"
 	deadmanDockerfile = "external-probe/Dockerfile"
 )
 

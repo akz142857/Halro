@@ -1,4 +1,4 @@
-# Heimdall Redis-like HA 架构提案
+# Halro Redis-like HA 架构提案
 
 - 状态：Proposed / 目标版本 1.1.0
 - 生产就绪：否
@@ -19,24 +19,24 @@ HA 的故障注入只能证明副本之间彼此一致，不能证明它们一�
 
 1.0.0 期间要从生产用量中收集、并作为 1.1.0 输入的：
 
-- 单实例真实吞吐与 fsync 成本（`heimdall stats`、`heimdall_wal_sync_seconds`）；
+- 单实例真实吞吐与 fsync 成本（`halro stats`、`halro_wal_sync_seconds`）；
 - 峰值并发与在飞请求数——它决定多数派提交的额外延迟是否可接受；
 - 实际的 Project 数与每 Project 速率分布；
 - 崩溃/重启后 `RecoverPendingLeases` 的真实发生率与保守结算比例。
 
 ## 1. 目标与设计 DNA
 
-Heimdall 保持与 Redis 相近的产品和运维形态：
+Halro 保持与 Redis 相近的产品和运维形态：
 
 - 单二进制；
 - 本地持久化；
 - Standalone 默认可用；
-- HA 由多个 Heimdall 进程组成；
+- HA 由多个 Halro 进程组成；
 - 不强制依赖 PostgreSQL、Redis、S3、KMS、Etcd 或 Consul；
 - 外部存储和 KMS 只能是可选增强。
 
 Redis-like 对齐的是单二进制、本地持久化和 Primary/Replica 运维体验，
-不是照搬 Redis 异步复制的数据丢失语义。Heimdall 会在调用外部 Provider
+不是照搬 Redis 异步复制的数据丢失语义。Halro 会在调用外部 Provider
 前产生预算和费用副作用，因此权威状态必须使用多数派提交。
 
 HA 只提高可用性，不增加单个 Project 的权威写吞吐；并且**会降低它**——见 §1.1。
@@ -52,7 +52,7 @@ HA 只提高可用性，不增加单个 Project 的权威写吞吐；并且**会
 
 | 量 | 值 | 来源 |
 |---|---:|---|
-| 单次 Ledger fsync | ~4.7 ms | 运行实例的 `heimdall_wal_sync_seconds` |
+| 单次 Ledger fsync | ~4.7 ms | 运行实例的 `halro_wal_sync_seconds` |
 | 每请求账务记录数 | 5 | 实测三次独立确认 |
 | 单 Project 上限（1 个在飞） | ~28 请求/秒 | 串行实测 |
 | 单 Project 上限（64 个在飞） | ~1011 请求/秒 | [ADR 0018](../adr/0018-project-admission-and-the-accounting-write-path.md) 落地后 |
@@ -83,7 +83,7 @@ HA 的额外延迟才有地方可吃。
 | 术语 | 定义 |
 |---|---|
 | Primary | 当前唯一允许提交权威 mutation 和启动 Provider 副作用的节点 |
-| Replica | 复制并回放权威日志、可作为候选节点的 Heimdall 进程 |
+| Replica | 复制并回放权威日志、可作为候选节点的 Halro 进程 |
 | Leader | 共识协议内部名称；在用户层等同于 Primary |
 | term | 一次 Primary 任期；每次合法选举单调增加 |
 | index | 复制日志中的单调位置 |
@@ -101,7 +101,7 @@ HA 的额外延迟才有地方可吃。
 Standalone 的外部部署契约保持不变：
 
 ```text
-一个 Heimdall 进程
+一个 Halro 进程
 一个 data_dir
 一个 master.key 或 Key Slot descriptor
 一个本地 Ledger
@@ -119,16 +119,16 @@ snapshot 结构，但不得增加必需外部服务或默认网络监听。
 
 ### 4.2 HA
 
-HA 使用三个独立 Heimdall 进程。Kubernetes 中每个 Pod 只运行一个
-Heimdall 进程，每个 Pod 使用独立的 `ReadWriteOnce` PVC：
+HA 使用三个独立 Halro 进程。Kubernetes 中每个 Pod 只运行一个
+Halro 进程，每个 Pod 使用独立的 `ReadWriteOnce` PVC：
 
 ```text
-heimdall-0 → PVC 0
-heimdall-1 → PVC 1
-heimdall-2 → PVC 2
+halro-0 → PVC 0
+halro-1 → PVC 1
+halro-2 → PVC 2
 ```
 
-不能在同一 Pod 中启动多个 Heimdall 进程冒充 HA，也不能让多个 Pod
+不能在同一 Pod 中启动多个 Halro 进程冒充 HA，也不能让多个 Pod
 共同写入同一个数据目录。
 
 用户配置表达集群成员身份，而不是永久 Primary/Replica 角色：
@@ -136,13 +136,13 @@ heimdall-2 → PVC 2
 ```yaml
 cluster:
   mode: ha
-  node_id: heimdall-0
+  node_id: halro-0
   cluster_id: production-a
   listen: 0.0.0.0:9910
   members:
-    - heimdall-0.heimdall-internal:9910
-    - heimdall-1.heimdall-internal:9910
-    - heimdall-2.heimdall-internal:9910
+    - halro-0.halro-internal:9910
+    - halro-1.halro-internal:9910
+    - halro-2.halro-internal:9910
 ```
 
 Primary/Replica 是运行时角色，不能固定绑定到 StatefulSet ordinal。
@@ -157,9 +157,9 @@ Primary/Replica 是运行时角色，不能固定绑定到 StatefulSet ordinal�
    副作用；检查到系统调用之间的残余竞态必须由 fencing token、Provider
    幂等键和 `provider_unknown_outcome` 协议收敛。
 
-   > **前置缺口（2026-08-08 核实）**：Heimdall 目前**不向任何 Provider 发送幂等键**。
+   > **前置缺口（2026-08-08 核实）**：Halro 目前**不向任何 Provider 发送幂等键**。
    > `internal/provider/` 中没有 `Idempotency-Key`；`internal/idempotency` 处理的是
-   > *调用方发给 Heimdall* 的头，方向相反。各 Provider 的支持程度也不一致。
+   > *调用方发给 Halro* 的头，方向相反。各 Provider 的支持程度也不一致。
    > 因此这条不变量的三个收敛机制里，第二个对部分 Provider 不可用，残余竞态只能
    > 落到保守结算。发布前必须按 Provider 逐一限定这条的措辞，或先补齐上游幂等键；
    > 笼统假设它可用会让故障切换时的重复消费无人负责。
@@ -313,8 +313,8 @@ Provider 支持幂等键时，Adapter 必须使用稳定的 `attempt_id`。不�
 `attempt_started` 必须携带由 `cluster_incarnation + term + lease_epoch` 派生的内部
 fencing token。Adapter/SafeTransport 必须在建立连接或写出请求字节的最后可控点
 再次校验该 token；Provider 支持幂等键时，还必须把稳定 `attempt_id` 映射为其
-幂等键。第三方 Provider 通常不会理解 Heimdall 的 fencing token，因此该 token
-只能封锁 Heimdall 内部旧 Owner，不能物理撤回已发到第三方的请求。
+幂等键。第三方 Provider 通常不会理解 Halro 的 fencing token，因此该 token
+只能封锁 Halro 内部旧 Owner，不能物理撤回已发到第三方的请求。
 
 若发生以下情况：
 
@@ -335,7 +335,7 @@ Pricing 中“价格未知”的状态不同，二者不得复用枚举、指标
 这属于明确公开的边界。
 
 Settlement 无法形成多数派时，不能静默释放 Reservation。活跃 SSE 在 Owner
-丢失后终止，客户端可以按幂等契约重连，但 Heimdall 不宣称迁移连接或
+丢失后终止，客户端可以按幂等契约重连，但 Halro 不宣称迁移连接或
 Provider exactly-once。
 
 关键失败分支必须确定性落到以下状态：
@@ -396,14 +396,14 @@ Replica ACK。校验与实际 socket connect/write 之间仍存在不可消除�
 进程暂停也可能跨过租约边界。因此架构承诺的是在经过证明的时间界限内停止新
 副作用，并以内部 fencing、Provider 幂等键和 `provider_unknown_outcome` 收敛，
 而不是声称能绝对保证第三方只看到一个发起者。已经进入第三方 Provider 的连接
-无法被 Heimdall epoch 物理撤销。
+无法被 Halro epoch 物理撤销。
 
 ### 9.3 人工切换
 
 第一阶段只支持 operator-managed failover。示例命令属于未来接口：
 
 ```bash
-heimdall cluster promote \
+halro cluster promote \
   --cluster-id production-a \
   --confirm-term 7 \
   --confirm-commit-index 10241 \
@@ -418,7 +418,7 @@ heimdall cluster promote \
 ### 9.4 自动切换
 
 自动切换只有在持久化 term/vote、日志新鲜度、多数派 commit、量化 lease 边界、
-内部 fencing、故障矩阵和发布门禁全部通过后才能启用。三个 Heimdall 进程可以在单二进制内
+内部 fencing、故障矩阵和发布门禁全部通过后才能启用。三个 Halro 进程可以在单二进制内
 完成投票，不要求部署独立 Sentinel、Etcd 或 Consul。
 
 ## 10. Provider object 复制
@@ -551,9 +551,9 @@ fail closed。在线备份不要求停止 Primary，但可能影响复制冗余�
 `data_dir` 锁：
 
 ```bash
-heimdall backup create-online \
-  --replica https://heimdall-1:8081 \
-  --output /secure-backups/heimdall.hmbk \
+halro backup create-online \
+  --replica https://halro-1:8081 \
+  --output /secure-backups/halro.hmbk \
   --key-file /secure-secrets/backup.key
 ```
 
@@ -570,7 +570,7 @@ HA backup manifest 必须保留当前 Standalone manifest 的全部字段和语�
 {
   "cluster_id": "production-a",
   "cluster_incarnation": "inc_...",
-  "source_node_id": "heimdall-1",
+  "source_node_id": "halro-1",
   "term": 7,
   "commit_index": 10241,
   "applied_index": 10241,
@@ -701,9 +701,9 @@ partition 或 `OnDelete` 策略，不能让默认滚动更新首先杀死当前 
 ## 18. 可观测性与目标
 
 至少提供以下有限基数指标和告警。**其中与持久化写入路径相关的部分已在 Standalone 落地**
-（`heimdall_wal_sync_seconds`、`heimdall_wal_append_{records,batches}_total`、
-`heimdall_accounting_project_lock_{wait,held}_seconds`、`heimdall_metadata_*`，以及
-`heimdall stats` 与控制台的"请求速率上限"卡片）；HA 阶段是在其上增加 term/index 维度，
+（`halro_wal_sync_seconds`、`halro_wal_append_{records,batches}_total`、
+`halro_accounting_project_lock_{wait,held}_seconds`、`halro_metadata_*`，以及
+`halro stats` 与控制台的"请求速率上限"卡片）；HA 阶段是在其上增加 term/index 维度，
 而不是从零开始。剩余项：
 
 - runtime role、term、ownership epoch；
@@ -824,7 +824,7 @@ standby"。对 1.1.0 来说，**带明确 RPO 的 warm standby 有可能就是�
 
 ## 21. 最终边界
 
-Heimdall HA 是多个独立 Heimdall 进程；Kubernetes 中是多个 Pod、每 Pod
+Halro HA 是多个独立 Halro 进程；Kubernetes 中是多个 Pod、每 Pod
 一个进程和一个独立 PVC。整体采用 Redis 风格的 Primary/Replica 运维模型，
 但权威费用和安全状态使用多数派提交、term/lease fencing 和确定性回放。
 

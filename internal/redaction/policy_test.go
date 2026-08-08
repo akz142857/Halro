@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/domain"
-	"github.com/akz142857/Heimdall/internal/openaiapi"
+	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/openaiapi"
 )
 
 func TestCompilePolicyRejectsUnboundedStreamingEnforcement(t *testing.T) {

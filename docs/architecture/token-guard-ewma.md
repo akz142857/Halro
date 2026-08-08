@@ -32,7 +32,7 @@ The versioned baseline checkpoint is stored in bbolt and included in normal
 encrypted backups through the metadata snapshot. It contains aggregate rates,
 sample counts, stable Project/Key IDs, and timestamps—never plaintext Gateway
 Keys, Provider credentials, prompts, responses, source IPs, or detector match
-values. Invalid or unsupported state is deleted during startup and Heimdall
+values. Invalid or unsupported state is deleted during startup and Halro
 continues with fixed Token Guard limits. Because EWMA is advisory, checkpoint
 loss can reduce detection continuity but cannot weaken hard enforcement.
 

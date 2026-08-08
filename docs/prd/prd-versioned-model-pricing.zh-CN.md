@@ -1,4 +1,4 @@
-# Heimdall 版本化模型定价与历史成本可追溯升级 PRD
+# Halro 版本化模型定价与历史成本可追溯升级 PRD
 
 - 状态：Implemented — Goal 0–6 已实现并通过自动化验收
 - 目标版本：metadata schema v15 / Ledger WAL v2 / backup format v2
@@ -8,9 +8,9 @@
 
 ## 1. 文档定位
 
-本 PRD 定义 Heimdall 从“Deployment 可原位修改单价”升级为“不可变价格版本 + Attempt 价格快照 + 追加式成本纠正”的产品与工程要求。
+本 PRD 定义 Halro 从“Deployment 可原位修改单价”升级为“不可变价格版本 + Attempt 价格快照 + 追加式成本纠正”的产品与工程要求。
 
-本升级不改变 Provider 返回 Token Usage 优先的计量原则，也不把 Heimdall 变成服务商账单系统。它解决的是以下问题：
+本升级不改变 Provider 返回 Token Usage 优先的计量原则，也不把 Halro 变成服务商账单系统。它解决的是以下问题：
 
 1. 模型价格会随时间、地区、服务等级和合同变化；
 2. 历史消费必须保持当时结算结果，不能用当前单价重算；
@@ -63,7 +63,7 @@
 
 ### 3.1 目标用户
 
-- 为多个 Provider 和模型维护成本的 Heimdall 管理员；
+- 为多个 Provider 和模型维护成本的 Halro 管理员；
 - 负责预算、成本归集和内部对账的平台或 FinOps 团队；
 - 审计历史调用和配置变化的安全、财务及合规人员；
 - 负责升级、备份恢复、事故处理和账本验证的 SRE。
@@ -225,11 +225,11 @@ Dashboard 的日、项目、Provider 和模型成本都是已结算 Attempt 成�
 
 | `source_assurance` | 含义 |
 |---|---|
-| `asserted` | 管理员声明，Heimdall 未验证材料真实性 |
+| `asserted` | 管理员声明，Halro 未验证材料真实性 |
 | `verified_api` | 由受支持的 Provider 官方 API 获取并由服务端记录接收时间 |
 | `signed_import` | 来自通过签名、schema version 和签名者 allowlist 验证的价格清单 |
 
-`manual`、`official_url` 和 `migration` 默认只能是 `asserted`。UI 不得仅因为 URL 域名看似官方就显示“已验证”。普通手工录价不要求管理员生成或填写内容 digest：没有被 Heimdall 实际接收的来源正文，就不存在可由产品验证其含义的内容摘要。此时必须明确记录 `asserted_without_archive=true`，来源只表示管理员声明；Price Version 自身仍由不可变记录、版本 digest 和 Audit 保护。只有服务端实际接收的文件、Provider API 响应或签名清单才生成并保存内容 digest。敏感合同不保存正文时，可记录外部 WORM/文档系统中的不可变证据 ID、版本、custody owner 和 digest。
+`manual`、`official_url` 和 `migration` 默认只能是 `asserted`。UI 不得仅因为 URL 域名看似官方就显示“已验证”。普通手工录价不要求管理员生成或填写内容 digest：没有被 Halro 实际接收的来源正文，就不存在可由产品验证其含义的内容摘要。此时必须明确记录 `asserted_without_archive=true`，来源只表示管理员声明；Price Version 自身仍由不可变记录、版本 digest 和 Audit 保护。只有服务端实际接收的文件、Provider API 响应或签名清单才生成并保存内容 digest。敏感合同不保存正文时，可记录外部 WORM/文档系统中的不可变证据 ID、版本、custody owner 和 digest。
 
 来源字段按类型定义必填矩阵，并统一限制长度、字符集和数量。`uri`、`reference`、`note`、URL path 和外部证据 ID 都必须通过 Secret Scanner；控制台外链使用安全转义与 `noopener noreferrer`，禁止自动预取。未来如启用抓取，只能复用 SafeTransport、重定向逐跳重校验和 egress allowlist。
 
@@ -296,7 +296,7 @@ Proposal 最小 schema 包含：Provider、模型/Deployment 身份、Region、�
 - `formula_version` 第一版固定为 `usd_token_v1`；
 - `source.uri` 只允许无 userinfo、无 query、无 fragment 的 HTTPS URL；
 - `source` 不得包含 API Key、合同正文、个人信息或其他 Secret；
-- `content_sha256` 只证明管理员所依据材料的 digest，不要求 Heimdall 保存受版权或合同保护的原文；
+- `content_sha256` 只证明管理员所依据材料的 digest，不要求 Halro 保存受版权或合同保护的原文；
 - `received_at` 由服务端写入且不可由客户端覆盖；`published_at/retrieved_at` 在 asserted 来源中只是管理员声明；
 - `revision` 只用于取消 scheduled 版本等生命周期操作，不允许借此修改价格条款。
 
@@ -792,14 +792,14 @@ If-Match: "adjustment-sequence-or-net-revision"
 
 流程分成两个步骤：
 
-1. **价格信息**：选择按量计费或免费；按量计费填写输入、输出价格，可在高级项中填写每请求固定费用；选择尽快生效或指定时间；价格依据默认“临时估算”，也可选择“官方公开价、合同价、内部成本价”。选择官方公开价或合同价时必须填写可供审计人员识别证据的来源说明；该说明不是 Heimdall 的验证结果。
+1. **价格信息**：选择按量计费或免费；按量计费填写输入、输出价格，可在高级项中填写每请求固定费用；选择尽快生效或指定时间；价格依据默认“临时估算”，也可选择“官方公开价、合同价、内部成本价”。选择官方公开价或合同价时必须填写可供审计人员识别证据的来源说明；该说明不是 Halro 的验证结果。
 2. **确认生效**：集中展示 Deployment、计费方式、全部价格、生效时间、价格依据和示例成本；此时才要求当前密码和可选 TOTP，确认后创建不可变 Price Version。
 
 Admin UI 不要求手工填写来源 URL 或 SHA-256。手工录价提交 `source.type=manual`、结构化 reference 和 `asserted_without_archive=true`；未来可信导入流程由服务端计算 digest，不复用此表单。
 
 如果价格下降或上涨超过实例可配置阈值，UI 必须强调显示，但第一版不要求第二管理员审批。
 
-创建 free 版本或超过阈值的价格必须在确认前完成 recent re-auth。确认页始终显示来源保证等级；来源为 asserted 时显示“管理员声明 · Heimdall 未验证 · 未归档”，不得使用“官方已验证”徽标。
+创建 free 版本或超过阈值的价格必须在确认前完成 recent re-auth。确认页始终显示来源保证等级；来源为 asserted 时显示“管理员声明 · Halro 未验证 · 未归档”，不得使用“官方已验证”徽标。
 
 ### 12.3 Usage 页面
 
@@ -858,18 +858,18 @@ Ledger 与 Admin Audit 是两个独立持久化边界。价格创建、取消和
 
 建议新增低基数指标：
 
-- `heimdall_pricing_unknown_attempts_total`；
-- `heimdall_pricing_version_created_total{billing_mode}`；
-- `heimdall_pricing_version_cancelled_total`；
-- `heimdall_cost_adjustments_total{direction}`；
-- `heimdall_cost_adjustment_micros_usd_total{direction}`；
-- `heimdall_pricing_invariant_failures_total`；
-- `heimdall_deployments_without_active_price`。
-- `heimdall_pricing_clock_offset_seconds`；
-- `heimdall_pricing_clock_rollback_total`；
-- `heimdall_pricing_quarantine_deployments`；
-- `heimdall_pricing_recovery_pending_intents`；
-- `heimdall_pricing_migration_failures_total`。
+- `halro_pricing_unknown_attempts_total`；
+- `halro_pricing_version_created_total{billing_mode}`；
+- `halro_pricing_version_cancelled_total`；
+- `halro_cost_adjustments_total{direction}`；
+- `halro_cost_adjustment_micros_usd_total{direction}`；
+- `halro_pricing_invariant_failures_total`；
+- `halro_deployments_without_active_price`。
+- `halro_pricing_clock_offset_seconds`；
+- `halro_pricing_clock_rollback_total`；
+- `halro_pricing_quarantine_deployments`；
+- `halro_pricing_recovery_pending_intents`；
+- `halro_pricing_migration_failures_total`。
 
 Metrics 标签不得包含 Price ID、Deployment ID、Provider model、来源 URL 或管理员身份，避免高基数和信息泄露。
 
@@ -925,8 +925,8 @@ metadata schema v15 将 `manual + asserted_without_archive` 的 `content_sha256`
 离线升级工具必须提供：
 
 ```text
-heimdall pricing migrate --dry-run --report <path>
-heimdall pricing migrate --resolution-file <path> --apply
+halro pricing migrate --dry-run --report <path>
+halro pricing migrate --resolution-file <path> --apply
 ```
 
 Resolution file 使用版本化 schema，逐 Deployment/legacy Route 声明 `metered`、`free` 或“保持停用”，并带来源证据；文件 digest、操作者和 apply 结果进入 Audit。工具先在 staging copy 完成全部迁移与校验，再原子发布数据目录，不能在 live metadata 上边询问边修改。无人值守 apply 要求报告 digest 与 resolution file 针对同一原始 metadata revision，防止检查后配置漂移。

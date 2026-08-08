@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/domain"
-	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
+	"github.com/akz142857/Halro/internal/domain"
+	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 )
 
 func TestSessionHashPersistenceCSRFAndExpiry(t *testing.T) {

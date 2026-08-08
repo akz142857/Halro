@@ -46,7 +46,7 @@ export function Login({ onSuccess }: { onSuccess: () => void }) {
       <section className="login-story" aria-label={t("auth.productIntro")}>
         <div className="brand login-brand">
           <span className="brand-mark">H</span>
-          <span><strong>HEIMDALL</strong><small>{t("navigation.productSubtitle")}</small></span>
+          <span><strong>HALRO</strong><small>{t("navigation.productSubtitle")}</small></span>
         </div>
         <div>
           <p className="eyebrow">{t("auth.loginStoryEyebrow")}</p>

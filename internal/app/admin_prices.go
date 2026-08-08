@@ -12,11 +12,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/adminauth"
-	"github.com/akz142857/Heimdall/internal/audit"
-	"github.com/akz142857/Heimdall/internal/domain"
-	"github.com/akz142857/Heimdall/internal/id"
-	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
+	"github.com/akz142857/Halro/internal/adminauth"
+	"github.com/akz142857/Halro/internal/audit"
+	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/id"
+	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -663,7 +663,7 @@ func priceCursorKey(price domain.DeploymentPriceVersion) string {
 
 func pricingIdempotencyDigest(actor, deploymentID, key string) string {
 	digest := sha256.New()
-	digest.Write([]byte("heimdall:pricing-idempotency:v1\x00"))
+	digest.Write([]byte("halro:pricing-idempotency:v1\x00"))
 	digest.Write([]byte(actor))
 	digest.Write([]byte{0})
 	digest.Write([]byte(deploymentID))

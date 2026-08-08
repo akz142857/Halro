@@ -1,7 +1,7 @@
 # Endpoint compatibility manifests
 
 [`endpoint-manifests.json`](endpoint-manifests.json) is the reviewed,
-machine-readable compatibility contract for Heimdall's currently exposed LLM
+machine-readable compatibility contract for Halro's currently exposed LLM
 endpoints. It records the northbound profile and revision, method/path, accepted
 and emitted field sets, stream events, state semantics, SDK test matrix,
 documented deviations, and the built-in provider profiles eligible for routing.
@@ -34,6 +34,6 @@ before they can be described as compatible.
 The Phase 2 media and resource endpoints are published as `experimental`.
 Gateway contract tests and provider transport fixtures do not substitute for an
 official SDK black-box matrix or real-provider release gates. In particular,
-`/v1/rerank` and `/v1/async/invocations` are Heimdall extensions, not OpenAI
+`/v1/rerank` and `/v1/async/invocations` are Halro extensions, not OpenAI
 surfaces, and therefore never claim OpenAI SDK coverage. Their SDK matrices stay
 empty until a truthful client compatibility suite exists.

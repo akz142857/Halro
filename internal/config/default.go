@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// defaultTemplate is what `heimdall start` writes when no config exists. It is
+// defaultTemplate is what `halro start` writes when no config exists. It is
 // the annotated form of Default(): the first file an operator ever opens should
 // explain what it is offering to change, not hand them a marshalled struct.
 // TestDefaultTemplateMatchesDefault keeps the two from drifting.
@@ -17,7 +17,7 @@ import (
 //go:embed default.yaml
 var defaultTemplate []byte
 
-// Default returns the safe, loopback-only configuration used by `heimdall start`.
+// Default returns the safe, loopback-only configuration used by `halro start`.
 // Relative storage paths intentionally remain relative to the process working
 // directory, matching the existing config loading semantics.
 func Default() Config {
@@ -34,7 +34,7 @@ func Default() Config {
 		},
 		Storage: Storage{
 			DataDir:      "./data",
-			MetadataFile: "heimdall.db",
+			MetadataFile: "halro.db",
 			MasterKey: MasterKey{
 				Mode: MasterKeyModeFile,
 				File: "./master.key",
@@ -130,7 +130,7 @@ func WriteDefault(path string) error {
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		return fmt.Errorf("create config directory: %w", err)
 	}
-	temporary, err := os.CreateTemp(directory, ".heimdall-config-*")
+	temporary, err := os.CreateTemp(directory, ".halro-config-*")
 	if err != nil {
 		return fmt.Errorf("create temporary config: %w", err)
 	}

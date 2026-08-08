@@ -62,10 +62,10 @@ export function Layout({
     <div className="shell">
       <a className="skip-link" href="#main-content">{t("navigation.skip")}</a>
       <aside className="sidebar">
-        <Link href="/admin" className="brand" aria-label={`Heimdall ${t("navigation.overview")}`}>
+        <Link href="/admin" className="brand" aria-label={`Halro ${t("navigation.overview")}`}>
           <span className="brand-mark">H</span>
           <span>
-            <strong>HEIMDALL</strong>
+            <strong>HALRO</strong>
             <small>{t("navigation.productSubtitle")}</small>
           </span>
         </Link>

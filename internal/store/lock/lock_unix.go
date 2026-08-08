@@ -26,7 +26,7 @@ func Acquire(dataDir string) (*Lock, error) {
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create data directory: %w", err)
 	}
-	path := filepath.Join(dataDir, ".heimdall.lock")
+	path := filepath.Join(dataDir, ".halro.lock")
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open data lock: %w", err)
@@ -53,7 +53,7 @@ func Acquire(dataDir string) (*Lock, error) {
 
 // AcquireInitialization serializes creation and atomic publication of a new
 // data directory without creating that directory first. Normal writers briefly
-// take the same sibling guard before opening .heimdall.lock, so they cannot
+// take the same sibling guard before opening .halro.lock, so they cannot
 // race the final directory rename.
 func AcquireInitialization(dataDir string) (*Lock, error) {
 	return acquireFile(publicationLockPath(dataDir), "initialization publication")
@@ -61,7 +61,7 @@ func AcquireInitialization(dataDir string) (*Lock, error) {
 
 func publicationLockPath(dataDir string) string {
 	digest := sha256.Sum256([]byte(filepath.Clean(dataDir)))
-	return filepath.Join(filepath.Dir(dataDir), fmt.Sprintf(".heimdall-publication-%x.lock", digest[:8]))
+	return filepath.Join(filepath.Dir(dataDir), fmt.Sprintf(".halro-publication-%x.lock", digest[:8]))
 }
 
 func acquireFile(path, purpose string) (*Lock, error) {
@@ -86,7 +86,7 @@ func acquireFile(path, purpose string) (*Lock, error) {
 // creating, truncating, or rewriting the lock file. Initialized data
 // directories always contain this file.
 func AcquireExistingReadOnly(dataDir string) (*Lock, error) {
-	path := filepath.Join(dataDir, ".heimdall.lock")
+	path := filepath.Join(dataDir, ".halro.lock")
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("open existing data lock read-only: %w", err)

@@ -3,13 +3,13 @@ package anthropic
 import (
 	"testing"
 
-	"github.com/akz142857/Heimdall/internal/anthropicapi"
+	"github.com/akz142857/Halro/internal/anthropicapi"
 )
 
 // Anthropic reports input_tokens net of both cache tiers. Reading that field as
 // the prompt span is what made a cache-served request look ~20x cheaper than it
 // was: on an agent workload the cache serves most of the prompt, so the part
-// Heimdall recorded was the small uncached remainder.
+// Halro recorded was the small uncached remainder.
 func TestAnthropicUsageRecoversThePromptSpanTheCacheServed(t *testing.T) {
 	// A long agent turn: 100k prompt, almost all of it served from cache.
 	wire := anthropicapi.Usage{

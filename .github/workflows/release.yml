@@ -58,7 +58,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          compat_server=$(mktemp "${RUNNER_TEMP}/heimdall-compat-server.XXXXXX")
+          compat_server=$(mktemp "${RUNNER_TEMP}/halro-compat-server.XXXXXX")
           go build -o "$compat_server" ./tests/compatibility/server
           "$compat_server" --listen 127.0.0.1:18088 &
           compat_server_pid=$!
@@ -86,7 +86,7 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: 1000 concurrent SSE cleanup gate
-        run: HEIMDALL_STRESS=1 go test ./tests/stress -run TestThousandConcurrentSSEConnectionsCleanup -count=1 -v
+        run: HALRO_STRESS=1 go test ./tests/stress -run TestThousandConcurrentSSEConnectionsCleanup -count=1 -v
 
   web:
     runs-on: ubuntu-latest
@@ -143,28 +143,28 @@ jobs:
           RELEASE_VERSION: ${{ github.ref_name }}
           RELEASE_COMMIT: ${{ github.sha }}
         run: |
-          package_dir="release/heimdall-${GOOS}-${GOARCH}"
+          package_dir="release/halro-${GOOS}-${GOARCH}"
           mkdir -p "${package_dir}"
           go build -trimpath \
-            -ldflags "-s -w -X github.com/akz142857/Heimdall/internal/buildinfo.Version=${RELEASE_VERSION} -X github.com/akz142857/Heimdall/internal/buildinfo.Commit=${RELEASE_COMMIT} -X github.com/akz142857/Heimdall/internal/buildinfo.Date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            -o "${package_dir}/heimdall" ./cmd/heimdall
+            -ldflags "-s -w -X github.com/akz142857/Halro/internal/buildinfo.Version=${RELEASE_VERSION} -X github.com/akz142857/Halro/internal/buildinfo.Commit=${RELEASE_COMMIT} -X github.com/akz142857/Halro/internal/buildinfo.Date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -o "${package_dir}/halro" ./cmd/halro
           go build -trimpath \
             -ldflags "-s -w" \
-            -o "${package_dir}/heimdall-deadman" ./cmd/heimdall-deadman
+            -o "${package_dir}/halro-deadman" ./cmd/halro-deadman
           cp deploy/observability/external-probe/config.example.yaml \
             deploy/observability/external-probe/config.schema.json \
             deploy/observability/external-probe/event.schema.json \
             deploy/observability/external-probe/RECEIVER-CONTRACT.md \
-            deploy/observability/external-probe/heimdall-deadman.service \
+            deploy/observability/external-probe/halro-deadman.service \
             "${package_dir}/"
           cp LICENSE NOTICE THIRD_PARTY_NOTICES.md README.md "${package_dir}/"
-          tar -C release -czf "release/heimdall-${GOOS}-${GOARCH}.tar.gz" \
-            "heimdall-${GOOS}-${GOARCH}"
+          tar -C release -czf "release/halro-${GOOS}-${GOARCH}.tar.gz" \
+            "halro-${GOOS}-${GOARCH}"
           rm -r "${package_dir}"
       - uses: actions/upload-artifact@v7
         with:
-          name: heimdall-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: release/heimdall-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
+          name: halro-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: release/halro-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
 
   container:
     needs: [quality, sdk-compatibility, stress]
@@ -181,20 +181,20 @@ jobs:
             --build-arg RELEASE_VERSION=${RELEASE_VERSION} \
             --build-arg RELEASE_COMMIT=${RELEASE_COMMIT} \
             --build-arg RELEASE_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
-            --tag heimdall:${IMAGE_TAG} .
-          docker run --rm --entrypoint /usr/local/bin/heimdall heimdall:${IMAGE_TAG} version
-          test "$(docker image inspect heimdall:${IMAGE_TAG} --format '{{.Config.User}}')" = "65532:65532"
-          docker save heimdall:${IMAGE_TAG} | gzip -n > heimdall-container.tar.gz
+            --tag halro:${IMAGE_TAG} .
+          docker run --rm --entrypoint /usr/local/bin/halro halro:${IMAGE_TAG} version
+          test "$(docker image inspect halro:${IMAGE_TAG} --format '{{.Config.User}}')" = "65532:65532"
+          docker save halro:${IMAGE_TAG} | gzip -n > halro-container.tar.gz
           docker build \
             -f deploy/observability/external-probe/Dockerfile \
-            --tag heimdall-deadman:${IMAGE_TAG} \
-            --tag heimdall-deadman:release .
-          test "$(docker image inspect heimdall-deadman:${IMAGE_TAG} --format '{{.Config.User}}')" = "65532:65532"
-          docker save heimdall-deadman:${IMAGE_TAG} | gzip -n > heimdall-deadman-container.tar.gz
+            --tag halro-deadman:${IMAGE_TAG} \
+            --tag halro-deadman:release .
+          test "$(docker image inspect halro-deadman:${IMAGE_TAG} --format '{{.Config.User}}')" = "65532:65532"
+          docker save halro-deadman:${IMAGE_TAG} | gzip -n > halro-deadman-container.tar.gz
       - name: Scan release dead-man image
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          image-ref: heimdall-deadman:release
+          image-ref: halro-deadman:release
           format: table
           exit-code: "1"
           ignore-unfixed: true
@@ -202,10 +202,10 @@ jobs:
           scanners: vuln,secret,misconfig
       - uses: actions/upload-artifact@v7
         with:
-          name: heimdall-container
+          name: halro-container
           path: |
-            heimdall-container.tar.gz
-            heimdall-deadman-container.tar.gz
+            halro-container.tar.gz
+            halro-deadman-container.tar.gz
 
   provenance:
     needs: [binaries, container]
@@ -217,7 +217,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
-          pattern: heimdall-*
+          pattern: halro-*
           path: release
           merge-multiple: true
       - name: Generate SPDX SBOM
@@ -225,18 +225,18 @@ jobs:
         with:
           path: .
           format: spdx-json
-          output-file: release/heimdall.spdx.json
+          output-file: release/halro.spdx.json
           upload-artifact: false
           upload-release-assets: false
       - name: Generate checksums
         working-directory: release
-        run: sha256sum heimdall-* heimdall.spdx.json > checksums.txt
+        run: sha256sum halro-* halro.spdx.json > checksums.txt
       - name: Install Cosign
         uses: sigstore/cosign-installer@v4.1.2
       - name: Keyless sign release blobs
         working-directory: release
         run: |
-          for artifact in heimdall-* heimdall.spdx.json checksums.txt; do
+          for artifact in halro-* halro.spdx.json checksums.txt; do
             cosign sign-blob --yes --bundle "${artifact}.sigstore.json" "${artifact}"
           done
       - uses: actions/upload-artifact@v7
@@ -276,7 +276,7 @@ jobs:
             --artifacts-dir release \
             "${evidence_file}"
           (cd release && sha256sum --check checksums.txt)
-          for artifact in release/heimdall-* release/heimdall.spdx.json release/checksums.txt; do
+          for artifact in release/halro-* release/halro.spdx.json release/checksums.txt; do
             case "${artifact}" in
               *.sigstore.json) continue ;;
             esac
@@ -298,4 +298,4 @@ jobs:
           if [[ "${GITHUB_REF_NAME}" == *-rc.* ]]; then
             release_notes=(--generate-notes --prerelease)
           fi
-          gh release create "${GITHUB_REF_NAME}" release/* --verify-tag "${release_notes[@]}" --title "Heimdall ${GITHUB_REF_NAME}"
+          gh release create "${GITHUB_REF_NAME}" release/* --verify-tag "${release_notes[@]}" --title "Halro ${GITHUB_REF_NAME}"

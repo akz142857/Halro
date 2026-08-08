@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/domain"
-	"github.com/akz142857/Heimdall/internal/ledger"
+	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/ledger"
 )
 
 // maxTrackedEventIDs bounds the dedup index, mirroring the audit log's. A

@@ -72,7 +72,7 @@ credentials nor contact IMDS.
 Mantle is a separate access surface. Only regional
 `bedrock-mantle.<region>.api.aws` origins are accepted. Each Provider instance
 selects one immutable wire profile; Runtime credentials cannot be attached to
-Mantle. The Responses profile participates only in Heimdall's stateless tier
+Mantle. The Responses profile participates only in Halro's stateless tier
 and always sends `store:false`. Native Anthropic routing preserves validated
 thinking signatures and raw event order while remaining pinned to the selected
 Mantle Anthropic profile.

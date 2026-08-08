@@ -31,7 +31,7 @@ func TestValidateRejectsAnchorURLMisconfiguration(t *testing.T) {
 	directory := t.TempDir()
 	base := validConfig(directory, "https://127.0.0.1:1/notify", pki.caFile, tokenPath)
 
-	// anchor_url on a non-heimdall target.
+	// anchor_url on a non-halro target.
 	withWrongKind := base
 	withWrongKind.AnchorFile = filepath.Join(directory, "anchors.jsonl")
 	withWrongKind.Targets = append([]TargetConfig{}, base.Targets...)
@@ -102,13 +102,13 @@ func TestPullAnchorsFetchesAndPersistsIncrementally(t *testing.T) {
 	if err := engine.Tick(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if got := engine.state.Targets["heimdall"].LastAnchorSequence; got != 2 {
+	if got := engine.state.Targets["halro"].LastAnchorSequence; got != 2 {
 		t.Fatalf("after first pull, LastAnchorSequence=%d, want 2", got)
 	}
 	if err := engine.Tick(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if got := engine.state.Targets["heimdall"].LastAnchorSequence; got != 3 {
+	if got := engine.state.Targets["halro"].LastAnchorSequence; got != 3 {
 		t.Fatalf("after second pull, LastAnchorSequence=%d, want 3 (incremental since=2 not since=0)", got)
 	}
 	if requests.Load() != 2 {
@@ -134,7 +134,7 @@ func TestPullAnchorsFetchesAndPersistsIncrementally(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := reloaded.state.Targets["heimdall"].LastAnchorSequence; got != 3 {
+	if got := reloaded.state.Targets["halro"].LastAnchorSequence; got != 3 {
 		t.Fatalf("reloaded LastAnchorSequence=%d, want 3", got)
 	}
 }
@@ -148,7 +148,7 @@ func TestPullAnchorsUnreachableDoesNotBlockProbes(t *testing.T) {
 	os.WriteFile(tokenPath, []byte("anchor-secret"), 0o600)
 	directory := t.TempDir()
 	// A URL with no listener behind it — every pull fails with a connection
-	// error, the way an unreachable Heimdall instance would behave.
+	// error, the way an unreachable Halro instance would behave.
 	cfg := anchorTestConfig(t, directory, "https://127.0.0.1:1/notify", "https://127.0.0.1:1/anchors", pki.caFile, tokenPath)
 	engine, err := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
@@ -165,7 +165,7 @@ func TestPullAnchorsUnreachableDoesNotBlockProbes(t *testing.T) {
 	if checks.Load() != 3 {
 		t.Fatalf("probes ran=%d, want 3 — anchor pull failure must not skip probing", checks.Load())
 	}
-	if got := engine.state.Targets["heimdall"].LastAnchorSequence; got != 0 {
+	if got := engine.state.Targets["halro"].LastAnchorSequence; got != 0 {
 		t.Fatalf("LastAnchorSequence=%d after a failed pull, want 0", got)
 	}
 	if _, err := os.Stat(cfg.AnchorFile); !os.IsNotExist(err) {

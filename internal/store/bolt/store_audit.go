@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/domain"
-	"github.com/akz142857/Heimdall/internal/masterkey"
+	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/masterkey"
 	bbolt "go.etcd.io/bbolt"
 )
 

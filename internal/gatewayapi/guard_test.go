@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akz142857/Heimdall/internal/anthropicapi"
-	"github.com/akz142857/Heimdall/internal/openaiapi"
+	"github.com/akz142857/Halro/internal/anthropicapi"
+	"github.com/akz142857/Halro/internal/openaiapi"
 )
 
 // countingBody reports whether anything pulled on the request body, which is

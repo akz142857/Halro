@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/akz142857/Heimdall/internal/config"
-	"github.com/akz142857/Heimdall/internal/vault"
+	"github.com/akz142857/Halro/internal/config"
+	"github.com/akz142857/Halro/internal/vault"
 )
 
 func TestFileStoreLifecycle(t *testing.T) {

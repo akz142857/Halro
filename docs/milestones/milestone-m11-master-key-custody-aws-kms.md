@@ -27,10 +27,10 @@ M11 将以下三项作为一个不可拆分的生产里程碑交付：
 
 里程碑完成后：
 
-- Heimdall 核心仍然独立、自包含、云中立；
+- Halro 核心仍然独立、自包含、云中立；
 - File 模式不安装、不调用也不依赖任何云服务；
 - AWS KMS 是首个可选的生产级扩展，不是核心架构前提；
-- 启用 AWS KMS 的生产实例不在主机磁盘或 Heimdall 备份中保存明文 Master Key；
+- 启用 AWS KMS 的生产实例不在主机磁盘或 Halro 备份中保存明文 Master Key；
 - Primary 和 Recovery KMS Slots 可以独立解锁同一个 Vault；
 - KMS 不进入 Gateway 请求热路径；
 - 初始化、轮换、诊断、备份和恢复形成完整生产闭环。
@@ -144,8 +144,8 @@ ADR 0010 已根据 Phase 0 的可复现测量接受方案 A；本次决策只比
 
 | 方案 | 描述 | 当前状态 |
 |---|---|---|
-| A | 主 Heimdall 二进制直接包含 AWS SDK；未启用时不访问 AWS | Accepted |
-| B | `heimdall` 与 `heimdall-aws` 两个签名 artifact | Rejected for M11 |
+| A | 主 Halro 二进制直接包含 AWS SDK；未启用时不访问 AWS | Accepted |
+| B | `halro` 与 `halro-aws` 两个签名 artifact | Rejected for M11 |
 
 Spike 必须测量：
 
@@ -174,14 +174,14 @@ GCP/Azure artifact 不进入本次决策。Spike 证据已归档，ADR 0010 已�
 
 | ID | PR Slice | 状态 | 前置依赖 | Exit evidence | Issue / PR / Commit | 备注 |
 |---|---|---|---|---|---|---|
-| M11-PR1 | 统一 Master Key 核心与最终配置 | In Review | 无 | File 模式完整测试；所有直接文件调用收口；新 schema 严格校验；`config check` 零 KMS 调用 | [#56](https://github.com/akz142857/Heimdall/issues/56)；[PR #64](https://github.com/akz142857/Heimdall/pull/64)；`3066541` | `go test ./...`、关键包 Race、Vet 已通过；不引入 AWS SDK |
-| M11-PR2 | Key Slot descriptor 与状态机 | In Review | PR1 | pending/active/retiring/revoked 事务、revision、Vault Key Check 和错误测试 | [#57](https://github.com/akz142857/Heimdall/issues/57)；[PR #65](https://github.com/akz142857/Heimdall/pull/65)；`510581a`、`eb8fc83` | provider-neutral 状态机与 CI 全部通过；待独立 review/merge |
-| M11-PR3a | AWS SDK spike、契约评审与 ADR 决策 | In Review | PR1 | A/B module/binary/container/build/test/cold-start/SBOM/vuln 实测；KMSWrapper/错误分类；fake KMS fault tests；ADR 0010 Accepted | [#58](https://github.com/akz142857/Heimdall/issues/58)；[PR #66](https://github.com/akz142857/Heimdall/pull/66)；`512d517`、`258c430` | 选择单 module/单 `heimdall` artifact；不含生产 AWS Adapter；完整 Test、Race、Vet、vuln 与边界检查通过 |
-| M11-PR3b | AWS KMS Adapter 实现 | In Progress | PR3a | Workload Identity、wrap/unwrap、Context、allowlist、重试和真实 AWS smoke tests | [#59](https://github.com/akz142857/Heimdall/issues/59)；[PR #67](https://github.com/akz142857/Heimdall/pull/67)；`docs/milestones/evidence/m11-03b-aws-kms-adapter-2026-08-03.md` | 本地实现与门禁通过；真实 AWS/CloudTrail evidence 待有效 Workload Identity 与现有 KMS Key |
-| M11-PR4 | AWS KMS 初始化与双 Slot 恢复 | In Progress | PR2、PR3b | 新实例原子初始化；Primary/Recovery 独立验证；失败清理；CLI 测试 | [#60](https://github.com/akz142857/Heimdall/issues/60)；[PR #69](https://github.com/akz142857/Heimdall/pull/69)；`docs/milestones/evidence/m11-04-dual-slot-initialization-2026-08-03.md` | 本地实现、Secret Canary 与 kill-point 门禁通过；真实 AWS 双 Key evidence 待有效身份和现有 Keys；不含 File→KMS 迁移 |
-| M11-PR5 | Rewrap、DEK Rotate 与崩溃恢复 | In Progress | PR2、PR4 | COW/bridge/Keyring/compaction；全部 publication kill points；幂等恢复 | [#61](https://github.com/akz142857/Heimdall/issues/61)；[Draft PR #71](https://github.com/akz142857/Heimdall/pull/71)；`docs/milestones/evidence/m11-05-key-lifecycle-2026-08-03.md` | 本地实现与 kill-point matrix 已落地；真实 AWS 证据待补 |
-| M11-PR6 | Doctor、Backup、Restore 与 DR | In Progress | PR4、PR5 | 完整/静态 doctor；备份 manifest；KMS restore；真实 Recovery Slot 恢复演练 | [#62](https://github.com/akz142857/Heimdall/issues/62)；[Draft PR #72](https://github.com/akz142857/Heimdall/pull/72)；`docs/milestones/evidence/m11-06-kms-dr-2026-08-03.md` | 本地实现与门禁通过；真实 AWS 与独立操作者证据待补 |
-| M11-PR7 | 生产交付与发布门禁 | In Progress | PR1–PR6（含 PR3a/PR3b） | Audit/Metrics/alerts；主机加固；IAM/Key Policy；VM/K8s Runbook；SBOM、签名、安全评审 | [#63](https://github.com/akz142857/Heimdall/issues/63)；[Draft PR #73](https://github.com/akz142857/Heimdall/pull/73)；`docs/milestones/evidence/m11-07-production-readiness-2026-08-03.md` | 本地生产基线与门禁通过；真实 AWS、RC artifact 与四方签署待补，尚不可 production-ready |
+| M11-PR1 | 统一 Master Key 核心与最终配置 | In Review | 无 | File 模式完整测试；所有直接文件调用收口；新 schema 严格校验；`config check` 零 KMS 调用 | [#56](https://github.com/akz142857/Halro/issues/56)；[PR #64](https://github.com/akz142857/Halro/pull/64)；`3066541` | `go test ./...`、关键包 Race、Vet 已通过；不引入 AWS SDK |
+| M11-PR2 | Key Slot descriptor 与状态机 | In Review | PR1 | pending/active/retiring/revoked 事务、revision、Vault Key Check 和错误测试 | [#57](https://github.com/akz142857/Halro/issues/57)；[PR #65](https://github.com/akz142857/Halro/pull/65)；`510581a`、`eb8fc83` | provider-neutral 状态机与 CI 全部通过；待独立 review/merge |
+| M11-PR3a | AWS SDK spike、契约评审与 ADR 决策 | In Review | PR1 | A/B module/binary/container/build/test/cold-start/SBOM/vuln 实测；KMSWrapper/错误分类；fake KMS fault tests；ADR 0010 Accepted | [#58](https://github.com/akz142857/Halro/issues/58)；[PR #66](https://github.com/akz142857/Halro/pull/66)；`512d517`、`258c430` | 选择单 module/单 `halro` artifact；不含生产 AWS Adapter；完整 Test、Race、Vet、vuln 与边界检查通过 |
+| M11-PR3b | AWS KMS Adapter 实现 | In Progress | PR3a | Workload Identity、wrap/unwrap、Context、allowlist、重试和真实 AWS smoke tests | [#59](https://github.com/akz142857/Halro/issues/59)；[PR #67](https://github.com/akz142857/Halro/pull/67)；`docs/milestones/evidence/m11-03b-aws-kms-adapter-2026-08-03.md` | 本地实现与门禁通过；真实 AWS/CloudTrail evidence 待有效 Workload Identity 与现有 KMS Key |
+| M11-PR4 | AWS KMS 初始化与双 Slot 恢复 | In Progress | PR2、PR3b | 新实例原子初始化；Primary/Recovery 独立验证；失败清理；CLI 测试 | [#60](https://github.com/akz142857/Halro/issues/60)；[PR #69](https://github.com/akz142857/Halro/pull/69)；`docs/milestones/evidence/m11-04-dual-slot-initialization-2026-08-03.md` | 本地实现、Secret Canary 与 kill-point 门禁通过；真实 AWS 双 Key evidence 待有效身份和现有 Keys；不含 File→KMS 迁移 |
+| M11-PR5 | Rewrap、DEK Rotate 与崩溃恢复 | In Progress | PR2、PR4 | COW/bridge/Keyring/compaction；全部 publication kill points；幂等恢复 | [#61](https://github.com/akz142857/Halro/issues/61)；[Draft PR #71](https://github.com/akz142857/Halro/pull/71)；`docs/milestones/evidence/m11-05-key-lifecycle-2026-08-03.md` | 本地实现与 kill-point matrix 已落地；真实 AWS 证据待补 |
+| M11-PR6 | Doctor、Backup、Restore 与 DR | In Progress | PR4、PR5 | 完整/静态 doctor；备份 manifest；KMS restore；真实 Recovery Slot 恢复演练 | [#62](https://github.com/akz142857/Halro/issues/62)；[Draft PR #72](https://github.com/akz142857/Halro/pull/72)；`docs/milestones/evidence/m11-06-kms-dr-2026-08-03.md` | 本地实现与门禁通过；真实 AWS 与独立操作者证据待补 |
+| M11-PR7 | 生产交付与发布门禁 | In Progress | PR1–PR6（含 PR3a/PR3b） | Audit/Metrics/alerts；主机加固；IAM/Key Policy；VM/K8s Runbook；SBOM、签名、安全评审 | [#63](https://github.com/akz142857/Halro/issues/63)；[Draft PR #73](https://github.com/akz142857/Halro/pull/73)；`docs/milestones/evidence/m11-07-production-readiness-2026-08-03.md` | 本地生产基线与门禁通过；真实 AWS、RC artifact 与四方签署待补，尚不可 production-ready |
 
 ## 7. PR Slice 详细范围
 
@@ -300,7 +300,7 @@ storage:
 
 ### M11-PR7：生产交付
 
-- AWS 与 Heimdall Audit 关联；
+- AWS 与 Halro Audit 关联；
 - 低基数 KMS Metrics；
 - Primary 解锁失败、Recovery 缺失/过期/使用、Vault mismatch 和 pending rotation 告警；
 - IAM Role、Key Policy、Recovery Role 和授权生命周期示例；
@@ -318,7 +318,7 @@ storage:
 |---|---|---|---|
 | G1 File 模式保持云中立且完整可用 | In Review | File init/start/rotate/backup/restore tests | PR #64 起的全仓 File 回归与 KMS boundary 持续通过；待堆叠 PR review/merge |
 | G2 最终配置 schema 冻结 | In Review | 统一字段 config tests + reviewed example + `config check` zero-KMS-call test | PR #64；严格 schema 与 CLI zero-call test 已落地 |
-| G3 AWS SDK 发布决策冻结 | In Review | spike report + Accepted ADR 0010 | [M11-03A evidence](evidence/m11-03a-aws-sdk-spike-2026-08-03.md)；[PR #66](https://github.com/akz142857/Heimdall/pull/66) |
+| G3 AWS SDK 发布决策冻结 | In Review | spike report + Accepted ADR 0010 | [M11-03A evidence](evidence/m11-03a-aws-sdk-spike-2026-08-03.md)；[PR #66](https://github.com/akz142857/Halro/pull/66) |
 | G4 Primary/Recovery 双 Slot | In Progress | 两个 Key 独立 unwrap + Vault Check | 本地双独立 fake KMS、原子初始化和 Recovery Audit 通过；真实 AWS 双 Key 待执行 |
 | G5 密钥材料不落盘且主机边界加固 | In Progress | filesystem/backup inspection；logs/errors/Audit/Metrics/bbolt/heap canary；core/pprof/RLIMIT/ptrace evidence | Canary、`RLIMIT_CORE=0`、Linux non-dumpable 与 K8s/systemd 基线已落地；最终 RC/目标主机证据待补 |
 | G6 KMS 不进入请求热路径 | In Review | request-path zero-call test | `TestKMSBootstrapAndRuntimeUsePrimaryOnlyOutsideRequestPath` 与 boundary script 通过 |
@@ -392,12 +392,12 @@ storage:
 | 日期 | 决策 | 状态 | 影响 |
 |---|---|---|---|
 | 2026-08-03 | M11 作为一个里程碑，设计文档和 PR 保持拆分 | Accepted | 防止安全链路割裂和巨型 PR |
-| 2026-08-03 | Heimdall 核心保持云中立，AWS 只是首个可选生产扩展 | Accepted | File 模式不得产生云依赖 |
+| 2026-08-03 | Halro 核心保持云中立，AWS 只是首个可选生产扩展 | Accepted | File 模式不得产生云依赖 |
 | 2026-08-03 | 不实现插件系统，只允许窄、显式、编译期 Adapter | Accepted | 无动态加载、插件市场或第三方 ABI |
 | 2026-08-03 | 不承担开发期旧配置和数据迁移 | Accepted | 直接实现最终 schema，无 Legacy/File→KMS 流程 |
 | 2026-08-03 | 不实现 Passphrase、助记词和钱包式恢复 | Accepted | 当前 Recovery 使用独立 KMS Slot |
 | 2026-08-03 | AWS KMS 生产模式必须有 Primary 和 Recovery | Accepted | 单 Slot 不能 production-ready |
-| 2026-08-03 | AWS SDK artifact 方案采用单 module、单签名 `heimdall` artifact，ADR 0010 已 Accepted | Accepted | AWS SDK 引入必须遵守冻结契约、File 零云调用和单 artifact 发布门禁 |
+| 2026-08-03 | AWS SDK artifact 方案采用单 module、单签名 `halro` artifact，ADR 0010 已 Accepted | Accepted | AWS SDK 引入必须遵守冻结契约、File 零云调用和单 artifact 发布门禁 |
 | 2026-08-03 | PR3 拆为决策门 PR3a 与实现 PR3b | Accepted | G3/Accepted ADR 成为 AWS SDK 实现的显式前置 |
 | 2026-08-03 | Key Slot 配置统一为 Primary/Recovery + timeout 字段 | Accepted | 两份 PRD 使用同一最终 schema，`config check` 保持纯静态 |
 | 2026-08-04 | Recovery 收敛为离线修复 Primary 后冷启动，不提供 Recovery Runtime | Accepted | Runtime/Bootstrap/Admin 永不选择 Recovery；恢复身份不得长期运行 Listener |

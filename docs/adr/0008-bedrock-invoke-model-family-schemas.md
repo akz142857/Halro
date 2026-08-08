@@ -2,12 +2,12 @@
 
 - Status: Accepted
 - Date: 2026-08-01
-- Issue: [#40](https://github.com/akz142857/Heimdall/issues/40)
+- Issue: [#40](https://github.com/akz142857/Halro/issues/40)
 
 ## Context
 
 Amazon Bedrock `InvokeModel` carries model-specific JSON. A generic passthrough
-would let Provider fields bypass Heimdall's semantic validation, capability
+would let Provider fields bypass Halro's semantic validation, capability
 evidence, redaction and compatibility contract. Different model families also
 have incompatible request, response, quota and accounting semantics.
 

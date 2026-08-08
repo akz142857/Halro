@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/adminauth"
-	"github.com/akz142857/Heimdall/internal/config"
-	"github.com/akz142857/Heimdall/internal/domain"
-	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
+	"github.com/akz142857/Halro/internal/adminauth"
+	"github.com/akz142857/Halro/internal/config"
+	"github.com/akz142857/Halro/internal/domain"
+	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 )
 
 type SetupStatus struct {

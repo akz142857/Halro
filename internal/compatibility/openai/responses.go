@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/akz142857/Heimdall/internal/compatibility"
-	"github.com/akz142857/Heimdall/internal/openaiapi"
-	"github.com/akz142857/Heimdall/internal/semantic"
+	"github.com/akz142857/Halro/internal/compatibility"
+	"github.com/akz142857/Halro/internal/openaiapi"
+	"github.com/akz142857/Halro/internal/semantic"
 )
 
 func DecodeResponseGenerate(request openaiapi.ResponseRequest) (semantic.GenerateRequest, error) {

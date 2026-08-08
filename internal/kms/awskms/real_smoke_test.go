@@ -12,18 +12,18 @@ import (
 	"testing"
 	"time"
 
-	corekms "github.com/akz142857/Heimdall/internal/kms"
+	corekms "github.com/akz142857/Halro/internal/kms"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 )
 
 func TestRealAWSKMSWorkloadIdentityEncryptDecrypt(t *testing.T) {
-	if os.Getenv("HEIMDALL_AWS_KMS_REAL") != "1" {
-		t.Skip("set HEIMDALL_AWS_KMS_REAL=1 for real AWS KMS evidence")
+	if os.Getenv("HALRO_AWS_KMS_REAL") != "1" {
+		t.Skip("set HALRO_AWS_KMS_REAL=1 for real AWS KMS evidence")
 	}
-	keyARN := os.Getenv("HEIMDALL_AWS_KMS_KEY_ARN")
+	keyARN := os.Getenv("HALRO_AWS_KMS_KEY_ARN")
 	partition, region, account, _, ok := parseKeyARN(keyARN)
 	if !ok || partition == "" {
-		t.Fatal("HEIMDALL_AWS_KMS_KEY_ARN must be a full customer managed Key ARN")
+		t.Fatal("HALRO_AWS_KMS_KEY_ARN must be a full customer managed Key ARN")
 	}
 	options := Options{Region: region, Account: account, KeyARN: keyARN, Algorithm: SymmetricDefaultAlgorithm}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -93,7 +93,7 @@ func TestRealAWSKMSWorkloadIdentityEncryptDecrypt(t *testing.T) {
 		t.Fatal(err)
 	}
 	fmt.Printf("M11_AWS_KMS_EVIDENCE=%s\n", encoded)
-	if privatePath := os.Getenv("HEIMDALL_AWS_KMS_PRIVATE_EVIDENCE_FILE"); privatePath != "" {
+	if privatePath := os.Getenv("HALRO_AWS_KMS_PRIVATE_EVIDENCE_FILE"); privatePath != "" {
 		privateEvidence, marshalErr := json.Marshal(map[string]string{
 			"account": account, "key_arn": keyARN,
 			"encrypt_request_id": wrapped.ProviderRequestID,

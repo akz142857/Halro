@@ -7,11 +7,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/adminauth"
-	"github.com/akz142857/Heimdall/internal/audit"
-	"github.com/akz142857/Heimdall/internal/domain"
-	"github.com/akz142857/Heimdall/internal/id"
-	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
+	"github.com/akz142857/Halro/internal/adminauth"
+	"github.com/akz142857/Halro/internal/audit"
+	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/id"
+	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -169,7 +169,7 @@ func (r *Runtime) createAdminMFAAuthenticator(w http.ResponseWriter, req *http.R
 		adminStoreError(w)
 		return
 	}
-	writeJSON(w, 201, map[string]any{"id": stored.ID, "name": stored.Name, "secret": adminauth.TOTPSecretBase32(secret), "otpauth_uri": adminauth.TOTPUri("Heimdall", user.Username, secret), "expires_at": expiry, "revision": stored.Revision})
+	writeJSON(w, 201, map[string]any{"id": stored.ID, "name": stored.Name, "secret": adminauth.TOTPSecretBase32(secret), "otpauth_uri": adminauth.TOTPUri("Halro", user.Username, secret), "expires_at": expiry, "revision": stored.Revision})
 }
 
 func (r *Runtime) confirmAdminMFAAuthenticator(w http.ResponseWriter, req *http.Request) {

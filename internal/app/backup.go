@@ -12,17 +12,17 @@ import (
 	"strings"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/audit"
-	"github.com/akz142857/Heimdall/internal/backup"
-	"github.com/akz142857/Heimdall/internal/buildinfo"
-	"github.com/akz142857/Heimdall/internal/config"
-	"github.com/akz142857/Heimdall/internal/id"
-	"github.com/akz142857/Heimdall/internal/ledger"
-	"github.com/akz142857/Heimdall/internal/masterkey"
-	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
-	"github.com/akz142857/Heimdall/internal/store/lock"
-	"github.com/akz142857/Heimdall/internal/usage"
-	"github.com/akz142857/Heimdall/internal/vault"
+	"github.com/akz142857/Halro/internal/audit"
+	"github.com/akz142857/Halro/internal/backup"
+	"github.com/akz142857/Halro/internal/buildinfo"
+	"github.com/akz142857/Halro/internal/config"
+	"github.com/akz142857/Halro/internal/id"
+	"github.com/akz142857/Halro/internal/ledger"
+	"github.com/akz142857/Halro/internal/masterkey"
+	boltstore "github.com/akz142857/Halro/internal/store/bolt"
+	"github.com/akz142857/Halro/internal/store/lock"
+	"github.com/akz142857/Halro/internal/usage"
+	"github.com/akz142857/Halro/internal/vault"
 )
 
 func CreateBackup(
@@ -196,7 +196,7 @@ func restoreBackupWithFactory(
 	}
 
 	dataParent := filepath.Dir(cfg.Storage.DataDir)
-	stagingRoot, err := os.MkdirTemp(dataParent, ".heimdall-restore-stage-*")
+	stagingRoot, err := os.MkdirTemp(dataParent, ".halro-restore-stage-*")
 	if err != nil {
 		return RestoreResult{}, err
 	}
@@ -461,7 +461,7 @@ func appendRestoreAudit(ctx context.Context, store *boltstore.Store, log *audit.
 }
 
 func reservePreviousDataPath(parent string) (string, error) {
-	path, err := os.MkdirTemp(parent, ".heimdall-pre-restore-*")
+	path, err := os.MkdirTemp(parent, ".halro-pre-restore-*")
 	if err != nil {
 		return "", err
 	}
@@ -517,7 +517,7 @@ func createBackupSnapshotWithLedger(
 	if ledgerLog == nil {
 		return backup.Manifest{}, errors.New("open Ledger is required for backup snapshot")
 	}
-	staging, err := os.MkdirTemp(filepath.Dir(outputPath), ".heimdall-backup-stage-*")
+	staging, err := os.MkdirTemp(filepath.Dir(outputPath), ".halro-backup-stage-*")
 	if err != nil {
 		return backup.Manifest{}, err
 	}

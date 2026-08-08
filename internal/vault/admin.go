@@ -14,8 +14,8 @@ func DeriveAdminSessionKey(masterKey []byte) ([]byte, error) {
 	key, err := hkdf.Key(
 		sha256.New,
 		masterKey,
-		[]byte("heimdall:admin-session:v1"),
-		"heimdall:admin-csrf-key:v1",
+		[]byte("halro:admin-session:v1"),
+		"halro:admin-csrf-key:v1",
 		32,
 	)
 	if err != nil {

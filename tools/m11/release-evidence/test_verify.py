@@ -173,7 +173,7 @@ class VerifyTests(unittest.TestCase):
                 artifact["sha256"] = hashlib.sha256(content).hexdigest()
                 (artifacts_dir / f"{artifact['name']}.sigstore.json").write_text("{}", encoding="utf-8")
             VERIFY.verify(bundle, artifacts_dir=artifacts_dir)
-            (artifacts_dir / "heimdall-linux-amd64.tar.gz").write_bytes(b"tampered")
+            (artifacts_dir / "halro-linux-amd64.tar.gz").write_bytes(b"tampered")
             with self.assertRaises(VERIFY.EvidenceError):
                 VERIFY.verify(bundle, artifacts_dir=artifacts_dir)
 

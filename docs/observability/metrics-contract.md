@@ -4,12 +4,12 @@ Status: Accepted for Standalone Phase A0
 Owner: Application Architecture
 Reviewers: SRE, Security
 
-This document is the compatibility contract for Heimdall's Prometheus
+This document is the compatibility contract for Halro's Prometheus
 exposition. `docs/contracts/metrics-reference.md` remains the operator-facing inventory.
 
 ## Invariants
 
-- Application metrics use the `heimdall_` prefix. Standard Go/process metrics
+- Application metrics use the `halro_` prefix. Standard Go/process metrics
   retain their ecosystem names.
 - Durations are seconds; byte quantities end in `_bytes`; counters end in
   `_total`.
@@ -19,7 +19,7 @@ exposition. `docs/contracts/metrics-reference.md` remains the operator-facing in
   not contain a hostname, customer name, credential fragment, URL, model name,
   request ID, key ID, project ID, or source address.
 - Target labels such as `environment`, `region`, `cluster`, and `instance` are
-  added by Prometheus, not by Heimdall.
+  added by Prometheus, not by Halro.
 - No current metric has `shard`, `role`, or `authority` semantics. Adding one
   requires the Cluster ownership ADR to define which replicas emit it and how
   it aggregates.
@@ -27,7 +27,7 @@ exposition. `docs/contracts/metrics-reference.md` remains the operator-facing in
   and accounting.
 - KMS metrics never label a Key ARN, account, Slot ID, request ID, ciphertext,
   identity, error text, or Vault fingerprint. Recovery is explicit; therefore
-  `heimdall_kms_automatic_fallback_total` is an invariant-zero tripwire rather
+  `halro_kms_automatic_fallback_total` is an invariant-zero tripwire rather
   than evidence that automatic failover exists.
 
 ## Compatibility

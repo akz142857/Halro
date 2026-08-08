@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/akz142857/Heimdall/internal/deadman"
+	"github.com/akz142857/Halro/internal/deadman"
 	"github.com/google/jsonschema-go/jsonschema"
 	"gopkg.in/yaml.v3"
 )
@@ -46,19 +46,19 @@ func TestDeadmanConfigSchemaMatchesRuntimeForSharedCases(t *testing.T) {
 			config["heartbeat_ttl"] = "3m"
 		}},
 		{name: "empty optional mtls fields with bearer", valid: true, mutate: func(config map[string]any) {
-			candidate := target(config, "heimdall")
+			candidate := target(config, "halro")
 			candidate["tls"].(map[string]any)["client_cert_file"] = ""
 			candidate["tls"].(map[string]any)["client_key_file"] = ""
 		}},
 		{name: "missing target kind", mutate: func(config map[string]any) {
 			candidate := target(config, "alertmanager")
-			candidate["kind"] = "heimdall"
+			candidate["kind"] = "halro"
 		}},
 		{name: "prometheus without freshness", mutate: func(config map[string]any) {
 			delete(target(config, "prometheus"), "freshness")
 		}},
 		{name: "target without authentication", mutate: func(config map[string]any) {
-			candidate := target(config, "heimdall")
+			candidate := target(config, "halro")
 			delete(candidate, "bearer_token_file")
 			tls := candidate["tls"].(map[string]any)
 			delete(tls, "client_cert_file")
@@ -78,10 +78,10 @@ func TestDeadmanConfigSchemaMatchesRuntimeForSharedCases(t *testing.T) {
 			config["interval"] = "soon"
 		}},
 		{name: "URL without host", mutate: func(config map[string]any) {
-			target(config, "heimdall")["url"] = "https://"
+			target(config, "halro")["url"] = "https://"
 		}},
 		{name: "URL with userinfo", mutate: func(config map[string]any) {
-			target(config, "heimdall")["url"] = "https://credential@example.invalid/ready"
+			target(config, "halro")["url"] = "https://credential@example.invalid/ready"
 		}},
 	}
 

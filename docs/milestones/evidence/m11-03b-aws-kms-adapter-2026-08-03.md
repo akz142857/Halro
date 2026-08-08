@@ -28,7 +28,7 @@ sanitized smoke record.
   flags, reserved-field and instance/Slot binding checks.
 - Stable error mapping, provider request IDs, bounded Retry-After, per-call
   timeout, total startup deadline, bounded attempts and full jitter.
-- The Adapter has no transitive dependency on bbolt or Heimdall App, Audit,
+- The Adapter has no transitive dependency on bbolt or Halro App, Audit,
   Backup, Domain, Gateway, Store or Vault packages. Gateway and provider-neutral
   KMS/Master Key packages have no AWS SDK dependency.
 
@@ -41,7 +41,7 @@ go test ./...
 go test -race ./...
 go vet ./...
 GOTOOLCHAIN=go1.26.5 go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
-go build -trimpath ./cmd/heimdall ./cmd/heimdall-deadman
+go build -trimpath ./cmd/halro ./cmd/halro-deadman
 sh -n tools/m11/aws-kms-smoke/run.sh
 python3 -m unittest tools/m11/aws-kms-smoke/test_verify_cloudtrail.py
 ./tools/m11/check-kms-boundaries.sh
@@ -68,7 +68,7 @@ The read-only environment check on 2026-08-03 found:
 ```text
 credential source: shared-credentials-file
 STS GetCallerIdentity: InvalidClientTokenId
-HEIMDALL_AWS_KMS_KEY_ARN: unset
+HALRO_AWS_KMS_KEY_ARN: unset
 ```
 
 No AWS resource was created or modified. Completion requires an existing
@@ -76,7 +76,7 @@ customer-managed symmetric KMS Key ARN and a valid approved Workload Identity
 with Encrypt, Decrypt and CloudTrail lookup permissions. Run:
 
 ```text
-HEIMDALL_AWS_KMS_KEY_ARN='arn:aws:kms:REGION:ACCOUNT:key/UUID' \
+HALRO_AWS_KMS_KEY_ARN='arn:aws:kms:REGION:ACCOUNT:key/UUID' \
   ./tools/m11/aws-kms-smoke/run.sh
 ```
 

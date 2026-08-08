@@ -10,8 +10,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/akz142857/Heimdall/internal/deadman"
-	"github.com/akz142857/Heimdall/internal/safelog"
+	"github.com/akz142857/Halro/internal/deadman"
+	"github.com/akz142857/Halro/internal/safelog"
 )
 
 func main() {
@@ -22,8 +22,8 @@ func main() {
 }
 
 func run(arguments []string) error {
-	flags := flag.NewFlagSet("heimdall-deadman", flag.ContinueOnError)
-	configPath := flags.String("config", "/etc/heimdall-deadman/config.yaml", "dead-man configuration file")
+	flags := flag.NewFlagSet("halro-deadman", flag.ContinueOnError)
+	configPath := flags.String("config", "/etc/halro-deadman/config.yaml", "dead-man configuration file")
 	check := flags.Bool("check-config", false, "validate configuration and exit")
 	if err := flags.Parse(arguments); err != nil {
 		return err

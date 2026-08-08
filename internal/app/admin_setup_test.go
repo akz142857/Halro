@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/audit"
+	"github.com/akz142857/Halro/internal/audit"
 )
 
 func TestAdminSetupCreatesFirstUserAndSessionOnce(t *testing.T) {

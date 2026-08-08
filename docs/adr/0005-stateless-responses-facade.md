@@ -8,7 +8,7 @@ Date: 2026-08-01
 
 The OpenAI Responses API combines a typed item/event protocol with optional
 provider-owned resources: stored Responses, Conversations, background work,
-retrieval, cancellation, deletion, input-item listing, and webhooks. Heimdall
+retrieval, cancellation, deletion, input-item listing, and webhooks. Halro
 does not yet have a cross-provider ownership model for those resources.
 
 The Phase 0 semantic `generate` operation and versioned ProviderPrimitive
@@ -20,7 +20,7 @@ is portable.
 
 ## Decision
 
-Heimdall publishes only `POST /v1/responses` as the versioned northbound
+Halro publishes only `POST /v1/responses` as the versioned northbound
 profile `openai.responses.stateless.v1`.
 
 The endpoint is a stateless protocol facade:
@@ -36,11 +36,11 @@ The endpoint is a stateless protocol facade:
 
 The `resp_*` and output-item IDs returned by this tier are ephemeral Gateway
 correlation identifiers. They are not provider resource IDs, cannot be used
-with a retrieval API, and are not stored by Heimdall.
+with a retrieval API, and are not stored by Halro.
 
 ## Resource ownership
 
-- Omitted `store` means `false` in Heimdall; `store: true` is rejected.
+- Omitted `store` means `false` in Halro; `store: true` is rejected.
 - `previous_response_id`, `conversation`, `background`, prompt resources,
   metadata persistence, retrieval, deletion, cancellation, input-item listing,
   compaction/context management, and webhooks are unavailable.
@@ -128,7 +128,7 @@ and Python SDKs.
 ## Consequences
 
 - Applications can adopt the Responses object/event model without giving
-  Heimdall responsibility for durable provider resources.
+  Halro responsibility for durable provider resources.
 - Existing provider integrations remain reusable through the semantic and
   primitive layers.
 - Some valid OpenAI requests receive stable 4xx responses because their

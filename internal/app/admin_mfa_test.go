@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/adminauth"
-	"github.com/akz142857/Heimdall/internal/domain"
+	"github.com/akz142857/Halro/internal/adminauth"
+	"github.com/akz142857/Halro/internal/domain"
 )
 
 func TestAdminMFALoginRequiresAndConsumesSecondFactor(t *testing.T) {

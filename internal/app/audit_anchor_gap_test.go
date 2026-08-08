@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
+	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 )
 
 // TestVerifyAuditAnchorsReportsGapsAndRewinds covers the difference between

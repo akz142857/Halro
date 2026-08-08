@@ -6,12 +6,12 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/akz142857/Heimdall/internal/auth"
-	"github.com/akz142857/Heimdall/internal/budget"
-	"github.com/akz142857/Heimdall/internal/domain"
-	"github.com/akz142857/Heimdall/internal/openaiapi"
-	"github.com/akz142857/Heimdall/internal/provider"
-	"github.com/akz142857/Heimdall/internal/redaction"
+	"github.com/akz142857/Halro/internal/auth"
+	"github.com/akz142857/Halro/internal/budget"
+	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/openaiapi"
+	"github.com/akz142857/Halro/internal/provider"
+	"github.com/akz142857/Halro/internal/redaction"
 )
 
 func (s *Service) inferenceResourcesTarget(ctx context.Context, key, model string, operation provider.Operation) (auth.AuthResult, provider.Target, string, error) {

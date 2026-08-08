@@ -25,18 +25,18 @@ import (
 	// instant in different periods without anything surfacing the divergence.
 	_ "time/tzdata"
 
-	"github.com/akz142857/Heimdall/internal/app"
-	backuppkg "github.com/akz142857/Heimdall/internal/backup"
-	"github.com/akz142857/Heimdall/internal/bearercred"
-	"github.com/akz142857/Heimdall/internal/buildinfo"
-	"github.com/akz142857/Heimdall/internal/config"
-	"github.com/akz142857/Heimdall/internal/domain"
-	"github.com/akz142857/Heimdall/internal/hostsecurity"
-	"github.com/akz142857/Heimdall/internal/masterkey"
-	"github.com/akz142857/Heimdall/internal/safelog"
-	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
-	storelock "github.com/akz142857/Heimdall/internal/store/lock"
-	"github.com/akz142857/Heimdall/internal/timezone"
+	"github.com/akz142857/Halro/internal/app"
+	backuppkg "github.com/akz142857/Halro/internal/backup"
+	"github.com/akz142857/Halro/internal/bearercred"
+	"github.com/akz142857/Halro/internal/buildinfo"
+	"github.com/akz142857/Halro/internal/config"
+	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/hostsecurity"
+	"github.com/akz142857/Halro/internal/masterkey"
+	"github.com/akz142857/Halro/internal/safelog"
+	boltstore "github.com/akz142857/Halro/internal/store/bolt"
+	storelock "github.com/akz142857/Halro/internal/store/lock"
+	"github.com/akz142857/Halro/internal/timezone"
 )
 
 func main() {
@@ -59,10 +59,10 @@ func main() {
 func reportCommandFailure(out io.Writer, err error) {
 	problems := strings.Split(strings.TrimSpace(safelog.Redact(err.Error())), "\n")
 	if len(problems) == 1 {
-		fmt.Fprintf(out, "heimdall: %s\n", problems[0])
+		fmt.Fprintf(out, "halro: %s\n", problems[0])
 		return
 	}
-	fmt.Fprintf(out, "heimdall: %d problems found:\n", len(problems))
+	fmt.Fprintf(out, "halro: %d problems found:\n", len(problems))
 	for _, problem := range problems {
 		fmt.Fprintf(out, "  - %s\n", strings.TrimSpace(problem))
 	}
@@ -137,12 +137,12 @@ const recoveryNextStepMessage = "Recovery Slot verified and audited; rewrap and 
 
 func run(arguments []string, logger *slog.Logger) error {
 	if len(arguments) == 0 {
-		return errors.New("usage: heimdall <start|init|bootstrap|admin|key|backup|restore|pricing|usage|audit|metrics|stats|doctor|serve|healthcheck|config|version>")
+		return errors.New("usage: halro <start|init|bootstrap|admin|key|backup|restore|pricing|usage|audit|metrics|stats|doctor|serve|healthcheck|config|version>")
 	}
 	switch arguments[0] {
 	case "pricing":
 		if len(arguments) < 2 || arguments[1] != "migrate" {
-			return errors.New("usage: heimdall pricing migrate --dry-run --report <path> | --resolution-file <path> --apply")
+			return errors.New("usage: halro pricing migrate --dry-run --report <path> | --resolution-file <path> --apply")
 		}
 		flags := flag.NewFlagSet("pricing migrate", flag.ContinueOnError)
 		configPath := flags.String("config", "config.yaml", "configuration file")
@@ -225,7 +225,7 @@ func run(arguments []string, logger *slog.Logger) error {
 			return err
 		}
 		if initialized {
-			fmt.Fprintln(os.Stdout, "Initialized Heimdall system storage")
+			fmt.Fprintln(os.Stdout, "Initialized Halro system storage")
 			printMasterKeyCustodyNotice(os.Stdout, cfg)
 		}
 		return runRuntime(cfg, logger, true)
@@ -243,7 +243,7 @@ func run(arguments []string, logger *slog.Logger) error {
 			return err
 		}
 		if !cfg.Metrics.Enabled {
-			return errors.New("metrics are disabled; heimdall stats reads the metrics endpoint")
+			return errors.New("metrics are disabled; halro stats reads the metrics endpoint")
 		}
 		endpoint := *statsURL
 		if endpoint == "" {
@@ -264,7 +264,7 @@ func run(arguments []string, logger *slog.Logger) error {
 		return runStats(fetch, *interval, os.Stdout)
 	case "healthcheck":
 		flags := flag.NewFlagSet("healthcheck", flag.ContinueOnError)
-		defaultURL := os.Getenv("HEIMDALL_HEALTH_URL")
+		defaultURL := os.Getenv("HALRO_HEALTH_URL")
 		if defaultURL == "" {
 			defaultURL = "http://127.0.0.1:8080/health/ready"
 		}
@@ -289,7 +289,7 @@ func run(arguments []string, logger *slog.Logger) error {
 		if err := initializeCommand(cfg); err != nil {
 			return err
 		}
-		fmt.Fprintln(os.Stdout, "Heimdall initialized")
+		fmt.Fprintln(os.Stdout, "Halro initialized")
 		return nil
 	case "serve":
 		flags := flag.NewFlagSet("serve", flag.ContinueOnError)
@@ -348,7 +348,7 @@ func run(arguments []string, logger *slog.Logger) error {
 		return json.NewEncoder(os.Stdout).Encode(result)
 	case "admin":
 		if len(arguments) < 2 || (arguments[1] != "bootstrap" && arguments[1] != "reset-password" && arguments[1] != "reset-mfa") {
-			return errors.New("usage: heimdall admin <bootstrap|reset-password|reset-mfa> --config <path> --username <name>")
+			return errors.New("usage: halro admin <bootstrap|reset-password|reset-mfa> --config <path> --username <name>")
 		}
 		command := arguments[1]
 		flags := flag.NewFlagSet("admin "+command, flag.ContinueOnError)
@@ -388,7 +388,7 @@ func run(arguments []string, logger *slog.Logger) error {
 		return nil
 	case "config":
 		if len(arguments) < 2 || arguments[1] != "check" {
-			return errors.New("usage: heimdall config check --config <path>")
+			return errors.New("usage: halro config check --config <path>")
 		}
 		flags := flag.NewFlagSet("config check", flag.ContinueOnError)
 		configPath := flags.String("config", "config.yaml", "configuration file")
@@ -402,12 +402,12 @@ func run(arguments []string, logger *slog.Logger) error {
 		return nil
 	case "key":
 		if len(arguments) < 2 {
-			return errors.New("usage: heimdall key <create|disable|rotate|rewrap|recover|slot>")
+			return errors.New("usage: halro key <create|disable|rotate|rewrap|recover|slot>")
 		}
 		switch arguments[1] {
 		case "slot":
 			if len(arguments) < 3 {
-				return errors.New("usage: heimdall key slot <status|revoke>")
+				return errors.New("usage: halro key slot <status|revoke>")
 			}
 			if arguments[2] == "status" {
 				flags := flag.NewFlagSet("key slot status", flag.ContinueOnError)
@@ -426,7 +426,7 @@ func run(arguments []string, logger *slog.Logger) error {
 				return json.NewEncoder(os.Stdout).Encode(result)
 			}
 			if arguments[2] != "revoke" {
-				return errors.New("usage: heimdall key slot <status|revoke>")
+				return errors.New("usage: halro key slot <status|revoke>")
 			}
 			flags := flag.NewFlagSet("key slot revoke", flag.ContinueOnError)
 			configPath := flags.String("config", "config.yaml", "configuration file")
@@ -558,7 +558,7 @@ func run(arguments []string, logger *slog.Logger) error {
 		return run(append([]string{"backup", "restore"}, arguments[1:]...), logger)
 	case "backup":
 		if len(arguments) < 2 {
-			return errors.New("usage: heimdall backup <create|verify|restore>")
+			return errors.New("usage: halro backup <create|verify|restore>")
 		}
 		switch arguments[1] {
 		case "create":
@@ -649,7 +649,7 @@ func run(arguments []string, logger *slog.Logger) error {
 		}
 	case "usage":
 		if len(arguments) < 2 {
-			return errors.New("usage: heimdall usage <compact|verify|prune>")
+			return errors.New("usage: halro usage <compact|verify|prune>")
 		}
 		flags := flag.NewFlagSet("usage "+arguments[1], flag.ContinueOnError)
 		configPath := flags.String("config", "config.yaml", "configuration file")
@@ -693,7 +693,7 @@ func run(arguments []string, logger *slog.Logger) error {
 		}
 	case "audit":
 		if len(arguments) < 2 {
-			return errors.New("usage: heimdall audit verify|verify-anchor --config <path> [--anchors <path>]")
+			return errors.New("usage: halro audit verify|verify-anchor --config <path> [--anchors <path>]")
 		}
 		switch arguments[1] {
 		case "verify":
@@ -719,7 +719,7 @@ func run(arguments []string, logger *slog.Logger) error {
 				return err
 			}
 			if *anchorsPath == "" {
-				return errors.New("usage: heimdall audit verify-anchor --config <path> --anchors <path>")
+				return errors.New("usage: halro audit verify-anchor --config <path> --anchors <path>")
 			}
 			cfg, err := config.Load(*configPath, config.LoadOptions{})
 			if err != nil {
@@ -735,11 +735,11 @@ func run(arguments []string, logger *slog.Logger) error {
 			}
 			return json.NewEncoder(os.Stdout).Encode(verdicts)
 		default:
-			return errors.New("usage: heimdall audit verify|verify-anchor --config <path> [--anchors <path>]")
+			return errors.New("usage: halro audit verify|verify-anchor --config <path> [--anchors <path>]")
 		}
 	case "ledger":
 		if len(arguments) < 2 || arguments[1] != "verify" {
-			return errors.New("usage: heimdall ledger verify --config <path>")
+			return errors.New("usage: halro ledger verify --config <path>")
 		}
 		flags := flag.NewFlagSet("ledger verify", flag.ContinueOnError)
 		configPath := flags.String("config", "config.yaml", "configuration file")
@@ -780,7 +780,7 @@ func run(arguments []string, logger *slog.Logger) error {
 		return errors.Join(doctorErr, encodeErr)
 	case "metrics":
 		if len(arguments) < 2 {
-			return errors.New("usage: heimdall metrics <token|rotate|revoke|list|verify-audit> --config <path>")
+			return errors.New("usage: halro metrics <token|rotate|revoke|list|verify-audit> --config <path>")
 		}
 		flags := flag.NewFlagSet("metrics "+arguments[1], flag.ContinueOnError)
 		configPath := flags.String("config", "config.yaml", "configuration file")
@@ -895,7 +895,7 @@ func runRuntime(cfg config.Config, logger *slog.Logger, printGuide bool) error {
 			if status.SetupRequired {
 				adminPath = "/admin/setup"
 			}
-			fmt.Fprintln(os.Stdout, "Heimdall is running")
+			fmt.Fprintln(os.Stdout, "Halro is running")
 			fmt.Fprintf(os.Stdout, "Admin:   %s://%s%s\n", scheme, cfg.Server.AdminListen, adminPath)
 			fmt.Fprintf(os.Stdout, "Gateway: %s://%s\n", scheme, cfg.Server.GatewayListen)
 			if cfg.Metrics.Enabled {

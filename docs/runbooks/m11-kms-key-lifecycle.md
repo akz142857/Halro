@@ -1,6 +1,6 @@
 # M11 AWS KMS Key 生命周期 Runbook
 
-本文只覆盖正常 KEK rewrap、Heimdall Master Key/DEK rotate，以及中断恢复。所有命令均为离线控制面操作：先停止 Heimdall 实例，保留唯一数据目录副本，并使用受审批的 Workload Identity；不要向命令行、日志或工单粘贴 ciphertext、token 或明文 Master Key。
+本文只覆盖正常 KEK rewrap、Halro Master Key/DEK rotate，以及中断恢复。所有命令均为离线控制面操作：先停止 Halro 实例，保留唯一数据目录副本，并使用受审批的 Workload Identity；不要向命令行、日志或工单粘贴 ciphertext、token 或明文 Master Key。
 
 ## 1. 语义边界
 
@@ -15,7 +15,7 @@
 3. 使用不被替换的独立 Slot 解锁并执行：
 
    ```bash
-   heimdall key rewrap --config /etc/heimdall/config.yaml \
+   halro key rewrap --config /etc/halro/config.yaml \
      --purpose primary \
      --slot-id slot_aws_primary_2026q3 \
      --key-reference arn:aws:kms:REGION:ACCOUNT:key/KEY_ID
@@ -25,12 +25,12 @@
 5. 验证 fingerprint、Credential ciphertext digest 和 KeyVersion 未改变。实例保持停止，使用受支持的低敏离线查询取得 descriptor 与 retiring Slot revision；该结果不包含 ARN、ciphertext、provider parameters 或 fingerprint：
 
    ```bash
-   heimdall key slot status --config /etc/heimdall/config.yaml
+   halro key slot status --config /etc/halro/config.yaml
    ```
 6. 恢复窗口与备份清单审批完成后，精确确认 retiring Slot 并执行：
 
    ```bash
-   heimdall key slot revoke --config /etc/heimdall/config.yaml \
+   halro key slot revoke --config /etc/halro/config.yaml \
      --slot-id slot_aws_primary_2026q2 \
      --expected-descriptor-revision DESCRIPTOR_REVISION \
      --expected-slot-revision SLOT_REVISION \
@@ -49,7 +49,7 @@
 每次操作选择一个可公开记录、可重复使用但不包含秘密的唯一 ID。进程中断后必须使用同一个 ID；新的轮换必须使用新 ID。
 
 ```bash
-heimdall key rotate --config /etc/heimdall/config.yaml \
+halro key rotate --config /etc/halro/config.yaml \
   --operation-id incident-2026-08-03-001
 ```
 
@@ -72,7 +72,7 @@ heimdall key rotate --config /etc/heimdall/config.yaml \
 
 ## 5. KEK/Decrypt 身份泄露响应与备份清单
 
-1. 隔离疑似泄露的身份、Session、Grant 与 Key Policy，并保全 AWS CloudTrail 和 Heimdall Audit。
+1. 隔离疑似泄露的身份、Session、Grant 与 Key Policy，并保全 AWS CloudTrail 和 Halro Audit。
 2. 使用可信独立 Recovery Slot 验证恢复能力；完成后撤销临时 Recovery 授权。
 3. 使用未泄露的 Primary/Recovery KMS Keys 配置执行 DEK rotate。
 4. 创建新备份，并在目标恢复身份与隔离环境完成一次真实 restore drill。

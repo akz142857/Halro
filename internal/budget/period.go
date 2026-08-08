@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/ledger"
+	"github.com/akz142857/Halro/internal/ledger"
 )
 
 // Period is the accounting window a daily budget is enforced against.

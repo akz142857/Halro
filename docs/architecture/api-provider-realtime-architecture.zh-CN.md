@@ -1,4 +1,4 @@
-# Heimdall 多协议 LLM API、Provider 与 Realtime 架构设计
+# Halro 多协议 LLM API、Provider 与 Realtime 架构设计
 
 状态：设计提案 v7；Phase 0、Phase 1 与已授权的 Phase 2 范围已实现；Phase 3 及以后仍是需求门控或延期设计，不代表现有能力<br>
 最后更新：2026-08-02<br>
@@ -6,7 +6,7 @@
 
 ## 1. 背景
 
-Heimdall 的目标不是成为某一家模型平台的简单反向代理，而是成为 LLM
+Halro 的目标不是成为某一家模型平台的简单反向代理，而是成为 LLM
 Gateway 领域中类似 Redis 的基础设施：提供稳定、低延迟、可治理的统一入口，同时允许不同
 Provider、模型、协议和部署形态持续演进。
 
@@ -33,7 +33,7 @@ Provider、模型、协议和部署形态持续演进。
 - `POST /v1/moderations`、`POST /v1/images/generations`；
 - `POST /v1/audio/transcriptions`、`POST /v1/audio/speech`；
 - Files/Batches 的已发布 Method 子集；
-- Heimdall 扩展的 `POST /v1/rerank` 与 Async Invoke 资源接口。
+- Halro 扩展的 `POST /v1/rerank` 与 Async Invoke 资源接口。
 
 当前 Provider 层支持请求级 Chat、SSE Streaming、Embeddings，以及已授权 Phase 2 的媒体、审核、
 重排和资源生命周期 Adapter，并已接入：
@@ -74,14 +74,14 @@ Smoke、Capacity/SLO 与安全发布门槛。Realtime 及未单独注册的 Prov
 ### 3.1 不承诺“OpenAI 全部 API 自动兼容”
 
 “支持 OpenAI API”必须拆分到具体 Endpoint、请求字段、响应字段、流事件和行为语义。
-Heimdall 不使用一个笼统的 `openai_compatible=true` 代表所有能力。
+Halro 不使用一个笼统的 `openai_compatible=true` 代表所有能力。
 
 每个公开协议都必须有独立、可测试的兼容契约。未知或不支持的字段必须显式拒绝，除非
 Deployment 声明了经过测试的转换；禁止静默丢弃参数。
 
 ### 3.2 不强迫所有 Provider 伪装成 OpenAI
 
-Heimdall 同时提供两类北向协议：
+Halro 同时提供两类北向协议：
 
 1. **标准兼容协议**：优先支持广泛使用的 OpenAI 数据面；
 2. **Provider 原生协议**：例如 Anthropic Messages，允许使用无法无损映射的原生能力。
@@ -102,7 +102,7 @@ Heimdall 同时提供两类北向协议：
 
 ### 3.4 Realtime 是独立数据面
 
-Heimdall 应明确分成三个数据面：
+Halro 应明确分成三个数据面：
 
 ```text
 HTTP Request/Response Data Plane
@@ -179,7 +179,7 @@ flowchart LR
         RealtimeAPI["Realtime WS / WebRTC"]
     end
 
-    subgraph Core["Heimdall canonical core"]
+    subgraph Core["Halro canonical core"]
         Auth["Auth / Project / Policy"]
         Normalize["Decode to semantic IR\n+ governance view"]
         Capability["Capability matching"]
@@ -237,7 +237,7 @@ ProviderPrimitive
 ```
 
 - **NorthboundProfile** 定义客户端看到的 HTTP、Header、Body、SSE/Event 和错误协议；
-- **SemanticOperation** 定义 Heimdall 可以治理和跨 Provider 表达的模型行为；
+- **SemanticOperation** 定义 Halro 可以治理和跨 Provider 表达的模型行为；
 - **ProviderPrimitive** 定义 Adapter 实际调用的 Provider API、版本、模型族和事件协议。
 
 以上是架构轴名称；当前 Go 实现分别落在 `internal/compatibility.NorthboundProfile`、
@@ -340,7 +340,7 @@ Deployment。
 Phase 1B 实施结果：`anthropic.messages.v1` 已发布严格的 `POST /v1/messages` JSON 与
 Anthropic SSE Facade。请求必须携带 `anthropic-version: 2023-06-01`；默认 `portable` 模式只接受
 能够进入 Canonical `generate` 的无损子集，并可使用满足 Requirements 的跨 Provider 路由；
-`Heimdall-Route-Mode: native` 则固定 Anthropic Access Surface/Profile，禁用跨 Provider Fallback，
+`Halro-Route-Mode: native` 则固定 Anthropic Access Surface/Profile，禁用跨 Provider Fallback，
 通过 NativeEnvelope 保留 Tool Use/Tool Result、Thinking/Redacted Thinking 以及签名事件的顺序和
 不透明值。上游 Header、错误类型、Request ID、Retry-After 与 SSE 生命周期均有独立契约；
 OpenAI、Anthropic、Gemini 的 Tool Choice 差异由 Golden Matrix 校验。`count_tokens` 尚未实现，
@@ -383,7 +383,7 @@ GovernanceView
 
 ## 6. Canonical Intermediate Representation
 
-Canonical IR 不是另一个公开 API，而是 Heimdall 内部用于表达治理需求和可移植语义的稳定模型。
+Canonical IR 不是另一个公开 API，而是 Halro 内部用于表达治理需求和可移植语义的稳定模型。
 
 ### 6.1 Semantic Operation
 
@@ -606,11 +606,11 @@ bedrock.mantle.openai.responses.v1
 bedrock.mantle.anthropic.messages.v1
 ```
 
-Profile 升级必须经过兼容测试，不能因 Heimdall 升级而静默改变现有 Deployment 行为。
+Profile 升级必须经过兼容测试，不能因 Halro 升级而静默改变现有 Deployment 行为。
 
 Profile Manifest 至少包含：
 
-- Heimdall Profile Revision；
+- Halro Profile Revision；
 - Provider API Version、必需 Header 和 Beta Feature Set；
 - Endpoint Family 和 Provider Primitive；
 - Request/Response/Event Schema Digest；
@@ -788,7 +788,7 @@ status: unsupported / experimental / compatible / native-pass-through
 documented deviations
 ```
 
-`/v1/models` 明确表示 Heimdall 当前 Project 可路由的模型视图，不保证等同于任一 Provider
+`/v1/models` 明确表示 Halro 当前 Project 可路由的模型视图，不保证等同于任一 Provider
 账户的模型清单。Files、Batches、Responses 等 API Family 必须逐 Method 和子资源声明。
 
 Gemini 当前 Beta Profile 继续限定为 generateContent/streamGenerateContent/embedContent；另建
@@ -836,7 +836,7 @@ Authenticate
 
 ### 9.3 Idempotency
 
-Idempotency 只保证 Heimdall 在可知范围内不重复执行，不能把 Provider 的未知结果变成
+Idempotency 只保证 Halro 在可知范围内不重复执行，不能把 Provider 的未知结果变成
 Exactly Once。对于 Files、Batches、Responses 状态对象和 Realtime Session，需要分别定义
 资源级 Idempotency，而不是复用普通 Chat 的请求哈希。
 
@@ -847,17 +847,17 @@ Exactly Once。对于 Files、Batches、Responses 状态对象和 Realtime Sessi
 本文的 OpenAI Realtime 目标范围只覆盖 WebRTC 和 WebSocket。OpenAI WebRTC 必须兼容两种
 原生初始化方式，不能把二者错误合并成同一条链路：
 
-1. **Unified Interface**：客户端先创建 SDP Offer，并把 Offer 交给 Heimdall；Heimdall 使用
+1. **Unified Interface**：客户端先创建 SDP Offer，并把 Offer 交给 Halro；Halro 使用
    服务端保存的 Provider Credential，把 SDP Offer 与 Session 配置一起提交到 OpenAI
    `POST /v1/realtime/calls`，再把 SDP Answer 返回客户端。Session 创建与 SDP 协商在一次
    上游调用中完成，不需要先获取 Provider 临时凭证；
-2. **Ephemeral Client Secret**：客户端先向 Heimdall 请求短期凭证；Heimdall 使用 Provider
+2. **Ephemeral Client Secret**：客户端先向 Halro 请求短期凭证；Halro 使用 Provider
    Credential 调用 OpenAI `POST /v1/realtime/client_secrets`，将返回的短期、不透明 Client
    Secret 交给客户端；客户端再携带该凭证和 SDP Offer 直接调用 OpenAI
    `POST /v1/realtime/calls`，取得 SDP Answer。
 
 两种方式在协商完成后都可以形成 Client 与 OpenAI 的 Provider Direct WebRTC 数据路径；差异
-主要在于 SDP Exchange 是否经过 Heimdall，以及 Provider 临时凭证是否到达客户端。WebSocket
+主要在于 SDP Exchange 是否经过 Halro，以及 Provider 临时凭证是否到达客户端。WebSocket
 和 WebRTC DataChannel 使用双向事件模型，但 WebRTC 音频通常通过加密 RTP Media Track
 传输，而不是把音频数据全部放进普通 HTTP Body。
 
@@ -867,7 +867,7 @@ Server Content、Tool Call 和 Session Resume 事件。两者可以共享 Canoni
 
 AWS Nova Sonic 使用 Bedrock Runtime `InvokeModelWithBidirectionalStream`，是有最大会话时长、
 可承载多轮 Prompt/Response 和双向音频的 Stateful Event Stream。它既不是普通
-`ConverseStream`，也不应伪装成 Provider WebSocket。Heimdall 将其建模为独立
+`ConverseStream`，也不应伪装成 Provider WebSocket。Halro 将其建模为独立
 `bedrock.runtime.nova-sonic-bidirectional.v1` Realtime Profile：与 OpenAI/Gemini 共享 Session、
 治理事件和 Accounting Core，但使用专用 Transport、Wire Event、SigV4 Credential、取消和
 超时实现。Bedrock API Key 不能被假定适用于该 Profile。
@@ -883,7 +883,7 @@ AWS Nova Sonic 使用 Bedrock Runtime `InvokeModelWithBidirectionalStream`，是
 | 风险 | 队头阻塞，媒体效率较低 | ICE、NAT、DTLS-SRTP、TURN 和媒体运维复杂 |
 
 表中 WebSocket 与 WebRTC 只比较浏览器/通用实时传输。Provider 专用的双向 HTTP/2 Event
-Stream（例如 Nova Sonic）属于第三种南向 Transport；它可以接在 Heimdall Realtime Edge 之后，
+Stream（例如 Nova Sonic）属于第三种南向 Transport；它可以接在 Halro Realtime Edge 之后，
 但不能复用 WebSocket Frame Parser 或 WebRTC Media Track 实现。
 
 ### 10.3 Control Plane 与 Realtime Edge
@@ -915,9 +915,9 @@ Accounting/Observability Side Channel
 ```
 
 普通 Gateway HTTP Listener 可以承载 Session 创建和 SDP Exchange。媒体路径由所选拓扑决定：
-Provider Direct 模式由 Provider 承载，Gateway Terminated 模式由 Heimdall Realtime Edge
-承载，独立媒体服务模式由受信 Media Service 承载；文档和实现不得把“控制面由 Heimdall
-管理”误写成“媒体一定经过 Heimdall”。
+Provider Direct 模式由 Provider 承载，Gateway Terminated 模式由 Halro Realtime Edge
+承载，独立媒体服务模式由受信 Media Service 承载；文档和实现不得把“控制面由 Halro
+管理”误写成“媒体一定经过 Halro”。
 
 ### 10.4 Realtime Session 模型
 
@@ -972,7 +972,7 @@ Provider Close、Idle/最大时长、预算耗尽、策略阻断、Owner Lost �
 
 Session Lifecycle 与 Transport Lifecycle 分离；Transport 暂时断开不自动代表 Session 可恢复。
 第一版明确 `session_resume=false`。未来 Resume 需要 Client Ack Watermark、重放窗口、Tool 去重和
-媒体不可重放边界；Provider Resume 只表示可能恢复模型上下文，不表示 Heimdall Transport 或
+媒体不可重放边界；Provider Resume 只表示可能恢复模型上下文，不表示 Halro Transport 或
 Event Exactly Once。
 
 ICE Restart 不回退 Session 主状态。Transport 使用独立状态机：
@@ -1071,47 +1071,47 @@ type RealtimeConnection interface {
 
 ```text
 Unified:
-  Client -> Heimdall: auth, route, SDP Offer
-  Heimdall -> Provider: provider credential + SDP Offer + session config
-  Provider -> Heimdall -> Client: SDP Answer
+  Client -> Halro: auth, route, SDP Offer
+  Halro -> Provider: provider credential + SDP Offer + session config
+  Provider -> Halro -> Client: SDP Answer
   Client <-> Provider: direct WebRTC
 
 Ephemeral Client Secret:
-  Client -> Heimdall: auth, route, request short-lived credential
-  Heimdall -> Provider: mint provider client secret
-  Heimdall -> Client: opaque short-lived provider client secret
+  Client -> Halro: auth, route, request short-lived credential
+  Halro -> Provider: mint provider client secret
+  Halro -> Client: opaque short-lived provider client secret
   Client -> Provider: client secret + SDP Offer
   Provider -> Client: SDP Answer
   Client <-> Provider: direct WebRTC
 ```
 
 优点：延迟最低、实现和带宽成本最低。<br>
-缺点：媒体绕过 Heimdall，无法完整执行内容策略、精确实时限流和媒体审计；Provider 地址也会
+缺点：媒体绕过 Halro，无法完整执行内容策略、精确实时限流和媒体审计；Provider 地址也会
 暴露给客户端。
 
 Unified 应作为 OpenAI Provider Direct 的默认握手方式，因为 Provider 长期凭证和临时凭证均
-不需要下发到浏览器，并且 Heimdall 可以在返回 SDP Answer 前完成认证、路由、预算预留和审计。
+不需要下发到浏览器，并且 Halro 可以在返回 SDP Answer 前完成认证、路由、预算预留和审计。
 Ephemeral Client Secret 作为 OpenAI 原生兼容入口保留，适用于客户端已经按照该流程集成的场景。
-二者具有相同的 Direct Media Assurance 下限，不能因为 Unified 的 SDP Exchange 经过 Heimdall
-就宣称 Heimdall 已经终止或完整观察媒体。
+二者具有相同的 Direct Media Assurance 下限，不能因为 Unified 的 SDP Exchange 经过 Halro
+就宣称 Halro 已经终止或完整观察媒体。
 
-#### 方案 B：Heimdall 终止 WebRTC
+#### 方案 B：Halro 终止 WebRTC
 
 ```text
-Client -> Heimdall Realtime Edge: WebRTC
-Heimdall -> Provider: WebSocket or WebRTC
+Client -> Halro Realtime Edge: WebRTC
+Halro -> Provider: WebSocket or WebRTC
 ```
 
-优点：身份、媒体、策略、预算和 Provider 凭证都由 Heimdall 掌控。<br>
+优点：身份、媒体、策略、预算和 Provider 凭证都由 Halro 掌控。<br>
 缺点：需要实现或集成 ICE、STUN/TURN、DTLS-SRTP、RTP/RTCP、Opus/PCM、Jitter Buffer、
 Congestion Control 和区域化媒体 Edge。
 
-#### 方案 C：独立媒体服务，Heimdall 只拥有控制面
+#### 方案 C：独立媒体服务，Halro 只拥有控制面
 
 ```text
 Client -> Media Service/SFU: WebRTC media
-Client -> Heimdall: auth, route, policy, budget, session control
-Media Service <-> Heimdall: signed control/usage/events
+Client -> Halro: auth, route, policy, budget, session control
+Media Service <-> Halro: signed control/usage/events
 Media Service -> Provider: WebSocket/WebRTC
 ```
 
@@ -1129,7 +1129,7 @@ NACK/PLI、GCC/TWCC、Codec/Resample、网络损伤调优、NAT/TURN 兼容、�
 #### 结论
 
 当前不预设最终采用 B。方案 A、B、C 都是合法终态，由 Build/Buy ADR 和真实原型决定。
-Heimdall 必须拥有身份、路由、策略声明、预算和审计控制面，但不要求 Heimdall Go 进程永久
+Halro 必须拥有身份、路由、策略声明、预算和审计控制面，但不要求 Halro Go 进程永久
 承担 RTP 媒体面。方案 A 使用能力受限的 Broker Assurance Profile；方案 C 必须达到与内部
 Media Edge 相同的签名控制、Usage 和故障契约。
 
@@ -1143,12 +1143,12 @@ Gateway Terminated 静默降级成 Provider Direct。
 
 | 故障时点 | Provider Direct | Gateway Terminated |
 |---|---|---|
-| Heimdall 在 Session 建立前不可用 | 不能创建新 Session，除非控制面已有可用副本 | 不能创建新 Session |
-| Heimdall 在 Session 建立后不可用 | 已建立的 Provider WebRTC 通常可以继续，控制、撤销、结算能力按 Profile 降级 | 当前 Edge 上的 Session 通常中断 |
+| Halro 在 Session 建立前不可用 | 不能创建新 Session，除非控制面已有可用副本 | 不能创建新 Session |
+| Halro 在 Session 建立后不可用 | 已建立的 Provider WebRTC 通常可以继续，控制、撤销、结算能力按 Profile 降级 | 当前 Edge 上的 Session 通常中断 |
 | Provider 不可用 | 当前 Session 中断；只允许客户端显式新建 Session 时重新路由 | 当前上游 Session 中断；只允许客户端显式新建 Session 时重新路由 |
 
-Provider Direct 提高的是“建连后的媒体数据面可用性”，并不能消除新 Session 对 Heimdall 控制
-面的依赖。若要求 Heimdall 故障时仍可创建新 Session，需要单独建设高可用 Control Plane；不应
+Provider Direct 提高的是“建连后的媒体数据面可用性”，并不能消除新 Session 对 Halro 控制
+面的依赖。若要求 Halro 故障时仍可创建新 Session，需要单独建设高可用 Control Plane；不应
 通过把长期 Provider Key 下发客户端或允许客户端绕过 Gateway Policy 来伪造高可用。
 
 Broker Profile 必须声明：
@@ -1195,15 +1195,15 @@ Authority 还必须支持按 JTI、Project Epoch、Signing Key Version 和 Sessi
 签发量都产生低基数指标和安全告警。疑似泄漏时立即阻止新 Session，并在 Provider 支持时主动
 挂断已经建立的 Broker Session。
 
-Broker Mode 中 Heimdall Token 只授权创建 Broker Session；如果 Provider 要求自己的临时 Client
-Secret，Heimdall 通过服务端 Credential 换取后以不透明、短 TTL 形式交给客户端。该临时 Secret
-的真实约束能力取决于 Provider，不能因为 Heimdall Token 带有 `max_spend` 等 Claim 就宣称上游
+Broker Mode 中 Halro Token 只授权创建 Broker Session；如果 Provider 要求自己的临时 Client
+Secret，Halro 通过服务端 Credential 换取后以不透明、短 TTL 形式交给客户端。该临时 Secret
+的真实约束能力取决于 Provider，不能因为 Halro Token 带有 `max_spend` 等 Claim 就宣称上游
 会执行这些限制。
 
-OpenAI Unified Interface 不需要把 Provider Client Secret 返回客户端，但客户端访问 Heimdall
-SDP Exchange 入口仍必须使用短期、受限的 Heimdall Session Authorization，并在返回 SDP
+OpenAI Unified Interface 不需要把 Provider Client Secret 返回客户端，但客户端访问 Halro
+SDP Exchange 入口仍必须使用短期、受限的 Halro Session Authorization，并在返回 SDP
 Answer 前完成同等的 `consume(jti, ...)`、路由绑定、Origin 校验和预算预留。Ephemeral Client
-Secret 流程则必须同时区分 Heimdall Authorization 与 Provider Client Secret：前者授权 Heimdall
+Secret 流程则必须同时区分 Halro Authorization 与 Provider Client Secret：前者授权 Halro
 创建 Broker Session，后者只用于建立对应的 OpenAI Realtime Call，二者不得混用或记录到日志。
 
 ## 11. 分布式与会话连贯性
@@ -1214,7 +1214,7 @@ Secret 流程则必须同时区分 Heimdall Authorization 与 Provider Client Se
 
 ### 11.1 Control Affinity 与 Media Affinity
 
-一个活跃 Realtime Session 在整个生命周期内由一个 Heimdall 节点拥有：
+一个活跃 Realtime Session 在整个生命周期内由一个 Halro 节点拥有：
 
 ```text
 session_id -> owner_node_id + project_epoch + session_epoch + lease_term + project_id
@@ -1244,7 +1244,7 @@ Candidate、端口和 TURN Allocation 直到活跃 Session 结束或达到明确
 - Provider Connect、Tool Execution、预算与结算必须同时校验 Project Epoch 和 Session Epoch；
 - 同一个 Session 不能有两个节点同时写事件和结算。
 
-Epoch 能绝对围栏 Heimdall 的权威提交，但第三方 Provider 不识别 Heimdall Epoch。已经建立的
+Epoch 能绝对围栏 Halro 的权威提交，但第三方 Provider 不识别 Halro Epoch。已经建立的
 上游连接无法被共享 Store 物理切断。因此：
 
 - Authority 线性化授予 Lease Term，并在响应中返回有界 `remaining_ttl`；Owner 收到后计算
@@ -1272,7 +1272,7 @@ Cluster 由 Project Directory 指向唯一 Owning Shard。在 Realtime Ownership
 4. 客户端创建新 Session；
 5. 只有 Provider 提供经过验证的 Session Resume 能力时，Adapter 才可以恢复上下文。
 
-Provider Resume Token 必须加密存储、限制生命周期，并且不能被当成 Heimdall 连接透明迁移。
+Provider Resume Token 必须加密存储、限制生命周期，并且不能被当成 Halro 连接透明迁移。
 Owner 本身崩溃后不能承担清理责任；Reservation TTL、Orphan Detection、Reaper 和最终账单对账
 必须由仍然存活的 Project Authority 执行。
 
@@ -1333,7 +1333,7 @@ Audit 只记录稳定 ID、协议、状态转换、能力决策、策略结果�
 Realtime Data Classification/Retention ADR 必须为 Session Registry、TURN、负载均衡、Heap/
 Profile、Panic/Core Dump、临时文件、备份以及 Provider 侧留存分别定义 Owner、Purpose、存储、
 加密、保留期、删除 SLA、导出权限和数据驻留。生产默认关闭 Core Dump；Transcript/Recording
-必须显式启用、默认关闭并产生 Audit。Provider 自身留存不属于 Heimdall 可删除范围，必须在
+必须显式启用、默认关闭并产生 Audit。Provider 自身留存不属于 Halro 可删除范围，必须在
 Deployment 中向管理员说明。
 
 ### 12.3 内容策略
@@ -1367,7 +1367,7 @@ transcript_posthoc
 
 ### 12.4 Tool 安全
 
-- Heimdall 默认只转发 Tool Call，不自动执行任意 Tool；
+- Halro 默认只转发 Tool Call，不自动执行任意 Tool；
 - Gateway Tool Executor 必须是单独、显式启用的能力；
 - 完整 Tool Argument 通过 Schema、大小和策略校验后才能审批或执行；
 - 审批绑定 Canonical Argument Hash、Tool Schema/Version、Project、Session、Call ID、Project/
@@ -1380,7 +1380,7 @@ transcript_posthoc
 - Owner 丢失后，未知 Tool 执行不得自动重试。
 
 上述 Epoch Fencing 和执行状态只适用于 Gateway Tool Executor。客户端自行执行的 Tool Call 在
-Heimdall 权威边界之外：Gateway 可以验证 Call ID、参数摘要、Sequence 和 Tool Result 关联，
+Halro 权威边界之外：Gateway 可以验证 Call ID、参数摘要、Sequence 和 Tool Result 关联，
 但不能证明客户端没有执行两次，也不能通过 Epoch 撤销已经开始的客户端副作用。要求强执行
 保证的 Route 必须使用受控 Gateway Executor 或拒绝该能力。
 
@@ -1462,27 +1462,27 @@ session_owner_unavailable
 建议增加低基数指标：
 
 ```text
-heimdall_gateway_requests_total{operation,protocol,status}
-heimdall_gateway_streams_active{protocol}
-heimdall_realtime_sessions_active{transport,provider}
-heimdall_realtime_sessions_total{transport,status,close_reason}
-heimdall_realtime_session_duration_seconds
-heimdall_realtime_events_total{direction,type}
-heimdall_realtime_media_bytes_total{direction,media_type}
-heimdall_realtime_queue_depth{direction}
-heimdall_realtime_queue_bytes{direction}
-heimdall_realtime_overload_closes_total{transport,reason}
-heimdall_realtime_negotiation_seconds{transport}
-heimdall_realtime_ice_outcomes_total{candidate_type,outcome}
-heimdall_realtime_turn_allocations{transport}
-heimdall_realtime_media_rtt_seconds
-heimdall_realtime_media_jitter_seconds
-heimdall_realtime_media_packet_loss_ratio
-heimdall_realtime_settlement_lag_seconds
-heimdall_realtime_orphan_sessions
-heimdall_realtime_token_replay_rejections_total{reason}
-heimdall_provider_translation_failures_total{profile,operation}
-heimdall_capability_rejections_total{operation,capability}
+halro_gateway_requests_total{operation,protocol,status}
+halro_gateway_streams_active{protocol}
+halro_realtime_sessions_active{transport,provider}
+halro_realtime_sessions_total{transport,status,close_reason}
+halro_realtime_session_duration_seconds
+halro_realtime_events_total{direction,type}
+halro_realtime_media_bytes_total{direction,media_type}
+halro_realtime_queue_depth{direction}
+halro_realtime_queue_bytes{direction}
+halro_realtime_overload_closes_total{transport,reason}
+halro_realtime_negotiation_seconds{transport}
+halro_realtime_ice_outcomes_total{candidate_type,outcome}
+halro_realtime_turn_allocations{transport}
+halro_realtime_media_rtt_seconds
+halro_realtime_media_jitter_seconds
+halro_realtime_media_packet_loss_ratio
+halro_realtime_settlement_lag_seconds
+halro_realtime_orphan_sessions
+halro_realtime_token_replay_rejections_total{reason}
+halro_provider_translation_failures_total{profile,operation}
+halro_capability_rejections_total{operation,capability}
 ```
 
 禁止把 Project ID、Session ID、Model 原始自由文本、Tool 名或 Provider Request ID 放入指标
@@ -1709,11 +1709,11 @@ Transcription/Speech、Files 与 Batches；Bedrock 覆盖 Titan Text Embeddings 
 Cohere Rerank 3.5 和 Nova Reel Async。Azure OpenAI 与 Gemini 没有在本阶段新增媒体能力。
 这里的“完成”表示已授权实现范围和本阶段资源所有权门槛闭环，不表示这些 Endpoint/Profile 已达到
 GA。它们在 Compatibility Manifest 中保持 `experimental`：当前没有可声明的完整官方 SDK 黑盒
-Matrix；Heimdall 扩展的 Rerank/Async 也不存在 OpenAI 官方 SDK Surface。升级为 `compatible` 前仍须
+Matrix；Halro 扩展的 Rerank/Async 也不存在 OpenAI 官方 SDK Surface。升级为 `compatible` 前仍须
 逐 Endpoint 满足第 17.4 节的 SDK、真实 Provider Smoke、安全、Capacity/SLO 和回滚门槛。
 
 - 所有 Bedrock 模型族均使用严格请求/响应 schema，禁止任意 JSON 透传和隐式批量 Fan-out；
-- Files/Batches/Async 的外部 ID 均为项目作用域 Heimdall ID；所有权固定绑定 Provider、
+- Files/Batches/Async 的外部 ID 均为项目作用域 Halro ID；所有权固定绑定 Provider、
   Deployment、Profile 和 Region；创建要求 `Idempotency-Key`，未知结果禁止盲目重试；
 - 文件内容以 `0600` 权限原子写入数据目录下的私有对象目录，元数据写入 bbolt；删除和 TTL
   回收通过创建时固定的 Owner 先确认上游文件已删除，再清理本地对象和元数据；非终态
@@ -1743,7 +1743,7 @@ Optional、Later、Deferred 或 Out of scope 状态。
 - 并发、时长、预算和 Usage 滚动结算；
 - 故障注入、压力测试和 Soak。
 
-完成标准：服务端应用可以通过 Heimdall 使用 OpenAI Realtime WebSocket；进程故障终止连接，
+完成标准：服务端应用可以通过 Halro 使用 OpenAI Realtime WebSocket；进程故障终止连接，
 重启 Reaper 根据 Ledger 水位保守结算，不宣称 HA、Session 接管或透明恢复。
 
 ### Phase 3H（Deferred）：Realtime HA
@@ -1781,7 +1781,7 @@ Optional、Later、Deferred 或 Out of scope 状态。
 - 媒体级性能、容量、成本和灾难恢复基线。
 
 完成标准：所选媒体方案的控制、策略、预算、Usage 和凭证保证与 Assurance Profile 一致，并在
-真实 NAT、网络损伤、音质、容量和安全门槛内运行；不要求媒体代码必须位于 Heimdall 进程。
+真实 NAT、网络损伤、音质、容量和安全门槛内运行；不要求媒体代码必须位于 Halro 进程。
 
 ## 19. 前置 ADR 与设计门槛
 
@@ -1840,8 +1840,8 @@ Manifest；其余记录在对应 Phase 获得真实需求、负责人和预算�
 | Realtime 是否复用普通 Adapter | 否，建立独立 Session 和 Realtime Adapter |
 | WebSocket 和 WebRTC 是否相同实现 | 否，共享 Session/Event Core，Transport 独立 |
 | OpenAI WebRTC 是否只有一种初始化链路 | 否，同时兼容 Unified Interface 与 Ephemeral Client Secret |
-| OpenAI WebRTC 默认是否必须由 Heimdall 终止媒体 | 否，Provider Direct 可作为默认；强治理 Route 显式选择 Gateway Terminated 或受信 Media Service |
-| Provider Direct 是否使 Heimdall 完全退出关键路径 | 否，只提高已建连媒体面的独立性；新 Session 仍依赖 Heimdall 控制面 |
+| OpenAI WebRTC 默认是否必须由 Halro 终止媒体 | 否，Provider Direct 可作为默认；强治理 Route 显式选择 Gateway Terminated 或受信 Media Service |
+| Provider Direct 是否使 Halro 完全退出关键路径 | 否，只提高已建连媒体面的独立性；新 Session 仍依赖 Halro 控制面 |
 | 浏览器是否持有 Provider/Gateway 长期 Key | 否，只使用短期、受限、单次凭证 |
 | 单次 Token 是否只靠离线验签 | 否，Provider Connect/SDP Answer 前必须权威原子 Consume |
 | 活跃 Realtime Session 是否跨节点透明迁移 | 首版不迁移，断开后显式重连 |
@@ -1851,7 +1851,7 @@ Manifest；其余记录在对应 Phase 获得真实需求、负责人和预算�
 | Accounting 故障是否允许未预付宽限 | 否，只能消费故障前已持久预留且有最坏成本上界的额度 |
 | Broker Mode 是否等价于完整 Gateway | 否，使用独立 Assurance Profile，强治理 Project 默认拒绝 |
 | 故障时是否允许从 Gateway Terminated 静默降级到 Provider Direct | 否，连接模式和最低 Assurance 必须由 Project/Route 显式授权 |
-| Heimdall 是否最终自行终止 WebRTC | 未决定；自建、独立/第三方 Media Service 和 Direct Broker 都是候选终态 |
+| Halro 是否最终自行终止 WebRTC | 未决定；自建、独立/第三方 Media Service 和 Direct Broker 都是候选终态 |
 | 当前优先级 | Phase 1A/1B/1C 与已授权 Phase 2 实现范围完成；Phase 2 仍为 Experimental，须通过第 17.4 节门槛后才能标 Compatible/GA；`/v1/models` 与 Anthropic `count_tokens` 尚未实现，Realtime 与 WebRTC 仍暂缓；后续新模型族继续按独立 Profile 和真实需求准入 |
 
 ## 21. 协议与内部契约参考

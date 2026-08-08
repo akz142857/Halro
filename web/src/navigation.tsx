@@ -1,6 +1,6 @@
 import { useEffect, useState, type MouseEvent, type ReactNode } from "react";
 
-const navigationEvent = "heimdall:navigate";
+const navigationEvent = "halro:navigate";
 let navigationBlocked = false;
 let blockedPath = "";
 let blockedMessage = "";

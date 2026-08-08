@@ -6,11 +6,11 @@
 > 上游版本：`1.96.0`
 > 分析日期：2026-07-31
 > 分析方式：静态源码、配置、Schema、测试与部署资产分析
-> 分析目的：评估 LiteLLM 对 Heimdall 轻量、单二进制、自托管 LLM Gateway V1 的参考价值。
+> 分析目的：评估 LiteLLM 对 Halro 轻量、单二进制、自托管 LLM Gateway V1 的参考价值。
 
 ## 1. 结论摘要
 
-LiteLLM 与 Heimdall 的产品能力高度重叠。它不只是 Provider SDK，也包含一个成熟的 OpenAI-compatible AI Gateway，已经覆盖：
+LiteLLM 与 Halro 的产品能力高度重叠。它不只是 Provider SDK，也包含一个成熟的 OpenAI-compatible AI Gateway，已经覆盖：
 
 - 虚拟 API Key；
 - Organization、Team、Project、User、Key 多级治理；
@@ -27,9 +27,9 @@ LiteLLM 与 Heimdall 的产品能力高度重叠。它不只是 Provider SDK，�
 因此，LiteLLM 是两类参考的结合体：
 
 1. **产品语义参考**：它充分暴露了企业 AI Gateway 真正需要处理的边界条件；
-2. **复杂度反例**：它为多租户、横向扩展和超宽功能面承担了 Heimdall V1 不应承担的复杂度。
+2. **复杂度反例**：它为多租户、横向扩展和超宽功能面承担了 Halro V1 不应承担的复杂度。
 
-对 Heimdall 最有价值的设计包括：
+对 Halro 最有价值的设计包括：
 
 1. 外部模型名与内部 Provider Deployment 分离；
 2. 公共请求模型、Provider Transformation、共享 HTTP 执行器分层；
@@ -52,7 +52,7 @@ LiteLLM 与 Heimdall 的产品能力高度重叠。它不只是 Provider SDK，�
 6. Python、Node、Prisma、Rust Bridge 和前端构建链组合；
 7. 超大核心文件和大量运行时分支。
 
-最终判断：**LiteLLM 应作为 Heimdall 的行为规范和风险清单，而不是代码基座。** Heimdall 应用 Go 重新实现一个受控子集，保留单进程下的强一致闭环，把多节点协调能力明确推迟到 V2。
+最终判断：**LiteLLM 应作为 Halro 的行为规范和风险清单，而不是代码基座。** Halro 应用 Go 重新实现一个受控子集，保留单进程下的强一致闭环，把多节点协调能力明确推迟到 V2。
 
 ## 2. 项目画像
 
@@ -93,7 +93,7 @@ LiteLLM 与 Heimdall 的产品能力高度重叠。它不只是 Provider SDK，�
 | `litellm/integrations/prometheus.py` | 4,255 |
 | `schema.prisma` | 1,463 |
 
-这说明 LiteLLM 的成熟度和覆盖面很高，也说明它已经越过了 Heimdall “Simple First” 所允许的复杂度边界。
+这说明 LiteLLM 的成熟度和覆盖面很高，也说明它已经越过了 Halro “Simple First” 所允许的复杂度边界。
 
 ## 3. 总体架构
 
@@ -159,7 +159,7 @@ Spend Queue / Metrics / Alerts / Logs
 - `proxy_server.py` 同时承担路由注册、配置、生命周期和大量端点协调；
 - `router.py` 同时承担部署选择、重试、Fallback、Cooldown、缓存和多种策略。
 
-Heimdall 应保留请求管线，不应保留文件组织方式。
+Halro 应保留请求管线，不应保留文件组织方式。
 
 ## 4. OpenAI-compatible API
 
@@ -181,7 +181,7 @@ Chat 请求会：
 5. 对流式响应返回 SSE；
 6. 通过 callback/hook 系统记录成功或失败。
 
-对 Heimdall 的结论：
+对 Halro 的结论：
 
 - V1 只实现 PRD 中的 Chat Completions 和 Embeddings；
 - 路径同时接受带 `/v1` 和不带 `/v1` 的形式价值不高，可只保留标准路径；
@@ -241,7 +241,7 @@ LiteLLM 源码证明，即使都支持聊天，差异仍包括：
 - 模型能力和上下文窗口；
 - Bedrock Converse 与 Invoke 的差异。
 
-Heimdall V1 的 Adapter 不能只包含 `BaseURL + APIKey`。
+Halro V1 的 Adapter 不能只包含 `BaseURL + APIKey`。
 
 建议接口：
 
@@ -276,7 +276,7 @@ max concurrency
 
 LiteLLM 公共数据模型极宽，导致共享 HTTP Handler 超过 1.3 万行。
 
-Heimdall V1 建议只标准化：
+Halro V1 建议只标准化：
 
 - Chat message；
 - text/image input 的最小集合；
@@ -328,7 +328,7 @@ Router 的解析路径大致包括：
 
 它还会清理内部 mock/testing 参数，避免调用方触发测试行为。这是一个重要的安全提醒：内部控制字段不能与公共请求参数共享命名空间。
 
-Heimdall 建议把概念固定为三层：
+Halro 建议把概念固定为三层：
 
 ```text
 Requested Model
@@ -371,7 +371,7 @@ LiteLLM Router 支持或扩展出：
 - weighted failover；
 - health-check routing。
 
-Heimdall V1 不需要这些策略的全集。
+Halro V1 不需要这些策略的全集。
 
 建议只保留：
 
@@ -394,7 +394,7 @@ LiteLLM 能按异常类型配置重试策略，例如：
 
 正确语义不是“失败就重试”。
 
-Heimdall 建议：
+Halro 建议：
 
 | 错误 | 同 Deployment Retry | 切换 Fallback |
 |---|---:|---:|
@@ -443,7 +443,7 @@ LiteLLM 为流式调用提供 Fallback 包装并记录 Fallback 元数据。这�
 - 客户端可能已经执行 tool call；
 - 两个 Provider 都会产生费用。
 
-Heimdall V1 应采用明确规则：
+Halro V1 应采用明确规则：
 
 > 只有在尚未向客户端发送第一个下游 payload 时允许 Fallback；首个 payload 发出后，任何失败都终止当前 SSE。
 
@@ -455,7 +455,7 @@ LiteLLM 会根据 429、401、408、404、5xx、失败比例、最小请求数�
 
 它本质上接近 Circuit Breaker，但名称和实现更偏缓存状态。
 
-Heimdall 建议显式三态：
+Halro 建议显式三态：
 
 ```text
 Closed
@@ -490,9 +490,9 @@ Schema 中 Key 支持：
 - blocked；
 - key rotation 和旧 Key 宽限期。
 
-这套设计远超 Heimdall V1，但基本安全语义正确。
+这套设计远超 Halro V1，但基本安全语义正确。
 
-Heimdall 建议：
+Halro 建议：
 
 - Key 格式使用 `gw_`；
 - 至少 256 bit CSPRNG 随机数；
@@ -533,7 +533,7 @@ LiteLLM 将 Credential 与 Model 分开，`LiteLLM_CredentialsTable` 保存 cred
 - AES-GCM 未利用 AAD 绑定记录身份；
 - “数据库字段已加密”不代表日志、异常和 UI 不会泄漏 Secret。
 
-Heimdall 推荐：
+Halro 推荐：
 
 ```text
 master.key: 32 random bytes, chmod 0600
@@ -574,9 +574,9 @@ User / Membership / End User / Agent / Tag
 - budget relation；
 - object permission。
 
-这个 Project 与 Heimdall PRD 的 Project 很接近。
+这个 Project 与 Halro PRD 的 Project 很接近。
 
-Heimdall V1 应刻意砍平为：
+Halro V1 应刻意砍平为：
 
 ```text
 Project
@@ -626,7 +626,7 @@ B 花费 $2
 
 LiteLLM 已有 Budget Reservation、原子计数器、数据库 reseed 和异步 Spend 更新，说明生产预算的难点在一致性，而不是查询报表。
 
-Heimdall 单进程可做得更简单，但仍应正确：
+Halro 单进程可做得更简单，但仍应正确：
 
 1. 请求前估算最大/合理成本；
 2. 在 Project 内存账本中原子预留；
@@ -655,7 +655,7 @@ LiteLLM 有多代 limiter hook，并按 Key、Team、User、End User、Project�
 
 还存在动态限流器，用活跃 Project 和模型容量计算份额。这是大规模平台能力，不适合 V1。
 
-Heimdall 单实例建议：
+Halro 单实例建议：
 
 - RPM：token bucket；
 - TPM：token bucket；
@@ -715,7 +715,7 @@ LiteLLM 将请求事实交给异步 Spend Queue，再更新 request log 和各�
 
 这说明高吞吐下不能让每个请求同步更新十几张表。
 
-Heimdall 的 Parquet 方向适合分析，但 Parquet 不是好的实时事务日志：
+Halro 的 Parquet 方向适合分析，但 Parquet 不是好的实时事务日志：
 
 - 追加与崩溃恢复不如 WAL；
 - 每次请求直接改 Parquet 成本高；
@@ -755,7 +755,7 @@ LiteLLM 的成本计算覆盖：
 - 自定义单价；
 - 图像、音频、工具等非文本计价。
 
-Heimdall V1 只需：
+Halro V1 只需：
 
 ```yaml
 prices:
@@ -778,7 +778,7 @@ prices:
 
 LiteLLM Schema 允许保存 messages、response、proxy request 和 requester IP。能力强，但隐私风险高。
 
-Heimdall 默认 Usage Log 不应保存 Prompt/Response 正文，只保存：
+Halro 默认 Usage Log 不应保存 Prompt/Response 正文，只保存：
 
 - request ID；
 - project/key ID；
@@ -801,7 +801,7 @@ LiteLLM 的 Prometheus 集成远超 PRD 的六个指标，覆盖请求、token�
 
 这暴露了一个常见风险：Project、User、Model、API Key 等高基数字段会造成 Prometheus series 爆炸。
 
-Heimdall V1 建议低基数指标：
+Halro V1 建议低基数指标：
 
 ```text
 gateway_requests_total{route,provider,status_class}
@@ -831,7 +831,7 @@ LiteLLM 区分：
 - database/cache 健康；
 - in-flight 和 graceful shutdown 状态。
 
-Heimdall 建议：
+Halro 建议：
 
 - `/health/live`：进程事件循环/HTTP Server 存活；
 - `/health/ready`：配置已加载、master key 可用、存储可写；
@@ -859,7 +859,7 @@ LiteLLM AlertType 包括：
 
 其 Slack Alerting 也能向结构化 Webhook 发送事件，并通过缓存窗口做 outage 聚合。
 
-Heimdall 不需要为飞书、企业微信、Slack、Discord 各写业务逻辑。建议：
+Halro 不需要为飞书、企业微信、Slack、Discord 各写业务逻辑。建议：
 
 ```text
 Alert Event
@@ -901,18 +901,18 @@ LiteLLM Dashboard 使用：
 - OpenAPI 类型生成；
 - 独立 Node 构建。
 
-构建后静态产物嵌入/打包到 Proxy 镜像中。它支持比 Heimdall PRD 更广的 Key、Team、Budget、Model、Credential、日志、SSO、Guardrail 等管理功能。
+构建后静态产物嵌入/打包到 Proxy 镜像中。它支持比 Halro PRD 更广的 Key、Team、Budget、Model、Credential、日志、SSO、Guardrail 等管理功能。
 
-这与 Heimdall 的 HTMX 选择形成鲜明对比：
+这与 Halro 的 HTMX 选择形成鲜明对比：
 
-| 方向 | LiteLLM | Heimdall |
+| 方向 | LiteLLM | Halro |
 |---|---|---|
 | UI 架构 | SPA/Next.js | Server-rendered HTMX |
 | 构建链 | Node + React | Go template + static |
 | 状态管理 | Client query/cache | Server authoritative |
 | 适用规模 | 复杂管理平台 | 轻量单机控制台 |
 
-Heimdall 应坚持 HTMX。需要借鉴的是信息架构，不是技术栈：
+Halro 应坚持 HTMX。需要借鉴的是信息架构，不是技术栈：
 
 - Dashboard；
 - Projects/Keys；
@@ -928,7 +928,7 @@ Heimdall 应坚持 HTMX。需要借鉴的是信息架构，不是技术栈：
 
 LiteLLM 支持 YAML、环境变量、数据库模型配置、管理 API 和大量 general/router settings。灵活性高，但配置来源多，优先级复杂。
 
-Heimdall 应提前定义唯一优先级：
+Halro 应提前定义唯一优先级：
 
 ```text
 CLI flags
@@ -974,17 +974,17 @@ LiteLLM Prisma datasource 明确指定 PostgreSQL。官方 Compose 至少启动�
 - enterprise 源码；
 - migration entrypoint。
 
-这与 Heimdall 的目标完全不同：
+这与 Halro 的目标完全不同：
 
 ```text
 LiteLLM production:
   container + postgres + optional/required redis + migrations + UI build
 
-Heimdall V1:
+Halro V1:
   one Go binary + config + master key + data directory
 ```
 
-因此，不要尝试“裁剪 LiteLLM 部署”来实现 Heimdall。裁剪后的维护成本仍然来自上游架构，而收益会不断被新增功能侵蚀。
+因此，不要尝试“裁剪 LiteLLM 部署”来实现 Halro。裁剪后的维护成本仍然来自上游架构，而收益会不断被新增功能侵蚀。
 
 ## 18. 安全审视
 
@@ -1006,7 +1006,7 @@ LiteLLM 展示了 Gateway 必须防御的攻击面：
 
 源码中健康检查会拒绝来自请求参数的 `os.environ/...` 引用，路由也清理内部 mock 参数。这些都是经过真实攻击面演化后的防护。
 
-Heimdall V1 至少需要：
+Halro V1 至少需要：
 
 1. Admin 与 Gateway API 分离 middleware；
 2. Admin session 使用 Secure、HttpOnly、SameSite Cookie；
@@ -1051,7 +1051,7 @@ LiteLLM 的测试资产很丰富，约有 2,324 个 `test_*.py`，还包括：
 - 核心文件过大；
 - callback/hook 对请求生命周期有隐式影响。
 
-Heimdall 应把测试预算集中在不变量：
+Halro 应把测试预算集中在不变量：
 
 1. Key 明文永不持久化；
 2. 预算并发不超卖；
@@ -1066,9 +1066,9 @@ Heimdall 应把测试预算集中在不变量：
 11. 时区和日预算 reset 正确；
 12. OpenAI SDK 兼容回归。
 
-## 20. 与 Heimdall PRD 的逐项对照
+## 20. 与 Halro PRD 的逐项对照
 
-| Heimdall PRD | LiteLLM 现状 | 对 Heimdall 的建议 |
+| Halro PRD | LiteLLM 现状 | 对 Halro 的建议 |
 |---|---|---|
 | Provider 管理 | Credential + Proxy Model + UI/API | 分离 Credential、Provider Instance、Deployment |
 | AES-GCM | 支持版本化 AES-256-GCM | 用 HKDF + AAD 强化 |
@@ -1154,10 +1154,10 @@ Heimdall 应把测试预算集中在不变量：
 14. 运行时允许任意 API Base 或 Webhook URL；
 15. 多个配置来源缺少明确优先级。
 
-## 23. 建议的 Heimdall 内部架构
+## 23. 建议的 Halro 内部架构
 
 ```text
-cmd/heimdall
+cmd/halro
   │
   ▼
 internal/http
@@ -1290,7 +1290,7 @@ Received
 
 | 评价维度 | 分数 | 说明 |
 |---|---:|---|
-| 产品能力参考 | 10/10 | 与 Heimdall 目标高度重叠 |
+| 产品能力参考 | 10/10 | 与 Halro 目标高度重叠 |
 | Provider 实现参考 | 9/10 | 转换层覆盖极广 |
 | 路由语义参考 | 9/10 | Retry/Fallback/Cooldown 边界丰富 |
 | 预算与限流参考 | 9/10 | 展示了生产一致性的真实复杂度 |
@@ -1298,17 +1298,17 @@ Received
 | 可观测性参考 | 9/10 | 指标、日志、告警覆盖完整 |
 | 轻量化参考 | 3/10 | 技术栈与依赖明显偏重 |
 | 直接复用价值 | 4/10 | 能力过宽，裁剪成本高 |
-| Heimdall V1 适配度 | 7/10 | 适合借鉴语义，不适合作为基座 |
+| Halro V1 适配度 | 7/10 | 适合借鉴语义，不适合作为基座 |
 
 LiteLLM 回答的是：
 
 > 一个横向扩展、多租户、覆盖大量 Provider 和 API 类型的企业 AI Gateway，最终会需要什么？
 
-Heimdall 要回答的是：
+Halro 要回答的是：
 
 > 在单节点、单二进制、零外部依赖的约束下，哪些能力构成可靠的最小企业网关闭环？
 
-两者不是竞争关系。LiteLLM 提供完整问题空间，Heimdall 应通过严格取舍提供更小的运维面。
+两者不是竞争关系。LiteLLM 提供完整问题空间，Halro 应通过严格取舍提供更小的运维面。
 
 ## 26. 主要源码依据
 
@@ -1352,7 +1352,7 @@ Heimdall 要回答的是：
 - `enterprise/` 目录之外为 MIT；
 - `enterprise/` 使用独立许可证。
 
-如果 Heimdall 只参考设计思想并用 Go 独立实现，许可证风险较低。
+如果 Halro 只参考设计思想并用 Go 独立实现，许可证风险较低。
 
 如果复制具体实现：
 
@@ -1376,4 +1376,4 @@ Heimdall 要回答的是：
 
 - 能力判断以源码、Schema、配置和测试资产为依据；
 - 性能、稳定性和具体 UI 行为未做运行时背书；
-- 上游迭代很快，实施 Heimdall 时应以自身不变量为准，不能依赖 LiteLLM 当前内部细节。
+- 上游迭代很快，实施 Halro 时应以自身不变量为准，不能依赖 LiteLLM 当前内部细节。

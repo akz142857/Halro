@@ -11,13 +11,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/adminauth"
-	"github.com/akz142857/Heimdall/internal/audit"
-	"github.com/akz142857/Heimdall/internal/domain"
-	"github.com/akz142857/Heimdall/internal/id"
+	"github.com/akz142857/Halro/internal/adminauth"
+	"github.com/akz142857/Halro/internal/audit"
+	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/id"
 )
 
-const adminSessionCookie = "__Host-heimdall_session"
+const adminSessionCookie = "__Host-halro_session"
 
 // adminRateState is one fixed-minute window's worth of per-source counters.
 type adminRateState struct {

@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/domain"
+	"github.com/akz142857/Halro/internal/domain"
 )
 
 // testChainKey is a fixed 32-byte HMAC key for exercising epoch-4 append and

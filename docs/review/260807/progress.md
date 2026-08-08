@@ -126,17 +126,17 @@ if value.CreatedAt.Before(existing.ExpiresAt) && existing.AttemptsRemaining < va
 
 对抗验证建议的第二件事——在 `internal/adminauth` 给 argon2 加并发信号量（照抄 `runtime.go:548` 的 `metricsScrapes` 模式）——**未做**。它和限流是两个问题：限流挡的是猜测速率，信号量挡的是内存放大（实测单次 64 MiB 无复用，当时 `deploy/kubernetes` 的 512Mi limit 意味着 8 并发即 OOMKill）。信号量需要定容量和排队超时两个数，且要覆盖未认证就能触达的 `loginAdmin`/`DummyVerify`，改动面比包装器大。
 
-**它当时被转交给 P2-32，而 P2-32 并没有接住它。** P2-32 的清单原文只要求"文档里绑定内存上限与并发的关系"，`c9528ab` 也正是那么做的：`deploy/kubernetes/heimdall-aws-kms.yaml` 的 limit 从 512Mi 提到 1Gi，并写清了"按 baseline + 64Mi × 预期并发凭据校验"来定容量。那条注释自己就写着 *nothing bounds how many run at once*——所以 P2-32 是完成的，信号量是另一件事，`internal/adminauth` 里至今 grep 不到任何信号量。
+**它当时被转交给 P2-32，而 P2-32 并没有接住它。** P2-32 的清单原文只要求"文档里绑定内存上限与并发的关系"，`c9528ab` 也正是那么做的：`deploy/kubernetes/halro-aws-kms.yaml` 的 limit 从 512Mi 提到 1Gi，并写清了"按 baseline + 64Mi × 预期并发凭据校验"来定容量。那条注释自己就写着 *nothing bounds how many run at once*——所以 P2-32 是完成的，信号量是另一件事，`internal/adminauth` 里至今 grep 不到任何信号量。
 
 顺着"移到 P2-32 一起处理"读下去，会以为并发上限已经有人管了。内存放大目前只被运维侧的 limit 兜着，代码侧无界。（同样形状的转交断链还有一处，见上面 P0-5 一节。）
 
 ### P1-9/P1-10 的实现取舍
 
-**"纳入 deadman down 判定"改成了"记录 + 公告"。** 直接把锚点失败并进探测的 success 判定会混淆两件事——探测答的是"实例还活着吗"，锚点答的是"见证还在吗"，一个实例完全健康而见证挂掉是真实且需要区分的状态。改为每 tick 写一条 `deadman.anchor` 审计记录，并在状态翻转时入 outbox 通知接收端。告警接在 `heimdall_audit_anchor_last_emit_timestamp_seconds` 的陈旧度上，而不是失败计数——**发射彻底停掉时失败计数一次都不涨**。
+**"纳入 deadman down 判定"改成了"记录 + 公告"。** 直接把锚点失败并进探测的 success 判定会混淆两件事——探测答的是"实例还活着吗"，锚点答的是"见证还在吗"，一个实例完全健康而见证挂掉是真实且需要区分的状态。改为每 tick 写一条 `deadman.anchor` 审计记录，并在状态翻转时入 outbox 通知接收端。告警接在 `halro_audit_anchor_last_emit_timestamp_seconds` 的陈旧度上，而不是失败计数——**发射彻底停掉时失败计数一次都不涨**。
 
 新增的三个指标只在 `Audit.Anchor.Enabled` 时渲染，避免给没开这个功能的实例增加恒零的时间序列。
 
-**锚点文件本身加 HMAC/hash 链未做。** 安全 B 指出证人文件是明文 JSON-lines、无完整性，能编辑它的人可以删掉不利的行。序号连续性检查已经把"删行"变成可检测的（缺号会报 `missing`），这是低成本的那一半。给文件本身加链需要在 deadman 侧引入一把密钥并决定它的托管方式——而 deadman 的整个立论是"它在 Heimdall 的失效域之外"，密钥放哪是个设计决策不是实现细节。留给 ADR 0015 的后续修订。
+**锚点文件本身加 HMAC/hash 链未做。** 安全 B 指出证人文件是明文 JSON-lines、无完整性，能编辑它的人可以删掉不利的行。序号连续性检查已经把"删行"变成可检测的（缺号会报 `missing`），这是低成本的那一半。给文件本身加链需要在 deadman 侧引入一把密钥并决定它的托管方式——而 deadman 的整个立论是"它在 Halro 的失效域之外"，密钥放哪是个设计决策不是实现细节。留给 ADR 0015 的后续修订。
 
 ### P1-12 未做的那半：溢出预算
 
@@ -158,7 +158,7 @@ if value.CreatedAt.Before(existing.ExpiresAt) && existing.AttemptsRemaining < va
 | P2-31 | 恢复复位路径 | **完成** `c9528ab`（结论与清单不同，见下） |
 | P2-32 | k8s 内存与 argon2 的关系 | **完成** `c9528ab`（只是文档与内存上限；它**没有**接住 P1-6(b) 的信号量，见上） |
 | P2-18 | `internal/app` 规模闸门 | **完成** `18ff5d5` |
-| P2-21 | 锚点凭据独立 + 强制 TLS | **完成** `18ff5d5`（`heimdall audit anchor rotate` 与 deadman 独立 token 文件未做，见下） |
+| P2-21 | 锚点凭据独立 + 强制 TLS | **完成** `18ff5d5`（`halro audit anchor rotate` 与 deadman 独立 token 文件未做，见下） |
 | P2-27 | 补测试（五处） | **完成** `97befaf`（另三处在 P1 期间已补） |
 | P2-28 | 测试基础设施 | **完成** `863adc2`（fuzz 语料入库未做，见下） |
 | P2-20 | `metricsauth` 改名为 `bearercred` | **完成** `25f3939` |
@@ -175,7 +175,7 @@ if value.CreatedAt.Before(existing.ExpiresAt) && existing.AttemptsRemaining < va
 
 `-shuffle=on` 已进 `make test`（三个种子都干净），新增 `make cover` 报总语句覆盖率，当前 **61.1%**——这是仓库第一次有这个数字。**fuzz 失败语料自动回灌未做**：CI 现在会把新语料内联打印到日志（避免 artifact 过期后崩溃输入丢失），但把它提交成回归种子仍是手工一步。
 
-**P2-21 做了配置校验两条，工具链两条未做。** 拒绝与 metrics 共用 `credential_file`、以及要求 `metrics.tls.enabled`，都已落到 `Validate`。清单里另外两条——补 `heimdall audit anchor rotate` 子命令、deadman 侧独立的 `anchor_bearer_token_file`——未做：现在配置**强制**两份凭据文件，但生成/轮换第二份仍得手工照着 metrics 的做，deadman 也仍共用一个 token 文件。也就是说约束已经立起来，配套的便利还没有；运维当下能做但不顺手。
+**P2-21 做了配置校验两条，工具链两条未做。** 拒绝与 metrics 共用 `credential_file`、以及要求 `metrics.tls.enabled`，都已落到 `Validate`。清单里另外两条——补 `halro audit anchor rotate` 子命令、deadman 侧独立的 `anchor_bearer_token_file`——未做：现在配置**强制**两份凭据文件，但生成/轮换第二份仍得手工照着 metrics 的做，deadman 也仍共用一个 token 文件。也就是说约束已经立起来，配套的便利还没有；运维当下能做但不顺手。
 
 **整改中发现并修掉的一处测试脆弱性。** step-up 的失败预算读的是硬编码 `time.Now()`，而旁边的登录限流用的是可注入的 `r.clockNow()`——`runtime.go` 的注释说明登录限流当初正是因为这个问题才改成可注入的，step-up 漏了。后果是预算类测试单独跑必过、整包跑约每次一挂（取决于 5 次尝试是否跨过整分钟）。这轮全量门禁挂了一次才暴露出来。已改用可注入时钟并在测试里固定，连跑三遍全包确认。
 
@@ -308,6 +308,6 @@ if value.CreatedAt.Before(existing.ExpiresAt) && existing.AttemptsRemaining < va
 | P1-7 | `PUT /credentials/{id}`、`PUT /redaction-policies/{id}` 两个端点的 step-up | 判据已确立；这两个是表单保存流，后端单独加会让保存开始返回 401 |
 | P1-10 | 锚点文件本身加 HMAC / 前向 hash 链 | 需要先决定 deadman 侧密钥怎么托管，是设计决策，留给 ADR 0015 修订 |
 | P1-12 | 溢出预算随 `maxTracked` 缩放 | 需要一个没人论证过的倍数，留给产品决策 |
-| P2-21 | `heimdall audit anchor rotate` 子命令、deadman 侧独立 `anchor_bearer_token_file` | 约束已强制，配套便利未做，运维当下能做但不顺手 |
+| P2-21 | `halro audit anchor rotate` 子命令、deadman 侧独立 `anchor_bearer_token_file` | 约束已强制，配套便利未做，运维当下能做但不顺手 |
 | P2-28 | fuzz 失败语料自动回灌成回归种子 | CI 已把语料内联打印进日志，提交仍是手工一步 |
 | P2-29 | 尺寸 ratchet 扩展到 TSX 内联样式 | 当下 0 处暴露，挡的是将来 |

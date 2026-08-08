@@ -1,4 +1,4 @@
-module github.com/akz142857/Heimdall/tests/compatibility/go
+module github.com/akz142857/Halro/tests/compatibility/go
 
 go 1.25.0
 

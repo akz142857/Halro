@@ -4,7 +4,7 @@
 
 本地交付：
 
-- KMS provider call/request ID 与 Heimdall `security.kms.call` Audit 关联，不记录 ARN、ciphertext、payload 或身份材料。
+- KMS provider call/request ID 与 Halro `security.kms.call` Audit 关联，不记录 ARN、ciphertext、payload 或身份材料。
 - 低基数 KMS call/duration/unlock/zero-fallback/descriptor/Slot/Recovery/pending-rotation Metrics 与 Prometheus contract tests。
 - Primary unwrap error、Recovery not-ready/expired/used、Vault mismatch、pending rotation 告警与 promtool fixtures。
 - 启动前 `RLIMIT_CORE=0` fail-closed；Linux `PR_SET_DUMPABLE=0`；无 pprof/crash uploader；明确 Go managed heap 无法保证 mlock、确定性擦除或安全的 per-slice `MADV_DONTDUMP`。

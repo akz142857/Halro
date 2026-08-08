@@ -1,6 +1,6 @@
-# Contributing to Heimdall
+# Contributing to Halro
 
-Thank you for helping improve Heimdall. Security, accounting correctness, and
+Thank you for helping improve Halro. Security, accounting correctness, and
 backward-compatible API behavior take priority over feature count.
 
 ## Before opening work
@@ -22,8 +22,8 @@ Requirements:
 - Docker only for container validation.
 
 ```bash
-git clone https://github.com/akz142857/Heimdall.git
-cd Heimdall
+git clone https://github.com/akz142857/Halro.git
+cd Halro
 make build
 make test
 make vet
@@ -76,8 +76,8 @@ require isolated, budget-limited credentials.
   state is refused and rebuilt instead of silently misread. Say so in the commit when a
   change requires re-initialising the data directory. See `CLAUDE.md` for the boundary
   and its two carve-outs.
-- Check assumptions about existing data against a real data directory — `heimdall doctor`,
-  `heimdall ledger verify`, an actual start — not only against fixtures. A check a real
+- Check assumptions about existing data against a real data directory — `halro doctor`,
+  `halro ledger verify`, an actual start — not only against fixtures. A check a real
   `data/` rejects is a check that bricks every install.
 
 ## Frontend style

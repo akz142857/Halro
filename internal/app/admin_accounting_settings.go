@@ -4,9 +4,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/budget"
-	"github.com/akz142857/Heimdall/internal/domain"
-	"github.com/akz142857/Heimdall/internal/timezone"
+	"github.com/akz142857/Halro/internal/budget"
+	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/timezone"
 )
 
 // Stable error codes for the accounting timezone. A rejected change should tell

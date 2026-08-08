@@ -203,7 +203,7 @@ func backupAEAD(backupKey []byte) (cipher.AEAD, error) {
 	if len(backupKey) != 32 {
 		return nil, errors.New("backup key must be exactly 32 bytes")
 	}
-	domain := []byte("heimdall:backup:v1\x00")
+	domain := []byte("halro:backup:v1\x00")
 	material := make([]byte, 0, len(domain)+len(backupKey))
 	material = append(material, domain...)
 	material = append(material, backupKey...)

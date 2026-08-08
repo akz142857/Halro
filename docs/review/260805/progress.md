@@ -38,8 +38,8 @@
 | P2-21 | 焦点环收敛到一个 token、Light 二三级层级对调、尺寸 ratchet（见下） | `4cf84d6` |
 | P2-20 | 网关时钟可注入、预算超限首次即短路、流式中断按已投递量计费、`reserved` 崩溃后可回收 | `d6601dc` `a7c905f` `4b61b49` |
 | P2-23 | 版本注入 + `make version`、首启配置带注释、CHANGELOG 收敛、英文 user-guide（4/6，见下） | `f503d9c` `e0922dd` |
-| P2-16 | ledger 帧 epoch 4：HMAC + hash 链，[ADR 0016](../../adr/0016-ledger-frame-integrity.md) Accepted。fail-closed 启动门禁、v3 gate 缺口一并补齐、backup manifest 链头字段、`heimdall ledger verify` 三态报告（见下） | `5d4936e` |
-| P1-7 | 审计外部锚点，[ADR 0015](../../adr/0015-audit-chain-external-anchoring.md) Accepted。默认 sink = dead-man 拉取；bbolt 实例身份、有界锚点环、metrics 监听器上独立凭证端点、deadman 侧增量拉取+持久化高水位、`heimdall audit verify-anchor` 三态报告（见下） | `5d4936e` |
+| P2-16 | ledger 帧 epoch 4：HMAC + hash 链，[ADR 0016](../../adr/0016-ledger-frame-integrity.md) Accepted。fail-closed 启动门禁、v3 gate 缺口一并补齐、backup manifest 链头字段、`halro ledger verify` 三态报告（见下） | `5d4936e` |
+| P1-7 | 审计外部锚点，[ADR 0015](../../adr/0015-audit-chain-external-anchoring.md) Accepted。默认 sink = dead-man 拉取；bbolt 实例身份、有界锚点环、metrics 监听器上独立凭证端点、deadman 侧增量拉取+持久化高水位、`halro audit verify-anchor` 三态报告（见下） | `5d4936e` |
 | P2-23 | Parquet 降级为可选格式（[ADR 0017](../../adr/0017-usage-export-format.md) Accepted）+ Admin 多用户登录、管理员/只读两级权限、管理员账户创建/删除的 step-up（见下"P2-23 验证记录"） | `5d4936e` |
 
 ## 决定不做（清单唯一一项）
@@ -57,7 +57,7 @@
 - 链头 checkpoint：`boltstore.LedgerChainCheckpoint`，`reconcileLedgerChainCheckpoint` fail-closed 挂在 `runtime.go` 主启动路径 `ledgerLog.Replay` 之后，镜像 `reconcileAuditCheckpoint`。
 - v3 gate 缺口：migration 17（`ledger_frame_integrity`）把 `keyLedgerFeatureEpoch`/`keyMinimumLedgerReaderVersion` 从 2 直接提到 4；`runtime.go`/`internal/backup/archive.go` 的门禁判断从精确相等改成"至少 N"+字符串按 epoch 派生，不再重复"精确相等导致漏保护"这个坑本身。
 - backup manifest：新增 `LedgerChainHeadSequence/Offset/Hash/Verified` 四个字段，restore 侧链头不一致直接拒绝恢复（`internal/app/backup.go`）。
-- CLI：`heimdall ledger verify --config <path>`（`internal/app/ledger_verify.go` + `cmd/heimdall/main.go`），已跑通 smoke test（init → verify，空账本报告 `ChainVerified:false` 符合预期）。
+- CLI：`halro ledger verify --config <path>`（`internal/app/ledger_verify.go` + `cmd/halro/main.go`），已跑通 smoke test（init → verify，空账本报告 `ChainVerified:false` 符合预期）。
 - 测试：`internal/ledger/log_test.go`/`period_identity_test.go` 全量适配 v4（`validReservation` 等 fixture 补 `PeriodTimezone`），新增 `chain_test.go` 三个对抗测试——伪造 payload+重算 CRC 被 MAC 拒绝、删除中间帧被链拒绝（序列号本身不够，验证了这点）、密钥"轮换"（信封换、明文不变）后历史帧仍可验证。**反向验证做了**：把 `verifier.verify()` 判断临时改成 `false`，确认这三个新测试和混合 epoch 测试全部会失败，再恢复。级联修复：`internal/budget`/`internal/gateway`/`internal/usage`/`internal/store/bolt`/`internal/backup`/`internal/app` 里凡是直接开 ledger 或构造裸 `Event` 走 Append 的测试都补了 chain key / `PeriodTimezone`。
 - 验证：`go test ./...`、`go test -race` 覆盖到的包（ledger/app/store/bolt/backup/budget/gateway/usage）全绿，`go vet ./...` 干净。
 
@@ -69,8 +69,8 @@
 - 锚点存储：新桶 `bucketAuditAnchors`（migration 18），`AppendAuditAnchor`（序列号必须连续、按序列号算术裁剪到最近 1000 条而不是靠 `bucket.Stats()`——后者在同一事务内不反映未提交的增删，曾经把整个桶删空，过程中改过来了）、`AuditAnchorsSince`、`LatestAuditAnchor`。
 - 发射：`internal/app/audit_anchor.go` 的 `runAuditAnchorMaintenance`，10 秒轮询（`var` 不是 `const`，测试可调快），满足"到间隔"或"过记录增量"任一条件即发射，fail-open（失败只记日志计数，绝不挡 audit append 或网关流量）。
 - 端点：`GET /audit/anchors?since=<seq>` 挂在现有 metrics 监听器上，认证复用 `internal/metricsauth` 整个包（换一个凭证文件路径就是一条独立的轮换生命周期，没有另起一个包）。
-- deadman 侧：`TargetConfig.AnchorURL`（仅 `heimdall` kind）+ `Config.AnchorFile`；`Engine.Checker` 签名塞不进 payload，锚点拉取是 `Tick` 里独立于 `probeTargets` 的一段（`pullAnchors`），JSON-lines 落盘（`anchorWriter`，镜像既有 `auditWriter`），高水位存进已有的 `TargetState`，重启不重放旧锚点。
-- 验证命令：`heimdall audit verify-anchor --config <path> --anchors <path>`，重放本地审计链，按序列号比对锚点的 `LastHash`，报告 agree/disagree/truncated。CLI smoke test 跑通（一个声称 999 条记录的伪锚点，对着 0 条记录的新实例，正确报 `truncated`）。
+- deadman 侧：`TargetConfig.AnchorURL`（仅 `halro` kind）+ `Config.AnchorFile`；`Engine.Checker` 签名塞不进 payload，锚点拉取是 `Tick` 里独立于 `probeTargets` 的一段（`pullAnchors`），JSON-lines 落盘（`anchorWriter`，镜像既有 `auditWriter`），高水位存进已有的 `TargetState`，重启不重放旧锚点。
+- 验证命令：`halro audit verify-anchor --config <path> --anchors <path>`，重放本地审计链，按序列号比对锚点的 `LastHash`，报告 agree/disagree/truncated。CLI smoke test 跑通（一个声称 999 条记录的伪锚点，对着 0 条记录的新实例，正确报 `truncated`）。
 - 测试：`internal/store/bolt`（锚点环增删裁剪+边界）、`internal/deadman`（拉取成功+增量+跨重启保序、端点不可达不挡探测循环+心跳、config 校验）、`internal/app`（端点鉴权隔离——metrics token 认证不了锚点端点、`since` 语义、record_delta 触发发射、启动告警、`VerifyAuditAnchors` 的 agree/disagree/truncated 三态）全部覆盖。**反向验证做了**：把 `VerifyAuditAnchors` 的哈希比较临时改成永远为真，确认"伪造锚点"用例会失败，再恢复。
 - 验证：`go test ./...` 全绿，`go vet ./...` 干净；`go test -race` 覆盖 app/config/deadman/store/bolt 四包。
 
@@ -90,7 +90,7 @@
 
 这类改动一旦做错，编译器不一定能兜底——比如把 `adminMutationError` 错误分类的一个分支漏调，或者把某个 mutex 的粒度在搬迁中意外改变，这些是编译通过、测试如果没覆盖到那条分支也通过、但实际行为悄悄变了的那类 bug。CLAUDE.md 把这个仓库的优先级写得很直白："Security, accounting correctness, and backward-compatible API behavior take priority over feature count"——admin mutation 路径正是这句话点名要保护的东西。用剩余时间去做一次仓促的、零功能收益的重构去冒这个风险，划不来；这些时间挪去做 Phase 4（RBAC、Parquet）更值——那两项是这轮唯一有真实功能/安全价值的剩余工作。
 
-**"phase2" 改名**同理但风险构成不同：命中 `internal/domain`、`internal/compatibility`、`internal/provider`（+`openai`）、`internal/gateway`、`internal/gatewayapi` 共 5+ 个包，24 个文件（含测试）。相比 adminapi 拆分，这个改动确实可以完全被编译器兜底（改名不对会直接报 undefined），风险主要是纯体力活的规模，以及一个必须手工守住、编译器管不到的硬约束——`internal/store/bolt/store_admin.go`（原 store.go）里 `{version: 6, name: "phase2_capability_evidence", ...}` 这个已经在真实部署上跑过的迁移历史字符串字面量绝对不能碰。本轮评估后判断和 adminapi 拆分一样优先级最低，一并推迟，留给下一轮单独执行——这项风险低，适合作为一个独立、专注的小改动去做，不该和其它工作混在一起仓促收尾。两项一并跟踪于 [#86](https://github.com/akz142857/Heimdall/issues/86)。
+**"phase2" 改名**同理但风险构成不同：命中 `internal/domain`、`internal/compatibility`、`internal/provider`（+`openai`）、`internal/gateway`、`internal/gatewayapi` 共 5+ 个包，24 个文件（含测试）。相比 adminapi 拆分，这个改动确实可以完全被编译器兜底（改名不对会直接报 undefined），风险主要是纯体力活的规模，以及一个必须手工守住、编译器管不到的硬约束——`internal/store/bolt/store_admin.go`（原 store.go）里 `{version: 6, name: "phase2_capability_evidence", ...}` 这个已经在真实部署上跑过的迁移历史字符串字面量绝对不能碰。本轮评估后判断和 adminapi 拆分一样优先级最低，一并推迟，留给下一轮单独执行——这项风险低，适合作为一个独立、专注的小改动去做，不该和其它工作混在一起仓促收尾。两项一并跟踪于 [#86](https://github.com/akz142857/Halro/issues/86)。
 
 ## P2-19 验证记录（2026-08-07 复量）
 
@@ -113,7 +113,7 @@
 
 这一项仍然是零功能收益，**不做也是一个可以辩护的结论**；上面这些是为了让"做"的那次不必从头摸边界。
 
-**2026-08-07 的决定：不做，[#86](https://github.com/akz142857/Heimdall/issues/86) 已关闭。** 边界量清楚之后重新权衡的结果——改动面是 41 个文件、12062 行非测试代码加 4699 行测试，全部落在 CLAUDE.md 点名要保护的 admin mutation 路径上，而收益是零功能、零安全。阶段一（57 行助手外提）已经单独完成（`9ee0fc3`），它本身就有价值，不依赖后续是否拆包。关闭而不是挂着：一个永远排不到的 issue 只会让人误以为这里还欠着东西——真要做，上面那张边界表和四步做法就是完整的起点，重开一个新 issue 即可。
+**2026-08-07 的决定：不做，[#86](https://github.com/akz142857/Halro/issues/86) 已关闭。** 边界量清楚之后重新权衡的结果——改动面是 41 个文件、12062 行非测试代码加 4699 行测试，全部落在 CLAUDE.md 点名要保护的 admin mutation 路径上，而收益是零功能、零安全。阶段一（57 行助手外提）已经单独完成（`9ee0fc3`），它本身就有价值，不依赖后续是否拆包。关闭而不是挂着：一个永远排不到的 issue 只会让人误以为这里还欠着东西——真要做，上面那张边界表和四步做法就是完整的起点，重开一个新 issue 即可。
 
 ## P2-23 验证记录（2026-08-06，Parquet 完成；RBAC 完成，step-up 覆盖面部分推迟）
 
@@ -130,7 +130,7 @@
 - 新端点：`GET/POST /admin/api/v1/admin-users`（`administrator` 权限 + step-up：创建新用户要求重新提交当前密码+新鲜 TOTP，逐请求校验，不发短期提权 token——跟 `admin_prices.go` 已有的 `verifyPricingReauthentication` 是同一个函数，只是换了个更贴合语义的调用名）、`DELETE /admin/api/v1/admin-users/{username}`（同样 step-up；拒绝自删——用 session/logout 结束自己的访问；拒绝删掉最后一个 administrator，否则系统会陷入"零管理员，只能靠离线 CLI 破窗"的更大故障）。
 - 测试（`internal/store/bolt/admin_users_test.go` 三个 + `internal/app/admin_users_test.go` 三个）：`ListAdminUsers` 排序正确、`DeleteAdminUser` 清掉会话与 MFA 状态但不影响其他管理员、revision 冲突和用户不存在两种失败路径；HTTP 层创建/删除的 step-up 正确路径与错密码/无效角色拒绝路径、新用户能实际登录、自删/删最后管理员被拒；**表驱动 read_only 全路由扫描**——用 `chi.Walk` 遍历 `adminRouter()` 全部已注册路由而不是手写清单（这样以后新增写接口默认就在覆盖范围内，不会漏），对每条非 GET/HEAD/OPTIONS 且不在"自服务"白名单里的路由，read_only 会话必须拿到 `403` 且 `code` 精确等于 `read_only_role`（不是被 CSRF 或别的校验先挡住而误判通过）。扫到 48 条真实挂载的写路由（已排除 chi mount 点自带的 405/404 兜底桩和白名单内的自服务路由）。**反向验证做了**：把 `requireAdministratorRole` 的判断临时改成 `if false && ...`，确认表驱动测试和 `TestDeleteAdminUserRejectsSelfAndLastAdministrator` 都会失败（48 条路由全部报"read_only 到达了 handler"），再改回。`go build`/`go vet`/`gofmt -l` 干净，`go test ./...` 全绿，`go test -race` 覆盖 app/domain/adminauth/store/bolt 四包。既有的 `TestFrozenV1AdminRoutesAreRegistered`（只断言列出的路由存在，不检查"仅此而已"）未受影响，跑了一遍确认仍绿。
 
-**推迟未做，原因写清楚（跟踪于 [#87](https://github.com/akz142857/Heimdall/issues/87)）——以下两条都已在次日（2026-08-07）做完，`ca26a3c` + `817f7d9`，#87 已关闭；保留原文是因为"当时为什么先不做"本身是这份记录要留住的东西：**
+**推迟未做，原因写清楚（跟踪于 [#87](https://github.com/akz142857/Halro/issues/87)）——以下两条都已在次日（2026-08-07）做完，`ca26a3c` + `817f7d9`，#87 已关闭；保留原文是因为"当时为什么先不做"本身是这份记录要留住的东西：**
 
 - **把 step-up 从"管理员账户创建/删除"推广到 project/credential/provider/route/deployment/redaction-policy/token-guard-policy/alert 的 delete。** 计划里原话是"复用同一函数模式"，但摸了这 8 个 handler 后发现前提不成立：它们全部走 `requireRevision`（`If-Match` header 表达乐观锁），**没有请求体**——不是"复用模式"，是要把这些端点从"无 body 的 DELETE"改成"要求 JSON body 携带 current_password/totp_code"，这是一处破坏性的 API 契约变更。Admin 前端现在发的 DELETE 请求不带 body，backend-only 上线这个改动会让现有的删除按钮当场变成 401——这不是"功能没做全"，是会让已经在用的功能倒退。CLAUDE.md 把"backward-compatible API behavior"列为优先于功能数量的第一条，前端改动又明确排除在本轮范围外（见下）——两者叠加，做这件事的唯一负责任方式是连前端一起改，但那超出了本轮"仅后端"的既定范围。MFA 相关的两个破坏性端点（`deleteAdminMFAAuthenticator`、`disableAdminMFA`）核查后确认**已经**各自内联了等价的密码+TOTP 校验，不需要额外补；`executeAdminDeveloperRequest` 的请求体是要透传给上游 LLM 的实际请求负载，结构上塞不进 step-up 字段，且它的风险已经在"整改过程中新发现的问题"里按"可达时告警"处理过，不属于同一类缺口。
 - **Admin 前端 UI**（角色选择器、只读态提示、按角色禁用写操作按钮）：整轮延续此前"仅后端"的既定范围，没有对应前端改动计划，此处如实记录而不是留空不提。
@@ -149,7 +149,7 @@
 
 **收尾三个提交（`1b33357`、`782b1ef`、`af08694`）。** 都是上面四项落地后自己暴露出来的，不是新工作：老账户 role 回填（见"新发现的问题"表最后一行），以及新增的"管理员账户"面板两处布局——状态提示与 step-up 字段各自成行、账户列表与面板标题对齐。前端项按同样的流程验证并重建了 `internal/webui/dist`。
 
-**`phase2` 标识符改名（`956c06b`，#86 的一半）。** 55 个标识符、25 个文件。新名字不是起的，是代码自己早就公布了的：北向 profile 是 `heimdall.inference-resources.v1`，所以门面与机器件叫 `InferenceResources`；OpenAI 服务商 profile 自己的值是 `openai.media-resources.v1`，所以那个常量叫 `ProfileOpenAIMediaResources`——按 wire 值 grep 现在能找到符号。**不跨线也不落盘**：profile ID 从来没有以 `phase2` 的形式持久化或发布过，`docs/compatibility/endpoint-manifests.json` 里这个字符串命中数为 0。三处字面量刻意保留旧名——bbolt 迁移 `phase2_capability_evidence` 及其两个 step 名，那是每个已经跑过它的实例里的历史记录，改了会让升级实例与自己的迁移日志对不上；现在有测试钉住，下一次"顺手清理最后几处"会失败而不是悄悄成功。
+**`phase2` 标识符改名（`956c06b`，#86 的一半）。** 55 个标识符、25 个文件。新名字不是起的，是代码自己早就公布了的：北向 profile 是 `halro.inference-resources.v1`，所以门面与机器件叫 `InferenceResources`；OpenAI 服务商 profile 自己的值是 `openai.media-resources.v1`，所以那个常量叫 `ProfileOpenAIMediaResources`——按 wire 值 grep 现在能找到符号。**不跨线也不落盘**：profile ID 从来没有以 `phase2` 的形式持久化或发布过，`docs/compatibility/endpoint-manifests.json` 里这个字符串命中数为 0。三处字面量刻意保留旧名——bbolt 迁移 `phase2_capability_evidence` 及其两个 step 名，那是每个已经跑过它的实例里的历史记录，改了会让升级实例与自己的迁移日志对不上；现在有测试钉住，下一次"顺手清理最后几处"会失败而不是悄悄成功。
 
 ## 时区升级影响核查（2026-08-06）
 

@@ -7,7 +7,7 @@ Owner: SRE
 
 1. Confirm the expected target exists and inspect Prometheus `up` and scrape
    error without printing authorization headers.
-2. Check Heimdall `/health/live` and `/health/ready` through their approved
+2. Check Halro `/health/live` and `/health/ready` through their approved
    paths.
 3. Check WAL errors and Ledger queue before treating Usage values as
    authoritative.
@@ -17,21 +17,21 @@ Owner: SRE
    the independent dead-man monitor.
 6. For AWS KMS/Key Slot alerts, follow the
    [M11 production operations runbook](../runbooks/m11-production-operations.md)
-   and correlate the bounded Heimdall Audit `correlation_id` with CloudTrail.
+   and correlate the bounded Halro Audit `correlation_id` with CloudTrail.
 
 Use the authenticated, audited Prometheus query path to inspect `up`, the
-`heimdall:*` recording rules and the source `heimdall_*` series. Do not enable
+`halro:*` recording rules and the source `halro_*` series. Do not enable
 a public Prometheus UI or unrestricted API. Useful checks include:
 
-- target health: `up{job="heimdall"}`;
-- request/error traffic: `heimdall:requests:rate5m` and
-  `heimdall:requests_errors:ratio5m`;
+- target health: `up{job="halro"}`;
+- request/error traffic: `halro:requests:rate5m` and
+  `halro:requests_errors:ratio5m`;
 - tail latency: `histogram_quantile(0.95, sum by (le, environment, region,
-  cluster) (rate(heimdall_request_latency_seconds_bucket[5m])))`;
-- accounting queues: `heimdall:ledger_queue:ratio` and
-  `heimdall_usage_analytics_lagging`;
-- provider pressure: `heimdall:deployments_unhealthy:count` and
-  `heimdall:deployment_capacity:ratio`.
+  cluster) (rate(halro_request_latency_seconds_bucket[5m])))`;
+- accounting queues: `halro:ledger_queue:ratio` and
+  `halro_usage_analytics_lagging`;
+- provider pressure: `halro:deployments_unhealthy:count` and
+  `halro:deployment_capacity:ratio`.
 
 ## Credential rotation
 
@@ -39,7 +39,7 @@ a public Prometheus UI or unrestricted API. Useful checks include:
 2. Atomically replace Prometheus's `0400/0440` credential file and reload.
 3. Require `up == 1` for two scrape intervals.
 4. Revoke the retiring credential.
-5. Run `heimdall metrics verify-audit --config <path>` and send its returned
+5. Run `halro metrics verify-audit --config <path>` and send its returned
    sequence/hash chain head to the independent immutable audit platform.
 6. Prove the old token receives 401 and record the secret-free audit evidence
    and independently anchored chain hash.
@@ -52,7 +52,7 @@ dashboard, screenshot, or shell history.
 1. Issue the replacement server certificate and Prometheus client certificate
    from the approved CA, retaining the old trust path for the overlap window.
 2. Atomically replace the mounted files with mode `0400/0440`.
-3. Perform a controlled Heimdall restart; Metrics TLS material is intentionally
+3. Perform a controlled Halro restart; Metrics TLS material is intentionally
    loaded at listener startup, so replacing files alone is not a reload.
 4. Require two successful mTLS scrapes, then remove the old client identity and
    trust anchor and restart again if the CA bundle changed.
@@ -99,9 +99,9 @@ mock webhook. It verifies Core target health, loaded rules, the continuous
 unique smoke project and temporary files.
 
 If a development service already owns one of those ports, do not stop it just
-for this check. Set `HEIMDALL_SMOKE_METRICS_PORT`,
-`HEIMDALL_SMOKE_PROMETHEUS_PORT`, `HEIMDALL_SMOKE_ALERTMANAGER_PORT`, and
-`HEIMDALL_SMOKE_WEBHOOK_PORT` to four distinct unused ports in `1024..65535`.
+for this check. Set `HALRO_SMOKE_METRICS_PORT`,
+`HALRO_SMOKE_PROMETHEUS_PORT`, `HALRO_SMOKE_ALERTMANAGER_PORT`, and
+`HALRO_SMOKE_WEBHOOK_PORT` to four distinct unused ports in `1024..65535`.
 The smoke creates runtime-only config copies with those addresses; shipped Core
 configuration and the existing service are not modified.
 
@@ -112,7 +112,7 @@ cannot change any Phase D checklist row from `BLOCKED`.
 
 ## Required drills
 
-- Heimdall and expected-target loss;
+- Halro and expected-target loss;
 - WAL append error and analytics lag;
 - multiple deployment failure and fallback saturation;
 - Prometheus/Alertmanager stop and TSDB full/read-only;

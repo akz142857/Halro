@@ -8,8 +8,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/akz142857/Heimdall/internal/budget"
-	"github.com/akz142857/Heimdall/internal/ledger"
+	"github.com/akz142857/Halro/internal/budget"
+	"github.com/akz142857/Halro/internal/ledger"
 )
 
 // testChainKey is a fixed 32-byte Ledger HMAC key: every event the ledger

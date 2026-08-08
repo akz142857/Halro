@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/kms"
+	"github.com/akz142857/Halro/internal/kms"
 )
 
 var _ kms.Wrapper = (*Wrapper)(nil)

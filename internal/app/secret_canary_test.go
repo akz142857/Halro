@@ -16,19 +16,19 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akz142857/Heimdall/internal/domain"
-	"github.com/akz142857/Heimdall/internal/openaiapi"
-	"github.com/akz142857/Heimdall/internal/provider"
-	"github.com/akz142857/Heimdall/internal/safelog"
-	"github.com/akz142857/Heimdall/internal/semantic"
+	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/openaiapi"
+	"github.com/akz142857/Halro/internal/provider"
+	"github.com/akz142857/Halro/internal/safelog"
+	"github.com/akz142857/Halro/internal/semantic"
 )
 
 const (
-	outputSecretCanary   = "sk-HEIMDALL_OUTPUT_CANARY_0123456789abcdef"
-	googleSecretCanary   = "AIzaHEIMDALL0123456789abcdefghijk"
+	outputSecretCanary   = "sk-HALRO_OUTPUT_CANARY_0123456789abcdef"
+	googleSecretCanary   = "AIzaHALRO0123456789abcdefghijk"
 	awsSecretCanary      = "ASIA0123456789ABCDEF"
-	bearerSecretCanary   = "Bearer heimdall.canary.token.0123456789"
-	providerSecretCanary = "sk-HEIMDALL_PROVIDER_CANARY_0123456789abcdef"
+	bearerSecretCanary   = "Bearer halro.canary.token.0123456789"
+	providerSecretCanary = "sk-HALRO_PROVIDER_CANARY_0123456789abcdef"
 	adminPasswordCanary  = "correct horse battery staple"
 )
 
@@ -186,7 +186,7 @@ func TestSecretCanaryNeverReachesTelemetryPersistenceOrAdminSurfaces(t *testing.
 }
 
 func TestRecoveredPanicDoesNotExposePanicRequestOrAuthorizationCanaries(t *testing.T) {
-	const panicCanary = "sk-HEIMDALL_PANIC_CANARY_0123456789abcdef"
+	const panicCanary = "sk-HALRO_PANIC_CANARY_0123456789abcdef"
 	var logs bytes.Buffer
 	runtime := &Runtime{logger: safelog.New(slog.NewJSONHandler(&logs, nil))}
 	handler := runtime.recoverPanics(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {

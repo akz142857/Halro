@@ -1,4 +1,4 @@
-# Heimdall Admin Console Design System
+# Halro Admin Console Design System
 
 A layered, themeable token system that drives both the **Dark** (default) and
 **Light** appearances. Appearance is a per-admin preference persisted server

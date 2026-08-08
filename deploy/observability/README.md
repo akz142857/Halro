@@ -1,15 +1,15 @@
-# Heimdall observability deployment
+# Halro observability deployment
 
 This directory contains a versioned single-host Monitoring MVP. It is not a
 production topology by itself.
 
-The example uses host networking so Prometheus can scrape Heimdall's existing
+The example uses host networking so Prometheus can scrape Halro's existing
 loopback-only Metrics listener. Run it only on a single-tenant Linux host. A
 shared host requires a dedicated network namespace or authenticated proxy.
 
 ## Secret preparation
 
-Create `/run/heimdall-observability` outside the repository, owned by the
+Create `/run/halro-observability` outside the repository, owned by the
 service account, and write:
 
 - `metrics-token` as mode `0400` or `0440`;
@@ -18,13 +18,13 @@ service account, and write:
   receiver/credential that alarms when Watchdog notifications stop.
 
 Do not use environment variables or Compose interpolation for either value.
-Generate the legacy development token with `heimdall metrics token`; production
+Generate the legacy development token with `halro metrics token`; production
 must use the versioned credential commands documented in the operator guide.
 
 ### macOS local development
 
 macOS keeps `/run` on a read-only system volume. For local OrbStack or Docker
-Desktop use, create `/private/tmp/heimdall-observability` with mode `0755`, keep
+Desktop use, create `/private/tmp/halro-observability` with mode `0755`, keep
 the Secret files at mode `0444`, and add `compose.macos.example.yaml` to every
 Compose command. The override changes only the host bind-mount source; the
 containers still read `/run/secrets`. This temporary path is not a production
@@ -64,7 +64,7 @@ published. Prometheus rule files are the only alert authority.
 ## Production boundary
 
 Production requires Phase B: versioned Metrics credentials and mutual workload
-identity; both are implemented by Heimdall, but must still be integrated with
+identity; both are implemented by Halro, but must still be integrated with
 the target PKI and Secret store. Images in the example are pinned to the digests validated with this
 commit; update tag, digest, validation evidence, and SBOM together. Ship
 audit logs to independent immutable storage, configure an external Watchdog
@@ -73,15 +73,15 @@ Use `docs/observability/admission-checklist.md` as the production evidence index
 
 ## Independent dead-man
 
-The repository ships a formal, separately deployable `heimdall-deadman`
-binary. It directly checks authenticated HTTPS endpoints for Heimdall,
+The repository ships a formal, separately deployable `halro-deadman`
+binary. It directly checks authenticated HTTPS endpoints for Halro,
 Prometheus and Alertmanager, verifies Prometheus sample freshness, persists a
 hysteretic state machine and bounded notification outbox, and sends versioned
 heartbeat and down/up events to an independent receiver.
 
-The v1 binary is intentionally the official Heimdall Core monitor, not a
+The v1 binary is intentionally the official Halro Core monitor, not a
 general-purpose probe. Its configuration therefore requires at least one
-`heimdall`, one `prometheus`, and one `alertmanager` target. Omitting any of
+`halro`, one `prometheus`, and one `alertmanager` target. Omitting any of
 those kinds is a configuration error rather than a way to silently reduce
 coverage.
 
@@ -89,7 +89,7 @@ Build and validate it with:
 
 ```sh
 make deadman
-./bin/heimdall-deadman \
+./bin/halro-deadman \
   -config deploy/observability/external-probe/config.example.yaml \
   -check-config
 ```
@@ -97,12 +97,12 @@ make deadman
 Deployment assets are under `external-probe/`:
 
 - `config.example.yaml` and `config.schema.json` define the v1 structure;
-  `heimdall-deadman -check-config` remains authoritative for cross-field and
+  `halro-deadman -check-config` remains authoritative for cross-field and
   duration semantics, and shared tests keep both validation paths aligned;
 - `event.schema.json` defines the receiver payload;
 - `RECEIVER-CONTRACT.md` defines durable acknowledgement, idempotency,
   heartbeat expiry, firing and resolved behavior;
-- `heimdall-deadman.service` is the hardened systemd template;
+- `halro-deadman.service` is the hardened systemd template;
 - `Dockerfile` and `external-probe.example.yaml` provide a separate container
   deployment.
 

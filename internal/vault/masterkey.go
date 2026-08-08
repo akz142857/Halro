@@ -107,7 +107,7 @@ func ReplaceMasterKey(path string, key []byte) error {
 		return errors.New("current master key must be a regular non-symlink file")
 	}
 	directory := filepath.Dir(path)
-	temporary, err := os.CreateTemp(directory, ".heimdall-master-key-*")
+	temporary, err := os.CreateTemp(directory, ".halro-master-key-*")
 	if err != nil {
 		return fmt.Errorf("create replacement master key: %w", err)
 	}

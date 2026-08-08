@@ -12,7 +12,7 @@ Connection affinity cannot repair that correctness failure.
 
 ## Decision
 
-Heimdall keeps three explicit operating modes:
+Halro keeps three explicit operating modes:
 
 - **Standalone** is the v1 default and has one local owner.
 - **HA** will be one replicated leader/follower group. It improves availability,
@@ -26,7 +26,7 @@ request attempts, and settlement for a Project must have one logical writer.
 
 An accepted HTTP or SSE request stays with its execution owner until completion.
 An active Provider stream is never migrated. After owner failure a client may
-retry under the idempotency contract, but Heimdall does not claim exactly-once
+retry under the idempotency contract, but Halro does not claim exactly-once
 Provider execution. A call that might have reached a Provider without a durable
 settlement remains an auditable, conservatively accounted unknown outcome.
 

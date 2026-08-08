@@ -45,9 +45,9 @@ describe("DeveloperPage", () => {
 
     // The code area ships collapsed, so only the footnote mentions the variable until
     // the sample is opened.
-    expect(screen.getAllByText(/HEIMDALL_API_KEY/)).toHaveLength(1);
+    expect(screen.getAllByText(/HALRO_API_KEY/)).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "展开代码" }));
-    expect(screen.getAllByText(/HEIMDALL_API_KEY/)).toHaveLength(2);
+    expect(screen.getAllByText(/HALRO_API_KEY/)).toHaveLength(2);
     expect(screen.getByRole("button", { name: "发送请求" })).toBeDisabled();
     expect(screen.getByText("等待真实请求")).toBeVisible();
 
@@ -312,7 +312,7 @@ describe("DeveloperPage", () => {
 
     const javaCode = view.container.querySelector(".developer-code")?.textContent ?? "";
     expect(javaCode).toContain("HttpRequest.newBuilder()");
-    expect(javaCode).toContain('System.getenv("HEIMDALL_API_KEY")');
+    expect(javaCode).toContain('System.getenv("HALRO_API_KEY")');
     expect(javaCode).toContain("http://127.0.0.1:8080/v1/responses");
     expect(javaCode).toContain("BodyHandlers.ofString()");
     expect(javaCode).not.toContain("support-chat\\\"");

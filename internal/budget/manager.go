@@ -12,9 +12,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/domain"
-	"github.com/akz142857/Heimdall/internal/id"
-	"github.com/akz142857/Heimdall/internal/ledger"
+	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/id"
+	"github.com/akz142857/Halro/internal/ledger"
 )
 
 var (
@@ -698,7 +698,7 @@ func (m *Manager) RecoverPendingLeases(ctx context.Context) error {
 				settlement.CommittedMicrosUSD = cost.TotalCostMicrosUSD
 			}
 		}
-		digest := sha256.Sum256([]byte("heimdall:accounting-recovery:v1\x00" + event.AttemptID + "\x00" + settlement.Outcome))
+		digest := sha256.Sum256([]byte("halro:accounting-recovery:v1\x00" + event.AttemptID + "\x00" + settlement.Outcome))
 		eventID := "evt_recovery_" + hex.EncodeToString(digest[:12])
 		if err := m.settle(ctx, eventID, attempt, settlement); err != nil {
 			m.recoveryMu.Lock()

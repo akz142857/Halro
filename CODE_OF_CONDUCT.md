@@ -2,7 +2,7 @@
 
 ## Our commitment
 
-Heimdall contributors and maintainers commit to a respectful, inclusive, and
+Halro contributors and maintainers commit to a respectful, inclusive, and
 professional community. Participation must be free from harassment regardless
 of experience, identity, background, nationality, appearance, disability,
 religion, or technical preference.
@@ -27,7 +27,7 @@ religion, or technical preference.
 ## Scope and enforcement
 
 This policy applies in repository activity, community spaces, and public events
-where someone represents Heimdall. Maintainers may edit or remove content,
+where someone represents Halro. Maintainers may edit or remove content,
 temporarily restrict participation, or permanently ban participants when needed
 to protect the community.
 

@@ -66,7 +66,7 @@ jobs:
           ./tools/m11/check-production-assets.sh
       - name: Go vulnerability scan
         run: GOTOOLCHAIN=go1.26.5 go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
-      - run: go build -trimpath ./cmd/heimdall ./cmd/heimdall-deadman
+      - run: go build -trimpath ./cmd/halro ./cmd/halro-deadman
 
   # Seeded corpora and regression inputs live in testdata and run with every
   # `go test`; this job is the part that looks for inputs nobody has thought of
@@ -145,12 +145,12 @@ jobs:
             --build-arg RELEASE_VERSION=ci \
             --build-arg RELEASE_COMMIT=${GITHUB_SHA} \
             --build-arg RELEASE_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
-            --tag heimdall:ci .
+            --tag halro:ci .
       - name: Verify image command and metadata
         run: |
-          docker run --rm --entrypoint /usr/local/bin/heimdall heimdall:ci version
-          test "$(docker image inspect heimdall:ci --format '{{.Config.User}}')" = "65532:65532"
-          test "$(docker image inspect heimdall:ci --format '{{json .Config.Healthcheck.Test}}')" = '["CMD","/usr/local/bin/heimdall","healthcheck"]'
+          docker run --rm --entrypoint /usr/local/bin/halro halro:ci version
+          test "$(docker image inspect halro:ci --format '{{.Config.User}}')" = "65532:65532"
+          test "$(docker image inspect halro:ci --format '{{json .Config.Healthcheck.Test}}')" = '["CMD","/usr/local/bin/halro","healthcheck"]'
 
   observability:
     runs-on: ubuntu-latest
@@ -178,12 +178,12 @@ jobs:
         run: |
           docker build \
             -f deploy/observability/external-probe/Dockerfile \
-            -t heimdall-deadman:ci .
-          test "$(docker image inspect heimdall-deadman:ci --format '{{.Config.User}}')" = "65532:65532"
+            -t halro-deadman:ci .
+          test "$(docker image inspect halro-deadman:ci --format '{{.Config.User}}')" = "65532:65532"
       - name: Scan independent dead-man image
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          image-ref: heimdall-deadman:ci
+          image-ref: halro-deadman:ci
           format: table
           exit-code: "1"
           ignore-unfixed: true
@@ -221,14 +221,14 @@ jobs:
         run: >-
           docker build
           -f deploy/observability/external-probe/Dockerfile
-          -t heimdall-deadman:ci .
+          -t halro-deadman:ci .
       - name: Generate independent dead-man SPDX SBOM
         run: >-
           docker run --rm
           -v "$PWD:/output"
           -v /var/run/docker.sock:/var/run/docker.sock
           anchore/syft@sha256:bd5357d2cd087f03af748dac24df48bfbc1723080d78f75f69aca1f2d429060e
-          docker:heimdall-deadman:ci
+          docker:halro-deadman:ci
           -o spdx-json=/output/independent-deadman.spdx.json
       - uses: actions/upload-artifact@v7
         with:
@@ -258,7 +258,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          compat_server=$(mktemp "${RUNNER_TEMP}/heimdall-compat-server.XXXXXX")
+          compat_server=$(mktemp "${RUNNER_TEMP}/halro-compat-server.XXXXXX")
           go build -o "$compat_server" ./tests/compatibility/server
           "$compat_server" --listen 127.0.0.1:18088 &
           compat_server_pid=$!

@@ -15,10 +15,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akz142857/Heimdall/internal/config"
-	"github.com/akz142857/Heimdall/internal/masterkey"
-	"github.com/akz142857/Heimdall/internal/safelog"
-	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
+	"github.com/akz142857/Halro/internal/config"
+	"github.com/akz142857/Halro/internal/masterkey"
+	"github.com/akz142857/Halro/internal/safelog"
+	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 )
 
 const kmsMasterKeyCanary = "M11KMS_MASTER_KEY_CANARY_1234567"
@@ -89,9 +89,9 @@ func TestKMSMasterKeyCanaryNeverReachesPersistenceTelemetryErrorsOrHeapProfile(t
 	}
 	assertMetricsExpositionContract(t, response.Body.String())
 	for _, metric := range []string{
-		"heimdall_kms_calls_total", "heimdall_kms_call_duration_seconds",
-		"heimdall_kms_unlock_total", "heimdall_kms_automatic_fallback_total 0",
-		"heimdall_kms_recovery_ready 1", "heimdall_kms_pending_rotation_slots 0",
+		"halro_kms_calls_total", "halro_kms_call_duration_seconds",
+		"halro_kms_unlock_total", "halro_kms_automatic_fallback_total 0",
+		"halro_kms_recovery_ready 1", "halro_kms_pending_rotation_slots 0",
 	} {
 		if !strings.Contains(response.Body.String(), metric) {
 			t.Fatalf("KMS Metrics output is missing %q", metric)
@@ -109,7 +109,7 @@ func TestKMSMasterKeyCanaryNeverReachesPersistenceTelemetryErrorsOrHeapProfile(t
 	}
 	if !bytes.Contains(auditBytes, []byte(`"action":"security.kms.call"`)) ||
 		!bytes.Contains(auditBytes, []byte(`"correlation_id":"fake-unwrap-`)) {
-		t.Fatal("Heimdall Audit cannot be correlated with the provider KMS request ID")
+		t.Fatal("Halro Audit cannot be correlated with the provider KMS request ID")
 	}
 	assertNoCanaries(t, "KMS Audit", auditBytes, publicSurfaceCanaries)
 	var heapProfile bytes.Buffer

@@ -1,12 +1,12 @@
 # Encrypted backup
 
-Heimdall backups are offline, atomic, encrypted snapshots. Stop the server
+Halro backups are offline, atomic, encrypted snapshots. Stop the server
 before creating one; the command acquires the same exclusive data-directory
 lock as the runtime and fails if another process owns the directory.
 
 ## What must survive a deployment
 
-Heimdall is a single-writer service. Replacing a binary, image, container, or
+Halro is a single-writer service. Replacing a binary, image, container, or
 Pod is safe only when the following state survives independently of that
 workload:
 
@@ -16,7 +16,7 @@ workload:
   directory;
 - configuration and any referenced TLS or Metrics credential files.
 
-The data directory is one consistency unit. Never restore only `heimdall.db`
+The data directory is one consistency unit. Never restore only `halro.db`
 or combine a database, WAL, Audit log, Usage tree, or Provider objects from
 different snapshots. Configuration and credential mounts are desired state,
 not substitutes for a data backup.
@@ -38,7 +38,7 @@ Recovery credentials.
 > permissions and keys needed by the archived Key Slot descriptor). Losing any
 > one of them can make the backup unusable.
 
-Create a dedicated random backup key. It is not the Heimdall Master Key:
+Create a dedicated random backup key. It is not the Halro Master Key:
 
 ```bash
 umask 077
@@ -48,19 +48,19 @@ openssl rand 32 > backup.key
 Create and verify a backup:
 
 ```bash
-heimdall backup create \
+halro backup create \
   --config ./config.yaml \
-  --output /secure-backups/heimdall-2026-07-31.hmbk \
+  --output /secure-backups/halro-2026-07-31.hmbk \
   --key-file ./backup.key
 
-heimdall backup verify \
-  --file /secure-backups/heimdall-2026-07-31.hmbk \
+halro backup verify \
+  --file /secure-backups/halro-2026-07-31.hmbk \
   --key-file ./backup.key
 ```
 
 The key file must be a regular file containing exactly 32 bytes and must not
 be accessible by group or other users. Losing this key makes the backup
-unrecoverable. Store it independently from both the backup and Heimdall Master
+unrecoverable. Store it independently from both the backup and Halro Master
 Key.
 
 The output path must be absolute, outside `storage.data_dir`, and must not
@@ -70,13 +70,13 @@ the same bucket, volume, snapshot, or failure domain as the archive.
 
 ## Repository backup helper
 
-For a source checkout, stop Heimdall and run:
+For a source checkout, stop Halro and run:
 
 ```bash
 make backup
 ```
 
-The target builds `bin/heimdall` when necessary and calls
+The target builds `bin/halro` when necessary and calls
 `scripts/backup.sh`. The helper:
 
 1. creates a 32-byte `backup.key` with mode `0600` if it is absent;
@@ -88,10 +88,10 @@ Override every location without editing the script:
 
 ```bash
 make backup \
-  CONFIG=/etc/heimdall/config.yaml \
+  CONFIG=/etc/halro/config.yaml \
   BACKUP_DIR=/secure-backups \
-  BACKUP_KEY_FILE=/secure-secrets/heimdall-backup.key \
-  BACKUP_NAME=heimdall-before-v1.1.0
+  BACKUP_KEY_FILE=/secure-secrets/halro-backup.key \
+  BACKUP_NAME=halro-before-v1.1.0
 ```
 
 Both the default key and archives are ignored by Git, but Git ignore is not
@@ -102,7 +102,7 @@ Backup Key is convenient but increases compromise scope; use a different
 
 ## Consistency boundary
 
-The offline data lock is the backup barrier. Inside it Heimdall:
+The offline data lock is the backup barrier. Inside it Halro:
 
 1. verifies the Audit checkpoint and records `backup.create`;
 2. creates a transactionally consistent bbolt snapshot;
@@ -153,8 +153,8 @@ Backup ID, manifest, binary version, result, and date as operational evidence.
 Use this sequence for every binary or container-image upgrade:
 
 1. retain the current binary/image digest and configuration;
-2. stop Heimdall and confirm that it released the data-directory lock;
-3. run `heimdall doctor --config ...` with the current binary;
+2. stop Halro and confirm that it released the data-directory lock;
+3. run `halro doctor --config ...` with the current binary;
 4. create and verify a new encrypted backup;
 5. run the new binary's `config check` against a copy of the configuration;
 6. start exactly one new instance against the unchanged persistent state;
@@ -171,24 +171,24 @@ child of it:
 
 ```yaml
 storage:
-  data_dir: /var/lib/heimdall-volume/data
-  metadata_file: heimdall.db
+  data_dir: /var/lib/halro-volume/data
+  metadata_file: halro.db
   master_key:
     mode: file
-    file: /run/secrets/heimdall-master.key
+    file: /run/secrets/halro-master.key
 ```
 
 ```yaml
 # Docker Compose fragment
 services:
-  heimdall:
+  halro:
     volumes:
-      - heimdall-state:/var/lib/heimdall-volume
-      - ./config.yaml:/etc/heimdall/config.yaml:ro
-      - ./secrets/master.key:/run/secrets/heimdall-master.key:ro
+      - halro-state:/var/lib/halro-volume
+      - ./config.yaml:/etc/halro/config.yaml:ro
+      - ./secrets/master.key:/run/secrets/halro-master.key:ro
 
 volumes:
-  heimdall-state:
+  halro-state:
 ```
 
 Do not set the volume mount point itself as `storage.data_dir`. Restore stages
@@ -197,9 +197,9 @@ directory cannot generally be renamed. The parent must be writable and the
 staging and live directories must be on the same filesystem.
 
 For Kubernetes, use a retained `ReadWriteOnce` PVC, mount it at
-`/var/lib/heimdall-volume`, and keep `replicas: 1` with `strategy.type:
+`/var/lib/halro-volume`, and keep `replicas: 1` with `strategy.type:
 Recreate`. Do not configure an HPA or allow two Pods to write the same data
-directory. `emptyDir` is suitable for `/tmp`, never for Heimdall state.
+directory. `emptyDir` is suitable for `/tmp`, never for Halro state.
 
 ```yaml
 spec:
@@ -209,14 +209,14 @@ spec:
   template:
     spec:
       containers:
-        - name: heimdall
+        - name: halro
           volumeMounts:
             - name: state
-              mountPath: /var/lib/heimdall-volume
+              mountPath: /var/lib/halro-volume
       volumes:
         - name: state
           persistentVolumeClaim:
-            claimName: heimdall-state
+            claimName: halro-state
 ```
 
 Kubernetes Secrets survive Pod replacement but are not disaster-recovery
@@ -239,18 +239,18 @@ Restore is offline and deliberately requires the verified Backup ID as a
 destructive confirmation:
 
 ```bash
-heimdall backup verify \
-  --file /secure-backups/heimdall-2026-07-31.hmbk \
+halro backup verify \
+  --file /secure-backups/halro-2026-07-31.hmbk \
   --key-file ./backup.key
 
-heimdall backup restore \
+halro backup restore \
   --config ./config.yaml \
-  --file /secure-backups/heimdall-2026-07-31.hmbk \
+  --file /secure-backups/halro-2026-07-31.hmbk \
   --key-file ./backup.key \
   --confirm-backup-id bkp_0123456789abcdef0123456789abcdef
 ```
 
-`heimdall restore` is an equivalent top-level alias with the same required
+`halro restore` is an equivalent top-level alias with the same required
 flags; `backup restore` remains available for command grouping compatibility.
 
 The server must be stopped. Restore verifies the encrypted archive and exact
@@ -268,7 +268,7 @@ because the Master Key is intentionally never packaged in a backup.
 After restore, run the following before accepting traffic:
 
 ```bash
-heimdall doctor --config ./config.yaml
+halro doctor --config ./config.yaml
 ```
 
 Then validate liveness, readiness, Audit, Admin authentication, Metrics,

@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/domain"
-	"github.com/akz142857/Heimdall/internal/provider"
+	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/provider"
 )
 
 func (a *Adapter) GenerateBedrockImage(ctx context.Context, call provider.ImageCall) (provider.ImageResult, error) {

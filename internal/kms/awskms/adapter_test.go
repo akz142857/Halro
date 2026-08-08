@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	corekms "github.com/akz142857/Heimdall/internal/kms"
+	corekms "github.com/akz142857/Halro/internal/kms"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsmiddleware "github.com/aws/aws-sdk-go-v2/aws/middleware"
 	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
@@ -218,7 +218,7 @@ func TestAdapterRejectsRequestsOutsideAllowlistBeforeAWSCall(t *testing.T) {
 	}{
 		{name: "unknown key", wrap: corekms.WrapRequest{KeyReference: strings.Replace(options.KeyARN, "1234", "9999", 1), Algorithm: options.Algorithm, Plaintext: payload, BindingContext: binding}, class: corekms.ErrorConfigInvalid},
 		{name: "unknown algorithm", wrap: corekms.WrapRequest{KeyReference: options.KeyARN, Algorithm: "RSAES_OAEP_SHA_256", Plaintext: payload, BindingContext: binding}, class: corekms.ErrorConfigInvalid},
-		{name: "incomplete context", wrap: corekms.WrapRequest{KeyReference: options.KeyARN, Algorithm: options.Algorithm, Plaintext: payload, BindingContext: corekms.BindingContext{"heimdall.context_version": "1"}}, class: corekms.ErrorConfigInvalid},
+		{name: "incomplete context", wrap: corekms.WrapRequest{KeyReference: options.KeyARN, Algorithm: options.Algorithm, Plaintext: payload, BindingContext: corekms.BindingContext{"halro.context_version": "1"}}, class: corekms.ErrorConfigInvalid},
 		{name: "native ciphertext limit", unwrap: corekms.UnwrapRequest{KeyReference: options.KeyARN, Algorithm: options.Algorithm, Ciphertext: make([]byte, MaxAWSCiphertextBytes+1), BindingContext: binding}, class: corekms.ErrorCiphertextInvalid},
 	}
 	for _, test := range tests {

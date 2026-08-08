@@ -8,8 +8,8 @@ usage: deploy/observability/smoke.sh
 Runs an isolated local Prometheus/Alertmanager Core runtime smoke. It requires
 docker compose, curl, jq, grep, and python3. The default
 loopback ports are 9090, 9091, 9093, and 19094; override them with
-HEIMDALL_SMOKE_METRICS_PORT, HEIMDALL_SMOKE_PROMETHEUS_PORT,
-HEIMDALL_SMOKE_ALERTMANAGER_PORT, and HEIMDALL_SMOKE_WEBHOOK_PORT.
+HALRO_SMOKE_METRICS_PORT, HALRO_SMOKE_PROMETHEUS_PORT,
+HALRO_SMOKE_ALERTMANAGER_PORT, and HALRO_SMOKE_WEBHOOK_PORT.
 EOF
 }
 
@@ -33,19 +33,19 @@ docker compose version >/dev/null
 root=$(unset CDPATH; cd -- "$(dirname -- "$0")/../.." && pwd)
 observability="$root/deploy/observability"
 temporary=$(mktemp -d)
-project="heimdall-observability-smoke-$$"
+project="halro-observability-smoke-$$"
 override="$temporary/compose.override.yaml"
 events="$temporary/webhook-events.jsonl"
 mock_log="$temporary/mock.log"
 secrets="$temporary/secrets"
 runtime_prometheus="$temporary/prometheus"
 runtime_alertmanager="$temporary/alertmanager"
-smoke_token=heimdall-observability-smoke-token
+smoke_token=halro-observability-smoke-token
 authorization_scheme=Bearer
-metrics_port=${HEIMDALL_SMOKE_METRICS_PORT:-9090}
-prometheus_port=${HEIMDALL_SMOKE_PROMETHEUS_PORT:-9091}
-alertmanager_port=${HEIMDALL_SMOKE_ALERTMANAGER_PORT:-9093}
-webhook_port=${HEIMDALL_SMOKE_WEBHOOK_PORT:-19094}
+metrics_port=${HALRO_SMOKE_METRICS_PORT:-9090}
+prometheus_port=${HALRO_SMOKE_PROMETHEUS_PORT:-9091}
+alertmanager_port=${HALRO_SMOKE_ALERTMANAGER_PORT:-9093}
+webhook_port=${HALRO_SMOKE_WEBHOOK_PORT:-19094}
 mock_pid=
 compose_started=false
 
@@ -85,7 +85,7 @@ cleanup() {
 trap cleanup EXIT HUP INT TERM
 
 # The shipped Core uses host networking and fixed loopback listeners. Refuse
-# to disturb an existing Heimdall or monitoring stack.
+# to disturb an existing Halro or monitoring stack.
 python3 - "$metrics_port" "$prometheus_port" "$alertmanager_port" "$webhook_port" <<'PY'
 import socket
 import sys
@@ -177,7 +177,7 @@ compose config --format json | jq -e --arg source "$secrets" '
     .volumes | any(.target == "/run/secrets" and .source == $source and .read_only == true)
   )' >/dev/null
 
-# One process provides an authenticated Heimdall Metrics endpoint and records
+# One process provides an authenticated Halro Metrics endpoint and records
 # real Alertmanager webhook payloads. It binds loopback only.
 python3 - "$events" "$smoke_token" "$metrics_port" "$webhook_port" <<'PY' >"$mock_log" 2>&1 &
 import http.server
@@ -189,7 +189,7 @@ event_path = sys.argv[1]
 token = "Bearer " + sys.argv[2]
 metrics_port = int(sys.argv[3])
 webhook_port = int(sys.argv[4])
-metrics = b"""# HELP heimdall_requests_total Requests handled by the smoke target.\n# TYPE heimdall_requests_total counter\nheimdall_requests_total{status=\"success\"} 1\n"""
+metrics = b"""# HELP halro_requests_total Requests handled by the smoke target.\n# TYPE halro_requests_total counter\nhalro_requests_total{status=\"success\"} 1\n"""
 
 class MetricsHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
@@ -333,7 +333,7 @@ attempts=60
 while [ "$attempts" -gt 0 ]; do
   targets=$(curl --fail --silent --show-error --max-time 3 "http://127.0.0.1:$prometheus_port/api/v1/targets")
   if printf '%s' "$targets" | jq -e '
-    [.data.activeTargets[] | select(.labels.job == "heimdall" or .labels.job == "prometheus" or .labels.job == "alertmanager")] as $core |
+    [.data.activeTargets[] | select(.labels.job == "halro" or .labels.job == "prometheus" or .labels.job == "alertmanager")] as $core |
     ($core | length) == 3 and ($core | all(.health == "up"))' >/dev/null; then
     break
   fi
@@ -367,10 +367,10 @@ now = datetime.datetime.now(datetime.timezone.utc)
 ends = now + datetime.timedelta(seconds=20)
 print(json.dumps([{
     "labels": {
-        "alertname": "HeimdallSmokeLifecycle",
+        "alertname": "HalroSmokeLifecycle",
         "environment": environment,
         "cluster": "smoke",
-        "source": "heimdall-core-runtime-smoke",
+        "source": "halro-core-runtime-smoke",
     },
     "annotations": {"summary": "Core runtime smoke lifecycle"},
     "startsAt": (now - datetime.timedelta(seconds=1)).isoformat().replace("+00:00", "Z"),
@@ -380,9 +380,9 @@ PY
 curl --fail --silent --show-error --max-time 5 \
   -H 'Content-Type: application/json' --data-binary @"$temporary/alert.json" \
   "http://127.0.0.1:$alertmanager_port/api/v2/alerts" >/dev/null
-wait_alert_state true "$lifecycle_environment" HeimdallSmokeLifecycle 20
+wait_alert_state true "$lifecycle_environment" HalroSmokeLifecycle 20
 # The bounded endsAt drives resolution without mutating the repository rule
 # set or relying on an Alertmanager deletion API.
-wait_alert_state false "$lifecycle_environment" HeimdallSmokeLifecycle 60
+wait_alert_state false "$lifecycle_environment" HalroSmokeLifecycle 60
 
 echo "Core runtime smoke passed: targets, rules, Watchdog delivery, and Alertmanager lifecycle verified"

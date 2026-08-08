@@ -12,10 +12,10 @@ The reproducible harness is `tools/m11/aws-sdk-spike/run.sh`. It creates two
 temporary copies of the same source tree and does not change the repository's
 production `go.mod`, `go.sum`, or source:
 
-- core: existing `heimdall` artifact;
+- core: existing `halro` artifact;
 - AWS-linked: the same artifact plus official AWS SDK config and KMS packages;
-- Option A publishes only the AWS-linked artifact as `heimdall`;
-- Option B publishes core as `heimdall` and AWS-linked as `heimdall-aws`.
+- Option A publishes only the AWS-linked artifact as `halro`;
+- Option B publishes core as `halro` and AWS-linked as `halro-aws`.
 
 Reproduce with:
 
@@ -42,7 +42,7 @@ measurement. The production Adapter is intentionally absent from this spike.
 The official SDK documentation confirms that `config.LoadDefaultConfig` owns
 the supported default credential chain, including web identity, ECS task role
 and EC2 instance role, and that the SDK owns credential caching/rotation and
-SigV4. Heimdall therefore does not implement or persist static AWS credentials.
+SigV4. Halro therefore does not implement or persist static AWS credentials.
 
 References:
 
@@ -113,7 +113,7 @@ The selected implementation path is deliberately small:
 5. File mode never calls steps 2–4.
 
 No access-key fields, credential files, SigV4 implementation or token-refresh
-code are added to Heimdall. Real identity and KMS calls remain M11-03B evidence.
+code are added to Halro. Real identity and KMS calls remain M11-03B evidence.
 
 ## Release-cost comparison
 
@@ -139,7 +139,7 @@ the release-risk reduction outweighs the modest File-only artifact increase.
 Accept Option A:
 
 - one Go module;
-- one `heimdall` binary and production container;
+- one `halro` binary and production container;
 - the official AWS config and KMS modules are direct dependencies after
   M11-03B adds the production Adapter;
 - File mode selects its backend before any AWS configuration or identity load;

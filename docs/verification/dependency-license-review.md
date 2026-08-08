@@ -2,7 +2,7 @@
 
 Date: 2026-07-31
 
-Heimdall is distributed under Apache-2.0. The source tree includes the exact
+Halro is distributed under Apache-2.0. The source tree includes the exact
 project license in `LICENSE`, required attribution in `NOTICE`, and the runtime
 dependency inventory in `THIRD_PARTY_NOTICES.md`. Release archives and the
 container image carry these files together with a versioned SPDX SBOM.

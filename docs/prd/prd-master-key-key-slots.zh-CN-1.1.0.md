@@ -1,4 +1,4 @@
-# Heimdall Master Key Key Slots PRD 1.1.0：未完成项收口
+# Halro Master Key Key Slots PRD 1.1.0：未完成项收口
 
 状态：Implementation complete — 外部生产验收仍 blocked
 
@@ -86,7 +86,7 @@
 - 旧 wrapped ciphertext 和 Key reference 无法按策略清理；
 - `retiring` Slot 长期累积；
 - Runbook、Audit 和实际状态不一致；
-- 无法证明旧 KMS Key/Grant 已退出 Heimdall 信任集合；
+- 无法证明旧 KMS Key/Grant 已退出 Halro 信任集合；
 - 多次 rewrap 最终可能触达 descriptor Slot 数量上限。
 
 ### 4.2 CLI 契约
@@ -94,8 +94,8 @@
 新增离线命令：
 
 ```bash
-heimdall key slot revoke \
-  --config /etc/heimdall/config.yaml \
+halro key slot revoke \
+  --config /etc/halro/config.yaml \
   --slot-id slot_aws_primary_2026q2 \
   --expected-descriptor-revision 12 \
   --expected-slot-revision 3 \
@@ -150,7 +150,7 @@ reason_code=retirement_window_completed|incident_retirement
 
 禁止记录完整 ARN、账号、ciphertext、payload、Workload Identity token 或 Master Key fingerprint。
 
-现有 `heimdall_kms_slot_state{purpose,state}` 和 pending/retiring 告警必须能反映 revoke 后状态；不得使用 Slot ID 作为 Metrics label。
+现有 `halro_kms_slot_state{purpose,state}` 和 pending/retiring 告警必须能反映 revoke 后状态；不得使用 Slot ID 作为 Metrics label。
 
 ## 5. P0-2：Recovery 契约收敛
 
@@ -170,7 +170,7 @@ reason_code=retirement_window_completed|incident_retirement
 Recovery 标准流程为：
 
 ```text
-停止 Heimdall
+停止 Halro
   → 临时启用受控 Recovery 身份
   → key recover 验证 Recovery/Vault/Audit
   → key rewrap --purpose primary 创建并验证新 Primary

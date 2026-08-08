@@ -14,8 +14,8 @@ func DeriveAuditHMACKey(masterKey []byte) ([]byte, error) {
 	key, err := hkdf.Key(
 		sha256.New,
 		masterKey,
-		[]byte("heimdall:audit:v1"),
-		"heimdall:audit-hmac-key:v1",
+		[]byte("halro:audit:v1"),
+		"halro:audit-hmac-key:v1",
 		32,
 	)
 	if err != nil {

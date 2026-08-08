@@ -3,7 +3,7 @@ package app
 import (
 	"testing"
 
-	"github.com/akz142857/Heimdall/internal/domain"
+	"github.com/akz142857/Halro/internal/domain"
 )
 
 // The empty role was fixed in the data, not in the checks. Nothing may start

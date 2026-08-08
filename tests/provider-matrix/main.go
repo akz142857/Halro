@@ -126,7 +126,7 @@ func profileValues(item profile) (map[string]string, []string) {
 	values := make(map[string]string, len(item.Required))
 	missing := make([]string, 0)
 	for _, suffix := range item.Required {
-		name := "HEIMDALL_MATRIX_" + item.Prefix + "_" + suffix
+		name := "HALRO_MATRIX_" + item.Prefix + "_" + suffix
 		value := os.Getenv(name)
 		if value == "" {
 			missing = append(missing, name)
@@ -140,21 +140,21 @@ func profileValues(item profile) (map[string]string, []string) {
 func smokeEnvironment(item profile, values map[string]string) []string {
 	environment := make([]string, 0, len(os.Environ())+8)
 	for _, entry := range os.Environ() {
-		if strings.HasPrefix(entry, "HEIMDALL_MATRIX_") || strings.HasPrefix(entry, "HEIMDALL_SMOKE_") || strings.HasPrefix(entry, "HEIMDALL_REAL_PROVIDER_SMOKE=") {
+		if strings.HasPrefix(entry, "HALRO_MATRIX_") || strings.HasPrefix(entry, "HALRO_SMOKE_") || strings.HasPrefix(entry, "HALRO_REAL_PROVIDER_SMOKE=") {
 			continue
 		}
 		environment = append(environment, entry)
 	}
 	environment = append(environment,
-		"HEIMDALL_REAL_PROVIDER_SMOKE=1",
-		"HEIMDALL_SMOKE_PROFILE="+item.Name,
-		"HEIMDALL_SMOKE_BASE_URL="+values["BASE_URL"],
-		"HEIMDALL_SMOKE_API_KEY="+values["API_KEY"],
-		"HEIMDALL_SMOKE_MODEL="+values["MODEL"],
+		"HALRO_REAL_PROVIDER_SMOKE=1",
+		"HALRO_SMOKE_PROFILE="+item.Name,
+		"HALRO_SMOKE_BASE_URL="+values["BASE_URL"],
+		"HALRO_SMOKE_API_KEY="+values["API_KEY"],
+		"HALRO_SMOKE_MODEL="+values["MODEL"],
 	)
 	for _, suffix := range []string{"EMBEDDING_MODEL", "API_VERSION"} {
 		if value := values[suffix]; value != "" {
-			environment = append(environment, "HEIMDALL_SMOKE_"+suffix+"="+value)
+			environment = append(environment, "HALRO_SMOKE_"+suffix+"="+value)
 		}
 	}
 	return environment

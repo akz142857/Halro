@@ -17,24 +17,24 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/anthropicapi"
-	"github.com/akz142857/Heimdall/internal/auth"
-	"github.com/akz142857/Heimdall/internal/budget"
-	"github.com/akz142857/Heimdall/internal/circuit"
-	"github.com/akz142857/Heimdall/internal/compatibility"
-	anthropicwire "github.com/akz142857/Heimdall/internal/compatibility/anthropic"
-	openaiwire "github.com/akz142857/Heimdall/internal/compatibility/openai"
-	"github.com/akz142857/Heimdall/internal/contentscan"
-	"github.com/akz142857/Heimdall/internal/domain"
-	"github.com/akz142857/Heimdall/internal/id"
-	"github.com/akz142857/Heimdall/internal/ledger"
-	"github.com/akz142857/Heimdall/internal/limiter"
-	"github.com/akz142857/Heimdall/internal/openaiapi"
-	"github.com/akz142857/Heimdall/internal/provider"
-	"github.com/akz142857/Heimdall/internal/redaction"
-	"github.com/akz142857/Heimdall/internal/requestmeta"
-	"github.com/akz142857/Heimdall/internal/semantic"
-	"github.com/akz142857/Heimdall/internal/tokenguard"
+	"github.com/akz142857/Halro/internal/anthropicapi"
+	"github.com/akz142857/Halro/internal/auth"
+	"github.com/akz142857/Halro/internal/budget"
+	"github.com/akz142857/Halro/internal/circuit"
+	"github.com/akz142857/Halro/internal/compatibility"
+	anthropicwire "github.com/akz142857/Halro/internal/compatibility/anthropic"
+	openaiwire "github.com/akz142857/Halro/internal/compatibility/openai"
+	"github.com/akz142857/Halro/internal/contentscan"
+	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/id"
+	"github.com/akz142857/Halro/internal/ledger"
+	"github.com/akz142857/Halro/internal/limiter"
+	"github.com/akz142857/Halro/internal/openaiapi"
+	"github.com/akz142857/Halro/internal/provider"
+	"github.com/akz142857/Halro/internal/redaction"
+	"github.com/akz142857/Halro/internal/requestmeta"
+	"github.com/akz142857/Halro/internal/semantic"
+	"github.com/akz142857/Halro/internal/tokenguard"
 )
 
 const (
@@ -238,7 +238,7 @@ func (s *Service) beginRequestRun(
 func (run *requestRun) close() {
 	// A request that was accepted into the ledger but never finalized stays
 	// "in flight" forever: the usage aggregate keeps its entry, the entry is
-	// checkpointed into bbolt, and heimdall_active_requests never comes back
+	// checkpointed into bbolt, and halro_active_requests never comes back
 	// down. Rejections that never reach a provider — budget exhausted, breaker
 	// open, concurrency full — are the paths most likely to return before any
 	// caller thinks to finalize, and they are also the cheapest to trigger in

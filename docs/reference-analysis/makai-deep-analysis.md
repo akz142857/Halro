@@ -4,13 +4,13 @@
 > 上游仓库：`https://github.com/lsm/makai.git`
 > 分析基线：`f27e940db21c9f604f3b966a8d9e3e8f131baa55`
 > 分析日期：2026-07-31
-> 分析目的：评估 Makai 对 Heimdall 轻量、自托管 LLM Gateway V1 的参考价值。
+> 分析目的：评估 Makai 对 Halro 轻量、自托管 LLM Gateway V1 的参考价值。
 
 ## 1. 结论摘要
 
 Makai 是 Zig-first 的流式 AI Runtime，并配有 TypeScript SDK。它的核心不是 HTTP Gateway，而是多 Provider 流式抽象、Provider/Auth/Agent/Tool 分布式协议、stdio/WebSocket 等传输，以及本地 Agent/TUI。
 
-它对 Heimdall 的最大价值集中在 Gateway Core 的下半部分：
+它对 Halro 的最大价值集中在 Gateway Core 的下半部分：
 
 1. Provider Adapter 统一接口；
 2. Provider 能力差异建模；
@@ -21,7 +21,7 @@ Makai 是 Zig-first 的流式 AI Runtime，并配有 TypeScript SDK。它的核�
 7. 凭证解析、OAuth 和安全落盘；
 8. 单二进制构建与跨平台发布。
 
-但 Makai 不能直接作为 Heimdall 基座，原因是：
+但 Makai 不能直接作为 Halro 基座，原因是：
 
 1. 它没有 OpenAI-compatible HTTP Server；
 2. 没有 Project、API Key、预算、RPM/TPM/并发配额；
@@ -31,7 +31,7 @@ Makai 是 Zig-first 的流式 AI Runtime，并配有 TypeScript SDK。它的核�
 6. Provider Retry 代码存在重复，若直接移植会放大维护成本；
 7. 项目版本仍为 `0.0.1`，部分真实 Provider E2E 在 CI 中被禁用或允许失败。
 
-综合判断：Makai 是优秀的 Provider/Streaming 实现样本，但不是成品 Gateway。Heimdall 应借鉴其边界和协议语义，用 Go 重新实现精简版本，不建议把 Zig Runtime 作为子进程嵌入。
+综合判断：Makai 是优秀的 Provider/Streaming 实现样本，但不是成品 Gateway。Halro 应借鉴其边界和协议语义，用 Go 重新实现精简版本，不建议把 Zig Runtime 作为子进程嵌入。
 
 ## 2. 项目画像
 
@@ -101,7 +101,7 @@ Makai 强调：
 - Provider 与 Agent 解耦；
 - Auth 生命周期单独建模。
 
-这种边界清晰度值得 Heimdall 学习，但 Heimdall 的外部协议已经确定为 HTTP/OpenAI-compatible，不需要复制 Makai 的四套分布式协议。
+这种边界清晰度值得 Halro 学习，但 Halro 的外部协议已经确定为 HTTP/OpenAI-compatible，不需要复制 Makai 的四套分布式协议。
 
 ## 4. Provider 抽象
 
@@ -138,11 +138,11 @@ optional auth-failure detector
 风险：
 
 - 相同 `api` 注册会静默覆盖旧实现；
-- Registry 按 API 类型索引，不直接表达 Heimdall 的 Provider Instance；
+- Registry 按 API 类型索引，不直接表达 Halro 的 Provider Instance；
 - 健康状态、权重、超时和熔断状态不在 Registry；
 - 没有显式能力验证。
 
-Heimdall 建议使用两层模型：
+Halro 建议使用两层模型：
 
 ```text
 Adapter Type:
@@ -173,9 +173,9 @@ Adapter 是代码级单例，Provider Instance 是配置和运行状态，不能
 
 并通过 URL 判断 OpenAI Native、Anthropic、Mistral、Groq、Cerebras、OpenRouter、Qwen、DeepSeek、Google、Bedrock、Azure、Ollama。
 
-这是 Makai 最值得 Heimdall 借鉴的设计之一。OpenAI-compatible 并不意味着语义完全兼容；同一请求需要按 Provider/Model 能力进行预转换或拒绝。
+这是 Makai 最值得 Halro 借鉴的设计之一。OpenAI-compatible 并不意味着语义完全兼容；同一请求需要按 Provider/Model 能力进行预转换或拒绝。
 
-Heimdall 可精简为：
+Halro 可精简为：
 
 ```go
 type Capabilities struct {
@@ -207,7 +207,7 @@ V1 不需要覆盖 Agent 特有的 thinking/tool 细节，但必须避免仅凭 
 - Stop Reason；
 - Provider 特殊 ID。
 
-Makai 将这些差异留在 Provider 文件中是正确的。Heimdall 应保持统一内部 DTO：
+Makai 将这些差异留在 Provider 文件中是正确的。Halro 应保持统一内部 DTO：
 
 ```text
 OpenAI Request
@@ -238,7 +238,7 @@ Provider Stream
 
 统一事件模型使调用方无需理解不同 Provider 的 SSE 格式。
 
-对 Heimdall，V1 可以更小：
+对 Halro，V1 可以更小：
 
 ```text
 ResponseStart
@@ -278,7 +278,7 @@ Makai 的 `EventStream` 使用固定环形缓冲、原子 head/tail、published 
 - 错误使用可能 double-free、use-after-free 或泄漏；
 - 对 Go 实现没有必要复制该低层复杂度。
 
-Heimdall 使用 Go channel 即可，但应保留这些语义：
+Halro 使用 Go channel 即可，但应保留这些语义：
 
 - channel 有界；
 - 不允许丢失文本 delta；
@@ -303,7 +303,7 @@ Makai Provider 实现包含：
 
 这是很有价值的工程实现样本。
 
-但目前 Retry 逻辑在 Anthropic、Google、OpenAI 等 Adapter 中有明显重复。Heimdall 应将重试分成两层：
+但目前 Retry 逻辑在 Anthropic、Google、OpenAI 等 Adapter 中有明显重复。Halro 应将重试分成两层：
 
 ```text
 HTTP Attempt Policy
@@ -319,7 +319,7 @@ Route Fallback Policy
   └─ 总 deadline / attempt budget
 ```
 
-特别要注意：流式响应一旦已经向客户端发出 delta，通常不能透明 fallback，否则会产生重复或拼接内容。Makai 的 Provider Retry 不等于 Heimdall 的 Route Fallback。
+特别要注意：流式响应一旦已经向客户端发出 delta，通常不能透明 fallback，否则会产生重复或拼接内容。Makai 的 Provider Retry 不等于 Halro 的 Route Fallback。
 
 ## 7. 模型标识与发现
 
@@ -340,14 +340,14 @@ provider_id/api@model_id
 - cache age；
 - resolve/list。
 
-对 Heimdall 的启示：
+对 Halro 的启示：
 
 - 内部模型标识应稳定、无歧义；
 - 外部 Alias 与内部目标分开；
 - 用户传入 `chat`，路由后应记录原始模型与 resolved model；
 - Admin API 返回稳定 route/provider ID，不应依赖 display name。
 
-建议 Heimdall 内部目标结构：
+建议 Halro 内部目标结构：
 
 ```text
 Target {
@@ -357,7 +357,7 @@ Target {
 }
 ```
 
-而不是把三者编码成业务字符串后到处解析。Makai 的 model_ref 很适合跨进程协议，Heimdall 单进程内使用结构体更简单。
+而不是把三者编码成业务字符串后到处解析。Makai 的 model_ref 很适合跨进程协议，Halro 单进程内使用结构体更简单。
 
 ## 8. Auth 与 Secret
 
@@ -372,7 +372,7 @@ Target {
 
 Auth 与 Provider 调用解耦，Provider Protocol 使用结构化错误码驱动 SDK 登录/重试。
 
-这种错误分类值得借鉴。Heimdall 的 Provider 错误至少应归一化为：
+这种错误分类值得借鉴。Halro 的 Provider 错误至少应归一化为：
 
 - auth；
 - permission；
@@ -401,10 +401,10 @@ Makai 在 macOS 优先使用 Keychain，其他情况或不可用时使用 `~/.ma
 
 这是本地 CLI 凭证管理的成熟实现。
 
-但它与 Heimdall 服务端 Secret 存储需求不同：
+但它与 Halro 服务端 Secret 存储需求不同：
 
 - JSON fallback 中保存的是明文 token/API Key，只靠 0600；
-- Heimdall PRD 要求 AES-GCM 密文；
+- Halro PRD 要求 AES-GCM 密文；
 - Server 需要 master key、轮换、备份和多 Provider Secret 管理；
 - macOS Keychain 不适合 Linux server 的通用部署模型。
 
@@ -434,7 +434,7 @@ Makai 的 `Usage` 支持：
 - 没有失败请求成本口径；
 - 没有聚合和查询。
 
-Heimdall 可直接借鉴统一 Usage 结构，但价格表应独立，最终 UsageRecord 应同时记录：
+Halro 可直接借鉴统一 Usage 结构，但价格表应独立，最终 UsageRecord 应同时记录：
 
 - Provider 报告 token；
 - Gateway 估算 token（若 Provider 缺失）；
@@ -459,7 +459,7 @@ Heimdall 可直接借鉴统一 Usage 结构，但价格表应独立，最终 Usa
 
 但不能据此判断 Bedrock 已受支持。
 
-这对 Heimdall 很重要：Bedrock 是 PRD 的核心 Provider，不能从 Makai 直接移植成品。需要自行实现并重点验证：
+这对 Halro 很重要：Bedrock 是 PRD 的核心 Provider，不能从 Makai 直接移植成品。需要自行实现并重点验证：
 
 - AWS Credential Chain；
 - SigV4；
@@ -486,7 +486,7 @@ Makai 抽象了：
 - per-stream sequence；
 - multi-session multiplexing。
 
-这对分布式 Runtime 很合理，但 Heimdall V1 是单进程 HTTP Gateway，不需要将内部调用序列化为 Envelope。
+这对分布式 Runtime 很合理，但 Halro V1 是单进程 HTTP Gateway，不需要将内部调用序列化为 Envelope。
 
 建议仅吸收：
 
@@ -511,9 +511,9 @@ Makai 抽象了：
 
 Makai 包含 Agent Loop、Tool Protocol、本地 Tool Runtime、Shell/File/Edit/Search/Workspace、MCP Bridge 和 TUI。
 
-这些实现本身较完整，但与 Heimdall V1 的“不做 Agent Trace、插件、工作流、MCP Server”直接冲突。
+这些实现本身较完整，但与 Halro V1 的“不做 Agent Trace、插件、工作流、MCP Server”直接冲突。
 
-唯一应吸收的思想是：Provider 调用能力与 Agent 编排能力是不同层。Heimdall 应保持 Gateway 中立，不应让 Agent/Tool 类型污染基础 Chat/Embeddings 路径。
+唯一应吸收的思想是：Provider 调用能力与 Agent 编排能力是不同层。Halro 应保持 Gateway 中立，不应让 Agent/Tool 类型污染基础 Chat/Embeddings 路径。
 
 ## 13. CI、测试与成熟度
 
@@ -547,9 +547,9 @@ Makai CI 有：
 
 因此 Makai 适合作为设计与源码样本，不应被当作已验证的生产 Gateway 依赖。
 
-## 14. 与 Heimdall PRD 的逐项适配
+## 14. 与 Halro PRD 的逐项适配
 
-| Heimdall 能力 | Makai 参考度 | 判断 |
+| Halro 能力 | Makai 参考度 | 判断 |
 |---|---:|---|
 | Provider Adapter | 高 | 最强参考点 |
 | Provider 管理 CRUD | 低 | Registry 不是持久化 Admin 管理 |
@@ -612,7 +612,7 @@ Makai CI 有：
 - 静默覆盖 Registry 项；
 - 明文 `auth.json` 作为 Server Secret Store。
 
-## 17. 建议的 Heimdall Provider 接口
+## 17. 建议的 Halro Provider 接口
 
 结合 Makai 的优点和 Go 的语言特性，建议接口近似：
 
@@ -702,7 +702,7 @@ routes:
 | 代码直接复用适合度 | 2/5 | 语言不同，且引入子进程不划算 |
 | 设计思想复用适合度 | 5/5 | 很适合转译为 Go Adapter 设计 |
 
-最终建议：把 Makai 当作 Heimdall 的“Provider Adapter 与 Streaming 参考实现”，不要把它当作部署依赖或完整 Gateway。
+最终建议：把 Makai 当作 Halro 的“Provider Adapter 与 Streaming 参考实现”，不要把它当作部署依赖或完整 Gateway。
 
 ## 20. 主要源码依据
 
@@ -736,7 +736,7 @@ routes:
 
 根 `package.json` 声明 TypeScript 包使用 ISC，但本地仓库顶层未发现独立 `LICENSE` 文件。Zig 源码的适用许可证需要在直接复用前向上游确认，不能仅依据 npm package metadata 推定整个仓库均可按 ISC 复制。
 
-建议 Heimdall 仅借鉴设计并独立实现；若要复制任何源文件或较大代码片段，应先完成许可证确认和 NOTICE 处理。
+建议 Halro 仅借鉴设计并独立实现；若要复制任何源文件或较大代码片段，应先完成许可证确认和 NOTICE 处理。
 
 ## 22. 分析限制
 

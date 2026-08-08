@@ -1,9 +1,9 @@
-# Heimdall v1.0.0 release notes
+# Halro v1.0.0 release notes
 
 Status: release-ready document; publish with the final `v1.0.0` tag only after
 the RC, real-Provider, and 24-hour soak gates pass.
 
-Heimdall v1.0.0 is the first release of a single-binary, self-hosted LLM
+Halro v1.0.0 is the first release of a single-binary, self-hosted LLM
 Gateway focused on unified OpenAI-compatible access, secure Provider credential
 custody, internal Gateway Key distribution, usage controls, anomaly protection,
 and sensitive-data redaction. Runtime deployment requires one binary, one YAML
@@ -86,7 +86,7 @@ credentials, IMDS, or the default credential chain.
 - Admin accounts can bind multiple independent standard TOTP authenticators.
   Two-stage login, encrypted seeds, replay protection, one-time recovery codes,
   optional/required policy, and audited offline MFA reset are included.
-- `heimdall key rotate --new-key-file ...` performs offline per-Credential COW
+- `halro key rotate --new-key-file ...` performs offline per-Credential COW
   re-encryption with a persistent versioned keyring, atomic Master Key
   publication, Admin-session invalidation, stable protected Audit HMAC key, and
   a compacted crash bridge. Rerun the same command and replacement key after an
@@ -128,14 +128,14 @@ These values are regression evidence, not cross-host guarantees. See
 1. Download the binary for Linux or macOS on amd64/arm64.
 2. Verify `checksums.txt`, the SPDX SBOM, and Sigstore bundles.
 3. Copy and validate `configs/config.example.yaml`.
-4. Run `heimdall init`, bootstrap the local Admin and first Provider/Project,
-   then start `heimdall serve`.
+4. Run `halro init`, bootstrap the local Admin and first Provider/Project,
+   then start `halro serve`.
 
 An optional non-root distroless container is attached as
-`heimdall-container.tar.gz`; verify it like every other release blob, then load
-it with `gzip -dc heimdall-container.tar.gz | docker load`.
+`halro-container.tar.gz`; verify it like every other release blob, then load
+it with `gzip -dc halro-container.tar.gz | docker load`.
 
-For upgrades, stop Heimdall, create and verify an encrypted backup, preserve the
+For upgrades, stop Halro, create and verify an encrypted backup, preserve the
 current binary/config/Master Key, run `config check`, and start the new binary.
 Do not downgrade a migrated data directory in place. Follow
 `docs/guides/operator-guide.md`, `docs/guides/backup-restore.md`, and `docs/guides/releasing.md`.

@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-CHECK_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/heimdall-kms-boundaries.XXXXXX")
+CHECK_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/halro-kms-boundaries.XXXXXX")
 cleanup() {
 	rm -rf "$CHECK_ROOT"
 }
@@ -18,7 +18,7 @@ done
 
 output="$CHECK_ROOT/aws-adapter-dependencies.txt"
 go list -deps ./internal/kms/awskms >"$output"
-if grep -E 'go\.etcd\.io/bbolt|github\.com/akz142857/Heimdall/internal/(app|audit|backup|domain|gateway|store|vault)' "$output"; then
+if grep -E 'go\.etcd\.io/bbolt|github\.com/akz142857/Halro/internal/(app|audit|backup|domain|gateway|store|vault)' "$output"; then
 	echo "AWS KMS adapter crossed persistence, Vault, Admin, Audit, or request-path boundary" >&2
 	exit 1
 fi

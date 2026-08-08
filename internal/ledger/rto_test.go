@@ -13,8 +13,8 @@ import (
 )
 
 func TestTenGiBWALRecoveryProfile(t *testing.T) {
-	if os.Getenv("HEIMDALL_10GIB_WAL_RTO") != "1" {
-		t.Skip("set HEIMDALL_10GIB_WAL_RTO=1 for the destructive-size recovery profile")
+	if os.Getenv("HALRO_10GIB_WAL_RTO") != "1" {
+		t.Skip("set HALRO_10GIB_WAL_RTO=1 for the destructive-size recovery profile")
 	}
 	const targetBytes int64 = 10 << 30
 	root := t.TempDir()

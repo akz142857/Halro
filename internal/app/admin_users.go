@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/adminauth"
-	"github.com/akz142857/Heimdall/internal/domain"
+	"github.com/akz142857/Halro/internal/adminauth"
+	"github.com/akz142857/Halro/internal/domain"
 	"github.com/go-chi/chi/v5"
 )
 

@@ -272,7 +272,7 @@ describe("deployment release workflow", () => {
 
     expect(screen.getByText("请核对价格")).toBeVisible();
     await waitFor(() => expect(screen.getByText("请核对价格").closest("section")).toHaveFocus());
-    expect(screen.getByText("管理员声明 · Heimdall 未验证 · 未归档")).toBeVisible();
+    expect(screen.getByText("管理员声明 · Halro 未验证 · 未归档")).toBeVisible();
     expect(screen.getByLabelText("当前密码")).toBeVisible();
     fireEvent.change(screen.getByLabelText("当前密码"), { target: { value: "admin-password" } });
     fireEvent.click(screen.getByRole("button", { name: "确认并创建价格版本" }));

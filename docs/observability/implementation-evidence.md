@@ -20,7 +20,7 @@ not mark target-environment Phase D gates as passed.
 | Core rules | repository Prometheus rules | pinned `promtool` validates 8 recording and 16 alert rules plus semantic fixtures |
 | Local topology | Prometheus/Alertmanager Compose plus Linux and macOS Secret mounts | service inventory is exactly Prometheus and Alertmanager; no management ports are published |
 | Core runtime smoke asset | `deploy/observability/smoke.sh` | starts authenticated mock Metrics/webhook endpoints and verifies targets, rules, `Watchdog` firing delivery and Alertmanager firing/resolved state lifecycle; real Contact Point delivery remains Phase D evidence |
-| Independent probe artifact | `cmd/heimdall-deadman`, `internal/deadman`, hardened systemd unit, schema and example configuration | behavior tests cover authenticated Prometheus and Alertmanager down/up transitions, durable heartbeat/retry state, recovery, freshness and invalid configuration |
+| Independent probe artifact | `cmd/halro-deadman`, `internal/deadman`, hardened systemd unit, schema and example configuration | behavior tests cover authenticated Prometheus and Alertmanager down/up transitions, durable heartbeat/retry state, recovery, freshness and invalid configuration |
 | Supply chain | digest-pinned images and CI SBOM job | CI emits SPDX JSON for Prometheus, Alertmanager and the dead-man image |
 
 ## Local verification commands
@@ -30,11 +30,11 @@ go test ./...
 go test -race ./internal/bearercred ./internal/app ./internal/usage ./internal/provider
 go test -race ./internal/deadman
 go vet ./...
-go build ./cmd/heimdall ./cmd/heimdall-deadman
+go build ./cmd/halro ./cmd/halro-deadman
 ./deploy/observability/validate.sh
 ./deploy/observability/smoke.sh
 docker compose -f deploy/observability/compose.example.yaml config --quiet
-go run ./cmd/heimdall-deadman -config deploy/observability/external-probe/config.example.yaml -check-config
+go run ./cmd/halro-deadman -config deploy/observability/external-probe/config.example.yaml -check-config
 ```
 
 ## Not repository-verifiable

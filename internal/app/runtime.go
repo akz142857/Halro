@@ -18,28 +18,28 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/adminauth"
-	"github.com/akz142857/Heimdall/internal/alert"
-	"github.com/akz142857/Heimdall/internal/audit"
-	"github.com/akz142857/Heimdall/internal/auth"
-	"github.com/akz142857/Heimdall/internal/bearercred"
-	"github.com/akz142857/Heimdall/internal/budget"
-	"github.com/akz142857/Heimdall/internal/buildinfo"
-	"github.com/akz142857/Heimdall/internal/config"
-	"github.com/akz142857/Heimdall/internal/domain"
-	gatewaycore "github.com/akz142857/Heimdall/internal/gateway"
-	"github.com/akz142857/Heimdall/internal/gatewayapi"
-	"github.com/akz142857/Heimdall/internal/id"
-	"github.com/akz142857/Heimdall/internal/ledger"
-	"github.com/akz142857/Heimdall/internal/provider"
-	"github.com/akz142857/Heimdall/internal/redaction"
-	"github.com/akz142857/Heimdall/internal/sourcelimit"
-	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
-	"github.com/akz142857/Heimdall/internal/store/lock"
-	"github.com/akz142857/Heimdall/internal/tokenguard"
-	"github.com/akz142857/Heimdall/internal/usage"
-	"github.com/akz142857/Heimdall/internal/vault"
-	"github.com/akz142857/Heimdall/internal/webui"
+	"github.com/akz142857/Halro/internal/adminauth"
+	"github.com/akz142857/Halro/internal/alert"
+	"github.com/akz142857/Halro/internal/audit"
+	"github.com/akz142857/Halro/internal/auth"
+	"github.com/akz142857/Halro/internal/bearercred"
+	"github.com/akz142857/Halro/internal/budget"
+	"github.com/akz142857/Halro/internal/buildinfo"
+	"github.com/akz142857/Halro/internal/config"
+	"github.com/akz142857/Halro/internal/domain"
+	gatewaycore "github.com/akz142857/Halro/internal/gateway"
+	"github.com/akz142857/Halro/internal/gatewayapi"
+	"github.com/akz142857/Halro/internal/id"
+	"github.com/akz142857/Halro/internal/ledger"
+	"github.com/akz142857/Halro/internal/provider"
+	"github.com/akz142857/Halro/internal/redaction"
+	"github.com/akz142857/Halro/internal/sourcelimit"
+	boltstore "github.com/akz142857/Halro/internal/store/bolt"
+	"github.com/akz142857/Halro/internal/store/lock"
+	"github.com/akz142857/Halro/internal/tokenguard"
+	"github.com/akz142857/Halro/internal/usage"
+	"github.com/akz142857/Halro/internal/vault"
+	"github.com/akz142857/Halro/internal/webui"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -800,7 +800,7 @@ func (r *Runtime) exportUsageParquet() {
 
 // parsePrefixes refuses the whole list rather than skipping what it cannot
 // parse. Configuration validation rejects a malformed CIDR before this runs, but
-// silently dropping one here would mean the set of addresses Heimdall trusts as
+// silently dropping one here would mean the set of addresses Halro trusts as
 // proxies differs from the set the operator wrote down — and the difference
 // decides whose X-Forwarded-For is believed.
 func parsePrefixes(raw []string) ([]netip.Prefix, error) {
@@ -1159,7 +1159,7 @@ func (r *Runtime) gatewayRouter() http.Handler {
 	})
 	router.Get("/", func(writer http.ResponseWriter, _ *http.Request) {
 		writeJSON(writer, http.StatusOK, map[string]any{
-			"name":    "heimdall",
+			"name":    "halro",
 			"version": buildinfo.Current(),
 		})
 	})
@@ -1309,7 +1309,7 @@ func (r *Runtime) metricsRouter() http.Handler {
 	router.Get("/metrics", func(writer http.ResponseWriter, request *http.Request) {
 		if r.config.Metrics.RequireAuth && !r.authorizeMetrics(request) {
 			r.metricsAuthFailed.Add(1)
-			writer.Header().Set("WWW-Authenticate", `Bearer realm="heimdall-metrics"`)
+			writer.Header().Set("WWW-Authenticate", `Bearer realm="halro-metrics"`)
 			writeJSON(writer, http.StatusUnauthorized, map[string]any{
 				"error": "metrics authentication required",
 			})

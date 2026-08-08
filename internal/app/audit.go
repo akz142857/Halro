@@ -5,11 +5,11 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/akz142857/Heimdall/internal/audit"
-	"github.com/akz142857/Heimdall/internal/config"
-	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
-	"github.com/akz142857/Heimdall/internal/store/lock"
-	"github.com/akz142857/Heimdall/internal/vault"
+	"github.com/akz142857/Halro/internal/audit"
+	"github.com/akz142857/Halro/internal/config"
+	boltstore "github.com/akz142857/Halro/internal/store/bolt"
+	"github.com/akz142857/Halro/internal/store/lock"
+	"github.com/akz142857/Halro/internal/vault"
 )
 
 func VerifyAudit(ctx context.Context, cfg config.Config) (audit.Summary, error) {

@@ -5,14 +5,14 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/akz142857/Heimdall/internal/config"
-	"github.com/akz142857/Heimdall/internal/ledger"
-	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
-	"github.com/akz142857/Heimdall/internal/store/lock"
-	"github.com/akz142857/Heimdall/internal/vault"
+	"github.com/akz142857/Halro/internal/config"
+	"github.com/akz142857/Halro/internal/ledger"
+	boltstore "github.com/akz142857/Halro/internal/store/bolt"
+	"github.com/akz142857/Halro/internal/store/lock"
+	"github.com/akz142857/Halro/internal/vault"
 )
 
-// VerifyLedger is the offline operator command behind `heimdall ledger
+// VerifyLedger is the offline operator command behind `halro ledger
 // verify`: a full walk of the committed WAL authenticating every epoch-4
 // frame's MAC and hash chain, then a comparison against the trusted
 // checkpoint the way the fail-closed startup gate already does. Unlike the
@@ -55,7 +55,7 @@ func VerifyLedger(ctx context.Context, cfg config.Config) (ledger.ChainReport, e
 		return ledger.ChainReport{}, err
 	}
 	if partial {
-		return ledger.ChainReport{}, errors.New("ledger has a partial tail; run `heimdall doctor` or start Heimdall to repair it before verifying")
+		return ledger.ChainReport{}, errors.New("ledger has a partial tail; run `halro doctor` or start Halro to repair it before verifying")
 	}
 	checkpoint, err := store.LedgerChainCheckpoint()
 	if err != nil {

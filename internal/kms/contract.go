@@ -1,4 +1,4 @@
-// Package kms defines the cloud-neutral boundary between Heimdall core and a
+// Package kms defines the cloud-neutral boundary between Halro core and a
 // Key Management Service adapter. It owns no provider SDK, credentials,
 // persistence, retry loop, Slot selection, or Vault behavior.
 package kms

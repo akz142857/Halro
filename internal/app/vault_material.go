@@ -5,22 +5,22 @@ import (
 	"errors"
 	"fmt"
 
-	boltstore "github.com/akz142857/Heimdall/internal/store/bolt"
-	"github.com/akz142857/Heimdall/internal/vault"
+	boltstore "github.com/akz142857/Halro/internal/store/bolt"
+	"github.com/akz142857/Halro/internal/vault"
 )
 
 const (
 	auditKeyID       = "system:audit-hmac"
 	auditKeyProvider = "system"
-	auditKeyAudience = "heimdall:audit:v1"
+	auditKeyAudience = "halro:audit:v1"
 
 	ledgerKeyID       = "system:ledger-hmac"
 	ledgerKeyProvider = "system"
-	ledgerKeyAudience = "heimdall:ledger:v1"
+	ledgerKeyAudience = "halro:ledger:v1"
 
 	rotationBridgeID       = "system:master-key-rotation"
 	rotationBridgeProvider = "system"
-	rotationBridgeAudience = "heimdall:master-key-rotation:v1"
+	rotationBridgeAudience = "halro:master-key-rotation:v1"
 )
 
 func encryptAuditHMACKey(secretVault *vault.Vault, key []byte) ([]byte, error) {

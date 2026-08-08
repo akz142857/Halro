@@ -143,7 +143,7 @@ func (v *Vault) scopedAEAD(kind, id, audience string) (cipher.AEAD, []byte, erro
 	if err != nil {
 		return nil, nil, err
 	}
-	key, err := hkdf.Key(sha256.New, v.masterKey, []byte("heimdall:vault:v1"), "heimdall:"+kind+"-key:v1:"+id+":"+audience, 32)
+	key, err := hkdf.Key(sha256.New, v.masterKey, []byte("halro:vault:v1"), "halro:"+kind+"-key:v1:"+id+":"+audience, 32)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -160,8 +160,8 @@ func (v *Vault) credentialAEAD(credentialID, providerType, audience string) (cip
 	if len(v.masterKey) != MasterKeySize {
 		return nil, errors.New("vault is closed")
 	}
-	info := "heimdall:credential-key:v1:" + credentialID + ":" + providerType + ":" + audience
-	key, err := hkdf.Key(sha256.New, v.masterKey, []byte("heimdall:vault:v1"), info, 32)
+	info := "halro:credential-key:v1:" + credentialID + ":" + providerType + ":" + audience
+	key, err := hkdf.Key(sha256.New, v.masterKey, []byte("halro:vault:v1"), info, 32)
 	if err != nil {
 		return nil, fmt.Errorf("derive credential key: %w", err)
 	}
@@ -177,7 +177,7 @@ func credentialAAD(credentialID, providerType, audience string) ([]byte, error) 
 	if credentialID == "" || providerType == "" || audience == "" {
 		return nil, errors.New("credential id, provider type, and audience are required")
 	}
-	values := []string{"heimdall:credential:v1", credentialID, providerType, audience}
+	values := []string{"halro:credential:v1", credentialID, providerType, audience}
 	size := 0
 	for _, value := range values {
 		size += 4 + len(value)

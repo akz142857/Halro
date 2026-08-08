@@ -1,15 +1,15 @@
 #!/bin/sh
 set -eu
 
-: "${HEIMDALL_AWS_KMS_KEY_ARN:?set a customer-managed KMS Key ARN}"
+: "${HALRO_AWS_KMS_KEY_ARN:?set a customer-managed KMS Key ARN}"
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 SOURCE_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../../.." && pwd)
 RESULT_PATH=${1:-"$SOURCE_ROOT/.tmp/m11-aws-kms-smoke.json"}
-PRIVATE_FILE=$(mktemp "${TMPDIR:-/tmp}/heimdall-aws-kms-private.XXXXXX")
-ENCRYPT_EVENTS=$(mktemp "${TMPDIR:-/tmp}/heimdall-aws-kms-encrypt.XXXXXX")
-DECRYPT_EVENTS=$(mktemp "${TMPDIR:-/tmp}/heimdall-aws-kms-decrypt.XXXXXX")
-TEST_OUTPUT=$(mktemp "${TMPDIR:-/tmp}/heimdall-aws-kms-test.XXXXXX")
+PRIVATE_FILE=$(mktemp "${TMPDIR:-/tmp}/halro-aws-kms-private.XXXXXX")
+ENCRYPT_EVENTS=$(mktemp "${TMPDIR:-/tmp}/halro-aws-kms-encrypt.XXXXXX")
+DECRYPT_EVENTS=$(mktemp "${TMPDIR:-/tmp}/halro-aws-kms-decrypt.XXXXXX")
+TEST_OUTPUT=$(mktemp "${TMPDIR:-/tmp}/halro-aws-kms-test.XXXXXX")
 
 cleanup() {
 	rm -f "$PRIVATE_FILE" "$ENCRYPT_EVENTS" "$DECRYPT_EVENTS" "$TEST_OUTPUT"
@@ -19,15 +19,15 @@ chmod 600 "$PRIVATE_FILE" "$ENCRYPT_EVENTS" "$DECRYPT_EVENTS" "$TEST_OUTPUT"
 mkdir -p "$(dirname -- "$RESULT_PATH")"
 
 START_TIME=$(python3 -c 'import datetime; print((datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(minutes=5)).isoformat())')
-AWS_REGION=$(python3 -c 'import sys; parts=sys.argv[1].split(":",5); print(parts[3] if len(parts)==6 else "")' "$HEIMDALL_AWS_KMS_KEY_ARN")
+AWS_REGION=$(python3 -c 'import sys; parts=sys.argv[1].split(":",5); print(parts[3] if len(parts)==6 else "")' "$HALRO_AWS_KMS_KEY_ARN")
 if [ -z "$AWS_REGION" ]; then
-	echo "HEIMDALL_AWS_KMS_KEY_ARN is not a full ARN" >&2
+	echo "HALRO_AWS_KMS_KEY_ARN is not a full ARN" >&2
 	exit 1
 fi
 (
 	cd "$SOURCE_ROOT"
-	HEIMDALL_AWS_KMS_REAL=1 \
-	HEIMDALL_AWS_KMS_PRIVATE_EVIDENCE_FILE="$PRIVATE_FILE" \
+	HALRO_AWS_KMS_REAL=1 \
+	HALRO_AWS_KMS_PRIVATE_EVIDENCE_FILE="$PRIVATE_FILE" \
 		go test ./internal/kms/awskms -run '^TestRealAWSKMSWorkloadIdentityEncryptDecrypt$' -count=1 -v
 ) >"$TEST_OUTPUT"
 

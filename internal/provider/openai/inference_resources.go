@@ -11,7 +11,7 @@ import (
 	"net/textproto"
 	"strings"
 
-	"github.com/akz142857/Heimdall/internal/provider"
+	"github.com/akz142857/Halro/internal/provider"
 )
 
 const maxInferenceResourcesResponseBytes = 32 << 20

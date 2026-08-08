@@ -57,7 +57,7 @@ func TestReadOnlyLockDoesNotRewriteOwnerMetadata(t *testing.T) {
 	if err := initial.Close(); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(directory, ".heimdall.lock")
+	path := filepath.Join(directory, ".halro.lock")
 	before, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)

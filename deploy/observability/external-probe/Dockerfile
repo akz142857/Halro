@@ -6,15 +6,15 @@ RUN go mod download
 # image exists to keep watching when the gateway cannot, so it must not
 # silently acquire the gateway's dependencies. A test asserts this list still
 # matches the binary's actual import graph.
-COPY cmd/heimdall-deadman ./cmd/heimdall-deadman
+COPY cmd/halro-deadman ./cmd/halro-deadman
 COPY internal/deadman ./internal/deadman
 COPY internal/safelog ./internal/safelog
-RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/heimdall-deadman ./cmd/heimdall-deadman
-RUN mkdir -p /rootfs/var/lib/heimdall-deadman /rootfs/var/log/heimdall-deadman
+RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/halro-deadman ./cmd/halro-deadman
+RUN mkdir -p /rootfs/var/lib/halro-deadman /rootfs/var/log/halro-deadman
 
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:f5b485ea962d9bd1186b2f6b3a061191539b905b82ec395de78cbfae51f20e35
-COPY --from=build /out/heimdall-deadman /usr/local/bin/heimdall-deadman
-COPY --from=build --chown=65532:65532 /rootfs/var/lib/heimdall-deadman/ /var/lib/heimdall-deadman/
-COPY --from=build --chown=65532:65532 /rootfs/var/log/heimdall-deadman/ /var/log/heimdall-deadman/
+COPY --from=build /out/halro-deadman /usr/local/bin/halro-deadman
+COPY --from=build --chown=65532:65532 /rootfs/var/lib/halro-deadman/ /var/lib/halro-deadman/
+COPY --from=build --chown=65532:65532 /rootfs/var/log/halro-deadman/ /var/log/halro-deadman/
 USER 65532:65532
-ENTRYPOINT ["/usr/local/bin/heimdall-deadman"]
+ENTRYPOINT ["/usr/local/bin/halro-deadman"]

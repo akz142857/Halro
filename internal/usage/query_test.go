@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/ledger"
+	"github.com/akz142857/Halro/internal/ledger"
 )
 
 func TestUsageCursorFilteringRequestDetailAndDashboard(t *testing.T) {

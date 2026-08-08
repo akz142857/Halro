@@ -5,7 +5,7 @@ for policy in deploy/aws-kms/*.json; do
 	jq -e . "$policy" >/dev/null
 done
 
-kubernetes=deploy/kubernetes/heimdall-aws-kms.yaml
+kubernetes=deploy/kubernetes/halro-aws-kms.yaml
 grep -Eq '^[[:space:]]+replicas: 1$' "$kubernetes"
 grep -Eq '^[[:space:]]+type: Recreate$' "$kubernetes"
 grep -Eq '^[[:space:]]+allowPrivilegeEscalation: false$' "$kubernetes"
@@ -14,7 +14,7 @@ grep -Eq '^[[:space:]]+seccompProfile: \{type: RuntimeDefault\}$' "$kubernetes"
 grep -Eq '^[[:space:]]+capabilities: \{drop: \["ALL"\]\}$' "$kubernetes"
 ! grep -Eq 'AWS_(ACCESS_KEY_ID|SECRET_ACCESS_KEY|SESSION_TOKEN)' "$kubernetes"
 
-systemd=deploy/systemd/heimdall-aws-kms.service
+systemd=deploy/systemd/halro-aws-kms.service
 grep -Fxq 'LimitCORE=0' "$systemd"
 grep -Fxq 'NoNewPrivileges=yes' "$systemd"
 grep -Fxq 'CapabilityBoundingSet=' "$systemd"

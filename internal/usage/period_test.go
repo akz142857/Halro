@@ -6,7 +6,7 @@ import (
 	"time"
 	_ "time/tzdata"
 
-	"github.com/akz142857/Heimdall/internal/ledger"
+	"github.com/akz142857/Halro/internal/ledger"
 )
 
 // settledAt records one successful attempt at the given instant.

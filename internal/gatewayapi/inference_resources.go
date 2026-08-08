@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/gateway"
-	"github.com/akz142857/Heimdall/internal/openaiapi"
-	"github.com/akz142857/Heimdall/internal/provider"
+	"github.com/akz142857/Halro/internal/gateway"
+	"github.com/akz142857/Halro/internal/openaiapi"
+	"github.com/akz142857/Halro/internal/provider"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -67,7 +67,7 @@ func (h *Handler) inferenceResourcesJSON(writer http.ResponseWriter, request *ht
 	}
 	key, ok := bearerToken(request.Header.Get("Authorization"))
 	if !ok {
-		writer.Header().Set("WWW-Authenticate", `Bearer realm="heimdall"`)
+		writer.Header().Set("WWW-Authenticate", `Bearer realm="halro"`)
 		writeError(writer, 401, "invalid_api_key", "missing or invalid bearer token", nil)
 		return
 	}
@@ -297,7 +297,7 @@ func (h *Handler) CreateFile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 401, "invalid_api_key", "missing or invalid bearer token", nil)
 		return
 	}
-	route := strings.TrimSpace(r.Header.Get("Heimdall-Route"))
+	route := strings.TrimSpace(r.Header.Get("Halro-Route"))
 	r.Body = http.MaxBytesReader(w, r.Body, h.maxRequestBytes)
 	reader, err := r.MultipartReader()
 	if err != nil {

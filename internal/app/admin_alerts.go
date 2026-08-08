@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/akz142857/Heimdall/internal/alert"
-	"github.com/akz142857/Heimdall/internal/domain"
-	"github.com/akz142857/Heimdall/internal/id"
-	"github.com/akz142857/Heimdall/internal/safetransport"
+	"github.com/akz142857/Halro/internal/alert"
+	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/id"
+	"github.com/akz142857/Halro/internal/safetransport"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -217,7 +217,7 @@ func (r *Runtime) testAdminAlertID(writer http.ResponseWriter, request *http.Req
 	}
 	result, err := r.alerts.TestEndpoint(webhook.ID, alert.Event{
 		ID: eventID, Type: "admin_test", Severity: "info",
-		DedupKey: "", Summary: "Heimdall alert connection test",
+		DedupKey: "", Summary: "Halro alert connection test",
 		Timestamp: time.Now().UTC(), Details: map[string]any{"source": "admin"},
 	})
 	outcome := "success"
