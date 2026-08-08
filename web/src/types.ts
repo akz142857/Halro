@@ -698,7 +698,19 @@ export interface WritePathSummary {
 
 export interface SystemConfig {
   yaml: string;
+  summary: SystemConfigSection[];
   time_context: TimeContext;
+}
+
+export interface SystemConfigSection {
+  id: string;
+  facts: SystemConfigFact[];
+}
+
+export interface SystemConfigFact {
+  id: string;
+  value: string;
+  kind: "address" | "boolean" | "path" | "text";
 }
 
 export interface RuntimeSettings {
