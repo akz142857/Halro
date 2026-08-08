@@ -21,7 +21,7 @@ import (
 	bbolt "go.etcd.io/bbolt"
 )
 
-const schemaVersion uint64 = 19
+const schemaVersion uint64 = 20
 
 const (
 	maxPriceVersionsPerDeployment   = 10_000
@@ -367,6 +367,29 @@ var migrations = []migration{
 			return err
 		}
 		return migrationStep(step, "after_admin_role_backfill")
+	}},
+	{version: 20, name: "deployment_capability_snapshot", up: func(tx *bbolt.Tx, step func(string) error) error {
+		if err := migrationStep(step, "before_capability_snapshot_check"); err != nil {
+			return err
+		}
+		// Deployments now carry the model capability snapshot the request path
+		// reads. There is no backfill: the honest value for an existing
+		// deployment would be "the provider ceiling", which is exactly the guess
+		// the snapshot exists to replace, and writing it would make a guess
+		// indistinguishable from an established fact for the rest of time.
+		//
+		// Pre-1.0.0 there is no deployment in the wild to preserve, so a data
+		// directory holding deployments is refused and rebuilt rather than
+		// silently reinterpreted. An empty one upgrades in place.
+		deployments := tx.Bucket(bucketDeployments)
+		if deployments != nil && deployments.Stats().KeyN > 0 {
+			return fmt.Errorf(
+				"this build stores a model capability snapshot on every deployment and cannot infer one for the %d existing deployment(s); "+
+					"re-initialise the data directory (make reset CONFIRM=RESET) and recreate them, or keep running the previous build",
+				deployments.Stats().KeyN,
+			)
+		}
+		return migrationStep(step, "after_capability_snapshot_check")
 	}},
 }
 

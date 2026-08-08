@@ -538,6 +538,81 @@ const (
 	TargetCustomEndpointModel          DeploymentTargetKind = "custom_endpoint_model"
 )
 
+// CapabilityReviewState tracks whether a deployment's stored capability
+// snapshot still matches what the catalog and the running profile say.
+type CapabilityReviewState string
+
+const (
+	// CapabilityReviewCurrent means the snapshot still matches.
+	CapabilityReviewCurrent CapabilityReviewState = "current"
+	// CapabilityReviewAvailable means the catalog now establishes more than the
+	// snapshot holds. Nothing is enabled by it; an operator reviews and retests.
+	CapabilityReviewAvailable CapabilityReviewState = "review_available"
+	// CapabilityReviewDrifted means the snapshot claims more than the catalog or
+	// the running profile now supports. Drifted deployments are fail-closed.
+	CapabilityReviewDrifted CapabilityReviewState = "drifted"
+)
+
+func (s CapabilityReviewState) Valid() bool {
+	switch s {
+	case CapabilityReviewCurrent, CapabilityReviewAvailable, CapabilityReviewDrifted:
+		return true
+	default:
+		return false
+	}
+}
+
+// ModelCapabilitySnapshot is what was established about a model at the moment a
+// deployment was saved. The request path reads this, never the live catalog: a
+// catalog refresh must not be able to change what an enabled deployment does.
+type ModelCapabilitySnapshot struct {
+	ProviderModel string `json:"provider_model"`
+	// ModelRevision is the per-model catalog digest this snapshot was taken
+	// from. Drift is detected by comparing it, not the catalog-wide digest.
+	ModelRevision   string               `json:"model_revision"`
+	CatalogRevision string               `json:"catalog_revision,omitempty"`
+	Source          string               `json:"source"`
+	Status          string               `json:"status"`
+	CapturedAt      time.Time            `json:"captured_at"`
+	Capabilities    ProviderCapabilities `json:"capabilities"`
+}
+
+// DeclaredCapabilitySnapshot records an operator's own claim about a model.
+// The revision still comes from the catalog — for a model it does not cover
+// that is the digest of the "nothing established" entry, which is what later
+// tells us the catalog has since started covering it.
+func DeclaredCapabilitySnapshot(model, revision string, capabilities ProviderCapabilities, at time.Time) ModelCapabilitySnapshot {
+	return ModelCapabilitySnapshot{
+		ProviderModel: model, ModelRevision: revision,
+		Source: "operator_declared", Status: "partial",
+		CapturedAt: at, Capabilities: capabilities,
+	}
+}
+
+func (s ModelCapabilitySnapshot) Validate(deployment Deployment) error {
+	var problems []error
+	if strings.TrimSpace(s.ProviderModel) == "" {
+		problems = append(problems, errors.New("capability snapshot requires a provider model"))
+	}
+	if s.ProviderModel != deployment.ProviderModel {
+		problems = append(problems, errors.New("capability snapshot model does not match the deployment"))
+	}
+	if strings.TrimSpace(s.Source) == "" || strings.TrimSpace(s.Status) == "" {
+		problems = append(problems, errors.New("capability snapshot requires a source and status"))
+	}
+	if s.ModelRevision == "" {
+		problems = append(problems, errors.New("capability snapshot requires a model revision"))
+	}
+	if s.CapturedAt.IsZero() {
+		problems = append(problems, errors.New("capability snapshot requires a capture time"))
+	}
+	// The deployment may narrow what was established, never exceed it.
+	if !ProviderCapabilitiesSubset(deployment.Capabilities, s.Capabilities) {
+		problems = append(problems, errors.New("deployment capabilities exceed the capability snapshot"))
+	}
+	return errors.Join(problems...)
+}
+
 type Deployment struct {
 	ID                      string                `json:"id"`
 	Name                    string                `json:"name"`
@@ -568,6 +643,9 @@ type Deployment struct {
 	DeletedAt               *time.Time            `json:"deleted_at,omitempty"`
 	PricingQuarantined      bool                  `json:"pricing_quarantined,omitempty"`
 	PricingQuarantineReason string                `json:"pricing_quarantine_reason,omitempty"`
+
+	ModelCapabilitySnapshot ModelCapabilitySnapshot `json:"model_capability_snapshot"`
+	CapabilityReviewState   CapabilityReviewState   `json:"capability_review_state"`
 }
 
 type DeploymentTestStatus string
@@ -641,6 +719,12 @@ func (d Deployment) Validate() error {
 	}
 	if err := d.CapabilityEvidence.Validate(d.Capabilities); err != nil {
 		problems = append(problems, err)
+	}
+	if err := d.ModelCapabilitySnapshot.Validate(d); err != nil {
+		problems = append(problems, err)
+	}
+	if !d.CapabilityReviewState.Valid() {
+		problems = append(problems, errors.New("deployment capability review state is invalid"))
 	}
 	if d.Priority < 0 {
 		problems = append(problems, errors.New("deployment priority cannot be negative"))

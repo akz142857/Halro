@@ -365,9 +365,27 @@ func (r *Runtime) deploymentFromInput(request *http.Request, deploymentID string
 		weight = 1
 	}
 	region := deploymentRegion(instance, input)
+	snapshot := domain.ModelCapabilitySnapshot{
+		ProviderModel: model,
+		ModelRevision: resolution.entry.Revision(),
+		Source:        string(resolution.entry.Source),
+		Status:        string(resolution.entry.Status),
+		CapturedAt:    updatedAt,
+		Capabilities:  resolution.capabilities,
+	}
+	if resolution.declared {
+		// An operator declaration is its own source. Recording it as the catalog
+		// would let a later refresh look like agreement that never happened.
+		snapshot.Source = string(modelcatalog.SourceOperatorDeclared)
+		snapshot.Status = string(modelcatalog.StatusPartial)
+	} else {
+		snapshot.CatalogRevision = modelcatalog.Builtin().Revision()
+		snapshot.Capabilities = modelcatalog.Clamp(resolution.entry.Capabilities, resolution.binding.Capabilities)
+	}
 	deployment := domain.Deployment{
 		ID: deploymentID, Name: strings.TrimSpace(input.Name), ProviderID: input.ProviderID,
 		ProviderModel: model, TargetKind: targetKind, Capabilities: capabilities,
+		ModelCapabilitySnapshot: snapshot, CapabilityReviewState: domain.CapabilityReviewCurrent,
 		AccessSurface: binding.AccessSurface, ProfileID: binding.ProfileID, BindingID: binding.ID,
 		Region:             region,
 		CapabilityEvidence: evidence,

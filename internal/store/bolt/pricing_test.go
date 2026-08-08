@@ -101,24 +101,18 @@ func TestVersionedPricingMigrationPreservesLegacyPriceAsEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store, err = Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	metered, err := store.ListDeploymentPriceVersions(context.Background(), "dep_metered")
-	if err != nil || len(metered) != 1 {
-		t.Fatalf("metered versions=%#v err=%v", metered, err)
-	}
-	price := metered[0]
-	if price.Version != 1 || price.BillingMode != domain.BillingModeMetered ||
-		price.InputMicrosPerMillion != 100 || price.OutputMicrosPerMillion != 200 || price.FixedRequestMicrosUSD != 3 ||
-		price.Source.Type != domain.PriceSourceMigration || price.Source.OriginalResourceID != "dep_metered" {
-		t.Fatalf("migrated price=%#v", price)
-	}
-	unknown, err := store.ListDeploymentPriceVersions(context.Background(), "dep_unknown")
-	if err != nil || len(unknown) != 0 {
-		t.Fatalf("zero legacy price was guessed instead of remaining unknown: %#v err=%v", unknown, err)
+	// Schema 20 stores a capability snapshot on every deployment and refuses to
+	// infer one, so this fixture — legacy prices attached to deployments in an
+	// old data directory — can no longer be carried to the current version.
+	//
+	// What this test used to assert (v11 turning a legacy price into a versioned
+	// one with migration provenance) is therefore no longer reachable from real
+	// data at all: legacy prices only exist alongside deployments. The coverage
+	// is gone with the upgrade path, not merely disabled here.
+	if _, err := Open(path); err == nil {
+		t.Fatal("legacy pricing data upgraded past schema 20")
+	} else if !strings.Contains(err.Error(), "re-initialise the data directory") {
+		t.Fatalf("refusal is not actionable: %v", err)
 	}
 }
 
@@ -469,7 +463,9 @@ func seedPricingDeployment(t testing.TB, store *Store, deploymentID string, inpu
 		TargetKind: domain.TargetModelID, AccessSurface: profile.AccessSurface, ProfileID: profile.ProfileID,
 		BindingID:    domain.DefaultProviderProfileBindingID(provider.ID, profile.ProfileID),
 		Capabilities: capabilities, CapabilityEvidence: domain.EvidenceForCapabilities(capabilities, domain.EvidenceDeclared),
-		InputMicrosPerMillion: input, OutputMicrosPerMillion: output, FixedRequestMicrosUSD: fixed,
+		ModelCapabilitySnapshot: domain.DeclaredCapabilitySnapshot("gpt-test", "sha256:test", capabilities, now),
+		CapabilityReviewState:   domain.CapabilityReviewCurrent,
+		InputMicrosPerMillion:   input, OutputMicrosPerMillion: output, FixedRequestMicrosUSD: fixed,
 		Weight: 1, Enabled: false, CreatedAt: now, UpdatedAt: now,
 	}, 0)
 	if err != nil {
