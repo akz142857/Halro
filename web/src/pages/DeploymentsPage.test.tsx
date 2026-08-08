@@ -51,6 +51,20 @@ function knownModel(id: string, capabilities: Partial<ProviderCapabilities>): Pr
   };
 }
 
+// A provider reachable through two internal interfaces. Which one serves a
+// given model is the question the create form used to ask first.
+const chatInterface = { ...noCapabilities, chat: true, streaming: true, stream_usage: true };
+const embedInterface = { ...noCapabilities, embeddings: true };
+const multiInterfaceProvider = {
+  ...provider,
+  id: "provider_multi",
+  capabilities: { ...chatInterface, embeddings: true },
+  bindings: [
+    { id: "b-chat", profile_id: "openai.chat-embeddings.v1", enabled: true, capabilities: chatInterface },
+    { id: "b-embed", profile_id: "openai.embeddings.v1", enabled: true, capabilities: embedInterface },
+  ],
+} as Provider;
+
 describe("deployment release workflow", () => {
   beforeEach(() => {
     vi.spyOn(api, "providers").mockResolvedValue({ items: [provider], next_cursor: "" });
@@ -190,7 +204,9 @@ describe("deployment release workflow", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "＋ 新建模型部署" }));
     const modelInput = screen.getByLabelText(/^模型 ID/);
-    await waitFor(() => expect(api.providerModels).toHaveBeenCalledWith(provider.id, ""));
+    // One aggregate call across every enabled interface, with no binding
+    // filter: choosing an interface is no longer a step the operator takes.
+    await waitFor(() => expect(api.providerModels).toHaveBeenCalledWith(provider.id));
     const highlightedCount = await screen.findByText("12");
     expect(highlightedCount).toHaveClass("deployment-model-count");
     expect(highlightedCount.closest('[role="status"]')).toHaveTextContent("已发现 12 个模型；也可手动输入");
@@ -622,6 +638,91 @@ describe("deployment release workflow", () => {
 
   // Turning a capability on drops the deployment out of routing until it is
   // retested, so the form has to say that before the operator saves.
+  // §7.1 puts the internal interface out of the ordinary flow: the operator
+  // names a model, and which interface serves it follows from the model and the
+  // capabilities. It stays reachable for diagnostics, collapsed and automatic.
+  it("creates a deployment without asking which internal interface to use", async () => {
+    vi.mocked(api.providers).mockResolvedValue({ items: [multiInterfaceProvider], next_cursor: "" });
+    vi.mocked(api.providerModels).mockResolvedValue({
+      items: [unknownModel("gpt-5")], catalog_revision: "sha256:catalog",
+      fetched_at: "2026-08-02T00:00:00Z", expires_at: "2026-08-02T00:05:00Z", cached: false,
+    });
+    const create = vi.spyOn(api, "createDeployment").mockResolvedValue({} as never);
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 新建模型部署" }));
+    fireEvent.change(screen.getByLabelText("部署名称"), { target: { value: "GPT" } });
+
+    const interfaceSelect = screen.getByLabelText(/^能力接口/);
+    const disclosure = interfaceSelect.closest("details");
+    expect(disclosure).not.toHaveAttribute("open");
+    expect(interfaceSelect).toHaveValue("");
+    expect(disclosure?.querySelector("summary")).toHaveTextContent("自动选择");
+
+    const modelInput = screen.getByLabelText(/^模型 ID/);
+    fireEvent.focus(modelInput);
+    const listbox = await screen.findByRole("listbox", { name: "可用模型" });
+    fireEvent.click(await within(listbox).findByRole("option", { name: /gpt-5/ }));
+    fireEvent.click(screen.getByLabelText("对话"));
+    fireEvent.click(screen.getByRole("button", { name: "保存为停用" }));
+
+    await waitFor(() => expect(create).toHaveBeenCalledOnce());
+    const payload = create.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload).not.toHaveProperty("binding_id");
+  });
+
+  // The interface ceiling is not an invitation to add what the model does not
+  // do. A catalogued model may only be narrowed.
+  it("offers only the capabilities the catalog establishes for a known model", async () => {
+    vi.mocked(api.providers).mockResolvedValue({ items: [multiInterfaceProvider], next_cursor: "" });
+    // The chat interface carries streaming and stream usage; the catalog
+    // establishes only that this model does chat.
+    vi.mocked(api.providerModels).mockResolvedValue({
+      items: [knownModel("catalogued-chat", { chat: true })],
+      catalog_revision: "sha256:catalog",
+      fetched_at: "2026-08-02T00:00:00Z", expires_at: "2026-08-02T00:05:00Z", cached: false,
+    });
+    const create = vi.spyOn(api, "createDeployment").mockResolvedValue({} as never);
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 新建模型部署" }));
+    fireEvent.change(screen.getByLabelText("部署名称"), { target: { value: "Chat" } });
+    const modelInput = screen.getByLabelText(/^模型 ID/);
+    fireEvent.focus(modelInput);
+    const listbox = await screen.findByRole("listbox", { name: "可用模型" });
+    fireEvent.click(await within(listbox).findByRole("option", { name: /catalogued-chat/ }));
+
+    expect(screen.getByLabelText("对话")).toBeChecked();
+    // The interface would carry these; the catalog does not establish them for
+    // this model, so they are not on offer.
+    expect(screen.queryByLabelText("流式")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("流式用量")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "保存为停用" }));
+    await waitFor(() => expect(create).toHaveBeenCalledOnce());
+    // The catalog named the interface, so this one is sent.
+    expect((create.mock.calls[0][0] as Record<string, unknown>).binding_id).toBe("b-chat");
+  });
+
+  // A deployment runs on one interface. Selecting across two is refused by the
+  // server, so the form names the reason rather than letting it come back as a
+  // bare rejection.
+  it("says when a selection no single interface carries has been made", async () => {
+    vi.mocked(api.providers).mockResolvedValue({ items: [multiInterfaceProvider], next_cursor: "" });
+    vi.mocked(api.providerModels).mockResolvedValue({
+      items: [unknownModel("gpt-5")], catalog_revision: "sha256:catalog",
+      fetched_at: "2026-08-02T00:00:00Z", expires_at: "2026-08-02T00:05:00Z", cached: false,
+    });
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 新建模型部署" }));
+    fireEvent.click(screen.getByLabelText("对话"));
+    expect(screen.queryByText("没有单一能力接口能承载全部所选能力")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText("向量嵌入"));
+    expect(await screen.findByText("没有单一能力接口能承载全部所选能力")).toBeVisible();
+  });
+
   it("warns that enabling a capability will take the deployment out of routing", async () => {
     const narrow = { ...capabilities, vision: false };
     const deployment = {
