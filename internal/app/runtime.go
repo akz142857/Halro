@@ -343,13 +343,17 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		secretVault.Close()
 		return fail(fmt.Errorf("recover pending accounting leases: %w", err))
 	}
-	providerRegistry, err := loadProviderRegistry(ctx, cfg, metadata, secretVault)
+	providerRegistry, withheld, err := loadProviderRegistry(ctx, cfg, metadata, secretVault)
 	if err != nil {
 		ledgerLog.Close()
 		metadata.Close()
 		secretVault.Close()
 		return fail(err)
 	}
+	// Starting with a route withheld is a state an operator has to be told
+	// about: the process is up and every other route works, so nothing else
+	// would say that this one is gone.
+	logCapabilityWithholdings(logger, withheld)
 	tokenGuard, err := loadTokenGuard(ctx, metadata, logger)
 	if err != nil {
 		providerRegistry.Close()

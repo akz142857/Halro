@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"time"
 
@@ -21,10 +22,11 @@ import (
 )
 
 func (r *Runtime) reloadProviderRegistry(ctx context.Context) error {
-	next, err := loadProviderRegistry(ctx, r.config, r.store, r.vault)
+	next, withheld, err := loadProviderRegistry(ctx, r.config, r.store, r.vault)
 	if err != nil {
 		return err
 	}
+	logCapabilityWithholdings(r.logger, withheld)
 	retired := r.providers.Replace(next)
 	if len(retired) == 0 {
 		return nil
@@ -49,23 +51,51 @@ func (r *Runtime) reloadProviderRegistry(ctx context.Context) error {
 	return nil
 }
 
+// capabilityWithholding records a route kept out of the routing candidates
+// because its deployment's capability snapshot no longer describes something
+// this build and the catalog still support.
+//
+// It is returned rather than logged in place so the caller decides what to do
+// with it — start-up logs it, a hot reload logs and audits it — and so a test
+// can assert the load succeeded *and* withheld the right route.
+type capabilityWithholding struct {
+	RouteID      string
+	DeploymentID string
+	State        domain.CapabilityReviewState
+}
+
+// logCapabilityWithholdings names the routes that are up but not routing. IDs
+// only: a capability set is configuration, not a secret, but there is nothing
+// here that needs more than the identifier an operator would look up.
+func logCapabilityWithholdings(logger *slog.Logger, withheld []capabilityWithholding) {
+	if logger == nil {
+		return
+	}
+	for _, item := range withheld {
+		logger.Warn("route withheld from routing candidates",
+			"route", item.RouteID, "deployment", item.DeploymentID,
+			"capability_review_state", string(item.State))
+	}
+}
+
 func loadProviderRegistry(
 	ctx context.Context,
 	cfg config.Config,
 	store *boltstore.Store,
 	secretVault *vault.Vault,
-) (*provider.Registry, error) {
+) (*provider.Registry, []capabilityWithholding, error) {
+	var withheld []capabilityWithholding
 	instances, err := store.ListProviders(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("list providers: %w", err)
+		return nil, nil, fmt.Errorf("list providers: %w", err)
 	}
 	routes, err := store.ListRoutes(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("list routes: %w", err)
+		return nil, nil, fmt.Errorf("list routes: %w", err)
 	}
 	deployments, err := store.ListDeployments(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("list deployments: %w", err)
+		return nil, nil, fmt.Errorf("list deployments: %w", err)
 	}
 	deploymentByID := make(map[string]domain.Deployment, len(deployments))
 	for _, deployment := range deployments {
@@ -80,11 +110,11 @@ func loadProviderRegistry(
 	adapters := make(map[string]provider.Adapter)
 	providerBindingIDs := make(map[string][]string)
 	providerLimits := make(map[string]int64)
-	fail := func(err error) (*provider.Registry, error) {
+	fail := func(err error) (*provider.Registry, []capabilityWithholding, error) {
 		for _, adapter := range adapters {
 			adapter.Close()
 		}
-		return nil, err
+		return nil, nil, err
 	}
 	for _, instance := range instances {
 		if !instance.Enabled || instance.DeletedAt != nil {
@@ -167,13 +197,18 @@ func loadProviderRegistry(
 			// Drift is resolved here rather than on the request path, so a
 			// profile this build narrowed is a state an operator can see instead
 			// of production traffic failing one request at a time.
+			//
+			// The drifted deployment is withheld from the candidates; it does not
+			// stop the load. Refusing to build the registry would turn one stale
+			// snapshot into a process that cannot start, taking down every other
+			// route with it — the opposite of what fail-closed is meant to buy.
 			if instance, ok := instanceByID[deployment.ProviderID]; ok {
-				binding, bound := instance.ProfileBinding(deployment.BindingID)
-				if !bound {
-					binding = domain.ProviderProfileBinding{ProfileID: deployment.ProfileID, Capabilities: instance.Capabilities}
-				}
-				if !capabilityReviewAdmitsTraffic(evaluateCapabilityReview(deployment, binding, instance.Type)) {
-					return fail(fmt.Errorf("route %q references deployment %q whose capability snapshot no longer matches its profile or the catalog; review and retest it", route.ID, deployment.ID))
+				state := evaluateCapabilityReview(deployment, deploymentBinding(instance, deployment), instance.Type)
+				if !capabilityReviewAdmitsTraffic(state) {
+					withheld = append(withheld, capabilityWithholding{
+						RouteID: route.ID, DeploymentID: deployment.ID, State: state,
+					})
+					continue
 				}
 			}
 			providerID = deployment.ProviderID
@@ -239,7 +274,7 @@ func loadProviderRegistry(
 			return fail(fmt.Errorf("register route %q: %w", route.ID, err))
 		}
 	}
-	return registry, nil
+	return registry, withheld, nil
 }
 
 func newProviderBindingAdapter(cfg config.Config, instance domain.ProviderInstance, binding domain.ProviderProfileBinding, endpoint *url.URL, policy safetransport.Policy, plaintext []byte) (provider.Adapter, error) {
