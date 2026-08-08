@@ -960,21 +960,21 @@ td small, td code { display: block; margin-top: 4px; color: var(--muted); }
 .write-path dl { margin-top: var(--space-3); }
 .write-path .write-path-meta { margin: 0; padding: 0 var(--space-4) var(--space-3); color: var(--muted-2); font-size: var(--font-size-xs); }
 .write-path > .notice { margin: 0 var(--space-4) var(--space-3); }
-.config-overview { display: grid; gap: 14px; }
+.config-overview { display: grid; gap: 0.875rem; }
 .config-summary { overflow: hidden; }
-.config-summary-header { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 18px 20px; border-bottom: 1px solid var(--line); }
+.config-summary-header { display: flex; align-items: center; justify-content: space-between; gap: 1.5rem; padding: 1.125rem 1.25rem; border-bottom: 1px solid var(--line); }
 .config-summary-header > div { min-width: 0; }
-.config-summary-header h3 { margin: 0 0 5px; font-size: 15px; }
+.config-summary-header h3 { margin: 0 0 0.3125rem; font-size: 15px; }
 .config-summary-header p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
 .config-summary-header .badge { flex: 0 0 auto; }
 .config-section-list { display: grid; }
 .config-section { display: grid; grid-template-columns: 150px minmax(0, 1fr); border-bottom: 1px solid var(--line); }
 .config-section:last-child { border-bottom: 0; }
-.config-section h4 { margin: 0; padding: 16px 20px; color: var(--muted); background: var(--surface-inset); font-size: 12px; font-weight: 700; }
+.config-section h4 { margin: 0; padding: 1rem 1.25rem; color: var(--muted); background: var(--surface-inset); font-size: 12px; font-weight: 700; }
 .config-section dl { margin: 0; }
 .config-section dl > div { display: grid; grid-template-columns: minmax(160px, .9fr) minmax(0, 1.1fr); align-items: center; min-height: 48px; border-bottom: 1px solid var(--line); }
 .config-section dl > div:last-child { border-bottom: 0; }
-.config-section dt, .config-section dd { min-width: 0; margin: 0; padding: 10px 18px; text-align: left; }
+.config-section dt, .config-section dd { min-width: 0; margin: 0; padding: 0.625rem 1.125rem; text-align: left; }
 .config-section dt { color: var(--muted); font-size: 12px; }
 .config-section dd { color: var(--text); font-size: 12px; font-weight: 650; overflow-wrap: anywhere; }
 .config-section dd.technical { font-family: var(--mono); font-size: 11px; font-weight: 500; }
@@ -1078,12 +1078,12 @@ td small, td code { display: block; margin-top: 4px; color: var(--muted); }
 .compact-form .notice { grid-column: 1 / -1; }
 .credential-form { max-width: 520px; }
 .runtime-form { max-width: none; gap: 0; padding: 0; }
-.runtime-editable { display: grid; width: min(100%, 460px); gap: 14px; padding: 20px 22px 22px; }
+.runtime-editable { display: grid; width: min(100%, 460px); gap: 0.875rem; padding: 1.25rem 1.375rem 1.375rem; }
 .runtime-editable .field, .runtime-editable .notice { margin: 0; }
 .runtime-editable .form-actions { justify-content: flex-start; padding: 0; }
-.runtime-startup-boundary { display: grid; grid-template-columns: 120px minmax(0, 1fr); align-items: start; gap: 18px; padding: 16px 22px; background: var(--overlay-subtle); border-top: 1px solid var(--line); }
+.runtime-startup-boundary { display: grid; grid-template-columns: 120px minmax(0, 1fr); align-items: start; gap: 1.125rem; padding: 1rem 1.375rem; background: var(--overlay-subtle); border-top: 1px solid var(--line); }
 .runtime-boundary-label { color: var(--muted-2); font: var(--font-size-xs)/1.4 var(--mono); letter-spacing: .06em; text-transform: uppercase; }
-.runtime-startup-boundary > div { display: grid; gap: 5px; min-width: 0; }
+.runtime-startup-boundary > div { display: grid; gap: 0.3125rem; min-width: 0; }
 .runtime-startup-boundary strong { color: var(--color-text-secondary); font-size: 12px; font-weight: 700; line-height: 1.4; }
 .runtime-startup-boundary span:not(.runtime-boundary-label) { color: var(--muted); font-size: 11px; line-height: 1.55; }
 .mfa-settings > .panel-header { margin: 0; background: transparent; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; }
@@ -1518,10 +1518,10 @@ textarea { resize: vertical; }
 }
 @media (max-width: 580px) {
   .topline span:last-child { display: none; }
-  .config-summary-header { align-items: flex-start; flex-direction: column; gap: 12px; }
+  .config-summary-header { align-items: flex-start; flex-direction: column; gap: 0.75rem; }
   .config-section { grid-template-columns: 1fr; }
-  .config-section h4 { padding: 12px 16px; border-bottom: 1px solid var(--line); }
-  .config-section dl > div { grid-template-columns: 1fr; gap: 3px; padding: 11px 16px; }
+  .config-section h4 { padding: 0.75rem 1rem; border-bottom: 1px solid var(--line); }
+  .config-section dl > div { grid-template-columns: 1fr; gap: 0.1875rem; padding: 0.6875rem 1rem; }
   .config-section dt, .config-section dd { padding: 0; }
   .page-header { align-items: flex-start; flex-direction: column; padding-top: 36px; }
   .page-action, .page-action .button, .button-group { width: 100%; }
@@ -1648,7 +1648,7 @@ textarea { resize: vertical; }
   .provider-facts { grid-template-columns: 1fr; }
   .provider-facts > div { padding: 0 0 10px; border-right: 0; border-bottom: 1px solid var(--line); }
   .provider-runtime .row-actions { width: 100%; justify-content: flex-start; }
-  .runtime-startup-boundary { grid-template-columns: 1fr; gap: 6px; }
+  .runtime-startup-boundary { grid-template-columns: 1fr; gap: 0.375rem; }
   .provider-runtime-heading { align-items: flex-start; flex-direction: column; }
   .developer-config-fields { grid-template-columns: 1fr; padding: 18px; }
   .developer-config-fields > .field:has(textarea), .developer-config-fields > .field:has(.developer-secret-input), .developer-response-mode { grid-column: 1; }
