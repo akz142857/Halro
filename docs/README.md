@@ -88,6 +88,12 @@ Markdown 编进二进制，由 `internal/app/admin_master_key_runbook.go` 提供
 
 尚未开工的设计提案。开工后移出本目录。
 
+| 文档 | 内容 |
+| --- | --- |
+| [基于服务商与模型的能力选择升级方案](todo/model-aware-capability-selection.zh-CN.md) | 模型级能力目录、自动 Profile 映射、能力快照、漂移与分阶段实施门禁 |
+| [告警投递适配方案](todo/alert-delivery-design.md) | 告警契约、平台格式、签名、企业网络与投递结果分类 |
+| [Halro Redis-like HA 架构提案](todo/halro-ha-architecture.zh-CN.md) | Standalone 向 Primary/Replica HA 的演进 |
+
 ## 草稿 · `drafts/`
 
 已在 `.gitignore` 与 `.dockerignore` 中，不进版本库，也不随镜像分发。

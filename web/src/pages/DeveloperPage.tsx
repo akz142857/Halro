@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useIsReadOnly } from "../session";
+import { OnboardingContextBanner } from "../OnboardingContext";
 import { api } from "../api";
 import { ConfirmButton, EmptyState, ErrorState, Field, Loading, PageHeader, type ReauthValues } from "../components";
 import { navigate } from "../navigation";
@@ -240,6 +241,7 @@ export function DeveloperPage() {
         description={t("developer.description")}
         action={<span className="badge developer-preview-badge">{t("developer.previewBadge")}</span>}
       />
+      <OnboardingContextBanner />
       {developerConfig.data?.enabled === false && (
         <EmptyState title={t("developer.disabledTitle")}>{t("developer.disabledDescription")}</EmptyState>
       )}
@@ -310,7 +312,7 @@ export function DeveloperPage() {
                     className="button secondary developer-create-key"
                     label={t("developer.createDebugKey")}
                     confirmLabel={t("auth.stepUpMintKey")}
-                    disabled={createDebugKey.isPending}
+                    disabled={readOnly || createDebugKey.isPending}
                     requireStepUp
                     onConfirm={(reauth) => createDebugKey.mutateAsync(reauth)}
                   />

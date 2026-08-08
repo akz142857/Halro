@@ -82,8 +82,8 @@ export function App() {
     if (session.data && path === "/admin/login") navigate(session.data.mfa_setup_required ? "/admin/settings" : "/admin");
   }, [path, session.data]);
   useEffect(() => {
-    if (session.data?.mfa_setup_required) document.getElementById("main-content")?.focus();
-  }, [session.data?.mfa_setup_required]);
+    if (session.data && path !== "/admin/login") document.getElementById("main-content")?.focus();
+  }, [path, session.data]);
   if (setup.isPending) {
     return <div className="boot"><span className="brand-mark">H</span><Loading label={t("app.checkingSetup")} /></div>;
   }

@@ -1,73 +1,126 @@
-import { useQueries, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
-import { StatusDot } from "../components";
+import { ErrorState } from "../components";
 import { Link } from "../navigation";
+import { useIsReadOnly } from "../session";
+import type { OnboardingGoal } from "../types";
 
-// The six-step configuration chain, in the order one step unlocks the next: a provider
-// needs a credential, a deployment needs a provider, and so on down to the key that a
-// real request finally presents. Rendered only on an instance that has never served
-// traffic, so an established gateway never pays for these queries.
 export function FirstRunChecklist() {
   const { t } = useTranslation();
-  const credentials = useQuery({ queryKey: ["credentials"], queryFn: api.credentials });
-  const providers = useQuery({ queryKey: ["providers"], queryFn: api.providers });
-  const deployments = useQuery({ queryKey: ["deployments"], queryFn: api.deployments });
-  const routes = useQuery({ queryKey: ["routes"], queryFn: api.routes });
-  const projects = useQuery({ queryKey: ["projects"], queryFn: api.projects });
-  const projectItems = projects.data?.items ?? [];
-  const keyQueries = useQueries({
-    queries: projectItems.map((project) => ({
-      queryKey: ["project-keys", project.id],
-      queryFn: () => api.keys(project.id),
-    })),
+  const readOnly = useIsReadOnly();
+  const readiness = useQuery({
+    queryKey: ["onboarding-readiness"],
+    queryFn: api.onboardingReadiness,
+    refetchInterval: 15_000,
   });
-  const lists = [credentials, providers, deployments, routes, projects];
-  // Silence rather than a half-read checklist: the dashboard reports its own failures,
-  // and a step that reads "none yet" only because a request failed would send the
-  // operator to create something they already have.
-  if (lists.some((list) => list.isPending || list.isError)) return null;
-  if (keyQueries.some((query) => query.isPending || query.isError)) return null;
-  const steps = [
-    { key: "credential", count: credentials.data?.items.length ?? 0, href: "/admin/providers?view=credentials" },
-    { key: "provider", count: providers.data?.items.length ?? 0, href: "/admin/providers" },
-    { key: "deployment", count: deployments.data?.items.length ?? 0, href: "/admin/deployments" },
-    { key: "route", count: routes.data?.items.length ?? 0, href: "/admin/routes" },
-    { key: "project", count: projectItems.length, href: "/admin/projects" },
-    { key: "key", count: keyQueries.reduce((total, query) => total + (query.data?.items.length ?? 0), 0), href: "/admin/projects" },
-  ];
-  const done = steps.filter((step) => step.count > 0).length;
+
+  if (readiness.isPending) {
+    return (
+      <section className="panel first-run-panel first-run-loading" aria-labelledby="first-run-loading-title" aria-busy="true">
+        <div>
+          <p className="eyebrow">{t("dashboard.firstRun.eyebrow")}</p>
+          <h2 id="first-run-loading-title">{t("dashboard.firstRun.loading")}</h2>
+        </div>
+        <span className="first-run-loading-line" aria-hidden="true" />
+      </section>
+    );
+  }
+
+  if (readiness.isError) {
+    return (
+      <section className="panel first-run-panel first-run-unavailable" aria-labelledby="first-run-unavailable-title">
+        <header className="panel-header">
+          <div>
+            <p className="eyebrow">{t("dashboard.firstRun.eyebrow")}</p>
+            <h2 id="first-run-unavailable-title">{t("dashboard.firstRun.unavailable")}</h2>
+          </div>
+        </header>
+        <ErrorState error={readiness.error} className="first-run-error" />
+        <div className="first-run-retry">
+          <button className="button primary" onClick={() => void readiness.refetch()}>{t("common.retry")}</button>
+        </div>
+      </section>
+    );
+  }
+
+  const data = readiness.data;
+  if (data.state === "first_value_reached") return null;
+  const current = data.goals.find((goal) => goal.state === "current" || goal.state === "error") ?? data.goals[0];
+  const progressText = t("dashboard.firstRun.progress", { done: data.completed_goals, total: data.total_goals });
+
   return (
     <section className="panel first-run-panel" aria-labelledby="first-run-title">
-      <header className="panel-header">
+      <header className="first-run-header">
         <div>
           <p className="eyebrow">{t("dashboard.firstRun.eyebrow")}</p>
           <h2 id="first-run-title">{t("dashboard.firstRun.title")}</h2>
+          <p className="first-run-description">{t("dashboard.firstRun.description")}</p>
         </div>
-        <strong className="first-run-progress">{t("dashboard.firstRun.progress", { done, total: steps.length })}</strong>
+        <div className="first-run-progress-shell">
+          <strong>{progressText}</strong>
+          <div
+            className="first-run-progress-track"
+            role="progressbar"
+            aria-label={t("dashboard.firstRun.progressLabel")}
+            aria-valuemin={0}
+            aria-valuemax={data.total_goals}
+            aria-valuenow={data.completed_goals}
+            aria-valuetext={progressText}
+          >
+            <span style={{ width: `${data.total_goals ? data.completed_goals / data.total_goals * 100 : 0}%` }} />
+          </div>
+        </div>
       </header>
-      <p className="first-run-description">{t("dashboard.firstRun.description")}</p>
-      <ol className="first-run-steps">
-        {steps.map((step, index) => (
-          <li className="first-run-step" key={step.key}>
-            <span className="first-run-step-copy">
-              <strong>
-                <StatusDot ok={step.count > 0} label={t(step.count > 0 ? "dashboard.firstRun.doneLabel" : "dashboard.firstRun.pendingLabel")} />
-                {index + 1}. {t(`dashboard.firstRun.${step.key}.title`)}
-              </strong>
-              <small>{step.count > 0 ? t("dashboard.firstRun.created", { count: step.count }) : t("dashboard.firstRun.none")}</small>
-            </span>
-            <Link className="button ghost" href={step.href}>{t(`dashboard.firstRun.${step.key}.action`)}</Link>
-          </li>
-        ))}
+
+      <ol className="first-run-goals">
+        {data.goals.map((goal, index) => <GoalRow goal={goal} index={index} key={goal.key} />)}
       </ol>
-      <div className="first-run-verify">
-        <span className="first-run-step-copy">
-          <strong>{t("dashboard.firstRun.verify.title")}</strong>
-          <small>{done === steps.length ? t("dashboard.firstRun.verify.ready") : t("dashboard.firstRun.verify.blocked")}</small>
-        </span>
-        <Link className="button primary" href="/admin/developer">{t("dashboard.firstRun.verify.action")}</Link>
-      </div>
+
+      {data.last_verification && (
+        <div className="first-run-verification-error" role="alert">
+          <div>
+            <strong>{t("dashboard.firstRun.failure.title")}</strong>
+            <span>{t("dashboard.firstRun.failure.description")}</span>
+          </div>
+          <dl>
+            <div><dt>{t("dashboard.firstRun.failure.requestID")}</dt><dd><code>{data.last_verification.request_id}</code></dd></div>
+            {data.last_verification.http_status ? <div><dt>HTTP</dt><dd>{data.last_verification.http_status}</dd></div> : null}
+            {data.last_verification.error_class ? <div><dt>{t("dashboard.firstRun.failure.error")}</dt><dd><code>{data.last_verification.error_class}</code></dd></div> : null}
+          </dl>
+          <Link className="button ghost" href={`/admin/usage?request_id=${encodeURIComponent(data.last_verification.request_id)}`}>{t("dashboard.firstRun.failure.details")}</Link>
+        </div>
+      )}
+
+      <footer className="first-run-action">
+        <div>
+          <span>{t("dashboard.firstRun.next")}</span>
+          <strong>{t(`dashboard.firstRun.goals.${current.key}.title`)}</strong>
+          <small>{readOnly ? t("dashboard.firstRun.readOnly") : t(`dashboard.firstRun.details.${current.detail_code}`)}</small>
+        </div>
+        {readOnly
+          ? <button className="button primary first-run-action-button" disabled>{t("dashboard.firstRun.adminRequired")}</button>
+          : (
+            <Link className="button primary first-run-action-button" href={current.action_href}>
+              <span>{t(`dashboard.firstRun.goals.${current.key}.action`)}</span>
+              <span className="first-run-action-arrow" aria-hidden="true">→</span>
+            </Link>
+          )}
+      </footer>
     </section>
+  );
+}
+
+function GoalRow({ goal, index }: { goal: OnboardingGoal; index: number }) {
+  const { t } = useTranslation();
+  return (
+    <li className={`first-run-goal ${goal.state}`} aria-current={goal.state === "current" || goal.state === "error" ? "step" : undefined}>
+      <span className="first-run-goal-marker" aria-hidden="true">{goal.state === "complete" ? "✓" : index + 1}</span>
+      <span className="first-run-goal-copy">
+        <strong>{t(`dashboard.firstRun.goals.${goal.key}.title`)}</strong>
+        <small>{t(`dashboard.firstRun.details.${goal.detail_code}`)}</small>
+      </span>
+      <span className={`first-run-goal-state ${goal.state}`}>{t(`dashboard.firstRun.states.${goal.state}`)}</span>
+    </li>
   );
 }

@@ -20,6 +20,7 @@ import type { InlineTestState } from "../components";
 import type { AccessSurface, Credential, CredentialScheme, Provider, ProviderBinding, ProviderCapabilities, ProviderType } from "../types";
 import { useTranslation } from "react-i18next";
 import { useIsReadOnly } from "../session";
+import { hasOnboardingCreateIntent, OnboardingContextBanner } from "../OnboardingContext";
 
 const providerTypes: ProviderType[] = [
   "openai", "anthropic", "azure_openai", "deepseek", "gemini", "bedrock", "openai_compatible",
@@ -79,8 +80,9 @@ export function ProvidersPage() {
   const [activeView, setActiveView] = useState<"providers" | "credentials">(() => providerViewFromURL());
   const [focusedCredentialID, setFocusedCredentialID] = useState("");
   const [focusedProviderCredentialID, setFocusedProviderCredentialID] = useState("");
-  const [credentialDialog, setCredentialDialog] = useState(false);
-  const [providerDialog, setProviderDialog] = useState(false);
+  const createFromOnboarding = hasOnboardingCreateIntent();
+  const [credentialDialog, setCredentialDialog] = useState(() => !readOnly && createFromOnboarding && providerViewFromURL() === "credentials");
+  const [providerDialog, setProviderDialog] = useState(() => !readOnly && createFromOnboarding && providerViewFromURL() === "providers");
   const [editingProvider, setEditingProvider] = useState<Provider>();
   const [providerQuery, setProviderQuery] = useState("");
   const [providerStatus, setProviderStatus] = useState<"all" | "enabled" | "disabled">("all");
@@ -135,6 +137,7 @@ export function ProvidersPage() {
             : <button className="button primary" disabled={readOnly} onClick={() => setCredentialDialog(true)}>{t("providers.addCredential")}</button>
         }
       />
+      <OnboardingContextBanner />
       {pending && <Loading />}
       {(credentials.isError || providers.isError) && (
         <ErrorState error={credentials.error || providers.error} />
@@ -171,7 +174,7 @@ export function ProvidersPage() {
         </div>
       )}
       {credentialDialog && <CredentialForm onClose={() => setCredentialDialog(false)} />}
-      {providerDialog && (
+      {providerDialog && credentials.isSuccess && (
         <ProviderForm
           credentials={credentials.data?.items ?? []}
           onClose={() => setProviderDialog(false)}

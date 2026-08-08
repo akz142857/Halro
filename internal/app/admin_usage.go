@@ -40,14 +40,15 @@ func (r *Runtime) adminDashboard(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{
-		"usage":             dashboard,
-		"governance":        governance,
-		"resource_labels":   labels,
-		"accounting_status": r.status.Load(),
-		"wal":               r.ledger.Stats(),
-		"write_path":        r.writePathSummary(),
-		"alerts":            r.alerts.Stats(),
-		"time_context":      timing,
+		"usage":               dashboard,
+		"first_value_reached": r.usage.Metrics().RequestsSuccess > 0,
+		"governance":          governance,
+		"resource_labels":     labels,
+		"accounting_status":   r.status.Load(),
+		"wal":                 r.ledger.Stats(),
+		"write_path":          r.writePathSummary(),
+		"alerts":              r.alerts.Stats(),
+		"time_context":        timing,
 	})
 }
 
