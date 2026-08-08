@@ -657,7 +657,7 @@ export const enUS = {
   routes: {
     eyebrow: "Model fabric", title: "Routes", description: "Public model aliases reference deployments only; model identity, pricing, capabilities, and concurrency policy are maintained by each deployment.",
     create: "＋ New route", emptyTitle: "No model routes", emptyDescription: "Create a route before the OpenAI-compatible API can resolve a public model alias.", list: "Model route list",
-    publicModel: "Public model", deployment: "Deployment", provider: "Provider", upstreamModel: "Upstream model", strategy: "Strategy", priority: "Priority", legacy: "Legacy route",
+    publicModel: "Public model", deployment: "Deployment", provider: "Provider", upstreamModel: "Upstream model", strategy: "Strategy", priority: "Priority",
     healthy: "Healthy · {{latency}}ms", unhealthy: "Unhealthy", testing: "Testing", deleteConfirm: "Delete route “{{name}}”?", edit: "Edit route", createTitle: "Create route",
     deploymentRequired: "An enabled deployment is required", deploymentRequiredDescription: "Create and enable a model deployment on the Deployments page first.", openDeployments: "Open model deployments →", publicAlias: "Public model alias",
     routeStrategy: "Routing strategy", ordered: "Ordered fallback", roundRobin: "Round robin", enable: "Enable route", save: "Save and hot-reload", createAndLoad: "Create and hot-reload",

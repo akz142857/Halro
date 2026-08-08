@@ -109,15 +109,27 @@ func seedProvider(t *testing.T, cfg config.Config, mismatch bool) {
 	if _, err := store.PutProvider(context.Background(), instance, 0); err != nil {
 		t.Fatal(err)
 	}
+	// A route names a deployment; provider, model, price, capabilities and
+	// concurrency all come from it.
+	deployment := domain.Deployment{
+		ID: "deployment_1", Name: "OpenAI / gpt-test", ProviderID: instance.ID,
+		ProviderModel: "gpt-test", AccessSurface: instance.AccessSurface,
+		ProfileID: instance.ProfileID, Capabilities: capabilities,
+		CapabilityEvidence: domain.EvidenceForCapabilities(capabilities, domain.EvidenceDeclared),
+		ModelCapabilitySnapshot: domain.DeclaredCapabilitySnapshot(
+			"gpt-test", "sha256:test", capabilities, now),
+		Weight: 1, Enabled: true, CreatedAt: now, UpdatedAt: now,
+	}
+	if _, err := store.PutDeployment(context.Background(), deployment, 0); err != nil {
+		t.Fatal(err)
+	}
 	route := domain.Route{
-		ID:                    "route_1",
-		PublicModel:           "chat",
-		ProviderID:            instance.ID,
-		ProviderModel:         "gpt-test",
-		InputMicrosPerMillion: 1_000,
-		Enabled:               true,
-		CreatedAt:             now,
-		UpdatedAt:             now,
+		ID:           "route_1",
+		PublicModel:  "chat",
+		DeploymentID: deployment.ID,
+		Enabled:      true,
+		CreatedAt:    now,
+		UpdatedAt:    now,
 	}
 	if _, err := store.PutRoute(context.Background(), route, 0); err != nil {
 		t.Fatal(err)

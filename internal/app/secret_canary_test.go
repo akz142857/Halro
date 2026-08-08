@@ -80,7 +80,7 @@ func TestSecretCanaryNeverReachesTelemetryPersistenceOrAdminSurfaces(t *testing.
 	}
 	replacement := provider.NewRegistry()
 	if err := replacement.Register(provider.Target{
-		ID: bootstrap.RouteID, ProviderID: bootstrap.ProviderID,
+		ID: bootstrap.RouteID, DeploymentID: bootstrap.DeploymentID, ProviderID: bootstrap.ProviderID,
 		PublicModel: "chat", ProviderModel: "canary-model", Adapter: fake,
 		InputMicrosPerMillion: 1_000_000, OutputMicrosPerMillion: 2_000_000,
 		Strategy: "ordered",

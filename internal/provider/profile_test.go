@@ -146,7 +146,7 @@ func TestRegistryRejectsTargetWhoseProfileDoesNotMatchAdapter(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = NewRegistry().Register(Target{
-		ID: "route", PublicModel: "public", ProviderModel: "upstream", Adapter: bridge,
+		ID: "route", DeploymentID: "dep_route", PublicModel: "public", ProviderModel: "upstream", Adapter: bridge,
 		ProfileID: domain.ProfileGeminiText,
 	})
 	if err == nil {

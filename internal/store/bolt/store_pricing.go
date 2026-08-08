@@ -69,84 +69,29 @@ func migrateDeployments(tx *bbolt.Tx, step func(string) error) error {
 	if err := migrationStep(step, "before_create_deployments_bucket"); err != nil {
 		return err
 	}
-	deployments, err := tx.CreateBucketIfNotExists(bucketDeployments)
-	if err != nil {
+	if _, err := tx.CreateBucketIfNotExists(bucketDeployments); err != nil {
 		return err
 	}
-	if err := migrationStep(step, "after_create_deployments_bucket"); err != nil {
-		return err
-	}
-	routes := tx.Bucket(bucketRoutes)
-	if routes == nil {
-		return errors.New("routes bucket is missing")
-	}
-	type routeMigration struct {
-		key        []byte
-		route      domain.Route
-		deployment domain.Deployment
-	}
-	var pending []routeMigration
-	if err := routes.ForEach(func(key, raw []byte) error {
-		if raw == nil {
-			return nil
-		}
-		var route domain.Route
-		if err := json.Unmarshal(raw, &route); err != nil {
-			return fmt.Errorf("decode legacy route %q: %w", key, err)
-		}
-		if route.DeploymentID != "" {
-			return nil
-		}
-		if route.ProviderID == "" || route.ProviderModel == "" {
-			return fmt.Errorf("legacy route %q cannot be migrated", route.ID)
-		}
-		deploymentID := "dep_migrated_" + route.ID
-		deployment := domain.Deployment{
-			ID: deploymentID, Name: route.PublicModel + " / " + route.ProviderModel,
-			ProviderID: route.ProviderID, ProviderModel: route.ProviderModel,
-			InputMicrosPerMillion:  route.InputMicrosPerMillion,
-			OutputMicrosPerMillion: route.OutputMicrosPerMillion,
-			Priority:               route.Priority, Weight: 1, Enabled: route.Enabled,
-			CreatedAt: route.CreatedAt, UpdatedAt: route.UpdatedAt, Revision: 1,
-			DeletedAt: route.DeletedAt,
-		}
-		route.DeploymentID = deploymentID
-		pending = append(pending, routeMigration{
-			key: bytes.Clone(key), route: route, deployment: deployment,
-		})
-		return nil
-	}); err != nil {
-		return err
-	}
-	for _, item := range pending {
-		encodedDeployment, err := json.Marshal(item.deployment)
-		if err != nil {
-			return err
-		}
-		if err := migrationStep(step, "before_put_deployment_"+item.deployment.ID); err != nil {
-			return err
-		}
-		if err := deployments.Put([]byte(item.deployment.ID), encodedDeployment); err != nil {
-			return err
-		}
-		if err := migrationStep(step, "after_put_deployment_"+item.deployment.ID); err != nil {
-			return err
-		}
-		encodedRoute, err := json.Marshal(item.route)
-		if err != nil {
-			return err
-		}
-		if err := migrationStep(step, "before_put_route_"+item.route.ID); err != nil {
-			return err
-		}
-		if err := routes.Put(item.key, encodedRoute); err != nil {
-			return err
-		}
-		if err := migrationStep(step, "after_put_route_"+item.route.ID); err != nil {
-			return err
-		}
-	}
-	return nil
+	// The route-to-deployment synthesis that used to run here is gone.
+	//
+	// It manufactured a deployment from a route's provider and model, and that
+	// output stopped being valid: since schema 20 a deployment must carry a
+	// model capability snapshot, and the synthesis set neither that nor an
+	// access surface, profile, binding, capability set or versioned price. The
+	// result was a record Deployment.Validate() rejects — unsaveable through
+	// the Admin API and unpriceable at request time.
+	//
+	// Worse, it was invisible to migration 20's guard. That guard asks whether
+	// the deployments bucket is non-empty, and Stats() does not see writes made
+	// earlier in the same uncommitted transaction, so a schema-2 directory
+	// migrated all the way to 21 carrying an invalid deployment. Migration 22
+	// refuses deployment-less routes instead, and it scans with ForEach, which
+	// does see same-transaction writes.
+	//
+	// The rung keeps its version and name. Renumbering to close the gap would
+	// reuse migration identifiers, which is what makes an upgrade history
+	// unambiguous.
+	return migrationStep(step, "after_create_deployments_bucket")
 }
 
 func normalizeDeploymentProfile(deployment *domain.Deployment, instance domain.ProviderInstance, evidence domain.CapabilityEvidence) {

@@ -191,7 +191,7 @@ func TestMetadataMigrationFromV1IsAtomicAndRecorded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(history) != 21 ||
+	if len(history) != 22 ||
 		history[0] != (MigrationRecord{Version: 1, Name: "initial_schema"}) ||
 		history[1] != (MigrationRecord{Version: 2, Name: "migration_history"}) ||
 		history[2] != (MigrationRecord{Version: 3, Name: "deployments"}) ||
@@ -212,7 +212,8 @@ func TestMetadataMigrationFromV1IsAtomicAndRecorded(t *testing.T) {
 		history[17] != (MigrationRecord{Version: 18, Name: "audit_anchors"}) ||
 		history[18] != (MigrationRecord{Version: 19, Name: "admin_role_backfill"}) ||
 		history[19] != (MigrationRecord{Version: 20, Name: "deployment_capability_snapshot"}) ||
-		history[20] != (MigrationRecord{Version: 21, Name: "refuse_legacy_capability_evidence"}) {
+		history[20] != (MigrationRecord{Version: 21, Name: "refuse_legacy_capability_evidence"}) ||
+		history[21] != (MigrationRecord{Version: 22, Name: "refuse_deployment_less_routes"}) {
 		t.Fatalf("history=%#v", history)
 	}
 }
@@ -482,17 +483,19 @@ func TestMetadataSnapshotIsConsistentAndReopenable(t *testing.T) {
 	}
 }
 
-func TestV2RouteMigrationMaterializesDeploymentAndPreservesRoute(t *testing.T) {
+func TestV2RouteWithNoDeploymentIsRefused(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "metadata.db")
 	db, err := bbolt.Open(path, 0o600, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	legacy := domain.Route{
-		ID: "route_legacy", PublicModel: "chat", ProviderID: "provider_legacy",
-		ProviderModel: "gpt-legacy", InputMicrosPerMillion: 10, OutputMicrosPerMillion: 20,
-		Priority: 3, Enabled: true, CreatedAt: now, UpdatedAt: now, Revision: 4,
+	// A schema-2 route carried its provider and model directly. That shape has
+	// no Go struct any more, so the fixture writes the bytes it actually had.
+	legacy := map[string]any{
+		"id": "route_legacy", "public_model": "chat", "provider_id": "provider_legacy",
+		"provider_model": "gpt-legacy", "input_micros_per_million": 10, "output_micros_per_million": 20,
+		"priority": 3, "enabled": true, "created_at": now, "updated_at": now, "revision": 4,
 	}
 	err = db.Update(func(tx *bbolt.Tx) error {
 		for _, name := range requiredBuckets() {
@@ -507,7 +510,7 @@ func TestV2RouteMigrationMaterializesDeploymentAndPreservesRoute(t *testing.T) {
 		if encodeErr != nil {
 			return encodeErr
 		}
-		if putErr := tx.Bucket(bucketRoutes).Put([]byte(legacy.ID), encodedRoute); putErr != nil {
+		if putErr := tx.Bucket(bucketRoutes).Put([]byte(legacy["id"].(string)), encodedRoute); putErr != nil {
 			return putErr
 		}
 		for version, name := range map[uint64]string{1: "initial_schema", 2: "migration_history"} {
@@ -530,25 +533,20 @@ func TestV2RouteMigrationMaterializesDeploymentAndPreservesRoute(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// The synthesis that used to materialise a deployment for this route is
+	// gone: what it produced no longer validates under schema 20's snapshot
+	// requirement, and it was invisible to that migration's own guard because
+	// Stats() does not see writes made earlier in the same transaction. The
+	// directory is refused instead, and the message has to say what to do.
 	store, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
+	if err == nil {
+		store.Close()
+		t.Fatal("a directory holding a route with no deployment was opened")
 	}
-	defer store.Close()
-	route, err := store.GetRoute(context.Background(), legacy.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if route.DeploymentID != "dep_migrated_"+legacy.ID || route.Revision != legacy.Revision {
-		t.Fatalf("migrated route=%#v", route)
-	}
-	deployment, err := store.GetDeployment(context.Background(), route.DeploymentID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if deployment.ProviderID != legacy.ProviderID || deployment.ProviderModel != legacy.ProviderModel ||
-		deployment.InputMicrosPerMillion != legacy.InputMicrosPerMillion || deployment.Revision != 1 {
-		t.Fatalf("migrated deployment=%#v", deployment)
+	for _, want := range []string{"without one", "make reset CONFIRM=RESET"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("refusal omits %q: %v", want, err)
+		}
 	}
 }
 
@@ -591,82 +589,44 @@ func TestInterruptedMetadataMigrationRollsBackToV1(t *testing.T) {
 	store.Close()
 }
 
-func TestDeploymentMigrationSurvivesEveryInjectedKillPoint(t *testing.T) {
+// The v3 route-to-deployment synthesis this test used to cover is gone, so
+// there are no longer per-route fault points to enumerate. What replaces it as
+// the property worth proving: migration 22 refuses a directory holding
+// deployment-less routes, and the refusal leaves that directory exactly as it
+// was — an operator who hits it can still start the previous build.
+func TestDeploymentLessRouteRefusalLeavesTheDirectoryUntouched(t *testing.T) {
 	const routeCount = 8
 	root := t.TempDir()
-	templatePath := filepath.Join(root, "metadata-v2.db")
-	createV2MetadataWithRoutes(t, templatePath, routeCount)
-	template, err := os.ReadFile(templatePath)
+	path := filepath.Join(root, "metadata-v2.db")
+	createV2MetadataWithRoutes(t, path, routeCount)
+	before, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	var points []string
-	probePath := filepath.Join(root, "probe.db")
-	if err := os.WriteFile(probePath, template, 0o600); err != nil {
-		t.Fatal(err)
+	store, err := Open(path)
+	if err == nil {
+		store.Close()
+		t.Fatal("a directory holding deployment-less routes was opened")
 	}
-	probe, err := openWithMigrationStepHook(probePath, func(version uint64, point string) error {
-		if version == 3 {
-			points = append(points, point)
-		}
-		return nil
-	})
+	if !strings.Contains(err.Error(), "8 route(s) without one") {
+		t.Fatalf("refusal does not name what it found: %v", err)
+	}
+
+	// Reopening must fail the same way rather than half-applying something.
+	if store, err := Open(path); err == nil {
+		store.Close()
+		t.Fatal("a second open succeeded after the first was refused")
+	}
+
+	assertV2MetadataUnchanged(t, path, routeCount)
+
+	after, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := probe.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if len(points) < routeCount*4+7 {
-		t.Fatalf("only %d migration fault points were exercised: %v", len(points), points)
-	}
-
-	for killPoint := range points {
-		killPoint := killPoint
-		t.Run(fmt.Sprintf("%03d_%s", killPoint, points[killPoint]), func(t *testing.T) {
-			path := filepath.Join(root, fmt.Sprintf("kill-%03d.db", killPoint))
-			if err := os.WriteFile(path, template, 0o600); err != nil {
-				t.Fatal(err)
-			}
-			injected := errors.New("injected process death")
-			seen := 0
-			_, err := openWithMigrationStepHook(path, func(version uint64, _ string) error {
-				if version != 3 {
-					return nil
-				}
-				current := seen
-				seen++
-				if current == killPoint {
-					return injected
-				}
-				return nil
-			})
-			if !errors.Is(err, injected) {
-				t.Fatalf("kill point %d returned %v", killPoint, err)
-			}
-			assertV2MetadataUnchanged(t, path, routeCount)
-
-			retried, err := Open(path)
-			if err != nil {
-				t.Fatalf("retry after kill point %d: %v", killPoint, err)
-			}
-			defer retried.Close()
-			version, err := retried.SchemaVersion()
-			if err != nil || version != schemaVersion {
-				t.Fatalf("schema=%d err=%v", version, err)
-			}
-			for index := 0; index < routeCount; index++ {
-				routeID := fmt.Sprintf("route_%02d", index)
-				route, err := retried.GetRoute(context.Background(), routeID)
-				if err != nil || route.DeploymentID != "dep_migrated_"+routeID {
-					t.Fatalf("route %s after retry=%#v err=%v", routeID, route, err)
-				}
-				if _, err := retried.GetDeployment(context.Background(), route.DeploymentID); err != nil {
-					t.Fatalf("deployment %s after retry: %v", route.DeploymentID, err)
-				}
-			}
-		})
+	if len(before) != len(after) {
+		t.Fatalf("refused migration changed the file size: %d -> %d", len(before), len(after))
 	}
 }
 
@@ -701,17 +661,17 @@ func createV2MetadataWithRoutes(t *testing.T, path string, count int) {
 		}
 		now := time.Unix(1_700_000_000, 0).UTC()
 		for index := 0; index < count; index++ {
-			route := domain.Route{
-				ID: fmt.Sprintf("route_%02d", index), PublicModel: fmt.Sprintf("chat-%02d", index),
-				ProviderID: "provider_legacy", ProviderModel: fmt.Sprintf("model-%02d", index),
-				InputMicrosPerMillion: 10, OutputMicrosPerMillion: 20,
-				Priority: index, Enabled: true, CreatedAt: now, UpdatedAt: now, Revision: 1,
+			route := map[string]any{
+				"id": fmt.Sprintf("route_%02d", index), "public_model": fmt.Sprintf("chat-%02d", index),
+				"provider_id": "provider_legacy", "provider_model": fmt.Sprintf("model-%02d", index),
+				"input_micros_per_million": 10, "output_micros_per_million": 20,
+				"priority": index, "enabled": true, "created_at": now, "updated_at": now, "revision": 1,
 			}
 			encoded, err := json.Marshal(route)
 			if err != nil {
 				return err
 			}
-			if err := tx.Bucket(bucketRoutes).Put([]byte(route.ID), encoded); err != nil {
+			if err := tx.Bucket(bucketRoutes).Put([]byte(route["id"].(string)), encoded); err != nil {
 				return err
 			}
 		}
@@ -744,7 +704,11 @@ func assertV2MetadataUnchanged(t *testing.T, path string, routeCount int) {
 			return fmt.Errorf("route count changed: %d", routes.Stats().KeyN)
 		}
 		return routes.ForEach(func(_, raw []byte) error {
-			var route domain.Route
+			var route struct {
+				DeploymentID  string `json:"deployment_id"`
+				ProviderID    string `json:"provider_id"`
+				ProviderModel string `json:"provider_model"`
+			}
 			if err := json.Unmarshal(raw, &route); err != nil {
 				return err
 			}
@@ -1004,15 +968,26 @@ func TestProviderAndRouteReferencesAndUniqueness(t *testing.T) {
 	if _, err := store.PutProvider(ctx, instance, 0); err != nil {
 		t.Fatal(err)
 	}
+	// A route names a deployment, so this reference test needs one.
+	deployment := domain.Deployment{
+		ID: "deployment_1", Name: "OpenAI / gpt-test", ProviderID: instance.ID,
+		ProviderModel: "gpt-test", AccessSurface: instance.AccessSurface,
+		ProfileID: instance.ProfileID, Capabilities: instance.Capabilities,
+		CapabilityEvidence: domain.EvidenceForCapabilities(instance.Capabilities, domain.EvidenceDeclared),
+		ModelCapabilitySnapshot: domain.DeclaredCapabilitySnapshot(
+			"gpt-test", "sha256:test", instance.Capabilities, time.Now().UTC()),
+		Weight: 1, Enabled: true, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+	}
+	if _, err := store.PutDeployment(ctx, deployment, 0); err != nil {
+		t.Fatal(err)
+	}
 	route := domain.Route{
-		ID:                    "route_1",
-		PublicModel:           "chat",
-		ProviderID:            instance.ID,
-		ProviderModel:         "gpt-test",
-		InputMicrosPerMillion: 100,
-		Enabled:               true,
-		CreatedAt:             time.Now().UTC(),
-		UpdatedAt:             time.Now().UTC(),
+		ID:           "route_1",
+		PublicModel:  "chat",
+		DeploymentID: deployment.ID,
+		Enabled:      true,
+		CreatedAt:    time.Now().UTC(),
+		UpdatedAt:    time.Now().UTC(),
 	}
 	if _, err := store.PutRoute(ctx, route, 0); err != nil {
 		t.Fatal(err)
@@ -1024,7 +999,7 @@ func TestProviderAndRouteReferencesAndUniqueness(t *testing.T) {
 		t.Fatalf("store fallback route: %v", err)
 	}
 	routes, err := store.ListRoutes(ctx)
-	if err != nil || len(routes) != 2 || routes[0].ProviderID != instance.ID {
+	if err != nil || len(routes) != 2 || routes[0].DeploymentID != deployment.ID {
 		t.Fatalf("unexpected routes=%#v err=%v", routes, err)
 	}
 }

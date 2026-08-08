@@ -219,10 +219,21 @@ func seedRouteForTest(t *testing.T, runtime *Runtime, publicModel string) {
 	}, 0); err != nil && !strings.Contains(err.Error(), "already exists") {
 		t.Fatal(err)
 	}
+	deploymentID := "dep_" + publicModel
+	if _, err := runtime.store.PutDeployment(context.Background(), domain.Deployment{
+		ID: deploymentID, Name: "seed / " + publicModel, ProviderID: "provider_route_seed",
+		ProviderModel: "upstream-" + publicModel, AccessSurface: profile.AccessSurface,
+		ProfileID: profile.ProfileID, Capabilities: capabilities,
+		CapabilityEvidence: domain.EvidenceForCapabilities(capabilities, domain.EvidenceDeclared),
+		ModelCapabilitySnapshot: domain.DeclaredCapabilitySnapshot(
+			"upstream-"+publicModel, "sha256:seed", capabilities, now),
+		Weight: 1, Enabled: true, CreatedAt: now, UpdatedAt: now,
+	}, 0); err != nil && !strings.Contains(err.Error(), "already exists") {
+		t.Fatal(err)
+	}
 	if _, err := runtime.store.PutRoute(context.Background(), domain.Route{
-		ID: "rt_" + publicModel, PublicModel: publicModel, ProviderID: "provider_route_seed",
-		ProviderModel: "upstream-" + publicModel, Enabled: true,
-		CreatedAt: now, UpdatedAt: now,
+		ID: "rt_" + publicModel, PublicModel: publicModel, DeploymentID: deploymentID,
+		Enabled: true, CreatedAt: now, UpdatedAt: now,
 	}, 0); err != nil {
 		t.Fatal(err)
 	}

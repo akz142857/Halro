@@ -8,12 +8,26 @@ semantic versioning.
 
 ### Changed
 
+- A route now names a deployment and nothing else. The shape that carried a
+  provider and model directly is removed: such a route reached an upstream
+  without the deployment's versioned price, health probe, capability snapshot
+  or concurrency limit behind it, and none of those can be inferred from it.
+
 - The `legacy` capability evidence tier is removed. It meant "this came from a
   record written before capability evidence was durable metadata", which is not
   evidence, and keeping it beside `declared` and `verified` gave the design a
   third tier that asserted nothing.
 
 ### Operator impact
+
+- **Re-initialising the data directory is also required** for an instance
+  holding any route without a `deployment_id`. Storage schema 22 refuses such a
+  directory at start-up and names the route count. The synthesis that used to
+  manufacture a deployment for these routes during migration is gone: what it
+  produced no longer satisfies the capability snapshot every deployment has
+  carried since schema 20, and it was invisible to that migration's own guard,
+  so a schema-2 directory could reach the current schema carrying a deployment
+  that fails validation.
 
 - **Re-initialising the data directory is required** for an instance whose
   providers or deployments still carry `legacy` capability evidence — that is

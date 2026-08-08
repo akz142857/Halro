@@ -65,7 +65,7 @@ export function RoutesPage() {
       header: t("routes.deployment"),
       cell: ({ getValue }) => {
         const deployment = deploymentByID.get(getValue());
-        return deployment?.name || getValue() || t("routes.legacy");
+        return deployment?.name || getValue();
       },
     }),
     column.display({
@@ -73,14 +73,14 @@ export function RoutesPage() {
       header: t("routes.provider"),
       cell: ({ row }) => {
         const deployment = deploymentByID.get(row.original.deployment_id);
-        const providerID = deployment?.provider_id || row.original.provider_id || "";
+        const providerID = deployment?.provider_id || "";
         return providerNames.get(providerID) || providerID;
       },
     }),
     column.display({
       id: "provider_model",
       header: t("routes.upstreamModel"),
-      cell: ({ row }) => deploymentByID.get(row.original.deployment_id)?.provider_model || row.original.provider_model,
+      cell: ({ row }) => deploymentByID.get(row.original.deployment_id)?.provider_model,
     }),
     column.accessor("strategy", {
       header: t("routes.strategy"),

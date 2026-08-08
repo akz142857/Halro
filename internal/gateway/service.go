@@ -465,7 +465,7 @@ func accountingTermsFromSnapshot(price domain.DeploymentPriceVersion, snapshot d
 }
 
 func (s *Service) prepareAccountingLease(ctx context.Context, target provider.Target, inputTokens, outputTokens int64) (int64, ledger.LeaseMode, *domain.PriceSnapshot, provider.Target, error) {
-	if s.pricing == nil || target.DeploymentID == "" {
+	if s.pricing == nil {
 		reservation, err := estimateReservation(inputTokens, outputTokens, target)
 		return reservation, "", nil, target, err
 	}
@@ -720,9 +720,6 @@ func (s *Service) acquireTargetConcurrency(target provider.Target) (*targetConcu
 		return nil, err
 	}
 	lease := &targetConcurrencyLease{provider: providerLease}
-	if target.DeploymentID == "" {
-		return lease, nil
-	}
 	lease.deployment, err = s.deploymentConcurrency.Acquire(target.DeploymentID, target.DeploymentConcurrency)
 	if err != nil {
 		providerLease.Release()

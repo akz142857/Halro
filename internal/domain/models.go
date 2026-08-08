@@ -745,25 +745,25 @@ func isRegionalProfile(id ProviderProfileID) bool {
 }
 
 type Route struct {
-	ID                     string               `json:"id"`
-	PublicModel            string               `json:"public_model"`
-	DeploymentID           string               `json:"deployment_id,omitempty"`
-	ProviderID             string               `json:"provider_id,omitempty"` // Legacy schema v2 compatibility.
-	ProviderModel          string               `json:"provider_model,omitempty"`
-	InputMicrosPerMillion  int64                `json:"input_micros_per_million,omitempty"`
-	OutputMicrosPerMillion int64                `json:"output_micros_per_million,omitempty"`
-	Priority               int                  `json:"priority"`
-	Strategy               string               `json:"strategy"`
-	Enabled                bool                 `json:"enabled"`
-	LastTestStatus         DeploymentTestStatus `json:"last_test_status,omitempty"`
-	LastTestedAt           *time.Time           `json:"last_tested_at,omitempty"`
-	LastTestLatencyMillis  int64                `json:"last_test_latency_millis,omitempty"`
-	LastTestErrorClass     string               `json:"last_test_error_class,omitempty"`
-	LastTestRevision       uint64               `json:"last_test_revision,omitempty"`
-	CreatedAt              time.Time            `json:"created_at"`
-	UpdatedAt              time.Time            `json:"updated_at"`
-	Revision               uint64               `json:"revision"`
-	DeletedAt              *time.Time           `json:"deleted_at,omitempty"`
+	ID          string `json:"id"`
+	PublicModel string `json:"public_model"`
+	// A route names a deployment and nothing else about the upstream. It used
+	// to be able to carry a provider and model directly, which meant a route
+	// could reach a provider without a deployment's versioned price, health
+	// probe, capability snapshot or concurrency limit behind it.
+	DeploymentID          string               `json:"deployment_id"`
+	Priority              int                  `json:"priority"`
+	Strategy              string               `json:"strategy"`
+	Enabled               bool                 `json:"enabled"`
+	LastTestStatus        DeploymentTestStatus `json:"last_test_status,omitempty"`
+	LastTestedAt          *time.Time           `json:"last_tested_at,omitempty"`
+	LastTestLatencyMillis int64                `json:"last_test_latency_millis,omitempty"`
+	LastTestErrorClass    string               `json:"last_test_error_class,omitempty"`
+	LastTestRevision      uint64               `json:"last_test_revision,omitempty"`
+	CreatedAt             time.Time            `json:"created_at"`
+	UpdatedAt             time.Time            `json:"updated_at"`
+	Revision              uint64               `json:"revision"`
+	DeletedAt             *time.Time           `json:"deleted_at,omitempty"`
 }
 
 func (r *Route) GetRevision() uint64      { return r.Revision }
@@ -778,15 +778,7 @@ func (r Route) Validate() error {
 		problems = append(problems, errors.New("route public model is required"))
 	}
 	if r.DeploymentID == "" {
-		if r.ProviderID == "" {
-			problems = append(problems, errors.New("route deployment id is required"))
-		}
-		if strings.TrimSpace(r.ProviderModel) == "" {
-			problems = append(problems, errors.New("legacy route provider model is required"))
-		}
-	}
-	if r.InputMicrosPerMillion < 0 || r.OutputMicrosPerMillion < 0 {
-		problems = append(problems, errors.New("route prices cannot be negative"))
+		problems = append(problems, errors.New("route deployment id is required"))
 	}
 	if r.Priority < 0 {
 		problems = append(problems, errors.New("route priority cannot be negative"))

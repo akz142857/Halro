@@ -181,16 +181,13 @@ func loadProviderRegistry(
 		if !route.Enabled || route.DeletedAt != nil {
 			continue
 		}
-		providerID := route.ProviderID
-		providerModel := route.ProviderModel
-		inputPrice := route.InputMicrosPerMillion
-		outputPrice := route.OutputMicrosPerMillion
-		fixedPrice := int64(0)
+		inputPrice, outputPrice, fixedPrice := int64(0), int64(0), int64(0)
 		deploymentID := route.DeploymentID
 		bindingID := ""
 		deploymentLimit := int64(0)
 		var capabilities provider.Capabilities
-		if deploymentID != "" {
+		var providerID, providerModel string
+		{
 			deployment, exists := deploymentByID[deploymentID]
 			if !exists || !deployment.Enabled || deployment.DeletedAt != nil {
 				return fail(fmt.Errorf("route %q references an unavailable deployment", route.ID))
@@ -232,19 +229,9 @@ func loadProviderRegistry(
 			deploymentLimit = deployment.MaxConcurrency
 			capabilities = deploymentCapabilities(deployment, adapters[bindingID])
 		}
-		if deploymentID == "" {
-			bindings := providerBindingIDs[providerID]
-			if len(bindings) != 1 {
-				return fail(fmt.Errorf("legacy route %q requires a provider with exactly one enabled binding", route.ID))
-			}
-			bindingID = bindings[0]
-		}
 		adapter := adapters[bindingID]
 		if adapter == nil {
 			return fail(fmt.Errorf("route %q references an unavailable provider binding", route.ID))
-		}
-		if deploymentID == "" {
-			capabilities = adapterCapabilitiesFor(adapter)
 		}
 		if profiled, ok := adapter.(provider.ProfiledAdapter); ok {
 			if err := bedrockprovider.ValidateProfileModel(profiled.Profile().ID, providerModel); err != nil {

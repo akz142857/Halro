@@ -94,7 +94,7 @@ func newNativeMessagesFixtureForProfile(t *testing.T, profileID domain.ProviderP
 		t.Fatal(err)
 	}
 	registry := provider.NewRegistry()
-	if err := registry.Register(provider.Target{ID: "route_native", ProviderID: "provider_native", PublicModel: "claude", ProviderModel: "claude-provider", AccessSurface: manifest.AccessSurface, ProfileID: profileID, Adapter: bridge, Capabilities: provider.Capabilities{Chat: true, Streaming: true, Tools: true, Reasoning: true, StreamUsage: true}, InputMicrosPerMillion: 1000, OutputMicrosPerMillion: 1000}); err != nil {
+	if err := registry.Register(provider.Target{ID: "route_native", DeploymentID: "dep_route_native", ProviderID: "provider_native", PublicModel: "claude", ProviderModel: "claude-provider", AccessSurface: manifest.AccessSurface, ProfileID: profileID, Adapter: bridge, Capabilities: provider.Capabilities{Chat: true, Streaming: true, Tools: true, Reasoning: true, StreamUsage: true}, InputMicrosPerMillion: 1000, OutputMicrosPerMillion: 1000}); err != nil {
 		t.Fatal(err)
 	}
 	service, err := NewService(snapshot, registry, accounting)
