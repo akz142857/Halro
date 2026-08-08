@@ -16,7 +16,7 @@ import {
   type ReauthValues,
 } from "../components";
 import { money, useInstantFormatter } from "../format";
-import type { Deployment, DeploymentPriceVersion, DeploymentTargetKind, Provider, ProviderBinding, ProviderCapabilities } from "../types";
+import type { Deployment, DeploymentPriceVersion, DeploymentTargetKind, Provider, ProviderBinding, ProviderCapabilities, ProviderModelDescriptor } from "../types";
 import { useTranslation } from "react-i18next";
 import { useIsReadOnly } from "../session";
 import { Link } from "../navigation";
@@ -504,12 +504,22 @@ function DeploymentForm({
   const initialProvider = enabledProviders.find((provider) => provider.id === (source?.provider_id ?? enabledProviders[0]?.id));
   const initialBindings = providerBindings(initialProvider);
   const [bindingID, setBindingID] = useState(source?.binding_id ?? initialBindings[0]?.id ?? "");
-  const initialBinding = initialBindings.find((binding) => binding.id === (source?.binding_id ?? initialBindings[0]?.id));
-  const [capabilities, setCapabilities] = useState<ProviderCapabilities>(source?.capabilities ?? initialBinding?.capabilities ?? initialProvider?.capabilities ?? emptyCapabilities());
+  // A new deployment starts with nothing enabled. Prefilling from the provider
+  // ceiling was the habit that let a deployment claim capabilities its model
+  // does not have; capabilities now arrive from the catalog or from a
+  // deliberate declaration.
+  const [capabilities, setCapabilities] = useState<ProviderCapabilities>(source?.capabilities ?? emptyCapabilities());
+  // What the catalog said about the chosen model, if anything. A model the
+  // catalog does not cover is deployable, but the operator has to say what it
+  // does — the profile ceiling is no longer a stand-in for an answer.
+  const [catalogModel, setCatalogModel] = useState<ProviderModelDescriptor | null>(null);
   const [region, setRegion] = useState(source?.region ?? "");
   const [maxConcurrency, setMaxConcurrency] = useState(source?.max_concurrency ?? 0);
   const [targetKind, setTargetKind] = useState<DeploymentTargetKind>(source?.target_kind ?? defaultTargetKind(initialProvider));
   const queryClient = useQueryClient();
+  // `current` rather than identityLocked: that is declared further down, and a
+  // const in the temporal dead zone would throw here.
+  const declaredModel = !current && catalogModel?.status !== "known";
   const value = () => ({
     name: name.trim(),
     provider_id: providerID,
@@ -517,6 +527,14 @@ function DeploymentForm({
     provider_model: providerModel.trim(),
     target_kind: targetKind,
     capabilities,
+    // Sent only for a model the catalog does not establish. The server rejects
+    // an undeclared unknown model rather than assuming the ceiling.
+    ...(declaredModel ? { mode: "operator_declared" } : {}),
+    // Echoing the revision the console read turns a catalog that moved
+    // underneath into a conflict instead of a silent substitution.
+    ...(catalogModel?.model_revision && catalogModel.id === providerModel.trim()
+      ? { model_revision: catalogModel.model_revision }
+      : {}),
     region: region.trim(),
     max_concurrency: maxConcurrency,
     priority: current?.priority ?? 0,
@@ -589,6 +607,19 @@ function DeploymentForm({
   }, [activeModelIndex]);
   const chooseModel = (modelID: string) => {
     setProviderModel(modelID);
+    const model = modelCatalog.data?.items.find((item) => item.id === modelID) ?? null;
+    setCatalogModel(model);
+    if (model?.preselect) {
+      // Only a builtin catalog entry may arrive checked, and it also decides
+      // which binding the deployment runs through.
+      setCapabilities(model.capabilities);
+      const selected = model.profile_candidates.find((candidate) => candidate.selected);
+      if (selected?.binding_id) setBindingID(selected.binding_id);
+    } else if (model) {
+      // Nothing establishes this model. Start from nothing rather than from the
+      // profile ceiling, and let the operator declare what it does.
+      setCapabilities(emptyCapabilities());
+    }
     setModelPickerOpen(false);
     setActiveModelIndex(-1);
   };
@@ -643,7 +674,10 @@ function DeploymentForm({
               if (provider) {
                 const binding = providerBindings(provider)[0];
                 setBindingID(binding?.id ?? "");
-                setCapabilities(binding?.capabilities ?? provider.capabilities);
+                // Switching provider clears the answer instead of substituting
+                // that provider's ceiling for it.
+                setCapabilities(emptyCapabilities());
+                setCatalogModel(null);
                 setTargetKind(defaultTargetKind(provider));
                 setProviderModel("");
                 setRegion("");
@@ -662,7 +696,8 @@ function DeploymentForm({
                   setBindingID(next);
                   const binding = bindings.find((item) => item.id === next);
                   if (binding) {
-                    setCapabilities(binding.capabilities);
+                    setCapabilities(emptyCapabilities());
+                    setCatalogModel(null);
                     setProviderModel("");
                     setRegion("");
                   }
@@ -693,7 +728,14 @@ function DeploymentForm({
                 value={providerModel}
                 onFocus={() => { if (modelCatalogSupported) setModelPickerOpen(true); }}
                 onClick={() => { if (modelCatalogSupported) setModelPickerOpen(true); }}
-                onChange={(event) => { setProviderModel(event.target.value); setModelPickerOpen(true); setActiveModelIndex(-1); }}
+                onChange={(event) => {
+                  setProviderModel(event.target.value);
+                  // A hand-typed identifier is not the model the catalog
+                  // answered about; its resolution no longer applies.
+                  if (event.target.value !== catalogModel?.id) setCatalogModel(null);
+                  setModelPickerOpen(true);
+                  setActiveModelIndex(-1);
+                }}
                 onKeyDown={handleModelPickerKeyDown}
               />
                 {modelCatalogSupported && <span className="deployment-model-input-icon" aria-hidden="true" />}
@@ -713,6 +755,9 @@ function DeploymentForm({
                         onClick={() => chooseModel(model.id)}
                       >
                         <strong>{model.id}</strong>
+                        <small className="model-status" data-status={model.status}>
+                          {t(`deployments.modelStatus.${model.status}`)}
+                        </small>
                         {model.owned_by && <small>{model.owned_by}</small>}
                       </button>
                     )) : (
@@ -723,6 +768,18 @@ function DeploymentForm({
               </div>
               <small>{t(`deployments.targetHints.${targetKind}`)}</small>
             </div>
+            {!identityLocked && providerModel.trim() !== "" && (
+              <div className={`deployment-model-declaration ${declaredModel ? "declared" : "catalogued"}`} role="status">
+                {declaredModel
+                  ? t("deployments.modelDeclarationRequired")
+                  : t("deployments.modelCataloguedCapabilities")}
+              </div>
+            )}
+            {modelCatalogSupported && modelCatalog.data?.degraded_bindings?.length ? (
+              <div className="deployment-model-degraded" role="status">
+                {t("deployments.modelCatalogPartial", { count: modelCatalog.data.degraded_bindings.length })}
+              </div>
+            ) : null}
             {modelCatalogSupported && (
               <div className="deployment-model-catalog-status" role="status">
                 <span>
@@ -802,10 +859,13 @@ function DeploymentForm({
   );
 }
 
+// Nothing declared. It used to hand back chat and streaming, which made "no
+// answer yet" indistinguishable from "this model does chat", and that guess
+// then rode along into the saved deployment.
 function emptyCapabilities(): ProviderCapabilities {
   return {
-    chat: true,
-    streaming: true,
+    chat: false,
+    streaming: false,
     embeddings: false,
     moderations: false,
     images: false,
