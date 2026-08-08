@@ -1,6 +1,6 @@
 # ADR 0018: Project admission and the accounting WAL write path
 
-- Status: Proposed. Not implemented.
+- Status: **Implemented 2026-08-08.** The decision below is what the code does.
 - Date: 2026-08-08
 - Tracking: raised as out of scope by ADR 0012's "Amendment 2026-08-07"
 - Related: `docs/adr/0002-ledger-authority.md`,
@@ -135,6 +135,37 @@ to have been applied first, so even that pair is not ordering-critical to the st
 machine; the usage read model creates its per-request accumulator on demand and is
 order-tolerant too. Caller control flow keeps them ordered anyway.
 
+## Measured
+
+`BenchmarkRequestLifecycle`, same harness, both sides built — request lifecycles
+per second, on the darwin/APFS reference host where `Sync` is `F_FULLFSYNC`:
+
+| Projects \ workers | 1 | 8 | 64 |
+|---|---:|---:|---:|
+| 1 — before | 43 | 44 | 46 |
+| 1 — after | 46 | **166** | **1011** |
+| 8 — after | 40 | 170 | 1068 |
+| 64 — after | 44 | 165 | 1021 |
+
+A single project goes from flat at ~45 to 1011 lifecycles per second, and the
+project count stops mattering: the three "after" rows are the same within noise,
+because a project is no longer limited to one concurrent WAL appender. At 64
+workers the path reaches roughly 5,100 Ledger events per second against 7,034
+for a raw concurrent append, so the remaining gap is apply serialization rather
+than the lock.
+
+The single-worker column is unchanged, as predicted: one request still walks five
+causally sequential durable steps. This is a throughput change, not a latency
+change, and any capacity claim has to say which.
+
+**A data race was found by the multi-project benchmark rather than by review.**
+The first implementation kept `pendingAdmitted` as one map on the Manager while
+guarding it with the *per-project* lock, so two projects mutated it under
+different locks. `projects=1` could never expose it; `projects=8` aborted on the
+first run. The pending amounts now live in a per-project struct, which is what
+makes the per-project lock a sufficient guard. The reason `BenchmarkRequestLifecycle`
+takes a project count is exactly this class of bug.
+
 ## Rejected alternatives
 
 ### Make the project lock shared, as ADR 0012 did for the pricing gate
@@ -213,6 +244,29 @@ side effect of this one.
   narrowing of an in-process lock, not a step toward multi-writer.
 
 ## Required verification
+
+Done, in `internal/budget/admission_test.go` unless noted:
+
+- `TestConcurrentAdmissionNeverExceedsTheDailyBudget` — 64 workers racing one
+  project against a budget for 20. Reverse-verified: dropping `pending` from the
+  admission total admits 640 micros against a 200 budget, caught on every run.
+- `TestFailedAppendReleasesAdmittedSpend` — a failed durable write, injected
+  through `ledger.Options.WrapDurability`, must not leave headroom held.
+  Reverse-verified by removing the release.
+- `TestAdmissionIsConservativeWhileASettlementIsInFlight`.
+- `TestProjectLockStatsExposeContention` pins the protocol rule structurally: two
+  acquisitions per lifecycle, not five, and a mean hold under a millisecond. A
+  durable step put back inside the critical section fails it.
+- Before/after on the committed harness, both sides built — see "Measured".
+
+Still open:
+
+- Reproducing the throughput table on Linux with an NVMe-backed data directory.
+- End-to-end evidence per `docs/verification/standalone-capacity-baseline.md`;
+  with this ceiling removed the next bottleneck is expected to move, and the
+  baseline should say where.
+
+Original list, for the record:
 
 - A property test that concurrent reservations against a fixed daily budget never
   exceed it: many workers racing on one project, asserting that

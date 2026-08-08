@@ -126,9 +126,13 @@ func TestProjectLockStatsExposeContention(t *testing.T) {
 	group.Wait()
 
 	stats := manager.ProjectLockStats()
-	// Five events per lifecycle, eight lifecycles.
-	if stats.Acquisitions != 40 {
-		t.Fatalf("counted %d acquisitions, want 40", stats.Acquisitions)
+	// Two acquisitions per lifecycle, not five: only the reservation makes a
+	// decision, and it takes the lock once to admit and once to hand the amount
+	// over to the Ledger. The other four events carry no decision and take no
+	// lock at all — if this climbs back toward five, a durable step has been put
+	// back inside the critical section (ADR 0018).
+	if stats.Acquisitions != 16 {
+		t.Fatalf("counted %d acquisitions for 8 lifecycles, want 16 (two per lifecycle)", stats.Acquisitions)
 	}
 	if stats.HeldDuration <= 0 {
 		t.Fatal("lock hold time went unmeasured")
@@ -136,11 +140,11 @@ func TestProjectLockStatsExposeContention(t *testing.T) {
 	if stats.WaitDuration <= 0 {
 		t.Fatal("eight workers on one project produced no measured wait")
 	}
-	// Every acquisition but the first has to wait out a durable append, so the
-	// aggregate wait must exceed one hold. If this ever inverts, the metric has
-	// stopped describing contention.
-	if stats.WaitDuration <= stats.HeldDuration/time.Duration(stats.Acquisitions) {
-		t.Fatalf("wait=%s is not larger than a single mean hold of %s",
-			stats.WaitDuration, stats.HeldDuration/time.Duration(stats.Acquisitions))
+	// The hold is now in-memory arithmetic rather than a durable append, so it
+	// should be far below one fsync. This is the property the change bought, and
+	// stating it as a bound keeps a future durable step from hiding here.
+	meanHold := stats.HeldDuration / time.Duration(stats.Acquisitions)
+	if meanHold > time.Millisecond {
+		t.Fatalf("mean hold is %s; the admission decision should be arithmetic, not I/O", meanHold)
 	}
 }

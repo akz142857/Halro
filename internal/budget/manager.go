@@ -201,24 +201,52 @@ func (m *Manager) localNow() time.Time {
 	return m.inAccountingZone(m.now())
 }
 
-// lockProject serializes one project's accounting writes. It is held across the
-// durable Ledger append, which makes it this process's per-project request-rate
-// ceiling — see ADR 0018. The wait and hold times are accumulated here because
-// that ceiling is otherwise invisible in production: an operator sees latency
-// rise with nothing to attribute it to. Deliberately aggregate, with no project
-// label, since project count is unbounded and high-cardinality labels are not
-// allowed.
-func (m *Manager) lockProject(projectID string) func() {
-	value, _ := m.projectLocks.LoadOrStore(projectID, &sync.Mutex{})
-	lock := value.(*sync.Mutex)
+// lockProject serializes one project's admission decisions — reading its balance
+// and deciding whether one more reservation fits — and nothing else.
+//
+// It is never held across a Ledger append. That is a protocol rule, not an
+// accident of the current code: holding it across the append made a project's
+// request rate a function of fsync latency, since its events could then never
+// share a WAL batch (ADR 0018). A durable step added inside this lock would grow
+// the ceiling straight back.
+//
+// The events that carry no decision — request accepted, attempt started,
+// settled, finalized — take no lock at all. Ordering does not come from here:
+// ledger.State applies records in WAL sequence order globally, and per-attempt
+// causality comes from callers awaiting each step before the next, which
+// Service.startAttempt does. A caller that fired an attempt's events
+// concurrently would break that, and no lock in this package would save it.
+//
+// Wait and hold times are accumulated because the remaining contention is
+// otherwise invisible in production: an operator sees latency rise with nothing
+// to attribute it to. Deliberately aggregate, with no project label, since
+// project count is unbounded and high-cardinality labels are not allowed.
+// projectAdmission is one project's admission state. The pending amounts live
+// here rather than in a map shared by every project, because the lock guarding
+// them is per-project: a shared map would be written under different locks by
+// different projects, which is a data race and not a subtle one — the
+// multi-project benchmark hit it on the first run.
+type projectAdmission struct {
+	mu sync.Mutex
+	// pending is spend admitted but not yet visible in the Ledger's own balance,
+	// keyed by period so a request near midnight counts against its own day.
+	pending map[ledger.BalanceKey]int64
+}
+
+func (m *Manager) lockProject(projectID string) (*projectAdmission, func()) {
+	value, loaded := m.projectLocks.Load(projectID)
+	if !loaded {
+		value, _ = m.projectLocks.LoadOrStore(projectID, &projectAdmission{})
+	}
+	admission := value.(*projectAdmission)
 	waitStarted := time.Now()
-	lock.Lock()
+	admission.mu.Lock()
 	held := time.Now()
 	m.lockWaitNanos.Add(int64(held.Sub(waitStarted)))
 	m.lockAcquisitions.Add(1)
-	return func() {
+	return admission, func() {
 		m.lockHeldNanos.Add(int64(time.Since(held)))
-		lock.Unlock()
+		admission.mu.Unlock()
 	}
 }
 
@@ -235,6 +263,71 @@ func (m *Manager) ProjectLockStats() ProjectLockStats {
 		Acquisitions: m.lockAcquisitions.Load(),
 		WaitDuration: time.Duration(m.lockWaitNanos.Load()),
 		HeldDuration: time.Duration(m.lockHeldNanos.Load()),
+	}
+}
+
+// admit decides whether one more reservation fits the project's daily budget,
+// and records it as spent until the Ledger says so itself.
+//
+// The count has to include reservations that were admitted but whose events are
+// still in flight, or two concurrent requests would both read the same balance,
+// both pass the same check, and both be let through. pendingAdmitted holds them
+// for exactly that window: an amount is added here, under the lock, and removed
+// only after Apply has made it visible in state.Balance. So it is counted in one
+// of the two places at every instant and in neither at none, which is the only
+// interval that could admit the same headroom twice.
+//
+// The reverse overlap does exist — between Apply and the release it is counted
+// in both — and that direction is safe: it can only refuse at the very edge of
+// a budget, never overspend it.
+func (m *Manager) admit(key ledger.BalanceKey, dailyBudgetMicrosUSD, reservationMicrosUSD int64, counted bool) error {
+	admission, unlock := m.lockProject(key.ProjectID)
+	defer unlock()
+	balance := m.state.Balance(key.ProjectID, key.PeriodID, key.TimezoneVersion)
+	total, err := checkedAdd(balance.CommittedMicrosUSD, balance.ReservedMicrosUSD)
+	if err != nil {
+		return err
+	}
+	if total, err = checkedAdd(total, admission.pending[key]); err != nil {
+		return err
+	}
+	if counted {
+		if total, err = checkedAdd(total, reservationMicrosUSD); err != nil {
+			return err
+		}
+	}
+	if dailyBudgetMicrosUSD > 0 && total > dailyBudgetMicrosUSD {
+		return ErrExceeded
+	}
+	if counted {
+		if admission.pending == nil {
+			admission.pending = make(map[ledger.BalanceKey]int64)
+		}
+		admission.pending[key] += reservationMicrosUSD
+	}
+	return nil
+}
+
+// admittedForTest reports spend admitted but not yet handed to the Ledger. Tests
+// assert it drains to zero: an amount left here would hold budget headroom for
+// the rest of the period with nothing to release it.
+func (m *Manager) admittedForTest(key ledger.BalanceKey) int64 {
+	admission, unlock := m.lockProject(key.ProjectID)
+	defer unlock()
+	return admission.pending[key]
+}
+
+// releaseAdmitted hands the amount over to the Ledger's own accounting. It runs
+// after the append has either applied or failed, on the same goroutine that
+// admitted it, so nothing has to record whose amount to remove.
+func (m *Manager) releaseAdmitted(key ledger.BalanceKey, reservationMicrosUSD int64) {
+	admission, unlock := m.lockProject(key.ProjectID)
+	defer unlock()
+	if remaining := admission.pending[key] - reservationMicrosUSD; remaining > 0 {
+		admission.pending[key] = remaining
+	} else {
+		// Keyed by period, so entries would otherwise accumulate one per day.
+		delete(admission.pending, key)
 	}
 }
 
@@ -281,7 +374,6 @@ func (m *Manager) BeginRequestDetailed(
 		RequestID: requestID, ProjectID: projectID, Period: period,
 		KeyID: keyID, RequestedModel: requestedModel,
 	}
-	defer m.lockProject(projectID)()
 	event := ledger.Event{
 		EventID: eventID, Kind: ledger.EventRequestAccepted,
 		RequestID: request.RequestID, ProjectID: request.ProjectID,
@@ -378,20 +470,20 @@ func (m *Manager) reserveAttemptDetailed(
 		snapshot := spec.PriceSnapshot.Clone()
 		attempt.PriceSnapshot = &snapshot
 	}
-	defer m.lockProject(request.ProjectID)()
-	balance := m.state.Balance(request.ProjectID, request.Period.ID, request.Period.TimezoneVersion)
-	total, err := checkedAdd(balance.CommittedMicrosUSD, balance.ReservedMicrosUSD)
-	if err != nil {
+	// Admission is a decision about money and has to be atomic against other
+	// requests in the same project; the durable write does not. Holding the lock
+	// across the append is what made a project's request rate a function of fsync
+	// latency (ADR 0018), so the lock ends here and the append happens without
+	// it.
+	key := ledger.BalanceKey{ProjectID: request.ProjectID, PeriodID: request.Period.ID, TimezoneVersion: request.Period.TimezoneVersion}
+	counted := spec.Mode != ledger.LeaseModeUnknownAllowed
+	if err := m.admit(key, dailyBudgetMicrosUSD, spec.ReservationMicrosUSD, counted); err != nil {
 		return Attempt{}, err
 	}
-	if spec.Mode != ledger.LeaseModeUnknownAllowed {
-		total, err = checkedAdd(total, spec.ReservationMicrosUSD)
-	}
-	if err != nil {
-		return Attempt{}, err
-	}
-	if dailyBudgetMicrosUSD > 0 && total > dailyBudgetMicrosUSD {
-		return Attempt{}, ErrExceeded
+	if counted {
+		// Released on every path out of here, so a reservation that never became
+		// durable does not hold budget headroom for the rest of the period.
+		defer m.releaseAdmitted(key, spec.ReservationMicrosUSD)
 	}
 	var reservationValue *int64
 	if spec.Mode != ledger.LeaseModeUnknownAllowed {
@@ -446,7 +538,6 @@ func (m *Manager) MarkStarted(ctx context.Context, attempt Attempt) error {
 	if err != nil {
 		return err
 	}
-	defer m.lockProject(attempt.ProjectID)()
 	started := ledger.Event{
 		EventID:   eventID,
 		Kind:      ledger.EventAttemptStarted,
@@ -523,7 +614,6 @@ func (m *Manager) settle(ctx context.Context, eventID string, attempt Attempt, s
 			tokenSource = ledger.TokenUsageSourceEstimate
 		}
 	}
-	defer m.lockProject(attempt.ProjectID)()
 	settled := ledger.Event{
 		EventID:            eventID,
 		Kind:               ledger.EventAttemptSettled,
@@ -636,7 +726,6 @@ func (m *Manager) Finalize(ctx context.Context, request Request, outcome string)
 	if err != nil {
 		return err
 	}
-	defer m.lockProject(request.ProjectID)()
 	finalized := ledger.Event{
 		EventID:   eventID,
 		Kind:      ledger.EventRequestFinalized,
