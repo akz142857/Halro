@@ -262,6 +262,7 @@ describe("SettingsPage system configuration pane", () => {
         wal_batch_size: 8.25,
         project_lock_held_seconds: 0.0221,
         project_events_per_second: 45.2,
+        project_requests_per_second: 9.04,
       }),
       audit: {}, alerts: {}, usage_watermark: {},
     } as never);
@@ -274,6 +275,44 @@ describe("SettingsPage system configuration pane", () => {
     expect(screen.getByText("22.1 ms")).toBeInTheDocument();
     expect(screen.getByText("8.25")).toBeInTheDocument();
     expect(screen.getByText("45.2")).toBeInTheDocument();
+    // The answer belongs on the collapsed row: an operator asking "how many
+    // requests per second can this take" should not have to expand a card and
+    // divide by five to find out.
+    expect(screen.getByText("≈ 9.04 请求/秒")).toBeInTheDocument();
+  });
+
+  // A batch size of 1.0 and a saturated disk read the same from a latency graph,
+  // and only the first is fixed by adding concurrency. The card has to say which
+  // one it is looking at, and must stay quiet until the reading is real.
+  it("says when appends are not coalescing, and only once traffic makes that real", async () => {
+    vi.spyOn(api, "systemConfig").mockResolvedValue({ yaml: "" } as never);
+    vi.spyOn(api, "systemStatus").mockResolvedValue({
+      build: { version: "1.0.0", commit: "abc", date: "2026-08-07" },
+      accounting_status: 0, draining: false, wal: { batches: 400 },
+      write_path: emptyWritePath({ wal_sync_seconds: 0.004, wal_batch_size: 1 }),
+      audit: {}, alerts: {}, usage_watermark: {},
+    } as never);
+    window.history.replaceState({}, "", "/admin/settings/diagnostics");
+    renderWithClient(<SettingsPage />);
+    const warning = await screen.findByText(/未合批/);
+    expect(warning).toBeInTheDocument();
+    // Rendered as the shared notice component rather than another paragraph, so
+    // a conditional warning does not read at the same weight as the table.
+    expect(warning).toHaveClass("notice", "warning");
+  });
+
+  it("stays quiet about coalescing on an instance with almost no traffic", async () => {
+    vi.spyOn(api, "systemConfig").mockResolvedValue({ yaml: "" } as never);
+    vi.spyOn(api, "systemStatus").mockResolvedValue({
+      build: { version: "1.0.0", commit: "abc", date: "2026-08-07" },
+      accounting_status: 0, draining: false, wal: { batches: 3 },
+      write_path: emptyWritePath({ wal_sync_seconds: 0.004, wal_batch_size: 1 }),
+      audit: {}, alerts: {}, usage_watermark: {},
+    } as never);
+    window.history.replaceState({}, "", "/admin/settings/diagnostics");
+    renderWithClient(<SettingsPage />);
+    await screen.findByText("Heimdall 1.0.0");
+    expect(screen.queryByText(/未合批/)).not.toBeInTheDocument();
   });
 
   // An instance that has served nothing has no means to report. Zero is what the
@@ -290,6 +329,21 @@ describe("SettingsPage system configuration pane", () => {
 
     await screen.findByText("Heimdall 1.0.0");
     expect(screen.queryByText(/NaN/)).not.toBeInTheDocument();
+    // The rows stay on screen with no data behind them. An idle instance asking
+    // this card a question should get "— over 0 barriers", which is an answer;
+    // replacing the table with prose is what made the first reader ask what the
+    // panel was for.
+    expect(screen.getByText("每次落盘耗时")).toBeInTheDocument();
+    // An empty card that does not say what would fill it sends the reader to
+    // ask someone. The Admin console never writes to the Ledger, so nothing
+    // done on this page can populate these figures — say so here rather than
+    // leaving "no data" to be interpreted as a fault.
+    expect(screen.getByText(/Gateway/)).toBeInTheDocument();
+    // "this instance" was ambiguous between the data directory and the current
+    // run: a restarted instance reports thousands of requests_total (replayed
+    // from the Ledger) beside zero here, and the first reader to hit that asked
+    // whether the card was broken.
+    expect(screen.getByText(/本次启动/)).toBeInTheDocument();
   });
 
   it("keeps an unknown pane on general rather than blanking the page", () => {

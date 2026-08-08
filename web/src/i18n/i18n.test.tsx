@@ -16,6 +16,25 @@ describe("admin internationalization", () => {
     expect(flattenKeys(zhCN)).toEqual(flattenKeys(enUS));
   });
 
+  // Half-width commas inside Chinese copy render noticeably wrong next to the
+  // full-width punctuation used everywhere else, and it is the kind of thing that
+  // survives review because the string still reads correctly in a diff. Caught
+  // once already, in the write-path card, from a screenshot rather than a test.
+  it("uses full-width punctuation in Chinese copy", () => {
+    const offenders: string[] = [];
+    const walk = (node: unknown, path: string) => {
+      if (typeof node === "string") {
+        if (/[\u4e00-\u9fa5][,;]|[,;][\u4e00-\u9fa5]/.test(node)) offenders.push(`${path}: ${node}`);
+        return;
+      }
+      if (node && typeof node === "object") {
+        for (const [key, value] of Object.entries(node)) walk(value, path ? `${path}.${key}` : key);
+      }
+    };
+    walk(zhCN, "");
+    expect(offenders).toEqual([]);
+  });
+
   it("keeps navigation labels aligned with page titles", () => {
     expect([
       zhCN.navigation.overview, zhCN.navigation.providers, zhCN.navigation.deployments,

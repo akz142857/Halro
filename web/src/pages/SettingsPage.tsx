@@ -111,7 +111,7 @@ function DiagnosticsPane({ status, accountingLabels, metricLabels }: { status: A
               ))}
             </dl>
           </details>
-          <WritePathCard summary={status.write_path} />
+          <WritePathCard summary={status.write_path} batches={Number(status.wal?.batches ?? 0)} />
           <details className="panel system-card diagnostic-details" open>
             <summary><span>{t("settings.auditHead")}</span><strong>{t("settings.chainCheckpoint")}</strong></summary>
             <dl>
@@ -127,12 +127,16 @@ function DiagnosticsPane({ status, accountingLabels, metricLabels }: { status: A
 // The durable write path. This is the answer to "what is this instance doing
 // right now" for an operator who has not stood up Prometheus — the same numbers
 // the metrics endpoint exposes, already reduced to the means that matter.
-function WritePathCard({ summary }: { summary?: WritePathSummary }) {
+function WritePathCard({ summary, batches }: { summary?: WritePathSummary; batches: number }) {
   const { t } = useTranslation();
   // Optional even though the server always sends it: this is the card an
   // operator opens when the instance is misbehaving, so it must not be the thing
   // that blanks the page.
   const idle = !summary || (summary.wal_sync_seconds === 0 && summary.project_lock_held_seconds === 0);
+  // Rows always render. Zero is data — "over 0 barriers" answers the question
+  // this card exists for — and hiding the table behind an idle branch is what
+  // turned a diagnostics panel into three paragraphs of prose. The CLI never
+  // hid it either.
   const rows: [string, string][] = summary ? [
     [t("settings.walSyncSeconds"), formatMillis(summary.wal_sync_seconds)],
     [t("settings.walBatchSize"), formatFactor(summary.wal_batch_size)],
@@ -142,13 +146,21 @@ function WritePathCard({ summary }: { summary?: WritePathSummary }) {
     [t("settings.metadataBatchSize"), formatFactor(summary.metadata_batch_size)],
     [t("settings.metadataWriteSeconds"), formatMillis(summary.metadata_write_seconds)],
   ] : [];
+  // The reading that looks like a slow disk and is not. Only stated once there
+  // is enough traffic for the batch size to mean anything.
+  const notCoalescing = !!summary && batches >= 20 && summary.wal_batch_size > 0 && summary.wal_batch_size < 1.2;
   return (
-    <details className="panel system-card diagnostic-details" open>
-      <summary><span>{t("settings.writePathTitle")}</span><strong>{t("settings.writePathSummaryLabel")}</strong></summary>
-      <p className="field-hint">{t("settings.writePathDescription")}</p>
-      {idle
-        ? <p className="field-hint">{t("settings.writePathIdle")}</p>
-        : <dl>{rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>}
+    <details className="panel system-card diagnostic-details write-path" open>
+      <summary>
+        <span>{t("settings.writePathTitle")}</span>
+        <strong>{idle || !summary?.project_requests_per_second
+          ? t("settings.writePathUnknownRate")
+          : t("settings.writePathRequestsPerSecond", { rate: formatFactor(summary.project_requests_per_second).trim() })}</strong>
+      </summary>
+      <p className="write-path-caption">{t("settings.writePathDescription")}</p>
+      <dl>{rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
+      <p className="write-path-meta">{idle ? t("settings.writePathIdle") : t("settings.writePathWindow")}</p>
+      {notCoalescing && <p className="notice warning">{t("settings.writePathNotCoalescing")}</p>}
     </details>
   );
 }

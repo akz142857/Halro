@@ -75,11 +75,23 @@ type writePathSummary struct {
 	// single project. Reported as observed rather than promised: it is a
 	// measurement of this instance's recent behaviour, not a rating.
 	ProjectEventsPerSecond float64 `json:"project_events_per_second"`
+	// The same ceiling expressed in requests, which is the unit an operator
+	// thinks in. One request lifecycle is five accounting events — request
+	// accepted, reservation, started, settled, finalized — so this is
+	// ProjectEventsPerSecond over that. Approximate by construction: a request
+	// that retries or falls back spends more than five, so the real ceiling for
+	// such traffic is lower than this reports.
+	ProjectRequestsPerSecond float64 `json:"project_requests_per_second"`
 	// Mean batched metadata calls per write transaction, the bbolt counterpart
 	// of WALBatchSize.
 	MetadataBatchSize    float64 `json:"metadata_batch_size"`
 	MetadataWriteSeconds float64 `json:"metadata_write_seconds"`
 }
+
+// accountingEventsPerRequest is the五-event lifecycle ADR 0018 describes, and is
+// a measured fact rather than an estimate: one Gateway request appends exactly
+// five Ledger records and takes exactly five project-lock acquisitions.
+const accountingEventsPerRequest = 5
 
 func (r *Runtime) writePathSummary() writePathSummary {
 	wal := r.ledger.Stats()
@@ -94,6 +106,7 @@ func (r *Runtime) writePathSummary() writePathSummary {
 		MetadataWriteSeconds:   perOperationSeconds(metadata.PageWriteDuration, uint64(max(metadata.PageWrites, 0))),
 	}
 	summary.ProjectEventsPerSecond = ratio(1, summary.ProjectLockHeldSeconds)
+	summary.ProjectRequestsPerSecond = ratio(summary.ProjectEventsPerSecond, accountingEventsPerRequest)
 	return summary
 }
 

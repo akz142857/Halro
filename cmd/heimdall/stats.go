@@ -91,6 +91,11 @@ func writeStatsReport(out io.Writer, sample statsSample, window string) {
 	fmt.Fprintf(writer, "  WAL queue             %s / %s\n",
 		statsCount(sample["heimdall_usage_queue_depth"]), statsCount(sample["heimdall_usage_queue_capacity"]))
 
+	// One request lifecycle is five accounting records (ADR 0018), so the
+	// per-project ceiling is reported in requests as well: that is the unit an
+	// operator plans in. Approximate — a request that retries spends more than
+	// five, so its real ceiling is lower.
+	const recordsPerRequest = 5
 	held := statsMean(sample["heimdall_accounting_project_lock_held_seconds_sum"], acquisitions)
 	fmt.Fprintf(writer, "  Project lock wait     %s\n",
 		statsMillis(sample["heimdall_accounting_project_lock_wait_seconds_sum"], acquisitions))
@@ -98,7 +103,7 @@ func writeStatsReport(out io.Writer, sample statsSample, window string) {
 	if held > 0 {
 		// One project's accounting writes serialize on this lock, so its
 		// reciprocal is that project's ceiling however many requests it offers.
-		fmt.Fprintf(writer, "   → one project ≈ %s accounting writes/s", statsFactor(1/held))
+		fmt.Fprintf(writer, "   → one project ≈ %s requests/s", statsFactor(1/held/recordsPerRequest))
 	}
 	fmt.Fprintln(writer)
 	fmt.Fprintf(writer, "  Metadata coalescing   %s   calls per write transaction\n",
@@ -198,7 +203,13 @@ func metricsSampleFetcher(rawURL string, token []byte, timeout time.Duration) (s
 		request.Header.Set("Authorization", "Bearer "+string(token))
 		response, err := client.Do(request)
 		if err != nil {
-			return nil, errors.New("metrics endpoint is unavailable")
+			// Naming the endpoint matters more here than the usual terseness:
+			// this command reads a *running* instance, and the failure an
+			// operator actually hits is that it is not up. "unavailable" alone
+			// sends them looking at credentials and listeners instead. The URL
+			// is loopback and operator-supplied, and userinfo is rejected above,
+			// so there is nothing here to leak.
+			return nil, fmt.Errorf("metrics endpoint %s is unavailable; is Heimdall running with metrics enabled?", parsed.Redacted())
 		}
 		defer response.Body.Close()
 		if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden {

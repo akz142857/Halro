@@ -26,6 +26,7 @@ export function emptyWritePath(overrides: Partial<WritePathSummary> = {}): Write
     project_lock_wait_seconds: 0,
     project_lock_held_seconds: 0,
     project_events_per_second: 0,
+    project_requests_per_second: 0,
     metadata_batch_size: 0,
     metadata_write_seconds: 0,
     ...overrides,

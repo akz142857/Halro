@@ -117,6 +117,26 @@ an authentication boundary.
 | `go_memstats_gc_cycles_total` | counter | none |
 | `process_start_time_seconds` | gauge | none |
 
+### Counter reset semantics
+
+Two kinds of counter are exported here and they do not reset together.
+
+`heimdall_requests_total`, `heimdall_attempts_total`, `heimdall_tokens_total` and
+`heimdall_cost_usd_total` are read-model totals: startup replays the Ledger into
+the Usage aggregate, so they carry the whole history of the data directory
+across restarts.
+
+`heimdall_wal_append_*`, `heimdall_wal_sync_seconds`,
+`heimdall_accounting_project_lock_*` and `heimdall_metadata_*` count work this
+*process* performed, so they start at zero on every restart — replay appends
+nothing and takes no locks.
+
+The pair is therefore expected to disagree after a restart: a freshly started
+instance can report thousands of requests and zero WAL appends without anything
+being wrong. `rate()` over either is unaffected; only an absolute comparison
+between the two families is meaningless.
+
+
 Histogram buckets are 10, 25, 50, 100, 250, and 500 milliseconds, then 1,
 2.5, 5, 10, 30, and 120 seconds plus `+Inf`. They are derived from Ledger
 events and persisted in the Usage checkpoint, so replay and catch-up preserve

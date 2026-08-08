@@ -46,9 +46,10 @@ func TestStatsReportsTheDerivedMeans(t *testing.T) {
 		"4.30 ms",
 		// 825 records in 100 batches.
 		"8.25",
-		// 11.05s held over 500 acquisitions, so one project tops out near 45/s.
+		// 11.05s held over 500 acquisitions: 45.2 records/s, or 9.05 requests/s
+		// at five records per request.
 		"22.1 ms",
-		"45.2",
+		"9.05",
 		// 64 batched calls coalesced into 20 transactions.
 		"3.20",
 		"3 / 4096",
@@ -224,6 +225,36 @@ func TestStatsFetcherReportsRejectedCredentials(t *testing.T) {
 	}
 	if _, err := fetch(context.Background()); err == nil || !strings.Contains(err.Error(), "rejected") {
 		t.Fatalf("unauthorized was reported as %v", err)
+	}
+}
+
+// The failure an operator actually hits is "the instance is not up", and the
+// error has to point there. A bare "unavailable" sends them to check
+// credentials and listeners first — which is what happened the first time this
+// command was run for real.
+func TestStatsFetcherNamesTheEndpointWhenNothingAnswers(t *testing.T) {
+	// A port that accepted a connection and then closed, so nothing is listening.
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	endpoint := server.URL + "/metrics"
+	server.Close()
+
+	fetch, err := metricsSampleFetcher(endpoint, []byte("token"), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = fetch(context.Background())
+	if err == nil {
+		t.Fatal("a closed endpoint was reported as reachable")
+	}
+	if !strings.Contains(err.Error(), "127.0.0.1") {
+		t.Fatalf("error does not name the endpoint it tried: %v", err)
+	}
+	if !strings.Contains(err.Error(), "running") {
+		t.Fatalf("error does not point at the likely cause: %v", err)
+	}
+	// The bearer token must not appear in an error an operator will paste.
+	if strings.Contains(err.Error(), "token") {
+		t.Fatalf("error leaked the credential: %v", err)
 	}
 }
 
