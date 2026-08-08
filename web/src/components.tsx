@@ -2,7 +2,7 @@ import { cloneElement, Component, isValidElement, useEffect, useId, useRef, useS
 import { createPortal } from "react-dom";
 import { ApiError } from "./api";
 import { useTranslation } from "react-i18next";
-import { useIsReadOnly } from "./session";
+import { useIsReadOnly, useSession } from "./session";
 import { errorDetail, localizedError } from "./i18n/errors";
 
 export function PageHeader({
@@ -350,7 +350,7 @@ export function ConfirmButton({
           dirty={Boolean(reauth.currentPassword)}
           onClose={close}
         >
-          <div className="confirmation-dialog">
+          <form className="confirmation-dialog" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
             <p id={consequenceID}>{confirmLabel}</p>
             {requireStepUp && <ReauthFields values={reauth} onChange={setReauth} description={t("auth.stepUpDestructive")} />}
             {Boolean(failure) && <ErrorState error={failure} />}
@@ -364,7 +364,7 @@ export function ConfirmButton({
                 onClick={submit}
               >{pending ? t("common.working") : label}</button>
             </div>
-          </div>
+          </form>
         </Modal>
       )}
     </>
@@ -417,7 +417,7 @@ export function ResourceToolbar({
   const { t } = useTranslation();
   return (
     <div className="resource-toolbar" role="search" aria-label={t("common.filters")}>
-      <label className="resource-search"><span>{t("common.search")}</span><input type="search" value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder={queryPlaceholder} /></label>
+      <label className="resource-search"><span>{t("common.search")}</span><input type="search" autoComplete="off" value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder={queryPlaceholder} /></label>
       {status !== undefined && onStatusChange && <label><span>{t("common.status")}</span><select value={status} onChange={(event) => onStatusChange(event.target.value as ResourceStatusFilter)}><option value="all">{t("common.allStatuses")}</option><option value="enabled">{t("common.enabled")}</option><option value="disabled">{t("common.disabled")}</option></select></label>}
       <span className="resource-result-count" role="status">{count}</span>
     </div>
@@ -511,12 +511,30 @@ export function ReauthFields({
   description?: string;
 }) {
   const { t } = useTranslation();
+  const username = useSession()?.username ?? "";
   // A fragment, not a wrapper: these are two ordinary fields and they belong to
   // the surrounding form's grid. Nesting them one level deeper takes them out
   // of its gap and lines them up with nothing.
   return (
     <>
       {description && <p className="form-note">{description}</p>}
+      {/* A password field with no username beside it makes the browser look
+          further out for one, and it will fill whatever text input it finds —
+          on a list page that is the filter box, which then silently filters the
+          list to nothing. Naming the account here keeps that search inside this
+          form. Hidden from assistive tech and from the tab order: it exists for
+          the password manager, and the operator already knows who they are. */}
+      <input
+        type="text"
+        name="username"
+        autoComplete="username"
+        value={username}
+        readOnly
+        tabIndex={-1}
+        aria-hidden="true"
+        className="sr-only"
+        onChange={() => {}}
+      />
       <Field label={t("auth.currentPassword")}>
         <input
           required
