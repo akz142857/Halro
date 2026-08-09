@@ -335,7 +335,7 @@ provider type
 ### 6.2 匹配规则
 
 - 优先精确模型 ID；
-- dated alias 只有在服务商命名规则稳定且有测试时才能映射到已知 family；
+- **dated alias 映射暂不启用（2026-08-09 决定）。** 它原本允许在服务商命名规则稳定且有测试时把 dated alias 映射到已知 family。目前没有任何服务商满足这个前提，而逐条精确 ID 已经覆盖同样的模型，所以启用它只会新增一条「靠命名规律推断能力」的路径 —— 那正是 §2.2 的非目标。若将来要启用，必须先同时满足：该服务商的 dated 命名规则有书面契约、映射有测试、且映射结果不高于被映射 family 的证据等级；
 - 不允许宽泛前缀把未知未来模型自动提升为已知能力；
 - 模型别名变化不改变已持久化 Deployment Snapshot；
 - Provider 返回重复、空、超长或异常模型 ID 时沿用现有规范化与数量上限。
@@ -824,7 +824,7 @@ Phase 0、Phase 1、Phase 2 的**执行机制**已经完成并有测试覆盖，
 - **C2. §13 第 3、7 项指标口径。** §13 已改为 Deployment 与 Deployment 测试，并说明为什么不按 Model / Operation Binding 统计。
 - **C3. `Clamp`/`Merge` 取窄值。** §4.2 已区分「派生层之间取窄」与「管理员输入越界则拒绝」，禁令只针对后者。
 
-#### D. 欠账 —— D1、D2、D4 已完成，D3 余一项（PR #135）
+#### D. 欠账 —— 已完成（PR #135）
 
 - **D1. CHANGELOG 未宣告 schema 20。** 已补：`[Unreleased] / Operator impact` 下有独立条目，说明为什么不能回填。
 - **D2. Phase 0 遗留两问。** 已答，写在 §9 Phase 0 与 `docs/compatibility/README.md`：
@@ -835,7 +835,7 @@ Phase 0、Phase 1、Phase 2 的**执行机制**已经完成并有测试覆盖，
   - [x] 聚合的并发上限与单 Binding 超时（`TestAggregateCatalogIsConcurrencyBoundedAndTimesOutPerBinding`）；
   - [x] 全部 Binding 都无法列举时的 502 与手输兜底提示（`TestProviderModelCatalogFailsClosedWhenNoInterfaceCanList`）；
   - [x] 「无关模型增减不触发 409」的反向（`TestAnUnrelatedModelChangingDoesNotMoveThisModelsRevision`）；
-  - [ ] **§6.2 的日期别名映射既无实现也无测试。** 这不是欠测试，是**未决定要不要做**：§6.2 只允许在「服务商命名规则稳定且有测试」时把 dated alias 映射到已知 family。目前没有任何服务商满足这个前提，逐条精确 ID 也能覆盖同样的模型。见 §17.4。
+  - [x] **§6.2 的日期别名映射：已决定不做（2026-08-09）。** 它不是欠测试而是欠决定。目前没有服务商满足 §6.2 的前提，逐条精确 ID 已覆盖同样的模型，启用它只会新增一条「靠命名规律推断能力」的路径。§6.2 已改写为「暂不启用」并列出将来启用的三项前置条件。
 - **D4. legacy 残留一处。** 已删除。**原描述有两处不准**：那段代码读的是 Provider 实例而非 Deployment，而且它不是「不可达分支」——`normalizedProviderCapabilities` 根本没有任何调用方，是死代码。
 
 #### E. Phase 3：多 Operation Binding Deployment
@@ -862,7 +862,7 @@ Phase 0、Phase 1、Phase 2 的**执行机制**已经完成并有测试覆盖，
 
 | 编号 | 内容 | 状态 | 卡在哪 |
 | --- | --- | --- | --- |
-| D3-4 | §6.2 日期别名（dated alias）映射到已知 family | 未开始 | **需要决定做不做**。§6.2 只允许在服务商命名规则稳定且有测试时使用。目前无服务商满足前提，逐条精确 ID 已覆盖同样的模型；建议**不做**，并把 §6.2 改写为「暂不启用，若启用需先满足以下条件」 |
+| D3-4 | §6.2 日期别名映射 | **已决定不做（2026-08-09）** | 无 —— §6.2 已改写为「暂不启用」并列出将来启用的前置条件 |
 | E | Phase 3：多 Operation Binding Deployment | 未开始 | 唯一的大工作量。按 2026-08-09 的决定纳入 1.0.0。开工前需先过 §5.3 列出的六道运行时门禁 |
 | F1 | 真实 Provider 能力证据进入 `docs/verification/provider-real-matrix.md` | 未开始 | **需要授权与凭据**：计费、opt-in，且矩阵运行器要求精确的 RC commit |
 | F2 | 浏览器验收（门禁 18 的最后一项） | 未开始 | 需要真人操作或浏览器自动化 |
@@ -871,4 +871,4 @@ Phase 0、Phase 1、Phase 2 的**执行机制**已经完成并有测试覆盖，
 
 **门禁现状（§15，共 19 条）：15 达成 / 3 部分 / 1 未达成。** 三条「部分」分别是上表的 §15-4、§15-5 与 F2；唯一「未达成」是 F1。
 
-换句话说：**除 Phase 3 外，剩下的都不是编码工作** —— 一个待决定（D3-4）、两个需要外部输入（F1、F2），另有两条门禁被 Phase 3 阻塞。
+换句话说：**除 Phase 3 外，剩下的都不是编码工作** —— 两个需要外部输入（F1、F2），另有两条门禁被 Phase 3 阻塞。
