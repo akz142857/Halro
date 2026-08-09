@@ -1,10 +1,10 @@
 # 基于服务商与模型的能力选择升级方案
 
-- 状态：Reviewed / 待实施（评审意见已并入正文，不单列评审章节）
-- 生产就绪：否
+- 状态：**已实施**（Phase 0、1、2 全部落地并有测试覆盖；Phase 3 已取消）。评审意见已并入正文，不单列评审章节
+- 生产就绪：代码就绪；发布前仍差三项非编码工作，见 §17.4
 - 范围：Provider 模型目录、Deployment 能力快照、Profile Binding 自动映射、Admin 创建流程、测试与重新初始化
-- 当前实现：仍由管理员先选择内部“能力接口”，再填写模型 ID；本文描述的模型级能力目录与自动映射尚未实现
-- 数据影响：**需要重新初始化数据目录**。项目处于 pre-1.0.0，无已发布实例需要兼容，因此不提供迁移路径、不保留 legacy 能力来源与 legacy 创建路径（见 §10）
+- 当前实现：普通创建流程为「服务商 → 模型 → 能力」，内部 Binding 由后端按模型解析；能力快照落库并在加载期核对漂移。本文正文描述的是**已实现的行为**，未落地的部分逐条列在 §17.4
+- 数据影响：**需要重新初始化数据目录**。项目处于 pre-1.0.0，无已发布实例需要兼容，因此不提供迁移路径、不保留 legacy 能力来源与 legacy 创建路径（见 §10）。本方案共引入四道迁移：schema 20、21、22（fail-closed，拒绝旧结构）与 schema 23（回填，见 §17.1）
 - 相关契约：[Provider capability contract](../contracts/provider-capabilities.md)、[ADR 0009](../adr/0009-phase2-resource-ownership.md)、[Compatibility manifests](../compatibility/README.md)
 
 ## 0. 决策摘要
@@ -259,14 +259,14 @@ type ModelProfileCandidate struct {
 
 ```go
 type ModelCapabilitySnapshot struct {
-    ProviderModel     string
-    ModelRevision     string // 冲突检查与漂移比较的基准
-    CatalogRevision   string // 诊断用
-    Source            string
-    CapturedAt        time.Time
-    Capabilities      ProviderCapabilities
-    Evidence          CapabilityEvidenceSet
-    OperationBindings map[string]string // operation -> provider binding id
+    ProviderModel   string
+    ModelRevision   string // 冲突检查与漂移比较的基准
+    CatalogRevision string // 诊断用
+    Source          string
+    Status          string // known | partial | unknown | conflicting
+    CapturedAt      time.Time
+    Capabilities    ProviderCapabilities
+    Evidence        CapabilityEvidenceSet
 }
 
 type Deployment struct {
@@ -275,6 +275,8 @@ type Deployment struct {
     OperatorDisabled        []string
 }
 ```
+
+这个结构体曾经还有一个 `OperationBindings map[string]string`。它随 Phase 3 一并取消（见 §5.3），因此不在上面 —— 一条 Deployment 只有一个内部 Binding，没有逐操作的映射需要存。
 
 **复核状态是派生的，不落库。** 它一度被列为 `Deployment` 字段，实现时改为在需要处计算（`internal/app/capability_drift.go`）。理由是比较的两侧——运行中的 Profile 上限与模型目录——都可以在这条记录不被改写的情况下变化，所以存下来的值只能记录“上次写入时”的答案，而读它的人会当成“现在”的答案。派生保证了不会有这种时间差；代价是每次读取要做一次比较，那是内存中的结构体比较。
 
@@ -642,7 +644,7 @@ GET /admin/api/v1/providers/{provider_id}/models
 - 目录刷新不改变持久化能力；
 - 能力复核推进 revision，并使 `LastTestRevision` 判定为 stale；
 - stale ETag / 单模型 revision 被拒绝；
-- Backup/Restore 保留快照、来源和 Operation Bindings。
+- Backup/Restore 保留快照、来源与证据。
 
 ### 12.3 Admin API 测试
 
@@ -701,7 +703,7 @@ GET /admin/api/v1/providers/{provider_id}/models
 - 单模型 revision 冲突次数（Counter）；
 - Deployment 测试成功/失败次数（Counter）。
 
-上面两项刻意以 Deployment 而非 Model、Operation Binding 为统计单位。Gauge 描述的是当前状态，而当前状态存在于 Deployment 记录上：同一模型可以有多个 Deployment，各自的快照状态不同，按模型聚合会把它们压成一个无法对应到任何一条记录的数字。Operation Binding 测试随 Phase 3 一并取消，因此可测的单位就是 Deployment；为一个不存在的维度预留指标只会让指标契约先于实现分叉。
+其中第 3、5、7 项刻意以 Deployment 而非 Model、Operation Binding 为统计单位。Gauge 描述的是当前状态，而当前状态存在于 Deployment 记录上：同一模型可以有多个 Deployment，各自的快照状态不同，按模型聚合会把它们压成一个无法对应到任何一条记录的数字。Operation Binding 测试随 Phase 3 一并取消，因此可测的单位就是 Deployment；为一个不存在的维度预留指标只会让指标契约先于实现分叉。
 
 Counter 与 Gauge 必须在设计阶段就定死，不能实现时临时决定 —— 两者的告警写法完全不同。新增指标需同步既有契约文档 `docs/contracts/metrics-reference.md`，否则指标契约与实现分叉。
 
@@ -749,7 +751,7 @@ Counter 与 Gauge 必须在设计阶段就定死，不能实现时临时决定 �
 - [ ] 完整 Go、Race、Vet、前端测试、生产构建和浏览器验收通过。**部分** —— 自动化部分通过；浏览器验收未做。
 - [ ] 真实 Provider 能力证据已进入 `docs/verification/provider-real-matrix.md`。**未达成**。
 
-计数：11 达成、6 部分、2 未达成。
+计数：共 19 条 —— **16 达成、2 部分、1 未达成**。两条「部分」是门禁 4（上游元数据无生产调用点）与门禁 18（浏览器验收未做），唯一「未达成」是门禁 19（真实 Provider 证据）。逐项跟踪见 §17.4。
 
 ## 16. 建议实施顺序
 
@@ -767,7 +769,7 @@ Phase 3 已取消（2026-08-09）。本节原本写的是「只在真实模型�
 
 ### 17.1 已落地
 
-Phase 0、Phase 1、Phase 2 的**执行机制**已经完成并有测试覆盖，对应 PR #114–#130：
+Phase 0、Phase 1、Phase 2 的**执行机制**已经完成并有测试覆盖，对应 PR #114–#136：
 
 | 切片 | PR |
 | --- | --- |
@@ -781,8 +783,13 @@ Phase 0、Phase 1、Phase 2 的**执行机制**已经完成并有测试覆盖，
 | 移除 legacy 能力证据与 unprofiled adapter（schema 21） | #128 |
 | 路由必须指向部署（schema 22） | #129 |
 | `operation_bindings` 不可用断言、只读角色门禁、备份保留快照断言 | #130 |
+| 用户流程收口：自动解析 Binding、目录种子覆盖 OpenAI/DeepSeek/Bedrock | #132、#133 |
+| 快照 `Evidence` 与 `OperatorDisabled` 落库（schema 23） | #134 |
+| 文档措辞偏差、欠账、Phase 3 取消 | #135、#136 |
 
 最强的部分是漂移核对、Route 预检、审计、指标，以及三道 fail-closed 迁移（schema 20/21/22）。这些都对真实数据目录验证过，不只是 fixture。
+
+**当前 `schemaVersion = 23`。** 第四道迁移 23（`deployment_snapshot_evidence_and_disabled`，随 #134）与前三道不同：它**回填**而不是拒绝。判据是值能不能被重建 —— 迁移 20、21 拒绝，是因为能力快照与 `legacy` 证据都无法在不编造主张的前提下补出来；迁移 23 的两个字段是记录中已有字段的纯函数，由写路径同一组 domain helper 计算，因此迁移后的记录与该记录重新保存的结果逐字节相同，并有测试断言这一点。
 
 ### 17.2 剩余工作
 
@@ -864,6 +871,7 @@ Phase 0、Phase 1、Phase 2 的**执行机制**已经完成并有测试覆盖，
 | --- | --- | --- | --- |
 | F1 | 真实 Provider 能力证据进入 `docs/verification/provider-real-matrix.md` | 未开始 | **需要授权与凭据**：计费、opt-in，且矩阵运行器要求精确的 RC commit |
 | F2 | 浏览器验收（门禁 18 的最后一项） | 未开始 | 需要真人操作或浏览器自动化 |
+| ~~F3~~ | ~~§12.5 的目录不可用兜底前端测试~~ | **已完成** | 曾是唯一漏掉的编码工作：后端与 UI 都实现了 kill-switch，但 `api.providerModels` 从未被 mock 成失败，因此断言的是健康目录下的手输覆盖。已补 `still deploys by hand when the model catalog is entirely unavailable`，并反向验证过（把输入框改为随目录失败禁用，该用例失败） |
 | §15-4 | 「仅内置目录能力默认勾选，上游元数据能力默认待确认」的后半 | 阻塞 | `provider_metadata` 来源没有生产调用点，无从演示。需要某个 Adapter 开始返回结构化能力元数据 |
 
 已关闭的项，保留编号便于回溯：
@@ -875,5 +883,5 @@ Phase 0、Phase 1、Phase 2 的**执行机制**已经完成并有测试覆盖，
 
 **门禁现状（§15，共 19 条）：16 达成 / 2 部分 / 1 未达成。** 两条「部分」是上表的 §15-4 与 F2，唯一「未达成」是 F1。
 
-**剩下的没有一项是编码工作** —— 两项需要外部输入（F1 计费凭据、F2 浏览器），一项等待上游元数据出现。1.1.0 的工作另见
+**剩下的没有一项是编码工作** —— 两项需要外部输入（F1 计费凭据、F2 浏览器），一项等待上游元数据出现。（这句话在 2026-08-09 的评审中被发现说早了：当时 §12.5 的目录不可用兜底前端测试还缺，那是编码工作。该测试已补，见上表 F3，因此这句话现在成立。）1.1.0 的工作另见
 [`model-aware-capability-selection.v1.1.0.zh-CN.md`](model-aware-capability-selection.v1.1.0.zh-CN.md) §4。

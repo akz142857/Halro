@@ -192,6 +192,47 @@ describe("deployment release workflow", () => {
     expect(payload.capabilities).toMatchObject({ chat: true });
   });
 
+  // The kill-switch. §7.3 of model-aware-capability-selection.zh-CN.md makes it
+  // a standing requirement rather than a nicety: the capability catalog must
+  // never become the only way into a deployment. The other manual-entry test
+  // runs against a *healthy* catalog and so only proves that typing overrides a
+  // picked option — it would keep passing if a catalog outage disabled the
+  // field. This one fails.
+  it("still deploys by hand when the model catalog is entirely unavailable", async () => {
+    vi.mocked(api.providerModels).mockRejectedValue(new ApiError(502, "provider model catalog is unavailable"));
+    const create = vi.spyOn(api, "createDeployment").mockResolvedValue({} as never);
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 新建模型部署" }));
+    await waitFor(() => expect(api.providerModels).toHaveBeenCalledWith(provider.id));
+
+    // The outage is stated, and stated as survivable.
+    expect(await screen.findByText("暂时无法读取模型列表，仍可手动输入")).toBeVisible();
+
+    // The field an operator needs is the one a catalog outage must not take
+    // away, so its enabled-ness is asserted, not just its presence.
+    const modelInput = screen.getByLabelText(/^模型 ID/);
+    expect(modelInput).toBeEnabled();
+
+    fireEvent.change(screen.getByLabelText("部署名称"), { target: { value: "手动部署" } });
+    fireEvent.change(modelInput, { target: { value: "gpt-unlisted" } });
+
+    // With no catalog there is no entry to inherit from, so this is the
+    // operator's own claim and has to travel as one.
+    expect(screen.getByLabelText("对话")).not.toBeChecked();
+    fireEvent.click(screen.getByLabelText("对话"));
+    fireEvent.click(screen.getByRole("button", { name: "保存为停用" }));
+
+    await waitFor(() => expect(create).toHaveBeenCalledOnce());
+    const payload = create.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload.provider_model).toBe("gpt-unlisted");
+    expect(payload.mode).toBe("operator_declared");
+    expect(payload.capabilities).toMatchObject({ chat: true });
+    // Nothing was read, so nothing may be claimed as read. A revision here
+    // would be a digest of a catalog the form never received.
+    expect(payload.model_revision ?? "").toBe("");
+  });
+
   it("discovers OpenAI model IDs, refreshes the catalog, and preserves manual entry", async () => {
     vi.mocked(api.providerModels).mockResolvedValue({
       items: Array.from({ length: 12 }, (_, index) => unknownModel(`gpt-model-${index}`)),
