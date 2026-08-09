@@ -23,6 +23,14 @@ func (r *Runtime) adminMasterKeyRecoveryRunbook(writer http.ResponseWriter, requ
 	writeMasterKeyRunbook(writer, runbooks.KMSDisasterRecovery)
 }
 
+// adminGatewayKeyCompromiseRunbook is not gated on the Master Key custody mode,
+// unlike the two above: a leaked Gateway Key is possible under every
+// configuration, and a runbook that is missing exactly when it is needed is
+// worse than no runbook at all.
+func (r *Runtime) adminGatewayKeyCompromiseRunbook(writer http.ResponseWriter, request *http.Request) {
+	writeMasterKeyRunbook(writer, runbooks.GatewayKeyCompromise)
+}
+
 func writeMasterKeyRunbook(writer http.ResponseWriter, content []byte) {
 	writer.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 	writer.Header().Set("Cache-Control", "private, no-store")

@@ -54,7 +54,11 @@ an existing data directory.
 
 The bootstrap response contains the Gateway Key once. Move it directly to the
 workload secret store; do not put it in shell history, source control, logs, or
-browser storage. The generated Master Key must remain a regular `0600` file.
+browser storage. If one reaches somewhere it should not have — a ticket, a chat
+transcript, a CI log — follow
+[`docs/runbooks/gateway-key-compromise.md`](../runbooks/gateway-key-compromise.md)
+and revoke before investigating: revocation takes effect before the request
+returns, and re-issuing costs one API call. The generated Master Key must remain a regular `0600` file.
 Back it up separately from both the data directory and encrypted backup key.
 Bootstrap never infers that zero prices mean free. Use `--billing-mode free`
 only for an intentionally free deployment; otherwise provide the reviewed
