@@ -8,6 +8,26 @@ semantic versioning.
 
 ### Changed
 
+- Creating a deployment no longer asks which internal capability interface to
+  use. The console asks for a provider, then a model, and the server resolves
+  the interface from the model and the selected capabilities. The interface
+  remains visible and overridable under advanced details, where it is the only
+  way to locate the internal adapter when diagnosing a deployment.
+
+- The capabilities offered when creating a deployment are now what the model
+  catalog establishes for that model, not what the interface can carry. The
+  interface ceiling still applies to a model the catalog does not cover, because
+  there the operator is the one making the claim.
+
+- The console's model list is now the aggregate across every enabled interface
+  of a provider rather than one interface's list. The server already returned
+  the aggregate; the console was filtering it back down to a single interface.
+
+- A profile that accepts exactly one model is no longer a candidate for a
+  different one. That pin used to be checked after the interface had been
+  chosen, so automatic selection could settle on an interface the very next
+  check rejected, and the refusal named a profile the operator never picked.
+
 - A route now names a deployment and nothing else. The shape that carried a
   provider and model directly is removed: such a route reached an upstream
   without the deployment's versioned price, health probe, capability snapshot

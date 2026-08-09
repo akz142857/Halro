@@ -407,9 +407,11 @@ func (r *Runtime) deploymentFromInput(request *http.Request, deploymentID string
 	if input.AccessSurface != "" && input.AccessSurface != binding.AccessSurface {
 		return domain.Deployment{}, errors.New("deployment access surface or profile does not match provider")
 	}
-	if err := bedrockprovider.ValidateProfileModel(binding.ProfileID, input.ProviderModel); err != nil {
-		return domain.Deployment{}, err
-	}
+	// The model/profile pin was settled while choosing the binding. The target
+	// kind is checked here rather than as a candidate filter: every binding on a
+	// provider shares its access surface, so the only profile-dependent kinds
+	// are Bedrock converse's, and capability matching already separates converse
+	// from the profiles that carry no chat.
 	targetKind, err := deploymentTargetKind(instance.Type, binding.AccessSurface, binding.ProfileID, input.TargetKind)
 	if err != nil {
 		return domain.Deployment{}, err
@@ -545,6 +547,13 @@ type deploymentResolution struct {
 // does not support for that model.
 func resolveDeploymentTarget(instance domain.ProviderInstance, input deploymentInput, model, region string, prior *domain.ProviderCapabilities) (deploymentResolution, error) {
 	var candidates []domain.ProviderProfileBinding
+	// Why a binding can be excluded before capabilities are even considered:
+	// some profiles accept exactly one model. That pin used to be checked after
+	// the binding had been chosen, which is too late — automatic selection could
+	// settle on a binding the very next check rejected, and the operator got a
+	// refusal naming a profile they never picked. A binding that cannot serve
+	// this model is not a candidate for it.
+	var excluded error
 	for _, binding := range instance.EffectiveProfileBindings() {
 		if !binding.Enabled {
 			continue
@@ -555,9 +564,21 @@ func resolveDeploymentTarget(instance domain.ProviderInstance, input deploymentI
 		if input.ProfileID != "" && binding.ProfileID != input.ProfileID {
 			continue
 		}
+		if err := bedrockprovider.ValidateProfileModel(binding.ProfileID, model); err != nil {
+			if excluded == nil {
+				excluded = err
+			}
+			continue
+		}
 		candidates = append(candidates, binding)
 	}
 	if len(candidates) == 0 {
+		// When a filter emptied the list, report why that filter rejected rather
+		// than the generic absence: "this profile requires model X" tells an
+		// operator what to change, "binding is unavailable" does not.
+		if excluded != nil {
+			return deploymentResolution{}, excluded
+		}
 		return deploymentResolution{}, errors.New("deployment provider profile binding is unavailable")
 	}
 	slices.SortFunc(candidates, func(left, right domain.ProviderProfileBinding) int {

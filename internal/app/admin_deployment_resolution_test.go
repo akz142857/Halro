@@ -3,6 +3,7 @@ package app
 import (
 	"encoding/json"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/akz142857/Halro/internal/domain"
@@ -186,26 +187,71 @@ func TestResolveRejectsStaleModelRevision(t *testing.T) {
 // from the console would conflict, and operators would learn to retry through
 // the conflict until it meant nothing.
 func TestDiscoveryAndCreateAgreeOnTheModelRevision(t *testing.T) {
-	instance := bedrockInstance(bedrockBinding("b-embed", domain.ProfileBedrockInvokeTitanEmbedV2))
+	// Both bindings are enabled, and neither discovery nor creation is told
+	// which one to use — that is the flow the console now performs.
+	instance := bedrockInstance(
+		bedrockBinding("b-chat", domain.ProfileBedrockConverseText),
+		bedrockBinding("b-embed", domain.ProfileBedrockInvokeTitanEmbedV2),
+	)
 	region := deploymentRegion(instance, deploymentInput{})
 	if region == "" {
 		t.Fatal("test provider is not regional, so it cannot exercise the mismatch")
 	}
+	declarations := map[string]domain.ProviderCapabilities{
+		// The converse ceiling declares its own context limit; a deployment may
+		// narrow a non-zero limit but may not leave it undeclared.
+		"amazon.nova-pro-v1:0": {Chat: true, MaxContextTokens: 8192},
+	}
 	for _, model := range []string{titanEmbedModel, "amazon.nova-pro-v1:0"} {
-		response := aggregateProviderModels(instance, []bindingCatalog{
-			catalogResult(instance.Bindings[0], true, model),
-		}, nil)
+		var results []bindingCatalog
+		for _, binding := range instance.Bindings {
+			results = append(results, catalogResult(binding, true, model))
+		}
+		response := aggregateProviderModels(instance, results, nil)
 		listed := findModel(t, response, model)
 		input := deploymentInput{ModelRevision: listed.ModelRevision}
 		if listed.Status != modelcatalog.StatusKnown {
 			input.Mode = deploymentModeOperatorDeclared
-			// The Titan embed ceiling declares 8192; a deployment may narrow a
-			// non-zero limit but may not leave it undeclared.
-			input.Capabilities = &domain.ProviderCapabilities{Embeddings: true, MaxContextTokens: 8192}
+			declared := declarations[model]
+			input.Capabilities = &declared
 		}
 		if _, err := resolveDeploymentTarget(instance, input, model, region, nil); err != nil {
 			t.Fatalf("model %q: the revision the console read was rejected at create time: %v", model, err)
 		}
+	}
+}
+
+// A profile that accepts exactly one model must not be picked for a different
+// one. It used to be, because the pin was checked only after the binding had
+// been chosen — so the operator saw a refusal naming a profile they never
+// selected, instead of the model simply landing on the profile that serves it.
+func TestResolveSkipsProfilesThatPinADifferentModel(t *testing.T) {
+	instance := bedrockInstance(
+		bedrockBinding("b-embed", domain.ProfileBedrockInvokeTitanEmbedV2),
+		bedrockBinding("b-chat", domain.ProfileBedrockConverseText),
+	)
+	declared := domain.ProviderCapabilities{Chat: true, MaxContextTokens: 8192}
+	resolution, err := resolveDeploymentTarget(instance, deploymentInput{
+		Mode: deploymentModeOperatorDeclared, Capabilities: &declared,
+	}, "amazon.nova-pro-v1:0", "us-east-1", nil)
+	if err != nil {
+		t.Fatalf("a model the converse profile serves was refused: %v", err)
+	}
+	if resolution.binding.ID != "b-chat" {
+		t.Fatalf("resolved binding=%q, want the profile that accepts this model", resolution.binding.ID)
+	}
+
+	// With only the pinned profile enabled there is nowhere for it to land, and
+	// the refusal must name the pin rather than report a missing binding.
+	pinnedOnly := bedrockInstance(bedrockBinding("b-embed", domain.ProfileBedrockInvokeTitanEmbedV2))
+	_, err = resolveDeploymentTarget(pinnedOnly, deploymentInput{
+		Mode: deploymentModeOperatorDeclared, Capabilities: &declared,
+	}, "amazon.nova-pro-v1:0", "us-east-1", nil)
+	if err == nil {
+		t.Fatal("a pinned profile accepted a model it rejects at request time")
+	}
+	if !strings.Contains(err.Error(), titanEmbedModel) {
+		t.Fatalf("refusal does not say which model the profile requires: %v", err)
 	}
 }
 

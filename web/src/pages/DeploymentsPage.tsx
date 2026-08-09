@@ -571,8 +571,9 @@ function DeploymentForm({
   const [providerID, setProviderID] = useState(source?.provider_id ?? enabledProviders[0]?.id ?? "");
   const [providerModel, setProviderModel] = useState(source?.provider_model ?? "");
   const initialProvider = enabledProviders.find((provider) => provider.id === (source?.provider_id ?? enabledProviders[0]?.id));
-  const initialBindings = providerBindings(initialProvider);
-  const [bindingID, setBindingID] = useState(source?.binding_id ?? initialBindings[0]?.id ?? "");
+  // Empty means the server picks. A new deployment starts there; an existing one
+  // keeps the interface it was resolved onto, because that identity is locked.
+  const [bindingID, setBindingID] = useState(source?.binding_id ?? "");
   // A new deployment starts with nothing enabled. Prefilling from the provider
   // ceiling was the habit that let a deployment claim capabilities its model
   // does not have; capabilities now arrive from the catalog or from a
@@ -653,10 +654,30 @@ function DeploymentForm({
   };
   const selectedProvider = enabledProviders.find((item) => item.id === providerID);
   const selectableBindings = providerBindings(selectedProvider);
-  const selectedBinding = selectableBindings.find((item) => item.id === bindingID) ?? selectableBindings[0];
-  const capabilityCeiling = selectedBinding?.capabilities ?? selectedProvider?.capabilities ?? emptyCapabilities();
+  // An empty bindingID means "the server decides". That is the ordinary flow:
+  // the operator names a model, and which internal interface serves it follows
+  // from the model and the capabilities, not from a menu they had to read.
+  const pinnedBinding = selectableBindings.find((item) => item.id === bindingID);
+  // Which capabilities may be offered at all. A model the catalog establishes is
+  // capped by what the catalog established — the operator may switch one off,
+  // but the interface ceiling is not an invitation to add what the model does
+  // not do. Only an undeclared model falls back to the interface, because there
+  // the operator is the one making the claim.
+  const catalogCeiling = current
+    ? catalogEditCeiling(current)
+    : catalogModel?.status === "known" && catalogModel.id === providerModel.trim()
+      ? catalogModel.capabilities
+      : null;
+  const bindingCeiling = pinnedBinding?.capabilities ?? unionCapabilities(selectableBindings);
+  const capabilityCeiling = catalogCeiling ?? bindingCeiling;
   const configurableCapabilityNames = deploymentCapabilityNames.filter((name) => capabilityCeiling[name] || capabilities[name]);
-  const availableTargetKinds = targetKinds(selectedProvider, selectedBinding);
+  // The server resolves one binding for the whole deployment, so a selection
+  // that no single interface carries is refused. Saying so here names the
+  // reason; multi-interface deployments are a separate design gate.
+  const selectionSpansInterfaces = !pinnedBinding && selectableBindings.length > 1
+    && selectableBindings.every((binding) => !coversCapabilities(binding.capabilities, capabilities))
+    && deploymentCapabilityNames.some((name) => capabilities[name]);
+  const availableTargetKinds = targetKinds(selectedProvider, pinnedBinding ?? selectableBindings[0]);
   const targetLabel = t(`deployments.targetLabels.${targetKind}`);
   const identityLocked = Boolean(current);
   const modelCatalogSupported = Boolean(
@@ -665,16 +686,19 @@ function DeploymentForm({
     && ["openai", "deepseek", "openai_compatible"].includes(selectedProvider.type)
     && (targetKind === "model_id" || targetKind === "custom_endpoint_model"),
   );
-  const modelCatalogKey = ["provider-models", providerID, selectedBinding?.id ?? ""] as const;
+  // No binding filter: the catalog is the aggregate across every enabled
+  // interface. Filtering it to one was what forced the operator to choose an
+  // interface before they had chosen a model.
+  const modelCatalogKey = ["provider-models", providerID] as const;
   const modelCatalog = useQuery({
     queryKey: modelCatalogKey,
-    queryFn: () => api.providerModels(providerID, selectedBinding?.id ?? ""),
+    queryFn: () => api.providerModels(providerID),
     enabled: modelCatalogSupported,
     staleTime: 5 * 60 * 1000,
     retry: false,
   });
   const refreshModelCatalog = useMutation({
-    mutationFn: () => api.providerModels(providerID, selectedBinding?.id ?? "", true),
+    mutationFn: () => api.providerModels(providerID, "", true),
     onSuccess: (catalog) => queryClient.setQueryData(modelCatalogKey, catalog),
   });
   const modelPickerRef = useRef<HTMLDivElement>(null);
@@ -769,8 +793,7 @@ function DeploymentForm({
               setProviderID(next);
               const provider = enabledProviders.find((item) => item.id === next);
               if (provider) {
-                const binding = providerBindings(provider)[0];
-                setBindingID(binding?.id ?? "");
+                setBindingID("");
                 // Switching provider clears the answer instead of substituting
                 // that provider's ceiling for it.
                 setCapabilities(emptyCapabilities());
@@ -783,27 +806,6 @@ function DeploymentForm({
               {enabledProviders.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}
             </select>
           </Field>
-          {(() => {
-            const provider = enabledProviders.find((item) => item.id === providerID);
-            const bindings = providerBindings(provider);
-            return bindings.length > 1 ? (
-              <Field label={t("deployments.binding")} hint={t("deployments.bindingHint")}>
-                <select disabled={identityLocked} value={bindingID} onChange={(event) => {
-                  const next = event.target.value;
-                  setBindingID(next);
-                  const binding = bindings.find((item) => item.id === next);
-                  if (binding) {
-                    setCapabilities(emptyCapabilities());
-                    setCatalogModel(null);
-                    setProviderModel("");
-                    setRegion("");
-                  }
-                }}>
-                  {bindings.map((binding) => <option value={binding.id} key={binding.id}>{bindingLabel(binding, t)}</option>)}
-                </select>
-              </Field>
-            ) : null;
-          })()}
           {availableTargetKinds.length > 1 && <Field label={t("deployments.targetKind")} hint={t("deployments.targetKindHint")}>
             <select disabled={identityLocked} value={targetKind} onChange={(event) => { setTargetKind(event.target.value as DeploymentTargetKind); setProviderModel(""); }}>
               {availableTargetKinds.map((kind) => <option value={kind} key={kind}>{t(`deployments.targetKinds.${kind}`)}</option>)}
@@ -925,6 +927,33 @@ function DeploymentForm({
               </fieldset>
             </div>
             {!anyOperation && <div className="notice warning"><span>{t("deployments.operationRequired")}</span></div>}
+            {selectionSpansInterfaces && <div className="notice warning"><strong>{t("deployments.selectionSpansInterfaces")}</strong><span>{t("deployments.selectionSpansInterfacesDescription")}</span></div>}
+            {selectableBindings.length > 1 && (
+              <details className="capability-disclosure capability-advanced">
+                <summary>
+                  <span>{t("deployments.interfaceAdvanced")}</span>
+                  <strong>{pinnedBinding ? bindingLabel(pinnedBinding, t) : t("deployments.interfaceAutomatic")}</strong>
+                </summary>
+                <p className="capability-advanced-note">{t("deployments.interfaceAdvancedHint")}</p>
+                <div className="form-grid">
+                  <Field label={t("deployments.binding")} hint={t("deployments.bindingHint")}>
+                    <select disabled={identityLocked} value={bindingID} onChange={(event) => {
+                      const next = event.target.value;
+                      setBindingID(next);
+                      // Pinning an interface changes the ceiling the answer was
+                      // given against, so the answer does not carry over.
+                      setCapabilities(emptyCapabilities());
+                      setCatalogModel(null);
+                      setProviderModel("");
+                      setRegion("");
+                    }}>
+                      <option value="">{t("deployments.interfaceAutomatic")}</option>
+                      {selectableBindings.map((binding) => <option value={binding.id} key={binding.id}>{bindingLabel(binding, t)}</option>)}
+                    </select>
+                  </Field>
+                </div>
+              </details>
+            )}
           </section>
           <section className="deployment-form-section deployment-token-section">
             <header><h3>{t("deployments.tokenLimitSection")}</h3><p>{t("deployments.tokenLimitSectionDescription")}</p></header>
@@ -994,6 +1023,41 @@ function emptyCapabilities(): ProviderCapabilities {
     max_context_tokens: 0,
     max_output_tokens: 0,
   };
+}
+
+// What the operator may declare when no interface is pinned. The server accepts
+// a declaration that any one enabled interface can carry, so the offer is the
+// union — narrower would hide a legitimate choice, and the server still refuses
+// a selection no single interface covers.
+function unionCapabilities(bindings: SelectableBinding[]): ProviderCapabilities {
+  return bindings.reduce<ProviderCapabilities>((union, binding) => {
+    const merged = { ...union };
+    for (const name of deploymentCapabilityNames) merged[name] = union[name] || binding.capabilities[name];
+    merged.max_context_tokens = Math.max(union.max_context_tokens, binding.capabilities.max_context_tokens);
+    merged.max_output_tokens = Math.max(union.max_output_tokens, binding.capabilities.max_output_tokens);
+    return merged;
+  }, emptyCapabilities());
+}
+
+function coversCapabilities(ceiling: ProviderCapabilities, wanted: ProviderCapabilities): boolean {
+  return deploymentCapabilityNames.every((name) => !wanted[name] || ceiling[name]);
+}
+
+// The ceiling for an existing deployment, when the catalog is what established
+// it. `available_for_review` is what the catalog covers now and the deployment
+// has not taken up, so the two together are the current catalog position. A
+// deployment the operator declared has no catalog ceiling and falls back to the
+// interface.
+function catalogEditCeiling(deployment: Deployment): ProviderCapabilities | null {
+  const review = deployment.capability_review;
+  if (!review?.catalog_covered || review.source === "operator_declared") return null;
+  const ceiling = { ...deployment.capabilities };
+  for (const name of review.available_for_review ?? []) {
+    if ((deploymentCapabilityNames as readonly string[]).includes(name)) {
+      ceiling[name as typeof deploymentCapabilityNames[number]] = true;
+    }
+  }
+  return ceiling;
 }
 
 function updateDeploymentCapability(current: ProviderCapabilities, capability: keyof ProviderCapabilities, enabled: boolean): ProviderCapabilities {
