@@ -1,6 +1,11 @@
 package app
 
 import (
+	"context"
+	"encoding/json"
+	"io"
+	"log/slog"
+	"net/http"
 	"testing"
 	"time"
 
@@ -207,5 +212,85 @@ func TestCatalogProviderBindingsNoLongerRequiresDisambiguation(t *testing.T) {
 	instance.Bindings[1].Enabled = false
 	if _, err := catalogProviderBindings(instance, ""); err == nil {
 		t.Fatal("a provider with no enabled binding produced a catalog")
+	}
+}
+
+// The gate this whole change exists for: a model the builtin catalog covers has
+// to be reachable in the console, not only by typing its identifier. Before
+// Bedrock could list models, the catalog held four entries no picker could
+// surface, and "known models arrive pre-checked" was vacuously true.
+func TestBedrockPinnedProfileOffersItsCataloguedModelThroughTheAdminAPI(t *testing.T) {
+	cfg := testConfig(t)
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := BootstrapAdmin(context.Background(), cfg, "admin", []byte("correct horse battery staple")); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := Open(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	cookie, csrf := loginAdminForTest(t, runtime)
+
+	secret := `{"access_key_id":"AKIDEXAMPLE12345678","secret_access_key":"test-secret-access-key-value","region":"us-east-1"}`
+	credentialResponse := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost, "/admin/api/v1/credentials", "", map[string]any{
+		"name": "Bedrock Runtime", "type": "bedrock", "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com", "secret": secret,
+	})
+	var credential credentialView
+	if credentialResponse.Code != http.StatusCreated || json.Unmarshal(credentialResponse.Body.Bytes(), &credential) != nil {
+		t.Fatalf("credential status=%d body=%s", credentialResponse.Code, credentialResponse.Body.String())
+	}
+	providerResponse := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost, "/admin/api/v1/providers", "", map[string]any{
+		"name": "Titan embeddings", "type": "bedrock", "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+		"credential_id": credential.ID, "profile_id": domain.ProfileBedrockInvokeTitanEmbedV2, "enabled": true,
+	})
+	var instance domain.ProviderInstance
+	if providerResponse.Code != http.StatusCreated || json.Unmarshal(providerResponse.Body.Bytes(), &instance) != nil {
+		t.Fatalf("provider status=%d body=%s", providerResponse.Code, providerResponse.Body.String())
+	}
+
+	// A pinned profile answers from the pin, so this reaches no network at all —
+	// which is why it can be asserted without a credentialed upstream.
+	listing := performAdminMutation(t, runtime, cookie, csrf, http.MethodGet,
+		"/admin/api/v1/providers/"+instance.ID+"/models", "", nil)
+	if listing.Code != http.StatusOK {
+		t.Fatalf("models status=%d body=%s", listing.Code, listing.Body.String())
+	}
+	var catalog providerModelCatalogResponse
+	if err := json.Unmarshal(listing.Body.Bytes(), &catalog); err != nil {
+		t.Fatal(err)
+	}
+	if len(catalog.Items) != 1 {
+		t.Fatalf("listed %d models, want the one the profile accepts: %s", len(catalog.Items), listing.Body.String())
+	}
+	offered := catalog.Items[0]
+	if offered.ID != "amazon.titan-embed-text-v2:0" {
+		t.Fatalf("offered %q", offered.ID)
+	}
+	if offered.Status != modelcatalog.StatusKnown || offered.CapabilitySource != modelcatalog.SourceBuiltin {
+		t.Fatalf("status=%q source=%q, want the builtin catalog to establish it", offered.Status, offered.CapabilitySource)
+	}
+	if !offered.Preselect || !offered.Capabilities.Embeddings || offered.Capabilities.Chat {
+		t.Fatalf("offered capabilities=%#v preselect=%v", offered.Capabilities, offered.Preselect)
+	}
+
+	// And the revision it carries is the one creating a deployment accepts, so
+	// the operator is not sent through a conflict on the first attempt.
+	created := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost, "/admin/api/v1/deployments", "", map[string]any{
+		"name": "Titan", "provider_id": instance.ID, "provider_model": offered.ID,
+		"model_revision": offered.ModelRevision, "capabilities": offered.Capabilities, "enabled": false,
+	})
+	if created.Code != http.StatusCreated {
+		t.Fatalf("deployment status=%d body=%s", created.Code, created.Body.String())
+	}
+	var deployment domain.Deployment
+	if err := json.Unmarshal(created.Body.Bytes(), &deployment); err != nil {
+		t.Fatal(err)
+	}
+	if deployment.ModelCapabilitySnapshot.Source != string(modelcatalog.SourceBuiltin) {
+		t.Fatalf("snapshot source=%q, want the catalog to be recorded as the source",
+			deployment.ModelCapabilitySnapshot.Source)
 	}
 }

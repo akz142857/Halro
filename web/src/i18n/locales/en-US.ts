@@ -637,6 +637,7 @@ export const enUS = {
       catalog_establishes_less: "The model catalog now establishes fewer capabilities than this deployment claims.",
       catalog_revision_advanced: "The model catalog changed for this model since the deployment was saved.",
       catalog_now_covers_model: "You declared this model's capabilities yourself, and the catalog now covers it.",
+      catalog_disagrees_with_declaration: "The catalog now covers this model and establishes less than you declared. The deployment keeps running on your declaration; review the disagreement.",
     },
     capabilitySources: {
       builtin_catalog: "Builtin model catalog", provider_metadata: "Provider metadata", verified_probe: "Verified probe",

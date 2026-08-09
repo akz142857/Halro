@@ -637,6 +637,7 @@ export const zhCN = {
       catalog_establishes_less: "模型目录现在确立的能力少于该部署所声称的能力。",
       catalog_revision_advanced: "该部署保存之后，模型目录中这个模型发生了变化。",
       catalog_now_covers_model: "这个模型的能力原本由你自行声明，现在模型目录已经收录了它。",
+      catalog_disagrees_with_declaration: "模型目录现已收录该模型，但它确立的能力少于你当初声明的内容。该部署继续按你的声明运行；请复核这处分歧。",
     },
     capabilitySources: {
       builtin_catalog: "内置模型目录", provider_metadata: "服务商元数据", verified_probe: "已验证探测",

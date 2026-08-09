@@ -59,6 +59,10 @@ func (r *Runtime) adminDeploymentInputError(writer http.ResponseWriter, err erro
 		writeJSON(writer, http.StatusBadRequest, map[string]string{
 			"error": err.Error(), "code": "model_capabilities_unknown",
 		})
+	case errors.Is(err, errModelCapabilitiesExceedCatalog):
+		writeJSON(writer, http.StatusBadRequest, map[string]string{
+			"error": err.Error(), "code": "model_capabilities_exceed_catalog",
+		})
 	default:
 		adminBadRequest(writer, err.Error())
 	}
@@ -530,6 +534,13 @@ var errModelCapabilityChanged = errors.New("model capabilities changed since the
 // does. It is not an outage: the operator declares the model explicitly.
 var errModelCapabilitiesUnknown = errors.New("model capabilities are unknown; declare them explicitly with mode=operator_declared")
 
+// errModelCapabilitiesExceedCatalog is its sibling for a model the catalog does
+// cover. It is a separate code because the operator's next move is different:
+// the usual answer is that the request is wrong, and the catalog is right. When
+// it is not, the same explicit declaration overrides it, and the deployment
+// then records the operator as the source rather than the catalog.
+var errModelCapabilitiesExceedCatalog = errors.New("deployment capabilities exceed what the catalog establishes for this model; declare them explicitly with mode=operator_declared to override")
+
 // deploymentResolution is what the server decided, from the catalog and the
 // provider topology, rather than from what the client claimed.
 type deploymentResolution struct {
@@ -617,17 +628,26 @@ func resolveDeploymentTarget(instance domain.ProviderInstance, input deploymentI
 			return resolution, checkModelRevision(input.ModelRevision, resolution.entry)
 		}
 	}
-	if len(known) > 0 {
-		return deploymentResolution{}, errors.New("deployment capabilities exceed what the catalog establishes for this model")
-	}
-
-	// Nothing is established. The operator may still deploy the model, but the
-	// declaration has to be explicit and stays Declared evidence.
+	// Either nothing is established, or the catalog establishes less than was
+	// asked for. Both leave the operator as the only source, and both need the
+	// word said out loud.
+	//
+	// Letting an explicit declaration exceed a catalog entry is deliberate. The
+	// catalog is reviewed claims about models, not measurements, and an entry
+	// that under-claims would otherwise be a wall: the deployment cannot be
+	// created at all, and no amount of operator knowledge gets past it. The
+	// declaration is recorded as the operator's claim rather than the catalog's,
+	// so nothing here turns a mistaken entry into apparent agreement. Silence
+	// still loses — without the word, the catalog stands.
+	//
 	// Declaring is an act the operator performs once. An edit that stays inside
 	// an existing declaration is not a new claim, and narrowing one is a
 	// reduction — neither should demand the word again. Anything wider does.
 	covered := prior != nil && retained != nil && domain.ProviderCapabilitiesSubset(*retained, *prior)
 	if input.Mode != deploymentModeOperatorDeclared && !covered {
+		if len(known) > 0 {
+			return deploymentResolution{}, errModelCapabilitiesExceedCatalog
+		}
 		return deploymentResolution{}, errModelCapabilitiesUnknown
 	}
 	if retained == nil || !retained.AnyOperation() {
@@ -636,7 +656,10 @@ func resolveDeploymentTarget(instance domain.ProviderInstance, input deploymentI
 	if err := modelcatalog.ValidateDependencies(*retained); err != nil {
 		return deploymentResolution{}, err
 	}
-	for _, resolution := range unknown {
+	// Known bindings come first: when the catalog covers this model on one of
+	// them, that is still the binding it belongs on, even though the operator is
+	// claiming more than the catalog does.
+	for _, resolution := range append(known, unknown...) {
 		if domain.ProviderCapabilitiesSubset(*retained, resolution.binding.Capabilities) {
 			resolution.capabilities = *retained
 			resolution.declared = true
