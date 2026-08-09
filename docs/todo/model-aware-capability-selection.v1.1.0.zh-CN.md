@@ -1,6 +1,6 @@
 # 模型能力选择 1.1.0：能力组合归属路由层
 
-- 状态：Proposed / 目标版本 1.1.0
+- 状态：Proposed / 目标版本 1.1.0。**§3 的 1.0.0 收尾三项已完成**；**§4 的 1.1.0 工作项尚未开始，也不应在 1.0.0 内开始**
 - 日期：2026-08-09
 - 基线文档：[`model-aware-capability-selection.zh-CN.md`](model-aware-capability-selection.zh-CN.md)
 - 影响：取消基线文档的 Phase 3（多 Operation Binding），改由路由层承担能力组合
@@ -56,15 +56,15 @@ Route       = 一个对外模型名 → 一个 Deployment
 
 ## 3. 与 1.0.0 的边界
 
-以下属于 **1.0.0 收尾**，在基线文档中完成，不等 1.1.0：
+以下属于 **1.0.0 收尾**，在基线文档中完成，不等 1.1.0。**三项已于 2026-08-09 全部完成**：
 
-- **B1.** 基线文档 §5.3、§9 Phase 3、§16、§17.4 按本结论改写：取消 `operation_bindings`，把「两个 Deployment」确立为**正式设计**而非过渡方案；§15 中与 Phase 3 绑定的两条门禁随之解除阻塞。
-- **B2.** 保留并强化对 `operation_bindings` 的拒绝。目前它靠 `decodeAdminJSON` 拒绝未知字段实现，应改为有名字、有说明的检查，说明替代做法是建立第二个 Deployment 并挂到同一个 public model 上。
-- **B3.** 修复 `internal/modelcatalog/builtin.go` 的 `builtinEntry` 静默 Clamp。当前实现把超出 Profile 上限的能力无声丢弃，条目仍通过校验。在本原则下这是必须显式失败的情形：**模型自身的能力装不进它的 Profile，说明 Halro 的 Profile 划分与该模型不符**，这件事必须在构建期暴露，而不是让控制台少几个勾。
+- **B1.** ✅ 基线文档 §5.3、§9 Phase 3、§16、§17.4 按本结论改写：取消 `operation_bindings`，把「两个 Deployment」确立为**正式设计**而非过渡方案；§15 中与 Phase 3 绑定的两条门禁随之解除阻塞。（PR #135、#136）
+- **B2.** ✅ 保留并强化对 `operation_bindings` 的拒绝。已不再依赖 `decodeAdminJSON` 的未知字段规则：该字段被显式解码为 `json.RawMessage` 只为能具名拒绝，返回 `400 operation_bindings_unavailable`，拒绝信息指向「建立第二个 Deployment 并挂到同一个 public model 上」。见 `internal/app/admin_deployments.go` 的 `refuseOperationBindings`，由 `operation_bindings_unavailable_test.go` 断言 POST 与 PUT 两条路径且断言未落库。
+- **B3.** ✅ `builtinEntry` 的静默 Clamp 已移除。现在条目按写下的原样声明，由 `Entry.Validate` 拒绝超出 Profile 上限的条目，使其成为**构建期失败**而不是控制台上少几个勾。`internal/modelcatalog/builtin.go` 在该函数上方写明了失败时的正确反应：不是删掉那项能力，而是**把它建到承载得了它的 Profile 上** —— 装不进一个 Profile 说明 Halro 的 Profile 划分与该模型不符。
 
 以下属于 **1.1.0**：
 
-- 见 §4。
+- 见 §4。**未开始，且刻意不在 1.0.0 内开始** —— 1.0.0 先发布并在生产验证，与 [`halro-ha-architecture.zh-CN.md`](halro-ha-architecture.zh-CN.md) §0 的排序理由相同。§4 是本文件剩余的全部内容。
 
 ## 4. 1.1.0 工作项：让路由层显示组合
 
