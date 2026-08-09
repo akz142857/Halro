@@ -283,6 +283,18 @@ PY
     sleep 1
   done
   echo "timed out waiting for $wanted_status Watchdog event ($wanted_environment)" >&2
+  # Past the retry budget the timeout means delivery is broken, not merely late,
+  # so print what the two ends of the path actually hold. Without this the
+  # failure is indistinguishable from the retry case it is meant to outlive.
+  echo "--- webhook events received ---" >&2
+  if [ -s "$events" ]; then
+    tail -n 20 "$events" >&2
+  else
+    echo "(none)" >&2
+  fi
+  echo "--- Alertmanager alerts ---" >&2
+  curl --fail --silent --show-error --max-time 3 \
+    "http://127.0.0.1:$alertmanager_port/api/v2/alerts" >&2 || echo "(query failed)" >&2
   return 1
 }
 
@@ -350,7 +362,13 @@ printf '%s' "$rules" | jq -e '[.. | objects | .name? // empty] | index("Watchdog
 
 # The repository Watchdog must traverse Prometheus and the real Alertmanager
 # routing configuration to the mock receiver.
-wait_event firing '*' 60
+#
+# The budget has to clear one delivery retry rather than only the nominal path.
+# The Watchdog route sets group_interval: 1m, so a notification that does not
+# land on the first dispatch arrives a full minute later. Measured locally the
+# wait is either 0s or exactly 60s and never in between, which means a 60s
+# budget decided the run on loop overhead instead of on whether delivery works.
+wait_event firing '*' 150
 
 # Exercise an identifiable firing/resolved state lifecycle through the real
 # Alertmanager API. Watchdog intentionally has send_resolved=false because its
