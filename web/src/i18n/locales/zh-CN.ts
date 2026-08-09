@@ -671,7 +671,7 @@ export const zhCN = {
     unblock: "解除令牌防护", unblockConfirm: "解除项目“{{name}}”的令牌防护封锁？被封锁的调用方将立即恢复访问。", unblocked: "已解除 {{count}} 个异常状态", deleteConfirm: "删除项目“{{name}}”？其网关密钥将立即失效。",
     allowedModels: "允许的模型", rateLimit: "速率限制", concurrency: "并发", dailyBudget: "每日预算", notAttached: "未绑定",
     credentials: "内部凭据", gatewayKeys: "网关密钥", createKey: "＋ 创建密钥", loadingKeys: "正在读取密钥", noKeys: "这个项目还没有可用密钥。",
-    created: "创建于 {{date}}", lastUsed: "最近使用 {{date}}", keyDisableTitle: "禁用网关密钥？", keyDisableConfirm: "确认禁用网关密钥“{{name}}”？使用该密钥的新请求将立即被拒绝。", keyDeleteConfirm: "确认永久停用密钥“{{name}}”？此操作不能恢复。",
+    created: "创建于 {{date}}", keyDisableTitle: "禁用网关密钥？", keyDisableConfirm: "确认禁用网关密钥“{{name}}”？使用该密钥的新请求将立即被拒绝。", keyDeleteConfirm: "确认永久停用密钥“{{name}}”？此操作不能恢复。",
     edit: "编辑项目", createTitle: "创建项目", name: "名称", aliases: "允许的模型", aliasesHint: "选择这个项目可以通过网关调用的模型别名。选项来自已配置的路由。", loadingModels: "正在读取可用模型", unavailableModel: "当前不可用", noConfiguredModels: "还没有可选模型", noConfiguredModelsDescription: "请先在路由页面配置并启用至少一个公共模型别名。", openRoutes: "前往路由配置 →", maxConcurrency: "最大并发",
     dailyBudgetUSD: "每日预算（USD）", enable: "启用项目", noBinding: "不绑定", redactionPolicy: "脱敏策略", tokenGuardPolicy: "令牌防护策略", rpm: "每分钟请求数（RPM）", tpm: "每分钟令牌数（TPM）", allowedCIDR: "允许的 CIDR",
     basicInfo: "基本信息", basicInfoDescription: "定义项目名称及允许访问的模型范围。", capacityControls: "容量与预算", capacityControlsDescription: "限制请求速率、并发量和每日费用。", securityControls: "安全与访问", securityControlsDescription: "配置项目状态、请求防护、脱敏和网络边界。", enableDescription: "启用后项目及其网关密钥可以处理请求。",

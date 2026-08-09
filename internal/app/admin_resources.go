@@ -27,14 +27,13 @@ type credentialView struct {
 }
 
 type gatewayKeyView struct {
-	ID         string     `json:"id"`
-	ProjectID  string     `json:"project_id"`
-	Name       string     `json:"name"`
-	Enabled    bool       `json:"enabled"`
-	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
-	CreatedAt  time.Time  `json:"created_at"`
-	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
-	Revision   uint64     `json:"revision"`
+	ID        string     `json:"id"`
+	ProjectID string     `json:"project_id"`
+	Name      string     `json:"name"`
+	Enabled   bool       `json:"enabled"`
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
+	Revision  uint64     `json:"revision"`
 }
 
 type alertWebhookView struct {
@@ -85,7 +84,7 @@ func (r *Runtime) listAdminProjectKeys(writer http.ResponseWriter, request *http
 			views = append(views, gatewayKeyView{
 				ID: key.ID, ProjectID: key.ProjectID, Name: key.Name,
 				Enabled: key.Enabled, ExpiresAt: key.ExpiresAt, CreatedAt: key.CreatedAt,
-				LastUsedAt: key.LastUsedAt, Revision: key.Revision,
+				Revision: key.Revision,
 			})
 		}
 	}

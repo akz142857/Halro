@@ -82,6 +82,16 @@ semantic versioning.
   evidence, and keeping it beside `declared` and `verified` gave the design a
   third tier that asserted nothing.
 
+- A Gateway Key no longer carries `last_used_at`. Nothing ever wrote it, so the
+  field was absent from every response and the console showed every key as never
+  used — an appearance indistinguishable from a key that genuinely had not been
+  used. It is removed rather than implemented: recording it means a metadata
+  write on the Gateway request path for a value nothing enforces, and the
+  question it looked like it answered — what a key actually did — is answered by
+  the audit trail and Usage data. No stored record ever contained it and it was
+  never serialised, so nothing an API client could observe changes. The MFA
+  authenticator's own `last_used_at` is a different field and is unaffected.
+
 ### Operator impact
 
 - **Re-initialising the data directory is required** for an instance holding any

@@ -206,10 +206,18 @@ type GatewayKey struct {
 	Enabled     bool       `json:"enabled"`
 	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
 	CreatedAt   time.Time  `json:"created_at"`
-	LastUsedAt  *time.Time `json:"last_used_at,omitempty"`
 	Revision    uint64     `json:"revision"`
 	DeletedAt   *time.Time `json:"deleted_at,omitempty"`
 }
+
+// There is deliberately no LastUsedAt here. One existed, was serialised through
+// the Admin API and rendered in the console, and was never written by anything —
+// so every key read as "never used", and an incident procedure that told an
+// operator to correlate a leak against it was pointing at a field that is always
+// absent. It is removed rather than implemented because recording it means a
+// bbolt write on the Gateway request path for a value nothing enforces; what an
+// incident actually needs is which key spent what, and the audit trail and Usage
+// data already answer that. If it ever comes back it must arrive with its write.
 
 type ProviderInstance struct {
 	ID                     string                   `json:"id"`
