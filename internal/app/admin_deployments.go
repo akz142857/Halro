@@ -1,7 +1,9 @@
 package app
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
@@ -30,6 +32,13 @@ type deploymentInput struct {
 	// ModelRevision is the per-model catalog revision the client read. An empty
 	// value skips the check; a stale one is a conflict, never a silent accept.
 	ModelRevision string `json:"model_revision,omitempty"`
+	// OperationBindings is accepted by the decoder only so it can be refused by
+	// name. It is the shape a deployment would take if it mapped each operation
+	// to its own internal binding, and it is not coming: a deployment carries one
+	// model's own capabilities, and composing several into one outward-facing
+	// model is what routes are for. Refusing it here rather than through the
+	// decoder's unknown-field rule is what lets the refusal say that.
+	OperationBindings json.RawMessage `json:"operation_bindings,omitempty"`
 	// Mode must be operator_declared for a model the catalog does not cover.
 	// Requiring the word keeps "I know what this model does" an explicit act
 	// rather than something inferred from a filled-in form.
@@ -41,6 +50,29 @@ type deploymentInput struct {
 }
 
 const deploymentModeOperatorDeclared = "operator_declared"
+
+// errOperationBindingsUnavailable answers a request that tries to give one
+// deployment several internal bindings.
+//
+// The design that proposed it has been withdrawn rather than deferred, so this
+// is a permanent refusal and the message says what to do instead. Composition
+// already works at the route layer: several routes may share one public model,
+// and the router picks a candidate per core operation, so a model whose
+// capabilities span two profiles is two deployments behind one public model.
+var errOperationBindingsUnavailable = errors.New(
+	"a deployment carries one model's own capabilities through one internal binding; " +
+		"to serve several capabilities under one public model, create one deployment per internal binding " +
+		"and point a route at each from the same public model")
+
+// refuseOperationBindings reports whether the request tried to set them. A JSON
+// null is not an attempt: it says nothing, the same as omitting the field.
+func refuseOperationBindings(input deploymentInput) error {
+	encoded := bytes.TrimSpace(input.OperationBindings)
+	if len(encoded) == 0 || string(encoded) == "null" {
+		return nil
+	}
+	return errOperationBindingsUnavailable
+}
 
 // adminDeploymentInputError separates "you asked for something impossible" from
 // "the catalog moved under you". The second is a conflict with a stable code:
@@ -59,6 +91,10 @@ func (r *Runtime) adminDeploymentInputError(writer http.ResponseWriter, err erro
 		writeJSON(writer, http.StatusBadRequest, map[string]string{
 			"error": err.Error(), "code": "model_capabilities_unknown",
 		})
+	case errors.Is(err, errOperationBindingsUnavailable):
+		writeJSON(writer, http.StatusBadRequest, map[string]string{
+			"error": err.Error(), "code": "operation_bindings_unavailable",
+		})
 	case errors.Is(err, errModelCapabilitiesExceedCatalog):
 		writeJSON(writer, http.StatusBadRequest, map[string]string{
 			"error": err.Error(), "code": "model_capabilities_exceed_catalog",
@@ -72,6 +108,10 @@ func (r *Runtime) createAdminDeployment(writer http.ResponseWriter, request *htt
 	var input deploymentInput
 	if err := decodeAdminJSON(request, &input); err != nil {
 		adminBadRequest(writer, "invalid request")
+		return
+	}
+	if err := refuseOperationBindings(input); err != nil {
+		r.adminDeploymentInputError(writer, err)
 		return
 	}
 	if input.Enabled {
@@ -139,6 +179,10 @@ func (r *Runtime) updateAdminDeployment(writer http.ResponseWriter, request *htt
 	var input deploymentInput
 	if err := decodeAdminJSON(request, &input); err != nil {
 		adminBadRequest(writer, "invalid request")
+		return
+	}
+	if err := refuseOperationBindings(input); err != nil {
+		r.adminDeploymentInputError(writer, err)
 		return
 	}
 	r.adminTopologyMu.Lock()

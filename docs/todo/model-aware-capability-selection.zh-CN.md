@@ -182,6 +182,13 @@ effective = provider_ceiling
 
 `0` 表示“该层没有声明上限”，不能用于擦除上游已经声明的非零限制。模型目录层沿用同一条规则：管理员填写的限制超出模型目录或 Provider 上限时返回校验错误，**不要改写成 `min()` 自动取小** —— 静默钳制会把管理员的越界输入藏起来，事后无法区分“他就想要这个值”和“系统替他改小了”。
 
+这条禁令针对的是**管理员输入**，不是派生层之间的合并。`modelcatalog` 的 `Clamp` 与 `Merge` 对数值上限确实取窄值，两者作用于不同的对象：
+
+- **派生层之间取窄**（目录条目 ∩ Profile 上限，或多个来源对同一模型的声明）：没有人可以询问，取窄是唯一 fail-closed 的答案，且结果本身就是被展示出来的“该模型的上限”。
+- **管理员输入越界**：有人可以询问，因此拒绝并报错，绝不悄悄改小。
+
+`resolveDeploymentTarget` 与 `ProviderCapabilitiesSubset` 走的是第二条。
+
 ### 4.3 不可变快照
 
 Deployment 创建时保存能力快照。目录刷新只产生比较结果：
@@ -266,9 +273,10 @@ type Deployment struct {
     // existing fields...
     ModelCapabilitySnapshot ModelCapabilitySnapshot
     OperatorDisabled        []string
-    CapabilityReviewState   string // current | review_available | drifted
 }
 ```
+
+**复核状态是派生的，不落库。** 它一度被列为 `Deployment` 字段，实现时改为在需要处计算（`internal/app/capability_drift.go`）。理由是比较的两侧——运行中的 Profile 上限与模型目录——都可以在这条记录不被改写的情况下变化，所以存下来的值只能记录“上次写入时”的答案，而读它的人会当成“现在”的答案。派生保证了不会有这种时间差；代价是每次读取要做一次比较，那是内存中的结构体比较。
 
 持久化时必须验证：
 
@@ -279,29 +287,29 @@ type Deployment struct {
 - Operation Binding 的 Profile、Access Surface、Credential Scheme 与 Provider 相容；
 - Evidence 不得高于来源允许的等级。
 
-### 5.3 单 Binding 与多 Binding
+### 5.3 一个 Deployment 一个内部 Binding
 
-大多数已知模型只需要一个核心操作 Profile。第一阶段继续使用现有 `binding_id`，但由系统自动选择。
+**一个 Deployment 表达的是这个模型自己的能力，通过一个内部 Binding 提供。它不表达组合。**
 
-目标模型允许同一 Provider + Model 在确有证据时跨多个内部 Profile 暴露能力。此时使用 `operation_bindings` 映射，而不是让用户重复创建逻辑上相同的模型：
+需要把多种能力组合成一个对外模型时，**组合发生在 Route 层**：同一个 public model 下挂多条 Route，各自指向一个 Deployment；路由按请求的核心操作选择候选，对外模型的能力是这些 Route 的并集。
 
-```json
-{
-  "chat": "binding_chat",
-  "embeddings": "binding_chat",
-  "images": "binding_media"
-}
+```text
+Deployment  = 一个模型 + 它自己具备的能力 + 一个内部 Profile
+Route       = 一个对外模型名 → 一个 Deployment
+对外模型能力 = 其名下所有已启用 Route 的能力并集
 ```
 
-多 Binding 进入运行时前必须完成单独设计门禁：
+这不是过渡安排，而是**正式设计**。理由与代价记录在
+[`model-aware-capability-selection.v1.1.0.zh-CN.md`](model-aware-capability-selection.v1.1.0.zh-CN.md)，要点：
 
-- Router 按请求的核心操作选择 Adapter；
-- 每个 Operation Binding 独立健康测试，Deployment 只有在所有已启用操作均通过时才可整体标记健康；
-- 价格选择必须按操作种类明确，不能把 token 价格用于固定请求资源；
-- 文件、批处理和异步资源继续遵守 ADR 0009 的 owner pinning；
-- 不清楚上游是否已经产生副作用时保持 UNKNOWN/fail-closed，不跨 Binding 重试。
+- 运行时本来就这样工作。`internal/provider/provider.go` 的 `resolveCandidatesLocked` 已按核心操作过滤候选；`validateAdminRoute` 只要求同一 public model 的已启用 Route 使用相同 strategy；Deployment 没有 (provider, model) 唯一性约束。
+- 把多个 Binding 塞进一条记录，会让健康测试、版本化价格、能力证据、资源 owner 这四样同时从「以 Deployment 为键」变成「记录内部逐操作」，而且改动落在请求路径上。
+- 它还会拆掉「Deployment 能力不得超过其 Provider Profile 上限」这个可校验事实 —— 一条记录挂多个 Profile 就没有单一上限可比。
+- 同一模型经两个协议提供两种核心操作，在上游本来就是两个调用身份：不同的失败模式、价格维度和探测方式。
 
-在这些门禁完成前，跨 Profile 模型必须拆成多个 Deployment；UI 不能伪装成已经支持一个多能力 Deployment。
+**因此 `operation_bindings` 取消，不是推迟。** Admin API 对它是具名拒绝（`operation_bindings_unavailable`），拒绝信息指向 Route 层的替代做法。
+
+它换来的代价是运维会看到「一个模型两行」。答案不是把它藏起来，而是让 Route 层把组合显示出来 —— 属于 1.1.0，见上述文档 §4。
 
 ## 6. 模型能力目录
 
@@ -327,7 +335,7 @@ provider type
 ### 6.2 匹配规则
 
 - 优先精确模型 ID；
-- dated alias 只有在服务商命名规则稳定且有测试时才能映射到已知 family；
+- **dated alias 映射暂不启用（2026-08-09 决定）。** 它原本允许在服务商命名规则稳定且有测试时把 dated alias 映射到已知 family。目前没有任何服务商满足这个前提，而逐条精确 ID 已经覆盖同样的模型，所以启用它只会新增一条「靠命名规律推断能力」的路径 —— 那正是 §2.2 的非目标。若将来要启用，必须先同时满足：该服务商的 dated 命名规则有书面契约、映射有测试、且映射结果不高于被映射 family 的证据等级；
 - 不允许宽泛前缀把未知未来模型自动提升为已知能力；
 - 模型别名变化不改变已持久化 Deployment Snapshot；
 - Provider 返回重复、空、超长或异常模型 ID 时沿用现有规范化与数量上限。
@@ -513,6 +521,12 @@ GET /admin/api/v1/providers/{provider_id}/models
 - 为 OpenAI、Azure OpenAI、Anthropic、DeepSeek、Gemini、Bedrock 各建立最小可信目录策略；
 - 给模型目录生成稳定的单模型 digest 与目录 digest；
 - **确定目录的载体与发布节奏**：内置目录随二进制发布，意味着服务商上线新模型后，管理员必须等 Halro 发版才能获得“已知能力”。Phase 0 必须回答：目录以 Go 源码还是嵌入式 JSON 形式存在、如何评审、发版节奏，以及是否与既有的定价目录（`halro pricing migrate` 那一套）合并为同一套“目录发布”流程。若不合并，需说明理由 —— 两套版本化目录各自演进是长期维护成本；
+
+  **已回答（2026-08-09）：**
+
+  - **载体是 Go 源码**（`internal/modelcatalog/builtin.go`），随二进制发布，按代码评审。选它而不是嵌入式 JSON 的理由是条目要受编译期与 `Validate()` 双重约束：`Key.Validate` 拒绝未注册的 Profile，`Entry.Validate` 拒绝超出 Profile 上限的条目，而 Profile 常量本身就是 Go 标识符。JSON 会把这些检查推迟到运行时，并让“条目引用了一个不存在的 Profile”从编译错误变成启动错误。种子政策与准入证据写在该文件顶部，与条目同一处评审。
+  - **发版节奏跟随二进制**，不单独发布。管理员不必等发版：未收录的模型走 §6.3 的显式声明流程，收录只是省掉这一步；催化剂在于“已知”意味着 Halro 愿意默认勾选，那必须与它能承载的 Profile 同版本，否则目录会声明当前二进制做不到的事。
+  - **不与定价目录合并，因为不存在“定价目录”可合并。** 价格不是 Halro 发布的版本化清单，而是管理员自己的按 Deployment 记录（`internal/domain/pricing.go` 的来源为 `manual / official_url / provider_api / import / migration`，全部由管理员提供并带生效时间）；`halro pricing migrate` 是把旧的零价 Deployment 一次性回填成 Price Version 的离线工具，不是发布流程。二者的所有权也相反：能力目录是 Halro 的主张，价格是管理员的主张。把它们并成一套流程，等于让 Halro 对价格背书或让管理员改写能力目录 —— 都不是想要的。因此“两套版本化目录各自演进”这一维护成本并不存在。
 - 更新 `docs/contracts/provider-capabilities.md` 和兼容性 manifest 规则；
 - 不改变运行时。
 
@@ -544,16 +558,12 @@ GET /admin/api/v1/providers/{provider_id}/models
 
 门禁：目录刷新、进程重启和备份恢复后，在线能力不发生静默变化；Profile 收窄在启动时被发现，而不是在请求路径上。
 
-### Phase 3：多 Operation Binding Deployment
+### Phase 3：已取消
 
-- 引入 `operation_bindings`；
-- Registry/Router 根据请求核心操作选择内部 Adapter；
-- 各 Operation 独立健康、能力证据和错误归类；
-- 价格与 Usage 按 Operation 选择正确维度；
-- 资源型操作继续 owner pinning；
-- 更新路由、readiness、测试和审计。
+原计划引入 `operation_bindings`，让一条 Deployment 记录按操作分派到不同内部 Binding。**该 Phase 取消**（2026-08-09）：能力组合属于 Route 层，而路由层已经按核心操作选择候选，所以它要解决的问题没有一处是到不了的，代价却是把四个以 Deployment 为键的不变量同时拆成逐操作。见 §5.3 与
+[`model-aware-capability-selection.v1.1.0.zh-CN.md`](model-aware-capability-selection.v1.1.0.zh-CN.md)。
 
-门禁：同一 Provider + Model 只有在目录明确支持时才能跨 Profile；任一 Operation 未通过验证时不得宣称整体 Ready。
+留在 1.0.0 的只有一条：Admin API 对 `operation_bindings` 保持**具名**拒绝，并在拒绝信息中说明替代做法。
 
 ## 10. 数据影响与重新初始化
 
@@ -607,8 +617,9 @@ GET /admin/api/v1/providers/{provider_id}/models
 - `deployment.capability_snapshot.created`；
 - `deployment.capability_snapshot.reviewed`；
 - `deployment.capability_drift.detected`；
-- `deployment.operator_capabilities.declared`；
-- `deployment.operation_bindings.changed`。
+- `deployment.operator_capabilities.declared`。
+
+原先还列了 `deployment.operation_bindings.changed`。它随 Phase 3 一并取消：没有 operation binding 状态可变更，一个永远不会触发的动作只会让审计面看起来比实际完整。
 
 事件包含 Deployment、Provider、模型、目录 revision、变更前后摘要和管理员身份，不包含凭据。
 
@@ -684,11 +695,13 @@ GET /admin/api/v1/providers/{provider_id}/models
 
 - 模型目录刷新成功/失败次数（Counter），按 Provider type、Profile、结果分类；
 - 聚合目录部分降级次数（Counter），按 Provider type、错误分类；
-- `known / partial / unknown / conflicting` 模型数量（Gauge）；
+- `known / partial / unknown / conflicting` **Deployment** 数量（Gauge）；
 - capability drift 检测次数（Counter），区分“目录漂移”与“Profile 收窄”两个来源；
 - 手动声明 Deployment 数量（Gauge）；
 - 单模型 revision 冲突次数（Counter）；
-- Operation Binding 测试成功/失败次数（Counter）。
+- Deployment 测试成功/失败次数（Counter）。
+
+上面两项刻意以 Deployment 而非 Model、Operation Binding 为统计单位。Gauge 描述的是当前状态，而当前状态存在于 Deployment 记录上：同一模型可以有多个 Deployment，各自的快照状态不同，按模型聚合会把它们压成一个无法对应到任何一条记录的数字。Operation Binding 测试随 Phase 3 一并取消，因此可测的单位就是 Deployment；为一个不存在的维度预留指标只会让指标契约先于实现分叉。
 
 Counter 与 Gauge 必须在设计阶段就定死，不能实现时临时决定 —— 两者的告警写法完全不同。新增指标需同步既有契约文档 `docs/contracts/metrics-reference.md`，否则指标契约与实现分叉。
 
@@ -702,7 +715,7 @@ Counter 与 Gauge 必须在设计阶段就定死，不能实现时临时决定 �
 | `/models` 不含能力 | 无法自动识别 | 目录 enrichment；未知模型显式声明 |
 | 名称规则误匹配未来模型 | 错误开启能力 | 精确匹配优先，宽泛前缀禁止 |
 | 同名模型因区域/账户不同而变化 | 缓存污染 | 键包含 Provider、Profile、目标和区域 |
-| 多 Binding 增加调度复杂度 | 错 Adapter、错价格、错重试 | Phase 3 独立门禁，未完成前不伪装支持 |
+| 多 Binding 增加调度复杂度 | 错 Adapter、错价格、错重试 | 不做 —— 组合归 Route 层，Deployment 保持一个内部 Binding（§5.3） |
 | 目录更新影响在线流量 | 非预期行为变化 | 不可变 Snapshot、显式复核、重新测试 |
 | UI 隐藏 Profile 后难以诊断 | 运维信息不足 | 高级详情显示 Profile、Binding、来源和证据（永久字段，非过渡） |
 | 手动声明被当作已验证 | 能力过度承诺 | Evidence 保持 Declared；每项验证单独升级 |
@@ -716,11 +729,11 @@ Counter 与 Gauge 必须在设计阶段就定死，不能实现时临时决定 �
 
 全部满足后才能宣布完成。状态核对于 2026-08-09，逐条对照代码验证，依据见 §17。
 
-- [ ] 普通 Deployment 创建不要求理解或选择内部 Profile。**未达成** —— 创建表单仍渲染「能力接口」选择器。
-- [ ] 已知模型只显示目录支持能力，管理员只能收窄。**部分** —— 后端拒绝超集，但 UI 的勾选框来自 Profile 上限而非目录。
+- [x] 普通 Deployment 创建不要求理解或选择内部 Profile。
+- [x] 已知模型只显示目录支持能力，管理员只能收窄。
 - [x] 未知模型默认零能力并进入显式声明流程。
 - [ ] 仅内置目录能力默认勾选，上游元数据能力默认待确认。**部分** —— 前半达成；`provider_metadata` 来源无生产调用点，后半无从演示。
-- [ ] Deployment 保存模型能力快照、单模型 revision、来源和证据。**部分** —— §5.2 要求的 `Evidence`、`OperatorDisabled`、`OperationBindings` 三个字段均未实现。
+- [x] Deployment 保存模型能力快照、单模型 revision、来源和证据。`OperationBindings` 随 Phase 3 一并取消，不再是缺口。
 - [x] 目录刷新不会静默改变在线 Deployment；无关模型变化不产生 409。
 - [x] 能力变化通过 `LastTestRevision` 使健康测试 stale，并要求重新验证。
 - [x] Provider ceiling、模型目录和管理员收窄在后端权威校验；越界值被拒绝而非钳制。
@@ -729,9 +742,9 @@ Counter 与 Gauge 必须在设计阶段就定死，不能实现时临时决定 �
 - [x] 目录整体不可用时，手动输入模型 ID 的通道仍可完成部署。
 - [x] 深链与普通新增没有初始化差异或请求竞态。
 - [x] Backup/Restore、审计、热加载和重启保持能力快照。
-- [ ] 代码中不存在 legacy 能力来源、legacy 复核状态或 legacy 创建路径。**基本达成，有一处残留** —— 见 §17.2 D4。
-- [ ] 变更说明与发布说明已写明需要重新初始化数据目录。**部分** —— schema 21、22 已写明，schema 20（能力快照本身）从未被单独宣告。
-- [x] 多 Binding 若未完成全部运行时门禁，则以**可断言的方式**保持不可用：提交 `operation_bindings` 的请求返回 400，并有对应测试用例；仅靠 UI 不暴露入口不算数。
+- [x] 代码中不存在 legacy 能力来源、legacy 复核状态或 legacy 创建路径。
+- [x] 变更说明与发布说明已写明需要重新初始化数据目录。
+- [x] 多 Binding 以**可断言的方式**保持不可用：提交 `operation_bindings` 的请求返回 400 与稳定错误码 `operation_bindings_unavailable`，拒绝信息指向 Route 层的替代做法，并有对应测试用例；仅靠 UI 不暴露入口不算数。
 - [x] 新增指标已同步 `docs/contracts/metrics-reference.md`。
 - [ ] 完整 Go、Race、Vet、前端测试、生产构建和浏览器验收通过。**部分** —— 自动化部分通过；浏览器验收未做。
 - [ ] 真实 Provider 能力证据已进入 `docs/verification/provider-real-matrix.md`。**未达成**。
@@ -744,7 +757,9 @@ Counter 与 Gauge 必须在设计阶段就定死，不能实现时临时决定 �
 
 由于不做迁移（§10），Phase 1 与 Phase 2 之间不存在“新旧结构并存”的中间态：结构版本号递增之后，旧数据目录被明确拒绝并重建。这也意味着这两个 Phase 应当在同一个可发布区间内完成，不要让主干长期停在“已改结构、未落快照”的状态。
 
-Phase 3 只在真实模型确实需要同一 Provider + Model 跨多个内部 Profile 时进入开发。不能为了界面上的“全选”提前扩大运行时；也不能因为 Phase 3 尚未完成，就继续让单模型错误继承 Provider 的全部能力。
+Phase 3 已取消（2026-08-09）。本节原本写的是「只在真实模型确实需要同一 Provider + Model 跨多个内部 Profile 时进入开发。不能为了界面上的『全选』提前扩大运行时」—— 这句警告本身是对的，而重新审视之后的结论比它更进一步：**「界面上的全选」这个诉求根本不需要 Phase 3。** 它由模型能力目录满足（选中模型即按该模型自身能力默认勾选），而真正跨 Profile 的组合属于 Route 层，路由已经按核心操作选择候选。见 §5.3。
+
+那句警告的后半仍然成立且已落实：单模型不会再错误继承 Provider 的全部能力。
 
 ## 17. 实施现状与剩余工作（2026-08-09）
 
@@ -798,24 +813,34 @@ Phase 0、Phase 1、Phase 2 的**执行机制**已经完成并有测试覆盖，
 - **B1. `Evidence`** —— 已关闭。`ModelCapabilitySnapshot.Evidence` 落库，并由 `domain.SnapshotEvidence` 统一生成；上界改为按来源计算（`MaxEvidenceForCapabilitySource`），不再是一次无条件的 verified→declared 降级。存储侧按 §5.2 拒绝「证据高于来源允许等级」与「证据描述了快照未确立的能力」。
 - **B2. `OperatorDisabled`** —— 已关闭。`Deployment.OperatorDisabled` 落库；复核结果里被管理员关掉的能力单独成项，不再混进 `available_for_review` 反复提示。
   - 连带修正：operator_declared 部署收窄时，快照原本会跟着塌陷到收窄后的集合，于是「关掉了什么」无从读起。现在收窄不改写声明（除非显式重新声明），因此关闭一项能力是可记录、可逆的动作；重新打开也不再需要重新声明。
-- **B3. `OperationBindings`** —— 属于 Phase 3，见 E。
+- **B3. `OperationBindings`** —— 随 Phase 3 一并取消，不再是缺口。见 E。
 
-#### C. 与文档措辞的偏差（已实现但形态不同，需确认是否接受）
+#### C. 与文档措辞的偏差 —— 已完成（PR #135）
 
-- **C1. 复核状态改为派生，不持久化。** §5.2 将其列为 `Deployment` 字段。改动理由记录在 `internal/app/capability_drift.go` 顶部：比较的两侧都会在记录不被改写的情况下变化，存下来只能记录上次写入时的状态。**建议接受并回改文档。**
-- **C2. §13 第 3 项指标统计的是 Deployment 而非 Model**，第 7 项统计的是 Deployment 测试而非 Operation Binding 测试（后者属 Phase 3）。**建议接受并回改文档。**
-- **C3. `Clamp`/`Merge` 对数值上限取 `min()`**，而 §4.2 写的是「不要改写成 `min()`」。代码的区分是「派生层之间取窄」与「管理员输入越界则拒绝」，后者确实是拒绝而非钳制。**建议澄清文档措辞。**
+三处都按建议接受，并回改了文档正文，不再是「实现与文档不一致」。
 
-#### D. 欠账
+- **C1. 复核状态改为派生，不持久化。** §5.2 的结构体已去掉 `CapabilityReviewState`，并在其后说明理由。
+- **C2. §13 第 3、7 项指标口径。** §13 已改为 Deployment 与 Deployment 测试，并说明为什么不按 Model / Operation Binding 统计。
+- **C3. `Clamp`/`Merge` 取窄值。** §4.2 已区分「派生层之间取窄」与「管理员输入越界则拒绝」，禁令只针对后者。
 
-- **D1. CHANGELOG 未宣告 schema 20。** `[Unreleased]` 有 schema 21、22 的重置说明，但能力快照本身——本方案的主题——从未被单独宣告为需要重新初始化的原因。§10.2 要求写进变更说明。
-- **D2. Phase 0 遗留两问未答**：目录是否与定价目录（`halro pricing migrate`）合并为同一套发布流程、若不合并的理由；以及兼容性 manifest 规则（`docs/compatibility/`）未更新。
-- **D3. §12 缺失的测试**：聚合的并发上限与单 Binding 超时无任何测试；全部 Binding 失败时的 502 路径无测试；「无关模型增减不触发 409」只测了正向；§6.2 的日期别名映射既无实现也无测试。
-- **D4. legacy 残留一处**：`internal/app/providers.go` 中，当部署未声明任何操作时仍会退回 Adapter 全量上限。该分支不可达（`Deployment.Validate` 会拒绝这种记录），但它正是 §10.1 要求消除的「未声明即继承 Provider 上限」形态。
+#### D. 欠账 —— 已完成（PR #135）
 
-#### E. Phase 3：多 Operation Binding Deployment
+- **D1. CHANGELOG 未宣告 schema 20。** 已补：`[Unreleased] / Operator impact` 下有独立条目，说明为什么不能回填。
+- **D2. Phase 0 遗留两问。** 已答，写在 §9 Phase 0 与 `docs/compatibility/README.md`：
+  - 载体为 Go 源码、随二进制发版、按代码评审；
+  - **不与定价目录合并，因为不存在可合并的「定价目录」** —— 价格是管理员按 Deployment 提供的记录，`halro pricing migrate` 是一次性回填工具而非发布流程，且二者所有权相反（能力目录是 Halro 的主张，价格是管理员的主张）。
+  - 兼容性 manifest 规则已补：**目录条目不是兼容性声明**，加模型不扩大端点成熟度，端点成熟度也不提升模型。
+- **D3. §12 缺失的测试。** 三项已补，一项待决定：
+  - [x] 聚合的并发上限与单 Binding 超时（`TestAggregateCatalogIsConcurrencyBoundedAndTimesOutPerBinding`）；
+  - [x] 全部 Binding 都无法列举时的 502 与手输兜底提示（`TestProviderModelCatalogFailsClosedWhenNoInterfaceCanList`）；
+  - [x] 「无关模型增减不触发 409」的反向（`TestAnUnrelatedModelChangingDoesNotMoveThisModelsRevision`）；
+  - [x] **§6.2 的日期别名映射：已决定不做（2026-08-09）。** 它不是欠测试而是欠决定。目前没有服务商满足 §6.2 的前提，逐条精确 ID 已覆盖同样的模型，启用它只会新增一条「靠命名规律推断能力」的路径。§6.2 已改写为「暂不启用」并列出将来启用的三项前置条件。
+- **D4. legacy 残留一处。** 已删除。**原描述有两处不准**：那段代码读的是 Provider 实例而非 Deployment，而且它不是「不可达分支」——`normalizedProviderCapabilities` 根本没有任何调用方，是死代码。
 
-整体未开始，与 §16 一致。按 2026-08-09 的决定，**纳入 1.0.0 范围**。
+#### E. Phase 3 —— 已取消（2026-08-09）
+
+不再纳入 1.0.0，也不推迟到 1.1.0：能力组合属于 Route 层，Phase 3 要解决的问题没有一处是到不了的。理由、代价与 1.1.0 的替代工作见
+[`model-aware-capability-selection.v1.1.0.zh-CN.md`](model-aware-capability-selection.v1.1.0.zh-CN.md)。1.0.0 内只保留对 `operation_bindings` 的具名拒绝。
 
 #### F. 发布前人工项
 
@@ -830,3 +855,25 @@ Phase 0、Phase 1、Phase 2 的**执行机制**已经完成并有测试覆盖，
 - **`Registry.Register` 硬拒绝非 `ProfiledAdapter`（#128）。** §4.1/§10.1 只要求「评估 `LegacyUnprofiled` 的去留」，实际做法更强：让该状态不可表示，因为原先的 fail-closed 是靠注册之后的一个分支擦除可选语义实现的，分支没覆盖到的需求会静默变成 fail-open。
 - **只读角色对「测试/启用/创建替代」的门禁（#130）。** §7.3 要求只读管理员可查看但不能创建或调整，这一项算在范围内，但修正面比文档所述更广。
 - **系统配置面板改版（#118、#120）** 与本方案无关。
+
+### 17.4 未完成任务清单（2026-08-09 更新）
+
+这是本方案剩余的全部工作。每项标注**卡在哪**，便于跟踪。
+
+| 编号 | 内容 | 状态 | 卡在哪 |
+| --- | --- | --- | --- |
+| F1 | 真实 Provider 能力证据进入 `docs/verification/provider-real-matrix.md` | 未开始 | **需要授权与凭据**：计费、opt-in，且矩阵运行器要求精确的 RC commit |
+| F2 | 浏览器验收（门禁 18 的最后一项） | 未开始 | 需要真人操作或浏览器自动化 |
+| §15-4 | 「仅内置目录能力默认勾选，上游元数据能力默认待确认」的后半 | 阻塞 | `provider_metadata` 来源没有生产调用点，无从演示。需要某个 Adapter 开始返回结构化能力元数据 |
+
+已关闭的项，保留编号便于回溯：
+
+- **A（用户流程）** —— PR #132、#133。
+- **B1 `Evidence` / B2 `OperatorDisabled`** —— PR #134。**B3 `OperationBindings`** 随 Phase 3 取消，不再是缺口。
+- **C（文档措辞偏差三处）、D（欠账四项）** —— PR #135。其中 D3-4（§6.2 日期别名）决定不做。
+- **E（Phase 3）** —— 取消，见上。
+
+**门禁现状（§15，共 19 条）：16 达成 / 2 部分 / 1 未达成。** 两条「部分」是上表的 §15-4 与 F2，唯一「未达成」是 F1。
+
+**剩下的没有一项是编码工作** —— 两项需要外部输入（F1 计费凭据、F2 浏览器），一项等待上游元数据出现。1.1.0 的工作另见
+[`model-aware-capability-selection.v1.1.0.zh-CN.md`](model-aware-capability-selection.v1.1.0.zh-CN.md) §4。

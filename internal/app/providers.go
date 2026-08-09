@@ -415,14 +415,6 @@ func minimumCapabilityLimit(left, right int64) int64 {
 	return right
 }
 
-func normalizedProviderCapabilities(instance domain.ProviderInstance) domain.ProviderCapabilities {
-	capabilities := instance.Capabilities
-	if !capabilities.AnyOperation() {
-		return domain.DefaultProviderCapabilitiesForProfile(instance.Type, instance.ProfileID)
-	}
-	return capabilities
-}
-
 func adapterCapabilitiesFor(adapter provider.Adapter) provider.Capabilities {
 	if reporter, ok := adapter.(provider.CapabilityReporter); ok {
 		return reporter.Capabilities()

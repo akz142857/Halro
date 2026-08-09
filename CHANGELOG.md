@@ -33,6 +33,19 @@ semantic versioning.
 
 ### Changed
 
+- Giving one deployment several internal bindings is refused by name rather than
+  incidentally, and the refusal says what to do instead: a deployment carries one
+  model's own capabilities through one internal binding, and serving several
+  capabilities under one public model is done with one deployment per binding and
+  a route pointing at each. The design that proposed `operation_bindings` is
+  withdrawn rather than deferred — composition already happens at the route
+  layer, where the router selects a candidate per core operation.
+
+- A model catalog entry claiming a capability its provider profile cannot carry
+  is now refused at build time instead of being silently trimmed. A trimmed entry
+  validated cleanly and left the console showing a model missing a capability
+  somebody had written down, with nothing saying why.
+
 - A deployment may now exceed what the catalog establishes for a model with an
   explicit `mode=operator_declared`, and is then recorded with the operator as
   the capability source rather than the catalog. Without the word, the catalog
@@ -70,6 +83,15 @@ semantic versioning.
   third tier that asserted nothing.
 
 ### Operator impact
+
+- **Re-initialising the data directory is required** for an instance holding any
+  deployment created before capability snapshots existed. Storage schema 20
+  refuses such a directory at start-up and names the deployment count. There is
+  no backfill: the only value that could be written for an existing deployment
+  is the provider ceiling, which is the guess the snapshot exists to replace,
+  and writing it would make a guess indistinguishable from an established fact
+  from then on. This was previously only mentioned in passing under the schema
+  21 and 22 entries; it is its own reason to re-initialise.
 
 - **Storage schema 23 upgrades in place; no re-initialisation.** It fills in the
   two fields above on existing deployments, computed by the same functions the

@@ -12,9 +12,11 @@ import (
 // they answer is different: not "who changed this deployment" but "what was
 // established about this model, by whom, against which catalog".
 //
-// deployment.operation_bindings.changed is deliberately absent. It belongs to
-// Phase 3, and there is no operation-binding state to report yet; adding an
-// action that can never fire would only make the audit surface look complete.
+// deployment.operation_bindings.changed is deliberately absent, and now
+// permanently so. A deployment carries one internal binding — composing several
+// capabilities into one outward-facing model is the route layer's job — so
+// there is no operation-binding state to report, and an action that can never
+// fire would only make the audit surface look complete.
 const (
 	auditCapabilitySnapshotCreated    = "deployment.capability_snapshot.created"
 	auditCapabilitySnapshotReviewed   = "deployment.capability_snapshot.reviewed"
