@@ -10,3 +10,11 @@ var KMSKeyLifecycle []byte
 
 //go:embed m11-kms-disaster-recovery.md
 var KMSDisasterRecovery []byte
+
+// A leaked Gateway Key is the most likely credential incident: it is the only
+// credential Halro hands to an application developer. The procedure is embedded
+// for the same reason as the others — during an incident the operator should
+// not be reading a moving branch.
+
+//go:embed gateway-key-compromise.md
+var GatewayKeyCompromise []byte

@@ -393,6 +393,25 @@ func TestAdminGatewayKeyDeleteRevokesImmediately(t *testing.T) {
 		t.Fatalf("deleted key read status=%d body=%s", readResponse.Code, readResponse.Body.String())
 	}
 
+	// Revocation is a soft delete: the record stays as a tombstone, disabled and
+	// stamped. The Admin surface hides it, but it is still in the store.
+	//
+	// This is load-bearing for incident response, which is why it is asserted
+	// rather than left to the handler's shape. docs/runbooks/gateway-key-compromise.md
+	// tells an operator that a data directory with *no* key records was rebuilt
+	// rather than revoked — that diagnosis only holds while revocation leaves
+	// something behind.
+	tombstone, err := runtime.store.GetGatewayKey(context.Background(), keyResult.Metadata.ID)
+	if err != nil {
+		t.Fatalf("revocation erased the record instead of tombstoning it: %v", err)
+	}
+	if tombstone.DeletedAt == nil {
+		t.Fatal("a revoked key carries no deletion stamp")
+	}
+	if tombstone.Enabled {
+		t.Fatal("a revoked key is still marked enabled")
+	}
+
 	update := adminRequest(t, http.MethodPut, keyPath, map[string]any{"name": "doomed", "enabled": true})
 	update.AddCookie(cookie)
 	update.Header.Set("X-CSRF-Token", csrf)

@@ -39,3 +39,28 @@ func TestMasterKeyRunbooksAreUnavailableInFileMode(t *testing.T) {
 		t.Fatalf("status=%d body=%q", response.Code, response.Body.String())
 	}
 }
+
+// A leaked Gateway Key is possible under every Master Key custody mode, so
+// unlike the two above this runbook must not be gated on one. A procedure that
+// is missing exactly when it is needed is worse than no procedure.
+func TestGatewayKeyCompromiseRunbookIsServedInEveryCustodyMode(t *testing.T) {
+	for _, mode := range []string{config.MasterKeyModeFile, config.MasterKeyModeKeySlots} {
+		runtime := &Runtime{config: config.Config{Storage: config.Storage{MasterKey: config.MasterKey{Mode: mode}}}}
+		response := httptest.NewRecorder()
+		runtime.adminGatewayKeyCompromiseRunbook(response, httptest.NewRequest(http.MethodGet, "/", nil))
+		if response.Code != http.StatusOK {
+			t.Fatalf("mode %q: status=%d", mode, response.Code)
+		}
+		if !strings.HasPrefix(response.Header().Get("Content-Type"), "text/markdown") ||
+			response.Header().Get("Cache-Control") != "private, no-store" {
+			t.Fatalf("mode %q: headers=%v", mode, response.Header())
+		}
+		// The runbook's two load-bearing claims. If the embed goes stale or the
+		// file is renamed, this is what says so.
+		for _, claim := range []string{"invalid_api_key", "墓碑"} {
+			if !strings.Contains(response.Body.String(), claim) {
+				t.Fatalf("mode %q: the runbook no longer states %q", mode, claim)
+			}
+		}
+	}
+}
