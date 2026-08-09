@@ -485,3 +485,40 @@ func TestAnUnrelatedModelChangingDoesNotMoveThisModelsRevision(t *testing.T) {
 		t.Fatal("changing what the catalog establishes for a model left its revision alone")
 	}
 }
+
+// An entry that claims what its profile cannot carry has to fail loudly. It
+// used to be trimmed on the way in and then validate cleanly, so the console
+// would show a model missing a capability somebody had written down, with
+// nothing anywhere saying why.
+//
+// The failure is also the signal that matters most: a model whose own
+// capabilities do not fit inside one profile means Halro's profile split does
+// not match a real model, and the answer is a second entry on the profile that
+// carries it — not a quieter first one.
+func TestAnEntryExceedingItsProfileIsRefusedRatherThanTrimmed(t *testing.T) {
+	// The OpenAI chat profile carries no image generation; the media profile does.
+	overreaching := builtinEntry(domain.ProviderOpenAI, domain.ProfileOpenAIChatEmbeddings, "chat-and-images",
+		domain.ProviderCapabilities{Chat: true, Images: true})
+	if !overreaching.Capabilities.Images {
+		t.Fatal("the entry was trimmed on construction, so nothing downstream can object to it")
+	}
+
+	catalog, err := New(overreaching)
+	if err == nil {
+		t.Fatal("a catalog accepted an entry claiming what its profile cannot carry")
+	}
+	if catalog != nil {
+		t.Fatal("a rejected catalog was still returned")
+	}
+	if !strings.Contains(err.Error(), "ceiling") {
+		t.Fatalf("the refusal does not say the profile is what refused it: %v", err)
+	}
+
+	// The same claim on the profile that does carry it is fine, which is what
+	// makes the refusal actionable rather than a dead end.
+	onTheRightProfile := builtinEntry(domain.ProviderOpenAI, domain.ProfileOpenAIMediaResources, "chat-and-images",
+		domain.ProviderCapabilities{Images: true})
+	if _, err := New(onTheRightProfile); err != nil {
+		t.Fatalf("the profile that carries images refused it: %v", err)
+	}
+}

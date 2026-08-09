@@ -33,6 +33,19 @@ semantic versioning.
 
 ### Changed
 
+- Giving one deployment several internal bindings is refused by name rather than
+  incidentally, and the refusal says what to do instead: a deployment carries one
+  model's own capabilities through one internal binding, and serving several
+  capabilities under one public model is done with one deployment per binding and
+  a route pointing at each. The design that proposed `operation_bindings` is
+  withdrawn rather than deferred — composition already happens at the route
+  layer, where the router selects a candidate per core operation.
+
+- A model catalog entry claiming a capability its provider profile cannot carry
+  is now refused at build time instead of being silently trimmed. A trimmed entry
+  validated cleanly and left the console showing a model missing a capability
+  somebody had written down, with nothing saying why.
+
 - A deployment may now exceed what the catalog establishes for a model with an
   explicit `mode=operator_declared`, and is then recorded with the operator as
   the capability source rather than the catalog. Without the word, the catalog

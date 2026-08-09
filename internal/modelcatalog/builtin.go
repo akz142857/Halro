@@ -93,17 +93,29 @@ func pinnedProfileEntry(providerType domain.ProviderType, profile domain.Provide
 	}
 }
 
-// builtinEntry declares one reviewed model. Capabilities are clamped to the
-// profile ceiling on the way in, so an entry can never be the thing that widens
-// a profile — including a Beta profile whose limits are pinned deliberately.
+// builtinEntry declares one reviewed model, exactly as written. Capabilities are
+// deliberately *not* clamped to the profile ceiling here.
+//
+// Clamping looked like the safe choice and was the opposite. An entry claiming
+// something its profile cannot carry would have been silently trimmed and then
+// validated cleanly, so the console would show a model missing a capability
+// somebody had written down, with nothing anywhere saying why. Validate()
+// refuses the entry instead, which makes it a build failure.
+//
+// What that failure means is worth stating, because the reflex is to delete the
+// offending capability: a model whose own capabilities do not fit inside one
+// profile is Halro's profile split failing to match a real model. A deployment
+// carries one model's own capabilities and nothing else — composing several into
+// one outward-facing model is the route layer's job (see
+// model-aware-capability-selection.v1.1.0.zh-CN.md) — so the answer is a second
+// entry on the profile that does carry it, not a quieter first one.
 func builtinEntry(providerType domain.ProviderType, profile domain.ProviderProfileID, model string,
 	capabilities domain.ProviderCapabilities) Entry {
-	key := Key{ProviderType: providerType, Profile: profile, Model: model}
 	return Entry{
-		Key:          key,
+		Key:          Key{ProviderType: providerType, Profile: profile, Model: model},
 		Status:       StatusKnown,
 		Source:       SourceBuiltin,
-		Capabilities: Clamp(capabilities, key.Ceiling()),
+		Capabilities: capabilities,
 	}
 }
 
