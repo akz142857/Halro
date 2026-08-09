@@ -631,6 +631,7 @@ export const enUS = {
     availableForReview: "Available to review",
     driftedConsequence: "This deployment is not serving traffic. Review its capabilities and retest before it can route again.",
     reviewAvailableConsequence: "It keeps serving exactly what it does today. Nothing changes until you turn a capability on and retest.",
+    switchedOff: "Switched off by an administrator",
     reviewReasons: {
       profile_narrowed: "This build of Halro no longer supports what this deployment claims.",
       catalog_no_longer_covers_model: "The model catalog no longer covers this model, so nothing establishes its capabilities.",

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/akz142857/Halro/internal/config"
@@ -65,7 +66,7 @@ func TestBackupRestorePreservesTheCapabilitySnapshot(t *testing.T) {
 	}
 
 	restored := readDeploymentSnapshot(t, cfg, bootstrap.DeploymentID)
-	if restored != before {
+	if !reflect.DeepEqual(restored, before) {
 		t.Fatalf("restored snapshot differs:\n before=%+v\n after =%+v", before, restored)
 	}
 

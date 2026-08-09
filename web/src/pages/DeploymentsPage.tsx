@@ -327,6 +327,10 @@ function CapabilityReviewNotice({ review }: { review: CapabilityReview | undefin
           <dt>{t("deployments.availableForReview")}</dt>
           <dd>{names(review.available_for_review) || "—"}</dd>
         </div>
+        <div>
+          <dt>{t("deployments.switchedOff")}</dt>
+          <dd>{names(review.operator_disabled) || "—"}</dd>
+        </div>
       </dl>
       <span className="deployment-review-consequence">
         {drifted ? t("deployments.driftedConsequence") : t("deployments.reviewAvailableConsequence")}

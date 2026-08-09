@@ -602,18 +602,31 @@ func TestCapabilityEvidenceIsNotSilentlyUpgradedAndDisabledCapabilitiesDowngrade
 	}
 
 	deploymentCapabilities := domain.ProviderCapabilities{Chat: true, Streaming: true}
-	deployment := deploymentCapabilityEvidence(deploymentCapabilities, declared, nil)
+	deployment := deploymentCapabilityEvidence(deploymentCapabilities, declared, nil, "builtin_catalog")
 	if deployment["chat"] != domain.EvidenceDeclared || deployment["tools"] != domain.EvidenceUnsupported {
 		t.Fatalf("deployment subset evidence=%#v", deployment)
 	}
 	verified := domain.EvidenceForCapabilities(deploymentCapabilities, domain.EvidenceVerified)
-	fresh := deploymentCapabilityEvidence(deploymentCapabilities, verified, nil)
+	fresh := deploymentCapabilityEvidence(deploymentCapabilities, verified, nil, "builtin_catalog")
 	if fresh["chat"] != domain.EvidenceDeclared {
 		t.Fatalf("new deployment inherited verified evidence: %#v", fresh)
 	}
-	preserved := deploymentCapabilityEvidence(deploymentCapabilities, verified, verified)
+	preserved := deploymentCapabilityEvidence(deploymentCapabilities, verified, verified, "builtin_catalog")
 	if preserved["chat"] != domain.EvidenceVerified {
 		t.Fatalf("unchanged deployment lost verified evidence: %#v", preserved)
+	}
+
+	// The cap is the source's, not a blanket demotion. Every source that exists
+	// today stops at declared, so the observable answer is unchanged — but a
+	// probe result is allowed to keep what it measured, which is the difference
+	// between applying the rule and reproducing its current output.
+	probed := deploymentCapabilityEvidence(deploymentCapabilities, verified, nil, "verified_probe")
+	if probed["chat"] != domain.EvidenceVerified {
+		t.Fatalf("a probe result was demoted: %#v", probed)
+	}
+	unsourced := deploymentCapabilityEvidence(deploymentCapabilities, verified, nil, "")
+	if unsourced["chat"] != domain.EvidenceUnsupported {
+		t.Fatalf("evidence survived a source that establishes nothing: %#v", unsourced)
 	}
 }
 

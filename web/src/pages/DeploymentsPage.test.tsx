@@ -530,7 +530,8 @@ describe("deployment release workflow", () => {
         state: "review_available", source: "operator_declared", status: "partial",
         model_revision: "sha256:declared", catalog_covered: true, catalog_source: "builtin_catalog",
         catalog_status: "known", catalog_model_revision: "sha256:new",
-        available_for_review: ["reasoning"], reason: "catalog_now_covers_model",
+        available_for_review: ["reasoning"], operator_disabled: ["vision"],
+        reason: "catalog_now_covers_model",
       },
     } as Deployment;
     vi.mocked(api.deployments).mockResolvedValue({ items: [deployment], next_cursor: "" });
@@ -542,6 +543,13 @@ describe("deployment release workflow", () => {
     const facts = within(await waitFor(() => document.querySelector(".deployment-review-facts") as HTMLElement));
     expect(facts.getByText("管理员声明")).toBeVisible();
     expect(facts.getByText("推理")).toBeVisible();
+    // A capability the administrator switched off is reported under its own
+    // heading, so it stays visible and reversible without reading as a new
+    // offer that has to be answered again.
+    const switchedOff = facts.getByText("已由管理员关闭").closest("div") as HTMLElement;
+    expect(within(switchedOff).getByText("视觉")).toBeVisible();
+    const offered = facts.getByText("可复核").closest("div") as HTMLElement;
+    expect(within(offered).queryByText("视觉")).not.toBeInTheDocument();
     // The offer must not read as something already in effect.
     expect(screen.getByText(/它仍然只做今天在做的事/)).toBeVisible();
   });

@@ -631,6 +631,7 @@ export const zhCN = {
     availableForReview: "可复核",
     driftedConsequence: "该部署已停止承接流量。复核其能力并重新测试后才能恢复路由。",
     reviewAvailableConsequence: "它仍然只做今天在做的事。在你开启某项能力并重新测试之前，什么都不会变。",
+    switchedOff: "已由管理员关闭",
     reviewReasons: {
       profile_narrowed: "当前版本的 Halro 已不再支持该部署所声称的能力。",
       catalog_no_longer_covers_model: "模型目录已不再收录该模型，没有任何依据可以确立它的能力。",
