@@ -55,9 +55,19 @@ func TestGatewayKeyCompromiseRunbookIsServedInEveryCustodyMode(t *testing.T) {
 			response.Header().Get("Cache-Control") != "private, no-store" {
 			t.Fatalf("mode %q: headers=%v", mode, response.Header())
 		}
-		// The runbook's two load-bearing claims. If the embed goes stale or the
-		// file is renamed, this is what says so.
-		for _, claim := range []string{"invalid_api_key", "墓碑"} {
+		// The runbook's load-bearing claims. If the embed goes stale or the file
+		// is renamed, this is what says so.
+		//
+		// The last three are the corrections: a 503 from the delete leaves the
+		// tombstone durable either way, so the runbook has to name both failure
+		// strings and say which one leaves the key live. gateway_key.disable is
+		// here because the CLI break-glass path audits under a different action
+		// than the API one, and an operator verifying revocation by the wrong
+		// name concludes there is no record.
+		for _, claim := range []string{
+			"invalid_api_key", "墓碑",
+			"metadata unavailable", "audit unavailable", "gateway_key.disable",
+		} {
 			if !strings.Contains(response.Body.String(), claim) {
 				t.Fatalf("mode %q: the runbook no longer states %q", mode, claim)
 			}
