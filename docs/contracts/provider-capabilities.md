@@ -132,7 +132,9 @@ token, and region are encrypted as one audience-bound credential. The region
 must match the endpoint hostname. Runtime adapters neither read environment
 credentials nor contact IMDS.
 
-Mantle is a separate access surface. Only regional
+Mantle is a separate access surface — for which of the two an operator should
+pick, and what neither supports, see
+[选择 AWS 接入面](../guides/aws-surface-selection.md). Only regional
 `bedrock-mantle.<region>.api.aws` origins are accepted. Each Provider instance
 selects one immutable wire profile; Runtime credentials cannot be attached to
 Mantle. The Responses profile participates only in Halro's stateless tier

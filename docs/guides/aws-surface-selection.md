@@ -1,0 +1,102 @@
+# 选择 AWS 接入面：Bedrock Runtime 还是 Bedrock Mantle
+
+Halro 对 AWS 有**两个并存的接入面**，不是一个在替代另一个。它们是同一个 Provider
+类型（`bedrock`）下的两组 Profile，凭据方案、Endpoint 和能力上限都不同，一个 Provider
+实例只能选其中一个。
+
+本文回答「我该用哪个」。每个 Profile 逐项的能力、鉴权与翻译行为在
+[Provider capability contract](../contracts/provider-capabilities.md) 的 Shipped
+profiles 表，本文不重复。
+
+## 先说结论
+
+| 你要做的事 | 用哪个 |
+| --- | --- |
+| 对话、流式、工具调用、视觉输入 | **两个都行**，Mantle 的能力面更宽（见下） |
+| Embedding、图像生成、Rerank、异步视频 | **只有 Runtime** |
+| 跨区域推理（Inference Profile）、预置吞吐 | **只有 Runtime，且只在 Converse 文本 Profile 上** |
+| 护栏（Guardrails）、批量推理、服务层 | **两个都还不支持**，见「都做不到的事」 |
+
+## 两个接入面的硬边界
+
+| | Bedrock Runtime | Bedrock Mantle |
+| --- | --- | --- |
+| Access Surface | `SurfaceBedrockRuntime` | `SurfaceBedrockMantle` |
+| Endpoint | `bedrock-runtime.<region>.amazonaws.com`（含 FIPS、`.com.cn`、PrivateLink `.vpce.`）与 `bedrock-agent-runtime.<region>.*` | 仅 `bedrock-mantle.<region>.api.aws` |
+| 凭据 | AWS SigV4（Access Key + Secret + 可选 Session Token + Region，加密为一条 audience-bound 凭据） | Bedrock API Key（静态 Header） |
+| 协议 | AWS 原生（Converse / InvokeModel / Agent Runtime） | OpenAI 与 Anthropic 兼容线 |
+| Profile 数 | 5 | 3 |
+
+**Runtime 凭据不能挂到 Mantle 上，反之亦然。** 这由 Profile 的
+`CredentialScheme` 强制（`AWSSigV4Explicit` vs `BedrockAPIKey`），装配期就会拒绝。
+Runtime 适配器也**不读环境变量凭据、不访问 IMDS**，Region 必须与 Endpoint 主机名一致。
+
+## 能力面的差别
+
+Runtime 的 Converse Profile 被**刻意钉死在纯文本对话**：只声明 Chat、Streaming、
+StreamUsage，工具、视觉、JSON 模式一律在 Provider I/O 之前拒绝，而不是静默降级。
+Mantle 的三个 Profile 反而更宽：
+
+| Profile | 能力 |
+| --- | --- |
+| `bedrock.runtime.converse.text.v1` | Chat、Streaming、StreamUsage |
+| `bedrock.runtime.invoke.titan-embed-text-v2.v1` | Embeddings，上下文 8192 |
+| `bedrock.runtime.invoke.titan-image-v2.v1` | Images |
+| `bedrock.agent-runtime.rerank.cohere-v3-5.v1` | Rerank |
+| `bedrock.runtime.async.nova-reel-v1.v1` | AsyncGenerate（需显式 S3 输出） |
+| `bedrock.mantle.openai.chat.v1` | Chat、Streaming、Tools、Vision、JSON、DeveloperRole、**Reasoning**、StreamUsage |
+| `bedrock.mantle.openai.responses.v1` | 同上，但**没有 Reasoning** |
+| `bedrock.mantle.anthropic.messages.v1` | Chat、Streaming、Tools、Vision、Reasoning、StreamUsage |
+
+Mantle Responses 少一项 Reasoning 是有原因的，不是遗漏：它只参与 Halro 的无状态层、
+恒发 `store:false`，而当前的 canonical response 映射保不住 reasoning item，所以那项能力
+不声明，而不是声明了再在运行时丢掉。
+
+**这些上限是刻意钉死的。** 目录、上游元数据和管理员声明都不得放宽 Beta Profile 的上限；
+放宽属于需要独立契约评审的决定，不能作为别的改动的副作用发生。
+
+## 部署目标类型：跨区域推理与预置吞吐的真实边界
+
+这一条容易想当然，实现比「Bedrock 支持 Inference Profile」要窄：
+
+| 接入面 / Profile | 可用的部署目标类型 |
+| --- | --- |
+| Mantle（全部三个 Profile） | 仅 `model_id` |
+| Runtime · Converse 文本 | `bedrock_foundation_model`、`bedrock_inference_profile`、`bedrock_provisioned_throughput` |
+| Runtime · 其余四个 Profile | 仅 `bedrock_foundation_model` |
+
+也就是说**跨区域推理和预置吞吐只对 Converse 文本对话可用**。Titan Embedding、
+Titan Image、Cohere Rerank、Nova Reel 都只能指向基础模型，Mantle 则完全没有这两种目标。
+
+## 都做不到的事
+
+以下能力在**两个接入面上都未对接**，需要新开发，且涉及 Beta Profile 上限的部分要走契约评审：
+
+- **护栏（Guardrails）** —— 不能配置或调用。唯一相关的实现是把上游返回的
+  `guardrail_intervened` / `content_filtered` 停止原因映射为 `content_filter`，也就是
+  Halro 能**识别护栏拦截发生了**，但不能主动使用护栏。
+- **批量推理** —— Bedrock 侧没有 `batches` 能力。该能力目前只存在于
+  `openai.media-resources.v1`。
+- **服务层（Service tiers）** —— 没有对接。北向 Anthropic Messages 门面接受
+  `service_tier` 请求字段，但那是协议兼容面的事，与 Bedrock 的服务层无关。
+
+## 一条常见的选型误解
+
+AWS 给 Mantle 的推荐理由里有「按项目隔离工作负载、跟踪应用级成本与用量」。
+**在 Halro 场景下这不构成选型依据 —— 这件事网关自己就在做，且对两个接入面一视同仁。**
+Project 隔离、RPM/TPM/并发上限、预算预留与结算、按 Project 与 Deployment 的成本和
+Token 记账，都由 Halro 的 `budget`、`ledger`、`usage` 负责，与你选 Runtime 还是 Mantle
+无关。选型应当只看上面几节的能力与目标类型差异。
+
+## 同时需要两边的能力时
+
+一个 Deployment 只承载**一个模型自己的能力**，通过**一个内部 Binding**，它不表达组合。
+需要把跨 Profile 的能力（例如 Converse 对话 + Titan 图像生成）合成一个对外模型时，
+**组合发生在 Route 层**：同一个 public model 下挂多条 Route，各自指向一个 Deployment，
+路由按请求的核心操作选择候选。
+
+因为 Runtime 与 Mantle 的凭据方案不同，跨这两个接入面的组合还意味着**两个 Provider
+实例**，各自持有自己的凭据。
+
+提交 `operation_bindings` 试图把多个 Binding 塞进一条 Deployment 会被具名拒绝
+（`400 operation_bindings_unavailable`），拒绝信息会指向上面这条做法。
