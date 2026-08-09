@@ -54,6 +54,94 @@ func TestResolveRejectsCapabilitiesBeyondTheCatalog(t *testing.T) {
 	}
 }
 
+// openAIInstance is the provider the seeded chat catalog applies to. Its
+// profile ceiling is wider than any single entry, which is what makes the gap
+// between "what the catalog claims" and "what the protocol carries" testable.
+func openAIInstance() domain.ProviderInstance {
+	profile := domain.ProfileOpenAIChatEmbeddings
+	return domain.ProviderInstance{
+		ID: "prov_openai", Type: domain.ProviderOpenAI, AccessSurface: domain.SurfaceOpenAI,
+		BaseURL: "https://api.openai.com", Enabled: true,
+		Bindings: []domain.ProviderProfileBinding{{
+			ID: "b-openai", ProfileID: profile, Enabled: true,
+			Capabilities: domain.DefaultProviderCapabilitiesForProfile(domain.ProviderOpenAI, profile),
+		}},
+	}
+}
+
+// A catalog entry is a reviewed claim, not a measurement. If it under-claims,
+// refusing outright would make it a wall no operator knowledge gets past, so an
+// explicit declaration overrides it — and the deployment then records the
+// operator as the source, never the catalog agreeing.
+func TestResolveLetsAnExplicitDeclarationExceedTheCatalog(t *testing.T) {
+	instance := openAIInstance()
+	entry, ok := modelcatalog.Builtin().Lookup(modelcatalog.Key{
+		ProviderType: domain.ProviderOpenAI, Profile: domain.ProfileOpenAIChatEmbeddings, Model: "gpt-4o",
+	})
+	if !ok {
+		t.Fatal("seed entry missing")
+	}
+	if entry.Capabilities.Reasoning {
+		t.Fatal("this test needs a capability the profile carries and the entry does not")
+	}
+
+	// Narrowing what the entry claims is a reduction and stays the catalog's.
+	narrowed := entry.Capabilities
+	narrowed.Vision = false
+	resolved, err := resolveDeploymentTarget(instance, deploymentInput{Capabilities: &narrowed}, "gpt-4o", "", nil)
+	if err != nil {
+		t.Fatalf("narrowing a catalogued model was refused: %v", err)
+	}
+	if resolved.declared {
+		t.Fatal("narrowing was recorded as an operator declaration")
+	}
+
+	// Asking for more than the entry establishes, without saying so, keeps the
+	// catalog's answer and reports its own code.
+	wider := entry.Capabilities
+	wider.Reasoning = true
+	if _, err := resolveDeploymentTarget(instance, deploymentInput{Capabilities: &wider}, "gpt-4o", "", nil); err == nil {
+		t.Fatal("a silent request exceeded the catalog")
+	} else if code := deploymentErrorCode(t, err); code != "model_capabilities_exceed_catalog" {
+		t.Fatalf("code=%q", code)
+	}
+
+	// The same request with the word said out loud is accepted, and the entry no
+	// longer carries it: the operator does.
+	declared, err := resolveDeploymentTarget(instance, deploymentInput{
+		Mode: deploymentModeOperatorDeclared, Capabilities: &wider,
+	}, "gpt-4o", "", nil)
+	if err != nil {
+		t.Fatalf("an explicit declaration was refused: %v", err)
+	}
+	if !declared.declared {
+		t.Fatal("an override of the catalog was not recorded as an operator declaration")
+	}
+	if declared.binding.ID != "b-openai" {
+		t.Fatalf("resolved binding=%q", declared.binding.ID)
+	}
+
+	// It still cannot exceed the profile, which is the limit that is not a claim.
+	beyondProfile := wider
+	beyondProfile.Moderations = true
+	if _, err := resolveDeploymentTarget(instance, deploymentInput{
+		Mode: deploymentModeOperatorDeclared, Capabilities: &beyondProfile,
+	}, "gpt-4o", "", nil); err == nil {
+		t.Fatal("a declaration widened the profile ceiling")
+	}
+}
+
+func deploymentErrorCode(t *testing.T, err error) string {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	(&Runtime{capabilityMetrics: newCapabilityMetrics()}).adminDeploymentInputError(recorder, err)
+	var body map[string]string
+	if json.Unmarshal(recorder.Body.Bytes(), &body) != nil {
+		return ""
+	}
+	return body["code"]
+}
+
 func TestResolveIgnoresClientClaimedBindingAsAuthority(t *testing.T) {
 	instance := bedrockInstance(
 		bedrockBinding("b-chat", domain.ProfileBedrockConverseText),

@@ -324,6 +324,20 @@ must match the endpoint hostname:
 {"access_key_id":"...","secret_access_key":"...","session_token":"...","region":"us-east-1"}
 ```
 
+Model discovery for the Converse profile reads the regional Bedrock control
+plane, which is a different host from the runtime endpoint that serves traffic:
+`bedrock-runtime.<region>.amazonaws.com` implies `bedrock.<region>.amazonaws.com`
+(and the matching FIPS, China, and dual-stack forms). Halro derives it from the
+endpoint you approved and never leaves that partition or region, but it is still
+an outbound call, so it must satisfy the Provider's allowed-hosts policy. If that
+policy lists only the runtime host, or the endpoint is a PrivateLink or Agent
+Runtime host with no control plane to derive, discovery reports the binding
+degraded and the console falls back to entering the model ID by hand. Nothing
+else about the deployment changes. The profiles that accept exactly one model —
+Titan Embeddings, Titan Image, Nova Reel, Cohere Rerank — answer from that pin
+and make no call at all. Discovery requires `bedrock:ListFoundationModels`; it is
+read-only and lists no customised or provisioned resources.
+
 The Bedrock Runtime profiles do not read environment credentials or IMDS. The
 Converse profile does not declare embeddings, tools, vision, or JSON mode. The
 separate `bedrock.runtime.invoke.titan-embed-text-v2.v1` profile declares

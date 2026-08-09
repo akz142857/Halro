@@ -454,7 +454,8 @@ export type CapabilityReviewReason =
   | "catalog_no_longer_covers_model"
   | "catalog_establishes_less"
   | "catalog_revision_advanced"
-  | "catalog_now_covers_model";
+  | "catalog_now_covers_model"
+  | "catalog_disagrees_with_declaration";
 
 export interface RouteCapabilityImpact {
   route_id: string;

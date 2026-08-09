@@ -82,6 +82,73 @@ func TestDeclaredModelTheCatalogNowCoversIsOfferedForReview(t *testing.T) {
 	}
 }
 
+// declaredOpenAIDeployment is a model an operator declared before the catalog
+// covered it. The OpenAI profile declares no token limits, so a declaration
+// that leaves them open sits comfortably inside the profile — and stops being a
+// subset of the catalog the moment an entry fills them in.
+func declaredOpenAIDeployment() (domain.Deployment, domain.ProviderProfileBinding) {
+	binding := openAIInstance().Bindings[0]
+	declared := domain.ProviderCapabilities{Chat: true, Streaming: true, StreamUsage: true}
+	return domain.Deployment{
+		ID: "dep", ProviderModel: "gpt-4o", ProfileID: binding.ProfileID, BindingID: binding.ID,
+		Capabilities: declared,
+		ModelCapabilitySnapshot: domain.ModelCapabilitySnapshot{
+			ProviderModel: "gpt-4o", ModelRevision: "sha256:before-the-catalog-covered-it",
+			Source: string(modelcatalog.SourceOperatorDeclared), Status: string(modelcatalog.StatusPartial),
+			CapturedAt: time.Now().UTC(), Capabilities: declared,
+		},
+	}, binding
+}
+
+// Growing the catalog must not silently stop traffic. An operator who declared
+// a model before the catalog covered it stops being a subset of the entry on
+// any point where the two disagree — token limits especially, since a
+// declaration that left them open is not inside an entry that fills them in.
+// That is a disagreement between two claims, not a capability that stopped
+// being supported, and the create path lets exactly this declaration through:
+// a deployment that can be created must not be withheld by the next restart.
+func TestCatalogGrowingUnderADeclarationIsReviewableNotDrift(t *testing.T) {
+	deployment, binding := declaredOpenAIDeployment()
+	if domain.ProviderCapabilitiesSubset(deployment.ModelCapabilitySnapshot.Capabilities, catalogueEntryFor(t, deployment, binding).Capabilities) {
+		t.Fatal("this test needs a snapshot the catalog entry does not cover")
+	}
+
+	review := reviewCapabilities(deployment, binding, domain.ProviderOpenAI)
+	if review.State != domain.CapabilityReviewAvailable || review.Reason != reviewReasonCatalogDisagrees {
+		t.Fatalf("state=%q reason=%q", review.State, review.Reason)
+	}
+	if !capabilityReviewAdmitsTraffic(review.State) {
+		t.Fatal("a catalog entry arriving stopped traffic on a working deployment")
+	}
+}
+
+// The same disagreement under a snapshot the catalog itself produced is drift:
+// that snapshot rested on the catalog, and the basis is gone.
+func TestCatalogNarrowingUnderItsOwnSnapshotIsStillDrift(t *testing.T) {
+	deployment, binding := declaredOpenAIDeployment()
+	deployment.ModelCapabilitySnapshot.Source = string(modelcatalog.SourceBuiltin)
+	deployment.ModelCapabilitySnapshot.Status = string(modelcatalog.StatusKnown)
+
+	review := reviewCapabilities(deployment, binding, domain.ProviderOpenAI)
+	if review.State != domain.CapabilityReviewDrifted || review.Reason != reviewReasonCatalogNarrowed {
+		t.Fatalf("state=%q reason=%q", review.State, review.Reason)
+	}
+	if capabilityReviewAdmitsTraffic(review.State) {
+		t.Fatal("a drifted deployment was still admitted")
+	}
+}
+
+func catalogueEntryFor(t *testing.T, deployment domain.Deployment, binding domain.ProviderProfileBinding) modelcatalog.Entry {
+	t.Helper()
+	entry, ok := modelcatalog.Builtin().Lookup(modelcatalog.Key{
+		ProviderType: domain.ProviderOpenAI, Profile: binding.ProfileID, Model: deployment.ProviderModel,
+	})
+	if !ok {
+		t.Fatalf("the catalog does not cover %q, so this test proves nothing", deployment.ProviderModel)
+	}
+	return entry
+}
+
 func TestCatalogEntryDisappearingUnderABuiltinSnapshotIsDrift(t *testing.T) {
 	deployment, binding := catalogueDeployment(t)
 	deployment.ProviderModel = "amazon.titan-embed-text-v9:0" // no such entry

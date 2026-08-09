@@ -35,6 +35,12 @@ type Adapter struct {
 	client     *http.Client
 	authorizer provider.Authorizer
 	profileID  domain.ProviderProfileID
+	// controlPlane signs model discovery, which lives on a different host from
+	// every request that serves traffic. Both are nil when this connection has
+	// no derivable control plane, and discovery then reports itself unavailable
+	// rather than reaching somewhere unapproved.
+	controlPlane         provider.Authorizer
+	controlPlaneEndpoint *url.URL
 }
 
 type textBlock struct {
@@ -117,17 +123,69 @@ func New(options Options) (*Adapter, error) {
 		return nil, errors.New("Bedrock Runtime profile is not implemented")
 	}
 	endpoint := *options.Endpoint
-	return &Adapter{endpoint: &endpoint, client: options.Client, authorizer: authorizer, profileID: profileID}, nil
+	controlPlane, controlPlaneEndpoint := newControlPlaneAuthorizer(options.Endpoint, options.CredentialJSON, options.Now)
+	return &Adapter{
+		endpoint: &endpoint, client: options.Client, authorizer: authorizer, profileID: profileID,
+		controlPlane: controlPlane, controlPlaneEndpoint: controlPlaneEndpoint,
+	}, nil
 }
 
 func NewAuthorizer(endpoint *url.URL, credentialJSON []byte, now func() time.Time) (provider.Authorizer, error) {
+	if err := validAuthorizerEndpoint(endpoint); err != nil {
+		return nil, err
+	}
+	signed, err := newCredentialSigner(credentialJSON, now)
+	if err != nil {
+		return nil, err
+	}
+	if validBedrockAgentRuntimeHost(endpoint.Hostname(), signed.region) {
+		signed.service = "bedrock-agent-runtime"
+	} else if !validBedrockRuntimeHost(endpoint.Hostname(), signed.region) {
+		signed.Close()
+		return nil, errors.New("AWS endpoint host is not an approved Bedrock Runtime endpoint for the credential region")
+	}
+	signed.authority = endpoint.Host
+	return signed, nil
+}
+
+// newControlPlaneAuthorizer signs model-discovery requests against the regional
+// Bedrock control plane derived from the runtime endpoint. It is a separate
+// authorizer because a signer pins the one host it will sign for, and that pin
+// is what keeps a bound credential from being usable against another endpoint.
+//
+// It returns no authorizer, and no error, when the runtime endpoint has no
+// derivable control plane. Discovery is an optional convenience: failing to
+// construct the adapter over it would take a working connection offline for the
+// sake of a model list.
+func newControlPlaneAuthorizer(endpoint *url.URL, credentialJSON []byte, now func() time.Time) (provider.Authorizer, *url.URL) {
+	if validAuthorizerEndpoint(endpoint) != nil {
+		return nil, nil
+	}
+	signed, err := newCredentialSigner(credentialJSON, now)
+	if err != nil {
+		return nil, nil
+	}
+	controlPlane, ok := controlPlaneEndpointFor(endpoint, signed.region)
+	if !ok {
+		signed.Close()
+		return nil, nil
+	}
+	signed.authority = controlPlane.Host
+	return signed, controlPlane
+}
+
+func validAuthorizerEndpoint(endpoint *url.URL) error {
 	if endpoint == nil {
-		return nil, errors.New("endpoint is required")
+		return errors.New("endpoint is required")
 	}
 	if !strings.EqualFold(endpoint.Scheme, "https") || endpoint.User != nil ||
 		(endpoint.Port() != "" && endpoint.Port() != "443") {
-		return nil, errors.New("AWS Bedrock credential authorizer requires an HTTPS endpoint on port 443 without user info")
+		return errors.New("AWS Bedrock credential authorizer requires an HTTPS endpoint on port 443 without user info")
 	}
+	return nil
+}
+
+func newCredentialSigner(credentialJSON []byte, now func() time.Time) (*signer, error) {
 	encoded := bytes.Clone(credentialJSON)
 	defer clear(encoded)
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
@@ -164,13 +222,6 @@ func NewAuthorizer(endpoint *url.URL, credentialJSON []byte, now func() time.Tim
 	if err != nil {
 		return nil, err
 	}
-	if validBedrockAgentRuntimeHost(endpoint.Hostname(), signed.region) {
-		signed.service = "bedrock-agent-runtime"
-	} else if !validBedrockRuntimeHost(endpoint.Hostname(), signed.region) {
-		signed.Close()
-		return nil, errors.New("AWS endpoint host is not an approved Bedrock Runtime endpoint for the credential region")
-	}
-	signed.authority = endpoint.Host
 	if now != nil {
 		signed.now = now
 	}
@@ -248,6 +299,9 @@ func (a *Adapter) Capabilities() provider.Capabilities {
 
 func (a *Adapter) Close() {
 	a.authorizer.Close()
+	if a.controlPlane != nil {
+		a.controlPlane.Close()
+	}
 	a.client.CloseIdleConnections()
 }
 

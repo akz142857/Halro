@@ -771,16 +771,27 @@ Phase 0、Phase 1、Phase 2 的**执行机制**已经完成并有测试覆盖，
 
 ### 17.2 剩余工作
 
-按建议顺序排列。A 组是本方案存在的理由，应当优先。
+按建议顺序排列。A 组是本方案存在的理由，已优先完成；余下从 B 组开始。
 
-#### A. 用户流程 —— 本方案的核心承诺尚未兑现
+#### A. 用户流程 —— 已完成（PR #132、#133）
 
-§1.1 开篇陈述的问题是「当前流程暴露了内部实现」，而这一点目前仍然成立。
+§1.1 开篇陈述的问题是「当前流程暴露了内部实现」。A1–A4 已全部关闭，此处保留原始描述与实际落点，便于回溯。
 
-- **A1. 创建表单仍要求选择「能力接口」。** `web/src/pages/DeploymentsPage.tsx:790` 渲染 `Field label={t("deployments.binding")}`，中文标签即「能力接口」，提示语为「选择该模型实际使用的能力接口和协议」。只要服务商有多于一个启用的 Binding 就会显示，而这是 OpenAI 的常态。按 §7.3，Profile ID 与 Binding ID 应当收进「高级详情」，不出现在普通创建路径上。
-- **A2. 能力勾选框来自 Profile 上限而非模型目录。** `DeploymentsPage.tsx:658` 的 `configurableCapabilityNames` 由 `capabilityCeiling` 推导。§7.1 步骤三要求只渲染模型目录支持的能力；目前不支持的能力仍会渲染且可勾选，管理员要到保存时才被服务端拒绝。
-- **A3. 控制台始终发送 `binding_id`，架空了后端的聚合。** §8.1 规定 `binding_id` 仅作为高级诊断过滤条件，但 `DeploymentsPage.tsx:668` 无条件带上 `selectedBinding?.id`，于是「正常情况」和「诊断情况」颠倒了。
-- **A4. 内置目录与模型选择器没有交集。** 内置目录只有 4 条，全部是 Bedrock（`internal/modelcatalog/builtin.go:27-30`）；而模型选择器只对 `openai / deepseek / openai_compatible` 启用（`DeploymentsPage.tsx:665`）。因此**没有任何目录覆盖的模型能在控制台里被选到**，所有路径都走 §6.3 的未知模型兜底。这使门禁 2、4 目前是「空真」而非被证明。需要决定：给这三类服务商补种子，还是把 Bedrock 纳入选择器，或两者都做。
+- **A1. 创建表单要求选择「能力接口」。** 已关闭（#132）。选择器移入「高级详情」折叠区，默认「自动选择」，普通路径不再出现；服务端按模型与所选能力解析 Binding。符合 §7.1 步骤一与 §7.3。
+- **A2. 能力勾选框来自 Profile 上限而非模型目录。** 已关闭（#132）。目录已收录的模型以目录条目为上限，只能收窄；未收录的模型仍以 Profile 上限为声明天花板，因为那里做出主张的是管理员。符合 §7.1 步骤三。
+- **A3. 控制台始终发送 `binding_id`，架空了后端的聚合。** 已关闭（#132）。目录请求不再带 Binding 过滤；创建请求仅在目录指定或管理员显式覆盖时携带 `binding_id`。符合 §8.1。
+- **A4. 内置目录与模型选择器没有交集。** 已关闭（#133），两项都做了。
+  - **更正**：原文写「没有任何目录覆盖的模型能在控制台里被选到」，说过头了。目录覆盖的 Bedrock 模型一直可以通过**手输模型 ID** 到达；不成立的是**选择器**从不呈现目录覆盖的模型——因为只有 `openai.Adapter` 实现了 `ListModels`。
+  - 内置目录按 §6.1 第 2 项补入 OpenAI 与 DeepSeek 的精确模型 ID（见 `internal/modelcatalog/builtin.go` 的种子政策）。
+  - Bedrock 实现 `ListModels`：Converse 读区域控制面（`bedrock.<region>.amazonaws.com`，由运行时端点派生，不跨分区/区域），四个固定模型的 Profile 直接按 pin 作答且不发起任何调用。后者正是让目录覆盖的模型第一次能在控制台里被选到的原因。
+  - 门禁 2、4 现由端到端测试 `TestBedrockPinnedProfileOffersItsCataloguedModelThroughTheAdminAPI` 证明，不再是「空真」。
+
+##### A4 引出的一处必须同时修的问题
+
+给目录补种子会让「目录条目」第一次成为运行中的约束，因此需要两个方向的安全阀，二者必须一致：
+
+- 创建路径：显式 `mode=operator_declared` 可以超出目录条目（仍不得超出 Profile 上限），并记为 `operator_declared` 来源，而非目录背书。否则一条低估的条目就是一堵管理员无法翻越的墙。
+- 漂移核对：`operator_declared` 快照与新出现的目录条目不一致时是**复核**而不是漂移。否则发布一条种子会让既有部署在下次重启后被静默摘除路由——而这条部署恰恰是创建路径允许建立的。已由 `TestCatalogGrowingUnderADeclarationIsReviewableNotDrift` 反向验证：去掉该判断后，既有的 operator-declared `gpt-4o` 部署确实变成 `drifted`。
 
 #### B. §5.2 缺失的快照字段
 

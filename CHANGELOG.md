@@ -6,7 +6,27 @@ semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- The built-in model catalog now covers OpenAI and DeepSeek models by exact
+  identifier, in addition to the four Bedrock profiles that pin their model.
+  A covered model arrives with its operations pre-checked and its context and
+  output limits filled in; a model not covered still requires an explicit
+  operator declaration and gets nothing by default. Entries carry `declared`
+  evidence — the catalog is reviewed claims, not measurements.
+
+- Bedrock model discovery. The Converse profile reads the regional Bedrock
+  control plane, and the four profiles that accept exactly one model answer from
+  that pin without any call. This is what makes a catalog-covered model
+  selectable in the console rather than only reachable by typing its identifier.
+
 ### Changed
+
+- A deployment may now exceed what the catalog establishes for a model with an
+  explicit `mode=operator_declared`, and is then recorded with the operator as
+  the capability source rather than the catalog. Without the word, the catalog
+  still stands. This exists because a catalog entry that under-claims would
+  otherwise be a wall no operator knowledge could get past.
 
 - Creating a deployment no longer asks which internal capability interface to
   use. The console asks for a provider, then a model, and the server resolves
@@ -39,6 +59,20 @@ semantic versioning.
   third tier that asserted nothing.
 
 ### Operator impact
+
+- **Bedrock model discovery needs a second host allowed.** The control plane
+  Halro derives from your runtime endpoint — `bedrock.<region>.amazonaws.com`
+  for `bedrock-runtime.<region>.amazonaws.com` — must be in the Provider's
+  allowed hosts, and the credential needs `bedrock:ListFoundationModels`. When
+  either is missing the binding is reported degraded and the console falls back
+  to entering the model ID by hand; nothing else about the deployment changes.
+  PrivateLink and Agent Runtime endpoints have no control plane to derive and
+  always fall back.
+
+- **Existing deployments are unaffected by the new catalog entries.** A stored
+  capability snapshot is never rewritten by a catalog that grew: a deployment
+  whose model is now covered reports the new capabilities as available for
+  review, and enabling one remains a deliberate act that makes its test stale.
 
 - **Re-initialising the data directory is also required** for an instance
   holding any route without a `deployment_id`. Storage schema 22 refuses such a

@@ -680,11 +680,15 @@ function DeploymentForm({
   const availableTargetKinds = targetKinds(selectedProvider, pinnedBinding ?? selectableBindings[0]);
   const targetLabel = t(`deployments.targetLabels.${targetKind}`);
   const identityLocked = Boolean(current);
+  // Which providers can answer "which models can I point this at". Bedrock
+  // answers from the control plane for Converse and from the profile pin for
+  // the profiles that accept one model; the inference-profile and provisioned
+  // target kinds take an ARN the operator holds, which no list contains.
   const modelCatalogSupported = Boolean(
     !identityLocked
     && selectedProvider
-    && ["openai", "deepseek", "openai_compatible"].includes(selectedProvider.type)
-    && (targetKind === "model_id" || targetKind === "custom_endpoint_model"),
+    && ["openai", "deepseek", "openai_compatible", "bedrock"].includes(selectedProvider.type)
+    && (targetKind === "model_id" || targetKind === "custom_endpoint_model" || targetKind === "bedrock_foundation_model"),
   );
   // No binding filter: the catalog is the aggregate across every enabled
   // interface. Filtering it to one was what forced the operator to choose an

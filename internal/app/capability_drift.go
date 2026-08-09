@@ -47,6 +47,7 @@ const (
 	reviewReasonCatalogNarrowed  = "catalog_establishes_less"
 	reviewReasonCatalogAdvanced  = "catalog_revision_advanced"
 	reviewReasonCatalogNowCovers = "catalog_now_covers_model"
+	reviewReasonCatalogDisagrees = "catalog_disagrees_with_declaration"
 )
 
 // reviewCapabilities compares a deployment's stored snapshot against what the
@@ -114,10 +115,31 @@ func reviewCapabilities(deployment domain.Deployment, binding domain.ProviderPro
 		return review
 	}
 	if !domain.ProviderCapabilitiesSubset(snapshot.Capabilities, entry.Capabilities) {
-		// The catalog now establishes less than the snapshot claims.
-		review.State = domain.CapabilityReviewDrifted
-		review.Reason = reviewReasonCatalogNarrowed
-		review.NoLongerSupported = modelcatalog.LostCapabilities(snapshot.Capabilities, entry.Capabilities)
+		// The catalog now establishes less than the snapshot claims. Whether that
+		// is drift depends on where the snapshot came from.
+		//
+		// A snapshot the catalog produced has lost its basis, so it is drift and
+		// fails closed. A snapshot the operator declared never rested on the
+		// catalog: the catalog growing to cover the model is a second opinion
+		// arriving, not the operator's claim being withdrawn. Treating that as
+		// drift would mean shipping a catalog entry silently stops traffic on
+		// every deployment that declared more than the entry — and it would
+		// contradict the create path, which lets an explicit declaration exceed
+		// the catalog. A deployment that can be created must not be withheld by
+		// the next restart.
+		if snapshot.Source != string(modelcatalog.SourceOperatorDeclared) {
+			review.State = domain.CapabilityReviewDrifted
+			review.Reason = reviewReasonCatalogNarrowed
+			review.NoLongerSupported = modelcatalog.LostCapabilities(snapshot.Capabilities, entry.Capabilities)
+			return review
+		}
+		review.State = domain.CapabilityReviewAvailable
+		review.Reason = reviewReasonCatalogDisagrees
+		// What the operator claims and the catalog does not. It is named so the
+		// disagreement is visible and reviewable, not so anything is turned off.
+		review.NoLongerSupported = modelcatalog.LostCapabilities(deployment.Capabilities, entry.Capabilities)
+		review.AvailableForReview = modelcatalog.GainedCapabilities(
+			deployment.Capabilities, modelcatalog.Clamp(entry.Capabilities, binding.Capabilities))
 		return review
 	}
 	review.State = domain.CapabilityReviewAvailable

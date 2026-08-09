@@ -50,20 +50,31 @@ func (a *Adapter) embedTitanV2(ctx context.Context, call provider.EmbeddingCall)
 	return translateTitanEmbedV2Response(call.ProviderModel, request, result)
 }
 
+// pinnedProfile is a profile that accepts exactly one model. The label is the
+// human name used in the refusal, so an operator reads which product the
+// profile is for rather than a profile identifier.
+type pinnedProfile struct {
+	Label string
+	Model string
+	Owner string
+}
+
+// pinnedProfileModels is the single place the pins are written down. Model
+// discovery answers from it and ValidateProfileModel enforces it, so the list an
+// operator is offered and the list the adapter accepts cannot drift apart.
+var pinnedProfileModels = map[domain.ProviderProfileID]pinnedProfile{
+	domain.ProfileBedrockInvokeTitanEmbedV2:  {"Titan Text Embeddings V2", titanEmbedV2ModelID, "Amazon"},
+	domain.ProfileBedrockInvokeTitanImageV2:  {"Titan Image Generator V2", "amazon.titan-image-generator-v2:0", "Amazon"},
+	domain.ProfileBedrockAsyncNovaReel:       {"Nova Reel", "amazon.nova-reel-v1:0", "Amazon"},
+	domain.ProfileBedrockAgentRerankCohere35: {"Cohere Rerank", "cohere.rerank-v3-5:0", "Cohere"},
+}
+
 func ValidateProfileModel(profileID domain.ProviderProfileID, model string) error {
-	if profileID == domain.ProfileBedrockInvokeTitanEmbedV2 && strings.TrimSpace(model) != titanEmbedV2ModelID {
-		return errors.New("Titan Text Embeddings V2 profile requires model amazon.titan-embed-text-v2:0")
+	pinned, ok := pinnedProfileModels[profileID]
+	if !ok || strings.TrimSpace(model) == pinned.Model {
+		return nil
 	}
-	if profileID == domain.ProfileBedrockInvokeTitanImageV2 && strings.TrimSpace(model) != "amazon.titan-image-generator-v2:0" {
-		return errors.New("Titan Image Generator V2 profile requires model amazon.titan-image-generator-v2:0")
-	}
-	if profileID == domain.ProfileBedrockAsyncNovaReel && strings.TrimSpace(model) != "amazon.nova-reel-v1:0" {
-		return errors.New("Nova Reel profile requires model amazon.nova-reel-v1:0")
-	}
-	if profileID == domain.ProfileBedrockAgentRerankCohere35 && strings.TrimSpace(model) != "cohere.rerank-v3-5:0" {
-		return errors.New("Cohere Rerank profile requires model cohere.rerank-v3-5:0")
-	}
-	return nil
+	return errors.New(pinned.Label + " profile requires model " + pinned.Model)
 }
 
 func translateTitanEmbedV2Request(request openaiapi.EmbeddingRequest) (titanEmbedV2Request, error) {

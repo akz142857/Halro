@@ -28,17 +28,62 @@ func TestBuiltinCatalogValidates(t *testing.T) {
 	}
 }
 
-// The seeded entries exist because the profile rejects every other model. If a
-// profile stops pinning its model, the entry stops being evidence and must be
-// re-justified rather than inherited.
-func TestBuiltinEntriesMatchTheirProfileCeiling(t *testing.T) {
+// No entry may widen its profile. A catalog claim is about a model; the profile
+// is what Halro's adapter can actually carry, and a Beta profile's limits are
+// pinned deliberately.
+func TestBuiltinEntriesStayInsideTheirProfileCeiling(t *testing.T) {
 	for _, entry := range Builtin().Entries() {
-		ceiling := entry.Key.Ceiling()
-		if !reflect.DeepEqual(entry.Capabilities, ceiling) {
-			t.Fatalf("entry %q capabilities=%#v ceiling=%#v", entry.Key.Model, entry.Capabilities, ceiling)
+		if !domain.ProviderCapabilitiesSubset(entry.Capabilities, entry.Key.Ceiling()) {
+			t.Fatalf("entry %q capabilities=%#v exceed ceiling=%#v", entry.Key.Model, entry.Capabilities, entry.Key.Ceiling())
 		}
 		if !entry.Capabilities.AnyOperation() {
 			t.Fatalf("entry %q declares no core operation", entry.Key.Model)
+		}
+	}
+}
+
+// A pinned-profile entry is evidence only because the profile rejects every
+// other model, which is what makes "the model's capabilities are the profile's"
+// sound. If a profile stops pinning its model, the entry stops being evidence
+// and has to be re-justified rather than inherited.
+func TestPinnedProfileEntriesEqualTheirCeiling(t *testing.T) {
+	pinned := map[domain.ProviderProfileID]string{
+		domain.ProfileBedrockInvokeTitanEmbedV2:  "amazon.titan-embed-text-v2:0",
+		domain.ProfileBedrockInvokeTitanImageV2:  "amazon.titan-image-generator-v2:0",
+		domain.ProfileBedrockAgentRerankCohere35: "cohere.rerank-v3-5:0",
+		domain.ProfileBedrockAsyncNovaReel:       "amazon.nova-reel-v1:0",
+	}
+	seen := 0
+	for _, entry := range Builtin().Entries() {
+		model, isPinned := pinned[entry.Key.Profile]
+		if !isPinned {
+			continue
+		}
+		seen++
+		if entry.Key.Model != model {
+			t.Fatalf("profile %q carries model %q, want the pinned %q", entry.Key.Profile, entry.Key.Model, model)
+		}
+		if !reflect.DeepEqual(entry.Capabilities, entry.Key.Ceiling()) {
+			t.Fatalf("entry %q capabilities=%#v ceiling=%#v", entry.Key.Model, entry.Capabilities, entry.Key.Ceiling())
+		}
+	}
+	if seen != len(pinned) {
+		t.Fatalf("covered %d pinned profiles, want %d", seen, len(pinned))
+	}
+}
+
+// §6.2 forbids a prefix promoting an unknown future model to known capabilities,
+// so every key must be an exact identifier. A moving alias is admissible only
+// where Halro itself pins it, which today is the moderation default.
+func TestBuiltinEntriesUseExactModelIdentifiers(t *testing.T) {
+	pinnedAliases := map[string]bool{"omni-moderation-latest": true}
+	for _, entry := range Builtin().Entries() {
+		model := entry.Key.Model
+		if strings.ContainsAny(model, "*?") || strings.HasSuffix(model, "-") {
+			t.Fatalf("entry %q is not an exact model identifier", model)
+		}
+		if strings.HasSuffix(model, "-latest") && !pinnedAliases[model] {
+			t.Fatalf("entry %q is a moving alias that Halro does not pin", model)
 		}
 	}
 }
