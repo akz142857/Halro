@@ -56,7 +56,7 @@ func (r *Runtime) authorizeMetrics(request *http.Request) bool {
 	return subtle.ConstantTimeCompare(hash[:], r.metricsTokenHash[:]) == 1
 }
 
-func (r *Runtime) writeMetrics(writer http.ResponseWriter) error {
+func (r *Runtime) writeMetrics(ctx context.Context, writer http.ResponseWriter) error {
 	usageMetrics := r.usage.Metrics()
 	ledgerStats := r.ledger.Stats()
 	collectorStats := r.usageCollector.Stats()
@@ -66,11 +66,17 @@ func (r *Runtime) writeMetrics(writer http.ResponseWriter) error {
 	recoveryStats := r.accounting.RecoveryStats()
 	projectLockStats := r.accounting.ProjectLockStats()
 	metadataWriteStats := r.store.MetadataWriteStats()
-	pricingQuarantines, _ := r.store.PricingQuarantineCount(context.Background())
+	pricingQuarantines, _ := r.store.PricingQuarantineCount(ctx)
 	// Current state, so it is read rather than tracked: a count that drifts
 	// from the records it describes is worse than one that costs a read.
-	storedDeployments, _ := r.store.ListDeployments(context.Background())
-	capabilityGauges := summariseDeploymentCapabilities(storedDeployments)
+	//
+	// A failed read must not be rendered as zeros. These gauges exist so that
+	// `drifted == 0` is assertable, and a store error that silently produces
+	// exactly that reading turns the alert into a check on whether the read
+	// worked. Omitting the series makes the scrape stale instead, which is what
+	// an absent answer actually is.
+	storedDeployments, deploymentsErr := r.store.ListDeployments(ctx)
+	capabilityGauges, capabilityGaugesReadable := summariseDeploymentCapabilities(storedDeployments), deploymentsErr == nil
 	writer.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	writer.Header().Set("Cache-Control", "no-store")
 	writer.WriteHeader(http.StatusOK)
@@ -103,7 +109,7 @@ func (r *Runtime) writeMetrics(writer http.ResponseWriter) error {
 	writeLatencyHistogram(output, "halro_attempt_latency_seconds",
 		"Completed Provider attempt latency distribution.", usageMetrics.AttemptLatencyBuckets,
 		usageMetrics.AttemptLatencyMillis, attemptCount)
-	writeCapabilityMetrics(output, r.capabilityMetrics.snapshot(), capabilityGauges)
+	writeCapabilityMetrics(output, r.capabilityMetrics.snapshot(), capabilityGauges, capabilityGaugesReadable)
 	metricHeader(output, "halro_active_requests", "gauge", "Requests accepted but not finalized.")
 	fmt.Fprintf(output, "halro_active_requests %d\n", usageMetrics.ActiveRequests)
 	// Deliberately unlabelled: the interesting dimension here is the source
@@ -473,7 +479,8 @@ func nanosecondsSeconds(value uint64) string {
 // IDs are deliberately absent: they are unbounded in principle and identify the
 // specific object, which belongs in the audit trail rather than on a metrics
 // port that is scraped and retained indefinitely.
-func writeCapabilityMetrics(output *bufio.Writer, snapshot capabilityMetricsSnapshot, gauges deploymentCapabilityGauges) {
+func writeCapabilityMetrics(output *bufio.Writer, snapshot capabilityMetricsSnapshot,
+	gauges deploymentCapabilityGauges, readable bool) {
 	metricHeader(output, "halro_model_catalog_refresh_total", "counter",
 		"Provider model catalog reads by capability profile and outcome.")
 	for _, sample := range snapshot.CatalogRefresh {
@@ -504,11 +511,26 @@ func writeCapabilityMetrics(output *bufio.Writer, snapshot capabilityMetricsSnap
 		fmt.Fprintf(output, "halro_deployment_test_total{status=%s} %d\n",
 			strconv.Quote(status), snapshot.DeploymentTests[status])
 	}
+	// Both gauges describe stored records, so when the store could not be read
+	// there is no value to publish. They are omitted rather than zeroed: a
+	// scrape gap is what "we do not know" looks like in Prometheus, and it
+	// leaves `drifted == 0` meaning what it says.
+	if !readable {
+		return
+	}
 	metricHeader(output, "halro_deployment_capability_status", "gauge",
 		"Deployments by the status of the model capability snapshot they hold.")
 	for _, status := range capabilityStatuses {
 		fmt.Fprintf(output, "halro_deployment_capability_status{state=%s} %d\n",
 			strconv.Quote(status), gauges.ByStatus[status])
+	}
+	// Any status outside the fixed four lands here rather than being dropped,
+	// so the states sum to the deployment count. Silently discarding one would
+	// make the gauges quietly disagree with the records they summarise —
+	// exactly the drift computing them at render time was meant to avoid.
+	if gauges.Unrecognised > 0 {
+		fmt.Fprintf(output, "halro_deployment_capability_status{state=%s} %d\n",
+			strconv.Quote("unrecognised"), gauges.Unrecognised)
 	}
 	metricHeader(output, "halro_operator_declared_deployments", "gauge",
 		"Deployments whose capabilities an administrator declared rather than the catalog establishing them.")

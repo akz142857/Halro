@@ -187,8 +187,20 @@ func evaluateCapabilityReview(deployment domain.Deployment, binding domain.Provi
 // capabilityReviewAdmitsTraffic reports whether a deployment in this state may
 // serve. review_available is deliberately routable: the catalog offering more
 // than a deployment uses changes nothing about what it already does.
+//
+// Written as an allowlist rather than `!= drifted`. Both spellings agree on the
+// three states that exist, and they disagree about a fourth: a state added
+// later would inherit "may serve" from the denylist without anyone choosing
+// that. Admitting traffic is the decision that should have to be made
+// explicitly, so a new state arrives non-routable and the compiler's silence
+// is not mistaken for a judgement.
 func capabilityReviewAdmitsTraffic(state domain.CapabilityReviewState) bool {
-	return state != domain.CapabilityReviewDrifted
+	switch state {
+	case domain.CapabilityReviewCurrent, domain.CapabilityReviewAvailable:
+		return true
+	default:
+		return false
+	}
 }
 
 // unionCapabilities is used only to report which names exceed a narrowed

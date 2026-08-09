@@ -1,6 +1,8 @@
 package app
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
@@ -16,7 +18,7 @@ import (
 func renderMetricsForTest(t *testing.T, runtime *Runtime) string {
 	t.Helper()
 	writer := httptest.NewRecorder()
-	if err := runtime.writeMetrics(writer); err != nil {
+	if err := runtime.writeMetrics(context.Background(), writer); err != nil {
 		t.Fatal(err)
 	}
 	body := writer.Body.String()
@@ -139,6 +141,56 @@ func TestDeploymentCapabilityGaugesIgnoreDeletedDeployments(t *testing.T) {
 	}
 	if gauges.OperatorDeclared != 1 {
 		t.Fatalf("operator_declared=%d", gauges.OperatorDeclared)
+	}
+}
+
+// A status outside the fixed four must not disappear from the totals. The
+// gauges are computed at render time precisely so they cannot drift from the
+// records they summarise, and silently dropping a record is that drift.
+func TestDeploymentCapabilityGaugesCountAnUnrecognisedStatus(t *testing.T) {
+	gauges := summariseDeploymentCapabilities([]domain.Deployment{
+		{ModelCapabilitySnapshot: domain.ModelCapabilitySnapshot{Status: "known"}},
+		{ModelCapabilitySnapshot: domain.ModelCapabilitySnapshot{Status: "something-new"}},
+	})
+
+	if gauges.Unrecognised != 1 {
+		t.Fatalf("an unrecognised status vanished from the gauges: %+v", gauges)
+	}
+	var total uint64
+	for _, count := range gauges.ByStatus {
+		total += count
+	}
+	if total+gauges.Unrecognised != 2 {
+		t.Fatalf("the states do not sum to the deployment count: %+v", gauges)
+	}
+}
+
+// When the store cannot be read there is no value to publish, so the gauges are
+// omitted rather than rendered as zeros. `drifted == 0` is the condition worth
+// alerting on, and a failed read that reports exactly that turns the alert into
+// a check on whether the read worked.
+func TestDeploymentCapabilityGaugesAreOmittedWhenTheStoreCannotBeRead(t *testing.T) {
+	var buffer bytes.Buffer
+	output := bufio.NewWriter(&buffer)
+	writeCapabilityMetrics(output, capabilityMetricsSnapshot{
+		Drift: map[string]uint64{}, DeploymentTests: map[string]uint64{},
+	}, deploymentCapabilityGauges{ByStatus: map[string]uint64{}}, false)
+	if err := output.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	body := buffer.String()
+
+	// The counters stay: they are process-local and were not read from the store.
+	if !strings.Contains(body, "halro_capability_drift_total") {
+		t.Fatal("an unreadable store suppressed the counters too")
+	}
+	for _, series := range []string{
+		"halro_deployment_capability_status",
+		"halro_operator_declared_deployments",
+	} {
+		if strings.Contains(body, series) {
+			t.Fatalf("%s was published as zero despite the store being unreadable", series)
+		}
 	}
 }
 

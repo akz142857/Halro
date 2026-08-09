@@ -43,6 +43,38 @@ func TestUnchangedCatalogAndProfileStaysCurrent(t *testing.T) {
 	}
 }
 
+// Admitting traffic is an allowlist, so a state nobody has taught this function
+// about does not serve. The three states that exist are decided above; this
+// pins the default for the fourth, which is the one a later change introduces
+// without remembering to come back here.
+func TestAnUnrecognisedReviewStateIsNotAdmitted(t *testing.T) {
+	if capabilityReviewAdmitsTraffic(domain.CapabilityReviewState("invented-later")) {
+		t.Fatal("a review state this build does not recognise was admitted to routing")
+	}
+	if capabilityReviewAdmitsTraffic("") {
+		t.Fatal("an empty review state was admitted to routing")
+	}
+}
+
+// A deployment whose provider is gone is drifted, not current. The registry
+// load used to skip the check when the provider was missing and admit the
+// deployment, while the Admin and doctor surfaces called the same condition
+// drifted — the route died later on a nil adapter, so nothing leaked, but by
+// accident and through a different check.
+func TestADeploymentWhoseProviderIsMissingIsDrifted(t *testing.T) {
+	deployment, _ := catalogueDeployment(t)
+	deployment.ProviderID = "provider_that_is_gone"
+
+	review := reviewForDeployment(map[string]domain.ProviderInstance{}, deployment)
+
+	if review.State != domain.CapabilityReviewDrifted {
+		t.Fatalf("state=%q, want drifted", review.State)
+	}
+	if capabilityReviewAdmitsTraffic(review.State) {
+		t.Fatal("a deployment with no provider was admitted to routing")
+	}
+}
+
 // The case no catalog refresh reports: the binary narrowed the profile under a
 // deployment that was saved when it was wider.
 func TestProfileNarrowingIsDriftAndFailsClosed(t *testing.T) {

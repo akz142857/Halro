@@ -163,7 +163,11 @@ func (m *capabilityMetrics) snapshot() capabilityMetricsSnapshot {
 // render time rather than tracked incrementally — a count that drifts from the
 // records it claims to describe is worse than one that costs a read.
 type deploymentCapabilityGauges struct {
-	ByStatus         map[string]uint64
+	ByStatus map[string]uint64
+	// Unrecognised holds deployments whose snapshot status is none of the four.
+	// It should stay zero; it exists so that it can be seen if it does not,
+	// rather than the record vanishing from the totals.
+	Unrecognised     uint64
 	OperatorDeclared uint64
 }
 
@@ -184,6 +188,8 @@ func summariseDeploymentCapabilities(deployments []domain.Deployment) deployment
 		snapshot := deployment.ModelCapabilitySnapshot
 		if _, known := gauges.ByStatus[snapshot.Status]; known {
 			gauges.ByStatus[snapshot.Status]++
+		} else {
+			gauges.Unrecognised++
 		}
 		if snapshot.Source == "operator_declared" {
 			gauges.OperatorDeclared++
