@@ -793,10 +793,11 @@ Phase 0、Phase 1、Phase 2 的**执行机制**已经完成并有测试覆盖，
 - 创建路径：显式 `mode=operator_declared` 可以超出目录条目（仍不得超出 Profile 上限），并记为 `operator_declared` 来源，而非目录背书。否则一条低估的条目就是一堵管理员无法翻越的墙。
 - 漂移核对：`operator_declared` 快照与新出现的目录条目不一致时是**复核**而不是漂移。否则发布一条种子会让既有部署在下次重启后被静默摘除路由——而这条部署恰恰是创建路径允许建立的。已由 `TestCatalogGrowingUnderADeclarationIsReviewableNotDrift` 反向验证：去掉该判断后，既有的 operator-declared `gpt-4o` 部署确实变成 `drifted`。
 
-#### B. §5.2 缺失的快照字段
+#### B. §5.2 缺失的快照字段 —— B1、B2 已完成（PR #134）
 
-- **B1. `Evidence`** —— 快照未保存证据等级。当前证据取自 Binding 而非目录条目来源，其上界靠 `admin_deployments.go` 中一次无条件的 verified→declared 降级实现，而不是 `entry.Source.MaxEvidence()`。
-- **B2. `OperatorDisabled`** —— 未实现。只存保留集的后果是：「管理员主动关掉」与「目录本来就没有」无法区分，而这正是该字段存在的理由。
+- **B1. `Evidence`** —— 已关闭。`ModelCapabilitySnapshot.Evidence` 落库，并由 `domain.SnapshotEvidence` 统一生成；上界改为按来源计算（`MaxEvidenceForCapabilitySource`），不再是一次无条件的 verified→declared 降级。存储侧按 §5.2 拒绝「证据高于来源允许等级」与「证据描述了快照未确立的能力」。
+- **B2. `OperatorDisabled`** —— 已关闭。`Deployment.OperatorDisabled` 落库；复核结果里被管理员关掉的能力单独成项，不再混进 `available_for_review` 反复提示。
+  - 连带修正：operator_declared 部署收窄时，快照原本会跟着塌陷到收窄后的集合，于是「关掉了什么」无从读起。现在收窄不改写声明（除非显式重新声明），因此关闭一项能力是可记录、可逆的动作；重新打开也不再需要重新声明。
 - **B3. `OperationBindings`** —— 属于 Phase 3，见 E。
 
 #### C. 与文档措辞的偏差（已实现但形态不同，需确认是否接受）

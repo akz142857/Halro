@@ -8,6 +8,17 @@ semantic versioning.
 
 ### Added
 
+- A deployment now records which capabilities an operator switched off, apart
+  from the ones nothing ever established. The two used to be the same absence,
+  and they call for opposite treatment: a capability that was declined is
+  reported as declined and is not offered again after every catalog change,
+  while one that was never established still is.
+
+- A capability snapshot now carries the evidence its source established, capped
+  at what that source is allowed to claim. Storage refuses a snapshot whose
+  evidence exceeds its source or describes something the snapshot does not
+  establish.
+
 - The built-in model catalog now covers OpenAI and DeepSeek models by exact
   identifier, in addition to the four Bedrock profiles that pin their model.
   A covered model arrives with its operations pre-checked and its context and
@@ -59,6 +70,14 @@ semantic versioning.
   third tier that asserted nothing.
 
 ### Operator impact
+
+- **Storage schema 23 upgrades in place; no re-initialisation.** It fills in the
+  two fields above on existing deployments, computed by the same functions the
+  write path uses, so a record brought forward is what re-saving it would
+  produce. This is a backfill rather than a refusal — unlike schema 20, 21 and
+  22 — because both values are derivable from fields already in the record,
+  where those were not. Run `halro doctor` after starting once: before the first
+  start it reports the schema mismatch, which is how every schema bump reads.
 
 - **Bedrock model discovery needs a second host allowed.** The control plane
   Halro derives from your runtime endpoint — `bedrock.<region>.amazonaws.com`

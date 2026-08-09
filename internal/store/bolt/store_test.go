@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -191,7 +193,7 @@ func TestMetadataMigrationFromV1IsAtomicAndRecorded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(history) != 22 ||
+	if len(history) != 23 ||
 		history[0] != (MigrationRecord{Version: 1, Name: "initial_schema"}) ||
 		history[1] != (MigrationRecord{Version: 2, Name: "migration_history"}) ||
 		history[2] != (MigrationRecord{Version: 3, Name: "deployments"}) ||
@@ -213,7 +215,8 @@ func TestMetadataMigrationFromV1IsAtomicAndRecorded(t *testing.T) {
 		history[18] != (MigrationRecord{Version: 19, Name: "admin_role_backfill"}) ||
 		history[19] != (MigrationRecord{Version: 20, Name: "deployment_capability_snapshot"}) ||
 		history[20] != (MigrationRecord{Version: 21, Name: "refuse_legacy_capability_evidence"}) ||
-		history[21] != (MigrationRecord{Version: 22, Name: "refuse_deployment_less_routes"}) {
+		history[21] != (MigrationRecord{Version: 22, Name: "refuse_deployment_less_routes"}) ||
+		history[22] != (MigrationRecord{Version: 23, Name: "deployment_snapshot_evidence_and_disabled"}) {
 		t.Fatalf("history=%#v", history)
 	}
 }
@@ -1150,4 +1153,121 @@ func TestSchema20RefusesADataDirectoryHoldingDeployments(t *testing.T) {
 	} else if !strings.Contains(err.Error(), "re-initialise the data directory") {
 		t.Fatalf("refusal is not actionable: %v", err)
 	}
+}
+
+// The migration comment claims a record brought forward is what the write path
+// would produce. This asserts it against the write path itself rather than
+// against a hand-written expectation, because a hand-written one would only
+// record what the migration was written to do.
+func TestSnapshotEvidenceBackfillMatchesWhatASaveWouldProduce(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "metadata-v22.db")
+	now := time.Now().UTC().Truncate(time.Second)
+	capabilities := domain.ProviderCapabilities{Chat: true, Streaming: true, StreamUsage: true}
+	// The snapshot establishes more than the deployment uses: tools is the
+	// capability the operator switched off, and the backfill has to notice.
+	established := capabilities
+	established.Tools = true
+
+	before := domain.Deployment{
+		ID: "dep_v22", Name: "GPT", ProviderID: "prov", ProviderModel: "gpt-test",
+		TargetKind: domain.TargetModelID, AccessSurface: domain.SurfaceOpenAI,
+		ProfileID: domain.ProfileOpenAIChatEmbeddings, Capabilities: capabilities,
+		CapabilityEvidence: domain.EvidenceForCapabilities(capabilities, domain.EvidenceDeclared),
+		ModelCapabilitySnapshot: domain.ModelCapabilitySnapshot{
+			ProviderModel: "gpt-test", ModelRevision: "sha256:test", Source: "operator_declared",
+			Status: "partial", CapturedAt: now, Capabilities: established,
+		},
+		MaxConcurrency: 1, Weight: 1, CreatedAt: now, UpdatedAt: now, Revision: 1,
+	}
+	writeV22Deployment(t, path, before)
+
+	store, err := Open(path)
+	if err != nil {
+		t.Fatalf("a v22 directory was refused rather than brought forward: %v", err)
+	}
+	defer store.Close()
+	migrated, err := store.GetDeployment(context.Background(), before.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// What the write path would have produced for the same record.
+	want := before
+	want.ModelCapabilitySnapshot.Evidence = domain.SnapshotEvidence(before.ModelCapabilitySnapshot)
+	want.OperatorDisabled = domain.OperatorDisabledCapabilities(before.ModelCapabilitySnapshot, before.Capabilities, nil)
+	if !reflect.DeepEqual(migrated.ModelCapabilitySnapshot.Evidence, want.ModelCapabilitySnapshot.Evidence) {
+		t.Fatalf("evidence=%#v want %#v", migrated.ModelCapabilitySnapshot.Evidence, want.ModelCapabilitySnapshot.Evidence)
+	}
+	if !reflect.DeepEqual(migrated.OperatorDisabled, want.OperatorDisabled) {
+		t.Fatalf("operator_disabled=%#v want %#v", migrated.OperatorDisabled, want.OperatorDisabled)
+	}
+	if !slices.Contains(migrated.OperatorDisabled, "tools") {
+		t.Fatalf("the capability the operator switched off was not recorded: %#v", migrated.OperatorDisabled)
+	}
+	// The brought-forward record has to satisfy the validation every write does,
+	// or the first edit an operator makes would be refused.
+	if err := migrated.Validate(); err != nil {
+		t.Fatalf("a migrated deployment does not validate: %v", err)
+	}
+	// Everything the migration was not told about survives it.
+	if migrated.Name != before.Name || migrated.ProviderModel != before.ProviderModel ||
+		migrated.Capabilities != before.Capabilities || migrated.MaxConcurrency != before.MaxConcurrency {
+		t.Fatalf("the migration disturbed fields it does not own: %#v", migrated)
+	}
+}
+
+// writeV22Deployment stores a deployment in the shape schema 22 wrote: no
+// snapshot evidence and no record of what the operator switched off.
+func writeV22Deployment(t *testing.T, path string, deployment domain.Deployment) {
+	t.Helper()
+	db, err := bbolt.Open(path, 0o600, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = db.Update(func(tx *bbolt.Tx) error {
+		for _, name := range requiredBuckets() {
+			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
+				return err
+			}
+		}
+		encoded, err := json.Marshal(deployment)
+		if err != nil {
+			return err
+		}
+		var record map[string]json.RawMessage
+		if err := json.Unmarshal(encoded, &record); err != nil {
+			return err
+		}
+		delete(record, "operator_disabled")
+		snapshot, err := stripJSONField(record["model_capability_snapshot"], "evidence")
+		if err != nil {
+			return err
+		}
+		record["model_capability_snapshot"] = snapshot
+		v22, err := json.Marshal(record)
+		if err != nil {
+			return err
+		}
+		if err := tx.Bucket(bucketDeployments).Put([]byte(deployment.ID), v22); err != nil {
+			return err
+		}
+		var version [8]byte
+		binary.BigEndian.PutUint64(version[:], 22)
+		return tx.Bucket(bucketMeta).Put(keySchemaVersion, version[:])
+	})
+	if closeErr := db.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func stripJSONField(encoded json.RawMessage, name string) (json.RawMessage, error) {
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &object); err != nil {
+		return nil, err
+	}
+	delete(object, name)
+	return json.Marshal(object)
 }

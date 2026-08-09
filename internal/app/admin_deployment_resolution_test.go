@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/modelcatalog"
@@ -213,10 +214,14 @@ func TestResolveDeclarationRequiresACoreOperation(t *testing.T) {
 // not a new claim, so the console does not have to re-send the word on update.
 func TestResolveEditWithinAnExistingDeclarationNeedsNoRedeclaration(t *testing.T) {
 	instance := bedrockInstance(bedrockBinding("b-chat", domain.ProfileBedrockConverseText))
-	prior := domain.ProviderCapabilities{Chat: true, Streaming: true, StreamUsage: true}
+	declared := domain.ProviderCapabilities{Chat: true, Streaming: true, StreamUsage: true}
+	prior := &priorDeployment{
+		Capabilities: declared,
+		Snapshot:     domain.DeclaredCapabilitySnapshot("amazon.nova-pro-v1:0", "sha256:test", declared, time.Now().UTC()),
+	}
 
 	narrowed := domain.ProviderCapabilities{Chat: true}
-	resolution, err := resolveDeploymentTarget(instance, deploymentInput{Capabilities: &narrowed}, "amazon.nova-pro-v1:0", "us-east-1", &prior)
+	resolution, err := resolveDeploymentTarget(instance, deploymentInput{Capabilities: &narrowed}, "amazon.nova-pro-v1:0", "us-east-1", prior)
 	if err != nil {
 		t.Fatalf("narrowing an existing declaration was rejected: %v", err)
 	}
@@ -226,18 +231,30 @@ func TestResolveEditWithinAnExistingDeclarationNeedsNoRedeclaration(t *testing.T
 
 	// Omitting capabilities keeps what is stored rather than reaching for the
 	// profile ceiling.
-	unchanged, err := resolveDeploymentTarget(instance, deploymentInput{}, "amazon.nova-pro-v1:0", "us-east-1", &prior)
+	unchanged, err := resolveDeploymentTarget(instance, deploymentInput{}, "amazon.nova-pro-v1:0", "us-east-1", prior)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if unchanged.capabilities != prior {
-		t.Fatalf("capabilities=%#v, want the stored declaration %#v", unchanged.capabilities, prior)
+	if unchanged.capabilities != declared {
+		t.Fatalf("capabilities=%#v, want what the deployment uses %#v", unchanged.capabilities, declared)
 	}
 
 	// Widening past the declaration is a new claim and needs the word again.
 	wider := domain.ProviderCapabilities{Chat: true, Streaming: true, StreamUsage: true, DeveloperRole: true}
-	if _, err := resolveDeploymentTarget(instance, deploymentInput{Capabilities: &wider}, "amazon.nova-pro-v1:0", "us-east-1", &prior); err == nil {
+	if _, err := resolveDeploymentTarget(instance, deploymentInput{Capabilities: &wider}, "amazon.nova-pro-v1:0", "us-east-1", prior); err == nil {
 		t.Fatal("an edit widened a declaration without re-declaring")
+	}
+
+	// Turning one back on is not a new claim either. The declaration is what an
+	// edit is measured against, so switching a capability off does not quietly
+	// make switching it back on require the word again.
+	switchedOff := &priorDeployment{Capabilities: narrowed, Snapshot: prior.Snapshot}
+	restored, err := resolveDeploymentTarget(instance, deploymentInput{Capabilities: &declared}, "amazon.nova-pro-v1:0", "us-east-1", switchedOff)
+	if err != nil {
+		t.Fatalf("re-enabling a declared capability demanded a fresh declaration: %v", err)
+	}
+	if restored.capabilities != declared {
+		t.Fatalf("capabilities=%#v", restored.capabilities)
 	}
 }
 

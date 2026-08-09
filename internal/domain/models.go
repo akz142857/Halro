@@ -2,7 +2,9 @@ package domain
 
 import (
 	"errors"
+	"fmt"
 	"net/netip"
+	"slices"
 	"strings"
 	"time"
 )
@@ -576,6 +578,63 @@ type ModelCapabilitySnapshot struct {
 	Status          string               `json:"status"`
 	CapturedAt      time.Time            `json:"captured_at"`
 	Capabilities    ProviderCapabilities `json:"capabilities"`
+	// Evidence is how well the source established each capability, bounded by
+	// what that source is allowed to claim. It is separate from the deployment's
+	// own CapabilityEvidence, which a successful test can raise: this records
+	// what was established about the model, not what this deployment has since
+	// demonstrated.
+	Evidence CapabilityEvidenceSet `json:"evidence"`
+}
+
+// MaxEvidenceForCapabilitySource caps the evidence a claim from a source may
+// carry. Writing something down confidently is not a verification, so only an
+// actual probe reaches `verified`.
+//
+// It lives here rather than beside the catalog's Source type because both the
+// storage layer and the catalog need it, and a second copy is how the two would
+// come to disagree.
+func MaxEvidenceForCapabilitySource(source string) CapabilityEvidence {
+	switch source {
+	case "verified_probe":
+		return EvidenceVerified
+	case "builtin_catalog", "provider_metadata", "operator_declared":
+		return EvidenceDeclared
+	default:
+		return EvidenceUnsupported
+	}
+}
+
+// SnapshotEvidence is what a snapshot's evidence must be, given what it claims
+// and where the claim came from. The write path and the storage migration both
+// call it, so a record written today and a record brought forward cannot end up
+// describing the same facts differently.
+func SnapshotEvidence(snapshot ModelCapabilitySnapshot) CapabilityEvidenceSet {
+	return EvidenceForCapabilities(snapshot.Capabilities, MaxEvidenceForCapabilitySource(snapshot.Source))
+}
+
+// OperatorDisabledCapabilities is the set an operator has switched off: things
+// the snapshot establishes that the deployment does not use, plus anything
+// previously recorded as switched off and still not in use.
+//
+// The carry-forward is the reason this is stored rather than re-derived. A
+// capability can leave the snapshot — the catalog narrows, the deployment is
+// re-saved — and if the decision lived only in "snapshot minus enabled", it
+// would vanish with it and the capability would be offered again as though the
+// operator had never answered.
+func OperatorDisabledCapabilities(snapshot ModelCapabilitySnapshot, capabilities ProviderCapabilities, previous []string) []string {
+	disabled := make([]string, 0, len(capabilityNames))
+	for _, name := range capabilityNames {
+		if capabilityEnabled(capabilities, name) {
+			continue
+		}
+		if capabilityEnabled(snapshot.Capabilities, name) || slices.Contains(previous, name) {
+			disabled = append(disabled, name)
+		}
+	}
+	if len(disabled) == 0 {
+		return nil
+	}
+	return disabled
 }
 
 // DeclaredCapabilitySnapshot records an operator's own claim about a model.
@@ -583,11 +642,13 @@ type ModelCapabilitySnapshot struct {
 // that is the digest of the "nothing established" entry, which is what later
 // tells us the catalog has since started covering it.
 func DeclaredCapabilitySnapshot(model, revision string, capabilities ProviderCapabilities, at time.Time) ModelCapabilitySnapshot {
-	return ModelCapabilitySnapshot{
+	snapshot := ModelCapabilitySnapshot{
 		ProviderModel: model, ModelRevision: revision,
 		Source: "operator_declared", Status: "partial",
 		CapturedAt: at, Capabilities: capabilities,
 	}
+	snapshot.Evidence = SnapshotEvidence(snapshot)
+	return snapshot
 }
 
 func (s ModelCapabilitySnapshot) Validate(deployment Deployment) error {
@@ -611,7 +672,44 @@ func (s ModelCapabilitySnapshot) Validate(deployment Deployment) error {
 	if !ProviderCapabilitiesSubset(deployment.Capabilities, s.Capabilities) {
 		problems = append(problems, errors.New("deployment capabilities exceed the capability snapshot"))
 	}
+	// §5.2: evidence may not exceed the level its source is allowed to claim,
+	// and may not describe a capability the snapshot does not establish.
+	maximum := MaxEvidenceForCapabilitySource(s.Source)
+	if len(s.Evidence) == 0 {
+		problems = append(problems, errors.New("capability snapshot requires capability evidence"))
+	}
+	for name, value := range s.Evidence {
+		if !slices.Contains(capabilityNames, name) {
+			problems = append(problems, fmt.Errorf("capability snapshot evidence names unknown capability %q", name))
+			continue
+		}
+		if value == EvidenceUnsupported {
+			continue
+		}
+		if !capabilityEnabled(s.Capabilities, name) {
+			problems = append(problems, fmt.Errorf("capability snapshot claims evidence for %q, which it does not establish", name))
+		}
+		if evidenceRankValue(value) > evidenceRankValue(maximum) {
+			problems = append(problems, fmt.Errorf("capability snapshot evidence for %q exceeds what source %q may claim", name, s.Source))
+		}
+	}
 	return errors.Join(problems...)
+}
+
+// evidenceRankValue orders the evidence tiers. It is deliberately total: an
+// unrecognised value ranks below unsupported, so a record carrying one fails the
+// comparison rather than passing it.
+func evidenceRankValue(value CapabilityEvidence) int {
+	switch value {
+	case EvidenceVerified:
+		return 2
+	case EvidenceDeclared:
+		return 1
+	case EvidenceUnsupported:
+		return 0
+	default:
+		return -1
+	}
 }
 
 type Deployment struct {
@@ -650,6 +748,11 @@ type Deployment struct {
 	// move without this record being rewritten, so persisting it would only ever
 	// record what was true at the last write. It is derived wherever it is needed.
 	ModelCapabilitySnapshot ModelCapabilitySnapshot `json:"model_capability_snapshot"`
+	// OperatorDisabled names capabilities the operator switched off. Storing
+	// only the retained set makes "the operator turned this off" and "nothing
+	// ever established it" the same absence, and they call for opposite
+	// treatment: one should not be offered again, the other should.
+	OperatorDisabled []string `json:"operator_disabled,omitempty"`
 }
 
 type DeploymentTestStatus string
@@ -726,6 +829,17 @@ func (d Deployment) Validate() error {
 	}
 	if err := d.ModelCapabilitySnapshot.Validate(d); err != nil {
 		problems = append(problems, err)
+	}
+	for _, name := range d.OperatorDisabled {
+		if !slices.Contains(capabilityNames, name) {
+			problems = append(problems, fmt.Errorf("deployment names unknown disabled capability %q", name))
+			continue
+		}
+		// A capability cannot be both switched off and in use. Allowing it would
+		// make the record say two things and leave every reader to pick one.
+		if capabilityEnabled(d.Capabilities, name) {
+			problems = append(problems, fmt.Errorf("deployment lists %q as switched off while using it", name))
+		}
 	}
 	if d.Priority < 0 {
 		problems = append(problems, errors.New("deployment priority cannot be negative"))

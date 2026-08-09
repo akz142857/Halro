@@ -1,6 +1,9 @@
 package app
 
 import (
+	"context"
+	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -149,6 +152,36 @@ func catalogueEntryFor(t *testing.T, deployment domain.Deployment, binding domai
 	return entry
 }
 
+// Storing only the retained set makes "the operator turned this off" and
+// "nothing ever established it" the same absence, and they call for opposite
+// treatment. A capability that was switched off must stop being offered, or the
+// console asks the same question after every catalog change until the answer
+// changes — which is how an operator learns to click past the notice.
+func TestACapabilityTheOperatorSwitchedOffIsNotOfferedAgain(t *testing.T) {
+	deployment, binding := catalogueDeployment(t)
+	// The catalog has moved on and now establishes more than this deployment
+	// uses, which is what puts anything on offer at all.
+	deployment.ModelCapabilitySnapshot.ModelRevision = "sha256:before-the-catalog-grew"
+	deployment.Capabilities.Embeddings = false
+	deployment.ModelCapabilitySnapshot.Capabilities.Embeddings = false
+
+	offered := reviewCapabilities(deployment, binding, domain.ProviderBedrock)
+	if !slices.Contains(offered.AvailableForReview, "embeddings") {
+		t.Fatalf("nothing was offered, so this test cannot show it being withheld: %#v", offered)
+	}
+
+	// The same deployment, with the operator having answered.
+	deployment.OperatorDisabled = []string{"embeddings"}
+	declined := reviewCapabilities(deployment, binding, domain.ProviderBedrock)
+	if slices.Contains(declined.AvailableForReview, "embeddings") {
+		t.Fatalf("a capability the operator switched off was offered again: %#v", declined.AvailableForReview)
+	}
+	// Reported, not hidden: the decision stays visible and reversible.
+	if !slices.Contains(declined.OperatorDisabled, "embeddings") {
+		t.Fatalf("the operator's decision is invisible: %#v", declined)
+	}
+}
+
 func TestCatalogEntryDisappearingUnderABuiltinSnapshotIsDrift(t *testing.T) {
 	deployment, binding := catalogueDeployment(t)
 	deployment.ProviderModel = "amazon.titan-embed-text-v9:0" // no such entry
@@ -202,5 +235,59 @@ func TestDoctorReportsDriftAsFailAndReviewAsWarn(t *testing.T) {
 	declared.ModelCapabilitySnapshot.ModelRevision = "sha256:before-the-catalog-knew"
 	if status, _ := collect([]domain.ProviderInstance{instance}, []domain.Deployment{declared}); status != "warn" {
 		t.Fatalf("review status=%q", status)
+	}
+}
+
+// The end of the wire: switching a capability off through the Admin API has to
+// leave a record saying so, or the review side has nothing to read.
+func TestTurningACapabilityOffRecordsTheOperatorsDecision(t *testing.T) {
+	runtime, bootstrap := bootstrapForCapabilityTest(t)
+	cookie, csrf := loginAdminForTest(t, runtime)
+
+	current, err := runtime.store.GetDeployment(context.Background(), bootstrap.DeploymentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !current.Capabilities.Streaming {
+		t.Fatal("the bootstrap deployment has nothing to switch off")
+	}
+	if len(current.OperatorDisabled) != 0 {
+		t.Fatalf("nothing was switched off yet: %#v", current.OperatorDisabled)
+	}
+
+	narrowed := current.Capabilities
+	narrowed.Streaming = false
+	narrowed.StreamUsage = false
+	response := performAdminMutation(t, runtime, cookie, csrf, http.MethodPut,
+		"/admin/api/v1/deployments/"+current.ID, revisionETag(current.Revision), map[string]any{
+			"name": current.Name, "provider_id": current.ProviderID, "provider_model": current.ProviderModel,
+			"capabilities": narrowed, "max_concurrency": current.MaxConcurrency,
+			"enabled": current.Enabled,
+		})
+	if response.Code != http.StatusOK {
+		t.Fatalf("update status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	updated, err := runtime.store.GetDeployment(context.Background(), current.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(updated.OperatorDisabled, "streaming") {
+		t.Fatalf("switching streaming off left no record: %#v", updated.OperatorDisabled)
+	}
+	if slices.Contains(updated.OperatorDisabled, "chat") {
+		t.Fatalf("a capability still in use was recorded as switched off: %#v", updated.OperatorDisabled)
+	}
+	// And the snapshot carries evidence bounded by its own source.
+	evidence := updated.ModelCapabilitySnapshot.Evidence
+	if len(evidence) == 0 {
+		t.Fatal("the snapshot carries no evidence")
+	}
+	maximum := domain.MaxEvidenceForCapabilitySource(updated.ModelCapabilitySnapshot.Source)
+	for name, value := range evidence {
+		if value != domain.EvidenceUnsupported && value != maximum {
+			t.Fatalf("evidence for %q is %q, which source %q may not claim",
+				name, value, updated.ModelCapabilitySnapshot.Source)
+		}
 	}
 }

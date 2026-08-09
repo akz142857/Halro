@@ -21,7 +21,7 @@ import (
 	bbolt "go.etcd.io/bbolt"
 )
 
-const schemaVersion uint64 = 22
+const schemaVersion uint64 = 23
 
 // legacyCapabilityEvidence is the evidence tier this project used before
 // capability evidence was durable metadata. The domain no longer accepts it, so
@@ -507,6 +507,101 @@ var migrations = []migration{
 		}
 		return migrationStep(step, "after_deployment_less_route_check")
 	}},
+	{version: 23, name: "deployment_snapshot_evidence_and_disabled", up: func(tx *bbolt.Tx, step func(string) error) error {
+		if err := migrationStep(step, "before_snapshot_evidence_backfill"); err != nil {
+			return err
+		}
+		// Two §5.2 fields arrive on existing records: the snapshot's evidence and
+		// the set of capabilities the operator switched off.
+		//
+		// This one backfills where migration 20 and 21 refused, and the
+		// difference is whether the value can be reconstructed. `legacy` evidence
+		// could not: promoting it to `declared` would assert a declaration nobody
+		// made. A capability snapshot could not: the honest value was the
+		// provider ceiling, which is the guess the snapshot replaces. These two
+		// can — both are pure functions of fields already in the record, computed
+		// by the same domain helpers the write path calls, so a record brought
+		// forward here is byte-identical to the same record re-saved. A test
+		// asserts exactly that rather than trusting this paragraph.
+		//
+		// Fields are patched into the decoded object rather than through the
+		// Deployment struct, so anything this migration does not know about
+		// survives it intact.
+		deployments := tx.Bucket(bucketDeployments)
+		if deployments == nil {
+			return migrationStep(step, "after_snapshot_evidence_backfill")
+		}
+		type snapshotShape struct {
+			Source       string                      `json:"source"`
+			Capabilities domain.ProviderCapabilities `json:"capabilities"`
+		}
+		cursor := deployments.Cursor()
+		for key, raw := cursor.First(); key != nil; key, raw = cursor.Next() {
+			if raw == nil {
+				continue
+			}
+			var record map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &record); err != nil {
+				return fmt.Errorf("deployment %q is unreadable and cannot be brought forward: %w", key, err)
+			}
+			encodedSnapshot, ok := record["model_capability_snapshot"]
+			if !ok {
+				return fmt.Errorf("deployment %q has no capability snapshot to derive evidence from", key)
+			}
+			var snapshot snapshotShape
+			if err := json.Unmarshal(encodedSnapshot, &snapshot); err != nil {
+				return fmt.Errorf("deployment %q has an unreadable capability snapshot: %w", key, err)
+			}
+			var capabilities domain.ProviderCapabilities
+			if encoded, ok := record["capabilities"]; ok {
+				if err := json.Unmarshal(encoded, &capabilities); err != nil {
+					return fmt.Errorf("deployment %q has unreadable capabilities: %w", key, err)
+				}
+			}
+			model := domain.ModelCapabilitySnapshot{Source: snapshot.Source, Capabilities: snapshot.Capabilities}
+			patched, err := patchJSONField(encodedSnapshot, "evidence", domain.SnapshotEvidence(model))
+			if err != nil {
+				return fmt.Errorf("deployment %q snapshot evidence: %w", key, err)
+			}
+			record["model_capability_snapshot"] = patched
+			disabled := domain.OperatorDisabledCapabilities(model, capabilities, nil)
+			if len(disabled) == 0 {
+				delete(record, "operator_disabled")
+			} else {
+				encoded, err := json.Marshal(disabled)
+				if err != nil {
+					return fmt.Errorf("deployment %q disabled capabilities: %w", key, err)
+				}
+				record["operator_disabled"] = encoded
+			}
+			updated, err := json.Marshal(record)
+			if err != nil {
+				return fmt.Errorf("deployment %q could not be re-encoded: %w", key, err)
+			}
+			if err := deployments.Put(key, updated); err != nil {
+				return err
+			}
+		}
+		return migrationStep(step, "after_snapshot_evidence_backfill")
+	}},
+}
+
+// patchJSONField sets one field on an encoded object without disturbing the
+// rest of it, so a migration cannot drop what it does not know about.
+func patchJSONField(encoded json.RawMessage, name string, value any) (json.RawMessage, error) {
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &object); err != nil {
+		return nil, err
+	}
+	field, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	if object == nil {
+		object = map[string]json.RawMessage{}
+	}
+	object[name] = field
+	return json.Marshal(object)
 }
 
 type usageCheckpoint struct {

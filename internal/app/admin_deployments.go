@@ -86,7 +86,7 @@ func (r *Runtime) createAdminDeployment(writer http.ResponseWriter, request *htt
 	r.adminTopologyMu.Lock()
 	defer r.adminTopologyMu.Unlock()
 	now := time.Now().UTC()
-	deployment, err := r.deploymentFromInput(request, deploymentID, input, nil, nil, now, now)
+	deployment, err := r.deploymentFromInput(request, deploymentID, input, nil, now, now)
 	if err != nil {
 		r.adminDeploymentInputError(writer, err)
 		return
@@ -152,13 +152,17 @@ func (r *Runtime) updateAdminDeployment(writer http.ResponseWriter, request *htt
 		adminPreconditionFailed(writer)
 		return
 	}
-	currentEvidence := domain.CapabilityEvidenceSet(nil)
+	// Everything an update may carry forward comes from the record it replaces,
+	// and only while the request still points at the same model through the same
+	// interface. Aimed somewhere else, nothing earned here applies.
+	prior := &priorDeployment{Capabilities: current.Capabilities, Snapshot: current.ModelCapabilitySnapshot}
 	if input.ProviderID == current.ProviderID && strings.TrimSpace(input.ProviderModel) == current.ProviderModel &&
 		(input.BindingID == "" || input.BindingID == current.BindingID) &&
 		(input.ProfileID == "" || input.ProfileID == current.ProfileID) {
-		currentEvidence = current.CapabilityEvidence
+		prior.Evidence = current.CapabilityEvidence
+		prior.OperatorDisabled = current.OperatorDisabled
 	}
-	deployment, err := r.deploymentFromInput(request, current.ID, input, currentEvidence, &current.Capabilities, current.CreatedAt, time.Now().UTC())
+	deployment, err := r.deploymentFromInput(request, current.ID, input, prior, current.CreatedAt, time.Now().UTC())
 	if err != nil {
 		r.adminDeploymentInputError(writer, err)
 		return
@@ -394,13 +398,38 @@ func (r *Runtime) testAdminDeployment(writer http.ResponseWriter, request *http.
 	writeJSON(writer, http.StatusOK, result)
 }
 
-func (r *Runtime) deploymentFromInput(request *http.Request, deploymentID string, input deploymentInput, currentEvidence domain.CapabilityEvidenceSet, priorCapabilities *domain.ProviderCapabilities, createdAt, updatedAt time.Time) (domain.Deployment, error) {
+// priorDeployment is what an update may carry forward from the record it
+// replaces: nil for a create, and with Evidence and OperatorDisabled empty when
+// the request aims at a different model or interface.
+type priorDeployment struct {
+	Capabilities     domain.ProviderCapabilities
+	Snapshot         domain.ModelCapabilitySnapshot
+	Evidence         domain.CapabilityEvidenceSet
+	OperatorDisabled []string
+}
+
+// Declaration is what has already been established for this deployment, which
+// is wider than what it uses whenever the operator has switched something off.
+// It is the right side of "is this edit a new claim": re-enabling a capability
+// that was declared and then switched off is not a new claim, and demanding the
+// word again for it would make switching one off effectively irreversible.
+func (p *priorDeployment) Declaration() domain.ProviderCapabilities {
+	if p == nil {
+		return domain.ProviderCapabilities{}
+	}
+	if p.Snapshot.Capabilities.AnyOperation() {
+		return p.Snapshot.Capabilities
+	}
+	return p.Capabilities
+}
+
+func (r *Runtime) deploymentFromInput(request *http.Request, deploymentID string, input deploymentInput, prior *priorDeployment, createdAt, updatedAt time.Time) (domain.Deployment, error) {
 	instance, err := r.store.GetProvider(request.Context(), input.ProviderID)
 	if err != nil || instance.DeletedAt != nil || (input.Enabled && !instance.Enabled) {
 		return domain.Deployment{}, errors.New("deployment provider is unavailable")
 	}
 	model := strings.TrimSpace(input.ProviderModel)
-	resolution, err := resolveDeploymentTarget(instance, input, model, deploymentRegion(instance, input), priorCapabilities)
+	resolution, err := resolveDeploymentTarget(instance, input, model, deploymentRegion(instance, input), prior)
 	if err != nil {
 		return domain.Deployment{}, err
 	}
@@ -420,20 +449,13 @@ func (r *Runtime) deploymentFromInput(request *http.Request, deploymentID string
 	if err != nil {
 		return domain.Deployment{}, err
 	}
-	evidence := deploymentCapabilityEvidence(capabilities, binding.CapabilityEvidence, currentEvidence)
-	for name, value := range evidence {
-		if !capabilitiesEnabledByName(capabilities, name) && value != domain.EvidenceUnsupported {
-			return domain.Deployment{}, errors.New("deployment capability evidence exceeds enabled capabilities")
-		}
-		if providerValue, ok := binding.CapabilityEvidence[name]; ok && evidenceRank(value) > evidenceRank(providerValue) {
-			return domain.Deployment{}, errors.New("deployment capability evidence exceeds provider evidence")
-		}
-	}
 	weight := input.Weight
 	if weight == 0 {
 		weight = 1
 	}
 	region := deploymentRegion(instance, input)
+	// The snapshot is built first because its source decides how strong the
+	// deployment's own evidence is allowed to be.
 	snapshot := domain.ModelCapabilitySnapshot{
 		ProviderModel: model,
 		ModelRevision: resolution.entry.Revision(),
@@ -447,14 +469,43 @@ func (r *Runtime) deploymentFromInput(request *http.Request, deploymentID string
 		// would let a later refresh look like agreement that never happened.
 		snapshot.Source = string(modelcatalog.SourceOperatorDeclared)
 		snapshot.Status = string(modelcatalog.StatusPartial)
+		// An edit that stays inside an existing declaration is not a new claim,
+		// so what was declared still stands and the narrowing is a switch-off
+		// rather than a withdrawal. Collapsing the snapshot onto the narrowed set
+		// would erase the very difference OperatorDisabled is read from, and the
+		// capability would be offered again as though it had never been declined.
+		if input.Mode != deploymentModeOperatorDeclared &&
+			domain.ProviderCapabilitiesSubset(capabilities, prior.Declaration()) {
+			snapshot.Capabilities = prior.Declaration()
+		}
 	} else {
 		snapshot.CatalogRevision = modelcatalog.Builtin().Revision()
 		snapshot.Capabilities = modelcatalog.Clamp(resolution.entry.Capabilities, resolution.binding.Capabilities)
+	}
+	snapshot.Evidence = domain.SnapshotEvidence(snapshot)
+
+	var priorDisabled []string
+	if prior != nil {
+		priorDisabled = prior.OperatorDisabled
+	}
+	var priorEvidence domain.CapabilityEvidenceSet
+	if prior != nil {
+		priorEvidence = prior.Evidence
+	}
+	evidence := deploymentCapabilityEvidence(capabilities, binding.CapabilityEvidence, priorEvidence, snapshot.Source)
+	for name, value := range evidence {
+		if !capabilitiesEnabledByName(capabilities, name) && value != domain.EvidenceUnsupported {
+			return domain.Deployment{}, errors.New("deployment capability evidence exceeds enabled capabilities")
+		}
+		if providerValue, ok := binding.CapabilityEvidence[name]; ok && evidenceRank(value) > evidenceRank(providerValue) {
+			return domain.Deployment{}, errors.New("deployment capability evidence exceeds provider evidence")
+		}
 	}
 	deployment := domain.Deployment{
 		ID: deploymentID, Name: strings.TrimSpace(input.Name), ProviderID: input.ProviderID,
 		ProviderModel: model, TargetKind: targetKind, Capabilities: capabilities,
 		ModelCapabilitySnapshot: snapshot,
+		OperatorDisabled:        domain.OperatorDisabledCapabilities(snapshot, capabilities, priorDisabled),
 		AccessSurface:           binding.AccessSurface, ProfileID: binding.ProfileID, BindingID: binding.ID,
 		Region:             region,
 		CapabilityEvidence: evidence,
@@ -556,7 +607,7 @@ type deploymentResolution struct {
 // binding_id and profile_id from the client are treated as filters, never as
 // authority: a client cannot name a binding to obtain capabilities the catalog
 // does not support for that model.
-func resolveDeploymentTarget(instance domain.ProviderInstance, input deploymentInput, model, region string, prior *domain.ProviderCapabilities) (deploymentResolution, error) {
+func resolveDeploymentTarget(instance domain.ProviderInstance, input deploymentInput, model, region string, prior *priorDeployment) (deploymentResolution, error) {
 	var candidates []domain.ProviderProfileBinding
 	// Why a binding can be excluded before capabilities are even considered:
 	// some profiles accept exactly one model. That pin used to be checked after
@@ -600,8 +651,11 @@ func resolveDeploymentTarget(instance domain.ProviderInstance, input deploymentI
 	// to mean "inherit the profile ceiling", which is the default this whole
 	// change exists to remove.
 	retained := input.Capabilities
-	if retained == nil {
-		retained = prior
+	if retained == nil && prior != nil {
+		// Omitting capabilities means "leave them as they are", not "adopt
+		// everything that was ever declared" — so this is what the deployment
+		// uses, not its declaration.
+		retained = &prior.Capabilities
 	}
 	var known, unknown []deploymentResolution
 	for _, binding := range candidates {
@@ -643,7 +697,8 @@ func resolveDeploymentTarget(instance domain.ProviderInstance, input deploymentI
 	// Declaring is an act the operator performs once. An edit that stays inside
 	// an existing declaration is not a new claim, and narrowing one is a
 	// reduction — neither should demand the word again. Anything wider does.
-	covered := prior != nil && retained != nil && domain.ProviderCapabilitiesSubset(*retained, *prior)
+	declaration := prior.Declaration()
+	covered := prior != nil && retained != nil && domain.ProviderCapabilitiesSubset(*retained, declaration)
 	if input.Mode != deploymentModeOperatorDeclared && !covered {
 		if len(known) > 0 {
 			return deploymentResolution{}, errModelCapabilitiesExceedCatalog
@@ -680,7 +735,17 @@ func checkModelRevision(claimed string, entry modelcatalog.Entry) error {
 	return errModelCapabilityChanged
 }
 
-func deploymentCapabilityEvidence(capabilities domain.ProviderCapabilities, providerEvidence, currentEvidence domain.CapabilityEvidenceSet) domain.CapabilityEvidenceSet {
+// deploymentCapabilityEvidence is the deployment's own evidence: what the
+// binding establishes, capped by what the capability source may claim, with a
+// previously earned level carried forward.
+//
+// The cap used to be an unconditional verified→declared downgrade. It produced
+// the right answer for every source that exists today and the wrong reason for
+// it — a probe result would have been demoted too. Asking the source what it
+// may claim is the rule §4.1 actually states.
+func deploymentCapabilityEvidence(capabilities domain.ProviderCapabilities,
+	providerEvidence, currentEvidence domain.CapabilityEvidenceSet, source string) domain.CapabilityEvidenceSet {
+	maximum := domain.MaxEvidenceForCapabilitySource(source)
 	evidence := providerEvidence.Clone()
 	for name, value := range evidence {
 		if !capabilitiesEnabledByName(capabilities, name) {
@@ -688,8 +753,8 @@ func deploymentCapabilityEvidence(capabilities domain.ProviderCapabilities, prov
 			continue
 		}
 		providerValue := value
-		if value == domain.EvidenceVerified {
-			evidence[name] = domain.EvidenceDeclared
+		if evidenceRank(value) > evidenceRank(maximum) {
+			evidence[name] = maximum
 		}
 		if previous := currentEvidence[name]; previous != "" && previous != domain.EvidenceUnsupported &&
 			evidenceRank(previous) <= evidenceRank(providerValue) {

@@ -1,6 +1,8 @@
 package app
 
 import (
+	"slices"
+
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/modelcatalog"
 )
@@ -31,7 +33,15 @@ type capabilityReview struct {
 	// AvailableForReview names capabilities established now that the deployment
 	// does not use. They are offered, never enabled — adopting one is an
 	// operator action that advances the revision and makes the test stale.
+	//
+	// Anything the operator switched off is excluded. Re-offering it on every
+	// catalog change would be asking the same question until the answer changed,
+	// which is how an operator learns to click past the notice.
 	AvailableForReview []string `json:"available_for_review,omitempty"`
+	// OperatorDisabled names what is established now and switched off on
+	// purpose. It is reported rather than hidden so the decision stays visible
+	// and reversible, but it is never presented as something new to adopt.
+	OperatorDisabled []string `json:"operator_disabled,omitempty"`
 	// NoLongerSupported names capabilities the snapshot claims that neither the
 	// running profile nor the catalog establishes any more.
 	NoLongerSupported []string `json:"no_longer_supported,omitempty"`
@@ -138,8 +148,7 @@ func reviewCapabilities(deployment domain.Deployment, binding domain.ProviderPro
 		// What the operator claims and the catalog does not. It is named so the
 		// disagreement is visible and reviewable, not so anything is turned off.
 		review.NoLongerSupported = modelcatalog.LostCapabilities(deployment.Capabilities, entry.Capabilities)
-		review.AvailableForReview = modelcatalog.GainedCapabilities(
-			deployment.Capabilities, modelcatalog.Clamp(entry.Capabilities, binding.Capabilities))
+		review.setOffered(deployment, modelcatalog.Clamp(entry.Capabilities, binding.Capabilities))
 		return review
 	}
 	review.State = domain.CapabilityReviewAvailable
@@ -147,13 +156,26 @@ func reviewCapabilities(deployment domain.Deployment, binding domain.ProviderPro
 	if snapshot.Source == string(modelcatalog.SourceOperatorDeclared) {
 		review.Reason = reviewReasonCatalogNowCovers
 	}
-	// What the catalog establishes beyond what the deployment actually uses. The
-	// deployment side, not the snapshot side, is what an operator would adopt:
-	// the snapshot can already hold capabilities the operator chose not to turn
-	// on, and those are equally "available".
-	review.AvailableForReview = modelcatalog.GainedCapabilities(
-		deployment.Capabilities, modelcatalog.Clamp(entry.Capabilities, binding.Capabilities))
+	review.setOffered(deployment, modelcatalog.Clamp(entry.Capabilities, binding.Capabilities))
 	return review
+}
+
+// setOffered splits what is established now and unused into the part worth
+// offering and the part the operator already declined.
+//
+// The comparison is against what the deployment uses, not against its snapshot:
+// the snapshot can hold capabilities that were never switched on, and those are
+// equally available. What separates them from a genuine offer is the operator
+// having said no, which is why that answer is stored rather than inferred from
+// the difference between the two.
+func (r *capabilityReview) setOffered(deployment domain.Deployment, established domain.ProviderCapabilities) {
+	for _, name := range modelcatalog.GainedCapabilities(deployment.Capabilities, established) {
+		if slices.Contains(deployment.OperatorDisabled, name) {
+			r.OperatorDisabled = append(r.OperatorDisabled, name)
+			continue
+		}
+		r.AvailableForReview = append(r.AvailableForReview, name)
+	}
 }
 
 // evaluateCapabilityReview is the state alone, for callers that only need to

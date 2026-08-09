@@ -442,8 +442,12 @@ export interface CapabilityReview {
   catalog_source?: ModelCapabilitySource | string;
   catalog_status?: ModelCapabilityStatus | string;
   catalog_model_revision?: string;
-  /** Established now but not in use. Offered, never enabled. */
+  /** Established now but not in use. Offered, never enabled. Excludes anything
+   * the operator switched off — that is reported separately, not re-offered. */
   available_for_review?: string[];
+  /** Established now and switched off on purpose. Shown so the decision stays
+   * visible and reversible, never as something new to adopt. */
+  operator_disabled?: string[];
   /** Claimed by the snapshot but no longer established by profile or catalog. */
   no_longer_supported?: string[];
   reason?: CapabilityReviewReason | string;
@@ -503,6 +507,9 @@ export interface Deployment {
 	pricing_quarantined?: boolean;
 	pricing_quarantine_reason?: string;
   capability_review: CapabilityReview;
+  /** Capabilities the operator switched off, kept apart from the ones nothing
+   * ever established. */
+  operator_disabled?: string[];
 }
 
 export type DeploymentTargetKind =
