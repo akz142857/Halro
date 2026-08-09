@@ -44,44 +44,45 @@ import (
 )
 
 type Runtime struct {
-	config              config.Config
-	logger              *slog.Logger
-	lock                *lock.Lock
-	store               *boltstore.Store
-	ledger              *ledger.Log
-	state               *ledger.State
-	status              *ledger.Status
-	vault               *vault.Vault
-	auth                *auth.Snapshot
-	providers           *provider.Registry
-	accounting          *budget.Manager
-	gateway             *gatewayapi.Handler
-	gatewayService      *gatewaycore.Service
-	sourceLimiter       *sourcelimit.Limiter
-	tokenGuard          *tokenguard.Manager
-	redactor            *redaction.Engine
-	alerts              *alert.Dispatcher
-	audit               *audit.Log
-	auditBatchMu        sync.Mutex
-	auditBatchPending   []adminAuditRequest
-	auditBatchRunning   bool
-	gatewayHandlerOnce  sync.Once
-	gatewayHandlerValue http.Handler
-	adminTopologyMu     sync.Mutex
-	providerModelsMu    sync.Mutex
-	providerModels      map[string]providerModelCatalogCache
-	adminProjectMu      sync.Mutex
-	adminAlertMu        sync.Mutex
-	adminSettingsMu     sync.Mutex
-	adminIdentityMu     sync.Mutex
-	metricsTokenHash    [32]byte
-	metricsAuthorizer   *bearercred.Authorizer
-	metricsScrapes      chan struct{}
-	capabilityMetrics   *capabilityMetrics
-	metricsAuthFailed   atomic.Uint64
-	metricsBusy         atomic.Uint64
-	metricsRenderErrs   atomic.Uint64
-	startedAt           time.Time
+	config               config.Config
+	logger               *slog.Logger
+	lock                 *lock.Lock
+	store                *boltstore.Store
+	ledger               *ledger.Log
+	state                *ledger.State
+	status               *ledger.Status
+	vault                *vault.Vault
+	auth                 *auth.Snapshot
+	providers            *provider.Registry
+	accounting           *budget.Manager
+	gateway              *gatewayapi.Handler
+	gatewayService       *gatewaycore.Service
+	sourceLimiter        *sourcelimit.Limiter
+	tokenGuard           *tokenguard.Manager
+	redactor             *redaction.Engine
+	alerts               *alert.Dispatcher
+	audit                *audit.Log
+	auditBatchMu         sync.Mutex
+	auditBatchPending    []adminAuditRequest
+	auditBatchRunning    bool
+	gatewayHandlerOnce   sync.Once
+	gatewayHandlerValue  http.Handler
+	adminTopologyMu      sync.Mutex
+	providerModelsMu     sync.Mutex
+	providerModels       map[string]providerModelCatalogCache
+	capabilityDetections capabilityDetectionRuntime
+	adminProjectMu       sync.Mutex
+	adminAlertMu         sync.Mutex
+	adminSettingsMu      sync.Mutex
+	adminIdentityMu      sync.Mutex
+	metricsTokenHash     [32]byte
+	metricsAuthorizer    *bearercred.Authorizer
+	metricsScrapes       chan struct{}
+	capabilityMetrics    *capabilityMetrics
+	metricsAuthFailed    atomic.Uint64
+	metricsBusy          atomic.Uint64
+	metricsRenderErrs    atomic.Uint64
+	startedAt            time.Time
 	// now is the clock the admin rate limiter buckets requests into. Its window
 	// is a wall-clock minute, so a test that sprays requests without pinning
 	// this depends on whether the spray happens to straddle a minute boundary —
@@ -574,6 +575,41 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		usageExporter:       usageExporter,
 		periods:             periods,
 		now:                 time.Now,
+		capabilityDetections: capabilityDetectionRuntime{
+			cancels:   make(map[string]context.CancelFunc),
+			global:    make(chan struct{}, cfg.Admin.ModelCapabilityDetection.GlobalConcurrency),
+			providers: make(map[string]chan struct{}),
+			rate:      adminRateState{windows: make(map[string]adminLoginWindow)},
+		},
+	}
+	detectionRecoveryAt := time.Now().UTC()
+	recoveredDetections, err := metadata.InterruptModelCapabilityDetections(ctx, detectionRecoveryAt)
+	if err != nil {
+		auditLog.Close()
+		alertDispatcher.Close()
+		ledgerLog.Close()
+		metadata.Close()
+		providerRegistry.Close()
+		secretVault.Close()
+		return fail(fmt.Errorf("recover model capability detections: %w", err))
+	}
+	if recoveredDetections > 0 {
+		items, listErr := metadata.ListModelCapabilityDetections(ctx)
+		if listErr != nil {
+			auditLog.Close()
+			alertDispatcher.Close()
+			ledgerLog.Close()
+			metadata.Close()
+			providerRegistry.Close()
+			secretVault.Close()
+			return fail(fmt.Errorf("list recovered model capability detections: %w", listErr))
+		}
+		for _, detection := range items {
+			if detection.Status != domain.DetectionInterrupted || detection.CompletedAt == nil || !detection.CompletedAt.Equal(detectionRecoveryAt) {
+				continue
+			}
+			_ = runtime.appendAdminAuditWithMetadata("system", "halro", "model_capability_detection.failed", "model_capability_detection", detection.ID, "success", "", detectionAuditMetadata(detection))
+		}
 	}
 	if err := runtime.drainAdminMFAAuditIntents(ctx); err != nil {
 		auditLog.Close()
@@ -647,7 +683,7 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 	runtime.backgroundCancel = backgroundCancel
 	runtime.alerts.SetObserver(runtime.auditAlertDelivery)
 	runtime.alerts.Start()
-	runtime.backgroundWait.Add(6)
+	runtime.backgroundWait.Add(7)
 	go func() {
 		defer runtime.backgroundWait.Done()
 		runtime.usageCollector.Run(backgroundContext)
@@ -670,6 +706,10 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 	go func() {
 		defer runtime.backgroundWait.Done()
 		runtime.runActiveDeploymentProbes(backgroundContext)
+	}()
+	go func() {
+		defer runtime.backgroundWait.Done()
+		runtime.runCapabilityDetectionMaintenance(backgroundContext)
 	}()
 	go func() {
 		defer runtime.backgroundWait.Done()
@@ -1249,6 +1289,9 @@ func (r *Runtime) adminRouter() http.Handler {
 	router.With(r.requireAdminMutation).Put("/admin/api/v1/providers/{id}", r.updateAdminProvider)
 	router.With(r.requireAdminMutation).Delete("/admin/api/v1/providers/{id}", r.deleteAdminProvider)
 	router.With(r.requireAdminMutation).Post("/admin/api/v1/providers/{id}/test", r.testAdminProvider)
+	router.With(r.requireAdminMutation).Post("/admin/api/v1/providers/{id}/model-capability-detections", r.createAdminModelCapabilityDetection)
+	router.With(r.requireAdmin).Get("/admin/api/v1/model-capability-detections/{id}", r.getAdminModelCapabilityDetection)
+	router.With(r.requireAdminMutation).Delete("/admin/api/v1/model-capability-detections/{id}", r.cancelAdminModelCapabilityDetection)
 	router.With(r.requireAdmin).Get("/admin/api/v1/deployments", r.listAdminDeployments)
 	router.With(r.requireAdminMutation).Post("/admin/api/v1/deployments", r.createAdminDeployment)
 	router.With(r.requireAdmin).Get("/admin/api/v1/deployments/{id}", r.getAdminDeployment)

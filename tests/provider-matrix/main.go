@@ -147,6 +147,7 @@ func smokeEnvironment(item profile, values map[string]string) []string {
 	}
 	environment = append(environment,
 		"HALRO_REAL_PROVIDER_SMOKE=1",
+		"HALRO_SMOKE_CAPABILITY_DETECTION=1",
 		"HALRO_SMOKE_PROFILE="+item.Name,
 		"HALRO_SMOKE_BASE_URL="+values["BASE_URL"],
 		"HALRO_SMOKE_API_KEY="+values["API_KEY"],

@@ -166,7 +166,7 @@ Bootstrap 不会把两个零价字段自动解释为免费。只有确认该 Dep
 
 1. **Providers → 凭据**：选择 Provider 类型并录入 API Key。Secret 使用 AES-GCM 加密，之后只显示“已配置”，不会回显明文。
 2. **Providers → Provider**：选择类型、Base URL、Credential 和能力上限，然后执行连接测试。
-3. **Deployments**：填写真实上游模型名称、能力子集、并发上限和每百万 Token 的输入/输出美元价格。
+3. **Deployments**：填写真实上游模型名称。已知模型直接应用目录能力；未知模型明确点击“确认模型并识别能力”，只保留需要的已验证能力，再填写并发上限和每百万 Token 的输入/输出美元价格。费用与恢复边界见[模型能力识别操作指南](model-capability-detection.zh-CN.md)。
 4. **Routes**：创建公开模型别名，例如 `chat`，绑定 Deployment，并选择 ordered fallback 或 round robin。
 5. **Projects**：配置允许的模型别名、RPM、TPM、最大并发、每日预算、CIDR 和安全 Policy。
 6. **Projects → Keys**：为应用创建 Gateway Key。Key 只显示一次；确认已经安全保存后关闭弹窗。

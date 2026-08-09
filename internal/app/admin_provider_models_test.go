@@ -58,7 +58,7 @@ func TestAggregateMergesBindingsAndResolvesCapabilities(t *testing.T) {
 
 	response := aggregateProviderModels(instance, []bindingCatalog{
 		catalogResult(embed, true, "amazon.titan-embed-text-v2:0"),
-		catalogResult(converse, true, "amazon.nova-pro-v1:0"),
+		catalogResult(converse, true, unknownBedrockModel),
 	}, nil)
 
 	if len(response.Items) != 2 {
@@ -88,7 +88,7 @@ func TestAggregateMergesBindingsAndResolvesCapabilities(t *testing.T) {
 
 	// Not seeded. The Converse profile allows chat and streaming; none of that
 	// may leak into a model no one has established anything about.
-	nova := findModel(t, response, "amazon.nova-pro-v1:0")
+	nova := findModel(t, response, unknownBedrockModel)
 	if nova.Status != modelcatalog.StatusUnknown {
 		t.Fatalf("nova status=%q", nova.Status)
 	}
@@ -104,6 +104,45 @@ func TestAggregateMergesBindingsAndResolvesCapabilities(t *testing.T) {
 	if nova.ModelRevision == "" {
 		t.Fatal("unknown model has no revision to detect change against")
 	}
+}
+
+func TestCapabilityModelTemplatesAreScopedToTheTargetProtocol(t *testing.T) {
+	azureProfile := domain.ProfileAzureChatEmbeddings
+	azure := domain.ProviderInstance{Type: domain.ProviderAzureOpenAI}
+	azureBindings := []domain.ProviderProfileBinding{{
+		ID: "b-azure", ProfileID: azureProfile, Enabled: true,
+		Capabilities: domain.DefaultProviderCapabilitiesForProfile(domain.ProviderAzureOpenAI, azureProfile),
+	}}
+	azureModels := capabilityModelTemplates(azure, azureBindings)
+	azureGPT := findCapabilityModel(t, azureModels, "gpt-5")
+	if !azureGPT.Capabilities.Chat || !azureGPT.Capabilities.Tools || !azureGPT.Preselect {
+		t.Fatalf("azure template=%#v", azureGPT)
+	}
+
+	compatibleProfile := domain.ProfileOpenAICompatible
+	compatible := domain.ProviderInstance{Type: domain.ProviderOpenAICompatible}
+	compatibleBindings := []domain.ProviderProfileBinding{{
+		ID: "b-compatible", ProfileID: compatibleProfile, Enabled: true,
+		Capabilities: domain.DefaultProviderCapabilitiesForProfile(domain.ProviderOpenAICompatible, compatibleProfile),
+	}}
+	compatibleGPT := findCapabilityModel(t, capabilityModelTemplates(compatible, compatibleBindings), "gpt-5")
+	if !compatibleGPT.Capabilities.Chat || !compatibleGPT.Capabilities.Streaming || compatibleGPT.Capabilities.Tools {
+		t.Fatalf("compatible template=%#v", compatibleGPT)
+	}
+	if models := capabilityModelTemplates(domain.ProviderInstance{Type: domain.ProviderAnthropic}, nil); len(models) != 0 {
+		t.Fatalf("ordinary model IDs received alias templates: %#v", models)
+	}
+}
+
+func findCapabilityModel(t *testing.T, models []adminProviderModel, id string) adminProviderModel {
+	t.Helper()
+	for _, model := range models {
+		if model.ID == id {
+			return model
+		}
+	}
+	t.Fatalf("capability model %q missing from %#v", id, models)
+	return adminProviderModel{}
 }
 
 func TestAggregatePrefersTheKnownCandidate(t *testing.T) {
@@ -173,7 +212,7 @@ func TestAggregateReportsTheEarliestExpiryAndCacheState(t *testing.T) {
 	embed := bedrockBinding("b-embed", domain.ProfileBedrockInvokeTitanEmbedV2)
 	converse := bedrockBinding("b-chat", domain.ProfileBedrockConverseText)
 
-	fresh := catalogResult(converse, false, "amazon.nova-pro-v1:0")
+	fresh := catalogResult(converse, false, unknownBedrockModel)
 	fresh.fetchedAt = fresh.fetchedAt.Add(time.Minute)
 	fresh.expiresAt = fresh.fetchedAt.Add(providerModelCatalogTTL)
 	stale := catalogResult(embed, true, "amazon.titan-embed-text-v2:0")

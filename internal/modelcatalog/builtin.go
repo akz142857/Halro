@@ -49,6 +49,10 @@ var builtinOnce = sync.OnceValues(func() (*Catalog, error) {
 		openAIEmbeddingModels(),
 		openAIMediaModels(),
 		deepSeekModels(),
+		anthropicModels(),
+		geminiModels(),
+		bedrockConverseModels(),
+		openAICompatibleModels(),
 	)...)
 })
 
@@ -221,5 +225,103 @@ func deepSeekModels() []Entry {
 			Chat: true, Streaming: true, StreamUsage: true, Reasoning: true,
 			MaxContextTokens: 131_072, MaxOutputTokens: 65_536,
 		}),
+	}
+}
+
+// anthropicModels contains pinned Claude API identifiers rather than the
+// convenience aliases used by pre-4.6 releases. Anthropic documents current
+// Claude models as accepting text and image input and supporting tool use; the
+// reasoning flag is limited to models whose current specification exposes
+// thinking. The catalog records reviewed protocol capabilities, not a probe.
+//
+// Sources reviewed 2026-08-09:
+//   - https://platform.claude.com/docs/en/about-claude/models/overview
+//   - https://platform.claude.com/docs/en/about-claude/models/model-ids-and-versions
+func anthropicModels() []Entry {
+	const provider, profile = domain.ProviderAnthropic, domain.ProfileAnthropicMessages
+	claude := func(contextTokens, outputTokens int64) domain.ProviderCapabilities {
+		return domain.ProviderCapabilities{
+			Chat: true, Streaming: true, StreamUsage: true, Tools: true, Vision: true, Reasoning: true,
+			MaxContextTokens: contextTokens, MaxOutputTokens: outputTokens,
+		}
+	}
+	return []Entry{
+		builtinEntry(provider, profile, "claude-opus-4-7", claude(1_000_000, 128_000)),
+		builtinEntry(provider, profile, "claude-sonnet-4-6", claude(1_000_000, 64_000)),
+		builtinEntry(provider, profile, "claude-haiku-4-5-20251001", claude(200_000, 64_000)),
+	}
+}
+
+// geminiModels uses stable model codes only; preview, latest and experimental
+// aliases are deliberately absent. The Gemini profile currently exposes chat,
+// streaming, embeddings and developer-role translation, so multimodal and
+// function-calling claims stay out until the profile itself can represent them.
+//
+// Sources reviewed 2026-08-09:
+//   - https://ai.google.dev/gemini-api/docs/models
+//   - https://ai.google.dev/api/models
+func geminiModels() []Entry {
+	const provider, profile = domain.ProviderGemini, domain.ProfileGeminiText
+	generate := func(contextTokens, outputTokens int64) domain.ProviderCapabilities {
+		return domain.ProviderCapabilities{
+			Chat: true, Streaming: true, DeveloperRole: true,
+			MaxContextTokens: contextTokens, MaxOutputTokens: outputTokens,
+		}
+	}
+	return []Entry{
+		builtinEntry(provider, profile, "gemini-3.6-flash", generate(0, 0)),
+		builtinEntry(provider, profile, "gemini-3.5-flash", generate(0, 0)),
+		builtinEntry(provider, profile, "gemini-3.5-flash-lite", generate(0, 0)),
+		builtinEntry(provider, profile, "gemini-3.1-flash-lite", generate(0, 0)),
+		builtinEntry(provider, profile, "gemini-2.5-pro", generate(1_048_576, 65_536)),
+		builtinEntry(provider, profile, "gemini-2.5-flash", generate(1_048_576, 65_536)),
+		builtinEntry(provider, profile, "gemini-2.5-flash-lite", generate(1_048_576, 65_536)),
+		builtinEntry(provider, profile, "gemini-embedding-001", domain.ProviderCapabilities{Embeddings: true}),
+	}
+}
+
+// bedrockConverseModels seeds a deliberately small set of exact, commonly
+// deployed Bedrock foundation-model IDs that AWS lists as Converse-capable.
+// Region availability is still resolved by the provider control plane; the
+// region-agnostic entry says only that this model speaks the Converse profile.
+//
+// Source reviewed 2026-08-09:
+// https://docs.aws.amazon.com/bedrock/latest/userguide/models-api-compatibility.html
+func bedrockConverseModels() []Entry {
+	const provider, profile = domain.ProviderBedrock, domain.ProfileBedrockConverseText
+	converse := domain.ProviderCapabilities{Chat: true, Streaming: true, StreamUsage: true}
+	return []Entry{
+		builtinEntry(provider, profile, "amazon.nova-premier-v1:0", converse),
+		builtinEntry(provider, profile, "amazon.nova-pro-v1:0", converse),
+		builtinEntry(provider, profile, "amazon.nova-lite-v1:0", converse),
+		builtinEntry(provider, profile, "amazon.nova-micro-v1:0", converse),
+		builtinEntry(provider, profile, "anthropic.claude-sonnet-4-5-20250929-v1:0", converse),
+		builtinEntry(provider, profile, "anthropic.claude-haiku-4-5-20251001-v1:0", converse),
+	}
+}
+
+// openAICompatibleModels is intentionally more conservative than either the
+// OpenAI or DeepSeek native catalog. An OpenAI-compatible endpoint establishes
+// only the operations implemented by Halro's compatibility profile; identical
+// model names do not inherit native-only tools, JSON, reasoning or token limits.
+// These exact IDs are also the choices offered when an operator maps a custom
+// endpoint alias to a reviewed underlying model.
+func openAICompatibleModels() []Entry {
+	const provider, profile = domain.ProviderOpenAICompatible, domain.ProfileOpenAICompatible
+	compatibleChat := domain.ProviderCapabilities{Chat: true, Streaming: true}
+	embeddings := domain.ProviderCapabilities{Embeddings: true}
+	return []Entry{
+		builtinEntry(provider, profile, "gpt-4o", compatibleChat),
+		builtinEntry(provider, profile, "gpt-4o-mini", compatibleChat),
+		builtinEntry(provider, profile, "gpt-4.1", compatibleChat),
+		builtinEntry(provider, profile, "gpt-4.1-mini", compatibleChat),
+		builtinEntry(provider, profile, "gpt-4.1-nano", compatibleChat),
+		builtinEntry(provider, profile, "gpt-5", compatibleChat),
+		builtinEntry(provider, profile, "gpt-5-mini", compatibleChat),
+		builtinEntry(provider, profile, "gpt-5-nano", compatibleChat),
+		builtinEntry(provider, profile, "deepseek-chat", compatibleChat),
+		builtinEntry(provider, profile, "deepseek-reasoner", compatibleChat),
+		builtinEntry(provider, profile, "text-embedding-3-small", embeddings),
+		builtinEntry(provider, profile, "text-embedding-3-large", embeddings),
 	}
 }

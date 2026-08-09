@@ -61,6 +61,7 @@ func TestEveryDestructiveDeleteRequiresStepUp(t *testing.T) {
 		"DELETE /admin/api/v1/session/mfa/challenge":                  true,
 		"DELETE /admin/api/v1/security/mfa/authenticators/{}/pending": true,
 		"DELETE /admin/api/v1/settings/accounting/pending":            true,
+		"DELETE /admin/api/v1/model-capability-detections/{}":         true,
 	}
 	parameter := regexp.MustCompile(`\{[^}]+\}`)
 	routes, ok := runtime.adminRouter().(chi.Routes)

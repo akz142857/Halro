@@ -57,6 +57,15 @@ admin:
   # loopback-only Admin listener; on a reachable one it means network controls
   # applied to the Gateway listener do not cover this path, and startup warns.
   developer_workbench: enabled
+  model_capability_detection:
+    fresh_ttl: 24h0m0s
+    retention: 720h0m0s
+    refresh_cooldown: 5m0s
+    total_timeout: 1m30s
+    global_concurrency: 4
+    provider_concurrency: 1
+    max_provider_calls: 8
+    create_rpm: 6
 
 usage:
   # "balanced" batches accounting writes; "strict" fsyncs every one of them,

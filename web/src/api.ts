@@ -14,6 +14,7 @@ import type {
   Provider,
   ProviderCapabilities,
   ProviderModelCatalog,
+  ModelCapabilityDetection,
   RedactionPolicy,
   RedactionTestResult,
   Route,
@@ -289,6 +290,14 @@ export const api = {
     const suffix = query.size ? `?${query.toString()}` : "";
     return request<ProviderModelCatalog>(`/providers/${encodeURIComponent(id)}/models${suffix}`).then((value) => value.data);
   },
+  createModelCapabilityDetection: (providerID: string, value: unknown, idempotencyKey: string) =>
+    request<ModelCapabilityDetection>(`/providers/${encodeURIComponent(providerID)}/model-capability-detections`, {
+      ...json("POST", value), headers: { "Idempotency-Key": idempotencyKey },
+    }).then((result) => result.data),
+  modelCapabilityDetection: (id: string) =>
+    request<ModelCapabilityDetection>(`/model-capability-detections/${encodeURIComponent(id)}`).then((result) => result.data),
+  cancelModelCapabilityDetection: (id: string, revision: number) =>
+    request<ModelCapabilityDetection>(`/model-capability-detections/${encodeURIComponent(id)}`, json("DELETE"), `"${revision}"`).then((result) => result.data),
   createProvider: (value: unknown) =>
     request<Provider>("/providers", json("POST", value)),
   updateProvider: (id: string, value: unknown, revision: number) =>

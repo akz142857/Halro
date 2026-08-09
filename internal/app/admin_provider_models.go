@@ -68,7 +68,11 @@ type degradedBinding struct {
 }
 
 type providerModelCatalogResponse struct {
-	Items            []adminProviderModel `json:"items"`
+	Items []adminProviderModel `json:"items"`
+	// CapabilityModels are reviewed catalog entries an operator may map an
+	// Azure Deployment or custom endpoint alias to. They are not upstream
+	// discovery results and selecting one remains an operator declaration.
+	CapabilityModels []adminProviderModel `json:"capability_models,omitempty"`
 	CatalogRevision  string               `json:"catalog_revision"`
 	DegradedBindings []degradedBinding    `json:"degraded_bindings,omitempty"`
 	FetchedAt        time.Time            `json:"fetched_at"`
@@ -105,6 +109,7 @@ func (r *Runtime) listAdminProviderModels(writer http.ResponseWriter, request *h
 		return
 	}
 	refresh := request.URL.Query().Get("refresh") == "true" || request.URL.Query().Get("refresh") == "1"
+	capabilityModels := capabilityModelTemplates(instance, bindings)
 
 	results := r.fetchProviderCatalogs(request.Context(), instance, bindings, refresh)
 	var degraded []degradedBinding
@@ -120,7 +125,7 @@ func (r *Runtime) listAdminProviderModels(writer http.ResponseWriter, request *h
 		}
 		reached++
 	}
-	if reached == 0 {
+	if reached == 0 && len(capabilityModels) == 0 {
 		errorClass := provider.ErrorUnknown
 		if len(degraded) > 0 {
 			errorClass = degraded[0].ErrorClass
@@ -130,7 +135,13 @@ func (r *Runtime) listAdminProviderModels(writer http.ResponseWriter, request *h
 		})
 		return
 	}
-	writeJSON(writer, http.StatusOK, aggregateProviderModels(instance, results, degraded))
+	response := aggregateProviderModels(instance, results, degraded)
+	response.CapabilityModels = capabilityModels
+	if response.FetchedAt.IsZero() {
+		response.FetchedAt = time.Now().UTC()
+		response.ExpiresAt = response.FetchedAt.Add(providerModelCatalogTTL)
+	}
+	writeJSON(writer, http.StatusOK, response)
 }
 
 // catalogProviderBindings returns the bindings whose catalogs make up the
@@ -317,6 +328,66 @@ func applySelectedCandidate(instance domain.ProviderInstance, model *adminProvid
 func modelCatalogKey(instance domain.ProviderInstance, binding domain.ProviderProfileBinding, model string) modelcatalog.Key {
 	return modelcatalog.Key{
 		ProviderType: instance.Type, Profile: binding.ProfileID, Model: model, Region: providerRegion(instance),
+	}
+}
+
+// capabilityModelTemplates projects the part of the builtin catalog that can
+// describe an operator-named target. Azure aliases map to reviewed OpenAI
+// entries; custom endpoint aliases map only to entries reviewed specifically
+// for Halro's conservative OpenAI-compatible profile.
+func capabilityModelTemplates(instance domain.ProviderInstance, bindings []domain.ProviderProfileBinding) []adminProviderModel {
+	providerType, profileID, ok := capabilityModelCatalogScope(instance.Type)
+	if !ok {
+		return nil
+	}
+	var templates []adminProviderModel
+	for _, entry := range modelcatalog.Builtin().Entries() {
+		if entry.Key.ProviderType != providerType || entry.Key.Profile != profileID || entry.Key.Region != "" || entry.Status != modelcatalog.StatusKnown {
+			continue
+		}
+		template := adminProviderModel{
+			ID: entry.Key.Model, Status: entry.Status, CapabilitySource: entry.Source,
+			Preselect: entry.Source.PreselectsCapabilities(), ModelRevision: entry.Revision(),
+		}
+		for _, binding := range bindings {
+			if !binding.Enabled {
+				continue
+			}
+			capabilities := modelcatalog.Clamp(entry.Capabilities, binding.Capabilities)
+			if !capabilities.AnyOperation() {
+				continue
+			}
+			template.ProfileCandidates = append(template.ProfileCandidates, modelProfileCandidate{
+				BindingID: binding.ID, ProfileID: binding.ProfileID, Status: modelcatalog.StatusKnown,
+				Capabilities: capabilities, ProfileCapabilities: binding.Capabilities,
+			})
+		}
+		if len(template.ProfileCandidates) == 0 {
+			continue
+		}
+		slices.SortFunc(template.ProfileCandidates, func(left, right modelProfileCandidate) int {
+			if count := capabilityCount(right.Capabilities) - capabilityCount(left.Capabilities); count != 0 {
+				return count
+			}
+			return strings.Compare(string(left.ProfileID), string(right.ProfileID))
+		})
+		template.ProfileCandidates[0].Selected = true
+		template.Capabilities = template.ProfileCandidates[0].Capabilities
+		template.CapabilityEvidence = domain.EvidenceForCapabilities(template.Capabilities, entry.Source.MaxEvidence())
+		templates = append(templates, template)
+	}
+	slices.SortFunc(templates, func(left, right adminProviderModel) int { return strings.Compare(left.ID, right.ID) })
+	return templates
+}
+
+func capabilityModelCatalogScope(providerType domain.ProviderType) (domain.ProviderType, domain.ProviderProfileID, bool) {
+	switch providerType {
+	case domain.ProviderAzureOpenAI:
+		return domain.ProviderOpenAI, domain.ProfileOpenAIChatEmbeddings, true
+	case domain.ProviderOpenAICompatible:
+		return domain.ProviderOpenAICompatible, domain.ProfileOpenAICompatible, true
+	default:
+		return "", "", false
 	}
 }
 

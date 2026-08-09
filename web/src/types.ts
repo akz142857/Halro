@@ -416,11 +416,36 @@ export interface DegradedBinding {
 
 export interface ProviderModelCatalog {
   items: ProviderModelDescriptor[];
+  /** Reviewed models that may describe an operator-named Azure Deployment or
+   * custom endpoint target. Selecting one is still an operator declaration. */
+  capability_models?: ProviderModelDescriptor[];
   catalog_revision: string;
   degraded_bindings?: DegradedBinding[];
   fetched_at: string;
   expires_at: string;
   cached: boolean;
+}
+
+export type CapabilityProbeStatus = "supported" | "unsupported" | "inconclusive" | "unavailable" | "unauthorized" | "not_probed" | "canceled";
+
+export interface ModelCapabilityDetection {
+  id: string;
+  status: "queued" | "running" | "completed" | "failed" | "canceled" | "interrupted";
+  source: "builtin_catalog" | "verified_probe";
+  provider_id: string;
+  provider_model: string;
+  binding_id: string;
+  profile_id: string;
+  provider_calls: number;
+  max_provider_calls: number;
+  started_at?: string;
+  completed_at?: string;
+  expires_at?: string;
+  cancel_requested_at?: string;
+  capabilities: Record<string, { status: CapabilityProbeStatus; evidence?: CapabilityEvidence; error_class?: string; probe_kind: string }>;
+  recommended_capabilities: ProviderCapabilities;
+  selection_revision?: string;
+  revision: number;
 }
 
 /** Whether a deployment's saved capability snapshot still describes something
@@ -752,19 +777,18 @@ export interface WritePathSummary {
 
 export interface SystemConfig {
   yaml: string;
-  summary: SystemConfigSection[];
+  entries: SystemConfigEntry[];
   time_context: TimeContext;
 }
 
-export interface SystemConfigSection {
-  id: string;
-  facts: SystemConfigFact[];
-}
-
-export interface SystemConfigFact {
-  id: string;
+export interface SystemConfigEntry {
+  path: string;
+  title_zh: string;
+  title_en: string;
+  description_zh: string;
+  description_en: string;
   value: string;
-  kind: "address" | "boolean" | "path" | "text";
+  kind: "boolean" | "collection" | "number" | "text";
 }
 
 export interface RuntimeSettings {

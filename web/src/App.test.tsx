@@ -64,7 +64,7 @@ describe("App first-run routing", () => {
     renderApp();
     expect(await screen.findByRole("heading", { name: "必须设置二次验证" })).toBeVisible();
     expect(screen.queryByRole("link", { name: /服务商/ })).not.toBeInTheDocument();
-    expect(screen.queryByText("变更管理员密码")).not.toBeInTheDocument();
+    expect(screen.queryByText("更改登录密码")).not.toBeInTheDocument();
   });
 });
 

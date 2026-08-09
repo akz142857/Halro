@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/akz142857/Halro/internal/domain"
 )
@@ -24,7 +25,23 @@ type capabilityMetrics struct {
 	drift             map[string]uint64
 	deploymentTests   map[string]uint64
 	revisionConflicts uint64
+	detections        map[detectionMetricKey]uint64
+	probes            map[probeMetricKey]uint64
+	detectionInflight map[string]int64
+	detectionCache    map[string]uint64
+	detectionCalls    map[string]uint64
+	detectionDuration map[detectionMetricKey]detectionDurationMetric
 }
+
+type detectionMetricKey struct{ ProviderType, Status, Source string }
+type probeMetricKey struct{ ProviderType, Capability, Status string }
+type detectionDurationMetric struct {
+	Count   uint64
+	Sum     float64
+	Buckets [6]uint64
+}
+
+var detectionDurationBounds = [6]float64{1, 5, 15, 30, 60, 90}
 
 type catalogRefreshKey struct {
 	ProviderType string
@@ -61,7 +78,44 @@ func newCapabilityMetrics() *capabilityMetrics {
 		catalogDegraded: make(map[catalogDegradedKey]uint64),
 		drift:           make(map[string]uint64),
 		deploymentTests: make(map[string]uint64),
+		detections:      make(map[detectionMetricKey]uint64), probes: make(map[probeMetricKey]uint64),
+		detectionInflight: make(map[string]int64), detectionCache: make(map[string]uint64),
+		detectionCalls: make(map[string]uint64), detectionDuration: make(map[detectionMetricKey]detectionDurationMetric),
 	}
+}
+
+func (m *capabilityMetrics) recordDetectionStart(providerType string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.detectionInflight[providerType]++
+}
+func (m *capabilityMetrics) recordDetectionFinish(providerType, status, source string, results map[string]domain.CapabilityProbeResult, calls int, duration time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := detectionMetricKey{providerType, status, source}
+	m.detections[key]++
+	if m.detectionInflight[providerType] > 0 {
+		m.detectionInflight[providerType]--
+	}
+	for capability, result := range results {
+		m.probes[probeMetricKey{providerType, capability, string(result.Status)}]++
+	}
+	m.detectionCalls[providerType] += uint64(calls)
+	seconds := duration.Seconds()
+	histogram := m.detectionDuration[key]
+	histogram.Count++
+	histogram.Sum += seconds
+	for index, bound := range detectionDurationBounds {
+		if seconds <= bound {
+			histogram.Buckets[index]++
+		}
+	}
+	m.detectionDuration[key] = histogram
+}
+func (m *capabilityMetrics) recordDetectionCache(status string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.detectionCache[status]++
 }
 
 func (m *capabilityMetrics) recordCatalogRefresh(providerType domain.ProviderType, profile domain.ProviderProfileID, ok bool) {
@@ -110,6 +164,12 @@ type capabilityMetricsSnapshot struct {
 	Drift             map[string]uint64
 	DeploymentTests   map[string]uint64
 	RevisionConflicts uint64
+	Detections        map[detectionMetricKey]uint64
+	Probes            map[probeMetricKey]uint64
+	DetectionInflight map[string]int64
+	DetectionCache    map[string]uint64
+	DetectionCalls    map[string]uint64
+	DetectionDuration map[detectionMetricKey]detectionDurationMetric
 }
 
 type catalogRefreshSample struct {
@@ -129,6 +189,9 @@ func (m *capabilityMetrics) snapshot() capabilityMetricsSnapshot {
 		Drift:             make(map[string]uint64, len(m.drift)),
 		DeploymentTests:   make(map[string]uint64, len(m.deploymentTests)),
 		RevisionConflicts: m.revisionConflicts,
+		Detections:        make(map[detectionMetricKey]uint64, len(m.detections)), Probes: make(map[probeMetricKey]uint64, len(m.probes)),
+		DetectionInflight: make(map[string]int64, len(m.detectionInflight)), DetectionCache: make(map[string]uint64, len(m.detectionCache)),
+		DetectionCalls: make(map[string]uint64, len(m.detectionCalls)), DetectionDuration: make(map[detectionMetricKey]detectionDurationMetric, len(m.detectionDuration)),
 	}
 	for key, count := range m.catalogRefresh {
 		snapshot.CatalogRefresh = append(snapshot.CatalogRefresh, catalogRefreshSample{key, count})
@@ -141,6 +204,24 @@ func (m *capabilityMetrics) snapshot() capabilityMetricsSnapshot {
 	}
 	for status, count := range m.deploymentTests {
 		snapshot.DeploymentTests[status] = count
+	}
+	for key, count := range m.detections {
+		snapshot.Detections[key] = count
+	}
+	for key, count := range m.probes {
+		snapshot.Probes[key] = count
+	}
+	for key, count := range m.detectionInflight {
+		snapshot.DetectionInflight[key] = count
+	}
+	for key, count := range m.detectionCache {
+		snapshot.DetectionCache[key] = count
+	}
+	for key, count := range m.detectionCalls {
+		snapshot.DetectionCalls[key] = count
+	}
+	for key, value := range m.detectionDuration {
+		snapshot.DetectionDuration[key] = value
 	}
 	slices.SortFunc(snapshot.CatalogRefresh, func(a, b catalogRefreshSample) int {
 		return cmp.Or(

@@ -16,7 +16,7 @@ import {
   type ReauthValues,
 } from "../components";
 import { money, useInstantFormatter } from "../format";
-import type { CapabilityPreflight, CapabilityReview, Deployment, DeploymentPriceVersion, DeploymentTargetKind, Provider, ProviderBinding, ProviderCapabilities, ProviderModelDescriptor } from "../types";
+import type { CapabilityPreflight, CapabilityReview, Deployment, DeploymentPriceVersion, DeploymentTargetKind, ModelCapabilityDetection, Provider, ProviderBinding, ProviderCapabilities, ProviderModelDescriptor } from "../types";
 import { useTranslation } from "react-i18next";
 import { useIsReadOnly } from "../session";
 import { Link } from "../navigation";
@@ -133,8 +133,8 @@ function DeploymentRow({
   onReplace: () => void;
 }) {
   const { t } = useTranslation();
-  const readOnly = useIsReadOnly();
   const dateTime = useInstantFormatter();
+  const readOnly = useIsReadOnly();
   const [expanded, setExpanded] = useState(false);
   const [pricing, setPricing] = useState(false);
 	const [confirmingRestore, setConfirmingRestore] = useState(false);
@@ -569,6 +569,7 @@ function DeploymentForm({
   onClose: () => void;
 }) {
   const { t } = useTranslation();
+  const dateTime = useInstantFormatter();
   const source = current ?? template;
   const enabledProviders = providers.filter((provider) => provider.enabled || provider.id === source?.provider_id);
   const [name, setName] = useState(current?.name ?? (template ? `${template.name} v2` : ""));
@@ -587,26 +588,76 @@ function DeploymentForm({
   // catalog does not cover is deployable, but the operator has to say what it
   // does — the profile ceiling is no longer a stand-in for an answer.
   const [catalogModel, setCatalogModel] = useState<ProviderModelDescriptor | null>(null);
+  const [capabilityDetection, setCapabilityDetection] = useState<ModelCapabilityDetection | null>(null);
+  const [manualDeclaration, setManualDeclaration] = useState(false);
+  const [selectionRevision, setSelectionRevision] = useState(() => crypto.randomUUID());
+  const detectionIdempotencyKey = useRef(crypto.randomUUID());
+  const appliedDetectionRevision = useRef(0);
   const [region, setRegion] = useState(source?.region ?? "");
   const [maxConcurrency, setMaxConcurrency] = useState(source?.max_concurrency ?? 0);
   const [targetKind, setTargetKind] = useState<DeploymentTargetKind>(source?.target_kind ?? defaultTargetKind(initialProvider));
   const queryClient = useQueryClient();
   // `current` rather than identityLocked: that is declared further down, and a
   // const in the temporal dead zone would throw here.
-  const declaredModel = !current && catalogModel?.status !== "known";
+  const capabilityModelMapping = !current && (targetKind === "azure_deployment" || targetKind === "custom_endpoint_model");
+  const declaredModel = !current && providerModel.trim() !== "" && catalogModel?.status !== "known";
+  const detectionQuery = useQuery({
+    queryKey: ["model-capability-detection", capabilityDetection?.id],
+    queryFn: () => api.modelCapabilityDetection(capabilityDetection!.id),
+    enabled: Boolean(capabilityDetection?.id && !["completed", "failed", "canceled", "interrupted"].includes(capabilityDetection.status)),
+    refetchInterval: 750,
+    retry: false,
+  });
+  const detection = detectionQuery.data ?? capabilityDetection;
+  useEffect(() => {
+    if (!detection || detection.revision <= appliedDetectionRevision.current) return;
+    setCapabilityDetection(detection);
+    if (detection.status === "completed") {
+      setCapabilities({ ...detection.recommended_capabilities });
+      setBindingID(detection.binding_id);
+      setManualDeclaration(false);
+    }
+    appliedDetectionRevision.current = detection.revision;
+  }, [detection]);
+  const resetDetection = () => {
+    setCapabilityDetection(null);
+    appliedDetectionRevision.current = 0;
+    detectionIdempotencyKey.current = crypto.randomUUID();
+    setSelectionRevision(crypto.randomUUID());
+    setManualDeclaration(false);
+  };
+  const detectCapabilities = useMutation({
+    mutationFn: () => api.createModelCapabilityDetection(providerID, {
+      provider_model: providerModel.trim(), target_kind: targetKind, region: region.trim(),
+      ...(bindingID ? { binding_id: bindingID } : {}), risk_tier: "safe_automatic",
+      selection_revision: selectionRevision,
+    }, detectionIdempotencyKey.current),
+    onSuccess: setCapabilityDetection,
+  });
+  const cancelDetection = useMutation({
+    mutationFn: () => api.cancelModelCapabilityDetection(detection!.id, detection!.revision),
+    onSuccess: setCapabilityDetection,
+  });
   const value = () => ({
     name: name.trim(),
     provider_id: providerID,
     ...(bindingID ? { binding_id: bindingID } : {}),
     provider_model: providerModel.trim(),
+    ...(capabilityModelMapping && catalogModel?.status === "known"
+      ? { capability_model: catalogModel.id }
+      : {}),
     target_kind: targetKind,
     capabilities,
     // Sent only for a model the catalog does not establish. The server rejects
     // an undeclared unknown model rather than assuming the ceiling.
-    ...(declaredModel ? { mode: "operator_declared" } : {}),
+    ...(declaredModel && manualDeclaration ? { mode: "operator_declared" } : {}),
+    ...(declaredModel && detection?.status === "completed" ? {
+      capability_detection_id: detection.id,
+      capability_detection_revision: detection.revision,
+    } : {}),
     // Echoing the revision the console read turns a catalog that moved
     // underneath into a conflict instead of a silent substitution.
-    ...(catalogModel?.model_revision && catalogModel.id === providerModel.trim()
+    ...(catalogModel?.model_revision && (capabilityModelMapping || catalogModel.id === providerModel.trim())
       ? { model_revision: catalogModel.model_revision }
       : {}),
     region: region.trim(),
@@ -669,7 +720,9 @@ function DeploymentForm({
   // the operator is the one making the claim.
   const catalogCeiling = current
     ? catalogEditCeiling(current)
-    : catalogModel?.status === "known" && catalogModel.id === providerModel.trim()
+    : detection?.status === "completed"
+      ? detection.recommended_capabilities
+      : catalogModel?.status === "known" && (capabilityModelMapping || catalogModel.id === providerModel.trim())
       ? catalogModel.capabilities
       : null;
   const bindingCeiling = pinnedBinding?.capabilities ?? unionCapabilities(selectableBindings);
@@ -694,6 +747,7 @@ function DeploymentForm({
     && ["openai", "deepseek", "openai_compatible", "bedrock"].includes(selectedProvider.type)
     && (targetKind === "model_id" || targetKind === "custom_endpoint_model" || targetKind === "bedrock_foundation_model"),
   );
+  const capabilityModelSupported = Boolean(!identityLocked && selectedProvider && capabilityModelMapping);
   // No binding filter: the catalog is the aggregate across every enabled
   // interface. Filtering it to one was what forced the operator to choose an
   // interface before they had chosen a model.
@@ -701,7 +755,7 @@ function DeploymentForm({
   const modelCatalog = useQuery({
     queryKey: modelCatalogKey,
     queryFn: () => api.providerModels(providerID),
-    enabled: modelCatalogSupported,
+    enabled: modelCatalogSupported || capabilityModelSupported,
     staleTime: 5 * 60 * 1000,
     retry: false,
   });
@@ -735,6 +789,7 @@ function DeploymentForm({
     activeOption?.scrollIntoView?.({ block: "nearest" });
   }, [activeModelIndex]);
   const chooseModel = (modelID: string) => {
+    resetDetection();
     setProviderModel(modelID);
     const model = modelCatalog.data?.items.find((item) => item.id === modelID) ?? null;
     setCatalogModel(model);
@@ -784,7 +839,7 @@ function DeploymentForm({
   const numericValues = [maxConcurrency, capabilities.max_context_tokens, capabilities.max_output_tokens];
   const tokenLimitsValid = capabilities.max_context_tokens === 0 || capabilities.max_output_tokens <= capabilities.max_context_tokens;
   const formValid = Boolean(name.trim() && providerID && providerModel.trim() && anyOperation && numericValues.every((value) => Number.isFinite(value) && value >= 0) && tokenLimitsValid);
-  const dirty = useDirty({ name, providerID, providerModel, bindingID, capabilities, region, maxConcurrency, targetKind });
+  const dirty = useDirty({ name, providerID, providerModel, capabilityModel: catalogModel?.id ?? "", bindingID, capabilities, region, maxConcurrency, targetKind });
   return (
     <Modal wide title={current ? t("deployments.edit") : template ? t("deployments.createReplacementTitle") : t("deployments.createTitle")} dirty={dirty} onClose={onClose}>
       {enabledProviders.length === 0 ? (
@@ -798,6 +853,7 @@ function DeploymentForm({
           <Field label={t("deployments.provider")}>
             <select required disabled={identityLocked} value={providerID} onChange={(event) => {
               const next = event.target.value;
+              resetDetection();
               setProviderID(next);
               const provider = enabledProviders.find((item) => item.id === next);
               if (provider) {
@@ -815,7 +871,7 @@ function DeploymentForm({
             </select>
           </Field>
           {availableTargetKinds.length > 1 && <Field label={t("deployments.targetKind")} hint={t("deployments.targetKindHint")}>
-            <select disabled={identityLocked} value={targetKind} onChange={(event) => { setTargetKind(event.target.value as DeploymentTargetKind); setProviderModel(""); }}>
+            <select disabled={identityLocked} value={targetKind} onChange={(event) => { resetDetection(); setTargetKind(event.target.value as DeploymentTargetKind); setProviderModel(""); setCatalogModel(null); setCapabilities(emptyCapabilities()); }}>
               {availableTargetKinds.map((kind) => <option value={kind} key={kind}>{t(`deployments.targetKinds.${kind}`)}</option>)}
             </select>
           </Field>}
@@ -836,10 +892,11 @@ function DeploymentForm({
                 onFocus={() => { if (modelCatalogSupported) setModelPickerOpen(true); }}
                 onClick={() => { if (modelCatalogSupported) setModelPickerOpen(true); }}
                 onChange={(event) => {
+                  resetDetection();
                   setProviderModel(event.target.value);
                   // A hand-typed identifier is not the model the catalog
                   // answered about; its resolution no longer applies.
-                  if (event.target.value !== catalogModel?.id) setCatalogModel(null);
+                  if (!capabilityModelMapping && event.target.value !== catalogModel?.id) setCatalogModel(null);
                   setModelPickerOpen(true);
                   setActiveModelIndex(-1);
                 }}
@@ -879,7 +936,9 @@ function DeploymentForm({
               <div className={`deployment-model-declaration ${declaredModel ? "declared" : "catalogued"}`} role="status">
                 {declaredModel
                   ? t("deployments.modelDeclarationRequired")
-                  : t("deployments.modelCataloguedCapabilities")}
+                  : capabilityModelMapping
+                    ? t("deployments.capabilityModelApplied")
+                    : t("deployments.modelCataloguedCapabilities")}
               </div>
             )}
             {modelCatalogSupported && modelCatalog.data?.degraded_bindings?.length ? (
@@ -907,13 +966,57 @@ function DeploymentForm({
               </div>
             )}
           </div>
-          {regional && <Field label={t("deployments.region")} hint={t("deployments.regionHint")}><input disabled={identityLocked} value={region} placeholder={t("deployments.regionAutomatic")} onChange={(event) => setRegion(event.target.value)} /></Field>}
+          {capabilityModelSupported && <Field label={t("deployments.capabilityModel")} hint={t("deployments.capabilityModelHint")}>
+            <select
+              value={catalogModel?.id ?? ""}
+              onChange={(event) => {
+                resetDetection();
+                const selectedModelID = event.target.value;
+                const model = modelCatalog.data?.capability_models?.find((item) => item.id === selectedModelID) ?? null;
+                setCatalogModel(model);
+                setCapabilities(model?.preselect ? { ...model.capabilities } : emptyCapabilities());
+                const selected = model?.profile_candidates.find((candidate) => candidate.selected);
+                if (selected?.binding_id) setBindingID(selected.binding_id);
+              }}
+            >
+              <option value="">{modelCatalog.isPending ? t("deployments.capabilityModelLoading") : t("deployments.capabilityModelUnknown")}</option>
+              {(modelCatalog.data?.capability_models ?? []).map((model) => (
+                <option key={model.model_revision} value={model.id}>{model.id}</option>
+              ))}
+            </select>
+          </Field>}
+          {regional && <Field label={t("deployments.region")} hint={t("deployments.regionHint")}><input disabled={identityLocked} value={region} placeholder={t("deployments.regionAutomatic")} onChange={(event) => { resetDetection(); setRegion(event.target.value); }} /></Field>}
           {identityLocked && <div className="notice"><strong>{t("deployments.targetLocked")}</strong><span>{t("deployments.targetLockedDescription")}</span></div>}
             </div>
           </section>
           <section className="deployment-form-section">
             <header><h3>{t("deployments.capabilitySection")}</h3><p>{t("deployments.capabilitySectionDescription")}</p></header>
-            <div className="capability-disclosure capability-advanced">
+            {!current && declaredModel && !manualDeclaration && (
+              <div className="capability-detection-panel" aria-live="polite">
+                {!detection && <>
+                  <div className="notice warning"><strong>{t("deployments.detectionUnknownTitle")}</strong><span>{t("deployments.detectionCostBoundary", { count: 8 })}</span></div>
+                  <div className="form-actions">
+                    <button type="button" className="button primary" disabled={!providerModel.trim() || detectCapabilities.isPending} onClick={() => detectCapabilities.mutate()}>{t("deployments.confirmAndDetect")}</button>
+                    <button type="button" className="button ghost" onClick={() => { setManualDeclaration(true); setCapabilities(emptyCapabilities()); }}>{t("deployments.advancedManualDeclaration")}</button>
+                  </div>
+                </>}
+                {detection && (detection.status === "queued" || detection.status === "running") && <>
+                  <div className="notice"><strong>{t("deployments.detectingCapabilities", { completed: Object.values(detection.capabilities).filter((result) => result.status !== "not_probed").length, total: detection.max_provider_calls })}</strong><span>{t("deployments.detectionCancelCost")}</span></div>
+                  <button type="button" className="button ghost" disabled={cancelDetection.isPending} onClick={() => cancelDetection.mutate()}>{t("deployments.cancelDetection")}</button>
+                </>}
+                {detection?.status === "completed" && <div className="notice success"><strong>{t("deployments.detectionCompleted", { count: deploymentCapabilityNames.filter((name) => detection.recommended_capabilities[name]).length })}</strong><span>{detection.source === "builtin_catalog" ? t("deployments.detectionCatalogEvidence") : t("deployments.detectionVerifiedEvidence")}</span></div>}
+                {detection && ["failed", "canceled", "interrupted"].includes(detection.status) && <div className="notice warning"><strong>{t(`deployments.detectionStatus.${detection.status}`)}</strong><span>{t("deployments.detectionRetryOrManual")}</span><div className="form-actions"><button type="button" className="button primary" onClick={resetDetection}>{t("deployments.retryDetection")}</button><button type="button" className="button ghost" onClick={() => { resetDetection(); setManualDeclaration(true); }}>{t("deployments.advancedManualDeclaration")}</button></div></div>}
+                {detection && Object.keys(detection.capabilities).length > 0 && <div className="detection-results" role="list" aria-label={t("deployments.detectionResults")}>
+                  {Object.entries(detection.capabilities).sort(([a], [b]) => a.localeCompare(b)).map(([name, result]) => <div role="listitem" key={name}>
+                    <span>{t(`capabilities.${name}`)}</span>
+                    <strong className={`detection-result ${result.status}`}>{t(`deployments.detectionProbeStatus.${result.status}`)}</strong>
+                  </div>)}
+                </div>}
+                {detection?.status === "completed" && detection.expires_at && <small className="technical">{t("deployments.detectionFreshUntil", { date: dateTime(detection.expires_at) })}</small>}
+                {(detectCapabilities.isError || detectionQuery.isError || cancelDetection.isError) && <ErrorState error={detectCapabilities.error || detectionQuery.error || cancelDetection.error} />}
+              </div>
+            )}
+            {(!declaredModel || manualDeclaration || detection?.status === "completed") && <div className="capability-disclosure capability-advanced">
               <header><span>{t("providers.advancedCapabilities")}</span><strong>{t("providers.selectedCapabilities", { count: selectedCapabilityNames.length })}</strong></header>
               <p className="capability-advanced-note">{t("deployments.inheritedCapabilitiesHint")}</p>
               <fieldset className="deployment-capabilities capability-grid" id="deployment-capability-editor">
@@ -933,8 +1036,8 @@ function DeploymentForm({
                   );
                 })}
               </fieldset>
-            </div>
-            {!anyOperation && <div className="notice warning"><span>{t("deployments.operationRequired")}</span></div>}
+            </div>}
+            {!anyOperation && (manualDeclaration || !declaredModel || detection?.status === "completed") && <div className="notice warning"><span>{t("deployments.operationRequired")}</span></div>}
             {selectionSpansInterfaces && <div className="notice warning"><strong>{t("deployments.selectionSpansInterfaces")}</strong><span>{t("deployments.selectionSpansInterfacesDescription")}</span></div>}
             {selectableBindings.length > 1 && (
               <details className="capability-disclosure capability-advanced">
@@ -947,6 +1050,7 @@ function DeploymentForm({
                   <Field label={t("deployments.binding")} hint={t("deployments.bindingHint")}>
                     <select disabled={identityLocked} value={bindingID} onChange={(event) => {
                       const next = event.target.value;
+                      resetDetection();
                       setBindingID(next);
                       // Pinning an interface changes the ceiling the answer was
                       // given against, so the answer does not carry over.

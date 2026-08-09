@@ -46,6 +46,11 @@ func Default() Config {
 			LoginRPM:           5,
 			MFAPolicy:          "optional",
 			DeveloperWorkbench: "enabled",
+			ModelCapabilityDetection: ModelCapabilityDetection{
+				FreshTTL: Duration(24 * time.Hour), Retention: Duration(30 * 24 * time.Hour),
+				RefreshCooldown: Duration(5 * time.Minute), TotalTimeout: Duration(90 * time.Second),
+				GlobalConcurrency: 4, ProviderConcurrency: 1, MaxProviderCalls: 8, CreateRPM: 6,
+			},
 		},
 		Usage: Usage{
 			Durability:             "balanced",

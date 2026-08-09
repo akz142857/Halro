@@ -5,7 +5,7 @@ import { MIN_PASSWORD_CHARACTERS, passwordCharacterCount } from "../password";
 import { api } from "../api";
 import { ErrorState, Field } from "../components";
 
-export function PasswordChangeForm() {
+export function PasswordChangeForm({ username = "" }: { username?: string }) {
   const { t } = useTranslation();
   const [editing, setEditing] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
@@ -39,7 +39,7 @@ export function PasswordChangeForm() {
   return (
     <section className="panel settings-card password-settings">
       <header className="panel-header">
-        <div><p className="eyebrow">{t("navigation.localAdmin")}</p><h3>{t("settings.changePassword")}</h3><p>{t("settings.otherSessionsEnd")}</p></div>
+        <div><p className="eyebrow">{t("settings.currentAccount")}{username ? ` · ${username}` : ""}</p><h3>{t("settings.changePassword")}</h3><p>{t("settings.otherSessionsEnd")}</p></div>
         {!editing && <button type="button" className="button" onClick={() => setEditing(true)}>{t("settings.changePassword")}</button>}
       </header>
       {mutation.isSuccess && <div className="notice success" role="status"><strong>{t("settings.passwordChanged")}</strong></div>}

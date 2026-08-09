@@ -19,7 +19,8 @@ func TestSmokeEnvironmentDoesNotExposeOtherMatrixProfiles(t *testing.T) {
 		"BASE_URL": "https://api.openai.com/v1", "API_KEY": "selected-secret", "MODEL": "model", "EMBEDDING_MODEL": "embedding",
 	})
 	joined := strings.Join(environment, "\n")
-	if strings.Contains(joined, "other-secret") || !strings.Contains(joined, "HALRO_SMOKE_API_KEY=selected-secret") {
+	if strings.Contains(joined, "other-secret") || !strings.Contains(joined, "HALRO_SMOKE_API_KEY=selected-secret") ||
+		!strings.Contains(joined, "HALRO_SMOKE_CAPABILITY_DETECTION=1") {
 		t.Fatalf("unexpected child environment: %s", scrubOutput(joined, map[string]string{"API_KEY": "selected-secret"}))
 	}
 }

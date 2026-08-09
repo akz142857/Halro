@@ -113,6 +113,12 @@ an authentication boundary.
 | `halro_capability_drift_total` | counter | `reason` |
 | `halro_model_revision_conflicts_total` | counter | none |
 | `halro_deployment_test_total` | counter | `status` |
+| `halro_model_capability_detection_total` | counter | `provider_type`, `status`, `source` |
+| `halro_model_capability_probe_total` | counter | `provider_type`, `capability`, `status` |
+| `halro_model_capability_detection_inflight` | gauge | `provider_type` |
+| `halro_model_capability_detection_cache_total` | counter | `status` |
+| `halro_model_capability_detection_provider_calls_total` | counter | `provider_type` |
+| `halro_model_capability_detection_duration_seconds` | classic histogram | `provider_type`, `status`, `source`, `le` |
 | `halro_deployment_capability_status` | gauge | `state` |
 | `halro_operator_declared_deployments` | gauge | none |
 | `halro_metrics_auth_failures_total` | counter | none |
@@ -142,6 +148,15 @@ The pair is therefore expected to disagree after a restart: a freshly started
 instance can report thousands of requests and zero WAL appends without anything
 being wrong. `rate()` over either is unaffected; only an absolute comparison
 between the two families is meaningless.
+
+The model-capability detection families are process-local control-plane
+counters. A possibly billable probe is durably reserved in the detection
+record before provider I/O, while these metrics describe activity observed by
+the current process. `source` is the bounded evidence source
+(`builtin_catalog` or `verified_probe`); `capability` is one of the compiled
+`ProviderCapabilities` field names. No model, provider instance, binding,
+detection, administrator, request, or credential identifier is used as a
+label. Duration buckets are 1, 5, 15, 30, 60, and 90 seconds plus `+Inf`.
 
 
 `halro_deployment_capability_status` and `halro_operator_declared_deployments`

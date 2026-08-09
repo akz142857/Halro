@@ -48,9 +48,10 @@ Rules the catalog holds to:
 - **A `/models` response is existence, not capability.** `provider.ModelLister`
   returns identifiers and no capability claims; nothing in the catalog is
   derived from one.
-- **Unknown means zero.** A model with no entry resolves to `unknown` with no
-  capabilities, never to the profile ceiling. The operator declares what it does
-  before it can serve.
+- **Unknown means zero until evidence exists.** A model with no entry resolves
+  to `unknown` with no capabilities, never to the profile ceiling. An explicit
+  safe capability detection may create `verified_probe` evidence; the advanced
+  fallback remains an operator declaration.
 - **Exact model matching.** A prefix or family rule must never promote an
   unknown future model to known capabilities. An entry with no region applies to
   every region, which is itself a claim that the capability does not vary by
@@ -60,9 +61,10 @@ Rules the catalog holds to:
   source that says nothing about a capability does not veto another's evidence,
   which is why claims carry asserted-supported and asserted-unsupported
   separately.
-- **Only the builtin catalog pre-selects.** Provider metadata is external input;
-  it may inform a claim but never arrives pre-checked, and no source but an
-  explicit probe may claim `verified` evidence.
+- **Only reviewed builtin entries and successful verified probes pre-select.**
+  Provider metadata is external input and never arrives pre-checked. A verified
+  probe is an explicit administrator-triggered, fixed-protocol control-plane
+  job; only its `supported` results may be pre-selected.
 - **Nothing widens a profile.** Every merge is clamped to the ceiling, so
   upstream metadata cannot loosen the deliberately pinned Gemini, Bedrock, or
   Bedrock Mantle Beta limits.
@@ -78,9 +80,10 @@ on the same release path as the profile ceilings they must stay under. There is
 no second embedded data format and no runtime catalog fetch.
 
 The consequence is deliberate: a model Halro has not shipped an entry for is
-`unknown` until either a release adds one or the operator declares it. The
-manual model-ID path therefore stays available permanently — it is the escape
-hatch for anything the catalog does not yet cover.
+`unknown` until an explicit fixed-protocol detection establishes it, a release
+adds it, or the operator uses the advanced declaration. The manual model-ID
+path stays available permanently as the escape hatch for targets that cannot
+be detected.
 
 An entry is added only against evidence. The shipped seed covers the four
 profiles that already pin exactly one model each — Titan Text Embeddings V2,

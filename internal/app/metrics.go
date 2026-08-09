@@ -511,6 +511,70 @@ func writeCapabilityMetrics(output *bufio.Writer, snapshot capabilityMetricsSnap
 		fmt.Fprintf(output, "halro_deployment_test_total{status=%s} %d\n",
 			strconv.Quote(status), snapshot.DeploymentTests[status])
 	}
+	detectionKeys := make([]detectionMetricKey, 0, len(snapshot.Detections))
+	for key := range snapshot.Detections {
+		detectionKeys = append(detectionKeys, key)
+	}
+	sort.Slice(detectionKeys, func(i, j int) bool {
+		a, b := detectionKeys[i], detectionKeys[j]
+		return a.ProviderType+a.Status+a.Source < b.ProviderType+b.Status+b.Source
+	})
+	metricHeader(output, "halro_model_capability_detection_total", "counter", "Model capability detections by bounded provider type, terminal status, and source.")
+	for _, key := range detectionKeys {
+		fmt.Fprintf(output, "halro_model_capability_detection_total{provider_type=%s,status=%s,source=%s} %d\n", strconv.Quote(key.ProviderType), strconv.Quote(key.Status), strconv.Quote(key.Source), snapshot.Detections[key])
+	}
+	probeKeys := make([]probeMetricKey, 0, len(snapshot.Probes))
+	for key := range snapshot.Probes {
+		probeKeys = append(probeKeys, key)
+	}
+	sort.Slice(probeKeys, func(i, j int) bool {
+		a, b := probeKeys[i], probeKeys[j]
+		return a.ProviderType+a.Capability+a.Status < b.ProviderType+b.Capability+b.Status
+	})
+	metricHeader(output, "halro_model_capability_probe_total", "counter", "Capability probe classifications by bounded provider type and capability.")
+	for _, key := range probeKeys {
+		fmt.Fprintf(output, "halro_model_capability_probe_total{provider_type=%s,capability=%s,status=%s} %d\n", strconv.Quote(key.ProviderType), strconv.Quote(key.Capability), strconv.Quote(key.Status), snapshot.Probes[key])
+	}
+	providerTypes := make([]string, 0, len(snapshot.DetectionInflight))
+	for key := range snapshot.DetectionInflight {
+		providerTypes = append(providerTypes, key)
+	}
+	sort.Strings(providerTypes)
+	metricHeader(output, "halro_model_capability_detection_inflight", "gauge", "Currently running model capability detection jobs by provider type.")
+	for _, providerType := range providerTypes {
+		fmt.Fprintf(output, "halro_model_capability_detection_inflight{provider_type=%s} %d\n", strconv.Quote(providerType), snapshot.DetectionInflight[providerType])
+	}
+	cacheStatuses := make([]string, 0, len(snapshot.DetectionCache))
+	for key := range snapshot.DetectionCache {
+		cacheStatuses = append(cacheStatuses, key)
+	}
+	sort.Strings(cacheStatuses)
+	metricHeader(output, "halro_model_capability_detection_cache_total", "counter", "Capability detection cache lookups by outcome.")
+	for _, status := range cacheStatuses {
+		fmt.Fprintf(output, "halro_model_capability_detection_cache_total{status=%s} %d\n", strconv.Quote(status), snapshot.DetectionCache[status])
+	}
+	callProviders := make([]string, 0, len(snapshot.DetectionCalls))
+	for key := range snapshot.DetectionCalls {
+		callProviders = append(callProviders, key)
+	}
+	sort.Strings(callProviders)
+	metricHeader(output, "halro_model_capability_detection_provider_calls_total", "counter", "Provider calls made by control-plane capability detection.")
+	for _, providerType := range callProviders {
+		fmt.Fprintf(output, "halro_model_capability_detection_provider_calls_total{provider_type=%s} %d\n", strconv.Quote(providerType), snapshot.DetectionCalls[providerType])
+	}
+	metricHeader(output, "halro_model_capability_detection_duration_seconds", "histogram", "Duration of model capability detections by provider type and terminal status.")
+	for _, key := range detectionKeys {
+		histogram, ok := snapshot.DetectionDuration[key]
+		if !ok {
+			continue
+		}
+		for index, bound := range detectionDurationBounds {
+			fmt.Fprintf(output, "halro_model_capability_detection_duration_seconds_bucket{provider_type=%s,status=%s,source=%s,le=%s} %d\n", strconv.Quote(key.ProviderType), strconv.Quote(key.Status), strconv.Quote(key.Source), strconv.Quote(strconv.FormatFloat(bound, 'f', -1, 64)), histogram.Buckets[index])
+		}
+		fmt.Fprintf(output, "halro_model_capability_detection_duration_seconds_bucket{provider_type=%s,status=%s,source=%s,le=%s} %d\n", strconv.Quote(key.ProviderType), strconv.Quote(key.Status), strconv.Quote(key.Source), strconv.Quote("+Inf"), histogram.Count)
+		fmt.Fprintf(output, "halro_model_capability_detection_duration_seconds_sum{provider_type=%s,status=%s,source=%s} %g\n", strconv.Quote(key.ProviderType), strconv.Quote(key.Status), strconv.Quote(key.Source), histogram.Sum)
+		fmt.Fprintf(output, "halro_model_capability_detection_duration_seconds_count{provider_type=%s,status=%s,source=%s} %d\n", strconv.Quote(key.ProviderType), strconv.Quote(key.Status), strconv.Quote(key.Source), histogram.Count)
+	}
 	// Both gauges describe stored records, so when the store could not be read
 	// there is no value to publish. They are omitted rather than zeroed: a
 	// scrape gap is what "we do not know" looks like in Prometheus, and it

@@ -102,12 +102,24 @@ const (
 )
 
 type Admin struct {
-	SessionTTL         Duration `yaml:"session_ttl"`
-	IdleTimeout        Duration `yaml:"idle_timeout"`
-	LoginRPM           int      `yaml:"login_rpm"`
-	ExternalOrigin     string   `yaml:"external_origin"`
-	MFAPolicy          string   `yaml:"mfa_policy"`
-	DeveloperWorkbench string   `yaml:"developer_workbench"`
+	SessionTTL               Duration                 `yaml:"session_ttl"`
+	IdleTimeout              Duration                 `yaml:"idle_timeout"`
+	LoginRPM                 int                      `yaml:"login_rpm"`
+	ExternalOrigin           string                   `yaml:"external_origin"`
+	MFAPolicy                string                   `yaml:"mfa_policy"`
+	DeveloperWorkbench       string                   `yaml:"developer_workbench"`
+	ModelCapabilityDetection ModelCapabilityDetection `yaml:"model_capability_detection"`
+}
+
+type ModelCapabilityDetection struct {
+	FreshTTL            Duration `yaml:"fresh_ttl"`
+	Retention           Duration `yaml:"retention"`
+	RefreshCooldown     Duration `yaml:"refresh_cooldown"`
+	TotalTimeout        Duration `yaml:"total_timeout"`
+	GlobalConcurrency   int      `yaml:"global_concurrency"`
+	ProviderConcurrency int      `yaml:"provider_concurrency"`
+	MaxProviderCalls    int      `yaml:"max_provider_calls"`
+	CreateRPM           int      `yaml:"create_rpm"`
 }
 
 type Gateway struct {
@@ -448,6 +460,31 @@ func (c *Config) Normalize() error {
 	if c.Admin.DeveloperWorkbench == "" {
 		c.Admin.DeveloperWorkbench = "enabled"
 	}
+	defaultDetection := Default().Admin.ModelCapabilityDetection
+	if c.Admin.ModelCapabilityDetection.FreshTTL == 0 {
+		c.Admin.ModelCapabilityDetection.FreshTTL = defaultDetection.FreshTTL
+	}
+	if c.Admin.ModelCapabilityDetection.Retention == 0 {
+		c.Admin.ModelCapabilityDetection.Retention = defaultDetection.Retention
+	}
+	if c.Admin.ModelCapabilityDetection.RefreshCooldown == 0 {
+		c.Admin.ModelCapabilityDetection.RefreshCooldown = defaultDetection.RefreshCooldown
+	}
+	if c.Admin.ModelCapabilityDetection.TotalTimeout == 0 {
+		c.Admin.ModelCapabilityDetection.TotalTimeout = defaultDetection.TotalTimeout
+	}
+	if c.Admin.ModelCapabilityDetection.GlobalConcurrency == 0 {
+		c.Admin.ModelCapabilityDetection.GlobalConcurrency = defaultDetection.GlobalConcurrency
+	}
+	if c.Admin.ModelCapabilityDetection.ProviderConcurrency == 0 {
+		c.Admin.ModelCapabilityDetection.ProviderConcurrency = defaultDetection.ProviderConcurrency
+	}
+	if c.Admin.ModelCapabilityDetection.MaxProviderCalls == 0 {
+		c.Admin.ModelCapabilityDetection.MaxProviderCalls = defaultDetection.MaxProviderCalls
+	}
+	if c.Admin.ModelCapabilityDetection.CreateRPM == 0 {
+		c.Admin.ModelCapabilityDetection.CreateRPM = defaultDetection.CreateRPM
+	}
 	return nil
 }
 
@@ -654,6 +691,14 @@ func (c Config) Validate(opts LoadOptions) error {
 	}
 	if c.Admin.MFAPolicy != "optional" && c.Admin.MFAPolicy != "required" {
 		return errors.New("admin.mfa_policy must be optional or required")
+	}
+	detection := c.Admin.ModelCapabilityDetection
+	if detection.FreshTTL <= 0 || detection.Retention < detection.FreshTTL || detection.RefreshCooldown <= 0 ||
+		detection.TotalTimeout <= 0 || detection.TotalTimeout > Duration(2*time.Minute) ||
+		detection.GlobalConcurrency < 1 || detection.ProviderConcurrency < 1 ||
+		detection.ProviderConcurrency > detection.GlobalConcurrency || detection.MaxProviderCalls < 1 || detection.MaxProviderCalls > 8 ||
+		detection.CreateRPM < 1 || detection.CreateRPM > 60 {
+		problems = append(problems, errors.New("admin.model_capability_detection limits are invalid"))
 	}
 	if c.Admin.ExternalOrigin != "" {
 		origin, err := url.Parse(c.Admin.ExternalOrigin)
