@@ -3,9 +3,18 @@ import { ApiError } from "../api";
 
 export function localizedError(t: TFunction, error: unknown) {
   if (!(error instanceof ApiError)) return t("errors.network");
-  if (error.code === "deployment_price_unavailable") {
-    return t("errors.deploymentPriceUnavailable");
-  }
+  const codeMessages: Record<string, string> = {
+    deployment_price_unavailable: "errors.deploymentPriceUnavailable",
+    capability_detection_stale: "errors.capabilityDetectionStale",
+    capability_detection_changed: "errors.capabilityDetectionChanged",
+    capability_detection_target_mismatch: "errors.capabilityDetectionTargetMismatch",
+    capabilities_exceed_detection: "errors.capabilitiesExceedDetection",
+    capability_detection_cooldown: "errors.capabilityDetectionCooldown",
+    capability_detection_rate_limited: "errors.capabilityDetectionRateLimited",
+    no_detectable_binding: "errors.noDetectableBinding",
+    idempotency_conflict: "errors.idempotencyConflict",
+  };
+  if (error.code && codeMessages[error.code]) return t(codeMessages[error.code]);
   if (error.status === 400 || error.status === 422) return t("errors.badRequest");
   if (error.status === 401) return t("errors.authentication");
   if (error.status === 403) return t("errors.forbidden");

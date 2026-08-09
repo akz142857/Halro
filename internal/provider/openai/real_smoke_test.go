@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/openaiapi"
 	"github.com/akz142857/Halro/internal/provider"
 	"github.com/akz142857/Halro/internal/semantic"
@@ -105,24 +106,71 @@ func TestRealProviderSmoke(t *testing.T) {
 	}
 
 	embeddingModel := os.Getenv("HALRO_SMOKE_EMBEDDING_MODEL")
-	if embeddingModel == "" {
-		return
+	if embeddingModel != "" {
+		if !capabilities.Embeddings {
+			t.Fatal("embedding model was configured for a profile without embeddings")
+		}
+		embedding, err := adapter.Embed(ctx, provider.EmbeddingCall{
+			RequestID: "smoke_embedding", ProviderModel: embeddingModel,
+			Request: openaiapi.EmbeddingRequest{
+				Model: embeddingModel, Input: json.RawMessage(`["smoke"]`),
+			},
+		})
+		if err != nil {
+			t.Fatalf("embedding failed: %s", smokeErrorClass(err))
+		}
+		if len(embedding.Data) == 0 {
+			t.Fatal("embedding returned no vectors")
+		}
 	}
-	if !capabilities.Embeddings {
-		t.Fatal("embedding model was configured for a profile without embeddings")
+	if os.Getenv("HALRO_SMOKE_CAPABILITY_DETECTION") == "1" {
+		runRealCapabilityDetection(t, adapter, profile, model)
 	}
-	embedding, err := adapter.Embed(ctx, provider.EmbeddingCall{
-		RequestID: "smoke_embedding", ProviderModel: embeddingModel,
-		Request: openaiapi.EmbeddingRequest{
-			Model: embeddingModel, Input: json.RawMessage(`["smoke"]`),
-		},
-	})
+}
+
+func runRealCapabilityDetection(t *testing.T, adapter *Adapter, profile, model string) {
+	providerType := domain.ProviderType(profile)
+	profileID := map[string]domain.ProviderProfileID{
+		"openai": domain.ProfileOpenAIChatEmbeddings, "azure_openai": domain.ProfileAzureChatEmbeddings,
+		"deepseek": domain.ProfileDeepSeekChat, "openai_compatible": domain.ProfileOpenAICompatible,
+	}[profile]
+	manifest, ok := provider.BuiltinProfile(profileID)
+	if !ok {
+		t.Fatal("capability detection profile is not registered")
+	}
+	bridge, err := provider.NewLegacyAdapterBridge(adapter, manifest,
+		domain.EvidenceForCapabilities(domain.DefaultProviderCapabilitiesForProfile(providerType, profileID), domain.EvidenceDeclared))
 	if err != nil {
-		t.Fatalf("embedding failed: %s", smokeErrorClass(err))
+		t.Fatal("capability detector construction failed")
 	}
-	if len(embedding.Data) == 0 {
-		t.Fatal("embedding returned no vectors")
+	target := provider.ModelCapabilityDetectionTarget{ProviderModel: model, BindingID: "real-matrix", ProfileID: profileID, RiskTier: "safe_automatic"}
+	plan, err := bridge.CapabilityDetectionPlan(target)
+	if err != nil || plan.MaxCalls > 8 || len(plan.Probes) > 8 {
+		t.Fatal("capability detection plan is invalid")
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	supported, chatSupported := 0, false
+	for _, probe := range plan.Probes {
+		if probe.PersistentEffect || !probe.MayBill {
+			t.Fatal("capability detection plan contains an unsafe probe")
+		}
+		result := bridge.DetectCapability(ctx, target, probe)
+		if !result.Status.Valid() {
+			t.Fatal("capability detection returned an invalid classification")
+		}
+		if result.Status == domain.ProbeSupported {
+			supported++
+			chatSupported = chatSupported || probe.Capability == "chat"
+		}
+	}
+	if !chatSupported {
+		t.Fatal("capability detection did not verify chat for the configured model")
+	}
+	// This is the only detection evidence written to test output: bounded counts
+	// and an explicit explanation for the absent stable negative model. No model,
+	// prompt, output, provider error body, request ID, or credential is logged.
+	t.Logf("capability detection passed: calls=%d supported=%d stable_negative=not_configured", len(plan.Probes), supported)
 }
 
 func int64Pointer(value int64) *int64 {

@@ -97,17 +97,17 @@ describe("PasswordChangeForm", () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><PasswordChangeForm /></QueryClientProvider>);
 
-    fireEvent.click(screen.getByRole("button", { name: "变更管理员密码" }));
+    fireEvent.click(screen.getByRole("button", { name: "更改登录密码" }));
     const [current, next, confirmation] = screen.getAllByLabelText(/密码/);
     fireEvent.change(current, { target: { value: "old secure password" } });
     fireEvent.change(next, { target: { value: "new secure password" } });
     fireEvent.change(confirmation, { target: { value: "different password" } });
-    fireEvent.click(screen.getByRole("button", { name: "变更管理员密码" }));
+    fireEvent.click(screen.getByRole("button", { name: "更改登录密码" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("不一致");
     expect(change).not.toHaveBeenCalled();
 
     fireEvent.change(confirmation, { target: { value: "new secure password" } });
-    fireEvent.click(screen.getByRole("button", { name: "变更管理员密码" }));
+    fireEvent.click(screen.getByRole("button", { name: "更改登录密码" }));
     await waitFor(() => expect(change).toHaveBeenCalledWith("old secure password", "new secure password"));
     expect(await screen.findByRole("status")).toHaveTextContent("会话已安全轮换");
     expect(current).not.toBeInTheDocument();
@@ -232,6 +232,29 @@ describe("MFASettings", () => {
   });
 });
 
+describe("SettingsPage account security pane", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    window.history.replaceState({}, "", "/");
+  });
+
+  it("binds self-service security actions to the signed-in account regardless of role", async () => {
+    vi.spyOn(api, "mfaStatus").mockResolvedValue({ enabled: false, policy: "optional", authenticators: [] });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    client.setQueryData(["session"], {
+      username: "auditor", role: "read_only", locale: "system", appearance: "light",
+      csrf_token: "csrf", absolute_expires_at: "x", idle_expires_at: "x",
+    });
+    window.history.replaceState({}, "", "/admin/settings/security");
+    render(<QueryClientProvider client={client}><SettingsPage /></QueryClientProvider>);
+
+    expect(await screen.findAllByText("当前账户 · auditor")).toHaveLength(2);
+    expect(screen.getByRole("button", { name: "更改登录密码" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "身份验证器二次验证" })).toBeInTheDocument();
+    expect(screen.queryByText("管理员密码")).not.toBeInTheDocument();
+  });
+});
+
 // 系统配置 is its own pane, a sibling of the others in the settings nav, not a
 // card at the bottom of one. Moving it means the query moves too: left enabled
 // on a pane that no longer renders the card it would fetch for nobody, and the
@@ -242,18 +265,14 @@ describe("SettingsPage system configuration pane", () => {
     window.history.replaceState({}, "", "/");
   });
 
-  it("shows semantic effective values and keeps the complete YAML collapsed", async () => {
+  it("shows a searchable annotated config list and keeps the complete YAML collapsed", async () => {
     const systemConfig = vi.spyOn(api, "systemConfig").mockResolvedValue({
       yaml: "server:\n  gateway_listen: 127.0.0.1:8080\n",
-      summary: [
-        { id: "network", facts: [
-          { id: "gateway_listen", value: "127.0.0.1:8080", kind: "address" },
-          { id: "admin_listen", value: "127.0.0.1:8081", kind: "address" },
-        ] },
-        { id: "transport", facts: [
-          { id: "tls_enabled", value: "false", kind: "boolean" },
-          { id: "tls_cert_file", value: "", kind: "path" },
-        ] },
+      entries: [
+        { path: "server.gateway_listen", title_zh: "Gateway 监听地址", title_en: "Gateway listen address", description_zh: "Gateway 接收模型请求的监听地址。", description_en: "Listener address for model requests.", value: "127.0.0.1:8080", kind: "text" },
+        { path: "server.admin_listen", title_zh: "管理端监听地址", title_en: "Admin listen address", description_zh: "Admin API 与管理界面的监听地址。", description_en: "Listener address for Admin.", value: "127.0.0.1:8081", kind: "text" },
+        { path: "tls.enabled", title_zh: "Gateway TLS", title_en: "Gateway TLS", description_zh: "是否启用 TLS。", description_en: "Enables TLS.", value: "false", kind: "boolean" },
+        { path: "tls.cert_file", title_zh: "TLS 证书文件", title_en: "TLS certificate file", description_zh: "证书链文件路径。", description_en: "Certificate chain path.", value: "", kind: "text" },
       ],
     } as never);
     window.history.replaceState({}, "", "/admin/settings/config");
@@ -267,8 +286,16 @@ describe("SettingsPage system configuration pane", () => {
     // only the pane can produce rather than on the label.
     expect(await screen.findByText("127.0.0.1:8080")).toBeInTheDocument();
     expect(document.querySelector("#effective-config-title")).toHaveTextContent("系统配置");
+    expect(document.querySelectorAll(".config-entry")).toHaveLength(4);
+    expect(screen.queryByText("网络")).not.toBeInTheDocument();
+    expect(screen.getByText("Gateway 接收模型请求的监听地址。")).toBeInTheDocument();
+    expect(screen.getByText("server.gateway_listen")).toBeInTheDocument();
+    expect(screen.getByText("tls.enabled")).toBeInTheDocument();
     expect(screen.getByText("未启用")).toBeInTheDocument();
     expect(screen.getByText("未配置")).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText("搜索名称、字段路径、说明或值"), { target: { value: "tls.enabled" } });
+    expect(document.querySelectorAll(".config-entry")).toHaveLength(1);
+    expect(screen.getByText("显示 1 / 4 项")).toBeInTheDocument();
     const yamlDetails = document.querySelector(".config-preview");
     expect(yamlDetails).not.toHaveAttribute("open");
     fireEvent.click(screen.getByText("有效配置 YAML"));

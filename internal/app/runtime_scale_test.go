@@ -32,7 +32,10 @@ const (
 	// the metrics renderer — the same shape as usage, ledger and alerts. The
 	// alternative shape available here is a process global, as the KMS metrics
 	// use, and that one leaks across Runtime lifecycles and across tests.
-	runtimeFieldBudget = 67
+	// 68: capabilityDetections. The persistent control-plane job manager owns
+	// one bounded semaphore set and cancellation registry; grouping it keeps the
+	// Runtime surface to one subsystem rather than four coordination fields.
+	runtimeFieldBudget = 68
 	runtimeMutexBudget = 11
 )
 

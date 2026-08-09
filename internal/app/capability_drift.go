@@ -137,7 +137,7 @@ func reviewCapabilities(deployment domain.Deployment, binding domain.ProviderPro
 		// contradict the create path, which lets an explicit declaration exceed
 		// the catalog. A deployment that can be created must not be withheld by
 		// the next restart.
-		if snapshot.Source != string(modelcatalog.SourceOperatorDeclared) {
+		if snapshot.Source != string(modelcatalog.SourceOperatorDeclared) && snapshot.Source != string(modelcatalog.SourceVerifiedProbe) {
 			review.State = domain.CapabilityReviewDrifted
 			review.Reason = reviewReasonCatalogNarrowed
 			review.NoLongerSupported = modelcatalog.LostCapabilities(snapshot.Capabilities, entry.Capabilities)
@@ -153,7 +153,7 @@ func reviewCapabilities(deployment domain.Deployment, binding domain.ProviderPro
 	}
 	review.State = domain.CapabilityReviewAvailable
 	review.Reason = reviewReasonCatalogAdvanced
-	if snapshot.Source == string(modelcatalog.SourceOperatorDeclared) {
+	if snapshot.Source == string(modelcatalog.SourceOperatorDeclared) || snapshot.Source == string(modelcatalog.SourceVerifiedProbe) {
 		review.Reason = reviewReasonCatalogNowCovers
 	}
 	review.setOffered(deployment, modelcatalog.Clamp(entry.Capabilities, binding.Capabilities))

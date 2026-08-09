@@ -111,8 +111,8 @@ describe("admin accessibility baseline", () => {
     expect(screen.getByRole("link", { name: "通用" })).toHaveAttribute("aria-current", "page");
     fireEvent.click(screen.getByRole("link", { name: "登录与安全" }));
     expect(await screen.findByRole("link", { name: "登录与安全" })).toHaveAttribute("aria-current", "page");
-    fireEvent.click(screen.getByRole("button", { name: /变更管理员密码|Change administrator password/ }));
-    await screen.findByRole("heading", { name: /变更管理员密码|Change administrator password/ });
+    fireEvent.click(screen.getByRole("button", { name: /更改登录密码|Change sign-in password/ }));
+    await screen.findByRole("heading", { name: /更改登录密码|Change sign-in password/ });
     const nextPassword = document.querySelector<HTMLInputElement>('input[autocomplete="new-password"]');
     expect(nextPassword).not.toBeNull();
     const description = nextPassword!.getAttribute("aria-describedby");

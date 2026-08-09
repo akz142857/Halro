@@ -22,7 +22,7 @@ func assertMetricsExpositionContract(t *testing.T, body string) {
 	allowedLabels := map[string]struct{}{
 		"le": {}, "status": {}, "direction": {}, "reason": {}, "provider_type": {},
 		"provider_id": {}, "deployment_id": {}, "version": {}, "commit": {},
-		"operation": {}, "error_class": {}, "purpose": {}, "state": {},
+		"operation": {}, "error_class": {}, "purpose": {}, "state": {}, "capability": {},
 		// Capability profile IDs are a fixed set compiled into the binary.
 		"profile": {},
 		// Constant for the life of a process; they identify the node's time

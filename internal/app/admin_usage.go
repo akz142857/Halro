@@ -1,14 +1,16 @@
 package app
 
 import (
+	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
+	referenceconfigs "github.com/akz142857/Halro/configs"
 	"github.com/akz142857/Halro/internal/budget"
 	"github.com/akz142857/Halro/internal/buildinfo"
-	"github.com/akz142857/Halro/internal/config"
 	"github.com/akz142857/Halro/internal/domain"
 	gatewaycore "github.com/akz142857/Halro/internal/gateway"
 	"github.com/akz142857/Halro/internal/ledger"
@@ -410,10 +412,9 @@ func (r *Runtime) adminSystemStatus(writer http.ResponseWriter, request *http.Re
 }
 
 // adminSystemConfig renders the effective, normalized config.yaml back as
-// YAML for the Settings > Diagnostics preview. It re-marshals the in-memory
-// Config rather than reading the file from disk: the struct is the schema
-// boundary (config.Decode rejects unknown fields), so nothing can end up in
-// this response that wasn't already validated into a known, non-secret field.
+// YAML and a field-level reference for Settings > System configuration. Values
+// come from the normalized in-memory Config; operator names, descriptions, and
+// ordering come from the annotated example embedded at build time.
 func (r *Runtime) adminSystemConfig(writer http.ResponseWriter, request *http.Request) {
 	timing, ok := r.writeTimeContext(writer, time.Now())
 	if !ok {
@@ -426,56 +427,119 @@ func (r *Runtime) adminSystemConfig(writer http.ResponseWriter, request *http.Re
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"yaml":         string(rendered),
-		"summary":      summarizeSystemConfig(r.config),
+		"entries":      describeSystemConfig(referenceconfigs.ExampleYAML, rendered),
 		"time_context": timing,
 	})
 }
 
-// systemConfigSection is intentionally a small presentation contract rather
-// than a JSON rendering of config.Config. The typed Config remains the schema
-// boundary, while this list identifies the startup facts an operator most often
-// needs. New config fields still appear in the complete YAML immediately; they
-// enter this summary only after their operator meaning is deliberately named.
-type systemConfigSection struct {
-	ID    string             `json:"id"`
-	Facts []systemConfigFact `json:"facts"`
+type systemConfigEntry struct {
+	Path          string `json:"path"`
+	TitleZH       string `json:"title_zh"`
+	TitleEN       string `json:"title_en"`
+	DescriptionZH string `json:"description_zh"`
+	DescriptionEN string `json:"description_en"`
+	Value         string `json:"value"`
+	Kind          string `json:"kind"`
 }
 
-type systemConfigFact struct {
-	ID    string `json:"id"`
-	Value string `json:"value"`
-	Kind  string `json:"kind"`
-}
-
-func summarizeSystemConfig(cfg config.Config) []systemConfigSection {
-	boolean := func(value bool) string { return strconv.FormatBool(value) }
-	return []systemConfigSection{
-		{ID: "network", Facts: []systemConfigFact{
-			{ID: "gateway_listen", Value: cfg.Server.GatewayListen, Kind: "address"},
-			{ID: "admin_listen", Value: cfg.Server.AdminListen, Kind: "address"},
-			{ID: "metrics_listen", Value: cfg.Server.MetricsListen, Kind: "address"},
-		}},
-		{ID: "transport", Facts: []systemConfigFact{
-			{ID: "tls_enabled", Value: boolean(cfg.TLS.Enabled), Kind: "boolean"},
-			{ID: "tls_cert_file", Value: cfg.TLS.CertFile, Kind: "path"},
-			{ID: "tls_key_file", Value: cfg.TLS.KeyFile, Kind: "path"},
-		}},
-		{ID: "storage", Facts: []systemConfigFact{
-			{ID: "data_dir", Value: cfg.Storage.DataDir, Kind: "path"},
-			{ID: "metadata_file", Value: cfg.Storage.MetadataFile, Kind: "path"},
-			{ID: "master_key_mode", Value: cfg.Storage.MasterKey.Mode, Kind: "text"},
-		}},
-		{ID: "security", Facts: []systemConfigFact{
-			{ID: "private_provider_endpoints", Value: boolean(cfg.Security.AllowPrivateProviderEndpoints), Kind: "boolean"},
-			{ID: "private_webhooks", Value: boolean(cfg.Security.AllowPrivateWebhooks), Kind: "boolean"},
-			{ID: "trust_proxy_headers", Value: boolean(cfg.Security.TrustProxyHeaders), Kind: "boolean"},
-		}},
-		{ID: "metrics", Facts: []systemConfigFact{
-			{ID: "metrics_enabled", Value: boolean(cfg.Metrics.Enabled), Kind: "boolean"},
-			{ID: "metrics_require_auth", Value: boolean(cfg.Metrics.RequireAuth), Kind: "boolean"},
-			{ID: "metrics_tls_enabled", Value: boolean(cfg.Metrics.TLS.Enabled), Kind: "boolean"},
-		}},
+func describeSystemConfig(reference, effective []byte) []systemConfigEntry {
+	var referenceDoc, effectiveDoc yaml.Node
+	if yaml.Unmarshal(reference, &referenceDoc) != nil || yaml.Unmarshal(effective, &effectiveDoc) != nil || len(referenceDoc.Content) == 0 || len(effectiveDoc.Content) == 0 {
+		return nil
 	}
+	effectiveValues := make(map[string]*yaml.Node)
+	collectConfigLeaves(effectiveDoc.Content[0], "", func(path string, node *yaml.Node) { effectiveValues[path] = node })
+	entries := make([]systemConfigEntry, 0, len(effectiveValues))
+	seen := make(map[string]bool, len(effectiveValues))
+	collectConfigLeaves(referenceDoc.Content[0], "", func(path string, node *yaml.Node) {
+		value, ok := effectiveValues[path]
+		if !ok {
+			return
+		}
+		metadata := configCommentMetadata(node.HeadComment)
+		entries = append(entries, systemConfigEntry{
+			Path: path, TitleZH: metadata["title.zh-CN"], TitleEN: metadata["title.en-US"],
+			DescriptionZH: metadata["description.zh-CN"], DescriptionEN: metadata["description.en-US"],
+			Value: configNodeValue(value), Kind: configNodeKind(value),
+		})
+		seen[path] = true
+	})
+	// Fail visibly instead of hiding a valid Config field when its reference
+	// annotation is temporarily missing. CI tests keep this fallback exceptional.
+	var extra []string
+	for path := range effectiveValues {
+		if !seen[path] {
+			extra = append(extra, path)
+		}
+	}
+	sort.Strings(extra)
+	for _, path := range extra {
+		value := effectiveValues[path]
+		entries = append(entries, systemConfigEntry{Path: path, Value: configNodeValue(value), Kind: configNodeKind(value)})
+	}
+	return entries
+}
+
+func collectConfigLeaves(node *yaml.Node, prefix string, visit func(string, *yaml.Node)) {
+	if node.Kind != yaml.MappingNode {
+		visit(prefix, node)
+		return
+	}
+	for index := 0; index+1 < len(node.Content); index += 2 {
+		key, value := node.Content[index], node.Content[index+1]
+		path := key.Value
+		if prefix != "" {
+			path = prefix + "." + path
+		}
+		if value.Kind == yaml.MappingNode {
+			collectConfigLeaves(value, path, visit)
+		} else {
+			// Comments written above a key belong to the key node in yaml.v3.
+			if value.HeadComment == "" {
+				value.HeadComment = key.HeadComment
+			}
+			visit(path, value)
+		}
+	}
+}
+
+func configCommentMetadata(comment string) map[string]string {
+	metadata := make(map[string]string)
+	for _, line := range strings.Split(comment, "\n") {
+		line = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "#"))
+		if !strings.HasPrefix(line, "@") {
+			continue
+		}
+		key, value, ok := strings.Cut(strings.TrimPrefix(line, "@"), " ")
+		if ok {
+			metadata[key] = strings.TrimSpace(value)
+		}
+	}
+	return metadata
+}
+
+func configNodeValue(node *yaml.Node) string {
+	if node.Kind == yaml.ScalarNode {
+		return node.Value
+	}
+	rendered, err := yaml.Marshal(node)
+	if err != nil {
+		return fmt.Sprint(node.Value)
+	}
+	return strings.TrimSpace(string(rendered))
+}
+
+func configNodeKind(node *yaml.Node) string {
+	if node.Kind == yaml.SequenceNode || node.Kind == yaml.MappingNode {
+		return "collection"
+	}
+	if node.Tag == "!!bool" {
+		return "boolean"
+	}
+	if node.Tag == "!!int" || node.Tag == "!!float" {
+		return "number"
+	}
+	return "text"
 }
 
 func (r *Runtime) syncUsageAdmin(writer http.ResponseWriter, request *http.Request) bool {

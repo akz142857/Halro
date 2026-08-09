@@ -206,9 +206,12 @@ In this order:
    "configured" — the plaintext is never shown again.
 2. **Providers → Provider**: choose the type, base URL, credential and
    capability ceiling, then run the connection test.
-3. **Deployments**: enter the real upstream model name, the subset of
-   capabilities to expose, a concurrency ceiling, and input/output prices in USD
-   per million tokens.
+3. **Deployments**: enter the real upstream model name. Catalog models apply
+   reviewed capabilities directly; for an unknown model, explicitly confirm
+   the bounded capability detection and retain only the verified capabilities
+   you need. Then set concurrency and input/output prices in USD per million
+   tokens. The cost and recovery boundaries are documented in the
+   [capability-detection guide](model-capability-detection.zh-CN.md).
 4. **Routes**: create a public model alias such as `chat`, bind it to the
    deployment, and choose ordered fallback or round robin.
 5. **Projects**: set the allowed model aliases, RPM, TPM, maximum concurrency,

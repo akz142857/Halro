@@ -1,106 +1,433 @@
+# @title.zh-CN 配置版本
+# @title.en-US Configuration version
+# @description.zh-CN 配置文件的结构版本。
+# @description.en-US Schema version of this configuration file.
 version: 1
 
 server:
+  # @title.zh-CN Gateway 监听地址
+  # @title.en-US Gateway listen address
+  # @description.zh-CN Gateway 接收模型请求的监听地址。
+  # @description.en-US Listener address for model requests.
   gateway_listen: "127.0.0.1:8080"
+  # @title.zh-CN 管理端监听地址
+  # @title.en-US Admin listen address
+  # @description.zh-CN Admin API 与管理界面的监听地址。
+  # @description.en-US Listener address for the Admin API and console.
   admin_listen: "127.0.0.1:8081"
+  # @title.zh-CN 指标监听地址
+  # @title.en-US Metrics listen address
+  # @description.zh-CN Prometheus 指标服务的监听地址。
+  # @description.en-US Listener address for the Prometheus metrics service.
   metrics_listen: "127.0.0.1:9090"
+  # @title.zh-CN 请求头读取超时
+  # @title.en-US Header read timeout
+  # @description.zh-CN 完整读取入站请求头允许的最长时间。
+  # @description.en-US Maximum time allowed to read inbound request headers.
   read_header_timeout: 5s
+  # @title.zh-CN 请求体读取超时
+  # @title.en-US Body read timeout
+  # @description.zh-CN 完整读取入站请求体允许的最长时间。
+  # @description.en-US Maximum time allowed to read an inbound request body.
   read_body_timeout: 15s
+  # @title.zh-CN 最大请求头大小
+  # @title.en-US Maximum header size
+  # @description.zh-CN 单个请求头允许的最大字节数。
+  # @description.en-US Maximum header bytes accepted for one request.
   max_header_bytes: 32768
+  # @title.zh-CN 最大请求大小
+  # @title.en-US Maximum request size
+  # @description.zh-CN 单个非流式请求允许的最大字节数。
+  # @description.en-US Maximum bytes accepted for one non-streaming request.
   max_request_bytes: 10485760
 
 tls:
+  # @title.zh-CN Gateway TLS
+  # @title.en-US Gateway TLS
+  # @description.zh-CN 是否为 Gateway 入站连接启用 TLS。
+  # @description.en-US Enables TLS for inbound Gateway connections.
   enabled: false
+  # @title.zh-CN TLS 证书文件
+  # @title.en-US TLS certificate file
+  # @description.zh-CN Gateway TLS 证书链文件路径。
+  # @description.en-US Path to the Gateway TLS certificate chain.
   cert_file: ""
+  # @title.zh-CN TLS 私钥文件
+  # @title.en-US TLS private-key file
+  # @description.zh-CN Gateway TLS 私钥文件路径。
+  # @description.en-US Path to the Gateway TLS private key.
   key_file: ""
 
 storage:
+  # @title.zh-CN 数据目录
+  # @title.en-US Data directory
+  # @description.zh-CN Halro 持久化运行数据的根目录。
+  # @description.en-US Root directory for Halro runtime data.
   data_dir: "./data"
+  # @title.zh-CN 元数据文件
+  # @title.en-US Metadata file
+  # @description.zh-CN 相对于数据目录的元数据库文件名。
+  # @description.en-US Metadata database filename relative to the data directory.
   metadata_file: "halro.db"
   master_key:
+    # @title.zh-CN 主密钥来源
+    # @title.en-US Master-key source
+    # @description.zh-CN 主密钥由本地文件或外部密钥槽提供。
+    # @description.en-US Selects a local file or external key slots as the master-key source.
     mode: file
+    # @title.zh-CN 主密钥文件
+    # @title.en-US Master-key file
+    # @description.zh-CN file 模式使用的主密钥文件路径。
+    # @description.en-US Master-key file path used in file mode.
     file: "./master.key"
 
 admin:
+  # @title.zh-CN 会话有效期
+  # @title.en-US Session lifetime
+  # @description.zh-CN 管理员会话可存续的最长时间。
+  # @description.en-US Maximum lifetime of an administrator session.
   session_ttl: "8h"
+  # @title.zh-CN 会话空闲超时
+  # @title.en-US Session idle timeout
+  # @description.zh-CN 无操作后管理员会话失效的时间。
+  # @description.en-US Inactivity period after which an administrator session expires.
   idle_timeout: "30m"
+  # @title.zh-CN 登录速率限制
+  # @title.en-US Login rate limit
+  # @description.zh-CN 每分钟允许的管理员登录尝试数。
+  # @description.en-US Administrator login attempts allowed per minute.
   login_rpm: 5
+  # @title.zh-CN MFA 策略
+  # @title.en-US MFA policy
+  # @description.zh-CN 管理员多因素认证的实例策略。
+  # @description.en-US Instance policy for administrator multi-factor authentication.
   mfa_policy: "optional"
   # "disabled" keeps the Admin listener free of data-plane traffic. Leave it
   # enabled for a loopback-only Admin listener; set "disabled" once that
   # listener is reachable from elsewhere, because network controls applied to
   # the Gateway listener do not cover this path. Startup warns when it matters.
+  # @title.zh-CN 开发者工作台
+  # @title.en-US Developer workbench
+  # @description.zh-CN 控制 Admin 监听端上的真实 Gateway 调试入口。
+  # @description.en-US Controls the real Gateway workbench on the Admin listener.
   developer_workbench: "enabled"
+  # @title.zh-CN 管理端外部地址
+  # @title.en-US Admin external origin
+  # @description.zh-CN 浏览器访问 Admin 时使用的规范外部源地址。
+  # @description.en-US Canonical external origin used to access Admin in a browser.
   external_origin: ""
+  # Capability checks run only after an administrator explicitly confirms a
+  # model. They may make billable provider calls and never run on input/change.
+  model_capability_detection:
+    # @title.zh-CN 检测结果新鲜期
+    # @title.en-US Detection freshness
+    # @description.zh-CN 能力检测结果无需重新检测的有效时间。
+    # @description.en-US Time a capability result remains fresh without retesting.
+    fresh_ttl: "24h"
+    # @title.zh-CN 检测记录保留期
+    # @title.en-US Detection retention
+    # @description.zh-CN 能力检测记录的保留时间。
+    # @description.en-US Retention period for capability detection records.
+    retention: "720h"
+    # @title.zh-CN 刷新冷却时间
+    # @title.en-US Refresh cooldown
+    # @description.zh-CN 同一模型两次手动刷新之间的最短间隔。
+    # @description.en-US Minimum interval between manual refreshes for one model.
+    refresh_cooldown: "5m"
+    # @title.zh-CN 检测总超时
+    # @title.en-US Detection timeout
+    # @description.zh-CN 一次能力检测任务允许的总执行时间。
+    # @description.en-US Total execution time allowed for one capability detection.
+    total_timeout: "90s"
+    # @title.zh-CN 全局检测并发
+    # @title.en-US Global detection concurrency
+    # @description.zh-CN 实例同时运行的能力检测任务上限。
+    # @description.en-US Maximum capability detections running across the instance.
+    global_concurrency: 4
+    # @title.zh-CN 服务商检测并发
+    # @title.en-US Provider detection concurrency
+    # @description.zh-CN 单个服务商同时运行的能力检测任务上限。
+    # @description.en-US Maximum concurrent detections for one provider.
+    provider_concurrency: 1
+    # @title.zh-CN 最大服务商调用数
+    # @title.en-US Maximum provider calls
+    # @description.zh-CN 单次检测允许发起的计费服务商调用上限。
+    # @description.en-US Maximum billable provider calls allowed per detection.
+    max_provider_calls: 8
+    # @title.zh-CN 每管理员创建速率
+    # @title.en-US Creation rate per administrator
+    # @description.zh-CN 每位管理员每分钟可启动的新检测任务上限；目录、缓存和幂等复用不计入。
+    # @description.en-US Maximum new detection jobs per administrator per minute; catalog, cache, and idempotent reuse do not count.
+    create_rpm: 6
 
 usage:
+  # @title.zh-CN 用量持久性
+  # @title.en-US Usage durability
+  # @description.zh-CN 用量写入在延迟与持久性之间采用的策略。
+  # @description.en-US Durability policy balancing usage-write latency and persistence.
   durability: "balanced"
+  # @title.zh-CN 记账时区
+  # @title.en-US Accounting timezone
+  # @description.zh-CN 用量账期和日界线采用的 IANA 时区。
+  # @description.en-US IANA timezone used for usage periods and day boundaries.
   timezone: "Asia/Shanghai"
+  # @title.zh-CN WAL 队列容量
+  # @title.en-US WAL queue capacity
+  # @description.zh-CN 等待写入用量 WAL 的记录容量。
+  # @description.en-US Record capacity of the pending usage WAL queue.
   wal_queue_capacity: 4096
+  # @title.zh-CN WAL 最大批次
+  # @title.en-US WAL maximum batch
+  # @description.zh-CN 单次 WAL 持久化处理的最大记录数。
+  # @description.en-US Maximum records persisted in one WAL batch.
   wal_max_batch: 128
+  # @title.zh-CN WAL 刷新间隔
+  # @title.en-US WAL flush interval
+  # @description.zh-CN 未满批次等待持久化的最长时间。
+  # @description.en-US Maximum time a partial WAL batch waits before persistence.
   wal_flush_interval: "2ms"
+  # @title.zh-CN 分析队列容量
+  # @title.en-US Analytics queue capacity
+  # @description.zh-CN 等待分析处理的用量记录容量。
+  # @description.en-US Capacity of usage records waiting for analytics processing.
   analytics_queue_capacity: 4096
+  # @title.zh-CN 检查点间隔
+  # @title.en-US Checkpoint interval
+  # @description.zh-CN 用量状态生成持久化检查点的频率。
+  # @description.en-US Frequency at which durable usage checkpoints are created.
   checkpoint_interval: "1m"
+  # @title.zh-CN 分区写入间隔
+  # @title.en-US Partition write interval
+  # @description.zh-CN 聚合用量写入分析分区的频率。
+  # @description.en-US Frequency at which aggregated usage is written to analytics partitions.
   parquet_interval: "1h"
+  # @title.zh-CN 用量保留天数
+  # @title.en-US Usage retention days
+  # @description.zh-CN 本地分析用量数据保留的天数。
+  # @description.en-US Days local analytical usage data is retained.
   retention_days: 90
   # parquet (default) or ndjson (ADR 0017, docs/adr/0017-usage-export-format.md).
+  # @title.zh-CN 用量导出格式
+  # @title.en-US Usage export format
+  # @description.zh-CN 新用量分区采用的容器格式，不重写已有分区。
+  # @description.en-US Container format for new usage partitions; existing partitions are not rewritten.
   export_format: "parquet"
 
 gateway:
+  # @title.zh-CN 路由总超时
+  # @title.en-US Route total timeout
+  # @description.zh-CN 一次 Gateway 请求跨所有尝试允许的总时间。
+  # @description.en-US Total time allowed across all attempts for one Gateway request.
   route_total_timeout: 120s
+  # @title.zh-CN 价格时钟回退容差
+  # @title.en-US Pricing rollback tolerance
+  # @description.zh-CN 价格选择时间允许向后偏移的安全容差。
+  # @description.en-US Safe tolerance for backward movement in pricing selection time.
   pricing_clock_rollback_tolerance: 2s
+  # @title.zh-CN 价格时钟前移容差
+  # @title.en-US Pricing forward tolerance
+  # @description.zh-CN 价格选择时间允许超前于当前时钟的容差。
+  # @description.en-US Tolerance for pricing selection time being ahead of the current clock.
   pricing_clock_forward_tolerance: 30s
+  # @title.zh-CN 未知价格策略
+  # @title.en-US Unknown pricing policy
+  # @description.zh-CN 无法确定有效价格时采用的失败策略。
+  # @description.en-US Failure policy used when no valid price can be established.
   pricing_unknown_policy: reject
+  # @title.zh-CN 连接尝试超时
+  # @title.en-US Attempt connect timeout
+  # @description.zh-CN 单次上游尝试建立连接允许的时间。
+  # @description.en-US Time allowed to establish an upstream connection per attempt.
   attempt_connect_timeout: 5s
+  # @title.zh-CN 响应头超时
+  # @title.en-US Response header timeout
+  # @description.zh-CN 单次上游尝试等待响应头的最长时间。
+  # @description.en-US Maximum time an upstream attempt waits for response headers.
   attempt_response_header_timeout: 60s
+  # @title.zh-CN 流空闲超时
+  # @title.en-US Stream idle timeout
+  # @description.zh-CN 流式响应无数据活动后终止连接的时间。
+  # @description.en-US Inactivity period after which a streaming response is terminated.
   stream_idle_timeout: 60s
+  # @title.zh-CN 下游写入超时
+  # @title.en-US Downstream write timeout
+  # @description.zh-CN 向客户端写入单次响应数据允许的时间。
+  # @description.en-US Time allowed for an individual response write to the client.
   downstream_write_timeout: 15s
+  # @title.zh-CN 流最长持续时间
+  # @title.en-US Maximum stream duration
+  # @description.zh-CN 单个流式请求允许保持活动的最长时间。
+  # @description.en-US Maximum lifetime allowed for one streaming request.
   stream_max_duration: 10m
+  # @title.zh-CN 最大总尝试次数
+  # @title.en-US Maximum total attempts
+  # @description.zh-CN 一次请求跨路由目标允许的尝试总数。
+  # @description.en-US Total attempts allowed across route targets for one request.
   max_total_attempts: 3
+  # @title.zh-CN 健康探测间隔
+  # @title.en-US Health probe interval
+  # @description.zh-CN 后台探测部署健康状态的时间间隔。
+  # @description.en-US Interval between background deployment health probes.
   health_probe_interval: 30s
   # Per-source admission, applied before authentication. Set requests_per_minute
   # to 0 to disable; addresses beyond max_tracked_sources share a single budget
   # so the limiter itself stays bounded.
   source_rate_limit:
+    # @title.zh-CN 来源每分钟请求数
+    # @title.en-US Source requests per minute
+    # @description.zh-CN 身份认证前单个来源地址的每分钟请求预算，0 表示禁用。
+    # @description.en-US Pre-authentication request budget per source address; zero disables it.
     requests_per_minute: 600
+    # @title.zh-CN 最大来源跟踪数
+    # @title.en-US Maximum tracked sources
+    # @description.zh-CN 独立跟踪限流状态的来源地址数量上限。
+    # @description.en-US Maximum source addresses tracked with independent rate-limit state.
     max_tracked_sources: 16384
 
 retry:
+  # @title.zh-CN 单目标最大尝试次数
+  # @title.en-US Maximum attempts per target
+  # @description.zh-CN 对同一上游目标允许的最大尝试次数。
+  # @description.en-US Maximum attempts allowed against one upstream target.
   max_attempts_per_target: 2
+  # @title.zh-CN 重试基础延迟
+  # @title.en-US Retry base delay
+  # @description.zh-CN 计算退避时间使用的初始延迟。
+  # @description.en-US Initial delay used to calculate retry backoff.
   base_delay: 100ms
+  # @title.zh-CN 重试最大延迟
+  # @title.en-US Retry maximum delay
+  # @description.zh-CN 单次重试退避允许达到的最大时间。
+  # @description.en-US Maximum delay allowed for one retry backoff.
   max_delay: 2s
+  # @title.zh-CN 重试随机抖动
+  # @title.en-US Retry jitter
+  # @description.zh-CN 是否为重试退避加入随机抖动。
+  # @description.en-US Adds randomized jitter to retry backoff.
   jitter: true
 
 circuit_breaker:
+  # @title.zh-CN 连续失败阈值
+  # @title.en-US Consecutive failure threshold
+  # @description.zh-CN 触发断路器打开所需的连续失败次数。
+  # @description.en-US Consecutive failures required to open the circuit breaker.
   consecutive_failures: 5
+  # @title.zh-CN 断路器打开时间
+  # @title.en-US Circuit open duration
+  # @description.zh-CN 断路器进入半开状态前保持打开的时间。
+  # @description.en-US Time the circuit remains open before entering half-open state.
   open_duration: 30s
+  # @title.zh-CN 半开探测请求数
+  # @title.en-US Half-open probe requests
+  # @description.zh-CN 半开状态允许同时执行的探测请求数。
+  # @description.en-US Probe requests allowed concurrently in half-open state.
   half_open_max_requests: 1
 
 alerts:
+  # @title.zh-CN 告警队列容量
+  # @title.en-US Alert queue capacity
+  # @description.zh-CN 等待分发的告警事件容量。
+  # @description.en-US Capacity of alert events waiting for dispatch.
   queue_capacity: 1024
+  # @title.zh-CN 告警工作线程
+  # @title.en-US Alert workers
+  # @description.zh-CN 并行投递告警的工作线程数。
+  # @description.en-US Workers delivering alerts concurrently.
   workers: 2
+  # @title.zh-CN 告警投递超时
+  # @title.en-US Alert delivery timeout
+  # @description.zh-CN 单次告警投递允许的最长时间。
+  # @description.en-US Maximum time allowed for one alert delivery.
   timeout: 5s
+  # @title.zh-CN 告警最大尝试次数
+  # @title.en-US Alert maximum attempts
+  # @description.zh-CN 单条告警投递允许的最大尝试次数。
+  # @description.en-US Maximum delivery attempts allowed for one alert.
   max_attempts: 3
+  # @title.zh-CN 告警重试基础延迟
+  # @title.en-US Alert retry base delay
+  # @description.zh-CN 告警投递重试的初始退避时间。
+  # @description.en-US Initial backoff delay for alert delivery retries.
   base_delay: 250ms
+  # @title.zh-CN 告警重试最大延迟
+  # @title.en-US Alert retry maximum delay
+  # @description.zh-CN 告警投递重试的最大退避时间。
+  # @description.en-US Maximum backoff delay for alert delivery retries.
   max_delay: 5s
+  # @title.zh-CN 告警去重冷却时间
+  # @title.en-US Alert deduplication cooldown
+  # @description.zh-CN 相同告警再次允许投递前的冷却时间。
+  # @description.en-US Cooldown before an identical alert may be delivered again.
   dedup_cooldown: 1m
 
 security:
+  # @title.zh-CN 服务商私网访问
+  # @title.en-US Private provider access
+  # @description.zh-CN 是否允许服务商端点解析或连接私有网络地址。
+  # @description.en-US Allows provider endpoints to resolve or connect to private network addresses.
   allow_private_provider_endpoints: false
+  # @title.zh-CN Webhook 私网访问
+  # @title.en-US Private webhook access
+  # @description.zh-CN 是否允许 Webhook 目标解析或连接私有网络地址。
+  # @description.en-US Allows webhook targets to resolve or connect to private network addresses.
   allow_private_webhooks: false
+  # @title.zh-CN 信任代理请求头
+  # @title.en-US Trust proxy headers
+  # @description.zh-CN 是否从可信代理发送的转发头读取客户端地址。
+  # @description.en-US Reads client addresses from forwarding headers sent by trusted proxies.
   trust_proxy_headers: false
+  # @title.zh-CN 可信代理网段
+  # @title.en-US Trusted proxy CIDRs
+  # @description.zh-CN 允许提供可信转发头的代理 CIDR 列表。
+  # @description.en-US Proxy CIDRs allowed to supply trusted forwarding headers.
   trusted_proxy_cidrs: []
 
 metrics:
+  # @title.zh-CN 指标服务
+  # @title.en-US Metrics service
+  # @description.zh-CN 是否开放 Prometheus 指标服务。
+  # @description.en-US Enables the Prometheus metrics service.
   enabled: true
+  # @title.zh-CN 指标认证
+  # @title.en-US Metrics authentication
+  # @description.zh-CN 是否要求指标抓取请求提供凭据。
+  # @description.en-US Requires credentials on metrics scrape requests.
   require_auth: true
+  # @title.zh-CN 指标凭据文件
+  # @title.en-US Metrics credential file
+  # @description.zh-CN 指标服务独立认证凭据的文件路径。
+  # @description.en-US Path to the metrics service's independent credential file.
   credential_file: ""
+  # @title.zh-CN 最大并发抓取数
+  # @title.en-US Maximum concurrent scrapes
+  # @description.zh-CN 指标服务同时处理的抓取请求上限。
+  # @description.en-US Maximum metrics scrape requests handled concurrently.
   max_concurrent_scrapes: 2
+  # @title.zh-CN 指标写入超时
+  # @title.en-US Metrics write timeout
+  # @description.zh-CN 指标响应写回抓取客户端允许的最长时间。
+  # @description.en-US Maximum time allowed to write a metrics response.
   write_timeout: 5s
   tls:
+    # @title.zh-CN 指标 TLS
+    # @title.en-US Metrics TLS
+    # @description.zh-CN 是否为指标服务启用独立 TLS。
+    # @description.en-US Enables independent TLS for the metrics service.
     enabled: false
+    # @title.zh-CN 指标 TLS 证书
+    # @title.en-US Metrics TLS certificate
+    # @description.zh-CN 指标服务 TLS 证书链文件路径。
+    # @description.en-US Path to the metrics TLS certificate chain.
     cert_file: ""
+    # @title.zh-CN 指标 TLS 私钥
+    # @title.en-US Metrics TLS private key
+    # @description.zh-CN 指标服务 TLS 私钥文件路径。
+    # @description.en-US Path to the metrics TLS private key.
     key_file: ""
+    # @title.zh-CN 指标客户端 CA
+    # @title.en-US Metrics client CA
+    # @description.zh-CN 验证指标抓取客户端证书使用的 CA 文件。
+    # @description.en-US CA file used to verify metrics scrape client certificates.
     client_ca_file: ""
 
 audit:
@@ -111,12 +438,32 @@ audit:
     # of the audit chain (record count + hash, no event content) that a
     # dead-man probe on a separate host pulls and keeps — a later rewrite then
     # disagrees with a copy the operator does not control.
+    # @title.zh-CN 外部审计锚定
+    # @title.en-US External audit anchoring
+    # @description.zh-CN 是否发布审计链摘要供独立 dead-man 主机留存。
+    # @description.en-US Publishes audit-chain summaries for retention by an independent dead-man host.
     enabled: false
     # dead_man_pull is the only implemented sink; it reuses the existing
     # halro-deadman probe and its independent host/credentials/TLS.
+    # @title.zh-CN 审计锚定接收端
+    # @title.en-US Audit anchor sink
+    # @description.zh-CN 接收外部审计锚定摘要的实现类型。
+    # @description.en-US Sink implementation receiving external audit-anchor summaries.
     sink: dead_man_pull
+    # @title.zh-CN 审计锚定间隔
+    # @title.en-US Audit anchor interval
+    # @description.zh-CN 即使记录增量未达到阈值也发布锚定的最长间隔。
+    # @description.en-US Maximum interval between anchors even below the record threshold.
     interval: 5m
+    # @title.zh-CN 审计锚定记录增量
+    # @title.en-US Audit anchor record delta
+    # @description.zh-CN 触发发布新锚定所需的新增审计记录数。
+    # @description.en-US New audit records required to publish another anchor.
     record_delta: 500
     # Required once enabled. Independent from metrics.credential_file — the
     # two rotate on unrelated schedules and one must not authorize the other.
+    # @title.zh-CN 审计锚定凭据文件
+    # @title.en-US Audit anchor credential file
+    # @description.zh-CN dead-man 拉取审计锚定使用的独立凭据文件。
+    # @description.en-US Independent credential file used by dead-man audit-anchor pulls.
     credential_file: ""

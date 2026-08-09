@@ -7,7 +7,7 @@ import { ErrorState, Field, Loading, Modal } from "../components";
 import { useInstantFormatter } from "../format";
 import { setNavigationBlocked } from "../navigation";
 
-export function MFASettings() {
+export function MFASettings({ username = "" }: { username?: string }) {
   const { t } = useTranslation();
   const formatInstant = useInstantFormatter();
   const queryClient = useQueryClient();
@@ -68,7 +68,7 @@ export function MFASettings() {
     actionWasOpen.current = actionOpen;
   }, [actionOpen]);
   return <section className="panel settings-card mfa-settings" aria-labelledby="mfa-title" aria-busy={status.isPending}>
-    <header className="panel-header"><div><p className="eyebrow">{t("settings.security")}</p><h3 id="mfa-title" tabIndex={-1}>{t("settings.mfaTitle")}</h3><p>{t("settings.mfaDescription")}</p></div>{status.data ? <span className={`badge ${status.data.enabled ? "good" : ""}`}>{status.data.enabled ? t("settings.mfaEnabled") : t(`settings.mfaPolicy.${status.data.policy}`)}</span> : <span className="badge">{t("common.loading")}</span>}</header>
+    <header className="panel-header"><div><p className="eyebrow">{t("settings.currentAccount")}{username ? ` · ${username}` : ""}</p><h3 id="mfa-title" tabIndex={-1}>{t("settings.mfaTitle")}</h3><p>{t("settings.mfaDescription")}</p></div>{status.data ? <span className={`badge ${status.data.enabled ? "good" : ""}`}>{status.data.enabled ? t("settings.mfaEnabled") : t(`settings.mfaPolicy.${status.data.policy}`)}</span> : <span className="badge">{t("common.loading")}</span>}</header>
     {status.isPending && <Loading label={t("settings.loadingMFA")} />}
     {status.isError && <ErrorState error={status.error} />}
     {enrollmentExpired && <div className="notice warning" role="status">{t("settings.enrollmentExpired")}</div>}

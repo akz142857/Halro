@@ -109,12 +109,15 @@ func TestUnknownModelGetsNoCapabilities(t *testing.T) {
 
 func TestLookupDoesNotWidenModelNames(t *testing.T) {
 	known := Builtin().Entries()[0].Key
-	for _, model := range []string{
+	models := []string{
 		known.Model + "-preview",
-		strings.TrimSuffix(known.Model, ":0"),
 		strings.ToUpper(known.Model),
 		" " + known.Model,
-	} {
+	}
+	if withoutVersion := strings.TrimSuffix(known.Model, ":0"); withoutVersion != known.Model {
+		models = append(models, withoutVersion)
+	}
+	for _, model := range models {
 		key := known
 		key.Model = model
 		if _, ok := Builtin().Lookup(key); ok {
@@ -129,6 +132,47 @@ func TestLookupIsScopedByProfile(t *testing.T) {
 	other.Profile = domain.ProfileBedrockConverseText
 	if _, ok := Builtin().Lookup(other); ok {
 		t.Fatal("entry leaked across profiles")
+	}
+}
+
+func TestBuiltinCoversReviewedProviderFamiliesConservatively(t *testing.T) {
+	tests := []struct {
+		key  Key
+		want domain.ProviderCapabilities
+	}{
+		{
+			key:  Key{ProviderType: domain.ProviderAnthropic, Profile: domain.ProfileAnthropicMessages, Model: "claude-sonnet-4-6"},
+			want: domain.ProviderCapabilities{Chat: true, Streaming: true, Tools: true, Vision: true, Reasoning: true, StreamUsage: true, MaxContextTokens: 1_000_000, MaxOutputTokens: 64_000},
+		},
+		{
+			key:  Key{ProviderType: domain.ProviderGemini, Profile: domain.ProfileGeminiText, Model: "gemini-2.5-pro"},
+			want: domain.ProviderCapabilities{Chat: true, Streaming: true, DeveloperRole: true, MaxContextTokens: 1_048_576, MaxOutputTokens: 65_536},
+		},
+		{
+			key:  Key{ProviderType: domain.ProviderGemini, Profile: domain.ProfileGeminiText, Model: "gemini-embedding-001"},
+			want: domain.ProviderCapabilities{Embeddings: true},
+		},
+		{
+			key:  Key{ProviderType: domain.ProviderBedrock, Profile: domain.ProfileBedrockConverseText, Model: "amazon.nova-pro-v1:0"},
+			want: domain.ProviderCapabilities{Chat: true, Streaming: true, StreamUsage: true},
+		},
+		{
+			key:  Key{ProviderType: domain.ProviderOpenAICompatible, Profile: domain.ProfileOpenAICompatible, Model: "gpt-5"},
+			want: domain.ProviderCapabilities{Chat: true, Streaming: true},
+		},
+	}
+	for _, test := range tests {
+		entry, ok := Builtin().Lookup(test.key)
+		if !ok {
+			t.Errorf("missing reviewed entry %#v", test.key)
+			continue
+		}
+		if entry.Status != StatusKnown || entry.Source != SourceBuiltin || entry.Capabilities != test.want {
+			t.Errorf("entry %#v = %#v", test.key, entry)
+		}
+		if !domain.ProviderCapabilitiesSubset(entry.Capabilities, test.key.Ceiling()) {
+			t.Errorf("entry %#v exceeds its profile", test.key)
+		}
 	}
 }
 
@@ -173,7 +217,7 @@ func TestRevisionsAreDeterministicAndPerModel(t *testing.T) {
 	// A catalog-wide digest would, which is why conflict detection uses the
 	// per-model one.
 	extra := Entry{
-		Key:          Key{ProviderType: domain.ProviderBedrock, Profile: domain.ProfileBedrockConverseText, Model: "amazon.nova-pro-v1:0"},
+		Key:          Key{ProviderType: domain.ProviderBedrock, Profile: domain.ProfileBedrockConverseText, Model: "test.unrelated-chat-v1:0"},
 		Status:       StatusKnown,
 		Source:       SourceBuiltin,
 		Capabilities: domain.DefaultProviderCapabilitiesForProfile(domain.ProviderBedrock, domain.ProfileBedrockConverseText),

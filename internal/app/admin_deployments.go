@@ -20,18 +20,24 @@ import (
 )
 
 type deploymentInput struct {
-	Name          string                       `json:"name"`
-	ProviderID    string                       `json:"provider_id"`
-	ProviderModel string                       `json:"provider_model"`
-	TargetKind    domain.DeploymentTargetKind  `json:"target_kind,omitempty"`
-	AccessSurface domain.AccessSurface         `json:"access_surface,omitempty"`
-	ProfileID     domain.ProviderProfileID     `json:"profile_id,omitempty"`
-	BindingID     string                       `json:"binding_id,omitempty"`
-	Region        string                       `json:"region"`
-	Capabilities  *domain.ProviderCapabilities `json:"capabilities,omitempty"`
+	Name          string `json:"name"`
+	ProviderID    string `json:"provider_id"`
+	ProviderModel string `json:"provider_model"`
+	// CapabilityModel is the reviewed model behind an operator-named Azure
+	// Deployment or custom endpoint target. It never replaces ProviderModel in
+	// an upstream request; it only bounds the capability declaration.
+	CapabilityModel string                       `json:"capability_model,omitempty"`
+	TargetKind      domain.DeploymentTargetKind  `json:"target_kind,omitempty"`
+	AccessSurface   domain.AccessSurface         `json:"access_surface,omitempty"`
+	ProfileID       domain.ProviderProfileID     `json:"profile_id,omitempty"`
+	BindingID       string                       `json:"binding_id,omitempty"`
+	Region          string                       `json:"region"`
+	Capabilities    *domain.ProviderCapabilities `json:"capabilities,omitempty"`
 	// ModelRevision is the per-model catalog revision the client read. An empty
 	// value skips the check; a stale one is a conflict, never a silent accept.
-	ModelRevision string `json:"model_revision,omitempty"`
+	ModelRevision               string `json:"model_revision,omitempty"`
+	CapabilityDetectionID       string `json:"capability_detection_id,omitempty"`
+	CapabilityDetectionRevision uint64 `json:"capability_detection_revision,omitempty"`
 	// OperationBindings is accepted by the decoder only so it can be refused by
 	// name. It is the shape a deployment would take if it mapped each operation
 	// to its own internal binding, and it is not coming: a deployment carries one
@@ -99,6 +105,14 @@ func (r *Runtime) adminDeploymentInputError(writer http.ResponseWriter, err erro
 		writeJSON(writer, http.StatusBadRequest, map[string]string{
 			"error": err.Error(), "code": "model_capabilities_exceed_catalog",
 		})
+	case errors.Is(err, errCapabilityDetectionStale):
+		writeJSON(writer, http.StatusConflict, map[string]string{"error": err.Error(), "code": "capability_detection_stale"})
+	case errors.Is(err, errCapabilityDetectionChanged):
+		writeJSON(writer, http.StatusConflict, map[string]string{"error": err.Error(), "code": "capability_detection_changed"})
+	case errors.Is(err, errCapabilitiesExceedDetection):
+		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": err.Error(), "code": "capabilities_exceed_detection"})
+	case errors.Is(err, errCapabilityDetectionTargetMismatch):
+		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": err.Error(), "code": "capability_detection_target_mismatch"})
 	default:
 		adminBadRequest(writer, err.Error())
 	}
@@ -473,7 +487,14 @@ func (r *Runtime) deploymentFromInput(request *http.Request, deploymentID string
 		return domain.Deployment{}, errors.New("deployment provider is unavailable")
 	}
 	model := strings.TrimSpace(input.ProviderModel)
-	resolution, err := resolveDeploymentTarget(instance, input, model, deploymentRegion(instance, input), prior)
+	region := deploymentRegion(instance, input)
+	var detected *domain.ModelCapabilityDetection
+	var resolution deploymentResolution
+	if input.CapabilityDetectionID != "" {
+		resolution, detected, err = r.resolveDeploymentDetection(request.Context(), instance, input, model, region)
+	} else {
+		resolution, err = resolveDeploymentTarget(instance, input, model, region, prior)
+	}
 	if err != nil {
 		return domain.Deployment{}, err
 	}
@@ -497,7 +518,6 @@ func (r *Runtime) deploymentFromInput(request *http.Request, deploymentID string
 	if weight == 0 {
 		weight = 1
 	}
-	region := deploymentRegion(instance, input)
 	// The snapshot is built first because its source decides how strong the
 	// deployment's own evidence is allowed to be.
 	snapshot := domain.ModelCapabilitySnapshot{
@@ -508,17 +528,27 @@ func (r *Runtime) deploymentFromInput(request *http.Request, deploymentID string
 		CapturedAt:    updatedAt,
 		Capabilities:  resolution.capabilities,
 	}
-	if resolution.declared {
+	if detected != nil {
+		snapshot = domain.DetectionCapabilitySnapshot(*detected, detected.Recommended, updatedAt)
+		snapshot.Capabilities = detected.Recommended
+	} else if resolution.declared {
 		// An operator declaration is its own source. Recording it as the catalog
 		// would let a later refresh look like agreement that never happened.
 		snapshot.Source = string(modelcatalog.SourceOperatorDeclared)
 		snapshot.Status = string(modelcatalog.StatusPartial)
+		if resolution.mapped {
+			// Keep the reviewed model's full, interface-clamped declaration in
+			// the snapshot even when the operator switches one capability off.
+			// The live deployment remains narrowed, and OperatorDisabled records
+			// the difference.
+			snapshot.Capabilities = modelcatalog.Clamp(resolution.entry.Capabilities, resolution.binding.Capabilities)
+		}
 		// An edit that stays inside an existing declaration is not a new claim,
 		// so what was declared still stands and the narrowing is a switch-off
 		// rather than a withdrawal. Collapsing the snapshot onto the narrowed set
 		// would erase the very difference OperatorDisabled is read from, and the
 		// capability would be offered again as though it had never been declined.
-		if input.Mode != deploymentModeOperatorDeclared &&
+		if !resolution.mapped && input.Mode != deploymentModeOperatorDeclared &&
 			domain.ProviderCapabilitiesSubset(capabilities, prior.Declaration()) {
 			snapshot.Capabilities = prior.Declaration()
 		}
@@ -557,6 +587,73 @@ func (r *Runtime) deploymentFromInput(request *http.Request, deploymentID string
 		Enabled: input.Enabled, CreatedAt: createdAt, UpdatedAt: updatedAt,
 	}
 	return deployment, deployment.Validate()
+}
+
+var (
+	errCapabilityDetectionStale          = errors.New("capability detection is incomplete or expired")
+	errCapabilityDetectionChanged        = errors.New("capability detection changed since it was read")
+	errCapabilitiesExceedDetection       = errors.New("deployment capabilities exceed the verified detection result")
+	errCapabilityDetectionTargetMismatch = errors.New("capability detection does not match the current target")
+)
+
+func (r *Runtime) resolveDeploymentDetection(ctx context.Context, instance domain.ProviderInstance, input deploymentInput, model, region string) (deploymentResolution, *domain.ModelCapabilityDetection, error) {
+	if input.Mode != "" || input.CapabilityDetectionRevision == 0 || input.Capabilities == nil {
+		return deploymentResolution{}, nil, errCapabilityDetectionTargetMismatch
+	}
+	detection, err := r.store.GetModelCapabilityDetection(ctx, input.CapabilityDetectionID)
+	if err != nil {
+		return deploymentResolution{}, nil, errCapabilityDetectionTargetMismatch
+	}
+	if detection.Revision != input.CapabilityDetectionRevision {
+		return deploymentResolution{}, nil, errCapabilityDetectionChanged
+	}
+	if !detection.Fresh(r.now().UTC()) {
+		return deploymentResolution{}, nil, errCapabilityDetectionStale
+	}
+	targetKind, err := deploymentTargetKind(instance.Type, detection.AccessSurface, detection.ProfileID, input.TargetKind)
+	if err != nil {
+		return deploymentResolution{}, nil, errCapabilityDetectionTargetMismatch
+	}
+	credential, err := r.store.GetCredential(ctx, instance.CredentialID)
+	if err != nil {
+		return deploymentResolution{}, nil, errCapabilityDetectionTargetMismatch
+	}
+	if detection.ProviderID != instance.ID || detection.ProviderModel != model || detection.Region != region || detection.TargetKind != targetKind ||
+		(input.BindingID != "" && input.BindingID != detection.BindingID) ||
+		(input.ProfileID != "" && input.ProfileID != detection.ProfileID) {
+		return deploymentResolution{}, nil, errCapabilityDetectionTargetMismatch
+	}
+	if detection.ProviderRevision != instance.Revision || detection.CredentialRevision != credential.Revision || detection.CredentialKeyVersion != credential.KeyVersion {
+		return deploymentResolution{}, nil, errCapabilityDetectionStale
+	}
+	expectedFingerprint := hashCanonical(map[string]any{"provider_id": instance.ID, "provider_revision": instance.Revision,
+		"credential_revision": credential.Revision, "credential_key_version": credential.KeyVersion, "binding_id": detection.BindingID,
+		"profile_id": detection.ProfileID, "access_surface": detection.AccessSurface, "provider_model": model,
+		"target_kind": targetKind, "canonical_target": model, "region": region,
+		"detector_version": provider.CapabilityDetectorContractVersion, "risk_tier": detection.RiskTier})
+	if detection.TargetFingerprint != expectedFingerprint {
+		return deploymentResolution{}, nil, errCapabilityDetectionStale
+	}
+	binding, ok := instance.ProfileBinding(detection.BindingID)
+	if !ok || !binding.Enabled || binding.ProfileID != detection.ProfileID || binding.AccessSurface != detection.AccessSurface {
+		return deploymentResolution{}, nil, errCapabilityDetectionTargetMismatch
+	}
+	retained := *input.Capabilities
+	if retained.MaxContextTokens == 0 {
+		retained.MaxContextTokens = detection.Recommended.MaxContextTokens
+	}
+	if retained.MaxOutputTokens == 0 {
+		retained.MaxOutputTokens = detection.Recommended.MaxOutputTokens
+	}
+	if !domain.ProviderCapabilitiesSubset(retained, detection.Recommended) || !domain.ProviderCapabilitiesSubset(retained, binding.Capabilities) {
+		return deploymentResolution{}, nil, errCapabilitiesExceedDetection
+	}
+	if err := modelcatalog.ValidateDependencies(retained); err != nil {
+		return deploymentResolution{}, nil, err
+	}
+	input.Capabilities.MaxContextTokens, input.Capabilities.MaxOutputTokens = retained.MaxContextTokens, retained.MaxOutputTokens
+	entry := modelcatalog.Unknown(modelcatalog.Key{ProviderType: instance.Type, Profile: binding.ProfileID, Model: model, Region: region})
+	return deploymentResolution{binding: binding, capabilities: retained, entry: entry}, &detection, nil
 }
 
 func deploymentTargetKind(providerType domain.ProviderType, surface domain.AccessSurface, profileID domain.ProviderProfileID, requested domain.DeploymentTargetKind) (domain.DeploymentTargetKind, error) {
@@ -636,6 +733,12 @@ var errModelCapabilitiesUnknown = errors.New("model capabilities are unknown; de
 // then records the operator as the source rather than the catalog.
 var errModelCapabilitiesExceedCatalog = errors.New("deployment capabilities exceed what the catalog establishes for this model; declare them explicitly with mode=operator_declared to override")
 
+// A mapped capability model is optional. Once supplied, however, it is the
+// bound the operator chose for this alias; widening past it while keeping the
+// mapping would produce a snapshot narrower than the deployment. Clear the
+// mapping and use the ordinary explicit declaration path instead.
+var errCapabilitiesExceedMappedModel = errors.New("deployment capabilities exceed the selected capability_model; clear capability_model to declare them manually")
+
 // deploymentResolution is what the server decided, from the catalog and the
 // provider topology, rather than from what the client claimed.
 type deploymentResolution struct {
@@ -643,6 +746,7 @@ type deploymentResolution struct {
 	capabilities domain.ProviderCapabilities
 	entry        modelcatalog.Entry
 	declared     bool
+	mapped       bool
 }
 
 // resolveDeploymentTarget picks the binding a model should run through and the
@@ -652,6 +756,10 @@ type deploymentResolution struct {
 // authority: a client cannot name a binding to obtain capabilities the catalog
 // does not support for that model.
 func resolveDeploymentTarget(instance domain.ProviderInstance, input deploymentInput, model, region string, prior *priorDeployment) (deploymentResolution, error) {
+	mappedEntry, mapped, err := resolveCapabilityModelEntry(instance, input)
+	if err != nil {
+		return deploymentResolution{}, err
+	}
 	var candidates []domain.ProviderProfileBinding
 	// Why a binding can be excluded before capabilities are even considered:
 	// some profiles accept exactly one model. That pin used to be checked after
@@ -705,10 +813,14 @@ func resolveDeploymentTarget(instance domain.ProviderInstance, input deploymentI
 	for _, binding := range candidates {
 		key := modelcatalog.Key{ProviderType: instance.Type, Profile: binding.ProfileID, Model: model, Region: region}
 		entry, found := modelcatalog.Builtin().Lookup(key)
+		if mapped {
+			entry, found = mappedEntry, true
+		}
 		resolution := deploymentResolution{
 			binding:      binding,
 			capabilities: modelcatalog.Clamp(entry.Capabilities, binding.Capabilities),
 			entry:        entry,
+			mapped:       mapped,
 		}
 		if found && entry.Status == modelcatalog.StatusKnown {
 			known = append(known, resolution)
@@ -723,8 +835,15 @@ func resolveDeploymentTarget(instance domain.ProviderInstance, input deploymentI
 			if retained != nil {
 				resolution.capabilities = *retained
 			}
+			// Mapping an operator-owned target name to a catalog model is itself
+			// an operator declaration. The catalog bounds the checkboxes, but it
+			// is not evidence that the alias really points at that model.
+			resolution.declared = resolution.mapped
 			return resolution, checkModelRevision(input.ModelRevision, resolution.entry)
 		}
+	}
+	if mapped {
+		return deploymentResolution{}, errCapabilitiesExceedMappedModel
 	}
 	// Either nothing is established, or the catalog establishes less than was
 	// asked for. Both leave the operator as the only source, and both need the
@@ -766,6 +885,33 @@ func resolveDeploymentTarget(instance domain.ProviderInstance, input deploymentI
 		}
 	}
 	return deploymentResolution{}, errors.New("no enabled provider binding supports the declared capabilities")
+}
+
+func resolveCapabilityModelEntry(instance domain.ProviderInstance, input deploymentInput) (modelcatalog.Entry, bool, error) {
+	model := strings.TrimSpace(input.CapabilityModel)
+	if model == "" {
+		return modelcatalog.Entry{}, false, nil
+	}
+	if instance.Type == domain.ProviderAzureOpenAI {
+		if input.TargetKind != "" && input.TargetKind != domain.TargetAzureDeployment {
+			return modelcatalog.Entry{}, false, errors.New("capability_model is only valid for an Azure Deployment target")
+		}
+	} else if instance.Type == domain.ProviderOpenAICompatible {
+		if input.TargetKind != "" && input.TargetKind != domain.TargetCustomEndpointModel {
+			return modelcatalog.Entry{}, false, errors.New("capability_model is only valid for a custom endpoint target")
+		}
+	} else {
+		return modelcatalog.Entry{}, false, errors.New("capability_model is only valid for Azure Deployment and custom endpoint targets")
+	}
+	providerType, profileID, _ := capabilityModelCatalogScope(instance.Type)
+	entry, found := modelcatalog.Builtin().Lookup(modelcatalog.Key{ProviderType: providerType, Profile: profileID, Model: model})
+	if !found || entry.Status != modelcatalog.StatusKnown {
+		return modelcatalog.Entry{}, false, errors.New("capability_model is not a reviewed builtin model")
+	}
+	if err := checkModelRevision(input.ModelRevision, entry); err != nil {
+		return modelcatalog.Entry{}, false, err
+	}
+	return entry, true, nil
 }
 
 // checkModelRevision compares the revision the client read against the one that

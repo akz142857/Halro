@@ -268,8 +268,28 @@ func TestOfflineEncryptedBackupCapturesConsistentManifestAndAudit(t *testing.T) 
 		CreationStatus: "completed", Status: "uploaded", CreatedAt: now,
 		UpdatedAt: now, ExpiresAt: now.Add(time.Hour),
 	}, 0)
+	instance, detectionErr := store.GetProvider(context.Background(), bootstrap.ProviderID)
+	if detectionErr == nil {
+		credential, credentialErr := store.GetCredential(context.Background(), instance.CredentialID)
+		if credentialErr != nil {
+			detectionErr = credentialErr
+		} else {
+			binding := instance.EffectiveProfileBindings()[0]
+			_, _, detectionErr = store.CreateModelCapabilityDetection(context.Background(), domain.ModelCapabilityDetection{
+				ID: "mcd_backup", ProviderID: instance.ID, ProviderRevision: instance.Revision,
+				CredentialRevision: credential.Revision, CredentialKeyVersion: credential.KeyVersion,
+				ProviderModel: "backup-unknown-model", ModelRevision: "sha256:backup-model", BindingID: binding.ID,
+				ProfileID: binding.ProfileID, AccessSurface: binding.AccessSurface, TargetKind: domain.TargetModelID,
+				CanonicalTarget: "backup-unknown-model", TargetFingerprint: "sha256:backup-target",
+				DetectorVersion: "capability-detector-v1", RiskTier: "safe_automatic", Status: domain.DetectionQueued,
+				Source: "verified_probe", Results: map[string]domain.CapabilityProbeResult{}, MaxProviderCalls: 8,
+				CreatedBy: "admin", IdempotencyKeyHash: "sha256:backup-key", RequestHash: "sha256:backup-request",
+				CreatedAt: now, UpdatedAt: now,
+			})
+		}
+	}
 	closeErr := store.Close()
-	if err := errors.Join(putErr, closeErr); err != nil {
+	if err := errors.Join(putErr, detectionErr, closeErr); err != nil {
 		t.Fatal(err)
 	}
 	root := filepath.Dir(cfg.Storage.DataDir)
@@ -320,6 +340,17 @@ func TestOfflineEncryptedBackupCapturesConsistentManifestAndAudit(t *testing.T) 
 	}
 	if payload, err := os.ReadFile(filepath.Join(extracted, "data", "provider-objects", objectName)); err != nil || string(payload) != objectCanary {
 		t.Fatalf("restored provider object=%q err=%v", payload, err)
+	}
+	restoredStore, err := boltstore.Open(filepath.Join(extracted, "data", "metadata.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := restoredStore.GetModelCapabilityDetection(context.Background(), "mcd_backup"); err != nil {
+		restoredStore.Close()
+		t.Fatalf("restored capability detection: %v", err)
+	}
+	if err := restoredStore.Close(); err != nil {
+		t.Fatal(err)
 	}
 	encrypted, err := os.ReadFile(output)
 	if err != nil {

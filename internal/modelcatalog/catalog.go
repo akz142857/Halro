@@ -58,7 +58,7 @@ func (s Source) Valid() bool {
 
 // PreselectsCapabilities reports whether the console may render a capability
 // from this source as checked by default. Only the builtin catalog may.
-func (s Source) PreselectsCapabilities() bool { return s == SourceBuiltin }
+func (s Source) PreselectsCapabilities() bool { return s == SourceBuiltin || s == SourceVerifiedProbe }
 
 // MaxEvidence caps the evidence level a claim from this source may carry. A
 // declaration never becomes verified by being written down confidently.

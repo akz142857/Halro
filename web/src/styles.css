@@ -986,28 +986,40 @@ td small, td code { display: block; margin-top: 4px; color: var(--muted); }
 .write-path dl { margin-top: var(--space-3); }
 .write-path .write-path-meta { margin: 0; padding: 0 var(--space-4) var(--space-3); color: var(--muted-2); font-size: var(--font-size-xs); }
 .write-path > .notice { margin: 0 var(--space-4) var(--space-3); }
-.config-overview { padding: var(--space-4) 0 0; background: var(--surface); border: 0.0625rem solid var(--line); }
-.config-overview-header { display: flex; align-items: baseline; justify-content: space-between; gap: 1.5rem; padding: 0 1.25rem var(--space-4); border-bottom: 0.0625rem solid var(--line); }
+.config-overview { display: grid; gap: var(--space-3); }
+.config-overview-header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-6); padding: var(--space-4) var(--space-5); background: var(--surface-inset); border: 0.0625rem solid var(--line); border-radius: var(--radius-lg); }
 .config-overview-header h3 { margin: 0 0 0.25rem; font-size: 15px; }
 .config-overview-header p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
-.config-overview-state { flex: 0 0 auto; color: var(--muted); font-size: 11px; }
-.config-group + .config-group { border-top: 0.0625rem solid var(--line); }
-.config-group h4 { margin: 0; padding: 1rem 1.25rem 0.375rem; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: 0.02em; }
-.config-group dl { margin: 0; }
-.config-group dl > div { display: grid; grid-template-columns: minmax(10rem, .9fr) minmax(0, 1.1fr); align-items: center; min-height: 3rem; padding: 0 1.25rem; }
-.config-group dl > div + div { border-top: 0.0625rem solid var(--line); }
-.config-group dt, .config-group dd { min-width: 0; margin: 0; padding: 0.625rem 0; }
-.config-group dt { color: var(--muted); font-size: 12px; }
-.config-group dd { color: var(--text); font-size: 12px; font-weight: 650; text-align: right; overflow-wrap: anywhere; }
-.config-group dd.technical { font-family: var(--mono); font-size: 11px; font-weight: 500; }
-.config-preview { border-top: 0.0625rem solid var(--line); }
+.config-overview-state { flex: 0 0 auto; padding: var(--space-1) var(--space-2); color: var(--muted); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-pill); font-size: 10px; font-weight: 650; }
+.config-list-toolbar { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); }
+.config-list-toolbar label { min-width: 0; flex: 1 1 360px; }
+.config-list-toolbar input { width: 100%; max-width: 420px; min-height: 38px; }
+.config-list-toolbar > span { flex: 0 0 auto; color: var(--muted); font-size: 11px; }
+.config-list { overflow: hidden; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg); }
+.config-entry { display: grid; grid-template-columns: minmax(0, 1fr) minmax(150px, .55fr); align-items: center; gap: var(--space-6); min-height: 76px; padding: var(--space-3) var(--space-5); }
+.config-entry + .config-entry { border-top: 1px solid var(--line); }
+.config-entry-copy { display: grid; min-width: 0; gap: var(--space-1); }
+.config-entry-copy h4 { margin: 0 0 var(--space-1); color: var(--text); font-size: 13px; }
+.config-entry-copy code { color: var(--muted-2); font: 10px/1.35 var(--mono); overflow-wrap: anywhere; }
+.config-entry-copy p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.config-entry-value { min-width: 0; color: var(--text); font: 600 11px/1.5 var(--mono); text-align: right; white-space: pre-wrap; overflow-wrap: anywhere; }
+.config-value-state { display: inline-flex; align-items: center; justify-self: end; gap: var(--space-2); }
+.config-value-state::before { width: 6px; height: 6px; content: ""; background: var(--muted-2); border-radius: 50%; }
+.config-value-state.enabled::before { background: var(--color-status-success-text); }
+.config-list-empty { margin: 0; padding: var(--space-10) var(--space-5); color: var(--muted); font-size: 12px; text-align: center; }
+.config-preview { overflow: hidden; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg); }
 .config-preview > summary { padding: 0.875rem 1.25rem; color: var(--muted); font-size: 12px; cursor: pointer; }
 .config-preview-description { margin: 0; padding: 0 1.25rem 0.5rem; color: var(--muted); font-size: 11px; line-height: 1.55; }
 .config-preview[open] > summary { color: var(--text); }
-@media (max-width: 640px) {
-  .config-group dl > div { grid-template-columns: minmax(0, 1fr); align-items: start; min-height: 0; }
-  .config-group dd { text-align: left; }
-  .config-group dt { padding-bottom: 0; }
+@media (max-width: 760px) {
+  .config-overview-header { align-items: flex-start; flex-direction: column; gap: var(--space-3); }
+  .config-list-toolbar { align-items: stretch; flex-direction: column; gap: var(--space-2); }
+  .config-list-toolbar label { flex-basis: auto; }
+  .config-list-toolbar input { max-width: none; }
+  .config-list-toolbar > span { align-self: flex-end; }
+  .config-entry { grid-template-columns: minmax(0, 1fr); gap: var(--space-2); }
+  .config-entry-value { text-align: left; }
+  .config-value-state { justify-self: start; }
 }
 .config-preview .form-actions { padding: 0 var(--space-4) var(--space-3); align-items: center; }
 .config-preview-body { margin: var(--space-3) var(--space-4); padding: var(--space-3) var(--space-4); max-height: 360px; overflow: auto; background: color-mix(in srgb, var(--surface) 88%, var(--text) 6%); border: 1px solid var(--border); border-radius: var(--radius-md); font-size: .82rem; line-height: 1.5; white-space: pre; }
@@ -1737,3 +1749,11 @@ textarea { resize: vertical; }
   .danger-zone { border: 2px solid CanvasText !important; }
   :focus-visible { outline: 2px solid Highlight !important; outline-offset: 2px !important; }
 }
+.capability-detection-panel { display: grid; gap: var(--space-3); }
+.runtime-settings { min-width: 0; }
+.detection-results { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; margin-top: .75rem; }
+.detection-results > div { display: flex; align-items: center; justify-content: space-between; gap: .75rem; min-width: 0; padding: .65rem .75rem; border: 1px solid var(--border); border-radius: .65rem; background: var(--surface); }
+.detection-result { font-size: .78rem; white-space: nowrap; }
+.detection-result.supported { color: var(--success); }
+.detection-result.unauthorized, .detection-result.unavailable { color: var(--warning); }
+@media (max-width: 720px) { .detection-results { grid-template-columns: 1fr; } }

@@ -21,7 +21,7 @@ import (
 	bbolt "go.etcd.io/bbolt"
 )
 
-const schemaVersion uint64 = 23
+const schemaVersion uint64 = 24
 
 // legacyCapabilityEvidence is the evidence tier this project used before
 // capability evidence was durable metadata. The domain no longer accepts it, so
@@ -83,6 +83,9 @@ var (
 	bucketPricingProposalIdempotency = []byte("pricing_proposal_idempotency")
 	bucketCostAdjustmentIntents      = []byte("cost_adjustment_intents")
 	bucketAuditAnchors               = []byte("audit_anchors")
+	bucketModelCapabilityDetections  = []byte("model_capability_detections")
+	bucketCapabilityDetectionIdem    = []byte("model_capability_detection_idempotency")
+	bucketCapabilityDetectionIndex   = []byte("model_capability_detection_fingerprint_index")
 	keySchemaVersion                 = []byte("schema_version")
 	keyVaultCheck                    = []byte("vault_key_check")
 	keyUsageCheckpoint               = []byte("usage_checkpoint")
@@ -583,6 +586,14 @@ var migrations = []migration{
 			}
 		}
 		return migrationStep(step, "after_snapshot_evidence_backfill")
+	}},
+	{version: 24, name: "model_capability_detections", up: func(tx *bbolt.Tx, step func(string) error) error {
+		for _, name := range [][]byte{bucketModelCapabilityDetections, bucketCapabilityDetectionIdem, bucketCapabilityDetectionIndex} {
+			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
+				return err
+			}
+		}
+		return migrationStep(step, "after_create_model_capability_detection_buckets")
 	}},
 }
 
@@ -1222,6 +1233,9 @@ func requiredBuckets() [][]byte {
 		bucketDeploymentPriceProposals,
 		bucketPricingProposalIdempotency,
 		bucketCostAdjustmentIntents,
+		bucketModelCapabilityDetections,
+		bucketCapabilityDetectionIdem,
+		bucketCapabilityDetectionIndex,
 	}
 }
 

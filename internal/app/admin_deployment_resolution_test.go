@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -11,7 +12,10 @@ import (
 	"github.com/akz142857/Halro/internal/modelcatalog"
 )
 
-const titanEmbedModel = "amazon.titan-embed-text-v2:0"
+const (
+	titanEmbedModel     = "amazon.titan-embed-text-v2:0"
+	unknownBedrockModel = "vendor.unlisted-chat-v1:0"
+)
 
 func bedrockInstance(bindings ...domain.ProviderProfileBinding) domain.ProviderInstance {
 	return domain.ProviderInstance{
@@ -161,7 +165,7 @@ func TestResolveUnknownModelDemandsAnExplicitDeclaration(t *testing.T) {
 	instance := bedrockInstance(bedrockBinding("b-chat", domain.ProfileBedrockConverseText))
 	wanted := domain.ProviderCapabilities{Chat: true, Streaming: true, StreamUsage: true}
 
-	if _, err := resolveDeploymentTarget(instance, deploymentInput{Capabilities: &wanted}, "amazon.nova-pro-v1:0", "us-east-1", nil); err == nil {
+	if _, err := resolveDeploymentTarget(instance, deploymentInput{Capabilities: &wanted}, unknownBedrockModel, "us-east-1", nil); err == nil {
 		t.Fatal("an unknown model was deployed without a declaration")
 	} else if !isUnknownCapabilityError(err) {
 		t.Fatalf("unexpected error: %v", err)
@@ -169,7 +173,7 @@ func TestResolveUnknownModelDemandsAnExplicitDeclaration(t *testing.T) {
 
 	resolution, err := resolveDeploymentTarget(instance, deploymentInput{
 		Mode: deploymentModeOperatorDeclared, Capabilities: &wanted,
-	}, "amazon.nova-pro-v1:0", "us-east-1", nil)
+	}, unknownBedrockModel, "us-east-1", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +192,7 @@ func TestResolveDeclarationStaysInsideTheProfileCeiling(t *testing.T) {
 	wanted := domain.ProviderCapabilities{Chat: true, Tools: true}
 	if _, err := resolveDeploymentTarget(instance, deploymentInput{
 		Mode: deploymentModeOperatorDeclared, Capabilities: &wanted,
-	}, "amazon.nova-pro-v1:0", "us-east-1", nil); err == nil {
+	}, unknownBedrockModel, "us-east-1", nil); err == nil {
 		t.Fatal("a declaration widened the profile ceiling")
 	}
 }
@@ -198,14 +202,14 @@ func TestResolveDeclarationRequiresACoreOperation(t *testing.T) {
 	empty := domain.ProviderCapabilities{}
 	if _, err := resolveDeploymentTarget(instance, deploymentInput{
 		Mode: deploymentModeOperatorDeclared, Capabilities: &empty,
-	}, "amazon.nova-pro-v1:0", "us-east-1", nil); err == nil {
+	}, unknownBedrockModel, "us-east-1", nil); err == nil {
 		t.Fatal("a declaration with no core operation was accepted")
 	}
 	// Enhancements cannot ride alone either.
 	orphan := domain.ProviderCapabilities{Streaming: true}
 	if _, err := resolveDeploymentTarget(instance, deploymentInput{
 		Mode: deploymentModeOperatorDeclared, Capabilities: &orphan,
-	}, "amazon.nova-pro-v1:0", "us-east-1", nil); err == nil {
+	}, unknownBedrockModel, "us-east-1", nil); err == nil {
 		t.Fatal("streaming without chat was accepted")
 	}
 }
@@ -217,11 +221,11 @@ func TestResolveEditWithinAnExistingDeclarationNeedsNoRedeclaration(t *testing.T
 	declared := domain.ProviderCapabilities{Chat: true, Streaming: true, StreamUsage: true}
 	prior := &priorDeployment{
 		Capabilities: declared,
-		Snapshot:     domain.DeclaredCapabilitySnapshot("amazon.nova-pro-v1:0", "sha256:test", declared, time.Now().UTC()),
+		Snapshot:     domain.DeclaredCapabilitySnapshot(unknownBedrockModel, "sha256:test", declared, time.Now().UTC()),
 	}
 
 	narrowed := domain.ProviderCapabilities{Chat: true}
-	resolution, err := resolveDeploymentTarget(instance, deploymentInput{Capabilities: &narrowed}, "amazon.nova-pro-v1:0", "us-east-1", prior)
+	resolution, err := resolveDeploymentTarget(instance, deploymentInput{Capabilities: &narrowed}, unknownBedrockModel, "us-east-1", prior)
 	if err != nil {
 		t.Fatalf("narrowing an existing declaration was rejected: %v", err)
 	}
@@ -231,7 +235,7 @@ func TestResolveEditWithinAnExistingDeclarationNeedsNoRedeclaration(t *testing.T
 
 	// Omitting capabilities keeps what is stored rather than reaching for the
 	// profile ceiling.
-	unchanged, err := resolveDeploymentTarget(instance, deploymentInput{}, "amazon.nova-pro-v1:0", "us-east-1", prior)
+	unchanged, err := resolveDeploymentTarget(instance, deploymentInput{}, unknownBedrockModel, "us-east-1", prior)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,7 +245,7 @@ func TestResolveEditWithinAnExistingDeclarationNeedsNoRedeclaration(t *testing.T
 
 	// Widening past the declaration is a new claim and needs the word again.
 	wider := domain.ProviderCapabilities{Chat: true, Streaming: true, StreamUsage: true, DeveloperRole: true}
-	if _, err := resolveDeploymentTarget(instance, deploymentInput{Capabilities: &wider}, "amazon.nova-pro-v1:0", "us-east-1", prior); err == nil {
+	if _, err := resolveDeploymentTarget(instance, deploymentInput{Capabilities: &wider}, unknownBedrockModel, "us-east-1", prior); err == nil {
 		t.Fatal("an edit widened a declaration without re-declaring")
 	}
 
@@ -249,7 +253,7 @@ func TestResolveEditWithinAnExistingDeclarationNeedsNoRedeclaration(t *testing.T
 	// edit is measured against, so switching a capability off does not quietly
 	// make switching it back on require the word again.
 	switchedOff := &priorDeployment{Capabilities: narrowed, Snapshot: prior.Snapshot}
-	restored, err := resolveDeploymentTarget(instance, deploymentInput{Capabilities: &declared}, "amazon.nova-pro-v1:0", "us-east-1", switchedOff)
+	restored, err := resolveDeploymentTarget(instance, deploymentInput{Capabilities: &declared}, unknownBedrockModel, "us-east-1", switchedOff)
 	if err != nil {
 		t.Fatalf("re-enabling a declared capability demanded a fresh declaration: %v", err)
 	}
@@ -287,6 +291,79 @@ func TestResolveRejectsStaleModelRevision(t *testing.T) {
 	}
 }
 
+func TestResolveAzureDeploymentThroughUnderlyingKnownModel(t *testing.T) {
+	profile := domain.ProfileAzureChatEmbeddings
+	instance := domain.ProviderInstance{
+		ID: "azure", Type: domain.ProviderAzureOpenAI, AccessSurface: domain.SurfaceAzureOpenAI, Enabled: true,
+		Bindings: []domain.ProviderProfileBinding{{
+			ID: "b-azure", ProfileID: profile, AccessSurface: domain.SurfaceAzureOpenAI, Enabled: true,
+			Capabilities: domain.DefaultProviderCapabilitiesForProfile(domain.ProviderAzureOpenAI, profile),
+		}},
+	}
+	entry, ok := modelcatalog.Builtin().Lookup(modelcatalog.Key{
+		ProviderType: domain.ProviderOpenAI, Profile: domain.ProfileOpenAIChatEmbeddings, Model: "gpt-5",
+	})
+	if !ok {
+		t.Fatal("underlying model missing from catalog")
+	}
+	wanted := entry.Capabilities
+	resolution, err := resolveDeploymentTarget(instance, deploymentInput{
+		TargetKind: domain.TargetAzureDeployment, CapabilityModel: "gpt-5",
+		ModelRevision: entry.Revision(), Capabilities: &wanted,
+	}, "my-production-deployment", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resolution.mapped || !resolution.declared || resolution.entry.Key.Model != "gpt-5" {
+		t.Fatalf("resolution=%#v", resolution)
+	}
+	if resolution.capabilities != wanted {
+		t.Fatalf("capabilities=%#v", resolution.capabilities)
+	}
+
+	if _, err := resolveDeploymentTarget(instance, deploymentInput{
+		TargetKind: domain.TargetAzureDeployment, CapabilityModel: "gpt-5", ModelRevision: "sha256:stale",
+	}, "my-production-deployment", "", nil); !errors.Is(err, errModelCapabilityChanged) {
+		t.Fatalf("stale mapped model revision was accepted: %v", err)
+	}
+}
+
+func TestResolveCustomEndpointThroughCompatibleCatalogOnly(t *testing.T) {
+	profile := domain.ProfileOpenAICompatible
+	instance := domain.ProviderInstance{
+		ID: "compatible", Type: domain.ProviderOpenAICompatible, AccessSurface: domain.SurfaceOpenAICompatible, Enabled: true,
+		Bindings: []domain.ProviderProfileBinding{{
+			ID: "b-compatible", ProfileID: profile, AccessSurface: domain.SurfaceOpenAICompatible, Enabled: true,
+			Capabilities: domain.DefaultProviderCapabilitiesForProfile(domain.ProviderOpenAICompatible, profile),
+		}},
+	}
+	wanted := domain.ProviderCapabilities{Chat: true, Streaming: true}
+	resolution, err := resolveDeploymentTarget(instance, deploymentInput{
+		TargetKind: domain.TargetCustomEndpointModel, CapabilityModel: "gpt-5", Capabilities: &wanted,
+	}, "tenant-model-alias", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resolution.mapped || !resolution.declared || resolution.capabilities != wanted {
+		t.Fatalf("resolution=%#v", resolution)
+	}
+	if resolution.capabilities.Tools || resolution.capabilities.JSONMode || resolution.capabilities.Reasoning {
+		t.Fatalf("native-only capabilities leaked into compatible target: %#v", resolution.capabilities)
+	}
+	wider := domain.ProviderCapabilities{Chat: true, Streaming: true, Embeddings: true}
+	if _, err := resolveDeploymentTarget(instance, deploymentInput{
+		TargetKind: domain.TargetCustomEndpointModel, CapabilityModel: "gpt-5",
+		Mode: deploymentModeOperatorDeclared, Capabilities: &wider,
+	}, "tenant-model-alias", "", nil); !errors.Is(err, errCapabilitiesExceedMappedModel) {
+		t.Fatalf("mapped model was widened past its catalog entry: %v", err)
+	}
+	if _, err := resolveDeploymentTarget(instance, deploymentInput{
+		TargetKind: domain.TargetCustomEndpointModel, CapabilityModel: "claude-sonnet-4-6", Capabilities: &wanted,
+	}, "tenant-model-alias", "", nil); err == nil {
+		t.Fatal("a native Anthropic entry was accepted as an OpenAI-compatible reviewed model")
+	}
+}
+
 // Discovery and creation resolve the same catalog entry from different code
 // paths. If they disagreed on the key, every create carrying a revision read
 // from the console would conflict, and operators would learn to retry through
@@ -305,9 +382,9 @@ func TestDiscoveryAndCreateAgreeOnTheModelRevision(t *testing.T) {
 	declarations := map[string]domain.ProviderCapabilities{
 		// The converse ceiling declares its own context limit; a deployment may
 		// narrow a non-zero limit but may not leave it undeclared.
-		"amazon.nova-pro-v1:0": {Chat: true, MaxContextTokens: 8192},
+		unknownBedrockModel: {Chat: true, MaxContextTokens: 8192},
 	}
-	for _, model := range []string{titanEmbedModel, "amazon.nova-pro-v1:0"} {
+	for _, model := range []string{titanEmbedModel, unknownBedrockModel} {
 		var results []bindingCatalog
 		for _, binding := range instance.Bindings {
 			results = append(results, catalogResult(binding, true, model))
@@ -338,7 +415,7 @@ func TestResolveSkipsProfilesThatPinADifferentModel(t *testing.T) {
 	declared := domain.ProviderCapabilities{Chat: true, MaxContextTokens: 8192}
 	resolution, err := resolveDeploymentTarget(instance, deploymentInput{
 		Mode: deploymentModeOperatorDeclared, Capabilities: &declared,
-	}, "amazon.nova-pro-v1:0", "us-east-1", nil)
+	}, unknownBedrockModel, "us-east-1", nil)
 	if err != nil {
 		t.Fatalf("a model the converse profile serves was refused: %v", err)
 	}
@@ -351,7 +428,7 @@ func TestResolveSkipsProfilesThatPinADifferentModel(t *testing.T) {
 	pinnedOnly := bedrockInstance(bedrockBinding("b-embed", domain.ProfileBedrockInvokeTitanEmbedV2))
 	_, err = resolveDeploymentTarget(pinnedOnly, deploymentInput{
 		Mode: deploymentModeOperatorDeclared, Capabilities: &declared,
-	}, "amazon.nova-pro-v1:0", "us-east-1", nil)
+	}, unknownBedrockModel, "us-east-1", nil)
 	if err == nil {
 		t.Fatal("a pinned profile accepted a model it rejects at request time")
 	}

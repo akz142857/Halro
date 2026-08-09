@@ -1,10 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { ErrorState, Loading, PageHeader, StatusDot } from "../components";
 import { navigate, usePathname } from "../navigation";
-import type { SystemConfigFact, SystemConfigSection, WritePathSummary } from "../types";
+import { useSession } from "../session";
+import type { SystemConfigEntry, WritePathSummary } from "../types";
 import { AdminUsersSection } from "./AdminUsersSection";
 import { AccountingTimezoneForm } from "./AccountingTimezoneForm";
 import { AppearanceForm } from "./AppearanceForm";
@@ -25,6 +26,7 @@ function paneFromPath(path: string): SettingsPane {
 
 export function SettingsPage({ mfaSetupRequired = false }: { mfaSetupRequired?: boolean }) {
   const { t } = useTranslation();
+  const session = useSession();
   const path = usePathname();
   const pane = mfaSetupRequired ? "security" : paneFromPath(path);
   const status = useQuery({
@@ -77,10 +79,10 @@ export function SettingsPage({ mfaSetupRequired = false }: { mfaSetupRequired?: 
             {pending && <Loading />}
             {error && <ErrorState error={error} />}
             {!pending && !error && pane === "general" && uiSettings.data && preferences.data && <section aria-labelledby="general-title"><SettingsGroupHeader title={t("settings.panes.general")} description={t("settings.generalDescription")} id="general-title" /><AppearanceForm preferences={preferences.data.data} /><PersonalLanguageForm ui={uiSettings.data.data} preferences={preferences.data.data} /></section>}
-            {pane === "security" && <section aria-labelledby="security-title"><SettingsGroupHeader title={t("settings.panes.security")} description={t("settings.securityDescription")} id="security-title" /><PasswordChangeForm /><MFASettings /></section>}
+            {pane === "security" && <section aria-labelledby="security-title"><SettingsGroupHeader title={t("settings.panes.security")} description={t("settings.securityDescription")} id="security-title" /><PasswordChangeForm username={session?.username} /><MFASettings username={session?.username} /></section>}
             {pane === "accounts" && <section aria-labelledby="accounts-title"><SettingsGroupHeader title={t("settings.panes.accounts")} description={t("settings.accountsDescription")} id="accounts-title" /><AdminUsersSection /></section>}
             {!pending && !error && pane === "instance" && uiSettings.data && preferences.data && settings.data && <section aria-labelledby="instance-title"><SettingsGroupHeader title={t("settings.panes.instance")} description={t("settings.instanceDescription")} id="instance-title" /><InstanceLanguageForm ui={uiSettings.data.data} preferences={preferences.data.data} />{accounting.data && <AccountingTimezoneForm settings={accounting.data.data} />}<RuntimeSettingsForm settings={settings.data.data} /></section>}
-            {!pending && !error && pane === "config" && config.data && <section aria-labelledby="config-title"><SettingsGroupHeader title={t("settings.panes.config")} description={t("settings.configPreviewDescription")} id="config-title" /><ConfigPreviewCard yaml={config.data.yaml} summary={config.data.summary} /></section>}
+            {!pending && !error && pane === "config" && config.data && <section aria-labelledby="config-title"><SettingsGroupHeader title={t("settings.panes.config")} description={t("settings.configPreviewDescription")} id="config-title" /><ConfigPreviewCard yaml={config.data.yaml} entries={config.data.entries} /></section>}
             {!pending && !error && pane === "diagnostics" && status.data && <DiagnosticsPane status={status.data} accountingLabels={accountingLabels} metricLabels={metricLabels} />}
           </div>
         </div>
@@ -187,10 +189,18 @@ function formatFactor(value: number) {
 // stop using the summary above it.
 let yamlDisclosureOpen = false;
 
-function ConfigPreviewCard({ yaml, summary }: { yaml: string; summary: SystemConfigSection[] }) {
-  const { t } = useTranslation();
+function ConfigPreviewCard({ yaml, entries }: { yaml: string; entries: SystemConfigEntry[] }) {
+  const { t, i18n } = useTranslation();
   const [copyStatus, setCopyStatus] = useState("");
   const [yamlOpen, setYamlOpen] = useState(yamlDisclosureOpen);
+  const [query, setQuery] = useState("");
+  const english = i18n.resolvedLanguage === "en-US";
+  const visibleEntries = useMemo(() => {
+    const needle = query.trim().toLocaleLowerCase();
+    if (!needle) return entries;
+    return entries.filter((entry) => [entry.path, entry.title_zh, entry.title_en, entry.description_zh, entry.description_en, entry.value]
+      .some((value) => value.toLocaleLowerCase().includes(needle)));
+  }, [entries, query]);
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(yaml);
@@ -207,7 +217,17 @@ function ConfigPreviewCard({ yaml, summary }: { yaml: string; summary: SystemCon
       </div>
       <span className="config-overview-state">{t("settings.readOnlyRestart")}</span>
     </header>
-    {summary.map((section) => <ConfigSummarySection key={section.id} section={section} />)}
+    <div className="config-list-toolbar">
+      <label>
+        <span className="sr-only">{t("settings.searchConfig")}</span>
+        <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("settings.searchConfigPlaceholder")} />
+      </label>
+      <span>{t("settings.configResultCount", { visible: visibleEntries.length, total: entries.length })}</span>
+    </div>
+    <div className="config-list" role="list">
+      {visibleEntries.map((entry) => <ConfigEntryRow key={entry.path} entry={entry} english={english} />)}
+      {visibleEntries.length === 0 && <p className="config-list-empty">{t("settings.noConfigMatches")}</p>}
+    </div>
     <details
       className="config-preview"
       open={yamlOpen}
@@ -228,27 +248,28 @@ function ConfigPreviewCard({ yaml, summary }: { yaml: string; summary: SystemCon
   </section>;
 }
 
-function ConfigSummarySection({ section }: { section: SystemConfigSection }) {
+function ConfigEntryRow({ entry, english }: { entry: SystemConfigEntry; english: boolean }) {
   const { t } = useTranslation();
-  // Title above its rows on one plane, rather than a second column: the label
-  // column is the scan path, and a group heading competing for it breaks the
-  // line the eye follows down the values.
-  return <div className="config-group">
-    <h4 id={`config-section-${section.id}`}>{t(`settings.configSections.${section.id}`)}</h4>
-    <dl aria-labelledby={`config-section-${section.id}`}>
-      {section.facts.map((fact) => <div key={fact.id}>
-        <dt>{t(`settings.configFacts.${fact.id}`)}</dt>
-        <dd className={fact.kind === "path" || fact.kind === "address" ? "technical" : undefined}>{formatConfigFact(fact, t)}</dd>
-      </div>)}
-    </dl>
-  </div>;
+  const title = (english ? entry.title_en : entry.title_zh) || entry.path;
+  const description = english ? entry.description_en : entry.description_zh;
+  return <article className="config-entry" role="listitem">
+    <div className="config-entry-copy">
+      <div>
+        <h4>{title}</h4>
+        <code>{entry.path}</code>
+      </div>
+      <p>{description || t("settings.configDescriptionMissing")}</p>
+    </div>
+    <div className={entry.kind === "boolean" ? `config-entry-value config-value-state ${entry.value === "true" ? "enabled" : "disabled"}` : "config-entry-value"}>
+      {formatConfigEntry(entry, t)}
+    </div>
+  </article>;
 }
 
-function formatConfigFact(fact: SystemConfigFact, t: (key: string, options?: Record<string, unknown>) => string) {
-  if (!fact.value) return t("settings.notConfigured");
-  if (fact.kind === "boolean") return t(fact.value === "true" ? "settings.enabled" : "settings.disabled");
-  if (fact.id === "master_key_mode") return t(`settings.masterKeyModes.${fact.value}`, { defaultValue: fact.value });
-  return fact.value;
+function formatConfigEntry(entry: SystemConfigEntry, t: (key: string, options?: Record<string, unknown>) => string) {
+  if (!entry.value || entry.value === "[]") return t("settings.notConfigured");
+  if (entry.kind === "boolean") return t(entry.value === "true" ? "settings.enabled" : "settings.disabled");
+  return entry.value;
 }
 
 function SettingsGroupHeader({ title, description, id }: { title: string; description: string; id: string }) {
