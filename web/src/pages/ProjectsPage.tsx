@@ -305,7 +305,6 @@ function KeyRow({ project, value }: { project: Project; value: GatewayKey }) {
         </div>
         <div className="key-dates">
           <small>{t("projects.created", { date: dateTime(value.created_at) })}</small>
-          <small>{t("projects.lastUsed", { date: dateTime(value.last_used_at) })}</small>
           <small className={expired ? "key-expiry expired" : "key-expiry"}>
             {value.expires_at
               ? t(expired ? "projects.expiredAt" : "projects.expiresAt", { date: dateTime(value.expires_at) })

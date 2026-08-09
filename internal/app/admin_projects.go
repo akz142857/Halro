@@ -275,8 +275,7 @@ func (r *Runtime) getAdminProjectKey(writer http.ResponseWriter, request *http.R
 	writer.Header().Set("ETag", revisionETag(key.Revision))
 	writeJSON(writer, http.StatusOK, gatewayKeyView{
 		ID: key.ID, ProjectID: key.ProjectID, Name: key.Name, Enabled: key.Enabled,
-		ExpiresAt: key.ExpiresAt, CreatedAt: key.CreatedAt, LastUsedAt: key.LastUsedAt,
-		Revision: key.Revision,
+		ExpiresAt: key.ExpiresAt, CreatedAt: key.CreatedAt, Revision: key.Revision,
 	})
 }
 
@@ -320,8 +319,7 @@ func (r *Runtime) updateAdminProjectKey(writer http.ResponseWriter, request *htt
 	writer.Header().Set("ETag", revisionETag(key.Revision))
 	writeJSON(writer, http.StatusOK, gatewayKeyView{
 		ID: key.ID, ProjectID: key.ProjectID, Name: key.Name, Enabled: key.Enabled,
-		ExpiresAt: key.ExpiresAt, CreatedAt: key.CreatedAt, LastUsedAt: key.LastUsedAt,
-		Revision: key.Revision,
+		ExpiresAt: key.ExpiresAt, CreatedAt: key.CreatedAt, Revision: key.Revision,
 	})
 }
 
