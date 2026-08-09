@@ -772,6 +772,15 @@ func resolveDeploymentTarget(instance domain.ProviderInstance, input deploymentI
 // applies now. It is per-model on purpose: a catalog-wide digest would rotate
 // whenever any unrelated model appeared, and operators would learn to retry
 // through the conflict until it meant nothing.
+//
+// An absent revision is deliberately not an error, and this is the reasoning so
+// it does not get "hardened" later. The builtin catalog is compiled in behind
+// sync.OnceValues, so it cannot move while the process runs: a request that
+// names no revision is resolved against the same catalog it would have read,
+// and there is no stale read to catch. The one real staleness — a client that
+// read the catalog from an older binary and writes to a newer one — sends the
+// *old* revision, which the comparison below already refuses with a 409.
+// Requiring the field would fail honest minimal requests without closing that.
 func checkModelRevision(claimed string, entry modelcatalog.Entry) error {
 	if claimed == "" || claimed == entry.Revision() {
 		return nil

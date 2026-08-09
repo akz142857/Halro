@@ -200,14 +200,23 @@ func loadProviderRegistry(
 			// stop the load. Refusing to build the registry would turn one stale
 			// snapshot into a process that cannot start, taking down every other
 			// route with it — the opposite of what fail-closed is meant to buy.
-			if instance, ok := instanceByID[deployment.ProviderID]; ok {
-				state := evaluateCapabilityReview(deployment, deploymentBinding(instance, deployment), instance.Type)
-				if !capabilityReviewAdmitsTraffic(state) {
-					withheld = append(withheld, capabilityWithholding{
-						RouteID: route.ID, DeploymentID: deployment.ID, State: state,
-					})
-					continue
-				}
+			// reviewForDeployment rather than an inline lookup, so this path and
+			// the Admin/doctor one read a missing provider the same way. They
+			// used to disagree: this skipped the check and admitted, that
+			// answered drifted.
+			//
+			// No reachable state distinguishes them today — ListProviders
+			// returns tombstones too, so instanceByID holds every provider
+			// record that exists, and a deployment can only miss one by
+			// referencing an ID with no record at all, which the store refuses.
+			// It is shared rather than duplicated because the alternative is two
+			// spellings of one rule, which is what a later change gets wrong.
+			state := reviewForDeployment(instanceByID, deployment).State
+			if !capabilityReviewAdmitsTraffic(state) {
+				withheld = append(withheld, capabilityWithholding{
+					RouteID: route.ID, DeploymentID: deployment.ID, State: state,
+				})
+				continue
 			}
 			providerID = deployment.ProviderID
 			bindingID = deployment.BindingID

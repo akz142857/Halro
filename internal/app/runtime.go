@@ -1342,7 +1342,7 @@ func (r *Runtime) metricsRouter() http.Handler {
 		if err := controller.SetWriteDeadline(time.Now().Add(r.config.Metrics.WriteTimeout.Value())); err != nil {
 			r.logger.Warn("metrics response write deadline unavailable", "error", err)
 		}
-		if err := r.writeMetrics(writer); err != nil {
+		if err := r.writeMetrics(request.Context(), writer); err != nil {
 			r.metricsRenderErrs.Add(1)
 			r.logger.Warn("metrics response write failed", "error", err)
 		}

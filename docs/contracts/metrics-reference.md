@@ -144,6 +144,17 @@ being wrong. `rate()` over either is unaffected; only an absolute comparison
 between the two families is meaningless.
 
 
+`halro_deployment_capability_status` and `halro_operator_declared_deployments`
+describe stored records rather than process counters, so they are read at scrape
+time. When that read fails, both families are **omitted from the exposition
+rather than reported as zero**. Alerts must treat a missing series as unknown —
+`absent()` — and not as "no drifted deployments", which is the assertion these
+gauges exist to support. Every other value of `state` is one of `known`,
+`partial`, `unknown` or `conflicting`, all four always present; the additional
+`unrecognised` series appears only if a stored record carries a status outside
+those four, and it exists so such a record shows up in the totals instead of
+being dropped from them.
+
 Histogram buckets are 10, 25, 50, 100, 250, and 500 milliseconds, then 1,
 2.5, 5, 10, 30, and 120 seconds plus `+Inf`. They are derived from Ledger
 events and persisted in the Usage checkpoint, so replay and catch-up preserve
