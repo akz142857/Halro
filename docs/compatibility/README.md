@@ -11,6 +11,16 @@ transform. Endpoint maturity never promotes an individual provider profile:
 for example, `/v1/embeddings` remains compatible while the Phase 2 Titan Text
 Embeddings V2 coverage remains experimental.
 
+A model catalog entry is not a compatibility claim. `internal/modelcatalog`
+records what a specific model does through a specific provider profile, which
+constrains what one deployment may be configured to offer; the manifest records
+what an endpoint accepts and emits. Adding a model never widens an endpoint's
+maturity, and endpoint maturity never promotes a model — the same rule that
+already holds one level up, where endpoint maturity never promotes an individual
+provider profile. A model the catalog does not cover is deployable through any
+compatible endpoint once the operator declares what it does, so an absent entry
+is not an absent capability either.
+
 The JSON is generated conceptually from `compatibility.BuiltinEndpointManifests`
 and enforced as a golden snapshot by the Go test suite. Any change requires a
 deliberate compatibility review. A provider profile listed in the manifest is

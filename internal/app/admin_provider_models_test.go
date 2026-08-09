@@ -3,11 +3,16 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/akz142857/Halro/internal/config"
 
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/modelcatalog"
@@ -292,5 +297,159 @@ func TestBedrockPinnedProfileOffersItsCataloguedModelThroughTheAdminAPI(t *testi
 	if deployment.ModelCapabilitySnapshot.Source != string(modelcatalog.SourceBuiltin) {
 		t.Fatalf("snapshot source=%q, want the catalog to be recorded as the source",
 			deployment.ModelCapabilitySnapshot.Source)
+	}
+}
+
+// §12 asked for the aggregate's failure and latency semantics to be tested, not
+// only described. These three cover what the aggregation actually promises.
+
+// listingAdapter is a model lister whose answer and delay the test controls.
+type listingAdapter struct {
+	provider.Adapter
+	models  []provider.ModelDescriptor
+	delay   time.Duration
+	err     error
+	inFlght *atomic.Int64
+	peak    *atomic.Int64
+}
+
+func (a *listingAdapter) ListModels(ctx context.Context) ([]provider.ModelDescriptor, error) {
+	if a.inFlght != nil {
+		current := a.inFlght.Add(1)
+		defer a.inFlght.Add(-1)
+		for {
+			peak := a.peak.Load()
+			if current <= peak || a.peak.CompareAndSwap(peak, current) {
+				break
+			}
+		}
+	}
+	if a.delay > 0 {
+		select {
+		case <-time.After(a.delay):
+		case <-ctx.Done():
+			return nil, &provider.Error{Class: provider.ErrorTimeout, Message: "listing timed out", Cause: ctx.Err()}
+		}
+	}
+	if a.err != nil {
+		return nil, a.err
+	}
+	return a.models, nil
+}
+
+func (a *listingAdapter) Close() {}
+
+// A provider with many enabled interfaces must not fan out without a bound, and
+// one slow interface must not consume the time the others need. The timeout is
+// per binding for that reason, and this asserts both rather than trusting the
+// comment that says so.
+func TestAggregateCatalogIsConcurrencyBoundedAndTimesOutPerBinding(t *testing.T) {
+	const bindings = 12
+	var inFlight, peak atomic.Int64
+	registry := provider.NewRegistry()
+	instance := domain.ProviderInstance{ID: "prov", Type: domain.ProviderOpenAI, Enabled: true}
+	for index := range bindings {
+		id := fmt.Sprintf("b-%02d", index)
+		adapter := &listingAdapter{
+			models:  []provider.ModelDescriptor{{ID: fmt.Sprintf("model-%02d", index)}},
+			delay:   20 * time.Millisecond,
+			inFlght: &inFlight, peak: &peak,
+		}
+		// One interface hangs past its own timeout. It must fail alone.
+		if index == 0 {
+			adapter.delay = time.Hour
+		}
+		if err := registry.RegisterBindingAdapter(instance.ID, id, adapter); err != nil {
+			t.Fatal(err)
+		}
+		instance.Bindings = append(instance.Bindings, domain.ProviderProfileBinding{
+			ID: id, ProfileID: domain.ProfileOpenAIChatEmbeddings, Enabled: true,
+			Capabilities: domain.DefaultProviderCapabilitiesForProfile(domain.ProviderOpenAI, domain.ProfileOpenAIChatEmbeddings),
+		})
+	}
+
+	cfg := config.Default()
+	cfg.Gateway.AttemptResponseHeaderTimeout = config.Duration(250 * time.Millisecond)
+	runtime := &Runtime{providers: registry, config: cfg, capabilityMetrics: newCapabilityMetrics()}
+
+	started := time.Now()
+	results := runtime.fetchProviderCatalogs(context.Background(), instance, instance.Bindings, true)
+	elapsed := time.Since(started)
+
+	if peak.Load() > int64(providerModelFetchConcurrency) {
+		t.Fatalf("peak concurrent fetches=%d, cap=%d", peak.Load(), providerModelFetchConcurrency)
+	}
+	if peak.Load() < 2 {
+		t.Fatalf("the fetches did not overlap at all, so the cap is not what bounded them: peak=%d", peak.Load())
+	}
+	// The hung interface is bounded by its own timeout rather than running to
+	// its full delay, and the others are not waiting behind it.
+	if elapsed > 3*time.Second {
+		t.Fatalf("one slow interface held the aggregate for %s", elapsed)
+	}
+	var failed, reached int
+	for _, result := range results {
+		if result.failed {
+			failed++
+			continue
+		}
+		reached++
+	}
+	if failed != 1 || reached != bindings-1 {
+		t.Fatalf("failed=%d reached=%d, want exactly the hung interface to fail", failed, reached)
+	}
+}
+
+// §7.3 calls manual model entry the kill switch: when nothing can answer, the
+// operator must still be told to type the ID rather than be left with a page
+// that looks empty.
+func TestProviderModelCatalogFailsClosedWhenNoInterfaceCanList(t *testing.T) {
+	cfg := testConfig(t)
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := BootstrapAdmin(context.Background(), cfg, "admin", []byte("correct horse battery staple")); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := Open(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	cookie, csrf := loginAdminForTest(t, runtime)
+
+	// Anthropic's adapter implements no model discovery, so every enabled
+	// binding degrades and none is reachable.
+	credentialResponse := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost, "/admin/api/v1/credentials", "", map[string]any{
+		"name": "Anthropic", "type": "anthropic", "base_url": "https://api.anthropic.com", "secret": "sk-ant-test-secret-value",
+	})
+	var credential credentialView
+	if credentialResponse.Code != http.StatusCreated || json.Unmarshal(credentialResponse.Body.Bytes(), &credential) != nil {
+		t.Fatalf("credential status=%d body=%s", credentialResponse.Code, credentialResponse.Body.String())
+	}
+	providerResponse := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost, "/admin/api/v1/providers", "", map[string]any{
+		"name": "Anthropic", "type": "anthropic", "base_url": "https://api.anthropic.com",
+		"credential_id": credential.ID, "enabled": true,
+	})
+	var instance domain.ProviderInstance
+	if providerResponse.Code != http.StatusCreated || json.Unmarshal(providerResponse.Body.Bytes(), &instance) != nil {
+		t.Fatalf("provider status=%d body=%s", providerResponse.Code, providerResponse.Body.String())
+	}
+
+	listing := performAdminMutation(t, runtime, cookie, csrf, http.MethodGet,
+		"/admin/api/v1/providers/"+instance.ID+"/models", "", nil)
+	if listing.Code != http.StatusBadGateway {
+		t.Fatalf("status=%d body=%s", listing.Code, listing.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(listing.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	message, _ := body["error"].(string)
+	if !strings.Contains(message, "enter a model ID manually") {
+		t.Fatalf("the refusal does not point at the fallback: %q", message)
+	}
+	if body["error_class"] == nil || body["error_class"] == "" {
+		t.Fatalf("no error class to distinguish an outage from a profile with no discovery: %#v", body)
 	}
 }

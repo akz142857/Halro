@@ -428,3 +428,60 @@ func TestUnionIsWiderThanBothSides(t *testing.T) {
 		t.Fatalf("an undeclared limit was bounded by the other side: %+v", widest)
 	}
 }
+
+// Conflict detection compares the per-model digest, and the reason is that the
+// catalog-wide one rotates whenever any unrelated model appears. The existing
+// coverage only showed a stale revision being caught; this shows the other
+// direction, which is what keeps operators from learning to retry through 409s
+// until the code means nothing.
+func TestAnUnrelatedModelChangingDoesNotMoveThisModelsRevision(t *testing.T) {
+	key := Key{ProviderType: domain.ProviderOpenAI, Profile: domain.ProfileOpenAIChatEmbeddings, Model: "subject"}
+	subject := Entry{
+		Key: key, Status: StatusKnown, Source: SourceBuiltin,
+		Capabilities: domain.ProviderCapabilities{Chat: true, Streaming: true},
+	}
+	unrelated := Entry{
+		Key:          Key{ProviderType: domain.ProviderOpenAI, Profile: domain.ProfileOpenAIChatEmbeddings, Model: "other"},
+		Status:       StatusKnown,
+		Source:       SourceBuiltin,
+		Capabilities: domain.ProviderCapabilities{Embeddings: true},
+	}
+
+	before, err := New(subject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := New(subject, unrelated)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first, ok := before.Lookup(key)
+	if !ok {
+		t.Fatal("subject missing")
+	}
+	second, ok := after.Lookup(key)
+	if !ok {
+		t.Fatal("subject missing after the unrelated model appeared")
+	}
+	if first.Revision() != second.Revision() {
+		t.Fatalf("an unrelated model moved this model's revision: %s -> %s", first.Revision(), second.Revision())
+	}
+	// And the catalog-wide digest does move, which is exactly why it is not what
+	// a create request echoes back.
+	if before.Revision() == after.Revision() {
+		t.Fatal("the catalog digest did not change, so this proves nothing about why it is unused for conflicts")
+	}
+
+	// Changing the subject itself does move its revision.
+	widened := subject
+	widened.Capabilities.Tools = true
+	changed, err := New(widened, unrelated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	third, _ := changed.Lookup(key)
+	if third.Revision() == second.Revision() {
+		t.Fatal("changing what the catalog establishes for a model left its revision alone")
+	}
+}
