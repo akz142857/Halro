@@ -210,6 +210,67 @@ func TestPricingMutationAndAuditIntentCommitAtomically(t *testing.T) {
 	}
 }
 
+func TestPendingPricingAuditIntentsIgnoreDeliveredRecords(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	// A creation intent without source evidence, already delivered: the shape a
+	// pre-guard binary left behind. Its audit record exists and nothing is owed,
+	// so it must not fail the listing every start-up depends on.
+	stale := domain.PricingAuditIntent{
+		EventID: "aud_stale_delivered", OccurredAt: now, ActorID: "admin_one",
+		Action: "deployment_price.create", TargetType: "deployment_price_version", TargetID: "price_stale",
+		RequestSHA256: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+		Delivered:     true, SourceType: domain.PriceSourceManual,
+	}
+	putRawPricingAuditIntent(t, store, stale)
+
+	seedPricingDeployment(t, store, "dep_stale", 0, 0, 0)
+	price := newStoredPrice("price_live", "dep_stale", now.Add(time.Hour))
+	live := domain.PricingAuditIntent{
+		EventID: "aud_live_pending", OccurredAt: now, ActorID: "admin_one",
+		Action: "deployment_price.create", TargetType: "deployment_price_version", TargetID: price.ID,
+		RequestSHA256: "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+	}
+	live.RecordSource(price.Source)
+	if _, err := store.CreateDeploymentPriceVersionWithAuditIntent(ctx, price, live); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := store.ListPendingPricingAuditIntents(ctx)
+	if err != nil || len(pending) != 1 || pending[0].EventID != live.EventID {
+		t.Fatalf("pending=%#v err=%v", pending, err)
+	}
+
+	// An undelivered intent missing the same evidence is still refused: what is
+	// about to be appended is held to the guard.
+	undelivered := stale
+	undelivered.EventID, undelivered.Delivered = "aud_stale_pending", false
+	putRawPricingAuditIntent(t, store, undelivered)
+	if _, err := store.ListPendingPricingAuditIntents(ctx); err == nil {
+		t.Fatal("pending intent without source evidence was listed")
+	}
+}
+
+// putRawPricingAuditIntent writes an intent straight into the bucket, bypassing
+// the write-side guard, because the records under test are ones no current code
+// path can produce.
+func putRawPricingAuditIntent(t *testing.T, store *Store, intent domain.PricingAuditIntent) {
+	t.Helper()
+	encoded, err := json.Marshal(intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.Update(func(tx *bbolt.Tx) error {
+		return tx.Bucket(bucketPricingAuditIntents).Put([]byte(intent.EventID), encoded)
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDeploymentPricePinPersistsHighWaterAndCommitsLedgerSequence(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
