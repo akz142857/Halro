@@ -80,7 +80,7 @@ func BundledSnapshot() Snapshot {
 		})
 	}
 	snapshot := Snapshot{
-		SchemaVersion: MinReadableSchema,
+		SchemaVersion:               MinReadableSchema,
 		CapabilityDictionaryVersion: CapabilityDictionaryVersion, Entries: entries,
 	}
 	revision, err := ComputeSnapshotRevision(snapshot)

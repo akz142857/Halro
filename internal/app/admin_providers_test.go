@@ -219,6 +219,8 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 	var deployment struct {
 		ID                 string                       `json:"id"`
 		Revision           uint64                       `json:"revision"`
+		LastTestStatus     domain.DeploymentTestStatus  `json:"last_test_status"`
+		LastTestRevision   uint64                       `json:"last_test_revision"`
 		AccessSurface      domain.AccessSurface         `json:"access_surface"`
 		ProfileID          domain.ProviderProfileID     `json:"profile_id"`
 		TargetKind         domain.DeploymentTargetKind  `json:"target_kind"`
@@ -272,6 +274,9 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 	}
 	if err := json.Unmarshal(enableDeployment.Body.Bytes(), &deployment); err != nil {
 		t.Fatal(err)
+	}
+	if deployment.LastTestStatus != domain.DeploymentTestHealthy || deployment.LastTestRevision != deployment.Revision {
+		t.Fatalf("enabling deployment made its current validation stale: %#v", deployment)
 	}
 	profileChange := performAdminMutation(t, runtime, cookie, csrf,
 		http.MethodPut, "/admin/api/v1/providers/"+instance.ID, `"1"`, map[string]any{

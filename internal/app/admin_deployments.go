@@ -242,11 +242,16 @@ func (r *Runtime) updateAdminDeployment(writer http.ResponseWriter, request *htt
 		r.adminDeploymentInputError(writer, request, err)
 		return
 	}
+	// Region is part of the target's identity, not a label on it: it selects the
+	// endpoint, enters the model catalog key and the capability claim revision,
+	// and binds the inference resources a deployment may use. A probe that
+	// succeeded in one region is evidence about that region only.
 	targetChanged := deployment.ProviderID != current.ProviderID ||
 		deployment.ProviderModel != current.ProviderModel ||
 		deployment.TargetKind != current.TargetKind && current.TargetKind != "" ||
 		deployment.BindingID != current.BindingID ||
 		deployment.ProfileID != current.ProfileID ||
+		deployment.Region != current.Region ||
 		deployment.AccessSurface != current.AccessSurface
 	if targetChanged {
 		writeJSON(writer, http.StatusConflict, map[string]string{"error": "deployment target identity is immutable; create and validate a replacement deployment"})
@@ -293,6 +298,29 @@ func (r *Runtime) updateAdminDeployment(writer http.ResponseWriter, request *htt
 		(current.LastTestStatus != domain.DeploymentTestHealthy || current.LastTestRevision != current.Revision) {
 		writeJSON(writer, http.StatusConflict, map[string]string{"error": "deployment must pass a current validation test before enable"})
 		return
+	}
+	// PutDeployment advances the optimistic-lock revision for every update, so a
+	// probe recorded against the current revision would read as stale after an
+	// edit that changed nothing the probe was evidence about. Carrying it forward
+	// is what keeps a rename or a concurrency change from silently demanding a
+	// retest, and it is narrow on purpose:
+	//
+	//   - the target itself cannot move here at all; targetChanged rejected that
+	//     above, region included;
+	//   - a change to the capability claim or its snapshot is a change to what
+	//     the deployment says it can do, whether or not it widened, so the probe
+	//     no longer covers the claim being made;
+	//   - taking a deployment out of service invalidates the probe. Re-enabling
+	//     is where an operator asserts it is healthy again, and that assertion
+	//     has to be paid for with a fresh test rather than with the one that was
+	//     current when it was switched off.
+	//
+	// The enable direction does carry forward: it only reaches this line by
+	// presenting a current healthy test to the gate above, so the result is still
+	// evidence about the revision being stored.
+	if current.LastTestStatus != "" && current.LastTestRevision == current.Revision &&
+		!capabilityChanged(current, deployment) && !(current.Enabled && !deployment.Enabled) {
+		deployment.LastTestRevision = current.Revision + 1
 	}
 	if deployment.Enabled {
 		if _, err := r.store.SelectDeploymentPriceVersion(request.Context(), deployment.ID, time.Now().UTC()); err != nil {

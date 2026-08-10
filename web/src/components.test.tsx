@@ -17,6 +17,7 @@ describe("InlineTestControl", () => {
     const onTest = vi.fn();
     const { rerender } = render(<InlineTestControl state="idle" onTest={onTest} />);
     const button = screen.getByRole("button", { name: "测试" });
+    expect(button).toHaveClass("secondary");
     const status = screen.getByRole("status");
     expect(status).toHaveTextContent("尚未测试");
     fireEvent.click(button);

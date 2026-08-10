@@ -5,6 +5,9 @@ export function localizedError(t: TFunction, error: unknown) {
   if (!(error instanceof ApiError)) return t("errors.network");
   const codeMessages: Record<string, string> = {
     deployment_price_unavailable: "errors.deploymentPriceUnavailable",
+    price_effective_from_conflict: "errors.priceEffectiveConflict",
+    price_effective_from_required: "errors.priceEffectiveRequired",
+    route_listing_incomplete: "errors.routeListingIncomplete",
     capability_detection_stale: "errors.capabilityDetectionStale",
     capability_detection_changed: "errors.capabilityDetectionChanged",
     capability_detection_target_mismatch: "errors.capabilityDetectionTargetMismatch",
@@ -33,7 +36,13 @@ export function errorDetail(error: unknown) {
   // This is an actionable, localized workflow state rather than a malformed
   // field. Repeating the server's English sentinel under the translated
   // instruction makes the UI look like an internal validation failure.
-  if (error.code === "ambiguous_capability_binding") return "";
+  const localizedWorkflowCodes = [
+    "ambiguous_capability_binding",
+    "deployment_price_unavailable",
+    "price_effective_from_conflict",
+    "price_effective_from_required",
+  ];
+  if (localizedWorkflowCodes.includes(error.code)) return "";
   // A forwarded upstream reply is the whole point of the message; show it at any status.
   if (error.detail) return error.detail;
   const detailed = error.status === 400 || error.status === 409 || error.status === 422;

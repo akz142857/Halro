@@ -2,7 +2,7 @@
 
 - Status: **Implemented 2026-08-10.** The decision below is the 1.0.0 contract.
 - Date: 2026-08-10
-- Tracking: `docs/todo/provider-model-selection-and-capability-resolution.zh-CN.md`
+- Tracking: `docs/prd/provider-model-selection-and-capability-resolution.zh-CN.md`
 - Related: `docs/contracts/provider-capabilities.md`
 
 ## Context

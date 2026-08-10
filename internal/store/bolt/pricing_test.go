@@ -179,6 +179,9 @@ func TestPricingMutationAndAuditIntentCommitAtomically(t *testing.T) {
 		Action: "deployment_price.create", TargetType: "deployment_price_version", TargetID: price.ID,
 		RequestSHA256: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 	}
+	// A creation intent that does not say where the price came from is refused,
+	// so the evidence is taken from the price itself.
+	intent.RecordSource(price.Source)
 	stored, err := store.CreateDeploymentPriceVersionWithAuditIntent(ctx, price, intent)
 	if err != nil || stored.Version != 1 {
 		t.Fatalf("stored=%#v err=%v", stored, err)

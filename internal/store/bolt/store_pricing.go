@@ -352,7 +352,7 @@ func (s *Store) createDeploymentPriceVersion(ctx context.Context, price domain.D
 		if intent != nil {
 			effective := price.EffectiveFrom.UTC()
 			intent.DeploymentID, intent.PriceVersion, intent.EffectiveFrom = price.DeploymentID, price.Version, &effective
-			intent.SourceType, intent.SourceContentSHA256 = price.Source.Type, price.Source.ContentSHA256
+			intent.RecordSource(price.Source)
 			intent.ChangeSummary = fmt.Sprintf("before=none after={billing:%s,input:%d,output:%d,fixed:%d}", price.BillingMode, price.InputMicrosPerMillion, price.OutputMicrosPerMillion, price.FixedRequestMicrosUSD)
 			if err := putPricingAuditIntentTx(tx, *intent); err != nil {
 				return err

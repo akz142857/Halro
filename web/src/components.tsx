@@ -50,7 +50,7 @@ export function InlineTestControl({ state, latency, onTest, disabled = false, ti
     : t(`testControl.${state}`);
   return (
     <div className="inline-test-control" aria-busy={state === "running"} title={title}>
-      <button className="button ghost" disabled={disabled || state === "running"} aria-describedby={statusID} onClick={onTest}>{t("common.test")}</button>
+      <button className="button secondary" disabled={disabled || state === "running"} aria-describedby={statusID} onClick={onTest}>{t("common.test")}</button>
       <span id={statusID} className={`inline-test-result ${state}`} role="status" aria-live="polite" aria-atomic="true"><span aria-hidden="true" />{status}</span>
     </div>
   );
@@ -75,15 +75,19 @@ export function EmptyState({
   );
 }
 
-export function ErrorState({ error, className = "" }: { error: unknown; className?: string }) {
+export function ErrorState({ error, className = "", action }: { error: unknown; className?: string; action?: ReactNode }) {
   const { t } = useTranslation();
   const message = error instanceof ApiError ? localizedError(t, error) : t("common.dataUnavailable");
   const detail = errorDetail(error);
+  const content = <>
+    <strong>{t("common.requestFailed")}</strong>
+    <span>{message}</span>
+    {detail && <small className="notice-detail">{detail}</small>}
+  </>;
   return (
-    <div className={`notice error${className ? ` ${className}` : ""}`} role="alert">
-      <strong>{t("common.requestFailed")}</strong>
-      <span>{message}</span>
-      {detail && <small className="notice-detail">{detail}</small>}
+    <div className={`notice error${action ? " has-action" : ""}${className ? ` ${className}` : ""}`} role="alert">
+      {action ? <div className="notice-copy">{content}</div> : content}
+      {action && <div className="notice-action">{action}</div>}
     </div>
   );
 }

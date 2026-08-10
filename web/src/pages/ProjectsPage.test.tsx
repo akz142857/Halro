@@ -39,6 +39,7 @@ describe("projects page", () => {
     vi.spyOn(api, "projectsPage").mockResolvedValue({ items: [], next_cursor: "" });
     vi.spyOn(api, "keysPage").mockResolvedValue({ items: [], next_cursor: "" } as never);
     vi.spyOn(api, "routes").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "allRoutes").mockResolvedValue([]);
     vi.spyOn(api, "tokenGuardPolicies").mockResolvedValue({ items: [tokenGuardPolicy], next_cursor: "" } as never);
     vi.spyOn(api, "redactionPolicies").mockResolvedValue({ items: [redactionPolicy], next_cursor: "" } as never);
     vi.spyOn(api, "tokenGuardPoliciesPage").mockResolvedValue({ items: [tokenGuardPolicy], next_cursor: "" } as never);
@@ -63,6 +64,35 @@ describe("projects page", () => {
     expect(screen.getByRole("option", { name: /Strict redaction/ })).toBeInTheDocument();
   });
 
+  it("authorizes one public model alias instead of exposing each candidate route", async () => {
+    vi.mocked(api.allRoutes).mockResolvedValue([
+      { id: "rt_openai", public_model: "chat", strategy: "ordered", enabled: true },
+      { id: "rt_azure", public_model: "chat", strategy: "ordered", enabled: true },
+      { id: "rt_disabled", public_model: "chat", strategy: "ordered", enabled: false },
+      { id: "rt_embed", public_model: "embedding", strategy: "round_robin", enabled: true },
+    ] as never);
+
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "创建第一个项目" }));
+
+    expect(await screen.findByText("允许的模型别名（路由入口）")).toBeVisible();
+    expect(screen.queryByRole("searchbox", { name: "搜索模型别名或路由 ID" })).not.toBeInTheDocument();
+    expect(await screen.findAllByRole("checkbox", { name: /chat/ })).toHaveLength(1);
+    expect(screen.getByRole("checkbox", { name: /chat/ })).toHaveAccessibleName(/2 条已启用路由/);
+    expect(screen.queryByRole("checkbox", { name: /rt_openai/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: /embedding/ })).toBeVisible();
+  });
+
+  it("places project enablement in the footer action area", async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "创建第一个项目" }));
+
+    const enable = screen.getByRole("checkbox", { name: /启用项目/ });
+    const actions = screen.getByRole("button", { name: "创建项目" }).closest<HTMLElement>(".project-form-actions")!;
+    expect(actions).toContainElement(enable);
+    expect(within(actions).getByText("启用项目 · 启用")).toBeVisible();
+  });
+
   it("renders a project whose allowed_routes came back as null", async () => {
     // The admin API accepts a project without allowed_routes and serialises it as null;
     // dereferencing it used to throw during render and blank the whole console.
@@ -74,7 +104,7 @@ describe("projects page", () => {
     renderPage();
 
     expect(await screen.findByRole("heading", { name: /NoRoutes/ })).toBeVisible();
-    expect(screen.getByText("允许的模型").nextSibling).toHaveTextContent("无");
+    expect(screen.getByText("允许的模型别名").nextSibling).toHaveTextContent("无");
   });
 
   it("keeps the policies page working after the project form filled the shared cache", async () => {
@@ -100,6 +130,68 @@ describe("projects page", () => {
     fireEvent.click(await screen.findByRole("button", { name: "加载更多" }));
     expect(await screen.findByText("Batch")).toBeVisible();
     expect(api.projectsPage).toHaveBeenLastCalledWith("?limit=50&cursor=prj_1");
+  });
+
+  it.each([
+    [true, "禁用", false],
+    [false, "启用", true],
+  ])("switches project status from the detail actions without changing its policy (%s)", async (enabled, actionLabel, nextEnabled) => {
+    const current = project({
+      enabled,
+      allowed_routes: ["chat"],
+      allowed_cidrs: ["10.0.0.0/8"],
+      max_input_tokens: 128_000,
+      max_output_tokens: 16_384,
+      max_request_bytes: 1_048_576,
+      max_stream_duration: 600_000_000_000,
+      redaction_policy_id: "rp_1",
+      token_guard_policy_id: "tgp_1",
+    });
+    vi.mocked(api.projectsPage).mockResolvedValue({ items: [current], next_cursor: "" } as never);
+    const update = vi.spyOn(api, "updateProject").mockResolvedValue({ ...current, enabled: nextEnabled } as never);
+
+    renderPage();
+    expect(await screen.findByText(enabled ? "启用" : "禁用", { selector: ".detail-title .badge" })).toHaveClass(enabled ? "good" : "muted");
+    fireEvent.click(await screen.findByRole("button", { name: actionLabel }));
+    // Disabling a project revokes every gateway key under it at once, so it asks
+    // first; enabling one restores nothing that was not already configured.
+    if (enabled) {
+      const dialog = await screen.findByRole("alertdialog");
+      fireEvent.click(within(dialog).getByRole("button", { name: "禁用" }));
+    }
+
+    await waitFor(() => expect(update).toHaveBeenCalledWith("prj_1", {
+      name: "Inference",
+      enabled: nextEnabled,
+      allowed_routes: ["chat"],
+      rpm: 60,
+      tpm: 1000,
+      max_concurrency: 8,
+      daily_budget_micros_usd: 0,
+      max_input_tokens: 128_000,
+      max_output_tokens: 16_384,
+      max_request_bytes: 1_048_576,
+      max_stream_duration_seconds: 600,
+      allowed_cidrs: ["10.0.0.0/8"],
+      redaction_policy_id: "rp_1",
+      token_guard_policy_id: "tgp_1",
+    }, '"1"'));
+  });
+
+  it("states how many gateway keys a project disable takes down", async () => {
+    vi.mocked(api.projectsPage).mockResolvedValue({ items: [project()], next_cursor: "" } as never);
+    vi.mocked(api.keysPage).mockResolvedValue({
+      items: [gatewayKey(), gatewayKey({ id: "key_2", name: "service-b" })], next_cursor: "",
+    } as never);
+
+    renderPage();
+    // Every key row carries its own "禁用" too, so the project-level one is taken
+    // from the detail header.
+    const header = (await screen.findByRole("heading", { name: /Inference/ })).closest(".detail-title")!;
+    await waitFor(() => expect(screen.getByText("service-b")).toBeVisible());
+    fireEvent.click(within(header as HTMLElement).getByRole("button", { name: "禁用" }));
+
+    expect(await screen.findByText(/该项目下已创建的 2 个网关密钥/)).toBeVisible();
   });
 
   it("mints one key even when Enter submits the create form repeatedly", async () => {
@@ -166,9 +258,9 @@ describe("projects page", () => {
   it("surfaces the server's reason for a rejected project", async () => {
     // A localized "the request is invalid" alone cannot tell name from CIDR from policy.
     vi.mocked(api.projectsPage).mockResolvedValue({ items: [], next_cursor: "" } as never);
-    vi.spyOn(api, "routes").mockResolvedValue({
-      items: [{ id: "rt_1", public_model: "chat", enabled: true, revision: 1 }], next_cursor: "",
-    } as never);
+    vi.mocked(api.allRoutes).mockResolvedValue([
+      { id: "rt_1", public_model: "chat", enabled: true, revision: 1 },
+    ] as never);
     vi.spyOn(api, "createProject").mockRejectedValue(
       new ApiError(409, "allowed_routes references unknown model alias chatt"),
     );
@@ -184,9 +276,9 @@ describe("projects page", () => {
 
   it("rejects an unparsable CIDR before the request leaves the browser", async () => {
     vi.mocked(api.projectsPage).mockResolvedValue({ items: [], next_cursor: "" } as never);
-    vi.spyOn(api, "routes").mockResolvedValue({
-      items: [{ id: "rt_1", public_model: "chat", enabled: true, revision: 1 }], next_cursor: "",
-    } as never);
+    vi.mocked(api.allRoutes).mockResolvedValue([
+      { id: "rt_1", public_model: "chat", enabled: true, revision: 1 },
+    ] as never);
     const createProject = vi.spyOn(api, "createProject");
 
     renderPage();

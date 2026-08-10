@@ -2,7 +2,7 @@
 
 - 状态：Proposed / 目标版本 1.1.0。**§3 的 1.0.0 收尾三项已完成**；**§4 的 1.1.0 工作项尚未开始，也不应在 1.0.0 内开始**
 - 日期：2026-08-09
-- 基线文档：[`model-aware-capability-selection.zh-CN.md`](model-aware-capability-selection.zh-CN.md)
+- 基线文档：[`model-aware-capability-selection.zh-CN.md`](../prd/model-aware-capability-selection.zh-CN.md)
 - 影响：取消基线文档的 Phase 3（多 Operation Binding），改由路由层承担能力组合
 
 ## 0. 结论
