@@ -34,7 +34,12 @@
   /* Brand accents */
   --p-lime-400: #d8ff61;
   --p-lime-500: #c2ee38;
-  --p-lime-700: #5f7d16; /* darker lime for light-mode fills / text-on-light */
+  /* Light-mode greens. 700 is the fill and the focus ring, 800 the hover and
+     the text-on-light value, so the pair reads as one green at two depths
+     rather than as an olive CTA beside a teal focus outline. Both clear 4.5:1
+     against the paper canvas; the ratchet in design-system.test.ts holds them
+     there. */
+  --p-lime-700: #3f7010;
   --p-lime-800: #4f6810;
   --p-mint-300: #7fe3cc;
   --p-mint-400: #58d6bc;

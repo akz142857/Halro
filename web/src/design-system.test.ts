@@ -161,6 +161,64 @@ describe("design system themes", () => {
     expect(bare.length).toBeLessThanOrEqual(bareSizeValueBaseline);
   });
 
+  // tokens.css states a 12px floor because CJK glyphs lose stroke separation
+  // below it at 1x. For a long time that was a comment and nothing else: the
+  // business stylesheet carried 106 declarations under the floor, and the pages
+  // that needed reading most — the audit timeline, System Config, the developer
+  // workbench — were the ones densest in 10px text. This is not a ratchet. A
+  // size under the floor is a defect, so the bound is zero, and an exception has
+  // to be argued for here rather than added quietly at a call site.
+  const typeFloorPx = 12;
+
+  /**
+   * Absolute font sizes declared by `font-size` or the `font` shorthand. Sizes
+   * reached through var(--font-size-*) resolve inside the design system and are
+   * checked by the token assertion below instead.
+   */
+  function absoluteFontSizes(css: string): { declaration: string; px: number }[] {
+    const sizes: { declaration: string; px: number }[] = [];
+    for (const match of css.matchAll(/\bfont(?:-size)?\s*:\s*([^;{}]+)/g)) {
+      const declaration = match[1].trim();
+      // The size is the only length a font declaration carries: a `font`
+      // shorthand's line-height is unitless here, and weight and family are not
+      // lengths at all.
+      for (const length of declaration.matchAll(/(?<![\w.-])(\d*\.?\d+)(px|rem)(?![\w-])/g)) {
+        const amount = Number(length[1]);
+        sizes.push({ declaration, px: length[2] === "px" ? amount : amount * 16 });
+      }
+    }
+    return sizes;
+  }
+
+  it("declares the type floor as a token so business CSS has something to reach for", () => {
+    const tokens = tokenValues(read("./design-system/tokens.css"));
+    expect(tokens.get("--font-size-xs")).toBe(`${typeFloorPx}px`);
+  });
+
+  it("declares no visible text below the type floor in business CSS", () => {
+    const styles = read("./styles.css");
+    const below = absoluteFontSizes(styles)
+      .filter((size) => size.px < typeFloorPx)
+      .map((size) => size.declaration);
+    expect(below, `font sizes below ${typeFloorPx}px: ${below.join(" | ")}`).toEqual([]);
+  });
+
+  // 400/500/600/800 are the four weights the system has. The stylesheet also
+  // carried 650, 700, 750 and 900, written by hand at individual call sites.
+  // 650 is the instructive one: it renders here because the macOS system face is
+  // variable, and on a Windows CJK face it snaps to 600 or 700 — a platform
+  // difference nobody sees while developing. Naming the token instead means the
+  // weight is a decision the design system made once.
+  it("declares no literal font weights in business CSS", () => {
+    const styles = read("./styles.css");
+    const literal = [
+      ...Array.from(styles.matchAll(/font-weight\s*:\s*(\d+)/g), (match) => match[1]),
+      // The `font` shorthand puts the weight first, before the size.
+      ...Array.from(styles.matchAll(/\bfont\s*:\s*(\d{3})\b/g), (match) => match[1]),
+    ];
+    expect(literal, `literal font weights: ${literal.join(", ")}`).toEqual([]);
+  });
+
   it("keeps literal colors and primitive-token consumption inside the design-system layer", () => {
     const stylesPath = "./styles.css";
     const sourceRoot = dirname(fileURLToPath(new URL(stylesPath, import.meta.url)));
