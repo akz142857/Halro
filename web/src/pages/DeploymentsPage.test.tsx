@@ -41,6 +41,8 @@ function deployment(id: string, overrides: Partial<Deployment> = {}): Deployment
 
 const existingDeployment = deployment("dep_1");
 
+const PRICE_BLOCKER = "该部署没有已生效的价格版本。设置价格后再启用；如模型免费，请明确选择“免费”。";
+
 function variant(targetID: string, bindingID: string, capabilities: ProviderCapabilities): DeploymentVariant {
   return {
     id: bindingID, binding_id: bindingID,
@@ -627,6 +629,36 @@ describe("deployment price panel", () => {
     fireEvent.click(within(alert).getByRole("button", { name: "重试" }));
     await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+  });
+
+  // The blocker is the refused enable attempt's error, so it used to outlive the
+  // condition it names: setting the very price it demanded left the row showing
+  // "no effective price version" directly under a price column reading
+  // "configured", until the page was reloaded.
+  it("clears the missing-price blocker once the price it demanded exists", async () => {
+    vi.mocked(api.deployments).mockResolvedValue({
+      items: [deployment("dep_1", { last_test_status: "healthy", last_test_revision: 1 })],
+      next_cursor: "",
+    });
+    vi.spyOn(api, "deploymentPrices")
+      .mockResolvedValueOnce({ items: [], next_cursor: "" })
+      .mockResolvedValue({ items: [activePriceVersion()], next_cursor: "" });
+    vi.spyOn(api, "updateDeployment").mockRejectedValue(new ApiError(409, "no price", "deployment_price_unavailable"));
+    const create = vi.spyOn(api, "createDeploymentPrice").mockResolvedValue(activePriceVersion());
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "启用" }));
+    expect(await screen.findByText(PRICE_BLOCKER)).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "设置价格" }));
+    fireEvent.change(await screen.findByLabelText("输入 USD / 百万令牌"), { target: { value: "5" } });
+    fireEvent.click(screen.getByRole("button", { name: "下一步：核对" }));
+    fireEvent.change(await screen.findByLabelText("当前密码"), { target: { value: "pw" } });
+    fireEvent.click(screen.getByRole("button", { name: "确认并创建价格版本" }));
+
+    await waitFor(() => expect(create).toHaveBeenCalled());
+    expect(await screen.findByRole("button", { name: "查看 Deployment dep_1 的价格详情" })).toBeVisible();
+    await waitFor(() => expect(screen.queryByText(PRICE_BLOCKER)).not.toBeInTheDocument());
   });
 
   it("gates every price write in the detail panel on the write role", async () => {
