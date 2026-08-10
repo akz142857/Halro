@@ -44,7 +44,7 @@ func (s *Store) CreateModelCapabilityDetection(ctx context.Context, detection do
 			return nil
 		}
 		index := tx.Bucket(bucketCapabilityDetectionIndex)
-		if existingID := index.Get([]byte(detection.TargetFingerprint)); existingID != nil {
+		if existingID := index.Get([]byte(detection.SelectionFingerprint)); existingID != nil {
 			if raw := tx.Bucket(bucketModelCapabilityDetections).Get(existingID); raw != nil {
 				var existing domain.ModelCapabilityDetection
 				if err := json.Unmarshal(raw, &existing); err != nil {
@@ -76,7 +76,7 @@ func (s *Store) CreateModelCapabilityDetection(ctx context.Context, detection do
 		if err := idem.Put([]byte(detection.IdempotencyKeyHash), record); err != nil {
 			return err
 		}
-		return index.Put([]byte(detection.TargetFingerprint), []byte(detection.ID))
+		return index.Put([]byte(detection.SelectionFingerprint), []byte(detection.ID))
 	})
 	return detection, replayed, err
 }
@@ -150,8 +150,8 @@ func (s *Store) DeleteModelCapabilityDetection(ctx context.Context, id string) e
 			}
 		}
 		index := tx.Bucket(bucketCapabilityDetectionIndex)
-		if string(index.Get([]byte(d.TargetFingerprint))) == id {
-			return index.Delete([]byte(d.TargetFingerprint))
+		if string(index.Get([]byte(d.SelectionFingerprint))) == id {
+			return index.Delete([]byte(d.SelectionFingerprint))
 		}
 		return nil
 	})

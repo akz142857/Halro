@@ -88,7 +88,7 @@ describe("projects page", () => {
     fireEvent.click(await screen.findByRole("button", { name: "创建第一个项目" }));
 
     const enable = screen.getByRole("checkbox", { name: /启用项目/ });
-    const actions = screen.getByRole("button", { name: "创建项目" }).closest<HTMLElement>(".project-form-actions")!;
+    const actions = screen.getByRole("button", { name: "创建项目" }).closest<HTMLElement>(".sticky-form-actions")!;
     expect(actions).toContainElement(enable);
     expect(within(actions).getByText("启用项目 · 启用")).toBeVisible();
   });

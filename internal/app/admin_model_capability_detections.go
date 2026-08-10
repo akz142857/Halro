@@ -85,7 +85,10 @@ func (r *Runtime) createAdminModelCapabilityDetection(writer http.ResponseWriter
 	if region == "" {
 		region = providerRegion(instance)
 	}
-	binding, adapter, detector, entry, catalogKnown, err := r.resolveCapabilityDetector(instance, input, region)
+	catalogCandidates, probeCandidates, err := r.capabilityDetectionCandidates(instance, input, region)
+	if err == nil {
+		err = capabilityCandidateError(catalogCandidates, probeCandidates)
+	}
 	if err != nil {
 		code := "no_detectable_binding"
 		if errors.Is(err, errAmbiguousCapabilityBinding) {
@@ -94,15 +97,30 @@ func (r *Runtime) createAdminModelCapabilityDetection(writer http.ResponseWriter
 		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": err.Error(), "code": code})
 		return
 	}
+	catalogKnown := len(catalogCandidates) == 1
+	resolved := probeCandidates
+	if catalogKnown {
+		resolved = catalogCandidates
+	}
+	candidates := make([]domain.DetectionBindingCandidate, 0, len(resolved))
+	candidateIDs := make([]string, 0, len(resolved))
+	for _, item := range resolved {
+		candidates = append(candidates, domain.DetectionBindingCandidate{BindingID: item.binding.ID, ProfileID: item.binding.ProfileID,
+			AccessSurface: item.binding.AccessSurface, ModelRevision: item.entry.Revision(), Status: domain.ProbeNotProbed})
+		candidateIDs = append(candidateIDs, item.binding.ID)
+	}
 	now := r.now().UTC()
 	requestShape := map[string]any{"provider_id": providerID, "provider_revision": instance.Revision, "credential_revision": credential.Revision,
 		"credential_key_version": credential.KeyVersion, "provider_model": input.ProviderModel, "target_kind": targetKind,
-		"region": region, "binding_id": binding.ID, "profile_id": binding.ProfileID, "risk_tier": input.RiskTier,
+		"region": region, "binding_candidates": candidateIDs, "risk_tier": input.RiskTier,
 		"selection_revision": input.SelectionRevision, "force_refresh": input.ForceRefresh}
 	requestHash := hashCanonical(requestShape)
+	// Cooldown keys off what was asked for, so a repeated ask cools down even
+	// while the interface is still unknown. The resolved-target fingerprint
+	// deployment creation checks is written once identification has an answer.
 	fingerprint := hashCanonical(map[string]any{"provider_id": providerID, "provider_revision": instance.Revision,
-		"credential_revision": credential.Revision, "credential_key_version": credential.KeyVersion, "binding_id": binding.ID,
-		"profile_id": binding.ProfileID, "access_surface": binding.AccessSurface, "provider_model": input.ProviderModel,
+		"credential_revision": credential.Revision, "credential_key_version": credential.KeyVersion,
+		"binding_candidates": candidateIDs, "provider_model": input.ProviderModel,
 		"target_kind": targetKind, "canonical_target": input.ProviderModel, "region": region,
 		"detector_version": provider.CapabilityDetectorContractVersion, "risk_tier": input.RiskTier})
 	if input.ForceRefresh {
@@ -113,7 +131,7 @@ func (r *Runtime) createAdminModelCapabilityDetection(writer http.ResponseWriter
 		}
 		cooldown := r.config.Admin.ModelCapabilityDetection.RefreshCooldown.Value()
 		for _, item := range items {
-			if item.TargetFingerprint == fingerprint && now.Sub(item.UpdatedAt) < cooldown {
+			if item.SelectionFingerprint == fingerprint && now.Sub(item.UpdatedAt) < cooldown {
 				writeJSON(writer, http.StatusTooManyRequests, map[string]string{"error": "capability detection refresh is cooling down", "code": "capability_detection_cooldown"})
 				return
 			}
@@ -127,15 +145,20 @@ func (r *Runtime) createAdminModelCapabilityDetection(writer http.ResponseWriter
 	admin := request.Context().Value(adminContextKey{}).(adminRequestContext)
 	detection := domain.ModelCapabilityDetection{ID: detectionID, ProviderID: providerID, ProviderRevision: instance.Revision,
 		CredentialRevision: credential.Revision, CredentialKeyVersion: credential.KeyVersion, ProviderModel: input.ProviderModel,
-		ModelRevision: entry.Revision(), BindingID: binding.ID, ProfileID: binding.ProfileID, AccessSurface: binding.AccessSurface,
-		TargetKind: targetKind, CanonicalTarget: input.ProviderModel, Region: region, TargetFingerprint: fingerprint,
+		ModelRevision: candidates[0].ModelRevision, Candidates: candidates,
+		TargetKind: targetKind, CanonicalTarget: input.ProviderModel, Region: region, SelectionFingerprint: fingerprint,
 		DetectorVersion: provider.CapabilityDetectorContractVersion, RiskTier: input.RiskTier, Status: domain.DetectionQueued,
 		Source: string(modelcatalog.SourceVerifiedProbe), Results: map[string]domain.CapabilityProbeResult{},
-		Recommended:      domain.ProviderCapabilities{MaxContextTokens: binding.Capabilities.MaxContextTokens, MaxOutputTokens: binding.Capabilities.MaxOutputTokens},
 		MaxProviderCalls: r.config.Admin.ModelCapabilityDetection.MaxProviderCalls, CreatedBy: admin.session.Username,
 		IdempotencyKeyHash: hashCanonical(map[string]any{"actor": admin.session.Username, "key": key}), RequestHash: requestHash,
 		SelectionRevision: input.SelectionRevision, ForceRefresh: input.ForceRefresh, CreatedAt: now, UpdatedAt: now}
 	if catalogKnown {
+		// The catalog already names the interface, so there is nothing to
+		// identify and nothing to spend.
+		binding, entry := resolved[0].binding, resolved[0].entry
+		detection.BindingID, detection.ProfileID, detection.AccessSurface = binding.ID, binding.ProfileID, binding.AccessSurface
+		detection.TargetFingerprint = detectionTargetFingerprint(providerID, instance.Revision, credential.Revision, credential.KeyVersion,
+			binding.ID, binding.ProfileID, binding.AccessSurface, input.ProviderModel, targetKind, region, input.RiskTier)
 		detection.Status, detection.Source = domain.DetectionCompleted, string(modelcatalog.SourceBuiltin)
 		detection.Recommended = modelcatalog.Clamp(entry.Capabilities, binding.Capabilities)
 		detection.MaxProviderCalls, detection.CompletedAt = 0, &now
@@ -168,9 +191,13 @@ func (r *Runtime) createAdminModelCapabilityDetection(writer http.ResponseWriter
 		writeJSON(writer, http.StatusOK, publicCapabilityDetection(detection))
 		return
 	}
-	if adapter == nil || detector == nil {
-		adminStoreError(writer)
-		return
+	detectors := make(map[string]provider.CapabilityDetector, len(resolved))
+	for _, item := range resolved {
+		if item.adapter == nil || item.detector == nil {
+			adminStoreError(writer)
+			return
+		}
+		detectors[item.binding.ID] = item.detector
 	}
 	allowed, _ := allowAdminRate(&r.capabilityDetections.rateMu, &r.capabilityDetections.rate,
 		admin.session.Username, r.now().UTC(), r.config.Admin.ModelCapabilityDetection.CreateRPM)
@@ -187,18 +214,47 @@ func (r *Runtime) createAdminModelCapabilityDetection(writer http.ResponseWriter
 	}
 	r.capabilityMetrics.recordDetectionCache("miss")
 	r.capabilityMetrics.recordDetectionStart(string(instance.Type))
-	r.startCapabilityDetection(detection.ID, detector)
+	r.startCapabilityDetection(detection.ID, detectors)
 	writer.Header().Set("ETag", revisionETag(detection.Revision))
 	writeJSON(writer, http.StatusAccepted, publicCapabilityDetection(detection))
 }
 
+// detectionCandidate is one invocation interface the model might run on, paired
+// with the detector that can ask it.
+type detectionCandidate struct {
+	binding  domain.ProviderProfileBinding
+	adapter  provider.Adapter
+	detector provider.CapabilityDetector
+	entry    modelcatalog.Entry
+}
+
+// resolveCapabilityDetector answers which interface a detection runs on when
+// that is knowable without spending anything: a catalog hit, or a single
+// interface that can be probed at all. When several interfaces could serve the
+// model it returns them all rather than refusing — identification asks the
+// provider which one answers, because that is the same question the operator
+// would otherwise have to guess at before any evidence exists.
 func (r *Runtime) resolveCapabilityDetector(instance domain.ProviderInstance, input modelCapabilityDetectionInput, region string) (domain.ProviderProfileBinding, provider.Adapter, provider.CapabilityDetector, modelcatalog.Entry, bool, error) {
-	type candidate struct {
-		binding  domain.ProviderProfileBinding
-		adapter  provider.Adapter
-		detector provider.CapabilityDetector
-		entry    modelcatalog.Entry
+	catalogCandidates, detectionCandidates, err := r.capabilityDetectionCandidates(instance, input, region)
+	if err != nil {
+		return domain.ProviderProfileBinding{}, nil, nil, modelcatalog.Entry{}, false, err
 	}
+	if len(catalogCandidates) == 1 {
+		match := catalogCandidates[0]
+		return match.binding, match.adapter, nil, match.entry, true, nil
+	}
+	if len(catalogCandidates) > 1 {
+		return domain.ProviderProfileBinding{}, nil, nil, modelcatalog.Entry{}, false, errAmbiguousCapabilityBinding
+	}
+	if len(detectionCandidates) >= 1 {
+		match := detectionCandidates[0]
+		return match.binding, match.adapter, match.detector, match.entry, false, nil
+	}
+	return domain.ProviderProfileBinding{}, nil, nil, modelcatalog.Entry{}, false, errNoDetectableCapabilityBinding
+}
+
+func (r *Runtime) capabilityDetectionCandidates(instance domain.ProviderInstance, input modelCapabilityDetectionInput, region string) ([]detectionCandidate, []detectionCandidate, error) {
+	type candidate = detectionCandidate
 	var catalogCandidates, detectionCandidates []candidate
 	bindings := instance.EffectiveProfileBindings()
 	slices.SortFunc(bindings, func(a, b domain.ProviderProfileBinding) int { return strings.Compare(a.ID, b.ID) })
@@ -226,18 +282,7 @@ func (r *Runtime) resolveCapabilityDetector(instance domain.ProviderInstance, in
 			detectionCandidates = append(detectionCandidates, candidate{binding: binding, adapter: adapter, detector: detector, entry: entry})
 		}
 	}
-	if len(catalogCandidates) == 1 {
-		match := catalogCandidates[0]
-		return match.binding, match.adapter, nil, match.entry, true, nil
-	}
-	if len(catalogCandidates) > 1 || len(detectionCandidates) > 1 {
-		return domain.ProviderProfileBinding{}, nil, nil, modelcatalog.Entry{}, false, errAmbiguousCapabilityBinding
-	}
-	if len(detectionCandidates) == 1 {
-		match := detectionCandidates[0]
-		return match.binding, match.adapter, match.detector, match.entry, false, nil
-	}
-	return domain.ProviderProfileBinding{}, nil, nil, modelcatalog.Entry{}, false, errNoDetectableCapabilityBinding
+	return catalogCandidates, detectionCandidates, nil
 }
 
 func capabilityDetectorFor(adapter provider.Adapter) (provider.CapabilityDetector, bool) {
@@ -264,9 +309,36 @@ func hashCanonical(value any) string {
 	return "sha256:" + hex.EncodeToString(digest[:])
 }
 
-func (r *Runtime) startCapabilityDetection(id string, detector provider.CapabilityDetector) {
+func (r *Runtime) startCapabilityDetection(id string, detectors map[string]provider.CapabilityDetector) {
 	r.backgroundWait.Add(1)
-	go func() { defer r.backgroundWait.Done(); r.runCapabilityDetection(r.backgroundCtx, id, detector) }()
+	go func() { defer r.backgroundWait.Done(); r.runCapabilityDetection(r.backgroundCtx, id, detectors) }()
+}
+
+// capabilityCandidateError reports the cases identification cannot rescue. A
+// model seeded into the catalog under two interfaces is a seeding conflict, not
+// a question to put to the operator, so it stays a refusal.
+func capabilityCandidateError(catalogCandidates, probeCandidates []detectionCandidate) error {
+	switch {
+	case len(catalogCandidates) > 1:
+		return errAmbiguousCapabilityBinding
+	case len(catalogCandidates) == 1 || len(probeCandidates) > 0:
+		return nil
+	default:
+		return errNoDetectableCapabilityBinding
+	}
+}
+
+// detectionTargetFingerprint binds a detection to the interface it resolved to.
+// Deployment creation recomputes it from its own reading of the provider, so
+// both sides must build it from exactly these fields.
+func detectionTargetFingerprint(providerID string, providerRevision, credentialRevision uint64, credentialKeyVersion uint16,
+	bindingID string, profileID domain.ProviderProfileID, surface domain.AccessSurface, model string,
+	targetKind domain.DeploymentTargetKind, region, riskTier string) string {
+	return hashCanonical(map[string]any{"provider_id": providerID, "provider_revision": providerRevision,
+		"credential_revision": credentialRevision, "credential_key_version": credentialKeyVersion, "binding_id": bindingID,
+		"profile_id": profileID, "access_surface": surface, "provider_model": model,
+		"target_kind": targetKind, "canonical_target": model, "region": region,
+		"detector_version": provider.CapabilityDetectorContractVersion, "risk_tier": riskTier})
 }
 
 func (r *Runtime) capabilityDetectionProviderSemaphore(providerID string) chan struct{} {
@@ -280,7 +352,7 @@ func (r *Runtime) capabilityDetectionProviderSemaphore(providerID string) chan s
 	return sem
 }
 
-func (r *Runtime) runCapabilityDetection(parent context.Context, detectionID string, detector provider.CapabilityDetector) {
+func (r *Runtime) runCapabilityDetection(parent context.Context, detectionID string, detectors map[string]provider.CapabilityDetector) {
 	d, err := r.store.GetModelCapabilityDetection(parent, detectionID)
 	if err != nil {
 		return
@@ -310,17 +382,22 @@ func (r *Runtime) runCapabilityDetection(parent context.Context, detectionID str
 		r.finishDetectionWithoutProbe(d, domain.DetectionInterrupted)
 		return
 	}
-	target := provider.ModelCapabilityDetectionTarget{ProviderModel: d.ProviderModel, BindingID: d.BindingID, ProfileID: d.ProfileID, RiskTier: d.RiskTier}
-	plan, err := detector.CapabilityDetectionPlan(target)
-	if err != nil || plan.MaxCalls > d.MaxProviderCalls || len(plan.Probes) > d.MaxProviderCalls {
-		r.finishDetectionWithoutProbe(d, domain.DetectionFailed)
-		return
-	}
 	now := r.now().UTC()
 	expected := d.Revision
 	d.Status, d.StartedAt, d.UpdatedAt = domain.DetectionRunning, &now, now
 	d, err = r.store.PutModelCapabilityDetection(ctx, d, expected)
 	if err != nil {
+		return
+	}
+	d, resolved := r.identifyCapabilityBinding(ctx, d, detectors)
+	if !resolved {
+		return
+	}
+	detector := detectors[d.BindingID]
+	target := provider.ModelCapabilityDetectionTarget{ProviderModel: d.ProviderModel, BindingID: d.BindingID, ProfileID: d.ProfileID, RiskTier: d.RiskTier}
+	plan, err := detector.CapabilityDetectionPlan(target)
+	if err != nil {
+		r.finishDetectionWithoutProbe(d, domain.DetectionFailed)
 		return
 	}
 	for probeIndex, probe := range plan.Probes {
@@ -333,7 +410,13 @@ func (r *Runtime) runCapabilityDetection(parent context.Context, detectionID str
 			r.finalizeCanceledDetection(d)
 			return
 		}
-		if !probeDependenciesSupported(d.Results, probe.DependsOn) {
+		// Identification already paid for this capability on this interface.
+		if _, carried := d.Results[probe.Capability]; carried {
+			continue
+		}
+		// A capability the budget cannot reach stays unverified rather than
+		// being reported as unsupported, which would be a claim nothing checked.
+		if !probeDependenciesSupported(d.Results, probe.DependsOn) || d.ProviderCalls >= d.MaxProviderCalls {
 			d.Results[probe.Capability] = domain.CapabilityProbeResult{Status: domain.ProbeNotProbed, BindingID: d.BindingID, ProbeKind: probe.Kind}
 			d.UpdatedAt = r.now().UTC()
 			d, _ = r.store.PutModelCapabilityDetection(ctx, d, d.Revision)
@@ -341,7 +424,7 @@ func (r *Runtime) runCapabilityDetection(parent context.Context, detectionID str
 		}
 		callTime := r.now().UTC()
 		d.ProviderCalls++
-		d.Calls = append(d.Calls, domain.DetectionProviderCall{Sequence: d.ProviderCalls, Capability: probe.Capability, ProbeKind: probe.Kind, Status: "reserved"})
+		d.Calls = append(d.Calls, domain.DetectionProviderCall{Sequence: d.ProviderCalls, BindingID: d.BindingID, Capability: probe.Capability, ProbeKind: probe.Kind, Status: "reserved"})
 		d.Results[probe.Capability] = domain.CapabilityProbeResult{Status: domain.ProbeInconclusive, BindingID: d.BindingID, ProbeKind: probe.Kind, StartedAt: &callTime}
 		d.UpdatedAt = callTime
 		d, err = r.store.PutModelCapabilityDetection(ctx, d, d.Revision)
@@ -397,6 +480,177 @@ func (r *Runtime) runCapabilityDetection(parent context.Context, detectionID str
 		}
 	}
 	r.finalizeCapabilityDetection(d)
+}
+
+// identifyCapabilityBinding asks the provider which invocation interface the
+// model actually answers on, instead of asking the operator to know it before
+// anything has been verified. Each candidate is probed with the roots of its own
+// plan — the probes that depend on nothing — because those are exactly the ones
+// that establish whether the model exists on that Access Surface. A candidate
+// the model does not serve fails its first root and costs one call that the
+// provider rejects before doing any work.
+//
+// It returns the detection with a binding resolved, or writes a terminal state
+// and reports false: nothing answered (failed), or several answered, which is a
+// real choice and belongs to the operator — now with evidence attached.
+func (r *Runtime) identifyCapabilityBinding(ctx context.Context, d domain.ModelCapabilityDetection,
+	detectors map[string]provider.CapabilityDetector) (domain.ModelCapabilityDetection, bool) {
+	carried := map[string]map[string]domain.CapabilityProbeResult{}
+	for index := range d.Candidates {
+		candidate := d.Candidates[index]
+		detector := detectors[candidate.BindingID]
+		if detector == nil {
+			continue
+		}
+		target := provider.ModelCapabilityDetectionTarget{ProviderModel: d.ProviderModel, BindingID: candidate.BindingID,
+			ProfileID: candidate.ProfileID, RiskTier: d.RiskTier}
+		plan, err := detector.CapabilityDetectionPlan(target)
+		if err != nil {
+			continue
+		}
+		results := map[string]domain.CapabilityProbeResult{}
+		for _, probe := range plan.Probes {
+			if len(probe.DependsOn) > 0 {
+				continue
+			}
+			// A single candidate has nothing to distinguish itself from, so it
+			// is resolved without spending anything on identification.
+			if len(d.Candidates) == 1 {
+				break
+			}
+			if d.ProviderCalls >= d.MaxProviderCalls {
+				break
+			}
+			updated, result, ok := r.spendDetectionProbe(ctx, d, candidate.BindingID, detector, target, probe, plan.Probes)
+			d = updated
+			if !ok {
+				return d, false
+			}
+			results[probe.Capability] = result
+			candidate.Capability, candidate.ProbeKind = probe.Capability, probe.Kind
+			candidate.Status, candidate.Evidence, candidate.ErrorClass = result.Status, result.Evidence, result.ErrorClass
+			candidate.Answered = result.Status == domain.ProbeSupported
+			if candidate.Answered {
+				break
+			}
+		}
+		carried[candidate.BindingID] = results
+		d.Candidates[index] = candidate
+		d.UpdatedAt = r.now().UTC()
+		stored, err := r.store.PutModelCapabilityDetection(ctx, d, d.Revision)
+		if err != nil {
+			return d, false
+		}
+		d = stored
+	}
+	var answered []domain.DetectionBindingCandidate
+	for _, candidate := range d.Candidates {
+		if candidate.Answered {
+			answered = append(answered, candidate)
+		}
+	}
+	if len(d.Candidates) == 1 {
+		answered = d.Candidates
+	}
+	switch len(answered) {
+	case 0:
+		r.finishDetectionWithoutProbe(d, domain.DetectionFailed)
+		return d, false
+	case 1:
+	default:
+		r.finishAmbiguousDetection(d)
+		return d, false
+	}
+	return r.resolveDetectionBinding(ctx, d, answered[0], carried[answered[0].BindingID])
+}
+
+// resolveDetectionBinding writes the identified interface onto the detection,
+// including the fingerprint deployment creation checks, and carries the
+// identification probes into the results so the capability pass never pays for
+// the same call twice.
+func (r *Runtime) resolveDetectionBinding(ctx context.Context, d domain.ModelCapabilityDetection,
+	candidate domain.DetectionBindingCandidate, carried map[string]domain.CapabilityProbeResult) (domain.ModelCapabilityDetection, bool) {
+	instance, err := r.store.GetProvider(ctx, d.ProviderID)
+	if err != nil {
+		return d, false
+	}
+	binding, bound := instance.ProfileBinding(candidate.BindingID)
+	if !bound || !binding.Enabled || binding.ProfileID != candidate.ProfileID || binding.AccessSurface != candidate.AccessSurface {
+		r.finishDetectionWithoutProbe(d, domain.DetectionFailed)
+		return d, false
+	}
+	d.BindingID, d.ProfileID, d.AccessSurface = binding.ID, binding.ProfileID, binding.AccessSurface
+	d.ModelRevision = candidate.ModelRevision
+	d.TargetFingerprint = detectionTargetFingerprint(d.ProviderID, d.ProviderRevision, d.CredentialRevision, d.CredentialKeyVersion,
+		binding.ID, binding.ProfileID, binding.AccessSurface, d.ProviderModel, d.TargetKind, d.Region, d.RiskTier)
+	d.Recommended.MaxContextTokens, d.Recommended.MaxOutputTokens = binding.Capabilities.MaxContextTokens, binding.Capabilities.MaxOutputTokens
+	for capability, result := range carried {
+		d.Results[capability] = result
+	}
+	d.UpdatedAt = r.now().UTC()
+	stored, err := r.store.PutModelCapabilityDetection(ctx, d, d.Revision)
+	if err != nil {
+		return d, false
+	}
+	return stored, true
+}
+
+// spendDetectionProbe performs one durable, possibly billable control-plane
+// call: reserved and then running are persisted before the request leaves the
+// process, so a crash on either side of the network boundary is recovered as
+// UNKNOWN rather than replayed.
+func (r *Runtime) spendDetectionProbe(ctx context.Context, d domain.ModelCapabilityDetection, bindingID string,
+	detector provider.CapabilityDetector, target provider.ModelCapabilityDetectionTarget, probe provider.CapabilityProbe,
+	remaining []provider.CapabilityProbe) (domain.ModelCapabilityDetection, domain.CapabilityProbeResult, bool) {
+	if d.CancelRequestedAt != nil || ctx.Err() != nil {
+		r.finalizeCanceledDetection(d)
+		return d, domain.CapabilityProbeResult{}, false
+	}
+	callTime := r.now().UTC()
+	d.ProviderCalls++
+	d.Calls = append(d.Calls, domain.DetectionProviderCall{Sequence: d.ProviderCalls, BindingID: bindingID,
+		Capability: probe.Capability, ProbeKind: probe.Kind, Status: "reserved"})
+	d.UpdatedAt = callTime
+	stored, err := r.store.PutModelCapabilityDetection(ctx, d, d.Revision)
+	if err != nil {
+		return d, domain.CapabilityProbeResult{}, false
+	}
+	d = stored
+	d.Calls[len(d.Calls)-1].Status = "running"
+	d.Calls[len(d.Calls)-1].StartedAt = &callTime
+	stored, err = r.store.PutModelCapabilityDetection(ctx, d, d.Revision)
+	if err != nil {
+		return d, domain.CapabilityProbeResult{}, false
+	}
+	d = stored
+	probeContext, probeCancel := ctx, func() {}
+	if deadline, ok := ctx.Deadline(); ok && len(remaining) > 0 {
+		fairShare := time.Until(deadline) / time.Duration(len(remaining))
+		if probeTimeout := min(fairShare, r.config.Gateway.AttemptResponseHeaderTimeout.Value()); probeTimeout > 0 {
+			probeContext, probeCancel = context.WithTimeout(ctx, probeTimeout)
+		}
+	}
+	result := detector.DetectCapability(probeContext, target, probe)
+	probeCancel()
+	finished := r.now().UTC()
+	current, err := r.store.GetModelCapabilityDetection(context.Background(), d.ID)
+	if err != nil {
+		return d, domain.CapabilityProbeResult{}, false
+	}
+	d = current
+	if len(d.Calls) > 0 {
+		d.Calls[len(d.Calls)-1].FinishedAt = &finished
+		d.Calls[len(d.Calls)-1].Status = "completed"
+		if ctx.Err() != nil {
+			d.Calls[len(d.Calls)-1].Status = "unknown"
+		}
+	}
+	if d.CancelRequestedAt != nil {
+		r.finalizeCanceledDetection(d)
+		return d, domain.CapabilityProbeResult{}, false
+	}
+	result.StartedAt, result.CompletedAt = &callTime, &finished
+	return d, result, true
 }
 
 func probeDependenciesSupported(results map[string]domain.CapabilityProbeResult, dependencies []string) bool {
@@ -467,6 +721,24 @@ func (r *Runtime) finishDetectionWithoutProbe(d domain.ModelCapabilityDetection,
 	}
 }
 
+// finishAmbiguousDetection ends a detection that found the model answering on
+// more than one interface. A deployment runs on exactly one, so the choice is
+// the operator's — but it is now made against what each interface answered
+// rather than asked before anything was known.
+func (r *Runtime) finishAmbiguousDetection(d domain.ModelCapabilityDetection) {
+	now := r.now().UTC()
+	current, err := r.store.GetModelCapabilityDetection(context.Background(), d.ID)
+	if err == nil {
+		d = current
+	}
+	d.Status, d.CompletedAt, d.UpdatedAt = domain.DetectionAmbiguous, &now, now
+	if stored, err := r.store.PutModelCapabilityDetection(context.Background(), d, d.Revision); err == nil {
+		r.recordCapabilityDetectionTerminal(stored)
+		_ = r.appendAdminAuditWithMetadata("admin_user", stored.CreatedBy, "model_capability_detection.ambiguous",
+			"model_capability_detection", stored.ID, "success", "", detectionAuditMetadata(stored))
+	}
+}
+
 func (r *Runtime) recordCapabilityDetectionTerminal(d domain.ModelCapabilityDetection) {
 	instance, err := r.store.GetProvider(context.Background(), d.ProviderID)
 	if err != nil {
@@ -494,7 +766,15 @@ func detectionAuditMetadata(d domain.ModelCapabilityDetection) map[string]any {
 	for _, result := range d.Results {
 		counts[string(result.Status)]++
 	}
-	return map[string]any{"provider_id": d.ProviderID, "binding_id": d.BindingID, "model_sha256": hashCanonical(d.ProviderModel), "status": d.Status, "status_counts": counts, "provider_calls": d.ProviderCalls, "risk_tier": d.RiskTier, "revision": d.Revision}
+	answered := 0
+	for _, candidate := range d.Candidates {
+		if candidate.Answered {
+			answered++
+		}
+	}
+	return map[string]any{"provider_id": d.ProviderID, "binding_id": d.BindingID, "binding_candidates": len(d.Candidates),
+		"answering_bindings": answered, "model_sha256": hashCanonical(d.ProviderModel), "status": d.Status,
+		"status_counts": counts, "provider_calls": d.ProviderCalls, "risk_tier": d.RiskTier, "revision": d.Revision}
 }
 
 func publicCapabilityDetection(d domain.ModelCapabilityDetection) map[string]any {

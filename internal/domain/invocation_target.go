@@ -92,6 +92,11 @@ type InvocationTargetDiscoveryCapabilities struct {
 	CanVerify                     bool                   `json:"can_verify"`
 	RequiresManagementIdentity    bool                   `json:"requires_management_identity"`
 	RequiresCanonicalModelMapping bool                   `json:"requires_canonical_model_mapping"`
+	// MaxVerificationCalls is the configured ceiling on possibly billable calls
+	// one detection may spend. The console states it before the operator presses
+	// a billable button, so it has to be the running value rather than a
+	// constant compiled into the bundle.
+	MaxVerificationCalls int `json:"max_verification_calls"`
 }
 
 type ClaimStatus string

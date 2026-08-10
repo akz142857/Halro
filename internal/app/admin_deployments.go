@@ -683,11 +683,8 @@ func (r *Runtime) resolveDeploymentDetection(ctx context.Context, instance domai
 	if detection.ProviderRevision != instance.Revision || detection.CredentialRevision != credential.Revision || detection.CredentialKeyVersion != credential.KeyVersion {
 		return deploymentResolution{}, nil, errCapabilityDetectionStale
 	}
-	expectedFingerprint := hashCanonical(map[string]any{"provider_id": instance.ID, "provider_revision": instance.Revision,
-		"credential_revision": credential.Revision, "credential_key_version": credential.KeyVersion, "binding_id": detection.BindingID,
-		"profile_id": detection.ProfileID, "access_surface": detection.AccessSurface, "provider_model": model,
-		"target_kind": targetKind, "canonical_target": model, "region": region,
-		"detector_version": provider.CapabilityDetectorContractVersion, "risk_tier": detection.RiskTier})
+	expectedFingerprint := detectionTargetFingerprint(instance.ID, instance.Revision, credential.Revision, credential.KeyVersion,
+		detection.BindingID, detection.ProfileID, detection.AccessSurface, model, targetKind, region, detection.RiskTier)
 	if detection.TargetFingerprint != expectedFingerprint {
 		return deploymentResolution{}, nil, errCapabilityDetectionStale
 	}

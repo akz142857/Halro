@@ -10,8 +10,12 @@ func TestModelCapabilityDetectionRecommendationRequiresVerifiedSupportedResults(
 	expires := now.Add(time.Hour)
 	d := ModelCapabilityDetection{
 		ID: "mcd_one", ProviderID: "prv_one", ProviderRevision: 1, CredentialRevision: 1,
-		ProviderModel: "model", ModelRevision: "sha256:model", BindingID: "binding", ProfileID: ProfileOpenAIChatEmbeddings,
-		AccessSurface: SurfaceOpenAI, TargetKind: TargetModelID, CanonicalTarget: "model", TargetFingerprint: "sha256:target",
+		ProviderModel: "model", ModelRevision: "sha256:model",
+		Candidates: []DetectionBindingCandidate{{BindingID: "binding", ProfileID: ProfileOpenAIChatEmbeddings,
+			AccessSurface: SurfaceOpenAI, ModelRevision: "sha256:model", Status: ProbeNotProbed}},
+		BindingID: "binding", ProfileID: ProfileOpenAIChatEmbeddings,
+		AccessSurface: SurfaceOpenAI, TargetKind: TargetModelID, CanonicalTarget: "model",
+		SelectionFingerprint: "sha256:selection", TargetFingerprint: "sha256:target",
 		DetectorVersion: "v1", RiskTier: "safe_automatic", Status: DetectionCompleted, Source: "verified_probe",
 		Results:     map[string]CapabilityProbeResult{"chat": {Status: ProbeSupported, Evidence: EvidenceVerified, BindingID: "binding", ProbeKind: "minimal_chat"}},
 		Recommended: ProviderCapabilities{Chat: true}, MaxProviderCalls: 8, CompletedAt: &now, ExpiresAt: &expires,

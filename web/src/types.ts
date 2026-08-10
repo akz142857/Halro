@@ -455,6 +455,8 @@ export interface InvocationTargetDiscoveryCapabilities {
   can_verify: boolean;
   requires_management_identity: boolean;
   requires_canonical_model_mapping: boolean;
+  /** Configured ceiling on possibly billable calls one detection may spend. */
+  max_verification_calls: number;
 }
 
 /** A binding whose catalog could not be read. Its models are absent from the
@@ -479,14 +481,30 @@ export interface InvocationTargetCatalog {
 
 export type CapabilityProbeStatus = "supported" | "unsupported" | "inconclusive" | "unavailable" | "unauthorized" | "not_probed" | "canceled";
 
+export interface DetectionBindingCandidate {
+  binding_id: string;
+  profile_id: string;
+  access_surface: string;
+  model_revision: string;
+  capability?: string;
+  probe_kind?: string;
+  status: CapabilityProbeStatus;
+  evidence?: CapabilityEvidence;
+  error_class?: string;
+  answered: boolean;
+}
+
 export interface ModelCapabilityDetection {
   id: string;
-  status: "queued" | "running" | "completed" | "failed" | "canceled" | "interrupted";
+  status: "queued" | "running" | "completed" | "failed" | "canceled" | "interrupted" | "ambiguous";
   source: "builtin_catalog" | "verified_probe";
   provider_id: string;
   provider_model: string;
-  binding_id: string;
-  profile_id: string;
+  /** The interfaces identification considered, and what each one answered. */
+  binding_candidates: DetectionBindingCandidate[];
+  /** Empty until identification resolves one; "ambiguous" leaves it empty. */
+  binding_id?: string;
+  profile_id?: string;
   provider_calls: number;
   max_provider_calls: number;
   started_at?: string;

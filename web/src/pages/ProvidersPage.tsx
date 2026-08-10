@@ -587,10 +587,20 @@ function ProviderForm({
             </select>
           </Field>
             </div>
-            <label className="project-enable-row"><span><strong>{t("providers.enable")}</strong><small>{t("providers.enableDescription")}</small></span><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} /></label>
           </section>
           {mutation.isError && <ErrorState error={mutation.error} />}
-          <div className="form-actions provider-form-actions">
+          {/* Whether deployments may use this upstream is the state the save
+              commits, so it belongs in the bar that commits it. */}
+          <div className="form-actions sticky-form-actions">
+            <div className="form-footer-state">
+              <label className="form-footer-enable">
+                <input type="checkbox" aria-label={t("providers.enable")} checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />
+                <span>
+                  <strong>{t("providers.enable")} · {enabled ? t("common.enabled") : t("common.disabled")}</strong>
+                  <small>{enabled ? t("providers.enableDescription") : t("providers.disabledImpact")}</small>
+                </span>
+              </label>
+            </div>
             <button type="button" className="button ghost" onClick={onClose}>{t("common.cancel")}</button>
             <button className="button primary" disabled={mutation.isPending || !credentialID || !hasEnabledCapability(capabilities)}>{current ? t("providers.save") : t("providers.createAndLoad")}</button>
           </div>

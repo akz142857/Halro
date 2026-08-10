@@ -14,8 +14,12 @@ import (
 
 func storedDetection(now time.Time) domain.ModelCapabilityDetection {
 	return domain.ModelCapabilityDetection{ID: "mcd_one", ProviderID: "prv_one", ProviderRevision: 1, CredentialRevision: 1,
-		ProviderModel: "model", ModelRevision: "sha256:model", BindingID: "binding", ProfileID: domain.ProfileOpenAIChatEmbeddings,
-		AccessSurface: domain.SurfaceOpenAI, TargetKind: domain.TargetModelID, CanonicalTarget: "model", TargetFingerprint: "sha256:target",
+		ProviderModel: "model", ModelRevision: "sha256:model",
+		Candidates: []domain.DetectionBindingCandidate{{BindingID: "binding", ProfileID: domain.ProfileOpenAIChatEmbeddings,
+			AccessSurface: domain.SurfaceOpenAI, ModelRevision: "sha256:model", Status: domain.ProbeNotProbed}},
+		BindingID: "binding", ProfileID: domain.ProfileOpenAIChatEmbeddings,
+		AccessSurface: domain.SurfaceOpenAI, TargetKind: domain.TargetModelID, CanonicalTarget: "model",
+		SelectionFingerprint: "sha256:selection", TargetFingerprint: "sha256:target",
 		DetectorVersion: "v1", RiskTier: "safe_automatic", Status: domain.DetectionQueued, Source: "verified_probe",
 		Results: map[string]domain.CapabilityProbeResult{}, MaxProviderCalls: 8, CreatedBy: "admin",
 		IdempotencyKeyHash: "sha256:key", RequestHash: "sha256:request", CreatedAt: now, UpdatedAt: now}
@@ -115,7 +119,7 @@ func TestCapabilityDetectionRecoveryInterruptsWithoutReplayingCalls(t *testing.T
 	d := storedDetection(now)
 	d.Status, d.StartedAt = domain.DetectionRunning, &now
 	d.ProviderCalls = 1
-	d.Calls = []domain.DetectionProviderCall{{Sequence: 1, Capability: "chat", ProbeKind: "minimal_chat", Status: "running", StartedAt: &now}}
+	d.Calls = []domain.DetectionProviderCall{{Sequence: 1, BindingID: d.BindingID, Capability: "chat", ProbeKind: "minimal_chat", Status: "running", StartedAt: &now}}
 	d.Results["chat"] = domain.CapabilityProbeResult{Status: domain.ProbeInconclusive, BindingID: d.BindingID, ProbeKind: "minimal_chat", StartedAt: &now}
 	d, _, err = store.CreateModelCapabilityDetection(context.Background(), d)
 	if err != nil {

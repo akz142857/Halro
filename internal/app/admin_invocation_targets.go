@@ -103,6 +103,9 @@ func (r *Runtime) listAdminInvocationTargets(writer http.ResponseWriter, request
 	catalog := r.effectiveModelCatalog()
 	evaluatedAt := r.clockNow().UTC()
 	response := aggregateInvocationTargetsWithCatalog(instance, results, evaluatedAt, catalog)
+	// The console names this ceiling before the operator presses a billable
+	// button, so it has to be the configured value, not a bundled constant.
+	response.Discovery.MaxVerificationCalls = r.config.Admin.ModelCapabilityDetection.MaxProviderCalls
 	credentialRevision, err := r.providerCredentialRevision(request.Context(), instance)
 	if err == nil {
 		response.CanonicalModels = canonicalModelTemplatesWithCatalog(instance, bindings, credentialRevision, evaluatedAt, catalog)

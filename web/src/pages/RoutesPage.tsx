@@ -222,7 +222,8 @@ function RouteForm({ current, deployments, onClose }: { current?: Route; deploym
       {enabled.length === 0 ? (
         <div className="notice warning"><strong>{t("routes.deploymentRequired")}</strong><span>{t("routes.deploymentRequiredDescription")}</span><Link className="notice-link" href="/admin/deployments">{t("routes.openDeployments")}</Link></div>
       ) : (
-        <form className="form-grid" onSubmit={submit}>
+        <form className="route-form" onSubmit={submit}>
+          <div className="route-form-body form-grid">
           <Field label={t("routes.publicAlias")}><input autoFocus required value={publicModel} onChange={(event) => setPublicModel(event.target.value)} /></Field>
           <Field label={t("routes.deployment")}>
             <select required value={deploymentID} onChange={(event) => setDeploymentID(event.target.value)}>
@@ -238,9 +239,20 @@ function RouteForm({ current, deployments, onClose }: { current?: Route; deploym
             </select>
           </Field>
           <Field label={t("routes.priority")}><input type="number" value={priority} onChange={(event) => setPriority(Number(event.target.value))} /></Field>
-          <label className="check-row"><input type="checkbox" checked={routeEnabled} onChange={(event) => setRouteEnabled(event.target.checked)} />{t("routes.enable")}</label>
           {mutation.isError && <ErrorState error={mutation.error} />}
-          <div className="form-actions">
+          </div>
+          {/* Whether this alias will answer requests is the state the save
+              commits, so it belongs in the bar that commits it. */}
+          <div className="form-actions sticky-form-actions">
+            <div className="form-footer-state">
+              <label className="form-footer-enable">
+                <input type="checkbox" aria-label={t("routes.enable")} checked={routeEnabled} onChange={(event) => setRouteEnabled(event.target.checked)} />
+                <span>
+                  <strong>{t("routes.enable")} · {routeEnabled ? t("common.enabled") : t("common.disabled")}</strong>
+                  <small>{routeEnabled ? t("routes.enabledImpact", { alias: publicModel.trim() || t("routes.publicAlias") }) : t("routes.disabledImpact")}</small>
+                </span>
+              </label>
+            </div>
             <button type="button" className="button ghost" onClick={onClose}>{t("common.cancel")}</button>
             <button className="button primary" disabled={mutation.isPending}>{current ? t("routes.save") : t("routes.createAndLoad")}</button>
           </div>

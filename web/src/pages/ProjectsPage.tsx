@@ -505,9 +505,9 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
           </div>
         </section>
         {mutation.isError && <ErrorState error={mutation.error} />}
-        <div className="form-actions project-form-actions">
-          <div className="project-footer-state">
-            <label className="project-footer-enable">
+        <div className="form-actions sticky-form-actions">
+          <div className="form-footer-state">
+            <label className="form-footer-enable">
               <input type="checkbox" {...register("enabled")} />
               <span><strong>{t("projects.enable")} · {enabled ? t("common.enabled") : t("common.disabled")}</strong><small>{t("projects.enableDescription")}</small></span>
             </label>

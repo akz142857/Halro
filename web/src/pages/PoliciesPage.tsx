@@ -401,13 +401,13 @@ function PolicyForm({
         )}
         </section>
         {mutation.isError && <ErrorState error={mutation.error} />}
-        <div className="form-actions policy-form-actions">
-          <div className="policy-footer-state">
-            <label className="policy-footer-enable">
+        <div className="form-actions sticky-form-actions">
+          <div className="form-footer-state">
+            <label className="form-footer-enable">
               <input type="checkbox" aria-label={t("policies.enable")} checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />
               <span><strong>{t("policies.enable")} · {enabled ? t("common.enabled") : t("common.disabled")}</strong><small>{current?.bound_projects ? t("policies.boundImpact", { count: current.bound_projects }) : t("policies.unboundImpact")}</small></span>
             </label>
-            <div className="policy-save-summary"><strong>{policyActionLabel(t, action)}</strong><small>{!ewmaEnabled
+            <div className="form-footer-summary"><strong>{policyActionLabel(t, action)}</strong><small>{!ewmaEnabled
               ? t("policies.ewmaOffSummary")
               : customizedAdaptiveSettings(adaptiveValues)
                 ? t("policies.ewmaSummary", { multiplier: ewmaMultiplier, window: ewmaWindow })

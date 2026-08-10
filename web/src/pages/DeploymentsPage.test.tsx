@@ -73,7 +73,7 @@ function catalog(items: ResolvedInvocationTarget[], overrides: Partial<Invocatio
     items,
     discovery: {
       target_kinds: ["model_id"], can_enumerate: true, can_describe: true, can_verify: true,
-      requires_management_identity: false, requires_canonical_model_mapping: false,
+      requires_management_identity: false, requires_canonical_model_mapping: false, max_verification_calls: 10,
     },
     catalog_revision: "sha256:catalog", provider_revision: 1,
     fetched_at: "2026-08-10T00:00:00Z", expires_at: "2026-08-10T00:05:00Z", cached: false,
@@ -133,11 +133,13 @@ describe("deployment invocation target workflow", () => {
   it("names every unmet condition next to a disabled save button", async () => {
     await openCreate();
     expect(screen.getByRole("button", { name: "保存为停用" })).toBeDisabled();
-    const blockers = screen.getByText("尚未完成").closest("div")!;
-    expect(within(blockers).getByText("填写部署名称")).toBeVisible();
-    expect(within(blockers).getByText("选择或输入模型")).toBeVisible();
+    // The conditions ride in the action bar beside the button they disable.
+    const blockers = screen.getByText("尚未完成").closest(".form-footer-summary")!;
+    expect(blockers.closest(".deployment-form-actions")).toContainElement(screen.getByRole("button", { name: "保存为停用" }));
+    expect(blockers.textContent).toContain("填写部署名称");
+    expect(blockers.textContent).toContain("选择或输入模型");
     // Nothing downstream of the model is answerable yet, so it is not listed.
-    expect(within(blockers).queryByText("至少保留一项核心能力")).not.toBeInTheDocument();
+    expect(blockers.textContent).not.toContain("至少保留一项核心能力");
 
     fireEvent.change(screen.getByLabelText("部署名称"), { target: { value: "Chat" } });
     await choose("GPT Chat");
@@ -265,34 +267,68 @@ describe("deployment invocation target workflow", () => {
   it("offers only verification and advanced onboarding for an unknown target", async () => {
     await openCreate();
     await choose("GPT Future");
-    expect(await screen.findByRole("button", { name: "识别能力" })).toBeDisabled();
-    expect(screen.getByText("最多 8 次低成本验证")).toBeVisible();
+    expect(await screen.findByRole("button", { name: "识别能力" })).toBeEnabled();
+    expect(screen.getByText("最多 10 次低成本验证")).toBeVisible();
     expect(screen.getByRole("button", { name: "手动配置" })).toBeVisible();
     expect(screen.queryByLabelText("对话")).not.toBeInTheDocument();
   });
 
-  // Detection pins the interface it ran on and the deployment target is
-  // immutable afterwards, so taking bindings[0] silently means the wrong choice
-  // can only be undone by rebuilding the deployment.
-  it("makes the operator name the invocation interface when the provider enables several", async () => {
+  // "Which interface does this model speak" is the question detection exists to
+  // answer, so asking it first put the operator in front of the one thing they
+  // cannot know — and got it wrong irreversibly, since the target is immutable
+  // after creation.
+  it("never asks which interface to use before anything has been verified", async () => {
     const detect = vi.spyOn(api, "createModelCapabilityDetection").mockImplementation(async (_id, body) => ({
       id: "picked", status: "queued", source: "verified_probe", provider_id: provider.id, provider_model: unknown.target_id,
-      binding_id: "b-embed", profile_id: "openai.embeddings.v1", provider_calls: 0, max_provider_calls: 8,
+      binding_candidates: [], provider_calls: 0, max_provider_calls: 10,
       capabilities: {}, recommended_capabilities: emptyCapabilities,
       selection_revision: (body as { selection_revision: string }).selection_revision, revision: 1,
     }));
     await openCreate();
     await choose("GPT Future");
-    const picker = await screen.findByLabelText(/^调用接口/);
-    expect((picker as HTMLSelectElement).value).toBe("");
-    expect(within(picker as HTMLSelectElement).getAllByRole("option").map((option) => (option as HTMLOptionElement).value))
-      .toEqual(["", "b-chat", "b-embed"]);
-    expect(screen.getByRole("button", { name: "识别能力" })).toBeDisabled();
+    expect(screen.queryByLabelText(/^调用接口/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "识别能力" })).toBeEnabled();
 
-    fireEvent.change(picker, { target: { value: "b-embed" } });
     fireEvent.click(screen.getByRole("button", { name: "识别能力" }));
     await waitFor(() => expect(detect).toHaveBeenCalledOnce());
-    expect(detect).toHaveBeenCalledWith(provider.id, expect.objectContaining({ binding_id: "b-embed" }), expect.any(String));
+    expect(detect.mock.calls[0][1]).not.toHaveProperty("binding_id");
+  });
+
+  // A model answering on several interfaces is a real choice — one deployment
+  // runs on one interface — so it comes back to the operator, but only after
+  // detection has established what each interface actually answered.
+  it("returns the interface choice only once detection found several that answer", async () => {
+    const ambiguous = {
+      id: "amb", status: "ambiguous" as const, source: "verified_probe" as const, provider_id: provider.id,
+      provider_model: unknown.target_id, provider_calls: 2, max_provider_calls: 10,
+      binding_candidates: [
+        { binding_id: "b-chat", profile_id: "openai.chat-embeddings.v1", access_surface: "openai-api", model_revision: "sha256:a", capability: "chat", probe_kind: "minimal_chat", status: "supported" as const, evidence: "verified" as const, answered: true },
+        { binding_id: "b-embed", profile_id: "openai.embeddings.v1", access_surface: "openai-api", model_revision: "sha256:b", capability: "embeddings", probe_kind: "embedding", status: "supported" as const, evidence: "verified" as const, answered: true },
+      ],
+      capabilities: {}, recommended_capabilities: emptyCapabilities, revision: 1,
+    };
+    const detect = vi.spyOn(api, "createModelCapabilityDetection").mockImplementation(async (_id, body) => ({
+      ...ambiguous, selection_revision: (body as { selection_revision: string }).selection_revision,
+    }));
+    await openCreate();
+    await choose("GPT Future");
+    fireEvent.click(screen.getByRole("button", { name: "识别能力" }));
+
+    const picker = await screen.findByLabelText(/^调用接口/);
+    expect(within(picker as HTMLSelectElement).getAllByRole("option").map((option) => (option as HTMLOptionElement).value))
+      .toEqual(["", "b-chat", "b-embed"]);
+    // The evidence rides along, so the choice is made against what each
+    // interface actually answered rather than against the operator's guess.
+    expect(within(picker as HTMLSelectElement).getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "选择调用接口",
+      "对话 · 流式 · 工具调用 — openai.chat-embeddings.v1（已验证对话）",
+      "向量嵌入 — openai.embeddings.v1（已验证向量嵌入）",
+    ]);
+
+    fireEvent.change(picker, { target: { value: "b-embed" } });
+    fireEvent.click(screen.getByRole("button", { name: "用这个接口继续识别" }));
+    await waitFor(() => expect(detect).toHaveBeenCalledTimes(2));
+    expect(detect.mock.calls[1][1]).toMatchObject({ binding_id: "b-embed" });
   });
 
   it("does not ask which interface to use when the provider enables exactly one", async () => {
@@ -318,7 +354,7 @@ describe("deployment invocation target workflow", () => {
   it("runs verification only after explicit confirmation", async () => {
     const detected = {
       id: "mcd", status: "completed" as const, source: "verified_probe" as const,
-      provider_id: provider.id, provider_model: unknown.target_id, binding_id: "b-chat", profile_id: "openai.chat-embeddings.v1",
+      provider_id: provider.id, provider_model: unknown.target_id, binding_id: "b-chat", profile_id: "openai.chat-embeddings.v1", binding_candidates: [],
       provider_calls: 2, max_provider_calls: 8, capabilities: { chat: { status: "supported" as const, evidence: "verified" as const, probe_kind: "chat" } },
       recommended_capabilities: { ...emptyCapabilities, chat: true }, selection_revision: "selection", revision: 3,
     };
@@ -326,20 +362,24 @@ describe("deployment invocation target workflow", () => {
     await openCreate();
     await choose("GPT Future");
     expect(detect).not.toHaveBeenCalled();
-    await pickDetectionInterface();
     fireEvent.click(screen.getByRole("button", { name: "识别能力" }));
     await waitFor(() => expect(detect).toHaveBeenCalledOnce());
-    expect(detect).toHaveBeenCalledWith(provider.id, expect.objectContaining({ binding_id: "b-chat" }), expect.any(String));
-    expect(await screen.findByText("已识别 1 项能力")).toBeVisible();
-    const details = screen.getByText("已识别 1 项能力").closest("details")!;
-    expect(within(details).getByText("识别详情")).toBeVisible();
-    expect(screen.getByLabelText("对话")).toBeChecked();
+    // No interface is asserted on the way in; the detection result names it.
+    expect(detect.mock.calls[0][0]).toBe(provider.id);
+    expect(detect.mock.calls[0][1]).not.toHaveProperty("binding_id");
+    // The result is the capability editor itself, carrying where it came from.
+    // Capabilities the model does not have are not listed: that set is just the
+    // complement of what is shown, and nobody acts on it.
+    expect(await screen.findByLabelText("对话")).toBeChecked();
+    expect(screen.getByText("受控能力验证")).toBeVisible();
+    expect(screen.queryByText("识别详情")).not.toBeInTheDocument();
+    expect(screen.queryByText("明确不支持")).not.toBeInTheDocument();
   });
 
   it("adopts a reused detection even when the shared job carries an older client selection token", async () => {
     const queued = {
       id: "cached", status: "queued" as const, source: "verified_probe" as const,
-      provider_id: provider.id, provider_model: unknown.target_id, binding_id: "b-chat", profile_id: "openai.chat-embeddings.v1",
+      provider_id: provider.id, provider_model: unknown.target_id, binding_id: "b-chat", profile_id: "openai.chat-embeddings.v1", binding_candidates: [],
       provider_calls: 0, max_provider_calls: 8, capabilities: {}, recommended_capabilities: emptyCapabilities,
       selection_revision: "selection-from-another-client", revision: 1,
     };
@@ -355,9 +395,8 @@ describe("deployment invocation target workflow", () => {
     await openCreate();
     fireEvent.change(screen.getByLabelText("部署名称"), { target: { value: "Cached detection" } });
     await choose("GPT Future");
-    await pickDetectionInterface();
     fireEvent.click(screen.getByRole("button", { name: "识别能力" }));
-    expect(await screen.findByText("已识别 1 项能力")).toBeVisible();
+    expect(await screen.findByLabelText("对话")).toBeChecked();
     expect(screen.getByRole("button", { name: "保存为停用" })).toBeEnabled();
   });
 
@@ -366,14 +405,13 @@ describe("deployment invocation target workflow", () => {
     vi.spyOn(api, "createModelCapabilityDetection").mockImplementation(() => new Promise((resolve) => { resolveDetection = resolve; }));
     await openCreate();
     await choose("GPT Future");
-    await pickDetectionInterface();
     fireEvent.click(screen.getByRole("button", { name: "识别能力" }));
     await waitFor(() => expect(api.createModelCapabilityDetection).toHaveBeenCalledOnce());
     const oldSelection = (vi.mocked(api.createModelCapabilityDetection).mock.calls[0][1] as { selection_revision: string }).selection_revision;
     await choose("GPT Chat");
     await act(async () => resolveDetection({
       id: "late", status: "completed", source: "verified_probe", provider_id: provider.id, provider_model: "gpt-future",
-      binding_id: "b-chat", profile_id: "openai.chat-embeddings.v1", provider_calls: 1, max_provider_calls: 8,
+      binding_id: "b-chat", profile_id: "openai.chat-embeddings.v1", binding_candidates: [], provider_calls: 1, max_provider_calls: 8,
       capabilities: { embeddings: { status: "supported", probe_kind: "embed" } },
       recommended_capabilities: { ...emptyCapabilities, embeddings: true }, selection_revision: oldSelection, revision: 1,
     } as never));
@@ -385,13 +423,12 @@ describe("deployment invocation target workflow", () => {
   it("ends an inconclusive verification at advanced onboarding without an immediate retry CTA", async () => {
     vi.spyOn(api, "createModelCapabilityDetection").mockImplementation(async (_id, body) => ({
       id: "inconclusive", status: "completed", source: "verified_probe", provider_id: provider.id, provider_model: unknown.target_id,
-      binding_id: "b-chat", profile_id: "openai.chat-embeddings.v1", provider_calls: 1, max_provider_calls: 8,
+      binding_id: "b-chat", profile_id: "openai.chat-embeddings.v1", binding_candidates: [], provider_calls: 1, max_provider_calls: 8,
       capabilities: { chat: { status: "inconclusive", probe_kind: "chat" } }, recommended_capabilities: emptyCapabilities,
       selection_revision: (body as { selection_revision: string }).selection_revision, revision: 2,
     }));
     await openCreate();
     await choose("GPT Future");
-    await pickDetectionInterface();
     fireEvent.click(screen.getByRole("button", { name: "识别能力" }));
     expect(await screen.findByText("仍无法确认模型能力")).toBeVisible();
     expect(screen.queryByRole("button", { name: "重新检测" })).not.toBeInTheDocument();
@@ -401,13 +438,12 @@ describe("deployment invocation target workflow", () => {
   it.each(["unauthorized", "unavailable"] as const)("routes a %s verification result only to provider repair", async (status) => {
     vi.spyOn(api, "createModelCapabilityDetection").mockImplementation(async (_id, body) => ({
       id: `repair-${status}`, status: "completed", source: "verified_probe", provider_id: provider.id, provider_model: unknown.target_id,
-      binding_id: "b-chat", profile_id: "openai.chat-embeddings.v1", provider_calls: 1, max_provider_calls: 8,
+      binding_id: "b-chat", profile_id: "openai.chat-embeddings.v1", binding_candidates: [], provider_calls: 1, max_provider_calls: 8,
       capabilities: { chat: { status, probe_kind: "chat" } }, recommended_capabilities: emptyCapabilities,
       selection_revision: (body as { selection_revision: string }).selection_revision, revision: 2,
     }));
     await openCreate();
     await choose("GPT Future");
-    await pickDetectionInterface();
     fireEvent.click(screen.getByRole("button", { name: "识别能力" }));
     expect(await screen.findByText("服务商暂时无法完成验证")).toBeVisible();
     expect(screen.getByRole("link", { name: "前往服务商配置 →" })).toHaveAttribute("href", "/admin/providers");
@@ -469,7 +505,7 @@ describe("deployment invocation target workflow", () => {
   it("shows no catalog affordance at all for a provider that cannot enumerate", async () => {
     vi.mocked(api.invocationTargets).mockResolvedValue(catalog([], { discovery: {
       target_kinds: ["model_id"], can_enumerate: false, can_describe: true, can_verify: true,
-      requires_management_identity: false, requires_canonical_model_mapping: false,
+      requires_management_identity: false, requires_canonical_model_mapping: false, max_verification_calls: 10,
     } }));
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "＋ 新建模型部署" }));
@@ -646,10 +682,6 @@ async function openCreate() {
   renderPage();
   fireEvent.click(await screen.findByRole("button", { name: "＋ 新建模型部署" }));
   await screen.findByRole("button", { name: "刷新" });
-}
-
-async function pickDetectionInterface(value = "b-chat") {
-  fireEvent.change(await screen.findByLabelText(/^调用接口/), { target: { value } });
 }
 
 async function choose(name: string) {

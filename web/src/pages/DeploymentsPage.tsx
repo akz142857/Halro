@@ -712,16 +712,18 @@ function DeploymentForm({
   const selectedProvider = enabledProviders.find((item) => item.id === providerID);
   const selectableBindings = providerBindings(selectedProvider);
   const pinnedBinding = selectableBindings.find((item) => item.id === bindingID);
-  // Detection pins the interface it ran on, and the deployment's target
-  // identity is immutable afterwards, so silently taking bindings[0] when the
-  // provider has several enabled interfaces means the wrong choice can only be
-  // undone by rebuilding the deployment. One interface needs no question; more
-  // than one has to be asked.
-  const detectionBindingChoiceRequired = selectableBindings.length > 1;
+  // "Which interface does this model speak" is the same question detection
+  // exists to answer, so it is not asked up front. Detection probes every
+  // candidate interface and binds the one that answers. The choice comes back
+  // only when several answered — and then it arrives with the evidence.
+  const answeringCandidates = capabilityDetection?.status === "ambiguous"
+    ? (capabilityDetection.binding_candidates ?? []).filter((candidate) => candidate.answered)
+    : [];
+  const detectionBindingChoiceRequired = answeringCandidates.length > 1;
   const detectionBindingID = pinnedBinding?.id
     ?? (detectionBindingChoiceRequired
-      ? selectableBindings.find((item) => item.id === detectionBinding)?.id ?? ""
-      : selectableBindings[0]?.id ?? "");
+      ? answeringCandidates.find((candidate) => candidate.binding_id === detectionBinding)?.binding_id ?? ""
+      : selectableBindings.find((item) => item.id === detectionBinding)?.id ?? "");
   const identityLocked = Boolean(current);
   const targetCatalogKey = ["provider-invocation-targets", providerID] as const;
   const targetCatalog = useQuery({
@@ -787,7 +789,9 @@ function DeploymentForm({
       && capabilityDetection.selection_revision === selectionRevision;
     if (detection.selection_revision && detection.selection_revision !== selectionRevision && !belongsToAcceptedRequest) return;
     setCapabilityDetection(detection);
-    if (detection.status === "completed") {
+    // Only a completed detection has resolved an interface; an ambiguous one
+    // deliberately has not, and must not pin the deployment to anything.
+    if (detection.status === "completed" && detection.binding_id) {
       setCapabilities({ ...detection.recommended_capabilities });
       setBindingID(detection.binding_id);
       setManualDeclaration(false);
@@ -821,6 +825,19 @@ function DeploymentForm({
     mutationFn: () => api.cancelModelCapabilityDetection(detection!.id, detection!.revision),
     onSuccess: setCapabilityDetection,
   });
+  // Resolving an ambiguous detection re-runs it pinned to the chosen interface,
+  // which is the same path an explicitly bound detection already takes. The
+  // binding it sends is the one this render resolved, so the request carries
+  // the operator's pick rather than whatever a later render computes.
+  const confirmDetectionBinding = () => {
+    const nextSelection = crypto.randomUUID();
+    setCapabilityDetection(null);
+    appliedDetectionRevision.current = 0;
+    detectionIdempotencyKey.current = crypto.randomUUID();
+    setSelectionRevision(nextSelection);
+    setResolutionRequiresConfirmation(false);
+    detectCapabilities.mutate(nextSelection);
+  };
   const value = () => ({
     name: name.trim(),
     provider_id: providerID,
@@ -1014,6 +1031,20 @@ function DeploymentForm({
   }
   if (!limitsValid) saveBlockers.push("limits");
   const formValid = saveBlockers.length === 0;
+  // Capabilities a probe could not settle. "not probed" is only one of these
+  // when the plan meant to reach it — the risk policy leaves everything outside
+  // the safe-automatic set unprobed by design, and reporting that as an open
+  // question would make every detection look incomplete.
+  const unestablishedCapabilities = detection?.status === "completed"
+    ? deploymentCapabilityNames.filter((name) => {
+      const result = detection.capabilities[name];
+      if (!result) return false;
+      return result.status === "inconclusive" || result.status === "not_probed" && result.probe_kind !== "risk_policy";
+    })
+    : [];
+  const capabilityEvidenceSource = manualDeclaration
+    ? "operator_declared"
+    : detection?.status === "completed" ? detection.source : "";
   const dirty = useDirty({ name, providerID, providerModel, canonicalModelRef, bindingID, capabilities, region, maxConcurrency, targetKind });
   return (
     <Modal wide title={current ? t("deployments.edit") : template ? t("deployments.createReplacementTitle") : t("deployments.createTitle")} dirty={dirty} onClose={onClose}>
@@ -1202,20 +1233,15 @@ function DeploymentForm({
                     <header>
                       <div>
                         <strong>{t("deployments.detectionUnknownTitle")}</strong>
-                        <span>{t("deployments.detectionCostBoundary", { count: 8 })}</span>
+                        <span>{t("deployments.detectionCostBoundary", { count: targetCatalog.data?.discovery.max_verification_calls ?? 0 })}</span>
                       </div>
                       <span className="capability-onboarding-status">{t("deployments.detectionRequired")}</span>
                     </header>
                     <div className="capability-onboarding-controls">
-                      {detectionBindingChoiceRequired && <Field label={t("deployments.detectionBindingLabel")} hint={t("deployments.detectionBindingHint")}>
-                        <select value={detectionBindingID} onChange={(event) => setDetectionBinding(event.target.value)}>
-                          <option value="">{t("deployments.interfaceRequired")}</option>
-                          {selectableBindings.map((binding) => <option value={binding.id} key={binding.id}>{bindingLabel(binding, t)}</option>)}
-                        </select>
-                      </Field>}
+                      {selectableBindings.length > 1 && <p className="capability-advanced-note">{t("deployments.detectionResolvesInterface")}</p>}
                       <div className="form-actions">
                         <button type="button" className="button ghost" onClick={() => { setManualDeclaration(true); setCapabilities(emptyCapabilities()); }}>{t("deployments.advancedManualDeclaration")}</button>
-                        <button type="button" className="button primary" disabled={!providerModel.trim() || !detectionBindingID || !targetCatalog.data?.discovery.can_verify || detectCapabilities.isPending} onClick={() => detectCapabilities.mutate(selectionRevision)}>{detectCapabilities.isPending ? t("common.working") : t("deployments.confirmAndDetect")}</button>
+                        <button type="button" className="button primary" disabled={!providerModel.trim() || !targetCatalog.data?.discovery.can_verify || detectCapabilities.isPending} onClick={() => detectCapabilities.mutate(selectionRevision)}>{detectCapabilities.isPending ? t("common.working") : t("deployments.confirmAndDetect")}</button>
                       </div>
                     </div>
                   </div>
@@ -1224,55 +1250,46 @@ function DeploymentForm({
                   <div className="notice"><strong>{t("deployments.detectingCapabilities", { completed: Object.values(detection.capabilities).filter((result) => result.status !== "not_probed").length, total: detection.max_provider_calls })}</strong><span>{t("deployments.detectionCancelCost")}</span></div>
                   <button type="button" className="button ghost" disabled={cancelDetection.isPending} onClick={() => cancelDetection.mutate()}>{t("deployments.cancelDetection")}</button>
                 </>}
+                {detection?.status === "ambiguous" && <div className="capability-onboarding-card">
+                  <header>
+                    <div>
+                      <strong>{t("deployments.detectionAmbiguousTitle")}</strong>
+                      <span>{t("deployments.detectionAmbiguousDescription")}</span>
+                    </div>
+                  </header>
+                  <div className="capability-onboarding-controls">
+                    <Field label={t("deployments.detectionBindingLabel")} hint={t("deployments.detectionBindingHint")}>
+                      <select value={detectionBindingID} onChange={(event) => setDetectionBinding(event.target.value)}>
+                        <option value="">{t("deployments.interfaceRequired")}</option>
+                        {answeringCandidates.map((candidate) => {
+                          const binding = selectableBindings.find((item) => item.id === candidate.binding_id);
+                          const label = binding ? bindingLabel(binding, t) : candidate.profile_id;
+                          return <option value={candidate.binding_id} key={candidate.binding_id}>
+                            {t("deployments.detectionCandidateOption", { interface: label, capability: t(`capabilities.${candidate.capability}`) })}
+                          </option>;
+                        })}
+                      </select>
+                    </Field>
+                    <div className="form-actions">
+                      <button type="button" className="button ghost" onClick={() => { resetDetection(); setManualDeclaration(true); }}>{t("deployments.advancedManualDeclaration")}</button>
+                      <button type="button" className="button primary" disabled={!detectionBindingID || detectCapabilities.isPending} onClick={confirmDetectionBinding}>{detectCapabilities.isPending ? t("common.working") : t("deployments.confirmDetectionBinding")}</button>
+                    </div>
+                  </div>
+                </div>}
                 {detection?.status === "completed" && !anyOperation && detectionNeedsProviderRepair && <div className="notice warning"><strong>{t("deployments.detectionProviderRepairTitle")}</strong><span>{t("deployments.detectionProviderRepairDescription")}</span><Link className="notice-link" href="/admin/providers">{t("deployments.openProviders")}</Link></div>}
                 {detection?.status === "completed" && !anyOperation && !detectionNeedsProviderRepair && <div className="notice warning"><strong>{t("deployments.detectionInconclusiveTitle")}</strong><span>{t("deployments.detectionInconclusiveDescription")}</span><div className="form-actions"><button type="button" className="button ghost" onClick={() => { resetDetection(); setManualDeclaration(true); }}>{t("deployments.advancedManualDeclaration")}</button></div></div>}
                 {detection && ["failed", "canceled", "interrupted"].includes(detection.status) && <div className="notice warning"><strong>{t(`deployments.detectionStatus.${detection.status}`)}</strong><span>{t("deployments.detectionRetryOrManual")}</span><div className="form-actions"><button type="button" className="button ghost" onClick={() => { resetDetection(); setManualDeclaration(true); }}>{t("deployments.advancedManualDeclaration")}</button></div></div>}
-                {detection && Object.keys(detection.capabilities).length > 0 && <details className="detection-details">
-                  <summary>
-                    {detection.status === "completed" && anyOperation ? <>
-                      <span className="detection-summary-primary">
-                        <span className="detection-summary-check" aria-hidden="true">✓</span>
-                        <strong>{t("deployments.detectionCompleted", { count: deploymentCapabilityNames.filter((name) => detection.recommended_capabilities[name]).length })}</strong>
-                        <small>{detection.source === "builtin_catalog" ? t("deployments.capabilityEvidenceSources.builtin_catalog") : t("deployments.capabilityEvidenceSources.verified_probe")}</small>
-                      </span>
-                      <span className="detection-summary-detail">
-                        <span>{t("deployments.detectionResults")}</span>
-                        <strong>{t("deployments.detectionResultCount", {
-                          supported: Object.values(detection.capabilities).filter((result) => result.status === "supported").length,
-                          total: Object.keys(detection.capabilities).length,
-                        })}</strong>
-                      </span>
-                    </> : <>
-                      <span>{t("deployments.detectionResults")}</span>
-                      <strong>{t("deployments.detectionResultCount", {
-                        supported: Object.values(detection.capabilities).filter((result) => result.status === "supported").length,
-                        total: Object.keys(detection.capabilities).length,
-                      })}</strong>
-                    </>}
-                  </summary>
-                  <div className="detection-result-groups">
-                    {deploymentCapabilityGroups.map((group) => {
-                      const names = group.capabilities.filter((name) => detection.capabilities[name]);
-                      if (!names.length) return null;
-                      const supported = names.filter((name) => detection.capabilities[name]?.status === "supported").length;
-                      return <section className="detection-result-group" aria-labelledby={`detection-group-${group.id}`} key={group.id}>
-                        <header>
-                          <strong id={`detection-group-${group.id}`}>{t(`deployments.capabilityGroups.${group.id}.title`)}</strong>
-                          <span>{t("deployments.capabilityGroupSupported", { supported, total: names.length })}</span>
-                        </header>
-                        <div className="detection-results" data-count={names.length} role="list" aria-label={t(`deployments.capabilityGroups.${group.id}.title`)}>
-                          {names.map((name) => {
-                            const result = detection.capabilities[name];
-                            return <div role="listitem" key={name}>
-                              <span>{t(`capabilities.${name}`)}</span>
-                              <strong className={`detection-result ${result.status}`}>{t(`deployments.detectionProbeStatus.${result.status}`)}</strong>
-                            </div>;
-                          })}
-                        </div>
-                      </section>;
-                    })}
-                  </div>
-                </details>}
+                {/* What a model cannot do is the complement of the capability
+                    editor below, so listing it twice only adds rows nobody acts
+                    on. What a probe failed to establish is not that complement:
+                    it is the one outcome the editor cannot express, so it is
+                    the only one still named here. */}
+                {!!unestablishedCapabilities.length && <div className="notice" role="status">
+                  <strong>{t("deployments.detectionUnestablishedTitle", {
+                    capabilities: unestablishedCapabilities.map((name) => t(`capabilities.${name}`)).join("、"),
+                  })}</strong>
+                  <span>{t("deployments.detectionUnestablishedDescription")}</span>
+                </div>}
                 {detection?.status === "completed" && detection.expires_at && <small className="technical detection-freshness">{t("deployments.detectionFreshUntil", { date: dateTime(detection.expires_at) })}</small>}
                 {(detectCapabilities.isError || detectionQuery.isError || cancelDetection.isError) && <ErrorState error={detectCapabilities.error || detectionQuery.error || cancelDetection.error} />}
               </div>
@@ -1281,6 +1298,9 @@ function DeploymentForm({
               <header>
                 <span>{t("deployments.enabledCapabilities")}</span>
                 <div className="deployment-capability-header-actions">
+                  {/* Evidence tier stays on screen. A verified set and a set an
+                      administrator simply asserted must never look alike. */}
+                  {capabilityEvidenceSource && <small className="capability-evidence-source">{t(`deployments.capabilityEvidenceSources.${capabilityEvidenceSource}`)}</small>}
                   <strong>{t("providers.selectedCapabilities", { count: selectedCapabilityNames.length })}</strong>
                   {declaredModel && manualDeclaration && <button type="button" className="button ghost deployment-capability-back" onClick={() => setManualDeclaration(false)}>{t("deployments.backToDetectionOptions")}</button>}
                 </div>
@@ -1365,23 +1385,23 @@ function DeploymentForm({
             <span>{current?.enabled ? t("deployments.expansionWhileRouted") : t("deployments.expansionSavedDisabled")}</span>
           </div>}
           {impact && <CapabilityImpactNotice impact={impact} />}
-          {/* Saving an existing deployment hot-reloads it; saving a new one
-              cannot enable it. Both consequences belong next to the button that
-              causes them. */}
-          <div className="notice">
-            <strong>{current ? t("deployments.updateLiveWarning") : t("deployments.savedDisabled")}</strong>
-            <span>{current ? t("deployments.updateLiveDescription") : t("deployments.savedDisabledDescription")}</span>
-          </div>
           {mutation.isError && mutation.error instanceof ApiError && mutation.error.code === "resolution_changed"
             ? <div className="notice warning"><strong>{t("deployments.resolutionChangedTitle")}</strong><span>{t("deployments.resolutionChangedDescription")}</span></div>
             : (mutation.isError || preflight.isError) && <ErrorState error={mutation.error || preflight.error} />}
-          {!!saveBlockers.length && <div className="notice" role="status">
-            <strong>{t("deployments.saveBlocked")}</strong>
-            <ul>
-              {saveBlockers.map((blocker) => <li key={blocker}>{t(`deployments.saveBlockers.${blocker}`)}</li>)}
-            </ul>
-          </div>}
-          <div className="form-actions deployment-form-actions">
+          {/* Saving an existing deployment hot-reloads it; saving a new one
+              cannot enable it. Both consequences belong in the bar that commits
+              them, beside what is still stopping the save. */}
+          <div className="form-actions sticky-form-actions deployment-form-actions">
+            <div className="form-footer-state">
+              <div className="form-footer-summary">
+                <strong>{current ? t("deployments.updateLiveWarning") : t("deployments.savedDisabled")}</strong>
+                <small>{current ? t("deployments.updateLiveDescription") : t("deployments.savedDisabledDescription")}</small>
+              </div>
+              {!!saveBlockers.length && <div className="form-footer-summary" role="status">
+                <strong>{t("deployments.saveBlocked")}</strong>
+                <small>{saveBlockers.map((blocker) => t(`deployments.saveBlockers.${blocker}`)).join(" · ")}</small>
+              </div>}
+            </div>
             <button type="button" className="button ghost" onClick={onClose}>{t("common.cancel")}</button>
             <button className={`button ${impact?.blocking ? "danger" : "primary"}`} disabled={mutation.isPending || preflight.isPending || !formValid}>
               {preflight.isPending

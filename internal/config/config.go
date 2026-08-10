@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akz142857/Halro/internal/domain"
 	"gopkg.in/yaml.v3"
 )
 
@@ -748,7 +749,7 @@ func (c Config) Validate(opts LoadOptions) error {
 	if detection.FreshTTL <= 0 || detection.Retention < detection.FreshTTL || detection.RefreshCooldown <= 0 ||
 		detection.TotalTimeout <= 0 || detection.TotalTimeout > Duration(2*time.Minute) ||
 		detection.GlobalConcurrency < 1 || detection.ProviderConcurrency < 1 ||
-		detection.ProviderConcurrency > detection.GlobalConcurrency || detection.MaxProviderCalls < 1 || detection.MaxProviderCalls > 8 ||
+		detection.ProviderConcurrency > detection.GlobalConcurrency || detection.MaxProviderCalls < 1 || detection.MaxProviderCalls > domain.MaxDetectionProviderCalls ||
 		detection.CreateRPM < 1 || detection.CreateRPM > 60 {
 		problems = append(problems, errors.New("admin.model_capability_detection limits are invalid"))
 	}

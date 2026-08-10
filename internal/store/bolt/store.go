@@ -21,7 +21,7 @@ import (
 	bbolt "go.etcd.io/bbolt"
 )
 
-const schemaVersion uint64 = 24
+const schemaVersion uint64 = 25
 
 // legacyCapabilityEvidence is the evidence tier this project used before
 // capability evidence was durable metadata. The domain no longer accepts it, so
@@ -594,6 +594,32 @@ var migrations = []migration{
 			}
 		}
 		return migrationStep(step, "after_create_model_capability_detection_buckets")
+	}},
+	// Detection records gained a candidate set, a selection fingerprint and a
+	// resolved-only target fingerprint when identification stopped asking the
+	// operator which interface a model speaks. A record written before that
+	// cannot be reshaped honestly: its selection fingerprint would have to be
+	// recomputed here from the app's own hashing, and the candidate set it was
+	// never evaluated against would be invented. Detections are a rebuildable
+	// cache — they carry a freshness TTL and a retention window, deployments
+	// keep their own capability snapshot, and re-running one costs the same
+	// probes it cost the first time. So drop them and let them be re-detected
+	// rather than carry a fabricated shape forward.
+	{version: 25, name: "reset_capability_detections_for_interface_identification", up: func(tx *bbolt.Tx, step func(string) error) error {
+		if err := migrationStep(step, "before_reset_model_capability_detections"); err != nil {
+			return err
+		}
+		for _, name := range [][]byte{bucketModelCapabilityDetections, bucketCapabilityDetectionIdem, bucketCapabilityDetectionIndex} {
+			if tx.Bucket(name) != nil {
+				if err := tx.DeleteBucket(name); err != nil {
+					return err
+				}
+			}
+			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
+				return err
+			}
+		}
+		return migrationStep(step, "after_reset_model_capability_detections")
 	}},
 }
 

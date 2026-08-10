@@ -193,7 +193,7 @@ func TestMetadataMigrationFromV1IsAtomicAndRecorded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(history) != 24 ||
+	if len(history) != 25 ||
 		history[0] != (MigrationRecord{Version: 1, Name: "initial_schema"}) ||
 		history[1] != (MigrationRecord{Version: 2, Name: "migration_history"}) ||
 		history[2] != (MigrationRecord{Version: 3, Name: "deployments"}) ||
@@ -217,7 +217,8 @@ func TestMetadataMigrationFromV1IsAtomicAndRecorded(t *testing.T) {
 		history[20] != (MigrationRecord{Version: 21, Name: "refuse_legacy_capability_evidence"}) ||
 		history[21] != (MigrationRecord{Version: 22, Name: "refuse_deployment_less_routes"}) ||
 		history[22] != (MigrationRecord{Version: 23, Name: "deployment_snapshot_evidence_and_disabled"}) ||
-		history[23] != (MigrationRecord{Version: 24, Name: "model_capability_detections"}) {
+		history[23] != (MigrationRecord{Version: 24, Name: "model_capability_detections"}) ||
+		history[24] != (MigrationRecord{Version: 25, Name: "reset_capability_detections_for_interface_identification"}) {
 		t.Fatalf("history=%#v", history)
 	}
 }

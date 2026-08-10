@@ -17,7 +17,7 @@ import (
 	"github.com/akz142857/Halro/internal/semantic"
 )
 
-func TestResolveCapabilityDetectorRequiresExplicitBindingForUnknownModel(t *testing.T) {
+func TestUnknownModelCarriesEveryCandidateInterfaceInsteadOfRefusing(t *testing.T) {
 	runtime, bootstrap := bootstrapForCapabilityTest(t)
 	instance, err := runtime.store.GetProvider(context.Background(), bootstrap.ProviderID)
 	if err != nil {
@@ -43,16 +43,194 @@ func TestResolveCapabilityDetectorRequiresExplicitBindingForUnknownModel(t *test
 	runtime.providers = registry
 	original.Close()
 
+	// An unlisted model must not be turned into a question the operator cannot
+	// answer. Both interfaces stay candidates and identification decides.
 	input := modelCapabilityDetectionInput{ProviderModel: "unlisted-image-model", RiskTier: "safe_automatic"}
-	if _, _, _, _, _, err := runtime.resolveCapabilityDetector(instance, input, ""); !errors.Is(err, errAmbiguousCapabilityBinding) {
-		t.Fatalf("unqualified unknown model resolved an arbitrary interface: %v", err)
+	catalogCandidates, probeCandidates, err := runtime.capabilityDetectionCandidates(instance, input, "")
+	if err != nil || len(catalogCandidates) != 0 || len(probeCandidates) != 2 {
+		t.Fatalf("catalog=%d probe=%d err=%v", len(catalogCandidates), len(probeCandidates), err)
+	}
+	if err := capabilityCandidateError(catalogCandidates, probeCandidates); err != nil {
+		t.Fatalf("several probeable interfaces were refused instead of identified: %v", err)
 	}
 
+	// An explicit interface still narrows the set to exactly that one, which is
+	// how the operator resolves a detection that found several answering.
 	input.BindingID = media.ID
-	binding, _, detector, _, known, err := runtime.resolveCapabilityDetector(instance, input, "")
-	if err != nil || binding.ID != media.ID || detector == nil || known {
-		t.Fatalf("explicit interface was not honored: binding=%q detector=%T known=%t err=%v", binding.ID, detector, known, err)
+	_, probeCandidates, err = runtime.capabilityDetectionCandidates(instance, input, "")
+	if err != nil || len(probeCandidates) != 1 || probeCandidates[0].binding.ID != media.ID {
+		t.Fatalf("explicit interface was not honored: candidates=%d err=%v", len(probeCandidates), err)
 	}
+}
+
+// A model that answers on exactly one interface must be bound to it without the
+// operator being asked, which is the whole point of pressing "detect".
+func TestIdentificationResolvesTheOnlyInterfaceThatAnswers(t *testing.T) {
+	runtime, instance, chat, media := twoInterfaceProviderForTest(t)
+	chatDetector := &scriptedCapabilityDetector{supported: map[string]bool{}}
+	mediaDetector := &scriptedCapabilityDetector{supported: map[string]bool{"moderations": true}}
+	registerBindingDetectors(t, runtime, instance, map[string]provider.Adapter{chat.ID: chatDetector, media.ID: mediaDetector})
+
+	completed := runDetectionForTest(t, runtime, instance, "unlisted-moderation-model")
+	if completed.Status != domain.DetectionCompleted {
+		t.Fatalf("status=%s candidates=%#v", completed.Status, completed.Candidates)
+	}
+	if completed.BindingID != media.ID {
+		t.Fatalf("identification resolved %q, want %q", completed.BindingID, media.ID)
+	}
+	if !completed.Recommended.Moderations || completed.Recommended.Chat {
+		t.Fatalf("recommended=%#v", completed.Recommended)
+	}
+	// The losing interface costs one probe and no more; the winner's own
+	// identification probe is carried into the results rather than repeated.
+	if chatDetector.calls.Load() != 1 || mediaDetector.calls.Load() != 1 {
+		t.Fatalf("chat calls=%d media calls=%d", chatDetector.calls.Load(), mediaDetector.calls.Load())
+	}
+	if completed.ProviderCalls != 2 || len(completed.Calls) != 2 {
+		t.Fatalf("provider calls=%d records=%d", completed.ProviderCalls, len(completed.Calls))
+	}
+	for _, call := range completed.Calls {
+		if call.BindingID == "" {
+			t.Fatalf("a probe was recorded without the interface it was spent on: %#v", call)
+		}
+	}
+}
+
+// When several interfaces answer, the deployment still runs on one, so the
+// choice returns to the operator — but carrying what each one answered.
+func TestIdentificationLeavesAGenuineChoiceToTheOperatorWithEvidence(t *testing.T) {
+	runtime, instance, chat, media := twoInterfaceProviderForTest(t)
+	chatDetector := &scriptedCapabilityDetector{supported: map[string]bool{"chat": true}}
+	mediaDetector := &scriptedCapabilityDetector{supported: map[string]bool{"moderations": true}}
+	registerBindingDetectors(t, runtime, instance, map[string]provider.Adapter{chat.ID: chatDetector, media.ID: mediaDetector})
+
+	completed := runDetectionForTest(t, runtime, instance, "unlisted-dual-model")
+	if completed.Status != domain.DetectionAmbiguous {
+		t.Fatalf("status=%s", completed.Status)
+	}
+	if completed.BindingID != "" {
+		t.Fatalf("an ambiguous detection resolved a binding anyway: %q", completed.BindingID)
+	}
+	answered := map[string]string{}
+	for _, candidate := range completed.Candidates {
+		if candidate.Answered {
+			answered[candidate.BindingID] = candidate.Capability
+		}
+	}
+	if len(answered) != 2 || answered[chat.ID] != "chat" || answered[media.ID] != "moderations" {
+		t.Fatalf("the operator was left without evidence: %#v", completed.Candidates)
+	}
+}
+
+// Nothing answering is a failure, not a silent pick of the first interface.
+func TestIdentificationFailsWhenNoInterfaceAnswers(t *testing.T) {
+	runtime, instance, chat, media := twoInterfaceProviderForTest(t)
+	chatDetector := &scriptedCapabilityDetector{supported: map[string]bool{}}
+	mediaDetector := &scriptedCapabilityDetector{supported: map[string]bool{}}
+	registerBindingDetectors(t, runtime, instance, map[string]provider.Adapter{chat.ID: chatDetector, media.ID: mediaDetector})
+
+	completed := runDetectionForTest(t, runtime, instance, "model-that-does-not-exist")
+	if completed.Status != domain.DetectionFailed || completed.BindingID != "" {
+		t.Fatalf("status=%s binding=%q", completed.Status, completed.BindingID)
+	}
+}
+
+// twoInterfaceProviderForTest persists a provider carrying both OpenAI
+// interfaces, which is the shape that used to force the operator to choose.
+func twoInterfaceProviderForTest(t *testing.T) (*Runtime, domain.ProviderInstance, domain.ProviderProfileBinding, domain.ProviderProfileBinding) {
+	t.Helper()
+	runtime, bootstrap := bootstrapForCapabilityTest(t)
+	instance, err := runtime.store.GetProvider(context.Background(), bootstrap.ProviderID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The chat binding keeps its bootstrapped ID: the seeded deployment is
+	// bound to it, and renaming it would orphan that deployment rather than
+	// test anything about identification.
+	chat := instance.EffectiveProfileBindings()[0]
+	chat.ProfileID = domain.ProfileOpenAIChatEmbeddings
+	chat.Capabilities = domain.DefaultProviderCapabilitiesForProfile(domain.ProviderOpenAI, domain.ProfileOpenAIChatEmbeddings)
+	chat.CapabilityEvidence = domain.EvidenceForCapabilities(chat.Capabilities, domain.EvidenceDeclared)
+	media := chat
+	media.ID, media.ProfileID = "b-media", domain.ProfileOpenAIMediaResources
+	media.Capabilities = domain.DefaultProviderCapabilitiesForProfile(domain.ProviderOpenAI, domain.ProfileOpenAIMediaResources)
+	media.CapabilityEvidence = domain.EvidenceForCapabilities(media.Capabilities, domain.EvidenceDeclared)
+	instance.Bindings = []domain.ProviderProfileBinding{chat, media}
+	instance.Capabilities, instance.CapabilityEvidence = domain.BindingsCapabilitiesSummary(instance.Bindings)
+	stored, err := runtime.store.PutProvider(context.Background(), instance, instance.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return runtime, stored, chat, media
+}
+
+func registerBindingDetectors(t *testing.T, runtime *Runtime, instance domain.ProviderInstance, adapters map[string]provider.Adapter) {
+	t.Helper()
+	original := runtime.providers
+	registry := provider.NewRegistry()
+	for bindingID, adapter := range adapters {
+		if err := registry.RegisterBindingAdapter(instance.ID, bindingID, adapter); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runtime.providers = registry
+	original.Close()
+}
+
+func runDetectionForTest(t *testing.T, runtime *Runtime, instance domain.ProviderInstance, model string) domain.ModelCapabilityDetection {
+	t.Helper()
+	session := loginTestAdmin(t, runtime, "admin", "correct horse battery staple")
+	request := adminMutationRequest(t, http.MethodPost, "/admin/api/v1/providers/"+instance.ID+"/model-capability-detections", session, map[string]any{
+		"provider_model": model, "target_kind": "model_id", "risk_tier": "safe_automatic",
+	})
+	request.Header.Set("Idempotency-Key", "identify-"+model)
+	response := httptest.NewRecorder()
+	runtime.adminRouter().ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var created domain.ModelCapabilityDetection
+	if err := json.Unmarshal(response.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		current, err := runtime.store.GetModelCapabilityDetection(context.Background(), created.ID)
+		if err == nil && current.Status.Terminal() {
+			return current
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("capability detection did not finish")
+	return domain.ModelCapabilityDetection{}
+}
+
+// scriptedCapabilityDetector answers a fixed set of capabilities and derives its
+// plan from the profile under test, so a probe against the wrong interface fails
+// exactly as an unsupported model would.
+type scriptedCapabilityDetector struct {
+	fixedCapabilityDetector
+	supported map[string]bool
+}
+
+func (d *scriptedCapabilityDetector) CapabilityDetectionPlan(target provider.ModelCapabilityDetectionTarget) (provider.CapabilityDetectionPlan, error) {
+	if target.ProviderModel == "" || target.BindingID == "" || target.RiskTier != "safe_automatic" {
+		return provider.CapabilityDetectionPlan{}, errors.New("capability detection target does not match adapter profile")
+	}
+	probes := []provider.CapabilityProbe{{Capability: "chat", Kind: "minimal_chat", MaxOutputTokens: 8, MayBill: true},
+		{Capability: "streaming", Kind: "minimal_stream", DependsOn: []string{"chat"}, MaxOutputTokens: 8, MayBill: true}}
+	if target.ProfileID == domain.ProfileOpenAIMediaResources {
+		probes = []provider.CapabilityProbe{{Capability: "moderations", Kind: "moderation", MaxOutputTokens: 8, MayBill: true}}
+	}
+	return provider.CapabilityDetectionPlan{ContractVersion: provider.CapabilityDetectorContractVersion, Probes: probes, MaxCalls: len(probes)}, nil
+}
+
+func (d *scriptedCapabilityDetector) DetectCapability(_ context.Context, target provider.ModelCapabilityDetectionTarget, probe provider.CapabilityProbe) domain.CapabilityProbeResult {
+	d.calls.Add(1)
+	if d.supported[probe.Capability] {
+		return domain.CapabilityProbeResult{Status: domain.ProbeSupported, Evidence: domain.EvidenceVerified, BindingID: target.BindingID, ProbeKind: probe.Kind}
+	}
+	return domain.CapabilityProbeResult{Status: domain.ProbeUnsupported, ErrorClass: "model_not_found", BindingID: target.BindingID, ProbeKind: probe.Kind}
 }
 
 type fixedCapabilityDetector struct{ calls atomic.Int64 }

@@ -64,7 +64,10 @@ admin:
     total_timeout: 1m30s
     global_concurrency: 4
     provider_concurrency: 1
-    max_provider_calls: 8
+    # Covers both halves of one detection: the probes that identify which
+    # invocation interface the model answers on, and the capability plan run
+    # against the one that did.
+    max_provider_calls: 10
     create_rpm: 6
 
 usage:
