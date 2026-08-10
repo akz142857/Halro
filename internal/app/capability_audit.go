@@ -47,6 +47,18 @@ func capabilitySnapshotMetadata(deployment domain.Deployment) map[string]any {
 	if snapshot.CatalogRevision != "" {
 		metadata["catalog_revision"] = snapshot.CatalogRevision
 	}
+	if snapshot.ResolutionRevision != "" {
+		metadata["resolution_revision"] = snapshot.ResolutionRevision
+	}
+	if snapshot.ProviderRevision != 0 {
+		metadata["provider_revision"] = snapshot.ProviderRevision
+	}
+	if snapshot.TargetFingerprint != "" {
+		metadata["target_fingerprint"] = snapshot.TargetFingerprint
+	}
+	if len(snapshot.ClaimRevisions) != 0 {
+		metadata["claim_revisions"] = append([]string(nil), snapshot.ClaimRevisions...)
+	}
 	if deployment.Region != "" {
 		metadata["region"] = deployment.Region
 	}
@@ -97,27 +109,25 @@ func (r *Runtime) auditCapabilityWithholdings(ctx context.Context, withheld []ca
 			"route_id":                item.RouteID,
 			"capability_review_state": string(item.State),
 		}
-		recorded := false
+		if item.Reason != "" {
+			metadata["reason"] = item.Reason
+		}
+		if len(item.NoLongerSupported) != 0 {
+			metadata["no_longer_supported"] = item.NoLongerSupported
+		}
 		if deployment, err := r.store.GetDeployment(ctx, item.DeploymentID); err == nil {
 			for key, value := range capabilitySnapshotMetadata(deployment) {
 				metadata[key] = value
-			}
-			if instance, err := r.store.GetProvider(ctx, deployment.ProviderID); err == nil {
-				review := reviewCapabilities(deployment, deploymentBinding(instance, deployment), instance.Type)
-				metadata["reason"] = review.Reason
-				if len(review.NoLongerSupported) != 0 {
-					metadata["no_longer_supported"] = review.NoLongerSupported
-				}
-				r.capabilityMetrics.recordDrift(driftMetricReason(review.Reason))
-				recorded = true
 			}
 		}
 		// The reason is only knowable with the deployment and its provider in
 		// hand. When either read fails the drift still happened, so it is
 		// counted rather than dropped — a metric that silently undercounts the
 		// exact case it exists to catch would be worse than a coarse one.
-		if !recorded {
+		if item.Reason == "" {
 			r.capabilityMetrics.recordDrift(driftReasonProfile)
+		} else {
+			r.capabilityMetrics.recordDrift(driftMetricReason(item.Reason))
 		}
 		// A failed audit append must not take the process down: the deployment
 		// is already fail-closed, and refusing to start over an audit write

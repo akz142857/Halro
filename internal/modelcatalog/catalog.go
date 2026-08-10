@@ -21,6 +21,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/akz142857/Halro/internal/domain"
 )
@@ -36,6 +37,9 @@ const (
 	// pre-selects one, because that would let an upstream decide what Halro
 	// enables by default.
 	SourceProviderMetadata Source = "provider_metadata"
+	// SourceSignedCatalog is a reviewed exact claim from the optional 1.1.0
+	// background catalog reader.
+	SourceSignedCatalog Source = "signed_catalog"
 	// SourceVerifiedProbe is the result of an explicit side-effect-free or
 	// operator-triggered verification.
 	SourceVerifiedProbe Source = "verified_probe"
@@ -49,16 +53,19 @@ const (
 
 func (s Source) Valid() bool {
 	switch s {
-	case SourceBuiltin, SourceProviderMetadata, SourceVerifiedProbe, SourceOperatorDeclared, SourceUnsupported:
+	case SourceBuiltin, SourceProviderMetadata, SourceSignedCatalog, SourceVerifiedProbe, SourceOperatorDeclared, SourceUnsupported:
 		return true
 	default:
 		return false
 	}
 }
 
-// PreselectsCapabilities reports whether the console may render a capability
-// from this source as checked by default. Only the builtin catalog may.
-func (s Source) PreselectsCapabilities() bool { return s == SourceBuiltin || s == SourceVerifiedProbe }
+// PreselectsCapabilities reports whether a reviewed source may participate in
+// an automatically resolved variant. Provider metadata and declarations still
+// require their explicit resolution/onboarding paths.
+func (s Source) PreselectsCapabilities() bool {
+	return s == SourceBuiltin || s == SourceSignedCatalog || s == SourceVerifiedProbe
+}
 
 // MaxEvidence caps the evidence level a claim from this source may carry. A
 // declaration never becomes verified by being written down confidently.
@@ -66,7 +73,7 @@ func (s Source) MaxEvidence() domain.CapabilityEvidence {
 	switch s {
 	case SourceVerifiedProbe:
 		return domain.EvidenceVerified
-	case SourceBuiltin, SourceProviderMetadata, SourceOperatorDeclared:
+	case SourceBuiltin, SourceProviderMetadata, SourceSignedCatalog, SourceOperatorDeclared:
 		return domain.EvidenceDeclared
 	default:
 		return domain.EvidenceUnsupported
@@ -106,6 +113,7 @@ func (s Status) Valid() bool {
 type Key struct {
 	ProviderType domain.ProviderType
 	Profile      domain.ProviderProfileID
+	TargetKind   domain.DeploymentTargetKind
 	Model        string
 	Region       string
 }
@@ -124,6 +132,15 @@ func (k Key) Validate() error {
 	if k.Model != strings.TrimSpace(k.Model) || len(k.Model) > 512 {
 		problems = append(problems, errors.New("catalog model must be trimmed and at most 512 bytes"))
 	}
+	if k.Region != strings.TrimSpace(k.Region) || len(k.Region) > 128 {
+		problems = append(problems, errors.New("catalog region must be trimmed and at most 128 bytes"))
+	}
+	if strings.IndexFunc(k.Model, unicode.IsControl) >= 0 || strings.IndexFunc(k.Region, unicode.IsControl) >= 0 {
+		problems = append(problems, errors.New("catalog model and region must not contain control characters"))
+	}
+	if k.TargetKind != "" && !validTargetKind(k.TargetKind) {
+		problems = append(problems, errors.New("catalog target kind is not implemented"))
+	}
 	if len(problems) > 0 {
 		return errors.Join(problems...)
 	}
@@ -134,11 +151,64 @@ func (k Key) Validate() error {
 	if providerType != k.ProviderType {
 		return fmt.Errorf("catalog profile %q belongs to provider type %q, not %q", k.Profile, providerType, k.ProviderType)
 	}
+	targetKind := k.TargetKind
+	if targetKind == "" {
+		// Empty remains an internal shorthand for the profile's default kind.
+		// Remote snapshots reject it before reaching this validation boundary.
+		targetKind = defaultTargetKind(k.ProviderType, k.Profile)
+	}
+	if !targetKindAllowedForProfile(k.ProviderType, k.Profile, targetKind) {
+		return fmt.Errorf("catalog target kind %q is incompatible with profile %q", targetKind, k.Profile)
+	}
 	return nil
 }
 
 func (k Key) canonical() string {
-	return strings.Join([]string{string(k.ProviderType), string(k.Profile), k.Model, k.Region}, "\x00")
+	fields := []string{string(k.ProviderType), string(k.Profile), string(k.TargetKind), k.Model, k.Region}
+	var builder strings.Builder
+	for _, field := range fields {
+		builder.WriteString(strconv.Itoa(len(field)))
+		builder.WriteByte(':')
+		builder.WriteString(field)
+	}
+	return builder.String()
+}
+
+func validTargetKind(kind domain.DeploymentTargetKind) bool {
+	switch kind {
+	case domain.TargetModelID, domain.TargetAzureDeployment, domain.TargetBedrockFoundationModel,
+		domain.TargetBedrockInferenceProfile, domain.TargetBedrockProvisionedThroughput, domain.TargetCustomEndpointModel:
+		return true
+	default:
+		return false
+	}
+}
+
+// targetKindAllowedForProfile validates the complete invocation identity, not
+// merely membership in the global target-kind enum. Rejecting impossible
+// signed identities prevents a future caller from accidentally making a
+// malformed claim reachable.
+func targetKindAllowedForProfile(providerType domain.ProviderType, profile domain.ProviderProfileID, kind domain.DeploymentTargetKind) bool {
+	switch providerType {
+	case domain.ProviderAzureOpenAI:
+		return kind == domain.TargetAzureDeployment
+	case domain.ProviderOpenAICompatible:
+		return kind == domain.TargetCustomEndpointModel || kind == domain.TargetModelID
+	case domain.ProviderBedrock:
+		switch profile {
+		case domain.ProfileBedrockConverseText:
+			return kind == domain.TargetBedrockFoundationModel ||
+				kind == domain.TargetBedrockInferenceProfile ||
+				kind == domain.TargetBedrockProvisionedThroughput
+		case domain.ProfileBedrockMantleOpenAIChat, domain.ProfileBedrockMantleOpenAIResponses,
+			domain.ProfileBedrockMantleAnthropicMessages:
+			return kind == domain.TargetModelID
+		default:
+			return kind == domain.TargetBedrockFoundationModel
+		}
+	default:
+		return kind == domain.TargetModelID
+	}
 }
 
 // Ceiling returns the profile capability ceiling a claim for this key may not
@@ -153,6 +223,10 @@ type Entry struct {
 	Status       Status
 	Source       Source
 	Capabilities domain.ProviderCapabilities
+	// Unsupported contains exact, explicit negative claims. Absence is never
+	// copied here: a remote or provider catalog must name a capability to deny
+	// it, otherwise it remains unknown.
+	Unsupported []string
 	// Conflicts lists capability names sources disagreed about. Each is forced
 	// off in Capabilities.
 	Conflicts []string
@@ -161,6 +235,11 @@ type Entry struct {
 // Unknown returns the fail-closed entry for a model no source covers: zero
 // capabilities, never the profile ceiling.
 func Unknown(key Key) Entry {
+	// There is no capability claim to scope when nothing matched. TargetKind is
+	// already part of the selection fingerprint; omitting it here keeps the
+	// historical unknown-entry revision stable while exact signed lookups remain
+	// kind-scoped.
+	key.TargetKind = ""
 	return Entry{Key: key, Status: StatusUnknown, Source: SourceUnsupported}
 }
 
@@ -186,6 +265,11 @@ func (e Entry) canonical() string {
 	}
 	conflicts := slices.Clone(e.Conflicts)
 	slices.Sort(conflicts)
+	conflicts = slices.Compact(conflicts)
+	unsupported := slices.Clone(e.Unsupported)
+	slices.Sort(unsupported)
+	unsupported = slices.Compact(unsupported)
+	fields = append(fields, "unsupported="+strings.Join(unsupported, ","))
 	fields = append(fields, "conflicts="+strings.Join(conflicts, ","))
 	return strings.Join(fields, "\x00")
 }
@@ -210,6 +294,17 @@ func (e Entry) Validate() error {
 	for _, name := range e.Conflicts {
 		if !slices.Contains(CapabilityNames, name) {
 			problems = append(problems, fmt.Errorf("catalog conflict names unknown capability %q", name))
+		}
+	}
+	for _, name := range e.Unsupported {
+		if !slices.Contains(CapabilityNames, name) {
+			problems = append(problems, fmt.Errorf("catalog entry names unknown unsupported capability %q", name))
+		}
+		if isLimit(name) {
+			problems = append(problems, fmt.Errorf("catalog entry cannot deny numeric limit %q", name))
+		}
+		if HasCapability(e.Capabilities, name) {
+			problems = append(problems, fmt.Errorf("catalog entry both supports and denies capability %q", name))
 		}
 	}
 	return errors.Join(problems...)
@@ -320,6 +415,8 @@ func rank(source Source) int {
 		return 4
 	case SourceVerifiedProbe:
 		return 3
+	case SourceSignedCatalog:
+		return 2
 	case SourceOperatorDeclared:
 		return 2
 	case SourceProviderMetadata:
@@ -477,6 +574,13 @@ func New(entries ...Entry) (*Catalog, error) {
 	catalog := &Catalog{entries: make(map[string]Entry, len(entries))}
 	var problems []error
 	for _, entry := range entries {
+		if entry.Key.TargetKind == "" {
+			// Internal catalog builders historically used an omitted kind as the
+			// profile's unambiguous default. Normalize before validation, hashing,
+			// and storage so Lookup reaches the same exact identity. Signed wire
+			// entries remain stricter and reject an omitted target_kind.
+			entry.Key.TargetKind = defaultTargetKind(entry.Key.ProviderType, entry.Key.Profile)
+		}
 		if err := entry.Validate(); err != nil {
 			problems = append(problems, err)
 			continue
@@ -485,7 +589,7 @@ func New(entries ...Entry) (*Catalog, error) {
 			problems = append(problems, fmt.Errorf("catalog entry for %q claims nothing", entry.Key.Model))
 			continue
 		}
-		if !entry.Capabilities.AnyOperation() {
+		if !entry.Capabilities.AnyOperation() && len(entry.Unsupported) == 0 {
 			problems = append(problems, fmt.Errorf("catalog entry for %q declares no core operation", entry.Key.Model))
 			continue
 		}
@@ -517,19 +621,18 @@ func New(entries ...Entry) (*Catalog, error) {
 // region is not covered falls back to a region-agnostic entry for the same
 // model, which is an explicit claim that the capability does not vary by region.
 func (c *Catalog) Lookup(key Key) (Entry, bool) {
+	if key.TargetKind == "" {
+		key.TargetKind = defaultTargetKind(key.ProviderType, key.Profile)
+	}
 	if entry, ok := c.entries[key.canonical()]; ok {
 		return entry, true
 	}
-	if key.Region == "" {
-		return Unknown(key), false
-	}
-	agnostic := key
-	agnostic.Region = ""
-	if entry, ok := c.entries[agnostic.canonical()]; ok {
-		// The entry keeps its own identity rather than adopting the caller's
-		// region. Its revision identifies the claim, and a claim that holds in
-		// every region must not hash differently depending on who asked.
-		return entry, true
+	if key.Region != "" {
+		agnosticRegion := key
+		agnosticRegion.Region = ""
+		if entry, ok := c.entries[agnosticRegion.canonical()]; ok {
+			return entry, true
+		}
 	}
 	return Unknown(key), false
 }

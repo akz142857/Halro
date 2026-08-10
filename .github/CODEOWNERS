@@ -6,3 +6,7 @@
 /internal/backup/ @akz142857
 /internal/redaction/ @akz142857
 /internal/safetransport/ @akz142857
+/internal/modelcatalog/ @akz142857
+/catalog/ @akz142857
+/tools/modelcatalog/ @akz142857
+/.github/workflows/model-catalog-publish.yml @akz142857

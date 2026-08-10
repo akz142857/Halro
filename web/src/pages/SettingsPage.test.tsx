@@ -266,6 +266,16 @@ describe("SettingsPage system configuration pane", () => {
   });
 
   it("shows a searchable annotated config list and keeps the complete YAML collapsed", async () => {
+    vi.spyOn(api, "modelCatalog").mockResolvedValue({
+      status: {
+        enabled: false, state: "disabled", source: "bundled", revision: "catalog-revision",
+        sequence: 0, pinned_revision: "", last_attempt_at: "", last_success_at: "",
+        degraded_since: "", error_class: "", using_expired_last_known_good: false,
+      },
+      bundled_revision: "catalog-revision", effective_revision: "catalog-revision",
+      schema: { min_readable: 1, max_readable: 1 }, capability_dictionary_version: 1,
+      trust_root_count: 0,
+    });
     const systemConfig = vi.spyOn(api, "systemConfig").mockResolvedValue({
       yaml: "server:\n  gateway_listen: 127.0.0.1:8080\n",
       entries: [
@@ -293,6 +303,8 @@ describe("SettingsPage system configuration pane", () => {
     expect(screen.getByText("tls.enabled")).toBeInTheDocument();
     expect(screen.getByText("未启用")).toBeInTheDocument();
     expect(screen.getByText("未配置")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "签名模型目录" })).toBeInTheDocument();
+    expect(screen.getByText("更新未启用")).toBeInTheDocument();
     fireEvent.change(screen.getByPlaceholderText("搜索名称、字段路径、说明或值"), { target: { value: "tls.enabled" } });
     expect(document.querySelectorAll(".config-entry")).toHaveLength(1);
     expect(screen.getByText("显示 1 / 4 项")).toBeInTheDocument();
@@ -302,6 +314,28 @@ describe("SettingsPage system configuration pane", () => {
     expect(yamlDetails).toHaveAttribute("open");
     expect(screen.getByText(/gateway_listen:/)).toBeInTheDocument();
     expect(systemConfig).toHaveBeenCalled();
+  });
+
+  it("does not offer catalog refresh to a read-only administrator", async () => {
+    vi.spyOn(api, "systemConfig").mockResolvedValue({ yaml: "", entries: [] } as never);
+    vi.spyOn(api, "modelCatalog").mockResolvedValue({
+      status: { enabled: true, state: "current", source: "signed_catalog", revision: "sha256:catalog", sequence: 4 },
+      bundled_revision: "sha256:bundled", effective_revision: "sha256:catalog",
+      schema: { min_readable: 1, max_readable: 1 }, capability_dictionary_version: 1, trust_root_count: 1,
+    });
+    const refresh = vi.spyOn(api, "refreshModelCatalog");
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    client.setQueryData(["session"], {
+      username: "auditor", role: "read_only", locale: "system", appearance: "light",
+      csrf_token: "csrf", absolute_expires_at: "x", idle_expires_at: "x",
+    });
+    window.history.replaceState({}, "", "/admin/settings/config");
+    render(<QueryClientProvider client={client}><SettingsPage /></QueryClientProvider>);
+
+    const button = await screen.findByRole("button", { name: "刷新签名目录" });
+    expect(button).toBeDisabled();
+    expect(screen.getByText("只读管理员不能刷新目录。")).toBeInTheDocument();
+    expect(refresh).not.toHaveBeenCalled();
   });
 
   it("no longer renders it, or fetches it, under diagnostics", async () => {

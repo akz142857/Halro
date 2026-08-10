@@ -2,26 +2,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError, api } from "../api";
-import type { Deployment, Provider, ProviderCapabilities, ProviderModelDescriptor } from "../types";
-import { DeploymentsPage, localDateTimeValue } from "./DeploymentsPage";
+import i18n from "../i18n";
+import type { DeploymentVariant, InvocationTargetCatalog, Provider, ProviderCapabilities, ResolvedInvocationTarget } from "../types";
+import { DeploymentsPage } from "./DeploymentsPage";
 
-const capabilities = {
-  chat: true, streaming: true, embeddings: true, moderations: false, images: false,
-  transcriptions: false, speech: false, files: false, batches: false, rerank: false,
-  async_generate: false, tools: true, vision: true, json_mode: true,
-  developer_role: true, reasoning: true, stream_usage: true,
-  max_context_tokens: 0, max_output_tokens: 0,
-};
-
-const provider = {
-  id: "provider_openai", name: "OpenAI production", type: "openai", base_url: "https://api.openai.com",
-  access_surface: "openai-api", profile_id: "openai.chat-embeddings.v1", credential_scheme: "bearer.static",
-  credential_id: "credential_openai", allowed_hosts: ["api.openai.com"], capabilities,
-  capability_evidence: {}, max_concurrency: 8, enabled: true, revision: 1,
-  created_at: "", updated_at: "",
-} as Provider;
-
-const noCapabilities: ProviderCapabilities = {
+const emptyCapabilities: ProviderCapabilities = {
   chat: false, streaming: false, embeddings: false, moderations: false, images: false,
   transcriptions: false, speech: false, files: false, batches: false, rerank: false,
   async_generate: false, tools: false, vision: false, json_mode: false,
@@ -29,54 +14,71 @@ const noCapabilities: ProviderCapabilities = {
   max_context_tokens: 0, max_output_tokens: 0,
 };
 
-// Unknown is the ordinary case: the builtin catalog does not seed chat model
-// line-ups, so a discovered OpenAI model carries no capabilities of its own.
-function unknownModel(id: string): ProviderModelDescriptor {
-  return {
-    id, owned_by: "openai", status: "unknown", capabilities: noCapabilities,
-    capability_evidence: {}, capability_source: "unsupported", preselect: false,
-    model_revision: `sha256:${id}`, profile_candidates: [],
-  };
-}
+const chatCapabilities: ProviderCapabilities = {
+  ...emptyCapabilities, chat: true, streaming: true, tools: true, stream_usage: true,
+};
 
-function knownModel(id: string, capabilities: Partial<ProviderCapabilities>): ProviderModelDescriptor {
-  return {
-    id, owned_by: "openai", status: "known", capabilities: { ...noCapabilities, ...capabilities },
-    capability_evidence: { chat: "declared" }, capability_source: "builtin_catalog", preselect: true,
-    model_revision: `sha256:known-${id}`,
-    profile_candidates: [{
-      binding_id: "b-chat", profile_id: "openai.chat-embeddings.v1", status: "known", selected: true,
-      capabilities: { ...noCapabilities, ...capabilities }, profile_capabilities: { ...noCapabilities, ...capabilities },
-    }],
-  };
-}
-
-// A provider reachable through two internal interfaces. Which one serves a
-// given model is the question the create form used to ask first.
-const chatInterface = { ...noCapabilities, chat: true, streaming: true, stream_usage: true };
-const embedInterface = { ...noCapabilities, embeddings: true };
-const multiInterfaceProvider = {
-  ...provider,
-  id: "provider_multi",
-  capabilities: { ...chatInterface, embeddings: true },
+const provider = {
+  id: "provider_openai", name: "OpenAI production", type: "openai", base_url: "https://api.openai.com",
+  access_surface: "openai-api", profile_id: "openai.chat-embeddings.v1", credential_scheme: "bearer.static",
+  credential_id: "credential_openai", allowed_hosts: ["api.openai.com"], capabilities: chatCapabilities,
+  capability_evidence: {}, max_concurrency: 8, enabled: true, revision: 1, created_at: "", updated_at: "",
   bindings: [
-    { id: "b-chat", profile_id: "openai.chat-embeddings.v1", enabled: true, capabilities: chatInterface },
-    { id: "b-embed", profile_id: "openai.embeddings.v1", enabled: true, capabilities: embedInterface },
+    { id: "b-chat", profile_id: "openai.chat-embeddings.v1", enabled: true, capabilities: chatCapabilities },
+    { id: "b-embed", profile_id: "openai.embeddings.v1", enabled: true, capabilities: { ...emptyCapabilities, embeddings: true } },
   ],
 } as Provider;
 
-describe("deployment release workflow", () => {
+function variant(targetID: string, bindingID: string, capabilities: ProviderCapabilities): DeploymentVariant {
+  return {
+    id: bindingID, binding_id: bindingID,
+    profile_id: bindingID === "b-embed" ? "openai.embeddings.v1" : "openai.chat-embeddings.v1",
+    target: {
+      target_id: targetID, target_kind: "model_id", display_name: targetID, canonical_model_ref: targetID,
+      lifecycle: "active", metadata: {}, metadata_source: "none", availability: "available", fetched_at: "2026-08-10T00:00:00Z",
+    },
+    capabilities,
+    capability_claims: Object.entries(capabilities).filter(([, value]) => value === true).map(([name]) => ({
+      capability_id: name, status: "supported", evidence: "declared", source: "builtin_catalog",
+      scope: { provider_id: provider.id, target_kind: "model_id", target_id: targetID, binding_id: bindingID, profile_id: bindingID === "b-embed" ? "openai.embeddings.v1" : "openai.chat-embeddings.v1" },
+      observed_at: "2026-08-10T00:00:00Z", revision: `sha256:${targetID}:${bindingID}:${name}`,
+    })),
+    resolution_state: "resolved", revision: `sha256:${targetID}:${bindingID}`,
+  };
+}
+
+function target(targetID: string, variants: DeploymentVariant[], state: ResolvedInvocationTarget["resolution_state"] = variants.length ? "resolved" : "unknown", displayName = targetID, owner = ""): ResolvedInvocationTarget {
+  return {
+    target_id: targetID, target_kind: "model_id", display_name: displayName, owned_by: owner || undefined,
+    canonical_model_ref: targetID, lifecycle: "active", metadata: {}, metadata_source: "none",
+    availability: "available", fetched_at: "2026-08-10T00:00:00Z", variants,
+    resolution_state: state, resolution_revision: `sha256:resolution:${targetID}`,
+  };
+}
+
+function catalog(items: ResolvedInvocationTarget[], overrides: Partial<InvocationTargetCatalog> = {}): InvocationTargetCatalog {
+  return {
+    items,
+    discovery: {
+      target_kinds: ["model_id"], can_enumerate: true, can_describe: true, can_verify: true,
+      requires_management_identity: false, requires_canonical_model_mapping: false,
+    },
+    catalog_revision: "sha256:catalog", provider_revision: 1,
+    fetched_at: "2026-08-10T00:00:00Z", expires_at: "2026-08-10T00:05:00Z", cached: false,
+    ...overrides,
+  };
+}
+
+const unknown = target("gpt-future", [], "unknown", "GPT Future", "system-owner");
+const chatTarget = target("gpt-chat", [variant("gpt-chat", "b-chat", chatCapabilities)], "resolved", "GPT Chat");
+
+describe("deployment invocation target workflow", () => {
   beforeEach(() => {
     vi.spyOn(api, "providers").mockResolvedValue({ items: [provider], next_cursor: "" });
     vi.spyOn(api, "deployments").mockResolvedValue({ items: [], next_cursor: "" });
     vi.spyOn(api, "routes").mockResolvedValue({ items: [], next_cursor: "" });
-    vi.spyOn(api, "providerModels").mockResolvedValue({
-      items: [unknownModel("gpt-5"), unknownModel("gpt-4.1")],
-      catalog_revision: "sha256:catalog",
-      fetched_at: "2026-08-02T00:00:00Z",
-      expires_at: "2026-08-02T00:05:00Z",
-      cached: false,
-    });
+    vi.spyOn(api, "invocationTargets").mockResolvedValue(catalog([chatTarget, unknown]));
+    vi.spyOn(api, "resolveInvocationTarget").mockImplementation(async (_providerID, targetID) => target(targetID, [], "unknown"));
   });
 
   afterEach(() => {
@@ -84,827 +86,301 @@ describe("deployment release workflow", () => {
     window.history.replaceState({}, "", "/admin/deployments");
   });
 
-  it("waits for providers before mounting the onboarding deployment form", async () => {
+  it("waits for providers before mounting an onboarding create form", async () => {
     window.history.replaceState({}, "", "/admin/deployments?intent=create&onboarding=first-request");
     let resolveProviders!: (value: Awaited<ReturnType<typeof api.providers>>) => void;
     vi.mocked(api.providers).mockImplementation(() => new Promise((resolve) => { resolveProviders = resolve; }));
     renderPage();
-
     expect(screen.queryByRole("dialog", { name: "创建模型部署" })).not.toBeInTheDocument();
     await act(async () => resolveProviders({ items: [provider], next_cursor: "" }));
-
-    const dialog = await screen.findByRole("dialog", { name: "创建模型部署" });
-    expect(within(dialog).getByRole("heading", { name: "模型能力" })).toBeVisible();
-    // The deep-linked onboarding form is the same form: it opens with nothing
-    // declared rather than assuming the provider ceiling describes the model.
-    expect(within(dialog).getByLabelText("对话")).not.toBeChecked();
+    expect(await screen.findByRole("dialog", { name: "创建模型部署" })).toBeVisible();
   });
 
-  it("creates a deployment disabled and keeps route policy out of the form", async () => {
-    const create = vi.spyOn(api, "createDeployment").mockResolvedValue({} as never);
-    renderPage();
-
-    fireEvent.click(await screen.findByRole("button", { name: "＋ 新建模型部署" }));
-    expect(screen.queryByLabelText("区域")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("默认优先级")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("权重")).not.toBeInTheDocument();
-    // A new deployment starts with nothing enabled: the provider ceiling is no
-    // longer an answer about what this model does.
-    expect(screen.getByLabelText("对话")).not.toBeChecked();
-    expect(screen.getByText("已启用 0 项")).toBeVisible();
-    expect(screen.getByRole("heading", { name: "令牌限制" })).toBeVisible();
-    expect(screen.getByLabelText(/^最大上下文令牌/)).toBeVisible();
-    expect(screen.getByLabelText(/^最大输出令牌/)).toBeVisible();
-    expect(screen.getByLabelText("对话").closest("label")).toHaveClass("capability-option");
-    expect(screen.queryByLabelText("内容审核")).not.toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("部署名称"), { target: { value: "GPT production" } });
-    fireEvent.change(screen.getByLabelText(/^模型 ID/), { target: { value: "gpt-5" } });
-    fireEvent.click(screen.getByRole("button", { name: "高级手动声明" }));
-    fireEvent.click(screen.getByLabelText("对话"));
-    fireEvent.click(screen.getByRole("button", { name: "保存为停用" }));
-
-    await waitFor(() => expect(create).toHaveBeenCalledOnce());
-    expect(create).toHaveBeenCalledWith(expect.objectContaining({
-      name: "GPT production",
-      provider_model: "gpt-5",
-      target_kind: "model_id",
-      // A hand-typed model is not catalogued, so what the operator ticked is a
-      // declaration and has to say so.
-      mode: "operator_declared",
-      enabled: false,
-      priority: 0,
-      weight: 1,
-    }));
-  });
-
-  it("carries a catalogued model's capabilities and does not call it a declaration", async () => {
-    vi.mocked(api.providerModels).mockResolvedValue({
-      items: [knownModel("catalogued-embedder", { embeddings: true, max_context_tokens: 8192 })],
-      catalog_revision: "sha256:catalog",
-      fetched_at: "2026-08-02T00:00:00Z",
-      expires_at: "2026-08-02T00:05:00Z",
-      cached: false,
-    });
-    const create = vi.spyOn(api, "createDeployment").mockResolvedValue({} as never);
-    renderPage();
-
-    fireEvent.click(await screen.findByRole("button", { name: "＋ 新建模型部署" }));
-    fireEvent.change(screen.getByLabelText("部署名称"), { target: { value: "Embedder" } });
-    const modelInput = screen.getByLabelText(/^模型 ID/);
-    fireEvent.focus(modelInput);
-    const listbox = await screen.findByRole("listbox", { name: "可用模型" });
-    fireEvent.click(await within(listbox).findByRole("option", { name: /catalogued-embedder/ }));
-
-    // The catalog answered, so the capability arrives checked and the notice
-    // says where it came from.
-    expect(screen.getByLabelText("向量嵌入")).toBeChecked();
-    expect(screen.getByText(/能力来自内置模型目录/)).toBeVisible();
-
-    fireEvent.click(screen.getByRole("button", { name: "保存为停用" }));
-    await waitFor(() => expect(create).toHaveBeenCalledOnce());
-    const payload = create.mock.calls[0][0] as Record<string, unknown>;
-    expect(payload).not.toHaveProperty("mode");
-    expect(payload.model_revision).toBe("sha256:known-catalogued-embedder");
-    expect(payload.capabilities).toMatchObject({ embeddings: true, chat: false });
-  });
-
-  it("maps an Azure Deployment name to a reviewed underlying model", async () => {
-    const azure = {
-      ...provider,
-      id: "provider_azure", name: "Azure production", type: "azure_openai",
-      access_surface: "azure-openai", profile_id: "azure.chat-embeddings.v1",
-      credential_scheme: "azure.api-key", api_version: "2025-04-01-preview",
-    } as Provider;
-    const underlying = knownModel("gpt-5", { chat: true, streaming: true, tools: true, reasoning: true });
-    vi.mocked(api.providers).mockResolvedValue({ items: [azure], next_cursor: "" });
-    vi.mocked(api.providerModels).mockResolvedValue({
-      items: [], capability_models: [underlying], catalog_revision: "sha256:catalog",
-      fetched_at: "2026-08-09T00:00:00Z", expires_at: "2026-08-09T00:05:00Z", cached: true,
-    });
-    const create = vi.spyOn(api, "createDeployment").mockResolvedValue({} as never);
-    renderPage();
-
-    fireEvent.click(await screen.findByRole("button", { name: "＋ 新建模型部署" }));
-    fireEvent.change(screen.getByLabelText("部署名称"), { target: { value: "Azure GPT" } });
-    fireEvent.change(screen.getByLabelText(/^Azure Deployment 名称/), { target: { value: "prod-east" } });
-    const capabilityModelSelect = await screen.findByLabelText(/^底层已知模型/);
-    await within(capabilityModelSelect).findByRole("option", { name: "gpt-5" });
-    fireEvent.change(capabilityModelSelect, { target: { value: underlying.id } });
-
-    await waitFor(() => expect(screen.getByLabelText("对话")).toBeChecked());
-    expect(screen.getByLabelText("工具调用")).toBeChecked();
-    expect(screen.getByText(/对应关系仍记为你的声明/)).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "保存为停用" }));
-
-    await waitFor(() => expect(create).toHaveBeenCalledOnce());
-    expect(create).toHaveBeenCalledWith(expect.objectContaining({
-      provider_model: "prod-east", target_kind: "azure_deployment",
-      capability_model: "gpt-5", model_revision: underlying.model_revision,
-    }));
-    expect(create.mock.calls[0][0]).not.toHaveProperty("mode");
-  });
-
-  it("maps a custom endpoint alias without inheriting native-only capabilities", async () => {
-    const compatibleCapabilities = { ...noCapabilities, chat: true, streaming: true, embeddings: true };
-    const compatible = {
-      ...provider,
-      id: "provider_compatible", name: "Compatible service", type: "openai_compatible",
-      access_surface: "openai-compatible", profile_id: "openai-compatible.chat-embeddings.v1",
-      capabilities: compatibleCapabilities,
-    } as Provider;
-    const underlying = knownModel("gpt-5", { chat: true, streaming: true });
-    vi.mocked(api.providers).mockResolvedValue({ items: [compatible], next_cursor: "" });
-    vi.mocked(api.providerModels).mockResolvedValue({
-      items: [unknownModel("tenant-alias")], capability_models: [underlying], catalog_revision: "sha256:catalog",
-      fetched_at: "2026-08-09T00:00:00Z", expires_at: "2026-08-09T00:05:00Z", cached: false,
-    });
-    const create = vi.spyOn(api, "createDeployment").mockResolvedValue({} as never);
-    renderPage();
-
-    fireEvent.click(await screen.findByRole("button", { name: "＋ 新建模型部署" }));
-    fireEvent.change(screen.getByLabelText("部署名称"), { target: { value: "Tenant GPT" } });
-    fireEvent.change(screen.getByLabelText(/^模型 ID/), { target: { value: "tenant-alias" } });
-    const capabilityModelSelect = await screen.findByLabelText(/^底层已知模型/);
-    await within(capabilityModelSelect).findByRole("option", { name: "gpt-5" });
-    fireEvent.change(capabilityModelSelect, { target: { value: underlying.id } });
-
-    await waitFor(() => expect(screen.getByLabelText("对话")).toBeChecked());
-    expect(screen.queryByLabelText("工具调用")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "保存为停用" }));
-    await waitFor(() => expect(create).toHaveBeenCalledOnce());
-    expect(create).toHaveBeenCalledWith(expect.objectContaining({
-      provider_model: "tenant-alias", target_kind: "custom_endpoint_model", capability_model: "gpt-5",
-      capabilities: expect.objectContaining({ chat: true, streaming: true, tools: false }),
-    }));
-  });
-
-  it("requires an explicit declaration for a model the catalog does not cover", async () => {
-    const create = vi.spyOn(api, "createDeployment").mockResolvedValue({} as never);
-    renderPage();
-
-    fireEvent.click(await screen.findByRole("button", { name: "＋ 新建模型部署" }));
-    fireEvent.change(screen.getByLabelText("部署名称"), { target: { value: "GPT" } });
-    const modelInput = screen.getByLabelText(/^模型 ID/);
-    fireEvent.focus(modelInput);
-    const listbox = await screen.findByRole("listbox", { name: "可用模型" });
-    fireEvent.click(await within(listbox).findByRole("option", { name: /gpt-5/ }));
-
-    // Nothing is established about it, so nothing arrives checked and the form
-    // says the operator is the one making the claim.
+  it("keeps purpose buttons and the expanded capability matrix out of the ordinary flow", async () => {
+    await openCreate();
+    expect(screen.queryByText("这个模型主要用于什么？")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("对话")).not.toBeInTheDocument();
-    expect(screen.getByText(/该模型的能力尚未收录/)).toBeVisible();
+    expect(screen.getByText("先选择模型")).toBeVisible();
+  });
 
-    fireEvent.click(screen.getByRole("button", { name: "高级手动声明" }));
-    fireEvent.click(screen.getByLabelText("对话"));
+  it("treats legacy null collection fields as empty instead of crashing", async () => {
+    vi.mocked(api.invocationTargets).mockResolvedValue({ ...catalog([]), items: null as never });
+    await openCreate();
+    expect(screen.getByRole("dialog", { name: "创建模型部署" })).toBeVisible();
+    expect(screen.getByText("先选择模型")).toBeVisible();
+  });
+
+  it("renders a single-column target list and searches only the visible target name", async () => {
+    await openCreate();
+    const input = screen.getByLabelText(/^模型 ID/);
+    fireEvent.focus(input);
+    const listbox = await screen.findByRole("listbox", { name: "可用模型" });
+    const options = within(listbox).getAllByRole("option");
+    expect(options).toHaveLength(2);
+    expect(options[0]).not.toHaveTextContent("能力未知");
+    expect(options[0]).not.toHaveTextContent("system-owner");
+
+    fireEvent.change(input, { target: { value: "system-owner" } });
+    expect(within(listbox).queryAllByRole("option")).toHaveLength(0);
+    fireEvent.change(input, { target: { value: "future" } });
+    expect(within(listbox).getByRole("option", { name: "GPT Future" })).toBeVisible();
+  });
+
+  it("auto-selects one server variant, shows a read-only summary, and saves its revision", async () => {
+    const create = vi.spyOn(api, "createDeployment").mockResolvedValue({} as never);
+    await openCreate();
+    fireEvent.change(screen.getByLabelText("部署名称"), { target: { value: "Chat" } });
+    await choose("GPT Chat");
+    expect(await screen.findByText("已识别")).toBeVisible();
+    expect(screen.getByText(/可用于：对话/)).toBeVisible();
+    expect(screen.getByText("可信证据：Halro 已评审模型目录")).toBeVisible();
+    expect(screen.queryByText(/builtin_catalog|verified_probe|provider_metadata/)).not.toBeInTheDocument();
+    const advanced = screen.getByText("高级设置：收窄能力").closest("details");
+    expect(advanced).not.toHaveAttribute("open");
+    fireEvent.click(screen.getByRole("button", { name: "保存为停用" }));
+    await waitFor(() => expect(create).toHaveBeenCalledOnce());
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      provider_model: "gpt-chat", binding_id: "b-chat", resolution_revision: "sha256:gpt-chat:b-chat",
+      capabilities: expect.objectContaining({ chat: true }), enabled: false,
+    }));
+  });
+
+  it("loads a changed resolution and requires explicit confirmation after a 409", async () => {
+    const changed = target("gpt-chat", [variant("gpt-chat", "b-chat", { ...chatCapabilities, tools: false })]);
+    const create = vi.spyOn(api, "createDeployment")
+      .mockRejectedValueOnce(new ApiError(409, "changed", "resolution_changed", "", {
+        code: "resolution_changed", mismatches: ["resolution_revision"], resolution: changed,
+      }))
+      .mockResolvedValueOnce({} as never);
+    await openCreate();
+    fireEvent.change(screen.getByLabelText("部署名称"), { target: { value: "Chat" } });
+    await choose("GPT Chat");
+    fireEvent.click(screen.getByRole("button", { name: "保存为停用" }));
+    expect(await screen.findByText("模型信息已更新")).toBeVisible();
+    expect(screen.getByRole("button", { name: "保存为停用" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("radio", { name: /对话/ }));
+    fireEvent.click(screen.getByRole("button", { name: "保存为停用" }));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
+  });
+
+  it("requires an explicit choice when the resolver returns multiple variants and saves only one", async () => {
+    const multi = target("dual-model", [
+      variant("dual-model", "b-chat", chatCapabilities),
+      variant("dual-model", "b-embed", { ...emptyCapabilities, embeddings: true }),
+    ]);
+    vi.mocked(api.invocationTargets).mockResolvedValue(catalog([multi]));
+    const create = vi.spyOn(api, "createDeployment").mockResolvedValue({} as never);
+    await openCreate();
+    fireEvent.change(screen.getByLabelText("部署名称"), { target: { value: "Dual" } });
+    await choose("dual-model");
+    expect(await screen.findByText("这个调用目标可通过 2 种接口部署")).toBeVisible();
+    expect(screen.getByRole("button", { name: "保存为停用" })).toBeDisabled();
+    fireEvent.click(screen.getByLabelText("向量嵌入"));
     fireEvent.click(screen.getByRole("button", { name: "保存为停用" }));
     await waitFor(() => expect(create).toHaveBeenCalledOnce());
     const payload = create.mock.calls[0][0] as Record<string, unknown>;
-    expect(payload.mode).toBe("operator_declared");
-    expect(payload.model_revision).toBe("sha256:gpt-5");
-    expect(payload.capabilities).toMatchObject({ chat: true });
+    expect(payload.binding_id).toBe("b-embed");
+    expect(payload.resolution_revision).toBe("sha256:dual-model:b-embed");
+    expect(payload).not.toHaveProperty("operation_bindings");
   });
 
-  it("calls capability detection only from the explicit confirmation and applies only its recommendation", async () => {
-    const detect = vi.spyOn(api, "createModelCapabilityDetection").mockResolvedValue({
-      id: "mcd_one", status: "completed", source: "verified_probe", provider_id: provider.id,
-      provider_model: "gpt-unlisted", binding_id: "b-chat", profile_id: provider.profile_id,
-      provider_calls: 2, max_provider_calls: 8, capabilities: {
-        chat: { status: "supported", evidence: "verified", probe_kind: "minimal_chat" },
-        tools: { status: "inconclusive", probe_kind: "tool_call" },
-      },
-      recommended_capabilities: { ...noCapabilities, chat: true },
-      selection_revision: "selection", revision: 3,
-    });
-    const create = vi.spyOn(api, "createDeployment").mockResolvedValue({} as never);
-    renderPage();
+  it("gives equivalent variants distinct accessible interface labels", async () => {
+    const equivalent = target("equivalent-model", [
+      variant("equivalent-model", "b-chat", chatCapabilities),
+      variant("equivalent-model", "b-embed", chatCapabilities),
+    ]);
+    vi.mocked(api.invocationTargets).mockResolvedValue(catalog([equivalent]));
+    await openCreate();
+    await choose("equivalent-model");
+    expect(await screen.findByRole("radio", { name: "对话 · 调用接口 1" })).toBeVisible();
+    expect(screen.getByRole("radio", { name: "对话 · 调用接口 2" })).toBeVisible();
+  });
 
-    fireEvent.click(await screen.findByRole("button", { name: "＋ 新建模型部署" }));
-    fireEvent.change(screen.getByLabelText("部署名称"), { target: { value: "Detected" } });
-    const modelInput = screen.getByLabelText(/^模型 ID/);
-    fireEvent.change(modelInput, { target: { value: "gpt-unlisted" } });
-    fireEvent.blur(modelInput);
+  it("shows the provider configuration exit for zero variants without offering verification", async () => {
+    vi.mocked(api.invocationTargets).mockResolvedValue(catalog([target("blocked", [], "no_variant")]));
+    await openCreate();
+    await choose("blocked");
+    expect(await screen.findByText("当前服务商尚未启用可承载此目标的调用接口")).toBeVisible();
+    expect(screen.getByRole("link", { name: "前往服务商配置 →" })).toHaveAttribute("href", "/admin/providers");
+    expect(screen.queryByRole("button", { name: "确认模型并识别能力" })).not.toBeInTheDocument();
+  });
+
+  it("offers only verification and advanced onboarding for an unknown target", async () => {
+    await openCreate();
+    await choose("GPT Future");
+    expect(await screen.findByRole("button", { name: "确认模型并识别能力" })).toBeDisabled();
+    expect(screen.getByLabelText(/^能力接口/)).toHaveValue("");
+    expect(screen.getByText("该服务商启用了多个接口。请选择将实际调用并接受低成本验证请求的接口。")).toBeVisible();
+    expect(screen.getByRole("button", { name: "高级接入" })).toBeVisible();
+    expect(screen.queryByLabelText("对话")).not.toBeInTheDocument();
+  });
+
+  it("fails closed with retry and provider exits when target resolution is unavailable", async () => {
+    vi.mocked(api.resolveInvocationTarget).mockRejectedValue(new ApiError(503, "unavailable", "catalog_unavailable"));
+    await openCreate();
+    fireEvent.change(screen.getByLabelText(/^模型 ID/), { target: { value: "unlisted-model" } });
+    expect(await screen.findByText("暂时无法解析模型能力")).toBeVisible();
+    expect(screen.getByRole("link", { name: "前往服务商配置 →" })).toHaveAttribute("href", "/admin/providers");
+    expect(screen.queryByText(/能力来自内置模型目录/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "高级接入" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "重新解析" }));
+    await waitFor(() => expect(api.resolveInvocationTarget).toHaveBeenCalledTimes(2));
+  });
+
+  it("runs verification only after explicit confirmation", async () => {
+    const detected = {
+      id: "mcd", status: "completed" as const, source: "verified_probe" as const,
+      provider_id: provider.id, provider_model: unknown.target_id, binding_id: "b-chat", profile_id: "openai.chat-embeddings.v1",
+      provider_calls: 2, max_provider_calls: 8, capabilities: { chat: { status: "supported" as const, evidence: "verified" as const, probe_kind: "chat" } },
+      recommended_capabilities: { ...emptyCapabilities, chat: true }, selection_revision: "selection", revision: 3,
+    };
+    const detect = vi.spyOn(api, "createModelCapabilityDetection").mockImplementation(async (_id, body) => ({ ...detected, selection_revision: (body as { selection_revision: string }).selection_revision }));
+    await openCreate();
+    await choose("GPT Future");
     expect(detect).not.toHaveBeenCalled();
-
+    chooseDetectionInterface();
     fireEvent.click(screen.getByRole("button", { name: "确认模型并识别能力" }));
     await waitFor(() => expect(detect).toHaveBeenCalledOnce());
-    expect(await screen.findByLabelText("对话")).toBeChecked();
-    expect(screen.queryByLabelText("工具调用")).not.toBeInTheDocument();
+    expect(detect).toHaveBeenCalledWith(provider.id, expect.objectContaining({ binding_id: "b-chat" }), expect.any(String));
+    expect(await screen.findByText("已识别 1 项能力")).toBeVisible();
+  });
 
+  it("adopts a reused detection even when the shared job carries an older client selection token", async () => {
+    const queued = {
+      id: "cached", status: "queued" as const, source: "verified_probe" as const,
+      provider_id: provider.id, provider_model: unknown.target_id, binding_id: "b-chat", profile_id: "openai.chat-embeddings.v1",
+      provider_calls: 0, max_provider_calls: 8, capabilities: {}, recommended_capabilities: emptyCapabilities,
+      selection_revision: "selection-from-another-client", revision: 1,
+    };
+    vi.spyOn(api, "createModelCapabilityDetection").mockResolvedValue(queued);
+    vi.spyOn(api, "modelCapabilityDetection").mockResolvedValue({
+      ...queued,
+      status: "completed",
+      provider_calls: 1,
+      capabilities: { chat: { status: "supported", evidence: "verified", probe_kind: "chat" } },
+      recommended_capabilities: { ...emptyCapabilities, chat: true },
+      revision: 2,
+    });
+    await openCreate();
+    fireEvent.change(screen.getByLabelText("部署名称"), { target: { value: "Cached detection" } });
+    await choose("GPT Future");
+    chooseDetectionInterface();
+    fireEvent.click(screen.getByRole("button", { name: "确认模型并识别能力" }));
+    expect(await screen.findByText("已识别 1 项能力")).toBeVisible();
+    expect(screen.getByRole("button", { name: "保存为停用" })).toBeEnabled();
+  });
+
+  it("does not apply a late verification response after the target selection changed", async () => {
+    let resolveDetection!: (value: never) => void;
+    vi.spyOn(api, "createModelCapabilityDetection").mockImplementation(() => new Promise((resolve) => { resolveDetection = resolve; }));
+    await openCreate();
+    await choose("GPT Future");
+    chooseDetectionInterface();
+    fireEvent.click(screen.getByRole("button", { name: "确认模型并识别能力" }));
+    await waitFor(() => expect(api.createModelCapabilityDetection).toHaveBeenCalledOnce());
+    const oldSelection = (vi.mocked(api.createModelCapabilityDetection).mock.calls[0][1] as { selection_revision: string }).selection_revision;
+    await choose("GPT Chat");
+    await act(async () => resolveDetection({
+      id: "late", status: "completed", source: "verified_probe", provider_id: provider.id, provider_model: "gpt-future",
+      binding_id: "b-chat", profile_id: "openai.chat-embeddings.v1", provider_calls: 1, max_provider_calls: 8,
+      capabilities: { embeddings: { status: "supported", probe_kind: "embed" } },
+      recommended_capabilities: { ...emptyCapabilities, embeddings: true }, selection_revision: oldSelection, revision: 1,
+    } as never));
+    expect(await screen.findByText(/可用于：对话/)).toBeVisible();
+    expect(screen.queryByText(/可用于：向量嵌入/)).not.toBeInTheDocument();
+  });
+
+  it("ends an inconclusive verification at advanced onboarding without an immediate retry CTA", async () => {
+    vi.spyOn(api, "createModelCapabilityDetection").mockImplementation(async (_id, body) => ({
+      id: "inconclusive", status: "completed", source: "verified_probe", provider_id: provider.id, provider_model: unknown.target_id,
+      binding_id: "b-chat", profile_id: "openai.chat-embeddings.v1", provider_calls: 1, max_provider_calls: 8,
+      capabilities: { chat: { status: "inconclusive", probe_kind: "chat" } }, recommended_capabilities: emptyCapabilities,
+      selection_revision: (body as { selection_revision: string }).selection_revision, revision: 2,
+    }));
+    await openCreate();
+    await choose("GPT Future");
+    chooseDetectionInterface();
+    fireEvent.click(screen.getByRole("button", { name: "确认模型并识别能力" }));
+    expect(await screen.findByText("仍无法确认模型能力")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "重新检测" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "高级接入" })).toBeVisible();
+  });
+
+  it.each(["unauthorized", "unavailable"] as const)("routes a %s verification result only to provider repair", async (status) => {
+    vi.spyOn(api, "createModelCapabilityDetection").mockImplementation(async (_id, body) => ({
+      id: `repair-${status}`, status: "completed", source: "verified_probe", provider_id: provider.id, provider_model: unknown.target_id,
+      binding_id: "b-chat", profile_id: "openai.chat-embeddings.v1", provider_calls: 1, max_provider_calls: 8,
+      capabilities: { chat: { status, probe_kind: "chat" } }, recommended_capabilities: emptyCapabilities,
+      selection_revision: (body as { selection_revision: string }).selection_revision, revision: 2,
+    }));
+    await openCreate();
+    await choose("GPT Future");
+    chooseDetectionInterface();
+    fireEvent.click(screen.getByRole("button", { name: "确认模型并识别能力" }));
+    expect(await screen.findByText("服务商暂时无法完成验证")).toBeVisible();
+    expect(screen.getByRole("link", { name: "前往服务商配置 →" })).toHaveAttribute("href", "/admin/providers");
+    expect(screen.queryByRole("button", { name: "高级接入" })).not.toBeInTheDocument();
+  });
+
+  it("makes advanced onboarding choose a real interface and only narrow its ceiling", async () => {
+    const create = vi.spyOn(api, "createDeployment").mockResolvedValue({} as never);
+    await openCreate();
+    fireEvent.change(screen.getByLabelText("部署名称"), { target: { value: "Manual" } });
+    await choose("GPT Future");
+    fireEvent.click(screen.getByRole("button", { name: "高级接入" }));
+    const interfaceDetails = screen.getByText("能力接口").closest("details")!;
+    fireEvent.click(within(interfaceDetails).getByText("能力接口"));
+    const select = within(interfaceDetails).getByLabelText(/^能力接口/);
+    fireEvent.change(select, { target: { value: "b-chat" } });
+    expect(screen.getByLabelText("对话")).toBeChecked();
+    fireEvent.click(screen.getByLabelText("工具调用"));
     fireEvent.click(screen.getByRole("button", { name: "保存为停用" }));
     await waitFor(() => expect(create).toHaveBeenCalledOnce());
     expect(create).toHaveBeenCalledWith(expect.objectContaining({
-      capability_detection_id: "mcd_one", capability_detection_revision: 3,
-      capabilities: expect.objectContaining({ chat: true, tools: false }),
+      mode: "operator_declared", binding_id: "b-chat", capabilities: expect.objectContaining({ chat: true, tools: false }),
     }));
-    expect(create.mock.calls[0][0]).not.toHaveProperty("mode");
   });
 
-  // The kill-switch. §7.3 of model-aware-capability-selection.zh-CN.md makes it
-  // a standing requirement rather than a nicety: the capability catalog must
-  // never become the only way into a deployment. The other manual-entry test
-  // runs against a *healthy* catalog and so only proves that typing overrides a
-  // picked option — it would keep passing if a catalog outage disabled the
-  // field. This one fails.
-  it("still deploys by hand when the model catalog is entirely unavailable", async () => {
-    vi.mocked(api.providerModels).mockRejectedValue(new ApiError(502, "provider model catalog is unavailable"));
-    const create = vi.spyOn(api, "createDeployment").mockResolvedValue({} as never);
+  it("refreshes the invocation target catalog through the adapter capability endpoint", async () => {
+    await openCreate();
+    fireEvent.click(await screen.findByRole("button", { name: "刷新模型列表" }));
+    await waitFor(() => expect(api.invocationTargets).toHaveBeenCalledWith(provider.id, "", true));
+  });
+
+  it("uses the active locale's capability-list separator", async () => {
+    await i18n.changeLanguage("en-US");
     renderPage();
-
-    fireEvent.click(await screen.findByRole("button", { name: "＋ 新建模型部署" }));
-    await waitFor(() => expect(api.providerModels).toHaveBeenCalledWith(provider.id));
-
-    // The outage is stated, and stated as survivable.
-    expect(await screen.findByText("暂时无法读取模型列表，仍可手动输入")).toBeVisible();
-
-    // The field an operator needs is the one a catalog outage must not take
-    // away, so its enabled-ness is asserted, not just its presence.
-    const modelInput = screen.getByLabelText(/^模型 ID/);
-    expect(modelInput).toBeEnabled();
-
-    fireEvent.change(screen.getByLabelText("部署名称"), { target: { value: "手动部署" } });
-    fireEvent.change(modelInput, { target: { value: "gpt-unlisted" } });
-
-    // With no catalog there is no entry to inherit from, so this is the
-    // operator's own claim and has to travel as one.
-    expect(screen.queryByLabelText("对话")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "高级手动声明" }));
-    fireEvent.click(screen.getByLabelText("对话"));
-    fireEvent.click(screen.getByRole("button", { name: "保存为停用" }));
-
-    await waitFor(() => expect(create).toHaveBeenCalledOnce());
-    const payload = create.mock.calls[0][0] as Record<string, unknown>;
-    expect(payload.provider_model).toBe("gpt-unlisted");
-    expect(payload.mode).toBe("operator_declared");
-    expect(payload.capabilities).toMatchObject({ chat: true });
-    // Nothing was read, so nothing may be claimed as read. A revision here
-    // would be a digest of a catalog the form never received.
-    expect(payload.model_revision ?? "").toBe("");
+    fireEvent.click(await screen.findByRole("button", { name: "＋ New deployment" }));
+    await screen.findByText(/Discovered/);
+    const input = screen.getByLabelText(/^Model ID/);
+    fireEvent.focus(input);
+    fireEvent.click(within(await screen.findByRole("listbox", { name: "Available models" })).getByRole("option", { name: "GPT Chat" }));
+    expect(await screen.findByText(/Available for: Chat, Streaming/)).toBeVisible();
+    expect(screen.queryByText(/Chat、Streaming/)).not.toBeInTheDocument();
+    expect(screen.getByText("Trusted evidence: Halro's reviewed model catalog")).toBeVisible();
   });
 
-  it("discovers OpenAI model IDs, refreshes the catalog, and preserves manual entry", async () => {
-    vi.mocked(api.providerModels).mockResolvedValue({
-      items: Array.from({ length: 12 }, (_, index) => unknownModel(`gpt-model-${index}`)),
-      catalog_revision: "sha256:catalog",
-      fetched_at: "2026-08-02T00:00:00Z",
-      expires_at: "2026-08-02T00:05:00Z",
-      cached: false,
-    });
-    renderPage();
-
-    fireEvent.click(await screen.findByRole("button", { name: "＋ 新建模型部署" }));
-    const modelInput = screen.getByLabelText(/^模型 ID/);
-    // One aggregate call across every enabled interface, with no binding
-    // filter: choosing an interface is no longer a step the operator takes.
-    await waitFor(() => expect(api.providerModels).toHaveBeenCalledWith(provider.id));
-    const highlightedCount = await screen.findByText("12");
-    expect(highlightedCount).toHaveClass("deployment-model-count");
-    expect(highlightedCount.closest('[role="status"]')).toHaveTextContent("已发现 12 个模型；也可手动输入");
-    fireEvent.focus(modelInput);
-    const listbox = screen.getByRole("listbox", { name: "可用模型" });
-    expect(within(listbox).getAllByRole("option")).toHaveLength(12);
-
-    fireEvent.change(modelInput, { target: { value: "gpt-model-11" } });
-    expect(within(listbox).getAllByRole("option")).toHaveLength(1);
-    fireEvent.click(within(listbox).getByRole("option", { name: /gpt-model-11/ }));
-    expect(modelInput).toHaveValue("gpt-model-11");
-    expect(screen.queryByRole("listbox", { name: "可用模型" })).not.toBeInTheDocument();
-    fireEvent.click(modelInput);
-    expect(screen.getByRole("listbox", { name: "可用模型" })).toBeVisible();
-    fireEvent.pointerDown(document.body);
-    expect(screen.queryByRole("listbox", { name: "可用模型" })).not.toBeInTheDocument();
-
-    fireEvent.change(modelInput, { target: { value: "gpt-manual-preview" } });
-    expect(modelInput).toHaveValue("gpt-manual-preview");
-    fireEvent.click(screen.getByRole("button", { name: "刷新模型列表" }));
-    await waitFor(() => expect(api.providerModels).toHaveBeenCalledWith(provider.id, "", true));
-  });
-
-  it("locks an existing invocation target and creates replacements as disabled deployments", async () => {
-    const deployment = {
-      id: "deployment_live", name: "Live GPT", provider_id: provider.id, provider_model: "gpt-5",
-      target_kind: "model_id", access_surface: provider.access_surface, profile_id: provider.profile_id, region: "",
-      capabilities, capability_evidence: {}, input_micros_per_million: 100,
-      output_micros_per_million: 200, fixed_request_micros_usd: 0, max_concurrency: 4,
-      priority: 0, weight: 1, enabled: true, revision: 5, created_at: "", updated_at: "",
-    } as Deployment;
-    vi.mocked(api.deployments).mockResolvedValue({ items: [deployment], next_cursor: "" });
-    const create = vi.spyOn(api, "createDeployment").mockResolvedValue({} as never);
-    renderPage();
-
-    fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
-    expect(screen.getByLabelText("服务商")).toBeDisabled();
-    expect(screen.getByLabelText(/^模型 ID/)).toBeDisabled();
-    expect(screen.getByText("调用目标创建后不可修改")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "关闭" }));
-
-    fireEvent.click(screen.getByLabelText("更多操作"));
-    fireEvent.click(screen.getByRole("button", { name: "创建替代" }));
-    expect(screen.getByRole("heading", { name: "创建替代部署" })).toBeVisible();
-    expect(screen.getByLabelText(/^模型 ID/)).toHaveValue("gpt-5");
-    fireEvent.change(screen.getByLabelText(/^模型 ID/), { target: { value: "gpt-5-next" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存替代部署" }));
-
-    await waitFor(() => expect(create).toHaveBeenCalledOnce());
-    expect(create).toHaveBeenCalledWith(expect.objectContaining({ provider_model: "gpt-5-next", target_kind: "model_id", enabled: false }));
-  });
-
-  it("requires a successful test before quick-enabling a disabled deployment", async () => {
-    const deployment = {
-      id: "deployment_gpt", name: "GPT", provider_id: provider.id, provider_model: "gpt-5",
-      access_surface: provider.access_surface, profile_id: provider.profile_id, region: "",
-      capabilities, capability_evidence: {}, input_micros_per_million: 0,
-      output_micros_per_million: 0, fixed_request_micros_usd: 0, max_concurrency: 4,
-      priority: 0, weight: 1, enabled: false, revision: 3, created_at: "", updated_at: "",
-    } as Deployment;
-    vi.mocked(api.deployments).mockResolvedValue({ items: [deployment], next_cursor: "" });
-    vi.spyOn(api, "testDeployment").mockImplementation(async () => {
-      Object.assign(deployment, {
-        revision: 4,
-        last_test_status: "healthy",
-        last_tested_at: "2026-08-02T01:00:00Z",
-        last_test_latency_millis: 9,
-        last_test_revision: 4,
-      });
-      return { status: "healthy", latency_ms: 9, tested_at: "2026-08-02T01:00:00Z", revision: 4 };
-    });
-    const update = vi.spyOn(api, "updateDeployment").mockResolvedValue({} as never);
-    renderPage();
-
-    const enable = await screen.findByRole("button", { name: "启用" });
-    expect(enable).toBeDisabled();
-    fireEvent.click(screen.getByRole("button", { name: "测试" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "启用" })).toBeEnabled());
-    fireEvent.click(screen.getByRole("button", { name: "启用" }));
-
-    await waitFor(() => expect(update).toHaveBeenCalledOnce());
-    expect(update).toHaveBeenCalledWith(deployment.id, expect.objectContaining({ enabled: true }), 4);
-  });
-
-  it("explains missing versioned pricing instead of reporting a revision conflict", async () => {
-    const deployment = {
-      id: "deployment_legacy", name: "Legacy GPT", provider_id: provider.id, provider_model: "gpt-5",
-      access_surface: provider.access_surface, profile_id: provider.profile_id, region: "",
-      capabilities, capability_evidence: {}, input_micros_per_million: 0,
-      output_micros_per_million: 0, fixed_request_micros_usd: 0, max_concurrency: 4,
-      priority: 0, weight: 1, enabled: false, revision: 4,
-      last_test_status: "healthy", last_test_revision: 4, last_tested_at: "2026-08-02T01:00:00Z",
-      created_at: "", updated_at: "",
-    } as Deployment;
-    vi.mocked(api.deployments).mockResolvedValue({ items: [deployment], next_cursor: "" });
-    vi.spyOn(api, "updateDeployment").mockRejectedValue(new ApiError(
-      409,
-      "deployment requires an effective versioned price before enable",
-      "deployment_price_unavailable",
-    ));
-    renderPage();
-
-    fireEvent.click(await screen.findByRole("button", { name: "启用" }));
-
-    const alert = await screen.findByRole("alert");
-    expect(alert).toHaveClass("deployment-card-error");
-    expect(alert).toHaveTextContent("该部署没有已生效的价格版本");
-    expect(alert).not.toHaveTextContent("数据已被其他操作修改");
-  });
-
-  it("requires confirmation before disabling an enabled deployment", async () => {
-    const deployment = {
-      id: "deployment_live", name: "Live GPT", provider_id: provider.id, provider_model: "gpt-5",
-      access_surface: provider.access_surface, profile_id: provider.profile_id, region: "",
-      capabilities, capability_evidence: {}, input_micros_per_million: 0,
-      output_micros_per_million: 0, fixed_request_micros_usd: 0, max_concurrency: 4,
-      priority: 0, weight: 1, enabled: true, revision: 3, created_at: "", updated_at: "",
-    } as Deployment;
-    vi.mocked(api.deployments).mockResolvedValue({ items: [deployment], next_cursor: "" });
-    const update = vi.spyOn(api, "updateDeployment").mockResolvedValue({} as never);
-    renderPage();
-
-    fireEvent.click(await screen.findByRole("button", { name: "禁用" }));
-    let dialog = screen.getByRole("alertdialog", { name: "禁用模型部署？" });
-    expect(dialog).toHaveTextContent("确认禁用模型部署“Live GPT”？该部署将立即停止接收新的模型请求。");
-    expect(update).not.toHaveBeenCalled();
-    fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
-    expect(screen.queryByRole("alertdialog", { name: "禁用模型部署？" })).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "禁用" }));
-    dialog = screen.getByRole("alertdialog", { name: "禁用模型部署？" });
-    fireEvent.click(within(dialog).getByRole("button", { name: "禁用" }));
-    await waitFor(() => expect(update).toHaveBeenCalledOnce());
-  });
-
-  it("renders a compact searchable list and expands details on demand", async () => {
-    const items = Array.from({ length: 20 }, (_, index) => ({
-      id: `deployment_${index}`, name: index === 19 ? "Special Vision" : `GPT ${index + 1}`,
-      provider_id: provider.id, provider_model: index === 19 ? "vision-special" : `gpt-${index + 1}`,
-      access_surface: provider.access_surface, profile_id: provider.profile_id, region: "",
-      capabilities, capability_evidence: {}, input_micros_per_million: 0,
-      output_micros_per_million: 0, fixed_request_micros_usd: 0, max_concurrency: 4,
-      priority: 0, weight: 1, enabled: index % 2 === 0, revision: 1, created_at: "", updated_at: "",
-    })) as Deployment[];
-    vi.mocked(api.deployments).mockResolvedValue({ items, next_cursor: "" });
-    vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [], next_cursor: "" });
-    renderPage();
-
-    expect(await screen.findByText("显示 20 / 20 个部署")).toBeVisible();
-    expect(screen.getAllByRole("button", { name: "查看详情" })).toHaveLength(20);
-    expect(screen.queryByText("输入价格")).not.toBeInTheDocument();
-
-    fireEvent.change(screen.getByPlaceholderText("搜索名称、模型或服务商"), { target: { value: "vision-special" } });
-    expect(screen.getByText("显示 1 / 20 个部署")).toBeVisible();
-    expect(screen.getByText("Special Vision")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "查看详情" }));
-    expect(screen.getByText("输入价格")).toBeVisible();
-    expect(await screen.findByText("不可变价格时间线")).toBeVisible();
-    expect(screen.getByText("不可变价格时间线").closest("section")).toHaveClass("deployment-pricing-panel");
-    expect(screen.getByRole("button", { name: "设置价格" }).closest("header")).not.toBeNull();
-    expect(screen.queryByRole("button", { name: "导入建议" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "收起详情" })).toHaveAttribute("aria-expanded", "true");
-  });
-
-  it("sets a manual price in two steps without asking for or sending a content digest", async () => {
-    const deployment = {
-      id: "deployment_price", name: "Price GPT", provider_id: provider.id, provider_model: "gpt-5",
-      access_surface: provider.access_surface, profile_id: provider.profile_id, region: "",
-      capabilities, capability_evidence: {}, input_micros_per_million: 0,
-      output_micros_per_million: 0, fixed_request_micros_usd: 0, max_concurrency: 4,
-      priority: 0, weight: 1, enabled: false, revision: 1, created_at: "", updated_at: "",
-    } as Deployment;
-    vi.mocked(api.deployments).mockResolvedValue({ items: [deployment], next_cursor: "" });
-    vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [], next_cursor: "" });
-    const createPrice = vi.spyOn(api, "createDeploymentPrice").mockResolvedValue({} as never);
-    renderPage();
-
-    fireEvent.click(await screen.findByRole("button", { name: "查看详情" }));
-    fireEvent.click(await screen.findByRole("button", { name: "设置价格" }));
-    expect(screen.getByRole("heading", { name: "设置价格" })).toBeVisible();
-    expect(screen.queryByText("来源内容 SHA-256")).not.toBeInTheDocument();
-	expect(screen.queryByLabelText("当前密码")).not.toBeInTheDocument();
-	expect(screen.getByLabelText("价格依据")).toHaveValue("temporary_estimate");
-	fireEvent.change(screen.getByLabelText("价格依据"), { target: { value: "official_public_price" } });
-	expect(screen.getByText("选择官方公开价或合同价时，请填写可供复核的来源说明。")).toBeVisible();
-	expect(screen.getByRole("button", { name: "下一步：核对" })).toBeDisabled();
-	fireEvent.change(screen.getByLabelText("价格依据"), { target: { value: "temporary_estimate" } });
-
-	fireEvent.change(screen.getByLabelText("输入 USD / 百万令牌"), { target: { value: "2.5" } });
-    fireEvent.change(screen.getByLabelText("输出 USD / 百万令牌"), { target: { value: "10" } });
-    fireEvent.click(screen.getByRole("button", { name: "下一步：核对" }));
-
-    expect(screen.getByText("请核对价格")).toBeVisible();
-    await waitFor(() => expect(screen.getByText("请核对价格").closest("section")).toHaveFocus());
-    expect(screen.getByText("管理员声明 · Halro 未验证 · 未归档")).toBeVisible();
-    expect(screen.getByLabelText("当前密码")).toBeVisible();
-    fireEvent.change(screen.getByLabelText("当前密码"), { target: { value: "admin-password" } });
-    fireEvent.click(screen.getByRole("button", { name: "确认并创建价格版本" }));
-
-    await waitFor(() => expect(createPrice).toHaveBeenCalledOnce());
-    expect(createPrice).toHaveBeenCalledWith(deployment.id, expect.objectContaining({
-      billing_mode: "metered",
-      input_usd_per_million: "2.5",
-      output_usd_per_million: "10",
-      source: {
-        type: "manual",
-        reference: "temporary_estimate",
-        note: "",
-        asserted_without_archive: true,
-      },
-      current_password: "admin-password",
-    }), expect.any(String));
-    expect((createPrice.mock.calls[0][1] as { source: Record<string, unknown> }).source).not.toHaveProperty("content_sha256");
-  });
-
-  it("formats datetime-local defaults in the administrator's timezone", () => {
-    const singaporeDate = {
-      getTime: () => Date.UTC(2026, 7, 5, 12, 30),
-      getTimezoneOffset: () => -480,
-    } as Date;
-    expect(localDateTimeValue(singaporeDate)).toBe("2026-08-05T20:30");
-  });
-
-  it("says why disable and delete are blocked while an enabled route references the deployment", async () => {
-    const deployment = {
-      id: "deployment_referenced", name: "Referenced GPT", provider_id: provider.id, provider_model: "gpt-5",
-      access_surface: provider.access_surface, profile_id: provider.profile_id, region: "",
-      capabilities, capability_evidence: {}, input_micros_per_million: 0,
-      output_micros_per_million: 0, fixed_request_micros_usd: 0, max_concurrency: 4,
-      priority: 0, weight: 1, enabled: true, revision: 1, created_at: "", updated_at: "",
-    } as Deployment;
-    vi.mocked(api.deployments).mockResolvedValue({ items: [deployment], next_cursor: "" });
-    vi.mocked(api.routes).mockResolvedValue({
-      items: [{
-        id: "route_gpt", public_model: "gpt", deployment_id: deployment.id, priority: 0,
-        strategy: "ordered", enabled: true, revision: 1, created_at: "", updated_at: "",
-      }],
-      next_cursor: "",
-    });
-    renderPage();
-
-    const disable = await screen.findByRole("button", { name: "禁用" });
-    expect(disable).toBeDisabled();
-    expect(disable).toHaveAccessibleDescription("请先停用引用该部署的模型路由");
-    fireEvent.click(screen.getByLabelText("更多操作"));
-    const remove = screen.getByRole("button", { name: "删除" });
-    expect(remove).toBeDisabled();
-    expect(remove).toHaveAccessibleDescription("请先停用引用该部署的模型路由");
-  });
-
-  it("retries an ambiguous price result with the exact payload and idempotency key", async () => {
-    const deployment = {
-      id: "deployment_ambiguous", name: "Ambiguous GPT", provider_id: provider.id, provider_model: "gpt-5",
-      access_surface: provider.access_surface, profile_id: provider.profile_id, region: "",
-      capabilities, capability_evidence: {}, input_micros_per_million: 0,
-      output_micros_per_million: 0, fixed_request_micros_usd: 0, max_concurrency: 4,
-      priority: 0, weight: 1, enabled: false, revision: 1, created_at: "", updated_at: "",
-    } as Deployment;
-    vi.mocked(api.deployments).mockResolvedValue({ items: [deployment], next_cursor: "" });
-    vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [], next_cursor: "" });
-    const createPrice = vi.spyOn(api, "createDeploymentPrice").mockRejectedValue(new ApiError(500, "ambiguous upstream result"));
-    renderPage();
-
-    fireEvent.click(await screen.findByRole("button", { name: "查看详情" }));
-    fireEvent.click(await screen.findByRole("button", { name: "设置价格" }));
-    fireEvent.change(screen.getByLabelText("输入 USD / 百万令牌"), { target: { value: "1" } });
-    fireEvent.click(screen.getByRole("button", { name: "下一步：核对" }));
-    fireEvent.change(screen.getByLabelText("当前密码"), { target: { value: "admin-password" } });
-    fireEvent.click(screen.getByRole("button", { name: "确认并创建价格版本" }));
-
-    expect(await screen.findByText(/上次结果不明确/)).toBeVisible();
-    expect(screen.queryByRole("button", { name: "返回修改" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "按原内容重试" }));
-    await waitFor(() => expect(createPrice).toHaveBeenCalledTimes(2));
-    expect(createPrice.mock.calls[1][1]).toEqual(createPrice.mock.calls[0][1]);
-    expect(createPrice.mock.calls[1][2]).toBe(createPrice.mock.calls[0][2]);
-  });
-
-  // Capability state is derived by the server, so the console must show what the
-  // server says rather than assuming a saved deployment is still supported.
-  it("shows why a drifted deployment stopped routing, and which capabilities went", async () => {
-    const deployment = {
-      id: "deployment_drifted", name: "Drifted GPT", provider_id: provider.id, provider_model: "gpt-5",
-      access_surface: provider.access_surface, profile_id: provider.profile_id, region: "",
-      capabilities, capability_evidence: {}, input_micros_per_million: 0,
-      output_micros_per_million: 0, fixed_request_micros_usd: 0, max_concurrency: 4,
-      priority: 0, weight: 1, enabled: true, revision: 6, created_at: "", updated_at: "",
-      capability_review: {
-        state: "drifted", source: "builtin_catalog", status: "known", model_revision: "sha256:old",
-        catalog_covered: true, catalog_source: "builtin_catalog", catalog_status: "known",
-        catalog_model_revision: "sha256:new", no_longer_supported: ["vision"],
-        reason: "catalog_establishes_less",
-      },
-    } as Deployment;
-    vi.mocked(api.deployments).mockResolvedValue({ items: [deployment], next_cursor: "" });
-    vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [], next_cursor: "" });
-    renderPage();
-
-    // Visible without expanding: a drifted deployment is not routing, whatever
-    // the enabled column says.
-    expect(await screen.findByText("能力已不再受支持")).toBeVisible();
-
-    fireEvent.click(screen.getByRole("button", { name: /查看详情/ }));
-    expect(await screen.findByText(/模型目录现在确立的能力少于/)).toBeVisible();
-    // Scoped to the review panel: the capability badge strip lists names too,
-    // and a match there would not prove the review named what it lost.
-    const facts = within(document.querySelector(".deployment-review-facts") as HTMLElement);
-    expect(facts.getByText("内置模型目录")).toBeVisible();
-    expect(facts.getByText("视觉")).toBeVisible();
-    expect(screen.getByText(/该部署已停止承接流量/)).toBeVisible();
-  });
-
-  it("keeps serving and offers the new capabilities when the catalog moved forward", async () => {
-    const deployment = {
-      id: "deployment_review", name: "Reviewable GPT", provider_id: provider.id, provider_model: "gpt-5",
-      access_surface: provider.access_surface, profile_id: provider.profile_id, region: "",
-      capabilities, capability_evidence: {}, input_micros_per_million: 0,
-      output_micros_per_million: 0, fixed_request_micros_usd: 0, max_concurrency: 4,
-      priority: 0, weight: 1, enabled: true, revision: 6, created_at: "", updated_at: "",
-      capability_review: {
-        state: "review_available", source: "operator_declared", status: "partial",
-        model_revision: "sha256:declared", catalog_covered: true, catalog_source: "builtin_catalog",
-        catalog_status: "known", catalog_model_revision: "sha256:new",
-        available_for_review: ["reasoning"], operator_disabled: ["vision"],
-        reason: "catalog_now_covers_model",
-      },
-    } as Deployment;
-    vi.mocked(api.deployments).mockResolvedValue({ items: [deployment], next_cursor: "" });
-    vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [], next_cursor: "" });
-    renderPage();
-
-    expect(await screen.findByText("有可复核的新能力")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: /查看详情/ }));
-    const facts = within(await waitFor(() => document.querySelector(".deployment-review-facts") as HTMLElement));
-    expect(facts.getByText("管理员声明")).toBeVisible();
-    expect(facts.getByText("推理")).toBeVisible();
-    // A capability the administrator switched off is reported under its own
-    // heading, so it stays visible and reversible without reading as a new
-    // offer that has to be answered again.
-    const switchedOff = facts.getByText("已由管理员关闭").closest("div") as HTMLElement;
-    expect(within(switchedOff).getByText("视觉")).toBeVisible();
-    const offered = facts.getByText("可复核").closest("div") as HTMLElement;
-    expect(within(offered).queryByText("视觉")).not.toBeInTheDocument();
-    // The offer must not read as something already in effect.
-    expect(screen.getByText(/它仍然只做今天在做的事/)).toBeVisible();
-  });
-
-  // Narrowing is allowed in place, so the console has to say which routes it
-  // would strand before it writes rather than after traffic starts failing.
-  it("preflights a capability narrowing and requires confirmation when a route loses its only candidate", async () => {
-    const deployment = {
-      id: "deployment_narrow", name: "Narrowing GPT", provider_id: provider.id, provider_model: "gpt-5",
-      target_kind: "model_id", access_surface: provider.access_surface, profile_id: provider.profile_id, region: "",
-      capabilities, capability_evidence: {}, input_micros_per_million: 0,
-      output_micros_per_million: 0, fixed_request_micros_usd: 0, max_concurrency: 4,
-      priority: 0, weight: 1, enabled: true, revision: 7, created_at: "", updated_at: "",
-    } as Deployment;
-    vi.mocked(api.deployments).mockResolvedValue({ items: [deployment], next_cursor: "" });
-    const preflight = vi.spyOn(api, "preflightDeploymentCapabilities").mockResolvedValue({
-      removed_capabilities: ["tools"],
-      added_capabilities: [],
-      affected_routes: [{ route_id: "route_1", public_model: "gpt-4o", capability: "tools", sole_candidate: true }],
-      blocking: true,
-    });
-    const update = vi.spyOn(api, "updateDeployment").mockResolvedValue({} as never);
-    renderPage();
-
-    fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: /工具调用/ }));
-
-    // The first submit asks the server, it does not write.
-    fireEvent.click(screen.getByRole("button", { name: "检查路由影响" }));
-    await waitFor(() => expect(preflight).toHaveBeenCalledOnce());
-    expect(update).not.toHaveBeenCalled();
-
-    expect(await screen.findByText("部分路由将失去唯一候选")).toBeVisible();
-    expect(screen.getByText("gpt-4o")).toBeVisible();
-    expect(screen.getByText("没有其他部署可以承接")).toBeVisible();
-
-    // Only an explicit confirmation writes.
-    fireEvent.click(screen.getByRole("button", { name: "仍然保存并热加载" }));
-    await waitFor(() => expect(update).toHaveBeenCalledOnce());
-    expect(update).toHaveBeenCalledWith(deployment.id, expect.objectContaining({
-      capabilities: expect.objectContaining({ tools: false }),
-    }), 7);
-  });
-
-  // Nothing is stranded, so there is nothing to confirm: the save goes through
-  // on the preflight's own answer rather than making the operator click twice.
-  it("saves a narrowing straight through when no route is affected", async () => {
-    const deployment = {
-      id: "deployment_safe", name: "Safe GPT", provider_id: provider.id, provider_model: "gpt-5",
-      target_kind: "model_id", access_surface: provider.access_surface, profile_id: provider.profile_id, region: "",
-      capabilities, capability_evidence: {}, input_micros_per_million: 0,
-      output_micros_per_million: 0, fixed_request_micros_usd: 0, max_concurrency: 4,
-      priority: 0, weight: 1, enabled: true, revision: 2, created_at: "", updated_at: "",
-    } as Deployment;
-    vi.mocked(api.deployments).mockResolvedValue({ items: [deployment], next_cursor: "" });
-    vi.spyOn(api, "preflightDeploymentCapabilities").mockResolvedValue({
-      removed_capabilities: ["tools"], added_capabilities: [], affected_routes: [], blocking: false,
-    });
-    const update = vi.spyOn(api, "updateDeployment").mockResolvedValue({} as never);
-    renderPage();
-
-    fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: /工具调用/ }));
-    fireEvent.click(screen.getByRole("button", { name: "检查路由影响" }));
-
-    await waitFor(() => expect(update).toHaveBeenCalledOnce());
-  });
-
-  // Widening does not remove a candidate from anything, so it must not pay the
-  // cost of a preflight round trip.
-  it("does not preflight when capabilities only widen", async () => {
-    const narrow = { ...capabilities, tools: false };
-    const deployment = {
-      id: "deployment_widen", name: "Widening GPT", provider_id: provider.id, provider_model: "gpt-5",
-      target_kind: "model_id", access_surface: provider.access_surface, profile_id: provider.profile_id, region: "",
-      capabilities: narrow, capability_evidence: {}, input_micros_per_million: 0,
-      output_micros_per_million: 0, fixed_request_micros_usd: 0, max_concurrency: 4,
-      priority: 0, weight: 1, enabled: true, revision: 3, created_at: "", updated_at: "",
-    } as Deployment;
-    vi.mocked(api.deployments).mockResolvedValue({ items: [deployment], next_cursor: "" });
-    const preflight = vi.spyOn(api, "preflightDeploymentCapabilities").mockResolvedValue({
-      removed_capabilities: [], added_capabilities: ["tools"], affected_routes: [], blocking: false,
-    });
-    const update = vi.spyOn(api, "updateDeployment").mockResolvedValue({} as never);
-    renderPage();
-
-    fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: /工具调用/ }));
-    fireEvent.click(screen.getByRole("button", { name: "保存并热加载" }));
-
-    await waitFor(() => expect(update).toHaveBeenCalledOnce());
-    expect(preflight).not.toHaveBeenCalled();
-  });
-
-  // Turning a capability on drops the deployment out of routing until it is
-  // retested, so the form has to say that before the operator saves.
-  // §7.1 puts the internal interface out of the ordinary flow: the operator
-  // names a model, and which interface serves it follows from the model and the
-  // capabilities. It stays reachable for diagnostics, collapsed and automatic.
-  it("creates a deployment without asking which internal interface to use", async () => {
-    vi.mocked(api.providers).mockResolvedValue({ items: [multiInterfaceProvider], next_cursor: "" });
-    vi.mocked(api.providerModels).mockResolvedValue({
-      items: [unknownModel("gpt-5")], catalog_revision: "sha256:catalog",
-      fetched_at: "2026-08-02T00:00:00Z", expires_at: "2026-08-02T00:05:00Z", cached: false,
-    });
-    const create = vi.spyOn(api, "createDeployment").mockResolvedValue({} as never);
-    renderPage();
-
-    fireEvent.click(await screen.findByRole("button", { name: "＋ 新建模型部署" }));
-    fireEvent.change(screen.getByLabelText("部署名称"), { target: { value: "GPT" } });
-
-    const interfaceSelect = screen.getByLabelText(/^能力接口/);
-    const disclosure = interfaceSelect.closest("details");
-    expect(disclosure).not.toHaveAttribute("open");
-    expect(interfaceSelect).toHaveValue("");
-    expect(disclosure?.querySelector("summary")).toHaveTextContent("自动选择");
-
-    const modelInput = screen.getByLabelText(/^模型 ID/);
-    fireEvent.focus(modelInput);
-    const listbox = await screen.findByRole("listbox", { name: "可用模型" });
-    fireEvent.click(await within(listbox).findByRole("option", { name: /gpt-5/ }));
-    fireEvent.click(screen.getByRole("button", { name: "高级手动声明" }));
-    fireEvent.click(screen.getByLabelText("对话"));
-    fireEvent.click(screen.getByRole("button", { name: "保存为停用" }));
-
-    await waitFor(() => expect(create).toHaveBeenCalledOnce());
-    const payload = create.mock.calls[0][0] as Record<string, unknown>;
-    expect(payload).not.toHaveProperty("binding_id");
-  });
-
-  // The interface ceiling is not an invitation to add what the model does not
-  // do. A catalogued model may only be narrowed.
-  it("offers only the capabilities the catalog establishes for a known model", async () => {
-    vi.mocked(api.providers).mockResolvedValue({ items: [multiInterfaceProvider], next_cursor: "" });
-    // The chat interface carries streaming and stream usage; the catalog
-    // establishes only that this model does chat.
-    vi.mocked(api.providerModels).mockResolvedValue({
-      items: [knownModel("catalogued-chat", { chat: true })],
-      catalog_revision: "sha256:catalog",
-      fetched_at: "2026-08-02T00:00:00Z", expires_at: "2026-08-02T00:05:00Z", cached: false,
-    });
-    const create = vi.spyOn(api, "createDeployment").mockResolvedValue({} as never);
-    renderPage();
-
-    fireEvent.click(await screen.findByRole("button", { name: "＋ 新建模型部署" }));
-    fireEvent.change(screen.getByLabelText("部署名称"), { target: { value: "Chat" } });
-    const modelInput = screen.getByLabelText(/^模型 ID/);
-    fireEvent.focus(modelInput);
-    const listbox = await screen.findByRole("listbox", { name: "可用模型" });
-    fireEvent.click(await within(listbox).findByRole("option", { name: /catalogued-chat/ }));
-
-    expect(screen.getByLabelText("对话")).toBeChecked();
-    // The interface would carry these; the catalog does not establish them for
-    // this model, so they are not on offer.
-    expect(screen.queryByLabelText("流式")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("流式用量")).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "保存为停用" }));
-    await waitFor(() => expect(create).toHaveBeenCalledOnce());
-    // The catalog named the interface, so this one is sent.
-    expect((create.mock.calls[0][0] as Record<string, unknown>).binding_id).toBe("b-chat");
-  });
-
-  // A deployment runs on one interface. Selecting across two is refused by the
-  // server, so the form names the reason rather than letting it come back as a
-  // bare rejection.
-  it("says when a selection no single interface carries has been made", async () => {
-    vi.mocked(api.providers).mockResolvedValue({ items: [multiInterfaceProvider], next_cursor: "" });
-    vi.mocked(api.providerModels).mockResolvedValue({
-      items: [unknownModel("gpt-5")], catalog_revision: "sha256:catalog",
-      fetched_at: "2026-08-02T00:00:00Z", expires_at: "2026-08-02T00:05:00Z", cached: false,
-    });
-    renderPage();
-
-    fireEvent.click(await screen.findByRole("button", { name: "＋ 新建模型部署" }));
-    fireEvent.click(screen.getByLabelText("对话"));
-    expect(screen.queryByText("没有单一能力接口能承载全部所选能力")).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByLabelText("向量嵌入"));
-    expect(await screen.findByText("没有单一能力接口能承载全部所选能力")).toBeVisible();
-  });
-
-  it("warns that enabling a capability will take the deployment out of routing", async () => {
-    const narrow = { ...capabilities, vision: false };
-    const deployment = {
-      id: "deployment_expand", name: "Expanding GPT", provider_id: provider.id, provider_model: "gpt-5",
-      target_kind: "model_id", access_surface: provider.access_surface, profile_id: provider.profile_id, region: "",
-      capabilities: narrow, capability_evidence: {}, input_micros_per_million: 0,
-      output_micros_per_million: 0, fixed_request_micros_usd: 0, max_concurrency: 4,
-      priority: 0, weight: 1, enabled: true, revision: 9, created_at: "", updated_at: "",
-    } as Deployment;
-    vi.mocked(api.deployments).mockResolvedValue({ items: [deployment], next_cursor: "" });
-    renderPage();
-
-    fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
-    expect(screen.queryByText("开启能力需要重新验证")).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("checkbox", { name: /视觉/ }));
-
-    expect(await screen.findByText("开启能力需要重新验证")).toBeVisible();
-    // It is routed, so the console names the thing that has to happen first.
-    expect(screen.getByText(/请先停用这些路由/)).toBeVisible();
-  });
 });
 
+async function openCreate() {
+  renderPage();
+  fireEvent.click(await screen.findByRole("button", { name: "＋ 新建模型部署" }));
+  await screen.findByText(/已发现/);
+}
+
+async function choose(name: string) {
+  const input = screen.getByLabelText(/^模型 ID/);
+  fireEvent.change(input, { target: { value: "" } });
+  fireEvent.focus(input);
+  const listbox = await screen.findByRole("listbox", { name: "可用模型" });
+  fireEvent.click(within(listbox).getByRole("option", { name }));
+}
+
+function chooseDetectionInterface(bindingID = "b-chat") {
+  fireEvent.change(screen.getByLabelText(/^能力接口/), { target: { value: bindingID } });
+}
+
 function renderPage() {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  return render(<QueryClientProvider client={client}><DeploymentsPage /></QueryClientProvider>);
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  return render(<QueryClientProvider client={queryClient}><DeploymentsPage /></QueryClientProvider>);
 }

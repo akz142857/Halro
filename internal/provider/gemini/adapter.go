@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -115,6 +116,143 @@ func (a *Adapter) Type() string { return "gemini" }
 
 func (a *Adapter) Capabilities() provider.Capabilities {
 	return provider.Capabilities{Chat: true, Streaming: true, Embeddings: true, DeveloperRole: true}
+}
+
+func (a *Adapter) InvocationTargetDiscovery() domain.InvocationTargetDiscoveryCapabilities {
+	return domain.InvocationTargetDiscoveryCapabilities{
+		TargetKinds:  []domain.DeploymentTargetKind{domain.TargetModelID},
+		CanEnumerate: true, CanDescribe: true, CanVerify: true,
+	}
+}
+
+func (a *Adapter) ListInvocationTargets(ctx context.Context, query domain.TargetQuery) ([]domain.InvocationTargetDescriptor, error) {
+	type model struct {
+		Name                       string   `json:"name"`
+		DisplayName                string   `json:"displayName"`
+		InputTokenLimit            int64    `json:"inputTokenLimit"`
+		OutputTokenLimit           int64    `json:"outputTokenLimit"`
+		SupportedGenerationMethods []string `json:"supportedGenerationMethods"`
+	}
+	var targets []domain.InvocationTargetDescriptor
+	pageToken := ""
+	for page := 0; page < 20; page++ {
+		endpoint := a.collectionURL()
+		values := endpoint.Query()
+		values.Set("pageSize", "1000")
+		if pageToken != "" {
+			values.Set("pageToken", pageToken)
+		}
+		endpoint.RawQuery = values.Encode()
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+		if err != nil {
+			return nil, badRequest("create Gemini model catalog request", err)
+		}
+		if err := a.authorize(request); err != nil {
+			return nil, badRequest("authorize Gemini model catalog request", err)
+		}
+		request.Header.Set("Accept", "application/json")
+		response, err := a.client.Do(request)
+		if err != nil {
+			return nil, transportError("Gemini model catalog request failed", err)
+		}
+		func() {
+			defer response.Body.Close()
+			if response.StatusCode < 200 || response.StatusCode >= 300 {
+				err = httpError(response.StatusCode, response.Body)
+				return
+			}
+			var catalog struct {
+				Models        []model `json:"models"`
+				NextPageToken string  `json:"nextPageToken"`
+			}
+			payload, readErr := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
+			if readErr != nil || len(payload) > maxResponseBytes {
+				err = malformed("read Gemini model catalog response", readErr)
+				return
+			}
+			if decodeErr := json.Unmarshal(payload, &catalog); decodeErr != nil {
+				err = malformed("decode Gemini model catalog response", decodeErr)
+				return
+			}
+			now := time.Now().UTC()
+			for _, item := range catalog.Models {
+				id := strings.TrimPrefix(strings.TrimSpace(item.Name), "models/")
+				if id == "" || len(id) > 512 {
+					continue
+				}
+				targets = append(targets, domain.InvocationTargetDescriptor{
+					TargetID: id, TargetKind: domain.TargetModelID, DisplayName: firstNonEmpty(strings.TrimSpace(item.DisplayName), id),
+					CanonicalModelRef: id, Lifecycle: domain.TargetLifecycleUnknown,
+					Metadata:       domain.NormalizedModelMetadata{SupportedOperations: slices.Clone(item.SupportedGenerationMethods), MaxContextTokens: item.InputTokenLimit, MaxOutputTokens: item.OutputTokenLimit},
+					MetadataSource: domain.MetadataSourceProvider, Availability: domain.AvailabilityAvailable, FetchedAt: now,
+				})
+			}
+			pageToken = strings.TrimSpace(catalog.NextPageToken)
+		}()
+		if err != nil {
+			return nil, err
+		}
+		if pageToken == "" {
+			return targets, nil
+		}
+	}
+	return nil, malformed("Gemini model catalog exceeded page limit", nil)
+}
+
+func (a *Adapter) DescribeInvocationTarget(ctx context.Context, target domain.InvocationTargetDescriptor) (domain.InvocationTargetDescriptor, error) {
+	endpoint, err := a.modelURL(target.TargetID, "")
+	if err != nil {
+		return domain.InvocationTargetDescriptor{}, err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	if err != nil {
+		return domain.InvocationTargetDescriptor{}, badRequest("create Gemini model description request", err)
+	}
+	if err := a.authorize(request); err != nil {
+		return domain.InvocationTargetDescriptor{}, badRequest("authorize Gemini model description request", err)
+	}
+	response, err := a.client.Do(request)
+	if err != nil {
+		return domain.InvocationTargetDescriptor{}, transportError("Gemini model description request failed", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return domain.InvocationTargetDescriptor{}, httpError(response.StatusCode, response.Body)
+	}
+	var item struct {
+		Name, DisplayName          string
+		InputTokenLimit            int64
+		OutputTokenLimit           int64
+		SupportedGenerationMethods []string
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, maxResponseBytes+1)).Decode(&item); err != nil {
+		return domain.InvocationTargetDescriptor{}, malformed("decode Gemini model description", err)
+	}
+	id := strings.TrimPrefix(strings.TrimSpace(item.Name), "models/")
+	return domain.InvocationTargetDescriptor{
+		TargetID: id, TargetKind: domain.TargetModelID, DisplayName: firstNonEmpty(strings.TrimSpace(item.DisplayName), id), CanonicalModelRef: id,
+		Lifecycle: domain.TargetLifecycleUnknown, MetadataSource: domain.MetadataSourceProvider, Availability: domain.AvailabilityAvailable, FetchedAt: time.Now().UTC(),
+		Metadata: domain.NormalizedModelMetadata{SupportedOperations: slices.Clone(item.SupportedGenerationMethods), MaxContextTokens: item.InputTokenLimit, MaxOutputTokens: item.OutputTokenLimit},
+	}, nil
+}
+
+func (a *Adapter) MapCapabilityClaims(target domain.InvocationTargetDescriptor, scope domain.InvocationTargetScopeKey, observedAt time.Time) []domain.CapabilityClaim {
+	methodClaims := map[string]string{
+		"generateContent": "chat", "streamGenerateContent": "streaming", "embedContent": "embeddings",
+	}
+	var claims []domain.CapabilityClaim
+	for _, method := range target.Metadata.SupportedOperations {
+		capabilityID, ok := methodClaims[method]
+		if !ok {
+			continue
+		}
+		claims = append(claims, domain.CapabilityClaim{
+			CapabilityID: capabilityID, Status: domain.ClaimSupported, Evidence: domain.EvidenceDeclared,
+			Source: domain.ClaimSourceProviderMetadata, Scope: scope, ObservedAt: observedAt,
+			Revision: provider.CapabilityClaimRevision(string(domain.ClaimSourceProviderMetadata), target.TargetID, method),
+		})
+	}
+	return claims
 }
 
 func (a *Adapter) Close() {

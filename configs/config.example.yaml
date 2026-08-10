@@ -467,3 +467,40 @@ audit:
     # @description.zh-CN dead-man 拉取审计锚定使用的独立凭据文件。
     # @description.en-US Independent credential file used by dead-man audit-anchor pulls.
     credential_file: ""
+
+model_catalog:
+  # @title.zh-CN 签名模型目录更新
+  # @title.en-US Signed model catalog updates
+  # @description.zh-CN 默认关闭；启用后仅后台通过固定端点和编译期信任根刷新，Gateway 请求路径不会下载目录。
+  # @description.en-US Disabled by default; background refresh uses a compiled endpoint and trust roots, never the Gateway request path.
+  enabled: false
+  # @title.zh-CN 目录刷新间隔
+  # @title.en-US Catalog refresh interval
+  # @description.zh-CN 后台检查签名目录更新的间隔。
+  # @description.en-US Interval between signed catalog update checks.
+  refresh_interval: 6h
+  # @title.zh-CN 固定目录 revision
+  # @title.en-US Pinned catalog revision
+  # @description.zh-CN 可选 sha256 revision；非精确匹配的更新会被拒绝。
+  # @description.en-US Optional sha256 revision; non-exact updates are rejected.
+  pinned_revision: ""
+  # @title.zh-CN 最大下载字节数
+  # @title.en-US Maximum download bytes
+  # @description.zh-CN 压缩响应体的硬上限。
+  # @description.en-US Hard limit for the compressed response body.
+  max_download_bytes: 1048576
+  # @title.zh-CN 最大解码字节数
+  # @title.en-US Maximum decoded bytes
+  # @description.zh-CN 解压和解码后的硬上限。
+  # @description.en-US Hard limit after decompression and decoding.
+  max_decoded_bytes: 4194304
+  # @title.zh-CN 最大压缩比
+  # @title.en-US Maximum compression ratio
+  # @description.zh-CN 拒绝超过该展开比例的压缩目录。
+  # @description.en-US Rejects compressed catalogs exceeding this expansion ratio.
+  max_compression_ratio: 20
+  # @title.zh-CN 最大目录条目数
+  # @title.en-US Maximum catalog entries
+  # @description.zh-CN 单个已验证清单允许的最大精确模型条目数。
+  # @description.en-US Maximum exact model entries in one verified manifest.
+  max_entries: 10000

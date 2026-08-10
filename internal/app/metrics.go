@@ -18,6 +18,7 @@ import (
 	"github.com/akz142857/Halro/internal/buildinfo"
 	"github.com/akz142857/Halro/internal/config"
 	"github.com/akz142857/Halro/internal/masterkey"
+	"github.com/akz142857/Halro/internal/modelcatalog"
 	"github.com/akz142857/Halro/internal/timezone"
 	"github.com/akz142857/Halro/internal/usage"
 	"github.com/akz142857/Halro/internal/vault"
@@ -494,6 +495,30 @@ func writeCapabilityMetrics(output *bufio.Writer, snapshot capabilityMetricsSnap
 		fmt.Fprintf(output, "halro_model_catalog_degraded_total{provider_type=%s,error_class=%s} %d\n",
 			strconv.Quote(sample.Key.ProviderType), strconv.Quote(sample.Key.ErrorClass), sample.Count)
 	}
+	metricHeader(output, "halro_signed_model_catalog_refresh_total", "counter",
+		"Signed model catalog background refreshes by bounded outcome and error class.")
+	signedKeys := make([]signedCatalogMetricKey, 0, len(snapshot.SignedCatalog))
+	for key := range snapshot.SignedCatalog {
+		signedKeys = append(signedKeys, key)
+	}
+	sort.Slice(signedKeys, func(i, j int) bool {
+		return signedKeys[i].Status+signedKeys[i].ErrorClass < signedKeys[j].Status+signedKeys[j].ErrorClass
+	})
+	for _, key := range signedKeys {
+		fmt.Fprintf(output, "halro_signed_model_catalog_refresh_total{status=%s,error_class=%s} %d\n", strconv.Quote(key.Status), strconv.Quote(key.ErrorClass), snapshot.SignedCatalog[key])
+	}
+	metricHeader(output, "halro_signed_model_catalog_degraded", "gauge", "Whether signed model catalog refresh is degraded while Halro continues with its last-known-good or bundled catalog.")
+	degraded := 0
+	if snapshot.SignedCatalogState.State == modelcatalog.CatalogStateDegraded || snapshot.SignedCatalogState.State == modelcatalog.CatalogStateUnavailable {
+		degraded = 1
+	}
+	fmt.Fprintf(output, "halro_signed_model_catalog_degraded %d\n", degraded)
+	metricHeader(output, "halro_signed_model_catalog_degraded_since_seconds", "gauge", "Unix time at which signed model catalog degradation began, or zero when healthy.")
+	degradedSince := int64(0)
+	if snapshot.SignedCatalogState.DegradedSince != nil {
+		degradedSince = snapshot.SignedCatalogState.DegradedSince.Unix()
+	}
+	fmt.Fprintf(output, "halro_signed_model_catalog_degraded_since_seconds %d\n", degradedSince)
 	metricHeader(output, "halro_capability_drift_total", "counter",
 		"Deployments withheld from routing because their capability snapshot no longer matches.")
 	// Both reasons are always emitted: `== 0` is the condition worth alerting
@@ -505,6 +530,20 @@ func writeCapabilityMetrics(output *bufio.Writer, snapshot capabilityMetricsSnap
 	metricHeader(output, "halro_model_revision_conflicts_total", "counter",
 		"Deployment writes refused because the model's catalog revision moved.")
 	fmt.Fprintf(output, "halro_model_revision_conflicts_total %d\n", snapshot.RevisionConflicts)
+	resolutionKeys := make([]resolutionMetricKey, 0, len(snapshot.Resolutions))
+	for key := range snapshot.Resolutions {
+		resolutionKeys = append(resolutionKeys, key)
+	}
+	sort.Slice(resolutionKeys, func(i, j int) bool {
+		a, b := resolutionKeys[i], resolutionKeys[j]
+		return a.ProviderType+a.TargetKind+a.Status+a.Source < b.ProviderType+b.TargetKind+b.Status+b.Source
+	})
+	metricHeader(output, "halro_invocation_target_resolution_total", "counter",
+		"Invocation target resolution results by bounded provider type, target kind, status, and evidence source.")
+	for _, key := range resolutionKeys {
+		fmt.Fprintf(output, "halro_invocation_target_resolution_total{provider_type=%s,target_kind=%s,status=%s,source=%s} %d\n",
+			strconv.Quote(key.ProviderType), strconv.Quote(key.TargetKind), strconv.Quote(key.Status), strconv.Quote(key.Source), snapshot.Resolutions[key])
+	}
 	metricHeader(output, "halro_deployment_test_total", "counter",
 		"Deployment validation tests by outcome.")
 	for _, status := range []string{"success", "failure"} {

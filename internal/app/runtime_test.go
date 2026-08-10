@@ -142,8 +142,10 @@ func TestRuntimeWritesVerifiableStartupAndShutdownAuditEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.Records != 2 {
-		t.Fatalf("audit records=%d want=2", summary.Records)
+	// Startup, the signed-catalog update policy, and shutdown are all security-
+	// relevant state transitions and must remain in the verifiable audit chain.
+	if summary.Records != 3 {
+		t.Fatalf("audit records=%d want=3", summary.Records)
 	}
 }
 

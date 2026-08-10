@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/modelcatalog"
 )
 
 // capabilityMetrics holds the §13 observability counters for model capability
@@ -19,22 +20,27 @@ import (
 // Prometheus labels, and the specific object belongs in the audit trail, which
 // already carries it.
 type capabilityMetrics struct {
-	mu                sync.Mutex
-	catalogRefresh    map[catalogRefreshKey]uint64
-	catalogDegraded   map[catalogDegradedKey]uint64
-	drift             map[string]uint64
-	deploymentTests   map[string]uint64
-	revisionConflicts uint64
-	detections        map[detectionMetricKey]uint64
-	probes            map[probeMetricKey]uint64
-	detectionInflight map[string]int64
-	detectionCache    map[string]uint64
-	detectionCalls    map[string]uint64
-	detectionDuration map[detectionMetricKey]detectionDurationMetric
+	mu                 sync.Mutex
+	catalogRefresh     map[catalogRefreshKey]uint64
+	catalogDegraded    map[catalogDegradedKey]uint64
+	drift              map[string]uint64
+	deploymentTests    map[string]uint64
+	revisionConflicts  uint64
+	resolutions        map[resolutionMetricKey]uint64
+	detections         map[detectionMetricKey]uint64
+	probes             map[probeMetricKey]uint64
+	detectionInflight  map[string]int64
+	detectionCache     map[string]uint64
+	detectionCalls     map[string]uint64
+	detectionDuration  map[detectionMetricKey]detectionDurationMetric
+	signedCatalog      map[signedCatalogMetricKey]uint64
+	signedCatalogState modelcatalog.ManagerStatus
 }
 
 type detectionMetricKey struct{ ProviderType, Status, Source string }
 type probeMetricKey struct{ ProviderType, Capability, Status string }
+type resolutionMetricKey struct{ ProviderType, TargetKind, Status, Source string }
+type signedCatalogMetricKey struct{ Status, ErrorClass string }
 type detectionDurationMetric struct {
 	Count   uint64
 	Sum     float64
@@ -78,9 +84,91 @@ func newCapabilityMetrics() *capabilityMetrics {
 		catalogDegraded: make(map[catalogDegradedKey]uint64),
 		drift:           make(map[string]uint64),
 		deploymentTests: make(map[string]uint64),
+		resolutions:     make(map[resolutionMetricKey]uint64),
 		detections:      make(map[detectionMetricKey]uint64), probes: make(map[probeMetricKey]uint64),
 		detectionInflight: make(map[string]int64), detectionCache: make(map[string]uint64),
 		detectionCalls: make(map[string]uint64), detectionDuration: make(map[detectionMetricKey]detectionDurationMetric),
+		signedCatalog: make(map[signedCatalogMetricKey]uint64),
+	}
+}
+
+func (m *capabilityMetrics) recordSignedCatalog(event modelcatalog.RefreshEvent) {
+	status := "failure"
+	if event.Outcome == "success" {
+		status = "success"
+	}
+	errorClass := boundedCatalogErrorClass(event.ErrorClass)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.signedCatalog[signedCatalogMetricKey{status, errorClass}]++
+	m.signedCatalogState = event.Status
+}
+
+func (m *capabilityMetrics) setSignedCatalogState(status modelcatalog.ManagerStatus) {
+	m.mu.Lock()
+	m.signedCatalogState = status
+	m.mu.Unlock()
+}
+
+func boundedCatalogErrorClass(value string) string {
+	switch value {
+	case "", "download", "signature", "schema", "expired", "pinned_revision", "size_limit", "rollback", "validation", "persistence", "activation":
+		if value == "" {
+			return "none"
+		}
+		return value
+	default:
+		return "unknown"
+	}
+}
+
+func (m *capabilityMetrics) recordResolution(providerType domain.ProviderType, targetKind domain.DeploymentTargetKind, status domain.ResolutionState, source domain.ClaimSource) {
+	key := resolutionMetricKey{
+		ProviderType: boundedResolutionProviderType(providerType),
+		TargetKind:   boundedResolutionTargetKind(targetKind),
+		Status:       boundedResolutionStatus(status),
+		Source:       boundedResolutionSource(source),
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.resolutions[key]++
+}
+
+func boundedResolutionProviderType(value domain.ProviderType) string {
+	if _, known := domain.DefaultProviderProfile(value); known {
+		return string(value)
+	}
+	return "unknown"
+}
+
+func boundedResolutionTargetKind(value domain.DeploymentTargetKind) string {
+	switch value {
+	case domain.TargetModelID, domain.TargetAzureDeployment, domain.TargetBedrockFoundationModel,
+		domain.TargetBedrockInferenceProfile, domain.TargetBedrockProvisionedThroughput, domain.TargetCustomEndpointModel:
+		return string(value)
+	default:
+		return "unknown"
+	}
+}
+
+func boundedResolutionStatus(value domain.ResolutionState) string {
+	switch value {
+	case domain.ResolutionResolved, domain.ResolutionUnknown, domain.ResolutionConflicting, domain.ResolutionNoVariant:
+		return string(value)
+	default:
+		return "unknown"
+	}
+}
+
+func boundedResolutionSource(value domain.ClaimSource) string {
+	switch value {
+	case domain.ClaimSourceBuiltinCatalog, domain.ClaimSourceProviderMetadata, domain.ClaimSourceSignedCatalog,
+		domain.ClaimSourceVerifiedProbe, domain.ClaimSourceOperatorDeclared:
+		return string(value)
+	case "":
+		return "none"
+	default:
+		return "unknown"
 	}
 }
 
@@ -159,17 +247,20 @@ func (m *capabilityMetrics) recordRevisionConflict() {
 // capabilityMetricsSnapshot is a render-time copy with deterministic ordering,
 // so repeated scrapes of unchanged state produce byte-identical output.
 type capabilityMetricsSnapshot struct {
-	CatalogRefresh    []catalogRefreshSample
-	CatalogDegraded   []catalogDegradedSample
-	Drift             map[string]uint64
-	DeploymentTests   map[string]uint64
-	RevisionConflicts uint64
-	Detections        map[detectionMetricKey]uint64
-	Probes            map[probeMetricKey]uint64
-	DetectionInflight map[string]int64
-	DetectionCache    map[string]uint64
-	DetectionCalls    map[string]uint64
-	DetectionDuration map[detectionMetricKey]detectionDurationMetric
+	CatalogRefresh     []catalogRefreshSample
+	CatalogDegraded    []catalogDegradedSample
+	Drift              map[string]uint64
+	DeploymentTests    map[string]uint64
+	RevisionConflicts  uint64
+	Resolutions        map[resolutionMetricKey]uint64
+	Detections         map[detectionMetricKey]uint64
+	Probes             map[probeMetricKey]uint64
+	DetectionInflight  map[string]int64
+	DetectionCache     map[string]uint64
+	DetectionCalls     map[string]uint64
+	DetectionDuration  map[detectionMetricKey]detectionDurationMetric
+	SignedCatalog      map[signedCatalogMetricKey]uint64
+	SignedCatalogState modelcatalog.ManagerStatus
 }
 
 type catalogRefreshSample struct {
@@ -189,9 +280,11 @@ func (m *capabilityMetrics) snapshot() capabilityMetricsSnapshot {
 		Drift:             make(map[string]uint64, len(m.drift)),
 		DeploymentTests:   make(map[string]uint64, len(m.deploymentTests)),
 		RevisionConflicts: m.revisionConflicts,
+		Resolutions:       make(map[resolutionMetricKey]uint64, len(m.resolutions)),
 		Detections:        make(map[detectionMetricKey]uint64, len(m.detections)), Probes: make(map[probeMetricKey]uint64, len(m.probes)),
 		DetectionInflight: make(map[string]int64, len(m.detectionInflight)), DetectionCache: make(map[string]uint64, len(m.detectionCache)),
 		DetectionCalls: make(map[string]uint64, len(m.detectionCalls)), DetectionDuration: make(map[detectionMetricKey]detectionDurationMetric, len(m.detectionDuration)),
+		SignedCatalog: make(map[signedCatalogMetricKey]uint64, len(m.signedCatalog)), SignedCatalogState: m.signedCatalogState,
 	}
 	for key, count := range m.catalogRefresh {
 		snapshot.CatalogRefresh = append(snapshot.CatalogRefresh, catalogRefreshSample{key, count})
@@ -211,6 +304,9 @@ func (m *capabilityMetrics) snapshot() capabilityMetricsSnapshot {
 	for key, count := range m.probes {
 		snapshot.Probes[key] = count
 	}
+	for key, count := range m.resolutions {
+		snapshot.Resolutions[key] = count
+	}
 	for key, count := range m.detectionInflight {
 		snapshot.DetectionInflight[key] = count
 	}
@@ -222,6 +318,9 @@ func (m *capabilityMetrics) snapshot() capabilityMetricsSnapshot {
 	}
 	for key, value := range m.detectionDuration {
 		snapshot.DetectionDuration[key] = value
+	}
+	for key, value := range m.signedCatalog {
+		snapshot.SignedCatalog[key] = value
 	}
 	slices.SortFunc(snapshot.CatalogRefresh, func(a, b catalogRefreshSample) int {
 		return cmp.Or(

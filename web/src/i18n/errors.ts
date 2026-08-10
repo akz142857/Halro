@@ -11,6 +11,7 @@ export function localizedError(t: TFunction, error: unknown) {
     capabilities_exceed_detection: "errors.capabilitiesExceedDetection",
     capability_detection_cooldown: "errors.capabilityDetectionCooldown",
     capability_detection_rate_limited: "errors.capabilityDetectionRateLimited",
+    ambiguous_capability_binding: "errors.ambiguousCapabilityBinding",
     no_detectable_binding: "errors.noDetectableBinding",
     idempotency_conflict: "errors.idempotencyConflict",
   };
@@ -29,6 +30,10 @@ export function localizedError(t: TFunction, error: unknown) {
 // the server's reason is surfaced verbatim underneath it.
 export function errorDetail(error: unknown) {
   if (!(error instanceof ApiError)) return "";
+  // This is an actionable, localized workflow state rather than a malformed
+  // field. Repeating the server's English sentinel under the translated
+  // instruction makes the UI look like an internal validation failure.
+  if (error.code === "ambiguous_capability_binding") return "";
   // A forwarded upstream reply is the whole point of the message; show it at any status.
   if (error.detail) return error.detail;
   const detailed = error.status === 400 || error.status === 409 || error.status === 422;

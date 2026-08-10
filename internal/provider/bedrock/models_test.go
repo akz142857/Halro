@@ -25,24 +25,48 @@ func refuseEveryRequest(t *testing.T) *http.Client {
 // whole account would offer the operator models this profile rejects, and the
 // pinned model is the one the builtin catalog actually establishes — so this is
 // also what makes a catalog-covered model reachable in the console.
-func TestListModelsAnswersPinnedProfilesWithoutCallingUpstream(t *testing.T) {
+func TestListInvocationTargetsAnswersPinnedProfilesWithoutCallingUpstream(t *testing.T) {
 	for profile, pinned := range pinnedProfileModels {
 		adapter := newProfileTestAdapter(t, refuseEveryRequest(t), profile)
-		models, err := adapter.ListModels(context.Background())
+		models, err := adapter.ListInvocationTargets(context.Background(), domain.TargetQuery{})
 		adapter.Close()
 		if err != nil {
 			t.Fatalf("profile %q: %v", profile, err)
 		}
-		if len(models) != 1 || models[0].ID != pinned.Model {
+		if len(models) != 1 || models[0].TargetID != pinned.Model {
 			t.Fatalf("profile %q listed %#v, want only %q", profile, models, pinned.Model)
 		}
+	}
+}
+
+func TestPinnedInvocationTargetUsesQueryRegionWithoutControlPlane(t *testing.T) {
+	adapter := newProfileTestAdapter(t, refuseEveryRequest(t), domain.ProfileBedrockAgentRerankCohere35)
+	defer adapter.Close()
+	targets, err := adapter.ListInvocationTargets(context.Background(), domain.TargetQuery{Region: "eu-west-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 1 || targets[0].Region != "eu-west-1" {
+		t.Fatalf("targets=%#v", targets)
+	}
+}
+
+func TestPinnedInvocationTargetFallsBackToValidatedAgentRuntimeRegion(t *testing.T) {
+	adapter := newProfileTestAdapter(t, refuseEveryRequest(t), domain.ProfileBedrockAgentRerankCohere35)
+	defer adapter.Close()
+	targets, err := adapter.ListInvocationTargets(context.Background(), domain.TargetQuery{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 1 || targets[0].Region != "us-east-1" {
+		t.Fatalf("targets=%#v", targets)
 	}
 }
 
 // Discovery lives on the control plane, which is a different host from every
 // request that serves traffic. The signature has to name that host, not the
 // runtime one the connection is bound to.
-func TestListModelsSignsTheControlPlaneHost(t *testing.T) {
+func TestListInvocationTargetsSignsTheControlPlaneHost(t *testing.T) {
 	var seen *http.Request
 	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		seen = request
@@ -53,11 +77,11 @@ func TestListModelsSignsTheControlPlaneHost(t *testing.T) {
 	adapter := newTestAdapter(t, client)
 	defer adapter.Close()
 
-	models, err := adapter.ListModels(context.Background())
+	models, err := adapter.ListInvocationTargets(context.Background(), domain.TargetQuery{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(models) != 1 || models[0].ID != "amazon.nova-pro-v1:0" || models[0].OwnedBy != "Amazon" {
+	if len(models) != 1 || models[0].TargetID != "amazon.nova-pro-v1:0" || models[0].OwnedBy != "Amazon" {
 		t.Fatalf("models=%#v", models)
 	}
 	if seen.URL.Host != "bedrock.us-east-1.amazonaws.com" || seen.URL.Path != "/foundation-models" {
@@ -77,7 +101,7 @@ func TestListModelsSignsTheControlPlaneHost(t *testing.T) {
 
 // Everything filtered out here is filtered because creating a deployment for it
 // would fail later, not because the model is uninteresting.
-func TestListModelsOffersOnlyModelsADeploymentCanBePointedAt(t *testing.T) {
+func TestListInvocationTargetsOffersOnlyModelsADeploymentCanBePointedAt(t *testing.T) {
 	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		return jsonResponse(http.StatusOK, `{"modelSummaries":[
 			{"modelId":"amazon.nova-pro-v1:0","providerName":"Amazon","outputModalities":["TEXT"],
@@ -94,13 +118,13 @@ func TestListModelsOffersOnlyModelsADeploymentCanBePointedAt(t *testing.T) {
 	adapter := newTestAdapter(t, client)
 	defer adapter.Close()
 
-	models, err := adapter.ListModels(context.Background())
+	models, err := adapter.ListInvocationTargets(context.Background(), domain.TargetQuery{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	var offered []string
 	for _, model := range models {
-		offered = append(offered, model.ID)
+		offered = append(offered, model.TargetID)
 	}
 	want := []string{"amazon.nova-pro-v1:0", "vendor.via-profile-v1:0"}
 	if len(offered) != len(want) {
@@ -113,12 +137,28 @@ func TestListModelsOffersOnlyModelsADeploymentCanBePointedAt(t *testing.T) {
 	}
 }
 
+func TestBedrockMetadataMapsOnlyReviewedModalities(t *testing.T) {
+	adapter := newTestAdapter(t, refuseEveryRequest(t))
+	defer adapter.Close()
+	target := domain.InvocationTargetDescriptor{
+		TargetID: "vendor.future-v1:0",
+		Metadata: domain.NormalizedModelMetadata{
+			InputModalities: []string{"TEXT", "IMAGE", "AUDIO"}, OutputModalities: []string{"TEXT"},
+		},
+	}
+	scope := domain.InvocationTargetScopeKey{ProviderID: "provider", TargetKind: domain.TargetBedrockFoundationModel, TargetID: target.TargetID, BindingID: "binding", ProfileID: domain.ProfileBedrockConverseText}
+	claims := adapter.MapCapabilityClaims(target, scope, time.Now().UTC())
+	if len(claims) != 2 || claims[0].CapabilityID != "chat" || claims[1].CapabilityID != "vision" {
+		t.Fatalf("claims=%#v", claims)
+	}
+}
+
 // An operator who approved a PrivateLink runtime endpoint said which endpoint
 // this connection reaches. There is no control-plane host that stays inside
 // that, so discovery reports itself unavailable and the console falls back to
 // manual model entry — rather than the adapter reaching a public AWS host the
 // operator never approved.
-func TestListModelsRefusesWhenNoControlPlaneStaysInsideTheApprovedEndpoint(t *testing.T) {
+func TestListInvocationTargetsRefusesWhenNoControlPlaneStaysInsideTheApprovedEndpoint(t *testing.T) {
 	endpoint, _ := url.Parse("https://vpce-0abc.bedrock-runtime.us-east-1.vpce.amazonaws.com")
 	adapter, err := New(Options{
 		Endpoint: endpoint, CredentialJSON: []byte(testCredential), Client: refuseEveryRequest(t),
@@ -132,7 +172,7 @@ func TestListModelsRefusesWhenNoControlPlaneStaysInsideTheApprovedEndpoint(t *te
 	if adapter.controlPlaneEndpoint != nil {
 		t.Fatalf("derived a control plane for a PrivateLink endpoint: %s", adapter.controlPlaneEndpoint)
 	}
-	_, err = adapter.ListModels(context.Background())
+	_, err = adapter.ListInvocationTargets(context.Background(), domain.TargetQuery{})
 	var classified *provider.Error
 	if err == nil {
 		t.Fatal("discovery reached upstream from a PrivateLink endpoint")

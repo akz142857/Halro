@@ -40,6 +40,11 @@ type capabilityDetectionRuntime struct {
 	rate      adminRateState
 }
 
+var (
+	errNoDetectableCapabilityBinding = errors.New("current capability interface does not support automatic detection")
+	errAmbiguousCapabilityBinding    = errors.New("capability interface cannot be determined for this model; select one explicitly")
+)
+
 func (r *Runtime) createAdminModelCapabilityDetection(writer http.ResponseWriter, request *http.Request) {
 	key := strings.TrimSpace(request.Header.Get("Idempotency-Key"))
 	if key == "" || len(key) > 256 {
@@ -75,13 +80,18 @@ func (r *Runtime) createAdminModelCapabilityDetection(writer http.ResponseWriter
 		adminBadRequest(writer, err.Error())
 		return
 	}
+	input.TargetKind = targetKind
 	region := input.Region
 	if region == "" {
 		region = providerRegion(instance)
 	}
 	binding, adapter, detector, entry, catalogKnown, err := r.resolveCapabilityDetector(instance, input, region)
 	if err != nil {
-		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": err.Error(), "code": "no_detectable_binding"})
+		code := "no_detectable_binding"
+		if errors.Is(err, errAmbiguousCapabilityBinding) {
+			code = "ambiguous_capability_binding"
+		}
+		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": err.Error(), "code": code})
 		return
 	}
 	now := r.now().UTC()
@@ -183,6 +193,13 @@ func (r *Runtime) createAdminModelCapabilityDetection(writer http.ResponseWriter
 }
 
 func (r *Runtime) resolveCapabilityDetector(instance domain.ProviderInstance, input modelCapabilityDetectionInput, region string) (domain.ProviderProfileBinding, provider.Adapter, provider.CapabilityDetector, modelcatalog.Entry, bool, error) {
+	type candidate struct {
+		binding  domain.ProviderProfileBinding
+		adapter  provider.Adapter
+		detector provider.CapabilityDetector
+		entry    modelcatalog.Entry
+	}
+	var catalogCandidates, detectionCandidates []candidate
 	bindings := instance.EffectiveProfileBindings()
 	slices.SortFunc(bindings, func(a, b domain.ProviderProfileBinding) int { return strings.Compare(a.ID, b.ID) })
 	for _, binding := range bindings {
@@ -193,22 +210,34 @@ func (r *Runtime) resolveCapabilityDetector(instance domain.ProviderInstance, in
 		if !ok {
 			continue
 		}
-		entry, found := modelcatalog.Builtin().Lookup(modelcatalog.Key{ProviderType: instance.Type, Profile: binding.ProfileID, Model: input.ProviderModel, Region: region})
+		entry, found := r.effectiveModelCatalog().Lookup(modelcatalog.Key{ProviderType: instance.Type, Profile: binding.ProfileID, TargetKind: input.TargetKind, Model: input.ProviderModel, Region: region})
 		if !found {
-			entry = modelcatalog.Unknown(modelcatalog.Key{ProviderType: instance.Type, Profile: binding.ProfileID, Model: input.ProviderModel, Region: region})
+			entry = modelcatalog.Unknown(modelcatalog.Key{ProviderType: instance.Type, Profile: binding.ProfileID, TargetKind: input.TargetKind, Model: input.ProviderModel, Region: region})
 		}
-		if found && entry.Status == modelcatalog.StatusKnown {
-			return binding, adapter, nil, entry, true, nil
+		if found && (entry.Source == modelcatalog.SourceBuiltin || entry.Source == modelcatalog.SourceSignedCatalog) {
+			catalogCandidates = append(catalogCandidates, candidate{binding: binding, adapter: adapter, entry: entry})
+			continue
 		}
 		detector, ok := capabilityDetectorFor(adapter)
 		if !ok {
 			continue
 		}
 		if _, err := detector.CapabilityDetectionPlan(provider.ModelCapabilityDetectionTarget{ProviderModel: input.ProviderModel, BindingID: binding.ID, ProfileID: binding.ProfileID, RiskTier: input.RiskTier}); err == nil {
-			return binding, adapter, detector, entry, false, nil
+			detectionCandidates = append(detectionCandidates, candidate{binding: binding, adapter: adapter, detector: detector, entry: entry})
 		}
 	}
-	return domain.ProviderProfileBinding{}, nil, nil, modelcatalog.Entry{}, false, errors.New("current capability interface does not support automatic detection")
+	if len(catalogCandidates) == 1 {
+		match := catalogCandidates[0]
+		return match.binding, match.adapter, nil, match.entry, true, nil
+	}
+	if len(catalogCandidates) > 1 || len(detectionCandidates) > 1 {
+		return domain.ProviderProfileBinding{}, nil, nil, modelcatalog.Entry{}, false, errAmbiguousCapabilityBinding
+	}
+	if len(detectionCandidates) == 1 {
+		match := detectionCandidates[0]
+		return match.binding, match.adapter, match.detector, match.entry, false, nil
+	}
+	return domain.ProviderProfileBinding{}, nil, nil, modelcatalog.Entry{}, false, errNoDetectableCapabilityBinding
 }
 
 func capabilityDetectorFor(adapter provider.Adapter) (provider.CapabilityDetector, bool) {

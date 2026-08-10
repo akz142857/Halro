@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	openaiwire "github.com/akz142857/Halro/internal/compatibility/openai"
 	"github.com/akz142857/Halro/internal/domain"
@@ -119,7 +120,23 @@ func (a *Adapter) modelCatalogURL() (url.URL, error) {
 	return endpoint, nil
 }
 
-func (a *Adapter) ListModels(ctx context.Context) ([]provider.ModelDescriptor, error) {
+func (a *Adapter) InvocationTargetDiscovery() domain.InvocationTargetDiscoveryCapabilities {
+	if a.azure {
+		return domain.InvocationTargetDiscoveryCapabilities{
+			TargetKinds: []domain.DeploymentTargetKind{domain.TargetAzureDeployment},
+			CanVerify:   true, RequiresManagementIdentity: true, RequiresCanonicalModelMapping: true,
+		}
+	}
+	kind := domain.TargetModelID
+	if a.providerType == string(domain.ProviderOpenAICompatible) {
+		kind = domain.TargetCustomEndpointModel
+	}
+	return domain.InvocationTargetDiscoveryCapabilities{
+		TargetKinds: []domain.DeploymentTargetKind{kind}, CanEnumerate: true, CanDescribe: true, CanVerify: true,
+	}
+}
+
+func (a *Adapter) ListInvocationTargets(ctx context.Context, query domain.TargetQuery) ([]domain.InvocationTargetDescriptor, error) {
 	endpoint, err := a.modelCatalogURL()
 	if err != nil {
 		return nil, err
@@ -160,15 +177,43 @@ func (a *Adapter) ListModels(ctx context.Context) ([]provider.ModelDescriptor, e
 	if err := json.Unmarshal(payload, &catalog); err != nil {
 		return nil, &provider.Error{Class: provider.ErrorMalformed, Message: "decode model catalog response", Cause: err}
 	}
-	models := make([]provider.ModelDescriptor, 0, len(catalog.Data))
+	now := time.Now().UTC()
+	kind := domain.TargetModelID
+	canonicalModelRef := func(id string) string { return id }
+	if a.providerType == string(domain.ProviderOpenAICompatible) {
+		kind = domain.TargetCustomEndpointModel
+		// A compatible endpoint owns the meaning of its model names. Seeing a
+		// familiar identifier proves availability only; it does not prove that an
+		// alias such as "gpt-5" implements OpenAI's model contract. Canonical
+		// capability mapping therefore remains an explicit operator action.
+		canonicalModelRef = func(string) string { return "" }
+	}
+	models := make([]domain.InvocationTargetDescriptor, 0, len(catalog.Data))
 	for _, model := range catalog.Data {
 		id := strings.TrimSpace(model.ID)
 		if id == "" || len(id) > 512 {
 			continue
 		}
-		models = append(models, provider.ModelDescriptor{ID: id, OwnedBy: strings.TrimSpace(model.OwnedBy)})
+		models = append(models, domain.InvocationTargetDescriptor{
+			TargetID: id, TargetKind: kind, DisplayName: id, OwnedBy: strings.TrimSpace(model.OwnedBy),
+			CanonicalModelRef: canonicalModelRef(id), Lifecycle: domain.TargetLifecycleUnknown,
+			MetadataSource: domain.MetadataSourceNone, Availability: domain.AvailabilityAvailable, FetchedAt: now,
+		})
 	}
 	return models, nil
+}
+
+func (a *Adapter) DescribeInvocationTarget(ctx context.Context, target domain.InvocationTargetDescriptor) (domain.InvocationTargetDescriptor, error) {
+	items, err := a.ListInvocationTargets(ctx, domain.TargetQuery{TargetKind: target.TargetKind})
+	if err != nil {
+		return domain.InvocationTargetDescriptor{}, err
+	}
+	for _, item := range items {
+		if item.TargetID == strings.TrimSpace(target.TargetID) {
+			return item, nil
+		}
+	}
+	return domain.InvocationTargetDescriptor{}, &provider.Error{Class: provider.ErrorBadRequest, Message: "invocation target was not found"}
 }
 
 func (a *Adapter) Probe(ctx context.Context, providerModel string) error {

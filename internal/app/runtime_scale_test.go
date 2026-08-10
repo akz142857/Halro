@@ -35,8 +35,10 @@ const (
 	// 68: capabilityDetections. The persistent control-plane job manager owns
 	// one bounded semaphore set and cancellation registry; grouping it keeps the
 	// Runtime surface to one subsystem rather than four coordination fields.
-	runtimeFieldBudget = 68
-	runtimeMutexBudget = 11
+	// 67: capabilityResolution now groups invocation-target cache coordination
+	// and the signed catalog manager behind one subsystem boundary.
+	runtimeFieldBudget = 67
+	runtimeMutexBudget = 10
 )
 
 func TestRuntimeStaysWithinItsDeclaredBreadth(t *testing.T) {

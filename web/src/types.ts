@@ -380,30 +380,81 @@ export type ModelCapabilityStatus = "known" | "partial" | "unknown" | "conflicti
 export type ModelCapabilitySource =
   | "builtin_catalog"
   | "provider_metadata"
+  | "signed_catalog"
   | "verified_probe"
   | "operator_declared"
   | "unsupported";
 
-export interface ModelProfileCandidate {
+export type AvailabilityState = "available" | "unverified" | "unavailable";
+export type TargetLifecycle = "active" | "deprecated" | "unknown";
+export type ResolutionState = "resolved" | "unknown" | "conflicting" | "no_variant";
+export type ClaimStatus = "supported" | "unsupported" | "unknown" | "conflicting";
+
+export interface InvocationTargetScopeKey {
+  provider_id: string;
+  target_kind: DeploymentTargetKind;
+  target_id: string;
   binding_id: string;
   profile_id: string;
-  status: ModelCapabilityStatus;
-  selected: boolean;
-  capabilities: ProviderCapabilities;
-  profile_capabilities: ProviderCapabilities;
+  location?: string;
 }
 
-export interface ProviderModelDescriptor {
-  id: string;
+export interface CapabilityClaim {
+  capability_id: string;
+  status: ClaimStatus;
+  evidence: CapabilityEvidence;
+  source: Exclude<ModelCapabilitySource, "unsupported">;
+  scope: InvocationTargetScopeKey;
+  observed_at: string;
+  expires_at?: string;
+  revision: string;
+}
+
+export interface InvocationTargetDescriptor {
+  target_id: string;
+  target_kind: DeploymentTargetKind;
+  display_name: string;
   owned_by?: string;
-  status: ModelCapabilityStatus;
+  canonical_model_ref?: string;
+  region?: string;
+  lifecycle: TargetLifecycle;
+  metadata: {
+    input_modalities?: string[];
+    output_modalities?: string[];
+    supported_operations?: string[];
+    inference_types?: string[];
+    max_context_tokens?: number;
+    max_output_tokens?: number;
+  };
+  metadata_source: "none" | "provider_metadata";
+  availability: AvailabilityState;
+  fetched_at: string;
+}
+
+export interface DeploymentVariant {
+  id: string;
+  binding_id: string;
+  profile_id: string;
+  target: InvocationTargetDescriptor;
   capabilities: ProviderCapabilities;
-  capability_evidence: CapabilityEvidenceSet;
-  capability_source: ModelCapabilitySource;
-  /** Only a builtin catalog entry may arrive with capabilities pre-checked. */
-  preselect: boolean;
-  model_revision: string;
-  profile_candidates: ModelProfileCandidate[];
+  capability_claims: CapabilityClaim[];
+  resolution_state: ResolutionState;
+  revision: string;
+}
+
+export interface ResolvedInvocationTarget extends InvocationTargetDescriptor {
+  variants: DeploymentVariant[];
+  resolution_state: ResolutionState;
+  resolution_revision: string;
+}
+
+export interface InvocationTargetDiscoveryCapabilities {
+  target_kinds: DeploymentTargetKind[];
+  can_enumerate: boolean;
+  can_describe: boolean;
+  can_verify: boolean;
+  requires_management_identity: boolean;
+  requires_canonical_model_mapping: boolean;
 }
 
 /** A binding whose catalog could not be read. Its models are absent from the
@@ -414,12 +465,12 @@ export interface DegradedBinding {
   error_class: string;
 }
 
-export interface ProviderModelCatalog {
-  items: ProviderModelDescriptor[];
-  /** Reviewed models that may describe an operator-named Azure Deployment or
-   * custom endpoint target. Selecting one is still an operator declaration. */
-  capability_models?: ProviderModelDescriptor[];
+export interface InvocationTargetCatalog {
+  items: ResolvedInvocationTarget[];
+  canonical_models?: ResolvedInvocationTarget[];
+  discovery: InvocationTargetDiscoveryCapabilities;
   catalog_revision: string;
+  provider_revision: number;
   degraded_bindings?: DegradedBinding[];
   fetched_at: string;
   expires_at: string;
@@ -452,7 +503,7 @@ export interface ModelCapabilityDetection {
  * that is supported now. Always derived by the server from a live comparison —
  * it is never stored on the deployment, because both sides of the comparison
  * move without the record being rewritten. */
-export type CapabilityReviewState = "current" | "review_available" | "drifted";
+export type CapabilityReviewState = "current" | "review_available" | "drifted" | "catalog_unavailable";
 
 export interface CapabilityReview {
   state: CapabilityReviewState;
@@ -483,7 +534,8 @@ export type CapabilityReviewReason =
   | "catalog_establishes_less"
   | "catalog_revision_advanced"
   | "catalog_now_covers_model"
-  | "catalog_disagrees_with_declaration";
+  | "catalog_disagrees_with_declaration"
+  | "catalog_unavailable";
 
 export interface RouteCapabilityImpact {
   route_id: string;
@@ -789,6 +841,30 @@ export interface SystemConfigEntry {
   description_en: string;
   value: string;
   kind: "boolean" | "collection" | "number" | "text";
+}
+
+export interface ModelCatalogStatus {
+  enabled: boolean;
+  state: "disabled" | "current" | "degraded" | "catalog_unavailable";
+  source: ModelCapabilitySource | string;
+  revision: string;
+  sequence?: number;
+  pinned_revision?: string;
+  last_attempt_at?: string;
+  last_success_at?: string;
+  degraded_since?: string;
+  error_class?: string;
+  expires_at?: string;
+  using_expired_last_known_good?: boolean;
+}
+
+export interface ModelCatalogInfo {
+  status: ModelCatalogStatus;
+  bundled_revision: string;
+  effective_revision: string;
+  schema: { min_readable: number; max_readable: number };
+  capability_dictionary_version: number;
+  trust_root_count: number;
 }
 
 export interface RuntimeSettings {

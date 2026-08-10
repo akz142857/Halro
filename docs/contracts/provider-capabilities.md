@@ -37,17 +37,23 @@ behind it does. `internal/modelcatalog` holds the second claim: that a specific
 model, reached through a specific profile and region, supports a specific set of
 operations.
 
-Effective capabilities are an intersection, and every layer may only narrow:
+Effective capabilities are resolved per exact invocation target and binding,
+and every layer may only narrow:
 
 ```text
-profile ceiling  ∩  model catalog entry  ∩  operator-retained subset
+binding/profile ceiling  ∩  active capability claims  ∩  operator-retained subset
 ```
 
 Rules the catalog holds to:
 
-- **A `/models` response is existence, not capability.** `provider.ModelLister`
-  returns identifiers and no capability claims; nothing in the catalog is
-  derived from one.
+- **Discovery is existence, not capability.** `provider.InvocationTargetLister`
+  returns normalized `InvocationTargetDescriptor` values. A target remains
+  `unknown` unless an independent exact claim exists. The Admin endpoint is
+  `/providers/{id}/invocation-targets`; the pre-1.0 `/models` endpoint has been
+  removed.
+- **Provider metadata is allowlisted by its Adapter.** Only reviewed structured
+  fields may become `provider_metadata` claims. Names, owners, families, and
+  unknown fields are never evidence.
 - **Unknown means zero until evidence exists.** A model with no entry resolves
   to `unknown` with no capabilities, never to the profile ceiling. An explicit
   safe capability detection may create `verified_probe` evidence; the advanced
@@ -61,29 +67,50 @@ Rules the catalog holds to:
   source that says nothing about a capability does not veto another's evidence,
   which is why claims carry asserted-supported and asserted-unsupported
   separately.
-- **Only reviewed builtin entries and successful verified probes pre-select.**
-  Provider metadata is external input and never arrives pre-checked. A verified
-  probe is an explicit administrator-triggered, fixed-protocol control-plane
-  job; only its `supported` results may be pre-selected.
+- **Only resolved variants pre-select.** A variant may use exact builtin claims,
+  Adapter-allowlisted Provider metadata, or a successful explicit probe. Every
+  result is clamped to one Binding and contradictory claims emit no variant.
 - **Nothing widens a profile.** Every merge is clamped to the ceiling, so
   upstream metadata cannot loosen the deliberately pinned Gemini, Bedrock, or
   Bedrock Mantle Beta limits.
 
-Sources are `builtin_catalog`, `provider_metadata`, `verified_probe`,
-`operator_declared`, and `unsupported`; statuses are `known`, `partial`,
-`unknown`, and `conflicting`.
+Claim sources are `builtin_catalog`, `provider_metadata`, `signed_catalog`,
+`verified_probe`, and `operator_declared`; statuses are
+`supported`, `unsupported`, `unknown`, and `conflicting`. Deployment snapshots
+retain the catalog status (`known`, `partial`, `unknown`, `conflicting`) for
+compatibility with stored evidence.
+
+Each Claim is scoped to provider ID, target kind and ID, Binding, Profile, and
+location semantics. Provider metadata expires with the target-cache lifetime;
+expiry only affects future resolution. A Deployment save binds the selected
+variant revision and stores its Claim revisions in an immutable snapshot. A
+stale save receives `409 resolution_changed` with mismatch names and the latest
+resolution.
 
 ### Carrier and release cadence
 
-Catalog entries are Go source, reviewed like code and shipped with the binary,
-on the same release path as the profile ceilings they must stay under. There is
-no second embedded data format and no runtime catalog fetch.
+Builtin entries are rendered into the same versioned snapshot schema used by
+the optional signed catalog and remain available offline. In 1.1.0 an
+administrator may explicitly enable background refresh from the compiled
+catalog endpoint. The reader verifies an Ed25519 signature against release-
+embedded public roots, an exact schema and capability-dictionary version,
+monotonic sequence, revision, expiry, entry count, and download/decompression
+limits before atomically replacing its last-known-good snapshot. The request
+path never downloads a catalog.
 
-The consequence is deliberate: a model Halro has not shipped an entry for is
-`unknown` until an explicit fixed-protocol detection establishes it, a release
-adds it, or the operator uses the advanced declaration. The manual model-ID
-path stays available permanently as the escape hatch for targets that cannot
-be detected.
+Signed entries may add or revoke only exact provider/profile/target-kind/model/
+region identities and capability IDs already understood by the binary. They cannot add request
+protocols, authentication, hosts, or SSRF policy and never imply that the
+current Provider credential can enumerate or invoke a target. Failure, future
+schema, rollback, or loss of the update service preserves an unexpired last-
+known-good or bundled catalog and reports `catalog_unavailable`. An expired
+last-known-good remains visible for provenance and sequence protection but
+cannot establish a new variant or save. No failure rewrites stored Deployment snapshots. See ADR 0020 and the catalog
+publishing runbook.
+
+The consequence is deliberate: a model with no exact builtin, signed, metadata,
+or verified-probe claim is `unknown`. The manual model-ID path stays available
+permanently as the escape hatch for targets that cannot be detected.
 
 An entry is added only against evidence. The shipped seed covers the four
 profiles that already pin exactly one model each — Titan Text Embeddings V2,

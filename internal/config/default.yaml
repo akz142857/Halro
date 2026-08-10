@@ -190,3 +190,15 @@ audit:
     # metrics.credential_file, since the two are rotated on unrelated
     # schedules.
     credential_file: ""
+
+# Optional signed model capability updates. Disabled means zero catalog
+# network requests; Halro continues to use its bundled reviewed snapshot.
+# Endpoint, host allowlist and signature trust roots are compiled in.
+model_catalog:
+  enabled: false
+  refresh_interval: 6h0m0s
+  pinned_revision: ""
+  max_download_bytes: 1048576
+  max_decoded_bytes: 4194304
+  max_compression_ratio: 20
+  max_entries: 10000

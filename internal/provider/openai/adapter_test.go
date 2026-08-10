@@ -266,7 +266,7 @@ func TestConnectionProbeUsesNonBillableEndpoint(t *testing.T) {
 	}
 }
 
-func TestListModelsUsesBoundCatalogEndpointAndParsesIDs(t *testing.T) {
+func TestListInvocationTargetsUsesBoundCatalogEndpointAndParsesIDs(t *testing.T) {
 	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		if request.Method != http.MethodGet || request.URL.String() != "https://provider.example/v1/models" {
 			t.Fatalf("unexpected catalog request: %s %s", request.Method, request.URL)
@@ -286,12 +286,44 @@ func TestListModelsUsesBoundCatalogEndpointAndParsesIDs(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer adapter.Close()
-	models, err := adapter.ListModels(context.Background())
+	models, err := adapter.ListInvocationTargets(context.Background(), domain.TargetQuery{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(models) != 2 || models[0].ID != "gpt-b" || models[1].ID != "gpt-a" || models[1].OwnedBy != "owner" {
+	if len(models) != 2 || models[0].TargetID != "gpt-b" || models[1].TargetID != "gpt-a" || models[1].OwnedBy != "owner" {
 		t.Fatalf("models=%#v", models)
+	}
+}
+
+func TestCompatibleInvocationTargetDoesNotInferCanonicalModelFromSameName(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK, Header: make(http.Header),
+			Body: io.NopCloser(strings.NewReader(`{
+				"data":[{"id":"gpt-5","owned_by":"system","capabilities":{"vision":true}}]
+			}`)), Request: request,
+		}, nil
+	})}
+	endpoint, _ := url.Parse("https://compatible.example")
+	adapter, err := NewWithOptions(Options{
+		Endpoint: endpoint, APIKey: []byte("provider-key"), Client: client,
+		ProviderType: string(domain.ProviderOpenAICompatible),
+		Capabilities: provider.Capabilities{Chat: true, Streaming: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer adapter.Close()
+
+	targets, err := adapter.ListInvocationTargets(context.Background(), domain.TargetQuery{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 1 || targets[0].TargetKind != domain.TargetCustomEndpointModel {
+		t.Fatalf("targets=%#v", targets)
+	}
+	if targets[0].CanonicalModelRef != "" || targets[0].MetadataSource != domain.MetadataSourceNone || len(targets[0].Metadata.SupportedOperations) != 0 {
+		t.Fatalf("compatible identity inferred canonical capabilities: %#v", targets[0])
 	}
 }
 

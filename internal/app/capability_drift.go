@@ -2,6 +2,7 @@ package app
 
 import (
 	"slices"
+	"strings"
 
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/modelcatalog"
@@ -52,12 +53,13 @@ type capabilityReview struct {
 }
 
 const (
-	reviewReasonProfileNarrowed  = "profile_narrowed"
-	reviewReasonCatalogDropped   = "catalog_no_longer_covers_model"
-	reviewReasonCatalogNarrowed  = "catalog_establishes_less"
-	reviewReasonCatalogAdvanced  = "catalog_revision_advanced"
-	reviewReasonCatalogNowCovers = "catalog_now_covers_model"
-	reviewReasonCatalogDisagrees = "catalog_disagrees_with_declaration"
+	reviewReasonProfileNarrowed    = "profile_narrowed"
+	reviewReasonCatalogDropped     = "catalog_no_longer_covers_model"
+	reviewReasonCatalogNarrowed    = "catalog_establishes_less"
+	reviewReasonCatalogAdvanced    = "catalog_revision_advanced"
+	reviewReasonCatalogNowCovers   = "catalog_now_covers_model"
+	reviewReasonCatalogDisagrees   = "catalog_disagrees_with_declaration"
+	reviewReasonCatalogUnavailable = "catalog_unavailable"
 )
 
 // reviewCapabilities compares a deployment's stored snapshot against what the
@@ -74,6 +76,14 @@ const (
 // the snapshot claims beyond what is supported now is drift, and drift is
 // fail-closed.
 func reviewCapabilities(deployment domain.Deployment, binding domain.ProviderProfileBinding, providerType domain.ProviderType) capabilityReview {
+	return reviewCapabilitiesWithCatalog(deployment, binding, providerType, modelcatalog.Builtin())
+}
+
+func reviewCapabilitiesWithCatalog(deployment domain.Deployment, binding domain.ProviderProfileBinding, providerType domain.ProviderType, catalog *modelcatalog.Catalog) capabilityReview {
+	return reviewCapabilitiesWithCatalogState(deployment, binding, providerType, catalog, false)
+}
+
+func reviewCapabilitiesWithCatalogState(deployment domain.Deployment, binding domain.ProviderProfileBinding, providerType domain.ProviderType, catalog *modelcatalog.Catalog, catalogUnavailable bool) capabilityReview {
 	snapshot := deployment.ModelCapabilitySnapshot
 	review := capabilityReview{
 		State:         domain.CapabilityReviewCurrent,
@@ -92,11 +102,13 @@ func reviewCapabilities(deployment domain.Deployment, binding domain.ProviderPro
 			unionCapabilities(snapshot.Capabilities, deployment.Capabilities), binding.Capabilities)
 		return review
 	}
+	if snapshot.Source == string(modelcatalog.SourceSignedCatalog) && catalogUnavailable {
+		review.State = domain.CapabilityReviewCatalogUnavailable
+		review.Reason = reviewReasonCatalogUnavailable
+		return review
+	}
 
-	entry, found := modelcatalog.Builtin().Lookup(modelcatalog.Key{
-		ProviderType: providerType, Profile: binding.ProfileID,
-		Model: deployment.ProviderModel, Region: deployment.Region,
-	})
+	entry, found := catalog.Lookup(capabilityReviewCatalogKey(deployment, binding, providerType))
 	if found {
 		review.CatalogCovered = true
 		review.CatalogSource = string(entry.Source)
@@ -114,7 +126,7 @@ func reviewCapabilities(deployment domain.Deployment, binding domain.ProviderPro
 		// The model left the catalog, or was never in it and the "nothing
 		// established" digest changed shape. Nothing here establishes the
 		// snapshot's claims any more.
-		if snapshot.Source == string(modelcatalog.SourceBuiltin) {
+		if snapshot.Source == string(modelcatalog.SourceBuiltin) || snapshot.Source == string(modelcatalog.SourceSignedCatalog) {
 			review.State = domain.CapabilityReviewDrifted
 			review.Reason = reviewReasonCatalogDropped
 			review.NoLongerSupported = modelcatalog.LostCapabilities(snapshot.Capabilities, entry.Capabilities)
@@ -160,6 +172,32 @@ func reviewCapabilities(deployment domain.Deployment, binding domain.ProviderPro
 	return review
 }
 
+// capabilityReviewCatalogKey reproduces the catalog scope used when the
+// immutable snapshot was saved. Azure deployments and compatible endpoint
+// aliases keep their invocation identity in ProviderModel while their reviewed
+// capability identity lives in CanonicalModelRef; looking up the alias here
+// would report review_available immediately even though no evidence changed.
+func capabilityReviewCatalogKey(deployment domain.Deployment, binding domain.ProviderProfileBinding, providerType domain.ProviderType) modelcatalog.Key {
+	key := modelcatalog.Key{
+		ProviderType: providerType, Profile: binding.ProfileID,
+		TargetKind: deployment.TargetKind, Model: deployment.ProviderModel, Region: deployment.Region,
+	}
+	canonical := strings.TrimSpace(deployment.ModelCapabilitySnapshot.CanonicalModelRef)
+	if canonical == "" || canonical == deployment.ProviderModel {
+		return key
+	}
+	canonicalProvider, canonicalProfile, ok := capabilityModelCatalogScope(providerType)
+	if !ok {
+		return key
+	}
+	key.ProviderType, key.Profile, key.Model, key.Region = canonicalProvider, canonicalProfile, canonical, ""
+	key.TargetKind = domain.TargetModelID
+	if canonicalProvider == domain.ProviderOpenAICompatible {
+		key.TargetKind = domain.TargetCustomEndpointModel
+	}
+	return key
+}
+
 // setOffered splits what is established now and unused into the part worth
 // offering and the part the operator already declined.
 //
@@ -196,7 +234,7 @@ func evaluateCapabilityReview(deployment domain.Deployment, binding domain.Provi
 // is not mistaken for a judgement.
 func capabilityReviewAdmitsTraffic(state domain.CapabilityReviewState) bool {
 	switch state {
-	case domain.CapabilityReviewCurrent, domain.CapabilityReviewAvailable:
+	case domain.CapabilityReviewCurrent, domain.CapabilityReviewAvailable, domain.CapabilityReviewCatalogUnavailable:
 		return true
 	default:
 		return false

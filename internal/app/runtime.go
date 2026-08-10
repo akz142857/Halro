@@ -31,6 +31,7 @@ import (
 	"github.com/akz142857/Halro/internal/gatewayapi"
 	"github.com/akz142857/Halro/internal/id"
 	"github.com/akz142857/Halro/internal/ledger"
+	"github.com/akz142857/Halro/internal/modelcatalog"
 	"github.com/akz142857/Halro/internal/provider"
 	"github.com/akz142857/Halro/internal/redaction"
 	"github.com/akz142857/Halro/internal/sourcelimit"
@@ -68,8 +69,7 @@ type Runtime struct {
 	gatewayHandlerOnce   sync.Once
 	gatewayHandlerValue  http.Handler
 	adminTopologyMu      sync.Mutex
-	providerModelsMu     sync.Mutex
-	providerModels       map[string]providerModelCatalogCache
+	capabilityResolution capabilityResolutionRuntime
 	capabilityDetections capabilityDetectionRuntime
 	adminProjectMu       sync.Mutex
 	adminAlertMu         sync.Mutex
@@ -121,6 +121,12 @@ type Runtime struct {
 	// /metrics or nobody finds out for months.
 	anchorLastEmitUnix atomic.Int64
 	anchorEmitFailures atomic.Uint64
+}
+
+type capabilityResolutionRuntime struct {
+	mu                sync.Mutex
+	invocationTargets map[string]invocationTargetCatalogCache
+	catalog           *modelcatalog.Manager
 }
 
 func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime, error) {
@@ -345,7 +351,26 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		secretVault.Close()
 		return fail(fmt.Errorf("recover pending accounting leases: %w", err))
 	}
-	providerRegistry, withheld, err := loadProviderRegistry(ctx, cfg, metadata, secretVault)
+	catalogManager, catalogErr := modelcatalog.NewManager(modelcatalog.ManagerOptions{
+		Enabled: cfg.ModelCatalog.Enabled, PinnedRevision: cfg.ModelCatalog.PinnedRevision,
+		RefreshInterval: cfg.ModelCatalog.RefreshInterval.Value(), DataDir: cfg.Storage.DataDir,
+		TrustRoots:          modelcatalog.ProductionTrustRoots(),
+		ConnectTimeout:      cfg.Gateway.AttemptConnectTimeout.Value(),
+		ResponseTimeout:     cfg.Gateway.AttemptResponseHeaderTimeout.Value(),
+		MaxDownloadBytes:    cfg.ModelCatalog.MaxDownloadBytes,
+		MaxDecodedBytes:     cfg.ModelCatalog.MaxDecodedBytes,
+		MaxCompressionRatio: cfg.ModelCatalog.MaxCompressionRatio,
+		MaxEntries:          cfg.ModelCatalog.MaxEntries, Now: time.Now,
+	})
+	if catalogErr != nil {
+		logger.Error("initialize signed model catalog", "error", catalogErr)
+	}
+	effectiveCatalog := modelcatalog.Builtin()
+	if catalogManager != nil {
+		effectiveCatalog = catalogManager.Current()
+	}
+	catalogUnavailable := catalogManager == nil || catalogManager.Status().State != modelcatalog.CatalogStateCurrent
+	providerRegistry, withheld, err := loadProviderRegistryWithCatalog(ctx, cfg, metadata, secretVault, effectiveCatalog, catalogUnavailable)
 	if err != nil {
 		ledgerLog.Close()
 		metadata.Close()
@@ -582,6 +607,13 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 			rate:      adminRateState{windows: make(map[string]adminLoginWindow)},
 		},
 	}
+	if catalogManager != nil {
+		catalogManager.SetObserver(runtime.observeModelCatalogRefresh)
+		catalogManager.SetActivationPreparer(runtime.prepareModelCatalogActivation)
+		runtime.capabilityResolution.catalog = catalogManager
+		runtime.capabilityMetrics.setSignedCatalogState(catalogManager.Status())
+		runtime.auditModelCatalogConfiguration()
+	}
 	detectionRecoveryAt := time.Now().UTC()
 	recoveredDetections, err := metadata.InterruptModelCapabilityDetections(ctx, detectionRecoveryAt)
 	if err != nil {
@@ -683,7 +715,7 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 	runtime.backgroundCancel = backgroundCancel
 	runtime.alerts.SetObserver(runtime.auditAlertDelivery)
 	runtime.alerts.Start()
-	runtime.backgroundWait.Add(7)
+	runtime.backgroundWait.Add(8)
 	go func() {
 		defer runtime.backgroundWait.Done()
 		runtime.usageCollector.Run(backgroundContext)
@@ -714,6 +746,12 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 	go func() {
 		defer runtime.backgroundWait.Done()
 		runtime.runProviderResourceMaintenance(backgroundContext)
+	}()
+	go func() {
+		defer runtime.backgroundWait.Done()
+		if runtime.capabilityResolution.catalog != nil {
+			runtime.capabilityResolution.catalog.Run(backgroundContext)
+		}
 	}()
 	return runtime, nil
 }
@@ -1283,9 +1321,12 @@ func (r *Runtime) adminRouter() http.Handler {
 	router.With(r.requireAdminMutation).Put("/admin/api/v1/credentials/{id}", r.updateAdminCredential)
 	router.With(r.requireAdminMutation).Delete("/admin/api/v1/credentials/{id}", r.deleteAdminCredential)
 	router.With(r.requireAdmin).Get("/admin/api/v1/providers", r.listAdminProviders)
+	router.With(r.requireAdmin).Get("/admin/api/v1/model-catalog", r.getAdminModelCatalog)
+	router.With(r.requireAdminMutation).Post("/admin/api/v1/model-catalog/refresh", r.refreshAdminModelCatalog)
 	router.With(r.requireAdminMutation).Post("/admin/api/v1/providers", r.createAdminProvider)
 	router.With(r.requireAdmin).Get("/admin/api/v1/providers/{id}", r.getAdminProvider)
-	router.With(r.requireAdmin).Get("/admin/api/v1/providers/{id}/models", r.listAdminProviderModels)
+	router.With(r.requireAdmin).Get("/admin/api/v1/providers/{id}/invocation-targets", r.listAdminInvocationTargets)
+	router.With(r.requireAdmin).Get("/admin/api/v1/providers/{id}/invocation-targets/*", r.resolveAdminInvocationTarget)
 	router.With(r.requireAdminMutation).Put("/admin/api/v1/providers/{id}", r.updateAdminProvider)
 	router.With(r.requireAdminMutation).Delete("/admin/api/v1/providers/{id}", r.deleteAdminProvider)
 	router.With(r.requireAdminMutation).Post("/admin/api/v1/providers/{id}/test", r.testAdminProvider)

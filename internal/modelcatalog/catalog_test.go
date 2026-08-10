@@ -310,6 +310,17 @@ func TestMergeWithNoClaimsIsUnknown(t *testing.T) {
 	}
 }
 
+func TestCatalogKeyEncodingHasNoCrossFieldCollision(t *testing.T) {
+	left := Key{ProviderType: domain.ProviderOpenAI, Profile: domain.ProfileOpenAIChatEmbeddings, TargetKind: domain.TargetModelID, Model: "ab", Region: "c"}
+	right := Key{ProviderType: domain.ProviderOpenAI, Profile: domain.ProfileOpenAIChatEmbeddings, TargetKind: domain.TargetModelID, Model: "a", Region: "bc"}
+	if left.canonical() == right.canonical() {
+		t.Fatal("length-prefixed catalog identities collided")
+	}
+	if err := (Key{ProviderType: domain.ProviderOpenAI, Profile: domain.ProfileOpenAIChatEmbeddings, TargetKind: domain.TargetModelID, Model: "a\x00b", Region: "c"}).Validate(); err == nil {
+		t.Fatal("control character in catalog identity was accepted")
+	}
+}
+
 func TestMergeTakesTheNarrowerLimit(t *testing.T) {
 	key := Key{ProviderType: domain.ProviderBedrock, Profile: domain.ProfileBedrockInvokeTitanEmbedV2, Model: "amazon.titan-embed-text-v2:0"}
 	entry := Merge(key,
@@ -367,6 +378,33 @@ func TestKeyRejectsUnregisteredOrMismatchedProfile(t *testing.T) {
 	}
 }
 
+func TestKeyRejectsProviderProfileTargetKindMismatch(t *testing.T) {
+	tests := []Key{
+		{ProviderType: domain.ProviderOpenAI, Profile: domain.ProfileOpenAIChatEmbeddings, TargetKind: domain.TargetBedrockInferenceProfile, Model: "gpt"},
+		{ProviderType: domain.ProviderAzureOpenAI, Profile: domain.ProfileAzureChatEmbeddings, TargetKind: domain.TargetModelID, Model: "deployment"},
+		{ProviderType: domain.ProviderBedrock, Profile: domain.ProfileBedrockInvokeTitanEmbedV2, TargetKind: domain.TargetBedrockProvisionedThroughput, Model: "provisioned-target"},
+		{ProviderType: domain.ProviderBedrock, Profile: domain.ProfileBedrockMantleOpenAIChat, TargetKind: domain.TargetBedrockFoundationModel, Model: "model"},
+	}
+	for _, key := range tests {
+		if err := key.Validate(); err == nil || !strings.Contains(err.Error(), "incompatible with profile") {
+			t.Fatalf("invalid provider/profile/target-kind identity accepted: %#v err=%v", key, err)
+		}
+	}
+}
+
+func TestBedrockConverseAcceptsEachSupportedTargetKind(t *testing.T) {
+	for _, kind := range []domain.DeploymentTargetKind{
+		domain.TargetBedrockFoundationModel,
+		domain.TargetBedrockInferenceProfile,
+		domain.TargetBedrockProvisionedThroughput,
+	} {
+		key := Key{ProviderType: domain.ProviderBedrock, Profile: domain.ProfileBedrockConverseText, TargetKind: kind, Model: "exact-target"}
+		if err := key.Validate(); err != nil {
+			t.Fatalf("supported converse target kind %q rejected: %v", kind, err)
+		}
+	}
+}
+
 func TestNewRejectsDuplicateAndEmptyEntries(t *testing.T) {
 	entry := Builtin().Entries()[0]
 	if _, err := New(entry, entry); err == nil {
@@ -376,6 +414,21 @@ func TestNewRejectsDuplicateAndEmptyEntries(t *testing.T) {
 	empty.Capabilities = domain.ProviderCapabilities{}
 	if _, err := New(empty); err == nil {
 		t.Fatal("entry without a core operation accepted")
+	}
+}
+
+func TestNewNormalizesOmittedTargetKindToReachableExactIdentity(t *testing.T) {
+	key := Key{ProviderType: domain.ProviderOpenAI, Profile: domain.ProfileOpenAIChatEmbeddings, Model: "internal-shorthand"}
+	catalog, err := New(Entry{
+		Key: key, Status: StatusKnown, Source: SourceBuiltin,
+		Capabilities: domain.ProviderCapabilities{Chat: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, found := catalog.Lookup(key)
+	if !found || entry.Key.TargetKind != domain.TargetModelID {
+		t.Fatalf("normalized entry is unreachable or inexact: found=%v entry=%#v", found, entry)
 	}
 }
 

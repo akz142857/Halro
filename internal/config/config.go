@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -31,6 +32,7 @@ type Config struct {
 	Security       Security       `yaml:"security"`
 	Metrics        Metrics        `yaml:"metrics"`
 	Audit          Audit          `yaml:"audit"`
+	ModelCatalog   ModelCatalog   `yaml:"model_catalog"`
 }
 
 type Server struct {
@@ -120,6 +122,18 @@ type ModelCapabilityDetection struct {
 	ProviderConcurrency int      `yaml:"provider_concurrency"`
 	MaxProviderCalls    int      `yaml:"max_provider_calls"`
 	CreateRPM           int      `yaml:"create_rpm"`
+}
+
+// ModelCatalog governs optional signed background catalog updates. The remote
+// endpoint, host allowlist and signature trust roots are compiled into Halro.
+type ModelCatalog struct {
+	Enabled             bool     `yaml:"enabled"`
+	RefreshInterval     Duration `yaml:"refresh_interval"`
+	PinnedRevision      string   `yaml:"pinned_revision,omitempty"`
+	MaxDownloadBytes    int64    `yaml:"max_download_bytes"`
+	MaxDecodedBytes     int64    `yaml:"max_decoded_bytes"`
+	MaxCompressionRatio int64    `yaml:"max_compression_ratio"`
+	MaxEntries          int      `yaml:"max_entries"`
 }
 
 type Gateway struct {
@@ -485,6 +499,22 @@ func (c *Config) Normalize() error {
 	if c.Admin.ModelCapabilityDetection.CreateRPM == 0 {
 		c.Admin.ModelCapabilityDetection.CreateRPM = defaultDetection.CreateRPM
 	}
+	defaultCatalog := Default().ModelCatalog
+	if c.ModelCatalog.RefreshInterval == 0 {
+		c.ModelCatalog.RefreshInterval = defaultCatalog.RefreshInterval
+	}
+	if c.ModelCatalog.MaxDownloadBytes == 0 {
+		c.ModelCatalog.MaxDownloadBytes = defaultCatalog.MaxDownloadBytes
+	}
+	if c.ModelCatalog.MaxDecodedBytes == 0 {
+		c.ModelCatalog.MaxDecodedBytes = defaultCatalog.MaxDecodedBytes
+	}
+	if c.ModelCatalog.MaxCompressionRatio == 0 {
+		c.ModelCatalog.MaxCompressionRatio = defaultCatalog.MaxCompressionRatio
+	}
+	if c.ModelCatalog.MaxEntries == 0 {
+		c.ModelCatalog.MaxEntries = defaultCatalog.MaxEntries
+	}
 	return nil
 }
 
@@ -499,6 +529,28 @@ func (c Config) Validate(opts LoadOptions) error {
 	problems = append(problems, validateMasterKey(c.Storage.MasterKey)...)
 	if c.Storage.MetadataFile == "" || filepath.Base(c.Storage.MetadataFile) != c.Storage.MetadataFile {
 		problems = append(problems, errors.New("storage.metadata_file must be a file name without path components"))
+	}
+	if c.ModelCatalog.RefreshInterval < Duration(5*time.Minute) || c.ModelCatalog.RefreshInterval > Duration(7*24*time.Hour) {
+		problems = append(problems, errors.New("model_catalog.refresh_interval must be between 5 minutes and 7 days"))
+	}
+	if c.ModelCatalog.MaxDownloadBytes < 4096 || c.ModelCatalog.MaxDownloadBytes > 16<<20 {
+		problems = append(problems, errors.New("model_catalog.max_download_bytes must be between 4096 and 16777216"))
+	}
+	if c.ModelCatalog.MaxDecodedBytes < c.ModelCatalog.MaxDownloadBytes || c.ModelCatalog.MaxDecodedBytes > 64<<20 {
+		problems = append(problems, errors.New("model_catalog.max_decoded_bytes must be at least max_download_bytes and at most 67108864"))
+	}
+	if c.ModelCatalog.MaxCompressionRatio < 1 || c.ModelCatalog.MaxCompressionRatio > 100 {
+		problems = append(problems, errors.New("model_catalog.max_compression_ratio must be between 1 and 100"))
+	}
+	if c.ModelCatalog.MaxEntries < 1 || c.ModelCatalog.MaxEntries > 100000 {
+		problems = append(problems, errors.New("model_catalog.max_entries must be between 1 and 100000"))
+	}
+	if pin := c.ModelCatalog.PinnedRevision; pin != "" {
+		if len(pin) != len("sha256:")+64 || !strings.HasPrefix(pin, "sha256:") {
+			problems = append(problems, errors.New("model_catalog.pinned_revision must be a sha256 digest"))
+		} else if _, err := hex.DecodeString(strings.TrimPrefix(pin, "sha256:")); err != nil {
+			problems = append(problems, errors.New("model_catalog.pinned_revision must be a sha256 digest"))
+		}
 	}
 	if c.TLS.Enabled {
 		if c.TLS.CertFile == "" || c.TLS.KeyFile == "" {

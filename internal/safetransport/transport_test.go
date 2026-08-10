@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"net/http"
 	"net/netip"
 	"strings"
 	"testing"
@@ -104,6 +105,29 @@ func TestAudienceIsCanonical(t *testing.T) {
 	}
 	if audience != "https://api.example.com:443:account=one" {
 		t.Fatalf("unexpected audience: %q", audience)
+	}
+}
+
+func TestClientIgnoresEnvironmentProxyAndRefusesRedirects(t *testing.T) {
+	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:9999")
+	client, err := NewClient(Options{
+		Policy:   Policy{RequireHTTPS: true, AllowedHosts: []string{"api.example.com"}},
+		Resolver: staticResolver{addresses: []netip.Addr{netip.MustParseAddr("203.0.113.10")}},
+		Dialer:   &recordingDialer{}, ConnectTimeout: time.Second, ResponseHeaderTimeout: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok || transport.Proxy != nil {
+		t.Fatalf("SafeTransport must not consult environment proxies: %#v", client.Transport)
+	}
+	request, err := http.NewRequest(http.MethodGet, "https://evil.example/redirect", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.CheckRedirect(request, nil); !errors.Is(err, http.ErrUseLastResponse) {
+		t.Fatalf("redirect policy err=%v", err)
 	}
 }
 

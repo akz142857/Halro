@@ -23,6 +23,7 @@ func catalogueDeployment(t *testing.T) (domain.Deployment, domain.ProviderProfil
 	}
 	deployment := domain.Deployment{
 		ID: "dep", ProviderModel: titanEmbedModel, ProfileID: binding.ProfileID, BindingID: binding.ID,
+		TargetKind:   domain.TargetBedrockFoundationModel,
 		Capabilities: entry.Capabilities,
 		ModelCapabilitySnapshot: domain.ModelCapabilitySnapshot{
 			ProviderModel: titanEmbedModel, ModelRevision: entry.Revision(),
@@ -40,6 +41,62 @@ func TestUnchangedCatalogAndProfileStaysCurrent(t *testing.T) {
 	}
 	if !capabilityReviewAdmitsTraffic(domain.CapabilityReviewCurrent) {
 		t.Fatal("a current deployment was refused traffic")
+	}
+}
+
+func TestCanonicalMappedSnapshotReviewsAgainstSavedCapabilityIdentity(t *testing.T) {
+	entry, found := modelcatalog.Builtin().Lookup(modelcatalog.Key{
+		ProviderType: domain.ProviderOpenAI, Profile: domain.ProfileOpenAIChatEmbeddings,
+		TargetKind: domain.TargetModelID, Model: "gpt-5",
+	})
+	if !found {
+		t.Fatal("canonical OpenAI fixture is missing")
+	}
+	binding := domain.ProviderProfileBinding{
+		ID: "azure-binding", ProfileID: domain.ProfileAzureChatEmbeddings,
+		Capabilities: domain.DefaultProviderCapabilitiesForProfile(domain.ProviderAzureOpenAI, domain.ProfileAzureChatEmbeddings),
+	}
+	capabilities := modelcatalog.Clamp(entry.Capabilities, binding.Capabilities)
+	deployment := domain.Deployment{
+		ProviderModel: "prod-chat", TargetKind: domain.TargetAzureDeployment,
+		ProfileID: binding.ProfileID, BindingID: binding.ID, Capabilities: capabilities,
+		ModelCapabilitySnapshot: domain.ModelCapabilitySnapshot{
+			ProviderModel: "prod-chat", CanonicalModelRef: "gpt-5", ModelRevision: entry.Revision(),
+			Source: string(modelcatalog.SourceOperatorDeclared), Status: string(modelcatalog.StatusPartial),
+			CapturedAt: time.Now().UTC(), Capabilities: capabilities,
+		},
+	}
+	review := reviewCapabilitiesWithCatalogState(deployment, binding, domain.ProviderAzureOpenAI, modelcatalog.Builtin(), false)
+	if review.State != domain.CapabilityReviewCurrent {
+		t.Fatalf("unchanged canonical mapping review=%#v", review)
+	}
+}
+
+func TestCompatibleMappedSnapshotReviewsAgainstSavedCapabilityIdentity(t *testing.T) {
+	entry, found := modelcatalog.Builtin().Lookup(modelcatalog.Key{
+		ProviderType: domain.ProviderOpenAICompatible, Profile: domain.ProfileOpenAICompatible,
+		TargetKind: domain.TargetCustomEndpointModel, Model: "gpt-5",
+	})
+	if !found {
+		t.Fatal("canonical compatible fixture is missing")
+	}
+	binding := domain.ProviderProfileBinding{
+		ID: "compatible-binding", ProfileID: domain.ProfileOpenAICompatible,
+		Capabilities: domain.DefaultProviderCapabilitiesForProfile(domain.ProviderOpenAICompatible, domain.ProfileOpenAICompatible),
+	}
+	capabilities := modelcatalog.Clamp(entry.Capabilities, binding.Capabilities)
+	deployment := domain.Deployment{
+		ProviderModel: "tenant-alias", TargetKind: domain.TargetCustomEndpointModel,
+		ProfileID: binding.ProfileID, BindingID: binding.ID, Capabilities: capabilities,
+		ModelCapabilitySnapshot: domain.ModelCapabilitySnapshot{
+			ProviderModel: "tenant-alias", CanonicalModelRef: "gpt-5", ModelRevision: entry.Revision(),
+			Source: string(modelcatalog.SourceOperatorDeclared), Status: string(modelcatalog.StatusPartial),
+			CapturedAt: time.Now().UTC(), Capabilities: capabilities,
+		},
+	}
+	review := reviewCapabilitiesWithCatalogState(deployment, binding, domain.ProviderOpenAICompatible, modelcatalog.Builtin(), false)
+	if review.State != domain.CapabilityReviewCurrent {
+		t.Fatalf("unchanged compatible mapping review=%#v", review)
 	}
 }
 
@@ -154,6 +211,39 @@ func TestCatalogGrowingUnderADeclarationIsReviewableNotDrift(t *testing.T) {
 	}
 	if !capabilityReviewAdmitsTraffic(review.State) {
 		t.Fatal("a catalog entry arriving stopped traffic on a working deployment")
+	}
+}
+
+func TestSignedSnapshotKeepsServingWhenDerivedCatalogIsUnavailable(t *testing.T) {
+	deployment, binding := catalogueDeployment(t)
+	deployment.ModelCapabilitySnapshot.Source = string(modelcatalog.SourceSignedCatalog)
+	review := reviewCapabilitiesWithCatalogState(deployment, binding, domain.ProviderBedrock, modelcatalog.Builtin(), true)
+	if review.State != domain.CapabilityReviewCatalogUnavailable || review.Reason != reviewReasonCatalogUnavailable {
+		t.Fatalf("review=%#v", review)
+	}
+	if !capabilityReviewAdmitsTraffic(review.State) {
+		t.Fatal("catalog outage stopped traffic backed by an immutable signed snapshot")
+	}
+}
+
+func TestSignedRevocationMakesItsOwnSavedSnapshotDrift(t *testing.T) {
+	deployment, binding := catalogueDeployment(t)
+	entry, found := modelcatalog.Builtin().Lookup(modelcatalog.Key{ProviderType: domain.ProviderBedrock, Profile: binding.ProfileID, TargetKind: deployment.TargetKind, Model: deployment.ProviderModel})
+	if !found {
+		t.Fatal("signed revocation fixture is not covered by the builtin catalog")
+	}
+	deployment.ModelCapabilitySnapshot.Source = string(modelcatalog.SourceSignedCatalog)
+	deployment.ModelCapabilitySnapshot.ModelRevision = entry.Revision()
+	catalog, err := modelcatalog.MergeSnapshots(modelcatalog.Snapshot{Entries: []modelcatalog.SnapshotEntry{{
+		ProviderType: entry.Key.ProviderType, ProfileID: entry.Key.Profile, TargetKind: deployment.TargetKind,
+		Model: entry.Key.Model, Region: entry.Key.Region, Revoked: true,
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	review := reviewCapabilitiesWithCatalogState(deployment, binding, domain.ProviderBedrock, catalog, false)
+	if review.State != domain.CapabilityReviewDrifted || review.Reason != reviewReasonCatalogDropped {
+		t.Fatalf("signed revocation review=%#v", review)
 	}
 }
 

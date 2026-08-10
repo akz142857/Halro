@@ -88,7 +88,7 @@ func pinnedBedrockProfiles() []Entry {
 }
 
 func pinnedProfileEntry(providerType domain.ProviderType, profile domain.ProviderProfileID, model string) Entry {
-	key := Key{ProviderType: providerType, Profile: profile, Model: model}
+	key := Key{ProviderType: providerType, Profile: profile, TargetKind: defaultTargetKind(providerType, profile), Model: model}
 	return Entry{
 		Key:          key,
 		Status:       StatusKnown,
@@ -116,7 +116,7 @@ func pinnedProfileEntry(providerType domain.ProviderType, profile domain.Provide
 func builtinEntry(providerType domain.ProviderType, profile domain.ProviderProfileID, model string,
 	capabilities domain.ProviderCapabilities) Entry {
 	return Entry{
-		Key:          Key{ProviderType: providerType, Profile: profile, Model: model},
+		Key:          Key{ProviderType: providerType, Profile: profile, TargetKind: defaultTargetKind(providerType, profile), Model: model},
 		Status:       StatusKnown,
 		Source:       SourceBuiltin,
 		Capabilities: capabilities,

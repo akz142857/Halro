@@ -65,6 +65,172 @@ func (adapter *Adapter) Type() string                        { return adapter.pr
 func (adapter *Adapter) Capabilities() provider.Capabilities { return adapter.capabilities }
 func (adapter *Adapter) Close()                              { adapter.authorizer.Close(); adapter.client.CloseIdleConnections() }
 
+func (adapter *Adapter) InvocationTargetDiscovery() domain.InvocationTargetDiscoveryCapabilities {
+	canEnumerate := adapter.messagesPath == "" && adapter.providerType == string(domain.ProviderAnthropic)
+	return domain.InvocationTargetDiscoveryCapabilities{
+		TargetKinds:  []domain.DeploymentTargetKind{domain.TargetModelID},
+		CanEnumerate: canEnumerate, CanDescribe: canEnumerate, CanVerify: true,
+	}
+}
+
+type anthropicModelDescriptor struct {
+	ID              string                     `json:"id"`
+	DisplayName     string                     `json:"display_name"`
+	Capabilities    map[string]json.RawMessage `json:"capabilities"`
+	MaxInputTokens  int64                      `json:"max_input_tokens"`
+	MaxOutputTokens int64                      `json:"max_output_tokens"`
+}
+
+func (adapter *Adapter) ListInvocationTargets(ctx context.Context, query domain.TargetQuery) ([]domain.InvocationTargetDescriptor, error) {
+	if !adapter.InvocationTargetDiscovery().CanEnumerate {
+		return nil, &provider.Error{Class: provider.ErrorBadRequest, Message: "this Anthropic-compatible profile has no model catalog"}
+	}
+	var targets []domain.InvocationTargetDescriptor
+	afterID := ""
+	for page := 0; page < 20; page++ {
+		endpoint := *adapter.endpoint
+		endpoint.Path = strings.TrimRight(endpoint.Path, "/")
+		if !strings.HasSuffix(endpoint.Path, "/v1") {
+			endpoint.Path += "/v1"
+		}
+		endpoint.Path += "/models"
+		values := endpoint.Query()
+		values.Set("limit", "1000")
+		if afterID != "" {
+			values.Set("after_id", afterID)
+		}
+		endpoint.RawQuery = values.Encode()
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+		if err != nil {
+			return nil, badRequest("create Anthropic model catalog request", err)
+		}
+		if err := adapter.authorizer.Authorize(request, nil); err != nil {
+			return nil, &provider.Error{Class: provider.ErrorAuthentication, Message: "authorize Anthropic model catalog request", Cause: err}
+		}
+		request.Header.Set("anthropic-version", anthropicapi.SupportedVersion)
+		request.Header.Set("accept", "application/json")
+		response, err := adapter.client.Do(request)
+		if err != nil {
+			return nil, transportError(err)
+		}
+		var catalog struct {
+			Data    []anthropicModelDescriptor `json:"data"`
+			HasMore bool                       `json:"has_more"`
+			LastID  string                     `json:"last_id"`
+		}
+		func() {
+			defer response.Body.Close()
+			if response.StatusCode < 200 || response.StatusCode >= 300 {
+				err = decodeHTTPError(response)
+				return
+			}
+			payload, readErr := readLimited(response.Body, maxResponseBytes)
+			if readErr != nil {
+				err = malformed("read Anthropic model catalog response", readErr)
+				return
+			}
+			if decodeErr := json.Unmarshal(payload, &catalog); decodeErr != nil {
+				err = malformed("decode Anthropic model catalog response", decodeErr)
+			}
+		}()
+		if err != nil {
+			return nil, err
+		}
+		now := time.Now().UTC()
+		for _, item := range catalog.Data {
+			id := strings.TrimSpace(item.ID)
+			if id == "" || len(id) > 512 {
+				continue
+			}
+			targets = append(targets, domain.InvocationTargetDescriptor{
+				TargetID: id, TargetKind: domain.TargetModelID, DisplayName: firstNonEmpty(strings.TrimSpace(item.DisplayName), id),
+				CanonicalModelRef: id, Lifecycle: domain.TargetLifecycleActive, Availability: domain.AvailabilityAvailable,
+				MetadataSource: domain.MetadataSourceProvider, FetchedAt: now,
+				Metadata: domain.NormalizedModelMetadata{
+					SupportedOperations: allowlistedAnthropicCapabilities(item.Capabilities),
+					MaxContextTokens:    item.MaxInputTokens, MaxOutputTokens: item.MaxOutputTokens,
+				},
+			})
+		}
+		if !catalog.HasMore {
+			return targets, nil
+		}
+		afterID = strings.TrimSpace(catalog.LastID)
+		if afterID == "" {
+			return nil, malformed("Anthropic model catalog omitted pagination cursor", nil)
+		}
+	}
+	return nil, malformed("Anthropic model catalog exceeded page limit", nil)
+}
+
+func (adapter *Adapter) DescribeInvocationTarget(ctx context.Context, target domain.InvocationTargetDescriptor) (domain.InvocationTargetDescriptor, error) {
+	items, err := adapter.ListInvocationTargets(ctx, domain.TargetQuery{TargetKind: target.TargetKind})
+	if err != nil {
+		return domain.InvocationTargetDescriptor{}, err
+	}
+	for _, item := range items {
+		if item.TargetID == strings.TrimSpace(target.TargetID) {
+			return item, nil
+		}
+	}
+	return domain.InvocationTargetDescriptor{}, &provider.Error{Class: provider.ErrorBadRequest, Message: "invocation target was not found"}
+}
+
+func (adapter *Adapter) MapCapabilityClaims(target domain.InvocationTargetDescriptor, scope domain.InvocationTargetScopeKey, observedAt time.Time) []domain.CapabilityClaim {
+	mapping := map[string]string{
+		"messages": "chat", "streaming": "streaming", "tool_use": "tools", "image_input": "vision",
+		"thinking": "reasoning", "structured_outputs": "json_mode",
+	}
+	var claims []domain.CapabilityClaim
+	for _, capability := range target.Metadata.SupportedOperations {
+		capabilityID, ok := mapping[capability]
+		if !ok {
+			continue
+		}
+		claims = append(claims, domain.CapabilityClaim{
+			CapabilityID: capabilityID, Status: domain.ClaimSupported, Evidence: domain.EvidenceDeclared,
+			Source: domain.ClaimSourceProviderMetadata, Scope: scope, ObservedAt: observedAt,
+			Revision: provider.CapabilityClaimRevision(string(domain.ClaimSourceProviderMetadata), target.TargetID, capability),
+		})
+	}
+	return claims
+}
+
+func allowlistedAnthropicCapabilities(input map[string]json.RawMessage) []string {
+	keys := []string{"messages", "streaming", "tool_use", "image_input", "thinking", "structured_outputs"}
+	result := make([]string, 0, len(keys))
+	for _, key := range keys {
+		if capabilityFlag(input[key]) {
+			result = append(result, key)
+		}
+	}
+	return result
+}
+
+func capabilityFlag(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var direct bool
+	if json.Unmarshal(raw, &direct) == nil {
+		return direct
+	}
+	var wrapped struct {
+		Supported bool `json:"supported"`
+		Enabled   bool `json:"enabled"`
+	}
+	return json.Unmarshal(raw, &wrapped) == nil && (wrapped.Supported || wrapped.Enabled)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 func (adapter *Adapter) Probe(ctx context.Context, model string) error {
 	request := anthropicapi.MessageRequest{Model: model, MaxTokens: 1, Messages: []anthropicapi.MessageParam{{Role: "user", Content: anthropicapi.ContentBlocks{{Type: "text", Text: "ping"}}}}}
 	payload, _ := json.Marshal(request)
