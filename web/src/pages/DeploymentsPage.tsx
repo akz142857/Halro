@@ -94,10 +94,11 @@ export function DeploymentsPage() {
             <span className="deployment-result-count" role="status">{t("deployments.resultCount", { visible: filteredDeployments.length, total: deployments.data.items.length })}</span>
           </div>
           {filteredDeployments.length ? (
-            filteredDeployments.map((deployment) => (
+            filteredDeployments.map((deployment, index) => (
               <DeploymentRow
                 key={deployment.id}
                 deployment={deployment}
+                listIndex={index}
                 providerName={providerNames.get(deployment.provider_id) || deployment.provider_id}
                 activeRouteCount={activeRouteCounts.get(deployment.id) ?? 0}
                 onEdit={() => setEditing(deployment)}
@@ -121,12 +122,14 @@ export function DeploymentsPage() {
 
 function DeploymentRow({
   deployment,
+  listIndex,
   providerName,
   activeRouteCount,
   onEdit,
   onReplace,
 }: {
   deployment: Deployment;
+  listIndex: number;
   providerName: string;
   activeRouteCount: number;
   onEdit: () => void;
@@ -139,7 +142,17 @@ function DeploymentRow({
   const [pricing, setPricing] = useState(false);
 	const [confirmingRestore, setConfirmingRestore] = useState(false);
   const queryClient = useQueryClient();
-  const prices = useQuery({ queryKey: ["deployment-prices", deployment.id], queryFn: () => api.deploymentPrices(deployment.id), enabled: expanded });
+  // The collapsed price column is worth having, but a fifty-row page must not
+  // turn into fifty simultaneous price reads — each one runs a lifecycle
+  // derivation server-side. Rows load in bounded batches instead, and an
+  // expanded row jumps its queue because the operator is looking at it.
+  const priceSlotReady = useDeferredSlot(expanded ? 0 : priceFetchDelay(listIndex));
+  const prices = useQuery({
+    queryKey: ["deployment-prices", deployment.id],
+    queryFn: () => api.deploymentPrices(deployment.id),
+    enabled: priceSlotReady,
+    refetchInterval: (query) => scheduledPriceRefreshInterval(query.state.data?.items),
+  });
   const priceItems = prices.data?.items ?? [];
   const activePrice = priceItems.find((price) => price.status === "active");
   const scheduledPrices = priceItems.filter((price) => price.status === "scheduled");
@@ -206,6 +219,36 @@ function DeploymentRow({
             ? <Link className="resource-link" href="/admin/routes">{t("deployments.activeRoutesCompact", { count: activeRouteCount })} →</Link>
             : <strong>{t("deployments.noActiveRoutes")}</strong>}
         </div>
+        <div className="deployment-compact-fact deployment-fact-price">
+          <small>{t("deployments.priceSetting")}</small>
+          {prices.isPending ? (
+            <span className="deployment-price-value">{t("common.loading")}</span>
+          ) : activePrice ? (
+            <button
+              className="deployment-price-link configured"
+              type="button"
+              aria-label={t("deployments.viewDeploymentPrice", { name: deployment.name })}
+              onClick={() => setExpanded(true)}
+            >{t("deployments.priceConfigured")}</button>
+          ) : prices.isError ? (
+            // Without a way back this cell was a dead end: it neither told an
+            // assistive reader that something failed nor offered the one action
+            // that can fix it.
+            <span className="deployment-price-value" role="alert">
+              <span>{t("deployments.priceUnavailable")}</span>
+              <button className="button ghost" type="button" disabled={prices.isFetching} onClick={() => prices.refetch()}>{t("common.retry")}</button>
+            </span>
+          ) : (
+            <button
+              className="deployment-price-link missing"
+              type="button"
+              disabled={readOnly}
+              title={readOnly ? t("navigation.readOnlyAction") : t("deployments.priceRequired")}
+              aria-label={t("deployments.setDeploymentPrice", { name: deployment.name })}
+              onClick={() => setPricing(true)}
+            >{t("deployments.priceNotConfigured")}</button>
+          )}
+        </div>
         <div className="deployment-compact-status">
           <small>{t("deployments.status")}</small>
           <span className={`resource-state ${deployment.enabled ? "enabled" : ""}`}>{deployment.enabled ? t("common.enabled") : t("common.disabled")}</span>
@@ -256,7 +299,15 @@ function DeploymentRow({
           <DeploymentFact label={t("deployments.maxOutput")} value={deployment.capabilities.max_output_tokens || t("deployments.upstreamApplies")} meta={deployment.capabilities.max_output_tokens ? t("deployments.tokens") : t("deployments.undeclared")} />
         </dl>
         <CapabilityReviewNotice review={review} />
-        {deployment.pricing_quarantined && <div className="notice warning deployment-pricing-warning"><strong>{t("deployments.pricingQuarantined")}</strong><span>{deployment.pricing_quarantine_reason}</span><button className="button ghost" onClick={() => setConfirmingRestore(true)}>{t("deployments.confirmRestoredPricing")}</button></div>}
+        {/* Every write in this panel is gated the way the compact row's price
+            action already is; §7.3 also requires the disabled control to say
+            why, so each one carries the reason. */}
+        {deployment.pricing_quarantined && <div className="notice warning deployment-pricing-warning"><strong>{t("deployments.pricingQuarantined")}</strong><span>{deployment.pricing_quarantine_reason}</span><button className="button ghost" disabled={readOnly} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={() => setConfirmingRestore(true)}>{t("deployments.confirmRestoredPricing")}</button></div>}
+        {prices.isError && <ErrorState
+          className="deployment-card-error"
+          error={prices.error}
+          action={<button className="button secondary" type="button" disabled={prices.isFetching} onClick={() => prices.refetch()}>{t("common.retry")}</button>}
+        />}
         <div className="deployment-pricing-grid single">
           <section className="deployment-pricing-panel">
             <header>
@@ -264,19 +315,19 @@ function DeploymentRow({
                 <strong>{t("deployments.priceTimeline")}</strong>
                 <small>{activePrice
                   ? t("deployments.priceSourceSummary", { type: activePrice.source.type, assurance: activePrice.source.assurance, reference: activePrice.source.reference || "—" })
-                  : prices.isPending ? t("common.loading") : t("deployments.noPriceVersions")}</small>
+                  : prices.isError ? t("deployments.priceUnavailable") : prices.isPending ? t("common.loading") : t("deployments.noPriceVersions")}</small>
               </div>
-              <button className="button secondary deployment-pricing-action" onClick={() => setPricing(true)}>{activePrice ? t("deployments.adjustPrice") : t("deployments.setPrice")}</button>
+              <button className="button secondary deployment-pricing-action" disabled={readOnly} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={() => setPricing(true)}>{activePrice ? t("deployments.adjustPrice") : t("deployments.setPrice")}</button>
             </header>
             {!!scheduledPrices.length && <div className="deployment-pricing-list">
               {scheduledPrices.map((price) => <div key={price.id}>
                 <span><code>v{price.version}</code><small>{dateTime(price.effective_from)} · {price.billing_mode}</small></span>
-                <button className="button ghost" disabled={cancelPrice.isPending} onClick={() => cancelPrice.mutate(price)}>{t("common.cancel")}</button>
+                <button className="button ghost" disabled={readOnly || cancelPrice.isPending} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={() => cancelPrice.mutate(price)}>{t("common.cancel")}</button>
               </div>)}
             </div>}
           </section>
         </div>
-        <div className="deployment-capability-summary">
+        <div className="deployment-capability-summary deployment-capability-strip">
           <strong>{t("deployments.capabilityCount", { count: capabilities.length })}</strong>
           <div className="capability-list" aria-label={t("deployments.capabilities")}>
             {capabilities.slice(0, 5).map((capability) => <span className="badge" key={capability}>{t(`capabilities.${capability}`)}</span>)}
@@ -294,7 +345,13 @@ function DeploymentRow({
           </dl>
         </details>
       </div>}
-      {(remove.isError || state.isError) && <ErrorState className="deployment-card-error" error={remove.error || state.error} />}
+      {(remove.isError || state.isError) && <ErrorState
+        className="deployment-card-error"
+        error={remove.error || state.error}
+        action={state.error instanceof ApiError && state.error.code === "deployment_price_unavailable"
+          ? <button className="button secondary" type="button" onClick={() => setPricing(true)}>{t("deployments.setPrice")}</button>
+          : undefined}
+      />}
       {pricing && <PriceVersionForm deployment={deployment} current={activePrice} onClose={() => setPricing(false)} />}
 	  {confirmingRestore && <RestorePricingConfirm deployment={deployment} onClose={() => setConfirmingRestore(false)} />}
     </article>
@@ -411,13 +468,28 @@ function PriceVersionForm({ deployment, current, onClose }: { deployment: Deploy
   const validDetails = validPrice && validEffective && validSource;
   const exampleCost = mode === "free" ? 0 : Number(input) / 1000 + Number(output) / 2000 + Number(fixed);
   const effectiveLabel = effectiveMode === "now" ? t("deployments.effectiveNow") : validEffective ? dateTime(new Date(scheduledTimestamp).toISOString()) : "—";
+  // Someone adjusting a live price is changing what every request costs from
+  // the moment they confirm. The version being replaced belongs on the same
+  // screen as its replacement, or the change is invisible at the only point
+  // where it can still be stopped.
+  const previousPrice = current
+    ? {
+        input: priceInputValue(current.input_micros_per_million),
+        output: priceInputValue(current.output_micros_per_million),
+        fixed: priceInputValue(current.fixed_request_micros_usd),
+      }
+    : undefined;
+  const priceCell = (previous: string | undefined, next: string) =>
+    previous !== undefined && previous !== next ? t("deployments.priceChange", { from: previous, to: next }) : `$${next}`;
   const mutation = useMutation({
     mutationFn: () => api.createDeploymentPrice(deployment.id, {
       billing_mode: mode, currency: "USD",
       input_usd_per_million: mode === "free" ? "0" : input,
       output_usd_per_million: mode === "free" ? "0" : output,
       fixed_request_usd: mode === "free" ? "0" : fixed,
-      effective_from: confirmedEffective,
+      ...(effectiveMode === "now"
+        ? { effective_immediately: true }
+        : { effective_from: confirmedEffective }),
       source: { type: "manual", reference: sourceKind, note: sourceNote.trim(), asserted_without_archive: true },
       current_password: password, totp_code: totp,
     }, idempotencyKey.current),
@@ -431,7 +503,7 @@ function PriceVersionForm({ deployment, current, onClose }: { deployment: Deploy
     event.preventDefault();
     if (step === "details") {
       if (validDetails) {
-        setConfirmedEffective(effectiveMode === "now" ? new Date(Date.now() + 60_000).toISOString() : new Date(scheduledTimestamp).toISOString());
+        setConfirmedEffective(effectiveMode === "now" ? "" : new Date(scheduledTimestamp).toISOString());
         setStep("confirm");
       }
       return;
@@ -485,16 +557,20 @@ function PriceVersionForm({ deployment, current, onClose }: { deployment: Deploy
       </> : <>
         <section className="price-confirm-summary" ref={confirmSummary} tabIndex={-1} aria-live="polite">
           <header><strong>{t("deployments.priceSummary")}</strong><small>{deployment.name} · {deployment.provider_model}</small></header>
+          {current && <p>{t("deployments.currentPriceVersion", { version: current.version })}</p>}
           <dl>
             <div><dt>{t("deployments.billingMode")}</dt><dd>{mode === "free" ? t("deployments.freeLabel") : t("deployments.meteredLabel")}</dd></div>
-            {mode === "metered" && <><div><dt>{t("deployments.inputUSD")}</dt><dd>${input}</dd></div><div><dt>{t("deployments.outputUSD")}</dt><dd>${output}</dd></div><div><dt>{t("deployments.fixedRequestUSD")}</dt><dd>${fixed}</dd></div></>}
+            {mode === "metered" && <><div><dt>{t("deployments.inputUSD")}</dt><dd>{priceCell(previousPrice?.input, input)}</dd></div><div><dt>{t("deployments.outputUSD")}</dt><dd>{priceCell(previousPrice?.output, output)}</dd></div><div><dt>{t("deployments.fixedRequestUSD")}</dt><dd>{priceCell(previousPrice?.fixed, fixed)}</dd></div></>}
             <div><dt>{t("deployments.effectiveFrom")}</dt><dd>{effectiveLabel}</dd></div>
             <div><dt>{t("deployments.priceSourceKind")}</dt><dd>{t(`deployments.sourceKinds.${sourceKind === "official_public_price" ? "officialPublicPrice" : sourceKind === "contract_price" ? "contractPrice" : sourceKind === "internal_cost" ? "internalCost" : "temporaryEstimate"}`)}</dd></div>
             <div><dt>{t("deployments.sourceAssurance")}</dt><dd>{t("deployments.assertedSource")}</dd></div>
           </dl>
           <p>{t("deployments.priceExample", { cost: exampleCost.toFixed(6) })}</p>
         </section>
-        <div className="notice warning"><strong>{t("deployments.priceWillTakeEffect")}</strong><span>{t("deployments.immutablePriceWarning")}</span></div>
+        {/* A version that is already effective when it is written can never
+            satisfy the cancellation rule (cancelled_at < effective_from), so
+            "immediately" also means "only a later version can undo this". */}
+        <div className="notice warning"><strong>{t("deployments.priceWillTakeEffect")}</strong><span>{t("deployments.immutablePriceWarning")}</span>{effectiveMode === "now" && <span>{t("deployments.immediateNotCancellable")}</span>}</div>
         <Field label={t("usage.currentPassword")}><input type="password" autoComplete="current-password" required value={password} onChange={(event) => setPassword(event.target.value)} /></Field>
         <Field label={t("usage.totpOptional")}><input inputMode="numeric" autoComplete="one-time-code" value={totp} onChange={(event) => setTotp(event.target.value)} /></Field>
         {mutation.isError && <ErrorState error={mutation.error} />}
@@ -515,6 +591,48 @@ function priceInputValue(micros: number) {
 
 export function localDateTimeValue(date: Date) {
   return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+}
+
+// A scheduled version whose effective time has already passed by this client's
+// clock, while the server still calls it scheduled, is the normal case for a
+// browser running slightly ahead or a tab that just woke up. Filtering those
+// out and returning false stopped polling for good and froze the row on
+// "scheduled", so they get a short retry instead.
+export const OVERDUE_SCHEDULED_PRICE_REFRESH_MS = 15_000;
+
+export function scheduledPriceRefreshInterval(prices: DeploymentPriceVersion[] | undefined, now = Date.now()): number | false {
+  const scheduled = (prices ?? [])
+    .filter((price) => price.status === "scheduled")
+    .map((price) => Date.parse(price.effective_from))
+    .filter((effective) => Number.isFinite(effective));
+  if (!scheduled.length) return false;
+  const nextEffective = scheduled.filter((effective) => effective > now).sort((left, right) => left - right)[0];
+  if (nextEffective === undefined) return OVERDUE_SCHEDULED_PRICE_REFRESH_MS;
+  // Wake just after the server-side boundary. Cap long schedules at one day so
+  // clock corrections and resumed browser tabs eventually reconcile as well.
+  return Math.min(Math.max(nextEffective - now + 250, 1_000), 24 * 60 * 60 * 1_000);
+}
+
+// Rows load their price in batches so opening the page costs a bounded number
+// of concurrent reads rather than one per deployment.
+export const PRICE_FETCH_BATCH_SIZE = 10;
+export const PRICE_FETCH_BATCH_DELAY_MS = 300;
+
+export function priceFetchDelay(listIndex: number): number {
+  return Math.floor(Math.max(listIndex, 0) / PRICE_FETCH_BATCH_SIZE) * PRICE_FETCH_BATCH_DELAY_MS;
+}
+
+function useDeferredSlot(delayMillis: number): boolean {
+  const [ready, setReady] = useState(delayMillis <= 0);
+  useEffect(() => {
+    if (delayMillis <= 0) {
+      setReady(true);
+      return;
+    }
+    const timer = setTimeout(() => setReady(true), delayMillis);
+    return () => clearTimeout(timer);
+  }, [delayMillis]);
+  return ready;
 }
 
 function evidenceSummary(evidence: Record<string, string>) {
@@ -570,6 +688,9 @@ function DeploymentForm({
   const [providerID, setProviderID] = useState(source?.provider_id ?? enabledProviders[0]?.id ?? "");
   const [providerModel, setProviderModel] = useState(source?.provider_model ?? "");
   const [bindingID, setBindingID] = useState(source?.binding_id ?? "");
+  // The interface the operator picked for capability detection, before any
+  // variant or detection result has pinned one.
+  const [detectionBinding, setDetectionBinding] = useState(source?.binding_id ?? "");
   // A new deployment starts with nothing enabled. Prefilling from the provider
   // ceiling was the habit that let a deployment claim capabilities its model
   // does not have; capabilities now arrive from the catalog or from a
@@ -591,7 +712,16 @@ function DeploymentForm({
   const selectedProvider = enabledProviders.find((item) => item.id === providerID);
   const selectableBindings = providerBindings(selectedProvider);
   const pinnedBinding = selectableBindings.find((item) => item.id === bindingID);
-  const detectionBindingID = pinnedBinding?.id ?? "";
+  // Detection pins the interface it ran on, and the deployment's target
+  // identity is immutable afterwards, so silently taking bindings[0] when the
+  // provider has several enabled interfaces means the wrong choice can only be
+  // undone by rebuilding the deployment. One interface needs no question; more
+  // than one has to be asked.
+  const detectionBindingChoiceRequired = selectableBindings.length > 1;
+  const detectionBindingID = pinnedBinding?.id
+    ?? (detectionBindingChoiceRequired
+      ? selectableBindings.find((item) => item.id === detectionBinding)?.id ?? ""
+      : selectableBindings[0]?.id ?? "");
   const identityLocked = Boolean(current);
   const targetCatalogKey = ["provider-invocation-targets", providerID] as const;
   const targetCatalog = useQuery({
@@ -626,7 +756,6 @@ function DeploymentForm({
       : targetResolution.data ?? null;
   const declaredModel = !current && providerModel.trim() !== "" && resolvedTarget?.resolution_state === "unknown";
   const noVariant = !current && providerModel.trim() !== "" && resolvedTarget?.resolution_state === "no_variant";
-  const detectionBindingRequired = declaredModel && selectableBindings.length > 1;
   useEffect(() => {
     if (current || manualDeclaration || capabilityDetection) return;
     const variants = resolvedTarget?.variants ?? [];
@@ -781,7 +910,17 @@ function DeploymentForm({
     : bindingCeiling;
   const configurableCapabilityNames = deploymentCapabilityNames.filter((name) => capabilityCeiling[name] || capabilities[name]);
   const targetLabel = t(`deployments.targetLabels.${targetKind}`);
-  const modelCatalogSupported = Boolean(!identityLocked && targetCatalog.data?.discovery.can_enumerate);
+  const modelCatalogEnumerable = Boolean(!identityLocked && targetCatalog.data?.discovery.can_enumerate);
+  const modelCatalogLoading = targetCatalog.isPending || refreshTargetCatalog.isPending;
+  // One flag drives every catalog affordance. Splitting the combobox from the
+  // refresh button gave a provider that cannot enumerate a dropdown arrow and a
+  // refresh control while the catalog was loading or had failed, and both led
+  // nowhere. A provider whose discovery says it cannot enumerate gets neither.
+  const showModelCatalogControls = Boolean(
+    !identityLocked
+    && providerID
+    && (modelCatalogEnumerable || targetCatalog.isPending || targetCatalog.isError || refreshTargetCatalog.isPending || refreshTargetCatalog.isError),
+  );
   const capabilityModelSupported = Boolean(!identityLocked && targetCatalog.data?.discovery.requires_canonical_model_mapping);
   const modelPickerRef = useRef<HTMLDivElement>(null);
   const modelOptionsRef = useRef<HTMLDivElement>(null);
@@ -821,7 +960,7 @@ function DeploymentForm({
     setActiveModelIndex(-1);
   };
   const handleModelPickerKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (!modelCatalogSupported) return;
+    if (!showModelCatalogControls) return;
     if (event.key === "ArrowDown") {
       event.preventDefault();
       event.stopPropagation();
@@ -846,20 +985,35 @@ function DeploymentForm({
     }
   };
   const selectedCapabilityNames = deploymentCapabilityNames.filter((name) => capabilities[name]);
-  const modelResolutionMessage = declaredModel
-    ? t("deployments.modelDeclarationRequired")
-    : canonicalModelRef
-      ? t("deployments.capabilityModelApplied")
-      : resolvedTarget?.resolution_state === "resolved"
-        ? t("deployments.modelResolvedCapabilities")
-        : "";
+  const modelResolutionMessage = canonicalModelRef
+    ? t("deployments.capabilityModelApplied")
+    : "";
   const regional = selectedProvider?.access_surface === "bedrock-runtime" || selectedProvider?.access_surface === "bedrock-agent-runtime";
   const fixedPriced = capabilities.moderations || capabilities.images || capabilities.transcriptions || capabilities.speech || capabilities.files || capabilities.batches || capabilities.rerank || capabilities.async_generate;
   const anyOperation = capabilities.chat || capabilities.embeddings || fixedPriced;
   const numericValues = [maxConcurrency, capabilities.max_context_tokens, capabilities.max_output_tokens];
   const tokenLimitsValid = capabilities.max_context_tokens === 0 || capabilities.max_output_tokens <= capabilities.max_context_tokens;
   const resolutionReady = Boolean(current || selectedVariant || detection?.status === "completed" && anyOperation || manualDeclaration && bindingID);
-  const formValid = Boolean(name.trim() && providerID && providerModel.trim() && resolutionReady && anyOperation && numericValues.every((value) => Number.isFinite(value) && value >= 0) && tokenLimitsValid);
+  const limitsValid = numericValues.every((value) => Number.isFinite(value) && value >= 0) && tokenLimitsValid;
+  // A disabled save button beside a blank margin is the same as no button at
+  // all: seven separate conditions collapse into one boolean, and the operator
+  // is left guessing which of them is unmet. Name each one that still is.
+  const saveBlockers: string[] = [];
+  if (!name.trim()) saveBlockers.push("name");
+  if (!providerID || !providerModel.trim()) {
+    // Everything downstream of the model is unanswerable until it exists;
+    // listing those too would bury the one step that is actually next.
+    saveBlockers.push("model");
+  } else {
+    if (!resolutionReady) {
+      if (manualDeclaration && !bindingID) saveBlockers.push("interface");
+      else if (declaredModel && detection?.status !== "completed") saveBlockers.push("detection");
+      else saveBlockers.push("resolution");
+    }
+    if (!anyOperation) saveBlockers.push("operation");
+  }
+  if (!limitsValid) saveBlockers.push("limits");
+  const formValid = saveBlockers.length === 0;
   const dirty = useDirty({ name, providerID, providerModel, canonicalModelRef, bindingID, capabilities, region, maxConcurrency, targetKind });
   return (
     <Modal wide title={current ? t("deployments.edit") : template ? t("deployments.createReplacementTitle") : t("deployments.createTitle")} dirty={dirty} onClose={onClose}>
@@ -878,6 +1032,7 @@ function DeploymentForm({
               setProviderID(next);
               if (enabledProviders.some((item) => item.id === next)) {
                 setBindingID("");
+                setDetectionBinding("");
                 setCapabilities(emptyCapabilities());
                 setSelectedTarget(null);
                 setSelectedVariant(null);
@@ -897,86 +1052,86 @@ function DeploymentForm({
           <div className="deployment-model-picker deployment-model-field" ref={modelPickerRef}>
             <div className="field">
               <label className="deployment-model-label" htmlFor="deployment-provider-model-id">{targetLabel}</label>
-              <div className={`deployment-model-input-shell ${modelPickerOpen ? "open" : ""}`}>
-              <input
-                id="deployment-provider-model-id"
-                required
-                disabled={identityLocked}
-                role={modelCatalogSupported ? "combobox" : undefined}
-                aria-autocomplete={modelCatalogSupported ? "list" : undefined}
-                aria-expanded={modelCatalogSupported ? modelPickerOpen : undefined}
-                aria-controls={modelCatalogSupported ? "deployment-provider-model-options" : undefined}
-                aria-activedescendant={modelPickerOpen && activeModelIndex >= 0 ? `deployment-provider-model-option-${activeModelIndex}` : undefined}
-                value={providerModel}
-                onFocus={() => { if (modelCatalogSupported) setModelPickerOpen(true); }}
-                onClick={() => { if (modelCatalogSupported) setModelPickerOpen(true); }}
-                onChange={(event) => {
-                  resetDetection();
-                  setProviderModel(event.target.value);
-                  setSelectedTarget(null);
-                  setSelectedVariant(null);
-                  setBindingID("");
-                  setCapabilities(emptyCapabilities());
-                  setModelPickerOpen(true);
-                  setActiveModelIndex(-1);
-                }}
-                onKeyDown={handleModelPickerKeyDown}
-              />
-                {modelCatalogSupported && <span className="deployment-model-input-icon" aria-hidden="true" />}
-                {modelCatalogSupported && modelPickerOpen && (
-                  <div className="deployment-model-options" id="deployment-provider-model-options" ref={modelOptionsRef} role="listbox" aria-label={t("deployments.modelCatalogLabel")}>
-                    {visibleModels.length ? visibleModels.map((model, index) => (
-                      <button
-                        className={index === activeModelIndex ? "active" : ""}
-                        id={`deployment-provider-model-option-${index}`}
-                        data-model-index={index}
-                        key={`${model.target_kind}:${model.target_id}`}
-                        role="option"
-                        aria-selected={providerModel === model.target_id}
-                        type="button"
-                        onMouseDown={(event) => event.preventDefault()}
-                        onMouseEnter={() => setActiveModelIndex(index)}
-                        onClick={() => chooseModel(model)}
-                      >
-                        <strong>{model.display_name}</strong>
-                      </button>
-                    )) : (
-                      <div className="deployment-model-empty">{targetCatalog.isPending ? t("deployments.modelCatalogLoading") : t("deployments.noModelMatches")}</div>
-                    )}
-                  </div>
-                )}
+              <div className="deployment-model-input-row">
+                <div className={`deployment-model-input-shell ${modelPickerOpen ? "open" : ""}`}>
+                  <input
+                    id="deployment-provider-model-id"
+                    required
+                    disabled={identityLocked}
+                    role={showModelCatalogControls ? "combobox" : undefined}
+                    aria-autocomplete={showModelCatalogControls ? "list" : undefined}
+                    aria-expanded={showModelCatalogControls ? modelPickerOpen : undefined}
+                    aria-controls={showModelCatalogControls ? "deployment-provider-model-options" : undefined}
+                    aria-activedescendant={modelPickerOpen && activeModelIndex >= 0 ? `deployment-provider-model-option-${activeModelIndex}` : undefined}
+                    value={providerModel}
+                    onFocus={() => { if (showModelCatalogControls) setModelPickerOpen(true); }}
+                    onClick={() => { if (showModelCatalogControls) setModelPickerOpen(true); }}
+                    onChange={(event) => {
+                      resetDetection();
+                      setProviderModel(event.target.value);
+                      setSelectedTarget(null);
+                      setSelectedVariant(null);
+                      setBindingID("");
+                      setCapabilities(emptyCapabilities());
+                      setModelPickerOpen(true);
+                      setActiveModelIndex(-1);
+                    }}
+                    onKeyDown={handleModelPickerKeyDown}
+                  />
+                  {showModelCatalogControls && <span className="deployment-model-input-icon" aria-hidden="true" />}
+                  {showModelCatalogControls && modelPickerOpen && (
+                    <div className="deployment-model-options" id="deployment-provider-model-options" ref={modelOptionsRef} role="listbox" aria-label={t("deployments.modelCatalogLabel")}>
+                      <div className="deployment-model-options-meta" role="presentation">
+                        {targetCatalog.isPending
+                          ? t("deployments.modelCatalogLoading")
+                          : targetCatalog.isError || refreshTargetCatalog.isError
+                            ? t("deployments.modelCatalogUnavailable")
+                            : <>{t("deployments.modelCatalogCountPrefix")} <strong>{targetCatalog.data?.items?.length ?? 0}</strong> {t("deployments.modelCatalogCountSuffix")}</>}
+                      </div>
+                      {visibleModels.length ? visibleModels.map((model, index) => (
+                        <button
+                          className={index === activeModelIndex ? "active" : ""}
+                          id={`deployment-provider-model-option-${index}`}
+                          data-model-index={index}
+                          key={`${model.target_kind}:${model.target_id}`}
+                          role="option"
+                          aria-selected={providerModel === model.target_id}
+                          type="button"
+                          onMouseDown={(event) => event.preventDefault()}
+                          onMouseEnter={() => setActiveModelIndex(index)}
+                          onClick={() => chooseModel(model)}
+                        >
+                          <strong>{model.display_name}</strong>
+                        </button>
+                      )) : (
+                        <div className="deployment-model-empty">{targetCatalog.isPending ? t("deployments.modelCatalogLoading") : t("deployments.noModelMatches")}</div>
+                      )}
+                    </div>
+                  )}
+                </div>
+                {showModelCatalogControls && <button
+                  className="button secondary deployment-model-refresh"
+                  type="button"
+                  disabled={modelCatalogLoading}
+                  aria-busy={modelCatalogLoading}
+                  onClick={() => refreshTargetCatalog.mutate()}
+                >
+                  {modelCatalogLoading && <span className="deployment-model-refresh-spinner" aria-hidden="true" />}
+                  <span>{modelCatalogLoading ? t("deployments.refreshingModels") : t("deployments.refreshModels")}</span>
+                </button>}
               </div>
               <small>{t(`deployments.targetHints.${targetKind}`)}</small>
             </div>
             {!identityLocked && providerModel.trim() !== "" && modelResolutionMessage && (
-              <div className={`deployment-model-declaration ${declaredModel ? "declared" : "catalogued"}`} role="status">
+              <div className="deployment-model-declaration" role="status">
                 {modelResolutionMessage}
               </div>
             )}
-            {modelCatalogSupported && targetCatalog.data?.degraded_bindings?.length ? (
+            {modelCatalogEnumerable && targetCatalog.data?.degraded_bindings?.length ? (
               <div className="deployment-model-degraded" role="status">
                 {t("deployments.modelCatalogPartial", { count: targetCatalog.data.degraded_bindings.length })}
               </div>
             ) : null}
-            {modelCatalogSupported && (
-              <div className="deployment-model-catalog-status" role="status">
-                <span>
-                  {targetCatalog.isPending
-                    ? t("deployments.modelCatalogLoading")
-                    : targetCatalog.isError || refreshTargetCatalog.isError
-                      ? t("deployments.modelCatalogUnavailable")
-                      : <>{t("deployments.modelCatalogCountPrefix")} <strong className="deployment-model-count">{targetCatalog.data?.items?.length ?? 0}</strong> {t("deployments.modelCatalogCountSuffix")}</>}
-                </span>
-                <button
-                  className="button ghost deployment-model-refresh"
-                  type="button"
-                  disabled={targetCatalog.isPending || refreshTargetCatalog.isPending}
-                  onClick={() => refreshTargetCatalog.mutate()}
-                >
-                  {refreshTargetCatalog.isPending ? t("deployments.refreshingModels") : t("deployments.refreshModels")}
-                </button>
-              </div>
-            )}
           </div>
           {capabilityModelSupported && <Field label={t("deployments.capabilityModel")} hint={t("deployments.capabilityModelHint")}>
             <select
@@ -1004,7 +1159,6 @@ function DeploymentForm({
             <header><h3 id="deployment-capabilities-heading">{t("deployments.capabilitySection")}</h3><p>{t("deployments.capabilitySectionDescription")}</p></header>
             {!providerModel.trim() && <div className="deployment-capability-empty">
               <strong>{t("deployments.selectModelFirst")}</strong>
-              <span>{t("deployments.selectModelFirstDescription")}</span>
             </div>}
             {!current && targetResolution.isError && <div className="notice warning">
               <strong>{t("deployments.resolutionUnavailableTitle")}</strong>
@@ -1039,44 +1193,62 @@ function DeploymentForm({
               <p className="capability-advanced-note">{t("deployments.inheritedCapabilitiesHint")}</p>
               <CapabilitySubsetEditor capabilities={capabilities} ceiling={selectedVariant.capabilities} onChange={changeCapabilities} />
             </details>}
-            {!current && detection?.status === "completed" && anyOperation && <CapabilitySummary capabilities={detection.recommended_capabilities} sources={[detection.source]} />}
             {!current && noVariant && <div className="notice warning"><strong>{t("deployments.noVariantTitle")}</strong><span>{t("deployments.noVariantDescription")}</span><Link className="notice-link" href="/admin/providers">{t("deployments.openProviders")}</Link></div>}
             {!current && resolvedTarget?.resolution_state === "conflicting" && <div className="notice warning"><strong>{t("deployments.resolutionConflictTitle")}</strong><span>{t("deployments.resolutionConflictDescription")}</span></div>}
             {!current && declaredModel && !manualDeclaration && (
               <div className="capability-detection-panel" aria-live="polite">
                 {!detection && <>
-                  <div className="notice warning"><strong>{t("deployments.detectionUnknownTitle")}</strong><span>{t("deployments.detectionCostBoundary", { count: 8 })}</span></div>
-                  {detectionBindingRequired && <Field label={t("deployments.binding")} hint={t("deployments.detectionBindingHint")}>
-                    <select value={bindingID} onChange={(event) => {
-                      resetDetection();
-                      detectCapabilities.reset();
-                      setBindingID(event.target.value);
-                      setCapabilities(emptyCapabilities());
-                    }}>
-                      <option value="">{t("deployments.interfaceRequired")}</option>
-                      {selectableBindings.map((binding) => <option value={binding.id} key={binding.id}>{bindingLabel(binding, t)}</option>)}
-                    </select>
-                  </Field>}
-                  <div className="form-actions">
-                    <button type="button" className="button primary" disabled={!providerModel.trim() || !targetCatalog.data?.discovery.can_verify || detectionBindingRequired && !detectionBindingID || detectCapabilities.isPending} onClick={() => detectCapabilities.mutate(selectionRevision)}>{detectCapabilities.isPending ? t("common.working") : t("deployments.confirmAndDetect")}</button>
-                    <button type="button" className="button ghost" onClick={() => { setManualDeclaration(true); setCapabilities(emptyCapabilities()); }}>{t("deployments.advancedManualDeclaration")}</button>
+                  <div className="capability-onboarding-card">
+                    <header>
+                      <div>
+                        <strong>{t("deployments.detectionUnknownTitle")}</strong>
+                        <span>{t("deployments.detectionCostBoundary", { count: 8 })}</span>
+                      </div>
+                      <span className="capability-onboarding-status">{t("deployments.detectionRequired")}</span>
+                    </header>
+                    <div className="capability-onboarding-controls">
+                      {detectionBindingChoiceRequired && <Field label={t("deployments.detectionBindingLabel")} hint={t("deployments.detectionBindingHint")}>
+                        <select value={detectionBindingID} onChange={(event) => setDetectionBinding(event.target.value)}>
+                          <option value="">{t("deployments.interfaceRequired")}</option>
+                          {selectableBindings.map((binding) => <option value={binding.id} key={binding.id}>{bindingLabel(binding, t)}</option>)}
+                        </select>
+                      </Field>}
+                      <div className="form-actions">
+                        <button type="button" className="button ghost" onClick={() => { setManualDeclaration(true); setCapabilities(emptyCapabilities()); }}>{t("deployments.advancedManualDeclaration")}</button>
+                        <button type="button" className="button primary" disabled={!providerModel.trim() || !detectionBindingID || !targetCatalog.data?.discovery.can_verify || detectCapabilities.isPending} onClick={() => detectCapabilities.mutate(selectionRevision)}>{detectCapabilities.isPending ? t("common.working") : t("deployments.confirmAndDetect")}</button>
+                      </div>
+                    </div>
                   </div>
                 </>}
                 {detection && (detection.status === "queued" || detection.status === "running") && <>
                   <div className="notice"><strong>{t("deployments.detectingCapabilities", { completed: Object.values(detection.capabilities).filter((result) => result.status !== "not_probed").length, total: detection.max_provider_calls })}</strong><span>{t("deployments.detectionCancelCost")}</span></div>
                   <button type="button" className="button ghost" disabled={cancelDetection.isPending} onClick={() => cancelDetection.mutate()}>{t("deployments.cancelDetection")}</button>
                 </>}
-                {detection?.status === "completed" && anyOperation && <div className="notice success"><strong>{t("deployments.detectionCompleted", { count: deploymentCapabilityNames.filter((name) => detection.recommended_capabilities[name]).length })}</strong><span>{detection.source === "builtin_catalog" ? t("deployments.detectionCatalogEvidence") : t("deployments.detectionVerifiedEvidence")}</span></div>}
                 {detection?.status === "completed" && !anyOperation && detectionNeedsProviderRepair && <div className="notice warning"><strong>{t("deployments.detectionProviderRepairTitle")}</strong><span>{t("deployments.detectionProviderRepairDescription")}</span><Link className="notice-link" href="/admin/providers">{t("deployments.openProviders")}</Link></div>}
                 {detection?.status === "completed" && !anyOperation && !detectionNeedsProviderRepair && <div className="notice warning"><strong>{t("deployments.detectionInconclusiveTitle")}</strong><span>{t("deployments.detectionInconclusiveDescription")}</span><div className="form-actions"><button type="button" className="button ghost" onClick={() => { resetDetection(); setManualDeclaration(true); }}>{t("deployments.advancedManualDeclaration")}</button></div></div>}
                 {detection && ["failed", "canceled", "interrupted"].includes(detection.status) && <div className="notice warning"><strong>{t(`deployments.detectionStatus.${detection.status}`)}</strong><span>{t("deployments.detectionRetryOrManual")}</span><div className="form-actions"><button type="button" className="button ghost" onClick={() => { resetDetection(); setManualDeclaration(true); }}>{t("deployments.advancedManualDeclaration")}</button></div></div>}
                 {detection && Object.keys(detection.capabilities).length > 0 && <details className="detection-details">
                   <summary>
-                    <span>{t("deployments.detectionResults")}</span>
-                    <strong>{t("deployments.detectionResultCount", {
-                      supported: Object.values(detection.capabilities).filter((result) => result.status === "supported").length,
-                      total: Object.keys(detection.capabilities).length,
-                    })}</strong>
+                    {detection.status === "completed" && anyOperation ? <>
+                      <span className="detection-summary-primary">
+                        <span className="detection-summary-check" aria-hidden="true">✓</span>
+                        <strong>{t("deployments.detectionCompleted", { count: deploymentCapabilityNames.filter((name) => detection.recommended_capabilities[name]).length })}</strong>
+                        <small>{detection.source === "builtin_catalog" ? t("deployments.capabilityEvidenceSources.builtin_catalog") : t("deployments.capabilityEvidenceSources.verified_probe")}</small>
+                      </span>
+                      <span className="detection-summary-detail">
+                        <span>{t("deployments.detectionResults")}</span>
+                        <strong>{t("deployments.detectionResultCount", {
+                          supported: Object.values(detection.capabilities).filter((result) => result.status === "supported").length,
+                          total: Object.keys(detection.capabilities).length,
+                        })}</strong>
+                      </span>
+                    </> : <>
+                      <span>{t("deployments.detectionResults")}</span>
+                      <strong>{t("deployments.detectionResultCount", {
+                        supported: Object.values(detection.capabilities).filter((result) => result.status === "supported").length,
+                        total: Object.keys(detection.capabilities).length,
+                      })}</strong>
+                    </>}
                   </summary>
                   <div className="detection-result-groups">
                     {deploymentCapabilityGroups.map((group) => {
@@ -1085,7 +1257,7 @@ function DeploymentForm({
                       const supported = names.filter((name) => detection.capabilities[name]?.status === "supported").length;
                       return <section className="detection-result-group" aria-labelledby={`detection-group-${group.id}`} key={group.id}>
                         <header>
-                          <div><strong id={`detection-group-${group.id}`}>{t(`deployments.capabilityGroups.${group.id}.title`)}</strong><small>{t(`deployments.capabilityGroups.${group.id}.description`)}</small></div>
+                          <strong id={`detection-group-${group.id}`}>{t(`deployments.capabilityGroups.${group.id}.title`)}</strong>
                           <span>{t("deployments.capabilityGroupSupported", { supported, total: names.length })}</span>
                         </header>
                         <div className="detection-results" data-count={names.length} role="list" aria-label={t(`deployments.capabilityGroups.${group.id}.title`)}>
@@ -1105,9 +1277,9 @@ function DeploymentForm({
                 {(detectCapabilities.isError || detectionQuery.isError || cancelDetection.isError) && <ErrorState error={detectCapabilities.error || detectionQuery.error || cancelDetection.error} />}
               </div>
             )}
-            {providerModel.trim() !== "" && (current || manualDeclaration) && <div className="capability-disclosure capability-advanced">
+            {providerModel.trim() !== "" && (current || manualDeclaration || detection?.status === "completed" && anyOperation) && <div className="capability-disclosure capability-advanced">
               <header>
-                <span>{t("providers.advancedCapabilities")}</span>
+                <span>{t("deployments.enabledCapabilities")}</span>
                 <div className="deployment-capability-header-actions">
                   <strong>{t("providers.selectedCapabilities", { count: selectedCapabilityNames.length })}</strong>
                   {declaredModel && manualDeclaration && <button type="button" className="button ghost deployment-capability-back" onClick={() => setManualDeclaration(false)}>{t("deployments.backToDetectionOptions")}</button>}
@@ -1121,7 +1293,7 @@ function DeploymentForm({
                   const selected = names.filter((name) => capabilities[name]).length;
                   return <section className="deployment-capability-group" aria-labelledby={`capability-group-${group.id}`} key={group.id}>
                     <header>
-                      <div><strong id={`capability-group-${group.id}`}>{t(`deployments.capabilityGroups.${group.id}.title`)}</strong><small>{t(`deployments.capabilityGroups.${group.id}.description`)}</small></div>
+                      <strong id={`capability-group-${group.id}`}>{t(`deployments.capabilityGroups.${group.id}.title`)}</strong>
                       <span>{t("deployments.capabilityGroupSelected", { selected, total: names.length })}</span>
                     </header>
                     <div className="deployment-capabilities capability-grid" data-count={names.length}>
@@ -1168,31 +1340,48 @@ function DeploymentForm({
             )}
           </section>
           <section className="deployment-form-section deployment-limit-section" aria-labelledby="deployment-limits-heading">
-            <header><h3 id="deployment-limits-heading">{t("deployments.limitSection")}</h3><p>{t("deployments.limitSectionDescription")}</p></header>
-            <div className="deployment-limit-grid">
-              <Field label={t("deployments.maxContext")} hint={t("deployments.maxContextHint")}>
-                <input min="0" type="number" value={capabilities.max_context_tokens} onChange={(event) => setCapabilities({ ...capabilities, max_context_tokens: Number(event.target.value) })} />
-              </Field>
-              <Field label={t("deployments.maxOutputTokens")} hint={t("deployments.maxOutputHint")}>
-                <input min="0" type="number" value={capabilities.max_output_tokens} onChange={(event) => setCapabilities({ ...capabilities, max_output_tokens: Number(event.target.value) })} />
-              </Field>
-              <Field label={t("deployments.concurrencyLimit")} hint={t("deployments.concurrencyHint")}><input min="0" type="number" value={maxConcurrency} onChange={(event) => setMaxConcurrency(Number(event.target.value))} /></Field>
+            <header>
+              <div><h3 id="deployment-limits-heading">{t("deployments.limitSection")}</h3><p>{t("deployments.limitSectionDescription")}</p></div>
+            </header>
+            <div>
+              <div className="deployment-limit-grid">
+                {/* "0 is automatic" said nothing about who then enforces the
+                    limit. Zero means the deployment declares nothing and the
+                    upstream ceiling still applies, which is a billing and
+                    throttling fact, so each field states it. */}
+                <Field label={t("deployments.maxContext")} hint={t("deployments.maxContextHint")}>
+                  <input min="0" type="number" value={capabilities.max_context_tokens} onChange={(event) => setCapabilities({ ...capabilities, max_context_tokens: Number(event.target.value) })} />
+                </Field>
+                <Field label={t("deployments.maxOutputTokens")} hint={t("deployments.maxOutputHint")}>
+                  <input min="0" type="number" value={capabilities.max_output_tokens} onChange={(event) => setCapabilities({ ...capabilities, max_output_tokens: Number(event.target.value) })} />
+                </Field>
+                <Field label={t("deployments.concurrencyLimit")} hint={t("deployments.concurrencyHint")}><input min="0" type="number" value={maxConcurrency} onChange={(event) => setMaxConcurrency(Number(event.target.value))} /></Field>
+              </div>
+              {!tokenLimitsValid && <div className="notice warning"><span>{t("deployments.tokenLimitInvalid")}</span></div>}
             </div>
-            {!tokenLimitsValid && <div className="notice warning"><span>{t("deployments.tokenLimitInvalid")}</span></div>}
           </section>
           {widening && <div className="notice warning deployment-capability-expansion">
             <strong>{t("deployments.expansionNeedsRevalidation")}</strong>
             <span>{current?.enabled ? t("deployments.expansionWhileRouted") : t("deployments.expansionSavedDisabled")}</span>
           </div>}
           {impact && <CapabilityImpactNotice impact={impact} />}
+          {/* Saving an existing deployment hot-reloads it; saving a new one
+              cannot enable it. Both consequences belong next to the button that
+              causes them. */}
+          <div className="notice">
+            <strong>{current ? t("deployments.updateLiveWarning") : t("deployments.savedDisabled")}</strong>
+            <span>{current ? t("deployments.updateLiveDescription") : t("deployments.savedDisabledDescription")}</span>
+          </div>
           {mutation.isError && mutation.error instanceof ApiError && mutation.error.code === "resolution_changed"
             ? <div className="notice warning"><strong>{t("deployments.resolutionChangedTitle")}</strong><span>{t("deployments.resolutionChangedDescription")}</span></div>
             : (mutation.isError || preflight.isError) && <ErrorState error={mutation.error || preflight.error} />}
+          {!!saveBlockers.length && <div className="notice" role="status">
+            <strong>{t("deployments.saveBlocked")}</strong>
+            <ul>
+              {saveBlockers.map((blocker) => <li key={blocker}>{t(`deployments.saveBlockers.${blocker}`)}</li>)}
+            </ul>
+          </div>}
           <div className="form-actions deployment-form-actions">
-            <div className="deployment-save-summary">
-              <strong>{current?.enabled ? t("deployments.updateLiveWarning") : t("deployments.savedDisabled")}</strong>
-              <small>{current?.enabled ? t("deployments.updateLiveDescription") : t("deployments.savedDisabledDescription")}</small>
-            </div>
             <button type="button" className="button ghost" onClick={onClose}>{t("common.cancel")}</button>
             <button className={`button ${impact?.blocking ? "danger" : "primary"}`} disabled={mutation.isPending || preflight.isPending || !formValid}>
               {preflight.isPending
@@ -1234,9 +1423,14 @@ function CapabilitySummary({ capabilities, sources }: { capabilities: ProviderCa
   const separator = t("deployments.capabilityListSeparator");
   const sourceSummary = sources.map((source) => t(`deployments.capabilityEvidenceSources.${source}`)).join(separator);
   return <div className="deployment-capability-summary" aria-live="polite">
-    <strong>{t("deployments.capabilityIdentified")}</strong>
-    <span>{t("deployments.capabilityAvailableFor", { capabilities: names.map((name) => t(`capabilities.${name}`)).join(separator) })}</span>
-    {sourceSummary && <small>{t("deployments.capabilityEvidenceSummary", { source: sourceSummary })}</small>}
+    <span className="deployment-capability-summary-icon" aria-hidden="true">✓</span>
+    <div className="deployment-capability-summary-copy">
+      <strong>{t("deployments.capabilityReady", { count: names.length })}</strong>
+      {sourceSummary && <small>{sourceSummary}</small>}
+    </div>
+    <div className="deployment-capability-summary-tags">
+      {names.map((name) => <span key={name}>{t(`capabilities.${name}`)}</span>)}
+    </div>
   </div>;
 }
 

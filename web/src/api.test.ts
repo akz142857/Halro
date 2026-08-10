@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { api, clearSensitiveClientState } from "./api";
+import { ROUTE_PAGE_CEILING, api, clearSensitiveClientState } from "./api";
 
 describe("typed admin API client", () => {
   afterEach(() => {
@@ -58,6 +58,50 @@ describe("typed admin API client", () => {
     // or a retried create would mint a second key whose plaintext is never shown.
     expect(headers.get("Idempotency-Key")).toBe("idem-canary");
     expect(JSON.stringify(calls)).not.toContain("localStorage");
+  });
+
+  it("follows every route page when building a project authorization list", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/routes?limit=100")) {
+        return response({ items: [{ id: "rt_1", public_model: "chat" }], next_cursor: "rt_1" });
+      }
+      if (url.endsWith("/routes?limit=100&cursor=rt_1")) {
+        return response({ items: [{ id: "rt_2", public_model: "embedding" }], next_cursor: "" });
+      }
+      return response({ error: "unexpected request" }, 500);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.allRoutes()).resolves.toEqual([
+      { id: "rt_1", public_model: "chat" },
+      { id: "rt_2", public_model: "embedding" },
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  // The caller turns this list into a project's model authorization set, so a
+  // truncated answer must never be handed back looking complete. A cursor that
+  // repeats used to loop forever.
+  it("fails closed instead of looping when the route cursor stops advancing", async () => {
+    const fetchMock = vi.fn(async () =>
+      response({ items: [{ id: "rt_1", public_model: "chat" }], next_cursor: "stuck" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.allRoutes()).rejects.toMatchObject({ code: "route_listing_incomplete" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails closed instead of paging past the route page ceiling", async () => {
+    let page = 0;
+    const fetchMock = vi.fn(async () => {
+      page += 1;
+      return response({ items: [{ id: `rt_${page}`, public_model: "chat" }], next_cursor: `rt_${page}` });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.allRoutes()).rejects.toMatchObject({ code: "route_listing_incomplete" });
+    expect(fetchMock).toHaveBeenCalledTimes(ROUTE_PAGE_CEILING);
   });
 });
 

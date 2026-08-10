@@ -65,6 +65,15 @@ export interface ApiResult<T> {
   etag: string;
 }
 
+// 100 pages of 100 routes is far beyond any single instance, so reaching it
+// means the cursor is misbehaving rather than that the operator has that many
+// routes.
+export const ROUTE_PAGE_CEILING = 100;
+
+function routeListingIncomplete(reason: string) {
+  return new ApiError(0, reason, "route_listing_incomplete");
+}
+
 async function request<T>(
   path: string,
   init: RequestInit = {},
@@ -390,6 +399,26 @@ export const api = {
   rejectDeploymentPriceProposal: (deploymentID: string, proposalID: string, revision: number) =>
     request<DeploymentPriceProposal>(`/deployments/${encodeURIComponent(deploymentID)}/price-proposals/${encodeURIComponent(proposalID)}/reject`, json("POST"), `"${revision}"`).then((result) => result.data),
   routes: () => request<Page<Route>>("/routes").then((value) => value.data),
+  // The caller builds a project's model authorization list out of this, so a
+  // truncated answer must never look like a complete one. A cursor that stops
+  // advancing, or a listing that outruns the page ceiling, fails closed rather
+  // than returning a prefix the caller cannot tell apart from the whole list.
+  allRoutes: async () => {
+    const items: Route[] = [];
+    const seenCursors = new Set<string>();
+    let cursor = "";
+    for (let page = 0; page < ROUTE_PAGE_CEILING; page++) {
+      const query = new URLSearchParams({ limit: "100", ...(cursor ? { cursor } : {}) });
+      const result = await request<Page<Route>>(`/routes?${query}`).then((value) => value.data);
+      items.push(...(result.items ?? []));
+      const next = result.next_cursor;
+      if (!next) return items;
+      if (seenCursors.has(next)) throw routeListingIncomplete("route listing cursor did not advance");
+      seenCursors.add(next);
+      cursor = next;
+    }
+    throw routeListingIncomplete(`route listing exceeded ${ROUTE_PAGE_CEILING} pages`);
+  },
   createRoute: (value: unknown) => request<Route>("/routes", json("POST", value)),
   updateRoute: (id: string, value: unknown, revision: number) =>
     request<Route>(
