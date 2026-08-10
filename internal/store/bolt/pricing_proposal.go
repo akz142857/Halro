@@ -127,6 +127,33 @@ func (s *Store) ListDeploymentPriceProposals(ctx context.Context, deploymentID s
 	return proposals, err
 }
 
+// GetDeploymentPriceProposal reads one proposal, scoped to the deployment it
+// belongs to so a proposal ID from another deployment reads as absent rather
+// than as someone else's pricing.
+func (s *Store) GetDeploymentPriceProposal(ctx context.Context, deploymentID, proposalID string) (domain.DeploymentPriceProposal, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.DeploymentPriceProposal{}, err
+	}
+	var proposal domain.DeploymentPriceProposal
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		raw := tx.Bucket(bucketDeploymentPriceProposals).Get([]byte(proposalID))
+		if raw == nil {
+			return ErrNotFound
+		}
+		if err := json.Unmarshal(raw, &proposal); err != nil {
+			return err
+		}
+		if proposal.DeploymentID != deploymentID {
+			return ErrNotFound
+		}
+		return nil
+	})
+	if err != nil {
+		return domain.DeploymentPriceProposal{}, err
+	}
+	return proposal, nil
+}
+
 func (s *Store) AdoptDeploymentPriceProposal(ctx context.Context, deploymentID, proposalID, priceID, actor string, effectiveFrom, now time.Time, expectedRevision uint64, intent domain.PricingAuditIntent) (domain.DeploymentPriceProposal, domain.DeploymentPriceVersion, error) {
 	var proposal domain.DeploymentPriceProposal
 	var price domain.DeploymentPriceVersion
@@ -202,7 +229,7 @@ func (s *Store) AdoptDeploymentPriceProposal(ctx context.Context, deploymentID, 
 		}
 		effective := price.EffectiveFrom.UTC()
 		intent.DeploymentID, intent.PriceVersion, intent.EffectiveFrom = price.DeploymentID, price.Version, &effective
-		intent.SourceType, intent.SourceContentSHA256 = price.Source.Type, price.Source.ContentSHA256
+		intent.RecordSource(price.Source)
 		intent.ChangeSummary = fmt.Sprintf("before={proposal:%s} after={price:%s,billing:%s,input:%d,output:%d,fixed:%d}", proposal.ID, price.ID, price.BillingMode, price.InputMicrosPerMillion, price.OutputMicrosPerMillion, price.FixedRequestMicrosUSD)
 		return putPricingAuditIntentTx(tx, intent)
 	})

@@ -40,15 +40,16 @@ type priceSourceInput struct {
 }
 
 type createPriceInput struct {
-	BillingMode         domain.BillingMode `json:"billing_mode"`
-	Currency            string             `json:"currency"`
-	InputUSDPerMillion  string             `json:"input_usd_per_million"`
-	OutputUSDPerMillion string             `json:"output_usd_per_million"`
-	FixedRequestUSD     string             `json:"fixed_request_usd"`
-	EffectiveFrom       time.Time          `json:"effective_from"`
-	Source              priceSourceInput   `json:"source"`
-	CurrentPassword     string             `json:"current_password,omitempty"`
-	TOTPCode            string             `json:"totp_code,omitempty"`
+	BillingMode          domain.BillingMode `json:"billing_mode"`
+	Currency             string             `json:"currency"`
+	InputUSDPerMillion   string             `json:"input_usd_per_million"`
+	OutputUSDPerMillion  string             `json:"output_usd_per_million"`
+	FixedRequestUSD      string             `json:"fixed_request_usd"`
+	EffectiveFrom        time.Time          `json:"effective_from"`
+	EffectiveImmediately bool               `json:"effective_immediately,omitempty"`
+	Source               priceSourceInput   `json:"source"`
+	CurrentPassword      string             `json:"current_password,omitempty"`
+	TOTPCode             string             `json:"totp_code,omitempty"`
 }
 
 type priceVersionView struct {
@@ -111,7 +112,18 @@ func (r *Runtime) createAdminDeploymentPrice(writer http.ResponseWriter, request
 	canonicalRequest := price
 	canonicalRequest.ID, canonicalRequest.CreatedBy, canonicalRequest.CreatedAt = "", "", time.Time{}
 	canonicalRequest.Source.ReceivedAt = time.Time{}
-	intent, err := newPricingAuditIntent("deployment_price.create", price.ID, admin.session.Username, request.Header.Get("X-Request-ID"), canonicalRequest)
+	var canonicalPayload any = canonicalRequest
+	if input.EffectiveImmediately {
+		// The server-selected timestamp must not enter the request digest. A retry
+		// with the same idempotency key represents the same immediate intent even
+		// though it reaches the server at a later wall-clock time.
+		canonicalRequest.EffectiveFrom = time.Time{}
+		canonicalPayload = struct {
+			Price                domain.DeploymentPriceVersion `json:"price"`
+			EffectiveImmediately bool                          `json:"effective_immediately"`
+		}{canonicalRequest, true}
+	}
+	intent, err := newPricingAuditIntent("deployment_price.create", price.ID, admin.session.Username, request.Header.Get("X-Request-ID"), canonicalPayload, &price.Source)
 	if err != nil {
 		adminStoreError(writer)
 		return
@@ -166,7 +178,7 @@ func (r *Runtime) cancelAdminDeploymentPrice(writer http.ResponseWriter, request
 		Revision     uint64    `json:"revision"`
 		CancelledAt  time.Time `json:"cancelled_at"`
 	}{deploymentID, priceID, expected, now}
-	intent, err := newPricingAuditIntent("deployment_price.cancel", priceID, admin.session.Username, request.Header.Get("X-Request-ID"), requestDigest)
+	intent, err := newPricingAuditIntent("deployment_price.cancel", priceID, admin.session.Username, request.Header.Get("X-Request-ID"), requestDigest, nil)
 	if err != nil {
 		adminStoreError(writer)
 		return
@@ -178,7 +190,7 @@ func (r *Runtime) cancelAdminDeploymentPrice(writer http.ResponseWriter, request
 	}
 	effective := currentPrice.EffectiveFrom.UTC()
 	intent.DeploymentID, intent.PriceVersion, intent.EffectiveFrom = deploymentID, currentPrice.Version, &effective
-	intent.SourceType, intent.SourceContentSHA256 = currentPrice.Source.Type, currentPrice.Source.ContentSHA256
+	intent.RecordSource(currentPrice.Source)
 	intent.ChangeSummary = fmt.Sprintf("before={v:%d,status:scheduled,effective:%s} after={v:%d,status:cancelled}", currentPrice.Version, effective.Format(time.RFC3339Nano), currentPrice.Version)
 	r.adminTopologyMu.Lock()
 	defer r.adminTopologyMu.Unlock()
@@ -245,7 +257,7 @@ func (r *Runtime) confirmRestoredDeploymentPricing(writer http.ResponseWriter, r
 	deploymentID := chi.URLParam(request, "id")
 	intent, err := newPricingAuditIntent(
 		"deployment_price.restore_confirm", deploymentID, admin.session.Username,
-		request.Header.Get("X-Request-ID"), map[string]string{"deployment_id": deploymentID},
+		request.Header.Get("X-Request-ID"), map[string]string{"deployment_id": deploymentID}, nil,
 	)
 	if err != nil {
 		adminStoreError(writer)
@@ -357,12 +369,12 @@ func (r *Runtime) createAdminDeploymentPriceProposal(writer http.ResponseWriter,
 		DeploymentID string                   `json:"deployment_id"`
 		Input        createPriceProposalInput `json:"input"`
 	}{deployment.ID, input}
-	intent, err := newPricingAuditIntent("deployment_price.proposal_create", proposal.ID, admin.session.Username, request.Header.Get("X-Request-ID"), canonicalRequest)
+	intent, err := newPricingAuditIntent("deployment_price.proposal_create", proposal.ID, admin.session.Username, request.Header.Get("X-Request-ID"), canonicalRequest, &proposal.Source)
 	if err != nil {
 		adminStoreError(writer)
 		return
 	}
-	intent.DeploymentID, intent.SourceType, intent.SourceContentSHA256 = proposal.DeploymentID, proposal.Source.Type, proposal.Source.ContentSHA256
+	intent.DeploymentID = proposal.DeploymentID
 	intent.ChangeSummary = fmt.Sprintf("proposal=%s match=%s tier=%s billing=%s input=%d output=%d fixed=%d", proposal.ID, proposal.Match, proposal.Tier, proposal.BillingMode, proposal.InputMicrosPerMillion, proposal.OutputMicrosPerMillion, proposal.FixedRequestMicrosUSD)
 	proposal, effectiveIntent, replayed, err := r.store.CreateDeploymentPriceProposal(request.Context(), proposal, intent, keyDigest)
 	if err != nil {
@@ -386,10 +398,11 @@ func (r *Runtime) adoptAdminDeploymentPriceProposal(writer http.ResponseWriter, 
 		return
 	}
 	var input struct {
-		EffectiveFrom   time.Time `json:"effective_from"`
-		Confirm         bool      `json:"confirm"`
-		CurrentPassword string    `json:"current_password"`
-		TOTPCode        string    `json:"totp_code,omitempty"`
+		EffectiveFrom        time.Time `json:"effective_from"`
+		EffectiveImmediately bool      `json:"effective_immediately,omitempty"`
+		Confirm              bool      `json:"confirm"`
+		CurrentPassword      string    `json:"current_password"`
+		TOTPCode             string    `json:"totp_code,omitempty"`
 	}
 	if err := decodeAdminJSON(request, &input); err != nil || !input.Confirm {
 		writePriceError(writer, errors.New("explicit proposal adoption confirmation is required"))
@@ -400,23 +413,44 @@ func (r *Runtime) adoptAdminDeploymentPriceProposal(writer http.ResponseWriter, 
 		return
 	}
 	clear([]byte(input.CurrentPassword))
-	proposalID := chi.URLParam(request, "proposalID")
+	deploymentID, proposalID := chi.URLParam(request, "id"), chi.URLParam(request, "proposalID")
+	now := time.Now().UTC()
+	// Adoption takes effect on the same two terms direct creation does. The
+	// server timestamp is chosen here rather than by the client so "now" cannot
+	// be backdated past an already-effective version.
+	effectiveFrom, err := resolvePriceEffectiveFrom(input.EffectiveFrom, input.EffectiveImmediately, now)
+	if err != nil {
+		writePriceError(writer, err)
+		return
+	}
 	priceID, err := id.New("price")
 	if err != nil {
 		adminStoreError(writer)
 		return
 	}
-	intent, err := newPricingAuditIntent("deployment_price.proposal_adopt", proposalID, admin.session.Username, request.Header.Get("X-Request-ID"), map[string]any{"proposal_id": proposalID, "effective_from": input.EffectiveFrom, "revision": expected})
+	// The adopted price inherits the proposal's source verbatim, so the audit
+	// intent is built from that source and not from the adoption request, which
+	// carries no provenance of its own. The store re-reads it inside the
+	// adoption transaction, which is what finally lands in the record.
+	proposed, err := r.store.GetDeploymentPriceProposal(request.Context(), deploymentID, proposalID)
+	if err != nil {
+		writePriceError(writer, err)
+		return
+	}
+	// The server-selected timestamp stays out of the request digest for the same
+	// reason it does on the create path: "immediately" is the intent, and the
+	// wall clock it lands on is the server's answer to it.
+	intent, err := newPricingAuditIntent("deployment_price.proposal_adopt", proposalID, admin.session.Username, request.Header.Get("X-Request-ID"),
+		map[string]any{"proposal_id": proposalID, "effective_from": input.EffectiveFrom, "effective_immediately": input.EffectiveImmediately, "revision": expected}, &proposed.Source)
 	if err != nil {
 		adminStoreError(writer)
 		return
 	}
-	now := time.Now().UTC()
 	r.adminTopologyMu.Lock()
 	defer r.adminTopologyMu.Unlock()
-	pricingUnlock := r.store.LockDeploymentPricingExclusive(chi.URLParam(request, "id"))
+	pricingUnlock := r.store.LockDeploymentPricingExclusive(deploymentID)
 	defer pricingUnlock()
-	proposal, price, err := r.store.AdoptDeploymentPriceProposal(request.Context(), chi.URLParam(request, "id"), proposalID, priceID, admin.session.Username, input.EffectiveFrom.UTC(), now, expected, intent)
+	proposal, price, err := r.store.AdoptDeploymentPriceProposal(request.Context(), deploymentID, proposalID, priceID, admin.session.Username, effectiveFrom, now, expected, intent)
 	if err != nil {
 		writePriceError(writer, err)
 		return
@@ -439,7 +473,7 @@ func (r *Runtime) rejectAdminDeploymentPriceProposal(writer http.ResponseWriter,
 	}
 	admin := request.Context().Value(adminContextKey{}).(adminRequestContext)
 	proposalID := chi.URLParam(request, "proposalID")
-	intent, err := newPricingAuditIntent("deployment_price.proposal_reject", proposalID, admin.session.Username, request.Header.Get("X-Request-ID"), map[string]any{"proposal_id": proposalID, "revision": expected})
+	intent, err := newPricingAuditIntent("deployment_price.proposal_reject", proposalID, admin.session.Username, request.Header.Get("X-Request-ID"), map[string]any{"proposal_id": proposalID, "revision": expected}, nil)
 	if err != nil {
 		adminStoreError(writer)
 		return
@@ -492,6 +526,31 @@ func deterministicMutationID(prefix, digest string) string {
 	return prefix + "_" + value
 }
 
+var (
+	errPriceEffectiveFromConflict = errors.New("effective_from and effective_immediately are mutually exclusive")
+	errPriceEffectiveFromRequired = errors.New("effective_from or effective_immediately is required")
+)
+
+// resolvePriceEffectiveFrom is the single rule for when a newly established
+// price starts applying, shared by direct creation and proposal adoption.
+//
+// "Immediately" is deliberately the server's clock and not a client-supplied
+// timestamp that happens to be near now: a client-chosen instant can be
+// backdated behind an already-effective version, which would rewrite what past
+// requests were billed at.
+func resolvePriceEffectiveFrom(effectiveFrom time.Time, immediately bool, now time.Time) (time.Time, error) {
+	if immediately {
+		if !effectiveFrom.IsZero() {
+			return time.Time{}, errPriceEffectiveFromConflict
+		}
+		return now.UTC(), nil
+	}
+	if effectiveFrom.IsZero() {
+		return time.Time{}, errPriceEffectiveFromRequired
+	}
+	return effectiveFrom.UTC(), nil
+}
+
 func priceVersionFromInput(priceID, deploymentID, actor string, now time.Time, input createPriceInput) (domain.DeploymentPriceVersion, error) {
 	inputMicros, err := domain.ParseUSDMicros(input.InputUSDPerMillion)
 	if err != nil {
@@ -523,11 +582,15 @@ func priceVersionFromInput(priceID, deploymentID, actor string, now time.Time, i
 		value := input.Source.RetrievedAt.UTC()
 		source.RetrievedAt = &value
 	}
+	effectiveFrom, err := resolvePriceEffectiveFrom(input.EffectiveFrom, input.EffectiveImmediately, now)
+	if err != nil {
+		return domain.DeploymentPriceVersion{}, err
+	}
 	price := domain.DeploymentPriceVersion{
 		ID: priceID, DeploymentID: deploymentID, BillingMode: input.BillingMode,
 		Currency: strings.ToUpper(strings.TrimSpace(input.Currency)), FormulaVersion: domain.PriceFormulaUSDTokensV1,
 		InputMicrosPerMillion: inputMicros, OutputMicrosPerMillion: outputMicros, FixedRequestMicrosUSD: fixedMicros,
-		EffectiveFrom: input.EffectiveFrom.UTC(), Source: source, CreatedBy: actor, CreatedAt: now,
+		EffectiveFrom: effectiveFrom, Source: source, CreatedBy: actor, CreatedAt: now,
 	}
 	validation := price
 	validation.Version, validation.Revision = 1, 1
@@ -537,7 +600,16 @@ func priceVersionFromInput(priceID, deploymentID, actor string, now time.Time, i
 	return price, nil
 }
 
-func newPricingAuditIntent(action, targetID, actor, correlationID string, request any) (domain.PricingAuditIntent, error) {
+// newPricingAuditIntent builds the audit intent for a pricing mutation.
+//
+// `request` is the canonical request payload, and it exists for one purpose: to
+// be hashed into RequestSHA256. Its shape is free to vary with what makes a
+// retry the same request — the immediate-effect creation path, for instance,
+// keeps the server-chosen timestamp out of it. `source` is the separate,
+// mandatory argument for the provenance of a price this action establishes,
+// precisely so that evidence never depends on the digest payload's shape. It is
+// nil for the actions that establish no price of their own.
+func newPricingAuditIntent(action, targetID, actor, correlationID string, request any, source *domain.PriceSource) (domain.PricingAuditIntent, error) {
 	payload, err := json.Marshal(request)
 	if err != nil {
 		return domain.PricingAuditIntent{}, err
@@ -552,15 +624,8 @@ func newPricingAuditIntent(action, targetID, actor, correlationID string, reques
 		TargetType: "deployment_price_version", TargetID: targetID, CorrelationID: correlationID,
 		RequestSHA256: "sha256:" + hex.EncodeToString(digest[:]),
 	}
-	switch value := request.(type) {
-	case domain.DeploymentPriceVersion:
-		intent.DeploymentID, intent.PriceVersion, intent.SourceType = value.DeploymentID, value.Version, value.Source.Type
-		intent.SourceAssurance, intent.SourceReference = value.Source.Assurance, value.Source.Reference
-		intent.SourceWithoutArchive = value.Source.AssertedWithoutArchive
-		intent.SourceContentSHA256 = value.Source.ContentSHA256
-		effective := value.EffectiveFrom.UTC()
-		intent.EffectiveFrom = &effective
-		intent.ChangeSummary = fmt.Sprintf("before=none after={billing:%s,input:%d,output:%d,fixed:%d}", value.BillingMode, value.InputMicrosPerMillion, value.OutputMicrosPerMillion, value.FixedRequestMicrosUSD)
+	if source != nil {
+		intent.RecordSource(*source)
 	}
 	if strings.Contains(action, ".proposal_") {
 		intent.TargetType = "deployment_price_proposal"
@@ -643,6 +708,13 @@ func (r *Runtime) verifyPricingPassword(writer http.ResponseWriter, request *htt
 func writePriceError(writer http.ResponseWriter, err error) {
 	status, code := http.StatusBadRequest, "invalid_price"
 	switch {
+	// These two carry a stable code because the Admin console has to say
+	// something specific about them in the operator's own language; the English
+	// message is a fallback, not the contract.
+	case errors.Is(err, errPriceEffectiveFromConflict):
+		code = "price_effective_from_conflict"
+	case errors.Is(err, errPriceEffectiveFromRequired):
+		code = "price_effective_from_required"
 	case errors.Is(err, boltstore.ErrNotFound):
 		status, code = http.StatusNotFound, "price_version_not_found"
 	case errors.Is(err, boltstore.ErrRevisionConflict):
