@@ -747,10 +747,16 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		defer runtime.backgroundWait.Done()
 		runtime.runProviderResourceMaintenance(backgroundContext)
 	}()
+	// Read the manager here, on the goroutine that installed it, rather than
+	// inside the worker. The field is written once during Open and never again
+	// in production, but reading it from the worker leaves the only unguarded
+	// access to Runtime state after Open returns — enough for the race detector
+	// to fire against anything that reaches in afterwards.
+	catalogWorker := runtime.capabilityResolution.catalog
 	go func() {
 		defer runtime.backgroundWait.Done()
-		if runtime.capabilityResolution.catalog != nil {
-			runtime.capabilityResolution.catalog.Run(backgroundContext)
+		if catalogWorker != nil {
+			catalogWorker.Run(backgroundContext)
 		}
 	}()
 	return runtime, nil
