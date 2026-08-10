@@ -54,6 +54,25 @@ function pageQuery(cursor: string) {
   return `?${new URLSearchParams({ limit: PAGE_SIZE, ...(cursor ? { cursor } : {}) })}`;
 }
 
+function projectUpdateBody(project: Project, enabled: boolean) {
+  return {
+    name: project.name,
+    enabled,
+    allowed_routes: project.allowed_routes ?? [],
+    rpm: project.rpm,
+    tpm: project.tpm,
+    max_concurrency: project.max_concurrency,
+    daily_budget_micros_usd: project.daily_budget_micros_usd,
+    max_input_tokens: project.max_input_tokens,
+    max_output_tokens: project.max_output_tokens,
+    max_request_bytes: project.max_request_bytes,
+    max_stream_duration_seconds: Math.round(project.max_stream_duration / 1_000_000_000),
+    allowed_cidrs: project.allowed_cidrs ?? [],
+    redaction_policy_id: project.redaction_policy_id,
+    token_guard_policy_id: project.token_guard_policy_id,
+  };
+}
+
 export function ProjectsPage() {
   const { t } = useTranslation();
   const readOnly = useIsReadOnly();
@@ -178,6 +197,10 @@ function ProjectDetail({ project }: { project: Project }) {
     mutationFn: (reauth: ReauthValues) => api.deleteProject(project.id, `"${project.revision}"`, reauth),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["projects"] }),
   });
+  const toggleStatus = useMutation({
+    mutationFn: () => api.updateProject(project.id, projectUpdateBody(project, !project.enabled), `"${project.revision}"`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["projects"] }),
+  });
   return (
     <section className="detail-panel">
       <header className="detail-title">
@@ -202,7 +225,21 @@ function ProjectDetail({ project }: { project: Project }) {
             requireStepUp
             onConfirm={(reauth) => unblock.mutateAsync(reauth)}
           />
-          <button className="button ghost" disabled={readOnly} onClick={() => setEditing(true)}>{t("common.edit")}</button>
+          {/* Disabling a project revokes every gateway key under it at once, which
+              is strictly larger than disabling one key — and that already asks.
+              The count comes from the keys actually loaded, so a list still being
+              paged says "at least". */}
+          {project.enabled
+            ? <ConfirmButton
+              className="button secondary"
+              label={t("common.disable")}
+              title={t("projects.disableTitle")}
+              confirmLabel={t(keys.hasNextPage ? "projects.disableConfirmMoreKeys" : "projects.disableConfirm", { name: project.name, count: keyItems.length })}
+              disabled={toggleStatus.isPending}
+              onConfirm={() => toggleStatus.mutateAsync()}
+            />
+            : <button className="button secondary" disabled={readOnly || toggleStatus.isPending} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={() => toggleStatus.mutate()}>{toggleStatus.isPending ? t("common.working") : t("common.enable")}</button>}
+          <button className="button ghost" disabled={readOnly} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={() => setEditing(true)}>{t("common.edit")}</button>
           <ConfirmButton
             label={t("common.delete")}
             confirmLabel={t("projects.deleteConfirm", { name: project.name })}
@@ -243,6 +280,7 @@ function ProjectDetail({ project }: { project: Project }) {
       </details>
       {unblockResult && <div className="notice success"><strong>{unblockResult}</strong></div>}
       {unblock.isError && <ErrorState error={unblock.error} />}
+      {toggleStatus.isError && <ErrorState error={toggleStatus.error} />}
       {remove.isError && <ErrorState error={remove.error} />}
       <header className="section-header">
         <div><p className="eyebrow">{t("projects.credentials")}</p><h3>{t("projects.gatewayKeys")}</h3></div>
@@ -343,22 +381,27 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
     queryFn: api.redactionPolicies,
   });
   const availableRoutes = useQuery({
-    queryKey: ["routes"],
-    queryFn: api.routes,
+    queryKey: ["project-route-aliases"],
+    queryFn: api.allRoutes,
   });
   const routeOptions = useMemo(() => {
-    const options = new Map<string, { enabled: boolean; configured: boolean }>();
-    (current?.allowed_routes ?? []).forEach((value) => options.set(value, { enabled: false, configured: false }));
-    availableRoutes.data?.items.forEach((route) => {
-      const existing = options.get(route.public_model);
-      if (!route.enabled && !existing) return;
-      options.set(route.public_model, { enabled: Boolean(existing?.enabled || route.enabled), configured: true });
+    const retained = new Set(current?.allowed_routes ?? []);
+    const options = new Map<string, { enabledCount: number; strategies: Set<string> }>();
+    retained.forEach((value) => options.set(value, { enabledCount: 0, strategies: new Set() }));
+    availableRoutes.data?.forEach((route) => {
+      const existing = options.get(route.public_model) ?? { enabledCount: 0, strategies: new Set<string>() };
+      if (route.enabled) existing.enabledCount += 1;
+      existing.strategies.add(route.strategy || "ordered");
+      options.set(route.public_model, existing);
     });
-    return Array.from(options, ([value, state]) => ({ value, ...state })).sort((a, b) => a.value.localeCompare(b.value));
-  }, [availableRoutes.data?.items, current?.allowed_routes]);
+    return Array.from(options, ([value, state]) => ({ value, ...state }))
+      .filter((option) => option.enabledCount > 0 || retained.has(option.value))
+      .sort((a, b) => a.value.localeCompare(b.value));
+  }, [availableRoutes.data, current?.allowed_routes]);
   const {
     register,
     handleSubmit,
+    watch,
     formState: { errors, isDirty },
   } = useForm<ProjectInput, unknown, ProjectValue>({
     resolver: zodResolver(schema),
@@ -375,6 +418,8 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
       enabled: current?.enabled ?? true,
     },
   });
+  const selectedRouteAliases = watch("routes") ?? [];
+  const enabled = watch("enabled");
   const mutation = useMutation({
     mutationFn: (value: ProjectValue) => {
       const body = {
@@ -418,12 +463,28 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
           <header><h3 id="project-basics-title">{t("projects.basicInfo")}</h3><p>{t("projects.basicInfoDescription")}</p></header>
           <div className="form-grid">
             <Field label={t("projects.name")} error={errors.name?.message}><input data-modal-initial maxLength={MAX_PROJECT_NAME} {...register("name")} /></Field>
-            <fieldset className="model-picker" aria-describedby="project-model-help">
-              <legend>{t("projects.aliases")}</legend>
+            <div className="model-picker" role="group" aria-labelledby="project-model-title" aria-describedby="project-model-help">
+              <div className="model-picker-heading">
+                <strong id="project-model-title">{t("projects.aliases")}</strong>
+                <span className="model-picker-selection-count">{t("projects.selectedAliases", { count: selectedRouteAliases.length })}</span>
+              </div>
               <p id="project-model-help">{t("projects.aliasesHint")}</p>
-              {availableRoutes.isPending ? <Loading label={t("projects.loadingModels")} /> : routeOptions.length ? <div className="model-option-grid">{routeOptions.map((route) => <label className="model-option" key={route.value}><input type="checkbox" value={route.value} {...register("routes")} /><span><strong>{route.value}</strong>{(!route.configured || !route.enabled) && <small>{t("projects.unavailableModel")}</small>}</span></label>)}</div> : <div className="notice warning"><strong>{t("projects.noConfiguredModels")}</strong><span>{t("projects.noConfiguredModelsDescription")}</span><Link className="notice-link" href="/admin/routes">{t("projects.openRoutes")}</Link></div>}
+              {availableRoutes.isPending ? <Loading label={t("projects.loadingModels")} /> : routeOptions.length ? <div className="route-alias-picker">
+                <div className="model-option-grid">
+                  {routeOptions.map((route) => {
+                    const strategy = route.strategies.size === 1 ? Array.from(route.strategies)[0] : "";
+                    return <label className="model-option" key={route.value}>
+                      <input type="checkbox" value={route.value} {...register("routes")} />
+                      <span>
+                        <strong>{route.value}</strong>
+                        <small className={route.enabledCount ? undefined : "unavailable"}>{route.enabledCount ? t("projects.enabledRouteCount", { count: route.enabledCount }) : t("projects.unavailableAlias")}{strategy && ` · ${strategy === "round_robin" ? t("routes.roundRobin") : t("routes.ordered")}`}</small>
+                      </span>
+                    </label>;
+                  })}
+                </div>
+              </div> : <div className="notice warning"><strong>{t("projects.noConfiguredModels")}</strong><span>{t("projects.noConfiguredModelsDescription")}</span><Link className="notice-link" href="/admin/routes">{t("projects.openRoutes")}</Link></div>}
               {errors.routes?.message && <small className="field-error" role="alert">{errors.routes.message}</small>}
-            </fieldset>
+            </div>
           </div>
         </section>
         <section className="project-form-section" aria-labelledby="project-capacity-title">
@@ -437,7 +498,6 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
         </section>
         <section className="project-form-section" aria-labelledby="project-security-title">
           <header><h3 id="project-security-title">{t("projects.securityControls")}</h3><p>{t("projects.securityControlsDescription")}</p></header>
-          <label className="project-enable-row"><span><strong>{t("projects.enable")}</strong><small>{t("projects.enableDescription")}</small></span><input type="checkbox" {...register("enabled")} /></label>
           <div className="form-grid">
             <Field label={t("projects.tokenGuardPolicy")}><select {...register("tokenGuardPolicyID")}><option value="">{t("projects.noBinding")}</option>{policies.data?.items.filter((policy) => policy.enabled).map((policy) => <option value={policy.id} key={policy.id}>{policy.name} · {policy.action === "temporary_block" ? t("policies.temporaryBlock") : policy.action === "alert" ? t("policies.alert") : t("policies.observe")}</option>)}</select></Field>
             <Field label={t("projects.redactionPolicy")}><select {...register("redactionPolicyID")}><option value="">{t("projects.noBinding")}</option>{redactionPolicies.data?.items.filter((policy) => policy.enabled).map((policy) => <option value={policy.id} key={policy.id}>{policy.name} · {policy.mode === "strict" ? t("redaction.strictBadge") : policy.mode === "bounded_stream" ? t("redaction.boundedBadge") : t("redaction.detectStreamBadge")}</option>)}</select></Field>
@@ -446,6 +506,12 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
         </section>
         {mutation.isError && <ErrorState error={mutation.error} />}
         <div className="form-actions project-form-actions">
+          <div className="project-footer-state">
+            <label className="project-footer-enable">
+              <input type="checkbox" {...register("enabled")} />
+              <span><strong>{t("projects.enable")} · {enabled ? t("common.enabled") : t("common.disabled")}</strong><small>{t("projects.enableDescription")}</small></span>
+            </label>
+          </div>
           <button type="button" className="button ghost" disabled={mutation.isPending} onClick={onClose}>{t("common.cancel")}</button>
           <button className="button primary" disabled={mutation.isPending}>{mutation.isPending ? t("common.working") : current ? t("projects.save") : t("projects.createSubmit")}</button>
         </div>

@@ -71,9 +71,9 @@ export function InstanceLanguageForm({ ui, preferences }: { ui: InstanceUISettin
             <option value="en-US">{t("settings.enUS")}</option>
           </select>
         </Field>
+        <div className="form-actions"><button className="button primary" disabled={readOnly || instanceMutation.isPending || !instanceChanged}>{instanceMutation.isPending ? t("settings.saving") : t("settings.saveInstanceLanguage")}</button></div>
         {instanceMutation.isError && <ErrorState error={instanceMutation.error} />}
         {instanceMutation.isSuccess && <div className="notice success" role="status"><strong>{t("settings.instanceLanguageSaved")}</strong></div>}
-        <div className="form-actions"><button className="button primary" disabled={readOnly || instanceMutation.isPending || !instanceChanged}>{instanceMutation.isPending ? t("settings.saving") : t("settings.saveInstanceLanguage")}</button></div>
       </form>
     </section>
   );

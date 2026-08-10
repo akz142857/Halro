@@ -1,12 +1,54 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { api } from "../api";
+import { ApiError, api } from "../api";
 import { AdminUsersSection } from "./AdminUsersSection";
+import { PoliciesPage } from "./PoliciesPage";
 import { ProjectsPage } from "./ProjectsPage";
+import { RedactionPoliciesSection } from "./RedactionPoliciesSection";
 import { RoutesPage } from "./RoutesPage";
 import { DeploymentsPage } from "./DeploymentsPage";
-import type { AdminRole, Deployment, Project, Provider, Route, Session } from "../types";
+import type { AdminRole, Deployment, DeploymentPriceVersion, Project, Provider, RedactionPolicy, Route, Session, TokenGuardPolicy } from "../types";
+
+// A read-only session that is offered a control the server will refuse learns
+// nothing from the 403. §7.3 also requires a disabled control to say why it is
+// disabled, so every assertion below checks the reason alongside the state.
+const readOnlyReason = "只读账户无法执行此操作。";
+
+function testProject(overrides: Partial<Project> = {}): Project {
+  return {
+    id: "project_a", name: "Alpha", enabled: true, revision: 1, allowed_routes: ["chat"],
+    rpm: 60, tpm: 1000, max_concurrency: 8, daily_budget_micros_usd: 0,
+    max_input_tokens: 0, max_output_tokens: 0, max_request_bytes: 0, max_stream_duration: 0,
+    allowed_cidrs: [], redaction_policy_id: "", token_guard_policy_id: "",
+    created_at: "", updated_at: "", ...overrides,
+  } as Project;
+}
+
+function testTokenGuardPolicy(overrides: Partial<TokenGuardPolicy> = {}): TokenGuardPolicy {
+  return {
+    id: "tgp_a", name: "Guard", enabled: true, action: "alert", revision: 1,
+    request_tokens: 0, tokens_per_minute: 0, cost_micros_per_minute: 0, error_rate: 0,
+    minimum_samples: 0, concurrency: 0, unique_ips_per_minute: 0, violations_before_block: 2,
+    block_ttl_seconds: 300, cooldown_seconds: 60, ewma_enabled: false, ewma_alpha: 0.2,
+    ewma_multiplier: 3, ewma_minimum_samples: 100, ewma_warmup_seconds: 3600,
+    ewma_evaluation_window_seconds: 60, ewma_cooldown_seconds: 300, ewma_absolute_rpm: 60,
+    ewma_absolute_tpm: 50000, ewma_absolute_tokens_per_request: 4000,
+    ewma_absolute_cost_micros_per_minute: 1000000, bound_projects: 1,
+    ...overrides,
+  } as TokenGuardPolicy;
+}
+
+function testRedactionPolicy(overrides: Partial<RedactionPolicy> = {}): RedactionPolicy {
+  return {
+    id: "rdp_a", name: "Redact", enabled: true, mode: "strict", revision: 1, bound_projects: 1,
+    rules: [{
+      id: "rrl_a", name: "Email", kind: "builtin", builtin: "email", scopes: ["inbound"],
+      action: "mask", enabled: true, priority: 10, computed_max_match_bytes: 128,
+    }],
+    ...overrides,
+  } as RedactionPolicy;
+}
 
 function session(role: AdminRole): Session {
   return {
@@ -31,27 +73,69 @@ function renderAs(role: AdminRole, element: React.ReactElement) {
 describe("read-only role", () => {
   afterEach(() => vi.restoreAllMocks());
 
+  // The page reads api.projectsPage; mocking api.projects left the detail panel
+  // unrendered, so the project-level write controls were never under test at all.
   it("offers no write action a read-only session cannot complete", async () => {
-    const project = {
-      id: "project_a", name: "Alpha", enabled: true, revision: 1,
-      created_at: "", updated_at: "",
-    } as Project;
-    vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
+    vi.spyOn(api, "projectsPage").mockResolvedValue({ items: [testProject()], next_cursor: "" });
+    vi.spyOn(api, "keysPage").mockResolvedValue({ items: [], next_cursor: "" } as never);
     renderAs("read_only", <ProjectsPage />);
 
     const create = await screen.findByRole("button", { name: "＋ 新建项目" });
     expect(create).toBeDisabled();
+
+    // Disabling a project revokes every gateway key under it, which is exactly the
+    // kind of control a read-only session must not be offered.
+    const disable = await screen.findByRole("button", { name: "禁用" });
+    expect(disable).toBeDisabled();
+    expect(disable).toHaveAttribute("title", readOnlyReason);
+    expect(screen.getByRole("button", { name: "编辑" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "编辑" })).toHaveAttribute("title", readOnlyReason);
   });
 
   it("leaves the same action available to an administrator", async () => {
-    const project = {
-      id: "project_a", name: "Alpha", enabled: true, revision: 1,
-      created_at: "", updated_at: "",
-    } as Project;
-    vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
+    vi.spyOn(api, "projectsPage").mockResolvedValue({ items: [testProject()], next_cursor: "" });
+    vi.spyOn(api, "keysPage").mockResolvedValue({ items: [], next_cursor: "" } as never);
     renderAs("administrator", <ProjectsPage />);
 
     expect(await screen.findByRole("button", { name: "＋ 新建项目" })).toBeEnabled();
+    expect(await screen.findByRole("button", { name: "禁用" })).toBeEnabled();
+  });
+
+  // The three status switches added with the policy console carried a `readOnly ||`
+  // guard and no test: deleting all three of them at once left the suite green.
+  it("offers no token guard status switch to a read-only session", async () => {
+    vi.spyOn(api, "tokenGuardPoliciesPage").mockResolvedValue({
+      items: [testTokenGuardPolicy(), testTokenGuardPolicy({ id: "tgp_b", name: "Off guard", enabled: false })],
+      next_cursor: "",
+    });
+    vi.spyOn(api, "redactionPoliciesPage").mockResolvedValue({ items: [], next_cursor: "" });
+    renderAs("read_only", <PoliciesPage />);
+
+    await screen.findByText("Off guard");
+    for (const name of ["禁用", "启用", "编辑"]) {
+      for (const control of screen.getAllByRole("button", { name })) {
+        expect(control).toBeDisabled();
+        expect(control).toHaveAttribute("title", readOnlyReason);
+      }
+    }
+    // Reading has to stay unimpeded.
+    expect(screen.getAllByRole("button", { name: "模拟" })[0]).toBeEnabled();
+  });
+
+  it("offers no redaction policy status switch to a read-only session", async () => {
+    renderAs("read_only", <RedactionPoliciesSection policies={[
+      testRedactionPolicy(),
+      testRedactionPolicy({ id: "rdp_b", name: "Off redaction", enabled: false }),
+    ]} />);
+
+    await screen.findByText("Off redaction");
+    for (const name of ["禁用", "启用", "编辑"]) {
+      for (const control of screen.getAllByRole("button", { name })) {
+        expect(control).toBeDisabled();
+        expect(control).toHaveAttribute("title", readOnlyReason);
+      }
+    }
+    expect(screen.getAllByRole("button", { name: "测试" })[0]).toBeEnabled();
   });
 
   // ConfirmButton backs every destructive action in the console, so honouring
@@ -212,19 +296,142 @@ describe("destructive step-up", () => {
     vi.spyOn(api, "providers").mockResolvedValue({ items: [provider], next_cursor: "" });
     vi.spyOn(api, "deployments").mockResolvedValue({ items: [deployment], next_cursor: "" });
     vi.spyOn(api, "routes").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [], next_cursor: "" });
 
     renderAs("read_only", <DeploymentsPage />);
 
     // The test is healthy and current, so nothing but the role should be
     // holding these back.
-    for (const name of ["测试", "启用", "编辑", "＋ 新建模型部署"]) {
+    for (const name of ["测试", "为 GPT 设置价格", "启用", "编辑", "＋ 新建模型部署"]) {
       expect(await screen.findByRole("button", { name })).toBeDisabled();
     }
+    expect(screen.getByText("价格设置")).toBeVisible();
+    expect(screen.getByText("未设置")).toBeVisible();
     fireEvent.click(screen.getByLabelText("更多操作"));
     expect(screen.getByRole("button", { name: "创建替代" })).toBeDisabled();
 
     // A disabled control has to say why it is disabled.
     expect(screen.getByRole("button", { name: "编辑" })).toHaveAttribute(
       "title", "只读账户无法执行此操作。");
+  });
+
+  it("opens price setup directly from a collapsed deployment without a price", async () => {
+    const capabilities = {
+      chat: true, streaming: true, embeddings: false, moderations: false, images: false,
+      transcriptions: false, speech: false, files: false, batches: false, rerank: false,
+      async_generate: false, tools: false, vision: false, json_mode: false,
+      developer_role: false, reasoning: false, stream_usage: false,
+      max_context_tokens: 0, max_output_tokens: 0,
+    };
+    const provider = {
+      id: "provider_openai", name: "OpenAI", type: "openai", enabled: true, capabilities,
+      capability_evidence: {}, revision: 1, created_at: "", updated_at: "",
+    } as Provider;
+    const deployment = {
+      id: "deployment_a", name: "GPT", provider_id: provider.id, provider_model: "gpt-5",
+      capabilities, capability_evidence: {}, enabled: false, revision: 2,
+      last_test_status: "healthy", last_test_revision: 2,
+      created_at: "", updated_at: "",
+    } as Deployment;
+    vi.spyOn(api, "providers").mockResolvedValue({ items: [provider], next_cursor: "" });
+    vi.spyOn(api, "deployments").mockResolvedValue({ items: [deployment], next_cursor: "" });
+    vi.spyOn(api, "routes").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [], next_cursor: "" });
+    const createPrice = vi.spyOn(api, "createDeploymentPrice").mockResolvedValue({} as DeploymentPriceVersion);
+
+    renderAs("administrator", <DeploymentsPage />);
+
+    expect(await screen.findByText("未设置")).toBeVisible();
+    expect(screen.queryByText("不可变价格时间线")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "为 GPT 设置价格" }));
+    const dialog = await screen.findByRole("dialog", { name: "设置价格" });
+    fireEvent.click(within(dialog).getByRole("radio", { name: /^免费/ }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "下一步：核对" }));
+    fireEvent.change(within(dialog).getByLabelText("当前密码"), { target: { value: "correct horse battery staple" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "确认并创建价格版本" }));
+    await waitFor(() => expect(createPrice).toHaveBeenCalledOnce());
+    expect(createPrice).toHaveBeenCalledWith(deployment.id, expect.objectContaining({
+      billing_mode: "free",
+      effective_immediately: true,
+    }), expect.any(String));
+    expect(createPrice.mock.calls[0][1]).not.toHaveProperty("effective_from");
+  });
+
+  it("expands details from the configured value in the price setup column", async () => {
+    const capabilities = {
+      chat: true, streaming: true, embeddings: false, moderations: false, images: false,
+      transcriptions: false, speech: false, files: false, batches: false, rerank: false,
+      async_generate: false, tools: false, vision: false, json_mode: false,
+      developer_role: false, reasoning: false, stream_usage: false,
+      max_context_tokens: 0, max_output_tokens: 0,
+    };
+    const provider = {
+      id: "provider_openai", name: "OpenAI", type: "openai", enabled: true, capabilities,
+      capability_evidence: {}, revision: 1, created_at: "", updated_at: "",
+    } as Provider;
+    const deployment = {
+      id: "deployment_a", name: "GPT", provider_id: provider.id, provider_model: "gpt-5",
+      capabilities, capability_evidence: {}, enabled: false, revision: 2,
+      last_test_status: "healthy", last_test_revision: 2,
+      created_at: "", updated_at: "",
+    } as Deployment;
+    const activePrice = {
+      id: "price_a", deployment_id: deployment.id, version: 1, revision: 1,
+      billing_mode: "metered", currency: "USD", formula_version: "v1",
+      input_micros_per_million: 1_000_000, output_micros_per_million: 2_000_000,
+      fixed_request_micros_usd: 0, effective_from: "2026-08-10T00:00:00Z",
+      source: { type: "manual", assurance: "asserted" }, status: "active",
+    } as DeploymentPriceVersion;
+    vi.spyOn(api, "providers").mockResolvedValue({ items: [provider], next_cursor: "" });
+    vi.spyOn(api, "deployments").mockResolvedValue({ items: [deployment], next_cursor: "" });
+    vi.spyOn(api, "routes").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [activePrice], next_cursor: "" });
+
+    renderAs("administrator", <DeploymentsPage />);
+
+    const configured = await screen.findByRole("button", { name: "查看 GPT 的价格详情" });
+    expect(configured).toHaveTextContent("已设置");
+    expect(screen.queryByText("不可变价格时间线")).not.toBeInTheDocument();
+    fireEvent.click(configured);
+    expect(await screen.findByText("不可变价格时间线")).toBeVisible();
+    expect(screen.getByRole("button", { name: "收起详情" })).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("offers price setup inside the enable error when no effective price exists", async () => {
+    const capabilities = {
+      chat: true, streaming: true, embeddings: false, moderations: false, images: false,
+      transcriptions: false, speech: false, files: false, batches: false, rerank: false,
+      async_generate: false, tools: false, vision: false, json_mode: false,
+      developer_role: false, reasoning: false, stream_usage: false,
+      max_context_tokens: 0, max_output_tokens: 0,
+    };
+    const provider = {
+      id: "provider_openai", name: "OpenAI", type: "openai", enabled: true, capabilities,
+      capability_evidence: {}, revision: 1, created_at: "", updated_at: "",
+    } as Provider;
+    const deployment = {
+      id: "deployment_a", name: "GPT", provider_id: provider.id, provider_model: "gpt-5",
+      capabilities, capability_evidence: {}, enabled: false, revision: 2,
+      last_test_status: "healthy", last_test_revision: 2,
+      created_at: "", updated_at: "",
+    } as Deployment;
+    vi.spyOn(api, "providers").mockResolvedValue({ items: [provider], next_cursor: "" });
+    vi.spyOn(api, "deployments").mockResolvedValue({ items: [deployment], next_cursor: "" });
+    vi.spyOn(api, "routes").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "updateDeployment").mockRejectedValue(new ApiError(
+      409,
+      "deployment requires an effective versioned price before enable",
+      "deployment_price_unavailable",
+    ));
+
+    renderAs("administrator", <DeploymentsPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "启用" }));
+
+    const error = await screen.findByRole("alert");
+    expect(within(error).getByText("该部署没有已生效的价格版本。设置价格后再启用；如模型免费，请明确选择“免费”。")).toBeVisible();
+    expect(within(error).queryByText(/deployment requires an effective/)).not.toBeInTheDocument();
+    fireEvent.click(within(error).getByRole("button", { name: "设置价格" }));
+    expect(await screen.findByRole("dialog", { name: "设置价格" })).toBeVisible();
   });
 });

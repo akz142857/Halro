@@ -145,6 +145,8 @@ describe("LanguageSettingsForm", () => {
 
     fireEvent.click(saveInstance);
     await waitFor(() => expect(updateUISettings).toHaveBeenCalledWith("en-US", 7));
+    const savedStatus = (await screen.findByText("The instance default language was saved")).closest("[role='status']");
+    expect(saveInstance.closest(".form-actions")?.nextElementSibling).toBe(savedStatus);
   });
 });
 
