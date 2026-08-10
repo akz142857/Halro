@@ -1,0 +1,271 @@
+# Provider 到 Project API 全链路
+
+> 目标：把 Halro 从管理面配置到数据面调用的真实代码路径放在同一张图里，作为设计、实现和发布前 review 的共同底稿。
+>
+> 基线：`main@b206285b920c`，并包含 2026-08-10 工作区中的未提交代码。本文是代码走查结果，不是期望态设计。
+>
+> 范围：Credential、Provider、Deployment、Route、Project、Gateway Key，以及通过 `/v1/*` 发起的推理请求。Admin 登录、前端页面细节、异步资源的完整生命周期不在主图内。
+
+## 1. 一句话模型
+
+管理面把上游秘密和调用能力逐层收窄为一个 Project 可见的公共模型别名；数据面只接受 Gateway Key 和公共模型别名，再从不可变运行时快照中解析实际 Provider 调用目标。
+
+```text
+Provider secret
+  → Credential
+  → Provider + Profile Binding
+  → Deployment + Model/Capability/Price snapshot
+  → Route(public model alias)
+  → Project.allowed_routes
+  → Gateway Key
+  → /v1/* request
+  → Provider attempt(s)
+```
+
+## 2. 管理面资源关系
+
+```mermaid
+flowchart LR
+    A["Credential<br/>密文、类型、访问面、认证方案、audience"]
+    B["Provider<br/>Base URL、Allowed Hosts、Profile Bindings、并发上限"]
+    C["Deployment<br/>上游模型、Binding、能力快照、版本价格、健康状态"]
+    D["Route<br/>公共模型别名、Deployment、优先级、策略"]
+    E["Project<br/>allowed_routes、预算、RPM/TPM/并发、CIDR、策略"]
+    F["Gateway Key<br/>Project 归属、hash、启停、过期时间"]
+
+    A -->|"credential_id"| B
+    B -->|"provider_id + binding_id"| C
+    C -->|"deployment_id"| D
+    D -->|"public_model 字符串"| E
+    E -->|"project_id"| F
+```
+
+这里有一个容易误读的点：`Project.allowed_routes` 保存的是 `Route.PublicModel`，不是 Route ID。因此多个 Route 可以共享同一个公共模型别名，并成为有序回退或轮询候选。
+
+### 2.1 Credential
+
+- Admin API：`POST/PUT/DELETE /admin/api/v1/credentials`。
+- 保存 Provider 类型、访问面、认证方案和按 audience 加密的凭据。
+- Provider 引用 Credential；Credential 删除时，存储层拒绝删除仍被非墓碑 Provider 引用的记录。
+- 运行时解密只发生在构建 Provider adapter 时，明文随后清零。
+
+关键代码：
+
+- `internal/domain/models.go:96`：持久化模型和基础校验。
+- `internal/app/admin_providers.go:57`：创建/轮换/删除入口。
+- `internal/app/providers.go:185`：Registry 装载时重新校验类型、audience 和 profile。
+
+### 2.2 Provider 与 Profile Binding
+
+- Admin API：`POST/PUT/DELETE /admin/api/v1/providers`。
+- Provider 固定 Base URL、允许主机、Credential、最大并发和一个或多个 Profile Binding。
+- Binding 固定访问面、认证方案、能力及能力证据；运行时按 Binding 创建 adapter。
+- 所有外呼 adapter 都使用 `safetransport`，执行 HTTPS、主机白名单、DNS/IP、固定拨号和禁止重定向等约束。
+
+### 2.3 Deployment
+
+- Admin API：`POST/PUT/DELETE /admin/api/v1/deployments`。
+- 新建 Deployment 必须先保存为 disabled。
+- Deployment 将一个 Provider Binding 固定到一个上游模型/调用目标，并保存能力快照、区域、并发限制、测试结果。
+- 启用前必须有当前 revision 的健康测试和当前有效的版本价格。
+- 调用目标身份不可在原 Deployment 上迁移；需要新建、验证再替换。
+
+### 2.4 Route
+
+- Admin API：`POST/PUT/DELETE /admin/api/v1/routes`。
+- Route 只保存公共模型别名到 Deployment 的映射，不再直接保存 Provider 或上游模型。
+- 同一公共模型下，所有 enabled Route 必须使用相同策略：`ordered` 或 `round_robin`。
+- 实际候选排序读取 Route 的 `priority`，priority 相同再按 Route ID 排序。
+
+### 2.5 Project 与 Gateway Key
+
+- Project Admin API：`POST/PUT/DELETE /admin/api/v1/projects`。
+- Key Admin API：`POST/PUT/DELETE /admin/api/v1/projects/{id}/keys`。
+- Project 是数据面策略和计费边界，保存可用公共模型、预算、速率、并发、Token 上限、CIDR、Redaction Policy 和 Token Guard Policy。
+- Gateway Key 明文只在创建响应中返回一次；持久化的是 hash，数据面用 hash 定位 Key 和 Project。
+- Project/Key 变更后，会重建 `auth.Snapshot` 并原子替换当前认证快照。
+
+## 3. 配置激活链
+
+管理面不是直接修改正在服务的对象。Provider、Deployment、Route 的持久化记录会被重新编译成 `provider.Registry`；Project 和 Key 会被重新编译成 `auth.Snapshot`。
+
+```mermaid
+sequenceDiagram
+    participant Admin as Admin Client
+    participant Handler as Admin Handler
+    participant Store as bbolt Store
+    participant Builder as Registry/Snapshot Builder
+    participant Live as Live Runtime Snapshot
+    participant Audit as Audit WAL
+
+    Admin->>Handler: 带 CSRF / revision / 必要时 step-up 的变更
+    Handler->>Handler: 输入、引用、能力、健康/价格门禁校验
+    Handler->>Store: Put versioned record
+    Store-->>Handler: durable revision
+    Handler->>Builder: 从 Store 全量重建
+    Builder->>Store: List Projects/Keys 或 Providers/Deployments/Routes/Prices
+    Builder-->>Handler: candidate snapshot
+    Handler->>Live: atomic swap
+    Handler->>Audit: append admin mutation
+    Handler-->>Admin: 2xx + ETag
+```
+
+### 3.1 Provider Registry 的筛选规则
+
+`loadProviderRegistryWithCatalog` 只把满足下列条件的 Route 注册为 Target：
+
+1. Provider enabled、未删除，Credential 存在且类型/audience/profile 匹配；
+2. Binding enabled、profile 可用，能够创建对应 adapter；
+3. Route enabled、未删除；
+4. Deployment 存在、enabled、未删除；
+5. Deployment 能力快照通过当前 catalog review；drifted 项会被 withheld，而不是拖垮全部 Registry；
+6. Binding adapter 存在，Provider model 符合 profile；
+7. 价格可选；无当前价格时 Target 仍可装载，但请求期按 unknown-price policy 决定是否允许。
+
+Registry Target 最终包含 Route ID、Deployment ID、Provider ID、Binding、公共模型、上游模型、adapter、能力证据、价格投影，以及 Provider/Deployment 两级并发上限。
+
+## 4. 数据面入口
+
+Runtime 为 `/v1/*` 入口统一挂载请求 ID、源地址解析、源速率限制、请求体上限等 guard，再分派到 Gateway API facade：
+
+- OpenAI 兼容：`/v1/chat/completions`、`/v1/responses`、`/v1/embeddings` 等；
+- Anthropic 兼容：`/v1/messages`；
+- Halro 扩展及资源类端点：moderations、images、audio、files、batches、rerank、async invocations。
+
+Facade 负责严格 JSON/Multipart/SSE 协议处理；`gateway.Service` 负责认证、策略、路由、预算、Provider attempt 和结算。
+
+## 5. 普通推理请求全链路
+
+以下以 `POST /v1/chat/completions` 为代表。Responses portable path 会转成相同的 semantic generation 热路径；Embeddings、Messages 和资源类端点在协议及 Provider primitive 上分支，但共享认证、Project、Registry、预算和结算原则。
+
+```mermaid
+flowchart TD
+    A["Client: Gateway Key + public model"] --> B["HTTP guards<br/>request ID / source / body limit"]
+    B --> C["Facade 严格解码协议"]
+    C --> D["auth.Snapshot.Authenticate"]
+    D --> E{"Key/Project enabled<br/>Key 未过期?"}
+    E -->|否| X1["401/403"]
+    E -->|是| F{"model ∈ Project.allowed_routes<br/>CIDR 允许?"}
+    F -->|否| X2["403"]
+    F -->|是| G["Registry.ResolveCandidatesFor<br/>operation + health + evidence"]
+    G --> H["Semantic/profile/capability/token filters"]
+    H --> I["Inbound redaction"]
+    I --> J["Token estimate + Project token limits"]
+    J --> K["Token Guard admission"]
+    K --> L["Project RPM/TPM/concurrency lease"]
+    L --> M["Ledger: RequestAccepted"]
+    M --> N["逐候选 / 有界 retry-fallback"]
+    N --> O["Circuit + Provider/Deployment concurrency"]
+    O --> P["选择并 pin 版本价格"]
+    P --> Q["Token Guard cost recheck"]
+    Q --> R["Ledger: durable reservation"]
+    R --> S["Ledger: AttemptStarted"]
+    S --> T["Provider semantic primitive"]
+    T --> U["Adapter + SafeTransport + upstream"]
+    U --> V["解析 usage / 输出语义校验"]
+    V --> W["Ledger: AttemptSettled"]
+    W --> Y{"成功?"}
+    Y -->|否且安全可重试| N
+    Y -->|否且终止| X3["映射 Provider error"]
+    Y -->|是| Z["Outbound redaction"]
+    Z --> AA["Ledger: RequestFinalized"]
+    AA --> AB["释放/校准 leases，返回公开模型名"]
+```
+
+### 5.1 解析与授权
+
+`gateway.Service.resolveRequest` 的顺序是：
+
+1. hash Gateway Key 并在 `auth.Snapshot` 中认证；
+2. 检查公共模型是否在 `Project.AllowedRoutes`；
+3. 检查来源 CIDR；
+4. 从 `provider.Registry` 解析满足 operation 的候选；
+5. 区分“别名存在但能力不支持”和“别名不存在”。
+
+随后各协议路径继续做 semantic requirement、profile、primitive、token capacity 筛选。所有候选都被筛掉时，不会调用 Provider。
+
+### 5.2 Project admission
+
+在第一次 Provider attempt 前依次执行：
+
+- inbound redaction；
+- Project input/output token 上限；
+- Token Guard 第一次准入；
+- Project RPM、TPM、并发租约；
+- `BeginRequestDetailed`，把请求接受事件写入 Ledger。
+
+这里的 RPM 和 Project 并发按客户端请求计一次；Provider/Deployment 并发、token 和 cost 按 attempt 计。
+
+### 5.3 每次 Provider attempt
+
+每个候选/重试都独立执行：
+
+1. 熔断器准入；
+2. Provider 并发和 Deployment 并发准入；
+3. 按 Deployment 选择版本价格并准备 price pin；
+4. Token Guard 用本次真实估价二次检查；
+5. 在 Ledger 中创建独立、持久的预算 reservation；
+6. 提交 price pin；
+7. 写 `AttemptStarted`；
+8. 调用 Provider primitive，经 adapter 和 SafeTransport 到上游；
+9. 按权威 usage 或保守估算结算 attempt；
+10. 更新熔断器并决定终止、重试或 fallback。
+
+模糊结果（请求可能已到上游，但没有权威结果）不得重试或 fallback；这是避免重复生成、副作用和重复计费的核心边界。
+
+### 5.4 流式差异
+
+```mermaid
+flowchart LR
+    A["Upstream SSE/event"] --> B["有界解析"]
+    B --> C["Semantic stream validator"]
+    C --> D["协议转换"]
+    D --> E["跨 chunk redaction"]
+    E --> F["Downstream emit"]
+    F --> G{"已成功发送首个 payload?"}
+    G -->|否| H["安全错误可 retry/fallback"]
+    G -->|是| I["禁止切换 Deployment<br/>异常终止当前流"]
+```
+
+流式请求还必须满足 Project redaction policy 允许流式处理。首个安全 payload 成功写给客户端后即跨过 delivery boundary，此后禁止悄悄切换 Provider/Deployment。
+
+## 6. 状态所有权与“有意的重复”
+
+| 数据 | 权威来源 | 运行时副本 | 作用 |
+|---|---|---|---|
+| Credential/Provider/Deployment/Route/Project/Key | bbolt | Registry / Auth Snapshot | 无锁或低锁热路径读取 |
+| 成本、reservation、attempt 结果 | Ledger WAL | 内存状态、bbolt checkpoint、usage aggregates | WAL 是唯一记账权威 |
+| Deployment 价格 | 版本价格记录 | Registry 中仅有投影；请求时重新选择并 pin | 防止热加载投影成为计费权威 |
+| 模型能力 | Deployment capability snapshot + catalog | Registry Target capability/evidence | 在激活期 fail-closed 筛选 |
+| Provider secret | Vault ciphertext | adapter 内的 authorizer | 不进入 Project 或客户端 |
+
+这些副本本身不是冗余缺陷；它们用于把持久化模型编译成请求热路径所需的只读快照。正确性要求是：持久化成功、快照激活、审计结果之间必须有明确的一致性语义。
+
+## 7. Review 检查表
+
+后续改动可以沿主图逐项检查：
+
+- 每个下游引用是否在创建、更新、删除三个方向都校验？
+- 一次 durable mutation 与运行时 snapshot swap 是否可能分离？失败后系统以哪一份为准？
+- disable/revoke/delete 是否立即 fail-closed，是否错误地依赖客户端请求仍存活？
+- Registry 筛选和请求期筛选是否存在两套不一致规则？
+- 配置字段是否真正进入 Target 和候选算法，还是只存储/展示？
+- 每个 Provider I/O 前是否已有 durable reservation 和 `AttemptStarted`？
+- retry/fallback 是否只发生在安全错误且未越过 delivery boundary 时？
+- 所有本地失败路径是否释放熔断 probe、并发、限流、Token Guard、预算和 request lifecycle？
+- 结算失败是否优先暴露 accounting unavailable，而不是把未记账响应当成功返回？
+- 日志、错误、metrics、audit 是否只记录 ID/类别而不记录秘密和内容？
+
+## 8. 相关代码入口
+
+- `internal/app/runtime.go:1224`：数据面路由注册。
+- `internal/app/runtime.go:1307`：管理面链路 API 注册。
+- `internal/app/providers.go:27`：Provider Registry 热加载。
+- `internal/provider/provider.go:275`：Target 注册约束与候选算法。
+- `internal/auth/snapshot.go:47`：Project/Key 认证快照刷新。
+- `internal/gateway/service.go:173`：认证、Project 授权、候选解析。
+- `internal/gateway/service.go:199`：Project admission 与 request lifecycle。
+- `internal/gateway/service.go:307`：attempt、价格 pin、预算 reservation、并发和熔断。
+- `internal/gateway/service.go:731`：非流式 Chat 主路径。
+- `internal/gateway/service.go:1387`：流式 Chat 主路径。
+- `docs/contracts/gateway-correctness.md`：请求、attempt、delivery boundary 和取消语义。
