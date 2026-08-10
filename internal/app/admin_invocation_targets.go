@@ -101,10 +101,11 @@ func (r *Runtime) listAdminInvocationTargets(writer http.ResponseWriter, request
 	}
 	results := r.fetchInvocationTargetCatalogs(request.Context(), instance, bindings, refresh)
 	catalog := r.effectiveModelCatalog()
-	response := aggregateInvocationTargetsWithCatalog(instance, results, catalog)
+	evaluatedAt := r.clockNow().UTC()
+	response := aggregateInvocationTargetsWithCatalog(instance, results, evaluatedAt, catalog)
 	credentialRevision, err := r.providerCredentialRevision(request.Context(), instance)
 	if err == nil {
-		response.CanonicalModels = canonicalModelTemplatesWithCatalog(instance, bindings, credentialRevision, catalog)
+		response.CanonicalModels = canonicalModelTemplatesWithCatalog(instance, bindings, credentialRevision, evaluatedAt, catalog)
 	} else {
 		response.CanonicalModels = make([]adminInvocationTarget, 0)
 	}
@@ -112,7 +113,7 @@ func (r *Runtime) listAdminInvocationTargets(writer http.ResponseWriter, request
 		r.capabilityMetrics.recordResolution(instance.Type, item.TargetKind, item.ResolutionState, resolutionSource(item))
 	}
 	if response.FetchedAt.IsZero() {
-		response.FetchedAt = time.Now().UTC()
+		response.FetchedAt = evaluatedAt
 		response.ExpiresAt = response.FetchedAt.Add(invocationTargetCatalogTTL)
 	}
 	writeJSON(writer, http.StatusOK, response)
@@ -139,6 +140,7 @@ func (r *Runtime) resolveAdminInvocationTarget(writer http.ResponseWriter, reque
 	targetKind := domain.DeploymentTargetKind(strings.TrimSpace(request.URL.Query().Get("target_kind")))
 	canonicalRef := strings.TrimSpace(request.URL.Query().Get("canonical_model_ref"))
 	results := r.fetchInvocationTargetCatalogs(request.Context(), instance, bindings, false)
+	evaluatedAt := r.clockNow().UTC()
 	if canonicalRef != "" {
 		for resultIndex := range results {
 			for itemIndex := range results[resultIndex].items {
@@ -151,7 +153,7 @@ func (r *Runtime) resolveAdminInvocationTarget(writer http.ResponseWriter, reque
 	}
 	var resolved adminInvocationTarget
 	matched := false
-	for _, item := range aggregateInvocationTargetsWithCatalog(instance, results, r.effectiveModelCatalog()).Items {
+	for _, item := range aggregateInvocationTargetsWithCatalog(instance, results, evaluatedAt, r.effectiveModelCatalog()).Items {
 		if item.TargetID == targetID && (targetKind == "" || item.TargetKind == targetKind) {
 			resolved, matched = item, true
 			break
@@ -167,7 +169,7 @@ func (r *Runtime) resolveAdminInvocationTarget(writer http.ResponseWriter, reque
 	target := domain.InvocationTargetDescriptor{
 		TargetID: targetID, TargetKind: targetKind, DisplayName: targetID, CanonicalModelRef: canonicalRef,
 		Region: strings.TrimSpace(request.URL.Query().Get("region")), Lifecycle: domain.TargetLifecycleUnknown,
-		MetadataSource: domain.MetadataSourceNone, Availability: domain.AvailabilityUnverified, FetchedAt: time.Now().UTC(),
+		MetadataSource: domain.MetadataSourceNone, Availability: domain.AvailabilityUnverified, FetchedAt: evaluatedAt,
 	}
 	if !matched {
 		bindingTargets := make(map[string]domain.InvocationTargetDescriptor)
@@ -204,7 +206,7 @@ func (r *Runtime) resolveAdminInvocationTarget(writer http.ResponseWriter, reque
 			adminBadRequest(writer, "provider credential is unavailable")
 			return
 		}
-		resolved = resolveInvocationTargetWithCatalog(instance, target, bindingTargets, bindings, mappers, credentialRevision, r.effectiveModelCatalog())
+		resolved = resolveInvocationTargetWithCatalog(instance, target, bindingTargets, bindings, mappers, credentialRevision, evaluatedAt, r.effectiveModelCatalog())
 	}
 	r.capabilityMetrics.recordResolution(instance.Type, resolved.TargetKind, resolved.ResolutionState, resolutionSource(resolved))
 	if resolved.ResolutionState == domain.ResolutionConflicting || resolved.ResolutionState == domain.ResolutionNoVariant || len(resolved.ConflictingBindings) > 0 {
@@ -380,11 +382,16 @@ func (r *Runtime) fetchInvocationTargetCatalog(ctx context.Context, instance dom
 	return result
 }
 
-func aggregateInvocationTargets(instance domain.ProviderInstance, results []bindingTargetCatalog) invocationTargetCatalogResponse {
-	return aggregateInvocationTargetsWithCatalog(instance, results, modelcatalog.Builtin())
+func aggregateInvocationTargets(instance domain.ProviderInstance, results []bindingTargetCatalog, at time.Time) invocationTargetCatalogResponse {
+	return aggregateInvocationTargetsWithCatalog(instance, results, at, modelcatalog.Builtin())
 }
 
-func aggregateInvocationTargetsWithCatalog(instance domain.ProviderInstance, results []bindingTargetCatalog, catalog *modelcatalog.Catalog) invocationTargetCatalogResponse {
+// at is the instant the resolution is evaluated at, and it decides which
+// capability claims are still live. It arrives from the caller rather than being
+// read from the global clock here: resolution has to be reproducible for a given
+// catalog, and a resolver that reads the wall clock cannot be asserted on except
+// by a test that races it.
+func aggregateInvocationTargetsWithCatalog(instance domain.ProviderInstance, results []bindingTargetCatalog, at time.Time, catalog *modelcatalog.Catalog) invocationTargetCatalogResponse {
 	response := invocationTargetCatalogResponse{
 		Items:           make([]adminInvocationTarget, 0),
 		Discovery:       domain.InvocationTargetDiscoveryCapabilities{TargetKinds: make([]domain.DeploymentTargetKind, 0)},
@@ -433,16 +440,12 @@ func aggregateInvocationTargetsWithCatalog(instance domain.ProviderInstance, res
 	slices.Sort(keys)
 	for _, key := range keys {
 		item := byKey[key]
-		response.Items = append(response.Items, resolveInvocationTargetWithCatalog(instance, item.target, item.bindingTargets, item.bindings, item.mappers, item.credentialRevision, catalog))
+		response.Items = append(response.Items, resolveInvocationTargetWithCatalog(instance, item.target, item.bindingTargets, item.bindings, item.mappers, item.credentialRevision, at, catalog))
 	}
 	return response
 }
 
-func resolveInvocationTarget(instance domain.ProviderInstance, target domain.InvocationTargetDescriptor, bindingTargets map[string]domain.InvocationTargetDescriptor, bindings []domain.ProviderProfileBinding, mappers map[string]provider.ProviderMetadataMapper, credentialRevision uint64) adminInvocationTarget {
-	return resolveInvocationTargetWithCatalog(instance, target, bindingTargets, bindings, mappers, credentialRevision, modelcatalog.Builtin())
-}
-
-func resolveInvocationTargetWithCatalog(instance domain.ProviderInstance, target domain.InvocationTargetDescriptor, bindingTargets map[string]domain.InvocationTargetDescriptor, bindings []domain.ProviderProfileBinding, mappers map[string]provider.ProviderMetadataMapper, credentialRevision uint64, catalog *modelcatalog.Catalog) adminInvocationTarget {
+func resolveInvocationTargetWithCatalog(instance domain.ProviderInstance, target domain.InvocationTargetDescriptor, bindingTargets map[string]domain.InvocationTargetDescriptor, bindings []domain.ProviderProfileBinding, mappers map[string]provider.ProviderMetadataMapper, credentialRevision uint64, at time.Time, catalog *modelcatalog.Catalog) adminInvocationTarget {
 	resolved := adminInvocationTarget{InvocationTargetDescriptor: target, Variants: make([]domain.DeploymentVariant, 0), ResolutionState: domain.ResolutionUnknown}
 	var allRevisions []string
 	claimsExist := false
@@ -478,7 +481,7 @@ func resolveInvocationTargetWithCatalog(instance domain.ProviderInstance, target
 					bindingConflict = true
 					continue
 				}
-				if metadataClaims[index].ActiveAt(time.Now().UTC()) {
+				if metadataClaims[index].ActiveAt(at) {
 					active = append(active, metadataClaims[index])
 				}
 			}
@@ -757,11 +760,11 @@ func mergeDiscovery(left, right domain.InvocationTargetDiscoveryCapabilities) do
 	return left
 }
 
-func canonicalModelTemplates(instance domain.ProviderInstance, bindings []domain.ProviderProfileBinding, credentialRevision uint64) []adminInvocationTarget {
-	return canonicalModelTemplatesWithCatalog(instance, bindings, credentialRevision, modelcatalog.Builtin())
+func canonicalModelTemplates(instance domain.ProviderInstance, bindings []domain.ProviderProfileBinding, credentialRevision uint64, at time.Time) []adminInvocationTarget {
+	return canonicalModelTemplatesWithCatalog(instance, bindings, credentialRevision, at, modelcatalog.Builtin())
 }
 
-func canonicalModelTemplatesWithCatalog(instance domain.ProviderInstance, bindings []domain.ProviderProfileBinding, credentialRevision uint64, catalog *modelcatalog.Catalog) []adminInvocationTarget {
+func canonicalModelTemplatesWithCatalog(instance domain.ProviderInstance, bindings []domain.ProviderProfileBinding, credentialRevision uint64, at time.Time, catalog *modelcatalog.Catalog) []adminInvocationTarget {
 	providerType, profileID, ok := capabilityModelCatalogScope(instance.Type)
 	if !ok {
 		return nil
@@ -774,9 +777,9 @@ func canonicalModelTemplatesWithCatalog(instance domain.ProviderInstance, bindin
 		target := domain.InvocationTargetDescriptor{
 			TargetID: entry.Key.Model, TargetKind: domain.TargetModelID, DisplayName: entry.Key.Model,
 			CanonicalModelRef: entry.Key.Model, Lifecycle: domain.TargetLifecycleUnknown,
-			MetadataSource: domain.MetadataSourceNone, Availability: domain.AvailabilityUnverified, FetchedAt: time.Now().UTC(),
+			MetadataSource: domain.MetadataSourceNone, Availability: domain.AvailabilityUnverified, FetchedAt: at,
 		}
-		templates = append(templates, resolveInvocationTargetWithCatalog(instance, target, nil, bindings, nil, credentialRevision, catalog))
+		templates = append(templates, resolveInvocationTargetWithCatalog(instance, target, nil, bindings, nil, credentialRevision, at, catalog))
 	}
 	slices.SortFunc(templates, func(left, right adminInvocationTarget) int {
 		return strings.Compare(left.DisplayName, right.DisplayName)

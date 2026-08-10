@@ -889,7 +889,7 @@ func (r *Runtime) resolveDeploymentVariant(ctx context.Context, instance domain.
 	if input.CapabilityModel != "" {
 		target.CanonicalModelRef = strings.TrimSpace(input.CapabilityModel)
 	}
-	current := resolveInvocationTargetWithCatalog(instance, target, bindingTargets, bindings, mappers, credentialRevision, r.effectiveModelCatalog())
+	current := resolveInvocationTargetWithCatalog(instance, target, bindingTargets, bindings, mappers, credentialRevision, r.clockNow().UTC(), r.effectiveModelCatalog())
 	var selected *domain.DeploymentVariant
 	for index := range current.Variants {
 		if current.Variants[index].BindingID == input.BindingID {
