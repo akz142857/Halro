@@ -90,7 +90,15 @@ func (r *Runtime) listAdminInvocationTargets(writer http.ResponseWriter, request
 		adminBadRequest(writer, err.Error())
 		return
 	}
+	// Reading the cached catalog is a read. Bypassing the cache is not: it spends
+	// the operator's provider credential on an upstream call, against their quota
+	// and their bill, as often as it is asked for. That is an administrator
+	// action even though it arrives as a GET, so the role gate the mutation
+	// routes get automatically is applied here by hand.
 	refresh := request.URL.Query().Get("refresh") == "true" || request.URL.Query().Get("refresh") == "1"
+	if refresh && !requireAdministratorRole(writer, request.Context().Value(adminContextKey{}).(adminRequestContext)) {
+		return
+	}
 	results := r.fetchInvocationTargetCatalogs(request.Context(), instance, bindings, refresh)
 	catalog := r.effectiveModelCatalog()
 	response := aggregateInvocationTargetsWithCatalog(instance, results, catalog)

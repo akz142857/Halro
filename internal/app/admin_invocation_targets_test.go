@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -529,5 +530,57 @@ func TestAdminUsesInvocationTargetRouteAndRemovesLegacyModelsRoute(t *testing.T)
 	refresh := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost, "/admin/api/v1/model-catalog/refresh", "", map[string]any{})
 	if refresh.Code != http.StatusBadGateway || !strings.Contains(refresh.Body.String(), `"state":"disabled"`) {
 		t.Fatalf("disabled model catalog refresh=%d body=%s", refresh.Code, refresh.Body.String())
+	}
+}
+
+// Listing invocation targets is a read of a cached catalog, but refresh=true is
+// not: it spends the operator's provider credential upstream, against their
+// quota and their bill, as often as it is asked for. read_only exists to keep a
+// session that cannot change anything from causing effects on the outside
+// world, so the refresh has to be gated on the administrator role even though
+// it arrives as a GET.
+func TestReadOnlySessionCannotForceAnInvocationTargetRefresh(t *testing.T) {
+	runtime, bootstrap, _ := openBootstrappedRuntime(t)
+	registry := provider.NewRegistry()
+	if err := registry.RegisterAdapter(bootstrap.ProviderID, &adminProbeAdapter{
+		targets: []domain.InvocationTargetDescriptor{{TargetID: "gpt-test", TargetKind: domain.TargetModelID}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runtime.providers.Replace(registry)
+	admin := loginTestAdmin(t, runtime, "admin", "correct horse battery staple")
+	create := adminMutationRequest(t, http.MethodPost, "/admin/api/v1/admin-users", admin, map[string]string{
+		"username": "viewer", "password": "another correct horse battery staple", "role": "read_only",
+		"current_password": "correct horse battery staple",
+	})
+	createResponse := httptest.NewRecorder()
+	runtime.adminRouter().ServeHTTP(createResponse, create)
+	if createResponse.Code != http.StatusCreated {
+		t.Fatalf("create viewer status=%d body=%s", createResponse.Code, createResponse.Body.String())
+	}
+	viewer := loginTestAdmin(t, runtime, "viewer", "another correct horse battery staple")
+	targets := "/admin/api/v1/providers/" + bootstrap.ProviderID + "/invocation-targets"
+
+	for _, query := range []string{"?refresh=true", "?refresh=1"} {
+		forced := authenticatedAdminGet(t, runtime, viewer.cookie, targets+query)
+		if forced.Code != http.StatusForbidden {
+			t.Fatalf("read_only %s status=%d body=%s", query, forced.Code, forced.Body.String())
+		}
+		var body struct {
+			Code string `json:"code"`
+		}
+		if err := json.Unmarshal(forced.Body.Bytes(), &body); err != nil || body.Code != "read_only_role" {
+			t.Fatalf("read_only %s: 403 was not the role gate (code=%q body=%s)", query, body.Code, forced.Body.String())
+		}
+	}
+	// The cached read stays available: read_only is a restriction on causing
+	// effects, not on looking.
+	cached := authenticatedAdminGet(t, runtime, viewer.cookie, targets)
+	if cached.Code != http.StatusOK {
+		t.Fatalf("read_only listing status=%d body=%s", cached.Code, cached.Body.String())
+	}
+	administrator := authenticatedAdminGet(t, runtime, admin.cookie, targets+"?refresh=true")
+	if administrator.Code != http.StatusOK {
+		t.Fatalf("administrator refresh status=%d body=%s", administrator.Code, administrator.Body.String())
 	}
 }
