@@ -3,6 +3,7 @@ package app
 import (
 	"encoding/json"
 	"errors"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -21,6 +22,14 @@ func bedrockInstance(bindings ...domain.ProviderProfileBinding) domain.ProviderI
 	return domain.ProviderInstance{
 		ID: "prov", Type: domain.ProviderBedrock, AccessSurface: domain.SurfaceBedrockRuntime,
 		BaseURL: "https://bedrock-runtime.us-east-1.amazonaws.com", Enabled: true, Bindings: bindings,
+	}
+}
+
+func TestProviderRegionParsesBedrockPrivateLinkEndpoint(t *testing.T) {
+	instance := bedrockInstance()
+	instance.BaseURL = "https://vpce-0abc.bedrock-agent-runtime.us-west-2.vpce.amazonaws.com"
+	if got := providerRegion(instance); got != "us-west-2" {
+		t.Fatalf("providerRegion()=%q, want us-west-2", got)
 	}
 }
 
@@ -139,7 +148,7 @@ func TestResolveLetsAnExplicitDeclarationExceedTheCatalog(t *testing.T) {
 func deploymentErrorCode(t *testing.T, err error) string {
 	t.Helper()
 	recorder := httptest.NewRecorder()
-	(&Runtime{capabilityMetrics: newCapabilityMetrics()}).adminDeploymentInputError(recorder, err)
+	(&Runtime{capabilityMetrics: newCapabilityMetrics()}).adminDeploymentInputError(recorder, httptest.NewRequest(http.MethodPost, "/", nil), err)
 	var body map[string]string
 	if json.Unmarshal(recorder.Body.Bytes(), &body) != nil {
 		return ""
@@ -278,7 +287,7 @@ func TestResolveRejectsStaleModelRevision(t *testing.T) {
 		t.Fatal("a stale revision was accepted")
 	}
 	recorder := httptest.NewRecorder()
-	(&Runtime{capabilityMetrics: newCapabilityMetrics()}).adminDeploymentInputError(recorder, err)
+	(&Runtime{capabilityMetrics: newCapabilityMetrics()}).adminDeploymentInputError(recorder, httptest.NewRequest(http.MethodPost, "/", nil), err)
 	if recorder.Code != 409 {
 		t.Fatalf("status=%d", recorder.Code)
 	}
@@ -385,17 +394,26 @@ func TestDiscoveryAndCreateAgreeOnTheModelRevision(t *testing.T) {
 		unknownBedrockModel: {Chat: true, MaxContextTokens: 8192},
 	}
 	for _, model := range []string{titanEmbedModel, unknownBedrockModel} {
-		var results []bindingCatalog
+		var results []bindingTargetCatalog
 		for _, binding := range instance.Bindings {
-			results = append(results, catalogResult(binding, true, model))
+			results = append(results, targetResult(binding, nil, domain.InvocationTargetDescriptor{
+				TargetID: model, TargetKind: domain.TargetBedrockFoundationModel, DisplayName: model,
+				CanonicalModelRef: model, Region: region, Availability: domain.AvailabilityAvailable,
+			}))
 		}
-		response := aggregateProviderModels(instance, results, nil)
-		listed := findModel(t, response, model)
-		input := deploymentInput{ModelRevision: listed.ModelRevision}
-		if listed.Status != modelcatalog.StatusKnown {
+		response := aggregateInvocationTargets(instance, results)
+		listed := findTarget(t, response, model)
+		input := deploymentInput{}
+		if listed.ResolutionState != domain.ResolutionResolved {
 			input.Mode = deploymentModeOperatorDeclared
 			declared := declarations[model]
 			input.Capabilities = &declared
+		} else {
+			variant := listed.Variants[0]
+			entry, _ := modelcatalog.Builtin().Lookup(modelcatalog.Key{
+				ProviderType: instance.Type, Profile: variant.ProfileID, Model: model, Region: region,
+			})
+			input.ModelRevision = entry.Revision()
 		}
 		if _, err := resolveDeploymentTarget(instance, input, model, region, nil); err != nil {
 			t.Fatalf("model %q: the revision the console read was rejected at create time: %v", model, err)
@@ -439,7 +457,7 @@ func TestResolveSkipsProfilesThatPinADifferentModel(t *testing.T) {
 
 func isUnknownCapabilityError(err error) bool {
 	recorder := httptest.NewRecorder()
-	(&Runtime{capabilityMetrics: newCapabilityMetrics()}).adminDeploymentInputError(recorder, err)
+	(&Runtime{capabilityMetrics: newCapabilityMetrics()}).adminDeploymentInputError(recorder, httptest.NewRequest(http.MethodPost, "/", nil), err)
 	var body map[string]string
 	if json.Unmarshal(recorder.Body.Bytes(), &body) != nil {
 		return false

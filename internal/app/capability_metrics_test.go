@@ -8,8 +8,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/modelcatalog"
 )
 
 // renderMetricsForTest scrapes /metrics the way Prometheus would, so what is
@@ -97,6 +99,39 @@ func TestDeploymentTestOutcomeIsCounted(t *testing.T) {
 		strings.Contains(body, `halro_deployment_test_total{status="success"} 0`) {
 		t.Fatalf("a deployment test did not move either counter:\n%s",
 			grepSeries(body, "halro_deployment_test_total"))
+	}
+}
+
+func TestResolutionMetricUsesOnlyBoundedDimensions(t *testing.T) {
+	runtime, _ := bootstrapForCapabilityTest(t)
+	runtime.capabilityMetrics.recordResolution(domain.ProviderGemini, domain.TargetModelID, domain.ResolutionResolved, domain.ClaimSourceProviderMetadata)
+	runtime.capabilityMetrics.recordResolution(domain.ProviderType("tenant-provider"), domain.DeploymentTargetKind("tenant-target"), domain.ResolutionState("tenant-state"), domain.ClaimSource("tenant-source"))
+	body := renderMetricsForTest(t, runtime)
+	for _, series := range []string{
+		`halro_invocation_target_resolution_total{provider_type="gemini",target_kind="model_id",status="resolved",source="provider_metadata"} 1`,
+		`halro_invocation_target_resolution_total{provider_type="unknown",target_kind="unknown",status="unknown",source="unknown"} 1`,
+	} {
+		if !strings.Contains(body, series) {
+			t.Fatalf("missing bounded resolution series %q:\n%s", series, grepSeries(body, "halro_invocation_target_resolution_total"))
+		}
+	}
+	for _, forbidden := range []string{"tenant-provider", "tenant-target", "tenant-state", "tenant-source"} {
+		if strings.Contains(grepSeries(body, "halro_invocation_target_resolution_total"), forbidden) {
+			t.Fatalf("resolution metric leaked unbounded label %q", forbidden)
+		}
+	}
+}
+
+func TestSignedCatalogMetricsUseBoundedErrorClasses(t *testing.T) {
+	runtime, _ := bootstrapForCapabilityTest(t)
+	now := time.Now().UTC()
+	runtime.capabilityMetrics.recordSignedCatalog(modelcatalog.RefreshEvent{Outcome: "failure", ErrorClass: "tenant-secret-error", Status: modelcatalog.ManagerStatus{State: modelcatalog.CatalogStateDegraded, DegradedSince: &now}})
+	body := renderMetricsForTest(t, runtime)
+	if !strings.Contains(body, `halro_signed_model_catalog_refresh_total{status="failure",error_class="unknown"} 1`) || !strings.Contains(body, `halro_signed_model_catalog_degraded 1`) {
+		t.Fatalf("signed catalog metrics missing:\n%s", grepSeries(body, "halro_signed_model_catalog"))
+	}
+	if strings.Contains(grepSeries(body, "halro_signed_model_catalog"), "tenant-secret-error") {
+		t.Fatal("signed catalog metric leaked an unbounded error class")
 	}
 }
 

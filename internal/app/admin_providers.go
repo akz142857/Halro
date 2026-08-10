@@ -124,6 +124,7 @@ func (r *Runtime) updateAdminCredential(writer http.ResponseWriter, request *htt
 		adminConfigurationError(writer, err)
 		return
 	}
+	r.clearAllInvocationTargetCatalogs()
 	if err := r.auditAdminMutation(request, "credential.rotate", "credential", credential.ID); err != nil {
 		adminAuditError(writer)
 		return
@@ -266,7 +267,7 @@ func (r *Runtime) updateAdminProvider(writer http.ResponseWriter, request *http.
 		adminConfigurationError(writer, err)
 		return
 	}
-	r.clearProviderModelCatalog(instance.ID)
+	r.clearInvocationTargetCatalog(instance.ID)
 	if err := r.auditAdminMutation(request, "provider.update", "provider", instance.ID); err != nil {
 		adminAuditError(writer)
 		return
@@ -315,7 +316,7 @@ func (r *Runtime) deleteAdminProvider(writer http.ResponseWriter, request *http.
 		adminConfigurationError(writer, err)
 		return
 	}
-	r.clearProviderModelCatalog(instance.ID)
+	r.clearInvocationTargetCatalog(instance.ID)
 	if err := r.auditAdminMutation(request, "provider.delete", "provider", instance.ID); err != nil {
 		adminAuditError(writer)
 		return

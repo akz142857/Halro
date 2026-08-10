@@ -562,11 +562,14 @@ const (
 	// CapabilityReviewDrifted means the snapshot claims more than the catalog or
 	// the running profile now supports. Drifted deployments are fail-closed.
 	CapabilityReviewDrifted CapabilityReviewState = "drifted"
+	// CapabilityReviewCatalogUnavailable means a signed snapshot remains the
+	// runtime authority while no verified online/LKG catalog is available.
+	CapabilityReviewCatalogUnavailable CapabilityReviewState = "catalog_unavailable"
 )
 
 func (s CapabilityReviewState) Valid() bool {
 	switch s {
-	case CapabilityReviewCurrent, CapabilityReviewAvailable, CapabilityReviewDrifted:
+	case CapabilityReviewCurrent, CapabilityReviewAvailable, CapabilityReviewDrifted, CapabilityReviewCatalogUnavailable:
 		return true
 	default:
 		return false
@@ -578,14 +581,22 @@ func (s CapabilityReviewState) Valid() bool {
 // catalog refresh must not be able to change what an enabled deployment does.
 type ModelCapabilitySnapshot struct {
 	ProviderModel string `json:"provider_model"`
+	// CanonicalModelRef is the reviewed capability identity behind an upstream
+	// alias such as an Azure Deployment. ProviderModel remains the invocation
+	// identity and is never replaced by this value on the request path.
+	CanonicalModelRef string `json:"canonical_model_ref,omitempty"`
 	// ModelRevision is the per-model catalog digest this snapshot was taken
 	// from. Drift is detected by comparing it, not the catalog-wide digest.
-	ModelRevision   string               `json:"model_revision"`
-	CatalogRevision string               `json:"catalog_revision,omitempty"`
-	Source          string               `json:"source"`
-	Status          string               `json:"status"`
-	CapturedAt      time.Time            `json:"captured_at"`
-	Capabilities    ProviderCapabilities `json:"capabilities"`
+	ModelRevision      string               `json:"model_revision"`
+	CatalogRevision    string               `json:"catalog_revision,omitempty"`
+	ResolutionRevision string               `json:"resolution_revision,omitempty"`
+	ProviderRevision   uint64               `json:"provider_revision,omitempty"`
+	TargetFingerprint  string               `json:"target_fingerprint,omitempty"`
+	ClaimRevisions     []string             `json:"claim_revisions,omitempty"`
+	Source             string               `json:"source"`
+	Status             string               `json:"status"`
+	CapturedAt         time.Time            `json:"captured_at"`
+	Capabilities       ProviderCapabilities `json:"capabilities"`
 	// Evidence is how well the source established each capability, bounded by
 	// what that source is allowed to claim. It is separate from the deployment's
 	// own CapabilityEvidence, which a successful test can raise: this records
@@ -605,7 +616,7 @@ func MaxEvidenceForCapabilitySource(source string) CapabilityEvidence {
 	switch source {
 	case "verified_probe":
 		return EvidenceVerified
-	case "builtin_catalog", "provider_metadata", "operator_declared":
+	case "builtin_catalog", "provider_metadata", "signed_catalog", "operator_declared":
 		return EvidenceDeclared
 	default:
 		return EvidenceUnsupported

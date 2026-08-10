@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"slices"
+	"sync"
 	"time"
 
 	"github.com/akz142857/Halro/internal/config"
 	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/modelcatalog"
 	"github.com/akz142857/Halro/internal/provider"
 	anthropicprovider "github.com/akz142857/Halro/internal/provider/anthropic"
 	bedrockprovider "github.com/akz142857/Halro/internal/provider/bedrock"
@@ -22,34 +25,79 @@ import (
 )
 
 func (r *Runtime) reloadProviderRegistry(ctx context.Context) error {
-	next, withheld, err := loadProviderRegistry(ctx, r.config, r.store, r.vault)
+	finalize, err := r.prepareProviderRegistryActivation(ctx, r.effectiveModelCatalog(), r.modelCatalogUnavailable())
 	if err != nil {
 		return err
 	}
-	logCapabilityWithholdings(r.logger, withheld)
-	r.auditCapabilityWithholdings(ctx, withheld)
-	retired := r.providers.Replace(next)
-	if len(retired) == 0 {
-		return nil
-	}
-	grace := max(
-		r.config.Gateway.RouteTotalTimeout.Value(),
-		r.config.Gateway.StreamMaxDuration.Value(),
-	) + time.Second
-	r.backgroundWait.Add(1)
-	go func() {
-		defer r.backgroundWait.Done()
-		timer := time.NewTimer(grace)
-		defer timer.Stop()
-		select {
-		case <-timer.C:
-		case <-r.backgroundCtx.Done():
-		}
-		for _, adapter := range retired {
-			adapter.Close()
-		}
-	}()
+	finalize(true)
 	return nil
+}
+
+// prepareModelCatalogActivation serializes a signed-catalog commit with every
+// Provider, Deployment, and Route mutation. The lock is acquired before the
+// candidate registry reads the store and is held until the Manager commits or
+// aborts it, so a stale candidate cannot resurrect topology an Admin mutation
+// already removed.
+func (r *Runtime) prepareModelCatalogActivation(candidate *modelcatalog.Catalog) (func(bool), error) {
+	r.adminTopologyMu.Lock()
+	finalize, err := r.prepareProviderRegistryActivation(r.backgroundCtx, candidate, false)
+	if err != nil {
+		r.adminTopologyMu.Unlock()
+		return nil, err
+	}
+	var once sync.Once
+	return func(activate bool) {
+		once.Do(func() {
+			defer r.adminTopologyMu.Unlock()
+			finalize(activate)
+		})
+	}, nil
+}
+
+// reconcileProviderRegistryWithCatalogState applies a degraded/unavailable
+// catalog transition under the same topology coordinator as successful signed
+// activation. It is called after the Manager has moved its resolution-effective
+// catalog to the bundled fallback.
+func (r *Runtime) reconcileProviderRegistryWithCatalogState(ctx context.Context) error {
+	r.adminTopologyMu.Lock()
+	defer r.adminTopologyMu.Unlock()
+	return r.reloadProviderRegistry(ctx)
+}
+
+func (r *Runtime) prepareProviderRegistryActivation(ctx context.Context, catalog *modelcatalog.Catalog, unavailable bool) (func(bool), error) {
+	next, withheld, err := loadProviderRegistryWithCatalog(ctx, r.config, r.store, r.vault, catalog, unavailable)
+	if err != nil {
+		return nil, err
+	}
+	return func(activate bool) {
+		if !activate {
+			next.Close()
+			return
+		}
+		logCapabilityWithholdings(r.logger, withheld)
+		r.auditCapabilityWithholdings(ctx, withheld)
+		retired := r.providers.Replace(next)
+		if len(retired) == 0 {
+			return
+		}
+		grace := max(
+			r.config.Gateway.RouteTotalTimeout.Value(),
+			r.config.Gateway.StreamMaxDuration.Value(),
+		) + time.Second
+		r.backgroundWait.Add(1)
+		go func() {
+			defer r.backgroundWait.Done()
+			timer := time.NewTimer(grace)
+			defer timer.Stop()
+			select {
+			case <-timer.C:
+			case <-r.backgroundCtx.Done():
+			}
+			for _, adapter := range retired {
+				adapter.Close()
+			}
+		}()
+	}, nil
 }
 
 // capabilityWithholding records a route kept out of the routing candidates
@@ -60,9 +108,11 @@ func (r *Runtime) reloadProviderRegistry(ctx context.Context) error {
 // with it — start-up logs it, a hot reload logs and audits it — and so a test
 // can assert the load succeeded *and* withheld the right route.
 type capabilityWithholding struct {
-	RouteID      string
-	DeploymentID string
-	State        domain.CapabilityReviewState
+	RouteID           string
+	DeploymentID      string
+	State             domain.CapabilityReviewState
+	Reason            string
+	NoLongerSupported []string
 }
 
 // logCapabilityWithholdings names the routes that are up but not routing. IDs
@@ -84,6 +134,17 @@ func loadProviderRegistry(
 	cfg config.Config,
 	store *boltstore.Store,
 	secretVault *vault.Vault,
+) (*provider.Registry, []capabilityWithholding, error) {
+	return loadProviderRegistryWithCatalog(ctx, cfg, store, secretVault, modelcatalog.Builtin(), false)
+}
+
+func loadProviderRegistryWithCatalog(
+	ctx context.Context,
+	cfg config.Config,
+	store *boltstore.Store,
+	secretVault *vault.Vault,
+	catalog *modelcatalog.Catalog,
+	catalogUnavailable bool,
 ) (*provider.Registry, []capabilityWithholding, error) {
 	var withheld []capabilityWithholding
 	instances, err := store.ListProviders(ctx)
@@ -211,10 +272,11 @@ func loadProviderRegistry(
 			// referencing an ID with no record at all, which the store refuses.
 			// It is shared rather than duplicated because the alternative is two
 			// spellings of one rule, which is what a later change gets wrong.
-			state := reviewForDeployment(instanceByID, deployment).State
-			if !capabilityReviewAdmitsTraffic(state) {
+			review := reviewForDeploymentWithCatalogState(instanceByID, deployment, catalog, catalogUnavailable)
+			if !capabilityReviewAdmitsTraffic(review.State) {
 				withheld = append(withheld, capabilityWithholding{
-					RouteID: route.ID, DeploymentID: deployment.ID, State: state,
+					RouteID: route.ID, DeploymentID: deployment.ID, State: review.State,
+					Reason: review.Reason, NoLongerSupported: slices.Clone(review.NoLongerSupported),
 				})
 				continue
 			}

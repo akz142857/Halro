@@ -62,6 +62,9 @@ jobs:
           sh -n tools/m11/aws-kms-lifecycle-smoke/run.sh
           sh -n tools/m11/aws-kms-dr-smoke/run.sh
           python3 -m unittest tools/m11/aws-kms-smoke/test_verify_cloudtrail.py
+          python3 -m unittest \
+            tools/modelcatalog/test_verify_publication_gate.py \
+            tools/modelcatalog/test_workflow_contract.py
           ./tools/m11/check-kms-boundaries.sh
           ./tools/m11/check-production-assets.sh
       - name: Go vulnerability scan

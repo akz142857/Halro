@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "catalog_revision": "",
+  "sequence": 1,
+  "generated_at": "2026-08-10T00:00:00Z",
+  "expires_at": "2026-08-17T00:00:00Z",
+  "capability_dictionary_version": 1,
+  "entries": [
+    {
+      "provider_type": "openai",
+      "profile_id": "openai_chat_embeddings",
+      "target_kind": "model_id",
+      "model": "exact-reviewed-model-id",
+      "capabilities": {
+        "chat": true,
+        "streaming": true,
+        "max_context_tokens": 8192,
+        "max_output_tokens": 2048
+      },
+      "unsupported": ["embeddings"]
+    }
+  ]
+}

@@ -110,8 +110,12 @@ an authentication boundary.
 | `halro_accounting_period_end_seconds` | gauge | none |
 | `halro_model_catalog_refresh_total` | counter | `provider_type`, `profile`, `status` |
 | `halro_model_catalog_degraded_total` | counter | `provider_type`, `error_class` |
+| `halro_signed_model_catalog_refresh_total` | counter | `status`, `error_class` |
+| `halro_signed_model_catalog_degraded` | gauge | none |
+| `halro_signed_model_catalog_degraded_since_seconds` | gauge | none |
 | `halro_capability_drift_total` | counter | `reason` |
 | `halro_model_revision_conflicts_total` | counter | none |
+| `halro_invocation_target_resolution_total` | counter | `provider_type`, `target_kind`, `status`, `source` |
 | `halro_deployment_test_total` | counter | `status` |
 | `halro_model_capability_detection_total` | counter | `provider_type`, `status`, `source` |
 | `halro_model_capability_probe_total` | counter | `provider_type`, `capability`, `status` |

@@ -9,7 +9,9 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"time"
 
+	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/provider"
 )
 
@@ -29,6 +31,7 @@ var invocableInferenceTypes = []string{"ON_DEMAND", "INFERENCE_PROFILE"}
 type foundationModelSummary struct {
 	ModelID                 string   `json:"modelId"`
 	ProviderName            string   `json:"providerName"`
+	InputModalities         []string `json:"inputModalities"`
 	OutputModalities        []string `json:"outputModalities"`
 	InferenceTypesSupported []string `json:"inferenceTypesSupported"`
 	ModelLifecycle          struct {
@@ -36,7 +39,8 @@ type foundationModelSummary struct {
 	} `json:"modelLifecycle"`
 }
 
-// ListModels answers which model identifiers this binding can be pointed at.
+// ListInvocationTargets answers which invocation identities this binding can
+// actually be pointed at.
 //
 // A profile that accepts exactly one model has no question to ask upstream, and
 // asking would be worse than not asking: listing a hundred foundation models
@@ -51,9 +55,29 @@ type foundationModelSummary struct {
 // like any other outbound call, and when it does not, discovery fails and the
 // console falls back to manual model entry — never a silent call to a host the
 // operator did not approve.
-func (a *Adapter) ListModels(ctx context.Context) ([]provider.ModelDescriptor, error) {
+func (a *Adapter) InvocationTargetDiscovery() domain.InvocationTargetDiscoveryCapabilities {
+	kinds := []domain.DeploymentTargetKind{domain.TargetBedrockFoundationModel}
+	if a.profileID == domain.ProfileBedrockConverseText {
+		kinds = append(kinds, domain.TargetBedrockInferenceProfile, domain.TargetBedrockProvisionedThroughput)
+	}
+	return domain.InvocationTargetDiscoveryCapabilities{TargetKinds: kinds, CanEnumerate: true, CanVerify: true}
+}
+
+func (a *Adapter) ListInvocationTargets(ctx context.Context, query domain.TargetQuery) ([]domain.InvocationTargetDescriptor, error) {
 	if pinned, ok := pinnedProfileModels[a.profileID]; ok {
-		return []provider.ModelDescriptor{{ID: pinned.Model, OwnedBy: pinned.Owner}}, nil
+		region := strings.TrimSpace(query.Region)
+		if region == "" {
+			region = bedrockTargetRegion(a.controlPlaneEndpoint)
+		}
+		if region == "" {
+			region = bedrockTargetRegion(a.endpoint)
+		}
+		return []domain.InvocationTargetDescriptor{{
+			TargetID: pinned.Model, TargetKind: domain.TargetBedrockFoundationModel, DisplayName: pinned.Model,
+			OwnedBy: pinned.Owner, CanonicalModelRef: pinned.Model, Region: region,
+			Lifecycle: domain.TargetLifecycleActive, MetadataSource: domain.MetadataSourceNone,
+			Availability: domain.AvailabilityAvailable, FetchedAt: time.Now().UTC(),
+		}}, nil
 	}
 	if a.controlPlane == nil {
 		return nil, &provider.Error{
@@ -93,16 +117,64 @@ func (a *Adapter) ListModels(ctx context.Context) ([]provider.ModelDescriptor, e
 	if err := json.Unmarshal(payload, &catalog); err != nil {
 		return nil, &provider.Error{Class: provider.ErrorMalformed, Message: "decode Bedrock model catalog response", Cause: err}
 	}
-	models := make([]provider.ModelDescriptor, 0, len(catalog.ModelSummaries))
+	now := time.Now().UTC()
+	models := make([]domain.InvocationTargetDescriptor, 0, len(catalog.ModelSummaries))
 	for _, summary := range catalog.ModelSummaries {
 		if !offerableFoundationModel(summary) {
 			continue
 		}
-		models = append(models, provider.ModelDescriptor{
-			ID: strings.TrimSpace(summary.ModelID), OwnedBy: strings.TrimSpace(summary.ProviderName),
+		id := strings.TrimSpace(summary.ModelID)
+		models = append(models, domain.InvocationTargetDescriptor{
+			TargetID: id, TargetKind: domain.TargetBedrockFoundationModel, DisplayName: id,
+			OwnedBy: strings.TrimSpace(summary.ProviderName), CanonicalModelRef: id,
+			Region: bedrockTargetRegion(a.controlPlaneEndpoint), Lifecycle: domain.TargetLifecycleActive,
+			MetadataSource: domain.MetadataSourceProvider, Availability: domain.AvailabilityAvailable, FetchedAt: now,
+			Metadata: domain.NormalizedModelMetadata{
+				InputModalities: slices.Clone(summary.InputModalities), OutputModalities: slices.Clone(summary.OutputModalities),
+				InferenceTypes: slices.Clone(summary.InferenceTypesSupported),
+			},
 		})
 	}
 	return models, nil
+}
+
+func (a *Adapter) MapCapabilityClaims(target domain.InvocationTargetDescriptor, scope domain.InvocationTargetScopeKey, observedAt time.Time) []domain.CapabilityClaim {
+	var capabilityIDs []string
+	if containsFold(target.Metadata.InputModalities, "TEXT") && containsFold(target.Metadata.OutputModalities, "TEXT") {
+		capabilityIDs = append(capabilityIDs, "chat")
+	}
+	if containsFold(target.Metadata.InputModalities, "IMAGE") && containsFold(target.Metadata.OutputModalities, "TEXT") {
+		capabilityIDs = append(capabilityIDs, "vision")
+	}
+	claims := make([]domain.CapabilityClaim, 0, len(capabilityIDs))
+	for _, capabilityID := range capabilityIDs {
+		claims = append(claims, domain.CapabilityClaim{
+			CapabilityID: capabilityID, Status: domain.ClaimSupported, Evidence: domain.EvidenceDeclared,
+			Source: domain.ClaimSourceProviderMetadata, Scope: scope, ObservedAt: observedAt,
+			Revision: provider.CapabilityClaimRevision(string(domain.ClaimSourceProviderMetadata), target.TargetID, capabilityID),
+		})
+	}
+	return claims
+}
+
+func containsFold(values []string, wanted string) bool {
+	return slices.ContainsFunc(values, func(value string) bool { return strings.EqualFold(value, wanted) })
+}
+
+func bedrockTargetRegion(endpoint *url.URL) string {
+	if endpoint == nil {
+		return ""
+	}
+	parts := strings.Split(endpoint.Hostname(), ".")
+	for index, part := range parts {
+		switch strings.ToLower(part) {
+		case "bedrock", "bedrock-fips", "bedrock-runtime", "bedrock-runtime-fips", "bedrock-agent-runtime":
+			if index+1 < len(parts) {
+				return parts[index+1]
+			}
+		}
+	}
+	return ""
 }
 
 // offerableFoundationModel decides whether a control-plane summary describes a

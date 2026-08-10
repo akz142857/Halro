@@ -13,7 +13,8 @@ import type {
   Project,
   Provider,
   ProviderCapabilities,
-  ProviderModelCatalog,
+  InvocationTargetCatalog,
+  ResolvedInvocationTarget,
   ModelCapabilityDetection,
   RedactionPolicy,
   RedactionTestResult,
@@ -34,6 +35,7 @@ import type {
   SetupStatus,
   SystemStatus,
   SystemConfig,
+  ModelCatalogInfo,
   TokenGuardPolicy,
   TokenGuardPreview,
   UsageAttempt,
@@ -52,6 +54,7 @@ export class ApiError extends Error {
     // What the far side actually answered, when a handler forwards it. A webhook endpoint
     // that rejects a payload explains itself in its body, not in our error string.
     public readonly detail = "",
+    public readonly payload: unknown = undefined,
   ) {
     super(message);
   }
@@ -96,6 +99,7 @@ async function request<T>(
       error?.error || `request failed (${response.status})`,
       error?.code,
       error?.response,
+      payload,
     );
   }
   return { data: payload as T, etag: response.headers.get("ETag") || "" };
@@ -195,6 +199,8 @@ export const api = {
     request<SystemStatus>("/system/status").then((value) => value.data),
   systemConfig: () =>
     request<SystemConfig>("/system/config").then((value) => value.data),
+  modelCatalog: () => request<ModelCatalogInfo>("/model-catalog").then((value) => value.data),
+  refreshModelCatalog: () => request<{ status: ModelCatalogInfo["status"] }>("/model-catalog/refresh", json("POST")).then((value) => value.data),
   settings: () => request<RuntimeSettings>("/settings"),
   updateSettings: (value: unknown, revision: number) =>
     request<RuntimeSettings>("/settings", json("PUT", value), `"${revision}"`),
@@ -283,12 +289,19 @@ export const api = {
       `"${revision}"`,
     ),
   providers: () => request<Page<Provider>>("/providers").then((value) => value.data),
-  providerModels: (id: string, bindingID = "", refresh = false) => {
+  invocationTargets: (id: string, bindingID = "", refresh = false) => {
     const query = new URLSearchParams();
     if (bindingID) query.set("binding_id", bindingID);
     if (refresh) query.set("refresh", "true");
     const suffix = query.size ? `?${query.toString()}` : "";
-    return request<ProviderModelCatalog>(`/providers/${encodeURIComponent(id)}/models${suffix}`).then((value) => value.data);
+    return request<InvocationTargetCatalog>(`/providers/${encodeURIComponent(id)}/invocation-targets${suffix}`).then((value) => value.data);
+  },
+  resolveInvocationTarget: (providerID: string, targetID: string, options: { targetKind: string; canonicalModelRef?: string; region?: string; bindingID?: string }) => {
+    const query = new URLSearchParams({ target_kind: options.targetKind });
+    if (options.canonicalModelRef) query.set("canonical_model_ref", options.canonicalModelRef);
+    if (options.region) query.set("region", options.region);
+    if (options.bindingID) query.set("binding_id", options.bindingID);
+    return request<ResolvedInvocationTarget>(`/providers/${encodeURIComponent(providerID)}/invocation-targets/${encodeURIComponent(targetID)}/resolution?${query.toString()}`).then((value) => value.data);
   },
   createModelCapabilityDetection: (providerID: string, value: unknown, idempotencyKey: string) =>
     request<ModelCapabilityDetection>(`/providers/${encodeURIComponent(providerID)}/model-capability-detections`, {

@@ -35,7 +35,10 @@ type deploymentInput struct {
 	Capabilities    *domain.ProviderCapabilities `json:"capabilities,omitempty"`
 	// ModelRevision is the per-model catalog revision the client read. An empty
 	// value skips the check; a stale one is a conflict, never a silent accept.
-	ModelRevision               string `json:"model_revision,omitempty"`
+	ModelRevision string `json:"model_revision,omitempty"`
+	// ResolutionRevision binds this write to the exact target and single
+	// Deployment Variant the operator reviewed.
+	ResolutionRevision          string `json:"resolution_revision,omitempty"`
 	CapabilityDetectionID       string `json:"capability_detection_id,omitempty"`
 	CapabilityDetectionRevision uint64 `json:"capability_detection_revision,omitempty"`
 	// OperationBindings is accepted by the decoder only so it can be refused by
@@ -84,8 +87,22 @@ func refuseOperationBindings(input deploymentInput) error {
 // "the catalog moved under you". The second is a conflict with a stable code:
 // the console refreshes the model and the operator re-confirms, rather than the
 // server quietly applying whatever the catalog says now.
-func (r *Runtime) adminDeploymentInputError(writer http.ResponseWriter, err error) {
+func (r *Runtime) adminDeploymentInputError(writer http.ResponseWriter, request *http.Request, err error) {
+	var changed *resolutionChangedError
 	switch {
+	case errors.As(err, &changed):
+		r.capabilityMetrics.recordRevisionConflict()
+		admin := request.Context().Value(adminContextKey{}).(adminRequestContext)
+		if auditErr := r.appendAdminAuditWithMetadata("admin_user", admin.session.Username, "deployment.resolution_changed", "provider", changed.ProviderID, "refused", "resolution_changed", map[string]any{
+			"mismatches": changed.Mismatches, "requested_revision": changed.RequestedRevision, "current_revision": changed.Resolution.ResolutionRevision,
+		}); auditErr != nil {
+			adminAuditError(writer)
+			return
+		}
+		writeJSON(writer, http.StatusConflict, map[string]any{
+			"error": changed.Error(), "code": "resolution_changed", "mismatches": changed.Mismatches,
+			"resolution": changed.Resolution,
+		})
 	case errors.Is(err, errModelCapabilityChanged):
 		// Counted here rather than at each caller: this is the single funnel
 		// every per-model revision conflict passes through.
@@ -125,7 +142,7 @@ func (r *Runtime) createAdminDeployment(writer http.ResponseWriter, request *htt
 		return
 	}
 	if err := refuseOperationBindings(input); err != nil {
-		r.adminDeploymentInputError(writer, err)
+		r.adminDeploymentInputError(writer, request, err)
 		return
 	}
 	if input.Enabled {
@@ -142,7 +159,7 @@ func (r *Runtime) createAdminDeployment(writer http.ResponseWriter, request *htt
 	now := time.Now().UTC()
 	deployment, err := r.deploymentFromInput(request, deploymentID, input, nil, now, now)
 	if err != nil {
-		r.adminDeploymentInputError(writer, err)
+		r.adminDeploymentInputError(writer, request, err)
 		return
 	}
 	deployment, err = r.store.PutDeployment(request.Context(), deployment, 0)
@@ -196,7 +213,7 @@ func (r *Runtime) updateAdminDeployment(writer http.ResponseWriter, request *htt
 		return
 	}
 	if err := refuseOperationBindings(input); err != nil {
-		r.adminDeploymentInputError(writer, err)
+		r.adminDeploymentInputError(writer, request, err)
 		return
 	}
 	r.adminTopologyMu.Lock()
@@ -222,7 +239,7 @@ func (r *Runtime) updateAdminDeployment(writer http.ResponseWriter, request *htt
 	}
 	deployment, err := r.deploymentFromInput(request, current.ID, input, prior, current.CreatedAt, time.Now().UTC())
 	if err != nil {
-		r.adminDeploymentInputError(writer, err)
+		r.adminDeploymentInputError(writer, request, err)
 		return
 	}
 	targetChanged := deployment.ProviderID != current.ProviderID ||
@@ -492,8 +509,10 @@ func (r *Runtime) deploymentFromInput(request *http.Request, deploymentID string
 	var resolution deploymentResolution
 	if input.CapabilityDetectionID != "" {
 		resolution, detected, err = r.resolveDeploymentDetection(request.Context(), instance, input, model, region)
+	} else if input.ResolutionRevision != "" {
+		resolution, err = r.resolveDeploymentVariant(request.Context(), instance, input, model, region)
 	} else {
-		resolution, err = resolveDeploymentTarget(instance, input, model, region, prior)
+		resolution, err = resolveDeploymentTargetWithCatalog(instance, input, model, region, prior, r.effectiveModelCatalog())
 	}
 	if err != nil {
 		return domain.Deployment{}, err
@@ -521,12 +540,22 @@ func (r *Runtime) deploymentFromInput(request *http.Request, deploymentID string
 	// The snapshot is built first because its source decides how strong the
 	// deployment's own evidence is allowed to be.
 	snapshot := domain.ModelCapabilitySnapshot{
-		ProviderModel: model,
-		ModelRevision: resolution.entry.Revision(),
-		Source:        string(resolution.entry.Source),
-		Status:        string(resolution.entry.Status),
-		CapturedAt:    updatedAt,
-		Capabilities:  resolution.capabilities,
+		ProviderModel:      model,
+		CanonicalModelRef:  resolution.canonicalModelRef,
+		ModelRevision:      resolution.entry.Revision(),
+		ResolutionRevision: resolution.resolutionRevision,
+		ProviderRevision:   instance.Revision,
+		Source:             string(resolution.entry.Source),
+		Status:             string(resolution.entry.Status),
+		CapturedAt:         updatedAt,
+		Capabilities:       resolution.capabilities,
+	}
+	if resolution.variant != nil {
+		snapshot.ClaimRevisions = make([]string, 0, len(resolution.variant.CapabilityClaims))
+		for _, claim := range resolution.variant.CapabilityClaims {
+			snapshot.ClaimRevisions = append(snapshot.ClaimRevisions, claim.Revision)
+		}
+		snapshot.TargetFingerprint = provider.CapabilityClaimRevision(instance.ID, model, string(resolution.variant.Target.TargetKind), resolution.binding.ID, region)
 	}
 	if detected != nil {
 		snapshot = domain.DetectionCapabilitySnapshot(*detected, detected.Recommended, updatedAt)
@@ -553,7 +582,7 @@ func (r *Runtime) deploymentFromInput(request *http.Request, deploymentID string
 			snapshot.Capabilities = prior.Declaration()
 		}
 	} else {
-		snapshot.CatalogRevision = modelcatalog.Builtin().Revision()
+		snapshot.CatalogRevision = r.effectiveModelCatalog().Revision()
 		snapshot.Capabilities = modelcatalog.Clamp(resolution.entry.Capabilities, resolution.binding.Capabilities)
 	}
 	snapshot.Evidence = domain.SnapshotEvidence(snapshot)
@@ -652,7 +681,7 @@ func (r *Runtime) resolveDeploymentDetection(ctx context.Context, instance domai
 		return deploymentResolution{}, nil, err
 	}
 	input.Capabilities.MaxContextTokens, input.Capabilities.MaxOutputTokens = retained.MaxContextTokens, retained.MaxOutputTokens
-	entry := modelcatalog.Unknown(modelcatalog.Key{ProviderType: instance.Type, Profile: binding.ProfileID, Model: model, Region: region})
+	entry := modelcatalog.Unknown(modelcatalog.Key{ProviderType: instance.Type, Profile: binding.ProfileID, TargetKind: input.TargetKind, Model: model, Region: region})
 	return deploymentResolution{binding: binding, capabilities: retained, entry: entry}, &detection, nil
 }
 
@@ -711,8 +740,13 @@ func providerRegion(instance domain.ProviderInstance) string {
 		return ""
 	}
 	parts := strings.Split(parsed.Hostname(), ".")
-	if len(parts) > 1 {
-		return parts[1]
+	for index, part := range parts {
+		if strings.HasPrefix(part, "bedrock") && index+1 < len(parts) {
+			candidate := parts[index+1]
+			if candidate != "amazonaws" && candidate != "vpce" {
+				return candidate
+			}
+		}
 	}
 	return ""
 }
@@ -742,11 +776,146 @@ var errCapabilitiesExceedMappedModel = errors.New("deployment capabilities excee
 // deploymentResolution is what the server decided, from the catalog and the
 // provider topology, rather than from what the client claimed.
 type deploymentResolution struct {
-	binding      domain.ProviderProfileBinding
-	capabilities domain.ProviderCapabilities
-	entry        modelcatalog.Entry
-	declared     bool
-	mapped       bool
+	binding            domain.ProviderProfileBinding
+	capabilities       domain.ProviderCapabilities
+	entry              modelcatalog.Entry
+	variant            *domain.DeploymentVariant
+	canonicalModelRef  string
+	resolutionRevision string
+	declared           bool
+	mapped             bool
+}
+
+type resolutionChangedError struct {
+	Mismatches        []string
+	Resolution        adminInvocationTarget
+	ProviderID        string
+	RequestedRevision string
+}
+
+func (e *resolutionChangedError) Error() string {
+	return "invocation target resolution changed; review the updated capability summary before saving"
+}
+
+func (r *Runtime) resolveDeploymentVariant(ctx context.Context, instance domain.ProviderInstance, input deploymentInput, model, region string) (deploymentResolution, error) {
+	bindings, err := invocationTargetBindings(instance, strings.TrimSpace(input.BindingID))
+	if err != nil {
+		return deploymentResolution{}, err
+	}
+	targetKind, err := deploymentTargetKind(instance.Type, bindings[0].AccessSurface, bindings[0].ProfileID, input.TargetKind)
+	if err != nil {
+		return deploymentResolution{}, err
+	}
+	target := domain.InvocationTargetDescriptor{
+		TargetID: model, TargetKind: targetKind, DisplayName: model, CanonicalModelRef: strings.TrimSpace(input.CapabilityModel),
+		Region: region, Lifecycle: domain.TargetLifecycleUnknown, MetadataSource: domain.MetadataSourceNone,
+		Availability: domain.AvailabilityUnverified, FetchedAt: r.now().UTC(),
+	}
+	mappers := make(map[string]provider.ProviderMetadataMapper)
+	bindingTargets := make(map[string]domain.InvocationTargetDescriptor)
+	credentialRevision, credentialErr := r.providerCredentialRevision(ctx, instance)
+	if credentialErr != nil {
+		return deploymentResolution{}, errors.New("deployment provider credential is unavailable")
+	}
+	results := r.fetchInvocationTargetCatalogs(ctx, instance, bindings, true)
+	for index, binding := range bindings {
+		result := results[index]
+		var bindingTarget domain.InvocationTargetDescriptor
+		found := false
+		for _, candidate := range result.items {
+			if candidate.TargetID == model && candidate.TargetKind == targetKind && (candidate.Region == "" || region == "" || candidate.Region == region) {
+				bindingTarget, found = candidate, true
+				break
+			}
+		}
+		adapter, ok := r.providers.AdapterForBinding(instance.ID, binding.ID)
+		if !ok && len(instance.Bindings) == 0 {
+			adapter, ok = r.providers.AdapterForProvider(instance.ID)
+		}
+		if ok {
+			if mapper, mapped := providerMetadataMapper(adapter); mapped {
+				mappers[binding.ID] = mapper
+			}
+			if result.discovery.CanDescribe {
+				if describer, canDescribe := invocationTargetDescriber(adapter); canDescribe {
+					describeTarget := target
+					if found {
+						describeTarget = bindingTarget
+					}
+					if described, describedOK := r.describeInvocationTarget(ctx, instance, binding, describer, describeTarget); describedOK {
+						bindingTarget, found = described, true
+					}
+				}
+			}
+		}
+		if found {
+			if input.CapabilityModel != "" {
+				bindingTarget.CanonicalModelRef = strings.TrimSpace(input.CapabilityModel)
+			}
+			bindingTargets[binding.ID] = bindingTarget
+			if len(bindingTargets) == 1 {
+				target = bindingTarget
+			}
+		}
+	}
+	if input.CapabilityModel != "" {
+		target.CanonicalModelRef = strings.TrimSpace(input.CapabilityModel)
+	}
+	current := resolveInvocationTargetWithCatalog(instance, target, bindingTargets, bindings, mappers, credentialRevision, r.effectiveModelCatalog())
+	var selected *domain.DeploymentVariant
+	for index := range current.Variants {
+		if current.Variants[index].BindingID == input.BindingID {
+			selected = &current.Variants[index]
+			break
+		}
+	}
+	var mismatches []string
+	if selected == nil {
+		mismatches = append(mismatches, "binding_revision")
+	} else if input.ResolutionRevision != selected.Revision {
+		mismatches = append(mismatches, "resolution_revision")
+	}
+	if len(mismatches) > 0 {
+		return deploymentResolution{}, &resolutionChangedError{Mismatches: mismatches, Resolution: current, ProviderID: instance.ID, RequestedRevision: input.ResolutionRevision}
+	}
+	retained := selected.Capabilities
+	if input.Capabilities != nil {
+		if !domain.ProviderCapabilitiesSubset(*input.Capabilities, selected.Capabilities) {
+			return deploymentResolution{}, errors.New("deployment capabilities exceed the selected deployment variant")
+		}
+		retained = *input.Capabilities
+	}
+	source := modelcatalog.SourceProviderMetadata
+	status := modelcatalog.StatusPartial
+	for _, claim := range selected.CapabilityClaims {
+		if claim.Source == domain.ClaimSourceBuiltinCatalog {
+			source, status = modelcatalog.SourceBuiltin, modelcatalog.StatusKnown
+			break
+		}
+		if claim.Source == domain.ClaimSourceSignedCatalog {
+			source, status = modelcatalog.SourceSignedCatalog, modelcatalog.StatusPartial
+		}
+	}
+	catalogModel := target.CanonicalModelRef
+	if catalogModel == "" {
+		catalogModel = model
+	}
+	bindingIndex := slices.IndexFunc(bindings, func(binding domain.ProviderProfileBinding) bool { return binding.ID == selected.BindingID })
+	selectedBinding := bindings[bindingIndex]
+	_, catalogEntry := invocationTargetCatalogEntryWithCatalog(instance, selectedBinding, target, r.effectiveModelCatalog())
+	entry := modelcatalog.Entry{
+		Key:    modelcatalog.Key{ProviderType: instance.Type, Profile: selected.ProfileID, TargetKind: target.TargetKind, Model: catalogModel, Region: region},
+		Status: status, Source: source, Capabilities: selected.Capabilities,
+	}
+	if source == modelcatalog.SourceBuiltin || source == modelcatalog.SourceSignedCatalog {
+		entry = catalogEntry
+	}
+	mapped := target.CanonicalModelRef != "" && target.CanonicalModelRef != model
+	return deploymentResolution{
+		binding:      selectedBinding,
+		capabilities: retained, entry: entry, variant: selected, canonicalModelRef: target.CanonicalModelRef,
+		resolutionRevision: selected.Revision, declared: mapped, mapped: mapped,
+	}, nil
 }
 
 // resolveDeploymentTarget picks the binding a model should run through and the
@@ -756,7 +925,11 @@ type deploymentResolution struct {
 // authority: a client cannot name a binding to obtain capabilities the catalog
 // does not support for that model.
 func resolveDeploymentTarget(instance domain.ProviderInstance, input deploymentInput, model, region string, prior *priorDeployment) (deploymentResolution, error) {
-	mappedEntry, mapped, err := resolveCapabilityModelEntry(instance, input)
+	return resolveDeploymentTargetWithCatalog(instance, input, model, region, prior, modelcatalog.Builtin())
+}
+
+func resolveDeploymentTargetWithCatalog(instance domain.ProviderInstance, input deploymentInput, model, region string, prior *priorDeployment, catalog *modelcatalog.Catalog) (deploymentResolution, error) {
+	mappedEntry, mapped, err := resolveCapabilityModelEntryWithCatalog(instance, input, catalog)
 	if err != nil {
 		return deploymentResolution{}, err
 	}
@@ -811,8 +984,12 @@ func resolveDeploymentTarget(instance domain.ProviderInstance, input deploymentI
 	}
 	var known, unknown []deploymentResolution
 	for _, binding := range candidates {
-		key := modelcatalog.Key{ProviderType: instance.Type, Profile: binding.ProfileID, Model: model, Region: region}
-		entry, found := modelcatalog.Builtin().Lookup(key)
+		targetKind, kindErr := deploymentTargetKind(instance.Type, binding.AccessSurface, binding.ProfileID, input.TargetKind)
+		if kindErr != nil {
+			return deploymentResolution{}, kindErr
+		}
+		key := modelcatalog.Key{ProviderType: instance.Type, Profile: binding.ProfileID, TargetKind: targetKind, Model: model, Region: region}
+		entry, found := catalog.Lookup(key)
 		if mapped {
 			entry, found = mappedEntry, true
 		}
@@ -822,7 +999,7 @@ func resolveDeploymentTarget(instance domain.ProviderInstance, input deploymentI
 			entry:        entry,
 			mapped:       mapped,
 		}
-		if found && entry.Status == modelcatalog.StatusKnown {
+		if found && (entry.Source == modelcatalog.SourceBuiltin || entry.Source == modelcatalog.SourceSignedCatalog) {
 			known = append(known, resolution)
 			continue
 		}
@@ -888,6 +1065,10 @@ func resolveDeploymentTarget(instance domain.ProviderInstance, input deploymentI
 }
 
 func resolveCapabilityModelEntry(instance domain.ProviderInstance, input deploymentInput) (modelcatalog.Entry, bool, error) {
+	return resolveCapabilityModelEntryWithCatalog(instance, input, modelcatalog.Builtin())
+}
+
+func resolveCapabilityModelEntryWithCatalog(instance domain.ProviderInstance, input deploymentInput, catalog *modelcatalog.Catalog) (modelcatalog.Entry, bool, error) {
 	model := strings.TrimSpace(input.CapabilityModel)
 	if model == "" {
 		return modelcatalog.Entry{}, false, nil
@@ -904,9 +1085,13 @@ func resolveCapabilityModelEntry(instance domain.ProviderInstance, input deploym
 		return modelcatalog.Entry{}, false, errors.New("capability_model is only valid for Azure Deployment and custom endpoint targets")
 	}
 	providerType, profileID, _ := capabilityModelCatalogScope(instance.Type)
-	entry, found := modelcatalog.Builtin().Lookup(modelcatalog.Key{ProviderType: providerType, Profile: profileID, Model: model})
-	if !found || entry.Status != modelcatalog.StatusKnown {
-		return modelcatalog.Entry{}, false, errors.New("capability_model is not a reviewed builtin model")
+	targetKind := domain.TargetModelID
+	if providerType == domain.ProviderOpenAICompatible {
+		targetKind = domain.TargetCustomEndpointModel
+	}
+	entry, found := catalog.Lookup(modelcatalog.Key{ProviderType: providerType, Profile: profileID, TargetKind: targetKind, Model: model})
+	if !found || entry.Source != modelcatalog.SourceBuiltin && entry.Source != modelcatalog.SourceSignedCatalog {
+		return modelcatalog.Entry{}, false, errors.New("capability_model is not covered by a reviewed catalog")
 	}
 	if err := checkModelRevision(input.ModelRevision, entry); err != nil {
 		return modelcatalog.Entry{}, false, err

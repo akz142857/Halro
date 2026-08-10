@@ -1,0 +1,143 @@
+name: publish signed model catalog
+
+on:
+  pull_request:
+    paths:
+      - catalog/model-catalog-v1.json
+  workflow_dispatch:
+    inputs:
+      candidate_ref:
+        description: Full commit SHA containing the externally signed candidate
+        required: true
+        type: string
+      candidate_path:
+        description: Candidate path under catalog/candidates
+        required: true
+        default: catalog/candidates/model-catalog-v1.json
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: model-catalog-production
+  cancel-in-progress: false
+
+jobs:
+  verify-publication:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    env:
+      CANDIDATE_SHA: ${{ github.event.pull_request.head.sha }}
+      EXPECTED_PUBLISHER: ${{ vars.CATALOG_PUBLISHER_LOGIN }}
+      MODEL_CATALOG_TRUST_ROOTS: ${{ vars.MODEL_CATALOG_TRUST_ROOTS }}
+      PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+      PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+      PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Verify publication artifact from the pull request
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${CANDIDATE_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          test -n "${MODEL_CATALOG_TRUST_ROOTS}"
+          git fetch origin "${CANDIDATE_SHA}"
+          umask 077
+          changed_file=$(mktemp "${RUNNER_TEMP}/model-catalog-changed.XXXXXX")
+          candidate_file=$(mktemp "${RUNNER_TEMP}/model-catalog-pr.XXXXXX.json")
+          trap 'rm -f "${changed_file}" "${candidate_file}"' EXIT
+          git diff --name-only --no-renames origin/main..."${CANDIDATE_SHA}" >"${changed_file}"
+          main_sha=$(git rev-parse --verify "origin/main^{commit}")
+          python3 tools/modelcatalog/verify_publication_gate.py \
+            --expected-publisher "${EXPECTED_PUBLISHER}" \
+            --actual-publisher "${PR_AUTHOR}" \
+            --expected-repository "${GITHUB_REPOSITORY}" \
+            --actual-head-repository "${PR_HEAD_REPOSITORY}" \
+            --head-ref "${PR_HEAD_REF}" \
+            --pr-base-sha "${PR_BASE_SHA}" \
+            --current-main-sha "${main_sha}" \
+            --changed-files "${changed_file}"
+          git show "${CANDIDATE_SHA}:catalog/model-catalog-v1.json" >"${candidate_file}"
+          if test -f catalog/model-catalog-v1.json; then
+            go run ./tools/modelcatalog/verify \
+              --newer-than catalog/model-catalog-v1.json "${candidate_file}"
+          else
+            go run ./tools/modelcatalog/verify "${candidate_file}"
+          fi
+
+  propose:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: model-catalog-production
+    permissions:
+      contents: read
+    env:
+      CANDIDATE_REF: ${{ inputs.candidate_ref }}
+      CANDIDATE_PATH: ${{ inputs.candidate_path }}
+      MODEL_CATALOG_TRUST_ROOTS: ${{ vars.MODEL_CATALOG_TRUST_ROOTS }}
+      GH_TOKEN: ${{ secrets.CATALOG_PUBLISHER_TOKEN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.CATALOG_PUBLISHER_TOKEN }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Fetch and verify externally signed candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${CANDIDATE_REF}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${CANDIDATE_PATH}" =~ ^catalog/candidates/[A-Za-z0-9._-]+\.json$ ]]
+          test -n "${MODEL_CATALOG_TRUST_ROOTS}"
+          test -n "${GH_TOKEN}"
+          git fetch origin "${CANDIDATE_REF}"
+          candidate_commit=$(git rev-parse --verify "FETCH_HEAD^{commit}")
+          umask 077
+          candidate_file=$(mktemp "${RUNNER_TEMP}/model-catalog-candidate.XXXXXX.json")
+          trap 'rm -f "${candidate_file}"' EXIT
+          git show "${candidate_commit}:${CANDIDATE_PATH}" >"${candidate_file}"
+          if test -f catalog/model-catalog-v1.json; then
+            go run ./tools/modelcatalog/verify \
+              --newer-than catalog/model-catalog-v1.json "${candidate_file}"
+          else
+            go run ./tools/modelcatalog/verify "${candidate_file}"
+          fi
+          candidate_revision=$(jq -r '.payload.catalog_revision' "${candidate_file}")
+          candidate_sequence=$(jq -r '.payload.sequence' "${candidate_file}")
+          install -m 0644 "${candidate_file}" catalog/model-catalog-v1.json
+          {
+            echo "candidate_commit=${candidate_commit}"
+            echo "candidate_revision=${candidate_revision}"
+            echo "candidate_sequence=${candidate_sequence}"
+          } >>"${GITHUB_OUTPUT}"
+        id: candidate
+      - name: Open publication pull request
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch="catalog/publish-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          git switch -c "${branch}"
+          git config user.name "halro-catalog-publisher[bot]"
+          git config user.email "halro-catalog-publisher[bot]@users.noreply.github.com"
+          git add catalog/model-catalog-v1.json
+          git commit -m "catalog: publish verified signed snapshot"
+          git push origin "${branch}"
+          gh pr create \
+            --base main \
+            --head "${branch}" \
+            --title "catalog: publish verified signed snapshot" \
+            --body "Externally signed candidate verified by the production trust roots. Candidate commit: ${{ steps.candidate.outputs.candidate_commit }}. Catalog revision: ${{ steps.candidate.outputs.candidate_revision }}. Sequence: ${{ steps.candidate.outputs.candidate_sequence }}. Merge requires the catalog CODEOWNERS, the verify-publication check, and branch-protection approvals described in docs/runbooks/model-catalog-publishing.md."

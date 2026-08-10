@@ -35,6 +35,14 @@ func deploymentBinding(instance domain.ProviderInstance, deployment domain.Deplo
 // as current: nothing establishes its claims any more, and the fail-closed
 // reading is the one that does not invent evidence.
 func reviewForDeployment(instances map[string]domain.ProviderInstance, deployment domain.Deployment) capabilityReview {
+	return reviewForDeploymentWithCatalog(instances, deployment, modelcatalog.Builtin())
+}
+
+func reviewForDeploymentWithCatalog(instances map[string]domain.ProviderInstance, deployment domain.Deployment, catalog *modelcatalog.Catalog) capabilityReview {
+	return reviewForDeploymentWithCatalogState(instances, deployment, catalog, false)
+}
+
+func reviewForDeploymentWithCatalogState(instances map[string]domain.ProviderInstance, deployment domain.Deployment, catalog *modelcatalog.Catalog, catalogUnavailable bool) capabilityReview {
 	instance, ok := instances[deployment.ProviderID]
 	if !ok {
 		return capabilityReview{
@@ -45,7 +53,7 @@ func reviewForDeployment(instances map[string]domain.ProviderInstance, deploymen
 			Reason:        reviewReasonProfileNarrowed,
 		}
 	}
-	return reviewCapabilities(deployment, deploymentBinding(instance, deployment), instance.Type)
+	return reviewCapabilitiesWithCatalogState(deployment, deploymentBinding(instance, deployment), instance.Type, catalog, catalogUnavailable)
 }
 
 func (r *Runtime) providerInstancesByID(ctx context.Context) (map[string]domain.ProviderInstance, error) {

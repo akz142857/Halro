@@ -198,6 +198,25 @@ func TestCapabilityAuditCarriesNoSecret(t *testing.T) {
 	}
 }
 
+func TestCapabilitySnapshotAuditCarriesResolutionProvenance(t *testing.T) {
+	deployment := domain.Deployment{
+		ProviderID: "provider", ProviderModel: "model", ProfileID: domain.ProfileGeminiText,
+		ModelCapabilitySnapshot: domain.ModelCapabilitySnapshot{
+			ProviderModel: "model", ModelRevision: "sha256:model", ResolutionRevision: "sha256:resolution",
+			ProviderRevision: 7, TargetFingerprint: "sha256:target", ClaimRevisions: []string{"sha256:claim-a", "sha256:claim-b"},
+		},
+	}
+	metadata := capabilitySnapshotMetadata(deployment)
+	if metadata["resolution_revision"] != "sha256:resolution" || metadata["provider_revision"] != uint64(7) ||
+		metadata["target_fingerprint"] != "sha256:target" {
+		t.Fatalf("resolution provenance missing from audit metadata: %#v", metadata)
+	}
+	claims, ok := metadata["claim_revisions"].([]string)
+	if !ok || len(claims) != 2 || claims[0] != "sha256:claim-a" || claims[1] != "sha256:claim-b" {
+		t.Fatalf("claim revisions missing from audit metadata: %#v", metadata)
+	}
+}
+
 // §7.2: turning a capability on makes the deployment claim something no test
 // has exercised, so it must drop out of routing and be re-enabled explicitly.
 // Turning one off leaves it doing strictly less than it was validated for, so

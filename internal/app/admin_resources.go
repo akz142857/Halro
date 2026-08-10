@@ -163,7 +163,7 @@ func (r *Runtime) listAdminDeployments(writer http.ResponseWriter, request *http
 			}
 			item.PricingQuarantined, item.PricingQuarantineReason = quarantined, reason
 			active = append(active, adminDeploymentView{
-				Deployment: item, CapabilityReview: reviewForDeployment(instances, item),
+				Deployment: item, CapabilityReview: reviewForDeploymentWithCatalogState(instances, item, r.effectiveModelCatalog(), r.modelCatalogUnavailable()),
 			})
 		}
 	}
@@ -188,7 +188,7 @@ func (r *Runtime) getAdminDeployment(writer http.ResponseWriter, request *http.R
 	}
 	writer.Header().Set("ETag", revisionETag(item.Revision))
 	writeJSON(writer, http.StatusOK, adminDeploymentView{
-		Deployment: item, CapabilityReview: reviewForDeployment(instances, item),
+		Deployment: item, CapabilityReview: reviewForDeploymentWithCatalogState(instances, item, r.effectiveModelCatalog(), r.modelCatalogUnavailable()),
 	})
 }
 

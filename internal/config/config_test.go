@@ -73,6 +73,36 @@ func TestDecodeRejectsUnknownFields(t *testing.T) {
 	}
 }
 
+func TestModelCatalogConfigurationIsBounded(t *testing.T) {
+	valid := Default()
+	valid.ModelCatalog.Enabled = true
+	valid.ModelCatalog.PinnedRevision = "sha256:" + strings.Repeat("a", 64)
+	if err := valid.Validate(LoadOptions{}); err != nil {
+		t.Fatalf("valid model catalog configuration was rejected: %v", err)
+	}
+	tests := []struct {
+		name   string
+		mutate func(*ModelCatalog)
+		want   string
+	}{
+		{"short refresh", func(value *ModelCatalog) { value.RefreshInterval = Duration(time.Minute) }, "refresh_interval"},
+		{"download limit", func(value *ModelCatalog) { value.MaxDownloadBytes = 1 }, "max_download_bytes"},
+		{"decoded below download", func(value *ModelCatalog) { value.MaxDecodedBytes = value.MaxDownloadBytes - 1 }, "max_decoded_bytes"},
+		{"compression ratio", func(value *ModelCatalog) { value.MaxCompressionRatio = 101 }, "max_compression_ratio"},
+		{"entry count", func(value *ModelCatalog) { value.MaxEntries = 100001 }, "max_entries"},
+		{"revision pin", func(value *ModelCatalog) { value.PinnedRevision = "sha256:not-a-digest" }, "pinned_revision"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := valid
+			test.mutate(&candidate.ModelCatalog)
+			if err := candidate.Validate(LoadOptions{}); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("expected %q validation error, got %v", test.want, err)
+			}
+		})
+	}
+}
+
 func TestKeySlotsConfigurationIsValidatedStatically(t *testing.T) {
 	keySlots := strings.Replace(validConfig, `  master_key:
     mode: file

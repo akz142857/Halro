@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,6 +16,44 @@ import (
 	"github.com/akz142857/Halro/internal/provider"
 	"github.com/akz142857/Halro/internal/semantic"
 )
+
+func TestResolveCapabilityDetectorRequiresExplicitBindingForUnknownModel(t *testing.T) {
+	runtime, bootstrap := bootstrapForCapabilityTest(t)
+	instance, err := runtime.store.GetProvider(context.Background(), bootstrap.ProviderID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bindings := instance.EffectiveProfileBindings()
+	chat := bindings[0]
+	chat.ID = "b-chat"
+	media := chat
+	media.ID = "b-media"
+	media.ProfileID = domain.ProfileOpenAIMediaResources
+	instance.Bindings = []domain.ProviderProfileBinding{chat, media}
+
+	original := runtime.providers
+	registry := provider.NewRegistry()
+	chatDetector, mediaDetector := &fixedCapabilityDetector{}, &fixedCapabilityDetector{}
+	if err := registry.RegisterBindingAdapter(instance.ID, chat.ID, chatDetector); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.RegisterBindingAdapter(instance.ID, media.ID, mediaDetector); err != nil {
+		t.Fatal(err)
+	}
+	runtime.providers = registry
+	original.Close()
+
+	input := modelCapabilityDetectionInput{ProviderModel: "unlisted-image-model", RiskTier: "safe_automatic"}
+	if _, _, _, _, _, err := runtime.resolveCapabilityDetector(instance, input, ""); !errors.Is(err, errAmbiguousCapabilityBinding) {
+		t.Fatalf("unqualified unknown model resolved an arbitrary interface: %v", err)
+	}
+
+	input.BindingID = media.ID
+	binding, _, detector, _, known, err := runtime.resolveCapabilityDetector(instance, input, "")
+	if err != nil || binding.ID != media.ID || detector == nil || known {
+		t.Fatalf("explicit interface was not honored: binding=%q detector=%T known=%t err=%v", binding.ID, detector, known, err)
+	}
+}
 
 type fixedCapabilityDetector struct{ calls atomic.Int64 }
 

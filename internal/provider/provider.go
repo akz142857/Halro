@@ -2,6 +2,8 @@ package provider
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"net"
 	"slices"
@@ -13,6 +15,15 @@ import (
 	"github.com/akz142857/Halro/internal/openaiapi"
 	"github.com/akz142857/Halro/internal/semantic"
 )
+
+func CapabilityClaimRevision(parts ...string) string {
+	hash := sha256.New()
+	for _, part := range parts {
+		_, _ = hash.Write([]byte(part))
+		_, _ = hash.Write([]byte{0})
+	}
+	return "sha256:" + hex.EncodeToString(hash.Sum(nil))
+}
 
 type ErrorClass string
 
@@ -148,21 +159,29 @@ type Prober interface {
 	Probe(context.Context, string) error
 }
 
-type ModelDescriptor struct {
-	ID      string `json:"id"`
-	OwnedBy string `json:"owned_by,omitempty"`
+// InvocationTargetLister discovers real upstream invocation identities using
+// the adapter's bound credential and endpoint. Discovery establishes
+// availability only; capability claims are produced separately by an audited
+// ProviderMetadataMapper.
+type InvocationTargetLister interface {
+	ListInvocationTargets(context.Context, domain.TargetQuery) ([]domain.InvocationTargetDescriptor, error)
 }
 
-// ModelLister discovers invocation target IDs using the adapter's bound
-// credential and normalized endpoint. It intentionally returns no capability
-// claims because provider catalog responses do not establish operation support.
-type ModelLister interface {
-	ListModels(context.Context) ([]ModelDescriptor, error)
+type InvocationTargetDescriber interface {
+	DescribeInvocationTarget(context.Context, domain.InvocationTargetDescriptor) (domain.InvocationTargetDescriptor, error)
+}
+
+type ProviderMetadataMapper interface {
+	MapCapabilityClaims(domain.InvocationTargetDescriptor, domain.InvocationTargetScopeKey, time.Time) []domain.CapabilityClaim
+}
+
+type InvocationTargetDiscoveryReporter interface {
+	InvocationTargetDiscovery() domain.InvocationTargetDiscoveryCapabilities
 }
 
 // AdapterUnwrapper exposes an adapter wrapped only to add profile metadata.
-// Optional extension interfaces such as ModelLister remain discoverable
-// without making every wrapper claim support for them.
+// Optional invocation-target extension interfaces remain discoverable without
+// making every wrapper claim support for them.
 type AdapterUnwrapper interface {
 	UnwrapAdapter() Adapter
 }

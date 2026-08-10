@@ -1,11 +1,12 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { ErrorState, Loading, PageHeader, StatusDot } from "../components";
+import { useInstantFormatter } from "../format";
 import { navigate, usePathname } from "../navigation";
-import { useSession } from "../session";
-import type { SystemConfigEntry, WritePathSummary } from "../types";
+import { useIsReadOnly, useSession } from "../session";
+import type { ModelCatalogInfo, SystemConfigEntry, WritePathSummary } from "../types";
 import { AdminUsersSection } from "./AdminUsersSection";
 import { AccountingTimezoneForm } from "./AccountingTimezoneForm";
 import { AppearanceForm } from "./AppearanceForm";
@@ -44,11 +45,16 @@ export function SettingsPage({ mfaSetupRequired = false }: { mfaSetupRequired?: 
     queryFn: api.systemConfig,
     enabled: !mfaSetupRequired && pane === "config",
   });
+  const modelCatalog = useQuery({
+    queryKey: ["model-catalog"], queryFn: api.modelCatalog,
+    enabled: !mfaSetupRequired && pane === "config",
+    refetchInterval: 30_000,
+  });
   const settings = useQuery({ queryKey: ["settings"], queryFn: api.settings, enabled: !mfaSetupRequired && pane === "instance" });
   const accounting = useQuery({ queryKey: ["accounting-settings"], queryFn: api.accountingSettings, enabled: !mfaSetupRequired && pane === "instance" });
   const uiSettings = useQuery({ queryKey: ["ui-settings"], queryFn: api.uiSettings, enabled: !mfaSetupRequired && (pane === "general" || pane === "instance") });
   const preferences = useQuery({ queryKey: ["preferences"], queryFn: api.preferences, enabled: !mfaSetupRequired && (pane === "general" || pane === "instance") });
-  const queries = pane === "diagnostics" ? [status] : pane === "config" ? [config] : pane === "instance" ? [settings, uiSettings, preferences, accounting] : pane === "general" ? [uiSettings, preferences] : [];
+  const queries = pane === "diagnostics" ? [status] : pane === "config" ? [config, modelCatalog] : pane === "instance" ? [settings, uiSettings, preferences, accounting] : pane === "general" ? [uiSettings, preferences] : [];
   const pending = queries.some((query) => query.isPending);
   const error = queries.find((query) => query.error)?.error;
   const accountingLabels = [t("settings.healthy"), t("settings.degraded"), t("settings.unavailable"), t("settings.recoveryRequired")];
@@ -82,13 +88,41 @@ export function SettingsPage({ mfaSetupRequired = false }: { mfaSetupRequired?: 
             {pane === "security" && <section aria-labelledby="security-title"><SettingsGroupHeader title={t("settings.panes.security")} description={t("settings.securityDescription")} id="security-title" /><PasswordChangeForm username={session?.username} /><MFASettings username={session?.username} /></section>}
             {pane === "accounts" && <section aria-labelledby="accounts-title"><SettingsGroupHeader title={t("settings.panes.accounts")} description={t("settings.accountsDescription")} id="accounts-title" /><AdminUsersSection /></section>}
             {!pending && !error && pane === "instance" && uiSettings.data && preferences.data && settings.data && <section aria-labelledby="instance-title"><SettingsGroupHeader title={t("settings.panes.instance")} description={t("settings.instanceDescription")} id="instance-title" /><InstanceLanguageForm ui={uiSettings.data.data} preferences={preferences.data.data} />{accounting.data && <AccountingTimezoneForm settings={accounting.data.data} />}<RuntimeSettingsForm settings={settings.data.data} /></section>}
-            {!pending && !error && pane === "config" && config.data && <section aria-labelledby="config-title"><SettingsGroupHeader title={t("settings.panes.config")} description={t("settings.configPreviewDescription")} id="config-title" /><ConfigPreviewCard yaml={config.data.yaml} entries={config.data.entries} /></section>}
+            {!pending && !error && pane === "config" && config.data && modelCatalog.data && <section aria-labelledby="config-title"><SettingsGroupHeader title={t("settings.panes.config")} description={t("settings.configPreviewDescription")} id="config-title" /><ModelCatalogCard info={modelCatalog.data} onRefresh={() => modelCatalog.refetch()} /><ConfigPreviewCard yaml={config.data.yaml} entries={config.data.entries} /></section>}
             {!pending && !error && pane === "diagnostics" && status.data && <DiagnosticsPane status={status.data} accountingLabels={accountingLabels} metricLabels={metricLabels} />}
           </div>
         </div>
       )}
     </>
   );
+}
+
+function ModelCatalogCard({ info, onRefresh }: { info: ModelCatalogInfo; onRefresh: () => Promise<unknown> }) {
+  const { t } = useTranslation();
+  const readOnly = useIsReadOnly();
+  const formatInstant = useInstantFormatter();
+  const refresh = useMutation({ mutationFn: api.refreshModelCatalog, onSettled: () => onRefresh() });
+  const status = info.status;
+  const degraded = status.state === "degraded" || status.state === "catalog_unavailable";
+  return <section className={`panel system-card model-catalog-card${degraded ? " warning" : ""}`} aria-labelledby="model-catalog-title">
+    <header className="config-overview-header">
+      <div><h3 id="model-catalog-title">{t("settings.modelCatalogTitle")}</h3><p>{t("settings.modelCatalogDescription")}</p></div>
+      <span className="config-overview-state" role="status" aria-live="polite"><StatusDot ok={!degraded} />{t(`settings.modelCatalogStates.${status.state}`)}</span>
+    </header>
+    <dl>
+      <div><dt>{t("settings.modelCatalogSource")}</dt><dd>{t(`deployments.capabilitySources.${status.source}`, { defaultValue: status.source })}</dd></div>
+      <div><dt>{t("settings.modelCatalogRevision")}</dt><dd><code>{status.revision}</code></dd></div>
+      <div><dt>{t("settings.modelCatalogSequence")}</dt><dd>{status.sequence ?? "—"}</dd></div>
+      <div><dt>{t("settings.modelCatalogLastSuccess")}</dt><dd>{formatInstant(status.last_success_at, "full")}</dd></div>
+      <div><dt>{t("settings.modelCatalogTrustRoots")}</dt><dd>{info.trust_root_count}</dd></div>
+      {status.error_class && <div><dt>{t("settings.modelCatalogError")}</dt><dd>{t(`settings.modelCatalogErrors.${status.error_class}`, { defaultValue: t("settings.modelCatalogErrors.unknown") })}</dd></div>}
+    </dl>
+    <div className="form-actions"><button type="button" className="button ghost" disabled={!status.enabled || readOnly || refresh.isPending} aria-describedby={readOnly ? "model-catalog-read-only" : undefined} onClick={() => refresh.mutate()}>{refresh.isPending ? t("common.loading") : t("settings.refreshModelCatalog")}</button></div>
+    {readOnly && <span id="model-catalog-read-only" className="sr-only">{t("settings.modelCatalogReadOnly")}</span>}
+    {!status.enabled && <p className="muted">{t("settings.modelCatalogDisabledHint")}</p>}
+    {refresh.isSuccess && <p role="status" aria-live="polite" className="muted">{t("settings.modelCatalogRefreshComplete")}</p>}
+    {refresh.error && <ErrorState error={refresh.error} />}
+  </section>;
 }
 
 function DiagnosticsPane({ status, accountingLabels, metricLabels }: { status: Awaited<ReturnType<typeof api.systemStatus>>; accountingLabels: string[]; metricLabels: Record<string, string> }) {

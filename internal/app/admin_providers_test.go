@@ -242,7 +242,7 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 	if directEnable.Code != http.StatusConflict {
 		t.Fatalf("untested deployment enable status=%d body=%s", directEnable.Code, directEnable.Body.String())
 	}
-	probe := &adminProbeAdapter{models: []provider.ModelDescriptor{{ID: "gpt-z"}, {ID: "gpt-a", OwnedBy: "openai"}, {ID: "gpt-a"}}}
+	probe := &adminProbeAdapter{targets: []domain.InvocationTargetDescriptor{{TargetID: "gpt-z", TargetKind: domain.TargetModelID}, {TargetID: "gpt-a", TargetKind: domain.TargetModelID, OwnedBy: "openai"}, {TargetID: "gpt-a", TargetKind: domain.TargetModelID}}}
 	probeRegistry := provider.NewRegistry()
 	if err := probeRegistry.RegisterAdapter(instance.ID, probe); err != nil {
 		t.Fatal(err)
@@ -355,7 +355,7 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 	if err := json.Unmarshal(routeResponse.Body.Bytes(), &route); err != nil {
 		t.Fatal(err)
 	}
-	probe = &adminProbeAdapter{models: []provider.ModelDescriptor{{ID: "gpt-z"}, {ID: "gpt-a", OwnedBy: "openai"}, {ID: "gpt-a"}}}
+	probe = &adminProbeAdapter{targets: []domain.InvocationTargetDescriptor{{TargetID: "gpt-z", TargetKind: domain.TargetModelID}, {TargetID: "gpt-a", TargetKind: domain.TargetModelID, OwnedBy: "openai"}, {TargetID: "gpt-a", TargetKind: domain.TargetModelID}}}
 	nextRegistry := provider.NewRegistry()
 	storedInstance, err := runtime.store.GetProvider(context.Background(), instance.ID)
 	if err != nil {
@@ -375,9 +375,9 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 	}
 	runtime.providers.Replace(nextRegistry)
 	for index, path := range []string{
-		"/admin/api/v1/providers/" + instance.ID + "/models",
-		"/admin/api/v1/providers/" + instance.ID + "/models",
-		"/admin/api/v1/providers/" + instance.ID + "/models?refresh=true",
+		"/admin/api/v1/providers/" + instance.ID + "/invocation-targets",
+		"/admin/api/v1/providers/" + instance.ID + "/invocation-targets",
+		"/admin/api/v1/providers/" + instance.ID + "/invocation-targets?refresh=true",
 	} {
 		request := adminRequest(t, http.MethodGet, path, nil)
 		request.AddCookie(cookie)
@@ -386,19 +386,19 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 		if response.Code != http.StatusOK {
 			t.Fatalf("model catalog request %d status=%d body=%s", index, response.Code, response.Body.String())
 		}
-		var catalog providerModelCatalogResponse
+		var catalog invocationTargetCatalogResponse
 		if err := json.Unmarshal(response.Body.Bytes(), &catalog); err != nil {
 			t.Fatal(err)
 		}
-		if len(catalog.Items) != 2 || catalog.Items[0].ID != "gpt-a" || catalog.Items[1].ID != "gpt-z" {
+		if len(catalog.Items) != 2 || catalog.Items[0].TargetID != "gpt-a" || catalog.Items[1].TargetID != "gpt-z" {
 			t.Fatalf("model catalog=%#v", catalog)
 		}
 		if index == 1 && !catalog.Cached {
 			t.Fatal("second model catalog response was not cached")
 		}
 	}
-	if probe.modelLists != 2 {
-		t.Fatalf("model catalog upstream calls=%d", probe.modelLists)
+	if probe.targetLists != 2 {
+		t.Fatalf("invocation target upstream calls=%d", probe.targetLists)
 	}
 	routeTest := performAdminMutation(t, runtime, cookie, csrf,
 		http.MethodPost, "/admin/api/v1/routes/"+route.ID+"/test", "", nil,
@@ -632,10 +632,10 @@ func TestCapabilityEvidenceIsNotSilentlyUpgradedAndDisabledCapabilitiesDowngrade
 
 type adminProbeAdapter struct {
 	canaryAdapter
-	probes     int
-	model      string
-	models     []provider.ModelDescriptor
-	modelLists int
+	probes      int
+	model       string
+	targets     []domain.InvocationTargetDescriptor
+	targetLists int
 }
 
 func (a *adminProbeAdapter) Probe(_ context.Context, model string) error {
@@ -644,9 +644,13 @@ func (a *adminProbeAdapter) Probe(_ context.Context, model string) error {
 	return nil
 }
 
-func (a *adminProbeAdapter) ListModels(context.Context) ([]provider.ModelDescriptor, error) {
-	a.modelLists++
-	return slices.Clone(a.models), nil
+func (a *adminProbeAdapter) InvocationTargetDiscovery() domain.InvocationTargetDiscoveryCapabilities {
+	return domain.InvocationTargetDiscoveryCapabilities{TargetKinds: []domain.DeploymentTargetKind{domain.TargetModelID}, CanEnumerate: true, CanVerify: true}
+}
+
+func (a *adminProbeAdapter) ListInvocationTargets(context.Context, domain.TargetQuery) ([]domain.InvocationTargetDescriptor, error) {
+	a.targetLists++
+	return slices.Clone(a.targets), nil
 }
 
 func TestAdminProviderRejectsCredentialAudienceMismatch(t *testing.T) {

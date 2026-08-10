@@ -16,8 +16,9 @@ COPY --from=web /src/internal/webui/dist/ ./internal/webui/dist/
 ARG RELEASE_VERSION=dev
 ARG RELEASE_COMMIT=unknown
 ARG RELEASE_DATE=unknown
+ARG MODEL_CATALOG_TRUST_ROOTS=
 RUN CGO_ENABLED=0 go build -trimpath \
-    -ldflags "-s -w -X github.com/akz142857/Halro/internal/buildinfo.Version=${RELEASE_VERSION} -X github.com/akz142857/Halro/internal/buildinfo.Commit=${RELEASE_COMMIT} -X github.com/akz142857/Halro/internal/buildinfo.Date=${RELEASE_DATE}" \
+    -ldflags "-s -w -X github.com/akz142857/Halro/internal/buildinfo.Version=${RELEASE_VERSION} -X github.com/akz142857/Halro/internal/buildinfo.Commit=${RELEASE_COMMIT} -X github.com/akz142857/Halro/internal/buildinfo.Date=${RELEASE_DATE} -X github.com/akz142857/Halro/internal/modelcatalog.ReleaseTrustRoots=${MODEL_CATALOG_TRUST_ROOTS}" \
     -o /out/halro ./cmd/halro
 RUN mkdir -p /rootfs/var/lib/halro
 

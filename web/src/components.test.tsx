@@ -1,7 +1,16 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { ConfirmButton, InlineTestControl } from "./components";
+import { ApiError } from "./api";
+import { ConfirmButton, ErrorState, InlineTestControl } from "./components";
+
+describe("ErrorState", () => {
+  it("turns an ambiguous capability interface response into an actionable localized instruction", () => {
+    render(<ErrorState error={new ApiError(400, "capability interface cannot be determined for this model; select one explicitly", "ambiguous_capability_binding")} />);
+    expect(screen.getByText("该模型可通过多个能力接口调用。请选择实际接口后再确认模型。")).toBeVisible();
+    expect(screen.queryByText(/capability interface cannot be determined/)).not.toBeInTheDocument();
+  });
+});
 
 describe("InlineTestControl", () => {
   it("keeps one stable live region through every test state", () => {

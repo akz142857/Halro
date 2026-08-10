@@ -121,6 +121,11 @@ func Default() Config {
 				Interval: Duration(5 * time.Minute), RecordDelta: 500,
 			},
 		},
+		ModelCatalog: ModelCatalog{
+			Enabled: false, RefreshInterval: Duration(6 * time.Hour),
+			MaxDownloadBytes: 1 << 20, MaxDecodedBytes: 4 << 20,
+			MaxCompressionRatio: 20, MaxEntries: 10_000,
+		},
 	}
 }
 
