@@ -478,12 +478,18 @@ func (s *Store) ListPendingPricingAuditIntents(ctx context.Context) ([]domain.Pr
 			if err := json.Unmarshal(raw, &intent); err != nil {
 				return err
 			}
+			// Only what this call is about to hand to the audit log is
+			// validated. A delivered intent is finished work whose record is
+			// already appended, and rejecting the whole listing over one of
+			// them turns a stale row into a refusal to start with no pending
+			// delivery to protect.
+			if intent.Delivered {
+				return nil
+			}
 			if err := intent.Validate(); err != nil {
 				return err
 			}
-			if !intent.Delivered {
-				intents = append(intents, intent)
-			}
+			intents = append(intents, intent)
 			return nil
 		})
 	})
