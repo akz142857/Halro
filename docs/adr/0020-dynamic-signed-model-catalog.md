@@ -2,7 +2,7 @@
 
 - Status: **Implemented 2026-08-10**
 - Date: 2026-08-10
-- Tracking: `docs/todo/provider-model-selection-and-capability-resolution.zh-CN.md`
+- Tracking: `docs/prd/provider-model-selection-and-capability-resolution.zh-CN.md`
 - Related: ADR 0019, `docs/contracts/provider-capabilities.md`
 
 ## Context

@@ -9,7 +9,7 @@
 // must stay under. An unknown model resolves to zero capabilities rather than to
 // the profile ceiling: the operator declares what it does before it can serve.
 //
-// Phase 0 of docs/todo/model-aware-capability-selection.zh-CN.md. Nothing in
+// Phase 0 of docs/prd/model-aware-capability-selection.zh-CN.md. Nothing in
 // this package is wired into the request path yet.
 package modelcatalog
 
