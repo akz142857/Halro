@@ -24,21 +24,35 @@ make dev               # build frontend, then `go run ./cmd/halro start`
 make frontend          # npm ci + npm run build for web/, output embedded at internal/webui/dist
 ```
 
-Test/lint (run before considering any change done):
+The full gate, run once before a commit — not after every edit:
 ```bash
 go test ./...
-go test -race ./...          # required for concurrency/lifecycle changes
 go vet ./...
 cd web && npm ci --ignore-scripts && npm run typecheck && npm test -- --run && npm run build && cd ..
 git diff --exit-code -- internal/webui/dist   # fails if the embedded bundle is stale after web/ changes
 ```
 Or run the full local gate: `make check` (test, race, vet, frontend-test, observability-check).
 
-Single test:
+The race detector is conditional, not part of every gate — run it for changes that
+touch concurrency, goroutines, shared state or lifecycle, and for the package that
+changed rather than the tree:
+```bash
+go test -race ./internal/<pkg>/ -count=1
+```
+
+While iterating, run only what the change can affect:
 ```bash
 go test ./internal/gatewayapi/ -run TestName -v
 cd web && npx vitest run <path/to/file.test.ts>
 ```
+
+**`AGENTS.md` owns the verification policy — read it before deciding what to run.**
+It says which changes justify which scope, and it is the single source for that
+decision. Re-running a suite that cannot see the change is not thoroughness: a
+CSS-only edit is answered by one vitest file in under a second, where the whole
+frontend suite takes 276 tests and the whole Go suite takes minutes. Anything the
+change genuinely could affect still gets run, and the full gate still runs before
+the commit.
 
 Other:
 ```bash
