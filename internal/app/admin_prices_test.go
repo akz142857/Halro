@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -151,6 +152,264 @@ func TestAdminDeploymentPriceLifecycleUsesVersionedTimelineAndAuditIntent(t *tes
 	}
 }
 
+func TestImmediateFreePriceUsesServerTimeAndIsImmediatelySelectable(t *testing.T) {
+	now := time.Date(2026, 8, 10, 6, 0, 0, 0, time.UTC)
+	price, err := priceVersionFromInput("price_immediate", "deployment_immediate", "admin", now, createPriceInput{
+		BillingMode: domain.BillingModeFree, Currency: "USD",
+		InputUSDPerMillion: "0", OutputUSDPerMillion: "0", FixedRequestUSD: "0",
+		EffectiveImmediately: true,
+		Source:               priceSourceInput{Type: domain.PriceSourceManual, Reference: "temporary_estimate", AssertedWithoutArchive: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !price.EffectiveFrom.Equal(now) {
+		t.Fatalf("immediate effective_from=%s want server now=%s", price.EffectiveFrom, now)
+	}
+	price.Version, price.Revision = 1, 1
+	selected, err := domain.SelectDeploymentPriceVersion([]domain.DeploymentPriceVersion{price}, price.DeploymentID, now)
+	if err != nil {
+		t.Fatalf("immediate free price was not selectable: %v", err)
+	}
+	if selected.ID != price.ID || selected.BillingMode != domain.BillingModeFree {
+		t.Fatalf("selected price=%#v", selected)
+	}
+}
+
+func TestAdminImmediateFreePriceIsActiveAndIdempotent(t *testing.T) {
+	cfg := testConfig(t)
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := BootstrapAdmin(context.Background(), cfg, "admin", []byte("correct horse battery staple")); err != nil {
+		t.Fatal(err)
+	}
+	bootstrap, err := Bootstrap(context.Background(), cfg, BootstrapOptions{
+		ProviderName: "OpenAI", ProviderType: domain.ProviderOpenAI,
+		ProviderBaseURL: "https://api.openai.com", ProviderModel: "gpt-test", PublicModel: "chat",
+		ProjectName: "Immediate pricing", BillingMode: domain.BillingModeFree,
+	}, []byte("provider-secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := Open(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	cookie, csrf := loginAdminForTest(t, runtime)
+	body := map[string]any{
+		"billing_mode": "free", "currency": "USD",
+		"input_usd_per_million": "0", "output_usd_per_million": "0", "fixed_request_usd": "0",
+		"effective_immediately": true, "current_password": "correct horse battery staple",
+		"source": map[string]any{"type": "manual", "reference": "temporary_estimate", "asserted_without_archive": true},
+	}
+	request := adminRequest(t, http.MethodPost, "/admin/api/v1/deployments/"+bootstrap.DeploymentID+"/prices", body)
+	request.AddCookie(cookie)
+	request.Header.Set("X-CSRF-Token", csrf)
+	request.Header.Set("Idempotency-Key", "immediate-free-price")
+	response := httptest.NewRecorder()
+	runtime.adminRouter().ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create immediate price status=%d body=%s", response.Code, response.Body.String())
+	}
+	var created domain.DeploymentPriceVersion
+	if err := json.Unmarshal(response.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	selected, err := runtime.store.SelectDeploymentPriceVersion(context.Background(), bootstrap.DeploymentID, time.Now().UTC())
+	if err != nil || selected.ID != created.ID || selected.BillingMode != domain.BillingModeFree {
+		t.Fatalf("immediate price was not active: selected=%#v created=%#v err=%v", selected, created, err)
+	}
+
+	retry := adminRequest(t, http.MethodPost, "/admin/api/v1/deployments/"+bootstrap.DeploymentID+"/prices", body)
+	retry.AddCookie(cookie)
+	retry.Header.Set("X-CSRF-Token", csrf)
+	retry.Header.Set("Idempotency-Key", "immediate-free-price")
+	retryResponse := httptest.NewRecorder()
+	runtime.adminRouter().ServeHTTP(retryResponse, retry)
+	if retryResponse.Code != http.StatusCreated || retryResponse.Header().Get("Idempotent-Replayed") != "true" {
+		t.Fatalf("immediate replay status=%d headers=%v body=%s", retryResponse.Code, retryResponse.Header(), retryResponse.Body.String())
+	}
+}
+
+// openPricingRuntimeForTest is the smallest instance that can price a
+// deployment: one provider, one deployment, one administrator session.
+func openPricingRuntimeForTest(t *testing.T, project string) (*Runtime, BootstrapResult, *http.Cookie, string) {
+	t.Helper()
+	cfg := testConfig(t)
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := BootstrapAdmin(context.Background(), cfg, "admin", []byte("correct horse battery staple")); err != nil {
+		t.Fatal(err)
+	}
+	bootstrap, err := Bootstrap(context.Background(), cfg, BootstrapOptions{
+		ProviderName: "OpenAI", ProviderType: domain.ProviderOpenAI,
+		ProviderBaseURL: "https://api.openai.com", ProviderModel: "gpt-test", PublicModel: "chat",
+		ProjectName: project, BillingMode: domain.BillingModeFree,
+	}, []byte("provider-secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := Open(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { runtime.Close() })
+	cookie, csrf := loginAdminForTest(t, runtime)
+	return runtime, bootstrap, cookie, csrf
+}
+
+func createPriceForTest(t *testing.T, runtime *Runtime, cookie *http.Cookie, csrf, deploymentID, idempotencyKey string, body map[string]any) *httptest.ResponseRecorder {
+	t.Helper()
+	request := adminRequest(t, http.MethodPost, "/admin/api/v1/deployments/"+deploymentID+"/prices", body)
+	request.AddCookie(cookie)
+	request.Header.Set("X-CSRF-Token", csrf)
+	request.Header.Set("Idempotency-Key", idempotencyKey)
+	response := httptest.NewRecorder()
+	runtime.adminRouter().ServeHTTP(response, request)
+	return response
+}
+
+func auditRecordsForAction(t *testing.T, runtime *Runtime, cookie *http.Cookie, action string) []map[string]any {
+	t.Helper()
+	var matches []map[string]any
+	for _, record := range auditActions(t, runtime, cookie) {
+		if record["action"] == action {
+			matches = append(matches, record)
+		}
+	}
+	return matches
+}
+
+func responseErrorCode(t *testing.T, response *httptest.ResponseRecorder) string {
+	t.Helper()
+	var body struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("response was not a JSON error: %s", response.Body.String())
+	}
+	return body.Code
+}
+
+// The audit record is the only durable statement of where a price came from,
+// and it is append-only. A creation path that reports no assurance, no
+// reference and "the operator did not assert an unarchived source" is not
+// merely incomplete: the last of those is a false statement about a submission
+// that said the opposite. Whichever way a price takes effect, the evidence has
+// to be the same, because it is the same submitted evidence.
+func TestPriceCreationAuditCarriesTheSameSourceEvidenceWhicheverWayItTakesEffect(t *testing.T) {
+	runtime, bootstrap, cookie, csrf := openPricingRuntimeForTest(t, "Pricing evidence")
+	source := map[string]any{
+		"type": "manual", "reference": "official_public_price", "asserted_without_archive": true,
+	}
+	price := func(extra map[string]any) map[string]any {
+		body := map[string]any{
+			"billing_mode": "metered", "currency": "USD", "current_password": "correct horse battery staple",
+			"input_usd_per_million": "0.40", "output_usd_per_million": "1.60", "fixed_request_usd": "0",
+			"source": source,
+		}
+		for key, value := range extra {
+			body[key] = value
+		}
+		return body
+	}
+	immediate := createPriceForTest(t, runtime, cookie, csrf, bootstrap.DeploymentID, "evidence-immediate",
+		price(map[string]any{"effective_immediately": true}))
+	if immediate.Code != http.StatusCreated {
+		t.Fatalf("immediate create status=%d body=%s", immediate.Code, immediate.Body.String())
+	}
+	scheduled := createPriceForTest(t, runtime, cookie, csrf, bootstrap.DeploymentID, "evidence-scheduled",
+		price(map[string]any{"effective_from": time.Now().UTC().Add(2 * time.Hour).Format(time.RFC3339)}))
+	if scheduled.Code != http.StatusCreated {
+		t.Fatalf("scheduled create status=%d body=%s", scheduled.Code, scheduled.Body.String())
+	}
+	records := auditRecordsForAction(t, runtime, cookie, "deployment_price.create")
+	if len(records) != 2 {
+		t.Fatalf("want one audit record per creation path, got %d: %#v", len(records), records)
+	}
+	var evidence []map[string]any
+	for _, record := range records {
+		metadata, ok := record["metadata"].(map[string]any)
+		if !ok {
+			t.Fatalf("audit record carried no metadata: %#v", record)
+		}
+		if metadata["source_assurance"] != "asserted" || metadata["source_type"] != "manual" ||
+			metadata["source_reference"] != "official_public_price" || metadata["source_without_archive"] != true {
+			t.Fatalf("audit record lost the submitted source evidence: %#v", metadata)
+		}
+		evidence = append(evidence, map[string]any{
+			"source_assurance": metadata["source_assurance"], "source_reference": metadata["source_reference"],
+			"source_without_archive": metadata["source_without_archive"],
+		})
+	}
+	if fmt.Sprintf("%v", evidence[0]) != fmt.Sprintf("%v", evidence[1]) {
+		t.Fatalf("the two creation paths recorded different evidence for the same source: %#v", evidence)
+	}
+}
+
+// effective_from and effective_immediately are two ways to say when a price
+// starts applying, and exactly one of them must be given. Both together is
+// ambiguous and neither leaves the price with no start at all.
+func TestPriceCreationRequiresExactlyOneWayOfTakingEffect(t *testing.T) {
+	runtime, bootstrap, cookie, csrf := openPricingRuntimeForTest(t, "Pricing effect")
+	for _, testCase := range []struct {
+		name   string
+		when   map[string]any
+		status int
+		code   string
+	}{
+		{
+			name:   "both",
+			when:   map[string]any{"effective_from": time.Now().UTC().Add(time.Hour).Format(time.RFC3339), "effective_immediately": true},
+			status: http.StatusBadRequest, code: "price_effective_from_conflict",
+		},
+		{
+			name: "neither", when: map[string]any{},
+			status: http.StatusBadRequest, code: "price_effective_from_required",
+		},
+		{
+			name: "immediate only", when: map[string]any{"effective_immediately": true},
+			status: http.StatusCreated, code: "",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			body := map[string]any{
+				"billing_mode": "metered", "currency": "USD", "current_password": "correct horse battery staple",
+				"input_usd_per_million": "0.40", "output_usd_per_million": "1.60", "fixed_request_usd": "0",
+				"source": map[string]any{"type": "manual", "reference": "official_public_price", "asserted_without_archive": true},
+			}
+			for key, value := range testCase.when {
+				body[key] = value
+			}
+			before := time.Now().UTC()
+			response := createPriceForTest(t, runtime, cookie, csrf, bootstrap.DeploymentID, "effect-"+testCase.name, body)
+			after := time.Now().UTC()
+			if response.Code != testCase.status {
+				t.Fatalf("status=%d want %d body=%s", response.Code, testCase.status, response.Body.String())
+			}
+			if testCase.code != "" {
+				if code := responseErrorCode(t, response); code != testCase.code {
+					t.Fatalf("error code=%q want %q body=%s", code, testCase.code, response.Body.String())
+				}
+				return
+			}
+			var created domain.DeploymentPriceVersion
+			if err := json.Unmarshal(response.Body.Bytes(), &created); err != nil {
+				t.Fatal(err)
+			}
+			// The server picks the instant, so the assertion is the interval the
+			// request was in flight for and not an equality against a clock read
+			// the handler never saw.
+			if created.EffectiveFrom.Before(before) || created.EffectiveFrom.After(after) {
+				t.Fatalf("immediate effective_from=%s outside the request window [%s, %s]", created.EffectiveFrom, before, after)
+			}
+		})
+	}
+}
+
 func TestAdminFreePriceRequiresReauthentication(t *testing.T) {
 	cfg := testConfig(t)
 	if err := Initialize(cfg); err != nil {
@@ -267,5 +526,76 @@ func TestAdminPriceProposalNeverActivatesUntilReviewedAndAdopted(t *testing.T) {
 	pending, err := runtime.store.ListPendingPricingAuditIntents(context.Background())
 	if err != nil || len(pending) != 0 {
 		t.Fatalf("proposal audit intents=%#v err=%v", pending, err)
+	}
+}
+
+// Adoption is the second way a price version comes into existence, so it takes
+// effect on the same terms direct creation does. An adoption that could only
+// schedule would leave the operator creating the price by hand to get it live
+// now, discarding the reviewed proposal's provenance in the process.
+func TestAdoptingAPriceProposalTakesEffectOnTheSameTermsAsCreatingOne(t *testing.T) {
+	runtime, bootstrap, cookie, csrf := openPricingRuntimeForTest(t, "Proposal adoption")
+	now := time.Now().UTC()
+	proposalRequest := adminRequest(t, http.MethodPost, "/admin/api/v1/deployments/"+bootstrap.DeploymentID+"/price-proposals", map[string]any{
+		"billing_mode": "metered", "currency": "USD", "input_usd_per_million": "0.50",
+		"output_usd_per_million": "2.00", "fixed_request_usd": "0", "match": "exact",
+		"expires_at": now.Add(24 * time.Hour).Format(time.RFC3339),
+		"source": map[string]any{
+			"type": "official_url", "uri": "https://example.test/pricing", "retrieved_at": now.Format(time.RFC3339),
+			"content_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"reference":      "public standard tier",
+		},
+	})
+	proposalRequest.AddCookie(cookie)
+	proposalRequest.Header.Set("X-CSRF-Token", csrf)
+	proposalRequest.Header.Set("Idempotency-Key", "adoption-proposal")
+	proposalResponse := httptest.NewRecorder()
+	runtime.adminRouter().ServeHTTP(proposalResponse, proposalRequest)
+	if proposalResponse.Code != http.StatusCreated {
+		t.Fatalf("create proposal status=%d body=%s", proposalResponse.Code, proposalResponse.Body.String())
+	}
+	var proposal domain.DeploymentPriceProposal
+	if err := json.Unmarshal(proposalResponse.Body.Bytes(), &proposal); err != nil {
+		t.Fatal(err)
+	}
+	adopt := "/admin/api/v1/deployments/" + bootstrap.DeploymentID + "/price-proposals/" + proposal.ID + "/adopt"
+
+	ambiguous := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost, adopt, `"1"`, map[string]any{
+		"effective_from": now.Add(2 * time.Hour).Format(time.RFC3339), "effective_immediately": true,
+		"confirm": true, "current_password": "correct horse battery staple",
+	})
+	if ambiguous.Code != http.StatusBadRequest || responseErrorCode(t, ambiguous) != "price_effective_from_conflict" {
+		t.Fatalf("ambiguous adoption status=%d body=%s", ambiguous.Code, ambiguous.Body.String())
+	}
+
+	before := time.Now().UTC()
+	adopted := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost, adopt, `"1"`, map[string]any{
+		"effective_immediately": true, "confirm": true, "current_password": "correct horse battery staple",
+	})
+	after := time.Now().UTC()
+	if adopted.Code != http.StatusCreated {
+		t.Fatalf("immediate adoption status=%d body=%s", adopted.Code, adopted.Body.String())
+	}
+	var result struct {
+		PriceVersion domain.DeploymentPriceVersion `json:"price_version"`
+	}
+	if err := json.Unmarshal(adopted.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.PriceVersion.EffectiveFrom.Before(before) || result.PriceVersion.EffectiveFrom.After(after) {
+		t.Fatalf("adopted effective_from=%s outside the request window [%s, %s]", result.PriceVersion.EffectiveFrom, before, after)
+	}
+	selected, err := runtime.store.SelectDeploymentPriceVersion(context.Background(), bootstrap.DeploymentID, time.Now().UTC())
+	if err != nil || selected.ID != result.PriceVersion.ID {
+		t.Fatalf("adopted price was not active: selected=%#v adopted=%#v err=%v", selected, result.PriceVersion, err)
+	}
+	records := auditRecordsForAction(t, runtime, cookie, "deployment_price.proposal_adopt")
+	if len(records) != 1 {
+		t.Fatalf("adoption audit records=%#v", records)
+	}
+	metadata, ok := records[0]["metadata"].(map[string]any)
+	if !ok || metadata["source_assurance"] != "asserted" || metadata["source_type"] != "official_url" ||
+		metadata["source_reference"] != "public standard tier" {
+		t.Fatalf("adoption audit lost the proposal's source evidence: %#v", records[0])
 	}
 }
