@@ -46,6 +46,39 @@ describe("RoutesPage", () => {
 
     expect(await screen.findByText("通过 · 37ms")).toBeInTheDocument();
   });
+
+  // Whether the alias answers requests is the state the save commits, so it
+  // belongs in the bar that commits it, saying what it will do. A stylesheet
+  // regression that breaks this structure is invisible to a typecheck.
+  it("states the routing state in the save bar rather than as a bare checkbox", async () => {
+    const route = {
+      id: "route_chat", public_model: "chat", deployment_id: "deployment_gpt",
+      priority: 10, strategy: "ordered", enabled: true, revision: 1, created_at: "", updated_at: "",
+    } as Route;
+    vi.spyOn(api, "routes").mockResolvedValue({ items: [route], next_cursor: "" });
+    vi.spyOn(api, "deployments").mockResolvedValue({
+      items: [{ id: "deployment_gpt", name: "GPT", provider_id: "provider_openai", provider_model: "gpt-5.1", enabled: true } as Deployment],
+      next_cursor: "",
+    });
+    vi.spyOn(api, "providers").mockResolvedValue({ items: [{ id: "provider_openai", name: "OpenAI" } as Provider], next_cursor: "" });
+    renderPage();
+
+    const row = (await screen.findByText("chat")).closest("tr");
+    fireEvent.click(within(row!).getByRole("button", { name: "编辑" }));
+
+    const toggle = await screen.findByLabelText("启用模型路由");
+    const bar = toggle.closest(".sticky-form-actions");
+    expect(bar).not.toBeNull();
+    expect(bar).toContainElement(screen.getByRole("button", { name: "保存并热加载" }));
+    expect(bar).toContainElement(screen.getByRole("button", { name: "取消" }));
+    expect(within(bar as HTMLElement).getByText("启用模型路由 · 启用")).toBeVisible();
+    expect(within(bar as HTMLElement).getByText("应用可以用“chat”请求这个部署")).toBeVisible();
+
+    // Turning it off has to change what the bar says it will do, not just the box.
+    fireEvent.click(toggle);
+    expect(within(bar as HTMLElement).getByText("启用模型路由 · 禁用")).toBeVisible();
+    expect(within(bar as HTMLElement).getByText("应用请求这个别名会被拒绝")).toBeVisible();
+  });
 });
 
 function renderPage() {

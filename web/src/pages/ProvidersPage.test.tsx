@@ -156,6 +156,27 @@ describe("ProvidersPage profile and credential bindings", () => {
     expect(within(dialog).getByRole("button", { name: "创建并热加载" })).toBeEnabled();
   });
 
+  // Whether deployments may use this upstream is the state the save commits, so
+  // it belongs in the bar that commits it, saying what it will do. A stylesheet
+  // regression that breaks this structure is invisible to a typecheck.
+  it("states the upstream's availability in the save bar rather than as a bare checkbox", async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
+
+    const toggle = await screen.findByLabelText("启用服务商");
+    const bar = toggle.closest(".sticky-form-actions");
+    expect(bar).not.toBeNull();
+    expect(bar).toContainElement(screen.getByRole("button", { name: "创建并热加载" }));
+    expect(bar).toContainElement(screen.getByRole("button", { name: "取消" }));
+    expect(within(bar as HTMLElement).getByText("启用服务商 · 启用")).toBeVisible();
+    expect(within(bar as HTMLElement).getByText("启用后，模型部署可以使用这个上游连接。")).toBeVisible();
+
+    // Turning it off has to change what the bar says it will do, not just the box.
+    fireEvent.click(toggle);
+    expect(within(bar as HTMLElement).getByText("启用服务商 · 禁用")).toBeVisible();
+    expect(within(bar as HTMLElement).getByText("模型部署无法使用这个上游连接")).toBeVisible();
+  });
+
   it("restores the active resource tab from the URL and exposes its contextual action", async () => {
     window.history.replaceState({}, "", "/admin/providers?view=credentials");
     renderPage();
