@@ -401,7 +401,7 @@ func TestDiscoveryAndCreateAgreeOnTheModelRevision(t *testing.T) {
 				CanonicalModelRef: model, Region: region, Availability: domain.AvailabilityAvailable,
 			}))
 		}
-		response := aggregateInvocationTargets(instance, results)
+		response := aggregateInvocationTargets(instance, results, testResolutionInstant)
 		listed := findTarget(t, response, model)
 		input := deploymentInput{}
 		if listed.ResolutionState != domain.ResolutionResolved {

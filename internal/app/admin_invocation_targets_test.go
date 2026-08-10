@@ -32,8 +32,16 @@ func bedrockBinding(id string, profile domain.ProviderProfileID) domain.Provider
 	return testBinding(id, domain.ProviderBedrock, profile)
 }
 
+// The instant every fixture below is fetched at, and the instant the resolution
+// is evaluated at. It used to be a bare date literal inside targetResult while
+// the resolver read time.Now(), so a catalog stamped 2026-08-10T12:00Z was only
+// inside the 5-minute claim TTL for five minutes on that one day: the
+// provider-metadata tests passed when they were written and failed by 12:06.
+// Fixture time and evaluation time have to be the same clock.
+var testResolutionInstant = time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+
 func targetResult(binding domain.ProviderProfileBinding, mapper provider.ProviderMetadataMapper, targets ...domain.InvocationTargetDescriptor) bindingTargetCatalog {
-	fetched := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	fetched := testResolutionInstant
 	for index := range targets {
 		if targets[index].FetchedAt.IsZero() {
 			targets[index].FetchedAt = fetched
@@ -68,7 +76,7 @@ func TestAggregateInvocationTargetsProducesBindingScopedVariants(t *testing.T) {
 	}
 	response := aggregateInvocationTargets(instance, []bindingTargetCatalog{
 		targetResult(chat, nil, target), targetResult(embed, nil, target),
-	})
+	}, testResolutionInstant)
 	item := findTarget(t, response, target.TargetID)
 	if item.ResolutionState != domain.ResolutionResolved || len(item.Variants) != 1 {
 		t.Fatalf("resolution=%q variants=%#v", item.ResolutionState, item.Variants)
@@ -91,7 +99,7 @@ func TestNewTargetIsAvailableWithoutInventingCapabilities(t *testing.T) {
 		TargetID: "gpt-future", TargetKind: domain.TargetModelID, DisplayName: "gpt-future",
 		CanonicalModelRef: "gpt-future", Availability: domain.AvailabilityAvailable, Lifecycle: domain.TargetLifecycleUnknown,
 	}
-	item := findTarget(t, aggregateInvocationTargets(instance, []bindingTargetCatalog{targetResult(binding, nil, target)}), target.TargetID)
+	item := findTarget(t, aggregateInvocationTargets(instance, []bindingTargetCatalog{targetResult(binding, nil, target)}, testResolutionInstant), target.TargetID)
 	if item.Availability != domain.AvailabilityAvailable || item.ResolutionState != domain.ResolutionUnknown || len(item.Variants) != 0 {
 		t.Fatalf("discovery was mistaken for capability evidence: %#v", item)
 	}
@@ -136,7 +144,7 @@ func TestAggregateInvocationTargetsKeepsMetadataBindingScoped(t *testing.T) {
 	embedTarget.Metadata.SupportedOperations = []string{"embed-op"}
 	item := findTarget(t, aggregateInvocationTargets(instance, []bindingTargetCatalog{
 		targetResult(chat, operationMetadataMapper{}, chatTarget), targetResult(embed, operationMetadataMapper{}, embedTarget),
-	}), base.TargetID)
+	}, testResolutionInstant), base.TargetID)
 	if len(item.Variants) != 2 {
 		t.Fatalf("variants=%#v", item.Variants)
 	}
@@ -158,7 +166,7 @@ func TestBindingConflictDoesNotDeleteAnotherValidVariant(t *testing.T) {
 	item := findTarget(t, aggregateInvocationTargets(instance, []bindingTargetCatalog{
 		targetResult(first, staticMetadataMapper{claims: map[string]domain.ClaimStatus{"chat": domain.ClaimUnsupported}}, target),
 		targetResult(second, nil, target),
-	}), target.TargetID)
+	}, testResolutionInstant), target.TargetID)
 	if item.ResolutionState != domain.ResolutionResolved || len(item.Variants) != 1 || item.Variants[0].BindingID != second.ID {
 		t.Fatalf("binding-scoped conflict poisoned valid variant: %#v", item)
 	}
@@ -171,9 +179,9 @@ func TestVariantRevisionCoversNormalizedTokenLimits(t *testing.T) {
 	instance := domain.ProviderInstance{ID: "provider", Type: domain.ProviderGemini, Revision: 1}
 	binding := testBinding("gemini", domain.ProviderGemini, domain.ProfileGeminiText)
 	target := domain.InvocationTargetDescriptor{TargetID: "future", TargetKind: domain.TargetModelID, Availability: domain.AvailabilityAvailable, MetadataSource: domain.MetadataSourceProvider, Metadata: domain.NormalizedModelMetadata{SupportedOperations: []string{"chat-op"}, MaxContextTokens: 1024}}
-	first := findTarget(t, aggregateInvocationTargets(instance, []bindingTargetCatalog{targetResult(binding, operationMetadataMapper{}, target)}), target.TargetID)
+	first := findTarget(t, aggregateInvocationTargets(instance, []bindingTargetCatalog{targetResult(binding, operationMetadataMapper{}, target)}, testResolutionInstant), target.TargetID)
 	target.Metadata.MaxContextTokens = 2048
-	second := findTarget(t, aggregateInvocationTargets(instance, []bindingTargetCatalog{targetResult(binding, operationMetadataMapper{}, target)}), target.TargetID)
+	second := findTarget(t, aggregateInvocationTargets(instance, []bindingTargetCatalog{targetResult(binding, operationMetadataMapper{}, target)}, testResolutionInstant), target.TargetID)
 	if len(first.Variants) != 1 || len(second.Variants) != 1 || first.Variants[0].Revision == second.Variants[0].Revision {
 		t.Fatalf("token limit change did not rotate variant revision: first=%#v second=%#v", first.Variants, second.Variants)
 	}
@@ -187,8 +195,14 @@ func TestVariantRevisionBindsCredentialGeneration(t *testing.T) {
 	firstResult.credentialRevision = 7
 	secondResult := targetResult(binding, operationMetadataMapper{}, target)
 	secondResult.credentialRevision = 8
-	first := findTarget(t, aggregateInvocationTargets(instance, []bindingTargetCatalog{firstResult}), target.TargetID)
-	second := findTarget(t, aggregateInvocationTargets(instance, []bindingTargetCatalog{secondResult}), target.TargetID)
+	first := findTarget(t, aggregateInvocationTargets(instance, []bindingTargetCatalog{firstResult}, testResolutionInstant), target.TargetID)
+	second := findTarget(t, aggregateInvocationTargets(instance, []bindingTargetCatalog{secondResult}, testResolutionInstant), target.TargetID)
+	// Indexing first: a resolution that produced no variant at all used to panic
+	// here, which aborts the whole package and takes every later test's result
+	// with it. State the precondition so the failure stays local.
+	if len(first.Variants) != 1 || len(second.Variants) != 1 {
+		t.Fatalf("credential rotation did not resolve one variant each: first=%#v second=%#v", first.Variants, second.Variants)
+	}
 	if first.Variants[0].Revision == second.Variants[0].Revision {
 		t.Fatal("credential rotation did not rotate the deployment variant revision")
 	}
@@ -198,7 +212,7 @@ func TestCompatibleTargetNameDoesNotImplyCanonicalCapabilityIdentity(t *testing.
 	instance := domain.ProviderInstance{ID: "provider", Type: domain.ProviderOpenAICompatible, Revision: 1}
 	binding := testBinding("compatible", domain.ProviderOpenAICompatible, domain.ProfileOpenAICompatible)
 	target := domain.InvocationTargetDescriptor{TargetID: "gpt-5", TargetKind: domain.TargetCustomEndpointModel, Availability: domain.AvailabilityAvailable}
-	item := findTarget(t, aggregateInvocationTargets(instance, []bindingTargetCatalog{targetResult(binding, nil, target)}), target.TargetID)
+	item := findTarget(t, aggregateInvocationTargets(instance, []bindingTargetCatalog{targetResult(binding, nil, target)}, testResolutionInstant), target.TargetID)
 	if item.ResolutionState != domain.ResolutionUnknown || len(item.Variants) != 0 {
 		t.Fatalf("compatible alias inherited builtin capability identity: %#v", item)
 	}
@@ -208,7 +222,7 @@ func TestCompatibleExplicitCanonicalMappingProducesVariant(t *testing.T) {
 	instance := domain.ProviderInstance{ID: "provider", Type: domain.ProviderOpenAICompatible, Revision: 1}
 	binding := testBinding("compatible", domain.ProviderOpenAICompatible, domain.ProfileOpenAICompatible)
 	target := domain.InvocationTargetDescriptor{TargetID: "tenant-alias", TargetKind: domain.TargetCustomEndpointModel, CanonicalModelRef: "gpt-4o", Availability: domain.AvailabilityAvailable}
-	item := findTarget(t, aggregateInvocationTargets(instance, []bindingTargetCatalog{targetResult(binding, nil, target)}), target.TargetID)
+	item := findTarget(t, aggregateInvocationTargets(instance, []bindingTargetCatalog{targetResult(binding, nil, target)}, testResolutionInstant), target.TargetID)
 	if item.ResolutionState != domain.ResolutionResolved || len(item.Variants) != 1 || !item.Variants[0].Capabilities.Chat {
 		t.Fatalf("explicit compatible mapping did not establish a reviewed variant: %#v", item)
 	}
@@ -226,7 +240,7 @@ func TestSignedCatalogResolvesNewExactModelWithoutBinaryRelease(t *testing.T) {
 		t.Fatal(err)
 	}
 	target := domain.InvocationTargetDescriptor{TargetID: model, TargetKind: domain.TargetModelID, CanonicalModelRef: model, Availability: domain.AvailabilityAvailable}
-	item := findTarget(t, aggregateInvocationTargetsWithCatalog(instance, []bindingTargetCatalog{targetResult(binding, nil, target)}, catalog), model)
+	item := findTarget(t, aggregateInvocationTargetsWithCatalog(instance, []bindingTargetCatalog{targetResult(binding, nil, target)}, testResolutionInstant, catalog), model)
 	if item.ResolutionState != domain.ResolutionResolved || len(item.Variants) != 1 || item.Variants[0].CapabilityClaims[0].Source != domain.ClaimSourceSignedCatalog {
 		t.Fatalf("signed catalog did not resolve exact model: %#v", item)
 	}
@@ -236,16 +250,19 @@ func TestVariantRevisionCoversAvailabilityAndLifecycle(t *testing.T) {
 	instance := domain.ProviderInstance{ID: "provider", Type: domain.ProviderOpenAI, Revision: 1}
 	binding := testBinding("openai", domain.ProviderOpenAI, domain.ProfileOpenAIChatEmbeddings)
 	target := domain.InvocationTargetDescriptor{TargetID: "gpt-4o", TargetKind: domain.TargetModelID, CanonicalModelRef: "gpt-4o", Availability: domain.AvailabilityAvailable, Lifecycle: domain.TargetLifecycleActive}
-	first := findTarget(t, aggregateInvocationTargets(instance, []bindingTargetCatalog{targetResult(binding, nil, target)}), target.TargetID)
+	first := findTarget(t, aggregateInvocationTargets(instance, []bindingTargetCatalog{targetResult(binding, nil, target)}, testResolutionInstant), target.TargetID)
 	target.Availability, target.Lifecycle = domain.AvailabilityUnavailable, domain.TargetLifecycleDeprecated
-	second := findTarget(t, aggregateInvocationTargets(instance, []bindingTargetCatalog{targetResult(binding, nil, target)}), target.TargetID)
+	second := findTarget(t, aggregateInvocationTargets(instance, []bindingTargetCatalog{targetResult(binding, nil, target)}, testResolutionInstant), target.TargetID)
+	if len(first.Variants) != 1 || len(second.Variants) != 1 {
+		t.Fatalf("availability/lifecycle change did not resolve one variant each: first=%#v second=%#v", first.Variants, second.Variants)
+	}
 	if first.Variants[0].Revision == second.Variants[0].Revision {
 		t.Fatal("availability/lifecycle change did not rotate the variant revision")
 	}
 }
 
 func TestEmptyCatalogSerializesTargetKindsAsArray(t *testing.T) {
-	response := aggregateInvocationTargets(domain.ProviderInstance{}, []bindingTargetCatalog{{failed: true}})
+	response := aggregateInvocationTargets(domain.ProviderInstance{}, []bindingTargetCatalog{{failed: true}}, testResolutionInstant)
 	payload, err := json.Marshal(response)
 	if err != nil {
 		t.Fatal(err)
@@ -265,7 +282,7 @@ func TestProviderMetadataCreatesOnlyAllowlistedClaimsAndConflictsFailClosed(t *t
 		MetadataSource: domain.MetadataSourceProvider,
 	}
 	mapper := staticMetadataMapper{claims: map[string]domain.ClaimStatus{"chat": domain.ClaimUnsupported}}
-	item := findTarget(t, aggregateInvocationTargets(instance, []bindingTargetCatalog{targetResult(binding, mapper, target)}), known)
+	item := findTarget(t, aggregateInvocationTargets(instance, []bindingTargetCatalog{targetResult(binding, mapper, target)}, testResolutionInstant), known)
 	if item.ResolutionState != domain.ResolutionConflicting || len(item.Variants) != 0 {
 		t.Fatalf("conflicting provider metadata opened a variant: %#v", item)
 	}
@@ -284,7 +301,7 @@ func TestSignedCatalogAndProviderMetadataConflictFailsClosed(t *testing.T) {
 	}
 	target := domain.InvocationTargetDescriptor{TargetID: model, TargetKind: domain.TargetModelID, Availability: domain.AvailabilityAvailable, MetadataSource: domain.MetadataSourceProvider}
 	mapper := staticMetadataMapper{claims: map[string]domain.ClaimStatus{"chat": domain.ClaimUnsupported}}
-	item := findTarget(t, aggregateInvocationTargetsWithCatalog(instance, []bindingTargetCatalog{targetResult(binding, mapper, target)}, catalog), model)
+	item := findTarget(t, aggregateInvocationTargetsWithCatalog(instance, []bindingTargetCatalog{targetResult(binding, mapper, target)}, testResolutionInstant, catalog), model)
 	if item.ResolutionState != domain.ResolutionConflicting || len(item.Variants) != 0 {
 		t.Fatalf("signed/provider conflict opened a variant: %#v", item)
 	}
@@ -293,7 +310,7 @@ func TestSignedCatalogAndProviderMetadataConflictFailsClosed(t *testing.T) {
 func TestCanonicalTemplatesAreMappingsNotAvailableTargets(t *testing.T) {
 	instance := domain.ProviderInstance{ID: "provider", Type: domain.ProviderAzureOpenAI, Revision: 1}
 	binding := testBinding("azure", domain.ProviderAzureOpenAI, domain.ProfileAzureChatEmbeddings)
-	templates := canonicalModelTemplates(instance, []domain.ProviderProfileBinding{binding}, 0)
+	templates := canonicalModelTemplates(instance, []domain.ProviderProfileBinding{binding}, 0, testResolutionInstant)
 	if len(templates) == 0 {
 		t.Fatal("Azure has no reviewed canonical model mappings")
 	}
@@ -393,8 +410,12 @@ func TestSaveResolutionRefreshRejectsRemovedTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime := &Runtime{providers: registry, config: config.Default(), capabilityMetrics: newCapabilityMetrics(), now: time.Now}
-	listed := aggregateInvocationTargets(instance, runtime.fetchInvocationTargetCatalogs(context.Background(), instance, []domain.ProviderProfileBinding{binding}, true))
-	variant := findTarget(t, listed, "gpt-4o").Variants[0]
+	listed := aggregateInvocationTargets(instance, runtime.fetchInvocationTargetCatalogs(context.Background(), instance, []domain.ProviderProfileBinding{binding}, true), runtime.clockNow().UTC())
+	target := findTarget(t, listed, "gpt-4o")
+	if len(target.Variants) != 1 {
+		t.Fatalf("listing did not resolve one variant: %#v", target)
+	}
+	variant := target.Variants[0]
 	adapter.targets = nil
 	_, err := runtime.resolveDeploymentVariant(context.Background(), instance, deploymentInput{BindingID: binding.ID, TargetKind: domain.TargetModelID, ResolutionRevision: variant.Revision}, "gpt-4o", "")
 	var changed *resolutionChangedError
