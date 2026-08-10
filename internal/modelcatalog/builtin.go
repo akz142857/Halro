@@ -18,7 +18,7 @@ import (
 //
 //  2. An exact model identifier whose operation support is reviewed here the
 //     way code is, recorded with the operations it claims and nothing else.
-//     §6.1 of docs/todo/model-aware-capability-selection.zh-CN.md asks for
+//     §6.1 of docs/prd/model-aware-capability-selection.zh-CN.md asks for
 //     exactly this: a versioned built-in list of precise model IDs. §6.2 bounds
 //     it — exact IDs only, no prefix ever promotes an unknown future model, and
 //     a moving alias qualifies only where Halro itself pins it.

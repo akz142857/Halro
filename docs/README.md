@@ -41,7 +41,14 @@ ADR 保留在 `docs/adr/` 顶层：这是业界通用路径，且 `tools/m11/rel
 ## 产品需求 · [`prd/`](prd/)
 
 历史 PRD 与执行计划，反映当时的需求与取舍，不一定等于当前实现。当前实现以代码和
-[实现状态](milestones/implementation-status.md) 为准。
+[实现状态](milestones/implementation-status.md) 为准。已实施完毕的设计方案从
+[`todo/`](todo/) 归档到这里。
+
+| 已归档的设计方案 | 落地情况 |
+| --- | --- |
+| [跨服务商模型选择与能力自动解析方案](prd/provider-model-selection-and-capability-resolution.zh-CN.md) | Phase 0–4 已实施，见 [ADR 0019](adr/0019-invocation-target-capability-resolution.md)、[ADR 0020](adr/0020-dynamic-signed-model-catalog.md)；动态签名目录默认关闭 |
+| [模型能力自动识别：保留的安全与任务契约](prd/model-capability-auto-detection.zh-CN.md) | 能力检测已实施；正文只保留检测的安全、预算与任务生命周期契约 |
+| [基于服务商与模型的能力选择升级方案](prd/model-aware-capability-selection.zh-CN.md) | 正文已迁入上面的解析方案，仅保留指向它的存根 |
 
 ## 里程碑与证据 · [`milestones/`](milestones/)
 
@@ -87,13 +94,15 @@ Markdown 编进二进制，由 `internal/app/admin_master_key_runbook.go` 提供
 
 ## 待办 · [`todo/`](todo/)
 
-尚未开工的设计提案。开工后移出本目录。
+尚未开工或尚未完成的设计提案。全部实施完毕后归档到 [`prd/`](prd/)。
 
-| 文档 | 内容 |
-| --- | --- |
-| [基于服务商与模型的能力选择升级方案](todo/model-aware-capability-selection.zh-CN.md) | 模型级能力目录、自动 Profile 映射、能力快照、漂移与分阶段实施门禁 |
-| [告警投递适配方案](todo/alert-delivery-design.md) | 告警契约、平台格式、签名、企业网络与投递结果分类 |
-| [Halro Redis-like HA 架构提案](todo/halro-ha-architecture.zh-CN.md) | Standalone 向 Primary/Replica HA 的演进 |
+| 文档 | 内容 | 状态 |
+| --- | --- | --- |
+| [告警投递适配方案](todo/alert-delivery-design.md) | 告警契约、平台格式、签名、企业网络与投递结果分类 | 提案待评审 |
+| [DLP（脱敏与数据防泄漏）升级方案](todo/dlp-upgrade-plan.zh-CN.md) | 敏感数据标识符、检测配置文件、DLP 策略、Project 绑定与编译快照 | 提案待评审 |
+| [模型能力字典演进与四层展示](todo/model-capability-dictionary-evolution.zh-CN.md) | 能力字典版本化、四层能力模型与新增能力语义 | Phase 1 待真实 Provider 视觉验收；Phase 2–3 未开始 |
+| [模型能力选择 1.1.0：能力组合归属路由层](todo/model-aware-capability-selection.v1.1.0.zh-CN.md) | 能力组合发生在 Route 层，对外模型能力为其 Route 的并集 | §3 的 1.0.0 收尾已完成；§4 的 1.1.0 工作未开始 |
+| [Halro Redis-like HA 架构提案](todo/halro-ha-architecture.zh-CN.md) | Standalone 向 Primary/Replica HA 的演进 | 目标 1.1.0，未实现 |
 
 ## 草稿 · `drafts/`
 
