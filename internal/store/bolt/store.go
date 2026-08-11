@@ -21,7 +21,7 @@ import (
 	bbolt "go.etcd.io/bbolt"
 )
 
-const schemaVersion uint64 = 25
+const schemaVersion uint64 = 26
 
 // legacyCapabilityEvidence is the evidence tier this project used before
 // capability evidence was durable metadata. The domain no longer accepts it, so
@@ -620,6 +620,27 @@ var migrations = []migration{
 			}
 		}
 		return migrationStep(step, "after_reset_model_capability_detections")
+	}},
+	// Candidates now record what their interface can verify at all, which is
+	// what separates "the model refused everything" from "nothing here could be
+	// asked". A record written before that carries no such list, and inventing
+	// one would mean re-deriving a detection plan from a provider whose bindings
+	// may since have changed. Same reasoning as 25: rebuild the cache.
+	{version: 26, name: "reset_capability_detections_for_verifiable_scope", up: func(tx *bbolt.Tx, step func(string) error) error {
+		if err := migrationStep(step, "before_reset_detections_for_verifiable_scope"); err != nil {
+			return err
+		}
+		for _, name := range [][]byte{bucketModelCapabilityDetections, bucketCapabilityDetectionIdem, bucketCapabilityDetectionIndex} {
+			if tx.Bucket(name) != nil {
+				if err := tx.DeleteBucket(name); err != nil {
+					return err
+				}
+			}
+			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
+				return err
+			}
+		}
+		return migrationStep(step, "after_reset_detections_for_verifiable_scope")
 	}},
 }
 

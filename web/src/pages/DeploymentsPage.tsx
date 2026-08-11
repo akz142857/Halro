@@ -1278,7 +1278,35 @@ function DeploymentForm({
                 </div>}
                 {detection?.status === "completed" && !anyOperation && detectionNeedsProviderRepair && <div className="notice warning"><strong>{t("deployments.detectionProviderRepairTitle")}</strong><span>{t("deployments.detectionProviderRepairDescription")}</span><Link className="notice-link" href="/admin/providers">{t("deployments.openProviders")}</Link></div>}
                 {detection?.status === "completed" && !anyOperation && !detectionNeedsProviderRepair && <div className="notice warning"><strong>{t("deployments.detectionInconclusiveTitle")}</strong><span>{t("deployments.detectionInconclusiveDescription")}</span><div className="form-actions"><button type="button" className="button ghost" onClick={() => { resetDetection(); setManualDeclaration(true); }}>{t("deployments.advancedManualDeclaration")}</button></div></div>}
-                {detection && ["failed", "canceled", "interrupted"].includes(detection.status) && <div className="notice warning"><strong>{t(`deployments.detectionStatus.${detection.status}`)}</strong><span>{t("deployments.detectionRetryOrManual")}</span><div className="form-actions"><button type="button" className="button ghost" onClick={() => { resetDetection(); setManualDeclaration(true); }}>{t("deployments.advancedManualDeclaration")}</button></div></div>}
+                {/* A failure is not "the model is broken". Detection can only
+                    ask what its plan has probes for, so a model whose real work
+                    is generating images or transcribing audio is asked text
+                    questions it cannot answer by construction. Name what each
+                    interface was asked, what came back, and what it could have
+                    established at all, so a rejected credential is not read as
+                    a model that refused. */}
+                {detection && ["failed", "canceled", "interrupted"].includes(detection.status) && <div className="notice warning">
+                  <strong>{t(`deployments.detectionStatus.${detection.status}`)}</strong>
+                  <span>{t("deployments.detectionUnverifiableDescription")}</span>
+                  {detection.status === "failed" && !!detection.binding_candidates?.length && <ul className="detection-candidate-outcomes">
+                    {detection.binding_candidates.map((candidate) => {
+                      const binding = selectableBindings.find((item) => item.id === candidate.binding_id);
+                      return <li key={candidate.binding_id}>
+                        <strong>{binding ? bindingLabel(binding, t) : candidate.profile_id}</strong>
+                        <span>{candidate.capability
+                          ? t("deployments.detectionCandidateOutcome", {
+                            capability: t(`capabilities.${candidate.capability}`),
+                            status: t(`deployments.detectionProbeStatus.${candidate.status}`),
+                          })
+                          : t("deployments.detectionCandidateNotAsked")}</span>
+                        <small>{t("deployments.detectionCandidateVerifiable", {
+                          capabilities: (candidate.verifiable ?? []).map((name) => t(`capabilities.${name}`)).join("、") || t("deployments.detectionCandidateVerifiableNone"),
+                        })}</small>
+                      </li>;
+                    })}
+                  </ul>}
+                  <div className="form-actions"><button type="button" className="button ghost" onClick={() => { resetDetection(); setManualDeclaration(true); }}>{t("deployments.advancedManualDeclaration")}</button></div>
+                </div>}
                 {/* What a model cannot do is the complement of the capability
                     editor below, so listing it twice only adds rows nobody acts
                     on. What a probe failed to establish is not that complement:

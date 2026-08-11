@@ -106,7 +106,7 @@ func (r *Runtime) createAdminModelCapabilityDetection(writer http.ResponseWriter
 	candidateIDs := make([]string, 0, len(resolved))
 	for _, item := range resolved {
 		candidates = append(candidates, domain.DetectionBindingCandidate{BindingID: item.binding.ID, ProfileID: item.binding.ProfileID,
-			AccessSurface: item.binding.AccessSurface, ModelRevision: item.entry.Revision(), Status: domain.ProbeNotProbed})
+			AccessSurface: item.binding.AccessSurface, ModelRevision: item.entry.Revision(), Verifiable: item.verifiable, Status: domain.ProbeNotProbed})
 		candidateIDs = append(candidateIDs, item.binding.ID)
 	}
 	now := r.now().UTC()
@@ -226,6 +226,9 @@ type detectionCandidate struct {
 	adapter  provider.Adapter
 	detector provider.CapabilityDetector
 	entry    modelcatalog.Entry
+	// verifiable is what this interface's plan can establish by probing, which
+	// is usually narrower than what the interface offers.
+	verifiable []string
 }
 
 // resolveCapabilityDetector answers which interface a detection runs on when
@@ -278,8 +281,13 @@ func (r *Runtime) capabilityDetectionCandidates(instance domain.ProviderInstance
 		if !ok {
 			continue
 		}
-		if _, err := detector.CapabilityDetectionPlan(provider.ModelCapabilityDetectionTarget{ProviderModel: input.ProviderModel, BindingID: binding.ID, ProfileID: binding.ProfileID, RiskTier: input.RiskTier}); err == nil {
-			detectionCandidates = append(detectionCandidates, candidate{binding: binding, adapter: adapter, detector: detector, entry: entry})
+		plan, err := detector.CapabilityDetectionPlan(provider.ModelCapabilityDetectionTarget{ProviderModel: input.ProviderModel, BindingID: binding.ID, ProfileID: binding.ProfileID, RiskTier: input.RiskTier})
+		if err == nil {
+			verifiable := make([]string, 0, len(plan.Probes))
+			for _, probe := range plan.Probes {
+				verifiable = append(verifiable, probe.Capability)
+			}
+			detectionCandidates = append(detectionCandidates, candidate{binding: binding, adapter: adapter, detector: detector, entry: entry, verifiable: verifiable})
 		}
 	}
 	return catalogCandidates, detectionCandidates, nil
@@ -527,9 +535,14 @@ func (r *Runtime) identifyCapabilityBinding(ctx context.Context, d domain.ModelC
 				return d, false
 			}
 			results[probe.Capability] = result
-			candidate.Capability, candidate.ProbeKind = probe.Capability, probe.Kind
-			candidate.Status, candidate.Evidence, candidate.ErrorClass = result.Status, result.Evidence, result.ErrorClass
-			candidate.Answered = result.Status == domain.ProbeSupported
+			// Keep the outcome that tells the operator the most, not the last
+			// one attempted. A credential rejected with 401 is a fact they can
+			// act on; a later "could not tell" would otherwise bury it.
+			if probeOutcomeRank(result.Status) > probeOutcomeRank(candidate.Status) {
+				candidate.Capability, candidate.ProbeKind = probe.Capability, probe.Kind
+				candidate.Status, candidate.Evidence, candidate.ErrorClass = result.Status, result.Evidence, result.ErrorClass
+			}
+			candidate.Answered = candidate.Status == domain.ProbeSupported
 			if candidate.Answered {
 				break
 			}
@@ -651,6 +664,27 @@ func (r *Runtime) spendDetectionProbe(ctx context.Context, d domain.ModelCapabil
 	}
 	result.StartedAt, result.CompletedAt = &callTime, &finished
 	return d, result, true
+}
+
+// probeOutcomeRank orders probe outcomes by how much they tell the operator.
+// A supported probe settles the interface. A rejected credential or an
+// unreachable provider names something they can fix. "Could not tell" and
+// "was not asked" name nothing, so they never displace either.
+func probeOutcomeRank(status domain.CapabilityProbeStatus) int {
+	switch status {
+	case domain.ProbeSupported:
+		return 5
+	case domain.ProbeUnauthorized:
+		return 4
+	case domain.ProbeUnavailable:
+		return 3
+	case domain.ProbeUnsupported:
+		return 2
+	case domain.ProbeInconclusive:
+		return 1
+	default:
+		return 0
+	}
 }
 
 func probeDependenciesSupported(results map[string]domain.CapabilityProbeResult, dependencies []string) bool {

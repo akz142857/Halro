@@ -53,6 +53,77 @@ func TestOnboardingRejectsDeploymentThatIsNotCurrentlyUsable(t *testing.T) {
 	}
 }
 
+// An operator who probed a deployment and a route but never opened the
+// provider's own test was told the first goal was still ahead of them, and the
+// panel read 0/4 for a chain that had already answered end to end. Both of
+// those probes reach upstream through the provider, which is everything the
+// provider's connection test proves and the model on top of it.
+func TestOnboardingAcceptsADownstreamProbeAsProviderEvidence(t *testing.T) {
+	now := time.Date(2026, 8, 8, 10, 0, 0, 0, time.UTC)
+	probed := now.Add(-time.Minute)
+	for _, test := range []struct {
+		name  string
+		probe func(*onboardingResources)
+	}{
+		{name: "deployment probe", probe: func(resources *onboardingResources) {
+			resources.Deployments[0].LastTestedAt = &probed
+			resources.Routes[0].LastTestStatus = ""
+			resources.Routes[0].LastTestRevision = 0
+		}},
+		{name: "route probe", probe: func(resources *onboardingResources) {
+			resources.Routes[0].LastTestedAt = &probed
+			resources.Deployments[0].LastTestStatus = ""
+			resources.Deployments[0].LastTestRevision = 0
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resources := readyOnboardingResources(now)
+			resources.Providers[0].LastTestStatus = ""
+			resources.Providers[0].LastTestRevision = 0
+			resources.Providers[0].UpdatedAt = now.Add(-time.Hour)
+			test.probe(&resources)
+
+			result := evaluateOnboardingReadiness(now, resources, usage.Metrics{}, usage.Snapshot{})
+			if result.Goals[0].State != onboardingGoalComplete || result.Goals[0].DetailCode != "provider_ready" {
+				t.Fatalf("connect goal=%#v", result.Goals[0])
+			}
+		})
+	}
+}
+
+// The probe proves the provider as it stood when the probe ran. Editing the
+// provider afterwards — a new base URL, a different credential — invalidates
+// that evidence exactly the way it invalidates the provider's own test.
+func TestOnboardingRejectsDownstreamProbeOlderThanTheProvider(t *testing.T) {
+	now := time.Date(2026, 8, 8, 10, 0, 0, 0, time.UTC)
+	resources := readyOnboardingResources(now)
+	resources.Providers[0].LastTestStatus = ""
+	resources.Providers[0].LastTestRevision = 0
+	resources.Providers[0].UpdatedAt = now
+	probed := now.Add(-time.Minute)
+	resources.Deployments[0].LastTestedAt = &probed
+	resources.Routes[0].LastTestedAt = &probed
+
+	result := evaluateOnboardingReadiness(now, resources, usage.Metrics{}, usage.Snapshot{})
+	if result.CompletedGoals != 0 || result.Goals[0].DetailCode != "provider_test_required" {
+		t.Fatalf("result=%#v", result)
+	}
+}
+
+// A probe that never recorded when it ran cannot be placed against the
+// provider's last edit, so it is not evidence of anything current.
+func TestOnboardingRejectsDownstreamProbeWithoutAnInstant(t *testing.T) {
+	now := time.Date(2026, 8, 8, 10, 0, 0, 0, time.UTC)
+	resources := readyOnboardingResources(now)
+	resources.Providers[0].LastTestStatus = ""
+	resources.Providers[0].LastTestRevision = 0
+
+	result := evaluateOnboardingReadiness(now, resources, usage.Metrics{}, usage.Snapshot{})
+	if result.CompletedGoals != 0 || result.Goals[0].DetailCode != "provider_test_required" {
+		t.Fatalf("result=%#v", result)
+	}
+}
+
 func TestOnboardingKeepsFailedVerificationRecoverable(t *testing.T) {
 	now := time.Date(2026, 8, 8, 10, 0, 0, 0, time.UTC)
 	snapshot := usage.Snapshot{

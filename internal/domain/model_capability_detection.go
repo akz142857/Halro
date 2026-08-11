@@ -93,16 +93,25 @@ type DetectionProviderCall struct {
 // the model answers on that Access Surface at all, and the winning candidate's
 // probe is carried into Results so the capability pass never pays for it twice.
 type DetectionBindingCandidate struct {
-	BindingID     string                `json:"binding_id"`
-	ProfileID     ProviderProfileID     `json:"profile_id"`
-	AccessSurface AccessSurface         `json:"access_surface"`
-	ModelRevision string                `json:"model_revision"`
-	Capability    string                `json:"capability,omitempty"`
-	ProbeKind     string                `json:"probe_kind,omitempty"`
-	Status        CapabilityProbeStatus `json:"status"`
-	Evidence      CapabilityEvidence    `json:"evidence,omitempty"`
-	ErrorClass    string                `json:"error_class,omitempty"`
-	Answered      bool                  `json:"answered"`
+	BindingID     string            `json:"binding_id"`
+	ProfileID     ProviderProfileID `json:"profile_id"`
+	AccessSurface AccessSurface     `json:"access_surface"`
+	ModelRevision string            `json:"model_revision"`
+	// Verifiable names the capabilities this interface can establish by probing
+	// at all. It is usually smaller than what the interface offers: generating
+	// an image or transcribing audio costs real money and leaves artefacts, so
+	// the safe-automatic plan has no probe for them. A model whose only
+	// capabilities fall outside this set cannot be identified by asking — every
+	// question the plan can put to it is one it cannot answer by construction —
+	// and saying so is the difference between "detection failed" and "there was
+	// nothing here detection could ask".
+	Verifiable []string              `json:"verifiable,omitempty"`
+	Capability string                `json:"capability,omitempty"`
+	ProbeKind  string                `json:"probe_kind,omitempty"`
+	Status     CapabilityProbeStatus `json:"status"`
+	Evidence   CapabilityEvidence    `json:"evidence,omitempty"`
+	ErrorClass string                `json:"error_class,omitempty"`
+	Answered   bool                  `json:"answered"`
 }
 
 type ModelCapabilityDetection struct {
@@ -179,6 +188,16 @@ func (d ModelCapabilityDetection) Validate() error {
 		seenCandidates[candidate.BindingID] = struct{}{}
 		if candidate.Capability != "" && !slices.Contains(capabilityNames, candidate.Capability) {
 			problems = append(problems, fmt.Errorf("capability detection candidate %q names an unknown capability", candidate.BindingID))
+		}
+		for _, name := range candidate.Verifiable {
+			if !slices.Contains(capabilityNames, name) {
+				problems = append(problems, fmt.Errorf("capability detection candidate %q claims an unknown verifiable capability %q", candidate.BindingID, name))
+			}
+		}
+		// A probe outcome can only come from a capability the interface was able
+		// to ask about in the first place.
+		if candidate.Capability != "" && len(candidate.Verifiable) > 0 && !slices.Contains(candidate.Verifiable, candidate.Capability) {
+			problems = append(problems, fmt.Errorf("capability detection candidate %q reports a probe it could not run", candidate.BindingID))
 		}
 		// Answered is the resolution input, so it may never be more generous
 		// than the probe that produced it.

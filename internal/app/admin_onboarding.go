@@ -125,6 +125,41 @@ func evaluateOnboardingReadiness(now time.Time, resources onboardingResources, m
 		}
 	}
 
+	// A deployment or route probe reaches upstream through the provider it
+	// names, so a healthy one proves everything the provider's own connection
+	// test proves and the model on top of it. Requiring the provider test
+	// anyway told operators who had already probed the whole chain that they
+	// had not started. Evidence collected before the provider was last edited
+	// says nothing about the provider as it now stands, which is why the
+	// instant is kept and compared rather than just the fact of a probe.
+	deploymentProvider := make(map[string]string, len(resources.Deployments))
+	downstreamProbe := make(map[string]time.Time)
+	recordProbe := func(providerID string, at *time.Time) {
+		if providerID == "" || at == nil {
+			return
+		}
+		if newest, seen := downstreamProbe[providerID]; !seen || at.After(newest) {
+			downstreamProbe[providerID] = *at
+		}
+	}
+	for _, deployment := range resources.Deployments {
+		if deployment.DeletedAt != nil {
+			continue
+		}
+		deploymentProvider[deployment.ID] = deployment.ProviderID
+		if deployment.LastTestStatus == domain.DeploymentTestHealthy && deployment.LastTestRevision == deployment.Revision {
+			recordProbe(deployment.ProviderID, deployment.LastTestedAt)
+		}
+	}
+	for _, route := range resources.Routes {
+		if route.DeletedAt != nil {
+			continue
+		}
+		if route.LastTestStatus == domain.DeploymentTestHealthy && route.LastTestRevision == route.Revision {
+			recordProbe(deploymentProvider[route.DeploymentID], route.LastTestedAt)
+		}
+	}
+
 	hasProvider := false
 	hasProviderCredential := false
 	hasEnabledProvider := false
@@ -160,6 +195,10 @@ func evaluateOnboardingReadiness(now time.Time, resources onboardingResources, m
 		}
 		hasProviderBinding = true
 		if provider.LastTestStatus == domain.DeploymentTestHealthy && provider.LastTestRevision == provider.Revision {
+			readyProviders[provider.ID] = provider
+			continue
+		}
+		if probedAt, proven := downstreamProbe[provider.ID]; proven && !probedAt.Before(provider.UpdatedAt) {
 			readyProviders[provider.ID] = provider
 		}
 	}

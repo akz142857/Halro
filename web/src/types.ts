@@ -486,6 +486,8 @@ export interface DetectionBindingCandidate {
   profile_id: string;
   access_surface: string;
   model_revision: string;
+  /** Capabilities this interface can establish by probing at all. */
+  verifiable?: string[];
   capability?: string;
   probe_kind?: string;
   status: CapabilityProbeStatus;

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -81,12 +82,14 @@ func TestIdentificationResolvesTheOnlyInterfaceThatAnswers(t *testing.T) {
 	if !completed.Recommended.Moderations || completed.Recommended.Chat {
 		t.Fatalf("recommended=%#v", completed.Recommended)
 	}
-	// The losing interface costs one probe and no more; the winner's own
-	// identification probe is carried into the results rather than repeated.
-	if chatDetector.calls.Load() != 1 || mediaDetector.calls.Load() != 1 {
+	// The losing interface costs only its roots — both of them, because failing
+	// chat does not rule out embeddings — and stops there rather than walking
+	// its dependents. The winner's own identification probe is carried into the
+	// results rather than paid for twice, so it adds nothing beyond its root.
+	if chatDetector.calls.Load() != 2 || mediaDetector.calls.Load() != 1 {
 		t.Fatalf("chat calls=%d media calls=%d", chatDetector.calls.Load(), mediaDetector.calls.Load())
 	}
-	if completed.ProviderCalls != 2 || len(completed.Calls) != 2 {
+	if completed.ProviderCalls != 3 || len(completed.Calls) != 3 {
 		t.Fatalf("provider calls=%d records=%d", completed.ProviderCalls, len(completed.Calls))
 	}
 	for _, call := range completed.Calls {
@@ -119,6 +122,40 @@ func TestIdentificationLeavesAGenuineChoiceToTheOperatorWithEvidence(t *testing.
 	}
 	if len(answered) != 2 || answered[chat.ID] != "chat" || answered[media.ID] != "moderations" {
 		t.Fatalf("the operator was left without evidence: %#v", completed.Candidates)
+	}
+}
+
+// A model whose real work has no probe — image generation, transcription —
+// gets asked only questions it cannot answer. The record has to say what each
+// interface could have established at all, or "failed" reads as a fault in the
+// model rather than as a question detection was never able to put.
+func TestFailedIdentificationReportsWhatEachInterfaceCouldVerify(t *testing.T) {
+	runtime, instance, chat, media := twoInterfaceProviderForTest(t)
+	// Nothing is supported anywhere, and the chat interface rejects the
+	// credential on its FIRST root probe — a fact the operator can act on, and
+	// one a rule that simply kept the last outcome would bury behind the "could
+	// not tell" that follows it.
+	chatDetector := &scriptedCapabilityDetector{supported: map[string]bool{}, unauthorized: map[string]bool{"chat": true}}
+	mediaDetector := &scriptedCapabilityDetector{supported: map[string]bool{}}
+	registerBindingDetectors(t, runtime, instance, map[string]provider.Adapter{chat.ID: chatDetector, media.ID: mediaDetector})
+
+	completed := runDetectionForTest(t, runtime, instance, "gpt-image-unlisted")
+	if completed.Status != domain.DetectionFailed {
+		t.Fatalf("status=%s", completed.Status)
+	}
+	byBinding := map[string]domain.DetectionBindingCandidate{}
+	for _, candidate := range completed.Candidates {
+		byBinding[candidate.BindingID] = candidate
+	}
+	if got := byBinding[media.ID].Verifiable; !slices.Equal(got, []string{"moderations"}) {
+		t.Fatalf("media interface reports verifiable=%v, want only moderations", got)
+	}
+	if got := byBinding[chat.ID].Verifiable; !slices.Contains(got, "chat") || !slices.Contains(got, "embeddings") {
+		t.Fatalf("chat interface reports verifiable=%v", got)
+	}
+	// The credential rejection survives, rather than the last probe attempted.
+	if candidate := byBinding[chat.ID]; candidate.Status != domain.ProbeUnauthorized || candidate.Capability != "chat" {
+		t.Fatalf("chat candidate kept %q/%s instead of the credential rejection", candidate.Capability, candidate.Status)
 	}
 }
 
@@ -210,14 +247,19 @@ func runDetectionForTest(t *testing.T, runtime *Runtime, instance domain.Provide
 // exactly as an unsupported model would.
 type scriptedCapabilityDetector struct {
 	fixedCapabilityDetector
-	supported map[string]bool
+	supported    map[string]bool
+	unauthorized map[string]bool
 }
 
 func (d *scriptedCapabilityDetector) CapabilityDetectionPlan(target provider.ModelCapabilityDetectionTarget) (provider.CapabilityDetectionPlan, error) {
 	if target.ProviderModel == "" || target.BindingID == "" || target.RiskTier != "safe_automatic" {
 		return provider.CapabilityDetectionPlan{}, errors.New("capability detection target does not match adapter profile")
 	}
+	// Two roots and one dependent, mirroring the real chat interface: a model
+	// that fails chat is still asked about embeddings before the interface is
+	// written off.
 	probes := []provider.CapabilityProbe{{Capability: "chat", Kind: "minimal_chat", MaxOutputTokens: 8, MayBill: true},
+		{Capability: "embeddings", Kind: "embedding", MaxOutputTokens: 8, MayBill: true},
 		{Capability: "streaming", Kind: "minimal_stream", DependsOn: []string{"chat"}, MaxOutputTokens: 8, MayBill: true}}
 	if target.ProfileID == domain.ProfileOpenAIMediaResources {
 		probes = []provider.CapabilityProbe{{Capability: "moderations", Kind: "moderation", MaxOutputTokens: 8, MayBill: true}}
@@ -230,7 +272,10 @@ func (d *scriptedCapabilityDetector) DetectCapability(_ context.Context, target 
 	if d.supported[probe.Capability] {
 		return domain.CapabilityProbeResult{Status: domain.ProbeSupported, Evidence: domain.EvidenceVerified, BindingID: target.BindingID, ProbeKind: probe.Kind}
 	}
-	return domain.CapabilityProbeResult{Status: domain.ProbeUnsupported, ErrorClass: "model_not_found", BindingID: target.BindingID, ProbeKind: probe.Kind}
+	if d.unauthorized[probe.Capability] {
+		return domain.CapabilityProbeResult{Status: domain.ProbeUnauthorized, ErrorClass: "authentication", BindingID: target.BindingID, ProbeKind: probe.Kind}
+	}
+	return domain.CapabilityProbeResult{Status: domain.ProbeInconclusive, ErrorClass: "bad_request", BindingID: target.BindingID, ProbeKind: probe.Kind}
 }
 
 type fixedCapabilityDetector struct{ calls atomic.Int64 }

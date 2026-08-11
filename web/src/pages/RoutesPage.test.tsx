@@ -79,7 +79,74 @@ describe("RoutesPage", () => {
     expect(within(bar as HTMLElement).getByText("启用模型路由 · 禁用")).toBeVisible();
     expect(within(bar as HTMLElement).getByText("应用请求这个别名会被拒绝")).toBeVisible();
   });
+
+  // The route update is a full replacement. A toggle that sent only `enabled`
+  // would blank the deployment the alias routes to, which the row cannot show.
+  it("switches a route off from the list without dropping the rest of the route", async () => {
+    vi.spyOn(api, "routes").mockResolvedValue({ items: [enabledRoute()], next_cursor: "" });
+    vi.spyOn(api, "deployments").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "providers").mockResolvedValue({ items: [], next_cursor: "" });
+    const update = vi.spyOn(api, "updateRoute").mockResolvedValue({ data: enabledRoute(), etag: "\"2\"" });
+    renderPage();
+
+    const row = (await screen.findByText("chat")).closest("tr");
+    expect(within(row!).getByText("启用")).toHaveClass("resource-state", "enabled");
+    fireEvent.click(within(row!).getByRole("button", { name: "禁用" }));
+
+    // The last enabled route for an alias is the one whose removal stops the
+    // alias answering, so the dialog has to say that rather than "are you sure".
+    const consequence = await screen.findByText("确认禁用模型路由“chat”？这是该别名最后一条已启用路由，应用请求“chat”会被拒绝。");
+    expect(consequence).toBeVisible();
+    fireEvent.click(within(consequence.closest(".confirmation-dialog")!).getByRole("button", { name: "禁用" }));
+
+    await waitFor(() => expect(update).toHaveBeenCalledWith(
+      "route_chat",
+      { public_model: "chat", deployment_id: "deployment_gpt", priority: 10, strategy: "ordered", enabled: false },
+      1,
+    ));
+  });
+
+  // Disabling one of several routes on an alias is a capacity change, not an
+  // outage, and the dialog has to distinguish the two.
+  it("counts the routes still serving the alias before switching one off", async () => {
+    const sibling = { ...enabledRoute(), id: "route_chat_backup", deployment_id: "deployment_claude", priority: 20 };
+    vi.spyOn(api, "routes").mockResolvedValue({ items: [enabledRoute(), sibling], next_cursor: "" });
+    vi.spyOn(api, "deployments").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "providers").mockResolvedValue({ items: [], next_cursor: "" });
+    renderPage();
+
+    const row = (await screen.findAllByText("chat"))[0].closest("tr");
+    fireEvent.click(within(row!).getByRole("button", { name: "禁用" }));
+
+    expect(await screen.findByText("确认禁用模型路由“chat”？该别名还有 1 条已启用路由继续承接请求。")).toBeVisible();
+  });
+
+  it("offers a disabled route the way back on", async () => {
+    vi.spyOn(api, "routes").mockResolvedValue({ items: [{ ...enabledRoute(), enabled: false }], next_cursor: "" });
+    vi.spyOn(api, "deployments").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "providers").mockResolvedValue({ items: [], next_cursor: "" });
+    const update = vi.spyOn(api, "updateRoute").mockResolvedValue({ data: enabledRoute(), etag: "\"2\"" });
+    renderPage();
+
+    const row = (await screen.findByText("chat")).closest("tr");
+    expect(within(row!).getByText("禁用")).toHaveClass("resource-state");
+    expect(within(row!).getByText("禁用")).not.toHaveClass("enabled");
+    fireEvent.click(within(row!).getByRole("button", { name: "启用" }));
+
+    await waitFor(() => expect(update).toHaveBeenCalledWith(
+      "route_chat",
+      expect.objectContaining({ enabled: true, deployment_id: "deployment_gpt" }),
+      1,
+    ));
+  });
 });
+
+function enabledRoute(): Route {
+  return {
+    id: "route_chat", public_model: "chat", deployment_id: "deployment_gpt",
+    priority: 10, strategy: "ordered", enabled: true, revision: 1, created_at: "", updated_at: "",
+  } as Route;
+}
 
 function renderPage() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });

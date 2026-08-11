@@ -450,6 +450,36 @@ describe("deployment invocation target workflow", () => {
     expect(screen.queryByRole("button", { name: "手动配置" })).not.toBeInTheDocument();
   });
 
+  // An image model is asked three text questions it cannot answer, because the
+  // plan has no probe for generating an image. Reporting only "detection
+  // failed" reads as a fault in the model; the card has to say what each
+  // interface was asked, what came back, and what it could establish at all.
+  it("says what each interface was asked and could verify when nothing answered", async () => {
+    vi.spyOn(api, "createModelCapabilityDetection").mockImplementation(async (_id, body) => ({
+      id: "image", status: "failed" as const, source: "verified_probe" as const, provider_id: provider.id,
+      provider_model: unknown.target_id, provider_calls: 3, max_provider_calls: 10,
+      binding_candidates: [
+        { binding_id: "b-chat", profile_id: "openai.chat-embeddings.v1", access_surface: "openai-api", model_revision: "sha256:a", verifiable: ["chat", "embeddings"], capability: "chat", probe_kind: "minimal_chat", status: "unauthorized" as const, error_class: "authentication", answered: false },
+        { binding_id: "b-embed", profile_id: "openai.embeddings.v1", access_surface: "openai-api", model_revision: "sha256:b", verifiable: ["embeddings"], capability: "embeddings", probe_kind: "embedding", status: "inconclusive" as const, error_class: "bad_request", answered: false },
+      ],
+      capabilities: {}, recommended_capabilities: emptyCapabilities,
+      selection_revision: (body as { selection_revision: string }).selection_revision, revision: 2,
+    }));
+    await openCreate();
+    await choose("GPT Future");
+    fireEvent.click(screen.getByRole("button", { name: "识别能力" }));
+
+    const card = (await screen.findByText("未能可靠识别能力")).closest(".notice")!;
+    // Not "the model is broken" — what automatic verification can ask at all.
+    expect(card.textContent).toContain("图像生成、音频转写、语音这类能力不做自动验证");
+    // The rejected credential is named, because that is the actionable one.
+    expect(card.textContent).toContain("对话 → 无权验证");
+    expect(card.textContent).toContain("向量嵌入 → 无法确认");
+    // And what each interface could ever have established.
+    expect(card.textContent).toContain("此接口可自动验证：对话、向量嵌入");
+    expect(within(card as HTMLElement).getByRole("button", { name: "手动配置" })).toBeVisible();
+  });
+
   it("makes advanced onboarding choose a real interface and only narrow its ceiling", async () => {
     const create = vi.spyOn(api, "createDeployment").mockResolvedValue({} as never);
     await openCreate();

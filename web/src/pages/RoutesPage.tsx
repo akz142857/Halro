@@ -29,6 +29,19 @@ import { hasOnboardingCreateIntent, OnboardingContextBanner } from "../Onboardin
 
 const column = createColumnHelper<Route>();
 
+// The route update is a full replacement, so a state toggle has to resend
+// everything the route already holds — sending only `enabled` would blank the
+// deployment and strategy it routes on.
+function routeUpdateBody(route: Route, enabled: boolean) {
+  return {
+    public_model: route.public_model,
+    deployment_id: route.deployment_id,
+    priority: route.priority,
+    strategy: route.strategy,
+    enabled,
+  };
+}
+
 export function RoutesPage() {
   const { t } = useTranslation();
   const readOnly = useIsReadOnly();
@@ -42,6 +55,21 @@ export function RoutesPage() {
     mutationFn: ({ route, reauth }: { route: Route; reauth: ReauthValues }) => api.deleteRoute(route.id, route.revision, reauth),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["routes"] }),
   });
+  // Switching a route off is the same write the edit form makes, so it goes
+  // through the same full-body update rather than a second, partial one.
+  const setEnabled = useMutation({
+    mutationFn: (route: Route) => api.updateRoute(route.id, routeUpdateBody(route, !route.enabled), route.revision),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["routes"] }),
+  });
+  // Whether an alias keeps answering after this route is switched off depends
+  // on what else still serves it, so the confirmation has to count.
+  const siblingEnabledCount = useMemo(() => {
+    const counts = new Map<string, number>();
+    routes.data?.items.forEach((route) => {
+      if (route.enabled) counts.set(route.public_model, (counts.get(route.public_model) ?? 0) + 1);
+    });
+    return counts;
+  }, [routes.data]);
   const deploymentByID = useMemo(
     () => new Map(deployments.data?.items.map((item) => [item.id, item]) ?? []),
     [deployments.data],
@@ -87,6 +115,14 @@ export function RoutesPage() {
       cell: ({ getValue }) => <span className="badge">{(getValue() || "ordered") === "round_robin" ? t("routes.roundRobin") : t("routes.ordered")}</span>,
     }),
     column.accessor("priority", { header: t("routes.priority") }),
+    column.accessor("enabled", {
+      header: t("routes.status"),
+      cell: ({ getValue }) => (
+        <span className={`resource-state ${getValue() ? "enabled" : ""}`}>
+          {getValue() ? t("common.enabled") : t("common.disabled")}
+        </span>
+      ),
+    }),
     column.display({
       id: "actions",
       header: "",
@@ -95,6 +131,20 @@ export function RoutesPage() {
           <RouteTestAction route={row.original} />
           <div className="row-actions route-management-actions">
             <button className="button ghost" disabled={readOnly} onClick={() => setEditing(row.original)}>{t("common.edit")}</button>
+            {row.original.enabled ? (
+              <ConfirmButton
+                className="button ghost"
+                label={t("common.disable")}
+                title={t("routes.disableTitle")}
+                confirmLabel={(siblingEnabledCount.get(row.original.public_model) ?? 0) > 1
+                  ? t("routes.disableConfirm", { name: row.original.public_model, count: (siblingEnabledCount.get(row.original.public_model) ?? 1) - 1 })
+                  : t("routes.disableConfirmLast", { name: row.original.public_model })}
+                disabled={setEnabled.isPending}
+                onConfirm={() => setEnabled.mutateAsync(row.original)}
+              />
+            ) : (
+              <button className="button ghost" disabled={readOnly || setEnabled.isPending} onClick={() => setEnabled.mutate(row.original)}>{t("common.enable")}</button>
+            )}
             <ConfirmButton
               label={t("common.delete")}
               confirmLabel={t("routes.deleteConfirm", { name: row.original.public_model })}
@@ -106,7 +156,7 @@ export function RoutesPage() {
         </div>
       ),
     }),
-  ], [deploymentByID, providerNames, remove, t]);
+  ], [deploymentByID, providerNames, readOnly, remove, setEnabled, siblingEnabledCount, t]);
   const table = useReactTable({
     data: routes.data?.items ?? [],
     columns,
@@ -129,6 +179,7 @@ export function RoutesPage() {
           did not, so a refused deletion left the route in the list with nothing
           to explain why. */}
       {remove.isError && <ErrorState error={remove.error} />}
+      {setEnabled.isError && <ErrorState error={setEnabled.error} />}
       {routes.data?.items.length === 0 && (
         <EmptyState title={t("routes.emptyTitle")}>{t("routes.emptyDescription")}</EmptyState>
       )}
