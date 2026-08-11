@@ -149,7 +149,7 @@ func (r *Runtime) createAdminDeploymentPrice(writer http.ResponseWriter, request
 		writePriceError(writer, err)
 		return
 	}
-	if err := r.reloadProviderRegistry(request.Context()); err != nil {
+	if err := r.activateTopology(); err != nil {
 		adminConfigurationError(writer, err)
 		return
 	}
@@ -201,7 +201,7 @@ func (r *Runtime) cancelAdminDeploymentPrice(writer http.ResponseWriter, request
 		writePriceError(writer, err)
 		return
 	}
-	if err := r.reloadProviderRegistry(request.Context()); err != nil {
+	if err := r.activateTopology(); err != nil {
 		adminConfigurationError(writer, err)
 		return
 	}
@@ -273,7 +273,7 @@ func (r *Runtime) confirmRestoredDeploymentPricing(writer http.ResponseWriter, r
 		writePriceError(writer, err)
 		return
 	}
-	if err := r.reloadProviderRegistry(request.Context()); err != nil {
+	if err := r.activateTopology(); err != nil {
 		adminConfigurationError(writer, err)
 		return
 	}
@@ -455,7 +455,7 @@ func (r *Runtime) adoptAdminDeploymentPriceProposal(writer http.ResponseWriter, 
 		writePriceError(writer, err)
 		return
 	}
-	if err := r.reloadProviderRegistry(request.Context()); err != nil {
+	if err := r.activateTopology(); err != nil {
 		adminConfigurationError(writer, err)
 		return
 	}

@@ -452,7 +452,15 @@ func gatewayKeyIdempotencyDigest(actor, projectID, key string) string {
 }
 
 func (r *Runtime) refreshAdminAuth(writer http.ResponseWriter, request *http.Request) bool {
-	if err := r.auth.Refresh(request.Context(), r.store); err != nil {
+	ctx, cancel := r.activationContext()
+	defer cancel()
+	if err := r.auth.Refresh(ctx, r.store); err != nil {
+		// The write is already durable, so this is the disagreement case rather
+		// than a rejected request: the operator has revoked something that is
+		// still being honoured. Loud, because the reply alone tells them the
+		// mutation failed, which is not what happened.
+		r.logger.Error("authentication snapshot activation failed after a durable mutation",
+			"error", err)
 		adminStoreError(writer)
 		return false
 	}

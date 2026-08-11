@@ -33,6 +33,49 @@ func (r *Runtime) reloadProviderRegistry(ctx context.Context) error {
 	return nil
 }
 
+// activationTimeout bounds the work that carries a durable Admin mutation into
+// the running snapshots. It is there to stop a wedged store read from holding an
+// Admin request open indefinitely — not to let the client's patience decide
+// whether a revocation takes effect.
+const activationTimeout = 30 * time.Second
+
+// activationContext returns the context that carries an already-committed
+// mutation into the live snapshots.
+//
+// Deliberately not the Admin request's. Activation only begins once the write is
+// durable, so a client that disconnects — or a proxy that gives up, or a request
+// deadline that expires — used to abort the rebuild and leave the persisted
+// state and the serving state disagreeing, with the data plane on the stale
+// side: a revoked Gateway Key still authenticating, a deleted Route still
+// routing, until some later mutation happened to succeed or the process
+// restarted. Because the store refuses reads on a canceled context, cancelling
+// at any point after the commit was enough; it was not a narrow race.
+//
+// Still bounded, and it dies with the runtime rather than outliving it.
+func (r *Runtime) activationContext() (context.Context, context.CancelFunc) {
+	parent := r.backgroundCtx
+	if parent == nil {
+		// Open assigns backgroundCtx late; a mutation cannot arrive before then,
+		// but activation must not depend on that ordering to be uncancellable.
+		parent = context.Background()
+	}
+	return context.WithTimeout(parent, activationTimeout)
+}
+
+// activateTopology rebuilds the routing registry after a durable Provider,
+// Deployment, Route, Credential or price mutation. It takes no context on
+// purpose: the only context that belongs here is one the Admin client cannot
+// cancel, so the call sites are not offered the choice.
+func (r *Runtime) activateTopology() error {
+	ctx, cancel := r.activationContext()
+	defer cancel()
+	if err := r.reloadProviderRegistry(ctx); err != nil {
+		r.logger.Error("routing registry activation failed after a durable mutation", "error", err)
+		return err
+	}
+	return nil
+}
+
 // prepareModelCatalogActivation serializes a signed-catalog commit with every
 // Provider, Deployment, and Route mutation. The lock is acquired before the
 // candidate registry reads the store and is held until the Manager commits or

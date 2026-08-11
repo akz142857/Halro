@@ -120,7 +120,7 @@ func (r *Runtime) updateAdminCredential(writer http.ResponseWriter, request *htt
 		adminMutationError(writer, err)
 		return
 	}
-	if err := r.reloadProviderRegistry(request.Context()); err != nil {
+	if err := r.activateTopology(); err != nil {
 		adminConfigurationError(writer, err)
 		return
 	}
@@ -187,7 +187,7 @@ func (r *Runtime) createAdminProvider(writer http.ResponseWriter, request *http.
 		adminMutationError(writer, err)
 		return
 	}
-	if err := r.reloadProviderRegistry(request.Context()); err != nil {
+	if err := r.activateTopology(); err != nil {
 		adminConfigurationError(writer, err)
 		return
 	}
@@ -269,7 +269,7 @@ func (r *Runtime) updateAdminProvider(writer http.ResponseWriter, request *http.
 		adminMutationError(writer, err)
 		return
 	}
-	if err := r.reloadProviderRegistry(request.Context()); err != nil {
+	if err := r.activateTopology(); err != nil {
 		adminConfigurationError(writer, err)
 		return
 	}
@@ -318,7 +318,7 @@ func (r *Runtime) deleteAdminProvider(writer http.ResponseWriter, request *http.
 		adminMutationError(writer, err)
 		return
 	}
-	if err := r.reloadProviderRegistry(request.Context()); err != nil {
+	if err := r.activateTopology(); err != nil {
 		adminConfigurationError(writer, err)
 		return
 	}
@@ -631,7 +631,7 @@ func (r *Runtime) createAdminRoute(writer http.ResponseWriter, request *http.Req
 		adminMutationError(writer, err)
 		return
 	}
-	if err := r.reloadProviderRegistry(request.Context()); err != nil {
+	if err := r.activateTopology(); err != nil {
 		adminConfigurationError(writer, err)
 		return
 	}
@@ -684,7 +684,7 @@ func (r *Runtime) updateAdminRoute(writer http.ResponseWriter, request *http.Req
 		adminMutationError(writer, err)
 		return
 	}
-	if err := r.reloadProviderRegistry(request.Context()); err != nil {
+	if err := r.activateTopology(); err != nil {
 		adminConfigurationError(writer, err)
 		return
 	}
@@ -728,7 +728,7 @@ func (r *Runtime) deleteAdminRoute(writer http.ResponseWriter, request *http.Req
 		adminMutationError(writer, err)
 		return
 	}
-	if err := r.reloadProviderRegistry(request.Context()); err != nil {
+	if err := r.activateTopology(); err != nil {
 		adminConfigurationError(writer, err)
 		return
 	}

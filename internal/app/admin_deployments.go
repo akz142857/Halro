@@ -167,7 +167,7 @@ func (r *Runtime) createAdminDeployment(writer http.ResponseWriter, request *htt
 		adminMutationError(writer, err)
 		return
 	}
-	if err := r.reloadProviderRegistry(request.Context()); err != nil {
+	if err := r.activateTopology(); err != nil {
 		adminConfigurationError(writer, err)
 		return
 	}
@@ -340,7 +340,7 @@ func (r *Runtime) updateAdminDeployment(writer http.ResponseWriter, request *htt
 		adminMutationError(writer, err)
 		return
 	}
-	if err := r.reloadProviderRegistry(request.Context()); err != nil {
+	if err := r.activateTopology(); err != nil {
 		adminConfigurationError(writer, err)
 		return
 	}
@@ -398,7 +398,7 @@ func (r *Runtime) deleteAdminDeployment(writer http.ResponseWriter, request *htt
 		adminMutationError(writer, err)
 		return
 	}
-	if err := r.reloadProviderRegistry(request.Context()); err != nil {
+	if err := r.activateTopology(); err != nil {
 		adminConfigurationError(writer, err)
 		return
 	}
