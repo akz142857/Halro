@@ -44,6 +44,18 @@ func TestDeploymentPriceTimelineCreateSelectAndCancel(t *testing.T) {
 	if _, err := store.CreateDeploymentPriceVersion(ctx, duplicate); !errors.Is(err, domain.ErrPriceTimelineConflict) {
 		t.Fatalf("duplicate effective time error=%v", err)
 	}
+	// A refusal that only states the rule leaves the caller with no way to tell
+	// which version occupies the end of the timeline, so it can neither cancel
+	// that one nor schedule after it. The Admin console turns this into an
+	// operator-facing instruction, and a stale client view is exactly when it
+	// needs the server's own answer.
+	earlier := newStoredPrice("price_earlier", "dep_price", second.EffectiveFrom.Add(-time.Minute))
+	_, err = store.CreateDeploymentPriceVersion(ctx, earlier)
+	if !errors.Is(err, domain.ErrPriceTimelineConflict) ||
+		!strings.Contains(err.Error(), "v2") ||
+		!strings.Contains(err.Error(), second.EffectiveFrom.UTC().Format(time.RFC3339)) {
+		t.Fatalf("timeline conflict did not name the blocking version: %v", err)
+	}
 	selected, err := store.SelectDeploymentPriceVersion(ctx, "dep_price", now)
 	if err != nil || selected.ID != first.ID {
 		t.Fatalf("selected=%#v err=%v", selected, err)

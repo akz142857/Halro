@@ -320,8 +320,13 @@ func (s *Store) createDeploymentPriceVersion(ctx context.Context, price domain.D
 		}); err != nil {
 			return err
 		}
+		// Naming the version that occupies the end of the timeline is what makes
+		// the refusal actionable: "must follow all non-cancelled versions" alone
+		// leaves the caller with no way to tell which one to cancel or schedule
+		// after. Version number and effective time are configuration, not
+		// secrets, so both are safe to return.
 		if latest.ID != "" && !price.EffectiveFrom.After(latest.EffectiveFrom) {
-			return fmt.Errorf("%w: effective_from must follow all non-cancelled versions", domain.ErrPriceTimelineConflict)
+			return fmt.Errorf("%w: effective_from must follow all non-cancelled versions (latest is v%d effective %s)", domain.ErrPriceTimelineConflict, latest.Version, latest.EffectiveFrom.UTC().Format(time.RFC3339))
 		}
 		versionCount, scheduledCount := 0, 0
 		if err := timeline.ForEach(func(_, priceID []byte) error {

@@ -6,6 +6,7 @@ export function localizedError(t: TFunction, error: unknown) {
   const codeMessages: Record<string, string> = {
     deployment_price_unavailable: "errors.deploymentPriceUnavailable",
     price_effective_from_conflict: "errors.priceEffectiveConflict",
+    price_timeline_conflict: "errors.priceTimelineConflict",
     price_effective_from_required: "errors.priceEffectiveRequired",
     route_listing_incomplete: "errors.routeListingIncomplete",
     capability_detection_stale: "errors.capabilityDetectionStale",

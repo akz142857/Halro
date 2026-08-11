@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError, api } from "../api";
 import i18n from "../i18n";
 import type { AdminRole, Deployment, DeploymentPriceVersion, DeploymentVariant, InvocationTargetCatalog, Provider, ProviderCapabilities, ResolvedInvocationTarget, Session } from "../types";
-import { DeploymentsPage, OVERDUE_SCHEDULED_PRICE_REFRESH_MS, PRICE_FETCH_BATCH_SIZE, priceFetchDelay, scheduledPriceRefreshInterval } from "./DeploymentsPage";
+import { DeploymentsPage, localDateTimeValue, OVERDUE_SCHEDULED_PRICE_REFRESH_MS, PRICE_FETCH_BATCH_SIZE, priceFetchDelay, scheduledPriceRefreshInterval } from "./DeploymentsPage";
 
 const emptyCapabilities: ProviderCapabilities = {
   chat: false, streaming: false, embeddings: false, moderations: false, images: false,
@@ -691,6 +691,61 @@ describe("deployment price panel", () => {
     await waitFor(() => expect(screen.queryByText(PRICE_BLOCKER)).not.toBeInTheDocument());
   });
 
+  // The server refuses any version that is not strictly later than every
+  // non-cancelled one. The form used to open on "immediately" regardless, so a
+  // deployment carrying a scheduled version offered a path whose only possible
+  // outcome was a 409 — repeatedly, since nothing about the row explained it.
+  it("keeps immediate pricing off the menu while a scheduled version outranks it", async () => {
+    vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [scheduledPriceVersion()], next_cursor: "" });
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "为 Deployment dep_1 设置价格" }));
+
+    expect(await screen.findByRole("option", { name: "立即生效（从现在起按此价计费）" })).toBeDisabled();
+    expect(screen.getByLabelText("何时生效")).toHaveValue("scheduled");
+    expect(screen.getByText(/已有计划版本 v4 .*无法选择“立即生效”/)).toBeVisible();
+    expect(screen.getByLabelText("生效时间")).toBeVisible();
+  });
+
+  it("refuses an effective time that does not follow the scheduled version", async () => {
+    vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [scheduledPriceVersion()], next_cursor: "" });
+    const create = vi.spyOn(api, "createDeploymentPrice");
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "为 Deployment dep_1 设置价格" }));
+    fireEvent.change(await screen.findByLabelText("输入 USD / 百万令牌"), { target: { value: "5" } });
+    fireEvent.change(screen.getByLabelText("生效时间"), { target: { value: localDateTimeValue(new Date(Date.parse(scheduledPriceVersion().effective_from) - 60_000)) } });
+
+    expect(await screen.findByText(/生效时间必须晚于计划版本 v4/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "下一步：核对" })).toBeDisabled();
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  // The submit button lives in a sticky footer, so a rejection rendered into the
+  // scrolled-away part of the modal: the operator saw the click do nothing and
+  // clicked again, which is exactly how one refusal turned into eight identical
+  // POSTs. The failure has to reach them, and say which rule was broken.
+  it("brings the refused price version's reason to the operator", async () => {
+    vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "createDeploymentPrice").mockRejectedValue(
+      new ApiError(409, "price timeline conflict: effective_from must follow all non-cancelled versions (latest is v4 effective 2126-08-01T00:00:00Z)", "price_timeline_conflict"),
+    );
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "为 Deployment dep_1 设置价格" }));
+    fireEvent.change(await screen.findByLabelText("输入 USD / 百万令牌"), { target: { value: "5" } });
+    fireEvent.click(screen.getByRole("button", { name: "下一步：核对" }));
+    fireEvent.change(await screen.findByLabelText("当前密码"), { target: { value: "pw" } });
+    fireEvent.click(screen.getByRole("button", { name: "确认并创建价格版本" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByText(/生效时间必须晚于所有未取消的版本/)).toBeVisible();
+    // The server names the blocking version, which the client's own view can be
+    // too stale to know about, so the detail stays visible under the headline.
+    expect(within(alert).getByText(/latest is v4 effective/)).toBeVisible();
+    await waitFor(() => expect(alert.parentElement).toHaveFocus());
+  });
+
   it("gates every price write in the detail panel on the write role", async () => {
     vi.mocked(api.deployments).mockResolvedValue({
       items: [deployment("dep_1", { pricing_quarantined: true, pricing_quarantine_reason: "restored" })],
@@ -738,6 +793,12 @@ function activePriceVersion(): DeploymentPriceVersion {
     fixed_request_micros_usd: 0, effective_from: "2026-08-01T00:00:00Z",
     source: { type: "manual", assurance: "asserted", reference: "temporary_estimate" }, status: "active",
   };
+}
+
+// Far enough out that the suite's own clock can never overtake it and turn the
+// blocking version into a past one mid-test.
+function scheduledPriceVersion(): DeploymentPriceVersion {
+  return { ...activePriceVersion(), id: "price_2", version: 4, effective_from: "2126-08-01T00:00:00Z", status: "scheduled" };
 }
 
 async function openCreate() {

@@ -156,6 +156,14 @@ function DeploymentRow({
   const priceItems = prices.data?.items ?? [];
   const activePrice = priceItems.find((price) => price.status === "active");
   const scheduledPrices = priceItems.filter((price) => price.status === "scheduled");
+  // The server refuses any version that is not strictly later than every
+  // non-cancelled one, so a scheduled version makes "immediately" unreachable
+  // until it is cancelled. The form has to know that before it offers the
+  // choice, or the operator is sent down a path that always ends in 409.
+  const blockingPrice = scheduledPrices.reduce<DeploymentPriceVersion | undefined>(
+    (latest, price) => (!latest || price.effective_from > latest.effective_from ? price : latest),
+    undefined,
+  );
   const cancelPrice = useMutation({ mutationFn: (price: DeploymentPriceVersion) => api.cancelDeploymentPrice(deployment.id, price.id, price.revision), onSuccess: () => queryClient.invalidateQueries({ queryKey: ["deployment-prices", deployment.id] }) });
   const test = useMutation({
     mutationFn: () => api.testDeployment(deployment.id),
@@ -362,7 +370,7 @@ function DeploymentRow({
           ? <button className="button secondary" type="button" onClick={() => setPricing(true)}>{t("deployments.setPrice")}</button>
           : undefined}
       />}
-      {pricing && <PriceVersionForm deployment={deployment} current={activePrice} onClose={() => setPricing(false)} />}
+      {pricing && <PriceVersionForm deployment={deployment} current={activePrice} blocking={blockingPrice} onClose={() => setPricing(false)} />}
 	  {confirmingRestore && <RestorePricingConfirm deployment={deployment} onClose={() => setConfirmingRestore(false)} />}
     </article>
   );
@@ -452,7 +460,7 @@ function DeploymentFact({ label, value, meta, unset = false }: { label: string; 
   );
 }
 
-function PriceVersionForm({ deployment, current, onClose }: { deployment: Deployment; current?: DeploymentPriceVersion; onClose: () => void }) {
+function PriceVersionForm({ deployment, current, blocking, onClose }: { deployment: Deployment; current?: DeploymentPriceVersion; blocking?: DeploymentPriceVersion; onClose: () => void }) {
   const { t } = useTranslation();
   const dateTime = useInstantFormatter();
   const queryClient = useQueryClient();
@@ -461,8 +469,12 @@ function PriceVersionForm({ deployment, current, onClose }: { deployment: Deploy
   const [input, setInput] = useState(current ? priceInputValue(current.input_micros_per_million) : "0");
   const [output, setOutput] = useState(current ? priceInputValue(current.output_micros_per_million) : "0");
   const [fixed, setFixed] = useState(current ? priceInputValue(current.fixed_request_micros_usd) : "0");
-  const [effectiveMode, setEffectiveMode] = useState<"now" | "scheduled">("now");
-  const [effective, setEffective] = useState(localDateTimeValue(new Date(Date.now() + 3_600_000)));
+  // A scheduled version already occupies the end of the timeline, so the only
+  // reachable choice is a later scheduled time — the form opens on it rather
+  // than on an "immediately" the server is bound to refuse.
+  const blockingFrom = blocking ? Date.parse(blocking.effective_from) : Number.NaN;
+  const [effectiveMode, setEffectiveMode] = useState<"now" | "scheduled">(blocking ? "scheduled" : "now");
+  const [effective, setEffective] = useState(localDateTimeValue(new Date(Math.max(Date.now() + 3_600_000, (blockingFrom || 0) + 60_000))));
   const [confirmedEffective, setConfirmedEffective] = useState("");
   const [sourceKind, setSourceKind] = useState("temporary_estimate");
   const [sourceNote, setSourceNote] = useState("");
@@ -470,9 +482,12 @@ function PriceVersionForm({ deployment, current, onClose }: { deployment: Deploy
   const [totp, setTotp] = useState("");
   const idempotencyKey = useRef(crypto.randomUUID());
   const confirmSummary = useRef<HTMLElement>(null);
+  const submitError = useRef<HTMLDivElement>(null);
   const validPrice = mode === "free" || ([input, output, fixed].every(validUSD) && [input, output, fixed].some((value) => Number(value) > 0));
   const scheduledTimestamp = Date.parse(effective);
-  const validEffective = effectiveMode === "now" || (Number.isFinite(scheduledTimestamp) && scheduledTimestamp > Date.now());
+  const validEffective = effectiveMode === "now"
+    ? !blocking
+    : Number.isFinite(scheduledTimestamp) && scheduledTimestamp > Date.now() && (!Number.isFinite(blockingFrom) || scheduledTimestamp > blockingFrom);
   const sourceNeedsNote = sourceKind === "official_public_price" || sourceKind === "contract_price";
   const validSource = !sourceNeedsNote || sourceNote.trim() !== "";
   const validDetails = validPrice && validEffective && validSource;
@@ -509,6 +524,17 @@ function PriceVersionForm({ deployment, current, onClose }: { deployment: Deploy
   useEffect(() => {
     if (step === "confirm") requestAnimationFrame(() => confirmSummary.current?.focus());
   }, [step]);
+  // The submit button sits in a sticky footer, so a rejection renders into the
+  // scrolled-away part of the modal: the operator sees the click do nothing and
+  // clicks again. Bring the failure to them, and move focus onto it so the
+  // reason is announced instead of merely present.
+  useEffect(() => {
+    if (!mutation.isError) return;
+    requestAnimationFrame(() => {
+      submitError.current?.scrollIntoView?.({ block: "center" });
+      submitError.current?.focus();
+    });
+  }, [mutation.isError, mutation.error]);
   const submit = (event: FormEvent) => {
     event.preventDefault();
     if (step === "details") {
@@ -555,11 +581,15 @@ function PriceVersionForm({ deployment, current, onClose }: { deployment: Deploy
           </details>
         </>}
         <div className="price-form-grid">
-          <Field label={t("deployments.effectiveMode")}><select value={effectiveMode} onChange={(event) => setEffectiveMode(event.target.value as "now" | "scheduled")}><option value="now">{t("deployments.effectiveNow")}</option><option value="scheduled">{t("deployments.effectiveScheduled")}</option></select></Field>
+          <Field label={t("deployments.effectiveMode")}><select value={effectiveMode} onChange={(event) => setEffectiveMode(event.target.value as "now" | "scheduled")}><option value="now" disabled={!!blocking}>{t("deployments.effectiveNow")}</option><option value="scheduled">{t("deployments.effectiveScheduled")}</option></select></Field>
           <Field label={t("deployments.priceSourceKind")}><select value={sourceKind} onChange={(event) => setSourceKind(event.target.value)}><option value="official_public_price">{t("deployments.sourceKinds.officialPublicPrice")}</option><option value="contract_price">{t("deployments.sourceKinds.contractPrice")}</option><option value="internal_cost">{t("deployments.sourceKinds.internalCost")}</option><option value="temporary_estimate">{t("deployments.sourceKinds.temporaryEstimate")}</option></select></Field>
         </div>
+        {/* Naming the version that occupies the end of the timeline is the whole
+            point: without it the operator only learns that "immediately" is
+            unavailable, not which scheduled version to cancel to get it back. */}
+        {blocking && <p className="field-hint">{t("deployments.scheduledBlocksImmediate", { version: blocking.version, effective: dateTime(blocking.effective_from) })}</p>}
         {effectiveMode === "scheduled" && <Field label={t("deployments.effectiveFrom")}><input type="datetime-local" required value={effective} onChange={(event) => setEffective(event.target.value)} /></Field>}
-        {!validEffective && <p className="field-hint error">{t("deployments.invalidEffectiveTime")}</p>}
+        {!validEffective && <p className="field-hint error">{blocking ? t("deployments.effectiveAfterScheduled", { version: blocking.version, effective: dateTime(blocking.effective_from) }) : t("deployments.invalidEffectiveTime")}</p>}
         <Field label={t("deployments.sourceNote")}><textarea value={sourceNote} onChange={(event) => setSourceNote(event.target.value)} placeholder={t("deployments.sourceNotePlaceholder")} /></Field>
         {!validSource && <p className="field-hint error">{t("deployments.sourceEvidenceRequired")}</p>}
         {!validPrice && <p className="field-hint error">{t("deployments.invalidPrice")}</p>}
@@ -583,7 +613,7 @@ function PriceVersionForm({ deployment, current, onClose }: { deployment: Deploy
         <div className="notice warning"><strong>{t("deployments.priceWillTakeEffect")}</strong><span>{t("deployments.immutablePriceWarning")}</span>{effectiveMode === "now" && <span>{t("deployments.immediateNotCancellable")}</span>}</div>
         <Field label={t("usage.currentPassword")}><input type="password" autoComplete="current-password" required value={password} onChange={(event) => setPassword(event.target.value)} /></Field>
         <Field label={t("usage.totpOptional")}><input inputMode="numeric" autoComplete="one-time-code" value={totp} onChange={(event) => setTotp(event.target.value)} /></Field>
-        {mutation.isError && <ErrorState error={mutation.error} />}
+        {mutation.isError && <div ref={submitError} tabIndex={-1} className="price-submit-error"><ErrorState error={mutation.error} /></div>}
         {ambiguousResult && <p className="field-hint error">{t("deployments.ambiguousPriceRetry")}</p>}
         <div className="form-actions">{!ambiguousResult && <button type="button" className="button ghost" onClick={() => { idempotencyKey.current = crypto.randomUUID(); setStep("details"); }}>{t("deployments.backToPrice")}</button>}<button className="button primary" disabled={mutation.isPending}>{ambiguousResult ? t("deployments.retryExactPrice") : t("deployments.confirmPrice")}</button></div>
       </>}
