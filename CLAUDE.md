@@ -24,7 +24,7 @@ make dev               # build frontend, then `go run ./cmd/halro start`
 make frontend          # npm ci + npm run build for web/, output embedded at internal/webui/dist
 ```
 
-The full gate, run once before a commit — not after every edit:
+The full gate, run once before pushing — not per commit, and not after every edit:
 ```bash
 go test ./...
 go vet ./...
@@ -52,7 +52,8 @@ decision. Re-running a suite that cannot see the change is not thoroughness: a
 CSS-only edit is answered by one vitest file in under a second, where the whole
 frontend suite takes 276 tests and the whole Go suite takes minutes. Anything the
 change genuinely could affect still gets run, and the full gate still runs before
-the commit.
+the push that publishes the work — a series of commits earns one gate, not one
+each.
 
 Other:
 ```bash
