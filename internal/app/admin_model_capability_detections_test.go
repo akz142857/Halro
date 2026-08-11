@@ -405,7 +405,7 @@ func TestCapabilityDetectionAPIIsExplicitCachedAndCreatesUntestedSnapshot(t *tes
 	deploymentResponse := performAdminMutation(t, runtime, session.cookie, session.csrf, http.MethodPost, "/admin/api/v1/deployments", "", map[string]any{
 		"name": "Detected", "provider_id": instance.ID, "provider_model": "unlisted-model", "target_kind": "model_id",
 		"capabilities": map[string]any{"chat": true}, "capability_detection_id": completed.ID,
-		"capability_detection_revision": completed.Revision, "max_concurrency": 0, "priority": 0, "weight": 1, "enabled": false,
+		"capability_detection_revision": completed.Revision, "max_concurrency": 0, "enabled": false,
 	})
 	if deploymentResponse.Code != http.StatusCreated {
 		t.Fatalf("deployment status=%d body=%s", deploymentResponse.Code, deploymentResponse.Body.String())
@@ -427,7 +427,7 @@ func TestCapabilityDetectionAPIIsExplicitCachedAndCreatesUntestedSnapshot(t *tes
 	stale := performAdminMutation(t, runtime, session.cookie, session.csrf, http.MethodPost, "/admin/api/v1/deployments", "", map[string]any{
 		"name": "Expired detection", "provider_id": instance.ID, "provider_model": "unlisted-model", "target_kind": "model_id",
 		"capabilities": map[string]any{"chat": true}, "capability_detection_id": completed.ID,
-		"capability_detection_revision": completed.Revision, "weight": 1, "enabled": false,
+		"capability_detection_revision": completed.Revision, "enabled": false,
 	})
 	if stale.Code != http.StatusConflict || !strings.Contains(stale.Body.String(), `"code":"capability_detection_stale"`) {
 		t.Fatalf("stale status=%d body=%s", stale.Code, stale.Body.String())

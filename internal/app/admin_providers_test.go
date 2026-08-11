@@ -164,7 +164,7 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 		http.MethodPost, "/admin/api/v1/deployments", "",
 		map[string]any{
 			"name": "Invalid limits", "provider_id": instance.ID, "provider_model": "gpt-test",
-			"priority": 10, "weight": 1, "enabled": false,
+			"enabled": false,
 			"capabilities": map[string]any{
 				"chat": true, "streaming": true,
 				"max_context_tokens": int64(256), "max_output_tokens": int64(64),
@@ -178,7 +178,7 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 		http.MethodPost, "/admin/api/v1/deployments", "",
 		map[string]any{
 			"name": "Unsafe enabled", "provider_id": instance.ID, "provider_model": "gpt-test",
-			"priority": 10, "weight": 1, "enabled": true,
+			"enabled": true,
 		},
 	)
 	if rejectedEnabledDeployment.Code != http.StatusConflict {
@@ -210,7 +210,7 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 				// non-zero limit but may not leave it undeclared.
 				"max_context_tokens": int64(128), "max_output_tokens": int64(64),
 			},
-			"max_concurrency": int64(2), "priority": 10, "weight": 1, "enabled": false,
+			"max_concurrency": int64(2), "enabled": false,
 		},
 	)
 	if deploymentResponse.Code != http.StatusCreated {
@@ -238,7 +238,7 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 		http.MethodPut, "/admin/api/v1/deployments/"+deployment.ID, `"1"`,
 		map[string]any{
 			"name": "GPT test", "provider_id": instance.ID, "provider_model": "gpt-test",
-			"max_concurrency": int64(2), "priority": 10, "weight": 1, "enabled": true,
+			"max_concurrency": int64(2), "enabled": true,
 		},
 	)
 	if directEnable.Code != http.StatusConflict {
@@ -266,7 +266,7 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 		http.MethodPut, "/admin/api/v1/deployments/"+deployment.ID, `"`+strconv.FormatUint(testedDeployment.Revision, 10)+`"`,
 		map[string]any{
 			"name": "GPT test", "provider_id": instance.ID, "provider_model": "gpt-test",
-			"max_concurrency": int64(2), "priority": 10, "weight": 1, "enabled": true,
+			"max_concurrency": int64(2), "enabled": true,
 		},
 	)
 	if enableDeployment.Code != http.StatusOK {
@@ -346,7 +346,7 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 		http.MethodPut, "/admin/api/v1/deployments/"+deployment.ID, `"`+strconv.FormatUint(deployment.Revision, 10)+`"`,
 		map[string]any{
 			"name": "Changed target", "provider_id": instance.ID, "provider_model": "gpt-other",
-			"max_concurrency": int64(2), "priority": 10, "weight": 1, "enabled": true,
+			"max_concurrency": int64(2), "enabled": true,
 		},
 	)
 	if blockedTargetChange.Code != http.StatusConflict {
@@ -437,7 +437,7 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 		http.MethodPut, "/admin/api/v1/deployments/"+deployment.ID, `"`+strconv.FormatUint(deployment.Revision, 10)+`"`,
 		map[string]any{
 			"name": "Changed target", "provider_id": instance.ID, "provider_model": "gpt-other",
-			"target_kind": domain.TargetModelID, "max_concurrency": int64(2), "priority": 10, "weight": 1, "enabled": false,
+			"target_kind": domain.TargetModelID, "max_concurrency": int64(2), "enabled": false,
 		},
 	)
 	if immutableTarget.Code != http.StatusConflict {
@@ -447,7 +447,7 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 		http.MethodPut, "/admin/api/v1/deployments/"+deployment.ID, `"`+strconv.FormatUint(deployment.Revision, 10)+`"`,
 		map[string]any{
 			"name": "GPT test", "provider_id": instance.ID, "provider_model": "gpt-test",
-			"max_concurrency": int64(2), "priority": 10, "weight": 1, "enabled": false,
+			"max_concurrency": int64(2), "enabled": false,
 		},
 	)
 	if disableDeployment.Code != http.StatusOK {
@@ -744,7 +744,7 @@ func TestAdminBedrockProviderHotLoadsConverseCapabilities(t *testing.T) {
 			"name": "Claude", "provider_id": instance.ID, "provider_model": "anthropic.claude-test-v1:0",
 			"mode":         "operator_declared",
 			"capabilities": map[string]any{"chat": true, "streaming": true, "stream_usage": true},
-			"priority":     10, "weight": 1, "enabled": false,
+			"enabled":      false,
 		})
 	if deploymentResponse.Code != http.StatusCreated {
 		t.Fatalf("deployment create status=%d body=%s", deploymentResponse.Code, deploymentResponse.Body.String())

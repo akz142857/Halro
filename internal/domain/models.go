@@ -747,8 +747,6 @@ type Deployment struct {
 	OutputMicrosPerMillion  int64                 `json:"output_micros_per_million"`
 	FixedRequestMicrosUSD   int64                 `json:"fixed_request_micros_usd"`
 	MaxConcurrency          int64                 `json:"max_concurrency"`
-	Priority                int                   `json:"priority"`
-	Weight                  int                   `json:"weight"`
 	Enabled                 bool                  `json:"enabled"`
 	LastTestStatus          DeploymentTestStatus  `json:"last_test_status,omitempty"`
 	LastTestedAt            *time.Time            `json:"last_tested_at,omitempty"`
@@ -859,12 +857,6 @@ func (d Deployment) Validate() error {
 		if capabilityEnabled(d.Capabilities, name) {
 			problems = append(problems, fmt.Errorf("deployment lists %q as switched off while using it", name))
 		}
-	}
-	if d.Priority < 0 {
-		problems = append(problems, errors.New("deployment priority cannot be negative"))
-	}
-	if d.Weight < 0 {
-		problems = append(problems, errors.New("deployment weight cannot be negative"))
 	}
 	return errors.Join(problems...)
 }

@@ -43,7 +43,7 @@ func newProbedDeploymentForTest(t *testing.T, runtime *Runtime, cookie *http.Coo
 		map[string]any{
 			"name": model, "provider_id": providerID, "provider_model": model, "target_kind": "model_id",
 			"mode": "operator_declared", "capabilities": capabilities,
-			"max_concurrency": int64(2), "priority": 10, "weight": 1, "enabled": false,
+			"max_concurrency": int64(2), "enabled": false,
 		})
 	if created.Code != http.StatusCreated {
 		t.Fatalf("create deployment %s status=%d body=%s", model, created.Code, created.Body.String())
@@ -99,7 +99,7 @@ func TestDeploymentUpdateCarriesAProbeForwardOnlyWhenNothingItValidatedChanged(t
 			"name": "gpt-widening", "provider_id": bootstrap.ProviderID, "provider_model": "gpt-widening",
 			"target_kind": "model_id", "mode": "operator_declared",
 			"capabilities":    map[string]any{"chat": true, "streaming": true},
-			"max_concurrency": int64(2), "priority": 10, "weight": 1, "enabled": false,
+			"max_concurrency": int64(2), "enabled": false,
 		})
 		if widened.Code != http.StatusOK {
 			t.Fatalf("widen status=%d body=%s", widened.Code, widened.Body.String())
@@ -110,7 +110,7 @@ func TestDeploymentUpdateCarriesAProbeForwardOnlyWhenNothingItValidatedChanged(t
 		}
 		enable := updateDeploymentForTest(t, runtime, cookie, csrf, after, map[string]any{
 			"name": "gpt-widening", "provider_id": bootstrap.ProviderID, "provider_model": "gpt-widening",
-			"max_concurrency": int64(2), "priority": 10, "weight": 1, "enabled": true,
+			"max_concurrency": int64(2), "enabled": true,
 		})
 		if enable.Code != http.StatusConflict {
 			t.Fatalf("enable after widening status=%d body=%s", enable.Code, enable.Body.String())
@@ -127,7 +127,7 @@ func TestDeploymentUpdateCarriesAProbeForwardOnlyWhenNothingItValidatedChanged(t
 		}
 		moved := updateDeploymentForTest(t, runtime, cookie, csrf, deployment, map[string]any{
 			"name": "gpt-region", "provider_id": bootstrap.ProviderID, "provider_model": "gpt-region",
-			"region": "us-east-1", "max_concurrency": int64(2), "priority": 10, "weight": 1, "enabled": false,
+			"region": "us-east-1", "max_concurrency": int64(2), "enabled": false,
 		})
 		if moved.Code != http.StatusConflict {
 			t.Fatalf("region edit status=%d body=%s", moved.Code, moved.Body.String())
@@ -146,7 +146,7 @@ func TestDeploymentUpdateCarriesAProbeForwardOnlyWhenNothingItValidatedChanged(t
 			map[string]any{"chat": true})
 		operational := map[string]any{
 			"name": "gpt-cycle", "provider_id": bootstrap.ProviderID, "provider_model": "gpt-cycle",
-			"max_concurrency": int64(2), "priority": 10, "weight": 1,
+			"max_concurrency": int64(2),
 		}
 		body := func(enabled bool) map[string]any {
 			next := map[string]any{"enabled": enabled}
@@ -187,7 +187,7 @@ func TestDeploymentUpdateCarriesAProbeForwardOnlyWhenNothingItValidatedChanged(t
 			map[string]any{"chat": true})
 		renamed := updateDeploymentForTest(t, runtime, cookie, csrf, deployment, map[string]any{
 			"name": "Renamed", "provider_id": bootstrap.ProviderID, "provider_model": "gpt-operational",
-			"max_concurrency": int64(5), "priority": 20, "weight": 3, "enabled": false,
+			"max_concurrency": int64(5), "enabled": false,
 		})
 		if renamed.Code != http.StatusOK {
 			t.Fatalf("operational edit status=%d body=%s", renamed.Code, renamed.Body.String())

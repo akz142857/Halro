@@ -589,8 +589,6 @@ export interface Deployment {
   output_micros_per_million: number;
   fixed_request_micros_usd: number;
   max_concurrency: number;
-  priority: number;
-  weight: number;
   enabled: boolean;
   last_test_status?: "healthy" | "unhealthy";
   last_tested_at?: string;

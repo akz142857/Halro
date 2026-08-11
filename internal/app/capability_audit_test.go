@@ -49,7 +49,6 @@ func TestCreatingADeploymentAuditsTheCapabilitySnapshotAndDeclaration(t *testing
 			"provider_model": "gpt-declared", "target_kind": "model_id",
 			"mode":         "operator_declared",
 			"capabilities": map[string]any{"chat": true},
-			"weight":       1,
 		})
 	if created.Code != http.StatusCreated {
 		t.Fatalf("create status=%d body=%s", created.Code, created.Body.String())
@@ -95,7 +94,7 @@ func TestOnlyACapabilityChangeAuditsAReview(t *testing.T) {
 			"name": deployment.Name, "provider_id": deployment.ProviderID,
 			"provider_model": deployment.ProviderModel, "target_kind": string(deployment.TargetKind),
 			"capabilities": capabilities, "max_concurrency": concurrency,
-			"weight": 1, "enabled": deployment.Enabled,
+			"enabled": deployment.Enabled,
 		}
 	}
 	enabled := map[string]any{}
@@ -236,7 +235,7 @@ func TestWideningDisablesTheDeploymentAndNarrowingDoesNot(t *testing.T) {
 		return map[string]any{
 			"name": deployment.Name, "provider_id": deployment.ProviderID,
 			"provider_model": deployment.ProviderModel, "target_kind": string(deployment.TargetKind),
-			"capabilities": capabilities, "weight": 1, "enabled": enabled,
+			"capabilities": capabilities, "enabled": enabled,
 			// The bootstrap model is not in the catalog, so claiming a
 			// capability back has to be re-declared; narrowing does not,
 			// because it stays inside what was already established.

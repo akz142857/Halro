@@ -53,8 +53,6 @@ type deploymentInput struct {
 	// rather than something inferred from a filled-in form.
 	Mode           string `json:"mode,omitempty"`
 	MaxConcurrency int64  `json:"max_concurrency"`
-	Priority       int    `json:"priority"`
-	Weight         int    `json:"weight"`
 	Enabled        bool   `json:"enabled"`
 }
 
@@ -561,10 +559,6 @@ func (r *Runtime) deploymentFromInput(request *http.Request, deploymentID string
 	if err != nil {
 		return domain.Deployment{}, err
 	}
-	weight := input.Weight
-	if weight == 0 {
-		weight = 1
-	}
 	// The snapshot is built first because its source decides how strong the
 	// deployment's own evidence is allowed to be.
 	snapshot := domain.ModelCapabilitySnapshot{
@@ -640,8 +634,8 @@ func (r *Runtime) deploymentFromInput(request *http.Request, deploymentID string
 		AccessSurface:           binding.AccessSurface, ProfileID: binding.ProfileID, BindingID: binding.ID,
 		Region:             region,
 		CapabilityEvidence: evidence,
-		MaxConcurrency:     input.MaxConcurrency, Priority: input.Priority, Weight: weight,
-		Enabled: input.Enabled, CreatedAt: createdAt, UpdatedAt: updatedAt,
+		MaxConcurrency:     input.MaxConcurrency,
+		Enabled:            input.Enabled, CreatedAt: createdAt, UpdatedAt: updatedAt,
 	}
 	return deployment, deployment.Validate()
 }

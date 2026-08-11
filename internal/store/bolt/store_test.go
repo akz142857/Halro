@@ -982,7 +982,7 @@ func TestProviderAndRouteReferencesAndUniqueness(t *testing.T) {
 		CapabilityEvidence: domain.EvidenceForCapabilities(instance.Capabilities, domain.EvidenceDeclared),
 		ModelCapabilitySnapshot: domain.DeclaredCapabilitySnapshot(
 			"gpt-test", "sha256:test", instance.Capabilities, time.Now().UTC()),
-		Weight: 1, Enabled: true, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+		Enabled: true, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
 	}
 	if _, err := store.PutDeployment(ctx, deployment, 0); err != nil {
 		t.Fatal(err)
@@ -1055,7 +1055,7 @@ func TestStoreRejectsProfileAwareDefaultGrantsAndDeploymentEscalation(t *testing
 		ID: "deployment_capability", Name: "Escalated", ProviderID: instance.ID, ProviderModel: "model",
 		AccessSurface: instance.AccessSurface, ProfileID: instance.ProfileID, Capabilities: badCapabilities,
 		CapabilityEvidence: domain.EvidenceForCapabilities(badCapabilities, domain.EvidenceDeclared),
-		Weight:             1, CreatedAt: now, UpdatedAt: now,
+		CreatedAt:          now, UpdatedAt: now,
 	}, 0)
 	if err == nil {
 		t.Fatal("deployment exceeded provider capabilities")
@@ -1064,7 +1064,7 @@ func TestStoreRejectsProfileAwareDefaultGrantsAndDeploymentEscalation(t *testing
 	_, err = store.PutDeployment(ctx, domain.Deployment{
 		ID: "deployment_evidence", Name: "Escalated evidence", ProviderID: instance.ID, ProviderModel: "model",
 		AccessSurface: instance.AccessSurface, ProfileID: instance.ProfileID, Capabilities: providerCapabilities,
-		CapabilityEvidence: verified, Weight: 1, CreatedAt: now, UpdatedAt: now,
+		CapabilityEvidence: verified, CreatedAt: now, UpdatedAt: now,
 	}, 0)
 	if err == nil {
 		t.Fatal("deployment exceeded provider capability evidence")
@@ -1074,7 +1074,7 @@ func TestStoreRejectsProfileAwareDefaultGrantsAndDeploymentEscalation(t *testing
 		AccessSurface: instance.AccessSurface, ProfileID: instance.ProfileID, Capabilities: providerCapabilities,
 		CapabilityEvidence:      domain.EvidenceForCapabilities(providerCapabilities, domain.EvidenceDeclared),
 		ModelCapabilitySnapshot: domain.DeclaredCapabilitySnapshot("model", "sha256:test", providerCapabilities, now),
-		Weight:                  1, CreatedAt: now, UpdatedAt: now,
+		CreatedAt:               now, UpdatedAt: now,
 	}, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -1138,7 +1138,7 @@ func TestSchema20RefusesADataDirectoryHoldingDeployments(t *testing.T) {
 	now := time.Now().UTC()
 	encoded, err := json.Marshal(domain.Deployment{
 		ID: "deployment_v3", Name: "Claude", ProviderID: "provider_v3", ProviderModel: "model",
-		Weight: 1, CreatedAt: now, UpdatedAt: now, Revision: 1,
+		CreatedAt: now, UpdatedAt: now, Revision: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1180,7 +1180,7 @@ func TestSnapshotEvidenceBackfillMatchesWhatASaveWouldProduce(t *testing.T) {
 			ProviderModel: "gpt-test", ModelRevision: "sha256:test", Source: "operator_declared",
 			Status: "partial", CapturedAt: now, Capabilities: established,
 		},
-		MaxConcurrency: 1, Weight: 1, CreatedAt: now, UpdatedAt: now, Revision: 1,
+		MaxConcurrency: 1, CreatedAt: now, UpdatedAt: now, Revision: 1,
 	}
 	writeV22Deployment(t, path, before)
 

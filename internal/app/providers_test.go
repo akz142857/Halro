@@ -118,7 +118,7 @@ func seedProvider(t *testing.T, cfg config.Config, mismatch bool) {
 		CapabilityEvidence: domain.EvidenceForCapabilities(capabilities, domain.EvidenceDeclared),
 		ModelCapabilitySnapshot: domain.DeclaredCapabilitySnapshot(
 			"gpt-test", "sha256:test", capabilities, now),
-		Weight: 1, Enabled: true, CreatedAt: now, UpdatedAt: now,
+		Enabled: true, CreatedAt: now, UpdatedAt: now,
 	}
 	if _, err := store.PutDeployment(context.Background(), deployment, 0); err != nil {
 		t.Fatal(err)

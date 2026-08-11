@@ -158,7 +158,7 @@ func Bootstrap(ctx context.Context, cfg config.Config, options BootstrapOptions,
 				options.ProviderModel, bootstrapModelRevision(options.ProviderType, profile.ProfileID, options.ProviderModel),
 				capabilities, now,
 			),
-			Weight: 1, Enabled: true, CreatedAt: now, UpdatedAt: now,
+			Enabled: true, CreatedAt: now, UpdatedAt: now,
 		},
 		Price: bootstrapPriceVersion(priceID, deploymentID, billingMode, options, now),
 		Route: domain.Route{

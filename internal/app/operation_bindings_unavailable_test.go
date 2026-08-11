@@ -24,7 +24,6 @@ func TestDeploymentRefusesOperationBindingsAndNamesTheAlternative(t *testing.T) 
 		"name": "Multi binding", "provider_id": bootstrap.ProviderID,
 		"provider_model": "gpt-multi", "target_kind": "model_id",
 		"mode": "operator_declared", "capabilities": map[string]any{"chat": true},
-		"weight": 1,
 		"operation_bindings": []map[string]any{
 			{"operation": "chat", "binding_id": "b-chat"},
 			{"operation": "embeddings", "binding_id": "b-embed"},
@@ -80,7 +79,7 @@ func TestDeploymentRefusesOperationBindingsAndNamesTheAlternative(t *testing.T) 
 		"name": "Single binding", "provider_id": bootstrap.ProviderID,
 		"provider_model": "gpt-single", "target_kind": "model_id",
 		"mode": "operator_declared", "capabilities": map[string]any{"chat": true},
-		"weight": 1, "operation_bindings": nil,
+		"operation_bindings": nil,
 	})
 	if permitted.Code != http.StatusCreated {
 		t.Fatalf("an explicit null was treated as an attempt: status=%d body=%s", permitted.Code, permitted.Body.String())

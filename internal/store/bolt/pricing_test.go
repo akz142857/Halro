@@ -534,7 +534,7 @@ func seedPricingDeployment(t testing.TB, store *Store, deploymentID string, inpu
 		Capabilities: capabilities, CapabilityEvidence: domain.EvidenceForCapabilities(capabilities, domain.EvidenceDeclared),
 		ModelCapabilitySnapshot: domain.DeclaredCapabilitySnapshot("gpt-test", "sha256:test", capabilities, now),
 		InputMicrosPerMillion:   input, OutputMicrosPerMillion: output, FixedRequestMicrosUSD: fixed,
-		Weight: 1, Enabled: false, CreatedAt: now, UpdatedAt: now,
+		Enabled: false, CreatedAt: now, UpdatedAt: now,
 	}, 0)
 	if err != nil {
 		t.Fatal(err)

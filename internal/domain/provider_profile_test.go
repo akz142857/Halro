@@ -63,7 +63,6 @@ func TestDeploymentValidationRejectsDetachedChatFeatures(t *testing.T) {
 		AccessSurface: SurfaceOpenAI, ProfileID: ProfileOpenAIChatEmbeddings,
 		Capabilities:       ProviderCapabilities{Embeddings: true, Tools: true},
 		CapabilityEvidence: EvidenceForCapabilities(ProviderCapabilities{Embeddings: true, Tools: true}, EvidenceDeclared),
-		Weight:             1,
 	}
 	if err := deployment.Validate(); err == nil || !strings.Contains(err.Error(), "chat features require chat") {
 		t.Fatalf("detached chat feature accepted: %v", err)

@@ -227,7 +227,7 @@ func seedRouteForTest(t *testing.T, runtime *Runtime, publicModel string) {
 		CapabilityEvidence: domain.EvidenceForCapabilities(capabilities, domain.EvidenceDeclared),
 		ModelCapabilitySnapshot: domain.DeclaredCapabilitySnapshot(
 			"upstream-"+publicModel, "sha256:seed", capabilities, now),
-		Weight: 1, Enabled: true, CreatedAt: now, UpdatedAt: now,
+		Enabled: true, CreatedAt: now, UpdatedAt: now,
 	}, 0); err != nil && !strings.Contains(err.Error(), "already exists") {
 		t.Fatal(err)
 	}

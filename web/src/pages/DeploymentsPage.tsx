@@ -175,8 +175,6 @@ function DeploymentRow({
       capabilities: deployment.capabilities,
       region: deployment.region,
       max_concurrency: deployment.max_concurrency,
-      priority: deployment.priority,
-      weight: deployment.weight,
       enabled: !deployment.enabled,
     }, deployment.revision),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["deployments"] }),
@@ -854,8 +852,6 @@ function DeploymentForm({
     ...(!current && !manualDeclaration && !detection && selectedVariant ? { resolution_revision: selectedVariant.revision } : {}),
     region: region.trim(),
     max_concurrency: maxConcurrency,
-    priority: current?.priority ?? 0,
-    weight: current?.weight ?? 1,
     enabled: current?.enabled ?? false,
   });
   const mutation = useMutation({
