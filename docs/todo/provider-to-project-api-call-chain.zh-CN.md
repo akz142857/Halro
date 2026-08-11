@@ -149,7 +149,9 @@ sequenceDiagram
 - Binding profile 不可用或与 Provider/Credential 不兼容、凭据解密失败、adapter 或 bridge 构建失败、adapter 注册失败：`providers.go:306-331`
 - 非 `ErrPriceUnavailable` 的价格读取错误：`providers.go:394`
 
-**这一类仍然会让进程起不来，和 F-05 修掉的是同一个形状。** 其中大部分在写入时有守卫（Credential 删除被存储层拒绝，类型和 audience 在写入时校验），但至少一条不是配置守卫能挡住的：`endpoint` 是按**当前**的 `security.allow_private_provider_endpoints` 校验的，把这个开关从 `true` 改回 `false`，之前合法的私网 Provider 就会让整次装载失败。这属于 review 中尚未处理的残留，见 F-06。
+**这一类仍然会让进程起不来，和 F-05 修掉的是同一个形状**，但没有已证实的触发方式：写入路径上都有守卫（Credential 删除被存储层拒绝，类型和 audience 在写入时校验），而 endpoint 那条实测不可达——`safetransport.Audience` 用空策略重新校验，私网 Provider 根本建不出来，所以收紧开关也无从触发。详见 review 的 F-06（已由 P1 降为加固建议）与 F-07（那个无法生效的开关本身）。
+
+注意两者的耦合：若按「让开关生效」修 F-07，endpoint 这条会立刻从不可达变为可达，两条必须一起处理。
 
 管理面的守卫分布：`validateProviderCanDeactivate` 要求先停掉 Provider 的活跃 Deployment，`validateDeploymentCanDeactivate` 要求先停掉 Deployment 的活跃 Route，`validateBindingsCanDeactivate`（`e1d94be` 新增）要求先停掉 binding 上的活跃 Deployment。三级同形，都在错误里点名挡路的那个资源。
 

@@ -20,12 +20,13 @@
 | F-01 | P0 | 确定缺陷 | **已修 `354428c`** | disable/delete 已持久化后，运行时刷新使用可取消的 Admin 请求上下文；刷新失败时旧 Key/Project/Route/Provider snapshot 继续服务 |
 | F-02 | P1 | 确定缺陷 | **已修 `066a08a`** | 删除最后一个 Route 可留下仍引用该公共模型别名的 Project，且 Project 与 Route 使用不同协调锁，存在并发 TOCTOU |
 | F-03 | P1 | 一致性风险 | **未处理** | topology mutation、snapshot activation、audit append 不是一个结果；API 报错时变更可能已持久化甚至已生效 |
-| F-06 | P1 | 确定缺陷 | **未处理** | Provider 级装载失败仍然致命，与 F-05 同形；`allow_private_provider_endpoints` 从 `true` 改回 `false` 即可让进程起不来 |
+| F-06 | P3 | 加固建议（原判 P1，已更正） | **未处理** | Provider 级装载失败仍然致命，与 F-05 同形，但**未能找到可达触发路径**；原文给出的 endpoint 场景经实测证伪，见该条 |
+| F-07 | P2 | 确定缺陷 | **未处理** | `allow_private_provider_endpoints` 无法生效：所有 Provider/Credential 路径都调用非策略版 `safetransport.Audience`，私网地址一律被拒，开关形同虚设 |
 | F-04 | P2 | 确定冗余 | **已修 `3580a89`** | Deployment `priority/weight` 被存储，但候选算法只使用 Route `priority/strategy`，字段对调用链无效 |
 
 已修部分的共同做法：每条单独提交，每条都做反向验证——先退掉修复、断言退改真的生效（防止搜索串失效导致「什么都没改却通过」），再确认测试在缺陷态失败。详见 §10。
 
-剩下两条的处理顺序建议：先 F-06，因为它和 F-05 是同一个形状、改法已经有了现成的模板（withheld 而非致命），且同样能让进程起不来；F-03 最后，因为它需要先定义提交点语义，是设计决定而不是缺陷修复。
+剩下三条：F-07 是确定缺陷但需要先定产品意图（让开关生效，还是删掉它）；F-06 降级为加固建议，因为在动手修它之前先做复现，结果把它自己的前提证伪了；F-03 最后，它需要先定义提交点语义，是设计决定而不是缺陷修复。
 
 F-05 和 F-01 都是“durable mutation 已提交、runtime activation 没有发生”的实例，也就是 F-03 描述的那个缺失的提交协议。两者已分别修掉各自的可达路径：F-05 让坏记录不再能否决整次装载，F-01 让激活不再被客户端取消。但**都没有建立那个协议**，所以 F-03 仍然开着——见该条。
 
@@ -116,36 +117,65 @@ live registry                       → 仍有 1 个候选                     �
 - 启动路径应当能区分“这份状态装载不起来”和“进程该拒绝启动”。让一个 Route 的悬空引用带走整个进程，与 §2 里 drifted deployment 只被 withheld 的处理是两套语义，且方向相反；
 - 回归测试至少覆盖：禁用被引用的 binding、从 `bindings` 列表中整体移除被引用的 binding、以及“落盘后能否重启”这一条断言。只断言 bbolt 字段已改变不足以发现本缺陷——本轮 API 返回 409 的同时状态已经写坏。
 
-### F-06 [P1] Provider 级装载失败仍然致命，与 F-05 同形
+### F-06 [P3] Provider 级装载失败仍然致命，但未找到可达触发路径
 
-【确定缺陷；未处理】
+【加固建议；**原判 P1「确定缺陷」，经实测更正**】
 
-F-05 只把**单条 Route** 造不出 Target 的情况改成了 withheld。作用域更大的问题——「这个 Provider 根本装载不起来」——仍然 `return fail(...)`，让整次装载失败，因此仍然保留 F-05 那条完整的后果链：变更已落盘、激活失败、此后每次拓扑变更都失败、进程再也起不来。
+F-05 只把**单条 Route** 造不出 Target 的情况改成了 withheld。作用域更大的问题——「这个 Provider 根本装载不起来」——仍然 `return fail(...)`，让整次装载失败，因此在原理上保留 F-05 那条完整的后果链：变更已落盘、激活失败、此后每次拓扑变更都失败、进程再也起不来。
 
-仍然致命的路径（`internal/app/providers.go:278-331`、`394`）：
+仍然致命的路径（`internal/app/providers.go:278-331`、`394`）：Credential 不存在/类型不匹配/audience 不匹配、endpoint 不符合当前安全策略、Binding profile 不兼容、凭据解密失败、adapter 或 bridge 构建失败、adapter 注册失败、非 `ErrPriceUnavailable` 的价格读取错误。
 
-- Credential 不存在、类型不匹配、audience 不匹配
-- **`endpoint` 不符合当前安全策略**
-- Binding profile 不可用或与 Provider/Credential 不兼容
-- 凭据解密失败、adapter 或 bridge 构建失败、adapter 注册失败
-- 非 `ErrPriceUnavailable` 的价格读取错误
+**原文给出的可达场景是错的，已由实测推翻。** 原文声称：运维开启 `allow_private_provider_endpoints: true` 建一个私网 Provider，之后把开关改回 `false`，装载即失败、进程起不来。动手修之前先复现，结果是**建不出这样的 Provider**：无论走 `Bootstrap` 还是 Admin API，创建 Credential 的那一步就被拒（`400 private address 10.1.2.3 is not allowed`）。原因是 F-07——`safetransport.Audience` 用空策略重新校验一次，私网地址一律被拒。既然私网 Provider 无法存在，收紧开关就不可能让实例起不来。
 
-多数在写入时有守卫：Credential 删除被存储层拒绝，类型和 audience 在 `providerFromInput` 里校验。**但 endpoint 那条不是配置守卫能挡住的**，因为它按**当前**的 `security.allow_private_provider_endpoints` 校验，而不是按写入时的值：
+其余致命路径逐条看可达性：
 
-1. 运维开启 `allow_private_provider_endpoints: true`，创建一个指向私网地址的 Provider（这是该开关存在的用途）；
-2. 后来把开关改回 `false`——收紧安全策略，是个正确的动作；
-3. 下次装载时 `safetransport.ValidateURL` 拒绝那个 Provider 的 endpoint，整次装载失败；
-4. 进程起不来。
+- Credential 不存在：存储层拒绝删除仍被非墓碑 Provider 引用的 Credential。有守卫。
+- 类型 / audience 不匹配：写入时校验，且 audience 由 `base_url` + 类型推导，两者都在记录里，不会因外部状态改变。
+- endpoint 不符合策略：见上，不可达（前提是 F-07 保持现状；**若 F-07 按「让开关生效」修，这条立刻变为可达**）。
+- 凭据解密失败：需要主密钥不可用或轮换出错。这是唯一看起来可达的一条，但也是最有理由保持致命的一条——不过「一个 Provider 的密钥有问题」是否应该让其余 Provider 全部停摆，仍然值得单独判断。
+- adapter / bridge 构建、Target 注册：给定 profile 与配置是确定的，只有构建变更可能引入，属于推测。
 
-也就是说**收紧安全配置会让实例无法启动**，且错误信息指向一个运维当时并没有编辑的 Provider。凭据解密失败同理：一个 Provider 的密钥有问题，不应该让其余 Provider 全部停摆。
+因此这一条从「确定缺陷」降为「加固建议」：形状仍在，代价仍是拒绝启动而非降级，但没有已证实的触发方式。它值得做的理由是影响半径，而不是有 bug 在等着触发。
 
-注意这条尚未实测复现，与 F-05 不同——它是在修 F-05、重新分类装载失败路径时从代码读出来的。列为「确定缺陷」是因为路径和后果都与已实测的 F-05 一致，但复现步骤本身还没跑过。
+建议方向（若采纳）：
 
-建议方向：
+- 沿用 F-05 的模板：把作用域限于单个 Provider 的问题降级为「排除该 Provider 及其 Route」，记进 `loadReport` 并审计；`referenceWithholding` 已经是这个形状，缺一个 provider 级的同类；
+- 一并决定：**是否存在应该让进程拒绝启动的装载失败**。若答案是「只有批量存储读取失败」，那么 `fail` 就该收敛到那一处，语义变成「装载永远成功，只是可能排除东西」，比留一个偶尔致命的分支更容易推理；
+- 无论怎么选，`halro doctor` 都要能报出被排除的 Provider 和 Route，否则「装载永远成功」会把问题藏起来。
 
-- 沿用 F-05 的模板：把作用域限于单个 Provider 的问题降级为「排除该 Provider 及其 Route」，记进 `loadReport` 并审计，而不是否决整次装载。`referenceWithholding` 已经是这个形状，缺的是一个 provider 级的同类；
-- 需要一并决定的是：**是否存在应该让进程拒绝启动的装载失败**。如果答案是「没有」，那么 `fail` 这条路径就该从装载函数里消失，语义变成「装载永远成功，只是可能排除东西」，这比留一个偶尔致命的分支更容易推理；
-- 无论选哪个，`halro doctor` 都应该能报出被排除的 Provider 和 Route，否则「装载永远成功」会把问题藏起来——这也是 §4 Q-03 已经提过的那个担忧。
+### F-07 [P2] `allow_private_provider_endpoints` 无法生效
+
+【确定缺陷；2026-08-11 实测】
+
+`safetransport.Audience(raw, semantic)` 转发到 `AudienceWithPolicy(raw, semantic, Policy{})`——**空策略**（`internal/safetransport/transport.go:118-120`）。空策略意味着 `AllowPrivate=false`，于是私网地址一律被拒，与配置无关。
+
+而所有 Provider / Credential 路径用的都是这个非策略版本：
+
+- `credentialFromInput`：`admin_providers.go:782`
+- `providerFromInput`：`admin_providers.go:861`
+- 连接测试：`admin_providers.go:1044`
+- onboarding 就绪评估：`admin_onboarding.go:177`
+- `Bootstrap`：`bootstrap.go:57`（这条连 `ValidateURL` 都没带策略，`bootstrap.go:53` 是硬编码的 `Policy{RequireHTTPS: true}`）
+- **Registry 装载**：`providers.go:294`
+
+这三处确实读了开关的 `ValidateURL`（`admin_providers.go:777`、`852`、`providers.go:287`）后面紧跟着一个非策略版 `Audience`，把刚放行的东西又拒掉。开关在每一个使用点都被抵消。
+
+实测（`ValidateURL` 与 `Audience` 对同一地址的分歧）：
+
+```text
+ValidateURL("https://10.1.2.3", AllowPrivate=true)       → nil
+Audience("https://10.1.2.3", "openai")                    → private address 10.1.2.3 is not allowed
+AudienceWithPolicy("https://10.1.2.3", ..., AllowPrivate) → nil
+```
+
+对照组：webhook 那一侧用的是策略版 `AudienceWithPolicy`（`alerts.go:107`、`admin_alerts.go:304`），所以 `allow_private_webhooks` 是真的能生效的。两个同族开关，一个有效一个无效。
+
+**方向是 fail-closed 的，所以这不是安全漏洞**：实际行为是「私网地址一律拒绝」，即更安全的那一侧，没有人因此被意外暴露。它的代价是一个写在 `config.yaml:62` 的能力从未可用，运维把它改成 `true` 会以为自己打开了自建/私网模型端点的支持，而实际什么都没变，且失败信息指向地址本身而不是这个开关。
+
+需要先定产品意图，两条路互斥：
+
+- **让开关生效**：把 Provider/Credential 路径改用 `AudienceWithPolicy` 并传入配置（Bootstrap 的硬编码策略也要一并修）。这会**启用一项当前完全关闭的、涉及 SSRF 面的能力**，因此属于安全相关变更，不该顺手做；且它会让 F-06 的 endpoint 场景从不可达变为可达，两条必须一起处理。
+- **删掉开关**：按 pre-1.0「错误构造不与替代品并存」直接移除 `AllowPrivateProviderEndpoints`，明确声明不支持私网 Provider 端点。`Policy.AllowPrivate` 本身保留，webhook 那侧在用。
 
 ### F-01 [P0] 撤销类变更可能已持久化但未进入运行时，旧权限/旧路由继续生效
 
@@ -429,4 +459,6 @@ boundary、Redaction 拒绝和 Token Guard 拒绝路径。
 
 F-04 的 no-migration 结论是对真实数据验证的，不是对 fixture：复制线上 `data/` 后用新结构体解码 `halro.db`，两条真实部署记录的存储 JSON 仍带 `weight`/`priority`，均能解码且 `Validate()` 通过，其余字段完好。`halro doctor` 未能用上——本机有一个 `go run ./cmd/halro start` 实例持有真实数据目录的锁，故改用直接解码真实字节的方式回答同一问题。
 
-未处理：F-06（Provider 级装载失败仍致命，同形，且收紧 `allow_private_provider_endpoints` 即可让进程起不来）、F-03（提交点语义，设计决定）。
+未处理：F-07（`allow_private_provider_endpoints` 无法生效，需先定产品意图）、F-06（Provider 级装载失败仍致命，但降级为加固建议）、F-03（提交点语义，设计决定）。
+
+一条关于本轮方法的记录：F-06 原本被判为 P1 确定缺陷并已写进文档，动手修之前按惯例先复现，结果**前提被证伪**——它声称的 endpoint 场景根本建不出私网 Provider。如果当时直接按文档去实现「provider 级 withheld」，就会在一个假前提上改掉装载语义，而且这个改动本身很难被证伪。复现同时暴露了 F-07 这个真实缺陷。这正是仓库「verify, never assume」那一条要买的东西：**一份没跑过的 finding 是假设，不是结论**，包括本文档自己写下的。
