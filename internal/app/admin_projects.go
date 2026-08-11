@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -87,12 +88,8 @@ func (r *Runtime) createAdminProject(writer http.ResponseWriter, request *http.R
 		adminMutationError(writer, err)
 		return
 	}
-	if !r.refreshAdminAuth(writer, request) {
-		return
-	}
-	if err := r.deliverAdminAuditIntent(request.Context(), *intent); err != nil {
-		r.logger.Error("admin audit record is durable but not yet delivered", "event_id", intent.EventID, "error", err)
-	}
+	r.activateAuthSnapshot()
+	r.completeAdminMutation(writer, request, *intent)
 	writer.Header().Set("ETag", revisionETag(project.Revision))
 	writeJSON(writer, http.StatusCreated, project)
 }
@@ -144,12 +141,8 @@ func (r *Runtime) updateAdminProject(writer http.ResponseWriter, request *http.R
 		adminMutationError(writer, err)
 		return
 	}
-	if !r.refreshAdminAuth(writer, request) {
-		return
-	}
-	if err := r.deliverAdminAuditIntent(request.Context(), *intent); err != nil {
-		r.logger.Error("admin audit record is durable but not yet delivered", "event_id", intent.EventID, "error", err)
-	}
+	r.activateAuthSnapshot()
+	r.completeAdminMutation(writer, request, *intent)
 	writer.Header().Set("ETag", revisionETag(replacement.Revision))
 	writeJSON(writer, http.StatusOK, replacement)
 }
@@ -191,12 +184,8 @@ func (r *Runtime) deleteAdminProject(writer http.ResponseWriter, request *http.R
 		adminMutationError(writer, err)
 		return
 	}
-	if !r.refreshAdminAuth(writer, request) {
-		return
-	}
-	if err := r.deliverAdminAuditIntent(request.Context(), *intent); err != nil {
-		r.logger.Error("admin audit record is durable but not yet delivered", "event_id", intent.EventID, "error", err)
-	}
+	r.activateAuthSnapshot()
+	r.completeAdminMutation(writer, request, *intent)
 	writer.Header().Set("ETag", revisionETag(project.Revision))
 	writer.WriteHeader(http.StatusNoContent)
 }
@@ -278,12 +267,8 @@ func (r *Runtime) createAdminProjectKey(writer http.ResponseWriter, request *htt
 		adminMutationError(writer, err)
 		return
 	}
-	if !r.refreshAdminAuth(writer, request) {
-		return
-	}
-	if err := r.deliverAdminAuditIntent(request.Context(), *intent); err != nil {
-		r.logger.Error("admin audit record is durable but not yet delivered", "event_id", intent.EventID, "error", err)
-	}
+	r.activateAuthSnapshot()
+	r.completeAdminMutation(writer, request, *intent)
 	writer.Header().Set("Cache-Control", "no-store")
 	writer.Header().Set("ETag", revisionETag(key.Revision))
 	writeJSON(writer, http.StatusCreated, map[string]any{
@@ -342,12 +327,8 @@ func (r *Runtime) updateAdminProjectKey(writer http.ResponseWriter, request *htt
 		adminMutationError(writer, err)
 		return
 	}
-	if !r.refreshAdminAuth(writer, request) {
-		return
-	}
-	if err := r.deliverAdminAuditIntent(request.Context(), *intent); err != nil {
-		r.logger.Error("admin audit record is durable but not yet delivered", "event_id", intent.EventID, "error", err)
-	}
+	r.activateAuthSnapshot()
+	r.completeAdminMutation(writer, request, *intent)
 	writer.Header().Set("ETag", revisionETag(key.Revision))
 	writeJSON(writer, http.StatusOK, gatewayKeyView{
 		ID: key.ID, ProjectID: key.ProjectID, Name: key.Name, Enabled: key.Enabled,
@@ -390,12 +371,8 @@ func (r *Runtime) deleteAdminProjectKey(writer http.ResponseWriter, request *htt
 		adminMutationError(writer, err)
 		return
 	}
-	if !r.refreshAdminAuth(writer, request) {
-		return
-	}
-	if err := r.deliverAdminAuditIntent(request.Context(), *intent); err != nil {
-		r.logger.Error("admin audit record is durable but not yet delivered", "event_id", intent.EventID, "error", err)
-	}
+	r.activateAuthSnapshot()
+	r.completeAdminMutation(writer, request, *intent)
 	writer.Header().Set("ETag", revisionETag(key.Revision))
 	writer.WriteHeader(http.StatusNoContent)
 }
@@ -487,20 +464,29 @@ func gatewayKeyIdempotencyDigest(actor, projectID, key string) string {
 	return "sha256:" + hex.EncodeToString(digest.Sum(nil))
 }
 
-func (r *Runtime) refreshAdminAuth(writer http.ResponseWriter, request *http.Request) bool {
+// activateAuthSnapshot carries a durable Project or Gateway Key mutation into
+// the live authentication snapshot.
+//
+// It does not fail the request when activation fails: the mutation is already
+// committed, so telling the operator it failed would be false. What the failure
+// changes is the runtime — it is marked stale, which refuses data-plane traffic
+// until the snapshot catches up. A revocation that is durable but not in force
+// must not keep authorizing requests.
+func (r *Runtime) activateAuthSnapshot() {
 	ctx, cancel := r.activationContext()
 	defer cancel()
-	if err := r.auth.Refresh(ctx, r.store); err != nil {
-		// The write is already durable, so this is the disagreement case rather
-		// than a rejected request: the operator has revoked something that is
-		// still being honoured. Loud, because the reply alone tells them the
-		// mutation failed, which is not what happened.
+	if err := r.reloadAdminAuth(ctx); err != nil {
 		r.logger.Error("authentication snapshot activation failed after a durable mutation",
 			"error", err)
-		adminStoreError(writer)
-		return false
+		r.activation.markStale("auth snapshot: "+err.Error(), time.Now().UTC())
+		return
 	}
-	return true
+	r.activation.markCurrent()
+}
+
+// reloadAdminAuth rebuilds the authentication snapshot from the store.
+func (r *Runtime) reloadAdminAuth(ctx context.Context) error {
+	return r.auth.Refresh(ctx, r.store)
 }
 
 func (r *Runtime) auditAdminMutation(request *http.Request, action, targetType, targetID string) error {

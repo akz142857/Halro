@@ -170,13 +170,8 @@ func (r *Runtime) createAdminDeployment(writer http.ResponseWriter, request *htt
 		adminMutationError(writer, err)
 		return
 	}
-	if err := r.activateTopology(); err != nil {
-		adminConfigurationError(writer, err)
-		return
-	}
-	if err := r.deliverAdminAuditIntent(request.Context(), *intent); err != nil {
-		r.logger.Error("admin audit record is durable but not yet delivered", "event_id", intent.EventID, "error", err)
-	}
+	r.activateTopologyAfterCommit()
+	r.completeAdminMutation(writer, request, *intent)
 	if err := r.auditCapabilitySnapshot(request, auditCapabilitySnapshotCreated, deployment,
 		capabilitySnapshotMetadata(deployment)); err != nil {
 		adminAuditError(writer)
@@ -347,13 +342,8 @@ func (r *Runtime) updateAdminDeployment(writer http.ResponseWriter, request *htt
 		adminMutationError(writer, err)
 		return
 	}
-	if err := r.activateTopology(); err != nil {
-		adminConfigurationError(writer, err)
-		return
-	}
-	if err := r.deliverAdminAuditIntent(request.Context(), *intent); err != nil {
-		r.logger.Error("admin audit record is durable but not yet delivered", "event_id", intent.EventID, "error", err)
-	}
+	r.activateTopologyAfterCommit()
+	r.completeAdminMutation(writer, request, *intent)
 	// A review is a change to what the deployment claims about its model. An
 	// edit to its name or concurrency is not one, and recording it as such
 	// would bury the events an operator actually reviews.
@@ -409,13 +399,8 @@ func (r *Runtime) deleteAdminDeployment(writer http.ResponseWriter, request *htt
 		adminMutationError(writer, err)
 		return
 	}
-	if err := r.activateTopology(); err != nil {
-		adminConfigurationError(writer, err)
-		return
-	}
-	if err := r.deliverAdminAuditIntent(request.Context(), *intent); err != nil {
-		r.logger.Error("admin audit record is durable but not yet delivered", "event_id", intent.EventID, "error", err)
-	}
+	r.activateTopologyAfterCommit()
+	r.completeAdminMutation(writer, request, *intent)
 	writer.Header().Set("ETag", revisionETag(deployment.Revision))
 	writer.WriteHeader(http.StatusNoContent)
 }
@@ -500,9 +485,7 @@ func (r *Runtime) testAdminDeployment(writer http.ResponseWriter, request *http.
 		adminMutationError(writer, storeErr)
 		return
 	}
-	if err := r.deliverAdminAuditIntent(request.Context(), *intent); err != nil {
-		r.logger.Error("admin audit record is durable but not yet delivered", "event_id", intent.EventID, "error", err)
-	}
+	r.completeAdminMutation(writer, request, *intent)
 	result := map[string]any{
 		"status": status, "latency_ms": latencyMS, "tested_at": testedAt, "revision": current.Revision,
 	}

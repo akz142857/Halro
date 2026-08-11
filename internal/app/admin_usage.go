@@ -401,6 +401,14 @@ func (r *Runtime) adminSystemStatus(writer http.ResponseWriter, request *http.Re
 		"alerts":            r.alerts.Stats(),
 		"usage_watermark":   r.usage.Watermark(),
 		"time_context":      timing,
+		// The commit protocol makes "durable" and "in force" two different
+		// questions, so the answer to the second one has to be visible
+		// somewhere an operator can read it. A stale runtime is refusing data
+		// plane traffic; the pending count is the audit backlog behind it.
+		"activation": r.activation.status(),
+	}
+	if pending, err := r.store.PendingAdminAuditIntentCount(request.Context()); err == nil {
+		payload["pending_admin_audit"] = pending
 	}
 	// Reported here so an operator can compare it against another node without
 	// shell access: divergent rules place the same instant in different

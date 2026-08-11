@@ -56,6 +56,31 @@ func (r *Runtime) newAdminAuditIntent(request *http.Request, action, targetType,
 	return intent, nil
 }
 
+// completeAdminMutation finishes a mutation whose store commit already
+// succeeded.
+//
+// The operation ID is the audit event ID, which is durable with the mutation:
+// it is what an operator whose connection dropped can look the change up by,
+// instead of guessing from a revision whether a failed-looking request took
+// effect. The activation header says whether the change is in force yet — the
+// commit protocol makes those two different questions, so the answer has to be
+// on the response rather than inferred from its status.
+//
+// A delivery failure does not fail the response. The record is already durable;
+// the drain will deliver it.
+func (r *Runtime) completeAdminMutation(writer http.ResponseWriter, request *http.Request, intent domain.AdminAuditIntent) {
+	writer.Header().Set("Halro-Operation-Id", intent.EventID)
+	if r.activation.status().Stale {
+		writer.Header().Set("Halro-Activation", "stale")
+	} else {
+		writer.Header().Set("Halro-Activation", "current")
+	}
+	if err := r.deliverAdminAuditIntent(request.Context(), intent); err != nil {
+		r.logger.Error("admin audit record is durable but not yet delivered",
+			"event_id", intent.EventID, "error", err)
+	}
+}
+
 // deliverAdminAuditIntent appends a durable intent to the audit log and retires
 // it. The intent is removed only after the append and the checkpoint are both
 // durable, so an interrupted delivery is retried rather than lost.

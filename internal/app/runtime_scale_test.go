@@ -37,7 +37,11 @@ const (
 	// Runtime surface to one subsystem rather than four coordination fields.
 	// 67: capabilityResolution now groups invocation-target cache coordination
 	// and the signed catalog manager behind one subsystem boundary.
-	runtimeFieldBudget = 67
+	// 68: activation. Raised deliberately. Whether the live snapshots still
+	// reflect the store is read on the data-plane hot path and written by every
+	// admin mutation, so it belongs to the Runtime rather than to any one
+	// handler; it is one grouped tracker, not a field per snapshot.
+	runtimeFieldBudget = 68
 	runtimeMutexBudget = 10
 )
 
