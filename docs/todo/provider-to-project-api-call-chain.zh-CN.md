@@ -4,6 +4,8 @@
 >
 > 基线：`main@b206285b920c`，并包含 2026-08-10 工作区中的未提交代码。本文是代码走查结果，不是期望态设计。
 >
+> 修订：2026-08-11 在 `main@4af0228` 复核，§3.1 重写。原文把 Registry 装载的全部条件统称为“筛选规则”，实际上其中大部分不满足时会让整次装载失败而非排除单条记录，这个区别正是 review 文档 F-05 的放大机制。§3.1 的行号以 `4af0228` 为准，其余各节仍是原基线的行号，可能已漂移。
+>
 > 范围：Credential、Provider、Deployment、Route、Project、Gateway Key，以及通过 `/v1/*` 发起的推理请求。Admin 登录、前端页面细节、异步资源的完整生命周期不在主图内。
 
 ## 1. 一句话模型
@@ -110,17 +112,46 @@ sequenceDiagram
     Handler-->>Admin: 2xx + ETag
 ```
 
-### 3.1 Provider Registry 的筛选规则
+### 3.1 Provider Registry 的装载规则
 
-`loadProviderRegistryWithCatalog` 只把满足下列条件的 Route 注册为 Target：
+`loadProviderRegistryWithCatalog` 决定哪些 Route 成为 Target。这里必须先分清一件容易读错的事：**它的条件不是同一种**。有的条件不满足时只是把这一条排除掉，有的会让整次装载失败。把它们统称为“筛选”会掩盖掉真实行为——一次装载失败意味着新 Registry 不会被激活，旧的原样继续服务（`internal/app/providers.go:110-114`），启动时则是进程起不来。
 
-1. Provider enabled、未删除，Credential 存在且类型/audience/profile 匹配；
-2. Binding enabled、profile 可用，能够创建对应 adapter；
-3. Route enabled、未删除；
-4. Deployment 存在、enabled、未删除；
-5. Deployment 能力快照通过当前 catalog review；drifted 项会被 withheld，而不是拖垮全部 Registry；
-6. Binding adapter 存在，Provider model 符合 profile；
-7. 价格可选；无当前价格时 Target 仍可装载，但请求期按 unknown-price policy 决定是否允许。
+分界线是**问题的作用域**：只影响单条 Route 的问题排除那条 Route，影响整个 Provider 装载能力的问题让整次装载失败。
+
+**一、静默排除（`continue`，不报错）**
+
+| 条件不满足 | 效果 | 代码 |
+|---|---|---|
+| Provider `enabled` 且未删除 | 该 Provider 及其全部 binding 不产生 adapter | `providers.go:274-277` |
+| Binding `enabled` | 该 binding 不产生 adapter | `providers.go:302-305` |
+| Route `enabled` 且未删除 | 该 Route 不成为 Target | `providers.go:334-337` |
+
+**二、记录后排除（withheld，不报错）**
+
+两类，都记录在 `loadReport` 里，但**分开记**——一类要 review，一类要修：
+
+- `Drifted`：Deployment 能力快照未通过当前 catalog review（`providers.go:380-385`）。审计为 `deployment.capability_drift.detected`，并计入漂移指标。
+- `Dangling`：Route 引用的东西造不出 Target（`providers.go:352-357`、`414-419`、`423-428`），三种原因 `deployment_unavailable`、`binding_unavailable`、`provider_model_rejected`。审计为 `route.reference_withheld`，日志级别是 error 而不是 warn，**不计入漂移指标**——漂移是能力声明超出了当前构建支持的范围，悬空引用是存储的拓扑自相矛盾，把后者算成前者会让漂移指标同时表示两件事。
+
+两类都是有意设计，理由相同：拒绝构建整个 Registry 会把一条坏记录升级成进程起不来，还带走所有正常的 Route，正是 fail-closed 想避免的结果。被排除的 Route 本身在两种情况下都是 fail-closed，变的只是影响半径。
+
+`Dangling` 这一类原本是致命的，是 review F-05 的核心：一条仍然 enabled 的 Route 指向被关掉的 Binding，会让整次装载失败，于是变更已落盘、激活失败、此后每次拓扑变更都失败、进程再也起不来。已在 `e1d94be` 改为 withheld。
+
+**三、容忍**
+
+无当前版本价格时 Target 仍然装载，价格投影为零（`providers.go:390-399`）；请求期重新选择并 pin，按 unknown-price policy 决定是否允许。只有非 `ErrPriceUnavailable` 的价格错误才让装载失败。
+
+**四、整次装载失败（`return fail(...)`）**
+
+剩下的都是 Provider 级问题——不是某条 Route 坏了，而是这个 Provider 根本无法装载：
+
+- Credential 不存在、类型不匹配、endpoint 不符合当前安全策略、audience 不匹配：`providers.go:278-300`
+- Binding profile 不可用或与 Provider/Credential 不兼容、凭据解密失败、adapter 或 bridge 构建失败、adapter 注册失败：`providers.go:306-331`
+- 非 `ErrPriceUnavailable` 的价格读取错误：`providers.go:394`
+
+**这一类仍然会让进程起不来，和 F-05 修掉的是同一个形状。** 其中大部分在写入时有守卫（Credential 删除被存储层拒绝，类型和 audience 在写入时校验），但至少一条不是配置守卫能挡住的：`endpoint` 是按**当前**的 `security.allow_private_provider_endpoints` 校验的，把这个开关从 `true` 改回 `false`，之前合法的私网 Provider 就会让整次装载失败。这属于 review 中尚未处理的残留，见 F-06。
+
+管理面的守卫分布：`validateProviderCanDeactivate` 要求先停掉 Provider 的活跃 Deployment，`validateDeploymentCanDeactivate` 要求先停掉 Deployment 的活跃 Route，`validateBindingsCanDeactivate`（`e1d94be` 新增）要求先停掉 binding 上的活跃 Deployment。三级同形，都在错误里点名挡路的那个资源。
 
 Registry Target 最终包含 Route ID、Deployment ID、Provider ID、Binding、公共模型、上游模型、adapter、能力证据、价格投影，以及 Provider/Deployment 两级并发上限。
 

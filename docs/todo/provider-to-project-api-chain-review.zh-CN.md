@@ -5,21 +5,31 @@
 > 基线：`main@b206285b920c`，并包含 2026-08-10 工作区中的未提交代码。
 >
 > 方法：静态代码走查，沿 Credential → Provider → Deployment → Route → Project → Gateway Key → `/v1/*` 的创建、激活、调用、失败和删除方向交叉核对。未修改业务代码，未执行真实 Provider 或计费 smoke test。
+>
+> 复核：2026-08-11 在 `main@4af0228`（较原基线前进 17 个提交）重新走查全链路，并对 F-01、F-02、F-04、F-05 逐条执行验证，不再只靠读代码推断。链路描述本身未发现错误；四条原 finding 全部仍然成立；新增 F-05。复核用的探针只读状态、只打日志，未修改业务代码，未发起任何 Provider 调用。
 
 ## 1. 结论
 
 主数据面设计是闭环的：客户端身份、Project 策略、能力路由、版本价格、预算 reservation、Provider attempt、流式 delivery boundary 和结算的顺序清晰，且关键失败方向普遍采取 fail-closed。
 
-本轮发现 4 个需要处理的点：
+本轮共 6 个点，按严重度排列（ID 按发现顺序分配，不重排）。四个已修复并推送，两个仍未处理：
 
-| ID | 级别 | 类型 | 结论 |
-|---|---|---|---|
-| F-01 | P0 | 确定缺陷 | disable/delete 已持久化后，运行时刷新使用可取消的 Admin 请求上下文；刷新失败时旧 Key/Project/Route/Provider snapshot 继续服务 |
-| F-02 | P1 | 确定缺陷 | 删除最后一个 Route 可留下仍引用该公共模型别名的 Project，且 Project 与 Route 使用不同协调锁，存在并发 TOCTOU |
-| F-03 | P1 | 一致性风险 | topology mutation、snapshot activation、audit append 不是一个结果；API 报错时变更可能已持久化甚至已生效 |
-| F-04 | P2 | 确定冗余 | Deployment `priority/weight` 被存储并在 UI 展示，但候选算法只使用 Route `priority/strategy`，字段对调用链无效 |
+| ID | 级别 | 类型 | 状态 | 结论 |
+|---|---|---|---|---|
+| F-05 | P0 | 确定缺陷 | **已修 `e1d94be`** | 禁用仍被启用 Deployment/Route 引用的 Profile Binding 不被拒绝：变更落盘、API 报 409、旧 registry 继续服务，此后每次拓扑变更都失败，**且进程再也无法启动** |
+| F-01 | P0 | 确定缺陷 | **已修 `354428c`** | disable/delete 已持久化后，运行时刷新使用可取消的 Admin 请求上下文；刷新失败时旧 Key/Project/Route/Provider snapshot 继续服务 |
+| F-02 | P1 | 确定缺陷 | **已修 `066a08a`** | 删除最后一个 Route 可留下仍引用该公共模型别名的 Project，且 Project 与 Route 使用不同协调锁，存在并发 TOCTOU |
+| F-03 | P1 | 一致性风险 | **未处理** | topology mutation、snapshot activation、audit append 不是一个结果；API 报错时变更可能已持久化甚至已生效 |
+| F-06 | P1 | 确定缺陷 | **未处理** | Provider 级装载失败仍然致命，与 F-05 同形；`allow_private_provider_endpoints` 从 `true` 改回 `false` 即可让进程起不来 |
+| F-04 | P2 | 确定冗余 | **已修 `3580a89`** | Deployment `priority/weight` 被存储，但候选算法只使用 Route `priority/strategy`，字段对调用链无效 |
 
-建议处理顺序：先修 F-01，再把 F-02/F-03 的跨聚合一致性语义统一，最后删除或真正实现 F-04。项目尚未正式发布，按照仓库“pre-1.0 fix in place”原则，F-04 更适合删除错误概念，而不是继续保留兼容字段。
+已修部分的共同做法：每条单独提交，每条都做反向验证——先退掉修复、断言退改真的生效（防止搜索串失效导致「什么都没改却通过」），再确认测试在缺陷态失败。详见 §10。
+
+剩下两条的处理顺序建议：先 F-06，因为它和 F-05 是同一个形状、改法已经有了现成的模板（withheld 而非致命），且同样能让进程起不来；F-03 最后，因为它需要先定义提交点语义，是设计决定而不是缺陷修复。
+
+F-05 和 F-01 都是“durable mutation 已提交、runtime activation 没有发生”的实例，也就是 F-03 描述的那个缺失的提交协议。两者已分别修掉各自的可达路径：F-05 让坏记录不再能否决整次装载，F-01 让激活不再被客户端取消。但**都没有建立那个协议**，所以 F-03 仍然开着——见该条。
+
+仓库里已经有这个协议的形状：`prepareModelCatalogActivation`（`internal/app/providers.go:84`）先构建候选 registry、成功后才提交，失败则整体放弃，全程持有 `adminTopologyMu`。Admin handler 仍然是先落盘再重建。
 
 ## 2. 已确认的正确设计
 
@@ -62,9 +72,84 @@ bbolt 到 Registry/Auth Snapshot 的重复是热路径编译结果，不应简�
 
 ## 3. Findings
 
+### F-05 [P0] 禁用仍被引用的 Profile Binding 会写坏数据目录，使进程无法再启动
+
+【确定缺陷；2026-08-11 实测复现；**已修 `e1d94be`**】
+
+Deployment 和 Provider 两级都有停用守卫：`validateDeploymentCanDeactivate` 要求先停掉 Deployment 的活跃 Route，`validateProviderCanDeactivate` 要求先停掉 Provider 的活跃 Deployment。**Profile Binding 这一级没有对应守卫**。`updateAdminProvider` 只把 Provider 自身的 `Enabled` 传给守卫（`admin_providers.go:249`），而 `bindings` 是整体替换、每个 binding 的 `Enabled` 直接取自输入（`admin_providers.go:886-935`），没有任何“该 binding 是否仍被启用的 Deployment 引用”的检查。
+
+`domain.ProviderInstance.Validate` 只要求“启用的 Provider 至少有一个启用的 binding”（`models.go:446`），所以单 binding 的 Provider 走不通，**双 binding 的 Provider 可以**：关掉其中一个、另一个保持启用，Provider 记录依然合法。
+
+放大它的是 registry 装载的失败语义。走查底稿 §3.1 把 7 条规则都写成“筛选”，但只有能力 drift 那一条是跳过单条 Route（`providers.go:276-282` 的 `continue`）；其余不满足时是 `return fail(...)`，**整个 Registry 装载失败**。被禁用的 binding 不会产生 adapter（`providers.go:210` 的 `continue`），于是仍然启用的 Route 走到 `providers.go:305` 的 `route %q references an unavailable provider binding` 并让整次装载失败。`prepareProviderRegistryActivation`（`providers.go:67`）在装载失败时返回 error 且不替换任何东西，旧 registry 原样留在服务中。
+
+实测后果链（`main@4af0228`，bootstrap 出的 OpenAI Provider + Deployment + Route，通过真实 Admin handler 发起 `PUT /admin/api/v1/providers/{id}`，把 Deployment 绑定的 chat binding 置为 `enabled:false`、media binding 保持启用）：
+
+```text
+PUT /admin/api/v1/providers/{id}   → 409 {"error":"configuration could not be activated"}
+持久化状态                          → chat binding enabled=false        （已落盘）
+live registry                       → 仍有 1 个候选                     （禁用未生效，fail-open）
+审计                                → 无记录（handler 在 reload 失败处返回，早于 audit）
+后续任意拓扑变更（实测：无关的 Route PUT）→ 409 configuration could not be activated
+进程重启                            → Open 失败：
+                                      route "rte_..." references an unavailable provider binding
+```
+
+也就是说：一次 Admin 编辑同时做到了四件事——撤销没有生效、没有留下审计、管理面的拓扑变更全部卡死、**数据目录进入一个进程无法启动的状态**。最后一条是不可自愈的：重启不能恢复，因为拒绝启动的正是这份已落盘的状态。恢复只能靠离线改回 binding 的 `enabled`。这正是仓库 CLAUDE.md 对 fail-closed 检查的告警——写错的代价是拒绝启动而不是降级。
+
+这条路径**从普通 Admin UI 即可触发**，不需要手写 API 调用。Provider 编辑表单提交 `bindings: openAIBindings(...)`（`web/src/pages/ProvidersPage.tsx:490`），而 `openAIBindings`（同文件 `:687`）里每个 binding 的 `enabled` 是从勾选的能力推导出来的：`enabled: hasEnabledCapability(chat)`。运维在 Provider 页取消勾选 chat/embeddings 类能力（例如“这个 Provider 以后只做图像”），而某个 Deployment + Route 还绑在 chat binding 上，就会命中。
+
+代码证据：
+
+- Binding 级守卫缺失：`internal/app/admin_providers.go:249`、`1025-1041`
+- Binding 整体替换、`Enabled` 取自输入：`internal/app/admin_providers.go:886-935`
+- 只要求“至少一个启用的 binding”：`internal/domain/models.go:446`
+- 禁用的 binding 不产生 adapter：`internal/app/providers.go:209-212`
+- 引用不存在 adapter 的 Route 让整次装载失败：`internal/app/providers.go:303-306`
+- 装载失败不替换、旧 registry 留存：`internal/app/providers.go:67-71`
+- reload 失败在 audit 之前返回：`internal/app/admin_providers.go:266-272`
+- UI 从能力勾选推导 binding 启停：`web/src/pages/ProvidersPage.tsx:490`、`687-694`
+
+建议方向：
+
+- 补上 binding 级停用守卫，与 Deployment/Provider 两级同形：拒绝停用或移除仍被非墓碑、启用中的 Deployment 引用的 binding，并在错误里点名是哪个 Deployment，而不是让运维撞上通用的激活失败；
+- 更根本的是**先验证候选 registry 装载得起来，再提交 durable mutation**。目前顺序是“落盘 → 重建 → 失败则报错”，这让任何 handler 层漏掉的引用完整性检查都直接升级成写坏数据目录。`prepareModelCatalogActivation` 已经是 prepare-candidate → commit 的形状，Admin 拓扑变更应当共用；
+- 启动路径应当能区分“这份状态装载不起来”和“进程该拒绝启动”。让一个 Route 的悬空引用带走整个进程，与 §2 里 drifted deployment 只被 withheld 的处理是两套语义，且方向相反；
+- 回归测试至少覆盖：禁用被引用的 binding、从 `bindings` 列表中整体移除被引用的 binding、以及“落盘后能否重启”这一条断言。只断言 bbolt 字段已改变不足以发现本缺陷——本轮 API 返回 409 的同时状态已经写坏。
+
+### F-06 [P1] Provider 级装载失败仍然致命，与 F-05 同形
+
+【确定缺陷；未处理】
+
+F-05 只把**单条 Route** 造不出 Target 的情况改成了 withheld。作用域更大的问题——「这个 Provider 根本装载不起来」——仍然 `return fail(...)`，让整次装载失败，因此仍然保留 F-05 那条完整的后果链：变更已落盘、激活失败、此后每次拓扑变更都失败、进程再也起不来。
+
+仍然致命的路径（`internal/app/providers.go:278-331`、`394`）：
+
+- Credential 不存在、类型不匹配、audience 不匹配
+- **`endpoint` 不符合当前安全策略**
+- Binding profile 不可用或与 Provider/Credential 不兼容
+- 凭据解密失败、adapter 或 bridge 构建失败、adapter 注册失败
+- 非 `ErrPriceUnavailable` 的价格读取错误
+
+多数在写入时有守卫：Credential 删除被存储层拒绝，类型和 audience 在 `providerFromInput` 里校验。**但 endpoint 那条不是配置守卫能挡住的**，因为它按**当前**的 `security.allow_private_provider_endpoints` 校验，而不是按写入时的值：
+
+1. 运维开启 `allow_private_provider_endpoints: true`，创建一个指向私网地址的 Provider（这是该开关存在的用途）；
+2. 后来把开关改回 `false`——收紧安全策略，是个正确的动作；
+3. 下次装载时 `safetransport.ValidateURL` 拒绝那个 Provider 的 endpoint，整次装载失败；
+4. 进程起不来。
+
+也就是说**收紧安全配置会让实例无法启动**，且错误信息指向一个运维当时并没有编辑的 Provider。凭据解密失败同理：一个 Provider 的密钥有问题，不应该让其余 Provider 全部停摆。
+
+注意这条尚未实测复现，与 F-05 不同——它是在修 F-05、重新分类装载失败路径时从代码读出来的。列为「确定缺陷」是因为路径和后果都与已实测的 F-05 一致，但复现步骤本身还没跑过。
+
+建议方向：
+
+- 沿用 F-05 的模板：把作用域限于单个 Provider 的问题降级为「排除该 Provider 及其 Route」，记进 `loadReport` 并审计，而不是否决整次装载。`referenceWithholding` 已经是这个形状，缺的是一个 provider 级的同类；
+- 需要一并决定的是：**是否存在应该让进程拒绝启动的装载失败**。如果答案是「没有」，那么 `fail` 这条路径就该从装载函数里消失，语义变成「装载永远成功，只是可能排除东西」，这比留一个偶尔致命的分支更容易推理；
+- 无论选哪个，`halro doctor` 都应该能报出被排除的 Provider 和 Route，否则「装载永远成功」会把问题藏起来——这也是 §4 Q-03 已经提过的那个担忧。
+
 ### F-01 [P0] 撤销类变更可能已持久化但未进入运行时，旧权限/旧路由继续生效
 
-【确定缺陷】
+【确定缺陷；**已修 `354428c`**——激活改用 runtime 自己的有界 context，拓扑激活入口 `activateTopology` 不再接受任何 context 参数，因此调用方无法再把请求的传进来。若激活因真实原因失败，不一致仍然存在，见 F-03】
 
 Project/Key 的 update/delete 先把 disabled/deleted 状态写入 bbolt，随后调用 `refreshAdminAuth(writer, request)`；该函数用 `request.Context()` 重读所有 Projects/Keys。Topology 的 Provider/Deployment/Route 变更同样先写 Store，再用 `request.Context()` 重建 Registry。
 
@@ -98,7 +183,7 @@ Store 的 `listJSON` 在读取前直接检查 `ctx.Err()`。因此存在完整�
 
 ### F-02 [P1] 删除最后一个 Route 会破坏 Project.allowed_routes 的引用完整性
 
-【确定缺陷】
+【确定缺陷；**已修 `066a08a`**——拒绝删除并返回 `route_referenced_by_project`；重命名别名走同一守卫；两条链统一为 `adminTopologyMu` → `adminProjectMu` 的固定顺序，TOCTOU 已关闭而非收窄】
 
 创建/更新 Project 时，`validateProjectReferences` 会拒绝不存在的公共模型别名，并明确说明“无 Route 的别名只会在请求时静默失败，所以要在这里拒绝”。但反向删除 Route 时没有检查 Project；最后一个同名 Route 可以被删除，留下 Project 仍允许该别名。
 
@@ -121,7 +206,7 @@ Store 的 `listJSON` 在读取前直接检查 `ctx.Err()`。因此存在完整�
 
 ### F-03 [P1] durable mutation、runtime activation、audit 三阶段没有统一成功语义
 
-【一致性风险；F-01 是其中已确认的高危实例】
+【一致性风险；**未处理**。F-01 和 F-05 各自的可达路径已修，窗口比原来窄得多，但提交协议本身没有建立】
 
 Provider、Deployment、Route、Project 和 Key 的常见顺序是：
 
@@ -154,7 +239,7 @@ Store commit → rebuild/swap runtime snapshot → append audit → return 2xx
 
 ### F-04 [P2] Deployment priority/weight 是无效配置，和 Route 调度字段重复
 
-【确定冗余】
+【确定冗余；**已修 `3580a89`**——字段已删除，不保留兼容。两点与原文不同：控制台从未渲染过这两个字段的编辑器（那两个 i18n 文案只被 locale 对齐测试引用，本身是死字符串），且不需要迁移或重新初始化——已对真实 `halro.db` 验证过旧记录仍可解码】
 
 Deployment API 和 UI 读写 `priority`、`weight`，Domain 也校验并持久化；但 Registry 构造 Target 时只把 `route.Priority` 和 `route.Strategy` 写入 Target。候选排序只读取 Target Priority，round-robin 也只是旋转候选，没有读取 Deployment Weight。
 
@@ -202,13 +287,17 @@ Registry 会把无当前版本价格的 Target 以零投影装载，请求期再
 | 同 alias 尚有另一个 Route | 删除一个 | 其余候选继续可用 | Project 引用保持有效 |
 | 修改 Deployment priority/weight | 若字段保留 | 必须有定义明确的调度变化 | 否则 API 拒绝/字段删除 |
 | Audit append 故障 | 可恢复 intent | fail-closed 或可查询完成 | 不产生“失败但已生效”的歧义 |
+| 禁用被启用 Deployment 引用的 binding | 应当被拒绝、不落盘 | 旧 binding 不得继续服务 | 409 且状态未变（`e1d94be` 已覆盖） |
+| 从 `bindings` 列表整体移除被引用的 binding | 同上 | 同上 | 同上 |
+| 上述任一变更之后重启进程 | 不变 | **必须能启动** | 启动日志点名问题资源，而不是拒绝启动（`e1d94be` 覆盖 Route 级；Provider 级见 F-06，未覆盖） |
+| 单 binding Provider 关掉唯一 binding | 应当被拒绝 | 无变化 | 已由 `models.go:446` 覆盖，保留回归 |
 
 ## 6. Review 边界
 
 - 仅运行了一次用户明确授权的真实 Provider smoke test；没有执行重试压测或其他计费请求；
 - 未对每个资源类端点逐一证明协议兼容性，主 review 聚焦共享控制链；
-- 未修改业务代码，因此没有执行全量测试门禁；
-- 行号以本次工作区为准，后续代码改动可能漂移，文件与函数名是稳定定位入口。
+- 首轮（2026-08-10）未修改业务代码，因此没有执行全量测试门禁；2026-08-11 的复核同样未修改业务代码，只用临时探针执行了 `internal/app` 的定向测试；
+- 行号分属两个基线：F-01～F-04 与 §2 的引用来自原基线 `main@b206285b920c`，复核时已确认普遍漂移（例如 F-01 引的 `store.go:1352-1356`，在 `4af0228` 上是 `1387-1390`）；F-05 与 §9 的引用来自 `main@4af0228`。两者都会随后续改动继续漂移，文件与函数名才是稳定定位入口。
 
 ## 7. 运行时非计费验证
 
@@ -302,3 +391,42 @@ Gateway Key → Project → public model authorization → Route → Deployment
 
 它不覆盖 F-01 的撤销竞争窗口，也不覆盖多候选 retry/fallback、流式 delivery
 boundary、Redaction 拒绝和 Token Guard 拒绝路径。
+
+## 9. 2026-08-11 全链路复核记录
+
+在 `main@4af0228` 重走全链路，并把结论从“读代码推断”提升为“执行验证”。走查底稿描述的链路顺序未发现错误：`resolveRequest`（`gateway/service.go:173`）的认证→别名→CIDR→候选五步、`startAttempt`（`:307`）的熔断→并发→价格 pin→Token Guard 复核→durable reservation→pin commit→`MarkStarted`→Provider I/O 十步、`retryable()`（`:1751`）对 `Ambiguous` 直接返回 false、流式以 `emitted` 闸住 delivery boundary（`:1559`、`:1576`），都与底稿一致。
+
+四条原 finding 全部仍然成立，且两条的实测结果比原文更具体：
+
+- **F-01**：durable revoke 落盘后，以取消的 request context 调用生产函数 `refreshAdminAuth`，返回 `ok=false`、写出 503，而被吊销的 Key **在 live snapshot 上仍然认证成功**；随后用未取消的 context 刷新一次即拒绝（`gateway key is disabled`）。缺的确实只有激活这一步。
+- **F-02**：删除别名最后一条 Route 返回 204，Project 的 `allowed_routes` 仍为 `[chat]`，Registry 候选归零——与原文一致。**原文未提的一点**：该 Project 从此存不进去了，把它原封不动重新保存返回 `409 allowed_routes references unknown model alias chat`。运维要改这个 Project 的预算、限流或 CIDR 都被挡住，唯一出路是先摘掉悬空别名。这使 F-02 从“请求期报错不准确”升级为“Project 记录被锁死”。
+- **F-04**：`.Weight` 全仓库仅两处非测试读取——`admin_deployments.go:564` 把输入拷进记录、`domain/models.go:866` 校验非负。`provider.Target` 结构中没有 Weight 字段，排序只读 `route.Priority`，round-robin 只旋转候选数组。确认为纯死字段。
+- **F-03**：本轮以三种独立形态各撞见一次（F-05、F-01、以及 F-05 之后一次无关的 Route PUT），都是同一形状：API 报错、变更已落盘。
+
+新增 F-05，见上。复核所用探针只读状态、只打日志、不修改业务代码、不发起任何 Provider 调用，验证完成后已删除；若要修复，应改写为带断言的回归测试。
+
+## 10. 修复记录（2026-08-11）
+
+四条已修，各自单独提交并推送到 `main`：
+
+| 提交 | Finding | 做法 |
+|---|---|---|
+| `e1d94be` | F-05 | 单条 Route 造不出 Target 时改为 withheld 而非致命（`referenceWithholding`，审计 `route.reference_withheld`，与漂移指标分开）；新增 `validateBindingsCanDeactivate`，与 Provider/Deployment 两级守卫同形并点名挡路的 Deployment |
+| `354428c` | F-01 | 激活改用从 runtime `backgroundCtx` 派生的 30s 有界 context；拓扑激活统一走 `activateTopology()`，该函数不接受 context 参数，调用方无法再传请求的进去；激活失败在两条路径上都记 error 日志 |
+| `066a08a` | F-02 | 删除别名最后一条 Route 时返回 409 `route_referenced_by_project`，点名别名和 Project；重命名别名走同一守卫；两条链统一 `adminTopologyMu` → `adminProjectMu` 固定顺序 |
+| `3580a89` | F-04 | 删除 `Deployment.Priority/Weight` 及其校验、API 字段、前端类型与死 i18n 文案；Route 的 priority 保留并有测试钉住它仍进入 Target |
+
+每条都做了反向验证，且**先断言退改真的生效**（脚本用 `assert needle in s`，避免搜索串失效导致「什么都没改却通过」），再确认测试在缺陷态失败：
+
+| 退掉的修复 | 缺陷态表现 |
+|---|---|
+| F-05 守卫 | `PUT /providers/{id}` 返回 200，chat binding 落盘为 `enabled=false` |
+| F-05 withhold | 装载、热重载、**重启**三者全部 `route "..." references an unavailable provider binding` |
+| F-01 | `refreshAdminAuth` 返回 503 `metadata unavailable`，被吊销的 Key 仍认证成功 |
+| F-02 | 删除返回 204、重命名返回 200 且别名已改 |
+
+门禁：每条提交前跑 `go test ./...`（54 包）+ `go vet ./...` + 前端 typecheck/test/build，并核对 `internal/webui/dist` 无漂移。race detector 只在 F-05、F-01、F-02 跑（`go test -race ./internal/app/`），F-04 未跑——删字段不触及并发。
+
+F-04 的 no-migration 结论是对真实数据验证的，不是对 fixture：复制线上 `data/` 后用新结构体解码 `halro.db`，两条真实部署记录的存储 JSON 仍带 `weight`/`priority`，均能解码且 `Validate()` 通过，其余字段完好。`halro doctor` 未能用上——本机有一个 `go run ./cmd/halro start` 实例持有真实数据目录的锁，故改用直接解码真实字节的方式回答同一问题。
+
+未处理：F-06（Provider 级装载失败仍致命，同形，且收紧 `allow_private_provider_endpoints` 即可让进程起不来）、F-03（提交点语义，设计决定）。
