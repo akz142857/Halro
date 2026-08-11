@@ -8,31 +8,31 @@
 >
 > 复核：2026-08-11 在 `main@4af0228`（较原基线前进 17 个提交）重新走查全链路，并对 F-01、F-02、F-04、F-05 逐条执行验证，不再只靠读代码推断。链路描述本身未发现错误；四条原 finding 全部仍然成立；新增 F-05。复核用的探针只读状态、只打日志，未修改业务代码，未发起任何 Provider 调用。
 >
-> 状态更新：2026-08-11 晚。本文档一度落后于代码——它把 F-06、F-07 标为「未处理」，而两者早已在 `95b5d47` 修掉，那个提交的 message 自己写着「That makes F-06 reachable, so it is fixed in the same commit」。本次按当前代码逐条重核并更新状态，F-03 亦已由 `18f3939` + `a96cf4b` 关闭。**七条 finding 的主缺陷全部关闭，剩三项子项**，见 §1 的子项表。行号仍以原基线为准，普遍已漂移；文件与函数名是稳定的定位入口。
+> 状态更新：2026-08-11 晚。本文档一度落后于代码——它把 F-06、F-07 标为「未处理」，而两者早已在 `95b5d47` 修掉，那个提交的 message 自己写着「That makes F-06 reachable, so it is fixed in the same commit」。本次按当前代码逐条重核并更新状态，F-03 亦已由 `18f3939` + `a96cf4b` 关闭。**七条 finding 与三项子项全部关闭**（子项在 `c051edc`），本 review 无未尽项。行号仍以原基线为准，普遍已漂移；文件与函数名是稳定的定位入口。
 
 ## 1. 结论
 
 主数据面设计是闭环的：客户端身份、Project 策略、能力路由、版本价格、预算 reservation、Provider attempt、流式 delivery boundary 和结算的顺序清晰，且关键失败方向普遍采取 fail-closed。
 
-本轮共 7 个点，按严重度排列（ID 按发现顺序分配，不重排）。**七条的主缺陷全部已修**，剩下的是三项子项，列在表后：
+本轮共 7 个点，按严重度排列（ID 按发现顺序分配，不重排）。**七条全部已修，三项子项也已在 `c051edc` 关闭**，本 review 无未尽项：
 
 | ID | 级别 | 类型 | 状态 | 结论 |
 |---|---|---|---|---|
 | F-05 | P0 | 确定缺陷 | **已修 `e1d94be`** | 禁用仍被启用 Deployment/Route 引用的 Profile Binding 不被拒绝：变更落盘、API 报 409、旧 registry 继续服务，此后每次拓扑变更都失败，**且进程再也无法启动** |
 | F-01 | P0 | 确定缺陷 | **已修 `354428c`** | disable/delete 已持久化后，运行时刷新使用可取消的 Admin 请求上下文；刷新失败时旧 Key/Project/Route/Provider snapshot 继续服务 |
 | F-02 | P1 | 确定缺陷 | **已修 `066a08a`** | 删除最后一个 Route 可留下仍引用该公共模型别名的 Project，且 Project 与 Route 使用不同协调锁，存在并发 TOCTOU |
-| F-03 | P1 | 一致性风险 | **已修 `18f3939` + `a96cf4b`（子项未尽）** | topology mutation、snapshot activation、audit append 不是一个结果；API 报错时变更可能已持久化甚至已生效 |
-| F-06 | P3 | 加固建议（原判 P1，已更正） | **已修 `95b5d47`（子项未尽）** | Provider 级装载失败仍然致命，与 F-05 同形，但**未能找到可达触发路径**；原文给出的 endpoint 场景经实测证伪，见该条 |
+| F-03 | P1 | 一致性风险 | **已修 `18f3939` + `a96cf4b` + `c051edc`** | topology mutation、snapshot activation、audit append 不是一个结果；API 报错时变更可能已持久化甚至已生效 |
+| F-06 | P3 | 加固建议（原判 P1，已更正） | **已修 `95b5d47` + `c051edc`** | Provider 级装载失败仍然致命，与 F-05 同形，但**未能找到可达触发路径**；原文给出的 endpoint 场景经实测证伪，见该条 |
 | F-07 | P2 | 确定缺陷 | **已修 `95b5d47`** | `allow_private_provider_endpoints` 无法生效：所有 Provider/Credential 路径都调用非策略版 `safetransport.Audience`，私网地址一律被拒，开关形同虚设 |
 | F-04 | P2 | 确定冗余 | **已修 `3580a89`** | Deployment `priority/weight` 被存储，但候选算法只使用 Route `priority/strategy`，字段对调用链无效 |
 
-仍然开着的三项子项，都不是原 finding 的主缺陷：
+三项子项及其结局：
 
 | 子项 | 来自 | 状态 |
 |---|---|---|
-| create 的幂等语义：Provider / Deployment / Route / Project 的重试行为未核对，调用方遇到 revision 冲突或 already exists 时仍分不清「上一次是否已生效」 | F-03 建议方向第三条 | 未处理。Gateway Key 与价格路径已有幂等键 |
-| 告警 webhook 与 redaction / Token Guard 策略资源仍是「先落盘、后 append」的旧顺序 | F-03 的范围外沿 | 未处理。同一形状，不在本轮选定范围内 |
-| `halro doctor` 看不见「endpoint 被安全策略拒绝」导致的 Provider 排除 | F-06 建议方向第三条 | 未处理。binding 级 withhold 与审计积压已在 `a96cf4b` 覆盖 |
+| create 的幂等语义 | F-03 建议方向第三条 | **已修 `c051edc`**。Provider / Deployment / Route / Project 的记录 ID 由必填的 `Idempotency-Key` 派生，重试撞成 409 `<resource>_idempotency_replay` 并点名已存在的 ID；控制台每次打开表单生成一个键 |
+| 告警 webhook 与 redaction / Token Guard 策略资源仍是旧顺序 | F-03 的范围外沿 | **已修 `c051edc`**。审计记录改为同事务落盘；激活改用 runtime 自己的 context。redaction 与 Token Guard 失败时标记 stale，告警不标记——投递告警不决定任何一个请求的放行与否 |
+| `halro doctor` 看不见 endpoint 被拒导致的 Provider 排除 | F-06 建议方向第三条 | **已修 `c051edc`**。doctor 用当前 `providerEndpointPolicy` 校验每个启用 Provider 的 base URL，并点名被排除的那个 |
 
 已修部分的共同做法：每条单独提交，每条都做反向验证——先退掉修复、断言退改真的生效（防止搜索串失效导致「什么都没改却通过」），再确认测试在缺陷态失败。详见 §10。
 
@@ -127,7 +127,7 @@ live registry                       → 仍有 1 个候选                     �
 
 ### F-06 [P3] Provider 级装载失败仍然致命，但未找到可达触发路径
 
-【加固建议；原判 P1「确定缺陷」，经实测更正；**已修 `95b5d47`**——endpoint 被拒改为排除该 Provider，binding profile 不兼容与 adapter 构建失败改为排除该 binding，均记入 `loadReport.Excluded` 并审计为 `provider.excluded_from_routing`；只有存储被篡改与 vault 不可信仍然致命，这是本条留下的那个问题的收敛答案。修 F-07 使 endpoint 场景从不可达变为可达，所以两条同提交处理。**未尽子项**：`halro doctor` 仍不校验 base URL 是否符合当前 endpoint 策略，因此被排除的 Provider 在 doctor 里仍报 `topology pass`——见 §1 子项表】
+【加固建议；原判 P1「确定缺陷」，经实测更正；**已修 `95b5d47`**——endpoint 被拒改为排除该 Provider，binding profile 不兼容与 adapter 构建失败改为排除该 binding，均记入 `loadReport.Excluded` 并审计为 `provider.excluded_from_routing`；只有存储被篡改与 vault 不可信仍然致命，这是本条留下的那个问题的收敛答案。修 F-07 使 endpoint 场景从不可达变为可达，所以两条同提交处理。`c051edc` 补上最后一条：`halro doctor` 现在用当前 endpoint 策略校验每个启用 Provider 的 base URL，并点名被排除的那个】
 
 F-05 只把**单条 Route** 造不出 Target 的情况改成了 withheld。作用域更大的问题——「这个 Provider 根本装载不起来」——仍然 `return fail(...)`，让整次装载失败，因此在原理上保留 F-05 那条完整的后果链：变更已落盘、激活失败、此后每次拓扑变更都失败、进程再也起不来。
 
@@ -244,7 +244,7 @@ Store 的 `listJSON` 在读取前直接检查 `ctx.Err()`。因此存在完整�
 
 ### F-03 [P1] durable mutation、runtime activation、audit 三阶段没有统一成功语义
 
-【一致性风险；**已修 `18f3939` + `a96cf4b`**。提交点定为 store commit，见下方「已实施的协议」；**未尽子项**：create 的幂等语义，以及告警 webhook 与策略资源仍是旧顺序——见 §1 子项表】
+【一致性风险；**已修 `18f3939` + `a96cf4b` + `c051edc`**。提交点定为 store commit，见下方「已实施的协议」。`c051edc` 补上 create 的幂等语义，并把告警 webhook 与 redaction / Token Guard 策略资源纳入同一协议】
 
 Provider、Deployment、Route、Project 和 Key 的常见顺序是：
 
@@ -272,7 +272,7 @@ Store commit → rebuild/swap runtime snapshot → append audit → return 2xx
 
 - ~~先定义提交点和错误响应~~ → 已选第一种：**Store commit 即提交点**，激活失败进入 fail-closed 并返回可查询的 operation ID。没有选 prepare-candidate → commit：装载器读的是具体的 `*boltstore.Store`，要在落盘前用「当前存储 + 本次变更」构建候选，需要先抽出读接口做 overlay，是一次独立的重构，且第一种已经消除了「已提交但无记录」和「已提交但仍放行旧快照」这两个实际后果。
 - ~~Audit 在 durable mutation 前准备~~ → 已实施：`AdminAuditIntent` 在 mutation 之前构造，与 mutation 写进同一个 bbolt 事务。
-- 所有 create 都应具备幂等语义 → **仍未处理**。Gateway Key 与价格路径有幂等键，Provider / Deployment / Route / Project 的重试行为尚未核对。
+- ~~所有 create 都应具备幂等语义~~ → 已实施（`c051edc`）：Provider / Deployment / Route / Project 的记录 ID 由必填的 `Idempotency-Key` 派生。键设为必填而非可选——可选的键只有已经想过重试的调用方才会带，而那正是不需要它的那批调用方。
 - ~~doctor/status 报告漂移~~ → 已实施：`/admin/api/v1/system/status` 报 `activation`（stale / stale_since / reason / generation）与 `pending_admin_audit`；`halro doctor` 新增 `admin_audit_backlog`。
 
 已实施的协议：
@@ -344,10 +344,11 @@ Registry 会把无当前版本价格的 Target 以零投影装载，请求期再
 | 修改 Deployment priority/weight | 若字段保留 | 必须有定义明确的调度变化 | 否则 API 拒绝/字段删除 | `3580a89`（字段已删） |
 | Audit append 故障 | 可恢复 intent | fail-closed 或可查询完成 | 不产生“失败但已生效”的歧义 | `18f3939`（同事务 intent + 启动 drain） |
 | 激活失败后数据面继续收流量 | 已落盘 | **必须拒绝**，不得由已知过期的快照授权 | `configuration_stale` + readiness `not_ready` | `a96cf4b` |
-| 被拒的写留下审计记录 | 未变更 | — | 记录随事务回滚，不得残留 | `18f3939` 存储层测试 |
+| 被拒的写留下审计记录 | 未变更 | — | 记录随事务回滚，不得残留 | `18f3939` 存储层测试，策略资源见 `c051edc` |
+| 响应丢失后重试一次 create | 只应有一条记录 | — | 409 点名已存在的 ID，而不是第二条记录 | `c051edc` |
 | 禁用被启用 Deployment 引用的 binding | 应当被拒绝、不落盘 | 旧 binding 不得继续服务 | 409 且状态未变（`e1d94be` 已覆盖） |
 | 从 `bindings` 列表整体移除被引用的 binding | 同上 | 同上 | 同上 |
-| 上述任一变更之后重启进程 | 不变 | **必须能启动** | 启动日志点名问题资源，而不是拒绝启动（`e1d94be` 覆盖 Route 级；Provider 级见 F-06，未覆盖） |
+| 上述任一变更之后重启进程 | 不变 | **必须能启动** | 启动日志点名问题资源，而不是拒绝启动（`e1d94be` 覆盖 Route 级，`95b5d47` 覆盖 Provider 级，`c051edc` 让 doctor 也能看见） |
 | 单 binding Provider 关掉唯一 binding | 应当被拒绝 | 无变化 | 已由 `models.go:446` 覆盖，保留回归 |
 
 ## 6. Review 边界
@@ -475,6 +476,7 @@ boundary、Redaction 拒绝和 Token Guard 拒绝路径。
 | `3580a89` | F-04 | 删除 `Deployment.Priority/Weight` 及其校验、API 字段、前端类型与死 i18n 文案；Route 的 priority 保留并有测试钉住它仍进入 Target |
 | `95b5d47` | F-07 + F-06 | 删除裸 `safetransport.Audience`，Provider 侧两次校验都由 `providerEndpointPolicy(cfg)` 派生；endpoint / binding profile / adapter 构建失败改为排除受影响的 Provider 或 binding 并审计 `provider.excluded_from_routing`，只有存储篡改与 vault 不可信仍致命 |
 | `18f3939` | F-03 | `AdminAuditIntent` 与 mutation 同事务落盘（Credential/Provider/Deployment/Route/Project/Gateway Key 共 21 个写入点），投递在其后、失败不影响响应，启动时 drain；schema 27 |
+| `c051edc` | F-03 / F-06 子项 | 四个 create 的记录 ID 由必填 `Idempotency-Key` 派生；告警 webhook 与 redaction / Token Guard 策略资源纳入同事务 intent 并改用 runtime 自己的激活 context；doctor 校验 endpoint 策略 |
 | `a96cf4b` | F-03 | 激活失败标记 stale：数据面 `configuration_stale` 拒绝、readiness `not_ready`、5s 重试自愈；响应带 `Halro-Operation-Id` / `Halro-Activation`；status 报 activation 与审计积压；doctor 新增 `admin_audit_backlog`，并对被关闭的 capability interface 报 fail |
 
 每条都做了反向验证，且**先断言退改真的生效**（脚本用 `assert needle in s`，避免搜索串失效导致「什么都没改却通过」），再确认测试在缺陷态失败：
@@ -498,6 +500,10 @@ F-04 的 no-migration 结论是对真实数据验证的，不是对 fixture：�
 
 F-03 的 no-migration 结论同样是对真实数据验证的：复制 `data/halro.db` 后用新代码打开，schema 升到 27，1 个 provider / 1 个 deployment / 1 条 route 仍可读，pending intent 为 0。因此新增 `admin_audit_intents` 桶不需要重新初始化数据目录。
 
-未处理的三项子项见 §1 的子项表：create 幂等语义、告警 webhook 与策略资源的旧顺序、`halro doctor` 对 endpoint 排除的盲区。原七条 finding 的主缺陷已全部关闭。
+三项子项已在 `c051edc` 关闭，见 §1 的子项表。本 review 的全部条目至此闭合。
+
+`c051edc` 的反向验证：去掉派生 ID，重试真的建出第二条 Route；去掉 doctor 的 endpoint 校验，收紧策略后仍报 `topology pass`；去掉策略资源的同事务 intent，被拒的 Token Guard 写入留下了审计记录。
+
+一处需要运维知道的破坏性变更：**四个 create 端点现在必须带 `Idempotency-Key`**，不带返回 400 `idempotency_key_required`。控制台已随本提交更新；直接调 Admin API 的脚本需要补这个头。
 
 一条关于本轮方法的记录：F-06 原本被判为 P1 确定缺陷并已写进文档，动手修之前按惯例先复现，结果**前提被证伪**——它声称的 endpoint 场景根本建不出私网 Provider。如果当时直接按文档去实现「provider 级 withheld」，就会在一个假前提上改掉装载语义，而且这个改动本身很难被证伪。复现同时暴露了 F-07 这个真实缺陷。这正是仓库「verify, never assume」那一条要买的东西：**一份没跑过的 finding 是假设，不是结论**，包括本文档自己写下的。

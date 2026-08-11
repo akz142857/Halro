@@ -6,7 +6,7 @@
 >
 > 修订：2026-08-11 在 `main@4af0228` 复核，§3.1 重写。原文把 Registry 装载的全部条件统称为“筛选规则”，实际上其中大部分不满足时会让整次装载失败而非排除单条记录，这个区别正是 review 文档 F-05 的放大机制。§3.1 的行号以 `4af0228` 为准，其余各节仍是原基线的行号，可能已漂移。
 >
-> 修订：2026-08-11 晚，在 `95b5d47`（F-06/F-07 修复）与 `18f3939`、`a96cf4b`（F-03 提交协议）之后再次重写 §3 与 §3.1。装载的失败语义和管理面的提交语义都变了：Provider 级问题现在排除该 Provider 而不再致命，管理面变更与其审计记录同事务落盘、激活失败改为让运行时进入 stale 并拒绝数据面流量。本轮不再给行号，只给文件与函数名——行号在过去两天里漂了三次。
+> 修订：2026-08-11 晚，在 `95b5d47`（F-06/F-07 修复）与 `18f3939`、`a96cf4b`、`c051edc`（F-03 提交协议及其子项）之后再次重写 §3 与 §3.1。装载的失败语义和管理面的提交语义都变了：Provider 级问题现在排除该 Provider 而不再致命，管理面变更与其审计记录同事务落盘、激活失败改为让运行时进入 stale 并拒绝数据面流量。本轮不再给行号，只给文件与函数名——行号在过去两天里漂了三次。
 >
 > 范围：Credential、Provider、Deployment、Route、Project、Gateway Key，以及通过 `/v1/*` 发起的推理请求。Admin 登录、前端页面细节、异步资源的完整生命周期不在主图内。
 
@@ -126,7 +126,11 @@ sequenceDiagram
 
 代码：`internal/app/admin_audit_intent.go`、`internal/app/activation_state.go`、`internal/store/bolt/store_admin_audit.go`。
 
-覆盖范围是 Credential、Provider、Deployment、Route、Project、Gateway Key。告警 webhook 与 redaction / Token Guard 策略资源**仍是旧顺序**，见 review 的 F-03。
+覆盖范围是全部管理面写入：Credential、Provider、Deployment、Route、Project、Gateway Key，以及告警 webhook 与 redaction / Token Guard 策略资源。
+
+redaction 与 Token Guard 的激活失败同样标记 stale——它们决定的是活跃流量被如何脱敏、被不被放行。告警不标记：投递告警不决定任何一个请求的结果，为一个 webhook 重建失败而拒绝全部流量，比它报告的故障更大。
+
+Provider / Deployment / Route / Project 的创建需要 `Idempotency-Key`，记录 ID 由它派生，因此响应丢失后的重试撞成 409 `<resource>_idempotency_replay` 而不是建出第二条记录。Gateway Key 与价格版本此前已是这个形状。
 
 ### 3.1 Provider Registry 的装载规则
 
@@ -184,7 +188,7 @@ sequenceDiagram
 装载层改成容忍之后，doctor 是这些排除唯一能被主动看见的地方。当前状态：
 
 - 被关闭的 capability interface（binding `enabled=false`）导致的 Route withhold —— **已覆盖**（`checkDoctorTopology`，`a96cf4b`）
-- endpoint 被安全策略拒绝导致的 Provider 排除 —— **未覆盖**：doctor 不用 `providerEndpointPolicy` 校验 base URL，所以收紧开关后被排除的 Provider 在 doctor 里仍报 `topology pass`
+- endpoint 被安全策略拒绝导致的 Provider 排除 —— **已覆盖**（`c051edc`）：doctor 用当前 `providerEndpointPolicy` 校验每个启用 Provider 的 base URL 并点名被排除的那个
 - 管理面审计积压 —— 已覆盖（`admin_audit_backlog`）
 
 管理面的守卫分布：`validateProviderCanDeactivate` 要求先停掉 Provider 的活跃 Deployment，`validateDeploymentCanDeactivate` 要求先停掉 Deployment 的活跃 Route，`validateBindingsCanDeactivate`（`e1d94be` 新增）要求先停掉 binding 上的活跃 Deployment。三级同形，都在错误里点名挡路的那个资源。
