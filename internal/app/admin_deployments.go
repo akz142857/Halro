@@ -160,7 +160,12 @@ func (r *Runtime) createAdminDeployment(writer http.ResponseWriter, request *htt
 		r.adminDeploymentInputError(writer, request, err)
 		return
 	}
-	deployment, err = r.store.PutDeployment(request.Context(), deployment, 0)
+	intent, intentErr := r.newAdminAuditIntent(request, "deployment.create", "deployment", deployment.ID)
+	if intentErr != nil {
+		adminStoreError(writer)
+		return
+	}
+	deployment, err = r.store.PutDeployment(request.Context(), deployment, 0, intent)
 	if err != nil {
 		adminMutationError(writer, err)
 		return
@@ -169,9 +174,8 @@ func (r *Runtime) createAdminDeployment(writer http.ResponseWriter, request *htt
 		adminConfigurationError(writer, err)
 		return
 	}
-	if err := r.auditAdminMutation(request, "deployment.create", "deployment", deployment.ID); err != nil {
-		adminAuditError(writer)
-		return
+	if err := r.deliverAdminAuditIntent(request.Context(), *intent); err != nil {
+		r.logger.Error("admin audit record is durable but not yet delivered", "event_id", intent.EventID, "error", err)
 	}
 	if err := r.auditCapabilitySnapshot(request, auditCapabilitySnapshotCreated, deployment,
 		capabilitySnapshotMetadata(deployment)); err != nil {
@@ -333,7 +337,12 @@ func (r *Runtime) updateAdminDeployment(writer http.ResponseWriter, request *htt
 		writeJSON(writer, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
 	}
-	deployment, err = r.store.PutDeployment(request.Context(), deployment, expected)
+	intent, intentErr := r.newAdminAuditIntent(request, "deployment.update", "deployment", deployment.ID)
+	if intentErr != nil {
+		adminStoreError(writer)
+		return
+	}
+	deployment, err = r.store.PutDeployment(request.Context(), deployment, expected, intent)
 	if err != nil {
 		adminMutationError(writer, err)
 		return
@@ -342,9 +351,8 @@ func (r *Runtime) updateAdminDeployment(writer http.ResponseWriter, request *htt
 		adminConfigurationError(writer, err)
 		return
 	}
-	if err := r.auditAdminMutation(request, "deployment.update", "deployment", deployment.ID); err != nil {
-		adminAuditError(writer)
-		return
+	if err := r.deliverAdminAuditIntent(request.Context(), *intent); err != nil {
+		r.logger.Error("admin audit record is durable but not yet delivered", "event_id", intent.EventID, "error", err)
 	}
 	// A review is a change to what the deployment claims about its model. An
 	// edit to its name or concurrency is not one, and recording it as such
@@ -391,7 +399,12 @@ func (r *Runtime) deleteAdminDeployment(writer http.ResponseWriter, request *htt
 	deployment.Enabled = false
 	deployment.UpdatedAt = now
 	deployment.DeletedAt = &now
-	deployment, err = r.store.PutDeployment(request.Context(), deployment, expected)
+	intent, intentErr := r.newAdminAuditIntent(request, "deployment.delete", "deployment", deployment.ID)
+	if intentErr != nil {
+		adminStoreError(writer)
+		return
+	}
+	deployment, err = r.store.PutDeployment(request.Context(), deployment, expected, intent)
 	if err != nil {
 		adminMutationError(writer, err)
 		return
@@ -400,9 +413,8 @@ func (r *Runtime) deleteAdminDeployment(writer http.ResponseWriter, request *htt
 		adminConfigurationError(writer, err)
 		return
 	}
-	if err := r.auditAdminMutation(request, "deployment.delete", "deployment", deployment.ID); err != nil {
-		adminAuditError(writer)
-		return
+	if err := r.deliverAdminAuditIntent(request.Context(), *intent); err != nil {
+		r.logger.Error("admin audit record is durable but not yet delivered", "event_id", intent.EventID, "error", err)
 	}
 	writer.Header().Set("ETag", revisionETag(deployment.Revision))
 	writer.WriteHeader(http.StatusNoContent)
@@ -472,19 +484,24 @@ func (r *Runtime) testAdminDeployment(writer http.ResponseWriter, request *http.
 		current.LastTestErrorClass = string(errorClass)
 	}
 	current.UpdatedAt = testedAt
-	current, storeErr = r.store.PutDeployment(request.Context(), current, testedRevision)
+	action := "deployment.test.success"
+	if probeErr != nil {
+		action = "deployment.test.failure"
+	}
+	intent, intentErr := r.newAdminAuditIntent(request, action, "deployment", deployment.ID)
+	if intentErr != nil {
+		r.adminTopologyMu.Unlock()
+		adminStoreError(writer)
+		return
+	}
+	current, storeErr = r.store.PutDeployment(request.Context(), current, testedRevision, intent)
 	r.adminTopologyMu.Unlock()
 	if storeErr != nil {
 		adminMutationError(writer, storeErr)
 		return
 	}
-	action := "deployment.test.success"
-	if probeErr != nil {
-		action = "deployment.test.failure"
-	}
-	if err := r.auditAdminMutation(request, action, "deployment", deployment.ID); err != nil {
-		adminAuditError(writer)
-		return
+	if err := r.deliverAdminAuditIntent(request.Context(), *intent); err != nil {
+		r.logger.Error("admin audit record is durable but not yet delivered", "event_id", intent.EventID, "error", err)
 	}
 	result := map[string]any{
 		"status": status, "latency_ms": latencyMS, "tested_at": testedAt, "revision": current.Revision,

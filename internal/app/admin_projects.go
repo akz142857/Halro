@@ -77,7 +77,12 @@ func (r *Runtime) createAdminProject(writer http.ResponseWriter, request *http.R
 		writeJSON(writer, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
 	}
-	project, err = r.store.PutProject(request.Context(), project, 0)
+	intent, intentErr := r.newAdminAuditIntent(request, "project.create", "project", project.ID)
+	if intentErr != nil {
+		adminStoreError(writer)
+		return
+	}
+	project, err = r.store.PutProject(request.Context(), project, 0, intent)
 	if err != nil {
 		adminMutationError(writer, err)
 		return
@@ -85,9 +90,8 @@ func (r *Runtime) createAdminProject(writer http.ResponseWriter, request *http.R
 	if !r.refreshAdminAuth(writer, request) {
 		return
 	}
-	if err := r.auditAdminMutation(request, "project.create", "project", project.ID); err != nil {
-		adminAuditError(writer)
-		return
+	if err := r.deliverAdminAuditIntent(request.Context(), *intent); err != nil {
+		r.logger.Error("admin audit record is durable but not yet delivered", "event_id", intent.EventID, "error", err)
 	}
 	writer.Header().Set("ETag", revisionETag(project.Revision))
 	writeJSON(writer, http.StatusCreated, project)
@@ -130,7 +134,12 @@ func (r *Runtime) updateAdminProject(writer http.ResponseWriter, request *http.R
 		writeJSON(writer, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
 	}
-	replacement, err = r.store.PutProject(request.Context(), replacement, expected)
+	intent, intentErr := r.newAdminAuditIntent(request, "project.update", "project", replacement.ID)
+	if intentErr != nil {
+		adminStoreError(writer)
+		return
+	}
+	replacement, err = r.store.PutProject(request.Context(), replacement, expected, intent)
 	if err != nil {
 		adminMutationError(writer, err)
 		return
@@ -138,9 +147,8 @@ func (r *Runtime) updateAdminProject(writer http.ResponseWriter, request *http.R
 	if !r.refreshAdminAuth(writer, request) {
 		return
 	}
-	if err := r.auditAdminMutation(request, "project.update", "project", replacement.ID); err != nil {
-		adminAuditError(writer)
-		return
+	if err := r.deliverAdminAuditIntent(request.Context(), *intent); err != nil {
+		r.logger.Error("admin audit record is durable but not yet delivered", "event_id", intent.EventID, "error", err)
 	}
 	writer.Header().Set("ETag", revisionETag(replacement.Revision))
 	writeJSON(writer, http.StatusOK, replacement)
@@ -173,7 +181,12 @@ func (r *Runtime) deleteAdminProject(writer http.ResponseWriter, request *http.R
 	project.Enabled = false
 	project.UpdatedAt = now
 	project.DeletedAt = &now
-	project, err = r.store.PutProject(request.Context(), project, expected)
+	intent, intentErr := r.newAdminAuditIntent(request, "project.delete", "project", project.ID)
+	if intentErr != nil {
+		adminStoreError(writer)
+		return
+	}
+	project, err = r.store.PutProject(request.Context(), project, expected, intent)
 	if err != nil {
 		adminMutationError(writer, err)
 		return
@@ -181,9 +194,8 @@ func (r *Runtime) deleteAdminProject(writer http.ResponseWriter, request *http.R
 	if !r.refreshAdminAuth(writer, request) {
 		return
 	}
-	if err := r.auditAdminMutation(request, "project.delete", "project", project.ID); err != nil {
-		adminAuditError(writer)
-		return
+	if err := r.deliverAdminAuditIntent(request.Context(), *intent); err != nil {
+		r.logger.Error("admin audit record is durable but not yet delivered", "event_id", intent.EventID, "error", err)
 	}
 	writer.Header().Set("ETag", revisionETag(project.Revision))
 	writer.WriteHeader(http.StatusNoContent)
@@ -246,7 +258,12 @@ func (r *Runtime) createAdminProjectKey(writer http.ResponseWriter, request *htt
 		adminNotFound(writer)
 		return
 	}
-	key, err = r.store.PutGatewayKey(request.Context(), key, 0)
+	intent, intentErr := r.newAdminAuditIntent(request, "gateway_key.create", "gateway_key", keyID)
+	if intentErr != nil {
+		adminStoreError(writer)
+		return
+	}
+	key, err = r.store.PutGatewayKey(request.Context(), key, 0, intent)
 	if errors.Is(err, boltstore.ErrAlreadyExists) {
 		// The first attempt already landed. Say so explicitly rather than minting a
 		// duplicate: the operator has to revoke and reissue to obtain a plaintext.
@@ -264,9 +281,8 @@ func (r *Runtime) createAdminProjectKey(writer http.ResponseWriter, request *htt
 	if !r.refreshAdminAuth(writer, request) {
 		return
 	}
-	if err := r.auditAdminMutation(request, "gateway_key.create", "gateway_key", key.ID); err != nil {
-		adminAuditError(writer)
-		return
+	if err := r.deliverAdminAuditIntent(request.Context(), *intent); err != nil {
+		r.logger.Error("admin audit record is durable but not yet delivered", "event_id", intent.EventID, "error", err)
 	}
 	writer.Header().Set("Cache-Control", "no-store")
 	writer.Header().Set("ETag", revisionETag(key.Revision))
@@ -316,7 +332,12 @@ func (r *Runtime) updateAdminProjectKey(writer http.ResponseWriter, request *htt
 	if input.Enabled != nil {
 		key.Enabled = *input.Enabled
 	}
-	key, err := r.store.PutGatewayKey(request.Context(), key, expected)
+	intent, intentErr := r.newAdminAuditIntent(request, "gateway_key.update", "gateway_key", key.ID)
+	if intentErr != nil {
+		adminStoreError(writer)
+		return
+	}
+	key, err := r.store.PutGatewayKey(request.Context(), key, expected, intent)
 	if err != nil {
 		adminMutationError(writer, err)
 		return
@@ -324,9 +345,8 @@ func (r *Runtime) updateAdminProjectKey(writer http.ResponseWriter, request *htt
 	if !r.refreshAdminAuth(writer, request) {
 		return
 	}
-	if err := r.auditAdminMutation(request, "gateway_key.update", "gateway_key", key.ID); err != nil {
-		adminAuditError(writer)
-		return
+	if err := r.deliverAdminAuditIntent(request.Context(), *intent); err != nil {
+		r.logger.Error("admin audit record is durable but not yet delivered", "event_id", intent.EventID, "error", err)
 	}
 	writer.Header().Set("ETag", revisionETag(key.Revision))
 	writeJSON(writer, http.StatusOK, gatewayKeyView{
@@ -360,7 +380,12 @@ func (r *Runtime) deleteAdminProjectKey(writer http.ResponseWriter, request *htt
 	now := time.Now().UTC()
 	key.Enabled = false
 	key.DeletedAt = &now
-	key, err := r.store.PutGatewayKey(request.Context(), key, expected)
+	intent, intentErr := r.newAdminAuditIntent(request, "gateway_key.delete", "gateway_key", key.ID)
+	if intentErr != nil {
+		adminStoreError(writer)
+		return
+	}
+	key, err := r.store.PutGatewayKey(request.Context(), key, expected, intent)
 	if err != nil {
 		adminMutationError(writer, err)
 		return
@@ -368,9 +393,8 @@ func (r *Runtime) deleteAdminProjectKey(writer http.ResponseWriter, request *htt
 	if !r.refreshAdminAuth(writer, request) {
 		return
 	}
-	if err := r.auditAdminMutation(request, "gateway_key.delete", "gateway_key", key.ID); err != nil {
-		adminAuditError(writer)
-		return
+	if err := r.deliverAdminAuditIntent(request.Context(), *intent); err != nil {
+		r.logger.Error("admin audit record is durable but not yet delivered", "event_id", intent.EventID, "error", err)
 	}
 	writer.Header().Set("ETag", revisionETag(key.Revision))
 	writer.WriteHeader(http.StatusNoContent)

@@ -661,6 +661,19 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		secretVault.Close()
 		return fail(fmt.Errorf("recover pending pricing audit: %w", err))
 	}
+	// An admin mutation is durable together with its audit record, so anything
+	// still pending here is a crash between that commit and the append. It is
+	// delivered before the instance serves, which is what makes "the mutation
+	// happened but nothing recorded it" unreachable rather than merely rare.
+	if err := runtime.drainAdminAuditIntents(ctx); err != nil {
+		auditLog.Close()
+		alertDispatcher.Close()
+		ledgerLog.Close()
+		metadata.Close()
+		providerRegistry.Close()
+		secretVault.Close()
+		return fail(fmt.Errorf("recover pending admin audit: %w", err))
+	}
 	// Emitted here rather than at the load itself: the audit log only exists
 	// once the runtime is assembled, and a deployment that came up withheld is
 	// exactly the state §4.4 wants a durable record of.

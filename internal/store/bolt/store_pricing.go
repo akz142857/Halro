@@ -126,7 +126,7 @@ func normalizeDeploymentBinding(deployment *domain.Deployment, instance domain.P
 	}
 }
 
-func (s *Store) PutDeployment(ctx context.Context, deployment domain.Deployment, expectedRevision uint64) (domain.Deployment, error) {
+func (s *Store) PutDeployment(ctx context.Context, deployment domain.Deployment, expectedRevision uint64, intent *domain.AdminAuditIntent) (domain.Deployment, error) {
 	if err := ctx.Err(); err != nil {
 		return domain.Deployment{}, err
 	}
@@ -145,7 +145,10 @@ func (s *Store) PutDeployment(ctx context.Context, deployment domain.Deployment,
 		if err := validateDeploymentProviderProfile(deployment, instance); err != nil {
 			return err
 		}
-		return putVersioned(tx.Bucket(bucketDeployments), deployment.ID, expectedRevision, &deployment)
+		if err := putVersioned(tx.Bucket(bucketDeployments), deployment.ID, expectedRevision, &deployment); err != nil {
+			return err
+		}
+		return putAdminAuditIntentTx(tx, intent)
 	})
 	return deployment, err
 }

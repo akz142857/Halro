@@ -194,7 +194,7 @@ func twoInterfaceProviderForTest(t *testing.T) (*Runtime, domain.ProviderInstanc
 	media.CapabilityEvidence = domain.EvidenceForCapabilities(media.Capabilities, domain.EvidenceDeclared)
 	instance.Bindings = []domain.ProviderProfileBinding{chat, media}
 	instance.Capabilities, instance.CapabilityEvidence = domain.BindingsCapabilitiesSummary(instance.Bindings)
-	stored, err := runtime.store.PutProvider(context.Background(), instance, instance.Revision)
+	stored, err := runtime.store.PutProvider(context.Background(), instance, instance.Revision, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

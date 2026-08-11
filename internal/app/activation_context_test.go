@@ -68,7 +68,7 @@ func TestRevokedKeyStopsAuthenticatingWhenTheAdminClientDisconnects(t *testing.T
 		t.Fatal(err)
 	}
 	key.Enabled = false
-	if _, err := runtime.store.PutGatewayKey(context.Background(), key, key.Revision); err != nil {
+	if _, err := runtime.store.PutGatewayKey(context.Background(), key, key.Revision, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -90,7 +90,7 @@ func TestDisabledProjectStopsAuthorizingWhenTheAdminClientDisconnects(t *testing
 		t.Fatal(err)
 	}
 	project.Enabled = false
-	if _, err := runtime.store.PutProject(context.Background(), project, project.Revision); err != nil {
+	if _, err := runtime.store.PutProject(context.Background(), project, project.Revision, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -119,7 +119,7 @@ func TestDeletedRouteStopsRoutingOnRuntimeOwnedActivation(t *testing.T) {
 	}
 	now := runtime.now().UTC()
 	route.Enabled, route.DeletedAt = false, &now
-	if _, err := runtime.store.PutRoute(context.Background(), route, route.Revision); err != nil {
+	if _, err := runtime.store.PutRoute(context.Background(), route, route.Revision, nil); err != nil {
 		t.Fatal(err)
 	}
 

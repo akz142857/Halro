@@ -23,7 +23,7 @@ func TestRuntimeRejectsMissingTokenGuardPolicyReference(t *testing.T) {
 	}
 	_, err = store.PutProject(context.Background(), domain.Project{
 		ID: "project_1", Name: "Project", Enabled: true, TokenGuardPolicyID: "missing",
-	}, 0)
+	}, 0, nil)
 	if closeErr := store.Close(); err == nil {
 		err = closeErr
 	}
@@ -55,7 +55,7 @@ func TestRuntimeLoadsReferencedTokenGuardPolicy(t *testing.T) {
 	}
 	if _, err := store.PutProject(context.Background(), domain.Project{
 		ID: "project_1", Name: "Project", Enabled: true, TokenGuardPolicyID: policy.ID,
-	}, 0); err != nil {
+	}, 0, nil); err != nil {
 		store.Close()
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestRuntimePersistsAndRestoresEWMABaseline(t *testing.T) {
 	}
 	if _, err := store.PutProject(context.Background(), domain.Project{
 		ID: "project_1", Name: "Project", Enabled: true, TokenGuardPolicyID: policy.ID,
-	}, 0); err != nil {
+	}, 0, nil); err != nil {
 		store.Close()
 		t.Fatal(err)
 	}

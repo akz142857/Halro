@@ -74,7 +74,7 @@ func TestAdminRedactionPolicyLifecycleTestAndReferenceProtection(t *testing.T) {
 	if _, err := runtime.store.PutProject(context.Background(), domain.Project{
 		ID: "prj_redacted", Name: "Redacted", Enabled: true,
 		RedactionPolicyID: policy.ID, CreatedAt: now, UpdatedAt: now,
-	}, 0); err != nil {
+	}, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	listed := performAdminMutation(t, runtime, cookie, csrf,
@@ -105,7 +105,7 @@ func TestAdminRedactionPolicyLifecycleTestAndReferenceProtection(t *testing.T) {
 		t.Fatal(err)
 	}
 	project.Enabled = false
-	project, err = runtime.store.PutProject(context.Background(), project, project.Revision)
+	project, err = runtime.store.PutProject(context.Background(), project, project.Revision, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func TestAdminRedactionPolicyLifecycleTestAndReferenceProtection(t *testing.T) {
 	}
 
 	project.RedactionPolicyID = ""
-	if _, err := runtime.store.PutProject(context.Background(), project, project.Revision); err != nil {
+	if _, err := runtime.store.PutProject(context.Background(), project, project.Revision, nil); err != nil {
 		t.Fatal(err)
 	}
 	released := performAdminMutation(t, runtime, cookie, csrf,

@@ -140,7 +140,7 @@ func TestVersionedPricingMigrationRejectsEnabledAmbiguousZeroPrice(t *testing.T)
 		t.Fatal(err)
 	}
 	deployment.Enabled = true
-	if _, err := store.PutDeployment(context.Background(), deployment, deployment.Revision); err != nil {
+	if _, err := store.PutDeployment(context.Background(), deployment, deployment.Revision, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {
@@ -523,7 +523,7 @@ func seedPricingDeployment(t testing.TB, store *Store, deploymentID string, inpu
 		AccessSurface: profile.AccessSurface, Scheme: profile.CredentialScheme,
 		Audience: "audience", Ciphertext: []byte("ciphertext"), KeyVersion: 1,
 		CreatedAt: now, UpdatedAt: now,
-	}, 0)
+	}, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -535,7 +535,7 @@ func seedPricingDeployment(t testing.TB, store *Store, deploymentID string, inpu
 		AllowedHosts: []string{"api.openai.com"}, Capabilities: capabilities,
 		CapabilityEvidence: domain.EvidenceForCapabilities(capabilities, domain.EvidenceDeclared),
 		Enabled:            true, CreatedAt: now, UpdatedAt: now,
-	}, 0)
+	}, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -547,7 +547,7 @@ func seedPricingDeployment(t testing.TB, store *Store, deploymentID string, inpu
 		ModelCapabilitySnapshot: domain.DeclaredCapabilitySnapshot("gpt-test", "sha256:test", capabilities, now),
 		InputMicrosPerMillion:   input, OutputMicrosPerMillion: output, FixedRequestMicrosUSD: fixed,
 		Enabled: false, CreatedAt: now, UpdatedAt: now,
-	}, 0)
+	}, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

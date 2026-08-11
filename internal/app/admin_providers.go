@@ -73,14 +73,18 @@ func (r *Runtime) createAdminCredential(writer http.ResponseWriter, request *htt
 	}
 	r.adminTopologyMu.Lock()
 	defer r.adminTopologyMu.Unlock()
-	credential, err = r.store.PutCredential(request.Context(), credential, 0)
+	intent, intentErr := r.newAdminAuditIntent(request, "credential.create", "credential", credential.ID)
+	if intentErr != nil {
+		adminStoreError(writer)
+		return
+	}
+	credential, err = r.store.PutCredential(request.Context(), credential, 0, intent)
 	if err != nil {
 		adminMutationError(writer, err)
 		return
 	}
-	if err := r.auditAdminMutation(request, "credential.create", "credential", credential.ID); err != nil {
-		adminAuditError(writer)
-		return
+	if err := r.deliverAdminAuditIntent(request.Context(), *intent); err != nil {
+		r.logger.Error("admin audit record is durable but not yet delivered", "event_id", intent.EventID, "error", err)
 	}
 	writer.Header().Set("ETag", revisionETag(credential.Revision))
 	writeJSON(writer, http.StatusCreated, credentialViewFrom(credential))
@@ -116,7 +120,12 @@ func (r *Runtime) updateAdminCredential(writer http.ResponseWriter, request *htt
 		writeJSON(writer, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
 	}
-	credential, err = r.store.PutCredential(request.Context(), credential, expected)
+	intent, intentErr := r.newAdminAuditIntent(request, "credential.rotate", "credential", credential.ID)
+	if intentErr != nil {
+		adminStoreError(writer)
+		return
+	}
+	credential, err = r.store.PutCredential(request.Context(), credential, expected, intent)
 	if err != nil {
 		adminMutationError(writer, err)
 		return
@@ -126,9 +135,8 @@ func (r *Runtime) updateAdminCredential(writer http.ResponseWriter, request *htt
 		return
 	}
 	r.clearAllInvocationTargetCatalogs()
-	if err := r.auditAdminMutation(request, "credential.rotate", "credential", credential.ID); err != nil {
-		adminAuditError(writer)
-		return
+	if err := r.deliverAdminAuditIntent(request.Context(), *intent); err != nil {
+		r.logger.Error("admin audit record is durable but not yet delivered", "event_id", intent.EventID, "error", err)
 	}
 	writer.Header().Set("ETag", revisionETag(credential.Revision))
 	writeJSON(writer, http.StatusOK, credentialViewFrom(credential))
@@ -149,7 +157,12 @@ func (r *Runtime) deleteAdminCredential(writer http.ResponseWriter, request *htt
 	credentialID := chi.URLParam(request, "id")
 	r.adminTopologyMu.Lock()
 	defer r.adminTopologyMu.Unlock()
-	if err := r.store.DeleteCredential(request.Context(), credentialID, expected); err != nil {
+	intent, intentErr := r.newAdminAuditIntent(request, "credential.delete", "credential", credentialID)
+	if intentErr != nil {
+		adminStoreError(writer)
+		return
+	}
+	if err := r.store.DeleteCredential(request.Context(), credentialID, expected, intent); err != nil {
 		if errors.Is(err, boltstore.ErrCredentialInUse) {
 			writeJSON(writer, http.StatusConflict, map[string]string{"error": "credential is still referenced"})
 			return
@@ -157,9 +170,8 @@ func (r *Runtime) deleteAdminCredential(writer http.ResponseWriter, request *htt
 		adminMutationError(writer, err)
 		return
 	}
-	if err := r.auditAdminMutation(request, "credential.delete", "credential", credentialID); err != nil {
-		adminAuditError(writer)
-		return
+	if err := r.deliverAdminAuditIntent(request.Context(), *intent); err != nil {
+		r.logger.Error("admin audit record is durable but not yet delivered", "event_id", intent.EventID, "error", err)
 	}
 	writer.WriteHeader(http.StatusNoContent)
 }
@@ -183,7 +195,12 @@ func (r *Runtime) createAdminProvider(writer http.ResponseWriter, request *http.
 		adminBadRequest(writer, err.Error())
 		return
 	}
-	instance, err = r.store.PutProvider(request.Context(), instance, 0)
+	intent, intentErr := r.newAdminAuditIntent(request, "provider.create", "provider", instance.ID)
+	if intentErr != nil {
+		adminStoreError(writer)
+		return
+	}
+	instance, err = r.store.PutProvider(request.Context(), instance, 0, intent)
 	if err != nil {
 		adminMutationError(writer, err)
 		return
@@ -192,9 +209,8 @@ func (r *Runtime) createAdminProvider(writer http.ResponseWriter, request *http.
 		adminConfigurationError(writer, err)
 		return
 	}
-	if err := r.auditAdminMutation(request, "provider.create", "provider", instance.ID); err != nil {
-		adminAuditError(writer)
-		return
+	if err := r.deliverAdminAuditIntent(request.Context(), *intent); err != nil {
+		r.logger.Error("admin audit record is durable but not yet delivered", "event_id", intent.EventID, "error", err)
 	}
 	writer.Header().Set("ETag", revisionETag(instance.Revision))
 	writeJSON(writer, http.StatusCreated, instance)
@@ -265,7 +281,12 @@ func (r *Runtime) updateAdminProvider(writer http.ResponseWriter, request *http.
 	instance.LastTestRevision = current.LastTestRevision
 	instance.LastTestHealthyTargets = current.LastTestHealthyTargets
 	instance.LastTestTotalTargets = current.LastTestTotalTargets
-	instance, err = r.store.PutProvider(request.Context(), instance, expected)
+	intent, intentErr := r.newAdminAuditIntent(request, "provider.update", "provider", instance.ID)
+	if intentErr != nil {
+		adminStoreError(writer)
+		return
+	}
+	instance, err = r.store.PutProvider(request.Context(), instance, expected, intent)
 	if err != nil {
 		adminMutationError(writer, err)
 		return
@@ -275,9 +296,8 @@ func (r *Runtime) updateAdminProvider(writer http.ResponseWriter, request *http.
 		return
 	}
 	r.clearInvocationTargetCatalog(instance.ID)
-	if err := r.auditAdminMutation(request, "provider.update", "provider", instance.ID); err != nil {
-		adminAuditError(writer)
-		return
+	if err := r.deliverAdminAuditIntent(request.Context(), *intent); err != nil {
+		r.logger.Error("admin audit record is durable but not yet delivered", "event_id", intent.EventID, "error", err)
 	}
 	writer.Header().Set("ETag", revisionETag(instance.Revision))
 	writeJSON(writer, http.StatusOK, instance)
@@ -314,7 +334,12 @@ func (r *Runtime) deleteAdminProvider(writer http.ResponseWriter, request *http.
 	instance.Enabled = false
 	instance.UpdatedAt = now
 	instance.DeletedAt = &now
-	instance, err = r.store.PutProvider(request.Context(), instance, expected)
+	intent, intentErr := r.newAdminAuditIntent(request, "provider.delete", "provider", instance.ID)
+	if intentErr != nil {
+		adminStoreError(writer)
+		return
+	}
+	instance, err = r.store.PutProvider(request.Context(), instance, expected, intent)
 	if err != nil {
 		adminMutationError(writer, err)
 		return
@@ -324,9 +349,8 @@ func (r *Runtime) deleteAdminProvider(writer http.ResponseWriter, request *http.
 		return
 	}
 	r.clearInvocationTargetCatalog(instance.ID)
-	if err := r.auditAdminMutation(request, "provider.delete", "provider", instance.ID); err != nil {
-		adminAuditError(writer)
-		return
+	if err := r.deliverAdminAuditIntent(request.Context(), *intent); err != nil {
+		r.logger.Error("admin audit record is durable but not yet delivered", "event_id", intent.EventID, "error", err)
 	}
 	writer.Header().Set("ETag", revisionETag(instance.Revision))
 	writer.WriteHeader(http.StatusNoContent)
@@ -446,19 +470,24 @@ func (r *Runtime) testAdminProvider(writer http.ResponseWriter, request *http.Re
 		current.LastTestErrorClass = string(errorClass)
 	}
 	current.UpdatedAt = testedAt
-	current, storeErr = r.store.PutProvider(request.Context(), current, testedRevision)
+	action := "provider.test.success"
+	if probeErr != nil {
+		action = "provider.test.failure"
+	}
+	intent, intentErr := r.newAdminAuditIntent(request, action, "provider", providerID)
+	if intentErr != nil {
+		r.adminTopologyMu.Unlock()
+		adminStoreError(writer)
+		return
+	}
+	current, storeErr = r.store.PutProvider(request.Context(), current, testedRevision, intent)
 	r.adminTopologyMu.Unlock()
 	if storeErr != nil {
 		adminMutationError(writer, storeErr)
 		return
 	}
-	action := "provider.test.success"
-	if probeErr != nil {
-		action = "provider.test.failure"
-	}
-	if err := r.auditAdminMutation(request, action, "provider", providerID); err != nil {
-		adminAuditError(writer)
-		return
+	if err := r.deliverAdminAuditIntent(request.Context(), *intent); err != nil {
+		r.logger.Error("admin audit record is durable but not yet delivered", "event_id", intent.EventID, "error", err)
 	}
 	result := map[string]any{
 		"status": status, "latency_ms": maxLatencyMS, "tested_at": testedAt, "revision": current.Revision,
@@ -577,19 +606,24 @@ func (r *Runtime) testAdminRoute(writer http.ResponseWriter, request *http.Reque
 		current.LastTestErrorClass = string(errorClass)
 	}
 	current.UpdatedAt = testedAt
-	current, storeErr = r.store.PutRoute(request.Context(), current, testedRevision)
+	action := "route.test.success"
+	if probeErr != nil {
+		action = "route.test.failure"
+	}
+	intent, intentErr := r.newAdminAuditIntent(request, action, "route", route.ID)
+	if intentErr != nil {
+		r.adminTopologyMu.Unlock()
+		adminStoreError(writer)
+		return
+	}
+	current, storeErr = r.store.PutRoute(request.Context(), current, testedRevision, intent)
 	r.adminTopologyMu.Unlock()
 	if storeErr != nil {
 		adminMutationError(writer, storeErr)
 		return
 	}
-	action := "route.test.success"
-	if probeErr != nil {
-		action = "route.test.failure"
-	}
-	if err := r.auditAdminMutation(request, action, "route", route.ID); err != nil {
-		adminAuditError(writer)
-		return
+	if err := r.deliverAdminAuditIntent(request.Context(), *intent); err != nil {
+		r.logger.Error("admin audit record is durable but not yet delivered", "event_id", intent.EventID, "error", err)
 	}
 	result := map[string]any{
 		"status": status, "latency_ms": latencyMS, "tested_at": testedAt, "revision": current.Revision,
@@ -627,7 +661,12 @@ func (r *Runtime) createAdminRoute(writer http.ResponseWriter, request *http.Req
 		adminBadRequest(writer, err.Error())
 		return
 	}
-	route, err = r.store.PutRoute(request.Context(), route, 0)
+	intent, intentErr := r.newAdminAuditIntent(request, "route.create", "route", route.ID)
+	if intentErr != nil {
+		adminStoreError(writer)
+		return
+	}
+	route, err = r.store.PutRoute(request.Context(), route, 0, intent)
 	if err != nil {
 		adminMutationError(writer, err)
 		return
@@ -636,9 +675,8 @@ func (r *Runtime) createAdminRoute(writer http.ResponseWriter, request *http.Req
 		adminConfigurationError(writer, err)
 		return
 	}
-	if err := r.auditAdminMutation(request, "route.create", "route", route.ID); err != nil {
-		adminAuditError(writer)
-		return
+	if err := r.deliverAdminAuditIntent(request.Context(), *intent); err != nil {
+		r.logger.Error("admin audit record is durable but not yet delivered", "event_id", intent.EventID, "error", err)
 	}
 	writer.Header().Set("ETag", revisionETag(route.Revision))
 	writeJSON(writer, http.StatusCreated, route)
@@ -691,7 +729,12 @@ func (r *Runtime) updateAdminRoute(writer http.ResponseWriter, request *http.Req
 		})
 		return
 	}
-	route, err = r.store.PutRoute(request.Context(), route, expected)
+	intent, intentErr := r.newAdminAuditIntent(request, "route.update", "route", route.ID)
+	if intentErr != nil {
+		adminStoreError(writer)
+		return
+	}
+	route, err = r.store.PutRoute(request.Context(), route, expected, intent)
 	if err != nil {
 		adminMutationError(writer, err)
 		return
@@ -700,9 +743,8 @@ func (r *Runtime) updateAdminRoute(writer http.ResponseWriter, request *http.Req
 		adminConfigurationError(writer, err)
 		return
 	}
-	if err := r.auditAdminMutation(request, "route.update", "route", route.ID); err != nil {
-		adminAuditError(writer)
-		return
+	if err := r.deliverAdminAuditIntent(request.Context(), *intent); err != nil {
+		r.logger.Error("admin audit record is durable but not yet delivered", "event_id", intent.EventID, "error", err)
 	}
 	writer.Header().Set("ETag", revisionETag(route.Revision))
 	writeJSON(writer, http.StatusOK, route)
@@ -744,7 +786,12 @@ func (r *Runtime) deleteAdminRoute(writer http.ResponseWriter, request *http.Req
 	route.Enabled = false
 	route.UpdatedAt = now
 	route.DeletedAt = &now
-	route, err = r.store.PutRoute(request.Context(), route, expected)
+	intent, intentErr := r.newAdminAuditIntent(request, "route.delete", "route", route.ID)
+	if intentErr != nil {
+		adminStoreError(writer)
+		return
+	}
+	route, err = r.store.PutRoute(request.Context(), route, expected, intent)
 	if err != nil {
 		adminMutationError(writer, err)
 		return
@@ -753,9 +800,8 @@ func (r *Runtime) deleteAdminRoute(writer http.ResponseWriter, request *http.Req
 		adminConfigurationError(writer, err)
 		return
 	}
-	if err := r.auditAdminMutation(request, "route.delete", "route", route.ID); err != nil {
-		adminAuditError(writer)
-		return
+	if err := r.deliverAdminAuditIntent(request.Context(), *intent); err != nil {
+		r.logger.Error("admin audit record is durable but not yet delivered", "event_id", intent.EventID, "error", err)
 	}
 	writer.Header().Set("ETag", revisionETag(route.Revision))
 	writer.WriteHeader(http.StatusNoContent)

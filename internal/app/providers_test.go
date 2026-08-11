@@ -89,7 +89,7 @@ func seedProvider(t *testing.T, cfg config.Config, mismatch bool) {
 		CreatedAt:  now,
 		UpdatedAt:  now,
 	}
-	if _, err := store.PutCredential(context.Background(), credential, 0); err != nil {
+	if _, err := store.PutCredential(context.Background(), credential, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	instance := domain.ProviderInstance{
@@ -106,7 +106,7 @@ func seedProvider(t *testing.T, cfg config.Config, mismatch bool) {
 		CredentialScheme: profile.CredentialScheme, Capabilities: capabilities,
 		CapabilityEvidence: domain.EvidenceForCapabilities(capabilities, domain.EvidenceDeclared),
 	}
-	if _, err := store.PutProvider(context.Background(), instance, 0); err != nil {
+	if _, err := store.PutProvider(context.Background(), instance, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	// A route names a deployment; provider, model, price, capabilities and
@@ -120,7 +120,7 @@ func seedProvider(t *testing.T, cfg config.Config, mismatch bool) {
 			"gpt-test", "sha256:test", capabilities, now),
 		Enabled: true, CreatedAt: now, UpdatedAt: now,
 	}
-	if _, err := store.PutDeployment(context.Background(), deployment, 0); err != nil {
+	if _, err := store.PutDeployment(context.Background(), deployment, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	route := domain.Route{
@@ -131,7 +131,7 @@ func seedProvider(t *testing.T, cfg config.Config, mismatch bool) {
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}
-	if _, err := store.PutRoute(context.Background(), route, 0); err != nil {
+	if _, err := store.PutRoute(context.Background(), route, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -21,7 +21,7 @@ import (
 	bbolt "go.etcd.io/bbolt"
 )
 
-const schemaVersion uint64 = 26
+const schemaVersion uint64 = 27
 
 // legacyCapabilityEvidence is the evidence tier this project used before
 // capability evidence was durable metadata. The domain no longer accepts it, so
@@ -78,6 +78,7 @@ var (
 	bucketDeploymentPricingHighWater = []byte("deployment_pricing_high_water")
 	bucketDeploymentPricePins        = []byte("deployment_price_pin_intents")
 	bucketPricingAuditIntents        = []byte("pricing_audit_intents")
+	bucketAdminAuditIntents          = []byte("admin_audit_intents")
 	bucketPricingIdempotency         = []byte("pricing_idempotency")
 	bucketDeploymentPriceProposals   = []byte("deployment_price_proposals")
 	bucketPricingProposalIdempotency = []byte("pricing_proposal_idempotency")
@@ -641,6 +642,20 @@ var migrations = []migration{
 			}
 		}
 		return migrationStep(step, "after_reset_detections_for_verifiable_scope")
+	}},
+	// Admin mutations gained a durable audit intent so the store commit is the
+	// only commit point: the audit record is written with the mutation and
+	// delivered afterwards. Nothing existing has to be reshaped — an instance
+	// upgrading here simply has no pending intents, which is the same state a
+	// fully drained instance is in.
+	{version: 27, name: "admin_audit_intents", up: func(tx *bbolt.Tx, step func(string) error) error {
+		if err := migrationStep(step, "before_create_admin_audit_intents"); err != nil {
+			return err
+		}
+		if _, err := tx.CreateBucketIfNotExists(bucketAdminAuditIntents); err != nil {
+			return err
+		}
+		return migrationStep(step, "after_create_admin_audit_intents")
 	}},
 }
 
@@ -1276,6 +1291,7 @@ func requiredBuckets() [][]byte {
 		bucketDeploymentPricingHighWater,
 		bucketDeploymentPricePins,
 		bucketPricingAuditIntents,
+		bucketAdminAuditIntents,
 		bucketPricingIdempotency,
 		bucketDeploymentPriceProposals,
 		bucketPricingProposalIdempotency,

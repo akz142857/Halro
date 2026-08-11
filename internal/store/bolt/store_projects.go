@@ -12,7 +12,7 @@ import (
 	bbolt "go.etcd.io/bbolt"
 )
 
-func (s *Store) PutProject(ctx context.Context, project domain.Project, expectedRevision uint64) (domain.Project, error) {
+func (s *Store) PutProject(ctx context.Context, project domain.Project, expectedRevision uint64, intent *domain.AdminAuditIntent) (domain.Project, error) {
 	if err := project.Validate(); err != nil {
 		return domain.Project{}, err
 	}
@@ -20,7 +20,10 @@ func (s *Store) PutProject(ctx context.Context, project domain.Project, expected
 		return domain.Project{}, err
 	}
 	err := s.db.Update(func(tx *bbolt.Tx) error {
-		return putVersioned(tx.Bucket(bucketProjects), project.ID, expectedRevision, &project)
+		if err := putVersioned(tx.Bucket(bucketProjects), project.ID, expectedRevision, &project); err != nil {
+			return err
+		}
+		return putAdminAuditIntentTx(tx, intent)
 	})
 	return project, err
 }
@@ -54,7 +57,7 @@ func (s *Store) ListProjects(ctx context.Context) ([]domain.Project, error) {
 	return projects, err
 }
 
-func (s *Store) PutGatewayKey(ctx context.Context, key domain.GatewayKey, expectedRevision uint64) (domain.GatewayKey, error) {
+func (s *Store) PutGatewayKey(ctx context.Context, key domain.GatewayKey, expectedRevision uint64, intent *domain.AdminAuditIntent) (domain.GatewayKey, error) {
 	if err := key.Validate(); err != nil {
 		return domain.GatewayKey{}, err
 	}
@@ -74,7 +77,10 @@ func (s *Store) PutGatewayKey(ctx context.Context, key domain.GatewayKey, expect
 		if err := putVersioned(keys, key.ID, expectedRevision, &key); err != nil {
 			return err
 		}
-		return index.Put(key.KeyHash[:], []byte(key.ID))
+		if err := index.Put(key.KeyHash[:], []byte(key.ID)); err != nil {
+			return err
+		}
+		return putAdminAuditIntentTx(tx, intent)
 	})
 	return key, err
 }

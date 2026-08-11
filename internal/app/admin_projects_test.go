@@ -206,7 +206,7 @@ func seedRouteForTest(t *testing.T, runtime *Runtime, publicModel string) {
 		ID: "cred_route_seed", Name: "Seed", Type: domain.ProviderOpenAI,
 		Audience: "https://api.openai.com:443:openai", Ciphertext: []byte("sealed"),
 		KeyVersion: 1, CreatedAt: now, UpdatedAt: now,
-	}, 0); err != nil && !strings.Contains(err.Error(), "already exists") {
+	}, 0, nil); err != nil && !strings.Contains(err.Error(), "already exists") {
 		t.Fatal(err)
 	}
 	if _, err := runtime.store.PutProvider(context.Background(), domain.ProviderInstance{
@@ -216,7 +216,7 @@ func seedRouteForTest(t *testing.T, runtime *Runtime, publicModel string) {
 		AccessSurface: profile.AccessSurface, ProfileID: profile.ProfileID,
 		CredentialScheme: profile.CredentialScheme, Capabilities: capabilities,
 		CapabilityEvidence: domain.EvidenceForCapabilities(capabilities, domain.EvidenceDeclared),
-	}, 0); err != nil && !strings.Contains(err.Error(), "already exists") {
+	}, 0, nil); err != nil && !strings.Contains(err.Error(), "already exists") {
 		t.Fatal(err)
 	}
 	deploymentID := "dep_" + publicModel
@@ -228,13 +228,13 @@ func seedRouteForTest(t *testing.T, runtime *Runtime, publicModel string) {
 		ModelCapabilitySnapshot: domain.DeclaredCapabilitySnapshot(
 			"upstream-"+publicModel, "sha256:seed", capabilities, now),
 		Enabled: true, CreatedAt: now, UpdatedAt: now,
-	}, 0); err != nil && !strings.Contains(err.Error(), "already exists") {
+	}, 0, nil); err != nil && !strings.Contains(err.Error(), "already exists") {
 		t.Fatal(err)
 	}
 	if _, err := runtime.store.PutRoute(context.Background(), domain.Route{
 		ID: "rt_" + publicModel, PublicModel: publicModel, DeploymentID: deploymentID,
 		Enabled: true, CreatedAt: now, UpdatedAt: now,
-	}, 0); err != nil {
+	}, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 }

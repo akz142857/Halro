@@ -120,7 +120,7 @@ func driftDeployment(t *testing.T, runtime *Runtime, deploymentID string) {
 		t.Fatal(err)
 	}
 	deployment.ModelCapabilitySnapshot.Capabilities.Rerank = true
-	if _, err := runtime.store.PutDeployment(context.Background(), deployment, deployment.Revision); err != nil {
+	if _, err := runtime.store.PutDeployment(context.Background(), deployment, deployment.Revision, nil); err != nil {
 		t.Fatal(err)
 	}
 	instance, err := runtime.store.GetProvider(context.Background(), deployment.ProviderID)
@@ -144,14 +144,14 @@ func addSecondRoute(t *testing.T, runtime *Runtime, bootstrap BootstrapResult, p
 	second.ID = "dpl-second"
 	second.Name = "Second"
 	second.Revision = 0
-	if _, err := runtime.store.PutDeployment(context.Background(), second, 0); err != nil {
+	if _, err := runtime.store.PutDeployment(context.Background(), second, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	route := domain.Route{
 		ID: "rte-second", PublicModel: publicModel, DeploymentID: second.ID,
 		Enabled: true, CreatedAt: source.CreatedAt, UpdatedAt: source.UpdatedAt,
 	}
-	if _, err := runtime.store.PutRoute(context.Background(), route, 0); err != nil {
+	if _, err := runtime.store.PutRoute(context.Background(), route, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	return second.ID
@@ -270,7 +270,7 @@ func switchOffDeploymentBinding(t *testing.T, runtime *Runtime, providerID, depl
 	// projection still matches its primary binding.
 	instance.Bindings = []domain.ProviderProfileBinding{chat, media}
 	instance.Capabilities, instance.CapabilityEvidence = domain.BindingsCapabilitiesSummary(instance.Bindings)
-	if _, err := runtime.store.PutProvider(context.Background(), instance, instance.Revision); err != nil {
+	if _, err := runtime.store.PutProvider(context.Background(), instance, instance.Revision, nil); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -358,7 +358,7 @@ func TestSignedCatalogWithholdingRefreshReturnsAndFallbackRestoresRoute(t *testi
 		Status: string(modelcatalog.StatusKnown), CapturedAt: now, Capabilities: builtinEntry.Capabilities,
 	}
 	deployment.ModelCapabilitySnapshot.Evidence = domain.SnapshotEvidence(deployment.ModelCapabilitySnapshot)
-	if _, err := runtime.store.PutDeployment(context.Background(), deployment, deployment.Revision); err != nil {
+	if _, err := runtime.store.PutDeployment(context.Background(), deployment, deployment.Revision, nil); err != nil {
 		t.Fatal(err)
 	}
 	payload, root := signedCatalogPayload(t, now, modelcatalog.SnapshotEntry{
@@ -441,7 +441,7 @@ func TestModelCatalogActivationSerializesTopologyMutation(t *testing.T) {
 			return
 		}
 		route.Enabled = false
-		if _, err := runtime.store.PutRoute(context.Background(), route, route.Revision); err != nil {
+		if _, err := runtime.store.PutRoute(context.Background(), route, route.Revision, nil); err != nil {
 			done <- err
 			return
 		}

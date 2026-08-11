@@ -43,7 +43,7 @@ func TestRuntimeLoadsAudienceBoundEncryptedWebhook(t *testing.T) {
 		ID: "cred_webhook", Name: "Webhook", Type: domain.ProviderType(webhookCredentialType),
 		Audience: audience, Ciphertext: ciphertext, KeyVersion: 1, CreatedAt: now, UpdatedAt: now,
 	}
-	if _, err := store.PutCredential(context.Background(), credential, 0); err != nil {
+	if _, err := store.PutCredential(context.Background(), credential, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.PutAlertWebhook(context.Background(), domain.AlertWebhook{

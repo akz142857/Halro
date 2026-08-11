@@ -193,7 +193,7 @@ func TestMetadataMigrationFromV1IsAtomicAndRecorded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(history) != 26 ||
+	if len(history) != 27 ||
 		history[0] != (MigrationRecord{Version: 1, Name: "initial_schema"}) ||
 		history[1] != (MigrationRecord{Version: 2, Name: "migration_history"}) ||
 		history[2] != (MigrationRecord{Version: 3, Name: "deployments"}) ||
@@ -219,7 +219,8 @@ func TestMetadataMigrationFromV1IsAtomicAndRecorded(t *testing.T) {
 		history[22] != (MigrationRecord{Version: 23, Name: "deployment_snapshot_evidence_and_disabled"}) ||
 		history[23] != (MigrationRecord{Version: 24, Name: "model_capability_detections"}) ||
 		history[24] != (MigrationRecord{Version: 25, Name: "reset_capability_detections_for_interface_identification"}) ||
-		history[25] != (MigrationRecord{Version: 26, Name: "reset_capability_detections_for_verifiable_scope"}) {
+		history[25] != (MigrationRecord{Version: 26, Name: "reset_capability_detections_for_verifiable_scope"}) ||
+		history[26] != (MigrationRecord{Version: 27, Name: "admin_audit_intents"}) {
 		t.Fatalf("history=%#v", history)
 	}
 }
@@ -864,7 +865,7 @@ func TestCredentialPersistenceAndRevision(t *testing.T) {
 		CreatedAt:  time.Now().UTC(),
 		UpdatedAt:  time.Now().UTC(),
 	}
-	credential, err = store.PutCredential(ctx, credential, 0)
+	credential, err = store.PutCredential(ctx, credential, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -872,10 +873,10 @@ func TestCredentialPersistenceAndRevision(t *testing.T) {
 		t.Fatalf("unexpected revision: %d", credential.Revision)
 	}
 	credential.Name = "renamed"
-	if _, err := store.PutCredential(ctx, credential, 99); !errors.Is(err, ErrRevisionConflict) {
+	if _, err := store.PutCredential(ctx, credential, 99, nil); !errors.Is(err, ErrRevisionConflict) {
 		t.Fatalf("expected revision conflict, got %v", err)
 	}
-	credential, err = store.PutCredential(ctx, credential, 1)
+	credential, err = store.PutCredential(ctx, credential, 1, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -908,7 +909,7 @@ func TestGatewayKeyHashIndex(t *testing.T) {
 	defer store.Close()
 	ctx := context.Background()
 	project := domain.Project{ID: "prj_1", Name: "project", Enabled: true}
-	if _, err := store.PutProject(ctx, project, 0); err != nil {
+	if _, err := store.PutProject(ctx, project, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	var hash [32]byte
@@ -922,7 +923,7 @@ func TestGatewayKeyHashIndex(t *testing.T) {
 		Enabled:     true,
 		CreatedAt:   time.Now().UTC(),
 	}
-	if _, err := store.PutGatewayKey(ctx, key, 0); err != nil {
+	if _, err := store.PutGatewayKey(ctx, key, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	got, err := store.FindGatewayKeyByHash(ctx, hash)
@@ -951,7 +952,7 @@ func TestProviderAndRouteReferencesAndUniqueness(t *testing.T) {
 		CreatedAt:  time.Now().UTC(),
 		UpdatedAt:  time.Now().UTC(),
 	}
-	if _, err := store.PutCredential(ctx, credential, 0); err != nil {
+	if _, err := store.PutCredential(ctx, credential, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	instance := domain.ProviderInstance{
@@ -971,7 +972,7 @@ func TestProviderAndRouteReferencesAndUniqueness(t *testing.T) {
 	instance.CredentialScheme = profile.CredentialScheme
 	instance.Capabilities = domain.DefaultProviderCapabilities(instance.Type)
 	instance.CapabilityEvidence = domain.EvidenceForCapabilities(instance.Capabilities, domain.EvidenceDeclared)
-	if _, err := store.PutProvider(ctx, instance, 0); err != nil {
+	if _, err := store.PutProvider(ctx, instance, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	// A route names a deployment, so this reference test needs one.
@@ -984,7 +985,7 @@ func TestProviderAndRouteReferencesAndUniqueness(t *testing.T) {
 			"gpt-test", "sha256:test", instance.Capabilities, time.Now().UTC()),
 		Enabled: true, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
 	}
-	if _, err := store.PutDeployment(ctx, deployment, 0); err != nil {
+	if _, err := store.PutDeployment(ctx, deployment, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	route := domain.Route{
@@ -995,13 +996,13 @@ func TestProviderAndRouteReferencesAndUniqueness(t *testing.T) {
 		CreatedAt:    time.Now().UTC(),
 		UpdatedAt:    time.Now().UTC(),
 	}
-	if _, err := store.PutRoute(ctx, route, 0); err != nil {
+	if _, err := store.PutRoute(ctx, route, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	fallback := route
 	fallback.ID = "route_2"
 	fallback.Priority = 1
-	if _, err := store.PutRoute(ctx, fallback, 0); err != nil {
+	if _, err := store.PutRoute(ctx, fallback, 0, nil); err != nil {
 		t.Fatalf("store fallback route: %v", err)
 	}
 	routes, err := store.ListRoutes(ctx)
@@ -1024,7 +1025,7 @@ func TestStoreRejectsProfileAwareDefaultGrantsAndDeploymentEscalation(t *testing
 		AccessSurface: profile.AccessSurface, Scheme: profile.CredentialScheme,
 		Audience: "audience", Ciphertext: []byte("ciphertext"), KeyVersion: 1,
 		CreatedAt: now, UpdatedAt: now,
-	}, 0)
+	}, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1034,7 +1035,7 @@ func TestStoreRejectsProfileAwareDefaultGrantsAndDeploymentEscalation(t *testing
 		BaseURL: "https://api.openai.com", CredentialID: credential.ID, AllowedHosts: []string{"api.openai.com"},
 		CapabilityEvidence: domain.EvidenceForCapabilities(domain.ProviderCapabilities{}, domain.EvidenceDeclared),
 		CreatedAt:          now, UpdatedAt: now,
-	}, 0)
+	}, 0, nil)
 	if err == nil {
 		t.Fatal("profile-aware provider received implicit default capabilities")
 	}
@@ -1046,7 +1047,7 @@ func TestStoreRejectsProfileAwareDefaultGrantsAndDeploymentEscalation(t *testing
 		Capabilities:       providerCapabilities,
 		CapabilityEvidence: domain.EvidenceForCapabilities(providerCapabilities, domain.EvidenceDeclared),
 		CreatedAt:          now, UpdatedAt: now,
-	}, 0)
+	}, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1056,7 +1057,7 @@ func TestStoreRejectsProfileAwareDefaultGrantsAndDeploymentEscalation(t *testing
 		AccessSurface: instance.AccessSurface, ProfileID: instance.ProfileID, Capabilities: badCapabilities,
 		CapabilityEvidence: domain.EvidenceForCapabilities(badCapabilities, domain.EvidenceDeclared),
 		CreatedAt:          now, UpdatedAt: now,
-	}, 0)
+	}, 0, nil)
 	if err == nil {
 		t.Fatal("deployment exceeded provider capabilities")
 	}
@@ -1065,7 +1066,7 @@ func TestStoreRejectsProfileAwareDefaultGrantsAndDeploymentEscalation(t *testing
 		ID: "deployment_evidence", Name: "Escalated evidence", ProviderID: instance.ID, ProviderModel: "model",
 		AccessSurface: instance.AccessSurface, ProfileID: instance.ProfileID, Capabilities: providerCapabilities,
 		CapabilityEvidence: verified, CreatedAt: now, UpdatedAt: now,
-	}, 0)
+	}, 0, nil)
 	if err == nil {
 		t.Fatal("deployment exceeded provider capability evidence")
 	}
@@ -1075,11 +1076,11 @@ func TestStoreRejectsProfileAwareDefaultGrantsAndDeploymentEscalation(t *testing
 		CapabilityEvidence:      domain.EvidenceForCapabilities(providerCapabilities, domain.EvidenceDeclared),
 		ModelCapabilitySnapshot: domain.DeclaredCapabilitySnapshot("model", "sha256:test", providerCapabilities, now),
 		CreatedAt:               now, UpdatedAt: now,
-	}, 0)
+	}, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	project, err := store.PutProject(ctx, domain.Project{ID: "project_resource", Name: "Resource owner", Enabled: true, AllowedRoutes: []string{"model"}, RPM: 10, TPM: 1000, MaxConcurrency: 1, CreatedAt: now, UpdatedAt: now}, 0)
+	project, err := store.PutProject(ctx, domain.Project{ID: "project_resource", Name: "Resource owner", Enabled: true, AllowedRoutes: []string{"model"}, RPM: 10, TPM: 1000, MaxConcurrency: 1, CreatedAt: now, UpdatedAt: now}, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1119,7 +1120,7 @@ func TestStoreRejectsProfileAwareDefaultGrantsAndDeploymentEscalation(t *testing
 	reduced := instance
 	reduced.Capabilities.Streaming = false
 	reduced.CapabilityEvidence = domain.EvidenceForCapabilities(reduced.Capabilities, domain.EvidenceDeclared)
-	if _, err := store.PutProvider(ctx, reduced, instance.Revision); err == nil {
+	if _, err := store.PutProvider(ctx, reduced, instance.Revision, nil); err == nil {
 		t.Fatal("provider update invalidated an existing deployment")
 	}
 }

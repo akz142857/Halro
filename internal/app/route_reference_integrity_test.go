@@ -83,7 +83,7 @@ func TestDeletingOneOfSeveralRoutesForAnAliasIsAllowed(t *testing.T) {
 	}
 	sibling := first
 	sibling.ID, sibling.Priority, sibling.Revision = "rte-sibling", first.Priority+10, 0
-	if _, err := runtime.store.PutRoute(context.Background(), sibling, 0); err != nil {
+	if _, err := runtime.store.PutRoute(context.Background(), sibling, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -100,7 +100,7 @@ func TestDeletingTheLastRouteForAnUnreferencedAliasIsAllowed(t *testing.T) {
 		t.Fatal(err)
 	}
 	project.AllowedRoutes = nil
-	if _, err := runtime.store.PutProject(context.Background(), project, project.Revision); err != nil {
+	if _, err := runtime.store.PutProject(context.Background(), project, project.Revision, nil); err != nil {
 		t.Fatal(err)
 	}
 	route, err := runtime.store.GetRoute(context.Background(), bootstrap.RouteID)

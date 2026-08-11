@@ -38,7 +38,10 @@ func CreateProjectKey(ctx context.Context, cfg config.Config, projectID, name st
 	if err != nil {
 		return CreatedGatewayKey{}, err
 	}
-	key, err = store.PutGatewayKey(ctx, key, 0)
+	// nil intent: this is an offline command holding the data lock, and it
+	// appends its own audit record below. There is no HTTP response whose
+	// success could disagree with what was recorded.
+	key, err = store.PutGatewayKey(ctx, key, 0, nil)
 	if err != nil {
 		return CreatedGatewayKey{}, fmt.Errorf("store gateway key: %w", err)
 	}
@@ -64,7 +67,7 @@ func DisableProjectKey(ctx context.Context, cfg config.Config, keyID string) err
 		return fmt.Errorf("load gateway key: %w", err)
 	}
 	key.Enabled = false
-	if _, err := store.PutGatewayKey(ctx, key, key.Revision); err != nil {
+	if _, err := store.PutGatewayKey(ctx, key, key.Revision, nil); err != nil {
 		return fmt.Errorf("disable gateway key: %w", err)
 	}
 	return appendOfflineKeyAudit(ctx, cfg, store, "gateway_key.disable", key.ID)
