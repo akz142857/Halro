@@ -896,10 +896,14 @@ function DeploymentForm({
     max_concurrency: maxConcurrency,
     enabled: current?.enabled ?? false,
   });
+  // One key per open form: a retry after a lost response reaches the same
+  // record instead of creating a second one, while a deliberate second create
+  // opens the form again and gets a new key.
+  const idempotencyKey = useRef(crypto.randomUUID());
   const mutation = useMutation({
     mutationFn: () => current
       ? api.updateDeployment(current.id, value(), current.revision)
-      : api.createDeployment(value()),
+      : api.createDeployment(value(), idempotencyKey.current),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["deployments"] });
       onClose();

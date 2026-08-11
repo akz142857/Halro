@@ -941,7 +941,7 @@ func enableStoredDeploymentForTest(t *testing.T, runtime *Runtime, deploymentID 
 	}
 	deployment.Enabled = true
 	deployment.UpdatedAt = time.Now().UTC()
-	if _, err := runtime.store.PutDeployment(context.Background(), deployment, deployment.Revision); err != nil {
+	if _, err := runtime.store.PutDeployment(context.Background(), deployment, deployment.Revision, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := runtime.reloadProviderRegistry(context.Background()); err != nil {

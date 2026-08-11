@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/akz142857/Halro/internal/domain"
-	"github.com/akz142857/Halro/internal/id"
 	"github.com/akz142857/Halro/internal/modelcatalog"
 	"github.com/akz142857/Halro/internal/provider"
 	bedrockprovider "github.com/akz142857/Halro/internal/provider/bedrock"
@@ -147,11 +146,12 @@ func (r *Runtime) createAdminDeployment(writer http.ResponseWriter, request *htt
 		writeJSON(writer, http.StatusConflict, map[string]string{"error": "new deployments must be saved disabled and pass validation before enable"})
 		return
 	}
-	deploymentID, err := id.New("dep")
-	if err != nil {
-		adminStoreError(writer)
+	idempotencyKey, ok := adminCreateIdempotencyKey(writer, request)
+	if !ok {
 		return
 	}
+	admin := request.Context().Value(adminContextKey{}).(adminRequestContext)
+	deploymentID := adminCreateID("dep", "deployment", admin.session.Username, idempotencyKey)
 	r.adminTopologyMu.Lock()
 	defer r.adminTopologyMu.Unlock()
 	now := time.Now().UTC()
@@ -160,19 +160,21 @@ func (r *Runtime) createAdminDeployment(writer http.ResponseWriter, request *htt
 		r.adminDeploymentInputError(writer, request, err)
 		return
 	}
-	deployment, err = r.store.PutDeployment(request.Context(), deployment, 0)
+	intent, intentErr := r.newAdminAuditIntent(request, "deployment.create", "deployment", deployment.ID)
+	if intentErr != nil {
+		adminStoreError(writer)
+		return
+	}
+	deployment, err = r.store.PutDeployment(request.Context(), deployment, 0, intent)
 	if err != nil {
+		if writeAdminCreateReplay(writer, err, "deployment", deploymentID) {
+			return
+		}
 		adminMutationError(writer, err)
 		return
 	}
-	if err := r.activateTopology(); err != nil {
-		adminConfigurationError(writer, err)
-		return
-	}
-	if err := r.auditAdminMutation(request, "deployment.create", "deployment", deployment.ID); err != nil {
-		adminAuditError(writer)
-		return
-	}
+	r.activateTopologyAfterCommit()
+	r.completeAdminMutation(writer, request, *intent)
 	if err := r.auditCapabilitySnapshot(request, auditCapabilitySnapshotCreated, deployment,
 		capabilitySnapshotMetadata(deployment)); err != nil {
 		adminAuditError(writer)
@@ -333,19 +335,18 @@ func (r *Runtime) updateAdminDeployment(writer http.ResponseWriter, request *htt
 		writeJSON(writer, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
 	}
-	deployment, err = r.store.PutDeployment(request.Context(), deployment, expected)
+	intent, intentErr := r.newAdminAuditIntent(request, "deployment.update", "deployment", deployment.ID)
+	if intentErr != nil {
+		adminStoreError(writer)
+		return
+	}
+	deployment, err = r.store.PutDeployment(request.Context(), deployment, expected, intent)
 	if err != nil {
 		adminMutationError(writer, err)
 		return
 	}
-	if err := r.activateTopology(); err != nil {
-		adminConfigurationError(writer, err)
-		return
-	}
-	if err := r.auditAdminMutation(request, "deployment.update", "deployment", deployment.ID); err != nil {
-		adminAuditError(writer)
-		return
-	}
+	r.activateTopologyAfterCommit()
+	r.completeAdminMutation(writer, request, *intent)
 	// A review is a change to what the deployment claims about its model. An
 	// edit to its name or concurrency is not one, and recording it as such
 	// would bury the events an operator actually reviews.
@@ -391,19 +392,18 @@ func (r *Runtime) deleteAdminDeployment(writer http.ResponseWriter, request *htt
 	deployment.Enabled = false
 	deployment.UpdatedAt = now
 	deployment.DeletedAt = &now
-	deployment, err = r.store.PutDeployment(request.Context(), deployment, expected)
+	intent, intentErr := r.newAdminAuditIntent(request, "deployment.delete", "deployment", deployment.ID)
+	if intentErr != nil {
+		adminStoreError(writer)
+		return
+	}
+	deployment, err = r.store.PutDeployment(request.Context(), deployment, expected, intent)
 	if err != nil {
 		adminMutationError(writer, err)
 		return
 	}
-	if err := r.activateTopology(); err != nil {
-		adminConfigurationError(writer, err)
-		return
-	}
-	if err := r.auditAdminMutation(request, "deployment.delete", "deployment", deployment.ID); err != nil {
-		adminAuditError(writer)
-		return
-	}
+	r.activateTopologyAfterCommit()
+	r.completeAdminMutation(writer, request, *intent)
 	writer.Header().Set("ETag", revisionETag(deployment.Revision))
 	writer.WriteHeader(http.StatusNoContent)
 }
@@ -472,20 +472,23 @@ func (r *Runtime) testAdminDeployment(writer http.ResponseWriter, request *http.
 		current.LastTestErrorClass = string(errorClass)
 	}
 	current.UpdatedAt = testedAt
-	current, storeErr = r.store.PutDeployment(request.Context(), current, testedRevision)
+	action := "deployment.test.success"
+	if probeErr != nil {
+		action = "deployment.test.failure"
+	}
+	intent, intentErr := r.newAdminAuditIntent(request, action, "deployment", deployment.ID)
+	if intentErr != nil {
+		r.adminTopologyMu.Unlock()
+		adminStoreError(writer)
+		return
+	}
+	current, storeErr = r.store.PutDeployment(request.Context(), current, testedRevision, intent)
 	r.adminTopologyMu.Unlock()
 	if storeErr != nil {
 		adminMutationError(writer, storeErr)
 		return
 	}
-	action := "deployment.test.success"
-	if probeErr != nil {
-		action = "deployment.test.failure"
-	}
-	if err := r.auditAdminMutation(request, action, "deployment", deployment.ID); err != nil {
-		adminAuditError(writer)
-		return
-	}
+	r.completeAdminMutation(writer, request, *intent)
 	result := map[string]any{
 		"status": status, "latency_ms": latencyMS, "tested_at": testedAt, "revision": current.Revision,
 	}

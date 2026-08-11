@@ -4,8 +4,6 @@ import (
 	"context"
 	"io"
 	"log/slog"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 
 	"github.com/akz142857/Halro/internal/domain"
@@ -37,17 +35,6 @@ func activationTestRuntime(t *testing.T) (*Runtime, BootstrapResult, loggedInAdm
 	return runtime, bootstrap, loginTestAdmin(t, runtime, "admin", stepUpTestPassword)
 }
 
-// canceledRequest is an Admin request whose client has gone away: a disconnect, a
-// proxy that gave up, or an expired deadline. The store refuses reads on such a
-// context, which is what used to make the difference between a revocation being
-// durable and it being in force.
-func canceledRequest(t *testing.T, session loggedInAdmin) *http.Request {
-	t.Helper()
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	return adminMutationRequest(t, http.MethodDelete, "/admin/api/v1/irrelevant", session, nil).WithContext(ctx)
-}
-
 // The revoke commits, then the client disappears before the auth snapshot is
 // rebuilt. Activation used to run on the request's context, so it read a
 // canceled context, returned early, and left the previous snapshot in place:
@@ -58,7 +45,7 @@ func canceledRequest(t *testing.T, session loggedInAdmin) *http.Request {
 // window is between the write's context check and activation's, and driving it
 // through the handler would only reproduce it by luck.
 func TestRevokedKeyStopsAuthenticatingWhenTheAdminClientDisconnects(t *testing.T) {
-	runtime, bootstrap, session := activationTestRuntime(t)
+	runtime, bootstrap, _ := activationTestRuntime(t)
 	if _, err := runtime.auth.Authenticate(bootstrap.GatewayKey, runtime.now()); err != nil {
 		t.Fatalf("the bootstrapped key does not authenticate to begin with: %v", err)
 	}
@@ -68,13 +55,13 @@ func TestRevokedKeyStopsAuthenticatingWhenTheAdminClientDisconnects(t *testing.T
 		t.Fatal(err)
 	}
 	key.Enabled = false
-	if _, err := runtime.store.PutGatewayKey(context.Background(), key, key.Revision); err != nil {
+	if _, err := runtime.store.PutGatewayKey(context.Background(), key, key.Revision, nil); err != nil {
 		t.Fatal(err)
 	}
 
-	recorder := httptest.NewRecorder()
-	if !runtime.refreshAdminAuth(recorder, canceledRequest(t, session)) {
-		t.Fatalf("activation gave up because the client had gone: status=%d body=%s", recorder.Code, recorder.Body.String())
+	runtime.activateAuthSnapshot()
+	if runtime.activation.status().Stale {
+		t.Fatalf("activation gave up because the client had gone: %#v", runtime.activation.status())
 	}
 	if _, err := runtime.auth.Authenticate(bootstrap.GatewayKey, runtime.now()); err == nil {
 		t.Fatal("a revoked gateway key still authenticates after activation")
@@ -84,19 +71,19 @@ func TestRevokedKeyStopsAuthenticatingWhenTheAdminClientDisconnects(t *testing.T
 // Same for a project: disabling it must take every one of its keys out of
 // service whether or not the Admin client waited for the reply.
 func TestDisabledProjectStopsAuthorizingWhenTheAdminClientDisconnects(t *testing.T) {
-	runtime, bootstrap, session := activationTestRuntime(t)
+	runtime, bootstrap, _ := activationTestRuntime(t)
 	project, err := runtime.store.GetProject(context.Background(), bootstrap.ProjectID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	project.Enabled = false
-	if _, err := runtime.store.PutProject(context.Background(), project, project.Revision); err != nil {
+	if _, err := runtime.store.PutProject(context.Background(), project, project.Revision, nil); err != nil {
 		t.Fatal(err)
 	}
 
-	recorder := httptest.NewRecorder()
-	if !runtime.refreshAdminAuth(recorder, canceledRequest(t, session)) {
-		t.Fatalf("activation gave up because the client had gone: status=%d", recorder.Code)
+	runtime.activateAuthSnapshot()
+	if runtime.activation.status().Stale {
+		t.Fatalf("activation gave up because the client had gone: %#v", runtime.activation.status())
 	}
 	if _, err := runtime.auth.Authenticate(bootstrap.GatewayKey, runtime.now()); err == nil {
 		t.Fatal("a key belonging to a disabled project still authenticates")
@@ -119,7 +106,7 @@ func TestDeletedRouteStopsRoutingOnRuntimeOwnedActivation(t *testing.T) {
 	}
 	now := runtime.now().UTC()
 	route.Enabled, route.DeletedAt = false, &now
-	if _, err := runtime.store.PutRoute(context.Background(), route, route.Revision); err != nil {
+	if _, err := runtime.store.PutRoute(context.Background(), route, route.Revision, nil); err != nil {
 		t.Fatal(err)
 	}
 

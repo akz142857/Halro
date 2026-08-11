@@ -6,6 +6,8 @@
 >
 > 修订：2026-08-11 在 `main@4af0228` 复核，§3.1 重写。原文把 Registry 装载的全部条件统称为“筛选规则”，实际上其中大部分不满足时会让整次装载失败而非排除单条记录，这个区别正是 review 文档 F-05 的放大机制。§3.1 的行号以 `4af0228` 为准，其余各节仍是原基线的行号，可能已漂移。
 >
+> 修订：2026-08-11 晚，在 `95b5d47`（F-06/F-07 修复）与 `18f3939`、`a96cf4b`、`c051edc`（F-03 提交协议及其子项）之后再次重写 §3 与 §3.1。装载的失败语义和管理面的提交语义都变了：Provider 级问题现在排除该 Provider 而不再致命，管理面变更与其审计记录同事务落盘、激活失败改为让运行时进入 stale 并拒绝数据面流量。本轮不再给行号，只给文件与函数名——行号在过去两天里漂了三次。
+>
 > 范围：Credential、Provider、Deployment、Route、Project、Gateway Key，以及通过 `/v1/*` 发起的推理请求。Admin 登录、前端页面细节、异步资源的完整生命周期不在主图内。
 
 ## 1. 一句话模型
@@ -102,15 +104,33 @@ sequenceDiagram
 
     Admin->>Handler: 带 CSRF / revision / 必要时 step-up 的变更
     Handler->>Handler: 输入、引用、能力、健康/价格门禁校验
-    Handler->>Store: Put versioned record
-    Store-->>Handler: durable revision
+    Handler->>Handler: 构造 AdminAuditIntent（事件 ID 即 operation ID）
+    Handler->>Store: 同一事务：Put versioned record + Put audit intent
+    Store-->>Handler: durable revision （**唯一提交点**）
     Handler->>Builder: 从 Store 全量重建
     Builder->>Store: List Projects/Keys 或 Providers/Deployments/Routes/Prices
     Builder-->>Handler: candidate snapshot
-    Handler->>Live: atomic swap
-    Handler->>Audit: append admin mutation
-    Handler-->>Admin: 2xx + ETag
+    Handler->>Live: atomic swap（失败则标记 stale，不回滚、不报错）
+    Handler->>Audit: 投递 intent，成功后删除该 intent
+    Handler-->>Admin: 2xx + ETag + Halro-Operation-Id + Halro-Activation
 ```
+
+### 3.0 提交语义
+
+变更曾经是三个各自独立的结果——store commit、runtime activation、audit append——而 HTTP 状态只能报告最后一个失败。**现在 store commit 是唯一提交点**：
+
+- 审计记录在 mutation 之前构造，与 mutation 写进同一个 bbolt 事务。被拒的写会连同记录一起回滚；提交了的写不可能没有记录。
+- 投递到 Audit WAL 在其后进行，失败不影响响应（那时变更已经发生），未投递的 intent 由启动时的 drain 重投。已投递的 intent 直接删除。
+- 激活失败不再让请求失败，而是把运行时标记为 **stale**：数据面在限流与鉴权之前用 `configuration_stale` 拒绝，`/health/ready` 报 `not_ready`，后台每 5 秒重试直到追上。撤销类变更「已落盘但未生效」时继续放行旧快照，是这条协议要消除的 fail-open。
+- 因此「已提交」和「已生效」是两个问题，响应上各有答案：`Halro-Operation-Id`（durable 的审计事件 ID）与 `Halro-Activation`。
+
+代码：`internal/app/admin_audit_intent.go`、`internal/app/activation_state.go`、`internal/store/bolt/store_admin_audit.go`。
+
+覆盖范围是全部管理面写入：Credential、Provider、Deployment、Route、Project、Gateway Key，以及告警 webhook 与 redaction / Token Guard 策略资源。
+
+redaction 与 Token Guard 的激活失败同样标记 stale——它们决定的是活跃流量被如何脱敏、被不被放行。告警不标记：投递告警不决定任何一个请求的结果，为一个 webhook 重建失败而拒绝全部流量，比它报告的故障更大。
+
+Provider / Deployment / Route / Project 的创建需要 `Idempotency-Key`，记录 ID 由它派生，因此响应丢失后的重试撞成 409 `<resource>_idempotency_replay` 而不是建出第二条记录。Gateway Key 与价格版本此前已是这个形状。
 
 ### 3.1 Provider Registry 的装载规则
 
@@ -139,19 +159,37 @@ sequenceDiagram
 
 **三、容忍**
 
-无当前版本价格时 Target 仍然装载，价格投影为零（`providers.go:390-399`）；请求期重新选择并 pin，按 unknown-price policy 决定是否允许。只有非 `ErrPriceUnavailable` 的价格错误才让装载失败。
+无当前版本价格时 Target 仍然装载，价格投影为零；请求期重新选择并 pin，按 unknown-price policy 决定是否允许。价格读取错误让该 Route 被 withheld（`price_unreadable`），不再让装载失败。
 
-**四、整次装载失败（`return fail(...)`）**
+**四、Provider / Binding 级排除（`95b5d47` 起，不再致命）**
 
-剩下的都是 Provider 级问题——不是某条 Route 坏了，而是这个 Provider 根本无法装载：
+作用域是「这个 Provider（或它的某个 binding）根本装载不起来」的问题。它们现在排除受影响的对象并记进 `loadReport.Excluded`，审计为 `provider.excluded_from_routing`；落在被排除 Provider 上的 Route 会走既有的 `binding_unavailable` withhold，其余 Provider 照常服务：
 
-- Credential 不存在、类型不匹配、endpoint 不符合当前安全策略、audience 不匹配：`providers.go:278-300`
-- Binding profile 不可用或与 Provider/Credential 不兼容、凭据解密失败、adapter 或 bridge 构建失败、adapter 注册失败：`providers.go:306-331`
-- 非 `ErrPriceUnavailable` 的价格读取错误：`providers.go:394`
+| 情况 | 排除粒度 | 常量 |
+|---|---|---|
+| endpoint 不符合当前安全策略 | 该 Provider | `endpoint_rejected` |
+| binding profile 不可用或与本次构建不兼容 | 该 binding | `binding_profile_incompatible` |
+| adapter 或 bridge 构建失败 | 该 binding | `adapter_unavailable` |
 
-**这一类仍然会让进程起不来，和 F-05 修掉的是同一个形状**，但没有已证实的触发方式：写入路径上都有守卫（Credential 删除被存储层拒绝，类型和 audience 在写入时校验），而 endpoint 那条实测不可达——`safetransport.Audience` 用空策略重新校验，私网 Provider 根本建不出来，所以收紧开关也无从触发。详见 review 的 F-06（已由 P1 降为加固建议）与 F-07（那个无法生效的开关本身）。
+这一类原本会让进程起不来（F-06）。它在 `95b5d47` 之前不可达——私网 Provider 根本建不出来——而修好 F-07（让 `allow_private_provider_endpoints` 真正生效）会立刻使 endpoint 那条变为可达，所以两条在同一个提交里一起处理。**运维收紧一个安全开关，不应该成为实例起不来的原因。**
 
-注意两者的耦合：若按「让开关生效」修 F-07，endpoint 这条会立刻从不可达变为可达，两条必须一起处理。
+**五、仍然致命（`return refuse(...)`）**
+
+只剩下「存储状态被篡改」或「vault 不可信」这一类，这是 F-06 留下的那个问题的收敛答案：
+
+- Credential 读取失败、类型不匹配、audience 不匹配（`providers.go` 的 `refuse` 三处）
+- Binding 与 Credential 的 access surface / scheme 不一致
+- 凭据在自己的 audience 下解密失败
+
+这些不是运维可以被告知后继续运行的配置问题；已构建的 adapter 在拒绝前会被关闭而不是泄漏。
+
+**六、`halro doctor` 的覆盖缺口**
+
+装载层改成容忍之后，doctor 是这些排除唯一能被主动看见的地方。当前状态：
+
+- 被关闭的 capability interface（binding `enabled=false`）导致的 Route withhold —— **已覆盖**（`checkDoctorTopology`，`a96cf4b`）
+- endpoint 被安全策略拒绝导致的 Provider 排除 —— **已覆盖**（`c051edc`）：doctor 用当前 `providerEndpointPolicy` 校验每个启用 Provider 的 base URL 并点名被排除的那个
+- 管理面审计积压 —— 已覆盖（`admin_audit_backlog`）
 
 管理面的守卫分布：`validateProviderCanDeactivate` 要求先停掉 Provider 的活跃 Deployment，`validateDeploymentCanDeactivate` 要求先停掉 Deployment 的活跃 Route，`validateBindingsCanDeactivate`（`e1d94be` 新增）要求先停掉 binding 上的活跃 Deployment。三级同形，都在错误里点名挡路的那个资源。
 
@@ -279,7 +317,8 @@ flowchart LR
 后续改动可以沿主图逐项检查：
 
 - 每个下游引用是否在创建、更新、删除三个方向都校验？
-- 一次 durable mutation 与运行时 snapshot swap 是否可能分离？失败后系统以哪一份为准？
+- 一次 durable mutation 与运行时 snapshot swap 是否可能分离？失败后系统以哪一份为准？（答案见 §3.0：store commit 为准，未生效时数据面 fail-closed）
+- 新增的管理面写入是否走了同事务的 audit intent，还是又回到「先落盘、后 append」？
 - disable/revoke/delete 是否立即 fail-closed，是否错误地依赖客户端请求仍存活？
 - Registry 筛选和请求期筛选是否存在两套不一致规则？
 - 配置字段是否真正进入 Target 和候选算法，还是只存储/展示？

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -11,7 +12,6 @@ import (
 
 	"github.com/akz142857/Halro/internal/auth"
 	"github.com/akz142857/Halro/internal/domain"
-	"github.com/akz142857/Halro/internal/id"
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 	"github.com/go-chi/chi/v5"
 )
@@ -54,11 +54,12 @@ func (r *Runtime) createAdminProject(writer http.ResponseWriter, request *http.R
 		adminBadRequest(writer, "invalid request")
 		return
 	}
-	projectID, err := id.New("prj")
-	if err != nil {
-		adminStoreError(writer)
+	idempotencyKey, ok := adminCreateIdempotencyKey(writer, request)
+	if !ok {
 		return
 	}
+	admin := request.Context().Value(adminContextKey{}).(adminRequestContext)
+	projectID := adminCreateID("prj", "project", admin.session.Username, idempotencyKey)
 	now := time.Now().UTC()
 	project, err := input.project(projectID, now, now)
 	if err != nil {
@@ -77,18 +78,21 @@ func (r *Runtime) createAdminProject(writer http.ResponseWriter, request *http.R
 		writeJSON(writer, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
 	}
-	project, err = r.store.PutProject(request.Context(), project, 0)
+	intent, intentErr := r.newAdminAuditIntent(request, "project.create", "project", project.ID)
+	if intentErr != nil {
+		adminStoreError(writer)
+		return
+	}
+	project, err = r.store.PutProject(request.Context(), project, 0, intent)
 	if err != nil {
+		if writeAdminCreateReplay(writer, err, "project", projectID) {
+			return
+		}
 		adminMutationError(writer, err)
 		return
 	}
-	if !r.refreshAdminAuth(writer, request) {
-		return
-	}
-	if err := r.auditAdminMutation(request, "project.create", "project", project.ID); err != nil {
-		adminAuditError(writer)
-		return
-	}
+	r.activateAuthSnapshot()
+	r.completeAdminMutation(writer, request, *intent)
 	writer.Header().Set("ETag", revisionETag(project.Revision))
 	writeJSON(writer, http.StatusCreated, project)
 }
@@ -130,18 +134,18 @@ func (r *Runtime) updateAdminProject(writer http.ResponseWriter, request *http.R
 		writeJSON(writer, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
 	}
-	replacement, err = r.store.PutProject(request.Context(), replacement, expected)
+	intent, intentErr := r.newAdminAuditIntent(request, "project.update", "project", replacement.ID)
+	if intentErr != nil {
+		adminStoreError(writer)
+		return
+	}
+	replacement, err = r.store.PutProject(request.Context(), replacement, expected, intent)
 	if err != nil {
 		adminMutationError(writer, err)
 		return
 	}
-	if !r.refreshAdminAuth(writer, request) {
-		return
-	}
-	if err := r.auditAdminMutation(request, "project.update", "project", replacement.ID); err != nil {
-		adminAuditError(writer)
-		return
-	}
+	r.activateAuthSnapshot()
+	r.completeAdminMutation(writer, request, *intent)
 	writer.Header().Set("ETag", revisionETag(replacement.Revision))
 	writeJSON(writer, http.StatusOK, replacement)
 }
@@ -173,18 +177,18 @@ func (r *Runtime) deleteAdminProject(writer http.ResponseWriter, request *http.R
 	project.Enabled = false
 	project.UpdatedAt = now
 	project.DeletedAt = &now
-	project, err = r.store.PutProject(request.Context(), project, expected)
+	intent, intentErr := r.newAdminAuditIntent(request, "project.delete", "project", project.ID)
+	if intentErr != nil {
+		adminStoreError(writer)
+		return
+	}
+	project, err = r.store.PutProject(request.Context(), project, expected, intent)
 	if err != nil {
 		adminMutationError(writer, err)
 		return
 	}
-	if !r.refreshAdminAuth(writer, request) {
-		return
-	}
-	if err := r.auditAdminMutation(request, "project.delete", "project", project.ID); err != nil {
-		adminAuditError(writer)
-		return
-	}
+	r.activateAuthSnapshot()
+	r.completeAdminMutation(writer, request, *intent)
 	writer.Header().Set("ETag", revisionETag(project.Revision))
 	writer.WriteHeader(http.StatusNoContent)
 }
@@ -246,7 +250,12 @@ func (r *Runtime) createAdminProjectKey(writer http.ResponseWriter, request *htt
 		adminNotFound(writer)
 		return
 	}
-	key, err = r.store.PutGatewayKey(request.Context(), key, 0)
+	intent, intentErr := r.newAdminAuditIntent(request, "gateway_key.create", "gateway_key", keyID)
+	if intentErr != nil {
+		adminStoreError(writer)
+		return
+	}
+	key, err = r.store.PutGatewayKey(request.Context(), key, 0, intent)
 	if errors.Is(err, boltstore.ErrAlreadyExists) {
 		// The first attempt already landed. Say so explicitly rather than minting a
 		// duplicate: the operator has to revoke and reissue to obtain a plaintext.
@@ -261,13 +270,8 @@ func (r *Runtime) createAdminProjectKey(writer http.ResponseWriter, request *htt
 		adminMutationError(writer, err)
 		return
 	}
-	if !r.refreshAdminAuth(writer, request) {
-		return
-	}
-	if err := r.auditAdminMutation(request, "gateway_key.create", "gateway_key", key.ID); err != nil {
-		adminAuditError(writer)
-		return
-	}
+	r.activateAuthSnapshot()
+	r.completeAdminMutation(writer, request, *intent)
 	writer.Header().Set("Cache-Control", "no-store")
 	writer.Header().Set("ETag", revisionETag(key.Revision))
 	writeJSON(writer, http.StatusCreated, map[string]any{
@@ -316,18 +320,18 @@ func (r *Runtime) updateAdminProjectKey(writer http.ResponseWriter, request *htt
 	if input.Enabled != nil {
 		key.Enabled = *input.Enabled
 	}
-	key, err := r.store.PutGatewayKey(request.Context(), key, expected)
+	intent, intentErr := r.newAdminAuditIntent(request, "gateway_key.update", "gateway_key", key.ID)
+	if intentErr != nil {
+		adminStoreError(writer)
+		return
+	}
+	key, err := r.store.PutGatewayKey(request.Context(), key, expected, intent)
 	if err != nil {
 		adminMutationError(writer, err)
 		return
 	}
-	if !r.refreshAdminAuth(writer, request) {
-		return
-	}
-	if err := r.auditAdminMutation(request, "gateway_key.update", "gateway_key", key.ID); err != nil {
-		adminAuditError(writer)
-		return
-	}
+	r.activateAuthSnapshot()
+	r.completeAdminMutation(writer, request, *intent)
 	writer.Header().Set("ETag", revisionETag(key.Revision))
 	writeJSON(writer, http.StatusOK, gatewayKeyView{
 		ID: key.ID, ProjectID: key.ProjectID, Name: key.Name, Enabled: key.Enabled,
@@ -360,18 +364,18 @@ func (r *Runtime) deleteAdminProjectKey(writer http.ResponseWriter, request *htt
 	now := time.Now().UTC()
 	key.Enabled = false
 	key.DeletedAt = &now
-	key, err := r.store.PutGatewayKey(request.Context(), key, expected)
+	intent, intentErr := r.newAdminAuditIntent(request, "gateway_key.delete", "gateway_key", key.ID)
+	if intentErr != nil {
+		adminStoreError(writer)
+		return
+	}
+	key, err := r.store.PutGatewayKey(request.Context(), key, expected, intent)
 	if err != nil {
 		adminMutationError(writer, err)
 		return
 	}
-	if !r.refreshAdminAuth(writer, request) {
-		return
-	}
-	if err := r.auditAdminMutation(request, "gateway_key.delete", "gateway_key", key.ID); err != nil {
-		adminAuditError(writer)
-		return
-	}
+	r.activateAuthSnapshot()
+	r.completeAdminMutation(writer, request, *intent)
 	writer.Header().Set("ETag", revisionETag(key.Revision))
 	writer.WriteHeader(http.StatusNoContent)
 }
@@ -463,20 +467,29 @@ func gatewayKeyIdempotencyDigest(actor, projectID, key string) string {
 	return "sha256:" + hex.EncodeToString(digest.Sum(nil))
 }
 
-func (r *Runtime) refreshAdminAuth(writer http.ResponseWriter, request *http.Request) bool {
+// activateAuthSnapshot carries a durable Project or Gateway Key mutation into
+// the live authentication snapshot.
+//
+// It does not fail the request when activation fails: the mutation is already
+// committed, so telling the operator it failed would be false. What the failure
+// changes is the runtime — it is marked stale, which refuses data-plane traffic
+// until the snapshot catches up. A revocation that is durable but not in force
+// must not keep authorizing requests.
+func (r *Runtime) activateAuthSnapshot() {
 	ctx, cancel := r.activationContext()
 	defer cancel()
-	if err := r.auth.Refresh(ctx, r.store); err != nil {
-		// The write is already durable, so this is the disagreement case rather
-		// than a rejected request: the operator has revoked something that is
-		// still being honoured. Loud, because the reply alone tells them the
-		// mutation failed, which is not what happened.
+	if err := r.reloadAdminAuth(ctx); err != nil {
 		r.logger.Error("authentication snapshot activation failed after a durable mutation",
 			"error", err)
-		adminStoreError(writer)
-		return false
+		r.activation.markStale("auth snapshot: "+err.Error(), time.Now().UTC())
+		return
 	}
-	return true
+	r.activation.markCurrent()
+}
+
+// reloadAdminAuth rebuilds the authentication snapshot from the store.
+func (r *Runtime) reloadAdminAuth(ctx context.Context) error {
+	return r.auth.Refresh(ctx, r.store)
 }
 
 func (r *Runtime) auditAdminMutation(request *http.Request, action, targetType, targetID string) error {

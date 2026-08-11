@@ -237,8 +237,8 @@ export const api = {
   projectsPage: (query = "") =>
     request<Page<Project>>(`/projects${query}`).then((value) => value.data),
   project: (id: string) => request<Project>(`/projects/${encodeURIComponent(id)}`),
-  createProject: (value: unknown) =>
-    request<Project>("/projects", json("POST", value)),
+  createProject: (value: unknown, idempotencyKey: string) =>
+    request<Project>("/projects", { ...json("POST", value), headers: { "Idempotency-Key": idempotencyKey } }),
   updateProject: (id: string, value: unknown, etag: string) =>
     request<Project>(`/projects/${encodeURIComponent(id)}`, json("PUT", value), etag),
   deleteProject: (id: string, etag: string, reauth: Reauth) =>
@@ -320,8 +320,8 @@ export const api = {
     request<ModelCapabilityDetection>(`/model-capability-detections/${encodeURIComponent(id)}`).then((result) => result.data),
   cancelModelCapabilityDetection: (id: string, revision: number) =>
     request<ModelCapabilityDetection>(`/model-capability-detections/${encodeURIComponent(id)}`, json("DELETE"), `"${revision}"`).then((result) => result.data),
-  createProvider: (value: unknown) =>
-    request<Provider>("/providers", json("POST", value)),
+  createProvider: (value: unknown, idempotencyKey: string) =>
+    request<Provider>("/providers", { ...json("POST", value), headers: { "Idempotency-Key": idempotencyKey } }),
   updateProvider: (id: string, value: unknown, revision: number) =>
     request<Provider>(
       `/providers/${encodeURIComponent(id)}`,
@@ -359,8 +359,8 @@ export const api = {
       signal,
     });
   },
-  createDeployment: (value: unknown) =>
-    request<Deployment>("/deployments", json("POST", value)),
+  createDeployment: (value: unknown, idempotencyKey: string) =>
+    request<Deployment>("/deployments", { ...json("POST", value), headers: { "Idempotency-Key": idempotencyKey } }),
   updateDeployment: (id: string, value: unknown, revision: number) =>
     request<Deployment>(
       `/deployments/${encodeURIComponent(id)}`,
@@ -419,7 +419,8 @@ export const api = {
     }
     throw routeListingIncomplete(`route listing exceeded ${ROUTE_PAGE_CEILING} pages`);
   },
-  createRoute: (value: unknown) => request<Route>("/routes", json("POST", value)),
+  createRoute: (value: unknown, idempotencyKey: string) =>
+    request<Route>("/routes", { ...json("POST", value), headers: { "Idempotency-Key": idempotencyKey } }),
   updateRoute: (id: string, value: unknown, revision: number) =>
     request<Route>(
       `/routes/${encodeURIComponent(id)}`,

@@ -88,9 +88,24 @@ func (r *Runtime) activateTopology() error {
 	defer cancel()
 	if err := r.reloadProviderRegistry(ctx); err != nil {
 		r.logger.Error("routing registry activation failed after a durable mutation", "error", err)
+		r.activation.markStale("routing registry: "+err.Error(), time.Now().UTC())
 		return err
 	}
+	r.activation.markCurrent()
 	return nil
+}
+
+// activateTopologyAfterCommit carries an already-committed topology mutation
+// into the live registry.
+//
+// The error is deliberately not returned to the Admin caller. Under the commit
+// protocol the store commit is the commit point, so a failed activation means
+// the mutation happened and is not yet in force — reporting it as a failed
+// request would describe a change that did take effect as one that did not.
+// The runtime is marked stale instead, which refuses data-plane traffic until
+// the snapshots catch up, and the recovery loop retries.
+func (r *Runtime) activateTopologyAfterCommit() {
+	_ = r.activateTopology()
 }
 
 // prepareModelCatalogActivation serializes a signed-catalog commit with every

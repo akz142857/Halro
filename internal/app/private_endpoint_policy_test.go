@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/akz142857/Halro/internal/config"
@@ -122,6 +123,24 @@ func TestTighteningTheEndpointPolicyExcludesTheProviderRatherThanTheProcess(t *t
 	}
 	if !found {
 		t.Fatalf("the excluded provider was not reported: %+v", report.Excluded)
+	}
+
+	// Reported in the load report is not the same as visible to an operator.
+	// The loader is deliberately tolerant here, so doctor is the one place the
+	// exclusion can still be found without reading logs.
+	reopened.Close()
+	doctor, doctorErr := DoctorWithOptions(context.Background(), tightened, DoctorOptions{NoKMS: true})
+	if doctorErr == nil {
+		t.Fatal("doctor reported a healthy instance while a provider was excluded from routing")
+	}
+	named := false
+	for _, check := range doctor.Checks {
+		if check.Name == "topology" && check.Status == "fail" && strings.Contains(check.Detail, instance.ID) {
+			named = true
+		}
+	}
+	if !named {
+		t.Fatalf("doctor did not name the excluded provider: %+v", doctor.Checks)
 	}
 }
 

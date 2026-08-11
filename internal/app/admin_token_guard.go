@@ -105,18 +105,18 @@ func (r *Runtime) createAdminTokenGuardPolicy(writer http.ResponseWriter, reques
 	}
 	r.adminProjectMu.Lock()
 	defer r.adminProjectMu.Unlock()
-	policy, err = r.store.PutTokenGuardPolicy(request.Context(), policy, 0)
+	intent, intentErr := r.newAdminAuditIntent(request, "token_guard_policy.create", "token_guard_policy", policy.ID)
+	if intentErr != nil {
+		adminStoreError(writer)
+		return
+	}
+	policy, err = r.store.PutTokenGuardPolicy(request.Context(), policy, 0, intent)
 	if err != nil {
 		adminMutationError(writer, err)
 		return
 	}
-	if !r.reloadTokenGuard(writer, request) {
-		return
-	}
-	if err := r.auditAdminMutation(request, "token_guard_policy.create", "token_guard_policy", policy.ID); err != nil {
-		adminAuditError(writer)
-		return
-	}
+	r.activateTokenGuardPolicies()
+	r.completeAdminMutation(writer, request, *intent)
 	writer.Header().Set("ETag", revisionETag(policy.Revision))
 	writeJSON(writer, http.StatusCreated, tokenGuardPolicyView(policy))
 }
@@ -151,18 +151,18 @@ func (r *Runtime) updateAdminTokenGuardPolicy(writer http.ResponseWriter, reques
 		writeJSON(writer, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
 	}
-	policy, err = r.store.PutTokenGuardPolicy(request.Context(), policy, expected)
+	intent, intentErr := r.newAdminAuditIntent(request, "token_guard_policy.update", "token_guard_policy", policy.ID)
+	if intentErr != nil {
+		adminStoreError(writer)
+		return
+	}
+	policy, err = r.store.PutTokenGuardPolicy(request.Context(), policy, expected, intent)
 	if err != nil {
 		adminMutationError(writer, err)
 		return
 	}
-	if !r.reloadTokenGuard(writer, request) {
-		return
-	}
-	if err := r.auditAdminMutation(request, "token_guard_policy.update", "token_guard_policy", policy.ID); err != nil {
-		adminAuditError(writer)
-		return
-	}
+	r.activateTokenGuardPolicies()
+	r.completeAdminMutation(writer, request, *intent)
 	writer.Header().Set("ETag", revisionETag(policy.Revision))
 	writeJSON(writer, http.StatusOK, tokenGuardPolicyView(policy))
 }
@@ -198,18 +198,18 @@ func (r *Runtime) deleteAdminTokenGuardPolicy(writer http.ResponseWriter, reques
 	policy.Enabled = false
 	policy.UpdatedAt = now
 	policy.DeletedAt = &now
-	policy, err = r.store.PutTokenGuardPolicy(request.Context(), policy, expected)
+	intent, intentErr := r.newAdminAuditIntent(request, "token_guard_policy.delete", "token_guard_policy", policy.ID)
+	if intentErr != nil {
+		adminStoreError(writer)
+		return
+	}
+	policy, err = r.store.PutTokenGuardPolicy(request.Context(), policy, expected, intent)
 	if err != nil {
 		adminMutationError(writer, err)
 		return
 	}
-	if !r.reloadTokenGuard(writer, request) {
-		return
-	}
-	if err := r.auditAdminMutation(request, "token_guard_policy.delete", "token_guard_policy", policy.ID); err != nil {
-		adminAuditError(writer)
-		return
-	}
+	r.activateTokenGuardPolicies()
+	r.completeAdminMutation(writer, request, *intent)
 	writer.Header().Set("ETag", revisionETag(policy.Revision))
 	writer.WriteHeader(http.StatusNoContent)
 }
@@ -325,11 +325,22 @@ func (r *Runtime) validateNoTokenGuardReference(
 	return nil
 }
 
-func (r *Runtime) reloadTokenGuard(writer http.ResponseWriter, request *http.Request) bool {
-	policies, err := r.store.ListTokenGuardPolicies(request.Context())
-	if err != nil || r.tokenGuard.ReplacePolicies(policies) != nil {
-		adminStoreError(writer)
-		return false
+// activateTokenGuardPolicies carries a durable Token Guard policy change into
+// the live admission control, on the runtime's own context and without failing
+// the request that committed it. A Token Guard policy decides what traffic is
+// admitted, so serving from a snapshot known to be behind the store is the
+// fail-open direction — the runtime is marked stale instead.
+func (r *Runtime) activateTokenGuardPolicies() {
+	ctx, cancel := r.activationContext()
+	defer cancel()
+	policies, err := r.store.ListTokenGuardPolicies(ctx)
+	if err == nil {
+		err = r.tokenGuard.ReplacePolicies(policies)
 	}
-	return true
+	if err != nil {
+		r.logger.Error("token guard policy activation failed after a durable mutation", "error", err)
+		r.activation.markStale("token guard policies: "+err.Error(), time.Now().UTC())
+		return
+	}
+	r.activation.markCurrent()
 }

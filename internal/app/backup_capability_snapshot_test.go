@@ -112,7 +112,7 @@ func mutateDeploymentSnapshot(t *testing.T, cfg config.Config, id string) {
 		t.Fatal(err)
 	}
 	deployment.ModelCapabilitySnapshot.ModelRevision = "sha256:changed-after-backup"
-	if _, err := store.PutDeployment(context.Background(), deployment, deployment.Revision); err != nil {
+	if _, err := store.PutDeployment(context.Background(), deployment, deployment.Revision, nil); err != nil {
 		t.Fatal(err)
 	}
 }

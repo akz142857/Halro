@@ -289,7 +289,7 @@ func TestWideningDisablesTheDeploymentAndNarrowingDoesNot(t *testing.T) {
 		t.Fatal(err)
 	}
 	route.Enabled = false
-	if _, err := runtime.store.PutRoute(context.Background(), route, route.Revision); err != nil {
+	if _, err := runtime.store.PutRoute(context.Background(), route, route.Revision, nil); err != nil {
 		t.Fatal(err)
 	}
 	final := performAdminMutation(t, runtime, cookie, csrf, http.MethodPut,

@@ -203,7 +203,7 @@ describe("deployment invocation target workflow", () => {
     expect(create).toHaveBeenCalledWith(expect.objectContaining({
       provider_model: "gpt-chat", binding_id: "b-chat", resolution_revision: "sha256:gpt-chat:b-chat",
       capabilities: expect.objectContaining({ chat: true }), enabled: false,
-    }));
+    }), expect.any(String));
   });
 
   it("loads a changed resolution and requires explicit confirmation after a 409", async () => {
@@ -498,7 +498,7 @@ describe("deployment invocation target workflow", () => {
     await waitFor(() => expect(create).toHaveBeenCalledOnce());
     expect(create).toHaveBeenCalledWith(expect.objectContaining({
       mode: "operator_declared", binding_id: "b-chat", capabilities: expect.objectContaining({ chat: true, tools: false }),
-    }));
+    }), expect.any(String));
   });
 
   it("refreshes the invocation target catalog through the adapter capability endpoint", async () => {

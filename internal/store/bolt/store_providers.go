@@ -154,7 +154,7 @@ func normalizeProviderBindings(instance *domain.ProviderInstance) {
 	}
 }
 
-func (s *Store) PutCredential(ctx context.Context, credential domain.Credential, expectedRevision uint64) (domain.Credential, error) {
+func (s *Store) PutCredential(ctx context.Context, credential domain.Credential, expectedRevision uint64, intent *domain.AdminAuditIntent) (domain.Credential, error) {
 	normalizeCredentialProfile(&credential)
 	if err := credential.Validate(); err != nil {
 		return domain.Credential{}, err
@@ -164,7 +164,10 @@ func (s *Store) PutCredential(ctx context.Context, credential domain.Credential,
 	}
 	err := s.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(bucketCredentials)
-		return putVersioned(bucket, credential.ID, expectedRevision, &credential)
+		if err := putVersioned(bucket, credential.ID, expectedRevision, &credential); err != nil {
+			return err
+		}
+		return putAdminAuditIntentTx(tx, intent)
 	})
 	return credential, err
 }
@@ -189,7 +192,7 @@ func (s *Store) ListCredentials(ctx context.Context) ([]domain.Credential, error
 	return credentials, err
 }
 
-func (s *Store) DeleteCredential(ctx context.Context, id string, expectedRevision uint64) error {
+func (s *Store) DeleteCredential(ctx context.Context, id string, expectedRevision uint64, intent *domain.AdminAuditIntent) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -214,11 +217,14 @@ func (s *Store) DeleteCredential(ctx context.Context, id string, expectedRevisio
 		if err := ensureCredentialUnreferenced(tx, id); err != nil {
 			return err
 		}
-		return bucket.Delete([]byte(id))
+		if err := bucket.Delete([]byte(id)); err != nil {
+			return err
+		}
+		return putAdminAuditIntentTx(tx, intent)
 	})
 }
 
-func (s *Store) PutProvider(ctx context.Context, provider domain.ProviderInstance, expectedRevision uint64) (domain.ProviderInstance, error) {
+func (s *Store) PutProvider(ctx context.Context, provider domain.ProviderInstance, expectedRevision uint64, intent *domain.AdminAuditIntent) (domain.ProviderInstance, error) {
 	if err := provider.Validate(); err != nil {
 		return domain.ProviderInstance{}, err
 	}
@@ -257,7 +263,10 @@ func (s *Store) PutProvider(ctx context.Context, provider domain.ProviderInstanc
 		}); err != nil {
 			return err
 		}
-		return putVersioned(tx.Bucket(bucketProviders), provider.ID, expectedRevision, &provider)
+		if err := putVersioned(tx.Bucket(bucketProviders), provider.ID, expectedRevision, &provider); err != nil {
+			return err
+		}
+		return putAdminAuditIntentTx(tx, intent)
 	})
 	return provider, err
 }
@@ -305,7 +314,7 @@ func providerCapabilityLimitSubset(candidate, available int64) bool {
 	return candidate > 0 && candidate <= available
 }
 
-func (s *Store) PutRoute(ctx context.Context, route domain.Route, expectedRevision uint64) (domain.Route, error) {
+func (s *Store) PutRoute(ctx context.Context, route domain.Route, expectedRevision uint64, intent *domain.AdminAuditIntent) (domain.Route, error) {
 	if err := route.Validate(); err != nil {
 		return domain.Route{}, err
 	}
@@ -316,7 +325,10 @@ func (s *Store) PutRoute(ctx context.Context, route domain.Route, expectedRevisi
 		if tx.Bucket(bucketDeployments).Get([]byte(route.DeploymentID)) == nil {
 			return fmt.Errorf("deployment %q: %w", route.DeploymentID, ErrNotFound)
 		}
-		return putVersioned(tx.Bucket(bucketRoutes), route.ID, expectedRevision, &route)
+		if err := putVersioned(tx.Bucket(bucketRoutes), route.ID, expectedRevision, &route); err != nil {
+			return err
+		}
+		return putAdminAuditIntentTx(tx, intent)
 	})
 	return route, err
 }

@@ -57,7 +57,7 @@ func TestStoreRefusesARouteWithoutADeployment(t *testing.T) {
 
 	_, err := runtime.store.PutRoute(context.Background(), domain.Route{
 		ID: "rte-orphan", PublicModel: "orphan", Enabled: true,
-	}, 0)
+	}, 0, nil)
 	if err == nil {
 		t.Fatal("the store persisted a route with no deployment")
 	}

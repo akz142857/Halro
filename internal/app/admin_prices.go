@@ -149,10 +149,7 @@ func (r *Runtime) createAdminDeploymentPrice(writer http.ResponseWriter, request
 		writePriceError(writer, err)
 		return
 	}
-	if err := r.activateTopology(); err != nil {
-		adminConfigurationError(writer, err)
-		return
-	}
+	r.activateTopologyAfterCommit()
 	if err := r.deliverPricingAuditIntent(request.Context(), effectiveIntent); err != nil {
 		adminAuditError(writer)
 		return
@@ -201,10 +198,7 @@ func (r *Runtime) cancelAdminDeploymentPrice(writer http.ResponseWriter, request
 		writePriceError(writer, err)
 		return
 	}
-	if err := r.activateTopology(); err != nil {
-		adminConfigurationError(writer, err)
-		return
-	}
+	r.activateTopologyAfterCommit()
 	if err := r.deliverPricingAuditIntent(request.Context(), intent); err != nil {
 		adminAuditError(writer)
 		return
@@ -273,10 +267,7 @@ func (r *Runtime) confirmRestoredDeploymentPricing(writer http.ResponseWriter, r
 		writePriceError(writer, err)
 		return
 	}
-	if err := r.activateTopology(); err != nil {
-		adminConfigurationError(writer, err)
-		return
-	}
+	r.activateTopologyAfterCommit()
 	if err := r.deliverPricingAuditIntent(request.Context(), intent); err != nil {
 		adminAuditError(writer)
 		return
@@ -455,10 +446,7 @@ func (r *Runtime) adoptAdminDeploymentPriceProposal(writer http.ResponseWriter, 
 		writePriceError(writer, err)
 		return
 	}
-	if err := r.activateTopology(); err != nil {
-		adminConfigurationError(writer, err)
-		return
-	}
+	r.activateTopologyAfterCommit()
 	if err := r.deliverPricingAuditIntent(request.Context(), intent); err != nil {
 		adminAuditError(writer)
 		return

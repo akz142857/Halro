@@ -13,6 +13,7 @@ import (
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/ledger"
 	"github.com/akz142857/Halro/internal/masterkey"
+	"github.com/akz142857/Halro/internal/safetransport"
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 	"github.com/akz142857/Halro/internal/store/lock"
 	"github.com/akz142857/Halro/internal/timezone"
@@ -253,7 +254,7 @@ func DoctorWithOptions(ctx context.Context, cfg config.Config, options DoctorOpt
 	}
 
 	if store != nil {
-		checkDoctorTopology(ctx, store, add)
+		checkDoctorTopology(ctx, cfg, store, add)
 		if err := store.PricingReadiness(ctx); err != nil {
 			add("pricing_clock", "fail", err.Error())
 		} else {
@@ -300,7 +301,7 @@ func validateDoctorKeySlots(ctx context.Context, cfg config.Config, store *bolts
 	return nil
 }
 
-func checkDoctorTopology(ctx context.Context, store *boltstore.Store, add func(string, string, string)) {
+func checkDoctorTopology(ctx context.Context, cfg config.Config, store *boltstore.Store, add func(string, string, string)) {
 	providers, providerErr := store.ListProviders(ctx)
 	deployments, deploymentErr := store.ListDeployments(ctx)
 	routes, routeErr := store.ListRoutes(ctx)
@@ -309,12 +310,51 @@ func checkDoctorTopology(ctx context.Context, store *boltstore.Store, add func(s
 		return
 	}
 	providerEnabled := make(map[string]bool, len(providers))
+	// An endpoint that was legal when the provider was created stops being legal
+	// the moment the operator tightens allow_private_provider_endpoints, and the
+	// loader then excludes that provider rather than refusing to start. That is
+	// the right call — tightening a security setting must not brick the
+	// instance — but it means the exclusion is silent unless doctor says it.
+	endpointPolicy := providerEndpointPolicy(cfg)
+	for _, item := range providers {
+		if !item.Enabled || item.DeletedAt != nil {
+			continue
+		}
+		policy := endpointPolicy
+		policy.AllowedHosts = item.AllowedHosts
+		if _, err := safetransport.ValidateURL(item.BaseURL, policy); err != nil {
+			add("topology", "fail", fmt.Sprintf(
+				"provider %q is excluded from routing: its endpoint does not satisfy the current policy: %v", item.ID, err))
+			return
+		}
+	}
+	// A binding that is switched off produces no adapter, so a route reaching it
+	// is withheld from the routing candidates rather than served. Checking only
+	// the provider and the deployment made that invisible here: the loader is
+	// deliberately tolerant now, which is exactly why doctor has to be the place
+	// the exclusion shows up.
+	bindingEnabled := make(map[string]bool)
+	providerByID := make(map[string]domain.ProviderInstance, len(providers))
 	for _, item := range providers {
 		providerEnabled[item.ID] = item.Enabled && item.DeletedAt == nil
+		providerByID[item.ID] = item
+		for _, binding := range item.EffectiveProfileBindings() {
+			bindingEnabled[item.ID+"\x00"+binding.ID] = binding.Enabled
+		}
+	}
+	deploymentBinding := make(map[string]string, len(deployments))
+	deploymentByID := make(map[string]domain.Deployment, len(deployments))
+	for _, item := range deployments {
+		deploymentByID[item.ID] = item
 	}
 	deploymentEnabled := make(map[string]bool, len(deployments))
 	pricingSelectedAt := time.Now().UTC()
 	for _, item := range deployments {
+		bindingID := item.BindingID
+		if bindingID == "" {
+			bindingID = domain.DefaultProviderProfileBindingID(item.ProviderID, item.ProfileID)
+		}
+		deploymentBinding[item.ID] = bindingID
 		deploymentEnabled[item.ID] = item.Enabled && item.DeletedAt == nil && providerEnabled[item.ProviderID]
 		if item.Enabled && item.DeletedAt == nil {
 			if _, err := store.SelectDeploymentPriceVersion(ctx, item.ID, pricingSelectedAt); err != nil {
@@ -335,9 +375,31 @@ func checkDoctorTopology(ctx context.Context, store *boltstore.Store, add func(s
 			add("topology", "fail", "an enabled route references an unavailable deployment or provider")
 			return
 		}
+		deployment, ok := deploymentByID[item.DeploymentID]
+		if !ok {
+			add("topology", "fail", fmt.Sprintf("route %q references a deployment that does not exist", item.ID))
+			return
+		}
+		if !bindingEnabled[deployment.ProviderID+"\x00"+deploymentBinding[item.DeploymentID]] {
+			add("topology", "fail", fmt.Sprintf(
+				"route %q is withheld: deployment %q uses capability interface %q, which is switched off on provider %q",
+				item.ID, deployment.ID, deploymentBinding[item.DeploymentID], deployment.ProviderID))
+			return
+		}
 	}
 	detail := fmt.Sprintf("%d active routes; all references are available", active)
 	add("topology", "pass", detail)
+	// An admin mutation is durable together with its audit record, and delivery
+	// happens afterwards. A backlog here is the audit log refusing appends, not
+	// a cosmetic lag: mutations are still being accepted while their records
+	// pile up undelivered.
+	if pending, err := store.PendingAdminAuditIntentCount(ctx); err != nil {
+		add("admin_audit_backlog", "fail", err.Error())
+	} else if pending > 0 {
+		add("admin_audit_backlog", "warn", fmt.Sprintf("%d admin mutations are durable with audit records not yet in the log", pending))
+	} else {
+		add("admin_audit_backlog", "pass", "every admin mutation's audit record is in the log")
+	}
 }
 
 // inspectLedgerChain authenticates the Ledger chain and reconciles it against

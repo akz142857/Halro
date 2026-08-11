@@ -45,30 +45,34 @@ import (
 )
 
 type Runtime struct {
-	config               config.Config
-	logger               *slog.Logger
-	lock                 *lock.Lock
-	store                *boltstore.Store
-	ledger               *ledger.Log
-	state                *ledger.State
-	status               *ledger.Status
-	vault                *vault.Vault
-	auth                 *auth.Snapshot
-	providers            *provider.Registry
-	accounting           *budget.Manager
-	gateway              *gatewayapi.Handler
-	gatewayService       *gatewaycore.Service
-	sourceLimiter        *sourcelimit.Limiter
-	tokenGuard           *tokenguard.Manager
-	redactor             *redaction.Engine
-	alerts               *alert.Dispatcher
-	audit                *audit.Log
-	auditBatchMu         sync.Mutex
-	auditBatchPending    []adminAuditRequest
-	auditBatchRunning    bool
-	gatewayHandlerOnce   sync.Once
-	gatewayHandlerValue  http.Handler
-	adminTopologyMu      sync.Mutex
+	config              config.Config
+	logger              *slog.Logger
+	lock                *lock.Lock
+	store               *boltstore.Store
+	ledger              *ledger.Log
+	state               *ledger.State
+	status              *ledger.Status
+	vault               *vault.Vault
+	auth                *auth.Snapshot
+	providers           *provider.Registry
+	accounting          *budget.Manager
+	gateway             *gatewayapi.Handler
+	gatewayService      *gatewaycore.Service
+	sourceLimiter       *sourcelimit.Limiter
+	tokenGuard          *tokenguard.Manager
+	redactor            *redaction.Engine
+	alerts              *alert.Dispatcher
+	audit               *audit.Log
+	auditBatchMu        sync.Mutex
+	auditBatchPending   []adminAuditRequest
+	auditBatchRunning   bool
+	gatewayHandlerOnce  sync.Once
+	gatewayHandlerValue http.Handler
+	adminTopologyMu     sync.Mutex
+	// activation records whether the live snapshots still reflect the store, so
+	// a durable mutation that failed to activate refuses traffic instead of
+	// being served from a snapshot known to be behind it.
+	activation           activationTracker
 	capabilityResolution capabilityResolutionRuntime
 	capabilityDetections capabilityDetectionRuntime
 	adminProjectMu       sync.Mutex
@@ -661,6 +665,19 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		secretVault.Close()
 		return fail(fmt.Errorf("recover pending pricing audit: %w", err))
 	}
+	// An admin mutation is durable together with its audit record, so anything
+	// still pending here is a crash between that commit and the append. It is
+	// delivered before the instance serves, which is what makes "the mutation
+	// happened but nothing recorded it" unreachable rather than merely rare.
+	if err := runtime.drainAdminAuditIntents(ctx); err != nil {
+		auditLog.Close()
+		alertDispatcher.Close()
+		ledgerLog.Close()
+		metadata.Close()
+		providerRegistry.Close()
+		secretVault.Close()
+		return fail(fmt.Errorf("recover pending admin audit: %w", err))
+	}
 	// Emitted here rather than at the load itself: the audit log only exists
 	// once the runtime is assembled, and a deployment that came up withheld is
 	// exactly the state §4.4 wants a durable record of.
@@ -715,7 +732,7 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 	runtime.backgroundCancel = backgroundCancel
 	runtime.alerts.SetObserver(runtime.auditAlertDelivery)
 	runtime.alerts.Start()
-	runtime.backgroundWait.Add(8)
+	runtime.backgroundWait.Add(9)
 	go func() {
 		defer runtime.backgroundWait.Done()
 		runtime.usageCollector.Run(backgroundContext)
@@ -746,6 +763,10 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 	go func() {
 		defer runtime.backgroundWait.Done()
 		runtime.runProviderResourceMaintenance(backgroundContext)
+	}()
+	go func() {
+		defer runtime.backgroundWait.Done()
+		runtime.runActivationRecovery(backgroundContext)
 	}()
 	// Read the manager here, on the goroutine that installed it, rather than
 	// inside the worker. The field is written once during Open and never again
@@ -1225,6 +1246,7 @@ func (r *Runtime) gatewayRouter() http.Handler {
 	// an anonymous caller sets the parsing cost and the per-project limiter
 	// that would bound it does not yet apply.
 	router.Group(func(guarded chi.Router) {
+		guarded.Use(r.refuseWhileSnapshotsStale)
 		guarded.Use(r.gateway.LimitOpenAI)
 		guarded.Use(r.gateway.GuardOpenAI)
 		guarded.Post("/v1/chat/completions", r.gateway.ChatCompletions)
@@ -1247,6 +1269,7 @@ func (r *Runtime) gatewayRouter() http.Handler {
 		guarded.Post("/v1/batches/{batchID}/cancel", r.gateway.CancelBatch)
 	})
 	router.Group(func(guarded chi.Router) {
+		guarded.Use(r.refuseWhileSnapshotsStale)
 		guarded.Use(r.gateway.LimitAnthropic)
 		guarded.Use(r.gateway.GuardAnthropic)
 		guarded.Post("/v1/messages", r.gateway.Messages)
@@ -1461,6 +1484,15 @@ func (r *Runtime) ready(writer http.ResponseWriter, request *http.Request) {
 	if err := r.store.PricingReadiness(request.Context()); err != nil {
 		writeJSON(writer, http.StatusServiceUnavailable, map[string]any{
 			"status": "not_ready", "pricing": "quarantined",
+		})
+		return
+	}
+	// A durable configuration change that has not reached the snapshots is not
+	// a ready instance: the data plane is refusing requests, so an orchestrator
+	// that keeps sending them is the only one who does not know.
+	if activation := r.activation.status(); activation.Stale {
+		writeJSON(writer, http.StatusServiceUnavailable, map[string]any{
+			"status": "not_ready", "activation": activation,
 		})
 		return
 	}
