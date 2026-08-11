@@ -35,6 +35,7 @@
 | [Distributed state ownership](architecture/distributed-state-ownership.md) | 分布式演进与状态归属 |
 | [Threat model](architecture/threat-model.md) | v1 威胁模型 |
 | [Experimental EWMA Token Guard](architecture/token-guard-ewma.md) | Token Guard 的 EWMA 实验特性 |
+| [Provider 到 Project API 全链路](architecture/provider-to-project-api-call-chain.zh-CN.md) | 从 Credential 到 `/v1/*` 的真实代码路径：配置激活链、提交语义、Registry 装载规则 |
 
 ADR 保留在 `docs/adr/` 顶层：这是业界通用路径，且 `tools/m11/release-evidence/test_verify.py` 按此路径校验证据。
 
@@ -71,6 +72,10 @@ ADR 保留在 `docs/adr/` 顶层：这是业界通用路径，且 `tools/m11/rel
 与 `verification/` 的分工：那里是发版证据门禁，回答"能不能发"；这里是主动找问题的评审
 记录，回答"哪里还不够好"。评审结论会随修复推进而过时，读的时候以文中 `文件:行号`
 索引回代码为准。
+
+| 评审 | 对象 | 结论 |
+| --- | --- | --- |
+| [Provider 到 Project API 全链路](review/260811/provider-to-project-api-chain.zh-CN.md) | 管理面配置链与数据面调用链 | 7 条 finding 与 3 项子项全部关闭，无未尽项 |
 
 ## 可观测性 · [`observability/`](observability/)
 

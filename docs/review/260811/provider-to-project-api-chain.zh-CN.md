@@ -1,6 +1,6 @@
 # Provider 到 Project API 全链路 Review
 
-> Review 对象：[`provider-to-project-api-call-chain.zh-CN.md`](provider-to-project-api-call-chain.zh-CN.md) 所描述的管理面和数据面链路。
+> Review 对象：[`architecture/provider-to-project-api-call-chain.zh-CN.md`](../../architecture/provider-to-project-api-call-chain.zh-CN.md) 所描述的管理面和数据面链路。
 >
 > 基线：`main@b206285b920c`，并包含 2026-08-10 工作区中的未提交代码。
 >
@@ -8,7 +8,7 @@
 >
 > 复核：2026-08-11 在 `main@4af0228`（较原基线前进 17 个提交）重新走查全链路，并对 F-01、F-02、F-04、F-05 逐条执行验证，不再只靠读代码推断。链路描述本身未发现错误；四条原 finding 全部仍然成立；新增 F-05。复核用的探针只读状态、只打日志，未修改业务代码，未发起任何 Provider 调用。
 >
-> 状态更新：2026-08-11 晚。本文档一度落后于代码——它把 F-06、F-07 标为「未处理」，而两者早已在 `95b5d47` 修掉，那个提交的 message 自己写着「That makes F-06 reachable, so it is fixed in the same commit」。本次按当前代码逐条重核并更新状态，F-03 亦已由 `18f3939` + `a96cf4b` 关闭。**七条 finding 与三项子项全部关闭**（子项在 `c051edc`），本 review 无未尽项。行号仍以原基线为准，普遍已漂移；文件与函数名是稳定的定位入口。
+> 状态更新：2026-08-11 晚。本文档一度落后于代码——它把 F-06、F-07 标为「未处理」，而两者早已在 `95b5d47` 修掉，那个提交的 message 自己写着「That makes F-06 reachable, so it is fixed in the same commit」。本次按当前代码逐条重核并更新状态，F-03 亦已由 `18f3939` + `a96cf4b` 关闭。**七条 finding 与三项子项全部关闭**（子项在 `c051edc`），本 review 无未尽项，因此本文从 `docs/todo/` 归档到 `docs/review/260811/`。行号仍以原基线为准，普遍已漂移；文件与函数名是稳定的定位入口。
 
 ## 1. 结论
 
