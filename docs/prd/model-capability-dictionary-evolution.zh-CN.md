@@ -1,7 +1,10 @@
 # 模型能力字典演进与四层展示
 
-状态：规划中  
-更新日期：2026-08-10
+状态：已归档（2026-08-11）。Phase 1 的一部分已落地，另一部分已被后来的检测改版取代；Phase 2–3 从未开始，能力字典仍是 v1。
+
+更新日期：2026-08-11
+
+> 归档说明：本文写于 2026-08-10，其后 `7d1a48b`、`4af0228` 重做了能力检测的呈现方式，本文 Phase 1 的两条勾选因此不再描述现存 UI。下面的清单已按当时代码逐条订正 —— 一份勾选说谎的归档比没有归档更坏。Phase 2–3 的内容仍然成立，将来要做能力字典 v2 时可以从 §3、§4 重新起草。
 
 ## 1. 背景与边界
 
@@ -62,20 +65,20 @@
 
 ### Phase 1：四层 UI（不改后端契约）
 
-- [x] “适用能力”按四层分组展示。
-- [x] “查看逐项识别结果”使用同一分组和稳定顺序，不再按字段名字母排序。
-- [x] 每层显示简短责任说明和该层已启用/已支持数量。
-- [x] 保留完整 17 项结果和原有状态，不隐藏 `not_probed` 或失败分类。
-- [ ] 使用真实 Provider 检测结果完成视觉验收；不得为验收额外触发付费检测。
+- [x] “适用能力”按四层分组展示。**成立**：`deploymentCapabilityGroups`（`web/src/pages/DeploymentsPage.tsx`）的 `operations` / `modalities` / `protocol` / `managed` 与 §2 四层一一对应，能力编辑器与只读视图共用同一份定义。
+- [~] “查看逐项识别结果”使用同一分组和稳定顺序。**已被取代**：`7d1a48b`、`4af0228` 把逐项结果换成了按候选接口出卡片——每个接口写明被问了什么、回了什么、它本来能确定什么。今天没有 17 项逐项列表，检测结果只用于算出“未能确定”的那几项。
+- [~] 每层显示简短责任说明和该层已启用/已支持数量。**只做了一半**：数量在（`capabilityGroupSelected` 渲染 `{selected}/{total}`）；责任说明没渲染——`deployments.capabilityGroups.*.description` 中英文都写了，代码只取 `.title`，是死字符串。
+- [~] 保留完整 17 项结果和原有状态，不隐藏 `not_probed` 或失败分类。**已被有意推翻**：风险策略按设计不探测安全自动集之外的能力，把这类 `not_probed` 报成未决会让每次检测都显得没做完，因此现在刻意不显示。失败分类本身仍然分开保留。
+- [ ] 使用真实 Provider 检测结果完成视觉验收；不得为验收额外触发付费检测。**未做**。
 
-### Phase 2：冻结 Capability Dictionary v2
+### Phase 2：冻结 Capability Dictionary v2（未开始，`CapabilityDictionaryVersion` 仍为 1）
 
 - [ ] 为能力条目定义稳定 ID、层级、依赖、风险等级、证据方式和生命周期类型。
 - [ ] 决定首批新增项；建议优先 `structured_outputs`、`audio_input`、`audio_output`、`document_input`、`citations`。
 - [ ] 明确 `json_mode → structured_outputs`、`vision → image_input`、`async_generate` 的兼容或迁移策略。
 - [ ] 决定 Realtime 是否属于独立 Operation，禁止只增加一个布尔字段后复用普通 Chat 生命周期。
 
-### Phase 3：端到端契约
+### Phase 3：端到端契约（未开始）
 
 - [ ] 更新 domain、API schema、存储迁移和备份恢复版本。
 - [ ] 更新模型目录及目录摘要，缺失来源保持 unknown。

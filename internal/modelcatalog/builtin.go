@@ -110,9 +110,9 @@ func pinnedProfileEntry(providerType domain.ProviderType, profile domain.Provide
 // offending capability: a model whose own capabilities do not fit inside one
 // profile is Halro's profile split failing to match a real model. A deployment
 // carries one model's own capabilities and nothing else — composing several into
-// one outward-facing model is the route layer's job (see
-// model-aware-capability-selection.v1.1.0.zh-CN.md) — so the answer is a second
-// entry on the profile that does carry it, not a quieter first one.
+// one outward-facing model is the route layer's job, since several routes may
+// share one public alias — so the answer is a second entry on the profile that
+// does carry it, not a quieter first one.
 func builtinEntry(providerType domain.ProviderType, profile domain.ProviderProfileID, model string,
 	capabilities domain.ProviderCapabilities) Entry {
 	return Entry{

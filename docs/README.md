@@ -42,14 +42,16 @@ ADR 保留在 `docs/adr/` 顶层：这是业界通用路径，且 `tools/m11/rel
 ## 产品需求 · [`prd/`](prd/)
 
 历史 PRD 与执行计划，反映当时的需求与取舍，不一定等于当前实现。当前实现以代码和
-[实现状态](milestones/implementation-status.md) 为准。已实施完毕的设计方案从
-[`todo/`](todo/) 归档到这里。
+[实现状态](milestones/implementation-status.md) 为准。已实施完毕、或已被后来的改动取代
+而不再作为待办的设计方案，从 [`todo/`](todo/) 归档到这里；归档时按当时代码订正正文，
+一份勾选说谎的归档比没有归档更坏。
 
 | 已归档的设计方案 | 落地情况 |
 | --- | --- |
 | [跨服务商模型选择与能力自动解析方案](prd/provider-model-selection-and-capability-resolution.zh-CN.md) | Phase 0–4 已实施，见 [ADR 0019](adr/0019-invocation-target-capability-resolution.md)、[ADR 0020](adr/0020-dynamic-signed-model-catalog.md)；动态签名目录默认关闭 |
 | [模型能力自动识别：保留的安全与任务契约](prd/model-capability-auto-detection.zh-CN.md) | 能力检测已实施；正文只保留检测的安全、预算与任务生命周期契约 |
 | [基于服务商与模型的能力选择升级方案](prd/model-aware-capability-selection.zh-CN.md) | 正文已迁入上面的解析方案，仅保留指向它的存根 |
+| [模型能力字典演进与四层展示](prd/model-capability-dictionary-evolution.zh-CN.md) | Phase 1 的四层分组已落地，逐项识别结果视图已被检测改版取代；Phase 2–3 未开始，能力字典仍为 v1 |
 
 ## 里程碑与证据 · [`milestones/`](milestones/)
 
@@ -105,8 +107,6 @@ Markdown 编进二进制，由 `internal/app/admin_master_key_runbook.go` 提供
 | --- | --- | --- |
 | [告警投递适配方案](todo/alert-delivery-design.md) | 告警契约、平台格式、签名、企业网络与投递结果分类 | 提案待评审 |
 | [DLP（脱敏与数据防泄漏）升级方案](todo/dlp-upgrade-plan.zh-CN.md) | 敏感数据标识符、检测配置文件、DLP 策略、Project 绑定与编译快照 | 提案待评审 |
-| [模型能力字典演进与四层展示](todo/model-capability-dictionary-evolution.zh-CN.md) | 能力字典版本化、四层能力模型与新增能力语义 | Phase 1 待真实 Provider 视觉验收；Phase 2–3 未开始 |
-| [模型能力选择 1.1.0：能力组合归属路由层](todo/model-aware-capability-selection.v1.1.0.zh-CN.md) | 能力组合发生在 Route 层，对外模型能力为其 Route 的并集 | §3 的 1.0.0 收尾已完成；§4 的 1.1.0 工作未开始 |
 | [Halro Redis-like HA 架构提案](todo/halro-ha-architecture.zh-CN.md) | Standalone 向 Primary/Replica HA 的演进 | 目标 1.1.0，未实现 |
 
 ## 草稿 · `drafts/`

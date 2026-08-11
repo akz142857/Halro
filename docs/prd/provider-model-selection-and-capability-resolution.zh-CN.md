@@ -639,8 +639,8 @@ Prometheus label 只能使用有界枚举，例如 provider type、target kind�
 ## 13. 与现有文档的关系
 
 - [模型能力自动识别方案](model-capability-auto-detection.zh-CN.md) 保留安全检测、证据、预算和不可重试 UNKNOWN 等契约；其“主要用途/Binding 消歧”产品交互由本方案替代。
-- [模型能力字典演进与四层展示](../todo/model-capability-dictionary-evolution.zh-CN.md) 继续负责能力字典版本与新增能力语义；本方案负责如何跨 Provider 为这些能力取得事实。
-- [基于服务商与模型的能力选择升级方案](model-aware-capability-selection.zh-CN.md) 和 [1.1.0 路由归属方案](../todo/model-aware-capability-selection.v1.1.0.zh-CN.md) 中“用户直接选择能力/用途”的普通流程，以本方案为后续目标；已保存 snapshot、单 Deployment 单 Binding 和 Route 组合原则继续有效。
+- [模型能力字典演进与四层展示](model-capability-dictionary-evolution.zh-CN.md)（已归档）记录了能力字典版本与新增能力语义的设想；本方案负责如何跨 Provider 为这些能力取得事实。字典本身仍是 v1，v2 未冻结。
+- [基于服务商与模型的能力选择升级方案](model-aware-capability-selection.zh-CN.md) 中“用户直接选择能力/用途”的普通流程，以本方案为后续目标；已保存 snapshot、单 Deployment 单 Binding 和 Route 组合原则继续有效。一个 Deployment 表达一个模型自己的能力，组合发生在 Route 层：多条 Route 可共享同一个公共模型别名，`operation_bindings`（在一条 Deployment 内维护 operation → binding 映射）为此被取消，由 `refuseOperationBindings` 明确拒绝。
 - Phase 3 落地时直接删除上述旧文档中已被替代的普通创建流程正文，仅保留迁移说明和指向本文档的链接；不长期维护两套互相冲突的产品流程。
 
 ## 14. Provider 事实来源（核对日期：2026-08-10）
