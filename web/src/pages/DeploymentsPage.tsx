@@ -179,6 +179,18 @@ function DeploymentRow({
     }, deployment.revision),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["deployments"] }),
   });
+  // The "no effective price" banner is the failed enable attempt's error, and it
+  // outlives the condition it describes: setting a price refreshes the price
+  // column to "configured" while the dead mutation keeps rendering its blocker,
+  // so the row contradicts itself until the page is reloaded. Drop the error
+  // once the deployment actually has an active price. A price that is only
+  // scheduled leaves the banner up, which is correct — enabling would still be
+  // refused.
+  const priceBlockedEnable = state.error instanceof ApiError && state.error.code === "deployment_price_unavailable";
+  const resetState = state.reset;
+  useEffect(() => {
+    if (priceBlockedEnable && activePrice) resetState();
+  }, [priceBlockedEnable, activePrice, resetState]);
   const capabilities = Object.entries(deployment.capabilities)
     .filter(([, enabled]) => typeof enabled === "boolean" && enabled)
     .map(([name]) => name);
