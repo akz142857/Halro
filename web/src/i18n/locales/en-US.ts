@@ -65,6 +65,7 @@ export const enUS = {
     ambiguousCapabilityBinding: "This model can use more than one capability interface. Choose the actual interface before confirming the model.",
     noDetectableBinding: "This capability interface cannot detect capabilities automatically. Use the advanced manual declaration.",
     bindingReferencedByDeployment: "A model deployment runs on this capability interface, so it cannot be switched off. Disable or delete the deployment named below first.",
+    routeReferencedByProject: "This is the alias's last route, and a project still lets applications ask for it. Remove the alias from the project named below first.",
     idempotencyConflict: "This confirmation was already used for a different request. Confirm the model again.",
     rateLimited: "Too many attempts. Try again later.",
     server: "The service is temporarily unavailable. Try again later.",

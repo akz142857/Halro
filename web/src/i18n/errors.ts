@@ -19,6 +19,7 @@ export function localizedError(t: TFunction, error: unknown) {
     // The server names the deployment in the detail, so this stays a headline and
     // the detail is deliberately left visible underneath it.
     binding_referenced_by_deployment: "errors.bindingReferencedByDeployment",
+    route_referenced_by_project: "errors.routeReferencedByProject",
     idempotency_conflict: "errors.idempotencyConflict",
   };
   if (error.code && codeMessages[error.code]) return t(codeMessages[error.code]);

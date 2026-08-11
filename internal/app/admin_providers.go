@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -653,8 +654,13 @@ func (r *Runtime) updateAdminRoute(writer http.ResponseWriter, request *http.Req
 		adminBadRequest(writer, "invalid request")
 		return
 	}
+	// Topology before projects, everywhere both are held, so the two coordinators
+	// cannot deadlock. Projects are held because renaming a route's alias orphans
+	// the old one exactly as deleting the route would.
 	r.adminTopologyMu.Lock()
 	defer r.adminTopologyMu.Unlock()
+	r.adminProjectMu.Lock()
+	defer r.adminProjectMu.Unlock()
 	current, err := r.store.GetRoute(request.Context(), chi.URLParam(request, "id"))
 	if err != nil {
 		adminMutationError(writer, err)
@@ -677,6 +683,12 @@ func (r *Runtime) updateAdminRoute(writer http.ResponseWriter, request *http.Req
 	}
 	if err := r.validateAdminRoute(request, route, current.ID); err != nil {
 		adminBadRequest(writer, err.Error())
+		return
+	}
+	if err := r.validateAliasKeepsServingProjects(request, current, route.PublicModel); err != nil {
+		writeJSON(writer, http.StatusConflict, map[string]string{
+			"error": err.Error(), "code": "route_referenced_by_project",
+		})
 		return
 	}
 	route, err = r.store.PutRoute(request.Context(), route, expected)
@@ -708,8 +720,11 @@ func (r *Runtime) deleteAdminRoute(writer http.ResponseWriter, request *http.Req
 	if !r.requireDestructiveStepUp(writer, request) {
 		return
 	}
+	// Topology before projects, the one order both coordinators are taken in.
 	r.adminTopologyMu.Lock()
 	defer r.adminTopologyMu.Unlock()
+	r.adminProjectMu.Lock()
+	defer r.adminProjectMu.Unlock()
 	route, err := r.store.GetRoute(request.Context(), chi.URLParam(request, "id"))
 	if err != nil {
 		adminMutationError(writer, err)
@@ -717,6 +732,12 @@ func (r *Runtime) deleteAdminRoute(writer http.ResponseWriter, request *http.Req
 	}
 	if route.Revision != expected {
 		adminPreconditionFailed(writer)
+		return
+	}
+	if err := r.validateAliasKeepsServingProjects(request, route, ""); err != nil {
+		writeJSON(writer, http.StatusConflict, map[string]string{
+			"error": err.Error(), "code": "route_referenced_by_project",
+		})
 		return
 	}
 	now := time.Now().UTC()
@@ -1043,6 +1064,65 @@ func (r *Runtime) validateProviderCanDeactivate(
 	for _, deployment := range deployments {
 		if deployment.ProviderID == providerID && deployment.Enabled && deployment.DeletedAt == nil {
 			return errors.New("disable or delete the provider's active deployments first")
+		}
+	}
+	return nil
+}
+
+// validateAliasKeepsServingProjects refuses a route mutation that would leave a
+// live Project allowing a public model alias nothing serves.
+//
+// Project writes already reject an unknown alias, on the stated grounds that an
+// alias with no route only fails at request time and does so silently. The
+// reverse direction had no such check, so referential integrity held in one
+// direction only: deleting the last route for an alias — or renaming it, which
+// removes the old alias just as effectively — left the Project authorizing
+// something that could only ever answer 404. Worse, the Project then could not be
+// saved at all, because its own validator rejects the alias it already holds, so
+// an unrelated edit to its budget or CIDRs was blocked until someone noticed why.
+//
+// replacementAlias is what the route will serve after the mutation, empty for a
+// delete. The rule reads the same way as validateProjectReferences: a route
+// exists if it is not a tombstone, disabled or not, because a disabled route is
+// a deliberate maintenance state the console shows as unavailable.
+//
+// The caller must hold adminProjectMu as well as adminTopologyMu. Checking
+// without it would only narrow the race the review described: Project validation
+// sees the route, the route is deleted concurrently, the Project commits.
+func (r *Runtime) validateAliasKeepsServingProjects(
+	request *http.Request,
+	route domain.Route,
+	replacementAlias string,
+) error {
+	if route.PublicModel == replacementAlias {
+		return nil
+	}
+	routes, err := r.store.ListRoutes(request.Context())
+	if err != nil {
+		return errors.New("routes are unavailable")
+	}
+	for _, other := range routes {
+		if other.ID == route.ID || other.DeletedAt != nil {
+			continue
+		}
+		if other.PublicModel == route.PublicModel {
+			// The alias keeps a route, so this is a capacity change.
+			return nil
+		}
+	}
+	projects, err := r.store.ListProjects(request.Context())
+	if err != nil {
+		return errors.New("projects are unavailable")
+	}
+	for _, project := range projects {
+		if project.DeletedAt != nil {
+			continue
+		}
+		if slices.Contains(project.AllowedRoutes, route.PublicModel) {
+			return fmt.Errorf(
+				"this is the last route for model alias %q; remove it from project %q's allowed models first",
+				route.PublicModel, project.Name,
+			)
 		}
 	}
 	return nil

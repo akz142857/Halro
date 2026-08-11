@@ -65,6 +65,7 @@ export const zhCN = {
     ambiguousCapabilityBinding: "该模型可通过多个能力接口调用。请选择实际接口后再确认模型。",
     noDetectableBinding: "当前能力接口不支持自动识别，请使用高级手动声明。",
     bindingReferencedByDeployment: "有模型部署正在这个能力接口上运行，所以它不能关闭。请先停用或删除下面这个部署。",
+    routeReferencedByProject: "这是该别名最后一条路由，还有项目允许应用请求它。请先从下面这个项目的可用模型中移除该别名。",
     idempotencyConflict: "同一次确认已被用于不同请求，请重新确认模型。",
     rateLimited: "操作过于频繁，请稍后重试。",
     server: "服务暂时不可用，请稍后重试。",

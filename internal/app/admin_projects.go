@@ -65,6 +65,12 @@ func (r *Runtime) createAdminProject(writer http.ResponseWriter, request *http.R
 		adminBadRequest(writer, err.Error())
 		return
 	}
+	// validateProjectReferences reads routes, so the topology coordinator is held
+	// across the check and the commit — otherwise the check could see a route that
+	// a concurrent delete removes before this write lands. Topology first, matching
+	// the order the route handlers take them in.
+	r.adminTopologyMu.Lock()
+	defer r.adminTopologyMu.Unlock()
 	r.adminProjectMu.Lock()
 	defer r.adminProjectMu.Unlock()
 	if err := r.validateProjectReferences(request, project); err != nil {
@@ -97,6 +103,12 @@ func (r *Runtime) updateAdminProject(writer http.ResponseWriter, request *http.R
 		adminBadRequest(writer, "invalid request")
 		return
 	}
+	// validateProjectReferences reads routes, so the topology coordinator is held
+	// across the check and the commit — otherwise the check could see a route that
+	// a concurrent delete removes before this write lands. Topology first, matching
+	// the order the route handlers take them in.
+	r.adminTopologyMu.Lock()
+	defer r.adminTopologyMu.Unlock()
 	r.adminProjectMu.Lock()
 	defer r.adminProjectMu.Unlock()
 	current, err := r.store.GetProject(request.Context(), chi.URLParam(request, "id"))
