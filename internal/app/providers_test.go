@@ -59,7 +59,7 @@ func seedProvider(t *testing.T, cfg config.Config, mismatch bool) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	audience, err := safetransport.Audience("https://api.openai.com", string(domain.ProviderOpenAI))
+	audience, err := safetransport.AudienceWithPolicy("https://api.openai.com", string(domain.ProviderOpenAI), safetransport.Policy{})
 	if err != nil {
 		t.Fatal(err)
 	}

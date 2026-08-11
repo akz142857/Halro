@@ -22,6 +22,7 @@ const (
 	auditCapabilitySnapshotReviewed   = "deployment.capability_snapshot.reviewed"
 	auditCapabilityDriftDetected      = "deployment.capability_drift.detected"
 	auditRouteReferenceWithheld       = "route.reference_withheld"
+	auditProviderExcluded             = "provider.excluded_from_routing"
 	auditOperatorCapabilitiesDeclared = "deployment.operator_capabilities.declared"
 )
 
@@ -104,14 +105,16 @@ func capabilityChanged(before, after domain.Deployment) bool {
 //
 // The actor is the system: no administrator asked for this, a catalog or a
 // binary upgrade caused it.
-// It also records routes withheld because what they reference cannot produce a
-// Target. Those are deliberately kept out of the drift action and the drift
-// metric: drift means the deployment's claim outgrew what this build supports,
-// while a dangling reference means the stored topology disagrees with itself.
-// Counting the second as the first would make the drift metric mean two things
-// and hide the one that needs repair rather than review.
+//
+// It also dispatches the other two kinds of exclusion, and they are deliberately
+// kept out of the drift action and the drift metric. Drift means the
+// deployment's claim outgrew what this build supports; a dangling reference
+// means the stored topology disagrees with itself; an excluded provider means it
+// could not be loaded at all. Counting any of them as drift would make that
+// metric mean several things and hide the ones needing repair rather than review.
 func (r *Runtime) auditCapabilityWithholdings(ctx context.Context, report loadReport) {
 	r.auditReferenceWithholdings(report.Dangling)
+	r.auditProviderExclusions(report.Excluded)
 	for _, item := range report.Drifted {
 		metadata := map[string]any{
 			"route_id":                item.RouteID,
@@ -145,6 +148,27 @@ func (r *Runtime) auditCapabilityWithholdings(ctx context.Context, report loadRe
 			"deployment", item.DeploymentID, "success", "", metadata); err != nil {
 			r.logger.Error("capability drift audit append failed",
 				"deployment", item.DeploymentID, "error", err)
+		}
+	}
+}
+
+// auditProviderExclusions records each Provider, or binding of one, that could
+// not be loaded. Every deployment and route on it has stopped serving, so it has
+// to be durable somewhere the operator will find it — and the most likely cause
+// is something they just changed, either a credential or the endpoint policy.
+//
+// Only the reason class is recorded. The underlying errors here are exactly the
+// ones that carry hostnames and key material.
+func (r *Runtime) auditProviderExclusions(excluded []providerExclusion) {
+	for _, item := range excluded {
+		metadata := map[string]any{"reason": item.Reason}
+		if item.BindingID != "" {
+			metadata["binding_id"] = item.BindingID
+		}
+		if err := r.appendAdminAuditWithMetadata("system", "", auditProviderExcluded,
+			"provider", item.ProviderID, "success", "", metadata); err != nil {
+			r.logger.Error("provider exclusion audit append failed",
+				"provider", item.ProviderID, "reason", item.Reason, "error", err)
 		}
 	}
 }

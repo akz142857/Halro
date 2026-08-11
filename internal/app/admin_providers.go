@@ -773,13 +773,12 @@ func (r *Runtime) credentialFromInput(
 	if !implementedProviderType(input.Type) {
 		return domain.Credential{}, errors.New("provider type is not implemented")
 	}
-	endpoint, err := safetransport.ValidateURL(input.BaseURL, safetransport.Policy{
-		RequireHTTPS: true, AllowPrivate: r.config.Security.AllowPrivateProviderEndpoints,
-	})
+	policy := providerEndpointPolicy(r.config)
+	endpoint, err := safetransport.ValidateURL(input.BaseURL, policy)
 	if err != nil {
 		return domain.Credential{}, err
 	}
-	audience, err := safetransport.Audience(input.BaseURL, string(input.Type))
+	audience, err := safetransport.AudienceWithPolicy(input.BaseURL, string(input.Type), policy)
 	if err != nil {
 		return domain.Credential{}, err
 	}
@@ -848,9 +847,8 @@ func (r *Runtime) providerFromInput(
 	if !implementedProviderType(input.Type) {
 		return domain.ProviderInstance{}, errors.New("provider type is not implemented")
 	}
-	endpoint, err := safetransport.ValidateURL(input.BaseURL, safetransport.Policy{
-		RequireHTTPS: true, AllowPrivate: r.config.Security.AllowPrivateProviderEndpoints,
-	})
+	policy := providerEndpointPolicy(r.config)
+	endpoint, err := safetransport.ValidateURL(input.BaseURL, policy)
 	if err != nil {
 		return domain.ProviderInstance{}, err
 	}
@@ -858,7 +856,7 @@ func (r *Runtime) providerFromInput(
 	if err != nil {
 		return domain.ProviderInstance{}, errors.New("credential was not found")
 	}
-	audience, err := safetransport.Audience(input.BaseURL, string(input.Type))
+	audience, err := safetransport.AudienceWithPolicy(input.BaseURL, string(input.Type), policy)
 	if err != nil {
 		return domain.ProviderInstance{}, err
 	}
@@ -1041,7 +1039,7 @@ func (r *Runtime) validateCredentialReferences(
 		if instance.CredentialID != credential.ID || instance.DeletedAt != nil {
 			continue
 		}
-		audience, err := safetransport.Audience(instance.BaseURL, string(instance.Type))
+		audience, err := safetransport.AudienceWithPolicy(instance.BaseURL, string(instance.Type), providerEndpointPolicy(r.config))
 		if err != nil || instance.Type != credential.Type || audience != credential.Audience {
 			return errors.New("credential type or audience conflicts with an existing provider")
 		}

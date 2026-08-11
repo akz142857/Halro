@@ -61,13 +61,18 @@ type onboardingResources struct {
 	Projects    []domain.Project
 	Keys        []domain.GatewayKey
 	PriceReady  map[string]bool
+	// EndpointPolicy is what "is this provider's endpoint usable" means for this
+	// instance. Readiness compares a derived audience against the stored one, and
+	// deriving it under a stricter policy than the one the provider was created
+	// under reported a correctly configured provider as not connected.
+	EndpointPolicy safetransport.Policy
 }
 
 func (r *Runtime) getAdminOnboardingReadiness(writer http.ResponseWriter, request *http.Request) {
 	if !r.syncUsageAdmin(writer, request) {
 		return
 	}
-	resources := onboardingResources{}
+	resources := onboardingResources{EndpointPolicy: providerEndpointPolicy(r.config)}
 	var err error
 	if resources.Credentials, err = r.store.ListCredentials(request.Context()); err != nil {
 		adminStoreError(writer)
@@ -174,7 +179,7 @@ func evaluateOnboardingReadiness(now time.Time, resources onboardingResources, m
 		if !ok || credential.Type != provider.Type {
 			continue
 		}
-		audience, audienceErr := safetransport.Audience(provider.BaseURL, string(provider.Type))
+		audience, audienceErr := safetransport.AudienceWithPolicy(provider.BaseURL, string(provider.Type), resources.EndpointPolicy)
 		if audienceErr != nil || audience != credential.Audience {
 			continue
 		}

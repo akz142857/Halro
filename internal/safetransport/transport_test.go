@@ -99,7 +99,7 @@ func TestValidateURLPolicy(t *testing.T) {
 }
 
 func TestAudienceIsCanonical(t *testing.T) {
-	audience, err := Audience("https://API.Example.com/v1", "account=one")
+	audience, err := AudienceWithPolicy("https://API.Example.com/v1", "account=one", Policy{})
 	if err != nil {
 		t.Fatal(err)
 	}

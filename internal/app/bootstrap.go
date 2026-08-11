@@ -50,11 +50,15 @@ func Bootstrap(ctx context.Context, cfg config.Config, options BootstrapOptions,
 	if options.ProviderType == "" {
 		options.ProviderType = domain.ProviderOpenAI
 	}
-	endpoint, err := safetransport.ValidateURL(options.ProviderBaseURL, safetransport.Policy{RequireHTTPS: true})
+	// Bootstrap used to hard-code the strictest policy, so it refused a private
+	// endpoint even where configuration allowed one — a second spelling of the
+	// same rule, disagreeing with the Admin API.
+	policy := providerEndpointPolicy(cfg)
+	endpoint, err := safetransport.ValidateURL(options.ProviderBaseURL, policy)
 	if err != nil {
 		return BootstrapResult{}, err
 	}
-	audience, err := safetransport.Audience(options.ProviderBaseURL, string(options.ProviderType))
+	audience, err := safetransport.AudienceWithPolicy(options.ProviderBaseURL, string(options.ProviderType), policy)
 	if err != nil {
 		return BootstrapResult{}, err
 	}

@@ -24,6 +24,23 @@ import (
 	"github.com/akz142857/Halro/internal/vault"
 )
 
+// providerEndpointPolicy is the one place the provider-endpoint rules are
+// derived from configuration.
+//
+// It exists because they used to be spelled out at each call site, and one of
+// the two calls every site makes — ValidateURL and then AudienceWithPolicy —
+// was given a policy while the other silently got the strictest one. The
+// configured opt-in was therefore cancelled everywhere it was read. Deriving
+// both from the same value makes that failure shape unavailable.
+//
+// AllowedHosts is left to the caller: it is per-provider, not global.
+func providerEndpointPolicy(cfg config.Config) safetransport.Policy {
+	return safetransport.Policy{
+		RequireHTTPS: true,
+		AllowPrivate: cfg.Security.AllowPrivateProviderEndpoints,
+	}
+}
+
 func (r *Runtime) reloadProviderRegistry(ctx context.Context) error {
 	finalize, err := r.prepareProviderRegistryActivation(ctx, r.effectiveModelCatalog(), r.modelCatalogUnavailable())
 	if err != nil {
@@ -166,6 +183,23 @@ const (
 	withheldDeploymentUnavailable = "deployment_unavailable"
 	withheldBindingUnavailable    = "binding_unavailable"
 	withheldProviderModelRejected = "provider_model_rejected"
+	withheldPriceUnreadable       = "price_unreadable"
+	withheldTargetRejected        = "target_rejected"
+)
+
+// Why a Provider, or one of its bindings, was left out of the load. Scoped wider
+// than a route withholding: nothing on this provider or binding can serve.
+//
+// These are the failures an operator or an upgrade causes — a tightened endpoint
+// policy, a profile this build narrowed, an adapter that will not construct.
+// Integrity and vault-trust failures are not here: a credential that disagrees
+// with its own audience, or will not decrypt under it, still refuses the whole
+// load, because that is corrupt security state rather than a configuration the
+// operator can be told about and left running.
+const (
+	excludedEndpointRejected           = "endpoint_rejected"
+	excludedBindingProfileIncompatible = "binding_profile_incompatible"
+	excludedAdapterUnavailable         = "adapter_unavailable"
 )
 
 // referenceWithholding records a route kept out of the routing candidates
@@ -191,12 +225,33 @@ type referenceWithholding struct {
 	Reason       string
 }
 
-// loadReport carries what a registry load excluded and why. The two kinds stay
+// providerExclusion records a Provider — or one binding of one — that could not
+// be loaded. BindingID is empty when the problem is provider-wide.
+//
+// Like a reference withholding, these used to fail the entire load, with the
+// same consequence: a state the operator could not edit their way out of and a
+// binary that would not open a directory it wrote. The reachable one is
+// endpoint_rejected, because an endpoint that was legal when the provider was
+// created stops being legal the moment allow_private_provider_endpoints is
+// tightened — and tightening a security setting must not be what prevents
+// start-up. Excluding the provider keeps every other provider serving and keeps
+// this one fail-closed.
+type providerExclusion struct {
+	ProviderID string
+	BindingID  string
+	// Reason is a class, never the underlying error: endpoint and credential
+	// failures carry hostnames and key material, and this record is durable.
+	Reason string
+}
+
+// loadReport carries what a registry load excluded and why. The kinds stay
 // separate because they mean different things to an operator and are audited
-// differently: drift is reviewed, a dangling reference is repaired.
+// differently: drift is reviewed, a dangling reference is repaired, and an
+// excluded provider is usually a credential or a policy the operator changed.
 type loadReport struct {
 	Drifted  []capabilityWithholding
 	Dangling []referenceWithholding
+	Excluded []providerExclusion
 }
 
 // logCapabilityWithholdings names the routes that are up but not routing. IDs
@@ -217,6 +272,11 @@ func logCapabilityWithholdings(logger *slog.Logger, report loadReport) {
 	for _, item := range report.Dangling {
 		logger.Error("route withheld: reference cannot produce a routing target",
 			"route", item.RouteID, "deployment", item.DeploymentID,
+			"provider", item.ProviderID, "binding", item.BindingID,
+			"reason", item.Reason)
+	}
+	for _, item := range report.Excluded {
+		logger.Error("provider excluded from routing candidates",
 			"provider", item.ProviderID, "binding", item.BindingID,
 			"reason", item.Reason)
 	}
@@ -265,11 +325,24 @@ func loadProviderRegistryWithCatalog(
 	adapters := make(map[string]provider.Adapter)
 	providerBindingIDs := make(map[string][]string)
 	providerLimits := make(map[string]int64)
-	fail := func(err error) (*provider.Registry, loadReport, error) {
+	// Integrity and vault-trust failures still refuse the load, and the adapters
+	// built so far are closed rather than leaked. This is the narrow answer to
+	// "should any load failure stop the process": yes — the ones that say the
+	// stored state has been tampered with or that the vault cannot be trusted.
+	// Everything else excludes what it affects and keeps serving the rest.
+	refuse := func(err error) (*provider.Registry, loadReport, error) {
 		for _, adapter := range adapters {
 			adapter.Close()
 		}
 		return nil, loadReport{}, err
+	}
+	excludeProvider := func(instance domain.ProviderInstance, reason string) {
+		report.Excluded = append(report.Excluded, providerExclusion{ProviderID: instance.ID, Reason: reason})
+	}
+	excludeBinding := func(instance domain.ProviderInstance, bindingID, reason string) {
+		report.Excluded = append(report.Excluded, providerExclusion{
+			ProviderID: instance.ID, BindingID: bindingID, Reason: reason,
+		})
 	}
 	for _, instance := range instances {
 		if !instance.Enabled || instance.DeletedAt != nil {
@@ -277,26 +350,29 @@ func loadProviderRegistryWithCatalog(
 		}
 		credential, err := store.GetCredential(ctx, instance.CredentialID)
 		if err != nil {
-			return fail(fmt.Errorf("provider %q credential: %w", instance.ID, err))
+			return refuse(fmt.Errorf("provider %q credential: %w", instance.ID, err))
 		}
 		if credential.Type != instance.Type {
-			return fail(fmt.Errorf("provider %q credential type mismatch", instance.ID))
+			return refuse(fmt.Errorf("provider %q credential type mismatch", instance.ID))
 		}
-		policy := safetransport.Policy{
-			RequireHTTPS: true,
-			AllowPrivate: cfg.Security.AllowPrivateProviderEndpoints,
-			AllowedHosts: instance.AllowedHosts,
-		}
+		policy := providerEndpointPolicy(cfg)
+		policy.AllowedHosts = instance.AllowedHosts
 		endpoint, err := safetransport.ValidateURL(instance.BaseURL, policy)
 		if err != nil {
-			return fail(fmt.Errorf("provider %q endpoint: %w", instance.ID, err))
+			// The reachable one: an endpoint legal when the provider was created
+			// can become illegal when the operator tightens
+			// allow_private_provider_endpoints. Tightening a security setting must
+			// not be what stops the process from starting.
+			excludeProvider(instance, excludedEndpointRejected)
+			continue
 		}
-		audience, err := safetransport.Audience(instance.BaseURL, string(instance.Type))
+		audience, err := safetransport.AudienceWithPolicy(instance.BaseURL, string(instance.Type), policy)
 		if err != nil {
-			return fail(fmt.Errorf("provider %q audience: %w", instance.ID, err))
+			excludeProvider(instance, excludedEndpointRejected)
+			continue
 		}
 		if credential.Audience != audience {
-			return fail(fmt.Errorf("provider %q credential audience mismatch", instance.ID))
+			return refuse(fmt.Errorf("provider %q credential audience mismatch", instance.ID))
 		}
 		providerLimits[instance.ID] = instance.MaxConcurrency
 		for _, binding := range instance.EffectiveProfileBindings() {
@@ -305,29 +381,38 @@ func loadProviderRegistryWithCatalog(
 			}
 			manifest, ok := provider.BuiltinProfile(binding.ProfileID)
 			if !ok || manifest.ProviderType != instance.Type || manifest.AccessSurface != binding.AccessSurface || manifest.CredentialScheme != binding.CredentialScheme {
-				return fail(fmt.Errorf("provider %q binding %q profile is unavailable or incompatible", instance.ID, binding.ID))
+				excludeBinding(instance, binding.ID, excludedBindingProfileIncompatible)
+				continue
 			}
 			if credential.AccessSurface != binding.AccessSurface || credential.Scheme != binding.CredentialScheme {
-				return fail(fmt.Errorf("provider %q binding %q credential profile mismatch", instance.ID, binding.ID))
+				return refuse(fmt.Errorf("provider %q binding %q credential profile mismatch", instance.ID, binding.ID))
 			}
 			plaintext, decryptErr := secretVault.DecryptCredential(credential.ID, string(credential.Type), credential.Audience, credential.Ciphertext)
 			if decryptErr != nil {
-				return fail(fmt.Errorf("provider %q binding %q decrypt credential: %w", instance.ID, binding.ID, decryptErr))
+				// Fatal on purpose. A credential that will not decrypt under its own
+				// audience means either the master key or the record is wrong, and
+				// neither is a state to keep serving other providers through.
+				return refuse(fmt.Errorf("provider %q binding %q decrypt credential: %w", instance.ID, binding.ID, decryptErr))
 			}
 			adapter, adapterErr := newProviderBindingAdapter(cfg, instance, binding, endpoint, policy, plaintext)
 			clear(plaintext)
 			if adapterErr != nil {
-				return fail(fmt.Errorf("provider %q binding %q adapter: %w", instance.ID, binding.ID, adapterErr))
+				excludeBinding(instance, binding.ID, excludedAdapterUnavailable)
+				continue
 			}
 			profiled, bridgeErr := provider.NewLegacyAdapterBridge(adapter, manifest, binding.CapabilityEvidence)
 			if bridgeErr != nil {
 				adapter.Close()
-				return fail(fmt.Errorf("provider %q binding %q legacy bridge: %w", instance.ID, binding.ID, bridgeErr))
+				excludeBinding(instance, binding.ID, excludedAdapterUnavailable)
+				continue
 			}
 			adapters[binding.ID] = profiled
 			providerBindingIDs[instance.ID] = append(providerBindingIDs[instance.ID], binding.ID)
 			if err := registry.RegisterBindingAdapter(instance.ID, binding.ID, profiled); err != nil {
-				return fail(fmt.Errorf("register provider %q binding %q adapter: %w", instance.ID, binding.ID, err))
+				profiled.Close()
+				delete(adapters, binding.ID)
+				excludeBinding(instance, binding.ID, excludedAdapterUnavailable)
+				continue
 			}
 		}
 	}
@@ -391,7 +476,16 @@ func loadProviderRegistryWithCatalog(
 			providerModel = deployment.ProviderModel
 			price, priceErr := store.SelectDeploymentPriceVersion(ctx, deployment.ID, pricingSelectedAt)
 			if priceErr != nil && !errors.Is(priceErr, domain.ErrPriceUnavailable) {
-				return fail(fmt.Errorf("deployment %q has no effective versioned price at %s: %w", deployment.ID, pricingSelectedAt.Format(time.RFC3339Nano), priceErr))
+				// A price that cannot be read is this deployment's problem, not the
+				// registry's. ErrPriceUnavailable is the ordinary "no current price"
+				// case and is tolerated with a zero projection; anything else is a
+				// store-level failure for this one record.
+				report.Dangling = append(report.Dangling, referenceWithholding{
+					RouteID: route.ID, DeploymentID: deployment.ID,
+					ProviderID: deployment.ProviderID, BindingID: deployment.BindingID,
+					Reason: withheldPriceUnreadable,
+				})
+				continue
 			}
 			if priceErr == nil {
 				inputPrice = price.InputMicrosPerMillion
@@ -449,7 +543,12 @@ func loadProviderRegistryWithCatalog(
 			MaxConcurrency:         providerLimits[providerID],
 			DeploymentConcurrency:  deploymentLimit,
 		}); err != nil {
-			return fail(fmt.Errorf("register route %q: %w", route.ID, err))
+			report.Dangling = append(report.Dangling, referenceWithholding{
+				RouteID: route.ID, DeploymentID: deploymentID,
+				ProviderID: providerID, BindingID: bindingID,
+				Reason: withheldTargetRejected,
+			})
+			continue
 		}
 	}
 	return registry, report, nil

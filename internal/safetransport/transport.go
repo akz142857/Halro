@@ -116,10 +116,6 @@ func ValidateURL(raw string, policy Policy) (*url.URL, error) {
 	return parsed, nil
 }
 
-func Audience(raw, semantic string) (string, error) {
-	return AudienceWithPolicy(raw, semantic, Policy{})
-}
-
 func AudienceWithPolicy(raw, semantic string, policy Policy) (string, error) {
 	parsed, err := ValidateURL(raw, policy)
 	if err != nil {
