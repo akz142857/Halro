@@ -73,6 +73,9 @@ func TestAdminProjectAndKeyLifecycle(t *testing.T) {
 	)
 	withoutIdempotency.AddCookie(cookie)
 	withoutIdempotency.Header.Set("X-CSRF-Token", csrf)
+	// This test is about the absence of the key, so it drops the one the shared
+	// helper supplies.
+	withoutIdempotency.Header.Del("Idempotency-Key")
 	withoutIdempotencyResponse := httptest.NewRecorder()
 	runtime.adminRouter().ServeHTTP(withoutIdempotencyResponse, withoutIdempotency)
 	if withoutIdempotencyResponse.Code != http.StatusBadRequest ||

@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/akz142857/Halro/internal/domain"
-	"github.com/akz142857/Halro/internal/id"
 	"github.com/akz142857/Halro/internal/modelcatalog"
 	"github.com/akz142857/Halro/internal/provider"
 	bedrockprovider "github.com/akz142857/Halro/internal/provider/bedrock"
@@ -147,11 +146,12 @@ func (r *Runtime) createAdminDeployment(writer http.ResponseWriter, request *htt
 		writeJSON(writer, http.StatusConflict, map[string]string{"error": "new deployments must be saved disabled and pass validation before enable"})
 		return
 	}
-	deploymentID, err := id.New("dep")
-	if err != nil {
-		adminStoreError(writer)
+	idempotencyKey, ok := adminCreateIdempotencyKey(writer, request)
+	if !ok {
 		return
 	}
+	admin := request.Context().Value(adminContextKey{}).(adminRequestContext)
+	deploymentID := adminCreateID("dep", "deployment", admin.session.Username, idempotencyKey)
 	r.adminTopologyMu.Lock()
 	defer r.adminTopologyMu.Unlock()
 	now := time.Now().UTC()
@@ -167,6 +167,9 @@ func (r *Runtime) createAdminDeployment(writer http.ResponseWriter, request *htt
 	}
 	deployment, err = r.store.PutDeployment(request.Context(), deployment, 0, intent)
 	if err != nil {
+		if writeAdminCreateReplay(writer, err, "deployment", deploymentID) {
+			return
+		}
 		adminMutationError(writer, err)
 		return
 	}

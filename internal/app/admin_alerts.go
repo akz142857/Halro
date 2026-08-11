@@ -56,23 +56,20 @@ func (r *Runtime) createAdminAlert(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	deleteCredentialID := ""
+	intent, intentErr := r.newAdminAuditIntent(request, "alert_webhook.create", "alert_webhook", webhookID)
+	if intentErr != nil {
+		adminStoreError(writer)
+		return
+	}
 	webhook, err = r.store.PutAlertWebhookBundle(
-		request.Context(), webhook, 0, credential, credentialRevision, deleteCredentialID,
+		request.Context(), webhook, 0, credential, credentialRevision, deleteCredentialID, intent,
 	)
 	if err != nil {
 		adminMutationError(writer, err)
 		return
 	}
-	// Audited before the dispatcher reload: the change is already durable at this point,
-	// and a reload failure caused by some *other* webhook must not erase the record that
-	// this one was written.
-	if err := r.auditAdminMutation(request, "alert_webhook.create", "alert_webhook", webhook.ID); err != nil {
-		adminAuditError(writer)
-		return
-	}
-	if !r.reloadAlerts(writer, request) {
-		return
-	}
+	r.completeAdminMutation(writer, request, *intent)
+	r.activateAlertEndpoints()
 	writer.Header().Set("ETag", revisionETag(webhook.Revision))
 	writeJSON(writer, http.StatusCreated, alertWebhookSafeView(webhook))
 }
@@ -111,23 +108,20 @@ func (r *Runtime) updateAdminAlert(writer http.ResponseWriter, request *http.Req
 	if current.CredentialID != "" && webhook.CredentialID == "" {
 		deleteCredentialID = current.CredentialID
 	}
+	intent, intentErr := r.newAdminAuditIntent(request, "alert_webhook.update", "alert_webhook", webhook.ID)
+	if intentErr != nil {
+		adminStoreError(writer)
+		return
+	}
 	webhook, err = r.store.PutAlertWebhookBundle(
-		request.Context(), webhook, expected, credential, credentialRevision, deleteCredentialID,
+		request.Context(), webhook, expected, credential, credentialRevision, deleteCredentialID, intent,
 	)
 	if err != nil {
 		adminMutationError(writer, err)
 		return
 	}
-	// Audited before the dispatcher reload: the change is already durable at this point,
-	// and a reload failure caused by some *other* webhook must not erase the record that
-	// this one was written.
-	if err := r.auditAdminMutation(request, "alert_webhook.update", "alert_webhook", webhook.ID); err != nil {
-		adminAuditError(writer)
-		return
-	}
-	if !r.reloadAlerts(writer, request) {
-		return
-	}
+	r.completeAdminMutation(writer, request, *intent)
+	r.activateAlertEndpoints()
 	writer.Header().Set("ETag", revisionETag(webhook.Revision))
 	writeJSON(writer, http.StatusOK, alertWebhookSafeView(webhook))
 }
@@ -164,23 +158,20 @@ func (r *Runtime) deleteAdminAlert(writer http.ResponseWriter, request *http.Req
 	webhook.CredentialID = ""
 	webhook.UpdatedAt = now
 	webhook.DeletedAt = &now
+	intent, intentErr := r.newAdminAuditIntent(request, "alert_webhook.delete", "alert_webhook", webhook.ID)
+	if intentErr != nil {
+		adminStoreError(writer)
+		return
+	}
 	webhook, err = r.store.PutAlertWebhookBundle(
-		request.Context(), webhook, expected, nil, 0, deleteCredentialID,
+		request.Context(), webhook, expected, nil, 0, deleteCredentialID, intent,
 	)
 	if err != nil {
 		adminMutationError(writer, err)
 		return
 	}
-	// Audited before the dispatcher reload: the change is already durable at this point,
-	// and a reload failure caused by some *other* webhook must not erase the record that
-	// this one was written.
-	if err := r.auditAdminMutation(request, "alert_webhook.delete", "alert_webhook", webhook.ID); err != nil {
-		adminAuditError(writer)
-		return
-	}
-	if !r.reloadAlerts(writer, request) {
-		return
-	}
+	r.completeAdminMutation(writer, request, *intent)
+	r.activateAlertEndpoints()
 	writer.Header().Set("ETag", revisionETag(webhook.Revision))
 	writer.WriteHeader(http.StatusNoContent)
 }
@@ -360,16 +351,26 @@ func (r *Runtime) prepareAlertWebhook(
 	return webhook, credential, credentialRevision, webhook.Validate()
 }
 
-func (r *Runtime) reloadAlerts(writer http.ResponseWriter, request *http.Request) bool {
-	endpoints, err := loadAlertEndpoints(request.Context(), r.config, r.store, r.vault)
+// activateAlertEndpoints carries a durable webhook change into the live
+// dispatcher, on the runtime's own context rather than the Admin client's.
+//
+// Unlike the redaction and Token Guard policies, a failure here does not mark
+// the runtime stale. Alert delivery is an outbound notification path: it
+// decides nothing about whether a request is authorized, redacted or admitted,
+// so refusing all data-plane traffic because one webhook could not be rebuilt
+// would be a far larger outage than the fault it reports. It is logged, and the
+// mutation is already durable and recorded either way.
+func (r *Runtime) activateAlertEndpoints() {
+	ctx, cancel := r.activationContext()
+	defer cancel()
+	endpoints, err := loadAlertEndpoints(ctx, r.config, r.store, r.vault)
 	if err != nil {
-		r.logger.Error("reload alert endpoints", "error", err)
-		adminConfigurationError(writer, err)
-		return false
+		r.logger.Error("alert endpoint activation failed after a durable mutation", "error", err)
+		return
 	}
 	retired := r.alerts.ReplaceEndpoints(endpoints)
 	if len(retired) == 0 {
-		return true
+		return
 	}
 	grace := r.config.Alerts.Timeout.Value()*time.Duration(r.config.Alerts.MaxAttempts) +
 		r.config.Alerts.MaxDelay.Value()*time.Duration(r.config.Alerts.MaxAttempts) + time.Second
@@ -386,7 +387,6 @@ func (r *Runtime) reloadAlerts(writer http.ResponseWriter, request *http.Request
 			retired[index].Close()
 		}
 	}()
-	return true
 }
 
 func alertWebhookSafeView(item domain.AlertWebhook) alertWebhookView {

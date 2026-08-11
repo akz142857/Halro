@@ -13,6 +13,7 @@ import (
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/ledger"
 	"github.com/akz142857/Halro/internal/masterkey"
+	"github.com/akz142857/Halro/internal/safetransport"
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 	"github.com/akz142857/Halro/internal/store/lock"
 	"github.com/akz142857/Halro/internal/timezone"
@@ -253,7 +254,7 @@ func DoctorWithOptions(ctx context.Context, cfg config.Config, options DoctorOpt
 	}
 
 	if store != nil {
-		checkDoctorTopology(ctx, store, add)
+		checkDoctorTopology(ctx, cfg, store, add)
 		if err := store.PricingReadiness(ctx); err != nil {
 			add("pricing_clock", "fail", err.Error())
 		} else {
@@ -300,7 +301,7 @@ func validateDoctorKeySlots(ctx context.Context, cfg config.Config, store *bolts
 	return nil
 }
 
-func checkDoctorTopology(ctx context.Context, store *boltstore.Store, add func(string, string, string)) {
+func checkDoctorTopology(ctx context.Context, cfg config.Config, store *boltstore.Store, add func(string, string, string)) {
 	providers, providerErr := store.ListProviders(ctx)
 	deployments, deploymentErr := store.ListDeployments(ctx)
 	routes, routeErr := store.ListRoutes(ctx)
@@ -309,6 +310,24 @@ func checkDoctorTopology(ctx context.Context, store *boltstore.Store, add func(s
 		return
 	}
 	providerEnabled := make(map[string]bool, len(providers))
+	// An endpoint that was legal when the provider was created stops being legal
+	// the moment the operator tightens allow_private_provider_endpoints, and the
+	// loader then excludes that provider rather than refusing to start. That is
+	// the right call — tightening a security setting must not brick the
+	// instance — but it means the exclusion is silent unless doctor says it.
+	endpointPolicy := providerEndpointPolicy(cfg)
+	for _, item := range providers {
+		if !item.Enabled || item.DeletedAt != nil {
+			continue
+		}
+		policy := endpointPolicy
+		policy.AllowedHosts = item.AllowedHosts
+		if _, err := safetransport.ValidateURL(item.BaseURL, policy); err != nil {
+			add("topology", "fail", fmt.Sprintf(
+				"provider %q is excluded from routing: its endpoint does not satisfy the current policy: %v", item.ID, err))
+			return
+		}
+	}
 	// A binding that is switched off produces no adapter, so a route reaching it
 	// is withheld from the routing candidates rather than served. Checking only
 	// the provider and the deployment made that invisible here: the loader is

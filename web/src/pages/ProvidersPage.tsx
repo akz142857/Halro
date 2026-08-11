@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { api } from "../api";
 import {
   EmptyState,
@@ -475,6 +475,10 @@ function ProviderForm({
   const matchingCredentials = credentials.filter((credential) => credential.type === type && (!selectedSurface || credential.access_surface === selectedSurface));
   const [credentialID, setCredentialID] = useState(current?.credential_id ?? credentials.find((credential) => credential.type === initialType && (initialType !== "bedrock" || credential.access_surface === bedrockProfileConfig(initialProfile).surface))?.id ?? "");
   const queryClient = useQueryClient();
+  // One key per open form: a retry after a lost response reaches the same
+  // record instead of creating a second one, while a deliberate second create
+  // opens the form again and gets a new key.
+  const idempotencyKey = useRef(crypto.randomUUID());
   const mutation = useMutation({
     mutationFn: () => {
       const value = {
@@ -494,7 +498,7 @@ function ProviderForm({
       };
       return current
         ? api.updateProvider(current.id, value, current.revision)
-        : api.createProvider(value);
+        : api.createProvider(value, idempotencyKey.current);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["providers"] });

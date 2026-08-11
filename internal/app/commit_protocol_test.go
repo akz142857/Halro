@@ -91,3 +91,96 @@ func TestStaleActivationRefusesDataPlaneTraffic(t *testing.T) {
 		t.Fatalf("the runtime kept refusing after catching up: %s", recovered.Body.String())
 	}
 }
+
+// A create mints its own ID, so a retry after a lost response used to produce a
+// second record: two routes on one public model become two routing candidates,
+// and the operator sees a duplicate they never asked for. The idempotency key
+// is how the caller says "this is the same create", and deriving the ID from it
+// turns the retry into a collision instead.
+func TestRetriedCreateDoesNotProduceASecondRecord(t *testing.T) {
+	runtime, bootstrap, session := activationTestRuntime(t)
+	body := map[string]any{
+		"public_model": "retry-alias", "deployment_id": bootstrap.DeploymentID,
+		"priority": 0, "strategy": "ordered", "enabled": false,
+	}
+	send := func(key string) *httptest.ResponseRecorder {
+		request := adminMutationRequest(t, http.MethodPost, "/admin/api/v1/routes", session, body)
+		request.Header.Set("Idempotency-Key", key)
+		recorder := httptest.NewRecorder()
+		runtime.adminRouter().ServeHTTP(recorder, request)
+		return recorder
+	}
+
+	first := send("operator-retry-1")
+	if first.Code != http.StatusCreated {
+		t.Fatalf("first create status=%d body=%s", first.Code, first.Body.String())
+	}
+	retry := send("operator-retry-1")
+	if retry.Code != http.StatusConflict {
+		t.Fatalf("retry status=%d body=%s", retry.Code, retry.Body.String())
+	}
+	var replay struct {
+		Code string `json:"code"`
+		ID   string `json:"id"`
+	}
+	if err := json.Unmarshal(retry.Body.Bytes(), &replay); err != nil || replay.Code != "route_idempotency_replay" || replay.ID == "" {
+		t.Fatalf("retry does not name the existing record: %s err=%v", retry.Body.String(), err)
+	}
+
+	// A deliberate second create is a different key, and must still work.
+	second := send("operator-retry-2")
+	if second.Code != http.StatusCreated {
+		t.Fatalf("second deliberate create status=%d body=%s", second.Code, second.Body.String())
+	}
+
+	routes, err := runtime.store.ListRoutes(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	aliases := 0
+	for _, route := range routes {
+		if route.PublicModel == "retry-alias" {
+			aliases++
+		}
+	}
+	if aliases != 2 {
+		t.Fatalf("routes on the retried alias=%d, want 2 (one per distinct key)", aliases)
+	}
+
+	missing := adminMutationRequest(t, http.MethodPost, "/admin/api/v1/routes", session, body)
+	missing.Header.Del("Idempotency-Key")
+	recorder := httptest.NewRecorder()
+	runtime.adminRouter().ServeHTTP(recorder, missing)
+	if recorder.Code != http.StatusBadRequest || !bytes.Contains(recorder.Body.Bytes(), []byte("idempotency_key_required")) {
+		t.Fatalf("create without a key status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+// The policy resources were left on the old ordering when the commit protocol
+// landed for the topology chain. A Token Guard policy decides what traffic is
+// admitted, so a change of it that is durable without a record — or that is
+// recorded as having been applied when activation never ran — is the same
+// defect, on a resource where it matters as much.
+func TestPolicyMutationsFollowTheCommitProtocol(t *testing.T) {
+	runtime, _, session := activationTestRuntime(t)
+	request := adminMutationRequest(t, http.MethodPost, "/admin/api/v1/token-guard-policies", session, map[string]any{
+		"name": "guard", "enabled": true, "action": "alert", "request_tokens": 1000,
+	})
+	recorder := httptest.NewRecorder()
+	runtime.adminRouter().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("token guard policy create status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	operation := recorder.Header().Get("Halro-Operation-Id")
+	if operation == "" {
+		t.Fatal("a committed policy change did not name its operation")
+	}
+	pending, err := runtime.store.PendingAdminAuditIntentCount(context.Background())
+	if err != nil || pending != 0 {
+		t.Fatalf("pending=%d err=%v", pending, err)
+	}
+	audit := authenticatedAdminGet(t, runtime, session.cookie, "/admin/api/v1/audit")
+	if !bytes.Contains(audit.Body.Bytes(), []byte(operation)) {
+		t.Fatalf("the audit log does not carry operation %q: %s", operation, audit.Body.String())
+	}
+}

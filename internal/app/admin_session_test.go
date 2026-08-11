@@ -9,8 +9,10 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -436,6 +438,10 @@ func adminRequest(
 	if body != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}
+	// Creates require an idempotency key, so every request built here carries a
+	// distinct one. A test about the key itself sets or clears its own; a test
+	// about anything else should not have to know the rule exists.
+	request.Header.Set("Idempotency-Key", "test-"+strconv.FormatUint(nextTestIdempotencyKey.Add(1), 10))
 	return request
 }
 
@@ -462,3 +468,5 @@ func TestAdminRateLimiterStaysBoundedUnderAddressFlood(t *testing.T) {
 		t.Fatalf("after the window rolled over, tracked=%d, want 1", tracked)
 	}
 }
+
+var nextTestIdempotencyKey atomic.Uint64

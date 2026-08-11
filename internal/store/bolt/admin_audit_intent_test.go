@@ -128,3 +128,44 @@ func TestAdminAuditIntentRejectsDuplicateEventID(t *testing.T) {
 		t.Fatalf("mutation survived its rejected audit record: revision=%d err=%v", after.Revision, err)
 	}
 }
+
+// The policy resources reach the same store helper, and the property is the
+// same there: a Token Guard policy that commits without its record leaves a
+// change to what traffic is admitted with nothing accounting for it.
+func TestPolicyMutationsCarryTheirAuditIntent(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	now := time.Date(2026, 8, 11, 9, 0, 0, 0, time.UTC)
+
+	policy := domain.TokenGuardPolicy{
+		ID: "tgp_one", Name: "guard", Enabled: true, Action: "alert",
+		RequestTokens: 1000, CreatedAt: now, UpdatedAt: now,
+	}
+	if _, err := store.PutTokenGuardPolicy(ctx, policy, 0, adminIntent("aud_guard", "token_guard_policy.create", "token_guard_policy", policy.ID)); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := store.ListPendingAdminAuditIntents(ctx)
+	if err != nil || len(pending) != 1 || pending[0].EventID != "aud_guard" {
+		t.Fatalf("token guard intent did not commit with the policy: %#v err=%v", pending, err)
+	}
+
+	// And a refused write takes its record with it.
+	stale := policy
+	stale.Name = "not applied"
+	if _, err := store.PutTokenGuardPolicy(ctx, stale, 99, adminIntent("aud_guard_stale", "token_guard_policy.update", "token_guard_policy", stale.ID)); err == nil {
+		t.Fatal("stale revision was accepted")
+	}
+	pending, err = store.ListPendingAdminAuditIntents(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, intent := range pending {
+		if intent.EventID == "aud_guard_stale" {
+			t.Fatal("a refused policy write left an audit record behind")
+		}
+	}
+}

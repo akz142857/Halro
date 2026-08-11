@@ -420,6 +420,10 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
   });
   const selectedRouteAliases = watch("routes") ?? [];
   const enabled = watch("enabled");
+  // One key per open form: a retry after a lost response reaches the same
+  // record instead of creating a second one, while a deliberate second create
+  // opens the form again and gets a new key.
+  const idempotencyKey = useRef(crypto.randomUUID());
   const mutation = useMutation({
     mutationFn: (value: ProjectValue) => {
       const body = {
@@ -440,7 +444,7 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
       };
       return current
         ? api.updateProject(current.id, body, `"${current.revision}"`)
-        : api.createProject(body);
+        : api.createProject(body, idempotencyKey.current);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["projects"] });

@@ -102,6 +102,7 @@ func (s *Store) PutRedactionPolicy(
 	ctx context.Context,
 	policy domain.RedactionPolicy,
 	expectedRevision uint64,
+	intent *domain.AdminAuditIntent,
 ) (domain.RedactionPolicy, error) {
 	if err := policy.Validate(); err != nil {
 		return domain.RedactionPolicy{}, err
@@ -110,12 +111,15 @@ func (s *Store) PutRedactionPolicy(
 		return domain.RedactionPolicy{}, err
 	}
 	err := s.db.Update(func(tx *bbolt.Tx) error {
-		return putVersioned(
+		if err := putVersioned(
 			tx.Bucket(bucketRedactionPolicies),
 			policy.ID,
 			expectedRevision,
 			&policy,
-		)
+		); err != nil {
+			return err
+		}
+		return putAdminAuditIntentTx(tx, intent)
 	})
 	return policy, err
 }
@@ -144,6 +148,7 @@ func (s *Store) PutTokenGuardPolicy(
 	ctx context.Context,
 	policy domain.TokenGuardPolicy,
 	expectedRevision uint64,
+	intent *domain.AdminAuditIntent,
 ) (domain.TokenGuardPolicy, error) {
 	if err := policy.Validate(); err != nil {
 		return domain.TokenGuardPolicy{}, err
@@ -152,7 +157,10 @@ func (s *Store) PutTokenGuardPolicy(
 		return domain.TokenGuardPolicy{}, err
 	}
 	err := s.db.Update(func(tx *bbolt.Tx) error {
-		return putVersioned(tx.Bucket(bucketTokenGuardPolicies), policy.ID, expectedRevision, &policy)
+		if err := putVersioned(tx.Bucket(bucketTokenGuardPolicies), policy.ID, expectedRevision, &policy); err != nil {
+			return err
+		}
+		return putAdminAuditIntentTx(tx, intent)
 	})
 	return policy, err
 }
@@ -181,6 +189,7 @@ func (s *Store) PutAlertWebhook(
 	ctx context.Context,
 	webhook domain.AlertWebhook,
 	expectedRevision uint64,
+	intent *domain.AdminAuditIntent,
 ) (domain.AlertWebhook, error) {
 	if err := webhook.Validate(); err != nil {
 		return domain.AlertWebhook{}, err
@@ -193,7 +202,10 @@ func (s *Store) PutAlertWebhook(
 			tx.Bucket(bucketCredentials).Get([]byte(webhook.CredentialID)) == nil {
 			return fmt.Errorf("credential %q: %w", webhook.CredentialID, ErrNotFound)
 		}
-		return putVersioned(tx.Bucket(bucketAlertWebhooks), webhook.ID, expectedRevision, &webhook)
+		if err := putVersioned(tx.Bucket(bucketAlertWebhooks), webhook.ID, expectedRevision, &webhook); err != nil {
+			return err
+		}
+		return putAdminAuditIntentTx(tx, intent)
 	})
 	return webhook, err
 }
@@ -205,6 +217,7 @@ func (s *Store) PutAlertWebhookBundle(
 	credential *domain.Credential,
 	expectedCredentialRevision uint64,
 	deleteCredentialID string,
+	intent *domain.AdminAuditIntent,
 ) (domain.AlertWebhook, error) {
 	if err := webhook.Validate(); err != nil {
 		return domain.AlertWebhook{}, err
@@ -247,7 +260,7 @@ func (s *Store) PutAlertWebhookBundle(
 			return err
 		}
 		if deleteCredentialID == "" {
-			return nil
+			return putAdminAuditIntentTx(tx, intent)
 		}
 		if tx.Bucket(bucketCredentials).Get([]byte(deleteCredentialID)) == nil {
 			return ErrNotFound
@@ -255,7 +268,10 @@ func (s *Store) PutAlertWebhookBundle(
 		if err := ensureCredentialUnreferenced(tx, deleteCredentialID); err != nil {
 			return err
 		}
-		return tx.Bucket(bucketCredentials).Delete([]byte(deleteCredentialID))
+		if err := tx.Bucket(bucketCredentials).Delete([]byte(deleteCredentialID)); err != nil {
+			return err
+		}
+		return putAdminAuditIntentTx(tx, intent)
 	})
 	return webhook, err
 }

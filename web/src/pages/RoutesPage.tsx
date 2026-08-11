@@ -5,7 +5,7 @@ import {
   useReactTable,
 } from "@tanstack/react-table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState, type FormEvent } from "react";
+import { useMemo, useRef, useState, type FormEvent } from "react";
 import { api } from "../api";
 import {
   ConfirmButton,
@@ -245,6 +245,10 @@ function RouteForm({ current, deployments, onClose }: { current?: Route; deploym
   const [strategy, setStrategy] = useState<"ordered" | "round_robin">(current?.strategy || "ordered");
   const [routeEnabled, setRouteEnabled] = useState(current?.enabled ?? true);
   const queryClient = useQueryClient();
+  // One key per open form: a retry after a lost response reaches the same
+  // record instead of creating a second one, while a deliberate second create
+  // opens the form again and gets a new key.
+  const idempotencyKey = useRef(crypto.randomUUID());
   const mutation = useMutation({
     mutationFn: () => {
       const value = {
@@ -256,7 +260,7 @@ function RouteForm({ current, deployments, onClose }: { current?: Route; deploym
       };
       return current
         ? api.updateRoute(current.id, value, current.revision)
-        : api.createRoute(value);
+        : api.createRoute(value, idempotencyKey.current);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["routes"] });

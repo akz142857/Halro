@@ -173,11 +173,12 @@ func (r *Runtime) createAdminProvider(writer http.ResponseWriter, request *http.
 		adminBadRequest(writer, "invalid request")
 		return
 	}
-	providerID, err := id.New("prv")
-	if err != nil {
-		adminStoreError(writer)
+	idempotencyKey, ok := adminCreateIdempotencyKey(writer, request)
+	if !ok {
 		return
 	}
+	admin := request.Context().Value(adminContextKey{}).(adminRequestContext)
+	providerID := adminCreateID("prv", "provider", admin.session.Username, idempotencyKey)
 	now := time.Now().UTC()
 	r.adminTopologyMu.Lock()
 	defer r.adminTopologyMu.Unlock()
@@ -193,6 +194,9 @@ func (r *Runtime) createAdminProvider(writer http.ResponseWriter, request *http.
 	}
 	instance, err = r.store.PutProvider(request.Context(), instance, 0, intent)
 	if err != nil {
+		if writeAdminCreateReplay(writer, err, "provider", providerID) {
+			return
+		}
 		adminMutationError(writer, err)
 		return
 	}
@@ -616,11 +620,12 @@ func (r *Runtime) createAdminRoute(writer http.ResponseWriter, request *http.Req
 		adminBadRequest(writer, "invalid request")
 		return
 	}
-	routeID, err := id.New("rte")
-	if err != nil {
-		adminStoreError(writer)
+	idempotencyKey, ok := adminCreateIdempotencyKey(writer, request)
+	if !ok {
 		return
 	}
+	admin := request.Context().Value(adminContextKey{}).(adminRequestContext)
+	routeID := adminCreateID("rte", "route", admin.session.Username, idempotencyKey)
 	now := time.Now().UTC()
 	route := input.route(routeID, now, now)
 	if err := route.Validate(); err != nil {
@@ -638,8 +643,11 @@ func (r *Runtime) createAdminRoute(writer http.ResponseWriter, request *http.Req
 		adminStoreError(writer)
 		return
 	}
-	route, err = r.store.PutRoute(request.Context(), route, 0, intent)
+	route, err := r.store.PutRoute(request.Context(), route, 0, intent)
 	if err != nil {
+		if writeAdminCreateReplay(writer, err, "route", routeID) {
+			return
+		}
 		adminMutationError(writer, err)
 		return
 	}

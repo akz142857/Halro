@@ -12,7 +12,6 @@ import (
 
 	"github.com/akz142857/Halro/internal/auth"
 	"github.com/akz142857/Halro/internal/domain"
-	"github.com/akz142857/Halro/internal/id"
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 	"github.com/go-chi/chi/v5"
 )
@@ -55,11 +54,12 @@ func (r *Runtime) createAdminProject(writer http.ResponseWriter, request *http.R
 		adminBadRequest(writer, "invalid request")
 		return
 	}
-	projectID, err := id.New("prj")
-	if err != nil {
-		adminStoreError(writer)
+	idempotencyKey, ok := adminCreateIdempotencyKey(writer, request)
+	if !ok {
 		return
 	}
+	admin := request.Context().Value(adminContextKey{}).(adminRequestContext)
+	projectID := adminCreateID("prj", "project", admin.session.Username, idempotencyKey)
 	now := time.Now().UTC()
 	project, err := input.project(projectID, now, now)
 	if err != nil {
@@ -85,6 +85,9 @@ func (r *Runtime) createAdminProject(writer http.ResponseWriter, request *http.R
 	}
 	project, err = r.store.PutProject(request.Context(), project, 0, intent)
 	if err != nil {
+		if writeAdminCreateReplay(writer, err, "project", projectID) {
+			return
+		}
 		adminMutationError(writer, err)
 		return
 	}

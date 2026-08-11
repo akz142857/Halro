@@ -50,7 +50,7 @@ func TestRuntimeLoadsAudienceBoundEncryptedWebhook(t *testing.T) {
 		ID: "webhook_1", Name: "Operations", URL: "https://hooks.example/alerts",
 		AllowedHosts: []string{"hooks.example"}, HeaderName: "Authorization",
 		CredentialID: credential.ID, Enabled: true, CreatedAt: now, UpdatedAt: now,
-	}, 0); err != nil {
+	}, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	secretVault.Close()
@@ -74,7 +74,7 @@ func TestRuntimeRejectsPrivateWebhookEndpointByDefault(t *testing.T) {
 	if _, err := store.PutAlertWebhook(context.Background(), domain.AlertWebhook{
 		ID: "webhook_1", Name: "Private", URL: "https://127.0.0.1/alerts",
 		AllowedHosts: []string{"127.0.0.1"}, Enabled: true, CreatedAt: now, UpdatedAt: now,
-	}, 0); err != nil {
+	}, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	secretVault.Close()
@@ -154,7 +154,7 @@ func TestTokenGuardAlertPipelineWritesGeneratedAndSubmissionAudit(t *testing.T) 
 	if _, err := store.PutTokenGuardPolicy(context.Background(), domain.TokenGuardPolicy{
 		ID: "guard_1", Name: "Guard", Enabled: true, Action: "alert",
 		RequestTokens: 1, CreatedAt: now, UpdatedAt: now,
-	}, 0); err != nil {
+	}, 0, nil); err != nil {
 		store.Close()
 		t.Fatal(err)
 	}

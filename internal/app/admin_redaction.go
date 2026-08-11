@@ -97,18 +97,18 @@ func (r *Runtime) createAdminRedactionPolicy(writer http.ResponseWriter, request
 	}
 	r.adminProjectMu.Lock()
 	defer r.adminProjectMu.Unlock()
-	policy, err = r.store.PutRedactionPolicy(request.Context(), policy, 0)
+	intent, intentErr := r.newAdminAuditIntent(request, "redaction_policy.create", "redaction_policy", policy.ID)
+	if intentErr != nil {
+		adminStoreError(writer)
+		return
+	}
+	policy, err = r.store.PutRedactionPolicy(request.Context(), policy, 0, intent)
 	if err != nil {
 		adminMutationError(writer, err)
 		return
 	}
-	if !r.reloadRedaction(writer, request) {
-		return
-	}
-	if err := r.auditAdminMutation(request, "redaction_policy.create", "redaction_policy", policy.ID); err != nil {
-		adminAuditError(writer)
-		return
-	}
+	r.activateRedactionPolicies()
+	r.completeAdminMutation(writer, request, *intent)
 	writer.Header().Set("ETag", revisionETag(policy.Revision))
 	writeJSON(writer, http.StatusCreated, policy)
 }
@@ -143,18 +143,18 @@ func (r *Runtime) updateAdminRedactionPolicy(writer http.ResponseWriter, request
 		writeJSON(writer, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
 	}
-	policy, err = r.store.PutRedactionPolicy(request.Context(), policy, expected)
+	intent, intentErr := r.newAdminAuditIntent(request, "redaction_policy.update", "redaction_policy", policy.ID)
+	if intentErr != nil {
+		adminStoreError(writer)
+		return
+	}
+	policy, err = r.store.PutRedactionPolicy(request.Context(), policy, expected, intent)
 	if err != nil {
 		adminMutationError(writer, err)
 		return
 	}
-	if !r.reloadRedaction(writer, request) {
-		return
-	}
-	if err := r.auditAdminMutation(request, "redaction_policy.update", "redaction_policy", policy.ID); err != nil {
-		adminAuditError(writer)
-		return
-	}
+	r.activateRedactionPolicies()
+	r.completeAdminMutation(writer, request, *intent)
 	writer.Header().Set("ETag", revisionETag(policy.Revision))
 	writeJSON(writer, http.StatusOK, policy)
 }
@@ -190,18 +190,18 @@ func (r *Runtime) deleteAdminRedactionPolicy(writer http.ResponseWriter, request
 	policy.Enabled = false
 	policy.UpdatedAt = now
 	policy.DeletedAt = &now
-	policy, err = r.store.PutRedactionPolicy(request.Context(), policy, expected)
+	intent, intentErr := r.newAdminAuditIntent(request, "redaction_policy.delete", "redaction_policy", policy.ID)
+	if intentErr != nil {
+		adminStoreError(writer)
+		return
+	}
+	policy, err = r.store.PutRedactionPolicy(request.Context(), policy, expected, intent)
 	if err != nil {
 		adminMutationError(writer, err)
 		return
 	}
-	if !r.reloadRedaction(writer, request) {
-		return
-	}
-	if err := r.auditAdminMutation(request, "redaction_policy.delete", "redaction_policy", policy.ID); err != nil {
-		adminAuditError(writer)
-		return
-	}
+	r.activateRedactionPolicies()
+	r.completeAdminMutation(writer, request, *intent)
 	writer.Header().Set("ETag", revisionETag(policy.Revision))
 	writer.WriteHeader(http.StatusNoContent)
 }
@@ -304,11 +304,25 @@ func (r *Runtime) validateNoRedactionReference(
 	return nil
 }
 
-func (r *Runtime) reloadRedaction(writer http.ResponseWriter, request *http.Request) bool {
-	policies, err := r.store.ListRedactionPolicies(request.Context())
-	if err != nil || r.redactor.ReplacePolicies(policies) != nil {
-		adminStoreError(writer)
-		return false
+// activateRedactionPolicies carries a durable redaction policy change into the
+// live redactor.
+//
+// Like the topology and auth snapshots it runs on the runtime's own context, so
+// an Admin client that disconnects cannot decide whether the change takes
+// effect, and a failure marks the runtime stale instead of failing the request.
+// Redaction is a control that applies to live traffic: running it from a
+// snapshot known to be behind the store is the fail-open direction.
+func (r *Runtime) activateRedactionPolicies() {
+	ctx, cancel := r.activationContext()
+	defer cancel()
+	policies, err := r.store.ListRedactionPolicies(ctx)
+	if err == nil {
+		err = r.redactor.ReplacePolicies(policies)
 	}
-	return true
+	if err != nil {
+		r.logger.Error("redaction policy activation failed after a durable mutation", "error", err)
+		r.activation.markStale("redaction policies: "+err.Error(), time.Now().UTC())
+		return
+	}
+	r.activation.markCurrent()
 }
