@@ -985,3 +985,124 @@ func createEffectiveMeteredPriceForTest(t *testing.T, runtime *Runtime, deployme
 		t.Fatal(err)
 	}
 }
+
+// Provider and Deployment both refuse to leave service while something
+// downstream names them. The Profile Binding level had no such rule, and it is
+// the level the console actually drives: the provider form derives each
+// binding's enabled flag from which capabilities are ticked, so unticking chat
+// and embeddings on a provider whose deployment runs on that interface used to
+// be accepted, land in the store, and leave a deployment bound to a binding that
+// produces no adapter.
+func TestProviderRefusesToSwitchOffAnInterfaceADeploymentRunsOn(t *testing.T) {
+	runtime, bootstrap, session := verifyingProviderRuntime(t)
+	instance, err := runtime.store.GetProvider(context.Background(), bootstrap.ProviderID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chat := instance.EffectiveProfileBindings()[0]
+	chat.ProfileID = domain.ProfileOpenAIChatEmbeddings
+	chat.Capabilities = domain.DefaultProviderCapabilitiesForProfile(domain.ProviderOpenAI, chat.ProfileID)
+	chat.CapabilityEvidence = domain.EvidenceForCapabilities(chat.Capabilities, domain.EvidenceDeclared)
+	media := chat
+	media.ProfileID = domain.ProfileOpenAIMediaResources
+	media.ID = domain.DefaultProviderProfileBindingID(instance.ID, media.ProfileID)
+	media.Capabilities = domain.DefaultProviderCapabilitiesForProfile(domain.ProviderOpenAI, media.ProfileID)
+	media.CapabilityEvidence = domain.EvidenceForCapabilities(media.Capabilities, domain.EvidenceDeclared)
+
+	// Chat off, media on: the Provider record itself stays valid, which is why
+	// domain validation never caught this.
+	chat.Enabled, media.Enabled = false, true
+	body := map[string]any{
+		"name": instance.Name, "type": instance.Type, "base_url": instance.BaseURL,
+		"credential_id": instance.CredentialID, "max_concurrency": instance.MaxConcurrency,
+		"enabled": true, "bindings": []domain.ProviderProfileBinding{chat, media},
+	}
+	request := adminMutationRequest(t, http.MethodPut, "/admin/api/v1/providers/"+instance.ID, session, body)
+	request.Header.Set("If-Match", revisionETag(instance.Revision))
+	response := httptest.NewRecorder()
+	runtime.adminRouter().ServeHTTP(response, request)
+
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var decoded map[string]string
+	if err := json.Unmarshal(response.Body.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded["code"] != "binding_referenced_by_deployment" {
+		t.Fatalf("code=%q error=%q", decoded["code"], decoded["error"])
+	}
+	// A refusal that already wrote is not a refusal.
+	stored, err := runtime.store.GetProvider(context.Background(), instance.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Revision != instance.Revision {
+		t.Fatalf("revision moved from %d to %d on a refused edit", instance.Revision, stored.Revision)
+	}
+	for _, binding := range stored.EffectiveProfileBindings() {
+		if !binding.Enabled {
+			t.Fatalf("binding %q was switched off by a refused edit", binding.ID)
+		}
+	}
+}
+
+// Switching off an interface nothing runs on is ordinary configuration and must
+// still work, or the guard above would make multi-interface providers uneditable.
+func TestProviderAllowsSwitchingOffAnUnusedInterface(t *testing.T) {
+	runtime, bootstrap, session := verifyingProviderRuntime(t)
+	instance, err := runtime.store.GetProvider(context.Background(), bootstrap.ProviderID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chat := instance.EffectiveProfileBindings()[0]
+	chat.ProfileID = domain.ProfileOpenAIChatEmbeddings
+	chat.Capabilities = domain.DefaultProviderCapabilitiesForProfile(domain.ProviderOpenAI, chat.ProfileID)
+	chat.CapabilityEvidence = domain.EvidenceForCapabilities(chat.Capabilities, domain.EvidenceDeclared)
+	media := chat
+	media.ProfileID = domain.ProfileOpenAIMediaResources
+	media.ID = domain.DefaultProviderProfileBindingID(instance.ID, media.ProfileID)
+	media.Capabilities = domain.DefaultProviderCapabilitiesForProfile(domain.ProviderOpenAI, media.ProfileID)
+	media.CapabilityEvidence = domain.EvidenceForCapabilities(media.Capabilities, domain.EvidenceDeclared)
+
+	// The deployment runs on chat, so switching media off costs nothing.
+	chat.Enabled, media.Enabled = true, false
+	body := map[string]any{
+		"name": instance.Name, "type": instance.Type, "base_url": instance.BaseURL,
+		"credential_id": instance.CredentialID, "max_concurrency": instance.MaxConcurrency,
+		"enabled": true, "bindings": []domain.ProviderProfileBinding{chat, media},
+	}
+	request := adminMutationRequest(t, http.MethodPut, "/admin/api/v1/providers/"+instance.ID, session, body)
+	request.Header.Set("If-Match", revisionETag(instance.Revision))
+	response := httptest.NewRecorder()
+	runtime.adminRouter().ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func verifyingProviderRuntime(t *testing.T) (*Runtime, BootstrapResult, loggedInAdmin) {
+	t.Helper()
+	cfg := testConfig(t)
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := BootstrapAdmin(context.Background(), cfg, "admin", []byte(stepUpTestPassword)); err != nil {
+		t.Fatal(err)
+	}
+	bootstrap, err := Bootstrap(context.Background(), cfg, BootstrapOptions{
+		ProviderName: "OpenAI", ProviderType: domain.ProviderOpenAI,
+		ProviderBaseURL: "https://api.openai.com", ProviderModel: "gpt-test", PublicModel: "chat",
+		ProjectName: "Guard", BillingMode: domain.BillingModeFree,
+	}, []byte("provider-secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := Open(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { runtime.Close() })
+	return runtime, bootstrap, loginTestAdmin(t, runtime, "admin", stepUpTestPassword)
+}

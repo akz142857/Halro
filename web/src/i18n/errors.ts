@@ -16,6 +16,9 @@ export function localizedError(t: TFunction, error: unknown) {
     capability_detection_rate_limited: "errors.capabilityDetectionRateLimited",
     ambiguous_capability_binding: "errors.ambiguousCapabilityBinding",
     no_detectable_binding: "errors.noDetectableBinding",
+    // The server names the deployment in the detail, so this stays a headline and
+    // the detail is deliberately left visible underneath it.
+    binding_referenced_by_deployment: "errors.bindingReferencedByDeployment",
     idempotency_conflict: "errors.idempotencyConflict",
   };
   if (error.code && codeMessages[error.code]) return t(codeMessages[error.code]);

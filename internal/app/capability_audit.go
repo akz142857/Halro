@@ -21,6 +21,7 @@ const (
 	auditCapabilitySnapshotCreated    = "deployment.capability_snapshot.created"
 	auditCapabilitySnapshotReviewed   = "deployment.capability_snapshot.reviewed"
 	auditCapabilityDriftDetected      = "deployment.capability_drift.detected"
+	auditRouteReferenceWithheld       = "route.reference_withheld"
 	auditOperatorCapabilitiesDeclared = "deployment.operator_capabilities.declared"
 )
 
@@ -103,8 +104,15 @@ func capabilityChanged(before, after domain.Deployment) bool {
 //
 // The actor is the system: no administrator asked for this, a catalog or a
 // binary upgrade caused it.
-func (r *Runtime) auditCapabilityWithholdings(ctx context.Context, withheld []capabilityWithholding) {
-	for _, item := range withheld {
+// It also records routes withheld because what they reference cannot produce a
+// Target. Those are deliberately kept out of the drift action and the drift
+// metric: drift means the deployment's claim outgrew what this build supports,
+// while a dangling reference means the stored topology disagrees with itself.
+// Counting the second as the first would make the drift metric mean two things
+// and hide the one that needs repair rather than review.
+func (r *Runtime) auditCapabilityWithholdings(ctx context.Context, report loadReport) {
+	r.auditReferenceWithholdings(report.Dangling)
+	for _, item := range report.Drifted {
 		metadata := map[string]any{
 			"route_id":                item.RouteID,
 			"capability_review_state": string(item.State),
@@ -137,6 +145,29 @@ func (r *Runtime) auditCapabilityWithholdings(ctx context.Context, withheld []ca
 			"deployment", item.DeploymentID, "success", "", metadata); err != nil {
 			r.logger.Error("capability drift audit append failed",
 				"deployment", item.DeploymentID, "error", err)
+		}
+	}
+}
+
+// auditReferenceWithholdings records each route that stopped routing because the
+// records it points at cannot produce a Target. The route is fail-closed, which
+// means an operator's alias silently stopped answering; that has to be durable
+// somewhere they will find it.
+//
+// As with drift, a failed append is logged rather than fatal — refusing to
+// finish activation over an audit write would put back the outage that
+// withholding exists to avoid.
+func (r *Runtime) auditReferenceWithholdings(withheld []referenceWithholding) {
+	for _, item := range withheld {
+		if err := r.appendAdminAuditWithMetadata("system", "", auditRouteReferenceWithheld,
+			"route", item.RouteID, "success", "", map[string]any{
+				"deployment_id": item.DeploymentID,
+				"provider_id":   item.ProviderID,
+				"binding_id":    item.BindingID,
+				"reason":        item.Reason,
+			}); err != nil {
+			r.logger.Error("route reference withholding audit append failed",
+				"route", item.RouteID, "reason", item.Reason, "error", err)
 		}
 	}
 }

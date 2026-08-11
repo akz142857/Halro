@@ -250,6 +250,12 @@ func (r *Runtime) updateAdminProvider(writer http.ResponseWriter, request *http.
 		writeJSON(writer, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
 	}
+	if err := r.validateBindingsCanDeactivate(request, instance); err != nil {
+		writeJSON(writer, http.StatusConflict, map[string]string{
+			"error": err.Error(), "code": "binding_referenced_by_deployment",
+		})
+		return
+	}
 	instance.DeletedAt = current.DeletedAt
 	instance.LastTestStatus = current.LastTestStatus
 	instance.LastTestedAt = current.LastTestedAt
@@ -1037,6 +1043,57 @@ func (r *Runtime) validateProviderCanDeactivate(
 	for _, deployment := range deployments {
 		if deployment.ProviderID == providerID && deployment.Enabled && deployment.DeletedAt == nil {
 			return errors.New("disable or delete the provider's active deployments first")
+		}
+	}
+	return nil
+}
+
+// validateBindingsCanDeactivate is the same rule one level down, and it was the
+// level that had no rule at all.
+//
+// Provider and Deployment both refuse to leave service while something
+// downstream still names them. A Profile Binding did not: because bindings are
+// replaced wholesale on update and each one's Enabled comes straight from the
+// request, switching off — or simply omitting — a binding that an enabled
+// deployment is bound to was accepted. The Provider record stayed valid, since
+// domain validation only requires *some* enabled binding, so the write
+// committed and left a deployment pointing at a binding that produces no
+// adapter.
+//
+// The registry no longer treats that as fatal, so it can no longer brick the
+// data directory. This is still the right answer for a deliberate edit: the
+// operator gets told which deployment is in the way instead of watching an
+// alias quietly stop answering.
+func (r *Runtime) validateBindingsCanDeactivate(
+	request *http.Request,
+	instance domain.ProviderInstance,
+) error {
+	deployments, err := r.store.ListDeployments(request.Context())
+	if err != nil {
+		return errors.New("deployments are unavailable")
+	}
+	enabled := make(map[string]bool)
+	for _, binding := range instance.EffectiveProfileBindings() {
+		if binding.Enabled {
+			enabled[binding.ID] = true
+		}
+	}
+	for _, deployment := range deployments {
+		if deployment.ProviderID != instance.ID || !deployment.Enabled || deployment.DeletedAt != nil {
+			continue
+		}
+		// Resolved exactly the way the registry resolves it, so the check and the
+		// thing it is protecting cannot disagree about which binding a deployment
+		// runs on.
+		bindingID := deployment.BindingID
+		if bindingID == "" {
+			bindingID = matchingBindingID(instance, deployment.ProfileID)
+		}
+		if !enabled[bindingID] {
+			return fmt.Errorf(
+				"model deployment %q runs on this capability interface; disable or delete it before switching the interface off",
+				deployment.Name,
+			)
 		}
 	}
 	return nil

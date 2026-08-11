@@ -370,7 +370,7 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		effectiveCatalog = catalogManager.Current()
 	}
 	catalogUnavailable := catalogManager == nil || catalogManager.Status().State != modelcatalog.CatalogStateCurrent
-	providerRegistry, withheld, err := loadProviderRegistryWithCatalog(ctx, cfg, metadata, secretVault, effectiveCatalog, catalogUnavailable)
+	providerRegistry, loaded, err := loadProviderRegistryWithCatalog(ctx, cfg, metadata, secretVault, effectiveCatalog, catalogUnavailable)
 	if err != nil {
 		ledgerLog.Close()
 		metadata.Close()
@@ -380,7 +380,7 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 	// Starting with a route withheld is a state an operator has to be told
 	// about: the process is up and every other route works, so nothing else
 	// would say that this one is gone.
-	logCapabilityWithholdings(logger, withheld)
+	logCapabilityWithholdings(logger, loaded)
 	tokenGuard, err := loadTokenGuard(ctx, metadata, logger)
 	if err != nil {
 		providerRegistry.Close()
@@ -664,7 +664,7 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 	// Emitted here rather than at the load itself: the audit log only exists
 	// once the runtime is assembled, and a deployment that came up withheld is
 	// exactly the state §4.4 wants a durable record of.
-	runtime.auditCapabilityWithholdings(ctx, withheld)
+	runtime.auditCapabilityWithholdings(ctx, loaded)
 	settings, err := metadata.RuntimeSettings()
 	if errors.Is(err, boltstore.ErrNotFound) {
 		settings = domain.RuntimeSettings{

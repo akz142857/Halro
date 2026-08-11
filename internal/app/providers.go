@@ -65,7 +65,7 @@ func (r *Runtime) reconcileProviderRegistryWithCatalogState(ctx context.Context)
 }
 
 func (r *Runtime) prepareProviderRegistryActivation(ctx context.Context, catalog *modelcatalog.Catalog, unavailable bool) (func(bool), error) {
-	next, withheld, err := loadProviderRegistryWithCatalog(ctx, r.config, r.store, r.vault, catalog, unavailable)
+	next, report, err := loadProviderRegistryWithCatalog(ctx, r.config, r.store, r.vault, catalog, unavailable)
 	if err != nil {
 		return nil, err
 	}
@@ -74,8 +74,8 @@ func (r *Runtime) prepareProviderRegistryActivation(ctx context.Context, catalog
 			next.Close()
 			return
 		}
-		logCapabilityWithholdings(r.logger, withheld)
-		r.auditCapabilityWithholdings(ctx, withheld)
+		logCapabilityWithholdings(r.logger, report)
+		r.auditCapabilityWithholdings(ctx, report)
 		retired := r.providers.Replace(next)
 		if len(retired) == 0 {
 			return
@@ -115,17 +115,67 @@ type capabilityWithholding struct {
 	NoLongerSupported []string
 }
 
+// Why a route could not become a Target. Distinct from a capability
+// withholding: drift is an expected state an operator resolves by reviewing the
+// deployment's claim, while these mean the records the route points at cannot
+// produce a Target at all.
+const (
+	withheldDeploymentUnavailable = "deployment_unavailable"
+	withheldBindingUnavailable    = "binding_unavailable"
+	withheldProviderModelRejected = "provider_model_rejected"
+)
+
+// referenceWithholding records a route kept out of the routing candidates
+// because what it references cannot produce a Target: the Deployment is gone or
+// switched off, the Provider Binding produced no adapter, or the upstream model
+// is not one its profile accepts.
+//
+// These used to fail the entire load. That made one dangling reference strictly
+// worse than a whole provider being switched off: disabling a Provider or
+// Deployment merely drops its routes, while a route left pointing at a disabled
+// *Binding* refused to build any registry at all — so the process could not
+// start, and no unrelated route could be edited. Withholding follows what drift
+// already does, and for the same reason: one broken record must not take down
+// every working one, and must never make the binary unable to open a data
+// directory it has already written.
+//
+// The route is fail-closed either way. What changes is the blast radius.
+type referenceWithholding struct {
+	RouteID      string
+	DeploymentID string
+	ProviderID   string
+	BindingID    string
+	Reason       string
+}
+
+// loadReport carries what a registry load excluded and why. The two kinds stay
+// separate because they mean different things to an operator and are audited
+// differently: drift is reviewed, a dangling reference is repaired.
+type loadReport struct {
+	Drifted  []capabilityWithholding
+	Dangling []referenceWithholding
+}
+
 // logCapabilityWithholdings names the routes that are up but not routing. IDs
 // only: a capability set is configuration, not a secret, but there is nothing
 // here that needs more than the identifier an operator would look up.
-func logCapabilityWithholdings(logger *slog.Logger, withheld []capabilityWithholding) {
+func logCapabilityWithholdings(logger *slog.Logger, report loadReport) {
 	if logger == nil {
 		return
 	}
-	for _, item := range withheld {
+	for _, item := range report.Drifted {
 		logger.Warn("route withheld from routing candidates",
 			"route", item.RouteID, "deployment", item.DeploymentID,
 			"capability_review_state", string(item.State))
+	}
+	// Louder than drift: drift is a state the design expects a binary upgrade to
+	// produce, while a dangling reference means the stored topology disagrees
+	// with itself and an operator has to repair it.
+	for _, item := range report.Dangling {
+		logger.Error("route withheld: reference cannot produce a routing target",
+			"route", item.RouteID, "deployment", item.DeploymentID,
+			"provider", item.ProviderID, "binding", item.BindingID,
+			"reason", item.Reason)
 	}
 }
 
@@ -134,7 +184,7 @@ func loadProviderRegistry(
 	cfg config.Config,
 	store *boltstore.Store,
 	secretVault *vault.Vault,
-) (*provider.Registry, []capabilityWithholding, error) {
+) (*provider.Registry, loadReport, error) {
 	return loadProviderRegistryWithCatalog(ctx, cfg, store, secretVault, modelcatalog.Builtin(), false)
 }
 
@@ -145,19 +195,19 @@ func loadProviderRegistryWithCatalog(
 	secretVault *vault.Vault,
 	catalog *modelcatalog.Catalog,
 	catalogUnavailable bool,
-) (*provider.Registry, []capabilityWithholding, error) {
-	var withheld []capabilityWithholding
+) (*provider.Registry, loadReport, error) {
+	var report loadReport
 	instances, err := store.ListProviders(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("list providers: %w", err)
+		return nil, report, fmt.Errorf("list providers: %w", err)
 	}
 	routes, err := store.ListRoutes(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("list routes: %w", err)
+		return nil, report, fmt.Errorf("list routes: %w", err)
 	}
 	deployments, err := store.ListDeployments(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("list deployments: %w", err)
+		return nil, report, fmt.Errorf("list deployments: %w", err)
 	}
 	deploymentByID := make(map[string]domain.Deployment, len(deployments))
 	for _, deployment := range deployments {
@@ -172,11 +222,11 @@ func loadProviderRegistryWithCatalog(
 	adapters := make(map[string]provider.Adapter)
 	providerBindingIDs := make(map[string][]string)
 	providerLimits := make(map[string]int64)
-	fail := func(err error) (*provider.Registry, []capabilityWithholding, error) {
+	fail := func(err error) (*provider.Registry, loadReport, error) {
 		for _, adapter := range adapters {
 			adapter.Close()
 		}
-		return nil, nil, err
+		return nil, loadReport{}, err
 	}
 	for _, instance := range instances {
 		if !instance.Enabled || instance.DeletedAt != nil {
@@ -251,7 +301,17 @@ func loadProviderRegistryWithCatalog(
 		{
 			deployment, exists := deploymentByID[deploymentID]
 			if !exists || !deployment.Enabled || deployment.DeletedAt != nil {
-				return fail(fmt.Errorf("route %q references an unavailable deployment", route.ID))
+				// Withheld rather than fatal. The Admin API refuses to disable or
+				// delete a deployment that an enabled route still names, so this
+				// is a state normal operation cannot reach — but "cannot reach"
+				// is not "impossible", and the cost of being wrong here was a
+				// data directory the binary refuses to open.
+				report.Dangling = append(report.Dangling, referenceWithholding{
+					RouteID: route.ID, DeploymentID: deploymentID,
+					ProviderID: deployment.ProviderID, BindingID: deployment.BindingID,
+					Reason: withheldDeploymentUnavailable,
+				})
+				continue
 			}
 			// Drift is resolved here rather than on the request path, so a
 			// profile this build narrowed is a state an operator can see instead
@@ -274,7 +334,7 @@ func loadProviderRegistryWithCatalog(
 			// spellings of one rule, which is what a later change gets wrong.
 			review := reviewForDeploymentWithCatalogState(instanceByID, deployment, catalog, catalogUnavailable)
 			if !capabilityReviewAdmitsTraffic(review.State) {
-				withheld = append(withheld, capabilityWithholding{
+				report.Drifted = append(report.Drifted, capabilityWithholding{
 					RouteID: route.ID, DeploymentID: deployment.ID, State: review.State,
 					Reason: review.Reason, NoLongerSupported: slices.Clone(review.NoLongerSupported),
 				})
@@ -302,11 +362,27 @@ func loadProviderRegistryWithCatalog(
 		}
 		adapter := adapters[bindingID]
 		if adapter == nil {
-			return fail(fmt.Errorf("route %q references an unavailable provider binding", route.ID))
+			// This is the reachable one, and the reason this whole path stopped
+			// being fatal. A Profile Binding can be switched off or dropped from
+			// a Provider's binding list while a deployment and route still name
+			// it; before, that made the registry unbuildable, so the mutation
+			// persisted, activation failed, every later topology edit failed, and
+			// the process could not restart.
+			report.Dangling = append(report.Dangling, referenceWithholding{
+				RouteID: route.ID, DeploymentID: deploymentID,
+				ProviderID: providerID, BindingID: bindingID,
+				Reason: withheldBindingUnavailable,
+			})
+			continue
 		}
 		if profiled, ok := adapter.(provider.ProfiledAdapter); ok {
 			if err := bedrockprovider.ValidateProfileModel(profiled.Profile().ID, providerModel); err != nil {
-				return fail(fmt.Errorf("route %q provider model: %w", route.ID, err))
+				report.Dangling = append(report.Dangling, referenceWithholding{
+					RouteID: route.ID, DeploymentID: deploymentID,
+					ProviderID: providerID, BindingID: bindingID,
+					Reason: withheldProviderModelRejected,
+				})
+				continue
 			}
 		}
 		if err := registry.Register(provider.Target{
@@ -333,7 +409,7 @@ func loadProviderRegistryWithCatalog(
 			return fail(fmt.Errorf("register route %q: %w", route.ID, err))
 		}
 	}
-	return registry, withheld, nil
+	return registry, report, nil
 }
 
 func newProviderBindingAdapter(cfg config.Config, instance domain.ProviderInstance, binding domain.ProviderProfileBinding, endpoint *url.URL, policy safetransport.Policy, plaintext []byte) (provider.Adapter, error) {

@@ -166,20 +166,20 @@ func TestDriftWithholdsTheRouteAndStillLoadsTheRegistry(t *testing.T) {
 	runtime, bootstrap := bootstrapForCapabilityTest(t)
 	driftDeployment(t, runtime, bootstrap.DeploymentID)
 
-	registry, withheld, err := loadProviderRegistry(context.Background(), runtime.config, runtime.store, runtime.vault)
+	registry, report, err := loadProviderRegistry(context.Background(), runtime.config, runtime.store, runtime.vault)
 	if err != nil {
 		t.Fatalf("a drifted deployment stopped the registry from loading: %v", err)
 	}
 	defer registry.Close()
 
-	if len(withheld) != 1 {
-		t.Fatalf("withheld=%+v, expected exactly the drifted route", withheld)
+	if len(report.Drifted) != 1 || len(report.Dangling) != 0 {
+		t.Fatalf("report=%+v, expected exactly the drifted route", report)
 	}
-	if withheld[0].RouteID != bootstrap.RouteID || withheld[0].DeploymentID != bootstrap.DeploymentID {
-		t.Fatalf("withheld the wrong route: %+v", withheld[0])
+	if report.Drifted[0].RouteID != bootstrap.RouteID || report.Drifted[0].DeploymentID != bootstrap.DeploymentID {
+		t.Fatalf("withheld the wrong route: %+v", report.Drifted[0])
 	}
-	if withheld[0].State != domain.CapabilityReviewDrifted {
-		t.Fatalf("state=%q", withheld[0].State)
+	if report.Drifted[0].State != domain.CapabilityReviewDrifted {
+		t.Fatalf("state=%q", report.Drifted[0].State)
 	}
 
 	// Withheld means withheld: the public model must have no candidate, not a
@@ -197,14 +197,14 @@ func TestDriftDoesNotWithholdUnrelatedRoutes(t *testing.T) {
 	addSecondRoute(t, runtime, bootstrap, "chat-second")
 	driftDeployment(t, runtime, bootstrap.DeploymentID)
 
-	registry, withheld, err := loadProviderRegistry(context.Background(), runtime.config, runtime.store, runtime.vault)
+	registry, report, err := loadProviderRegistry(context.Background(), runtime.config, runtime.store, runtime.vault)
 	if err != nil {
 		t.Fatalf("registry load failed: %v", err)
 	}
 	defer registry.Close()
 
-	if len(withheld) != 1 || withheld[0].RouteID != bootstrap.RouteID {
-		t.Fatalf("withheld=%+v", withheld)
+	if len(report.Drifted) != 1 || report.Drifted[0].RouteID != bootstrap.RouteID {
+		t.Fatalf("report=%+v", report)
 	}
 	if targets := registry.ResolveCandidatesForEvidence("chat-second", provider.OperationChat, domain.EvidenceDeclared); len(targets) != 1 {
 		t.Fatalf("the unrelated route did not survive the drifted one: %+v", targets)
@@ -237,6 +237,101 @@ func TestRuntimeOpensWithADriftedDeployment(t *testing.T) {
 
 	if targets := second.providers.ResolveCandidatesForEvidence("chat", provider.OperationChat, domain.EvidenceDeclared); len(targets) != 0 {
 		t.Fatalf("a drifted deployment was routable after restart: %+v", targets)
+	}
+}
+
+// switchOffDeploymentBinding disables the Profile Binding the seeded deployment
+// runs on, leaving a second binding enabled so the Provider record stays valid.
+// It writes straight to the store: the Admin guard against exactly this edit is
+// tested separately, and what matters here is what the loader does when the
+// state exists anyway.
+func switchOffDeploymentBinding(t *testing.T, runtime *Runtime, providerID, deploymentID string) {
+	t.Helper()
+	instance, err := runtime.store.GetProvider(context.Background(), providerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment, err := runtime.store.GetDeployment(context.Background(), deploymentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chat := instance.EffectiveProfileBindings()[0]
+	if chat.ID != deployment.BindingID {
+		t.Fatalf("fixture assumes the deployment runs on the primary binding: %q vs %q", deployment.BindingID, chat.ID)
+	}
+	chat.Enabled = false
+	media := chat
+	media.ProfileID = domain.ProfileOpenAIMediaResources
+	media.ID = domain.DefaultProviderProfileBindingID(instance.ID, media.ProfileID)
+	media.Capabilities = domain.DefaultProviderCapabilitiesForProfile(domain.ProviderOpenAI, media.ProfileID)
+	media.CapabilityEvidence = domain.EvidenceForCapabilities(media.Capabilities, domain.EvidenceDeclared)
+	media.Enabled = true
+	// The disabled binding stays at index 0 so the provider's legacy profile
+	// projection still matches its primary binding.
+	instance.Bindings = []domain.ProviderProfileBinding{chat, media}
+	instance.Capabilities, instance.CapabilityEvidence = domain.BindingsCapabilitiesSummary(instance.Bindings)
+	if _, err := runtime.store.PutProvider(context.Background(), instance, instance.Revision); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A route left pointing at a switched-off Profile Binding used to fail the whole
+// registry load. That made one dangling reference worse than switching off an
+// entire provider: the durable edit landed, activation failed, every later
+// topology edit failed the same way, and the process could not start again.
+//
+// It is withheld now, for the reason drift already is: one broken record must
+// cost its own route and nothing else.
+func TestDanglingBindingWithholdsTheRouteAndStillLoadsTheRegistry(t *testing.T) {
+	runtime, bootstrap := bootstrapForCapabilityTest(t)
+	switchOffDeploymentBinding(t, runtime, bootstrap.ProviderID, bootstrap.DeploymentID)
+
+	registry, report, err := loadProviderRegistry(context.Background(), runtime.config, runtime.store, runtime.vault)
+	if err != nil {
+		t.Fatalf("a dangling binding stopped the registry from loading: %v", err)
+	}
+	defer registry.Close()
+
+	if len(report.Dangling) != 1 || len(report.Drifted) != 0 {
+		t.Fatalf("report=%+v, expected exactly the dangling route", report)
+	}
+	item := report.Dangling[0]
+	if item.RouteID != bootstrap.RouteID || item.Reason != withheldBindingUnavailable {
+		t.Fatalf("withheld=%+v", item)
+	}
+	// Not counted as drift: the deployment's claim is fine, the topology is not.
+	if targets := registry.ResolveCandidatesForEvidence("chat", provider.OperationChat, domain.EvidenceDeclared); len(targets) != 0 {
+		t.Fatalf("a route with no adapter was still a candidate: %+v", targets)
+	}
+}
+
+// The part that made this a P0 rather than a routing bug: the binary has to be
+// able to open a data directory it already wrote.
+func TestRuntimeOpensWithADanglingBinding(t *testing.T) {
+	runtime, bootstrap, open := openBootstrappedRuntime(t)
+	switchOffDeploymentBinding(t, runtime, bootstrap.ProviderID, bootstrap.DeploymentID)
+	runtime.Close()
+
+	second := open()
+	defer second.Close()
+
+	if targets := second.providers.ResolveCandidatesForEvidence("chat", provider.OperationChat, domain.EvidenceDeclared); len(targets) != 0 {
+		t.Fatalf("a dangling binding was routable after restart: %+v", targets)
+	}
+}
+
+// A hot reload must survive it too, or the operator cannot edit their way out:
+// every subsequent topology mutation reloads the registry and would fail on a
+// state some earlier edit left behind.
+func TestHotReloadSucceedsWithADanglingBinding(t *testing.T) {
+	runtime, bootstrap := bootstrapForCapabilityTest(t)
+	switchOffDeploymentBinding(t, runtime, bootstrap.ProviderID, bootstrap.DeploymentID)
+
+	if err := runtime.reloadProviderRegistry(context.Background()); err != nil {
+		t.Fatalf("hot reload refused to complete because a binding was switched off: %v", err)
+	}
+	if targets := runtime.providers.ResolveCandidatesForEvidence("chat", provider.OperationChat, domain.EvidenceDeclared); len(targets) != 0 {
+		t.Fatalf("route stayed routable after reload: %+v", targets)
 	}
 }
 
