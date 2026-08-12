@@ -86,6 +86,32 @@ function zoneOffsetMillis(instant: number, timeZone: string): number {
 }
 
 /**
+ * Render an instant as a `datetime-local` value in the accounting zone — the
+ * inverse of zonedInputToISO.
+ *
+ * Without it a field written through zonedInputToISO reopens as the browser's
+ * wall clock and the operator sees a different reading than the one they saved,
+ * and than the row beside it displays. Returns "" for a missing or unparsable
+ * value, which the caller renders as an empty control.
+ */
+export function isoToZonedInput(value: string | number | Date | undefined, timeZone: string): string {
+  if (value === undefined || value === null || value === "") return "";
+  const instant = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(instant.getTime())) return "";
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone, hour12: false,
+    year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
+  }).formatToParts(instant).reduce<Record<string, string>>((all, part) => {
+    all[part.type] = part.value;
+    return all;
+  }, {});
+  // en-US renders midnight as hour 24 under hour12:false.
+  const hour = parts.hour === "24" ? "00" : parts.hour;
+  if (!parts.year || !parts.month || !parts.day || !hour || !parts.minute) return "";
+  return `${parts.year}-${parts.month}-${parts.day}T${hour}:${parts.minute}`;
+}
+
+/**
  * Read a `datetime-local` value as a wall-clock reading in the accounting zone.
  *
  * The control has no zone of its own — it yields "2026-08-07T00:00" and the

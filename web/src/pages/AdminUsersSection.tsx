@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useNotify } from "../notifications";
 import { api } from "../api";
 import { ErrorState, Field, Loading, Modal, ReauthFields } from "../components";
 import { MIN_PASSWORD_CHARACTERS, passwordCharacterCount } from "../password";
@@ -82,9 +83,13 @@ function CreateAdminUserModal({ onClose, onCreated }: { onClose: () => void; onC
   const [password, setPassword] = useState("");
   const [role, setRole] = useState<AdminRole>("read_only");
   const [reauth, setReauth] = useState(emptyReauth);
+  const { notify } = useNotify();
   const create = useMutation({
     mutationFn: () => api.createAdminUser(username.trim(), password, role, reauth.currentPassword, reauth.totpCode),
-    onSuccess: onCreated,
+    onSuccess: () => {
+      onCreated();
+      notify({ tone: "success", title: t("adminUsers.notifyCreated"), description: username.trim() });
+    },
   });
   const tooShort = passwordCharacterCount(password) < MIN_PASSWORD_CHARACTERS;
   return <Modal title={t("adminUsers.create")} onClose={onClose} dirty={Boolean(username || password || reauth.currentPassword)}>
@@ -118,9 +123,13 @@ function CreateAdminUserModal({ onClose, onCreated }: { onClose: () => void; onC
 function DeleteAdminUserModal({ username, onClose, onDeleted }: { username: string; onClose: () => void; onDeleted: () => void }) {
   const { t } = useTranslation();
   const [reauth, setReauth] = useState(emptyReauth);
+  const { notify } = useNotify();
   const remove = useMutation({
     mutationFn: () => api.deleteAdminUser(username, reauth.currentPassword, reauth.totpCode),
-    onSuccess: onDeleted,
+    onSuccess: () => {
+      onDeleted();
+      notify({ tone: "success", title: t("adminUsers.notifyDeleted"), description: username });
+    },
   });
   return <Modal dangerous title={t("adminUsers.deleteTitle", { username })} onClose={onClose} dirty={Boolean(reauth.currentPassword)}>
     <form className="settings-form credential-form danger-panel" onSubmit={(event) => { event.preventDefault(); remove.mutate(); }}>

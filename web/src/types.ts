@@ -303,6 +303,7 @@ export interface Credential {
   bound_base_url: string;
   secret_configured: boolean;
   key_version: number;
+  expires_at?: string;
   revision: number;
 }
 

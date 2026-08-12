@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError, api } from "../api";
 import { PoliciesPage } from "./PoliciesPage";
+import { NotificationProvider } from "../notifications";
 import { ProjectsPage } from "./ProjectsPage";
 
 const tokenGuardPolicy = {
@@ -30,7 +31,7 @@ function gatewayKey(overrides: Record<string, unknown> = {}) {
 
 function renderPage() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<QueryClientProvider client={client}><ProjectsPage /></QueryClientProvider>);
+  return render(<QueryClientProvider client={client}><NotificationProvider><ProjectsPage /></NotificationProvider></QueryClientProvider>);
 }
 
 describe("projects page", () => {
@@ -272,6 +273,27 @@ describe("projects page", () => {
     fireEvent.click(screen.getByRole("button", { name: "创建项目" }));
 
     expect(await screen.findByText("allowed_routes references unknown model alias chatt")).toBeVisible();
+  });
+
+  // The dialog closes on success, so the acknowledgement has nothing left on
+  // the page to attach to and goes to the notification column.
+  it("confirms a created project in the notification column", async () => {
+    vi.mocked(api.projectsPage).mockResolvedValue({ items: [], next_cursor: "" } as never);
+    vi.mocked(api.allRoutes).mockResolvedValue([
+      { id: "rt_1", public_model: "chat", enabled: true, revision: 1 },
+    ] as never);
+    const createProject = vi.spyOn(api, "createProject").mockResolvedValue({ data: project(), etag: '"1"' } as never);
+
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "创建第一个项目" }));
+    fireEvent.change(screen.getByLabelText("名称"), { target: { value: "Inference" } });
+    fireEvent.click(await screen.findByRole("checkbox", { name: /chat/ }));
+    fireEvent.click(screen.getByRole("button", { name: "创建项目" }));
+
+    await waitFor(() => expect(createProject).toHaveBeenCalledOnce());
+    const confirmation = await screen.findByText("项目已创建");
+    expect(confirmation.closest("[aria-live]")).toHaveAttribute("aria-live", "polite");
+    expect(screen.getByText("Inference")).toBeVisible();
   });
 
   it("rejects an unparsable CIDR before the request leaves the browser", async () => {

@@ -599,8 +599,39 @@ h3 { margin-bottom: 0; font-size: var(--font-size-lg); }
    so it keeps room to scroll to and takes focus without drawing a focus ring
    around a whole block. */
 .form-submit-error { scroll-margin: 24px; }
+.form-submit-error > p { margin: 0 0 8px; color: var(--danger); font-size: var(--font-size-sm); }
 .form-submit-error:focus { outline: none; }
 .form-submit-error:focus-visible { outline: 2px solid var(--color-focus-ring); outline-offset: 2px; }
+/* System notifications: the column for outcomes with no anchor of their own —
+   a save that closed its modal, a delete that removed its own row. Anything
+   bound to a field, and anything the operator must act on, stays where it
+   happened; see the placement rule in the design-system README. */
+.notification-region {
+  position: fixed; top: 18px; right: 20px; z-index: var(--z-toast);
+  display: grid; gap: 10px; width: min(24rem, calc(100vw - 40px)); pointer-events: none;
+}
+.notification-stack { display: grid; gap: 10px; }
+.notification-card {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: start;
+  padding: 12px 14px; background: var(--surface-overlay-solid);
+  border: 1px solid var(--line); border-left: 3px solid var(--muted-2);
+  border-radius: var(--radius-md); box-shadow: var(--shadow-menu);
+  pointer-events: auto; animation: notification-in .18s ease-out;
+}
+.notification-card.success { border-left-color: var(--color-status-success-icon); }
+.notification-card.error { border-left-color: var(--danger); }
+.notification-card.warning { border-left-color: var(--warning); }
+.notification-body { display: grid; min-width: 0; gap: 4px; }
+.notification-body > strong { font-size: var(--font-size-sm); font-weight: var(--font-weight-semibold); }
+.notification-body > span { color: var(--muted); font-size: var(--font-size-xs); line-height: 1.45; overflow-wrap: anywhere; }
+.notification-repeat { color: var(--muted); }
+.notification-dismiss {
+  padding: 0 4px; color: var(--muted); background: none; border: 0; border-radius: var(--radius-sm);
+  font-size: var(--font-size-md); line-height: 1.2; cursor: pointer;
+}
+.notification-dismiss:hover { color: var(--text); }
+.notification-dismiss:focus-visible { outline: 2px solid var(--color-focus-ring); outline-offset: 2px; }
+@keyframes notification-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
 .price-version-form .button { font-size: var(--font-size-sm); }
 .price-version-form > .form-actions { position: sticky; bottom: 0; z-index: var(--z-sticky); align-items: center; min-height: 76px; margin: 8px -24px -24px; padding: 15px 24px 16px; background: var(--surface-overlay-solid); border-top: 1px solid var(--line-strong); box-shadow: var(--shadow-sticky); }
 .price-confirm-summary { margin-bottom: 18px; padding: 18px; background: var(--surface-deep); border: 1px solid var(--line); }
@@ -777,6 +808,9 @@ h3 { margin-bottom: 0; font-size: var(--font-size-lg); }
 .provider-compact-actions { justify-content: flex-end; flex-wrap: nowrap; }
 .provider-compact-actions .button { padding-right: 10px; padding-left: 10px; }
 .provider-compact-actions > .inline-test-control { margin-right: 14px; }
+/* Spans the row so a long upstream reason wraps under the identity columns
+   rather than widening the fixed-width test control. */
+.provider-row > .row-test-failure { grid-column: 2 / -1; margin: 2px 0 0; color: var(--danger); font-size: var(--font-size-xs); line-height: 1.4; overflow-wrap: anywhere; }
 .provider-expanded-content { grid-column: 2 / -1; padding: 18px 0 6px; border-top: 1px solid var(--line); }
 .provider-row, .credential-row, .deployment-row { overflow-anchor: none; }
 .provider-expanded-content .provider-facts { margin-top: 0; }
@@ -794,6 +828,11 @@ h3 { margin-bottom: 0; font-size: var(--font-size-lg); }
 .credential-compact-fact > small { font: var(--font-size-xs)/1.3 var(--mono); letter-spacing: .02em; }
 .credential-compact-fact > strong, .credential-compact-fact > .resource-link { margin: 0; color: var(--color-text-primary); font-size: var(--font-size-sm); font-weight: var(--font-weight-semibold); line-height: 1.35; }
 .credential-compact-fact > .resource-link { width: max-content; max-width: 100%; }
+/* An expiry is only rendered once it exists, and the two states worth acting on
+   are the two that get colour: gone, and close enough to plan a rotation. */
+.credential-expiry { font-variant-numeric: tabular-nums; }
+.credential-expiry.expiring { color: var(--color-status-warning-text); }
+.credential-expiry.expired { color: var(--color-status-danger-text); }
 .credential-identity-endpoint { display: none !important; margin: 0 !important; overflow: hidden; color: var(--color-text-secondary); font: var(--font-size-xs)/1.35 var(--mono) !important; text-overflow: ellipsis; white-space: nowrap; }
 .credential-actions { align-self: center; flex-wrap: nowrap; }
 .credential-actions .button { min-height: 34px; padding-right: 10px; padding-left: 10px; font-size: var(--font-size-xs); }
@@ -1367,6 +1406,11 @@ dd { margin: 0; font: var(--font-size-xs) var(--mono); text-align: right; overfl
 .field > span, .developer-key-field > label { display: block; margin-bottom: 8px; color: var(--color-text-secondary); font-size: var(--font-size-sm); font-weight: var(--font-weight-semibold); }
 .field small { display: block; margin-top: 6px; color: var(--muted); font-size: var(--font-size-xs); line-height: 1.5; }
 .field .field-error { color: var(--danger); }
+/* A refused field says so on the control itself. The sentence under it can then
+   stay short — the border is what draws the eye back to what has to change. */
+.field input[aria-invalid="true"], .field select[aria-invalid="true"], .field textarea[aria-invalid="true"] {
+  border-color: var(--color-status-danger-border);
+}
 input, select, textarea {
   width: 100%; min-height: 44px; padding: 9px 11px; color: var(--text);
   background: var(--surface-deep); border: 1px solid var(--line-strong); border-radius: 3px;
@@ -1888,6 +1932,9 @@ textarea { resize: vertical; }
   .provider-compact-status { justify-items: start; }
   .provider-compact-actions { justify-content: flex-start; flex-wrap: wrap; }
   .provider-expanded-content { grid-column: 1; }
+  /* Single column here, so the wide-row `2 / -1` span would push the sentence
+     into an implicit second column of its own. */
+  .provider-row > .row-test-failure { grid-column: 1; }
   .provider-expanded-content .provider-facts { grid-template-columns: 1fr; }
   .provider-expanded-runtime { align-items: flex-start; flex-direction: column; }
   .credential-row { grid-template-areas: "identity" "usage" "generation" "actions" "details"; grid-template-columns: 1fr; row-gap: 12px; }

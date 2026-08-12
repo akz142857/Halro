@@ -27,7 +27,7 @@ func TestImmutableProfileBindingCannotExceedItsCeiling(t *testing.T) {
 			capabilities := DefaultProviderCapabilitiesForProfile(ProviderBedrock, test.profile)
 			test.widen(&capabilities)
 			binding := mantleBindingForTest(test.profile, capabilities)
-			err := binding.Validate("prov_1", ProviderBedrock)
+			err := binding.Validate("prov_1", ProviderBedrock, false)
 			if err == nil || !strings.Contains(err.Error(), "exceed the immutable operation profile") {
 				t.Fatalf("widened %s binding was accepted: %v", test.profile, err)
 			}
@@ -45,12 +45,12 @@ func TestImmutableProfileBindingMayNarrowItsCeiling(t *testing.T) {
 	}
 	for _, profile := range profiles {
 		ceiling := DefaultProviderCapabilitiesForProfile(ProviderBedrock, profile)
-		if err := mantleBindingForTest(profile, ceiling).Validate("prov_1", ProviderBedrock); err != nil {
+		if err := mantleBindingForTest(profile, ceiling).Validate("prov_1", ProviderBedrock, false); err != nil {
 			t.Fatalf("%s binding at its own ceiling was rejected: %v", profile, err)
 		}
 		narrowed := ceiling
 		narrowed.Vision, narrowed.Tools = false, false
-		if err := mantleBindingForTest(profile, narrowed).Validate("prov_1", ProviderBedrock); err != nil {
+		if err := mantleBindingForTest(profile, narrowed).Validate("prov_1", ProviderBedrock, false); err != nil {
 			t.Fatalf("%s binding narrower than its ceiling was rejected: %v", profile, err)
 		}
 	}

@@ -121,7 +121,9 @@ aws iam create-service-specific-credential \
 ```
 
 响应中的 `ServiceApiKeyValue` 即 Halro 凭据里要填的密钥；`ServiceSpecificCredentialId`
-留作停用与轮换之用。除了推理权限（例如 `AmazonBedrockMantleInferenceAccess`），还要确认
+留作停用与轮换之用。`--credential-age-days` 定下的到期日可以填进凭据表单的**到期时间**
+（可选）：控制台会在凭据库里显示剩余天数、过期后标红。这是提醒，不是强制限制——网关不会
+因为这个日期拒绝请求，到期后仍照常调用，直到 AWS 自己返回 401。除了推理权限（例如 `AmazonBedrockMantleInferenceAccess`），还要确认
 没有策略 Deny 掉 `bedrock-mantle:CallWithBearerToken` —— 那个 action 单独管“能否用
 bearer token 走 Mantle 端点”。
 

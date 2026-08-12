@@ -19,6 +19,7 @@ import {
 import { useInstantFormatter } from "../format";
 import type { AlertWebhook } from "../types";
 import { useTranslation } from "react-i18next";
+import { useNotify } from "../notifications";
 import { useIsReadOnly } from "../session";
 
 const PAGE_SIZE = "100";
@@ -163,15 +164,30 @@ function AlertRow({
   const readOnly = useIsReadOnly();
   // Per row, not per page: a page-wide mutation greys out every other row's buttons and
   // leaves one shared "delivered" notice that never says which endpoint it belongs to.
+  const { notify } = useNotify();
+  // The test result stays on the row: it is that endpoint's state, and the row
+  // is where the operator pressed the button.
   const test = useMutation({ mutationFn: () => api.testAlert(webhook.id), onSuccess: onMutated, onError: onMutated });
-  const remove = useMutation({ mutationFn: (reauth: ReauthValues) => api.deleteAlert(webhook.id, webhook.revision, reauth), onSuccess: onMutated });
+  const remove = useMutation({
+    mutationFn: (reauth: ReauthValues) => api.deleteAlert(webhook.id, webhook.revision, reauth),
+    onSuccess: () => {
+      onMutated();
+      notify({ tone: "success", title: t("operations.notifyDeleted"), description: webhook.name });
+    },
+  });
   const toggle = useMutation({
     mutationFn: () => api.updateAlert(
       webhook.id,
       { name: webhook.name, url: webhook.url, header_name: webhook.header_name ?? "", enabled: !webhook.enabled },
       webhook.revision,
     ),
-    onSuccess: onMutated,
+    onSuccess: () => {
+      onMutated();
+      notify({ tone: "success", title: t(webhook.enabled ? "operations.notifyDisabled" : "operations.notifyEnabled"), description: webhook.name });
+    },
+    // No onError: this mutation renders an ErrorState in place, which carries the
+    // reason. A second copy in the notification column says less and, on the
+    // confirm-gated path, appears above a modal whose Tab trap cannot reach it.
   });
   const testState: InlineTestState = test.isPending
     ? "running"
@@ -264,6 +280,7 @@ function AlertForm({
   const [removeSecret, setRemoveSecret] = useState(false);
   const [enabled, setEnabled] = useState(current?.enabled ?? false);
   const [problem, setProblem] = useState("");
+  const { notify } = useNotify();
   const body = {
     name, url, enabled,
     header_name: removeSecret ? "" : header,
@@ -278,6 +295,7 @@ function AlertForm({
     onSuccess: () => {
       setSecret("");
       onSaved();
+      notify({ tone: "success", title: t(current ? "operations.notifyUpdated" : "operations.notifyCreated"), description: name });
       onClose();
     },
   });

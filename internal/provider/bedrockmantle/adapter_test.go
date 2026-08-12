@@ -144,6 +144,16 @@ func TestResponsesAdapterRendersTheBedrockProject(t *testing.T) {
 			Endpoint: endpoint, Authorizer: authorizer,
 			Client: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 				seen = request
+				if request.URL.Path == "/v1/responses" {
+					if request.Header.Get("Accept") == "text/event-stream" {
+						return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+							`event: response.created`, `data: {"type":"response.created","response":{"id":"resp_1","object":"response","created_at":7,"status":"in_progress","model":"amazon.nova-pro","output":[]}}`, ``,
+							`event: response.completed`, `data: {"type":"response.completed","response":{"id":"resp_1","object":"response","created_at":7,"status":"completed","model":"amazon.nova-pro","output":[],"usage":{"input_tokens":2,"input_tokens_details":{},"output_tokens":1,"output_tokens_details":{},"total_tokens":3}}}`, ``, ``,
+						}, "\n")))}, nil
+					}
+					return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(
+						`{"id":"resp_1","object":"response","created_at":7,"status":"completed","model":"amazon.nova-pro","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"hello","annotations":[],"logprobs":[]}]}],"usage":{"input_tokens":2,"input_tokens_details":{},"output_tokens":1,"output_tokens_details":{},"total_tokens":3}}`))}, nil
+				}
 				return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"object":"list","data":[]}`))}, nil
 			})},
 			Capabilities:     provider.Capabilities{Chat: true},
@@ -163,6 +173,38 @@ func TestResponsesAdapterRendersTheBedrockProject(t *testing.T) {
 		}
 		if seen.Header.Get("Authorization") != "Bearer bedrock-key" {
 			t.Fatalf("project %q disturbed the credential header: %v", test.projectID, seen.Header)
+		}
+		// The probe is a metadata read. Every billed request goes out through the
+		// data plane instead, and it is the data plane whose requests have to be
+		// associated with the project — a header the probe sends and inference
+		// does not would put the spend on the account default.
+		chatRequest := provider.ChatCall{
+			RequestID: "request_1", ProviderModel: "amazon.nova-pro",
+			Request: openaiapi.ChatCompletionRequest{
+				Model: "public", Messages: []openaiapi.Message{{Role: "user", Content: openaiapi.TextContent("hi")}},
+			},
+		}
+		seen = nil
+		if _, err := adapter.Chat(context.Background(), chatRequest); err != nil {
+			t.Fatalf("project %q: chat: %v", test.projectID, err)
+		}
+		if seen == nil || seen.URL.Path != "/v1/responses" {
+			t.Fatalf("project %q: chat did not reach the data plane: %#v", test.projectID, seen)
+		}
+		if got := seen.Header.Get("OpenAI-Project"); got != test.expected {
+			t.Fatalf("project %q rendered OpenAI-Project=%q on a Chat request", test.projectID, got)
+		}
+		streamRequest := chatRequest
+		streamRequest.Request.Stream = true
+		seen = nil
+		if _, err := adapter.ChatStream(context.Background(), streamRequest, func(semantic.Event) error { return nil }); err != nil {
+			t.Fatalf("project %q: chat stream: %v", test.projectID, err)
+		}
+		if seen == nil || seen.Header.Get("Accept") != "text/event-stream" {
+			t.Fatalf("project %q: the stream did not reach the data plane: %#v", test.projectID, seen)
+		}
+		if got := seen.Header.Get("OpenAI-Project"); got != test.expected {
+			t.Fatalf("project %q rendered OpenAI-Project=%q on a ChatStream request", test.projectID, got)
 		}
 		adapter.Close()
 	}

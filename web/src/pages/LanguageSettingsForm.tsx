@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { ErrorState, Field } from "../components";
 import { applyPreference } from "../i18n";
+import { useNotify } from "../notifications";
 import { useIsReadOnly } from "../session";
 import type { AdminPreferences, InstanceUISettings, LocalePreference, SupportedLocale } from "../types";
 
@@ -14,11 +15,15 @@ export function LanguageSettingsForm(props: { ui: InstanceUISettings; preference
 export function PersonalLanguageForm({ ui, preferences }: { ui: InstanceUISettings; preferences: AdminPreferences }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
+  const { notify } = useNotify();
   const [locale, setLocale] = useState<LocalePreference>(preferences.locale);
   useEffect(() => setLocale(preferences.locale), [preferences.locale]);
   const preferenceMutation = useMutation({
     mutationFn: (value: LocalePreference) => api.updatePreferences({ locale: value, appearance: preferences.appearance }, preferences.revision),
-    onSuccess: async (_, value) => applyPreference(value, ui.default_locale),
+    onSuccess: async (_, value) => {
+      await applyPreference(value, ui.default_locale);
+      notify({ tone: "success", title: t("settings.preferenceSaved") });
+    },
     onSettled: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["preferences"] }),
@@ -42,7 +47,6 @@ export function PersonalLanguageForm({ ui, preferences }: { ui: InstanceUISettin
           </select>
         </Field>
         {preferenceMutation.isError && <ErrorState error={preferenceMutation.error} />}
-        {preferenceMutation.isSuccess && <div className="notice success" role="status"><strong>{t("settings.preferenceSaved")}</strong></div>}
       </div>
     </section>
   );
@@ -52,11 +56,15 @@ export function InstanceLanguageForm({ ui, preferences }: { ui: InstanceUISettin
   const { t } = useTranslation();
   const readOnly = useIsReadOnly();
   const queryClient = useQueryClient();
+  const { notify } = useNotify();
   const [defaultLocale, setDefaultLocale] = useState<SupportedLocale>(ui.default_locale);
   useEffect(() => setDefaultLocale(ui.default_locale), [ui.default_locale]);
   const instanceMutation = useMutation({
     mutationFn: () => api.updateUISettings(defaultLocale, ui.revision),
-    onSuccess: async () => { if (preferences.locale === "system") await applyPreference(preferences.locale, defaultLocale); },
+    onSuccess: async () => {
+      if (preferences.locale === "system") await applyPreference(preferences.locale, defaultLocale);
+      notify({ tone: "success", title: t("settings.instanceLanguageSaved") });
+    },
     onSettled: async () => { await Promise.all([queryClient.invalidateQueries({ queryKey: ["ui-settings"] }), queryClient.invalidateQueries({ queryKey: ["ui-bootstrap"] })]); },
   });
   const instanceChanged = defaultLocale !== ui.default_locale;
@@ -73,7 +81,6 @@ export function InstanceLanguageForm({ ui, preferences }: { ui: InstanceUISettin
         </Field>
         <div className="form-actions"><button className="button primary" disabled={readOnly || instanceMutation.isPending || !instanceChanged}>{instanceMutation.isPending ? t("settings.saving") : t("settings.saveInstanceLanguage")}</button></div>
         {instanceMutation.isError && <ErrorState error={instanceMutation.error} />}
-        {instanceMutation.isSuccess && <div className="notice success" role="status"><strong>{t("settings.instanceLanguageSaved")}</strong></div>}
       </form>
     </section>
   );

@@ -20,8 +20,10 @@ import {
   type ReauthValues,
 } from "../components";
 import { compactNumber, money, useInstantFormatter } from "../format";
+import { useAccountingTimeZone, zonedInputToISO } from "../timezone";
 import type { CreatedGatewayKey, GatewayKey, Project } from "../types";
 import { useTranslation } from "react-i18next";
+import { useNotify } from "../notifications";
 import { useIsReadOnly } from "../session";
 import type { TFunction } from "i18next";
 import { Link } from "../navigation";
@@ -180,7 +182,6 @@ function ProjectDetail({ project }: { project: Project }) {
   const readOnly = useIsReadOnly();
   const [keyDialog, setKeyDialog] = useState(false);
   const [editing, setEditing] = useState(false);
-  const [unblockResult, setUnblockResult] = useState("");
   const keys = useInfiniteQuery({
     queryKey: ["project-keys", project.id, "paged"],
     initialPageParam: "",
@@ -188,18 +189,25 @@ function ProjectDetail({ project }: { project: Project }) {
     getNextPageParam: (page) => page.next_cursor || undefined,
   });
   const keyItems = keys.data?.pages.flatMap((page) => page.items) ?? [];
+  const { notify } = useNotify();
   const unblock = useMutation({
     mutationFn: (reauth: ReauthValues) => api.unblockProject(project.id, reauth),
-    onSuccess: (value) => setUnblockResult(t("projects.unblocked", { count: value.subjects })),
+    onSuccess: (value) => notify({ tone: "success", title: t("projects.unblocked", { count: value.subjects }), description: project.name }),
   });
   const queryClient = useQueryClient();
   const remove = useMutation({
     mutationFn: (reauth: ReauthValues) => api.deleteProject(project.id, `"${project.revision}"`, reauth),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["projects"] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["projects"] });
+      notify({ tone: "success", title: t("projects.notifyDeleted"), description: project.name });
+    },
   });
   const toggleStatus = useMutation({
     mutationFn: () => api.updateProject(project.id, projectUpdateBody(project, !project.enabled), `"${project.revision}"`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["projects"] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["projects"] });
+      notify({ tone: "success", title: t(project.enabled ? "projects.notifyDisabled" : "projects.notifyEnabled"), description: project.name });
+    },
   });
   return (
     <section className="detail-panel">
@@ -278,7 +286,6 @@ function ProjectDetail({ project }: { project: Project }) {
           <Policy label={t("projects.tokenGuardPolicy")} value={project.token_guard_policy_id || t("projects.notAttached")} />
         </div>
       </details>
-      {unblockResult && <div className="notice success"><strong>{unblockResult}</strong></div>}
       {unblock.isError && <ErrorState error={unblock.error} />}
       {toggleStatus.isError && <ErrorState error={toggleStatus.error} />}
       {remove.isError && <ErrorState error={remove.error} />}
@@ -316,6 +323,7 @@ function KeyRow({ project, value }: { project: Project; value: GatewayKey }) {
   const dateTime = useInstantFormatter();
   const queryClient = useQueryClient();
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["project-keys", project.id] });
+  const { notify } = useNotify();
   const mutation = useMutation({
     mutationFn: () => api.updateKey(
       project.id,
@@ -323,11 +331,20 @@ function KeyRow({ project, value }: { project: Project; value: GatewayKey }) {
       { name: value.name, enabled: !value.enabled, ...(value.expires_at ? { expires_at: value.expires_at } : {}) },
       value.revision,
     ),
-    onSuccess: refresh,
+    onSuccess: () => {
+      refresh();
+      notify({ tone: "success", title: t(value.enabled ? "projects.notifyKeyDisabled" : "projects.notifyKeyEnabled"), description: value.name });
+    },
+    // No onError: this mutation renders an ErrorState in place, which carries the
+    // reason. A second copy in the notification column says less and, on the
+    // confirm-gated path, appears above a modal whose Tab trap cannot reach it.
   });
   const remove = useMutation({
     mutationFn: (reauth: ReauthValues) => api.deleteKey(project.id, value.id, value.revision, reauth),
-    onSuccess: refresh,
+    onSuccess: () => {
+      refresh();
+      notify({ tone: "success", title: t("projects.notifyKeyDeleted"), description: value.name });
+    },
   });
   const expired = Boolean(value.expires_at && new Date(value.expires_at).getTime() <= Date.now());
   const live = value.enabled && !expired;
@@ -420,6 +437,7 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
   });
   const selectedRouteAliases = watch("routes") ?? [];
   const enabled = watch("enabled");
+  const { notify } = useNotify();
   // One key per open form: a retry after a lost response reaches the same
   // record instead of creating a second one, while a deliberate second create
   // opens the form again and gets a new key.
@@ -446,8 +464,9 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
         ? api.updateProject(current.id, body, `"${current.revision}"`)
         : api.createProject(body, idempotencyKey.current);
     },
-    onSuccess: () => {
+    onSuccess: (_result, value) => {
       queryClient.invalidateQueries({ queryKey: ["projects"] });
+      notify({ tone: "success", title: t(current ? "projects.notifyUpdated" : "projects.notifyCreated"), description: value.name });
       onClose();
     },
   });
@@ -528,10 +547,12 @@ function CreateKey({ project, onClose }: { project: Project; onClose: () => void
   const { t } = useTranslation();
   const [name, setName] = useState("");
   const [expiresAt, setExpiresAt] = useState("");
+  const timeZone = useAccountingTimeZone();
   const [created, setCreated] = useState<CreatedGatewayKey | null>(null);
   const [acknowledged, setAcknowledged] = useState(false);
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
+  const { notify } = useNotify();
   // One key per dialog: a retry after a timeout replays this token, so the server can
   // recognise the second attempt instead of issuing a key the operator never sees.
   const idempotencyKey = useRef(crypto.randomUUID());
@@ -546,11 +567,17 @@ function CreateKey({ project, onClose }: { project: Project; onClose: () => void
       name,
       idempotencyKey.current,
       reauth,
-      expiresAt ? new Date(expiresAt).toISOString() : undefined,
+      // Read in the accounting zone, which is the zone the key row renders the
+      // expiry back in; the browser's own wall clock would have made the two
+      // disagree by the offset between them.
+      zonedInputToISO(expiresAt, timeZone) || undefined,
     ),
     onSuccess: (result) => {
       setCreated(result.data);
       queryClient.invalidateQueries({ queryKey: ["project-keys", project.id] });
+      // The plaintext key stays in the dialog that can gate its own close; the
+      // column only says a key now exists, and never carries the secret.
+      notify({ tone: "success", title: t("projects.notifyKeyCreated"), description: name });
     },
   });
   const safelyClose = () => {

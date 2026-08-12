@@ -1,6 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useNotify } from "../notifications";
 import { api } from "../api";
 import { ErrorState, Loading, PageHeader, StatusDot } from "../components";
 import { useInstantFormatter } from "../format";
@@ -101,7 +102,12 @@ function ModelCatalogCard({ info, onRefresh }: { info: ModelCatalogInfo; onRefre
   const { t } = useTranslation();
   const readOnly = useIsReadOnly();
   const formatInstant = useInstantFormatter();
-  const refresh = useMutation({ mutationFn: api.refreshModelCatalog, onSettled: () => onRefresh() });
+  const { notify } = useNotify();
+  const refresh = useMutation({
+    mutationFn: api.refreshModelCatalog,
+    onSettled: () => onRefresh(),
+    onSuccess: () => notify({ tone: "success", title: t("settings.modelCatalogRefreshComplete") }),
+  });
   const status = info.status;
   const degraded = status.state === "degraded" || status.state === "catalog_unavailable";
   return <section className={`panel system-card model-catalog-card${degraded ? " warning" : ""}`} aria-labelledby="model-catalog-title">
@@ -120,7 +126,6 @@ function ModelCatalogCard({ info, onRefresh }: { info: ModelCatalogInfo; onRefre
     <div className="form-actions"><button type="button" className="button ghost" disabled={!status.enabled || readOnly || refresh.isPending} aria-describedby={readOnly ? "model-catalog-read-only" : undefined} onClick={() => refresh.mutate()}>{refresh.isPending ? t("common.loading") : t("settings.refreshModelCatalog")}</button></div>
     {readOnly && <span id="model-catalog-read-only" className="sr-only">{t("settings.modelCatalogReadOnly")}</span>}
     {!status.enabled && <p className="muted">{t("settings.modelCatalogDisabledHint")}</p>}
-    {refresh.isSuccess && <p role="status" aria-live="polite" className="muted">{t("settings.modelCatalogRefreshComplete")}</p>}
     {refresh.error && <ErrorState error={refresh.error} />}
   </section>;
 }

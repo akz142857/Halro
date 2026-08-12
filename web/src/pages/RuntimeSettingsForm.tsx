@@ -3,17 +3,22 @@ import { useEffect, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { ErrorState, Field } from "../components";
+import { useNotify } from "../notifications";
 import { useIsReadOnly } from "../session";
 
 export function RuntimeSettingsForm({ settings }: { settings: { health_probe_interval_seconds: number; revision: number; updated_at?: string } }) {
   const { t } = useTranslation();
   const readOnly = useIsReadOnly();
+  const { notify } = useNotify();
   const [interval, setInterval] = useState(settings.health_probe_interval_seconds);
   const queryClient = useQueryClient();
   useEffect(() => setInterval(settings.health_probe_interval_seconds), [settings.health_probe_interval_seconds]);
   const mutation = useMutation({
     mutationFn: () => api.updateSettings({ health_probe_interval_seconds: interval }, settings.revision),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["settings"] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["settings"] });
+      notify({ tone: "success", title: t("settings.runtimeSaved") });
+    },
   });
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -31,7 +36,6 @@ export function RuntimeSettingsForm({ settings }: { settings: { health_probe_int
             <input type="number" min="10" max="3600" required value={interval} onChange={(event) => { mutation.reset(); setInterval(Number(event.target.value)); }} />
           </Field>
           {mutation.isError && <ErrorState error={mutation.error} />}
-          {mutation.isSuccess && <div className="notice success" role="status"><strong>{t("settings.runtimeSaved")}</strong></div>}
           <div className="form-actions"><button className="button primary" disabled={readOnly || mutation.isPending || interval === settings.health_probe_interval_seconds}>{mutation.isPending ? t("settings.saving") : t("settings.saveRuntime")}</button></div>
         </div>
         <aside className="runtime-startup-boundary" aria-labelledby="runtime-startup-title">

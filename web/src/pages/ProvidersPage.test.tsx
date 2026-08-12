@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api, ApiError } from "../api";
 import type { Credential } from "../types";
+import { NotificationProvider } from "../notifications";
 import { ProvidersPage } from "./ProvidersPage";
 
 const openAICredential: Credential = {
@@ -18,6 +19,12 @@ const openAICredential: Credential = {
 };
 
 describe("ProvidersPage profile and credential bindings", () => {
+  // jsdom has no scrollIntoView, and several tests here assert the form brings a
+  // rejection into view. Stubbed once and restored once: a stub left on the
+  // prototype, or a pinned clock left running, leaks into every later test in
+  // the file.
+  const realScrollIntoView = Element.prototype.scrollIntoView;
+
   beforeEach(() => {
     vi.spyOn(api, "credentials").mockResolvedValue({ items: [openAICredential], next_cursor: "" });
     vi.spyOn(api, "providers").mockResolvedValue({ items: [], next_cursor: "" });
@@ -25,6 +32,8 @@ describe("ProvidersPage profile and credential bindings", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.useRealTimers();
+    Element.prototype.scrollIntoView = realScrollIntoView;
     window.history.replaceState({}, "", "/admin/providers");
   });
 
@@ -105,6 +114,47 @@ describe("ProvidersPage profile and credential bindings", () => {
     const staleResult = await screen.findByText("需重测");
     expect(staleResult).toBeInTheDocument();
     expect(staleResult.closest(".inline-test-control")).toHaveAttribute("title", "1/1 个接口正常 · 18ms");
+  });
+
+  // A failed test used to be a red word with nothing behind it: the console
+  // showed "失败", the response carried the class and the upstream's own reply,
+  // and neither reached the operator.
+  it("says why a provider connection test failed", async () => {
+    const failing = {
+      id: "provider_openai", name: "OpenAI", type: "openai", base_url: "https://api.openai.com",
+      access_surface: "openai-api", profile_id: "openai.chat-embeddings.v1", capability_evidence: {},
+      credential_id: openAICredential.id, capabilities: { chat: true }, max_concurrency: 0, enabled: true,
+      revision: 2,
+    } as never;
+    vi.mocked(api.providers).mockResolvedValue({ items: [failing], next_cursor: "" });
+    vi.spyOn(api, "testProvider").mockRejectedValue(new ApiError(502, "request failed (502)", "", "", {
+      status: "unhealthy", error_class: "authentication", provider_status: 403,
+      provider_code: "AccessDeniedException", error_detail: "provider error (403): not authorized to call this project",
+    }));
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "测试" }));
+
+    const reason = await screen.findByText(/上游拒绝了这份凭据/);
+    expect(reason).toHaveTextContent("HTTP 403 · AccessDeniedException · provider error (403): not authorized to call this project");
+  });
+
+  // The class is all the store keeps, so a reload still explains the failure
+  // even though the upstream's sentence is long gone.
+  it("keeps explaining a persisted test failure after a reload", async () => {
+    vi.mocked(api.providers).mockResolvedValue({
+      items: [{
+        id: "provider_openai", name: "OpenAI", type: "openai", base_url: "https://api.openai.com",
+        access_surface: "openai-api", profile_id: "openai.chat-embeddings.v1", capability_evidence: {},
+        credential_id: openAICredential.id, capabilities: { chat: true }, max_concurrency: 0, enabled: true,
+        revision: 3, last_test_status: "unhealthy", last_test_revision: 3, last_test_error_class: "connect",
+        last_tested_at: "2026-08-02T12:00:00Z",
+      } as never],
+      next_cursor: "",
+    });
+    renderPage();
+
+    expect(await screen.findByText(/无法建立到上游的连接/)).toBeVisible();
   });
 
   it("toggles a provider from the row while preserving its configuration", async () => {
@@ -240,6 +290,62 @@ describe("ProvidersPage profile and credential bindings", () => {
     fireEvent.click(streaming);
     expect(streaming).toBeChecked();
     expect(chat).toBeChecked();
+  });
+
+  // Some upstream keys have a stated lifetime — a Bedrock API key, an STS
+  // session, a provider rotation policy — and the first sign used to be a 401 in
+  // production. The date is optional and advisory; what it buys is the rotation
+  // being visible before it happens.
+  it("records an optional credential expiry and counts down to it in the row", async () => {
+    const create = vi.spyOn(api, "createCredential").mockResolvedValue({} as never);
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("tab", { name: /凭据库/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 凭据" }));
+    fireEvent.change(screen.getByLabelText("凭据名称"), { target: { value: "OpenAI" } });
+    fireEvent.change(await screen.findByLabelText(/^服务商密钥/), { target: { value: "sk-test" } });
+    // Optional: nothing typed in the expiry, and the save still goes through
+    // with an explicit "no declared end" rather than a silent omission.
+    fireEvent.click(screen.getByRole("button", { name: "加密保存" }));
+
+    await waitFor(() => expect(create).toHaveBeenCalledOnce());
+    expect(create.mock.calls[0][0]).toMatchObject({ expires_at: null });
+
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 凭据" }));
+    fireEvent.change(screen.getByLabelText("凭据名称"), { target: { value: "Bedrock API key" } });
+    fireEvent.change(await screen.findByLabelText(/^服务商密钥/), { target: { value: "sk-test" } });
+    fireEvent.change(screen.getByLabelText(/^到期时间/), { target: { value: "2027-03-01T12:00" } });
+    fireEvent.click(screen.getByRole("button", { name: "加密保存" }));
+
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
+    // Read in the accounting zone (UTC by default here), not the browser's, so
+    // the instant sent is the one the row renders back.
+    const sent = create.mock.calls[1][0] as { expires_at: string };
+    expect(sent.expires_at).toBe("2027-03-01T12:00:00.000Z");
+  });
+
+  it("says how long a credential has left, and when it is already gone", async () => {
+    vi.setSystemTime(new Date("2026-08-12T00:00:00Z"));
+    vi.mocked(api.credentials).mockResolvedValue({
+      items: [
+        { ...openAICredential, id: "credential_soon", name: "Expiring", expires_at: "2026-08-20T00:00:00Z" },
+        { ...openAICredential, id: "credential_gone", name: "Gone", expires_at: "2026-07-01T00:00:00Z" },
+        { ...openAICredential, id: "credential_open", name: "Open ended" },
+      ],
+      next_cursor: "",
+    });
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("tab", { name: /凭据库/ }));
+    expect(screen.getByText(/^8 天后到期/)).toBeVisible();
+    expect(screen.getByText(/^已于 .* 过期/)).toBeVisible();
+    // A secret with no declared end says nothing in the row rather than
+    // claiming something about a date that was never given.
+    const rows = screen.getAllByText("Open ended")[0].closest(".credential-row");
+    expect(rows?.querySelector(".credential-expiry")).toBeNull();
+    // The full instant stays available where the rest of the technical detail is.
+    fireEvent.click(within(rows as HTMLElement).getByRole("button", { name: "查看详情" }));
+    expect(within(rows as HTMLElement).getByText("未设置到期时间")).toBeVisible();
   });
 
   it("creates an isolated Bedrock Agent Runtime credential for Cohere Rerank", async () => {
@@ -402,6 +508,8 @@ describe("ProvidersPage profile and credential bindings", () => {
       revision: 1,
     };
     vi.mocked(api.credentials).mockResolvedValue({ items: [mantleCredential], next_cursor: "" });
+    // A value the form itself accepts, so what is under test is the server's
+    // refusal travelling back to the operator rather than the local check.
     vi.spyOn(api, "createProvider").mockRejectedValue(
       new ApiError(400, "bedrock project id must be `proj_` followed by alphanumerics", "bedrock_project_id_invalid"),
     );
@@ -416,7 +524,7 @@ describe("ProvidersPage profile and credential bindings", () => {
     fireEvent.change(screen.getByLabelText("服务商名称"), { target: { value: "AwsBedrockMantle" } });
     fireEvent.change(screen.getByLabelText("类型"), { target: { value: "bedrock" } });
     fireEvent.change(await screen.findByRole("combobox", { name: /^能力实现/ }), { target: { value: "bedrock.mantle.openai.chat.v1" } });
-    fireEvent.change(screen.getByLabelText(/^Bedrock 项目/), { target: { value: "wahool-mantle" } });
+    fireEvent.change(screen.getByLabelText(/^Bedrock 项目/), { target: { value: "proj_wahool1" } });
     fireEvent.click(screen.getByRole("button", { name: "创建并热加载" }));
 
     const alert = await screen.findByRole("alert");
@@ -425,6 +533,236 @@ describe("ProvidersPage profile and credential bindings", () => {
     expect(container).not.toBeNull();
     await waitFor(() => expect(scrolled).toContain(container));
     await waitFor(() => expect(document.activeElement).toBe(container));
+  });
+
+  // A missing name and a malformed project ID both used to end at a submit
+  // handler that returned without doing anything: no request, no message, and a
+  // button that looked broken. Both now name the field that stopped the save.
+  it("names the fields that stop a provider save instead of doing nothing", async () => {
+    const mantleCredential: Credential = {
+      id: "credential_mantle",
+      name: "Mantle",
+      type: "bedrock",
+      access_surface: "bedrock-mantle",
+      scheme: "aws.bedrock.api-key",
+      bound_base_url: "https://bedrock-mantle.us-east-1.api.aws:443",
+      secret_configured: true,
+      key_version: 1,
+      revision: 1,
+    };
+    vi.mocked(api.credentials).mockResolvedValue({ items: [mantleCredential], next_cursor: "" });
+    const create = vi.spyOn(api, "createProvider").mockResolvedValue({} as never);
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
+    fireEvent.change(screen.getByLabelText("类型"), { target: { value: "bedrock" } });
+    fireEvent.change(await screen.findByRole("combobox", { name: /^能力实现/ }), { target: { value: "bedrock.mantle.openai.chat.v1" } });
+    fireEvent.change(screen.getByLabelText(/^Bedrock 项目/), { target: { value: "5amaxg" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建并热加载" }));
+
+    expect(create).not.toHaveBeenCalled();
+    expect(await screen.findByText(/必填；模型部署选择上游连接时看到的就是这个名称/)).toBeVisible();
+    expect(screen.getByText(/必须是 AWS 签发的 proj_ 开头加字母数字的 ID/)).toBeVisible();
+    expect(screen.getByLabelText(/^服务商名称/)).toHaveAttribute("aria-invalid", "true");
+    // The reason sits on the field, so the field is what the form scrolls to
+    // and focuses; no second summary line repeats it near the footer.
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText(/^服务商名称/)));
+    expect(document.querySelector(".form-submit-error")).toBeNull();
+
+    // A workspace identifier from the neighbouring product is the likeliest
+    // paste, so it is refused by name rather than as a generic format error.
+    fireEvent.change(screen.getByLabelText(/^Bedrock 项目/), { target: { value: "wrkspc_abc123" } });
+    fireEvent.change(screen.getByLabelText(/^服务商名称/), { target: { value: "AwsBedrockMantle" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建并热加载" }));
+
+    expect(create).not.toHaveBeenCalled();
+    expect(await screen.findByText(/Claude Platform on AWS 的工作区标识/)).toBeVisible();
+
+    // `default` is AWS's name for the account default project, which is what an
+    // empty value already means, so it is normalised away rather than sent.
+    fireEvent.change(screen.getByLabelText(/^Bedrock 项目/), { target: { value: " default " } });
+    fireEvent.click(screen.getByRole("button", { name: "创建并热加载" }));
+
+    await waitFor(() => expect(create).toHaveBeenCalledOnce());
+    expect(create.mock.calls[0][0]).toMatchObject({ name: "AwsBedrockMantle", bedrock_project_id: "" });
+    // The save closed its own modal, so its confirmation has no anchor left on
+    // the page and belongs in the notification column.
+    expect(await screen.findByText("服务商已创建并热加载")).toBeVisible();
+  });
+
+  // Every field that failed keeps its message, and the first one takes focus.
+  // Clearing one of them is a keystroke in that field: re-running the focus move
+  // on it sent the caret to the next still-invalid control, so the rest of what
+  // was being typed landed in the wrong field.
+  it("does not move focus out of the field being corrected", async () => {
+    const mantleCredential: Credential = {
+      id: "credential_mantle",
+      name: "Mantle",
+      type: "bedrock",
+      access_surface: "bedrock-mantle",
+      scheme: "aws.bedrock.api-key",
+      bound_base_url: "https://bedrock-mantle.us-east-1.api.aws:443",
+      secret_configured: true,
+      key_version: 1,
+      revision: 1,
+    };
+    vi.mocked(api.credentials).mockResolvedValue({ items: [mantleCredential], next_cursor: "" });
+    Element.prototype.scrollIntoView = function scrollIntoView() {};
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
+    fireEvent.change(screen.getByLabelText("类型"), { target: { value: "bedrock" } });
+    fireEvent.change(await screen.findByRole("combobox", { name: /^能力实现/ }), { target: { value: "bedrock.mantle.openai.chat.v1" } });
+    // Two refusals at once: an empty name and a malformed project id.
+    fireEvent.change(screen.getByLabelText(/^Bedrock 项目/), { target: { value: "5amaxg" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建并热加载" }));
+
+    // The move is scheduled on an animation frame, so each step waits one out —
+    // otherwise the assertion reads the caret before anything could move it.
+    const frame = () => act(async () => { await new Promise((resolve) => requestAnimationFrame(() => resolve(null))); });
+    const nameField = screen.getByLabelText(/^服务商名称/);
+    await frame();
+    expect(document.activeElement).toBe(nameField);
+
+    fireEvent.change(nameField, { target: { value: "A" } });
+    await waitFor(() => expect(screen.queryByText(/必填；模型部署选择上游连接时看到的就是这个名称/)).toBeNull());
+    await frame();
+    expect(document.activeElement).toBe(nameField);
+    // The other field keeps its own message; it just did not steal the caret.
+    expect(screen.getByText(/必须是 AWS 签发的 proj_ 开头加字母数字的 ID/)).toBeVisible();
+  });
+
+  // A provider with no capability can carry no deployment. The save button used
+  // to be disabled, which said nothing about why; the refusal now has to say it,
+  // and it is the one refusal with no field of its own to carry it.
+  it("refuses a provider with every capability switched off and says so", async () => {
+    const create = vi.spyOn(api, "createProvider").mockResolvedValue({} as never);
+    const scrolled: unknown[] = [];
+    Element.prototype.scrollIntoView = function scrollIntoView(this: Element) {
+      scrolled.push(this);
+    };
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
+    fireEvent.change(screen.getByLabelText("服务商名称"), { target: { value: "OpenAI" } });
+    for (const capability of screen.getAllByRole("checkbox")) {
+      if ((capability as HTMLInputElement).checked && capability.getAttribute("aria-label") !== "启用") {
+        fireEvent.click(capability);
+      }
+    }
+    fireEvent.click(screen.getByRole("button", { name: "创建并热加载" }));
+
+    expect(create).not.toHaveBeenCalled();
+    const alert = await screen.findByText(/至少启用一项能力/);
+    const container = alert.closest(".form-submit-error");
+    expect(container).not.toBeNull();
+    await waitFor(() => expect(scrolled).toContain(container));
+    await waitFor(() => expect(document.activeElement).toBe(container));
+  });
+
+  // A credential is encrypted against the endpoint it was saved for, so a base
+  // URL edited afterwards invalidates the pairing. The refusal used to reach the
+  // operator as "credential type or audience does not match provider", which
+  // names neither URL and does not say which of the two to change.
+  it("refuses a credential sealed to a different base URL and names both endpoints", async () => {
+    const mantleCredential: Credential = {
+      id: "credential_mantle",
+      name: "AWS-EAST2-365",
+      type: "bedrock",
+      access_surface: "bedrock-mantle",
+      scheme: "aws.bedrock.api-key",
+      bound_base_url: "https://bedrock-mantle.us-east-1.api.aws:443",
+      secret_configured: true,
+      key_version: 1,
+      revision: 1,
+    };
+    vi.mocked(api.credentials).mockResolvedValue({ items: [mantleCredential], next_cursor: "" });
+    const create = vi.spyOn(api, "createProvider").mockResolvedValue({} as never);
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
+    fireEvent.change(screen.getByLabelText("服务商名称"), { target: { value: "AwsBedrockMantle" } });
+    fireEvent.change(screen.getByLabelText("类型"), { target: { value: "bedrock" } });
+    fireEvent.change(await screen.findByRole("combobox", { name: /^能力实现/ }), { target: { value: "bedrock.mantle.openai.chat.v1" } });
+    // The endpoint the credential is sealed to is in the option itself, so the
+    // choice can be made without leaving the form.
+    expect(screen.getByRole("option", { name: "AWS-EAST2-365 · https://bedrock-mantle.us-east-1.api.aws" })).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText(/^基础地址/), { target: { value: "https://bedrock-mantle.us-east-2.api.aws" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建并热加载" }));
+
+    expect(create).not.toHaveBeenCalled();
+    // Short on the field that is wrong, with the endpoint to reconcile stated
+    // on the field that has to change.
+    expect(await screen.findByText("地址绑定不匹配")).toBeVisible();
+    expect(screen.getByLabelText(/^加密凭据/)).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByText("所选凭据绑定的是 https://bedrock-mantle.us-east-1.api.aws。")).toBeVisible();
+
+    // A default port on one side and none on the other is the same endpoint,
+    // which is how the server compares them too.
+    fireEvent.change(screen.getByLabelText(/^基础地址/), { target: { value: "https://bedrock-mantle.us-east-1.api.aws:443" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建并热加载" }));
+    await waitFor(() => expect(create).toHaveBeenCalledOnce());
+  });
+
+  // The same refusal made server-side — a base URL changed in another tab, say —
+  // arrives with both endpoints as data, so it is explained rather than reduced
+  // to "the request is invalid" over an English sentinel.
+  it("explains a server-side credential endpoint mismatch in the reader's language", async () => {
+    vi.spyOn(api, "createProvider").mockRejectedValue(
+      Object.assign(
+        new ApiError(
+          400,
+          "credential is bound to https://api.openai.com:443, this provider's base URL is https://gateway.example:8443",
+          "credential_base_url_mismatch",
+          "",
+          {
+            code: "credential_base_url_mismatch",
+            credential_base_url: "https://api.openai.com:443",
+            provider_base_url: "https://gateway.example:8443",
+          },
+        ),
+      ),
+    );
+    Element.prototype.scrollIntoView = function scrollIntoView() {};
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
+    fireEvent.change(screen.getByLabelText("服务商名称"), { target: { value: "OpenAI" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建并热加载" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("这份凭据加密时绑定的是 https://api.openai.com:443");
+    expect(alert).toHaveTextContent("当前连接的基础地址是 https://gateway.example:8443");
+    expect(alert).not.toHaveTextContent("credential is bound to");
+  });
+
+  // The localized sentence names both endpoints, so it is only usable when both
+  // arrived. A refusal built while the provider's own base URL could not be
+  // parsed carries an empty one, and rendering that would leave a sentence with
+  // a blank in it instead of the generic message and the server's own line.
+  it("falls back to the generic refusal when an endpoint is missing from the payload", async () => {
+    vi.spyOn(api, "createProvider").mockRejectedValue(
+      new ApiError(
+        400,
+        "credential is bound to https://api.openai.com:443, this provider's base URL is ",
+        "credential_base_url_mismatch",
+        "",
+        { code: "credential_base_url_mismatch", credential_base_url: "https://api.openai.com:443", provider_base_url: "" },
+      ),
+    );
+    Element.prototype.scrollIntoView = function scrollIntoView() {};
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
+    fireEvent.change(screen.getByLabelText("服务商名称"), { target: { value: "OpenAI" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建并热加载" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("请求内容无效，请检查后重试。");
+    expect(alert).not.toHaveTextContent("这份凭据加密时绑定的是");
+    // The server's own sentence stays visible, because nothing localized replaced it.
+    expect(alert).toHaveTextContent("credential is bound to https://api.openai.com:443");
   });
 
   // Testing an Anthropic Messages provider issues a real inference call, while
@@ -473,7 +811,9 @@ function renderPage() {
   });
   return render(
     <QueryClientProvider client={client}>
-      <ProvidersPage />
+      <NotificationProvider>
+        <ProvidersPage />
+      </NotificationProvider>
     </QueryClientProvider>,
   );
 }

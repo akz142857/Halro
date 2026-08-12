@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
+import { useNotify } from "../notifications";
 import { useIsReadOnly } from "../session";
 import { OnboardingContextBanner } from "../OnboardingContext";
 import { api } from "../api";
@@ -142,6 +143,7 @@ export function DeveloperPage() {
     }
   };
   const queryClient = useQueryClient();
+  const { notify } = useNotify();
   // The console never holds an existing key's plaintext — it is stored as a SHA-256 hash.
   // Creating one is the only moment the secret exists, so fill it in straight from there.
   const createDebugKey = useMutation({
@@ -159,6 +161,9 @@ export function DeveloperPage() {
       setShowGatewayKey(false);
       setCreatedKeyName(created.data.metadata.name);
       queryClient.invalidateQueries({ queryKey: ["project-keys", selectedProject?.id] });
+      // The key itself stays in the field it was written into; the column only
+      // reports that a billable key now exists.
+      notify({ tone: "success", title: t("developer.notifyKeyCreated"), description: created.data.metadata.name });
     },
   });
   const cancelExecution = () => executionController.current?.abort();

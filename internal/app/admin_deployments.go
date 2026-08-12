@@ -441,14 +441,14 @@ func (r *Runtime) testAdminDeployment(writer http.ResponseWriter, request *http.
 	testedAt := time.Now().UTC()
 	latencyMS := time.Since(started).Milliseconds()
 	errorClass := provider.ErrorUnknown
+	var failure probeFailure
 	status := domain.DeploymentTestHealthy
 	r.capabilityMetrics.recordDeploymentTest(probeErr == nil)
 	if probeErr != nil {
 		status = domain.DeploymentTestUnhealthy
-		var classified *provider.Error
-		if errors.As(probeErr, &classified) {
-			errorClass = classified.Class
-		}
+		failure = describeProbeFailure(probeErr)
+		errorClass = failure.Class
+		r.logProbeFailure("deployment", deployment.ID, deployment.BindingID, failure, latencyMS)
 	}
 
 	r.adminTopologyMu.Lock()
@@ -495,6 +495,7 @@ func (r *Runtime) testAdminDeployment(writer http.ResponseWriter, request *http.
 	writer.Header().Set("ETag", revisionETag(current.Revision))
 	if probeErr != nil {
 		result["error_class"] = errorClass
+		failure.addTo(result)
 		writeJSON(writer, http.StatusBadGateway, result)
 		return
 	}
@@ -533,7 +534,7 @@ func (r *Runtime) deploymentFromInput(request *http.Request, deploymentID string
 		return domain.Deployment{}, errors.New("deployment provider is unavailable")
 	}
 	model := strings.TrimSpace(input.ProviderModel)
-	if err := validateBedrockMantleRegion(instance, input); err != nil {
+	if err := validateBedrockMantleRegion(instance, input.Region); err != nil {
 		return domain.Deployment{}, err
 	}
 	region := deploymentRegion(instance, input)
@@ -755,17 +756,20 @@ func deploymentTargetKind(providerType domain.ProviderType, surface domain.Acces
 // Left as an equality check rather than making the field read-only, so an
 // operator can still state the region explicitly — they just cannot state a
 // different one.
-func validateBedrockMantleRegion(instance domain.ProviderInstance, input deploymentInput) error {
+// Takes the declared region rather than a deploymentInput so capability
+// detection, which accepts the same field and keys the same catalog and evidence
+// on it, is bound by the same rule.
+func validateBedrockMantleRegion(instance domain.ProviderInstance, region string) error {
 	if instance.AccessSurface != domain.SurfaceBedrockMantle {
 		return nil
 	}
-	declared := strings.TrimSpace(input.Region)
+	declared := strings.TrimSpace(region)
 	if declared == "" {
 		return nil
 	}
 	endpointRegion := providerRegion(instance)
 	if endpointRegion == "" || declared != endpointRegion {
-		return errors.New("deployment region must match the Bedrock Mantle endpoint region")
+		return errors.New("region must match the Bedrock Mantle endpoint region")
 	}
 	return nil
 }
@@ -792,7 +796,11 @@ func providerRegion(instance domain.ProviderInstance) string {
 	if err != nil {
 		return ""
 	}
-	parts := strings.Split(parsed.Hostname(), ".")
+	// Host comparison is case-insensitive, and the endpoint the operator typed
+	// keeps whatever case they used — ValidateEndpoint and the provider's
+	// AllowedHosts both lower it, so this has to as well or a mixed-case
+	// endpoint refuses its own correct region.
+	parts := strings.Split(strings.ToLower(parsed.Hostname()), ".")
 	for index, part := range parts {
 		if strings.HasPrefix(part, "bedrock") && index+1 < len(parts) {
 			candidate := parts[index+1]

@@ -102,9 +102,17 @@ type Credential struct {
 	Audience      string           `json:"audience"`
 	Ciphertext    []byte           `json:"ciphertext"`
 	KeyVersion    uint16           `json:"key_version"`
-	CreatedAt     time.Time        `json:"created_at"`
-	UpdatedAt     time.Time        `json:"updated_at"`
-	Revision      uint64           `json:"revision"`
+	// ExpiresAt is the operator's record of when the upstream stops honouring
+	// this secret — a Bedrock API key's lifetime, an STS session, a provider
+	// key with a rotation policy. Optional, because most secrets have no
+	// declared end, and advisory: the gateway does not refuse traffic on it,
+	// because it is a typed-in date rather than anything the upstream told us.
+	// What it buys is the rotation being planned instead of discovered from a
+	// 401 in production.
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
+	Revision  uint64     `json:"revision"`
 }
 
 func (c *Credential) GetRevision() uint64      { return c.Revision }
@@ -134,6 +142,11 @@ func (c Credential) Validate() error {
 	}
 	if len(c.Ciphertext) == 0 {
 		problems = append(problems, errors.New("credential ciphertext is required"))
+	}
+	// A zero timestamp is what an unparsed or half-built value decays to, and
+	// stored as "expires" it would read as the year 1. No expiry is nil.
+	if c.ExpiresAt != nil && c.ExpiresAt.IsZero() {
+		problems = append(problems, errors.New("credential expiry must be a real instant or absent"))
 	}
 	return errors.Join(problems...)
 }
@@ -278,7 +291,11 @@ func DefaultProviderProfileBindingID(providerID string, profileID ProviderProfil
 	return providerID + ":" + string(profileID)
 }
 
-func (b ProviderProfileBinding) Validate(providerID string, providerType ProviderType) error {
+// retired says the record being validated is a tombstone. A deleted provider is
+// read by nothing that acts on capabilities, and refusing its write would leave
+// a record that predates the ceiling permanently undeletable — the operator
+// cannot lower a capability set on a provider they are removing.
+func (b ProviderProfileBinding) Validate(providerID string, providerType ProviderType, retired bool) error {
 	if strings.TrimSpace(b.ID) == "" {
 		return errors.New("provider profile binding id is required")
 	}
@@ -300,7 +317,7 @@ func (b ProviderProfileBinding) Validate(providerID string, providerType Provide
 	// whose capabilities the build fixes must never be widened by a stored
 	// record, because everything downstream (capability detection plans, the
 	// data-plane preflight) reads the binding and believes it.
-	if IsImmutableCapabilityProfile(b.ProfileID) &&
+	if !retired && IsImmutableCapabilityProfile(b.ProfileID) &&
 		!ProviderCapabilitiesSubset(b.Capabilities, DefaultProviderCapabilitiesForProfile(providerType, b.ProfileID)) {
 		return errors.New("provider profile binding capabilities exceed the immutable operation profile")
 	}
@@ -462,7 +479,7 @@ func (p ProviderInstance) Validate() error {
 		}
 		seenProfiles[binding.ProfileID] = struct{}{}
 		enabledBinding = enabledBinding || binding.Enabled
-		if err := binding.Validate(p.ID, p.Type); err != nil {
+		if err := binding.Validate(p.ID, p.Type, p.DeletedAt != nil); err != nil {
 			problems = append(problems, err)
 		}
 		if binding.CredentialScheme != p.CredentialScheme {
@@ -490,7 +507,7 @@ func (p ProviderInstance) Validate() error {
 				break
 			}
 		}
-	} else if IsImmutableCapabilityProfile(p.ProfileID) &&
+	} else if p.DeletedAt == nil && IsImmutableCapabilityProfile(p.ProfileID) &&
 		!ProviderCapabilitiesSubset(p.Capabilities, DefaultProviderCapabilitiesForProfile(p.Type, p.ProfileID)) {
 		// No explicit bindings: the legacy single-profile projection is the only
 		// capability declaration there is, so the ceiling has to be checked

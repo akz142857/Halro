@@ -4,7 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError, api } from "../api";
 import i18n from "../i18n";
 import type { AdminRole, Deployment, DeploymentPriceVersion, DeploymentVariant, InvocationTargetCatalog, Provider, ProviderCapabilities, ResolvedInvocationTarget, Session } from "../types";
-import { DeploymentsPage, localDateTimeValue, OVERDUE_SCHEDULED_PRICE_REFRESH_MS, PRICE_FETCH_BATCH_SIZE, priceFetchDelay, scheduledPriceRefreshInterval } from "./DeploymentsPage";
+import { DeploymentsPage, OVERDUE_SCHEDULED_PRICE_REFRESH_MS, PRICE_FETCH_BATCH_SIZE, priceFetchDelay, scheduledPriceRefreshInterval } from "./DeploymentsPage";
+import { DEFAULT_TIME_ZONE, isoToZonedInput } from "../timezone";
 
 const emptyCapabilities: ProviderCapabilities = {
   chat: false, streaming: false, embeddings: false, moderations: false, images: false,
@@ -715,7 +716,11 @@ describe("deployment price panel", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "为 Deployment dep_1 设置价格" }));
     fireEvent.change(await screen.findByLabelText("输入 USD / 百万令牌"), { target: { value: "5" } });
-    fireEvent.change(screen.getByLabelText("生效时间"), { target: { value: localDateTimeValue(new Date(Date.parse(scheduledPriceVersion().effective_from) - 60_000)) } });
+    // The field reads in the accounting zone, so the value it is given has to be
+    // written in that zone too.
+    fireEvent.change(screen.getByLabelText("生效时间"), {
+      target: { value: isoToZonedInput(new Date(Date.parse(scheduledPriceVersion().effective_from) - 60_000), DEFAULT_TIME_ZONE) },
+    });
 
     expect(await screen.findByText(/生效时间必须晚于计划版本 v4/)).toBeVisible();
     expect(screen.getByRole("button", { name: "下一步：核对" })).toBeDisabled();

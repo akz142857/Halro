@@ -16,6 +16,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/akz142857/Halro/internal/domain"
 )
 
 var commitPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
@@ -219,7 +221,10 @@ func describeCell(current *result, item profile, values map[string]string) {
 	current.WireProfile = values["MANTLE_PROFILE"]
 	current.Authentication = "bedrock_api_key"
 	current.ProjectMode = "account_default"
-	if values["BEDROCK_PROJECT_ID"] != "" {
+	// The smoke normalises `default` and whitespace to the account default, so
+	// classifying on the raw value would claim a matrix cell the run never
+	// covered — and the digest binds ProjectMode, so the claim would be sealed.
+	if domain.NormalizeBedrockProjectID(values["BEDROCK_PROJECT_ID"]) != "" {
 		current.ProjectMode = "explicit_project"
 	}
 	digest := sha256.Sum256([]byte(strings.Join([]string{

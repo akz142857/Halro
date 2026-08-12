@@ -56,6 +56,24 @@ export function InlineTestControl({ state, latency, onTest, disabled = false, ti
   );
 }
 
+// What a failed connection test answered, as far as it can be shown. A red
+// "failed" with nothing beside it sent the operator to logs that had nothing
+// either, so the class is turned into a sentence and the upstream's own status,
+// code and message follow it when the provider supplied them.
+export function useTestFailureReason(error: unknown, persistedErrorClass?: string) {
+  const { t } = useTranslation();
+  const payload = error instanceof ApiError
+    ? error.payload as { error_class?: string; provider_status?: number; provider_code?: string; error_detail?: string } | undefined
+    : undefined;
+  const errorClass = payload?.error_class || persistedErrorClass || "";
+  if (!errorClass && !payload?.error_detail) return "";
+  const parts = [t(`testControl.reasons.${errorClass || "unknown"}`, { defaultValue: t("testControl.reasons.unknown") })];
+  if (payload?.provider_status) parts.push(`HTTP ${payload.provider_status}`);
+  if (payload?.provider_code) parts.push(payload.provider_code);
+  if (payload?.error_detail) parts.push(payload.error_detail);
+  return parts.join(" · ");
+}
+
 export function EmptyState({
   title,
   children,

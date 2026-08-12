@@ -23,6 +23,7 @@ type credentialView struct {
 	BoundBaseURL     string                  `json:"bound_base_url"`
 	SecretConfigured bool                    `json:"secret_configured"`
 	KeyVersion       uint16                  `json:"key_version"`
+	ExpiresAt        *time.Time              `json:"expires_at,omitempty"`
 	Revision         uint64                  `json:"revision"`
 }
 

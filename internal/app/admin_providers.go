@@ -14,6 +14,7 @@ import (
 	"github.com/akz142857/Halro/internal/provider"
 	bedrockprovider "github.com/akz142857/Halro/internal/provider/bedrock"
 	bedrockmantleprovider "github.com/akz142857/Halro/internal/provider/bedrockmantle"
+	"github.com/akz142857/Halro/internal/safelog"
 	"github.com/akz142857/Halro/internal/safetransport"
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 	"github.com/go-chi/chi/v5"
@@ -26,6 +27,10 @@ type credentialInput struct {
 	AccessSurface domain.AccessSurface    `json:"access_surface,omitempty"`
 	Scheme        domain.CredentialScheme `json:"scheme,omitempty"`
 	Secret        *string                 `json:"secret,omitempty"`
+	// Absolute, like the Gateway Key's own expiry: what the request says is what
+	// is stored, and an omitted or null value means the secret has no declared
+	// end. A rotation that means to keep an expiry sends it again.
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 }
 
 type providerInput struct {
@@ -125,6 +130,14 @@ func (r *Runtime) updateAdminCredential(writer http.ResponseWriter, request *htt
 		return
 	}
 	if err := r.validateCredentialReferences(request, credential); err != nil {
+		// A generic 409 reads as "someone else edited this, refresh" in the
+		// console, which is the one thing that will not help here: the rotation
+		// would move the credential away from an endpoint a provider still uses.
+		var conflict credentialMatchError
+		if errors.As(err, &conflict) {
+			writeJSON(writer, http.StatusConflict, codedErrorBody(conflict.code, err.Error(), conflict.fields))
+			return
+		}
 		writeJSON(writer, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
 	}
@@ -397,6 +410,7 @@ func (r *Runtime) testAdminProvider(writer http.ResponseWriter, request *http.Re
 	healthyTargets := 0
 	errorClass := provider.ErrorUnknown
 	var probeErr error
+	var failure probeFailure
 	for _, binding := range bindings {
 		adapter, ok := r.providers.AdapterForBinding(providerID, binding.ID)
 		if !ok && len(instance.Bindings) == 0 {
@@ -424,12 +438,15 @@ func (r *Runtime) testAdminProvider(writer http.ResponseWriter, request *http.Re
 			healthyTargets++
 			continue
 		}
+		// Every failing binding is logged, not only the one the response
+		// carries: a provider with three bindings that fails on one of them is
+		// a different problem from one that fails on all three, and the console
+		// only ever shows the first.
+		r.logProbeFailure("provider", providerID, binding.ID, describeProbeFailure(err), latencyMS)
 		if probeErr == nil {
 			probeErr = err
-			var classified *provider.Error
-			if errors.As(err, &classified) {
-				errorClass = classified.Class
-			}
+			failure = describeProbeFailure(err)
+			errorClass = failure.Class
 		}
 	}
 	status := domain.DeploymentTestHealthy
@@ -484,10 +501,156 @@ func (r *Runtime) testAdminProvider(writer http.ResponseWriter, request *http.Re
 	writer.Header().Set("ETag", revisionETag(current.Revision))
 	if probeErr != nil {
 		result["error_class"] = errorClass
+		failure.addTo(result)
 		writeJSON(writer, http.StatusBadGateway, result)
 		return
 	}
 	writeJSON(writer, http.StatusOK, result)
+}
+
+// probeFailure is what a failed connection test can say about itself. The
+// stored record keeps only the class, which answers "what kind of failure" and
+// nothing about which upstream refusal produced it — so the operator was left
+// with a red "failed" and no way to tell an expired key from a wrong region.
+// These fields travel in the response and the log, and are not persisted.
+type probeFailure struct {
+	Class     provider.ErrorClass
+	Status    int
+	Code      string
+	RequestID string
+	Reason    string
+}
+
+// maxProbeReasonLength bounds the upstream sentence. Provider error bodies are
+// already read under a limit, but the reason reaches a table cell that does not
+// want four kilobytes of it.
+const maxProbeReasonLength = 300
+
+// maxProbeIdentifierLength bounds the two identifiers the upstream names itself
+// by. Both are decoded from an upstream body or header read under a megabyte
+// limit, and both travel into a log line and a console cell; a hostile or
+// misconfigured host answering with a multi-kilobyte `error.type` should not be
+// able to write it to disk. Real values are short — `AccessDeniedException`,
+// a request UUID.
+const maxProbeIdentifierLength = 120
+
+func describeProbeFailure(err error) probeFailure {
+	failure := probeFailure{Class: provider.ErrorUnknown}
+	if err == nil {
+		return failure
+	}
+	// The upstream sentence is forwarded to the console, and an operator who
+	// pasted a key into a base URL or a project field gets it echoed back inside
+	// the provider's own error. Redacting here covers the response; the log gets
+	// this text only when Halro wrote it (see logProbeFailure).
+	failure.Reason = truncateProbeReason(safelog.Redact(probeReason(err)))
+	var classified *provider.Error
+	if errors.As(err, &classified) {
+		failure.Class = classified.Class
+		failure.Status = classified.StatusCode
+		failure.Code = probeIdentifier(classified.ProviderCode)
+		failure.RequestID = probeIdentifier(classified.ProviderRequestID)
+	}
+	return failure
+}
+
+// probeIdentifier bounds and narrows an identifier the upstream chose. Anything
+// outside the shape real provider codes and request IDs take is dropped rather
+// than trimmed, because a value that is not one of those is not an identifier
+// and has no business in a log attribute.
+func probeIdentifier(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" || len(trimmed) > maxProbeIdentifierLength {
+		return ""
+	}
+	for _, r := range trimmed {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '.' || r == '_' || r == '-' || r == ':':
+		default:
+			return ""
+		}
+	}
+	return trimmed
+}
+
+// probeReason unwraps the cause a provider error carries. provider.Error.Error
+// returns its own headline and stops there, so a transport refusal arrived as
+// the bare sentence "provider probe failed" — which is the one case where the
+// operator most needs the layer underneath, because it names the address or the
+// allowlist entry that refused the dial.
+func probeReason(err error) string {
+	var classified *provider.Error
+	if !errors.As(err, &classified) || classified.Cause == nil {
+		return err.Error()
+	}
+	cause := classified.Cause.Error()
+	if classified.Message == "" || strings.Contains(cause, classified.Message) {
+		return cause
+	}
+	return classified.Message + ": " + cause
+}
+
+func truncateProbeReason(reason string) string {
+	trimmed := strings.TrimSpace(reason)
+	if len(trimmed) <= maxProbeReasonLength {
+		return trimmed
+	}
+	return strings.ToValidUTF8(trimmed[:maxProbeReasonLength], "") + "…"
+}
+
+// addTo carries the failure into a test response. Absent fields are omitted
+// rather than sent empty, so the console can tell "the provider said nothing"
+// from "the provider said this".
+func (f probeFailure) addTo(result map[string]any) {
+	if f.Status > 0 {
+		result["provider_status"] = f.Status
+	}
+	if f.Code != "" {
+		result["provider_code"] = f.Code
+	}
+	if f.RequestID != "" {
+		result["provider_request_id"] = f.RequestID
+	}
+	if f.Reason != "" {
+		result["error_detail"] = f.Reason
+	}
+}
+
+// logProbeFailure records a connection test the operator ran and the upstream
+// refused. Without it the only trace of a failed test is an audit action name,
+// which says a test failed and never why.
+//
+// What it does not write is the upstream's own sentence. That text is a provider
+// response body, which this repo does not persist anywhere outside its one-time
+// response — the operator who ran the test still reads it in the reply, where it
+// lives for one request rather than on disk. A pattern denylist is not a basis
+// for writing an upstream body to a log file: it knows the credential formats it
+// was told about, and the one thing an upstream is most likely to echo is the
+// key it just refused. A refusal Halro produced itself carries no provider body
+// and is the case the sentence was added for, so that one is still logged.
+func (r *Runtime) logProbeFailure(kind, id, bindingID string, failure probeFailure, latencyMS int64) {
+	attributes := []any{
+		kind + "_id", id,
+		"error_class", string(failure.Class),
+		"latency_ms", latencyMS,
+	}
+	if bindingID != "" {
+		attributes = append(attributes, "binding_id", bindingID)
+	}
+	if failure.Status > 0 {
+		attributes = append(attributes, "provider_status", failure.Status)
+	}
+	if failure.Code != "" {
+		attributes = append(attributes, "provider_code", failure.Code)
+	}
+	if failure.RequestID != "" {
+		attributes = append(attributes, "provider_request_id", failure.RequestID)
+	}
+	if failure.Reason != "" && failure.Status == 0 {
+		attributes = append(attributes, "reason", failure.Reason)
+	}
+	r.logger.Warn(kind+" connection test failed", attributes...)
 }
 
 func providerProbeModel(instance domain.ProviderInstance, providerID, bindingID string, deployments []domain.Deployment, routes []domain.Route) string {
@@ -565,13 +728,13 @@ func (r *Runtime) testAdminRoute(writer http.ResponseWriter, request *http.Reque
 	cancel()
 	testedAt := time.Now().UTC()
 	errorClass := provider.ErrorUnknown
+	var failure probeFailure
 	status := domain.DeploymentTestHealthy
 	if probeErr != nil {
 		status = domain.DeploymentTestUnhealthy
-		var classified *provider.Error
-		if errors.As(probeErr, &classified) {
-			errorClass = classified.Class
-		}
+		failure = describeProbeFailure(probeErr)
+		errorClass = failure.Class
+		r.logProbeFailure("route", route.ID, "", failure, latencyMS)
 	}
 	r.adminTopologyMu.Lock()
 	current, storeErr := r.store.GetRoute(request.Context(), route.ID)
@@ -617,6 +780,7 @@ func (r *Runtime) testAdminRoute(writer http.ResponseWriter, request *http.Reque
 	writer.Header().Set("ETag", revisionETag(current.Revision))
 	if probeErr != nil {
 		result["error_class"] = errorClass
+		failure.addTo(result)
 		writeJSON(writer, http.StatusBadGateway, result)
 		return
 	}
@@ -847,10 +1011,19 @@ func (r *Runtime) credentialFromInput(
 		}
 		keyVersion = current.KeyVersion + 1
 	}
+	var expiresAt *time.Time
+	if input.ExpiresAt != nil {
+		if input.ExpiresAt.IsZero() {
+			return domain.Credential{}, errors.New("credential expiry must be a real instant or absent")
+		}
+		normalized := input.ExpiresAt.UTC()
+		expiresAt = &normalized
+	}
 	credential := domain.Credential{
 		ID: id, Name: input.Name, Type: input.Type, AccessSurface: profile.AccessSurface,
 		Scheme: profile.CredentialScheme, Audience: audience,
-		Ciphertext: ciphertext, KeyVersion: keyVersion, CreatedAt: createdAt, UpdatedAt: now,
+		Ciphertext: ciphertext, KeyVersion: keyVersion, ExpiresAt: expiresAt,
+		CreatedAt: createdAt, UpdatedAt: now,
 	}
 	return credential, credential.Validate()
 }
@@ -864,6 +1037,21 @@ type bedrockProjectIDError struct{ err error }
 func (e bedrockProjectIDError) Error() string { return e.err.Error() }
 func (e bedrockProjectIDError) Unwrap() error { return e.err }
 
+// credentialMatchError marks the refusals that follow from which credential the
+// operator picked rather than from a malformed field. A credential is sealed
+// against one provider type and one base URL, so "does not match" has several
+// distinct causes with different fixes, and a single message covering all of
+// them tells the reader nothing about which value to change. Each cause carries
+// its own code and the two values that disagreed.
+type credentialMatchError struct {
+	code   string
+	fields map[string]string
+	err    error
+}
+
+func (e credentialMatchError) Error() string { return e.err.Error() }
+func (e credentialMatchError) Unwrap() error { return e.err }
+
 // adminProviderInputError answers a rejected provider payload. Most refusals
 // are self-explanatory in context and stay code-less; the ones that are not
 // carry a stable code so the console can localise them.
@@ -871,6 +1059,11 @@ func adminProviderInputError(writer http.ResponseWriter, err error) {
 	var projectID bedrockProjectIDError
 	if errors.As(err, &projectID) {
 		adminBadRequestCode(writer, "bedrock_project_id_invalid", err.Error())
+		return
+	}
+	var credentialMatch credentialMatchError
+	if errors.As(err, &credentialMatch) {
+		adminBadRequestFields(writer, credentialMatch.code, err.Error(), credentialMatch.fields)
 		return
 	}
 	adminBadRequest(writer, err.Error())
@@ -902,8 +1095,36 @@ func (r *Runtime) providerFromInput(
 	if err != nil {
 		return domain.ProviderInstance{}, err
 	}
-	if credential.Type != input.Type || credential.Audience != audience {
-		return domain.ProviderInstance{}, errors.New("credential type or audience does not match provider")
+	if credential.Type != input.Type {
+		return domain.ProviderInstance{}, credentialMatchError{
+			code: "credential_type_mismatch",
+			fields: map[string]string{
+				"credential_provider_type": string(credential.Type),
+				"provider_type":            string(input.Type),
+			},
+			err: fmt.Errorf(
+				"credential is for provider type %s, this provider is %s",
+				credential.Type, input.Type,
+			),
+		}
+	}
+	// The audience seals the credential to the base URL it was encrypted for, so
+	// a base URL edit after the credential was saved lands here rather than at
+	// the upstream. Both origins go back as data: which one to change is the
+	// operator's call, and they can only make it if they can see both.
+	if credential.Audience != audience {
+		return domain.ProviderInstance{}, credentialMatchError{
+			code: "credential_base_url_mismatch",
+			fields: map[string]string{
+				"credential_base_url": credentialOrigin(credential.Audience, credential.Type),
+				"provider_base_url":   credentialOrigin(audience, input.Type),
+			},
+			err: fmt.Errorf(
+				"credential is bound to %s, this provider's base URL is %s",
+				credentialOrigin(credential.Audience, credential.Type),
+				credentialOrigin(audience, input.Type),
+			),
+		}
 	}
 	requestedProfile := input.ProfileID
 	if requestedProfile == "" {
@@ -919,7 +1140,17 @@ func (r *Runtime) providerFromInput(
 		return domain.ProviderInstance{}, errors.New("provider access surface, profile, or credential scheme is incompatible")
 	}
 	if credential.AccessSurface != profile.AccessSurface || credential.Scheme != profile.CredentialScheme {
-		return domain.ProviderInstance{}, errors.New("credential access surface or scheme does not match provider")
+		return domain.ProviderInstance{}, credentialMatchError{
+			code: "credential_surface_mismatch",
+			fields: map[string]string{
+				"credential_access_surface": string(credential.AccessSurface),
+				"provider_access_surface":   string(profile.AccessSurface),
+			},
+			err: fmt.Errorf(
+				"credential is for access surface %s, this provider uses %s",
+				credential.AccessSurface, profile.AccessSurface,
+			),
+		}
 	}
 	if profile.AccessSurface == domain.SurfaceBedrockMantle {
 		if err := bedrockmantleprovider.ValidateEndpoint(endpoint); err != nil {
@@ -1086,8 +1317,38 @@ func (r *Runtime) validateCredentialReferences(
 			continue
 		}
 		audience, err := safetransport.AudienceWithPolicy(instance.BaseURL, string(instance.Type), providerEndpointPolicy(r.config))
-		if err != nil || instance.Type != credential.Type || audience != credential.Audience {
-			return errors.New("credential type or audience conflicts with an existing provider")
+		// A rotation can move the credential along two axes, and naming the wrong
+		// one is worse than naming neither: a type change reports two identical
+		// endpoints and sends the operator to correct a base URL that is already
+		// right.
+		if instance.Type != credential.Type {
+			return credentialMatchError{
+				code: "credential_type_in_use",
+				fields: map[string]string{
+					"credential_provider_type": string(credential.Type),
+					"provider_provider_type":   string(instance.Type),
+					"provider_name":            instance.Name,
+				},
+				err: fmt.Errorf(
+					"provider %q uses this credential as provider type %s, which this rotation would change to %s",
+					instance.Name, instance.Type, credential.Type,
+				),
+			}
+		}
+		if err != nil || audience != credential.Audience {
+			return credentialMatchError{
+				code: "credential_endpoint_in_use",
+				fields: map[string]string{
+					"credential_base_url": credentialOrigin(credential.Audience, credential.Type),
+					"provider_base_url":   credentialOrigin(audience, instance.Type),
+					"provider_name":       instance.Name,
+				},
+				err: fmt.Errorf(
+					"provider %q uses this credential at %s, which this rotation would move to %s",
+					instance.Name, credentialOrigin(audience, instance.Type),
+					credentialOrigin(credential.Audience, credential.Type),
+				),
+			}
 		}
 	}
 	return nil
@@ -1223,6 +1484,13 @@ func (r *Runtime) validateBindingsCanDeactivate(
 	return nil
 }
 
+// credentialOrigin recovers the base URL an audience seals a credential to. The
+// audience is that origin with the provider type appended, and the type is what
+// the reader already knows; the origin is the part they can act on.
+func credentialOrigin(audience string, providerType domain.ProviderType) string {
+	return strings.TrimSuffix(audience, ":"+string(providerType))
+}
+
 func implementedProviderType(value domain.ProviderType) bool {
 	switch value {
 	case domain.ProviderOpenAI, domain.ProviderAzureOpenAI,
@@ -1238,9 +1506,10 @@ func credentialViewFrom(item domain.Credential) credentialView {
 	return credentialView{
 		ID: item.ID, Name: item.Name, Type: item.Type,
 		AccessSurface: item.AccessSurface, Scheme: item.Scheme,
-		BoundBaseURL:     strings.TrimSuffix(item.Audience, ":"+string(item.Type)),
+		BoundBaseURL:     credentialOrigin(item.Audience, item.Type),
 		SecretConfigured: len(item.Ciphertext) > 0, KeyVersion: item.KeyVersion,
-		Revision: item.Revision,
+		ExpiresAt: item.ExpiresAt,
+		Revision:  item.Revision,
 	}
 }
 

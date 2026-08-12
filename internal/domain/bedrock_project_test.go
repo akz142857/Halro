@@ -19,6 +19,16 @@ func TestBedrockProjectIDAcceptsOnlyAWSProjectIdentifiers(t *testing.T) {
 			t.Fatalf("accepted %q as a Bedrock project id", value)
 		}
 	}
+	// At the bound, not near it: the only over-length value above also carries
+	// underscores, so the alphanumeric rule refused it and the length rule was
+	// never the thing under test.
+	atLimit := "proj_" + strings.Repeat("a", MaxBedrockProjectIDLength-len("proj_"))
+	if err := ValidateBedrockProjectID(atLimit); err != nil {
+		t.Fatalf("rejected a project id of exactly the maximum length: %v", err)
+	}
+	if err := ValidateBedrockProjectID(atLimit + "a"); err == nil {
+		t.Fatal("accepted a project id one character over the maximum length")
+	}
 }
 
 // Pasting a Claude Platform on AWS workspace id into the Bedrock field is the

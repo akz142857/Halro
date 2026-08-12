@@ -23,6 +23,7 @@ import {
 import type { InlineTestState } from "../components";
 import type { Deployment, Provider, Route } from "../types";
 import { useTranslation } from "react-i18next";
+import { useNotify } from "../notifications";
 import { useIsReadOnly } from "../session";
 import { Link } from "../navigation";
 import { hasOnboardingCreateIntent, OnboardingContextBanner } from "../OnboardingContext";
@@ -51,15 +52,25 @@ export function RoutesPage() {
   const deployments = useQuery({ queryKey: ["deployments"], queryFn: api.deployments });
   const providers = useQuery({ queryKey: ["providers"], queryFn: api.providers });
   const queryClient = useQueryClient();
+  const { notify } = useNotify();
   const remove = useMutation({
     mutationFn: ({ route, reauth }: { route: Route; reauth: ReauthValues }) => api.deleteRoute(route.id, route.revision, reauth),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["routes"] }),
+    onSuccess: (_result, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["routes"] });
+      notify({ tone: "success", title: t("routes.notifyDeleted"), description: variables.route.public_model });
+    },
   });
   // Switching a route off is the same write the edit form makes, so it goes
   // through the same full-body update rather than a second, partial one.
   const setEnabled = useMutation({
     mutationFn: (route: Route) => api.updateRoute(route.id, routeUpdateBody(route, !route.enabled), route.revision),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["routes"] }),
+    onSuccess: (_result, route) => {
+      queryClient.invalidateQueries({ queryKey: ["routes"] });
+      notify({ tone: "success", title: t(route.enabled ? "routes.notifyDisabled" : "routes.notifyEnabled"), description: route.public_model });
+    },
+    // No onError: this mutation renders an ErrorState in place, which carries the
+    // reason. A second copy in the notification column says less and, on the
+    // confirm-gated path, appears above a modal whose Tab trap cannot reach it.
   });
   // Whether an alias keeps answering after this route is switched off depends
   // on what else still serves it, so the confirmation has to count.
@@ -245,6 +256,7 @@ function RouteForm({ current, deployments, onClose }: { current?: Route; deploym
   const [strategy, setStrategy] = useState<"ordered" | "round_robin">(current?.strategy || "ordered");
   const [routeEnabled, setRouteEnabled] = useState(current?.enabled ?? true);
   const queryClient = useQueryClient();
+  const { notify } = useNotify();
   // One key per open form: a retry after a lost response reaches the same
   // record instead of creating a second one, while a deliberate second create
   // opens the form again and gets a new key.
@@ -264,6 +276,7 @@ function RouteForm({ current, deployments, onClose }: { current?: Route; deploym
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["routes"] });
+      notify({ tone: "success", title: t(current ? "routes.notifyUpdated" : "routes.notifyCreated"), description: publicModel });
       onClose();
     },
   });
