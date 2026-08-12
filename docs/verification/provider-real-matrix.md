@@ -145,8 +145,49 @@ These come from AWS documentation and this repository's code. They are contract
 tests, not evidence: they prove Halro sends what the documentation describes,
 not that the service accepts it.
 
-A real-account smoke, when it is authorised, must bind each result to
-`exact commit × region × profile × exact model × authentication × project mode`
-and must not generalise one model's capability result to a whole profile. Until
-then the release notes carry this as a known limitation, and any statement that
-Mantle "works" is a statement about fixtures.
+### Running the Mantle smoke when it is authorised
+
+The harness exists; no run has happened. It is opt-in twice over: the matrix
+runner ignores Beta profiles unless asked, and the smoke itself skips unless
+every variable is set.
+
+```bash
+export HALRO_MATRIX_BEDROCK_MANTLE_BASE_URL="https://bedrock-mantle.<region>.api.aws"
+export HALRO_MATRIX_BEDROCK_MANTLE_API_KEY="<dedicated, budget-limited Bedrock API key>"
+export HALRO_MATRIX_BEDROCK_MANTLE_MODEL="<exact upstream model id>"
+export HALRO_MATRIX_BEDROCK_MANTLE_MANTLE_PROFILE="chat"   # or responses, messages
+# optional; omit to exercise the account default project
+export HALRO_MATRIX_BEDROCK_MANTLE_BEDROCK_PROJECT_ID="proj_..."
+
+go run ./tests/provider-matrix \
+  -commit '<exact-lowercase-40-character-commit>' \
+  -include-beta \
+  -output provider-matrix.json
+```
+
+Each run exercises one wire profile with a non-stream and a streaming call, and
+requires both to report usage — a run Halro could not account for is not
+evidence that Halro can serve the profile. Three wire profiles is three runs.
+
+`-include-beta` never moves the GA release gate: Beta results carry
+`tier: "beta"` and `passed` counts GA results only. Without the flag the Beta
+rows are still emitted with `status: "not_run"`, so silence cannot be read as
+coverage.
+
+### What a Mantle evidence row may contain
+
+Each row records the cell it covers — `region`, `wire_profile`,
+`authentication`, `project_mode` — plus a `target_digest`. The digest is
+`sha256(region, wire profile, authentication, project mode, exact model)`: it
+lets a later reader confirm two runs used the same target, or match a claimed
+target against a custody record they hold locally, without this shared file
+naming an account's model entitlements. The exact model, the key, the account
+ID, the project ID, request and response bodies, and provider request IDs never
+enter it.
+
+A run proves one cell. It says nothing about the other two wire profiles,
+another model, another region, or the other project mode, and nothing about
+capabilities the run did not exercise. A transient failure, a rate limit or a
+5xx must never be recorded as `unsupported`. Until at least one row exists, the
+release notes carry Mantle as a known limitation and any statement that Mantle
+"works" is a statement about fixtures.

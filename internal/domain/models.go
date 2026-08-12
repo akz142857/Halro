@@ -220,15 +220,27 @@ type GatewayKey struct {
 // data already answer that. If it ever comes back it must arrive with its write.
 
 type ProviderInstance struct {
-	ID                     string                   `json:"id"`
-	Name                   string                   `json:"name"`
-	Type                   ProviderType             `json:"type"`
-	BaseURL                string                   `json:"base_url"`
-	APIVersion             string                   `json:"api_version,omitempty"`
-	CredentialID           string                   `json:"credential_id"`
-	AccessSurface          AccessSurface            `json:"access_surface"`
-	ProfileID              ProviderProfileID        `json:"profile_id"`
-	CredentialScheme       CredentialScheme         `json:"credential_scheme"`
+	ID               string            `json:"id"`
+	Name             string            `json:"name"`
+	Type             ProviderType      `json:"type"`
+	BaseURL          string            `json:"base_url"`
+	APIVersion       string            `json:"api_version,omitempty"`
+	CredentialID     string            `json:"credential_id"`
+	AccessSurface    AccessSurface     `json:"access_surface"`
+	ProfileID        ProviderProfileID `json:"profile_id"`
+	CredentialScheme CredentialScheme  `json:"credential_scheme"`
+	// BedrockProjectID selects the Bedrock Project (Workspace, in the Anthropic
+	// protocol's naming — AWS documents them as one resource) that requests
+	// through this provider are associated with. Empty means the account's
+	// default project, which is also what every record written before this
+	// field existed means: no header is sent, and AWS associates the request
+	// with the default. That is why adding it needs no migration.
+	//
+	// Provider-level rather than binding-level because a binding is uniquely
+	// keyed by (provider, profile) and cannot repeat, so it cannot carry a
+	// dimension an operator needs several of. Two projects are two providers,
+	// which may share one credential.
+	BedrockProjectID       string                   `json:"bedrock_project_id,omitempty"`
 	AllowedHosts           []string                 `json:"allowed_hosts"`
 	Capabilities           ProviderCapabilities     `json:"capabilities"`
 	CapabilityEvidence     CapabilityEvidenceSet    `json:"capability_evidence"`
@@ -410,6 +422,14 @@ func (p ProviderInstance) Validate() error {
 	}
 	if p.CredentialID == "" {
 		problems = append(problems, errors.New("provider credential id is required"))
+	}
+	if p.BedrockProjectID != "" && p.AccessSurface != SurfaceBedrockMantle {
+		// Every other surface has no such concept, so a value here would be
+		// stored and never sent — a setting that silently does nothing.
+		problems = append(problems, errors.New("bedrock project id is only valid on the Bedrock Mantle access surface"))
+	}
+	if err := ValidateBedrockProjectID(p.BedrockProjectID); err != nil {
+		problems = append(problems, err)
 	}
 	if len(p.AllowedHosts) == 0 {
 		problems = append(problems, errors.New("provider allowed hosts must not be empty"))

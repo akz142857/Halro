@@ -37,6 +37,7 @@ type providerInput struct {
 	AccessSurface    domain.AccessSurface             `json:"access_surface,omitempty"`
 	ProfileID        domain.ProviderProfileID         `json:"profile_id,omitempty"`
 	CredentialScheme domain.CredentialScheme          `json:"credential_scheme,omitempty"`
+	BedrockProjectID string                           `json:"bedrock_project_id,omitempty"`
 	Capabilities     *domain.ProviderCapabilities     `json:"capabilities,omitempty"`
 	Bindings         *[]domain.ProviderProfileBinding `json:"bindings,omitempty"`
 	MaxConcurrency   int64                            `json:"max_concurrency"`
@@ -904,6 +905,16 @@ func (r *Runtime) providerFromInput(
 			return domain.ProviderInstance{}, err
 		}
 	}
+	// `default` is the ID AWS lists for the account default project, and sending
+	// it as a header is indistinguishable from sending none; normalising here
+	// means one stored spelling for "the default" rather than two.
+	bedrockProjectID := domain.NormalizeBedrockProjectID(input.BedrockProjectID)
+	if err := domain.ValidateBedrockProjectID(bedrockProjectID); err != nil {
+		return domain.ProviderInstance{}, err
+	}
+	if bedrockProjectID != "" && profile.AccessSurface != domain.SurfaceBedrockMantle {
+		return domain.ProviderInstance{}, errors.New("bedrock project id is only valid on the Bedrock Mantle access surface")
+	}
 	instance := domain.ProviderInstance{
 		ID: id, Name: input.Name, Type: input.Type, BaseURL: input.BaseURL,
 		APIVersion:       strings.TrimSpace(input.APIVersion),
@@ -911,6 +922,7 @@ func (r *Runtime) providerFromInput(
 		AccessSurface:    profile.AccessSurface,
 		ProfileID:        profile.ProfileID,
 		CredentialScheme: profile.CredentialScheme,
+		BedrockProjectID: bedrockProjectID,
 		AllowedHosts:     []string{strings.ToLower(endpoint.Hostname())},
 		MaxConcurrency:   input.MaxConcurrency,
 		Enabled:          input.Enabled, CreatedAt: createdAt, UpdatedAt: updatedAt,

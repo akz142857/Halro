@@ -64,7 +64,7 @@ and other external services are not required.
 | Reviewed OpenAI-compatible endpoint | GA profile | conservative chat/stream/embedding capability declaration |
 | Gemini | Beta | text `generateContent`, SSE, float embeddings |
 | AWS Bedrock | Beta | text Converse/ConverseStream, SigV4, static encrypted credential JSON |
-| AWS Bedrock Mantle | Beta | Chat Completions, Responses (stateless), Anthropic Messages; Bedrock API key only; account default project only |
+| AWS Bedrock Mantle | Beta | Chat Completions, Responses (stateless), Anthropic Messages; Bedrock API key only; optional Bedrock Project per provider |
 
 Gemini and Bedrock reject undeclared tools, vision, JSON mode, or embedding
 capabilities rather than silently degrading. Bedrock does not use ambient AWS
@@ -72,9 +72,10 @@ credentials, IMDS, or the default credential chain.
 
 The three Bedrock Mantle profiles authenticate with a Bedrock API key — the
 AWS console offers IAM credentials as its default choice, and that path is not
-implemented here. Requests carry no project or workspace header, so every call
-is associated with the account's default Bedrock project; a non-default project
-cannot be addressed in this release.
+implemented here. A provider may name one Bedrock Project (`proj_...`); leaving
+it empty associates every call with the account's default project. Serving two
+projects means two Provider instances, which may share one credential. The
+project is a provider-level property, not a per-request one.
 
 ## Security and recovery
 
@@ -240,12 +241,14 @@ data-directory lock uses Unix `flock` semantics.
    ship Beta with their endpoint shape, request paths, credential headers, and
    declared capabilities derived from AWS documentation and pinned by local
    contract tests. No request from this build has been made against a real
-   Bedrock Mantle account. Two consequences are known and intentional:
-   authentication is Bedrock API key only (the console's default IAM path is
-   not implemented), and no project or workspace header is sent, so only the
-   account's default Bedrock project is reachable. A deployment's region must
-   match its provider endpoint's region, because a Bedrock project is a
-   region-scoped resource.
+   Bedrock Mantle account, including the project-addressing header. Two
+   limits are known and intentional: authentication is Bedrock API key only
+   (the console's default IAM path is not implemented), and a provider
+   addresses exactly one Bedrock Project, so a per-request project is not
+   available. A deployment's region must match its provider endpoint's region,
+   because a Bedrock project is a region-scoped resource. A project that does
+   not exist or has been archived fails at request time as an authentication
+   error, which is not retried and not failed over.
 9. **Dynamic signed catalog is inactive in the current release build.** No
    production trust roots are compiled, so verification fails closed to the
    bundled catalog; `trust_root_count: 0` is expected and updates default off.

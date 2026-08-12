@@ -110,16 +110,22 @@ Token 记账，都由 Halro 的 `budget`、`ledger`、`usage` 负责，与你选
 默认值配会在保存凭据时失败。数据面不使用默认凭据链、IMDS 或容器 metadata，这是
 安全裁决，不是待办。
 
-**只能用账户的 default project。** AWS 把 Workspaces（Anthropic 协议）与 Projects
-（OpenAI 协议）实现为同一种 Bedrock project 资源，分别由 `anthropic-workspace` 与
-`OpenAI-Project` 请求头选择；省略请求头时归入账户的 default project。**Halro 目前
-两个头都不发**，因此：
+**Bedrock Project 是 Provider 级属性。** AWS 把 Workspaces（Anthropic 协议）与
+Projects（OpenAI 协议）实现为同一种 Bedrock project 资源，分别由 `anthropic-workspace`
+与 `OpenAI-Project` 请求头选择；省略请求头时归入账户的 default project。
 
-- default project 可用；
-- 非 default project 无法寻址，AWS 侧的按 project 成本分摊与 IAM 隔离用不上。
+Halro 的做法：Provider 表单上的 **Bedrock Project ID** 留空即 default project（不发头），
+填写 `proj_` 开头的 ID 则该实例的全部请求都归入该 project。
 
-注意这与上一节说的不是一回事：Halro 自己的 Project 隔离、预算与记账照常工作，
-用不上的是 **AWS 账单侧**的 project 维度。
+- 一个 Provider 只指向一个 project。需要两个 project 就建两个 Provider——**可以复用同一
+  条凭据**，各自保留自己的并发上限、熔断状态、能力证据与记账目标；
+- 不接受 `wrkspc_` 开头的值：那是 Claude Platform on AWS 的 workspace ID，属于另一条
+  产品线；
+- 保存时不做在线校验（AWS 长期 key 的默认策略只允许 get/list projects）。project 不存在
+  或已归档会在**请求时**以认证错误暴露，且按 401/403 的规则不重试、不 fallback。
+
+注意这与上一节说的不是一回事：Halro 自己的 Project 隔离、预算与记账与此无关，这里管的是
+**AWS 账单与 IAM 侧**的 project 维度。
 
 **Deployment 的 Region 必须与 Provider endpoint 的 Region 一致。** Bedrock project
 是 region 作用域资源（ARN 里带 region），模型可用性、配额与能力证据同样按 region

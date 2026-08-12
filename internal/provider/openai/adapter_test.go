@@ -369,7 +369,7 @@ func TestProviderAuthorizationCannotBeOverriddenByExistingHeaders(t *testing.T) 
 	request, _ := http.NewRequest(http.MethodPost, endpoint.String(), nil)
 	request.Header.Set("Authorization", "Bearer client-controlled")
 	request.Header.Set("api-key", "client-controlled")
-	openAI.authorize(request)
+	openAI.prepareRequest(request)
 	if request.Header.Get("Authorization") != "Bearer provider-key" || request.Header.Get("api-key") != "" {
 		t.Fatalf("OpenAI provider credentials were not authoritative: %#v", request.Header)
 	}
@@ -384,7 +384,7 @@ func TestProviderAuthorizationCannotBeOverriddenByExistingHeaders(t *testing.T) 
 	defer azure.Close()
 	request.Header.Set("Authorization", "Bearer client-controlled")
 	request.Header.Set("api-key", "client-controlled")
-	azure.authorize(request)
+	azure.prepareRequest(request)
 	if request.Header.Get("api-key") != "azure-key" || request.Header.Get("Authorization") != "" {
 		t.Fatalf("Azure provider credentials were not authoritative: %#v", request.Header)
 	}

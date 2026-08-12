@@ -223,6 +223,7 @@ function ProviderRow({ provider, credential, highlighted, onCredentialClick, onE
       type: provider.type,
       base_url: provider.base_url,
       ...(provider.api_version ? { api_version: provider.api_version } : {}),
+      ...(provider.bedrock_project_id ? { bedrock_project_id: provider.bedrock_project_id } : {}),
       credential_id: provider.credential_id,
       access_surface: provider.access_surface,
       profile_id: provider.profile_id,
@@ -470,6 +471,7 @@ function ProviderForm({
   const [profileID, setProfileID] = useState<BedrockProfile>(initialProfile);
   const [baseURL, setBaseURL] = useState(current?.base_url ?? defaultBaseURL(initialType));
   const [apiVersion, setAPIVersion] = useState(current?.api_version ?? "");
+  const [bedrockProjectID, setBedrockProjectID] = useState(current?.bedrock_project_id ?? "");
   const [maxConcurrency, setMaxConcurrency] = useState(current?.max_concurrency ?? 0);
   const [enabled, setEnabled] = useState(current?.enabled ?? true);
   const [capabilities, setCapabilities] = useState<ProviderCapabilities>(current?.capabilities ?? defaultProviderCapabilities(initialType));
@@ -493,6 +495,9 @@ function ProviderForm({
         profile_id: profileID,
         access_surface: bedrockProfileConfig(profileID).surface,
         credential_scheme: bedrockProfileConfig(profileID).scheme,
+        ...(bedrockProfileConfig(profileID).surface === "bedrock-mantle"
+          ? { bedrock_project_id: bedrockProjectID.trim() }
+          : {}),
       } : type === "openai" ? {
         // profile_id remains during the rolling backend migration. New runtimes
         // route each operation through the matching capability binding.
@@ -511,7 +516,7 @@ function ProviderForm({
       onClose();
     },
   });
-  const dirty = useDirty({ name, type, profileID, baseURL, apiVersion, maxConcurrency, enabled, capabilities, credentialID });
+  const dirty = useDirty({ name, type, profileID, baseURL, apiVersion, bedrockProjectID, maxConcurrency, enabled, capabilities, credentialID });
   return (
     <Modal wide title={current ? t("providers.editProvider") : t("providers.createProvider")} dirty={dirty} onClose={onClose}>
       {credentials.length === 0 ? (
@@ -560,6 +565,11 @@ function ProviderForm({
           {type === "azure_openai" && (
             <Field label={t("providers.apiVersion")} hint={t("providers.apiVersionHint")}>
               <input value={apiVersion} onChange={(event) => setAPIVersion(event.target.value)} required />
+            </Field>
+          )}
+          {selectedSurface === "bedrock-mantle" && (
+            <Field label={t("providers.bedrockProject")} hint={t("providers.bedrockProjectHint")}>
+              <input value={bedrockProjectID} placeholder="default" onChange={(event) => setBedrockProjectID(event.target.value)} />
             </Field>
           )}
             </div>

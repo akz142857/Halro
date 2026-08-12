@@ -1,6 +1,6 @@
 # Amazon Bedrock Mantle 接入评估与开发计划
 
-状态：Phase 0、Phase 1 已实现；Phase 2 待产品裁决；Phase 3 待计费授权
+状态：Phase 0～3 已实现；Phase 3 的真实调用待账户与计费授权
 日期：2026-08-12
 范围：`internal/domain`、`internal/provider/{bedrock,bedrockmantle,openai,anthropic}`、
 `internal/app`、`internal/gateway`、`internal/compatibility`、`internal/store`、`web`、
@@ -149,15 +149,13 @@ Halro 的具体实现是否符合契约，但不能用单次 smoke 代替协议�
 
 ## 3. Project / Workspace 寻址设计
 
-### 3.1 当前精确能力
+### 3.1 当前精确能力（Phase 2 之后）
 
-当前请求不发送 `OpenAI-Project` 或 `anthropic-workspace`。依据 Bedrock 官方契约：
+Provider 可选填 `BedrockProjectID`：留空不发资源头、归入账户 default project；填写则按
+协议渲染 `OpenAI-Project` 或 `anthropic-workspace`。`anthropic-workspace-id` 仍然
+不得出现在任何 Mantle 请求上——它属于另一条产品线，代码里只用于删除。
 
-- default project/workspace：应可使用，但尚无真实账户证据；
-- 非 default project/workspace：无法显式选择，所有调用仍落 default；
-- 初始截图中的 `anthropic-workspace-id` 不得加入任何 Mantle 适配器。
-
-这是一项多 Project 增强，不是 default 路径阻塞。
+仍然成立的限制：两者都没有真实账户证据；project 是 Provider 级而非请求级。
 
 ### 3.2 推荐的第一版：Provider 级 `BedrockProjectID`
 
@@ -185,9 +183,10 @@ Halro 的具体实现是否符合契约，但不能用单次 smoke 代替协议�
   在线校验会让 Provider 保存路径依赖一次上游调用，且权限结果因 key 类型而异。
   project 是否存在、是否已归档，一律在请求时暴露。
 
-该方案不是“零 schema 改动”。至少涉及 domain、Admin API、store format、backup/restore、
-Provider 表单、i18n、三个适配器和文档。按仓库 pre-1.0 规则，durable schema 改动必须 bump
-format version，并明确陈旧数据目录的重建/迁移行为。
+该方案不是“零 schema 改动”：涉及 domain、Admin API、Provider 表单、i18n、三个适配器
+和文档。**但它不需要 bump format version，也不需要重建数据目录**——这一条是实现时纠正的：
+新字段缺失即"账户 default project"，而这正是该字段存在之前每一条记录的真实含义，没有任何
+已存字节改变解释。pre-1.0 的版本号规则针对的是"陈旧状态会被误读"，这里不会。
 
 ### 3.3 请求头落点
 
@@ -411,33 +410,57 @@ Operator Guide、release notes、provider real matrix。
 未做（留给后续任务，不属于本阶段）：真实 smoke harness 与 `tests/provider-matrix`
 的 Mantle 扩展，见 Phase 3。
 
-### Phase 2：Provider 级显式 Project（产品批准后）
+### Phase 2：Provider 级显式 Project —— 已实现
 
-触及：`domain`、`store`、`app`、三个适配器、Admin API、`web`、i18n、backup/restore、ADR。
+裁决：采用文档推荐的 Provider 级 `BedrockProjectID`，不做 Deployment 级。
 
-验收：
+落地形状：
 
-- 空 BedrockProjectID 省略资源头；显式值按 profile 输出正确头；
-- 校验只接受 `proj_` 前缀或 `default`，拒绝 `wrkspc_` 前缀，且不发起任何在线校验调用；
-- 指向已归档或无权 project 的请求在**请求时**失败，错误分类明确：按 §5.1，403 归入
-  `ErrorAuthentication`，因此不重试、不 fallback、客户端收到 502
-  `provider_authentication_error`。运维必须能把它与"凭据过期"区分开——两者今天是同一个
-  错误码，Phase 2 需给出区分手段（至少在 Operator Guide 的排障表里写清）；
-- 同一 Credential 可被 Project A/B 的两个 Provider 安全复用且不会串 Project；
-- 更新、重启、Credential 轮换、backup/restore、旧数据处理均有测试；
-- BedrockProjectID 不进入日志、错误、Metrics、Audit 或真实 evidence；
-- format version 与重建/迁移说明符合 pre-1.0 规则。
+- `domain.ProviderInstance.BedrockProjectID`，可选。空值即账户 default project，
+  这也正是该字段存在之前所有记录的含义——**因此不需要 migration，也不需要重建数据目录**
+  （原 §3.2 写的"必须 bump format version"在这里不成立：没有任何已存字节改变含义）；
+- 校验 `domain.ValidateBedrockProjectID`：`proj_` + 字母数字、长度上限；字面量 `default`
+  由 `NormalizeBedrockProjectID` 归一为空；`wrkspc_` 前缀按名拒绝；非 Mantle 访问面拒绝；
+- 渲染由 `provider.ApplyBedrockProject` 单点负责：OpenAI 形态发 `OpenAI-Project`，
+  Messages 发 `anthropic-workspace`，并在设置前清掉它认识的全部资源头（含
+  `anthropic-workspace-id`——它在这份名单里只为被删除）。**不是自由 header map，
+  也不走 credential authorizer**；
+- 三个适配器均改为"协议头与资源寻址在先、认证在后"，即 §3.3 的顺序要求；
+- Admin API、Provider 表单、i18n（zh-CN/en-US）、类型定义同步。
 
-粗估：2～4 天。
+验收（含反向验证）：
 
-### Phase 3：真实 Mantle smoke（需要显式计费授权）
+- `domain`：ID 形状、`wrkspc_` 具名拒绝、`default` 归一、非 Mantle 面拒绝；
+- `provider`：只发本协议的头、清掉全部已知资源头、永不发 `anthropic-workspace-id`、
+  伪造的 `Authorization` 仍被 authorizer 清除；
+- 三个适配器各自的 project 渲染（有值/空值）与凭据头不受影响；
+- `app`：两个 Provider 共用一条 Credential、各自的 project 不串且重启后仍然如此；
+  Admin 拒绝不可用 ID；Runtime 面拒绝该字段；
+- **组合根的接线本身有测试**：`newProviderBindingAdapterWithClient` 从
+  `newProviderBindingAdapter` 中拆出，可以对着假 transport 跑真实接线。拆分的直接原因是
+  反向验证发现：把三处 `BedrockProjectID` 全删掉，当时**没有任何测试失败**——功能会存下
+  project 却从不发送。
 
-触及：`tests/provider-matrix` 或独立 `bedrockmantle/real_smoke_test.go`、三适配器 fixture、
-证据 schema、runbook。
+### Phase 3：真实 Mantle smoke —— harness 已实现，未执行
 
-验收：按 §6.2 的精确目标矩阵归档安全证据，不把一个模型结论外推成 profile 全局事实。
+**没有发生任何真实调用。** 需要真实 AWS 账户与一次明确的计费授权。
 
-粗估：1～2 天开发 harness；真实执行时间取决于账户、区域、模型权限和产品裁决。
+已交付：
+
+- `internal/provider/bedrockmantle/real_smoke_test.go`：三种 wire profile 各自跑
+  非流式 + 流式，两者都必须报出 usage（Halro 记不了账的一次调用不算证据）；
+  端点先过 `ValidateEndpoint`，所以 smoke 不可能在产品拒绝保存的 host 上通过；
+  能力上限取 profile 的 ceiling，smoke 不会碰产品不声明的能力；
+- `tests/provider-matrix`：新增 `-include-beta` 与独立的 `betaProfiles`。Beta 结果
+  带 `tier: "beta"`，**永远不参与 GA 发布门禁**；不加该 flag 时仍输出
+  `status: "not_run"` 行，避免"沉默被读成已覆盖"；
+- 证据按 §6.2 绑定到 `region × wire_profile × authentication × project_mode` 与一个
+  `target_digest`（`sha256(region, wire profile, auth, project mode, 精确模型)`）——
+  可复核两次运行是否同一目标，但共享证据里不出现账户的模型权限；
+- `docs/verification/provider-real-matrix.md` 写明运行方式、证据字段与"一次运行只证明
+  一个格子"的口径。
+
+未做：真实执行、以及执行后回填 real matrix 的证据行。
 
 ### 后续独立任务
 

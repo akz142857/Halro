@@ -102,3 +102,51 @@ func assertNoBedrockResourceHeaders(t *testing.T, header http.Header) {
 		}
 	}
 }
+
+// The OpenAI-shaped Mantle profiles select the same Bedrock Project resource
+// with OpenAI-Project. An empty project sends no header, which is how the
+// account default is addressed.
+func TestBedrockMantleChatRendersTheProjectAsAnOpenAIProjectHeader(t *testing.T) {
+	for _, test := range []struct{ projectID, expected string }{
+		{"proj_abc123", "proj_abc123"},
+		{"", ""},
+	} {
+		var seen *http.Request
+		client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			seen = request
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(`{"object":"list","data":[]}`)),
+			}, nil
+		})}
+		endpoint, _ := url.Parse("https://bedrock-mantle.us-east-1.api.aws")
+		authorizer, err := provider.NewStaticHeaderAuthorizer(domain.CredentialBedrockAPIKey, "Authorization", "Bearer ", []byte("bedrock-key"), "api-key", "x-api-key")
+		if err != nil {
+			t.Fatal(err)
+		}
+		adapter, err := NewWithOptions(Options{
+			Endpoint: endpoint, Authorizer: authorizer, Client: client,
+			ProviderType:     string(domain.ProviderBedrock),
+			CredentialScheme: domain.CredentialBedrockAPIKey,
+			Capabilities:     provider.Capabilities{Chat: true},
+			BedrockProjectID: test.projectID,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := adapter.Probe(context.Background(), "openai.gpt-test"); err != nil {
+			t.Fatalf("project %q: %v", test.projectID, err)
+		}
+		if got := seen.Header.Get("OpenAI-Project"); got != test.expected {
+			t.Fatalf("project %q rendered OpenAI-Project=%q", test.projectID, got)
+		}
+		if seen.Header.Get("anthropic-workspace") != "" || seen.Header.Get("anthropic-workspace-id") != "" {
+			t.Fatalf("project %q leaked a foreign resource header: %v", test.projectID, seen.Header)
+		}
+		if seen.Header.Get("Authorization") != "Bearer bedrock-key" {
+			t.Fatalf("project %q disturbed the credential header: %v", test.projectID, seen.Header)
+		}
+		adapter.Close()
+	}
+}

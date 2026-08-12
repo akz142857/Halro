@@ -181,6 +181,59 @@ func capabilityEnabled(c ProviderCapabilities, name string) bool {
 	return values[name]
 }
 
+// MaxBedrockProjectIDLength bounds the stored identifier. AWS project IDs are
+// short (`proj_` plus a generated suffix); the bound exists so a pasted blob
+// cannot become a request header.
+const MaxBedrockProjectIDLength = 128
+
+// ValidateBedrockProjectID accepts the identifiers AWS actually issues for a
+// Bedrock Project and refuses everything else.
+//
+// A Bedrock project ID is `proj_` followed by alphanumerics. The literal
+// `default` names the account's default project, which is what an empty value
+// already means, so callers normalise it away rather than send a header that
+// changes nothing.
+//
+// `wrkspc_` is refused by name. That prefix belongs to Claude Platform on AWS —
+// a different service, on a different host, whose workspace header is spelled
+// differently — and pasting one product's identifier into the other's field is
+// the most likely mistake here. A prefix check is the cheapest place to catch
+// it, and the error says which product the value came from.
+func ValidateBedrockProjectID(value string) error {
+	if value == "" {
+		return nil
+	}
+	if len(value) > MaxBedrockProjectIDLength {
+		return errors.New("bedrock project id is too long")
+	}
+	if strings.HasPrefix(value, "wrkspc_") {
+		return errors.New("bedrock project id looks like a Claude Platform on AWS workspace id, which belongs to a different service")
+	}
+	suffix, ok := strings.CutPrefix(value, "proj_")
+	if !ok || suffix == "" {
+		return errors.New("bedrock project id must be `proj_` followed by alphanumerics")
+	}
+	for _, char := range suffix {
+		switch {
+		case char >= 'a' && char <= 'z', char >= 'A' && char <= 'Z', char >= '0' && char <= '9':
+		default:
+			return errors.New("bedrock project id must be `proj_` followed by alphanumerics")
+		}
+	}
+	return nil
+}
+
+// NormalizeBedrockProjectID turns the ways of saying "the account default" into
+// the one stored spelling: empty. `default` is the ID AWS lists for that
+// project, and sending it as a header is indistinguishable from sending none.
+func NormalizeBedrockProjectID(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "default" {
+		return ""
+	}
+	return trimmed
+}
+
 // IsImmutableCapabilityProfile reports whether a profile's capability set is
 // fixed by the build rather than declared by the operator. For these profiles
 // DefaultProviderCapabilitiesForProfile is a ceiling, not a starting point: a

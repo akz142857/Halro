@@ -62,3 +62,47 @@ func assertNoBedrockResourceHeaders(t *testing.T, header http.Header) {
 		}
 	}
 }
+
+// A Mantle provider that names a project sends anthropic-workspace — the
+// Anthropic protocol's spelling of the same Bedrock Project resource the
+// OpenAI-shaped profiles select with OpenAI-Project.
+func TestBedrockMantleMessagesRendersTheProjectAsAWorkspaceHeader(t *testing.T) {
+	for _, test := range []struct{ projectID, expected string }{
+		{"proj_abc123", "proj_abc123"},
+		{"", ""},
+	} {
+		var seen *http.Request
+		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			seen = request.Clone(request.Context())
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = writer.Write([]byte(`{"id":"msg_1","type":"message","role":"assistant","model":"anthropic.claude-test","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
+		}))
+		endpoint, _ := url.Parse(server.URL)
+		authorizer, _ := provider.NewStaticHeaderAuthorizer(domain.CredentialBedrockAPIKey, "x-api-key", "", []byte("bedrock-key"), "Authorization")
+		adapter, err := New(Options{
+			Endpoint: endpoint, Authorizer: authorizer, Client: server.Client(),
+			Capabilities:     provider.Capabilities{Chat: true},
+			ProviderType:     string(domain.ProviderBedrock),
+			CredentialScheme: domain.CredentialBedrockAPIKey,
+			MessagesPath:     "anthropic/v1/messages",
+			BedrockProjectID: test.projectID,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := adapter.Probe(context.Background(), "anthropic.claude-test"); err != nil {
+			t.Fatalf("project %q: %v", test.projectID, err)
+		}
+		if got := seen.Header.Get("anthropic-workspace"); got != test.expected {
+			t.Fatalf("project %q rendered anthropic-workspace=%q", test.projectID, got)
+		}
+		if seen.Header.Get("OpenAI-Project") != "" || seen.Header.Get("anthropic-workspace-id") != "" {
+			t.Fatalf("project %q leaked a foreign resource header: %v", test.projectID, seen.Header)
+		}
+		if seen.Header.Get("x-api-key") != "bedrock-key" {
+			t.Fatalf("project %q disturbed the credential header: %v", test.projectID, seen.Header)
+		}
+		adapter.Close()
+		server.Close()
+	}
+}

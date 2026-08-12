@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"slices"
 	"sync"
@@ -591,6 +592,20 @@ func newProviderBindingAdapter(cfg config.Config, instance domain.ProviderInstan
 	if err != nil {
 		return nil, err
 	}
+	return newProviderBindingAdapterWithClient(instance, binding, endpoint, plaintext, client)
+}
+
+// newProviderBindingAdapterWithClient is the wiring itself, separated from the
+// transport it runs on.
+//
+// The split exists so this mapping — which profile gets which credential
+// header, which path, and which Bedrock Project — can be exercised against a
+// fake transport. Without it the composition is only reachable through a real
+// dialer to a pinned public host, which meant the wiring was the one part of
+// the Mantle work no test could see: removing the project from all three
+// branches broke nothing.
+func newProviderBindingAdapterWithClient(instance domain.ProviderInstance, binding domain.ProviderProfileBinding, endpoint *url.URL, plaintext []byte, client *http.Client) (provider.Adapter, error) {
+	var err error
 	capabilities := providerCapabilities(binding.Capabilities)
 	var adapter provider.Adapter
 	var authorizer provider.Authorizer
@@ -628,7 +643,7 @@ func newProviderBindingAdapter(cfg config.Config, instance domain.ProviderInstan
 				authorizer, err = provider.NewStaticHeaderAuthorizer(binding.CredentialScheme, "Authorization", "Bearer ", plaintext, "api-key", "x-api-key")
 			}
 			if err == nil {
-				adapter, err = openaiprovider.NewWithOptions(openaiprovider.Options{Endpoint: endpoint, Authorizer: authorizer, Client: client, ProviderType: string(domain.ProviderBedrock), CredentialScheme: binding.CredentialScheme, Capabilities: capabilities})
+				adapter, err = openaiprovider.NewWithOptions(openaiprovider.Options{Endpoint: endpoint, Authorizer: authorizer, Client: client, ProviderType: string(domain.ProviderBedrock), CredentialScheme: binding.CredentialScheme, Capabilities: capabilities, BedrockProjectID: instance.BedrockProjectID})
 			}
 		case domain.ProfileBedrockMantleOpenAIResponses:
 			err = bedrockmantleprovider.ValidateEndpoint(endpoint)
@@ -636,7 +651,7 @@ func newProviderBindingAdapter(cfg config.Config, instance domain.ProviderInstan
 				authorizer, err = provider.NewStaticHeaderAuthorizer(binding.CredentialScheme, "Authorization", "Bearer ", plaintext, "api-key", "x-api-key")
 			}
 			if err == nil {
-				adapter, err = bedrockmantleprovider.NewResponses(bedrockmantleprovider.ResponsesOptions{Endpoint: endpoint, Authorizer: authorizer, Client: client, Capabilities: capabilities})
+				adapter, err = bedrockmantleprovider.NewResponses(bedrockmantleprovider.ResponsesOptions{Endpoint: endpoint, Authorizer: authorizer, Client: client, Capabilities: capabilities, BedrockProjectID: instance.BedrockProjectID})
 			}
 		case domain.ProfileBedrockMantleAnthropicMessages:
 			err = bedrockmantleprovider.ValidateEndpoint(endpoint)
@@ -644,7 +659,7 @@ func newProviderBindingAdapter(cfg config.Config, instance domain.ProviderInstan
 				authorizer, err = provider.NewStaticHeaderAuthorizer(binding.CredentialScheme, "x-api-key", "", plaintext, "Authorization", "api-key")
 			}
 			if err == nil {
-				adapter, err = anthropicprovider.New(anthropicprovider.Options{Endpoint: endpoint, Authorizer: authorizer, Client: client, Capabilities: capabilities, ProviderType: string(domain.ProviderBedrock), CredentialScheme: binding.CredentialScheme, MessagesPath: "anthropic/v1/messages"})
+				adapter, err = anthropicprovider.New(anthropicprovider.Options{Endpoint: endpoint, Authorizer: authorizer, Client: client, Capabilities: capabilities, ProviderType: string(domain.ProviderBedrock), CredentialScheme: binding.CredentialScheme, MessagesPath: "anthropic/v1/messages", BedrockProjectID: instance.BedrockProjectID})
 			}
 		default:
 			err = errors.New("Bedrock provider profile is not implemented")
