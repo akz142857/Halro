@@ -32,6 +32,11 @@ docker compose version >/dev/null
 
 root=$(unset CDPATH; cd -- "$(dirname -- "$0")/../.." && pwd)
 observability="$root/deploy/observability"
+# The budget is checked against the Watchdog route's group_interval below rather
+# than carried as a comment. It sits exactly on the minimum (2 x 60s + 30s), and
+# that is deliberate: raising group_interval reds this gate on the same commit
+# that raises it, which is the point — the budget must move with the config, not
+# drift behind it. Raise both together.
 watchdog_delivery_budget_seconds=150
 watchdog_group_interval=$(awk '
   /receiver: independent-deadman-webhook/ { watchdog = 1 }

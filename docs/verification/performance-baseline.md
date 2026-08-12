@@ -150,6 +150,15 @@ work above it queues — is asserted unconditionally by
 scales with concurrency, which is the property a memory limit can be sized
 against; absolute values on Linux/NVMe will differ.
 
+What the bound converts the failure into, accepted for 1.0.0: waiting for a slot
+has no deadline, so a sustained login storm becomes queueing latency on the Admin
+login path with a goroutine held per waiter, rather than heap growth. Arrival is
+bounded per source by `admin.login_rpm` (5/min) and not globally, and the Admin
+server sets no write timeout, so the wait ends only when a slot frees or the
+client gives up. A deadline would answer a storm by failing legitimate operator
+logins; if the Admin surface is ever put on an untrusted network that trade
+inverts and this needs revisiting.
+
 The exact-RC 24-hour workload, measurements, explicit limits, and artifact
 format are defined in `docs/verification/soak-testing.md`. This baseline does not claim that
 gate has passed until its `release_24h` artifact is archived.

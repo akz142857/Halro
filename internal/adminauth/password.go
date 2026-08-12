@@ -29,6 +29,15 @@ const (
 
 var argonHashSlots = make(chan struct{}, argonHashConcurrency)
 
+// derivePasswordKey waits for a slot with no deadline, which is a deliberate
+// trade the memory bound buys: a login storm now shows up as queueing latency on
+// the Admin login path instead of unbounded heap growth, and the goroutine is
+// held for the wait (the Admin server sets no write timeout, so nothing else
+// cuts it short). The arrival rate is bounded per source by `admin.login_rpm`
+// (5/min), not globally. A deadline here would answer the storm by failing
+// legitimate operator logins, which is the worse of the two, so 1.0.0 accepts
+// the queue. Revisit if the Admin surface is ever exposed to an untrusted
+// network, where shedding beats queueing.
 func derivePasswordKey(password, salt []byte, iterations, memoryKiB uint32, parallelism uint8, size uint32) []byte {
 	argonHashSlots <- struct{}{}
 	defer func() { <-argonHashSlots }()

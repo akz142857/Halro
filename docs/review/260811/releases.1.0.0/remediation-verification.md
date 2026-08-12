@@ -14,9 +14,10 @@
 > 或在 scratchpad 内的独立 fixture / 容器里复现，仓库文件零改动；每次注入前断言
 > "搜索串恰好命中 1 次且替换确实改变了内容"（CLAUDE.md：反向验证不失败就不是证据）。
 
-> **本文分两个阶段写成。** §0~§6 是 2026-08-12 七个角色的**只读核对结论**，
+> **本文分三个阶段写成。** §0~§6 是 2026-08-12 七个角色的**只读核对结论**，
 > 记录当时的状态，不因后续修复而改写——那是评审证据。§7 是**修复收尾**：核对
-> 发现的每一条未符合项的处置、证据与复跑结果。读的时候把两段合起来看。
+> 发现的每一条未符合项的处置、证据与复跑结果。§8 是**再核对后的收尾**：对 §7
+> 逐条验证时发现它没接住的四件事，以及在当前代码上重跑的 G5。读的时候三段合起来看。
 
 ---
 
@@ -466,3 +467,60 @@ GitHub 侧动作与需要用户拍板的产品取舍。
 | G7 的 6 条 🔴 | 产品取舍，必须由用户拍板：`syncUsageAdmin` 的 ctx 语义、两个 PUT 的 step-up、溢出预算随 `maxTracked` 缩放、rc.1 根因、能力选择 §15 三条门禁、`security-review-v1.md` 的四道门 |
 | R-03p 的容器可复现 | 需要在真实 RC 上验证一次流水线改动（用户指示 Docker 验证暂缓） |
 | S1 真实 Provider 证据、24h soak | 计费/长跑，需要单独授权 |
+
+---
+
+## 8. 核对后的收尾（2026-08-12 第二轮）
+
+§1~§6 是当时的只读核对结论，§7 是当轮修复。本节记的是**再核对**发现的、§7 没接住的四件事。
+所有验证在当前工作树上重跑，仓库根目录的 `data/` / `master.key` / `config.yaml` 未被触碰。
+
+### 8.1 `provider_metadata` 勘误已落书面
+
+§2.2 末尾那条勘误当时只写在本文里，没有进任何活台账，而它正是 G7 #13 的输入。现已写入
+`carry-forward.md` 第 5 行（就地更正并保留原判）与 `progress.md` 的 Report errata。
+事实复核：`internal/provider/gemini/adapter.go:251`、`internal/provider/bedrock/models.go:153`、
+`internal/provider/anthropic/adapter.go:192` 三处都发射 `domain.ClaimSourceProviderMetadata`，
+各包的 `DescribeInvocationTargets` 测试覆盖到位。**该子项无需裁决**；G7 #13 只剩浏览器验收与
+真实 Provider 证据两条。
+
+### 8.2 三条"接受并记录"已落书面
+
+- argon2 取槽无 deadline：取舍与残余风险写在 `derivePasswordKey`（`internal/adminauth/password.go`）
+  与 `docs/verification/performance-baseline.md`；
+- Watchdog 预算零余量：`smoke.sh` 说明"贴着下限是有意的"，`validate.sh` 的 `repeat_interval`
+  断言加注"只钉再通知节奏，预算从 `group_interval` 推导，不要再从这个旋钮推"；
+- §1.8 三处非阻塞覆盖缺口逐条记入 `progress.md` 的 "Accepted with rationale, not closed"。
+
+### 8.3 G5 在当前代码上重跑一次（原证据产生于 `archive.go`/`backup.go` 改动之前）
+
+隔离实例：scratchpad 内 `data_dir` 与 `master.key`，监听 18080/18081/19090，
+上游按 C1 原法指向 `https://upstream.invalid`（请求 502，认证与记账链路照走，不产生计费）。
+
+| 核对项 | A（备份点） | B（备份后 4 次请求 + 撤销 key） | 恢复后 | 判定 |
+|---|---|---|---|---|
+| Ledger 已认证帧数 | 20 | 40 | **20** | 精确回到 A |
+| Ledger head | seq 20 / off 21689 | seq 40 / off 43387 | **seq 20 / off 21689** | 精确回到 A |
+| Ledger chain hash（前 4 字节） | `a2 7b a8 ee` | `83 02 b1 c7` | **`a2 7b a8 ee`** | 精确回到 A |
+| `ledger.wal` sha256 | `d1ac88fe…` | — | **`d1ac88fe…`** | 逐字节相同 |
+| ChainVerified | true | true | **true** | 通过 |
+| Usage ledger/parquet | 4 / 4 | 8 / 8 | **4 / 4** | 精确回到 A；missing/duplicates/extra 全 0 |
+| Audit 记录数 | 3 | 9 | 5 | 单调追加：A 的 3 条 + `backup.create` + restore |
+| `doctor` | healthy=true | — | **healthy=true, vault=verified, schema v27, leases pending=0** | 通过 |
+
+负面用例仍 fail-closed：`--confirm-backup-id` 给错值 →
+`restore confirmation must exactly match the verified backup id`，exit 1，事后 live 仍是
+seq 40 / off 43387，**零改动**。`backup verify` 的 manifest 与 `backup create` 的逐字段相同。
+
+本轮改动的三处在真实输出里可见，这正是需要重跑的理由：restore 返回
+`schema_version_before: 27` / `schema_version_after: 27`（R-34）与
+`restored_enabled_gateway_key_count: 1` + `restored_enabled_gateway_key_ids:
+["key_z21y…"]`（R-35）——**点名的正是 B 阶段被撤销、恢复后重新生效的那把 key**；恢复后启动，
+该 key 的请求确实重新通过鉴权（502，上游不可达）。`init` 误指向已有 Master Key 时的新错误文案
+（R-18）也在本次搭建中被真实触发，逐字给出路径与两种读法。
+
+**G5 维持通过，证据是当前代码产生的。**
+
+### 8.4 仍然只剩边界项
+
+§7.5 那四条不变：G4 的 GitHub 侧动作、G7 的 6 条产品裁决、容器可复现、S1/soak。

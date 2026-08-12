@@ -44,6 +44,19 @@ pre-adjudication severity here.
   preconditions that are verifiably absent today. B3-03 is also out of the G4
   determination as a category error — G4 is about verifiable signatures, not
   byte-identical third-party rebuilds.
+- Report §9.3 item 13 and `carry-forward.md` row 5 both stated that
+  `provider_metadata` exists only as an enum value and validation, with no
+  adapter emitting it. That is factually wrong: at the review HEAD `2cd24a7`,
+  `internal/provider/gemini/adapter.go:251`,
+  `internal/provider/bedrock/models.go:153`, and
+  `internal/provider/anthropic/adapter.go:192` all emit
+  `domain.ClaimSourceProviderMetadata`, each covered by its package's
+  `DescribeInvocationTargets` tests. The claim source is therefore not a
+  defined-but-unemitted placeholder, and the report's recommendation to "either
+  retire the enum value or implement it" rests on a premise that does not hold.
+  This sub-item needs no adjudication; the other two parts of G7 #13 (browser
+  acceptance, real-Provider evidence) still do. `carry-forward.md` row 5 carries
+  the same correction inline.
 - Report §9.2 item 10, recorded as a method lesson rather than a finding: A5
   routed the stale question to A1 by prior agreement and therefore did not
   independently review the round's heaviest defect. Independence fails silently
@@ -145,6 +158,24 @@ recording and 30 alert rules and all rule unit tests; `tools/m11/check-productio
 green, now including a new gate that fails on any unpinned GitHub Action
 reference (reverse-verified: unpinning one reference makes it exit 1).
 
+Independently re-run on 2026-08-12 after the verification round, against the
+committed tree: `go vet ./...` and `gofmt -l` clean, `go test ./...` with no
+failures, frontend typecheck plus 32 files / 297 tests, `npm run build` leaving
+`internal/webui/dist` byte-identical (no drift), `deploy/observability/validate.sh`
+green, and `tools/m11/check-production-assets.sh` green.
+
+G5 was also re-run end to end on the current code, because R-34/R-35/R-36 changed
+`internal/backup/archive.go` and `internal/app/backup.go` after C1 produced the
+original evidence. Backup → divergence → refused restore → restore → start, on an
+isolated scratchpad instance with its own data directory and Master Key: the
+Ledger returned exactly to the backup point (20 frames, sequence 20 at offset
+21689, identical chain hash, byte-identical `ledger.wal`), Usage returned to 4/4
+with no missing, duplicate, or extra records, audit stayed append-only, and
+`doctor` reported healthy with a verified vault. The restore output carried
+`schema_version_before/after` and named the one enabled Gateway Key the restore
+brought back — the two behaviours R-34 and R-35 added. Evidence table in
+[remediation-verification.md](remediation-verification.md) §8.3.
+
 The earlier run recorded below still applies to the pre-verification tree:
 
 - `go test -count=1 ./...` and `go test -race -count=1 ./...`;
@@ -161,6 +192,34 @@ The earlier run recorded below still applies to the pre-verification tree:
 The first sandboxed full Go run could not bind an existing `httptest` loopback
 listener; the identical command passed in the permitted local test environment.
 No billable real-provider smoke test was run.
+
+## Accepted with rationale, not closed
+
+Recorded so the next reader does not have to re-derive the choice from the code.
+None of these is a repository TODO.
+
+- **Argon2 slot acquisition has no deadline.** The process-wide bound converts a
+  login storm from unbounded heap growth into queueing latency with a goroutine
+  held per waiter; arrival is bounded per source by `admin.login_rpm` and not
+  globally, and the Admin server sets no write timeout. A deadline would answer a
+  storm by failing legitimate operator logins. Rationale is on
+  `derivePasswordKey` in `internal/adminauth/password.go` and in
+  `docs/verification/performance-baseline.md`; revisit if the Admin surface is
+  ever exposed to an untrusted network.
+- **The Watchdog delivery budget sits exactly on its minimum.** 150s equals
+  `2 x group_interval + 30s`, so raising `group_interval` reds `smoke.sh` on the
+  same commit — intended, and now stated there. `validate.sh` still pins the
+  Watchdog `repeat_interval`; that assertion covers re-notify cadence only and
+  carries a note against re-deriving the budget from it, which is what produced
+  the wrong budget before.
+- **Three test-coverage gaps stay open, all non-blocking.**
+  `runActivationRecovery` itself has no test — only the two functions it calls
+  do, so deleting the startup line in `internal/app/runtime.go` fails nothing;
+  `activateAuthSnapshot` is exercised only on its success path, with no
+  failure-injection case from the call site (the auth domain's stale path is
+  covered by direct `markStale` injection instead); and `doctor.go`'s
+  `admin_audit_backlog` check has no test. Each is a missing test around behaviour
+  that is asserted elsewhere, not an unverified behaviour.
 
 ## External and explicit-decision gates
 
