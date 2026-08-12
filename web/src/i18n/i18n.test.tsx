@@ -18,6 +18,20 @@ describe("admin internationalization", () => {
     expect(flattenKeys(zhCN)).toEqual(flattenKeys(enUS));
   });
 
+  // Each locale ships as its own chunk, so switching language has to fetch the
+  // target before i18next is told to use it. Drop the ordering and the console
+  // paints raw keys until the import resolves. The test setup keeps both locales
+  // resident, so the unloaded state has to be recreated to be observed at all.
+  it("loads a locale's resources before switching to it", async () => {
+    i18n.removeResourceBundle("en-US", "translation");
+    expect(i18n.hasResourceBundle("en-US", "translation")).toBe(false);
+
+    await applyPreference("en-US", "zh-CN");
+
+    expect(i18n.hasResourceBundle("en-US", "translation")).toBe(true);
+    expect(i18n.t("navigation.label")).toBe(enUS.navigation.label);
+  });
+
   // Half-width commas inside Chinese copy render noticeably wrong next to the
   // full-width punctuation used everywhere else, and it is the kind of thing that
   // survives review because the string still reads correctly in a diff. Caught
