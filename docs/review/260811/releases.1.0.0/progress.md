@@ -219,6 +219,42 @@ scope, with the reason recorded in `docs/verification/security-review-v1.md`.
 The Console collects the material at all four entry points, so the server-side
 tightening does not repeat R-24's shape of a guard the browser cannot satisfy.
 
+## D4's three remaining defects, closed
+
+All three were the same shape: something this process knows for certain, recorded
+as unknown.
+
+- **A SafeTransport refusal settled as ambiguous.** The four refusal points in
+  the pinned dialer returned plain errors, and `provider.Unsent` recognises only
+  `*net.DNSError` and a dial `*net.OpError`. Every adapter therefore marked the
+  attempt ambiguous, which makes `retryable()` refuse to fail over and settles
+  the attempt at its full reservation. A dial that fails against a real host was
+  classified correctly; the case where this process guaranteed nothing was sent
+  was not — and it is reachable in ordinary operation, because a Provider base
+  URL resolving inside the network with private endpoints off refuses every
+  request there. `safetransport.ErrRefusedBeforeSend` now marks those four
+  points and `Unsent` recognises it. A resolver failure is deliberately left
+  unmarked: it is the network's answer rather than this package's refusal, and
+  it already carries `*net.DNSError`.
+- **A bbolt walk that wrote under its own cursor.**
+  `InterruptModelCapabilityDetections` mutated the bucket it was iterating,
+  which bbolt leaves undefined; a skipped record leaves a detection in `running`
+  with possibly-billable calls that never reach a terminal state, which is the
+  one thing that function exists to prevent. It now collects and writes after
+  the walk, like every other walk in the package. Its new test is a regression
+  guard, not a reproduction — undefined behaviour does not reliably fail.
+- **The recovery loop had no test.** It is the only thing that ends a stale
+  snapshot, and a stale snapshot refuses the whole data plane, yet deleting the
+  line in `Open` that starts it failed nothing. The retry interval is now a
+  parameter so a test can drive the loop, and four tests cover replay, the
+  audit-intent drain that is deliberately not gated on staleness, cancellation,
+  and the startup wiring at the real interval.
+
+Reverse-verified by overlay in every case where the defect state can fail:
+removing the `Unsent` clause fails the settlement test, removing the goroutine in
+`Open` fails the wiring test, and moving the audit drain inside the staleness
+branch — which reads like a tidy-up — fails the drain test.
+
 ## Accepted with rationale, not closed
 
 Recorded so the next reader does not have to re-derive the choice from the code.
@@ -238,14 +274,13 @@ None of these is a repository TODO.
   Watchdog `repeat_interval`; that assertion covers re-notify cadence only and
   carries a note against re-deriving the budget from it, which is what produced
   the wrong budget before.
-- **Three test-coverage gaps stay open, all non-blocking.**
-  `runActivationRecovery` itself has no test — only the two functions it calls
-  do, so deleting the startup line in `internal/app/runtime.go` fails nothing;
+- **Two test-coverage gaps stay open, both non-blocking.**
   `activateAuthSnapshot` is exercised only on its success path, with no
   failure-injection case from the call site (the auth domain's stale path is
-  covered by direct `markStale` injection instead); and `doctor.go`'s
+  covered by direct `markStale` injection instead), and `doctor.go`'s
   `admin_audit_backlog` check has no test. Each is a missing test around behaviour
-  that is asserted elsewhere, not an unverified behaviour.
+  that is asserted elsewhere, not an unverified behaviour. The third gap in this
+  list, `runActivationRecovery`, was closed rather than accepted — see above.
 
 ## External and explicit-decision gates
 

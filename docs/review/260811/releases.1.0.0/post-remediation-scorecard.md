@@ -16,7 +16,7 @@
 
 # **No-Go**
 
-**封顶前加权总分 7.45 / 10；封顶后最终分 6.5 / 10**（宽读下 5.0，见 §3）。
+**封顶前加权总分 7.55 / 10；封顶后最终分 6.5 / 10**（宽读下 5.0，见 §3）。
 
 G4 与 G7 未通过 → 按 rubric §5 总分封顶 6.5、且不得出具 Go；按 §6 的映射，
 `6.5~8.0` 且有未通过判据 = **No-Go**。
@@ -39,20 +39,20 @@ G4 与 G7 未通过 → 按 rubric §5 总分封顶 6.5、且不得出具 Go；�
 | 维度 | 权重 | 报告原判 | 现在 | 主要加分项（带 file:line 或实跑） | 仍在的扣分项 | 到 8 分还差什么 |
 |---|---:|---:|---:|---|---|---|
 | D1 安全性 | 0.20 | 6.5 | **8.0** | V1 那条 fail-open 不是"补一句裁决"而是代码层关死：`internal/redaction/engine.go:433-444` 与 `internal/tokenguard/manager.go:311-322` 对具名策略缺失一律拒绝（空 ID 仍放行，因为那是"该项目没有策略"这个决定），`internal/gateway/service.go:184-220` 在授权阶段一次性拒绝这类 Project 并返回 503 `configuration_stale`；两条花费凭据的侧信道改为 POST 走 `requireAdminMutation`（角色 + CSRF + Origin），`requireCredentialedAdminRead` 整个删除、不与替代品并存；argon2 全局信号量 + 实测；**step-up 判据从"破坏性"改为"破坏性 or 削弱在执行的控制 or 花费凭据"**（`PUT /credentials/{id}`、`PUT /redaction-policies/{id}`、`PUT /token-guard-policies/{id}`、`POST …/model-capability-detections`），并由按路由族的 sweep 门禁守护（`TestEverySecurityControlEditRequiresStepUp`，反向验证：拿掉任一处该测试 FAIL） | 无 P0/P1。**rubric 的 9 分要求判断建立在实跑证据上、10 分要求守护自动强制，而本轮评审自述是 "source-and-test review, not a third-party penetration test"——没有外部对抗验证，D1 的天花板就是 8** | 外部渗透测试或独立安全评审（1.0.0 之后） |
-| D4 逻辑正确性 | 0.20 | 6.5 | **7.5** | stale 按四域建模（`internal/app/activation_state.go:39-60`）、恢复循环重放全部四域；T-1/T-2/T-3 从调用点出发且缺陷态会失败；T-8 补上探针阶段上限并反向验证（删掉 `admin_model_capability_detections.go:427` 该测试 FAIL）；A4-11 改成 8 goroutine 真并发断言；`go test ./...` 今日复跑无失败 | `internal/safetransport/transport.go:139,151,155` 三个"本方保证零字节发出"的拒绝点仍返回裸 `fmt.Errorf`，`provider.Unsent`（`internal/provider/provider.go:77-87`）认不出，按 ambiguous 满额结算并抑制 failover——**异常路径尚未 fail-closed 的一处**；`internal/store/bolt/model_capability_detection.go:169-197` 仍在 `ForEach` 内 `Put`；`runActivationRecovery` 本体零测试（已记为接受） | 类型化 safetransport 自拒错误 + 负面测试（denied 地址 → 结算必须为 0）；`ForEach` 内 mutation 改先收集后写入 |
+| D4 逻辑正确性 | 0.20 | 6.5 | **8.0** | stale 按四域建模（`internal/app/activation_state.go:39-60`）、恢复循环重放全部四域；T-1/T-2/T-3 从调用点出发且缺陷态会失败；T-8 补上探针阶段上限并反向验证（删掉 `admin_model_capability_detections.go:427` 该测试 FAIL）；A4-11 改成 8 goroutine 真并发断言；`go test ./...` 今日复跑无失败；**三条剩余项已全部关闭**（见 §5.3）：safetransport 自拒改带 `ErrRefusedBeforeSend` 且 `provider.Unsent` 认它（反向验证：拿掉 → 网关那条结算测试 FAIL）、`InterruptModelCapabilityDetections` 改先收集后写入、`runActivationRecovery` 补四条测试（反向验证：删掉 Open 里的启动行 / 把审计排空挪进 stale 分支，各有一条 FAIL） | 无 P0/P1。与 D1 同理，rubric 的 9 分要求实跑证据、10 分要求自动强制守护；剩下的是覆盖广度（如 stale 端到端链）而非已知缺陷 | 外部对抗验证（1.0.0 之后） |
 | D2 系统设计 | 0.12 | 7.0 | **7.5** | 报告点名的设计错误已改：`activationTracker` 从一个标志变成四个独立域；`admin_user.create/delete` 迁入 `AdminAuditIntent`（`internal/app/admin_users.go:82-87,145`） | Runtime 68 字段、跨 admin/非 admin 边界符号约 27 个不变；"1.0.0 前不拆 internal/app" 仍是取舍而非解决 | 1.0.0 后第一个间隔做 internal/app 的书面二选一 |
 | D7 可运维性 | 0.12 | 6.5 | **8.0** | 本轮涨幅最大。告警 24 → **30** 条，新增签名目录降级、能力漂移、探测失败率三类并进 `rule-tests.yml`；rule-test 有效性反向验证（把 `HalroConfigurationStale` 的 `for: 1m` 改 5m，promtool 立刻 FAILED）；`configuration-stale.md` 与 `file-master-key-rotation.md` 两条 runbook 进 `docs/runbooks/embed.go` 并各有 Admin 路由；控制台四个激活域常在并点名 runbook；`operations-runbook.md` 有 23 个按 alertname 的小节；**G5 于今日在当前代码上重跑通过**（§4） | stale 端到端链（真二进制 → 真 Prometheus → 真 Alertmanager 1m 后 firing）仍是三段独立实证的拼接；`release_24h` 未归档 | 把 stale 端到端跑一次；归档 soak 工件 |
 | D8 可交付性 | 0.12 | 4.0 | **5.5** | 四个二进制归档**逐字节可复现**（两个独立容器、不同路径/mtime/umask 实证，且对照修复前命令确实不同）；验签命令块完整可执行（`gh release download`、`--ignore-missing`、cosign ≥ v2.2 前提）；license review 重生成 + CI 门禁反向验证会红；`ci.yml` 19 处 `uses:` 全 SHA-pin 且有门禁；NOTICE / SBOM / provenance 补齐；CHANGELOG 与 20 条已知限制到位 | **仍未产出过任何 Release**：今日复查 `releases`、`environments`、`actions/secrets`、release workflow runs **四项均为 0**；两个容器包不可复现（已在 `releasing.md` 声明范围并给出两条根因） | 建 `v1-release` Environment + required reviewers、装 environment secret、跑通一次 publish |
 | D6 可用性 | 0.10 | 6.0 | **7.5** | `operator-guide.md` 的 `data_dir`、`server.gateway_listen: 0.0.0.0:8080`、init 步骤补齐；`internal/vault/masterkey.go` 的 EEXIST/EACCES 两条错误都带路径与下一步（本轮搭建 G5 实例时被真实触发，逐字给出路径与两种读法）；`doctor` 把未初始化数据目录单列一支；五个 `*_idempotency_replay` 有 i18n 与 deep-link；onboarding 以"该 Route 上出现过成功请求"为充分证据，级联码方向修正后 25 个 detail code 在 zh-CN/en-US **逐个命中、无漏译** | 容器小节与空卷首启**没有逐字实跑过**（结论来自读码 + 同工作区 CI 脚本对照）；无真实浏览器验收 | 按指南原文起一次容器并从宿主 curl 到 200 |
 | D5 性能与容量 | 0.08 | 6.5 | **7.5** | argon2 从解析性论证变实测：64 并发峰值堆 **256 MiB**（每并发 4.0 MiB），对照无上限约 4,096 MiB；三个容量数字（1,223 lifecycles/s、约 31 mut/s、拓扑协议 −25.3%）归档进 `performance-baseline.md` 并写入已知限制 19 | Linux/NVMe 绝对值与 24h soak 工件仍缺；取槽无 deadline 的排队行为未在风暴下实测（已记为接受并写明取舍） | Linux/NVMe 复跑并归档；跑满 24h soak |
 | D3 工程规范 | 0.06 | 6.5 | **8.0** | `idempotency-contract.md` 拆成"数据面 / Admin create"两节，不再自相矛盾；指标静态清单门禁扩到 `writeLatencyHistogram`（86 → 88 族）；两份 manifest 补 unknown-field deviation（全文 19 处 unknown 声明）；stale 与 503 语义进 `gateway-correctness.md:39-48`；`alerting-rules.md` 的 Core groups 补入三类；字阶门禁反向验证会红 | 覆盖广度而非矛盾：契约面已基本闭合 | — |
-| **加权总分** | **1.00** | **6.21** | **7.45** | 触发的封顶规则：**G4/G7 未通过 → 总分封顶 6.5**（rubric §5 第 2 行）。**封顶咬合**，最终分 = **6.5** | | |
+| **加权总分** | **1.00** | **6.21** | **7.55** | 触发的封顶规则：**G4/G7 未通过 → 总分封顶 6.5**（rubric §5 第 2 行）。**封顶咬合**，最终分 = **6.5** | | |
 
 ### 2.1 两个数字的差距，这次说的是相反的事
 
 报告那轮加权分 6.21、封顶 6.5，差 0.29，结论是"封顶几乎没起作用——**问题是弥散的**"。
 
-这轮加权分 7.45、封顶 6.5，差 **0.95**，封顶明确咬合。按同一条读法，这说明
+这轮加权分 7.55、封顶 6.5，差 **1.05**，封顶明确咬合。按同一条读法，这说明
 **问题已经收敛到少数几点**，而且那几点可以逐一点名：一次 GitHub 环境配置、一次真实发布、
 用户在若干产品取舍上签字。八个维度里没有一个低于 5.5，最低的 D8 也从 4.0 抬到 5.5，
 六个维度落在 7.5~8.0 的窄带里。上一轮"新增面把整改的收益吃掉了"的形态没有重演——
@@ -74,7 +74,7 @@ G4 与 G7 未通过 → 按 rubric §5 总分封顶 6.5、且不得出具 Go；�
 | G8 | 未完成 | **通过** | 发布说明 20 条已知限制，⚠ 三条按要求改写而非固化 |
 | G9 | 通过 | **维持通过** | `release_24h` 仍未归档，报告已明确该项在 G9 外 |
 
-**宽读记录**：若把 B3-01 计为 D8 的 CONFIRMED P0，则 D8 封顶 4（加权分变 7.27）、
+**宽读记录**：若把 B3-01 计为 D8 的 CONFIRMED P0，则 D8 封顶 4（加权分变 7.37）、
 总分封顶 5.0，最终分 **5.0**。两种读法下判定都是 No-Go，差别只在记录在案的分数。
 
 ---
@@ -155,6 +155,43 @@ redaction-policies / token-guard-policies / model-capability-detections），
 控制台侧同步收紧：四处入口都在提交前收集口令与 TOTP（策略启停走确认对话框，
 表单走 `ReauthFields`），zh-CN/en-US 文案齐备——**不重演 R-24 那次"服务端收紧、
 浏览器发不出"的回归**。
+
+### 5.3 D4 的三条剩余项：同一个形状，已全部关闭
+
+三条扣分项共享一句话——**我们自己确知的事实被记成"不知道"**。
+
+**① SafeTransport 自拒被判成 ambiguous（影响最实，也抬了 D1）**
+
+`pinnedDialContext` 的四个拒绝点返回裸 `fmt.Errorf`，而 `provider.Unsent` 只认
+`*net.DNSError` 与 `*net.OpError{Op:"dial"}`。于是五个 adapter 统一写的
+`Ambiguous: !provider.Unsent(err)` 判成 true，下游两条后果都在代码里：
+`retryable()`（`gateway/service.go:1785-1795`）**开头就因 Ambiguous 返回 false** → 不 failover；
+结算（`:2238-2247`）走 estimated 分支 → **按预留上限满额扣款**。
+
+确定性正好反了：真去 dial 一个正常主机失败会带 `net.OpError`，被正确判为 unsent、结算 0；
+而**我们自己在建连之前拒绝、零字节发出、确定性 100%** 的那次，被当成"上游可能已经跑完"。
+可触发路径很普通：Provider base_url 指向内网而私网开关未开，每个请求扣满额且不 failover。
+
+修法：`safetransport.ErrRefusedBeforeSend` 标记四个拒绝点，`provider.Unsent` 用
+`errors.Is` 认它。**DNS 解析失败刻意不标**——那是网络的答复而非本包的拒绝，且它自带
+`*net.DNSError`，标了反而是宣称本包决定了它没决定的事。
+**反向验证**：overlay 拿掉 `Unsent` 里那三行 → `TestProviderRefusedByPolicyFailsOverAndIsNotBilled` FAIL。
+
+**② `ForEach` 内 `Put`**
+
+`InterruptModelCapabilityDetections` 在游标迭代中对同 bucket `Put`，违反 bbolt 明文契约
+（改变长度的值会触发页分裂/合并，游标可能跳过或重访）。后果不是崩溃而是**静默漏改**：
+漏掉的检测停在 running，其"可能已计费"的调用永不收口为 UNKNOWN——而这正是该函数存在的唯一理由，
+`count` 也会少报。全仓其余 37 处 `ForEach` 无一这么写。改为先收集后写入（同一 `Update` 事务内）。
+新测试跨 600 条在途记录 + 一条终态记录断言"无一遗漏、终态不被改写、count 相符"；
+**诚实标注它是回归守护而非复现**——未定义行为不保证在缺陷态失败。
+
+**③ `runActivationRecovery` 零测试**
+
+整机 503 的唯一自愈路径，此前只有它调用的两个函数有测试，删掉 `runtime.go` 里启动它的那行
+全仓不红。间隔改成形参后补四条：stale 被重放、**审计排空不受 stale 门控**、`ctx.Done` 立即返回、
+以及一条用真实 5 秒间隔的启动接线用例。**反向验证两次**：删掉 Open 的启动行 → 接线用例 FAIL；
+把审计排空挪进 `if stale` 分支（一个看起来像整理的改动）→ 排空用例 FAIL。
 
 ---
 

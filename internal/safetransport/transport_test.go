@@ -175,3 +175,102 @@ func TestReservedAndTunnelAddressesAreRefused(t *testing.T) {
 		}
 	}
 }
+
+type failingResolver struct{ err error }
+
+func (r failingResolver) LookupNetIP(context.Context, string, string) ([]netip.Addr, error) {
+	return nil, r.err
+}
+
+// Every refusal this package makes in the dialer happens with no connection
+// open, so it must say so. Without the marker these arrive at the caller as
+// plain errors and get classified as "the provider may already have served it",
+// which settles the attempt at its full reservation and blocks failover — the
+// one case with total certainty treated as the uncertain one.
+func TestRefusalsInTheDialerSayNothingWasSent(t *testing.T) {
+	denied := staticResolver{addresses: []netip.Addr{netip.MustParseAddr("169.254.169.254")}}
+	empty := staticResolver{}
+	tests := []struct {
+		name     string
+		policy   Policy
+		resolver Resolver
+		url      string
+	}{
+		{
+			name:     "address is in a denied range",
+			policy:   Policy{RequireHTTPS: true, AllowedHosts: []string{"api.example.com"}},
+			resolver: denied,
+			url:      "https://api.example.com/v1/models",
+		},
+		{
+			name:     "resolver answers with no addresses",
+			policy:   Policy{RequireHTTPS: true, AllowedHosts: []string{"api.example.com"}},
+			resolver: empty,
+			url:      "https://api.example.com/v1/models",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dialer := &recordingDialer{}
+			client, err := NewClient(Options{
+				Policy: test.policy, Resolver: test.resolver, Dialer: dialer,
+				ConnectTimeout: time.Second, ResponseHeaderTimeout: time.Second,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			response, err := client.Get(test.url)
+			if response != nil {
+				response.Body.Close()
+			}
+			if !errors.Is(err, ErrRefusedBeforeSend) {
+				t.Fatalf("refusal did not report that nothing was sent: %v", err)
+			}
+			if dialer.called {
+				t.Fatal("the dialer ran for a request this package refused")
+			}
+		})
+	}
+}
+
+// The allowlist check inside the dialer is a second gate: ValidateURL already
+// refuses an unlisted host at configuration time, so this one only fires if a
+// caller reaches the transport another way. It must carry the marker too.
+func TestDialerAllowlistRefusalSaysNothingWasSent(t *testing.T) {
+	dialer := &recordingDialer{}
+	dial := pinnedDialContext(
+		Policy{RequireHTTPS: true, AllowedHosts: []string{"api.example.com"}},
+		staticResolver{addresses: []netip.Addr{netip.MustParseAddr("203.0.113.10")}},
+		dialer,
+	)
+	_, err := dial(context.Background(), "tcp", "elsewhere.example.net:443")
+	if !errors.Is(err, ErrRefusedBeforeSend) {
+		t.Fatalf("allowlist refusal did not report that nothing was sent: %v", err)
+	}
+	if _, err := dial(context.Background(), "tcp", "no-port-here"); !errors.Is(err, ErrRefusedBeforeSend) {
+		t.Fatalf("malformed address refusal did not report that nothing was sent: %v", err)
+	}
+	if dialer.called {
+		t.Fatal("the dialer ran for a refused address")
+	}
+}
+
+// A resolver failure is the network's answer rather than this package's refusal.
+// It stays unmarked because it already carries *net.DNSError, which callers
+// recognise on its own — marking it would claim this package decided something
+// it did not.
+func TestResolverFailureIsNotMarkedAsOurRefusal(t *testing.T) {
+	dial := pinnedDialContext(
+		Policy{RequireHTTPS: true},
+		failingResolver{err: &net.DNSError{Err: "no such host", Name: "api.example.com", IsNotFound: true}},
+		&recordingDialer{},
+	)
+	_, err := dial(context.Background(), "tcp", "api.example.com:443")
+	if errors.Is(err, ErrRefusedBeforeSend) {
+		t.Fatalf("a resolver failure was reported as this package's refusal: %v", err)
+	}
+	var resolution *net.DNSError
+	if !errors.As(err, &resolution) {
+		t.Fatalf("a resolver failure lost its DNS error: %v", err)
+	}
+}

@@ -179,8 +179,11 @@ func (r *Runtime) refuseWhileSnapshotsStale(protocol staleErrorProtocol) func(ht
 // Activation is retried only while stale. Durable Admin audit intents are
 // checked every tick independently: an audit append failure does not make a
 // serving snapshot stale, but it must not wait for another process start.
-func (r *Runtime) runActivationRecovery(ctx context.Context) {
-	ticker := time.NewTicker(activationRetryInterval)
+// The interval is a parameter so a test can drive the loop instead of waiting
+// on it. The production call site passes activationRetryInterval, which is also
+// the value the Retry-After header advertises.
+func (r *Runtime) runActivationRecovery(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {

@@ -548,6 +548,26 @@ seq 40 / off 43387，**零改动**。`backup verify` 的 manifest 与 `backup cr
 实际交付的是 POST + `requireAdminMutation`），并把该文件 "Release decision" 的四道门
 按归属拆成交付面三条与容量面一条——安全自有的门是 0 条。
 
-### 8.5 仍然只剩边界项
+### 8.5 D4 的三条剩余项一并关闭
+
+同一个形状：**本进程确知的事实被记成"不知道"**。
+
+- **SafeTransport 自拒被判 ambiguous**：`pinnedDialContext` 四个拒绝点返回裸错误，
+  `provider.Unsent` 认不出 → `retryable()` 因 Ambiguous 直接返回 false（不 failover）、
+  结算走 estimated 分支（按预留上限满额扣款）。确定性反了：真 dial 失败带 `net.OpError`
+  被正确判为 unsent，而**我们自己建连前拒绝、零字节发出**的那次被当成"上游可能已跑完"。
+  已加 `safetransport.ErrRefusedBeforeSend` 标记四点并由 `Unsent` 用 `errors.Is` 认它；
+  DNS 解析失败刻意不标（那是网络的答复，且自带 `*net.DNSError`）。
+- **`ForEach` 内 `Put`**：违反 bbolt 游标契约，漏改会让检测停在 running、
+  其"可能已计费"的调用永不收口——正是该函数唯一的存在理由。改为先收集后写入。
+- **`runActivationRecovery` 零测试**：整机 503 的唯一自愈路径，删掉启动行全仓不红。
+  间隔改形参后补四条测试，含一条用真实 5 秒间隔的启动接线用例。
+
+**反向验证**（凡缺陷态能失败的都做了）：拿掉 `Unsent` 那三行 → 网关结算测试 FAIL；
+删掉 `Open` 里的启动 goroutine → 接线用例 FAIL；把审计排空挪进 `if stale` 分支
+（一个读起来像整理的改动）→ 排空用例 FAIL。`ForEach` 那条**明确标注是回归守护而非复现**——
+未定义行为不保证在缺陷态失败，按 CLAUDE.md 不当作证据宣称。
+
+### 8.6 仍然只剩边界项
 
 §7.5 那四条不变：G4 的 GitHub 侧动作、G7 的 6 条产品裁决、容器可复现、S1/soak。

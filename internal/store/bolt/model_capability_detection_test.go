@@ -255,3 +255,78 @@ func TestCapabilityDetectionRecoveryInterruptsWithoutReplayingCalls(t *testing.T
 		t.Fatalf("got=%#v", got)
 	}
 }
+
+// Startup recovery is the only thing that moves possibly-billable calls to a
+// terminal state, so it has to reach every in-flight record, not most of them.
+//
+// This is a regression guard rather than a reproduction: the walk used to write
+// under its own cursor, which bbolt leaves undefined rather than deterministically
+// wrong, so the defect state does not reliably fail. What the test pins is the
+// property that matters — nothing in flight is left behind, and the count
+// reports what was actually written — across enough records to span many pages,
+// with values that grow when rewritten.
+func TestEveryInFlightDetectionIsInterruptedAcrossManyPages(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := time.Now().UTC()
+	const inFlight = 600
+	for i := range inFlight {
+		d := storedDetection(now)
+		d.ID = fmt.Sprintf("mcd_%04d", i)
+		d.IdempotencyKeyHash = fmt.Sprintf("sha256:key-%04d", i)
+		d.SelectionFingerprint = fmt.Sprintf("sha256:selection-%04d", i)
+		d.Status, d.StartedAt = domain.DetectionRunning, &now
+		d.ProviderCalls = 1
+		d.Calls = []domain.DetectionProviderCall{{
+			Sequence: 1, BindingID: d.BindingID, Capability: "chat",
+			ProbeKind: "minimal_chat", Status: "running", StartedAt: &now,
+		}}
+		d.Results["chat"] = domain.CapabilityProbeResult{
+			Status: domain.ProbeInconclusive, BindingID: d.BindingID, ProbeKind: "minimal_chat", StartedAt: &now,
+		}
+		if _, _, err := store.CreateModelCapabilityDetection(context.Background(), d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A terminal record must be left alone, so the walk cannot pass by writing to
+	// everything it sees.
+	settled := storedDetection(now)
+	settled.ID, settled.IdempotencyKeyHash, settled.SelectionFingerprint = "mcd_settled", "sha256:key-settled", "sha256:selection-settled"
+	settled.Status, settled.CompletedAt = domain.DetectionFailed, &now
+	if _, _, err := store.CreateModelCapabilityDetection(context.Background(), settled); err != nil {
+		t.Fatal(err)
+	}
+
+	recoveredAt := now.Add(time.Minute)
+	count, err := store.InterruptModelCapabilityDetections(context.Background(), recoveredAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != inFlight {
+		t.Fatalf("recovery reported %d interrupted detections, want %d", count, inFlight)
+	}
+	all, err := store.ListModelCapabilityDetections(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != inFlight+1 {
+		t.Fatalf("recovery changed how many detections exist: %d", len(all))
+	}
+	for _, d := range all {
+		if d.ID == settled.ID {
+			if d.Status != domain.DetectionFailed {
+				t.Fatalf("a settled detection was rewritten by recovery: %#v", d)
+			}
+			continue
+		}
+		if d.Status != domain.DetectionInterrupted {
+			t.Fatalf("%s was left in flight after recovery: status=%s", d.ID, d.Status)
+		}
+		if len(d.Calls) != 1 || d.Calls[0].Status != "unknown" {
+			t.Fatalf("%s kept a possibly-billable call in a non-terminal state: %#v", d.ID, d.Calls)
+		}
+	}
+}

@@ -766,7 +766,7 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 	}()
 	go func() {
 		defer runtime.backgroundWait.Done()
-		runtime.runActivationRecovery(backgroundContext)
+		runtime.runActivationRecovery(backgroundContext, activationRetryInterval)
 	}()
 	// Read the manager here, on the goroutine that installed it, rather than
 	// inside the worker. The field is written once during Open and never again

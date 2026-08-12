@@ -13,6 +13,7 @@ import (
 	"github.com/akz142857/Halro/internal/anthropicapi"
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/openaiapi"
+	"github.com/akz142857/Halro/internal/safetransport"
 	"github.com/akz142857/Halro/internal/semantic"
 )
 
@@ -77,6 +78,13 @@ func (e *Error) Unwrap() error {
 func Unsent(err error) bool {
 	if err == nil {
 		return false
+	}
+	// A refusal SafeTransport made itself, before a connection existed. This one
+	// is not an inference from an error type the network happened to produce: the
+	// gateway declined to dial, so nothing was sent. Left out, it was the single
+	// case of total certainty being settled as ambiguous.
+	if errors.Is(err, safetransport.ErrRefusedBeforeSend) {
+		return true
 	}
 	var resolution *net.DNSError
 	if errors.As(err, &resolution) {
