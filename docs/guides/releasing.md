@@ -40,6 +40,47 @@ object reports a valid GPG, SSH, or S/MIME signature; a lightweight or
 unverified tag cannot publish assets. RC tags are marked prerelease, while the
 reviewed `docs/milestones/release-notes-v1.0.0.md` is used only for the final tag.
 
+## Where the M11 evidence bundle comes from
+
+`publish` verifies `M11_RELEASE_EVIDENCE_JSON` against the artifacts the same run
+produced: `tools/m11/release-evidence/verify.py` requires a SHA-256 for each of
+the nine release files and recomputes every one of them from the downloaded
+`release-assets`. Two of those nine are the container archives, which are not
+byte-reproducible (see below), so their digests cannot be computed from the
+source tree ahead of time. **The bundle can only be completed after a release run
+has built the artifacts it describes.**
+
+The Environment approval pause is that window. `publish` declares
+`environment: v1-release`, so once `provenance` has uploaded `release-assets` and
+`release-governance` has confirmed the Environment's protections, the job is
+scheduled and then waits for a reviewer. The order is therefore:
+
+1. create `v1-release` with required reviewers and Prevent self-review — before
+   the tag, because `release-governance` fails the run without it. The evidence
+   secret does not have to exist yet;
+2. push the signed annotated tag and let the run build, sign, attest, and upload
+   `release-assets`;
+3. while `publish` waits for approval, download that run's `release-assets`,
+   complete the bundle from `tools/m11/release-evidence/template.json` inside the
+   restricted evidence system using those exact digests, and install it as the
+   `v1-release` Environment secret;
+4. have an independent reviewer approve. `publish` then verifies the bundle
+   against the artifacts it was written from.
+
+If approval happens before the secret is installed, `publish` fails on the empty
+secret. Recover with `gh run rerun --failed`, which reuses the same
+`release-assets` — but only inside the 90-day artifact retention window. Once
+that window closes, or if anything forces a fresh build, the container digests
+change and the bundle has to be rewritten against the new run.
+
+Note the consequence for release candidates: `publish` applies this verification
+to every `v*` tag, and the bundle it verifies covers the full M11 production
+evidence — the 14 real-AWS KMS scenarios, the recovery drill, and four-role
+sign-off. An RC cannot publish on supply-chain evidence alone.
+
+This sequence follows from the workflow definition and the verifier's inputs. It
+has not been exercised: no release workflow run exists yet.
+
 Before creating an RC tag:
 
 1. run all CI, race, fuzz, SDK compatibility, recovery, and benchmark gates;

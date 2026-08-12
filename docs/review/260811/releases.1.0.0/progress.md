@@ -255,6 +255,36 @@ removing the `Unsent` clause fails the settlement test, removing the goroutine i
 `Open` fails the wiring test, and moving the audit drain inside the staleness
 branch — which reads like a tidy-up — fails the drain test.
 
+## The release order nobody had written down
+
+Following `releasing.md` step by step stopped working at the tag: it says to run
+the pre-RC gates and push a signed tag, and never says where
+`M11_RELEASE_EVIDENCE_JSON` comes from. It cannot come from the source tree.
+`tools/m11/release-evidence/verify.py` requires a SHA-256 for each of the nine
+release files and recomputes all nine from the run's own `release-assets`; two of
+them are the container archives, which are not byte-reproducible, so the bundle
+can only be completed after a run has built the artifacts it describes.
+
+The window is the Environment approval pause: `publish` declares
+`environment: v1-release`, so it is scheduled once `provenance` has uploaded
+`release-assets` and `release-governance` has confirmed the protections, and then
+waits. The Environment is created before the tag; the secret is installed during
+that wait; an independent reviewer approves afterwards. Approving early fails the
+job on an empty secret and is recoverable with `gh run rerun --failed` only while
+the 90-day artifacts survive. Written into `docs/guides/releasing.md`, with
+`docs/verification/release-run-evidence.md` §1 corrected — it had said to install
+the secret before creating the tag, which the container digests make impossible —
+and a pointer added to the evidence bundle's own README.
+
+Also recorded there, because it decides how G4 can be closed: `publish` applies
+the same verification to every `v*` tag, so a release candidate cannot publish on
+supply-chain evidence alone. Proving the delivery pipeline works currently
+requires finishing the most expensive gate in the project first. Whether to scale
+the evidence depth by tag class is a design decision that has not been taken.
+
+The sequence follows from the workflow definition and the verifier's inputs, and
+is marked in the guide as not yet exercised — no release workflow run exists.
+
 ## Accepted with rationale, not closed
 
 Recorded so the next reader does not have to re-derive the choice from the code.

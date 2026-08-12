@@ -48,7 +48,12 @@ completed production bundle to the public repository.
 
 The `v1-release` GitHub Environment must expose the completed sanitized bundle
 as the `M11_RELEASE_EVIDENCE_JSON` environment secret only after reviewers have
-downloaded and verified the `provenance` job artifacts. The publish job binds
+downloaded and verified the `provenance` job artifacts. That ordering is also a
+constraint rather than only a policy: two of the nine artifact digests belong to
+container archives that are not byte-reproducible, so the bundle cannot be
+finished before the run that builds them exists. `docs/guides/releasing.md`
+describes the window — the Environment approval pause — in which it is authored
+and installed. The publish job binds
 the bundle to the signed tag's commit and tag, recomputes every artifact digest,
 checks `checksums.txt`, verifies GitHub build-provenance attestations, and
 independently verifies every Sigstore bundle before creating the GitHub Release.

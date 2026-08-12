@@ -14,6 +14,16 @@ Create `v1-release` in the repository settings. Configure at least one required
 reviewer and enable **Prevent self-review**. The reviewer who approves the job
 must be independent from the operator who installs the evidence secret.
 
+Do this before the tag: `release-governance` reads the Environment's protection
+rules and fails the run when they are missing, so a tag pushed first cannot
+publish.
+
+The evidence secret is installed later, during the approval pause, and not here.
+It has to name the SHA-256 of the two container archives, which are not
+byte-reproducible, so it cannot be completed until a run has built them —
+`docs/guides/releasing.md` sets out the full order. This section covers only what
+that secret must look like once it exists.
+
 Install `M11_RELEASE_EVIDENCE_JSON` as an **Environment secret**, never as a
 repository secret. Confirm the scope without printing its value:
 
@@ -53,6 +63,13 @@ workflow identity, and the name, size, and SHA-256 digest of every file in
 `release-assets`. It is generated only after all release-file signatures exist,
 so it also covers those bundles. It is not copied into the release directory,
 which avoids a self-referential digest.
+
+`publish` is scheduled once these exist and then waits for the Environment
+reviewer. That pause is when the M11 bundle is completed against this run's
+`release-assets` and installed as the Environment secret; approving before it is
+installed fails the job on an empty secret, recoverable with
+`gh run rerun --failed` while the 90-day artifacts survive. The full order is in
+`docs/guides/releasing.md`.
 
 ## 3. Preserve the run before its retention window expires
 

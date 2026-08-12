@@ -277,6 +277,14 @@ redaction-policies / token-guard-policies / model-capability-detections），
   `gh api .../environments/v1-release` 上拿 404 直接失败，`publish` 因 `needs` 未满足而 skip。
   这同时避免了 GitHub 在 publish 跑起来后自动创建一个**不带保护规则**的环境
   （rc.1 那次正是如此）。
+- **`publish` 的门是完整 M11 生产证据包，且对 RC 一视同仁**：`release.yml:341-355` 无条件
+  校验 `M11_RELEASE_EVIDENCE_JSON`，而 `verify.py` 要求 14 个真实 AWS KMS 场景、恢复演练、
+  四方签字。**这意味着 D8 与已知限制 18 的"KMS release-blocked"是同一个阻塞**，也意味着
+  想打个 rc.2 把流水线走通来证明 G4，得先做完项目里最贵的那一关。
+- **证据包只能在一次真实 run 之后定稿**：`verify.py:283-318` 要求九个产物的 sha256 并与
+  该 run 的 `release-assets` 逐一比对，其中两个容器包不可复现、无法离线重算。**窗口是
+  Environment 的审批暂停**——`publish` 已被调度但等待评审时，产物已经存在。顺序与
+  90 天保留期兜底写在 `docs/guides/releasing.md`（2026-08-12 补，此前无人写过这一步）。
 - **四个二进制归档逐字节可复现**（两台"机器"实证）；**两个容器包不可复现**，
   根因与实测数字写在 `docs/guides/releasing.md` 的 Reproducibility scope。
 - **无官方容器 registry**：发行物是 `halro-container.tar.gz`，运维自行 load、
