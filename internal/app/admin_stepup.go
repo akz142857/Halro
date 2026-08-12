@@ -52,6 +52,40 @@ func (r *Runtime) requireDestructiveStepUp(writer http.ResponseWriter, request *
 	return r.verifyAdminStepUp(writer, request, admin.session.Username, input.CurrentPassword, input.TOTPCode)
 }
 
+// stepUpMaterial carries the same two fields requireDestructiveStepUp reads,
+// for mutations whose body is the resource itself. Those handlers cannot call
+// requireDestructiveStepUp: it consumes the whole body to find the material,
+// and the body is needed for the resource. Embedding this in the handler's
+// input keeps one shape on the wire — an operator supplies the same two fields
+// whether they are deleting a policy or editing it down to nothing.
+type stepUpMaterial struct {
+	CurrentPassword string `json:"current_password"`
+	TOTPCode        string `json:"totp_code,omitempty"`
+}
+
+// requireStepUpMaterial applies the step-up criterion to an edit that weakens a
+// protection currently in force.
+//
+// The criterion is the one unblockAdminProject already states: not only what
+// destroys state, but what removes a protection that is in force. Applying it
+// to deletes alone left an asymmetry with no defensible reading — deleting a
+// redaction policy demanded re-authentication, while editing that same policy
+// down to zero rules did not, and the data plane cannot tell the two apart.
+// The same holds for a Token Guard policy edited to unlimited, and for a
+// Provider credential whose material is replaced outright.
+//
+// Every such edit asks for step-up, not only the ones a comparison judges to be
+// weakening. A predicate deciding "is the new state at least as strong" is
+// itself security-critical, and getting it wrong fails open on exactly the edit
+// that matters; it also cannot be swept, because the router cannot see which
+// branch a request will take.
+func (r *Runtime) requireStepUpMaterial(
+	writer http.ResponseWriter, request *http.Request, material stepUpMaterial,
+) bool {
+	admin := request.Context().Value(adminContextKey{}).(adminRequestContext)
+	return r.verifyAdminStepUp(writer, request, admin.session.Username, material.CurrentPassword, material.TOTPCode)
+}
+
 // verifyAdminStepUp is verifyReauthenticationMaterial with the two things a
 // credential check owes an operator once it guards more than a handful of
 // endpoints: a bound on how fast it can be attempted, and a record that it was.

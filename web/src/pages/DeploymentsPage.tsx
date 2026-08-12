@@ -846,13 +846,17 @@ function DeploymentForm({
     setManualDeclaration(false);
     setResolutionRequiresConfirmation(false);
   };
+  // Detection spends the operator's Provider credential upstream, so it asks
+  // who is spending it. The step-up material travels with the mutation rather
+  // than in component state: it must not outlive the click that supplied it.
   const detectCapabilities = useMutation({
-    mutationFn: (requestedSelectionRevision: string) => api.createModelCapabilityDetection(providerID, {
-      provider_model: providerModel.trim(), target_kind: targetKind, region: region.trim(),
-      ...(detectionBindingID ? { binding_id: detectionBindingID } : {}), risk_tier: "safe_automatic",
-      selection_revision: requestedSelectionRevision,
-    }, detectionIdempotencyKey.current),
-    onSuccess: (result, requestedSelectionRevision) => {
+    mutationFn: ({ requestedSelectionRevision, reauth }: { requestedSelectionRevision: string; reauth: ReauthValues }) =>
+      api.createModelCapabilityDetection(providerID, {
+        provider_model: providerModel.trim(), target_kind: targetKind, region: region.trim(),
+        ...(detectionBindingID ? { binding_id: detectionBindingID } : {}), risk_tier: "safe_automatic",
+        selection_revision: requestedSelectionRevision,
+      }, detectionIdempotencyKey.current, reauth),
+    onSuccess: (result, { requestedSelectionRevision }) => {
       if (requestedSelectionRevision !== selectionRevision) return;
       // A provider/model result may be reused from the server cache and carry
       // the selection token of the client that originally created it. The
@@ -869,14 +873,14 @@ function DeploymentForm({
   // which is the same path an explicitly bound detection already takes. The
   // binding it sends is the one this render resolved, so the request carries
   // the operator's pick rather than whatever a later render computes.
-  const confirmDetectionBinding = () => {
+  const confirmDetectionBinding = (reauth: ReauthValues) => {
     const nextSelection = crypto.randomUUID();
     setCapabilityDetection(null);
     appliedDetectionRevision.current = 0;
     detectionIdempotencyKey.current = crypto.randomUUID();
     setSelectionRevision(nextSelection);
     setResolutionRequiresConfirmation(false);
-    detectCapabilities.mutate(nextSelection);
+    return detectCapabilities.mutateAsync({ requestedSelectionRevision: nextSelection, reauth });
   };
   const value = () => ({
     name: name.trim(),
@@ -1283,7 +1287,7 @@ function DeploymentForm({
                       {selectableBindings.length > 1 && <p className="capability-advanced-note">{t("deployments.detectionResolvesInterface")}</p>}
                       <div className="form-actions">
                         <button type="button" className="button ghost" onClick={() => { setManualDeclaration(true); setCapabilities(emptyCapabilities()); }}>{t("deployments.advancedManualDeclaration")}</button>
-                        <button type="button" className="button primary" disabled={!providerModel.trim() || !targetCatalog.data?.discovery.can_verify || detectCapabilities.isPending} onClick={() => detectCapabilities.mutate(selectionRevision)}>{detectCapabilities.isPending ? t("common.working") : t("deployments.confirmAndDetect")}</button>
+                        <ConfirmButton className="button primary" label={detectCapabilities.isPending ? t("common.working") : t("deployments.confirmAndDetect")} title={t("deployments.confirmAndDetect")} confirmLabel={t("deployments.detectionSpendConfirm")} disabled={!providerModel.trim() || !targetCatalog.data?.discovery.can_verify || detectCapabilities.isPending} requireStepUp onConfirm={(reauth) => detectCapabilities.mutateAsync({ requestedSelectionRevision: selectionRevision, reauth })} />
                       </div>
                     </div>
                   </div>
@@ -1314,7 +1318,7 @@ function DeploymentForm({
                     </Field>
                     <div className="form-actions">
                       <button type="button" className="button ghost" onClick={() => { resetDetection(); setManualDeclaration(true); }}>{t("deployments.advancedManualDeclaration")}</button>
-                      <button type="button" className="button primary" disabled={!detectionBindingID || detectCapabilities.isPending} onClick={confirmDetectionBinding}>{detectCapabilities.isPending ? t("common.working") : t("deployments.confirmDetectionBinding")}</button>
+                      <ConfirmButton className="button primary" label={detectCapabilities.isPending ? t("common.working") : t("deployments.confirmDetectionBinding")} title={t("deployments.confirmDetectionBinding")} confirmLabel={t("deployments.detectionSpendConfirm")} disabled={!detectionBindingID || detectCapabilities.isPending} requireStepUp onConfirm={confirmDetectionBinding} />
                     </div>
                   </div>
                 </div>}

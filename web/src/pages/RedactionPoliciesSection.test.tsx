@@ -121,12 +121,15 @@ describe("RedactionPoliciesSection form safety", () => {
     expect(within(dialog).getByText("已绑定 2 个项目")).toBeInTheDocument();
     expect(within(dialog).getByLabelText("名称")).toHaveValue("Email");
     fireEvent.change(within(dialog).getByLabelText(/^优先级/), { target: { value: "30" } });
+    // Editing an existing policy can take enforcement away, so the server asks
+    // who is doing it and the form collects it.
+    fireEvent.change(within(dialog).getByLabelText("当前密码"), { target: { value: "a passphrase" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "编译并保存" }));
 
     await waitFor(() => expect(update).toHaveBeenCalledOnce());
     expect(update).toHaveBeenCalledWith("rdp_existing", expect.objectContaining({
       rules: [expect.objectContaining({ id: "rrl_existing", priority: 30 })],
-    }), 7);
+    }), 7, expect.objectContaining({ currentPassword: "a passphrase" }));
   });
 
   it("enables and disables policies directly from the policy list", async () => {
@@ -141,18 +144,22 @@ describe("RedactionPoliciesSection form safety", () => {
     ]);
 
     fireEvent.click(await screen.findByRole("button", { name: "启用" }));
+    const enableDialog = await screen.findByRole("alertdialog");
+    fireEvent.change(within(enableDialog).getByLabelText("当前密码"), { target: { value: "a passphrase" } });
+    fireEvent.click(within(enableDialog).getByRole("button", { name: "启用" }));
     await waitFor(() => expect(update).toHaveBeenCalledWith("rdp_off", expect.objectContaining({
       enabled: true,
       rules: [expect.not.objectContaining({ computed_max_match_bytes: expect.anything() })],
-    }), 2));
+    }), 2, expect.objectContaining({ currentPassword: "a passphrase" })));
 
     // Switching a redaction policy off removes DLP from every Project bound to it,
     // so it asks first — the same weight the delete action carries.
     fireEvent.click(screen.getByRole("button", { name: "禁用" }));
     const dialog = await screen.findByRole("alertdialog");
     expect(within(dialog).getByText(/未脱敏内容直连服务商/)).toBeVisible();
+    fireEvent.change(within(dialog).getByLabelText("当前密码"), { target: { value: "a passphrase" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "禁用" }));
-    await waitFor(() => expect(update).toHaveBeenCalledWith("rdp_on", expect.objectContaining({ enabled: false }), 4));
+    await waitFor(() => expect(update).toHaveBeenCalledWith("rdp_on", expect.objectContaining({ enabled: false }), 4, expect.objectContaining({ currentPassword: "a passphrase" })));
   });
 
   // The controlled textarea normalised on every keystroke: Enter produced an empty

@@ -32,7 +32,8 @@ on every push and pull request.
 | Admin authentication | Process-wide bounded Argon2id work, signed server-side session, fixation rotation, absolute/idle expiry tests | Pass |
 | Admin TOTP MFA | Encrypted independent seeds, short-lived hash-only pre-auth challenges, atomic replay protection and recovery codes | Pass |
 | Admin mutations | Same-origin + CSRF + exact administrator role, optimistic revisions, mandatory create idempotency | Pass |
-| Credential-spending reads | Invocation-target refresh/describe require administrator role and same-origin validation | Pass |
+| Credential-spending calls | Invocation-target refresh/resolve are POSTs behind the administrator role, CSRF and same-origin; capability detection additionally requires step-up | Pass |
+| Security-control edits | Replacing credential material and editing a redaction or Token Guard policy require step-up, not only deleting them; swept by route family so a new verb is in scope when registered | Pass |
 | Gateway keys | One-time plaintext, hash-only persistence, fail-closed revocation snapshot activation | Pass |
 | Provider/Webhook secrets | AES-GCM + HKDF audience binding; API, errors, telemetry and heap canaries exclude protected values | Pass |
 | Egress/SSRF | Shared SafeTransport, redirect/DNS revalidation, metadata denial and explicit private-network opt-in | Pass; typed-unsent classification remains P3 |
@@ -153,18 +154,50 @@ result can be attached to the release commit.
   retained artifacts, production registry availability, 24-hour soak, real AWS
   recovery, or independent dead-man delivery.
 
+## Step-up criterion
+
+Step-up asks for the account password and a fresh TOTP code per request. It is
+required for what destroys state and for what removes or replaces a protection
+that is in force — the second half matters because deleting a redaction policy
+and editing it down to no rules have the same effect on the data plane, and only
+one of them used to ask. In scope: every destructive Admin DELETE; `PUT` on
+credentials, redaction policies and Token Guard policies; and capability
+detection, which spends the Provider credential outside project accounting.
+
+Every edit in those families asks, not only the ones a comparison judges to be
+weakening. A predicate deciding "is the new state at least as strong" is itself
+security-critical and fails open on exactly the edit that matters, and a router
+sweep cannot see which branch a request will take. Both criteria are enforced by
+sweeps over the registered routes (`TestEveryDestructiveDeleteRequiresStepUp`,
+`TestEverySecurityControlEditRequiresStepUp`) with named exemptions, so a route
+added later is in scope the day it is registered.
+
+Out of scope, deliberately: Provider and Deployment connection tests, and
+invocation-target refresh/resolve. Each is a single bounded call that changes no
+policy and writes no capability evidence; they are bounded by role, CSRF,
+same-origin, rate limits and durable per-call accounting instead.
+
 ## Release decision
 
-Core controls are suitable for an exact-commit release-candidate gate. Final
-v1.0.0 release remains blocked until all of the following are archived for that
-same commit:
+Core controls are suitable for an exact-commit release-candidate gate. No
+security-owned gate is open.
 
-1. the current crash/recovery matrix and 24-hour soak artifact;
-2. packaging/install evidence for every advertised artifact surface;
-3. a protected `v1-release` GitHub Environment with required reviewers and its
+Final v1.0.0 release remains blocked on evidence this review does not own and
+cannot close. Both groups must be archived for the same commit:
+
+Delivery-owned (the G4 surface — see `docs/guides/releasing.md`):
+
+1. packaging/install evidence for every advertised artifact surface;
+2. a protected `v1-release` GitHub Environment with required reviewers and its
    environment-scoped signing secret;
-4. a complete signed/checksummed release whose public verification procedure
+3. a complete signed/checksummed release whose public verification procedure
    succeeds and whose workflow/artifact identifiers are retained.
 
+Capacity-owned:
+
+4. the current crash/recovery matrix and the 24-hour soak artifact.
+
 These replace the obsolete, undefined name “M10 recovery”; none is considered
-closed by editing this document.
+closed by editing this document. Splitting them is not a downgrade: it records
+that what blocks the release is release engineering and soak evidence, so that a
+reader does not count the same missing Release twice.

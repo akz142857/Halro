@@ -193,6 +193,32 @@ The first sandboxed full Go run could not bind an existing `httptest` loopback
 listener; the identical command passed in the permitted local test environment.
 No billable real-provider smoke test was run.
 
+## G7 item 3, closed by fixing rather than by accepting
+
+The release owner chose to tighten. Step-up now keys on the criterion this
+repository already stated for unblocking a Project — what destroys state *or
+removes a protection that is in force* — instead of on the HTTP verb. Deleting a
+redaction policy asked for re-authentication while editing it down to zero rules
+did not, and the data plane cannot tell those apart; the same held for a Token
+Guard policy edited to unlimited and for a credential whose material is
+replaced.
+
+Now required on `PUT /credentials/{id}`, `PUT /redaction-policies/{id}`,
+`PUT /token-guard-policies/{id}`, and `POST
+/providers/{id}/model-capability-detections`, the last as credential-spending
+work that writes adoptable capability evidence. Every edit asks, rather than
+only the ones a comparison judges to be weakening: that predicate is itself
+security-critical, fails open on exactly the edit that matters, and cannot be
+swept because the router cannot see which branch a request takes.
+
+Enforced by `TestEverySecurityControlEditRequiresStepUp`, a route-family sweep
+shaped like the existing DELETE sweep, so a verb added later is in scope the day
+it is registered (reverse-verified: removing one call site fails it). Provider
+and Deployment connection tests and invocation-target refresh/resolve stay out of
+scope, with the reason recorded in `docs/verification/security-review-v1.md`.
+The Console collects the material at all four entry points, so the server-side
+tightening does not repeat R-24's shape of a guard the browser cannot satisfy.
+
 ## Accepted with rationale, not closed
 
 Recorded so the next reader does not have to re-derive the choice from the code.

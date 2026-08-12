@@ -126,9 +126,17 @@ func (r *Runtime) updateAdminTokenGuardPolicy(writer http.ResponseWriter, reques
 	if !ok {
 		return
 	}
-	var input tokenGuardInput
+	var input struct {
+		tokenGuardInput
+		stepUpMaterial
+	}
 	if err := decodeAdminJSON(request, &input); err != nil {
 		adminBadRequest(writer, "invalid request")
+		return
+	}
+	// A Token Guard policy edited to unlimited stops enforcing without being
+	// deleted; see requireStepUpMaterial.
+	if !r.requireStepUpMaterial(writer, request, input.stepUpMaterial) {
 		return
 	}
 	r.adminProjectMu.Lock()

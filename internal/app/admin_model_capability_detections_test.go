@@ -276,6 +276,8 @@ func runDetectionForTest(t *testing.T, runtime *Runtime, instance domain.Provide
 	session := loginTestAdmin(t, runtime, "admin", "correct horse battery staple")
 	request := adminMutationRequest(t, http.MethodPost, "/admin/api/v1/providers/"+instance.ID+"/model-capability-detections", session, map[string]any{
 		"provider_model": model, "target_kind": "model_id", "risk_tier": "safe_automatic",
+		// Detection spends the Provider credential, so it carries step-up.
+		"current_password": "correct horse battery staple",
 	})
 	request.Header.Set("Idempotency-Key", "identify-"+model)
 	response := httptest.NewRecorder()
@@ -391,6 +393,7 @@ func TestCapabilityDetectionAPIIsExplicitCachedAndCreatesUntestedSnapshot(t *tes
 	createDetection := func(key string) *httptest.ResponseRecorder {
 		request := adminMutationRequest(t, http.MethodPost, "/admin/api/v1/providers/"+instance.ID+"/model-capability-detections", session, map[string]any{
 			"provider_model": "unlisted-model", "target_kind": "model_id", "risk_tier": "safe_automatic", "selection_revision": "selection-one",
+			"current_password": "correct horse battery staple",
 		})
 		request.Header.Set("Idempotency-Key", key)
 		response := httptest.NewRecorder()
@@ -450,6 +453,7 @@ func TestCapabilityDetectionAPIIsExplicitCachedAndCreatesUntestedSnapshot(t *tes
 	}
 	rateLimitedRequest := adminMutationRequest(t, http.MethodPost, "/admin/api/v1/providers/"+instance.ID+"/model-capability-detections", session, map[string]any{
 		"provider_model": "another-unlisted-model", "target_kind": "model_id", "risk_tier": "safe_automatic",
+		"current_password": "correct horse battery staple",
 	})
 	rateLimitedRequest.Header.Set("Idempotency-Key", "rate-limited-new-work")
 	rateLimited := httptest.NewRecorder()
@@ -516,6 +520,7 @@ func TestCapabilityDetectionCancelDiscardsALateSupportedResult(t *testing.T) {
 	session := loginTestAdmin(t, runtime, "admin", "correct horse battery staple")
 	request := adminMutationRequest(t, http.MethodPost, "/admin/api/v1/providers/"+instance.ID+"/model-capability-detections", session, map[string]any{
 		"provider_model": "late-model", "target_kind": "model_id", "risk_tier": "safe_automatic",
+		"current_password": "correct horse battery staple",
 	})
 	request.Header.Set("Idempotency-Key", "cancel-late")
 	response := httptest.NewRecorder()

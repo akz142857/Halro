@@ -521,6 +521,33 @@ seq 40 / off 43387，**零改动**。`backup verify` 的 manifest 与 `backup cr
 
 **G5 维持通过，证据是当前代码产生的。**
 
-### 8.4 仍然只剩边界项
+### 8.4 G7 #3 按"修复"关闭：step-up 判据换轴
+
+再核对 D1 时发现的、§1~§7 都没提的一条：step-up 按"是否破坏性"分类，而不是按
+"是否削弱在执行的控制"。后果是一条没有可辩护读法的不对称——**删掉一条脱敏策略需要重新认证，
+把它编辑成一条规则都不剩不需要**，而数据面分不出这两者。Token Guard 编辑成不限、
+凭据 PUT 替换材料同理。判据本身仓库里早就写着（`unblockAdminProject` 的注释：
+"not only what destroys state, but what removes a protection that is currently in force"），
+只是没落到 DELETE 之外。
+
+用户裁决为**收紧**。四个入口现在都要 step-up：`PUT /credentials/{id}`、
+`PUT /redaction-policies/{id}`、`PUT /token-guard-policies/{id}`、
+`POST /providers/{id}/model-capability-detections`（最后一条属"花费凭据"那一类）。
+每次编辑都问，不做"这次是否削弱"的条件判断——那个谓词本身是安全关键逻辑，
+判错即在最该拦的那次编辑上 fail-open，且路由层看不见分支、无法 sweep。
+
+守护是按路由族的 sweep（`TestEverySecurityControlEditRequiresStepUp`），与既有的
+`TestEveryDestructiveDeleteRequiresStepUp` 同形：非 GET 路由要么要求 step-up、
+要么在具名豁免表里，新增动词注册当天进范围。**反向验证**：overlay 拿掉
+`admin_redaction.go` 的那次调用 → 该测试 FAIL。范围外的（Provider/Deployment 连接测试、
+调用目标刷新与解析）连同理由写进 `security-review-v1.md` 的 "Step-up criterion" 一节。
+
+控制台四处入口同步收集口令与 TOTP，zh-CN/en-US 文案齐备——不重演 R-24 那次
+"服务端收紧、浏览器发不出"的回归。同一轮还订正了 `security-review-v1.md` 里一行
+认证已废弃设计的控制项（原写 invocation-target 的两条"读"靠角色 + 同源，
+实际交付的是 POST + `requireAdminMutation`），并把该文件 "Release decision" 的四道门
+按归属拆成交付面三条与容量面一条——安全自有的门是 0 条。
+
+### 8.5 仍然只剩边界项
 
 §7.5 那四条不变：G4 的 GitHub 侧动作、G7 的 6 条产品裁决、容器可复现、S1/soak。

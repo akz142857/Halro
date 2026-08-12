@@ -312,6 +312,7 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 		map[string]any{
 			"name": "OpenAI production", "type": "openai",
 			"base_url": "https://api.openai.com", "secret": "rotated-provider-secret-canary",
+			"current_password": "correct horse battery staple",
 		},
 	)
 	if rotationResponse.Code != http.StatusOK ||
@@ -590,6 +591,8 @@ func TestAdminCredentialViewPreservesBedrockBoundBaseURLForRotation(t *testing.T
 			rotated := performAdminMutation(t, runtime, cookie, csrf, http.MethodPut, "/admin/api/v1/credentials/"+view.ID, `"1"`, map[string]any{
 				"name": test.name, "type": "bedrock", "base_url": view.BoundBaseURL,
 				"access_surface": test.surface, "scheme": test.scheme, "secret": "rotated-secret",
+				// Replacing credential material carries step-up, like deleting it.
+				"current_password": "correct horse battery staple",
 			})
 			if rotated.Code != http.StatusOK {
 				t.Fatalf("rotate status=%d body=%s", rotated.Code, rotated.Body.String())

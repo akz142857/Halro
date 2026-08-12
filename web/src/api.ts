@@ -285,10 +285,13 @@ export const api = {
     request<Page<Credential>>("/credentials").then((value) => value.data),
   createCredential: (value: unknown) =>
     request<Credential>("/credentials", json("POST", value)),
-  rotateCredential: (id: string, value: unknown, revision: number) =>
+  // Replacing credential material carries step-up for the same reason deleting
+  // it does: the server applies one criterion to both, so this client sends one
+  // shape.
+  rotateCredential: (id: string, value: object, revision: number, reauth: Reauth) =>
     request<Credential>(
       `/credentials/${encodeURIComponent(id)}`,
-      json("PUT", value),
+      json("PUT", { ...value, ...stepUpBody(reauth) }),
       `"${revision}"`,
     ),
   deleteCredential: (id: string, revision: number, reauth: Reauth) =>
@@ -319,9 +322,11 @@ export const api = {
       { method: "POST" },
     ).then((value) => value.data);
   },
-  createModelCapabilityDetection: (providerID: string, value: unknown, idempotencyKey: string) =>
+  // Detection spends the operator's Provider credential upstream and writes the
+  // capability evidence a Deployment can adopt, so it carries step-up too.
+  createModelCapabilityDetection: (providerID: string, value: object, idempotencyKey: string, reauth: Reauth) =>
     request<ModelCapabilityDetection>(`/providers/${encodeURIComponent(providerID)}/model-capability-detections`, {
-      ...json("POST", value), headers: { "Idempotency-Key": idempotencyKey },
+      ...json("POST", { ...value, ...stepUpBody(reauth) }), headers: { "Idempotency-Key": idempotencyKey },
     }).then((result) => result.data),
   modelCapabilityDetection: (id: string) =>
     request<ModelCapabilityDetection>(`/model-capability-detections/${encodeURIComponent(id)}`).then((result) => result.data),
@@ -452,10 +457,12 @@ export const api = {
     request<Page<TokenGuardPolicy>>(`/token-guard-policies${query}`).then((value) => value.data),
   createTokenGuardPolicy: (value: unknown) =>
     request<TokenGuardPolicy>("/token-guard-policies", json("POST", value)),
-  updateTokenGuardPolicy: (id: string, value: unknown, revision: number) =>
+  // An edit can switch a policy off or raise it to unlimited, which is the same
+  // loss of enforcement as deleting it; the server asks for step-up on both.
+  updateTokenGuardPolicy: (id: string, value: object, revision: number, reauth: Reauth) =>
     request<TokenGuardPolicy>(
       `/token-guard-policies/${encodeURIComponent(id)}`,
-      json("PUT", value),
+      json("PUT", { ...value, ...stepUpBody(reauth) }),
       `"${revision}"`,
     ),
   deleteTokenGuardPolicy: (id: string, revision: number, reauth: Reauth) =>
@@ -475,10 +482,12 @@ export const api = {
     request<Page<RedactionPolicy>>(`/redaction-policies${query}`).then((value) => value.data),
   createRedactionPolicy: (value: unknown) =>
     request<RedactionPolicy>("/redaction-policies", json("POST", value)),
-  updateRedactionPolicy: (id: string, value: unknown, revision: number) =>
+  // Same criterion: a policy edited down to no rules stops redacting without
+  // being deleted.
+  updateRedactionPolicy: (id: string, value: object, revision: number, reauth: Reauth) =>
     request<RedactionPolicy>(
       `/redaction-policies/${encodeURIComponent(id)}`,
-      json("PUT", value),
+      json("PUT", { ...value, ...stepUpBody(reauth) }),
       `"${revision}"`,
     ),
   deleteRedactionPolicy: (id: string, revision: number, reauth: Reauth) =>

@@ -118,9 +118,17 @@ func (r *Runtime) updateAdminRedactionPolicy(writer http.ResponseWriter, request
 	if !ok {
 		return
 	}
-	var input redactionPolicyInput
+	var input struct {
+		redactionPolicyInput
+		stepUpMaterial
+	}
 	if err := decodeAdminJSONLimit(request, &input, 256<<10); err != nil {
 		adminBadRequest(writer, "invalid request")
+		return
+	}
+	// Before the store is touched, for the reason deleteAdminProject gives: the
+	// revision header is a parse, this is an Argon2id verification.
+	if !r.requireStepUpMaterial(writer, request, input.stepUpMaterial) {
 		return
 	}
 	r.adminProjectMu.Lock()
