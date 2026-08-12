@@ -123,6 +123,18 @@ func TestAdminRefusesUnusableBedrockProjectIdentifiers(t *testing.T) {
 		if response.Code != http.StatusBadRequest {
 			t.Fatalf("%s was accepted: status=%d body=%s", test.name, response.Code, response.Body.String())
 		}
+		// A stable code, so the console can explain the refusal in the reader's
+		// own language instead of falling back to "the request was invalid" and
+		// leaving the English sentence as the only clue.
+		var refusal struct {
+			Code string `json:"code"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &refusal); err != nil {
+			t.Fatal(err)
+		}
+		if refusal.Code != "bedrock_project_id_invalid" {
+			t.Fatalf("%s refused without a usable code: %s", test.name, response.Body.String())
+		}
 	}
 
 	// `default` is the account default's own ID; it is accepted and stored as

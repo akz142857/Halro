@@ -595,6 +595,12 @@ h3 { margin-bottom: 0; font-size: var(--font-size-lg); }
    not a validation failure, so it reads as guidance rather than as an error. */
 .price-version-form .field-hint:not(.error) { color: var(--muted); }
 .price-version-form .price-submit-error { scroll-margin: 24px; }
+/* A rejected save has to be reachable from the sticky footer that submitted it,
+   so it keeps room to scroll to and takes focus without drawing a focus ring
+   around a whole block. */
+.form-submit-error { scroll-margin: 24px; }
+.form-submit-error:focus { outline: none; }
+.form-submit-error:focus-visible { outline: 2px solid var(--color-focus-ring); outline-offset: 2px; }
 .price-version-form .button { font-size: var(--font-size-sm); }
 .price-version-form > .form-actions { position: sticky; bottom: 0; z-index: var(--z-sticky); align-items: center; min-height: 76px; margin: 8px -24px -24px; padding: 15px 24px 16px; background: var(--surface-overlay-solid); border-top: 1px solid var(--line-strong); box-shadow: var(--shadow-sticky); }
 .price-confirm-summary { margin-bottom: 18px; padding: 18px; background: var(--surface-deep); border: 1px solid var(--line); }

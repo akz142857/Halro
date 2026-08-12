@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { api } from "../api";
+import { api, ApiError } from "../api";
 import type { Credential } from "../types";
 import { ProvidersPage } from "./ProvidersPage";
 
@@ -383,6 +383,48 @@ describe("ProvidersPage profile and credential bindings", () => {
     expect(project.closest("label")?.parentElement).toBe(
       screen.getByLabelText(/基础地址/).closest("label")?.parentElement,
     );
+  });
+
+  // A rejected save used to look like a dead button: the notice rendered at the
+  // bottom of a form that scrolls behind a sticky footer, so the operator saw
+  // nothing happen and clicked again. The failure now comes to them, carries
+  // the reason in their own language, and takes focus so it is announced.
+  it("brings a rejected provider save into view and explains it", async () => {
+    const mantleCredential: Credential = {
+      id: "credential_mantle",
+      name: "Mantle",
+      type: "bedrock",
+      access_surface: "bedrock-mantle",
+      scheme: "aws.bedrock.api-key",
+      bound_base_url: "https://bedrock-mantle.us-east-1.api.aws:443",
+      secret_configured: true,
+      key_version: 1,
+      revision: 1,
+    };
+    vi.mocked(api.credentials).mockResolvedValue({ items: [mantleCredential], next_cursor: "" });
+    vi.spyOn(api, "createProvider").mockRejectedValue(
+      new ApiError(400, "bedrock project id must be `proj_` followed by alphanumerics", "bedrock_project_id_invalid"),
+    );
+    const scrolled: unknown[] = [];
+    Element.prototype.scrollIntoView = function scrollIntoView(this: Element, options?: unknown) {
+      scrolled.push(this);
+      void options;
+    };
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
+    fireEvent.change(screen.getByLabelText("服务商名称"), { target: { value: "AwsBedrockMantle" } });
+    fireEvent.change(screen.getByLabelText("类型"), { target: { value: "bedrock" } });
+    fireEvent.change(await screen.findByRole("combobox", { name: /^能力实现/ }), { target: { value: "bedrock.mantle.openai.chat.v1" } });
+    fireEvent.change(screen.getByLabelText(/^Bedrock 项目/), { target: { value: "wahool-mantle" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建并热加载" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("这里要填 AWS 项目的 id（proj_ 开头），不是项目名称");
+    const container = alert.closest(".form-submit-error");
+    expect(container).not.toBeNull();
+    await waitFor(() => expect(scrolled).toContain(container));
+    await waitFor(() => expect(document.activeElement).toBe(container));
   });
 
   // Testing an Anthropic Messages provider issues a real inference call, while

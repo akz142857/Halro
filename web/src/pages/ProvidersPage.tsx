@@ -388,6 +388,16 @@ function CredentialForm({
       onClose();
     },
   });
+  // Same reason as the provider form below: the rejection must reach the
+  // operator who clicked, not sit in a scrolled-away part of the modal.
+  const submitError = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!mutation.isError) return;
+    requestAnimationFrame(() => {
+      submitError.current?.scrollIntoView?.({ block: "center" });
+      submitError.current?.focus();
+    });
+  }, [mutation.isError, mutation.error]);
   const submit = (event: FormEvent) => {
     event.preventDefault();
     if (name.trim() && baseURL.trim() && (current || secret) && (!current || reauth.currentPassword)) mutation.mutate();
@@ -441,7 +451,9 @@ function CredentialForm({
             onChange={(event) => setSecret(event.target.value)}
           />
         </Field>
-        {mutation.isError && <ErrorState error={mutation.error} />}
+        {mutation.isError && (
+          <div ref={submitError} tabIndex={-1} className="form-submit-error"><ErrorState error={mutation.error} /></div>
+        )}
         {current && <ReauthFields values={reauth} onChange={setReauth} description={t("auth.stepUpSecurityControl")} />}
         <div className="form-actions">
           <button type="button" className="button ghost" onClick={onClose}>{t("common.cancel")}</button>
@@ -517,6 +529,19 @@ function ProviderForm({
     },
   });
   const dirty = useDirty({ name, type, profileID, baseURL, apiVersion, bedrockProjectID, maxConcurrency, enabled, capabilities, credentialID });
+  // The save button sits in a sticky footer while the form scrolls behind it,
+  // so a rejection renders into the part of the modal the operator is not
+  // looking at: the click appears to do nothing and they click again. Bring the
+  // failure into view and move focus onto it, so the reason is announced rather
+  // than merely present.
+  const submitError = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!mutation.isError) return;
+    requestAnimationFrame(() => {
+      submitError.current?.scrollIntoView?.({ block: "center" });
+      submitError.current?.focus();
+    });
+  }, [mutation.isError, mutation.error]);
   return (
     <Modal wide title={current ? t("providers.editProvider") : t("providers.createProvider")} dirty={dirty} onClose={onClose}>
       {credentials.length === 0 ? (
@@ -616,7 +641,9 @@ function ProviderForm({
           </Field>
             </div>
           </section>
-          {mutation.isError && <ErrorState error={mutation.error} />}
+          {mutation.isError && (
+            <div ref={submitError} tabIndex={-1} className="form-submit-error"><ErrorState error={mutation.error} /></div>
+          )}
           {/* Whether deployments may use this upstream is the state the save
               commits, so it belongs in the bar that commits it. */}
           <div className="form-actions sticky-form-actions">

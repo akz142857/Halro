@@ -67,6 +67,7 @@ export const enUS = {
     noDetectableBinding: "This capability interface cannot detect capabilities automatically. Use the advanced manual declaration.",
     bindingReferencedByDeployment: "A model deployment runs on this capability interface, so it cannot be switched off. Disable or delete the deployment named below first.",
     routeReferencedByProject: "This is the alias's last route, and a project still lets applications ask for it. Remove the alias from the project named below first.",
+    bedrockProjectIDInvalid: "That is not a Bedrock project ID. The field takes the project's id (it starts with proj_), not its name; you will find it in the project detail page or in the Projects API response. Leave it empty to use the account default project.",
     idempotencyConflict: "This confirmation was already used for a different request. Confirm the model again.",
     providerIdempotencyReplay: "This is not a conflicting edit: this request already created the Provider connection.",
     deploymentIdempotencyReplay: "This is not a conflicting edit: this request already created the model deployment.",

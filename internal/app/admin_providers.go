@@ -194,7 +194,7 @@ func (r *Runtime) createAdminProvider(writer http.ResponseWriter, request *http.
 	defer r.adminTopologyMu.Unlock()
 	instance, err := r.providerFromInput(request, providerID, input, "", nil, nil, now, now)
 	if err != nil {
-		adminBadRequest(writer, err.Error())
+		adminProviderInputError(writer, err)
 		return
 	}
 	intent, intentErr := r.newAdminAuditIntent(request, "provider.create", "provider", instance.ID)
@@ -260,7 +260,7 @@ func (r *Runtime) updateAdminProvider(writer http.ResponseWriter, request *http.
 	}
 	instance, err := r.providerFromInput(request, current.ID, input, current.ProfileID, currentEvidence, current.Bindings, current.CreatedAt, time.Now().UTC())
 	if err != nil {
-		adminBadRequest(writer, err.Error())
+		adminProviderInputError(writer, err)
 		return
 	}
 	if err := r.validateProviderCanDeactivate(request, instance.ID, instance.Enabled); err != nil {
@@ -855,6 +855,27 @@ func (r *Runtime) credentialFromInput(
 	return credential, credential.Validate()
 }
 
+// bedrockProjectIDError marks the one provider refusal an operator is most
+// likely to hit and least able to act on from a generic message: a value that
+// is not a Bedrock Project ID. Typed rather than matched on message text, so
+// the console can say what to do about it in the reader's own language.
+type bedrockProjectIDError struct{ err error }
+
+func (e bedrockProjectIDError) Error() string { return e.err.Error() }
+func (e bedrockProjectIDError) Unwrap() error { return e.err }
+
+// adminProviderInputError answers a rejected provider payload. Most refusals
+// are self-explanatory in context and stay code-less; the ones that are not
+// carry a stable code so the console can localise them.
+func adminProviderInputError(writer http.ResponseWriter, err error) {
+	var projectID bedrockProjectIDError
+	if errors.As(err, &projectID) {
+		adminBadRequestCode(writer, "bedrock_project_id_invalid", err.Error())
+		return
+	}
+	adminBadRequest(writer, err.Error())
+}
+
 func (r *Runtime) providerFromInput(
 	request *http.Request,
 	id string,
@@ -910,10 +931,12 @@ func (r *Runtime) providerFromInput(
 	// means one stored spelling for "the default" rather than two.
 	bedrockProjectID := domain.NormalizeBedrockProjectID(input.BedrockProjectID)
 	if err := domain.ValidateBedrockProjectID(bedrockProjectID); err != nil {
-		return domain.ProviderInstance{}, err
+		return domain.ProviderInstance{}, bedrockProjectIDError{err}
 	}
 	if bedrockProjectID != "" && profile.AccessSurface != domain.SurfaceBedrockMantle {
-		return domain.ProviderInstance{}, errors.New("bedrock project id is only valid on the Bedrock Mantle access surface")
+		return domain.ProviderInstance{}, bedrockProjectIDError{
+			errors.New("bedrock project id is only valid on the Bedrock Mantle access surface"),
+		}
 	}
 	instance := domain.ProviderInstance{
 		ID: id, Name: input.Name, Type: input.Type, BaseURL: input.BaseURL,

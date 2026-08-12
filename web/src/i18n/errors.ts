@@ -21,6 +21,7 @@ export function localizedError(t: TFunction, error: unknown) {
     // the detail is deliberately left visible underneath it.
     binding_referenced_by_deployment: "errors.bindingReferencedByDeployment",
     route_referenced_by_project: "errors.routeReferencedByProject",
+    bedrock_project_id_invalid: "errors.bedrockProjectIDInvalid",
     idempotency_conflict: "errors.idempotencyConflict",
     provider_idempotency_replay: "errors.providerIdempotencyReplay",
     deployment_idempotency_replay: "errors.deploymentIdempotencyReplay",

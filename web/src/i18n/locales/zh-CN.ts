@@ -67,6 +67,7 @@ export const zhCN = {
     noDetectableBinding: "当前能力接口不支持自动识别，请使用高级手动声明。",
     bindingReferencedByDeployment: "有模型部署正在这个能力接口上运行，所以它不能关闭。请先停用或删除下面这个部署。",
     routeReferencedByProject: "这是该别名最后一条路由，还有项目允许应用请求它。请先从下面这个项目的可用模型中移除该别名。",
+    bedrockProjectIDInvalid: "Bedrock 项目 ID 无效。这里要填 AWS 项目的 id（proj_ 开头），不是项目名称；在 Bedrock 控制台的项目详情或 Projects API 的返回里可以找到。留空则使用账户默认项目。",
     idempotencyConflict: "同一次确认已被用于不同请求，请重新确认模型。",
     providerIdempotencyReplay: "这不是编辑冲突：本次请求已经成功创建了服务商连接。",
     deploymentIdempotencyReplay: "这不是编辑冲突：本次请求已经成功创建了模型部署。",
