@@ -92,6 +92,7 @@ describe("deployment invocation target workflow", () => {
     vi.spyOn(api, "deployments").mockResolvedValue({ items: [], next_cursor: "" });
     vi.spyOn(api, "routes").mockResolvedValue({ items: [], next_cursor: "" });
     vi.spyOn(api, "invocationTargets").mockResolvedValue(catalog([chatTarget, unknown]));
+    vi.spyOn(api, "refreshInvocationTargets").mockResolvedValue(catalog([chatTarget, unknown]));
     vi.spyOn(api, "resolveInvocationTarget").mockImplementation(async (_providerID, targetID) => target(targetID, [], "unknown"));
   });
 
@@ -270,7 +271,7 @@ describe("deployment invocation target workflow", () => {
     await openCreate();
     await choose("GPT Future");
     expect(await screen.findByRole("button", { name: "识别能力" })).toBeEnabled();
-    expect(screen.getByText("最多 10 次低成本验证")).toBeVisible();
+    expect(screen.getByText("最多 10 次低成本验证。这些控制面调用不计入项目预算、Ledger 或用量统计。")).toBeVisible();
     expect(screen.getByRole("button", { name: "手动配置" })).toBeVisible();
     expect(screen.queryByLabelText("对话")).not.toBeInTheDocument();
   });
@@ -291,7 +292,7 @@ describe("deployment invocation target workflow", () => {
     expect(screen.queryByLabelText(/^调用接口/)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "识别能力" })).toBeEnabled();
 
-    fireEvent.click(screen.getByRole("button", { name: "识别能力" }));
+    await startDetection();
     await waitFor(() => expect(detect).toHaveBeenCalledOnce());
     expect(detect.mock.calls[0][1]).not.toHaveProperty("binding_id");
   });
@@ -314,7 +315,7 @@ describe("deployment invocation target workflow", () => {
     }));
     await openCreate();
     await choose("GPT Future");
-    fireEvent.click(screen.getByRole("button", { name: "识别能力" }));
+    await startDetection();
 
     const picker = await screen.findByLabelText(/^调用接口/);
     expect(within(picker as HTMLSelectElement).getAllByRole("option").map((option) => (option as HTMLOptionElement).value))
@@ -328,7 +329,7 @@ describe("deployment invocation target workflow", () => {
     ]);
 
     fireEvent.change(picker, { target: { value: "b-embed" } });
-    fireEvent.click(screen.getByRole("button", { name: "用这个接口继续识别" }));
+    await startDetection("用这个接口继续识别");
     await waitFor(() => expect(detect).toHaveBeenCalledTimes(2));
     expect(detect.mock.calls[1][1]).toMatchObject({ binding_id: "b-embed" });
   });
@@ -364,7 +365,7 @@ describe("deployment invocation target workflow", () => {
     await openCreate();
     await choose("GPT Future");
     expect(detect).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "识别能力" }));
+    await startDetection();
     await waitFor(() => expect(detect).toHaveBeenCalledOnce());
     // No interface is asserted on the way in; the detection result names it.
     expect(detect.mock.calls[0][0]).toBe(provider.id);
@@ -397,7 +398,7 @@ describe("deployment invocation target workflow", () => {
     await openCreate();
     fireEvent.change(screen.getByLabelText("部署名称"), { target: { value: "Cached detection" } });
     await choose("GPT Future");
-    fireEvent.click(screen.getByRole("button", { name: "识别能力" }));
+    await startDetection();
     expect(await screen.findByLabelText("对话")).toBeChecked();
     expect(screen.getByRole("button", { name: "保存为停用" })).toBeEnabled();
   });
@@ -407,7 +408,7 @@ describe("deployment invocation target workflow", () => {
     vi.spyOn(api, "createModelCapabilityDetection").mockImplementation(() => new Promise((resolve) => { resolveDetection = resolve; }));
     await openCreate();
     await choose("GPT Future");
-    fireEvent.click(screen.getByRole("button", { name: "识别能力" }));
+    await startDetection();
     await waitFor(() => expect(api.createModelCapabilityDetection).toHaveBeenCalledOnce());
     const oldSelection = (vi.mocked(api.createModelCapabilityDetection).mock.calls[0][1] as { selection_revision: string }).selection_revision;
     await choose("GPT Chat");
@@ -431,7 +432,7 @@ describe("deployment invocation target workflow", () => {
     }));
     await openCreate();
     await choose("GPT Future");
-    fireEvent.click(screen.getByRole("button", { name: "识别能力" }));
+    await startDetection();
     expect(await screen.findByText("仍无法确认模型能力")).toBeVisible();
     expect(screen.queryByRole("button", { name: "重新检测" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "手动配置" })).toBeVisible();
@@ -446,7 +447,7 @@ describe("deployment invocation target workflow", () => {
     }));
     await openCreate();
     await choose("GPT Future");
-    fireEvent.click(screen.getByRole("button", { name: "识别能力" }));
+    await startDetection();
     expect(await screen.findByText("服务商暂时无法完成验证")).toBeVisible();
     expect(screen.getByRole("link", { name: "前往服务商配置 →" })).toHaveAttribute("href", "/admin/providers");
     expect(screen.queryByRole("button", { name: "手动配置" })).not.toBeInTheDocument();
@@ -469,7 +470,7 @@ describe("deployment invocation target workflow", () => {
     }));
     await openCreate();
     await choose("GPT Future");
-    fireEvent.click(screen.getByRole("button", { name: "识别能力" }));
+    await startDetection();
 
     const card = (await screen.findByText("未能可靠识别能力")).closest(".notice")!;
     // Not "the model is broken" — what automatic verification can ask at all.
@@ -510,7 +511,7 @@ describe("deployment invocation target workflow", () => {
     const listbox = await screen.findByRole("listbox", { name: "可用模型" });
     expect(listbox.querySelector(".deployment-model-options-meta")).toHaveTextContent("可用 2 个模型");
     fireEvent.click(refresh);
-    await waitFor(() => expect(api.invocationTargets).toHaveBeenCalledWith(provider.id, "", true));
+    await waitFor(() => expect(api.refreshInvocationTargets).toHaveBeenCalledWith(provider.id));
   });
 
   it("keeps the model refresh control visible while the initial catalog is loading", async () => {
@@ -822,4 +823,14 @@ function renderPage(role: AdminRole = "administrator") {
     absolute_expires_at: "2026-08-08T00:00:00Z", idle_expires_at: "2026-08-07T01:00:00Z",
   } satisfies Session);
   return render(<QueryClientProvider client={queryClient}><DeploymentsPage /></QueryClientProvider>);
+}
+
+// Detection spends the operator's Provider credential, so the console asks who
+// is spending it before the call goes out. Every test that starts a detection
+// goes through the same two steps a person does.
+async function startDetection(label = "识别能力") {
+  fireEvent.click(screen.getByRole("button", { name: label }));
+  const dialog = await screen.findByRole("alertdialog");
+  fireEvent.change(within(dialog).getByLabelText("当前密码"), { target: { value: "a passphrase" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: label }));
 }

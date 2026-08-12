@@ -21,6 +21,10 @@ const (
 	StatusTemporarilyBlocked Status = "temporarily_blocked"
 )
 
+// ReasonPolicyUnavailable marks a refusal caused by the live snapshot not
+// holding the policy the Project names, as opposed to a limit being hit.
+const ReasonPolicyUnavailable = "token guard policy is unavailable"
+
 type Input struct {
 	PolicyID               string
 	ProjectID              string
@@ -308,7 +312,14 @@ func (m *Manager) admit(input Input, holdConcurrency bool) (Decision, *Lease) {
 	policy, ok := m.policies[input.PolicyID]
 	if !ok {
 		m.metadataMu.RUnlock()
-		return Decision{Allowed: true, Status: StatusNormal}, nil
+		// An empty ID means the Project has no policy. A named policy that is
+		// not in the live snapshot is a different thing: admitting
+		// unconditionally would run none of the limits the Project is supposed
+		// to be under, while reporting a normal decision.
+		if input.PolicyID == "" {
+			return Decision{Allowed: true, Status: StatusNormal}, nil
+		}
+		return Decision{Allowed: false, Status: StatusNormal, Reason: ReasonPolicyUnavailable}, nil
 	}
 	key := input.ProjectID + ":" + input.KeyID
 	current := m.subjects[key]
@@ -318,7 +329,10 @@ func (m *Manager) admit(input Input, holdConcurrency bool) (Decision, *Lease) {
 		policy, ok = m.policies[input.PolicyID]
 		if !ok {
 			m.metadataMu.Unlock()
-			return Decision{Allowed: true, Status: StatusNormal}, nil
+			if input.PolicyID == "" {
+				return Decision{Allowed: true, Status: StatusNormal}, nil
+			}
+			return Decision{Allowed: false, Status: StatusNormal, Reason: ReasonPolicyUnavailable}, nil
 		}
 		current = m.subjects[key]
 		if current == nil || current.policyID != policy.ID || current.policyRevision != policy.Revision {

@@ -312,6 +312,7 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 		map[string]any{
 			"name": "OpenAI production", "type": "openai",
 			"base_url": "https://api.openai.com", "secret": "rotated-provider-secret-canary",
+			"current_password": "correct horse battery staple",
 		},
 	)
 	if rotationResponse.Code != http.StatusOK ||
@@ -379,13 +380,19 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime.providers.Replace(nextRegistry)
-	for index, path := range []string{
-		"/admin/api/v1/providers/" + instance.ID + "/invocation-targets",
-		"/admin/api/v1/providers/" + instance.ID + "/invocation-targets",
-		"/admin/api/v1/providers/" + instance.ID + "/invocation-targets?refresh=true",
+	for index, step := range []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/admin/api/v1/providers/" + instance.ID + "/invocation-targets"},
+		{http.MethodGet, "/admin/api/v1/providers/" + instance.ID + "/invocation-targets"},
+		{http.MethodPost, "/admin/api/v1/providers/" + instance.ID + "/invocation-targets"},
 	} {
-		request := adminRequest(t, http.MethodGet, path, nil)
+		request := adminRequest(t, step.method, step.path, nil)
 		request.AddCookie(cookie)
+		if step.method == http.MethodPost {
+			request.Header.Set("X-CSRF-Token", csrf)
+		}
 		response := httptest.NewRecorder()
 		runtime.adminRouter().ServeHTTP(response, request)
 		if response.Code != http.StatusOK {
@@ -584,6 +591,8 @@ func TestAdminCredentialViewPreservesBedrockBoundBaseURLForRotation(t *testing.T
 			rotated := performAdminMutation(t, runtime, cookie, csrf, http.MethodPut, "/admin/api/v1/credentials/"+view.ID, `"1"`, map[string]any{
 				"name": test.name, "type": "bedrock", "base_url": view.BoundBaseURL,
 				"access_surface": test.surface, "scheme": test.scheme, "secret": "rotated-secret",
+				// Replacing credential material carries step-up, like deleting it.
+				"current_password": "correct horse battery staple",
 			})
 			if rotated.Code != http.StatusOK {
 				t.Fatalf("rotate status=%d body=%s", rotated.Code, rotated.Body.String())
@@ -1044,6 +1053,65 @@ func TestProviderRefusesToSwitchOffAnInterfaceADeploymentRunsOn(t *testing.T) {
 		if !binding.Enabled {
 			t.Fatalf("binding %q was switched off by a refused edit", binding.ID)
 		}
+	}
+}
+
+func TestOmittingAReferencedBindingIsRefusedLikeSwitchingItOff(t *testing.T) {
+	runtime, bootstrap, session := verifyingProviderRuntime(t)
+	instance, err := runtime.store.GetProvider(context.Background(), bootstrap.ProviderID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chat := instance.EffectiveProfileBindings()[0]
+	media := chat
+	media.ID = domain.DefaultProviderProfileBindingID(instance.ID, domain.ProfileOpenAIMediaResources)
+	media.ProfileID = domain.ProfileOpenAIMediaResources
+	media.Capabilities = domain.DefaultProviderCapabilitiesForProfile(domain.ProviderOpenAI, media.ProfileID)
+	media.CapabilityEvidence = domain.EvidenceForCapabilities(media.Capabilities, domain.EvidenceDeclared)
+	body := map[string]any{
+		"name": instance.Name, "type": instance.Type, "base_url": instance.BaseURL,
+		"credential_id": instance.CredentialID, "max_concurrency": instance.MaxConcurrency,
+		"enabled": true, "bindings": []domain.ProviderProfileBinding{media},
+	}
+	request := adminMutationRequest(t, http.MethodPut, "/admin/api/v1/providers/"+instance.ID, session, body)
+	request.Header.Set("If-Match", revisionETag(instance.Revision))
+	response := httptest.NewRecorder()
+	runtime.adminRouter().ServeHTTP(response, request)
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "binding_referenced_by_deployment") {
+		t.Fatalf("omitted referenced binding status=%d body=%s", response.Code, response.Body.String())
+	}
+	stored, err := runtime.store.GetProvider(context.Background(), instance.ID)
+	if err != nil || stored.Revision != instance.Revision {
+		t.Fatalf("refused omission changed provider revision=%d err=%v", stored.Revision, err)
+	}
+}
+
+func TestEmptyBindingsAreRefusedBeforeLegacyFallback(t *testing.T) {
+	runtime, bootstrap, session := verifyingProviderRuntime(t)
+	instance, err := runtime.store.GetProvider(context.Background(), bootstrap.ProviderID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := map[string]any{
+		"name": instance.Name, "type": instance.Type, "base_url": instance.BaseURL,
+		"credential_id": instance.CredentialID, "max_concurrency": instance.MaxConcurrency,
+		"enabled": instance.Enabled, "bindings": []domain.ProviderProfileBinding{},
+		"profile_id": instance.ProfileID, "access_surface": instance.AccessSurface,
+		"credential_scheme": instance.CredentialScheme, "capabilities": instance.Capabilities,
+	}
+	request := adminMutationRequest(t, http.MethodPut, "/admin/api/v1/providers/"+instance.ID, session, body)
+	request.Header.Set("If-Match", revisionETag(instance.Revision))
+	response := httptest.NewRecorder()
+	runtime.adminRouter().ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "at least one profile binding") {
+		t.Fatalf("empty bindings status=%d body=%s", response.Code, response.Body.String())
+	}
+	stored, err := runtime.store.GetProvider(context.Background(), instance.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Revision != instance.Revision || len(stored.EffectiveProfileBindings()) == 0 {
+		t.Fatalf("empty binding refusal changed provider: %#v", stored)
 	}
 }
 

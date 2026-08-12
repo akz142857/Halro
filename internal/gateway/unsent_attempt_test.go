@@ -2,10 +2,12 @@ package gateway
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"testing"
 
 	"github.com/akz142857/Halro/internal/provider"
+	"github.com/akz142857/Halro/internal/safetransport"
 	"github.com/akz142857/Halro/internal/semantic"
 )
 
@@ -73,5 +75,42 @@ func TestAttemptThatReachedTheProviderStillStopsAndSettles(t *testing.T) {
 	)
 	if !settlement.TokenEstimated {
 		t.Fatalf("an attempt that may have executed upstream was not settled: %#v", settlement)
+	}
+}
+
+// policyRefusedConnection is the error an adapter produces when SafeTransport
+// declines to dial at all — a Provider base URL resolving inside the network
+// while private endpoints are off refuses every request this way.
+func policyRefusedConnection() error {
+	cause := fmt.Errorf("outbound host %q: %w: %w", "api.internal",
+		safetransport.ErrRefusedBeforeSend, errors.New("address 10.0.0.5 is not allowed"))
+	return &provider.Error{
+		Class:     provider.ErrorConnect,
+		Retryable: true,
+		Ambiguous: !provider.Unsent(cause),
+		Message:   "provider request failed",
+		Cause:     cause,
+	}
+}
+
+// Our own refusal used to be the worst-classified failure in the system: a real
+// dial failure carries *net.OpError and was recognised as unsent, while the case
+// where this process guaranteed nothing left it arrived as a plain error and was
+// recorded as possibly-executed. That charged the project a whole estimated
+// completion for a request no socket ever carried, and stopped the route from
+// failing over to a deployment that works.
+func TestProviderRefusedByPolicyFailsOverAndIsNotBilled(t *testing.T) {
+	if !retryable(policyRefusedConnection()) {
+		t.Fatal("a connection this gateway refused itself did not fail over to the next deployment")
+	}
+	settlement := settlementForResult(
+		semantic.GenerateResult{}, policyRefusedConnection(),
+		1_000, 2_000, provider.Target{}, 5_000,
+	)
+	if settlement.ProviderInputTokens != 0 || settlement.ProviderOutputTokens != 0 {
+		t.Fatalf("a request refused before dialling was billed for tokens: %#v", settlement)
+	}
+	if settlement.TokenEstimated || settlement.CostEstimated {
+		t.Fatalf("a request refused before dialling produced an estimated charge: %#v", settlement)
 	}
 }

@@ -265,6 +265,26 @@ JSON result. Start and validate the restored server before deleting that
 rollback directory. In File mode, `storage.master_key.file` must be outside `storage.data_dir`
 because the Master Key is intentionally never packaged in a backup.
 
+The result also reports `schema_version_before` from the authenticated backup
+manifest and `schema_version_after` from the staged database after migration.
+When they differ, the CLI prints the transition to stderr before the JSON
+result; the migrated directory must not be opened with the older binary.
+
+`restored_enabled_gateway_key_count` and
+`restored_enabled_gateway_key_ids` identify every Gateway Key whose enabled
+flag was restored. Treat this as a mandatory revocation review: a backup from
+before a compromise response can restore a key that was disabled later. Before
+accepting traffic, compare every listed ID with the incident/revocation ledger
+and immediately revoke anything that must not return to service. Key IDs are
+not secrets; plaintext Gateway Keys and hashes are never printed.
+
+If restore rejects a historical archive because its Master Key differs, the
+error shows shortened configured and manifest fingerprint prefixes and tells
+which key generation to configure. For File mode, stop Halro, point
+`storage.master_key.file` at the retired key recorded for that archive, and
+retry the complete restore. Never copy only the old database or key into the
+live directory.
+
 After restore, run the following before accepting traffic:
 
 ```bash

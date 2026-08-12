@@ -36,6 +36,9 @@ if grep -En '(^|[[:space:]])ports:|0\.0\.0\.0|host\.docker\.internal|169\.254\.1
   exit 1
 fi
 
+# Pins the Watchdog route's re-notify cadence only. The dead-man delivery budget
+# is derived from that route's group_interval in smoke.sh — do not re-derive it
+# from repeat_interval, which is the knob that produced the wrong budget before.
 grep -Eq 'repeat_interval: 1m' "$observability/alertmanager/alertmanager.yml"
 for label in environment region cluster; do
   grep -Eq "^[[:space:]]+$label:" "$observability/prometheus/prometheus.yml"

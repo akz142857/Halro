@@ -203,6 +203,43 @@ describe("design system themes", () => {
     expect(below, `font sizes below ${typeFloorPx}px: ${below.join(" | ")}`).toEqual([]);
   });
 
+  // Body and control text must use the six-level type scale. A small explicit
+  // allowlist keeps display headlines and glyph-only marks reviewable without
+  // pretending their responsive/art-directed sizes are ordinary body tokens.
+  // Adding an exception is therefore a design-system decision in this test,
+  // not a literal that can arrive unnoticed in business CSS.
+  const nonScaleTypeAllowlist = new Map<string, string[]>([
+    ["h1", ["font-size:clamp(32px, 4vw, 42px)"]],
+    [".brand strong", ["font:var(--font-weight-bold) 14px/1.2 var(--mono)"]],
+    [".metric strong", ["font:var(--font-weight-medium) clamp(20px, 2vw, 30px)/1 var(--mono)"]],
+    [".custody-summary-primary h2", ["font-size:25px"]],
+    [".system-card h3", ["font-size:20px"]],
+    [".login-story h1", ["font-size:clamp(34px, 4.2vw, 46px)"]],
+    [".login-story > div > p:last-child", ["font-size:16px"]],
+    [".login-panel h2", ["font-size:34px"]],
+    [".count", ["font:20px var(--mono)"]],
+    [".empty-mark", ["font:20px var(--mono)"]],
+    [".first-run-action-arrow", ["font:var(--font-weight-medium) 1rem/1 var(--mono)"]],
+  ]);
+
+  it("keeps business font sizes on type tokens or the reviewed allowlist", () => {
+    const styles = read("./styles.css");
+    const offenders: string[] = [];
+    for (const rule of styles.matchAll(/([^{}]+)\{([^}]*)\}/g)) {
+      const selector = rule[1].trim();
+      for (const declaration of rule[2].matchAll(/(?:^|;)\s*(font(?:-size)?)\s*:\s*([^;]+)/g)) {
+        const property = declaration[1];
+        const value = declaration[2].trim();
+        if (value === "inherit" || value.includes("var(--font-size-")) continue;
+        const normalized = `${property}:${value}`;
+        if (!(nonScaleTypeAllowlist.get(selector) ?? []).includes(normalized)) {
+          offenders.push(`${selector} { ${normalized} }`);
+        }
+      }
+    }
+    expect(offenders, `unreviewed type sizes:\n${offenders.join("\n")}`).toEqual([]);
+  });
+
   // 400/500/600/800 are the four weights the system has. The stylesheet also
   // carried 650, 700, 750 and 900, written by hand at individual call sites.
   // 650 is the instructive one: it renders here because the macOS system face is

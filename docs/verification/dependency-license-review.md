@@ -1,40 +1,98 @@
 # Dependency and License Review
 
-Date: 2026-07-31
+Date: 2026-08-11
 
-Halro is distributed under Apache-2.0. The source tree includes the exact
-project license in `LICENSE`, required attribution in `NOTICE`, and the runtime
-dependency inventory in `THIRD_PARTY_NOTICES.md`. Release archives and the
-container image carry these files together with a versioned SPDX SBOM.
+Halro is distributed under Apache-2.0. The source tree includes the project
+license in `LICENSE`, required attribution in `NOTICE`, and the runtime
+inventory in `THIRD_PARTY_NOTICES.md`. Release archives and the container carry
+those files together with a versioned SPDX SBOM.
 
-The single binary has five direct Go dependencies. The embedded admin UI has seven runtime npm dependencies; build/test dependencies are not shipped as separately executable services.
+The root module currently declares 12 direct Go dependencies. Eleven are linked
+into the `halro` runtime; `github.com/google/jsonschema-go` is used by tests and
+release validation only. The embedded Admin UI has 11 direct runtime npm
+dependencies. Versions below are the exact versions pinned by the reviewed
+module and lock files.
 
-## Go runtime dependencies
+## Go direct dependencies
 
-| Module | Version | License |
+| Module | Version | License | Distribution scope |
+|---|---:|---|---|
+| `github.com/aws/aws-sdk-go-v2` | 1.43.3 | Apache-2.0 | runtime |
+| `github.com/aws/aws-sdk-go-v2/config` | 1.32.34 | Apache-2.0 | runtime |
+| `github.com/aws/aws-sdk-go-v2/credentials` | 1.19.33 | Apache-2.0 | runtime |
+| `github.com/aws/aws-sdk-go-v2/service/kms` | 1.55.3 | Apache-2.0 | runtime |
+| `github.com/aws/smithy-go` | 1.27.6 | Apache-2.0 | runtime |
+| `github.com/go-chi/chi/v5` | 5.3.1 | MIT | runtime |
+| `github.com/google/jsonschema-go` | 0.4.3 | MIT | test/release tooling |
+| `github.com/parquet-go/parquet-go` | 0.30.1 | Apache-2.0 | runtime |
+| `go.etcd.io/bbolt` | 1.5.0 | MIT | runtime |
+| `golang.org/x/crypto` | 0.54.0 | BSD-3-Clause | runtime |
+| `golang.org/x/sys` | 0.47.0 | BSD-3-Clause | runtime |
+| `gopkg.in/yaml.v3` | 3.0.1 | MIT and Apache-2.0 | runtime |
+
+The AWS KMS custody path is part of this review. The linked AWS SDK config and
+credential modules can resolve environment, shared-file, web-identity,
+ECS/container, and EC2 IMDS workload credentials when Key Slot mode creates the
+AWS adapter. File-mode startup is separately tested not to initialize the AWS
+SDK or perform cloud calls. The SDK and smithy NOTICE text is carried in the
+root `NOTICE`; all exact runtime modules, including transitive parquet helpers,
+are listed in `THIRD_PARTY_NOTICES.md` and the release SBOM.
+
+Resolved Go runtime modules were checked from the module cache. Licenses are
+permissive MIT, BSD, or Apache-2.0; no GPL, AGPL, LGPL, MPL, SSPL, or BUSL module
+is linked into the Go runtime.
+
+## Admin UI direct runtime dependencies
+
+| Package | Version | License |
 |---|---:|---|
-| `github.com/go-chi/chi/v5` | 5.2.2 | MIT |
-| `github.com/parquet-go/parquet-go` | 0.25.1 | Apache-2.0 |
-| `go.etcd.io/bbolt` | 1.4.0 | MIT |
-| `golang.org/x/crypto` | 0.32.0 | BSD-3-Clause |
-| `gopkg.in/yaml.v3` | 3.0.1 | MIT and Apache-2.0 |
+| `@hookform/resolvers` | 5.7.1 | MIT |
+| `@tanstack/react-query` | 5.101.4 | MIT |
+| `@tanstack/react-table` | 8.21.3 | MIT |
+| `i18next` | 26.3.6 | MIT |
+| `qrcode` | 1.5.4 | MIT |
+| `react` | 19.2.8 | MIT |
+| `react-dom` | 19.2.8 | MIT |
+| `react-hook-form` | 7.84.0 | MIT |
+| `react-i18next` | 17.0.11 | MIT |
+| `uplot` | 1.6.32 | MIT |
+| `zod` | 4.4.3 | MIT |
 
-Transitive Go dependencies use permissive MIT, BSD, or Apache-2.0 terms. Their license files were inspected from the resolved module cache. No GPL/AGPL/copyleft runtime dependency was found.
+The Admin UI lockfile contains no CC-BY package. Its 12 MPL-2.0 entries are
+`lightningcss` 1.33.0 plus eleven platform-specific optional binaries. They are
+dev-only CSS build tooling and are not present in the generated Admin UI bundle
+or final container. Source and build environments still retain their upstream
+license metadata; this review does not relabel them as runtime dependencies.
 
-## Admin UI runtime dependencies
-
-React, React DOM, React Hook Form, Zod, TanStack Query/Table, the hook-form resolver, uPlot, and the locally bundled `qrcode` enrollment renderer declare MIT licenses. The lockfile also contains permissive MIT, BSD, ISC, Apache-2.0, BlueOak, CC0, and CC-BY metadata for build/test/browser-data packages. No GPL/AGPL runtime package was found.
+The independent packages under `tests/compatibility/` install official SDK test
+clients in CI. They are excluded from the embedded Admin UI inventory and are
+not copied into release archives or the runtime container. Their lock files and
+licenses remain part of the source/CI dependency surface and the corresponding
+SDK jobs continue to audit them.
 
 ## Distribution requirements
 
-- Preserve the project license plus dependency copyright/license notices in binary archives and container images.
-- Include Apache-2.0 notices for Parquet and the Apache-covered portions of YAML.
-- Preserve attribution for generated browser compatibility data where applicable to source distributions.
-- Generate an SBOM from the final, clean release tree; this review is not a substitute for the release SBOM.
-- Repeat the inventory whenever `go.mod`, `go.sum`, `package.json`, or `package-lock.json` changes.
+- Preserve the project license plus dependency copyright/license notices in
+  binary archives and container images.
+- Carry the AWS SDK for Go and smithy-go upstream NOTICE text, plus Apache-2.0
+  notices for Parquet and Apache-covered YAML portions.
+- Generate the SPDX SBOM from the final clean release tree; this review is not
+  a substitute for the artifact-specific SBOM.
 - Keep `LICENSE`, `NOTICE`, and `THIRD_PARTY_NOTICES.md` in every binary archive
-  and container image; the release and repository-hygiene gates enforce this.
+  and container image.
+- Repeat this review whenever any dependency input below changes.
 
-## Automated checks
+## Drift gate
 
-CI runs `govulncheck` and `npm audit`. License compatibility is reviewed from pinned module/package metadata; final archives still require an SBOM and bundled notice verification.
+CI runs `scripts/check-dependency-license-review.sh`. These are Git blob hashes
+of the reviewed dependency inputs; a dependency change cannot pass until this
+document is deliberately refreshed with the new inventory and hashes.
+
+- `go.mod`: `94754ae7811c1d49169a8beeafc01a15f49b9020`
+- `go.sum`: `c09f554dd6640d84b73b8d51f8945eae1bc3bc19`
+- `web/package.json`: `6a5b59d3144e55b40a8e48b9a478d300482de29e`
+- `web/package-lock.json`: `09490f443fe210e4fcf76b05a68262325519345e`
+
+CI also runs `govulncheck`, npm audits, bundle scanning, repository notice
+checks, and artifact SBOM generation. Those checks complement license review;
+none individually replaces it.

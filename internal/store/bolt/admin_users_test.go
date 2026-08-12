@@ -112,3 +112,45 @@ func TestDeleteAdminUserRejectsRevisionConflictAndMissingUser(t *testing.T) {
 		t.Fatalf("err=%v, want ErrNotFound", err)
 	}
 }
+
+func TestAdminUserMutationsCommitTheirAuditIntentAtomically(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	now := time.Now().UTC()
+	if _, err := store.CreateFirstAdmin(ctx, testAdminUser("admin", domain.AdminRoleAdministrator, now)); err != nil {
+		t.Fatal(err)
+	}
+
+	viewer := testAdminUser("viewer", domain.AdminRoleReadOnly, now)
+	created, err := store.PutAdminUserWithAuditIntent(ctx, viewer, 0, adminIntent("aud_user_create", "admin_user.create", "admin_user", viewer.Username))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, err := store.ListPendingAdminAuditIntents(ctx)
+	if err != nil || len(pending) != 1 || pending[0].EventID != "aud_user_create" {
+		t.Fatalf("create intent=%#v err=%v", pending, err)
+	}
+
+	if err := store.DeleteAdminUserWithAuditIntent(ctx, created.Username, created.Revision+1, adminIntent("aud_refused", "admin_user.delete", "admin_user", created.Username)); !errors.Is(err, ErrRevisionConflict) {
+		t.Fatalf("stale delete error=%v", err)
+	}
+	pending, err = store.ListPendingAdminAuditIntents(ctx)
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("refused delete changed intents=%#v err=%v", pending, err)
+	}
+	if _, err := store.GetAdminUser(ctx, created.Username); err != nil {
+		t.Fatalf("refused delete removed user: %v", err)
+	}
+
+	if err := store.DeleteAdminUserWithAuditIntent(ctx, created.Username, created.Revision, adminIntent("aud_user_delete", "admin_user.delete", "admin_user", created.Username)); err != nil {
+		t.Fatal(err)
+	}
+	pending, err = store.ListPendingAdminAuditIntents(ctx)
+	if err != nil || len(pending) != 2 || pending[1].EventID != "aud_user_delete" {
+		t.Fatalf("delete intent=%#v err=%v", pending, err)
+	}
+}

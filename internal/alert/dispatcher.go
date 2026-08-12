@@ -101,16 +101,26 @@ type Dispatcher struct {
 	delivered     atomic.Uint64
 	failed        atomic.Uint64
 	dropped       atomic.Uint64
+	healthMu      sync.RWMutex
+	unhealthy     map[string]bool
+	lastDelivered time.Time
+	lastFailed    time.Time
 	observerMu    sync.RWMutex
 	observer      func(DeliveryResult)
 }
 
 type Stats struct {
-	Accepted  uint64
-	Delivered uint64
-	Failed    uint64
-	Dropped   uint64
-	Queued    int
+	Accepted           uint64
+	Delivered          uint64
+	Failed             uint64
+	Dropped            uint64
+	Queued             int
+	QueueCapacity      int
+	Endpoints          int
+	UnhealthyEndpoints int
+	UnknownEndpoints   int
+	LastDeliveredAt    *time.Time `json:",omitempty"`
+	LastFailedAt       *time.Time `json:",omitempty"`
 }
 
 type SubmissionStatus string
@@ -172,6 +182,7 @@ func (d *Dispatcher) TestEndpoint(id string, event Event) (DeliveryResult, error
 			errors.New("alert endpoint is not active")
 	}
 	result := d.deliver(event, selected)
+	d.recordDeliveryState(result)
 	d.notify(result)
 	if result.Outcome != "success" {
 		return result, errors.New("alert endpoint delivery failed")
@@ -194,6 +205,7 @@ func New(config Config, endpoints []Endpoint) (*Dispatcher, error) {
 		shutdown:      make(chan struct{}),
 		deliverySlots: make(chan struct{}, config.MaxConcurrentDeliveries),
 		lastSent:      make(map[string]time.Time),
+		unhealthy:     make(map[string]bool),
 	}, nil
 }
 
@@ -272,14 +284,74 @@ func (d *Dispatcher) ReplaceEndpoints(endpoints []Endpoint) []Endpoint {
 	previous := d.endpoints
 	d.endpoints = endpoints
 	d.endpointsMu.Unlock()
+	active := make(map[string]struct{}, len(endpoints))
+	for index := range endpoints {
+		active[endpoints[index].ID] = struct{}{}
+	}
+	d.healthMu.Lock()
+	for id := range d.unhealthy {
+		if _, exists := active[id]; !exists {
+			delete(d.unhealthy, id)
+		}
+	}
+	d.healthMu.Unlock()
 	return previous
 }
 
 func (d *Dispatcher) Stats() Stats {
+	d.endpointsMu.RLock()
+	endpointIDs := make([]string, 0, len(d.endpoints))
+	for index := range d.endpoints {
+		endpointIDs = append(endpointIDs, d.endpoints[index].ID)
+	}
+	d.endpointsMu.RUnlock()
+	d.healthMu.RLock()
+	unhealthyCount := 0
+	observedCount := 0
+	for _, id := range endpointIDs {
+		if unhealthy, observed := d.unhealthy[id]; observed {
+			observedCount++
+			if unhealthy {
+				unhealthyCount++
+			}
+		}
+	}
+	var lastDeliveredAt, lastFailedAt *time.Time
+	if !d.lastDelivered.IsZero() {
+		value := d.lastDelivered
+		lastDeliveredAt = &value
+	}
+	if !d.lastFailed.IsZero() {
+		value := d.lastFailed
+		lastFailedAt = &value
+	}
+	d.healthMu.RUnlock()
 	return Stats{
 		Accepted: d.accepted.Load(), Delivered: d.delivered.Load(),
 		Failed: d.failed.Load(), Dropped: d.dropped.Load(), Queued: len(d.queue),
+		QueueCapacity: d.config.QueueCapacity, Endpoints: len(endpointIDs),
+		UnhealthyEndpoints: unhealthyCount, UnknownEndpoints: len(endpointIDs) - observedCount,
+		LastDeliveredAt: lastDeliveredAt, LastFailedAt: lastFailedAt,
 	}
+}
+
+func (d *Dispatcher) recordDeliveryState(result DeliveryResult) {
+	if result.EndpointID == "" {
+		return
+	}
+	occurredAt := result.OccurredAt
+	if occurredAt.IsZero() {
+		occurredAt = time.Now().UTC()
+	}
+	d.healthMu.Lock()
+	if result.Outcome == "success" {
+		d.unhealthy[result.EndpointID] = false
+		d.lastDelivered = occurredAt
+	} else {
+		d.unhealthy[result.EndpointID] = true
+		d.lastFailed = occurredAt
+	}
+	d.healthMu.Unlock()
 }
 
 func (d *Dispatcher) worker() {
@@ -301,6 +373,7 @@ func (d *Dispatcher) worker() {
 				defer fanOut.Done()
 				defer func() { <-d.deliverySlots }()
 				result := d.deliver(event, endpoint)
+				d.recordDeliveryState(result)
 				if result.Outcome == "success" {
 					d.delivered.Add(1)
 				} else {

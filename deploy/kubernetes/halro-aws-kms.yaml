@@ -23,7 +23,9 @@ spec:
       serviceAccountName: halro
       automountServiceAccountToken: false
       enableServiceLinks: false
-      terminationGracePeriodSeconds: 60
+      # The default server.shutdown_timeout is 120s. Leave process and
+      # container-runtime cleanup headroom beyond Halro's own drain budget.
+      terminationGracePeriodSeconds: 150
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
@@ -32,6 +34,9 @@ spec:
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: halro
+          # Halro 1.0.0 has no official registry. Load the signed release image
+          # archive, push it to an operator-controlled registry, and replace
+          # both OWNER and REPLACE_WITH_REVIEWED_DIGEST before deployment.
           image: ghcr.io/OWNER/halro@sha256:REPLACE_WITH_REVIEWED_DIGEST
           args: ["start", "--config", "/etc/halro/config.yaml"]
           ports:
@@ -50,13 +55,13 @@ spec:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities: {drop: ["ALL"]}
-          # Admin password verification runs Argon2id at 64 MiB per concurrent
-          # check, and nothing bounds how many run at once, so the memory limit
-          # is also a cap on how many simultaneous logins or step-ups the pod
-          # survives: at 512Mi, roughly eight. With replicas fixed at 1 and a
-          # Recreate strategy, an OOMKill here takes the gateway with it. Size
-          # this as (baseline + 64Mi x expected concurrent credential checks)
-          # rather than by steady-state usage, which is far lower.
+          # Admin password verification runs Argon2id at 64 MiB per operation.
+          # Halro admits at most two Argon2 operations process-wide, so this
+          # part of the working set is bounded at about 128 MiB and additional
+          # login or step-up requests wait for a slot. With replicas fixed at 1
+          # and a Recreate strategy, an OOMKill still takes the gateway with it;
+          # size this above the observed baseline plus that 128 MiB bound rather
+          # than by steady-state usage alone.
           resources:
             requests: {cpu: 100m, memory: 128Mi}
             limits: {memory: 1Gi}

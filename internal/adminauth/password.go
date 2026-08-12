@@ -20,7 +20,29 @@ const (
 	passwordHashSize = 32
 	minPasswordChars = 8
 	maxPasswordBytes = 1024
+	// Each Argon2 invocation allocates argonMemoryKiB (64 MiB). Keep the
+	// process-wide working set bounded across login, step-up, dummy verification,
+	// and password creation; callers wait for a slot instead of allocating an
+	// unbounded number of blocks under a multi-source login storm.
+	argonHashConcurrency = 2
 )
+
+var argonHashSlots = make(chan struct{}, argonHashConcurrency)
+
+// derivePasswordKey waits for a slot with no deadline, which is a deliberate
+// trade the memory bound buys: a login storm now shows up as queueing latency on
+// the Admin login path instead of unbounded heap growth, and the goroutine is
+// held for the wait (the Admin server sets no write timeout, so nothing else
+// cuts it short). The arrival rate is bounded per source by `admin.login_rpm`
+// (5/min), not globally. A deadline here would answer the storm by failing
+// legitimate operator logins, which is the worse of the two, so 1.0.0 accepts
+// the queue. Revisit if the Admin surface is ever exposed to an untrusted
+// network, where shedding beats queueing.
+func derivePasswordKey(password, salt []byte, iterations, memoryKiB uint32, parallelism uint8, size uint32) []byte {
+	argonHashSlots <- struct{}{}
+	defer func() { <-argonHashSlots }()
+	return argon2.IDKey(password, salt, iterations, memoryKiB, parallelism, size)
+}
 
 func NewUser(username string, password []byte, role string, now time.Time) (domain.AdminUser, error) {
 	if !utf8.Valid(password) {
@@ -36,7 +58,7 @@ func NewUser(username string, password []byte, role string, now time.Time) (doma
 	if _, err := rand.Read(salt); err != nil {
 		return domain.AdminUser{}, err
 	}
-	hash := argon2.IDKey(password, salt, argonIterations, argonMemoryKiB, argonParallelism, passwordHashSize)
+	hash := derivePasswordKey(password, salt, argonIterations, argonMemoryKiB, argonParallelism, passwordHashSize)
 	user := domain.AdminUser{
 		Username: username, Role: role, Appearance: domain.AppearanceDark, PasswordVersion: passwordVersion,
 		PasswordSalt: salt, PasswordHash: hash, ArgonMemoryKiB: argonMemoryKiB,
@@ -71,7 +93,7 @@ func VerifyPassword(user domain.AdminUser, password []byte) bool {
 		len(user.PasswordSalt) < passwordSaltSize || len(user.PasswordHash) != passwordHashSize {
 		return false
 	}
-	candidate := argon2.IDKey(
+	candidate := derivePasswordKey(
 		password,
 		user.PasswordSalt,
 		user.ArgonIterations,
@@ -93,7 +115,7 @@ func PasswordNeedsUpgrade(user domain.AdminUser) bool {
 
 func DummyVerify(password []byte) {
 	salt := []byte("halro-dummy!!")
-	candidate := argon2.IDKey(
+	candidate := derivePasswordKey(
 		password, salt, argonIterations, argonMemoryKiB, argonParallelism, passwordHashSize,
 	)
 	clear(candidate)

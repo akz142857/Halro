@@ -1,7 +1,9 @@
-# Gateway idempotency contract
+# Idempotency contract
+
+## Data-plane requests
 
 `Idempotency-Key` is an optional future-safe retry contract for chat completions
-and embeddings. Clients that omit it retain existing behavior.
+and embeddings. Data-plane clients that omit it retain existing behavior.
 
 - Keys are scoped to the authenticated Project, not globally.
 - A key is 1 to 128 visible ASCII characters and must not contain whitespace.
@@ -20,3 +22,23 @@ and embeddings. Clients that omit it retain existing behavior.
 The initial durable store is a Standalone primitive. Runtime endpoint adoption
 requires a separately reviewed API change so the current OpenAI compatibility
 contract does not change accidentally before v1.
+
+## Admin create requests
+
+`Idempotency-Key` is required on the Admin create endpoints for Providers,
+Deployments, Routes, Projects, and Gateway Keys. A key is scoped to the
+authenticated administrator and resource kind, may contain up to 256 bytes,
+and is used to derive the server-side record ID. This is intentionally a
+different contract from the data-plane 1–128 visible-ASCII key above.
+
+- A missing, empty, or over-256-byte key returns `400
+  idempotency_key_required` before mutation.
+- Retrying a request whose first attempt committed returns `409
+  <resource>_idempotency_replay` with the existing `id`. The server does not
+  claim the current request created or replay the stored representation; the
+  original body may differ under a reused key.
+- A different key represents a deliberate second create and derives a different
+  record ID.
+- Gateway Key plaintext is shown only in the first successful response. A 409
+  replay can identify the existing key but cannot recover its plaintext; revoke
+  and issue a new key if the first response was lost.

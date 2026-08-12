@@ -8,21 +8,30 @@ import { useTranslation } from "react-i18next";
 import { useAppearance } from "./theme";
 import { useAccountingTimeZone } from "./timezone";
 
-/**
- * Reads the semantic chart tokens from the design system. uPlot draws to a
- * canvas, so it can't inherit CSS variables — we resolve them at build time and
- * re-run when the appearance changes (PRD §8.3). Fallbacks keep charts legible
- * if a token is ever missing.
- */
 function readChartTokens(host: HTMLElement) {
   const style = getComputedStyle(host);
   const read = (name: string, fallback: string) => style.getPropertyValue(name).trim() || fallback;
   return {
-    series: read("--color-chart-series-1", "currentColor"),
+    primary: read("--color-chart-series-1", "currentColor"),
+    secondary: read("--color-chart-series-2", "currentColor"),
     fill: read("--color-chart-series-1-fill", "transparent"),
     grid: read("--color-chart-grid", "currentColor"),
     axis: read("--color-chart-axis", "currentColor"),
   };
+}
+
+function formatValue(metric: TrendMetric, value: number | null) {
+  if (value == null) return "—";
+  if (metric === "cost") return `$${value.toFixed(value < 10 ? 3 : 2)}`;
+  if (metric === "success_rate") return `${value.toFixed(1)}%`;
+  if (metric === "latency_p95") return `${Math.round(value)} ms`;
+  return compactNumber(value);
+}
+
+function seriesKeys(metric: TrendMetric) {
+  if (metric === "requests") return ["successful", "failed"];
+  if (metric === "tokens" || metric === "cost") return ["confirmed", "estimated"];
+  return [metric];
 }
 
 export default function TrendChart({ buckets, metric }: { buckets: Bucket[]; metric: TrendMetric }) {
@@ -34,34 +43,45 @@ export default function TrendChart({ buckets, metric }: { buckets: Bucket[]; met
   const summary = summarizeTrend(buckets, metric);
   const accessibleLabel = t("dashboard.trendAria", {
     metric: t(`dashboard.trendMetrics.${metric}`),
-    value: metric === "cost" ? summary.value.toFixed(2) : compactNumber(summary.value),
+    value: formatValue(metric, summary.value),
   });
+
   useEffect(() => {
     if (!host.current) return;
-    const series = buildTrendSeries(buckets, metric);
+    const chartData = buildTrendSeries(buckets, metric);
     const tokens = readChartTokens(host.current);
+    const keys = seriesKeys(metric);
     const chart = new uPlot(
       {
         width: Math.max(Math.floor(host.current.clientWidth), 1),
         height: 280,
         cursor: { drag: { x: false, y: false } },
-        legend: { show: false },
-        // uPlot renders a time axis in the browser's zone unless told
-        // otherwise. That default is what put this chart on a different day
-        // from the totals printed above it: those are summed over the server's
-        // accounting day. Both now read the same zone.
+        legend: { show: true, live: true },
         tzDate: (timestamp) => uPlot.tzDate(new Date(timestamp * 1000), timeZone),
-        scales: { x: { time: true, range: series.range } },
+        scales: {
+          x: { time: true, range: chartData.range },
+          y: metric === "success_rate" ? { range: [0, 100] } : {},
+        },
         axes: [
           { stroke: tokens.axis, grid: { stroke: tokens.grid }, ticks: { stroke: tokens.grid }, font: "11px ui-monospace" },
-          { stroke: tokens.axis, grid: { stroke: tokens.grid }, ticks: { stroke: tokens.grid }, font: "11px ui-monospace" },
+          {
+            stroke: tokens.axis, grid: { stroke: tokens.grid }, ticks: { stroke: tokens.grid }, font: "11px ui-monospace",
+            values: (_chart, values) => values.map((value) => formatValue(metric, value)),
+          },
         ],
         series: [
           {},
-          { label: t(`dashboard.trendMetrics.${metric}`), stroke: tokens.series, width: 2, fill: tokens.fill },
+          ...keys.map((key, index) => ({
+            label: t(`dashboard.trendSeries.${key}`),
+            stroke: index === 0 ? tokens.primary : tokens.secondary,
+            width: 2,
+            fill: keys.length === 1 ? tokens.fill : undefined,
+            spanGaps: false,
+            value: (_chart: uPlot, raw: number | null) => formatValue(metric, raw),
+          })),
         ],
       },
-      series.data,
+      chartData.data,
       host.current,
     );
     chartRef.current = chart;
@@ -75,6 +95,7 @@ export default function TrendChart({ buckets, metric }: { buckets: Bucket[]; met
       chart.destroy();
     };
   }, [t, metric, appearance, timeZone]);
+
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart) return;
@@ -82,5 +103,6 @@ export default function TrendChart({ buckets, metric }: { buckets: Bucket[]; met
     chart.setData(series.data);
     chart.setScale("x", { min: series.range[0], max: series.range[1] });
   }, [buckets, metric]);
+
   return <div className="trend-chart" ref={host} role="img" aria-label={accessibleLabel} />;
 }

@@ -128,31 +128,48 @@ func AudienceWithPolicy(raw, semantic string, policy Policy) (string, error) {
 	return audience, nil
 }
 
+// ErrRefusedBeforeSend marks a refusal this package made itself, while there was
+// still no connection — the request cannot have reached the provider, and that
+// is a fact rather than an inference.
+//
+// Callers classifying a provider failure need the distinction. A dial that fails
+// against a real host arrives as *net.OpError and is recognised as unsent; a
+// refusal made here arrives as a plain error and, without this marker, is
+// treated as "the provider may already have served it". That is backwards: the
+// case with total certainty was the one recorded as ambiguous, which settles the
+// attempt at its full reservation and suppresses failover to a healthy
+// deployment. Reachable in ordinary operation — a Provider base URL pointing
+// inside the network while private endpoints are off refuses every request here.
+var ErrRefusedBeforeSend = errors.New("refused before any bytes were sent")
+
 func pinnedDialContext(policy Policy, resolver Resolver, dialer Dialer) func(context.Context, string, string) (net.Conn, error) {
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
 		host, port, err := net.SplitHostPort(address)
 		if err != nil {
-			return nil, fmt.Errorf("split outbound address: %w", err)
+			return nil, fmt.Errorf("split outbound address: %w: %w", ErrRefusedBeforeSend, err)
 		}
 		host = normalizeHost(host)
 		if len(policy.AllowedHosts) > 0 && !hostAllowed(host, policy.AllowedHosts) {
-			return nil, fmt.Errorf("outbound host %q is not in the allowlist", host)
+			return nil, fmt.Errorf("outbound host %q is not in the allowlist: %w", host, ErrRefusedBeforeSend)
 		}
 		var addresses []netip.Addr
 		if literal, err := netip.ParseAddr(host); err == nil {
 			addresses = []netip.Addr{literal}
 		} else {
+			// Not marked: a resolver failure is the network's answer rather than
+			// this package's refusal, and it already carries *net.DNSError,
+			// which callers recognise on its own.
 			addresses, err = resolver.LookupNetIP(ctx, "ip", host)
 			if err != nil {
 				return nil, fmt.Errorf("resolve outbound host: %w", err)
 			}
 		}
 		if len(addresses) == 0 {
-			return nil, errors.New("outbound host resolved to no addresses")
+			return nil, fmt.Errorf("outbound host resolved to no addresses: %w", ErrRefusedBeforeSend)
 		}
 		for _, candidate := range addresses {
 			if err := validateAddress(candidate, policy.AllowPrivate); err != nil {
-				return nil, fmt.Errorf("outbound host %q: %w", host, err)
+				return nil, fmt.Errorf("outbound host %q: %w: %w", host, ErrRefusedBeforeSend, err)
 			}
 		}
 		// Dial exactly one of the addresses that was validated in this call.

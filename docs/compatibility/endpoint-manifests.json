@@ -53,6 +53,7 @@
     "status": "compatible",
     "documented_deviations": [
       "gateway routes model names; provider-owned chat state is not exposed",
+      "unknown request fields are rejected before provider I/O",
       "provider-specific unsupported fields are rejected before provider I/O"
     ],
     "provider_profiles": [
@@ -204,6 +205,7 @@
     "status": "compatible",
     "documented_deviations": [
       "gateway routes model names",
+      "unknown request fields are rejected before provider I/O",
       "provider-specific unsupported fields are rejected before provider I/O"
     ],
     "provider_profiles": [

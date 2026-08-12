@@ -8,6 +8,7 @@ import {
   Field,
   Loading,
   Modal,
+  ReauthFields,
   StatusDot,
   type ReauthValues,
 } from "../components";
@@ -129,8 +130,8 @@ export function RedactionPoliciesSection({
       queryClient.invalidateQueries({ queryKey: ["redaction-policies"] }),
   });
   const toggle = useMutation({
-    mutationFn: (policy: RedactionPolicy) =>
-      api.updateRedactionPolicy(policy.id, policyUpdateBody(policy, !policy.enabled), policy.revision),
+    mutationFn: ({ policy, reauth }: { policy: RedactionPolicy; reauth: ReauthValues }) =>
+      api.updateRedactionPolicy(policy.id, policyUpdateBody(policy, !policy.enabled), policy.revision, reauth),
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: ["redaction-policies"] }),
   });
@@ -158,7 +159,7 @@ export function RedactionPoliciesSection({
           <tbody>{visible.map((policy) => {
             const enabledRules = policy.rules.filter((rule) => rule.enabled);
             const strongest = enabledRules.some((rule) => rule.action === "reject") ? "reject" : enabledRules.some((rule) => rule.action === "replace") ? "replace" : enabledRules.some((rule) => rule.action === "mask") ? "mask" : "detect_only";
-            const rowBusy = toggle.isPending && toggle.variables?.id === policy.id;
+            const rowBusy = toggle.isPending && toggle.variables?.policy.id === policy.id;
             return <tr key={policy.id}>
               <td><strong>{policy.name}</strong><code>{policy.id}</code></td>
               <td><span className="inline-status"><StatusDot ok={policy.enabled} />{policy.enabled ? t("common.enabled") : t("common.disabled")}</span></td>
@@ -168,8 +169,8 @@ export function RedactionPoliciesSection({
               {/* Switching a redaction policy off takes DLP away from every Project
                   bound to it, so it asks first and names the blast radius. */}
               <td><div className="row-actions policy-row-actions"><button className="button ghost" onClick={() => setTesting(policy)}>{t("common.test")}</button>{policy.enabled
-                ? <ConfirmButton className="button ghost" label={t("common.disable")} title={t("redaction.disableTitle")} confirmLabel={t("redaction.disableConfirm", { name: policy.name, count: policy.bound_projects ?? 0 })} disabled={rowBusy} onConfirm={() => toggle.mutateAsync(policy)} />
-                : <button className="button secondary" disabled={readOnly || rowBusy} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={() => toggle.mutate(policy)}>{t("common.enable")}</button>}<button className="button ghost" disabled={readOnly || rowBusy} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={() => setEditing(policy)}>{t("common.edit")}</button><ConfirmButton label={t("common.delete")} confirmLabel={t("redaction.deleteConfirm", { name: policy.name })} disabled={remove.isPending || rowBusy} requireStepUp onConfirm={(reauth) => remove.mutateAsync({ policy, reauth })} /></div>{toggle.isError && toggle.variables?.id === policy.id && <ErrorState error={toggle.error} />}</td>
+                ? <ConfirmButton className="button ghost" label={t("common.disable")} title={t("redaction.disableTitle")} confirmLabel={t("redaction.disableConfirm", { name: policy.name, count: policy.bound_projects ?? 0 })} disabled={rowBusy} requireStepUp onConfirm={(reauth) => toggle.mutateAsync({ policy, reauth })} />
+                : <ConfirmButton className="button secondary" label={t("common.enable")} confirmLabel={t("redaction.enableConfirm", { name: policy.name })} disabled={rowBusy} requireStepUp onConfirm={(reauth) => toggle.mutateAsync({ policy, reauth })} />}<button className="button ghost" disabled={readOnly || rowBusy} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={() => setEditing(policy)}>{t("common.edit")}</button><ConfirmButton label={t("common.delete")} confirmLabel={t("redaction.deleteConfirm", { name: policy.name })} disabled={remove.isPending || rowBusy} requireStepUp onConfirm={(reauth) => remove.mutateAsync({ policy, reauth })} /></div>{toggle.isError && toggle.variables?.policy.id === policy.id && <ErrorState error={toggle.error} />}</td>
             </tr>;
           })}</tbody></table>
           {remove.isError && <ErrorState error={remove.error} />}
@@ -344,10 +345,14 @@ function RedactionPolicyForm({
       revealRule(rules[problemIndex].draftKey);
     }
   };
+  // Editing an existing policy can take enforcement away, so the server asks
+  // who is doing it; creating one cannot, and does not ask.
+  const [reauth, setReauth] = useState<ReauthValues>({ currentPassword: "", totpCode: "" });
   const mutation = useMutation({
     mutationFn: () => current
-      ? api.updateRedactionPolicy(current.id, body, current.revision)
+      ? api.updateRedactionPolicy(current.id, body, current.revision, reauth)
       : api.createRedactionPolicy(body),
+    onSettled: () => setReauth((values) => ({ ...values, totpCode: "" })),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["redaction-policies"] });
       onClose();
@@ -527,6 +532,7 @@ function RedactionPolicyForm({
         {removedRule && <div className="redaction-undo" role="status"><span>{t("redaction.ruleRemoved", { name: removedRule.rule.name })}</span><button type="button" className="button ghost small" onClick={undoRemove}>{t("redaction.undo")}</button></div>}
         {mutation.isError && <ErrorState error={mutation.error} />}
         </div>
+        {current && <ReauthFields values={reauth} onChange={setReauth} description={t("auth.stepUpSecurityControl")} />}
         <div className="redaction-form-actions form-actions">
           <div className="redaction-footer-state">
             <label className="redaction-footer-enable">
@@ -542,7 +548,7 @@ function RedactionPolicyForm({
             </div>
           </div>
           <button type="button" className="button ghost" disabled={mutation.isPending} data-modal-close>{t("common.cancel")}</button>
-          <button className="button primary" disabled={mutation.isPending}>{t("redaction.compile")}</button>
+          <button className="button primary" disabled={mutation.isPending || (Boolean(current) && !reauth.currentPassword)}>{t("redaction.compile")}</button>
         </div>
       </form>
     </Modal>

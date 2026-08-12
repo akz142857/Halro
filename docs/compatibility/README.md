@@ -34,6 +34,13 @@ Provider adapter owns transport fixtures for its request, response, and stream
 wire format. The bridge fixture deliberately does not claim six-provider wire
 compatibility.
 
+The official SDK black-box workflow starts `tests/compatibility/server`, a
+protocol stub. It proves that pinned SDK versions can serialize requests and
+consume Halro's declared response/stream shapes. It does **not** traverse the
+real Runtime router, Gateway Key authentication, route selection, capability
+filtering, redaction, budget/accounting, or a real Provider adapter, and must
+not be cited as end-to-end Gateway or real-Provider evidence.
+
 `POST /v1/chat/completions`, `POST /v1/embeddings`, and the explicitly
 stateless `POST /v1/responses` tier are published as compatible. The Responses tier treats an
 omitted `store` as false and rejects all state/resource fields before Provider

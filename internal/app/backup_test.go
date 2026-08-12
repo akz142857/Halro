@@ -12,6 +12,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -617,6 +619,14 @@ func TestRestoreValidatesStagesAtomicallyAndPreservesRollbackDirectory(t *testin
 	if err := BootstrapAdmin(context.Background(), cfg, "admin", []byte("correct horse battery staple")); err != nil {
 		t.Fatal(err)
 	}
+	bootstrap, err := Bootstrap(context.Background(), cfg, BootstrapOptions{
+		ProviderName: "OpenAI", ProviderType: domain.ProviderOpenAI,
+		ProviderBaseURL: "https://api.openai.com", ProviderModel: "gpt-test",
+		PublicModel: "chat", ProjectName: "Restore", BillingMode: domain.BillingModeFree,
+	}, []byte("restore-provider-secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	root := filepath.Dir(cfg.Storage.DataDir)
 	configPath := filepath.Join(root, "config.yaml")
 	if err := os.WriteFile(configPath, []byte("version: 1\n"), 0o600); err != nil {
@@ -642,7 +652,9 @@ func TestRestoreValidatesStagesAtomicallyAndPreservesRollbackDirectory(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.BackupID != manifest.BackupID || result.DataDir != cfg.Storage.DataDir || result.PreviousDataDir == "" {
+	if result.BackupID != manifest.BackupID || result.DataDir != cfg.Storage.DataDir || result.PreviousDataDir == "" ||
+		result.SchemaVersionBefore != manifest.Metadata.SchemaVersion || result.SchemaVersionAfter != boltstore.CurrentSchemaVersion() ||
+		result.RestoredEnabledGatewayKeyCount != 1 || !slices.Equal(result.RestoredEnabledGatewayKeyIDs, []string{bootstrap.KeyID}) {
 		t.Fatalf("restore result=%#v", result)
 	}
 	if _, err := os.Stat(sentinel); !os.IsNotExist(err) {
@@ -661,6 +673,46 @@ func TestRestoreValidatesStagesAtomicallyAndPreservesRollbackDirectory(t *testin
 	summary, err := VerifyAudit(context.Background(), cfg)
 	if err != nil || summary.Records < 3 {
 		t.Fatalf("restored audit is invalid: summary=%#v err=%v", summary, err)
+	}
+}
+
+func TestRestoreMasterKeyMismatchNamesBothFingerprintsAndRecoveryStep(t *testing.T) {
+	cfg := testConfig(t)
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := BootstrapAdmin(context.Background(), cfg, "admin", []byte("correct horse battery staple")); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Dir(cfg.Storage.DataDir)
+	configPath := filepath.Join(root, "config.yaml")
+	if err := os.WriteFile(configPath, []byte("version: 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	backupKey := bytes.Repeat([]byte{0x64}, 32)
+	archivePath := filepath.Join(root, "pre-rotation.hmbk")
+	manifest, err := CreateBackup(context.Background(), cfg, configPath, archivePath, backupKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacementKey := bytes.Repeat([]byte{0x65}, 32)
+	if err := os.WriteFile(cfg.Storage.MasterKey.File, replacementKey, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	replacementDigest := sha256.Sum256(replacementKey)
+	replacementFingerprint := "sha256:" + hex.EncodeToString(replacementDigest[:])
+	sentinel := filepath.Join(cfg.Storage.DataDir, "live-sentinel")
+	if err := os.WriteFile(sentinel, []byte("live"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = RestoreBackup(context.Background(), cfg, archivePath, backupKey, manifest.BackupID)
+	if err == nil || !strings.Contains(err.Error(), fingerprintPrefix(replacementFingerprint)) ||
+		!strings.Contains(err.Error(), fingerprintPrefix(manifest.MasterKeyFingerprint)) ||
+		!strings.Contains(err.Error(), "storage.master_key.file") || !strings.Contains(err.Error(), "retry") {
+		t.Fatalf("Master Key mismatch error=%v", err)
+	}
+	if payload, readErr := os.ReadFile(sentinel); readErr != nil || string(payload) != "live" {
+		t.Fatalf("rejected restore changed live data: payload=%q err=%v", payload, readErr)
 	}
 }
 

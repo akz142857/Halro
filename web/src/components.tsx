@@ -79,17 +79,42 @@ export function ErrorState({ error, className = "", action }: { error: unknown; 
   const { t } = useTranslation();
   const message = error instanceof ApiError ? localizedError(t, error) : t("common.dataUnavailable");
   const detail = errorDetail(error);
+  const replayAction = idempotencyReplayAction(error);
+  const renderedAction = action ?? (replayAction
+    ? <a className="button ghost" href={replayAction}>{t("errors.viewIdempotencyReplay")}</a>
+    : undefined);
   const content = <>
     <strong>{t("common.requestFailed")}</strong>
     <span>{message}</span>
     {detail && <small className="notice-detail">{detail}</small>}
   </>;
   return (
-    <div className={`notice error${action ? " has-action" : ""}${className ? ` ${className}` : ""}`} role="alert">
-      {action ? <div className="notice-copy">{content}</div> : content}
-      {action && <div className="notice-action">{action}</div>}
+    <div className={`notice error${renderedAction ? " has-action" : ""}${className ? ` ${className}` : ""}`} role="alert">
+      {renderedAction ? <div className="notice-copy">{content}</div> : content}
+      {renderedAction && <div className="notice-action">{renderedAction}</div>}
     </div>
   );
+}
+
+function idempotencyReplayAction(error: unknown) {
+  if (!(error instanceof ApiError) || !error.code.endsWith("_idempotency_replay")) return "";
+  const payload = error.payload as { id?: unknown; project_id?: unknown } | undefined;
+  const id = typeof payload?.id === "string" ? payload.id : "";
+  if (!id) return "";
+  const anchor = encodeURIComponent(id);
+  switch (error.code) {
+    case "provider_idempotency_replay": return `/admin/providers#provider-${anchor}`;
+    case "deployment_idempotency_replay": return `/admin/deployments#deployment-${anchor}`;
+    case "route_idempotency_replay": return `/admin/routes#route-${anchor}`;
+    case "project_idempotency_replay": return `/admin/projects?project_id=${encodeURIComponent(id)}`;
+    case "gateway_key_idempotency_replay": {
+      const projectID = typeof payload?.project_id === "string" ? payload.project_id : "";
+      return projectID
+        ? `/admin/projects?project_id=${encodeURIComponent(projectID)}#gateway-key-${anchor}`
+        : "/admin/projects";
+    }
+    default: return "";
+  }
 }
 
 interface CrashLabels {

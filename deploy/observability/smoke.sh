@@ -32,6 +32,32 @@ docker compose version >/dev/null
 
 root=$(unset CDPATH; cd -- "$(dirname -- "$0")/../.." && pwd)
 observability="$root/deploy/observability"
+# The budget is checked against the Watchdog route's group_interval below rather
+# than carried as a comment. It sits exactly on the minimum (2 x 60s + 30s), and
+# that is deliberate: raising group_interval reds this gate on the same commit
+# that raises it, which is the point — the budget must move with the config, not
+# drift behind it. Raise both together.
+watchdog_delivery_budget_seconds=150
+watchdog_group_interval=$(awk '
+  /receiver: independent-deadman-webhook/ { watchdog = 1 }
+  watchdog && /group_interval:/ { print $2; exit }
+' "$observability/alertmanager/alertmanager.yml")
+watchdog_group_interval_seconds=$(python3 - "$watchdog_group_interval" <<'PY'
+import re
+import sys
+
+match = re.fullmatch(r"([0-9]+)([smh])", sys.argv[1])
+if not match:
+    raise SystemExit("Watchdog group_interval must use an integer s, m, or h duration")
+value = int(match.group(1))
+print(value * {"s": 1, "m": 60, "h": 3600}[match.group(2)])
+PY
+)
+minimum_watchdog_budget=$((2 * watchdog_group_interval_seconds + 30))
+if [ "$watchdog_delivery_budget_seconds" -lt "$minimum_watchdog_budget" ]; then
+  echo "Watchdog smoke budget ${watchdog_delivery_budget_seconds}s is below 2 x group_interval + 30s (${minimum_watchdog_budget}s)" >&2
+  exit 1
+fi
 temporary=$(mktemp -d)
 project="halro-observability-smoke-$$"
 override="$temporary/compose.override.yaml"
@@ -364,11 +390,10 @@ printf '%s' "$rules" | jq -e '[.. | objects | .name? // empty] | index("Watchdog
 # routing configuration to the mock receiver.
 #
 # The budget has to clear one delivery retry rather than only the nominal path.
-# The Watchdog route sets group_interval: 1m, so a notification that does not
-# land on the first dispatch arrives a full minute later. Measured locally the
-# wait is either 0s or exactly 60s and never in between, which means a 60s
-# budget decided the run on loop overhead instead of on whether delivery works.
-wait_event firing '*' 150
+# The configured budget is guarded above against the Watchdog route's actual
+# group_interval, so a routing change cannot silently reintroduce the flaky
+# nominal-path-only wait this smoke is meant to prevent.
+wait_event firing '*' "$watchdog_delivery_budget_seconds"
 
 # Exercise an identifiable firing/resolved state lifecycle through the real
 # Alertmanager API. Watchdog intentionally has send_resolved=false because its

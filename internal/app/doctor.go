@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -78,7 +79,7 @@ func DoctorWithOptions(ctx context.Context, cfg config.Config, options DoctorOpt
 
 	dataLock, err := lock.AcquireExistingReadOnly(cfg.Storage.DataDir)
 	if err != nil {
-		add("data_lock", "fail", "data directory is in use or cannot be locked")
+		add("data_lock", "fail", doctorDataLockFailure(cfg.Storage.DataDir, err))
 		return report, errors.New("doctor requires exclusive offline access")
 	}
 	defer dataLock.Close()
@@ -266,6 +267,27 @@ func DoctorWithOptions(ctx context.Context, cfg config.Config, options DoctorOpt
 		return report, errors.New("doctor found one or more failed checks")
 	}
 	return report, nil
+}
+
+func doctorDataLockFailure(dataDir string, err error) string {
+	switch {
+	case errors.Is(err, lock.ErrAlreadyLocked), errors.Is(err, syscall.EWOULDBLOCK):
+		return "data directory is locked by another Halro process or offline command; find the holder and do not delete the lock file"
+	case errors.Is(err, os.ErrPermission), errors.Is(err, syscall.EACCES), errors.Is(err, syscall.EPERM):
+		parent := filepath.Dir(filepath.Clean(dataDir))
+		return fmt.Sprintf("cannot access the data lock: data_dir %q and its parent %q must be accessible to the Halro user; initialization and publication require a writable parent, so mount a writable parent and use a child data_dir", dataDir, parent)
+	case errors.Is(err, os.ErrNotExist), errors.Is(err, syscall.ENOENT):
+		// The lock lives in the parent, and the read-only open that produced
+		// this error only happens once the directory has been initialized. So
+		// "no such file" here means there is nothing to inspect yet, which is
+		// the state an operator lands in when a container start failed before
+		// writing anything. Saying "cannot acquire the lock" sends them
+		// looking for a holder that does not exist.
+		parent := filepath.Dir(filepath.Clean(dataDir))
+		return fmt.Sprintf("data_dir %q has not been initialized: run `halro init --config <file>` with a writable parent %q, then re-run doctor", dataDir, parent)
+	default:
+		return fmt.Sprintf("cannot acquire the offline data lock for %q: %v", dataDir, err)
+	}
 }
 
 func validateDoctorKeySlots(ctx context.Context, cfg config.Config, store *boltstore.Store) error {

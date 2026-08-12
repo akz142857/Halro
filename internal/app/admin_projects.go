@@ -260,9 +260,10 @@ func (r *Runtime) createAdminProjectKey(writer http.ResponseWriter, request *htt
 		// The first attempt already landed. Say so explicitly rather than minting a
 		// duplicate: the operator has to revoke and reissue to obtain a plaintext.
 		writeJSON(writer, http.StatusConflict, map[string]string{
-			"code":  "gateway_key_idempotency_replay",
-			"error": "this request already created gateway key " + keyID,
-			"id":    keyID,
+			"code":       "gateway_key_idempotency_replay",
+			"error":      "this request already created gateway key " + keyID,
+			"id":         keyID,
+			"project_id": projectID,
 		})
 		return
 	}
@@ -481,10 +482,10 @@ func (r *Runtime) activateAuthSnapshot() {
 	if err := r.reloadAdminAuth(ctx); err != nil {
 		r.logger.Error("authentication snapshot activation failed after a durable mutation",
 			"error", err)
-		r.activation.markStale("auth snapshot: "+err.Error(), time.Now().UTC())
+		r.activation.markStale(activationDomainAuth, "auth snapshot: "+err.Error(), time.Now().UTC())
 		return
 	}
-	r.activation.markCurrent()
+	r.activation.markCurrent(activationDomainAuth)
 }
 
 // reloadAdminAuth rebuilds the authentication snapshot from the store.

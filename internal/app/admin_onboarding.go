@@ -139,6 +139,8 @@ func evaluateOnboardingReadiness(now time.Time, resources onboardingResources, m
 	// instant is kept and compared rather than just the fact of a probe.
 	deploymentProvider := make(map[string]string, len(resources.Deployments))
 	downstreamProbe := make(map[string]time.Time)
+	successfulDeployment := make(map[string]time.Time)
+	successfulRoute := make(map[string]time.Time)
 	recordProbe := func(providerID string, at *time.Time) {
 		if providerID == "" || at == nil {
 			return
@@ -163,6 +165,33 @@ func evaluateOnboardingReadiness(now time.Time, resources onboardingResources, m
 		if route.LastTestStatus == domain.DeploymentTestHealthy && route.LastTestRevision == route.Revision {
 			recordProbe(deploymentProvider[route.DeploymentID], route.LastTestedAt)
 		}
+	}
+	// A finalized successful request is stronger evidence than an explicit
+	// control-plane probe: it proves the selected Route, Deployment, Provider,
+	// credential, Project grant, and Gateway Key worked together. Keep it tied
+	// to the exact attempt IDs and revision timestamps so a later edit still
+	// invalidates the evidence.
+	successfulRequests := make(map[string]struct{})
+	for _, request := range snapshot.Requests {
+		if request.Outcome == "success" {
+			successfulRequests[request.RequestID] = struct{}{}
+		}
+	}
+	for _, attempt := range snapshot.Attempts {
+		if attempt.Status != "success" {
+			continue
+		}
+		if _, ok := successfulRequests[attempt.RequestID]; !ok {
+			continue
+		}
+		if newest := successfulDeployment[attempt.DeploymentID]; attempt.DeploymentID != "" && attempt.CompletedAt.After(newest) {
+			successfulDeployment[attempt.DeploymentID] = attempt.CompletedAt
+		}
+		if newest := successfulRoute[attempt.RouteID]; attempt.RouteID != "" && attempt.CompletedAt.After(newest) {
+			successfulRoute[attempt.RouteID] = attempt.CompletedAt
+		}
+		at := attempt.CompletedAt
+		recordProbe(attempt.ProviderID, &at)
 	}
 
 	hasProvider := false
@@ -251,7 +280,9 @@ func evaluateOnboardingReadiness(now time.Time, resources onboardingResources, m
 			continue
 		}
 		hasDeploymentPrice = true
-		if deployment.LastTestStatus != domain.DeploymentTestHealthy || deployment.LastTestRevision != deployment.Revision {
+		provenAt, provenByTraffic := successfulDeployment[deployment.ID]
+		if (deployment.LastTestStatus != domain.DeploymentTestHealthy || deployment.LastTestRevision != deployment.Revision) &&
+			(!provenByTraffic || provenAt.Before(deployment.UpdatedAt)) {
 			continue
 		}
 		hasTestedDeployment = true
@@ -279,7 +310,9 @@ func evaluateOnboardingReadiness(now time.Time, resources onboardingResources, m
 			continue
 		}
 		hasEnabledRoute = true
-		if route.LastTestStatus == domain.DeploymentTestHealthy && route.LastTestRevision == route.Revision {
+		provenAt, provenByTraffic := successfulRoute[route.ID]
+		if route.LastTestStatus == domain.DeploymentTestHealthy && route.LastTestRevision == route.Revision ||
+			provenByTraffic && !provenAt.Before(route.UpdatedAt) {
 			readyRoutes[route.PublicModel] = route
 		}
 	}
@@ -287,7 +320,14 @@ func evaluateOnboardingReadiness(now time.Time, resources onboardingResources, m
 	publishDetail := "model_ready"
 	switch {
 	case !connectReady:
-		publishDetail = "provider_blocking_model"
+		// The earlier step is what blocks this one, so say which of its two
+		// shapes it is. "A provider exists but is unverified" and "there is no
+		// provider yet" need different actions, and describing the second as
+		// the first sends the operator looking for an object that is not there.
+		publishDetail = connectDetail
+		if connectDetail == "provider_test_required" {
+			publishDetail = "provider_not_verified"
+		}
 	case !hasDeployment:
 		publishDetail = "deployment_missing"
 	case !hasLinkedDeployment:
@@ -349,7 +389,13 @@ func evaluateOnboardingReadiness(now time.Time, resources onboardingResources, m
 	accessDetail := "access_ready"
 	switch {
 	case !publishReady:
-		accessDetail = "model_blocking_access"
+		// Same rule as above: propagate what the publish step actually found
+		// unless it is the "exists but unverified" case, which is the only one
+		// this step can describe in its own words.
+		accessDetail = publishDetail
+		if publishDetail == "deployment_test_required" || publishDetail == "route_test_required" {
+			accessDetail = "model_not_verified"
+		}
 	case !hasProject:
 		accessDetail = "project_missing"
 	case !hasEnabledProject:

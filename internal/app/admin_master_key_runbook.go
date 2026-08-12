@@ -31,6 +31,21 @@ func (r *Runtime) adminGatewayKeyCompromiseRunbook(writer http.ResponseWriter, r
 	writeMasterKeyRunbook(writer, runbooks.GatewayKeyCompromise)
 }
 
+// Neither of these is gated on custody mode either: configuration_stale can
+// happen in any deployment, and the file-mode rotation procedure is the one
+// the default configuration needs.
+func (r *Runtime) adminConfigurationStaleRunbook(writer http.ResponseWriter, request *http.Request) {
+	writeMasterKeyRunbook(writer, runbooks.ConfigurationStale)
+}
+
+func (r *Runtime) adminFileMasterKeyRotationRunbook(writer http.ResponseWriter, request *http.Request) {
+	if r.config.Storage.MasterKey.Mode == config.MasterKeyModeKeySlots {
+		http.NotFound(writer, request)
+		return
+	}
+	writeMasterKeyRunbook(writer, runbooks.FileMasterKeyRotation)
+}
+
 func writeMasterKeyRunbook(writer http.ResponseWriter, content []byte) {
 	writer.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 	writer.Header().Set("Cache-Control", "private, no-store")

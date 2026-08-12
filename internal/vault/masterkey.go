@@ -27,7 +27,16 @@ func InitMasterKey(path string) error {
 	fd, err := syscall.Open(path, syscall.O_WRONLY|syscall.O_CREAT|syscall.O_EXCL|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
 		if errors.Is(err, syscall.EEXIST) {
-			return fmt.Errorf("master key already exists")
+			// Two situations produce this, and they need opposite actions: a
+			// second init against a working instance (nothing to do), or a key
+			// left behind by an earlier attempt whose data directory never got
+			// written — a container start that failed after the key was
+			// created. Naming the path and both readings keeps the operator
+			// from deleting a key that is still the only way into their data.
+			return fmt.Errorf("master key already exists at %s: if this instance is already initialized there is nothing to do; if the data directory is empty this key is from an earlier attempt and must be kept with it — never delete a Master Key that any data directory or backup was written under", path)
+		}
+		if errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.EPERM) {
+			return fmt.Errorf("create master key at %s: %w (the directory must be writable by the user Halro runs as; in a container that is the --user uid, not the host user that created the mount)", path, err)
 		}
 		return fmt.Errorf("create master key: %w", err)
 	}

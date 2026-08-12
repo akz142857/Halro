@@ -100,7 +100,7 @@ Content-Type: application/json
 控制台与 Admin API 都不可用时：
 
 ```bash
-halro key disable --key-id <keyID>
+halro key disable --config <path> --key-id <keyID>
 ```
 
 用之前必须知道三件事：

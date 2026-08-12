@@ -29,6 +29,7 @@ func Default() Config {
 			MetricsListen:     "127.0.0.1:9090",
 			ReadHeaderTimeout: Duration(5 * time.Second),
 			ReadBodyTimeout:   Duration(15 * time.Second),
+			ShutdownTimeout:   Duration(2 * time.Minute),
 			MaxHeaderBytes:    32768,
 			MaxRequestBytes:   10 << 20,
 		},

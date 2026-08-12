@@ -581,17 +581,19 @@ func TestReadOnlySessionCannotForceAnInvocationTargetRefresh(t *testing.T) {
 	}
 	viewer := loginTestAdmin(t, runtime, "viewer", "another correct horse battery staple")
 	targets := "/admin/api/v1/providers/" + bootstrap.ProviderID + "/invocation-targets"
+	resolution := targets + "/unlisted-model/resolution?target_kind=model_id"
 
-	for _, query := range []string{"?refresh=true", "?refresh=1"} {
-		forced := authenticatedAdminGet(t, runtime, viewer.cookie, targets+query)
+	for _, path := range []string{targets, resolution} {
+		forced := httptest.NewRecorder()
+		runtime.adminRouter().ServeHTTP(forced, adminMutationRequest(t, http.MethodPost, path, viewer, nil))
 		if forced.Code != http.StatusForbidden {
-			t.Fatalf("read_only %s status=%d body=%s", query, forced.Code, forced.Body.String())
+			t.Fatalf("read_only POST %s status=%d body=%s", path, forced.Code, forced.Body.String())
 		}
 		var body struct {
 			Code string `json:"code"`
 		}
 		if err := json.Unmarshal(forced.Body.Bytes(), &body); err != nil || body.Code != "read_only_role" {
-			t.Fatalf("read_only %s: 403 was not the role gate (code=%q body=%s)", query, body.Code, forced.Body.String())
+			t.Fatalf("read_only POST %s: 403 was not the role gate (code=%q body=%s)", path, body.Code, forced.Body.String())
 		}
 	}
 	// The cached read stays available: read_only is a restriction on causing
@@ -600,8 +602,67 @@ func TestReadOnlySessionCannotForceAnInvocationTargetRefresh(t *testing.T) {
 	if cached.Code != http.StatusOK {
 		t.Fatalf("read_only listing status=%d body=%s", cached.Code, cached.Body.String())
 	}
-	administrator := authenticatedAdminGet(t, runtime, admin.cookie, targets+"?refresh=true")
-	if administrator.Code != http.StatusOK {
-		t.Fatalf("administrator refresh status=%d body=%s", administrator.Code, administrator.Body.String())
+	for _, path := range []string{targets, resolution} {
+		allowed := httptest.NewRecorder()
+		runtime.adminRouter().ServeHTTP(allowed, adminMutationRequest(t, http.MethodPost, path, admin, nil))
+		if allowed.Code != http.StatusOK {
+			t.Fatalf("administrator POST %s status=%d body=%s", path, allowed.Code, allowed.Body.String())
+		}
+	}
+
+	// A cross-site page can drive a POST at this router, so the credential is
+	// protected by the CSRF token and the Origin the browser does send on a
+	// POST — not by the method being unusual.
+	for _, path := range []string{targets, resolution} {
+		crossOrigin := adminMutationRequest(t, http.MethodPost, path, admin, nil)
+		crossOrigin.Header.Set("Origin", "https://attacker.example")
+		response := httptest.NewRecorder()
+		runtime.adminRouter().ServeHTTP(response, crossOrigin)
+		if response.Code != http.StatusForbidden || !strings.Contains(response.Body.String(), "CSRF validation failed") {
+			t.Fatalf("cross-origin POST %s status=%d body=%s", path, response.Code, response.Body.String())
+		}
+
+		noToken := adminMutationRequest(t, http.MethodPost, path, admin, nil)
+		noToken.Header.Del("X-CSRF-Token")
+		tokenless := httptest.NewRecorder()
+		runtime.adminRouter().ServeHTTP(tokenless, noToken)
+		if tokenless.Code != http.StatusForbidden || !strings.Contains(tokenless.Body.String(), "CSRF validation failed") {
+			t.Fatalf("tokenless POST %s status=%d body=%s", path, tokenless.Code, tokenless.Body.String())
+		}
+	}
+}
+
+// A browser sends no Origin on a same-origin GET, and this router sets
+// Referrer-Policy: no-referrer, so a console read arrives with neither header.
+// An Origin check placed on these reads therefore rejects the console itself
+// while a cross-site POST would sail past it — the check has to live on the
+// method that carries a CSRF token. This test is the console's shape: cookie
+// only, no Origin, no Referer.
+func TestConsoleReadsSucceedWithNeitherOriginNorReferer(t *testing.T) {
+	runtime, bootstrap, _ := openBootstrappedRuntime(t)
+	registry := provider.NewRegistry()
+	if err := registry.RegisterAdapter(bootstrap.ProviderID, &adminProbeAdapter{
+		targets: []domain.InvocationTargetDescriptor{{TargetID: "gpt-test", TargetKind: domain.TargetModelID}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runtime.providers.Replace(registry)
+	admin := loginTestAdmin(t, runtime, "admin", "correct horse battery staple")
+
+	for _, path := range []string{
+		"/admin/api/v1/providers/" + bootstrap.ProviderID + "/invocation-targets",
+		"/admin/api/v1/system/status",
+		"/admin/api/v1/providers",
+	} {
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.AddCookie(admin.cookie)
+		if request.Header.Get("Origin") != "" || request.Header.Get("Referer") != "" {
+			t.Fatalf("%s: the request under test must carry neither header", path)
+		}
+		response := httptest.NewRecorder()
+		runtime.adminRouter().ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("console-shaped GET %s status=%d body=%s", path, response.Code, response.Body.String())
+		}
 	}
 }

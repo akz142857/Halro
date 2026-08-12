@@ -94,6 +94,23 @@ in-use space. The retained profile is therefore explained by Go scheduler/thread
 structures, goroutine stacks, and fixed runtime/HTTP initialization rather than
 live connection ownership.
 
+## Single-instance capacity, 2026-08-11
+
+Measured on Apple M4 Pro / darwin-arm64 / 14 cores / 64 GiB / APFS. APFS
+`F_FULLFSYNC` is one to two orders of magnitude more expensive than a Linux NVMe
+`fdatasync`, so **every throughput figure here is a floor, not a ceiling**; the
+shape transfers across hosts, the absolute numbers do not.
+
+| Measurement | Result | What transfers |
+|---|---|---|
+| Accounting lifecycles | 1,223/s at 64 concurrency | Scales with concurrency, not with project count — the shape ADR 0018 predicts |
+| Admin write path | ~31 mutations/s | Floor set by one full bbolt fsync per transaction |
+| Topology commit protocol overhead | −25.3% on the Admin write path (41.69 → 31.13 mut/s, p=0.008) | Measured by building both sides and running the same harness against the same input, not inferred from the diff |
+| Long run | 2,588 real Admin mutations → RSS +1.4 MiB, flat after ~900; `go_goroutines` steady at 18 | No memory or goroutine leak |
+
+These are capacity references, not commitments. The 24-hour `release_24h`
+artifact is a separate gate and is still unarchived (see below).
+
 Release benchmark policy:
 
 - compare on the same host/toolchain;
@@ -101,6 +118,46 @@ Release benchmark policy:
 - profile before optimizing allocations;
 - run load/soak with the race detector disabled and production build flags;
 - keep correctness, bounded memory, and secret safety ahead of synthetic throughput.
+
+Admin password hashing is process-wide bounded to two concurrent Argon2id
+operations. With the 64 MiB memory parameter this caps the Argon2 working set at
+approximately 128 MiB across login, step-up, dummy verification, and password
+creation; additional work waits for a slot. Deployment memory limits still need
+headroom for the gateway, caches, provider buffers, and Go runtime and must not
+be sized to 128 MiB alone.
+
+Measured rather than reasoned, because the pre-fix figure was also measured and
+the point of the fix is that the two differ:
+
+| Concurrent logins | Peak heap growth | Per concurrent login |
+|---|---|---|
+| 64 (bounded, current) | **256 MiB** | 4.0 MiB |
+| 64 (unbounded, before the slot limit) | ~4,096 MiB | 64.2 MiB |
+
+Command, on the same host as the rest of this baseline (Apple M4 Pro,
+darwin/arm64, go1.26.5):
+
+```
+HALRO_MEASURE_ARGON2=1 go test ./internal/adminauth/ \
+  -run TestArgon2MemoryUnderAConcurrentLoginStorm -count=1 -v
+```
+
+The measurement is opt-in (`HALRO_MEASURE_ARGON2=1`) because it allocates
+hundreds of MiB and samples the heap, which makes it a poor neighbour in the
+ordinary suite. The structural guarantee — that the slot count is two and that
+work above it queues — is asserted unconditionally by
+`TestArgon2WorkIsBoundedProcessWide` in the same package. Growth no longer
+scales with concurrency, which is the property a memory limit can be sized
+against; absolute values on Linux/NVMe will differ.
+
+What the bound converts the failure into, accepted for 1.0.0: waiting for a slot
+has no deadline, so a sustained login storm becomes queueing latency on the Admin
+login path with a goroutine held per waiter, rather than heap growth. Arrival is
+bounded per source by `admin.login_rpm` (5/min) and not globally, and the Admin
+server sets no write timeout, so the wait ends only when a slot frees or the
+client gives up. A deadline would answer a storm by failing legitimate operator
+logins; if the Admin surface is ever put on an untrusted network that trade
+inverts and this needs revisiting.
 
 The exact-RC 24-hour workload, measurements, explicit limits, and artifact
 format are defined in `docs/verification/soak-testing.md`. This baseline does not claim that

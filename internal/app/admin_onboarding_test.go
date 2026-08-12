@@ -151,6 +151,53 @@ func TestOnboardingCompletesOnlyAfterSuccessfulFinalization(t *testing.T) {
 	}
 }
 
+func TestOnboardingAcceptsSuccessfulRouteTrafficAsPublicationEvidence(t *testing.T) {
+	now := time.Date(2026, 8, 8, 10, 0, 0, 0, time.UTC)
+	resources := readyOnboardingResources(now)
+	resources.Providers[0].LastTestStatus = ""
+	resources.Deployments[0].LastTestStatus = ""
+	resources.Routes[0].LastTestStatus = ""
+	resources.Providers[0].UpdatedAt = now.Add(-time.Hour)
+	resources.Deployments[0].UpdatedAt = now.Add(-time.Hour)
+	resources.Routes[0].UpdatedAt = now.Add(-time.Hour)
+	snapshot := usage.Snapshot{
+		Requests: []usage.RequestSummary{{RequestID: "request_1", Outcome: "success", CompletedAt: now}},
+		Attempts: []usage.AttemptEvent{{
+			RequestID: "request_1", RouteID: "route_1", DeploymentID: "deployment_1", ProviderID: "provider_1",
+			Status: "success", CompletedAt: now,
+		}},
+	}
+
+	result := evaluateOnboardingReadiness(now, resources, usage.Metrics{RequestsSuccess: 1}, snapshot)
+	if result.State != onboardingFirstValueReached || result.CompletedGoals != 4 {
+		t.Fatalf("successful route traffic was not accepted as readiness evidence: %#v", result)
+	}
+	for index, goal := range result.Goals[:3] {
+		if goal.State != onboardingGoalComplete {
+			t.Fatalf("goal %d=%#v", index, goal)
+		}
+	}
+}
+
+func TestOnboardingSuccessfulTrafficDoesNotSurviveALaterRouteEdit(t *testing.T) {
+	now := time.Date(2026, 8, 8, 10, 0, 0, 0, time.UTC)
+	resources := readyOnboardingResources(now)
+	resources.Routes[0].LastTestStatus = ""
+	resources.Routes[0].UpdatedAt = now
+	snapshot := usage.Snapshot{
+		Requests: []usage.RequestSummary{{RequestID: "request_1", Outcome: "success", CompletedAt: now.Add(-time.Minute)}},
+		Attempts: []usage.AttemptEvent{{
+			RequestID: "request_1", RouteID: "route_1", DeploymentID: "deployment_1", ProviderID: "provider_1",
+			Status: "success", CompletedAt: now.Add(-time.Minute),
+		}},
+	}
+
+	result := evaluateOnboardingReadiness(now, resources, usage.Metrics{}, snapshot)
+	if result.Goals[1].DetailCode != "route_test_required" || result.Goals[1].State != onboardingGoalCurrent {
+		t.Fatalf("old traffic survived a later route edit: %#v", result)
+	}
+}
+
 func TestOnboardingRejectsExpiredKey(t *testing.T) {
 	now := time.Date(2026, 8, 8, 10, 0, 0, 0, time.UTC)
 	resources := readyOnboardingResources(now)

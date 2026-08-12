@@ -172,6 +172,63 @@ func TestIdentificationFailsWhenNoInterfaceAnswers(t *testing.T) {
 	}
 }
 
+func TestDetectionStopsAtItsBillableCallCeiling(t *testing.T) {
+	runtime, instance, chat, media := twoInterfaceProviderForTest(t)
+	chatDetector := &scriptedCapabilityDetector{supported: map[string]bool{}}
+	mediaDetector := &scriptedCapabilityDetector{supported: map[string]bool{"moderations": true}}
+	registerBindingDetectors(t, runtime, instance, map[string]provider.Adapter{chat.ID: chatDetector, media.ID: mediaDetector})
+	runtime.config.Admin.ModelCapabilityDetection.MaxProviderCalls = 1
+
+	completed := runDetectionForTest(t, runtime, instance, "call-ceiling-model")
+	if completed.ProviderCalls != 1 || len(completed.Calls) != 1 {
+		t.Fatalf("provider calls=%d records=%d, want the configured ceiling of one", completed.ProviderCalls, len(completed.Calls))
+	}
+	if chatDetector.calls.Load()+mediaDetector.calls.Load() != 1 {
+		t.Fatalf("detector calls crossed ceiling: chat=%d media=%d", chatDetector.calls.Load(), mediaDetector.calls.Load())
+	}
+}
+
+// The other half of the ceiling, and the one nothing reached. With a single
+// candidate, identification spends nothing and breaks out early, so the test
+// above never executes the probe loop's own budget check — deleting that check
+// left it green. Here the whole budget is consumed by the first probe, and what
+// is asserted is the branch's actual product: the remaining capabilities come
+// back not_probed rather than unsupported. Reporting "unsupported" for a probe
+// nobody could afford to run would be a claim nothing checked, and this ceiling
+// is the only upper bound on what detection can spend.
+func TestProbesBeyondTheCallCeilingAreLeftUnprobedRatherThanUnsupported(t *testing.T) {
+	runtime, bootstrap := bootstrapForCapabilityTest(t)
+	instance, err := runtime.store.GetProvider(context.Background(), bootstrap.ProviderID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bindings := instance.EffectiveProfileBindings()
+	if len(bindings) != 1 {
+		t.Fatalf("this test needs a single candidate so identification spends nothing; bindings=%d", len(bindings))
+	}
+	detector := &scriptedCapabilityDetector{supported: map[string]bool{"chat": true, "embeddings": true, "streaming": true}}
+	registerBindingDetectors(t, runtime, instance, map[string]provider.Adapter{bindings[0].ID: detector})
+	runtime.config.Admin.ModelCapabilityDetection.MaxProviderCalls = 1
+
+	completed := runDetectionForTest(t, runtime, instance, "probe-ceiling-model")
+
+	if completed.ProviderCalls != 1 || detector.calls.Load() != 1 {
+		t.Fatalf("ceiling of one was crossed: accounted=%d adapter=%d", completed.ProviderCalls, detector.calls.Load())
+	}
+	notProbed := 0
+	for capability, result := range completed.Results {
+		switch result.Status {
+		case domain.ProbeNotProbed:
+			notProbed++
+		case domain.ProbeUnsupported:
+			t.Fatalf("%q was reported unsupported although the budget stopped before it ran", capability)
+		}
+	}
+	if notProbed == 0 {
+		t.Fatalf("no capability was left unprobed, so the probe-loop ceiling never ran: %#v", completed.Results)
+	}
+}
+
 // twoInterfaceProviderForTest persists a provider carrying both OpenAI
 // interfaces, which is the shape that used to force the operator to choose.
 func twoInterfaceProviderForTest(t *testing.T) (*Runtime, domain.ProviderInstance, domain.ProviderProfileBinding, domain.ProviderProfileBinding) {
@@ -219,6 +276,8 @@ func runDetectionForTest(t *testing.T, runtime *Runtime, instance domain.Provide
 	session := loginTestAdmin(t, runtime, "admin", "correct horse battery staple")
 	request := adminMutationRequest(t, http.MethodPost, "/admin/api/v1/providers/"+instance.ID+"/model-capability-detections", session, map[string]any{
 		"provider_model": model, "target_kind": "model_id", "risk_tier": "safe_automatic",
+		// Detection spends the Provider credential, so it carries step-up.
+		"current_password": "correct horse battery staple",
 	})
 	request.Header.Set("Idempotency-Key", "identify-"+model)
 	response := httptest.NewRecorder()
@@ -334,6 +393,7 @@ func TestCapabilityDetectionAPIIsExplicitCachedAndCreatesUntestedSnapshot(t *tes
 	createDetection := func(key string) *httptest.ResponseRecorder {
 		request := adminMutationRequest(t, http.MethodPost, "/admin/api/v1/providers/"+instance.ID+"/model-capability-detections", session, map[string]any{
 			"provider_model": "unlisted-model", "target_kind": "model_id", "risk_tier": "safe_automatic", "selection_revision": "selection-one",
+			"current_password": "correct horse battery staple",
 		})
 		request.Header.Set("Idempotency-Key", key)
 		response := httptest.NewRecorder()
@@ -393,6 +453,7 @@ func TestCapabilityDetectionAPIIsExplicitCachedAndCreatesUntestedSnapshot(t *tes
 	}
 	rateLimitedRequest := adminMutationRequest(t, http.MethodPost, "/admin/api/v1/providers/"+instance.ID+"/model-capability-detections", session, map[string]any{
 		"provider_model": "another-unlisted-model", "target_kind": "model_id", "risk_tier": "safe_automatic",
+		"current_password": "correct horse battery staple",
 	})
 	rateLimitedRequest.Header.Set("Idempotency-Key", "rate-limited-new-work")
 	rateLimited := httptest.NewRecorder()
@@ -459,6 +520,7 @@ func TestCapabilityDetectionCancelDiscardsALateSupportedResult(t *testing.T) {
 	session := loginTestAdmin(t, runtime, "admin", "correct horse battery staple")
 	request := adminMutationRequest(t, http.MethodPost, "/admin/api/v1/providers/"+instance.ID+"/model-capability-detections", session, map[string]any{
 		"provider_model": "late-model", "target_kind": "model_id", "risk_tier": "safe_automatic",
+		"current_password": "correct horse battery staple",
 	})
 	request.Header.Set("Idempotency-Key", "cancel-late")
 	response := httptest.NewRecorder()

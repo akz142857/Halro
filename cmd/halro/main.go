@@ -282,7 +282,7 @@ func run(arguments []string, logger *slog.Logger) error {
 		if err := flags.Parse(arguments[1:]); err != nil {
 			return err
 		}
-		cfg, err := config.Load(*configPath, config.LoadOptions{})
+		cfg, err := config.Load(*configPath, config.LoadOptions{SkipListenerValidation: true})
 		if err != nil {
 			return err
 		}
@@ -642,7 +642,7 @@ func run(arguments []string, logger *slog.Logger) error {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintln(os.Stderr, "Restore complete; previous data directory was preserved for rollback.")
+			writeRestoreStatus(os.Stderr, result)
 			return json.NewEncoder(os.Stdout).Encode(result)
 		default:
 			return fmt.Errorf("unknown backup command %q", arguments[1])
@@ -861,6 +861,13 @@ func run(arguments []string, logger *slog.Logger) error {
 	default:
 		return fmt.Errorf("unknown command %q", arguments[0])
 	}
+}
+
+func writeRestoreStatus(output io.Writer, result app.RestoreResult) {
+	if result.SchemaVersionBefore != result.SchemaVersionAfter {
+		fmt.Fprintf(output, "Restored metadata schema migrated from v%d to v%d.\n", result.SchemaVersionBefore, result.SchemaVersionAfter)
+	}
+	fmt.Fprintln(output, "Restore complete; previous data directory was preserved for rollback.")
 }
 
 func runRuntime(cfg config.Config, logger *slog.Logger, printGuide bool) error {

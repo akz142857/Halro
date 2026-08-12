@@ -3,10 +3,13 @@ package provider
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/akz142857/Halro/internal/safetransport"
 )
 
 func TestUnsentSeparatesSetupFailuresFromPossiblyExecutedOnes(t *testing.T) {
@@ -67,5 +70,21 @@ func TestUnsentRecognisesARefusedConnectionFromTheStandardLibrary(t *testing.T) 
 	}
 	if !Unsent(&Error{Class: ErrorConnect, Retryable: true, Cause: err}) {
 		t.Fatal("Unsent did not see through the provider error wrapper")
+	}
+}
+
+// SafeTransport refusing to dial is the one case where "nothing was sent" is a
+// fact this process owns rather than an inference from an error the network
+// produced. It arrives as a plain error, so without this it was classified as
+// possibly-executed and settled at the full reservation.
+func TestSafeTransportRefusalCountsAsUnsent(t *testing.T) {
+	refusal := fmt.Errorf("outbound host %q: %w: %w", "api.example.com",
+		safetransport.ErrRefusedBeforeSend, errors.New("address 169.254.169.254 is not allowed"))
+	if !Unsent(refusal) {
+		t.Fatal("a refusal made before any connection existed was treated as possibly sent")
+	}
+	// Adapters classify the wrapped error, so the marker has to survive the wrap.
+	if !Unsent(&Error{Class: ErrorConnect, Retryable: true, Cause: refusal}) {
+		t.Fatal("the marker did not survive an adapter's provider.Error wrapper")
 	}
 }

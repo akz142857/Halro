@@ -25,6 +25,13 @@ fields and controlled target labels only.
   its own failure counter.
 - Platform: Prometheus rule/config failures and TSDB disk pressure, plus
   Alertmanager notification failures.
+- Configuration activation: a live snapshot that has not caught up with the
+  durable store (`halro_activation_stale`), which refuses the whole data plane.
+- Audit anchoring: anchor emission that has stopped relative to its configured
+  interval.
+- Capability evidence: signed-catalog degradation, capability drift by reason,
+  conflicting or absent deployment capability evidence, and a high
+  capability-detection failure rate.
 
 Aggregated critical provider alerts inhibit child deployment warnings with the
 same environment and cluster. Maintenance silences require owner, reason and

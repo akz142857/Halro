@@ -15,6 +15,7 @@ type AttemptQuery struct {
 	ProviderID     string
 	RequestID      string
 	RequestedModel string
+	ProviderModel  string
 	Status         string
 	Start          time.Time
 	End            time.Time
@@ -31,12 +32,12 @@ type RequestDetail struct {
 }
 
 type Dashboard struct {
-	Today           Bucket                 `json:"today"`
-	Hourly          []Bucket               `json:"hourly"`
-	Active          uint64                 `json:"active_requests"`
-	Watermark       uint64                 `json:"watermark_sequence"`
-	Breakdowns      map[string][]Breakdown `json:"breakdowns"`
-	RecentAnomalies []Anomaly              `json:"recent_anomalies"`
+	Today           Bucket                            `json:"today"`
+	Hourly          []Bucket                          `json:"hourly"`
+	Active          uint64                            `json:"active_requests"`
+	Watermark       uint64                            `json:"watermark_sequence"`
+	Breakdowns      map[string]map[string][]Breakdown `json:"breakdowns"`
+	RecentAnomalies []Anomaly                         `json:"recent_anomalies"`
 }
 
 type Breakdown struct {
@@ -51,8 +52,11 @@ type Breakdown struct {
 }
 
 type Anomaly struct {
+	RequestID      string    `json:"request_id"`
+	AttemptID      string    `json:"attempt_id"`
 	CompletedAt    time.Time `json:"completed_at"`
 	ProjectID      string    `json:"project_id"`
+	DeploymentID   string    `json:"deployment_id,omitempty"`
 	ProviderID     string    `json:"provider_id,omitempty"`
 	RequestedModel string    `json:"requested_model,omitempty"`
 	ProviderModel  string    `json:"provider_model,omitempty"`
@@ -79,6 +83,7 @@ func (a *Aggregate) QueryAttempts(query AttemptQuery) (AttemptPage, error) {
 			query.ProviderID != "" && attempt.ProviderID != query.ProviderID ||
 			query.RequestID != "" && attempt.RequestID != query.RequestID ||
 			query.RequestedModel != "" && attempt.RequestedModel != query.RequestedModel ||
+			query.ProviderModel != "" && attempt.ProviderModel != query.ProviderModel ||
 			query.Status != "" && attempt.Status != query.Status ||
 			!query.Start.IsZero() && attempt.CompletedAt.Before(query.Start) ||
 			!query.End.IsZero() && !attempt.CompletedAt.Before(query.End) {
@@ -146,25 +151,49 @@ func (a *Aggregate) Dashboard(now time.Time, period Period) Dashboard {
 		Active: uint64(len(a.requests)), Watermark: a.watermark.Sequence,
 		Hourly:          make([]Bucket, 0, 7*24),
 		RecentAnomalies: make([]Anomaly, 0, 5),
-		Breakdowns: map[string][]Breakdown{
+		Breakdowns: map[string]map[string][]Breakdown{
 			"project": {}, "provider": {}, "requested_model": {}, "provider_model": {},
 		},
 	}
 	hourIndexes := make(map[int64]int, len(a.hourly))
 	for _, bucket := range a.hourly {
 		if !bucket.Hour.Before(since) {
+			// Request quality is rebuilt from terminal request summaries below. That
+			// keeps restored checkpoints from needing a schema migration and prevents
+			// an hourly bucket from being reused as an accounting-period boundary.
+			bucket.Requests = 0
+			bucket.RequestErrors = 0
+			bucket.RequestLatencySamples = 0
+			bucket.RequestLatencyP50Millis = 0
+			bucket.RequestLatencyP95Millis = 0
 			hourIndexes[bucket.Hour.UTC().Truncate(time.Hour).Unix()] = len(result.Hourly)
 			result.Hourly = append(result.Hourly, bucket)
 		}
-		if period.Contains(bucket.Hour) {
-			result.Today.Requests += bucket.Requests
-			result.Today.Attempts += bucket.Attempts
-			result.Today.InputTokens += bucket.InputTokens
-			result.Today.OutputTokens += bucket.OutputTokens
-			result.Today.CostMicrosUSD += bucket.CostMicrosUSD
-			result.Today.UnknownAttempts += bucket.UnknownAttempts
-			result.Today.Errors += bucket.Errors
-			result.Today.LatencyMillis += bucket.LatencyMillis
+	}
+	hourlyRequestLatencies := make(map[int64][]int64, len(result.Hourly))
+	todayRequestLatencies := make([]int64, 0)
+	for _, summary := range a.summaries {
+		if summary.CompletedAt.IsZero() {
+			continue
+		}
+		hour := summary.CompletedAt.UTC().Truncate(time.Hour)
+		if bucketIndex, ok := hourIndexes[hour.Unix()]; ok {
+			result.Hourly[bucketIndex].Requests++
+			if summary.Outcome != "success" {
+				result.Hourly[bucketIndex].RequestErrors++
+			}
+			if latency, ok := requestLatencyMillis(summary); ok {
+				hourlyRequestLatencies[hour.Unix()] = append(hourlyRequestLatencies[hour.Unix()], latency)
+			}
+		}
+		if period.Contains(summary.CompletedAt) {
+			result.Today.Requests++
+			if summary.Outcome != "success" {
+				result.Today.RequestErrors++
+			}
+			if latency, ok := requestLatencyMillis(summary); ok {
+				todayRequestLatencies = append(todayRequestLatencies, latency)
+			}
 		}
 	}
 	// Provider usage can be unavailable after an ambiguous failure. Such attempts
@@ -184,6 +213,18 @@ func (a *Aggregate) Dashboard(now time.Time, period Period) Dashboard {
 			}
 		}
 		if period.Contains(attempt.CompletedAt) {
+			result.Today.Attempts++
+			result.Today.InputTokens += attempt.ProviderInputTokens
+			result.Today.OutputTokens += attempt.ProviderOutputTokens
+			if cost, ok := attempt.KnownCostMicrosUSD(); ok {
+				result.Today.CostMicrosUSD += cost
+			} else {
+				result.Today.UnknownAttempts++
+			}
+			if attempt.Status != "success" {
+				result.Today.Errors++
+			}
+			result.Today.LatencyMillis += attempt.LatencyMillis
 			if attempt.TokensEstimated {
 				result.Today.EstimatedInputTokens += attempt.ProviderInputTokens
 				result.Today.EstimatedOutputTokens += attempt.ProviderOutputTokens
@@ -200,8 +241,10 @@ func (a *Aggregate) Dashboard(now time.Time, period Period) Dashboard {
 			if len(result.RecentAnomalies) < 5 &&
 				(attempt.Status != "success" || attempt.RetryCount > 0 || attempt.FallbackCount > 0) {
 				result.RecentAnomalies = append(result.RecentAnomalies, Anomaly{
+					RequestID: attempt.RequestID, AttemptID: attempt.AttemptID,
 					CompletedAt: attempt.CompletedAt, ProjectID: attempt.ProjectID,
-					ProviderID: attempt.ProviderID, RequestedModel: attempt.RequestedModel,
+					DeploymentID: attempt.DeploymentID,
+					ProviderID:   attempt.ProviderID, RequestedModel: attempt.RequestedModel,
 					ProviderModel: attempt.ProviderModel, Status: attempt.Status,
 					ErrorClass: attempt.ErrorClass, HTTPStatus: attempt.HTTPStatus,
 					RetryCount: attempt.RetryCount, FallbackCount: attempt.FallbackCount,
@@ -209,8 +252,18 @@ func (a *Aggregate) Dashboard(now time.Time, period Period) Dashboard {
 			}
 		}
 	}
+	setRequestLatency(&result.Today, todayRequestLatencies)
+	for hour, latencies := range hourlyRequestLatencies {
+		if bucketIndex, ok := hourIndexes[hour]; ok {
+			setRequestLatency(&result.Hourly[bucketIndex], latencies)
+		}
+	}
 	for dimension, groups := range breakdowns {
-		result.Breakdowns[dimension] = topBreakdowns(groups, 5)
+		result.Breakdowns[dimension] = map[string][]Breakdown{
+			"calls":  topBreakdowns(groups, 5, "calls"),
+			"cost":   topBreakdowns(groups, 5, "cost"),
+			"errors": topBreakdowns(groups, 5, "errors"),
+		}
 	}
 	sortBuckets(result.Hourly)
 	return result
@@ -241,14 +294,21 @@ func addBreakdown(groups map[string]*Breakdown, key string, attempt AttemptEvent
 	}
 }
 
-func topBreakdowns(groups map[string]*Breakdown, limit int) []Breakdown {
+func topBreakdowns(groups map[string]*Breakdown, limit int, metric string) []Breakdown {
 	items := make([]Breakdown, 0, len(groups))
 	for _, item := range groups {
 		items = append(items, *item)
 	}
 	sort.Slice(items, func(i, j int) bool {
-		if items[i].Calls != items[j].Calls {
-			return items[i].Calls > items[j].Calls
+		left, right := items[i].Calls, items[j].Calls
+		switch metric {
+		case "cost":
+			left, right = items[i].CostMicrosUSD, items[j].CostMicrosUSD
+		case "errors":
+			left, right = items[i].Errors, items[j].Errors
+		}
+		if left != right {
+			return left > right
 		}
 		return items[i].Key < items[j].Key
 	})
@@ -256,6 +316,31 @@ func topBreakdowns(groups map[string]*Breakdown, limit int) []Breakdown {
 		items = items[:limit]
 	}
 	return items
+}
+
+func requestLatencyMillis(summary RequestSummary) (int64, bool) {
+	if summary.AcceptedAt.IsZero() || !summary.CompletedAt.After(summary.AcceptedAt) {
+		return 0, false
+	}
+	return summary.CompletedAt.Sub(summary.AcceptedAt).Milliseconds(), true
+}
+
+func setRequestLatency(bucket *Bucket, latencies []int64) {
+	if bucket == nil || len(latencies) == 0 {
+		return
+	}
+	sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
+	bucket.RequestLatencySamples = int64(len(latencies))
+	bucket.RequestLatencyP50Millis = percentile(latencies, 50)
+	bucket.RequestLatencyP95Millis = percentile(latencies, 95)
+}
+
+func percentile(sorted []int64, percent int) int64 {
+	if len(sorted) == 0 {
+		return 0
+	}
+	index := (len(sorted)*percent + 99) / 100
+	return sorted[index-1]
 }
 
 func EncodeCursor(sequence uint64) string {

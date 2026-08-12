@@ -26,7 +26,7 @@ describe("Layout", () => {
     adoptTimeContext(timeContext({ accounting_timezone: "Asia/Shanghai" }));
     renderLayout();
     expect(screen.getByText("Asia/Shanghai")).toBeInTheDocument();
-    expect(screen.getByText(/本地控制 \/ 无云端依赖/)).toBeInTheDocument();
+    expect(screen.getByText(/本地控制 \| 无云端依赖/)).toBeInTheDocument();
   });
 
   it("follows the zone the server reports rather than a fixed default", () => {

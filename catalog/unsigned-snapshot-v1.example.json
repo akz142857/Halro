@@ -2,13 +2,13 @@
   "schema_version": 1,
   "catalog_revision": "",
   "sequence": 1,
-  "generated_at": "2026-08-10T00:00:00Z",
-  "expires_at": "2026-08-17T00:00:00Z",
+  "generated_at": "2026-08-12T00:00:00Z",
+  "expires_at": "2030-01-01T00:00:00Z",
   "capability_dictionary_version": 1,
   "entries": [
     {
       "provider_type": "openai",
-      "profile_id": "openai_chat_embeddings",
+      "profile_id": "openai.chat-embeddings.v1",
       "target_kind": "model_id",
       "model": "exact-reviewed-model-id",
       "capabilities": {

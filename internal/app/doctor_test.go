@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -11,11 +12,57 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/store/lock"
 )
+
+func TestDoctorDistinguishesLockContentionFromPermissions(t *testing.T) {
+	permission := doctorDataLockFailure("/srv/halro/data", syscall.EACCES)
+	if !strings.Contains(permission, "/srv/halro") || !strings.Contains(permission, "writable parent") {
+		t.Fatalf("permission detail is not actionable: %q", permission)
+	}
+	contention := doctorDataLockFailure("/srv/halro/data", errors.Join(lock.ErrAlreadyLocked, syscall.EWOULDBLOCK))
+	if !strings.Contains(contention, "another Halro process") || strings.Contains(contention, "writable parent") {
+		t.Fatalf("contention detail is misleading: %q", contention)
+	}
+}
+
+// The formatter above is only half the claim. This runs the real doctor
+// against the state an operator actually reaches — a data_dir that no start
+// ever wrote to, reached by following container instructions that failed — and
+// asserts the report names that state instead of reporting a lock it could not
+// acquire. Two different situations with two different next steps.
+func TestDoctorReportsAnUninitializedDataDirAsSuch(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Storage.DataDir = filepath.Join(t.TempDir(), "never-initialized")
+	if err := os.MkdirAll(cfg.Storage.DataDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	report, err := DoctorWithOptions(context.Background(), cfg, DoctorOptions{NoKMS: true})
+	if err == nil {
+		t.Fatal("doctor passed on a data directory that was never initialized")
+	}
+	var detail string
+	for _, check := range report.Checks {
+		if check.Name == "data_lock" {
+			detail = check.Detail
+		}
+	}
+	if detail == "" {
+		t.Fatalf("doctor produced no data_lock check: %#v", report.Checks)
+	}
+	if !strings.Contains(detail, "has not been initialized") || !strings.Contains(detail, "halro init") {
+		t.Fatalf("data_lock detail does not name the state or the next step: %q", detail)
+	}
+	if strings.Contains(detail, "another Halro process") {
+		t.Fatalf("an uninitialized directory was reported as lock contention: %q", detail)
+	}
+}
 
 func TestKMSDoctorStaticAndFullModesAreReadOnly(t *testing.T) {
 	cfg := kmsAppTestConfig(t)

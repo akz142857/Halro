@@ -170,6 +170,37 @@ type activeAttempt struct {
 	pricingTarget provider.Target
 }
 
+// assertPolicySnapshotsCoverProject refuses a request whose Project names a
+// redaction or Token Guard policy the live snapshot does not hold.
+//
+// Both engines answer a lookup miss with "no policy", and for two controls
+// whose whole job is to constrain traffic that is the fail-open direction: the
+// project's PII rules simply do not run, and Token Guard admits unconditionally.
+// The Admin guards make a miss unreachable through the supported paths — a
+// policy an enabled Project references cannot be disabled or deleted — so
+// arriving here means the live snapshot is behind the durable store or one of
+// those guards regressed. Both are refusal cases. An empty ID is not a miss:
+// it means the Project deliberately has no policy.
+func (s *Service) assertPolicySnapshotsCoverProject(principal auth.AuthResult) error {
+	if id := principal.Project.RedactionPolicyID; id != "" && !s.redactor.HasPolicy(id) {
+		return gatewayError(
+			"configuration_stale",
+			"the redaction policy this project requires is not loaded; retry shortly",
+			503,
+			nil,
+		)
+	}
+	if id := principal.Project.TokenGuardPolicyID; id != "" && !s.tokenGuard.HasPolicy(id) {
+		return gatewayError(
+			"configuration_stale",
+			"the Token Guard policy this project requires is not loaded; retry shortly",
+			503,
+			nil,
+		)
+	}
+	return nil
+}
+
 func (s *Service) resolveRequest(
 	ctx context.Context,
 	plaintextKey, model string,
@@ -184,6 +215,9 @@ func (s *Service) resolveRequest(
 		return auth.AuthResult{}, nil, gatewayError("model_not_allowed", "model is not allowed for this project", 403, nil)
 	}
 	if err := authorizeSource(ctx, principal.Project); err != nil {
+		return auth.AuthResult{}, nil, err
+	}
+	if err := s.assertPolicySnapshotsCoverProject(principal); err != nil {
 		return auth.AuthResult{}, nil, err
 	}
 	targets := s.registry.ResolveCandidatesFor(model, operation)

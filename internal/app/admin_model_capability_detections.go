@@ -51,9 +51,20 @@ func (r *Runtime) createAdminModelCapabilityDetection(writer http.ResponseWriter
 		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "Idempotency-Key is required", "code": "idempotency_key_required"})
 		return
 	}
-	var input modelCapabilityDetectionInput
+	var input struct {
+		modelCapabilityDetectionInput
+		stepUpMaterial
+	}
 	if err := decodeAdminJSON(request, &input); err != nil {
 		adminBadRequest(writer, "invalid request")
+		return
+	}
+	// Detection spends the operator's Provider credential on up to
+	// MaxProviderCalls upstream calls and writes the capability evidence a
+	// Deployment can later adopt. Both halves are outside project accounting,
+	// so a stolen session is the only thing between an attacker and a bill;
+	// see requireStepUpMaterial.
+	if !r.requireStepUpMaterial(writer, request, input.stepUpMaterial) {
 		return
 	}
 	input.ProviderModel, input.Region, input.BindingID = strings.TrimSpace(input.ProviderModel), strings.TrimSpace(input.Region), strings.TrimSpace(input.BindingID)
@@ -85,7 +96,7 @@ func (r *Runtime) createAdminModelCapabilityDetection(writer http.ResponseWriter
 	if region == "" {
 		region = providerRegion(instance)
 	}
-	catalogCandidates, probeCandidates, err := r.capabilityDetectionCandidates(instance, input, region)
+	catalogCandidates, probeCandidates, err := r.capabilityDetectionCandidates(instance, input.modelCapabilityDetectionInput, region)
 	if err == nil {
 		err = capabilityCandidateError(catalogCandidates, probeCandidates)
 	}

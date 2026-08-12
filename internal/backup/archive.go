@@ -268,10 +268,15 @@ func Verify(archivePath string, backupKey []byte) (Manifest, error) {
 	if _, err := io.Copy(io.Discard, decrypted); err != nil {
 		return Manifest{}, fmt.Errorf("verify authenticated backup ending: %w", err)
 	}
+	if manifest.Metadata.SchemaVersion > boltstore.CurrentSchemaVersion() {
+		return Manifest{}, fmt.Errorf(
+			"backup metadata schema version %d is newer than this Halro binary supports (schema version %d)",
+			manifest.Metadata.SchemaVersion, boltstore.CurrentSchemaVersion(),
+		)
+	}
 	if !foundManifest || (manifest.FormatVersion != 1 && manifest.FormatVersion != manifestVersion) || !manifest.Encrypted ||
 		manifest.BackupID == "" || manifest.CreatedAt.IsZero() ||
 		manifest.Metadata.SchemaVersion == 0 ||
-		manifest.Metadata.SchemaVersion > boltstore.CurrentSchemaVersion() ||
 		manifest.Metadata.TxID == 0 ||
 		manifest.CheckpointWatermark.Sequence > manifest.LedgerWatermark.Sequence ||
 		manifest.CheckpointWatermark.Offset > manifest.LedgerWatermark.Offset ||

@@ -30,6 +30,11 @@ server:
   # @description.zh-CN 完整读取入站请求体允许的最长时间。
   # @description.en-US Maximum time allowed to read an inbound request body.
   read_body_timeout: 15s
+  # @title.zh-CN 优雅关闭超时
+  # @title.en-US Graceful shutdown timeout
+  # @description.zh-CN 所有监听器共享的关闭预算，必须不短于 Gateway 路由总超时。
+  # @description.en-US Shared listener shutdown budget; must not be shorter than the Gateway route total timeout.
+  shutdown_timeout: 120s
   # @title.zh-CN 最大请求头大小
   # @title.en-US Maximum header size
   # @description.zh-CN 单个请求头允许的最大字节数。

@@ -535,3 +535,36 @@ func TestCheckpointOmitsStateThatHasAlreadyExpired(t *testing.T) {
 		t.Fatalf("expired state was persisted to be revived at the next start: %s", expired)
 	}
 }
+
+// The mirror of the redaction case: a Project naming a policy the live
+// snapshot does not hold was admitted unconditionally — allowed=true,
+// status=normal — which is every limit the Project is supposed to be under
+// silently not applying.
+func TestAMissingPolicyRefusesInsteadOfAdmittingUnconditionally(t *testing.T) {
+	manager, err := New([]domain.TokenGuardPolicy{testPolicy()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC)
+
+	absent := Input{PolicyID: "tgp_not_in_this_snapshot", ProjectID: "prj_1", KeyID: "key_1", EstimatedTokens: 10, Now: now}
+	decision, lease := manager.Acquire(absent)
+	if decision.Allowed {
+		t.Fatalf("named-but-absent policy was admitted: %#v", decision)
+	}
+	if decision.Reason != ReasonPolicyUnavailable {
+		t.Fatalf("refusal reason=%q, which does not tell the operator the snapshot is short a policy", decision.Reason)
+	}
+	if lease != nil {
+		t.Fatal("a refused admission handed out a concurrency lease")
+	}
+	if decision := manager.Admit(absent); decision.Allowed {
+		t.Fatalf("the non-holding path admitted it: %#v", decision)
+	}
+
+	// A Project with no policy is unconstrained on purpose and keeps working.
+	none := Input{PolicyID: "", ProjectID: "prj_1", KeyID: "key_1", EstimatedTokens: 10, Now: now}
+	if decision, _ := manager.Acquire(none); !decision.Allowed {
+		t.Fatalf("no-policy project was refused: %#v", decision)
+	}
+}

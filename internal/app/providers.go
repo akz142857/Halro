@@ -88,10 +88,10 @@ func (r *Runtime) activateTopology() error {
 	defer cancel()
 	if err := r.reloadProviderRegistry(ctx); err != nil {
 		r.logger.Error("routing registry activation failed after a durable mutation", "error", err)
-		r.activation.markStale("routing registry: "+err.Error(), time.Now().UTC())
+		r.activation.markStale(activationDomainTopology, "routing registry: "+err.Error(), time.Now().UTC())
 		return err
 	}
-	r.activation.markCurrent()
+	r.activation.markCurrent(activationDomainTopology)
 	return nil
 }
 

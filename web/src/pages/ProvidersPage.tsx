@@ -9,6 +9,7 @@ import {
   Loading,
   Modal,
   PageHeader,
+  ReauthFields,
   StatusDot,
   ConfirmButton,
   OverflowMenu,
@@ -250,7 +251,7 @@ function ProviderRow({ provider, credential, highlighted, onCredentialClick, onE
   const totalTargets = testMutation.data?.total_targets ?? provider.last_test_total_targets;
   return (
     <>
-      <article className={`provider-row ${highlighted ? "resource-highlight" : ""}`}>
+      <article id={`provider-${provider.id}`} className={`provider-row ${highlighted ? "resource-highlight" : ""}`}>
         <span className="provider-icon">{provider.type === "openai" ? "OA" : "AI"}</span>
         <div className="provider-compact-identity"><span><StatusDot ok={provider.enabled} /><strong>{provider.name}</strong></span><small>{t(`providers.types.${provider.type}`)}</small></div>
         <div className="provider-compact-fact"><small>{t("providers.endpoint")}</small><strong>{provider.base_url}</strong></div>
@@ -359,6 +360,10 @@ function CredentialForm({
       : "bedrock-runtime",
   );
   const [secret, setSecret] = useState("");
+  // Replacing the material an existing credential holds is the same
+  // trust-boundary change as deleting it; the server asks on both. Creating one
+  // establishes new material and does not ask.
+  const [reauth, setReauth] = useState<ReauthValues>({ currentPassword: "", totpCode: "" });
   const queryClient = useQueryClient();
   const mutation = useMutation({
     mutationFn: () => {
@@ -373,10 +378,10 @@ function CredentialForm({
         ...(secret ? { secret } : {}),
       };
       return current
-        ? api.rotateCredential(current.id, value, current.revision)
+        ? api.rotateCredential(current.id, value, current.revision, reauth)
         : api.createCredential({ ...value, secret });
     },
-    onSettled: () => setSecret(""),
+    onSettled: () => { setSecret(""); setReauth((values) => ({ ...values, totpCode: "" })); },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["credentials"] });
       onClose();
@@ -384,7 +389,7 @@ function CredentialForm({
   });
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (name.trim() && baseURL.trim() && (current || secret)) mutation.mutate();
+    if (name.trim() && baseURL.trim() && (current || secret) && (!current || reauth.currentPassword)) mutation.mutate();
   };
   const dirty = useDirty({ name, type, baseURL, bedrockSurface, secret });
   return (
@@ -436,9 +441,10 @@ function CredentialForm({
           />
         </Field>
         {mutation.isError && <ErrorState error={mutation.error} />}
+        {current && <ReauthFields values={reauth} onChange={setReauth} description={t("auth.stepUpSecurityControl")} />}
         <div className="form-actions">
           <button type="button" className="button ghost" onClick={onClose}>{t("common.cancel")}</button>
-          <button className="button primary" disabled={mutation.isPending || (!current && !secret)}>
+          <button className="button primary" disabled={mutation.isPending || (!current && !secret) || (Boolean(current) && !reauth.currentPassword)}>
             {current ? t("providers.rotateSecurely") : t("providers.saveEncrypted")}
           </button>
         </div>

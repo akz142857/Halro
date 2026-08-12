@@ -117,3 +117,55 @@ func TestDeletedRouteStopsRoutingOnRuntimeOwnedActivation(t *testing.T) {
 		t.Fatalf("a deleted route is still a routing candidate: %+v", targets)
 	}
 }
+
+// Named for what it can actually fail on: that disabling a Provider or a
+// Deployment removes its routing candidates on the next activation. The
+// context independence in the older name is not testable here and does not
+// need to be — activateTopologyAfterCommit takes no context parameter, so an
+// Admin client's cancellation cannot reach activation by construction (see the
+// note on activateTopology above). The canceled context is kept only to show
+// the commit path it does belong to.
+func TestDisablingAProviderOrDeploymentRemovesItsRoutingCandidates(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		commit func(*testing.T, *Runtime, BootstrapResult, context.Context)
+	}{
+		{name: "provider", commit: func(t *testing.T, runtime *Runtime, bootstrap BootstrapResult, ctx context.Context) {
+			provider, err := runtime.store.GetProvider(ctx, bootstrap.ProviderID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			provider.Enabled = false
+			if _, err := runtime.store.PutProvider(ctx, provider, provider.Revision, nil); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "deployment", commit: func(t *testing.T, runtime *Runtime, bootstrap BootstrapResult, ctx context.Context) {
+			deployment, err := runtime.store.GetDeployment(ctx, bootstrap.DeploymentID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			deployment.Enabled = false
+			if _, err := runtime.store.PutDeployment(ctx, deployment, deployment.Revision, nil); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runtime, bootstrap, _ := activationTestRuntime(t)
+			if targets := runtime.providers.ResolveCandidatesForEvidence("chat", provider.OperationChat, domain.EvidenceDeclared); len(targets) != 1 {
+				t.Fatalf("precondition candidates=%#v", targets)
+			}
+			requestContext, cancel := context.WithCancel(context.Background())
+			test.commit(t, runtime, bootstrap, requestContext)
+			cancel()
+			runtime.activateTopologyAfterCommit()
+			if targets := runtime.providers.ResolveCandidatesForEvidence("chat", provider.OperationChat, domain.EvidenceDeclared); len(targets) != 0 {
+				t.Fatalf("%s disconnect left route active: %#v", test.name, targets)
+			}
+			if runtime.activation.status().Stale {
+				t.Fatalf("%s activation failed and left the runtime stale", test.name)
+			}
+		})
+	}
+}

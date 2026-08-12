@@ -107,6 +107,42 @@ unrecoverable.
 See [Encrypted backup and restore](docs/guides/backup-restore.md) for Docker/Kubernetes
 layouts, upgrade sequencing, key custody, retention, and recovery commands.
 
+## Verify release downloads
+
+Verify the signed checksum manifest before trusting it, use that manifest to
+check all downloaded bytes, and then verify every artifact bundle against the
+exact release workflow identity:
+
+Requires cosign v2.2 or newer (`--bundle` reads the new Sigstore bundle format).
+
+```bash
+# Download everything: checksums.txt lists every published artifact, and both
+# the checksum check and the loop below expect the files to be present.
+gh release download v1.0.0 --repo akz142857/Halro   # or download all assets by hand
+
+COSIGN_IDENTITY='https://github.com/akz142857/Halro/.github/workflows/release.yml@refs/tags/v1.0.0'
+COSIGN_ISSUER='https://token.actions.githubusercontent.com'
+cosign verify-blob \
+  --certificate-identity "$COSIGN_IDENTITY" \
+  --certificate-oidc-issuer "$COSIGN_ISSUER" \
+  --bundle checksums.txt.sigstore.json checksums.txt
+# --ignore-missing lets you verify only the platform you downloaded; drop it to
+# require every listed file. Without either, a partial download exits non-zero.
+sha256sum --check --ignore-missing checksums.txt  # macOS: shasum -a 256 --check --ignore-missing checksums.txt
+for artifact in halro-* halro.spdx.json; do
+  case "$artifact" in *.sigstore.json) continue ;; esac
+  [ -f "$artifact.sigstore.json" ] || continue
+  cosign verify-blob \
+    --certificate-identity "$COSIGN_IDENTITY" \
+    --certificate-oidc-issuer "$COSIGN_ISSUER" \
+    --bundle "$artifact.sigstore.json" "$artifact"
+done
+```
+
+Do not verify the blobs against an unsigned `checksums.txt`, and do not replace
+the exact tag identity with a branch identity. Release candidates use their own
+exact `refs/tags/v1.0.0-rc.N` identity.
+
 ## API status
 
 | API | Status | Notes |

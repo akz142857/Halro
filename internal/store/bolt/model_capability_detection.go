@@ -1,6 +1,7 @@
 package bolt
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -166,7 +167,20 @@ func (s *Store) InterruptModelCapabilityDetections(ctx context.Context, now time
 	count := 0
 	err := s.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(bucketModelCapabilityDetections)
-		return bucket.ForEach(func(key, raw []byte) error {
+		// Collected first, written after the walk. Writing under ForEach mutates
+		// the bucket the cursor is walking, which bbolt leaves undefined: a value
+		// that changes length can split or merge the page the cursor sits on, and
+		// the walk then skips or revisits records. Skipping one here leaves a
+		// detection stuck in `running` with possibly-billable calls that never
+		// reach a terminal state, which is the one thing this function exists to
+		// prevent — and it would under-report `count` while doing it. Every other
+		// walk in this package collects first for the same reason.
+		type interrupted struct {
+			key   []byte
+			value []byte
+		}
+		var pending []interrupted
+		if err := bucket.ForEach(func(key, raw []byte) error {
 			var d domain.ModelCapabilityDetection
 			if err := json.Unmarshal(raw, &d); err != nil {
 				return err
@@ -191,12 +205,19 @@ func (s *Store) InterruptModelCapabilityDetections(ctx context.Context, now time
 			if err != nil {
 				return err
 			}
-			if err := bucket.Put(key, encoded); err != nil {
+			// The key is only valid for this callback, so it is copied.
+			pending = append(pending, interrupted{key: bytes.Clone(key), value: encoded})
+			return nil
+		}); err != nil {
+			return err
+		}
+		for _, record := range pending {
+			if err := bucket.Put(record.key, record.value); err != nil {
 				return err
 			}
 			count++
-			return nil
-		})
+		}
+		return nil
 	})
 	return count, err
 }

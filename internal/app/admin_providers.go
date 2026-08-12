@@ -93,9 +93,18 @@ func (r *Runtime) updateAdminCredential(writer http.ResponseWriter, request *htt
 	if !ok {
 		return
 	}
-	var input credentialInput
+	var input struct {
+		credentialInput
+		stepUpMaterial
+	}
 	if err := decodeAdminJSON(request, &input); err != nil {
 		adminBadRequest(writer, "invalid request")
+		return
+	}
+	// Replacing credential material is the same trust-boundary change as
+	// deleting it and creating a new one, which already asks; see
+	// requireStepUpMaterial.
+	if !r.requireStepUpMaterial(writer, request, input.stepUpMaterial) {
 		return
 	}
 	r.adminTopologyMu.Lock()
@@ -109,7 +118,7 @@ func (r *Runtime) updateAdminCredential(writer http.ResponseWriter, request *htt
 		adminPreconditionFailed(writer)
 		return
 	}
-	credential, err := r.credentialFromInput(current.ID, input, &current, current.CreatedAt)
+	credential, err := r.credentialFromInput(current.ID, input.credentialInput, &current, current.CreatedAt)
 	if err != nil {
 		adminBadRequest(writer, err.Error())
 		return

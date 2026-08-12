@@ -12,6 +12,11 @@ import (
 var (
 	samplePattern = regexp.MustCompile(`^([a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{([^}]*)\})?[[:space:]]`)
 	labelPattern  = regexp.MustCompile(`(?:^|,)([a-zA-Z_][a-zA-Z0-9_]*)=`)
+	// Two shapes emit a family name: the metricHeader calls, and the helpers
+	// that take the name as their first literal argument. Matching only the
+	// first left every histogram family outside the inventory, which is the same
+	// structural blindness this static pass exists to remove.
+	staticMetricPattern = regexp.MustCompile(`(?:metricHeader|writeLatencyHistogram)\(output,\s*(?:\n\s*)?"([^"]+)"`)
 )
 
 func assertMetricsExpositionContract(t *testing.T, body string) {
@@ -85,6 +90,24 @@ func assertMetricsExpositionContract(t *testing.T, body string) {
 		}
 		if !strings.Contains(string(reference), fmt.Sprintf("`%s`", family)) {
 			t.Fatalf("exported metric %s is missing from docs/contracts/metrics-reference.md", family)
+		}
+	}
+
+	// Runtime exposition can omit conditional families, such as audit-anchor
+	// metrics when anchoring is disabled. Inventory literal metricHeader calls
+	// as well so adding a conditional exporter cannot silently bypass the docs
+	// contract merely because the test fixture does not activate its branch.
+	metricsSource, err := os.ReadFile("metrics.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, match := range staticMetricPattern.FindAllSubmatch(metricsSource, -1) {
+		family := string(match[1])
+		if !strings.HasPrefix(family, "halro_") {
+			continue
+		}
+		if !strings.Contains(string(reference), fmt.Sprintf("`%s`", family)) {
+			t.Fatalf("statically exported metric %s is missing from docs/contracts/metrics-reference.md", family)
 		}
 	}
 }

@@ -19,6 +19,10 @@ server:
   metrics_listen: 127.0.0.1:9090
   read_header_timeout: 5s
   read_body_timeout: 15s
+  # Shared graceful-shutdown budget for Gateway, Admin and Metrics listeners.
+  # It must be at least gateway.route_total_timeout so an accepted request can
+  # finish before the process forcibly closes remaining connections.
+  shutdown_timeout: 2m0s
   max_header_bytes: 32768
   # Bounds one request body. Callers above this get 413 rather than the gateway
   # deciding how much memory an unauthenticated body may cost.

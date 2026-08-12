@@ -9,6 +9,15 @@
 | [role-prompts.md](role-prompts.md) | 可直接使用的角色提示词：通用前置块、15 个角色各自的目标与下限、拒答自检与处置 |
 | [kickoff.md](kickoff.md) | 派发说明：执行顺序、每一步的提示词原文、各步之间的判定点 |
 
+执行后的产出（按方案 §8 落在本目录）：
+
+| 文件 | 内容 |
+|---|---|
+| [release-1.0.0-report.md](release-1.0.0-report.md) | 放行评审报告（冻结件，评审后不再改动） |
+| [carry-forward.md](carry-forward.md) / [progress.md](progress.md) | 继承台账 / 整改台账（可变） |
+| [remediation-verification.md](remediation-verification.md) | 整改核对（只读复核 → 修复收尾 → 再核对收尾，三阶段） |
+| [post-remediation-scorecard.md](post-remediation-scorecard.md) | 整改后按同一套 rubric 重新评分，并给出当前系统的能力边界 |
+
 上游框架（角色定义、方法论、历史评审）见 [`docs/review/README.md`](../../README.md)。
 
 三件事先说清楚，避免读者误判本轮的位置：

@@ -94,6 +94,29 @@ semantic versioning.
 
 ### Operator impact
 
+- **Storage schemas 24 and 27 upgrade in place.** Schema 24 adds the durable
+  model-capability detection buckets; schema 27 adds durable Admin audit
+  intents so a committed mutation cannot lose its audit event across a crash.
+  Neither change requires re-initializing a supported data directory.
+
+- **Storage schemas 25 and 26 reset capability-detection cache state.** These
+  are two reset migrations, not three. They affect only development instances
+  that ran unpublished builds between schemas 24 and 26; published/schema ≤23
+  instances had no detection cache to discard. Re-run capability detection if
+  such an intermediate instance is upgraded.
+
+- **Admin creates now require `Idempotency-Key`.** Provider, Deployment, Route,
+  Project, and Gateway Key create requests without the header return `400
+  idempotency_key_required`; a retry after a committed create returns `409
+  <resource>_idempotency_replay` and the existing ID. See
+  `docs/contracts/idempotency-contract.md` for the Admin/data-plane difference.
+
+- **`security.allow_private_provider_endpoints` now takes effect.** Enabling it
+  permits explicitly configured RFC1918/CGN Provider endpoints while loopback,
+  link-local, cloud metadata, reserved ranges, redirects, environment proxies,
+  and DNS-rebinding remain blocked. Leave it disabled unless private Provider
+  routing is an intentional network boundary.
+
 - **Re-initialising the data directory is required** for an instance holding any
   deployment created before capability snapshots existed. Storage schema 20
   refuses such a directory at start-up and names the deployment count. There is
@@ -180,6 +203,18 @@ to act on.
   600 per minute; `doctor` reports it when a configuration leaves it disabled.
 
 ### Changed
+
+- Graceful shutdown uses a configurable budget that cannot be shorter than the
+  Gateway route timeout. Provider attempts remaining when that budget expires
+  are durably counted before their connections are forcibly closed.
+- Release assets now include a separate binary-input SPDX SBOM and GitHub build
+  provenance attestations. Halro 1.0.0 continues to ship container archives
+  without claiming an official registry image.
+- The optional signed model catalog remains intentionally inactive in 1.0.0
+  release builds without production trust roots; bundled catalog resolution is
+  the fail-closed default.
+- The Light primary hue adjustment is explicitly deferred until after 1.0.0;
+  the current AA-compliant color remains, while typography token use is gated.
 
 - **Breaking (Admin API, pre-1.0).** Deleting a project, gateway key,
   credential, provider, deployment, route, Token Guard policy, redaction policy

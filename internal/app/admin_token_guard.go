@@ -126,9 +126,17 @@ func (r *Runtime) updateAdminTokenGuardPolicy(writer http.ResponseWriter, reques
 	if !ok {
 		return
 	}
-	var input tokenGuardInput
+	var input struct {
+		tokenGuardInput
+		stepUpMaterial
+	}
 	if err := decodeAdminJSON(request, &input); err != nil {
 		adminBadRequest(writer, "invalid request")
+		return
+	}
+	// A Token Guard policy edited to unlimited stops enforcing without being
+	// deleted; see requireStepUpMaterial.
+	if !r.requireStepUpMaterial(writer, request, input.stepUpMaterial) {
 		return
 	}
 	r.adminProjectMu.Lock()
@@ -339,8 +347,8 @@ func (r *Runtime) activateTokenGuardPolicies() {
 	}
 	if err != nil {
 		r.logger.Error("token guard policy activation failed after a durable mutation", "error", err)
-		r.activation.markStale("token guard policies: "+err.Error(), time.Now().UTC())
+		r.activation.markStale(activationDomainTokenGuard, "token guard policies: "+err.Error(), time.Now().UTC())
 		return
 	}
-	r.activation.markCurrent()
+	r.activation.markCurrent(activationDomainTokenGuard)
 }

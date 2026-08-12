@@ -18,3 +18,15 @@ var KMSDisasterRecovery []byte
 
 //go:embed gateway-key-compromise.md
 var GatewayKeyCompromise []byte
+
+// Both of these describe conditions the operator meets while the instance is
+// the thing that is broken: the data plane refusing every request, or a Master
+// Key rotation that stopped half way. Reaching for them over the network is
+// exactly what may not be available, and unlike the KMS pair they apply in the
+// default file mode, so they ship in every binary.
+
+//go:embed configuration-stale.md
+var ConfigurationStale []byte
+
+//go:embed file-master-key-rotation.md
+var FileMasterKeyRotation []byte

@@ -22,6 +22,11 @@ export function localizedError(t: TFunction, error: unknown) {
     binding_referenced_by_deployment: "errors.bindingReferencedByDeployment",
     route_referenced_by_project: "errors.routeReferencedByProject",
     idempotency_conflict: "errors.idempotencyConflict",
+    provider_idempotency_replay: "errors.providerIdempotencyReplay",
+    deployment_idempotency_replay: "errors.deploymentIdempotencyReplay",
+    route_idempotency_replay: "errors.routeIdempotencyReplay",
+    project_idempotency_replay: "errors.projectIdempotencyReplay",
+    gateway_key_idempotency_replay: "errors.gatewayKeyIdempotencyReplay",
   };
   if (error.code && codeMessages[error.code]) return t(codeMessages[error.code]);
   if (error.status === 400 || error.status === 422) return t("errors.badRequest");
@@ -46,6 +51,11 @@ export function errorDetail(error: unknown) {
     "deployment_price_unavailable",
     "price_effective_from_conflict",
     "price_effective_from_required",
+    "provider_idempotency_replay",
+    "deployment_idempotency_replay",
+    "route_idempotency_replay",
+    "project_idempotency_replay",
+    "gateway_key_idempotency_replay",
   ];
   if (localizedWorkflowCodes.includes(error.code)) return "";
   // A forwarded upstream reply is the whole point of the message; show it at any status.
