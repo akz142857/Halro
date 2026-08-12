@@ -110,6 +110,25 @@ Token 记账，都由 Halro 的 `budget`、`ledger`、`usage` 负责，与你选
 默认值配会在保存凭据时失败。数据面不使用默认凭据链、IMDS 或容器 metadata，这是
 安全裁决，不是待办。
 
+IAM 用户仍然是权限的来源，只是以 API key 的形式投影出来。长期 key 就是该用户的
+service-specific credential：
+
+```bash
+aws iam create-service-specific-credential \
+  --user-name <your-bedrock-user> \
+  --service-name bedrock.amazonaws.com \
+  --credential-age-days 90
+```
+
+响应中的 `ServiceApiKeyValue` 即 Halro 凭据里要填的密钥；`ServiceSpecificCredentialId`
+留作停用与轮换之用。除了推理权限（例如 `AmazonBedrockMantleInferenceAccess`），还要确认
+没有策略 Deny 掉 `bedrock-mantle:CallWithBearerToken` —— 那个 action 单独管“能否用
+bearer token 走 Mantle 端点”。
+
+**短期 key 目前不适用。** 它取 12 小时与 IAM 会话时长中更短者，且只在生成它的 region
+有效；Halro 在 topology 构造时固定密钥、没有自动刷新，到期后全部请求 401，且按下面的
+规则不重试、不 fallback。在自动刷新立项完成前，请使用长期 key 并人工轮换。
+
 **Bedrock Project 是 Provider 级属性。** AWS 把 Workspaces（Anthropic 协议）与
 Projects（OpenAI 协议）实现为同一种 Bedrock project 资源，分别由 `anthropic-workspace`
 与 `OpenAI-Project` 请求头选择；省略请求头时归入账户的 default project。

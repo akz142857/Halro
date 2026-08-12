@@ -93,6 +93,10 @@ Halro 的具体实现是否符合契约，但不能用单次 smoke 代替协议�
   inference requests”，历史数据保留 30 天。失败发生在**请求时**而非保存时。
 - **长期 API key 默认策略只允许 get/list projects**，创建/更新/归档需要额外 IAM 策略。
   这限制了任何“保存时在线校验 project 是否存在”的方案。
+- **长期 key 就是 IAM 的 service-specific credential**：
+  `aws iam create-service-specific-credential --service-name bedrock.amazonaws.com`，
+  权限等于该 IAM 用户已附加的策略。另有独立的 IAM action `bedrock-mantle:CallWithBearerToken`
+  控制“能否用 bearer token 走 Mantle 端点”，与推理权限是两回事——运维排障时要分开看。
 - **控制面与数据面同 host**：project 管理走同一个 `bedrock-mantle.<region>.api.aws` 上的
   `/v1/organization/projects`。Halro 只使用数据面路径，控制面路径不得被网关暴露或代理。
 - 每账户最多 1000 个 project。
@@ -239,8 +243,9 @@ IAM，Halro 当前应选择 API key 路径。
 
 ### 4.3 `Credential.ExpiresAt` 不是短期 key 自动刷新
 
-Bedrock 短期 API key 的有效期上限（约 12 小时）来自初始截图，**尚未在官方文档中核实**；
-落地告警阈值前须以 `api-keys.md` 的正式表述为准。AWS 推荐生产负载使用短期凭据。当前
+Bedrock 短期 API key 的有效期已于 2026-08-12 对官方 `api-keys.html` 核实：取
+**12 小时**与**生成它的 IAM 会话时长**两者中更短者，且只在生成它的 region 有效，
+权限继承自生成它的 IAM principal。AWS 推荐生产负载使用短期凭据。当前
 `StaticHeaderAuthorizer` 在 topology 构造时固定秘密，因此 `ExpiresAt` 只能支持提示和人工轮换，
 不能把 Halro 变成生产级自动刷新客户端。
 

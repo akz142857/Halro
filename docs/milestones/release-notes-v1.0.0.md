@@ -249,7 +249,8 @@ data-directory lock uses Unix `flock` semantics.
    because a Bedrock project is a region-scoped resource. A project that does
    not exist or has been archived fails at request time as an authentication
    error, which is not retried and not failed over. Bedrock API keys expire —
-   short-term keys within hours — and Halro has no credential expiry field:
+   a short-term key lasts at most 12 hours, or the life of the IAM session
+   that generated it — and Halro has no credential expiry field:
    rotation is manual through `PUT /credentials/{id}`, and an expired key
    surfaces only as upstream authentication failures.
 9. **Dynamic signed catalog is inactive in the current release build.** No
