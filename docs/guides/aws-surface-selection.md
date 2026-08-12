@@ -100,3 +100,71 @@ Token 记账，都由 Halro 的 `budget`、`ledger`、`usage` 负责，与你选
 
 提交 `operation_bindings` 试图把多个 Binding 塞进一条 Deployment 会被具名拒绝
 （`400 operation_bindings_unavailable`），拒绝信息会指向上面这条做法。
+
+## Mantle 的当前边界（1.0.0）
+
+三条限制，配置前先确认能接受：
+
+**只支持 Bedrock API key。** AWS 控制台的接入向导默认选中 IAM 凭据（走默认凭据链：
+环境变量 → `~/.aws/credentials` → 附加角色）。**Halro 走的是第二个选项**，照着控制台
+默认值配会在保存凭据时失败。数据面不使用默认凭据链、IMDS 或容器 metadata，这是
+安全裁决，不是待办。
+
+IAM 用户仍然是权限的来源，只是以 API key 的形式投影出来。长期 key 就是该用户的
+service-specific credential：
+
+```bash
+aws iam create-service-specific-credential \
+  --user-name <your-bedrock-user> \
+  --service-name bedrock.amazonaws.com \
+  --credential-age-days 90
+```
+
+响应中的 `ServiceApiKeyValue` 即 Halro 凭据里要填的密钥；`ServiceSpecificCredentialId`
+留作停用与轮换之用。`--credential-age-days` 定下的到期日可以填进凭据表单的**到期时间**
+（可选）：控制台会在凭据库里显示剩余天数、过期后标红。这是提醒，不是强制限制——网关不会
+因为这个日期拒绝请求，到期后仍照常调用，直到 AWS 自己返回 401。除了推理权限（例如 `AmazonBedrockMantleInferenceAccess`），还要确认
+没有策略 Deny 掉 `bedrock-mantle:CallWithBearerToken` —— 那个 action 单独管“能否用
+bearer token 走 Mantle 端点”。
+
+**短期 key 目前不适用。** 它取 12 小时与 IAM 会话时长中更短者，且只在生成它的 region
+有效；Halro 在 topology 构造时固定密钥、没有自动刷新，到期后全部请求 401，且按下面的
+规则不重试、不 fallback。在自动刷新立项完成前，请使用长期 key 并人工轮换。
+
+**Bedrock Project 是 Provider 级属性。** AWS 把 Workspaces（Anthropic 协议）与
+Projects（OpenAI 协议）实现为同一种 Bedrock project 资源，分别由 `anthropic-workspace`
+与 `OpenAI-Project` 请求头选择；省略请求头时归入账户的 default project。
+
+Halro 的做法：Provider 表单上的 **Bedrock Project ID** 留空即 default project（不发头），
+填写 `proj_` 开头的 ID 则该实例的全部请求都归入该 project。
+
+- 一个 Provider 只指向一个 project。需要两个 project 就建两个 Provider——**可以复用同一
+  条凭据**，各自保留自己的并发上限、熔断状态、能力证据与记账目标；
+- 不接受 `wrkspc_` 开头的值：那是 Claude Platform on AWS 的 workspace ID，属于另一条
+  产品线；
+- 保存时不做在线校验（AWS 长期 key 的默认策略只允许 get/list projects）。project 不存在
+  或已归档会在**请求时**以认证错误暴露，且按 401/403 的规则不重试、不 fallback。
+
+注意这与上一节说的不是一回事：Halro 自己的 Project 隔离、预算与记账与此无关，这里管的是
+**AWS 账单与 IAM 侧**的 project 维度。
+
+**Deployment 的 Region 必须与 Provider endpoint 的 Region 一致。** Bedrock project
+是 region 作用域资源（ARN 里带 region），模型可用性、配额与能力证据同样按 region
+区分。显式填写的 Region 与 endpoint 派生的 Region 不一致会被拒绝；留空则从 endpoint
+推导。
+
+另外，三个 Mantle Profile 的能力集是**编译期固定**的：控制台不提供勾选，API 保存
+超出上限的能力会被拒绝。这与 Runtime 的 Converse 不同，后者仍由运维声明。
+
+**连接测试的费用不一样。** Anthropic Messages 没有免费的元数据接口，它的探测是一次
+真实推理调用（输出限 1 个令牌）——会计费。Chat 与 Responses 两个实现读取模型元数据，
+不计费。控制台在选中 Messages 实现时会给出提示。
+
+顺带一条与记账有关的事实：能力识别、连接测试与健康探测都可能产生上游费用，但**不进
+Ledger、不计入项目预算与用量**（见发布说明的已知限制）。也就是说 AWS 账单会略高于
+Halro 的账本合计。
+
+最后一条不是限制而是事实：**这三个 Profile 尚未对真实 Bedrock Mantle 账户发过任何
+请求。** 端点形状、路径、认证头与能力声明都来自 AWS 文档，并由本仓的契约测试钉住
+——契约测试证明 Halro 按文档发送，不证明服务端接受。见
+`docs/verification/provider-real-matrix.md`。

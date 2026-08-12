@@ -238,6 +238,10 @@ func (s source) ListProjects(context.Context) ([]domain.Project, error) {
 }
 
 type fakeAdapter struct {
+	// profileID lets a test register the fake behind a profile other than the
+	// default OpenAI one, so profile-scoped filtering can be exercised without
+	// a second fake.
+	profileID         domain.ProviderProfileID
 	mu                sync.Mutex
 	response          openaiapi.ChatCompletionResponse
 	embeddingResponse openaiapi.EmbeddingResponse
@@ -254,10 +258,21 @@ type fakeAdapter struct {
 // production wires every adapter (internal/app wraps each one in
 // LegacyAdapterBridge). The fake mirrors that instead of registering bare, so
 // these tests exercise the same shape the gateway actually serves.
-func (a *fakeAdapter) Type() string { return "openai" }
+func (a *fakeAdapter) Type() string {
+	if a.profileID != "" {
+		if providerType, _, ok := domain.RegisteredProviderProfile(a.profileID); ok {
+			return string(providerType)
+		}
+	}
+	return "openai"
+}
 
 func (a *fakeAdapter) Profile() provider.ProfileManifest {
-	manifest, _ := provider.BuiltinProfile(domain.ProfileOpenAIChatEmbeddings)
+	profileID := a.profileID
+	if profileID == "" {
+		profileID = domain.ProfileOpenAIChatEmbeddings
+	}
+	manifest, _ := provider.BuiltinProfile(profileID)
 	return manifest
 }
 
@@ -1618,3 +1633,148 @@ func TestInterruptedStreamIsBilledForWhatItDelivered(t *testing.T) {
 // stamps onto events. Balances are keyed by it, so a lookup that omitted it
 // would read an empty balance and quietly assert nothing.
 const testTimezoneVersion = 1
+
+// An expired or wrong-project Bedrock API key answers 401 or 403, which every
+// adapter classifies as ErrorAuthentication with Retryable false. That must
+// stop the request rather than move it to a standby deployment: falling back
+// would hide a credential the operator has to rotate, and spend the fallback's
+// budget doing it.
+func TestChatDoesNotFallbackForProviderAuthenticationFailure(t *testing.T) {
+	for _, status := range []int{401, 403} {
+		f := newFixture(t, 10_000)
+		f.adapter.err = &provider.Error{
+			Class: provider.ErrorAuthentication, StatusCode: status, Retryable: false, Message: "denied",
+		}
+		fallback := &fakeAdapter{response: f.adapter.response}
+		if err := f.registry.Register(provider.Target{
+			ID: "target_2", DeploymentID: "dep_target_2", PublicModel: "chat", ProviderModel: "provider-model",
+			Adapter: fallback, Priority: 1,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		_, err := f.service.Chat(context.Background(), f.plaintext, chatRequest())
+		var classified *Error
+		if !errors.As(err, &classified) {
+			t.Fatalf("status %d produced an unclassified error: %v", status, err)
+		}
+		if classified.Code != "provider_authentication_error" {
+			t.Fatalf("status %d surfaced as %q", status, classified.Code)
+		}
+		if f.adapter.calls != 1 || fallback.calls != 0 {
+			t.Fatalf("status %d primary_calls=%d fallback_calls=%d", status, f.adapter.calls, fallback.calls)
+		}
+		f.close()
+	}
+}
+
+// What the accounting record says about an authentication failure is what an
+// operator sees days later. It must name the class — so an expired key is
+// distinguishable from a rate limit or a provider outage — and it must not
+// carry the provider's error text, which can quote the request.
+func TestProviderAuthenticationFailureIsAccountedAsAuthenticationWithoutProviderText(t *testing.T) {
+	f := newFixture(t, 10_000)
+	defer f.close()
+	f.adapter.err = &provider.Error{
+		Class: provider.ErrorAuthentication, StatusCode: 403, Retryable: false,
+		Message: "project proj_secret is archived; caller sk-leak has no access",
+	}
+	var records []ledger.Record
+	f.accounting.AddObserver(func(record ledger.Record) {
+		records = append(records, record)
+	})
+
+	if _, err := f.service.Chat(context.Background(), f.plaintext, chatRequest()); err == nil {
+		t.Fatal("an authentication failure was reported as success")
+	}
+
+	classified := 0
+	for _, record := range records {
+		encoded, marshalErr := json.Marshal(record.Event)
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		for _, leaked := range []string{"proj_secret", "sk-leak", "is archived"} {
+			if strings.Contains(string(encoded), leaked) {
+				t.Fatalf("the provider error text reached the ledger: %q", leaked)
+			}
+		}
+		if record.Event.ErrorClass == "" {
+			continue
+		}
+		if record.Event.ErrorClass != string(provider.ErrorAuthentication) {
+			t.Fatalf("attempt recorded error_class=%q", record.Event.ErrorClass)
+		}
+		classified++
+	}
+	if classified == 0 {
+		t.Fatalf("no accounting record classified the failure: %d records", len(records))
+	}
+}
+
+// A Mantle target must refuse a request its profile cannot serve before any
+// Provider I/O: no upstream call, no budget consumed.
+//
+// Two distinct filters can do that, and this pins both rather than assuming
+// which one fires. reasoning_effort on the Responses profile is refused by the
+// profile's field manifest — that profile cannot preserve reasoning items, so
+// the field is unsupported regardless of what the target declares. An image
+// input is refused by the capability filter, from the target's own declaration.
+// Verified by inverting each: giving the Responses target Reasoning does not
+// make the first pass, because the field manifest is what refuses it.
+func TestMantleTargetRefusesUnservableRequestsBeforeProviderIO(t *testing.T) {
+	f := newFixture(t, 10_000)
+	defer f.close()
+	ceiling := domain.DefaultProviderCapabilitiesForProfile(domain.ProviderBedrock, domain.ProfileBedrockMantleOpenAIResponses)
+	f.registry = provider.NewRegistry()
+	mantle := &fakeAdapter{response: f.adapter.response, profileID: domain.ProfileBedrockMantleOpenAIResponses}
+	if err := f.registry.Register(provider.Target{
+		ID: "target_mantle", DeploymentID: "dep_mantle", PublicModel: "chat", ProviderModel: "provider-model",
+		Adapter: mantle, ProfileID: domain.ProfileBedrockMantleOpenAIResponses,
+		// Narrowed below the ceiling on vision, which a deployment is allowed to
+		// do and which is what makes the capability filter observable here.
+		Capabilities: provider.Capabilities{
+			Chat: ceiling.Chat, Streaming: ceiling.Streaming, Tools: ceiling.Tools, Vision: false,
+			JSONMode: ceiling.JSONMode, DeveloperRole: ceiling.DeveloperRole,
+			Reasoning: ceiling.Reasoning, StreamUsage: ceiling.StreamUsage,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewServiceWithOptions(f.service.auth, f.registry, f.accounting, ServiceOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reasoning := chatRequest()
+	reasoning.ReasoningEffort = "high"
+	assertRefusedBeforeProviderIO(t, service, f.plaintext, reasoning, mantle, "reasoning_effort")
+
+	vision := chatRequest()
+	vision.Messages = []openaiapi.Message{{Role: "user", Content: json.RawMessage(
+		`[{"type":"image_url","image_url":{"url":"https://example.invalid/image.png"}}]`,
+	)}}
+	assertRefusedBeforeProviderIO(t, service, f.plaintext, vision, mantle, "image input")
+}
+
+func assertRefusedBeforeProviderIO(
+	t *testing.T,
+	service *Service,
+	plaintext string,
+	request openaiapi.ChatCompletionRequest,
+	adapter *fakeAdapter,
+	what string,
+) {
+	t.Helper()
+	before := adapter.calls
+	_, err := service.Chat(context.Background(), plaintext, request)
+	var classified *Error
+	if !errors.As(err, &classified) {
+		t.Fatalf("%s was not refused: %v", what, err)
+	}
+	if classified.Code != "unsupported_feature" || classified.HTTPStatus != 400 {
+		t.Fatalf("%s refused as %q with status %d", what, classified.Code, classified.HTTPStatus)
+	}
+	if adapter.calls != before {
+		t.Fatalf("%s reached the provider: %d calls", what, adapter.calls-before)
+	}
+}

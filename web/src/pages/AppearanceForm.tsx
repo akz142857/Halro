@@ -1,6 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useNotify } from "../notifications";
 import { api } from "../api";
 import { applyAppearance } from "../theme";
 import type { AdminPreferences, Appearance, LocalePreference } from "../types";
@@ -9,6 +10,7 @@ const APPEARANCE_OPTIONS: Appearance[] = ["light", "dark"];
 
 export function AppearanceForm({ preferences }: { preferences: AdminPreferences }) {
   const { t } = useTranslation();
+  const { notify } = useNotify();
   const queryClient = useQueryClient();
   const [selected, setSelected] = useState<Appearance>(preferences.appearance);
   const [status, setStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
@@ -71,6 +73,7 @@ export function AppearanceForm({ preferences }: { preferences: AdminPreferences 
         failedTarget.current = null;
         saving.current = false;
         setStatus("saved");
+        notify({ tone: "success", title: t("settings.appearance.saved") });
         void queryClient.invalidateQueries({ queryKey: ["preferences"] });
         void queryClient.invalidateQueries({ queryKey: ["session"] });
       })
@@ -132,7 +135,6 @@ export function AppearanceForm({ preferences }: { preferences: AdminPreferences 
       </fieldset>
       <div className="appearance-status" aria-live="polite">
         {status === "saving" && <span className="muted">{t("settings.appearance.saving")}</span>}
-        {status === "saved" && <div className="notice success" role="status"><strong>{t("settings.appearance.saved")}</strong></div>}
         {status === "error" && (
           <div className="notice error" role="alert">
             <strong>{t("settings.appearance.error")}</strong>

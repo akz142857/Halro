@@ -298,7 +298,7 @@ func (a *Adapter) inferenceResourcesDo(ctx context.Context, method, operation, r
 	if requestID != "" {
 		request.Header.Set("X-Request-ID", requestID)
 	}
-	if err := a.authorize(request); err != nil {
+	if err := a.prepareRequest(request); err != nil {
 		return inferenceResourcesHTTPResult{}, &provider.Error{Class: provider.ErrorAuthentication, Message: "authorize provider request", Cause: err}
 	}
 	response, err := a.client.Do(request)

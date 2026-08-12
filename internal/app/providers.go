@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"slices"
 	"sync"
@@ -200,6 +201,7 @@ const (
 	withheldProviderModelRejected = "provider_model_rejected"
 	withheldPriceUnreadable       = "price_unreadable"
 	withheldTargetRejected        = "target_rejected"
+	withheldRegionMismatched      = "region_mismatched"
 )
 
 // Why a Provider, or one of its bindings, was left out of the load. Scoped wider
@@ -215,6 +217,7 @@ const (
 	excludedEndpointRejected           = "endpoint_rejected"
 	excludedBindingProfileIncompatible = "binding_profile_incompatible"
 	excludedAdapterUnavailable         = "adapter_unavailable"
+	excludedCapabilityCeilingExceeded  = "capability_ceiling_exceeded"
 )
 
 // referenceWithholding records a route kept out of the routing candidates
@@ -399,6 +402,19 @@ func loadProviderRegistryWithCatalog(
 				excludeBinding(instance, binding.ID, excludedBindingProfileIncompatible)
 				continue
 			}
+			// A stored binding that claims more than its profile allows is
+			// withheld here rather than clamped. Clamping would keep serving a
+			// record whose declared capabilities and actual behaviour disagree,
+			// and the disagreement is exactly what capability evidence is
+			// supposed to make impossible. Withholding is also why this is not
+			// fatal: the write paths reject the state, so reaching it means a
+			// record predating the check, and one such record must not stop the
+			// process from loading every other provider.
+			if domain.IsImmutableCapabilityProfile(binding.ProfileID) &&
+				!domain.ProviderCapabilitiesSubset(binding.Capabilities, domain.DefaultProviderCapabilitiesForProfile(instance.Type, binding.ProfileID)) {
+				excludeBinding(instance, binding.ID, excludedCapabilityCeilingExceeded)
+				continue
+			}
 			if credential.AccessSurface != binding.AccessSurface || credential.Scheme != binding.CredentialScheme {
 				return refuse(fmt.Errorf("provider %q binding %q credential profile mismatch", instance.ID, binding.ID))
 			}
@@ -475,6 +491,24 @@ func loadProviderRegistryWithCatalog(
 			// referencing an ID with no record at all, which the store refuses.
 			// It is shared rather than duplicated because the alternative is two
 			// spellings of one rule, which is what a later change gets wrong.
+			// The Admin API refuses a Mantle deployment whose region disagrees
+			// with its provider endpoint, but a restore replaces the whole data
+			// directory rather than replaying that path, and an operator can
+			// move a provider's endpoint under a deployment that already
+			// exists. Answered here for the same reason the capability ceiling
+			// is: withhold the one route, keep loading the rest. A Bedrock
+			// project is region-scoped, so this deployment's catalog key and
+			// capability evidence describe a region no request can reach.
+			if instance, known := instanceByID[deployment.ProviderID]; known &&
+				instance.AccessSurface == domain.SurfaceBedrockMantle &&
+				deployment.Region != "" && deployment.Region != providerRegion(instance) {
+				report.Dangling = append(report.Dangling, referenceWithholding{
+					RouteID: route.ID, DeploymentID: deployment.ID,
+					ProviderID: deployment.ProviderID, BindingID: deployment.BindingID,
+					Reason: withheldRegionMismatched,
+				})
+				continue
+			}
 			review := reviewForDeploymentWithCatalogState(instanceByID, deployment, catalog, catalogUnavailable)
 			if !capabilityReviewAdmitsTraffic(review.State) {
 				report.Drifted = append(report.Drifted, capabilityWithholding{
@@ -577,6 +611,20 @@ func newProviderBindingAdapter(cfg config.Config, instance domain.ProviderInstan
 	if err != nil {
 		return nil, err
 	}
+	return newProviderBindingAdapterWithClient(instance, binding, endpoint, plaintext, client)
+}
+
+// newProviderBindingAdapterWithClient is the wiring itself, separated from the
+// transport it runs on.
+//
+// The split exists so this mapping — which profile gets which credential
+// header, which path, and which Bedrock Project — can be exercised against a
+// fake transport. Without it the composition is only reachable through a real
+// dialer to a pinned public host, which meant the wiring was the one part of
+// the Mantle work no test could see: removing the project from all three
+// branches broke nothing.
+func newProviderBindingAdapterWithClient(instance domain.ProviderInstance, binding domain.ProviderProfileBinding, endpoint *url.URL, plaintext []byte, client *http.Client) (provider.Adapter, error) {
+	var err error
 	capabilities := providerCapabilities(binding.Capabilities)
 	var adapter provider.Adapter
 	var authorizer provider.Authorizer
@@ -614,7 +662,7 @@ func newProviderBindingAdapter(cfg config.Config, instance domain.ProviderInstan
 				authorizer, err = provider.NewStaticHeaderAuthorizer(binding.CredentialScheme, "Authorization", "Bearer ", plaintext, "api-key", "x-api-key")
 			}
 			if err == nil {
-				adapter, err = openaiprovider.NewWithOptions(openaiprovider.Options{Endpoint: endpoint, Authorizer: authorizer, Client: client, ProviderType: string(domain.ProviderBedrock), CredentialScheme: binding.CredentialScheme, Capabilities: capabilities})
+				adapter, err = openaiprovider.NewWithOptions(openaiprovider.Options{Endpoint: endpoint, Authorizer: authorizer, Client: client, ProviderType: string(domain.ProviderBedrock), CredentialScheme: binding.CredentialScheme, Capabilities: capabilities, BedrockProjectID: instance.BedrockProjectID})
 			}
 		case domain.ProfileBedrockMantleOpenAIResponses:
 			err = bedrockmantleprovider.ValidateEndpoint(endpoint)
@@ -622,7 +670,7 @@ func newProviderBindingAdapter(cfg config.Config, instance domain.ProviderInstan
 				authorizer, err = provider.NewStaticHeaderAuthorizer(binding.CredentialScheme, "Authorization", "Bearer ", plaintext, "api-key", "x-api-key")
 			}
 			if err == nil {
-				adapter, err = bedrockmantleprovider.NewResponses(bedrockmantleprovider.ResponsesOptions{Endpoint: endpoint, Authorizer: authorizer, Client: client, Capabilities: capabilities})
+				adapter, err = bedrockmantleprovider.NewResponses(bedrockmantleprovider.ResponsesOptions{Endpoint: endpoint, Authorizer: authorizer, Client: client, Capabilities: capabilities, BedrockProjectID: instance.BedrockProjectID})
 			}
 		case domain.ProfileBedrockMantleAnthropicMessages:
 			err = bedrockmantleprovider.ValidateEndpoint(endpoint)
@@ -630,7 +678,7 @@ func newProviderBindingAdapter(cfg config.Config, instance domain.ProviderInstan
 				authorizer, err = provider.NewStaticHeaderAuthorizer(binding.CredentialScheme, "x-api-key", "", plaintext, "Authorization", "api-key")
 			}
 			if err == nil {
-				adapter, err = anthropicprovider.New(anthropicprovider.Options{Endpoint: endpoint, Authorizer: authorizer, Client: client, Capabilities: capabilities, ProviderType: string(domain.ProviderBedrock), CredentialScheme: binding.CredentialScheme, MessagesPath: "anthropic/v1/messages"})
+				adapter, err = anthropicprovider.New(anthropicprovider.Options{Endpoint: endpoint, Authorizer: authorizer, Client: client, Capabilities: capabilities, ProviderType: string(domain.ProviderBedrock), CredentialScheme: binding.CredentialScheme, MessagesPath: "anthropic/v1/messages", BedrockProjectID: instance.BedrockProjectID})
 			}
 		default:
 			err = errors.New("Bedrock provider profile is not implemented")

@@ -1,8 +1,65 @@
 import type { TFunction } from "i18next";
 import { ApiError } from "../api";
 
+// A credential is sealed against one provider type and one base URL, and the
+// server sends back both sides of whichever comparison failed. Rendering those
+// values into the translated sentence is the difference between "the request is
+// invalid" and a sentence naming the two values the operator has to reconcile.
+const credentialMismatches: Record<string, { message: string; credential: string; provider: string; name?: string }> = {
+  credential_base_url_mismatch: {
+    message: "errors.credentialBaseURLMismatch",
+    credential: "credential_base_url",
+    provider: "provider_base_url",
+  },
+  credential_type_mismatch: {
+    message: "errors.credentialTypeMismatch",
+    credential: "credential_provider_type",
+    provider: "provider_type",
+  },
+  credential_surface_mismatch: {
+    message: "errors.credentialSurfaceMismatch",
+    credential: "credential_access_surface",
+    provider: "provider_access_surface",
+  },
+  // The mirror image, hit from the credential form: rotating the credential to
+  // a different endpoint would strand a provider that still uses it there.
+  credential_endpoint_in_use: {
+    message: "errors.credentialEndpointInUse",
+    credential: "credential_base_url",
+    provider: "provider_base_url",
+    name: "provider_name",
+  },
+  // Same rotation, other axis: the provider still uses this credential as a
+  // different provider type. Reporting that as an endpoint conflict would print
+  // the same URL twice and send the operator to fix a base URL that is correct.
+  credential_type_in_use: {
+    message: "errors.credentialTypeInUse",
+    credential: "credential_provider_type",
+    provider: "provider_provider_type",
+    name: "provider_name",
+  },
+};
+
+// Both values or neither: a half-filled sentence would leave a raw
+// `{{provider}}` on screen, which is worse than the generic fallback.
+function credentialMismatchValues(error: ApiError) {
+  const mismatch = credentialMismatches[error.code];
+  if (!mismatch) return undefined;
+  const payload = error.payload as Record<string, unknown> | undefined;
+  const credential = payload?.[mismatch.credential];
+  const provider = payload?.[mismatch.provider];
+  if (typeof credential !== "string" || typeof provider !== "string" || !credential || !provider) return undefined;
+  const name = mismatch.name ? payload?.[mismatch.name] : "";
+  if (mismatch.name && (typeof name !== "string" || !name)) return undefined;
+  return { message: mismatch.message, credential, provider, name: name as string };
+}
+
 export function localizedError(t: TFunction, error: unknown) {
   if (!(error instanceof ApiError)) return t("errors.network");
+  const mismatch = credentialMismatchValues(error);
+  if (mismatch) {
+    return t(mismatch.message, { credential: mismatch.credential, provider: mismatch.provider, name: mismatch.name });
+  }
   const codeMessages: Record<string, string> = {
     deployment_price_unavailable: "errors.deploymentPriceUnavailable",
     price_effective_from_conflict: "errors.priceEffectiveConflict",
@@ -21,6 +78,7 @@ export function localizedError(t: TFunction, error: unknown) {
     // the detail is deliberately left visible underneath it.
     binding_referenced_by_deployment: "errors.bindingReferencedByDeployment",
     route_referenced_by_project: "errors.routeReferencedByProject",
+    bedrock_project_id_invalid: "errors.bedrockProjectIDInvalid",
     idempotency_conflict: "errors.idempotencyConflict",
     provider_idempotency_replay: "errors.providerIdempotencyReplay",
     deployment_idempotency_replay: "errors.deploymentIdempotencyReplay",
@@ -58,6 +116,11 @@ export function errorDetail(error: unknown) {
     "gateway_key_idempotency_replay",
   ];
   if (localizedWorkflowCodes.includes(error.code)) return "";
+  // The translated sentence already names both values the server compared, so
+  // the English original underneath it says the same thing twice — and says it
+  // in the wrong language. It stays visible when the values did not arrive and
+  // the message fell back to the generic one.
+  if (credentialMismatchValues(error)) return "";
   // A forwarded upstream reply is the whole point of the message; show it at any status.
   if (error.detail) return error.detail;
   const detailed = error.status === 400 || error.status === 409 || error.status === 422;

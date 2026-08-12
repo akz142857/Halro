@@ -18,6 +18,7 @@ import { compactNumber, money } from "../format";
 import type { TokenGuardPolicy, TokenGuardPreview } from "../types";
 import { RedactionPoliciesSection } from "./RedactionPoliciesSection";
 import { useTranslation } from "react-i18next";
+import { useNotify } from "../notifications";
 import { useIsReadOnly } from "../session";
 
 export function PoliciesPage() {
@@ -53,17 +54,22 @@ export function PoliciesPage() {
     (!action || policy.action === action),
   );
   const queryClient = useQueryClient();
+  const { notify } = useNotify();
   const remove = useMutation({
     mutationFn: ({ policy, reauth }: { policy: TokenGuardPolicy; reauth: ReauthValues }) =>
       api.deleteTokenGuardPolicy(policy.id, policy.revision, reauth),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: ["token-guard-policies"] }),
+    onSuccess: (_result, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["token-guard-policies"] });
+      notify({ tone: "success", title: t("policies.notifyDeleted"), description: variables.policy.name });
+    },
   });
   const toggleStatus = useMutation({
     mutationFn: ({ policy, reauth }: { policy: TokenGuardPolicy; reauth: ReauthValues }) =>
       api.updateTokenGuardPolicy(policy.id, tokenGuardPolicyBody(policy, !policy.enabled), policy.revision, reauth),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: ["token-guard-policies"] }),
+    onSuccess: (_result, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["token-guard-policies"] });
+      notify({ tone: "success", title: t(variables.policy.enabled ? "policies.notifyDisabled" : "policies.notifyEnabled"), description: variables.policy.name });
+    },
   });
   useEffect(() => {
     const syncTab = () => setTab(policyTabFromURL());
@@ -318,6 +324,7 @@ function PolicyForm({
   // Editing an existing policy can raise every limit to unlimited or switch it
   // off, so the server asks who is doing it; creating one cannot.
   const [reauth, setReauth] = useState<ReauthValues>({ currentPassword: "", totpCode: "" });
+  const { notify } = useNotify();
   const mutation = useMutation({
     mutationFn: () => current
       ? api.updateTokenGuardPolicy(current.id, body, current.revision, reauth)
@@ -325,6 +332,7 @@ function PolicyForm({
     onSettled: () => setReauth((values) => ({ ...values, totpCode: "" })),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["token-guard-policies"] });
+      notify({ tone: "success", title: t(current ? "policies.notifyUpdated" : "policies.notifyCreated"), description: name });
       onClose();
     },
   });

@@ -92,6 +92,15 @@ func (r *Runtime) createAdminModelCapabilityDetection(writer http.ResponseWriter
 		return
 	}
 	input.TargetKind = targetKind
+	// A Mantle detection carries the same region rule a deployment does: the
+	// probes run against the provider's own regional endpoint whatever label the
+	// request carries, and a detection stamped with another region is evidence no
+	// deployment can adopt — deploymentFromInput refuses that region outright.
+	// Billable probes for a dead result is the worst version of this.
+	if err := validateBedrockMantleRegion(instance, input.Region); err != nil {
+		adminBadRequest(writer, err.Error())
+		return
+	}
 	region := input.Region
 	if region == "" {
 		region = providerRegion(instance)

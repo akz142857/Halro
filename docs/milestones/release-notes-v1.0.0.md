@@ -64,10 +64,18 @@ and other external services are not required.
 | Reviewed OpenAI-compatible endpoint | GA profile | conservative chat/stream/embedding capability declaration |
 | Gemini | Beta | text `generateContent`, SSE, float embeddings |
 | AWS Bedrock | Beta | text Converse/ConverseStream, SigV4, static encrypted credential JSON |
+| AWS Bedrock Mantle | Beta | Chat Completions, Responses (stateless), Anthropic Messages; Bedrock API key only; optional Bedrock Project per provider |
 
 Gemini and Bedrock reject undeclared tools, vision, JSON mode, or embedding
 capabilities rather than silently degrading. Bedrock does not use ambient AWS
 credentials, IMDS, or the default credential chain.
+
+The three Bedrock Mantle profiles authenticate with a Bedrock API key — the
+AWS console offers IAM credentials as its default choice, and that path is not
+implemented here. A provider may name one Bedrock Project (`proj_...`); leaving
+it empty associates every call with the account's default project. Serving two
+projects means two Provider instances, which may share one credential. The
+project is a provider-level property, not a per-request one.
 
 ## Security and recovery
 
@@ -222,42 +230,58 @@ data-directory lock uses Unix `flock` semantics.
    the old response.
 6. **Migrations 25/26 reset detection caches.** This only affects development
    instances that ran unpublished schema-24/25 builds; run detection again.
-7. **Gemini and AWS Bedrock are Beta.** The Admin API may store declarations
-   beyond a Beta profile's defaults, but compile-time profile/adapter gates
-   prevent those declarations from becoming data-plane capabilities: an
-   out-of-ceiling request is refused with 400 `unsupported_feature` before any
-   Provider I/O, with no budget reserved and no upstream connection opened.
-   Where the Console shows more than a profile's defaults, data-plane behaviour
-   is authoritative.
-8. **Dynamic signed catalog is inactive in the current release build.** No
+7. **Gemini and AWS Bedrock are Beta.** Profiles whose capability set is fixed
+   by the build — including all three Bedrock Mantle profiles — refuse a stored
+   declaration above their defaults at the Admin API and at every other write
+   into the store. A record that predates the check is withheld from routing
+   rather than served, and the process still starts. An out-of-ceiling request
+   is refused with 400 `unsupported_feature` before any Provider I/O, with no
+   budget reserved and no upstream connection opened.
+8. **Bedrock Mantle has no real-account evidence.** The three Mantle profiles
+   ship Beta with their endpoint shape, request paths, credential headers, and
+   declared capabilities derived from AWS documentation and pinned by local
+   contract tests. No request from this build has been made against a real
+   Bedrock Mantle account, including the project-addressing header. Two
+   limits are known and intentional: authentication is Bedrock API key only
+   (the console's default IAM path is not implemented), and a provider
+   addresses exactly one Bedrock Project, so a per-request project is not
+   available. A deployment's region must match its provider endpoint's region,
+   because a Bedrock project is a region-scoped resource. A project that does
+   not exist or has been archived fails at request time as an authentication
+   error, which is not retried and not failed over. Bedrock API keys expire —
+   a short-term key lasts at most 12 hours, or the life of the IAM session
+   that generated it — and Halro has no credential expiry field:
+   rotation is manual through `PUT /credentials/{id}`, and an expired key
+   surfaces only as upstream authentication failures.
+9. **Dynamic signed catalog is inactive in the current release build.** No
    production trust roots are compiled, so verification fails closed to the
    bundled catalog; `trust_root_count: 0` is expected and updates default off.
-9. **Unknown request fields are rejected.** Chat and Embeddings return 400 for
+10. **Unknown request fields are rejected.** Chat and Embeddings return 400 for
    any field absent from their manifests, including the official OpenAI
    parameters `frequency_penalty`, `presence_penalty`, `logit_bias`,
    `logprobs`, `store`, `metadata`, and `service_tier`. Check the field set in
    `docs/compatibility/endpoint-manifests.json` before migrating from direct
    OpenAI access.
-10. **Control-plane Provider calls are outside project accounting.** Capability
+11. **Control-plane Provider calls are outside project accounting.** Capability
     detection, Provider tests, and health probes can incur upstream charges but
     do not enter the Ledger, project budget, or Usage totals. The spend is
     bounded (at most 12 calls per detection, each ≤2048 bytes in and 16 output
     tokens) and every call is recorded durably and counted in Prometheus, but
     the operator's real upstream invoice will be slightly higher than Halro's
     ledger total.
-11. **Ambiguous upstream outcomes settle conservatively.** If Halro cannot prove
+12. **Ambiguous upstream outcomes settle conservatively.** If Halro cannot prove
     that no request bytes reached the Provider, it may settle the reserved
     maximum rather than blind-retry or refund. Failures that provably never
     reached the Provider — refused connection, DNS failure, upstream 5xx — are
     settled at zero and release the full reservation; only the ambiguous middle
     is charged.
-12. **Shutdown is bounded and operator-configurable.** The default
+13. **Shutdown is bounded and operator-configurable.** The default
     `server.shutdown_timeout` is two minutes and cannot be shorter than
     `gateway.route_total_timeout`. Service-manager termination grace must be
     longer than Halro's budget. Attempts still active when the budget expires
     are forcibly closed, conservatively settled when ambiguous, and counted by
     durable `halro_shutdown_truncated_attempts_total`.
-13. **Stale activation refuses the whole data plane.** A durable Admin change
+14. **Stale activation refuses the whole data plane.** A durable Admin change
     that has not reached topology, authentication, redaction, or Token Guard
     snapshots returns 503 for every Project. Halro retries all four domains
     every five seconds; the Console, system status, readiness, the unlabelled
@@ -266,24 +290,24 @@ data-directory lock uses Unix `flock` semantics.
     radius remains instance-wide by design to avoid known-stale authorization.
     OpenAI routes return code `configuration_stale`; Anthropic Messages returns
     `overloaded_error`; both use HTTP 503 with `Retry-After: 5`.
-14. **Capability monitoring requires the bundled Prometheus rules.** The
+15. **Capability monitoring requires the bundled Prometheus rules.** The
     release ships alerts for signed-catalog degradation, capability drift, and
     high detection failure rate, but deployments that scrape `/metrics`
     without loading those rules will not receive these signals.
-15. **The dead-man monitor is a separate deployment.** The default Core compose
+16. **The dead-man monitor is a separate deployment.** The default Core compose
     file contains only Prometheus and Alertmanager; without the external probe
     there is no independent witness. It does not prove notification delivery.
-16. **Old backups can restore revoked Gateway Keys.** After restoring an
+17. **Old backups can restore revoked Gateway Keys.** After restoring an
     archive from before an incident, repeat the reviewed revocation list before
     returning the instance to service.
-17. **Pre-rotation backups require their historical Master Key generation.** A
+18. **Pre-rotation backups require their historical Master Key generation.** A
     backup created before Master Key rotation cannot be restored with only the
     new key; retain a mapping from archive to retired key generation.
-18. **KMS Key Slot mode is release-blocked.** Do not use the three M11 runbooks
+19. **KMS Key Slot mode is release-blocked.** Do not use the three M11 runbooks
     as production acceptance until the real AWS matrix, independent recovery
     drill, and four-party sign-off are archived for this exact commit. File mode
     is the verified default.
-19. **Capacity figures are reference results, not guarantees.** All figures were
+20. **Capacity figures are reference results, not guarantees.** All figures were
     measured on macOS/APFS with `F_FULLFSYNC` and are floors, not ceilings —
     Linux/NVMe is materially higher. Accounting sustained 1,223 lifecycles/s at
     64 concurrency and scales with concurrency rather than project count; the
@@ -295,7 +319,7 @@ data-directory lock uses Unix `flock` semantics.
     work queues, and deployments still need memory headroom for the runtime.
     Details in `docs/verification/performance-baseline.md`. The exact-tag
     24-hour soak artifact is not yet archived.
-20. **There is no official container registry.** Releases attach
+21. **There is no official container registry.** Releases attach
     `halro-container.tar.gz`; operators load it, push it to their own registry,
     and replace the explicit placeholder digest in Kubernetes manifests.
 

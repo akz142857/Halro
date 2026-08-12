@@ -15,9 +15,13 @@ import {
   OverflowMenu,
   ResourceToolbar,
   useDirty,
+  useTestFailureReason,
   type ReauthValues,
 } from "../components";
 import type { InlineTestState } from "../components";
+import { useInstantFormatter } from "../format";
+import { isoToZonedInput, useAccountingTimeZone, zonedInputToISO } from "../timezone";
+import { useNotify } from "../notifications";
 import type { AccessSurface, Credential, CredentialScheme, Provider, ProviderBinding, ProviderCapabilities, ProviderType } from "../types";
 import { useTranslation } from "react-i18next";
 import { useIsReadOnly } from "../session";
@@ -39,12 +43,33 @@ function defaultBaseURL(type: ProviderType) {
   return "https://api.openai.com";
 }
 
-function displayBoundBaseURL(value: string) {
+// The server normalizes an endpoint to scheme, host and an always-explicit
+// port; `origin` collapses the default port on both sides, so two values that
+// compare equal here are the two the server compares.
+function urlOrigin(value: string) {
   try {
-    return new URL(value).origin;
+    return new URL(value.trim()).origin;
   } catch {
-    return value;
+    return "";
   }
+}
+
+function displayBoundBaseURL(value: string) {
+  return urlOrigin(value) || value;
+}
+
+// A credential's declared expiry is operator-supplied and advisory: nothing in
+// the request path reads it. What it is for is seeing the rotation coming, so
+// the row states it in the terms the operator plans in — already gone, or how
+// many days are left — rather than only as a timestamp.
+const credentialExpiryWarningDays = 30;
+
+function credentialExpiry(value: string | undefined, now = Date.now()) {
+  if (!value) return undefined;
+  const at = new Date(value).getTime();
+  if (Number.isNaN(at)) return undefined;
+  const days = Math.ceil((at - now) / 86_400_000);
+  return { expired: at <= now, days, soon: at > now && days <= credentialExpiryWarningDays };
 }
 
 const bedrockProfiles = [
@@ -209,13 +234,17 @@ function ProviderRow({ provider, credential, highlighted, onCredentialClick, onE
   const readOnly = useIsReadOnly();
   const [expanded, setExpanded] = useState(false);
   const queryClient = useQueryClient();
+  const { notify } = useNotify();
   const testMutation = useMutation({
     mutationFn: () => api.testProvider(provider.id),
     onSettled: () => queryClient.invalidateQueries({ queryKey: ["providers"] }),
   });
   const deleteMutation = useMutation({
     mutationFn: (reauth: ReauthValues) => api.deleteProvider(provider.id, provider.revision, reauth),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["providers"] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["providers"] });
+      notify({ tone: "success", title: t("providers.notifyDeleted"), description: provider.name });
+    },
   });
   const stateMutation = useMutation({
     mutationFn: () => api.updateProvider(provider.id, {
@@ -223,6 +252,7 @@ function ProviderRow({ provider, credential, highlighted, onCredentialClick, onE
       type: provider.type,
       base_url: provider.base_url,
       ...(provider.api_version ? { api_version: provider.api_version } : {}),
+      ...(provider.bedrock_project_id ? { bedrock_project_id: provider.bedrock_project_id } : {}),
       credential_id: provider.credential_id,
       access_surface: provider.access_surface,
       profile_id: provider.profile_id,
@@ -232,7 +262,13 @@ function ProviderRow({ provider, credential, highlighted, onCredentialClick, onE
       max_concurrency: provider.max_concurrency,
       enabled: !provider.enabled,
     }, provider.revision),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["providers"] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["providers"] });
+      notify({ tone: "success", title: t(provider.enabled ? "providers.notifyDisabled" : "providers.notifyEnabled"), description: provider.name });
+    },
+    // No onError: this mutation renders an ErrorState in place, which carries the
+    // reason. A second copy in the notification column says less and, on the
+    // confirm-gated path, appears above a modal whose Tab trap cannot reach it.
   });
   const persistedTestIsCurrent = provider.last_test_revision === provider.revision;
   const testState: InlineTestState = testMutation.isPending
@@ -246,6 +282,7 @@ function ProviderRow({ provider, credential, highlighted, onCredentialClick, onE
           : provider.last_test_status
             ? "stale"
             : "idle";
+  const testFailureReason = useTestFailureReason(testMutation.error, persistedTestIsCurrent ? provider.last_test_error_class : undefined);
   const testLatency = testMutation.data?.latency_ms ?? provider.last_test_latency_millis;
   const healthyTargets = testMutation.data?.healthy_targets ?? provider.last_test_healthy_targets;
   const totalTargets = testMutation.data?.total_targets ?? provider.last_test_total_targets;
@@ -265,6 +302,11 @@ function ProviderRow({ provider, credential, highlighted, onCredentialClick, onE
           {provider.enabled ? <ConfirmButton className="button ghost" label={t("common.disable")} title={t("providers.disableTitle")} confirmLabel={t("providers.disableConfirm", { name: provider.name })} disabled={stateMutation.isPending} onConfirm={() => stateMutation.mutateAsync()} /> : <button className="button ghost" disabled={stateMutation.isPending} onClick={() => stateMutation.mutate()}>{t("common.enable")}</button>}
           <OverflowMenu label={t("providers.moreActions")}><ConfirmButton label={t("common.delete")} confirmLabel={t("providers.deleteProvider", { name: provider.name })} disabled={deleteMutation.isPending} requireStepUp onConfirm={(reauth) => deleteMutation.mutateAsync(reauth)} /></OverflowMenu>
         </div>
+        {/* The reason belongs in the row that failed, not behind an expander:
+            the operator is looking at the button they just pressed. */}
+        {testState === "failure" && testFailureReason && (
+          <p className="row-test-failure" role="status">{testFailureReason}</p>
+        )}
         {expanded && <div id={`provider-details-${provider.id}`} className="provider-row-content provider-expanded-content">
           <div className="provider-facts">
             <div><small>{t("providers.endpoint")}</small><strong>{provider.base_url}</strong></div>
@@ -295,16 +337,36 @@ function CredentialRow({ credential, useCount, highlighted, onUsageClick }: { cr
   const [rotating, setRotating] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const queryClient = useQueryClient();
+  const dateTime = useInstantFormatter();
   const displayBaseURL = displayBoundBaseURL(credential.bound_base_url);
+  const expiry = credentialExpiry(credential.expires_at);
+  const { notify } = useNotify();
   const remove = useMutation({
     mutationFn: (reauth: ReauthValues) => api.deleteCredential(credential.id, credential.revision, reauth),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["credentials"] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["credentials"] });
+      notify({ tone: "success", title: t("providers.notifyCredentialDeleted"), description: credential.name });
+    },
   });
   return (
     <>
       <article className={`credential-row ${highlighted ? "resource-highlight" : ""}`}>
         <span className="provider-icon credential-icon" aria-hidden="true">K{credential.key_version}</span>
-        <div className="credential-compact-identity"><strong>{credential.name}</strong><small>{t(`providers.types.${credential.type}`)}</small><code className="credential-identity-endpoint">{displayBaseURL}</code></div>
+        <div className="credential-compact-identity">
+          <strong>{credential.name}</strong>
+          <small>{t(`providers.types.${credential.type}`)}</small>
+          {/* Only stated once there is something to state: a secret with no
+              declared end says nothing here, and the two cases worth acting on
+              carry their own tone. */}
+          {expiry && (
+            <small className={`credential-expiry${expiry.expired ? " expired" : expiry.soon ? " expiring" : ""}`}>
+              {expiry.expired
+                ? t("providers.credentialExpired", { date: dateTime(credential.expires_at, "date") })
+                : t("providers.credentialExpiresIn", { count: expiry.days, date: dateTime(credential.expires_at, "date") })}
+            </small>
+          )}
+          <code className="credential-identity-endpoint">{displayBaseURL}</code>
+        </div>
         <div className="credential-compact-fact credential-endpoint"><small>{t("providers.boundURL")}</small><strong>{displayBaseURL}</strong></div>
         <div className="credential-compact-fact credential-usage"><small>{t("providers.usage")}</small>{useCount > 0 ? <button className="resource-link inline" onClick={onUsageClick}>{t("providers.credentialUsage", { count: useCount })} →</button> : <strong>{t("providers.credentialUsage", { count: useCount })}</strong>}</div>
         <div className="credential-compact-fact credential-generation"><small>{t("providers.generation")}</small><strong>{t("providers.keyGeneration", { version: credential.key_version })}</strong></div>
@@ -325,6 +387,7 @@ function CredentialRow({ credential, useCount, highlighted, onUsageClick }: { cr
             <div><dt>{t("providers.surface")}</dt><dd><code>{credential.access_surface}</code></dd></div>
             <div><dt>{t("providers.scheme")}</dt><dd><code>{credential.scheme}</code></dd></div>
             <div><dt>{t("providers.credentialID")}</dt><dd><code>{credential.id}</code></dd></div>
+            <div><dt>{t("providers.credentialExpiry")}</dt><dd>{credential.expires_at ? dateTime(credential.expires_at, "dateTimeYear") : t("providers.credentialNeverExpires")}</dd></div>
           </dl>
         </section>}
       </article>
@@ -351,6 +414,7 @@ function CredentialForm({
   onClose: () => void;
 }) {
   const { t } = useTranslation();
+  const { notify } = useNotify();
   const [name, setName] = useState(current?.name ?? "");
   const [type, setType] = useState<ProviderType>(current?.type ?? "openai");
   const [baseURL, setBaseURL] = useState(current ? displayBoundBaseURL(current.bound_base_url) : defaultBaseURL("openai"));
@@ -360,6 +424,13 @@ function CredentialForm({
       : "bedrock-runtime",
   );
   const [secret, setSecret] = useState("");
+  // datetime-local has no zone of its own. Read and written in the accounting
+  // zone, which is the zone every timestamp the console displays is rendered in
+  // — including this credential's expiry in the row behind the form. Reading it
+  // as the browser's wall clock made the form and the row disagree by the offset
+  // between the two zones.
+  const timeZone = useAccountingTimeZone();
+  const [expiresAt, setExpiresAt] = useState(isoToZonedInput(current?.expires_at, timeZone));
   // Replacing the material an existing credential holds is the same
   // trust-boundary change as deleting it; the server asks on both. Creating one
   // establishes new material and does not ask.
@@ -376,6 +447,10 @@ function CredentialForm({
         base_url: baseURL,
         ...(bedrockBinding ? { access_surface: bedrockBinding.surface, scheme: bedrockBinding.scheme } : {}),
         ...(secret ? { secret } : {}),
+        // Always sent, including as null: the stored expiry is whatever the
+        // form says, so clearing the field clears it rather than silently
+        // keeping the old date through a rotation.
+        expires_at: zonedInputToISO(expiresAt, timeZone) || null,
       };
       return current
         ? api.rotateCredential(current.id, value, current.revision, reauth)
@@ -384,14 +459,25 @@ function CredentialForm({
     onSettled: () => { setSecret(""); setReauth((values) => ({ ...values, totpCode: "" })); },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["credentials"] });
+      notify({ tone: "success", title: t(current ? "providers.notifyCredentialRotated" : "providers.notifyCredentialSaved"), description: name });
       onClose();
     },
   });
+  // Same reason as the provider form below: the rejection must reach the
+  // operator who clicked, not sit in a scrolled-away part of the modal.
+  const submitError = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!mutation.isError) return;
+    requestAnimationFrame(() => {
+      submitError.current?.scrollIntoView?.({ block: "center" });
+      submitError.current?.focus();
+    });
+  }, [mutation.isError, mutation.error]);
   const submit = (event: FormEvent) => {
     event.preventDefault();
     if (name.trim() && baseURL.trim() && (current || secret) && (!current || reauth.currentPassword)) mutation.mutate();
   };
-  const dirty = useDirty({ name, type, baseURL, bedrockSurface, secret });
+  const dirty = useDirty({ name, type, baseURL, bedrockSurface, secret, expiresAt });
   return (
     <Modal title={current ? t("providers.rotateCredential") : t("providers.saveCredential")} dirty={dirty} onClose={onClose}>
       <form onSubmit={submit} autoComplete="off">
@@ -440,7 +526,12 @@ function CredentialForm({
             onChange={(event) => setSecret(event.target.value)}
           />
         </Field>
-        {mutation.isError && <ErrorState error={mutation.error} />}
+        <Field label={t("providers.credentialExpiry")} hint={t("providers.credentialExpiryHint")}>
+          <input type="datetime-local" value={expiresAt} onChange={(event) => setExpiresAt(event.target.value)} />
+        </Field>
+        {mutation.isError && (
+          <div ref={submitError} tabIndex={-1} className="form-submit-error"><ErrorState error={mutation.error} /></div>
+        )}
         {current && <ReauthFields values={reauth} onChange={setReauth} description={t("auth.stepUpSecurityControl")} />}
         <div className="form-actions">
           <button type="button" className="button ghost" onClick={onClose}>{t("common.cancel")}</button>
@@ -463,6 +554,7 @@ function ProviderForm({
   onClose: () => void;
 }) {
   const { t } = useTranslation();
+  const { notify } = useNotify();
   const initialType = current?.type ?? "openai";
   const [name, setName] = useState(current?.name ?? "");
   const [type, setType] = useState<ProviderType>(initialType);
@@ -470,6 +562,7 @@ function ProviderForm({
   const [profileID, setProfileID] = useState<BedrockProfile>(initialProfile);
   const [baseURL, setBaseURL] = useState(current?.base_url ?? defaultBaseURL(initialType));
   const [apiVersion, setAPIVersion] = useState(current?.api_version ?? "");
+  const [bedrockProjectID, setBedrockProjectID] = useState(current?.bedrock_project_id ?? "");
   const [maxConcurrency, setMaxConcurrency] = useState(current?.max_concurrency ?? 0);
   const [enabled, setEnabled] = useState(current?.enabled ?? true);
   const [capabilities, setCapabilities] = useState<ProviderCapabilities>(current?.capabilities ?? defaultProviderCapabilities(initialType));
@@ -480,6 +573,17 @@ function ProviderForm({
   const selectedSurface = type === "bedrock" ? bedrockProfileConfig(profileID).surface : undefined;
   const matchingCredentials = credentials.filter((credential) => credential.type === type && (!selectedSurface || credential.access_surface === selectedSurface));
   const [credentialID, setCredentialID] = useState(current?.credential_id ?? credentials.find((credential) => credential.type === initialType && (initialType !== "bedrock" || credential.access_surface === bedrockProfileConfig(initialProfile).surface))?.id ?? "");
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  // A credential is encrypted against the endpoint it was saved for, so editing
+  // the base URL afterwards silently invalidates the pairing. The server refuses
+  // the save; without this the operator only learns that after a round-trip, and
+  // from a message that names neither URL.
+  const selectedCredential = matchingCredentials.find((credential) => credential.id === credentialID);
+  const credentialBoundURL = selectedCredential ? displayBoundBaseURL(selectedCredential.bound_base_url) : "";
+  const baseURLOrigin = urlOrigin(baseURL);
+  const credentialBaseURLMismatch = credentialBoundURL && baseURLOrigin && credentialBoundURL !== baseURLOrigin
+    ? t("providers.validationCredentialBaseURL")
+    : "";
   const queryClient = useQueryClient();
   // One key per open form: a retry after a lost response reaches the same
   // record instead of creating a second one, while a deliberate second create
@@ -493,6 +597,9 @@ function ProviderForm({
         profile_id: profileID,
         access_surface: bedrockProfileConfig(profileID).surface,
         credential_scheme: bedrockProfileConfig(profileID).scheme,
+        ...(bedrockProfileConfig(profileID).surface === "bedrock-mantle"
+          ? { bedrock_project_id: normalizeBedrockProjectID(bedrockProjectID) }
+          : {}),
       } : type === "openai" ? {
         // profile_id remains during the rolling backend migration. New runtimes
         // route each operation through the matching capability binding.
@@ -508,10 +615,42 @@ function ProviderForm({
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["providers"] });
+      notify({ tone: "success", title: t(current ? "providers.notifyUpdated" : "providers.notifyCreated"), description: name });
       onClose();
     },
   });
-  const dirty = useDirty({ name, type, profileID, baseURL, apiVersion, maxConcurrency, enabled, capabilities, credentialID });
+  const dirty = useDirty({ name, type, profileID, baseURL, apiVersion, bedrockProjectID, maxConcurrency, enabled, capabilities, credentialID });
+  // The save button sits in a sticky footer while the form scrolls behind it,
+  // so a rejection renders into the part of the modal the operator is not
+  // looking at: the click appears to do nothing and they click again. Bring the
+  // failure into view and move focus onto it, so the reason is announced rather
+  // than merely present.
+  const submitError = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!mutation.isError) return;
+    requestAnimationFrame(() => {
+      submitError.current?.scrollIntoView?.({ block: "center" });
+      submitError.current?.focus();
+    });
+  }, [mutation.isError, mutation.error]);
+  // A save the form itself refuses has the same problem, and the field that
+  // failed already says why. Take the operator to that field rather than adding
+  // a second, redundant sentence at the foot of the form.
+  //
+  // Keyed on the submit that produced the errors rather than on the errors
+  // themselves: clearing one field's error is a keystroke in that field, and
+  // re-running on it moved focus to the next still-invalid control mid-word, so
+  // the rest of what was being typed landed somewhere else.
+  const formElement = useRef<HTMLFormElement>(null);
+  const [refusedSubmits, setRefusedSubmits] = useState(0);
+  useEffect(() => {
+    if (refusedSubmits === 0) return;
+    requestAnimationFrame(() => {
+      const invalid = formElement.current?.querySelector<HTMLElement>("[aria-invalid='true']") ?? submitError.current;
+      invalid?.scrollIntoView?.({ block: "center" });
+      invalid?.focus();
+    });
+  }, [refusedSubmits]);
   return (
     <Modal wide title={current ? t("providers.editProvider") : t("providers.createProvider")} dirty={dirty} onClose={onClose}>
       {credentials.length === 0 ? (
@@ -520,16 +659,20 @@ function ProviderForm({
           <span>{t("providers.credentialRequiredDescription")}</span>
         </div>
       ) : (
-        <form className="provider-form"
+        <form className="provider-form" ref={formElement}
           onSubmit={(event) => {
             event.preventDefault();
-            if (name && credentialID) mutation.mutate();
+            const nextErrors = validateProvider({ name, credentialID, bedrockProjectID, mantle: selectedSurface === "bedrock-mantle", capabilities }, t);
+            if (!nextErrors.credentialID && credentialBaseURLMismatch) nextErrors.credentialID = credentialBaseURLMismatch;
+            setErrors(nextErrors);
+            if (Object.keys(nextErrors).length) setRefusedSubmits((value) => value + 1);
+            else mutation.mutate();
           }}
         >
           <section className="provider-form-section" aria-labelledby="provider-connection-title">
             <header><h3 id="provider-connection-title">{t("providers.connectionSection")}</h3><p>{t("providers.connectionSectionDescription")}</p></header>
             <div className="form-grid">
-          <Field label={t("providers.providerName")}><input autoFocus value={name} onChange={(event) => setName(event.target.value)} /></Field>
+          <Field label={t("providers.providerName")} error={errors.name}><input autoFocus value={name} onChange={(event) => { setName(event.target.value); setErrors((previous) => omitError(previous, "name")); }} /></Field>
           <Field label={t("providers.type")}>
             <select value={type} onChange={(event) => {
               const next = event.target.value as ProviderType;
@@ -556,11 +699,26 @@ function ProviderForm({
               </select>
             </Field>
           )}
-          <Field label={t("providers.baseURL")}><input value={baseURL} onChange={(event) => setBaseURL(event.target.value)} /></Field>
+          <Field label={t("providers.baseURL")} hint={credentialBaseURLMismatch ? t("providers.baseURLBoundHint", { credential: credentialBoundURL }) : undefined}>
+            <input value={baseURL} onChange={(event) => { setBaseURL(event.target.value); setErrors((previous) => omitError(previous, "credentialID")); }} />
+          </Field>
           {type === "azure_openai" && (
             <Field label={t("providers.apiVersion")} hint={t("providers.apiVersionHint")}>
               <input value={apiVersion} onChange={(event) => setAPIVersion(event.target.value)} required />
             </Field>
+          )}
+          {selectedSurface === "bedrock-mantle" && (
+            <>
+              <Field label={t("providers.bedrockProject")} hint={t("providers.bedrockProjectHint")} error={errors.bedrockProjectID}>
+                <input value={bedrockProjectID} placeholder={t("providers.bedrockProjectPlaceholder")} onChange={(event) => { setBedrockProjectID(event.target.value); setErrors((previous) => omitError(previous, "bedrockProjectID")); }} />
+              </Field>
+              {profileID === "bedrock.mantle.anthropic.messages.v1" && (
+                <div className="notice warning">
+                  <strong>{t("providers.billableProbe")}</strong>
+                  <span>{t("providers.billableProbeDescription")}</span>
+                </div>
+              )}
+            </>
           )}
             </div>
             <div className="provider-capabilities-group" aria-labelledby="provider-capabilities-title">
@@ -589,16 +747,25 @@ function ProviderForm({
               onChange={(event) => setMaxConcurrency(Number(event.target.value))}
             />
           </Field>
-          <Field label={t("providers.encryptedCredential")}>
-            <select value={credentialID} onChange={(event) => setCredentialID(event.target.value)}>
+          <Field label={t("providers.encryptedCredential")} error={errors.credentialID || credentialBaseURLMismatch}>
+            {/* The endpoint the credential is sealed to is what decides whether
+                it can be used here, so it is in the option rather than a detail
+                page the operator would have to leave the form to read. */}
+            <select value={credentialID} onChange={(event) => { setCredentialID(event.target.value); setErrors((previous) => omitError(previous, "credentialID")); }}>
               {matchingCredentials.map((credential) => (
-                <option value={credential.id} key={credential.id}>{credential.name} · {credential.type}</option>
+                <option value={credential.id} key={credential.id}>{credential.name} · {displayBoundBaseURL(credential.bound_base_url)}</option>
               ))}
             </select>
           </Field>
             </div>
           </section>
-          {mutation.isError && <ErrorState error={mutation.error} />}
+          {(mutation.isError || errors.capabilities) && (
+            <div ref={submitError} tabIndex={-1} className="form-submit-error">
+              {/* The one refusal with no field of its own to carry it. */}
+              {errors.capabilities && <p role="alert">{errors.capabilities}</p>}
+              {mutation.isError && <ErrorState error={mutation.error} />}
+            </div>
+          )}
           {/* Whether deployments may use this upstream is the state the save
               commits, so it belongs in the bar that commits it. */}
           <div className="form-actions sticky-form-actions">
@@ -612,7 +779,9 @@ function ProviderForm({
               </label>
             </div>
             <button type="button" className="button ghost" onClick={onClose}>{t("common.cancel")}</button>
-            <button className="button primary" disabled={mutation.isPending || !credentialID || !hasEnabledCapability(capabilities)}>{current ? t("providers.save") : t("providers.createAndLoad")}</button>
+            {/* Every refusal reason is reported by the submit path rather than
+                by a disabled button, which states nothing about why. */}
+            <button className="button primary" disabled={mutation.isPending}>{current ? t("providers.save") : t("providers.createAndLoad")}</button>
           </div>
         </form>
       )}
@@ -644,6 +813,9 @@ function isStrictCapabilityProfile(type: ProviderType, profileID: BedrockProfile
     "bedrock.runtime.invoke.titan-image-v2.v1",
     "bedrock.agent-runtime.rerank.cohere-v3-5.v1",
     "bedrock.runtime.async.nova-reel-v1.v1",
+    "bedrock.mantle.openai.chat.v1",
+    "bedrock.mantle.openai.responses.v1",
+    "bedrock.mantle.anthropic.messages.v1",
   ].includes(profileID);
 }
 
@@ -692,6 +864,46 @@ function bindingCapabilities(source: ProviderCapabilities, allowed: Set<keyof Pr
 
 function hasEnabledCapability(capabilities: ProviderCapabilities) {
   return capabilityNames.some((name) => capabilities[name]);
+}
+
+// Mirrors domain.NormalizeBedrockProjectID: `default` is AWS's name for the
+// account default project, which is what an empty value already means.
+function normalizeBedrockProjectID(value: string) {
+  const trimmed = value.trim();
+  return trimmed === "default" ? "" : trimmed;
+}
+
+// Mirrors domain.MaxBedrockProjectIDLength.
+const maxBedrockProjectIDLength = 128;
+
+// The same rules the Admin API enforces, applied where the operator can still
+// see which field is wrong. The server stays the authority; this only keeps a
+// refusal from arriving as a bare 400 after the modal has scrolled away.
+function validateProvider(
+  value: { name: string; credentialID: string; bedrockProjectID: string; mantle: boolean; capabilities: ProviderCapabilities },
+  t: ReturnType<typeof useTranslation>["t"],
+): Record<string, string> {
+  const errors: Record<string, string> = {};
+  if (!value.name.trim()) errors.name = t("providers.validationNameRequired");
+  if (!value.credentialID) errors.credentialID = t("providers.validationCredentialRequired");
+  if (!hasEnabledCapability(value.capabilities)) errors.capabilities = t("providers.validationCapabilityRequired");
+  if (value.mantle) {
+    const projectID = normalizeBedrockProjectID(value.bedrockProjectID);
+    if (projectID.length > maxBedrockProjectIDLength) {
+      errors.bedrockProjectID = t("providers.validationProjectTooLong", { max: maxBedrockProjectIDLength });
+    } else if (projectID.startsWith("wrkspc_")) {
+      errors.bedrockProjectID = t("providers.validationProjectWorkspace");
+    } else if (projectID !== "" && !/^proj_[A-Za-z0-9]+$/.test(projectID)) {
+      errors.bedrockProjectID = t("providers.validationProjectFormat");
+    }
+  }
+  return errors;
+}
+
+function omitError(errors: Record<string, string>, key: string) {
+  if (!(key in errors)) return errors;
+  const { [key]: _removed, ...rest } = errors;
+  return rest;
 }
 
 function openAIBindings(chatProfileID: string, capabilities: ProviderCapabilities): ProviderBinding[] {

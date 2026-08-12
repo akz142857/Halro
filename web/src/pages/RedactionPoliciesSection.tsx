@@ -18,6 +18,7 @@ import type {
   RedactionTestResult,
 } from "../types";
 import { useTranslation } from "react-i18next";
+import { useNotify } from "../notifications";
 import { useIsReadOnly } from "../session";
 
 const builtins = [
@@ -123,17 +124,22 @@ export function RedactionPoliciesSection({
     (!mode || policy.mode === mode),
   );
   const queryClient = useQueryClient();
+  const { notify } = useNotify();
   const remove = useMutation({
     mutationFn: ({ policy, reauth }: { policy: RedactionPolicy; reauth: ReauthValues }) =>
       api.deleteRedactionPolicy(policy.id, policy.revision, reauth),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: ["redaction-policies"] }),
+    onSuccess: (_result, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["redaction-policies"] });
+      notify({ tone: "success", title: t("redaction.notifyDeleted"), description: variables.policy.name });
+    },
   });
   const toggle = useMutation({
     mutationFn: ({ policy, reauth }: { policy: RedactionPolicy; reauth: ReauthValues }) =>
       api.updateRedactionPolicy(policy.id, policyUpdateBody(policy, !policy.enabled), policy.revision, reauth),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: ["redaction-policies"] }),
+    onSuccess: (_result, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["redaction-policies"] });
+      notify({ tone: "success", title: t(variables.policy.enabled ? "redaction.notifyDisabled" : "redaction.notifyEnabled"), description: variables.policy.name });
+    },
   });
   return (
     <section className="policy-management-panel" role="tabpanel" id={panelID} aria-labelledby={labelledBy} aria-label={labelledBy ? undefined : t("redaction.title")}>
@@ -348,6 +354,7 @@ function RedactionPolicyForm({
   // Editing an existing policy can take enforcement away, so the server asks
   // who is doing it; creating one cannot, and does not ask.
   const [reauth, setReauth] = useState<ReauthValues>({ currentPassword: "", totpCode: "" });
+  const { notify } = useNotify();
   const mutation = useMutation({
     mutationFn: () => current
       ? api.updateRedactionPolicy(current.id, body, current.revision, reauth)
@@ -355,6 +362,7 @@ function RedactionPolicyForm({
     onSettled: () => setReauth((values) => ({ ...values, totpCode: "" })),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["redaction-policies"] });
+      notify({ tone: "success", title: t(current ? "redaction.notifyUpdated" : "redaction.notifyCreated"), description: name });
       onClose();
     },
   });

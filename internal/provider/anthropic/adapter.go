@@ -32,15 +32,20 @@ type Options struct {
 	ProviderType     string
 	CredentialScheme domain.CredentialScheme
 	MessagesPath     string
+	// BedrockProjectID is empty for Anthropic's own API, which has no such
+	// concept, and for a Bedrock Mantle provider that addresses the account's
+	// default project.
+	BedrockProjectID string
 }
 
 type Adapter struct {
-	endpoint     *url.URL
-	authorizer   provider.Authorizer
-	client       *http.Client
-	capabilities provider.Capabilities
-	providerType string
-	messagesPath string
+	endpoint         *url.URL
+	authorizer       provider.Authorizer
+	client           *http.Client
+	capabilities     provider.Capabilities
+	providerType     string
+	messagesPath     string
+	bedrockProjectID string
 }
 
 func New(options Options) (*Adapter, error) {
@@ -58,7 +63,11 @@ func New(options Options) (*Adapter, error) {
 	if providerType == "" {
 		providerType = string(domain.ProviderAnthropic)
 	}
-	return &Adapter{endpoint: options.Endpoint, authorizer: options.Authorizer, client: options.Client, capabilities: options.Capabilities, providerType: providerType, messagesPath: options.MessagesPath}, nil
+	return &Adapter{
+		endpoint: options.Endpoint, authorizer: options.Authorizer, client: options.Client,
+		capabilities: options.Capabilities, providerType: providerType, messagesPath: options.MessagesPath,
+		bedrockProjectID: options.BedrockProjectID,
+	}, nil
 }
 
 func (adapter *Adapter) Type() string                        { return adapter.providerType }
@@ -423,9 +432,9 @@ func (adapter *Adapter) request(ctx context.Context, call provider.NativeMessage
 	if err != nil {
 		return nil, badRequest("create Anthropic request", err)
 	}
-	if err := adapter.authorizer.Authorize(request, nil); err != nil {
-		return nil, &provider.Error{Class: provider.ErrorAuthentication, Message: "authorize Anthropic request", Cause: err}
-	}
+	// Protocol headers first, credential last: a signing credential scheme has
+	// to see every header it covers, and the project header is chosen here
+	// rather than by the authorizer because addressing is not authentication.
 	request.Header.Set("anthropic-version", call.Version)
 	request.Header.Set("content-type", "application/json")
 	if stream {
@@ -434,6 +443,10 @@ func (adapter *Adapter) request(ctx context.Context, call provider.NativeMessage
 		request.Header.Set("accept", "application/json")
 	}
 	request.Header.Set("x-request-id", call.RequestID)
+	provider.ApplyBedrockProject(request, provider.HeaderBedrockAnthropicWorkspace, adapter.bedrockProjectID)
+	if err := adapter.authorizer.Authorize(request, nil); err != nil {
+		return nil, &provider.Error{Class: provider.ErrorAuthentication, Message: "authorize Anthropic request", Cause: err}
+	}
 	return request, nil
 }
 

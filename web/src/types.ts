@@ -303,6 +303,7 @@ export interface Credential {
   bound_base_url: string;
   secret_configured: boolean;
   key_version: number;
+  expires_at?: string;
   revision: number;
 }
 
@@ -376,6 +377,8 @@ export interface Provider {
   base_url: string;
   api_version?: string;
   credential_id: string;
+  /** Empty or absent means the account's default Bedrock project. */
+  bedrock_project_id?: string;
   allowed_hosts: string[];
   capabilities: ProviderCapabilities;
   bindings?: ProviderBinding[];

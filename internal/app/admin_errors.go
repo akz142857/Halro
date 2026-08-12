@@ -52,6 +52,28 @@ func adminBadRequestCode(writer http.ResponseWriter, code, message string) {
 	writeJSON(writer, http.StatusBadRequest, map[string]string{"code": code, "error": message})
 }
 
+// codedErrorBody answers a refusal the console can only explain if it is told
+// which values disagreed. The extra fields carry those values as data rather
+// than as English prose inside the message, so the reader is shown them in
+// their own language. `code` and `error` own their keys: a field may not
+// overwrite either.
+func codedErrorBody(code, message string, fields map[string]string) map[string]string {
+	body := make(map[string]string, len(fields)+2)
+	for key, value := range fields {
+		if key == "code" || key == "error" {
+			continue
+		}
+		body[key] = value
+	}
+	body["code"] = code
+	body["error"] = message
+	return body
+}
+
+func adminBadRequestFields(writer http.ResponseWriter, code, message string, fields map[string]string) {
+	writeJSON(writer, http.StatusBadRequest, codedErrorBody(code, message, fields))
+}
+
 func adminPreconditionFailed(writer http.ResponseWriter) {
 	writeJSON(writer, http.StatusPreconditionFailed, map[string]string{"error": "resource revision conflict"})
 }

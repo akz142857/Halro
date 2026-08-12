@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { MIN_PASSWORD_CHARACTERS, passwordCharacterCount } from "../password";
 import { api } from "../api";
 import { ErrorState, Field } from "../components";
+import { useNotify } from "../notifications";
 
 export function PasswordChangeForm({ username = "" }: { username?: string }) {
   const { t } = useTranslation();
@@ -12,6 +13,7 @@ export function PasswordChangeForm({ username = "" }: { username?: string }) {
   const [newPassword, setNewPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [validationError, setValidationError] = useState("");
+  const { notify } = useNotify();
   const queryClient = useQueryClient();
   const mutation = useMutation({
     mutationFn: () => api.changePassword(currentPassword, newPassword),
@@ -21,6 +23,9 @@ export function PasswordChangeForm({ username = "" }: { username?: string }) {
       setConfirmation("");
       setEditing(false);
       void queryClient.invalidateQueries({ queryKey: ["session"] });
+      // The form closes itself on success, so the confirmation would otherwise
+      // be reporting on a panel that is no longer there.
+      notify({ tone: "success", title: t("settings.passwordChanged"), description: t("settings.otherSessionsEnd") });
     },
   });
   const submit = (event: FormEvent) => {
@@ -42,7 +47,6 @@ export function PasswordChangeForm({ username = "" }: { username?: string }) {
         <div><p className="eyebrow">{t("settings.currentAccount")}{username ? ` · ${username}` : ""}</p><h3>{t("settings.changePassword")}</h3><p>{t("settings.otherSessionsEnd")}</p></div>
         {!editing && <button type="button" className="button" onClick={() => setEditing(true)}>{t("settings.changePassword")}</button>}
       </header>
-      {mutation.isSuccess && <div className="notice success" role="status"><strong>{t("settings.passwordChanged")}</strong></div>}
       {editing && <form className="settings-form credential-form action-panel" aria-busy={mutation.isPending} onSubmit={submit} autoComplete="off">
         <Field label={t("settings.currentPassword")}><input type="password" autoComplete="current-password" required value={currentPassword} onChange={(event) => { mutation.reset(); setCurrentPassword(event.target.value); }} /></Field>
         <Field label={t("settings.newPassword")} hint={t("settings.newPasswordHint")}><input type="password" autoComplete="new-password" required value={newPassword} onChange={(event) => { mutation.reset(); setNewPassword(event.target.value); }} /></Field>

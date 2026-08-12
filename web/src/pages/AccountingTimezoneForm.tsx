@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useNotify } from "../notifications";
 import { api } from "../api";
 import { ErrorState, Field, Modal } from "../components";
 import { useInstantFormatter } from "../format";
@@ -32,13 +33,21 @@ export function AccountingTimezoneForm({ settings }: { settings: AccountingSetti
   });
   useEffect(() => setTimezone(settings.pending_timezone || settings.timezone), [settings.pending_timezone, settings.timezone]);
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["accounting-settings"] });
+  const { notify } = useNotify();
   const schedule = useMutation({
     mutationFn: () => api.scheduleAccountingTimezone(timezone.trim(), settings.revision),
-    onSuccess: () => { setConfirming(false); return refresh(); },
+    onSuccess: () => {
+      setConfirming(false);
+      notify({ tone: "success", title: t("settings.notifyTimezoneScheduled"), description: timezone.trim() });
+      return refresh();
+    },
   });
   const cancel = useMutation({
     mutationFn: () => api.cancelAccountingTimezoneChange(settings.revision),
-    onSuccess: refresh,
+    onSuccess: () => {
+      notify({ tone: "success", title: t("settings.notifyTimezoneCancelled") });
+      return refresh();
+    },
   });
   const changed = timezone.trim() !== "" && timezone.trim() !== settings.timezone;
   const busy = schedule.isPending || cancel.isPending;

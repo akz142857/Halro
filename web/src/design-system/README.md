@@ -59,6 +59,31 @@ Business pages/components may use **semantic tokens** (`--color-*`, `--shadow-*`
 :root[data-appearance="light"] .some-page { }  /* per-page theme patch */
 ```
 
+## Where an outcome is reported
+
+`NotificationProvider` (`web/src/notifications.tsx`) owns the top-right column.
+It is for outcomes that have **no anchor left on the page**, and only those.
+
+Goes to the notification column:
+
+- a save whose modal has already closed; a delete whose row is gone;
+- a toggle or bare button with nowhere to render a rejection;
+- results of work the operator is no longer looking at (background refresh);
+- the transient acknowledgement of a settings save — the panel stays on screen
+  and already shows the saved value, so a second inline banner only repeats it.
+
+Stays where it happened, and must not be replaced by a notification:
+
+- field-level validation — the reason and the input are one thing;
+- fail-closed refusals (auth, budget, read-only) — an auto-dismissing overlay
+  must never be the only signal;
+- persisted row state, such as a connection test result that survives a reload;
+- destructive confirmations, which state their consequence in the dialog.
+
+Two rules on top of that: a message is reported **once** — never both inline and
+in the column — and notifications carry no secret, prompt or response body, the
+same as logs. Errors never auto-dismiss; success and info clear themselves.
+
 ## Enforcement
 
 `design-system.test.ts` requires exact Dark/Light semantic-token parity, checks

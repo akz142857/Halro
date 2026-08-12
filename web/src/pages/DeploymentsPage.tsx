@@ -16,8 +16,10 @@ import {
   type ReauthValues,
 } from "../components";
 import { money, useInstantFormatter } from "../format";
+import { isoToZonedInput, useAccountingTimeZone, zonedInputToISO } from "../timezone";
 import type { CapabilityPreflight, CapabilityReview, Deployment, DeploymentPriceVersion, DeploymentTargetKind, DeploymentVariant, ModelCapabilityDetection, Provider, ProviderBinding, ProviderCapabilities, ResolvedInvocationTarget } from "../types";
 import { useTranslation } from "react-i18next";
+import { useNotify } from "../notifications";
 import { useIsReadOnly } from "../session";
 import { Link } from "../navigation";
 import { hasOnboardingCreateIntent, OnboardingContextBanner } from "../OnboardingContext";
@@ -164,6 +166,7 @@ function DeploymentRow({
     (latest, price) => (!latest || price.effective_from > latest.effective_from ? price : latest),
     undefined,
   );
+  const { notify } = useNotify();
   const cancelPrice = useMutation({ mutationFn: (price: DeploymentPriceVersion) => api.cancelDeploymentPrice(deployment.id, price.id, price.revision), onSuccess: () => queryClient.invalidateQueries({ queryKey: ["deployment-prices", deployment.id] }) });
   const test = useMutation({
     mutationFn: () => api.testDeployment(deployment.id),
@@ -171,7 +174,10 @@ function DeploymentRow({
   });
   const remove = useMutation({
     mutationFn: (reauth: ReauthValues) => api.deleteDeployment(deployment.id, deployment.revision, reauth),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["deployments"] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["deployments"] });
+      notify({ tone: "success", title: t("deployments.notifyDeleted"), description: deployment.name });
+    },
   });
   const state = useMutation({
     mutationFn: () => api.updateDeployment(deployment.id, {
@@ -185,7 +191,10 @@ function DeploymentRow({
       max_concurrency: deployment.max_concurrency,
       enabled: !deployment.enabled,
     }, deployment.revision),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["deployments"] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["deployments"] });
+      notify({ tone: "success", title: t(deployment.enabled ? "deployments.notifyDisabled" : "deployments.notifyEnabled"), description: deployment.name });
+    },
   });
   // The "no effective price" banner is the failed enable attempt's error, and it
   // outlives the condition it describes: setting a price refreshes the price
@@ -474,7 +483,14 @@ function PriceVersionForm({ deployment, current, blocking, onClose }: { deployme
   // than on an "immediately" the server is bound to refuse.
   const blockingFrom = blocking ? Date.parse(blocking.effective_from) : Number.NaN;
   const [effectiveMode, setEffectiveMode] = useState<"now" | "scheduled">(blocking ? "scheduled" : "now");
-  const [effective, setEffective] = useState(localDateTimeValue(new Date(Math.max(Date.now() + 3_600_000, (blockingFrom || 0) + 60_000))));
+  // datetime-local carries no zone. This field is read and pre-filled in the
+  // accounting zone, which is the zone the confirmation line beside it and the
+  // price timeline behind it are rendered in — the browser's own wall clock put
+  // the two an offset apart with nothing on screen to say so.
+  const timeZone = useAccountingTimeZone();
+  const [effective, setEffective] = useState(
+    isoToZonedInput(new Date(Math.max(Date.now() + 3_600_000, (blockingFrom || 0) + 60_000)), timeZone),
+  );
   const [confirmedEffective, setConfirmedEffective] = useState("");
   const [sourceKind, setSourceKind] = useState("temporary_estimate");
   const [sourceNote, setSourceNote] = useState("");
@@ -484,7 +500,7 @@ function PriceVersionForm({ deployment, current, blocking, onClose }: { deployme
   const confirmSummary = useRef<HTMLElement>(null);
   const submitError = useRef<HTMLDivElement>(null);
   const validPrice = mode === "free" || ([input, output, fixed].every(validUSD) && [input, output, fixed].some((value) => Number(value) > 0));
-  const scheduledTimestamp = Date.parse(effective);
+  const scheduledTimestamp = Date.parse(zonedInputToISO(effective, timeZone));
   const validEffective = effectiveMode === "now"
     ? !blocking
     : Number.isFinite(scheduledTimestamp) && scheduledTimestamp > Date.now() && (!Number.isFinite(blockingFrom) || scheduledTimestamp > blockingFrom);
@@ -629,10 +645,6 @@ function priceInputValue(micros: number) {
   return String(micros / 1_000_000);
 }
 
-export function localDateTimeValue(date: Date) {
-  return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
-}
-
 // A scheduled version whose effective time has already passed by this client's
 // clock, while the server still calls it scheduled, is the normal case for a
 // browser running slightly ahead or a tab that just woke up. Filtering those
@@ -723,6 +735,7 @@ function DeploymentForm({
   const { t } = useTranslation();
   const dateTime = useInstantFormatter();
   const source = current ?? template;
+  const { notify } = useNotify();
   const enabledProviders = providers.filter((provider) => provider.enabled || provider.id === source?.provider_id);
   const [name, setName] = useState(current?.name ?? (template ? `${template.name} v2` : ""));
   const [providerID, setProviderID] = useState(source?.provider_id ?? enabledProviders[0]?.id ?? "");
@@ -910,6 +923,7 @@ function DeploymentForm({
       : api.createDeployment(value(), idempotencyKey.current),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["deployments"] });
+      notify({ tone: "success", title: t(current ? "deployments.notifyUpdated" : "deployments.notifyCreated"), description: name });
       onClose();
     },
     onError: (error) => {

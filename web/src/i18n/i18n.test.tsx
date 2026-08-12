@@ -37,6 +37,25 @@ describe("admin internationalization", () => {
     expect(offenders).toEqual([]);
   });
 
+  // The console renders copy as text, not markdown. A backtick therefore shows
+  // up literally, which is how `proj_` reached a field hint and read as a stray
+  // character next to every other hint in the form.
+  it("writes copy as plain text rather than markdown", () => {
+    const offenders: string[] = [];
+    const walk = (node: unknown, path: string) => {
+      if (typeof node === "string") {
+        if (node.includes("`") || /\*\*/.test(node)) offenders.push(`${path}: ${node}`);
+        return;
+      }
+      if (node && typeof node === "object") {
+        for (const [key, value] of Object.entries(node)) walk(value, path ? `${path}.${key}` : key);
+      }
+    };
+    walk(zhCN, "zh-CN");
+    walk(enUS, "en-US");
+    expect(offenders).toEqual([]);
+  });
+
   it("keeps navigation labels aligned with page titles", () => {
     expect([
       zhCN.navigation.overview, zhCN.navigation.providers, zhCN.navigation.deployments,

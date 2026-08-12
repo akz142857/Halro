@@ -23,13 +23,14 @@ import (
 const maxResponseBytes = 16 << 20
 
 type Adapter struct {
-	endpoint     *url.URL
-	authorizer   provider.Authorizer
-	client       *http.Client
-	providerType string
-	apiVersion   string
-	azure        bool
-	capabilities provider.Capabilities
+	endpoint         *url.URL
+	authorizer       provider.Authorizer
+	client           *http.Client
+	providerType     string
+	apiVersion       string
+	azure            bool
+	capabilities     provider.Capabilities
+	bedrockProjectID string
 }
 
 func New(endpoint *url.URL, apiKey []byte, client *http.Client) (*Adapter, error) {
@@ -52,6 +53,9 @@ type Options struct {
 	Capabilities     provider.Capabilities
 	Authorizer       provider.Authorizer
 	CredentialScheme domain.CredentialScheme
+	// BedrockProjectID is set only for Bedrock Mantle providers, and only when
+	// they address a project other than the account default.
+	BedrockProjectID string
 }
 
 func NewWithOptions(options Options) (*Adapter, error) {
@@ -95,6 +99,7 @@ func NewWithOptions(options Options) (*Adapter, error) {
 		endpoint: endpoint, authorizer: authorizer, client: client,
 		providerType: options.ProviderType, apiVersion: options.APIVersion,
 		azure: options.Azure, capabilities: options.Capabilities,
+		bedrockProjectID: options.BedrockProjectID,
 	}, nil
 }
 
@@ -145,7 +150,7 @@ func (a *Adapter) ListInvocationTargets(ctx context.Context, query domain.Target
 	if err != nil {
 		return nil, &provider.Error{Class: provider.ErrorBadRequest, Message: "create model catalog request", Cause: err}
 	}
-	if err := a.authorize(request); err != nil {
+	if err := a.prepareRequest(request); err != nil {
 		return nil, &provider.Error{Class: provider.ErrorAuthentication, Message: "authorize model catalog request", Cause: err}
 	}
 	request.Header.Set("Accept", "application/json")
@@ -240,7 +245,7 @@ func (a *Adapter) Probe(ctx context.Context, providerModel string) error {
 	if err != nil {
 		return &provider.Error{Class: provider.ErrorBadRequest, Message: "create provider probe", Cause: err}
 	}
-	if err := a.authorize(request); err != nil {
+	if err := a.prepareRequest(request); err != nil {
 		return &provider.Error{Class: provider.ErrorAuthentication, Message: "authorize provider probe", Cause: err}
 	}
 	request.Header.Set("Accept", "application/json")
@@ -294,7 +299,7 @@ func (a *Adapter) Chat(ctx context.Context, call provider.ChatCall) (openaiapi.C
 	if err != nil {
 		return openaiapi.ChatCompletionResponse{}, &provider.Error{Class: provider.ErrorBadRequest, Message: "create provider request", Cause: err}
 	}
-	if err := a.authorize(request); err != nil {
+	if err := a.prepareRequest(request); err != nil {
 		return openaiapi.ChatCompletionResponse{}, &provider.Error{Class: provider.ErrorAuthentication, Message: "authorize provider request", Cause: err}
 	}
 	request.Header.Set("Content-Type", "application/json")
@@ -357,7 +362,7 @@ func (a *Adapter) Embed(ctx context.Context, call provider.EmbeddingCall) (opena
 	if err != nil {
 		return openaiapi.EmbeddingResponse{}, &provider.Error{Class: provider.ErrorBadRequest, Message: "create provider request", Cause: err}
 	}
-	if err := a.authorize(request); err != nil {
+	if err := a.prepareRequest(request); err != nil {
 		return openaiapi.EmbeddingResponse{}, &provider.Error{Class: provider.ErrorAuthentication, Message: "authorize provider embedding request", Cause: err}
 	}
 	request.Header.Set("Content-Type", "application/json")
@@ -430,7 +435,7 @@ func (a *Adapter) ChatStream(
 	if err != nil {
 		return nil, &provider.Error{Class: provider.ErrorBadRequest, Message: "create provider request", Cause: err}
 	}
-	if err := a.authorize(request); err != nil {
+	if err := a.prepareRequest(request); err != nil {
 		return nil, &provider.Error{Class: provider.ErrorAuthentication, Message: "authorize provider stream request", Cause: err}
 	}
 	request.Header.Set("Content-Type", "application/json")
@@ -520,7 +525,14 @@ func (a *Adapter) operationURL(providerModel, operation string) url.URL {
 	return endpoint
 }
 
-func (a *Adapter) authorize(request *http.Request) error {
+// prepareRequest applies resource addressing and then the credential, in that
+// order: a signing credential scheme has to see every header it covers.
+//
+// The project header is not the authorizer's business — addressing is not
+// authentication — but both belong to every outbound request, so they share one
+// call site rather than being remembered separately at five of them.
+func (a *Adapter) prepareRequest(request *http.Request) error {
+	provider.ApplyBedrockProject(request, provider.HeaderBedrockOpenAIProject, a.bedrockProjectID)
 	return a.authorizer.Authorize(request, nil)
 }
 

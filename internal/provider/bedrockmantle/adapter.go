@@ -27,13 +27,18 @@ type ResponsesOptions struct {
 	Authorizer   provider.Authorizer
 	Client       *http.Client
 	Capabilities provider.Capabilities
+	// BedrockProjectID is empty when this provider addresses the account's
+	// default Bedrock project, which is the only reachable one until an
+	// operator names another.
+	BedrockProjectID string
 }
 
 type ResponsesAdapter struct {
-	endpoint     *url.URL
-	authorizer   provider.Authorizer
-	client       *http.Client
-	capabilities provider.Capabilities
+	endpoint         *url.URL
+	authorizer       provider.Authorizer
+	client           *http.Client
+	capabilities     provider.Capabilities
+	bedrockProjectID string
 }
 
 func ValidateEndpoint(endpoint *url.URL) error {
@@ -65,7 +70,10 @@ func NewResponses(options ResponsesOptions) (*ResponsesAdapter, error) {
 		return nil, errors.New("credential scheme does not match Bedrock Mantle Responses profile")
 	}
 	endpoint := *options.Endpoint
-	return &ResponsesAdapter{endpoint: &endpoint, authorizer: options.Authorizer, client: options.Client, capabilities: options.Capabilities}, nil
+	return &ResponsesAdapter{
+		endpoint: &endpoint, authorizer: options.Authorizer, client: options.Client,
+		capabilities: options.Capabilities, bedrockProjectID: options.BedrockProjectID,
+	}, nil
 }
 
 func (*ResponsesAdapter) Type() string                                { return string(domain.ProviderBedrock) }
@@ -80,10 +88,11 @@ func (adapter *ResponsesAdapter) Probe(ctx context.Context, _ string) error {
 	if err != nil {
 		return badRequest("create Mantle probe", err)
 	}
+	request.Header.Set("Accept", "application/json")
+	provider.ApplyBedrockProject(request, provider.HeaderBedrockOpenAIProject, adapter.bedrockProjectID)
 	if err := adapter.authorizer.Authorize(request, nil); err != nil {
 		return &provider.Error{Class: provider.ErrorAuthentication, Message: "authorize Mantle probe", Cause: err}
 	}
-	request.Header.Set("Accept", "application/json")
 	response, err := adapter.client.Do(request)
 	if err != nil {
 		return transportError("Mantle probe failed", err, false)
@@ -202,15 +211,18 @@ func (adapter *ResponsesAdapter) do(ctx context.Context, requestID string, paylo
 	if err != nil {
 		return nil, badRequest("create Mantle Responses request", err)
 	}
-	if err := adapter.authorizer.Authorize(request, nil); err != nil {
-		return nil, &provider.Error{Class: provider.ErrorAuthentication, Message: "authorize Mantle Responses request", Cause: err}
-	}
+	// Protocol headers and resource addressing first, credential last, so a
+	// signing credential scheme would see everything it has to cover.
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json")
 	if stream {
 		request.Header.Set("Accept", "text/event-stream")
 	}
 	request.Header.Set("X-Request-ID", requestID)
+	provider.ApplyBedrockProject(request, provider.HeaderBedrockOpenAIProject, adapter.bedrockProjectID)
+	if err := adapter.authorizer.Authorize(request, nil); err != nil {
+		return nil, &provider.Error{Class: provider.ErrorAuthentication, Message: "authorize Mantle Responses request", Cause: err}
+	}
 	response, err := adapter.client.Do(request)
 	if err != nil {
 		return nil, transportError("Mantle Responses request failed", err, true)

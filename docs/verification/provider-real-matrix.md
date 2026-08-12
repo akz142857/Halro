@@ -118,3 +118,76 @@ published catalog has been configured. Those are explicit production
 activation gates in `docs/runbooks/model-catalog-publishing.md`; dynamic updates
 must remain disabled until they are evidenced for the target repository and
 release.
+
+## AWS Bedrock Mantle: no real-account evidence (2026-08-12)
+
+The three Bedrock Mantle profiles — `bedrock.mantle.openai.chat.v1`,
+`bedrock.mantle.openai.responses.v1`, `bedrock.mantle.anthropic.messages.v1` —
+have **no real-account evidence at any commit**. The matrix runner does not
+cover them, no `HALRO_MATRIX_BEDROCK_MANTLE_...` prefix exists, and no request
+from this build has reached a real Bedrock Mantle endpoint.
+
+What is pinned instead, entirely against fake servers:
+
+- request paths `/v1/chat/completions`, `/v1/responses`, `/anthropic/v1/messages`;
+- credential rendering: bearer `Authorization` on the OpenAI-shaped profiles,
+  `x-api-key` on the Anthropic Messages profile, with the other credential
+  headers explicitly cleared;
+- `anthropic-version` pinned on the Messages profile, `store:false` on Responses;
+- no project or workspace header on any profile, so requests are associated with
+  the account's default Bedrock project;
+- 401 and 403 classified as authentication failures that are neither retried nor
+  failed over to another deployment;
+- probe cost shape: the OpenAI-shaped profiles read one model's metadata, while
+  the Messages profile issues a real one-token inference call.
+
+These come from AWS documentation and this repository's code. They are contract
+tests, not evidence: they prove Halro sends what the documentation describes,
+not that the service accepts it.
+
+### Running the Mantle smoke when it is authorised
+
+The harness exists; no run has happened. It is opt-in twice over: the matrix
+runner ignores Beta profiles unless asked, and the smoke itself skips unless
+every variable is set.
+
+```bash
+export HALRO_MATRIX_BEDROCK_MANTLE_BASE_URL="https://bedrock-mantle.<region>.api.aws"
+export HALRO_MATRIX_BEDROCK_MANTLE_API_KEY="<dedicated, budget-limited Bedrock API key>"
+export HALRO_MATRIX_BEDROCK_MANTLE_MODEL="<exact upstream model id>"
+export HALRO_MATRIX_BEDROCK_MANTLE_MANTLE_PROFILE="chat"   # or responses, messages
+# optional; omit to exercise the account default project
+export HALRO_MATRIX_BEDROCK_MANTLE_BEDROCK_PROJECT_ID="proj_..."
+
+go run ./tests/provider-matrix \
+  -commit '<exact-lowercase-40-character-commit>' \
+  -include-beta \
+  -output provider-matrix.json
+```
+
+Each run exercises one wire profile with a non-stream and a streaming call, and
+requires both to report usage — a run Halro could not account for is not
+evidence that Halro can serve the profile. Three wire profiles is three runs.
+
+`-include-beta` never moves the GA release gate: Beta results carry
+`tier: "beta"` and `passed` counts GA results only. Without the flag the Beta
+rows are still emitted with `status: "not_run"`, so silence cannot be read as
+coverage.
+
+### What a Mantle evidence row may contain
+
+Each row records the cell it covers — `region`, `wire_profile`,
+`authentication`, `project_mode` — plus a `target_digest`. The digest is
+`sha256(region, wire profile, authentication, project mode, exact model)`: it
+lets a later reader confirm two runs used the same target, or match a claimed
+target against a custody record they hold locally, without this shared file
+naming an account's model entitlements. The exact model, the key, the account
+ID, the project ID, request and response bodies, and provider request IDs never
+enter it.
+
+A run proves one cell. It says nothing about the other two wire profiles,
+another model, another region, or the other project mode, and nothing about
+capabilities the run did not exercise. A transient failure, a rate limit or a
+5xx must never be recorded as `unsupported`. Until at least one row exists, the
+release notes carry Mantle as a known limitation and any statement that Mantle
+"works" is a statement about fixtures.

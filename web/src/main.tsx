@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ApiError } from "./api";
 import { App } from "./App";
 import { ErrorBoundary } from "./components";
+import { NotificationProvider } from "./notifications";
 import "./i18n";
 import "./design-system/index.css";
 import "./styles.css";
@@ -21,9 +22,11 @@ const queryClient = new QueryClient({
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
-      <ErrorBoundary>
-        <App />
-      </ErrorBoundary>
+      <NotificationProvider>
+        <ErrorBoundary>
+          <App />
+        </ErrorBoundary>
+      </NotificationProvider>
     </QueryClientProvider>
   </React.StrictMode>,
 );

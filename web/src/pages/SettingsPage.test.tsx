@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
+import { NotificationProvider } from "../notifications";
 import { AppearanceForm } from "./AppearanceForm";
 import { LanguageSettingsForm } from "./LanguageSettingsForm";
 import { MFASettings } from "./MFASettings";
@@ -12,7 +13,7 @@ import { emptyWritePath } from "../test/fixtures";
 
 function renderWithClient(node: React.ReactElement) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<QueryClientProvider client={client}>{node}</QueryClientProvider>);
+  return render(<QueryClientProvider client={client}><NotificationProvider>{node}</NotificationProvider></QueryClientProvider>);
 }
 
 describe("AppearanceForm", () => {
@@ -95,7 +96,7 @@ describe("PasswordChangeForm", () => {
       idle_expires_at: "2026-01-01T00:00:00Z",
     });
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(<QueryClientProvider client={client}><PasswordChangeForm /></QueryClientProvider>);
+    render(<QueryClientProvider client={client}><NotificationProvider><PasswordChangeForm /></NotificationProvider></QueryClientProvider>);
 
     fireEvent.click(screen.getByRole("button", { name: "更改登录密码" }));
     const [current, next, confirmation] = screen.getAllByLabelText(/密码/);
@@ -109,7 +110,7 @@ describe("PasswordChangeForm", () => {
     fireEvent.change(confirmation, { target: { value: "new secure password" } });
     fireEvent.click(screen.getByRole("button", { name: "更改登录密码" }));
     await waitFor(() => expect(change).toHaveBeenCalledWith("old secure password", "new secure password"));
-    expect(await screen.findByRole("status")).toHaveTextContent("会话已安全轮换");
+    expect(await screen.findByText("密码已变更，会话已安全轮换")).toBeVisible();
     expect(current).not.toBeInTheDocument();
     expect(next).not.toBeInTheDocument();
     expect(confirmation).not.toBeInTheDocument();
@@ -129,10 +130,12 @@ describe("LanguageSettingsForm", () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={client}>
+        <NotificationProvider>
         <LanguageSettingsForm
           preferences={{ locale: "system", appearance: "dark", revision: 3 }}
           ui={{ default_locale: "zh-CN", revision: 7, updated_at: "2026-01-01T00:00:00Z" }}
         />
+        </NotificationProvider>
       </QueryClientProvider>,
     );
 
@@ -145,8 +148,11 @@ describe("LanguageSettingsForm", () => {
 
     fireEvent.click(saveInstance);
     await waitFor(() => expect(updateUISettings).toHaveBeenCalledWith("en-US", 7));
-    const savedStatus = (await screen.findByText("The instance default language was saved")).closest("[role='status']");
-    expect(saveInstance.closest(".form-actions")?.nextElementSibling).toBe(savedStatus);
+    const saved = await screen.findByText("The instance default language was saved");
+    expect(saved.closest("[aria-live]")).toHaveAttribute("aria-live", "polite");
+    // The panel keeps the saved value in its own control; the acknowledgement
+    // itself lives in the notification column.
+    expect(saveInstance.closest(".form-actions")?.nextElementSibling).toBeNull();
   });
 });
 

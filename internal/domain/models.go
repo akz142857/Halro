@@ -102,9 +102,17 @@ type Credential struct {
 	Audience      string           `json:"audience"`
 	Ciphertext    []byte           `json:"ciphertext"`
 	KeyVersion    uint16           `json:"key_version"`
-	CreatedAt     time.Time        `json:"created_at"`
-	UpdatedAt     time.Time        `json:"updated_at"`
-	Revision      uint64           `json:"revision"`
+	// ExpiresAt is the operator's record of when the upstream stops honouring
+	// this secret — a Bedrock API key's lifetime, an STS session, a provider
+	// key with a rotation policy. Optional, because most secrets have no
+	// declared end, and advisory: the gateway does not refuse traffic on it,
+	// because it is a typed-in date rather than anything the upstream told us.
+	// What it buys is the rotation being planned instead of discovered from a
+	// 401 in production.
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
+	Revision  uint64     `json:"revision"`
 }
 
 func (c *Credential) GetRevision() uint64      { return c.Revision }
@@ -134,6 +142,11 @@ func (c Credential) Validate() error {
 	}
 	if len(c.Ciphertext) == 0 {
 		problems = append(problems, errors.New("credential ciphertext is required"))
+	}
+	// A zero timestamp is what an unparsed or half-built value decays to, and
+	// stored as "expires" it would read as the year 1. No expiry is nil.
+	if c.ExpiresAt != nil && c.ExpiresAt.IsZero() {
+		problems = append(problems, errors.New("credential expiry must be a real instant or absent"))
 	}
 	return errors.Join(problems...)
 }
@@ -220,15 +233,27 @@ type GatewayKey struct {
 // data already answer that. If it ever comes back it must arrive with its write.
 
 type ProviderInstance struct {
-	ID                     string                   `json:"id"`
-	Name                   string                   `json:"name"`
-	Type                   ProviderType             `json:"type"`
-	BaseURL                string                   `json:"base_url"`
-	APIVersion             string                   `json:"api_version,omitempty"`
-	CredentialID           string                   `json:"credential_id"`
-	AccessSurface          AccessSurface            `json:"access_surface"`
-	ProfileID              ProviderProfileID        `json:"profile_id"`
-	CredentialScheme       CredentialScheme         `json:"credential_scheme"`
+	ID               string            `json:"id"`
+	Name             string            `json:"name"`
+	Type             ProviderType      `json:"type"`
+	BaseURL          string            `json:"base_url"`
+	APIVersion       string            `json:"api_version,omitempty"`
+	CredentialID     string            `json:"credential_id"`
+	AccessSurface    AccessSurface     `json:"access_surface"`
+	ProfileID        ProviderProfileID `json:"profile_id"`
+	CredentialScheme CredentialScheme  `json:"credential_scheme"`
+	// BedrockProjectID selects the Bedrock Project (Workspace, in the Anthropic
+	// protocol's naming — AWS documents them as one resource) that requests
+	// through this provider are associated with. Empty means the account's
+	// default project, which is also what every record written before this
+	// field existed means: no header is sent, and AWS associates the request
+	// with the default. That is why adding it needs no migration.
+	//
+	// Provider-level rather than binding-level because a binding is uniquely
+	// keyed by (provider, profile) and cannot repeat, so it cannot carry a
+	// dimension an operator needs several of. Two projects are two providers,
+	// which may share one credential.
+	BedrockProjectID       string                   `json:"bedrock_project_id,omitempty"`
 	AllowedHosts           []string                 `json:"allowed_hosts"`
 	Capabilities           ProviderCapabilities     `json:"capabilities"`
 	CapabilityEvidence     CapabilityEvidenceSet    `json:"capability_evidence"`
@@ -266,7 +291,11 @@ func DefaultProviderProfileBindingID(providerID string, profileID ProviderProfil
 	return providerID + ":" + string(profileID)
 }
 
-func (b ProviderProfileBinding) Validate(providerID string, providerType ProviderType) error {
+// retired says the record being validated is a tombstone. A deleted provider is
+// read by nothing that acts on capabilities, and refusing its write would leave
+// a record that predates the ceiling permanently undeletable — the operator
+// cannot lower a capability set on a provider they are removing.
+func (b ProviderProfileBinding) Validate(providerID string, providerType ProviderType, retired bool) error {
 	if strings.TrimSpace(b.ID) == "" {
 		return errors.New("provider profile binding id is required")
 	}
@@ -281,6 +310,16 @@ func (b ProviderProfileBinding) Validate(providerID string, providerType Provide
 	}
 	if b.Capabilities.Streaming && !b.Capabilities.Chat {
 		return errors.New("streaming capability requires chat capability")
+	}
+	// The ceiling belongs here rather than only in the Admin handler. Validate is
+	// what PutProvider calls, so this is the boundary every write crosses —
+	// Admin API, restore, or a future caller that does not exist yet. A profile
+	// whose capabilities the build fixes must never be widened by a stored
+	// record, because everything downstream (capability detection plans, the
+	// data-plane preflight) reads the binding and believes it.
+	if !retired && IsImmutableCapabilityProfile(b.ProfileID) &&
+		!ProviderCapabilitiesSubset(b.Capabilities, DefaultProviderCapabilitiesForProfile(providerType, b.ProfileID)) {
+		return errors.New("provider profile binding capabilities exceed the immutable operation profile")
 	}
 	if err := b.CapabilityEvidence.Validate(b.Capabilities); err != nil {
 		return err
@@ -401,6 +440,14 @@ func (p ProviderInstance) Validate() error {
 	if p.CredentialID == "" {
 		problems = append(problems, errors.New("provider credential id is required"))
 	}
+	if p.BedrockProjectID != "" && p.AccessSurface != SurfaceBedrockMantle {
+		// Every other surface has no such concept, so a value here would be
+		// stored and never sent — a setting that silently does nothing.
+		problems = append(problems, errors.New("bedrock project id is only valid on the Bedrock Mantle access surface"))
+	}
+	if err := ValidateBedrockProjectID(p.BedrockProjectID); err != nil {
+		problems = append(problems, err)
+	}
 	if len(p.AllowedHosts) == 0 {
 		problems = append(problems, errors.New("provider allowed hosts must not be empty"))
 	}
@@ -432,7 +479,7 @@ func (p ProviderInstance) Validate() error {
 		}
 		seenProfiles[binding.ProfileID] = struct{}{}
 		enabledBinding = enabledBinding || binding.Enabled
-		if err := binding.Validate(p.ID, p.Type); err != nil {
+		if err := binding.Validate(p.ID, p.Type, p.DeletedAt != nil); err != nil {
 			problems = append(problems, err)
 		}
 		if binding.CredentialScheme != p.CredentialScheme {
@@ -460,6 +507,13 @@ func (p ProviderInstance) Validate() error {
 				break
 			}
 		}
+	} else if p.DeletedAt == nil && IsImmutableCapabilityProfile(p.ProfileID) &&
+		!ProviderCapabilitiesSubset(p.Capabilities, DefaultProviderCapabilitiesForProfile(p.Type, p.ProfileID)) {
+		// No explicit bindings: the legacy single-profile projection is the only
+		// capability declaration there is, so the ceiling has to be checked
+		// against it directly. With bindings present the equality check above
+		// already forces the instance to match a set that Validate has bounded.
+		problems = append(problems, errors.New("provider capabilities exceed the immutable operation profile"))
 	}
 	if p.MaxConcurrency < 0 {
 		problems = append(problems, errors.New("provider max concurrency cannot be negative"))

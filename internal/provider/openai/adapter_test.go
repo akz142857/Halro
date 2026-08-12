@@ -21,6 +21,9 @@ func TestBedrockMantleChatUsesBearerAPIKeyAndOpenAIPath(t *testing.T) {
 		if request.URL.String() != "https://bedrock-mantle.us-east-1.api.aws/v1/chat/completions" || request.Header.Get("Authorization") != "Bearer bedrock-key" || request.Header.Get("x-api-key") != "" {
 			t.Fatalf("unexpected Mantle request: %s %#v", request.URL, request.Header)
 		}
+		// Halro addresses the account's default Bedrock project, so OpenAI-Project
+		// is never sent. anthropic-workspace-id belongs to a different AWS service.
+		assertNoBedrockResourceHeaders(t, request.Header)
 		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"id":"chatcmpl_1","object":"chat.completion","created":1,"model":"amazon.nova-pro","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`)), Request: request}, nil
 	})}
 	endpoint, _ := url.Parse("https://bedrock-mantle.us-east-1.api.aws")
@@ -366,7 +369,7 @@ func TestProviderAuthorizationCannotBeOverriddenByExistingHeaders(t *testing.T) 
 	request, _ := http.NewRequest(http.MethodPost, endpoint.String(), nil)
 	request.Header.Set("Authorization", "Bearer client-controlled")
 	request.Header.Set("api-key", "client-controlled")
-	openAI.authorize(request)
+	openAI.prepareRequest(request)
 	if request.Header.Get("Authorization") != "Bearer provider-key" || request.Header.Get("api-key") != "" {
 		t.Fatalf("OpenAI provider credentials were not authoritative: %#v", request.Header)
 	}
@@ -381,7 +384,7 @@ func TestProviderAuthorizationCannotBeOverriddenByExistingHeaders(t *testing.T) 
 	defer azure.Close()
 	request.Header.Set("Authorization", "Bearer client-controlled")
 	request.Header.Set("api-key", "client-controlled")
-	azure.authorize(request)
+	azure.prepareRequest(request)
 	if request.Header.Get("api-key") != "azure-key" || request.Header.Get("Authorization") != "" {
 		t.Fatalf("Azure provider credentials were not authoritative: %#v", request.Header)
 	}

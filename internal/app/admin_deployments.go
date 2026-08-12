@@ -441,14 +441,14 @@ func (r *Runtime) testAdminDeployment(writer http.ResponseWriter, request *http.
 	testedAt := time.Now().UTC()
 	latencyMS := time.Since(started).Milliseconds()
 	errorClass := provider.ErrorUnknown
+	var failure probeFailure
 	status := domain.DeploymentTestHealthy
 	r.capabilityMetrics.recordDeploymentTest(probeErr == nil)
 	if probeErr != nil {
 		status = domain.DeploymentTestUnhealthy
-		var classified *provider.Error
-		if errors.As(probeErr, &classified) {
-			errorClass = classified.Class
-		}
+		failure = describeProbeFailure(probeErr)
+		errorClass = failure.Class
+		r.logProbeFailure("deployment", deployment.ID, deployment.BindingID, failure, latencyMS)
 	}
 
 	r.adminTopologyMu.Lock()
@@ -495,6 +495,7 @@ func (r *Runtime) testAdminDeployment(writer http.ResponseWriter, request *http.
 	writer.Header().Set("ETag", revisionETag(current.Revision))
 	if probeErr != nil {
 		result["error_class"] = errorClass
+		failure.addTo(result)
 		writeJSON(writer, http.StatusBadGateway, result)
 		return
 	}
@@ -533,6 +534,9 @@ func (r *Runtime) deploymentFromInput(request *http.Request, deploymentID string
 		return domain.Deployment{}, errors.New("deployment provider is unavailable")
 	}
 	model := strings.TrimSpace(input.ProviderModel)
+	if err := validateBedrockMantleRegion(instance, input.Region); err != nil {
+		return domain.Deployment{}, err
+	}
 	region := deploymentRegion(instance, input)
 	var detected *domain.ModelCapabilityDetection
 	var resolution deploymentResolution
@@ -739,6 +743,37 @@ func deploymentTargetKind(providerType domain.ProviderType, surface domain.Acces
 	}
 }
 
+// validateBedrockMantleRegion refuses a Mantle deployment whose declared region
+// disagrees with the one its provider endpoint points at.
+//
+// deploymentRegion lets an explicit region win, which on every other surface is
+// only a label mismatch. On Mantle it is not: the Bedrock Project a request is
+// associated with is a region-scoped resource (its ARN carries the region), and
+// model availability, quota and capability evidence are region-scoped with it.
+// A deployment claiming eu-west-1 against a us-east-1 endpoint therefore keys
+// the catalog and the evidence on a region no request will ever reach.
+//
+// Left as an equality check rather than making the field read-only, so an
+// operator can still state the region explicitly — they just cannot state a
+// different one.
+// Takes the declared region rather than a deploymentInput so capability
+// detection, which accepts the same field and keys the same catalog and evidence
+// on it, is bound by the same rule.
+func validateBedrockMantleRegion(instance domain.ProviderInstance, region string) error {
+	if instance.AccessSurface != domain.SurfaceBedrockMantle {
+		return nil
+	}
+	declared := strings.TrimSpace(region)
+	if declared == "" {
+		return nil
+	}
+	endpointRegion := providerRegion(instance)
+	if endpointRegion == "" || declared != endpointRegion {
+		return errors.New("region must match the Bedrock Mantle endpoint region")
+	}
+	return nil
+}
+
 // deploymentRegion is the region the deployment runs in, taken from the request
 // or derived from a regional provider's endpoint. The catalog is keyed on it
 // because the same identifier can behave differently per region.
@@ -761,7 +796,11 @@ func providerRegion(instance domain.ProviderInstance) string {
 	if err != nil {
 		return ""
 	}
-	parts := strings.Split(parsed.Hostname(), ".")
+	// Host comparison is case-insensitive, and the endpoint the operator typed
+	// keeps whatever case they used — ValidateEndpoint and the provider's
+	// AllowedHosts both lower it, so this has to as well or a mixed-case
+	// endpoint refuses its own correct region.
+	parts := strings.Split(strings.ToLower(parsed.Hostname()), ".")
 	for index, part := range parts {
 		if strings.HasPrefix(part, "bedrock") && index+1 < len(parts) {
 			candidate := parts[index+1]

@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useNotify } from "../notifications";
 import QRCode from "qrcode";
 import { api } from "../api";
 import { ErrorState, Field, Loading, Modal } from "../components";
@@ -46,19 +47,20 @@ export function MFASettings({ username = "" }: { username?: string }) {
     return () => window.clearTimeout(timer);
   }, [enrollment]);
 
+  const { notify } = useNotify();
   const refresh = async () => { await queryClient.invalidateQueries({ queryKey: ["mfa"] }); await queryClient.invalidateQueries({ queryKey: ["session"] }); };
   const create = useMutation({ mutationFn: () => api.createMFAAuthenticator(name, password, approvalCode), onSettled: () => { setPassword(""); setApprovalCode(""); }, onSuccess: (value) => { setAddingAuthenticator(false); setEnrollmentExpired(false); setEnrollment(value); } });
   const confirm = useMutation({ mutationFn: () => api.confirmMFAAuthenticator(enrollment!.id, confirmCode), onSettled: () => setConfirmCode(""), onSuccess: async (value) => { setRecoverySaved(false); setRecoveryConfirmed(false); setRecovery(value.recovery_codes || []); setEnrollment(null); setName(""); await refresh(); } });
-  const cancelEnrollment = useMutation({ mutationFn: () => api.cancelPendingMFAAuthenticator(enrollment!.id), onSuccess: () => { setEnrollment(null); setConfirmCode(""); restoreActionFocus(); }, onError: () => { /* keep the secret visible until server cancellation succeeds */ } });
+  const cancelEnrollment = useMutation({ mutationFn: () => api.cancelPendingMFAAuthenticator(enrollment!.id), onSuccess: () => { setEnrollment(null); setConfirmCode(""); restoreActionFocus(); notify({ tone: "success", title: t("settings.notifyEnrollmentCancelled") }); }, onError: () => { /* keep the secret visible until server cancellation succeeds */ } });
   const restoreActionFocus = () => {
     const target = actionTrigger.current || document.getElementById("mfa-title");
     actionTrigger.current = null;
     window.setTimeout(() => target?.focus(), 0);
   };
-  const revoke = useMutation({ mutationFn: () => api.deleteMFAAuthenticator(revokeState.id, revokeState.password, revokeState.code), onSuccess: async () => { setRevokeState({ id: "", password: "", code: "" }); await refresh(); restoreActionFocus(); } });
+  const revoke = useMutation({ mutationFn: () => api.deleteMFAAuthenticator(revokeState.id, revokeState.password, revokeState.code), onSuccess: async () => { setRevokeState({ id: "", password: "", code: "" }); await refresh(); restoreActionFocus(); notify({ tone: "success", title: t("settings.notifyAuthenticatorRevoked") }); } });
   const regenerate = useMutation({ mutationFn: () => api.regenerateMFARecoveryCodes(regenerateState.password, regenerateState.code), onSuccess: async (value) => { setRegenerateState({ open: false, password: "", code: "" }); setRecoverySaved(false); setRecoveryConfirmed(false); setRecovery(value.recovery_codes); await refresh(); } });
-  const disable = useMutation({ mutationFn: () => api.disableMFA(disableState.password, disableState.code), onSuccess: async () => { setDisableState({ open: false, password: "", code: "", confirmed: false }); await refresh(); restoreActionFocus(); } });
-  const rename = useMutation({ mutationFn: () => api.renameMFAAuthenticator(renameState.id, renameState.name, renameState.revision), onSuccess: async () => { setRenameState({ id: "", name: "", revision: 0 }); await queryClient.invalidateQueries({ queryKey: ["mfa"] }); restoreActionFocus(); } });
+  const disable = useMutation({ mutationFn: () => api.disableMFA(disableState.password, disableState.code), onSuccess: async () => { setDisableState({ open: false, password: "", code: "", confirmed: false }); await refresh(); restoreActionFocus(); notify({ tone: "warning", title: t("settings.notifyMFADisabled"), description: t("settings.disableMFAWarning") }); } });
+  const rename = useMutation({ mutationFn: () => api.renameMFAAuthenticator(renameState.id, renameState.name, renameState.revision), onSuccess: async () => { const renamed = renameState.name; setRenameState({ id: "", name: "", revision: 0 }); await queryClient.invalidateQueries({ queryKey: ["mfa"] }); restoreActionFocus(); notify({ tone: "success", title: t("settings.notifyAuthenticatorRenamed"), description: renamed }); } });
   const copyRecovery = async () => { try { await navigator.clipboard.writeText(recovery.join("\n")); setRecoverySaved(true); setCopyStatus(t("settings.recoveryCopied")); } catch { setCopyStatus(t("settings.recoveryCopyFailed")); } };
   const formatDate = (value?: string) => value ? formatInstant(value, "full") : t("common.never");
 
