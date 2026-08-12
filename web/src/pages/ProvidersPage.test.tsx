@@ -316,6 +316,49 @@ describe("ProvidersPage profile and credential bindings", () => {
       expect.objectContaining({ currentPassword: "a passphrase" }),
     ]);
   });
+
+  // The Bedrock Mantle profiles are Beta and their capability set is fixed by
+  // the build. The form used to offer the capability checkboxes for them, so an
+  // operator could tick embeddings or reasoning on a profile that cannot serve
+  // them and have the request accepted. The backend now refuses that; the form
+  // must not present it as a choice in the first place.
+  it.each([
+    "bedrock.mantle.openai.chat.v1",
+    "bedrock.mantle.openai.responses.v1",
+    "bedrock.mantle.anthropic.messages.v1",
+  ])("presents %s capabilities as fixed rather than selectable", async (profile) => {
+    const mantleCredential: Credential = {
+      id: "credential_mantle",
+      name: "Mantle",
+      type: "bedrock",
+      access_surface: "bedrock-mantle",
+      scheme: "aws.bedrock.api-key",
+      bound_base_url: "https://bedrock-mantle.us-east-1.api.aws:443",
+      secret_configured: true,
+      key_version: 1,
+      revision: 1,
+    };
+    vi.mocked(api.credentials).mockResolvedValue({ items: [mantleCredential], next_cursor: "" });
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
+    fireEvent.change(screen.getByLabelText("类型"), { target: { value: "bedrock" } });
+    fireEvent.change(await screen.findByRole("combobox", { name: /^能力实现/ }), { target: { value: profile } });
+
+    expect(screen.getByText("该能力实现使用固定协议，无需额外配置。")).toBeVisible();
+    expect(screen.queryByRole("checkbox", { name: "对话" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "向量嵌入" })).not.toBeInTheDocument();
+  });
+
+  // Converse text stays operator-declared. If the fixed list grew to cover it,
+  // the check above would still pass while silently removing a real choice.
+  it("keeps Bedrock Converse capabilities selectable", async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
+    fireEvent.change(screen.getByLabelText("类型"), { target: { value: "bedrock" } });
+
+    expect(await screen.findByRole("checkbox", { name: "对话" })).toBeInTheDocument();
+  });
 });
 
 function renderPage() {

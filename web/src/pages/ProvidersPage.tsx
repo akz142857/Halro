@@ -644,6 +644,9 @@ function isStrictCapabilityProfile(type: ProviderType, profileID: BedrockProfile
     "bedrock.runtime.invoke.titan-image-v2.v1",
     "bedrock.agent-runtime.rerank.cohere-v3-5.v1",
     "bedrock.runtime.async.nova-reel-v1.v1",
+    "bedrock.mantle.openai.chat.v1",
+    "bedrock.mantle.openai.responses.v1",
+    "bedrock.mantle.anthropic.messages.v1",
   ].includes(profileID);
 }
 

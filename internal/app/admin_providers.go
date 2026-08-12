@@ -922,7 +922,7 @@ func (r *Runtime) providerFromInput(
 		if !instance.Capabilities.AnyOperation() {
 			return domain.ProviderInstance{}, errors.New("provider must declare at least one operation capability")
 		}
-		if isStrictOperationProfile(profile.ProfileID) &&
+		if domain.IsImmutableCapabilityProfile(profile.ProfileID) &&
 			!capabilitySubset(instance.Capabilities, domain.DefaultProviderCapabilitiesForProfile(input.Type, profile.ProfileID)) {
 			return domain.ProviderInstance{}, errors.New("provider capabilities exceed the immutable operation profile")
 		}
@@ -945,7 +945,7 @@ func (r *Runtime) providerFromInput(
 			if binding.CredentialScheme != credential.Scheme || binding.AccessSurface != credential.AccessSurface {
 				return domain.ProviderInstance{}, errors.New("provider binding credential profile does not match connection")
 			}
-			if isStrictOperationProfile(binding.ProfileID) &&
+			if domain.IsImmutableCapabilityProfile(binding.ProfileID) &&
 				!domain.ProviderCapabilitiesSubset(binding.Capabilities, domain.DefaultProviderCapabilitiesForProfile(input.Type, binding.ProfileID)) {
 				return domain.ProviderInstance{}, errors.New("provider binding capabilities exceed the immutable operation profile")
 			}
@@ -979,15 +979,6 @@ func (r *Runtime) providerFromInput(
 		instance.Capabilities, instance.CapabilityEvidence = domain.BindingsCapabilitiesSummary(instance.Bindings)
 	}
 	return instance, instance.Validate()
-}
-
-func isStrictOperationProfile(id domain.ProviderProfileID) bool {
-	switch id {
-	case domain.ProfileOpenAIMediaResources, domain.ProfileBedrockInvokeTitanEmbedV2, domain.ProfileBedrockInvokeTitanImageV2, domain.ProfileBedrockAgentRerankCohere35, domain.ProfileBedrockAsyncNovaReel:
-		return true
-	default:
-		return false
-	}
 }
 
 func preserveCapabilityEvidence(capabilities domain.ProviderCapabilities, current domain.CapabilityEvidenceSet) domain.CapabilityEvidenceSet {

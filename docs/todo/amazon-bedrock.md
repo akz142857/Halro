@@ -1,196 +1,466 @@
-# Amazon Bedrock Mantle 接入评估
+# Amazon Bedrock Mantle 接入评估与开发计划
 
-状态：评估，待裁决
+状态：Phase 0 已实现；Phase 1 待做；Phase 2 待产品裁决；Phase 3 待计费授权
 日期：2026-08-12
-范围：`internal/provider/bedrockmantle`、`internal/provider/anthropic`、`internal/domain/provider_profile.go`、
-`internal/app/providers.go`、`internal/compatibility`、`docs/verification/provider-real-matrix.md`
+范围：`internal/domain`、`internal/provider/{bedrock,bedrockmantle,openai,anthropic}`、
+`internal/app`、`internal/gateway`、`internal/compatibility`、`internal/store`、`web`、
+`docs/adr/0007-bedrock-mantle-profiles.md`、`docs/verification/provider-real-matrix.md`
 
-> 输入是 AWS 控制台 Bedrock Mantle "Getting started" 的四张截图（SDK 选择、环境配置、
-> 快速测试、App integration）。**截图证明的是控制台今天提供什么，不证明我们这边的实现对不对**——
-> 后者的每一条结论都标了 `file:line`，是本仓当前代码的事实。
-
----
-
-## 0. 结论先说
-
-**Mantle 不是"从零接入"，三个 profile 已经在仓库里并且接好了线。** 真正的缺口是四条，
-其中两条会让控制台上最常见的那条路径**根本走不通**，一条是运维层面的定时炸弹，
-还有一条是"整套东西从未对着真实服务发过一个请求"。
-
-按成本从低到高：**先做 §3.1 的取证**（一次真实调用就能定死三个未知数），
-再定 §3.2 的产品取舍（IAM 认证要不要支持），最后才是写代码。
-**在取证之前写代码是在猜。**
+> 本文评估的是 **Amazon Bedrock 的 `bedrock-mantle` 访问面**，不是 Claude Platform on AWS。
+> 初始输入截图包含了属于另一产品线的 `anthropic-workspace-id` 信息，不能继续作为
+> Bedrock Mantle wire contract 的依据。本文以 AWS 当前官方文档和本仓代码为准。
+>
+> 本轮没有执行真实 Provider 调用。真实调用可能计费，必须由用户显式授权后再运行。
 
 ---
 
-## 1. 仓库现状（已核对）
+## 0. 结论与建议裁决
 
-三个 Mantle profile 都已注册、都有适配器、都有能力天花板：
+Mantle 不是从零接入：三个 profile 已注册并接入适配器。但原评估的两个核心前提错误：
 
-| Profile ID | 适配器 | 认证头 | 能力天花板（`domain/models.go:523-530`） |
+1. `anthropic-workspace-id` 属于 Claude Platform on AWS；Bedrock Mantle 使用
+   `anthropic-workspace`（Messages）和 `OpenAI-Project`（Chat/Responses）。Bedrock
+   账户已有 default project/workspace，省略资源头的请求归入 default。因此当前路径不是
+   “可能 100% 不可用”，准确口径是：**default project 可用但未经真实账户验证，非 default
+   project 无法显式寻址**。
+2. Mantle 默认能力 ceiling 目前不是编译期保证。Admin 可以声明超出默认 ceiling 的
+   binding 能力，适配器又直接使用 `binding.Capabilities`。这是现有 fail-closed 契约缺口，
+   应先于任何 Mantle 增强修复。
+
+建议裁决如下：
+
+- **当前三个 v1 profile 继续只支持 Bedrock API key**，不把默认 AWS 凭据链塞进数据面。
+- **当前版本只承诺账户 default project**；在 Operator Guide 与发布说明中写清限制。
+- 若要支持显式非 default project，第一版采用可选的 **Provider 级 `BedrockProjectID`**：一个
+  Provider 对应一个 Bedrock Project，多 Provider 可以复用同一 Credential。暂不做
+  Deployment 级多 Project。
+- **SigV4、自动刷新短期凭据、通用 Credential expiry** 分别立项，不作为 BedrockProjectID
+  支持的顺手改动。
+- 如果 1.0.0 继续携带 Mantle Beta profile，必须在发布前修复能力 ceiling；否则应禁用
+  这些 profile。显式 Project、SigV4 和自动刷新不阻塞 1.0.0。
+  （**该修复已完成，见 §7 Phase 0。**）
+
+---
+
+## 1. 产品边界与官方契约
+
+### 1.1 不要混淆两条 AWS 产品线
+
+| 项 | Amazon Bedrock Mantle | Claude Platform on AWS |
+|---|---|---|
+| 服务端点 | `bedrock-mantle.<region>.api.aws` | `aws-external-anthropic.<region>.api.aws` |
+| 运营方 | AWS / Amazon Bedrock | Anthropic on AWS |
+| Anthropic 资源头 | `anthropic-workspace` | `anthropic-workspace-id`（必填） |
+| OpenAI 资源头 | `OpenAI-Project` | 不适用 |
+| SigV4 service | `bedrock-mantle` | `aws-external-anthropic` |
+
+参考：
+
+- [Amazon Bedrock Workspaces (Anthropic-compatible)](https://docs.aws.amazon.com/bedrock/latest/userguide/workspaces.html)
+- [Amazon Bedrock Projects (OpenAI-compatible)](https://docs.aws.amazon.com/bedrock/latest/userguide/projects.html)
+- [Amazon Bedrock Mantle Responses API](https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html)
+- [Amazon Bedrock Messages API](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-messages-api.html)
+- [Claude Platform on AWS Workspaces](https://docs.aws.amazon.com/claude-platform/latest/userguide/workspaces.html)
+
+上表的两个资源头名、default 归属行为、三条请求路径，以及 Claude Platform 的
+`anthropic-workspace-id` 必填要求，均已于 2026-08-12 对上述文档页逐条核对。
+本节其余推断若与后续文档更新冲突，以文档为准并回改本文。
+
+### 1.2 Bedrock Mantle 已能由官方文档确定的事实
+
+| Profile | 请求路径 | API-key 认证 | 显式资源头 |
 |---|---|---|---|
-| `bedrock.mantle.openai.chat.v1` | `openai` 适配器 | `Authorization: Bearer` | Chat/Streaming/Tools/Vision/JSONMode/DeveloperRole/Reasoning/StreamUsage |
-| `bedrock.mantle.openai.responses.v1` | `bedrockmantle.ResponsesAdapter` | 同上 | 同上但**无 Reasoning**（映射器保不住 reasoning item，有注释说明） |
-| `bedrock.mantle.anthropic.messages.v1` | `anthropic` 适配器，`MessagesPath: "anthropic/v1/messages"` | `x-api-key` | Chat/Streaming/Tools/Vision/Reasoning/StreamUsage |
+| `bedrock.mantle.openai.chat.v1` | `/v1/chat/completions` | `Authorization: Bearer` | `OpenAI-Project` |
+| `bedrock.mantle.openai.responses.v1` | `/v1/responses` | `Authorization: Bearer` | `OpenAI-Project` |
+| `bedrock.mantle.anthropic.messages.v1` | `/anthropic/v1/messages` | `x-api-key` | `anthropic-workspace` |
 
-线在 `internal/app/providers.go:611-634`。截图里 `AnthropicBedrockMantle` +
-`client.messages.create/stream` 对应的正是第三行。
+Workspaces 与 Projects 是同一种 Bedrock Project 资源在不同协议中的名称。每个账户有
+default project/workspace；省略资源头时，请求关联到 default。因此上述 host、path、API-key
+头名和 default 行为不再列为“必须付费抓包才能裁决”的未知数。真实账户 smoke 仍要验证
+Halro 的具体实现是否符合契约，但不能用单次 smoke 代替协议设计。
 
-其余已就位的部分：
+### 1.3 官方文档还确定了这些，都影响设计
 
-- **端点形状被强校验**：`bedrockmantle.ValidateEndpoint`（`adapter.go:39-58`）要求 HTTPS 源、
-  无 path/query/fragment/user-info、非默认端口一律拒绝，host 必须
-  `bedrock-mantle.<region>.api.aws`，region 只允许 `[a-z0-9-]`。
-  Admin 侧在保存 Provider 前也跑同一函数（`admin_providers.go:813,902`）。
-- **凭据方案与访问面绑死**：`SurfaceBedrockMantle` 只解析出 `CredentialBedrockAPIKey`
-  （`provider_profile.go:112`），且有测试钉住 **SigV4 在这个访问面上必须解析失败**
-  （`provider_profile_test.go:9-14`）。
-- **兼容性口径已分类**：Mantle 的三个 profile 在 `compatibility/provider_fields.go:41,49,55`
-  分别按 Anthropic / Responses / Chat 三种线型处理，不是漏网的默认分支。
-- **Beta 天花板是编译期保证**：数据面用的不是 `binding.Capabilities`——V3 已独立复核过，
-  越界请求在任何 Provider I/O 之前被 400 `unsupported_feature` 拒绝，不预留额度、不建连。
+以下事实同样来自上述 AWS 文档页，取得成本为零，但会改变 Phase 2 的形状：
 
----
-
-## 2. 四条缺口
-
-### 2.1 workspace 概念在本仓完全不存在（阻塞）
-
-截图三、四里 SDK 显式设 `default_headers={"anthropic-workspace-id": "default"}`，
-控制台面包屑也是 `default / Getting started`——workspace 是 Mantle 的一级概念。
-
-**全仓 `grep -ri workspace internal/` 零命中。** `anthropic.Options`
-（`internal/provider/anthropic/adapter.go:27-35`）也没有任何自定义头的入口，
-所以今天连"手工塞一个头"都做不到。
-
-两种可能，**必须先取证再决定改法**：
-
-- 若该头**必填**：现在这条路径对着真实服务是 100% 失败，只是没人试过。
-- 若**可选**（缺省落到 `default` workspace）：单 workspace 账户能用，
-  多 workspace 账户无法寻址——对一个把"凭据托管 + 项目隔离"当卖点的网关来说，
-  这等于把租户维度丢在门外。
-
-改法的形状（无论哪种）：workspace 是 **binding 级**而不是 Provider 级的属性——
-同一套凭据下不同 workspace 应当是不同的调用目标。这会牵动
-`domain.ProviderBinding`、Admin 表单、以及 `anthropic.Options` 的自定义头通道。
-
-### 2.2 控制台默认的 IAM 认证，本仓按设计不支持（需产品裁决）
-
-截图一的"身份验证"默认选中 **IAM 凭证**（"使用您的 AWS 配置文件或附加角色"），
-截图二写明走 **默认凭据链**：环境变量 → `~/.aws/credentials` → 附加角色（EC2/ECS/Lambda）。
-API 密钥是第二选项。
-
-本仓对 Mantle 访问面**只接受 API key**，且这不是遗漏而是有测试钉住的取舍
-（`provider_profile_test.go:13`）。
-
-**这条不能当配置项加。** `docs/verification/security-review-v1.md` 的 IMDS 裁决明写：
-默认凭据链只在 **Key Slot 模式**下被接受，且只接受三种 workload-identity 源；
-"新增静态源、另一个 metadata 源、或让 Admin 输入控制凭据端点选择，需要另一次评审"。
-把默认链引入**数据面 Provider** 正好落在这句话里——**它是一次新的威胁评审的触发条件，
-不是一个开关**。
-
-裁决三选一：
-
-1. **维持只支持 API key**，并在文档里写清"控制台默认选 IAM，Halro 走第二个选项"，
-   避免运维照着控制台默认值配到一半发现不通；
-2. **支持 SigV4 显式会话凭据**（复用已有的 `CredentialAWSSigV4Explicit`，
-   Bedrock Runtime 已经在用），不碰默认链——这是安全代价最小的扩展；
-3. **支持默认凭据链**——需要一次完整的威胁评审，且与 §2.3 的托管模型冲突
-   （见下）。
-
-### 2.3 API key 会过期，而 `domain.Credential` 没有过期概念（运维定时炸弹）
-
-截图一写明：短期密钥**有效期长达 12 小时**，长期密钥有可配置的到期时间。
-
-`domain.Credential`（`internal/domain/models.go:96-108`）只有
-`CreatedAt/UpdatedAt/Revision`，**没有任何过期字段**。后果链条：
-
-- 12 小时后所有请求 401，Halro 侧表现为 `ErrorAuthentication`；
-- 没有任何指标/告警说"凭据过期了"，运维看到的是上游认证失败；
-- 轮换必须人工，且要走 `PUT /credentials/{id}`（现在还要 step-up）。
-
-这与项目其他地方的纪律不一致：Gateway Key 有 `ExpiresAt`，Master Key 有代次与指纹，
-唯独 Provider 凭据没有寿命概念。
-
-最小可行改法：`Credential` 增加可选 `ExpiresAt`，`doctor` 与控制台在临近过期时告警，
-`halro_provider_credential_expiry_seconds` 一个 gauge。**这条与 Mantle 无关地有价值**——
-Azure、Anthropic 的密钥同样会被轮换。
-
-### 2.4 整条路径从未对真实服务发过一个请求（最应该先做的事）
-
-`docs/verification/provider-real-matrix.md` **零处提及 mantle**。也就是说：
-
-- host 形状 `bedrock-mantle.<region>.api.aws`、
-- path `anthropic/v1/messages`（`providers.go:633`）、
-- `x-api-key` 而不是 `Authorization: Bearer`、
-- 错误信封与 `x-amzn-requestid` 头名（`bedrockmantle/adapter.go:324-331`）、
-- 流式事件序列，
-
-**全部来自文档阅读，没有一条被真实响应验证过。** 按 CLAUDE.md 的"Verify, never assume"，
-这些现在都只是假设。截图给了三个可直接取证的事实（region `us-east-2`、
-model id `anthropic.claude-haiku-4-5`、workspace 头），但没给 host 与 path。
+- **Project ID 有可校验的形状**：Bedrock project ID 为 `proj_` 前缀加字母数字，另有字面量
+  `default`；Claude Platform on AWS 的 workspace ID 是 `wrkspc_` 前缀。二者不可互换。
+- **Project 是 region 作用域资源**：project ARN 形如
+  `arn:aws:bedrock-mantle:<region>:<account>:project/proj_...`。project ID 与 endpoint region
+  绑定，不一致必然失败——这是 §5.3 Region 一致性的直接依据。
+- **归档 project 不能用于新推理**：官方原文为 archived project “cannot be used for new
+  inference requests”，历史数据保留 30 天。失败发生在**请求时**而非保存时。
+- **长期 API key 默认策略只允许 get/list projects**，创建/更新/归档需要额外 IAM 策略。
+  这限制了任何“保存时在线校验 project 是否存在”的方案。
+- **控制面与数据面同 host**：project 管理走同一个 `bedrock-mantle.<region>.api.aws` 上的
+  `/v1/organization/projects`。Halro 只使用数据面路径，控制面路径不得被网关暴露或代理。
+- 每账户最多 1000 个 project。
 
 ---
 
-## 3. 建议顺序
+## 2. 仓库现状
 
-### 3.1 先取证（半天，需要一个真实账户，billable 但极小）
+### 2.1 已接通的部分
 
-按截图三的快速测试跑一次，**抓下真实请求**（`anthropic[bedrock]` SDK 走 HTTP 代理，
-或直接读 SDK 源码里的 endpoint/path 常量），回答四个问题：
+三个 Mantle profile 均已注册：
 
-| # | 问题 | 定死什么 |
+| Profile ID | 适配器 | 默认能力 ceiling（`internal/domain/models.go:523-530`） |
 |---|---|---|
-| Q1 | 实际 host 与 path 是什么？ | `ValidateEndpoint` 与 `MessagesPath` 对不对 |
-| Q2 | `anthropic-workspace-id` 是必填还是可选？ | §2.1 是阻塞还是增强 |
-| Q3 | IAM 与 API key 两条路的头分别长什么样？ | §2.2 的选项 2 是否可行 |
-| Q4 | 短期 key 的实际有效期与过期后的错误码/信封？ | §2.3 的告警阈值 |
+| `bedrock.mantle.openai.chat.v1` | `openai` | Chat/Streaming/Tools/Vision/JSONMode/DeveloperRole/Reasoning/StreamUsage |
+| `bedrock.mantle.openai.responses.v1` | `bedrockmantle.ResponsesAdapter` | 同上但无 Reasoning |
+| `bedrock.mantle.anthropic.messages.v1` | `anthropic` | Chat/Streaming/Tools/Vision/Reasoning/StreamUsage |
 
-证据按 `docs/verification/provider-real-matrix.md` 的格式归档；**不要把密钥、账号 ID
-或原始响应体提交进仓库**。
+已有边界：
 
-### 3.2 再裁决（判断题，无工程量）
+- `bedrockmantle.ValidateEndpoint` 只接受 HTTPS origin
+  `bedrock-mantle.<region>.api.aws`，拒绝 path/query/fragment/user-info 和非默认端口；
+- `SurfaceBedrockMantle` 当前只接受 `CredentialBedrockAPIKey`；
+- 三个 profile 在 compatibility 层分别按 Chat、Responses、Anthropic Messages 分类；
+- Responses 显式发送 `store:false`，不导入 AWS 默认的 30 天 stateful response 所有权；
+- API key 绑定精确 Mantle endpoint audience，不能附着到 Bedrock Runtime Provider。
 
-- §2.2 的三选一（建议：**选项 1 或 2**，不碰默认链）；
-- workspace 建模在 binding 级还是 Provider 级；
-- 凭据过期是否随 1.0.0 做（建议：**不随**，它是独立于 Mantle 的改进，
-  且会动 `domain.Credential` 的持久结构）。
+### 2.2 必须先修复：immutable capability ceiling 实际可被放宽
 
-### 3.3 最后才写代码
+原文关于“数据面不用 `binding.Capabilities`、ceiling 是编译期保证”的结论不成立：
 
-按取证结果，工作量大致：
+- `internal/app/admin_providers.go:918-950` 只对 `isStrictOperationProfile` 返回 true 的
+  profile 校验默认上限；`isStrictOperationProfile`（`:984-990`）没有三个 Mantle profile；
+- `web/src/pages/ProvidersPage.tsx:639-647` 的固定能力 profile 列表也没有 Mantle；
+- `internal/app/providers.go:580` 直接把 `binding.Capabilities` 转成适配器能力，并在
+  `:617`、`:625`、`:633` 传给三个 Mantle 适配器；
+- capability detection 又从适配器能力生成可能计费的探测计划。
 
-| 项 | 触及 | 粗估 |
-|---|---|---|
-| workspace 头通道（binding 级属性 + Admin 表单 + i18n + 适配器自定义头） | `domain`、`app`、`provider/anthropic`、`web` | 1~2 天 |
-| SigV4 显式会话凭据支持 Mantle（若选 2.2-选项2） | `provider_profile.go` + 认证器复用 + 负面测试 | 半天 |
-| 凭据过期字段 + doctor/告警/控制台 | `domain`、`store`、`app`、`web`、observability | 1~2 天（**需要 data dir 重建**，见下） |
-| 真实 Provider 矩阵条目 + 兼容性 golden 更新 | `docs/verification`、`compatibility` | 半天 |
+因此 Admin/API 可以保存超出 `DefaultProviderCapabilitiesForProfile` 的 Mantle 能力，随后影响
+请求预检和能力探测。这条修复是 Phase 0：
+
+1. 三个 Mantle profile 加入后端 strict profile 和前端 fixed profile；
+2. 不把安全约束只留在 Admin：在 `ProviderProfileBinding.Validate` /
+   `ProviderInstance.Validate` 强制 immutable profile 能力是默认 ceiling 的子集；
+3. 适配器构造时再次与默认 ceiling 求交或拒绝越界旧记录，防迁移/非 Admin 写入绕过；
+4. 覆盖 Admin API 越界、旧记录激活、capability detection 计划和数据面 preflight 测试。
+
+**第 3 条的失败粒度必须写死：越界的旧 binding 走既有的 withholding 路径**——像
+`providers.go` 处理 `withheldBindingUnavailable` 那样把该 deployment 摘出候选并计入
+`report.Dangling`，其余路由照常加载。**不是让进程起不来。** fail-closed 指的是这条路径
+不再被流量使用，不是把一条陈旧记录升级成全局启动失败；后者会让一个 Mantle 配置错误
+带走所有其他 Provider 的路由。Admin 写入路径则相反，必须直接拒绝保存。
 
 ---
 
-## 4. 不要做的事
+## 3. Project / Workspace 寻址设计
 
-- **不要为了 Mantle 放宽 Beta 能力天花板。** CLAUDE.md 明列它是需要专门契约评审的一条，
-  且天花板不可注入目前是**类型层面**的保证（`gemini.Options`/`bedrock.Options` 结构里
-  没有 `Capabilities` 字段），把它改成可配置就是把编译期保证降级成运行期校验。
-- **不要把默认凭据链当配置开关加进数据面。** 见 §2.2，那是一次威胁评审的触发条件。
-- **不要在没有 §3.1 取证的情况下改 `ValidateEndpoint` 或 `MessagesPath`。**
-  当前值可能是对的；在没有真实响应的前提下改动它们，只是把一个未验证的假设
-  换成另一个未验证的假设。
-- **不要新增 profile ID 复用旧编号。** 三个 Mantle profile ID 已注册，
-  契约上不得重用（CLAUDE.md：event kind / frame epoch / migration name 同理）。
+### 3.1 当前精确能力
+
+当前请求不发送 `OpenAI-Project` 或 `anthropic-workspace`。依据 Bedrock 官方契约：
+
+- default project/workspace：应可使用，但尚无真实账户证据；
+- 非 default project/workspace：无法显式选择，所有调用仍落 default；
+- 初始截图中的 `anthropic-workspace-id` 不得加入任何 Mantle 适配器。
+
+这是一项多 Project 增强，不是 default 路径阻塞。
+
+### 3.2 推荐的第一版：Provider 级 `BedrockProjectID`
+
+`ProviderProfileBinding` 在同一 Provider 下不能重复 profile，不能充当可重复的 Project 维度：
+
+- `internal/domain/models.go:431` 禁止 profile 重复；
+- binding ID 是 `providerID + ":" + profileID`；
+- `matchingBindingID` 遇到同 profile 多 binding 会失败关闭。
+
+为避免与 Halro 自身的 `Project` 混淆，推荐增加可选、类型化的
+`ProviderInstance.BedrockProjectID`：
+
+- 空值：显式表示使用 AWS default project，不发送资源头；
+- 非空：OpenAI Chat/Responses 渲染 `OpenAI-Project`，Anthropic Messages 渲染
+  `anthropic-workspace`；
+- 一个 Provider 只指向一个 Project；需要多个 Project 时创建多个 Provider，并复用同一
+  Credential；Provider 各自保留并发、熔断、证据和运维状态；
+- `BedrockProjectID` 作为不透明标识符处理，不写入日志、错误、Metrics 或真实证据；
+  Admin list/detail 是否展示脱敏值需单独定义；
+- 校验规则按 §1.3 的形状事实收紧：只接受 `proj_` 前缀加字母数字，或字面量 `default`
+  （后者等价于留空，建议直接规范化为留空）。**显式拒绝 `wrkspc_` 前缀**——那是
+  Claude Platform on AWS 的 workspace ID，粘错产品线的 ID 是这一整节最可能的人为错误，
+  而前缀检查是最便宜的一道闸；
+- **不做保存时在线校验**：按 §1.3，长期 key 的默认策略只允许 get/list projects，
+  在线校验会让 Provider 保存路径依赖一次上游调用，且权限结果因 key 类型而异。
+  project 是否存在、是否已归档，一律在请求时暴露。
+
+该方案不是“零 schema 改动”。至少涉及 domain、Admin API、store format、backup/restore、
+Provider 表单、i18n、三个适配器和文档。按仓库 pre-1.0 规则，durable schema 改动必须 bump
+format version，并明确陈旧数据目录的重建/迁移行为。
+
+### 3.3 请求头落点
+
+Project 是资源寻址，不是凭据。不要把它塞进 `StaticHeaderAuthorizer`，也不要引入
+`map[string]string` 自由头。
+
+实现应使用类型化请求元数据/装饰逻辑，并由 profile 映射成正确 wire header：
+
+1. 构造请求并设置 Content-Type、Project 等协议头；
+2. 最后执行认证；未来若使用 SigV4，签名器才能看到真实 payload 和需要签名的头；
+3. 明确删除与当前 profile 冲突的资源头及认证头，防调用方注入覆盖；
+4. Chat、Responses、Messages 的 stream/non-stream 和 Probe 均走同一规则。
+
+### 3.4 暂不选择 Deployment 级
+
+只有产品明确要求“同一 Provider 在请求级跨多个 Bedrock Project 路由”时才把 BedrockProjectID 放到
+Deployment/Target。该方案必须把 BedrockProjectID 穿过 semantic operation 与适配器调用接口，且要
+重新定义 Project 与 Route、Halro Project、预算、成本归属和 fallback 隔离语义。当前不需要为
+这个未确认需求支付复杂度。
 
 ---
 
-## 5. 与 1.0.0 的关系
+## 4. 认证与凭据生命周期
 
-**这项工作不阻塞 1.0.0，也不应该塞进 1.0.0。** 理由：
+### 4.1 当前裁决：v1 profile 保持 API-key only
 
-- 三个 profile 已经在 1.0.0 里，且已在已知限制里标注为 **Beta**；
-- §2.3 的凭据过期字段会改动持久化结构，属于"需要重建数据目录"的变更；
-- §3.1 的取证需要真实 AWS 账户，与 S1（真实 Provider 证据）是同一类需要单独授权的动作。
+当前 `SurfaceBedrockMantle` 只接受 `CredentialBedrockAPIKey`，且已有负面测试拒绝 SigV4。
+这与 ADR 0007 的 Phase 1C 决策一致。Operator Guide 和 UI 必须说明：AWS 控制台若默认展示
+IAM，Halro 当前应选择 API key 路径。
 
-若 §3.1 取证发现 workspace 头**必填**，则应把"Mantle Anthropic Messages profile
-在 1.0.0 中未经真实服务验证"这一句补进发布说明的已知限制——
-这与 §2.4 的事实一致，且不需要改代码。
+### 4.2 SigV4 必须另立 profile/安全评审
+
+不能只复用现有 `CredentialAWSSigV4Explicit` 或把 `CredentialScheme` 从单值改成集合：
+
+- 现有 Bedrock signer 只接受 Runtime/Agent Runtime host 和对应 signing service；
+- Mantle signing service 是 `bedrock-mantle`，authority 与 action/resource 规则不同；
+- OpenAI、Responses、Anthropic 当前 POST 路径均以 `Authorize(request, nil)` 调用认证器，
+  且在认证后才设置 Content-Type；现有 signer 会因此签名空 payload；
+- 默认凭据链会引入环境变量、shared credentials、容器/实例 metadata 与刷新端点选择，触发
+  新的威胁评审。
+
+若后续支持 SigV4，必须使用新的 profile revision/ID，并交付：
+
+- Mantle host、region、service scope 与 IAM least-privilege 规则；
+- 显式会话凭据和 session token 生命周期；
+- 真实 payload hash、签名前 header 顺序和 canonical request 测试；
+- wrong region、expired token、AccessDenied、clock skew、refresh failure 测试；
+- 对默认链、IMDS/ECS endpoint、代理、重定向和 SSRF 边界的独立安全裁决。
+
+### 4.3 `Credential.ExpiresAt` 不是短期 key 自动刷新
+
+Bedrock 短期 API key 的有效期上限（约 12 小时）来自初始截图，**尚未在官方文档中核实**；
+落地告警阈值前须以 `api-keys.md` 的正式表述为准。AWS 推荐生产负载使用短期凭据。当前
+`StaticHeaderAuthorizer` 在 topology 构造时固定秘密，因此 `ExpiresAt` 只能支持提示和人工轮换，
+不能把 Halro 变成生产级自动刷新客户端。
+
+通用 Credential expiry 应独立立项并先定义：
+
+- expiry 是 operator-declared 还是 Provider-verifiable；未知 expiry 的语义；
+- warning/critical/expired 阈值、时钟偏差和过期后是告警还是拒绝流量；
+- 更新 Credential 后 authorizer 的原子替换与旧秘密清零；
+- schema version、backup/restore、doctor、Admin/API、Audit 和 runbook；
+- Metrics 使用有界 `expiry_state` 聚合。`credential_id` 仍是无界集合，不能声称它避免高基数；
+  具体 ID 只在 Admin/doctor 的授权输出中展示。
+
+---
+
+## 5. 已由代码定案的行为
+
+### 5.1 401/403 不会触发 fallback
+
+三个适配器把 401/403 映成 `provider.ErrorAuthentication`，且 `Retryable` 为 false。
+`gateway.retryable` 只重试明确 retryable、malformed 或 provider 5xx，并对认证错误立即终止。
+客户端最终收到 502 `provider_authentication_error`，但 **502 映射不是 fallback 决策依据**。
+
+因此原文“401 是否会静默切到备用 Deployment”无需真实账户调查，结论是不会。仍需补回归测试：
+
+- Chat、Responses、Messages，各自 stream/non-stream；
+- 401 与 403；
+- 只产生一次 attempt、备用 Deployment 调用数为零；
+- 客户端错误稳定为 `provider_authentication_error`；
+- Usage/Attempt 记录 `error_class=authentication`，不保存 Provider 错误正文。
+
+### 5.2 capability detection 不更新 Deployment connection-test 状态
+
+Capability detection 会把认证错误分类为 `ProbeUnauthorized`，但不会设置
+`Deployment.LastTestStatus`；现有测试明确要求 detection 创建的 Deployment 仍保持空状态。
+文档和 UI 不得把 detection 结果描述成 connection-test 留痕。
+
+### 5.3 Region 必须与 Mantle endpoint 一致
+
+`deploymentRegion`（`internal/app/admin_deployments.go:745-749`）在显式 `Region` 非空时直接返回它，
+与 `providerRegion` 从 endpoint host 派生出的值没有任何交叉校验。
+
+这不只是标签不一致：按 §1.3，Bedrock project 是 region 作用域资源，其 ARN 内含 region，
+project ID 与 endpoint region 不一致必然失败。模型可用性、能力证据和配额同样具有 region 语义。
+因此必须二选一：
+
+- Mantle Deployment 的 Region 只读并始终从 Provider endpoint 派生；或
+- 保存时强校验显式 Region 与 endpoint region 完全一致。
+
+create、update、restore、catalog lookup 和 capability evidence 都必须执行同一规则。
+
+---
+
+## 6. 真实 Provider 证据计划
+
+### 6.1 静态契约测试优先
+
+先依据官方文档和本地 fake server 固定以下契约，不产生费用：
+
+- 三个路径、两种 API-key 头和两种 Project 头；
+- default（省略头）、显式 Project A/B、非法/无权 Project；
+- Project 头不能覆盖认证头，错误协议头必须被清除；
+- non-stream、stream、usage、工具、视觉、JSON、reasoning 的请求渲染边界；
+- 2xx、401、403、429 + Retry-After、5xx、timeout、malformed/oversize、request ID；
+- Responses 的 completed、incomplete、failed/error、缺失终态以及有无 `[DONE]`；
+- Anthropic Probe 实际发送 `max_tokens=1`，UI/文档标记其可能计费；OpenAI/Responses 的
+  `/v1/models` Probe 单独验证。
+
+### 6.2 真实 smoke 的证据粒度
+
+一次调用不能证明三个 profile 的全部能力。执行身份必须至少绑定：
+
+`exact commit × region × profile × exact model × authentication × project mode`
+
+并分别验证：
+
+- profile 与模型的 API compatibility；
+- non-stream 与 stream；
+- profile 声明的 tools、vision、JSON/developer role、reasoning、stream usage；
+- default project 和显式 Project（若该功能已实现）；
+- 结构化稳定错误与 retry/request-ID 行为。
+
+某个模型不支持某能力不能直接证明整个 profile 不支持；单个模型支持也不能证明所有 Mantle
+模型支持。能力结果只能进入对应 model/profile/region 的 Deployment evidence。
+
+### 6.3 安全执行要求
+
+真实 smoke 只能在用户显式授权后执行，并遵循：
+
+- 专用、最小权限、限额凭据和明确调用上限；
+- 优先进程内受控 Transport，不用会记录敏感头和 body 的第三方 HTTP 代理；
+- 原始 trace 只存本机临时 0600 文件、限时保留，不提交仓库；
+- canary 测试证明清洗器会移除 API key、account ID、Project ID、原始 model ID、endpoint、
+  request ID、prompt、response 和错误正文；
+- 为遵守现有 real-matrix 的安全证据契约，共享证据不保存原始 model ID；使用绑定执行身份的
+  target digest/受限 custody record 保留可复核性；
+- 安全证据只归档 exact commit、profile、region、target digest、操作、计数和归一化结论；
+- 临时/限流/5xx 不得记录为 unsupported。
+
+`docs/verification/provider-real-matrix.md` 和 runner/adapter smoke 必须先扩展到 Mantle，不能用
+手工截图替代可复现证据。
+
+---
+
+## 7. 开发拆分与验收
+
+### Phase 0：修复能力 ceiling（发布前必须完成）—— 已实现
+
+触及：`domain`、`app`、`web`。
+
+落地形状：
+
+- `domain.IsImmutableCapabilityProfile` 是这份名单唯一的拼写，domain、Admin 与
+  registry loader 共用；三个 Mantle profile 已加入；
+- `ProviderProfileBinding.Validate` 与 `ProviderInstance.Validate`（无显式 binding 的
+  legacy 投影分支）强制 binding 能力是默认 ceiling 的子集。这是 `PutProvider` 必经的
+  边界，因此 Admin API 与任何直接 store 写入一起被挡住；
+- registry loader 在构造适配器之前检查同一条不变量，越界的陈旧 binding 计入
+  `capability_ceiling_exceeded` 并被摘出候选——**不是让进程起不来**；
+- `app/admin_providers.go` 里重复的 `isStrictOperationProfile` 已删除，不留第二份名单；
+- 前端 `isStrictCapabilityProfile` 补齐三个 profile，表单不再渲染可勾选的能力网格。
+
+验收（均有测试，且已反向验证：撤掉修复后对应测试失败）：
+
+- `internal/domain/capability_ceiling_test.go`：三个 Mantle profile 越界被拒、
+  等于 ceiling 与收窄被接受、legacy 投影越界被拒、名单成员资格；
+- `internal/app/bedrock_mantle_capability_ceiling_test.go`：Admin API 越界返回 400、
+  ceiling 本身仍可保存；直接改写 bbolt 记录制造的陈旧越界 binding 被 withheld 而进程
+  正常启动；
+- `web/src/pages/ProvidersPage.test.tsx`：三个 Mantle profile 显示固定能力且无勾选框，
+  Converse text 仍可勾选。
+
+越界能力既进不了 store，也进不了 registry，因此不会出现在 detection 计划里，也不会
+触发 Provider I/O。
+
+### Phase 1：default project 口径与非计费验证
+
+触及：ADR、Operator Guide、release notes、fixture tests、provider real matrix 文档。
+
+验收：
+
+- 明确当前 API-key only、default project only、未经真实账户验证；
+- 三协议本地 fixture 覆盖正确 host/path/auth；
+- 401/403 no-fallback、Probe 计费语义、Region 一致性有契约测试。
+
+粗估：1 天。
+
+### Phase 2：Provider 级显式 Project（产品批准后）
+
+触及：`domain`、`store`、`app`、三个适配器、Admin API、`web`、i18n、backup/restore、ADR。
+
+验收：
+
+- 空 BedrockProjectID 省略资源头；显式值按 profile 输出正确头；
+- 校验只接受 `proj_` 前缀或 `default`，拒绝 `wrkspc_` 前缀，且不发起任何在线校验调用；
+- 指向已归档或无权 project 的请求在**请求时**失败，错误分类明确：按 §5.1，403 归入
+  `ErrorAuthentication`，因此不重试、不 fallback、客户端收到 502
+  `provider_authentication_error`。运维必须能把它与"凭据过期"区分开——两者今天是同一个
+  错误码，Phase 2 需给出区分手段（至少在 Operator Guide 的排障表里写清）；
+- 同一 Credential 可被 Project A/B 的两个 Provider 安全复用且不会串 Project；
+- 更新、重启、Credential 轮换、backup/restore、旧数据处理均有测试；
+- BedrockProjectID 不进入日志、错误、Metrics、Audit 或真实 evidence；
+- format version 与重建/迁移说明符合 pre-1.0 规则。
+
+粗估：2～4 天。
+
+### Phase 3：真实 Mantle smoke（需要显式计费授权）
+
+触及：`tests/provider-matrix` 或独立 `bedrockmantle/real_smoke_test.go`、三适配器 fixture、
+证据 schema、runbook。
+
+验收：按 §6.2 的精确目标矩阵归档安全证据，不把一个模型结论外推成 profile 全局事实。
+
+粗估：1～2 天开发 harness；真实执行时间取决于账户、区域、模型权限和产品裁决。
+
+### 后续独立任务
+
+- Mantle SigV4 新 profile 与威胁评审；
+- 可刷新短期凭据/workload identity；
+- 通用 Provider Credential expiry/rotation；
+- 若确有需求，再设计 Deployment 级多 Project。
+
+这些任务在安全与生命周期设计冻结前不估实现工期。
+
+---
+
+## 8. 测试与发布门禁
+
+迭代期间按 `AGENTS.md` 运行变更能影响的最小集合，并使用 `-count=1`：
+
+- `internal/domain`：profile ceiling、schema validation；
+- `internal/app`：Admin 写入、activation、Region、backup/restore；
+- `internal/provider/{openai,anthropic,bedrockmantle,bedrock}`：请求头、签名、stream/error；
+- `internal/gateway`：401/403 no-fallback 与 Usage error class；
+- `web`：fixed capability UI、Project 表单与 i18n；
+- 仅并发/刷新逻辑改动才对受影响包运行 `-race`。
+
+最终 push 前只运行一次完整 gate；没有用户显式授权时绝不运行真实 Provider smoke。
+
+1.0.0 发布门禁：
+
+1. Mantle ceiling 修复通过；否则禁用三个 Mantle profile；
+2. `docs/adr/0007-bedrock-mantle-profiles.md` 与最终范围一致；
+3. `docs/milestones/release-notes-v1.0.0.md` 无条件披露 Mantle Beta 尚无真实账户证据；
+4. 已知限制明确 API-key only、default project only、手工凭据轮换；
+5. 不把 fixture、SDK 文档或截图冒充真实账户证据。
+
+---
+
+## 9. 明确禁止
+
+- 不把 `anthropic-workspace-id` 加到 Bedrock Mantle；
+- 不接受 `wrkspc_` 前缀的值作为 `BedrockProjectID`；
+- 不暴露或代理 Mantle 控制面路径（`/v1/organization/projects`）——Halro 只使用数据面；
+- 不在 Provider 保存路径上发起 project 存在性的在线校验；
+- 不用自由 header map 实现 Project；
+- 不把 Project 资源寻址混入 Credential authorizer；
+- 不在旧 Mantle v1 profile 上静默增加 SigV4；
+- 不引入未经威胁评审的默认 AWS 凭据链或 metadata endpoint；
+- 不把 `Credential.ExpiresAt` 宣称为短期凭据自动刷新；
+- 不使用 `credential_id` 等无界 Metrics label 并声称其低基数；
+- 不从单模型/单区域 smoke 外推 profile 全局能力；
+- 不在未获明确授权时运行计费真实 Provider 调用；
+- 不提交真实凭据、account/Project ID、原始请求响应或 Provider evidence。

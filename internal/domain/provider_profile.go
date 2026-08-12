@@ -181,6 +181,32 @@ func capabilityEnabled(c ProviderCapabilities, name string) bool {
 	return values[name]
 }
 
+// IsImmutableCapabilityProfile reports whether a profile's capability set is
+// fixed by the build rather than declared by the operator. For these profiles
+// DefaultProviderCapabilitiesForProfile is a ceiling, not a starting point: a
+// binding may narrow it, never widen it.
+//
+// This is the single spelling of that list. It used to live in the Admin layer
+// alone, which meant the ceiling was only enforced where the Admin API happened
+// to look — the three Bedrock Mantle profiles were missing from it, so an
+// operator could declare Mantle capabilities beyond what the profile supports
+// and have them reach capability detection and the data plane.
+func IsImmutableCapabilityProfile(id ProviderProfileID) bool {
+	switch id {
+	case ProfileOpenAIMediaResources,
+		ProfileBedrockInvokeTitanEmbedV2,
+		ProfileBedrockInvokeTitanImageV2,
+		ProfileBedrockAgentRerankCohere35,
+		ProfileBedrockAsyncNovaReel,
+		ProfileBedrockMantleOpenAIChat,
+		ProfileBedrockMantleOpenAIResponses,
+		ProfileBedrockMantleAnthropicMessages:
+		return true
+	default:
+		return false
+	}
+}
+
 // ProviderCapabilitiesSubset is the single authoritative subset check used at
 // API and storage boundaries.
 func ProviderCapabilitiesSubset(candidate, available ProviderCapabilities) bool {

@@ -282,6 +282,16 @@ func (b ProviderProfileBinding) Validate(providerID string, providerType Provide
 	if b.Capabilities.Streaming && !b.Capabilities.Chat {
 		return errors.New("streaming capability requires chat capability")
 	}
+	// The ceiling belongs here rather than only in the Admin handler. Validate is
+	// what PutProvider calls, so this is the boundary every write crosses —
+	// Admin API, restore, or a future caller that does not exist yet. A profile
+	// whose capabilities the build fixes must never be widened by a stored
+	// record, because everything downstream (capability detection plans, the
+	// data-plane preflight) reads the binding and believes it.
+	if IsImmutableCapabilityProfile(b.ProfileID) &&
+		!ProviderCapabilitiesSubset(b.Capabilities, DefaultProviderCapabilitiesForProfile(providerType, b.ProfileID)) {
+		return errors.New("provider profile binding capabilities exceed the immutable operation profile")
+	}
 	if err := b.CapabilityEvidence.Validate(b.Capabilities); err != nil {
 		return err
 	}
@@ -460,6 +470,13 @@ func (p ProviderInstance) Validate() error {
 				break
 			}
 		}
+	} else if IsImmutableCapabilityProfile(p.ProfileID) &&
+		!ProviderCapabilitiesSubset(p.Capabilities, DefaultProviderCapabilitiesForProfile(p.Type, p.ProfileID)) {
+		// No explicit bindings: the legacy single-profile projection is the only
+		// capability declaration there is, so the ceiling has to be checked
+		// against it directly. With bindings present the equality check above
+		// already forces the instance to match a set that Validate has bounded.
+		problems = append(problems, errors.New("provider capabilities exceed the immutable operation profile"))
 	}
 	if p.MaxConcurrency < 0 {
 		problems = append(problems, errors.New("provider max concurrency cannot be negative"))

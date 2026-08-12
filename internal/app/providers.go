@@ -215,6 +215,7 @@ const (
 	excludedEndpointRejected           = "endpoint_rejected"
 	excludedBindingProfileIncompatible = "binding_profile_incompatible"
 	excludedAdapterUnavailable         = "adapter_unavailable"
+	excludedCapabilityCeilingExceeded  = "capability_ceiling_exceeded"
 )
 
 // referenceWithholding records a route kept out of the routing candidates
@@ -397,6 +398,19 @@ func loadProviderRegistryWithCatalog(
 			manifest, ok := provider.BuiltinProfile(binding.ProfileID)
 			if !ok || manifest.ProviderType != instance.Type || manifest.AccessSurface != binding.AccessSurface || manifest.CredentialScheme != binding.CredentialScheme {
 				excludeBinding(instance, binding.ID, excludedBindingProfileIncompatible)
+				continue
+			}
+			// A stored binding that claims more than its profile allows is
+			// withheld here rather than clamped. Clamping would keep serving a
+			// record whose declared capabilities and actual behaviour disagree,
+			// and the disagreement is exactly what capability evidence is
+			// supposed to make impossible. Withholding is also why this is not
+			// fatal: the write paths reject the state, so reaching it means a
+			// record predating the check, and one such record must not stop the
+			// process from loading every other provider.
+			if domain.IsImmutableCapabilityProfile(binding.ProfileID) &&
+				!domain.ProviderCapabilitiesSubset(binding.Capabilities, domain.DefaultProviderCapabilitiesForProfile(instance.Type, binding.ProfileID)) {
+				excludeBinding(instance, binding.ID, excludedCapabilityCeilingExceeded)
 				continue
 			}
 			if credential.AccessSurface != binding.AccessSurface || credential.Scheme != binding.CredentialScheme {
