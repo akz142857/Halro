@@ -1,10 +1,22 @@
 # Amazon Bedrock Mantle 接入评估与开发计划
 
-状态：Phase 0～3 已实现；Phase 3 的真实调用待账户与计费授权
-日期：2026-08-12
+状态：Phase 0～2 与验收补齐已实现并经代码核实；Phase 3 的 harness 已交付，真实调用未执行
+日期：2026-08-12（2026-08-13 归档时按当时代码复核）
 范围：`internal/domain`、`internal/provider/{bedrock,bedrockmantle,openai,anthropic}`、
 `internal/app`、`internal/gateway`、`internal/compatibility`、`internal/store`、`web`、
 `docs/adr/0007-bedrock-mantle-profiles.md`、`docs/verification/provider-real-matrix.md`
+
+> 位置：本文原在 `docs/todo/`，Phase 0～2 与验收清单全部关闭后迁到这里。它不再是待办，
+> 而是这条接入面为什么长成现在这样的记录——改动 Mantle 的 wire contract、能力上限或
+> Project 寻址时应当同步更新本文。
+>
+> 归档时仍未关闭、且**不由本文继续跟踪**的两项：
+>
+> - **Phase 3 的真实 Mantle 调用**未执行，需要真实 AWS 账户与一次明确的计费授权。
+>   它的归属是 [`verification/provider-real-matrix.md`](../verification/provider-real-matrix.md)——
+>   那里写明三个 profile 在任何 commit 上都没有真实证据，以及获授权后怎么跑、证据要记哪些字段。
+> - **§7「后续独立任务」的四项**从一开始就声明为独立立项，不属于本文范围。其中通用
+>   Credential expiry 已部分落地，见 §4.3 的归档订正。
 
 > 本文评估的是 **Amazon Bedrock 的 `bedrock-mantle` 访问面**，不是 Claude Platform on AWS。
 > 初始输入截图包含了属于另一产品线的 `anthropic-workspace-id` 信息，不能继续作为
@@ -258,6 +270,21 @@ Bedrock 短期 API key 的有效期已于 2026-08-12 对官方 `api-keys.html` �
 - Metrics 使用有界 `expiry_state` 聚合。`credential_id` 仍是无界集合，不能声称它避免高基数；
   具体 ID 只在 Admin/doctor 的授权输出中展示。
 
+〔2026-08-13 归档订正〕上面这段写的是"应独立立项"，但其中前两条已在 `237a1e9` 落地，
+本文归档时必须说清落到哪儿了，否则读者会以为整块都还没动：
+
+- `domain.Credential.ExpiresAt`（`internal/domain/models.go:112`，可选指针）已存在，
+  裁决取 **operator-declared + 纯提示**：注释明写"the gateway does not refuse traffic on it,
+  because it is a typed-in date rather than anything the upstream told us"。这同时答掉了
+  第一条（operator-declared，不做 Provider-verifiable）和第二条的后半（过期后不拒绝流量）。
+  Admin 侧有 `internal/app/admin_credential_expiry_test.go` 守护。
+- **仍未做**：warning/critical 阈值与时钟偏差、doctor、Audit、runbook，以及有界
+  `expiry_state` 指标——`grep -rn 'expiry_state' internal/` 零命中，
+  `internal/app/doctor.go` 与 `internal/audit/` 也不认识 `ExpiresAt`。
+
+因此"通用 Provider Credential expiry/rotation"这个独立立项仍然成立，只是范围缩小为
+可观测性与生命周期那一半；字段本身与它的提示语义已经定案，不必重开。
+
 ---
 
 ## 5. 已由代码定案的行为
@@ -499,7 +526,9 @@ Operator Guide、release notes、provider real matrix。
 
 - Mantle SigV4 新 profile 与威胁评审；
 - 可刷新短期凭据/workload identity；
-- 通用 Provider Credential expiry/rotation；
+- 通用 Provider Credential expiry/rotation——**部分已落地**：字段与"仅提示、不拒绝流量"的
+  裁决已定案，剩余的阈值、doctor、Audit、runbook 与有界 `expiry_state` 指标仍未开工，
+  见 §4.3 的归档订正；
 - 若确有需求，再设计 Deployment 级多 Project。
 
 这些任务在安全与生命周期设计冻结前不估实现工期。

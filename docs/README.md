@@ -52,6 +52,7 @@ ADR 保留在 `docs/adr/` 顶层：这是业界通用路径，且 `tools/m11/rel
 | [模型能力自动识别：保留的安全与任务契约](prd/model-capability-auto-detection.zh-CN.md) | 能力检测已实施；正文只保留检测的安全、预算与任务生命周期契约 |
 | [基于服务商与模型的能力选择升级方案](prd/model-aware-capability-selection.zh-CN.md) | 正文已迁入上面的解析方案，仅保留指向它的存根 |
 | [模型能力字典演进与四层展示](prd/model-capability-dictionary-evolution.zh-CN.md) | Phase 1 的四层分组已落地，逐项识别结果视图已被检测改版取代；Phase 2–3 未开始，能力字典仍为 v1 |
+| [Amazon Bedrock Mantle 接入评估与开发计划](prd/amazon-bedrock-mantle.zh-CN.md) | Phase 0–2 与验收清单已实施，见 [ADR 0007](adr/0007-bedrock-mantle-profiles.md)；Phase 3 的 smoke harness 已交付但从未执行，真实证据归 [provider real matrix](verification/provider-real-matrix.md) 跟踪 |
 
 ## 里程碑与证据 · [`milestones/`](milestones/)
 
