@@ -2,7 +2,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNotify } from "../notifications";
-import QRCode from "qrcode";
 import { api } from "../api";
 import { ErrorState, Field, Loading, Modal } from "../components";
 import { useInstantFormatter } from "../format";
@@ -90,6 +89,8 @@ export function MFASettings({ username = "" }: { username?: string }) {
   </section>;
 }
 
-function EnrollmentQR({uri}:{uri:string}) { const {t}=useTranslation(); const [source,setSource]=useState(""); useEffect(()=>{let active=true;void QRCode.toDataURL(uri,{errorCorrectionLevel:"M",margin:2,width:240}).then((value)=>{if(active)setSource(value)});return()=>{active=false;setSource("")}},[uri]);return source?<img src={source} width={240} height={240} alt={t("settings.enrollmentQRAlt")}/>:<Loading/> }
+// The encoder is only reachable from an authenticator enrolment, so it loads on
+// the render that needs it rather than in every session's initial bundle.
+function EnrollmentQR({uri}:{uri:string}) { const {t}=useTranslation(); const [source,setSource]=useState(""); useEffect(()=>{let active=true;void import("qrcode").then((module)=>module.default.toDataURL(uri,{errorCorrectionLevel:"M",margin:2,width:240})).then((value)=>{if(active)setSource(value)});return()=>{active=false;setSource("")}},[uri]);return source?<img src={source} width={240} height={240} alt={t("settings.enrollmentQRAlt")}/>:<Loading/> }
 
 function downloadRecoveryCodes(codes:string[]){const url=URL.createObjectURL(new Blob([`Halro recovery codes\n\n${codes.join("\n")}\n`],{type:"text/plain"}));const link=document.createElement("a");link.href=url;link.download="halro-recovery-codes.txt";link.click();URL.revokeObjectURL(url)}
