@@ -17,6 +17,7 @@ server:
   metrics_listen: "127.0.0.1:9090"
   read_header_timeout: 5s
   read_body_timeout: 15s
+  shutdown_timeout: 120s
   max_header_bytes: 32768
   max_request_bytes: 10485760
 tls:
@@ -63,6 +64,27 @@ func TestDecodeAndValidate(t *testing.T) {
 	}
 	if cfg.Gateway.StreamMaxDuration.Value() != 10*time.Minute {
 		t.Fatalf("unexpected stream duration: %s", cfg.Gateway.StreamMaxDuration.Value())
+	}
+}
+
+func TestShutdownTimeoutInheritsAndCoversRouteTimeout(t *testing.T) {
+	cfg, err := Decode(strings.NewReader(strings.Replace(validConfig, "  shutdown_timeout: 120s\n", "", 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Server.ShutdownTimeout != cfg.Gateway.RouteTotalTimeout {
+		t.Fatalf("shutdown timeout=%v route timeout=%v", cfg.Server.ShutdownTimeout, cfg.Gateway.RouteTotalTimeout)
+	}
+	if err := cfg.Validate(LoadOptions{}); err != nil {
+		t.Fatalf("inherited shutdown timeout was rejected: %v", err)
+	}
+
+	cfg.Server.ShutdownTimeout = Duration(time.Minute)
+	if err := cfg.Validate(LoadOptions{}); err == nil || !strings.Contains(err.Error(), "server.shutdown_timeout must be at least gateway.route_total_timeout") {
+		t.Fatalf("expected shutdown/route invariant error, got %v", err)
 	}
 }
 

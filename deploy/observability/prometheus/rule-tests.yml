@@ -7,6 +7,97 @@ evaluation_interval: 1m
 tests:
   - interval: 1m
     input_series:
+      - series: 'halro_activation_stale{environment="test",region="local",cluster="standalone",instance="one"}'
+        values: '0 1 1 0'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: HalroConfigurationStale
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: HalroConfigurationStale
+        exp_alerts:
+          - exp_labels:
+              alertname: HalroConfigurationStale
+              category: availability
+              cluster: standalone
+              environment: test
+              instance: one
+              owner: sre
+              region: local
+              service: halro
+              severity: critical
+            exp_annotations:
+              summary: Halro is refusing traffic because a configuration snapshot is stale
+              runbook_url: /docs/runbooks/configuration-stale.md
+      - eval_time: 3m
+        alertname: HalroConfigurationStale
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'halro_audit_anchor_last_emit_timestamp_seconds{environment="test",region="local",cluster="standalone",instance="one"}'
+        values: '300x26 1620x4'
+      - series: 'halro_audit_anchor_interval_seconds{environment="test",region="local",cluster="standalone",instance="one"}'
+        values: '300x30'
+      - series: 'process_start_time_seconds{environment="test",region="local",cluster="standalone",instance="one"}'
+        values: '0x30'
+    alert_rule_test:
+      # Pending while `for` runs, firing once it elapses, resolved after the
+      # next emission lands.
+      - eval_time: 19m
+        alertname: HalroAuditAnchorStale
+        exp_alerts: []
+      - eval_time: 23m
+        alertname: HalroAuditAnchorStale
+        exp_alerts:
+          - exp_labels: {alertname: HalroAuditAnchorStale, category: audit, cluster: standalone, environment: test, instance: one, owner: security, region: local, service: halro, severity: critical}
+            exp_annotations: {summary: Halro audit anchor emission is stale, runbook_url: /docs/observability/operations-runbook.md#halroauditanchorstale}
+      - eval_time: 28m
+        alertname: HalroAuditAnchorStale
+        exp_alerts: []
+
+  # The other half of the expression: an instance that has never emitted an
+  # anchor at all. The counter-based half cannot see this — nothing increments
+  # — so without its own case the branch is only prose.
+  - interval: 1m
+    input_series:
+      - series: 'halro_audit_anchor_last_emit_timestamp_seconds{environment="test",region="local",cluster="standalone",instance="never"}'
+        values: '0x24'
+      - series: 'halro_audit_anchor_interval_seconds{environment="test",region="local",cluster="standalone",instance="never"}'
+        values: '300x24'
+      - series: 'process_start_time_seconds{environment="test",region="local",cluster="standalone",instance="never"}'
+        values: '0x24'
+    alert_rule_test:
+      - eval_time: 23m
+        alertname: HalroAuditAnchorStale
+        exp_alerts:
+          - exp_labels: {alertname: HalroAuditAnchorStale, category: audit, cluster: standalone, environment: test, instance: never, owner: security, region: local, service: halro, severity: critical}
+            exp_annotations: {summary: Halro audit anchor emission is stale, runbook_url: /docs/observability/operations-runbook.md#halroauditanchorstale}
+
+  - interval: 1m
+    input_series:
+      - series: 'halro_deployment_capability_status{environment="test",region="local",cluster="standalone",instance="one",state="conflicting"}'
+        values: '0 1 0'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: HalroDeploymentCapabilityEvidenceDegraded
+        exp_alerts:
+          - exp_labels: {alertname: HalroDeploymentCapabilityEvidenceDegraded, category: capability, cluster: standalone, environment: test, instance: one, owner: sre, region: local, service: halro, severity: warning, state: conflicting}
+            exp_annotations: {summary: Halro deployment capability evidence is missing or conflicting, runbook_url: /docs/observability/operations-runbook.md#halrodeploymentcapabilityevidencedegraded}
+      - eval_time: 2m
+        alertname: HalroDeploymentCapabilityEvidenceDegraded
+        exp_alerts: []
+
+  - interval: 1m
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: HalroDeploymentCapabilityEvidenceDegraded
+        exp_alerts:
+          - exp_labels: {alertname: HalroDeploymentCapabilityEvidenceDegraded, category: capability, owner: sre, service: halro, severity: warning}
+            exp_annotations: {summary: Halro deployment capability evidence is missing or conflicting, runbook_url: /docs/observability/operations-runbook.md#halrodeploymentcapabilityevidencedegraded}
+
+  - interval: 1m
+    input_series:
       - series: 'halro_wal_append_errors_total{environment="test",region="local",cluster="standalone",instance="one"}'
         values: '0 0 1 1 1'
       - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="standalone",instance="one"}'
@@ -30,7 +121,55 @@ tests:
               severity: critical
             exp_annotations:
               summary: Halro WAL append errors increased
-              runbook_url: /docs/observability/operations-runbook.md
+              runbook_url: /docs/observability/operations-runbook.md#halrowalappenderrors
+
+  - interval: 1m
+    input_series:
+      - series: 'halro_signed_model_catalog_degraded{environment="test",region="local",cluster="standalone",instance="one"}'
+        values: '1x20 0x5'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: HalroSignedModelCatalogDegraded
+        exp_alerts:
+          - exp_labels: {alertname: HalroSignedModelCatalogDegraded, category: capability, cluster: standalone, environment: test, instance: one, owner: sre, region: local, service: halro, severity: warning}
+            exp_annotations: {summary: Halro signed model catalog refresh is degraded, runbook_url: /docs/observability/operations-runbook.md#halrosignedmodelcatalogdegraded}
+      - eval_time: 21m
+        alertname: HalroSignedModelCatalogDegraded
+        exp_alerts: []
+
+  - interval: 5m
+    input_series:
+      - series: 'halro_capability_drift_total{environment="test",region="local",cluster="standalone",reason="catalog"}'
+        values: '0 1x20'
+      - series: 'halro_capability_drift_total{environment="test",region="local",cluster="standalone",reason="profile"}'
+        values: '0 2x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: HalroCapabilityDriftDetected
+        exp_alerts:
+          - exp_labels: {alertname: HalroCapabilityDriftDetected, category: capability, cluster: standalone, environment: test, owner: sre, reason: catalog, region: local, service: halro, severity: warning}
+            exp_annotations: {summary: Halro withheld a deployment because capability evidence drifted, runbook_url: /docs/observability/operations-runbook.md#halrocapabilitydriftdetected}
+          - exp_labels: {alertname: HalroCapabilityDriftDetected, category: capability, cluster: standalone, environment: test, owner: sre, reason: profile, region: local, service: halro, severity: warning}
+            exp_annotations: {summary: Halro withheld a deployment because capability evidence drifted, runbook_url: /docs/observability/operations-runbook.md#halrocapabilitydriftdetected}
+      - eval_time: 70m
+        alertname: HalroCapabilityDriftDetected
+        exp_alerts: []
+
+  - interval: 5m
+    input_series:
+      - series: 'halro_model_capability_detection_total{environment="test",region="local",cluster="standalone",provider_type="openai",status="failed",source="verified_probe"}'
+        values: '0+2x5 10x20'
+      - series: 'halro_model_capability_detection_total{environment="test",region="local",cluster="standalone",provider_type="openai",status="completed",source="verified_probe"}'
+        values: '0+1x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: HalroCapabilityDetectionFailureRateHigh
+        exp_alerts:
+          - exp_labels: {alertname: HalroCapabilityDetectionFailureRateHigh, category: capability, cluster: standalone, environment: test, owner: sre, provider_type: openai, region: local, service: halro, severity: warning}
+            exp_annotations: {summary: Halro capability detection failure rate exceeds 50 percent, runbook_url: /docs/observability/operations-runbook.md#halrocapabilitydetectionfailureratehigh}
+      - eval_time: 75m
+        alertname: HalroCapabilityDetectionFailureRateHigh
+        exp_alerts: []
 
   - interval: 1m
     input_series:
@@ -54,7 +193,7 @@ tests:
               severity: critical
             exp_annotations:
               summary: Halro Metrics target is down
-              runbook_url: /docs/observability/operations-runbook.md
+              runbook_url: /docs/observability/operations-runbook.md#halrotargetdown
       - eval_time: 4m
         alertname: HalroTargetDown
         exp_alerts: []
@@ -111,7 +250,7 @@ tests:
         alertname: HalroTargetDown
         exp_alerts:
           - exp_labels: {alertname: HalroTargetDown, category: availability, expected_target: "true", job: halro, owner: sre, service: halro, severity: critical}
-            exp_annotations: {summary: Halro Metrics target is down, runbook_url: /docs/observability/operations-runbook.md}
+            exp_annotations: {summary: Halro Metrics target is down, runbook_url: /docs/observability/operations-runbook.md#halrotargetdown}
       - eval_time: 3m
         alertname: HalroDeploymentUnhealthy
         exp_alerts: []
@@ -135,21 +274,21 @@ tests:
         alertname: HalroDeploymentUnhealthy
         exp_alerts:
           - exp_labels: {alertname: HalroDeploymentUnhealthy, category: provider, cluster: standalone, deployment_id: a, environment: test, owner: sre, region: local, service: halro, severity: warning}
-            exp_annotations: {summary: A probed Halro deployment is unhealthy, runbook_url: /docs/observability/operations-runbook.md}
+            exp_annotations: {summary: A probed Halro deployment is unhealthy, runbook_url: /docs/observability/operations-runbook.md#halrodeploymentunhealthy}
           - exp_labels: {alertname: HalroDeploymentUnhealthy, category: provider, cluster: standalone, deployment_id: b, environment: test, owner: sre, region: local, service: halro, severity: warning}
-            exp_annotations: {summary: A probed Halro deployment is unhealthy, runbook_url: /docs/observability/operations-runbook.md}
+            exp_annotations: {summary: A probed Halro deployment is unhealthy, runbook_url: /docs/observability/operations-runbook.md#halrodeploymentunhealthy}
       - eval_time: 6m
         alertname: HalroMultipleDeploymentsUnhealthy
         exp_alerts:
           - exp_labels: {alertname: HalroMultipleDeploymentsUnhealthy, category: provider, cluster: standalone, environment: test, owner: sre, region: local, service: halro, severity: critical}
-            exp_annotations: {summary: Multiple Halro deployments are unhealthy, runbook_url: /docs/observability/operations-runbook.md}
+            exp_annotations: {summary: Multiple Halro deployments are unhealthy, runbook_url: /docs/observability/operations-runbook.md#halromultipledeploymentsunhealthy}
       - eval_time: 6m
         alertname: HalroProviderCapacityPressure
         exp_alerts:
           - exp_labels: {alertname: HalroProviderCapacityPressure, category: provider, cluster: standalone, environment: test, owner: sre, provider_id: p, region: local, service: halro, severity: warning}
-            exp_annotations: {summary: Halro Provider concurrency capacity is nearly exhausted, runbook_url: /docs/observability/operations-runbook.md}
+            exp_annotations: {summary: Halro Provider concurrency capacity is nearly exhausted, runbook_url: /docs/observability/operations-runbook.md#halroprovidercapacitypressure}
           - exp_labels: {alertname: HalroProviderCapacityPressure, category: provider, cluster: primary, environment: production, owner: sre, provider_id: q, region: eu, service: halro, severity: warning}
-            exp_annotations: {summary: Halro Provider concurrency capacity is nearly exhausted, runbook_url: /docs/observability/operations-runbook.md}
+            exp_annotations: {summary: Halro Provider concurrency capacity is nearly exhausted, runbook_url: /docs/observability/operations-runbook.md#halroprovidercapacitypressure}
 
   - interval: 1m
     input_series:
@@ -191,12 +330,12 @@ tests:
         alertname: HalroHighErrorRate
         exp_alerts:
           - exp_labels: {alertname: HalroHighErrorRate, category: traffic, cluster: standalone, environment: test, owner: sre, region: local, service: halro, severity: warning}
-            exp_annotations: {summary: Halro request error rate is elevated, runbook_url: /docs/observability/operations-runbook.md}
+            exp_annotations: {summary: Halro request error rate is elevated, runbook_url: /docs/observability/operations-runbook.md#halrohigherrorrate}
       - eval_time: 11m
         alertname: HalroFallbackSaturation
         exp_alerts:
           - exp_labels: {alertname: HalroFallbackSaturation, category: provider, cluster: standalone, environment: test, owner: sre, region: local, service: halro, severity: warning}
-            exp_annotations: {summary: Halro fallback rate is elevated, runbook_url: /docs/observability/operations-runbook.md}
+            exp_annotations: {summary: Halro fallback rate is elevated, runbook_url: /docs/observability/operations-runbook.md#halrofallbacksaturation}
 
   - interval: 1m
     input_series:
@@ -213,17 +352,17 @@ tests:
         alertname: HalroUsageAnalyticsLagging
         exp_alerts:
           - exp_labels: {alertname: HalroUsageAnalyticsLagging, category: accounting, cluster: standalone, environment: test, instance: one, owner: sre, region: local, service: halro, severity: warning}
-            exp_annotations: {summary: Halro Usage analytics is behind the Ledger, runbook_url: /docs/observability/operations-runbook.md}
+            exp_annotations: {summary: Halro Usage analytics is behind the Ledger, runbook_url: /docs/observability/operations-runbook.md#halrousageanalyticslagging}
       - eval_time: 6m
         alertname: HalroLedgerQueueHigh
         exp_alerts:
           - exp_labels: {alertname: HalroLedgerQueueHigh, category: accounting, cluster: standalone, environment: test, instance: one, owner: sre, region: local, service: halro, severity: warning}
-            exp_annotations: {summary: Halro Ledger queue exceeds 75 percent, runbook_url: /docs/observability/operations-runbook.md}
+            exp_annotations: {summary: Halro Ledger queue exceeds 75 percent, runbook_url: /docs/observability/operations-runbook.md#halroledgerqueuehigh}
       - eval_time: 16m
         alertname: HalroAlertDeliveryFailing
         exp_alerts:
           - exp_labels: {alertname: HalroAlertDeliveryFailing, category: delivery, cluster: standalone, environment: test, owner: sre, region: local, service: halro, severity: warning, status: failed}
-            exp_annotations: {summary: Halro alert delivery is failing, runbook_url: /docs/observability/operations-runbook.md}
+            exp_annotations: {summary: Halro alert delivery is failing, runbook_url: /docs/observability/operations-runbook.md#halroalertdeliveryfailing}
 
   - interval: 1m
     input_series:
@@ -242,22 +381,22 @@ tests:
         alertname: AlertmanagerNotificationFailing
         exp_alerts:
           - exp_labels: {alertname: AlertmanagerNotificationFailing, category: platform, cluster: standalone, environment: test, instance: alertmanager, owner: sre, region: local, service: alertmanager, severity: critical}
-            exp_annotations: {summary: Alertmanager notifications are failing}
+            exp_annotations: {summary: Alertmanager notifications are failing, runbook_url: /docs/observability/operations-runbook.md#alertmanagernotificationfailing}
       - eval_time: 4m
         alertname: PrometheusRuleEvaluationFailing
         exp_alerts:
           - exp_labels: {alertname: PrometheusRuleEvaluationFailing, category: platform, instance: prometheus, owner: sre, service: prometheus, severity: warning}
-            exp_annotations: {summary: Prometheus rule evaluation is failing}
+            exp_annotations: {summary: Prometheus rule evaluation is failing, runbook_url: /docs/observability/operations-runbook.md#prometheusruleevaluationfailing}
       - eval_time: 3m
         alertname: PrometheusConfigReloadFailing
         exp_alerts:
           - exp_labels: {alertname: PrometheusConfigReloadFailing, category: platform, instance: prometheus, owner: sre, service: prometheus, severity: critical}
-            exp_annotations: {summary: Prometheus configuration reload failed}
+            exp_annotations: {summary: Prometheus configuration reload failed, runbook_url: /docs/observability/operations-runbook.md#prometheusconfigreloadfailing}
       - eval_time: 11m
         alertname: PrometheusTSDBDiskHigh
         exp_alerts:
           - exp_labels: {alertname: PrometheusTSDBDiskHigh, category: platform, instance: prometheus, owner: sre, service: prometheus, severity: warning}
-            exp_annotations: {summary: Prometheus TSDB and WAL exceed the local 3.5 GiB warning budget}
+            exp_annotations: {summary: Prometheus TSDB and WAL exceed the local 3.5 GiB warning budget, runbook_url: /docs/observability/operations-runbook.md#prometheustsdbdiskhigh}
 
   - interval: 1m
     input_series:
@@ -270,7 +409,7 @@ tests:
         alertname: PrometheusTSDBDiskCritical
         exp_alerts:
           - exp_labels: {alertname: PrometheusTSDBDiskCritical, category: platform, cluster: standalone, environment: test, instance: prometheus-critical, job: prometheus, owner: sre, region: local, service: prometheus, severity: critical}
-            exp_annotations: {summary: Prometheus TSDB and WAL exceed the local 4.25 GiB critical budget}
+            exp_annotations: {summary: Prometheus TSDB and WAL exceed the local 4.25 GiB critical budget, runbook_url: /docs/observability/operations-runbook.md#prometheustsdbdiskcritical}
       - eval_time: 6m
         alertname: PrometheusTSDBDiskHigh
         exp_alerts: []
@@ -281,7 +420,7 @@ tests:
         alertname: Watchdog
         exp_alerts:
           - exp_labels: {alertname: Watchdog, category: deadman, owner: sre, service: halro, severity: none}
-            exp_annotations: {summary: Continuous signal for an independent dead-man monitor, runbook_url: /docs/observability/operations-runbook.md}
+            exp_annotations: {summary: Continuous signal for an independent dead-man monitor, runbook_url: /docs/observability/operations-runbook.md#watchdog}
 
   # Durable write path. A slow fsync and a saturated per-project accounting lock
   # both present as "requests got slower"; these two series are what tell them
@@ -302,13 +441,13 @@ tests:
         alertname: HalroWALSyncSlow
         exp_alerts:
           - exp_labels: {alertname: HalroWALSyncSlow, category: accounting, cluster: standalone, environment: test, instance: one, owner: sre, region: local, service: halro, severity: warning}
-            exp_annotations: {summary: Halro Ledger fsync is slow enough to cap accounting throughput, runbook_url: /docs/observability/operations-runbook.md}
+            exp_annotations: {summary: Halro Ledger fsync is slow enough to cap accounting throughput, runbook_url: /docs/observability/operations-runbook.md#halrowalsyncslow}
       # 0.3s mean wait per acquisition, sustained.
       - eval_time: 21m
         alertname: HalroAccountingProjectLockSaturated
         exp_alerts:
           - exp_labels: {alertname: HalroAccountingProjectLockSaturated, category: accounting, cluster: standalone, environment: test, instance: one, owner: sre, region: local, service: halro, severity: warning}
-            exp_annotations: {summary: Halro requests are queueing on one project's accounting lock, runbook_url: /docs/observability/operations-runbook.md}
+            exp_annotations: {summary: Halro requests are queueing on one project's accounting lock, runbook_url: /docs/observability/operations-runbook.md#halroaccountingprojectlocksaturated}
       # Neither has been true long enough yet at 6m.
       - eval_time: 6m
         alertname: HalroAccountingProjectLockSaturated

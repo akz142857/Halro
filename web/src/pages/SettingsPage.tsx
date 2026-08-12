@@ -127,9 +127,19 @@ function ModelCatalogCard({ info, onRefresh }: { info: ModelCatalogInfo; onRefre
 
 function DiagnosticsPane({ status, accountingLabels, metricLabels }: { status: Awaited<ReturnType<typeof api.systemStatus>>; accountingLabels: string[]; metricLabels: Record<string, string> }) {
   const { t } = useTranslation();
+  const formatInstant = useInstantFormatter();
+  const activation = status.activation;
+  // Every domain keeps its row, healthy or not. A panel that drops the rows it
+  // has nothing to report about answers "is redaction current?" with silence,
+  // which reads the same as "there is no such thing as redaction here".
+  const activationDomains = activation?.domains ?? [];
   return <section aria-labelledby="diagnostics-title">
     <SettingsGroupHeader title={t("settings.panes.diagnostics")} description={t("settings.systemDescription")} id="diagnostics-title" />
-    {(status.accounting_status !== 0 || status.draining) && <SettingsOverview status={status} />}
+    {(status.accounting_status !== 0 || status.draining || activation?.stale) && <SettingsOverview status={status} />}
+    {activation?.stale && <div className="notice warning" role="alert">
+      <strong>{t("settings.activationStale")}</strong>
+      <span>{t("settings.activationStaleDescription")}</span>
+    </div>}
     <div className="settings-grid">
           <details id="system" className="panel system-card diagnostic-details" open>
             <summary><span>{t("settings.build")}</span><strong>Halro {status.build.version || "development"}</strong></summary>
@@ -148,6 +158,19 @@ function DiagnosticsPane({ status, accountingLabels, metricLabels }: { status: A
             </dl>
           </details>
           <WritePathCard summary={status.write_path} batches={Number(status.wal?.batches ?? 0)} />
+          {activation && <details id="activation" className="panel system-card diagnostic-details" open>
+            <summary><span>{t("settings.activationTitle")}</span><strong><StatusDot ok={!activation.stale} />{t(activation.stale ? "settings.activationStale" : "settings.activationCurrent")}</strong></summary>
+            <p>{t(activation.stale ? "settings.activationStaleDescription" : "settings.activationCurrentDescription")}</p>
+            <dl>
+              <div><dt>{t("settings.activationGeneration")}</dt><dd>{activation.generation}</dd></div>
+              {activation.stale_since && <div><dt>{t("settings.activationSince")}</dt><dd>{formatInstant(activation.stale_since, "full")}</dd></div>}
+              {activationDomains.map((domain) => <div key={domain.domain}>
+                <dt>{t(`settings.activationDomainNames.${domain.domain}`)}</dt>
+                <dd>{domain.stale ? (domain.reason || t("common.unknown")) : t("settings.activationDomainCurrent")}</dd>
+              </div>)}
+            </dl>
+            {activation.stale && <p>{t("settings.activationRecovery")}</p>}
+          </details>}
           <details className="panel system-card diagnostic-details" open>
             <summary><span>{t("settings.auditHead")}</span><strong>{t("settings.chainCheckpoint")}</strong></summary>
             <dl>
@@ -312,7 +335,7 @@ function SettingsGroupHeader({ title, description, id }: { title: string; descri
 
 function SettingsOverview({ status }: { status: Awaited<ReturnType<typeof api.systemStatus>> }) {
   const { t } = useTranslation();
-  const healthy = status.accounting_status === 0 && !status.draining;
+  const healthy = status.accounting_status === 0 && !status.draining && !status.activation?.stale;
   return (
     <section className="settings-overview" aria-labelledby="settings-overview-title">
       <div className="settings-overview-copy">

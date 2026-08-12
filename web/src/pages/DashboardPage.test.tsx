@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
 import type { Dashboard, OnboardingReadiness } from "../types";
@@ -27,6 +27,7 @@ describe("DashboardPage", () => {
     expect(panel.querySelector('li[aria-current="step"]')).toHaveTextContent("发布可调用模型");
     expect(within(panel).getByRole("link", { name: "配置模型与路由" })).toHaveAttribute("href", "/admin/deployments?intent=create&onboarding=first-request");
     expect(screen.queryByLabelText("今日关键指标")).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "实时运行状态" })).toBeVisible();
   });
 
   it("drops the checklist only after the first successful request", async () => {
@@ -70,16 +71,16 @@ describe("DashboardPage", () => {
 
   it("shows the real alert and WAL queue state and marks failures unhealthy", async () => {
     vi.spyOn(api, "dashboard").mockResolvedValue(dashboard({
-      alerts: { Accepted: 12, Delivered: 8, Failed: 2, Dropped: 1, Queued: 4 },
+      alerts: { Accepted: 12, Delivered: 8, Failed: 2, Dropped: 1, Queued: 4, QueueCapacity: 16, Endpoints: 2, UnhealthyEndpoints: 1, UnknownEndpoints: 0 },
       wal: { batches: 20, records: 40, errors: 1, syncs: 20, sync_seconds: 0.08, queue_depth: 3, queue_capacity: 16 },
     }));
     renderPage();
 
     const alertRow = (await screen.findByText("告警投递")).closest(".status-row")!;
-    expect(alertRow).toHaveTextContent("4 条排队 · 3 条失败或丢弃");
+    expect(alertRow).toHaveTextContent("4 条排队 · 1 个目标异常");
     expect(alertRow.querySelector(".status-dot")).toHaveClass("bad");
 
-    const walRow = screen.getByText("WAL 队列").closest(".status-row")!;
+    const walRow = screen.getByText("持久化计费").closest(".status-row")!;
     expect(walRow).toHaveTextContent("3 条排队 · 1 次错误");
     expect(walRow.querySelector(".status-dot")).toHaveClass("bad");
   });
@@ -89,11 +90,22 @@ describe("DashboardPage", () => {
     renderPage();
 
     const alertRow = (await screen.findByText("告警投递")).closest(".status-row")!;
-    const walRow = screen.getByText("WAL 队列").closest(".status-row")!;
+    const walRow = screen.getByText("持久化计费").closest(".status-row")!;
     expect(alertRow).toHaveTextContent("就绪");
     expect(walRow).toHaveTextContent("就绪");
     expect(alertRow.querySelector(".status-dot")).toHaveClass("ok");
     expect(walRow.querySelector(".status-dot")).toHaveClass("ok");
+  });
+
+  it("does not label an unverified alert destination healthy", async () => {
+    const data = dashboard();
+    data.alerts.UnknownEndpoints = 1;
+    vi.spyOn(api, "dashboard").mockResolvedValue(data);
+    renderPage();
+
+    const alertRow = (await screen.findByText("告警投递")).closest(".status-row")!;
+    expect(alertRow).toHaveTextContent("1 个目标尚未验证投递");
+    expect(alertRow.querySelector(".status-dot")).not.toBeInTheDocument();
   });
 
 
@@ -103,6 +115,8 @@ describe("DashboardPage", () => {
     const data = dashboard();
     data.time_context = timeContext({ accounting_timezone: "Asia/Shanghai" });
     data.usage.recent_anomalies = [{
+      request_id: "req_anomaly",
+      attempt_id: "attempt_anomaly",
       completed_at: "2026-08-05T17:30:00Z",
       project_id: "project_a",
       status: "error",
@@ -129,8 +143,23 @@ describe("DashboardPage", () => {
     vi.spyOn(api, "dashboard").mockResolvedValue(empty);
     renderPage();
 
-    expect(await screen.findByText("异常事件")).toBeInTheDocument();
+    expect(await screen.findByText("最近请求异常")).toBeInTheDocument();
     expect(screen.getByText("今天没有失败、重试或路由回退")).toBeInTheDocument();
+  });
+
+  it("uses roving tab focus and exposes the active trend panel", async () => {
+    vi.spyOn(api, "dashboard").mockResolvedValue(dashboard());
+    renderPage();
+
+    const requests = await screen.findByRole("tab", { name: "请求结果" });
+    const success = screen.getByRole("tab", { name: "请求成功率" });
+    expect(requests).toHaveAttribute("tabindex", "0");
+    expect(success).toHaveAttribute("tabindex", "-1");
+    requests.focus();
+    fireEvent.keyDown(requests, { key: "ArrowRight" });
+    expect(success).toHaveFocus();
+    expect(success).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tabpanel", { name: "请求成功率" })).toBeVisible();
   });
 });
 
@@ -147,9 +176,12 @@ function dashboard(overrides: Partial<Dashboard> = {}): Dashboard {
   return {
     first_value_reached: true,
     usage: {
-      today: { hour: "2026-08-03T00:00:00Z", requests: 0, attempts: 0, input_tokens: 0, output_tokens: 0, cost_micros_usd: 0, errors: 0, latency_millis: 0 },
+      today: { hour: "2026-08-03T00:00:00Z", requests: 0, request_errors: 0, request_latency_samples: 0, request_latency_p50_millis: 0, request_latency_p95_millis: 0, attempts: 0, input_tokens: 0, output_tokens: 0, cost_micros_usd: 0, unknown_attempts: 0, errors: 0, latency_millis: 0 },
       hourly: [], active_requests: 0, watermark_sequence: 0,
-      breakdowns: { project: [], provider: [], requested_model: [], provider_model: [] },
+      breakdowns: {
+        project: { calls: [], cost: [], errors: [] }, provider: { calls: [], cost: [], errors: [] },
+        requested_model: { calls: [], cost: [], errors: [] }, provider_model: { calls: [], cost: [], errors: [] },
+      },
       recent_anomalies: [],
     },
     governance: {
@@ -159,8 +191,9 @@ function dashboard(overrides: Partial<Dashboard> = {}): Dashboard {
     },
     resource_labels: {},
     accounting_status: 0,
+    runtime: { accepting_traffic: true, draining: false, activation: { stale: false, generation: 1, domains: [] } },
     time_context: timeContext(),
-    alerts: { Accepted: 0, Delivered: 0, Failed: 0, Dropped: 0, Queued: 0 },
+    alerts: { Accepted: 0, Delivered: 0, Failed: 0, Dropped: 0, Queued: 0, QueueCapacity: 16, Endpoints: 1, UnhealthyEndpoints: 0, UnknownEndpoints: 0 },
     wal: { batches: 0, records: 0, errors: 0, syncs: 0, sync_seconds: 0.08, queue_depth: 0, queue_capacity: 16 },
     ...overrides,
   };
@@ -176,7 +209,7 @@ function onboarding(overrides: Partial<OnboardingReadiness> = {}): OnboardingRea
     goals: [
       { key: "connect_provider", state: "complete", detail_code: "provider_ready", action_href: "/admin/providers" },
       { key: "publish_model", state: "current", detail_code: "deployment_missing", action_href: "/admin/deployments?intent=create&onboarding=first-request" },
-      { key: "grant_access", state: "blocked", detail_code: "model_blocking_access", action_href: "/admin/projects" },
+      { key: "grant_access", state: "blocked", detail_code: "model_not_verified", action_href: "/admin/projects" },
       { key: "verify_request", state: "blocked", detail_code: "request_ready", action_href: "/admin/developer?onboarding=first-request" },
     ],
     ...overrides,

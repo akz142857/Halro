@@ -250,7 +250,7 @@ function ProviderRow({ provider, credential, highlighted, onCredentialClick, onE
   const totalTargets = testMutation.data?.total_targets ?? provider.last_test_total_targets;
   return (
     <>
-      <article className={`provider-row ${highlighted ? "resource-highlight" : ""}`}>
+      <article id={`provider-${provider.id}`} className={`provider-row ${highlighted ? "resource-highlight" : ""}`}>
         <span className="provider-icon">{provider.type === "openai" ? "OA" : "AI"}</span>
         <div className="provider-compact-identity"><span><StatusDot ok={provider.enabled} /><strong>{provider.name}</strong></span><small>{t(`providers.types.${provider.type}`)}</small></div>
         <div className="provider-compact-fact"><small>{t("providers.endpoint")}</small><strong>{provider.base_url}</strong></div>

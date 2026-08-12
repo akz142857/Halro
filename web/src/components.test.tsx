@@ -10,6 +10,33 @@ describe("ErrorState", () => {
     expect(screen.getByText("该模型可通过多个能力接口调用。请选择实际接口后再确认模型。")).toBeVisible();
     expect(screen.queryByText(/capability interface cannot be determined/)).not.toBeInTheDocument();
   });
+
+  it("explains a Gateway Key replay without exposing the server's English sentinel", () => {
+    render(<ErrorState error={new ApiError(
+      409,
+      "this request already created gateway key key_1",
+      "gateway_key_idempotency_replay",
+      "",
+      { id: "key_1", project_id: "project_1" },
+    )} />);
+    expect(screen.getByText(/密钥明文无法再次显示/)).toBeVisible();
+    expect(screen.queryByText(/this request already created/)).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "查看已创建记录" })).toHaveAttribute(
+      "href",
+      "/admin/projects?project_id=project_1#gateway-key-key_1",
+    );
+  });
+
+  it.each([
+    ["provider_idempotency_replay", "provider_1", "/admin/providers#provider-provider_1"],
+    ["deployment_idempotency_replay", "deployment_1", "/admin/deployments#deployment-deployment_1"],
+    ["route_idempotency_replay", "route_1", "/admin/routes#route-route_1"],
+    ["project_idempotency_replay", "project_1", "/admin/projects?project_id=project_1"],
+  ])("links %s to its created record", (code, id, href) => {
+    render(<ErrorState error={new ApiError(409, "already created", code, "", { id })} />);
+    expect(screen.getByRole("link", { name: "查看已创建记录" })).toHaveAttribute("href", href);
+    expect(screen.queryByText("数据已被其他操作修改，请刷新后重试。")).not.toBeInTheDocument();
+  });
 });
 
 describe("InlineTestControl", () => {

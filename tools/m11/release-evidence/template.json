@@ -208,6 +208,7 @@
       {"name": "halro-container.tar.gz", "sha256": "replace-with-sha256", "sigstore_verified": false, "sigstore_bundle": "pending"},
       {"name": "halro-deadman-container.tar.gz", "sha256": "replace-with-sha256", "sigstore_verified": false, "sigstore_bundle": "pending"},
       {"name": "halro.spdx.json", "sha256": "replace-with-sha256", "sigstore_verified": false, "sigstore_bundle": "pending"},
+      {"name": "halro-binaries.spdx.json", "sha256": "replace-with-sha256", "sigstore_verified": false, "sigstore_bundle": "pending"},
       {"name": "checksums.txt", "sha256": "replace-with-sha256", "sigstore_verified": false, "sigstore_bundle": "pending"}
     ]
   },

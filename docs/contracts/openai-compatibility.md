@@ -39,6 +39,12 @@ Unknown or unsupported parameters are rejected unless a deployment explicitly de
 
 Compatibility is tested with the Python, Node, and Go OpenAI SDKs. A Halro stream error extension is not represented as a standard OpenAI guarantee.
 
+When a durable Admin change has not reached every running authorization and
+routing snapshot, all OpenAI-family endpoints fail closed with HTTP `503`, an
+OpenAI error envelope whose code is `configuration_stale`, and
+`Retry-After: 5`. The runtime retries activation every five seconds; this is a
+temporary gateway state, not evidence that a Provider received the request.
+
 ## Stateless Responses tier
 
 The Responses endpoint has its own typed item and event contract; it is not a

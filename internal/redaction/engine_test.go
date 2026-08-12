@@ -81,3 +81,30 @@ func TestOutboundPrivateKeyFailsClosedAndCompatibilityWrapperReturnsNoMaterial(t
 		t.Fatalf("compatibility wrapper returned private material: %s", encoded)
 	}
 }
+
+// A Project whose policy is missing from the live snapshot must not be served
+// as though it had no rules. The failure this pins down was observed end to
+// end: with the snapshot behind the store, ProcessText returned the prompt
+// unchanged — "here is SECRET-12345 in a prompt" went to the provider with
+// none of the Project's rules having run, and the call reported success.
+func TestAMissingPolicyRefusesInsteadOfPassingTheTextThrough(t *testing.T) {
+	engine := NewDefault()
+	const prompt = "here is SECRET-12345 in a prompt"
+
+	out, err := engine.ProcessText("redp_not_in_this_snapshot", "inbound", prompt)
+	if !errors.Is(err, ErrPolicyUnavailable) {
+		t.Fatalf("named-but-absent policy: err=%v out=%q", err, out)
+	}
+
+	// An absent policy is not a match, so it must not be reported as one: the
+	// two mean different things to the caller and to the audit record.
+	if errors.Is(err, ErrPolicyRejected) {
+		t.Fatal("an absent policy was reported as a rule rejection")
+	}
+
+	// The empty ID is a decision, not a miss: a Project with no policy keeps
+	// working, and the mandatory built-in rules still run.
+	if out, err := engine.ProcessText("", "inbound", prompt); err != nil || out != prompt {
+		t.Fatalf("no-policy project: out=%q err=%v", out, err)
+	}
+}

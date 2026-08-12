@@ -81,7 +81,7 @@ defaults from drifting apart. `configs/config.example.yaml` remains the
 canonical complete v1 example, including the settings the default file leaves
 out. Important groups are:
 
-- `server`: three listener addresses and HTTP size/time limits;
+- `server`: three listener addresses, HTTP size/time limits, and graceful-shutdown budget;
 - `tls`: certificate and private-key paths shared by enabled listeners;
 - `storage`: data directory, bbolt filename, and Master Key path;
 - `admin`: session/idle limits, login rate, and external origin;
@@ -111,6 +111,15 @@ Unknown YAML fields and invalid durations are rejected. Listener, TLS, storage,
 egress, proxy, and Metrics-auth changes require restart. The Admin Settings page
 only changes the explicitly writable runtime settings. Always run `config check`
 before restart.
+
+`server.shutdown_timeout` is shared by the Gateway, Admin, and Metrics
+listeners and must be at least `gateway.route_total_timeout`. When omitted by
+an older configuration it inherits the effective route timeout. If the budget
+expires, Halro records still-active Provider attempts in the durable
+`halro_shutdown_truncated_attempts_total` counter and then forcibly closes the
+remaining connections. Service managers and orchestrators must grant extra
+termination headroom beyond this value; the shipped Kubernetes manifest uses
+150 seconds for the default 120-second Halro budget.
 
 Admin localization is metadata, not YAML configuration. The public
 `GET /admin/api/v1/ui/bootstrap` endpoint exposes only the instance default and
@@ -256,6 +265,8 @@ With `mfa_policy: required`, the next password login is restricted to setup.
 ## Master Key rotation
 
 The `--new-key-file` procedure below applies to `storage.master_key.mode: file`.
+Use the complete [file-mode Master Key rotation runbook](../runbooks/file-master-key-rotation.md)
+for prerequisites, interruption recovery, validation, and rollback evidence.
 For `key_slots`, Halro generates the new Master Key only in memory and
 requires a stable, non-secret operation ID so a command interrupted after
 publication can be retried without accidentally creating another generation:
@@ -424,7 +435,11 @@ settlement, or the Gateway. Adoption requires recent Admin re-authentication
 and creates a new immutable Price Version; ambiguous or expired Proposals
 cannot be adopted.
 
-1. Read release notes and verify the binary checksum and Sigstore bundle.
+1. Read release notes and verify the binary checksum and Sigstore bundle. The
+   complete, copyable command sequence — including the exact
+   `--certificate-identity` for the tag — is in `README.md` under "Verify
+   release downloads" and in the release notes; do not verify against an
+   unsigned `checksums.txt`.
 2. Stop Halro and confirm the process released the data-directory lock.
 3. Create and verify an encrypted backup; preserve the current binary/config.
 4. Run the new binary's `config check` against a copy of the configuration.
@@ -485,19 +500,73 @@ UID/GID, and healthcheck metadata. Tagged releases also attach a signed,
 checksummed `halro-container.tar.gz`; load it with
 `gzip -dc halro-container.tar.gz | docker load`.
 
+Halro 1.0.0 does not publish an official registry image. To use the shipped
+Kubernetes manifest, load the archive, tag and push it into a registry governed
+by your deployment, then replace the manifest's explicit
+`ghcr.io/OWNER/halro@sha256:REPLACE_WITH_REVIEWED_DIGEST` placeholder with the
+reviewed digest from that registry. Do not deploy the placeholder verbatim.
+
 ```bash
 docker build -t halro:v1.0.0 .
+
+# config.yaml must set all three of these for the container shape:
+#   storage.data_dir:         /var/lib/halro/data     (a child of the mount)
+#   storage.master_key.file:  /run/secrets/halro-master.key
+#   server.gateway_listen:    0.0.0.0:8080            (see below)
+mkdir -p ./halro-secrets
+# The container runs as uid 65532 and a bind mount keeps the host's ownership,
+# so that uid must be able to write here for `init` to create the key.
+# Preferred (needs root on the host):   sudo chown 65532:65532 ./halro-secrets && chmod 700 ./halro-secrets
+# Otherwise, widen it only for init:    chmod 777 ./halro-secrets
+sudo chown 65532:65532 ./halro-secrets && chmod 700 ./halro-secrets
+docker volume create halro-data
 docker run --rm --user 65532:65532 \
   -v "$PWD/config.yaml:/etc/halro/config.yaml:ro" \
-  -v "$PWD/master.key:/run/secrets/halro-master.key:ro" \
+  -v "$PWD/halro-secrets:/run/secrets" \
   -v halro-data:/var/lib/halro \
-  -p 8080:8080 -p 8081:8081 halro:v1.0.0
+  halro:v1.0.0 init --config /etc/halro/config.yaml
+# init creates the key 0600 and owned by 65532; nothing further is needed.
+
+docker run --rm --user 65532:65532 \
+  -v "$PWD/config.yaml:/etc/halro/config.yaml:ro" \
+  -v "$PWD/halro-secrets:/run/secrets:ro" \
+  -v halro-data:/var/lib/halro \
+  -p 127.0.0.1:8080:8080 \
+  halro:v1.0.0 serve --config /etc/halro/config.yaml \
+    -allow-insecure-public-listen
 ```
 
-Container configuration must use `/var/lib/halro` for `storage.data_dir`
-and `/run/secrets/halro-master.key` for the Master Key. A listener exposed
-outside the container must follow the same TLS rules as a bare-metal install;
-do not weaken Admin/Metrics listener validation for Docker. The built-in
-healthcheck calls only a loopback HTTP(S) readiness URL, follows no redirects,
-and can be changed with `HALRO_HEALTH_URL` when TLS is enabled. Ensure its
-hostname is covered by the mounted certificate.
+**`server.gateway_listen` must be `0.0.0.0:8080` for this example to work.** The
+shipped default is `127.0.0.1:8080`, which inside a container binds the
+*container's* loopback: `docker run -p` then publishes a port nothing is
+listening on, and every request from the host is refused while `docker ps` still
+reports `healthy` (see the healthcheck note below). Binding a non-loopback
+address is what makes `-allow-insecure-public-listen` necessary rather than
+decorative — the two go together, and neither alone is enough.
+
+Mount the persistent **parent** at `/var/lib/halro` and configure its child
+`/var/lib/halro/data` as `storage.data_dir`; the mount point itself must not be
+the data directory because Halro creates an atomic-publication lock beside it.
+The first command deliberately mounts `/run/secrets` writable so `init` can
+create the file-mode Master Key. Every later `serve`, backup, and restore mounts
+that secret directory read-only. If both the Master Key and initialized data
+already exist, skip `init`; if only the key exists while the data directory is
+empty, do not delete or replace it blindly—verify whether it belongs to a
+previous instance, then either restore that instance's complete data set or
+start with a separately named key and empty data directory.
+
+The example publishes only the Gateway on host loopback and therefore uses
+`-allow-insecure-public-listen`; that override applies only to Gateway
+plaintext and is suitable for a host-local development boundary, not a public
+network. Admin and Metrics remain container-loopback-only in this shape. For a
+network-reachable deployment, enable TLS, bind the required listener to
+`0.0.0.0` inside the container, mount its certificate/key (and Metrics client
+CA), and publish the port only through the approved network control. Never use
+the Gateway override to weaken Admin or Metrics validation.
+
+The built-in healthcheck runs inside the container and calls a loopback
+readiness URL. `healthy` therefore proves process readiness, not that a
+published host port, certificate name, firewall, or reverse proxy is reachable.
+When TLS is enabled set `HALRO_HEALTH_URL` to an HTTPS name covered by the
+mounted certificate and resolvable inside the container, then separately probe
+the external address from the host/load balancer.

@@ -333,7 +333,7 @@ function KeyRow({ project, value }: { project: Project; value: GatewayKey }) {
   const live = value.enabled && !expired;
   return (
     <>
-      <div className="key-row">
+      <div id={`gateway-key-${value.id}`} className="key-row">
         <div>
           <span>
             <StatusDot ok={live} label={live ? t("common.enabled") : expired ? t("projects.expired") : t("common.disabled")} />

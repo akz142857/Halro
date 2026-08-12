@@ -72,6 +72,10 @@ func TestAuditAnchorsEndpointRequiresItsOwnCredential(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer runtime.Close()
+	metrics := renderMetricsForTest(t, runtime)
+	if !strings.Contains(metrics, "halro_audit_anchor_interval_seconds 300.000000") {
+		t.Fatalf("anchor interval metric is missing:\n%s", grepSeries(metrics, "halro_audit_anchor_interval_seconds"))
+	}
 
 	unauthenticated := httptest.NewRequest(http.MethodGet, "/audit/anchors", nil)
 	response := httptest.NewRecorder()

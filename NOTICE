@@ -6,3 +6,10 @@ This product is licensed under the Apache License, Version 2.0.
 This product includes parquet-go, Copyright 2023 Twilio, Inc., licensed under
 the Apache License, Version 2.0. parquet-go includes code based on Apache
 Parquet, Copyright 2014 The Apache Software Foundation.
+
+AWS SDK for Go
+Copyright 2015 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+Copyright 2014-2015 Stripe, Inc.
+
+smithy-go
+Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.

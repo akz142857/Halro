@@ -4,7 +4,11 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"slices"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -106,6 +110,119 @@ func TestCapabilityDetectionCreateIsIdempotentAndSingleFlight(t *testing.T) {
 	otherKey.RequestHash = "sha256:different-after-singleflight"
 	if _, _, err := store.CreateModelCapabilityDetection(context.Background(), otherKey); !errors.Is(err, ErrIdempotencyConflict) {
 		t.Fatalf("singleflight idempotency conflict err=%v", err)
+	}
+
+	// The assertions above are sequential, and a sequential replay of a record
+	// that already exists is not single-flight — it is a lookup. The property
+	// the name claims only shows up under a race: distinct callers arriving at
+	// the same target at the same moment must collapse onto one detection,
+	// because each one that does not is a billable Provider call nobody asked
+	// for.
+	racing, err := Open(filepath.Join(t.TempDir(), "racing.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer racing.Close()
+	const racers = 8
+	var wait sync.WaitGroup
+	var fresh, collapsed atomic.Int64
+	identities := make([]string, racers)
+	var identityMu sync.Mutex
+	for index := 0; index < racers; index++ {
+		wait.Add(1)
+		go func(index int) {
+			defer wait.Done()
+			candidate := storedDetection(now)
+			candidate.ID = fmt.Sprintf("mcd_race_%d", index)
+			candidate.IdempotencyKeyHash = fmt.Sprintf("sha256:race-key-%d", index)
+			stored, replayed, err := racing.CreateModelCapabilityDetection(context.Background(), candidate)
+			if err != nil {
+				t.Errorf("racer %d: %v", index, err)
+				return
+			}
+			if replayed {
+				collapsed.Add(1)
+			} else {
+				fresh.Add(1)
+			}
+			identityMu.Lock()
+			identities[index] = stored.ID
+			identityMu.Unlock()
+		}(index)
+	}
+	wait.Wait()
+	if fresh.Load() != 1 || collapsed.Load() != racers-1 {
+		t.Fatalf("%d concurrent creates produced %d detections and %d replays", racers, fresh.Load(), collapsed.Load())
+	}
+	for index, id := range identities {
+		if id != identities[0] {
+			t.Fatalf("racer %d landed on detection %q while racer 0 landed on %q", index, id, identities[0])
+		}
+	}
+}
+
+func TestResetMigrationDiscardsExistingDetections(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "metadata.db")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	project := domain.Project{ID: "prj_preserved", Name: "preserved", Enabled: false, CreatedAt: now, UpdatedAt: now}
+	if _, err := store.PutProject(context.Background(), project, 0, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := bbolt.Open(path, 0o600, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Update(func(tx *bbolt.Tx) error {
+		for index, name := range [][]byte{bucketModelCapabilityDetections, bucketCapabilityDetectionIdem, bucketCapabilityDetectionIndex} {
+			if err := tx.Bucket(name).Put([]byte("stale"), []byte{byte(index + 1)}); err != nil {
+				return err
+			}
+		}
+		var schema [8]byte
+		binary.BigEndian.PutUint64(schema[:], 24)
+		if err := tx.Bucket(bucketMeta).Put(keySchemaVersion, schema[:]); err != nil {
+			return err
+		}
+		for _, version := range []uint64{25, 26, 27} {
+			if err := tx.Bucket(bucketMigrationHistory).Delete(versionKey(version)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.db.View(func(tx *bbolt.Tx) error {
+		for _, name := range [][]byte{bucketModelCapabilityDetections, bucketCapabilityDetectionIdem, bucketCapabilityDetectionIndex} {
+			if keys := tx.Bucket(name).Stats().KeyN; keys != 0 {
+				t.Errorf("reset bucket %q retained %d records", name, keys)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	preserved, err := store.ListProjects(context.Background())
+	if err != nil || len(preserved) != 1 || !slices.Equal([]string{preserved[0].ID}, []string{project.ID}) {
+		t.Fatalf("unrelated project was changed: %#v err=%v", preserved, err)
 	}
 }
 

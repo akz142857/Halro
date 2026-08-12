@@ -62,6 +62,7 @@ RELEASE_ARTIFACTS = {
     "halro-container.tar.gz",
     "halro-deadman-container.tar.gz",
     "halro.spdx.json",
+    "halro-binaries.spdx.json",
     "checksums.txt",
 }
 

@@ -50,6 +50,13 @@ groups:
           / halro_provider_concurrency_limit)
           and on (environment, region, cluster, provider_id)
           (halro_provider_concurrency_limit > 0)
+      - record: halro:capability_detection_failure:ratio1h
+        expr: >-
+          sum by (environment, region, cluster, provider_type)
+          (increase(halro_model_capability_detection_total{status=~"failed|interrupted"}[1h]))
+          /
+          clamp_min(sum by (environment, region, cluster, provider_type)
+          (increase(halro_model_capability_detection_total[1h])), 1)
       # Durable write path. These four are the capacity story for this process:
       # every accounting ceiling is bounded by an fsync, and the group-commit
       # sizes say whether the host or the offered concurrency is the limit.

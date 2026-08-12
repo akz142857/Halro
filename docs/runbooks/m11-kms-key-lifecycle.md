@@ -1,5 +1,11 @@
 # M11 AWS KMS Key 生命周期 Runbook
 
+> [!WARNING]
+> **1.0.0 release-blocked:** do not use this as production acceptance evidence
+> until the gates in the
+> [1.0.0 release notes](../milestones/release-notes-v1.0.0.md) are archived for
+> the exact release commit.
+
 本文只覆盖正常 KEK rewrap、Halro Master Key/DEK rotate，以及中断恢复。所有命令均为离线控制面操作：先停止 Halro 实例，保留唯一数据目录副本，并使用受审批的 Workload Identity；不要向命令行、日志或工单粘贴 ciphertext、token 或明文 Master Key。
 
 ## 1. 语义边界

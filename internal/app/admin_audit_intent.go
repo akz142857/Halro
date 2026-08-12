@@ -75,7 +75,12 @@ func (r *Runtime) completeAdminMutation(writer http.ResponseWriter, request *htt
 	} else {
 		writer.Header().Set("Halro-Activation", "current")
 	}
-	if err := r.deliverAdminAuditIntent(request.Context(), intent); err != nil {
+	// The commit has happened. Delivery belongs to the runtime now: a caller
+	// disconnecting after the commit must not cancel the durable record's trip
+	// to the audit log.
+	deliveryContext, cancel := r.activationContext()
+	defer cancel()
+	if err := r.deliverAdminAuditIntent(deliveryContext, intent); err != nil {
 		r.logger.Error("admin audit record is durable but not yet delivered",
 			"event_id", intent.EventID, "error", err)
 	}
@@ -123,4 +128,17 @@ func (r *Runtime) drainAdminAuditIntents(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// recoverAdminAuditIntents is the bounded, runtime-owned retry used after
+// startup. A delivery error does not make activation stale, so this check must
+// run independently of snapshot recovery.
+func (r *Runtime) recoverAdminAuditIntents() error {
+	pending, err := r.store.PendingAdminAuditIntentCount(r.backgroundCtx)
+	if err != nil || pending == 0 {
+		return err
+	}
+	ctx, cancel := r.activationContext()
+	defer cancel()
+	return r.drainAdminAuditIntents(ctx)
 }

@@ -217,7 +217,7 @@ function DeploymentRow({
   const review = deployment.capability_review;
   const routeBlocked = activeRouteCount > 0;
   return (
-    <article className="deployment-row">
+    <article id={`deployment-${deployment.id}`} className="deployment-row">
       <div className="deployment-row-main">
         <div className="deployment-compact-identity">
           <span><StatusDot ok={deployment.enabled} /><strong>{deployment.name}</strong></span>
@@ -774,7 +774,7 @@ function DeploymentForm({
     retry: false,
   });
   const refreshTargetCatalog = useMutation({
-    mutationFn: () => api.invocationTargets(providerID, "", true),
+    mutationFn: () => api.refreshInvocationTargets(providerID),
     onSuccess: (catalog) => queryClient.setQueryData(targetCatalogKey, catalog),
   });
   const availableTargetKinds = targetCatalog.data?.discovery?.target_kinds ?? (source?.target_kind ? [source.target_kind] : [targetKind]);

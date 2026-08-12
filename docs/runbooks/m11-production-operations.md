@@ -1,5 +1,11 @@
 # M11 AWS KMS 生产运行与事故 Runbook
 
+> [!WARNING]
+> **1.0.0 release-blocked:** do not mark Key Slot mode production-ready until
+> the real AWS account matrix, independent recovery drill, and four-party
+> sign-off named in the [1.0.0 release notes](../milestones/release-notes-v1.0.0.md)
+> are archived for the exact release commit.
+
 状态：生产候选基线。只有 M11 真实 AWS 矩阵、独立恢复演练和四方签署完成后，才可把 AWS KMS 模式标记为 production-ready。
 
 ## 1. 发布前基线

@@ -23,6 +23,7 @@ func TestUsageCursorFilteringRequestDetailAndDashboard(t *testing.T) {
 			{EventID: requestID + "_settled", Kind: ledger.EventAttemptSettled,
 				RequestID: requestID, AttemptID: attemptID, ProjectID: "project",
 				ProviderID: fmt.Sprintf("provider_%d", requestIndex), PeriodID: "period",
+				ProviderModel:       fmt.Sprintf("model_%d", requestIndex),
 				OccurredAt:          now.Add(time.Duration(requestIndex)*time.Minute + time.Second),
 				ProviderInputTokens: int64(requestIndex), CommittedMicrosUSD: ledger.MicrosUSD(int64(requestIndex)),
 				Outcome: "success"},
@@ -62,6 +63,10 @@ func TestUsageCursorFilteringRequestDetailAndDashboard(t *testing.T) {
 	filtered, err := aggregate.QueryAttempts(AttemptQuery{Limit: 10, ProviderID: "provider_2"})
 	if err != nil || len(filtered.Attempts) != 1 || filtered.Attempts[0].RequestID != "req_2" {
 		t.Fatalf("filtered=%#v err=%v", filtered, err)
+	}
+	modelFiltered, err := aggregate.QueryAttempts(AttemptQuery{Limit: 10, ProviderModel: "model_2"})
+	if err != nil || len(modelFiltered.Attempts) != 1 || modelFiltered.Attempts[0].RequestID != "req_2" {
+		t.Fatalf("provider model filtered=%#v err=%v", modelFiltered, err)
 	}
 	requestFiltered, err := aggregate.QueryAttempts(AttemptQuery{Limit: 10, RequestID: "req_1"})
 	if err != nil || len(requestFiltered.Attempts) != 1 || requestFiltered.Attempts[0].RequestID != "req_1" {
@@ -134,12 +139,12 @@ func TestDashboardBuildsTodayBreakdownsAndRecentAnomalies(t *testing.T) {
 	}
 
 	dashboard := aggregate.Dashboard(now.Add(time.Hour), utcDay(now.Add(time.Hour)))
-	projects := dashboard.Breakdowns["project"]
+	projects := dashboard.Breakdowns["project"]["calls"]
 	if len(projects) != 1 || projects[0].Key != "project_a" || projects[0].Calls != 2 ||
 		projects[0].Errors != 1 || projects[0].CostMicrosUSD != 3_000 || projects[0].EstimatedCostMicros != 2_000 {
 		t.Fatalf("project breakdown=%#v", projects)
 	}
-	providers := dashboard.Breakdowns["provider"]
+	providers := dashboard.Breakdowns["provider"]["calls"]
 	if len(providers) != 2 || providers[0].Key != "provider_a" {
 		t.Fatalf("provider breakdown=%#v", providers)
 	}
@@ -147,7 +152,7 @@ func TestDashboardBuildsTodayBreakdownsAndRecentAnomalies(t *testing.T) {
 		t.Fatalf("estimated cost=%d", dashboard.Today.EstimatedCostMicrosUSD)
 	}
 	if len(dashboard.RecentAnomalies) != 2 || dashboard.RecentAnomalies[0].FallbackCount != 1 ||
-		dashboard.RecentAnomalies[1].HTTPStatus != 429 {
+		dashboard.RecentAnomalies[1].HTTPStatus != 429 || dashboard.RecentAnomalies[1].RequestID != "req_failed" {
 		t.Fatalf("recent anomalies=%#v", dashboard.RecentAnomalies)
 	}
 }
@@ -157,10 +162,51 @@ func TestEmptyDashboardUsesEmptyCollections(t *testing.T) {
 	if dashboard.Hourly == nil || dashboard.RecentAnomalies == nil {
 		t.Fatalf("empty dashboard collections must encode as arrays: %#v", dashboard)
 	}
-	for dimension, items := range dashboard.Breakdowns {
-		if items == nil {
-			t.Fatalf("breakdown %q must encode as an array", dimension)
+	for dimension, rankings := range dashboard.Breakdowns {
+		if rankings == nil {
+			t.Fatalf("breakdown %q must encode as an object", dimension)
 		}
+		for metric, items := range rankings {
+			if items == nil {
+				t.Fatalf("breakdown %q ranking %q must encode as an array", dimension, metric)
+			}
+		}
+	}
+}
+
+func TestDashboardReportsFinalRequestSLIs(t *testing.T) {
+	aggregate := NewAggregate()
+	base := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
+	requests := []struct {
+		id      string
+		latency time.Duration
+		outcome string
+	}{
+		{id: "fast", latency: 100 * time.Millisecond, outcome: "success"},
+		{id: "slow", latency: 900 * time.Millisecond, outcome: "provider_error"},
+	}
+	var sequence uint64
+	for _, request := range requests {
+		for _, event := range []ledger.Event{
+			{EventID: request.id + "_accepted", Kind: ledger.EventRequestAccepted, RequestID: request.id, ProjectID: "project", PeriodID: "period", OccurredAt: base},
+			{EventID: request.id + "_final", Kind: ledger.EventRequestFinalized, RequestID: request.id, ProjectID: "project", PeriodID: "period", OccurredAt: base.Add(request.latency), Outcome: request.outcome},
+		} {
+			sequence++
+			if err := aggregate.Apply(ledger.Record{Sequence: sequence, Offset: int64(sequence), Event: event}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	dashboard := aggregate.Dashboard(base.Add(time.Hour), utcDay(base))
+	if dashboard.Today.Requests != 2 || dashboard.Today.RequestErrors != 1 ||
+		dashboard.Today.RequestLatencySamples != 2 || dashboard.Today.RequestLatencyP50Millis != 100 ||
+		dashboard.Today.RequestLatencyP95Millis != 900 {
+		t.Fatalf("request SLI totals=%#v", dashboard.Today)
+	}
+	if len(dashboard.Hourly) != 1 || dashboard.Hourly[0].RequestErrors != 1 ||
+		dashboard.Hourly[0].RequestLatencyP95Millis != 900 {
+		t.Fatalf("request SLI hourly=%#v", dashboard.Hourly)
 	}
 }
 

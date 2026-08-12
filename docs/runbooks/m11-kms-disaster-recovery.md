@@ -1,5 +1,11 @@
 # M11 AWS KMS 备份、恢复与灾备 Runbook
 
+> [!WARNING]
+> **1.0.0 release-blocked:** this procedure is not production-ready until the
+> real-account matrix, independent recovery drill, and four-party sign-off in
+> the [1.0.0 release notes](../milestones/release-notes-v1.0.0.md) are archived
+> for the exact release commit.
+
 本 Runbook 面向 `storage.master_key.mode: key_slots`。完整 doctor、backup create 和 restore 会调用只读 KMS `Decrypt` 并产生 AWS CloudTrail 事件；`doctor --no-kms` 与 `backup verify` 不调用 KMS。
 
 ## 1. Doctor

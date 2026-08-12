@@ -25,18 +25,22 @@ export function UsagePage() {
     [projects.data?.items],
   );
   const [status, setStatus] = useState("");
-  const [model, setModel] = useState("");
+  const [model, setModel] = useState(() => new URLSearchParams(window.location.search).get("model") ?? "");
+  const [providerModel, setProviderModel] = useState(() => new URLSearchParams(window.location.search).get("provider_model") ?? "");
+  const [providerID, setProviderID] = useState(() => new URLSearchParams(window.location.search).get("provider_id") ?? "");
   const [requestID, setRequestID] = useState(() => new URLSearchParams(window.location.search).get("request_id") ?? "");
   const [projectID, setProjectID] = useState(() => new URLSearchParams(window.location.search).get("project_id") ?? "");
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
   const timeZone = useAccountingTimeZone();
   const usage = useInfiniteQuery({
-    queryKey: ["usage", status, model, requestID, projectID, start, end, timeZone],
+    queryKey: ["usage", status, model, providerModel, providerID, requestID, projectID, start, end, timeZone],
     initialPageParam: "",
     queryFn: ({ pageParam }) => api.usage(`?${new URLSearchParams({
       limit: "100", ...(status ? { status } : {}), ...(model ? { model } : {}), ...(requestID ? { request_id: requestID } : {}),
       ...(projectID ? { project_id: projectID } : {}),
+      ...(providerID ? { provider_id: providerID } : {}),
+      ...(providerModel ? { provider_model: providerModel } : {}),
       ...(start ? { start: zonedInputToISO(start, timeZone) } : {}),
       ...(end ? { end: zonedInputToISO(end, timeZone) } : {}),
       ...(pageParam ? { cursor: pageParam } : {}),
@@ -81,6 +85,8 @@ export function UsagePage() {
             {models.map((alias) => <option key={alias} value={alias}>{alias}</option>)}
           </select>
         </label>
+        <label><span>{t("usage.provider")}</span><input value={providerID} onChange={(event) => setProviderID(event.target.value)} placeholder="provider_…" /></label>
+        <label><span>{t("usage.actualModel")}</span><input value={providerModel} onChange={(event) => setProviderModel(event.target.value)} /></label>
         <label>
           <span>{t("usage.status")}</span>
           <select value={status} onChange={(event) => setStatus(event.target.value)}>

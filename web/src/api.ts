@@ -298,19 +298,26 @@ export const api = {
       `"${revision}"`,
     ),
   providers: () => request<Page<Provider>>("/providers").then((value) => value.data),
-  invocationTargets: (id: string, bindingID = "", refresh = false) => {
-    const query = new URLSearchParams();
-    if (bindingID) query.set("binding_id", bindingID);
-    if (refresh) query.set("refresh", "true");
-    const suffix = query.size ? `?${query.toString()}` : "";
+  // Reading the cached catalog is a GET. The two calls below reach the provider
+  // with the operator's credential, so they are POSTs and carry the CSRF token
+  // this client only attaches to non-GET requests.
+  invocationTargets: (id: string, bindingID = "") => {
+    const suffix = bindingID ? `?binding_id=${encodeURIComponent(bindingID)}` : "";
     return request<InvocationTargetCatalog>(`/providers/${encodeURIComponent(id)}/invocation-targets${suffix}`).then((value) => value.data);
+  },
+  refreshInvocationTargets: (id: string, bindingID = "") => {
+    const suffix = bindingID ? `?binding_id=${encodeURIComponent(bindingID)}` : "";
+    return request<InvocationTargetCatalog>(`/providers/${encodeURIComponent(id)}/invocation-targets${suffix}`, { method: "POST" }).then((value) => value.data);
   },
   resolveInvocationTarget: (providerID: string, targetID: string, options: { targetKind: string; canonicalModelRef?: string; region?: string; bindingID?: string }) => {
     const query = new URLSearchParams({ target_kind: options.targetKind });
     if (options.canonicalModelRef) query.set("canonical_model_ref", options.canonicalModelRef);
     if (options.region) query.set("region", options.region);
     if (options.bindingID) query.set("binding_id", options.bindingID);
-    return request<ResolvedInvocationTarget>(`/providers/${encodeURIComponent(providerID)}/invocation-targets/${encodeURIComponent(targetID)}/resolution?${query.toString()}`).then((value) => value.data);
+    return request<ResolvedInvocationTarget>(
+      `/providers/${encodeURIComponent(providerID)}/invocation-targets/${encodeURIComponent(targetID)}/resolution?${query.toString()}`,
+      { method: "POST" },
+    ).then((value) => value.data);
   },
   createModelCapabilityDetection: (providerID: string, value: unknown, idempotencyKey: string) =>
     request<ModelCapabilityDetection>(`/providers/${encodeURIComponent(providerID)}/model-capability-detections`, {

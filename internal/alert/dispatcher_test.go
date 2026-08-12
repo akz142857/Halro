@@ -51,6 +51,9 @@ func TestDispatcherRetriesAndKeepsSecretOutOfPayload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if stats := dispatcher.Stats(); stats.UnknownEndpoints != 1 || stats.UnhealthyEndpoints != 0 {
+		t.Fatalf("unobserved endpoint health stats=%#v", stats)
+	}
 	results := make(chan DeliveryResult, 1)
 	dispatcher.SetObserver(func(result DeliveryResult) { results <- result })
 	dispatcher.Start()
@@ -166,7 +169,45 @@ func TestDispatcherReplacesEndpointsAndTestsOneDestination(t *testing.T) {
 	if newCalls.Load() != 1 || oldCalls.Load() != 0 {
 		t.Fatalf("old=%d new=%d", oldCalls.Load(), newCalls.Load())
 	}
+	stats := dispatcher.Stats()
+	if stats.Endpoints != 1 || stats.UnhealthyEndpoints != 0 || stats.UnknownEndpoints != 0 || stats.QueueCapacity != 1 || stats.LastDeliveredAt == nil {
+		t.Fatalf("delivery health stats=%#v", stats)
+	}
 	retired[0].Close()
+	dispatcher.Close()
+}
+
+func TestEndpointHealthTracksCurrentOutcomeInsteadOfLifetimeFailures(t *testing.T) {
+	var fail atomic.Bool
+	fail.Store(true)
+	endpointURL, _ := url.Parse("https://hooks.example/current-health")
+	endpoint, err := NewEndpoint("current", endpointURL, "", nil, &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		status := http.StatusNoContent
+		if fail.Load() {
+			status = http.StatusInternalServerError
+		}
+		return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader("")), Header: make(http.Header), Request: request}, nil
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatcher, err := New(Config{QueueCapacity: 1, Workers: 1, Timeout: time.Second, MaxAttempts: 1, BaseDelay: time.Millisecond, MaxDelay: time.Millisecond, DedupCooldown: time.Minute}, []Endpoint{endpoint})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dispatcher.TestEndpoint("current", Event{ID: "failed"}); err == nil {
+		t.Fatal("failed delivery unexpectedly succeeded")
+	}
+	if stats := dispatcher.Stats(); stats.UnhealthyEndpoints != 1 || stats.UnknownEndpoints != 0 || stats.LastFailedAt == nil {
+		t.Fatalf("failed health stats=%#v", stats)
+	}
+	fail.Store(false)
+	if _, err := dispatcher.TestEndpoint("current", Event{ID: "recovered"}); err != nil {
+		t.Fatal(err)
+	}
+	if stats := dispatcher.Stats(); stats.UnhealthyEndpoints != 0 || stats.LastDeliveredAt == nil {
+		t.Fatalf("recovered health stats=%#v", stats)
+	}
 	dispatcher.Close()
 }
 

@@ -50,6 +50,19 @@ visually inspected.
 
 ## Release boundary
 
+### 1.0.0 Light primary-color decision (2026-08-11)
+
+The proposed Light primary hue adjustment is explicitly deferred until after
+1.0.0. The current `lime-700` primary and white foreground meet the automated
+WCAG AA contrast gate, and changing the global CTA/focus/selection hue during
+release remediation would require a new cross-page visual acceptance pass. The
+release therefore keeps the reviewed color values. This is a visual-brand
+refinement, not an accessibility waiver.
+
+Typography governance is not deferred: the design-system test now rejects
+business CSS font sizes that do not use the approved type-scale tokens unless
+the declaration is in the reviewed, explicit allowlist.
+
 This evidence closes automated and in-app-browser code acceptance. The PRD's
 separate human sign-off across current Safari and Firefox, a desktop screen
 reader, native autofill, and a real second browser/device remains a release

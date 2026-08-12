@@ -31,6 +31,22 @@ The delivery boundary is the first response payload successfully written to the 
 
 Network work inherits request cancellation. Once an attempt may have reached a provider, ledger settlement uses a short cleanup context that is independent of client cancellation.
 
+## Durable configuration activation
+
+The store commit is the commit point for an Admin mutation. Topology,
+authentication, redaction, and Token Guard snapshots activate independently;
+if any domain is known to be behind the store, readiness fails and the entire
+data plane returns `503` rather than authorize from stale state. A runtime-owned
+loop retries all four domains every five seconds.
+
+OpenAI-family routes return the OpenAI error envelope with code
+`configuration_stale`. `/v1/messages` returns the Anthropic error envelope with
+type `overloaded_error` and prefixes the message with `configuration_stale`.
+Both forms include `Retry-After: 5` and `Cache-Control: no-store`. Clients may
+retry after the indicated delay, but must keep their own retry count bounded;
+operators diagnose the per-domain reason in System Status, Console Diagnostics,
+or the `halro_activation_stale` metrics and alert.
+
 ## Stream ownership
 
 The handler is the sole stream owner. `Close` is idempotent. Frame, semantic event, redaction tail, tool arguments, and pending downstream write sizes are bounded. A downstream write failure cancels upstream work.

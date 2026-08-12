@@ -2,6 +2,7 @@ package backup
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -111,6 +112,34 @@ func TestEncryptedBackupRejectsTamperAndTruncation(t *testing.T) {
 				t.Fatal("corrupt backup was accepted")
 			}
 		})
+	}
+}
+
+func TestVerifyExplainsNewerMetadataSchemaVersion(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.WriteFile(source, []byte("schema-boundary"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	key := bytes.Repeat([]byte{0x51}, 32)
+	archive := filepath.Join(root, "newer-schema.hmbk")
+	newerSchema := boltstore.CurrentSchemaVersion() + 1
+	if _, err := Create(CreateOptions{
+		OutputPath: archive,
+		BackupKey:  key,
+		Files:      []SourceFile{{ArchivePath: "data/source", LocalPath: source}},
+		Metadata: boltstore.MetadataInfo{
+			SchemaVersion: newerSchema,
+			TxID:          1,
+		},
+		MasterKeyFingerprint: "sha256:" + strings.Repeat("0", 64),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Verify(archive, key)
+	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("schema version %d", newerSchema)) ||
+		!strings.Contains(err.Error(), fmt.Sprintf("schema version %d", boltstore.CurrentSchemaVersion())) {
+		t.Fatalf("newer-schema error=%v", err)
 	}
 }
 

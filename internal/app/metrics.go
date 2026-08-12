@@ -68,6 +68,20 @@ func (r *Runtime) writeMetrics(ctx context.Context, writer http.ResponseWriter) 
 	projectLockStats := r.accounting.ProjectLockStats()
 	metadataWriteStats := r.store.MetadataWriteStats()
 	pricingQuarantines, _ := r.store.PricingQuarantineCount(ctx)
+	// Read before the status line is written, and treated like the capability
+	// gauges below: a failed read omits its own series rather than failing the
+	// whole exposition. Returning an error here would abort the render after
+	// net/http has already implied 200, so the scrape would succeed with an
+	// empty body — `up` stays 1 while every series vanishes, including
+	// halro_activation_stale. That silences the configuration-stale alert in
+	// exactly the failure it exists to catch, because an unreadable metadata
+	// store is one of the ways a snapshot goes stale.
+	shutdownTruncatedAttempts, shutdownCounterErr := r.store.ShutdownTruncatedAttempts()
+	if shutdownCounterErr != nil {
+		r.logger.Warn("shutdown-truncated Provider attempt counter unavailable",
+			"error", shutdownCounterErr)
+	}
+	activation := r.activation.status()
 	// Current state, so it is read rather than tracked: a count that drifts
 	// from the records it describes is worse than one that costs a read.
 	//
@@ -111,6 +125,21 @@ func (r *Runtime) writeMetrics(ctx context.Context, writer http.ResponseWriter) 
 		"Completed Provider attempt latency distribution.", usageMetrics.AttemptLatencyBuckets,
 		usageMetrics.AttemptLatencyMillis, attemptCount)
 	writeCapabilityMetrics(output, r.capabilityMetrics.snapshot(), capabilityGauges, capabilityGaugesReadable)
+	metricHeader(output, "halro_activation_stale", "gauge", "Whether any live configuration snapshot is known to be behind the durable store.")
+	if activation.Stale {
+		fmt.Fprintln(output, "halro_activation_stale 1")
+	} else {
+		fmt.Fprintln(output, "halro_activation_stale 0")
+	}
+	staleSeconds := 0.0
+	if activation.Stale && !activation.StaleSince.IsZero() {
+		staleSeconds = time.Since(activation.StaleSince).Seconds()
+		if staleSeconds < 0 {
+			staleSeconds = 0
+		}
+	}
+	metricHeader(output, "halro_activation_stale_seconds", "gauge", "Seconds since the oldest live configuration snapshot became stale, or 0 when current.")
+	fmt.Fprintf(output, "halro_activation_stale_seconds %.6f\n", staleSeconds)
 	metricHeader(output, "halro_active_requests", "gauge", "Requests accepted but not finalized.")
 	fmt.Fprintf(output, "halro_active_requests %d\n", usageMetrics.ActiveRequests)
 	// Deliberately unlabelled: the interesting dimension here is the source
@@ -160,6 +189,10 @@ func (r *Runtime) writeMetrics(ctx context.Context, writer http.ResponseWriter) 
 	fmt.Fprintf(output, "halro_metrics_scrape_rejected_total %d\n", r.metricsBusy.Load())
 	metricHeader(output, "halro_metrics_render_errors_total", "counter", "Metrics responses that failed while flushing to the client.")
 	fmt.Fprintf(output, "halro_metrics_render_errors_total %d\n", r.metricsRenderErrs.Load())
+	metricHeader(output, "halro_shutdown_truncated_attempts_total", "counter", "Provider attempts still active when a graceful-shutdown budget expired and forced connection close began.")
+	if shutdownCounterErr == nil {
+		fmt.Fprintf(output, "halro_shutdown_truncated_attempts_total %d\n", shutdownTruncatedAttempts)
+	}
 	if r.config.Audit.Anchor.Enabled {
 		// Emission is fail-open, so silence is what a broken witness looks
 		// like. Alert on staleness against Audit.Anchor.Interval rather than
@@ -167,6 +200,8 @@ func (r *Runtime) writeMetrics(ctx context.Context, writer http.ResponseWriter) 
 		// at all increments nothing.
 		metricHeader(output, "halro_audit_anchor_last_emit_timestamp_seconds", "gauge", "Unix time of the most recent audit anchor emission, or 0 if none has been emitted.")
 		fmt.Fprintf(output, "halro_audit_anchor_last_emit_timestamp_seconds %d\n", r.anchorLastEmitUnix.Load())
+		metricHeader(output, "halro_audit_anchor_interval_seconds", "gauge", "Configured maximum interval between audit anchor emissions.")
+		fmt.Fprintf(output, "halro_audit_anchor_interval_seconds %.6f\n", r.config.Audit.Anchor.Interval.Value().Seconds())
 		metricHeader(output, "halro_audit_anchor_emit_failures_total", "counter", "Audit anchor emissions that failed and were dropped.")
 		fmt.Fprintf(output, "halro_audit_anchor_emit_failures_total %d\n", r.anchorEmitFailures.Load())
 		metricHeader(output, "halro_audit_anchor_auth_failures_total", "counter", "Rejected audit anchor authentication attempts.")

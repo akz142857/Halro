@@ -206,6 +206,10 @@ func TestAdminPreferenceAuditFailureRollsBackServerState(t *testing.T) {
 
 func authenticatedAdminGet(t *testing.T, runtime *Runtime, cookie *http.Cookie, path string) *httptest.ResponseRecorder {
 	t.Helper()
+	// No Origin header on purpose: browsers do not send one on a same-origin
+	// GET, and this router sets Referrer-Policy: no-referrer, so a console GET
+	// arrives with neither. A test that supplies one stops being a test of what
+	// the console actually sends.
 	request := httptest.NewRequest(http.MethodGet, path, nil)
 	request.AddCookie(cookie)
 	response := httptest.NewRecorder()

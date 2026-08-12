@@ -40,6 +40,39 @@ func TestMasterKeyRunbooksAreUnavailableInFileMode(t *testing.T) {
 	}
 }
 
+// The stale-configuration procedure is needed in whichever mode the instance
+// happens to run, and the moment it is needed is the moment the data plane is
+// returning 503 — so it ships in the binary rather than living only in the
+// repository. The file-mode rotation runbook is the mirror image: it applies to
+// the default custody mode and is hidden under key_slots, which has its own
+// pair.
+func TestOperationalRunbooksAreServedFromTheBinary(t *testing.T) {
+	for _, mode := range []string{config.MasterKeyModeFile, config.MasterKeyModeKeySlots} {
+		runtime := &Runtime{config: config.Config{Storage: config.Storage{MasterKey: config.MasterKey{Mode: mode}}}}
+
+		stale := httptest.NewRecorder()
+		runtime.adminConfigurationStaleRunbook(stale, httptest.NewRequest(http.MethodGet, "/", nil))
+		if stale.Code != http.StatusOK {
+			t.Fatalf("mode %q: configuration-stale status=%d", mode, stale.Code)
+		}
+		for _, claim := range []string{"configuration_stale", "halro_activation_stale"} {
+			if !strings.Contains(stale.Body.String(), claim) {
+				t.Fatalf("mode %q: the stale runbook no longer states %q", mode, claim)
+			}
+		}
+
+		rotation := httptest.NewRecorder()
+		runtime.adminFileMasterKeyRotationRunbook(rotation, httptest.NewRequest(http.MethodGet, "/", nil))
+		wantCode := http.StatusOK
+		if mode == config.MasterKeyModeKeySlots {
+			wantCode = http.StatusNotFound
+		}
+		if rotation.Code != wantCode {
+			t.Fatalf("mode %q: file-rotation status=%d want=%d", mode, rotation.Code, wantCode)
+		}
+	}
+}
+
 // A leaked Gateway Key is possible under every Master Key custody mode, so
 // unlike the two above this runbook must not be gated on one. A procedure that
 // is missing exactly when it is needed is worse than no procedure.

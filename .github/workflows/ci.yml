@@ -15,7 +15,7 @@ jobs:
   repository-hygiene:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Verify public repository boundaries
         run: |
           test -f LICENSE
@@ -23,12 +23,14 @@ jobs:
           test -f THIRD_PARTY_NOTICES.md
           test ! -e v1.0.0.md
           ! git ls-files | grep -E '(^|/)(data|node_modules|bin)/|(^|/)(master\.key|config\.yaml|v1\.0\.0\.md)$|\.(hmbk|pem|p12|pprof|prof|test)$'
+      - name: Verify dependency license review is current
+        run: sh scripts/check-dependency-license-review.sh
 
   web:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22
           cache: npm
@@ -46,8 +48,8 @@ jobs:
   go:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
           cache: true
@@ -64,7 +66,9 @@ jobs:
           python3 -m unittest tools/m11/aws-kms-smoke/test_verify_cloudtrail.py
           python3 -m unittest \
             tools/modelcatalog/test_verify_publication_gate.py \
-            tools/modelcatalog/test_workflow_contract.py
+            tools/modelcatalog/test_workflow_contract.py \
+            tools/release/test_verify_environment.py \
+            tools/release/test_run_evidence.py
           ./tools/m11/check-kms-boundaries.sh
           ./tools/m11/check-production-assets.sh
       - name: Go vulnerability scan
@@ -79,8 +83,8 @@ jobs:
   fuzz:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
           cache: true
@@ -132,7 +136,7 @@ jobs:
           fi
       - name: Preserve any failing input
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: fuzz-failures
           path: internal/**/testdata/fuzz/**
@@ -141,7 +145,7 @@ jobs:
   container:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Build non-root distroless image
         run: |
           docker build \
@@ -154,11 +158,68 @@ jobs:
           docker run --rm --entrypoint /usr/local/bin/halro halro:ci version
           test "$(docker image inspect halro:ci --format '{{.Config.User}}')" = "65532:65532"
           test "$(docker image inspect halro:ci --format '{{json .Config.Healthcheck.Test}}')" = '["CMD","/usr/local/bin/halro","healthcheck"]'
+      - name: Initialize a mounted volume and reach readiness
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture="${RUNNER_TEMP}/halro-container-runtime"
+          secrets="${fixture}/secrets"
+          config_file="${fixture}/config.yaml"
+          volume="halro-ci-data-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          container="halro-ci-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          cleanup() {
+            docker rm -f "$container" >/dev/null 2>&1 || true
+            docker volume rm "$volume" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          mkdir -p "$secrets"
+          chmod 0777 "$secrets"
+          sed \
+            -e 's|gateway_listen: 127.0.0.1:8080|gateway_listen: 0.0.0.0:8080|' \
+            -e 's|data_dir: ./data|data_dir: /var/lib/halro/data|' \
+            -e 's|file: ./master.key|file: /run/secrets/halro-master.key|' \
+            internal/config/default.yaml >"$config_file"
+          docker volume create "$volume" >/dev/null
+          docker run --rm \
+            --volume "$config_file:/etc/halro/config.yaml:ro" \
+            --volume "$secrets:/run/secrets" \
+            --volume "$volume:/var/lib/halro" \
+            halro:ci init --config /etc/halro/config.yaml
+          test -s "$secrets/halro-master.key"
+          docker run --detach --name "$container" \
+            --publish 127.0.0.1:18080:8080 \
+            --volume "$config_file:/etc/halro/config.yaml:ro" \
+            --volume "$secrets:/run/secrets:ro" \
+            --volume "$volume:/var/lib/halro" \
+            halro:ci serve --config /etc/halro/config.yaml --allow-insecure-public-listen
+          for attempt in {1..60}; do
+            if curl --fail --silent http://127.0.0.1:18080/health/ready >/dev/null; then
+              break
+            fi
+            if ! docker inspect "$container" --format '{{.State.Running}}' | grep -qx true; then
+              docker logs "$container"
+              exit 1
+            fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:18080/health/ready >/dev/null
+          for attempt in {1..60}; do
+            health="$(docker inspect "$container" --format '{{.State.Health.Status}}')"
+            if [ "$health" = healthy ]; then
+              break
+            fi
+            if [ "$health" = unhealthy ]; then
+              docker inspect "$container" --format '{{json .State.Health}}'
+              exit 1
+            fi
+            sleep 1
+          done
+          test "$(docker inspect "$container" --format '{{.State.Health.Status}}')" = healthy
 
   observability:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Validate Prometheus and Alertmanager provisioning
         run: ./deploy/observability/validate.sh
       - name: Validate Core Compose topology
@@ -184,7 +245,7 @@ jobs:
             -t halro-deadman:ci .
           test "$(docker image inspect halro-deadman:ci --format '{{.Config.User}}')" = "65532:65532"
       - name: Scan independent dead-man image
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: halro-deadman:ci
           format: table
@@ -203,7 +264,7 @@ jobs:
           - name: alertmanager
             image: prom/alertmanager@sha256:27c475db5fb156cab31d5c18a4251ac7ed567746a2483ff264516437a39b15ba
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Generate SPDX SBOM with digest-pinned Syft
         run: >-
           docker run --rm
@@ -211,7 +272,7 @@ jobs:
           anchore/syft@sha256:bd5357d2cd087f03af748dac24df48bfbc1723080d78f75f69aca1f2d429060e
           "registry:${{ matrix.image }}"
           -o "spdx-json=/output/${{ matrix.name }}.spdx.json"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: observability-sbom-${{ matrix.name }}
           path: ${{ matrix.name }}.spdx.json
@@ -219,7 +280,7 @@ jobs:
   deadman-sbom:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Build independent dead-man image
         run: >-
           docker build
@@ -233,7 +294,7 @@ jobs:
           anchore/syft@sha256:bd5357d2cd087f03af748dac24df48bfbc1723080d78f75f69aca1f2d429060e
           docker:halro-deadman:ci
           -o spdx-json=/output/independent-deadman.spdx.json
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: observability-sbom-independent-deadman
           path: independent-deadman.spdx.json
@@ -241,15 +302,15 @@ jobs:
   sdk-compatibility:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
           cache: true
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.12"
           cache: pip

@@ -56,6 +56,8 @@ an authentication boundary.
 | `halro_attempt_duration_seconds` | summary sum/count | none |
 | `halro_request_latency_seconds` | classic histogram | `le` |
 | `halro_attempt_latency_seconds` | classic histogram | `le` |
+| `halro_activation_stale` | gauge | none |
+| `halro_activation_stale_seconds` | gauge | none |
 | `halro_active_requests` | gauge | none |
 | `halro_source_rate_limited_total` | counter | none |
 | `halro_source_rate_limit_overflow_total` | counter | none |
@@ -128,6 +130,11 @@ an authentication boundary.
 | `halro_metrics_auth_failures_total` | counter | none |
 | `halro_metrics_scrape_rejected_total` | counter | none |
 | `halro_metrics_render_errors_total` | counter | none |
+| `halro_shutdown_truncated_attempts_total` | counter | none |
+| `halro_audit_anchor_last_emit_timestamp_seconds` | gauge | none |
+| `halro_audit_anchor_interval_seconds` | gauge | none |
+| `halro_audit_anchor_emit_failures_total` | counter | none |
+| `halro_audit_anchor_auth_failures_total` | counter | none |
 | `halro_process_goroutines` | gauge | none |
 | `go_goroutines` | gauge | none |
 | `go_memstats_heap_alloc_bytes` | gauge | none |
@@ -142,6 +149,12 @@ Two kinds of counter are exported here and they do not reset together.
 `halro_cost_usd_total` are read-model totals: startup replays the Ledger into
 the Usage aggregate, so they carry the whole history of the data directory
 across restarts.
+
+`halro_shutdown_truncated_attempts_total` is also durable. When
+`server.shutdown_timeout` expires, Halro counts Provider attempts still active
+at the instant forced connection close begins and commits that increment to the
+metadata store before closing sockets. The next process therefore exposes the
+terminal event that the previous process could no longer serve to Prometheus.
 
 `halro_wal_append_*`, `halro_wal_sync_seconds`,
 `halro_accounting_project_lock_*` and `halro_metadata_*` count work this
@@ -192,3 +205,10 @@ User-controlled Project, Key, Route, model, request ID, source IP, and raw error
 values are deliberately excluded. Provider/Deployment IDs are bounded managed
 identifiers. `halro_deployment_up` is absent until the first active probe;
 absence must not be interpreted as healthy.
+
+`halro_activation_stale` is always present. A value of `1` means at least one
+live topology, authentication, redaction, or Token Guard snapshot is known to
+be behind the durable store, so the data plane is intentionally refusing all
+requests. `halro_activation_stale_seconds` measures from the oldest affected
+domain and is `0` when every domain is current. These gauges have no labels;
+use `/admin/api/v1/system/status` to identify the affected domains and reasons.

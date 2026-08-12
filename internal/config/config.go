@@ -42,6 +42,7 @@ type Server struct {
 	MetricsListen     string   `yaml:"metrics_listen"`
 	ReadHeaderTimeout Duration `yaml:"read_header_timeout"`
 	ReadBodyTimeout   Duration `yaml:"read_body_timeout"`
+	ShutdownTimeout   Duration `yaml:"shutdown_timeout"`
 	MaxHeaderBytes    int      `yaml:"max_header_bytes"`
 	MaxRequestBytes   int64    `yaml:"max_request_bytes"`
 }
@@ -285,6 +286,9 @@ type AuditAnchor struct {
 
 type LoadOptions struct {
 	AllowInsecurePublicGateway bool
+	// SkipListenerValidation is only for offline commands that never bind a
+	// socket, such as init. Runtime entry points must leave it false.
+	SkipListenerValidation bool
 }
 
 func Load(path string, opts LoadOptions) (Config, error) {
@@ -327,6 +331,12 @@ func Decode(r io.Reader) (Config, error) {
 
 func (c *Config) Normalize() error {
 	var err error
+	// Existing configuration files predate server.shutdown_timeout. In that
+	// case inherit the effective route budget rather than falling back to a
+	// fixed duration that could be shorter than an operator's longest request.
+	if c.Server.ShutdownTimeout == 0 {
+		c.Server.ShutdownTimeout = c.Gateway.RouteTotalTimeout
+	}
 	if c.Gateway.SourceRateLimit.RequestsPerMinute == nil {
 		budget := defaultSourceRequestsPerMinute
 		c.Gateway.SourceRateLimit.RequestsPerMinute = &budget
@@ -561,18 +571,22 @@ func (c Config) Validate(opts LoadOptions) error {
 		problems = append(problems, errors.New("tls cert/key cannot be set while TLS is disabled"))
 	}
 
-	problems = append(problems, validateListener("server.gateway_listen", c.Server.GatewayListen, c.TLS.Enabled, opts.AllowInsecurePublicGateway)...)
-	problems = append(problems, validateListener("server.admin_listen", c.Server.AdminListen, c.TLS.Enabled, false)...)
+	if !opts.SkipListenerValidation {
+		problems = append(problems, validateListener("server.gateway_listen", c.Server.GatewayListen, c.TLS.Enabled, opts.AllowInsecurePublicGateway)...)
+		problems = append(problems, validateListener("server.admin_listen", c.Server.AdminListen, c.TLS.Enabled, false)...)
+	}
 	if c.Metrics.Enabled {
 		metricsTLSEnabled := c.Metrics.TLS.Enabled
-		problems = append(problems, validateListener("server.metrics_listen", c.Server.MetricsListen, metricsTLSEnabled, false)...)
-		metricsHost, _, metricsAddressErr := net.SplitHostPort(c.Server.MetricsListen)
-		if metricsAddressErr == nil && !listenerHostIsLoopback(metricsHost) {
-			if c.Metrics.CredentialFile == "" {
-				problems = append(problems, errors.New("non-loopback metrics listener requires metrics.credential_file"))
-			}
-			if !c.Metrics.TLS.Enabled {
-				problems = append(problems, errors.New("non-loopback metrics listener requires dedicated metrics.tls mutual authentication"))
+		if !opts.SkipListenerValidation {
+			problems = append(problems, validateListener("server.metrics_listen", c.Server.MetricsListen, metricsTLSEnabled, false)...)
+			metricsHost, _, metricsAddressErr := net.SplitHostPort(c.Server.MetricsListen)
+			if metricsAddressErr == nil && !listenerHostIsLoopback(metricsHost) {
+				if c.Metrics.CredentialFile == "" {
+					problems = append(problems, errors.New("non-loopback metrics listener requires metrics.credential_file"))
+				}
+				if !c.Metrics.TLS.Enabled {
+					problems = append(problems, errors.New("non-loopback metrics listener requires dedicated metrics.tls mutual authentication"))
+				}
 			}
 		}
 		if c.Metrics.CredentialFile != "" && !c.Metrics.RequireAuth {
@@ -632,17 +646,19 @@ func (c Config) Validate(opts LoadOptions) error {
 			problems = append(problems, errors.New("audit.anchor.record_delta must be at least 1"))
 		}
 	}
-	listeners := map[string]string{
-		"gateway": c.Server.GatewayListen,
-		"admin":   c.Server.AdminListen,
-	}
-	if c.Metrics.Enabled {
-		listeners["metrics"] = c.Server.MetricsListen
-	}
-	for leftName, leftAddress := range listeners {
-		for rightName, rightAddress := range listeners {
-			if leftName < rightName && leftAddress == rightAddress {
-				problems = append(problems, fmt.Errorf("server %s and %s listeners must be distinct", leftName, rightName))
+	if !opts.SkipListenerValidation {
+		listeners := map[string]string{
+			"gateway": c.Server.GatewayListen,
+			"admin":   c.Server.AdminListen,
+		}
+		if c.Metrics.Enabled {
+			listeners["metrics"] = c.Server.MetricsListen
+		}
+		for leftName, leftAddress := range listeners {
+			for rightName, rightAddress := range listeners {
+				if leftName < rightName && leftAddress == rightAddress {
+					problems = append(problems, fmt.Errorf("server %s and %s listeners must be distinct", leftName, rightName))
+				}
 			}
 		}
 	}
@@ -652,6 +668,11 @@ func (c Config) Validate(opts LoadOptions) error {
 	}
 	if c.Server.ReadBodyTimeout <= 0 {
 		problems = append(problems, errors.New("server.read_body_timeout must be positive"))
+	}
+	if c.Server.ShutdownTimeout <= 0 {
+		problems = append(problems, errors.New("server.shutdown_timeout must be positive"))
+	} else if c.Server.ShutdownTimeout < c.Gateway.RouteTotalTimeout {
+		problems = append(problems, errors.New("server.shutdown_timeout must be at least gateway.route_total_timeout so accepted requests can drain"))
 	}
 	if c.Server.MaxHeaderBytes < 1024 {
 		problems = append(problems, errors.New("server.max_header_bytes must be at least 1024"))

@@ -108,3 +108,19 @@ func TestTodayBoundaryIsHalfOpen(t *testing.T) {
 		t.Fatal("Contains is not half-open")
 	}
 }
+
+// Offset zones do not align their local midnight with a UTC hour. Summing whole
+// UTC buckets leaks the first or last partial hour into another accounting day.
+func TestTodayUsesExactBoundaryInHalfHourZone(t *testing.T) {
+	period := localDay(t, "Asia/Kolkata", time.Date(2026, time.August, 6, 6, 0, 0, 0, time.UTC))
+	aggregate := NewAggregate()
+	settledAt(t, aggregate, 1, period.Start.Add(-time.Minute))
+	settledAt(t, aggregate, 2, period.Start)
+	settledAt(t, aggregate, 3, period.End.Add(-time.Nanosecond))
+	settledAt(t, aggregate, 4, period.End)
+
+	dashboard := aggregate.Dashboard(period.Start.Add(time.Hour), period)
+	if dashboard.Today.Attempts != 2 {
+		t.Fatalf("today counted %d attempts, want only the exact half-hour period", dashboard.Today.Attempts)
+	}
+}

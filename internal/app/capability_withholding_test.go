@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -187,6 +188,23 @@ func TestDriftWithholdsTheRouteAndStillLoadsTheRegistry(t *testing.T) {
 	targets := registry.ResolveCandidatesForEvidence("chat", provider.OperationChat, domain.EvidenceDeclared)
 	if len(targets) != 0 {
 		t.Fatalf("a drifted deployment was still a routing candidate: %+v", targets)
+	}
+}
+
+func TestAWithheldAliasIsUnreachableThroughTheDataPlane(t *testing.T) {
+	runtime, bootstrap := bootstrapForCapabilityTest(t)
+	driftDeployment(t, runtime, bootstrap.DeploymentID)
+	if err := runtime.reloadProviderRegistry(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"model":"chat","messages":[{"role":"user","content":"hello"}]}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer "+bootstrap.GatewayKey)
+	response := httptest.NewRecorder()
+	runtime.gatewayRouter().ServeHTTP(response, request)
+	if response.Code != http.StatusNotFound || !bytes.Contains(response.Body.Bytes(), []byte(`"code":"model_not_found"`)) {
+		t.Fatalf("withheld alias status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 
@@ -425,40 +443,41 @@ func TestSignedCatalogWithholdingRefreshReturnsAndFallbackRestoresRoute(t *testi
 
 func TestModelCatalogActivationSerializesTopologyMutation(t *testing.T) {
 	runtime, bootstrap := bootstrapForCapabilityTest(t)
+	session := loginTestAdmin(t, runtime, "admin", "correct horse battery staple")
 	finalize, err := runtime.prepareModelCatalogActivation(modelcatalog.Builtin())
 	if err != nil {
 		t.Fatal(err)
 	}
+	route, err := runtime.store.GetRoute(context.Background(), bootstrap.RouteID)
+	if err != nil {
+		finalize(false)
+		t.Fatal(err)
+	}
+	request := adminMutationRequest(t, http.MethodPut, "/admin/api/v1/routes/"+route.ID, session, map[string]any{
+		"public_model": route.PublicModel, "deployment_id": route.DeploymentID,
+		"priority": route.Priority, "strategy": string(route.Strategy), "enabled": false,
+	})
+	request.Header.Set("If-Match", revisionETag(route.Revision))
 	started := make(chan struct{})
-	done := make(chan error, 1)
+	done := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
 		close(started)
-		runtime.adminTopologyMu.Lock()
-		defer runtime.adminTopologyMu.Unlock()
-		route, err := runtime.store.GetRoute(context.Background(), bootstrap.RouteID)
-		if err != nil {
-			done <- err
-			return
-		}
-		route.Enabled = false
-		if _, err := runtime.store.PutRoute(context.Background(), route, route.Revision, nil); err != nil {
-			done <- err
-			return
-		}
-		done <- runtime.reloadProviderRegistry(context.Background())
+		response := httptest.NewRecorder()
+		runtime.adminRouter().ServeHTTP(response, request)
+		done <- response
 	}()
 	<-started
 	select {
-	case err := <-done:
+	case response := <-done:
 		finalize(false)
-		t.Fatalf("topology mutation crossed a prepared catalog activation: %v", err)
+		t.Fatalf("Admin topology mutation crossed a prepared catalog activation: status=%d body=%s", response.Code, response.Body.String())
 	case <-time.After(50 * time.Millisecond):
 	}
 	finalize(true)
 	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatal(err)
+	case response := <-done:
+		if response.Code != http.StatusOK {
+			t.Fatalf("Admin topology mutation status=%d body=%s", response.Code, response.Body.String())
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("topology mutation did not resume after catalog commit")

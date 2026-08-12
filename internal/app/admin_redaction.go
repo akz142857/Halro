@@ -321,8 +321,8 @@ func (r *Runtime) activateRedactionPolicies() {
 	}
 	if err != nil {
 		r.logger.Error("redaction policy activation failed after a durable mutation", "error", err)
-		r.activation.markStale("redaction policies: "+err.Error(), time.Now().UTC())
+		r.activation.markStale(activationDomainRedaction, "redaction policies: "+err.Error(), time.Now().UTC())
 		return
 	}
-	r.activation.markCurrent()
+	r.activation.markCurrent(activationDomainRedaction)
 }

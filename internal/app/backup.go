@@ -123,14 +123,18 @@ func VerifyBackup(path string, backupKey []byte) (backup.Manifest, error) {
 }
 
 type RestoreResult struct {
-	BackupID                   string `json:"backup_id"`
-	DataDir                    string `json:"data_dir"`
-	PreviousDataDir            string `json:"previous_data_dir"`
-	LedgerSequence             uint64 `json:"ledger_sequence"`
-	UnlockPath                 string `json:"unlock_path"`
-	VaultVerified              bool   `json:"vault_verified"`
-	RecoveryAudited            bool   `json:"recovery_audited"`
-	QuarantinedScheduledPrices int    `json:"quarantined_scheduled_prices"`
+	BackupID                       string   `json:"backup_id"`
+	DataDir                        string   `json:"data_dir"`
+	PreviousDataDir                string   `json:"previous_data_dir"`
+	LedgerSequence                 uint64   `json:"ledger_sequence"`
+	UnlockPath                     string   `json:"unlock_path"`
+	VaultVerified                  bool     `json:"vault_verified"`
+	RecoveryAudited                bool     `json:"recovery_audited"`
+	QuarantinedScheduledPrices     int      `json:"quarantined_scheduled_prices"`
+	SchemaVersionBefore            uint64   `json:"schema_version_before"`
+	SchemaVersionAfter             uint64   `json:"schema_version_after"`
+	RestoredEnabledGatewayKeyCount int      `json:"restored_enabled_gateway_key_count"`
+	RestoredEnabledGatewayKeyIDs   []string `json:"restored_enabled_gateway_key_ids"`
 }
 
 type RestoreOptions struct {
@@ -223,10 +227,20 @@ func restoreBackupWithFactory(
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("open staged metadata for authentication invalidation: %w", err)
 	}
+	schemaVersionAfter, schemaErr := stageStore.SchemaVersion()
+	gatewayKeys, gatewayKeysErr := stageStore.ListGatewayKeys(ctx)
+	restoredEnabledGatewayKeyIDs := make([]string, 0, len(gatewayKeys))
+	if gatewayKeysErr == nil {
+		for _, key := range gatewayKeys {
+			if key.Enabled && key.DeletedAt == nil {
+				restoredEnabledGatewayKeyIDs = append(restoredEnabledGatewayKeyIDs, key.ID)
+			}
+		}
+	}
 	quarantined, quarantineErr := stageStore.QuarantineRestoredScheduledPrices(ctx, manifest.CreatedAt.UTC(), time.Now().UTC())
 	invalidateErr := stageStore.InvalidateAdminAuthenticationForRestore(ctx)
 	closeErr := stageStore.Close()
-	if err := errors.Join(quarantineErr, invalidateErr, closeErr); err != nil {
+	if err := errors.Join(schemaErr, gatewayKeysErr, quarantineErr, invalidateErr, closeErr); err != nil {
 		return RestoreResult{}, fmt.Errorf("invalidate restored admin authentication: %w", err)
 	}
 
@@ -278,6 +292,9 @@ func restoreBackupWithFactory(
 		PreviousDataDir: previousDataDir, LedgerSequence: manifest.LedgerWatermark.Sequence,
 		UnlockPath: unlockPath, VaultVerified: true, RecoveryAudited: options.UseRecoverySlot,
 		QuarantinedScheduledPrices: quarantined,
+		SchemaVersionBefore:        manifest.Metadata.SchemaVersion, SchemaVersionAfter: schemaVersionAfter,
+		RestoredEnabledGatewayKeyCount: len(restoredEnabledGatewayKeyIDs),
+		RestoredEnabledGatewayKeyIDs:   restoredEnabledGatewayKeyIDs,
 	}, nil
 }
 
@@ -332,9 +349,13 @@ func validateRestoreStage(
 		return err
 	}
 	fingerprint := sha256.Sum256(masterKey)
-	if "sha256:"+hex.EncodeToString(fingerprint[:]) != manifest.MasterKeyFingerprint {
+	configuredFingerprint := "sha256:" + hex.EncodeToString(fingerprint[:])
+	if configuredFingerprint != manifest.MasterKeyFingerprint {
 		clear(masterKey)
-		return errors.New("staged Vault belongs to a different Master Key than the backup manifest")
+		return fmt.Errorf(
+			"configured Master Key fingerprint %s does not match backup manifest fingerprint %s; configure the Master Key generation recorded for this backup (storage.master_key.file in file mode) and retry",
+			fingerprintPrefix(configuredFingerprint), fingerprintPrefix(manifest.MasterKeyFingerprint),
+		)
 	}
 	secretVault, err := vault.New(masterKey)
 	if err != nil {
@@ -429,6 +450,14 @@ func validateRestoreStage(
 		return err
 	}
 	return nil
+}
+
+func fingerprintPrefix(value string) string {
+	const visibleHexDigits = 12
+	if !strings.HasPrefix(value, "sha256:") || len(value) <= len("sha256:")+visibleHexDigits {
+		return value
+	}
+	return value[:len("sha256:")+visibleHexDigits] + "..."
 }
 
 func appendRecoveryRestoreAudit(ctx context.Context, store *boltstore.Store, log *audit.Log, slotID string) error {

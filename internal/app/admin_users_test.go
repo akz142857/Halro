@@ -86,6 +86,9 @@ func TestCreateAdminUserRequiresStepUpAndProducesAWorkingReadOnlyLogin(t *testin
 	if createResponse.Code != http.StatusCreated {
 		t.Fatalf("create status=%d body=%s", createResponse.Code, createResponse.Body.String())
 	}
+	if createResponse.Header().Get("Halro-Operation-Id") == "" {
+		t.Fatal("create response omitted its durable audit operation id")
+	}
 	var created adminUserView
 	if err := json.Unmarshal(createResponse.Body.Bytes(), &created); err != nil {
 		t.Fatal(err)
@@ -168,6 +171,9 @@ func TestDeleteAdminUserRejectsSelfAndLastAdministrator(t *testing.T) {
 	runtime.adminRouter().ServeHTTP(deleteSecondResponse, deleteSecond)
 	if deleteSecondResponse.Code != http.StatusNoContent {
 		t.Fatalf("delete second administrator status=%d body=%s", deleteSecondResponse.Code, deleteSecondResponse.Body.String())
+	}
+	if deleteSecondResponse.Header().Get("Halro-Operation-Id") == "" {
+		t.Fatal("delete response omitted its durable audit operation id")
 	}
 
 	// Now "admin" is the only administrator left; create a read_only user and

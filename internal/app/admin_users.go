@@ -79,18 +79,17 @@ func (r *Runtime) createAdminUser(writer http.ResponseWriter, request *http.Requ
 	}
 	defer clear(user.PasswordHash)
 	defer clear(user.PasswordSalt)
-	created, err := r.store.PutAdminUser(request.Context(), user, 0)
+	intent, err := r.newAdminAuditIntent(request, "admin_user.create", "admin_user", user.Username)
+	if err != nil {
+		adminStoreError(writer)
+		return
+	}
+	created, err := r.store.PutAdminUserWithAuditIntent(request.Context(), user, 0, intent)
 	if err != nil {
 		adminMutationError(writer, err)
 		return
 	}
-	if err := r.appendAdminAudit(
-		"admin_user", admin.session.Username, "admin_user.create", "admin_user", created.Username,
-		"success", "",
-	); err != nil {
-		adminAuditError(writer)
-		return
-	}
+	r.completeAdminMutation(writer, request, *intent)
 	writeJSON(writer, http.StatusCreated, toAdminUserView(created))
 }
 
@@ -143,16 +142,15 @@ func (r *Runtime) deleteAdminUser(writer http.ResponseWriter, request *http.Requ
 			return
 		}
 	}
-	if err := r.store.DeleteAdminUser(request.Context(), username, target.Revision); err != nil {
+	intent, err := r.newAdminAuditIntent(request, "admin_user.delete", "admin_user", username)
+	if err != nil {
+		adminStoreError(writer)
+		return
+	}
+	if err := r.store.DeleteAdminUserWithAuditIntent(request.Context(), username, target.Revision, intent); err != nil {
 		adminMutationError(writer, err)
 		return
 	}
-	if err := r.appendAdminAudit(
-		"admin_user", admin.session.Username, "admin_user.delete", "admin_user", username,
-		"success", "",
-	); err != nil {
-		adminAuditError(writer)
-		return
-	}
+	r.completeAdminMutation(writer, request, *intent)
 	writer.WriteHeader(http.StatusNoContent)
 }

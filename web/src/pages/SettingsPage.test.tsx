@@ -386,6 +386,61 @@ describe("SettingsPage system configuration pane", () => {
     expect(screen.getByText("≈ 9.04 请求/秒")).toBeInTheDocument();
   });
 
+  it("shows why data-plane traffic is refused while activation is stale", async () => {
+    vi.spyOn(api, "systemStatus").mockResolvedValue({
+      build: { version: "1.0.0", commit: "abc", date: "2026-08-11" },
+      accounting_status: 0, draining: false, wal: {}, write_path: emptyWritePath(),
+      audit: {}, alerts: {}, usage_watermark: {},
+      activation: {
+        stale: true, stale_since: "2026-08-11T01:02:03Z", generation: 7,
+        reason: "redaction: redaction policies: store unavailable",
+        domains: [
+          { domain: "topology", stale: false },
+          { domain: "auth", stale: false },
+          { domain: "redaction", stale: true, stale_since: "2026-08-11T01:02:03Z", reason: "redaction policies: store unavailable" },
+          { domain: "token_guard", stale: false },
+        ],
+      },
+    } as never);
+    window.history.replaceState({}, "", "/admin/settings/diagnostics");
+    renderWithClient(<SettingsPage />);
+
+    expect(await screen.findAllByText("正在拒绝流量 · 配置未追平")).toHaveLength(2);
+    expect(screen.getByText("脱敏策略")).toBeInTheDocument();
+    expect(screen.getByText("redaction policies: store unavailable")).toBeInTheDocument();
+    expect(screen.getByText("7")).toBeInTheDocument();
+    expect(screen.getAllByText(/数据面流量返回 503/)).toHaveLength(2);
+  });
+
+  // The healthy reading has to be visible too. "Redaction is current" and
+  // "this panel has nothing to say about redaction" look identical when the
+  // row is dropped, and only one of them means an operator can stop looking.
+  it("keeps every activation domain on screen when nothing is stale", async () => {
+    vi.spyOn(api, "systemStatus").mockResolvedValue({
+      build: { version: "1.0.0", commit: "abc", date: "2026-08-11" },
+      accounting_status: 0, draining: false, wal: {}, write_path: emptyWritePath(),
+      audit: {}, alerts: {}, usage_watermark: {},
+      activation: {
+        stale: false, generation: 3,
+        domains: [
+          { domain: "topology", stale: false },
+          { domain: "auth", stale: false },
+          { domain: "redaction", stale: false },
+          { domain: "token_guard", stale: false },
+        ],
+      },
+    } as never);
+    window.history.replaceState({}, "", "/admin/settings/diagnostics");
+    renderWithClient(<SettingsPage />);
+
+    for (const name of ["路由拓扑", "鉴权快照", "脱敏策略", "Token Guard 策略"]) {
+      expect(await screen.findByText(name)).toBeInTheDocument();
+    }
+    expect(screen.getAllByText("与持久化存储一致")).toHaveLength(4);
+    // The recovery instructions belong to the failure, not to the steady state.
+    expect(screen.queryByText(/configuration-stale.md/)).not.toBeInTheDocument();
+  });
+
   // A batch size of 1.0 and a saturated disk read the same from a latency graph,
   // and only the first is fixed by adding concurrency. The card has to say which
   // one it is looking at, and must stay quiet until the reading is real.

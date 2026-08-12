@@ -92,6 +92,7 @@ describe("deployment invocation target workflow", () => {
     vi.spyOn(api, "deployments").mockResolvedValue({ items: [], next_cursor: "" });
     vi.spyOn(api, "routes").mockResolvedValue({ items: [], next_cursor: "" });
     vi.spyOn(api, "invocationTargets").mockResolvedValue(catalog([chatTarget, unknown]));
+    vi.spyOn(api, "refreshInvocationTargets").mockResolvedValue(catalog([chatTarget, unknown]));
     vi.spyOn(api, "resolveInvocationTarget").mockImplementation(async (_providerID, targetID) => target(targetID, [], "unknown"));
   });
 
@@ -270,7 +271,7 @@ describe("deployment invocation target workflow", () => {
     await openCreate();
     await choose("GPT Future");
     expect(await screen.findByRole("button", { name: "识别能力" })).toBeEnabled();
-    expect(screen.getByText("最多 10 次低成本验证")).toBeVisible();
+    expect(screen.getByText("最多 10 次低成本验证。这些控制面调用不计入项目预算、Ledger 或用量统计。")).toBeVisible();
     expect(screen.getByRole("button", { name: "手动配置" })).toBeVisible();
     expect(screen.queryByLabelText("对话")).not.toBeInTheDocument();
   });
@@ -510,7 +511,7 @@ describe("deployment invocation target workflow", () => {
     const listbox = await screen.findByRole("listbox", { name: "可用模型" });
     expect(listbox.querySelector(".deployment-model-options-meta")).toHaveTextContent("可用 2 个模型");
     fireEvent.click(refresh);
-    await waitFor(() => expect(api.invocationTargets).toHaveBeenCalledWith(provider.id, "", true));
+    await waitFor(() => expect(api.refreshInvocationTargets).toHaveBeenCalledWith(provider.id));
   });
 
   it("keeps the model refresh control visible while the initial catalog is loading", async () => {

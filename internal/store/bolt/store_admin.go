@@ -37,6 +37,18 @@ func (s *Store) PutAdminUser(
 	user domain.AdminUser,
 	expectedRevision uint64,
 ) (domain.AdminUser, error) {
+	return s.PutAdminUserWithAuditIntent(ctx, user, expectedRevision, nil)
+}
+
+// PutAdminUserWithAuditIntent commits an Admin API identity mutation and its
+// audit intent in one bbolt transaction. Offline/session-maintenance callers
+// use PutAdminUser when there is no Admin HTTP mutation to account for.
+func (s *Store) PutAdminUserWithAuditIntent(
+	ctx context.Context,
+	user domain.AdminUser,
+	expectedRevision uint64,
+	intent *domain.AdminAuditIntent,
+) (domain.AdminUser, error) {
 	if err := user.Validate(); err != nil {
 		return domain.AdminUser{}, err
 	}
@@ -44,7 +56,10 @@ func (s *Store) PutAdminUser(
 		return domain.AdminUser{}, err
 	}
 	err := s.db.Update(func(tx *bbolt.Tx) error {
-		return putVersioned(tx.Bucket(bucketAdminUsers), user.Username, expectedRevision, &user)
+		if err := putVersioned(tx.Bucket(bucketAdminUsers), user.Username, expectedRevision, &user); err != nil {
+			return err
+		}
+		return putAdminAuditIntentTx(tx, intent)
 	})
 	return user, err
 }
@@ -109,6 +124,18 @@ func (s *Store) ListAdminUsers(ctx context.Context) ([]domain.AdminUser, error) 
 // preserve, and its sessions and MFA state are deleted alongside it in the
 // same transaction so nothing outlives the identity it belonged to.
 func (s *Store) DeleteAdminUser(ctx context.Context, username string, expectedRevision uint64) error {
+	return s.DeleteAdminUserWithAuditIntent(ctx, username, expectedRevision, nil)
+}
+
+// DeleteAdminUserWithAuditIntent removes the identity and all of its session
+// and MFA state in the same transaction that makes the Admin audit record
+// durable.
+func (s *Store) DeleteAdminUserWithAuditIntent(
+	ctx context.Context,
+	username string,
+	expectedRevision uint64,
+	intent *domain.AdminAuditIntent,
+) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -133,7 +160,10 @@ func (s *Store) DeleteAdminUser(ctx context.Context, username string, expectedRe
 		// identity, reused here rather than re-implementing key schemes
 		// (session records matched by field, MFA records by key prefix) a
 		// second time.
-		return deleteAdminIdentityRecords(tx, username, true)
+		if err := deleteAdminIdentityRecords(tx, username, true); err != nil {
+			return err
+		}
+		return putAdminAuditIntentTx(tx, intent)
 	})
 }
 

@@ -115,6 +115,10 @@ export interface MasterKeyCustody {
 export interface Bucket {
   hour: string;
   requests: number;
+  request_errors: number;
+  request_latency_samples: number;
+  request_latency_p50_millis: number;
+  request_latency_p95_millis: number;
   attempts: number;
   input_tokens: number;
   output_tokens: number;
@@ -122,6 +126,7 @@ export interface Bucket {
   estimated_output_tokens?: number;
   cost_micros_usd: number;
   estimated_cost_micros_usd?: number;
+  unknown_attempts: number;
   errors: number;
   latency_millis: number;
 }
@@ -137,8 +142,11 @@ export interface UsageBreakdown {
 }
 
 export interface UsageAnomaly {
+  request_id: string;
+  attempt_id: string;
   completed_at: string;
   project_id: string;
+  deployment_id?: string;
   provider_id?: string;
   requested_model?: string;
   provider_model?: string;
@@ -167,7 +175,7 @@ export interface Dashboard {
     hourly: Bucket[];
     active_requests: number;
     watermark_sequence: number;
-    breakdowns: Record<"project" | "provider" | "requested_model" | "provider_model", UsageBreakdown[]>;
+    breakdowns: Record<"project" | "provider" | "requested_model" | "provider_model", Record<"calls" | "cost" | "errors", UsageBreakdown[]>>;
     recent_anomalies: UsageAnomaly[];
   };
   governance: {
@@ -187,6 +195,11 @@ export interface Dashboard {
   };
   resource_labels: Record<string, string>;
   accounting_status: number;
+  runtime: {
+    accepting_traffic: boolean;
+    draining: boolean;
+    activation: ActivationStatus;
+  };
   wal: WALStats;
   alerts: AlertStats;
   time_context: TimeContext;
@@ -237,6 +250,12 @@ export interface AlertStats {
   Failed: number;
   Dropped: number;
   Queued: number;
+  QueueCapacity: number;
+  Endpoints: number;
+  UnhealthyEndpoints: number;
+  UnknownEndpoints: number;
+  LastDeliveredAt?: string;
+  LastFailedAt?: string;
 }
 
 export interface Project {
@@ -828,7 +847,23 @@ export interface SystemStatus {
   alerts: Record<string, number>;
   usage_watermark: Record<string, number>;
   time_context: TimeContext;
+  activation?: ActivationStatus;
   tzdata?: { source: string; path?: string; version: string; fingerprint: string; zones: string[] };
+}
+
+export type ActivationDomain = "topology" | "auth" | "redaction" | "token_guard";
+
+export interface ActivationStatus {
+  stale: boolean;
+  stale_since?: string;
+  reason?: string;
+  generation: number;
+  domains: Array<{
+    domain: ActivationDomain;
+    stale: boolean;
+    stale_since?: string;
+    reason?: string;
+  }>;
 }
 
 // The durable write path reduced to the means that explain this instance's

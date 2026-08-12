@@ -12,7 +12,11 @@ property of their respective owners.
 | github.com/aws/smithy-go | Apache-2.0 |
 | github.com/go-chi/chi/v5 | MIT |
 | github.com/parquet-go/parquet-go | Apache-2.0 |
+| github.com/parquet-go/bitpack | Apache-2.0 |
+| github.com/parquet-go/jsonlite | MIT |
+| github.com/twpayne/go-geom | BSD-2-Clause |
 | go.etcd.io/bbolt | MIT |
+| google.golang.org/protobuf | BSD-3-Clause |
 | golang.org/x/crypto | BSD-3-Clause |
 | gopkg.in/yaml.v3 | MIT and Apache-2.0 |
 | github.com/andybalholm/brotli | MIT |
@@ -38,6 +42,8 @@ property of their respective owners.
 | uPlot | MIT |
 | Zod | MIT |
 | qrcode | MIT |
+| i18next | MIT |
+| react-i18next | MIT |
 
 The Apache-2.0 license text is included in [LICENSE](LICENSE). MIT, BSD, and
 Apache licenses require preservation of their upstream copyright and license

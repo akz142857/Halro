@@ -33,6 +33,165 @@ a public Prometheus UI or unrestricted API. Useful checks include:
 - provider pressure: `halro:deployments_unhealthy:count` and
   `halro:deployment_capacity:ratio`.
 
+## Alert procedures
+
+### HalroTargetDown
+
+- Trigger: the expected Halro scrape target is absent or down for two minutes.
+- Immediate: check process/listener health, Metrics authentication and TLS, then the Prometheus target error.
+- Escalate: page the service owner if readiness cannot be restored without restart or rollback.
+
+### HalroWALAppendErrors
+
+- Trigger: a Ledger WAL write or sync error occurred in the last five minutes.
+- Immediate: stop new Provider traffic, inspect filesystem capacity/permissions/I/O, and preserve the data directory.
+- Escalate: treat committed-data corruption or repeated fsync failure as an accounting incident; do not edit the WAL.
+
+### HalroUsageAnalyticsLagging
+
+- Trigger: derivative Usage aggregation has remained behind the Ledger for ten minutes.
+- Immediate: inspect queue depth, checkpoint progress, host I/O and the authoritative Ledger watermark.
+- Escalate: if the lag keeps growing, protect Ledger durability first and rebuild the derivative only from verified records.
+
+### HalroLedgerQueueHigh
+
+- Trigger: the durable append queue stays above 75 percent for five minutes.
+- Immediate: compare request rate, WAL sync latency, batch size and project-lock wait.
+- Escalate: shed traffic or increase approved capacity before the queue fills and accounting becomes unavailable.
+
+### HalroAlertDeliveryFailing
+
+- Trigger: application alert delivery fails or drops for ten minutes.
+- Immediate: inspect the receiver endpoint, credential, SafeTransport rejection class and delivery queue.
+- Escalate: use the independent dead-man path and Security/SRE channels if operational alerts cannot be delivered.
+
+### HalroDeploymentUnhealthy
+
+- Trigger: one probed Deployment remains down for five minutes.
+- Immediate: inspect its Provider credential, endpoint, model/region, last test and upstream status.
+- Escalate: disable or replace the Deployment if healthy fallbacks are insufficient or the provider is persistently unavailable.
+
+### HalroMultipleDeploymentsUnhealthy
+
+- Trigger: at least two Deployments in one cluster are unhealthy for three minutes.
+- Immediate: look for a shared Provider, credential, network, DNS or regional dependency before changing routes.
+- Escalate: invoke the provider-outage plan and preserve budget/accounting controls while shifting approved traffic.
+
+### HalroFallbackSaturation
+
+- Trigger: fallback exceeds 25 percent with at least 20 recent requests for five minutes.
+- Immediate: identify the primary Deployment failure class and compare fallback capacity, latency and cost.
+- Escalate: stop the degraded primary or cap traffic if fallback spend/capacity threatens the project boundary.
+
+### HalroProviderCapacityPressure
+
+- Trigger: Provider active requests stay above 85 percent of its configured concurrency for five minutes.
+- Immediate: inspect per-Deployment pressure, queueing and upstream quota; confirm the configured ceiling is intentional.
+- Escalate: scale or request quota only with evidence; otherwise shed load before all routes on the Provider stall.
+
+### HalroHighErrorRate
+
+- Trigger: request errors exceed five percent with at least 20 recent requests for ten minutes.
+- Immediate: split errors by policy, Provider, Deployment and protocol; correlate latency and fallback signals.
+- Escalate: rollback the responsible configuration or isolate the upstream when the rate breaches the service objective.
+
+### Watchdog
+
+- Trigger: this alert continuously fires; missing notifications are the failure signal.
+- Immediate: the independent receiver checks its last firing timestamp and direct Prometheus/Alertmanager probes.
+- Escalate: missing Watchdog beyond the approved grace window is a monitoring outage even if Core cannot page itself.
+
+### HalroWALSyncSlow
+
+- Trigger: mean Ledger durability barrier time exceeds the host baseline for ten minutes.
+- Immediate: inspect storage latency, saturation, WAL batch size and noisy-neighbor activity.
+- Escalate: move to approved storage or reduce traffic if fsync latency threatens queue and request objectives.
+
+### HalroAccountingProjectLockSaturated
+
+- Trigger: mean wait on one project's accounting lock exceeds 250 ms for fifteen minutes.
+- Immediate: identify the hot project and compare its concurrency/request pattern with WAL sync latency.
+- Escalate: enforce project capacity limits or isolate workload; do not weaken per-project accounting serialization.
+
+### AlertmanagerNotificationFailing
+
+- Trigger: Alertmanager reports notification failures for two minutes.
+- Immediate: inspect receiver reachability, secret file, TLS and Alertmanager logs through the authenticated path.
+- Escalate: notify through the independent dead-man channel and treat simultaneous Core failure as loss of paging.
+
+### PrometheusRuleEvaluationFailing
+
+- Trigger: Prometheus rule evaluations fail for two minutes.
+- Immediate: inspect the failing rule/group, source-series cardinality and query/resource errors.
+- Escalate: rollback the rule change if evaluation cannot be restored promptly; a loaded file is not a working rule.
+
+### PrometheusConfigReloadFailing
+
+- Trigger: the last Prometheus configuration reload failed for two minutes.
+- Immediate: run the pinned config/rule validators, inspect reload logs and retain the last known-good configuration.
+- Escalate: rollback rather than restart repeatedly if validation and the live error disagree.
+
+### PrometheusTSDBDiskHigh
+
+- Trigger: Prometheus TSDB plus WAL exceeds the local 3.5 GiB warning budget for ten minutes.
+- Immediate: inspect retention, ingestion growth, compaction and filesystem free space without deleting live blocks.
+- Escalate: expand approved storage or reduce retention before the 4.25 GiB critical threshold.
+
+### PrometheusTSDBDiskCritical
+
+- Trigger: Prometheus TSDB plus WAL exceeds 4.25 GiB for five minutes.
+- Immediate: protect the host from disk exhaustion, preserve recent monitoring evidence and stop nonessential ingestion.
+- Escalate: page SRE and execute the approved TSDB recovery/capacity plan; do not hand-delete WAL or block files.
+
+### HalroAuditAnchorStale
+
+1. Confirm anchoring is enabled and compare the last-emission timestamp with
+   the exported configured interval and process start time.
+2. Check the independent sink credential, reachability and audit-anchor
+   authentication failures without disabling signature or chain verification.
+3. Escalate to Security immediately; restore emission and independently verify
+   a new chain head before treating the external witness as current.
+
+### HalroDeploymentCapabilityEvidenceDegraded
+
+1. Determine whether the family is absent (store read unknown) or the
+   `conflicting` state is non-zero (trusted evidence disagrees).
+2. Keep affected deployments withheld, inspect store health, then compare their
+   immutable snapshots with current provider-profile and catalog evidence.
+3. Escalate if the series stays absent or conflict cannot be reconciled; close
+   only after all four bounded states are visible and `conflicting` is zero.
+
+### HalroSignedModelCatalogDegraded
+
+1. Inspect `halro_signed_model_catalog_refresh_total` by `status` and
+   `error_class`; check the catalog URL, signature, pinned public key, TLS and
+   clock without weakening signature verification.
+2. Confirm Halro is using its last-known-good or bundled catalog, and inspect
+   `halro_signed_model_catalog_degraded_since_seconds` to bound the exposure.
+3. Restore a valid signed catalog or intentionally disable the dynamic source;
+   require the degraded gauge to return to zero before closing the incident.
+
+### HalroCapabilityDriftDetected
+
+1. Split the alert by `reason`: `catalog` means catalog evidence narrowed;
+   `profile` means the provider profile no longer supports the active snapshot.
+2. Identify deployments withheld from routing and compare their immutable
+   capability snapshots with the current signed catalog and provider profile.
+3. Do not override the hold. Re-detect and explicitly activate a reviewed
+   deployment revision, or restore the trusted evidence, then verify routing.
+
+### HalroCapabilityDetectionFailureRateHigh
+
+1. Break down `halro_model_capability_detection_total` by `provider_type`,
+   `status`, and `source`; correlate failures with probe totals, duration and
+   provider-call counts.
+2. Check provider credentials, endpoint reachability, rate limits and the
+   bounded detection-call budget. Detection calls are control-plane traffic
+   and are not project usage-accounting evidence.
+3. Fix the provider or configuration and rerun detection. Require at least five
+   recent terminal detections with a failure ratio at or below 50 percent
+   before resolving the incident.
+
 ## Credential rotation
 
 1. Generate a new active Metrics credential with a bounded overlap.

@@ -996,6 +996,10 @@ func (r *Runtime) RunWithReady(ctx context.Context, ready func() error) error {
 	if r.config.Metrics.Enabled {
 		servers = append(servers, r.server("metrics", r.config.Server.MetricsListen, r.metricsRouter()))
 	}
+	shutdownServers := make([]shutdownHTTPServer, len(servers))
+	for index, server := range servers {
+		shutdownServers[index] = server
+	}
 
 	type boundServer struct {
 		name     string
@@ -1053,27 +1057,77 @@ func (r *Runtime) RunWithReady(ctx context.Context, ready func() error) error {
 	case err := <-errs:
 		r.draining.Store(true)
 		runErr := fmt.Errorf("listener failed: %w", err)
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), r.config.Server.ShutdownTimeout.Value())
 		defer cancel()
-		var shutdownErrors []error
-		for _, server := range servers {
-			if shutdownErr := server.Shutdown(shutdownCtx); shutdownErr != nil {
-				shutdownErrors = append(shutdownErrors, shutdownErr)
-			}
-		}
+		shutdownErrors := r.shutdownHTTPServers(shutdownCtx, shutdownServers)
 		return errors.Join(runErr, errors.Join(shutdownErrors...))
 	}
 
 	r.draining.Store(true)
-	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), r.config.Server.ShutdownTimeout.Value())
 	defer cancel()
+	shutdownErrors := r.shutdownHTTPServers(shutdownCtx, shutdownServers)
+	return errors.Join(shutdownErrors...)
+}
+
+type shutdownHTTPServer interface {
+	Shutdown(context.Context) error
+	Close() error
+}
+
+func (r *Runtime) shutdownHTTPServers(ctx context.Context, servers []shutdownHTTPServer) []error {
+	return gracefullyShutdownHTTPServers(ctx, servers, r.activeProviderAttemptCount, r.recordShutdownTruncatedAttempts)
+}
+
+func gracefullyShutdownHTTPServers(
+	ctx context.Context,
+	servers []shutdownHTTPServer,
+	activeProviderAttempts func() uint64,
+	recordTruncatedAttempts func(uint64) error,
+) []error {
 	var shutdownErrors []error
 	for _, server := range servers {
-		if err := server.Shutdown(shutdownCtx); err != nil {
+		if err := server.Shutdown(ctx); err != nil {
 			shutdownErrors = append(shutdownErrors, err)
 		}
 	}
-	return errors.Join(shutdownErrors...)
+	if !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return shutdownErrors
+	}
+
+	// The grace budget is exhausted. Persist the count before forcing the
+	// sockets closed so Prometheus can observe the terminal event after the
+	// next start instead of losing an in-memory counter with this process.
+	if truncated := activeProviderAttempts(); truncated > 0 {
+		if err := recordTruncatedAttempts(truncated); err != nil {
+			shutdownErrors = append(shutdownErrors, fmt.Errorf("record shutdown-truncated Provider attempts: %w", err))
+		}
+	}
+	for _, server := range servers {
+		if err := server.Close(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			shutdownErrors = append(shutdownErrors, err)
+		}
+	}
+	return shutdownErrors
+}
+
+func (r *Runtime) activeProviderAttemptCount() uint64 {
+	var total uint64
+	for _, active := range r.gatewayService.ActiveProviderRequests() {
+		if active > 0 {
+			total += uint64(active)
+		}
+	}
+	return total
+}
+
+func (r *Runtime) recordShutdownTruncatedAttempts(delta uint64) error {
+	total, err := r.store.AddShutdownTruncatedAttempts(delta)
+	if err != nil {
+		return err
+	}
+	r.logger.Warn("graceful shutdown budget expired with active Provider attempts", "truncated_attempts", delta, "total", total)
+	return nil
 }
 
 func (r *Runtime) metricsTLSConfig() (*tls.Config, error) {
@@ -1246,7 +1300,7 @@ func (r *Runtime) gatewayRouter() http.Handler {
 	// an anonymous caller sets the parsing cost and the per-project limiter
 	// that would bound it does not yet apply.
 	router.Group(func(guarded chi.Router) {
-		guarded.Use(r.refuseWhileSnapshotsStale)
+		guarded.Use(r.refuseWhileSnapshotsStale(staleErrorOpenAI))
 		guarded.Use(r.gateway.LimitOpenAI)
 		guarded.Use(r.gateway.GuardOpenAI)
 		guarded.Post("/v1/chat/completions", r.gateway.ChatCompletions)
@@ -1269,7 +1323,7 @@ func (r *Runtime) gatewayRouter() http.Handler {
 		guarded.Post("/v1/batches/{batchID}/cancel", r.gateway.CancelBatch)
 	})
 	router.Group(func(guarded chi.Router) {
-		guarded.Use(r.refuseWhileSnapshotsStale)
+		guarded.Use(r.refuseWhileSnapshotsStale(staleErrorAnthropic))
 		guarded.Use(r.gateway.LimitAnthropic)
 		guarded.Use(r.gateway.GuardAnthropic)
 		guarded.Post("/v1/messages", r.gateway.Messages)
@@ -1318,6 +1372,8 @@ func (r *Runtime) adminRouter() http.Handler {
 	router.With(r.requireAdmin).Get("/admin/api/v1/master-key/runbooks/lifecycle", r.adminMasterKeyLifecycleRunbook)
 	router.With(r.requireAdmin).Get("/admin/api/v1/master-key/runbooks/recovery", r.adminMasterKeyRecoveryRunbook)
 	router.With(r.requireAdmin).Get("/admin/api/v1/runbooks/gateway-key-compromise", r.adminGatewayKeyCompromiseRunbook)
+	router.With(r.requireAdmin).Get("/admin/api/v1/runbooks/configuration-stale", r.adminConfigurationStaleRunbook)
+	router.With(r.requireAdmin).Get("/admin/api/v1/runbooks/file-master-key-rotation", r.adminFileMasterKeyRotationRunbook)
 	router.With(r.requireAdmin).Get("/admin/api/v1/usage", r.adminUsage)
 	router.With(r.requireAdmin).Get("/admin/api/v1/usage/requests/{requestID}", r.adminUsageRequest)
 	router.With(r.requireAdmin).Get("/admin/api/v1/system/status", r.adminSystemStatus)
@@ -1355,7 +1411,12 @@ func (r *Runtime) adminRouter() http.Handler {
 	router.With(r.requireAdminMutation).Post("/admin/api/v1/providers", r.createAdminProvider)
 	router.With(r.requireAdmin).Get("/admin/api/v1/providers/{id}", r.getAdminProvider)
 	router.With(r.requireAdmin).Get("/admin/api/v1/providers/{id}/invocation-targets", r.listAdminInvocationTargets)
-	router.With(r.requireAdmin).Get("/admin/api/v1/providers/{id}/invocation-targets/*", r.resolveAdminInvocationTarget)
+	// Both of these reach a Provider with the operator's credential, so they are
+	// mutations of the outside world and carry a CSRF token. See
+	// refreshAdminInvocationTargets for why an Origin check on a GET is not an
+	// option here.
+	router.With(r.requireAdminMutation).Post("/admin/api/v1/providers/{id}/invocation-targets", r.refreshAdminInvocationTargets)
+	router.With(r.requireAdminMutation).Post("/admin/api/v1/providers/{id}/invocation-targets/*", r.resolveAdminInvocationTarget)
 	router.With(r.requireAdminMutation).Put("/admin/api/v1/providers/{id}", r.updateAdminProvider)
 	router.With(r.requireAdminMutation).Delete("/admin/api/v1/providers/{id}", r.deleteAdminProvider)
 	router.With(r.requireAdminMutation).Post("/admin/api/v1/providers/{id}/test", r.testAdminProvider)

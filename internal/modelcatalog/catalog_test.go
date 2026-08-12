@@ -2,10 +2,13 @@ package modelcatalog
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/akz142857/Halro/internal/domain"
 )
@@ -617,5 +620,27 @@ func TestAnEntryExceedingItsProfileIsRefusedRatherThanTrimmed(t *testing.T) {
 		domain.ProviderCapabilities{Images: true})
 	if _, err := New(onTheRightProfile); err != nil {
 		t.Fatalf("the profile that carries images refused it: %v", err)
+	}
+}
+
+// The publishing runbook tells an operator to sign this exact file as their
+// first rehearsal. It is a fixture with a hard expiry, so it rots on a date
+// rather than on a code change: past expires_at, prepare and sign still
+// succeed and verify fails, which reads as "the procedure is broken" rather
+// than "the example is old". Fail here, in the repository, well before that.
+func TestTheAuthoringExampleIsNotAboutToExpire(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "catalog", "unsigned-snapshot-v1.example.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var example struct {
+		ExpiresAt time.Time `json:"expires_at"`
+	}
+	if err := json.Unmarshal(raw, &example); err != nil {
+		t.Fatal(err)
+	}
+	if remaining := time.Until(example.ExpiresAt); remaining < 90*24*time.Hour {
+		t.Fatalf("the authoring example expires at %s (%.0f days away); push it out before the runbook stops working",
+			example.ExpiresAt.Format(time.RFC3339), remaining.Hours()/24)
 	}
 }

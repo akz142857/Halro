@@ -50,8 +50,8 @@ The `v1-release` GitHub Environment must expose the completed sanitized bundle
 as the `M11_RELEASE_EVIDENCE_JSON` environment secret only after reviewers have
 downloaded and verified the `provenance` job artifacts. The publish job binds
 the bundle to the signed tag's commit and tag, recomputes every artifact digest,
-checks `checksums.txt`, and independently verifies every Sigstore bundle before
-creating the GitHub Release.
+checks `checksums.txt`, verifies GitHub build-provenance attestations, and
+independently verifies every Sigstore bundle before creating the GitHub Release.
 
 Only `M11_RELEASE_EVIDENCE=PASS` permits G4–G16 and the milestone to be marked
 Complete. Store the actual bundle in the restricted release evidence system,

@@ -209,6 +209,47 @@ func TestKeySlotInitAndRecoveryCLIUseExplicitOfflinePaths(t *testing.T) {
 	}
 }
 
+func TestInitDoesNotValidateListenersItNeverBinds(t *testing.T) {
+	cfg := config.Default()
+	cfg.Storage.DataDir = filepath.Join(t.TempDir(), "data")
+	cfg.Server.GatewayListen = "0.0.0.0:8080"
+	contents, err := yaml.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	previous := initializeCommand
+	t.Cleanup(func() { initializeCommand = previous })
+	called := false
+	initializeCommand = func(loaded config.Config) error {
+		called = loaded.Server.GatewayListen == "0.0.0.0:8080"
+		return nil
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	if err := run([]string{"init", "--config", path}, logger); err != nil {
+		t.Fatalf("offline init rejected a listener it does not bind: %v", err)
+	}
+	if !called {
+		t.Fatal("init did not reach storage initialization")
+	}
+	if _, err := config.Load(path, config.LoadOptions{}); err == nil || !strings.Contains(err.Error(), "gateway_listen") {
+		t.Fatalf("runtime validation no longer rejects public plaintext Gateway: %v", err)
+	}
+}
+
+func TestRestoreStatusReportsSchemaMigration(t *testing.T) {
+	var output strings.Builder
+	writeRestoreStatus(&output, app.RestoreResult{SchemaVersionBefore: 23, SchemaVersionAfter: 27})
+	for _, expected := range []string{"schema migrated from v23 to v27", "previous data directory was preserved"} {
+		if !strings.Contains(output.String(), expected) {
+			t.Fatalf("restore status %q does not contain %q", output.String(), expected)
+		}
+	}
+}
+
 func TestHealthcheckAcceptsOnlySuccessfulLoopbackReadiness(t *testing.T) {
 	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		status := http.StatusServiceUnavailable

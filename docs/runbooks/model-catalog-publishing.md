@@ -46,7 +46,9 @@ build artifacts.
 
 ## Prepare and sign a candidate
 
-Start from a complete unsigned `Snapshot` object. Set schema version and
+Start from the validated
+[`catalog/unsigned-snapshot-v1.example.json`](../../catalog/unsigned-snapshot-v1.example.json)
+shape and replace every example identity with reviewed exact values. Set schema version and
 capability dictionary version to 1, use a new strictly increasing positive
 sequence, choose bounded UTC generation/expiry times wholly inside the signing
 root's validity interval, and include only exact provider/profile/target-kind/

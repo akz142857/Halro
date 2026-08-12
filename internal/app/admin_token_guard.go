@@ -339,8 +339,8 @@ func (r *Runtime) activateTokenGuardPolicies() {
 	}
 	if err != nil {
 		r.logger.Error("token guard policy activation failed after a durable mutation", "error", err)
-		r.activation.markStale("token guard policies: "+err.Error(), time.Now().UTC())
+		r.activation.markStale(activationDomainTokenGuard, "token guard policies: "+err.Error(), time.Now().UTC())
 		return
 	}
-	r.activation.markCurrent()
+	r.activation.markCurrent(activationDomainTokenGuard)
 }

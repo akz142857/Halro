@@ -11,7 +11,9 @@ ExecStart=/usr/local/bin/halro start --config /etc/halro/config.yaml
 Restart=on-failure
 RestartSec=15s
 TimeoutStartSec=120s
-TimeoutStopSec=60s
+# Must exceed server.shutdown_timeout (default 120s) so Halro finishes its own
+# graceful drain and durably records truncated attempts before SIGKILL.
+TimeoutStopSec=150s
 LimitCORE=0
 NoNewPrivileges=yes
 CapabilityBoundingSet=

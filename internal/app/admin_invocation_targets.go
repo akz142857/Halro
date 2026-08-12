@@ -74,7 +74,27 @@ type bindingTargetCatalog struct {
 	credentialRevision uint64
 }
 
+// Reading the cached catalog is a read: any authenticated role may ask for it
+// and it never reaches a Provider.
 func (r *Runtime) listAdminInvocationTargets(writer http.ResponseWriter, request *http.Request) {
+	r.writeInvocationTargetCatalog(writer, request, false)
+}
+
+// Bypassing the cache is not a read: it spends the operator's provider
+// credential on an upstream call, against their quota and their bill, as often
+// as it is asked for. So it is a POST behind requireAdminMutation — role, CSRF
+// token and Origin together — rather than a GET carrying refresh=true.
+//
+// It must not be a GET with an Origin check bolted on: browsers do not send
+// Origin on a same-origin GET, and this router sets Referrer-Policy:
+// no-referrer, so such a check rejects the console itself while leaving a
+// cross-site attacker free to use a form-shaped POST. The method is the thing
+// that carries the CSRF defence here.
+func (r *Runtime) refreshAdminInvocationTargets(writer http.ResponseWriter, request *http.Request) {
+	r.writeInvocationTargetCatalog(writer, request, true)
+}
+
+func (r *Runtime) writeInvocationTargetCatalog(writer http.ResponseWriter, request *http.Request, refresh bool) {
 	providerID := chi.URLParam(request, "id")
 	instance, err := r.store.GetProvider(request.Context(), providerID)
 	if err != nil || instance.DeletedAt != nil {
@@ -88,15 +108,6 @@ func (r *Runtime) listAdminInvocationTargets(writer http.ResponseWriter, request
 	bindings, err := invocationTargetBindings(instance, strings.TrimSpace(request.URL.Query().Get("binding_id")))
 	if err != nil {
 		adminBadRequest(writer, err.Error())
-		return
-	}
-	// Reading the cached catalog is a read. Bypassing the cache is not: it spends
-	// the operator's provider credential on an upstream call, against their quota
-	// and their bill, as often as it is asked for. That is an administrator
-	// action even though it arrives as a GET, so the role gate the mutation
-	// routes get automatically is applied here by hand.
-	refresh := request.URL.Query().Get("refresh") == "true" || request.URL.Query().Get("refresh") == "1"
-	if refresh && !requireAdministratorRole(writer, request.Context().Value(adminContextKey{}).(adminRequestContext)) {
 		return
 	}
 	results := r.fetchInvocationTargetCatalogs(request.Context(), instance, bindings, refresh)
@@ -123,6 +134,11 @@ func (r *Runtime) listAdminInvocationTargets(writer http.ResponseWriter, request
 }
 
 func (r *Runtime) resolveAdminInvocationTarget(writer http.ResponseWriter, request *http.Request) {
+	// Resolution may enumerate a cold catalog and may call the Provider's
+	// Describe interface when the target is absent, so the whole endpoint is
+	// treated as credential-spending rather than trying to predict which cache
+	// branch will run. It is registered as a POST behind requireAdminMutation
+	// for the reason spelled out on refreshAdminInvocationTargets.
 	providerID := chi.URLParam(request, "id")
 	instance, err := r.store.GetProvider(request.Context(), providerID)
 	if err != nil || instance.DeletedAt != nil {

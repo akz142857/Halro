@@ -1,6 +1,6 @@
 # Crash and Recovery Matrix
 
-Date: 2026-07-31
+Date: 2026-08-11
 
 The matrix is exercised by package and integration tests, not by fault injection in a production host.
 
@@ -16,14 +16,14 @@ The matrix is exercised by package and integration tests, not by fault injection
 | Audit committed record/key is modified | Verification fails | `TestAuditDetectsTamperingAndWrongKey` | Pass |
 | Usage checkpoint is absent | Aggregate rebuild from Ledger is identical | `TestDeletingUsageCheckpointRebuildsIdenticalAggregateFromLedger` | Pass |
 | Process stops immediately before/after any of 126 checkpoint boundaries | Restored checkpoint plus Ledger suffix exactly equals full replay for snapshot and metrics | `TestCheckpointRecoveryMatchesFullReplayAcrossOneHundredKillPoints` | Pass |
-| Usage checkpoint moves behind/ahead incorrectly | Monotonic watermark validation rejects it | checkpoint/store tests | Pass |
+| Usage checkpoint moves behind/ahead incorrectly | Monotonic watermark validation rejects or safely discards it | `TestCheckpointWatermarkRejectsAlreadyAggregatedLedgerPrefix`, `TestUsageCheckpointAheadOfLedgerHeadIsDiscarded`, `TestUsageCheckpointPersistenceAndMonotonicity` | Pass |
 | Parquet partition is modified | Manifest verification rejects it | `TestExporterDetectsParquetTampering` | Pass |
-| bbolt V2→V3 migration stops at any of 39 deterministic mutation/commit boundaries | The transaction leaves schema V2, all eight legacy routes, and the absence of the deployments bucket unchanged; a later open retries fully to V3 | `TestDeploymentMigrationSurvivesEveryInjectedKillPoint` | Pass |
+| bbolt metadata is newer than this binary | Open rejects it without mutating the database | `TestMetadataNewerSchemaIsRejectedWithoutMutation` | Pass |
 | Master Key rotation stops at any of nine snapshot/rewrite/DB publication/key publication/bridge cleanup boundaries | Rerunning with the same replacement key finishes the protocol; Credential plaintext and Audit chain remain exact, Admin sessions are invalidated, retired ciphertext/bridge bytes are absent after compacted cleanup | `TestMasterKeyRotationRecoversFromEveryPublicationKillPoint` | Pass |
 | 100 Ledger appends overlap the backup snapshot | Snapshot contains an fsynced complete prefix only; archive verification and restore reproduce exactly the manifest watermark, while the rollback directory retains the full live suffix | `TestSnapshotIsExactDuringOneHundredConcurrentAppends`, `TestBackupRestoreMatchesManifestDuringOneHundredConcurrentLedgerWrites` | Pass |
 | Reference host recovers a 10 GiB WAL | Startup verifies every frame, then full State replay reaches the exact final watermark; measured published bound is 68.578 seconds with 12.1 MB HeapAlloc for the near-1-MiB-frame profile | `TestTenGiBWALRecoveryProfile` (opt-in) | Pass with published bound |
 | Backup is truncated/tampered | AEAD final record/checksum verification rejects it | `TestEncryptedBackupRejectsTamperAndTruncation` | Pass |
-| Restore confirmation is wrong | Live directory remains untouched | restore integration test | Pass |
+| Restore confirmation is wrong | Live directory remains untouched | `TestRestoreValidatesStagesAtomicallyAndPreservesRollbackDirectory` | Pass |
 | Restore succeeds | Staged Vault/WAL/Audit/Usage validate, atomic switch succeeds, old directory remains | `TestRestoreValidatesStagesAtomicallyAndPreservesRollbackDirectory` | Pass |
 
 Operator recovery policy:

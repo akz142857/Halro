@@ -37,6 +37,18 @@ func (r *Runtime) adminDashboard(writer http.ResponseWriter, request *http.Reque
 	// The same interval the response advertises in time_context, so the totals
 	// and the window they claim to cover cannot disagree.
 	dashboard := r.usage.Dashboard(now, usage.Period{Start: period.Start, End: period.End})
+	accountingStatus := r.status.Load()
+	draining := r.draining.Load()
+	activation := r.activation.status()
+	runtimeStatus := struct {
+		AcceptingTraffic bool             `json:"accepting_traffic"`
+		Draining         bool             `json:"draining"`
+		Activation       activationStatus `json:"activation"`
+	}{
+		AcceptingTraffic: accountingStatus == ledger.AccountingHealthy && !draining && !activation.Stale,
+		Draining:         draining,
+		Activation:       activation,
+	}
 	governance, labels, err := r.dashboardGovernance(request, now, period)
 	if err != nil {
 		adminStoreError(writer)
@@ -47,7 +59,8 @@ func (r *Runtime) adminDashboard(writer http.ResponseWriter, request *http.Reque
 		"first_value_reached": r.usage.Metrics().RequestsSuccess > 0,
 		"governance":          governance,
 		"resource_labels":     labels,
-		"accounting_status":   r.status.Load(),
+		"accounting_status":   accountingStatus,
+		"runtime":             runtimeStatus,
 		"wal":                 r.ledger.Stats(),
 		"write_path":          r.writePathSummary(),
 		"alerts":              r.alerts.Stats(),
@@ -304,7 +317,7 @@ func (r *Runtime) adminUsage(writer http.ResponseWriter, request *http.Request) 
 	}
 	allowed := map[string]struct{}{
 		"cursor": {}, "limit": {}, "project_id": {}, "provider_id": {}, "request_id": {},
-		"model": {}, "status": {}, "start": {}, "end": {},
+		"model": {}, "provider_model": {}, "status": {}, "start": {}, "end": {},
 	}
 	for name := range request.URL.Query() {
 		if _, exists := allowed[name]; !exists {
@@ -335,6 +348,7 @@ func (r *Runtime) adminUsage(writer http.ResponseWriter, request *http.Request) 
 		ProviderID:     request.URL.Query().Get("provider_id"),
 		RequestID:      request.URL.Query().Get("request_id"),
 		RequestedModel: request.URL.Query().Get("model"),
+		ProviderModel:  request.URL.Query().Get("provider_model"),
 		Status:         request.URL.Query().Get("status"),
 	}
 	if raw := request.URL.Query().Get("start"); raw != "" {

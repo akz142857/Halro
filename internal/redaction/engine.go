@@ -42,6 +42,11 @@ var mandatorySecretCategories = []string{
 	"aws_access_key", "bearer_token", "private_key",
 }
 
+// ErrPolicyUnavailable reports that a named policy is absent from the live
+// snapshot. It is deliberately not a MatchError: nothing matched, the rules
+// never ran, and treating it as a clean pass is the fail-open direction.
+var ErrPolicyUnavailable = errors.New("redaction policy is unavailable")
+
 type MatchError struct {
 	RuleID   string
 	Category string
@@ -427,7 +432,16 @@ func (e *Engine) processString(policyID, scope, value string) (string, error) {
 	}
 	policy, ok := e.policy(policyID)
 	if !ok {
-		return value, nil
+		// An empty ID means the Project has no policy, which is a decision. A
+		// named policy that is not in the live snapshot is not: returning the
+		// value untouched runs zero of that Project's rules while reporting
+		// success. The Gateway refuses such a Project up front; this is the
+		// same answer one layer down, for the window in which the snapshot is
+		// replaced mid-request.
+		if policyID == "" {
+			return value, nil
+		}
+		return value, ErrPolicyUnavailable
 	}
 	for _, rule := range policy.rules {
 		if !hasScope(rule.rule, scope) || !rule.matches(value) {
@@ -487,7 +501,16 @@ func (e *Engine) processToolFragment(policyID, scope, value string) (string, err
 	}
 	policy, ok := e.policy(policyID)
 	if !ok {
-		return value, nil
+		// An empty ID means the Project has no policy, which is a decision. A
+		// named policy that is not in the live snapshot is not: returning the
+		// value untouched runs zero of that Project's rules while reporting
+		// success. The Gateway refuses such a Project up front; this is the
+		// same answer one layer down, for the window in which the snapshot is
+		// replaced mid-request.
+		if policyID == "" {
+			return value, nil
+		}
+		return value, ErrPolicyUnavailable
 	}
 	for _, rule := range policy.rules {
 		if !hasScope(rule.rule, scope) || !rule.matches(value) {
