@@ -201,6 +201,7 @@ const (
 	withheldProviderModelRejected = "provider_model_rejected"
 	withheldPriceUnreadable       = "price_unreadable"
 	withheldTargetRejected        = "target_rejected"
+	withheldRegionMismatched      = "region_mismatched"
 )
 
 // Why a Provider, or one of its bindings, was left out of the load. Scoped wider
@@ -490,6 +491,24 @@ func loadProviderRegistryWithCatalog(
 			// referencing an ID with no record at all, which the store refuses.
 			// It is shared rather than duplicated because the alternative is two
 			// spellings of one rule, which is what a later change gets wrong.
+			// The Admin API refuses a Mantle deployment whose region disagrees
+			// with its provider endpoint, but a restore replaces the whole data
+			// directory rather than replaying that path, and an operator can
+			// move a provider's endpoint under a deployment that already
+			// exists. Answered here for the same reason the capability ceiling
+			// is: withhold the one route, keep loading the rest. A Bedrock
+			// project is region-scoped, so this deployment's catalog key and
+			// capability evidence describe a region no request can reach.
+			if instance, known := instanceByID[deployment.ProviderID]; known &&
+				instance.AccessSurface == domain.SurfaceBedrockMantle &&
+				deployment.Region != "" && deployment.Region != providerRegion(instance) {
+				report.Dangling = append(report.Dangling, referenceWithholding{
+					RouteID: route.ID, DeploymentID: deployment.ID,
+					ProviderID: deployment.ProviderID, BindingID: deployment.BindingID,
+					Reason: withheldRegionMismatched,
+				})
+				continue
+			}
 			review := reviewForDeploymentWithCatalogState(instanceByID, deployment, catalog, catalogUnavailable)
 			if !capabilityReviewAdmitsTraffic(review.State) {
 				report.Drifted = append(report.Drifted, capabilityWithholding{

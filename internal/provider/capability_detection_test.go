@@ -149,3 +149,72 @@ func TestCapabilityDetectorUsesStructuredModerationAndRerankResults(t *testing.T
 		})
 	}
 }
+
+// The detection plan is derived from the adapter's capabilities, and it can
+// bill. For a profile whose ceiling the build fixes, that makes the ceiling the
+// bound on what a detection run may spend probes on — a plan may never contain
+// a probe for something the profile does not declare.
+//
+// Verified by inverting it: an adapter that declares embeddings — the shape of
+// the pre-Phase-0 bug, where a widened binding reached the adapter — makes this
+// fail on all three profiles, because the planner does add an embeddings probe.
+// (Reasoning has no probe of its own, so the Responses profile's missing
+// reasoning ceiling is not what this test can demonstrate.)
+func TestCapabilityDetectionPlanStaysInsideTheProfileCeiling(t *testing.T) {
+	for _, profileID := range []domain.ProviderProfileID{
+		domain.ProfileBedrockMantleOpenAIChat,
+		domain.ProfileBedrockMantleOpenAIResponses,
+		domain.ProfileBedrockMantleAnthropicMessages,
+	} {
+		manifest, ok := BuiltinProfile(profileID)
+		if !ok {
+			t.Fatalf("%s is not a registered profile", profileID)
+		}
+		ceiling := domain.DefaultProviderCapabilitiesForProfile(domain.ProviderBedrock, profileID)
+		bridge, err := NewLegacyAdapterBridge(
+			&bedrockCapabilityDetectorAdapter{resourceCapabilityDetectorAdapter{capabilities: capabilitiesFromDomain(ceiling)}},
+			manifest, nil,
+		)
+		if err != nil {
+			t.Fatalf("%s: %v", profileID, err)
+		}
+		plan, err := bridge.CapabilityDetectionPlan(ModelCapabilityDetectionTarget{
+			RiskTier: "safe_automatic", ProviderModel: "model", BindingID: "binding_1", ProfileID: profileID,
+		})
+		if err != nil {
+			t.Fatalf("%s: %v", profileID, err)
+		}
+		declared := map[string]bool{
+			"chat": ceiling.Chat, "streaming": ceiling.Streaming, "stream_usage": ceiling.StreamUsage,
+			"tools": ceiling.Tools, "json_mode": ceiling.JSONMode, "developer_role": ceiling.DeveloperRole,
+			"vision": ceiling.Vision, "embeddings": ceiling.Embeddings, "reasoning": ceiling.Reasoning,
+			"moderations": ceiling.Moderations, "rerank": ceiling.Rerank,
+		}
+		for _, probe := range plan.Probes {
+			if !declared[probe.Capability] {
+				t.Fatalf("%s planned a billable probe for %q, which its ceiling does not declare", profileID, probe.Capability)
+			}
+		}
+	}
+}
+
+// The Mantle profiles are Bedrock profiles, and the bridge refuses an adapter
+// whose provider type disagrees with the manifest.
+type bedrockCapabilityDetectorAdapter struct {
+	resourceCapabilityDetectorAdapter
+}
+
+func (*bedrockCapabilityDetectorAdapter) Type() string { return string(domain.ProviderBedrock) }
+
+func capabilitiesFromDomain(declared domain.ProviderCapabilities) Capabilities {
+	return Capabilities{
+		Chat: declared.Chat, Streaming: declared.Streaming, Embeddings: declared.Embeddings,
+		Tools: declared.Tools, Vision: declared.Vision, JSONMode: declared.JSONMode,
+		DeveloperRole: declared.DeveloperRole, Reasoning: declared.Reasoning,
+		StreamUsage: declared.StreamUsage, Moderations: declared.Moderations,
+		Images: declared.Images, Transcriptions: declared.Transcriptions, Speech: declared.Speech,
+		Files: declared.Files, Batches: declared.Batches, Rerank: declared.Rerank,
+		AsyncGenerate:    declared.AsyncGenerate,
+		MaxContextTokens: declared.MaxContextTokens, MaxOutputTokens: declared.MaxOutputTokens,
+	}
+}

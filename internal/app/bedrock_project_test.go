@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -240,4 +241,86 @@ type recordingTransport func(*http.Request) (*http.Response, error)
 
 func (transport recordingTransport) RoundTrip(request *http.Request) (*http.Response, error) {
 	return transport(request)
+}
+
+// A Bedrock Project ID is an account-scoped resource identifier. It is not a
+// secret, but it identifies a customer's internal structure, so it belongs in
+// exactly two places: the stored provider record and the outbound request
+// header. The Admin API returns it because the operator who set it has to be
+// able to read it back; logs, error bodies, metrics and audit records must not.
+func TestBedrockProjectIDStaysOutOfLogsErrorsMetricsAndAudit(t *testing.T) {
+	cfg := testConfig(t)
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := BootstrapAdmin(context.Background(), cfg, "admin", []byte(stepUpTestPassword)); err != nil {
+		t.Fatal(err)
+	}
+	logs := &strings.Builder{}
+	runtime, err := Open(context.Background(), cfg, slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	cookie, csrf := loginAdminForTest(t, runtime)
+	endpoint := "https://bedrock-mantle.us-east-1.api.aws"
+	const projectID = "proj_secretstructure"
+
+	credentialResponse := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost, "/admin/api/v1/credentials", "", map[string]any{
+		"name": "Mantle API key", "type": "bedrock", "base_url": endpoint, "secret": "bedrock-api-key",
+		"access_surface": domain.SurfaceBedrockMantle, "scheme": domain.CredentialBedrockAPIKey,
+	})
+	var credential struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(credentialResponse.Body.Bytes(), &credential); err != nil {
+		t.Fatal(err)
+	}
+	providerResponse := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost, "/admin/api/v1/providers", "", map[string]any{
+		"name": "mantle", "type": "bedrock", "base_url": endpoint,
+		"credential_id": credential.ID, "enabled": true,
+		"access_surface": domain.SurfaceBedrockMantle, "profile_id": domain.ProfileBedrockMantleOpenAIChat,
+		"credential_scheme":  domain.CredentialBedrockAPIKey,
+		"bedrock_project_id": projectID,
+	})
+	if providerResponse.Code != http.StatusCreated {
+		t.Fatalf("provider setup: status=%d body=%s", providerResponse.Code, providerResponse.Body.String())
+	}
+	// The operator who set it reads it back. This is the decision, recorded:
+	// Admin detail returns the value unmasked, because a masked value cannot be
+	// checked against the AWS console and the reader is already authenticated
+	// as an administrator of this instance.
+	if !strings.Contains(providerResponse.Body.String(), projectID) {
+		t.Fatal("the Admin API did not return the project the operator just set")
+	}
+
+	// A refusal must not quote it either.
+	refusal := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost, "/admin/api/v1/providers", "", map[string]any{
+		"name": "runtime", "type": "bedrock", "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+		"credential_id": credential.ID, "enabled": true,
+		"access_surface": domain.SurfaceBedrockRuntime, "profile_id": domain.ProfileBedrockConverseText,
+		"credential_scheme":  domain.CredentialAWSSigV4Explicit,
+		"bedrock_project_id": projectID,
+	})
+	if refusal.Code == http.StatusCreated {
+		t.Fatal("a Runtime provider accepted a project id")
+	}
+	if strings.Contains(refusal.Body.String(), projectID) {
+		t.Fatalf("the refusal quoted the project id: %s", refusal.Body.String())
+	}
+
+	metrics := httptest.NewRecorder()
+	runtime.metricsRouter().ServeHTTP(metrics, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if strings.Contains(metrics.Body.String(), projectID) {
+		t.Fatal("the project id reached Prometheus metrics")
+	}
+
+	audit := authenticatedAdminGet(t, runtime, cookie, "/admin/api/v1/audit")
+	if strings.Contains(audit.Body.String(), projectID) {
+		t.Fatalf("the project id reached the audit trail: %s", audit.Body.String())
+	}
+
+	if strings.Contains(logs.String(), projectID) {
+		t.Fatal("the project id was logged")
+	}
 }

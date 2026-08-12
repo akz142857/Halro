@@ -350,6 +350,35 @@ describe("ProvidersPage profile and credential bindings", () => {
     expect(screen.queryByRole("checkbox", { name: "向量嵌入" })).not.toBeInTheDocument();
   });
 
+  // Testing an Anthropic Messages provider issues a real inference call, while
+  // the other two Mantle implementations read model metadata. An operator
+  // cannot tell those apart from the button, so the form says so.
+  it("warns that connection tests are billable only on the Messages implementation", async () => {
+    const mantleCredential: Credential = {
+      id: "credential_mantle",
+      name: "Mantle",
+      type: "bedrock",
+      access_surface: "bedrock-mantle",
+      scheme: "aws.bedrock.api-key",
+      bound_base_url: "https://bedrock-mantle.us-east-1.api.aws:443",
+      secret_configured: true,
+      key_version: 1,
+      revision: 1,
+    };
+    vi.mocked(api.credentials).mockResolvedValue({ items: [mantleCredential], next_cursor: "" });
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
+    fireEvent.change(screen.getByLabelText("类型"), { target: { value: "bedrock" } });
+    const implementation = await screen.findByRole("combobox", { name: /^能力实现/ });
+
+    fireEvent.change(implementation, { target: { value: "bedrock.mantle.anthropic.messages.v1" } });
+    expect(screen.getByText("该实现的连接测试会产生费用")).toBeVisible();
+
+    fireEvent.change(implementation, { target: { value: "bedrock.mantle.openai.chat.v1" } });
+    expect(screen.queryByText("该实现的连接测试会产生费用")).not.toBeInTheDocument();
+  });
+
   // Converse text stays operator-declared. If the fixed list grew to cover it,
   // the check above would still pass while silently removing a real choice.
   it("keeps Bedrock Converse capabilities selectable", async () => {

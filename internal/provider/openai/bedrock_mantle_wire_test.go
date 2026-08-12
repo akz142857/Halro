@@ -12,6 +12,7 @@ import (
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/openaiapi"
 	"github.com/akz142857/Halro/internal/provider"
+	"github.com/akz142857/Halro/internal/semantic"
 )
 
 // The OpenAI-shaped profiles probe by reading one model's metadata. The
@@ -70,6 +71,42 @@ func TestBedrockMantleChatAuthenticationFailureIsNotRetryable(t *testing.T) {
 		}
 		if calls != 1 {
 			t.Fatalf("status %d was attempted %d times", status, calls)
+		}
+	}
+}
+
+// The streaming path has its own request builder and its own error handling.
+// An authentication failure there must be as terminal as on the non-stream
+// path, and must not be marked ambiguous when nothing was emitted — an
+// ambiguous failure is settled conservatively, as if the provider might have
+// done the work.
+func TestBedrockMantleChatStreamAuthenticationFailureIsTerminal(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: status,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"denied","type":"access_denied"}}`)),
+			}, nil
+		})}
+		adapter := newMantleChatAdapter(t, client)
+		emitted := 0
+		_, err := adapter.ChatStream(context.Background(), provider.ChatCall{
+			RequestID: "req_1", ProviderModel: "openai.gpt-test",
+			Request: openaiapi.ChatCompletionRequest{Model: "route", Messages: []openaiapi.Message{{Role: "user", Content: openaiapi.TextContent("hello")}}},
+		}, func(semantic.Event) error {
+			emitted++
+			return nil
+		})
+		var classified *provider.Error
+		if !errors.As(err, &classified) {
+			t.Fatalf("status %d was not classified: %v", status, err)
+		}
+		if classified.Class != provider.ErrorAuthentication || classified.Retryable || classified.Ambiguous {
+			t.Fatalf("status %d stream error: %#v", status, classified)
+		}
+		if emitted != 0 {
+			t.Fatalf("status %d emitted %d events before failing", status, emitted)
 		}
 	}
 }

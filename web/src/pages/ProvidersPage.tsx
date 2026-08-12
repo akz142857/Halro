@@ -568,9 +568,17 @@ function ProviderForm({
             </Field>
           )}
           {selectedSurface === "bedrock-mantle" && (
-            <Field label={t("providers.bedrockProject")} hint={t("providers.bedrockProjectHint")}>
-              <input value={bedrockProjectID} placeholder="default" onChange={(event) => setBedrockProjectID(event.target.value)} />
-            </Field>
+            <>
+              <Field label={t("providers.bedrockProject")} hint={t("providers.bedrockProjectHint")}>
+                <input value={bedrockProjectID} placeholder="default" onChange={(event) => setBedrockProjectID(event.target.value)} />
+              </Field>
+              {profileID === "bedrock.mantle.anthropic.messages.v1" && (
+                <div className="notice warning">
+                  <strong>{t("providers.billableProbe")}</strong>
+                  <span>{t("providers.billableProbeDescription")}</span>
+                </div>
+              )}
+            </>
           )}
             </div>
             <div className="provider-capabilities-group" aria-labelledby="provider-capabilities-title">

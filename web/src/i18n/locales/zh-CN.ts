@@ -851,6 +851,7 @@ export const zhCN = {
     newSecret: "新密钥（留空则只更新元数据）", providerSecret: "服务商密钥", awsCredentialJSON: "AWS 凭据 JSON", secretConfigured: "已配置的密钥永不回显",
     bedrockSurface: "Bedrock 访问面", bedrockSurfaceHint: "Runtime、Agent Runtime 与 Mantle 使用不同端点、凭据方案、配额池和服务商实例。", bedrockRuntime: "Bedrock Runtime · Converse", bedrockAgentRuntime: "Bedrock Agent Runtime · 重排", bedrockMantle: "Bedrock Mantle · OpenAI / Anthropic API",
     bedrockHint: "字段：access_key_id、secret_access_key、region；session_token 可选。区域必须匹配基础地址。", bedrockMantleHint: "粘贴 Bedrock API Key。Halro 将它绑定到准确的区域 Mantle 端点，且不会写入浏览器存储。", secretHint: "只通过 HTTPS 请求体发送，不写入浏览器存储",
+    billableProbe: "该实现的连接测试会产生费用", billableProbeDescription: "Anthropic Messages 没有免费的元数据接口，连接测试会发起一次真实推理调用（最多 1 个输出令牌）。另外两个 Mantle 实现读取模型元数据，不计费。",
     bedrockProject: "Bedrock Project ID", bedrockProjectHint: "留空使用账户的 default project。填写 AWS 的 `proj_` 开头 ID 可把该实例的全部请求归入指定 project；`wrkspc_` 开头的是 Claude Platform on AWS 的 workspace ID，不适用于此处。",
     bedrockProfileHint: "每个服务商实例只选择一种线协议；需要多个 Mantle 协议时，请分别创建实例。",
     openAIProfiles: { chat: "Chat Completions", media: "媒体与资源" },

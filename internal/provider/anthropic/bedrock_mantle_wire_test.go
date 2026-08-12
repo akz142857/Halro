@@ -3,11 +3,13 @@ package anthropic
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"testing"
 
+	"github.com/akz142857/Halro/internal/anthropicapi"
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/provider"
 )
@@ -105,4 +107,118 @@ func TestBedrockMantleMessagesRendersTheProjectAsAWorkspaceHeader(t *testing.T) 
 		adapter.Close()
 		server.Close()
 	}
+}
+
+// The Messages profile's own status matrix. It is not covered by the OpenAI
+// adapter's: this is a different classifier on a different envelope, and 401 or
+// 403 here decides the same thing — whether an expired key or an unusable
+// project quietly moves traffic to a standby deployment.
+func TestBedrockMantleMessagesClassifiesTheStatusMatrix(t *testing.T) {
+	for _, test := range []struct {
+		status    int
+		class     provider.ErrorClass
+		retryable bool
+	}{
+		{401, provider.ErrorAuthentication, false},
+		{403, provider.ErrorAuthentication, false},
+		{400, provider.ErrorBadRequest, false},
+		{429, provider.ErrorRateLimit, true},
+		{500, provider.ErrorProvider5xx, true},
+		{529, provider.ErrorProvider5xx, true},
+	} {
+		adapter := newMantleMessagesAdapter(t, func(writer http.ResponseWriter, _ *http.Request) {
+			writer.Header().Set("x-amzn-requestid", "aws-request-matrix")
+			writer.WriteHeader(test.status)
+			_, _ = writer.Write([]byte(`{"type":"error","error":{"type":"authentication_error","message":"denied"}}`))
+		}, "")
+		_, err := adapter.MessagesNative(context.Background(), mantleMessagesCall())
+		var classified *provider.Error
+		if !errors.As(err, &classified) {
+			t.Fatalf("status %d was not classified: %v", test.status, err)
+		}
+		if classified.Class != test.class || classified.Retryable != test.retryable {
+			t.Fatalf("status %d classified as %s retryable=%v", test.status, classified.Class, classified.Retryable)
+		}
+		if classified.ProviderRequestID != "aws-request-matrix" {
+			t.Fatalf("status %d lost the AWS request id: %q", test.status, classified.ProviderRequestID)
+		}
+	}
+}
+
+// The same failure on the streaming path. A stream that never emitted must not
+// be reported as ambiguous, or the gateway would settle it conservatively as if
+// the provider might have done the work.
+func TestBedrockMantleMessagesStreamAuthenticationFailureIsTerminal(t *testing.T) {
+	for _, status := range []int{401, 403} {
+		adapter := newMantleMessagesAdapter(t, func(writer http.ResponseWriter, _ *http.Request) {
+			writer.WriteHeader(status)
+			_, _ = writer.Write([]byte(`{"type":"error","error":{"type":"authentication_error","message":"denied"}}`))
+		}, "")
+		emitted := 0
+		_, err := adapter.MessagesNativeStream(context.Background(), mantleMessagesCall(), func(anthropicapi.RawStreamEvent) error {
+			emitted++
+			return nil
+		})
+		var classified *provider.Error
+		if !errors.As(err, &classified) {
+			t.Fatalf("status %d was not classified: %v", status, err)
+		}
+		if classified.Class != provider.ErrorAuthentication || classified.Retryable || classified.Ambiguous {
+			t.Fatalf("status %d stream error: %#v", status, classified)
+		}
+		if emitted != 0 {
+			t.Fatalf("status %d emitted %d events before failing", status, emitted)
+		}
+	}
+}
+
+// A project that does not exist, is archived, or the key has no rights to,
+// answers 403. It must reach the same non-retryable authentication class as a
+// bad key: the operator has to fix the provider record either way, and a
+// fallback would hide that.
+func TestBedrockMantleMessagesTreatsAnUnusableProjectAsAuthenticationFailure(t *testing.T) {
+	adapter := newMantleMessagesAdapter(t, func(writer http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("anthropic-workspace") != "proj_archived" {
+			t.Errorf("the project was not addressed: %v", request.Header)
+		}
+		writer.WriteHeader(http.StatusForbidden)
+		_, _ = writer.Write([]byte(`{"type":"error","error":{"type":"permission_error","message":"workspace is archived"}}`))
+	}, "proj_archived")
+	_, err := adapter.MessagesNative(context.Background(), mantleMessagesCall())
+	var classified *provider.Error
+	if !errors.As(err, &classified) {
+		t.Fatalf("unclassified project failure: %v", err)
+	}
+	if classified.Class != provider.ErrorAuthentication || classified.Retryable {
+		t.Fatalf("project failure classified as %s retryable=%v", classified.Class, classified.Retryable)
+	}
+}
+
+func newMantleMessagesAdapter(t *testing.T, handler http.HandlerFunc, projectID string) *Adapter {
+	t.Helper()
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	endpoint, _ := url.Parse(server.URL)
+	authorizer, err := provider.NewStaticHeaderAuthorizer(domain.CredentialBedrockAPIKey, "x-api-key", "", []byte("bedrock-key"), "Authorization")
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := New(Options{
+		Endpoint: endpoint, Authorizer: authorizer, Client: server.Client(),
+		Capabilities:     provider.Capabilities{Chat: true, Streaming: true},
+		ProviderType:     string(domain.ProviderBedrock),
+		CredentialScheme: domain.CredentialBedrockAPIKey,
+		MessagesPath:     "anthropic/v1/messages",
+		BedrockProjectID: projectID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(adapter.Close)
+	return adapter
+}
+
+func mantleMessagesCall() provider.NativeMessageCall {
+	payload := []byte(`{"model":"public","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}`)
+	return provider.NativeMessageCall{RequestID: "req_1", ProviderModel: "anthropic.claude-test", Version: anthropicapi.SupportedVersion, Payload: payload}
 }

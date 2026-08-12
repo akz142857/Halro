@@ -31,6 +31,7 @@ Mantle 不是从零接入：三个 profile 已注册并接入适配器。但原�
 
 - **当前三个 v1 profile 继续只支持 Bedrock API key**，不把默认 AWS 凭据链塞进数据面。
 - **当前版本只承诺账户 default project**；在 Operator Guide 与发布说明中写清限制。
+  （Phase 2 之后此条放宽为：Provider 可显式指定一个 Bedrock Project，仍无请求级 project。）
 - 若要支持显式非 default project，第一版采用可选的 **Provider 级 `BedrockProjectID`**：一个
   Provider 对应一个 Bedrock Project，多 Provider 可以复用同一 Credential。暂不做
   Deployment 级多 Project。
@@ -462,6 +463,33 @@ Operator Guide、release notes、provider real matrix。
 
 未做：真实执行、以及执行后回填 real matrix 的证据行。
 
+### 验收补齐（Phase 0～2 的清单剩余项）—— 已完成
+
+前面几个 Phase 落地时，§2.2、§5.1、§6.1、§5.3、§3.2 的验收清单还有若干条没做完，
+现已逐条补上：
+
+- **§2.2 第 4 条**：`internal/provider` 断言三个 Mantle profile 的 detection plan 不会
+  包含 ceiling 之外的探测（反向验证：让适配器声明 embeddings —— 即 Phase 0 之前的
+  缺陷形状 —— 三个 profile 全部失败）；`internal/gateway` 断言越界请求在**任何
+  Provider I/O 之前**被 400 `unsupported_feature` 拒绝，且适配器调用数为零。
+  两条拒绝路径分别钉住：Responses 的 `reasoning_effort` 由 profile 字段清单拒绝，
+  图片输入由能力过滤器拒绝。
+- **§5.1**：Responses 与 Messages 两个适配器各自的 401/403 分类（此前只有 openai
+  形态有）；三条协议的 **stream 路径**认证失败均为终态、不可重试、`Ambiguous=false`
+  且未发出任何事件；**账本记录 `error_class=authentication` 且不含 Provider 错误正文**
+  （用 `budget.Manager.AddObserver` 捕获 ledger 记录后断言）。
+- **§6.1**：Mantle 状态矩阵（400/401/403/408/429/500/502/503/504）含 `Retry-After`
+  与 `x-amzn-requestid` 透传、错误正文不进 message；**非法/无权/已归档 project** 的
+  403 归入认证类；malformed body 与 `readLimited` 的 oversize 边界；
+  **Probe 计费语义写进控制台**（选中 Messages 实现时给出计费提示，另两个实现不提示，
+  有前端测试）与 Operator Guide。
+- **§5.3**：`create`/`update` 走同一条 `deploymentFromInput` 校验；**restore 与
+  endpoint 迁移**这条路补上 loader 侧兜底——region 不一致的 deployment 计入
+  `region_mismatched` 并被摘出候选，进程照常启动（反向验证过）。
+- **§3.2**：断言 `BedrockProjectID` 不进日志、错误正文、Prometheus、Audit；
+  并把"Admin detail 返回明文"这个决定写进测试注释——脱敏值无法与 AWS 控制台核对，
+  而读者已经是本实例的管理员。
+
 ### 后续独立任务
 
 - Mantle SigV4 新 profile 与威胁评审；
@@ -491,7 +519,8 @@ Operator Guide、release notes、provider real matrix。
 1. Mantle ceiling 修复通过；否则禁用三个 Mantle profile；
 2. `docs/adr/0007-bedrock-mantle-profiles.md` 与最终范围一致；
 3. `docs/milestones/release-notes-v1.0.0.md` 无条件披露 Mantle Beta 尚无真实账户证据；
-4. 已知限制明确 API-key only、default project only、手工凭据轮换；
+4. 已知限制明确 API-key only、Bedrock Project 为 Provider 级（无请求级 project）、
+   手工凭据轮换；
 5. 不把 fixture、SDK 文档或截图冒充真实账户证据。
 
 ---

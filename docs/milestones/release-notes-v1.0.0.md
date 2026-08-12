@@ -248,7 +248,10 @@ data-directory lock uses Unix `flock` semantics.
    available. A deployment's region must match its provider endpoint's region,
    because a Bedrock project is a region-scoped resource. A project that does
    not exist or has been archived fails at request time as an authentication
-   error, which is not retried and not failed over.
+   error, which is not retried and not failed over. Bedrock API keys expire —
+   short-term keys within hours — and Halro has no credential expiry field:
+   rotation is manual through `PUT /credentials/{id}`, and an expired key
+   surfaces only as upstream authentication failures.
 9. **Dynamic signed catalog is inactive in the current release build.** No
    production trust roots are compiled, so verification fails closed to the
    bundled catalog; `trust_root_count: 0` is expected and updates default off.
