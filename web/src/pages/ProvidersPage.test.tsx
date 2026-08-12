@@ -350,6 +350,41 @@ describe("ProvidersPage profile and credential bindings", () => {
     expect(screen.queryByRole("checkbox", { name: "向量嵌入" })).not.toBeInTheDocument();
   });
 
+  // The field shipped with its Chinese label set to the English string, so it
+  // rendered in a Latin face beside every other label in the form and read as a
+  // different component. Pinned by the label the operator actually sees.
+  it("labels the Bedrock project field in the active locale", async () => {
+    const mantleCredential: Credential = {
+      id: "credential_mantle",
+      name: "Mantle",
+      type: "bedrock",
+      access_surface: "bedrock-mantle",
+      scheme: "aws.bedrock.api-key",
+      bound_base_url: "https://bedrock-mantle.us-east-1.api.aws:443",
+      secret_configured: true,
+      key_version: 1,
+      revision: 1,
+    };
+    vi.mocked(api.credentials).mockResolvedValue({ items: [mantleCredential], next_cursor: "" });
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
+    fireEvent.change(screen.getByLabelText("类型"), { target: { value: "bedrock" } });
+    fireEvent.change(await screen.findByRole("combobox", { name: /^能力实现/ }), { target: { value: "bedrock.mantle.openai.chat.v1" } });
+
+    // The hint lives inside the same label element, so the accessible name is
+    // label plus hint; anchor on the label itself.
+    const project = screen.getByLabelText(/^Bedrock 项目（Project ID）/);
+    expect(project).toBeVisible();
+    expect(project).toHaveAttribute("placeholder", "默认项目");
+    // Same wrapper and class as every other field in this form, so the label,
+    // input and hint inherit one set of rules.
+    expect(project.closest("label")).toHaveClass("field");
+    expect(project.closest("label")?.parentElement).toBe(
+      screen.getByLabelText(/基础地址/).closest("label")?.parentElement,
+    );
+  });
+
   // Testing an Anthropic Messages provider issues a real inference call, while
   // the other two Mantle implementations read model metadata. An operator
   // cannot tell those apart from the button, so the form says so.
