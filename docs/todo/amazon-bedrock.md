@@ -1,6 +1,6 @@
 # Amazon Bedrock Mantle 接入评估与开发计划
 
-状态：Phase 0 已实现；Phase 1 待做；Phase 2 待产品裁决；Phase 3 待计费授权
+状态：Phase 0、Phase 1 已实现；Phase 2 待产品裁决；Phase 3 待计费授权
 日期：2026-08-12
 范围：`internal/domain`、`internal/provider/{bedrock,bedrockmantle,openai,anthropic}`、
 `internal/app`、`internal/gateway`、`internal/compatibility`、`internal/store`、`web`、
@@ -375,17 +375,41 @@ create、update、restore、catalog lookup 和 capability evidence 都必须执�
 越界能力既进不了 store，也进不了 registry，因此不会出现在 detection 计划里，也不会
 触发 Provider I/O。
 
-### Phase 1：default project 口径与非计费验证
+### Phase 1：default project 口径与非计费验证 —— 已实现
 
-触及：ADR、Operator Guide、release notes、fixture tests、provider real matrix 文档。
+触及：`internal/app`、三个 provider 包、`internal/gateway`、ADR 0007、
+Operator Guide、release notes、provider real matrix。
 
-验收：
+代码：
 
-- 明确当前 API-key only、default project only、未经真实账户验证；
-- 三协议本地 fixture 覆盖正确 host/path/auth；
-- 401/403 no-fallback、Probe 计费语义、Region 一致性有契约测试。
+- Region 一致性落地为 `validateBedrockMantleRegion`（`app/admin_deployments.go`）——
+  显式 Region 与 endpoint 派生 Region 不一致直接拒绝，留空仍从 endpoint 推导。
+  选的是等值校验而不是只读字段，运维仍可显式写出 region，只是不能写成另一个。
 
-粗估：1 天。
+契约测试（全部对 fake server，不产生费用）：
+
+- 三个 profile 的路径与认证头，外加**任何 project/workspace 头都不发**的断言
+  （`provider/openai`、`provider/bedrockmantle`、`provider/anthropic` 各自的 Mantle 用例）；
+- Probe 计费语义：OpenAI 形态读单个模型元数据，Anthropic Messages 发 `max_tokens=1`
+  的真实推理调用——两者对"测试连接要不要花钱"的答案不同，各自钉住；
+- 401/403 归 `ErrorAuthentication` 且不可重试，网关层不 fallback、备用 deployment
+  调用数为零、客户端稳定收到 `provider_authentication_error`
+  （`gateway/service_test.go`）；
+- Region 一致性：不匹配被拒、匹配与留空不被这条规则拦下（`app`）。
+
+文档口径（无条件，不依赖真实账户结果）：
+
+- ADR 0007 增补修订节：ceiling 此前并非真的不可变、Workspaces/Projects 是同一种资源
+  且头名按协议不同、`anthropic-workspace-id` 属于另一条产品线、Region 一致性；
+- release notes：Provider 表新增 Mantle 行；已知限制新增"Mantle 无真实账户证据"，
+  并改写原第 7 条（它写的"Admin 可以存超出上限的声明"在 Phase 0 之后不再成立）；
+- `docs/verification/provider-real-matrix.md`：明写三个 profile 在任何 commit 上都
+  没有真实证据，并列出被 fixture 钉住的是哪些事实；
+- `docs/guides/aws-surface-selection.md`：新增「当前边界」节——API key only、
+  default project only、Region 必须一致、能力集编译期固定。
+
+未做（留给后续任务，不属于本阶段）：真实 smoke harness 与 `tests/provider-matrix`
+的 Mantle 扩展，见 Phase 3。
 
 ### Phase 2：Provider 级显式 Project（产品批准后）
 

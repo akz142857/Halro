@@ -72,6 +72,10 @@ func TestBedrockMantleMessagesUsesNativePathAndAPIKey(t *testing.T) {
 		if request.URL.Path != "/anthropic/v1/messages" || request.Header.Get("x-api-key") != "bedrock-key" || request.Header.Get("Authorization") != "" || request.Header.Get("anthropic-version") != anthropicapi.SupportedVersion {
 			t.Errorf("unexpected Mantle request: %s %#v", request.URL.Path, request.Header)
 		}
+		// Halro addresses the account's default Bedrock project, so no resource
+		// header is sent. anthropic-workspace would select a non-default one;
+		// anthropic-workspace-id belongs to Claude Platform on AWS entirely.
+		assertNoBedrockResourceHeaders(t, request.Header)
 		var body map[string]json.RawMessage
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 			t.Error(err)

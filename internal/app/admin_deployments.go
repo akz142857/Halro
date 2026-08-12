@@ -533,6 +533,9 @@ func (r *Runtime) deploymentFromInput(request *http.Request, deploymentID string
 		return domain.Deployment{}, errors.New("deployment provider is unavailable")
 	}
 	model := strings.TrimSpace(input.ProviderModel)
+	if err := validateBedrockMantleRegion(instance, input); err != nil {
+		return domain.Deployment{}, err
+	}
 	region := deploymentRegion(instance, input)
 	var detected *domain.ModelCapabilityDetection
 	var resolution deploymentResolution
@@ -737,6 +740,34 @@ func deploymentTargetKind(providerType domain.ProviderType, surface domain.Acces
 	default:
 		return "", errors.New("deployment target kind is incompatible with provider or access surface")
 	}
+}
+
+// validateBedrockMantleRegion refuses a Mantle deployment whose declared region
+// disagrees with the one its provider endpoint points at.
+//
+// deploymentRegion lets an explicit region win, which on every other surface is
+// only a label mismatch. On Mantle it is not: the Bedrock Project a request is
+// associated with is a region-scoped resource (its ARN carries the region), and
+// model availability, quota and capability evidence are region-scoped with it.
+// A deployment claiming eu-west-1 against a us-east-1 endpoint therefore keys
+// the catalog and the evidence on a region no request will ever reach.
+//
+// Left as an equality check rather than making the field read-only, so an
+// operator can still state the region explicitly — they just cannot state a
+// different one.
+func validateBedrockMantleRegion(instance domain.ProviderInstance, input deploymentInput) error {
+	if instance.AccessSurface != domain.SurfaceBedrockMantle {
+		return nil
+	}
+	declared := strings.TrimSpace(input.Region)
+	if declared == "" {
+		return nil
+	}
+	endpointRegion := providerRegion(instance)
+	if endpointRegion == "" || declared != endpointRegion {
+		return errors.New("deployment region must match the Bedrock Mantle endpoint region")
+	}
+	return nil
 }
 
 // deploymentRegion is the region the deployment runs in, taken from the request

@@ -21,6 +21,9 @@ func TestBedrockMantleChatUsesBearerAPIKeyAndOpenAIPath(t *testing.T) {
 		if request.URL.String() != "https://bedrock-mantle.us-east-1.api.aws/v1/chat/completions" || request.Header.Get("Authorization") != "Bearer bedrock-key" || request.Header.Get("x-api-key") != "" {
 			t.Fatalf("unexpected Mantle request: %s %#v", request.URL, request.Header)
 		}
+		// Halro addresses the account's default Bedrock project, so OpenAI-Project
+		// is never sent. anthropic-workspace-id belongs to a different AWS service.
+		assertNoBedrockResourceHeaders(t, request.Header)
 		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"id":"chatcmpl_1","object":"chat.completion","created":1,"model":"amazon.nova-pro","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`)), Request: request}, nil
 	})}
 	endpoint, _ := url.Parse("https://bedrock-mantle.us-east-1.api.aws")

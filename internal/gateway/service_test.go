@@ -1618,3 +1618,36 @@ func TestInterruptedStreamIsBilledForWhatItDelivered(t *testing.T) {
 // stamps onto events. Balances are keyed by it, so a lookup that omitted it
 // would read an empty balance and quietly assert nothing.
 const testTimezoneVersion = 1
+
+// An expired or wrong-project Bedrock API key answers 401 or 403, which every
+// adapter classifies as ErrorAuthentication with Retryable false. That must
+// stop the request rather than move it to a standby deployment: falling back
+// would hide a credential the operator has to rotate, and spend the fallback's
+// budget doing it.
+func TestChatDoesNotFallbackForProviderAuthenticationFailure(t *testing.T) {
+	for _, status := range []int{401, 403} {
+		f := newFixture(t, 10_000)
+		f.adapter.err = &provider.Error{
+			Class: provider.ErrorAuthentication, StatusCode: status, Retryable: false, Message: "denied",
+		}
+		fallback := &fakeAdapter{response: f.adapter.response}
+		if err := f.registry.Register(provider.Target{
+			ID: "target_2", DeploymentID: "dep_target_2", PublicModel: "chat", ProviderModel: "provider-model",
+			Adapter: fallback, Priority: 1,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		_, err := f.service.Chat(context.Background(), f.plaintext, chatRequest())
+		var classified *Error
+		if !errors.As(err, &classified) {
+			t.Fatalf("status %d produced an unclassified error: %v", status, err)
+		}
+		if classified.Code != "provider_authentication_error" {
+			t.Fatalf("status %d surfaced as %q", status, classified.Code)
+		}
+		if f.adapter.calls != 1 || fallback.calls != 0 {
+			t.Fatalf("status %d primary_calls=%d fallback_calls=%d", status, f.adapter.calls, fallback.calls)
+		}
+		f.close()
+	}
+}

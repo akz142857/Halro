@@ -58,3 +58,45 @@ Phase 1C does not implement Mantle Models as a public Gateway endpoint,
 stateful Responses, Workspaces/Projects, hosted tools, `count_tokens`, API-key
 generation, or quota discovery. Those require separate ownership and operator
 contracts.
+
+## Amendment, 2026-08-12: what "immutable profile" and "no Projects" mean
+
+Two things this ADR asserted were not true of the code, and one term it used
+turned out to name a different AWS product. Recorded here rather than rewritten
+above, so the correction is visible.
+
+**The profiles were not immutable in practice.** The list of profiles whose
+capability set the build fixes lived only in the Admin handler, and the three
+Mantle profiles were absent from it. A stored binding could therefore claim
+capabilities the profile does not serve, and the loader passed the binding's
+capabilities straight to the adapter. The list is now
+`domain.IsImmutableCapabilityProfile`, checked in `ProviderProfileBinding`
+validation — which every write into the store crosses — and again by the
+registry loader, which withholds an over-ceiling record from routing instead of
+refusing the load.
+
+**Workspaces and Projects are one Bedrock resource, and the header names differ
+per protocol.** AWS documents Workspaces (Anthropic-compatible) and Projects
+(OpenAI-compatible) as the same underlying project resource, selected by
+`anthropic-workspace` on `/anthropic/v1/messages` and by `OpenAI-Project` on
+the OpenAI-shaped paths. `anthropic-workspace-id` belongs to Claude Platform on
+AWS — a different service on `aws-external-anthropic.<region>.api.aws` — and
+must never be sent to Mantle.
+
+Halro sends neither project header. Each AWS account has a default project and
+a request that omits the header is associated with it, so the profiles are
+usable, and reachable only for that default project. That is a product limit
+stated in the release notes, not an oversight: addressing a non-default project
+needs a durable, typed provider-level field and is deferred to its own change.
+
+**A deployment's region must match its provider endpoint's region.** A Bedrock
+project is region-scoped — the region is in its ARN — so a declared region that
+disagrees with the endpoint keys the catalog and the capability evidence on a
+region no request can reach. The Admin API refuses that combination on Mantle
+rather than letting the explicit value win.
+
+The wire contract in the Decision section — three paths, two credential header
+shapes, `store:false` — is pinned by contract tests against fake servers, and
+those tests also assert that no project or workspace header is sent. None of it
+has been verified against a real Bedrock Mantle account; see
+`docs/verification/provider-real-matrix.md`.

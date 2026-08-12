@@ -63,6 +63,14 @@ func TestResponsesAdapterUsesMantleWireAndDisablesStorage(t *testing.T) {
 		if request.Header.Get("Authorization") != "Bearer bedrock-key" || request.Header.Get("x-api-key") != "" {
 			t.Fatalf("unexpected authorization headers: %#v", request.Header)
 		}
+		// Halro addresses the account's default Bedrock project, so OpenAI-Project
+		// is never sent. anthropic-workspace-id belongs to Claude Platform on AWS,
+		// a different service on a different host, and must never appear here.
+		for _, name := range []string{"OpenAI-Project", "OpenAI-Organization", "anthropic-workspace", "anthropic-workspace-id"} {
+			if value := request.Header.Get(name); value != "" {
+				t.Fatalf("%s was sent while Halro only supports the account default project: %q", name, value)
+			}
+		}
 		var payload map[string]json.RawMessage
 		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
 			t.Fatal(err)

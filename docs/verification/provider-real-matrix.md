@@ -118,3 +118,35 @@ published catalog has been configured. Those are explicit production
 activation gates in `docs/runbooks/model-catalog-publishing.md`; dynamic updates
 must remain disabled until they are evidenced for the target repository and
 release.
+
+## AWS Bedrock Mantle: no real-account evidence (2026-08-12)
+
+The three Bedrock Mantle profiles — `bedrock.mantle.openai.chat.v1`,
+`bedrock.mantle.openai.responses.v1`, `bedrock.mantle.anthropic.messages.v1` —
+have **no real-account evidence at any commit**. The matrix runner does not
+cover them, no `HALRO_MATRIX_BEDROCK_MANTLE_...` prefix exists, and no request
+from this build has reached a real Bedrock Mantle endpoint.
+
+What is pinned instead, entirely against fake servers:
+
+- request paths `/v1/chat/completions`, `/v1/responses`, `/anthropic/v1/messages`;
+- credential rendering: bearer `Authorization` on the OpenAI-shaped profiles,
+  `x-api-key` on the Anthropic Messages profile, with the other credential
+  headers explicitly cleared;
+- `anthropic-version` pinned on the Messages profile, `store:false` on Responses;
+- no project or workspace header on any profile, so requests are associated with
+  the account's default Bedrock project;
+- 401 and 403 classified as authentication failures that are neither retried nor
+  failed over to another deployment;
+- probe cost shape: the OpenAI-shaped profiles read one model's metadata, while
+  the Messages profile issues a real one-token inference call.
+
+These come from AWS documentation and this repository's code. They are contract
+tests, not evidence: they prove Halro sends what the documentation describes,
+not that the service accepts it.
+
+A real-account smoke, when it is authorised, must bind each result to
+`exact commit × region × profile × exact model × authentication × project mode`
+and must not generalise one model's capability result to a whole profile. Until
+then the release notes carry this as a known limitation, and any statement that
+Mantle "works" is a statement about fixtures.
