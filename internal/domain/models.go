@@ -348,9 +348,17 @@ func (b ProviderProfileBinding) Validate(providerID string, providerType Provide
 	// whose capabilities the build fixes must never be widened by a stored
 	// record, because everything downstream (capability detection plans, the
 	// data-plane preflight) reads the binding and believes it.
-	if !retired && IsImmutableCapabilityProfile(b.ProfileID) &&
-		!ProviderCapabilitiesSubset(b.Capabilities, DefaultProviderCapabilitiesForProfile(providerType, b.ProfileID)) {
-		return errors.New("provider profile binding capabilities exceed the immutable operation profile")
+	//
+	// Every profile is bounded here, not only the immutable ones. Bounding those
+	// alone left the bindings array as a way in: the provider-level ceiling runs
+	// against the capabilities field, and PutProvider then replaces that field
+	// with the summary of these bindings, so whatever a binding declared became
+	// the connection's capabilities without ever meeting a ceiling.
+	if !retired && !ProviderCapabilitiesSubset(b.Capabilities, MaxProviderCapabilitiesForProfile(providerType, b.ProfileID)) {
+		if IsImmutableCapabilityProfile(b.ProfileID) {
+			return errors.New("provider profile binding capabilities exceed the immutable operation profile")
+		}
+		return errors.New("provider profile binding capabilities exceed what this profile can serve")
 	}
 	if err := b.CapabilityEvidence.Validate(b.Capabilities); err != nil {
 		return err
