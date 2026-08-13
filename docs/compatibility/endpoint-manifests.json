@@ -1054,11 +1054,16 @@
       "resource identifiers are opaque Halro identifiers scoped to one project"
     ],
     "provider_profiles": [
-      "openai.media-resources.v1"
+      "openai.media-resources.v1",
+      "anthropic.messages.2023-06-01"
     ],
     "profile_coverage": [
       {
         "profile_id": "openai.media-resources.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "anthropic.messages.2023-06-01",
         "status": "experimental"
       }
     ]
@@ -1101,11 +1106,16 @@
       "resource identifiers are opaque Halro identifiers scoped to one project"
     ],
     "provider_profiles": [
-      "openai.media-resources.v1"
+      "openai.media-resources.v1",
+      "anthropic.messages.2023-06-01"
     ],
     "profile_coverage": [
       {
         "profile_id": "openai.media-resources.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "anthropic.messages.2023-06-01",
         "status": "experimental"
       }
     ]
@@ -1141,11 +1151,16 @@
       "resource identifiers are opaque Halro identifiers scoped to one project"
     ],
     "provider_profiles": [
-      "openai.media-resources.v1"
+      "openai.media-resources.v1",
+      "anthropic.messages.2023-06-01"
     ],
     "profile_coverage": [
       {
         "profile_id": "openai.media-resources.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "anthropic.messages.2023-06-01",
         "status": "experimental"
       }
     ]
@@ -1183,11 +1198,16 @@
       "resource identifiers are opaque Halro identifiers scoped to one project"
     ],
     "provider_profiles": [
-      "openai.media-resources.v1"
+      "openai.media-resources.v1",
+      "anthropic.messages.2023-06-01"
     ],
     "profile_coverage": [
       {
         "profile_id": "openai.media-resources.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "anthropic.messages.2023-06-01",
         "status": "experimental"
       }
     ]
@@ -1238,14 +1258,23 @@
     "status": "experimental",
     "documented_deviations": [
       "unknown fields and unsupported profile fields are rejected before provider I/O",
-      "resource identifiers are opaque Halro identifiers scoped to one project"
+      "resource identifiers are opaque Halro identifiers scoped to one project",
+      "a batch served by the Anthropic profile has its requests carried inline: the input file is stored by Halro and never uploaded, so its identifier names a Halro object rather than one the upstream also holds",
+      "results collected from a provider that does not return them as a file are bounded by the gateway's response ceiling; a batch whose results exceed it is reported as undeliverable rather than truncated",
+      "completion_window is honoured only where the provider has one; the Anthropic profile expires a batch 24 hours after creation and accepts no other value",
+      "every line of the input is checked against the selected profile before the batch is created, because a batch is routed once for many requests; a line the profile cannot carry fails the batch and names itself"
     ],
     "provider_profiles": [
-      "openai.media-resources.v1"
+      "openai.media-resources.v1",
+      "anthropic.messages.2023-06-01"
     ],
     "profile_coverage": [
       {
         "profile_id": "openai.media-resources.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "anthropic.messages.2023-06-01",
         "status": "experimental"
       }
     ]
@@ -1293,14 +1322,22 @@
     "status": "experimental",
     "documented_deviations": [
       "unknown fields and unsupported profile fields are rejected before provider I/O",
-      "resource identifiers are opaque Halro identifiers scoped to one project"
+      "resource identifiers are opaque Halro identifiers scoped to one project",
+      "a batch served by the Anthropic profile has its requests carried inline: the input file is stored by Halro and never uploaded, so its identifier names a Halro object rather than one the upstream also holds",
+      "results collected from a provider that does not return them as a file are bounded by the gateway's response ceiling; a batch whose results exceed it is reported as undeliverable rather than truncated",
+      "completion_window is honoured only where the provider has one; the Anthropic profile expires a batch 24 hours after creation and accepts no other value"
     ],
     "provider_profiles": [
-      "openai.media-resources.v1"
+      "openai.media-resources.v1",
+      "anthropic.messages.2023-06-01"
     ],
     "profile_coverage": [
       {
         "profile_id": "openai.media-resources.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "anthropic.messages.2023-06-01",
         "status": "experimental"
       }
     ]
@@ -1348,14 +1385,22 @@
     "status": "experimental",
     "documented_deviations": [
       "unknown fields and unsupported profile fields are rejected before provider I/O",
-      "resource identifiers are opaque Halro identifiers scoped to one project"
+      "resource identifiers are opaque Halro identifiers scoped to one project",
+      "a batch served by the Anthropic profile has its requests carried inline: the input file is stored by Halro and never uploaded, so its identifier names a Halro object rather than one the upstream also holds",
+      "results collected from a provider that does not return them as a file are bounded by the gateway's response ceiling; a batch whose results exceed it is reported as undeliverable rather than truncated",
+      "completion_window is honoured only where the provider has one; the Anthropic profile expires a batch 24 hours after creation and accepts no other value"
     ],
     "provider_profiles": [
-      "openai.media-resources.v1"
+      "openai.media-resources.v1",
+      "anthropic.messages.2023-06-01"
     ],
     "profile_coverage": [
       {
         "profile_id": "openai.media-resources.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "anthropic.messages.2023-06-01",
         "status": "experimental"
       }
     ]

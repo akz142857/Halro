@@ -1,6 +1,6 @@
 # Provider 适配缺口 — 待决与待建
 
-状态：**#0 已修；资源模型已定（ADR 0021）；#3 待写实施方案；#4 已决定不做；#1/#2 阻塞于凭据**
+状态：**#0 已修；资源模型已定（ADR 0021）；#3 代码完成待真实验证；#4 已决定不做；#1/#2/媒体证据阻塞于凭据；#3b 未排期**
 建立日期：2026-08-13
 来源：[`docs/review/260813`](../review/260813/README.md) 摸底的 #2、#4、#5、#6
 范围：`internal/provider/{anthropic,bedrock}`、`internal/compatibility`、`internal/gateway`、`docs/compatibility`
@@ -181,6 +181,39 @@ JSONL ↔ inline 转换、不需要把 `results_url` 落盘再伪装成 `output_
 
 ---
 
+## 未完成项总览（2026-08-13 收尾）
+
+按"卡在什么上"分类，而不是按优先级——优先级会变，阻塞条件不会。
+
+### 需要一次真实账号运行
+
+| 项 | 需要什么 | 为什么重要 |
+|---|---|---|
+| Anthropic 批处理端到端 | 已有的 Anthropic 密钥 | 五个切片全部只有假上游验证。同一天里假上游三次没拦住真实缺陷，见[批处理方案 §5](anthropic-batches-plan.zh-CN.md) |
+| 媒体资源 6 项中的 2 项 | 一把带 `api.files.write` 的 OpenAI 密钥，或把组织角色提到 Writer | 文件与批处理无任何真实证据；现有密钥是模型推理可用、资源写入被拒 |
+
+### 阻塞于手头没有的凭据
+
+| 项 | 需要什么 |
+|---|---|
+| Bedrock Converse 工具调用（#1） | Bedrock Runtime 的 SigV4 凭据。现有两把 AWS 凭据都是 Mantle，改了也无法验证 |
+| 非文本模态第二供应商（#2） | Azure OpenAI 凭据。最小方案是复用现有适配器的 azure 分支加一个 media-resources profile |
+
+### 未排期
+
+**Anthropic Files API（#3b）**。与批处理无依赖——Anthropic 的批处理不引用文件，本次实现里的"文件"是
+Halro 自持的本地对象。真正的 Files API 价值在 Messages 的文档/PDF 输入，需要 `files-api-2025-04-14`
+beta 头，并与既有的每连接 beta 令牌允许列表衔接。
+
+### 已关闭
+
+**Bedrock 固定模型 pin（#4）**：保持现状，理由见 §4。
+
+### 与本文无关但仍开着的
+
+`docs/todo/` 下另有三份早于本次工作的文档：`alert-delivery-design.md`、`dlp-upgrade-plan.zh-CN.md`
+（753 行，状态"提案待评审"）、`halro-ha-architecture.zh-CN.md`。它们不在这条链条里。
+
 ## 决策记录
 
 | 项 | 决定 | 状态 | 日期 |
@@ -188,6 +221,6 @@ JSONL ↔ inline 转换、不需要把 `results_url` 落盘再伪装成 `output_
 | 0. 批处理文件标识符未翻译 | 既有缺陷，与 Anthropic 无关；是 #3 的前置 | **已修** | 2026-08-13 |
 | 1. Converse 工具 | 阻塞：需要一份 Bedrock Runtime 的 SigV4 凭据才能验证，另需决定按 Profile 放宽还是按模型级能力证据 | **触发条件**：凭据到位 | 2026-08-13 |
 | 2. 第二供应商 | 阻塞：最小方案（Azure 语音/审核，复用现有适配器的 azure 分支 + 一个 media-resources Profile）需要 Azure OpenAI 凭据 | **触发条件**：凭据到位 | 2026-08-13 |
-| 3. Anthropic Batches | 形状决定已被四角色评审推翻；三条实施决定作废 | **待重做**，排在 #0 与资源模型决定之后 | 2026-08-13 |
+| 3. Anthropic Batches | 形状经 ADR 0021 定为 A；实施见 [批处理方案](anthropic-batches-plan.zh-CN.md)，切片 1–4 完成 | **实施中** | 2026-08-13 |
 | 3b. Anthropic Files | 与 Batches 无依赖关系，独立评估 | 未排期 | 2026-08-13 |
 | 4. Bedrock 模型 pin | **不做。** 放开 pin 但保留请求体形状，等于假设新模型沿用同一形状——Titan Embed、Titan Image、Nova Reel 的请求体各不相同，这在 Bedrock 上不成立。正确方向是每个模型族一个 Profile，现在就是这么做的；发版成本低于形状猜错的成本 | **已关闭** | 2026-08-13 |

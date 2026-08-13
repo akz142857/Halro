@@ -258,6 +258,15 @@ func BuiltinEndpointManifests() []EndpointCompatibilityManifest {
 func inferenceResourcesEndpointManifests() []EndpointCompatibilityManifest {
 	openAI := domain.ProfileOpenAIMediaResources
 	imageProfiles := []domain.ProviderProfileID{openAI, domain.ProfileBedrockInvokeTitanImageV2}
+	// Batching is a modality, not a provider's feature, so the endpoint lists
+	// every profile that can serve it and routing turns away the rest (ADR 0021).
+	// The two differ in where the work is described: OpenAI reads the requests
+	// from an uploaded file, Anthropic is handed them inline, and the caller
+	// sees neither.
+	batchProfiles := []domain.ProviderProfileID{openAI, domain.ProfileAnthropicMessages}
+	// The Anthropic profile serves files so a batch destined for it has an input
+	// to name. Halro keeps those bytes and the upstream never receives them.
+	fileProfiles := batchProfiles
 	makeManifest := func(id, method, path string, operation semantic.Operation, requestFields, responseFields []string, profiles []domain.ProviderProfileID, state string) EndpointCompatibilityManifest {
 		coverage := make([]ProfileCoverage, len(profiles))
 		for index, profileID := range profiles {
@@ -270,19 +279,29 @@ func inferenceResourcesEndpointManifests() []EndpointCompatibilityManifest {
 		makeManifest("openai.images.generations.v1", "POST", "/v1/images/generations", semantic.OperationImage, []string{"model", "prompt", "n", "quality", "response_format", "size", "style"}, []string{"created", "data", "data[].url", "data[].b64_json", "data[].revised_prompt"}, imageProfiles, "stateless"),
 		makeManifest("openai.audio.transcriptions.v1", "POST", "/v1/audio/transcriptions", semantic.OperationTranscribe, []string{"file", "model", "language", "prompt", "response_format", "temperature"}, []string{"text"}, []domain.ProviderProfileID{openAI}, "stateless"),
 		makeManifest("openai.audio.speech.v1", "POST", "/v1/audio/speech", semantic.OperationSynthesize, []string{"model", "input", "voice", "response_format", "speed"}, []string{"binary audio"}, []domain.ProviderProfileID{openAI}, "stateless"),
-		makeManifest("openai.files.create.v1", "POST", "/v1/files", semantic.OperationFile, []string{"file", "purpose", "Halro-Route"}, []string{"id", "object", "bytes", "created_at", "filename", "purpose", "status", "status_details"}, []domain.ProviderProfileID{openAI}, "project-owned resource with 30 day TTL"),
-		makeManifest("openai.files.get.v1", "GET", "/v1/files/{id}", semantic.OperationFile, []string{"id"}, []string{"id", "object", "bytes", "created_at", "filename", "purpose", "status", "status_details"}, []domain.ProviderProfileID{openAI}, "project-owned resource"),
-		makeManifest("openai.files.content.v1", "GET", "/v1/files/{id}/content", semantic.OperationFile, []string{"id"}, []string{"binary content"}, []domain.ProviderProfileID{openAI}, "content served from the private local object directory"),
-		makeManifest("openai.files.delete.v1", "DELETE", "/v1/files/{id}", semantic.OperationFile, []string{"id"}, []string{"id", "object", "deleted"}, []domain.ProviderProfileID{openAI}, "deletes upstream, metadata, and local content"),
-		makeManifest("openai.batches.create.v1", "POST", "/v1/batches", semantic.OperationBatch, []string{"input_file_id", "endpoint", "completion_window", "metadata"}, batchResponseFields(), []domain.ProviderProfileID{openAI}, "project-owned resource with 7 day TTL"),
-		makeManifest("openai.batches.get.v1", "GET", "/v1/batches/{id}", semantic.OperationBatch, []string{"id"}, batchResponseFields(), []domain.ProviderProfileID{openAI}, "project-owned resource"),
-		makeManifest("openai.batches.cancel.v1", "POST", "/v1/batches/{id}/cancel", semantic.OperationBatch, []string{"id"}, batchResponseFields(), []domain.ProviderProfileID{openAI}, "project-owned cancellable resource"),
+		makeManifest("openai.files.create.v1", "POST", "/v1/files", semantic.OperationFile, []string{"file", "purpose", "Halro-Route"}, []string{"id", "object", "bytes", "created_at", "filename", "purpose", "status", "status_details"}, fileProfiles, "project-owned resource with 30 day TTL"),
+		makeManifest("openai.files.get.v1", "GET", "/v1/files/{id}", semantic.OperationFile, []string{"id"}, []string{"id", "object", "bytes", "created_at", "filename", "purpose", "status", "status_details"}, fileProfiles, "project-owned resource"),
+		makeManifest("openai.files.content.v1", "GET", "/v1/files/{id}/content", semantic.OperationFile, []string{"id"}, []string{"binary content"}, fileProfiles, "content served from the private local object directory"),
+		makeManifest("openai.files.delete.v1", "DELETE", "/v1/files/{id}", semantic.OperationFile, []string{"id"}, []string{"id", "object", "deleted"}, fileProfiles, "deletes upstream, metadata, and local content"),
+		makeManifest("openai.batches.create.v1", "POST", "/v1/batches", semantic.OperationBatch, []string{"input_file_id", "endpoint", "completion_window", "metadata"}, batchResponseFields(), batchProfiles, "project-owned resource with 7 day TTL"),
+		makeManifest("openai.batches.get.v1", "GET", "/v1/batches/{id}", semantic.OperationBatch, []string{"id"}, batchResponseFields(), batchProfiles, "project-owned resource"),
+		makeManifest("openai.batches.cancel.v1", "POST", "/v1/batches/{id}/cancel", semantic.OperationBatch, []string{"id"}, batchResponseFields(), batchProfiles, "project-owned cancellable resource"),
 		makeManifest("halro.rerank.v1", "POST", "/v1/rerank", semantic.OperationRerank, []string{"model", "query", "documents", "top_n"}, []string{"results"}, []domain.ProviderProfileID{domain.ProfileBedrockAgentRerankCohere35}, "stateless Halro extension"),
 		makeManifest("halro.async.create.v1", "POST", "/v1/async/invocations", semantic.OperationAsyncGenerate, []string{"model", "prompt", "s3_output_uri", "duration_seconds", "dimension", "fps", "seed"}, asyncResponseFields(), []domain.ProviderProfileID{domain.ProfileBedrockAsyncNovaReel}, "project-owned resource with 7 day TTL"),
 		makeManifest("halro.async.get.v1", "GET", "/v1/async/invocations/{id}", semantic.OperationAsyncGenerate, []string{"id"}, asyncResponseFields(), []domain.ProviderProfileID{domain.ProfileBedrockAsyncNovaReel}, "project-owned resource"),
 		makeManifest("halro.async.cancel.v1", "POST", "/v1/async/invocations/{id}/cancel", semantic.OperationAsyncGenerate, []string{"id"}, []string{"error"}, []domain.ProviderProfileID{domain.ProfileBedrockAsyncNovaReel}, "always fails closed because Bedrock has no cancellation operation"),
 	}
 	for index := range manifests {
+		if strings.HasPrefix(manifests[index].ID, "openai.batches.") {
+			manifests[index].DocumentedDeviations = append(manifests[index].DocumentedDeviations,
+				"a batch served by the Anthropic profile has its requests carried inline: the input file is stored by Halro and never uploaded, so its identifier names a Halro object rather than one the upstream also holds",
+				"results collected from a provider that does not return them as a file are bounded by the gateway's response ceiling; a batch whose results exceed it is reported as undeliverable rather than truncated",
+				"completion_window is honoured only where the provider has one; the Anthropic profile expires a batch 24 hours after creation and accepts no other value")
+		}
+		if manifests[index].ID == "openai.batches.create.v1" {
+			manifests[index].DocumentedDeviations = append(manifests[index].DocumentedDeviations,
+				"every line of the input is checked against the selected profile before the batch is created, because a batch is routed once for many requests; a line the profile cannot carry fails the batch and names itself")
+		}
 		if manifests[index].ID == "openai.images.generations.v1" {
 			manifests[index].RejectedRequestFields = []string{"user"}
 			manifests[index].DocumentedDeviations = append(manifests[index].DocumentedDeviations, "the OpenAI user field is not accepted by this experimental tier")

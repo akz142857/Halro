@@ -1,6 +1,6 @@
 # Anthropic Message Batches 实施方案
 
-状态：**切片 1 已完成**；切片 2 判据经三角色评审后重定，待实施
+状态：**五个切片全部完成**；**尚未做过真实账号端到端验证**，见 §5
 建立日期：2026-08-13
 决定依据：[ADR 0021](../adr/0021-provider-resource-upstream-twin.md)（Accepted）
 评审依据：[`docs/review/260813/batch-design-review.zh-CN.md`](../review/260813/batch-design-review.zh-CN.md)
@@ -86,9 +86,9 @@ JSON，没有跨片段的滚动窗口问题。
 |---|---|---|
 | 1 | 资源模型不再假设上游孪生 | ✅ 已完成（`12bb3e0`） |
 | 2 | Anthropic profile 声明 files 与 batches，files 走本地独有 Primitive | ✅ 已完成 |
-| 3 | Anthropic 适配器的批处理原语 | 待 |
-| 4 | 结果落盘（惰性拉取 + 逐行 `ProcessJSON` + 32 MiB 界 + 幂等短路） | 待 |
-| 5 | 契约与 manifest | 待 |
+| 3 | Anthropic 适配器的批处理原语 | ✅ 已完成 |
+| 4 | 结果落盘（惰性拉取 + 逐行 `ProcessJSON` + 32 MiB 界 + 幂等短路） | ✅ 已完成 |
+| 5 | 契约与 manifest | ✅ 已完成 |
 
 ### 2.1 本地独有文件模式的判据：三角色评审后重定（2026-08-13）
 
@@ -228,6 +228,30 @@ native mode"）。该行按 `errored` 处理并说明原因，而不是让整批
 - 每个切片各自的单元与契约测试
 - 反向验证：每处修复退回旧行为，确认对应测试变红
 - 真实账号：Anthropic 凭据已在手且今日验证过（7/7），切片 2、3 完成后跑一次端到端批处理
+
+## 5. 唯一的未完成项：真实账号端到端验证
+
+五个切片的代码路径已经齐了，但**全部只有 fixture 与假上游验证**。这一天里假上游三次没能拦住真实缺陷：
+`max_output_tokens` 字段名读错、`capabilities` 里三个键根本不存在、`unsupported_parameter:max_tokens`。
+每一次都是测试与代码出自同一份假设，一起错、一起绿。
+
+因此这一项不是收尾，是这条链条真正的完成条件。
+
+**怎么跑**（凭据在手且今日验证过，7/7）：
+
+1. 控制台给 Anthropic Provider 勾上 Files 与 Batches 能力——**升级不会自动打开**（见 §2.5）
+2. 建一个指向该 Provider 的 Deployment 与 Route
+3. `POST /v1/files`（`Halro-Route: <别名>`，multipart，JSONL 内容）
+4. `POST /v1/batches`，`input_file_id` 用上一步返回的 id，`completion_window: "24h"`
+5. 轮询 `GET /v1/batches/{id}` 直到 `status` 变为 `completed`
+6. `GET /v1/files/{output_file_id}/content` 取结果
+
+**预期会撞上的地方**（都是从样例或文档推断、未经真实上游验证的）：
+
+- 批处理创建时 `params` 的完整形状是否被上游接受
+- `request_counts` 的字段名（文档写 `canceled`，注意不是 `cancelled`）
+- 结果文件每行的 `result.message` 是否能被 `DecodeMessage` 直接解析
+- 32 MiB 上限在真实结果规模下是否过窄
 
 ## 4. 明确不做的
 
