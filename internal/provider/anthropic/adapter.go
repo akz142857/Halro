@@ -436,6 +436,12 @@ func (adapter *Adapter) request(ctx context.Context, call provider.NativeMessage
 	// to see every header it covers, and the project header is chosen here
 	// rather than by the authorizer because addressing is not authentication.
 	request.Header.Set("anthropic-version", call.Version)
+	if len(call.Betas) > 0 {
+		// Tokens are validated against the connection's allowlist upstream of
+		// here, and the stored charset excludes commas and whitespace, so joining
+		// cannot smuggle an unaccepted token into the header.
+		request.Header.Set(anthropicapi.BetaHeader, strings.Join(call.Betas, ","))
+	}
 	request.Header.Set("content-type", "application/json")
 	if stream {
 		request.Header.Set("accept", "text/event-stream")
@@ -450,13 +456,31 @@ func (adapter *Adapter) request(ctx context.Context, call provider.NativeMessage
 	return request, nil
 }
 
+// preparePayload rewrites only the two fields Halro owns — the upstream model
+// identifier and the stream flag — directly on the caller's bytes. Decoding into
+// MessageRequest and re-marshalling would silently drop every field the struct
+// does not model, which is the difference between a native mode that pins a wire
+// profile and one that quietly re-authors the request on the way out. Values are
+// carried as RawMessage so only the top-level key order changes; nothing nested
+// is re-rendered.
 func preparePayload(call provider.NativeMessageCall, stream bool) ([]byte, error) {
-	request, err := anthropicapi.DecodeMessageRequest(bytes.NewReader(call.Payload))
+	if _, err := anthropicapi.DecodeMessageRequest(bytes.NewReader(call.Payload)); err != nil {
+		return nil, err
+	}
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(call.Payload, &root); err != nil {
+		return nil, err
+	}
+	model, err := json.Marshal(call.ProviderModel)
 	if err != nil {
 		return nil, err
 	}
-	request.Model, request.Stream, request.Raw = call.ProviderModel, stream, nil
-	return json.Marshal(request)
+	streamFlag, err := json.Marshal(stream)
+	if err != nil {
+		return nil, err
+	}
+	root["model"], root["stream"] = model, streamFlag
+	return json.Marshal(root)
 }
 
 func readLimited(reader io.Reader, limit int64) ([]byte, error) {

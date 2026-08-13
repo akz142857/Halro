@@ -589,6 +589,7 @@ func loadProviderRegistryWithCatalog(
 			Strategy:               route.Strategy,
 			Capabilities:           capabilities,
 			CapabilityEvidence:     deploymentByID[deploymentID].CapabilityEvidence.Clone(),
+			AllowedAnthropicBetas:  append([]string(nil), instanceByID[providerID].AllowedAnthropicBetas...),
 			MaxConcurrency:         providerLimits[providerID],
 			DeploymentConcurrency:  deploymentLimit,
 		}); err != nil {

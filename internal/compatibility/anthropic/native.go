@@ -17,7 +17,7 @@ func NewNativeSchemaRegistry() (*compatibility.NativeSchemaRegistry, error) {
 	for _, profileID := range []domain.ProviderProfileID{domain.ProfileAnthropicMessages, domain.ProfileBedrockMantleAnthropicMessages} {
 		schemas = append(schemas, compatibility.NativeSchema{
 			ProfileID: profileID, SchemaRevision: 1,
-			AllowedHeaders: []string{anthropicapi.VersionHeader}, MaxPayloadBytes: anthropicapi.MaxRequestBytes, MaxEventBytes: semantic.MaxEncodedEventBytes,
+			AllowedHeaders: []string{anthropicapi.VersionHeader, anthropicapi.BetaHeader}, MaxPayloadBytes: anthropicapi.MaxRequestBytes, MaxEventBytes: semantic.MaxEncodedEventBytes,
 			ValidatePayload: validateNativePayload, ExtractGovernance: extractNativeGovernance,
 		})
 	}
@@ -61,6 +61,10 @@ func extractNativeGovernance(kind compatibility.NativePayloadKind, payload json.
 	}
 	result.EstimatedOutputTokens = request.MaxTokens
 	result.Requirements = semantic.Requirements{Streaming: request.Stream, StreamUsage: request.Stream, Tools: len(request.Tools) > 0 || request.ToolChoice != nil, Reasoning: len(request.Thinking) > 0}
+	if request.OutputConfig != nil {
+		result.Requirements.Reasoning = result.Requirements.Reasoning || request.OutputConfig.Effort != ""
+		result.Requirements.StructuredJSON = len(request.OutputConfig.Format) > 0
+	}
 	for _, message := range request.Messages {
 		for _, block := range message.Content {
 			switch block.Type {

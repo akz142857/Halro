@@ -34,19 +34,20 @@ type credentialInput struct {
 }
 
 type providerInput struct {
-	Name             string                           `json:"name"`
-	Type             domain.ProviderType              `json:"type"`
-	BaseURL          string                           `json:"base_url"`
-	APIVersion       string                           `json:"api_version,omitempty"`
-	CredentialID     string                           `json:"credential_id"`
-	AccessSurface    domain.AccessSurface             `json:"access_surface,omitempty"`
-	ProfileID        domain.ProviderProfileID         `json:"profile_id,omitempty"`
-	CredentialScheme domain.CredentialScheme          `json:"credential_scheme,omitempty"`
-	BedrockProjectID string                           `json:"bedrock_project_id,omitempty"`
-	Capabilities     *domain.ProviderCapabilities     `json:"capabilities,omitempty"`
-	Bindings         *[]domain.ProviderProfileBinding `json:"bindings,omitempty"`
-	MaxConcurrency   int64                            `json:"max_concurrency"`
-	Enabled          bool                             `json:"enabled"`
+	Name                  string                           `json:"name"`
+	Type                  domain.ProviderType              `json:"type"`
+	BaseURL               string                           `json:"base_url"`
+	APIVersion            string                           `json:"api_version,omitempty"`
+	CredentialID          string                           `json:"credential_id"`
+	AccessSurface         domain.AccessSurface             `json:"access_surface,omitempty"`
+	ProfileID             domain.ProviderProfileID         `json:"profile_id,omitempty"`
+	CredentialScheme      domain.CredentialScheme          `json:"credential_scheme,omitempty"`
+	BedrockProjectID      string                           `json:"bedrock_project_id,omitempty"`
+	AllowedAnthropicBetas []string                         `json:"allowed_anthropic_betas,omitempty"`
+	Capabilities          *domain.ProviderCapabilities     `json:"capabilities,omitempty"`
+	Bindings              *[]domain.ProviderProfileBinding `json:"bindings,omitempty"`
+	MaxConcurrency        int64                            `json:"max_concurrency"`
+	Enabled               bool                             `json:"enabled"`
 }
 
 type routeInput struct {
@@ -1169,17 +1170,25 @@ func (r *Runtime) providerFromInput(
 			errors.New("bedrock project id is only valid on the Bedrock Mantle access surface"),
 		}
 	}
+	allowedBetas := domain.NormalizeAnthropicBetaTokens(input.AllowedAnthropicBetas)
+	if err := domain.ValidateAnthropicBetaTokens(allowedBetas); err != nil {
+		return domain.ProviderInstance{}, err
+	}
+	if len(allowedBetas) > 0 && profile.AccessSurface != domain.SurfaceAnthropic && profile.AccessSurface != domain.SurfaceBedrockMantle {
+		return domain.ProviderInstance{}, errors.New("anthropic beta tokens are only valid on an Anthropic-wire access surface")
+	}
 	instance := domain.ProviderInstance{
 		ID: id, Name: input.Name, Type: input.Type, BaseURL: input.BaseURL,
-		APIVersion:       strings.TrimSpace(input.APIVersion),
-		CredentialID:     input.CredentialID,
-		AccessSurface:    profile.AccessSurface,
-		ProfileID:        profile.ProfileID,
-		CredentialScheme: profile.CredentialScheme,
-		BedrockProjectID: bedrockProjectID,
-		AllowedHosts:     []string{strings.ToLower(endpoint.Hostname())},
-		MaxConcurrency:   input.MaxConcurrency,
-		Enabled:          input.Enabled, CreatedAt: createdAt, UpdatedAt: updatedAt,
+		APIVersion:            strings.TrimSpace(input.APIVersion),
+		CredentialID:          input.CredentialID,
+		AccessSurface:         profile.AccessSurface,
+		ProfileID:             profile.ProfileID,
+		CredentialScheme:      profile.CredentialScheme,
+		BedrockProjectID:      bedrockProjectID,
+		AllowedAnthropicBetas: allowedBetas,
+		AllowedHosts:          []string{strings.ToLower(endpoint.Hostname())},
+		MaxConcurrency:        input.MaxConcurrency,
+		Enabled:               input.Enabled, CreatedAt: createdAt, UpdatedAt: updatedAt,
 	}
 	if input.Capabilities == nil {
 		instance.Capabilities = domain.DefaultProviderCapabilitiesForProfile(input.Type, profile.ProfileID)

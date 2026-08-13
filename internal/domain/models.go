@@ -253,7 +253,18 @@ type ProviderInstance struct {
 	// keyed by (provider, profile) and cannot repeat, so it cannot carry a
 	// dimension an operator needs several of. Two projects are two providers,
 	// which may share one credential.
-	BedrockProjectID       string                   `json:"bedrock_project_id,omitempty"`
+	BedrockProjectID string `json:"bedrock_project_id,omitempty"`
+	// AllowedAnthropicBetas names the anthropic-beta tokens this connection may
+	// forward. Empty means none, which is also what every record written before
+	// this field existed means — no header is sent — so adding it needs no
+	// migration.
+	//
+	// It is an allowlist rather than a boolean because a beta token is a request
+	// for behaviour Halro has not modelled: some are inert additions, others move
+	// work upstream (code execution, MCP egress) or change what a response means.
+	// The operator names the ones they have accepted, per connection, rather than
+	// opening the whole beta surface at once.
+	AllowedAnthropicBetas  []string                 `json:"allowed_anthropic_betas,omitempty"`
 	AllowedHosts           []string                 `json:"allowed_hosts"`
 	Capabilities           ProviderCapabilities     `json:"capabilities"`
 	CapabilityEvidence     CapabilityEvidenceSet    `json:"capability_evidence"`
@@ -448,6 +459,14 @@ func (p ProviderInstance) Validate() error {
 	if err := ValidateBedrockProjectID(p.BedrockProjectID); err != nil {
 		problems = append(problems, err)
 	}
+	if err := ValidateAnthropicBetaTokens(p.AllowedAnthropicBetas); err != nil {
+		problems = append(problems, err)
+	}
+	if len(p.AllowedAnthropicBetas) > 0 && p.AccessSurface != SurfaceAnthropic && p.AccessSurface != SurfaceBedrockMantle {
+		// Every other surface has no such header, so a value here would be stored
+		// and never sent — a setting that silently does nothing.
+		problems = append(problems, errors.New("anthropic beta tokens are only valid on an Anthropic-wire access surface"))
+	}
 	if len(p.AllowedHosts) == 0 {
 		problems = append(problems, errors.New("provider allowed hosts must not be empty"))
 	}
@@ -541,7 +560,9 @@ func DefaultProviderCapabilities(providerType ProviderType) ProviderCapabilities
 			StreamUsage: true,
 		}
 	case ProviderAnthropic:
-		return ProviderCapabilities{Chat: true, Streaming: true, Tools: true, Vision: true, Reasoning: true, StreamUsage: true}
+		// JSONMode covers Anthropic's schema-backed structured outputs, which the
+		// Messages profile now carries through output_config.format.
+		return ProviderCapabilities{Chat: true, Streaming: true, Tools: true, Vision: true, JSONMode: true, Reasoning: true, StreamUsage: true}
 	case ProviderDeepSeek:
 		return ProviderCapabilities{
 			Chat: true, Streaming: true, Tools: true, JSONMode: true,

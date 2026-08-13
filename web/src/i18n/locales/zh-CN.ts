@@ -871,6 +871,7 @@ export const zhCN = {
     bedrockSurface: "Bedrock 访问面", bedrockSurfaceHint: "Runtime、Agent Runtime 与 Mantle 使用不同端点、凭据方案、配额池和服务商实例。", bedrockRuntime: "Bedrock Runtime · Converse", bedrockAgentRuntime: "Bedrock Agent Runtime · 重排", bedrockMantle: "Bedrock Mantle · OpenAI / Anthropic API",
     bedrockHint: "字段：access_key_id、secret_access_key、region；session_token 可选。区域必须匹配基础地址。", bedrockMantleHint: "粘贴 Bedrock API Key。Halro 将它绑定到准确的区域 Mantle 端点，且不会写入浏览器存储。", secretHint: "只通过 HTTPS 请求体发送，不写入浏览器存储",
     billableProbe: "该实现的连接测试会产生费用", billableProbeDescription: "Anthropic Messages 没有免费的元数据接口，连接测试会发起一次真实推理调用（最多 1 个输出令牌）。另外两个 Mantle 实现读取模型元数据，不计费。",
+    anthropicBetas: "Anthropic Beta 允许列表", anthropicBetasHint: "留空则拒绝所有 anthropic-beta 请求头。逗号分隔；只有列在这里的 token 会被转发，其余请求直接拒绝。Beta 功能可能把工作移到上游（代码执行、MCP 出站）或改变响应含义——逐个确认后再填。仅 native 模式生效。", anthropicBetasPlaceholder: "例如 context-management-2025-06-27, compact-2026-01-12",
     bedrockProject: "Bedrock 项目（Project ID）", bedrockProjectHint: "留空使用账户默认项目；填写 proj_ 开头的 ID 后，该实例的全部请求归入指定项目。wrkspc_ 开头的标识属于另一条产品线，此处不接受。", bedrockProjectPlaceholder: "默认项目",
     bedrockProfileHint: "每个服务商实例只选择一种线协议；需要多个 Mantle 协议时，请分别创建实例。",
     credentialExpiry: "到期时间（可选）",

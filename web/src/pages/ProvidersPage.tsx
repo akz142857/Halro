@@ -104,6 +104,14 @@ function bedrockCredentialConfig(surface: BedrockCredentialSurface) {
   return bedrockProfileConfig("bedrock.runtime.converse.text.v1");
 }
 
+// The anthropic-beta header is comma separated, so the form takes one comma
+// separated string and stores the token set. Splitting here (rather than asking
+// the operator for one row per token) keeps copy-paste from Anthropic's docs
+// working, which is how these values actually arrive.
+function parseBetaTokens(value: string): string[] {
+  return value.split(",").map((token) => token.trim()).filter(Boolean);
+}
+
 function isBedrockProfile(value: string): value is BedrockProfile {
   return bedrockProfiles.includes(value as BedrockProfile);
 }
@@ -563,6 +571,7 @@ function ProviderForm({
   const [baseURL, setBaseURL] = useState(current?.base_url ?? defaultBaseURL(initialType));
   const [apiVersion, setAPIVersion] = useState(current?.api_version ?? "");
   const [bedrockProjectID, setBedrockProjectID] = useState(current?.bedrock_project_id ?? "");
+  const [anthropicBetas, setAnthropicBetas] = useState((current?.allowed_anthropic_betas ?? []).join(", "));
   const [maxConcurrency, setMaxConcurrency] = useState(current?.max_concurrency ?? 0);
   const [enabled, setEnabled] = useState(current?.enabled ?? true);
   const [capabilities, setCapabilities] = useState<ProviderCapabilities>(current?.capabilities ?? defaultProviderCapabilities(initialType));
@@ -571,6 +580,7 @@ function ProviderForm({
   const visibleCapabilities = capabilityNames.filter((capability) => capabilities[capability]);
   const configurableCapabilities = capabilityNames.filter((capability) => capabilityCeiling[capability] || capabilities[capability]);
   const selectedSurface = type === "bedrock" ? bedrockProfileConfig(profileID).surface : undefined;
+  const supportsAnthropicBetas = type === "anthropic" || selectedSurface === "bedrock-mantle";
   const matchingCredentials = credentials.filter((credential) => credential.type === type && (!selectedSurface || credential.access_surface === selectedSurface));
   const [credentialID, setCredentialID] = useState(current?.credential_id ?? credentials.find((credential) => credential.type === initialType && (initialType !== "bedrock" || credential.access_surface === bedrockProfileConfig(initialProfile).surface))?.id ?? "");
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -608,6 +618,7 @@ function ProviderForm({
       } : {}),
       ...(type === "azure_openai" ? { api_version: apiVersion } : {}),
       credential_id: credentialID, capabilities, max_concurrency: maxConcurrency, enabled,
+      ...(supportsAnthropicBetas ? { allowed_anthropic_betas: parseBetaTokens(anthropicBetas) } : {}),
       };
       return current
         ? api.updateProvider(current.id, value, current.revision)
@@ -619,7 +630,7 @@ function ProviderForm({
       onClose();
     },
   });
-  const dirty = useDirty({ name, type, profileID, baseURL, apiVersion, bedrockProjectID, maxConcurrency, enabled, capabilities, credentialID });
+  const dirty = useDirty({ name, type, profileID, baseURL, apiVersion, bedrockProjectID, anthropicBetas, maxConcurrency, enabled, capabilities, credentialID });
   // The save button sits in a sticky footer while the form scrolls behind it,
   // so a rejection renders into the part of the modal the operator is not
   // looking at: the click appears to do nothing and they click again. Bring the
@@ -705,6 +716,11 @@ function ProviderForm({
           {type === "azure_openai" && (
             <Field label={t("providers.apiVersion")} hint={t("providers.apiVersionHint")}>
               <input value={apiVersion} onChange={(event) => setAPIVersion(event.target.value)} required />
+            </Field>
+          )}
+          {supportsAnthropicBetas && (
+            <Field label={t("providers.anthropicBetas")} hint={t("providers.anthropicBetasHint")} error={errors.anthropicBetas}>
+              <input value={anthropicBetas} placeholder={t("providers.anthropicBetasPlaceholder")} onChange={(event) => { setAnthropicBetas(event.target.value); setErrors((previous) => omitError(previous, "anthropicBetas")); }} />
             </Field>
           )}
           {selectedSurface === "bedrock-mantle" && (
@@ -831,7 +847,7 @@ function defaultProviderCapabilities(type: ProviderType, profileID: BedrockProfi
     if (type === "openai") return { ...chat, moderations: true, images: true, transcriptions: true, speech: true, files: true, batches: true };
     return chat;
   }
-  if (type === "anthropic") return { ...value, tools: true, vision: true, reasoning: true, stream_usage: true };
+  if (type === "anthropic") return { ...value, tools: true, vision: true, json_mode: true, reasoning: true, stream_usage: true };
   if (type === "deepseek") return { ...value, tools: true, json_mode: true, reasoning: true, stream_usage: true };
   if (type === "openai_compatible") return { ...value, embeddings: true };
   if (type === "gemini") return { ...value, embeddings: true, developer_role: true, stream_usage: false };

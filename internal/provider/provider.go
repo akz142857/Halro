@@ -110,6 +110,7 @@ type NativeMessageCall struct {
 	RequestID     string
 	ProviderModel string
 	Version       string
+	Betas         []string
 	Payload       []byte
 }
 
@@ -230,9 +231,14 @@ type Target struct {
 	Strategy               string
 	Capabilities           Capabilities
 	CapabilityEvidence     domain.CapabilityEvidenceSet
-	MaxConcurrency         int64
-	DeploymentConcurrency  int64
-	operations             OperationRegistry
+	// AllowedAnthropicBetas is the set of anthropic-beta tokens this connection
+	// may forward. Routing checks a request's tokens against it before any
+	// provider work, so an unaccepted beta fails closed rather than reaching the
+	// upstream and changing what the response means.
+	AllowedAnthropicBetas []string
+	MaxConcurrency        int64
+	DeploymentConcurrency int64
+	operations            OperationRegistry
 }
 
 type Registry struct {

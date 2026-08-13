@@ -148,3 +148,38 @@ func TestAnthropicHTTPErrorClassification(t *testing.T) {
 		t.Fatalf("unexpected error: %#v", err)
 	}
 }
+
+// This pins the fields that must survive to the provider and the two Halro
+// overrides on top of them.
+//
+// It does not, on its own, discriminate the surgical rewrite from the struct
+// round-trip it replaced: every field asserted here also survives the old path,
+// because Tool and ContentBlock carry their own Raw. The rewrite matters for
+// top-level fields the struct does not model, and today the decoder accepts
+// none — so this test starts discriminating only once output_config and betas
+// open that surface. Keeping it now means the regression is caught the moment
+// they do.
+func TestPreparePayloadRewritesOnlyModelAndStream(t *testing.T) {
+	payload := []byte(`{"model":"public-alias","max_tokens":10,"stream":false,` +
+		`"tools":[{"type":"computer_20251124","name":"computer","display_width_px":1024}],` +
+		`"metadata":{"user_id":"tenant-42"},` +
+		`"messages":[{"role":"user","content":[{"type":"text","text":"x","cache_control":{"type":"ephemeral"}}]}]}`)
+	out, err := preparePayload(provider.NativeMessageCall{Payload: payload, ProviderModel: "upstream-model"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`"display_width_px":1024`,
+		`"cache_control":{"type":"ephemeral"}`,
+		`"metadata":{"user_id":"tenant-42"}`,
+		`"model":"upstream-model"`,
+		`"stream":true`,
+	} {
+		if !strings.Contains(string(out), want) {
+			t.Fatalf("prepared payload lost %s: %s", want, out)
+		}
+	}
+	if strings.Contains(string(out), "public-alias") {
+		t.Fatalf("public alias leaked upstream: %s", out)
+	}
+}

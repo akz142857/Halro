@@ -47,11 +47,17 @@ type ResponsesService interface {
 	ResponsesStream(context.Context, string, openaiapi.ResponseRequest, func(openaiapi.ResponseStreamEvent) error) error
 }
 
+// The handler discovers Messages support with a comma-ok type assertion, so a
+// signature drift silently leaves h.messages nil and every /v1/messages request
+// answers 501 instead of failing the build. This assertion puts that failure
+// back at compile time, where it belongs.
+var _ MessagesService = (*gateway.Service)(nil)
+
 type MessagesService interface {
 	Messages(context.Context, string, anthropicapi.MessageRequest) (anthropicapi.Message, error)
 	MessagesStream(context.Context, string, anthropicapi.MessageRequest, func(anthropicapi.StreamEvent) error) error
-	MessagesNative(context.Context, string, string, anthropicapi.MessageRequest) (anthropicapi.Message, error)
-	MessagesNativeStream(context.Context, string, string, anthropicapi.MessageRequest, func(anthropicapi.RawStreamEvent) error) error
+	MessagesNative(context.Context, string, string, []string, anthropicapi.MessageRequest) (anthropicapi.Message, error)
+	MessagesNativeStream(context.Context, string, string, []string, anthropicapi.MessageRequest, func(anthropicapi.RawStreamEvent) error) error
 }
 
 func (h *Handler) Responses(writer http.ResponseWriter, request *http.Request) {
@@ -387,13 +393,22 @@ func (h *Handler) Messages(writer http.ResponseWriter, request *http.Request) {
 		writeAnthropicError(writer, http.StatusBadRequest, "invalid_request_error", "unsupported anthropic-version", requestID)
 		return
 	}
-	if strings.TrimSpace(request.Header.Get(anthropicapi.BetaHeader)) != "" {
-		writeAnthropicError(writer, http.StatusBadRequest, "invalid_request_error", "anthropic-beta is not supported by this profile", requestID)
-		return
-	}
 	mode, err := anthropicapi.ParseExecutionMode(request.Header.Get(anthropicapi.RouteModeHeader))
 	if err != nil {
 		writeAnthropicError(writer, http.StatusBadRequest, "invalid_request_error", err.Error(), requestID)
+		return
+	}
+	betas, err := anthropicapi.ParseBetaTokens(request.Header.Get(anthropicapi.BetaHeader))
+	if err != nil {
+		writeAnthropicError(writer, http.StatusBadRequest, "invalid_request_error", err.Error(), requestID)
+		return
+	}
+	if len(betas) > 0 && mode != anthropicapi.ModeNative {
+		// Portable mode re-authors the request through the canonical model. A
+		// beta token describes wire behaviour of the request as written, so
+		// forwarding one alongside a rewritten body would claim semantics Halro
+		// did not send.
+		writeAnthropicError(writer, http.StatusBadRequest, "invalid_request_error", "anthropic-beta requires Halro-Route-Mode: native", requestID)
 		return
 	}
 	key, ok := anthropicGatewayKey(request.Header)
@@ -418,7 +433,7 @@ func (h *Handler) Messages(writer http.ResponseWriter, request *http.Request) {
 		if decoded.Stream {
 			ctx, cancel := context.WithTimeout(request.Context(), h.streamTimeout)
 			defer cancel()
-			h.messagesNativeStream(writer, request.WithContext(ctx), key, version, decoded, requestID)
+			h.messagesNativeStream(writer, request.WithContext(ctx), key, version, betas, decoded, requestID)
 			return
 		}
 		ctx, cancel := context.WithTimeout(request.Context(), h.routeTimeout)
@@ -427,7 +442,7 @@ func (h *Handler) Messages(writer http.ResponseWriter, request *http.Request) {
 			writeAnthropicError(writer, http.StatusNotImplemented, "api_error", "Messages API is unavailable", requestID)
 			return
 		}
-		response, callErr := h.messages.MessagesNative(ctx, key, version, decoded)
+		response, callErr := h.messages.MessagesNative(ctx, key, version, betas, decoded)
 		if callErr != nil {
 			h.renderAnthropicGatewayError(writer, callErr, requestID)
 			return
@@ -459,7 +474,7 @@ func (h *Handler) Messages(writer http.ResponseWriter, request *http.Request) {
 	_ = json.NewEncoder(writer).Encode(response)
 }
 
-func (h *Handler) messagesNativeStream(writer http.ResponseWriter, request *http.Request, key, version string, decoded anthropicapi.MessageRequest, requestID string) {
+func (h *Handler) messagesNativeStream(writer http.ResponseWriter, request *http.Request, key, version string, betas []string, decoded anthropicapi.MessageRequest, requestID string) {
 	flusher, ok := writer.(http.Flusher)
 	if !ok {
 		writeAnthropicError(writer, http.StatusInternalServerError, "api_error", "response streaming is unavailable", requestID)
@@ -482,7 +497,7 @@ func (h *Handler) messagesNativeStream(writer http.ResponseWriter, request *http
 		writer.WriteHeader(http.StatusOK)
 		started = true
 	}
-	err := h.messages.MessagesNativeStream(request.Context(), key, version, decoded, func(event anthropicapi.RawStreamEvent) error {
+	err := h.messages.MessagesNativeStream(request.Context(), key, version, betas, decoded, func(event anthropicapi.RawStreamEvent) error {
 		start()
 		if err := http.NewResponseController(writer).SetWriteDeadline(time.Now().Add(h.writeTimeout)); err != nil && !errors.Is(err, http.ErrNotSupported) {
 			return err

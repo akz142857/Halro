@@ -52,10 +52,16 @@ func (s *service) MessagesStream(ctx context.Context, key string, request anthro
 	}
 	return nil
 }
-func (s *service) MessagesNative(ctx context.Context, key, _ string, request anthropicapi.MessageRequest) (anthropicapi.Message, error) {
+
+// Pinned for the same reason the handler pins its own service: the handler
+// discovers Messages support with a comma-ok assertion, so drifting from the
+// interface would leave this server answering 501 with nothing failing first.
+var _ gatewayapi.MessagesService = (*service)(nil)
+
+func (s *service) MessagesNative(ctx context.Context, key, _ string, _ []string, request anthropicapi.MessageRequest) (anthropicapi.Message, error) {
 	return s.Messages(ctx, key, request)
 }
-func (s *service) MessagesNativeStream(ctx context.Context, key, _ string, request anthropicapi.MessageRequest, emit func(anthropicapi.RawStreamEvent) error) error {
+func (s *service) MessagesNativeStream(ctx context.Context, key, _ string, _ []string, request anthropicapi.MessageRequest, emit func(anthropicapi.RawStreamEvent) error) error {
 	return s.MessagesStream(ctx, key, request, func(event anthropicapi.StreamEvent) error {
 		payload, err := json.Marshal(event)
 		if err != nil {

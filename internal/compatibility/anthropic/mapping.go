@@ -43,7 +43,18 @@ func DecodePortable(request anthropicapi.MessageRequest) (semantic.GenerateReque
 		if tool.Strict != nil && *tool.Strict {
 			return semantic.GenerateRequest{}, errors.New("strict Anthropic tools are not portable")
 		}
+		if tool.IsAnthropicDefined() {
+			return semantic.GenerateRequest{}, errors.New("Anthropic-defined tools are not portable")
+		}
 		result.Tools = append(result.Tools, semantic.Tool{Name: tool.Name, Description: tool.Description, Schema: append(json.RawMessage(nil), tool.InputSchema...)})
+	}
+	if request.OutputConfig != nil {
+		result.ReasoningEffort = request.OutputConfig.Effort
+		format, err := decodeOutputFormat(request.OutputConfig.Format)
+		if err != nil {
+			return semantic.GenerateRequest{}, err
+		}
+		result.OutputFormat = format
 	}
 	if request.ToolChoice != nil {
 		choice, parallel, err := compatibility.DecodeToolChoice(compatibility.ToolChoiceWire{
@@ -278,7 +289,73 @@ func RenderPortableRequest(request semantic.GenerateRequest, providerModel strin
 		}
 		result.ToolChoice = &anthropicapi.ToolChoice{Type: wire.Mode, Name: wire.NamedTool, DisableParallelToolUse: !wire.ParallelAllowed}
 	}
+	if request.ReasoningEffort != "" || request.OutputFormat != nil {
+		config := &anthropicapi.OutputConfig{Effort: request.ReasoningEffort}
+		if request.OutputFormat != nil {
+			format, err := renderOutputFormat(*request.OutputFormat)
+			if err != nil {
+				return anthropicapi.MessageRequest{}, err
+			}
+			config.Format = format
+		}
+		result.OutputConfig = config
+	}
 	return result, result.Validate()
+}
+
+// decodeOutputFormat maps Anthropic's output_config.format onto the portable
+// output format. Anthropic expresses structured output as a JSON schema only —
+// it has no counterpart to OpenAI's schema-less json_object mode — so json_schema
+// and text are the whole portable surface here.
+func decodeOutputFormat(raw json.RawMessage) (*semantic.OutputFormat, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var format struct {
+		Type        string          `json:"type"`
+		Name        string          `json:"name"`
+		Description string          `json:"description"`
+		Schema      json.RawMessage `json:"schema"`
+	}
+	if err := json.Unmarshal(raw, &format); err != nil {
+		return nil, errors.New("invalid output_config format")
+	}
+	switch format.Type {
+	case "text":
+		return &semantic.OutputFormat{Kind: semantic.OutputText}, nil
+	case "json_schema":
+		return &semantic.OutputFormat{
+			Kind: semantic.OutputJSONSchema, Name: format.Name, Description: format.Description,
+			Schema: append(json.RawMessage(nil), format.Schema...), Strict: true,
+		}, nil
+	default:
+		return nil, errors.New("output_config format type is not portable")
+	}
+}
+
+func renderOutputFormat(format semantic.OutputFormat) (json.RawMessage, error) {
+	switch format.Kind {
+	case semantic.OutputText:
+		return json.Marshal(map[string]string{"type": "text"})
+	case semantic.OutputJSONSchema:
+		if len(format.Schema) == 0 {
+			return nil, errors.New("json_schema output requires a schema")
+		}
+		value := map[string]any{"type": "json_schema", "schema": format.Schema}
+		if format.Name != "" {
+			value["name"] = format.Name
+		}
+		if format.Description != "" {
+			value["description"] = format.Description
+		}
+		return json.Marshal(value)
+	default:
+		// OpenAI's json_object asks for "some JSON" without a schema, and
+		// Anthropic has no way to express that. Inventing a schema would change
+		// what the caller asked for, so the profile declares it unsupported and
+		// routing avoids this provider instead.
+		return nil, errors.New("Anthropic structured output requires a schema")
+	}
 }
 
 func renderMessage(message semantic.Message) (anthropicapi.MessageParam, error) {

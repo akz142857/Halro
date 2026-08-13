@@ -58,6 +58,78 @@ func TestEnabledThinkingRejectsForcedToolChoice(t *testing.T) {
 	}
 }
 
+// Tool families are matched by family, not by exact version, so an upstream
+// version bump must not need a code change here. The dated types below are the
+// ones Anthropic ships today; the far-future one stands in for the next bump.
+func TestDecodeMessageRequestClassifiesToolsByExecutionSite(t *testing.T) {
+	body := func(tool string) string {
+		return `{"model":"m","max_tokens":10,"tools":[` + tool + `],"messages":[{"role":"user","content":"hi"}]}`
+	}
+	for _, testCase := range []struct {
+		name    string
+		tool    string
+		wantErr string
+	}{
+		{"bash", `{"type":"bash_20250124","name":"bash"}`, ""},
+		{"text editor", `{"type":"text_editor_20250728","name":"str_replace_based_edit_tool"}`, ""},
+		{"memory", `{"type":"memory_20250818","name":"memory"}`, ""},
+		{"computer keeps display fields", `{"type":"computer_20251124","name":"computer","display_width_px":1024,"display_height_px":768}`, ""},
+		{"unreleased version of a known family", `{"type":"text_editor_29991231","name":"editor"}`, ""},
+		{"custom", `{"name":"lookup","input_schema":{"type":"object"}}`, ""},
+		{"custom keeps cache_control", `{"name":"lookup","input_schema":{"type":"object"},"cache_control":{"type":"ephemeral"}}`, ""},
+		{"client tool rejects a schema", `{"type":"bash_20250124","name":"bash","input_schema":{"type":"object"}}`, "no input schema"},
+		{"web search", `{"type":"web_search_20260209","name":"web_search"}`, "provider-executed"},
+		{"code execution", `{"type":"code_execution_20260521","name":"code_execution"}`, "provider-executed"},
+		{"unknown family", `{"type":"frobnicate_20260101","name":"frobnicate"}`, "unrecognised tool type"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, err := DecodeMessageRequest(strings.NewReader(body(testCase.tool)))
+			switch {
+			case testCase.wantErr == "" && err != nil:
+				t.Fatalf("want accepted, got %v", err)
+			case testCase.wantErr != "" && (err == nil || !strings.Contains(err.Error(), testCase.wantErr)):
+				t.Fatalf("want error containing %q, got %v", testCase.wantErr, err)
+			}
+		})
+	}
+}
+
+// A tool declaration must reach the provider byte-identical. Anything the
+// struct does not model — cache_control, defer_loading, the computer tool's
+// display dimensions — rides through Raw rather than being dropped.
+func TestToolRoundTripPreservesUnmodelledFields(t *testing.T) {
+	body := `{"model":"m","max_tokens":10,"tools":[{"type":"computer_20251124","name":"computer","display_width_px":1024,"cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":"hi"}]}`
+	request, err := DecodeMessageRequest(strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(request.Tools)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"display_width_px":1024`, `"cache_control":{"type":"ephemeral"}`} {
+		if !strings.Contains(string(encoded), want) {
+			t.Fatalf("tool lost %s: %s", want, encoded)
+		}
+	}
+}
+
+// document and search_result carry input data the same way image does, so they
+// belong on the accepted side of a boundary drawn by execution site.
+func TestDecodeMessageRequestAcceptsDataCarryingBlocks(t *testing.T) {
+	for _, testCase := range []struct{ name, block string }{
+		{"document", `{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"AA=="}}`},
+		{"search_result", `{"type":"search_result","title":"t","source":"s","content":[{"type":"text","text":"x"}]}`},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			body := `{"model":"m","max_tokens":10,"messages":[{"role":"user","content":[` + testCase.block + `]}]}`
+			if _, err := DecodeMessageRequest(strings.NewReader(body)); err != nil {
+				t.Fatalf("want accepted, got %v", err)
+			}
+		})
+	}
+}
+
 // A duplicate object member makes the document Halro inspects and the document
 // the provider receives two different things: encoding/json resolves duplicates
 // last-wins, while the native path forwards the caller's original bytes. That

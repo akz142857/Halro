@@ -1087,7 +1087,7 @@ func (s *Service) MessagesStream(
 	return nil
 }
 
-func (s *Service) MessagesNative(ctx context.Context, plaintextKey, version string, request anthropicapi.MessageRequest) (anthropicapi.Message, error) {
+func (s *Service) MessagesNative(ctx context.Context, plaintextKey, version string, betas []string, request anthropicapi.MessageRequest) (anthropicapi.Message, error) {
 	if request.Stream {
 		return anthropicapi.Message{}, gatewayError("invalid_request_error", "stream must be false", 400, nil)
 	}
@@ -1097,6 +1097,9 @@ func (s *Service) MessagesNative(ctx context.Context, plaintextKey, version stri
 	}
 	// Inspect the bytes the envelope will hand the provider, not the decoded
 	// struct: the struct is a lossy view of them.
+	if err := checkAnthropicBetas(target, betas); err != nil {
+		return anthropicapi.Message{}, err
+	}
 	payload, err := envelope.PayloadFor(target.ProfileID, 1, compatibility.NativeRequest)
 	if err != nil {
 		return anthropicapi.Message{}, gatewayError("internal_error", "native request payload is unavailable", 500, err)
@@ -1122,7 +1125,7 @@ func (s *Service) MessagesNative(ctx context.Context, plaintextKey, version stri
 		abortErr := attempt.abort("unsupported_feature")
 		return anthropicapi.Message{}, gatewayError("unsupported_feature", "native Messages primitive is unavailable", 400, errors.Join(err, abortErr))
 	}
-	result, providerErr := adapter.MessagesNative(ctx, provider.NativeMessageCall{RequestID: run.requestID, ProviderModel: target.ProviderModel, Version: version, Payload: payload})
+	result, providerErr := adapter.MessagesNative(ctx, provider.NativeMessageCall{RequestID: run.requestID, ProviderModel: target.ProviderModel, Version: version, Betas: betas, Payload: payload})
 	var message anthropicapi.Message
 	var semanticResult semantic.GenerateResult
 	if providerErr == nil {
@@ -1161,12 +1164,15 @@ func (s *Service) MessagesNative(ctx context.Context, plaintextKey, version stri
 	return message, nil
 }
 
-func (s *Service) MessagesNativeStream(ctx context.Context, plaintextKey, version string, request anthropicapi.MessageRequest, emit func(anthropicapi.RawStreamEvent) error) error {
+func (s *Service) MessagesNativeStream(ctx context.Context, plaintextKey, version string, betas []string, request anthropicapi.MessageRequest, emit func(anthropicapi.RawStreamEvent) error) error {
 	if !request.Stream {
 		return gatewayError("invalid_request_error", "stream must be true", 400, nil)
 	}
 	principal, target, envelope, inputTokens, outputTokens, err := s.prepareNativeMessages(ctx, plaintextKey, version, request, provider.OperationMessagesStream)
 	if err != nil {
+		return err
+	}
+	if err := checkAnthropicBetas(target, betas); err != nil {
 		return err
 	}
 	payload, err := envelope.PayloadFor(target.ProfileID, 1, compatibility.NativeRequest)
@@ -1206,7 +1212,7 @@ func (s *Service) MessagesNativeStream(ctx context.Context, plaintextKey, versio
 	emitted := false
 	deliveredBytes := int64(0)
 	providerErrorEvent := false
-	usage, providerErr := adapter.MessagesNativeStream(ctx, provider.NativeMessageCall{RequestID: run.requestID, ProviderModel: target.ProviderModel, Version: version, Payload: payload}, func(event anthropicapi.RawStreamEvent) error {
+	usage, providerErr := adapter.MessagesNativeStream(ctx, provider.NativeMessageCall{RequestID: run.requestID, ProviderModel: target.ProviderModel, Version: version, Betas: betas, Payload: payload}, func(event anthropicapi.RawStreamEvent) error {
 		eventEnvelope, envelopeErr := compatibility.NewNativeEventEnvelope(registry, target.ProfileID, 1, http.Header{}, event.Data, identity)
 		if envelopeErr != nil {
 			return envelopeErr
@@ -1279,6 +1285,19 @@ func rewriteAnthropicStreamModel(payload json.RawMessage, publicModel string) (j
 	}
 	event["message"] = encodedMessage
 	return json.Marshal(event)
+}
+
+// checkAnthropicBetas fails closed on any token the selected connection has not
+// been configured to forward. It runs after target selection because the
+// allowlist is per connection, and before any provider work so an unaccepted
+// beta costs nothing.
+func checkAnthropicBetas(target provider.Target, betas []string) error {
+	for _, beta := range betas {
+		if !slices.Contains(target.AllowedAnthropicBetas, beta) {
+			return gatewayError("unsupported_feature", "anthropic-beta "+beta+" is not enabled for the selected connection", 400, nil)
+		}
+	}
+	return nil
 }
 
 func (s *Service) prepareNativeMessages(ctx context.Context, plaintextKey, version string, request anthropicapi.MessageRequest, operation provider.Operation) (auth.AuthResult, provider.Target, *compatibility.NativeEnvelope, int64, int64, error) {

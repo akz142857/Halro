@@ -85,7 +85,8 @@
           "user"
         ],
         "declared_transforms": [
-          "portable Chat content is mapped to Anthropic Messages blocks"
+          "portable Chat content is mapped to Anthropic Messages blocks",
+          "response_format and reasoning_effort are declared unsupported at field granularity because support is value-dependent: json_schema maps to output_config.format and the low/medium/high/xhigh/max ladder maps to output_config.effort, while json_object and any effort outside that ladder have no Anthropic representation and are routed away before provider I/O"
         ]
       },
       {
@@ -521,6 +522,8 @@
       "messages",
       "messages[].role",
       "messages[].content",
+      "messages[].content[].type=document",
+      "messages[].content[].type=search_result",
       "system",
       "stream",
       "stop_sequences",
@@ -528,14 +531,25 @@
       "top_p",
       "top_k",
       "tools",
+      "tools[].type=custom",
+      "tools[].type=bash_*",
+      "tools[].type=text_editor_*",
+      "tools[].type=memory_*",
+      "tools[].type=computer_*",
       "tool_choice",
       "thinking",
       "metadata",
-      "service_tier"
+      "service_tier",
+      "output_config",
+      "output_config.effort",
+      "output_config.format"
     ],
     "rejected_request_fields": [
-      "anthropic-beta",
-      "hosted tools",
+      "provider-executed tools (web_search_*, web_fetch_*, code_execution_*, advisor_*, tool_search_*)",
+      "mcp_servers",
+      "container",
+      "fallbacks",
+      "Anthropic-defined tools in portable mode",
       "strict tools in portable mode",
       "signed thinking in portable mode",
       "unknown fields"
@@ -543,6 +557,7 @@
     "request_headers": [
       "x-api-key or Authorization",
       "anthropic-version",
+      "anthropic-beta",
       "Halro-Route-Mode",
       "Content-Type"
     ],
@@ -575,7 +590,10 @@
     "status": "compatible",
     "documented_deviations": [
       "only anthropic-version 2023-06-01 is accepted",
-      "anthropic-beta and hosted tools are unavailable",
+      "anthropic-beta is forwarded only in native mode and only for tokens the selected connection has been configured to accept; portable mode rejects it because the request is re-authored through the canonical model and a beta token describes the request as written",
+      "tools are classified by execution site: Anthropic-defined client-executed tools are accepted at any version suffix, while provider-executed tools are rejected because the upstream would make network calls outside SafeTransport's host allowlist",
+      "mcp_servers, container, and fallbacks are rejected as deliberate boundaries rather than unmodelled fields: the first two delegate egress or code execution to the upstream, and the third moves model selection outside Halro's routing and cost attribution",
+      "tool and content-block bodies are forwarded verbatim, so cache_control and per-tool configuration reach the provider unchanged",
       "Gateway Keys are accepted through x-api-key for official SDK compatibility and are never forwarded upstream",
       "native mode is selected with Halro-Route-Mode and requires either the direct Anthropic or Bedrock Mantle Anthropic profile"
     ],

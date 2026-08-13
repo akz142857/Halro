@@ -66,7 +66,7 @@ func newNativeMessagesFixture(t *testing.T) (*Service, *nativeMessagesFake, stri
 	return newNativeMessagesFixtureForProfile(t, domain.ProfileAnthropicMessages)
 }
 
-func newNativeMessagesFixtureForProfile(t *testing.T, profileID domain.ProviderProfileID) (*Service, *nativeMessagesFake, string, func()) {
+func newNativeMessagesFixtureForProfile(t *testing.T, profileID domain.ProviderProfileID, allowedBetas ...string) (*Service, *nativeMessagesFake, string, func()) {
 	t.Helper()
 	project := domain.Project{ID: "project_native", Name: "Native", Enabled: true, AllowedRoutes: []string{"claude"}, DailyBudgetMicrosUSD: 1000000, MaxInputTokens: 10000, MaxOutputTokens: 1000}
 	plaintext, key, err := auth.GenerateGatewayKey(project.ID, "test", nil)
@@ -95,7 +95,7 @@ func newNativeMessagesFixtureForProfile(t *testing.T, profileID domain.ProviderP
 		t.Fatal(err)
 	}
 	registry := provider.NewRegistry()
-	if err := registry.Register(provider.Target{ID: "route_native", DeploymentID: "dep_route_native", ProviderID: "provider_native", PublicModel: "claude", ProviderModel: "claude-provider", AccessSurface: manifest.AccessSurface, ProfileID: profileID, Adapter: bridge, Capabilities: provider.Capabilities{Chat: true, Streaming: true, Tools: true, Reasoning: true, StreamUsage: true}, InputMicrosPerMillion: 1000, OutputMicrosPerMillion: 1000}); err != nil {
+	if err := registry.Register(provider.Target{ID: "route_native", DeploymentID: "dep_route_native", ProviderID: "provider_native", PublicModel: "claude", ProviderModel: "claude-provider", AccessSurface: manifest.AccessSurface, ProfileID: profileID, Adapter: bridge, Capabilities: provider.Capabilities{Chat: true, Streaming: true, Tools: true, Reasoning: true, StreamUsage: true}, AllowedAnthropicBetas: allowedBetas, InputMicrosPerMillion: 1000, OutputMicrosPerMillion: 1000}); err != nil {
 		t.Fatal(err)
 	}
 	service, err := NewService(snapshot, registry, accounting)
@@ -112,7 +112,7 @@ func TestNativeMessagesPinsBedrockMantleAnthropicProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.MessagesNative(context.Background(), key, anthropicapi.SupportedVersion, request); err != nil {
+	if _, err := service.MessagesNative(context.Background(), key, anthropicapi.SupportedVersion, nil, request); err != nil {
 		t.Fatal(err)
 	}
 	if fake.Type() != string(domain.ProviderBedrock) || !bytes.Contains(fake.payload, []byte(`"signature":"mantle-sig"`)) {
@@ -128,7 +128,7 @@ func TestNativeMessagesPreservesSignedThinkingAndPinsProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	message, err := service.MessagesNative(context.Background(), key, anthropicapi.SupportedVersion, request)
+	message, err := service.MessagesNative(context.Background(), key, anthropicapi.SupportedVersion, nil, request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +146,7 @@ func TestNativeMessagesStreamPreservesRawSignatureEvent(t *testing.T) {
 	}
 	var signature bool
 	var publicModel bool
-	err = service.MessagesNativeStream(context.Background(), key, anthropicapi.SupportedVersion, request, func(event anthropicapi.RawStreamEvent) error {
+	err = service.MessagesNativeStream(context.Background(), key, anthropicapi.SupportedVersion, nil, request, func(event anthropicapi.RawStreamEvent) error {
 		if event.Type == "message_start" && bytes.Contains(event.Data, []byte(`"model":"claude"`)) && !bytes.Contains(event.Data, []byte("claude-provider")) {
 			publicModel = true
 		}
@@ -188,7 +188,7 @@ func TestNativeMessagesInspectsFieldsOutsideThePortableProjection(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err = service.MessagesNative(context.Background(), key, anthropicapi.SupportedVersion, request)
+			_, err = service.MessagesNative(context.Background(), key, anthropicapi.SupportedVersion, nil, request)
 			// Assert the specific code, not merely that something failed: an
 			// unrelated error would otherwise let this test pass against the
 			// very projection it exists to rule out.
@@ -209,7 +209,7 @@ func TestNativeMessagesAcceptsBenignMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.MessagesNative(context.Background(), key, anthropicapi.SupportedVersion, request); err != nil {
+	if _, err := service.MessagesNative(context.Background(), key, anthropicapi.SupportedVersion, nil, request); err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Contains(fake.payload, []byte(`"user_id":"tenant-42"`)) {
@@ -227,4 +227,43 @@ func mustResolver(t *testing.T, timezone string) *budget.PeriodResolver {
 		t.Fatalf("resolver for %s: %v", timezone, err)
 	}
 	return resolver
+}
+
+// A beta token is a request for behaviour Halro has not modelled, so it travels
+// only when the connection has been configured to accept that exact token.
+func TestNativeMessagesGatesAnthropicBetasOnTheConnectionAllowlist(t *testing.T) {
+	const accepted = "context-management-2025-06-27"
+	body := `{"model":"claude","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`
+
+	t.Run("token absent from the allowlist is refused", func(t *testing.T) {
+		service, fake, key, closeFixture := newNativeMessagesFixture(t)
+		defer closeFixture()
+		request, err := anthropicapi.DecodeMessageRequest(bytes.NewBufferString(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = service.MessagesNative(context.Background(), key, anthropicapi.SupportedVersion, []string{accepted}, request)
+		var gatewayErr *Error
+		if !errors.As(err, &gatewayErr) || gatewayErr.Code != "unsupported_feature" {
+			t.Fatalf("want unsupported_feature, got %v", err)
+		}
+		if fake.payload != nil {
+			t.Fatalf("provider was called despite the refusal: %s", fake.payload)
+		}
+	})
+
+	t.Run("token on the allowlist reaches the provider", func(t *testing.T) {
+		service, fake, key, closeFixture := newNativeMessagesFixtureForProfile(t, domain.ProfileAnthropicMessages, accepted)
+		defer closeFixture()
+		request, err := anthropicapi.DecodeMessageRequest(bytes.NewBufferString(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := service.MessagesNative(context.Background(), key, anthropicapi.SupportedVersion, []string{accepted}, request); err != nil {
+			t.Fatal(err)
+		}
+		if fake.payload == nil {
+			t.Fatal("provider was not called")
+		}
+	})
 }

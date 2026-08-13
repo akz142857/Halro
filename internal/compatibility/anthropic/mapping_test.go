@@ -2,9 +2,13 @@ package anthropic
 
 import (
 	"bytes"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/akz142857/Halro/internal/anthropicapi"
+	"github.com/akz142857/Halro/internal/compatibility"
+	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/semantic"
 )
 
@@ -46,5 +50,57 @@ func TestRenderResultMapsToolUseAndStopReason(t *testing.T) {
 	}
 	if message.ID != "msg_1" || message.StopReason == nil || *message.StopReason != "tool_use" || message.Content[0].Type != "tool_use" {
 		t.Fatalf("unexpected message: %#v", message)
+	}
+}
+
+// output_config is the Anthropic spelling of two portable concepts, so it has to
+// survive a round trip through the semantic model rather than being carried as
+// an opaque native-only field.
+func TestOutputConfigRoundTripsThroughTheSemanticModel(t *testing.T) {
+	body := `{"model":"claude","max_tokens":64,` +
+		`"output_config":{"effort":"xhigh","format":{"type":"json_schema","name":"invoice","schema":{"type":"object"}}},` +
+		`"messages":[{"role":"user","content":"hi"}]}`
+	request, err := anthropicapi.DecodeMessageRequest(strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := DecodePortable(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if canonical.ReasoningEffort != "xhigh" {
+		t.Fatalf("effort lost: %q", canonical.ReasoningEffort)
+	}
+	if canonical.OutputFormat == nil || canonical.OutputFormat.Kind != semantic.OutputJSONSchema || canonical.OutputFormat.Name != "invoice" {
+		t.Fatalf("output format lost: %#v", canonical.OutputFormat)
+	}
+	// The derived requirements are what routing filters on; without them a
+	// structured-output request could land on a provider that cannot honour it.
+	if !canonical.Requirements.StructuredJSON || !canonical.Requirements.Reasoning {
+		t.Fatalf("requirements not derived: %#v", canonical.Requirements)
+	}
+	rendered, err := RenderPortableRequest(canonical, "claude-provider")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rendered.OutputConfig == nil || rendered.OutputConfig.Effort != "xhigh" {
+		t.Fatalf("effort not rendered back: %#v", rendered.OutputConfig)
+	}
+	if !strings.Contains(string(rendered.OutputConfig.Format), `"type":"json_schema"`) {
+		t.Fatalf("format not rendered back: %s", rendered.OutputConfig.Format)
+	}
+}
+
+// json_object asks for unschema'd JSON, which Anthropic cannot express. Routing
+// must be told so it picks another provider instead of the render failing late.
+func TestJSONObjectOutputIsDeclaredUnsupportedForAnthropic(t *testing.T) {
+	request := semantic.GenerateRequest{OutputFormat: &semantic.OutputFormat{Kind: semantic.OutputJSONObject}}
+	unsupported := compatibility.UnsupportedGenerateFields(domain.ProfileAnthropicMessages, request)
+	if !slices.Contains(unsupported, "response_format") {
+		t.Fatalf("json_object should be declared unsupported, got %v", unsupported)
+	}
+	schema := semantic.GenerateRequest{OutputFormat: &semantic.OutputFormat{Kind: semantic.OutputJSONSchema}}
+	if got := compatibility.UnsupportedGenerateFields(domain.ProfileAnthropicMessages, schema); slices.Contains(got, "response_format") {
+		t.Fatalf("json_schema should route to Anthropic, got %v", got)
 	}
 }

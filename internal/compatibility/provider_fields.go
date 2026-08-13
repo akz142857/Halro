@@ -2,7 +2,9 @@ package compatibility
 
 import (
 	"encoding/json"
+	"slices"
 
+	"github.com/akz142857/Halro/internal/anthropicapi"
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/semantic"
 )
@@ -38,7 +40,24 @@ func UnsupportedGenerateFields(profileID domain.ProviderProfileID, request seman
 		add(request.OutputFormat != nil, "response_format")
 		add(request.ReasoningEffort != "", "reasoning_effort")
 		add(request.EndUserRef != "", "user")
-	case domain.ProfileAnthropicMessages, domain.ProfileBedrockMantleAnthropicMessages:
+	case domain.ProfileAnthropicMessages:
+		add(hasNamedMessage(request), "messages[].name")
+		add(hasDeveloperMessage(request), "messages[].role=developer")
+		add(request.Candidates != nil && *request.Candidates > 1, "n")
+		add(request.Seed != nil, "seed")
+		// Structured output is supported, but only as a schema: Anthropic has no
+		// counterpart to the schema-less json_object mode, and the effort ladder
+		// does not cover every value the OpenAI surface accepts. Declaring the
+		// gaps precisely lets routing pick another provider rather than failing
+		// the request at render time.
+		add(request.OutputFormat != nil && request.OutputFormat.Kind == semantic.OutputJSONObject, "response_format")
+		add(request.ReasoningEffort != "" && !slices.Contains(anthropicapi.EffortLevels, request.ReasoningEffort), "reasoning_effort")
+		add(request.EndUserRef != "", "user")
+	case domain.ProfileBedrockMantleAnthropicMessages:
+		// The Mantle Beta profile shares this wire representation and could carry
+		// output_config, but its capability ceiling is fixed by the build and
+		// widening it is a separate contract review. Until that happens the
+		// declared surface stays where it was.
 		add(hasNamedMessage(request), "messages[].name")
 		add(hasDeveloperMessage(request), "messages[].role=developer")
 		add(request.Candidates != nil && *request.Candidates > 1, "n")

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 )
 
@@ -26,6 +27,35 @@ const (
 	ModePortable ExecutionMode = "portable"
 	ModeNative   ExecutionMode = "native"
 )
+
+// MaxBetaTokens bounds one request's anthropic-beta header independently of the
+// per-connection allowlist, so a malformed header is rejected before it is
+// compared against anything.
+const MaxBetaTokens = 16
+
+// ParseBetaTokens splits an anthropic-beta header value. It normalises
+// surrounding whitespace but deliberately preserves case: tokens are matched
+// against a stored allowlist, and case-folding here would let a token the
+// operator never accepted match one they did.
+func ParseBetaTokens(header string) ([]string, error) {
+	trimmed := strings.TrimSpace(header)
+	if trimmed == "" {
+		return nil, nil
+	}
+	parts := strings.Split(trimmed, ",")
+	if len(parts) > MaxBetaTokens {
+		return nil, errors.New("anthropic-beta declares too many tokens")
+	}
+	tokens := make([]string, 0, len(parts))
+	for _, part := range parts {
+		token := strings.TrimSpace(part)
+		if token == "" {
+			return nil, errors.New("anthropic-beta contains an empty token")
+		}
+		tokens = append(tokens, token)
+	}
+	return tokens, nil
+}
 
 func ParseExecutionMode(value string) (ExecutionMode, error) {
 	switch ExecutionMode(strings.ToLower(strings.TrimSpace(value))) {
@@ -53,7 +83,75 @@ type MessageRequest struct {
 	Thinking      json.RawMessage `json:"thinking,omitempty"`
 	Metadata      json.RawMessage `json:"metadata,omitempty"`
 	ServiceTier   string          `json:"service_tier,omitempty"`
+	OutputConfig  *OutputConfig   `json:"output_config,omitempty"`
 	Raw           json.RawMessage `json:"-"`
+}
+
+// OutputConfig models only the two members the gateway has to read — effort,
+// which drives the reasoning requirement, and format, which drives the
+// structured-output requirement. Everything else it carries (task_budget, and
+// whatever a later release adds) rides through Raw untouched, so routing can
+// reason about the request without the struct becoming a second copy of the
+// upstream schema.
+type OutputConfig struct {
+	Effort string          `json:"effort,omitempty"`
+	Format json.RawMessage `json:"format,omitempty"`
+	Raw    json.RawMessage `json:"-"`
+}
+
+type outputConfigWire struct {
+	Effort string          `json:"effort,omitempty"`
+	Format json.RawMessage `json:"format,omitempty"`
+}
+
+func (config *OutputConfig) UnmarshalJSON(data []byte) error {
+	var wire outputConfigWire
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return errors.New("invalid output_config")
+	}
+	*config = OutputConfig{Effort: wire.Effort, Format: wire.Format, Raw: append(json.RawMessage(nil), data...)}
+	return nil
+}
+
+func (config OutputConfig) MarshalJSON() ([]byte, error) {
+	if len(config.Raw) > 0 {
+		return append(json.RawMessage(nil), config.Raw...), nil
+	}
+	return json.Marshal(outputConfigWire{Effort: config.Effort, Format: config.Format})
+}
+
+// EffortLevels is the accepted ladder. It is validated here rather than left to
+// the provider so an unroutable request fails before any budget is reserved.
+var EffortLevels = []string{"low", "medium", "high", "xhigh", "max"}
+
+func (config OutputConfig) Validate() error {
+	if config.Effort != "" && !slices.Contains(EffortLevels, config.Effort) {
+		return errors.New("output_config effort must be one of " + strings.Join(EffortLevels, ", "))
+	}
+	if len(config.Format) == 0 {
+		return nil
+	}
+	if !json.Valid(config.Format) || bytes.TrimSpace(config.Format)[0] != '{' {
+		return errors.New("output_config format must be an object")
+	}
+	var format struct {
+		Type   string          `json:"type"`
+		Schema json.RawMessage `json:"schema"`
+	}
+	if err := json.Unmarshal(config.Format, &format); err != nil {
+		return errors.New("invalid output_config format")
+	}
+	switch format.Type {
+	case "text":
+		return nil
+	case "json_schema":
+		if len(format.Schema) == 0 || !json.Valid(format.Schema) {
+			return errors.New("output_config json_schema format requires a schema")
+		}
+		return nil
+	default:
+		return errors.New("output_config format type is not supported")
+	}
 }
 
 type MessageParam struct {
@@ -178,6 +276,96 @@ type Tool struct {
 	InputSchema json.RawMessage `json:"input_schema"`
 	Type        string          `json:"type,omitempty"`
 	Strict      *bool           `json:"strict,omitempty"`
+	Raw         json.RawMessage `json:"-"`
+}
+
+// toolWire carries the fields Halro reads. Tool itself round-trips through Raw
+// so that everything else a tool declaration carries — cache_control,
+// defer_loading, the computer tool's display dimensions — reaches the provider
+// unchanged instead of being dropped by a struct that never modelled it. This
+// mirrors how ContentBlocks already preserves block bodies.
+type toolWire struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	InputSchema json.RawMessage `json:"input_schema"`
+	Type        string          `json:"type,omitempty"`
+	Strict      *bool           `json:"strict,omitempty"`
+}
+
+func (tool *Tool) UnmarshalJSON(data []byte) error {
+	var wire toolWire
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return errors.New("invalid tool")
+	}
+	*tool = Tool{
+		Name: wire.Name, Description: wire.Description, InputSchema: wire.InputSchema,
+		Type: wire.Type, Strict: wire.Strict, Raw: append(json.RawMessage(nil), data...),
+	}
+	return nil
+}
+
+func (tool Tool) MarshalJSON() ([]byte, error) {
+	if len(tool.Raw) > 0 {
+		return append(json.RawMessage(nil), tool.Raw...), nil
+	}
+	return json.Marshal(toolWire{
+		Name: tool.Name, Description: tool.Description, InputSchema: tool.InputSchema,
+		Type: tool.Type, Strict: tool.Strict,
+	})
+}
+
+// Tool families are classified by what executes them rather than by an exact
+// version string. Anthropic revisions the version suffix far more often than it
+// introduces a family (text_editor_20250124 → text_editor_20250728), so
+// matching the family is what stops this list needing an edit per release.
+var (
+	clientExecutedToolFamilies   = []string{"bash_", "text_editor_", "memory_", "computer_"}
+	providerExecutedToolFamilies = []string{"web_search_", "web_fetch_", "code_execution_", "advisor_", "tool_search_"}
+)
+
+type toolExecution int
+
+const (
+	toolExecutionUnknown toolExecution = iota
+	toolExecutionCustom
+	toolExecutionClient
+	toolExecutionProvider
+)
+
+// ClassifyTool reports who runs a declared tool. The distinction that matters to
+// the gateway is egress: a client-executed tool means the caller runs it and
+// returns a tool_result, so nothing leaves Halro's transport boundary, while a
+// provider-executed tool has the upstream make its own network calls outside
+// SafeTransport's host allowlist.
+func classifyTool(toolType string) toolExecution {
+	trimmed := strings.TrimSpace(toolType)
+	switch {
+	case trimmed == "" || trimmed == "custom":
+		return toolExecutionCustom
+	case hasAnyPrefix(trimmed, clientExecutedToolFamilies):
+		return toolExecutionClient
+	case hasAnyPrefix(trimmed, providerExecutedToolFamilies):
+		return toolExecutionProvider
+	default:
+		return toolExecutionUnknown
+	}
+}
+
+// IsAnthropicDefined reports a tool whose behaviour the model carries rather
+// than the caller's schema. These have no portable equivalent — a generic
+// OpenAI-wire provider cannot run text_editor — so the portable path rejects
+// them instead of translating into something the target cannot honour.
+func (tool Tool) IsAnthropicDefined() bool {
+	return classifyTool(tool.Type) != toolExecutionCustom
+}
+
+func hasAnyPrefix(value string, prefixes []string) bool {
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(value, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 type ToolChoice struct {
@@ -304,11 +492,21 @@ func (request MessageRequest) Validate() error {
 		}
 	}
 	for _, tool := range request.Tools {
-		if tool.Type != "" && tool.Type != "custom" {
-			return errors.New("hosted and server tools are not supported")
-		}
-		if tool.Name == "" || len(tool.InputSchema) == 0 || !json.Valid(tool.InputSchema) || bytes.TrimSpace(tool.InputSchema)[0] != '{' {
-			return errors.New("invalid client tool")
+		switch classifyTool(tool.Type) {
+		case toolExecutionCustom:
+			if tool.Name == "" || len(tool.InputSchema) == 0 || !json.Valid(tool.InputSchema) || bytes.TrimSpace(tool.InputSchema)[0] != '{' {
+				return errors.New("invalid client tool")
+			}
+		case toolExecutionClient:
+			// Anthropic-defined client tools are schema-less: the schema is built
+			// into the model and sending one is an upstream error.
+			if tool.Name == "" || len(tool.InputSchema) != 0 {
+				return errors.New("Anthropic-defined client tools take a name and no input schema")
+			}
+		case toolExecutionProvider:
+			return errors.New("provider-executed tools are not available on this connection")
+		default:
+			return errors.New("unrecognised tool type")
 		}
 	}
 	if request.ToolChoice != nil {
@@ -329,6 +527,11 @@ func (request MessageRequest) Validate() error {
 			return errors.New("invalid tool_choice type")
 		}
 	}
+	if request.OutputConfig != nil {
+		if err := request.OutputConfig.Validate(); err != nil {
+			return err
+		}
+	}
 	if len(request.Thinking) > 0 {
 		var thinking struct {
 			Type string `json:"type"`
@@ -347,9 +550,16 @@ func validateBlock(role string, block ContentBlock) error {
 	switch block.Type {
 	case "text":
 		return nil
-	case "image":
+	case "image", "document":
+		// Data-carrying input blocks. The source stays opaque on purpose: it is
+		// forwarded verbatim and redaction walks the raw payload, so the only
+		// thing to establish here is that a well-formed source is present.
 		if role != "user" || len(block.Source) == 0 || !json.Valid(block.Source) {
-			return errors.New("invalid image block")
+			return errors.New("invalid " + block.Type + " block")
+		}
+	case "search_result":
+		if role != "user" {
+			return errors.New("invalid search_result block")
 		}
 	case "tool_use":
 		if role != "assistant" || block.ID == "" || block.Name == "" || len(block.Input) == 0 || len(block.Input) > MaxToolInputBytes || !json.Valid(block.Input) {
