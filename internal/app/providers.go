@@ -732,7 +732,8 @@ func providerCapabilities(capabilities domain.ProviderCapabilities) provider.Cap
 		Rerank: capabilities.Rerank, AsyncGenerate: capabilities.AsyncGenerate, Tools: capabilities.Tools,
 		Vision: capabilities.Vision, JSONMode: capabilities.JSONMode, DeveloperRole: capabilities.DeveloperRole,
 		Reasoning: capabilities.Reasoning, StreamUsage: capabilities.StreamUsage,
-		MaxContextTokens: capabilities.MaxContextTokens, MaxOutputTokens: capabilities.MaxOutputTokens,
+		ProviderExecutedTools: capabilities.ProviderExecutedTools,
+		MaxContextTokens:      capabilities.MaxContextTokens, MaxOutputTokens: capabilities.MaxOutputTokens,
 	}
 }
 
@@ -747,14 +748,15 @@ func deploymentCapabilities(deployment domain.Deployment, adapter provider.Adapt
 		Streaming:   available.Streaming && declared.Streaming,
 		Embeddings:  available.Embeddings && declared.Embeddings,
 		Moderations: available.Moderations && declared.Moderations, Images: available.Images && declared.Images, Transcriptions: available.Transcriptions && declared.Transcriptions, Speech: available.Speech && declared.Speech, Files: available.Files && declared.Files, Batches: available.Batches && declared.Batches, Rerank: available.Rerank && declared.Rerank, AsyncGenerate: available.AsyncGenerate && declared.AsyncGenerate,
-		Tools:            available.Tools && declared.Tools,
-		Vision:           available.Vision && declared.Vision,
-		JSONMode:         available.JSONMode && declared.JSONMode,
-		DeveloperRole:    available.DeveloperRole && declared.DeveloperRole,
-		Reasoning:        available.Reasoning && declared.Reasoning,
-		StreamUsage:      available.StreamUsage && declared.StreamUsage,
-		MaxContextTokens: minimumCapabilityLimit(available.MaxContextTokens, declared.MaxContextTokens),
-		MaxOutputTokens:  minimumCapabilityLimit(available.MaxOutputTokens, declared.MaxOutputTokens),
+		Tools:                 available.Tools && declared.Tools,
+		Vision:                available.Vision && declared.Vision,
+		JSONMode:              available.JSONMode && declared.JSONMode,
+		DeveloperRole:         available.DeveloperRole && declared.DeveloperRole,
+		Reasoning:             available.Reasoning && declared.Reasoning,
+		StreamUsage:           available.StreamUsage && declared.StreamUsage,
+		ProviderExecutedTools: available.ProviderExecutedTools && declared.ProviderExecutedTools,
+		MaxContextTokens:      minimumCapabilityLimit(available.MaxContextTokens, declared.MaxContextTokens),
+		MaxOutputTokens:       minimumCapabilityLimit(available.MaxOutputTokens, declared.MaxOutputTokens),
 	}
 }
 

@@ -6,8 +6,26 @@ import (
 
 	"github.com/akz142857/Halro/internal/anthropicapi"
 	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/openaiapi"
 	"github.com/akz142857/Halro/internal/semantic"
 )
+
+// portableEffortLevels is what a portable request can actually ask an Anthropic
+// target for: the values Anthropic accepts, minus the ones that cannot survive
+// the OpenAI intermediate representation every portable request passes through.
+// Anthropic's `max` is the whole difference, and it is why this is an
+// intersection rather than either list on its own.
+var portableEffortLevels = intersectSorted(anthropicapi.EffortLevels, openaiapi.ReasoningEffortLevels)
+
+func intersectSorted(left, right []string) []string {
+	result := make([]string, 0, len(left))
+	for _, value := range left {
+		if slices.Contains(right, value) {
+			result = append(result, value)
+		}
+	}
+	return result
+}
 
 // UnsupportedGenerateFields returns northbound fields that the selected
 // provider profile cannot represent without silent semantic loss.
@@ -46,12 +64,19 @@ func UnsupportedGenerateFields(profileID domain.ProviderProfileID, request seman
 		add(request.Candidates != nil && *request.Candidates > 1, "n")
 		add(request.Seed != nil, "seed")
 		// Structured output is supported, but only as a schema: Anthropic has no
-		// counterpart to the schema-less json_object mode, and the effort ladder
-		// does not cover every value the OpenAI surface accepts. Declaring the
-		// gaps precisely lets routing pick another provider rather than failing
-		// the request at render time.
+		// counterpart to the schema-less json_object mode, and it has no relaxed
+		// mode either — a schema it is given is enforced. Declaring the gaps
+		// precisely lets routing pick another provider rather than failing the
+		// request at render time.
 		add(request.OutputFormat != nil && request.OutputFormat.Kind == semantic.OutputJSONObject, "response_format")
-		add(request.ReasoningEffort != "" && !slices.Contains(anthropicapi.EffortLevels, request.ReasoningEffort), "reasoning_effort")
+		add(request.OutputFormat != nil && request.OutputFormat.Kind == semantic.OutputJSONSchema && !request.OutputFormat.Strict, "response_format")
+		// The ladder is bounded by the portable representation, not by Anthropic.
+		// Every portable request reaches this profile through the OpenAI wire
+		// form, whose reasoning_effort stops at xhigh, so declaring Anthropic's
+		// own `max` as routable produced a request that passed capability
+		// filtering and then failed while being rendered — after the budget
+		// reservation, naming a field the caller never sent.
+		add(request.ReasoningEffort != "" && !slices.Contains(portableEffortLevels, request.ReasoningEffort), "reasoning_effort")
 		add(request.EndUserRef != "", "user")
 	case domain.ProfileBedrockMantleAnthropicMessages:
 		// The Mantle Beta profile shares this wire representation and could carry

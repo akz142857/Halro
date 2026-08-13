@@ -337,6 +337,8 @@ func setCapability(c *ProviderCapabilities, name string, value bool) {
 		c.Reasoning = value
 	case "stream_usage":
 		c.StreamUsage = value
+	case "provider_executed_tools":
+		c.ProviderExecutedTools = value
 	}
 }
 
