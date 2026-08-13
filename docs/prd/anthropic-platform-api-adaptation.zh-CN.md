@@ -1,6 +1,6 @@
 # Anthropic Platform API 适配 — 进展与遗留
 
-状态：**已完成。§1 的原有工作加上 §2/§3 全部遗留项均已实现并验证**
+状态：**已完成并归档。** §1 的原有工作加上 §2/§3 全部遗留项均已实现；随后在真实账号验证中发现四处缺陷，已修复（见 §5）
 更新日期：2026-08-13
 范围：`internal/anthropicapi`、`internal/provider/anthropic`、`internal/compatibility/anthropic`、`internal/compatibility`、`internal/gateway`、`internal/gatewayapi`、`internal/redaction`、`internal/semantic`、`internal/provider`、`internal/domain`、`internal/modelcatalog`、`internal/store/bolt`、`internal/app`、`web/src`
 
@@ -135,8 +135,12 @@ token 粗估。那会给每个请求加一次额外的 Provider 往返，成本�
 
 ## 4. 升级注意事项
 
-- **不需要重新初始化数据目录。** migration 28 把新能力名补进已有记录的 evidence 集合；未改动任何
-  持久化格式版本。
+- **不需要重新初始化数据目录，但持久化格式版本会前进。** migration 28 把新能力名补进已有记录的
+  evidence 集合。本文初稿曾写"未改动任何持久化格式版本"，那是错的——当时 `schemaVersion` 仍是 27，
+  migration 28 因此从未被执行（迁移循环的条件是 `currentVersion < schemaVersion`）。已有记录保持
+  17 项 evidence，而校验开始要求 18 项：读取不校验，所以直到下一次写入才暴露，表现为连接测试探测
+  成功、写回结果时被拒。修复是把常量推到 28（提交 `fbbaa6c`），这**就是**一次持久化格式版本变更：
+  升级后旧二进制会拒绝加载该数据目录，因为版本比它支持的新。这是设计的失败方式，但回滚方案要据此规划。
 - **现存 Anthropic 连接需手工启用 `json_mode`。** 能力默认值只在新建时生效，
   `ProfileAnthropicMessages` 不在 immutable 名单中，因此已存记录保持 `json_mode: false`，
   结构化输出请求会被路由过滤掉——**native 模式现在同样受此约束**（native 路径已开始做能力过滤）。
@@ -144,3 +148,26 @@ token 粗估。那会给每个请求加一次额外的 Provider 往返，成本�
   deployment 两处显式勾选；勾选即承担该连接会发起 Halro 看不到、SafeTransport 不过滤的上游出站。
 - **portable 模式收紧了三处**：`tools[]` / `output_config` 的未知成员、`strict:false` 的
   json_schema、无 `name` 的 json_schema，现在都会被拒绝或被路由绕开，而不是静默丢弃/升级。
+
+---
+
+## 5. 归档后续：真实账号验证发现的四处缺陷（2026-08-13）
+
+本文声明"已实现并验证"之后，第一次用真实 Anthropic 账号走通全链路，当天在这项工作范围内又发现四处
+缺陷。记录在这里，是因为它们说明了一件事：**本文 §3 的验证记录全部是自测，而这四处没有一处是自测
+能发现的。**
+
+1. **连接测试对空模型构造 Messages 请求**，被 Halro 自身的校验拒绝，从未发出——控制台把一次本地
+   拒绝报成了上游拒绝。改为回退读 Models API（`d724e1f`）。
+2. **Models API 解码读错字段名与能力键**：输出上限是 `max_tokens` 而非 `max_output_tokens`；
+   `capabilities` 里根本没有 `messages`/`streaming`/`tool_use` 这三个键，而它们是 chat 声明的
+   全部依据（同上）。fixture 是照着实现者的假设写的，所以测试与代码一起错、全绿。
+3. **adaptive thinking 默认开启**导致 portable 路径必然失败：签名 thinking 块在 OpenAI 形状的
+   响应里无处安放，于是上游执行并计费、调用方收到 502。portable 现在显式发送
+   `thinking: {"type":"disabled"}`（`0e0a4ef`）。
+4. **termination 词汇表用错方向**：本适配写的是 OpenAI 线协议词汇，而语义字段期待自己的词汇；
+   叠加 `finish_reason` 无条件透传上游原词，`/v1/responses` 最终拒绝了网关自己造出的响应（同上）。
+
+第 2 项最值得记住。它的测试 fixture 与被测代码出自同一份假设，因此二者一起错、且全部通过——这正是
+真实账号回归存在的理由，也是为什么 `internal/provider/anthropic/real_smoke_test.go` 在同一天被补上
+并接入 GA 门禁（`8f9c30b`）。该冒烟已对 `claude-opus-5` 实跑，七项全部通过。
