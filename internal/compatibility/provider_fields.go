@@ -91,6 +91,13 @@ func UnsupportedGenerateFields(profileID domain.ProviderProfileID, request seman
 		add(request.ReasoningEffort != "", "reasoning_effort")
 		add(request.EndUserRef != "", "user")
 	case domain.ProfileBedrockMantleOpenAIResponses:
+		// A Responses message item has no author name to put one in — the Name
+		// field on the item carries a function's name, not a speaker's — so the
+		// renderer drops it. Every other profile that cannot carry it says so;
+		// this one did not, which made it the one branch that neither carried the
+		// field nor declared the loss, and a multi-speaker conversation routed
+		// here came back 200 with the speakers made indistinguishable.
+		add(hasNamedMessage(request), "messages[].name")
 		add(request.Candidates != nil && *request.Candidates > 1, "n")
 		add(len(request.Stop) > 0, "stop")
 		add(request.Seed != nil, "seed")

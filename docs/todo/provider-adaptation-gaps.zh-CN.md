@@ -221,6 +221,16 @@ Converse / Gemini / Anthropic / DeepSeek / openai-compatible 全部不设防。�
 两条都做了反向验证：撤掉修复后新增测试全部变红（bindings 那条返回 201 且 evidence 记为
 `"tools":"declared"`，轮换那条返回 200），恢复后转绿。
 
+**Mantle Responses 的 `messages[].name` 既不透传也不申报。** Responses 的 message 条目没有作者名的位置
+（`ResponseInputItem.Name` 是给 `function_call` 放函数名的），所以 `renderProviderResponseItems`
+（`internal/compatibility/openai/provider_responses.go`）丢掉它是被目标协议逼的；错在
+`UnsupportedGenerateFields` 那个分支没有申报——凡是带不了这个字段的分支（Gemini、Converse、
+Anthropic、Mantle Anthropic、fail-closed 默认分支）全都申报了，只有它两头落空。后果是多说话人会话
+路由到这个 profile 时返回 200，而说话人标签在途中消失。
+
+修法是加一行申报，不是改渲染。测试改成**双向**：带不了的必须申报，真能透传的（OpenAI/Azure/DeepSeek/
+compatible/Mantle Chat）必须不申报——只查前一半的表永远发现不了这个洞。同样做了反向验证。
+
 ### 5.2 未修（按建议顺序）
 
 | 项 | 位置 | 症状 |
@@ -230,7 +240,6 @@ Converse / Gemini / Anthropic / DeepSeek / openai-compatible 全部不设防。�
 | `Registry.Register` 交集为空时回退到 adapter 全量能力 | `internal/provider/provider.go` | 把「交集空」读成「调用方没填」，转而采用 adapter 全量能力。违反 fail-closed。可达路径之一是叠加上面已修的能力绕过 |
 | rerank 分数恒为 0 | `internal/provider/inference_resources.go` 的 `RerankItem` | tag 是 `relevance_score`，AWS 返回 `relevanceScore`，下划线让大小写不敏感回退也匹配不上。校验 `<0 \|\| >1` 放行 0，fail-open。**仓库自己的 fixture 用的正是 AWS 真实形状，但断言只检查 `index`、从不看分数**，所以测试一直绿。根因是一个结构体同时当 AWS 解码目标与北向 wire 形状 |
 | `parallel_tool_calls: false` 在无 `tool_choice` 时对 Anthropic 静默丢失 | `internal/compatibility/anthropic/mapping.go` | 只在 `ToolChoice != nil` 分支渲染 `disable_parallel_tool_use`，且未申报为不支持。`Requirements.ParallelTools` 被派生出来却无人消费 |
-| Mantle Responses 的 `messages[].name` 既丢又不申报 | `internal/compatibility/openai/provider_responses.go` | switch 里唯一一个既丢弃又不申报的分支，兄弟分支全都申报了。改一行 |
 | portable 模式下 content block 的 `cache_control` / `tool_result.is_error` 静默丢弃 | `internal/compatibility/anthropic/mapping.go` | 同一请求体内自相矛盾：`tools[].cache_control` 报 400，消息块上的同名字段静默消失，而前者的论据正是「静默丢弃会产生调用方没发过的请求」。`is_error` 丢失更实际——出错的工具结果被当成成功结果喂给模型 |
 | Bedrock 控制面模型发现被自身 host 白名单挡住 | `internal/provider/bedrock/models.go` | 用数据面 client 去请求 `bedrock.<region>.amazonaws.com`，而该 client 的 AllowedHosts 只有 runtime host。不是绕过，是 fail-closed 过头导致功能静默失效 |
 
@@ -361,5 +370,6 @@ beta 头，并与既有的每连接 beta 令牌允许列表衔接。
 | 4. Bedrock 模型 pin | **不做。** 放开 pin 但保留请求体形状，等于假设新模型沿用同一形状——Titan Embed、Titan Image、Nova Reel 的请求体各不相同，这在 Bedrock 上不成立。正确方向是每个模型族一个 Profile，现在就是这么做的；发版成本低于形状猜错的成本 | **已关闭** | 2026-08-13 |
 | 5a. 能力上限经 `bindings` 绕过 | 上限下沉到 `ProviderProfileBinding.Validate` 并对所有 profile 生效，用 `MaxProviderCapabilitiesForProfile` 以保住 `provider_executed_tools` 的 opt-in；Admin 与加载期两处对齐。已做反向验证 | **已修** | 2026-08-14 |
 | 5b. 凭据轮换可配死 registry | `validateCredentialReferences` 增加 (surface, scheme) 轴，逐 binding 比对，新错误码 `credential_surface_in_use`。已做反向验证 | **已修** | 2026-08-14 |
-| 5c. 评审其余七条 | 见 §5.2 表，按建议顺序排在 Anthropic 流式词表与 `max_completion_tokens` 两条之后 | 未排期 | 2026-08-14 |
-| 5d. 16 MiB 上限是否过窄 | **不验证。** 属容量问题而非代码正确性；真正的代码风险可用「临时降低常量 + 小批处理」以零成本验证。理由见[批处理方案 §5.2](anthropic-batches-plan.zh-CN.md) | **已关闭** | 2026-08-14 |
+| 5c. Mantle Responses 丢 `messages[].name` 不申报 | 加一行申报（Responses 协议本就没有作者名的位置，不该改渲染）；测试改成双向，同时断言真能透传的 profile 不申报。已做反向验证 | **已修** | 2026-08-14 |
+| 5d. 评审其余七条 | 见 §5.2 表，按建议顺序排在 Anthropic 流式词表与 `max_completion_tokens` 两条之后 | 未排期 | 2026-08-14 |
+| 5e. 16 MiB 上限是否过窄 | **不验证。** 属容量问题而非代码正确性；真正的代码风险可用「临时降低常量 + 小批处理」以零成本验证。理由见[批处理方案 §5.2](anthropic-batches-plan.zh-CN.md) | **已关闭** | 2026-08-14 |
