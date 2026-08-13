@@ -90,7 +90,8 @@ out. Important groups are:
 - `retry` and `circuit_breaker`: bounded attempt and failure policy;
 - `alerts`: queue, worker, timeout, retry, and dedup bounds;
 - `security`: private egress and trusted proxy policy;
-- `metrics`: exporter enablement and authentication requirement.
+- `metrics`: exporter enablement and authentication requirement;
+- `logging`: level, encoding, and whether a bounded local file is kept.
 
 Metrics also supports `credential_file`, bounded scrapes/write timeout, and a
 dedicated mutual-TLS listener. The legacy Master-Key-derived token is suitable
@@ -106,6 +107,32 @@ settlement and returns the failure without retrying or switching Provider. Safe
 fallback remains available for explicitly classified non-ambiguous failures.
 This fail-closed behavior is not configurable in v1; changing it requires an
 end-to-end idempotency contract with the upstream Provider.
+
+### Logging
+
+The process log is JSON on stderr at `info` by default, which suits systemd and
+Docker and leaves nothing behind for an operator running the binary directly.
+Set `logging.output` to `file` or `both` to also keep a copy on this host —
+`logging.file` defaults to `logs/halro.log` inside the data directory, rotated
+at `logging.max_size_mb` and kept for `logging.max_files` generations, counting
+the file being written. Rotated generations are `halro.log.1`, `halro.log.2`,
+and so on; the file and its directory are created 0600/0700.
+
+Records are redacted before they are written, whatever the level: no
+authorization headers, Provider or Gateway keys, prompts, response bodies, or
+raw source IPs. Raising the level to `debug` changes how much is written, never
+what is allowed into a record. If the log file cannot be written — a full disk,
+a revoked permission — records go to stderr with one notice explaining why,
+rather than being dropped silently.
+
+A failed Provider attempt is logged as `provider attempt failed`, carrying the
+request ID, public model, deployment, provider and binding IDs, and the error
+class that decided whether it was retried. The upstream's own sentence is not
+written: it is a response body, and the one thing an upstream is most likely to
+quote back is the credential it just refused. A refusal Halro produced itself —
+a transport policy rejection, a response it would not decode — carries no
+Provider body and is logged with its cause, which is the case where an operator
+most needs it.
 
 Unknown YAML fields and invalid durations are rejected. Listener, TLS, storage,
 egress, proxy, and Metrics-auth changes require restart. The Admin Settings page
@@ -475,6 +502,10 @@ a WAL/Audit/Parquet set from another epoch.
 - Provider test is unhealthy: verify HTTPS hostname, credential audience/type,
   model deployment, Azure API version, and Bedrock region. Upstream bodies are
   intentionally hidden; use the provider control plane for detailed diagnosis.
+- Requests return 502 `provider_error`: the response deliberately carries no
+  upstream detail. Read `provider attempt failed` in the log for the error class
+  and, when Halro produced the refusal itself, its cause. Set
+  `logging.output: both` first if nothing is collecting stderr.
 - Requests return 403: check Project enabled state, key revocation, allowed
   routes/CIDRs, daily budget, Token Guard block, and redaction reject policy.
 - Requests return 429: distinguish Project RPM/TPM/concurrency, Provider or

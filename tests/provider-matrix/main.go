@@ -51,6 +51,10 @@ var betaProfiles = []profile{
 
 var gaProfiles = []profile{
 	{Name: "openai", Prefix: "OPENAI", Required: []string{"BASE_URL", "API_KEY", "MODEL", "EMBEDDING_MODEL"}},
+	// Anthropic has its own adapter package because it is the only GA profile
+	// with two execution modes. A run has to prove both the verbatim native path
+	// and the re-authored portable one; neither says anything about the other.
+	{Name: "anthropic", Prefix: "ANTHROPIC", Package: "./internal/provider/anthropic", Required: []string{"BASE_URL", "API_KEY", "MODEL"}},
 	{Name: "azure_openai", Prefix: "AZURE_OPENAI", Required: []string{"BASE_URL", "API_KEY", "MODEL", "EMBEDDING_MODEL", "API_VERSION"}},
 	{Name: "deepseek", Prefix: "DEEPSEEK", Required: []string{"BASE_URL", "API_KEY", "MODEL"}},
 	{Name: "openai_compatible", Prefix: "OPENAI_COMPATIBLE", Required: []string{"BASE_URL", "API_KEY", "MODEL", "EMBEDDING_MODEL"}},

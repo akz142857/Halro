@@ -52,10 +52,16 @@ func (s *service) MessagesStream(ctx context.Context, key string, request anthro
 	}
 	return nil
 }
-func (s *service) MessagesNative(ctx context.Context, key, _ string, request anthropicapi.MessageRequest) (anthropicapi.Message, error) {
+
+// Pinned for the same reason the handler pins its own service: the handler
+// discovers Messages support with a comma-ok assertion, so drifting from the
+// interface would leave this server answering 501 with nothing failing first.
+var _ gatewayapi.MessagesService = (*service)(nil)
+
+func (s *service) MessagesNative(ctx context.Context, key, _ string, _ []string, request anthropicapi.MessageRequest) (anthropicapi.Message, error) {
 	return s.Messages(ctx, key, request)
 }
-func (s *service) MessagesNativeStream(ctx context.Context, key, _ string, request anthropicapi.MessageRequest, emit func(anthropicapi.RawStreamEvent) error) error {
+func (s *service) MessagesNativeStream(ctx context.Context, key, _ string, _ []string, request anthropicapi.MessageRequest, emit func(anthropicapi.RawStreamEvent) error) error {
 	return s.MessagesStream(ctx, key, request, func(event anthropicapi.StreamEvent) error {
 		payload, err := json.Marshal(event)
 		if err != nil {
@@ -63,6 +69,16 @@ func (s *service) MessagesNativeStream(ctx context.Context, key, _ string, reque
 		}
 		return emit(anthropicapi.RawStreamEvent{Type: event.Type, Data: payload})
 	})
+}
+
+// The contract server answers count_tokens from the same fixed estimate the
+// manifest tests assert against; it exists to exercise the endpoint's envelope,
+// not to model Anthropic's tokenizer.
+func (s *service) MessagesCountTokens(_ context.Context, key, _ string, _ []string, request anthropicapi.MessageRequest) (anthropicapi.TokenCount, error) {
+	if err := contractError(key, request.Model); err != nil {
+		return anthropicapi.TokenCount{}, err
+	}
+	return anthropicapi.TokenCount{InputTokens: 7}, nil
 }
 
 func (s *service) Responses(_ context.Context, key string, request openaiapi.ResponseRequest) (openaiapi.Response, error) {
@@ -232,6 +248,7 @@ func main() {
 	mux.HandleFunc("POST /v1/chat/completions", handler.ChatCompletions)
 	mux.HandleFunc("POST /v1/responses", handler.Responses)
 	mux.HandleFunc("POST /v1/messages", handler.Messages)
+	mux.HandleFunc("POST /v1/messages/count_tokens", handler.CountTokens)
 	mux.HandleFunc("POST /v1/embeddings", handler.Embeddings)
 	mux.HandleFunc("GET /healthz", func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusNoContent)

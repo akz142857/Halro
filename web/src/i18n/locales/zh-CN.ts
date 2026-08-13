@@ -47,7 +47,7 @@ export const zhCN = {
   },
   notifications: { region: "系统通知", dismiss: "关闭通知" },
   testControl: { idle: "尚未测试", running: "测试中…", successPlain: "通过", success: "通过 · {{latency}}ms", failure: "失败", stale: "需重测",
-    reasons: { authentication: "上游拒绝了这份凭据（认证或授权失败）", rate_limit: "上游限流，稍后重试", timeout: "等待上游响应超时", provider_5xx: "上游返回服务端错误", bad_request: "上游拒绝了这次探测请求", connect: "无法建立到上游的连接（DNS、TLS 或网络）", malformed_response: "上游响应无法解析", unknown: "连接测试失败，原因未分类" } },
+    reasons: { authentication: "上游拒绝了这份凭据（认证或授权失败）", rate_limit: "上游限流，稍后重试", timeout: "等待上游响应超时", provider_5xx: "上游返回服务端错误", bad_request: "上游拒绝了这次探测请求", bad_request_local: "Halro 在发往上游之前拒绝了这次探测", connect: "无法建立到上游的连接（DNS、TLS 或网络）", malformed_response: "上游响应无法解析", unknown: "连接测试失败，原因未分类" } },
   errors: {
     badRequest: "请求内容无效，请检查后重试。",
     authentication: "登录状态无效或已过期，请重新登录。",
@@ -669,7 +669,7 @@ export const zhCN = {
     httpError: "上游 HTTP", routeFallback: "发生路由回退", requestRetry: "发生请求重试", unknownContext: "上下文不可用",
   },
   capabilities: {
-    chat: "对话", streaming: "流式", embeddings: "向量嵌入", moderations: "内容审核", images: "图像", transcriptions: "音频转写", speech: "语音合成", files: "文件", batches: "批处理", rerank: "重排", async_generate: "异步生成", tools: "工具调用", vision: "视觉", json_mode: "JSON 模式", developer_role: "开发者角色", reasoning: "推理", stream_usage: "流式用量",
+    chat: "对话", streaming: "流式", embeddings: "向量嵌入", moderations: "内容审核", images: "图像", transcriptions: "音频转写", speech: "语音合成", files: "文件", batches: "批处理", rerank: "重排", async_generate: "异步生成", tools: "工具调用", vision: "视觉", json_mode: "JSON 模式", developer_role: "开发者角色", reasoning: "推理", stream_usage: "流式用量", provider_executed_tools: "服务商侧执行工具",
   },
   usage: {
     eyebrow: "持久化计费", title: "用量与调用", description: "记录每次服务商尝试的项目、模型、令牌、成本与终态，支持多维度筛选。",
@@ -871,6 +871,7 @@ export const zhCN = {
     bedrockSurface: "Bedrock 访问面", bedrockSurfaceHint: "Runtime、Agent Runtime 与 Mantle 使用不同端点、凭据方案、配额池和服务商实例。", bedrockRuntime: "Bedrock Runtime · Converse", bedrockAgentRuntime: "Bedrock Agent Runtime · 重排", bedrockMantle: "Bedrock Mantle · OpenAI / Anthropic API",
     bedrockHint: "字段：access_key_id、secret_access_key、region；session_token 可选。区域必须匹配基础地址。", bedrockMantleHint: "粘贴 Bedrock API Key。Halro 将它绑定到准确的区域 Mantle 端点，且不会写入浏览器存储。", secretHint: "只通过 HTTPS 请求体发送，不写入浏览器存储",
     billableProbe: "该实现的连接测试会产生费用", billableProbeDescription: "Anthropic Messages 没有免费的元数据接口，连接测试会发起一次真实推理调用（最多 1 个输出令牌）。另外两个 Mantle 实现读取模型元数据，不计费。",
+    anthropicBetas: "Anthropic Beta 允许列表", anthropicBetasHint: "留空则拒绝所有 anthropic-beta 请求头。逗号分隔；只有列在这里的 token 会被转发，其余请求直接拒绝。Beta 功能可能把工作移到上游（代码执行、MCP 出站）或改变响应含义——逐个确认后再填。仅 native 模式生效。", anthropicBetasPlaceholder: "例如 context-management-2025-06-27, compact-2026-01-12",
     bedrockProject: "Bedrock 项目（Project ID）", bedrockProjectHint: "留空使用账户默认项目；填写 proj_ 开头的 ID 后，该实例的全部请求归入指定项目。wrkspc_ 开头的标识属于另一条产品线，此处不接受。", bedrockProjectPlaceholder: "默认项目",
     bedrockProfileHint: "每个服务商实例只选择一种线协议；需要多个 Mantle 协议时，请分别创建实例。",
     credentialExpiry: "到期时间（可选）",
@@ -884,6 +885,10 @@ export const zhCN = {
     validationCredentialBaseURL: "地址绑定不匹配",
     validationCapabilityRequired: "至少启用一项能力，否则没有模型部署能路由到这个服务商。",
     validationProjectFormat: "必须是 AWS 签发的 proj_ 开头加字母数字的 ID；留空则使用账户默认项目。",
+    validationBetaTooMany: "一个连接最多允许 {{max}} 个 beta token。",
+    validationBetaTooLong: "每个 beta token 最长 {{max}} 个字符。",
+    validationBetaCharset: "beta token 只能包含小写字母、数字、短横线、点和下划线。",
+    validationBetaDuplicate: "每个 beta token 只能出现一次。",
     validationProjectWorkspace: "这是 Claude Platform on AWS 的工作区标识（wrkspc_ 开头），属于另一条产品线，此处不接受。",
     validationProjectTooLong: "长度不能超过 {{max}} 个字符。",
     openAIProfiles: { chat: "Chat Completions", media: "媒体与资源" },

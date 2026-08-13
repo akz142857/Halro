@@ -652,6 +652,7 @@ var CapabilityNames = []string{
 	"chat", "embeddings", "moderations", "images", "transcriptions", "speech",
 	"files", "batches", "rerank", "async_generate",
 	"streaming", "tools", "vision", "json_mode", "developer_role", "reasoning", "stream_usage",
+	"provider_executed_tools",
 	"max_context_tokens", "max_output_tokens",
 }
 
@@ -705,6 +706,8 @@ func booleanValue(capabilities domain.ProviderCapabilities, name string) bool {
 		return capabilities.Reasoning
 	case "stream_usage":
 		return capabilities.StreamUsage
+	case "provider_executed_tools":
+		return capabilities.ProviderExecutedTools
 	default:
 		return false
 	}
@@ -746,6 +749,8 @@ func setBoolean(capabilities *domain.ProviderCapabilities, name string) {
 		capabilities.Reasoning = true
 	case "stream_usage":
 		capabilities.StreamUsage = true
+	case "provider_executed_tools":
+		capabilities.ProviderExecutedTools = true
 	}
 }
 

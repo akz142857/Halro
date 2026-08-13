@@ -104,6 +104,14 @@ function bedrockCredentialConfig(surface: BedrockCredentialSurface) {
   return bedrockProfileConfig("bedrock.runtime.converse.text.v1");
 }
 
+// The anthropic-beta header is comma separated, so the form takes one comma
+// separated string and stores the token set. Splitting here (rather than asking
+// the operator for one row per token) keeps copy-paste from Anthropic's docs
+// working, which is how these values actually arrive.
+function parseBetaTokens(value: string): string[] {
+  return value.split(",").map((token) => token.trim()).filter(Boolean);
+}
+
 function isBedrockProfile(value: string): value is BedrockProfile {
   return bedrockProfiles.includes(value as BedrockProfile);
 }
@@ -563,14 +571,25 @@ function ProviderForm({
   const [baseURL, setBaseURL] = useState(current?.base_url ?? defaultBaseURL(initialType));
   const [apiVersion, setAPIVersion] = useState(current?.api_version ?? "");
   const [bedrockProjectID, setBedrockProjectID] = useState(current?.bedrock_project_id ?? "");
+  const [anthropicBetas, setAnthropicBetas] = useState((current?.allowed_anthropic_betas ?? []).join(", "));
   const [maxConcurrency, setMaxConcurrency] = useState(current?.max_concurrency ?? 0);
   const [enabled, setEnabled] = useState(current?.enabled ?? true);
   const [capabilities, setCapabilities] = useState<ProviderCapabilities>(current?.capabilities ?? defaultProviderCapabilities(initialType));
-  const capabilityCeiling = defaultProviderCapabilities(type, profileID);
+  // The ceiling is what the operator may turn on; the defaults are what a new
+  // connection starts with. They were the same function, which forced every
+  // capability to be either always-on or unreachable — and
+  // provider_executed_tools has to be neither, because the profile supports it
+  // and enabling it accepts upstream egress Halro never sees.
+  const capabilityCeiling = maxProviderCapabilities(type, profileID);
   const fixedCapabilities = isStrictCapabilityProfile(type, profileID);
   const visibleCapabilities = capabilityNames.filter((capability) => capabilities[capability]);
   const configurableCapabilities = capabilityNames.filter((capability) => capabilityCeiling[capability] || capabilities[capability]);
   const selectedSurface = type === "bedrock" ? bedrockProfileConfig(profileID).surface : undefined;
+  // The header is only ever sent by the native Anthropic Messages path, which is
+  // a property of the profile rather than the surface: Bedrock Mantle also
+  // carries OpenAI chat and responses profiles, and a token stored on one of
+  // those would be kept and never sent.
+  const supportsAnthropicBetas = type === "anthropic" || profileID === "bedrock.mantle.anthropic.messages.v1";
   const matchingCredentials = credentials.filter((credential) => credential.type === type && (!selectedSurface || credential.access_surface === selectedSurface));
   const [credentialID, setCredentialID] = useState(current?.credential_id ?? credentials.find((credential) => credential.type === initialType && (initialType !== "bedrock" || credential.access_surface === bedrockProfileConfig(initialProfile).surface))?.id ?? "");
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -608,6 +627,7 @@ function ProviderForm({
       } : {}),
       ...(type === "azure_openai" ? { api_version: apiVersion } : {}),
       credential_id: credentialID, capabilities, max_concurrency: maxConcurrency, enabled,
+      ...(supportsAnthropicBetas ? { allowed_anthropic_betas: parseBetaTokens(anthropicBetas) } : {}),
       };
       return current
         ? api.updateProvider(current.id, value, current.revision)
@@ -619,7 +639,7 @@ function ProviderForm({
       onClose();
     },
   });
-  const dirty = useDirty({ name, type, profileID, baseURL, apiVersion, bedrockProjectID, maxConcurrency, enabled, capabilities, credentialID });
+  const dirty = useDirty({ name, type, profileID, baseURL, apiVersion, bedrockProjectID, anthropicBetas, maxConcurrency, enabled, capabilities, credentialID });
   // The save button sits in a sticky footer while the form scrolls behind it,
   // so a rejection renders into the part of the modal the operator is not
   // looking at: the click appears to do nothing and they click again. Bring the
@@ -662,7 +682,7 @@ function ProviderForm({
         <form className="provider-form" ref={formElement}
           onSubmit={(event) => {
             event.preventDefault();
-            const nextErrors = validateProvider({ name, credentialID, bedrockProjectID, mantle: selectedSurface === "bedrock-mantle", capabilities }, t);
+            const nextErrors = validateProvider({ name, credentialID, bedrockProjectID, mantle: selectedSurface === "bedrock-mantle", capabilities, anthropicBetas: supportsAnthropicBetas ? anthropicBetas : "" }, t);
             if (!nextErrors.credentialID && credentialBaseURLMismatch) nextErrors.credentialID = credentialBaseURLMismatch;
             setErrors(nextErrors);
             if (Object.keys(nextErrors).length) setRefusedSubmits((value) => value + 1);
@@ -705,6 +725,11 @@ function ProviderForm({
           {type === "azure_openai" && (
             <Field label={t("providers.apiVersion")} hint={t("providers.apiVersionHint")}>
               <input value={apiVersion} onChange={(event) => setAPIVersion(event.target.value)} required />
+            </Field>
+          )}
+          {supportsAnthropicBetas && (
+            <Field label={t("providers.anthropicBetas")} hint={t("providers.anthropicBetasHint")} error={errors.anthropicBetas}>
+              <input value={anthropicBetas} placeholder={t("providers.anthropicBetasPlaceholder")} onChange={(event) => { setAnthropicBetas(event.target.value); setErrors((previous) => omitError(previous, "anthropicBetas")); }} />
             </Field>
           )}
           {selectedSurface === "bedrock-mantle" && (
@@ -791,12 +816,12 @@ function ProviderForm({
 
 const capabilityNames = [
   "chat", "streaming", "embeddings", "moderations", "images", "transcriptions", "speech", "files", "batches", "rerank", "async_generate", "tools", "vision", "json_mode",
-  "developer_role", "reasoning", "stream_usage",
+  "developer_role", "reasoning", "stream_usage", "provider_executed_tools",
 ] as const;
 
 function updateCapabilitySelection(current: ProviderCapabilities, capability: typeof capabilityNames[number], enabled: boolean): ProviderCapabilities {
   const next = { ...current, [capability]: enabled };
-  const chatFeatures = ["streaming", "tools", "vision", "json_mode", "developer_role", "reasoning", "stream_usage"] as const;
+  const chatFeatures = ["streaming", "tools", "vision", "json_mode", "developer_role", "reasoning", "stream_usage", "provider_executed_tools"] as const;
   if (capability === "chat" && !enabled) {
     for (const feature of chatFeatures) next[feature] = false;
   } else if (capability !== "chat" && chatFeatures.includes(capability as typeof chatFeatures[number]) && enabled) {
@@ -823,7 +848,7 @@ function defaultProviderCapabilities(type: ProviderType, profileID: BedrockProfi
   const value: ProviderCapabilities = {
     chat: true, streaming: true, embeddings: false, tools: false, vision: false,
     moderations: false, images: false, transcriptions: false, speech: false, files: false, batches: false, rerank: false, async_generate: false,
-    json_mode: false, developer_role: false, reasoning: false, stream_usage: false,
+    json_mode: false, developer_role: false, reasoning: false, stream_usage: false, provider_executed_tools: false,
     max_context_tokens: 0, max_output_tokens: 0,
   };
   if (type === "openai" || type === "azure_openai") {
@@ -831,7 +856,7 @@ function defaultProviderCapabilities(type: ProviderType, profileID: BedrockProfi
     if (type === "openai") return { ...chat, moderations: true, images: true, transcriptions: true, speech: true, files: true, batches: true };
     return chat;
   }
-  if (type === "anthropic") return { ...value, tools: true, vision: true, reasoning: true, stream_usage: true };
+  if (type === "anthropic") return { ...value, tools: true, vision: true, json_mode: true, reasoning: true, stream_usage: true };
   if (type === "deepseek") return { ...value, tools: true, json_mode: true, reasoning: true, stream_usage: true };
   if (type === "openai_compatible") return { ...value, embeddings: true };
   if (type === "gemini") return { ...value, embeddings: true, developer_role: true, stream_usage: false };
@@ -847,9 +872,19 @@ function defaultProviderCapabilities(type: ProviderType, profileID: BedrockProfi
   return value;
 }
 
+// Mirrors domain.MaxProviderCapabilitiesForProfile.
+function maxProviderCapabilities(type: ProviderType, profileID: BedrockProfile = "bedrock.runtime.converse.text.v1"): ProviderCapabilities {
+  const ceiling = defaultProviderCapabilities(type, profileID);
+  // The direct Anthropic Messages profile can run the upstream's own tools. The
+  // Bedrock Mantle profiles keep ceiling == defaults: their sets are fixed by
+  // the build and widening one is a separate contract review.
+  if (type === "anthropic") return { ...ceiling, provider_executed_tools: true };
+  return ceiling;
+}
+
 const openAIChatCapabilities = new Set<keyof ProviderCapabilities>([
   "chat", "streaming", "embeddings", "tools", "vision", "json_mode", "developer_role", "reasoning", "stream_usage",
-  "max_context_tokens", "max_output_tokens",
+  "provider_executed_tools", "max_context_tokens", "max_output_tokens",
 ]);
 const openAIMediaCapabilities = new Set<keyof ProviderCapabilities>([
   "moderations", "images", "transcriptions", "speech", "files", "batches",
@@ -880,7 +915,7 @@ const maxBedrockProjectIDLength = 128;
 // see which field is wrong. The server stays the authority; this only keeps a
 // refusal from arriving as a bare 400 after the modal has scrolled away.
 function validateProvider(
-  value: { name: string; credentialID: string; bedrockProjectID: string; mantle: boolean; capabilities: ProviderCapabilities },
+  value: { name: string; credentialID: string; bedrockProjectID: string; mantle: boolean; capabilities: ProviderCapabilities; anthropicBetas: string },
   t: ReturnType<typeof useTranslation>["t"],
 ): Record<string, string> {
   const errors: Record<string, string> = {};
@@ -897,8 +932,22 @@ function validateProvider(
       errors.bedrockProjectID = t("providers.validationProjectFormat");
     }
   }
+  const betas = parseBetaTokens(value.anthropicBetas);
+  if (betas.length > maxAnthropicBetaTokens) {
+    errors.anthropicBetas = t("providers.validationBetaTooMany", { max: maxAnthropicBetaTokens });
+  } else if (betas.some((token) => token.length > maxAnthropicBetaTokenLength)) {
+    errors.anthropicBetas = t("providers.validationBetaTooLong", { max: maxAnthropicBetaTokenLength });
+  } else if (betas.some((token) => !/^[a-z0-9._-]+$/.test(token))) {
+    errors.anthropicBetas = t("providers.validationBetaCharset");
+  } else if (new Set(betas).size !== betas.length) {
+    errors.anthropicBetas = t("providers.validationBetaDuplicate");
+  }
   return errors;
 }
+
+// Mirrors domain.MaxAnthropicBetaTokens and MaxAnthropicBetaTokenLength.
+const maxAnthropicBetaTokens = 16;
+const maxAnthropicBetaTokenLength = 128;
 
 function omitError(errors: Record<string, string>, key: string) {
   if (!(key in errors)) return errors;

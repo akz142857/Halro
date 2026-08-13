@@ -328,7 +328,7 @@ Canonical `generate` 后复用现有版本化 ProviderPrimitive，因此认证�
 建议提供独立的原生入口：
 
 - `POST /v1/messages`；
-- `POST /v1/messages/count_tokens`，仅在能够给出可靠结果时提供；
+- `POST /v1/messages/count_tokens`，仅直连 Anthropic Messages Profile 提供（Bedrock Mantle 该端点未经证实，拒绝）；
 - Anthropic 原生 SSE 事件序列。
 
 该 Facade 保留 Anthropic 的消息、Content Block、Tool Use、Tool Result、停止原因、Usage
@@ -343,8 +343,8 @@ Anthropic SSE Facade。请求必须携带 `anthropic-version: 2023-06-01`；默�
 `Halro-Route-Mode: native` 则固定 Anthropic Access Surface/Profile，禁用跨 Provider Fallback，
 通过 NativeEnvelope 保留 Tool Use/Tool Result、Thinking/Redacted Thinking 以及签名事件的顺序和
 不透明值。上游 Header、错误类型、Request ID、Retry-After 与 SSE 生命周期均有独立契约；
-OpenAI、Anthropic、Gemini 的 Tool Choice 差异由 Golden Matrix 校验。`count_tokens` 尚未实现，
-因此不在当前 Manifest 中。执行模式和不支持项见 [ADR 0006](../adr/0006-anthropic-messages-facade.md)。
+OpenAI、Anthropic、Gemini 的 Tool Choice 差异由 Golden Matrix 校验。`count_tokens` 已实现，
+仅直连 Anthropic Messages Profile 提供，零成本结算但仍进 ledger 与审计，并有独立 Manifest 条目。执行模式和不支持项见 [ADR 0006](../adr/0006-anthropic-messages-facade.md)。
 
 ### 5.4 Portable 与 Native 模式
 
@@ -1727,7 +1727,7 @@ Matrix；Halro 扩展的 Rerank/Async 也不存在 OpenAI 官方 SDK Surface。�
 
 完成标准：资源 ID 不会被错误地跨 Provider 使用，媒体不会进入日志和不必要的持久层。
 
-本阶段不包含 `/v1/models`、Anthropic `count_tokens`、Azure/Gemini 新媒体能力、Realtime、状态型
+本阶段不包含 `/v1/models`、Azure/Gemini 新媒体能力、Realtime、状态型
 Responses、Vector Stores、Fine-tuning 或其他 Provider 控制面 API；这些项目保持各自的 Target、
 Optional、Later、Deferred 或 Out of scope 状态。
 
@@ -1852,7 +1852,7 @@ Manifest；其余记录在对应 Phase 获得真实需求、负责人和预算�
 | Broker Mode 是否等价于完整 Gateway | 否，使用独立 Assurance Profile，强治理 Project 默认拒绝 |
 | 故障时是否允许从 Gateway Terminated 静默降级到 Provider Direct | 否，连接模式和最低 Assurance 必须由 Project/Route 显式授权 |
 | Halro 是否最终自行终止 WebRTC | 未决定；自建、独立/第三方 Media Service 和 Direct Broker 都是候选终态 |
-| 当前优先级 | Phase 1A/1B/1C 与已授权 Phase 2 实现范围完成；Phase 2 仍为 Experimental，须通过第 17.4 节门槛后才能标 Compatible/GA；`/v1/models` 与 Anthropic `count_tokens` 尚未实现，Realtime 与 WebRTC 仍暂缓；后续新模型族继续按独立 Profile 和真实需求准入 |
+| 当前优先级 | Phase 1A/1B/1C 与已授权 Phase 2 实现范围完成；Phase 2 仍为 Experimental，须通过第 17.4 节门槛后才能标 Compatible/GA；`/v1/models` 尚未实现，Anthropic `count_tokens` 已实现（仅直连 Anthropic Messages Profile，零成本结算但仍进 ledger 与审计）；Realtime 与 WebRTC 仍暂缓；后续新模型族继续按独立 Profile 和真实需求准入 |
 
 ## 21. 协议与内部契约参考
 

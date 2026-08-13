@@ -694,13 +694,13 @@ function evidenceSummary(evidence: Record<string, string>) {
 
 type SelectableBinding = ProviderBinding & { id: string };
 
-const deploymentCapabilityNames = ["chat", "streaming", "embeddings", "moderations", "images", "transcriptions", "speech", "files", "batches", "rerank", "async_generate", "tools", "vision", "json_mode", "developer_role", "reasoning", "stream_usage"] as const;
+const deploymentCapabilityNames = ["chat", "streaming", "embeddings", "moderations", "images", "transcriptions", "speech", "files", "batches", "rerank", "async_generate", "tools", "vision", "json_mode", "developer_role", "reasoning", "stream_usage", "provider_executed_tools"] as const;
 type DeploymentCapabilityName = typeof deploymentCapabilityNames[number];
 
 const deploymentCapabilityGroups = [
   { id: "operations", capabilities: ["chat", "embeddings", "moderations", "images", "transcriptions", "speech", "rerank", "async_generate"] },
   { id: "modalities", capabilities: ["vision"] },
-  { id: "protocol", capabilities: ["streaming", "tools", "json_mode", "developer_role", "reasoning", "stream_usage"] },
+  { id: "protocol", capabilities: ["streaming", "tools", "json_mode", "developer_role", "reasoning", "stream_usage", "provider_executed_tools"] },
   { id: "managed", capabilities: ["files", "batches"] },
 ] as const;
 
@@ -1593,6 +1593,7 @@ function emptyCapabilities(): ProviderCapabilities {
     developer_role: false,
     reasoning: false,
     stream_usage: false,
+    provider_executed_tools: false,
     max_context_tokens: 0,
     max_output_tokens: 0,
   };

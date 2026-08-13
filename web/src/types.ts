@@ -356,6 +356,9 @@ export interface ProviderCapabilities {
   developer_role: boolean;
   reasoning: boolean;
   stream_usage: boolean;
+  // Tools the upstream runs itself. Off by default on every profile: enabling it
+  // accepts that this connection originates network calls Halro never sees.
+  provider_executed_tools: boolean;
   max_context_tokens: number;
   max_output_tokens: number;
 }
@@ -379,6 +382,7 @@ export interface Provider {
   credential_id: string;
   /** Empty or absent means the account's default Bedrock project. */
   bedrock_project_id?: string;
+  allowed_anthropic_betas?: string[];
   allowed_hosts: string[];
   capabilities: ProviderCapabilities;
   bindings?: ProviderBinding[];

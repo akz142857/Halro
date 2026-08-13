@@ -110,6 +110,7 @@ type NativeMessageCall struct {
 	RequestID     string
 	ProviderModel string
 	Version       string
+	Betas         []string
 	Payload       []byte
 }
 
@@ -124,6 +125,14 @@ type NativeMessagesAdapter interface {
 	MessagesNativeStream(context.Context, NativeMessageCall, func(anthropicapi.RawStreamEvent) error) (*anthropicapi.Usage, error)
 }
 
+// NativeTokenCountAdapter is separate from NativeMessagesAdapter because the
+// operation is separate: an adapter can speak the Messages wire format without
+// exposing count_tokens, and an adapter that cannot must fail closed rather than
+// have the call fall through to something that looks similar.
+type NativeTokenCountAdapter interface {
+	CountTokensNative(context.Context, NativeMessageCall) (NativeMessageResult, error)
+}
+
 type Adapter interface {
 	Type() string
 	Chat(context.Context, ChatCall) (openaiapi.ChatCompletionResponse, error)
@@ -133,25 +142,29 @@ type Adapter interface {
 }
 
 type Capabilities struct {
-	Chat             bool
-	Streaming        bool
-	Embeddings       bool
-	Moderations      bool
-	Images           bool
-	Transcriptions   bool
-	Speech           bool
-	Files            bool
-	Batches          bool
-	Rerank           bool
-	AsyncGenerate    bool
-	Tools            bool
-	Vision           bool
-	JSONMode         bool
-	DeveloperRole    bool
-	Reasoning        bool
-	StreamUsage      bool
-	MaxContextTokens int64
-	MaxOutputTokens  int64
+	Chat           bool
+	Streaming      bool
+	Embeddings     bool
+	Moderations    bool
+	Images         bool
+	Transcriptions bool
+	Speech         bool
+	Files          bool
+	Batches        bool
+	Rerank         bool
+	AsyncGenerate  bool
+	Tools          bool
+	Vision         bool
+	JSONMode       bool
+	DeveloperRole  bool
+	Reasoning      bool
+	StreamUsage    bool
+	// ProviderExecutedTools admits tools the upstream runs itself. It is the one
+	// capability here that describes egress rather than formatting: the provider
+	// makes its own network calls, outside SafeTransport's host allowlist.
+	ProviderExecutedTools bool
+	MaxContextTokens      int64
+	MaxOutputTokens       int64
 }
 
 func (c Capabilities) AnyOperation() bool {
@@ -230,9 +243,14 @@ type Target struct {
 	Strategy               string
 	Capabilities           Capabilities
 	CapabilityEvidence     domain.CapabilityEvidenceSet
-	MaxConcurrency         int64
-	DeploymentConcurrency  int64
-	operations             OperationRegistry
+	// AllowedAnthropicBetas is the set of anthropic-beta tokens this connection
+	// may forward. Routing checks a request's tokens against it before any
+	// provider work, so an unaccepted beta fails closed rather than reaching the
+	// upstream and changing what the response means.
+	AllowedAnthropicBetas []string
+	MaxConcurrency        int64
+	DeploymentConcurrency int64
+	operations            OperationRegistry
 }
 
 type Registry struct {

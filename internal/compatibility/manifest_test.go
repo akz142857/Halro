@@ -149,3 +149,37 @@ func TestInferenceResourcesManifestMatchesImplementedRequestAndResponseFields(t 
 		}
 	}
 }
+
+// Evidence and the SDK matrix are two ways of saying the same thing, and the
+// failure they invite is drift: an endpoint that gains an SDK suite without
+// claiming the evidence, or claims it without naming the SDKs. The first
+// understates what exists and the second overstates it, and overstating is the
+// one a reader cannot detect.
+func TestEndpointEvidenceCannotDriftFromTheSDKMatrix(t *testing.T) {
+	for _, manifest := range BuiltinEndpointManifests() {
+		claimed := slices.Contains(manifest.Evidence, EvidenceSDKBlackBox)
+		if claimed != (len(manifest.SDKMatrix) > 0) {
+			t.Errorf("%s: sdk_blackbox evidence=%v but sdk_matrix has %d entries",
+				manifest.ID, claimed, len(manifest.SDKMatrix))
+		}
+		if manifest.Status == StatusCompatible && !claimed {
+			t.Errorf("%s is compatible without SDK black-box evidence", manifest.ID)
+		}
+	}
+}
+
+// A status is a verdict and evidence is its basis, so every endpoint has to
+// declare one. An endpoint that declares none is not "unverified" — it is
+// unaccounted for, and there is no way to tell the two apart from the outside.
+func TestEveryEndpointDeclaresItsEvidence(t *testing.T) {
+	for _, manifest := range BuiltinEndpointManifests() {
+		if len(manifest.Evidence) == 0 {
+			t.Errorf("%s declares no evidence", manifest.ID)
+		}
+		for _, kind := range manifest.Evidence {
+			if !kind.Valid() {
+				t.Errorf("%s declares evidence kind %q, which is not a recognised kind", manifest.ID, kind)
+			}
+		}
+	}
+}

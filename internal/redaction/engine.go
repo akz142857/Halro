@@ -378,8 +378,8 @@ func (e *Engine) processRaw(policyID, scope string, raw json.RawMessage) (json.R
 	if len(raw) == 0 {
 		return raw, nil
 	}
-	var value any
-	if json.Unmarshal(raw, &value) != nil {
+	value, err := decodeJSONValue(raw)
+	if err != nil {
 		transformed, err := e.processString(policyID, scope, string(raw))
 		return json.RawMessage(transformed), err
 	}
@@ -394,10 +394,42 @@ func (e *Engine) processRaw(policyID, scope string, raw json.RawMessage) (json.R
 	return encoded, nil
 }
 
+// decodeJSONValue parses with UseNumber so a number survives the round trip as
+// its original literal. Without it every number became a float64, which both
+// corrupted long digit strings — the exact shape a card or account number takes
+// — and made the re-marshalled document differ from the input for reasons that
+// have nothing to do with the policy.
+func decodeJSONValue(raw json.RawMessage) (any, error) {
+	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err == nil {
+		return nil, errors.New("payload contains multiple JSON values")
+	}
+	return value, nil
+}
+
+// transformValue rewrites string values, and inspects everything else a secret
+// can hide in.
+//
+// Member names and numbers are checked but never rewritten. Renaming a member
+// changes the document's shape rather than its content, and replacing a number
+// with a masked string changes its type; either would hand the caller a document
+// that no longer means what it did. Reporting the match instead keeps the
+// inspected surface equal to the accepted surface — the property the native
+// paths rely on — without a rewrite that silently breaks the schema.
 func (e *Engine) transformValue(policyID, scope string, value any) (any, error) {
 	switch typed := value.(type) {
 	case string:
 		return e.processString(policyID, scope, typed)
+	case json.Number:
+		if err := e.inspectString(policyID, scope, typed.String()); err != nil {
+			return value, err
+		}
 	case []any:
 		for index := range typed {
 			next, err := e.transformValue(policyID, scope, typed[index])
@@ -408,6 +440,9 @@ func (e *Engine) transformValue(policyID, scope string, value any) (any, error) 
 		}
 	case map[string]any:
 		for key := range typed {
+			if err := e.inspectString(policyID, scope, key); err != nil {
+				return value, err
+			}
 			next, err := e.transformValue(policyID, scope, typed[key])
 			if err != nil {
 				return value, err

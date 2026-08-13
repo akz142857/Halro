@@ -32,6 +32,7 @@ import (
 	"github.com/akz142857/Halro/internal/config"
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/hostsecurity"
+	"github.com/akz142857/Halro/internal/logging"
 	"github.com/akz142857/Halro/internal/masterkey"
 	"github.com/akz142857/Halro/internal/safelog"
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
@@ -40,7 +41,7 @@ import (
 )
 
 func main() {
-	logger := safelog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	logger := logging.Bootstrap()
 	if err := run(os.Args[1:], logger); err != nil && !errors.Is(err, flag.ErrHelp) {
 		reportCommandFailure(os.Stderr, err)
 		os.Exit(1)
@@ -870,7 +871,31 @@ func writeRestoreStatus(output io.Writer, result app.RestoreResult) {
 	fmt.Fprintln(output, "Restore complete; previous data directory was preserved for rollback.")
 }
 
+// runRuntime is where the configured logger replaces the bootstrap one. Every
+// command that only reads or reports keeps the bootstrap logger — they run for a
+// second and their verdict goes to the terminal — but a serving process is the
+// one that has to answer questions hours later, and it is the only one whose
+// configuration was read before it started writing.
 func runRuntime(cfg config.Config, logger *slog.Logger, printGuide bool) error {
+	configured, closeLog, err := logging.Open(cfg)
+	if err != nil {
+		return fmt.Errorf("open log destination: %w", err)
+	}
+	defer func() {
+		if err := closeLog(); err != nil {
+			fmt.Fprintf(os.Stderr, "halro: close log file: %v\n", err)
+		}
+	}()
+	logger = configured
+	// Not "level": slog already spends that key on the record's own severity, and
+	// a JSON object carrying it twice is one every reader is entitled to
+	// disagree about.
+	logAttributes := []any{"min_level", cfg.Logging.Level, "format", cfg.Logging.Format, "output", cfg.Logging.Output}
+	if cfg.Logging.WritesFile() {
+		logAttributes = append(logAttributes,
+			"file", cfg.LogFilePath(), "max_size_mb", cfg.Logging.MaxSizeMB, "max_files", cfg.Logging.MaxFiles)
+	}
+	logger.Info("logging configured", logAttributes...)
 	hardening, err := hardenRuntimeCommand()
 	if err != nil {
 		return fmt.Errorf("apply runtime host hardening before Master Key unlock: %w", err)

@@ -407,7 +407,7 @@ func TestFakeProviderHTTPErrorMatrix(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(http.StatusText(test.status), func(t *testing.T) {
-			got := classifyHTTPError(test.status, "synthetic provider failure")
+			got := classifyHTTPError(test.status, upstreamRefusal{Message: "synthetic provider failure"})
 			if got.Class != test.class || got.Retryable != test.retryable || got.StatusCode != test.status {
 				t.Fatalf("status=%d error=%#v", test.status, got)
 			}

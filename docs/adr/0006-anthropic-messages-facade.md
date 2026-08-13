@@ -75,5 +75,14 @@ The semantic matrix is executable test data, not an assumed enum cast:
 
 Native mode provides provider fidelity at the cost of provider pinning and no
 fallback. Portable mode retains gateway mobility but rejects features whose
-semantics are not proven. `count_tokens`, stored resources, hosted tools,
-media, Realtime, and HA/Cluster remain outside Phase 1B.
+semantics are not proven. Stored resources, media, Realtime, and HA/Cluster
+remain outside Phase 1B.
+
+`count_tokens` and provider-executed (hosted) tools were later added on the same
+axis this ADR establishes. `count_tokens` is served natively against the direct
+Anthropic profile only, and settled at zero cost while still taking a ledger
+attempt, because it is a real provider call on the operator's credential.
+Provider-executed tools are admitted by an explicit `provider_executed_tools`
+capability rather than by the decoder: what makes them different is not their
+shape but their egress — the upstream originates network calls that never pass
+through SafeTransport.

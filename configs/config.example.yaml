@@ -509,3 +509,35 @@ model_catalog:
   # @description.zh-CN 单个已验证清单允许的最大精确模型条目数。
   # @description.en-US Maximum exact model entries in one verified manifest.
   max_entries: 10000
+
+logging:
+  # @title.zh-CN 日志级别
+  # @title.en-US Log level
+  # @description.zh-CN debug、info、warn 或 error；低于该级别的记录不写出。
+  # @description.en-US debug, info, warn or error; records below this level are not written.
+  level: info
+  # @title.zh-CN 日志格式
+  # @title.en-US Log format
+  # @description.zh-CN json 供机器读取，text 供终端阅读。无论哪种格式，记录都已脱敏。
+  # @description.en-US json for machine reading, text for a terminal. Records are redacted either way.
+  format: json
+  # @title.zh-CN 日志输出位置
+  # @title.en-US Log output
+  # @description.zh-CN stderr、file 或 both；没有外部采集器时用 file 或 both 在本机留一份。
+  # @description.en-US stderr, file or both; use file or both to keep a local copy when nothing collects stderr.
+  output: stderr
+  # @title.zh-CN 日志文件路径
+  # @title.en-US Log file path
+  # @description.zh-CN 留空表示数据目录下的 logs/halro.log；仅在输出包含文件时使用。
+  # @description.en-US Empty means logs/halro.log inside the data directory; used only when the output includes a file.
+  file: ""
+  # @title.zh-CN 单个日志文件上限（MB）
+  # @title.en-US Log file size limit (MB)
+  # @description.zh-CN 写入将超过该大小时轮转当前文件。
+  # @description.en-US Rotates the current file once a record would carry it past this size.
+  max_size_mb: 64
+  # @title.zh-CN 保留的日志文件数
+  # @title.en-US Retained log files
+  # @description.zh-CN 含正在写入的文件在内的总代数；1 表示不保留历史。
+  # @description.en-US Total generations kept, including the file being written; 1 keeps no history.
+  max_files: 5

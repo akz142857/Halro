@@ -196,3 +196,32 @@ func TestTokenLimitAliasesAndJSONSchemaMetadataRoundTrip(t *testing.T) {
 		t.Fatal("unknown response_format field was silently dropped")
 	}
 }
+
+// finish_reason is an OpenAI enum, and NativeTermination is whatever word the
+// upstream used. Preferring the native word unconditionally put "end_turn" from
+// Anthropic and Bedrock, and "STOP" from Gemini, into a field whose only defined
+// values are stop, length, tool_calls and content_filter. No OpenAI client can
+// read those, and /v1/responses refused its own gateway's answer as
+// unrepresentable — a 502 for a request the upstream had completed normally.
+func TestFinishReasonStaysInTheOpenAIVocabulary(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		native      string
+		termination string
+		expected    string
+	}{
+		{"an OpenAI upstream keeps its own word", "stop", "complete", "stop"},
+		{"including a legacy value this mapping does not model", "function_call", "unknown", "function_call"},
+		{"an Anthropic turn ending normally", "end_turn", "complete", "stop"},
+		{"an Anthropic turn asking for a tool", "tool_use", "tool_call", "tool_calls"},
+		{"a Gemini turn cut short", "MAX_TOKENS", "max_output", "length"},
+		{"a termination nothing recognized", "surprise", "unknown", "unknown"},
+		{"no termination at all", "", "", ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := openAIFinishReason(test.native, test.termination); got != test.expected {
+				t.Fatalf("finish_reason=%q want %q", got, test.expected)
+			}
+		})
+	}
+}

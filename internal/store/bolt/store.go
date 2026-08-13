@@ -21,7 +21,7 @@ import (
 	bbolt "go.etcd.io/bbolt"
 )
 
-const schemaVersion uint64 = 27
+const schemaVersion uint64 = 28
 
 // legacyCapabilityEvidence is the evidence tier this project used before
 // capability evidence was durable metadata. The domain no longer accepts it, so
@@ -657,6 +657,129 @@ var migrations = []migration{
 		}
 		return migrationStep(step, "after_create_admin_audit_intents")
 	}},
+	// provider_executed_tools joins the capability dictionary. Evidence sets are
+	// validated against that dictionary as a whole — every name must be present —
+	// so a record written before this migration stops loading the moment the name
+	// exists. The value is reconstructible rather than invented: the capability
+	// did not exist, so nothing could have declared it, and `unsupported` is the
+	// only reading of a record that predates it.
+	//
+	// Fields are patched into the decoded object rather than re-marshalled through
+	// the domain structs, so nothing this migration does not know about is lost.
+	{version: 28, name: "provider_executed_tools_capability", up: func(tx *bbolt.Tx, step func(string) error) error {
+		if err := migrationStep(step, "before_provider_executed_tools_capability"); err != nil {
+			return err
+		}
+		if err := rewriteBucketIfPresent(tx, bucketProviders, func(record map[string]json.RawMessage) error {
+			if err := backfillEvidenceMember(record, "capability_evidence"); err != nil {
+				return err
+			}
+			return patchArrayMember(record, "bindings", func(binding map[string]json.RawMessage) error {
+				return backfillEvidenceMember(binding, "capability_evidence")
+			})
+		}); err != nil {
+			return err
+		}
+		if err := rewriteBucketIfPresent(tx, bucketDeployments, func(record map[string]json.RawMessage) error {
+			if err := backfillEvidenceMember(record, "capability_evidence"); err != nil {
+				return err
+			}
+			encoded, ok := record["model_capability_snapshot"]
+			if !ok {
+				return nil
+			}
+			var snapshot map[string]json.RawMessage
+			if err := json.Unmarshal(encoded, &snapshot); err != nil {
+				return err
+			}
+			if err := backfillEvidenceMember(snapshot, "evidence"); err != nil {
+				return err
+			}
+			updated, err := json.Marshal(snapshot)
+			if err != nil {
+				return err
+			}
+			record["model_capability_snapshot"] = updated
+			return nil
+		}); err != nil {
+			return err
+		}
+		return migrationStep(step, "after_provider_executed_tools_capability")
+	}},
+}
+
+// newCapabilityEvidenceMembers names the capabilities added to the dictionary by
+// migration 28. Each is recorded as unsupported on records that predate it.
+var newCapabilityEvidenceMembers = []string{"provider_executed_tools"}
+
+func backfillEvidenceMember(object map[string]json.RawMessage, field string) error {
+	encoded, ok := object[field]
+	if !ok || len(encoded) == 0 {
+		return nil
+	}
+	var evidence map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &evidence); err != nil {
+		return err
+	}
+	if evidence == nil {
+		return nil
+	}
+	changed := false
+	for _, name := range newCapabilityEvidenceMembers {
+		if _, present := evidence[name]; present {
+			continue
+		}
+		evidence[name] = json.RawMessage(`"` + string(domain.EvidenceUnsupported) + `"`)
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	updated, err := json.Marshal(evidence)
+	if err != nil {
+		return err
+	}
+	object[field] = updated
+	return nil
+}
+
+func patchArrayMember(object map[string]json.RawMessage, field string, patch func(map[string]json.RawMessage) error) error {
+	encoded, ok := object[field]
+	if !ok || len(encoded) == 0 {
+		return nil
+	}
+	var elements []map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &elements); err != nil {
+		return err
+	}
+	for _, element := range elements {
+		if err := patch(element); err != nil {
+			return err
+		}
+	}
+	updated, err := json.Marshal(elements)
+	if err != nil {
+		return err
+	}
+	object[field] = updated
+	return nil
+}
+
+func rewriteBucketIfPresent(tx *bbolt.Tx, name []byte, patch func(map[string]json.RawMessage) error) error {
+	bucket := tx.Bucket(name)
+	if bucket == nil {
+		return nil
+	}
+	return rewriteBucket(bucket, func(raw []byte) ([]byte, error) {
+		var record map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &record); err != nil {
+			return nil, fmt.Errorf("record in %s is unreadable and cannot be brought forward: %w", name, err)
+		}
+		if err := patch(record); err != nil {
+			return nil, err
+		}
+		return json.Marshal(record)
+	})
 }
 
 // patchJSONField sets one field on an encoded object without disturbing the

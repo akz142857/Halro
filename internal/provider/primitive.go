@@ -298,6 +298,21 @@ func (target Target) Embedding() (EmbeddingAdapter, error) {
 	return embedding, nil
 }
 
+// NativeTokenCount resolves the count_tokens adapter. Eligibility is checked
+// against OperationMessages because count_tokens takes a Messages request and is
+// served by the same connection; what it does not share is billing, so the
+// caller settles it at zero cost rather than through the generation path.
+func (target Target) NativeTokenCount() (NativeTokenCountAdapter, error) {
+	if _, ok := target.ResolveOperation(OperationMessages); !ok {
+		return nil, errors.New("native Messages operation is unavailable")
+	}
+	adapter, ok := target.Adapter.(NativeTokenCountAdapter)
+	if !ok {
+		return nil, errors.New("provider adapter does not implement native count_tokens")
+	}
+	return adapter, nil
+}
+
 func (target Target) NativeMessages(stream bool) (NativeMessagesAdapter, error) {
 	operation := OperationMessages
 	if stream {

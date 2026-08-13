@@ -47,11 +47,25 @@ func (s *fakeService) MessagesStream(_ context.Context, key string, request anth
 	return emit(anthropicapi.StreamEvent{Type: "message_stop"})
 }
 
-func (s *fakeService) MessagesNative(ctx context.Context, key, _ string, request anthropicapi.MessageRequest) (anthropicapi.Message, error) {
+// The handler discovers Messages support with a comma-ok assertion, so a fake
+// that drifts from the interface silently answers 501 instead of failing the
+// build. Pin the fake the same way the production service is pinned.
+var _ MessagesService = (*fakeService)(nil)
+
+func (s *fakeService) MessagesNative(ctx context.Context, key, _ string, _ []string, request anthropicapi.MessageRequest) (anthropicapi.Message, error) {
 	return s.Messages(ctx, key, request)
 }
 
-func (s *fakeService) MessagesNativeStream(_ context.Context, key, _ string, request anthropicapi.MessageRequest, emit func(anthropicapi.RawStreamEvent) error) error {
+func (s *fakeService) MessagesCountTokens(_ context.Context, key, _ string, _ []string, _ anthropicapi.MessageRequest) (anthropicapi.TokenCount, error) {
+	s.calls++
+	s.key = key
+	if s.err != nil {
+		return anthropicapi.TokenCount{}, s.err
+	}
+	return anthropicapi.TokenCount{InputTokens: 11}, nil
+}
+
+func (s *fakeService) MessagesNativeStream(_ context.Context, key, _ string, _ []string, request anthropicapi.MessageRequest, emit func(anthropicapi.RawStreamEvent) error) error {
 	s.calls++
 	s.key = key
 	if s.err != nil {

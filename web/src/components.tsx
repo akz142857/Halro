@@ -63,14 +63,29 @@ export function InlineTestControl({ state, latency, onTest, disabled = false, ti
 export function useTestFailureReason(error: unknown, persistedErrorClass?: string) {
   const { t } = useTranslation();
   const payload = error instanceof ApiError
-    ? error.payload as { error_class?: string; provider_status?: number; provider_code?: string; error_detail?: string } | undefined
+    ? error.payload as { error_class?: string; provider_status?: number; provider_code?: string; error_detail?: string; error?: string } | undefined
     : undefined;
-  const errorClass = payload?.error_class || persistedErrorClass || "";
-  if (!errorClass && !payload?.error_detail) return "";
-  const parts = [t(`testControl.reasons.${errorClass || "unknown"}`, { defaultValue: t("testControl.reasons.unknown") })];
+  // The class this response carried, kept apart from the one the store
+  // remembers: a stale class from an older test must not describe a refusal
+  // this request produced.
+  const responseClass = payload?.error_class || "";
+  const errorClass = responseClass || persistedErrorClass || "";
+  // A refusal Halro made before probing answers with a plain `error` message and
+  // never reaches the provider, so it is the whole explanation rather than a
+  // detail beside one — and it was previously dropped, leaving the operator with
+  // a class and no sentence.
+  const detail = payload?.error_detail || payload?.error || "";
+  if (!errorClass && !detail) return "";
+  // Halro's own refusal, not the upstream's: either it classified the request as
+  // bad before sending it, or it answered with a message and no class at all.
+  // Saying "the upstream rejected this probe" there sends the operator to audit
+  // a key and a network that were never involved.
+  const local = !payload?.provider_status && (responseClass === "bad_request" || (!responseClass && !!payload?.error));
+  const reasonKey = local ? "bad_request_local" : errorClass || "unknown";
+  const parts = [t(`testControl.reasons.${reasonKey}`, { defaultValue: t("testControl.reasons.unknown") })];
   if (payload?.provider_status) parts.push(`HTTP ${payload.provider_status}`);
   if (payload?.provider_code) parts.push(payload.provider_code);
-  if (payload?.error_detail) parts.push(payload.error_detail);
+  if (detail) parts.push(detail);
   return parts.join(" · ");
 }
 

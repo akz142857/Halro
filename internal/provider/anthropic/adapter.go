@@ -83,11 +83,46 @@ func (adapter *Adapter) InvocationTargetDiscovery() domain.InvocationTargetDisco
 }
 
 type anthropicModelDescriptor struct {
-	ID              string                     `json:"id"`
-	DisplayName     string                     `json:"display_name"`
-	Capabilities    map[string]json.RawMessage `json:"capabilities"`
-	MaxInputTokens  int64                      `json:"max_input_tokens"`
-	MaxOutputTokens int64                      `json:"max_output_tokens"`
+	ID           string                     `json:"id"`
+	DisplayName  string                     `json:"display_name"`
+	Capabilities map[string]json.RawMessage `json:"capabilities"`
+	// MaxInputTokens is the context window; the output ceiling arrives as
+	// `max_tokens`, named after the request parameter it bounds rather than
+	// after the window it sits opposite.
+	MaxInputTokens  int64 `json:"max_input_tokens"`
+	MaxOutputTokens int64 `json:"max_tokens"`
+}
+
+// modelCatalogURL addresses GET /v1/models, which both the catalog enumeration
+// and the credential-only connection test read.
+func (adapter *Adapter) modelCatalogURL(limit int, afterID string) url.URL {
+	endpoint := *adapter.endpoint
+	endpoint.Path = strings.TrimRight(endpoint.Path, "/")
+	if !strings.HasSuffix(endpoint.Path, "/v1") {
+		endpoint.Path += "/v1"
+	}
+	endpoint.Path += "/models"
+	values := endpoint.Query()
+	values.Set("limit", strconv.Itoa(limit))
+	if afterID != "" {
+		values.Set("after_id", afterID)
+	}
+	endpoint.RawQuery = values.Encode()
+	return endpoint
+}
+
+// newModelCatalogRequest is the authorized GET both catalog readers share.
+func (adapter *Adapter) newModelCatalogRequest(ctx context.Context, endpoint url.URL) (*http.Request, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	if err != nil {
+		return nil, badRequest("create Anthropic model catalog request", err)
+	}
+	if err := adapter.authorizer.Authorize(request, nil); err != nil {
+		return nil, &provider.Error{Class: provider.ErrorAuthentication, Message: "authorize Anthropic model catalog request", Cause: err}
+	}
+	request.Header.Set("anthropic-version", anthropicapi.SupportedVersion)
+	request.Header.Set("accept", "application/json")
+	return request, nil
 }
 
 func (adapter *Adapter) ListInvocationTargets(ctx context.Context, query domain.TargetQuery) ([]domain.InvocationTargetDescriptor, error) {
@@ -97,27 +132,10 @@ func (adapter *Adapter) ListInvocationTargets(ctx context.Context, query domain.
 	var targets []domain.InvocationTargetDescriptor
 	afterID := ""
 	for page := 0; page < 20; page++ {
-		endpoint := *adapter.endpoint
-		endpoint.Path = strings.TrimRight(endpoint.Path, "/")
-		if !strings.HasSuffix(endpoint.Path, "/v1") {
-			endpoint.Path += "/v1"
-		}
-		endpoint.Path += "/models"
-		values := endpoint.Query()
-		values.Set("limit", "1000")
-		if afterID != "" {
-			values.Set("after_id", afterID)
-		}
-		endpoint.RawQuery = values.Encode()
-		request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+		request, err := adapter.newModelCatalogRequest(ctx, adapter.modelCatalogURL(1000, afterID))
 		if err != nil {
-			return nil, badRequest("create Anthropic model catalog request", err)
+			return nil, err
 		}
-		if err := adapter.authorizer.Authorize(request, nil); err != nil {
-			return nil, &provider.Error{Class: provider.ErrorAuthentication, Message: "authorize Anthropic model catalog request", Cause: err}
-		}
-		request.Header.Set("anthropic-version", anthropicapi.SupportedVersion)
-		request.Header.Set("accept", "application/json")
 		response, err := adapter.client.Do(request)
 		if err != nil {
 			return nil, transportError(err)
@@ -185,28 +203,49 @@ func (adapter *Adapter) DescribeInvocationTarget(ctx context.Context, target dom
 	return domain.InvocationTargetDescriptor{}, &provider.Error{Class: provider.ErrorBadRequest, Message: "invocation target was not found"}
 }
 
+// MapCapabilityClaims turns the Models API's capability report into Halro's
+// vocabulary. Two things about that report shape this:
+//
+// Chat and streaming have no flag, because the Models API describes the models
+// of the Messages API — a target it enumerates is a Messages target by
+// construction, and this profile only enumerates when it is talking to
+// Anthropic's own surface. They are claimed from that fact rather than from an
+// absent field, and they have to be: dependencyClosure drops vision, json_mode
+// and reasoning from any target that does not also claim chat.
+//
+// Tool use has no flag either, and unlike chat it is not implied by the
+// endpoint, so nothing is claimed for it here — a capability the upstream never
+// asserted is left to the model catalog rather than assumed.
 func (adapter *Adapter) MapCapabilityClaims(target domain.InvocationTargetDescriptor, scope domain.InvocationTargetScopeKey, observedAt time.Time) []domain.CapabilityClaim {
 	mapping := map[string]string{
-		"messages": "chat", "streaming": "streaming", "tool_use": "tools", "image_input": "vision",
-		"thinking": "reasoning", "structured_outputs": "json_mode",
+		"image_input": "vision", "thinking": "reasoning", "structured_outputs": "json_mode", "batch": "batches",
 	}
-	var claims []domain.CapabilityClaim
-	for _, capability := range target.Metadata.SupportedOperations {
-		capabilityID, ok := mapping[capability]
-		if !ok {
-			continue
-		}
-		claims = append(claims, domain.CapabilityClaim{
+	claim := func(capabilityID, evidenceKey string) domain.CapabilityClaim {
+		return domain.CapabilityClaim{
 			CapabilityID: capabilityID, Status: domain.ClaimSupported, Evidence: domain.EvidenceDeclared,
 			Source: domain.ClaimSourceProviderMetadata, Scope: scope, ObservedAt: observedAt,
-			Revision: provider.CapabilityClaimRevision(string(domain.ClaimSourceProviderMetadata), target.TargetID, capability),
-		})
+			Revision: provider.CapabilityClaimRevision(string(domain.ClaimSourceProviderMetadata), target.TargetID, evidenceKey),
+		}
+	}
+	claims := []domain.CapabilityClaim{claim("chat", "messages"), claim("streaming", "messages")}
+	for _, capability := range target.Metadata.SupportedOperations {
+		if capabilityID, ok := mapping[capability]; ok {
+			claims = append(claims, claim(capabilityID, capability))
+		}
 	}
 	return claims
 }
 
+// allowlistedAnthropicCapabilities keeps the capability keys the Models API
+// documents, in the provider's own vocabulary. Not all of them map onto a Halro
+// capability — pdf_input, citations, code_execution, context_management and
+// effort have no counterpart — but they are the upstream's answer about this
+// model and belong in its metadata.
 func allowlistedAnthropicCapabilities(input map[string]json.RawMessage) []string {
-	keys := []string{"messages", "streaming", "tool_use", "image_input", "thinking", "structured_outputs"}
+	keys := []string{
+		"batch", "citations", "code_execution", "context_management", "effort",
+		"image_input", "pdf_input", "structured_outputs", "thinking",
+	}
 	result := make([]string, 0, len(keys))
 	for _, key := range keys {
 		if capabilityFlag(input[key]) {
@@ -216,19 +255,17 @@ func allowlistedAnthropicCapabilities(input map[string]json.RawMessage) []string
 	return result
 }
 
+// capabilityFlag reads the `{"supported": bool}` object every capability member
+// carries — including the ones that nest further members beside it, such as
+// thinking.types and effort.high.
 func capabilityFlag(raw json.RawMessage) bool {
 	if len(raw) == 0 {
 		return false
 	}
-	var direct bool
-	if json.Unmarshal(raw, &direct) == nil {
-		return direct
-	}
 	var wrapped struct {
 		Supported bool `json:"supported"`
-		Enabled   bool `json:"enabled"`
 	}
-	return json.Unmarshal(raw, &wrapped) == nil && (wrapped.Supported || wrapped.Enabled)
+	return json.Unmarshal(raw, &wrapped) == nil && wrapped.Supported
 }
 
 func firstNonEmpty(values ...string) string {
@@ -240,11 +277,61 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
+// Probe answers whether this credential reaches this upstream. A provider whose
+// binding has an enabled Deployment is tested through the smallest real Messages
+// request; one tested before any Deployment exists has no model to name, and
+// reads the Models API instead — the same fallback the OpenAI and Gemini
+// adapters use. Sending Messages with an empty model would be refused by Halro's
+// own request validation, before a single byte reached the network, and the
+// console would report a local refusal as an upstream one.
 func (adapter *Adapter) Probe(ctx context.Context, model string) error {
+	if strings.TrimSpace(model) == "" {
+		return adapter.probeModelCatalog(ctx)
+	}
 	request := anthropicapi.MessageRequest{Model: model, MaxTokens: 1, Messages: []anthropicapi.MessageParam{{Role: "user", Content: anthropicapi.ContentBlocks{{Type: "text", Text: "ping"}}}}}
 	payload, _ := json.Marshal(request)
 	_, err := adapter.MessagesNative(ctx, provider.NativeMessageCall{RequestID: "probe", ProviderModel: model, Version: anthropicapi.SupportedVersion, Payload: payload})
 	return err
+}
+
+// probeModelCatalog reads one page of one model. It answers the same questions a
+// Messages probe answers about reachability, TLS, and the credential, and asks
+// the upstream for as little as the endpoint allows.
+func (adapter *Adapter) probeModelCatalog(ctx context.Context) error {
+	if !adapter.InvocationTargetDiscovery().CanEnumerate {
+		return &provider.Error{Class: provider.ErrorBadRequest, Message: "this profile has no model catalog to test against; bind an enabled deployment and test that"}
+	}
+	request, err := adapter.newModelCatalogRequest(ctx, adapter.modelCatalogURL(1, ""))
+	if err != nil {
+		return err
+	}
+	response, err := adapter.client.Do(request)
+	if err != nil {
+		return transportError(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return decodeHTTPError(response)
+	}
+	payload, err := readLimited(response.Body, maxResponseBytes)
+	if err != nil {
+		return malformed("read Anthropic model catalog response", err)
+	}
+	// A 200 carrying something other than a model list means the endpoint is
+	// answering, but not as the Models API — a proxy login page reached over
+	// HTTPS should not read as a healthy provider.
+	var catalog struct {
+		Data []anthropicModelDescriptor `json:"data"`
+	}
+	if err := json.Unmarshal(payload, &catalog); err != nil {
+		return malformed("decode Anthropic model catalog response", err)
+	}
+	// An empty list is a valid answer — an account can be entitled to nothing —
+	// but an absent one means this was not the Models API's reply.
+	if catalog.Data == nil {
+		return malformed("Anthropic model catalog response omitted its model list", nil)
+	}
+	return nil
 }
 
 func (adapter *Adapter) Chat(ctx context.Context, call provider.ChatCall) (openaiapi.ChatCompletionResponse, error) {
@@ -417,7 +504,42 @@ func (adapter *Adapter) MessagesNativeStream(ctx context.Context, call provider.
 	return usage, nil
 }
 
+// CountTokensNative asks the upstream how many prompt tokens a Messages request
+// would consume. Anthropic does not bill it, but it is still a real provider
+// call on the operator's credential, so it runs through the same authorization,
+// transport and accounting path as a generation — only its settlement is zero.
+func (adapter *Adapter) CountTokensNative(ctx context.Context, call provider.NativeMessageCall) (provider.NativeMessageResult, error) {
+	payload, err := prepareCountTokensPayload(call)
+	if err != nil {
+		return provider.NativeMessageResult{}, badRequest("prepare Anthropic count_tokens request", err)
+	}
+	request, err := adapter.requestTo(ctx, call, payload, false, "count_tokens")
+	if err != nil {
+		return provider.NativeMessageResult{}, err
+	}
+	response, err := adapter.client.Do(request)
+	if err != nil {
+		return provider.NativeMessageResult{}, transportError(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return provider.NativeMessageResult{}, decodeHTTPError(response)
+	}
+	body, err := readLimited(response.Body, maxResponseBytes)
+	if err != nil {
+		return provider.NativeMessageResult{}, malformed("read Anthropic count_tokens response", err)
+	}
+	if _, err := anthropicapi.DecodeTokenCount(body); err != nil {
+		return provider.NativeMessageResult{}, malformed("validate Anthropic count_tokens response", err)
+	}
+	return provider.NativeMessageResult{Payload: body, ProviderRequestID: upstreamRequestID(response.Header), RetryAfter: parseRetryAfter(response.Header)}, nil
+}
+
 func (adapter *Adapter) request(ctx context.Context, call provider.NativeMessageCall, payload []byte, stream bool) (*http.Request, error) {
+	return adapter.requestTo(ctx, call, payload, stream, "")
+}
+
+func (adapter *Adapter) requestTo(ctx context.Context, call provider.NativeMessageCall, payload []byte, stream bool, suffix string) (*http.Request, error) {
 	endpoint := *adapter.endpoint
 	endpoint.Path = strings.TrimRight(endpoint.Path, "/")
 	if adapter.messagesPath != "" {
@@ -428,6 +550,9 @@ func (adapter *Adapter) request(ctx context.Context, call provider.NativeMessage
 		}
 		endpoint.Path += "/messages"
 	}
+	if suffix != "" {
+		endpoint.Path += "/" + suffix
+	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), bytes.NewReader(payload))
 	if err != nil {
 		return nil, badRequest("create Anthropic request", err)
@@ -436,6 +561,12 @@ func (adapter *Adapter) request(ctx context.Context, call provider.NativeMessage
 	// to see every header it covers, and the project header is chosen here
 	// rather than by the authorizer because addressing is not authentication.
 	request.Header.Set("anthropic-version", call.Version)
+	if len(call.Betas) > 0 {
+		// Tokens are validated against the connection's allowlist upstream of
+		// here, and the stored charset excludes commas and whitespace, so joining
+		// cannot smuggle an unaccepted token into the header.
+		request.Header.Set(anthropicapi.BetaHeader, strings.Join(call.Betas, ","))
+	}
 	request.Header.Set("content-type", "application/json")
 	if stream {
 		request.Header.Set("accept", "text/event-stream")
@@ -450,13 +581,51 @@ func (adapter *Adapter) request(ctx context.Context, call provider.NativeMessage
 	return request, nil
 }
 
+// preparePayload rewrites only the two fields Halro owns — the upstream model
+// identifier and the stream flag — directly on the caller's bytes. Decoding into
+// MessageRequest and re-marshalling would silently drop every field the struct
+// does not model, which is the difference between a native mode that pins a wire
+// profile and one that quietly re-authors the request on the way out. Values are
+// carried as RawMessage so only the top-level key order changes; nothing nested
+// is re-rendered.
 func preparePayload(call provider.NativeMessageCall, stream bool) ([]byte, error) {
-	request, err := anthropicapi.DecodeMessageRequest(bytes.NewReader(call.Payload))
+	if _, err := anthropicapi.DecodeMessageRequest(bytes.NewReader(call.Payload)); err != nil {
+		return nil, err
+	}
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(call.Payload, &root); err != nil {
+		return nil, err
+	}
+	model, err := json.Marshal(call.ProviderModel)
 	if err != nil {
 		return nil, err
 	}
-	request.Model, request.Stream, request.Raw = call.ProviderModel, stream, nil
-	return json.Marshal(request)
+	streamFlag, err := json.Marshal(stream)
+	if err != nil {
+		return nil, err
+	}
+	root["model"], root["stream"] = model, streamFlag
+	return json.Marshal(root)
+}
+
+// prepareCountTokensPayload rewrites the upstream model and nothing else.
+// count_tokens has no stream flag to own, and every other member is the
+// caller's — including max_tokens, which Anthropic decides about rather than
+// Halro silently stripping.
+func prepareCountTokensPayload(call provider.NativeMessageCall) ([]byte, error) {
+	if _, err := anthropicapi.DecodeMessageRequest(bytes.NewReader(call.Payload)); err != nil {
+		return nil, err
+	}
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(call.Payload, &root); err != nil {
+		return nil, err
+	}
+	model, err := json.Marshal(call.ProviderModel)
+	if err != nil {
+		return nil, err
+	}
+	root["model"] = model
+	return json.Marshal(root)
 }
 
 func readLimited(reader io.Reader, limit int64) ([]byte, error) {

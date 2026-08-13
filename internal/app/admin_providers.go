@@ -34,19 +34,20 @@ type credentialInput struct {
 }
 
 type providerInput struct {
-	Name             string                           `json:"name"`
-	Type             domain.ProviderType              `json:"type"`
-	BaseURL          string                           `json:"base_url"`
-	APIVersion       string                           `json:"api_version,omitempty"`
-	CredentialID     string                           `json:"credential_id"`
-	AccessSurface    domain.AccessSurface             `json:"access_surface,omitempty"`
-	ProfileID        domain.ProviderProfileID         `json:"profile_id,omitempty"`
-	CredentialScheme domain.CredentialScheme          `json:"credential_scheme,omitempty"`
-	BedrockProjectID string                           `json:"bedrock_project_id,omitempty"`
-	Capabilities     *domain.ProviderCapabilities     `json:"capabilities,omitempty"`
-	Bindings         *[]domain.ProviderProfileBinding `json:"bindings,omitempty"`
-	MaxConcurrency   int64                            `json:"max_concurrency"`
-	Enabled          bool                             `json:"enabled"`
+	Name                  string                           `json:"name"`
+	Type                  domain.ProviderType              `json:"type"`
+	BaseURL               string                           `json:"base_url"`
+	APIVersion            string                           `json:"api_version,omitempty"`
+	CredentialID          string                           `json:"credential_id"`
+	AccessSurface         domain.AccessSurface             `json:"access_surface,omitempty"`
+	ProfileID             domain.ProviderProfileID         `json:"profile_id,omitempty"`
+	CredentialScheme      domain.CredentialScheme          `json:"credential_scheme,omitempty"`
+	BedrockProjectID      string                           `json:"bedrock_project_id,omitempty"`
+	AllowedAnthropicBetas []string                         `json:"allowed_anthropic_betas,omitempty"`
+	Capabilities          *domain.ProviderCapabilities     `json:"capabilities,omitempty"`
+	Bindings              *[]domain.ProviderProfileBinding `json:"bindings,omitempty"`
+	MaxConcurrency        int64                            `json:"max_concurrency"`
+	Enabled               bool                             `json:"enabled"`
 }
 
 type routeInput struct {
@@ -417,11 +418,13 @@ func (r *Runtime) testAdminProvider(writer http.ResponseWriter, request *http.Re
 			adapter, ok = r.providers.AdapterForProvider(providerID)
 		}
 		if !ok {
+			r.logProbeRefusal(providerID, binding.ID, "provider binding adapter is unavailable")
 			adminBadRequest(writer, "provider binding adapter is unavailable")
 			return
 		}
 		prober, ok := adapter.(provider.Prober)
 		if !ok {
+			r.logProbeRefusal(providerID, binding.ID, "provider does not support connection testing")
 			adminBadRequest(writer, "provider does not support connection testing")
 			return
 		}
@@ -490,6 +493,7 @@ func (r *Runtime) testAdminProvider(writer http.ResponseWriter, request *http.Re
 	current, storeErr = r.store.PutProvider(request.Context(), current, testedRevision, intent)
 	r.adminTopologyMu.Unlock()
 	if storeErr != nil {
+		r.logProbeResultWriteFailure("provider", providerID, storeErr)
 		adminMutationError(writer, storeErr)
 		return
 	}
@@ -615,6 +619,30 @@ func (f probeFailure) addTo(result map[string]any) {
 	if f.Reason != "" {
 		result["error_detail"] = f.Reason
 	}
+}
+
+// logProbeRefusal records a connection test Halro turned down before probing
+// anything. These paths answer 400 and return, so they used to leave no trace at
+// all on the server: the operator saw a red result in the console, went to the
+// log for the reason, and found the log silent — which reads as "the test never
+// ran" rather than "the test was refused, here is why".
+func (r *Runtime) logProbeRefusal(providerID, bindingID, reason string) {
+	r.logger.Warn("provider connection test refused", "provider_id", providerID, "binding_id", bindingID, "reason", reason)
+}
+
+// logProbeResultWriteFailure records a connection test that ran and then could
+// not be recorded. This is the one failure in the test path that says nothing
+// about the upstream at all — the probe already answered — and it used to leave
+// no server-side trace whatsoever: the console showed a refusal, the log showed
+// a successful test or nothing, and the two disagreed with no way to tell which
+// was describing what. A stale record the store now refuses is the case this was
+// added for, and reading the store's own sentence is the whole diagnosis.
+//
+// The error comes from Halro's validation and storage layer, never from a
+// provider response, so unlike a probe failure it carries no upstream body.
+func (r *Runtime) logProbeResultWriteFailure(kind, id string, err error) {
+	r.logger.Warn(kind+" connection test result could not be recorded",
+		kind+"_id", id, "reason", truncateProbeReason(safelog.Redact(err.Error())))
 }
 
 // logProbeFailure records a connection test the operator ran and the upstream
@@ -770,6 +798,7 @@ func (r *Runtime) testAdminRoute(writer http.ResponseWriter, request *http.Reque
 	current, storeErr = r.store.PutRoute(request.Context(), current, testedRevision, intent)
 	r.adminTopologyMu.Unlock()
 	if storeErr != nil {
+		r.logProbeResultWriteFailure("route", route.ID, storeErr)
 		adminMutationError(writer, storeErr)
 		return
 	}
@@ -1169,17 +1198,25 @@ func (r *Runtime) providerFromInput(
 			errors.New("bedrock project id is only valid on the Bedrock Mantle access surface"),
 		}
 	}
+	allowedBetas := domain.NormalizeAnthropicBetaTokens(input.AllowedAnthropicBetas)
+	if err := domain.ValidateAnthropicBetaTokens(allowedBetas); err != nil {
+		return domain.ProviderInstance{}, err
+	}
+	if len(allowedBetas) > 0 && profile.AccessSurface != domain.SurfaceAnthropic && profile.AccessSurface != domain.SurfaceBedrockMantle {
+		return domain.ProviderInstance{}, errors.New("anthropic beta tokens are only valid on an Anthropic-wire access surface")
+	}
 	instance := domain.ProviderInstance{
 		ID: id, Name: input.Name, Type: input.Type, BaseURL: input.BaseURL,
-		APIVersion:       strings.TrimSpace(input.APIVersion),
-		CredentialID:     input.CredentialID,
-		AccessSurface:    profile.AccessSurface,
-		ProfileID:        profile.ProfileID,
-		CredentialScheme: profile.CredentialScheme,
-		BedrockProjectID: bedrockProjectID,
-		AllowedHosts:     []string{strings.ToLower(endpoint.Hostname())},
-		MaxConcurrency:   input.MaxConcurrency,
-		Enabled:          input.Enabled, CreatedAt: createdAt, UpdatedAt: updatedAt,
+		APIVersion:            strings.TrimSpace(input.APIVersion),
+		CredentialID:          input.CredentialID,
+		AccessSurface:         profile.AccessSurface,
+		ProfileID:             profile.ProfileID,
+		CredentialScheme:      profile.CredentialScheme,
+		BedrockProjectID:      bedrockProjectID,
+		AllowedAnthropicBetas: allowedBetas,
+		AllowedHosts:          []string{strings.ToLower(endpoint.Hostname())},
+		MaxConcurrency:        input.MaxConcurrency,
+		Enabled:               input.Enabled, CreatedAt: createdAt, UpdatedAt: updatedAt,
 	}
 	if input.Capabilities == nil {
 		instance.Capabilities = domain.DefaultProviderCapabilitiesForProfile(input.Type, profile.ProfileID)

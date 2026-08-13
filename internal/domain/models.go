@@ -253,7 +253,18 @@ type ProviderInstance struct {
 	// keyed by (provider, profile) and cannot repeat, so it cannot carry a
 	// dimension an operator needs several of. Two projects are two providers,
 	// which may share one credential.
-	BedrockProjectID       string                   `json:"bedrock_project_id,omitempty"`
+	BedrockProjectID string `json:"bedrock_project_id,omitempty"`
+	// AllowedAnthropicBetas names the anthropic-beta tokens this connection may
+	// forward. Empty means none, which is also what every record written before
+	// this field existed means — no header is sent — so adding it needs no
+	// migration.
+	//
+	// It is an allowlist rather than a boolean because a beta token is a request
+	// for behaviour Halro has not modelled: some are inert additions, others move
+	// work upstream (code execution, MCP egress) or change what a response means.
+	// The operator names the ones they have accepted, per connection, rather than
+	// opening the whole beta surface at once.
+	AllowedAnthropicBetas  []string                 `json:"allowed_anthropic_betas,omitempty"`
 	AllowedHosts           []string                 `json:"allowed_hosts"`
 	Capabilities           ProviderCapabilities     `json:"capabilities"`
 	CapabilityEvidence     CapabilityEvidenceSet    `json:"capability_evidence"`
@@ -374,6 +385,7 @@ func BindingsCapabilitiesSummary(bindings []ProviderProfileBinding) (ProviderCap
 		summary.DeveloperRole = summary.DeveloperRole || c.DeveloperRole
 		summary.Reasoning = summary.Reasoning || c.Reasoning
 		summary.StreamUsage = summary.StreamUsage || c.StreamUsage
+		summary.ProviderExecutedTools = summary.ProviderExecutedTools || c.ProviderExecutedTools
 		if c.MaxContextTokens > summary.MaxContextTokens {
 			summary.MaxContextTokens = c.MaxContextTokens
 		}
@@ -391,25 +403,31 @@ func BindingsCapabilitiesSummary(bindings []ProviderProfileBinding) (ProviderCap
 }
 
 type ProviderCapabilities struct {
-	Chat             bool  `json:"chat"`
-	Streaming        bool  `json:"streaming"`
-	Embeddings       bool  `json:"embeddings"`
-	Moderations      bool  `json:"moderations"`
-	Images           bool  `json:"images"`
-	Transcriptions   bool  `json:"transcriptions"`
-	Speech           bool  `json:"speech"`
-	Files            bool  `json:"files"`
-	Batches          bool  `json:"batches"`
-	Rerank           bool  `json:"rerank"`
-	AsyncGenerate    bool  `json:"async_generate"`
-	Tools            bool  `json:"tools"`
-	Vision           bool  `json:"vision"`
-	JSONMode         bool  `json:"json_mode"`
-	DeveloperRole    bool  `json:"developer_role"`
-	Reasoning        bool  `json:"reasoning"`
-	StreamUsage      bool  `json:"stream_usage"`
-	MaxContextTokens int64 `json:"max_context_tokens"`
-	MaxOutputTokens  int64 `json:"max_output_tokens"`
+	Chat           bool `json:"chat"`
+	Streaming      bool `json:"streaming"`
+	Embeddings     bool `json:"embeddings"`
+	Moderations    bool `json:"moderations"`
+	Images         bool `json:"images"`
+	Transcriptions bool `json:"transcriptions"`
+	Speech         bool `json:"speech"`
+	Files          bool `json:"files"`
+	Batches        bool `json:"batches"`
+	Rerank         bool `json:"rerank"`
+	AsyncGenerate  bool `json:"async_generate"`
+	Tools          bool `json:"tools"`
+	Vision         bool `json:"vision"`
+	JSONMode       bool `json:"json_mode"`
+	DeveloperRole  bool `json:"developer_role"`
+	Reasoning      bool `json:"reasoning"`
+	StreamUsage    bool `json:"stream_usage"`
+	// ProviderExecutedTools admits tools the upstream runs itself — web_search,
+	// web_fetch, code_execution. Enabling it means accepting that this connection
+	// originates network calls Halro never sees and SafeTransport never filters,
+	// so it is off by default on every profile and has to be turned on per
+	// connection by whoever owns that egress.
+	ProviderExecutedTools bool  `json:"provider_executed_tools"`
+	MaxContextTokens      int64 `json:"max_context_tokens"`
+	MaxOutputTokens       int64 `json:"max_output_tokens"`
 }
 
 func (p *ProviderInstance) GetRevision() uint64      { return p.Revision }
@@ -447,6 +465,17 @@ func (p ProviderInstance) Validate() error {
 	}
 	if err := ValidateBedrockProjectID(p.BedrockProjectID); err != nil {
 		problems = append(problems, err)
+	}
+	if err := ValidateAnthropicBetaTokens(p.AllowedAnthropicBetas); err != nil {
+		problems = append(problems, err)
+	}
+	if len(p.AllowedAnthropicBetas) > 0 && !ProfileSendsAnthropicBetas(p.ProfileID) {
+		// The header is only ever sent on the native Anthropic Messages path, which
+		// is a property of the profile, not of the surface: Bedrock Mantle also
+		// carries OpenAI chat and responses profiles, and a token stored on one of
+		// those would never be sent — exactly the setting-that-does-nothing this
+		// check exists to prevent.
+		problems = append(problems, errors.New("anthropic beta tokens are only valid on an Anthropic Messages provider profile"))
 	}
 	if len(p.AllowedHosts) == 0 {
 		problems = append(problems, errors.New("provider allowed hosts must not be empty"))
@@ -541,7 +570,9 @@ func DefaultProviderCapabilities(providerType ProviderType) ProviderCapabilities
 			StreamUsage: true,
 		}
 	case ProviderAnthropic:
-		return ProviderCapabilities{Chat: true, Streaming: true, Tools: true, Vision: true, Reasoning: true, StreamUsage: true}
+		// JSONMode covers Anthropic's schema-backed structured outputs, which the
+		// Messages profile now carries through output_config.format.
+		return ProviderCapabilities{Chat: true, Streaming: true, Tools: true, Vision: true, JSONMode: true, Reasoning: true, StreamUsage: true}
 	case ProviderDeepSeek:
 		return ProviderCapabilities{
 			Chat: true, Streaming: true, Tools: true, JSONMode: true,
@@ -585,6 +616,25 @@ func DefaultProviderCapabilitiesForProfile(providerType ProviderType, profileID 
 	default:
 		return DefaultProviderCapabilities(providerType)
 	}
+}
+
+// MaxProviderCapabilitiesForProfile is the most a profile can be declared to do.
+//
+// It is deliberately not the same function as the defaults. The defaults answer
+// "what does a new connection start with"; the ceiling answers "what may an
+// operator turn on at all". Collapsing the two makes every optional capability
+// either always-on or unreachable, and provider_executed_tools has to be
+// neither: the profile supports it, and enabling it means accepting upstream
+// egress that never passes through SafeTransport, so the operator opts in.
+//
+// The Bedrock Mantle profiles keep ceiling == defaults on purpose. Their sets
+// are fixed by the build and widening one is a separate contract review.
+func MaxProviderCapabilitiesForProfile(providerType ProviderType, profileID ProviderProfileID) ProviderCapabilities {
+	ceiling := DefaultProviderCapabilitiesForProfile(providerType, profileID)
+	if profileID == ProfileAnthropicMessages {
+		ceiling.ProviderExecutedTools = true
+	}
+	return ceiling
 }
 
 // Deployment is a concrete model endpoint hosted by a Provider instance.
@@ -868,7 +918,8 @@ func (d Deployment) Validate() error {
 		problems = append(problems, errors.New("deployment must declare at least one operation capability"))
 	}
 	if (d.Capabilities.Streaming || d.Capabilities.Tools || d.Capabilities.Vision || d.Capabilities.JSONMode ||
-		d.Capabilities.DeveloperRole || d.Capabilities.Reasoning || d.Capabilities.StreamUsage) && !d.Capabilities.Chat {
+		d.Capabilities.DeveloperRole || d.Capabilities.Reasoning || d.Capabilities.StreamUsage ||
+		d.Capabilities.ProviderExecutedTools) && !d.Capabilities.Chat {
 		problems = append(problems, errors.New("deployment chat features require chat capability"))
 	}
 	if d.Capabilities.StreamUsage && !d.Capabilities.Streaming {

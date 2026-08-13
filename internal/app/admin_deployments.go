@@ -485,6 +485,7 @@ func (r *Runtime) testAdminDeployment(writer http.ResponseWriter, request *http.
 	current, storeErr = r.store.PutDeployment(request.Context(), current, testedRevision, intent)
 	r.adminTopologyMu.Unlock()
 	if storeErr != nil {
+		r.logProbeResultWriteFailure("deployment", deployment.ID, storeErr)
 		adminMutationError(writer, storeErr)
 		return
 	}

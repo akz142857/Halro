@@ -6,7 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 )
+
+// ReasoningEffortLevels is the ladder this wire format accepts. It is exported
+// because it bounds every portable request: a request that reaches any provider
+// through the OpenAI intermediate representation cannot carry an effort outside
+// it, whatever the destination provider supports on its own surface.
+var ReasoningEffortLevels = []string{"none", "minimal", "low", "medium", "high", "xhigh"}
 
 type ChatCompletionRequest struct {
 	Model               string          `json:"model,omitempty"`
@@ -97,12 +104,8 @@ func (r ChatCompletionRequest) Validate() error {
 	if r.TopP != nil && (*r.TopP < 0 || *r.TopP > 1) {
 		problems = append(problems, errors.New("top_p must be between 0 and 1"))
 	}
-	if r.ReasoningEffort != "" {
-		switch r.ReasoningEffort {
-		case "none", "minimal", "low", "medium", "high", "xhigh":
-		default:
-			problems = append(problems, errors.New("reasoning_effort is invalid"))
-		}
+	if r.ReasoningEffort != "" && !slices.Contains(ReasoningEffortLevels, r.ReasoningEffort) {
+		problems = append(problems, errors.New("reasoning_effort is invalid"))
 	}
 	if len(r.ResponseFormat) > 0 {
 		var format struct {

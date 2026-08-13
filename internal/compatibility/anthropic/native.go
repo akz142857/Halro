@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/akz142857/Halro/internal/anthropicapi"
 	"github.com/akz142857/Halro/internal/compatibility"
@@ -17,7 +18,7 @@ func NewNativeSchemaRegistry() (*compatibility.NativeSchemaRegistry, error) {
 	for _, profileID := range []domain.ProviderProfileID{domain.ProfileAnthropicMessages, domain.ProfileBedrockMantleAnthropicMessages} {
 		schemas = append(schemas, compatibility.NativeSchema{
 			ProfileID: profileID, SchemaRevision: 1,
-			AllowedHeaders: []string{anthropicapi.VersionHeader}, MaxPayloadBytes: anthropicapi.MaxRequestBytes, MaxEventBytes: semantic.MaxEncodedEventBytes,
+			AllowedHeaders: []string{anthropicapi.VersionHeader, anthropicapi.BetaHeader}, MaxPayloadBytes: anthropicapi.MaxRequestBytes, MaxEventBytes: semantic.MaxEncodedEventBytes,
 			ValidatePayload: validateNativePayload, ExtractGovernance: extractNativeGovernance,
 		})
 	}
@@ -60,22 +61,53 @@ func extractNativeGovernance(kind compatibility.NativePayloadKind, payload json.
 		return result, err
 	}
 	result.EstimatedOutputTokens = request.MaxTokens
-	result.Requirements = semantic.Requirements{Streaming: request.Stream, StreamUsage: request.Stream, Tools: len(request.Tools) > 0 || request.ToolChoice != nil, Reasoning: len(request.Thinking) > 0}
-	for _, message := range request.Messages {
-		for _, block := range message.Content {
-			switch block.Type {
-			case "image":
-				result.Requirements.InputImage = true
-			case "tool_use", "tool_result":
-				result.Requirements.Tools = true
-			case "thinking", "redacted_thinking":
-				result.Requirements.Reasoning = true
-			}
-		}
-	}
+	result.Requirements = NativeRequirements(request)
 	return result, nil
 }
 
-func NativeHeaders(version string) http.Header {
-	return http.Header{http.CanonicalHeaderKey(anthropicapi.VersionHeader): []string{version}}
+// NativeRequirements derives what a native request needs from a target. It is
+// exported because routing has to apply it before a target is chosen, and the
+// governance envelope is built for a target that is already selected — deriving
+// requirements only inside the envelope left them unused by the native path,
+// which is how a structured-output request could reach a target whose ceiling
+// has no JSON mode.
+func NativeRequirements(request anthropicapi.MessageRequest) semantic.Requirements {
+	requirements := semantic.Requirements{
+		Streaming: request.Stream, StreamUsage: request.Stream,
+		Tools:                 len(request.Tools) > 0 || request.ToolChoice != nil,
+		Reasoning:             len(request.Thinking) > 0,
+		ProviderExecutedTools: request.UsesProviderExecutedTools(),
+	}
+	if request.OutputConfig != nil {
+		requirements.Reasoning = requirements.Reasoning || request.OutputConfig.Effort != ""
+		requirements.StructuredJSON = len(request.OutputConfig.Format) > 0
+	}
+	for _, message := range request.Messages {
+		for _, block := range message.Content {
+			switch block.Type {
+			case "image", "document":
+				// A PDF is decoded by the same multimodal pipeline as an image; a
+				// target that cannot see one cannot read the other, so declaring
+				// only images under-reported what the request needs.
+				requirements.InputImage = true
+			case "tool_use", "tool_result":
+				requirements.Tools = true
+			case "thinking", "redacted_thinking":
+				requirements.Reasoning = true
+			}
+		}
+	}
+	return requirements
+}
+
+// NativeHeaders records the headers that will actually reach the provider. The
+// beta tokens belong here with the version: they change what the upstream does
+// with the request, and an envelope that proves "these bytes, under these
+// headers" while omitting them proves the wrong thing.
+func NativeHeaders(version string, betas []string) http.Header {
+	headers := http.Header{http.CanonicalHeaderKey(anthropicapi.VersionHeader): []string{version}}
+	if len(betas) > 0 {
+		headers[http.CanonicalHeaderKey(anthropicapi.BetaHeader)] = []string{strings.Join(betas, ",")}
+	}
+	return headers
 }

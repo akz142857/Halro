@@ -139,6 +139,54 @@ describe("ProvidersPage profile and credential bindings", () => {
     expect(reason).toHaveTextContent("HTTP 403 · AccessDeniedException · provider error (403): not authorized to call this project");
   });
 
+  // A bad_request Halro produced itself carries no upstream status, and calling
+  // it an upstream rejection sends the operator to audit a credential and a
+  // network that were never involved.
+  it("distinguishes a refusal Halro made from one the upstream made", async () => {
+    const failing = {
+      id: "provider_anthropic", name: "Anthropic", type: "anthropic", base_url: "https://api.anthropic.com",
+      access_surface: "anthropic-api", profile_id: "anthropic.messages.2023-06-01", capability_evidence: {},
+      credential_id: openAICredential.id, capabilities: { chat: true }, max_concurrency: 0, enabled: true,
+      revision: 2,
+    } as never;
+    vi.mocked(api.providers).mockResolvedValue({ items: [failing], next_cursor: "" });
+    vi.spyOn(api, "testProvider").mockRejectedValue(new ApiError(502, "request failed (502)", "", "", {
+      status: "unhealthy", error_class: "bad_request",
+      error_detail: "this profile has no model catalog to test against; bind an enabled deployment and test that",
+    }));
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "测试" }));
+
+    expect(await screen.findByText(/Halro 在发往上游之前拒绝了这次探测/)).toBeVisible();
+    expect(screen.queryByText(/上游拒绝了这次探测请求/)).toBeNull();
+  });
+
+  // A refusal Halro made before probing answers 400 with a plain message and no
+  // class. That message used to be dropped, and the stale class the store still
+  // remembered from an earlier test was shown in its place — the operator read a
+  // sentence about the upstream for a request that never left the process.
+  it("shows the message behind a refusal that never reached the upstream", async () => {
+    const failing = {
+      id: "provider_anthropic", name: "Anthropic", type: "anthropic", base_url: "https://api.anthropic.com",
+      access_surface: "anthropic-api", profile_id: "anthropic.messages.2023-06-01", capability_evidence: {},
+      credential_id: openAICredential.id, capabilities: { chat: true }, max_concurrency: 0, enabled: true,
+      revision: 4, last_test_status: "unhealthy", last_test_revision: 4, last_test_error_class: "authentication",
+      last_tested_at: "2026-08-13T12:00:00Z",
+    } as never;
+    vi.mocked(api.providers).mockResolvedValue({ items: [failing], next_cursor: "" });
+    vi.spyOn(api, "testProvider").mockRejectedValue(
+      new ApiError(400, "request failed (400)", "", "", { error: "provider binding adapter is unavailable" }),
+    );
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "测试" }));
+
+    const reason = await screen.findByText(/provider binding adapter is unavailable/);
+    expect(reason).toHaveTextContent("Halro 在发往上游之前拒绝了这次探测");
+    expect(reason).not.toHaveTextContent("上游拒绝了这份凭据");
+  });
+
   // The class is all the store keeps, so a reload still explains the failure
   // even though the upstream's sentence is long gone.
   it("keeps explaining a persisted test failure after a reload", async () => {
@@ -658,6 +706,60 @@ describe("ProvidersPage profile and credential bindings", () => {
     expect(container).not.toBeNull();
     await waitFor(() => expect(scrolled).toContain(container));
     await waitFor(() => expect(document.activeElement).toBe(container));
+  });
+
+  // errors.anthropicBetas was a dead key: nothing set it, so an illegal token
+  // reached the operator as a generic banner with no field highlighted.
+  it("names the anthropic-beta field when a token is malformed", async () => {
+    const anthropicCredential: Credential = {
+      id: "credential_anthropic",
+      name: "Anthropic production",
+      type: "anthropic",
+      access_surface: "anthropic-api",
+      scheme: "anthropic.x-api-key",
+      bound_base_url: "https://api.anthropic.com:443",
+      secret_configured: true,
+      key_version: 1,
+      revision: 1,
+    };
+    vi.mocked(api.credentials).mockResolvedValue({ items: [anthropicCredential], next_cursor: "" });
+    const create = vi.spyOn(api, "createProvider").mockResolvedValue({} as never);
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
+    fireEvent.change(screen.getByLabelText("服务商名称"), { target: { value: "Anthropic" } });
+    fireEvent.change(screen.getByLabelText("类型"), { target: { value: "anthropic" } });
+    const betas = await screen.findByLabelText(/^Anthropic Beta 允许列表/);
+    fireEvent.change(betas, { target: { value: "Context-Management-2025-06-27" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建并热加载" }));
+
+    expect(create).not.toHaveBeenCalled();
+    expect(await screen.findByText(/只能包含小写字母/)).toBeVisible();
+    expect(betas).toHaveAttribute("aria-invalid", "true");
+  });
+
+  // Upstream egress is a decision the operator makes per connection, so the
+  // capability has to be offered — and offered switched off.
+  it("offers provider-executed tools on an Anthropic connection without enabling it", async () => {
+    const anthropicCredential: Credential = {
+      id: "credential_anthropic",
+      name: "Anthropic production",
+      type: "anthropic",
+      access_surface: "anthropic-api",
+      scheme: "anthropic.x-api-key",
+      bound_base_url: "https://api.anthropic.com:443",
+      secret_configured: true,
+      key_version: 1,
+      revision: 1,
+    };
+    vi.mocked(api.credentials).mockResolvedValue({ items: [anthropicCredential], next_cursor: "" });
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
+    fireEvent.change(screen.getByLabelText("类型"), { target: { value: "anthropic" } });
+    const egress = await screen.findByRole("checkbox", { name: /服务商侧执行工具/ });
+    expect(egress).not.toBeChecked();
+    expect(egress).not.toBeDisabled();
   });
 
   // A credential is encrypted against the endpoint it was saved for, so a base

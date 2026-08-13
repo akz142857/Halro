@@ -209,3 +209,21 @@ model_catalog:
   max_decoded_bytes: 4194304
   max_compression_ratio: 20
   max_entries: 10000
+
+# The process log. Records are redacted before they are written — no
+# authorization headers, provider or gateway keys, prompts, response bodies or
+# raw source IPs — whatever is set here.
+logging:
+  # debug | info | warn | error
+  level: info
+  # json for machine reading, text for a human at a terminal.
+  format: json
+  # stderr | file | both. "file" and "both" also write a local file, which is
+  # what to use when nothing collects this process's stderr.
+  output: stderr
+  # Empty means <data_dir>/logs/halro.log.
+  file: ""
+  # Rotates once a record would carry the file past this size.
+  max_size_mb: 64
+  # Generations kept, counting the file being written. 1 keeps no history.
+  max_files: 5

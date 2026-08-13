@@ -58,7 +58,7 @@ const (
 
 var capabilityNames = []string{
 	"chat", "streaming", "embeddings", "tools", "vision", "json_mode",
-	"developer_role", "reasoning", "stream_usage", "moderations", "images", "transcriptions", "speech", "files", "batches", "rerank", "async_generate",
+	"developer_role", "reasoning", "stream_usage", "provider_executed_tools", "moderations", "images", "transcriptions", "speech", "files", "batches", "rerank", "async_generate",
 }
 
 type CapabilityEvidenceSet map[string]CapabilityEvidence
@@ -149,8 +149,8 @@ func EvidenceForCapabilities(capabilities ProviderCapabilities, enabled Capabili
 		"embeddings": capabilities.Embeddings, "tools": capabilities.Tools,
 		"vision": capabilities.Vision, "json_mode": capabilities.JSONMode,
 		"developer_role": capabilities.DeveloperRole, "reasoning": capabilities.Reasoning,
-		"stream_usage": capabilities.StreamUsage,
-		"moderations":  capabilities.Moderations, "images": capabilities.Images, "transcriptions": capabilities.Transcriptions, "speech": capabilities.Speech, "files": capabilities.Files, "batches": capabilities.Batches, "rerank": capabilities.Rerank, "async_generate": capabilities.AsyncGenerate,
+		"stream_usage": capabilities.StreamUsage, "provider_executed_tools": capabilities.ProviderExecutedTools,
+		"moderations": capabilities.Moderations, "images": capabilities.Images, "transcriptions": capabilities.Transcriptions, "speech": capabilities.Speech, "files": capabilities.Files, "batches": capabilities.Batches, "rerank": capabilities.Rerank, "async_generate": capabilities.AsyncGenerate,
 	}
 	for _, name := range capabilityNames {
 		if values[name] {
@@ -177,7 +177,7 @@ func NormalizeCapabilityEvidence(capabilities ProviderCapabilities, existing Cap
 	return result
 }
 func capabilityEnabled(c ProviderCapabilities, name string) bool {
-	values := map[string]bool{"chat": c.Chat, "streaming": c.Streaming, "embeddings": c.Embeddings, "tools": c.Tools, "vision": c.Vision, "json_mode": c.JSONMode, "developer_role": c.DeveloperRole, "reasoning": c.Reasoning, "stream_usage": c.StreamUsage, "moderations": c.Moderations, "images": c.Images, "transcriptions": c.Transcriptions, "speech": c.Speech, "files": c.Files, "batches": c.Batches, "rerank": c.Rerank, "async_generate": c.AsyncGenerate}
+	values := map[string]bool{"chat": c.Chat, "streaming": c.Streaming, "embeddings": c.Embeddings, "tools": c.Tools, "vision": c.Vision, "json_mode": c.JSONMode, "developer_role": c.DeveloperRole, "reasoning": c.Reasoning, "stream_usage": c.StreamUsage, "provider_executed_tools": c.ProviderExecutedTools, "moderations": c.Moderations, "images": c.Images, "transcriptions": c.Transcriptions, "speech": c.Speech, "files": c.Files, "batches": c.Batches, "rerank": c.Rerank, "async_generate": c.AsyncGenerate}
 	return values[name]
 }
 
@@ -199,6 +199,42 @@ const MaxBedrockProjectIDLength = 128
 // differently — and pasting one product's identifier into the other's field is
 // the most likely mistake here. A prefix check is the cheapest place to catch
 // it, and the error says which product the value came from.
+const (
+	// MaxAnthropicBetaTokenLength bounds one token. Anthropic's are short
+	// (`feature-name-YYYY-MM-DD`); the bound exists so a pasted blob cannot
+	// become a request header.
+	MaxAnthropicBetaTokenLength = 128
+	MaxAnthropicBetaTokens      = 16
+)
+
+// ValidateAnthropicBetaTokens bounds the allowlist and constrains each entry to
+// the shape Anthropic actually issues. The charset matters because these values
+// are concatenated into an outbound header: anything that could carry a comma,
+// newline, or whitespace would let one stored token smuggle in others.
+func ValidateAnthropicBetaTokens(values []string) error {
+	if len(values) > MaxAnthropicBetaTokens {
+		return errors.New("too many anthropic beta tokens")
+	}
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if value == "" || len(value) > MaxAnthropicBetaTokenLength {
+			return errors.New("anthropic beta token is empty or too long")
+		}
+		if _, duplicate := seen[value]; duplicate {
+			return errors.New("anthropic beta tokens must be unique")
+		}
+		seen[value] = struct{}{}
+		for _, char := range value {
+			switch {
+			case char >= 'a' && char <= 'z', char >= '0' && char <= '9', char == '-', char == '.', char == '_':
+			default:
+				return errors.New("anthropic beta token must be lowercase alphanumerics, dashes, dots, or underscores")
+			}
+		}
+	}
+	return nil
+}
+
 func ValidateBedrockProjectID(value string) error {
 	if value == "" {
 		return nil
@@ -280,6 +316,7 @@ func ProviderCapabilitiesSubset(candidate, available ProviderCapabilities) bool 
 		(!candidate.DeveloperRole || available.DeveloperRole) &&
 		(!candidate.Reasoning || available.Reasoning) &&
 		(!candidate.StreamUsage || available.StreamUsage) &&
+		(!candidate.ProviderExecutedTools || available.ProviderExecutedTools) &&
 		capabilityLimitSubset(candidate.MaxContextTokens, available.MaxContextTokens) &&
 		capabilityLimitSubset(candidate.MaxOutputTokens, available.MaxOutputTokens)
 }
@@ -325,8 +362,8 @@ func (e CapabilityEvidenceSet) Validate(capabilities ProviderCapabilities) error
 		"embeddings": capabilities.Embeddings, "tools": capabilities.Tools,
 		"vision": capabilities.Vision, "json_mode": capabilities.JSONMode,
 		"developer_role": capabilities.DeveloperRole, "reasoning": capabilities.Reasoning,
-		"stream_usage": capabilities.StreamUsage,
-		"moderations":  capabilities.Moderations, "images": capabilities.Images, "transcriptions": capabilities.Transcriptions, "speech": capabilities.Speech, "files": capabilities.Files, "batches": capabilities.Batches, "rerank": capabilities.Rerank, "async_generate": capabilities.AsyncGenerate,
+		"stream_usage": capabilities.StreamUsage, "provider_executed_tools": capabilities.ProviderExecutedTools,
+		"moderations": capabilities.Moderations, "images": capabilities.Images, "transcriptions": capabilities.Transcriptions, "speech": capabilities.Speech, "files": capabilities.Files, "batches": capabilities.Batches, "rerank": capabilities.Rerank, "async_generate": capabilities.AsyncGenerate,
 	}
 	for name, enabled := range values {
 		if enabled && e[name] == EvidenceUnsupported {
@@ -378,4 +415,37 @@ func ValidateProviderProfile(providerType ProviderType, surface AccessSurface, p
 		return errors.New("provider access surface, profile, or credential scheme is incompatible")
 	}
 	return nil
+}
+
+// ProfileSendsAnthropicBetas reports the profiles whose data path can actually
+// emit an anthropic-beta header. Only the native Anthropic Messages surface
+// forwards the caller's request bytes unchanged, which is the premise a beta
+// token describes; the portable path rewrites the body, so a token claiming
+// "this is the request I sent" would be false there.
+func ProfileSendsAnthropicBetas(id ProviderProfileID) bool {
+	switch id {
+	case ProfileAnthropicMessages, ProfileBedrockMantleAnthropicMessages:
+		return true
+	default:
+		return false
+	}
+}
+
+// NormalizeAnthropicBetaTokens trims each entry and drops empties, so an
+// operator pasting a comma-separated list with stray spaces stores the same set
+// as one who typed them individually.
+func NormalizeAnthropicBetaTokens(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }

@@ -346,6 +346,14 @@ func (b *LegacyAdapterBridge) MessagesNativeStream(ctx context.Context, call Nat
 	return adapter.MessagesNativeStream(ctx, call, emit)
 }
 
+func (b *LegacyAdapterBridge) CountTokensNative(ctx context.Context, call NativeMessageCall) (NativeMessageResult, error) {
+	adapter, ok := b.Adapter.(NativeTokenCountAdapter)
+	if !ok {
+		return NativeMessageResult{}, errors.New("native count_tokens is unavailable")
+	}
+	return adapter.CountTokensNative(ctx, call)
+}
+
 func BuiltinProfile(id domain.ProviderProfileID) (ProfileManifest, bool) {
 	manifests := map[domain.ProviderProfileID]ProfileManifest{
 		domain.ProfileOpenAIChatEmbeddings: {
