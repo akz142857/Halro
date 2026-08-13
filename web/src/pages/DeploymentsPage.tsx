@@ -903,7 +903,7 @@ function DeploymentForm({
     ...(canonicalModelRef ? { capability_model: canonicalModelRef } : {}),
     target_kind: targetKind,
     capabilities,
-    ...(declaredModel && manualDeclaration ? { mode: "operator_declared" } : {}),
+    ...((declaredModel || widenedBeyondSaved) && manualDeclaration ? { mode: "operator_declared" } : {}),
     ...(declaredModel && detection?.status === "completed" ? {
       capability_detection_id: detection.id,
       capability_detection_revision: detection.revision,
@@ -1071,6 +1071,15 @@ function DeploymentForm({
   const numericValues = [maxConcurrency, capabilities.max_context_tokens, capabilities.max_output_tokens];
   const tokenLimitsValid = capabilities.max_context_tokens === 0 || capabilities.max_output_tokens <= capabilities.max_context_tokens;
   const resolutionReady = Boolean(current || selectedVariant || detection?.status === "completed" && anyOperation || manualDeclaration && bindingID);
+  // An edit cannot re-run detection or re-pick a variant — the invocation
+  // identity is locked, so nothing new can establish what the model does. A tick
+  // that widens past what the deployment already records is therefore the
+  // operator's own claim, and the server refuses it without the explicit word.
+  // Ask for the word here; otherwise the form offers a checkbox whose only
+  // outcome is a save that fails with model_capabilities_unknown.
+  const widenedBeyondSaved = Boolean(current) && deploymentCapabilityNames.some(
+    (name) => capabilities[name] && !current!.capabilities[name],
+  );
   const limitsValid = numericValues.every((value) => Number.isFinite(value) && value >= 0) && tokenLimitsValid;
   // A disabled save button beside a blank margin is the same as no button at
   // all: seven separate conditions collapse into one boolean, and the operator
@@ -1088,6 +1097,7 @@ function DeploymentForm({
       else saveBlockers.push("resolution");
     }
     if (!anyOperation) saveBlockers.push("operation");
+    if (widenedBeyondSaved && !manualDeclaration) saveBlockers.push("declaration");
   }
   if (!limitsValid) saveBlockers.push("limits");
   const formValid = saveBlockers.length === 0;
@@ -1421,6 +1431,11 @@ function DeploymentForm({
                   </section>;
                 })}
               </fieldset>
+            </div>}
+            {widenedBeyondSaved && !manualDeclaration && <div className="notice warning" aria-live="polite">
+              <strong>{t("deployments.widenDeclarationTitle")}</strong>
+              <span>{t("deployments.widenDeclarationDescription")}</span>
+              <button type="button" className="button ghost" onClick={() => setManualDeclaration(true)}>{t("deployments.widenDeclarationConfirm")}</button>
             </div>}
             {providerModel.trim() !== "" && !anyOperation && (manualDeclaration || !declaredModel || detection?.status === "completed") && <p className="deployment-operation-required" role="alert">{t("deployments.operationRequired")}</p>}
             {providerModel.trim() !== "" && manualDeclaration && (

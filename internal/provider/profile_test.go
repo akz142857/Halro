@@ -241,6 +241,50 @@ func TestBridgeSatisfiesTheResourceInterfaceWhateverItWraps(t *testing.T) {
 	}
 }
 
+// The split between files and batches is not a taxonomy preference. Anthropic's
+// Message Batch carries its requests inline, so its adapter has no file methods
+// at all and Halro holds the caller's JSONL locally. While one interface
+// demanded both, the bridge's assertion failed on the missing file methods and
+// every batch call came back "batches are unavailable" — from an adapter that
+// implements all three.
+func TestBridgeForwardsBatchesToAnAdapterWithNoFileStore(t *testing.T) {
+	manifest, _ := BuiltinProfile(domain.ProfileAnthropicMessages)
+	bridge, err := NewLegacyAdapterBridge(&batchOnlyAdapter{}, manifest,
+		domain.EvidenceForCapabilities(domain.ProviderCapabilities{Chat: true, Batches: true}, domain.EvidenceDeclared))
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := bridge.CreateBatch(context.Background(), BatchCreateCall{})
+	if err != nil {
+		t.Fatalf("CreateBatch: %v", err)
+	}
+	if batch.ID != "batch_forwarded" {
+		t.Fatalf("batch=%#v", batch)
+	}
+	if _, err := bridge.GetBatch(context.Background(), "req", "batch_forwarded"); err != nil {
+		t.Fatalf("GetBatch: %v", err)
+	}
+	if _, err := bridge.CancelBatch(context.Background(), "req", "batch_forwarded"); err != nil {
+		t.Fatalf("CancelBatch: %v", err)
+	}
+	// The other direction still holds: no file store means no file calls.
+	if _, err := bridge.DownloadFile(context.Background(), "req", "file"); err == nil {
+		t.Fatal("a batch-only adapter served a file download")
+	}
+}
+
+type batchOnlyAdapter struct{ bridgeProbeAdapter }
+
+func (*batchOnlyAdapter) CreateBatch(context.Context, BatchCreateCall) (BatchObject, error) {
+	return BatchObject{ID: "batch_forwarded"}, nil
+}
+func (*batchOnlyAdapter) GetBatch(context.Context, string, string) (BatchObject, error) {
+	return BatchObject{ID: "batch_forwarded"}, nil
+}
+func (*batchOnlyAdapter) CancelBatch(context.Context, string, string) (BatchObject, error) {
+	return BatchObject{ID: "batch_forwarded"}, nil
+}
+
 type bridgeProbeAdapter struct{}
 
 func (*bridgeProbeAdapter) Type() string { return string(domain.ProviderAnthropic) }

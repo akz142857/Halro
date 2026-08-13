@@ -410,8 +410,7 @@ func loadProviderRegistryWithCatalog(
 			// fatal: the write paths reject the state, so reaching it means a
 			// record predating the check, and one such record must not stop the
 			// process from loading every other provider.
-			if domain.IsImmutableCapabilityProfile(binding.ProfileID) &&
-				!domain.ProviderCapabilitiesSubset(binding.Capabilities, domain.DefaultProviderCapabilitiesForProfile(instance.Type, binding.ProfileID)) {
+			if !domain.ProviderCapabilitiesSubset(binding.Capabilities, domain.MaxProviderCapabilitiesForProfile(instance.Type, binding.ProfileID)) {
 				excludeBinding(instance, binding.ID, excludedCapabilityCeilingExceeded)
 				continue
 			}

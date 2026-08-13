@@ -246,28 +246,28 @@ func (b *LegacyAdapterBridge) Synthesize(ctx context.Context, call SpeechCall) (
 	return a.Synthesize(ctx, call)
 }
 func (b *LegacyAdapterBridge) CreateFile(ctx context.Context, call FileCreateCall) (FileObject, error) {
-	a, ok := b.Adapter.(ResourceInferenceResourcesAdapter)
+	a, ok := b.Adapter.(ResourceFilesAdapter)
 	if !ok {
 		return FileObject{}, errors.New("files are unavailable")
 	}
 	return a.CreateFile(ctx, call)
 }
 func (b *LegacyAdapterBridge) GetFile(ctx context.Context, requestID, id string) (FileObject, error) {
-	a, ok := b.Adapter.(ResourceInferenceResourcesAdapter)
+	a, ok := b.Adapter.(ResourceFilesAdapter)
 	if !ok {
 		return FileObject{}, errors.New("files are unavailable")
 	}
 	return a.GetFile(ctx, requestID, id)
 }
 func (b *LegacyAdapterBridge) DownloadFile(ctx context.Context, requestID, id string) (FileContent, error) {
-	a, ok := b.Adapter.(ResourceInferenceResourcesAdapter)
+	a, ok := b.Adapter.(ResourceFilesAdapter)
 	if !ok {
 		return FileContent{}, errors.New("files are unavailable")
 	}
 	return a.DownloadFile(ctx, requestID, id)
 }
 func (b *LegacyAdapterBridge) DeleteFile(ctx context.Context, requestID, id string) (FileDeleteResult, error) {
-	a, ok := b.Adapter.(ResourceInferenceResourcesAdapter)
+	a, ok := b.Adapter.(ResourceFilesAdapter)
 	if !ok {
 		return FileDeleteResult{}, errors.New("files are unavailable")
 	}
@@ -288,21 +288,21 @@ func (b *LegacyAdapterBridge) FetchBatchResults(ctx context.Context, requestID, 
 }
 
 func (b *LegacyAdapterBridge) CreateBatch(ctx context.Context, call BatchCreateCall) (BatchObject, error) {
-	a, ok := b.Adapter.(ResourceInferenceResourcesAdapter)
+	a, ok := b.Adapter.(ResourceBatchesAdapter)
 	if !ok {
 		return BatchObject{}, errors.New("batches are unavailable")
 	}
 	return a.CreateBatch(ctx, call)
 }
 func (b *LegacyAdapterBridge) GetBatch(ctx context.Context, requestID, id string) (BatchObject, error) {
-	a, ok := b.Adapter.(ResourceInferenceResourcesAdapter)
+	a, ok := b.Adapter.(ResourceBatchesAdapter)
 	if !ok {
 		return BatchObject{}, errors.New("batches are unavailable")
 	}
 	return a.GetBatch(ctx, requestID, id)
 }
 func (b *LegacyAdapterBridge) CancelBatch(ctx context.Context, requestID, id string) (BatchObject, error) {
-	a, ok := b.Adapter.(ResourceInferenceResourcesAdapter)
+	a, ok := b.Adapter.(ResourceBatchesAdapter)
 	if !ok {
 		return BatchObject{}, errors.New("batches are unavailable")
 	}

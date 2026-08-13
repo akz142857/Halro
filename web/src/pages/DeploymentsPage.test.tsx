@@ -166,6 +166,38 @@ describe("deployment invocation target workflow", () => {
     expect(screen.getByText(/保存会立即热加载这个部署的配置/)).toBeVisible();
   });
 
+  // An edit locks the invocation identity: detection cannot run and no variant
+  // is re-resolved, so nothing but the operator can establish a capability the
+  // deployment never recorded. The form used to send the widened set with no
+  // mode at all, and the only possible outcome was model_capabilities_unknown
+  // with no way forward on screen.
+  it("makes an edit that widens capabilities declare them before it can save", async () => {
+    const resourceCapabilities: ProviderCapabilities = { ...chatCapabilities, files: true, batches: true };
+    vi.mocked(api.providers).mockResolvedValue({
+      items: [{
+        ...provider, capabilities: resourceCapabilities,
+        bindings: [{ id: "b-chat", profile_id: "openai.chat-embeddings.v1", enabled: true, capabilities: resourceCapabilities }],
+      } as Provider],
+      next_cursor: "",
+    });
+    vi.mocked(api.deployments).mockResolvedValue({ items: [existingDeployment], next_cursor: "" });
+    vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [], next_cursor: "" });
+    const update = vi.spyOn(api, "updateDeployment").mockResolvedValue({} as never);
+    renderPage();
+
+    fireEvent.click((await screen.findAllByRole("button", { name: "编辑" }))[0]);
+    fireEvent.click(await screen.findByLabelText("文件"));
+    expect(screen.getByRole("button", { name: "保存并热加载" })).toBeDisabled();
+    expect(screen.getByText("尚未完成").closest(".form-footer-summary")!.textContent).toContain("声明新增的能力");
+
+    fireEvent.click(screen.getByRole("button", { name: "以管理员身份声明这些能力" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存并热加载" }));
+    await waitFor(() => expect(update).toHaveBeenCalledOnce());
+    expect(update).toHaveBeenCalledWith(existingDeployment.id, expect.objectContaining({
+      mode: "operator_declared", capabilities: expect.objectContaining({ files: true }),
+    }), expect.anything());
+  });
+
   it("treats legacy null collection fields as empty instead of crashing", async () => {
     vi.mocked(api.invocationTargets).mockResolvedValue({ ...catalog([]), items: null as never });
     await openCreate();

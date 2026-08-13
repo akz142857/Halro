@@ -1225,9 +1225,16 @@ func (r *Runtime) providerFromInput(
 		if !instance.Capabilities.AnyOperation() {
 			return domain.ProviderInstance{}, errors.New("provider must declare at least one operation capability")
 		}
-		if domain.IsImmutableCapabilityProfile(profile.ProfileID) &&
-			!capabilitySubset(instance.Capabilities, domain.DefaultProviderCapabilitiesForProfile(input.Type, profile.ProfileID)) {
-			return domain.ProviderInstance{}, errors.New("provider capabilities exceed the immutable operation profile")
+		// Every profile has a ceiling, not only the immutable ones. The check used
+		// to run for those alone, which left the console's checkbox list as the
+		// only thing preventing a direct API caller from declaring a capability
+		// the adapter cannot serve — routing would then offer that connection for
+		// an operation it answers with an error.
+		if !capabilitySubset(instance.Capabilities, domain.MaxProviderCapabilitiesForProfile(input.Type, profile.ProfileID)) {
+			if domain.IsImmutableCapabilityProfile(profile.ProfileID) {
+				return domain.ProviderInstance{}, errors.New("provider capabilities exceed the immutable operation profile")
+			}
+			return domain.ProviderInstance{}, errors.New("provider capabilities exceed what this profile can serve")
 		}
 	}
 	instance.CapabilityEvidence = preserveCapabilityEvidence(instance.Capabilities, currentEvidence)
@@ -1248,9 +1255,11 @@ func (r *Runtime) providerFromInput(
 			if binding.CredentialScheme != credential.Scheme || binding.AccessSurface != credential.AccessSurface {
 				return domain.ProviderInstance{}, errors.New("provider binding credential profile does not match connection")
 			}
-			if domain.IsImmutableCapabilityProfile(binding.ProfileID) &&
-				!domain.ProviderCapabilitiesSubset(binding.Capabilities, domain.DefaultProviderCapabilitiesForProfile(input.Type, binding.ProfileID)) {
-				return domain.ProviderInstance{}, errors.New("provider binding capabilities exceed the immutable operation profile")
+			if !domain.ProviderCapabilitiesSubset(binding.Capabilities, domain.MaxProviderCapabilitiesForProfile(input.Type, binding.ProfileID)) {
+				if domain.IsImmutableCapabilityProfile(binding.ProfileID) {
+					return domain.ProviderInstance{}, errors.New("provider binding capabilities exceed the immutable operation profile")
+				}
+				return domain.ProviderInstance{}, errors.New("provider binding capabilities exceed what this profile can serve")
 			}
 			var previous domain.CapabilityEvidenceSet
 			for _, current := range currentBindings {
@@ -1387,8 +1396,48 @@ func (r *Runtime) validateCredentialReferences(
 				),
 			}
 		}
+		// The third axis. A credential is sealed against one access surface and
+		// one scheme as much as against a type and an endpoint, and the registry
+		// refuses to load at all when a binding disagrees with the credential it
+		// was issued for — not by withholding that provider, but by failing the
+		// whole load. Checking only type and audience here let a rotation move a
+		// credential onto a surface no binding uses and take the data plane down
+		// with it, so the surface is compared against every binding that would
+		// have to accept the rotated credential.
+		for _, binding := range providerCredentialProfiles(instance) {
+			if binding.AccessSurface == credential.AccessSurface && binding.CredentialScheme == credential.Scheme {
+				continue
+			}
+			return credentialMatchError{
+				code: "credential_surface_in_use",
+				fields: map[string]string{
+					"credential_access_surface": string(credential.AccessSurface),
+					"provider_access_surface":   string(binding.AccessSurface),
+					"provider_name":             instance.Name,
+				},
+				err: fmt.Errorf(
+					"provider %q uses this credential on access surface %s, which this rotation would change to %s",
+					instance.Name, binding.AccessSurface, credential.AccessSurface,
+				),
+			}
+		}
 	}
 	return nil
+}
+
+// providerCredentialProfiles answers the (surface, scheme) pairs a connection
+// would present the credential with. Bindings are the authority — the
+// instance's own fields are a projection of the first one — but a record
+// written before bindings existed has none, and its projection is then the only
+// declaration there is.
+func providerCredentialProfiles(instance domain.ProviderInstance) []domain.ProviderProfileBinding {
+	if len(instance.Bindings) > 0 {
+		return instance.Bindings
+	}
+	return []domain.ProviderProfileBinding{{
+		AccessSurface:    instance.AccessSurface,
+		CredentialScheme: instance.CredentialScheme,
+	}}
 }
 
 func (r *Runtime) validateProviderCanDeactivate(

@@ -34,11 +34,36 @@ func TestProviderFieldCompatibilityRejectsSilentLoss(t *testing.T) {
 	}
 }
 
-func TestProviderFieldCompatibilityRejectsUnsupportedMessageNames(t *testing.T) {
+// Every profile either carries messages[].name to the wire or declares that it
+// cannot. Listing both halves is the point: the Bedrock Mantle Responses branch
+// used to do neither, and a table that only checked the profiles known to
+// declare the field would never have noticed. A Responses message item has no
+// place for a speaker's name, so a conversation with several participants
+// routed there came back 200 with them made indistinguishable.
+func TestProviderFieldCompatibilityAccountsForMessageNamesOnEveryProfile(t *testing.T) {
 	request := semantic.GenerateRequest{Messages: []semantic.Message{{Role: semantic.RoleUser, Name: "customer", Content: []semantic.Content{{Kind: semantic.ContentText, Text: "hi"}}}}}
-	for _, profileID := range []domain.ProviderProfileID{domain.ProfileGeminiText, domain.ProfileBedrockConverseText} {
+	for _, profileID := range []domain.ProviderProfileID{
+		domain.ProfileGeminiText,
+		domain.ProfileBedrockConverseText,
+		domain.ProfileAnthropicMessages,
+		domain.ProfileBedrockMantleAnthropicMessages,
+		domain.ProfileBedrockMantleOpenAIResponses,
+	} {
 		if fields := UnsupportedGenerateFields(profileID, request); !slices.Contains(fields, "messages[].name") {
-			t.Fatalf("%s did not reject messages[].name: %v", profileID, fields)
+			t.Fatalf("%s drops messages[].name without declaring it: %v", profileID, fields)
+		}
+	}
+	// These render the OpenAI wire form, whose message object has the field, so
+	// declaring it would route requests away from a provider that serves them.
+	for _, profileID := range []domain.ProviderProfileID{
+		domain.ProfileOpenAIChatEmbeddings,
+		domain.ProfileAzureChatEmbeddings,
+		domain.ProfileDeepSeekChat,
+		domain.ProfileOpenAICompatible,
+		domain.ProfileBedrockMantleOpenAIChat,
+	} {
+		if fields := UnsupportedGenerateFields(profileID, request); slices.Contains(fields, "messages[].name") {
+			t.Fatalf("%s declared a field it carries: %v", profileID, fields)
 		}
 	}
 }

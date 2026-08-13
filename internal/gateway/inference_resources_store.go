@@ -219,9 +219,9 @@ func (s *Service) CreateFile(ctx context.Context, key, route, idempotencyKey str
 	if resolved, ok := target.ResolveOperation(provider.OperationFiles); ok {
 		localOnly = resolved.ProviderPrimitive() == provider.PrimitiveHalroLocalFiles
 	}
-	var adapter provider.ResourceInferenceResourcesAdapter
+	var adapter provider.ResourceFilesAdapter
 	if !localOnly {
-		resourceAdapter, ok := target.Adapter.(provider.ResourceInferenceResourcesAdapter)
+		resourceAdapter, ok := target.Adapter.(provider.ResourceFilesAdapter)
 		if !ok {
 			return provider.FileObject{}, gatewayError("unsupported_feature", "file adapter is unavailable", 400, nil)
 		}
@@ -324,7 +324,7 @@ func (s *Service) CreateFile(ctx context.Context, key, route, idempotencyKey str
 	upstream.ID = externalID
 	return upstream, nil
 }
-func (s *Service) fileOwner(ctx context.Context, key, idValue string) (auth.AuthResult, domain.ProviderResource, provider.ResourceInferenceResourcesAdapter, error) {
+func (s *Service) fileOwner(ctx context.Context, key, idValue string) (auth.AuthResult, domain.ProviderResource, provider.ResourceFilesAdapter, error) {
 	principal, err := s.resourcePrincipal(ctx, key)
 	if err != nil {
 		return principal, domain.ProviderResource{}, nil, err
@@ -347,7 +347,7 @@ func (s *Service) fileOwner(ctx context.Context, key, idValue string) (auth.Auth
 	if resource.UpstreamID == "" {
 		return principal, resource, nil, nil
 	}
-	adapter, ok := target.Adapter.(provider.ResourceInferenceResourcesAdapter)
+	adapter, ok := target.Adapter.(provider.ResourceFilesAdapter)
 	if !ok {
 		return principal, resource, nil, gatewayError("resource_owner_unavailable", "file owner adapter is unavailable", 409, nil)
 	}
@@ -483,7 +483,7 @@ func (s *Service) downloadUpstreamFile(ctx context.Context, principal auth.AuthR
 	if err != nil {
 		return provider.FileContent{}, err
 	}
-	adapter, ok := target.Adapter.(provider.ResourceInferenceResourcesAdapter)
+	adapter, ok := target.Adapter.(provider.ResourceFilesAdapter)
 	if !ok {
 		return provider.FileContent{}, gatewayError("resource_owner_unavailable", "file owner adapter is unavailable", 409, nil)
 	}
@@ -617,7 +617,7 @@ func (s *Service) CleanupExpiredProviderResource(ctx context.Context, resource d
 	if err != nil {
 		return err
 	}
-	adapter, ok := target.Adapter.(provider.ResourceInferenceResourcesAdapter)
+	adapter, ok := target.Adapter.(provider.ResourceFilesAdapter)
 	if !ok {
 		return gatewayError("resource_owner_unavailable", "file owner adapter is unavailable", 409, nil)
 	}
@@ -698,7 +698,7 @@ func (s *Service) CreateBatch(ctx context.Context, key, idempotencyKey string, c
 		}
 		call.InputRequests = data
 	}
-	adapter, ok := batchTarget.Adapter.(provider.ResourceInferenceResourcesAdapter)
+	adapter, ok := batchTarget.Adapter.(provider.ResourceBatchesAdapter)
 	if !ok {
 		return provider.BatchObject{}, gatewayError("unsupported_feature", "batch adapter is unavailable", 400, nil)
 	}
@@ -978,7 +978,7 @@ func (s *Service) registerUpstreamFile(ctx context.Context, batch domain.Provide
 	return externalID, nil
 }
 
-func (s *Service) batchOwner(ctx context.Context, key, idValue string) (auth.AuthResult, domain.ProviderResource, provider.ResourceInferenceResourcesAdapter, error) {
+func (s *Service) batchOwner(ctx context.Context, key, idValue string) (auth.AuthResult, domain.ProviderResource, provider.ResourceBatchesAdapter, error) {
 	principal, err := s.resourcePrincipal(ctx, key)
 	if err != nil {
 		return principal, domain.ProviderResource{}, nil, err
@@ -991,7 +991,7 @@ func (s *Service) batchOwner(ctx context.Context, key, idValue string) (auth.Aut
 	if err != nil {
 		return principal, resource, nil, err
 	}
-	adapter, ok := target.Adapter.(provider.ResourceInferenceResourcesAdapter)
+	adapter, ok := target.Adapter.(provider.ResourceBatchesAdapter)
 	if !ok {
 		return principal, resource, nil, gatewayError("resource_owner_unavailable", "batch owner adapter is unavailable", 409, nil)
 	}

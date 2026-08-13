@@ -131,14 +131,31 @@ type BatchResultsAdapter interface {
 	FetchBatchResults(ctx context.Context, requestID, batchID, resultsURL string) ([]byte, error)
 }
 
-type ResourceInferenceResourcesAdapter interface {
+// ResourceFilesAdapter is implemented by providers that keep an upload of their
+// own. It is separate from batches on purpose: an upstream can run batches with
+// no file store at all, and asking one interface for both refuses that upstream
+// its batches over methods it never needed.
+type ResourceFilesAdapter interface {
 	CreateFile(context.Context, FileCreateCall) (FileObject, error)
 	GetFile(context.Context, string, string) (FileObject, error)
 	DownloadFile(context.Context, string, string) (FileContent, error)
 	DeleteFile(context.Context, string, string) (FileDeleteResult, error)
+}
+
+// ResourceBatchesAdapter is its counterpart. Anthropic is the case that makes
+// the split load-bearing: a Message Batch carries its requests inline, so the
+// adapter has no file methods, and Halro holds the caller's JSONL locally.
+type ResourceBatchesAdapter interface {
 	CreateBatch(context.Context, BatchCreateCall) (BatchObject, error)
 	GetBatch(context.Context, string, string) (BatchObject, error)
 	CancelBatch(context.Context, string, string) (BatchObject, error)
+}
+
+// ResourceInferenceResourcesAdapter is both, for the callers that hold one
+// handle and use it for either.
+type ResourceInferenceResourcesAdapter interface {
+	ResourceFilesAdapter
+	ResourceBatchesAdapter
 }
 
 type RerankCall struct {
