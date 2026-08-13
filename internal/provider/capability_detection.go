@@ -45,6 +45,19 @@ type CapabilityDetector interface {
 // CapabilityDetectionPlan is deliberately derived from the immutable profile
 // wrapper. It can only offer operations the registered adapter/profile ceiling
 // already permits, and excludes every persistent or high-cost primitive.
+//
+// Which ones that excludes, so the omission is not read as an oversight and
+// re-raised as a gap: images, speech, transcription and async generation are
+// high-cost — one probe is a real generation, billed at generation prices, on
+// every model an operator asks about. Files and batches are persistent: a probe
+// would create an object on the operator's account that nothing here deletes.
+//
+// The consequence is worth stating plainly, because it is a real limit rather
+// than a free choice. Those capabilities can only ever hold declared evidence.
+// They are still filtered before Provider I/O and their unsupported fields are
+// still rejected, but nothing will automatically discover that a declaration
+// and the upstream disagree. Verifying them needs an operator-initiated action
+// that accepts the cost, which is a different mechanism from this one.
 func (b *LegacyAdapterBridge) CapabilityDetectionPlan(target ModelCapabilityDetectionTarget) (CapabilityDetectionPlan, error) {
 	if target.RiskTier != "safe_automatic" || target.ProviderModel == "" || target.BindingID == "" || target.ProfileID != b.manifest.ID {
 		return CapabilityDetectionPlan{}, errors.New("capability detection target does not match adapter profile")
