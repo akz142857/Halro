@@ -270,9 +270,24 @@ native mode"）。该行按 `errored` 处理并说明原因，而不是让整批
    断言整体失败。已拆为 `ResourceFilesAdapter` / `ResourceBatchesAdapter`。
 
 上面的「预期会撞上的地方」四条**一条都还没被验证**——真实上游还没收到过一次
-`POST /v1/messages/batches`。下次接着从第 4 步跑。
+`POST /v1/messages/batches`。
 
-另外记一笔：`POST /v1/files` 返回的 `created_at` 是 0，北向形状不该这样。
+**续跑步骤**（承接 §5，从第 4 步起）：
+
+1. `make build` 后重启 Halro——接口拆分改的是 Go 侧，不重启仍是旧的断言
+2. 确认部署与路由都启用（若上一轮为扩宽能力停过路由，别忘了启用回来）
+3. `POST /v1/files` 传 JSONL，拿 `input_file_id`
+4. `POST /v1/batches`，`completion_window: "24h"`——**这里是真实上游的第一次批处理创建**，
+   §5 那四条预期风险从这一步开始逐条兑现
+5. 轮询 `GET /v1/batches/{id}` 至 `completed`
+6. `GET /v1/files/{output_file_id}/content` 取结果，核对每行 `custom_id` 与 `response.body`
+
+**跑之前要按对的顺序**：给部署扩宽能力必须先停用其路由（`capability_expansion_requires_revalidation`），
+再保存 → 测试 → 启用部署 → 启用路由。Provider 与 Deployment 两层能力都要开，只开 Provider 会得到
+`ambiguous_resource_route`。
+
+另外记一笔：`POST /v1/files` 返回的 `created_at` 是 0，北向形状不该这样。已登记在
+[provider-adaptation-gaps](provider-adaptation-gaps.zh-CN.md) 的控制台缺口一节。
 
 ## 4. 明确不做的
 

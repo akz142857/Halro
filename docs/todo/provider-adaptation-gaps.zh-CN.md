@@ -189,7 +189,7 @@ JSONL ↔ inline 转换、不需要把 `results_url` 落盘再伪装成 `output_
 
 | 项 | 需要什么 | 为什么重要 |
 |---|---|---|
-| Anthropic 批处理端到端 | 已有的 Anthropic 密钥 | 五个切片全部只有假上游验证。同一天里假上游三次没拦住真实缺陷，见[批处理方案 §5](anthropic-batches-plan.zh-CN.md) |
+| Anthropic 批处理端到端 | 已有的 Anthropic 密钥 | 五个切片全部只有假上游验证。同一天里假上游三次没拦住真实缺陷，见[批处理方案 §5](anthropic-batches-plan.zh-CN.md)。**首次运行已走到第 4 步**，前三步真实通过，挡路的四个缺陷都已修复，续跑起点与踩过的坑见[§5.1](anthropic-batches-plan.zh-CN.md) |
 | 媒体资源 6 项中的 2 项 | 一把带 `api.files.write` 的 OpenAI 密钥，或把组织角色提到 Writer | 文件与批处理无任何真实证据；现有密钥是模型推理可用、资源写入被拒 |
 
 ### 阻塞于手头没有的凭据
@@ -213,6 +213,15 @@ JSONL ↔ inline 转换、不需要把 `results_url` 落盘再伪装成 `output_
 
 没有仓促加"用 Go 测试解析 TSX 文本"的守卫：那种断言脆弱到维护成本可能高过它挡住的问题，而真实的
 解法是消除重复而不是监视重复。
+
+### 首次真实运行暴露的两个控制台缺口（2026-08-13）
+
+| 项 | 症状 | 位置 |
+|---|---|---|
+| 文件对象的 `created_at` 恒为 0 | `POST /v1/files` 返回 `"created_at":0`。北向形状照抄 OpenAI，那里这是文件创建时间戳，客户端会拿它排序和判新旧 | `internal/gateway/inference_resources_store.go` 的本地文件对象构造 |
+| 网关密钥不显示剩余有效期 | 密钥过期后调用只回 401，控制台看不出"过期了"还是"配错了"。本次排查是直接读 bolt 才看到 `expires_at` 已过 | 密钥列表与详情 |
+
+两条都是操作者可见面的缺陷，不阻塞批处理续跑。
 
 ### 未排期
 
