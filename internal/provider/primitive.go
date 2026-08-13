@@ -68,6 +68,11 @@ const (
 	// work. It also cannot tell "deliberately local" from "not implemented yet",
 	// which turns a wiring defect into silent non-delivery.
 	PrimitiveHalroLocalFiles Primitive = "halro.local-files"
+
+	// PrimitiveAnthropicMessageBatches is Anthropic's own batch API. Its requests
+	// are inline, which is why the file beside it is local: there is nothing to
+	// upload them to.
+	PrimitiveAnthropicMessageBatches Primitive = "anthropic.messages.batches"
 )
 
 type PrimitiveBinding struct {

@@ -631,6 +631,13 @@ func DefaultProviderCapabilitiesForProfile(providerType ProviderType, profileID 
 		// Phase 1C deliberately exposes only the stateless Responses subset. The
 		// current canonical response mapper cannot preserve reasoning items.
 		return ProviderCapabilities{Chat: true, Streaming: true, Tools: true, Vision: true, JSONMode: true, DeveloperRole: true, StreamUsage: true}
+	case ProfileAnthropicMessages:
+		// Files and batches ride with this profile because Anthropic serves both
+		// on the same connection. The file half is stored by Halro and never
+		// uploaded — Anthropic batches carry their requests inline — so the
+		// capability says the deployment can be given a file, not that Anthropic
+		// will hold one. See ADR 0021.
+		return ProviderCapabilities{Chat: true, Streaming: true, Tools: true, Vision: true, JSONMode: true, Reasoning: true, StreamUsage: true, Files: true, Batches: true}
 	case ProfileBedrockMantleAnthropicMessages:
 		return ProviderCapabilities{Chat: true, Streaming: true, Tools: true, Vision: true, Reasoning: true, StreamUsage: true}
 	default:

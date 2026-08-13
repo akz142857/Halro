@@ -769,3 +769,51 @@ func TestLocalOnlyFileIsServedAndReapedWithoutTouchingTheUpstream(t *testing.T) 
 		t.Fatalf("the local object survived cleanup: %v", statErr)
 	}
 }
+
+// Uploading to a profile whose files primitive is local keeps the bytes and
+// tells no upstream. The mode is the profile's declaration — not something read
+// off the adapter's shape, which cannot work: every adapter reaches the gateway
+// wrapped in a bridge that implements the file interface whatever it wraps.
+func TestLocalFilesPrimitiveKeepsTheUploadAndSkipsTheUpstream(t *testing.T) {
+	adapter := &inferenceResourcesAdapter{providerType: string(domain.ProviderAnthropic)}
+	target := inferenceResourcesTargetFor("batch-route", adapter)
+	f := newInferenceResourcesServiceFixture(t, domain.ProfileAnthropicMessages, adapter, target, nil)
+	defer f.close()
+
+	created, err := f.service.CreateFile(context.Background(), f.plaintext, "batch-route", "idem-local-1", provider.FileCreateCall{
+		Filename: "batch-input.jsonl", ContentType: "application/jsonl", Purpose: "batch",
+		Data: []byte("{\"custom_id\":\"a\"}\n"),
+	})
+	if err != nil {
+		t.Fatalf("local upload: %v", err)
+	}
+	if adapter.fileCalls != 0 {
+		t.Fatalf("the upstream was asked to store a file the profile serves locally (%d calls)", adapter.fileCalls)
+	}
+	if created.ID == "" || created.Filename != "batch-input.jsonl" {
+		t.Fatalf("upload result=%#v", created)
+	}
+
+	record, ok := f.store.resources[created.ID]
+	if !ok {
+		t.Fatal("the upload left no record")
+	}
+	if record.UpstreamID != "" {
+		t.Fatalf("a local upload recorded an upstream identifier %q", record.UpstreamID)
+	}
+	if record.ObjectPath == "" {
+		t.Fatal("a local upload stored no object")
+	}
+	if record.CreationStatus != creationCompleted {
+		t.Fatalf("creation status=%q", record.CreationStatus)
+	}
+	// The bytes have to be readable back, since inlining them into a batch is
+	// the only reason this upload exists.
+	content, err := f.service.DownloadFile(context.Background(), f.plaintext, created.ID)
+	if err != nil {
+		t.Fatalf("reading a local upload back: %v", err)
+	}
+	if string(content.Data) != "{\"custom_id\":\"a\"}\n" {
+		t.Fatalf("content came back as %q", content.Data)
+	}
+}

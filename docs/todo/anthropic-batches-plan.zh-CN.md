@@ -85,7 +85,7 @@ JSON，没有跨片段的滚动窗口问题。
 | # | 内容 | 状态 |
 |---|---|---|
 | 1 | 资源模型不再假设上游孪生 | ✅ 已完成（`12bb3e0`） |
-| 2 | Anthropic profile 声明 files 与 batches，files 走本地独有 Primitive | 判据已定（§2.2），待实施 |
+| 2 | Anthropic profile 声明 files 与 batches，files 走本地独有 Primitive | ✅ 已完成 |
 | 3 | Anthropic 适配器的批处理原语 | 待 |
 | 4 | 结果落盘（惰性拉取 + 逐行 `ProcessJSON` + 32 MiB 界 + 幂等短路） | 待 |
 | 5 | 契约与 manifest | 待 |
@@ -142,6 +142,18 @@ JSON，没有跨片段的滚动窗口问题。
 切片 1 新增的 `localFileObject` 绕过了 `accountedInferenceResources`，也就绕过了 Token Guard、限流、
 并发与账本记录——本地文件的元数据查询可以无限轮询且不留请求记录。而同为本地读的 `DownloadFile` 走了
 信封。二者必须统一：**保留信封，单价归零**。
+
+### 2.5 升级注意事项
+
+`DefaultProviderCapabilitiesForProfile` 对 `ProfileAnthropicMessages` 打开了 `Files`/`Batches`。该默认值是
+**上限**（`ProviderCapabilitiesSubset(binding.Capabilities, defaults)`），放宽上限不会让既有记录失效——
+它们仍是更大集合的子集。
+
+因此**既有 Anthropic 连接不会自动获得批处理能力，需要操作者在控制台手工勾选**。与归档计划里
+`json_mode` 的情形同类。`ProfileAnthropicMessages` 不在 `IsImmutableCapabilityProfile` 名单中，勾选是允许的。
+
+Provider 侧 `ProfileManifest.Revision` 从 1 升到 2 仅为标注：该字段只被校验为非零
+（`internal/provider/profile.go:24`），不持久化、不参与任何比较。
 
 ## 3. 测试门禁
 

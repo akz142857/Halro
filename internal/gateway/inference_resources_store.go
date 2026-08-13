@@ -208,9 +208,22 @@ func (s *Service) CreateFile(ctx context.Context, key, route, idempotencyKey str
 		return provider.FileObject{}, gatewayError("ambiguous_resource_route", "file creation requires exactly one eligible deployment", 409, nil)
 	}
 	target := targets[0]
-	adapter, ok := target.Adapter.(provider.ResourceInferenceResourcesAdapter)
-	if !ok {
-		return provider.FileObject{}, gatewayError("unsupported_feature", "file adapter is unavailable", 400, nil)
+	// Whether this upload has a southbound call is the profile's declaration,
+	// not something inferred from the adapter's shape. PrimitiveHalroLocalFiles
+	// means Halro keeps the bytes and the upstream is never told; every other
+	// primitive means there is an upload to make and an adapter that must be
+	// able to make it.
+	localOnly := false
+	if resolved, ok := target.ResolveOperation(provider.OperationFiles); ok {
+		localOnly = resolved.ProviderPrimitive() == provider.PrimitiveHalroLocalFiles
+	}
+	var adapter provider.ResourceInferenceResourcesAdapter
+	if !localOnly {
+		resourceAdapter, ok := target.Adapter.(provider.ResourceInferenceResourcesAdapter)
+		if !ok {
+			return provider.FileObject{}, gatewayError("unsupported_feature", "file adapter is unavailable", 400, nil)
+		}
+		adapter = resourceAdapter
 	}
 	keyHash := sha256.Sum256([]byte(idempotencyKey))
 	fingerprint := sha256.Sum256(append(append([]byte(route+"\x00"+call.Purpose+"\x00"+call.Filename+"\x00"), call.Data...), []byte(call.ContentType)...))
@@ -239,14 +252,34 @@ func (s *Service) CreateFile(ctx context.Context, key, route, idempotencyKey str
 	if err != nil {
 		return provider.FileObject{}, gatewayError("idempotency_in_progress", "resource creation is already reserved", 409, err)
 	}
-	if record, err = s.markInFlight(ctx, record); err != nil {
-		return provider.FileObject{}, err
+	// in-flight means "the call may already have reached the upstream", which is
+	// what makes an interrupted attempt unreplayable and holds the idempotency
+	// key until the record expires. A local upload has no upstream to have
+	// reached: an interrupted one created nothing, so it stays reserved and the
+	// key stays reclaimable.
+	if !localOnly {
+		if record, err = s.markInFlight(ctx, record); err != nil {
+			return provider.FileObject{}, err
+		}
 	}
 	requestID := ""
 	call.RequestID = requestID
 	var upstream provider.FileObject
-	err = s.accountedInferenceResources(ctx, principal, route, target, int64(len(call.Data))/4+1, &requestID, func() error {
+	// A local upload is still metered — the envelope carries Token Guard, the
+	// limiters and the request record — but at one unit and no fixed price.
+	// Charging the upstream's per-byte rate for bytes that never left the host
+	// would bill a call that was never made.
+	units := int64(len(call.Data))/4 + 1
+	if localOnly {
+		units = 1
+		target.FixedRequestMicrosUSD = 0
+	}
+	err = s.accountedInferenceResources(ctx, principal, route, target, units, &requestID, func() error {
 		call.RequestID = requestID
+		if localOnly {
+			upstream = provider.FileObject{Object: "file", Bytes: int64(len(call.Data)), Filename: call.Filename, Purpose: call.Purpose, Status: "uploaded"}
+			return s.redactFileObject(principal.Project.RedactionPolicyID, &upstream)
+		}
 		var callErr error
 		upstream, callErr = adapter.CreateFile(ctx, call)
 		if callErr == nil {
@@ -255,9 +288,14 @@ func (s *Service) CreateFile(ctx context.Context, key, route, idempotencyKey str
 		return callErr
 	})
 	if err != nil {
-		record.CreationStatus = creationUnknown
-		record.UpdatedAt = s.now()
-		_, _ = s.resources.PutProviderResource(ctx, record, record.Revision)
+		// Unknown is for an outcome nobody can determine. A local failure is
+		// determinate — nothing was created — so the reservation is left as it
+		// is rather than being reported as ambiguous and freezing the key.
+		if !localOnly {
+			record.CreationStatus = creationUnknown
+			record.UpdatedAt = s.now()
+			_, _ = s.resources.PutProviderResource(ctx, record, record.Revision)
+		}
 		return provider.FileObject{}, err
 	}
 	record.UpstreamID = upstream.ID
