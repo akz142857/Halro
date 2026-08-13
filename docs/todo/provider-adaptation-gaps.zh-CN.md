@@ -199,6 +199,21 @@ JSONL ↔ inline 转换、不需要把 `results_url` 落盘再伪装成 `output_
 | Bedrock Converse 工具调用（#1） | Bedrock Runtime 的 SigV4 凭据。现有两把 AWS 凭据都是 Mantle，改了也无法验证 |
 | 非文本模态第二供应商（#2） | Azure OpenAI 凭据。最小方案是复用现有适配器的 azure 分支加一个 media-resources profile |
 
+### 已知重复：能力上限有两份真相
+
+`domain.DefaultProviderCapabilitiesForProfile`（`internal/domain/models.go`）与
+`defaultProviderCapabilities`（`web/src/pages/ProvidersPage.tsx`）各自维护一份"某个 profile 能开哪些
+能力"的表，**没有任何东西阻止两者漂移**。
+
+2026-08-13 就漂了一次：后端给 Anthropic 打开 Files/Batches 后，控制台的能力网格里根本不显示这两项，
+操作者无法勾选，功能等于不可用。前端那份已补齐，但重复本身还在。
+
+**正确的修法是让 Admin API 直接给出上限，前端不再自己算**——现在 API 只回传已选能力，不回传"可选
+范围"。这是一块独立改动，涉及 Admin 响应形状与控制台表单。
+
+没有仓促加"用 Go 测试解析 TSX 文本"的守卫：那种断言脆弱到维护成本可能高过它挡住的问题，而真实的
+解法是消除重复而不是监视重复。
+
 ### 未排期
 
 **Anthropic Files API（#3b）**。与批处理无依赖——Anthropic 的批处理不引用文件，本次实现里的"文件"是

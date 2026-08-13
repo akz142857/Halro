@@ -856,7 +856,13 @@ function defaultProviderCapabilities(type: ProviderType, profileID: BedrockProfi
     if (type === "openai") return { ...chat, moderations: true, images: true, transcriptions: true, speech: true, files: true, batches: true };
     return chat;
   }
-  if (type === "anthropic") return { ...value, tools: true, vision: true, json_mode: true, reasoning: true, stream_usage: true };
+  // Files and batches ride with the Anthropic connection because Anthropic
+  // serves both on the same credential. The file half is stored by Halro and
+  // never uploaded — Anthropic batches carry their requests inline — so the
+  // capability says this deployment can be given a file, not that Anthropic
+  // will hold one. Kept in step with DefaultProviderCapabilitiesForProfile in
+  // internal/domain/models.go, which is the ceiling the API actually enforces.
+  if (type === "anthropic") return { ...value, tools: true, vision: true, json_mode: true, reasoning: true, stream_usage: true, files: true, batches: true };
   if (type === "deepseek") return { ...value, tools: true, json_mode: true, reasoning: true, stream_usage: true };
   if (type === "openai_compatible") return { ...value, embeddings: true };
   if (type === "gemini") return { ...value, embeddings: true, developer_role: true, stream_usage: false };
