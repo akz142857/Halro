@@ -550,8 +550,17 @@ func validAzureDeployment(value string) bool {
 	return true
 }
 
-func classifyHTTPError(status int, message string) *provider.Error {
-	result := &provider.Error{StatusCode: status, Message: "provider rejected request"}
+// classifyHTTPError turns an upstream refusal into a classified provider error.
+//
+// It takes the whole refusal rather than only its sentence, because the sentence
+// is the one part that cannot be forwarded anywhere: it is prose the upstream
+// wrote about the request, so it stays inside the error and never reaches a log
+// or a console cell. The code and the offending parameter are identifiers, and
+// they are what an operator can act on — a bare "bad_request http=400" says a
+// parameter was refused without saying which, and the operator is left to bisect
+// a request they did not write.
+func classifyHTTPError(status int, refusal upstreamRefusal) *provider.Error {
+	result := &provider.Error{StatusCode: status, Message: "provider rejected request", ProviderCode: refusal.Code}
 	switch {
 	case status == http.StatusUnauthorized || status == http.StatusForbidden:
 		result.Class = provider.ErrorAuthentication
@@ -567,20 +576,50 @@ func classifyHTTPError(status int, message string) *provider.Error {
 	default:
 		result.Class = provider.ErrorBadRequest
 	}
-	if message != "" {
-		result.Message = fmt.Sprintf("provider error (%d): %s", status, message)
+	if refusal.Message != "" {
+		result.Message = fmt.Sprintf("provider error (%d): %s", status, refusal.Message)
 	}
 	return result
 }
 
-func limitedErrorMessage(reader io.Reader) string {
+// upstreamRefusal is the machine-readable part of an OpenAI-shaped error body,
+// kept apart from the human sentence beside it.
+type upstreamRefusal struct {
+	Message string
+	Code    string
+}
+
+func limitedErrorMessage(reader io.Reader) upstreamRefusal {
 	payload, err := io.ReadAll(io.LimitReader(reader, 4096))
 	if err != nil {
-		return ""
+		return upstreamRefusal{}
 	}
 	var envelope openaiapi.ErrorEnvelope
-	if json.Unmarshal(payload, &envelope) == nil && envelope.Error.Message != "" {
-		return envelope.Error.Message
+	if json.Unmarshal(payload, &envelope) != nil {
+		return upstreamRefusal{Message: http.StatusText(http.StatusBadGateway)}
 	}
-	return http.StatusText(http.StatusBadGateway)
+	refusal := upstreamRefusal{Message: envelope.Error.Message, Code: strings.TrimSpace(envelope.Error.Code)}
+	if refusal.Code == "" {
+		// Not every OpenAI-shaped upstream fills `code`; `type` is the coarser
+		// identifier the same bodies always carry.
+		refusal.Code = strings.TrimSpace(envelope.Error.Type)
+	}
+	// The refused parameter is an identifier too, and it is the one an operator
+	// needs: "unsupported_parameter" without it names a category, not a field.
+	// Joining keeps both inside the single identifier field the error contract
+	// has, in a shape the console and log already accept.
+	if param := strings.TrimSpace(pointerValue(envelope.Error.Param)); param != "" && refusal.Code != "" {
+		refusal.Code += ":" + param
+	}
+	if refusal.Message == "" {
+		refusal.Message = http.StatusText(http.StatusBadGateway)
+	}
+	return refusal
+}
+
+func pointerValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
