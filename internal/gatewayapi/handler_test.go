@@ -56,6 +56,15 @@ func (s *fakeService) MessagesNative(ctx context.Context, key, _ string, _ []str
 	return s.Messages(ctx, key, request)
 }
 
+func (s *fakeService) MessagesCountTokens(_ context.Context, key, _ string, _ []string, _ anthropicapi.MessageRequest) (anthropicapi.TokenCount, error) {
+	s.calls++
+	s.key = key
+	if s.err != nil {
+		return anthropicapi.TokenCount{}, s.err
+	}
+	return anthropicapi.TokenCount{InputTokens: 11}, nil
+}
+
 func (s *fakeService) MessagesNativeStream(_ context.Context, key, _ string, _ []string, request anthropicapi.MessageRequest, emit func(anthropicapi.RawStreamEvent) error) error {
 	s.calls++
 	s.key = key

@@ -71,6 +71,16 @@ func (s *service) MessagesNativeStream(ctx context.Context, key, _ string, _ []s
 	})
 }
 
+// The contract server answers count_tokens from the same fixed estimate the
+// manifest tests assert against; it exists to exercise the endpoint's envelope,
+// not to model Anthropic's tokenizer.
+func (s *service) MessagesCountTokens(_ context.Context, key, _ string, _ []string, request anthropicapi.MessageRequest) (anthropicapi.TokenCount, error) {
+	if err := contractError(key, request.Model); err != nil {
+		return anthropicapi.TokenCount{}, err
+	}
+	return anthropicapi.TokenCount{InputTokens: 7}, nil
+}
+
 func (s *service) Responses(_ context.Context, key string, request openaiapi.ResponseRequest) (openaiapi.Response, error) {
 	if err := contractError(key, request.Model); err != nil {
 		return openaiapi.Response{}, err
@@ -238,6 +248,7 @@ func main() {
 	mux.HandleFunc("POST /v1/chat/completions", handler.ChatCompletions)
 	mux.HandleFunc("POST /v1/responses", handler.Responses)
 	mux.HandleFunc("POST /v1/messages", handler.Messages)
+	mux.HandleFunc("POST /v1/messages/count_tokens", handler.CountTokens)
 	mux.HandleFunc("POST /v1/embeddings", handler.Embeddings)
 	mux.HandleFunc("GET /healthz", func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusNoContent)

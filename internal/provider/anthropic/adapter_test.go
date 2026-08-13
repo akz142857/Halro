@@ -12,6 +12,7 @@ import (
 
 	"github.com/akz142857/Halro/internal/anthropicapi"
 	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/openaiapi"
 	"github.com/akz142857/Halro/internal/provider"
 )
 
@@ -181,5 +182,67 @@ func TestPreparePayloadRewritesOnlyModelAndStream(t *testing.T) {
 	}
 	if strings.Contains(string(out), "public-alias") {
 		t.Fatalf("public alias leaked upstream: %s", out)
+	}
+}
+
+// The two payloads that tell the surgical rewrite apart from the struct round
+// trip it replaced. The round trip turned a string content into a one-element
+// array — which is not valid Anthropic wire format — and dropped an empty
+// stop_sequences to omitempty. Without these, the test above passes against
+// either implementation and proves nothing.
+func TestPreparePayloadPreservesShapesTheStructRoundTripDestroyed(t *testing.T) {
+	payload := []byte(`{"model":"public-alias","max_tokens":10,"stop_sequences":[],"messages":[{"role":"user","content":"hi"}]}`)
+	out, err := preparePayload(provider.NativeMessageCall{Payload: payload, ProviderModel: "upstream-model"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), `"content":"hi"`) {
+		t.Fatalf("string content was rewritten into an array: %s", out)
+	}
+	if !strings.Contains(string(out), `"stop_sequences":[]`) {
+		t.Fatalf("empty stop_sequences was dropped: %s", out)
+	}
+}
+
+// count_tokens has no stream flag to own, and max_tokens is the caller's to
+// send or omit — Anthropic decides about it, not Halro.
+func TestPrepareCountTokensPayloadRewritesOnlyTheModel(t *testing.T) {
+	payload := []byte(`{"model":"public-alias","messages":[{"role":"user","content":"hi"}]}`)
+	out, err := prepareCountTokensPayload(provider.NativeMessageCall{Payload: payload, ProviderModel: "upstream-model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), `"model":"upstream-model"`) || strings.Contains(string(out), `"stream"`) {
+		t.Fatalf("unexpected count_tokens payload: %s", out)
+	}
+}
+
+// The OpenAI-compatible surface reaches Anthropic through this path, and the
+// current Claude models think by default. A request that leaves thinking
+// unspecified comes back with signed thinking blocks that an OpenAI-shaped
+// response has nowhere to keep, so the whole response is refused as malformed
+// and the caller is charged for a 502. Asserting on the mapping alone would not
+// have caught it: what matters is what leaves this adapter.
+func TestPortableChatTellsAnthropicNotToThink(t *testing.T) {
+	var thinking string
+	adapter := newTestAdapter(t, func(writer http.ResponseWriter, request *http.Request) {
+		var body map[string]json.RawMessage
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		thinking = string(body["thinking"])
+		writer.Header().Set("content-type", "application/json")
+		_, _ = writer.Write([]byte(`{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],` +
+			`"model":"claude-provider","stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":4,"output_tokens":1}}`))
+	})
+	_, err := adapter.Chat(context.Background(), provider.ChatCall{
+		RequestID: "req", ProviderModel: "claude-provider",
+		Request: openaiapi.ChatCompletionRequest{Model: "public", Messages: []openaiapi.Message{{Role: "user", Content: openaiapi.TextContent("hi")}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if thinking != `{"type":"disabled"}` {
+		t.Fatalf("thinking sent upstream=%q", thinking)
 	}
 }

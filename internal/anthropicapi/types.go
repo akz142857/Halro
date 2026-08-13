@@ -6,9 +6,56 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"slices"
+	"sort"
 	"strings"
 )
+
+// Members the gateway reads out of each nested object. A native request forwards
+// everything else verbatim, so these lists are not an acceptance filter — they
+// are what the portable projection is able to carry. Portable rewrites the
+// request body, so anything outside them would be dropped on the way out, and
+// dropping a member that constrains the request (task_budget bounds spend) is
+// worse than refusing it.
+var (
+	knownToolMembers         = []string{"name", "description", "input_schema", "type", "strict"}
+	knownOutputConfigMembers = []string{"effort", "format"}
+	knownOutputFormatMembers = []string{"type", "name", "description", "schema"}
+)
+
+func unknownMembers(raw json.RawMessage, known []string) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	var members map[string]json.RawMessage
+	if json.Unmarshal(raw, &members) != nil {
+		return nil
+	}
+	var result []string
+	for name := range members {
+		if !slices.Contains(known, name) {
+			result = append(result, name)
+		}
+	}
+	sort.Strings(result)
+	return result
+}
+
+// UnknownMembers reports tool members the portable projection cannot carry.
+func (tool Tool) UnknownMembers() []string {
+	return unknownMembers(tool.Raw, knownToolMembers)
+}
+
+// UnknownMembers reports output_config members the portable projection cannot
+// carry, including those nested in format.
+func (config OutputConfig) UnknownMembers() []string {
+	result := unknownMembers(config.Raw, knownOutputConfigMembers)
+	for _, name := range unknownMembers(config.Format, knownOutputFormatMembers) {
+		result = append(result, "format."+name)
+	}
+	return result
+}
 
 const (
 	VersionHeader     = "anthropic-version"
@@ -37,22 +84,27 @@ const MaxBetaTokens = 16
 // surrounding whitespace but deliberately preserves case: tokens are matched
 // against a stored allowlist, and case-folding here would let a token the
 // operator never accepted match one they did.
+//
+// Empty elements are skipped rather than refused. HTTP's list production
+// tolerates them, and an SDK that builds this header by joining an accumulated
+// slice emits a trailing comma the moment one entry is conditional — refusing
+// that rejects a request whose token set is unambiguous.
 func ParseBetaTokens(header string) ([]string, error) {
 	trimmed := strings.TrimSpace(header)
 	if trimmed == "" {
 		return nil, nil
 	}
 	parts := strings.Split(trimmed, ",")
-	if len(parts) > MaxBetaTokens {
-		return nil, errors.New("anthropic-beta declares too many tokens")
-	}
 	tokens := make([]string, 0, len(parts))
 	for _, part := range parts {
 		token := strings.TrimSpace(part)
 		if token == "" {
-			return nil, errors.New("anthropic-beta contains an empty token")
+			continue
 		}
 		tokens = append(tokens, token)
+	}
+	if len(tokens) > MaxBetaTokens {
+		return nil, errors.New("anthropic-beta declares too many tokens")
 	}
 	return tokens, nil
 }
@@ -196,7 +248,11 @@ func (blocks ContentBlocks) MarshalJSON() ([]byte, error) {
 			values = append(values, append(json.RawMessage(nil), block.Raw...))
 			continue
 		}
-		encoded, err := json.Marshal(block.wireValue())
+		value, err := block.wireValue()
+		if err != nil {
+			return nil, err
+		}
+		encoded, err := json.Marshal(value)
 		if err != nil {
 			return nil, err
 		}
@@ -233,40 +289,55 @@ func decodeContentBlock(raw json.RawMessage) (ContentBlock, error) {
 	return block, nil
 }
 
-func (block ContentBlock) wireValue() any {
+// wireValue renders a block Halro constructed itself — one with no original
+// bytes to forward. Every accepted type needs a case here: the old default
+// emitted `{"type": ...}` and nothing else, which turned a portable image block
+// into an image block with no source. Anthropic rejects that, and Validate could
+// not see it because Validate reads the struct while the provider reads these
+// bytes. A type with no case is a programming error, so it is returned as one
+// rather than sent.
+func (block ContentBlock) wireValue() (any, error) {
 	switch block.Type {
 	case "text":
 		return struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
-		}{block.Type, block.Text}
+		}{block.Type, block.Text}, nil
+	case "image", "document":
+		if len(block.Source) == 0 {
+			return nil, errors.New(block.Type + " block requires a source")
+		}
+		return struct {
+			Type   string          `json:"type"`
+			Source json.RawMessage `json:"source"`
+		}{block.Type, block.Source}, nil
 	case "tool_use":
 		return struct {
 			Type  string          `json:"type"`
 			ID    string          `json:"id"`
 			Name  string          `json:"name"`
 			Input json.RawMessage `json:"input"`
-		}{block.Type, block.ID, block.Name, block.Input}
+		}{block.Type, block.ID, block.Name, block.Input}, nil
 	case "tool_result":
 		return struct {
 			Type      string          `json:"type"`
 			ToolUseID string          `json:"tool_use_id"`
 			Content   json.RawMessage `json:"content,omitempty"`
 			IsError   bool            `json:"is_error,omitempty"`
-		}{block.Type, block.ToolUseID, block.Content, block.IsError}
+		}{block.Type, block.ToolUseID, block.Content, block.IsError}, nil
 	case "thinking":
 		return struct {
 			Type      string `json:"type"`
 			Thinking  string `json:"thinking"`
 			Signature string `json:"signature"`
-		}{block.Type, block.Thinking, block.Signature}
+		}{block.Type, block.Thinking, block.Signature}, nil
 	case "redacted_thinking":
 		return struct {
 			Type string `json:"type"`
 			Data string `json:"data"`
-		}{block.Type, block.Data}
+		}{block.Type, block.Data}, nil
 	default:
-		return map[string]any{"type": block.Type}
+		return nil, fmt.Errorf("content block %q cannot be rendered without its original bytes", block.Type)
 	}
 }
 
@@ -318,10 +389,36 @@ func (tool Tool) MarshalJSON() ([]byte, error) {
 // version string. Anthropic revisions the version suffix far more often than it
 // introduces a family (text_editor_20250124 → text_editor_20250728), so
 // matching the family is what stops this list needing an edit per release.
+//
+// The match is anchored: family, then exactly one eight-digit version. A bare
+// prefix test is fail-open *inside* a known prefix — `bash_code_execution_...`
+// starts with `bash_` and would be read as the client-executed shell tool, while
+// it is in fact the upstream code-execution container, whose whole point is that
+// Anthropic runs it. Anchoring makes every unrecognised spelling fall through to
+// toolExecutionUnknown, which is refused.
 var (
-	clientExecutedToolFamilies   = []string{"bash_", "text_editor_", "memory_", "computer_"}
-	providerExecutedToolFamilies = []string{"web_search_", "web_fetch_", "code_execution_", "advisor_", "tool_search_"}
+	clientExecutedToolFamilies   = []string{"bash", "text_editor", "memory", "computer"}
+	providerExecutedToolFamilies = []string{
+		"web_search", "web_fetch", "code_execution", "bash_code_execution",
+		"text_editor_code_execution", "advisor", "tool_search",
+	}
 )
+
+var toolVersionSuffix = regexp.MustCompile(`^[0-9]{8}$`)
+
+// matchesToolFamily reports a type spelled exactly `<family>_<YYYYMMDD>`. The
+// anchor is what disambiguates overlapping families: `bash_code_execution_20250825`
+// leaves `code_execution_20250825` after the `bash_` prefix, which is not a
+// version, so it never matches the client-executed `bash` family.
+func matchesToolFamily(value string, families []string) bool {
+	for _, family := range families {
+		suffix, ok := strings.CutPrefix(value, family+"_")
+		if ok && toolVersionSuffix.MatchString(suffix) {
+			return true
+		}
+	}
+	return false
+}
 
 type toolExecution int
 
@@ -342,13 +439,27 @@ func classifyTool(toolType string) toolExecution {
 	switch {
 	case trimmed == "" || trimmed == "custom":
 		return toolExecutionCustom
-	case hasAnyPrefix(trimmed, clientExecutedToolFamilies):
+	case matchesToolFamily(trimmed, clientExecutedToolFamilies):
 		return toolExecutionClient
-	case hasAnyPrefix(trimmed, providerExecutedToolFamilies):
+	case matchesToolFamily(trimmed, providerExecutedToolFamilies):
 		return toolExecutionProvider
 	default:
 		return toolExecutionUnknown
 	}
+}
+
+// UsesProviderExecutedTools reports whether the request asks the upstream to run
+// tools of its own. That is an egress decision, not a formatting one: web_search
+// and code_execution make the provider originate network calls that never pass
+// through SafeTransport's host allowlist, so it is gated on a capability the
+// operator turns on per connection rather than on whether the struct parses.
+func (request MessageRequest) UsesProviderExecutedTools() bool {
+	for _, tool := range request.Tools {
+		if classifyTool(tool.Type) == toolExecutionProvider {
+			return true
+		}
+	}
+	return false
 }
 
 // IsAnthropicDefined reports a tool whose behaviour the model carries rather
@@ -357,15 +468,6 @@ func classifyTool(toolType string) toolExecution {
 // them instead of translating into something the target cannot honour.
 func (tool Tool) IsAnthropicDefined() bool {
 	return classifyTool(tool.Type) != toolExecutionCustom
-}
-
-func hasAnyPrefix(value string, prefixes []string) bool {
-	for _, prefix := range prefixes {
-		if strings.HasPrefix(value, prefix) {
-			return true
-		}
-	}
-	return false
 }
 
 type ToolChoice struct {
@@ -504,7 +606,14 @@ func (request MessageRequest) Validate() error {
 				return errors.New("Anthropic-defined client tools take a name and no input schema")
 			}
 		case toolExecutionProvider:
-			return errors.New("provider-executed tools are not available on this connection")
+			// Accepted at the wire layer, admitted only by a route whose
+			// connection declares the provider_executed_tools capability. The
+			// decision belongs to the operator who owns the egress, not to the
+			// decoder, so it is enforced during target selection where the
+			// connection is known.
+			if tool.Name == "" {
+				return errors.New("provider-executed tools require a name")
+			}
 		default:
 			return errors.New("unrecognised tool type")
 		}
@@ -642,6 +751,31 @@ func DecodeMessage(payload []byte) (Message, error) {
 	}
 	message.Raw = append(json.RawMessage(nil), payload...)
 	return message, nil
+}
+
+// TokenCount is the count_tokens response. Anthropic returns only the prompt
+// span: the endpoint measures a request, so there is no completion to report.
+type TokenCount struct {
+	InputTokens int64 `json:"input_tokens"`
+}
+
+func DecodeTokenCount(payload []byte) (TokenCount, error) {
+	if len(payload) == 0 || len(payload) > MaxRequestBytes {
+		return TokenCount{}, errors.New("Anthropic count_tokens response has invalid size")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	var count TokenCount
+	if err := decoder.Decode(&count); err != nil {
+		return TokenCount{}, err
+	}
+	if err := ensureEOF(decoder); err != nil {
+		return TokenCount{}, err
+	}
+	if count.InputTokens < 0 {
+		return TokenCount{}, errors.New("Anthropic count_tokens response is invalid")
+	}
+	return count, nil
 }
 
 type StreamEvent struct {

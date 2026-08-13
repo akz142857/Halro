@@ -58,6 +58,7 @@ type MessagesService interface {
 	MessagesStream(context.Context, string, anthropicapi.MessageRequest, func(anthropicapi.StreamEvent) error) error
 	MessagesNative(context.Context, string, string, []string, anthropicapi.MessageRequest) (anthropicapi.Message, error)
 	MessagesNativeStream(context.Context, string, string, []string, anthropicapi.MessageRequest, func(anthropicapi.RawStreamEvent) error) error
+	MessagesCountTokens(context.Context, string, string, []string, anthropicapi.MessageRequest) (anthropicapi.TokenCount, error)
 }
 
 func (h *Handler) Responses(writer http.ResponseWriter, request *http.Request) {
@@ -472,6 +473,84 @@ func (h *Handler) Messages(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Content-Type", "application/json")
 	writer.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(writer).Encode(response)
+}
+
+// CountTokens serves Anthropic's count_tokens.
+//
+// It has only one execution shape. The request body reaches the provider
+// verbatim — there is nothing to translate, because nothing is generated — so
+// the route-mode header has no portable alternative to select. An explicit
+// portable is refused rather than silently treated as native, since it would
+// claim a translation that does not happen; an absent header is fine.
+func (h *Handler) CountTokens(writer http.ResponseWriter, request *http.Request) {
+	writer.Header().Set("Cache-Control", "no-store")
+	requestID, err := id.New("req")
+	if err != nil {
+		writeAnthropicError(writer, http.StatusInternalServerError, "api_error", "internal server error", "")
+		return
+	}
+	writer.Header().Set("request-id", requestID)
+	request, ok := h.withSourceIPAnthropic(writer, request, requestID)
+	if !ok {
+		return
+	}
+	version := strings.TrimSpace(request.Header.Get(anthropicapi.VersionHeader))
+	if version == "" {
+		writeAnthropicError(writer, http.StatusBadRequest, "invalid_request_error", "anthropic-version header is required", requestID)
+		return
+	}
+	if version != anthropicapi.SupportedVersion {
+		writeAnthropicError(writer, http.StatusBadRequest, "invalid_request_error", "unsupported anthropic-version", requestID)
+		return
+	}
+	if declared := strings.TrimSpace(request.Header.Get(anthropicapi.RouteModeHeader)); declared != "" {
+		mode, modeErr := anthropicapi.ParseExecutionMode(declared)
+		if modeErr != nil {
+			writeAnthropicError(writer, http.StatusBadRequest, "invalid_request_error", modeErr.Error(), requestID)
+			return
+		}
+		if mode != anthropicapi.ModeNative {
+			writeAnthropicError(writer, http.StatusBadRequest, "invalid_request_error", "count_tokens is served natively; Halro-Route-Mode: portable does not apply", requestID)
+			return
+		}
+	}
+	betas, err := anthropicapi.ParseBetaTokens(request.Header.Get(anthropicapi.BetaHeader))
+	if err != nil {
+		writeAnthropicError(writer, http.StatusBadRequest, "invalid_request_error", err.Error(), requestID)
+		return
+	}
+	key, ok := anthropicGatewayKey(request.Header)
+	if !ok {
+		writer.Header().Set("WWW-Authenticate", `Bearer realm="halro"`)
+		writeAnthropicError(writer, http.StatusUnauthorized, "authentication_error", "missing or invalid gateway key", requestID)
+		return
+	}
+	request.Body = http.MaxBytesReader(writer, request.Body, h.maxRequestBytes)
+	decoded, err := anthropicapi.DecodeMessageRequest(request.Body)
+	if err != nil {
+		message, _ := decodeProblem(err)
+		status, kind := http.StatusBadRequest, "invalid_request_error"
+		var maxBytesError *http.MaxBytesError
+		if errors.As(err, &maxBytesError) || strings.Contains(err.Error(), "exceeds limit") {
+			status, kind, message = http.StatusRequestEntityTooLarge, "request_too_large", "request body exceeds the configured limit"
+		}
+		writeAnthropicError(writer, status, kind, message, requestID)
+		return
+	}
+	ctx, cancel := context.WithTimeout(request.Context(), h.routeTimeout)
+	defer cancel()
+	if h.messages == nil {
+		writeAnthropicError(writer, http.StatusNotImplemented, "api_error", "Messages API is unavailable", requestID)
+		return
+	}
+	count, err := h.messages.MessagesCountTokens(ctx, key, version, betas, decoded)
+	if err != nil {
+		h.renderAnthropicGatewayError(writer, err, requestID)
+		return
+	}
+	writer.Header().Set("Content-Type", "application/json")
+	writer.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(writer).Encode(count)
 }
 
 func (h *Handler) messagesNativeStream(writer http.ResponseWriter, request *http.Request, key, version string, betas []string, decoded anthropicapi.MessageRequest, requestID string) {
@@ -915,7 +994,6 @@ func (h *Handler) guardKey(next http.Handler, deny http.HandlerFunc) http.Handle
 var unimplementedHints = map[string]string{
 	"/v1/models": "Halro does not implement /v1/models. " +
 		"Applications address models by the public alias configured on their Project.",
-	"/v1/messages/count_tokens": "Halro does not implement Anthropic count_tokens.",
 }
 
 // NotFound answers an unrouted path with the envelope every other error uses.

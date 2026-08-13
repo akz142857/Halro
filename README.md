@@ -21,8 +21,8 @@ locally owned control boundary.
 > [!IMPORTANT]
 > Chat, Embeddings, Stateless Responses, and Anthropic Messages have published
 > compatibility contracts. Phase 2 media/resource endpoints are
-> **Experimental**. Realtime WebSocket/WebRTC, stateful Responses,
-> `/v1/models`, and Anthropic `count_tokens` are not implemented.
+> **Experimental**. Realtime WebSocket/WebRTC, stateful Responses, and
+> `/v1/models` are not implemented.
 
 ## Quick start
 
@@ -169,7 +169,7 @@ Access Surface, operations, credential scheme, and capability evidence.
 | Provider | Current scope |
 |---|---|
 | OpenAI | Chat, streaming, embeddings, Stateless Responses, and Experimental Phase 2 media/resources |
-| Anthropic | Native Messages JSON/SSE, tools, and signed Thinking round-trip; no embeddings or `count_tokens` |
+| Anthropic | Native Messages JSON/SSE, `count_tokens`, tools, and signed Thinking round-trip; no embeddings |
 | Azure OpenAI | Deployment-scoped Chat/stream/embeddings with an explicitly pinned API version |
 | DeepSeek | OpenAI-compatible Chat/stream; embeddings disabled by default |
 | OpenAI-compatible | Chat/stream/embeddings with explicitly declared optional capabilities |

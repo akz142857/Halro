@@ -78,9 +78,17 @@ func TestDecodeMessageRequestClassifiesToolsByExecutionSite(t *testing.T) {
 		{"custom", `{"name":"lookup","input_schema":{"type":"object"}}`, ""},
 		{"custom keeps cache_control", `{"name":"lookup","input_schema":{"type":"object"},"cache_control":{"type":"ephemeral"}}`, ""},
 		{"client tool rejects a schema", `{"type":"bash_20250124","name":"bash","input_schema":{"type":"object"}}`, "no input schema"},
-		{"web search", `{"type":"web_search_20260209","name":"web_search"}`, "provider-executed"},
-		{"code execution", `{"type":"code_execution_20260521","name":"code_execution"}`, "provider-executed"},
+		// Provider-executed tools decode; whether they may run is a property of
+		// the connection's egress, checked during target selection.
+		{"web search", `{"type":"web_search_20260209","name":"web_search"}`, ""},
+		{"code execution", `{"type":"code_execution_20260521","name":"code_execution"}`, ""},
 		{"unknown family", `{"type":"frobnicate_20260101","name":"frobnicate"}`, "unrecognised tool type"},
+		// Anchoring the version is what keeps a known family from swallowing an
+		// unrelated tool: this one is the upstream code-execution container, and
+		// reading it as the client-executed shell tool would let the request
+		// through without the egress capability.
+		{"bash code execution is not the bash tool", `{"type":"bash_code_execution_20250825","name":"bash_code_execution"}`, ""},
+		{"undated family member", `{"type":"bash_next","name":"bash"}`, "unrecognised tool type"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			_, err := DecodeMessageRequest(strings.NewReader(body(testCase.tool)))
@@ -153,5 +161,65 @@ func TestDecodeMessageRequestRejectsDuplicateMembers(t *testing.T) {
 	body := `{"model":"m","max_tokens":10,"metadata":{"user_id":"benign"},"tools":[{"type":"custom","name":"x","input_schema":{"type":"object"}}],"messages":[{"role":"user","content":[{"type":"text","text":"a"}]}]}`
 	if _, err := DecodeMessageRequest(strings.NewReader(body)); err != nil {
 		t.Fatalf("control rejected: %v", err)
+	}
+}
+
+// A block Halro constructed itself has no original bytes to forward, so
+// wireValue is what the provider receives. The old default emitted only the
+// type, which turned a portable image block into an image block with no source —
+// invalid Anthropic wire format that Validate could not see, because Validate
+// reads the struct while the provider reads these bytes.
+func TestContentBlocksRenderDataCarryingBlocksWithTheirSource(t *testing.T) {
+	source := json.RawMessage(`{"type":"url","url":"https://example.test/a.png"}`)
+	encoded, err := json.Marshal(ContentBlocks{{Type: "image", Source: source}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"source":{"type":"url"`) {
+		t.Fatalf("image block lost its source: %s", encoded)
+	}
+	if _, err := json.Marshal(ContentBlocks{{Type: "image"}}); err == nil {
+		t.Fatal("an image block with no source must not be rendered")
+	}
+	// A type with no case is a programming error, not something to send a
+	// half-formed block for.
+	if _, err := json.Marshal(ContentBlocks{{Type: "search_result"}}); err == nil {
+		t.Fatal("an unrenderable block type must be reported, not truncated to its type")
+	}
+}
+
+// HTTP's list production tolerates empty elements, and an SDK that joins an
+// accumulated slice emits a trailing comma the moment one entry is conditional.
+func TestParseBetaTokensToleratesEmptyListElements(t *testing.T) {
+	tokens, err := ParseBetaTokens("context-management-2025-06-27, ,fast-mode-2026-01-12,")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tokens) != 2 || tokens[0] != "context-management-2025-06-27" || tokens[1] != "fast-mode-2026-01-12" {
+		t.Fatalf("unexpected tokens: %#v", tokens)
+	}
+	if _, err := ParseBetaTokens(strings.Repeat("a,", MaxBetaTokens+1)); err == nil {
+		t.Fatal("the count bound must still hold")
+	}
+}
+
+// Portable rewrites the request body, so a member it cannot carry would be
+// dropped rather than forwarded. Native keeps them, which is why the two answers
+// differ.
+func TestUnknownNestedMembersAreReportedForThePortableProjection(t *testing.T) {
+	request, err := DecodeMessageRequest(strings.NewReader(
+		`{"model":"m","max_tokens":10,` +
+			`"tools":[{"name":"lookup","input_schema":{"type":"object"},"cache_control":{"type":"ephemeral"}}],` +
+			`"output_config":{"effort":"high","task_budget":{"max_micros":10},"format":{"type":"json_schema","name":"x","schema":{},"nonstandard":1}},` +
+			`"messages":[{"role":"user","content":"hi"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unknown := request.Tools[0].UnknownMembers(); len(unknown) != 1 || unknown[0] != "cache_control" {
+		t.Fatalf("tool unknown members=%v", unknown)
+	}
+	unknown := request.OutputConfig.UnknownMembers()
+	if len(unknown) != 2 || unknown[0] != "task_budget" || unknown[1] != "format.nonstandard" {
+		t.Fatalf("output_config unknown members=%v", unknown)
 	}
 }
