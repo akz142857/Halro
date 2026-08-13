@@ -104,6 +104,21 @@ non-stream chat failed: bad_request http=400 code=unsupported_parameter:max_toke
 
 媒体与资源这条链路则相反：端点齐了六类，但缺 list、缺 translations、缺图片编辑。**真实账号证据已经补上机制**：`internal/provider/openai/media_smoke_test.go` 覆盖审核、语音、转写、图片、文件与批处理生命周期，每项由是否给出模型名单独开启。截至本文，该冒烟尚未用真实凭据跑过——补上的是"能被验证"。
 
-**2026-08-13 首跑结果**：审核（`omni-moderation-latest`）、语音合成（`gpt-4o-mini-tts`）、语音转写（`gpt-4o-mini-transcribe`）三项一次通过，4.89s。图片、文件、批处理三项**尚未跑过**——前者按生成价计费，后两者会在账户上留下对象，都需要单独开启。
+**2026-08-13 实跑结果：6 项中 4 项通过。**
 
-也就是说这个 Profile 现在是 6 项里 3 项有真实证据。剩下三项的机制已就位，缺的是一次有意的付费运行。
+| 操作 | 模型 | 结果 |
+|---|---|---|
+| 内容审核 | `omni-moderation-latest` | ✅ |
+| 语音合成 | `gpt-4o-mini-tts` | ✅ |
+| 语音转写 | `gpt-4o-mini-transcribe` | ✅（转写的是上一步合成的音频） |
+| 图片生成 | `gpt-image-1` | ✅ 39.94s |
+| 文件 | — | ⛔ 密钥缺少 `api.files.write` 作用域 |
+| 批处理 | — | ⛔ 未到达，文件是它的前置 |
+
+后两项**不是代码问题**：文件与前四项走的是同一条授权路径（`internal/provider/openai/inference_resources.go:290-296` 的 `inferenceResourcesDo` → `prepareRequest`），同一把密钥、同一个 header，只有端点不同。直接向 OpenAI 求证得到的原文是 `You have insufficient permissions for this operation. Missing scopes: api.files.write`——受限项目密钥按端点组授权，这把只授了模型能力那一组。
+
+排查到底的结论：使用的密钥在控制台上标着 Permissions = All，而且确认是同一把（尾段 `...4ssA`）。密钥权限不是最终权限——账号在组织里的角色才是上限，一把 All 密钥的 All 是"该角色能拿到的全部"。失败的分布正好落在 OpenAI **Reader** 角色的分界线上：模型推理允许（四项通过），账户资源写入不允许（文件被拒）。
+
+要补齐这两项，需要把该账号的组织角色提到 Writer，或在项目里改用 service account 密钥。这是账号治理的决定，不应为了一条测试证据去动，因此本轮到此为止。
+
+**对生产的实际影响**：只要 Provider 凭据是这把密钥，通过 Halro 调 `/v1/files` 与 `/v1/batches` 同样会 401。这不是测试环境特有的现象，是这把密钥真实的能力边界。
