@@ -18,7 +18,7 @@ ADR 同时把四条约束原样交给实施方案，本文逐条给出答案。*
 
 评审在这一条上没有收敛：架构反对为"用户少等一次"引入隐式写者，可用性指出 `routeTimeout` 只有两分钟且 SDK 默认重试两次。
 
-**两边的分歧建立在同一个前提上——结果可能无限大。** 一旦按 §1.3 给拉取设界，这个前提消失：有界的拉取同时是有时限的，32 MiB 在正常链路上是秒级，远在两分钟之内。
+**两边的分歧建立在同一个前提上——结果可能无限大。** 一旦按 §1.3 给拉取设界，这个前提消失：有界的拉取同时是有时限的，16 MiB 在正常链路上是秒级，远在两分钟之内。
 
 因此：**在 `GET /v1/batches/{id}` 中惰性拉取，不引入后台任务。** 这保住了"整个资源路径没有第二个写者"这条既有性质。
 
@@ -34,11 +34,16 @@ ADR 同时把四条约束原样交给实施方案，本文逐条给出答案。*
 
 ### 1.3 字节界：写读两侧同界，沿用既有上限
 
-拉取受 `maxInferenceResourcesResponseBytes`（32 MiB）约束。超限不是截断，是失败：批处理标记为无法交付，`errors` 说明结果超出网关可承载的大小，并提示改用更小的批次。
+拉取受 Anthropic 适配器的 `maxResponseBytes`（**16 MiB**，`internal/provider/anthropic/adapter.go:25`）约束，
+`FetchBatchResults` 就是用它读结果流的。超限不是截断，是失败：批处理标记为无法交付，`errors` 说明结果超出
+网关可承载的大小，并提示改用更小的批次。
+
+> 本节原先写的是 `maxInferenceResourcesResponseBytes`（32 MiB）——那是 **OpenAI 适配器**的常量
+> （`internal/provider/openai/inference_resources.go:17`），与这条链路无关。2026-08-14 更正。
 
 这条同时决定了 §1.1，也避免了新增一个"网关级配额"概念——那是另一个决定，不该作为本功能的副作用发生。
 
-**已知代价**：Anthropic 的批处理结果可能远超 32 MiB。这条限制要写进 manifest 的 documented deviations，让调用方在遇到之前就知道。若将来要放开，那是一次独立的、带配额设计的改动。
+**已知代价**：Anthropic 的批处理结果可能远超 16 MiB。这条限制要写进 manifest 的 documented deviations，让调用方在遇到之前就知道。若将来要放开，那是一次独立的、带配额设计的改动。
 
 ### 1.4 `completion_window`：只接受 `24h`
 
@@ -87,7 +92,7 @@ JSON，没有跨片段的滚动窗口问题。
 | 1 | 资源模型不再假设上游孪生 | ✅ 已完成（`12bb3e0`） |
 | 2 | Anthropic profile 声明 files 与 batches，files 走本地独有 Primitive | ✅ 已完成 |
 | 3 | Anthropic 适配器的批处理原语 | ✅ 已完成 |
-| 4 | 结果落盘（惰性拉取 + 逐行 `ProcessJSON` + 32 MiB 界 + 幂等短路） | ✅ 已完成 |
+| 4 | 结果落盘（惰性拉取 + 逐行 `ProcessJSON` + 16 MiB 界 + 幂等短路） | ✅ 已完成 |
 | 5 | 契约与 manifest | ✅ 已完成 |
 
 ### 2.1 本地独有文件模式的判据：三角色评审后重定（2026-08-13）
@@ -251,7 +256,7 @@ native mode"）。该行按 `errored` 处理并说明原因，而不是让整批
 - 批处理创建时 `params` 的完整形状是否被上游接受
 - `request_counts` 的字段名（文档写 `canceled`，注意不是 `cancelled`）
 - 结果文件每行的 `result.message` 是否能被 `DecodeMessage` 直接解析
-- 32 MiB 上限在真实结果规模下是否过窄
+- 16 MiB 上限在真实结果规模下是否过窄（**决定不验证**，见 §5.2）
 
 ### 5.1 首次真实运行到哪一步（2026-08-13）
 
@@ -288,6 +293,28 @@ native mode"）。该行按 `errored` 处理并说明原因，而不是让整批
 
 另外记一笔：`POST /v1/files` 返回的 `created_at` 是 0，北向形状不该这样。已登记在
 [provider-adaptation-gaps](provider-adaptation-gaps.zh-CN.md) 的控制台缺口一节。
+
+还有一条 §5 没写的前置条件：**`POST /v1/files` 强制要 `Idempotency-Key` 头**，不带就是 400
+`invalid_idempotency_key`（`internal/gateway/inference_resources_store.go:188`，头名在
+`internal/gatewayapi/inference_resources.go:344` 读取）。§5 的六步里漏了这一条，照着跑的人会先撞一次 400。
+`POST /v1/batches` 同样需要。
+
+### 5.2 16 MiB 上限：决定不验证（2026-08-14）
+
+§5 的第四条预期风险「上限在真实结果规模下是否过窄」**明确不验证**，理由记在这里，免得以后被当成遗漏。
+
+验证它必须让某一边越线：要么把结果撑到 16 MiB，要么把界降到数据这边。小批处理测不到——上限管的是结果
+文件字节数，小结果永远走不到那个分支。
+
+撑满 16 MiB 的成本比直觉低，但仍不值得：结果文件的字节大头是每行的 JSON 外壳（`id`/`custom_id`/
+`response` 骨架约 400 字节），而外壳不花钱，所以「很多条极短请求」比「少数条长输出」便宜得多——约 4.2 万条、
+合计约 $2（Sonnet 5 批处理价）。但这测的是**这个数值本身合不合适**，属于容量问题，等有真实批量需求时再
+测更有意义。
+
+真正的代码风险——`readLimited` 超限时是否 fail-closed、错误信息是否说得清——可以用**把常量临时降到
+几 KiB 再跑一次小批处理**来验证，代码路径完全相同、成本为零。这条留给需要动那段代码时再做。
+
+本轮的目的是打通流程，不是压测容量。
 
 ## 4. 明确不做的
 
