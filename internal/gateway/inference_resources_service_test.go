@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -579,5 +580,101 @@ func TestInferenceResourcesInFlightCrashIsNotReclaimed(t *testing.T) {
 	}
 	if adapter.fileCalls != 1 {
 		t.Fatalf("provider calls=%d, want 1", adapter.fileCalls)
+	}
+}
+
+// A batch names three files, and only one of them was ever translated. The batch
+// itself got a Halro identifier while input_file_id, output_file_id and
+// error_file_id went back to the caller exactly as the upstream wrote them —
+// leaking an upstream identifier through a surface whose manifest promises
+// project-scoped opaque ones, and handing the caller identifiers that answer 404
+// against Halro's own files endpoint. The documented way to collect a batch's
+// results did not work.
+func TestBatchNamesItsFilesWithHalroIdentifiers(t *testing.T) {
+	adapter := &inferenceResourcesAdapter{providerType: string(domain.ProviderOpenAI)}
+	f := newInferenceResourcesServiceFixture(t, domain.ProfileOpenAIMediaResources, adapter, inferenceResourcesTargetFor("resources", adapter), nil)
+	defer f.close()
+	now := time.Now()
+	batch := domain.ProviderResource{
+		ID: "batch-owned", Kind: domain.ResourceBatch, ProjectID: f.project.ID,
+		ProviderID: "inferenceResources-provider", DeploymentID: "inferenceResources-deployment",
+		PublicModel: "resources", ProfileID: domain.ProfileOpenAIMediaResources, Region: "us-east-1",
+		UpstreamID: "upstream-batch", InputFileID: "file_halro_input",
+		CreationStatus: "completed", Status: "in_progress",
+		CreatedAt: now.Add(-time.Hour), UpdatedAt: now, ExpiresAt: now.Add(time.Hour), Revision: 1,
+	}
+	f.store.resources[batch.ID] = batch
+	adapter.batch = provider.BatchObject{
+		ID: "upstream-batch", Object: "batch", Status: "completed",
+		InputFileID: "file-upstream-input", OutputFileID: "file-upstream-output", ErrorFileID: "file-upstream-errors",
+	}
+
+	result, err := f.service.GetBatch(context.Background(), f.plaintext, batch.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ID != batch.ID {
+		t.Fatalf("batch id=%q", result.ID)
+	}
+	if result.InputFileID != "file_halro_input" {
+		t.Fatalf("input_file_id=%q, want the identifier the caller supplied", result.InputFileID)
+	}
+	for name, value := range map[string]string{"output_file_id": result.OutputFileID, "error_file_id": result.ErrorFileID} {
+		if value == "" {
+			t.Fatalf("%s was dropped", name)
+		}
+		if strings.HasPrefix(value, "file-upstream") {
+			t.Fatalf("%s=%q is the upstream's own identifier", name, value)
+		}
+		// The translated identifier has to resolve in this project, which is the
+		// whole point: an identifier the caller cannot use is no better than the
+		// upstream's.
+		resolved, ok := f.store.resources[value]
+		if !ok || resolved.ProjectID != f.project.ID || resolved.Kind != domain.ResourceFile {
+			t.Fatalf("%s=%q does not resolve to a file in this project: %#v", name, value, resolved)
+		}
+	}
+
+	// A batch is polled. The second look must reuse the identifiers minted by the
+	// first, or every poll leaves another record behind for one upstream file.
+	before := len(f.store.resources)
+	second, err := f.service.GetBatch(context.Background(), f.plaintext, batch.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.OutputFileID != result.OutputFileID || second.ErrorFileID != result.ErrorFileID {
+		t.Fatalf("polling minted new identifiers: %q/%q then %q/%q",
+			result.OutputFileID, result.ErrorFileID, second.OutputFileID, second.ErrorFileID)
+	}
+	if len(f.store.resources) != before {
+		t.Fatalf("polling created %d extra resource records", len(f.store.resources)-before)
+	}
+}
+
+// A batch record written before the file identifiers were recorded carries none
+// of them. It answers with the fields absent rather than with the upstream's
+// values: not knowing is a worse answer than knowing and a better one than
+// being wrong.
+func TestBatchWithoutRecordedFilesDoesNotFallBackToUpstreamIdentifiers(t *testing.T) {
+	adapter := &inferenceResourcesAdapter{providerType: string(domain.ProviderOpenAI)}
+	f := newInferenceResourcesServiceFixture(t, domain.ProfileOpenAIMediaResources, adapter, inferenceResourcesTargetFor("resources", adapter), nil)
+	defer f.close()
+	now := time.Now()
+	batch := domain.ProviderResource{
+		ID: "batch-legacy", Kind: domain.ResourceBatch, ProjectID: f.project.ID,
+		ProviderID: "inferenceResources-provider", DeploymentID: "inferenceResources-deployment",
+		PublicModel: "resources", ProfileID: domain.ProfileOpenAIMediaResources, Region: "us-east-1",
+		UpstreamID: "upstream-batch", CreationStatus: "completed", Status: "in_progress",
+		CreatedAt: now.Add(-time.Hour), UpdatedAt: now, ExpiresAt: now.Add(time.Hour), Revision: 1,
+	}
+	f.store.resources[batch.ID] = batch
+	adapter.batch = provider.BatchObject{ID: "upstream-batch", Object: "batch", Status: "in_progress", InputFileID: "file-upstream-input"}
+
+	result, err := f.service.GetBatch(context.Background(), f.plaintext, batch.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.InputFileID != "" {
+		t.Fatalf("input_file_id=%q, want it absent rather than the upstream's", result.InputFileID)
 	}
 }

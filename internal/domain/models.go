@@ -46,15 +46,29 @@ type ProviderResource struct {
 	// still held by a process that is gone can never complete on its own, and
 	// the data directory is exclusive, so a value other than the running
 	// instance's means the request that made it died.
-	ReservedBy        string    `json:"reserved_by,omitempty"`
-	CleanupStatus     string    `json:"cleanup_status,omitempty"`
-	Status            string    `json:"status"`
-	ObjectPath        string    `json:"object_path,omitempty"`
-	ObjectContentType string    `json:"object_content_type,omitempty"`
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
-	ExpiresAt         time.Time `json:"expires_at"`
-	Revision          uint64    `json:"revision"`
+	ReservedBy        string `json:"reserved_by,omitempty"`
+	CleanupStatus     string `json:"cleanup_status,omitempty"`
+	Status            string `json:"status"`
+	ObjectPath        string `json:"object_path,omitempty"`
+	ObjectContentType string `json:"object_content_type,omitempty"`
+	// InputFileID, OutputFileID and ErrorFileID are the Halro identifiers of the
+	// files a batch refers to, recorded so the batch can name them without
+	// echoing the upstream's own identifiers back to the caller. A batch that
+	// has not produced results yet leaves the last two empty, and a record
+	// written before these fields existed leaves all three empty — which reads
+	// as "not known here" rather than as a wrong answer.
+	//
+	// They live on the record rather than being derived on demand because
+	// registering the result files is a write, and a batch is polled: without
+	// somewhere to remember the answer, every poll would mint a new identifier
+	// for the same upstream file.
+	InputFileID  string    `json:"input_file_id,omitempty"`
+	OutputFileID string    `json:"output_file_id,omitempty"`
+	ErrorFileID  string    `json:"error_file_id,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+	ExpiresAt    time.Time `json:"expires_at"`
+	Revision     uint64    `json:"revision"`
 }
 
 func (r *ProviderResource) GetRevision() uint64  { return r.Revision }
