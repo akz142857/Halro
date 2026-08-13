@@ -1,6 +1,6 @@
 # Anthropic Message Batches 实施方案
 
-状态：**待实施**，切片 1 进行中
+状态：**切片 1 已完成**；切片 2 判据经三角色评审后重定，待实施
 建立日期：2026-08-13
 决定依据：[ADR 0021](../adr/0021-provider-resource-upstream-twin.md)（Accepted）
 评审依据：[`docs/review/260813/batch-design-review.zh-CN.md`](../review/260813/batch-design-review.zh-CN.md)
@@ -24,7 +24,7 @@ ADR 同时把四条约束原样交给实施方案，本文逐条给出答案。*
 
 幂等：结果一旦落盘，`OutputFileID` 记在批处理记录上（#0 已建立的机制），后续轮询直接短路，不重复拉取。并发轮询由现有的 `reserved / in_flight` 阶梯与 `ReservedBy` 保护，第二个请求读到 `in_flight` 时回答"结果拉取中"，而不是重复下载。
 
-### 1.2 结果脱敏：落盘前逐行过出站策略
+### 1.2 结果脱敏：落盘前逐行过出站策略（接口见 §2 核实结论三）
 
 批处理结果是模型输出，属于出站方向。落盘等于把响应体持久化到一次性响应路径之外，这是 CLAUDE.md 明确禁止的。
 
@@ -46,37 +46,102 @@ OpenAI 形状里 `completion_window` 必填；Anthropic 没有这个参数，其
 
 按"不支持的字段拒绝而非静默丢弃"，Anthropic profile 只接受 `"24h"`，其余值在 Provider I/O 之前拒绝。
 
-## 2. 切片划分
+## 2. 切片划分（2026-08-13 核实后修订）
 
-每个切片独立可测、可提交。
+初版划分把一个**前置条件**当成了收尾的配置工作，核实后重排。
 
-### 切片 1：资源模型不再假设上游孪生
+### 核实结论一：Anthropic 必须先能服务 `/v1/files`
 
-ADR 0021 的直接后果，不涉及 Anthropic 任何代码，可单独验证。
+`CreateFile` 要求 `ResolveCandidatesFor(route, provider.OperationFiles)` 恰好命中一个目标
+（`internal/gateway/inference_resources_store.go:206-209`）。而切片 1 之后，批处理的 owner 取自
+**输入文件的 owner**（`s.ownedTarget(file)`）。
 
-三处停止假设（`internal/gateway/inference_resources_store.go`）：
+因此：**要让一个批处理落到 Anthropic，它的输入文件必须先归属于一个声明了 `OperationFiles` 的
+Anthropic Deployment。** 这个文件只存在于 Halro 本地、不上传上游——正是 ADR 0021 允许的形态。
 
-- `GetFile`（`:318`）——`UpstreamID` 为空时从记录答元数据，不问上游
-- `CleanupExpiredProviderResource`（`:480`）——只删本地对象，不去上游删
-- `CreateBatch`（`:501`）——输入文件的 owner 不再必须实现文件操作
+这不是收尾的配置项，是批处理原语的前置。
 
-验收：本地独有的文件资源能被创建、查询元数据、下载内容、过期回收，全程不产生任何上游调用；备份仍然通过（本地独有资源必然有对象文件）。
+### 核实结论二：JSONL 行的能力过滤位置
 
-### 切片 2：Anthropic 适配器的批处理原语
+`DecodeGenerate`（`internal/compatibility/openai/mapping.go:17`）→ `RenderPortableRequest`
+（`internal/compatibility/anthropic/mapping.go:253`）这条链路成立，不需要第二份映射。
 
-`internal/provider/anthropic` 实现 `CreateBatch`/`GetBatch`/`CancelBatch`：
+但能力过滤发生在**路由时**，按整个请求选目标（`internal/gateway/service.go:866`、`:1461`、`:1749`）。
+批处理是一次路由、N 行请求：某一行带了目标承载不了的字段，路由时看不见，渲染时才发现。
 
-- 请求：读回本地 JSONL，逐行转成 `{custom_id, params}`；`params` 复用 `RenderPortableRequest`（`internal/compatibility/anthropic/mapping.go:253`），**不写第二份映射**
-- 响应：`processing_status` → OpenAI `status`（`ended` 需按 `request_counts` 分解为 completed/failed/cancelled，不能一律 completed）；RFC 3339 时间戳 → Unix
-- 结果 URL：**自己按配置 endpoint 拼** `{endpoint}/v1/messages/batches/{id}/results`，`results_url` 仅用于一致性校验
+**渲染失败即整批拒绝，并指明是哪一行。** fail-closed，且错误可行动。不做逐行降级——静默丢弃调用方
+写下的字段是这个项目明令禁止的。
 
-### 切片 3：结果落盘
+### 核实结论三：结果脱敏不用 `StreamInspector`
 
-惰性拉取 + 逐行脱敏 + 32 MiB 界 + 幂等短路，见 §1。
+`StreamInspector` 是按 channel 的增量推送模型（`Push`/`Close`/`Finish`，
+`internal/redaction/inspect.go:136-183`），为 SSE 的多路增量设计。批处理结果的每一行是一条完整
+JSON，没有跨片段的滚动窗口问题。
 
-### 切片 4：Profile 与契约
+**改用 `ProcessJSON` 逐行处理。** 初版方案里"逐行过 StreamInspector"是没核实接口就写下的。
 
-`anthropic.messages.2023-06-01` 增加 batches operation（或新建 profile——按 `openai.media-resources.v1` 的先例，媒体资源与对话分家的理由是失败模式与计费方式不同，批处理同理，倾向新建）；manifest 的 `/v1/batches` 加入该 profile 与 ProfileCoverage；documented deviations 写明 32 MiB 上限与 `completion_window` 约束。
+### 修订后的切片
+
+| # | 内容 | 状态 |
+|---|---|---|
+| 1 | 资源模型不再假设上游孪生 | ✅ 已完成（`12bb3e0`） |
+| 2 | Anthropic profile 声明 files 与 batches，files 走本地独有 Primitive | 判据已定（§2.2），待实施 |
+| 3 | Anthropic 适配器的批处理原语 | 待 |
+| 4 | 结果落盘（惰性拉取 + 逐行 `ProcessJSON` + 32 MiB 界 + 幂等短路） | 待 |
+| 5 | 契约与 manifest | 待 |
+
+### 2.1 本地独有文件模式的判据：三角色评审后重定（2026-08-13）
+
+**候选判据已作废。** 原候选是"profile 声明 `OperationFiles` 但适配器不实现
+`ResourceInferenceResourcesAdapter` → 视为本地独有"。架构、安全、核心逻辑三个角色独立评审，**三票不通过**，
+且三者都先撞上同一条事实：
+
+`*LegacyAdapterBridge` 无条件实现该接口的全部方法（`internal/provider/profile.go:248-296`），而
+`Target.Adapter` 装的**始终**是这个 bridge（`internal/app/providers.go:434` 构造 → `:584` 赋值）。
+编译期断言 `var _ ResourceInferenceResourcesAdapter = (*LegacyAdapterBridge)(nil)` 通过。
+
+因此断言恒为真，**判据分支在生产中是死代码**；而单元测试注册的是裸 fake adapter，断言会失败，判据看起来
+完全正常。**绿测试 + 坏生产。**
+
+第二层问题：Go 的接口断言是全有全无。只实现 `CreateFile` 不实现 `DeleteFile` 的适配器整体断言失败，
+会被判为"本地独有"从而**静默不上传**。而"缺少接口"同时表示"尚未实现"和"故意本地"，二者不可区分——
+一次接线缺陷会与设计意图产生字节级相同的记录，事后无从分辨。
+
+### 2.2 重定的判据：正向声明一个 Primitive
+
+三个角色独立给出同一替代：**用 profile 的正向声明，而不是某个接口的缺席。**
+
+`Primitive` 的定义是"southbound 使用的具体 provider API"（`internal/provider/primitive.go:12-14`），
+而"没有 southbound、Halro 自持"正是它该表达的值：
+
+- 新增 `PrimitiveHalroLocalFiles`
+- `ProfileAnthropicMessages` 的 manifest 增加 `OperationFiles` + 该 primitive 的绑定
+- 在 `profileAllowsPrimitive` 的表里补对应项——**`Validate()` 会在加载期强制说清楚，写错则拒绝启动**
+- `CreateFile` 按 primitive 名分支，不做接口断言
+- 模式**持久化到 `ProviderResource`**，不靠空 `UpstreamID` 反推
+
+不新增 Operation（会把同一个北向端点的路由键劈成两个），不加 manifest 布尔字段（不受 primitive 表约束，
+也不说明谁来服务）。
+
+### 2.3 放行条件（切片 2 必须全部满足）
+
+评审开出的清单，逐条都是拦下来的具体缺陷：
+
+1. 判据改为 profile 正向声明（§2.2）
+2. **本地路径不 `markInFlight`、不写 `creationUnknown`。** `markInFlight` 的语义是"调用可能已到达上游"，
+   `classifyIdempotency` 会据此把幂等键判为 in-progress 并毒化 30 天；而本地写失败是确定性的"什么都没
+   创建"（临时文件由 `defer os.Remove` 清掉、rename 原子），标 `unknown` 是把确定状态谎报成模糊状态
+3. **`FixedRequestMicrosUSD = 0` + 1 单位。** 现状传 `len(call.Data)/4+1` 个单位，会为从未离开本机的
+   字节按上游单价结算。既有惯例见 `GetFile`/`DownloadFile`/`DeleteFile` 三处
+4. **把 `UpstreamID == ""` 分支提到 `fileOwner` 的接口断言之前**（`inference_resources_store.go:303-306`）。
+   今天被 bridge 掩盖，判据一旦生效，本地文件的 GET/DELETE 会先吃 409
+5. **给 `DeleteFile` 补本地分支。** 切片 1 修了过期回收却漏了交互式删除，会用空 `UpstreamID` 调上游
+
+### 2.4 切片 1 留下的一处不一致（本轮一并修）
+
+切片 1 新增的 `localFileObject` 绕过了 `accountedInferenceResources`，也就绕过了 Token Guard、限流、
+并发与账本记录——本地文件的元数据查询可以无限轮询且不留请求记录。而同为本地读的 `DownloadFile` 走了
+信封。二者必须统一：**保留信封，单价归零**。
 
 ## 3. 测试门禁
 

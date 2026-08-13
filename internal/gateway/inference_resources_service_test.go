@@ -731,6 +731,31 @@ func TestLocalOnlyFileIsServedAndReapedWithoutTouchingTheUpstream(t *testing.T) 
 		t.Fatal("content was empty")
 	}
 
+	// Interactive delete gets the same branch the reaper does. Slice 1 gave it to
+	// one and not the other, and the gap was invisible because the bridge that
+	// wraps every adapter satisfies the interface either way.
+	deleted, err := f.service.DeleteFile(context.Background(), f.plaintext, local.ID)
+	if err != nil {
+		t.Fatalf("interactive delete of a local-only file: %v", err)
+	}
+	if !deleted.Deleted || deleted.ID != local.ID {
+		t.Fatalf("delete result=%#v", deleted)
+	}
+	if adapter.deleteCalls != 0 {
+		t.Fatalf("interactive delete called the upstream for a file it never had (%d calls)", adapter.deleteCalls)
+	}
+	if _, present := f.store.resources[local.ID]; present {
+		t.Fatal("the record survived interactive delete")
+	}
+
+	// Re-create both the record and its object, so expiry cleanup is exercised
+	// against an object that is actually there. Left as it was, the interactive
+	// delete above would have removed it and the assertion below would pass
+	// against nothing.
+	if _, err := f.service.writeResourceObject("file-local", []byte("{\"custom_id\":\"a\"}\n")); err != nil {
+		t.Fatal(err)
+	}
+	f.store.resources[local.ID] = local
 	if err := f.service.CleanupExpiredProviderResource(context.Background(), f.store.resources[local.ID]); err != nil {
 		t.Fatalf("expiry cleanup: %v", err)
 	}

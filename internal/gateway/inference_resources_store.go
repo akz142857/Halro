@@ -300,6 +300,13 @@ func (s *Service) fileOwner(ctx context.Context, key, idValue string) (auth.Auth
 	if err != nil {
 		return principal, resource, nil, err
 	}
+	// A file with no upstream twin needs an owner, not an adapter. Demanding one
+	// here would refuse the local paths before they are reached — every caller
+	// below branches on the empty UpstreamID, and none of them would get the
+	// chance. A nil adapter is safe precisely because those callers never use it.
+	if resource.UpstreamID == "" {
+		return principal, resource, nil, nil
+	}
 	adapter, ok := target.Adapter.(provider.ResourceInferenceResourcesAdapter)
 	if !ok {
 		return principal, resource, nil, gatewayError("resource_owner_unavailable", "file owner adapter is unavailable", 409, nil)
@@ -308,9 +315,15 @@ func (s *Service) fileOwner(ctx context.Context, key, idValue string) (auth.Auth
 }
 
 // localFileObject describes a file Halro holds and the upstream does not. The
-// record is the whole truth about it, so nothing is fetched and nothing is
-// billed — there is no provider call to account for.
-func (s *Service) localFileObject(principal auth.AuthResult, resource domain.ProviderResource) (provider.FileObject, error) {
+// record is the whole truth about it, so nothing is fetched.
+//
+// It still runs inside the accounting envelope at zero cost, the way every other
+// local read does. The envelope is not only about money: it is where Token
+// Guard, the rate limiters, the concurrency leases and the request record live.
+// Answering outside it would make this the one file operation a project could
+// poll without limit and without leaving a trace, which is a strange privilege
+// for the operation that happens to need no provider call.
+func (s *Service) localFileObject(ctx context.Context, principal auth.AuthResult, resource domain.ProviderResource) (provider.FileObject, error) {
 	size := int64(0)
 	if path, err := s.resourceObjectPath(resource.ObjectPath); err == nil {
 		if info, statErr := os.Stat(path); statErr == nil {
@@ -322,7 +335,15 @@ func (s *Service) localFileObject(principal auth.AuthResult, resource domain.Pro
 		CreatedAt: resource.CreatedAt.Unix(), Filename: resource.ObjectFilename,
 		Purpose: resource.ObjectPurpose, Status: resource.Status,
 	}
-	if err := s.redactFileObject(principal.Project.RedactionPolicyID, &result); err != nil {
+	target, err := s.ownedTarget(resource)
+	if err != nil {
+		return provider.FileObject{}, err
+	}
+	target.FixedRequestMicrosUSD = 0
+	requestID := ""
+	if err := s.accountedInferenceResources(ctx, principal, resource.PublicModel, target, 1, &requestID, func() error {
+		return s.redactFileObject(principal.Project.RedactionPolicyID, &result)
+	}); err != nil {
 		return provider.FileObject{}, err
 	}
 	return result, nil
@@ -365,7 +386,7 @@ func (s *Service) GetFile(ctx context.Context, key, idValue string) (provider.Fi
 	// exist. See ADR 0021 — an empty UpstreamID is an ordinary state, not a
 	// resource in a broken one.
 	if resource.UpstreamID == "" {
-		return s.localFileObject(principal, resource)
+		return s.localFileObject(ctx, principal, resource)
 	}
 	target, _ := s.ownedTarget(resource)
 	target.FixedRequestMicrosUSD = 0
@@ -458,6 +479,16 @@ func (s *Service) DeleteFile(ctx context.Context, key, idValue string) (provider
 		return provider.FileDeleteResult{}, err
 	}
 	result := provider.FileDeleteResult{ID: resource.ID, Object: "file", Deleted: true}
+	// Interactive delete needs the same branch expiry cleanup already has. Slice
+	// 1 gave it to the reaper and not to this path, which would have called the
+	// upstream with an empty identifier — a request nobody could answer, about a
+	// file it never had.
+	if resource.UpstreamID == "" {
+		if err := s.forgetLocalResource(ctx, resource); err != nil {
+			return provider.FileDeleteResult{}, gatewayError("resource_store_unavailable", "file could not be deleted", 503, err)
+		}
+		return result, nil
+	}
 	target, _ := s.ownedTarget(resource)
 	target.FixedRequestMicrosUSD = 0
 	freshDelete := resource.CleanupStatus == ""
