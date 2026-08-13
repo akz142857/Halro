@@ -18,6 +18,11 @@ type Requirements struct {
 	Seed               bool `json:"seed,omitempty"`
 	MultipleCandidates bool `json:"multiple_candidates,omitempty"`
 	EndUserReference   bool `json:"end_user_reference,omitempty"`
+	// ProviderExecutedTools is set by a request that asks the upstream to run
+	// tools of its own. Routing treats it like any other requirement, which is
+	// what keeps a request that implies upstream egress off a connection whose
+	// operator never accepted it.
+	ProviderExecutedTools bool `json:"provider_executed_tools,omitempty"`
 }
 
 type Tool struct {

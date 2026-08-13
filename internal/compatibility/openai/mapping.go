@@ -124,10 +124,7 @@ func RenderGenerateResult(result semantic.GenerateResult) (openaiapi.ChatComplet
 		if err != nil {
 			return openaiapi.ChatCompletionResponse{}, err
 		}
-		finish := choice.NativeTermination
-		if finish == "" {
-			finish = renderTermination(choice.Termination)
-		}
+		finish := openAIFinishReason(choice.NativeTermination, choice.Termination)
 		response.Choices = append(response.Choices, openaiapi.Choice{Index: choice.Index, Message: &message, FinishReason: stringPointer(finish)})
 	}
 	return response, nil
@@ -242,10 +239,7 @@ func RenderEvent(event semantic.Event) (openaiapi.ChatCompletionResponse, error)
 				delta.ToolCalls = append(delta.ToolCalls, openaiapi.ToolCall{Index: cloneInt(content.ToolIndex), ID: content.CallID, Type: "function", Function: openaiapi.ToolCallFunction{Name: content.Name, Arguments: content.ArgumentsFragment}})
 			}
 		}
-		finish := source.NativeTermination
-		if finish == "" {
-			finish = renderTermination(source.Termination)
-		}
+		finish := openAIFinishReason(source.NativeTermination, source.Termination)
 		chunk.Choices = append(chunk.Choices, openaiapi.Choice{Index: source.Index, Delta: delta, FinishReason: stringPointer(finish)})
 	}
 	return chunk, nil
@@ -504,6 +498,25 @@ func renderUsage(usage *semantic.Usage) *openaiapi.Usage {
 	rendered.SetReasoningTokens(usage.ReasoningTokens)
 	return rendered
 }
+
+// openAIFinishReason decides what goes in an OpenAI-shaped finish_reason.
+//
+// The provider's own word is preferred when it is already one this wire format
+// defines, which keeps an OpenAI upstream's exact answer intact — including
+// legacy values this mapping does not otherwise model. For every other upstream
+// it is the wrong vocabulary for the field: Anthropic ends a turn with
+// "end_turn", Bedrock with "end_turn", Gemini with "STOP", and none of those are
+// values an OpenAI client can read. Emitting them produced a finish_reason no
+// SDK recognized, and made /v1/responses refuse its own gateway's answer as
+// unrepresentable — a 502 for a request the upstream had completed normally.
+func openAIFinishReason(native, termination string) string {
+	switch native {
+	case "stop", "length", "tool_calls", "content_filter", "function_call":
+		return native
+	}
+	return renderTermination(termination)
+}
+
 func normalizeTermination(value string) string {
 	switch value {
 	case "":

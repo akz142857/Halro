@@ -15,7 +15,7 @@ func TestStreamRendererEmitsAnthropicLifecycle(t *testing.T) {
 	if len(events) != 3 || events[0].Type != "message_start" || events[1].Type != "content_block_start" || events[2].Type != "content_block_delta" {
 		t.Fatalf("unexpected start events: %#v", events)
 	}
-	_, err = renderer.Accept(semantic.Event{Kind: semantic.EventDelta, ID: "chatcmpl-1", Model: "provider", Outputs: []semantic.OutputDelta{{Index: 0, Termination: "stop"}}, Translation: semantic.TranslationNone, MappingRevision: 1})
+	_, err = renderer.Accept(semantic.Event{Kind: semantic.EventDelta, ID: "chatcmpl-1", Model: "provider", Outputs: []semantic.OutputDelta{{Index: 0, Termination: "complete"}}, Translation: semantic.TranslationNone, MappingRevision: 1})
 	if err != nil {
 		t.Fatal(err)
 	}

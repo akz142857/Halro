@@ -46,9 +46,20 @@ func DecodePortable(request anthropicapi.MessageRequest) (semantic.GenerateReque
 		if tool.IsAnthropicDefined() {
 			return semantic.GenerateRequest{}, errors.New("Anthropic-defined tools are not portable")
 		}
+		// The portable projection rewrites the request body, so a member it does
+		// not model is not passed through — it is dropped. Refusing is the only
+		// honest answer: cache_control changes what the caller pays, defer_loading
+		// changes when the tool is read, and silently discarding either produces a
+		// request the caller did not make.
+		if unknown := tool.UnknownMembers(); len(unknown) > 0 {
+			return semantic.GenerateRequest{}, fmt.Errorf("tool %q declares %s, which the portable projection cannot carry", tool.Name, strings.Join(unknown, ", "))
+		}
 		result.Tools = append(result.Tools, semantic.Tool{Name: tool.Name, Description: tool.Description, Schema: append(json.RawMessage(nil), tool.InputSchema...)})
 	}
 	if request.OutputConfig != nil {
+		if unknown := request.OutputConfig.UnknownMembers(); len(unknown) > 0 {
+			return semantic.GenerateRequest{}, fmt.Errorf("output_config declares %s, which the portable projection cannot carry", strings.Join(unknown, ", "))
+		}
 		result.ReasoningEffort = request.OutputConfig.Effort
 		format, err := decodeOutputFormat(request.OutputConfig.Format)
 		if err != nil {
@@ -201,13 +212,17 @@ func RenderResult(result semantic.GenerateResult, publicModel string) (anthropic
 	return message, nil
 }
 
+// renderStopReason is decodeStopReason's inverse, and reads the same semantic
+// vocabulary. It too used to expect OpenAI's words, so a semantic "max_output"
+// or "tool_call" fell through to end_turn and told the caller the turn had
+// finished normally when it had been cut short or had asked for a tool.
 func renderStopReason(reason string) string {
 	switch reason {
-	case "length":
+	case "max_output":
 		return "max_tokens"
-	case "tool_calls":
+	case "tool_call":
 		return "tool_use"
-	case "content_filter":
+	case "refusal":
 		return "refusal"
 	default:
 		return "end_turn"
@@ -289,6 +304,22 @@ func RenderPortableRequest(request semantic.GenerateRequest, providerModel strin
 		}
 		result.ToolChoice = &anthropicapi.ToolChoice{Type: wire.Mode, Name: wire.NamedTool, DisableParallelToolUse: !wire.ParallelAllowed}
 	}
+	// Adaptive-thinking models decide for themselves whether to think, and the
+	// current generation does it by default: a request that says nothing about
+	// thinking comes back carrying signed thinking blocks. The portable surface
+	// cannot return those — a thinking block's signature has to be handed back
+	// verbatim on the next turn, and there is nowhere in an OpenAI-shaped
+	// response to keep it — so DecodeResult refuses the response and the caller
+	// gets a 502 for a request the upstream executed and billed.
+	//
+	// Not asking is the only honest answer available here. Reasoning that was
+	// explicitly requested is left alone: the caller asked for depth, and
+	// disabling it to make the response decodable would quietly serve them
+	// something other than what they asked for. Those requests still need the
+	// native Messages surface on a model that thinks.
+	if request.ReasoningEffort == "" {
+		result.Thinking = json.RawMessage(`{"type":"disabled"}`)
+	}
 	if request.ReasoningEffort != "" || request.OutputFormat != nil {
 		config := &anthropicapi.OutputConfig{Effort: request.ReasoningEffort}
 		if request.OutputFormat != nil {
@@ -324,8 +355,19 @@ func decodeOutputFormat(raw json.RawMessage) (*semantic.OutputFormat, error) {
 	case "text":
 		return &semantic.OutputFormat{Kind: semantic.OutputText}, nil
 	case "json_schema":
+		if strings.TrimSpace(format.Name) == "" {
+			// Anthropic treats name as optional; every portable target requires it.
+			// Saying so here is the difference between an error that names the field
+			// and the "request is not portable" the semantic layer would produce two
+			// steps later, which points the caller at nothing they can act on.
+			return nil, errors.New("portable output_config.format requires a name for the json_schema")
+		}
 		return &semantic.OutputFormat{
 			Kind: semantic.OutputJSONSchema, Name: format.Name, Description: format.Description,
+			// Anthropic has no relaxed schema mode: a json_schema format is enforced.
+			// Strict is therefore a fact about this request, not a default — and
+			// renderOutputFormat refuses to render the other value rather than
+			// quietly promoting it.
 			Schema: append(json.RawMessage(nil), format.Schema...), Strict: true,
 		}, nil
 	default:
@@ -340,6 +382,14 @@ func renderOutputFormat(format semantic.OutputFormat) (json.RawMessage, error) {
 	case semantic.OutputJSONSchema:
 		if len(format.Schema) == 0 {
 			return nil, errors.New("json_schema output requires a schema")
+		}
+		if !format.Strict {
+			// Anthropic enforces the schema unconditionally. Rendering a
+			// non-strict request here would hand the caller stricter behaviour
+			// than they asked for — a response refused for a schema violation the
+			// original request was willing to accept. UnsupportedGenerateFields
+			// declares this so routing avoids the profile instead of arriving here.
+			return nil, errors.New("Anthropic structured output is always schema-enforced and cannot express strict=false")
 		}
 		value := map[string]any{"type": "json_schema", "schema": format.Schema}
 		if format.Name != "" {
@@ -423,19 +473,31 @@ func DecodeResult(message anthropicapi.Message) (semantic.GenerateResult, error)
 	return result, result.Validate()
 }
 
+// decodeStopReason maps Anthropic's stop_reason onto the semantic termination
+// vocabulary — the same one the Gemini and Bedrock adapters produce. It used to
+// answer in OpenAI's wire vocabulary ("stop", "length", "tool_calls"), which is
+// a different set of words for the same field: every consumer downstream reads
+// semantic terminations, so an Anthropic response arrived carrying a value none
+// of them recognized. The provider's own word is not lost — it travels beside
+// this one as NativeTermination.
 func decodeStopReason(reason *string) string {
 	if reason == nil {
 		return ""
 	}
 	switch *reason {
 	case "max_tokens", "model_context_window_exceeded":
-		return "length"
+		return "max_output"
 	case "tool_use", "pause_turn":
-		return "tool_calls"
+		return "tool_call"
 	case "refusal":
-		return "content_filter"
+		return "refusal"
+	case "end_turn", "stop_sequence":
+		return "complete"
 	default:
-		return "stop"
+		// An unrecognized stop_reason is reported as unknown rather than
+		// flattened into "complete": a turn that ended for a reason this build
+		// has never seen is not a turn that ended normally.
+		return "unknown"
 	}
 }
 
