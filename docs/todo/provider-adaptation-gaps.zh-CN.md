@@ -1,6 +1,6 @@
 # Provider 适配缺口 — 待决与待建
 
-状态：**#0 已修；#3 设计已推翻、待重做；#4 已决定不做；#1/#2 阻塞于凭据**
+状态：**#0 已修；资源模型已定（ADR 0021）；#3 待写实施方案；#4 已决定不做；#1/#2 阻塞于凭据**
 建立日期：2026-08-13
 来源：[`docs/review/260813`](../review/260813/README.md) 摸底的 #2、#4、#5、#6
 范围：`internal/provider/{anthropic,bedrock}`、`internal/compatibility`、`internal/gateway`、`docs/compatibility`
@@ -160,9 +160,11 @@ JSONL ↔ inline 转换、不需要把 `results_url` 落盘再伪装成 `output_
 ### 3.5 重排后的执行顺序
 
 1. ~~**修 #0**（批处理文件标识符翻译）~~ **已完成**
-2. **定资源模型**：文件资源是否必须有上游孪生？已起草
-   [`docs/adr/0021-provider-resource-upstream-twin.md`](../adr/0021-provider-resource-upstream-twin.md)，
-   三个方案（扩展资源模型 / 原生直通 / 不做）连同各自代价已写全，**Decision 一节留空待裁决**
+2. ~~**定资源模型**：文件资源是否必须有上游孪生？~~ **已决定：可以没有**（
+   [ADR 0021](../adr/0021-provider-resource-upstream-twin.md)，Accepted）。
+   `UpstreamID` 为空是正常状态，不是例外——批处理是一种模态，谁能服务它是运营者配置的属性，
+   回答这个问题是网关的职责而不是调用方的。供应商形状的端点与路径里写供应商名两种做法都被否决，
+   理由记在 ADR 里
 3. **重提三条实施决定**——在 1、2 有答案之后。当前三条已作废，不要在它们之上继续设计
 
 ## 4. Bedrock 固定模型 Profile 的模型 pin
