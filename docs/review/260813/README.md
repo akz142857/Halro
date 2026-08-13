@@ -79,6 +79,24 @@
 
 两者都在修好各自的冒烟缺陷之后才通过——Anthropic 那次是冒烟 payload 带了 count_tokens 不接受的 `max_tokens`，OpenAI 那次是冒烟发了模型不接受的 `max_tokens`。同一个词，两个不同的陈旧假设。
 
-## 仍然建议、但未在本轮处理的
+## 后续处理（摸底之后）
 
-**给实验层端点补 SDK 黑盒验证，或把 "experimental" 分级。** 当前 15 个端点共用同一句免责声明，操作者无法区分"没测"和"测了但有已知偏差"。manifest 已有 `sdk_matrix` 与 `profile_coverage` 字段可以承载这个信息。这一条不需要新功能，但需要决定分级标准。
+### ✅ 给 `openai.media-resources.v1` 补真实冒烟
+
+摸底指出这个 Profile 的六个操作零真实证据。新增 `internal/provider/openai/media_smoke_test.go`，与对话冒烟分开——两者的成本与副作用不同，合在一起会让便宜的证据必须连同昂贵的一起买。
+
+每个操作由"是否给出模型名"单独开启，操作者可以精确买自己要的证据。两处设计值得记：语音合成的输出直接喂给转写，避免在仓库里放一份没人能重新生成的音频 fixture；文件与批处理是唯一留下痕迹的部分，因此单独开关，且上传的文件在结尾无条件删除（批处理记录本身留在终态——OpenAI 没有删除批处理的操作，这也正是自动能力探测排除持久化 primitive 的原因）。
+
+### ✅ 把 "experimental" 分级落成数据
+
+原先 15 个端点共用同一句免责声明，它说的是**缺什么**，从不说**有什么**——于是"有契约测试和传输 fixture"的端点与"什么都没有"的端点长得一模一样。
+
+`EndpointCompatibilityManifest` 新增 `evidence` 字段（`internal/compatibility/manifest.go`），取值为枚举：`gateway_contract`、`provider_transport_fixture`、`sdk_blackbox`。status 是判决，evidence 是判决的依据，不同意判决的人现在能看到依据。
+
+校验强制两件事：每个端点必须声明证据；`sdk_blackbox` 与 `sdk_matrix` 必须同真同假——两种说法说的是同一件事，漂移时高估的那一侧读者是察觉不到的。那句重复了 15 次的散文随之删除，因为它现在是数据。
+
+**刻意只放端点级的证据种类**：真实账号冒烟验证的是适配器，不是北向端点，把它算进来等于把南向证据记到一个它从未接触的界面上。那一维在 `docs/verification/provider-real-matrix.md`，按 Provider Profile 组织。
+
+### 📋 仍未处理
+
+`docs/todo/provider-adaptation-gaps.zh-CN.md` 的四条。其中两条的阻塞不是优先级而是条件：Converse 工具与 Bedrock 固定模型 pin 都在 Runtime（SigV4）侧，手头凭据是 Mantle，改了无法验证；第二供应商的最小方案需要 Azure 凭据。唯一凭据齐备的是 Anthropic Batches/Files，但它要先定北向端点形状——OpenAI 的 `/v1/batches` 吃已上传文件的 ID，Anthropic 吃内联请求数组，这个选择决定工作量级别。

@@ -102,4 +102,6 @@ non-stream chat failed: bad_request http=400 code=unsupported_parameter:max_toke
 
 对话与嵌入这条主链路是三个平台里最扎实的：能力面完整、无字段拒绝、有 GA 门禁、有 SDK 黑盒验证。
 
-媒体与资源这条链路则相反：端点齐了六类，但缺 list、缺 translations、缺图片编辑，且完全没有真实账号证据。如果这条链路要往前推，第一步应该是给 `openai.media-resources.v1` 补一个真实冒烟，而不是继续加端点。
+媒体与资源这条链路则相反：端点齐了六类，但缺 list、缺 translations、缺图片编辑。**真实账号证据已经补上机制**：`internal/provider/openai/media_smoke_test.go` 覆盖审核、语音、转写、图片、文件与批处理生命周期，每项由是否给出模型名单独开启。截至本文，该冒烟尚未用真实凭据跑过——补上的是"能被验证"。
+
+这条链路要往前推，第一步是跑一次那个冒烟，而不是继续加端点。
