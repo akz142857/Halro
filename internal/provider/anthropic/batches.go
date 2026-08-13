@@ -3,10 +3,18 @@ package anthropic
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"strings"
+	"time"
+
+	"github.com/akz142857/Halro/internal/anthropicapi"
+	"github.com/akz142857/Halro/internal/provider"
 
 	"github.com/akz142857/Halro/internal/compatibility"
 	anthropicwire "github.com/akz142857/Halro/internal/compatibility/anthropic"
@@ -181,4 +189,161 @@ func decodeBatchProcessingStatus(status string, counts batchRequestCounts) strin
 		// exist; leaving it verbatim is visibly strange, which is the point.
 		return status
 	}
+}
+
+// batchesPath addresses the batch collection under whatever base this adapter
+// was configured with. Built here rather than taken from a response: results_url
+// arrives in the batch object, and dialling a URL the upstream chose would let
+// the upstream decide which host Halro connects to — the one thing
+// SafeTransport exists to prevent.
+func (adapter *Adapter) batchesPath(suffix string) url.URL {
+	endpoint := *adapter.endpoint
+	endpoint.Path = strings.TrimRight(endpoint.Path, "/")
+	if adapter.messagesPath != "" {
+		endpoint.Path += "/" + strings.Trim(adapter.messagesPath, "/")
+	} else {
+		if !strings.HasSuffix(endpoint.Path, "/v1") {
+			endpoint.Path += "/v1"
+		}
+		endpoint.Path += "/messages"
+	}
+	endpoint.Path += "/batches"
+	if suffix != "" {
+		endpoint.Path += "/" + suffix
+	}
+	return endpoint
+}
+
+func (adapter *Adapter) newBatchRequest(ctx context.Context, method, suffix, requestID string, body []byte) (*http.Request, error) {
+	endpoint := adapter.batchesPath(suffix)
+	var reader io.Reader
+	if body != nil {
+		reader = bytes.NewReader(body)
+	}
+	request, err := http.NewRequestWithContext(ctx, method, endpoint.String(), reader)
+	if err != nil {
+		return nil, badRequest("create Anthropic batch request", err)
+	}
+	request.Header.Set("anthropic-version", anthropicapi.SupportedVersion)
+	request.Header.Set("accept", "application/json")
+	if body != nil {
+		request.Header.Set("content-type", "application/json")
+	}
+	if requestID != "" {
+		request.Header.Set("x-request-id", requestID)
+	}
+	provider.ApplyBedrockProject(request, provider.HeaderBedrockAnthropicWorkspace, adapter.bedrockProjectID)
+	if err := adapter.authorizer.Authorize(request, nil); err != nil {
+		return nil, &provider.Error{Class: provider.ErrorAuthentication, Message: "authorize Anthropic batch request", Cause: err}
+	}
+	return request, nil
+}
+
+// upstreamBatch is Anthropic's batch object. Its timestamps are RFC 3339
+// strings where the northbound shape counts seconds, so they are parsed here
+// rather than passed along and misread as zero.
+type upstreamBatch struct {
+	ID                string             `json:"id"`
+	Type              string             `json:"type"`
+	ProcessingStatus  string             `json:"processing_status"`
+	RequestCounts     batchRequestCounts `json:"request_counts"`
+	ResultsURL        string             `json:"results_url"`
+	CreatedAt         string             `json:"created_at"`
+	EndedAt           string             `json:"ended_at"`
+	ExpiresAt         string             `json:"expires_at"`
+	ArchivedAt        string             `json:"archived_at"`
+	CancelInitiatedAt string             `json:"cancel_initiated_at"`
+}
+
+func batchTimestamp(value string) int64 {
+	if strings.TrimSpace(value) == "" {
+		return 0
+	}
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return 0
+	}
+	return parsed.Unix()
+}
+
+// decodeBatchObject renders Anthropic's batch onto the northbound shape.
+//
+// The upstream identifier is kept as-is; the gateway replaces it with Halro's
+// own, the way it does for every other resource. What this cannot fill is
+// output_file_id: Anthropic has no file to name, only a results URL, and
+// materialising one is the next slice's work.
+func decodeBatchObject(raw []byte) (provider.BatchObject, error) {
+	var upstream upstreamBatch
+	if err := json.Unmarshal(raw, &upstream); err != nil {
+		return provider.BatchObject{}, malformed("decode Anthropic batch", err)
+	}
+	if upstream.ID == "" {
+		return provider.BatchObject{}, malformed("Anthropic batch carried no identifier", nil)
+	}
+	return provider.BatchObject{
+		ID: upstream.ID, Object: "batch", Endpoint: "/v1/chat/completions",
+		CompletionWindow: "24h",
+		Status:           decodeBatchProcessingStatus(upstream.ProcessingStatus, upstream.RequestCounts),
+		CreatedAt:        batchTimestamp(upstream.CreatedAt),
+		ExpiresAt:        batchTimestamp(upstream.ExpiresAt),
+		CompletedAt:      batchTimestamp(upstream.EndedAt),
+		CancellingAt:     batchTimestamp(upstream.CancelInitiatedAt),
+	}, nil
+}
+
+func (adapter *Adapter) CreateBatch(ctx context.Context, call provider.BatchCreateCall) (provider.BatchObject, error) {
+	// completion_window is not a knob here. Anthropic expires a batch 24 hours
+	// after creation and takes no parameter for it, so accepting another value
+	// would report a window the upstream will not honour.
+	if window := strings.TrimSpace(call.CompletionWindow); window != "" && window != "24h" {
+		return provider.BatchObject{}, badRequest("Anthropic batches expire 24 hours after creation; completion_window must be 24h", nil)
+	}
+	if call.Endpoint != "" && call.Endpoint != "/v1/chat/completions" {
+		return provider.BatchObject{}, badRequest("this batch profile serves /v1/chat/completions", nil)
+	}
+	payload, err := renderBatchRequests(adapter.profileID, call.ProviderModel, call.InputRequests)
+	if err != nil {
+		return provider.BatchObject{}, badRequest("prepare Anthropic batch", err)
+	}
+	raw, err := adapter.doBatch(ctx, http.MethodPost, "", call.RequestID, payload)
+	if err != nil {
+		return provider.BatchObject{}, err
+	}
+	return decodeBatchObject(raw)
+}
+
+func (adapter *Adapter) GetBatch(ctx context.Context, requestID, id string) (provider.BatchObject, error) {
+	raw, err := adapter.doBatch(ctx, http.MethodGet, id, requestID, nil)
+	if err != nil {
+		return provider.BatchObject{}, err
+	}
+	return decodeBatchObject(raw)
+}
+
+func (adapter *Adapter) CancelBatch(ctx context.Context, requestID, id string) (provider.BatchObject, error) {
+	raw, err := adapter.doBatch(ctx, http.MethodPost, id+"/cancel", requestID, nil)
+	if err != nil {
+		return provider.BatchObject{}, err
+	}
+	return decodeBatchObject(raw)
+}
+
+func (adapter *Adapter) doBatch(ctx context.Context, method, suffix, requestID string, body []byte) ([]byte, error) {
+	request, err := adapter.newBatchRequest(ctx, method, suffix, requestID, body)
+	if err != nil {
+		return nil, err
+	}
+	response, err := adapter.client.Do(request)
+	if err != nil {
+		return nil, transportError(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, decodeHTTPError(response)
+	}
+	raw, err := readLimited(response.Body, maxResponseBytes)
+	if err != nil {
+		return nil, malformed("read Anthropic batch response", err)
+	}
+	return raw, nil
 }

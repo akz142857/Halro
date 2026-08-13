@@ -685,6 +685,7 @@ func (s *Service) CreateBatch(ctx context.Context, key, idempotencyKey string, c
 	// adapter keeps the object directory the gateway's business: an adapter has
 	// no idea where Halro puts its bytes, and should not learn.
 	if file.UpstreamID == "" {
+		call.ProviderModel = batchTarget.ProviderModel
 		path, pathErr := s.resourceObjectPath(file.ObjectPath)
 		if pathErr != nil {
 			return provider.BatchObject{}, gatewayError("resource_store_unavailable", "batch input is unavailable", 503, pathErr)

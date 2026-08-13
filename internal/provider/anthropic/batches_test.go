@@ -1,11 +1,14 @@
 package anthropic
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/provider"
 )
 
 func TestRenderBatchRequestsCarriesEachLineThroughTheCanonicalModel(t *testing.T) {
@@ -131,5 +134,85 @@ func TestEndedBatchesAreClassifiedByTheirCounts(t *testing.T) {
 				t.Fatalf("status=%q counts=%#v gave %q, want %q", test.status, test.counts, got, test.expected)
 			}
 		})
+	}
+}
+
+// The three batch calls have to land on the paths and methods Anthropic
+// documents, and the batch object has to arrive in the northbound shape. A fake
+// upstream is the only way to see what actually left the adapter.
+func TestBatchCallsAddressTheDocumentedEndpoints(t *testing.T) {
+	type seen struct{ method, path string }
+	var observed []seen
+	adapter := newTestAdapter(t, func(writer http.ResponseWriter, request *http.Request) {
+		observed = append(observed, seen{request.Method, request.URL.Path})
+		if request.Method == http.MethodPost && request.URL.Path == "/v1/messages/batches" {
+			var body struct {
+				Requests []struct {
+					CustomID string `json:"custom_id"`
+				} `json:"requests"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				t.Error(err)
+			}
+			if len(body.Requests) != 1 || body.Requests[0].CustomID != "a" {
+				t.Errorf("batch body=%#v", body.Requests)
+			}
+		}
+		writer.Header().Set("content-type", "application/json")
+		_, _ = writer.Write([]byte(`{"id":"msgbatch_1","type":"message_batch","processing_status":"ended",` +
+			`"request_counts":{"succeeded":1,"errored":0,"canceled":0,"expired":0,"processing":0},` +
+			`"results_url":"https://api.anthropic.com/v1/messages/batches/msgbatch_1/results",` +
+			`"created_at":"2026-08-13T10:00:00Z","ended_at":"2026-08-13T10:05:00Z","expires_at":"2026-08-14T10:00:00Z"}`))
+	})
+
+	created, err := adapter.CreateBatch(context.Background(), provider.BatchCreateCall{
+		RequestID: "req", ProviderModel: "claude-provider", CompletionWindow: "24h",
+		InputRequests: []byte(`{"custom_id":"a","body":{"model":"public","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}}` + "\n"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.ID != "msgbatch_1" || created.Status != "completed" {
+		t.Fatalf("created=%#v", created)
+	}
+	// RFC 3339 in, seconds out. Passing the string through would have been read
+	// as zero by everything downstream.
+	if created.CreatedAt == 0 || created.ExpiresAt == 0 || created.CompletedAt == 0 {
+		t.Fatalf("timestamps did not survive: %#v", created)
+	}
+	if _, err := adapter.GetBatch(context.Background(), "req", "msgbatch_1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapter.CancelBatch(context.Background(), "req", "msgbatch_1"); err != nil {
+		t.Fatal(err)
+	}
+	expected := []seen{
+		{http.MethodPost, "/v1/messages/batches"},
+		{http.MethodGet, "/v1/messages/batches/msgbatch_1"},
+		{http.MethodPost, "/v1/messages/batches/msgbatch_1/cancel"},
+	}
+	if len(observed) != len(expected) {
+		t.Fatalf("observed=%#v", observed)
+	}
+	for index, want := range expected {
+		if observed[index] != want {
+			t.Fatalf("call %d was %v, want %v", index, observed[index], want)
+		}
+	}
+}
+
+// Anthropic expires a batch 24 hours after creation and takes no parameter for
+// it. Accepting another window would report one the upstream will not honour.
+func TestBatchRefusesACompletionWindowAnthropicCannotHonour(t *testing.T) {
+	adapter := newTestAdapter(t, func(writer http.ResponseWriter, _ *http.Request) {
+		t.Error("a batch with an unhonourable window reached the upstream")
+		writer.WriteHeader(http.StatusInternalServerError)
+	})
+	_, err := adapter.CreateBatch(context.Background(), provider.BatchCreateCall{
+		RequestID: "req", ProviderModel: "claude-provider", CompletionWindow: "7d",
+		InputRequests: []byte(`{"custom_id":"a","body":{"model":"public","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}}` + "\n"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "24h") {
+		t.Fatalf("err=%v", err)
 	}
 }

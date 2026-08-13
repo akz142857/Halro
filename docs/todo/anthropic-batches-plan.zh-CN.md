@@ -155,6 +155,37 @@ JSON，没有跨片段的滚动窗口问题。
 Provider 侧 `ProfileManifest.Revision` 从 1 升到 2 仅为标注：该字段只被校验为非零
 （`internal/provider/profile.go:24`），不持久化、不参与任何比较。
 
+## 2.6 批处理端点契约（2026-08-13 核对官方文档）
+
+| 操作 | 方法与路径 |
+|---|---|
+| 创建 | `POST /v1/messages/batches`，体为 `{"requests":[{custom_id, params}]}` |
+| 查询 | `GET /v1/messages/batches/{id}` |
+| 取消 | `POST /v1/messages/batches/{id}/cancel` |
+| 结果 | `results_url` 指向的 `.jsonl`；**只在处理结束后才存在** |
+
+核对推翻或收紧了三处判断：
+
+**一、`expires_at` 是创建后固定 24 小时**，不是可配置窗口。这让 §1.4 的决定理由更硬：只接受
+`completion_window: "24h"` 不是 Halro 的偏好，而是**填别的值都在谎报上游行为**。
+
+**二、取消是"发起"而非"完成"。** 文档明说批处理进入 `canceling`，系统"可能先跑完进行中的不可中断
+请求"，并且"取消可能不产生任何被取消的请求"。因此 `decodeBatchProcessingStatus` 里按计数分类而不是
+按"取消过就是 cancelled"是必需的，不是保守。
+
+**三、`request_counts` 在整批结束前除 `processing` 外全为 0。** 文档原话："This is zero until
+processing of the entire Message Batch has ended."。现有实现只在 `ended` 分支读计数，因此成立；但这
+条必须写下来——任何未来在 `in_progress` 期间读计数的改动都会读到 0 并据此做出错误判断。
+
+**四、惰性拉取的触发条件是 `results_url` 非空，不是"状态为 ended"。** 文档："Specified only once
+processing ends."。比 §1.1 原先写的更精确：以 URL 是否出现为准，不必自己推断生命周期。
+
+另注意 `archived_at` 与 `expires_at` 是两个不同时刻：前者表示**结果已不可取**。ADR 0021 的
+Consequences 里那条 `expired` 映射处理的正是 `archived_at`。
+
+**结果顺序无保证**：文档说结果文件中的顺序不保证与请求一致，要用 `custom_id` 匹配。这也是为什么
+`renderBatchRequests` 拒绝重复的 `custom_id`——重复会让匹配失去唯一解。
+
 ## 3. 测试门禁
 
 - 每个切片各自的单元与契约测试

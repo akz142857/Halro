@@ -83,7 +83,12 @@ type FileDeleteResult struct {
 }
 type BatchCreateCall struct {
 	RequestID, InputFileID, Endpoint, CompletionWindow string
-	Metadata                                           map[string]string
+	// ProviderModel is the upstream model the batch runs against. An upstream
+	// that reads the model from each line of an uploaded file ignores it; one
+	// that is handed the requests inline needs it, because the lines carry the
+	// public alias the caller addressed and the upstream has never heard of it.
+	ProviderModel string
+	Metadata      map[string]string
 	// InputRequests carries the batch's input lines when the upstream has no
 	// copy of the file to refer to. An upstream whose batches are created from
 	// an uploaded file gets InputFileID and ignores this; one whose batches
