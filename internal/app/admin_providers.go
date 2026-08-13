@@ -1225,9 +1225,16 @@ func (r *Runtime) providerFromInput(
 		if !instance.Capabilities.AnyOperation() {
 			return domain.ProviderInstance{}, errors.New("provider must declare at least one operation capability")
 		}
-		if domain.IsImmutableCapabilityProfile(profile.ProfileID) &&
-			!capabilitySubset(instance.Capabilities, domain.DefaultProviderCapabilitiesForProfile(input.Type, profile.ProfileID)) {
-			return domain.ProviderInstance{}, errors.New("provider capabilities exceed the immutable operation profile")
+		// Every profile has a ceiling, not only the immutable ones. The check used
+		// to run for those alone, which left the console's checkbox list as the
+		// only thing preventing a direct API caller from declaring a capability
+		// the adapter cannot serve — routing would then offer that connection for
+		// an operation it answers with an error.
+		if !capabilitySubset(instance.Capabilities, domain.MaxProviderCapabilitiesForProfile(input.Type, profile.ProfileID)) {
+			if domain.IsImmutableCapabilityProfile(profile.ProfileID) {
+				return domain.ProviderInstance{}, errors.New("provider capabilities exceed the immutable operation profile")
+			}
+			return domain.ProviderInstance{}, errors.New("provider capabilities exceed what this profile can serve")
 		}
 	}
 	instance.CapabilityEvidence = preserveCapabilityEvidence(instance.Capabilities, currentEvidence)

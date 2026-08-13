@@ -16,6 +16,7 @@ import (
 
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/provider"
+	"github.com/akz142857/Halro/internal/safelog"
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 )
 
@@ -1173,4 +1174,62 @@ func verifyingProviderRuntime(t *testing.T) (*Runtime, BootstrapResult, loggedIn
 	}
 	t.Cleanup(func() { runtime.Close() })
 	return runtime, bootstrap, loginTestAdmin(t, runtime, "admin", stepUpTestPassword)
+}
+
+// The ceiling is what an operator may turn on, and it applies to every profile.
+// The check used to run only for the immutable ones, which left the console's
+// list of checkboxes as the only thing standing between a direct API caller and
+// a capability the adapter cannot serve — routing would then offer that
+// connection for an operation it answers with an error. A console is not an
+// authorization boundary.
+func TestProviderCapabilitiesAreBoundedForMutableProfilesToo(t *testing.T) {
+	cfg := testConfig(t)
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := BootstrapAdmin(context.Background(), cfg, "admin", []byte("correct horse battery staple")); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := Open(context.Background(), cfg, safelog.New(slog.NewJSONHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	cookie, csrf := loginAdminForTest(t, runtime)
+	credentialResponse := performAdminMutation(t, runtime, cookie, csrf,
+		http.MethodPost, "/admin/api/v1/credentials", "",
+		map[string]any{"name": "Anthropic", "type": "anthropic", "base_url": "https://api.anthropic.com", "secret": "sk-ant-canary"},
+	)
+	var credential credentialView
+	if credentialResponse.Code != http.StatusCreated || json.Unmarshal(credentialResponse.Body.Bytes(), &credential) != nil {
+		t.Fatalf("credential status=%d body=%s", credentialResponse.Code, credentialResponse.Body.String())
+	}
+
+	// Images is not something the Anthropic Messages profile can serve at all.
+	refused := performAdminMutation(t, runtime, cookie, csrf,
+		http.MethodPost, "/admin/api/v1/providers", "",
+		map[string]any{
+			"name": "Anthropic", "type": "anthropic", "base_url": "https://api.anthropic.com",
+			"credential_id": credential.ID, "enabled": true,
+			"capabilities": map[string]any{"chat": true, "images": true},
+		},
+	)
+	if refused.Code < 400 {
+		t.Fatalf("a capability the profile cannot serve was accepted: status=%d body=%s", refused.Code, refused.Body.String())
+	}
+
+	// Provider-executed tools sit above the defaults and below the ceiling: the
+	// profile can serve them, and enabling them accepts upstream egress. The
+	// console offers the choice, so the API has to accept it.
+	accepted := performAdminMutation(t, runtime, cookie, csrf,
+		http.MethodPost, "/admin/api/v1/providers", "",
+		map[string]any{
+			"name": "Anthropic tools", "type": "anthropic", "base_url": "https://api.anthropic.com",
+			"credential_id": credential.ID, "enabled": true,
+			"capabilities": map[string]any{"chat": true, "tools": true, "provider_executed_tools": true},
+		},
+	)
+	if accepted.Code != http.StatusCreated {
+		t.Fatalf("a capability within the ceiling was refused: status=%d body=%s", accepted.Code, accepted.Body.String())
+	}
 }
