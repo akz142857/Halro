@@ -3,9 +3,11 @@ package openai
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -70,12 +72,28 @@ func TestRealProviderSmoke(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	defer cancel()
+	// Which output-limit parameter to send is a property of the upstream, not a
+	// preference. OpenAI's current models reject max_tokens outright —
+	// `unsupported_parameter:max_tokens`, HTTP 400 — and take
+	// max_completion_tokens instead; Azure follows the same API. DeepSeek and the
+	// reviewed compatible endpoints are on the older parameter, and sending both
+	// is rejected everywhere, so this picks one per profile.
+	//
+	// This smoke sent max_tokens to every profile, which made the GA gate's
+	// OpenAI cell fail against any current model. The capability-detection path
+	// beside it was already on max_completion_tokens
+	// (internal/provider/capability_detection.go:113); only this file was stale.
 	request := openaiapi.ChatCompletionRequest{
 		Model: model,
 		Messages: []openaiapi.Message{{
 			Role: "user", Content: openaiapi.TextContent("Reply with OK."),
 		}},
-		MaxTokens: int64Pointer(8),
+	}
+	switch profile {
+	case "openai", "azure_openai":
+		request.MaxCompletionTokens = int64Pointer(16)
+	default:
+		request.MaxTokens = int64Pointer(16)
 	}
 	response, err := adapter.Chat(ctx, provider.ChatCall{
 		RequestID: "smoke_nonstream", ProviderModel: model, Request: request,
@@ -177,12 +195,49 @@ func int64Pointer(value int64) *int64 {
 	return &value
 }
 
+// smokeErrorClass names a failure as narrowly as the evidence contract allows.
+//
+// The class alone was not enough to act on: a run that answered "bad_request"
+// said nothing about which parameter the upstream refused, and the operator had
+// to bisect a request they did not write. The status and the upstream's own
+// error code are added because they are identifiers rather than prose — the same
+// two fields a failed connection test already logs — while the message stays
+// out, since that is where an upstream quotes back what it was sent.
+//
+// The code is admitted only in the shape a real error code takes. Anything else
+// is dropped rather than trimmed: a value that is not an identifier is prose,
+// and prose is what this must not print.
 func smokeErrorClass(err error) string {
 	var classified *provider.Error
-	if errorsAsProvider(err, &classified) {
-		return string(classified.Class)
+	if !errorsAsProvider(err, &classified) {
+		return "unknown"
 	}
-	return "unknown"
+	description := string(classified.Class)
+	if classified.StatusCode > 0 {
+		description += fmt.Sprintf(" http=%d", classified.StatusCode)
+	}
+	if code := smokeIdentifier(classified.ProviderCode); code != "" {
+		description += " code=" + code
+	}
+	return description
+}
+
+// smokeIdentifier mirrors probeIdentifier in the Admin provider tests: bounded
+// length, and only the characters a provider error code is made of.
+func smokeIdentifier(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" || len(trimmed) > 120 {
+		return ""
+	}
+	for _, r := range trimmed {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '.' || r == '_' || r == '-' || r == ':':
+		default:
+			return ""
+		}
+	}
+	return trimmed
 }
 
 // Kept local so failure messages cannot accidentally format a wrapped error

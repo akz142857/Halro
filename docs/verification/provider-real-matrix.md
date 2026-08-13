@@ -4,23 +4,32 @@ The final release requires a passing real-account smoke for every GA Provider
 profile on the exact RC commit. Unit, golden, fake-server, SDK compatibility,
 and capability-contract tests remain mandatory but do not replace this gate.
 
-The matrix runner covers OpenAI, Azure OpenAI, DeepSeek, and one explicitly
-reviewed OpenAI-compatible endpoint. It verifies non-stream chat, semantic SSE,
-embeddings wherever the profile declares embeddings, and the same bounded
-fixed-protocol capability-detection plan used by the Admin control plane.
+The matrix runner covers OpenAI, Anthropic, Azure OpenAI, DeepSeek, and one
+explicitly reviewed OpenAI-compatible endpoint. It verifies non-stream chat,
+semantic SSE, embeddings wherever the profile declares embeddings, and the same
+bounded fixed-protocol capability-detection plan used by the Admin control
+plane.
+
+Anthropic is the one GA profile with two execution modes, so its smoke proves
+both: native Messages and its stream forwarded verbatim, the portable OpenAI
+shape re-authored through the canonical model, `count_tokens`, and the model
+catalog that a credential-only connection test falls back to. A pass on one
+mode is not evidence for the other; they share an adapter and nothing else.
 Capability detection is enabled only in this opt-in child process, may incur
 additional charges, and must verify `chat` for the configured model without
 exceeding eight calls. Configure dedicated,
 budget-limited credentials through environment variables using these prefixes:
 
 - `HALRO_MATRIX_OPENAI_...`
+- `HALRO_MATRIX_ANTHROPIC_...`
 - `HALRO_MATRIX_AZURE_OPENAI_...`
 - `HALRO_MATRIX_DEEPSEEK_...`
 - `HALRO_MATRIX_OPENAI_COMPATIBLE_...`
 
 Each prefix requires `BASE_URL`, `API_KEY`, and `MODEL`. OpenAI, Azure, and the
 reviewed compatible endpoint also require `EMBEDDING_MODEL`; Azure additionally
-requires `API_VERSION`. Then run:
+requires `API_VERSION`. Anthropic requires only the three common values — the
+profile declares no embeddings, and its extra surfaces take no configuration. Then run:
 
 ```bash
 go run ./tests/provider-matrix \
