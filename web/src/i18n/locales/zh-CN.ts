@@ -47,7 +47,7 @@ export const zhCN = {
   },
   notifications: { region: "系统通知", dismiss: "关闭通知" },
   testControl: { idle: "尚未测试", running: "测试中…", successPlain: "通过", success: "通过 · {{latency}}ms", failure: "失败", stale: "需重测",
-    reasons: { authentication: "上游拒绝了这份凭据（认证或授权失败）", rate_limit: "上游限流，稍后重试", timeout: "等待上游响应超时", provider_5xx: "上游返回服务端错误", bad_request: "上游拒绝了这次探测请求", connect: "无法建立到上游的连接（DNS、TLS 或网络）", malformed_response: "上游响应无法解析", unknown: "连接测试失败，原因未分类" } },
+    reasons: { authentication: "上游拒绝了这份凭据（认证或授权失败）", rate_limit: "上游限流，稍后重试", timeout: "等待上游响应超时", provider_5xx: "上游返回服务端错误", bad_request: "上游拒绝了这次探测请求", bad_request_local: "Halro 在发往上游之前拒绝了这次探测", connect: "无法建立到上游的连接（DNS、TLS 或网络）", malformed_response: "上游响应无法解析", unknown: "连接测试失败，原因未分类" } },
   errors: {
     badRequest: "请求内容无效，请检查后重试。",
     authentication: "登录状态无效或已过期，请重新登录。",
@@ -669,7 +669,7 @@ export const zhCN = {
     httpError: "上游 HTTP", routeFallback: "发生路由回退", requestRetry: "发生请求重试", unknownContext: "上下文不可用",
   },
   capabilities: {
-    chat: "对话", streaming: "流式", embeddings: "向量嵌入", moderations: "内容审核", images: "图像", transcriptions: "音频转写", speech: "语音合成", files: "文件", batches: "批处理", rerank: "重排", async_generate: "异步生成", tools: "工具调用", vision: "视觉", json_mode: "JSON 模式", developer_role: "开发者角色", reasoning: "推理", stream_usage: "流式用量",
+    chat: "对话", streaming: "流式", embeddings: "向量嵌入", moderations: "内容审核", images: "图像", transcriptions: "音频转写", speech: "语音合成", files: "文件", batches: "批处理", rerank: "重排", async_generate: "异步生成", tools: "工具调用", vision: "视觉", json_mode: "JSON 模式", developer_role: "开发者角色", reasoning: "推理", stream_usage: "流式用量", provider_executed_tools: "服务商侧执行工具",
   },
   usage: {
     eyebrow: "持久化计费", title: "用量与调用", description: "记录每次服务商尝试的项目、模型、令牌、成本与终态，支持多维度筛选。",
@@ -885,6 +885,10 @@ export const zhCN = {
     validationCredentialBaseURL: "地址绑定不匹配",
     validationCapabilityRequired: "至少启用一项能力，否则没有模型部署能路由到这个服务商。",
     validationProjectFormat: "必须是 AWS 签发的 proj_ 开头加字母数字的 ID；留空则使用账户默认项目。",
+    validationBetaTooMany: "一个连接最多允许 {{max}} 个 beta token。",
+    validationBetaTooLong: "每个 beta token 最长 {{max}} 个字符。",
+    validationBetaCharset: "beta token 只能包含小写字母、数字、短横线、点和下划线。",
+    validationBetaDuplicate: "每个 beta token 只能出现一次。",
     validationProjectWorkspace: "这是 Claude Platform on AWS 的工作区标识（wrkspc_ 开头），属于另一条产品线，此处不接受。",
     validationProjectTooLong: "长度不能超过 {{max}} 个字符。",
     openAIProfiles: { chat: "Chat Completions", media: "媒体与资源" },

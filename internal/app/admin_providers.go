@@ -418,11 +418,13 @@ func (r *Runtime) testAdminProvider(writer http.ResponseWriter, request *http.Re
 			adapter, ok = r.providers.AdapterForProvider(providerID)
 		}
 		if !ok {
+			r.logProbeRefusal(providerID, binding.ID, "provider binding adapter is unavailable")
 			adminBadRequest(writer, "provider binding adapter is unavailable")
 			return
 		}
 		prober, ok := adapter.(provider.Prober)
 		if !ok {
+			r.logProbeRefusal(providerID, binding.ID, "provider does not support connection testing")
 			adminBadRequest(writer, "provider does not support connection testing")
 			return
 		}
@@ -491,6 +493,7 @@ func (r *Runtime) testAdminProvider(writer http.ResponseWriter, request *http.Re
 	current, storeErr = r.store.PutProvider(request.Context(), current, testedRevision, intent)
 	r.adminTopologyMu.Unlock()
 	if storeErr != nil {
+		r.logProbeResultWriteFailure("provider", providerID, storeErr)
 		adminMutationError(writer, storeErr)
 		return
 	}
@@ -616,6 +619,30 @@ func (f probeFailure) addTo(result map[string]any) {
 	if f.Reason != "" {
 		result["error_detail"] = f.Reason
 	}
+}
+
+// logProbeRefusal records a connection test Halro turned down before probing
+// anything. These paths answer 400 and return, so they used to leave no trace at
+// all on the server: the operator saw a red result in the console, went to the
+// log for the reason, and found the log silent — which reads as "the test never
+// ran" rather than "the test was refused, here is why".
+func (r *Runtime) logProbeRefusal(providerID, bindingID, reason string) {
+	r.logger.Warn("provider connection test refused", "provider_id", providerID, "binding_id", bindingID, "reason", reason)
+}
+
+// logProbeResultWriteFailure records a connection test that ran and then could
+// not be recorded. This is the one failure in the test path that says nothing
+// about the upstream at all — the probe already answered — and it used to leave
+// no server-side trace whatsoever: the console showed a refusal, the log showed
+// a successful test or nothing, and the two disagreed with no way to tell which
+// was describing what. A stale record the store now refuses is the case this was
+// added for, and reading the store's own sentence is the whole diagnosis.
+//
+// The error comes from Halro's validation and storage layer, never from a
+// provider response, so unlike a probe failure it carries no upstream body.
+func (r *Runtime) logProbeResultWriteFailure(kind, id string, err error) {
+	r.logger.Warn(kind+" connection test result could not be recorded",
+		kind+"_id", id, "reason", truncateProbeReason(safelog.Redact(err.Error())))
 }
 
 // logProbeFailure records a connection test the operator ran and the upstream
@@ -771,6 +798,7 @@ func (r *Runtime) testAdminRoute(writer http.ResponseWriter, request *http.Reque
 	current, storeErr = r.store.PutRoute(request.Context(), current, testedRevision, intent)
 	r.adminTopologyMu.Unlock()
 	if storeErr != nil {
+		r.logProbeResultWriteFailure("route", route.ID, storeErr)
 		adminMutationError(writer, storeErr)
 		return
 	}

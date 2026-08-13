@@ -9,11 +9,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -89,6 +92,7 @@ type Service struct {
 	pricingClockRollbackTolerance time.Duration
 	pricingClockForwardTolerance  time.Duration
 	pricingUnknownPolicy          string
+	logger                        *slog.Logger
 }
 
 type PriceSelector interface {
@@ -125,6 +129,13 @@ type ServiceOptions struct {
 	PricingClockRollbackTolerance time.Duration
 	PricingClockForwardTolerance  time.Duration
 	PricingUnknownPolicy          string
+
+	// Logger records provider attempts that failed. A gateway answers its caller
+	// with a deliberately opaque envelope — no upstream status, code or sentence,
+	// because that is the caller's side of a trust boundary — which left the
+	// operator with a 502 and nothing at all to read. Nil selects a discarding
+	// logger so tests and embedders need not supply one.
+	Logger *slog.Logger
 
 	// Now overrides the clock the whole service reads: authentication
 	// timestamps, price selection, rate-limit buckets and Token Guard windows
@@ -528,6 +539,7 @@ func (s *Service) prepareAccountingLease(ctx context.Context, target provider.Ta
 }
 
 func (attempt *activeAttempt) finish(providerErr error, settlement budget.Settlement) error {
+	attempt.logProviderFailure(providerErr)
 	if attempt.accounting.LeaseMode == ledger.LeaseModeUnknownAllowed {
 		settlement.CommittedMicrosUSD = 0
 		settlement.CostEstimated = false
@@ -545,6 +557,71 @@ func (attempt *activeAttempt) finish(providerErr error, settlement budget.Settle
 	}
 	attempt.reportBreaker(providerErr)
 	return nil
+}
+
+// logProviderFailure records an attempt the upstream did not complete.
+//
+// What the caller is told and what the operator is told are different answers on
+// purpose. The response carries a fixed sentence and no upstream detail, because
+// the caller is on the other side of a trust boundary. The log is on this side,
+// so it names the route that failed and how the failure was classified — which
+// is what decides whether the attempt was retried, whether the breaker counted
+// it, and whether a fallback target was tried.
+//
+// The upstream's own sentence is not written. It is a provider response body,
+// and the one thing an upstream is most likely to quote back is the credential
+// it just refused; a pattern denylist only knows the formats it was told about.
+// A refusal Halro produced itself — a transport policy rejection, a response it
+// would not decode — carries no provider body and is the case an operator most
+// needs, so that text is logged, on the same rule the connection tests use: an
+// error with no upstream status is one Halro wrote.
+func (attempt *activeAttempt) logProviderFailure(providerErr error) {
+	if providerErr == nil {
+		return
+	}
+	target := attempt.pricingTarget
+	attributes := []any{
+		"request_id", attempt.run.requestID,
+		"public_model", target.PublicModel,
+		"deployment_id", target.DeploymentID,
+		"provider_id", target.ProviderID,
+		"binding_id", target.BindingID,
+	}
+	var classified *provider.Error
+	if errors.As(providerErr, &classified) {
+		attributes = append(attributes, "error_class", string(classified.Class), "retryable", classified.Retryable)
+		if classified.Ambiguous {
+			attributes = append(attributes, "ambiguous", true)
+		}
+		if classified.StatusCode > 0 {
+			attributes = append(attributes, "provider_status", classified.StatusCode)
+		}
+		if classified.ProviderRequestID != "" {
+			attributes = append(attributes, "provider_request_id", classified.ProviderRequestID)
+		}
+		if classified.StatusCode == 0 {
+			attributes = append(attributes, "reason", providerFailureReason(classified))
+		}
+	} else if errors.Is(providerErr, context.Canceled) || errors.Is(providerErr, context.DeadlineExceeded) {
+		attributes = append(attributes, "error_class", "client_disconnected_or_timed_out")
+	} else {
+		attributes = append(attributes, "error_class", string(provider.ErrorUnknown), "reason", providerErr.Error())
+	}
+	attempt.service.logger.Warn("provider attempt failed", attributes...)
+}
+
+// providerFailureReason unwraps the cause a provider error carries. Error stops
+// at its own headline, so a transport refusal reads as a bare "provider request
+// failed" — losing the address or allowlist entry that actually refused it.
+func providerFailureReason(classified *provider.Error) string {
+	if classified.Cause == nil {
+		return classified.Message
+	}
+	cause := classified.Cause.Error()
+	if classified.Message == "" || strings.Contains(cause, classified.Message) {
+		return cause
+	}
+	return classified.Message + ": " + cause
 }
 
 // abort releases everything startAttempt took, for a request that fails after
@@ -682,7 +759,12 @@ func NewServiceWithOptions(
 	if clock == nil {
 		clock = time.Now
 	}
+	logger := options.Logger
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
 	return &Service{
+		logger:                        logger,
 		auth:                          authSnapshot,
 		registry:                      registry,
 		accounting:                    accounting,
@@ -933,11 +1015,11 @@ func (s *Service) Responses(
 	}
 	result, err := openaiwire.DecodeGenerateResult(chatResponse)
 	if err != nil {
-		return openaiapi.Response{}, gatewayError("provider_error", "provider response cannot be represented safely", 502, err)
+		return openaiapi.Response{}, s.returnFailure(ctx, "responses", "provider response cannot be represented safely", err)
 	}
 	response, err := openaiwire.RenderResponseResult(result, request)
 	if err != nil {
-		return openaiapi.Response{}, gatewayError("provider_error", "provider response cannot be rendered safely", 502, err)
+		return openaiapi.Response{}, s.returnFailure(ctx, "responses", "provider response cannot be rendered safely", err)
 	}
 	return response, nil
 }
@@ -989,7 +1071,7 @@ func (s *Service) ResponsesStream(
 	}
 	events, err := renderer.Complete()
 	if err != nil {
-		return gatewayError("provider_error", "provider stream cannot be completed safely", 502, err)
+		return s.returnFailure(ctx, "responses", "provider stream cannot be completed safely", err)
 	}
 	for _, event := range events {
 		if err := emit(event); err != nil {
@@ -1024,11 +1106,11 @@ func (s *Service) Messages(
 	}
 	result, err := openaiwire.DecodeGenerateResult(chatResponse)
 	if err != nil {
-		return anthropicapi.Message{}, gatewayError("provider_error", "provider response cannot be represented safely", 502, err)
+		return anthropicapi.Message{}, s.returnFailure(ctx, "messages", "provider response cannot be represented safely", err)
 	}
 	message, err := anthropicwire.RenderResult(result, request.Model)
 	if err != nil {
-		return anthropicapi.Message{}, gatewayError("provider_error", "provider response cannot be rendered safely", 502, err)
+		return anthropicapi.Message{}, s.returnFailure(ctx, "messages", "provider response cannot be rendered safely", err)
 	}
 	return message, nil
 }
@@ -1077,7 +1159,7 @@ func (s *Service) MessagesStream(
 	}
 	events, err := renderer.Complete()
 	if err != nil {
-		return gatewayError("provider_error", "provider stream cannot be completed safely", 502, err)
+		return s.returnFailure(ctx, "messages", "provider stream cannot be completed safely", err)
 	}
 	for _, event := range events {
 		if err := emit(event); err != nil {
@@ -1091,15 +1173,12 @@ func (s *Service) MessagesNative(ctx context.Context, plaintextKey, version stri
 	if request.Stream {
 		return anthropicapi.Message{}, gatewayError("invalid_request_error", "stream must be false", 400, nil)
 	}
-	principal, target, envelope, inputTokens, outputTokens, err := s.prepareNativeMessages(ctx, plaintextKey, version, request, provider.OperationMessages)
+	principal, target, envelope, inputTokens, outputTokens, err := s.prepareNativeMessages(ctx, plaintextKey, version, betas, request, provider.OperationMessages)
 	if err != nil {
 		return anthropicapi.Message{}, err
 	}
 	// Inspect the bytes the envelope will hand the provider, not the decoded
 	// struct: the struct is a lossy view of them.
-	if err := checkAnthropicBetas(target, betas); err != nil {
-		return anthropicapi.Message{}, err
-	}
 	payload, err := envelope.PayloadFor(target.ProfileID, 1, compatibility.NativeRequest)
 	if err != nil {
 		return anthropicapi.Message{}, gatewayError("internal_error", "native request payload is unavailable", 500, err)
@@ -1164,15 +1243,81 @@ func (s *Service) MessagesNative(ctx context.Context, plaintextKey, version stri
 	return message, nil
 }
 
+// MessagesCountTokens serves Anthropic's count_tokens. Anthropic does not bill
+// it, and Halro settles it at zero cost — but it still runs the whole admission
+// path: authentication, project policy, routing, redaction, and a real ledger
+// attempt. The endpoint sends the caller's prompt to the provider on the
+// operator's credential, so leaving it off the ledger would put a class of
+// provider calls outside the record that every other call is held to. What the
+// entry says is that it happened and cost nothing.
+func (s *Service) MessagesCountTokens(ctx context.Context, plaintextKey, version string, betas []string, request anthropicapi.MessageRequest) (anthropicapi.TokenCount, error) {
+	if request.Stream {
+		return anthropicapi.TokenCount{}, gatewayError("invalid_request_error", "count_tokens does not stream", 400, nil)
+	}
+	principal, target, envelope, inputTokens, _, err := s.prepareNativeMessages(ctx, plaintextKey, version, betas, request, provider.OperationMessages)
+	if err != nil {
+		return anthropicapi.TokenCount{}, err
+	}
+	if target.ProfileID != domain.ProfileAnthropicMessages {
+		// Only the direct Anthropic profile has a proven count_tokens surface.
+		// Bedrock Mantle shares the Messages wire format, but whether it serves
+		// this path is not established, and guessing would send the operator's
+		// prompt at an endpoint nobody verified.
+		return anthropicapi.TokenCount{}, gatewayError("unsupported_feature", "count_tokens requires a direct Anthropic Messages provider profile", 400, nil)
+	}
+	payload, err := envelope.PayloadFor(target.ProfileID, 1, compatibility.NativeRequest)
+	if err != nil {
+		return anthropicapi.TokenCount{}, gatewayError("internal_error", "native request payload is unavailable", 500, err)
+	}
+	if err := s.checkNativeInboundRedaction(principal, payload); err != nil {
+		return anthropicapi.TokenCount{}, err
+	}
+	run, err := s.beginRequestRun(ctx, principal, request.Model, []provider.Target{target}, inputTokens, inputTokens, 0)
+	if err != nil {
+		return anthropicapi.TokenCount{}, err
+	}
+	defer run.close()
+	// Zero prepared tokens is what makes the reservation zero: nothing is
+	// generated, so there is no span to price.
+	attempt, err := s.startAttempt(ctx, run, target, 0, 0, 0, 0, 1)
+	if err != nil {
+		return anthropicapi.TokenCount{}, s.exhaustedAttemptsError(err)
+	}
+	adapter, err := target.NativeTokenCount()
+	if err != nil {
+		abortErr := attempt.abort("unsupported_feature")
+		return anthropicapi.TokenCount{}, gatewayError("unsupported_feature", "native count_tokens primitive is unavailable", 400, errors.Join(err, abortErr))
+	}
+	result, providerErr := adapter.CountTokensNative(ctx, provider.NativeMessageCall{RequestID: run.requestID, ProviderModel: target.ProviderModel, Version: version, Betas: betas, Payload: payload})
+	var count anthropicapi.TokenCount
+	if providerErr == nil {
+		count, providerErr = anthropicapi.DecodeTokenCount(result.Payload)
+		if providerErr == nil {
+			providerErr = s.checkNativeOutboundRedaction(principal, result.Payload)
+		}
+	}
+	settlement := budget.Settlement{Outcome: "success", ProviderInputTokens: count.InputTokens}
+	if providerErr != nil {
+		settlement = budget.Settlement{Outcome: "provider_error"}
+	}
+	if err := attempt.finish(providerErr, settlement); err != nil {
+		return anthropicapi.TokenCount{}, err
+	}
+	if err := run.finalize(settlement.Outcome); err != nil {
+		return anthropicapi.TokenCount{}, gatewayError("accounting_unavailable", "request accounting could not be finalized", 503, err)
+	}
+	if providerErr != nil {
+		return anthropicapi.TokenCount{}, terminalProviderError(providerErr)
+	}
+	return count, nil
+}
+
 func (s *Service) MessagesNativeStream(ctx context.Context, plaintextKey, version string, betas []string, request anthropicapi.MessageRequest, emit func(anthropicapi.RawStreamEvent) error) error {
 	if !request.Stream {
 		return gatewayError("invalid_request_error", "stream must be true", 400, nil)
 	}
-	principal, target, envelope, inputTokens, outputTokens, err := s.prepareNativeMessages(ctx, plaintextKey, version, request, provider.OperationMessagesStream)
+	principal, target, envelope, inputTokens, outputTokens, err := s.prepareNativeMessages(ctx, plaintextKey, version, betas, request, provider.OperationMessagesStream)
 	if err != nil {
-		return err
-	}
-	if err := checkAnthropicBetas(target, betas); err != nil {
 		return err
 	}
 	payload, err := envelope.PayloadFor(target.ProfileID, 1, compatibility.NativeRequest)
@@ -1185,7 +1330,7 @@ func (s *Service) MessagesNativeStream(ctx context.Context, plaintextKey, versio
 	if !s.redactor.AllowsStreaming(principal.Project.RedactionPolicyID) {
 		return gatewayError("streaming_redaction_incompatible", "streaming is disabled by the Project redaction policy", 400, nil)
 	}
-	streamRedactor, err := s.redactor.NewStream(principal.Project.RedactionPolicyID)
+	streamInspector, err := s.redactor.NewStreamInspector(principal.Project.RedactionPolicyID)
 	if err != nil {
 		return gatewayError("streaming_redaction_incompatible", "streaming is disabled by the Project redaction policy", 400, err)
 	}
@@ -1209,8 +1354,7 @@ func (s *Service) MessagesNativeStream(ctx context.Context, plaintextKey, versio
 	}
 	registry, _ := anthropicwire.NewNativeSchemaRegistry()
 	identity := nativeIdentity(principal, target, request.Model)
-	emitted := false
-	deliveredBytes := int64(0)
+	gate := newNativeStreamGate(s, principal.Project.RedactionPolicyID, streamInspector, emit)
 	providerErrorEvent := false
 	usage, providerErr := adapter.MessagesNativeStream(ctx, provider.NativeMessageCall{RequestID: run.requestID, ProviderModel: target.ProviderModel, Version: version, Betas: betas, Payload: payload}, func(event anthropicapi.RawStreamEvent) error {
 		eventEnvelope, envelopeErr := compatibility.NewNativeEventEnvelope(registry, target.ProfileID, 1, http.Header{}, event.Data, identity)
@@ -1224,17 +1368,16 @@ func (s *Service) MessagesNativeStream(ctx context.Context, plaintextKey, versio
 				return envelopeErr
 			}
 		}
-		if redactionErr := s.verifyNativeStreamRedaction(principal.Project.RedactionPolicyID, streamRedactor, event.Type, safePayload); redactionErr != nil {
-			return redactionErr
-		}
-		if emitErr := emit(anthropicapi.RawStreamEvent{Type: event.Type, Data: safePayload}); emitErr != nil {
-			return emitErr
-		}
-		deliveredBytes += int64(len(safePayload))
-		emitted = true
 		providerErrorEvent = providerErrorEvent || event.Type == "error"
-		return nil
+		return gate.Accept(event, safePayload)
 	})
+	if providerErr == nil {
+		// Closing the inspector is what confirms the suffix each channel was still
+		// withholding; the events waiting on it are released here or never.
+		providerErr = gate.Finish()
+	}
+	emitted := gate.emitted
+	deliveredBytes := gate.delivered
 	semanticUsage := (*semantic.Usage)(nil)
 	if usage != nil {
 		semanticUsage = &semantic.Usage{InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, TotalTokens: usage.InputTokens + usage.OutputTokens, Source: semantic.UsageProviderReported}
@@ -1287,20 +1430,18 @@ func rewriteAnthropicStreamModel(payload json.RawMessage, publicModel string) (j
 	return json.Marshal(event)
 }
 
-// checkAnthropicBetas fails closed on any token the selected connection has not
-// been configured to forward. It runs after target selection because the
-// allowlist is per connection, and before any provider work so an unaccepted
-// beta costs nothing.
-func checkAnthropicBetas(target provider.Target, betas []string) error {
+// allowsAnthropicBetas fails closed on any token a connection has not been
+// configured to forward.
+func allowsAnthropicBetas(target provider.Target, betas []string) bool {
 	for _, beta := range betas {
 		if !slices.Contains(target.AllowedAnthropicBetas, beta) {
-			return gatewayError("unsupported_feature", "anthropic-beta "+beta+" is not enabled for the selected connection", 400, nil)
+			return false
 		}
 	}
-	return nil
+	return true
 }
 
-func (s *Service) prepareNativeMessages(ctx context.Context, plaintextKey, version string, request anthropicapi.MessageRequest, operation provider.Operation) (auth.AuthResult, provider.Target, *compatibility.NativeEnvelope, int64, int64, error) {
+func (s *Service) prepareNativeMessages(ctx context.Context, plaintextKey, version string, betas []string, request anthropicapi.MessageRequest, operation provider.Operation) (auth.AuthResult, provider.Target, *compatibility.NativeEnvelope, int64, int64, error) {
 	principal, targets, err := s.resolveRequest(ctx, plaintextKey, request.Model, operation, "model route does not support native Anthropic Messages")
 	if err != nil {
 		return auth.AuthResult{}, provider.Target{}, nil, 0, 0, err
@@ -1311,12 +1452,31 @@ func (s *Service) prepareNativeMessages(ctx context.Context, plaintextKey, versi
 	if len(targets) == 0 {
 		return auth.AuthResult{}, provider.Target{}, nil, 0, 0, gatewayError("unsupported_feature", "native mode requires an Anthropic Messages provider profile", 400, nil)
 	}
+	// Native requests carry requirements too — a schema-backed output_config
+	// needs JSON mode, a web_search tool needs the connection to have accepted
+	// upstream egress. Filtering here is what makes those requirements load
+	// bearing; deriving them only inside the governance envelope, which is built
+	// for an already-chosen target, left them as decoration.
+	requirements := anthropicwire.NativeRequirements(request)
+	targets = filterSemanticCapabilities(targets, requirements)
+	if len(targets) == 0 {
+		return auth.AuthResult{}, provider.Target{}, nil, 0, 0, gatewayError("unsupported_feature", "model route does not support the requested Anthropic Messages capabilities", 400, nil)
+	}
+	// The beta allowlist is per connection, so it is checked once a target is
+	// chosen and before any provider work — an unaccepted beta costs nothing —
+	// and before the envelope, which has to record the headers actually sent.
+	targets = slices.DeleteFunc(targets, func(target provider.Target) bool {
+		return !allowsAnthropicBetas(target, betas)
+	})
+	if len(targets) == 0 {
+		return auth.AuthResult{}, provider.Target{}, nil, 0, 0, gatewayError("unsupported_feature", "anthropic-beta is not enabled for any connection behind this model", 400, nil)
+	}
 	target := targets[0]
 	registry, err := anthropicwire.NewNativeSchemaRegistry()
 	if err != nil {
 		return auth.AuthResult{}, provider.Target{}, nil, 0, 0, gatewayError("internal_error", "native schema is unavailable", 500, err)
 	}
-	envelope, err := compatibility.NewNativeEnvelope(registry, target.ProfileID, 1, anthropicwire.NativeHeaders(version), request.Raw, nativeIdentity(principal, target, request.Model))
+	envelope, err := compatibility.NewNativeEnvelope(registry, target.ProfileID, 1, anthropicwire.NativeHeaders(version, betas), request.Raw, nativeIdentity(principal, target, request.Model))
 	if err != nil {
 		return auth.AuthResult{}, provider.Target{}, nil, 0, 0, gatewayError("invalid_request_error", "native request failed schema validation", 400, err)
 	}
@@ -1343,18 +1503,6 @@ func nativeIdentity(principal auth.AuthResult, target provider.Target, model str
 	return compatibility.NativeIdentity{ProjectID: principal.Project.ID, PrincipalID: principal.Key.ID, CredentialRef: "cred_" + target.ProviderID, RouteID: target.ID, RequestedModel: model}
 }
 
-// canonicalJSON renders payload through the same any round-trip the redaction
-// engine performs internally, so comparing against the engine's output measures
-// whether the policy rewrote content rather than whether Go reordered map keys
-// or re-rendered a number.
-func canonicalJSON(payload json.RawMessage) ([]byte, error) {
-	var value any
-	if err := json.Unmarshal(payload, &value); err != nil {
-		return nil, err
-	}
-	return json.Marshal(value)
-}
-
 // checkNativeInboundRedaction inspects the exact bytes that will travel
 // upstream. It walks the raw payload rather than a portable projection because
 // a projection can only carry what the canonical model models: every field
@@ -1363,18 +1511,17 @@ func canonicalJSON(payload json.RawMessage) ([]byte, error) {
 // the inspection surface equal to the accepted surface, which is the invariant
 // that lets the accepted surface grow without opening a redaction hole.
 func (s *Service) checkNativeInboundRedaction(principal auth.AuthResult, payload json.RawMessage) error {
-	baseline, err := canonicalJSON(payload)
-	if err != nil {
+	err := s.redactor.InspectJSON(principal.Project.RedactionPolicyID, "inbound", payload)
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, redaction.ErrMalformedJSON):
 		return gatewayError("invalid_request_error", "native request cannot be inspected safely", 400, err)
-	}
-	processed, err := s.redactor.ProcessJSON(principal.Project.RedactionPolicyID, "inbound", payload)
-	if err != nil {
+	case errors.Is(err, redaction.ErrRewriteRequired):
+		return gatewayError("native_redaction_incompatible", "native payload would require rewriting", 400, err)
+	default:
 		return gatewayError("sensitive_data_detected", "request contains secret material", 400, err)
 	}
-	if !bytes.Equal(baseline, processed) {
-		return gatewayError("native_redaction_incompatible", "native payload would require rewriting", 400, redaction.ErrPolicyRejected)
-	}
-	return nil
 }
 
 // checkNativeOutboundRedaction mirrors the inbound walk over the response the
@@ -1383,10 +1530,11 @@ func (s *Service) checkNativeInboundRedaction(principal auth.AuthResult, payload
 // had nowhere to put them, not because model reasoning is exempt from the
 // outbound secret baseline.
 func (s *Service) checkNativeOutboundRedaction(principal auth.AuthResult, payload json.RawMessage) error {
-	if _, err := canonicalJSON(payload); err != nil {
+	err := s.inspectOutboundJSON(principal.Project.RedactionPolicyID, payload)
+	if errors.Is(err, redaction.ErrMalformedJSON) {
 		return &provider.Error{Class: provider.ErrorMalformed, Ambiguous: true, Message: "native response cannot be inspected safely", Cause: err}
 	}
-	return s.inspectOutboundJSON(principal.Project.RedactionPolicyID, payload)
+	return err
 }
 
 // inspectOutboundJSON is the stateless half of outbound inspection, shared by
@@ -1395,69 +1543,187 @@ func (s *Service) checkNativeOutboundRedaction(principal auth.AuthResult, payloa
 // would require the schema knowledge this design removes, and a uniform walk is
 // what keeps the inspected surface equal to the accepted surface.
 func (s *Service) inspectOutboundJSON(policyID string, payload json.RawMessage) error {
-	baseline, err := canonicalJSON(payload)
-	if err != nil {
-		return redaction.ErrPolicyRejected
+	err := s.redactor.InspectJSON(policyID, "outbound", payload)
+	if err == nil || errors.Is(err, redaction.ErrMalformedJSON) {
+		return err
 	}
-	processed, err := s.redactor.ProcessJSON(policyID, "outbound", payload)
-	if err != nil {
-		return redaction.ErrPolicyRejected
+	return errors.Join(redaction.ErrPolicyRejected, err)
+}
+
+// nativeStreamGate is the outbound baseline for a stream Halro forwards byte
+// for byte.
+//
+// It exists because the ordinary stream redactor cannot answer the question
+// native mode has to ask. That redactor withholds the trailing max-match-width
+// bytes of each channel so a pattern split across two provider chunks cannot be
+// delivered half-redacted, and it returns the redacted prefix; comparing that
+// prefix against the fragment that produced it always differs, which is not a
+// verdict about the policy. Native streaming was gated on exactly that
+// comparison, so every delta carrying text was refused — the mode has never
+// worked on real payloads, and the repository's only native streaming test used
+// signature_delta, which carries none.
+//
+// The gate inverts the arrangement: the inspector reports how many bytes of each
+// channel are confirmed unchanged, and an event is released only once every byte
+// of text it carries falls inside that confirmed span. Events therefore queue
+// briefly — bounded by the widest rule, not by the block — and an event whose
+// text turns out to need rewriting is never emitted at all.
+type nativeStreamGate struct {
+	inspector *redaction.StreamInspector
+	policyID  string
+	service   *Service
+	emit      func(anthropicapi.RawStreamEvent) error
+	queue     []gatedStreamEvent
+	pushed    map[string]int64
+	confirmed map[string]int64
+	delivered int64
+	emitted   bool
+}
+
+type gatedStreamEvent struct {
+	event   anthropicapi.RawStreamEvent
+	channel string
+	need    int64
+}
+
+type nativeStreamDelta struct {
+	Index *int `json:"index"`
+	Delta struct {
+		Type        string `json:"type"`
+		Text        string `json:"text"`
+		PartialJSON string `json:"partial_json"`
+		Thinking    string `json:"thinking"`
+	} `json:"delta"`
+}
+
+func newNativeStreamGate(service *Service, policyID string, inspector *redaction.StreamInspector, emit func(anthropicapi.RawStreamEvent) error) *nativeStreamGate {
+	return &nativeStreamGate{
+		inspector: inspector, policyID: policyID, service: service, emit: emit,
+		pushed: make(map[string]int64), confirmed: make(map[string]int64),
 	}
-	if !bytes.Equal(baseline, processed) {
+}
+
+// Accept inspects one event and releases whatever the inspection has now
+// confirmed. Order is preserved: a queued event never overtakes one in front of
+// it, so a content_block_stop cannot reach the client before the deltas it ends.
+func (g *nativeStreamGate) Accept(event anthropicapi.RawStreamEvent, payload json.RawMessage) error {
+	channel, text, err := nativeDeltaChannel(event, payload)
+	if err != nil {
+		return err
+	}
+	switch {
+	case channel != "":
+		confirmed, err := g.inspector.Push(channel, strings.HasSuffix(channel, ":input_json_delta"), text)
+		if err != nil {
+			return err
+		}
+		g.pushed[channel] += int64(len(text))
+		g.confirmed[channel] = confirmed
+		g.queue = append(g.queue, gatedStreamEvent{event: anthropicapi.RawStreamEvent{Type: event.Type, Data: payload}, channel: channel, need: g.pushed[channel]})
+	default:
+		// Every event that is not incremental text arrives whole, so it gets the
+		// same raw-JSON walk the unary path uses. Without it a content_block_start
+		// carrying a block type Halro does not model would reach the client
+		// uninspected — the hole that widening the accepted block set would open.
+		if err := g.service.inspectOutboundJSON(g.policyID, payload); err != nil {
+			return err
+		}
+		if event.Type == "content_block_stop" {
+			// The block is complete, so its channels can be closed and their
+			// withheld suffixes confirmed. Doing it before queuing this event is
+			// what lets the deltas ahead of it drain in the same pass.
+			if err := g.closeBlock(payload); err != nil {
+				return err
+			}
+		}
+		g.queue = append(g.queue, gatedStreamEvent{event: anthropicapi.RawStreamEvent{Type: event.Type, Data: payload}})
+	}
+	return g.drain()
+}
+
+// Finish closes every open channel and releases what that confirms. A stream
+// that ends without it leaves each channel's withheld suffix uninspected, which
+// is the same leak as not inspecting at all.
+func (g *nativeStreamGate) Finish() error {
+	if err := g.inspector.Finish(); err != nil {
+		return err
+	}
+	for channel := range g.pushed {
+		g.confirmed[channel] = g.inspector.Confirmed(channel)
+	}
+	if err := g.drain(); err != nil {
+		return err
+	}
+	if len(g.queue) > 0 {
 		return redaction.ErrPolicyRejected
 	}
 	return nil
 }
 
-// verifyNativeStreamRedaction splits inspection by what an event can carry.
-// Incremental text goes through the stateful stream processor, which is the
-// only thing that catches a secret split across two chunks. Every other event
-// arrives whole, so it gets the same raw-JSON walk the unary path uses —
-// without that, a content_block_start carrying a block type Halro does not
-// model would reach the client uninspected, which is exactly the hole that
-// widening the accepted block set would otherwise open.
-func (s *Service) verifyNativeStreamRedaction(policyID string, stream *redaction.Stream, eventType string, payload []byte) error {
-	if eventType != "content_block_delta" {
-		return s.inspectOutboundJSON(policyID, payload)
+func (g *nativeStreamGate) closeBlock(payload json.RawMessage) error {
+	var event struct {
+		Index *int `json:"index"`
 	}
-	var value struct {
-		Delta struct {
-			Type        string `json:"type"`
-			Text        string `json:"text"`
-			PartialJSON string `json:"partial_json"`
-			Thinking    string `json:"thinking"`
-		} `json:"delta"`
+	if json.Unmarshal(payload, &event) != nil || event.Index == nil {
+		return nil
 	}
-	if json.Unmarshal(payload, &value) != nil {
-		return redaction.ErrPolicyRejected
+	prefix := strconv.Itoa(*event.Index) + ":"
+	closed, err := g.inspector.CloseGroup(prefix)
+	if err != nil {
+		return err
 	}
-	text := value.Delta.Text
+	for _, channel := range closed {
+		g.confirmed[channel] = g.inspector.Confirmed(channel)
+	}
+	return nil
+}
+
+func (g *nativeStreamGate) drain() error {
+	for len(g.queue) > 0 {
+		head := g.queue[0]
+		if head.channel != "" && g.confirmed[head.channel] < head.need {
+			return nil
+		}
+		g.queue = g.queue[1:]
+		if err := g.emit(head.event); err != nil {
+			return err
+		}
+		g.delivered += int64(len(head.event.Data))
+		g.emitted = true
+	}
+	return nil
+}
+
+// nativeDeltaChannel names the logical text stream an event contributes to, or
+// returns an empty name for an event that carries no incremental text. The name
+// is scoped by content block index because two blocks stream independently and a
+// pattern cannot span them.
+func nativeDeltaChannel(event anthropicapi.RawStreamEvent, payload json.RawMessage) (string, string, error) {
+	if event.Type != "content_block_delta" {
+		return "", "", nil
+	}
+	var value nativeStreamDelta
+	if json.Unmarshal(payload, &value) != nil || value.Index == nil {
+		return "", "", redaction.ErrPolicyRejected
+	}
+	var text string
 	switch value.Delta.Type {
+	case "text_delta":
+		text = value.Delta.Text
 	case "input_json_delta":
 		text = value.Delta.PartialJSON
 	case "thinking_delta":
 		text = value.Delta.Thinking
+	default:
+		// signature_delta and any delta shape a later release adds carry no text
+		// Halro can inspect incrementally; they take the whole-event walk instead
+		// of passing through unlooked-at.
+		return "", "", nil
 	}
 	if text == "" {
-		// A delta carrying no inspectable text still gets the whole-event walk;
-		// signature_delta and any future delta shape land here rather than
-		// passing through unlooked-at.
-		return s.inspectOutboundJSON(policyID, payload)
+		return "", "", nil
 	}
-	chunk := openaiapi.ChatCompletionResponse{ID: "native-redaction", Object: "chat.completion.chunk", Model: "native", Choices: []openaiapi.Choice{{Index: 0, Delta: &openaiapi.Message{Role: "assistant", Content: openaiapi.TextContent(text)}}}}
-	processed, err := stream.Process(chunk)
-	if err != nil {
-		return err
-	}
-	if len(processed) != 1 {
-		return redaction.ErrPolicyRejected
-	}
-	original, _ := json.Marshal(chunk)
-	actual, _ := json.Marshal(processed[0])
-	if !bytes.Equal(original, actual) {
-		return redaction.ErrPolicyRejected
-	}
-	return nil
+	return strconv.Itoa(*value.Index) + ":" + value.Delta.Type, text, nil
 }
 
 func (s *Service) ChatStream(
@@ -2021,7 +2287,8 @@ func filterSemanticCapabilities(targets []provider.Target, requirements semantic
 			(requirements.StructuredJSON && !capabilities.JSONMode) ||
 			(requirements.DeveloperRole && !capabilities.DeveloperRole) ||
 			(requirements.Reasoning && !capabilities.Reasoning) ||
-			(requirements.StreamUsage && !capabilities.StreamUsage)
+			(requirements.StreamUsage && !capabilities.StreamUsage) ||
+			(requirements.ProviderExecutedTools && !capabilities.ProviderExecutedTools)
 	})
 }
 
@@ -2413,4 +2680,26 @@ func (s *Service) mapLimitError(err error) error {
 
 func gatewayError(code, message string, status int, cause error) *Error {
 	return &Error{Code: code, Message: message, HTTPStatus: status, Cause: cause}
+}
+
+// returnFailure is gatewayError for the failures on the way back: the upstream
+// answered, the attempt settled, and the answer could not be turned into the
+// shape this surface returns.
+//
+// These are the only 502s the attempt log never sees — logProviderFailure runs
+// where a provider error is recorded, and here there is no provider error. That
+// left the operator with a 502 whose sentence names a stage and nothing else,
+// and it is the failure most likely to be Halro's own: a termination, a content
+// block or a usage shape one side of the translation cannot express.
+//
+// The cause is written because these sentences are Halro's, produced by its own
+// decoders and renderers. No provider body reaches them.
+func (s *Service) returnFailure(ctx context.Context, surface, message string, cause error) *Error {
+	requestID, _ := requestmeta.RequestID(ctx)
+	attributes := []any{"request_id", requestID, "surface", surface, "stage", message}
+	if cause != nil {
+		attributes = append(attributes, "reason", cause.Error())
+	}
+	s.logger.Warn("provider response could not be returned to the caller", attributes...)
+	return gatewayError("provider_error", message, 502, cause)
 }

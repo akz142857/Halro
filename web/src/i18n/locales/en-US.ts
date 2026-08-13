@@ -47,7 +47,7 @@ export const enUS = {
   },
   notifications: { region: "System notifications", dismiss: "Dismiss notification" },
   testControl: { idle: "Not tested", running: "Testing…", successPlain: "Passed", success: "Passed · {{latency}}ms", failure: "Failed", stale: "Retest needed",
-    reasons: { authentication: "The upstream rejected this credential (authentication or authorization failed)", rate_limit: "The upstream is rate limiting; retry later", timeout: "Timed out waiting for the upstream", provider_5xx: "The upstream returned a server error", bad_request: "The upstream rejected the probe request", connect: "Could not connect to the upstream (DNS, TLS or network)", malformed_response: "The upstream response could not be parsed", unknown: "The connection test failed for an unclassified reason" } },
+    reasons: { authentication: "The upstream rejected this credential (authentication or authorization failed)", rate_limit: "The upstream is rate limiting; retry later", timeout: "Timed out waiting for the upstream", provider_5xx: "The upstream returned a server error", bad_request: "The upstream rejected the probe request", bad_request_local: "Halro refused this probe before sending it upstream", connect: "Could not connect to the upstream (DNS, TLS or network)", malformed_response: "The upstream response could not be parsed", unknown: "The connection test failed for an unclassified reason" } },
   errors: {
     badRequest: "The request is invalid. Check the values and try again.",
     authentication: "Your session is invalid or expired. Sign in again.",
@@ -669,7 +669,7 @@ export const enUS = {
     httpError: "Upstream HTTP", routeFallback: "Route fallback occurred", requestRetry: "Request retry occurred", unknownContext: "Context unavailable",
   },
   capabilities: {
-    chat: "Chat", streaming: "Streaming", embeddings: "Embeddings", moderations: "Moderations", images: "Images", transcriptions: "Transcriptions", speech: "Speech", files: "Files", batches: "Batches", rerank: "Rerank", async_generate: "Async generation", tools: "Tools", vision: "Vision", json_mode: "JSON mode", developer_role: "Developer role", reasoning: "Reasoning", stream_usage: "Stream usage",
+    chat: "Chat", streaming: "Streaming", embeddings: "Embeddings", moderations: "Moderations", images: "Images", transcriptions: "Transcriptions", speech: "Speech", files: "Files", batches: "Batches", rerank: "Rerank", async_generate: "Async generation", tools: "Tools", vision: "Vision", json_mode: "JSON mode", developer_role: "Developer role", reasoning: "Reasoning", stream_usage: "Stream usage", provider_executed_tools: "Provider-executed tools",
   },
   usage: {
     eyebrow: "Durable accounting", title: "Usage & Requests", description: "Project, model, tokens, cost, and terminal state for every provider attempt, with filters across all of them.",
@@ -885,6 +885,10 @@ export const enUS = {
     validationCredentialBaseURL: "Does not match the base URL",
     validationCapabilityRequired: "Enable at least one capability, otherwise no deployment can route to this provider.",
     validationProjectFormat: "Must be proj_ followed by letters and digits, as issued by AWS. Leave it empty to use the account default project.",
+    validationBetaTooMany: "At most {{max}} beta tokens can be allowed on one connection.",
+    validationBetaTooLong: "Each beta token must be at most {{max}} characters.",
+    validationBetaCharset: "Beta tokens use lowercase letters, digits, dashes, dots, and underscores only.",
+    validationBetaDuplicate: "Each beta token can only be listed once.",
     validationProjectWorkspace: "This is a Claude Platform on AWS workspace identifier (wrkspc_), which belongs to a different service and is not accepted here.",
     validationProjectTooLong: "Must be at most {{max}} characters.",
     openAIProfiles: { chat: "Chat Completions", media: "Media and resources" },

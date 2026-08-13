@@ -430,6 +430,7 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 			PricingClockRollbackTolerance: cfg.Gateway.PricingClockRollbackTolerance.Value(),
 			PricingClockForwardTolerance:  cfg.Gateway.PricingClockForwardTolerance.Value(),
 			PricingUnknownPolicy:          cfg.Gateway.PricingUnknownPolicy,
+			Logger:                        logger,
 		},
 	)
 	if err != nil {
@@ -1327,6 +1328,7 @@ func (r *Runtime) gatewayRouter() http.Handler {
 		guarded.Use(r.gateway.LimitAnthropic)
 		guarded.Use(r.gateway.GuardAnthropic)
 		guarded.Post("/v1/messages", r.gateway.Messages)
+		guarded.Post("/v1/messages/count_tokens", r.gateway.CountTokens)
 	})
 	router.Get("/", func(writer http.ResponseWriter, _ *http.Request) {
 		writeJSON(writer, http.StatusOK, map[string]any{

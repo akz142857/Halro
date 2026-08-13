@@ -11,7 +11,7 @@ const emptyCapabilities: ProviderCapabilities = {
   chat: false, streaming: false, embeddings: false, moderations: false, images: false,
   transcriptions: false, speech: false, files: false, batches: false, rerank: false,
   async_generate: false, tools: false, vision: false, json_mode: false,
-  developer_role: false, reasoning: false, stream_usage: false,
+  developer_role: false, reasoning: false, stream_usage: false, provider_executed_tools: false,
   max_context_tokens: 0, max_output_tokens: 0,
 };
 
