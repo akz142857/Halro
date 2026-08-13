@@ -83,7 +83,21 @@ type FileDeleteResult struct {
 }
 type BatchCreateCall struct {
 	RequestID, InputFileID, Endpoint, CompletionWindow string
-	Metadata                                           map[string]string
+	// ProviderModel is the upstream model the batch runs against. An upstream
+	// that reads the model from each line of an uploaded file ignores it; one
+	// that is handed the requests inline needs it, because the lines carry the
+	// public alias the caller addressed and the upstream has never heard of it.
+	ProviderModel string
+	Metadata      map[string]string
+	// InputRequests carries the batch's input lines when the upstream has no
+	// copy of the file to refer to. An upstream whose batches are created from
+	// an uploaded file gets InputFileID and ignores this; one whose batches
+	// carry their requests inline has no file to name and needs the bytes.
+	//
+	// The gateway fills it exactly when the input file is local-only, which is
+	// the same condition: if the upstream was never given the file, the requests
+	// have to travel with the batch.
+	InputRequests []byte
 }
 type BatchObject struct {
 	ID               string            `json:"id"`
@@ -102,6 +116,19 @@ type BatchObject struct {
 	CancelledAt      int64             `json:"cancelled_at,omitempty"`
 	Metadata         map[string]string `json:"metadata,omitempty"`
 	RawErrors        json.RawMessage   `json:"errors,omitempty"`
+	// ResultsURL is where an upstream says a finished batch's results live. It
+	// never reaches the caller: it is the upstream's own address, and the
+	// northbound shape hands out an output_file_id instead. Halro uses it only
+	// to know results exist and to check that they are the ones this connection
+	// would have addressed.
+	ResultsURL string `json:"-"`
+}
+
+// BatchResultsAdapter is implemented by providers whose finished batches leave
+// their results somewhere Halro must collect, rather than as a file the caller
+// can already name. An upstream that returns an output file needs none of this.
+type BatchResultsAdapter interface {
+	FetchBatchResults(ctx context.Context, requestID, batchID, resultsURL string) ([]byte, error)
 }
 
 type ResourceInferenceResourcesAdapter interface {

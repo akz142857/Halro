@@ -69,7 +69,7 @@ func (m ProfileManifest) Validate() error {
 func profileAllowsPrimitive(profileID domain.ProviderProfileID, operation Operation, primitive Primitive) bool {
 	expected := map[domain.ProviderProfileID]map[Operation]Primitive{
 		domain.ProfileOpenAIChatEmbeddings:           {OperationChat: PrimitiveOpenAIChatCompletions, OperationChatStream: PrimitiveOpenAIChatStream, OperationEmbeddings: PrimitiveOpenAIEmbeddings},
-		domain.ProfileAnthropicMessages:              {OperationChat: PrimitiveAnthropicMessages, OperationChatStream: PrimitiveAnthropicMessagesStream, OperationMessages: PrimitiveAnthropicMessages, OperationMessagesStream: PrimitiveAnthropicMessagesStream},
+		domain.ProfileAnthropicMessages:              {OperationChat: PrimitiveAnthropicMessages, OperationChatStream: PrimitiveAnthropicMessagesStream, OperationMessages: PrimitiveAnthropicMessages, OperationMessagesStream: PrimitiveAnthropicMessagesStream, OperationFiles: PrimitiveHalroLocalFiles, OperationBatches: PrimitiveAnthropicMessageBatches},
 		domain.ProfileAzureChatEmbeddings:            {OperationChat: PrimitiveAzureChatCompletions, OperationChatStream: PrimitiveAzureChatStream, OperationEmbeddings: PrimitiveAzureEmbeddings},
 		domain.ProfileDeepSeekChat:                   {OperationChat: PrimitiveDeepSeekChat, OperationChatStream: PrimitiveDeepSeekChatStream},
 		domain.ProfileOpenAICompatible:               {OperationChat: PrimitiveCompatibleChat, OperationChatStream: PrimitiveCompatibleChatStream, OperationEmbeddings: PrimitiveCompatibleEmbeddings},
@@ -273,6 +273,20 @@ func (b *LegacyAdapterBridge) DeleteFile(ctx context.Context, requestID, id stri
 	}
 	return a.DeleteFile(ctx, requestID, id)
 }
+
+// FetchBatchResults forwards to an adapter that can collect a finished batch's
+// results. It exists on the bridge because everything reaches the gateway
+// wrapped in one: an optional interface asserted against the wrapper is an
+// assertion against the wrapper, which is how a criterion that could never fire
+// was nearly shipped once already.
+func (b *LegacyAdapterBridge) FetchBatchResults(ctx context.Context, requestID, batchID, resultsURL string) ([]byte, error) {
+	a, ok := b.Adapter.(BatchResultsAdapter)
+	if !ok {
+		return nil, errors.New("batch result collection is unavailable")
+	}
+	return a.FetchBatchResults(ctx, requestID, batchID, resultsURL)
+}
+
 func (b *LegacyAdapterBridge) CreateBatch(ctx context.Context, call BatchCreateCall) (BatchObject, error) {
 	a, ok := b.Adapter.(ResourceInferenceResourcesAdapter)
 	if !ok {
@@ -363,10 +377,17 @@ func BuiltinProfile(id domain.ProviderProfileID) (ProfileManifest, bool) {
 			PrimitiveBindings: []PrimitiveBinding{{OperationChat, semantic.OperationGenerate, PrimitiveOpenAIChatCompletions}, {OperationChatStream, semantic.OperationGenerate, PrimitiveOpenAIChatStream}, {OperationEmbeddings, semantic.OperationEmbed, PrimitiveOpenAIEmbeddings}},
 		},
 		domain.ProfileAnthropicMessages: {
-			ID: domain.ProfileAnthropicMessages, Revision: 1, ProviderType: domain.ProviderAnthropic,
+			ID: domain.ProfileAnthropicMessages, Revision: 2, ProviderType: domain.ProviderAnthropic,
 			AccessSurface: domain.SurfaceAnthropic, CredentialScheme: domain.CredentialAnthropicAPIKey,
-			Operations:        []Operation{OperationChat, OperationChatStream, OperationMessages, OperationMessagesStream},
-			PrimitiveBindings: []PrimitiveBinding{{OperationChat, semantic.OperationGenerate, PrimitiveAnthropicMessages}, {OperationChatStream, semantic.OperationGenerate, PrimitiveAnthropicMessagesStream}, {OperationMessages, semantic.OperationGenerate, PrimitiveAnthropicMessages}, {OperationMessagesStream, semantic.OperationGenerate, PrimitiveAnthropicMessagesStream}},
+			// Files are declared and served locally. Anthropic batches carry their
+			// requests inline and refer to no file, so the upload exists to give
+			// the caller something to name in the OpenAI-shaped batch request —
+			// Halro keeps the bytes and Anthropic is never told about them
+			// (ADR 0021). Declaring the operation is what makes the file
+			// addressable at all: CreateFile routes by operation, so without it
+			// there is no Anthropic deployment to upload to.
+			Operations:        []Operation{OperationChat, OperationChatStream, OperationMessages, OperationMessagesStream, OperationFiles, OperationBatches},
+			PrimitiveBindings: []PrimitiveBinding{{OperationChat, semantic.OperationGenerate, PrimitiveAnthropicMessages}, {OperationChatStream, semantic.OperationGenerate, PrimitiveAnthropicMessagesStream}, {OperationMessages, semantic.OperationGenerate, PrimitiveAnthropicMessages}, {OperationMessagesStream, semantic.OperationGenerate, PrimitiveAnthropicMessagesStream}, {OperationFiles, semantic.OperationFile, PrimitiveHalroLocalFiles}, {OperationBatches, semantic.OperationBatch, PrimitiveAnthropicMessageBatches}},
 		},
 		domain.ProfileAzureChatEmbeddings: {
 			ID: domain.ProfileAzureChatEmbeddings, Revision: 1, ProviderType: domain.ProviderAzureOpenAI,

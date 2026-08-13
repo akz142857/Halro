@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -185,6 +186,7 @@ type inferenceResourcesServiceFixture struct {
 	project   domain.Project
 	state     *ledger.State
 	store     *inferenceResourcesMemoryStore
+	objectDir string
 	close     func()
 }
 
@@ -243,7 +245,7 @@ func newInferenceResourcesServiceFixture(t *testing.T, profileID domain.Provider
 	if err != nil {
 		t.Fatal(err)
 	}
-	return inferenceResourcesServiceFixture{service: service, plaintext: plaintext, project: project, state: state, store: store, close: func() { _ = log.Close() }}
+	return inferenceResourcesServiceFixture{service: service, plaintext: plaintext, project: project, state: state, store: store, objectDir: objectDir, close: func() { _ = log.Close() }}
 }
 
 func inferenceResourcesTargetFor(model string, adapter provider.Adapter) provider.Target {
@@ -579,5 +581,351 @@ func TestInferenceResourcesInFlightCrashIsNotReclaimed(t *testing.T) {
 	}
 	if adapter.fileCalls != 1 {
 		t.Fatalf("provider calls=%d, want 1", adapter.fileCalls)
+	}
+}
+
+// A batch names three files, and only one of them was ever translated. The batch
+// itself got a Halro identifier while input_file_id, output_file_id and
+// error_file_id went back to the caller exactly as the upstream wrote them —
+// leaking an upstream identifier through a surface whose manifest promises
+// project-scoped opaque ones, and handing the caller identifiers that answer 404
+// against Halro's own files endpoint. The documented way to collect a batch's
+// results did not work.
+func TestBatchNamesItsFilesWithHalroIdentifiers(t *testing.T) {
+	adapter := &inferenceResourcesAdapter{providerType: string(domain.ProviderOpenAI)}
+	f := newInferenceResourcesServiceFixture(t, domain.ProfileOpenAIMediaResources, adapter, inferenceResourcesTargetFor("resources", adapter), nil)
+	defer f.close()
+	now := time.Now()
+	batch := domain.ProviderResource{
+		ID: "batch-owned", Kind: domain.ResourceBatch, ProjectID: f.project.ID,
+		ProviderID: "inferenceResources-provider", DeploymentID: "inferenceResources-deployment",
+		PublicModel: "resources", ProfileID: domain.ProfileOpenAIMediaResources, Region: "us-east-1",
+		UpstreamID: "upstream-batch", InputFileID: "file_halro_input",
+		CreationStatus: "completed", Status: "in_progress",
+		CreatedAt: now.Add(-time.Hour), UpdatedAt: now, ExpiresAt: now.Add(time.Hour), Revision: 1,
+	}
+	f.store.resources[batch.ID] = batch
+	adapter.batch = provider.BatchObject{
+		ID: "upstream-batch", Object: "batch", Status: "completed",
+		InputFileID: "file-upstream-input", OutputFileID: "file-upstream-output", ErrorFileID: "file-upstream-errors",
+	}
+
+	result, err := f.service.GetBatch(context.Background(), f.plaintext, batch.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ID != batch.ID {
+		t.Fatalf("batch id=%q", result.ID)
+	}
+	if result.InputFileID != "file_halro_input" {
+		t.Fatalf("input_file_id=%q, want the identifier the caller supplied", result.InputFileID)
+	}
+	for name, value := range map[string]string{"output_file_id": result.OutputFileID, "error_file_id": result.ErrorFileID} {
+		if value == "" {
+			t.Fatalf("%s was dropped", name)
+		}
+		if strings.HasPrefix(value, "file-upstream") {
+			t.Fatalf("%s=%q is the upstream's own identifier", name, value)
+		}
+		// The translated identifier has to resolve in this project, which is the
+		// whole point: an identifier the caller cannot use is no better than the
+		// upstream's.
+		resolved, ok := f.store.resources[value]
+		if !ok || resolved.ProjectID != f.project.ID || resolved.Kind != domain.ResourceFile {
+			t.Fatalf("%s=%q does not resolve to a file in this project: %#v", name, value, resolved)
+		}
+	}
+
+	// A batch is polled. The second look must reuse the identifiers minted by the
+	// first, or every poll leaves another record behind for one upstream file.
+	before := len(f.store.resources)
+	second, err := f.service.GetBatch(context.Background(), f.plaintext, batch.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.OutputFileID != result.OutputFileID || second.ErrorFileID != result.ErrorFileID {
+		t.Fatalf("polling minted new identifiers: %q/%q then %q/%q",
+			result.OutputFileID, result.ErrorFileID, second.OutputFileID, second.ErrorFileID)
+	}
+	if len(f.store.resources) != before {
+		t.Fatalf("polling created %d extra resource records", len(f.store.resources)-before)
+	}
+}
+
+// A batch record written before the file identifiers were recorded carries none
+// of them. It answers with the fields absent rather than with the upstream's
+// values: not knowing is a worse answer than knowing and a better one than
+// being wrong.
+func TestBatchWithoutRecordedFilesDoesNotFallBackToUpstreamIdentifiers(t *testing.T) {
+	adapter := &inferenceResourcesAdapter{providerType: string(domain.ProviderOpenAI)}
+	f := newInferenceResourcesServiceFixture(t, domain.ProfileOpenAIMediaResources, adapter, inferenceResourcesTargetFor("resources", adapter), nil)
+	defer f.close()
+	now := time.Now()
+	batch := domain.ProviderResource{
+		ID: "batch-legacy", Kind: domain.ResourceBatch, ProjectID: f.project.ID,
+		ProviderID: "inferenceResources-provider", DeploymentID: "inferenceResources-deployment",
+		PublicModel: "resources", ProfileID: domain.ProfileOpenAIMediaResources, Region: "us-east-1",
+		UpstreamID: "upstream-batch", CreationStatus: "completed", Status: "in_progress",
+		CreatedAt: now.Add(-time.Hour), UpdatedAt: now, ExpiresAt: now.Add(time.Hour), Revision: 1,
+	}
+	f.store.resources[batch.ID] = batch
+	adapter.batch = provider.BatchObject{ID: "upstream-batch", Object: "batch", Status: "in_progress", InputFileID: "file-upstream-input"}
+
+	result, err := f.service.GetBatch(context.Background(), f.plaintext, batch.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.InputFileID != "" {
+		t.Fatalf("input_file_id=%q, want it absent rather than the upstream's", result.InputFileID)
+	}
+}
+
+// A file Halro holds and the upstream never received has to be answerable
+// without asking anyone. Every lifecycle path used to assume the opposite —
+// metadata was fetched from the upstream, expiry deleted there first — which
+// made the resource unusable rather than merely unusual. ADR 0021 settles that
+// an empty UpstreamID is an ordinary state.
+//
+// The assertion that matters is the call count: not that the answers are right,
+// but that no upstream was contacted to produce them.
+func TestLocalOnlyFileIsServedAndReapedWithoutTouchingTheUpstream(t *testing.T) {
+	adapter := &inferenceResourcesAdapter{providerType: string(domain.ProviderOpenAI)}
+	f := newInferenceResourcesServiceFixture(t, domain.ProfileOpenAIMediaResources, adapter, inferenceResourcesTargetFor("resources", adapter), nil)
+	defer f.close()
+	now := time.Now()
+
+	objectPath, err := f.service.writeResourceObject("file-local", []byte("{\"custom_id\":\"a\"}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	local := domain.ProviderResource{
+		ID: "file-local", Kind: domain.ResourceFile, ProjectID: f.project.ID,
+		ProviderID: "inferenceResources-provider", DeploymentID: "inferenceResources-deployment",
+		PublicModel: "resources", ProfileID: domain.ProfileOpenAIMediaResources, Region: "us-east-1",
+		UpstreamID: "", ObjectPath: objectPath, ObjectContentType: "application/jsonl",
+		ObjectFilename: "batch-input.jsonl", ObjectPurpose: "batch",
+		CreationStatus: "completed", Status: "uploaded",
+		CreatedAt: now.Add(-time.Hour), UpdatedAt: now, ExpiresAt: now.Add(-time.Minute), Revision: 1,
+	}
+	f.store.resources[local.ID] = local
+
+	object, err := f.service.GetFile(context.Background(), f.plaintext, local.ID)
+	if err != nil {
+		t.Fatalf("metadata for a local-only file: %v", err)
+	}
+	if object.ID != local.ID || object.Filename != "batch-input.jsonl" || object.Purpose != "batch" {
+		t.Fatalf("metadata came back wrong: %#v", object)
+	}
+	if object.Bytes == 0 {
+		t.Fatal("metadata reported no size for an object that exists")
+	}
+	if adapter.getFileCalls != 0 {
+		t.Fatalf("the upstream was asked about a file it never received (%d calls)", adapter.getFileCalls)
+	}
+
+	content, err := f.service.DownloadFile(context.Background(), f.plaintext, local.ID)
+	if err != nil {
+		t.Fatalf("content for a local-only file: %v", err)
+	}
+	if len(content.Data) == 0 {
+		t.Fatal("content was empty")
+	}
+
+	// Interactive delete gets the same branch the reaper does. Slice 1 gave it to
+	// one and not the other, and the gap was invisible because the bridge that
+	// wraps every adapter satisfies the interface either way.
+	deleted, err := f.service.DeleteFile(context.Background(), f.plaintext, local.ID)
+	if err != nil {
+		t.Fatalf("interactive delete of a local-only file: %v", err)
+	}
+	if !deleted.Deleted || deleted.ID != local.ID {
+		t.Fatalf("delete result=%#v", deleted)
+	}
+	if adapter.deleteCalls != 0 {
+		t.Fatalf("interactive delete called the upstream for a file it never had (%d calls)", adapter.deleteCalls)
+	}
+	if _, present := f.store.resources[local.ID]; present {
+		t.Fatal("the record survived interactive delete")
+	}
+
+	// Re-create both the record and its object, so expiry cleanup is exercised
+	// against an object that is actually there. Left as it was, the interactive
+	// delete above would have removed it and the assertion below would pass
+	// against nothing.
+	if _, err := f.service.writeResourceObject("file-local", []byte("{\"custom_id\":\"a\"}\n")); err != nil {
+		t.Fatal(err)
+	}
+	f.store.resources[local.ID] = local
+	if err := f.service.CleanupExpiredProviderResource(context.Background(), f.store.resources[local.ID]); err != nil {
+		t.Fatalf("expiry cleanup: %v", err)
+	}
+	if adapter.deleteCalls != 0 {
+		t.Fatalf("expiry deleted upstream for a file the upstream never had (%d calls)", adapter.deleteCalls)
+	}
+	if _, present := f.store.resources[local.ID]; present {
+		t.Fatal("the record survived its own cleanup")
+	}
+	if _, statErr := os.Stat(filepath.Join(f.objectDir, objectPath)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("the local object survived cleanup: %v", statErr)
+	}
+}
+
+// Uploading to a profile whose files primitive is local keeps the bytes and
+// tells no upstream. The mode is the profile's declaration — not something read
+// off the adapter's shape, which cannot work: every adapter reaches the gateway
+// wrapped in a bridge that implements the file interface whatever it wraps.
+func TestLocalFilesPrimitiveKeepsTheUploadAndSkipsTheUpstream(t *testing.T) {
+	adapter := &inferenceResourcesAdapter{providerType: string(domain.ProviderAnthropic)}
+	target := inferenceResourcesTargetFor("batch-route", adapter)
+	f := newInferenceResourcesServiceFixture(t, domain.ProfileAnthropicMessages, adapter, target, nil)
+	defer f.close()
+
+	created, err := f.service.CreateFile(context.Background(), f.plaintext, "batch-route", "idem-local-1", provider.FileCreateCall{
+		Filename: "batch-input.jsonl", ContentType: "application/jsonl", Purpose: "batch",
+		Data: []byte("{\"custom_id\":\"a\"}\n"),
+	})
+	if err != nil {
+		t.Fatalf("local upload: %v", err)
+	}
+	if adapter.fileCalls != 0 {
+		t.Fatalf("the upstream was asked to store a file the profile serves locally (%d calls)", adapter.fileCalls)
+	}
+	if created.ID == "" || created.Filename != "batch-input.jsonl" {
+		t.Fatalf("upload result=%#v", created)
+	}
+
+	record, ok := f.store.resources[created.ID]
+	if !ok {
+		t.Fatal("the upload left no record")
+	}
+	if record.UpstreamID != "" {
+		t.Fatalf("a local upload recorded an upstream identifier %q", record.UpstreamID)
+	}
+	if record.ObjectPath == "" {
+		t.Fatal("a local upload stored no object")
+	}
+	if record.CreationStatus != creationCompleted {
+		t.Fatalf("creation status=%q", record.CreationStatus)
+	}
+	// The bytes have to be readable back, since inlining them into a batch is
+	// the only reason this upload exists.
+	content, err := f.service.DownloadFile(context.Background(), f.plaintext, created.ID)
+	if err != nil {
+		t.Fatalf("reading a local upload back: %v", err)
+	}
+	if string(content.Data) != "{\"custom_id\":\"a\"}\n" {
+		t.Fatalf("content came back as %q", content.Data)
+	}
+}
+
+// batchResultsAdapter is an upstream that leaves its finished results somewhere
+// Halro has to collect, rather than handing over a file the caller can name.
+type batchResultsAdapter struct {
+	inferenceResourcesAdapter
+	results     []byte
+	fetchCalls  int
+	seenResults string
+}
+
+func (a *batchResultsAdapter) FetchBatchResults(_ context.Context, _, _, resultsURL string) ([]byte, error) {
+	a.fetchCalls++
+	a.seenResults = resultsURL
+	return a.results, nil
+}
+
+// Results are model output travelling outbound, and storing them writes a
+// response body outside its one-time response path. Redaction has to happen
+// before any of it reaches disk: redacting on the way out instead would leave
+// the unredacted copy sitting in the object directory.
+func TestBatchResultsAreRedactedBeforeTheyAreStored(t *testing.T) {
+	policy := domain.RedactionPolicy{
+		ID: "batch-outbound", Name: "outbound", Enabled: true, Mode: "strict",
+		Rules: []domain.RedactionRule{{ID: "email-out", Name: "email", Kind: "builtin", Builtin: "email", Scopes: []string{"outbound"}, Action: "reject", Enabled: true}},
+	}
+	adapter := &batchResultsAdapter{
+		inferenceResourcesAdapter: inferenceResourcesAdapter{providerType: string(domain.ProviderAnthropic)},
+		results:                   []byte(`{"custom_id":"a","response":{"status_code":200,"body":{"choices":[{"message":{"content":"private@example.com"}}]}}}` + "\n"),
+	}
+	f := newInferenceResourcesServiceFixture(t, domain.ProfileAnthropicMessages, adapter, inferenceResourcesTargetFor("resources", adapter), []domain.RedactionPolicy{policy})
+	defer f.close()
+	now := time.Now()
+	batch := domain.ProviderResource{
+		ID: "batch-results", Kind: domain.ResourceBatch, ProjectID: f.project.ID,
+		ProviderID: "inferenceResources-provider", DeploymentID: "inferenceResources-deployment",
+		PublicModel: "resources", ProfileID: domain.ProfileAnthropicMessages, Region: "us-east-1",
+		UpstreamID: "msgbatch_1", CreationStatus: "completed", Status: "in_progress",
+		CreatedAt: now.Add(-time.Hour), UpdatedAt: now, ExpiresAt: now.Add(time.Hour), Revision: 1,
+	}
+	f.store.resources[batch.ID] = batch
+	adapter.batch = provider.BatchObject{
+		ID: "msgbatch_1", Object: "batch", Status: "completed",
+		ResultsURL: "https://api.anthropic.com/v1/messages/batches/msgbatch_1/results",
+	}
+
+	_, err := f.service.GetBatch(context.Background(), f.plaintext, batch.ID)
+	if err == nil {
+		t.Fatal("results carrying material the policy rejects were stored anyway")
+	}
+	assertGatewayCode(t, err, "sensitive_data_detected")
+	// Nothing may have been written: the point of redacting first is that the
+	// rejected bytes never reach the object directory.
+	entries, readErr := os.ReadDir(f.objectDir)
+	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+		t.Fatal(readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("%d object(s) were written before redaction refused them", len(entries))
+	}
+}
+
+// A batch is polled. Fetching the results again on every poll would re-download
+// the whole file and mint a new one each time.
+func TestBatchResultsAreFetchedOnceAndThenNamed(t *testing.T) {
+	adapter := &batchResultsAdapter{
+		inferenceResourcesAdapter: inferenceResourcesAdapter{providerType: string(domain.ProviderAnthropic)},
+		results:                   []byte(`{"custom_id":"a","response":{"status_code":200,"body":{"choices":[]}}}` + "\n"),
+	}
+	f := newInferenceResourcesServiceFixture(t, domain.ProfileAnthropicMessages, adapter, inferenceResourcesTargetFor("resources", adapter), nil)
+	defer f.close()
+	now := time.Now()
+	batch := domain.ProviderResource{
+		ID: "batch-once", Kind: domain.ResourceBatch, ProjectID: f.project.ID,
+		ProviderID: "inferenceResources-provider", DeploymentID: "inferenceResources-deployment",
+		PublicModel: "resources", ProfileID: domain.ProfileAnthropicMessages, Region: "us-east-1",
+		UpstreamID: "msgbatch_1", CreationStatus: "completed", Status: "in_progress",
+		CreatedAt: now.Add(-time.Hour), UpdatedAt: now, ExpiresAt: now.Add(time.Hour), Revision: 1,
+	}
+	f.store.resources[batch.ID] = batch
+	adapter.batch = provider.BatchObject{
+		ID: "msgbatch_1", Object: "batch", Status: "completed",
+		ResultsURL: "https://api.anthropic.com/v1/messages/batches/msgbatch_1/results",
+	}
+
+	first, err := f.service.GetBatch(context.Background(), f.plaintext, batch.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.OutputFileID == "" {
+		t.Fatal("the collected results were not named")
+	}
+	// The caller can download what was named — an identifier that resolves to
+	// nothing is no better than none.
+	content, err := f.service.DownloadFile(context.Background(), f.plaintext, first.OutputFileID)
+	if err != nil {
+		t.Fatalf("downloading the results: %v", err)
+	}
+	if len(content.Data) == 0 {
+		t.Fatal("the results file was empty")
+	}
+
+	second, err := f.service.GetBatch(context.Background(), f.plaintext, batch.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.OutputFileID != first.OutputFileID {
+		t.Fatalf("polling named a different file: %q then %q", first.OutputFileID, second.OutputFileID)
+	}
+	if adapter.fetchCalls != 1 {
+		t.Fatalf("results were fetched %d times", adapter.fetchCalls)
 	}
 }

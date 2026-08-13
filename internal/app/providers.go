@@ -638,7 +638,7 @@ func newProviderBindingAdapterWithClient(instance domain.ProviderInstance, bindi
 	case domain.ProviderAnthropic:
 		authorizer, err = provider.NewStaticHeaderAuthorizer(binding.CredentialScheme, "x-api-key", "", plaintext, "Authorization")
 		if err == nil {
-			adapter, err = anthropicprovider.New(anthropicprovider.Options{Endpoint: endpoint, Authorizer: authorizer, Client: client, Capabilities: capabilities})
+			adapter, err = anthropicprovider.New(anthropicprovider.Options{Endpoint: endpoint, Authorizer: authorizer, Client: client, Capabilities: capabilities, ProfileID: binding.ProfileID})
 		}
 	case domain.ProviderAzureOpenAI:
 		authorizer, err = provider.NewStaticHeaderAuthorizer(binding.CredentialScheme, "api-key", "", plaintext, "Authorization")
@@ -679,7 +679,7 @@ func newProviderBindingAdapterWithClient(instance domain.ProviderInstance, bindi
 				authorizer, err = provider.NewStaticHeaderAuthorizer(binding.CredentialScheme, "x-api-key", "", plaintext, "Authorization", "api-key")
 			}
 			if err == nil {
-				adapter, err = anthropicprovider.New(anthropicprovider.Options{Endpoint: endpoint, Authorizer: authorizer, Client: client, Capabilities: capabilities, ProviderType: string(domain.ProviderBedrock), CredentialScheme: binding.CredentialScheme, MessagesPath: "anthropic/v1/messages", BedrockProjectID: instance.BedrockProjectID})
+				adapter, err = anthropicprovider.New(anthropicprovider.Options{Endpoint: endpoint, Authorizer: authorizer, Client: client, Capabilities: capabilities, ProviderType: string(domain.ProviderBedrock), CredentialScheme: binding.CredentialScheme, MessagesPath: "anthropic/v1/messages", BedrockProjectID: instance.BedrockProjectID, ProfileID: binding.ProfileID})
 			}
 		default:
 			err = errors.New("Bedrock provider profile is not implemented")

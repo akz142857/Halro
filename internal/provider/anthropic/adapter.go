@@ -31,7 +31,11 @@ type Options struct {
 	Capabilities     provider.Capabilities
 	ProviderType     string
 	CredentialScheme domain.CredentialScheme
-	MessagesPath     string
+	// ProfileID is the provider profile this adapter was built for. Batch input
+	// is checked against it line by line, because a batch is routed once for
+	// many requests and nothing else will look at them.
+	ProfileID    domain.ProviderProfileID
+	MessagesPath string
 	// BedrockProjectID is empty for Anthropic's own API, which has no such
 	// concept, and for a Bedrock Mantle provider that addresses the account's
 	// default project.
@@ -46,6 +50,7 @@ type Adapter struct {
 	providerType     string
 	messagesPath     string
 	bedrockProjectID string
+	profileID        domain.ProviderProfileID
 }
 
 func New(options Options) (*Adapter, error) {
@@ -63,10 +68,14 @@ func New(options Options) (*Adapter, error) {
 	if providerType == "" {
 		providerType = string(domain.ProviderAnthropic)
 	}
+	profileID := options.ProfileID
+	if profileID == "" {
+		profileID = domain.ProfileAnthropicMessages
+	}
 	return &Adapter{
 		endpoint: options.Endpoint, authorizer: options.Authorizer, client: options.Client,
 		capabilities: options.Capabilities, providerType: providerType, messagesPath: options.MessagesPath,
-		bedrockProjectID: options.BedrockProjectID,
+		bedrockProjectID: options.BedrockProjectID, profileID: profileID,
 	}, nil
 }
 

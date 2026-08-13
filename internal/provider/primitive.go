@@ -49,6 +49,30 @@ const (
 	PrimitiveBedrockMantleOpenAIResponsesStream   Primitive = "bedrock.mantle.openai.responses.stream"
 	PrimitiveBedrockMantleAnthropicMessages       Primitive = "bedrock.mantle.anthropic.messages"
 	PrimitiveBedrockMantleAnthropicMessagesStream Primitive = "bedrock.mantle.anthropic.messages.stream"
+
+	// PrimitiveHalroLocalFiles is a file operation with no southbound call at
+	// all: Halro stores the bytes and the upstream is never told they exist.
+	//
+	// It is a Primitive rather than a flag because a Primitive is exactly the
+	// question "which provider API serves this operation", and "none, Halro
+	// serves it" is an answer to that question. Saying it here means the profile
+	// declares it, profileAllowsPrimitive checks it, and Validate refuses a
+	// profile that binds it without meaning to — a claim that fails at load
+	// rather than a behaviour inferred at request time.
+	//
+	// The alternative considered and rejected was inferring the mode from a
+	// missing Go interface. Three independent reviewers found the same fatal
+	// flaw: every adapter reaches the gateway wrapped in LegacyAdapterBridge,
+	// which implements the file interface unconditionally, so the inference is
+	// dead code in production while unit tests that register bare fakes see it
+	// work. It also cannot tell "deliberately local" from "not implemented yet",
+	// which turns a wiring defect into silent non-delivery.
+	PrimitiveHalroLocalFiles Primitive = "halro.local-files"
+
+	// PrimitiveAnthropicMessageBatches is Anthropic's own batch API. Its requests
+	// are inline, which is why the file beside it is local: there is nothing to
+	// upload them to.
+	PrimitiveAnthropicMessageBatches Primitive = "anthropic.messages.batches"
 )
 
 type PrimitiveBinding struct {

@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/openaiapi"
+	"github.com/akz142857/Halro/internal/semantic"
 )
 
 func TestBuiltinProfilesAreValidAndReturnedAsCopies(t *testing.T) {
@@ -204,3 +206,51 @@ type typedRegistryAdapter struct {
 
 func (a *typedRegistryAdapter) Type() string                        { return a.providerType }
 func (a *typedRegistryAdapter) Probe(context.Context, string) error { return nil }
+
+// The rejected design inferred "this profile stores files locally" from a Go
+// interface not being implemented. It could never have worked, and the reason is
+// worth keeping executable: every adapter reaches the gateway wrapped in
+// LegacyAdapterBridge, and the bridge implements the file interface
+// unconditionally. The inference would have been dead code in production while
+// unit tests registering bare fakes watched it behave.
+//
+// This asserts the fact that killed it, so nobody rebuilds the same inference
+// on the assumption that a bare adapter is what the gateway sees.
+func TestBridgeSatisfiesTheResourceInterfaceWhateverItWraps(t *testing.T) {
+	manifest, ok := BuiltinProfile(domain.ProfileAnthropicMessages)
+	if !ok {
+		t.Fatal("the Anthropic profile is not registered")
+	}
+	// An adapter with no file methods at all — the case the rejected inference
+	// believed it could detect.
+	bridge, err := NewLegacyAdapterBridge(&bridgeProbeAdapter{}, manifest,
+		domain.EvidenceForCapabilities(domain.ProviderCapabilities{Chat: true}, domain.EvidenceDeclared))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, isResourceAdapter := any(bridge).(ResourceInferenceResourcesAdapter); !isResourceAdapter {
+		t.Fatal("the bridge stopped satisfying the resource interface; the rejected inference would now appear to work")
+	}
+	// The same fact from the other direction: an optional capability the bridge
+	// does not forward is invisible to the gateway, because the gateway only
+	// ever holds the bridge. Adding one without teaching the bridge about it
+	// produces a feature that works in a unit test holding a bare adapter and
+	// never fires in production.
+	if _, collectsResults := any(bridge).(BatchResultsAdapter); !collectsResults {
+		t.Fatal("the bridge does not forward batch result collection, so no adapter can offer it")
+	}
+}
+
+type bridgeProbeAdapter struct{}
+
+func (*bridgeProbeAdapter) Type() string { return string(domain.ProviderAnthropic) }
+func (*bridgeProbeAdapter) Close()       {}
+func (*bridgeProbeAdapter) Chat(context.Context, ChatCall) (openaiapi.ChatCompletionResponse, error) {
+	return openaiapi.ChatCompletionResponse{}, nil
+}
+func (*bridgeProbeAdapter) ChatStream(context.Context, ChatCall, func(semantic.Event) error) (*openaiapi.Usage, error) {
+	return nil, nil
+}
+func (*bridgeProbeAdapter) Embed(context.Context, EmbeddingCall) (openaiapi.EmbeddingResponse, error) {
+	return openaiapi.EmbeddingResponse{}, nil
+}

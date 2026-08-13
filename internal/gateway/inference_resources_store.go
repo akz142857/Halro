@@ -1,6 +1,8 @@
 package gateway
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -208,9 +210,22 @@ func (s *Service) CreateFile(ctx context.Context, key, route, idempotencyKey str
 		return provider.FileObject{}, gatewayError("ambiguous_resource_route", "file creation requires exactly one eligible deployment", 409, nil)
 	}
 	target := targets[0]
-	adapter, ok := target.Adapter.(provider.ResourceInferenceResourcesAdapter)
-	if !ok {
-		return provider.FileObject{}, gatewayError("unsupported_feature", "file adapter is unavailable", 400, nil)
+	// Whether this upload has a southbound call is the profile's declaration,
+	// not something inferred from the adapter's shape. PrimitiveHalroLocalFiles
+	// means Halro keeps the bytes and the upstream is never told; every other
+	// primitive means there is an upload to make and an adapter that must be
+	// able to make it.
+	localOnly := false
+	if resolved, ok := target.ResolveOperation(provider.OperationFiles); ok {
+		localOnly = resolved.ProviderPrimitive() == provider.PrimitiveHalroLocalFiles
+	}
+	var adapter provider.ResourceInferenceResourcesAdapter
+	if !localOnly {
+		resourceAdapter, ok := target.Adapter.(provider.ResourceInferenceResourcesAdapter)
+		if !ok {
+			return provider.FileObject{}, gatewayError("unsupported_feature", "file adapter is unavailable", 400, nil)
+		}
+		adapter = resourceAdapter
 	}
 	keyHash := sha256.Sum256([]byte(idempotencyKey))
 	fingerprint := sha256.Sum256(append(append([]byte(route+"\x00"+call.Purpose+"\x00"+call.Filename+"\x00"), call.Data...), []byte(call.ContentType)...))
@@ -239,14 +254,34 @@ func (s *Service) CreateFile(ctx context.Context, key, route, idempotencyKey str
 	if err != nil {
 		return provider.FileObject{}, gatewayError("idempotency_in_progress", "resource creation is already reserved", 409, err)
 	}
-	if record, err = s.markInFlight(ctx, record); err != nil {
-		return provider.FileObject{}, err
+	// in-flight means "the call may already have reached the upstream", which is
+	// what makes an interrupted attempt unreplayable and holds the idempotency
+	// key until the record expires. A local upload has no upstream to have
+	// reached: an interrupted one created nothing, so it stays reserved and the
+	// key stays reclaimable.
+	if !localOnly {
+		if record, err = s.markInFlight(ctx, record); err != nil {
+			return provider.FileObject{}, err
+		}
 	}
 	requestID := ""
 	call.RequestID = requestID
 	var upstream provider.FileObject
-	err = s.accountedInferenceResources(ctx, principal, route, target, int64(len(call.Data))/4+1, &requestID, func() error {
+	// A local upload is still metered — the envelope carries Token Guard, the
+	// limiters and the request record — but at one unit and no fixed price.
+	// Charging the upstream's per-byte rate for bytes that never left the host
+	// would bill a call that was never made.
+	units := int64(len(call.Data))/4 + 1
+	if localOnly {
+		units = 1
+		target.FixedRequestMicrosUSD = 0
+	}
+	err = s.accountedInferenceResources(ctx, principal, route, target, units, &requestID, func() error {
 		call.RequestID = requestID
+		if localOnly {
+			upstream = provider.FileObject{Object: "file", Bytes: int64(len(call.Data)), Filename: call.Filename, Purpose: call.Purpose, Status: "uploaded"}
+			return s.redactFileObject(principal.Project.RedactionPolicyID, &upstream)
+		}
 		var callErr error
 		upstream, callErr = adapter.CreateFile(ctx, call)
 		if callErr == nil {
@@ -255,9 +290,14 @@ func (s *Service) CreateFile(ctx context.Context, key, route, idempotencyKey str
 		return callErr
 	})
 	if err != nil {
-		record.CreationStatus = creationUnknown
-		record.UpdatedAt = s.now()
-		_, _ = s.resources.PutProviderResource(ctx, record, record.Revision)
+		// Unknown is for an outcome nobody can determine. A local failure is
+		// determinate — nothing was created — so the reservation is left as it
+		// is rather than being reported as ambiguous and freezing the key.
+		if !localOnly {
+			record.CreationStatus = creationUnknown
+			record.UpdatedAt = s.now()
+			_, _ = s.resources.PutProviderResource(ctx, record, record.Revision)
+		}
 		return provider.FileObject{}, err
 	}
 	record.UpstreamID = upstream.ID
@@ -270,6 +310,8 @@ func (s *Service) CreateFile(ctx context.Context, key, route, idempotencyKey str
 	}
 	record.ObjectPath = objectPath
 	record.ObjectContentType = call.ContentType
+	record.ObjectFilename = call.Filename
+	record.ObjectPurpose = call.Purpose
 	record.CreationStatus = creationCompleted
 	record.Status = upstream.Status
 	if record.Status == "" {
@@ -298,16 +340,93 @@ func (s *Service) fileOwner(ctx context.Context, key, idValue string) (auth.Auth
 	if err != nil {
 		return principal, resource, nil, err
 	}
+	// A file with no upstream twin needs an owner, not an adapter. Demanding one
+	// here would refuse the local paths before they are reached — every caller
+	// below branches on the empty UpstreamID, and none of them would get the
+	// chance. A nil adapter is safe precisely because those callers never use it.
+	if resource.UpstreamID == "" {
+		return principal, resource, nil, nil
+	}
 	adapter, ok := target.Adapter.(provider.ResourceInferenceResourcesAdapter)
 	if !ok {
 		return principal, resource, nil, gatewayError("resource_owner_unavailable", "file owner adapter is unavailable", 409, nil)
 	}
 	return principal, resource, adapter, nil
 }
+
+// localFileObject describes a file Halro holds and the upstream does not. The
+// record is the whole truth about it, so nothing is fetched.
+//
+// It still runs inside the accounting envelope at zero cost, the way every other
+// local read does. The envelope is not only about money: it is where Token
+// Guard, the rate limiters, the concurrency leases and the request record live.
+// Answering outside it would make this the one file operation a project could
+// poll without limit and without leaving a trace, which is a strange privilege
+// for the operation that happens to need no provider call.
+func (s *Service) localFileObject(ctx context.Context, principal auth.AuthResult, resource domain.ProviderResource) (provider.FileObject, error) {
+	size := int64(0)
+	if path, err := s.resourceObjectPath(resource.ObjectPath); err == nil {
+		if info, statErr := os.Stat(path); statErr == nil {
+			size = info.Size()
+		}
+	}
+	result := provider.FileObject{
+		ID: resource.ID, Object: "file", Bytes: size,
+		CreatedAt: resource.CreatedAt.Unix(), Filename: resource.ObjectFilename,
+		Purpose: resource.ObjectPurpose, Status: resource.Status,
+	}
+	target, err := s.ownedTarget(resource)
+	if err != nil {
+		return provider.FileObject{}, err
+	}
+	target.FixedRequestMicrosUSD = 0
+	requestID := ""
+	if err := s.accountedInferenceResources(ctx, principal, resource.PublicModel, target, 1, &requestID, func() error {
+		return s.redactFileObject(principal.Project.RedactionPolicyID, &result)
+	}); err != nil {
+		return provider.FileObject{}, err
+	}
+	return result, nil
+}
+
+// forgetLocalResource removes what Halro holds for a resource the upstream never
+// had. The object goes first: a record without its object is recoverable, an
+// object without its record is a file nothing can name or reap.
+func (s *Service) forgetLocalResource(ctx context.Context, resource domain.ProviderResource) error {
+	if path, pathErr := s.resourceObjectPath(resource.ObjectPath); pathErr == nil {
+		if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			return removeErr
+		}
+	}
+	return s.resources.DeleteProviderResource(ctx, resource.ProjectID, resource.ID)
+}
+
+// batchInputFile resolves a batch's input file for ownership alone. It is
+// fileOwner without the adapter requirement, because a batch whose provider
+// takes its requests inline needs the bytes rather than an upstream handle.
+func (s *Service) batchInputFile(ctx context.Context, key, idValue string) (auth.AuthResult, domain.ProviderResource, error) {
+	principal, err := s.resourcePrincipal(ctx, key)
+	if err != nil {
+		return principal, domain.ProviderResource{}, err
+	}
+	resource, err := s.resources.ProviderResource(ctx, principal.Project.ID, idValue)
+	if err != nil || resource.Kind != domain.ResourceFile {
+		return principal, resource, gatewayError("resource_not_found", "resource was not found", 404, err)
+	}
+	return principal, resource, nil
+}
+
 func (s *Service) GetFile(ctx context.Context, key, idValue string) (provider.FileObject, error) {
 	principal, resource, adapter, err := s.fileOwner(ctx, key, idValue)
 	if err != nil {
 		return provider.FileObject{}, err
+	}
+	// A file with no upstream twin is answered from the record. There is nothing
+	// to ask: Halro holds these bytes and the upstream was never told they
+	// exist. See ADR 0021 — an empty UpstreamID is an ordinary state, not a
+	// resource in a broken one.
+	if resource.UpstreamID == "" {
+		return s.localFileObject(ctx, principal, resource)
 	}
 	target, _ := s.ownedTarget(resource)
 	target.FixedRequestMicrosUSD = 0
@@ -332,6 +451,14 @@ func (s *Service) DownloadFile(ctx context.Context, key, idValue string) (provid
 	if err != nil {
 		return provider.FileContent{}, err
 	}
+	// A file produced by a batch has no local object: Halro never uploaded those
+	// bytes. Serving it means asking the upstream, which is bounded by the
+	// adapter's own response ceiling — the same ceiling every other provider
+	// response is read under. Nothing here decides to store large results; it
+	// declines to pretend the file is missing when the upstream still has it.
+	if resource.ObjectPath == "" {
+		return s.downloadUpstreamFile(ctx, principal, resource)
+	}
 	path, err := s.resourceObjectPath(resource.ObjectPath)
 	if err != nil {
 		return provider.FileContent{}, gatewayError("resource_store_unavailable", "file content is unavailable", 503, err)
@@ -351,6 +478,32 @@ func (s *Service) DownloadFile(ctx context.Context, key, idValue string) (provid
 	return provider.FileContent{Data: data, ContentType: resource.ObjectContentType}, nil
 }
 
+func (s *Service) downloadUpstreamFile(ctx context.Context, principal auth.AuthResult, resource domain.ProviderResource) (provider.FileContent, error) {
+	target, err := s.ownedTarget(resource)
+	if err != nil {
+		return provider.FileContent{}, err
+	}
+	adapter, ok := target.Adapter.(provider.ResourceInferenceResourcesAdapter)
+	if !ok {
+		return provider.FileContent{}, gatewayError("resource_owner_unavailable", "file owner adapter is unavailable", 409, nil)
+	}
+	if resource.UpstreamID == "" {
+		return provider.FileContent{}, gatewayError("resource_store_unavailable", "file content is unavailable", 503, nil)
+	}
+	target.FixedRequestMicrosUSD = 0
+	requestID := ""
+	var content provider.FileContent
+	err = s.accountedInferenceResources(ctx, principal, resource.PublicModel, target, 1, &requestID, func() error {
+		var callErr error
+		content, callErr = adapter.DownloadFile(ctx, requestID, resource.UpstreamID)
+		return callErr
+	})
+	if err != nil {
+		return provider.FileContent{}, err
+	}
+	return content, nil
+}
+
 func (s *Service) redactFileObject(policyID string, result *provider.FileObject) error {
 	var err error
 	result.Filename, err = s.redactor.ProcessText(policyID, "outbound", result.Filename)
@@ -366,6 +519,16 @@ func (s *Service) DeleteFile(ctx context.Context, key, idValue string) (provider
 		return provider.FileDeleteResult{}, err
 	}
 	result := provider.FileDeleteResult{ID: resource.ID, Object: "file", Deleted: true}
+	// Interactive delete needs the same branch expiry cleanup already has. Slice
+	// 1 gave it to the reaper and not to this path, which would have called the
+	// upstream with an empty identifier — a request nobody could answer, about a
+	// file it never had.
+	if resource.UpstreamID == "" {
+		if err := s.forgetLocalResource(ctx, resource); err != nil {
+			return provider.FileDeleteResult{}, gatewayError("resource_store_unavailable", "file could not be deleted", 503, err)
+		}
+		return result, nil
+	}
 	target, _ := s.ownedTarget(resource)
 	target.FixedRequestMicrosUSD = 0
 	freshDelete := resource.CleanupStatus == ""
@@ -442,6 +605,14 @@ func (s *Service) CleanupExpiredProviderResource(ctx context.Context, resource d
 	if resource.Kind != domain.ResourceFile {
 		return s.resources.DeleteProviderResource(ctx, resource.ProjectID, resource.ID)
 	}
+	// A file with no upstream twin skips the upstream half of the dance and goes
+	// straight to removing what Halro actually holds. Running the delete-confirm
+	// ladder against an upstream that never had the file would answer 404 and
+	// be read as "already gone", which is the right conclusion reached by
+	// asking a question that should not have been asked.
+	if resource.UpstreamID == "" {
+		return s.forgetLocalResource(ctx, resource)
+	}
 	target, err := s.ownedTarget(resource)
 	if err != nil {
 		return err
@@ -498,9 +669,38 @@ func (s *Service) CleanupExpiredProviderResource(ctx context.Context, resource d
 }
 
 func (s *Service) CreateBatch(ctx context.Context, key, idempotencyKey string, call provider.BatchCreateCall) (provider.BatchObject, error) {
-	principal, file, adapter, err := s.fileOwner(ctx, key, call.InputFileID)
+	// The input file is resolved for ownership, not for its adapter. A provider
+	// whose batches take their requests inline never receives the file at all,
+	// so requiring its owner to serve files would refuse the very providers this
+	// endpoint exists to reach (ADR 0021). What the batch needs from the file is
+	// that this project owns it and Halro holds its bytes.
+	principal, file, err := s.batchInputFile(ctx, key, call.InputFileID)
 	if err != nil {
 		return provider.BatchObject{}, err
+	}
+	batchTarget, err := s.ownedTarget(file)
+	if err != nil {
+		return provider.BatchObject{}, err
+	}
+	// An upstream that never received the file cannot be pointed at it, so the
+	// requests travel with the batch. Reading them here rather than in the
+	// adapter keeps the object directory the gateway's business: an adapter has
+	// no idea where Halro puts its bytes, and should not learn.
+	if file.UpstreamID == "" {
+		call.ProviderModel = batchTarget.ProviderModel
+		path, pathErr := s.resourceObjectPath(file.ObjectPath)
+		if pathErr != nil {
+			return provider.BatchObject{}, gatewayError("resource_store_unavailable", "batch input is unavailable", 503, pathErr)
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return provider.BatchObject{}, gatewayError("resource_store_unavailable", "batch input could not be read", 503, readErr)
+		}
+		call.InputRequests = data
+	}
+	adapter, ok := batchTarget.Adapter.(provider.ResourceInferenceResourcesAdapter)
+	if !ok {
+		return provider.BatchObject{}, gatewayError("unsupported_feature", "batch adapter is unavailable", 400, nil)
 	}
 	if err := idempotency.ValidateKey(idempotencyKey); err != nil {
 		return provider.BatchObject{}, gatewayError("invalid_idempotency_key", err.Error(), 400, err)
@@ -564,6 +764,7 @@ func (s *Service) CreateBatch(ctx context.Context, key, idempotencyKey string, c
 		return provider.BatchObject{}, err
 	}
 	record.UpstreamID = upstream.ID
+	record.InputFileID = file.ID
 	record.CreationStatus = creationCompleted
 	record.Status = upstream.Status
 	record.UpdatedAt = s.now()
@@ -574,6 +775,209 @@ func (s *Service) CreateBatch(ctx context.Context, key, idempotencyKey string, c
 	upstream.InputFileID = file.ID
 	return upstream, nil
 }
+
+// nameBatchFiles replaces the upstream's file identifiers with Halro's own
+// before a batch object is returned.
+//
+// The batch surface promises project-scoped opaque identifiers — the endpoint
+// manifest says so in as many words — and it was keeping that promise for the
+// batch itself and for nothing else. input_file_id, output_file_id and
+// error_file_id went back to the caller exactly as the upstream wrote them,
+// which leaked an upstream identifier and handed the caller something that
+// cannot be used: Halro's own files endpoint resolves identifiers in the
+// project's resource bucket, so an upstream file id answers 404 there. The
+// documented way to collect a batch's results did not work.
+//
+// The input file is named from the record, because the caller supplied it and
+// Halro already knows which one it was. The result files are named on first
+// sight and remembered, because a batch is polled and minting a new identifier
+// per poll would leave a trail of records for one upstream file.
+//
+// A record written before these fields existed carries none of them. Those
+// batches answer with the fields absent rather than with the upstream's values:
+// "not known here" is a worse answer than a correct one and a better answer
+// than a wrong one.
+// materialiseBatchResults turns an upstream's finished results into a file the
+// caller can download, for providers that leave them somewhere rather than
+// handing over a file.
+//
+// It runs while a batch is being read, not on a schedule. The fetch is bounded
+// by the adapter's response ceiling, so it is bounded in time as well, which is
+// what makes doing it inside a request acceptable — an unbounded fetch would
+// need a background pass and a second writer this data directory does not have.
+//
+// Once stored, the identifier is remembered on the batch, so polling collects
+// the same file rather than fetching it again.
+func (s *Service) materialiseBatchResults(ctx context.Context, principal auth.AuthResult, resource domain.ProviderResource, result *provider.BatchObject) (domain.ProviderResource, error) {
+	if resource.OutputFileID != "" || result.ResultsURL == "" {
+		return resource, nil
+	}
+	target, err := s.ownedTarget(resource)
+	if err != nil {
+		return resource, err
+	}
+	fetcher, ok := target.Adapter.(provider.BatchResultsAdapter)
+	if !ok {
+		return resource, nil
+	}
+	target.FixedRequestMicrosUSD = 0
+	requestID := ""
+	var raw []byte
+	if err := s.accountedInferenceResources(ctx, principal, resource.PublicModel, target, 1, &requestID, func() error {
+		var fetchErr error
+		raw, fetchErr = fetcher.FetchBatchResults(ctx, requestID, resource.UpstreamID, result.ResultsURL)
+		return fetchErr
+	}); err != nil {
+		return resource, err
+	}
+	// Results are model output travelling outbound, and storing them writes a
+	// response body outside its one-time response path. Every line goes through
+	// the project's outbound policy before any of it reaches disk — redacting on
+	// the way out instead would leave the unredacted copy sitting there.
+	redacted, err := s.redactBatchResults(principal.Project.RedactionPolicyID, raw)
+	if err != nil {
+		return resource, gatewayError("sensitive_data_detected", "batch results contain material this project may not receive", 502, err)
+	}
+	fileID, err := s.storeBatchResults(ctx, resource, redacted)
+	if err != nil {
+		return resource, err
+	}
+	updated := resource
+	updated.OutputFileID = fileID
+	updated.UpdatedAt = s.now()
+	stored, err := s.resources.PutProviderResource(ctx, updated, updated.Revision)
+	if err != nil {
+		// The file exists and can be named; only the memo failed. Returning the
+		// identifier is better than failing a poll, and the next poll re-fetches
+		// rather than losing it.
+		result.OutputFileID = fileID
+		return resource, nil
+	}
+	result.OutputFileID = fileID
+	return stored, nil
+}
+
+func (s *Service) redactBatchResults(policyID string, raw []byte) ([]byte, error) {
+	scanner := bufio.NewScanner(bytes.NewReader(raw))
+	scanner.Buffer(make([]byte, 0, 64<<10), 1<<20)
+	var out bytes.Buffer
+	for scanner.Scan() {
+		line := bytes.TrimSpace(scanner.Bytes())
+		if len(line) == 0 {
+			continue
+		}
+		processed, err := s.redactor.ProcessJSON(policyID, "outbound", append(json.RawMessage(nil), line...))
+		if err != nil {
+			return nil, err
+		}
+		out.Write(processed)
+		out.WriteByte('\n')
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
+}
+
+// storeBatchResults writes the results as a local-only file owned by the same
+// project and deployment as the batch. It has no upstream twin by construction:
+// the bytes were assembled here.
+func (s *Service) storeBatchResults(ctx context.Context, batch domain.ProviderResource, data []byte) (string, error) {
+	externalID, err := id.New("file")
+	if err != nil {
+		return "", gatewayError("internal_error", "unable to create resource ID", 500, err)
+	}
+	objectPath, err := s.writeResourceObject(externalID, data)
+	if err != nil {
+		return "", gatewayError("resource_store_unavailable", "batch results could not be stored", 503, err)
+	}
+	now := s.now()
+	record := domain.ProviderResource{
+		ID: externalID, Kind: domain.ResourceFile, ProjectID: batch.ProjectID,
+		ProviderID: batch.ProviderID, DeploymentID: batch.DeploymentID, PublicModel: batch.PublicModel,
+		ProfileID: batch.ProfileID, Region: batch.Region,
+		ObjectPath: objectPath, ObjectContentType: "application/jsonl",
+		ObjectFilename: externalID + ".jsonl", ObjectPurpose: "batch_output",
+		CreationStatus: creationCompleted, Status: "uploaded",
+		CreatedAt: now, UpdatedAt: now, ExpiresAt: batch.ExpiresAt,
+	}
+	if _, err := s.resources.PutProviderResource(ctx, record, 0); err != nil {
+		return "", gatewayError("resource_store_unavailable", "batch results could not be recorded", 503, err)
+	}
+	return externalID, nil
+}
+
+func (s *Service) nameBatchFiles(ctx context.Context, resource domain.ProviderResource, result *provider.BatchObject) (domain.ProviderResource, error) {
+	result.ID = resource.ID
+	result.InputFileID = resource.InputFileID
+	updated := resource
+	for _, file := range []struct {
+		upstream string
+		halro    *string
+		out      *string
+	}{
+		{result.OutputFileID, &updated.OutputFileID, &result.OutputFileID},
+		{result.ErrorFileID, &updated.ErrorFileID, &result.ErrorFileID},
+	} {
+		if file.upstream == "" {
+			// The upstream has not produced this file. Anything already recorded
+			// stays recorded; a batch does not un-produce a result.
+			*file.out = *file.halro
+			continue
+		}
+		if *file.halro == "" {
+			registered, err := s.registerUpstreamFile(ctx, resource, file.upstream)
+			if err != nil {
+				return resource, err
+			}
+			*file.halro = registered
+		}
+		*file.out = *file.halro
+	}
+	if updated.OutputFileID == resource.OutputFileID && updated.ErrorFileID == resource.ErrorFileID {
+		return resource, nil
+	}
+	updated.UpdatedAt = s.now()
+	stored, err := s.resources.PutProviderResource(ctx, updated, updated.Revision)
+	if err != nil {
+		// The files exist and the caller can be told about them; only the memo
+		// failed. Answering with the identifiers already minted is better than
+		// failing a poll, and the next poll re-registers rather than losing them.
+		return resource, nil
+	}
+	return stored, nil
+}
+
+// registerUpstreamFile gives an upstream file produced by a batch a Halro
+// identity, so it can be addressed through the files endpoint like any other.
+//
+// It has no local object: Halro never uploaded these bytes and does not hold
+// them. DownloadFile fetches them from the upstream on demand, under the
+// adapter's existing response ceiling, which is why this record can be created
+// without deciding anything about storing large results.
+func (s *Service) registerUpstreamFile(ctx context.Context, batch domain.ProviderResource, upstreamID string) (string, error) {
+	externalID, err := id.New("file")
+	if err != nil {
+		return "", gatewayError("internal_error", "unable to create resource ID", 500, err)
+	}
+	now := s.now()
+	record := domain.ProviderResource{
+		ID: externalID, Kind: domain.ResourceFile, ProjectID: batch.ProjectID,
+		ProviderID: batch.ProviderID, DeploymentID: batch.DeploymentID, PublicModel: batch.PublicModel,
+		ProfileID: batch.ProfileID, Region: batch.Region, UpstreamID: upstreamID,
+		CreationStatus: creationCompleted, Status: "uploaded",
+		CreatedAt: now, UpdatedAt: now,
+		// The results outlive the batch record that names them, so this borrows
+		// the batch's expiry rather than the file default: a file the caller can
+		// no longer reach through any batch has nothing left to be reached by.
+		ExpiresAt: batch.ExpiresAt,
+	}
+	if _, err := s.resources.PutProviderResource(ctx, record, 0); err != nil {
+		return "", gatewayError("resource_store_unavailable", "batch result file could not be recorded", 503, err)
+	}
+	return externalID, nil
+}
+
 func (s *Service) batchOwner(ctx context.Context, key, idValue string) (auth.AuthResult, domain.ProviderResource, provider.ResourceInferenceResourcesAdapter, error) {
 	principal, err := s.resourcePrincipal(ctx, key)
 	if err != nil {
@@ -616,7 +1020,17 @@ func (s *Service) GetBatch(ctx context.Context, key, idValue string) (provider.B
 	if err := s.updateResourceStatus(ctx, resource, result.Status); err != nil {
 		return provider.BatchObject{}, err
 	}
-	result.ID = resource.ID
+	resource, err = s.resources.ProviderResource(ctx, principal.Project.ID, resource.ID)
+	if err != nil {
+		return provider.BatchObject{}, gatewayError("resource_store_unavailable", "batch owner could not be read", 503, err)
+	}
+	resource, err = s.materialiseBatchResults(ctx, principal, resource, &result)
+	if err != nil {
+		return provider.BatchObject{}, err
+	}
+	if _, err := s.nameBatchFiles(ctx, resource, &result); err != nil {
+		return provider.BatchObject{}, err
+	}
 	return result, nil
 }
 func (s *Service) CancelBatch(ctx context.Context, key, idValue string) (provider.BatchObject, error) {
@@ -642,7 +1056,13 @@ func (s *Service) CancelBatch(ctx context.Context, key, idValue string) (provide
 	if err := s.updateResourceStatus(ctx, resource, result.Status); err != nil {
 		return provider.BatchObject{}, err
 	}
-	result.ID = resource.ID
+	resource, err = s.resources.ProviderResource(ctx, principal.Project.ID, resource.ID)
+	if err != nil {
+		return provider.BatchObject{}, gatewayError("resource_store_unavailable", "batch owner could not be read", 503, err)
+	}
+	if _, err := s.nameBatchFiles(ctx, resource, &result); err != nil {
+		return provider.BatchObject{}, err
+	}
 	return result, nil
 }
 
