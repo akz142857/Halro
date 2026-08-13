@@ -808,9 +808,22 @@ h3 { margin-bottom: 0; font-size: var(--font-size-lg); }
 .provider-compact-actions { justify-content: flex-end; flex-wrap: nowrap; }
 .provider-compact-actions .button { padding-right: 10px; padding-left: 10px; }
 .provider-compact-actions > .inline-test-control { margin-right: 14px; }
-/* Spans the row so a long upstream reason wraps under the identity columns
-   rather than widening the fixed-width test control. */
-.provider-row > .row-test-failure { grid-column: 2 / -1; margin: 2px 0 0; color: var(--danger); font-size: var(--font-size-xs); line-height: 1.4; overflow-wrap: anywhere; }
+/* Sits under the control that produced it, not at the far left of the row. The
+   operator is looking at the failure marker beside the button they just
+   pressed, and a red sentence at the opposite end of a wide row reads as
+   belonging to something else — the eye has to travel the width of the table to
+   connect the two.
+
+   The block is right-justified while its text stays left-aligned, because a
+   right-aligned sentence is harder to scan, and the rule down the left edge
+   ties it to the control above it. It is still bounded rather than sized by its
+   content: a long upstream reason has to wrap instead of widening the
+   fixed-width test control. */
+.provider-row > .row-test-failure {
+  grid-column: 2 / -1; justify-self: end; max-width: min(46rem, 100%);
+  margin: 4px 0 0; padding-left: 10px; border-left: 2px solid var(--danger);
+  color: var(--danger); font-size: var(--font-size-xs); line-height: 1.4; overflow-wrap: anywhere;
+}
 .provider-expanded-content { grid-column: 2 / -1; padding: 18px 0 6px; border-top: 1px solid var(--line); }
 .provider-row, .credential-row, .deployment-row { overflow-anchor: none; }
 .provider-expanded-content .provider-facts { margin-top: 0; }
@@ -1934,7 +1947,9 @@ textarea { resize: vertical; }
   .provider-expanded-content { grid-column: 1; }
   /* Single column here, so the wide-row `2 / -1` span would push the sentence
      into an implicit second column of its own. */
-  .provider-row > .row-test-failure { grid-column: 1; }
+  /* Narrow layout stacks the row, so the control is no longer to the right of
+     anything and the reason returns to the reading edge. */
+  .provider-row > .row-test-failure { grid-column: 1; justify-self: start; max-width: 100%; }
   .provider-expanded-content .provider-facts { grid-template-columns: 1fr; }
   .provider-expanded-runtime { align-items: flex-start; flex-direction: column; }
   .credential-row { grid-template-areas: "identity" "usage" "generation" "actions" "details"; grid-template-columns: 1fr; row-gap: 12px; }
