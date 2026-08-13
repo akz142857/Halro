@@ -186,6 +186,7 @@ type inferenceResourcesServiceFixture struct {
 	project   domain.Project
 	state     *ledger.State
 	store     *inferenceResourcesMemoryStore
+	objectDir string
 	close     func()
 }
 
@@ -244,7 +245,7 @@ func newInferenceResourcesServiceFixture(t *testing.T, profileID domain.Provider
 	if err != nil {
 		t.Fatal(err)
 	}
-	return inferenceResourcesServiceFixture{service: service, plaintext: plaintext, project: project, state: state, store: store, close: func() { _ = log.Close() }}
+	return inferenceResourcesServiceFixture{service: service, plaintext: plaintext, project: project, state: state, store: store, objectDir: objectDir, close: func() { _ = log.Close() }}
 }
 
 func inferenceResourcesTargetFor(model string, adapter provider.Adapter) provider.Target {
@@ -676,5 +677,70 @@ func TestBatchWithoutRecordedFilesDoesNotFallBackToUpstreamIdentifiers(t *testin
 	}
 	if result.InputFileID != "" {
 		t.Fatalf("input_file_id=%q, want it absent rather than the upstream's", result.InputFileID)
+	}
+}
+
+// A file Halro holds and the upstream never received has to be answerable
+// without asking anyone. Every lifecycle path used to assume the opposite —
+// metadata was fetched from the upstream, expiry deleted there first — which
+// made the resource unusable rather than merely unusual. ADR 0021 settles that
+// an empty UpstreamID is an ordinary state.
+//
+// The assertion that matters is the call count: not that the answers are right,
+// but that no upstream was contacted to produce them.
+func TestLocalOnlyFileIsServedAndReapedWithoutTouchingTheUpstream(t *testing.T) {
+	adapter := &inferenceResourcesAdapter{providerType: string(domain.ProviderOpenAI)}
+	f := newInferenceResourcesServiceFixture(t, domain.ProfileOpenAIMediaResources, adapter, inferenceResourcesTargetFor("resources", adapter), nil)
+	defer f.close()
+	now := time.Now()
+
+	objectPath, err := f.service.writeResourceObject("file-local", []byte("{\"custom_id\":\"a\"}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	local := domain.ProviderResource{
+		ID: "file-local", Kind: domain.ResourceFile, ProjectID: f.project.ID,
+		ProviderID: "inferenceResources-provider", DeploymentID: "inferenceResources-deployment",
+		PublicModel: "resources", ProfileID: domain.ProfileOpenAIMediaResources, Region: "us-east-1",
+		UpstreamID: "", ObjectPath: objectPath, ObjectContentType: "application/jsonl",
+		ObjectFilename: "batch-input.jsonl", ObjectPurpose: "batch",
+		CreationStatus: "completed", Status: "uploaded",
+		CreatedAt: now.Add(-time.Hour), UpdatedAt: now, ExpiresAt: now.Add(-time.Minute), Revision: 1,
+	}
+	f.store.resources[local.ID] = local
+
+	object, err := f.service.GetFile(context.Background(), f.plaintext, local.ID)
+	if err != nil {
+		t.Fatalf("metadata for a local-only file: %v", err)
+	}
+	if object.ID != local.ID || object.Filename != "batch-input.jsonl" || object.Purpose != "batch" {
+		t.Fatalf("metadata came back wrong: %#v", object)
+	}
+	if object.Bytes == 0 {
+		t.Fatal("metadata reported no size for an object that exists")
+	}
+	if adapter.getFileCalls != 0 {
+		t.Fatalf("the upstream was asked about a file it never received (%d calls)", adapter.getFileCalls)
+	}
+
+	content, err := f.service.DownloadFile(context.Background(), f.plaintext, local.ID)
+	if err != nil {
+		t.Fatalf("content for a local-only file: %v", err)
+	}
+	if len(content.Data) == 0 {
+		t.Fatal("content was empty")
+	}
+
+	if err := f.service.CleanupExpiredProviderResource(context.Background(), f.store.resources[local.ID]); err != nil {
+		t.Fatalf("expiry cleanup: %v", err)
+	}
+	if adapter.deleteCalls != 0 {
+		t.Fatalf("expiry deleted upstream for a file the upstream never had (%d calls)", adapter.deleteCalls)
+	}
+	if _, present := f.store.resources[local.ID]; present {
+		t.Fatal("the record survived its own cleanup")
+	}
+	if _, statErr := os.Stat(filepath.Join(f.objectDir, objectPath)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("the local object survived cleanup: %v", statErr)
 	}
 }

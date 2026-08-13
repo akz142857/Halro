@@ -270,6 +270,8 @@ func (s *Service) CreateFile(ctx context.Context, key, route, idempotencyKey str
 	}
 	record.ObjectPath = objectPath
 	record.ObjectContentType = call.ContentType
+	record.ObjectFilename = call.Filename
+	record.ObjectPurpose = call.Purpose
 	record.CreationStatus = creationCompleted
 	record.Status = upstream.Status
 	if record.Status == "" {
@@ -304,10 +306,66 @@ func (s *Service) fileOwner(ctx context.Context, key, idValue string) (auth.Auth
 	}
 	return principal, resource, adapter, nil
 }
+
+// localFileObject describes a file Halro holds and the upstream does not. The
+// record is the whole truth about it, so nothing is fetched and nothing is
+// billed — there is no provider call to account for.
+func (s *Service) localFileObject(principal auth.AuthResult, resource domain.ProviderResource) (provider.FileObject, error) {
+	size := int64(0)
+	if path, err := s.resourceObjectPath(resource.ObjectPath); err == nil {
+		if info, statErr := os.Stat(path); statErr == nil {
+			size = info.Size()
+		}
+	}
+	result := provider.FileObject{
+		ID: resource.ID, Object: "file", Bytes: size,
+		CreatedAt: resource.CreatedAt.Unix(), Filename: resource.ObjectFilename,
+		Purpose: resource.ObjectPurpose, Status: resource.Status,
+	}
+	if err := s.redactFileObject(principal.Project.RedactionPolicyID, &result); err != nil {
+		return provider.FileObject{}, err
+	}
+	return result, nil
+}
+
+// forgetLocalResource removes what Halro holds for a resource the upstream never
+// had. The object goes first: a record without its object is recoverable, an
+// object without its record is a file nothing can name or reap.
+func (s *Service) forgetLocalResource(ctx context.Context, resource domain.ProviderResource) error {
+	if path, pathErr := s.resourceObjectPath(resource.ObjectPath); pathErr == nil {
+		if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			return removeErr
+		}
+	}
+	return s.resources.DeleteProviderResource(ctx, resource.ProjectID, resource.ID)
+}
+
+// batchInputFile resolves a batch's input file for ownership alone. It is
+// fileOwner without the adapter requirement, because a batch whose provider
+// takes its requests inline needs the bytes rather than an upstream handle.
+func (s *Service) batchInputFile(ctx context.Context, key, idValue string) (auth.AuthResult, domain.ProviderResource, error) {
+	principal, err := s.resourcePrincipal(ctx, key)
+	if err != nil {
+		return principal, domain.ProviderResource{}, err
+	}
+	resource, err := s.resources.ProviderResource(ctx, principal.Project.ID, idValue)
+	if err != nil || resource.Kind != domain.ResourceFile {
+		return principal, resource, gatewayError("resource_not_found", "resource was not found", 404, err)
+	}
+	return principal, resource, nil
+}
+
 func (s *Service) GetFile(ctx context.Context, key, idValue string) (provider.FileObject, error) {
 	principal, resource, adapter, err := s.fileOwner(ctx, key, idValue)
 	if err != nil {
 		return provider.FileObject{}, err
+	}
+	// A file with no upstream twin is answered from the record. There is nothing
+	// to ask: Halro holds these bytes and the upstream was never told they
+	// exist. See ADR 0021 — an empty UpstreamID is an ordinary state, not a
+	// resource in a broken one.
+	if resource.UpstreamID == "" {
+		return s.localFileObject(principal, resource)
 	}
 	target, _ := s.ownedTarget(resource)
 	target.FixedRequestMicrosUSD = 0
@@ -476,6 +534,14 @@ func (s *Service) CleanupExpiredProviderResource(ctx context.Context, resource d
 	if resource.Kind != domain.ResourceFile {
 		return s.resources.DeleteProviderResource(ctx, resource.ProjectID, resource.ID)
 	}
+	// A file with no upstream twin skips the upstream half of the dance and goes
+	// straight to removing what Halro actually holds. Running the delete-confirm
+	// ladder against an upstream that never had the file would answer 404 and
+	// be read as "already gone", which is the right conclusion reached by
+	// asking a question that should not have been asked.
+	if resource.UpstreamID == "" {
+		return s.forgetLocalResource(ctx, resource)
+	}
 	target, err := s.ownedTarget(resource)
 	if err != nil {
 		return err
@@ -532,9 +598,22 @@ func (s *Service) CleanupExpiredProviderResource(ctx context.Context, resource d
 }
 
 func (s *Service) CreateBatch(ctx context.Context, key, idempotencyKey string, call provider.BatchCreateCall) (provider.BatchObject, error) {
-	principal, file, adapter, err := s.fileOwner(ctx, key, call.InputFileID)
+	// The input file is resolved for ownership, not for its adapter. A provider
+	// whose batches take their requests inline never receives the file at all,
+	// so requiring its owner to serve files would refuse the very providers this
+	// endpoint exists to reach (ADR 0021). What the batch needs from the file is
+	// that this project owns it and Halro holds its bytes.
+	principal, file, err := s.batchInputFile(ctx, key, call.InputFileID)
 	if err != nil {
 		return provider.BatchObject{}, err
+	}
+	batchTarget, err := s.ownedTarget(file)
+	if err != nil {
+		return provider.BatchObject{}, err
+	}
+	adapter, ok := batchTarget.Adapter.(provider.ResourceInferenceResourcesAdapter)
+	if !ok {
+		return provider.BatchObject{}, gatewayError("unsupported_feature", "batch adapter is unavailable", 400, nil)
 	}
 	if err := idempotency.ValidateKey(idempotencyKey); err != nil {
 		return provider.BatchObject{}, gatewayError("invalid_idempotency_key", err.Error(), 400, err)

@@ -51,6 +51,12 @@ type ProviderResource struct {
 	Status            string `json:"status"`
 	ObjectPath        string `json:"object_path,omitempty"`
 	ObjectContentType string `json:"object_content_type,omitempty"`
+	// ObjectFilename and ObjectPurpose are what the upstream would have been
+	// asked for. A resource with no upstream twin has no one to ask, so the
+	// record carries them: it is the whole truth about that object rather than a
+	// pointer to somewhere the truth lives.
+	ObjectFilename string `json:"object_filename,omitempty"`
+	ObjectPurpose  string `json:"object_purpose,omitempty"`
 	// InputFileID, OutputFileID and ErrorFileID are the Halro identifiers of the
 	// files a batch refers to, recorded so the batch can name them without
 	// echoing the upstream's own identifiers back to the caller. A batch that
