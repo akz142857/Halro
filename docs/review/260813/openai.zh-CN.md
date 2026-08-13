@@ -104,4 +104,6 @@ non-stream chat failed: bad_request http=400 code=unsupported_parameter:max_toke
 
 媒体与资源这条链路则相反：端点齐了六类，但缺 list、缺 translations、缺图片编辑。**真实账号证据已经补上机制**：`internal/provider/openai/media_smoke_test.go` 覆盖审核、语音、转写、图片、文件与批处理生命周期，每项由是否给出模型名单独开启。截至本文，该冒烟尚未用真实凭据跑过——补上的是"能被验证"。
 
-这条链路要往前推，第一步是跑一次那个冒烟，而不是继续加端点。
+**2026-08-13 首跑结果**：审核（`omni-moderation-latest`）、语音合成（`gpt-4o-mini-tts`）、语音转写（`gpt-4o-mini-transcribe`）三项一次通过，4.89s。图片、文件、批处理三项**尚未跑过**——前者按生成价计费，后两者会在账户上留下对象，都需要单独开启。
+
+也就是说这个 Profile 现在是 6 项里 3 项有真实证据。剩下三项的机制已就位，缺的是一次有意的付费运行。

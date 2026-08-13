@@ -15,6 +15,15 @@ both: native Messages and its stream forwarded verbatim, the portable OpenAI
 shape re-authored through the canonical model, `count_tokens`, and the model
 catalog that a credential-only connection test falls back to. A pass on one
 mode is not evidence for the other; they share an adapter and nothing else.
+
+`openai.media-resources.v1` has a smoke of its own,
+`TestRealMediaResourcesSmoke`, outside this runner. It is separate because its
+operations cost differently and leave different traces: an image is priced like
+a generation, and files and batches put objects on the account. Each operation
+is opted into by naming its model, so an operator buys only the evidence they
+want, and the file upload is deleted unconditionally at the end. Run it with
+`HALRO_SMOKE_PROFILE=openai_media`; a batch record survives in a terminal state
+because OpenAI has no delete for batches.
 Capability detection is enabled only in this opt-in child process, may incur
 additional charges, and must verify `chat` for the configured model without
 exceeding eight calls. Configure dedicated,
