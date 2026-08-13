@@ -817,3 +817,115 @@ func TestLocalFilesPrimitiveKeepsTheUploadAndSkipsTheUpstream(t *testing.T) {
 		t.Fatalf("content came back as %q", content.Data)
 	}
 }
+
+// batchResultsAdapter is an upstream that leaves its finished results somewhere
+// Halro has to collect, rather than handing over a file the caller can name.
+type batchResultsAdapter struct {
+	inferenceResourcesAdapter
+	results     []byte
+	fetchCalls  int
+	seenResults string
+}
+
+func (a *batchResultsAdapter) FetchBatchResults(_ context.Context, _, _, resultsURL string) ([]byte, error) {
+	a.fetchCalls++
+	a.seenResults = resultsURL
+	return a.results, nil
+}
+
+// Results are model output travelling outbound, and storing them writes a
+// response body outside its one-time response path. Redaction has to happen
+// before any of it reaches disk: redacting on the way out instead would leave
+// the unredacted copy sitting in the object directory.
+func TestBatchResultsAreRedactedBeforeTheyAreStored(t *testing.T) {
+	policy := domain.RedactionPolicy{
+		ID: "batch-outbound", Name: "outbound", Enabled: true, Mode: "strict",
+		Rules: []domain.RedactionRule{{ID: "email-out", Name: "email", Kind: "builtin", Builtin: "email", Scopes: []string{"outbound"}, Action: "reject", Enabled: true}},
+	}
+	adapter := &batchResultsAdapter{
+		inferenceResourcesAdapter: inferenceResourcesAdapter{providerType: string(domain.ProviderAnthropic)},
+		results:                   []byte(`{"custom_id":"a","response":{"status_code":200,"body":{"choices":[{"message":{"content":"private@example.com"}}]}}}` + "\n"),
+	}
+	f := newInferenceResourcesServiceFixture(t, domain.ProfileAnthropicMessages, adapter, inferenceResourcesTargetFor("resources", adapter), []domain.RedactionPolicy{policy})
+	defer f.close()
+	now := time.Now()
+	batch := domain.ProviderResource{
+		ID: "batch-results", Kind: domain.ResourceBatch, ProjectID: f.project.ID,
+		ProviderID: "inferenceResources-provider", DeploymentID: "inferenceResources-deployment",
+		PublicModel: "resources", ProfileID: domain.ProfileAnthropicMessages, Region: "us-east-1",
+		UpstreamID: "msgbatch_1", CreationStatus: "completed", Status: "in_progress",
+		CreatedAt: now.Add(-time.Hour), UpdatedAt: now, ExpiresAt: now.Add(time.Hour), Revision: 1,
+	}
+	f.store.resources[batch.ID] = batch
+	adapter.batch = provider.BatchObject{
+		ID: "msgbatch_1", Object: "batch", Status: "completed",
+		ResultsURL: "https://api.anthropic.com/v1/messages/batches/msgbatch_1/results",
+	}
+
+	_, err := f.service.GetBatch(context.Background(), f.plaintext, batch.ID)
+	if err == nil {
+		t.Fatal("results carrying material the policy rejects were stored anyway")
+	}
+	assertGatewayCode(t, err, "sensitive_data_detected")
+	// Nothing may have been written: the point of redacting first is that the
+	// rejected bytes never reach the object directory.
+	entries, readErr := os.ReadDir(f.objectDir)
+	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+		t.Fatal(readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("%d object(s) were written before redaction refused them", len(entries))
+	}
+}
+
+// A batch is polled. Fetching the results again on every poll would re-download
+// the whole file and mint a new one each time.
+func TestBatchResultsAreFetchedOnceAndThenNamed(t *testing.T) {
+	adapter := &batchResultsAdapter{
+		inferenceResourcesAdapter: inferenceResourcesAdapter{providerType: string(domain.ProviderAnthropic)},
+		results:                   []byte(`{"custom_id":"a","response":{"status_code":200,"body":{"choices":[]}}}` + "\n"),
+	}
+	f := newInferenceResourcesServiceFixture(t, domain.ProfileAnthropicMessages, adapter, inferenceResourcesTargetFor("resources", adapter), nil)
+	defer f.close()
+	now := time.Now()
+	batch := domain.ProviderResource{
+		ID: "batch-once", Kind: domain.ResourceBatch, ProjectID: f.project.ID,
+		ProviderID: "inferenceResources-provider", DeploymentID: "inferenceResources-deployment",
+		PublicModel: "resources", ProfileID: domain.ProfileAnthropicMessages, Region: "us-east-1",
+		UpstreamID: "msgbatch_1", CreationStatus: "completed", Status: "in_progress",
+		CreatedAt: now.Add(-time.Hour), UpdatedAt: now, ExpiresAt: now.Add(time.Hour), Revision: 1,
+	}
+	f.store.resources[batch.ID] = batch
+	adapter.batch = provider.BatchObject{
+		ID: "msgbatch_1", Object: "batch", Status: "completed",
+		ResultsURL: "https://api.anthropic.com/v1/messages/batches/msgbatch_1/results",
+	}
+
+	first, err := f.service.GetBatch(context.Background(), f.plaintext, batch.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.OutputFileID == "" {
+		t.Fatal("the collected results were not named")
+	}
+	// The caller can download what was named — an identifier that resolves to
+	// nothing is no better than none.
+	content, err := f.service.DownloadFile(context.Background(), f.plaintext, first.OutputFileID)
+	if err != nil {
+		t.Fatalf("downloading the results: %v", err)
+	}
+	if len(content.Data) == 0 {
+		t.Fatal("the results file was empty")
+	}
+
+	second, err := f.service.GetBatch(context.Background(), f.plaintext, batch.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.OutputFileID != first.OutputFileID {
+		t.Fatalf("polling named a different file: %q then %q", first.OutputFileID, second.OutputFileID)
+	}
+	if adapter.fetchCalls != 1 {
+		t.Fatalf("results were fetched %d times", adapter.fetchCalls)
+	}
+}

@@ -186,6 +186,43 @@ Consequences 里那条 `expired` 映射处理的正是 `archived_at`。
 **结果顺序无保证**：文档说结果文件中的顺序不保证与请求一致，要用 `custom_id` 匹配。这也是为什么
 `renderBatchRequests` 拒绝重复的 `custom_id`——重复会让匹配失去唯一解。
 
+## 2.7 结果端点契约（2026-08-13 核对官方文档）
+
+`GET /v1/messages/batches/{id}/results`，返回 `.jsonl` 流。路径与此前从 `results_url` 样例推断的一致
+——但现在是核实过的，不是推断的。
+
+**每行的形状（Anthropic）**：
+
+```json
+{"custom_id":"a","result":{"type":"succeeded","message":{ ...Message... }}}
+```
+
+`result.type` 取 `succeeded` / `errored` / `canceled` / `expired` 四值之一；成功时 `result.message`
+是一个完整的 Message 对象，失败时 `result.error` 是错误信封。
+
+**而 OpenAI 的批处理结果行是另一种形状**：`{id, custom_id, response:{status_code, request_id, body}, error}`。
+
+### 这暴露了方案漏算的一整步
+
+切片 4 原本写成"惰性拉取 + 逐行脱敏 + 落盘"。实际还有**逐行翻译**：Anthropic 的
+`result.message` 要变成 OpenAI 的 `response.body`，也就是一个 ChatCompletionResponse。
+
+翻译本身可以复用——`anthropicwire.DecodeResult` → semantic → `openaiwire.RenderGenerateResult`，
+与 `adapter.Chat` 用的是同一对函数，同切片 3 的做法一致，不写第二份映射。
+
+四种 `result.type` 到 OpenAI 行的对应：
+
+| Anthropic | OpenAI 结果行 |
+|---|---|
+| `succeeded` | `response.status_code = 200`，`body` 为翻译后的 ChatCompletionResponse |
+| `errored` | `error` 携带上游错误类型；不编造 status_code |
+| `canceled` / `expired` | `error` 说明该请求未被执行的原因 |
+
+**注意**：结果里可能含 `thinking` 块。切片 3 已让批处理请求发送 `thinking: {"type":"disabled"}`，
+所以正常情况下不会出现；但若上游仍返回，`DecodeResult` 会拒绝该行（"signed thinking response requires
+native mode"）。该行按 `errored` 处理并说明原因，而不是让整批失败——这一条与请求侧"整批拒绝"的取舍
+不同，理由是：请求侧的问题是调用方可以修的，结果侧的问题调用方无能为力，丢掉其余可用结果没有意义。
+
 ## 3. 测试门禁
 
 - 每个切片各自的单元与契约测试

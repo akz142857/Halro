@@ -116,6 +116,19 @@ type BatchObject struct {
 	CancelledAt      int64             `json:"cancelled_at,omitempty"`
 	Metadata         map[string]string `json:"metadata,omitempty"`
 	RawErrors        json.RawMessage   `json:"errors,omitempty"`
+	// ResultsURL is where an upstream says a finished batch's results live. It
+	// never reaches the caller: it is the upstream's own address, and the
+	// northbound shape hands out an output_file_id instead. Halro uses it only
+	// to know results exist and to check that they are the ones this connection
+	// would have addressed.
+	ResultsURL string `json:"-"`
+}
+
+// BatchResultsAdapter is implemented by providers whose finished batches leave
+// their results somewhere Halro must collect, rather than as a file the caller
+// can already name. An upstream that returns an output file needs none of this.
+type BatchResultsAdapter interface {
+	FetchBatchResults(ctx context.Context, requestID, batchID, resultsURL string) ([]byte, error)
 }
 
 type ResourceInferenceResourcesAdapter interface {

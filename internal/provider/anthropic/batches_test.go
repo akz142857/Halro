@@ -216,3 +216,86 @@ func TestBatchRefusesACompletionWindowAnthropicCannotHonour(t *testing.T) {
 		t.Fatalf("err=%v", err)
 	}
 }
+
+// Results are collected in the OpenAI shape because the endpoint that serves
+// them is not provider-specific. A caller who moves a batch between providers
+// reads the same file either way.
+func TestBatchResultLinesAreRenderedInTheCollectableShape(t *testing.T) {
+	succeeded := `{"custom_id":"a","result":{"type":"succeeded","message":{"id":"msg_1","type":"message","role":"assistant",` +
+		`"content":[{"type":"text","text":"ok"}],"model":"claude-provider","stop_reason":"end_turn","stop_sequence":null,` +
+		`"usage":{"input_tokens":4,"output_tokens":1}}}}`
+	rendered, err := renderBatchResultLine("batch_1", []byte(succeeded))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var line struct {
+		ID       string `json:"id"`
+		CustomID string `json:"custom_id"`
+		Response *struct {
+			StatusCode int             `json:"status_code"`
+			Body       json.RawMessage `json:"body"`
+		} `json:"response"`
+		Error *struct{ Code string } `json:"error"`
+	}
+	if err := json.Unmarshal(rendered, &line); err != nil {
+		t.Fatal(err)
+	}
+	if line.CustomID != "a" || line.Error != nil || line.Response == nil || line.Response.StatusCode != 200 {
+		t.Fatalf("line=%s", rendered)
+	}
+	var body struct {
+		Object  string `json:"object"`
+		Choices []struct {
+			FinishReason string `json:"finish_reason"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(line.Response.Body, &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Object != "chat.completion" {
+		t.Fatalf("body is not a chat completion: %s", line.Response.Body)
+	}
+	// The same translation a live response takes, so the same vocabulary comes
+	// out — end_turn does not reach a caller here either.
+	if len(body.Choices) == 0 || body.Choices[0].FinishReason != "stop" {
+		t.Fatalf("finish_reason=%#v", body.Choices)
+	}
+}
+
+// A request that never ran produced no answer. Reporting one with an empty body
+// would let a caller process nothing as though it were something.
+func TestUnsuccessfulBatchResultsBecomeErrorsRatherThanEmptyAnswers(t *testing.T) {
+	for _, test := range []struct{ name, line, code string }{
+		{"cancelled", `{"custom_id":"a","result":{"type":"canceled"}}`, "cancelled"},
+		{"expired", `{"custom_id":"a","result":{"type":"expired"}}`, "expired"},
+		{"errored", `{"custom_id":"a","result":{"type":"errored","error":{"type":"error","error":{"type":"invalid_request_error","message":"nope"}}}}`, "invalid_request_error"},
+		{"a kind this build does not know", `{"custom_id":"a","result":{"type":"reticulated"}}`, "unknown_result"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rendered, err := renderBatchResultLine("batch_1", []byte(test.line))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var line struct {
+				Response *json.RawMessage `json:"response"`
+				Error    *struct {
+					Code    string `json:"code"`
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal(rendered, &line); err != nil {
+				t.Fatal(err)
+			}
+			if line.Response != nil {
+				t.Fatalf("an unsuccessful result carried a response: %s", rendered)
+			}
+			if line.Error == nil || line.Error.Code != test.code {
+				t.Fatalf("line=%s, want code %q", rendered, test.code)
+			}
+			// The upstream's own sentence is not copied into a file on disk.
+			if strings.Contains(string(rendered), "nope") {
+				t.Fatalf("an upstream message reached the results file: %s", rendered)
+			}
+		})
+	}
+}

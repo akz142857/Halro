@@ -273,6 +273,20 @@ func (b *LegacyAdapterBridge) DeleteFile(ctx context.Context, requestID, id stri
 	}
 	return a.DeleteFile(ctx, requestID, id)
 }
+
+// FetchBatchResults forwards to an adapter that can collect a finished batch's
+// results. It exists on the bridge because everything reaches the gateway
+// wrapped in one: an optional interface asserted against the wrapper is an
+// assertion against the wrapper, which is how a criterion that could never fire
+// was nearly shipped once already.
+func (b *LegacyAdapterBridge) FetchBatchResults(ctx context.Context, requestID, batchID, resultsURL string) ([]byte, error) {
+	a, ok := b.Adapter.(BatchResultsAdapter)
+	if !ok {
+		return nil, errors.New("batch result collection is unavailable")
+	}
+	return a.FetchBatchResults(ctx, requestID, batchID, resultsURL)
+}
+
 func (b *LegacyAdapterBridge) CreateBatch(ctx context.Context, call BatchCreateCall) (BatchObject, error) {
 	a, ok := b.Adapter.(ResourceInferenceResourcesAdapter)
 	if !ok {

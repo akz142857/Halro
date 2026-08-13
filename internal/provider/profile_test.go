@@ -231,6 +231,14 @@ func TestBridgeSatisfiesTheResourceInterfaceWhateverItWraps(t *testing.T) {
 	if _, isResourceAdapter := any(bridge).(ResourceInferenceResourcesAdapter); !isResourceAdapter {
 		t.Fatal("the bridge stopped satisfying the resource interface; the rejected inference would now appear to work")
 	}
+	// The same fact from the other direction: an optional capability the bridge
+	// does not forward is invisible to the gateway, because the gateway only
+	// ever holds the bridge. Adding one without teaching the bridge about it
+	// produces a feature that works in a unit test holding a bare adapter and
+	// never fires in production.
+	if _, collectsResults := any(bridge).(BatchResultsAdapter); !collectsResults {
+		t.Fatal("the bridge does not forward batch result collection, so no adapter can offer it")
+	}
 }
 
 type bridgeProbeAdapter struct{}

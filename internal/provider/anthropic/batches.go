@@ -288,6 +288,7 @@ func decodeBatchObject(raw []byte) (provider.BatchObject, error) {
 		ExpiresAt:        batchTimestamp(upstream.ExpiresAt),
 		CompletedAt:      batchTimestamp(upstream.EndedAt),
 		CancellingAt:     batchTimestamp(upstream.CancelInitiatedAt),
+		ResultsURL:       upstream.ResultsURL,
 	}, nil
 }
 
@@ -346,4 +347,189 @@ func (adapter *Adapter) doBatch(ctx context.Context, method, suffix, requestID s
 		return nil, malformed("read Anthropic batch response", err)
 	}
 	return raw, nil
+}
+
+// batchResultLine is one line of Anthropic's results file.
+type batchResultLine struct {
+	CustomID string `json:"custom_id"`
+	Result   struct {
+		Type    string          `json:"type"`
+		Message json.RawMessage `json:"message"`
+		Error   json.RawMessage `json:"error"`
+	} `json:"result"`
+}
+
+// openAIResultLine is one line of the results file the caller collects. The
+// northbound surface is OpenAI-shaped, so the results are too — a caller who
+// moves a batch between providers reads the same file format either way, which
+// is the whole reason this endpoint is not provider-specific (ADR 0021).
+type openAIResultLine struct {
+	ID       string                `json:"id"`
+	CustomID string                `json:"custom_id"`
+	Response *openAIResultResponse `json:"response,omitempty"`
+	Error    *openAIResultError    `json:"error,omitempty"`
+}
+
+type openAIResultResponse struct {
+	StatusCode int             `json:"status_code"`
+	RequestID  string          `json:"request_id,omitempty"`
+	Body       json.RawMessage `json:"body"`
+}
+
+type openAIResultError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+// renderBatchResultLine turns one Anthropic result into the OpenAI-shaped line a
+// caller collects.
+//
+// A succeeded result is translated by the same pair a live response takes —
+// decode to the canonical model, render to the OpenAI shape — so a batched
+// answer and a live one differ in when they arrived and in nothing else.
+//
+// The three unsuccessful kinds become errors rather than empty successes. An
+// expired or cancelled request produced no answer, and reporting one with an
+// empty body would let a caller process nothing as though it were something.
+func renderBatchResultLine(batchID string, raw []byte) ([]byte, error) {
+	var line batchResultLine
+	if err := json.Unmarshal(raw, &line); err != nil {
+		return nil, fmt.Errorf("result line is unreadable: %w", err)
+	}
+	if strings.TrimSpace(line.CustomID) == "" {
+		return nil, errors.New("result line carries no custom_id")
+	}
+	out := openAIResultLine{ID: batchID + "_" + line.CustomID, CustomID: line.CustomID}
+	switch line.Result.Type {
+	case "succeeded":
+		message, err := anthropicapi.DecodeMessage(line.Result.Message)
+		if err != nil {
+			out.Error = &openAIResultError{Code: "malformed_response", Message: "the provider result could not be read"}
+			break
+		}
+		result, err := anthropicwire.DecodeResult(message)
+		if err != nil {
+			// A result this gateway cannot represent — a signed thinking block
+			// is the case that reaches here — fails its own line rather than the
+			// batch. The caller cannot fix a result that already exists, and
+			// discarding the other answers would help nobody.
+			out.Error = &openAIResultError{Code: "unrepresentable_response", Message: "the provider result cannot be represented on this surface"}
+			break
+		}
+		rendered, err := openaiwire.RenderGenerateResult(result)
+		if err != nil {
+			out.Error = &openAIResultError{Code: "unrepresentable_response", Message: "the provider result cannot be represented on this surface"}
+			break
+		}
+		body, err := json.Marshal(rendered)
+		if err != nil {
+			return nil, err
+		}
+		out.Response = &openAIResultResponse{StatusCode: 200, Body: body}
+	case "errored":
+		out.Error = &openAIResultError{Code: batchResultErrorCode(line.Result.Error), Message: "the provider refused this request"}
+	case "canceled":
+		out.Error = &openAIResultError{Code: "cancelled", Message: "the batch was cancelled before this request ran"}
+	case "expired":
+		out.Error = &openAIResultError{Code: "expired", Message: "the batch expired before this request ran"}
+	default:
+		out.Error = &openAIResultError{Code: "unknown_result", Message: "the provider reported a result kind this build does not know"}
+	}
+	return json.Marshal(out)
+}
+
+// batchResultErrorCode takes the upstream's own error type and nothing else. The
+// message beside it is prose the upstream wrote about a request, which is where
+// a credential gets quoted back, and this line is written to disk.
+func batchResultErrorCode(raw json.RawMessage) string {
+	var envelope struct {
+		Error struct {
+			Type string `json:"type"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(raw, &envelope) != nil || envelope.Error.Type == "" {
+		return "provider_error"
+	}
+	return envelope.Error.Type
+}
+
+// FetchBatchResults reads a finished batch's results and returns them in the
+// shape a caller collects.
+//
+// The URL is built from the configured endpoint. The batch object carries a
+// results_url, and following it would let the upstream choose which host Halro
+// dials — the one thing SafeTransport exists to prevent — so that field is used
+// to check agreement and never to navigate.
+//
+// The whole file is bounded by the same ceiling every other provider response is
+// read under. A batch whose results exceed it fails with a bound the caller can
+// act on rather than being truncated into a file that looks complete.
+func (adapter *Adapter) FetchBatchResults(ctx context.Context, requestID, id, resultsURL string) ([]byte, error) {
+	expected := adapter.batchesPath(id + "/results")
+	if resultsURL != "" {
+		declared, err := url.Parse(resultsURL)
+		if err != nil || declared.Host != expected.Host || declared.Path != expected.Path {
+			// A results URL pointing somewhere else is not followed and not
+			// ignored: it means this batch is not the one this connection would
+			// address, and acting on either reading would be a guess.
+			return nil, malformed("Anthropic results URL does not match this connection", nil)
+		}
+	}
+	request, err := adapter.newBatchRequest(ctx, http.MethodGet, id+"/results", requestID, nil)
+	if err != nil {
+		return nil, err
+	}
+	response, err := adapter.client.Do(request)
+	if err != nil {
+		return nil, transportError(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, decodeHTTPError(response)
+	}
+	raw, err := readLimited(response.Body, maxResponseBytes)
+	if err != nil {
+		return nil, &provider.Error{
+			Class:   provider.ErrorMalformed,
+			Message: "Anthropic batch results exceed the size this gateway can carry; submit smaller batches",
+			Cause:   err,
+		}
+	}
+	return renderBatchResults(id, raw)
+}
+
+// renderBatchResults translates a whole results file line by line.
+//
+// A line that cannot be read at all is reported as a line-level error rather
+// than failing the file. By the time results exist the caller can no longer
+// change anything about the batch, so discarding the answers that did arrive
+// would cost them everything and fix nothing — the opposite of the choice made
+// on the request side, where the caller can still edit what they submitted.
+func renderBatchResults(batchID string, raw []byte) ([]byte, error) {
+	scanner := bufio.NewScanner(bytes.NewReader(raw))
+	scanner.Buffer(make([]byte, 0, 64<<10), maxBatchInputLineBytes)
+	var out bytes.Buffer
+	lines := 0
+	for scanner.Scan() {
+		text := bytes.TrimSpace(scanner.Bytes())
+		if len(text) == 0 {
+			continue
+		}
+		rendered, err := renderBatchResultLine(batchID, text)
+		if err != nil {
+			// Without a custom_id there is nothing to attribute the failure to,
+			// so the line is dropped and the count still reflects it.
+			continue
+		}
+		out.Write(rendered)
+		out.WriteByte('\n')
+		lines++
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, malformed("read Anthropic batch results", err)
+	}
+	if lines == 0 {
+		return nil, malformed("Anthropic batch results carried no readable lines", nil)
+	}
+	return out.Bytes(), nil
 }

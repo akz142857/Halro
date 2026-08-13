@@ -1,6 +1,8 @@
 package gateway
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -795,6 +797,116 @@ func (s *Service) CreateBatch(ctx context.Context, key, idempotencyKey string, c
 // batches answer with the fields absent rather than with the upstream's values:
 // "not known here" is a worse answer than a correct one and a better answer
 // than a wrong one.
+// materialiseBatchResults turns an upstream's finished results into a file the
+// caller can download, for providers that leave them somewhere rather than
+// handing over a file.
+//
+// It runs while a batch is being read, not on a schedule. The fetch is bounded
+// by the adapter's response ceiling, so it is bounded in time as well, which is
+// what makes doing it inside a request acceptable — an unbounded fetch would
+// need a background pass and a second writer this data directory does not have.
+//
+// Once stored, the identifier is remembered on the batch, so polling collects
+// the same file rather than fetching it again.
+func (s *Service) materialiseBatchResults(ctx context.Context, principal auth.AuthResult, resource domain.ProviderResource, result *provider.BatchObject) (domain.ProviderResource, error) {
+	if resource.OutputFileID != "" || result.ResultsURL == "" {
+		return resource, nil
+	}
+	target, err := s.ownedTarget(resource)
+	if err != nil {
+		return resource, err
+	}
+	fetcher, ok := target.Adapter.(provider.BatchResultsAdapter)
+	if !ok {
+		return resource, nil
+	}
+	target.FixedRequestMicrosUSD = 0
+	requestID := ""
+	var raw []byte
+	if err := s.accountedInferenceResources(ctx, principal, resource.PublicModel, target, 1, &requestID, func() error {
+		var fetchErr error
+		raw, fetchErr = fetcher.FetchBatchResults(ctx, requestID, resource.UpstreamID, result.ResultsURL)
+		return fetchErr
+	}); err != nil {
+		return resource, err
+	}
+	// Results are model output travelling outbound, and storing them writes a
+	// response body outside its one-time response path. Every line goes through
+	// the project's outbound policy before any of it reaches disk — redacting on
+	// the way out instead would leave the unredacted copy sitting there.
+	redacted, err := s.redactBatchResults(principal.Project.RedactionPolicyID, raw)
+	if err != nil {
+		return resource, gatewayError("sensitive_data_detected", "batch results contain material this project may not receive", 502, err)
+	}
+	fileID, err := s.storeBatchResults(ctx, resource, redacted)
+	if err != nil {
+		return resource, err
+	}
+	updated := resource
+	updated.OutputFileID = fileID
+	updated.UpdatedAt = s.now()
+	stored, err := s.resources.PutProviderResource(ctx, updated, updated.Revision)
+	if err != nil {
+		// The file exists and can be named; only the memo failed. Returning the
+		// identifier is better than failing a poll, and the next poll re-fetches
+		// rather than losing it.
+		result.OutputFileID = fileID
+		return resource, nil
+	}
+	result.OutputFileID = fileID
+	return stored, nil
+}
+
+func (s *Service) redactBatchResults(policyID string, raw []byte) ([]byte, error) {
+	scanner := bufio.NewScanner(bytes.NewReader(raw))
+	scanner.Buffer(make([]byte, 0, 64<<10), 1<<20)
+	var out bytes.Buffer
+	for scanner.Scan() {
+		line := bytes.TrimSpace(scanner.Bytes())
+		if len(line) == 0 {
+			continue
+		}
+		processed, err := s.redactor.ProcessJSON(policyID, "outbound", append(json.RawMessage(nil), line...))
+		if err != nil {
+			return nil, err
+		}
+		out.Write(processed)
+		out.WriteByte('\n')
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
+}
+
+// storeBatchResults writes the results as a local-only file owned by the same
+// project and deployment as the batch. It has no upstream twin by construction:
+// the bytes were assembled here.
+func (s *Service) storeBatchResults(ctx context.Context, batch domain.ProviderResource, data []byte) (string, error) {
+	externalID, err := id.New("file")
+	if err != nil {
+		return "", gatewayError("internal_error", "unable to create resource ID", 500, err)
+	}
+	objectPath, err := s.writeResourceObject(externalID, data)
+	if err != nil {
+		return "", gatewayError("resource_store_unavailable", "batch results could not be stored", 503, err)
+	}
+	now := s.now()
+	record := domain.ProviderResource{
+		ID: externalID, Kind: domain.ResourceFile, ProjectID: batch.ProjectID,
+		ProviderID: batch.ProviderID, DeploymentID: batch.DeploymentID, PublicModel: batch.PublicModel,
+		ProfileID: batch.ProfileID, Region: batch.Region,
+		ObjectPath: objectPath, ObjectContentType: "application/jsonl",
+		ObjectFilename: externalID + ".jsonl", ObjectPurpose: "batch_output",
+		CreationStatus: creationCompleted, Status: "uploaded",
+		CreatedAt: now, UpdatedAt: now, ExpiresAt: batch.ExpiresAt,
+	}
+	if _, err := s.resources.PutProviderResource(ctx, record, 0); err != nil {
+		return "", gatewayError("resource_store_unavailable", "batch results could not be recorded", 503, err)
+	}
+	return externalID, nil
+}
+
 func (s *Service) nameBatchFiles(ctx context.Context, resource domain.ProviderResource, result *provider.BatchObject) (domain.ProviderResource, error) {
 	result.ID = resource.ID
 	result.InputFileID = resource.InputFileID
@@ -911,6 +1023,10 @@ func (s *Service) GetBatch(ctx context.Context, key, idValue string) (provider.B
 	resource, err = s.resources.ProviderResource(ctx, principal.Project.ID, resource.ID)
 	if err != nil {
 		return provider.BatchObject{}, gatewayError("resource_store_unavailable", "batch owner could not be read", 503, err)
+	}
+	resource, err = s.materialiseBatchResults(ctx, principal, resource, &result)
+	if err != nil {
+		return provider.BatchObject{}, err
 	}
 	if _, err := s.nameBatchFiles(ctx, resource, &result); err != nil {
 		return provider.BatchObject{}, err
