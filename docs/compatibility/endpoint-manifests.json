@@ -50,6 +50,11 @@
       "openai-node",
       "openai-python"
     ],
+    "evidence": [
+      "gateway_contract",
+      "provider_transport_fixture",
+      "sdk_blackbox"
+    ],
     "status": "compatible",
     "documented_deviations": [
       "gateway routes model names; provider-owned chat state is not exposed",
@@ -202,6 +207,11 @@
       "openai-go",
       "openai-node",
       "openai-python"
+    ],
+    "evidence": [
+      "gateway_contract",
+      "provider_transport_fixture",
+      "sdk_blackbox"
     ],
     "status": "compatible",
     "documented_deviations": [
@@ -390,6 +400,11 @@
       "openai-go",
       "openai-node",
       "openai-python"
+    ],
+    "evidence": [
+      "gateway_contract",
+      "provider_transport_fixture",
+      "sdk_blackbox"
     ],
     "status": "compatible",
     "documented_deviations": [
@@ -588,6 +603,11 @@
       "anthropic-typescript",
       "anthropic-python"
     ],
+    "evidence": [
+      "gateway_contract",
+      "provider_transport_fixture",
+      "sdk_blackbox"
+    ],
     "status": "compatible",
     "documented_deviations": [
       "only anthropic-version 2023-06-01 is accepted",
@@ -778,6 +798,11 @@
       "anthropic-typescript",
       "anthropic-python"
     ],
+    "evidence": [
+      "gateway_contract",
+      "provider_transport_fixture",
+      "sdk_blackbox"
+    ],
     "status": "compatible",
     "documented_deviations": [
       "only the direct Anthropic Messages provider profile serves this endpoint; Bedrock Mantle shares the Messages wire format but its count_tokens surface is not established",
@@ -822,9 +847,12 @@
     ],
     "state_semantics": "stateless",
     "sdk_matrix": null,
+    "evidence": [
+      "gateway_contract",
+      "provider_transport_fixture"
+    ],
     "status": "experimental",
     "documented_deviations": [
-      "official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures",
       "unknown fields and unsupported profile fields are rejected before provider I/O",
       "resource identifiers are opaque Halro identifiers scoped to one project"
     ],
@@ -872,9 +900,12 @@
     ],
     "state_semantics": "stateless",
     "sdk_matrix": null,
+    "evidence": [
+      "gateway_contract",
+      "provider_transport_fixture"
+    ],
     "status": "experimental",
     "documented_deviations": [
-      "official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures",
       "unknown fields and unsupported profile fields are rejected before provider I/O",
       "resource identifiers are opaque Halro identifiers scoped to one project",
       "the OpenAI user field is not accepted by this experimental tier"
@@ -920,9 +951,12 @@
     ],
     "state_semantics": "stateless",
     "sdk_matrix": null,
+    "evidence": [
+      "gateway_contract",
+      "provider_transport_fixture"
+    ],
     "status": "experimental",
     "documented_deviations": [
-      "official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures",
       "unknown fields and unsupported profile fields are rejected before provider I/O",
       "resource identifiers are opaque Halro identifiers scoped to one project"
     ],
@@ -961,9 +995,12 @@
     ],
     "state_semantics": "stateless",
     "sdk_matrix": null,
+    "evidence": [
+      "gateway_contract",
+      "provider_transport_fixture"
+    ],
     "status": "experimental",
     "documented_deviations": [
-      "official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures",
       "unknown fields and unsupported profile fields are rejected before provider I/O",
       "resource identifiers are opaque Halro identifiers scoped to one project"
     ],
@@ -1007,9 +1044,12 @@
     ],
     "state_semantics": "project-owned resource with 30 day TTL",
     "sdk_matrix": null,
+    "evidence": [
+      "gateway_contract",
+      "provider_transport_fixture"
+    ],
     "status": "experimental",
     "documented_deviations": [
-      "official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures",
       "unknown fields and unsupported profile fields are rejected before provider I/O",
       "resource identifiers are opaque Halro identifiers scoped to one project"
     ],
@@ -1051,9 +1091,12 @@
     ],
     "state_semantics": "project-owned resource",
     "sdk_matrix": null,
+    "evidence": [
+      "gateway_contract",
+      "provider_transport_fixture"
+    ],
     "status": "experimental",
     "documented_deviations": [
-      "official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures",
       "unknown fields and unsupported profile fields are rejected before provider I/O",
       "resource identifiers are opaque Halro identifiers scoped to one project"
     ],
@@ -1088,9 +1131,12 @@
     ],
     "state_semantics": "content served from the private local object directory",
     "sdk_matrix": null,
+    "evidence": [
+      "gateway_contract",
+      "provider_transport_fixture"
+    ],
     "status": "experimental",
     "documented_deviations": [
-      "official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures",
       "unknown fields and unsupported profile fields are rejected before provider I/O",
       "resource identifiers are opaque Halro identifiers scoped to one project"
     ],
@@ -1127,9 +1173,12 @@
     ],
     "state_semantics": "deletes upstream, metadata, and local content",
     "sdk_matrix": null,
+    "evidence": [
+      "gateway_contract",
+      "provider_transport_fixture"
+    ],
     "status": "experimental",
     "documented_deviations": [
-      "official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures",
       "unknown fields and unsupported profile fields are rejected before provider I/O",
       "resource identifiers are opaque Halro identifiers scoped to one project"
     ],
@@ -1182,9 +1231,12 @@
     ],
     "state_semantics": "project-owned resource with 7 day TTL",
     "sdk_matrix": null,
+    "evidence": [
+      "gateway_contract",
+      "provider_transport_fixture"
+    ],
     "status": "experimental",
     "documented_deviations": [
-      "official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures",
       "unknown fields and unsupported profile fields are rejected before provider I/O",
       "resource identifiers are opaque Halro identifiers scoped to one project"
     ],
@@ -1234,9 +1286,12 @@
     ],
     "state_semantics": "project-owned resource",
     "sdk_matrix": null,
+    "evidence": [
+      "gateway_contract",
+      "provider_transport_fixture"
+    ],
     "status": "experimental",
     "documented_deviations": [
-      "official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures",
       "unknown fields and unsupported profile fields are rejected before provider I/O",
       "resource identifiers are opaque Halro identifiers scoped to one project"
     ],
@@ -1286,9 +1341,12 @@
     ],
     "state_semantics": "project-owned cancellable resource",
     "sdk_matrix": null,
+    "evidence": [
+      "gateway_contract",
+      "provider_transport_fixture"
+    ],
     "status": "experimental",
     "documented_deviations": [
-      "official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures",
       "unknown fields and unsupported profile fields are rejected before provider I/O",
       "resource identifiers are opaque Halro identifiers scoped to one project"
     ],
@@ -1326,9 +1384,12 @@
     ],
     "state_semantics": "stateless Halro extension",
     "sdk_matrix": null,
+    "evidence": [
+      "gateway_contract",
+      "provider_transport_fixture"
+    ],
     "status": "experimental",
     "documented_deviations": [
-      "official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures",
       "unknown fields and unsupported profile fields are rejected before provider I/O",
       "resource identifiers are opaque Halro identifiers scoped to one project",
       "this is a Halro extension and has no OpenAI official SDK surface"
@@ -1375,9 +1436,12 @@
     ],
     "state_semantics": "project-owned resource with 7 day TTL",
     "sdk_matrix": null,
+    "evidence": [
+      "gateway_contract",
+      "provider_transport_fixture"
+    ],
     "status": "experimental",
     "documented_deviations": [
-      "official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures",
       "unknown fields and unsupported profile fields are rejected before provider I/O",
       "resource identifiers are opaque Halro identifiers scoped to one project",
       "this is a Halro extension and has no OpenAI official SDK surface"
@@ -1418,9 +1482,12 @@
     ],
     "state_semantics": "project-owned resource",
     "sdk_matrix": null,
+    "evidence": [
+      "gateway_contract",
+      "provider_transport_fixture"
+    ],
     "status": "experimental",
     "documented_deviations": [
-      "official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures",
       "unknown fields and unsupported profile fields are rejected before provider I/O",
       "resource identifiers are opaque Halro identifiers scoped to one project",
       "this is a Halro extension and has no OpenAI official SDK surface"
@@ -1456,9 +1523,12 @@
     ],
     "state_semantics": "always fails closed because Bedrock has no cancellation operation",
     "sdk_matrix": null,
+    "evidence": [
+      "gateway_contract",
+      "provider_transport_fixture"
+    ],
     "status": "experimental",
     "documented_deviations": [
-      "official SDK black-box matrix is not yet validated; current coverage is limited to gateway contracts and provider transport fixtures",
       "unknown fields and unsupported profile fields are rejected before provider I/O",
       "resource identifiers are opaque Halro identifiers scoped to one project",
       "this is a Halro extension and has no OpenAI official SDK surface"
