@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/netip"
 	"net/url"
@@ -34,6 +35,77 @@ type Config struct {
 	Metrics        Metrics        `yaml:"metrics"`
 	Audit          Audit          `yaml:"audit"`
 	ModelCatalog   ModelCatalog   `yaml:"model_catalog"`
+	Logging        Logging        `yaml:"logging"`
+}
+
+// Logging configures the process log: what is written, in which encoding, and
+// whether a copy lands on this host.
+//
+// It is deliberately small. Records are redacted on the way out no matter what
+// is set here — that is a property of the logger, not a switch — and there is no
+// per-package level, no sampling, and no network sink. What an operator needs
+// from this file is a level, an encoding their tooling reads, and a bounded file
+// they can grep after the terminal has scrolled away.
+type Logging struct {
+	// Level is the lowest severity written: debug, info, warn or error.
+	Level string `yaml:"level"`
+	// Format is json for machine reading or text for a human at a terminal.
+	Format string `yaml:"format"`
+	// Output is stderr, file, or both. "both" is what a containerised deployment
+	// wants when it also keeps a local file: the platform collects the stream,
+	// the file survives a collector outage.
+	Output string `yaml:"output"`
+	// File is where the log is written when Output includes a file. Empty means
+	// logs/halro.log inside the data directory, which is already this instance's
+	// private, exclusively-locked directory.
+	File string `yaml:"file"`
+	// MaxSizeMB rotates the file once a record would carry it past this size.
+	MaxSizeMB int `yaml:"max_size_mb"`
+	// MaxFiles counts every generation kept, including the file being written.
+	MaxFiles int `yaml:"max_files"`
+}
+
+const (
+	LogOutputStderr = "stderr"
+	LogOutputFile   = "file"
+	LogOutputBoth   = "both"
+
+	LogFormatJSON = "json"
+	LogFormatText = "text"
+)
+
+// Level maps the configured name onto a slog level. It answers info for an
+// unrecognized name; Validate is what refuses one, and a logger built before
+// validation has run should still write something.
+func (l Logging) SlogLevel() slog.Level {
+	switch strings.ToLower(strings.TrimSpace(l.Level)) {
+	case "debug":
+		return slog.LevelDebug
+	case "warn", "warning":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
+}
+
+func (l Logging) WritesStderr() bool {
+	return l.Output != LogOutputFile
+}
+
+func (l Logging) WritesFile() bool {
+	return l.Output == LogOutputFile || l.Output == LogOutputBoth
+}
+
+// LogFilePath resolves the file the log is written to. An operator who names one
+// gets exactly that path; the default lives beside the data this instance
+// already owns exclusively.
+func (c Config) LogFilePath() string {
+	if path := strings.TrimSpace(c.Logging.File); path != "" {
+		return path
+	}
+	return filepath.Join(c.Storage.DataDir, "logs", "halro.log")
 }
 
 type Server struct {
@@ -413,6 +485,23 @@ func (c *Config) Normalize() error {
 	if c.Metrics.MaxConcurrentScrapes == 0 {
 		c.Metrics.MaxConcurrentScrapes = 2
 	}
+	// A config file written before logging existed has an empty block, and an
+	// empty level would otherwise validate as "not a level" and refuse to start.
+	if c.Logging.Level == "" {
+		c.Logging.Level = "info"
+	}
+	if c.Logging.Format == "" {
+		c.Logging.Format = LogFormatJSON
+	}
+	if c.Logging.Output == "" {
+		c.Logging.Output = LogOutputStderr
+	}
+	if c.Logging.MaxSizeMB == 0 {
+		c.Logging.MaxSizeMB = 64
+	}
+	if c.Logging.MaxFiles == 0 {
+		c.Logging.MaxFiles = 5
+	}
 	if c.Metrics.WriteTimeout == 0 {
 		c.Metrics.WriteTimeout = Duration(5 * time.Second)
 	}
@@ -541,6 +630,7 @@ func (c Config) Validate(opts LoadOptions) error {
 	if c.Storage.MetadataFile == "" || filepath.Base(c.Storage.MetadataFile) != c.Storage.MetadataFile {
 		problems = append(problems, errors.New("storage.metadata_file must be a file name without path components"))
 	}
+	problems = append(problems, validateLogging(c.Logging)...)
 	if c.ModelCatalog.RefreshInterval < Duration(5*time.Minute) || c.ModelCatalog.RefreshInterval > Duration(7*24*time.Hour) {
 		problems = append(problems, errors.New("model_catalog.refresh_interval must be between 5 minutes and 7 days"))
 	}
@@ -808,6 +898,41 @@ func (c Config) UsagePath() string {
 
 func (c Config) AuditPath() string {
 	return filepath.Join(c.Storage.DataDir, "audit", "audit.log")
+}
+
+// validateLogging refuses a logging block that cannot be honoured. The limits
+// are validated whether or not a file is written: a value that only becomes
+// invalid when the operator later switches output to a file is a trap set for
+// the day they most want the log.
+func validateLogging(logging Logging) []error {
+	var problems []error
+	switch strings.ToLower(strings.TrimSpace(logging.Level)) {
+	case "debug", "info", "warn", "error":
+	default:
+		problems = append(problems, fmt.Errorf("logging.level %q must be debug, info, warn or error", logging.Level))
+	}
+	switch logging.Format {
+	case LogFormatJSON, LogFormatText:
+	default:
+		problems = append(problems, fmt.Errorf("logging.format %q must be json or text", logging.Format))
+	}
+	switch logging.Output {
+	case LogOutputStderr, LogOutputFile, LogOutputBoth:
+	default:
+		problems = append(problems, fmt.Errorf("logging.output %q must be stderr, file or both", logging.Output))
+	}
+	if logging.MaxSizeMB < 1 || logging.MaxSizeMB > 4096 {
+		problems = append(problems, errors.New("logging.max_size_mb must be between 1 and 4096"))
+	}
+	if logging.MaxFiles < 1 || logging.MaxFiles > 100 {
+		problems = append(problems, errors.New("logging.max_files must be between 1 and 100"))
+	}
+	// A path ending in a separator names a directory, and the sink would create
+	// the whole thing as a directory and then fail to open a file inside itself.
+	if file := strings.TrimSpace(logging.File); file != "" && strings.HasSuffix(file, string(os.PathSeparator)) {
+		problems = append(problems, errors.New("logging.file must name a file, not a directory"))
+	}
+	return problems
 }
 
 func validateMasterKey(masterKey MasterKey) []error {

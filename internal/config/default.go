@@ -127,6 +127,10 @@ func Default() Config {
 			MaxDownloadBytes: 1 << 20, MaxDecodedBytes: 4 << 20,
 			MaxCompressionRatio: 20, MaxEntries: 10_000,
 		},
+		Logging: Logging{
+			Level: "info", Format: LogFormatJSON, Output: LogOutputStderr,
+			MaxSizeMB: 64, MaxFiles: 5,
+		},
 	}
 }
 
