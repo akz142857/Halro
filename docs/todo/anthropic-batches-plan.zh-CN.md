@@ -253,6 +253,27 @@ native mode"）。该行按 `errored` 处理并说明原因，而不是让整批
 - 结果文件每行的 `result.message` 是否能被 `DecodeMessage` 直接解析
 - 32 MiB 上限在真实结果规模下是否过窄
 
+### 5.1 首次真实运行到哪一步（2026-08-13）
+
+走到第 4 步为止，前三步真实通过，第 4 步被两个真实缺陷挡住，都已修复并推到
+`feat/anthropic-platform-api`：
+
+1. **部署层能力没打开就无从路由。** Provider 勾上 Files/Batches 不够，`ResolveCandidatesFor`
+   按 Deployment 的能力筛，Deployment 仍只有 chat，`POST /v1/files` 返回
+   `ambiguous_resource_route`。§5 第 1 步只说了 Provider，实际两层都要开。
+2. **编辑态发不出 `mode=operator_declared`。** 控制台的 `declaredModel` 带 `!current`，
+   只有新建能声明；编辑时勾出新能力必然撞 `model_capabilities_unknown`，界面上没有出路。
+3. **扩宽能力要先离开路由。** `capability_expansion_requires_revalidation` 是设计内的闸：
+   停用路由 → 保存部署（自动落停用）→ 测试 → 启用部署 → 启用路由。跑之前就该按这个顺序排。
+4. **`CreateBatch` 一律 "batches are unavailable"。** `ResourceInferenceResourcesAdapter`
+   把文件与批处理方法捆在一个接口里，Anthropic 适配器（inline 批处理，无提供商侧文件）
+   断言整体失败。已拆为 `ResourceFilesAdapter` / `ResourceBatchesAdapter`。
+
+上面的「预期会撞上的地方」四条**一条都还没被验证**——真实上游还没收到过一次
+`POST /v1/messages/batches`。下次接着从第 4 步跑。
+
+另外记一笔：`POST /v1/files` 返回的 `created_at` 是 0，北向形状不该这样。
+
 ## 4. 明确不做的
 
 - 不引入后台轮询任务
