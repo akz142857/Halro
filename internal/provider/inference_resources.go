@@ -84,6 +84,15 @@ type FileDeleteResult struct {
 type BatchCreateCall struct {
 	RequestID, InputFileID, Endpoint, CompletionWindow string
 	Metadata                                           map[string]string
+	// InputRequests carries the batch's input lines when the upstream has no
+	// copy of the file to refer to. An upstream whose batches are created from
+	// an uploaded file gets InputFileID and ignores this; one whose batches
+	// carry their requests inline has no file to name and needs the bytes.
+	//
+	// The gateway fills it exactly when the input file is local-only, which is
+	// the same condition: if the upstream was never given the file, the requests
+	// have to travel with the batch.
+	InputRequests []byte
 }
 type BatchObject struct {
 	ID               string            `json:"id"`

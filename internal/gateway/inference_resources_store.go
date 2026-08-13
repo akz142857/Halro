@@ -680,6 +680,21 @@ func (s *Service) CreateBatch(ctx context.Context, key, idempotencyKey string, c
 	if err != nil {
 		return provider.BatchObject{}, err
 	}
+	// An upstream that never received the file cannot be pointed at it, so the
+	// requests travel with the batch. Reading them here rather than in the
+	// adapter keeps the object directory the gateway's business: an adapter has
+	// no idea where Halro puts its bytes, and should not learn.
+	if file.UpstreamID == "" {
+		path, pathErr := s.resourceObjectPath(file.ObjectPath)
+		if pathErr != nil {
+			return provider.BatchObject{}, gatewayError("resource_store_unavailable", "batch input is unavailable", 503, pathErr)
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return provider.BatchObject{}, gatewayError("resource_store_unavailable", "batch input could not be read", 503, readErr)
+		}
+		call.InputRequests = data
+	}
 	adapter, ok := batchTarget.Adapter.(provider.ResourceInferenceResourcesAdapter)
 	if !ok {
 		return provider.BatchObject{}, gatewayError("unsupported_feature", "batch adapter is unavailable", 400, nil)
