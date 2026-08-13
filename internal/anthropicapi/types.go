@@ -194,6 +194,9 @@ func DecodeMessageRequest(reader io.Reader) (MessageRequest, error) {
 	if len(payload) > MaxRequestBytes {
 		return MessageRequest{}, errors.New("request body exceeds limit")
 	}
+	if err := rejectDuplicateMembers(payload); err != nil {
+		return MessageRequest{}, err
+	}
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	decoder.DisallowUnknownFields()
 	var request MessageRequest
@@ -208,6 +211,62 @@ func DecodeMessageRequest(reader io.Reader) (MessageRequest, error) {
 		return MessageRequest{}, err
 	}
 	return request, nil
+}
+
+// rejectDuplicateMembers fails a payload that declares the same object member
+// twice.
+//
+// This is a security boundary, not tidiness. encoding/json resolves duplicates
+// last-wins, but the native path forwards the caller's original bytes verbatim,
+// so a duplicate makes the document Halro inspects and the document the provider
+// receives two different things: {"user_id":"<secret>","user_id":"benign"} is
+// redaction-clean when parsed and still carries the secret on the wire. Rejecting
+// the ambiguity is the only way to keep inspected and forwarded identical without
+// re-authoring the bytes.
+func rejectDuplicateMembers(payload []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.UseNumber()
+	return walkForDuplicateMembers(decoder)
+}
+
+func walkForDuplicateMembers(decoder *json.Decoder) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delimiter, isDelimiter := token.(json.Delim)
+	if !isDelimiter {
+		return nil
+	}
+	switch delimiter {
+	case '{':
+		seen := map[string]struct{}{}
+		for decoder.More() {
+			name, err := decoder.Token()
+			if err != nil {
+				return err
+			}
+			key, ok := name.(string)
+			if !ok {
+				return errors.New("object member name must be a string")
+			}
+			if _, duplicate := seen[key]; duplicate {
+				return errors.New("request declares object member " + key + " more than once")
+			}
+			seen[key] = struct{}{}
+			if err := walkForDuplicateMembers(decoder); err != nil {
+				return err
+			}
+		}
+	case '[':
+		for decoder.More() {
+			if err := walkForDuplicateMembers(decoder); err != nil {
+				return err
+			}
+		}
+	}
+	_, err = decoder.Token()
+	return err
 }
 
 func ensureEOF(decoder *json.Decoder) error {

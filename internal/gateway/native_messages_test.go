@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/akz142857/Halro/internal/anthropicapi"
@@ -159,6 +160,60 @@ func TestNativeMessagesStreamPreservesRawSignatureEvent(t *testing.T) {
 	}
 	if !signature || !publicModel {
 		t.Fatalf("signature=%v public_model=%v", signature, publicModel)
+	}
+}
+
+// A secret in metadata is precisely the case the portable projection could not
+// see: it assigned projection.Metadata = nil before inspecting, so the field
+// reached the provider unread. This is the regression test for that hole, and
+// it is the reason the accepted-field set can now grow safely.
+func TestNativeMessagesInspectsFieldsOutsideThePortableProjection(t *testing.T) {
+	// A Gateway Key is the sharpest case available. The envelope's own
+	// credential guard (containsCredentialField) keys off sk-/AKIA/AIza/bearer
+	// prefixes and does not know the gw_ shape, so this value clears that guard
+	// and only the redaction walk can stop it — and metadata is exactly what
+	// the old projection discarded before walking.
+	gatewayKey := "gw_" + strings.Repeat("A", 44)
+	for _, testCase := range []struct {
+		name string
+		body string
+	}{
+		{"metadata", `{"model":"claude","max_tokens":64,"metadata":{"user_id":"` + gatewayKey + `"},"messages":[{"role":"user","content":"hi"}]}`},
+		{"thinking config", `{"model":"claude","max_tokens":64,"thinking":{"type":"enabled","note":"` + gatewayKey + `"},"messages":[{"role":"user","content":"hi"}]}`},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			service, fake, key, closeFixture := newNativeMessagesFixture(t)
+			defer closeFixture()
+			request, err := anthropicapi.DecodeMessageRequest(bytes.NewBufferString(testCase.body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = service.MessagesNative(context.Background(), key, anthropicapi.SupportedVersion, request)
+			// Assert the specific code, not merely that something failed: an
+			// unrelated error would otherwise let this test pass against the
+			// very projection it exists to rule out.
+			var gatewayErr *Error
+			if !errors.As(err, &gatewayErr) || gatewayErr.Code != "sensitive_data_detected" {
+				t.Fatalf("want sensitive_data_detected, got %v (payload=%s)", err, fake.payload)
+			}
+		})
+	}
+}
+
+// The widened walk must not start rejecting ordinary requests: a metadata block
+// with nothing secret in it is the control for the test above.
+func TestNativeMessagesAcceptsBenignMetadata(t *testing.T) {
+	service, fake, key, closeFixture := newNativeMessagesFixture(t)
+	defer closeFixture()
+	request, err := anthropicapi.DecodeMessageRequest(bytes.NewBufferString(`{"model":"claude","max_tokens":64,"metadata":{"user_id":"tenant-42"},"messages":[{"role":"user","content":"hi"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.MessagesNative(context.Background(), key, anthropicapi.SupportedVersion, request); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(fake.payload, []byte(`"user_id":"tenant-42"`)) {
+		t.Fatalf("metadata did not survive to the provider: payload=%s", fake.payload)
 	}
 }
 

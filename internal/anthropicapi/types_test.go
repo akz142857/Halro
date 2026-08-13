@@ -3,6 +3,7 @@ package anthropicapi
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -54,5 +55,31 @@ func TestEnabledThinkingRejectsForcedToolChoice(t *testing.T) {
 	}
 	if _, err := DecodeMessageRequest(bytes.NewBufferString(`{"model":"claude","max_tokens":64,"messages":[{"role":"user","content":"hi"}],"thinking":{"type":"enabled","budget_tokens":32},"tool_choice":{"type":"auto"}}`)); err != nil {
 		t.Fatalf("auto tool choice should remain valid: %v", err)
+	}
+}
+
+// A duplicate object member makes the document Halro inspects and the document
+// the provider receives two different things: encoding/json resolves duplicates
+// last-wins, while the native path forwards the caller's original bytes. That
+// gap is a redaction bypass — a Gateway Key in the losing copy is invisible to
+// inspection and still on the wire — so the ambiguity is refused outright.
+func TestDecodeMessageRequestRejectsDuplicateMembers(t *testing.T) {
+	gatewayKey := "gw_" + strings.Repeat("A", 44)
+	for _, testCase := range []struct{ name, body string }{
+		{"secret hidden behind a duplicate", `{"model":"m","max_tokens":10,"metadata":{"user_id":"` + gatewayKey + `","user_id":"benign"},"messages":[{"role":"user","content":"hi"}]}`},
+		{"tool type declared twice", `{"model":"m","max_tokens":10,"tools":[{"type":"code_execution_20250825","name":"x","input_schema":{"type":"object"},"type":"custom"}],"messages":[{"role":"user","content":"hi"}]}`},
+		{"top level", `{"model":"a","model":"b","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}`},
+		{"inside a content block", `{"model":"m","max_tokens":10,"messages":[{"role":"user","content":[{"type":"text","text":"a","text":"b"}]}]}`},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if _, err := DecodeMessageRequest(strings.NewReader(testCase.body)); err == nil {
+				t.Fatal("duplicate member accepted")
+			}
+		})
+	}
+	// Control: the same shapes without a duplicate still decode.
+	body := `{"model":"m","max_tokens":10,"metadata":{"user_id":"benign"},"tools":[{"type":"custom","name":"x","input_schema":{"type":"object"}}],"messages":[{"role":"user","content":[{"type":"text","text":"a"}]}]}`
+	if _, err := DecodeMessageRequest(strings.NewReader(body)); err != nil {
+		t.Fatalf("control rejected: %v", err)
 	}
 }

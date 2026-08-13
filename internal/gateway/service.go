@@ -1095,7 +1095,13 @@ func (s *Service) MessagesNative(ctx context.Context, plaintextKey, version stri
 	if err != nil {
 		return anthropicapi.Message{}, err
 	}
-	if err := s.checkNativeInboundRedaction(principal, request); err != nil {
+	// Inspect the bytes the envelope will hand the provider, not the decoded
+	// struct: the struct is a lossy view of them.
+	payload, err := envelope.PayloadFor(target.ProfileID, 1, compatibility.NativeRequest)
+	if err != nil {
+		return anthropicapi.Message{}, gatewayError("internal_error", "native request payload is unavailable", 500, err)
+	}
+	if err := s.checkNativeInboundRedaction(principal, payload); err != nil {
 		return anthropicapi.Message{}, err
 	}
 	totalTokens, err := addTokens(inputTokens, outputTokens)
@@ -1116,7 +1122,6 @@ func (s *Service) MessagesNative(ctx context.Context, plaintextKey, version stri
 		abortErr := attempt.abort("unsupported_feature")
 		return anthropicapi.Message{}, gatewayError("unsupported_feature", "native Messages primitive is unavailable", 400, errors.Join(err, abortErr))
 	}
-	payload, _ := envelope.PayloadFor(target.ProfileID, 1, compatibility.NativeRequest)
 	result, providerErr := adapter.MessagesNative(ctx, provider.NativeMessageCall{RequestID: run.requestID, ProviderModel: target.ProviderModel, Version: version, Payload: payload})
 	var message anthropicapi.Message
 	var semanticResult semantic.GenerateResult
@@ -1130,7 +1135,7 @@ func (s *Service) MessagesNative(ctx context.Context, plaintextKey, version stri
 			safePayload, _ := responseEnvelope.PayloadFor(target.ProfileID, 1, compatibility.NativeResponse)
 			message, providerErr = anthropicapi.DecodeMessage(safePayload)
 			if providerErr == nil {
-				providerErr = s.checkNativeOutboundRedaction(principal, message)
+				providerErr = s.checkNativeOutboundRedaction(principal, safePayload)
 			}
 		}
 	}
@@ -1164,7 +1169,11 @@ func (s *Service) MessagesNativeStream(ctx context.Context, plaintextKey, versio
 	if err != nil {
 		return err
 	}
-	if err := s.checkNativeInboundRedaction(principal, request); err != nil {
+	payload, err := envelope.PayloadFor(target.ProfileID, 1, compatibility.NativeRequest)
+	if err != nil {
+		return gatewayError("internal_error", "native request payload is unavailable", 500, err)
+	}
+	if err := s.checkNativeInboundRedaction(principal, payload); err != nil {
 		return err
 	}
 	if !s.redactor.AllowsStreaming(principal.Project.RedactionPolicyID) {
@@ -1192,7 +1201,6 @@ func (s *Service) MessagesNativeStream(ctx context.Context, plaintextKey, versio
 		abortErr := attempt.abort("unsupported_feature")
 		return gatewayError("unsupported_feature", "native Messages stream primitive is unavailable", 400, errors.Join(err, abortErr))
 	}
-	payload, _ := envelope.PayloadFor(target.ProfileID, 1, compatibility.NativeRequest)
 	registry, _ := anthropicwire.NewNativeSchemaRegistry()
 	identity := nativeIdentity(principal, target, request.Model)
 	emitted := false
@@ -1210,7 +1218,7 @@ func (s *Service) MessagesNativeStream(ctx context.Context, plaintextKey, versio
 				return envelopeErr
 			}
 		}
-		if redactionErr := verifyNativeStreamRedaction(streamRedactor, event.Type, safePayload); redactionErr != nil {
+		if redactionErr := s.verifyNativeStreamRedaction(principal.Project.RedactionPolicyID, streamRedactor, event.Type, safePayload); redactionErr != nil {
 			return redactionErr
 		}
 		if emitErr := emit(anthropicapi.RawStreamEvent{Type: event.Type, Data: safePayload}); emitErr != nil {
@@ -1316,91 +1324,106 @@ func nativeIdentity(principal auth.AuthResult, target provider.Target, model str
 	return compatibility.NativeIdentity{ProjectID: principal.Project.ID, PrincipalID: principal.Key.ID, CredentialRef: "cred_" + target.ProviderID, RouteID: target.ID, RequestedModel: model}
 }
 
-func (s *Service) checkNativeInboundRedaction(principal auth.AuthResult, request anthropicapi.MessageRequest) error {
-	projection := request
-	projection.Thinking = nil
-	projection.Metadata = nil
-	projection.ServiceTier = ""
-	projection.TopK = nil
-	projection.Raw = nil
-	for messageIndex := range projection.Messages {
-		blocks := projection.Messages[messageIndex].Content[:0]
-		for _, block := range projection.Messages[messageIndex].Content {
-			if block.Type != "thinking" && block.Type != "redacted_thinking" {
-				blocks = append(blocks, block)
-			}
-		}
-		projection.Messages[messageIndex].Content = blocks
+// canonicalJSON renders payload through the same any round-trip the redaction
+// engine performs internally, so comparing against the engine's output measures
+// whether the policy rewrote content rather than whether Go reordered map keys
+// or re-rendered a number.
+func canonicalJSON(payload json.RawMessage) ([]byte, error) {
+	var value any
+	if err := json.Unmarshal(payload, &value); err != nil {
+		return nil, err
 	}
-	canonical, err := anthropicwire.DecodePortable(projection)
+	return json.Marshal(value)
+}
+
+// checkNativeInboundRedaction inspects the exact bytes that will travel
+// upstream. It walks the raw payload rather than a portable projection because
+// a projection can only carry what the canonical model models: every field
+// outside it — metadata, service_tier, top_k, and anything a newer Anthropic
+// release adds — reached the provider uninspected. Walking the payload keeps
+// the inspection surface equal to the accepted surface, which is the invariant
+// that lets the accepted surface grow without opening a redaction hole.
+func (s *Service) checkNativeInboundRedaction(principal auth.AuthResult, payload json.RawMessage) error {
+	baseline, err := canonicalJSON(payload)
 	if err != nil {
 		return gatewayError("invalid_request_error", "native request cannot be inspected safely", 400, err)
 	}
-	chat, err := openaiwire.RenderGenerateRequest(canonical, request.Model)
-	if err != nil {
-		return gatewayError("invalid_request_error", "native request cannot be inspected safely", 400, err)
-	}
-	processed, err := s.redactor.ProcessInboundChat(principal.Project.RedactionPolicyID, chat)
+	processed, err := s.redactor.ProcessJSON(principal.Project.RedactionPolicyID, "inbound", payload)
 	if err != nil {
 		return gatewayError("sensitive_data_detected", "request contains secret material", 400, err)
 	}
-	left, _ := json.Marshal(chat)
-	right, _ := json.Marshal(processed)
-	if !bytes.Equal(left, right) {
+	if !bytes.Equal(baseline, processed) {
 		return gatewayError("native_redaction_incompatible", "native payload would require rewriting", 400, redaction.ErrPolicyRejected)
 	}
 	return nil
 }
 
-func (s *Service) checkNativeOutboundRedaction(principal auth.AuthResult, message anthropicapi.Message) error {
-	projection := message
-	blocks := projection.Content[:0]
-	for _, block := range projection.Content {
-		if block.Type != "thinking" && block.Type != "redacted_thinking" {
-			blocks = append(blocks, block)
-		}
-	}
-	projection.Content = blocks
-	result, err := anthropicwire.DecodeResult(projection)
-	if err != nil {
+// checkNativeOutboundRedaction mirrors the inbound walk over the response the
+// client is about to receive. Thinking blocks are inspected here rather than
+// projected away: the old exclusion existed because the portable result model
+// had nowhere to put them, not because model reasoning is exempt from the
+// outbound secret baseline.
+func (s *Service) checkNativeOutboundRedaction(principal auth.AuthResult, payload json.RawMessage) error {
+	if _, err := canonicalJSON(payload); err != nil {
 		return &provider.Error{Class: provider.ErrorMalformed, Ambiguous: true, Message: "native response cannot be inspected safely", Cause: err}
 	}
-	chat, err := openaiwire.RenderGenerateResult(result)
-	if err != nil {
-		return err
-	}
-	processed, err := s.redactor.ProcessOutboundChat(principal.Project.RedactionPolicyID, chat)
+	return s.inspectOutboundJSON(principal.Project.RedactionPolicyID, payload)
+}
+
+// inspectOutboundJSON is the stateless half of outbound inspection, shared by
+// the unary response and by whole stream events. It deliberately walks opaque
+// values too (thinking signatures, redacted_thinking data): exempting a field
+// would require the schema knowledge this design removes, and a uniform walk is
+// what keeps the inspected surface equal to the accepted surface.
+func (s *Service) inspectOutboundJSON(policyID string, payload json.RawMessage) error {
+	baseline, err := canonicalJSON(payload)
 	if err != nil {
 		return redaction.ErrPolicyRejected
 	}
-	left, _ := json.Marshal(chat)
-	right, _ := json.Marshal(processed)
-	if !bytes.Equal(left, right) {
+	processed, err := s.redactor.ProcessJSON(policyID, "outbound", payload)
+	if err != nil {
+		return redaction.ErrPolicyRejected
+	}
+	if !bytes.Equal(baseline, processed) {
 		return redaction.ErrPolicyRejected
 	}
 	return nil
 }
 
-func verifyNativeStreamRedaction(stream *redaction.Stream, eventType string, payload []byte) error {
+// verifyNativeStreamRedaction splits inspection by what an event can carry.
+// Incremental text goes through the stateful stream processor, which is the
+// only thing that catches a secret split across two chunks. Every other event
+// arrives whole, so it gets the same raw-JSON walk the unary path uses —
+// without that, a content_block_start carrying a block type Halro does not
+// model would reach the client uninspected, which is exactly the hole that
+// widening the accepted block set would otherwise open.
+func (s *Service) verifyNativeStreamRedaction(policyID string, stream *redaction.Stream, eventType string, payload []byte) error {
 	if eventType != "content_block_delta" {
-		return nil
+		return s.inspectOutboundJSON(policyID, payload)
 	}
 	var value struct {
 		Delta struct {
 			Type        string `json:"type"`
 			Text        string `json:"text"`
 			PartialJSON string `json:"partial_json"`
+			Thinking    string `json:"thinking"`
 		} `json:"delta"`
 	}
 	if json.Unmarshal(payload, &value) != nil {
 		return redaction.ErrPolicyRejected
 	}
 	text := value.Delta.Text
-	if value.Delta.Type == "input_json_delta" {
+	switch value.Delta.Type {
+	case "input_json_delta":
 		text = value.Delta.PartialJSON
+	case "thinking_delta":
+		text = value.Delta.Thinking
 	}
 	if text == "" {
-		return nil
+		// A delta carrying no inspectable text still gets the whole-event walk;
+		// signature_delta and any future delta shape land here rather than
+		// passing through unlooked-at.
+		return s.inspectOutboundJSON(policyID, payload)
 	}
 	chunk := openaiapi.ChatCompletionResponse{ID: "native-redaction", Object: "chat.completion.chunk", Model: "native", Choices: []openaiapi.Choice{{Index: 0, Delta: &openaiapi.Message{Role: "assistant", Content: openaiapi.TextContent(text)}}}}
 	processed, err := stream.Process(chunk)
