@@ -9,6 +9,7 @@
 | 文件 | 内容 |
 |---|---|
 | [`api-model-adaptation.zh-CN.md`](api-model-adaptation.zh-CN.md) | 跨平台矩阵：北向端点 × Provider Profile × 模态，以及五条跨平台发现 |
+| [`batch-design-review.zh-CN.md`](batch-design-review.zh-CN.md) | 四角色评审 Anthropic Message Batches 的三条实施决定；结论是推翻重做，并确认了一处已发布缺陷 |
 | [`openai.zh-CN.md`](openai.zh-CN.md) | OpenAI 平台逐项摸底 |
 | [`bedrock.zh-CN.md`](bedrock.zh-CN.md) | AWS Bedrock（Runtime/Agent Runtime + Mantle）逐项摸底 |
 | [`anthropic.zh-CN.md`](anthropic.zh-CN.md) | Anthropic 平台逐项摸底 |
