@@ -160,7 +160,9 @@ JSONL ↔ inline 转换、不需要把 `results_url` 落盘再伪装成 `output_
 ### 3.5 重排后的执行顺序
 
 1. ~~**修 #0**（批处理文件标识符翻译）~~ **已完成**
-2. **定资源模型**：文件资源是否必须有上游孪生？ADR 级决定，连同 §3.4 的原生直通方案一并裁决
+2. **定资源模型**：文件资源是否必须有上游孪生？已起草
+   [`docs/adr/0021-provider-resource-upstream-twin.md`](../adr/0021-provider-resource-upstream-twin.md)，
+   三个方案（扩展资源模型 / 原生直通 / 不做）连同各自代价已写全，**Decision 一节留空待裁决**
 3. **重提三条实施决定**——在 1、2 有答案之后。当前三条已作废，不要在它们之上继续设计
 
 ## 4. Bedrock 固定模型 Profile 的模型 pin
