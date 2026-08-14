@@ -128,9 +128,9 @@ spdx_package_count() {
 }
 
 set +e
-(cd "$CORE_ROOT" && GOTOOLCHAIN=go1.26.5 go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...) >"$RESULT_ROOT/core-govulncheck.txt" 2>&1
+(cd "$CORE_ROOT" && GOTOOLCHAIN=go1.26.6 go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...) >"$RESULT_ROOT/core-govulncheck.txt" 2>&1
 CORE_VULN_STATUS=$?
-(cd "$AWS_ROOT" && GOTOOLCHAIN=go1.26.5 go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...) >"$RESULT_ROOT/aws-govulncheck.txt" 2>&1
+(cd "$AWS_ROOT" && GOTOOLCHAIN=go1.26.6 go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...) >"$RESULT_ROOT/aws-govulncheck.txt" 2>&1
 AWS_VULN_STATUS=$?
 set -e
 

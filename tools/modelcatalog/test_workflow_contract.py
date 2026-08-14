@@ -8,6 +8,13 @@ FULL_SHA_ACTION = re.compile(r"^\s*-?\s*uses:\s*[^@\s]+@[0-9a-f]{40}(?:\s+#.*)?$
 ANY_ACTION = re.compile(r"^\s*-?\s*uses:", re.MULTILINE)
 
 
+def pinned_go_version() -> str:
+    """The Go version go.mod pins, e.g. "1.26.6"."""
+    match = re.search(r"^go (\d+\.\d+(?:\.\d+)?)$", (ROOT / "go.mod").read_text(), re.MULTILINE)
+    assert match is not None, "go.mod does not pin a Go version"
+    return match.group(1)
+
+
 class WorkflowContractTest(unittest.TestCase):
     def test_catalog_workflow_binds_push_and_pr_to_protected_publisher(self) -> None:
         workflow = (ROOT / ".github/workflows/model-catalog-publish.yml").read_text()
@@ -54,7 +61,13 @@ class WorkflowContractTest(unittest.TestCase):
 
     def test_release_archives_use_one_reproducible_timestamp(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text()
-        self.assertIn("GOTOOLCHAIN: go1.26.5", workflow)
+        # The release build has to run on the toolchain go.mod pins, and this
+        # asserts exactly that rather than a version literal. Spelling the
+        # version out here made a routine toolchain bump fail a test named after
+        # timestamps, in a job the bump had no other reason to touch — and the
+        # literal never checked the property that matters, which is that the two
+        # files agree.
+        self.assertIn(f"GOTOOLCHAIN: go{pinned_go_version()}", workflow)
         self.assertGreaterEqual(workflow.count("SOURCE_DATE_EPOCH=$(git show -s --format=%ct"), 2)
         self.assertIn("buildinfo.Date=${RELEASE_DATE}", workflow)
         self.assertIn('--mtime="@${SOURCE_DATE_EPOCH}"', workflow)
