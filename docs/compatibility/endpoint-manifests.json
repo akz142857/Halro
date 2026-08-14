@@ -614,9 +614,9 @@
       "anthropic-beta is forwarded only in native mode and only for tokens the selected connection has been configured to accept; portable mode rejects it because the request is re-authored through the canonical model and a beta token describes the request as written",
       "tools are classified by execution site: Anthropic-defined client-executed tools are accepted at any dated version suffix, while provider-executed tools require the selected connection to declare provider_executed_tools, because the upstream would make network calls outside SafeTransport's host allowlist",
       "family matching is anchored to \u003cfamily\u003e_\u003cYYYYMMDD\u003e, so a longer name that merely begins with a known family (bash_code_execution_*) is classified on its own terms rather than as the client-executed tool it resembles",
-      "portable mode rejects members of tools[] and output_config that the canonical model cannot carry, because that path re-authors the body and would otherwise drop them silently; native mode forwards them verbatim",
+      "portable mode rejects members of tools[], output_config, and message content blocks that the canonical model cannot carry, because that path re-authors the body and would otherwise drop them silently; native mode forwards them verbatim",
       "mcp_servers, container, and fallbacks are rejected as deliberate boundaries rather than unmodelled fields: the first two delegate egress or code execution to the upstream, and the third moves model selection outside Halro's routing and cost attribution",
-      "tool and content-block bodies are forwarded verbatim, so cache_control and per-tool configuration reach the provider unchanged",
+      "in native mode tool and content-block bodies are forwarded verbatim, so cache_control and per-tool configuration reach the provider unchanged; portable mode refuses them rather than re-authoring the body without them",
       "Gateway Keys are accepted through x-api-key for official SDK compatibility and are never forwarded upstream",
       "native mode is selected with Halro-Route-Mode and requires either the direct Anthropic or Bedrock Mantle Anthropic profile"
     ],

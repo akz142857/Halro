@@ -14,6 +14,7 @@ import (
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/openaiapi"
 	"github.com/akz142857/Halro/internal/provider"
+	"github.com/akz142857/Halro/internal/semantic"
 )
 
 func newTestAdapter(t *testing.T, handler http.HandlerFunc) *Adapter {
@@ -244,5 +245,60 @@ func TestPortableChatTellsAnthropicNotToThink(t *testing.T) {
 	}
 	if thinking != `{"type":"disabled"}` {
 		t.Fatalf("thinking sent upstream=%q", thinking)
+	}
+}
+
+// TestChatStreamTerminationUsesSemanticVocabulary pins the words the streaming
+// bridge puts on a termination.
+//
+// The streaming decoder used to carry its own copy of the mapping, answering in
+// OpenAI's wire vocabulary ("length", "tool_calls", "stop") while everything
+// downstream reads semantic terminations. Nothing caught it because this path
+// had no termination coverage at all: the same field was decoded twice, and only
+// the non-streaming copy was ever asserted.
+//
+// The unknown case matters as much as the recognized ones. A stop_reason this
+// build has never seen is not a turn that ended normally, and flattening it into
+// "complete" is exactly what the non-streaming decoder was corrected not to do.
+func TestChatStreamTerminationUsesSemanticVocabulary(t *testing.T) {
+	for _, test := range []struct{ upstream, termination string }{
+		{"end_turn", "complete"},
+		{"max_tokens", "max_output"},
+		{"tool_use", "tool_call"},
+		{"refusal", "refusal"},
+		{"model_invented_this", "unknown"},
+	} {
+		t.Run(test.upstream, func(t *testing.T) {
+			adapter := newTestAdapter(t, func(writer http.ResponseWriter, _ *http.Request) {
+				writer.Header().Set("content-type", "text/event-stream")
+				writer.WriteHeader(http.StatusOK)
+				_, _ = writer.Write([]byte("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"claude\",\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":2,\"output_tokens\":0}}}\n\n" +
+					"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n" +
+					"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}\n\n" +
+					"event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n" +
+					"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"" + test.upstream + "\",\"stop_sequence\":null},\"usage\":{\"output_tokens\":1}}\n\n" +
+					"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"))
+			})
+			var termination, native string
+			if _, err := adapter.ChatStream(context.Background(), provider.ChatCall{
+				RequestID: "req", ProviderModel: "claude",
+				Request: openaiapi.ChatCompletionRequest{Model: "public", Stream: true, Messages: []openaiapi.Message{{Role: "user", Content: openaiapi.TextContent("hi")}}},
+			}, func(event semantic.Event) error {
+				for _, output := range event.Outputs {
+					if output.Termination != "" {
+						termination, native = output.Termination, output.NativeTermination
+					}
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if termination != test.termination {
+				t.Fatalf("termination=%q want %q", termination, test.termination)
+			}
+			if native != test.upstream {
+				t.Fatalf("native termination=%q want %q", native, test.upstream)
+			}
+		})
 	}
 }

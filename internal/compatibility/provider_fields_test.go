@@ -158,3 +158,44 @@ func TestEndpointManifestCloneIsDeep(t *testing.T) {
 		t.Fatal("profile coverage shares mutable storage")
 	}
 }
+
+// The same both-halves table for a failed tool result. Only the Anthropic-wire
+// profiles have somewhere to put is_error; every other profile has to say so, or
+// the model is handed a failure that reads as a successful answer.
+func TestFailedToolResultIsDeclaredByEveryProfileThatCannotCarryIt(t *testing.T) {
+	request := semantic.GenerateRequest{Messages: []semantic.Message{
+		{Role: semantic.RoleAssistant, Content: []semantic.Content{{Kind: semantic.ContentToolCall, CallID: "toolu_1", Name: "lookup", Arguments: "{}"}}},
+		{Role: semantic.RoleTool, Content: []semantic.Content{{Kind: semantic.ContentToolResult, CallID: "toolu_1", Text: "boom", ToolError: true}}},
+	}}
+	for _, profileID := range []domain.ProviderProfileID{
+		domain.ProfileGeminiText,
+		domain.ProfileBedrockConverseText,
+		domain.ProfileBedrockMantleOpenAIResponses,
+		domain.ProfileOpenAIChatEmbeddings,
+		domain.ProfileAzureChatEmbeddings,
+		domain.ProfileDeepSeekChat,
+		domain.ProfileOpenAICompatible,
+		domain.ProfileBedrockMantleOpenAIChat,
+		domain.ProviderProfileID("some-extension-adapter"),
+	} {
+		if fields := UnsupportedGenerateFields(profileID, request); !slices.Contains(fields, "messages[].content[].is_error") {
+			t.Fatalf("%s drops is_error without declaring it: %v", profileID, fields)
+		}
+	}
+	for _, profileID := range []domain.ProviderProfileID{
+		domain.ProfileAnthropicMessages,
+		domain.ProfileBedrockMantleAnthropicMessages,
+	} {
+		if fields := UnsupportedGenerateFields(profileID, request); slices.Contains(fields, "messages[].content[].is_error") {
+			t.Fatalf("%s declared a field it carries: %v", profileID, fields)
+		}
+	}
+	// A tool result that succeeded declares nothing: the field is only lost when
+	// there is something in it to lose.
+	request.Messages[1].Content[0].ToolError = false
+	for _, profileID := range []domain.ProviderProfileID{domain.ProfileOpenAIChatEmbeddings, domain.ProfileGeminiText} {
+		if fields := UnsupportedGenerateFields(profileID, request); slices.Contains(fields, "messages[].content[].is_error") {
+			t.Fatalf("%s declared a loss for a request that carries no failure: %v", profileID, fields)
+		}
+	}
+}

@@ -821,7 +821,7 @@ func (bridge *portableStreamBridge) Accept(event anthropicapi.RawStreamEvent) er
 			return err
 		}
 		bridge.terminated = true
-		if err := bridge.emitEvent(semantic.OutputDelta{Index: 0, Termination: anthropicwireDecodeStop(value.Delta.StopReason), NativeTermination: value.Delta.StopReason}); err != nil {
+		if err := bridge.emitEvent(semantic.OutputDelta{Index: 0, Termination: anthropicwire.DecodeStopReason(&value.Delta.StopReason), NativeTermination: value.Delta.StopReason}); err != nil {
 			return err
 		}
 		if bridge.usage != nil {
@@ -839,16 +839,4 @@ func (bridge *portableStreamBridge) Finalize() error {
 		return errors.New("Anthropic portable stream did not terminate")
 	}
 	return nil
-}
-func anthropicwireDecodeStop(reason string) string {
-	switch reason {
-	case "max_tokens", "model_context_window_exceeded":
-		return "length"
-	case "tool_use", "pause_turn":
-		return "tool_calls"
-	case "refusal":
-		return "content_filter"
-	default:
-		return "stop"
-	}
 }

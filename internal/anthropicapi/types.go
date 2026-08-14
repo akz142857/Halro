@@ -22,6 +22,17 @@ var (
 	knownToolMembers         = []string{"name", "description", "input_schema", "type", "strict"}
 	knownOutputConfigMembers = []string{"effort", "format"}
 	knownOutputFormatMembers = []string{"type", "name", "description", "schema"}
+	// A content block's members depend on its type, so each type answers for its
+	// own. The lists cover exactly what the portable projection reads back out in
+	// renderMessage; cache_control is deliberately absent from all of them,
+	// because a portable request is re-authored and the caching instruction would
+	// not survive the rewrite — the same reason it is refused on tools[].
+	knownContentBlockMembers = map[string][]string{
+		"text":        {"type", "text"},
+		"image":       {"type", "source"},
+		"tool_use":    {"type", "id", "name", "input"},
+		"tool_result": {"type", "tool_use_id", "content", "is_error"},
+	}
 )
 
 func unknownMembers(raw json.RawMessage, known []string) []string {
@@ -45,6 +56,18 @@ func unknownMembers(raw json.RawMessage, known []string) []string {
 // UnknownMembers reports tool members the portable projection cannot carry.
 func (tool Tool) UnknownMembers() []string {
 	return unknownMembers(tool.Raw, knownToolMembers)
+}
+
+// UnknownMembers reports content block members the portable projection cannot
+// carry. A block whose type the projection does not accept at all reports
+// nothing: the type itself is refused, and listing its members would describe
+// the failure by the wrong cause.
+func (block ContentBlock) UnknownMembers() []string {
+	known, ok := knownContentBlockMembers[block.Type]
+	if !ok {
+		return nil
+	}
+	return unknownMembers(block.Raw, known)
 }
 
 // UnknownMembers reports output_config members the portable projection cannot

@@ -2,6 +2,7 @@ package anthropic
 
 import (
 	"bytes"
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
@@ -217,7 +218,7 @@ func TestStopReasonsUseTheSemanticVocabularyInBothDirections(t *testing.T) {
 	} {
 		t.Run(test.reason, func(t *testing.T) {
 			reason := test.reason
-			if got := decodeStopReason(&reason); got != test.termination {
+			if got := DecodeStopReason(&reason); got != test.termination {
 				t.Fatalf("decoded %q as %q, want %q", test.reason, got, test.termination)
 			}
 			// The pairs are round trips: what this mapping decodes, it renders
@@ -235,11 +236,174 @@ func TestStopReasonsUseTheSemanticVocabularyInBothDirections(t *testing.T) {
 // is whole when nothing checked whether it is.
 func TestAnUnknownStopReasonIsNotReportedAsCompletion(t *testing.T) {
 	reason := "some_future_stop_reason"
-	if got := decodeStopReason(&reason); got != "unknown" {
+	if got := DecodeStopReason(&reason); got != "unknown" {
 		t.Fatalf("decoded as %q, want unknown", got)
 	}
 	var absent *string
-	if got := decodeStopReason(absent); got != "" {
+	if got := DecodeStopReason(absent); got != "" {
 		t.Fatalf("a missing stop_reason decoded as %q", got)
+	}
+}
+
+// TestOutputCeilingIsTheOneTheCallerNamed pins which of the two token limits
+// reaches Anthropic.
+//
+// Reading only the visible limit did not drop max_completion_tokens — it
+// replaced it with the fallback, so a caller who asked for 64 output tokens got
+// a request for 1024. The Responses surface makes that the common case rather
+// than the odd one: max_output_tokens is carried as the completion limit and is
+// the only output ceiling that surface has.
+func TestOutputCeilingIsTheOneTheCallerNamed(t *testing.T) {
+	base := func() semantic.GenerateRequest {
+		return semantic.GenerateRequest{
+			Operation: semantic.OperationGenerate, Mode: semantic.ModePortable, RequestedModel: "public",
+			Source:   semantic.Source{ProfileID: string(compatibility.ProfileAnthropicMessages), ProfileRevision: 1},
+			Messages: []semantic.Message{{Role: semantic.RoleUser, Content: []semantic.Content{{Kind: semantic.ContentText, Text: "hi"}}}},
+		}
+	}
+	visible, completion := int64(32), int64(64)
+	for _, test := range []struct {
+		name      string
+		mutate    func(*semantic.GenerateRequest)
+		maxTokens int64
+	}{
+		{"completion limit alone", func(r *semantic.GenerateRequest) { r.CompletionTokenLimit = &completion }, 64},
+		{"visible limit alone", func(r *semantic.GenerateRequest) { r.VisibleOutputTokenLimit = &visible }, 32},
+		{"completion limit wins over visible", func(r *semantic.GenerateRequest) {
+			r.CompletionTokenLimit, r.VisibleOutputTokenLimit = &completion, &visible
+		}, 64},
+		{"neither, so the fallback applies", func(*semantic.GenerateRequest) {}, defaultMaxTokens},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := base()
+			test.mutate(&request)
+			rendered, err := RenderPortableRequest(request, "claude-provider")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if rendered.MaxTokens != test.maxTokens {
+				t.Fatalf("max_tokens=%d want %d", rendered.MaxTokens, test.maxTokens)
+			}
+		})
+	}
+}
+
+// TestParallelToolCallsSurvivesWithoutToolChoice pins the field that used to
+// vanish between the two surfaces.
+//
+// Anthropic carries the parallel switch inside tool_choice; OpenAI carries it on
+// its own. Rendering it only when a tool_choice was present meant the most
+// ordinary form of the request — "here are my tools, do not call them in
+// parallel" — reached the upstream with the constraint removed and nothing
+// declared as unsupported.
+func TestParallelToolCallsSurvivesWithoutToolChoice(t *testing.T) {
+	disallowed := false
+	request := semantic.GenerateRequest{
+		Operation: semantic.OperationGenerate, Mode: semantic.ModePortable, RequestedModel: "public",
+		Source:        semantic.Source{ProfileID: string(compatibility.ProfileAnthropicMessages), ProfileRevision: 1},
+		Messages:      []semantic.Message{{Role: semantic.RoleUser, Content: []semantic.Content{{Kind: semantic.ContentText, Text: "hi"}}}},
+		Tools:         []semantic.Tool{{Name: "lookup", Schema: json.RawMessage(`{"type":"object"}`)}},
+		ParallelTools: &disallowed,
+	}
+	request.Requirements = request.DeriveRequirements()
+	rendered, err := RenderPortableRequest(request, "claude-provider")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rendered.ToolChoice == nil || rendered.ToolChoice.Type != "auto" || !rendered.ToolChoice.DisableParallelToolUse {
+		t.Fatalf("tool choice=%#v", rendered.ToolChoice)
+	}
+	// Allowing parallel calls is Anthropic's own default, so it needs no
+	// tool_choice of its own: inventing one would put a field in the request the
+	// caller never wrote.
+	allowed := true
+	request.ParallelTools = &allowed
+	request.Requirements = request.DeriveRequirements()
+	rendered, err = RenderPortableRequest(request, "claude-provider")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rendered.ToolChoice != nil {
+		t.Fatalf("a request that asked for the default carried a tool choice: %#v", rendered.ToolChoice)
+	}
+	// Without tools there is nothing to call in parallel.
+	request.Tools, request.ParallelTools = nil, &disallowed
+	request.Requirements = request.DeriveRequirements()
+	rendered, err = RenderPortableRequest(request, "claude-provider")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rendered.ToolChoice != nil {
+		t.Fatalf("a toolless request carried a tool choice: %#v", rendered.ToolChoice)
+	}
+}
+
+// TestPortableRefusesContentBlockMembersItCannotCarry pins the rule at the place
+// the caller writes most of these members.
+//
+// The same request body used to answer two ways: cache_control on tools[]
+// returned 400 with the reason "silently discarding it produces a request the
+// caller did not make", while the identical member on a content block vanished
+// without a word.
+func TestPortableRefusesContentBlockMembersItCannotCarry(t *testing.T) {
+	for _, test := range []struct{ name, body string }{
+		{"text block", `{"model":"m","max_tokens":16,"messages":[{"role":"user","content":[{"type":"text","text":"hi","cache_control":{"type":"ephemeral"}}]}]}`},
+		{"system block", `{"model":"m","max_tokens":16,"system":[{"type":"text","text":"be brief","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":"hi"}]}`},
+		{"tool result block", `{"model":"m","max_tokens":16,"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"done","cache_control":{"type":"ephemeral"}}]}]}`},
+		{"nested tool result text block", `{"model":"m","max_tokens":16,"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":[{"type":"text","text":"done","cache_control":{"type":"ephemeral"}}]}]}]}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var request anthropicapi.MessageRequest
+			if err := json.Unmarshal([]byte(test.body), &request); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := DecodePortable(request); err == nil {
+				t.Fatal("cache_control was accepted and dropped")
+			} else if !strings.Contains(err.Error(), "cache_control") {
+				t.Fatalf("error does not name the member: %v", err)
+			}
+		})
+	}
+}
+
+// A failed tool result is carried, not dropped. Feeding the model a failure as
+// if it had succeeded is the one outcome worse than refusing the request, and it
+// is what dropping is_error did.
+func TestFailedToolResultSurvivesTheRoundTrip(t *testing.T) {
+	body := `{"model":"m","max_tokens":16,"messages":[` +
+		`{"role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"lookup","input":{}}]},` +
+		`{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"boom","is_error":true}]}]}`
+	var request anthropicapi.MessageRequest
+	if err := json.Unmarshal([]byte(body), &request); err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := DecodePortable(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, message := range canonical.Messages {
+		for _, part := range message.Content {
+			if part.Kind == semantic.ContentToolResult {
+				found = true
+				if !part.ToolError {
+					t.Fatal("is_error was dropped on the way in")
+				}
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no tool result decoded")
+	}
+	rendered, err := RenderPortableRequest(canonical, "claude-provider")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, message := range rendered.Messages {
+		for _, block := range message.Content {
+			if block.Type == "tool_result" && !block.IsError {
+				t.Fatal("is_error was dropped on the way out")
+			}
+		}
 	}
 }
