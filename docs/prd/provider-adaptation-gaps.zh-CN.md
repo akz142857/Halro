@@ -2,6 +2,9 @@
 
 状态：**#0 已修；资源模型已定（ADR 0021）；#3 代码完成待真实验证；#4 已决定不做；#1/#2/媒体证据阻塞于凭据；#3b 未排期；§5 评审开出的十条全部已修（2026-08-14）**
 未完成项以 [`adaptation-open-items`](adaptation-open-items.zh-CN.md) 为准，本文是决定过程的记录
+归档：2026-08-14 从 `docs/todo/` 移入本目录。归档的是**决定过程**，不是把开着的项算成关掉的：
+#1（Converse 工具）与 #2（第二供应商）仍阻塞于凭据，#3b 未排期，「能力上限有三份真相」的重复
+仍在（§5.1 收紧的是执行那一半）。逐条以 [`adaptation-open-items`](adaptation-open-items.zh-CN.md) §2 为准。
 建立日期：2026-08-13
 来源：[`docs/review/260813`](../review/260813/README.md) 摸底的 #2、#4、#5、#6
 范围：`internal/provider/{anthropic,bedrock}`、`internal/compatibility`、`internal/gateway`、`docs/compatibility`

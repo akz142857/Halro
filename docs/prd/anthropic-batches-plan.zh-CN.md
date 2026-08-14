@@ -1,6 +1,9 @@
 # Anthropic Message Batches 实施方案
 
 状态：**五个切片全部完成**；**尚未做过真实账号端到端验证**，见 §5
+归档：2026-08-14 从 `docs/todo/` 移入本目录。代码侧五个切片确实完成，但 §5 那一项未完成项
+原样带过来：真实上游只验证到「创建被接受」，结果文件从未取回核对，§5「预期会撞上的地方」
+四条里仍有三条没有兑现。§5.1 记的批处理窗口在 2026-08-15 00:10:43 关闭，过后要重开一个批处理才能续跑。
 建立日期：2026-08-13
 决定依据：[ADR 0021](../adr/0021-provider-resource-upstream-twin.md)（Accepted）
 评审依据：[`docs/review/260813/batch-design-review.zh-CN.md`](../review/260813/batch-design-review.zh-CN.md)

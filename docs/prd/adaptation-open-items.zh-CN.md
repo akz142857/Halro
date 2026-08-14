@@ -1,6 +1,10 @@
 # 适配链条的未完成项
 
 状态：**§1 八条全部已修（2026-08-14）；§2 四项等外部条件；§3 是一处撤销的记录**
+归档：2026-08-14 从 `docs/todo/` 移入本目录。**归档不等于关闭**——§2 的四项与两项排期问题
+在归档时逐条仍然成立，只是它们等的是外部凭据或一次独立改动，留在待办目录里也不会前进。
+其中批处理端到端那一项还带着时限：批处理窗口在 2026-08-15 00:10:43 关闭，归档时（17:14）
+剩约七小时，过后这一轮作废，续跑要重开一个批处理。
 建立日期：2026-08-14
 来源：[`provider-adaptation-gaps`](provider-adaptation-gaps.zh-CN.md) §5.2 与「未完成项总览」、[`anthropic-batches-plan`](anthropic-batches-plan.zh-CN.md) §5
 范围：`internal/provider/{anthropic,bedrock}`、`internal/compatibility`、`internal/gateway`、`internal/app`

@@ -116,4 +116,4 @@ Halro 的 `/v1/batches` 与 `/v1/files` 只能落到 `openai.media-resources.v1`
 
 其中两条断言是照着今天踩过的坑写的：portable 路径的 `finish_reason` 必须落在 OpenAI 枚举内，模型目录必须至少有一条同时报出两个 token 上限——后者正是读错字段名时会退化成的形状。
 
-功能层面，Message Batches 与 Files API 是两个明确的、平台已有而 Halro 未适配的缺口，已记入 [`docs/todo/provider-adaptation-gaps.zh-CN.md`](../../todo/provider-adaptation-gaps.zh-CN.md) §3，动手前需要先定北向端点的形状——两家的批处理输入语义不同（OpenAI 是已上传文件的 ID，Anthropic 是内联请求数组）。
+功能层面，Message Batches 与 Files API 是两个明确的、平台已有而 Halro 未适配的缺口，已记入 [`docs/prd/provider-adaptation-gaps.zh-CN.md`](../../prd/provider-adaptation-gaps.zh-CN.md) §3，动手前需要先定北向端点的形状——两家的批处理输入语义不同（OpenAI 是已上传文件的 ID，Anthropic 是内联请求数组）。

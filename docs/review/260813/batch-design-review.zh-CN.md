@@ -83,7 +83,7 @@
 
 **OpenAI 的批处理取结果今天就是断的**，且与 manifest 自己的声明矛盾——`openai.batches.get.v1` 同时写着 `output_file_id` 在响应字段里、以及"resource identifiers are opaque Halro identifiers scoped to one project"。
 
-与 Anthropic 无关，已列为 [`docs/todo/provider-adaptation-gaps.zh-CN.md`](../../todo/provider-adaptation-gaps.zh-CN.md) 的 #0。
+与 Anthropic 无关，已列为 [`docs/prd/provider-adaptation-gaps.zh-CN.md`](../../prd/provider-adaptation-gaps.zh-CN.md) 的 #0。
 
 ## 未被认真评估的替代方案
 

@@ -53,6 +53,9 @@ ADR 保留在 `docs/adr/` 顶层：这是业界通用路径，且 `tools/m11/rel
 | [基于服务商与模型的能力选择升级方案](prd/model-aware-capability-selection.zh-CN.md) | 正文已迁入上面的解析方案，仅保留指向它的存根 |
 | [模型能力字典演进与四层展示](prd/model-capability-dictionary-evolution.zh-CN.md) | Phase 1 的四层分组已落地，逐项识别结果视图已被检测改版取代；Phase 2–3 未开始，能力字典仍为 v1 |
 | [Amazon Bedrock Mantle 接入评估与开发计划](prd/amazon-bedrock-mantle.zh-CN.md) | Phase 0–2 与验收清单已实施，见 [ADR 0007](adr/0007-bedrock-mantle-profiles.md)；Phase 3 的 smoke harness 已交付但从未执行，真实证据归 [provider real matrix](verification/provider-real-matrix.md) 跟踪 |
+| [Provider 适配缺口 — 待决与待建](prd/provider-adaptation-gaps.zh-CN.md) | 决定过程的记录。#0 与 §5 十条已修；#4 已关闭；#1/#2 阻塞于凭据、#3b 未排期、能力上限三份真相仍在，逐条见下面的未完成项清单 |
+| [Anthropic Message Batches 实施方案](prd/anthropic-batches-plan.zh-CN.md) | 五个切片全部完成，见 [ADR 0021](adr/0021-provider-resource-upstream-twin.md)；真实账号端到端只走到创建成功，结果核对从未完成，§5.1 记的批处理窗口在 2026-08-15 00:10:43 关闭 |
+| [适配链条的未完成项](prd/adaptation-open-items.zh-CN.md) | 上面两份归档时留下的未完成项清单：§1 八条已修，§2 四项等外部凭据或排期，§3 是一处撤销的记录 |
 
 ## 里程碑与证据 · [`milestones/`](milestones/)
 
@@ -109,6 +112,7 @@ Markdown 编进二进制，由 `internal/app/admin_master_key_runbook.go` 提供
 | [告警投递适配方案](todo/alert-delivery-design.md) | 告警契约、平台格式、签名、企业网络与投递结果分类 | 提案待评审 |
 | [DLP（脱敏与数据防泄漏）升级方案](todo/dlp-upgrade-plan.zh-CN.md) | 敏感数据标识符、检测配置文件、DLP 策略、Project 绑定与编译快照 | 提案待评审 |
 | [Halro Redis-like HA 架构提案](todo/halro-ha-architecture.zh-CN.md) | Standalone 向 Primary/Replica HA 的演进 | 目标 1.1.0，未实现 |
+| [DeepSeek 适配方案](todo/deepseek-adaptation-plan.zh-CN.md) | `deepseek.chat.v1` 已在跑，方案收的是它与真实上游的六处差异：目录模型名、字段申报、thinking 接口、缓存用量、计价档位、能力上限重复 | 提案待评审 |
 
 ## 草稿 · `drafts/`
 

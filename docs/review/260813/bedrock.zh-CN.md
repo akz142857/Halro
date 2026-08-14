@@ -34,7 +34,7 @@ return provider.Capabilities{Chat: true, Streaming: true, StreamUsage: true}
 
 **定位文档已经存在**——这是摸底初稿的一处漏读。[`docs/guides/aws-surface-selection.md`](../../guides/aws-surface-selection.md) 的「能力面的差别」一节写明 Converse 被"刻意钉死在纯文本对话"，并列出八个 Profile 的能力对照表；「都做不到的事」一节还记录了 Bedrock 侧没有批量推理与护栏。缺的不是说明，是功能本身。
 
-已记入 [`docs/todo/provider-adaptation-gaps.zh-CN.md`](../../todo/provider-adaptation-gaps.zh-CN.md) §1。现实阻塞：Converse 走 Runtime（SigV4），而当前手头两份 AWS 凭据都是 Mantle（API Key），改了也无法用真实账号验证。
+已记入 [`docs/prd/provider-adaptation-gaps.zh-CN.md`](../../prd/provider-adaptation-gaps.zh-CN.md) §1。现实阻塞：Converse 走 Runtime（SigV4），而当前手头两份 AWS 凭据都是 Mantle（API Key），改了也无法用真实账号验证。
 
 ### 【肯定】四个固定模型 Profile 的取舍
 

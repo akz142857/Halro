@@ -33,11 +33,11 @@
 | # | 严重度 | 发现 | 位置 |
 |---|---|---|---|
 | 1 | 高 | ~~Anthropic 既不在 GA 真实账号发布门禁里，也没有适配器级真实冒烟测试~~ **已修复**：新增 `internal/provider/anthropic/real_smoke_test.go`（原生非流式/流式、portable 非流式/流式、count_tokens、模型目录、空模型探测），并加入 `gaProfiles` | `internal/provider/anthropic/real_smoke_test.go`；`tests/provider-matrix/main.go:54-57` |
-| 2 | 中 | Bedrock Converse Profile 拒绝 `tools`/`tool_choice`/`response_format`/`reasoning_effort`，实际只支持纯文本对话。**降级**：定位早已写清（见下方更正），缺的只是功能本身 → [TODO §1](../../todo/provider-adaptation-gaps.zh-CN.md) | `internal/compatibility/provider_fields.go:44-53`；`internal/provider/bedrock/adapter.go:296` |
+| 2 | 中 | Bedrock Converse Profile 拒绝 `tools`/`tool_choice`/`response_format`/`reasoning_effort`，实际只支持纯文本对话。**降级**：定位早已写清（见下方更正），缺的只是功能本身 → [TODO §1](../../prd/provider-adaptation-gaps.zh-CN.md) | `internal/compatibility/provider_fields.go:44-53`；`internal/provider/bedrock/adapter.go:296` |
 | 3 | — | ~~七类能力没有自动探针~~ **误判，已更正**：图片/语音/转写/异步是高成本，文件/批处理会创建持久对象，自动探测在这两类上不能做。保留的部分（"这些能力永远只能是 declared"这一后果从未被写下）已补进代码注释 | `internal/provider/capability_detection.go:44-59` |
-| 4 | 中 | 非文本模态的南向实现是单点：图片=OpenAI + Titan Image V2，语音/转写/文件/批处理=仅 OpenAI，重排/异步=仅 Bedrock 固定模型 → [TODO §2](../../todo/provider-adaptation-gaps.zh-CN.md) | `docs/compatibility/endpoint-manifests.json` |
-| 5 | 中 | Anthropic 平台已有的 Message Batches、Files API 完全未适配；Halro 的 `/v1/batches`、`/v1/files` 只能落到 OpenAI → [TODO §3](../../todo/provider-adaptation-gaps.zh-CN.md) | 见 [anthropic.zh-CN.md](anthropic.zh-CN.md) |
-| 6 | 低 | Bedrock 四个固定模型 Profile 每个只允许一个写死的模型 ID，新模型需要改代码。**倾向保持现状** → [TODO §4](../../todo/provider-adaptation-gaps.zh-CN.md) | `internal/provider/bedrock/invoke_titan_embedding.go:65-70` |
+| 4 | 中 | 非文本模态的南向实现是单点：图片=OpenAI + Titan Image V2，语音/转写/文件/批处理=仅 OpenAI，重排/异步=仅 Bedrock 固定模型 → [TODO §2](../../prd/provider-adaptation-gaps.zh-CN.md) | `docs/compatibility/endpoint-manifests.json` |
+| 5 | 中 | Anthropic 平台已有的 Message Batches、Files API 完全未适配；Halro 的 `/v1/batches`、`/v1/files` 只能落到 OpenAI → [TODO §3](../../prd/provider-adaptation-gaps.zh-CN.md) | 见 [anthropic.zh-CN.md](anthropic.zh-CN.md) |
+| 6 | 低 | Bedrock 四个固定模型 Profile 每个只允许一个写死的模型 ID，新模型需要改代码。**倾向保持现状** → [TODO §4](../../prd/provider-adaptation-gaps.zh-CN.md) | `internal/provider/bedrock/invoke_titan_embedding.go:65-70` |
 
 ## 两处自我更正
 
@@ -54,11 +54,11 @@
 | # | 结果 |
 |---|---|
 | 1 | ✅ **已修复并已用真实账号验证**：`internal/provider/anthropic/real_smoke_test.go` + 加入 `gaProfiles` + 更新 `docs/verification/provider-real-matrix.md`。2026-08-13 对 `claude-opus-5` 实跑，七项在同一次运行内全部通过（17.165s；`count_tokens` 首跑暴露了冒烟自身的 payload 错误，修正后整跑全绿） |
-| 2 | 📋 记入 [TODO §1](../../todo/provider-adaptation-gaps.zh-CN.md)；定位文档已存在，无需补 |
+| 2 | 📋 记入 [TODO §1](../../prd/provider-adaptation-gaps.zh-CN.md)；定位文档已存在，无需补 |
 | 3 | ✅ **误判已更正**，代码注释已补 |
-| 4 | 📋 记入 [TODO §2](../../todo/provider-adaptation-gaps.zh-CN.md)，倾向先做 Azure 语音/审核 |
-| 5 | 📋 记入 [TODO §3](../../todo/provider-adaptation-gaps.zh-CN.md)，需先定北向端点形状 |
-| 6 | 📋 记入 [TODO §4](../../todo/provider-adaptation-gaps.zh-CN.md)，倾向保持现状 |
+| 4 | 📋 记入 [TODO §2](../../prd/provider-adaptation-gaps.zh-CN.md)，倾向先做 Azure 语音/审核 |
+| 5 | 📋 记入 [TODO §3](../../prd/provider-adaptation-gaps.zh-CN.md)，需先定北向端点形状 |
+| 6 | 📋 记入 [TODO §4](../../prd/provider-adaptation-gaps.zh-CN.md)，倾向保持现状 |
 
 #2、#4、#6 受 `CLAUDE.md` 的约束——放宽 Gemini/Bedrock Beta 的能力上限需要独立契约评审。#2 与 #6 还有一个现实阻塞：手头没有 Bedrock Runtime 的 SigV4 凭据（现有两份 AWS 凭据都是 Mantle），改了也无法用真实账号验证。
 
@@ -102,4 +102,4 @@
 
 ### 📋 仍未处理
 
-`docs/todo/provider-adaptation-gaps.zh-CN.md` 的四条。其中两条的阻塞不是优先级而是条件：Converse 工具与 Bedrock 固定模型 pin 都在 Runtime（SigV4）侧，手头凭据是 Mantle，改了无法验证；第二供应商的最小方案需要 Azure 凭据。唯一凭据齐备的是 Anthropic Batches/Files，但它要先定北向端点形状——OpenAI 的 `/v1/batches` 吃已上传文件的 ID，Anthropic 吃内联请求数组，这个选择决定工作量级别。
+`docs/prd/provider-adaptation-gaps.zh-CN.md` 的四条。其中两条的阻塞不是优先级而是条件：Converse 工具与 Bedrock 固定模型 pin 都在 Runtime（SigV4）侧，手头凭据是 Mantle，改了无法验证；第二供应商的最小方案需要 Azure 凭据。唯一凭据齐备的是 Anthropic Batches/Files，但它要先定北向端点形状——OpenAI 的 `/v1/batches` 吃已上传文件的 ID，Anthropic 吃内联请求数组，这个选择决定工作量级别。

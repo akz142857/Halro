@@ -117,7 +117,7 @@ portable across providers today.
 
 Costs nothing to build and forfeits the 50% batch discount on Anthropic. The
 gap is already recorded in
-[`docs/todo/provider-adaptation-gaps.zh-CN.md`](../todo/provider-adaptation-gaps.zh-CN.md);
+[`docs/prd/provider-adaptation-gaps.zh-CN.md`](../prd/provider-adaptation-gaps.zh-CN.md);
 choosing this makes the record permanent rather than pending.
 
 ## Decision
