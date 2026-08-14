@@ -54,3 +54,33 @@ gateway key 一次性打印）→ `halro admin bootstrap` → `halro serve`。Ad
 ## 剧本留档
 
 `scenarios.py` 与 serve 日志在会话 scratchpad `runtime260814/`（会话结束即弃，凭据均为假值）。
+
+---
+
+## 追加：真实 Provider 的 R1 完整版（用户授权的计费冒烟）
+
+上游：Z.AI（智谱）Anthropic 兼容面 `https://api.z.ai/api/anthropic`，模型 `glm-4-flash`，
+provider-type `anthropic`；`halro bootstrap` 直接建链。消耗约 60 token（三次最小请求 + 两次探测）。
+
+| 检查 | 结果 |
+|---|---|
+| OpenAI 面非流式 `/v1/chat/completions` | 200，内容 `pong`；**`model` 重写为别名 `real-chat`**；usage 为上游真值 (12/3/15) 非估算 |
+| OpenAI 面流式 `stream:true` | SSE 正常，每个 chunk 的 `model` 均为别名，`[DONE]` 收尾 |
+| 原生 Anthropic 面 `/v1/messages` | 200，`model` 重写为别名，`stop_reason: end_turn`，usage 上游真值——翻译与原生两条执行模式各自验证 |
+| 泄漏检查 | 三个响应体 + SSE 原文均无上游模型名、上游域名、IP |
+| 结算 | 停服后 doctor：ledger 15 帧链验证通过、`accounting_leases pending=0`（成功往返全部结算，无悬挂） |
+| 日志 | 无 API key 材料、零失败 attempt |
+
+至此链路的**成功往返**（上一节明确列为未验证的部分）在真实二进制 + 真实上游上闭合。
+
+### 过程中的两个新发现
+
+**F24【问题】`openai/adapter.go operationURL` 硬编码 `/v1` 段，非 `/v1` 版本路径的兼容端点不可配**
+base 路径不以 `/v1` 结尾时无条件插入 `/v1/`（`internal/provider/openai/adapter.go` `operationURL`），
+Z.AI 的 `/api/paas/v4` 拼成 `/api/paas/v4/v1/chat/completions`，上游 404 实证。任何 base 取值都无法
+命中 `/v4/chat/completions`——即 openai_compatible 无法接这一类端点（本次改用其 Anthropic 面绕过，
+anthropic 适配器保留 base 路径无此问题）。列入下一批整改。
+
+**环境观察（非缺陷）**：fake-IP 模式的本机 VPN 把域名解析进 198.18/15 保留段，safetransport 按
+设计拒绝（anti-SSRF），Provider 全部拨号失败且错误只说"reserved address not allowed"。行为正确；
+建议部署文档记一句该环境症状与诊断方法。

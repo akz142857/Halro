@@ -77,4 +77,6 @@ load-bearing 的，enforcement 点在 Admin 解析层（对抗验证已确认三
 
 - **F23**（运行时新发现，见 runtime-evidence.md）：健康过滤空候选误报 400 `unsupported_feature`，
   应与操作过滤区分、映射 5xx。
+- **F24**（真实上游冒烟新发现）：openai 适配器 `operationURL` 硬编码 `/v1`，非 `/v1` 版本段的
+  兼容端点（如 Z.AI `/api/paas/v4`）无法配置，上游 404 实证。
 - F20（三份 `LastTest*` 副本收敛）仍为建议级，未动。
