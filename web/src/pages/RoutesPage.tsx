@@ -1,9 +1,3 @@
-import {
-  createColumnHelper,
-  flexRender,
-  getCoreRowModel,
-  useReactTable,
-} from "@tanstack/react-table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useRef, useState, type FormEvent } from "react";
 import { api } from "../api";
@@ -27,8 +21,6 @@ import { useNotify } from "../notifications";
 import { useIsReadOnly } from "../session";
 import { Link } from "../navigation";
 import { hasOnboardingCreateIntent, OnboardingContextBanner } from "../OnboardingContext";
-
-const column = createColumnHelper<Route>();
 
 // The route update is a full replacement, so a state toggle has to resend
 // everything the route already holds — sending only `enabled` would blank the
@@ -89,90 +81,6 @@ export function RoutesPage() {
     () => new Map(providers.data?.items.map((item) => [item.id, item.name]) ?? []),
     [providers.data],
   );
-  const columns = useMemo(() => [
-    column.accessor("public_model", {
-      header: t("routes.publicModel"),
-      cell: ({ row, getValue }) => (
-        <div className="model-cell">
-          <StatusDot ok={row.original.enabled} />
-          <strong>{getValue()}</strong>
-          <code>{row.original.id}</code>
-        </div>
-      ),
-    }),
-    column.accessor("deployment_id", {
-      header: t("routes.deployment"),
-      cell: ({ getValue }) => {
-        const deployment = deploymentByID.get(getValue());
-        return deployment?.name || getValue();
-      },
-    }),
-    column.display({
-      id: "provider",
-      header: t("routes.provider"),
-      cell: ({ row }) => {
-        const deployment = deploymentByID.get(row.original.deployment_id);
-        const providerID = deployment?.provider_id || "";
-        return providerNames.get(providerID) || providerID;
-      },
-    }),
-    column.display({
-      id: "provider_model",
-      header: t("routes.upstreamModel"),
-      cell: ({ row }) => deploymentByID.get(row.original.deployment_id)?.provider_model,
-    }),
-    column.accessor("strategy", {
-      header: t("routes.strategy"),
-      cell: ({ getValue }) => <span className="badge">{(getValue() || "ordered") === "round_robin" ? t("routes.roundRobin") : t("routes.ordered")}</span>,
-    }),
-    column.accessor("priority", { header: t("routes.priority") }),
-    column.accessor("enabled", {
-      header: t("routes.status"),
-      cell: ({ getValue }) => (
-        <span className={`resource-state ${getValue() ? "enabled" : ""}`}>
-          {getValue() ? t("common.enabled") : t("common.disabled")}
-        </span>
-      ),
-    }),
-    column.display({
-      id: "actions",
-      header: "",
-      cell: ({ row }) => (
-        <div className="row-actions route-row-actions">
-          <RouteTestAction route={row.original} />
-          <div className="row-actions route-management-actions">
-            <button className="button ghost" disabled={readOnly} onClick={() => setEditing(row.original)}>{t("common.edit")}</button>
-            {row.original.enabled ? (
-              <ConfirmButton
-                className="button ghost"
-                label={t("common.disable")}
-                title={t("routes.disableTitle")}
-                confirmLabel={(siblingEnabledCount.get(row.original.public_model) ?? 0) > 1
-                  ? t("routes.disableConfirm", { name: row.original.public_model, count: (siblingEnabledCount.get(row.original.public_model) ?? 1) - 1 })
-                  : t("routes.disableConfirmLast", { name: row.original.public_model })}
-                disabled={setEnabled.isPending}
-                onConfirm={() => setEnabled.mutateAsync(row.original)}
-              />
-            ) : (
-              <button className="button ghost" disabled={readOnly || setEnabled.isPending} onClick={() => setEnabled.mutate(row.original)}>{t("common.enable")}</button>
-            )}
-            <ConfirmButton
-              label={t("common.delete")}
-              confirmLabel={t("routes.deleteConfirm", { name: row.original.public_model })}
-              requireStepUp
-              onConfirm={(reauth) => remove.mutateAsync({ route: row.original, reauth })}
-              disabled={remove.isPending}
-            />
-          </div>
-        </div>
-      ),
-    }),
-  ], [deploymentByID, providerNames, readOnly, remove, setEnabled, siblingEnabledCount, t]);
-  const table = useReactTable({
-    data: routes.data?.items ?? [],
-    columns,
-    getCoreRowModel: getCoreRowModel(),
-  });
   const pending = routes.isPending || deployments.isPending || providers.isPending;
   const error = routes.error || deployments.error || providers.error;
   return (
@@ -199,22 +107,73 @@ export function RoutesPage() {
           <table className="route-table">
             <caption className="visually-hidden">{t("routes.list")}</caption>
             <thead>
-              {table.getHeaderGroups().map((group) => (
-                <tr key={group.id}>
-                  {group.headers.map((header) => (
-                    <th scope="col" key={header.id}>{flexRender(header.column.columnDef.header, header.getContext())}</th>
-                  ))}
-                </tr>
-              ))}
+              <tr>
+                <th scope="col">{t("routes.publicModel")}</th>
+                <th scope="col">{t("routes.deployment")}</th>
+                <th scope="col">{t("routes.provider")}</th>
+                <th scope="col">{t("routes.upstreamModel")}</th>
+                <th scope="col">{t("routes.strategy")}</th>
+                <th scope="col">{t("routes.priority")}</th>
+                <th scope="col">{t("routes.status")}</th>
+                <th scope="col" />
+              </tr>
             </thead>
             <tbody>
-              {table.getRowModel().rows.map((row) => (
-                <tr id={`route-${row.original.id}`} key={row.id}>
-                  {row.getVisibleCells().map((cell) => (
-                    <td key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>
-                  ))}
-                </tr>
-              ))}
+              {routes.data.items.map((route) => {
+                const deployment = deploymentByID.get(route.deployment_id);
+                const providerID = deployment?.provider_id || "";
+                const siblings = siblingEnabledCount.get(route.public_model) ?? 0;
+                return (
+                  <tr id={`route-${route.id}`} key={route.id}>
+                    <td>
+                      <div className="model-cell">
+                        <StatusDot ok={route.enabled} />
+                        <strong>{route.public_model}</strong>
+                        <code>{route.id}</code>
+                      </div>
+                    </td>
+                    <td>{deployment?.name || route.deployment_id}</td>
+                    <td>{providerNames.get(providerID) || providerID}</td>
+                    <td>{deployment?.provider_model}</td>
+                    <td><span className="badge">{(route.strategy || "ordered") === "round_robin" ? t("routes.roundRobin") : t("routes.ordered")}</span></td>
+                    <td>{route.priority}</td>
+                    <td>
+                      <span className={`resource-state ${route.enabled ? "enabled" : ""}`}>
+                        {route.enabled ? t("common.enabled") : t("common.disabled")}
+                      </span>
+                    </td>
+                    <td>
+                      <div className="row-actions route-row-actions">
+                        <RouteTestAction route={route} />
+                        <div className="row-actions route-management-actions">
+                          <button className="button ghost" disabled={readOnly} onClick={() => setEditing(route)}>{t("common.edit")}</button>
+                          {route.enabled ? (
+                            <ConfirmButton
+                              className="button ghost"
+                              label={t("common.disable")}
+                              title={t("routes.disableTitle")}
+                              confirmLabel={siblings > 1
+                                ? t("routes.disableConfirm", { name: route.public_model, count: siblings - 1 })
+                                : t("routes.disableConfirmLast", { name: route.public_model })}
+                              disabled={setEnabled.isPending}
+                              onConfirm={() => setEnabled.mutateAsync(route)}
+                            />
+                          ) : (
+                            <button className="button ghost" disabled={readOnly || setEnabled.isPending} onClick={() => setEnabled.mutate(route)}>{t("common.enable")}</button>
+                          )}
+                          <ConfirmButton
+                            label={t("common.delete")}
+                            confirmLabel={t("routes.deleteConfirm", { name: route.public_model })}
+                            requireStepUp
+                            onConfirm={(reauth) => remove.mutateAsync({ route, reauth })}
+                            disabled={remove.isPending}
+                          />
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

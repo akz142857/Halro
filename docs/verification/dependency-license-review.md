@@ -48,7 +48,6 @@ is linked into the Go runtime.
 |---|---:|---|
 | `@hookform/resolvers` | 5.7.1 | MIT |
 | `@tanstack/react-query` | 5.101.4 | MIT |
-| `@tanstack/react-table` | 8.21.3 | MIT |
 | `i18next` | 26.3.6 | MIT |
 | `qrcode` | 1.5.4 | MIT |
 | `react` | 19.2.8 | MIT |
@@ -90,8 +89,8 @@ document is deliberately refreshed with the new inventory and hashes.
 
 - `go.mod`: `e10cb2a24494e08ed99f80435d3474f6952e4dcb`
 - `go.sum`: `c09f554dd6640d84b73b8d51f8945eae1bc3bc19`
-- `web/package.json`: `6a5b59d3144e55b40a8e48b9a478d300482de29e`
-- `web/package-lock.json`: `09490f443fe210e4fcf76b05a68262325519345e`
+- `web/package.json`: `da393ec3322f86c5838fea58e9316489df1fa0f0`
+- `web/package-lock.json`: `6354fca3aae708be1571167743cefb419594bef2`
 
 CI also runs `govulncheck`, npm audits, bundle scanning, repository notice
 checks, and artifact SBOM generation. Those checks complement license review;
