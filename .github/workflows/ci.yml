@@ -1,7 +1,17 @@
 name: ci
 
+# A change is checked once, not twice. An unfiltered `push:` meant every commit
+# on a pull-request branch started a full run of its own beside the
+# `pull_request` run of the same tree — two complete matrices for one change,
+# and the two never cancel each other because the concurrency group is keyed on
+# `github.ref`, which differs between them (refs/heads/... and refs/pull/N/merge).
+#
+# `main` keeps its own run: it is the merge result, which is a tree no pull
+# request ever tested on its own.
 on:
   push:
+    branches:
+      - main
   pull_request:
 
 concurrency:
