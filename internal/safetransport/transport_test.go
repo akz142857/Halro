@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -118,8 +119,12 @@ func TestClientIgnoresEnvironmentProxyAndRefusesRedirects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	transport, ok := client.Transport.(*http.Transport)
-	if !ok || transport.Proxy != nil {
+	// Reached through the pinned wrapper, which carries the policy so a built
+	// client can be asked what it may dial. The proxy assertion is about the real
+	// transport underneath, so it has to unwrap rather than accept whatever the
+	// wrapper reports.
+	pinned, ok := client.Transport.(*pinnedTransport)
+	if !ok || pinned.Transport.Proxy != nil {
 		t.Fatalf("SafeTransport must not consult environment proxies: %#v", client.Transport)
 	}
 	request, err := http.NewRequest(http.MethodGet, "https://evil.example/redirect", nil)
@@ -272,5 +277,42 @@ func TestResolverFailureIsNotMarkedAsOurRefusal(t *testing.T) {
 	var resolution *net.DNSError
 	if !errors.As(err, &resolution) {
 		t.Fatalf("a resolver failure lost its DNS error: %v", err)
+	}
+}
+
+// The policy a client runs under is readable after construction, and reading it
+// cannot change it. Both halves matter: callers have to be able to assert what a
+// built client may dial without opening a connection, and a caller holding that
+// answer must not be able to widen a running client's allowlist through it.
+func TestPolicyOfReportsTheEffectiveAllowlistAsACopy(t *testing.T) {
+	client, err := NewClient(Options{
+		Policy:         Policy{RequireHTTPS: true, AllowedHosts: []string{"API.Example.com", "api.example.com", "other.example"}},
+		ConnectTimeout: time.Second, ResponseHeaderTimeout: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, ok := PolicyOf(client)
+	if !ok || !policy.RequireHTTPS {
+		t.Fatalf("policy=%#v ok=%v", policy, ok)
+	}
+	// Normalized as the dialer sees it: lowercased and deduplicated, not the
+	// literal input.
+	if !slices.Equal(policy.AllowedHosts, []string{"api.example.com", "other.example"}) {
+		t.Fatalf("allowed hosts=%v", policy.AllowedHosts)
+	}
+	policy.AllowedHosts[0] = "evil.example"
+	again, _ := PolicyOf(client)
+	if again.AllowedHosts[0] != "api.example.com" {
+		t.Fatalf("a caller widened a running client's allowlist: %v", again.AllowedHosts)
+	}
+	// A client Halro did not build has no policy to report, and must not be
+	// mistaken for one with an empty allowlist — an empty allowlist allows every
+	// host that passes the address checks.
+	if _, ok := PolicyOf(&http.Client{}); ok {
+		t.Fatal("a foreign client reported a SafeTransport policy")
+	}
+	if _, ok := PolicyOf(nil); ok {
+		t.Fatal("a nil client reported a SafeTransport policy")
 	}
 }

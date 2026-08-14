@@ -76,11 +76,43 @@ func NewClient(options Options) (*http.Client, error) {
 	transport.DialContext = pinnedDialContext(options.Policy, options.Resolver, options.Dialer)
 
 	return &http.Client{
-		Transport: transport,
+		Transport: &pinnedTransport{Transport: transport, policy: options.Policy},
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
 	}, nil
+}
+
+// pinnedTransport is the RoundTripper every provider and webhook call goes
+// through. It embeds the real transport and adds nothing to the request path;
+// what it adds is the policy, kept readable after construction.
+//
+// The policy is otherwise captured inside the dial closure, so nothing could ask
+// a built client which hosts it may dial. That made a host the allowlist must
+// contain — the Bedrock control plane, derived from the approved runtime host —
+// unassertable except by opening a real outbound connection, which is not
+// something a test may do. Anything a caller has to get right about the
+// allowlist should be answerable without leaving the process.
+type pinnedTransport struct {
+	*http.Transport
+	policy Policy
+}
+
+// PolicyOf reports the effective policy of a client built by NewClient, with the
+// allowlist as NewClient normalized it. The copy is deep: the returned policy is
+// for reading, and handing back the live slice would let a caller widen what a
+// running client may dial.
+func PolicyOf(client *http.Client) (Policy, bool) {
+	if client == nil {
+		return Policy{}, false
+	}
+	pinned, ok := client.Transport.(*pinnedTransport)
+	if !ok {
+		return Policy{}, false
+	}
+	policy := pinned.policy
+	policy.AllowedHosts = slices.Clone(pinned.policy.AllowedHosts)
+	return policy, true
 }
 
 func ValidateURL(raw string, policy Policy) (*url.URL, error) {
