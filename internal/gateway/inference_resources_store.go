@@ -279,7 +279,11 @@ func (s *Service) CreateFile(ctx context.Context, key, route, idempotencyKey str
 	err = s.accountedInferenceResources(ctx, principal, route, target, units, &requestID, func() error {
 		call.RequestID = requestID
 		if localOnly {
-			upstream = provider.FileObject{Object: "file", Bytes: int64(len(call.Data)), Filename: call.Filename, Purpose: call.Purpose, Status: "uploaded"}
+			// created_at comes from the record, the same instant the later GET
+			// reports. It used to be left at zero here, so a file's creation
+			// response said it was created at the epoch while every subsequent read
+			// of the same file gave the real time — and clients sort by this field.
+			upstream = provider.FileObject{Object: "file", Bytes: int64(len(call.Data)), CreatedAt: record.CreatedAt.Unix(), Filename: call.Filename, Purpose: call.Purpose, Status: "uploaded"}
 			return s.redactFileObject(principal.Project.RedactionPolicyID, &upstream)
 		}
 		var callErr error
