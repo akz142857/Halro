@@ -299,6 +299,30 @@ native mode"）。该行按 `errored` 处理并说明原因，而不是让整批
 `internal/gatewayapi/inference_resources.go:344` 读取）。§5 的六步里漏了这一条，照着跑的人会先撞一次 400。
 `POST /v1/batches` 同样需要。
 
+**第二次真实运行：第 4 步通过（2026-08-14）**
+
+真实上游第一次收到并接受了 `POST /v1/messages/batches`。批处理仍在 24 小时窗口内，停在第 5 步：
+
+- 批处理 id：`batch_qkqmxerjvwytsqk9prsbze0yb8`
+- `expires_at`：`2026-08-15 00:10:43`
+- 轮询尚未见到 `status: completed`
+
+续跑要先把 Halro 起回来（`make dev` 或 `make start`）——上一轮是 `go run` 起的，进程随那个终端一起结束：
+
+```bash
+curl -s http://127.0.0.1:8080/v1/batches/batch_qkqmxerjvwytsqk9prsbze0yb8 \
+  -H "Authorization: Bearer $HALRO_GATEWAY_KEY" \
+  -H "Halro-Route: chat-claude"
+```
+
+`status` 转为 `completed` 后接第 6 步：用返回的 `output_file_id` 取内容，核对两行的 `custom_id` 与
+`response.body`。§5「预期会撞上的地方」四条里，只有第一条（创建时 `params` 的形状）到此为止得到了验证，
+其余三条要等结果文件才算数。
+
+若这一步只回 401，先怀疑网关密钥已过期：控制台分不出「过期」与「配错」，上一次是直接读 bolt 看到
+`expires_at` 已过才定位的——就是
+[provider-adaptation-gaps](provider-adaptation-gaps.zh-CN.md) §「首次真实运行暴露的两个控制台缺口」里的那一条。
+
 ### 5.2 16 MiB 上限：决定不验证（2026-08-14）
 
 §5 的第四条预期风险「上限在真实结果规模下是否过窄」**明确不验证**，理由记在这里，免得以后被当成遗漏。
