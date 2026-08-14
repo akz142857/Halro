@@ -233,6 +233,16 @@ func (s *Service) resolveRequest(
 	}
 	targets := s.registry.ResolveCandidatesFor(model, operation)
 	if len(targets) == 0 {
+		// Order matters: candidate resolution drops probe-unhealthy targets
+		// before the operation filter, so an alias whose every deployment is
+		// unhealthy is empty for every operation. Reporting that as 400
+		// "unsupported" blames the request for an upstream state — the caller
+		// rewrites their payload, the operator audits capabilities, and neither
+		// finds anything. It is the same condition an open circuit reports, so
+		// it gets the same shape.
+		if s.registry.SupportsOperation(model, operation, "") {
+			return auth.AuthResult{}, nil, gatewayError("provider_unavailable", "no healthy deployment is available for this model; retry shortly", 503, nil)
+		}
 		if len(s.registry.ResolveAll(model)) > 0 {
 			return auth.AuthResult{}, nil, gatewayError("unsupported_feature", unsupportedMessage, 400, nil)
 		}

@@ -117,11 +117,9 @@ func (a *Adapter) modelCatalogURL() (url.URL, error) {
 	}
 	endpoint := *a.endpoint
 	basePath := strings.TrimRight(endpoint.Path, "/")
-	if strings.HasSuffix(basePath, "/v1") {
-		endpoint.Path = basePath + "/models"
-	} else {
-		endpoint.Path = basePath + "/v1/models"
-	}
+	// The same base-is-literal rule as versionedPath, so discovery and the
+	// operation it discovers for cannot disagree about the URL.
+	endpoint.Path = versionedPath(basePath, "models")
 	return endpoint, nil
 }
 
@@ -517,12 +515,23 @@ func (a *Adapter) operationURL(providerModel, operation string) url.URL {
 		endpoint.RawQuery = query.Encode()
 		return endpoint
 	}
-	if strings.HasSuffix(basePath, "/v1") {
-		endpoint.Path = basePath + "/" + operation
-	} else {
-		endpoint.Path = basePath + "/v1/" + operation
-	}
+	endpoint.Path = versionedPath(basePath, operation)
 	return endpoint
+}
+
+// versionedPath joins an operation onto the configured base URL. A base with
+// no path gets the OpenAI default /v1 prefix; a base that carries a path is
+// taken literally, because OpenAI-compatible endpoints version their paths
+// differently — /v4, /api/paas/v4 — and the operator's base is the only place
+// that knows the right prefix. The old rule inserted /v1 into any path not
+// already ending in it, which made those endpoints unconfigurable: every base
+// produced /…/v1/chat/completions and the upstream answered 404. A deployment
+// that wants /v1 under a longer path spells it out (https://host/openai/v1).
+func versionedPath(basePath, operation string) string {
+	if basePath == "" {
+		return "/v1/" + operation
+	}
+	return basePath + "/" + operation
 }
 
 // prepareRequest applies resource addressing and then the credential, in that

@@ -218,6 +218,18 @@ func TestProfileOperationURLs(t *testing.T) {
 			want: "https://llm.internal/v1/embeddings",
 		},
 		{
+			// A path-bearing base is literal: no /v1 is inserted, so endpoints
+			// versioned as /v4 (Z.AI) or anything else are configurable.
+			name: "compatible non-v1 versioned base", base: "https://api.z.ai/api/paas/v4",
+			model: "glm-4-flash", operation: "chat/completions",
+			want: "https://api.z.ai/api/paas/v4/chat/completions",
+		},
+		{
+			name: "compatible path base wanting v1 spells it out", base: "https://llm.internal/openai/v1",
+			model: "model", operation: "chat/completions",
+			want: "https://llm.internal/openai/v1/chat/completions",
+		},
+		{
 			name: "azure deployment", base: "https://resource.openai.azure.com",
 			model: "embedding/prod", operation: "embeddings", azure: true,
 			apiVersion: "2025-01-01",

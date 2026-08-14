@@ -435,6 +435,23 @@ func (r *Registry) resolveCandidatesLocked(publicModel string, operation Operati
 		healthy, probed := r.health[target.DeploymentID]
 		return target.DeploymentID != "" && probed && !healthy
 	})
+	return filterByOperation(targets, operation, minimum)
+}
+
+// SupportsOperation reports whether any registered target for the alias could
+// serve the operation, ignoring probe health. Candidate resolution removes
+// unhealthy targets before the operation filter runs, so an alias whose every
+// deployment is probe-failed resolves to zero candidates for every operation —
+// indistinguishable, from the outside, from an operation the route never
+// supported. This answers which of the two it was, so the caller can say
+// "upstream is unhealthy" instead of blaming the request.
+func (r *Registry) SupportsOperation(publicModel string, operation Operation, minimum domain.CapabilityEvidence) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return len(filterByOperation(cloneTargets(r.targets[publicModel]), operation, minimum)) > 0
+}
+
+func filterByOperation(targets []Target, operation Operation, minimum domain.CapabilityEvidence) []Target {
 	if operation != "" {
 		targets = slices.DeleteFunc(targets, func(target Target) bool {
 			if _, ok := target.ResolveOperation(operation); !ok {

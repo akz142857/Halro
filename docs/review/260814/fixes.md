@@ -73,10 +73,21 @@ load-bearing 的，enforcement 点在 Admin 解析层（对抗验证已确认三
 控制台强制 ≥1 别名、隐藏从未绑定的全禁用别名——判定为链路引导的产品决策，API 保持权威
 （脚本可建零别名 Project）。已在 `ProjectsPage.tsx` schema 处注释声明，不放开。
 
-## 阶段 3 之后的遗留项（下一批）
+## 追修：F23 与 F24（运行时/真实冒烟发现，同轮闭环）
 
-- **F23**（运行时新发现，见 runtime-evidence.md）：健康过滤空候选误报 400 `unsupported_feature`，
-  应与操作过滤区分、映射 5xx。
-- **F24**（真实上游冒烟新发现）：openai 适配器 `operationURL` 硬编码 `/v1`，非 `/v1` 版本段的
-  兼容端点（如 Z.AI `/api/paas/v4`）无法配置，上游 404 实证。
-- F20（三份 `LastTest*` 副本收敛）仍为建议级，未动。
+**F23 — 健康过滤空候选改报 503**
+`provider.Registry` 把 operation 过滤拆为 `filterByOperation`，新增 `SupportsOperation`
+（忽略探测健康回答"这个别名本来能不能做这个操作"）；`resolveRequest` 在候选为空时先问它：
+能做但全不健康 → 503 `provider_unavailable`（与熔断开路同形），确实不支持 → 维持 400，
+别名不存在 → 维持 404。回归测试 `internal/gateway/unhealthy_upstream_test.go`：不健康 → 503 且
+不触达 provider、恢复健康 → 正常放行、真不支持的操作不被健康态升格为 503；`SupportsOperation`
+的健康无关性单测。反向验证：退掉 503 分支测试确实 FAIL。
+
+**F24 — openai 适配器 base 路径改为字面语义**
+`operationURL`/`modelCatalogURL` 收敛为一条规则 `versionedPath`：**无路径的 base 补默认 `/v1`，
+带路径的 base 按字面拼接**——`/api/paas/v4` 类端点（Z.AI）从此可配；想要长路径下的 `/v1` 的写法是
+把它写进 base（`https://host/openai/v1`）。行为变化：以前"带路径且不以 /v1 结尾"的 base 会被插入
+`/v1`，现在不再插——该形状此前恒 404（F24 本体），无既有可用配置受影响。测试表新增 Z.AI 形与
+显式 `/openai/v1` 形两例。
+
+**遗留（真正的下一批）**：F20（`LastTest*` 三副本收敛，建议级）、W3（镜像 contract 测试）。
