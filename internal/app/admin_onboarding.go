@@ -364,7 +364,7 @@ func evaluateOnboardingReadiness(now time.Time, resources onboardingResources, m
 		}
 		hasEnabledProject = true
 		matchesRoute := false
-		for _, alias := range project.AllowedRoutes {
+		for _, alias := range project.AllowedModels {
 			if _, ok := readyRoutes[alias]; ok {
 				matchesRoute = true
 				break

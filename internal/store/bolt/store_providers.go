@@ -322,8 +322,23 @@ func (s *Store) PutRoute(ctx context.Context, route domain.Route, expectedRevisi
 		return domain.Route{}, err
 	}
 	err := s.db.Update(func(tx *bbolt.Tx) error {
-		if tx.Bucket(bucketDeployments).Get([]byte(route.DeploymentID)) == nil {
+		rawDeployment := tx.Bucket(bucketDeployments).Get([]byte(route.DeploymentID))
+		if rawDeployment == nil {
 			return fmt.Errorf("deployment %q: %w", route.DeploymentID, ErrNotFound)
+		}
+		// A live route may not reference a tombstoned deployment. The route's
+		// own tombstone write is exempt: refusing it would make a route whose
+		// deployment was removed first permanently undeletable.
+		if route.DeletedAt == nil {
+			var reference struct {
+				DeletedAt *time.Time `json:"deleted_at,omitempty"`
+			}
+			if err := json.Unmarshal(rawDeployment, &reference); err != nil {
+				return err
+			}
+			if reference.DeletedAt != nil {
+				return fmt.Errorf("deployment %q: %w", route.DeploymentID, ErrNotFound)
+			}
 		}
 		if err := putVersioned(tx.Bucket(bucketRoutes), route.ID, expectedRevision, &route); err != nil {
 			return err
@@ -383,14 +398,37 @@ func (s *Store) PutProviderResource(ctx context.Context, resource domain.Provide
 		return domain.ProviderResource{}, err
 	}
 	err := s.db.Update(func(tx *bbolt.Tx) error {
-		if tx.Bucket(bucketProjects).Get([]byte(resource.ProjectID)) == nil {
-			return errors.New("resource project does not exist")
+		// A new resource may only be created against live owners. Updates are
+		// exempt: a batch keeps being polled and settled after its deployment is
+		// tombstoned, and refusing the status write would strand the record.
+		requireLive := expectedRevision == 0
+		checkOwner := func(bucket []byte, id, kind string) error {
+			raw := tx.Bucket(bucket).Get([]byte(id))
+			if raw == nil {
+				return errors.New("resource " + kind + " does not exist")
+			}
+			if !requireLive {
+				return nil
+			}
+			var reference struct {
+				DeletedAt *time.Time `json:"deleted_at,omitempty"`
+			}
+			if err := json.Unmarshal(raw, &reference); err != nil {
+				return err
+			}
+			if reference.DeletedAt != nil {
+				return errors.New("resource " + kind + " does not exist")
+			}
+			return nil
 		}
-		if tx.Bucket(bucketProviders).Get([]byte(resource.ProviderID)) == nil {
-			return errors.New("resource provider does not exist")
+		if err := checkOwner(bucketProjects, resource.ProjectID, "project"); err != nil {
+			return err
 		}
-		if tx.Bucket(bucketDeployments).Get([]byte(resource.DeploymentID)) == nil {
-			return errors.New("resource deployment does not exist")
+		if err := checkOwner(bucketProviders, resource.ProviderID, "provider"); err != nil {
+			return err
+		}
+		if err := checkOwner(bucketDeployments, resource.DeploymentID, "deployment"); err != nil {
+			return err
 		}
 		bucket := tx.Bucket(bucketProviderResources)
 		if expectedRevision == 0 && resource.IdempotencyKeyHash != ([32]byte{}) {

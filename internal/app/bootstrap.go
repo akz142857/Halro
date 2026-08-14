@@ -172,7 +172,7 @@ func Bootstrap(ctx context.Context, cfg config.Config, options BootstrapOptions,
 		},
 		Project: domain.Project{
 			ID: projectID, Name: options.ProjectName, Enabled: true,
-			AllowedRoutes: []string{options.PublicModel}, DailyBudgetMicrosUSD: options.DailyBudgetMicrosUSD,
+			AllowedModels: []string{options.PublicModel}, DailyBudgetMicrosUSD: options.DailyBudgetMicrosUSD,
 			MaxInputTokens: 128_000, MaxOutputTokens: 16_384, MaxRequestBytes: cfg.Server.MaxRequestBytes,
 			MaxStreamDuration: cfg.Gateway.StreamMaxDuration.Value(), CreatedAt: now, UpdatedAt: now,
 		},

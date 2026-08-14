@@ -9,7 +9,7 @@ const project: Project = {
   id: "project_1",
   name: "Checkout service",
   enabled: true,
-  allowed_routes: ["support-chat", "text-embedding"],
+  allowed_models: ["support-chat", "text-embedding"],
   rpm: 60,
   tpm: 100000,
   max_concurrency: 8,
@@ -324,11 +324,11 @@ describe("DeveloperPage", () => {
     expect(streamingJava).toContain("HttpResponse<Stream<String>>");
   });
 
-  it("survives a project whose allowed_routes came back as null", async () => {
-    // The admin API accepts projects without allowed_routes and serialises them as null;
+  it("survives a project whose allowed_models came back as null", async () => {
+    // The admin API accepts projects without allowed_models and serialises them as null;
     // dereferencing it used to throw during render and blank the whole console.
     vi.spyOn(api, "projects").mockResolvedValue({
-      items: [{ ...project, id: "project_null", name: "NoRoutes", allowed_routes: null as never }, project],
+      items: [{ ...project, id: "project_null", name: "NoRoutes", allowed_models: null as never }, project],
       next_cursor: "",
     });
     vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });

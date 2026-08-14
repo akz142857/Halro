@@ -19,7 +19,7 @@ func TestOnboardingRequiresOneUsableTopology(t *testing.T) {
 
 	// Every resource still exists, but the Project now grants a different public
 	// model. Independent item counts would report 4/4; a topology check must not.
-	resources.Projects[0].AllowedRoutes = []string{"another-model"}
+	resources.Projects[0].AllowedModels = []string{"another-model"}
 	detached := evaluateOnboardingReadiness(now, resources, usage.Metrics{}, usage.Snapshot{})
 	if detached.State != onboardingConfiguring || detached.CompletedGoals != 2 || detached.Goals[2].DetailCode != "project_route_unavailable" {
 		t.Fatalf("detached=%#v", detached)
@@ -229,7 +229,7 @@ func readyOnboardingResources(now time.Time) onboardingResources {
 			LastTestStatus: domain.DeploymentTestHealthy, LastTestRevision: 1, Revision: 1,
 		}},
 		Projects: []domain.Project{{
-			ID: "project_1", Enabled: true, AllowedRoutes: []string{"halro-chat"},
+			ID: "project_1", Enabled: true, AllowedModels: []string{"halro-chat"},
 		}},
 		Keys: []domain.GatewayKey{{
 			ID: "key_1", ProjectID: "project_1", Enabled: true, CreatedAt: now,

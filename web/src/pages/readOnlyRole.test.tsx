@@ -17,7 +17,7 @@ const readOnlyReason = "只读账户无法执行此操作。";
 
 function testProject(overrides: Partial<Project> = {}): Project {
   return {
-    id: "project_a", name: "Alpha", enabled: true, revision: 1, allowed_routes: ["chat"],
+    id: "project_a", name: "Alpha", enabled: true, revision: 1, allowed_models: ["chat"],
     rpm: 60, tpm: 1000, max_concurrency: 8, daily_budget_micros_usd: 0,
     max_input_tokens: 0, max_output_tokens: 0, max_request_bytes: 0, max_stream_duration: 0,
     allowed_cidrs: [], redaction_policy_id: "", token_guard_policy_id: "",

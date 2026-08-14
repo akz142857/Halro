@@ -175,7 +175,7 @@ type Project struct {
 	ID                   string         `json:"id"`
 	Name                 string         `json:"name"`
 	Enabled              bool           `json:"enabled"`
-	AllowedRoutes        []string       `json:"allowed_routes"`
+	AllowedModels        []string       `json:"allowed_models"`
 	RPM                  int64          `json:"rpm"`
 	TPM                  int64          `json:"tpm"`
 	MaxConcurrency       int64          `json:"max_concurrency"`

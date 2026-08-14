@@ -99,7 +99,7 @@ func TestProviderDeploymentAndProjectCreateRequireAKeyAndRefuseReplay(t *testing
 			"max_concurrency": int64(1), "enabled": false,
 		}},
 		{name: "project", path: "/admin/api/v1/projects", replayCode: "project_idempotency_replay", body: map[string]any{
-			"name": "Idempotent project", "enabled": false, "allowed_routes": []string{},
+			"name": "Idempotent project", "enabled": false, "allowed_models": []string{},
 		}},
 	}
 	for _, test := range tests {

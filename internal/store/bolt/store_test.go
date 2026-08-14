@@ -193,7 +193,7 @@ func TestMetadataMigrationFromV1IsAtomicAndRecorded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(history) != 28 ||
+	if len(history) != 29 ||
 		history[0] != (MigrationRecord{Version: 1, Name: "initial_schema"}) ||
 		history[1] != (MigrationRecord{Version: 2, Name: "migration_history"}) ||
 		history[2] != (MigrationRecord{Version: 3, Name: "deployments"}) ||
@@ -221,7 +221,8 @@ func TestMetadataMigrationFromV1IsAtomicAndRecorded(t *testing.T) {
 		history[24] != (MigrationRecord{Version: 25, Name: "reset_capability_detections_for_interface_identification"}) ||
 		history[25] != (MigrationRecord{Version: 26, Name: "reset_capability_detections_for_verifiable_scope"}) ||
 		history[26] != (MigrationRecord{Version: 27, Name: "admin_audit_intents"}) ||
-		history[27] != (MigrationRecord{Version: 28, Name: "provider_executed_tools_capability"}) {
+		history[27] != (MigrationRecord{Version: 28, Name: "provider_executed_tools_capability"}) ||
+		history[28] != (MigrationRecord{Version: 29, Name: "project_allowed_models"}) {
 		t.Fatalf("history=%#v", history)
 	}
 }
@@ -1081,7 +1082,7 @@ func TestStoreRejectsProfileAwareDefaultGrantsAndDeploymentEscalation(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	project, err := store.PutProject(ctx, domain.Project{ID: "project_resource", Name: "Resource owner", Enabled: true, AllowedRoutes: []string{"model"}, RPM: 10, TPM: 1000, MaxConcurrency: 1, CreatedAt: now, UpdatedAt: now}, 0, nil)
+	project, err := store.PutProject(ctx, domain.Project{ID: "project_resource", Name: "Resource owner", Enabled: true, AllowedModels: []string{"model"}, RPM: 10, TPM: 1000, MaxConcurrency: 1, CreatedAt: now, UpdatedAt: now}, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

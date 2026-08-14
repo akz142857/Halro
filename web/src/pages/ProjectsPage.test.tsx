@@ -15,7 +15,7 @@ const redactionPolicy = {
 
 function project(overrides: Record<string, unknown> = {}) {
   return {
-    id: "prj_1", name: "Inference", enabled: true, allowed_routes: ["chat"], rpm: 60, tpm: 1000,
+    id: "prj_1", name: "Inference", enabled: true, allowed_models: ["chat"], rpm: 60, tpm: 1000,
     max_concurrency: 8, daily_budget_micros_usd: 0, max_input_tokens: 0, max_output_tokens: 0,
     max_request_bytes: 0, max_stream_duration: 0, allowed_cidrs: [], redaction_policy_id: "",
     token_guard_policy_id: "", revision: 1, created_at: "", updated_at: "", ...overrides,
@@ -94,11 +94,11 @@ describe("projects page", () => {
     expect(within(actions).getByText("启用项目 · 启用")).toBeVisible();
   });
 
-  it("renders a project whose allowed_routes came back as null", async () => {
-    // The admin API accepts a project without allowed_routes and serialises it as null;
+  it("renders a project whose allowed_models came back as null", async () => {
+    // The admin API accepts a project without allowed_models and serialises it as null;
     // dereferencing it used to throw during render and blank the whole console.
     vi.mocked(api.projectsPage).mockResolvedValue({
-      items: [project({ name: "NoRoutes", allowed_routes: null })],
+      items: [project({ name: "NoRoutes", allowed_models: null })],
       next_cursor: "",
     } as never);
 
@@ -139,7 +139,7 @@ describe("projects page", () => {
   ])("switches project status from the detail actions without changing its policy (%s)", async (enabled, actionLabel, nextEnabled) => {
     const current = project({
       enabled,
-      allowed_routes: ["chat"],
+      allowed_models: ["chat"],
       allowed_cidrs: ["10.0.0.0/8"],
       max_input_tokens: 128_000,
       max_output_tokens: 16_384,
@@ -164,7 +164,7 @@ describe("projects page", () => {
     await waitFor(() => expect(update).toHaveBeenCalledWith("prj_1", {
       name: "Inference",
       enabled: nextEnabled,
-      allowed_routes: ["chat"],
+      allowed_models: ["chat"],
       rpm: 60,
       tpm: 1000,
       max_concurrency: 8,
@@ -263,7 +263,7 @@ describe("projects page", () => {
       { id: "rt_1", public_model: "chat", enabled: true, revision: 1 },
     ] as never);
     vi.spyOn(api, "createProject").mockRejectedValue(
-      new ApiError(409, "allowed_routes references unknown model alias chatt"),
+      new ApiError(409, "allowed_models references unknown model alias chatt"),
     );
 
     renderPage();
@@ -272,7 +272,7 @@ describe("projects page", () => {
     fireEvent.click(await screen.findByRole("checkbox", { name: /chat/ }));
     fireEvent.click(screen.getByRole("button", { name: "创建项目" }));
 
-    expect(await screen.findByText("allowed_routes references unknown model alias chatt")).toBeVisible();
+    expect(await screen.findByText("allowed_models references unknown model alias chatt")).toBeVisible();
   });
 
   // The dialog closes on success, so the acknowledgement has nothing left on

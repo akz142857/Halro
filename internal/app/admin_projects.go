@@ -19,7 +19,7 @@ import (
 type projectInput struct {
 	Name                     string   `json:"name"`
 	Enabled                  bool     `json:"enabled"`
-	AllowedRoutes            []string `json:"allowed_routes"`
+	AllowedModels            []string `json:"allowed_models"`
 	RPM                      int64    `json:"rpm"`
 	TPM                      int64    `json:"tpm"`
 	MaxConcurrency           int64    `json:"max_concurrency"`
@@ -120,6 +120,11 @@ func (r *Runtime) updateAdminProject(writer http.ResponseWriter, request *http.R
 		adminMutationError(writer, err)
 		return
 	}
+	// A tombstone is not editable; see the provider update handler.
+	if current.DeletedAt != nil {
+		adminNotFound(writer)
+		return
+	}
 	if current.Revision != expected {
 		adminPreconditionFailed(writer)
 		return
@@ -167,6 +172,12 @@ func (r *Runtime) deleteAdminProject(writer http.ResponseWriter, request *http.R
 	project, err := r.store.GetProject(request.Context(), chi.URLParam(request, "id"))
 	if err != nil {
 		adminMutationError(writer, err)
+		return
+	}
+	// Deleting a tombstone again would advance its revision and record a second
+	// delete event for an object that is already gone.
+	if project.DeletedAt != nil {
+		adminNotFound(writer)
 		return
 	}
 	if project.Revision != expected {
@@ -402,7 +413,7 @@ func (input projectInput) project(id string, createdAt, updatedAt time.Time) (do
 	project := domain.Project{
 		ID: id, Name: input.Name, Enabled: input.Enabled,
 		// Never nil: a nil slice marshals to JSON null, which clients cannot iterate.
-		AllowedRoutes: append([]string{}, input.AllowedRoutes...), RPM: input.RPM, TPM: input.TPM,
+		AllowedModels: append([]string{}, input.AllowedModels...), RPM: input.RPM, TPM: input.TPM,
 		MaxConcurrency: input.MaxConcurrency, DailyBudgetMicrosUSD: input.DailyBudgetMicrosUSD,
 		MaxInputTokens: input.MaxInputTokens, MaxOutputTokens: input.MaxOutputTokens,
 		MaxRequestBytes:   input.MaxRequestBytes,
@@ -435,7 +446,7 @@ func (r *Runtime) validateProjectReferences(request *http.Request, project domai
 			return errors.New("redaction policy is unavailable")
 		}
 	}
-	if len(project.AllowedRoutes) > 0 {
+	if len(project.AllowedModels) > 0 {
 		routes, err := r.store.ListRoutes(request.Context())
 		if err != nil {
 			return errors.New("routes are unavailable")
@@ -448,9 +459,9 @@ func (r *Runtime) validateProjectReferences(request *http.Request, project domai
 		}
 		// A disabled route stays bindable — the console surfaces it as unavailable. An
 		// alias with no route at all only fails at request time, silently, so reject here.
-		for _, alias := range project.AllowedRoutes {
+		for _, alias := range project.AllowedModels {
 			if _, ok := known[alias]; !ok {
-				return errors.New("allowed_routes references unknown model alias " + alias)
+				return errors.New("allowed_models references unknown model alias " + alias)
 			}
 		}
 	}

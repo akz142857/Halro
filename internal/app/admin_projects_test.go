@@ -34,7 +34,7 @@ func TestAdminProjectAndKeyLifecycle(t *testing.T) {
 	seedRouteForTest(t, runtime, "chat")
 
 	projectBody := map[string]any{
-		"name": "Inference", "enabled": true, "allowed_routes": []string{"chat"},
+		"name": "Inference", "enabled": true, "allowed_models": []string{"chat"},
 		"rpm": int64(60), "tpm": int64(100_000), "max_concurrency": int64(8),
 		"daily_budget_micros_usd":     int64(5_000_000),
 		"max_input_tokens":            int64(32_000),
@@ -261,9 +261,9 @@ func loginAdminForTest(t *testing.T, runtime *Runtime) (*http.Cookie, string) {
 	return response.Result().Cookies()[0], body.CSRF
 }
 
-// A project created without allowed_routes must still serialise the field as an array.
+// A project created without allowed_models must still serialise the field as an array.
 // Clients iterate it directly, and a JSON null used to blank the admin console.
-func TestAdminProjectOmittingAllowedRoutesSerialisesEmptyArray(t *testing.T) {
+func TestAdminProjectOmittingAllowedModelsSerialisesEmptyArray(t *testing.T) {
 	cfg := testConfig(t)
 	if err := Initialize(cfg); err != nil {
 		t.Fatal(err)
@@ -296,8 +296,8 @@ func TestAdminProjectOmittingAllowedRoutesSerialisesEmptyArray(t *testing.T) {
 	if createResponse.Code != http.StatusCreated {
 		t.Fatalf("project create status=%d body=%s", createResponse.Code, createResponse.Body.String())
 	}
-	if strings.Contains(createResponse.Body.String(), `"allowed_routes":null`) {
-		t.Fatalf("create response carried a null allowed_routes: %s", createResponse.Body.String())
+	if strings.Contains(createResponse.Body.String(), `"allowed_models":null`) {
+		t.Fatalf("create response carried a null allowed_models: %s", createResponse.Body.String())
 	}
 
 	list := adminRequest(t, http.MethodGet, "/admin/api/v1/projects", nil)
@@ -307,19 +307,19 @@ func TestAdminProjectOmittingAllowedRoutesSerialisesEmptyArray(t *testing.T) {
 	if listResponse.Code != http.StatusOK {
 		t.Fatalf("project list status=%d", listResponse.Code)
 	}
-	if strings.Contains(listResponse.Body.String(), `"allowed_routes":null`) {
-		t.Fatalf("list response carried a null allowed_routes: %s", listResponse.Body.String())
+	if strings.Contains(listResponse.Body.String(), `"allowed_models":null`) {
+		t.Fatalf("list response carried a null allowed_models: %s", listResponse.Body.String())
 	}
 	var page struct {
 		Items []struct {
-			AllowedRoutes []string `json:"allowed_routes"`
+			AllowedModels []string `json:"allowed_models"`
 		} `json:"items"`
 	}
 	if err := json.Unmarshal(listResponse.Body.Bytes(), &page); err != nil {
 		t.Fatal(err)
 	}
-	if len(page.Items) != 1 || page.Items[0].AllowedRoutes == nil {
-		t.Fatalf("expected one project with a non-nil allowed_routes, got %+v", page.Items)
+	if len(page.Items) != 1 || page.Items[0].AllowedModels == nil {
+		t.Fatalf("expected one project with a non-nil allowed_models, got %+v", page.Items)
 	}
 }
 
@@ -510,7 +510,7 @@ func TestAdminProjectRejectsUnknownModelAlias(t *testing.T) {
 	seedRouteForTest(t, runtime, "chat")
 
 	create := adminRequest(t, http.MethodPost, "/admin/api/v1/projects", map[string]any{
-		"name": "Typo", "enabled": true, "allowed_routes": []string{"chat", "chatt"},
+		"name": "Typo", "enabled": true, "allowed_models": []string{"chat", "chatt"},
 		"rpm": int64(60), "tpm": int64(100_000), "max_concurrency": int64(8),
 	})
 	create.AddCookie(cookie)
@@ -559,7 +559,7 @@ func createProjectForTest(
 ) domain.Project {
 	t.Helper()
 	create := adminRequest(t, http.MethodPost, "/admin/api/v1/projects", map[string]any{
-		"name": name, "enabled": true, "allowed_routes": routes,
+		"name": name, "enabled": true, "allowed_models": routes,
 		"rpm": int64(60), "tpm": int64(100_000), "max_concurrency": int64(8),
 		"daily_budget_micros_usd":     int64(5_000_000),
 		"max_input_tokens":            int64(32_000),

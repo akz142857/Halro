@@ -36,6 +36,9 @@ const MAX_PROJECT_NAME = 128;
 
 const projectSchema = (t: TFunction) => z.object({
   name: z.string().trim().min(1, t("projects.nameRequired")).max(MAX_PROJECT_NAME, t("projects.nameTooLong")),
+  // Deliberately stricter than the Admin API, which accepts a project with no
+  // model aliases (it just cannot call anything). The console guides the chain,
+  // so it requires at least one; the API stays the authority for scripts.
   routes: z.array(z.string()).min(1, t("projects.routeRequired")),
   rpm: z.coerce.number().int().min(0),
   tpm: z.coerce.number().int().min(0),
@@ -60,7 +63,7 @@ function projectUpdateBody(project: Project, enabled: boolean) {
   return {
     name: project.name,
     enabled,
-    allowed_routes: project.allowed_routes ?? [],
+    allowed_models: project.allowed_models ?? [],
     rpm: project.rpm,
     tpm: project.tpm,
     max_concurrency: project.max_concurrency,
@@ -264,8 +267,8 @@ function ProjectDetail({ project }: { project: Project }) {
           <svg className="policy-details-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5" /></svg>
           <span className="policy-details-label">{t("projects.policyDetails")}</span>
           <small>{[
-            (project.allowed_routes ?? []).length
-              ? t("projects.modelCount", { count: (project.allowed_routes ?? []).length })
+            (project.allowed_models ?? []).length
+              ? t("projects.modelCount", { count: (project.allowed_models ?? []).length })
               : t("common.none"),
             `${compactNumber(project.rpm)} RPM`,
             project.daily_budget_micros_usd ? money(project.daily_budget_micros_usd) : t("common.unlimited"),
@@ -279,7 +282,7 @@ function ProjectDetail({ project }: { project: Project }) {
           </span>
         </summary>
         <div className="policy-grid">
-          <Policy label={t("projects.allowedModels")} value={(project.allowed_routes ?? []).join(", ") || t("common.none")} />
+          <Policy label={t("projects.allowedModels")} value={(project.allowed_models ?? []).join(", ") || t("common.none")} />
           <Policy label={t("projects.rateLimit")} value={`${compactNumber(project.rpm)} RPM / ${compactNumber(project.tpm)} TPM`} />
           <Policy label={t("projects.concurrency")} value={String(project.max_concurrency || t("common.unlimited"))} />
           <Policy label={t("projects.dailyBudget")} value={project.daily_budget_micros_usd ? money(project.daily_budget_micros_usd) : t("common.unlimited")} />
@@ -402,7 +405,7 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
     queryFn: api.allRoutes,
   });
   const routeOptions = useMemo(() => {
-    const retained = new Set(current?.allowed_routes ?? []);
+    const retained = new Set(current?.allowed_models ?? []);
     const options = new Map<string, { enabledCount: number; strategies: Set<string> }>();
     retained.forEach((value) => options.set(value, { enabledCount: 0, strategies: new Set() }));
     availableRoutes.data?.forEach((route) => {
@@ -414,7 +417,7 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
     return Array.from(options, ([value, state]) => ({ value, ...state }))
       .filter((option) => option.enabledCount > 0 || retained.has(option.value))
       .sort((a, b) => a.value.localeCompare(b.value));
-  }, [availableRoutes.data, current?.allowed_routes]);
+  }, [availableRoutes.data, current?.allowed_models]);
   const {
     register,
     handleSubmit,
@@ -428,7 +431,7 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
       tpm: current?.tpm ?? 100_000,
       concurrency: current?.max_concurrency ?? 8,
       budget: (current?.daily_budget_micros_usd ?? 50_000_000) / 1_000_000,
-      routes: current?.allowed_routes ?? [],
+      routes: current?.allowed_models ?? [],
       cidrs: (current?.allowed_cidrs ?? []).join(", "),
       tokenGuardPolicyID: current?.token_guard_policy_id ?? "",
       redactionPolicyID: current?.redaction_policy_id ?? "",
@@ -447,7 +450,7 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
       const body = {
       name: value.name,
       enabled: value.enabled,
-      allowed_routes: value.routes,
+      allowed_models: value.routes,
       rpm: value.rpm,
       tpm: value.tpm,
       max_concurrency: value.concurrency,

@@ -262,7 +262,7 @@ export interface Project {
   id: string;
   name: string;
   enabled: boolean;
-  allowed_routes: string[];
+  allowed_models: string[];
   rpm: number;
   tpm: number;
   max_concurrency: number;

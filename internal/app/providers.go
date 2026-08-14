@@ -202,6 +202,7 @@ const (
 	withheldPriceUnreadable       = "price_unreadable"
 	withheldTargetRejected        = "target_rejected"
 	withheldRegionMismatched      = "region_mismatched"
+	withheldCapabilitiesInvalid   = "capabilities_invalid"
 )
 
 // Why a Provider, or one of its bindings, was left out of the load. Scoped wider
@@ -458,6 +459,20 @@ func loadProviderRegistryWithCatalog(
 		var providerID, providerModel string
 		{
 			deployment, exists := deploymentByID[deploymentID]
+			if exists && !deployment.Capabilities.AnyOperation() {
+				// Every supported write path refuses a deployment with no
+				// operation capability, so a record like this was written around
+				// the store. deploymentCapabilities would read the empty set as
+				// "unspecified" and adopt the adapter's full set — the fail-open
+				// direction — so the route is withheld instead, the same answer
+				// the ceiling check gives a binding that claims too much.
+				report.Dangling = append(report.Dangling, referenceWithholding{
+					RouteID: route.ID, DeploymentID: deploymentID,
+					ProviderID: deployment.ProviderID, BindingID: deployment.BindingID,
+					Reason: withheldCapabilitiesInvalid,
+				})
+				continue
+			}
 			if !exists || !deployment.Enabled || deployment.DeletedAt != nil {
 				// Withheld rather than fatal. The Admin API refuses to disable or
 				// delete a deployment that an enabled route still names, so this

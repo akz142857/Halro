@@ -22,7 +22,7 @@ Provider secret
   → Provider + Profile Binding
   → Deployment + Model/Capability/Price snapshot
   → Route(public model alias)
-  → Project.allowed_routes
+  → Project.allowed_models
   → Gateway Key
   → /v1/* request
   → Provider attempt(s)
@@ -36,7 +36,7 @@ flowchart LR
     B["Provider<br/>Base URL、Allowed Hosts、Profile Bindings、并发上限"]
     C["Deployment<br/>上游模型、Binding、能力快照、版本价格、健康状态"]
     D["Route<br/>公共模型别名、Deployment、优先级、策略"]
-    E["Project<br/>allowed_routes、预算、RPM/TPM/并发、CIDR、策略"]
+    E["Project<br/>allowed_models、预算、RPM/TPM/并发、CIDR、策略"]
     F["Gateway Key<br/>Project 归属、hash、启停、过期时间"]
 
     A -->|"credential_id"| B
@@ -46,7 +46,7 @@ flowchart LR
     E -->|"project_id"| F
 ```
 
-这里有一个容易误读的点：`Project.allowed_routes` 保存的是 `Route.PublicModel`，不是 Route ID。因此多个 Route 可以共享同一个公共模型别名，并成为有序回退或轮询候选。
+这里有一个容易误读的点：`Project.allowed_models` 保存的是 `Route.PublicModel`，不是 Route ID。因此多个 Route 可以共享同一个公共模型别名，并成为有序回退或轮询候选。
 
 ### 2.1 Credential
 
@@ -218,7 +218,7 @@ flowchart TD
     C --> D["auth.Snapshot.Authenticate"]
     D --> E{"Key/Project enabled<br/>Key 未过期?"}
     E -->|否| X1["401/403"]
-    E -->|是| F{"model ∈ Project.allowed_routes<br/>CIDR 允许?"}
+    E -->|是| F{"model ∈ Project.allowed_models<br/>CIDR 允许?"}
     F -->|否| X2["403"]
     F -->|是| G["Registry.ResolveCandidatesFor<br/>operation + health + evidence"]
     G --> H["Semantic/profile/capability/token filters"]

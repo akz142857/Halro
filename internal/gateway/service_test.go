@@ -392,7 +392,7 @@ func newFixtureAt(
 		ID:                   "project_1",
 		Name:                 "Project",
 		Enabled:              true,
-		AllowedRoutes:        []string{"chat"},
+		AllowedModels:        []string{"chat"},
 		DailyBudgetMicrosUSD: dailyBudget,
 		MaxInputTokens:       10_000,
 		MaxOutputTokens:      100,

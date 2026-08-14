@@ -247,6 +247,13 @@ func (r *Runtime) updateAdminProvider(writer http.ResponseWriter, request *http.
 		adminMutationError(writer, err)
 		return
 	}
+	// A tombstone is not editable. Deployment and Gateway Key updates already
+	// answer 404 here; without this, a deleted provider stayed writable and the
+	// audit trail recorded successful updates against a removed object.
+	if current.DeletedAt != nil {
+		adminNotFound(writer)
+		return
+	}
 	if current.Revision != expected {
 		adminPreconditionFailed(writer)
 		return
@@ -329,6 +336,12 @@ func (r *Runtime) deleteAdminProvider(writer http.ResponseWriter, request *http.
 	instance, err := r.store.GetProvider(request.Context(), chi.URLParam(request, "id"))
 	if err != nil {
 		adminMutationError(writer, err)
+		return
+	}
+	// Deleting a tombstone again would advance its revision and record a second
+	// delete event for an object that is already gone.
+	if instance.DeletedAt != nil {
+		adminNotFound(writer)
 		return
 	}
 	if instance.Revision != expected {
@@ -882,6 +895,11 @@ func (r *Runtime) updateAdminRoute(writer http.ResponseWriter, request *http.Req
 		adminMutationError(writer, err)
 		return
 	}
+	// A tombstone is not editable; see the provider update handler.
+	if current.DeletedAt != nil {
+		adminNotFound(writer)
+		return
+	}
 	if current.Revision != expected {
 		adminPreconditionFailed(writer)
 		return
@@ -943,6 +961,12 @@ func (r *Runtime) deleteAdminRoute(writer http.ResponseWriter, request *http.Req
 	route, err := r.store.GetRoute(request.Context(), chi.URLParam(request, "id"))
 	if err != nil {
 		adminMutationError(writer, err)
+		return
+	}
+	// Deleting a tombstone again would advance its revision and record a second
+	// delete event for an object that is already gone.
+	if route.DeletedAt != nil {
+		adminNotFound(writer)
 		return
 	}
 	if route.Revision != expected {
@@ -1509,7 +1533,7 @@ func (r *Runtime) validateAliasKeepsServingProjects(
 		if project.DeletedAt != nil {
 			continue
 		}
-		if slices.Contains(project.AllowedRoutes, route.PublicModel) {
+		if slices.Contains(project.AllowedModels, route.PublicModel) {
 			return fmt.Errorf(
 				"this is the last route for model alias %q; remove it from project %q's allowed models first",
 				route.PublicModel, project.Name,

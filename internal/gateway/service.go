@@ -222,7 +222,7 @@ func (s *Service) resolveRequest(
 	if err != nil {
 		return auth.AuthResult{}, nil, gatewayError("invalid_api_key", "invalid API key", 401, err)
 	}
-	if !slices.Contains(principal.Project.AllowedRoutes, model) {
+	if !slices.Contains(principal.Project.AllowedModels, model) {
 		return auth.AuthResult{}, nil, gatewayError("model_not_allowed", "model is not allowed for this project", 403, nil)
 	}
 	if err := authorizeSource(ctx, principal.Project); err != nil {

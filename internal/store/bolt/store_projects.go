@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/akz142857/Halro/internal/domain"
 	bbolt "go.etcd.io/bbolt"
@@ -31,8 +32,8 @@ func (s *Store) PutProject(ctx context.Context, project domain.Project, expected
 // normalizeProject keeps slices non-nil so records written before normalization
 // existed still marshal as JSON arrays rather than null.
 func normalizeProject(project domain.Project) domain.Project {
-	if project.AllowedRoutes == nil {
-		project.AllowedRoutes = []string{}
+	if project.AllowedModels == nil {
+		project.AllowedModels = []string{}
 	}
 	return project
 }
@@ -65,8 +66,23 @@ func (s *Store) PutGatewayKey(ctx context.Context, key domain.GatewayKey, expect
 		return domain.GatewayKey{}, err
 	}
 	err := s.db.Update(func(tx *bbolt.Tx) error {
-		if tx.Bucket(bucketProjects).Get([]byte(key.ProjectID)) == nil {
+		rawProject := tx.Bucket(bucketProjects).Get([]byte(key.ProjectID))
+		if rawProject == nil {
 			return fmt.Errorf("project %q: %w", key.ProjectID, ErrNotFound)
+		}
+		// A live key may not be attached to a tombstoned project. The key's own
+		// tombstone write is exempt so a key can still be deleted after its
+		// project is.
+		if key.DeletedAt == nil {
+			var reference struct {
+				DeletedAt *time.Time `json:"deleted_at,omitempty"`
+			}
+			if err := json.Unmarshal(rawProject, &reference); err != nil {
+				return err
+			}
+			if reference.DeletedAt != nil {
+				return fmt.Errorf("project %q: %w", key.ProjectID, ErrNotFound)
+			}
 		}
 		keys := tx.Bucket(bucketGatewayKeys)
 		index := tx.Bucket(bucketGatewayKeyHash)

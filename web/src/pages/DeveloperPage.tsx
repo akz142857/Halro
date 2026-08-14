@@ -43,7 +43,7 @@ export function DeveloperPage() {
   const projects = useQuery({ queryKey: ["projects"], queryFn: api.projects });
   const developerConfig = useQuery({ queryKey: ["developer-config"], queryFn: api.developerConfig });
   const availableProjects = useMemo(
-    () => (projects.data?.items ?? []).filter((project) => project.enabled && (project.allowed_routes ?? []).length > 0),
+    () => (projects.data?.items ?? []).filter((project) => project.enabled && (project.allowed_models ?? []).length > 0),
     [projects.data?.items],
   );
   const [projectID, setProjectID] = useState("");
@@ -69,7 +69,7 @@ export function DeveloperPage() {
     if (selectedProject && selectedProject.id !== projectID) setProjectID(selectedProject.id);
   }, [projectID, selectedProject]);
   useEffect(() => {
-    const routes = selectedProject?.allowed_routes ?? [];
+    const routes = selectedProject?.allowed_models ?? [];
     if (!routes.includes(model)) setModel(routes[0] ?? "");
   }, [model, selectedProject]);
   // Seed the URL once. Reacting to gatewayURL would refill the field the moment the
@@ -279,7 +279,7 @@ export function DeveloperPage() {
                   would show one model while sending — and billing — another. */}
               <Field label={t("developer.publicModel")} hint={requestMode === "json" ? t("developer.jsonModeOverride") : undefined}>
                 <select value={model} disabled={requestMode === "json"} onChange={(event) => setModel(event.target.value)}>
-                  {(selectedProject.allowed_routes ?? []).map((route) => <option value={route} key={route}>{route}</option>)}
+                  {(selectedProject.allowed_models ?? []).map((route) => <option value={route} key={route}>{route}</option>)}
                 </select>
               </Field>
               <Field label={t("developer.endpoint")}>

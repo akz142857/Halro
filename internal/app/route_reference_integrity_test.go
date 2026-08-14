@@ -58,7 +58,7 @@ func TestDeletingTheLastRouteForAReferencedAliasIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := map[string]any{
-		"name": project.Name, "allowed_routes": project.AllowedRoutes, "enabled": true,
+		"name": project.Name, "allowed_models": project.AllowedModels, "enabled": true,
 		"daily_budget_micros_usd": project.DailyBudgetMicrosUSD,
 		"rpm":                     project.RPM, "tpm": project.TPM,
 		"max_concurrency": project.MaxConcurrency,
@@ -99,7 +99,7 @@ func TestDeletingTheLastRouteForAnUnreferencedAliasIsAllowed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	project.AllowedRoutes = nil
+	project.AllowedModels = nil
 	if _, err := runtime.store.PutProject(context.Background(), project, project.Revision, nil); err != nil {
 		t.Fatal(err)
 	}

@@ -21,7 +21,7 @@ import (
 	bbolt "go.etcd.io/bbolt"
 )
 
-const schemaVersion uint64 = 28
+const schemaVersion uint64 = 29
 
 // legacyCapabilityEvidence is the evidence tier this project used before
 // capability evidence was durable metadata. The domain no longer accepts it, so
@@ -705,6 +705,29 @@ var migrations = []migration{
 			return err
 		}
 		return migrationStep(step, "after_provider_executed_tools_capability")
+	}},
+	{version: 29, name: "project_allowed_models", up: func(tx *bbolt.Tx, step func(string) error) error {
+		if err := migrationStep(step, "before_project_allowed_models"); err != nil {
+			return err
+		}
+		// The field always held public model aliases, never route IDs; the name
+		// said otherwise, and the wire contract inherited the lie. Renamed in
+		// place — pre-1.0.0 keeps no compatibility alias — so stored records
+		// move their value to the key every reader now uses.
+		if err := rewriteBucketIfPresent(tx, bucketProjects, func(record map[string]json.RawMessage) error {
+			encoded, ok := record["allowed_routes"]
+			if !ok {
+				return nil
+			}
+			delete(record, "allowed_routes")
+			if _, taken := record["allowed_models"]; !taken {
+				record["allowed_models"] = encoded
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		return migrationStep(step, "after_project_allowed_models")
 	}},
 }
 

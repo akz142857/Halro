@@ -96,7 +96,7 @@ func newNativeMessagesFixtureForProfile(t *testing.T, profileID domain.ProviderP
 
 func newNativeMessagesFixtureFull(t *testing.T, profileID domain.ProviderProfileID, adjust func(*provider.Capabilities), allowedBetas ...string) (*Service, *nativeMessagesFake, string, func()) {
 	t.Helper()
-	project := domain.Project{ID: "project_native", Name: "Native", Enabled: true, AllowedRoutes: []string{"claude"}, DailyBudgetMicrosUSD: 1000000, MaxInputTokens: 10000, MaxOutputTokens: 1000}
+	project := domain.Project{ID: "project_native", Name: "Native", Enabled: true, AllowedModels: []string{"claude"}, DailyBudgetMicrosUSD: 1000000, MaxInputTokens: 10000, MaxOutputTokens: 1000}
 	plaintext, key, err := auth.GenerateGatewayKey(project.ID, "test", nil)
 	if err != nil {
 		t.Fatal(err)

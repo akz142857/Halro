@@ -162,6 +162,14 @@ func (s *Service) resourcePrincipal(ctx context.Context, key string) (auth.AuthR
 	if err := authorizeSource(ctx, principal.Project); err != nil {
 		return auth.AuthResult{}, err
 	}
+	// The resource paths redact file names, textual uploads and batch results,
+	// and the redaction engine answers a policy lookup miss with "no policy" —
+	// the fail-open direction. resolveRequest already refuses a request whose
+	// Project names a policy the live snapshot does not hold; this is the same
+	// belt for the plane that does not pass through resolveRequest.
+	if err := s.assertPolicySnapshotsCoverProject(principal); err != nil {
+		return auth.AuthResult{}, err
+	}
 	if s.resources == nil {
 		return auth.AuthResult{}, gatewayError("resource_store_unavailable", "resource storage is unavailable", 503, nil)
 	}
@@ -202,7 +210,7 @@ func (s *Service) CreateFile(ctx context.Context, key, route, idempotencyKey str
 		}
 		call.Data = []byte(processed)
 	}
-	if !slices.Contains(principal.Project.AllowedRoutes, route) {
+	if !slices.Contains(principal.Project.AllowedModels, route) {
 		return provider.FileObject{}, gatewayError("model_not_allowed", "route is not allowed for this project", 403, nil)
 	}
 	targets := s.registry.ResolveCandidatesFor(route, provider.OperationFiles)
@@ -1098,7 +1106,7 @@ func (s *Service) StartAsyncInvoke(ctx context.Context, key, idempotencyKey stri
 	if err != nil {
 		return provider.AsyncInvokeObject{}, gatewayError("sensitive_data_detected", "request contains secret material", 400, err)
 	}
-	if !slices.Contains(principal.Project.AllowedRoutes, request.Model) {
+	if !slices.Contains(principal.Project.AllowedModels, request.Model) {
 		return provider.AsyncInvokeObject{}, gatewayError("model_not_allowed", "model is not allowed for this project", 403, nil)
 	}
 	targets := s.registry.ResolveCandidatesFor(request.Model, provider.OperationAsyncInvoke)

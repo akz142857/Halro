@@ -162,6 +162,13 @@ func validateDeploymentProviderProfile(deployment domain.Deployment, instance do
 	if !ok {
 		return errors.New("deployment provider profile binding was not found")
 	}
+	// binding.Enabled is deliberately not checked here. The Admin resolution
+	// paths only ever offer enabled bindings, and the registry withholds a
+	// deployment whose binding is switched off — but the store has to keep
+	// accepting the state itself, because a dangling binding is something the
+	// binary must be able to load, reload and edit its way out of (see
+	// TestRuntimeOpensWithADanglingBinding). Refusing it here would also refuse
+	// the provider write that repairs it.
 	if deployment.AccessSurface != binding.AccessSurface || deployment.ProfileID != binding.ProfileID {
 		return errors.New("deployment access surface or profile does not match provider")
 	}

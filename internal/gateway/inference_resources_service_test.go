@@ -192,7 +192,7 @@ type inferenceResourcesServiceFixture struct {
 
 func newInferenceResourcesServiceFixture(t *testing.T, profileID domain.ProviderProfileID, adapter provider.Adapter, target provider.Target, policies []domain.RedactionPolicy) inferenceResourcesServiceFixture {
 	t.Helper()
-	project := domain.Project{ID: "inferenceResources-project", Name: "Phase 2", Enabled: true, AllowedRoutes: []string{target.PublicModel}, DailyBudgetMicrosUSD: 1_000_000, MaxInputTokens: 100_000, MaxOutputTokens: 100_000}
+	project := domain.Project{ID: "inferenceResources-project", Name: "Phase 2", Enabled: true, AllowedModels: []string{target.PublicModel}, DailyBudgetMicrosUSD: 1_000_000, MaxInputTokens: 100_000, MaxOutputTokens: 100_000}
 	if len(policies) > 0 {
 		project.RedactionPolicyID = policies[0].ID
 	}
