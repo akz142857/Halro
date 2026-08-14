@@ -34,7 +34,11 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn("attestations: write", workflow)
         self.assertIn("release/sbom-binary-input", workflow)
         self.assertIn("release/halro-binaries.spdx.json", workflow)
-        self.assertIn("actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a", workflow)
+        # The step has to exist and be pinned to a commit; which commit is
+        # test_release_pins_every_action's business. Naming one here added no
+        # coverage that test does not already give and turned every upgrade of
+        # the action into a failure of the SBOM contract.
+        self.assertRegex(workflow, r"actions/attest-build-provenance@[0-9a-f]{40}")
         self.assertIn('gh attestation verify "${artifact}"', workflow)
 
     def test_release_keeps_dynamic_signed_catalog_inactive(self) -> None:
