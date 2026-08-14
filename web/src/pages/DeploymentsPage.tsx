@@ -903,7 +903,7 @@ function DeploymentForm({
     ...(canonicalModelRef ? { capability_model: canonicalModelRef } : {}),
     target_kind: targetKind,
     capabilities,
-    ...((declaredModel || widenedBeyondSaved) && manualDeclaration ? { mode: "operator_declared" } : {}),
+    ...(widening || declaredModel && manualDeclaration ? { mode: "operator_declared" } : {}),
     ...(declaredModel && detection?.status === "completed" ? {
       capability_detection_id: detection.id,
       capability_detection_revision: detection.revision,
@@ -950,6 +950,14 @@ function DeploymentForm({
   // Turning a capability on makes the deployment claim something no test has
   // exercised, so the server drops it out of routing until it is retested and
   // re-enabled. Saying so here means that is a decision, not a surprise.
+  //
+  // It is also the operator's own claim. An edit locks the invocation identity,
+  // so detection cannot run and no variant is re-resolved — nothing but the
+  // operator can establish a capability the deployment never recorded, and the
+  // server refuses the save unless it carries mode=operator_declared. Ticking
+  // the box is that claim; the save commits it under a button that says so.
+  // Asking for a separate "I declare" click before the save bought nothing the
+  // tick had not already said.
   const widening = Boolean(current && deploymentCapabilityNames.some((name) => !current.capabilities[name] && capabilities[name]));
   const preflight = useMutation({
     mutationFn: () => api.preflightDeploymentCapabilities(current!.id, capabilities),
@@ -1071,15 +1079,6 @@ function DeploymentForm({
   const numericValues = [maxConcurrency, capabilities.max_context_tokens, capabilities.max_output_tokens];
   const tokenLimitsValid = capabilities.max_context_tokens === 0 || capabilities.max_output_tokens <= capabilities.max_context_tokens;
   const resolutionReady = Boolean(current || selectedVariant || detection?.status === "completed" && anyOperation || manualDeclaration && bindingID);
-  // An edit cannot re-run detection or re-pick a variant — the invocation
-  // identity is locked, so nothing new can establish what the model does. A tick
-  // that widens past what the deployment already records is therefore the
-  // operator's own claim, and the server refuses it without the explicit word.
-  // Ask for the word here; otherwise the form offers a checkbox whose only
-  // outcome is a save that fails with model_capabilities_unknown.
-  const widenedBeyondSaved = Boolean(current) && deploymentCapabilityNames.some(
-    (name) => capabilities[name] && !current!.capabilities[name],
-  );
   const limitsValid = numericValues.every((value) => Number.isFinite(value) && value >= 0) && tokenLimitsValid;
   // A disabled save button beside a blank margin is the same as no button at
   // all: seven separate conditions collapse into one boolean, and the operator
@@ -1097,7 +1096,6 @@ function DeploymentForm({
       else saveBlockers.push("resolution");
     }
     if (!anyOperation) saveBlockers.push("operation");
-    if (widenedBeyondSaved && !manualDeclaration) saveBlockers.push("declaration");
   }
   if (!limitsValid) saveBlockers.push("limits");
   const formValid = saveBlockers.length === 0;
@@ -1112,7 +1110,9 @@ function DeploymentForm({
       return result.status === "inconclusive" || result.status === "not_probed" && result.probe_kind !== "risk_policy";
     })
     : [];
-  const capabilityEvidenceSource = manualDeclaration
+  // What the save will record, not what the form happens to display: widening
+  // sends mode=operator_declared, so the source shown has to say so too.
+  const capabilityEvidenceSource = manualDeclaration || widening
     ? "operator_declared"
     : detection?.status === "completed" ? detection.source : "";
   const dirty = useDirty({ name, providerID, providerModel, canonicalModelRef, bindingID, capabilities, region, maxConcurrency, targetKind });
@@ -1432,10 +1432,9 @@ function DeploymentForm({
                 })}
               </fieldset>
             </div>}
-            {widenedBeyondSaved && !manualDeclaration && <div className="notice warning" aria-live="polite">
+            {widening && <div className="notice warning deployment-capability-declaration" aria-live="polite">
               <strong>{t("deployments.widenDeclarationTitle")}</strong>
               <span>{t("deployments.widenDeclarationDescription")}</span>
-              <button type="button" className="button ghost" onClick={() => setManualDeclaration(true)}>{t("deployments.widenDeclarationConfirm")}</button>
             </div>}
             {providerModel.trim() !== "" && !anyOperation && (manualDeclaration || !declaredModel || detection?.status === "completed") && <p className="deployment-operation-required" role="alert">{t("deployments.operationRequired")}</p>}
             {providerModel.trim() !== "" && manualDeclaration && (
@@ -1483,22 +1482,28 @@ function DeploymentForm({
               {!tokenLimitsValid && <div className="notice warning"><span>{t("deployments.tokenLimitInvalid")}</span></div>}
             </div>
           </section>
-          {widening && <div className="notice warning deployment-capability-expansion">
-            <strong>{t("deployments.expansionNeedsRevalidation")}</strong>
-            <span>{current?.enabled ? t("deployments.expansionWhileRouted") : t("deployments.expansionSavedDisabled")}</span>
-          </div>}
           {impact && <CapabilityImpactNotice impact={impact} />}
           {mutation.isError && mutation.error instanceof ApiError && mutation.error.code === "resolution_changed"
             ? <div className="notice warning"><strong>{t("deployments.resolutionChangedTitle")}</strong><span>{t("deployments.resolutionChangedDescription")}</span></div>
             : (mutation.isError || preflight.isError) && <ErrorState error={mutation.error || preflight.error} />}
           {/* Saving an existing deployment hot-reloads it; saving a new one
               cannot enable it. Both consequences belong in the bar that commits
-              them, beside what is still stopping the save. */}
+              them, beside what is still stopping the save.
+
+              A widening replaces that line rather than adding a second notice
+              above the bar: it does not hot-reload into service, it drops the
+              deployment to disabled, and while the deployment is routed the
+              server refuses the save outright
+              (capability_expansion_requires_revalidation). The instruction that
+              gets past it — disable the routes first — has nowhere else to
+              live, so it belongs on the bar that would otherwise 409. */}
           <div className="form-actions sticky-form-actions deployment-form-actions">
             <div className="form-footer-state">
               <div className="form-footer-summary">
-                <strong>{current ? t("deployments.updateLiveWarning") : t("deployments.savedDisabled")}</strong>
-                <small>{current ? t("deployments.updateLiveDescription") : t("deployments.savedDisabledDescription")}</small>
+                <strong>{widening ? t("deployments.expansionNeedsRevalidation") : current ? t("deployments.updateLiveWarning") : t("deployments.savedDisabled")}</strong>
+                <small>{widening
+                  ? current?.enabled ? t("deployments.expansionWhileRouted") : t("deployments.expansionSavedDisabled")
+                  : current ? t("deployments.updateLiveDescription") : t("deployments.savedDisabledDescription")}</small>
               </div>
               {!!saveBlockers.length && <div className="form-footer-summary" role="status">
                 <strong>{t("deployments.saveBlocked")}</strong>
@@ -1513,7 +1518,10 @@ function DeploymentForm({
                   ? t("deployments.saveDespiteImpact")
                   : narrowing
                     ? t("deployments.checkRouteImpact")
-                    : current ? t("deployments.save") : template ? t("deployments.saveReplacement") : t("deployments.saveDisabled")}
+                    // The commit is where the declaration is made, so the button
+                    // has to name it rather than read as an ordinary save.
+                    : widening ? t("deployments.saveWithDeclaration")
+                      : current ? t("deployments.save") : template ? t("deployments.saveReplacement") : t("deployments.saveDisabled")}
             </button>
           </div>
         </form>

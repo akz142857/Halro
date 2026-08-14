@@ -170,8 +170,9 @@ describe("deployment invocation target workflow", () => {
   // is re-resolved, so nothing but the operator can establish a capability the
   // deployment never recorded. The form used to send the widened set with no
   // mode at all, and the only possible outcome was model_capabilities_unknown
-  // with no way forward on screen.
-  it("makes an edit that widens capabilities declare them before it can save", async () => {
+  // with no way forward on screen. Ticking the box is the claim — the save
+  // carries it, under a button that names what it commits.
+  it("sends an edit that widens capabilities as an operator declaration", async () => {
     const resourceCapabilities: ProviderCapabilities = { ...chatCapabilities, files: true, batches: true };
     vi.mocked(api.providers).mockResolvedValue({
       items: [{
@@ -187,15 +188,43 @@ describe("deployment invocation target workflow", () => {
 
     fireEvent.click((await screen.findAllByRole("button", { name: "编辑" }))[0]);
     fireEvent.click(await screen.findByLabelText("文件"));
-    expect(screen.getByRole("button", { name: "保存并热加载" })).toBeDisabled();
-    expect(screen.getByText("尚未完成").closest(".form-footer-summary")!.textContent).toContain("声明新增的能力");
+    expect(screen.getByText("新增能力需要管理员声明")).toBeVisible();
+    expect(screen.queryByText("尚未完成")).not.toBeInTheDocument();
+    // No second act to perform: the tick is the claim, and the commit says so.
+    expect(screen.queryByRole("button", { name: "保存并热加载" })).not.toBeInTheDocument();
+    // A widening does not hot-reload into service; the bar states what it does.
+    expect(screen.getByText("开启能力需要重新验证")).toBeVisible();
+    expect(screen.getByText("保存后将处于停用状态。重新测试并启用后，它才能提供这项能力。")).toBeVisible();
+    expect(screen.queryByText("保存后立即热加载")).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "以管理员身份声明这些能力" }));
-    fireEvent.click(screen.getByRole("button", { name: "保存并热加载" }));
+    fireEvent.click(screen.getByRole("button", { name: "声明并保存" }));
     await waitFor(() => expect(update).toHaveBeenCalledOnce());
     expect(update).toHaveBeenCalledWith(existingDeployment.id, expect.objectContaining({
       mode: "operator_declared", capabilities: expect.objectContaining({ files: true }),
     }), expect.anything());
+  });
+
+  // The server refuses a widening while the deployment is still routed
+  // (capability_expansion_requires_revalidation), and disabling the routes is
+  // the only way past it. That instruction has no other home on screen, so it
+  // has to be on the bar that would otherwise 409.
+  it("tells a routed deployment to leave routing before a widening can save", async () => {
+    const resourceCapabilities: ProviderCapabilities = { ...chatCapabilities, files: true, batches: true };
+    vi.mocked(api.providers).mockResolvedValue({
+      items: [{
+        ...provider, capabilities: resourceCapabilities,
+        bindings: [{ id: "b-chat", profile_id: "openai.chat-embeddings.v1", enabled: true, capabilities: resourceCapabilities }],
+      } as Provider],
+      next_cursor: "",
+    });
+    vi.mocked(api.deployments).mockResolvedValue({ items: [deployment("dep_1", { enabled: true })], next_cursor: "" });
+    vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [], next_cursor: "" });
+    renderPage();
+
+    fireEvent.click((await screen.findAllByRole("button", { name: "编辑" }))[0]);
+    fireEvent.click(await screen.findByLabelText("文件"));
+    expect(screen.getByText("开启能力需要重新验证")).toBeVisible();
+    expect(screen.getByText(/请先停用这些路由/)).toBeVisible();
   });
 
   it("treats legacy null collection fields as empty instead of crashing", async () => {
