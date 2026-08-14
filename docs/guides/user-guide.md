@@ -30,7 +30,7 @@ upstream model name.
 
 ### 2.1 Requirements
 
-- Go 1.26.5 or newer;
+- Go 1.26.6 or newer;
 - Node.js and npm, only if you are building the React admin console from source;
 - macOS, Linux, or any other Go target platform the project supports.
 

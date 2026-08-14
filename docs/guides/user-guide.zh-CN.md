@@ -24,7 +24,7 @@ Application
 
 ### 2.1 环境要求
 
-- Go 1.26.5 或更高版本；
+- Go 1.26.6 或更高版本；
 - Node.js 与 npm，仅在从源码构建 React 管理后台时需要；
 - macOS、Linux，或项目支持的其他 Go 目标平台。
 

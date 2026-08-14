@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  GOTOOLCHAIN: go1.26.5
+  GOTOOLCHAIN: go1.26.6
 
 jobs:
   quality:
