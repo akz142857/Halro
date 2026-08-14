@@ -88,7 +88,7 @@ CI runs `scripts/check-dependency-license-review.sh`. These are Git blob hashes
 of the reviewed dependency inputs; a dependency change cannot pass until this
 document is deliberately refreshed with the new inventory and hashes.
 
-- `go.mod`: `94754ae7811c1d49169a8beeafc01a15f49b9020`
+- `go.mod`: `e10cb2a24494e08ed99f80435d3474f6952e4dcb`
 - `go.sum`: `c09f554dd6640d84b73b8d51f8945eae1bc3bc19`
 - `web/package.json`: `6a5b59d3144e55b40a8e48b9a478d300482de29e`
 - `web/package-lock.json`: `09490f443fe210e4fcf76b05a68262325519345e`

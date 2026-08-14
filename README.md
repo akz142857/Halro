@@ -28,7 +28,7 @@ locally owned control boundary.
 
 ### Requirements
 
-- Go 1.26.5 or later
+- Go 1.26.6 or later
 - Node.js/npm only when rebuilding the embedded Admin console
 
 Start a new loopback-only local instance:

@@ -122,7 +122,7 @@ identical. Two causes, both known:
   build`, which is a release-pipeline change that must be exercised on a real
   RC run before it is trusted.
 - The main `Dockerfile` still uses floating base tags (`node:22-bookworm-slim`,
-  `golang:1.26.5-bookworm`, `distroless/static-debian12:nonroot`) while
+  `golang:1.26.6-bookworm`, `distroless/static-debian12:nonroot`) while
   `deploy/observability/external-probe/Dockerfile` is digest-pinned. Byte
   identity requires the same base digests.
 

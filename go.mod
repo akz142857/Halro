@@ -1,6 +1,6 @@
 module github.com/akz142857/Halro
 
-go 1.26.5
+go 1.26.6
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.43.3
