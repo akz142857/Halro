@@ -17,14 +17,14 @@ module and lock files.
 
 | Module | Version | License | Distribution scope |
 |---|---:|---|---|
-| `github.com/aws/aws-sdk-go-v2` | 1.43.3 | Apache-2.0 | runtime |
-| `github.com/aws/aws-sdk-go-v2/config` | 1.32.34 | Apache-2.0 | runtime |
-| `github.com/aws/aws-sdk-go-v2/credentials` | 1.19.33 | Apache-2.0 | runtime |
-| `github.com/aws/aws-sdk-go-v2/service/kms` | 1.55.3 | Apache-2.0 | runtime |
-| `github.com/aws/smithy-go` | 1.27.6 | Apache-2.0 | runtime |
+| `github.com/aws/aws-sdk-go-v2` | 1.43.5 | Apache-2.0 | runtime |
+| `github.com/aws/aws-sdk-go-v2/config` | 1.32.36 | Apache-2.0 | runtime |
+| `github.com/aws/aws-sdk-go-v2/credentials` | 1.19.35 | Apache-2.0 | runtime |
+| `github.com/aws/aws-sdk-go-v2/service/kms` | 1.55.5 | Apache-2.0 | runtime |
+| `github.com/aws/smithy-go` | 1.27.7 | Apache-2.0 | runtime |
 | `github.com/go-chi/chi/v5` | 5.3.1 | MIT | runtime |
 | `github.com/google/jsonschema-go` | 0.4.3 | MIT | test/release tooling |
-| `github.com/parquet-go/parquet-go` | 0.30.1 | Apache-2.0 | runtime |
+| `github.com/parquet-go/parquet-go` | 0.32.0 | Apache-2.0 | runtime |
 | `go.etcd.io/bbolt` | 1.5.0 | MIT | runtime |
 | `golang.org/x/crypto` | 0.54.0 | BSD-3-Clause | runtime |
 | `golang.org/x/sys` | 0.47.0 | BSD-3-Clause | runtime |
@@ -87,8 +87,8 @@ CI runs `scripts/check-dependency-license-review.sh`. These are Git blob hashes
 of the reviewed dependency inputs; a dependency change cannot pass until this
 document is deliberately refreshed with the new inventory and hashes.
 
-- `go.mod`: `e10cb2a24494e08ed99f80435d3474f6952e4dcb`
-- `go.sum`: `c09f554dd6640d84b73b8d51f8945eae1bc3bc19`
+- `go.mod`: `c853d9c61d0b14ad5c3a14f78b4b85bfe99e0dc0`
+- `go.sum`: `adea23025a66a068f3dc7797a8fe60d452283c8b`
 - `web/package.json`: `da393ec3322f86c5838fea58e9316489df1fa0f0`
 - `web/package-lock.json`: `6354fca3aae708be1571167743cefb419594bef2`
 
