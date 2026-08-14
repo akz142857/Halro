@@ -41,6 +41,7 @@ func UnsupportedGenerateFields(profileID domain.ProviderProfileID, request seman
 	switch profileID {
 	case domain.ProfileGeminiText:
 		add(hasNamedMessage(request), "messages[].name")
+		add(hasFailedToolResult(request), "messages[].content[].is_error")
 		add(request.Seed != nil, "seed")
 		add(len(request.Tools) > 0, "tools")
 		add(request.ToolChoice != nil, "tool_choice")
@@ -50,6 +51,7 @@ func UnsupportedGenerateFields(profileID domain.ProviderProfileID, request seman
 		add(request.EndUserRef != "", "user")
 	case domain.ProfileBedrockConverseText:
 		add(hasNamedMessage(request), "messages[].name")
+		add(hasFailedToolResult(request), "messages[].content[].is_error")
 		add(request.Candidates != nil && *request.Candidates > 1, "n")
 		add(request.Seed != nil, "seed")
 		add(len(request.Tools) > 0, "tools")
@@ -91,6 +93,7 @@ func UnsupportedGenerateFields(profileID domain.ProviderProfileID, request seman
 		add(request.ReasoningEffort != "", "reasoning_effort")
 		add(request.EndUserRef != "", "user")
 	case domain.ProfileBedrockMantleOpenAIResponses:
+		add(hasFailedToolResult(request), "messages[].content[].is_error")
 		// A Responses message item has no author name to put one in — the Name
 		// field on the item carries a function's name, not a speaker's — so the
 		// renderer drops it. Every other profile that cannot carry it says so;
@@ -105,6 +108,11 @@ func UnsupportedGenerateFields(profileID domain.ProviderProfileID, request seman
 		add(request.ReasoningEffort != "", "reasoning_effort")
 	case domain.ProfileOpenAIChatEmbeddings, domain.ProfileAzureChatEmbeddings, domain.ProfileDeepSeekChat, domain.ProfileOpenAICompatible, domain.ProfileBedrockMantleOpenAIChat:
 		// These profiles use the OpenAI-compatible wire representation directly.
+		// The one thing that representation has no place for is a tool result the
+		// caller marked as failed: an OpenAI tool message is its text and nothing
+		// else, so is_error would be dropped and the model would read a failure as
+		// a successful answer.
+		add(hasFailedToolResult(request), "messages[].content[].is_error")
 	default:
 		// Legacy or extension adapters do not have profile-level proof for optional
 		// fields. Permit only the portable text/model core and fail closed for
@@ -112,6 +120,7 @@ func UnsupportedGenerateFields(profileID domain.ProviderProfileID, request seman
 		add(hasNamedMessage(request), "messages[].name")
 		add(hasDeveloperMessage(request), "messages[].role")
 		add(hasNonTextContent(request), "messages[].content")
+		add(hasFailedToolResult(request), "messages[].content[].is_error")
 		// Scalar Chat Completions controls remain part of the legacy OpenAI-wire
 		// adapter contract. Their conversion is declared (never lossless), while
 		// richer optional semantics stay fail-closed until a profile is supplied.
@@ -125,6 +134,20 @@ func UnsupportedGenerateFields(profileID domain.ProviderProfileID, request seman
 		add(request.IncludeUsage, "stream_options")
 	}
 	return unsupported
+}
+
+// hasFailedToolResult reports a tool result the caller marked as failed. Only
+// the Anthropic-wire profiles can carry it; everywhere else the flag would be
+// dropped and the model would be told a failed tool call succeeded.
+func hasFailedToolResult(request semantic.GenerateRequest) bool {
+	for _, message := range request.Messages {
+		for _, part := range message.Content {
+			if part.Kind == semantic.ContentToolResult && part.ToolError {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func hasNamedMessage(request semantic.GenerateRequest) bool {

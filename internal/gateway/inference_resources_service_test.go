@@ -793,6 +793,13 @@ func TestLocalFilesPrimitiveKeepsTheUploadAndSkipsTheUpstream(t *testing.T) {
 	if created.ID == "" || created.Filename != "batch-input.jsonl" {
 		t.Fatalf("upload result=%#v", created)
 	}
+	// The creation response carries the creation time. It used to be left at
+	// zero on this branch while every later read of the same file reported the
+	// real one, so a client that sorts its files by created_at — the reason the
+	// northbound shape has the field — put every upload at the epoch.
+	if created.CreatedAt <= 0 {
+		t.Fatalf("created_at=%d on the creation response", created.CreatedAt)
+	}
 
 	record, ok := f.store.resources[created.ID]
 	if !ok {

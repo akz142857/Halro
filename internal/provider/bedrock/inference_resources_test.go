@@ -58,6 +58,12 @@ func TestAgentRuntimeRerankUsesDistinctSigV4Service(t *testing.T) {
 	if err != nil || len(result.Results) != 1 || result.Results[0].Index != 1 {
 		t.Fatalf("result=%#v err=%v", result, err)
 	}
+	// The score is the answer; the index is only where to put it. This assertion
+	// is the one that was missing while the fixture already carried AWS's real
+	// spelling, so a decoder that returned zero for every document passed.
+	if result.Results[0].RelevanceScore != 0.9 {
+		t.Fatalf("relevance score=%v want 0.9", result.Results[0].RelevanceScore)
+	}
 }
 
 func TestNovaReelRequiresExplicitS3PrefixBeforeIO(t *testing.T) {

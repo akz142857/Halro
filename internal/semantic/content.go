@@ -36,6 +36,13 @@ type Content struct {
 	CallID    string      `json:"call_id,omitempty"`
 	Name      string      `json:"name,omitempty"`
 	Arguments string      `json:"arguments,omitempty"`
+	// ToolError marks a tool result the caller reported as failed. It is only
+	// meaningful on ContentToolResult. Anthropic models it (tool_result.is_error)
+	// and the OpenAI wire does not, so a profile that cannot carry it declares the
+	// loss in compatibility.UnsupportedGenerateFields rather than dropping it:
+	// feeding a failed tool result to a model as if it had succeeded changes what
+	// the model is answering.
+	ToolError bool `json:"tool_error,omitempty"`
 }
 
 type Message struct {

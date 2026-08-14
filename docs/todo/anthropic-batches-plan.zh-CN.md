@@ -291,13 +291,38 @@ native mode"）。该行按 `errored` 处理并说明原因，而不是让整批
 再保存 → 测试 → 启用部署 → 启用路由。Provider 与 Deployment 两层能力都要开，只开 Provider 会得到
 `ambiguous_resource_route`。
 
-另外记一笔：`POST /v1/files` 返回的 `created_at` 是 0，北向形状不该这样。已登记在
-[provider-adaptation-gaps](provider-adaptation-gaps.zh-CN.md) 的控制台缺口一节。
+另外记一笔：`POST /v1/files` 返回的 `created_at` 是 0，北向形状不该这样。**2026-08-14 已修**
+（本地创建分支现在填记录里的创建时间），见
+[adaptation-open-items](adaptation-open-items.zh-CN.md) §1.8。
 
 还有一条 §5 没写的前置条件：**`POST /v1/files` 强制要 `Idempotency-Key` 头**，不带就是 400
 `invalid_idempotency_key`（`internal/gateway/inference_resources_store.go:188`，头名在
 `internal/gatewayapi/inference_resources.go:344` 读取）。§5 的六步里漏了这一条，照着跑的人会先撞一次 400。
 `POST /v1/batches` 同样需要。
+
+**第二次真实运行：第 4 步通过（2026-08-14）**
+
+真实上游第一次收到并接受了 `POST /v1/messages/batches`。批处理仍在 24 小时窗口内，停在第 5 步：
+
+- 批处理 id：`batch_qkqmxerjvwytsqk9prsbze0yb8`
+- `expires_at`：`2026-08-15 00:10:43`
+- 轮询尚未见到 `status: completed`
+
+续跑要先把 Halro 起回来（`make dev` 或 `make start`）——上一轮是 `go run` 起的，进程随那个终端一起结束：
+
+```bash
+curl -s http://127.0.0.1:8080/v1/batches/batch_qkqmxerjvwytsqk9prsbze0yb8 \
+  -H "Authorization: Bearer $HALRO_GATEWAY_KEY" \
+  -H "Halro-Route: chat-claude"
+```
+
+`status` 转为 `completed` 后接第 6 步：用返回的 `output_file_id` 取内容，核对两行的 `custom_id` 与
+`response.body`。§5「预期会撞上的地方」四条里，只有第一条（创建时 `params` 的形状）到此为止得到了验证，
+其余三条要等结果文件才算数。
+
+若这一步只回 401，先怀疑网关密钥已过期。上一次是直接读 bolt 看到 `expires_at` 已过才定位的，
+但**控制台其实是显示有效期的**（密钥行有过期状态与日期，见
+[adaptation-open-items](adaptation-open-items.zh-CN.md) §3），所以先看控制台那一行再去翻 bolt。
 
 ### 5.2 16 MiB 上限：决定不验证（2026-08-14）
 

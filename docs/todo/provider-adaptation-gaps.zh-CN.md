@@ -1,6 +1,7 @@
 # Provider 适配缺口 — 待决与待建
 
-状态：**#0 已修；资源模型已定（ADR 0021）；#3 代码完成待真实验证；#4 已决定不做；#1/#2/媒体证据阻塞于凭据；#3b 未排期**
+状态：**#0 已修；资源模型已定（ADR 0021）；#3 代码完成待真实验证；#4 已决定不做；#1/#2/媒体证据阻塞于凭据；#3b 未排期；§5 评审开出的十条全部已修（2026-08-14）**
+未完成项以 [`adaptation-open-items`](adaptation-open-items.zh-CN.md) 为准，本文是决定过程的记录
 建立日期：2026-08-13
 来源：[`docs/review/260813`](../review/260813/README.md) 摸底的 #2、#4、#5、#6
 范围：`internal/provider/{anthropic,bedrock}`、`internal/compatibility`、`internal/gateway`、`docs/compatibility`
@@ -231,7 +232,13 @@ Anthropic、Mantle Anthropic、fail-closed 默认分支）全都申报了，只�
 修法是加一行申报，不是改渲染。测试改成**双向**：带不了的必须申报，真能透传的（OpenAI/Azure/DeepSeek/
 compatible/Mantle Chat）必须不申报——只查前一半的表永远发现不了这个洞。同样做了反向验证。
 
-### 5.2 未修（按建议顺序）
+### 5.2 七条（2026-08-14 全部已修）
+
+原表按建议顺序列出，当时七条未修；同日一次修完，每条都配了会红的测试并做了反向验证，
+修法与实际后果记在 [`adaptation-open-items`](adaptation-open-items.zh-CN.md) §1。
+
+一处更正：流式词表那条的 502 发生在 `/v1/responses` 流式（`responses.go` 只接受 `complete`
+与 `max_output`），不是 `/v1/messages`；后者的表现是把被截断的回答说成 `end_turn`。
 
 | 项 | 位置 | 症状 |
 |---|---|---|
@@ -296,6 +303,10 @@ audience 由基址推导，形如 `https://api.anthropic.com:443:anthropic`。`k
 
 按"卡在什么上"分类，而不是按优先级——优先级会变，阻塞条件不会。
 
+> **2026-08-14 之后请以 [`adaptation-open-items`](adaptation-open-items.zh-CN.md) 为准。**
+> 本节只保留当时的分类；§5.2 的七条与 `created_at` 那条已在 2026-08-14 修完，
+> 剩下的阻塞项与排期项在那份文档里逐条重核过。
+
 ### 需要一次真实账号运行
 
 | 项 | 需要什么 | 为什么重要 |
@@ -334,14 +345,14 @@ audience 由基址推导，形如 `https://api.anthropic.com:443:anthropic`。`k
 修了前者不代表后者不再是问题；恰恰相反，执行收紧后，前端算错上限的后果从"少显示一个勾选框"变成
 "操作者勾了但后端 400"，可见度更高了。
 
-### 首次真实运行暴露的两个控制台缺口（2026-08-13）
+### 首次真实运行暴露的两个控制台缺口（2026-08-13；2026-08-14 复核后一条修掉、一条撤销）
 
-| 项 | 症状 | 位置 |
-|---|---|---|
-| 文件对象的 `created_at` 恒为 0 | `POST /v1/files` 返回 `"created_at":0`。北向形状照抄 OpenAI，那里这是文件创建时间戳，客户端会拿它排序和判新旧 | `internal/gateway/inference_resources_store.go` 的本地文件对象构造 |
-| 网关密钥不显示剩余有效期 | 密钥过期后调用只回 401，控制台看不出"过期了"还是"配错了"。本次排查是直接读 bolt 才看到 `expires_at` 已过 | 密钥列表与详情 |
+| 项 | 症状 | 位置 | 状态 |
+|---|---|---|---|
+| 文件对象的 `created_at` 恒为 0 | `POST /v1/files` 返回 `"created_at":0`。北向形状照抄 OpenAI，那里这是文件创建时间戳，客户端会拿它排序和判新旧 | `internal/gateway/inference_resources_store.go` 的本地创建分支 | **已修**（2026-08-14）。注意 `localFileObject` 一直是对的，错的只有创建响应 |
+| ~~网关密钥不显示剩余有效期~~ | ~~密钥过期后调用只回 401，控制台看不出"过期了"还是"配错了"~~ | — | **撤销：这条不成立。** `web/src/pages/ProjectsPage.tsx:349-367` 有 `expired` 判定与三态文案，Admin API 回传 `expires_at`（`internal/app/admin_projects.go:282,295,339`），内嵌 bundle 里也有中文串。自 `b5f012f`（2026-08-05）就在，早于本条记录 |
 
-两条都是操作者可见面的缺陷，不阻塞批处理续跑。
+当时的 401 应另有原因；排查时直接读 bolt 看到 `expires_at` 已过，这一点为真，但据此推断的"控制台不显示"为假。
 
 ### 未排期
 
@@ -371,5 +382,5 @@ beta 头，并与既有的每连接 beta 令牌允许列表衔接。
 | 5a. 能力上限经 `bindings` 绕过 | 上限下沉到 `ProviderProfileBinding.Validate` 并对所有 profile 生效，用 `MaxProviderCapabilitiesForProfile` 以保住 `provider_executed_tools` 的 opt-in；Admin 与加载期两处对齐。已做反向验证 | **已修** | 2026-08-14 |
 | 5b. 凭据轮换可配死 registry | `validateCredentialReferences` 增加 (surface, scheme) 轴，逐 binding 比对，新错误码 `credential_surface_in_use`。已做反向验证 | **已修** | 2026-08-14 |
 | 5c. Mantle Responses 丢 `messages[].name` 不申报 | 加一行申报（Responses 协议本就没有作者名的位置，不该改渲染）；测试改成双向，同时断言真能透传的 profile 不申报。已做反向验证 | **已修** | 2026-08-14 |
-| 5d. 评审其余七条 | 见 §5.2 表，按建议顺序排在 Anthropic 流式词表与 `max_completion_tokens` 两条之后 | 未排期 | 2026-08-14 |
+| 5d. 评审其余七条 | 七条一次修完：流式终止词表改用同一份 `DecodeStopReason`（旧的那份删掉，不是并存）；`max_tokens` 优先取 `CompletionTokenLimit`；`parallel_tool_calls` 无 `tool_choice` 时按 `auto` 渲染；content block 未知成员（`cache_control`）拒绝、`is_error` 由 `semantic.Content` 承载并按 profile 双向申报；rerank 解码与北向 wire 拆成两个结构体；`Registry.Register` 对能报告能力的 adapter 空交集即拒；Bedrock 控制面 host 进策略允许列表。逐条配了会红的测试并做反向验证 | **已修** | 2026-08-14 |
 | 5e. 16 MiB 上限是否过窄 | **不验证。** 属容量问题而非代码正确性；真正的代码风险可用「临时降低常量 + 小批处理」以零成本验证。理由见[批处理方案 §5.2](anthropic-batches-plan.zh-CN.md) | **已关闭** | 2026-08-14 |

@@ -14,6 +14,11 @@ import (
 
 const MappingRevision uint64 = 1
 
+// defaultMaxTokens is what a request that named no output ceiling is given.
+// Anthropic requires the field, so there has to be a number; it applies only
+// when the caller supplied neither max_completion_tokens nor max_tokens.
+const defaultMaxTokens int64 = 1024
+
 func DecodePortable(request anthropicapi.MessageRequest) (semantic.GenerateRequest, error) {
 	if len(request.Thinking) > 0 || len(request.Metadata) > 0 || request.ServiceTier != "" || request.TopK != nil {
 		return semantic.GenerateRequest{}, errors.New("request contains Anthropic-native fields")
@@ -101,6 +106,9 @@ func decodeSystem(raw json.RawMessage) ([]semantic.Content, error) {
 		if block.Type != "text" {
 			return nil, errors.New("portable system supports text blocks only")
 		}
+		if unknown := block.UnknownMembers(); len(unknown) > 0 {
+			return nil, fmt.Errorf("system block declares %s, which the portable projection cannot carry", strings.Join(unknown, ", "))
+		}
 		result = append(result, semantic.Content{Kind: semantic.ContentText, Text: block.Text})
 	}
 	return result, nil
@@ -120,6 +128,14 @@ func decodeMessage(message anthropicapi.MessageParam) ([]semantic.Message, error
 		}
 	}
 	for _, block := range message.Content {
+		// The same rule tools[] follows, applied where the caller writes far more
+		// of them: a portable request is re-authored, so a member this projection
+		// does not read is dropped rather than forwarded. Refusing cache_control
+		// here and rejecting it on tools[] is one rule; refusing it there and
+		// dropping it here was one request body answering two ways.
+		if unknown := block.UnknownMembers(); len(unknown) > 0 {
+			return nil, fmt.Errorf("content block %q declares %s, which the portable projection cannot carry", block.Type, strings.Join(unknown, ", "))
+		}
 		switch block.Type {
 		case "text":
 			current.Content = append(current.Content, semantic.Content{Kind: semantic.ContentText, Text: block.Text})
@@ -137,7 +153,7 @@ func decodeMessage(message anthropicapi.MessageParam) ([]semantic.Message, error
 			if err != nil {
 				return nil, err
 			}
-			result = append(result, semantic.Message{Role: semantic.RoleTool, Content: []semantic.Content{{Kind: semantic.ContentToolResult, CallID: block.ToolUseID, Text: text}}})
+			result = append(result, semantic.Message{Role: semantic.RoleTool, Content: []semantic.Content{{Kind: semantic.ContentToolResult, CallID: block.ToolUseID, Text: text, ToolError: block.IsError}}})
 		case "thinking", "redacted_thinking":
 			return nil, errors.New("signed thinking blocks require native mode")
 		default:
@@ -176,6 +192,9 @@ func decodeToolResult(raw json.RawMessage) (string, error) {
 		if block.Type != "text" {
 			return "", errors.New("portable tool_result supports text blocks only")
 		}
+		if unknown := block.UnknownMembers(); len(unknown) > 0 {
+			return "", fmt.Errorf("tool_result block declares %s, which the portable projection cannot carry", strings.Join(unknown, ", "))
+		}
 		joined.WriteString(block.Text)
 	}
 	return joined.String(), nil
@@ -212,7 +231,7 @@ func RenderResult(result semantic.GenerateResult, publicModel string) (anthropic
 	return message, nil
 }
 
-// renderStopReason is decodeStopReason's inverse, and reads the same semantic
+// renderStopReason is DecodeStopReason's inverse, and reads the same semantic
 // vocabulary. It too used to expect OpenAI's words, so a semantic "max_output"
 // or "tool_call" fell through to end_turn and told the caller the turn had
 // finished normally when it had been cut short or had asked for a tool.
@@ -255,11 +274,19 @@ func RenderPortableRequest(request semantic.GenerateRequest, providerModel strin
 		return anthropicapi.MessageRequest{}, err
 	}
 	result := anthropicapi.MessageRequest{Model: providerModel, Stream: request.Stream, StopSequences: append([]string(nil), request.Stop...), Temperature: request.Temperature, TopP: request.TopP}
-	if request.VisibleOutputTokenLimit != nil {
+	// Anthropic's max_tokens is required, so a request that named no ceiling gets
+	// the fallback below. A request that named one gets the one it named: reading
+	// only the visible limit meant max_completion_tokens — the sole output ceiling
+	// on the Responses surface — was replaced by a fallback the caller never
+	// wrote, silently raising a 64-token ceiling to 1024. Bedrock reads the two in
+	// this order for the same reason.
+	if request.CompletionTokenLimit != nil && *request.CompletionTokenLimit > 0 {
+		result.MaxTokens = *request.CompletionTokenLimit
+	} else if request.VisibleOutputTokenLimit != nil {
 		result.MaxTokens = *request.VisibleOutputTokenLimit
 	}
 	if result.MaxTokens == 0 {
-		result.MaxTokens = 1024
+		result.MaxTokens = defaultMaxTokens
 	}
 	for _, message := range request.Messages {
 		if message.Role == semantic.RoleSystem || message.Role == semantic.RoleDeveloper {
@@ -293,11 +320,21 @@ func RenderPortableRequest(request semantic.GenerateRequest, providerModel strin
 	for _, tool := range request.Tools {
 		result.Tools = append(result.Tools, anthropicapi.Tool{Name: tool.Name, Description: tool.Description, InputSchema: append(json.RawMessage(nil), tool.Schema...)})
 	}
+	parallel := true
+	if request.ParallelTools != nil {
+		parallel = *request.ParallelTools
+	}
+	// Anthropic keeps the parallel switch inside tool_choice, so a caller who
+	// sent parallel_tool_calls: false and no tool_choice used to have the
+	// constraint disappear on the way out — the only branch that rendered it was
+	// the one this request did not take. "auto" is what Anthropic already does
+	// when tools are present and no choice is named, so saying it here adds the
+	// switch without deciding anything else on the caller's behalf. With no tools
+	// there is nothing to run in parallel and nothing to say.
+	if request.ToolChoice == nil && !parallel && len(request.Tools) > 0 {
+		result.ToolChoice = &anthropicapi.ToolChoice{Type: "auto", DisableParallelToolUse: true}
+	}
 	if request.ToolChoice != nil {
-		parallel := true
-		if request.ParallelTools != nil {
-			parallel = *request.ParallelTools
-		}
 		wire, err := compatibility.RenderToolChoice(*request.ToolChoice, parallel, compatibility.ToolProtocolAnthropic)
 		if err != nil {
 			return anthropicapi.MessageRequest{}, err
@@ -428,7 +465,7 @@ func renderMessage(message semantic.Message) (anthropicapi.MessageParam, error) 
 			result.Content = append(result.Content, anthropicapi.ContentBlock{Type: "tool_use", ID: part.CallID, Name: part.Name, Input: input})
 		case semantic.ContentToolResult:
 			content, _ := json.Marshal(part.Text)
-			result.Content = append(result.Content, anthropicapi.ContentBlock{Type: "tool_result", ToolUseID: part.CallID, Content: content})
+			result.Content = append(result.Content, anthropicapi.ContentBlock{Type: "tool_result", ToolUseID: part.CallID, Content: content, IsError: part.ToolError})
 		default:
 			return result, errors.New("content is not portable to Anthropic Messages")
 		}
@@ -456,7 +493,7 @@ func DecodeResult(message anthropicapi.Message) (semantic.GenerateResult, error)
 			return semantic.GenerateResult{}, errors.New("Anthropic response contains non-portable content")
 		}
 	}
-	termination := decodeStopReason(message.StopReason)
+	termination := DecodeStopReason(message.StopReason)
 	// input_tokens excludes both cache tiers on this API, so the full prompt span
 	// has to be recovered before anything downstream prices it.
 	promptTokens := message.Usage.PromptTokens()
@@ -473,14 +510,19 @@ func DecodeResult(message anthropicapi.Message) (semantic.GenerateResult, error)
 	return result, result.Validate()
 }
 
-// decodeStopReason maps Anthropic's stop_reason onto the semantic termination
+// DecodeStopReason maps Anthropic's stop_reason onto the semantic termination
 // vocabulary — the same one the Gemini and Bedrock adapters produce. It used to
 // answer in OpenAI's wire vocabulary ("stop", "length", "tool_calls"), which is
 // a different set of words for the same field: every consumer downstream reads
 // semantic terminations, so an Anthropic response arrived carrying a value none
 // of them recognized. The provider's own word is not lost — it travels beside
 // this one as NativeTermination.
-func decodeStopReason(reason *string) string {
+//
+// It is exported because the streaming path lives in the provider package and
+// decodes the same field. That path used to carry its own copy, which kept the
+// OpenAI vocabulary long after this one was corrected: one state with two decode
+// paths, only one of them fixed. There is now a single function to fix.
+func DecodeStopReason(reason *string) string {
 	if reason == nil {
 		return ""
 	}

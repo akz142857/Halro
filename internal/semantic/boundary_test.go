@@ -42,7 +42,12 @@ func TestSemanticPackageHasNoProtocolOrProviderDependencies(t *testing.T) {
 // field an explicit architecture decision reviewed together with mappings.
 func TestExportedCanonicalSchemaMatchesReviewedSnapshot(t *testing.T) {
 	want := map[string][]string{
-		"Content":          {"Kind=kind", "Text=text", "URL=url", "Detail=detail", "CallID=call_id", "Name=name", "Arguments=arguments"},
+		// ToolError was reviewed in as provider-neutral: "this tool result is a
+		// failure" is a property of the conversation, not of one vendor's wire
+		// form. It is carried rather than dropped so that the profiles which
+		// cannot express it declare the loss instead of feeding a model a failed
+		// result dressed as a successful one.
+		"Content":          {"Kind=kind", "Text=text", "URL=url", "Detail=detail", "CallID=call_id", "Name=name", "Arguments=arguments", "ToolError=tool_error"},
 		"Message":          {"Role=role", "Name=name", "Content=content"},
 		"Source":           {"ProfileID=profile_id", "ProfileRevision=profile_revision"},
 		"Requirements":     {"Streaming=streaming", "StreamUsage=stream_usage", "Tools=tools", "ParallelTools=parallel_tools", "InputImage=input_image", "StructuredJSON=structured_json", "DeveloperRole=developer_role", "Reasoning=reasoning", "Seed=seed", "MultipleCandidates=multiple_candidates", "EndUserReference=end_user_reference", "ProviderExecutedTools=provider_executed_tools"},

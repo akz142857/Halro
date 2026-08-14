@@ -216,18 +216,10 @@ func controlPlaneEndpointFor(endpoint *url.URL, region string) (*url.URL, bool) 
 	if endpoint == nil {
 		return nil, false
 	}
-	host := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(endpoint.Hostname()), "."))
-	region = strings.ToLower(region)
-	replacements := map[string]string{
-		"bedrock-runtime." + region + ".amazonaws.com":         "bedrock." + region + ".amazonaws.com",
-		"bedrock-runtime-fips." + region + ".amazonaws.com":    "bedrock-fips." + region + ".amazonaws.com",
-		"bedrock-runtime." + region + ".amazonaws.com.cn":      "bedrock." + region + ".amazonaws.com.cn",
-		"bedrock-runtime-fips." + region + ".amazonaws.com.cn": "bedrock-fips." + region + ".amazonaws.com.cn",
-		"bedrock-runtime." + region + ".api.aws":               "bedrock." + region + ".api.aws",
-		"bedrock-runtime-fips." + region + ".api.aws":          "bedrock-fips." + region + ".api.aws",
-	}
-	controlPlaneHost, ok := replacements[host]
-	if !ok {
+	controlPlaneHost, hostRegion, ok := ControlPlaneHostFor(endpoint.Hostname())
+	// The region has to match the credential's, not merely be present: the
+	// derivation stays inside the one region and partition the operator approved.
+	if !ok || hostRegion != strings.ToLower(strings.TrimSpace(region)) {
 		return nil, false
 	}
 	derived := *endpoint
@@ -237,4 +229,38 @@ func controlPlaneEndpointFor(endpoint *url.URL, region string) (*url.URL, bool) 
 	derived.RawQuery = ""
 	derived.Fragment = ""
 	return &derived, true
+}
+
+// ControlPlaneHostFor derives the control-plane host that model discovery reads,
+// and the region it belongs to, from an approved runtime host.
+//
+// It is exported because the derived host also has to be on the transport
+// policy's allowlist. The allowlist is built from the provider record, which
+// holds the runtime host alone, so discovery signed a correct request against a
+// host its own client would not dial: not a bypass, but fail-closed far enough
+// to make the feature silently do nothing.
+//
+// Anything that is not one of the approved public runtime forms — a PrivateLink
+// endpoint, an agent-runtime host — derives nothing, which is what keeps this a
+// derivation rather than a second configurable endpoint.
+func ControlPlaneHostFor(runtimeHost string) (host, region string, ok bool) {
+	candidate := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(runtimeHost), "."))
+	for prefix, replacement := range map[string]string{
+		"bedrock-runtime.":      "bedrock.",
+		"bedrock-runtime-fips.": "bedrock-fips.",
+	} {
+		rest, found := strings.CutPrefix(candidate, prefix)
+		if !found {
+			continue
+		}
+		region, suffix, split := strings.Cut(rest, ".")
+		if !split || region == "" {
+			return "", "", false
+		}
+		if !slices.Contains([]string{"amazonaws.com", "amazonaws.com.cn", "api.aws"}, suffix) {
+			return "", "", false
+		}
+		return replacement + rest, region, true
+	}
+	return "", "", false
 }

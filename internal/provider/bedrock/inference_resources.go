@@ -107,8 +107,18 @@ func (a *Adapter) Rerank(ctx context.Context, call provider.RerankCall) (provide
 		sources[index].Inline.Text.Text = document
 	}
 	request := map[string]any{"queries": []any{map[string]any{"type": "TEXT", "textQuery": map[string]string{"text": call.Query}}}, "sources": sources, "rerankingConfiguration": map[string]any{"type": "BEDROCK_RERANKING_MODEL", "bedrockRerankingConfiguration": map[string]any{"modelConfiguration": map[string]string{"modelArn": "arn:aws:bedrock:" + region + "::foundation-model/" + call.ProviderModel}, "numberOfResults": call.TopN}}}
+	// The upstream shape is decoded on its own terms. It used to decode straight
+	// into provider.RerankItem, which is the northbound wire shape and spells the
+	// score relevance_score; AWS spells it relevanceScore, and the underscore is
+	// enough that Go's case-insensitive fallback does not match it either. Every
+	// score decoded as zero, the range check let zero through, and the fixture
+	// below carried the real AWS spelling while the assertions only ever looked at
+	// the index.
 	var response struct {
-		Results []provider.RerankItem `json:"results"`
+		Results []struct {
+			Index          int     `json:"index"`
+			RelevanceScore float64 `json:"relevanceScore"`
+		} `json:"results"`
 	}
 	requestID, err := a.runtimeJSON(ctx, http.MethodPost, "/rerank", call.RequestID, request, &response)
 	if err != nil {
@@ -118,13 +128,15 @@ func (a *Adapter) Rerank(ctx context.Context, call provider.RerankCall) (provide
 		return provider.RerankResult{}, malformed("rerank response count is invalid", nil)
 	}
 	seen := map[int]bool{}
+	results := make([]provider.RerankItem, 0, len(response.Results))
 	for _, item := range response.Results {
 		if item.Index < 0 || item.Index >= len(call.Documents) || item.RelevanceScore < 0 || item.RelevanceScore > 1 || seen[item.Index] {
 			return provider.RerankResult{}, malformed("rerank response item is invalid", nil)
 		}
 		seen[item.Index] = true
+		results = append(results, provider.RerankItem{Index: item.Index, RelevanceScore: item.RelevanceScore})
 	}
-	return provider.RerankResult{Results: response.Results, ProviderRequestID: requestID}, nil
+	return provider.RerankResult{Results: results, ProviderRequestID: requestID}, nil
 }
 
 func agentRuntimeRegion(host string) string {

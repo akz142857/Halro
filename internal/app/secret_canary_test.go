@@ -84,6 +84,11 @@ func TestSecretCanaryNeverReachesTelemetryPersistenceOrAdminSurfaces(t *testing.
 		PublicModel: "chat", ProviderModel: "canary-model", Adapter: fake,
 		InputMicrosPerMillion: 1_000_000, OutputMicrosPerMillion: 2_000_000,
 		Strategy: "ordered",
+		// Stated rather than left to the registry, the same as production: the
+		// registry no longer fills an empty set in from the adapter, because an
+		// empty set is what an adapter and a deployment with nothing in common
+		// produce.
+		Capabilities: provider.Capabilities{Chat: true, Streaming: true, Embeddings: true},
 	}); err != nil {
 		t.Fatal(err)
 	}

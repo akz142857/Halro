@@ -604,14 +604,39 @@ func loadProviderRegistryWithCatalog(
 }
 
 func newProviderBindingAdapter(cfg config.Config, instance domain.ProviderInstance, binding domain.ProviderProfileBinding, endpoint *url.URL, policy safetransport.Policy, plaintext []byte) (provider.Adapter, error) {
-	client, err := safetransport.NewClient(safetransport.Options{
-		Policy: policy, ConnectTimeout: cfg.Gateway.AttemptConnectTimeout.Value(),
-		ResponseHeaderTimeout: cfg.Gateway.AttemptResponseHeaderTimeout.Value(),
-	})
+	client, err := newBindingClient(cfg, binding, endpoint, policy)
 	if err != nil {
 		return nil, err
 	}
 	return newProviderBindingAdapterWithClient(instance, binding, endpoint, plaintext, client)
+}
+
+// newBindingClient builds the one transport a Profile Binding may use, and is
+// the only place a binding's client is built.
+//
+// The Bedrock control-plane host is derived here rather than by the caller on
+// purpose. A Bedrock Runtime connection reads its model list from the regional
+// control plane, which is a different host from the one the operator approved;
+// the allowlist comes from the provider record, which holds the runtime host
+// alone, so discovery signed a correct request against a host its own client
+// would not dial — not a bypass, but fail-closed far enough that model listing
+// came back empty forever with nothing to explain why. Deriving it inside the
+// constructor means there is no separate step for a future caller to forget.
+//
+// The added host is derived from the approved one and from nothing else — a
+// PrivateLink or agent-runtime endpoint derives none — so this widens the policy
+// by exactly the host the adapter's own signer is already pinned to.
+func newBindingClient(cfg config.Config, binding domain.ProviderProfileBinding, endpoint *url.URL, policy safetransport.Policy) (*http.Client, error) {
+	if binding.AccessSurface == domain.SurfaceBedrockRuntime && endpoint != nil {
+		if controlPlaneHost, _, ok := bedrockprovider.ControlPlaneHostFor(endpoint.Hostname()); ok &&
+			!slices.Contains(policy.AllowedHosts, controlPlaneHost) {
+			policy.AllowedHosts = append(slices.Clone(policy.AllowedHosts), controlPlaneHost)
+		}
+	}
+	return safetransport.NewClient(safetransport.Options{
+		Policy: policy, ConnectTimeout: cfg.Gateway.AttemptConnectTimeout.Value(),
+		ResponseHeaderTimeout: cfg.Gateway.AttemptResponseHeaderTimeout.Value(),
+	})
 }
 
 // newProviderBindingAdapterWithClient is the wiring itself, separated from the

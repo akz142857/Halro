@@ -4,6 +4,8 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"net/url"
+	"slices"
 	"testing"
 	"time"
 
@@ -133,5 +135,65 @@ func seedProvider(t *testing.T, cfg config.Config, mismatch bool) {
 	}
 	if _, err := store.PutRoute(context.Background(), route, 0, nil); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Model discovery reads a host the provider record does not name. The signer is
+// already pinned to it, but the transport policy was built from the record
+// alone, so the request was signed correctly and then refused by Halro's own
+// dialer — the model list came back empty with nothing in it to explain why.
+//
+// This asserts the client that is actually built, not a policy value on its way
+// there: the allowlist a binding runs under is exactly what nothing could read
+// back before, and it is where the defect lived.
+func TestBedrockRuntimeClientMayDialTheDerivedControlPlaneOnly(t *testing.T) {
+	cfg := testConfig(t)
+	runtimeEndpoint, _ := url.Parse("https://bedrock-runtime.us-east-1.amazonaws.com")
+	runtimeBinding := domain.ProviderProfileBinding{AccessSurface: domain.SurfaceBedrockRuntime}
+	base := safetransport.Policy{RequireHTTPS: true, AllowedHosts: []string{"bedrock-runtime.us-east-1.amazonaws.com"}}
+
+	client, err := newBindingClient(cfg, runtimeBinding, runtimeEndpoint, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, ok := safetransport.PolicyOf(client)
+	if !ok {
+		t.Fatal("a client built by SafeTransport did not report its policy")
+	}
+	if !slices.Contains(policy.AllowedHosts, "bedrock.us-east-1.amazonaws.com") {
+		t.Fatalf("the control plane host is not dialable: %v", policy.AllowedHosts)
+	}
+	if len(policy.AllowedHosts) != 2 {
+		t.Fatalf("the policy was widened by more than the derived host: %v", policy.AllowedHosts)
+	}
+	if len(base.AllowedHosts) != 1 {
+		t.Fatalf("the caller's policy was mutated: %v", base.AllowedHosts)
+	}
+
+	// Nothing else derives one. An agent-runtime host is a different service, and
+	// a private endpoint has no public control plane to reach.
+	for _, host := range []string{
+		"https://bedrock-agent-runtime.us-east-1.amazonaws.com",
+		"https://vpce-0123-abcd.bedrock-runtime.us-east-1.vpce.amazonaws.com",
+	} {
+		other, _ := url.Parse(host)
+		narrow, err := newBindingClient(cfg, runtimeBinding, other, safetransport.Policy{RequireHTTPS: true, AllowedHosts: []string{other.Hostname()}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if policy, _ := safetransport.PolicyOf(narrow); len(policy.AllowedHosts) != 1 {
+			t.Fatalf("%s widened the policy: %v", host, policy.AllowedHosts)
+		}
+	}
+
+	// A binding on another access surface is left alone even when its host would
+	// derive one: the control plane belongs to the runtime surface.
+	mantle := domain.ProviderProfileBinding{AccessSurface: domain.SurfaceBedrockMantle}
+	other, err := newBindingClient(cfg, mantle, runtimeEndpoint, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if policy, _ := safetransport.PolicyOf(other); len(policy.AllowedHosts) != 1 {
+		t.Fatalf("a non-runtime surface widened the policy: %v", policy.AllowedHosts)
 	}
 }

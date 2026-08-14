@@ -338,13 +338,22 @@ func (r *Registry) Register(target Target) error {
 		return errors.New("route strategy must be ordered or round_robin")
 	}
 	if !target.Capabilities.AnyOperation() {
-		if reporter, ok := target.Adapter.(CapabilityReporter); ok {
-			target.Capabilities = reporter.Capabilities()
-		} else {
-			// Preserve compatibility for built-in test and extension adapters.
-			target.Capabilities = Capabilities{
-				Chat: true, Streaming: true, Embeddings: true,
-			}
+		if _, reports := target.Adapter.(CapabilityReporter); reports {
+			// An adapter that reports its own capabilities is registered by a
+			// caller that has already intersected them with what the deployment
+			// declared, so an empty set here means the intersection came out
+			// empty — a deployment that can serve nothing. Adopting the adapter's
+			// full set instead read "empty" as "unspecified" and granted every
+			// capability the adapter has, including ones the deployment never
+			// declared. Refusing keeps the target out of the registry rather than
+			// widening it, and the caller records it as a withheld reference.
+			return errors.New("target declares no operation capability; the deployment and the adapter have none in common")
+		}
+		// Built-in test and extension adapters predate capability reporting and
+		// have nothing to intersect against, so their targets still get the
+		// portable core.
+		target.Capabilities = Capabilities{
+			Chat: true, Streaming: true, Embeddings: true,
 		}
 	}
 	target = cloneTarget(target)

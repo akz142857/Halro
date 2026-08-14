@@ -408,3 +408,46 @@ func TestUnprofiledAdapterIsRejected(t *testing.T) {
 		t.Fatal("the rejected target still became a routing candidate")
 	}
 }
+
+// reportingAdapter is what production registers: an adapter that can state its
+// own capabilities, wrapped around a profile contract.
+type reportingAdapter struct{ registryAdapter }
+
+func (*reportingAdapter) Capabilities() Capabilities {
+	return Capabilities{Chat: true, Streaming: true, Embeddings: true, Tools: true}
+}
+
+// An empty capability set on a target whose adapter reports its own is not a
+// target that said nothing — it is a deployment and an adapter with nothing in
+// common, because the caller registers the intersection of the two. Reading it
+// as "unspecified" and adopting the adapter's full set granted every capability
+// the adapter has, including ones the deployment never declared, which is how a
+// deployment that declared only rerank could serve chat.
+func TestRegistryRefusesATargetWithNoCapabilityInCommon(t *testing.T) {
+	registry := NewRegistry()
+	if err := registry.Register(Target{
+		ID: "empty", DeploymentID: "dep_empty", PublicModel: "chat", ProviderModel: "model",
+		Adapter: &reportingAdapter{}, Strategy: "ordered",
+	}); err == nil {
+		t.Fatal("a target with no capability in common was registered")
+	}
+	if _, ok := registry.Resolve("chat"); ok {
+		t.Fatal("the rejected target became a routing candidate")
+	}
+	// The intersection its deployment did declare still registers, and registers
+	// as itself: the adapter's extra capabilities are not added back.
+	if err := registry.Register(Target{
+		ID: "narrow", DeploymentID: "dep_narrow", PublicModel: "chat", ProviderModel: "model",
+		Adapter: &reportingAdapter{}, Strategy: "ordered",
+		Capabilities: Capabilities{Chat: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	target, ok := registry.Resolve("chat")
+	if !ok {
+		t.Fatal("the declared target did not register")
+	}
+	if !target.Capabilities.Chat || target.Capabilities.Tools {
+		t.Fatalf("capabilities=%#v", target.Capabilities)
+	}
+}
