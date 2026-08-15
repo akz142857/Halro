@@ -585,7 +585,6 @@ export function ReauthFields({
   // of its gap and lines them up with nothing.
   return (
     <>
-      {description && <p className="form-note">{description}</p>}
       {/* A password field with no username beside it makes the browser look
           further out for one, and it will fill whatever text input it finds —
           on a list page that is the filter box, which then silently filters the
@@ -603,7 +602,11 @@ export function ReauthFields({
         className="sr-only"
         onChange={() => {}}
       />
-      <Field label={t("auth.currentPassword")}>
+      {/* Why the form is asking sits under the field that answers it, as every
+          other hint in the console does. Standing above the pair it read as a
+          note about the section before it, and it now describes the password
+          input to assistive tech rather than floating unattached. */}
+      <Field label={t("auth.currentPassword")} hint={description}>
         <input
           required
           type="password"

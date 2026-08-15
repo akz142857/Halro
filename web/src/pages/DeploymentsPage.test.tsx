@@ -897,6 +897,6 @@ function renderPage(role: AdminRole = "administrator") {
 async function startDetection(label = "识别能力") {
   fireEvent.click(screen.getByRole("button", { name: label }));
   const dialog = await screen.findByRole("alertdialog");
-  fireEvent.change(within(dialog).getByLabelText("当前密码"), { target: { value: "a passphrase" } });
+  fireEvent.change(within(dialog).getByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
   fireEvent.click(within(dialog).getByRole("button", { name: label }));
 }

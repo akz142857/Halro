@@ -298,11 +298,11 @@ function ProviderRow({ provider, credential, highlighted, onCredentialClick, onE
     <>
       <article id={`provider-${provider.id}`} className={`provider-row ${highlighted ? "resource-highlight" : ""}`}>
         <span className="provider-icon">{provider.type === "openai" ? "OA" : "AI"}</span>
-        <div className="provider-compact-identity"><span><StatusDot ok={provider.enabled} /><strong>{provider.name}</strong></span><small>{t(`providers.types.${provider.type}`)}</small></div>
-        <div className="provider-compact-fact"><small>{t("providers.endpoint")}</small><strong>{provider.base_url}</strong></div>
-        <div className="provider-compact-fact"><small>{t("providers.boundCredential")}</small>{credential ? <button className="resource-link" onClick={onCredentialClick}>{credential.name} →</button> : <strong>{t("providers.missingCredential")}</strong>}</div>
-        <div className="provider-compact-fact"><small>{t("providers.capabilities")}</small><strong>{t("providers.capabilityCount", { count: enabledCapabilities(provider).length })}</strong></div>
-        <div className="provider-compact-status"><span className={`resource-state ${provider.enabled ? "enabled" : ""}`}>{provider.enabled ? t("providers.enabled") : t("providers.off")}</span></div>
+        <div className="resource-identity"><span><StatusDot ok={provider.enabled} /><strong>{provider.name}</strong></span><small>{t(`providers.types.${provider.type}`)}</small></div>
+        <div className="resource-fact provider-fact-endpoint"><small>{t("providers.endpoint")}</small><strong>{provider.base_url}</strong></div>
+        <div className="resource-fact"><small>{t("providers.boundCredential")}</small>{credential ? <button className="resource-link" onClick={onCredentialClick}>{credential.name} →</button> : <strong>{t("providers.missingCredential")}</strong>}</div>
+        <div className="resource-fact provider-fact-capabilities"><small>{t("providers.capabilities")}</small><strong>{t("providers.capabilityCount", { count: enabledCapabilities(provider).length })}</strong></div>
+        <div className="resource-row-state provider-compact-status"><span className={`resource-state ${provider.enabled ? "enabled" : ""}`}>{provider.enabled ? t("providers.enabled") : t("providers.off")}</span></div>
         <div className="row-actions provider-compact-actions">
           <InlineTestControl state={testState} latency={testLatency} disabled={!provider.enabled} title={totalTargets ? t("providers.testSummary", { healthy: healthyTargets ?? 0, total: totalTargets, latency: testLatency ?? 0 }) : undefined} onTest={() => testMutation.mutate()} />
           <button className="button ghost" disabled={readOnly} onClick={onEdit}>{t("common.edit")}</button>
@@ -360,7 +360,7 @@ function CredentialRow({ credential, useCount, highlighted, onUsageClick }: { cr
     <>
       <article className={`credential-row ${highlighted ? "resource-highlight" : ""}`}>
         <span className="provider-icon credential-icon" aria-hidden="true">K{credential.key_version}</span>
-        <div className="credential-compact-identity">
+        <div className="resource-identity credential-compact-identity">
           <strong>{credential.name}</strong>
           <small>{t(`providers.types.${credential.type}`)}</small>
           {/* Only stated once there is something to state: a secret with no
@@ -375,9 +375,9 @@ function CredentialRow({ credential, useCount, highlighted, onUsageClick }: { cr
           )}
           <code className="credential-identity-endpoint">{displayBaseURL}</code>
         </div>
-        <div className="credential-compact-fact credential-endpoint"><small>{t("providers.boundURL")}</small><strong>{displayBaseURL}</strong></div>
-        <div className="credential-compact-fact credential-usage"><small>{t("providers.usage")}</small>{useCount > 0 ? <button className="resource-link inline" onClick={onUsageClick}>{t("providers.credentialUsage", { count: useCount })} →</button> : <strong>{t("providers.credentialUsage", { count: useCount })}</strong>}</div>
-        <div className="credential-compact-fact credential-generation"><small>{t("providers.generation")}</small><strong>{t("providers.keyGeneration", { version: credential.key_version })}</strong></div>
+        <div className="resource-fact credential-endpoint"><small>{t("providers.boundURL")}</small><strong>{displayBaseURL}</strong></div>
+        <div className="resource-fact credential-usage"><small>{t("providers.usage")}</small>{useCount > 0 ? <button className="resource-link" onClick={onUsageClick}>{t("providers.credentialUsage", { count: useCount })} →</button> : <strong>{t("providers.credentialUsage", { count: useCount })}</strong>}</div>
+        <div className="resource-fact credential-generation"><small>{t("providers.generation")}</small><strong>{t("providers.keyGeneration", { version: credential.key_version })}</strong></div>
         <div className="row-actions credential-actions">
           <button className="button ghost" onClick={() => setRotating(true)}>{t("providers.rotate")}</button>
           <button className="button ghost credential-expand" aria-expanded={expanded} aria-controls={`credential-details-${credential.id}`} onClick={() => setExpanded((value) => !value)}>{expanded ? t("providers.collapseDetails") : t("providers.expandDetails")}</button>
@@ -488,7 +488,10 @@ function CredentialForm({
   const dirty = useDirty({ name, type, baseURL, bedrockSurface, secret, expiresAt });
   return (
     <Modal title={current ? t("providers.rotateCredential") : t("providers.saveCredential")} dirty={dirty} onClose={onClose}>
-      <form onSubmit={submit} autoComplete="off">
+      {/* Like the other modal forms: the form drops the modal's margin so the
+          footer can stick to both edges, and the body carries the padding. */}
+      <form className="provider-credential-form" onSubmit={submit} autoComplete="off">
+        <div className="provider-credential-form-body">
         <Field label={t("providers.credentialName")}><input autoFocus value={name} onChange={(event) => setName(event.target.value)} /></Field>
         <Field label={t("providers.providerType")}>
           <select value={type} disabled={Boolean(current)} onChange={(event) => {
@@ -541,7 +544,8 @@ function CredentialForm({
           <div ref={submitError} tabIndex={-1} className="form-submit-error"><ErrorState error={mutation.error} /></div>
         )}
         {current && <ReauthFields values={reauth} onChange={setReauth} description={t("auth.stepUpSecurityControl")} />}
-        <div className="form-actions">
+        </div>
+        <div className="form-actions sticky-form-actions">
           <button type="button" className="button ghost" onClick={onClose}>{t("common.cancel")}</button>
           <button className="button primary" disabled={mutation.isPending || (!current && !secret) || (Boolean(current) && !reauth.currentPassword)}>
             {current ? t("providers.rotateSecurely") : t("providers.saveEncrypted")}

@@ -481,7 +481,7 @@ h3 { margin-bottom: 0; font-size: var(--font-size-lg); }
 .deployment-result-count { margin-left: auto; padding: 9px 4px; color: var(--muted); font: var(--font-size-xs) var(--mono); white-space: nowrap; }
 .deployment-list > .empty-state { border: 0; }
 .deployment-row {
-  overflow: visible; padding: 12px 18px; border-bottom: 1px solid var(--line);
+  overflow: visible; padding: var(--resource-row-padding-block) var(--resource-row-padding-inline); border-bottom: 1px solid var(--line);
   font-size: var(--font-size-sm); line-height: var(--line-height-normal);
 }
 .deployment-row:last-child { border-bottom: 0; }
@@ -489,19 +489,9 @@ h3 { margin-bottom: 0; font-size: var(--font-size-lg); }
 .deployment-row-main {
   display: grid; align-items: center;
   grid-template-columns: minmax(140px, .9fr) minmax(120px, .75fr) minmax(84px, .45fr) minmax(100px, .55fr) minmax(76px, .4fr) minmax(70px, .4fr) auto;
-  gap: 16px; min-height: 54px;
+  gap: var(--resource-row-column-gap); min-height: 3.375rem;
 }
-.deployment-compact-identity, .deployment-compact-fact, .deployment-compact-status { display: grid; min-width: 0; gap: 5px; }
-.deployment-compact-identity > span { display: flex; align-items: center; min-width: 0; gap: 8px; }
-.deployment-compact-identity strong { overflow: hidden; color: var(--text); font-size: var(--font-size-sm); font-weight: var(--font-weight-semibold); line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }
-.deployment-compact-identity small { margin: 0; overflow: hidden; color: var(--color-text-secondary); font-size: var(--font-size-xs); font-weight: var(--font-weight-regular); line-height: var(--line-height-normal); text-overflow: ellipsis; white-space: nowrap; }
-.deployment-compact-fact small, .deployment-compact-status small { margin: 0; color: var(--color-text-tertiary); font: var(--font-size-xs) var(--mono); letter-spacing: .03em; line-height: 1.3; }
-.deployment-compact-fact > strong, .deployment-compact-fact > code, .deployment-compact-fact > .resource-link {
-  overflow: hidden; color: var(--color-text-primary); font-size: var(--font-size-sm); font-weight: var(--font-weight-semibold); line-height: 1.35; text-overflow: ellipsis; white-space: nowrap;
-}
-.deployment-compact-fact > code { font: var(--font-size-sm) var(--mono); }
-.deployment-fact-price { min-width: 0; align-content: center; }
-.deployment-compact-status .resource-state { font: var(--font-size-sm) var(--mono); }
+.deployment-fact-price { min-width: 0; }
 .deployment-price-value, .deployment-price-link { overflow: hidden; font-size: var(--font-size-sm); font-weight: var(--font-weight-semibold); line-height: var(--line-height-normal); text-align: left; text-overflow: ellipsis; white-space: nowrap; }
 .deployment-price-value { color: var(--color-text-tertiary); }
 .deployment-price-link { width: fit-content; max-width: 100%; padding: 0; color: var(--color-action-primary); background: transparent; border: 0; cursor: pointer; }
@@ -798,12 +788,7 @@ h3 { margin-bottom: 0; font-size: var(--font-size-lg); }
 .resource-toolbar { padding-inline: 26px; }
 .resource-search { flex: 1 1 320px; max-width: 520px; }
 .resource-result-count { margin-left: auto; padding: 9px 4px; color: var(--muted); font: var(--font-size-xs) var(--mono); white-space: nowrap; }
-.provider-row { grid-template-columns: 42px minmax(130px, .85fr) minmax(180px, 1.35fr) minmax(120px, .75fr) minmax(82px, .45fr) minmax(82px, .45fr) auto; grid-template-rows: minmax(54px, auto) auto; align-items: center; min-height: 78px; padding: 12px 18px; column-gap: 16px; row-gap: 0; }
-.provider-compact-identity, .credential-compact-identity, .provider-compact-fact, .credential-compact-fact, .provider-compact-status { display: grid; min-width: 0; gap: 5px; }
-.provider-compact-identity > span { display: flex; align-items: center; min-width: 0; gap: 8px; }
-.provider-compact-identity strong, .credential-compact-identity strong, .provider-compact-fact strong, .credential-compact-fact strong, .provider-compact-fact .resource-link, .credential-compact-fact .resource-link { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.provider-compact-identity strong, .credential-compact-identity strong { color: var(--text); font-size: var(--font-size-sm); font-weight: var(--font-weight-semibold); line-height: 1.3; }
-.provider-compact-identity small, .credential-compact-identity small, .provider-compact-fact small, .credential-compact-fact small, .provider-compact-status small { margin: 0; color: var(--muted); font-size: var(--font-size-xs); line-height: 1.3; }
+.provider-row { grid-template-columns: 42px minmax(130px, .85fr) minmax(180px, 1.35fr) minmax(120px, .75fr) minmax(82px, .45fr) minmax(82px, .45fr) auto; grid-template-rows: minmax(3.375rem, auto) auto; align-items: center; min-height: var(--resource-row-min-height); padding: var(--resource-row-padding-block) var(--resource-row-padding-inline); column-gap: var(--resource-row-column-gap); row-gap: 0; }
 .provider-compact-status { justify-items: end; }
 .provider-compact-status small.good { color: var(--lime); }
 .provider-compact-status small.bad { color: var(--danger); }
@@ -830,19 +815,28 @@ h3 { margin-bottom: 0; font-size: var(--font-size-lg); }
 .provider-row, .credential-row, .deployment-row { overflow-anchor: none; }
 .provider-expanded-content .provider-facts { margin-top: 0; }
 .provider-technical-details > strong { display: block; color: var(--color-text-secondary); font-size: var(--font-size-xs); }
+/* One fact per row wasted the width and pushed the value to the far edge of the
+   card, where the label it belongs to was no longer beside it. These are short
+   identifiers, so they tile: as many per row as fit, wrapping on their own. The
+   1px gaps over a --line background draw every divider, which is what lets the
+   column count change without a rule per column. */
+.provider-technical-details dl { grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); gap: 1px; margin-top: 10px; }
+/* The rule around each tile, not around the grid: the tiles that fit on a row
+   change with the width, so the last row is usually partial, and a bordered
+   container would have to paint that empty remainder as if a fact were there. */
+.provider-technical-details dl > div { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; align-content: start; gap: 6px; padding: 12px 14px; border: 0; background: var(--surface-inset); box-shadow: 0 0 0 1px var(--line); text-align: left; }
+.provider-technical-details dt { color: var(--muted-2); font: var(--font-size-xs)/1.3 var(--mono); letter-spacing: .03em; }
+.provider-technical-details dd { min-width: 0; color: var(--color-text-secondary); font-size: var(--font-size-xs); text-align: left; overflow-wrap: anywhere; }
+.provider-technical-details code { font: var(--font-size-xs)/1.5 var(--mono); word-break: break-word; }
 .provider-expanded-runtime { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
 .provider-expanded-runtime .provider-state-control { min-width: 150px; }
-.credential-row { grid-template-areas: "icon identity endpoint usage generation actions" "empty details details details details details"; grid-template-columns: 42px minmax(130px, .85fr) minmax(180px, 1.35fr) minmax(120px, .75fr) minmax(100px, .55fr) auto; grid-template-rows: minmax(54px, auto) auto; align-items: center; column-gap: 16px; row-gap: 0; min-height: 78px; padding: 12px 18px; }
+.credential-row { grid-template-areas: "icon identity endpoint usage generation actions" "empty details details details details details"; grid-template-columns: 42px minmax(130px, .85fr) minmax(180px, 1.35fr) minmax(120px, .75fr) minmax(100px, .55fr) auto; grid-template-rows: minmax(3.375rem, auto) auto; align-items: center; column-gap: var(--resource-row-column-gap); row-gap: 0; min-height: var(--resource-row-min-height); padding: var(--resource-row-padding-block) var(--resource-row-padding-inline); }
 .credential-icon { grid-area: icon; }
 .credential-compact-identity { grid-area: identity; }
 .credential-endpoint { grid-area: endpoint; }
 .credential-usage { grid-area: usage; }
 .credential-generation { grid-area: generation; }
 .credential-actions { grid-area: actions; }
-.credential-compact-identity strong, .credential-compact-identity small, .credential-compact-fact strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.credential-compact-fact > small { font: var(--font-size-xs)/1.3 var(--mono); letter-spacing: .02em; }
-.credential-compact-fact > strong, .credential-compact-fact > .resource-link { margin: 0; color: var(--color-text-primary); font-size: var(--font-size-sm); font-weight: var(--font-weight-semibold); line-height: 1.35; }
-.credential-compact-fact > .resource-link { width: max-content; max-width: 100%; }
 /* An expiry is only rendered once it exists, and the two states worth acting on
    are the two that get colour: gone, and close enough to plan a rotation. */
 .credential-expiry { font-variant-numeric: tabular-nums; }
@@ -859,8 +853,12 @@ h3 { margin-bottom: 0; font-size: var(--font-size-lg); }
 .credential-detail-header strong { color: var(--text); font-size: var(--font-size-sm); font-weight: var(--font-weight-semibold); }
 .credential-detail-header p { max-width: 520px; margin: 0; color: var(--muted); font-size: var(--font-size-xs); line-height: 1.5; text-align: right; }
 .credential-detail-grid { display: grid; grid-template-columns: minmax(220px, 1.2fr) minmax(140px, .75fr) minmax(160px, .85fr) minmax(220px, 1.2fr); gap: 0; margin: 0; background: var(--surface-inset); border: 1px solid var(--line); }
-.credential-detail-grid > div { display: grid; min-width: 0; align-content: start; gap: 8px; padding: 14px 16px; border-right: 1px solid var(--line); text-align: left; }
-.credential-detail-grid > div:last-child { border-right: 0; }
+/* border: 0 first, because the base `dl div` rule gives every row a top rule —
+   here the cell below a row would draw its own separator on top of the one the
+   row above already draws. */
+.credential-detail-grid > div { display: grid; min-width: 0; align-content: start; gap: 8px; padding: 14px 16px; border: 0; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); text-align: left; }
+.credential-detail-grid > div:nth-child(4n) { border-right: 0; }
+.credential-detail-grid > div:last-child { grid-column: 1 / -1; border-right: 0; border-bottom: 0; }
 .credential-detail-grid dt { width: 100%; color: var(--muted-2); font: var(--font-size-xs)/1.3 var(--mono); letter-spacing: .03em; text-align: left; }
 .credential-detail-grid dd { width: 100%; min-width: 0; margin: 0; overflow-wrap: anywhere; text-align: left; }
 .credential-detail-grid code { display: block; width: 100%; margin: 0; color: var(--color-text-secondary); font: var(--font-size-xs)/1.5 var(--mono); text-align: left; white-space: normal; word-break: break-word; }
@@ -1522,6 +1520,8 @@ textarea { resize: vertical; }
 .model-picker > .field-error { display: block; margin-top: 8px; color: var(--danger); font-size: var(--font-size-xs); }
 .compact-number-grid input { font-family: var(--mono); }
 .project-form > .notice { margin: 18px 24px 0; }
+.modal > .provider-credential-form { display: grid; gap: 0; margin: 0; padding: 0; }
+.provider-credential-form-body { padding: var(--space-5) var(--space-6); }
 .modal > .provider-form { display: grid; gap: 0; margin: 0; padding: 0; }
 .modal > .deployment-form { display: grid; gap: 0; margin: 0; padding: 0; }
 .modal:has(> .deployment-form) { width: min(900px, 100%); scrollbar-width: none; }
@@ -1542,6 +1542,12 @@ textarea { resize: vertical; }
 .deployment-variant-picker { display: grid; gap: 10px; margin: 0; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius-md); }
 .deployment-variant-picker > p { margin: 0; color: var(--muted); font-size: var(--font-size-sm); }
 .deployment-variant-picker > label { display: flex; align-items: center; gap: 10px; min-height: 36px; cursor: pointer; }
+/* The radio needs the same reset every other choice control here carries: the
+   base rule sizes a form control at `width: 100%; min-height: 44px`, which on a
+   radio renders a 44px circle spanning the row and squeezes its own label into a
+   column one character wide. */
+.deployment-variant-picker > label > input { width: 1.125rem; height: 1.125rem; min-height: 1.125rem; flex: 0 0 auto; margin: 0; padding: 0; accent-color: var(--color-action-primary); }
+.deployment-variant-picker > label > span { min-width: 0; }
 .deployment-variant-picker > details { color: var(--muted); font-size: var(--font-size-xs); }
 .capability-advanced-note { margin: 0; padding: 12px 14px; color: var(--muted); border-top: 1px solid var(--line); font-size: var(--font-size-xs); line-height: 1.55; }
 .capability-disclosure { overflow: hidden; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg); }
@@ -1738,16 +1744,14 @@ textarea { resize: vertical; }
   .settings-overview-facts { border-top: 1px solid var(--line); border-left: 0; }
   .settings-layout { grid-template-columns: 1fr; }
   .provider-row { grid-template-columns: 42px minmax(140px, 1fr) minmax(110px, .75fr) minmax(80px, .5fr) auto; }
-  .provider-compact-fact:nth-of-type(2), .provider-compact-fact:nth-of-type(4) { display: none; }
+  .provider-fact-endpoint, .provider-fact-capabilities { display: none; }
   .provider-expanded-content { grid-column: 2 / -1; }
   .credential-row { grid-template-areas: "icon identity usage generation actions" "empty details details details details"; grid-template-columns: 42px minmax(170px, 1fr) minmax(130px, .8fr) minmax(100px, .6fr) auto; }
-  .credential-compact-fact:nth-of-type(2) { display: none; }
+  .credential-endpoint { display: none; }
   .credential-identity-endpoint { display: block !important; }
   .credential-expanded-content { grid-area: details; }
   .credential-detail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .credential-detail-grid > div { border-bottom: 1px solid var(--line); }
   .credential-detail-grid > div:nth-child(2n) { border-right: 0; }
-  .credential-detail-grid > div:nth-last-child(-n+2) { border-bottom: 0; }
   .provider-runtime { grid-column: 2; width: 100%; padding: 20px 0 0; border-top: 1px solid var(--line); border-left: 0; }
   .provider-runtime .connection-health { justify-items: start; }
   .provider-runtime .row-actions { justify-self: start; }
@@ -1943,7 +1947,7 @@ textarea { resize: vertical; }
   .provider-row { grid-template-columns: 1fr; }
   .deployment-capabilities { grid-template-columns: 1fr 1fr; }
   .provider-row > .provider-icon { display: none; }
-  .provider-compact-fact, .provider-compact-fact:nth-of-type(2), .provider-compact-fact:nth-of-type(4) { display: grid; }
+  .provider-row > .resource-fact { display: grid; }
   .provider-compact-status { justify-items: start; }
   .provider-compact-actions { justify-content: flex-start; flex-wrap: wrap; }
   .provider-expanded-content { grid-column: 1; }
@@ -1956,16 +1960,17 @@ textarea { resize: vertical; }
   .provider-expanded-runtime { align-items: flex-start; flex-direction: column; }
   .credential-row { grid-template-areas: "identity" "usage" "generation" "actions" "details"; grid-template-columns: 1fr; row-gap: 12px; }
   .credential-row > .credential-icon { display: none; }
-  .credential-compact-fact { display: grid; }
+  /* Every fact returns except the bound endpoint: the stacked identity already
+     carries it, and the row has no `endpoint` area at this width, so showing it
+     again put a second copy in an implicit column of its own. */
+  .credential-row > .resource-fact:not(.credential-endpoint) { display: grid; }
   .credential-identity-endpoint { display: block !important; }
   .credential-actions { justify-content: flex-start; }
   .credential-expanded-content { grid-area: details; }
   .credential-expanded-content dl { grid-template-columns: 1fr; }
   .credential-detail-header { align-items: flex-start; flex-direction: column; gap: 8px; }
   .credential-detail-header p { text-align: left; }
-  .credential-detail-grid > div { border-right: 0; border-bottom: 1px solid var(--line); }
-  .credential-detail-grid > div:nth-last-child(-n+2) { border-bottom: 1px solid var(--line); }
-  .credential-detail-grid > div:last-child { border-bottom: 0; }
+  .credential-detail-grid > div { border-right: 0; }
   .provider-runtime { grid-column: 1; }
   .provider-runtime .row-actions { justify-self: start; }
   .provider-facts { grid-template-columns: 1fr; }

@@ -147,10 +147,21 @@ describe("design system themes", () => {
   // actually held 754 — four units of slack that later commits spent without
   // anyone deciding to. It is now the exact count, so any new hand-picked value
   // fails and lowering it is a deliberate edit.
-  const bareSizeValueBaseline = 743;
+  //
+  // 743 → 724 when the resource-list row spec moved row padding, column gap and
+  // cell gaps onto --resource-row-* / --space-* tokens.
+  //
+  // resource-list.css is counted alongside styles.css, and contributes zero.
+  // The ratchet used to read the business stylesheet alone, which was the whole
+  // file when it was written; once a design-system stylesheet started owning
+  // spacing that pages had declared by hand, reading only styles.css would have
+  // scored a value as converted for moving out of the file the count is taken
+  // from. A stylesheet that owns spacing has to be inside the ratchet, or the
+  // next one to own some is where the hand-picked values go.
+  const bareSizeValueBaseline = 724;
 
   it("does not add bare spacing or radius values beyond the current baseline", () => {
-    const styles = read("./styles.css");
+    const styles = read("./styles.css") + read("./design-system/resource-list.css");
     const declarations = styles.matchAll(
       /\b(?:gap|row-gap|column-gap|padding|padding-top|padding-right|padding-bottom|padding-left|margin|margin-top|margin-right|margin-bottom|margin-left|border-radius|inset)\s*:\s*([^;{}]*)/g,
     );
@@ -322,7 +333,7 @@ describe("component styling reaches the markup", () => {
   const unstyledClassBaseline = 12;
 
   it("does not add class names the stylesheets never style", () => {
-    const cssFiles = ["./styles.css", "./design-system/index.css", "./design-system/components.css", "./design-system/tokens.css"];
+    const cssFiles = ["./styles.css", "./design-system/index.css", "./design-system/components.css", "./design-system/resource-list.css", "./design-system/tokens.css"];
     let css = "";
     for (const file of cssFiles) {
       try {

@@ -1,0 +1,127 @@
+/*
+ * Resource list rows (design-system component contract).
+ *
+ * Providers, Credentials, Deployments, Projects and Routes all render the same
+ * shape: an icon, an identity, a run of labelled facts, a state and the row
+ * actions. Each page had grown its own copy of that typography, and the copies
+ * drifted — a fact value was 15px bold on Providers and 13px semibold on
+ * Credentials, a fact label was sans on one list and mono on the next, so the
+ * same kind of value shouted on one screen and whispered on the other.
+ *
+ * The rule this file states is the hierarchy, not the page:
+ *
+ *   identity name      --font-size-md   semibold   text-primary
+ *   fact value         --font-size-sm   semibold   text-primary
+ *   identity subtitle  --font-size-xs   regular    text-secondary
+ *   fact label         --font-size-xs   regular    text-tertiary
+ *
+ * The name is the largest thing in the row because it is what the operator is
+ * looking for; a fact is answered at one step down; the label that names the
+ * fact is quieter than the fact. Machine values (endpoints, ids, model names)
+ * keep the mono face at the value size — labels do not, because a mono CJK
+ * label falls back to a CJK face anyway and only loses the metrics.
+ *
+ * A page owns its columns — how many facts, how wide, which ones collapse at
+ * which width. It does not own the type or the spacing inside a cell.
+ *
+ * Usage:
+ *   <article class="provider-row">                        page: grid columns
+ *     <span class="provider-icon">…</span>
+ *     <div class="resource-identity">                     shared: name/subtitle
+ *       <span><StatusDot/><strong>name</strong></span><small>subtitle</small>
+ *     </div>
+ *     <div class="resource-fact credential-endpoint">     shared + placement
+ *       <small>label</small><strong>value</strong>
+ *     </div>
+ *     <div class="resource-row-state">…</div>
+ *     <div class="row-actions …">…</div>
+ *   </article>
+ */
+:root {
+  --resource-row-padding-block: var(--space-3);
+  --resource-row-padding-inline: var(--space-5);
+  --resource-row-column-gap: var(--space-4);
+  /* 78px — two lines of a fact cell plus the row padding. Rows without a
+     subtitle still reserve it so a list does not change rhythm row to row. */
+  --resource-row-min-height: 4.875rem;
+  /* Label to value, and icon to name. */
+  --resource-cell-gap: var(--space-1);
+  --resource-identity-gap: var(--space-2);
+}
+
+.resource-identity,
+.resource-fact,
+.resource-row-state {
+  display: grid;
+  min-width: 0;
+  align-content: center;
+  gap: var(--resource-cell-gap);
+}
+
+.resource-identity > span {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--resource-identity-gap);
+}
+
+.resource-identity > strong,
+.resource-identity > span > strong {
+  overflow: hidden;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-tight);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resource-identity > small {
+  margin: 0;
+  overflow: hidden;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-regular);
+  line-height: var(--line-height-normal);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resource-fact > small,
+.resource-row-state > small {
+  margin: 0;
+  overflow: hidden;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-regular);
+  letter-spacing: .02em;
+  line-height: var(--line-height-normal);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resource-fact > strong,
+.resource-fact > code,
+.resource-fact > span,
+.resource-fact > .resource-link {
+  overflow: hidden;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-normal);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resource-fact > code {
+  font-family: var(--font-mono);
+}
+
+/* A link is still a value: it reads at the value's size and weight, and only
+   the colour says it goes somewhere. */
+.resource-fact > .resource-link {
+  width: max-content;
+  max-width: 100%;
+  color: var(--color-action-primary);
+  text-align: left;
+}

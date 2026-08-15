@@ -228,25 +228,25 @@ function DeploymentRow({
   return (
     <article id={`deployment-${deployment.id}`} className="deployment-row">
       <div className="deployment-row-main">
-        <div className="deployment-compact-identity">
+        <div className="resource-identity">
           <span><StatusDot ok={deployment.enabled} /><strong>{deployment.name}</strong></span>
           <small>{providerName}</small>
         </div>
-        <div className="deployment-compact-fact deployment-fact-target">
+        <div className="resource-fact deployment-fact-target">
           <small>{t("deployments.upstreamTarget")}</small>
           <code>{deployment.provider_model}</code>
         </div>
-        <div className="deployment-compact-fact deployment-fact-concurrency">
+        <div className="resource-fact deployment-fact-concurrency">
           <small>{t("deployments.concurrency")}</small>
           <strong>{deployment.max_concurrency || t("deployments.unlimited")}</strong>
         </div>
-        <div className="deployment-compact-fact deployment-fact-routes">
+        <div className="resource-fact deployment-fact-routes">
           <small>{t("deployments.routeDependency")}</small>
           {activeRouteCount
             ? <Link className="resource-link" href="/admin/routes">{t("deployments.activeRoutesCompact", { count: activeRouteCount })} →</Link>
             : <strong>{t("deployments.noActiveRoutes")}</strong>}
         </div>
-        <div className="deployment-compact-fact deployment-fact-price">
+        <div className="resource-fact deployment-fact-price">
           <small>{t("deployments.priceSetting")}</small>
           {prices.isPending ? (
             <span className="deployment-price-value">{t("common.loading")}</span>
@@ -276,7 +276,7 @@ function DeploymentRow({
             >{t("deployments.priceNotConfigured")}</button>
           )}
         </div>
-        <div className="deployment-compact-status">
+        <div className="resource-row-state">
           <small>{t("deployments.status")}</small>
           <span className={`resource-state ${deployment.enabled ? "enabled" : ""}`}>{deployment.enabled ? t("common.enabled") : t("common.disabled")}</span>
           {/* A drifted deployment is not routing whatever the enabled flag says,
