@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -69,7 +71,11 @@ func (s *signer) Authorize(request *http.Request, payload []byte) error {
 	if len(s.secretKey) == 0 {
 		return errors.New("AWS credential authorizer is closed")
 	}
-	if !strings.EqualFold(request.URL.Host, s.authority) {
+	// Compared without the scheme's default port, because that is how the
+	// canonical host below is built: a stored endpoint normalized to `:443` and
+	// the same endpoint written without it are one audience, not two.
+	if !strings.EqualFold(hostWithoutDefaultPort(request.URL.Scheme, request.URL.Host),
+		hostWithoutDefaultPort(request.URL.Scheme, s.authority)) {
 		return errors.New("AWS credential authorizer audience mismatch")
 	}
 	now := s.now().UTC()
@@ -83,13 +89,29 @@ func (s *signer) Authorize(request *http.Request, payload []byte) error {
 	} else {
 		request.Header.Del("x-amz-security-token")
 	}
+	// The header the request will actually send has to be the authority that was
+	// signed, so the port comes off the request as well as off the canonical
+	// string. This is what the AWS SDK's own signer does, and skipping it would
+	// sign one authority and send another. Only the Host header moves: the URL
+	// keeps its port, and the transport still dials it.
+	canonicalHost := hostWithoutDefaultPort(request.URL.Scheme, request.URL.Host)
+	request.Host = canonicalHost
 	names := []string{"host", "x-amz-content-sha256", "x-amz-date"}
 	values := map[string]string{
-		"host": request.URL.Host, "x-amz-content-sha256": payloadHex, "x-amz-date": amzDate,
+		"host": canonicalHost, "x-amz-content-sha256": payloadHex, "x-amz-date": amzDate,
 	}
 	if contentType := request.Header.Get("Content-Type"); contentType != "" {
 		names = append(names, "content-type")
 		values["content-type"] = normalizeHeader(contentType)
+	}
+	// Signed whenever the request carries a body, which is what every AWS SDK
+	// signer does. Omitting an optional header is legal — AWS verifies against
+	// the SignedHeaders list — but a set that matches the SDK's is a set that can
+	// be compared against it, and that comparison is the only independent check
+	// this hand-rolled signer has.
+	if request.ContentLength > 0 {
+		names = append(names, "content-length")
+		values["content-length"] = strconv.FormatInt(request.ContentLength, 10)
 	}
 	if len(s.sessionToken) != 0 {
 		names = append(names, "x-amz-security-token")
@@ -101,12 +123,15 @@ func (s *signer) Authorize(request *http.Request, payload []byte) error {
 		fmt.Fprintf(&canonicalHeaders, "%s:%s\n", name, values[name])
 	}
 	signedHeaders := strings.Join(names, ";")
-	canonicalURI := request.URL.EscapedPath()
-	if canonicalURI == "" {
-		canonicalURI = "/"
-	}
+	canonicalURI := canonicalSigV4Path(request.URL.EscapedPath())
+	// The blank line between the canonical headers and the signed-header list is
+	// part of the format, not spacing: SigV4 defines the canonical request as
+	// method, URI, query, canonical headers, *an empty line*, signed headers and
+	// the payload hash. Without it AWS derives a different string to sign and
+	// answers InvalidSignatureException — which is what a real account did to
+	// every signed request this adapter made.
 	canonicalRequest := request.Method + "\n" + canonicalURI + "\n" + request.URL.RawQuery + "\n" +
-		canonicalHeaders.String() + signedHeaders + "\n" + payloadHex
+		canonicalHeaders.String() + "\n" + signedHeaders + "\n" + payloadHex
 	canonicalHash := sha256.Sum256([]byte(canonicalRequest))
 	service := s.service
 	if service == "" {
@@ -127,6 +152,65 @@ func (s *signer) Authorize(request *http.Request, payload []byte) error {
 		", SignedHeaders="+signedHeaders+", Signature="+hex.EncodeToString(signature))
 	clear(signature)
 	return nil
+}
+
+// canonicalSigV4Path is the request path as SigV4 canonicalizes it for every
+// service except S3: the path that goes on the wire, URI-encoded a second time.
+//
+// A Bedrock model id carries a colon — `anthropic.claude-sonnet-4-5-...-v1:0`,
+// and an inference-profile ARN carries several — so this is not a corner the
+// adapter can skip. Signing the once-encoded path produced a signature AWS
+// could not reproduce, and the account answered InvalidSignatureException.
+//
+// Unreserved characters (RFC 3986) and the separator pass through; everything
+// else becomes uppercase percent-hex. Kept as code rather than as a dependency:
+// the AWS SDK's escaper would bring the SDK into the request path, and this
+// adapter signs by hand on purpose. The equivalence with the SDK's escaper is
+// asserted in signer_vector_test.go.
+func canonicalSigV4Path(escapedPath string) string {
+	if escapedPath == "" {
+		return "/"
+	}
+	var canonical strings.Builder
+	for index := 0; index < len(escapedPath); index++ {
+		char := escapedPath[index]
+		switch {
+		case char >= 'A' && char <= 'Z', char >= 'a' && char <= 'z', char >= '0' && char <= '9',
+			char == '-', char == '.', char == '_', char == '~', char == '/':
+			canonical.WriteByte(char)
+		default:
+			fmt.Fprintf(&canonical, "%%%02X", char)
+		}
+	}
+	return canonical.String()
+}
+
+// hostWithoutDefaultPort is the authority as SigV4 canonicalizes it: a port that
+// is the scheme's default is not part of the host.
+//
+// Halro normalizes every stored Provider endpoint to an explicit port, so the
+// adapter signs `https://host:443/...` where an AWS SDK would sign
+// `https://host/...`. Signing the port produced a signature the account could
+// not reproduce — InvalidSignatureException on every request — while the
+// port-less form matches the SDK's byte for byte.
+func hostWithoutDefaultPort(scheme, host string) string {
+	if host == "" {
+		return host
+	}
+	parsed := url.URL{Scheme: scheme, Host: host}
+	port := parsed.Port()
+	if port == "" {
+		return host
+	}
+	if !(strings.EqualFold(scheme, "https") && port == "443" ||
+		strings.EqualFold(scheme, "http") && port == "80") {
+		return host
+	}
+	name := parsed.Hostname()
+	if strings.Contains(name, ":") {
+		return "[" + name + "]"
+	}
+	return name
 }
 
 func hmacSHA256(key []byte, value string) []byte {

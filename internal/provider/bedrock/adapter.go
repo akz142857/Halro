@@ -305,9 +305,25 @@ func (a *Adapter) Close() {
 	a.client.CloseIdleConnections()
 }
 
+// ProbeRequiresModel is true for every profile whose probe addresses a model
+// path. Nova Reel and the Cohere rerank profile probe their own operation
+// endpoint, so they can answer for a connection that has no deployment yet.
+func (a *Adapter) ProbeRequiresModel() bool {
+	return a.profileID != domain.ProfileBedrockAsyncNovaReel && a.profileID != domain.ProfileBedrockAgentRerankCohere35
+}
+
 func (a *Adapter) Probe(ctx context.Context, model string) error {
-	if err := ValidateProfileModel(a.profileID, model); err != nil {
-		return badRequest(err.Error(), nil)
+	// The pin is enforced on a model that was supplied, and not on the absence
+	// of one the probe never names. Nova Reel and Cohere rerank probe their own
+	// operation endpoint — no model in the path — which is exactly what
+	// ProbeRequiresModel reports, so validating "" against the pin would refuse
+	// the one case that exemption exists for: the caller then saw "Nova Reel
+	// profile requires model amazon.nova-reel-v1:0" for an id it was told it did
+	// not have to supply.
+	if strings.TrimSpace(model) != "" || a.ProbeRequiresModel() {
+		if err := ValidateProfileModel(a.profileID, model); err != nil {
+			return badRequest(err.Error(), nil)
+		}
 	}
 	operation := "converse"
 	if a.profileID == domain.ProfileBedrockInvokeTitanEmbedV2 || a.profileID == domain.ProfileBedrockInvokeTitanImageV2 {
@@ -328,11 +344,31 @@ func (a *Adapter) Probe(ctx context.Context, model string) error {
 	if err != nil {
 		return err
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodHead, endpoint.String(), nil)
+	// The probe is the operation's own method carrying a body the operation
+	// must reject.
+	//
+	// It used to be a HEAD, on the theory that a POST-only route would answer
+	// 400 or 405 — which is why both count as reachable below. A real account
+	// answered 404 with a request id and no `x-amzn-errortype` at all: not one
+	// of Bedrock's modelled errors, which always name themselves in that header,
+	// but the frontend refusing a method its route does not have. The probe
+	// could therefore never pass, and a connection that works cannot be enabled
+	// while its own test says it does not.
+	//
+	// An empty object is a request Bedrock rejects at validation, before any
+	// inference and before any token is metered: `messages` is required by
+	// Converse, `body` by Invoke, and the async and rerank operations have their
+	// own required fields. The refusal is the evidence — reaching a validation
+	// error means the host resolved, the signature verified, the model exists on
+	// this account and the operation is one this credential may call.
+	const probeBody = "{}"
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), strings.NewReader(probeBody))
 	if err != nil {
 		return badRequest("create Bedrock probe", err)
 	}
-	if err := a.authorizer.Authorize(request, nil); err != nil {
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json")
+	if err := a.authorizer.Authorize(request, []byte(probeBody)); err != nil {
 		return badRequest("sign Bedrock probe", err)
 	}
 	response, err := a.client.Do(request)
@@ -340,6 +376,10 @@ func (a *Adapter) Probe(ctx context.Context, model string) error {
 		return transportError("Bedrock probe failed", err)
 	}
 	defer response.Body.Close()
+	// 400 is the expected answer, not a tolerated one: the probe asks a question
+	// the operation must refuse. 2xx stays reachable because a future operation
+	// may accept an empty body, and 405 because a route that names the method
+	// still proves the endpoint and the signature.
 	if response.StatusCode >= 200 && response.StatusCode < 300 ||
 		response.StatusCode == http.StatusBadRequest || response.StatusCode == http.StatusMethodNotAllowed {
 		return nil

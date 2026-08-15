@@ -524,3 +524,125 @@ func encodeStringHeader(name, value string) []byte {
 }
 
 func errorsAs(err error, target any) bool { return errors.As(err, target) }
+
+// The connection test asks the operation a question it must refuse.
+//
+// It used to ask with HEAD, on the theory that a POST-only route answers 400 or
+// 405. A real account answered a bare 404 — no `x-amzn-errortype`, so not one of
+// Bedrock's modelled errors but the frontend refusing a method its route does
+// not have — which made the probe unpassable and left a working connection
+// unable to be enabled, because enabling is gated on its own test.
+func TestProbeAsksTheOperationWithABodyItMustReject(t *testing.T) {
+	var seen struct {
+		method string
+		path   string
+		body   string
+		signed bool
+	}
+	respond := func(status int, errorType string) *http.Client {
+		return &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			body, _ := io.ReadAll(request.Body)
+			seen.method, seen.path, seen.body = request.Method, request.URL.EscapedPath(), string(body)
+			seen.signed = strings.HasPrefix(request.Header.Get("Authorization"), "AWS4-HMAC-SHA256 ") &&
+				request.Header.Get("x-amz-content-sha256") != ""
+			header := http.Header{"Content-Type": []string{"application/json"}}
+			if errorType != "" {
+				header.Set("x-amzn-errortype", errorType)
+			}
+			return &http.Response{StatusCode: status, Header: header, Body: io.NopCloser(strings.NewReader("{}"))}, nil
+		})}
+	}
+
+	// The validation refusal is the evidence: the host resolved, the signature
+	// verified, the model exists and the credential may call the operation.
+	adapter := newTestAdapter(t, respond(http.StatusBadRequest, "ValidationException"))
+	if err := adapter.Probe(context.Background(), "anthropic.claude-test-v1:0"); err != nil {
+		t.Fatalf("a validation refusal was read as an unreachable connection: %v", err)
+	}
+	if seen.method != http.MethodPost {
+		t.Fatalf("probe method=%q, which is not the method the operation routes", seen.method)
+	}
+	if seen.path != "/model/anthropic.claude-test-v1:0/converse" {
+		t.Fatalf("probe path=%q", seen.path)
+	}
+	// Nothing that could be inferred on, and therefore nothing that can be
+	// metered: an empty object has no messages for Converse to answer.
+	if seen.body != "{}" {
+		t.Fatalf("probe body=%q — a probe must carry nothing the upstream could bill for", seen.body)
+	}
+	if !seen.signed {
+		t.Fatal("the probe body was not covered by the signature")
+	}
+
+	// A model this account cannot invoke still has to fail, or the test that
+	// gates enabling a deployment would pass for a model that never answers.
+	adapter = newTestAdapter(t, respond(http.StatusNotFound, "ResourceNotFoundException"))
+	err := adapter.Probe(context.Background(), "anthropic.claude-test-v1:0")
+	var missing *provider.Error
+	if !errors.As(err, &missing) || missing.StatusCode != http.StatusNotFound {
+		t.Fatalf("a missing model was accepted: %v", err)
+	}
+
+	adapter = newTestAdapter(t, respond(http.StatusForbidden, "AccessDeniedException"))
+	err = adapter.Probe(context.Background(), "anthropic.claude-test-v1:0")
+	var denied *provider.Error
+	if !errors.As(err, &denied) || denied.Class != provider.ErrorAuthentication {
+		t.Fatalf("a refused credential was not classified as authentication: %v", err)
+	}
+}
+
+// The two profiles that answer for a connection with nothing deployed on it.
+//
+// ProbeRequiresModel reports false for Nova Reel and Cohere rerank because
+// their probes address the operation's own collection endpoint and never name a
+// model — which is what lets the Admin connection test run before a deployment
+// exists. Both are pinned profiles, so the model check at the top of Probe read
+// the absent id as a wrong one and answered "Nova Reel profile requires model
+// amazon.nova-reel-v1:0": the exemption existed and the probe refused anyway,
+// for exactly the value the caller was told it did not have to supply.
+func TestProbeWithoutAModelIsRefusedOnlyByProfilesThatAddressOne(t *testing.T) {
+	for _, test := range []struct {
+		profile domain.ProviderProfileID
+		path    string
+	}{
+		{domain.ProfileBedrockAsyncNovaReel, "/async-invoke"},
+		{domain.ProfileBedrockAgentRerankCohere35, "/rerank"},
+	} {
+		t.Run(string(test.profile), func(t *testing.T) {
+			seen := ""
+			adapter := newProfileTestAdapter(t, &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				seen = request.URL.EscapedPath()
+				return &http.Response{
+					StatusCode: http.StatusBadRequest, Header: http.Header{},
+					Body: io.NopCloser(strings.NewReader("{}")),
+				}, nil
+			})}, test.profile)
+			if adapter.ProbeRequiresModel() {
+				t.Fatal("this profile claims to need a model, so the exemption below does not apply to it")
+			}
+			if err := adapter.Probe(context.Background(), ""); err != nil {
+				t.Fatalf("a probe that names no model was refused for not naming one: %v", err)
+			}
+			if seen != test.path {
+				t.Fatalf("probe path=%q want %q", seen, test.path)
+			}
+
+			// The pin still holds on a model that was supplied: an exemption
+			// from naming one is not permission to name the wrong one.
+			if err := adapter.Probe(context.Background(), "anthropic.claude-test-v1:0"); err == nil {
+				t.Fatal("a model outside the profile's pin was accepted")
+			}
+		})
+	}
+
+	// A profile whose probe does address a model path still refuses an absent
+	// one — the Admin API stops that case before it gets here, and the adapter
+	// must not become the thing that lets it through.
+	titan := newProfileTestAdapter(t, refuseEveryRequest(t), domain.ProfileBedrockInvokeTitanEmbedV2)
+	if !titan.ProbeRequiresModel() {
+		t.Fatal("the Titan embedding profile probes a model path and must say so")
+	}
+	if err := titan.Probe(context.Background(), ""); err == nil {
+		t.Fatal("a model-addressed probe accepted an empty model")
+	}
+}
