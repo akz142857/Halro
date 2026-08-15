@@ -469,7 +469,7 @@ func (r *Runtime) testAdminDeployment(writer http.ResponseWriter, request *http.
 	current.LastTestRevision = current.Revision + 1
 	current.LastTestErrorClass = ""
 	if probeErr != nil {
-		current.LastTestErrorClass = string(errorClass)
+		current.LastTestErrorClass = persistedProbeClass(failure)
 	}
 	current.UpdatedAt = testedAt
 	action := "deployment.test.success"

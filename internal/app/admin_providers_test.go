@@ -544,15 +544,19 @@ func TestAdminCredentialViewPreservesBedrockBoundBaseURLForRotation(t *testing.T
 		baseURL string
 		surface domain.AccessSurface
 		scheme  domain.CredentialScheme
+		secret  string
+		// The rotation replaces the material, so it has to be material the
+		// scheme accepts too.
+		rotatedSecret string
 	}{
-		{name: "agent runtime", baseURL: "https://bedrock-agent-runtime.eu-west-1.amazonaws.com", surface: domain.SurfaceBedrockAgentRuntime, scheme: domain.CredentialAWSSigV4Explicit},
-		{name: "mantle", baseURL: "https://bedrock-mantle.ap-southeast-1.api.aws", surface: domain.SurfaceBedrockMantle, scheme: domain.CredentialBedrockAPIKey},
+		{name: "agent runtime", baseURL: "https://bedrock-agent-runtime.eu-west-1.amazonaws.com", surface: domain.SurfaceBedrockAgentRuntime, scheme: domain.CredentialAWSSigV4Explicit, secret: awsCredentialForTest("eu-west-1"), rotatedSecret: awsCredentialForTest("eu-west-1")},
+		{name: "mantle", baseURL: "https://bedrock-mantle.ap-southeast-1.api.aws", surface: domain.SurfaceBedrockMantle, scheme: domain.CredentialBedrockAPIKey, secret: "test-secret", rotatedSecret: "rotated-secret"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			created := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost, "/admin/api/v1/credentials", "", map[string]any{
 				"name": test.name, "type": "bedrock", "base_url": test.baseURL,
-				"access_surface": test.surface, "scheme": test.scheme, "secret": "test-secret",
+				"access_surface": test.surface, "scheme": test.scheme, "secret": test.secret,
 			})
 			if created.Code != http.StatusCreated {
 				t.Fatalf("create status=%d body=%s", created.Code, created.Body.String())
@@ -591,7 +595,7 @@ func TestAdminCredentialViewPreservesBedrockBoundBaseURLForRotation(t *testing.T
 			}
 			rotated := performAdminMutation(t, runtime, cookie, csrf, http.MethodPut, "/admin/api/v1/credentials/"+view.ID, `"1"`, map[string]any{
 				"name": test.name, "type": "bedrock", "base_url": view.BoundBaseURL,
-				"access_surface": test.surface, "scheme": test.scheme, "secret": "rotated-secret",
+				"access_surface": test.surface, "scheme": test.scheme, "secret": test.rotatedSecret,
 				// Replacing credential material carries step-up, like deleting it.
 				"current_password": "correct horse battery staple",
 			})

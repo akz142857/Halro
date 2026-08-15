@@ -344,6 +344,14 @@ func (b *LegacyAdapterBridge) Probe(ctx context.Context, model string) error {
 	return prober.Probe(ctx, model)
 }
 
+// ProbeRequiresModel answers for the adapter behind the bridge, and answers
+// false for one that never stated a requirement: an adapter that can probe
+// without a model must not be refused for lack of one.
+func (b *LegacyAdapterBridge) ProbeRequiresModel() bool {
+	requirer, ok := b.Adapter.(ProbeModelRequirer)
+	return ok && requirer.ProbeRequiresModel()
+}
+
 func (b *LegacyAdapterBridge) MessagesNative(ctx context.Context, call NativeMessageCall) (NativeMessageResult, error) {
 	adapter, ok := b.Adapter.(NativeMessagesAdapter)
 	if !ok {

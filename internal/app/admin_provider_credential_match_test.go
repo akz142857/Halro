@@ -20,10 +20,10 @@ func TestAdminExplainsWhichCredentialDimensionDidNotMatch(t *testing.T) {
 	runtime, _ := openRuntimeWithPolicyForTest(t, cfg)
 	cookie, csrf := loginAdminForTest(t, runtime)
 
-	credential := func(name, providerType, baseURL string, surface domain.AccessSurface, scheme domain.CredentialScheme) string {
+	credential := func(name, providerType, baseURL string, surface domain.AccessSurface, scheme domain.CredentialScheme, secret string) string {
 		t.Helper()
 		response := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost, "/admin/api/v1/credentials", "", map[string]any{
-			"name": name, "type": providerType, "base_url": baseURL, "secret": "provider-secret",
+			"name": name, "type": providerType, "base_url": baseURL, "secret": secret,
 			"access_surface": surface, "scheme": scheme,
 		})
 		if response.Code != http.StatusCreated {
@@ -38,16 +38,21 @@ func TestAdminExplainsWhichCredentialDimensionDidNotMatch(t *testing.T) {
 		return created.ID
 	}
 
-	openAI := credential("OpenAI", "openai", "https://api.openai.com", domain.SurfaceOpenAI, domain.CredentialBearerStatic)
+	openAI := credential("OpenAI", "openai", "https://api.openai.com", domain.SurfaceOpenAI, domain.CredentialBearerStatic, "provider-secret")
 	runtimeCredential := credential(
 		"Bedrock Runtime", "bedrock", "https://bedrock-runtime.us-east-1.amazonaws.com",
-		domain.SurfaceBedrockRuntime, domain.CredentialAWSSigV4Explicit,
+		domain.SurfaceBedrockRuntime, domain.CredentialAWSSigV4Explicit, awsCredentialForTest("us-east-1"),
 	)
-	// Bound to the Mantle endpoint but saved as a Runtime credential, so the
-	// endpoint matches and the access surface is the only thing left to refuse.
-	runtimeAtMantleEndpoint := credential(
-		"Bedrock Runtime at the Mantle endpoint", "bedrock", "https://bedrock-mantle.us-east-1.api.aws",
-		domain.SurfaceBedrockRuntime, domain.CredentialAWSSigV4Explicit,
+	// Sealed to the Agent Runtime endpoint, which is a legal binding for its own
+	// surface. Pointing a Runtime provider at that same endpoint leaves the type
+	// and the endpoint agreeing and the access surface as the only thing left to
+	// refuse. (A Runtime credential bound to the Mantle endpoint would have been
+	// the shorter fixture, and is no longer reachable: the write path now runs
+	// the credential through the same constructor the load does, and a SigV4
+	// document cannot sign for a host outside its own service and region.)
+	agentRuntimeCredential := credential(
+		"Bedrock Agent Runtime", "bedrock", "https://bedrock-agent-runtime.us-east-1.amazonaws.com",
+		domain.SurfaceBedrockAgentRuntime, domain.CredentialAWSSigV4Explicit, awsCredentialForTest("us-east-1"),
 	)
 
 	for _, test := range []struct {
@@ -85,17 +90,17 @@ func TestAdminExplainsWhichCredentialDimensionDidNotMatch(t *testing.T) {
 		{
 			// Same type and same account, different access surface: separate
 			// endpoints, separate credential schemes, separate quotas.
-			name: "a Runtime credential on the Mantle surface",
+			name: "an Agent Runtime credential on the Runtime surface",
 			payload: map[string]any{
-				"name": "Mantle", "type": "bedrock", "base_url": "https://bedrock-mantle.us-east-1.api.aws",
-				"credential_id": runtimeAtMantleEndpoint, "enabled": true,
-				"access_surface": domain.SurfaceBedrockMantle, "profile_id": domain.ProfileBedrockMantleOpenAIChat,
-				"credential_scheme": domain.CredentialBedrockAPIKey,
+				"name": "Runtime", "type": "bedrock", "base_url": "https://bedrock-agent-runtime.us-east-1.amazonaws.com",
+				"credential_id": agentRuntimeCredential, "enabled": true,
+				"access_surface": domain.SurfaceBedrockRuntime, "profile_id": domain.ProfileBedrockConverseText,
+				"credential_scheme": domain.CredentialAWSSigV4Explicit,
 			},
 			code: "credential_surface_mismatch",
 			fields: map[string]string{
-				"credential_access_surface": string(domain.SurfaceBedrockRuntime),
-				"provider_access_surface":   string(domain.SurfaceBedrockMantle),
+				"credential_access_surface": string(domain.SurfaceBedrockAgentRuntime),
+				"provider_access_surface":   string(domain.SurfaceBedrockRuntime),
 			},
 		},
 	} {

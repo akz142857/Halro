@@ -219,6 +219,13 @@ const (
 	excludedBindingProfileIncompatible = "binding_profile_incompatible"
 	excludedAdapterUnavailable         = "adapter_unavailable"
 	excludedCapabilityCeilingExceeded  = "capability_ceiling_exceeded"
+	// Not a load-time reason: what a probe reports when no adapter exists and
+	// the active load's exclusions do not account for it — a registry replaced
+	// between the lookup and the read, or a binding this build never loaded.
+	excludedBindingAdapterMissing = "binding_adapter_missing"
+	// Also not a load-time reason: the binding loaded, and the connection test
+	// has no model to probe with because nothing is deployed on it yet.
+	probeRequiresDeployment = "probe_requires_deployment"
 )
 
 // referenceWithholding records a route kept out of the routing candidates
@@ -355,13 +362,19 @@ func loadProviderRegistryWithCatalog(
 		}
 		return nil, loadReport{}, err
 	}
+	// Both recorders write the same fact twice on purpose: once into the report,
+	// which is logged and audited, and once onto the registry being built, where
+	// a probe that finds no adapter can read it back. The registry copy is what
+	// lets the console name the cause in the row rather than in a log file.
 	excludeProvider := func(instance domain.ProviderInstance, reason string) {
 		report.Excluded = append(report.Excluded, providerExclusion{ProviderID: instance.ID, Reason: reason})
+		registry.RecordUnavailable(instance.ID, "", reason)
 	}
 	excludeBinding := func(instance domain.ProviderInstance, bindingID, reason string) {
 		report.Excluded = append(report.Excluded, providerExclusion{
 			ProviderID: instance.ID, BindingID: bindingID, Reason: reason,
 		})
+		registry.RecordUnavailable(instance.ID, bindingID, reason)
 	}
 	for _, instance := range instances {
 		if !instance.Enabled || instance.DeletedAt != nil {

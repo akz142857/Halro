@@ -47,7 +47,8 @@ export const zhCN = {
   },
   notifications: { region: "系统通知", dismiss: "关闭通知" },
   testControl: { idle: "尚未测试", running: "测试中…", successPlain: "通过", success: "通过 · {{latency}}ms", failure: "失败", stale: "需重测",
-    reasons: { authentication: "上游拒绝了这份凭据（认证或授权失败）", rate_limit: "上游限流，稍后重试", timeout: "等待上游响应超时", provider_5xx: "上游返回服务端错误", bad_request: "上游拒绝了这次探测请求", bad_request_local: "Halro 在发往上游之前拒绝了这次探测", connect: "无法建立到上游的连接（DNS、TLS 或网络）", malformed_response: "上游响应无法解析", unknown: "连接测试失败，原因未分类" } },
+    reasons: { authentication: "上游拒绝了这份凭据（认证或授权失败）", rate_limit: "上游限流，稍后重试", timeout: "等待上游响应超时", provider_5xx: "上游返回服务端错误", bad_request: "上游拒绝了这次探测请求", bad_request_local: "Halro 在发往上游之前拒绝了这次探测", connect: "无法建立到上游的连接（DNS、TLS 或网络）", malformed_response: "上游响应无法解析", unknown: "连接测试失败，原因未分类" },
+    refusals: { adapter_unavailable: "这个绑定没有建立起连接：凭据或端点无法构建出适配器。最常见的是 AWS 凭据里的 region 与绑定地址不一致，请检查该绑定使用的凭据。", binding_profile_incompatible: "这个绑定的能力实现与当前版本内置的 Profile 不兼容，请重新选择能力实现后保存。", capability_ceiling_exceeded: "这个绑定声明的能力超出该能力实现允许的上限，请取消多余能力后保存。", endpoint_rejected: "这个服务商的地址不再符合当前的出站策略，请检查地址或 allow_private_provider_endpoints 设置。", binding_adapter_missing: "这个绑定当前没有可用的适配器，请重新保存该服务商或查看服务端日志。", probe_requires_deployment: "这个绑定还没有启用的模型部署，连接测试没有可探测的模型。请先为它创建并启用一个模型部署，再测试。" } },
   errors: {
     badRequest: "请求内容无效，请检查后重试。",
     authentication: "登录状态无效或已过期，请重新登录。",
@@ -875,7 +876,7 @@ export const zhCN = {
     bedrockProject: "Bedrock 项目（Project ID）", bedrockProjectHint: "留空使用账户默认项目；填写 proj_ 开头的 ID 后，该实例的全部请求归入指定项目。wrkspc_ 开头的标识属于另一条产品线，此处不接受。", bedrockProjectPlaceholder: "默认项目",
     bedrockProfileHint: "每个服务商实例只选择一种线协议；需要多个 Mantle 协议时，请分别创建实例。",
     credentialExpiry: "到期时间（可选）",
-    credentialExpiryHint: "上游停止接受这份密钥的时间——Bedrock API Key 的有效期、STS 会话、服务商的轮换策略。没有明确期限就留空。这只是控制台的提醒，不是强制限制：网关仍会继续使用该凭据，直到上游拒绝为止。",
+    credentialExpiryHint: "上游停止接受这份密钥的时间，没有就留空。仅作控制台提醒，不会停用凭据。",
     credentialExpired: "已于 {{date}} 过期",
     credentialExpiresIn: "{{count}} 天后到期（{{date}}）",
     credentialExpiresIn_other: "{{count}} 天后到期（{{date}}）",
