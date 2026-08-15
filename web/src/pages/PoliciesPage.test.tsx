@@ -66,7 +66,7 @@ describe("token guard policy workflow", () => {
     expect(screen.getByLabelText("每分钟请求数达到")).toHaveValue(0);
     expect(screen.getByLabelText("每分钟令牌数达到")).toHaveValue(0);
     expect(screen.getByLabelText("单次请求平均令牌数达到")).toHaveValue(0);
-    fireEvent.change(screen.getByLabelText("当前密码"), { target: { value: "a passphrase" } });
+    fireEvent.change(screen.getByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
     fireEvent.click(screen.getByRole("button", { name: "保存并立即应用" }));
     await waitFor(() => expect(update).toHaveBeenCalledWith("tgp_test", expect.objectContaining({
       ewma_absolute_rpm: 0,
@@ -117,7 +117,7 @@ describe("token guard policy workflow", () => {
     // The switch has to be reachable, so the block opens for a policy the
     // recommended defaults cannot describe.
     expect(screen.getByLabelText("启用自适应检测")).not.toBeChecked();
-    fireEvent.change(screen.getByLabelText("当前密码"), { target: { value: "a passphrase" } });
+    fireEvent.change(screen.getByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
     fireEvent.click(screen.getByRole("button", { name: "保存并立即应用" }));
 
     await waitFor(() => expect(update).toHaveBeenCalledWith(
@@ -139,7 +139,7 @@ describe("token guard policy workflow", () => {
     const update = vi.spyOn(api, "updateTokenGuardPolicy").mockResolvedValue({ data: offPolicy, etag: '"2"' });
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
-    fireEvent.change(screen.getByLabelText("当前密码"), { target: { value: "a passphrase" } });
+    fireEvent.change(screen.getByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
     fireEvent.click(screen.getByRole("button", { name: "保存并立即应用" }));
 
     await waitFor(() => expect(update).toHaveBeenCalledOnce());
@@ -255,7 +255,7 @@ describe("token guard policy workflow", () => {
     // many Projects that is.
     const dialog = await screen.findByRole("alertdialog");
     expect(within(dialog).getByText(/已绑定的 2 个项目/)).toBeVisible();
-    fireEvent.change(within(dialog).getByLabelText("当前密码"), { target: { value: "a passphrase" } });
+    fireEvent.change(within(dialog).getByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "禁用" }));
 
     await waitFor(() => expect(update).toHaveBeenCalledWith("tgp_test", {
@@ -297,7 +297,7 @@ describe("token guard policy workflow", () => {
     const second = screen.getByText("Second guard").closest("tr")!;
     fireEvent.click(within(first).getByRole("button", { name: "禁用" }));
     const confirmation = await screen.findByRole("alertdialog");
-    fireEvent.change(within(confirmation).getByLabelText("当前密码"), { target: { value: "a passphrase" } });
+    fireEvent.change(within(confirmation).getByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
     fireEvent.click(within(confirmation).getByRole("button", { name: "禁用" }));
 
     await waitFor(() => expect(within(first).getByRole("button", { name: "禁用" })).toBeDisabled());
@@ -315,7 +315,7 @@ describe("token guard policy workflow", () => {
     const second = screen.getByText("Second guard").closest("tr")!;
     fireEvent.click(within(first).getByRole("button", { name: "禁用" }));
     const confirmation = await screen.findByRole("alertdialog");
-    fireEvent.change(within(confirmation).getByLabelText("当前密码"), { target: { value: "a passphrase" } });
+    fireEvent.change(within(confirmation).getByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
     fireEvent.click(within(confirmation).getByRole("button", { name: "禁用" }));
 
     expect(await within(first).findByText("无法完成请求")).toBeVisible();

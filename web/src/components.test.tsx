@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ApiError } from "./api";
-import { ConfirmButton, ErrorState, InlineTestControl } from "./components";
+import { ConfirmButton, ErrorState, InlineTestControl, useTestFailureReason } from "./components";
 
 describe("ErrorState", () => {
   it("turns an ambiguous capability interface response into an actionable localized instruction", () => {
@@ -97,5 +97,32 @@ describe("step-up confirmation dialog", () => {
     expect(username).not.toBeNull();
     expect(username).toHaveAttribute("aria-hidden", "true");
     expect(username).toHaveAttribute("tabindex", "-1");
+  });
+});
+
+// A probe Halro refused before sending anything upstream used to reach the row
+// as the English symptom it answers with — "provider binding adapter is
+// unavailable" — which names what failed and nothing an operator can act on.
+// The refusal carries the class the registry load decided, and the row explains
+// that class in the reader's own language.
+describe("useTestFailureReason", () => {
+  function Reason({ error }: { error: unknown }) {
+    return <>{useTestFailureReason(error)}</>;
+  }
+  const refusal = (code: string) =>
+    new ApiError(400, "provider binding adapter is unavailable", code, "", {
+      code,
+      error: "provider binding adapter is unavailable",
+    });
+
+  it("explains the class the load recorded instead of the English symptom", () => {
+    render(<Reason error={refusal("adapter_unavailable")} />);
+    expect(screen.getByText(/region 与绑定地址不一致/)).toBeVisible();
+    expect(screen.queryByText(/binding adapter is unavailable/)).not.toBeInTheDocument();
+  });
+
+  it("falls back to the server's sentence for a class it has no wording for", () => {
+    render(<Reason error={refusal("some_future_reason")} />);
+    expect(screen.getByText(/provider binding adapter is unavailable/)).toBeVisible();
   });
 });

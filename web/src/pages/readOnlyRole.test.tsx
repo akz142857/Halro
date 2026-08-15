@@ -201,7 +201,7 @@ describe("admin accounts", () => {
     // step-up request is never sent half-filled.
     expect(submit).toBeDisabled();
 
-    fireEvent.change(screen.getByLabelText("当前密码"), { target: { value: "correct horse battery staple" } });
+    fireEvent.change(screen.getByLabelText(/^当前密码/), { target: { value: "correct horse battery staple" } });
     expect(submit).toBeEnabled();
     fireEvent.click(submit);
 
@@ -347,7 +347,7 @@ describe("destructive step-up", () => {
     const dialog = await screen.findByRole("dialog", { name: "设置价格" });
     fireEvent.click(within(dialog).getByRole("radio", { name: /^免费/ }));
     fireEvent.click(within(dialog).getByRole("button", { name: "下一步：核对" }));
-    fireEvent.change(within(dialog).getByLabelText("当前密码"), { target: { value: "correct horse battery staple" } });
+    fireEvent.change(within(dialog).getByLabelText(/^当前密码/), { target: { value: "correct horse battery staple" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "确认并创建价格版本" }));
     await waitFor(() => expect(createPrice).toHaveBeenCalledOnce());
     expect(createPrice).toHaveBeenCalledWith(deployment.id, expect.objectContaining({

@@ -123,7 +123,7 @@ describe("RedactionPoliciesSection form safety", () => {
     fireEvent.change(within(dialog).getByLabelText(/^优先级/), { target: { value: "30" } });
     // Editing an existing policy can take enforcement away, so the server asks
     // who is doing it and the form collects it.
-    fireEvent.change(within(dialog).getByLabelText("当前密码"), { target: { value: "a passphrase" } });
+    fireEvent.change(within(dialog).getByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "编译并保存" }));
 
     await waitFor(() => expect(update).toHaveBeenCalledOnce());
@@ -145,7 +145,7 @@ describe("RedactionPoliciesSection form safety", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "启用" }));
     const enableDialog = await screen.findByRole("alertdialog");
-    fireEvent.change(within(enableDialog).getByLabelText("当前密码"), { target: { value: "a passphrase" } });
+    fireEvent.change(within(enableDialog).getByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
     fireEvent.click(within(enableDialog).getByRole("button", { name: "启用" }));
     await waitFor(() => expect(update).toHaveBeenCalledWith("rdp_off", expect.objectContaining({
       enabled: true,
@@ -157,7 +157,7 @@ describe("RedactionPoliciesSection form safety", () => {
     fireEvent.click(screen.getByRole("button", { name: "禁用" }));
     const dialog = await screen.findByRole("alertdialog");
     expect(within(dialog).getByText(/未脱敏内容直连服务商/)).toBeVisible();
-    fireEvent.change(within(dialog).getByLabelText("当前密码"), { target: { value: "a passphrase" } });
+    fireEvent.change(within(dialog).getByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "禁用" }));
     await waitFor(() => expect(update).toHaveBeenCalledWith("rdp_on", expect.objectContaining({ enabled: false }), 4, expect.objectContaining({ currentPassword: "a passphrase" })));
   });

@@ -59,6 +59,36 @@ Business pages/components may use **semantic tokens** (`--color-*`, `--shadow-*`
 :root[data-appearance="light"] .some-page { }  /* per-page theme patch */
 ```
 
+## Resource list rows
+
+`resource-list.css` owns the row that Providers, Credentials and Deployments all
+render — and that Projects, Routes and any later list should render too. Pages
+had each grown their own copy of this typography and the copies drifted: the
+same kind of value was 15px bold on one list and 13px semibold on the next, a
+fact label was sans on one and mono on another.
+
+The contract is the hierarchy, not the page:
+
+| Part | Class | Size | Weight | Colour |
+| --- | --- | --- | --- | --- |
+| identity name | `.resource-identity > strong` | `--font-size-md` | semibold | `--color-text-primary` |
+| fact value | `.resource-fact > strong` / `code` / `.resource-link` | `--font-size-sm` | semibold | `--color-text-primary` |
+| identity subtitle | `.resource-identity > small` | `--font-size-xs` | regular | `--color-text-secondary` |
+| fact label | `.resource-fact > small` | `--font-size-xs` | regular | `--color-text-tertiary` |
+
+The name is the largest thing in the row because it is what the operator is
+scanning for; a fact answers one step down; the label naming the fact is quieter
+than the fact itself. Machine values (`<code>`: endpoints, ids, model names)
+keep the mono face at the value size. Labels never do — a mono CJK label falls
+back to a CJK face anyway and only loses the metrics.
+
+Spacing comes from `--resource-row-padding-block` / `-inline`,
+`--resource-row-column-gap`, `--resource-row-min-height` and
+`--resource-cell-gap`. A page owns its **columns** — how many facts, how wide,
+which collapse at which breakpoint — and nothing else about the row. When a
+breakpoint hides a fact, hide it by a placement class (`.credential-endpoint`),
+not by `:nth-of-type`, which counts elements rather than facts.
+
 ## Where an outcome is reported
 
 `NotificationProvider` (`web/src/notifications.tsx`) owns the top-right column.

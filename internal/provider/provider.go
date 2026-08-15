@@ -180,6 +180,20 @@ type Prober interface {
 	Probe(context.Context, string) error
 }
 
+// ProbeModelRequirer is a Prober whose probe is a request about one model, so a
+// connection with no enabled deployment has nothing to name in it.
+//
+// It exists because the adapters that need a model reported its absence as a
+// malformed value — "invalid Bedrock model id" for an id that was never
+// supplied — which sends the operator to look at a model they never chose. The
+// requirement is the adapter's own knowledge (Azure needs a deployment route,
+// plain OpenAI lists models instead, two Bedrock profiles probe a collection),
+// so it is stated here rather than guessed from the profile by the caller.
+type ProbeModelRequirer interface {
+	Prober
+	ProbeRequiresModel() bool
+}
+
 // InvocationTargetLister discovers real upstream invocation identities using
 // the adapter's bound credential and endpoint. Discovery establishes
 // availability only; capability claims are produced separately by an audited
@@ -262,6 +276,12 @@ type Registry struct {
 	adapters         map[string]Adapter
 	providerBindings map[string][]string
 	health           map[string]bool
+	// Why a provider or binding has no adapter here, keyed by binding identity
+	// and by Provider ID for a provider-wide exclusion. It lives beside the
+	// adapters rather than next to the load report so it swaps with them: a
+	// caller that finds no adapter and then reads a reason must not be told why
+	// a registry that is no longer the live one left something out.
+	unavailable map[string]string
 }
 
 func NewRegistry() *Registry {
@@ -270,7 +290,39 @@ func NewRegistry() *Registry {
 		adapters:         make(map[string]Adapter),
 		providerBindings: make(map[string][]string),
 		health:           make(map[string]bool),
+		unavailable:      make(map[string]string),
 	}
+}
+
+// RecordUnavailable states why this registry has no adapter for a provider or
+// one of its bindings. Recorded by the load beside the exclusion it reports, so
+// the two always say the same thing.
+func (r *Registry) RecordUnavailable(providerID, bindingID, reason string) {
+	key := providerID
+	if bindingID != "" {
+		key = bindingID
+	}
+	if key == "" || reason == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.unavailable[key] = reason
+}
+
+// UnavailableReason answers why a binding has no adapter. It returns "" when
+// this registry excluded nothing that covers it: a caller finding no adapter and
+// no reason is looking at a state the load cannot explain, and keeps its own
+// fail-closed answer.
+func (r *Registry) UnavailableReason(providerID, bindingID string) string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if bindingID != "" {
+		if reason, ok := r.unavailable[bindingID]; ok {
+			return reason
+		}
+	}
+	return r.unavailable[providerID]
 }
 
 // RegisterAdapter makes an enabled provider independently addressable for
@@ -694,11 +746,13 @@ func (r *Registry) Replace(next *Registry) []Adapter {
 	replacementAdapters := next.adapters
 	replacementProviderBindings := next.providerBindings
 	replacementHealth := next.health
+	replacementUnavailable := next.unavailable
 	next.targets = make(map[string][]Target)
 	next.next = make(map[string]uint64)
 	next.adapters = make(map[string]Adapter)
 	next.providerBindings = make(map[string][]string)
 	next.health = make(map[string]bool)
+	next.unavailable = make(map[string]string)
 	next.mu.Unlock()
 
 	r.mu.Lock()
@@ -710,6 +764,7 @@ func (r *Registry) Replace(next *Registry) []Adapter {
 	r.adapters = replacementAdapters
 	r.providerBindings = replacementProviderBindings
 	r.health = replacementHealth
+	r.unavailable = replacementUnavailable
 	for deploymentID, healthy := range oldHealth {
 		if _, exists := r.health[deploymentID]; !exists {
 			r.health[deploymentID] = healthy

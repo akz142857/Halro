@@ -268,7 +268,7 @@ describe("DeveloperPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "新建调试 Key" }));
     // Minting is gated the same way a deletion is: the key is shown once and
     // outlives this session, so the dialog asks who is asking.
-    fireEvent.change(screen.getByLabelText("当前密码"), { target: { value: "a passphrase" } });
+    fireEvent.change(screen.getByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
     fireEvent.click(screen.getAllByRole("button", { name: "新建调试 Key" }).at(-1)!);
 
     await waitFor(() => expect(screen.getByLabelText("Gateway Key")).toHaveValue("hm_created_secret"));

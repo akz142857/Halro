@@ -453,7 +453,7 @@ describe("ProvidersPage profile and credential bindings", () => {
     expect(screen.getByLabelText(/^地址绑定/)).toHaveValue(displayBaseURL);
     fireEvent.change(screen.getByLabelText(/^新密钥/), { target: { value: "rotated-secret" } });
     // Replacing credential material asks who is doing it, like deleting it does.
-    fireEvent.change(screen.getByLabelText("当前密码"), { target: { value: "a passphrase" } });
+    fireEvent.change(screen.getByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
     fireEvent.click(screen.getByRole("button", { name: "安全轮换" }));
 
     await waitFor(() => expect(rotate).toHaveBeenCalledOnce());

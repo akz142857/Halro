@@ -63,7 +63,7 @@ export function InlineTestControl({ state, latency, onTest, disabled = false, ti
 export function useTestFailureReason(error: unknown, persistedErrorClass?: string) {
   const { t } = useTranslation();
   const payload = error instanceof ApiError
-    ? error.payload as { error_class?: string; provider_status?: number; provider_code?: string; error_detail?: string; error?: string } | undefined
+    ? error.payload as { error_class?: string; provider_status?: number; provider_code?: string; error_detail?: string; error?: string; code?: string } | undefined
     : undefined;
   // The class this response carried, kept apart from the one the store
   // remembers: a stale class from an older test must not describe a refusal
@@ -73,8 +73,14 @@ export function useTestFailureReason(error: unknown, persistedErrorClass?: strin
   // A refusal Halro made before probing answers with a plain `error` message and
   // never reaches the provider, so it is the whole explanation rather than a
   // detail beside one — and it was previously dropped, leaving the operator with
-  // a class and no sentence.
-  const detail = payload?.error_detail || payload?.error || "";
+  // a class and no sentence. When that refusal carries a code, the class is the
+  // better explanation: "provider binding adapter is unavailable" names the
+  // symptom in English and leaves the reader nowhere to go, while the class says
+  // which record to open. Codes with no wording yet fall back to the message.
+  const refusal = payload?.code
+    ? t(`testControl.refusals.${payload.code}`, { defaultValue: "" })
+    : "";
+  const detail = refusal || payload?.error_detail || payload?.error || "";
   if (!errorClass && !detail) return "";
   // Halro's own refusal, not the upstream's: either it classified the request as
   // bad before sending it, or it answered with a message and no class at all.
@@ -579,7 +585,6 @@ export function ReauthFields({
   // of its gap and lines them up with nothing.
   return (
     <>
-      {description && <p className="form-note">{description}</p>}
       {/* A password field with no username beside it makes the browser look
           further out for one, and it will fill whatever text input it finds —
           on a list page that is the filter box, which then silently filters the
@@ -597,7 +602,11 @@ export function ReauthFields({
         className="sr-only"
         onChange={() => {}}
       />
-      <Field label={t("auth.currentPassword")}>
+      {/* Why the form is asking sits under the field that answers it, as every
+          other hint in the console does. Standing above the pair it read as a
+          note about the section before it, and it now describes the password
+          input to assistive tech rather than floating unattached. */}
+      <Field label={t("auth.currentPassword")} hint={description}>
         <input
           required
           type="password"

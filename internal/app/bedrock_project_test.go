@@ -167,7 +167,7 @@ func TestAdminRefusesABedrockProjectOnTheRuntimeSurface(t *testing.T) {
 
 	credentialResponse := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost, "/admin/api/v1/credentials", "", map[string]any{
 		"name": "Runtime credential", "type": "bedrock", "base_url": runtimeEndpoint,
-		"secret":         `{"access_key_id":"AKIAEXAMPLE","secret_access_key":"secret","session_token":"token"}`,
+		"secret":         awsCredentialForTest("us-east-1"),
 		"access_surface": domain.SurfaceBedrockRuntime, "scheme": domain.CredentialAWSSigV4Explicit,
 	})
 	if credentialResponse.Code != http.StatusCreated {

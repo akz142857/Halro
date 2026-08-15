@@ -137,6 +137,74 @@ activation gates in `docs/runbooks/model-catalog-publishing.md`; dynamic updates
 must remain disabled until they are evidenced for the target repository and
 release.
 
+## AWS Bedrock Runtime: the connection probe was unpassable (2026-08-15)
+
+A real account in `us-east-2` refused every Bedrock Runtime connection test with
+**HTTP 404 and no `x-amzn-errortype`**. Every modelled Bedrock error names itself
+in that header, so a bare 404 carrying only a request id is the service frontend
+refusing a method its route does not have — the probe was a `HEAD` on
+`/model/{id}/converse`, and Converse routes `POST`.
+
+Nothing in the tree contradicted it: the Bedrock probe had no test of any kind
+and no real-account evidence at any commit, and the `400`/`405` statuses it
+accepted were a guess about how a POST-only route would answer a HEAD.
+
+The probe now asks the operation with its own method and a body the operation
+must reject (`{}`): a validation refusal proves the host resolved, the signature
+verified, the model exists on the account and the credential may call the
+operation, while nothing in an empty object can be inferred on or metered. `404`
+is deliberately not accepted — a model the account cannot invoke has to fail the
+test that gates enabling a deployment.
+
+What is pinned against a fake server: the method, path, body and that the body is
+covered by the signature; `400` reachable; `404` and `403` failing, the latter as
+an authentication class.
+
+The same account then answered the new form with **HTTP 403
+`InvalidSignatureException`** — which is what made the next finding reachable at
+all. The HEAD probe had never carried a body, and no other request from this
+adapter had ever reached a real account, so the signer's defects had nothing to
+report them.
+
+## AWS Bedrock: the SigV4 signature was wrong for every signed request (2026-08-15)
+
+Three defects in the hand-rolled signer, all invisible to every test that existed:
+
+1. the canonical request omitted the **empty line** SigV4 requires between the
+   canonical headers and the signed-header list, so AWS derived a different
+   string to sign for *every* request;
+2. the canonical URI used the once-encoded path. SigV4 canonicalizes the path
+   for every service except S3 by **encoding it a second time**, and a Bedrock
+   model id carries a colon (`anthropic.claude-sonnet-4-5-…-v1:0`), an
+   inference-profile ARN several — so the two sides disagreed on essentially
+   every real model;
+3. the canonical host carried the scheme's **default port**. Halro normalizes
+   every stored Provider endpoint to an explicit `:443`, so the adapter signed
+   `host:443` where an AWS SDK signs `host` — and the SDK also rewrites the
+   request's own `Host` header to the authority it signed, which this signer did
+   not. This is the one that survived the first two fixes: the account went on
+   answering InvalidSignatureException until the port came off both the
+   canonical string and the header.
+
+`content-length` is now signed whenever a request carries a body, matching what
+every AWS SDK signer does. Omitting it was legal — AWS verifies against the
+SignedHeaders list — but a set that matches the SDK's is a set that can be
+compared against it.
+
+The tests that existed asserted the *shape* of the Authorization header: its
+prefix, that the secret never appears inside it. A wrong signature satisfies all
+of that. `signer_vector_test.go` now checks the produced header against
+`aws-sdk-go-v2`'s own SigV4 signer — an independent implementation, already a
+dependency for KMS, used as a test oracle and never in the request path — over a
+GET with no body, a POST with a JSON body, a POST to a colon-bearing
+inference-profile path, and a POST to an endpoint carrying the `:443` that
+Halro's own normalization produces. It also asserts that the host sent is the
+host signed. Backing out any of the three defects fails it.
+
+This repaired the request path, not only the probe: Chat, Converse streaming,
+Titan invoke, rerank and async-invoke all signed through the same function and
+had all never reached a real account.
+
 ## AWS Bedrock Mantle: no real-account evidence (2026-08-12)
 
 The three Bedrock Mantle profiles — `bedrock.mantle.openai.chat.v1`,

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -431,8 +432,17 @@ func (r *Runtime) testAdminProvider(writer http.ResponseWriter, request *http.Re
 			adapter, ok = r.providers.AdapterForProvider(providerID)
 		}
 		if !ok {
+			// The symptom is always the same — no adapter — but the causes are
+			// not, and they are fixed in different places: a credential, a
+			// capability set, an endpoint policy. The load already decided which
+			// one it was, so the refusal carries that class rather than making
+			// the operator go read the log for it.
+			reason := r.providers.UnavailableReason(providerID, binding.ID)
+			if reason == "" {
+				reason = excludedBindingAdapterMissing
+			}
 			r.logProbeRefusal(providerID, binding.ID, "provider binding adapter is unavailable")
-			adminBadRequest(writer, "provider binding adapter is unavailable")
+			adminBadRequestCode(writer, reason, "provider binding adapter is unavailable")
 			return
 		}
 		prober, ok := adapter.(provider.Prober)
@@ -442,6 +452,16 @@ func (r *Runtime) testAdminProvider(writer http.ResponseWriter, request *http.Re
 			return
 		}
 		providerModel := providerProbeModel(instance, providerID, binding.ID, deployments, routes)
+		// A probe that addresses a model has nothing to address until a
+		// deployment names one. The adapters used to report that as a malformed
+		// model — "invalid Bedrock model id" for an id that was never supplied —
+		// which points the operator at a value they never chose instead of at
+		// the deployment they have not created.
+		if requirer, needs := adapter.(provider.ProbeModelRequirer); providerModel == "" && needs && requirer.ProbeRequiresModel() {
+			r.logProbeRefusal(providerID, binding.ID, "connection test has no deployment to probe with")
+			adminBadRequestCode(writer, probeRequiresDeployment, "connection test requires an enabled deployment on this binding")
+			return
+		}
 		ctx, cancel := context.WithTimeout(request.Context(), timeout)
 		started := time.Now()
 		err := prober.Probe(ctx, providerModel)
@@ -490,7 +510,7 @@ func (r *Runtime) testAdminProvider(writer http.ResponseWriter, request *http.Re
 	current.LastTestHealthyTargets = healthyTargets
 	current.LastTestTotalTargets = len(bindings)
 	if probeErr != nil {
-		current.LastTestErrorClass = string(errorClass)
+		current.LastTestErrorClass = persistedProbeClass(failure)
 	}
 	current.UpdatedAt = testedAt
 	action := "provider.test.success"
@@ -550,6 +570,31 @@ const maxProbeReasonLength = 300
 // able to write it to disk. Real values are short — `AccessDeniedException`,
 // a request UUID.
 const maxProbeIdentifierLength = 120
+
+// persistedProbeClass is the class a failed connection test stores.
+//
+// The record keeps a class and nothing else — no upstream status, no sentence —
+// so the class is the whole account of the failure once the page is reloaded.
+// That made Halro's own refusals unreadable: a probe the gateway rejected
+// before sending anything carries class bad_request, which is the same value an
+// upstream 4xx carries, and the console then reported "the upstream rejected
+// this probe" for a request the upstream never saw.
+//
+// A bad_request with no upstream status is a refusal Halro made itself: the
+// classes for a request that did leave (connect, timeout) say so on their own,
+// and an upstream refusal always brings a status back with it.
+func persistedProbeClass(failure probeFailure) string {
+	if failure.Class == provider.ErrorBadRequest && failure.Status == 0 {
+		return localProbeRefusalClass
+	}
+	return string(failure.Class)
+}
+
+// localProbeRefusalClass is stored, never produced by a provider. The console
+// already had wording for it — it derives the same distinction from a live
+// response, where the upstream status is still there to read — so a stored
+// value reads back as the same sentence rather than needing a second key.
+const localProbeRefusalClass = "bad_request_local"
 
 func describeProbeFailure(err error) probeFailure {
 	failure := probeFailure{Class: provider.ErrorUnknown}
@@ -795,7 +840,7 @@ func (r *Runtime) testAdminRoute(writer http.ResponseWriter, request *http.Reque
 	current.LastTestRevision = current.Revision + 1
 	current.LastTestErrorClass = ""
 	if probeErr != nil {
-		current.LastTestErrorClass = string(errorClass)
+		current.LastTestErrorClass = persistedProbeClass(failure)
 	}
 	current.UpdatedAt = testedAt
 	action := "route.test.success"
@@ -1052,6 +1097,9 @@ func (r *Runtime) credentialFromInput(
 		}
 	}
 	defer clear(plaintext)
+	if err := validateCredentialMaterial(profile.CredentialScheme, endpoint, plaintext); err != nil {
+		return domain.Credential{}, err
+	}
 	ciphertext, err := r.vault.EncryptCredential(id, string(input.Type), audience, plaintext)
 	if err != nil {
 		return domain.Credential{}, err
@@ -1079,6 +1127,32 @@ func (r *Runtime) credentialFromInput(
 		CreatedAt: createdAt, UpdatedAt: now,
 	}
 	return credential, credential.Validate()
+}
+
+// validateCredentialMaterial runs the credential through the same constructor
+// the registry load will run, at the one moment the operator can still fix the
+// value.
+//
+// Only the AWS SigV4 scheme has material with a shape: the static-header schemes
+// carry an opaque token whose only requirement — non-empty — the caller has
+// already checked. An AWS document, by contrast, declares its own region, and
+// the signer pins the host to that region; a credential bound to us-east-2 while
+// its JSON says us-east-1 used to save cleanly and then be dropped at load, so
+// the console reported "provider binding adapter is unavailable" on a record
+// that looked fine and named nothing to change.
+//
+// The errors are safe to return to the admin: they name the field or the
+// disagreement, never the key material and never the host.
+func validateCredentialMaterial(scheme domain.CredentialScheme, endpoint *url.URL, plaintext []byte) error {
+	if scheme != domain.CredentialAWSSigV4Explicit {
+		return nil
+	}
+	authorizer, err := bedrockprovider.NewAuthorizer(endpoint, plaintext, nil)
+	if err != nil {
+		return err
+	}
+	authorizer.Close()
+	return nil
 }
 
 // bedrockProjectIDError marks the one provider refusal an operator is most

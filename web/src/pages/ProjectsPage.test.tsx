@@ -208,7 +208,7 @@ describe("projects page", () => {
     fireEvent.click(await screen.findByRole("button", { name: "＋ 创建密钥" }));
     const nameField = screen.getByLabelText(/密钥名称/);
     fireEvent.change(nameField, { target: { value: "service-a" } });
-    fireEvent.change(screen.getByLabelText("当前密码"), { target: { value: "a passphrase" } });
+    fireEvent.change(screen.getByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
     const form = nameField.closest("form")!;
     fireEvent.submit(form);
     await waitFor(() => expect(createKey).toHaveBeenCalledTimes(1));
@@ -228,7 +228,7 @@ describe("projects page", () => {
     fireEvent.change(screen.getByLabelText(/密钥名称/), { target: { value: "service-a" } });
     // Minting now asks for the operator's password, so the form cannot submit
     // until it is supplied.
-    fireEvent.change(screen.getByLabelText("当前密码"), { target: { value: "a passphrase" } });
+    fireEvent.change(screen.getByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
     fireEvent.click(screen.getByRole("button", { name: "生成密钥" }));
     await screen.findByText("无法完成请求");
     fireEvent.click(screen.getByRole("button", { name: "生成密钥" }));
@@ -323,7 +323,7 @@ describe("projects page", () => {
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "＋ 创建密钥" }));
     fireEvent.change(screen.getByLabelText(/密钥名称/), { target: { value: "service-a" } });
-    fireEvent.change(screen.getByLabelText("当前密码"), { target: { value: "a passphrase" } });
+    fireEvent.change(screen.getByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
     fireEvent.click(screen.getByRole("button", { name: "生成密钥" }));
 
     expect(await screen.findByText("gw_plaintext")).toBeVisible();

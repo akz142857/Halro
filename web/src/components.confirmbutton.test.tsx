@@ -32,7 +32,7 @@ describe("ConfirmButton", () => {
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "删除" }));
-    fireEvent.change(screen.getByLabelText("当前密码"), { target: { value: "a passphrase" } });
+    fireEvent.change(screen.getByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
     fireEvent.change(screen.getByLabelText(/验证码/), { target: { value: "123456" } });
     fireEvent.click(screen.getAllByRole("button", { name: "删除" }).at(-1)!);
 
@@ -43,7 +43,7 @@ describe("ConfirmButton", () => {
     expect(screen.getByText("删除模型路由？")).toBeInTheDocument();
     // The password survives; the code does not, because a TOTP step is spent
     // once and reusing it would be refused again for a different reason.
-    expect(screen.getByLabelText("当前密码")).toHaveValue("a passphrase");
+    expect(screen.getByLabelText(/^当前密码/)).toHaveValue("a passphrase");
     expect(screen.getByLabelText(/验证码/)).toHaveValue("");
     expect(screen.getByText(/验证码已被使用/)).toBeInTheDocument();
   });

@@ -363,3 +363,87 @@ func TestDeploymentAndRouteTestsReportTheSameFailure(t *testing.T) {
 		})
 	}
 }
+
+// The record of a failed test keeps a class and nothing else — no upstream
+// status, no sentence — so after a reload the class is the whole account of
+// what happened. Halro's own refusals and an upstream 4xx both carried
+// bad_request, and the console read that back as "the upstream rejected this
+// probe" for a request the upstream never saw.
+func TestFailedProviderTestRecordsWhetherTheUpstreamAnswered(t *testing.T) {
+	cfg := testConfig(t)
+	runtime, _ := openRuntimeWithPolicyForTest(t, cfg)
+	cookie, csrf := loginAdminForTest(t, runtime)
+
+	credentialResponse := performAdminMutation(t, runtime, cookie, csrf,
+		http.MethodPost, "/admin/api/v1/credentials", "",
+		map[string]any{"name": "OpenAI", "type": "openai", "base_url": "https://api.openai.com", "secret": "sk-test"},
+	)
+	var credential credentialView
+	if credentialResponse.Code != http.StatusCreated || json.Unmarshal(credentialResponse.Body.Bytes(), &credential) != nil {
+		t.Fatalf("credential status=%d body=%s", credentialResponse.Code, credentialResponse.Body.String())
+	}
+	providerResponse := performAdminMutation(t, runtime, cookie, csrf,
+		http.MethodPost, "/admin/api/v1/providers", "",
+		map[string]any{
+			"name": "OpenAI", "type": "openai", "base_url": "https://api.openai.com",
+			"credential_id": credential.ID, "enabled": true, "capabilities": map[string]any{"chat": true},
+		},
+	)
+	var instance struct {
+		ID       string `json:"id"`
+		Bindings []struct {
+			ID      string `json:"id"`
+			Enabled bool   `json:"enabled"`
+		} `json:"bindings"`
+	}
+	if providerResponse.Code != http.StatusCreated || json.Unmarshal(providerResponse.Body.Bytes(), &instance) != nil {
+		t.Fatalf("provider status=%d body=%s", providerResponse.Code, providerResponse.Body.String())
+	}
+
+	for _, test := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{
+			// Halro classified the request as bad before sending it, so no
+			// upstream status came back with it.
+			name: "refused before the request left",
+			err:  &provider.Error{Class: provider.ErrorBadRequest, Message: "invalid Bedrock model id"},
+			want: localProbeRefusalClass,
+		},
+		{
+			// The upstream answered, and its status is what says so.
+			name: "refused by the upstream",
+			err:  &provider.Error{Class: provider.ErrorBadRequest, StatusCode: http.StatusBadRequest, Message: "model not found"},
+			want: string(provider.ErrorBadRequest),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			registry := provider.NewRegistry()
+			adapter := &failingProbeAdapter{err: test.err}
+			for _, binding := range instance.Bindings {
+				if !binding.Enabled {
+					continue
+				}
+				if err := registry.RegisterBindingAdapter(instance.ID, binding.ID, adapter); err != nil {
+					t.Fatal(err)
+				}
+			}
+			runtime.providers.Replace(registry)
+
+			response := performAdminMutation(t, runtime, cookie, csrf,
+				http.MethodPost, "/admin/api/v1/providers/"+instance.ID+"/test", "", nil)
+			if response.Code != http.StatusBadGateway {
+				t.Fatalf("test status=%d body=%s", response.Code, response.Body.String())
+			}
+			stored, err := runtime.store.GetProvider(context.Background(), instance.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stored.LastTestErrorClass != test.want {
+				t.Fatalf("stored class=%q want %q", stored.LastTestErrorClass, test.want)
+			}
+		})
+	}
+}

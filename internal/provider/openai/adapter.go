@@ -219,6 +219,11 @@ func (a *Adapter) DescribeInvocationTarget(ctx context.Context, target domain.In
 	return domain.InvocationTargetDescriptor{}, &provider.Error{Class: provider.ErrorBadRequest, Message: "invocation target was not found"}
 }
 
+// ProbeRequiresModel is true only for Azure, whose probe is a request to one
+// deployment route; the plain OpenAI surface probes the model catalogue and
+// needs no deployment to exist yet.
+func (a *Adapter) ProbeRequiresModel() bool { return a.azure }
+
 func (a *Adapter) Probe(ctx context.Context, providerModel string) error {
 	var endpoint url.URL
 	if a.azure {
