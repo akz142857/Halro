@@ -182,7 +182,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: Build release container image
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Build release container images per architecture
         env:
           RELEASE_VERSION: ${{ github.ref_name }}
           RELEASE_COMMIT: ${{ github.sha }}
@@ -191,22 +193,30 @@ jobs:
           RELEASE_DATE=$(date -u -d "@${SOURCE_DATE_EPOCH}" +%Y-%m-%dT%H:%M:%SZ)
           export SOURCE_DATE_EPOCH RELEASE_DATE
           IMAGE_TAG=${RELEASE_VERSION//\//-}
-          docker build \
-            --build-arg RELEASE_VERSION=${RELEASE_VERSION} \
-            --build-arg RELEASE_COMMIT=${RELEASE_COMMIT} \
-            --build-arg RELEASE_DATE=${RELEASE_DATE} \
-            --build-arg SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} \
-            --tag halro:${IMAGE_TAG} .
-          docker run --rm --entrypoint /usr/local/bin/halro halro:${IMAGE_TAG} version
-          test "$(docker image inspect halro:${IMAGE_TAG} --format '{{.Config.User}}')" = "65532:65532"
-          docker save halro:${IMAGE_TAG} | gzip -n > halro-container.tar.gz
-          docker build \
-            -f deploy/observability/external-probe/Dockerfile \
-            --build-arg SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} \
-            --tag halro-deadman:${IMAGE_TAG} \
-            --tag halro-deadman:release .
-          test "$(docker image inspect halro-deadman:${IMAGE_TAG} --format '{{.Config.User}}')" = "65532:65532"
-          docker save halro-deadman:${IMAGE_TAG} | gzip -n > halro-deadman-container.tar.gz
+          for arch in amd64 arm64; do
+            docker buildx build \
+              --platform linux/${arch} \
+              --load \
+              --build-arg RELEASE_VERSION=${RELEASE_VERSION} \
+              --build-arg RELEASE_COMMIT=${RELEASE_COMMIT} \
+              --build-arg RELEASE_DATE=${RELEASE_DATE} \
+              --build-arg SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} \
+              --tag halro:${IMAGE_TAG}-${arch} .
+            docker run --rm --platform linux/${arch} --entrypoint /usr/local/bin/halro halro:${IMAGE_TAG}-${arch} version
+            test "$(docker image inspect halro:${IMAGE_TAG}-${arch} --format '{{.Config.User}}')" = "65532:65532"
+            test "$(docker image inspect halro:${IMAGE_TAG}-${arch} --format '{{.Architecture}}')" = "${arch}"
+            docker save halro:${IMAGE_TAG}-${arch} | gzip -n > halro-container-${arch}.tar.gz
+            docker buildx build \
+              --platform linux/${arch} \
+              --load \
+              -f deploy/observability/external-probe/Dockerfile \
+              --build-arg SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} \
+              --tag halro-deadman:${IMAGE_TAG}-${arch} .
+            test "$(docker image inspect halro-deadman:${IMAGE_TAG}-${arch} --format '{{.Config.User}}')" = "65532:65532"
+            test "$(docker image inspect halro-deadman:${IMAGE_TAG}-${arch} --format '{{.Architecture}}')" = "${arch}"
+            docker save halro-deadman:${IMAGE_TAG}-${arch} | gzip -n > halro-deadman-container-${arch}.tar.gz
+          done
+          docker tag halro-deadman:${IMAGE_TAG}-amd64 halro-deadman:release
       - name: Scan release dead-man image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -220,8 +230,10 @@ jobs:
         with:
           name: halro-container
           path: |
-            halro-container.tar.gz
-            halro-deadman-container.tar.gz
+            halro-container-amd64.tar.gz
+            halro-container-arm64.tar.gz
+            halro-deadman-container-amd64.tar.gz
+            halro-deadman-container-arm64.tar.gz
 
   provenance:
     needs: [binaries, container]
@@ -367,14 +379,17 @@ jobs:
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"
           gh release download "${tag}" --repo "${GITHUB_REPOSITORY}" \
-            -p halro-container.tar.gz -p halro-deadman-container.tar.gz -p checksums.txt
+            -p 'halro-container-*.tar.gz' -p 'halro-deadman-container-*.tar.gz' -p checksums.txt
           sha256sum --check --ignore-missing checksums.txt
-          docker load < halro-container.tar.gz
-          docker load < halro-deadman-container.tar.gz
           owner=$(printf '%s' "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
           for name in halro halro-deadman; do
-            docker tag "${name}:${tag}" "ghcr.io/${owner}/${name}:${tag}"
-            docker tag "${name}:${tag}" "ghcr.io/${owner}/${name}:latest"
-            docker push "ghcr.io/${owner}/${name}:${tag}"
-            docker push "ghcr.io/${owner}/${name}:latest"
+            refs=""
+            for arch in amd64 arm64; do
+              docker load < "${name}-container-${arch}.tar.gz"
+              docker tag "${name}:${tag}-${arch}" "ghcr.io/${owner}/${name}:${tag}-${arch}"
+              docker push "ghcr.io/${owner}/${name}:${tag}-${arch}"
+              refs="${refs} ghcr.io/${owner}/${name}:${tag}-${arch}"
+            done
+            docker buildx imagetools create -t "ghcr.io/${owner}/${name}:${tag}" ${refs}
+            docker buildx imagetools create -t "ghcr.io/${owner}/${name}:latest" ${refs}
           done
