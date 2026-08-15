@@ -1,7 +1,24 @@
-# Halro v1.0.0 release notes
+# Halro v1.0.0 release notes (deferred draft)
 
-Status: release-ready document; publish with the final `v1.0.0` tag only after
-the RC, real-Provider, and 24-hour soak gates pass.
+Status: **deferred draft, not a published document.** The version line was
+reset on 2026-08-16: releases start at `v0.1.0` (published with auto-generated
+notes) and carry no gates. This file describes the product as it stood before
+that reset and becomes the basis for the eventual 1.0.0 notes once the gates
+in issue #110 are cleared. Known content gaps to resolve before publication:
+
+- `gateway.pricing_clock_rollback_tolerance` now has a 1-second floor and a
+  lower value is refused at startup; `Normalize` fills both pricing clock
+  tolerances when the config omits them.
+- The per-deployment pricing ceiling (ADR 0012 amendment) and per-project
+  accounting ceiling (ADR 0018) were removed; single-project throughput is
+  ~1,011 lifecycles/s on the darwin reference host and ~7,000 on the Linux/NVMe
+  reference host (`docs/verification/standalone-capacity-baseline.md`).
+- New operability surface: durable-write-path metrics, `halro stats`,
+  `make stats`, and the console request-rate card.
+- Container images are multi-architecture (linux/amd64 + linux/arm64) and
+  published to `ghcr.io` by the release workflow.
+- Confirm explicitly that none of the above requires re-initialising the data
+  directory.
 
 Halro v1.0.0 is the first release of a single-binary, self-hosted LLM
 Gateway focused on unified OpenAI-compatible access, secure Provider credential
