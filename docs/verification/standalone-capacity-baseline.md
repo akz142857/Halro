@@ -96,5 +96,50 @@ does not need to be re-derived from benchmarks:
 average — the distinction matters during an incident, since the counters are
 cumulative since start. The same summary appears under Settings → Diagnostics.
 
-Still open: reproducing the table above on Linux with an NVMe-backed data
-directory, production build flags, and the race detector disabled.
+## Linux/NVMe reference run (2026-08-15)
+
+Host: bare-metal (no virtualization), Intel Xeon E3-1270 v6 (4 cores / 8
+threads @ 3.80 GHz), 32 GiB RAM, two Intel SSDPE2MX450G7 NVMe drives in md
+RAID1, ext4, Debian 13 (kernel 6.12.69), `intel_pstate` `powersave` governor.
+Go 1.26.6 linux/amd64, commit `213d9ec`, production flags, race detector
+disabled, median of `-count=3 -benchtime=1s`. The bench data directory was
+explicitly placed on the NVMe-backed ext4 filesystem because Debian 13 mounts
+`/tmp` as tmpfs, which would void every fsync measurement. Raw machine-readable
+output and host metadata are attached to issue #13.
+
+`BenchmarkRequestLifecycle`, request lifecycles per second:
+
+| Projects \ workers | 1 | 8 | 64 |
+|---|---:|---:|---:|
+| 1 | 1021 | 4182 | 7051 |
+| 8 | 1029 | 4197 | 7002 |
+| 64 | 1028 | 4118 | 6991 |
+
+`BenchmarkConcurrentAppend`, raw WAL events per second (observed batch size):
+
+| Appenders | 1 | 8 | 64 | 256 |
+|---|---:|---:|---:|---:|
+| events/s | 5,119 | 22,113 | 116,019 | 153,689 |
+| events/batch | 1.0 | 4.1 | 32.6 | 64.0 |
+
+What transfers from darwin and what does not:
+
+- **The shape transfers exactly.** The project axis is flat within noise, so
+  ADR 0018's removal of the per-project ceiling holds on Linux; single-project
+  load scales with offered concurrency alone, as on darwin.
+- **The absolute numbers do not, as predicted.** A single-worker lifecycle went
+  from 45/s (darwin `F_FULLFSYNC`, ~4.3 ms per durable event) to 1,021/s
+  (~196 µs per durable event on md-RAID1 NVMe) — about 22×, inside the
+  documented one-to-two-orders-of-magnitude expectation.
+- **The first measured bottleneck moves.** On darwin the lifecycle path reached
+  73 % of the raw group-commit rate, so fsync governed both. On this host the
+  raw WAL absorbs 116k events/s at 64 appenders while the lifecycle path
+  saturates near 35k events/s (~7,000 lifecycles/s) — about 30 %. With fsync
+  cheap, serialized `ledger.State.Apply` plus per-event CPU work (this host has
+  4 physical cores) governs before the WAL does. Distribution pressure on
+  Linux/NVMe therefore appears first in the apply path, not in storage.
+
+bbolt on the same host: batch-mode metadata writes reach ~155k tx/s at 64
+workers against ~830 tx/s for a single fsync-bound writer, and the pricing
+durable path (`BenchmarkDeploymentPricePinCeiling`) reaches ~6,100 attempts/s
+at 64 workers; neither is the governing constraint.
