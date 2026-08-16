@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -181,6 +182,63 @@ func TestCapabilityRequiresChatMatchesValidation(t *testing.T) {
 			Capabilities: capabilities,
 		}).Validate(); err == nil {
 			t.Errorf("%q was accepted without chat", name)
+		}
+	}
+}
+
+// The endpoints moved from the console into the table, so they must resolve to
+// exactly what the console used to hardcode. These are transcribed from what
+// ProvidersPage.tsx offered — a wrong prefill sends a credential to the wrong
+// host, and it is the field an operator is least likely to re-read.
+func TestResolvedEndpointsMatchWhatTheConsoleOffered(t *testing.T) {
+	const region = "us-east-1"
+	want := map[ProviderProfileID]string{
+		ProfileOpenAIChatEmbeddings:           "https://api.openai.com",
+		ProfileOpenAIMediaResources:           "https://api.openai.com",
+		ProfileAzureChatEmbeddings:            "https://api.openai.com",
+		ProfileOpenAICompatible:               "https://api.openai.com",
+		ProfileAnthropicMessages:              "https://api.anthropic.com",
+		ProfileDeepSeekChat:                   "https://api.deepseek.com",
+		ProfileGeminiText:                     "https://generativelanguage.googleapis.com",
+		ProfileBedrockConverseText:            "https://bedrock-runtime.us-east-1.amazonaws.com",
+		ProfileBedrockInvokeTitanEmbedV2:      "https://bedrock-runtime.us-east-1.amazonaws.com",
+		ProfileBedrockInvokeTitanImageV2:      "https://bedrock-runtime.us-east-1.amazonaws.com",
+		ProfileBedrockAsyncNovaReel:           "https://bedrock-runtime.us-east-1.amazonaws.com",
+		ProfileBedrockAgentRerankCohere35:     "https://bedrock-agent-runtime.us-east-1.amazonaws.com",
+		ProfileBedrockMantleOpenAIChat:        "https://bedrock-mantle.us-east-1.api.aws",
+		ProfileBedrockMantleOpenAIResponses:   "https://bedrock-mantle.us-east-1.api.aws",
+		ProfileBedrockMantleAnthropicMessages: "https://bedrock-mantle.us-east-1.api.aws",
+	}
+	for _, profile := range AllProviderProfiles() {
+		expected, listed := want[profile.ID]
+		if !listed {
+			t.Errorf("%s has no expected endpoint; add it here when adding the row", profile.ID)
+			continue
+		}
+		if got := ResolveBaseURL(profile.ID, region); got != expected {
+			t.Errorf("%s endpoint is %q, want %q", profile.ID, got, expected)
+		}
+	}
+}
+
+// Only the Bedrock surfaces vary by region; a template without the placeholder
+// must come back untouched rather than silently absorbing the value.
+func TestRegionAppliesOnlyWhereTheTemplateAsksForIt(t *testing.T) {
+	if got := ResolveBaseURL(ProfileBedrockConverseText, "eu-central-1"); got != "https://bedrock-runtime.eu-central-1.amazonaws.com" {
+		t.Errorf("bedrock endpoint did not take the region: %q", got)
+	}
+	if got := ResolveBaseURL(ProfileBedrockMantleOpenAIChat, "ap-northeast-1"); got != "https://bedrock-mantle.ap-northeast-1.api.aws" {
+		t.Errorf("mantle endpoint did not take the region: %q", got)
+	}
+	if got := ResolveBaseURL(ProfileOpenAIChatEmbeddings, "eu-central-1"); got != "https://api.openai.com" {
+		t.Errorf("a region-free endpoint was rewritten: %q", got)
+	}
+	if got := ResolveBaseURL("no.such.profile.v1", "us-east-1"); got != "" {
+		t.Errorf("an unregistered profile produced an endpoint: %q", got)
+	}
+	for _, profile := range AllProviderProfiles() {
+		if strings.Contains(ResolveBaseURL(profile.ID, "us-east-1"), RegionPlaceholder) {
+			t.Errorf("%s still carries the placeholder after resolution", profile.ID)
 		}
 	}
 }

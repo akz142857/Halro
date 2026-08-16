@@ -1,5 +1,7 @@
 package domain
 
+import "strings"
+
 // The provider matrix, in one place.
 //
 // What a profile is, what it starts with, and what an operator may turn on used
@@ -30,14 +32,49 @@ package domain
 // accepts upstream egress that never passes through SafeTransport, so the
 // operator opts in. Where the two are equal the row repeats the set, which is
 // the readable form — a reader should not have to compute a ceiling.
+//
+// BaseURLTemplate is the endpoint a new connection on this profile is offered.
+// It is a prefill, not a bound: an operator may enter any endpoint, and the
+// outbound host allowlist is derived from the saved connection rather than from
+// this. RegionPlaceholder, where present, is substituted from configuration —
+// the region is a deployment choice, unlike everything else in this row.
 type profileRow struct {
-	ID        ProviderProfileID
-	Type      ProviderType
-	Surface   AccessSurface
-	Scheme    CredentialScheme
-	Immutable bool
-	Defaults  ProviderCapabilities
-	Ceiling   ProviderCapabilities
+	ID              ProviderProfileID
+	Type            ProviderType
+	Surface         AccessSurface
+	Scheme          CredentialScheme
+	BaseURLTemplate string
+	Immutable       bool
+	Defaults        ProviderCapabilities
+	Ceiling         ProviderCapabilities
+}
+
+// RegionPlaceholder is what BaseURLTemplate carries where a deployment's own
+// region belongs. ResolveBaseURL replaces it; a template without it is returned
+// unchanged.
+const RegionPlaceholder = "{region}"
+
+// The three Bedrock access surfaces are addressed by different hosts, which is
+// why the endpoint belongs to the profile rather than to the provider type: one
+// value per type cannot say all three.
+const (
+	bedrockRuntimeEndpoint      = "https://bedrock-runtime." + RegionPlaceholder + ".amazonaws.com"
+	bedrockAgentRuntimeEndpoint = "https://bedrock-agent-runtime." + RegionPlaceholder + ".amazonaws.com"
+	bedrockMantleEndpoint       = "https://bedrock-mantle." + RegionPlaceholder + ".api.aws"
+)
+
+// ResolveBaseURL fills a profile's endpoint template in for one deployment.
+//
+// An unregistered profile has no endpoint to offer and returns "", which the
+// caller shows as an empty field rather than guessing — a wrong prefilled
+// endpoint is worse than none, because it is the field an operator is least
+// likely to check.
+func ResolveBaseURL(profileID ProviderProfileID, region string) string {
+	row, ok := profileIndex[profileID]
+	if !ok || row.BaseURLTemplate == "" {
+		return ""
+	}
+	return strings.ReplaceAll(row.BaseURLTemplate, RegionPlaceholder, region)
 }
 
 var (
@@ -68,25 +105,29 @@ var profileTable = []profileRow{
 	{
 		ID: ProfileOpenAIChatEmbeddings, Type: ProviderOpenAI,
 		Surface: SurfaceOpenAI, Scheme: CredentialBearerStatic,
-		Defaults: openAIChatSet, Ceiling: openAIChatSet,
+		BaseURLTemplate: "https://api.openai.com",
+		Defaults:        openAIChatSet, Ceiling: openAIChatSet,
 	},
 	{
 		// JSONMode covers Anthropic's schema-backed structured outputs, which the
 		// Messages profile carries through output_config.format.
 		ID: ProfileAnthropicMessages, Type: ProviderAnthropic,
 		Surface: SurfaceAnthropic, Scheme: CredentialAnthropicAPIKey,
-		Defaults: anthropicMessagesSet,
-		Ceiling:  withProviderExecutedTools(anthropicMessagesSet),
+		BaseURLTemplate: "https://api.anthropic.com",
+		Defaults:        anthropicMessagesSet,
+		Ceiling:         withProviderExecutedTools(anthropicMessagesSet),
 	},
 	{
 		ID: ProfileAzureChatEmbeddings, Type: ProviderAzureOpenAI,
 		Surface: SurfaceAzureOpenAI, Scheme: CredentialAzureAPIKey,
-		Defaults: openAIChatSet, Ceiling: openAIChatSet,
+		BaseURLTemplate: "https://api.openai.com",
+		Defaults:        openAIChatSet, Ceiling: openAIChatSet,
 	},
 	{
 		ID: ProfileDeepSeekChat, Type: ProviderDeepSeek,
 		Surface: SurfaceDeepSeek, Scheme: CredentialBearerStatic,
-		Defaults: deepSeekSet, Ceiling: deepSeekSet,
+		BaseURLTemplate: "https://api.deepseek.com",
+		Defaults:        deepSeekSet, Ceiling: deepSeekSet,
 	},
 	{
 		// Compatibility servers vary. These conservative defaults preserve the two
@@ -94,49 +135,57 @@ var profileTable = []profileRow{
 		// which capability detection does — not asserted in a table.
 		ID: ProfileOpenAICompatible, Type: ProviderOpenAICompatible,
 		Surface: SurfaceOpenAICompatible, Scheme: CredentialBearerStatic,
-		Defaults: openAICompatibleSet, Ceiling: openAICompatibleSet,
+		BaseURLTemplate: "https://api.openai.com",
+		Defaults:        openAICompatibleSet, Ceiling: openAICompatibleSet,
 	},
 	{
 		// Beta profile intentionally declares only the translated text subset.
 		ID: ProfileGeminiText, Type: ProviderGemini,
 		Surface: SurfaceGemini, Scheme: CredentialGoogleAPIKey,
-		Defaults: geminiTextSet, Ceiling: geminiTextSet,
+		BaseURLTemplate: "https://generativelanguage.googleapis.com",
+		Defaults:        geminiTextSet, Ceiling: geminiTextSet,
 	},
 	{
 		// Beta profile intentionally declares only Converse text chat and usage.
 		ID: ProfileBedrockConverseText, Type: ProviderBedrock,
 		Surface: SurfaceBedrockRuntime, Scheme: CredentialAWSSigV4Explicit,
-		Defaults: bedrockConverseSet, Ceiling: bedrockConverseSet,
+		BaseURLTemplate: bedrockRuntimeEndpoint,
+		Defaults:        bedrockConverseSet, Ceiling: bedrockConverseSet,
 	},
 	{
 		ID: ProfileBedrockInvokeTitanEmbedV2, Type: ProviderBedrock,
 		Surface: SurfaceBedrockRuntime, Scheme: CredentialAWSSigV4Explicit,
-		Immutable: true,
-		Defaults:  titanEmbedSet, Ceiling: titanEmbedSet,
+		BaseURLTemplate: bedrockRuntimeEndpoint,
+		Immutable:       true,
+		Defaults:        titanEmbedSet, Ceiling: titanEmbedSet,
 	},
 	{
 		ID: ProfileOpenAIMediaResources, Type: ProviderOpenAI,
 		Surface: SurfaceOpenAI, Scheme: CredentialBearerStatic,
-		Immutable: true,
-		Defaults:  openAIMediaSet, Ceiling: openAIMediaSet,
+		BaseURLTemplate: "https://api.openai.com",
+		Immutable:       true,
+		Defaults:        openAIMediaSet, Ceiling: openAIMediaSet,
 	},
 	{
 		ID: ProfileBedrockInvokeTitanImageV2, Type: ProviderBedrock,
 		Surface: SurfaceBedrockRuntime, Scheme: CredentialAWSSigV4Explicit,
-		Immutable: true,
-		Defaults:  ProviderCapabilities{Images: true}, Ceiling: ProviderCapabilities{Images: true},
+		BaseURLTemplate: bedrockRuntimeEndpoint,
+		Immutable:       true,
+		Defaults:        ProviderCapabilities{Images: true}, Ceiling: ProviderCapabilities{Images: true},
 	},
 	{
 		ID: ProfileBedrockAgentRerankCohere35, Type: ProviderBedrock,
 		Surface: SurfaceBedrockAgentRuntime, Scheme: CredentialAWSSigV4Explicit,
-		Immutable: true,
-		Defaults:  ProviderCapabilities{Rerank: true}, Ceiling: ProviderCapabilities{Rerank: true},
+		BaseURLTemplate: bedrockAgentRuntimeEndpoint,
+		Immutable:       true,
+		Defaults:        ProviderCapabilities{Rerank: true}, Ceiling: ProviderCapabilities{Rerank: true},
 	},
 	{
 		ID: ProfileBedrockAsyncNovaReel, Type: ProviderBedrock,
 		Surface: SurfaceBedrockRuntime, Scheme: CredentialAWSSigV4Explicit,
-		Immutable: true,
-		Defaults:  ProviderCapabilities{AsyncGenerate: true}, Ceiling: ProviderCapabilities{AsyncGenerate: true},
+		BaseURLTemplate: bedrockRuntimeEndpoint,
+		Immutable:       true,
+		Defaults:        ProviderCapabilities{AsyncGenerate: true}, Ceiling: ProviderCapabilities{AsyncGenerate: true},
 	},
 	{
 		// The Bedrock Mantle profiles keep ceiling == defaults on purpose. Their
@@ -144,8 +193,9 @@ var profileTable = []profileRow{
 		// review.
 		ID: ProfileBedrockMantleOpenAIChat, Type: ProviderBedrock,
 		Surface: SurfaceBedrockMantle, Scheme: CredentialBedrockAPIKey,
-		Immutable: true,
-		Defaults:  mantleOpenAIChatSet, Ceiling: mantleOpenAIChatSet,
+		BaseURLTemplate: bedrockMantleEndpoint,
+		Immutable:       true,
+		Defaults:        mantleOpenAIChatSet, Ceiling: mantleOpenAIChatSet,
 	},
 	{
 		// Phase 1C deliberately exposes only the stateless Responses subset. The
@@ -153,14 +203,16 @@ var profileTable = []profileRow{
 		// is the one capability this row does not share with the chat profile.
 		ID: ProfileBedrockMantleOpenAIResponses, Type: ProviderBedrock,
 		Surface: SurfaceBedrockMantle, Scheme: CredentialBedrockAPIKey,
-		Immutable: true,
-		Defaults:  mantleOpenAIResponsesSet, Ceiling: mantleOpenAIResponsesSet,
+		BaseURLTemplate: bedrockMantleEndpoint,
+		Immutable:       true,
+		Defaults:        mantleOpenAIResponsesSet, Ceiling: mantleOpenAIResponsesSet,
 	},
 	{
 		ID: ProfileBedrockMantleAnthropicMessages, Type: ProviderBedrock,
 		Surface: SurfaceBedrockMantle, Scheme: CredentialBedrockAPIKey,
-		Immutable: true,
-		Defaults:  mantleAnthropicSet, Ceiling: mantleAnthropicSet,
+		BaseURLTemplate: bedrockMantleEndpoint,
+		Immutable:       true,
+		Defaults:        mantleAnthropicSet, Ceiling: mantleAnthropicSet,
 	},
 }
 
@@ -245,6 +297,7 @@ type ProviderProfileSummary struct {
 	Type             ProviderType
 	AccessSurface    AccessSurface
 	CredentialScheme CredentialScheme
+	BaseURLTemplate  string
 	Immutable        bool
 	Defaults         ProviderCapabilities
 	Ceiling          ProviderCapabilities
@@ -260,8 +313,9 @@ func AllProviderProfiles() []ProviderProfileSummary {
 	for _, row := range profileTable {
 		summaries = append(summaries, ProviderProfileSummary{
 			ID: row.ID, Type: row.Type, AccessSurface: row.Surface,
-			CredentialScheme: row.Scheme, Immutable: row.Immutable,
-			Defaults: row.Defaults, Ceiling: row.Ceiling,
+			CredentialScheme: row.Scheme, BaseURLTemplate: row.BaseURLTemplate,
+			Immutable: row.Immutable,
+			Defaults:  row.Defaults, Ceiling: row.Ceiling,
 		})
 	}
 	return summaries
