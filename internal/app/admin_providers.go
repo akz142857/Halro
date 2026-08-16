@@ -1328,7 +1328,25 @@ func (r *Runtime) providerFromInput(
 		// only thing preventing a direct API caller from declaring a capability
 		// the adapter cannot serve — routing would then offer that connection for
 		// an operation it answers with an error.
-		if !capabilitySubset(instance.Capabilities, domain.MaxProviderCapabilitiesForProfile(input.Type, profile.ProfileID)) {
+		//
+		// It applies only when this field is what the connection will be built
+		// from. A request that carries bindings has its top-level capabilities
+		// recomputed from them below (BindingsCapabilitiesSummary), so the value
+		// checked here would be discarded either way — and checking a discarded
+		// value against one binding's ceiling is what rejected every multi-profile
+		// connection the console could produce: an OpenAI connection sends the
+		// union of the chat and media profiles here, which no single profile's
+		// ceiling contains. Each binding is bounded on its own below, and again at
+		// the domain write boundary, so nothing is loosened by skipping it.
+		//
+		// The consequence is that top-level capabilities sent alongside bindings
+		// are accepted and ignored rather than rejected, which is not where this
+		// should end up: the field stops being sent at all once the console
+		// submits a flat capability set and the split moves server-side. Until
+		// then, treat "accepted and ignored" as a temporary state, not a contract.
+		// See docs/todo/provider-capability-single-source.zh-CN.md §3.3.
+		if input.Bindings == nil &&
+			!capabilitySubset(instance.Capabilities, domain.MaxProviderCapabilitiesForProfile(input.Type, profile.ProfileID)) {
 			if domain.IsImmutableCapabilityProfile(profile.ProfileID) {
 				return domain.ProviderInstance{}, errors.New("provider capabilities exceed the immutable operation profile")
 			}
