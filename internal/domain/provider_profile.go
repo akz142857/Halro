@@ -70,49 +70,23 @@ type ProviderProfileDefaults struct {
 }
 
 func DefaultProviderProfile(providerType ProviderType) (ProviderProfileDefaults, bool) {
-	switch providerType {
-	case ProviderOpenAI:
-		return ProviderProfileDefaults{SurfaceOpenAI, ProfileOpenAIChatEmbeddings, CredentialBearerStatic}, true
-	case ProviderAnthropic:
-		return ProviderProfileDefaults{SurfaceAnthropic, ProfileAnthropicMessages, CredentialAnthropicAPIKey}, true
-	case ProviderAzureOpenAI:
-		return ProviderProfileDefaults{SurfaceAzureOpenAI, ProfileAzureChatEmbeddings, CredentialAzureAPIKey}, true
-	case ProviderDeepSeek:
-		return ProviderProfileDefaults{SurfaceDeepSeek, ProfileDeepSeekChat, CredentialBearerStatic}, true
-	case ProviderOpenAICompatible:
-		return ProviderProfileDefaults{SurfaceOpenAICompatible, ProfileOpenAICompatible, CredentialBearerStatic}, true
-	case ProviderGemini:
-		return ProviderProfileDefaults{SurfaceGemini, ProfileGeminiText, CredentialGoogleAPIKey}, true
-	case ProviderBedrock:
-		return ProviderProfileDefaults{SurfaceBedrockRuntime, ProfileBedrockConverseText, CredentialAWSSigV4Explicit}, true
-	default:
+	typeRow, ok := providerTypeIndex[providerType]
+	if !ok {
 		return ProviderProfileDefaults{}, false
 	}
+	row, ok := profileIndex[typeRow.DefaultProfile]
+	if !ok {
+		return ProviderProfileDefaults{}, false
+	}
+	return ProviderProfileDefaults{row.Surface, row.ID, row.Scheme}, true
 }
 
 func RegisteredProviderProfile(profile ProviderProfileID) (ProviderType, ProviderProfileDefaults, bool) {
-	switch profile {
-	case ProfileOpenAIChatEmbeddings, ProfileOpenAIMediaResources:
-		return ProviderOpenAI, ProviderProfileDefaults{SurfaceOpenAI, profile, CredentialBearerStatic}, true
-	case ProfileAnthropicMessages:
-		return ProviderAnthropic, ProviderProfileDefaults{SurfaceAnthropic, profile, CredentialAnthropicAPIKey}, true
-	case ProfileAzureChatEmbeddings:
-		return ProviderAzureOpenAI, ProviderProfileDefaults{SurfaceAzureOpenAI, profile, CredentialAzureAPIKey}, true
-	case ProfileDeepSeekChat:
-		return ProviderDeepSeek, ProviderProfileDefaults{SurfaceDeepSeek, profile, CredentialBearerStatic}, true
-	case ProfileOpenAICompatible:
-		return ProviderOpenAICompatible, ProviderProfileDefaults{SurfaceOpenAICompatible, profile, CredentialBearerStatic}, true
-	case ProfileGeminiText:
-		return ProviderGemini, ProviderProfileDefaults{SurfaceGemini, profile, CredentialGoogleAPIKey}, true
-	case ProfileBedrockConverseText, ProfileBedrockInvokeTitanEmbedV2, ProfileBedrockInvokeTitanImageV2, ProfileBedrockAsyncNovaReel:
-		return ProviderBedrock, ProviderProfileDefaults{SurfaceBedrockRuntime, profile, CredentialAWSSigV4Explicit}, true
-	case ProfileBedrockAgentRerankCohere35:
-		return ProviderBedrock, ProviderProfileDefaults{SurfaceBedrockAgentRuntime, profile, CredentialAWSSigV4Explicit}, true
-	case ProfileBedrockMantleOpenAIChat, ProfileBedrockMantleOpenAIResponses, ProfileBedrockMantleAnthropicMessages:
-		return ProviderBedrock, ProviderProfileDefaults{SurfaceBedrockMantle, profile, CredentialBedrockAPIKey}, true
-	default:
+	row, ok := profileIndex[profile]
+	if !ok {
 		return "", ProviderProfileDefaults{}, false
 	}
+	return row.Type, ProviderProfileDefaults{row.Surface, row.ID, row.Scheme}, true
 }
 
 func ResolveProviderProfile(providerType ProviderType, requested ProviderProfileID) (ProviderProfileDefaults, bool) {
@@ -127,16 +101,11 @@ func ResolveCredentialProfile(providerType ProviderType, surface AccessSurface, 
 	if surface == "" && scheme == "" {
 		return DefaultProviderProfile(providerType)
 	}
-	for _, profileID := range []ProviderProfileID{
-		ProfileOpenAIChatEmbeddings, ProfileAnthropicMessages, ProfileAzureChatEmbeddings,
-		ProfileDeepSeekChat, ProfileOpenAICompatible, ProfileGeminiText, ProfileBedrockConverseText,
-		ProfileBedrockInvokeTitanEmbedV2,
-		ProfileOpenAIMediaResources, ProfileBedrockInvokeTitanImageV2, ProfileBedrockAgentRerankCohere35, ProfileBedrockAsyncNovaReel,
-		ProfileBedrockMantleOpenAIChat, ProfileBedrockMantleOpenAIResponses, ProfileBedrockMantleAnthropicMessages,
-	} {
-		registeredType, profile, ok := RegisteredProviderProfile(profileID)
-		if ok && registeredType == providerType && profile.AccessSurface == surface && profile.CredentialScheme == scheme {
-			return profile, true
+	// Table order is the precedence: several profiles share one (type, surface,
+	// scheme), and a stored credential must resolve to the same one every time.
+	for _, row := range profileTable {
+		if row.Type == providerType && row.Surface == surface && row.Scheme == scheme {
+			return ProviderProfileDefaults{row.Surface, row.ID, row.Scheme}, true
 		}
 	}
 	return ProviderProfileDefaults{}, false
@@ -281,19 +250,7 @@ func NormalizeBedrockProjectID(value string) string {
 // operator could declare Mantle capabilities beyond what the profile supports
 // and have them reach capability detection and the data plane.
 func IsImmutableCapabilityProfile(id ProviderProfileID) bool {
-	switch id {
-	case ProfileOpenAIMediaResources,
-		ProfileBedrockInvokeTitanEmbedV2,
-		ProfileBedrockInvokeTitanImageV2,
-		ProfileBedrockAgentRerankCohere35,
-		ProfileBedrockAsyncNovaReel,
-		ProfileBedrockMantleOpenAIChat,
-		ProfileBedrockMantleOpenAIResponses,
-		ProfileBedrockMantleAnthropicMessages:
-		return true
-	default:
-		return false
-	}
+	return profileIndex[id].Immutable
 }
 
 // ProviderCapabilitiesSubset is the single authoritative subset check used at
