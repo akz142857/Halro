@@ -1,6 +1,7 @@
 # 适用能力改由服务端统一下发（设计提案）
 
-状态：提案，**已过多角色评审 + 一轮存储形态评估，按结论修订**，待评审通过
+状态：**已实施**（分支 `feat/provider-capability-single-source`，5 个提交）。
+第 1–5 步全部落地，§3.3 的服务端拆分**仍未做**——见文末「实施记录」。
 建立日期：2026-08-16
 修订日期：2026-08-17（第二稿：权威数据的存储形态定为 Go 声明式表；Base URL / region 进 `config.yaml`）
 　　　　　2026-08-16（第一稿评审：后端 / 前端 / 安全 / API 契约 / 操作员体验 / 事实核查 六角色）
@@ -569,3 +570,78 @@ servers vary"（`models.go:610-611`）——一个跑 vLLM 且确实支持工具
   评审时需就此权衡是否接受，以及恢复路径（重试 / 重新登录）如何呈现。
 - **端点粒度**：一次性下发全矩阵（几 KB）还是按类型查询？倾向全矩阵——数据是编译期
   常量，体积可忽略，且表单切换类型时零额外请求。
+
+---
+
+## 9. 实施记录（2026-08-17）
+
+分支 `feat/provider-capability-single-source`，五个提交，每个都跑过完整 `go test ./...`
+与 `go vet ./...`，前端跑过 typecheck + 333 个 vitest + build。
+
+| 提交 | 对应 | 内容 |
+| --- | --- | --- |
+| `035ecdb` | §5 | 带 bindings 时不再校验随后被覆盖的顶层能力；三条回归测试复刻控制台真实载荷 |
+| `7cb9b1d` | §3.0 | 六处 switch 与内联切片收敛成 `internal/domain/provider_table.go`；新增 ceiling↔manifest 不变量 |
+| `d25253e` | §3.1 注 A | Base URL 模板进表、`providers.bedrock.region` 进 `config.yaml` |
+| `b788a6d` | §3.1 | `GET /admin/api/v1/provider-profiles` |
+| `f07ab24` | §3.2 | 前端删除全部镜像，改为消费端点 |
+
+**做到的**：§1 列出的镜像全部消失。`ProvidersPage.tsx` 不再有能力清单、默认值、上限、
+不可变 Profile 清单、Bedrock Profile 清单与配置、默认 Base URL、OpenAI 拆分集合；
+`DeploymentsPage.tsx` 的第二份能力名清单改由展示分组推导。
+
+**每条修复都做了反向验证**（按 CLAUDE.md：不失败的反向验证不是证据），且每次都先确认
+编辑真的生效：退掉 §5 的修复 → 回归测试以用户报告的同一条错误失败；给 Gemini 的 ceiling
+加一项没有 Primitive 的能力 → 新不变量失败；关掉 region 的默认填充 → 兼容性测试失败；
+让端点漏掉一个 profile → 防漏列测试失败；从展示分组里删掉 `vision` → 分组完整性测试失败。
+
+**真实二进制验证**（临时数据目录，未触碰本机 `data/`）：新装实例的 `config.yaml` 带出
+注释齐全的 `providers` 段；把该段整个删掉后**实例照常启动**（这是兼容性的核心断言，
+用真实生成的配置文件验证，不是测试里现造的 fixture）；`/provider-profiles` 未认证返回
+401、拼错路径返回 404，说明路由真的挂上且鉴权真的生效。
+
+**前端测试的 fixture 来自真实端点**：`web/src/test/provider-profiles.golden.json` 由
+`TestProviderProfilesGoldenMatchesConsoleFixture` 从跑起来的 handler 生成并校验，
+两边漂移即失败。手写 fixture 只能测到写的人对矩阵的想象，而"对矩阵的想象与服务端不符"
+正是本提案要消灭的东西。
+
+### 仍未做：§3.3 的服务端拆分
+
+前端现在提交的仍是 bindings，只不过**拆分规则不再硬编码**——它由端点下发的各 profile
+ceiling 推导（能力归入 ceiling 覆盖它的那个 profile）。§2 的「删除镜像」目标因此已达成，
+但 §3.3 想要的「前端完全不知道 binding 存在」尚未达成。
+
+实施中撞上了 §3.3 rule 2 预告的那个歧义，并且把它量化了：
+
+| 共享 (type, surface, scheme) 的组 | profile 数 | ceiling 是否互斥 |
+| --- | --- | --- |
+| `openai` / `openai-api` / `bearer.static` | 2 | **互斥**（chat 集 vs media 集） |
+| `bedrock` / `bedrock-runtime` / `sigv4` | 4 | **互斥**（对话 / 嵌入 / 图像 / 异步各一） |
+| `bedrock` / `bedrock-mantle` / `api-key` | 3 | **重叠严重**（三者共享 chat/streaming/tools/vision/stream_usage） |
+
+所以自动拆分对前两组无歧义、对第三组有歧义。**但第三组不需要自动拆分**：Mantle 与
+Bedrock runtime 的 profile 都由操作员在「能力实现」里显式选定，只产生一个 binding。
+
+由此得到 §3.3 落地时该钉死的规则（这是实施带回来的结论，不是提案时的猜测）：
+
+> **操作员显式选定 profile 时 → 单个 binding；未选定（OpenAI）时 → 按 ceiling 自动拆分。**
+> 后者只在 ceiling 互斥的组里发生，因此确定。
+
+剩余工作与其验收条件：
+
+1. 请求契约改为「扁平能力 + 可选 profile_id，不带 bindings」，服务端 `providerFromInput`
+   按上面的规则分解。
+2. §3.3 rule 1 必须实现：落不进任何候选 profile 的能力**返回 400 并指名**，不得静默丢弃。
+   前端现在已经在本地拦下这种情况并指名（`validationCapabilityUnservable`），服务端还没有。
+3. rule 3 的终局：`bindings` 存在时顶层 `capabilities` 从「接受但静默忽略」（§5 修复后的
+   临时状态，已在 `admin_providers.go` 注释里写明）改为**拒收或不再发送**。
+4. 需要一次请求契约评审——这是 API 形状变更，且 pre-1.0 可原地改，值得单独一个 PR。
+
+### 其他遗留
+
+- `providers.bedrock.region` 之外，`defaultBaseURL` 对 `azure_openai` 与 `openai_compatible`
+  仍返回 `https://api.openai.com`。这是搬迁前就有的行为，原样保留了（纯迁移不改行为），
+  但对这两个类型都不合理：Azure 需要资源专属域名，兼容服务器是自建地址。建议改为空值
+  或要求显式填写，属独立的小改动。
+- §8 的两个开放问题仍然开放：`provider_executed_tools` 的出网警示文案、端点故障的运维
+  含义（后者已部分缓解——失败时页面顶部报错、创建按钮禁用并给出原因，但没有重试入口）。
