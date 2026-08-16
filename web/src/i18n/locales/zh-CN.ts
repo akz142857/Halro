@@ -885,6 +885,8 @@ export const zhCN = {
     validationCredentialRequired: "请选择加密凭据；下拉为空时，先为该服务商类型和访问面保存一份凭据。",
     validationCredentialBaseURL: "地址绑定不匹配",
     validationCapabilityRequired: "至少启用一项能力，否则没有模型部署能路由到这个服务商。",
+    validationCapabilityUnservable: "这个连接无法提供：{{capabilities}}。请取消勾选，或改用支持它的服务商类型。",
+    matrixUnavailable: "暂时读不到本实例支持的能力清单，无法新建。请重试，或确认登录状态仍然有效。",
     validationProjectFormat: "必须是 AWS 签发的 proj_ 开头加字母数字的 ID；留空则使用账户默认项目。",
     validationBetaTooMany: "一个连接最多允许 {{max}} 个 beta token。",
     validationBetaTooLong: "每个 beta token 最长 {{max}} 个字符。",

@@ -885,6 +885,8 @@ export const enUS = {
     validationCredentialRequired: "Select an encrypted credential. If the list is empty, save one for this provider type and access surface first.",
     validationCredentialBaseURL: "Does not match the base URL",
     validationCapabilityRequired: "Enable at least one capability, otherwise no deployment can route to this provider.",
+    validationCapabilityUnservable: "This connection cannot serve: {{capabilities}}. Clear them, or use a provider type that supports them.",
+    matrixUnavailable: "The list of capabilities this instance supports could not be read, so nothing can be created yet. Retry, or check that you are still signed in.",
     validationProjectFormat: "Must be proj_ followed by letters and digits, as issued by AWS. Leave it empty to use the account default project.",
     validationBetaTooMany: "At most {{max}} beta tokens can be allowed on one connection.",
     validationBetaTooLong: "Each beta token must be at most {{max}} characters.",

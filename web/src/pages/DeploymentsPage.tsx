@@ -694,15 +694,27 @@ function evidenceSummary(evidence: Record<string, string>) {
 
 type SelectableBinding = ProviderBinding & { id: string };
 
-const deploymentCapabilityNames = ["chat", "streaming", "embeddings", "moderations", "images", "transcriptions", "speech", "files", "batches", "rerank", "async_generate", "tools", "vision", "json_mode", "developer_role", "reasoning", "stream_usage", "provider_executed_tools"] as const;
-type DeploymentCapabilityName = typeof deploymentCapabilityNames[number];
-
+// How the capabilities are grouped on screen. Which group a capability belongs
+// in is a judgement about the operator's question, not something the server can
+// answer, so it stays here — but the set has to stay complete, or a capability
+// the server offers would have nowhere to be drawn and would silently vanish
+// from this form. DeploymentsPage.test.tsx checks it against what the endpoint
+// actually serves.
 const deploymentCapabilityGroups = [
   { id: "operations", capabilities: ["chat", "embeddings", "moderations", "images", "transcriptions", "speech", "rerank", "async_generate"] },
   { id: "modalities", capabilities: ["vision"] },
   { id: "protocol", capabilities: ["streaming", "tools", "json_mode", "developer_role", "reasoning", "stream_usage", "provider_executed_tools"] },
   { id: "managed", capabilities: ["files", "batches"] },
 ] as const;
+
+/** Exported for DeploymentsPage.test.tsx, which checks the grouping against what
+ * the provider-profiles endpoint actually serves. */
+export const deploymentCapabilityGroupsForTest = deploymentCapabilityGroups;
+
+// One list, derived. It used to be written out a second time above these groups,
+// which meant a capability could be in one and not the other.
+const deploymentCapabilityNames = deploymentCapabilityGroups.flatMap((group) => group.capabilities);
+type DeploymentCapabilityName = typeof deploymentCapabilityGroups[number]["capabilities"][number];
 
 function providerBindings(provider?: Provider): SelectableBinding[] {
   if (!provider) return [];

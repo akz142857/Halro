@@ -363,6 +363,43 @@ export interface ProviderCapabilities {
   max_output_tokens: number;
 }
 
+/** One profile as the server describes it, from GET /provider-profiles.
+ *
+ * `ceiling` is what an operator may turn on; `defaults` is what a new connection
+ * starts with. `default_base_url` arrives already resolved for this deployment —
+ * the region is substituted server-side, so this is a value to put straight into
+ * the form. */
+export interface ProviderProfileDescriptor {
+  id: string;
+  access_surface: AccessSurface;
+  credential_scheme: CredentialScheme;
+  default_base_url: string;
+  immutable: boolean;
+  defaults: ProviderCapabilities;
+  ceiling: ProviderCapabilities;
+}
+
+export interface ProviderTypeDescriptor {
+  type: ProviderType;
+  default_profile_id: string;
+  profiles: ProviderProfileDescriptor[];
+}
+
+/** What this build can serve. Everything a connection form needs to decide what
+ * to offer comes from here rather than from constants in this bundle: the two
+ * used to be kept in step by hand, and both directions of drift were bad — a
+ * console wider than the server offers capabilities whose save is refused
+ * without saying which, a console narrower hides capabilities that work. */
+export interface ProviderProfilesCatalog {
+  /** The capability keys. Not a display order: how they are arranged and what
+   * they are called in a given language stay with this bundle. */
+  capability_names: string[];
+  /** Capabilities that cannot be enabled without chat, as the server enforces
+   * it, so the form can present the rule instead of discovering it on refusal. */
+  capability_requires_chat: string[];
+  provider_types: ProviderTypeDescriptor[];
+}
+
 export interface ProviderBinding {
   id?: string;
   profile_id: string;

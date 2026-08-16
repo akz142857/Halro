@@ -22,7 +22,19 @@ import type { InlineTestState } from "../components";
 import { useInstantFormatter } from "../format";
 import { isoToZonedInput, useAccountingTimeZone, zonedInputToISO } from "../timezone";
 import { useNotify } from "../notifications";
-import type { AccessSurface, Credential, CredentialScheme, Provider, ProviderBinding, ProviderCapabilities, ProviderType } from "../types";
+import type { AccessSurface, Credential, CredentialScheme, Provider, ProviderCapabilities, ProviderProfilesCatalog, ProviderType } from "../types";
+import {
+  booleanCapabilityNames,
+  combinableProfiles,
+  connectionCeiling,
+  connectionDefaults,
+  defaultProfileID,
+  findProfile,
+  profilesForType,
+  splitCapabilitiesAcrossProfiles,
+  updateCapabilitySelection,
+  useProviderProfiles,
+} from "../hooks/useProviderProfiles";
 import { useTranslation } from "react-i18next";
 import { useIsReadOnly } from "../session";
 import { hasOnboardingCreateIntent, OnboardingContextBanner } from "../OnboardingContext";
@@ -33,14 +45,6 @@ const providerTypes: ProviderType[] = [
 
 function ProviderTypeOptions({ t }: { t: ReturnType<typeof useTranslation>["t"] }) {
   return providerTypes.map((type) => <option key={type} value={type}>{t(`providers.types.${type}`)}</option>);
-}
-
-function defaultBaseURL(type: ProviderType) {
-  if (type === "gemini") return "https://generativelanguage.googleapis.com";
-  if (type === "anthropic") return "https://api.anthropic.com";
-  if (type === "deepseek") return "https://api.deepseek.com";
-  if (type === "bedrock") return "https://bedrock-runtime.us-east-1.amazonaws.com";
-  return "https://api.openai.com";
 }
 
 // The server normalizes an endpoint to scheme, host and an always-explicit
@@ -72,36 +76,14 @@ function credentialExpiry(value: string | undefined, now = Date.now()) {
   return { expired: at <= now, days, soon: at > now && days <= credentialExpiryWarningDays };
 }
 
-const bedrockProfiles = [
-  "bedrock.runtime.converse.text.v1",
-  "bedrock.runtime.invoke.titan-embed-text-v2.v1",
-  "bedrock.runtime.invoke.titan-image-v2.v1",
-  "bedrock.agent-runtime.rerank.cohere-v3-5.v1",
-  "bedrock.runtime.async.nova-reel-v1.v1",
-  "bedrock.mantle.openai.chat.v1",
-  "bedrock.mantle.openai.responses.v1",
-  "bedrock.mantle.anthropic.messages.v1",
-] as const;
-type BedrockProfile = typeof bedrockProfiles[number];
 type BedrockCredentialSurface = "bedrock-runtime" | "bedrock-agent-runtime" | "bedrock-mantle";
 
-const openAIChatProfile = "openai.chat-embeddings.v1";
-const openAIMediaProfile = "openai.media-resources.v1";
-
-function bedrockProfileConfig(profile: BedrockProfile): { surface: AccessSurface; scheme: CredentialScheme; baseURL: string } {
-  if (profile.startsWith("bedrock.agent-runtime.")) {
-    return { surface: "bedrock-agent-runtime", scheme: "aws.sigv4.explicit-session", baseURL: "https://bedrock-agent-runtime.us-east-1.amazonaws.com" };
-  }
-  if (profile.startsWith("bedrock.runtime.")) {
-    return { surface: "bedrock-runtime", scheme: "aws.sigv4.explicit-session", baseURL: "https://bedrock-runtime.us-east-1.amazonaws.com" };
-  }
-  return { surface: "bedrock-mantle", scheme: "aws.bedrock.api-key", baseURL: "https://bedrock-mantle.us-east-1.api.aws" };
-}
-
-function bedrockCredentialConfig(surface: BedrockCredentialSurface) {
-  if (surface === "bedrock-agent-runtime") return bedrockProfileConfig("bedrock.agent-runtime.rerank.cohere-v3-5.v1");
-  if (surface === "bedrock-mantle") return bedrockProfileConfig("bedrock.mantle.openai.chat.v1");
-  return bedrockProfileConfig("bedrock.runtime.converse.text.v1");
+// Which profile a Bedrock credential is created for. The surfaces have
+// different hosts and different credential schemes, so the form asks first and
+// then takes the endpoint from whichever profile leads that surface — the
+// served matrix decides which that is, rather than a list repeated here.
+function leadProfileForSurface(catalog: ProviderProfilesCatalog, surface: BedrockCredentialSurface) {
+  return profilesForType(catalog, "bedrock").find((profile) => profile.access_surface === surface);
 }
 
 // The anthropic-beta header is comma separated, so the form takes one comma
@@ -112,8 +94,14 @@ function parseBetaTokens(value: string): string[] {
   return value.split(",").map((token) => token.trim()).filter(Boolean);
 }
 
-function isBedrockProfile(value: string): value is BedrockProfile {
-  return bedrockProfiles.includes(value as BedrockProfile);
+// The endpoint offered for a type is the one its default profile carries,
+// already resolved for this deployment by the server.
+function endpointForType(catalog: ProviderProfilesCatalog, type: ProviderType) {
+  return findProfile(catalog, type, defaultProfileID(catalog, type))?.default_base_url ?? "";
+}
+
+function isBedrockProfile(catalog: ProviderProfilesCatalog, value: string) {
+  return profilesForType(catalog, "bedrock").some((profile) => profile.id === value);
 }
 
 export function ProvidersPage() {
@@ -131,7 +119,11 @@ export function ProvidersPage() {
   const [credentialQuery, setCredentialQuery] = useState("");
   const credentials = useQuery({ queryKey: ["credentials"], queryFn: api.credentials });
   const providers = useQuery({ queryKey: ["providers"], queryFn: api.providers });
-  const pending = credentials.isPending || providers.isPending;
+  // What this build can serve. The forms cannot decide what to offer without it,
+  // so they wait for it; the listing below does not, and stays readable either
+  // way.
+  const catalog = useProviderProfiles();
+  const pending = credentials.isPending || providers.isPending || catalog.isPending;
   const credentialItems = credentials.data?.items ?? [];
   const providerItems = providers.data?.items ?? [];
   const filteredProviders = useMemo(() => {
@@ -175,14 +167,14 @@ export function ProvidersPage() {
         description={t("providers.description")}
         action={
           activeView === "providers"
-            ? <button className="button primary" disabled={readOnly || (!pending && !canCreateProvider)} title={!pending && !canCreateProvider ? t("providers.createCredentialFirst") : undefined} onClick={() => setProviderDialog(true)}>{t("providers.addProvider")}</button>
-            : <button className="button primary" disabled={readOnly} onClick={() => setCredentialDialog(true)}>{t("providers.addCredential")}</button>
+            ? <button className="button primary" disabled={readOnly || catalog.isError || (!pending && !canCreateProvider)} title={catalog.isError ? t("providers.matrixUnavailable") : !pending && !canCreateProvider ? t("providers.createCredentialFirst") : undefined} onClick={() => setProviderDialog(true)}>{t("providers.addProvider")}</button>
+            : <button className="button primary" disabled={readOnly || catalog.isError} title={catalog.isError ? t("providers.matrixUnavailable") : undefined} onClick={() => setCredentialDialog(true)}>{t("providers.addCredential")}</button>
         }
       />
       <OnboardingContextBanner />
       {pending && <Loading />}
-      {(credentials.isError || providers.isError) && (
-        <ErrorState error={credentials.error || providers.error} />
+      {(credentials.isError || providers.isError || catalog.isError) && (
+        <ErrorState error={credentials.error || providers.error || catalog.error} />
       )}
       {!pending && (
         <div className="provider-tabs-shell">
@@ -210,22 +202,30 @@ export function ProvidersPage() {
             {!!credentialItems.length && <ResourceToolbar query={credentialQuery} onQueryChange={setCredentialQuery} queryPlaceholder={t("providers.searchCredentials")} count={t("providers.resultCount", { visible: filteredCredentials.length, total: credentialItems.length })} />}
             {!!credentialItems.length && !filteredCredentials.length && <EmptyState title={t("providers.noMatches")}>{t("providers.noMatchesDescription")}</EmptyState>}
             {filteredCredentials.map((credential) => (
-              <CredentialRow key={credential.id} credential={credential} highlighted={focusedCredentialID === credential.id} useCount={providerItems.filter((provider) => provider.credential_id === credential.id).length} onUsageClick={() => { setFocusedProviderCredentialID(credential.id); selectView("providers"); }} />
+              <CredentialRow key={credential.id} credential={credential} catalog={catalog.data} highlighted={focusedCredentialID === credential.id} useCount={providerItems.filter((provider) => provider.credential_id === credential.id).length} onUsageClick={() => { setFocusedProviderCredentialID(credential.id); selectView("providers"); }} />
             ))}
           </section>}
         </div>
       )}
-      {credentialDialog && <CredentialForm onClose={() => setCredentialDialog(false)} />}
-      {providerDialog && credentials.isSuccess && (
+      {/* The forms decide what to offer from the served matrix, and their initial
+          state is built when they mount, so they mount only once it has arrived.
+          There is no fallback on purpose: a form built from a guess is how the
+          console and the server drifted apart. */}
+      {credentialDialog && catalog.isSuccess && (
+        <CredentialForm catalog={catalog.data} onClose={() => setCredentialDialog(false)} />
+      )}
+      {providerDialog && credentials.isSuccess && catalog.isSuccess && (
         <ProviderForm
           credentials={credentials.data?.items ?? []}
+          catalog={catalog.data}
           onClose={() => setProviderDialog(false)}
         />
       )}
-      {editingProvider && (
+      {editingProvider && catalog.isSuccess && (
         <ProviderForm
           current={editingProvider}
           credentials={credentials.data?.items ?? []}
+          catalog={catalog.data}
           onClose={() => setEditingProvider(undefined)}
         />
       )}
@@ -340,7 +340,7 @@ function ProviderRow({ provider, credential, highlighted, onCredentialClick, onE
   );
 }
 
-function CredentialRow({ credential, useCount, highlighted, onUsageClick }: { credential: Credential; useCount: number; highlighted: boolean; onUsageClick: () => void }) {
+function CredentialRow({ credential, useCount, highlighted, catalog, onUsageClick }: { credential: Credential; useCount: number; highlighted: boolean; catalog?: ProviderProfilesCatalog; onUsageClick: () => void }) {
   const { t } = useTranslation();
   const [rotating, setRotating] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -400,7 +400,7 @@ function CredentialRow({ credential, useCount, highlighted, onUsageClick }: { cr
         </section>}
       </article>
       {remove.isError && <ErrorState error={remove.error} />}
-      {rotating && <CredentialForm current={credential} onClose={() => setRotating(false)} />}
+      {rotating && catalog && <CredentialForm current={credential} catalog={catalog} onClose={() => setRotating(false)} />}
     </>
   );
 }
@@ -410,22 +410,34 @@ function evidenceSummary(evidence: Record<string, string>) {
   return values.length ? values.join(" / ") : "—";
 }
 
+// Read from the connection's own record rather than from the served matrix, so
+// the listing keeps working when that request has not landed. Only the forms
+// need to know what may be turned on; showing what a saved connection already
+// has needs nothing but the connection.
 function enabledCapabilities(provider: Provider) {
-  return capabilityNames.filter((capability) => provider.capabilities?.[capability]);
+  const capabilities = provider.capabilities;
+  if (!capabilities) return [];
+  return (Object.keys(capabilities) as (keyof ProviderCapabilities)[]).filter(
+    (capability) => capability !== "max_context_tokens" && capability !== "max_output_tokens" && capabilities[capability],
+  );
 }
 
 function CredentialForm({
   current,
+  catalog,
   onClose,
 }: {
   current?: Credential;
+  catalog: ProviderProfilesCatalog;
   onClose: () => void;
 }) {
   const { t } = useTranslation();
   const { notify } = useNotify();
   const [name, setName] = useState(current?.name ?? "");
   const [type, setType] = useState<ProviderType>(current?.type ?? "openai");
-  const [baseURL, setBaseURL] = useState(current ? displayBoundBaseURL(current.bound_base_url) : defaultBaseURL("openai"));
+  const [baseURL, setBaseURL] = useState(
+    current ? displayBoundBaseURL(current.bound_base_url) : endpointForType(catalog, "openai"),
+  );
   const [bedrockSurface, setBedrockSurface] = useState<BedrockCredentialSurface>(
     current?.access_surface === "bedrock-mantle" || current?.access_surface === "bedrock-agent-runtime"
       ? current.access_surface
@@ -447,13 +459,15 @@ function CredentialForm({
   const mutation = useMutation({
     mutationFn: () => {
       const bedrockBinding = type === "bedrock"
-        ? bedrockCredentialConfig(bedrockSurface)
+        ? leadProfileForSurface(catalog, bedrockSurface)
         : undefined;
       const value = {
         name,
         type,
         base_url: baseURL,
-        ...(bedrockBinding ? { access_surface: bedrockBinding.surface, scheme: bedrockBinding.scheme } : {}),
+        ...(bedrockBinding
+          ? { access_surface: bedrockBinding.access_surface, scheme: bedrockBinding.credential_scheme }
+          : {}),
         ...(secret ? { secret } : {}),
         // Always sent, including as null: the stored expiry is whatever the
         // form says, so clearing the field clears it rather than silently
@@ -497,7 +511,7 @@ function CredentialForm({
           <select value={type} disabled={Boolean(current)} onChange={(event) => {
             const next = event.target.value as ProviderType;
             setType(next);
-            setBaseURL(defaultBaseURL(next));
+            setBaseURL(endpointForType(catalog, next));
             setBedrockSurface("bedrock-runtime");
           }}>
             <ProviderTypeOptions t={t} />
@@ -508,8 +522,7 @@ function CredentialForm({
             <select value={bedrockSurface} disabled={Boolean(current)} onChange={(event) => {
               const next = event.target.value as BedrockCredentialSurface;
               setBedrockSurface(next);
-              const config = bedrockCredentialConfig(next);
-              setBaseURL(config.baseURL);
+              setBaseURL(leadProfileForSurface(catalog, next)?.default_base_url ?? "");
             }}>
               <option value="bedrock-runtime">{t("providers.bedrockRuntime")}</option>
               <option value="bedrock-agent-runtime">{t("providers.bedrockAgentRuntime")}</option>
@@ -559,10 +572,12 @@ function CredentialForm({
 function ProviderForm({
   current,
   credentials,
+  catalog,
   onClose,
 }: {
   current?: Provider;
   credentials: Credential[];
+  catalog: ProviderProfilesCatalog;
   onClose: () => void;
 }) {
   const { t } = useTranslation();
@@ -570,32 +585,52 @@ function ProviderForm({
   const initialType = current?.type ?? "openai";
   const [name, setName] = useState(current?.name ?? "");
   const [type, setType] = useState<ProviderType>(initialType);
-  const initialProfile = current?.profile_id && isBedrockProfile(current.profile_id) ? current.profile_id : "bedrock.runtime.converse.text.v1";
-  const [profileID, setProfileID] = useState<BedrockProfile>(initialProfile);
-  const [baseURL, setBaseURL] = useState(current?.base_url ?? defaultBaseURL(initialType));
+  const bedrockDefaultProfile = defaultProfileID(catalog, "bedrock");
+  const initialProfile = current?.profile_id && isBedrockProfile(catalog, current.profile_id)
+    ? current.profile_id
+    : bedrockDefaultProfile;
+  const [profileID, setProfileID] = useState(initialProfile);
+  const [baseURL, setBaseURL] = useState(current?.base_url ?? endpointForType(catalog, initialType));
   const [apiVersion, setAPIVersion] = useState(current?.api_version ?? "");
   const [bedrockProjectID, setBedrockProjectID] = useState(current?.bedrock_project_id ?? "");
   const [anthropicBetas, setAnthropicBetas] = useState((current?.allowed_anthropic_betas ?? []).join(", "));
   const [maxConcurrency, setMaxConcurrency] = useState(current?.max_concurrency ?? 0);
   const [enabled, setEnabled] = useState(current?.enabled ?? true);
-  const [capabilities, setCapabilities] = useState<ProviderCapabilities>(current?.capabilities ?? defaultProviderCapabilities(initialType));
-  // The ceiling is what the operator may turn on; the defaults are what a new
-  // connection starts with. They were the same function, which forced every
-  // capability to be either always-on or unreachable — and
-  // provider_executed_tools has to be neither, because the profile supports it
-  // and enabling it accepts upstream egress Halro never sees.
-  const capabilityCeiling = maxProviderCapabilities(type, profileID);
-  const fixedCapabilities = isStrictCapabilityProfile(type, profileID);
+  const [capabilities, setCapabilities] = useState<ProviderCapabilities>(
+    current?.capabilities ?? connectionDefaults(catalog, initialType, defaultProfileID(catalog, initialType)),
+  );
+  // Both come from the server. The ceiling is what an operator may turn on, the
+  // defaults are what a new connection starts with, and they are different
+  // questions — provider_executed_tools sits above the defaults and inside the
+  // ceiling, because the profile supports it and enabling it accepts upstream
+  // egress Halro never sees.
+  const anchorProfile = type === "bedrock" ? profileID : defaultProfileID(catalog, type);
+  const capabilityCeiling = connectionCeiling(catalog, type, anchorProfile);
+  const capabilityNames = booleanCapabilityNames(catalog);
+  // A profile whose set is fixed by the build offers no checkboxes to widen.
+  const fixedCapabilities = combinableProfiles(catalog, type, anchorProfile).every((profile) => profile.immutable);
   const visibleCapabilities = capabilityNames.filter((capability) => capabilities[capability]);
   const configurableCapabilities = capabilityNames.filter((capability) => capabilityCeiling[capability] || capabilities[capability]);
-  const selectedSurface = type === "bedrock" ? bedrockProfileConfig(profileID).surface : undefined;
+  const selectedSurface = type === "bedrock" ? findProfile(catalog, "bedrock", profileID)?.access_surface : undefined;
+  // Where the ticked capabilities land. `unservable` is what no profile on this
+  // connection can serve; the save is refused locally rather than sent to be
+  // refused remotely without naming the capability.
+  const profileSplit = splitCapabilitiesAcrossProfiles(catalog, type, anchorProfile, capabilities);
   // The header is only ever sent by the native Anthropic Messages path, which is
   // a property of the profile rather than the surface: Bedrock Mantle also
   // carries OpenAI chat and responses profiles, and a token stored on one of
   // those would be kept and never sent.
   const supportsAnthropicBetas = type === "anthropic" || profileID === "bedrock.mantle.anthropic.messages.v1";
   const matchingCredentials = credentials.filter((credential) => credential.type === type && (!selectedSurface || credential.access_surface === selectedSurface));
-  const [credentialID, setCredentialID] = useState(current?.credential_id ?? credentials.find((credential) => credential.type === initialType && (initialType !== "bedrock" || credential.access_surface === bedrockProfileConfig(initialProfile).surface))?.id ?? "");
+  const [credentialID, setCredentialID] = useState(
+    current?.credential_id ??
+      credentials.find((credential) =>
+        credential.type === initialType &&
+        (initialType !== "bedrock" ||
+          credential.access_surface === findProfile(catalog, "bedrock", initialProfile)?.access_surface),
+      )?.id ??
+      "",
+  );
   const [errors, setErrors] = useState<Record<string, string>>({});
   // A credential is encrypted against the endpoint it was saved for, so editing
   // the base URL afterwards silently invalidates the pairing. The server refuses
@@ -618,17 +653,19 @@ function ProviderForm({
       name, type, base_url: baseURL,
       ...(type === "bedrock" ? {
         profile_id: profileID,
-        access_surface: bedrockProfileConfig(profileID).surface,
-        credential_scheme: bedrockProfileConfig(profileID).scheme,
-        ...(bedrockProfileConfig(profileID).surface === "bedrock-mantle"
+        access_surface: findProfile(catalog, "bedrock", profileID)?.access_surface,
+        credential_scheme: findProfile(catalog, "bedrock", profileID)?.credential_scheme,
+        ...(selectedSurface === "bedrock-mantle"
           ? { bedrock_project_id: normalizeBedrockProjectID(bedrockProjectID) }
           : {}),
-      } : type === "openai" ? {
-        // profile_id remains during the rolling backend migration. New runtimes
-        // route each operation through the matching capability binding.
-        profile_id: openAIChatProfile,
-        bindings: openAIBindings(openAIChatProfile, capabilities),
       } : {}),
+      // One connection can span more than one profile — an OpenAI key serves both
+      // the chat endpoints and the media ones — so what the operator ticked is
+      // sorted into a binding per profile that can serve it. Which profile that
+      // is comes from the served ceilings, not from a list kept here.
+      ...(profileSplit.bindings.length > 1
+        ? { profile_id: profileSplit.bindings[0].profile_id, bindings: profileSplit.bindings }
+        : {}),
       ...(type === "azure_openai" ? { api_version: apiVersion } : {}),
       credential_id: credentialID, capabilities, max_concurrency: maxConcurrency, enabled,
       ...(supportsAnthropicBetas ? { allowed_anthropic_betas: parseBetaTokens(anthropicBetas) } : {}),
@@ -686,7 +723,13 @@ function ProviderForm({
         <form className="provider-form" ref={formElement}
           onSubmit={(event) => {
             event.preventDefault();
-            const nextErrors = validateProvider({ name, credentialID, bedrockProjectID, mantle: selectedSurface === "bedrock-mantle", capabilities, anthropicBetas: supportsAnthropicBetas ? anthropicBetas : "" }, t);
+            const nextErrors = validateProvider({
+              name, credentialID, bedrockProjectID,
+              mantle: selectedSurface === "bedrock-mantle",
+              anyCapability: profileSplit.bindings.length > 0,
+              unservable: profileSplit.unservable,
+              anthropicBetas: supportsAnthropicBetas ? anthropicBetas : "",
+            }, t);
             if (!nextErrors.credentialID && credentialBaseURLMismatch) nextErrors.credentialID = credentialBaseURLMismatch;
             setErrors(nextErrors);
             if (Object.keys(nextErrors).length) setRefusedSubmits((value) => value + 1);
@@ -701,10 +744,10 @@ function ProviderForm({
             <select value={type} onChange={(event) => {
               const next = event.target.value as ProviderType;
               setType(next);
-              setBaseURL(defaultBaseURL(next));
+              setBaseURL(endpointForType(catalog, next));
               setProfileID("bedrock.runtime.converse.text.v1");
               setCredentialID(credentials.find((credential) => credential.type === next && (next !== "bedrock" || credential.access_surface === "bedrock-runtime"))?.id ?? "");
-              setCapabilities(defaultProviderCapabilities(next));
+              setCapabilities(connectionDefaults(catalog, next, defaultProfileID(catalog, next)));
             }}>
               <ProviderTypeOptions t={t} />
             </select>
@@ -712,14 +755,16 @@ function ProviderForm({
           {type === "bedrock" && (
             <Field label={t("providers.capabilityImplementation")} hint={t("providers.bedrockProfileHint")}>
               <select value={profileID} onChange={(event) => {
-                const next = event.target.value as BedrockProfile;
-                const config = bedrockProfileConfig(next);
+                const next = event.target.value;
+                const profile = findProfile(catalog, "bedrock", next);
                 setProfileID(next);
-                setBaseURL(config.baseURL);
-                setCredentialID(credentials.find((credential) => credential.type === "bedrock" && credential.access_surface === config.surface)?.id ?? "");
-                setCapabilities(defaultProviderCapabilities("bedrock", next));
+                setBaseURL(profile?.default_base_url ?? "");
+                setCredentialID(credentials.find((credential) => credential.type === "bedrock" && credential.access_surface === profile?.access_surface)?.id ?? "");
+                setCapabilities(connectionDefaults(catalog, "bedrock", next));
               }}>
-                {bedrockProfiles.map((profile) => <option value={profile} key={profile}>{t(`providers.bedrockProfiles.${profile}`)}</option>)}
+                {profilesForType(catalog, "bedrock").map((profile) => (
+                  <option value={profile.id} key={profile.id}>{t(`providers.bedrockProfiles.${profile.id}`)}</option>
+                ))}
               </select>
             </Field>
           )}
@@ -759,7 +804,7 @@ function ProviderForm({
                 <div className="capability-disclosure capability-advanced">
                   <header><span>{t("providers.advancedCapabilities")}</span><strong>{t("providers.selectedCapabilities", { count: visibleCapabilities.length })}</strong></header>
                   <p className="capability-advanced-note">{t("providers.advancedCapabilitiesHint")}</p>
-                  <div className="capability-grid">{configurableCapabilities.map((capability) => { const unavailable = !capabilityCeiling[capability]; return <label className={`capability-option ${unavailable ? "unavailable" : ""}`} key={capability}><input type="checkbox" disabled={unavailable && !capabilities[capability]} checked={capabilities[capability]} onChange={(event) => setCapabilities(updateCapabilitySelection(capabilities, capability, event.target.checked))} /><span>{t(`capabilities.${capability}`)}{unavailable && <small>{t("providers.unsupportedByInterface")}</small>}</span></label>; })}</div>
+                  <div className="capability-grid">{configurableCapabilities.map((capability) => { const unavailable = !capabilityCeiling[capability]; return <label className={`capability-option ${unavailable ? "unavailable" : ""}`} key={capability}><input type="checkbox" disabled={unavailable && !capabilities[capability]} checked={Boolean(capabilities[capability])} onChange={(event) => setCapabilities(updateCapabilitySelection(catalog, capabilities, capability, event.target.checked))} /><span>{t(`capabilities.${capability}`)}{unavailable && <small>{t("providers.unsupportedByInterface")}</small>}</span></label>; })}</div>
                   <div className="form-grid capability-limits"><Field label={t("providers.maxContext")} hint={t("providers.maxContextHint")}><input min="0" type="number" value={capabilities.max_context_tokens} onChange={(event) => setCapabilities({ ...capabilities, max_context_tokens: Number(event.target.value) })} /></Field><Field label={t("providers.maxOutput")} hint={t("providers.maxOutputHint")}><input min="0" type="number" value={capabilities.max_output_tokens} onChange={(event) => setCapabilities({ ...capabilities, max_output_tokens: Number(event.target.value) })} /></Field></div>
                 </div>
               )}
@@ -818,98 +863,10 @@ function ProviderForm({
   );
 }
 
-const capabilityNames = [
-  "chat", "streaming", "embeddings", "moderations", "images", "transcriptions", "speech", "files", "batches", "rerank", "async_generate", "tools", "vision", "json_mode",
-  "developer_role", "reasoning", "stream_usage", "provider_executed_tools",
-] as const;
-
-function updateCapabilitySelection(current: ProviderCapabilities, capability: typeof capabilityNames[number], enabled: boolean): ProviderCapabilities {
-  const next = { ...current, [capability]: enabled };
-  const chatFeatures = ["streaming", "tools", "vision", "json_mode", "developer_role", "reasoning", "stream_usage", "provider_executed_tools"] as const;
-  if (capability === "chat" && !enabled) {
-    for (const feature of chatFeatures) next[feature] = false;
-  } else if (capability !== "chat" && chatFeatures.includes(capability as typeof chatFeatures[number]) && enabled) {
-    next.chat = true;
-  }
-  return next;
-}
-
-function isStrictCapabilityProfile(type: ProviderType, profileID: BedrockProfile) {
-  if (type === "openai") return false;
-  if (type !== "bedrock") return false;
-  return [
-    "bedrock.runtime.invoke.titan-embed-text-v2.v1",
-    "bedrock.runtime.invoke.titan-image-v2.v1",
-    "bedrock.agent-runtime.rerank.cohere-v3-5.v1",
-    "bedrock.runtime.async.nova-reel-v1.v1",
-    "bedrock.mantle.openai.chat.v1",
-    "bedrock.mantle.openai.responses.v1",
-    "bedrock.mantle.anthropic.messages.v1",
-  ].includes(profileID);
-}
-
-function defaultProviderCapabilities(type: ProviderType, profileID: BedrockProfile = "bedrock.runtime.converse.text.v1"): ProviderCapabilities {
-  const value: ProviderCapabilities = {
-    chat: true, streaming: true, embeddings: false, tools: false, vision: false,
-    moderations: false, images: false, transcriptions: false, speech: false, files: false, batches: false, rerank: false, async_generate: false,
-    json_mode: false, developer_role: false, reasoning: false, stream_usage: false, provider_executed_tools: false,
-    max_context_tokens: 0, max_output_tokens: 0,
-  };
-  if (type === "openai" || type === "azure_openai") {
-    const chat = { ...value, embeddings: true, tools: true, vision: true, json_mode: true, developer_role: true, reasoning: true, stream_usage: true };
-    if (type === "openai") return { ...chat, moderations: true, images: true, transcriptions: true, speech: true, files: true, batches: true };
-    return chat;
-  }
-  // Files and batches ride with the Anthropic connection because Anthropic
-  // serves both on the same credential. The file half is stored by Halro and
-  // never uploaded — Anthropic batches carry their requests inline — so the
-  // capability says this deployment can be given a file, not that Anthropic
-  // will hold one. Kept in step with DefaultProviderCapabilitiesForProfile in
-  // internal/domain/models.go, which is the ceiling the API actually enforces.
-  if (type === "anthropic") return { ...value, tools: true, vision: true, json_mode: true, reasoning: true, stream_usage: true, files: true, batches: true };
-  if (type === "deepseek") return { ...value, tools: true, json_mode: true, reasoning: true, stream_usage: true };
-  if (type === "openai_compatible") return { ...value, embeddings: true };
-  if (type === "gemini") return { ...value, embeddings: true, developer_role: true, stream_usage: false };
-  if (type === "bedrock") {
-    if (profileID === "bedrock.runtime.converse.text.v1") return { ...value, stream_usage: true };
-    if (profileID === "bedrock.runtime.invoke.titan-embed-text-v2.v1") return { ...value, chat: false, streaming: false, embeddings: true, max_context_tokens: 8192 };
-    if (profileID === "bedrock.runtime.invoke.titan-image-v2.v1") return { ...value, chat: false, streaming: false, images: true };
-    if (profileID === "bedrock.agent-runtime.rerank.cohere-v3-5.v1") return { ...value, chat: false, streaming: false, rerank: true };
-    if (profileID === "bedrock.runtime.async.nova-reel-v1.v1") return { ...value, chat: false, streaming: false, async_generate: true };
-    if (profileID === "bedrock.mantle.anthropic.messages.v1") return { ...value, tools: true, vision: true, reasoning: true, stream_usage: true };
-    return { ...value, tools: true, vision: true, json_mode: true, developer_role: true, reasoning: profileID === "bedrock.mantle.openai.chat.v1", stream_usage: true };
-  }
-  return value;
-}
-
-// Mirrors domain.MaxProviderCapabilitiesForProfile.
-function maxProviderCapabilities(type: ProviderType, profileID: BedrockProfile = "bedrock.runtime.converse.text.v1"): ProviderCapabilities {
-  const ceiling = defaultProviderCapabilities(type, profileID);
-  // The direct Anthropic Messages profile can run the upstream's own tools. The
-  // Bedrock Mantle profiles keep ceiling == defaults: their sets are fixed by
-  // the build and widening one is a separate contract review.
-  if (type === "anthropic") return { ...ceiling, provider_executed_tools: true };
-  return ceiling;
-}
-
-const openAIChatCapabilities = new Set<keyof ProviderCapabilities>([
-  "chat", "streaming", "embeddings", "tools", "vision", "json_mode", "developer_role", "reasoning", "stream_usage",
-  "provider_executed_tools", "max_context_tokens", "max_output_tokens",
-]);
-const openAIMediaCapabilities = new Set<keyof ProviderCapabilities>([
-  "moderations", "images", "transcriptions", "speech", "files", "batches",
-]);
-
-function bindingCapabilities(source: ProviderCapabilities, allowed: Set<keyof ProviderCapabilities>): ProviderCapabilities {
-  return Object.fromEntries(Object.entries(source).map(([name, value]) => [
-    name,
-    allowed.has(name as keyof ProviderCapabilities) ? value : (typeof value === "number" ? 0 : false),
-  ])) as unknown as ProviderCapabilities;
-}
-
-function hasEnabledCapability(capabilities: ProviderCapabilities) {
-  return capabilityNames.some((name) => capabilities[name]);
-}
+// The capability matrix used to be repeated here — which capabilities exist,
+// what each provider starts with, what may be turned on, which profiles are
+// fixed by the build. It is served now (see hooks/useProviderProfiles), so the
+// only thing this file decides about capabilities is how to draw them.
 
 // Mirrors domain.NormalizeBedrockProjectID: `default` is AWS's name for the
 // account default project, which is what an empty value already means.
@@ -925,13 +882,24 @@ const maxBedrockProjectIDLength = 128;
 // see which field is wrong. The server stays the authority; this only keeps a
 // refusal from arriving as a bare 400 after the modal has scrolled away.
 function validateProvider(
-  value: { name: string; credentialID: string; bedrockProjectID: string; mantle: boolean; capabilities: ProviderCapabilities; anthropicBetas: string },
+  value: {
+    name: string; credentialID: string; bedrockProjectID: string; mantle: boolean;
+    anyCapability: boolean; unservable: string[]; anthropicBetas: string;
+  },
   t: ReturnType<typeof useTranslation>["t"],
 ): Record<string, string> {
   const errors: Record<string, string> = {};
   if (!value.name.trim()) errors.name = t("providers.validationNameRequired");
   if (!value.credentialID) errors.credentialID = t("providers.validationCredentialRequired");
-  if (!hasEnabledCapability(value.capabilities)) errors.capabilities = t("providers.validationCapabilityRequired");
+  if (!value.anyCapability) errors.capabilities = t("providers.validationCapabilityRequired");
+  // Refusing here rather than on the round trip: the server rejects a capability
+  // no profile can serve, but its refusal cannot say which one the operator
+  // ticked, and the form can.
+  if (value.unservable.length) {
+    errors.capabilities = t("providers.validationCapabilityUnservable", {
+      capabilities: value.unservable.map((name) => t(`capabilities.${name}`)).join("、"),
+    });
+  }
   if (value.mantle) {
     const projectID = normalizeBedrockProjectID(value.bedrockProjectID);
     if (projectID.length > maxBedrockProjectIDLength) {
@@ -965,11 +933,7 @@ function omitError(errors: Record<string, string>, key: string) {
   return rest;
 }
 
-function openAIBindings(chatProfileID: string, capabilities: ProviderCapabilities): ProviderBinding[] {
-  const chat = bindingCapabilities(capabilities, openAIChatCapabilities);
-  const media = bindingCapabilities(capabilities, openAIMediaCapabilities);
-  return [
-    { profile_id: chatProfileID, enabled: hasEnabledCapability(chat), capabilities: chat },
-    { profile_id: openAIMediaProfile, enabled: hasEnabledCapability(media), capabilities: media },
-  ];
-}
+// Which profile carries which capability used to be two hardcoded sets here.
+// splitCapabilitiesAcrossProfiles derives it from the served ceilings instead:
+// each capability goes to the profile that can serve it, and anything no profile
+// can serve comes back named rather than dropped.
