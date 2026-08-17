@@ -113,7 +113,7 @@ Markdown 编进二进制，由 `internal/app/admin_master_key_runbook.go` 提供
 | [告警投递适配方案](todo/alert-delivery-design.md) | 告警契约、平台格式、签名、企业网络与投递结果分类 | 提案待评审 |
 | [DLP（脱敏与数据防泄漏）升级方案](todo/dlp-upgrade-plan.zh-CN.md) | 敏感数据标识符、检测配置文件、DLP 策略、Project 绑定与编译快照 | 提案待评审 |
 | [Halro Redis-like HA 架构提案](todo/halro-ha-architecture.zh-CN.md) | Standalone 向 Primary/Replica HA 的演进 | 目标 1.1.0，未实现 |
-| [DeepSeek 适配方案](todo/deepseek-adaptation-plan.zh-CN.md) | `deepseek.chat.v1` 已在跑，方案收的是它与真实上游的差异。2026-08-17 重核：目录模型名、字段申报、thinking 接口、缓存用量四条仍成立；计价档位已落地一半（缓存已有、分时仍无），能力上限重复已关闭 | 提案待评审 |
+| [DeepSeek 适配方案](todo/deepseek-adaptation-plan.zh-CN.md) | `deepseek.chat.v1` 已在跑，方案收的是它与真实上游的差异。2026-08-17 实施片 1–4：缓存用量解码、字段申报按真实子集、thinking 映射、目录模型名订正；实施中发现方案本身写错三处，记在该文 §6 | 片 1–4 已实现；片 5（真实账号）未做 |
 
 ## 草稿 · `drafts/`
 

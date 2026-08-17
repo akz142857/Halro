@@ -110,8 +110,22 @@ func (b *LegacyAdapterBridge) CapabilityDetectionPlan(target ModelCapabilityDete
 func (b *LegacyAdapterBridge) DetectCapability(ctx context.Context, target ModelCapabilityDetectionTarget, probe CapabilityProbe) domain.CapabilityProbeResult {
 	result := domain.CapabilityProbeResult{Status: domain.ProbeInconclusive, BindingID: target.BindingID, ProbeKind: probe.Kind}
 	maxTokens := probe.MaxOutputTokens
-	request := openaiapi.ChatCompletionRequest{Model: target.ProviderModel, MaxCompletionTokens: &maxTokens,
+	request := openaiapi.ChatCompletionRequest{Model: target.ProviderModel,
 		Messages: []openaiapi.Message{{Role: "user", Content: openaiapi.TextContent("Reply briefly.")}}}
+	// Which output-limit parameter a probe may send is a property of the
+	// upstream. OpenAI's current models reject max_tokens outright and take
+	// max_completion_tokens; DeepSeek accepts only max_tokens, and its adapter
+	// now refuses to put the other one on the wire, which would have failed
+	// every DeepSeek probe before it left the process.
+	//
+	// Choosing here is not the silent rewrite the request path forbids. This
+	// bound is Halro's own — it exists to keep a probe cheap — so there is no
+	// caller intent to preserve, only a parameter name to get right.
+	if target.ProfileID == domain.ProfileDeepSeekChat {
+		request.MaxTokens = &maxTokens
+	} else {
+		request.MaxCompletionTokens = &maxTokens
+	}
 	var err error
 	switch probe.Kind {
 	case "minimal_chat":

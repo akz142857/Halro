@@ -110,6 +110,39 @@ func TestUnknownModelGetsNoCapabilities(t *testing.T) {
 	}
 }
 
+// DeepSeek's direct profile lists deepseek-v4-flash and deepseek-v4-pro, and
+// the two names the catalog used to carry no longer appear in its API
+// documentation. They are replaced rather than kept beside the new pair: a
+// retired identifier left in the catalog is a pre-checked capability claim for a
+// model the upstream will refuse, and its context and output ceilings — 131072
+// and 8192 against the current 1M and 384K — are the two numbers Token Guard,
+// budget reservation and max_tokens truncation all read.
+//
+// The compatible profile is a different question and deliberately untouched: it
+// serves third-party servers that may still host either name, and it claims
+// nothing beyond chat and streaming for any of them.
+func TestRetiredDeepSeekModelNamesAreGoneFromTheDirectProfile(t *testing.T) {
+	for _, model := range []string{"deepseek-chat", "deepseek-reasoner"} {
+		key := Key{ProviderType: domain.ProviderDeepSeek, Profile: domain.ProfileDeepSeekChat, Model: model}
+		if entry, ok := Builtin().Lookup(key); ok {
+			t.Fatalf("retired model %q still carries built-in capabilities: %#v", model, entry.Capabilities)
+		}
+	}
+	for _, model := range []string{"deepseek-v4-flash", "deepseek-v4-pro"} {
+		key := Key{ProviderType: domain.ProviderDeepSeek, Profile: domain.ProfileDeepSeekChat, Model: model}
+		entry, ok := Builtin().Lookup(key)
+		if !ok {
+			t.Fatalf("model %q is not covered", model)
+		}
+		if entry.Capabilities.MaxContextTokens != 1_000_000 || entry.Capabilities.MaxOutputTokens != 384_000 {
+			t.Fatalf("model %q carries stale limits: %#v", model, entry.Capabilities)
+		}
+		if !entry.Capabilities.Reasoning {
+			t.Fatalf("model %q lost reasoning, which is now a switch on both models: %#v", model, entry.Capabilities)
+		}
+	}
+}
+
 func TestLookupDoesNotWidenModelNames(t *testing.T) {
 	known := Builtin().Entries()[0].Key
 	models := []string{
@@ -162,6 +195,14 @@ func TestBuiltinCoversReviewedProviderFamiliesConservatively(t *testing.T) {
 		{
 			key:  Key{ProviderType: domain.ProviderOpenAICompatible, Profile: domain.ProfileOpenAICompatible, Model: "gpt-5"},
 			want: domain.ProviderCapabilities{Chat: true, Streaming: true},
+		},
+		{
+			key:  Key{ProviderType: domain.ProviderDeepSeek, Profile: domain.ProfileDeepSeekChat, Model: "deepseek-v4-flash"},
+			want: domain.ProviderCapabilities{Chat: true, Streaming: true, Tools: true, JSONMode: true, Reasoning: true, StreamUsage: true, MaxContextTokens: 1_000_000, MaxOutputTokens: 384_000},
+		},
+		{
+			key:  Key{ProviderType: domain.ProviderDeepSeek, Profile: domain.ProfileDeepSeekChat, Model: "deepseek-v4-pro"},
+			want: domain.ProviderCapabilities{Chat: true, Streaming: true, Tools: true, JSONMode: true, Reasoning: true, StreamUsage: true, MaxContextTokens: 1_000_000, MaxOutputTokens: 384_000},
 		},
 	}
 	for _, test := range tests {

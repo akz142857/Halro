@@ -100,7 +100,21 @@
       },
       {
         "profile_id": "deepseek.chat.v1",
-        "status": "compatible"
+        "status": "compatible",
+        "unsupported_request_fields": [
+          "n",
+          "seed",
+          "max_completion_tokens",
+          "parallel_tool_calls",
+          "response_format",
+          "reasoning_effort"
+        ],
+        "declared_transforms": [
+          "DeepSeek speaks this wire format but accepts a smaller member list, so the fields it has no place for are rejected before provider I/O rather than sent and ignored",
+          "user is carried as DeepSeek's user_id",
+          "reasoning_effort and response_format are declared unsupported at field granularity because support is value-dependent: none maps to thinking.type=disabled and the low and high rungs map to thinking.reasoning_effort with thinking enabled, while minimal, medium and xhigh have no DeepSeek rung; json_object maps to response_format and json_schema has no DeepSeek counterpart",
+          "n and parallel_tool_calls are value-dependent in the same way: n=1 and parallel_tool_calls=true are what omitting the member already means, and only n\u003e1 and a request to run tools one at a time are rejected"
+        ]
       },
       {
         "profile_id": "openai-compatible.chat-embeddings.v1",
@@ -456,8 +470,17 @@
       {
         "profile_id": "deepseek.chat.v1",
         "status": "compatible",
+        "unsupported_request_fields": [
+          "max_output_tokens",
+          "parallel_tool_calls",
+          "text.format"
+        ],
         "declared_transforms": [
-          "Responses items are mapped through the DeepSeek Chat ProviderPrimitive"
+          "Responses items are mapped through the DeepSeek Chat ProviderPrimitive",
+          "max_output_tokens is a completion budget that counts reasoning, and DeepSeek has only max_tokens, so it is rejected before provider I/O rather than renamed into a different limit",
+          "parallel_tool_calls is value-dependent: true is what omitting the member already means, and only a request to run tools one at a time is rejected",
+          "text.format is value-dependent: DeepSeek has json_object and no schema mode, so a schema is rejected before provider I/O",
+          "user is carried as DeepSeek's user_id"
         ]
       },
       {
@@ -673,10 +696,14 @@
           "top_k",
           "thinking",
           "metadata",
-          "service_tier"
+          "service_tier",
+          "output_config.effort",
+          "output_config.format"
         ],
         "declared_transforms": [
-          "portable Messages content is mapped through DeepSeek Chat Completions"
+          "portable Messages content is mapped through DeepSeek Chat Completions",
+          "output_config.effort and output_config.format are declared unsupported at field granularity because support is value-dependent: none, low and high reach DeepSeek's thinking switch while minimal, medium and xhigh have no rung, and DeepSeek has json_object but no schema mode",
+          "thinking stays unsupported for the same reason it is on every other portable profile — it is the Anthropic-native block config, which only native mode forwards; DeepSeek's own thinking switch is reached through output_config.effort"
         ]
       },
       {

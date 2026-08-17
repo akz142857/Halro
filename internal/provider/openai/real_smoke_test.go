@@ -141,8 +141,105 @@ func TestRealProviderSmoke(t *testing.T) {
 			t.Fatal("embedding returned no vectors")
 		}
 	}
+	if profile == "deepseek" {
+		runRealDeepSeekContract(ctx, t, adapter, model)
+	}
 	if os.Getenv("HALRO_SMOKE_CAPABILITY_DETECTION") == "1" {
 		runRealCapabilityDetection(t, adapter, profile, model)
+	}
+}
+
+// runRealDeepSeekContract exercises the two claims Halro's DeepSeek path now
+// depends on and that nothing else can establish: that `thinking` is the
+// spelling of the reasoning switch, and that a repeated prefix comes back with
+// the cache split under prompt_cache_hit_tokens.
+//
+// Both were read from DeepSeek's published documentation and adapted against a
+// fake upstream, which is exactly the position the Anthropic batches work was in
+// when three fake-upstream passes missed a real defect on the same day. The
+// billing consequence is one-sided: a hit reported as zero settles at the miss
+// rate, thirty times the price.
+//
+// Nothing here logs a model, a prompt, a completion, or a provider message —
+// only bounded counts and whether a documented field was present.
+func runRealDeepSeekContract(ctx context.Context, t *testing.T, adapter *Adapter, model string) {
+	thinking := openaiapi.ChatCompletionRequest{
+		Model:    model,
+		Messages: []openaiapi.Message{{Role: "user", Content: openaiapi.TextContent("What is 17 times 23? Reply with the number.")}},
+		// none, low and high are the rungs Halro can reach: DeepSeek's depth
+		// ladder is low/high/max and every portable request passes through the
+		// OpenAI ladder, which has no max.
+		ReasoningEffort: "low",
+		MaxTokens:       int64Pointer(256),
+	}
+	response, err := adapter.Chat(ctx, provider.ChatCall{
+		RequestID: "smoke_deepseek_thinking", ProviderModel: model, Request: thinking,
+	})
+	if err != nil {
+		t.Fatalf("thinking chat failed, which is how a wrong `thinking` spelling shows up: %s", smokeErrorClass(err))
+	}
+	if len(response.Choices) == 0 || response.Choices[0].Message == nil {
+		t.Fatal("thinking chat returned an incomplete envelope")
+	}
+	reasoningReturned := response.Choices[0].Message.ReasoningContent != ""
+	reasoningTokens := int64(0)
+	if response.Usage != nil {
+		reasoningTokens = response.Usage.ReasoningTokens()
+	}
+	t.Logf("deepseek thinking accepted: reasoning_content_present=%t reasoning_tokens=%d", reasoningReturned, reasoningTokens)
+
+	// The off switch is worth its own call because DeepSeek's documented default
+	// is thinking ON. If "disabled" is not the right spelling, or the default is
+	// not what the reference says, a caller who explicitly declined reasoning is
+	// silently billed for it on every request.
+	off := thinking
+	off.ReasoningEffort = "none"
+	quiet, err := adapter.Chat(ctx, provider.ChatCall{
+		RequestID: "smoke_deepseek_no_thinking", ProviderModel: model, Request: off,
+	})
+	if err != nil {
+		t.Fatalf("thinking-disabled chat failed: %s", smokeErrorClass(err))
+	}
+	quietReasoning := int64(0)
+	if quiet.Usage != nil {
+		quietReasoning = quiet.Usage.ReasoningTokens()
+	}
+	t.Logf("deepseek thinking disabled: reasoning_tokens=%d", quietReasoning)
+	if quietReasoning != 0 {
+		t.Fatalf("thinking stayed on after being disabled: %d reasoning tokens billed", quietReasoning)
+	}
+
+	// A cache hit needs a prefix long enough for DeepSeek to have stored it, and
+	// two requests that share it exactly. The filler is generated rather than
+	// prose so nothing here is content anyone wrote.
+	prefix := strings.Repeat("The quick brown fox jumps over the lazy dog. ", 120)
+	cacheRequest := openaiapi.ChatCompletionRequest{
+		Model:     model,
+		Messages:  []openaiapi.Message{{Role: "user", Content: openaiapi.TextContent(prefix + "Reply with OK.")}},
+		MaxTokens: int64Pointer(16),
+	}
+	var hit, miss, prompt int64
+	for attempt := range 2 {
+		cached, err := adapter.Chat(ctx, provider.ChatCall{
+			RequestID: fmt.Sprintf("smoke_deepseek_cache_%d", attempt), ProviderModel: model, Request: cacheRequest,
+		})
+		if err != nil {
+			t.Fatalf("cache probe %d failed: %s", attempt, smokeErrorClass(err))
+		}
+		if cached.Usage == nil {
+			t.Fatal("cache probe returned no usage, so the cache split cannot be established")
+		}
+		hit, miss, prompt = cached.Usage.CachedPromptTokens(), cached.Usage.PromptCacheMissTokens, cached.Usage.PromptTokens
+	}
+	t.Logf("deepseek cache split: prompt=%d hit=%d miss=%d", prompt, hit, miss)
+	if hit == 0 {
+		t.Fatal("the repeated prefix reported no cache hit, so either the counters are spelled differently or the prefix was not cached")
+	}
+	// The subset convention the accounting depends on. If prompt_tokens turns out
+	// to count only the misses, decodeUsage recovers the full span — but that is a
+	// recovery, and the documented invariant is this one.
+	if hit+miss != prompt {
+		t.Fatalf("prompt_tokens is not the sum of its two tiers: %d != %d + %d", prompt, hit, miss)
 	}
 }
 

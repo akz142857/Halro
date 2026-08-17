@@ -16,6 +16,23 @@ shape re-authored through the canonical model, `count_tokens`, and the model
 catalog that a credential-only connection test falls back to. A pass on one
 mode is not evidence for the other; they share an adapter and nothing else.
 
+DeepSeek's smoke carries two extra assertions, because it is the one profile
+whose southbound body differs from the adapter it shares. Both were adapted from
+DeepSeek's published documentation against a fake upstream, and neither can be
+established that way:
+
+- `thinking` is the spelling of the reasoning switch. A request carrying it is
+  sent at the `low` rung; a refusal is how a wrong spelling surfaces, since
+  DeepSeek does not accept the top-level `reasoning_effort` the OpenAI wire has.
+- a repeated prefix comes back with `prompt_cache_hit_tokens` non-zero and the
+  two tiers summing to `prompt_tokens`. A hit reported as zero is settled at the
+  miss rate, which DeepSeek prices at thirty times the hit rate, so this
+  is an accounting assertion rather than a protocol one.
+
+Both add billable calls to a DeepSeek run and run unconditionally on that
+profile — an inconclusive DeepSeek cell is what the adaptation work was trying
+to close.
+
 `openai.media-resources.v1` has a smoke of its own,
 `TestRealMediaResourcesSmoke`, outside this runner. It is separate because its
 operations cost differently and leave different traces: an image is priced like

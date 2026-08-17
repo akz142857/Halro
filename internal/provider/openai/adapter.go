@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akz142857/Halro/internal/compatibility"
 	openaiwire "github.com/akz142857/Halro/internal/compatibility/openai"
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/openaiapi"
@@ -29,6 +30,7 @@ type Adapter struct {
 	providerType     string
 	apiVersion       string
 	azure            bool
+	deepSeek         bool
 	capabilities     provider.Capabilities
 	bedrockProjectID string
 }
@@ -98,9 +100,30 @@ func NewWithOptions(options Options) (*Adapter, error) {
 	return &Adapter{
 		endpoint: endpoint, authorizer: authorizer, client: client,
 		providerType: options.ProviderType, apiVersion: options.APIVersion,
-		azure: options.Azure, capabilities: options.Capabilities,
+		azure: options.Azure, deepSeek: options.ProviderType == string(domain.ProviderDeepSeek),
+		capabilities:     options.Capabilities,
 		bedrockProjectID: options.BedrockProjectID,
 	}, nil
+}
+
+// encodeChatRequest turns the OpenAI-shaped call into the bytes this upstream
+// accepts.
+//
+// Only DeepSeek needs a second shape. It reuses this adapter because it speaks
+// the same wire format, but not the same member list: it has no n, seed,
+// parallel_tool_calls, max_completion_tokens or top-level reasoning_effort, it
+// reaches reasoning through `thinking`, and it names the end-user reference
+// user_id. Marshalling the OpenAI struct straight out sent five members it
+// ignores and one under a name it does not read.
+func (a *Adapter) encodeChatRequest(request openaiapi.ChatCompletionRequest) ([]byte, error) {
+	if !a.deepSeek {
+		return json.Marshal(request)
+	}
+	body, err := compatibility.RenderDeepSeekChatRequest(request)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(body)
 }
 
 func (a *Adapter) Type() string {
@@ -287,7 +310,7 @@ func (a *Adapter) Chat(ctx context.Context, call provider.ChatCall) (openaiapi.C
 		requestBody.Model = call.ProviderModel
 	}
 	requestBody.Stream = false
-	encoded, err := json.Marshal(requestBody)
+	encoded, err := a.encodeChatRequest(requestBody)
 	if err != nil {
 		return openaiapi.ChatCompletionResponse{}, &provider.Error{Class: provider.ErrorBadRequest, Message: "encode provider request", Cause: err}
 	}
@@ -417,7 +440,7 @@ func (a *Adapter) ChatStream(
 	} else {
 		requestBody.StreamOptions = nil
 	}
-	encoded, err := json.Marshal(requestBody)
+	encoded, err := a.encodeChatRequest(requestBody)
 	if err != nil {
 		return nil, &provider.Error{Class: provider.ErrorBadRequest, Message: "encode provider request", Cause: err}
 	}

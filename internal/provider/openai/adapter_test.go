@@ -209,7 +209,7 @@ func TestProfileOperationURLs(t *testing.T) {
 	}{
 		{
 			name: "deepseek base", base: "https://api.deepseek.com",
-			model: "deepseek-chat", operation: "chat/completions",
+			model: "deepseek-v4-flash", operation: "chat/completions",
 			want: "https://api.deepseek.com/v1/chat/completions",
 		},
 		{

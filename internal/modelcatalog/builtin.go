@@ -213,18 +213,29 @@ func openAIMediaModels() []Entry {
 // deepSeekModels cover the DeepSeek chat profile, whose ceiling carries no
 // vision and no embeddings.
 //
-// deepseek-reasoner is credited with reasoning and deliberately not with tools
-// or JSON mode: those are the two the reasoning model has not carried, and
-// crediting them would put a pre-checked box in front of an operator that the
-// upstream then rejects.
+// Both entries carry reasoning, which is the whole difference from the previous
+// pair. DeepSeek used to split reasoning off into its own model — deepseek-chat
+// beside deepseek-reasoner, the second credited with reasoning and deliberately
+// not with tools or JSON mode — and it no longer does: thinking is a switch on
+// the same model, so there is no longer a model whose capabilities have to be
+// narrowed to describe it.
+//
+// The two names DeepSeek's GET /models listed before this revision no longer
+// appear in its documentation. They are replaced rather than kept alongside, so
+// a Deployment still pointing at one will read as "not covered by the catalog"
+// and ask its operator to declare or re-detect its capabilities. That is the
+// capability review working, not a failure, and it needs no data-directory
+// re-initialisation.
+//
+// Sources reviewed 2026-08-14, documentation only — no live account:
+//   - https://api-docs.deepseek.com/api/list-models
+//   - https://api-docs.deepseek.com/api/create-chat-completion
+//   - https://api-docs.deepseek.com/guides/reasoning_model
 func deepSeekModels() []Entry {
 	const provider, profile = domain.ProviderDeepSeek, domain.ProfileDeepSeekChat
 	return []Entry{
-		builtinEntry(provider, profile, "deepseek-chat", chat(131_072, 8_192)),
-		builtinEntry(provider, profile, "deepseek-reasoner", domain.ProviderCapabilities{
-			Chat: true, Streaming: true, StreamUsage: true, Reasoning: true,
-			MaxContextTokens: 131_072, MaxOutputTokens: 65_536,
-		}),
+		builtinEntry(provider, profile, "deepseek-v4-flash", with(chat(1_000_000, 384_000), reasoning)),
+		builtinEntry(provider, profile, "deepseek-v4-pro", with(chat(1_000_000, 384_000), reasoning)),
 	}
 }
 

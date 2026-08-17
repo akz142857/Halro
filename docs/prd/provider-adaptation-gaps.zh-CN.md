@@ -207,6 +207,11 @@ Converse / Gemini / Anthropic / DeepSeek / openai-compatible 全部不设防。�
 分支，不做任何字段拒绝**，声明什么就真发什么到上游。其余情况的代价是记录与 evidence 说谎，以及能力探测
 为不可能的能力发起计费探针。
 
+> 2026-08-17 更新：DeepSeek 已不在这句话里。它从直通分支拆出，按上游真实接受列表申报
+> （`internal/compatibility/provider_fields.go` 的 `ProfileDeepSeekChat` 分支），南向请求体也换成
+> `internal/compatibility/deepseek.go` 的子集。openai-compatible 仍是直通分支，这是它服务「未知兼容
+> 服务器」的正确姿态。见 [DeepSeek 适配方案](../todo/deepseek-adaptation-plan.zh-CN.md)。
+
 修法：把上限下沉到 `ProviderProfileBinding.Validate`（`internal/domain/models.go`）并对**所有** profile
 生效，Admin 与加载期两处跟着对齐。用的是 `MaxProviderCapabilitiesForProfile` 而非 defaults——两者的差
 是 Anthropic 的 `provider_executed_tools`，那是设计上留给操作者的 opt-in，用 defaults 会把它一并封死。

@@ -476,6 +476,26 @@ func decodeUsage(usage *openaiapi.Usage) *semantic.Usage {
 		TotalTokens:           usage.TotalTokens,
 		Source:                semantic.UsageProviderReported,
 	}
+	// DeepSeek partitions the prompt into hit and miss counters instead of
+	// nesting the read tier in prompt_tokens_details, and documents
+	// prompt_tokens = hit + miss — already the subset convention above, so the
+	// tiers map straight across. The one shape that would mis-price silently is
+	// the other reading of the same two numbers: a prompt_tokens counting only
+	// the misses, the way Anthropic reports input_tokens. That reading is
+	// detectable, because it is the only one where the partition overruns the
+	// prompt it belongs to, and under it InputTokens has to be the sum for
+	// "every prompt token the provider processed" to stay true.
+	if partition := usage.PromptCacheHitTokens + usage.PromptCacheMissTokens; partition > decoded.InputTokens {
+		decoded.InputTokens = partition
+	}
+	// The cache tiers partition InputTokens rather than adding to it, and
+	// semantic validation refuses a sum that overruns it — which would cost the
+	// attempt its provider-reported usage entirely. Clamping instead settles the
+	// disputed span at the ordinary input rate, the more expensive of the two
+	// readings, rather than dropping to an estimate.
+	if room := decoded.InputTokens - decoded.CacheWriteInputTokens; decoded.CachedInputTokens > room {
+		decoded.CachedInputTokens = max(room, 0)
+	}
 	// A provider that under-reports its own total would otherwise fail semantic
 	// validation, which costs the request its provider-reported usage entirely
 	// and silently downgrades the attempt to an estimate.

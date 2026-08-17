@@ -204,6 +204,18 @@ type Usage struct {
 	// rather than inventing a non-standard key in an OpenAI-shaped response; the
 	// adapters that populate it construct this struct in process.
 	CacheWriteTokens int64 `json:"-"`
+	// PromptCacheHitTokens and PromptCacheMissTokens are DeepSeek's spelling of
+	// the cache-read split. It speaks this wire format but reports the tiers as
+	// two sibling counters on usage rather than inside prompt_tokens_details, so
+	// a decoder that only knows OpenAI's shape reads every cache hit as zero and
+	// settles the hit span at the miss rate — two rates that differ by thirty
+	// times on DeepSeek's published table.
+	//
+	// They are decode-side only in practice: nothing Halro renders northbound
+	// sets them, so an OpenAI-shaped response keeps reporting the cache-read tier
+	// through prompt_tokens_details.cached_tokens alone.
+	PromptCacheHitTokens  int64 `json:"prompt_cache_hit_tokens,omitempty"`
+	PromptCacheMissTokens int64 `json:"prompt_cache_miss_tokens,omitempty"`
 }
 
 type PromptTokenDetails struct {
@@ -216,12 +228,16 @@ type CompletionTokenDetails struct {
 	AudioTokens     int64 `json:"audio_tokens,omitempty"`
 }
 
-// CachedPromptTokens reports the cache-read tier without the nil dance.
+// CachedPromptTokens reports the cache-read tier without the nil dance, from
+// whichever of the two spellings this wire format carries it in. OpenAI's
+// details object wins when both are present, because it is the one this struct
+// also renders; DeepSeek's counter is the fallback rather than an alternative,
+// so no upstream can report the tier twice and have it counted twice.
 func (u Usage) CachedPromptTokens() int64 {
-	if u.PromptTokensDetails == nil {
-		return 0
+	if u.PromptTokensDetails != nil && u.PromptTokensDetails.CachedTokens != 0 {
+		return u.PromptTokensDetails.CachedTokens
 	}
-	return u.PromptTokensDetails.CachedTokens
+	return u.PromptCacheHitTokens
 }
 
 // ReasoningTokens reports the reasoning span of the completion, which providers

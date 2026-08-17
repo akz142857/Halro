@@ -106,7 +106,41 @@ func UnsupportedGenerateFields(profileID domain.ProviderProfileID, request seman
 		add(request.Seed != nil, "seed")
 		add(request.Stream && len(request.Tools) > 0, "tools")
 		add(request.ReasoningEffort != "", "reasoning_effort")
-	case domain.ProfileOpenAIChatEmbeddings, domain.ProfileAzureChatEmbeddings, domain.ProfileDeepSeekChat, domain.ProfileOpenAICompatible, domain.ProfileBedrockMantleOpenAIChat:
+	case domain.ProfileDeepSeekChat:
+		// DeepSeek speaks this wire format but accepts a smaller set of members
+		// than OpenAI does; deepseek.go holds the list and the renderer that has
+		// to agree with it. Sharing OpenAI's branch declared none of the gap, so
+		// n, seed and parallel_tool_calls were sent to a surface that ignores
+		// them and the caller got a 200 for a request that never happened as
+		// written.
+		add(hasFailedToolResult(request), "messages[].content[].is_error")
+		add(request.Candidates != nil && *request.Candidates > 1, "n")
+		add(request.Seed != nil, "seed")
+		// Only the disable is a loss, and the guard is not cosmetic. Every
+		// portable Messages request that names a tool_choice comes out of
+		// DecodeToolChoice with this flag set — it always returns one, defaulting
+		// to parallel-allowed — so declaring on presence routed DeepSeek away from
+		// requests that expressed no preference at all. Parallel-allowed is what
+		// omitting the member already gets, the way n=1 is; asking for tools to be
+		// run one at a time is the thing DeepSeek has no member for.
+		add(request.ParallelTools != nil && !*request.ParallelTools, "parallel_tool_calls")
+		// DeepSeek has max_tokens and nothing that counts reasoning against the
+		// same budget. Rendering the completion limit as max_tokens would change
+		// what the caller asked for, so the two limits are kept distinct and the
+		// one DeepSeek cannot express is declared.
+		add(request.CompletionTokenLimit != nil, "max_completion_tokens")
+		// DeepSeek has json_object and no schema mode, so support is value-
+		// dependent the way it is on the Anthropic profile: a schema request is
+		// routed away rather than sent to a surface that would refuse it after
+		// the budget was already reserved.
+		add(request.OutputFormat != nil && request.OutputFormat.Kind == semantic.OutputJSONSchema, "response_format")
+		// Value-dependent too. `none` reaches thinking.type=disabled and low/high
+		// reach thinking.reasoning_effort; minimal, medium and xhigh have no
+		// DeepSeek rung and are not rounded to a neighbouring one.
+		add(request.ReasoningEffort != "" && !slices.Contains(deepSeekPortableEfforts, request.ReasoningEffort), "reasoning_effort")
+		// `user` is absent on purpose. DeepSeek carries the same concept as
+		// user_id, so it is renamed by the renderer rather than declared lost.
+	case domain.ProfileOpenAIChatEmbeddings, domain.ProfileAzureChatEmbeddings, domain.ProfileOpenAICompatible, domain.ProfileBedrockMantleOpenAIChat:
 		// These profiles use the OpenAI-compatible wire representation directly.
 		// The one thing that representation has no place for is a tool result the
 		// caller marked as failed: an OpenAI tool message is its text and nothing

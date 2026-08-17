@@ -1821,6 +1821,53 @@ func TestChatSettlesCachedPromptTokensAtTheCacheReadRate(t *testing.T) {
 	}
 }
 
+// DeepSeek reports the same split under its own two keys, and the rate it earns
+// is the same rate. Reading only OpenAI's spelling left the hit span at zero, so
+// every cached DeepSeek prompt settled at the miss rate — the whole distance
+// between 13 and 20 here, and a factor of thirty on DeepSeek's own table.
+func TestChatSettlesDeepSeekCachePromptCountersAtTheCacheReadRate(t *testing.T) {
+	f := newFixture(t, 1_000)
+	defer f.close()
+	if err := f.registry.Register(provider.Target{
+		ID: "target_deepseek", DeploymentID: "dep_target_deepseek",
+		PublicModel: "chat-deepseek", ProviderModel: "provider-model", Adapter: f.adapter,
+		InputMicrosPerMillion:       1_000_000,
+		CachedInputMicrosPerMillion: 100_000,
+		OutputMicrosPerMillion:      2_000_000,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f.project.AllowedModels = append(f.project.AllowedModels, "chat-deepseek")
+	if err := f.service.auth.Refresh(context.Background(), source{
+		keys: []domain.GatewayKey{f.key}, projects: []domain.Project{f.project},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f.adapter.response.Usage = &openaiapi.Usage{
+		PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15,
+		PromptCacheHitTokens: 8, PromptCacheMissTokens: 2,
+	}
+	request := chatRequest()
+	request.Model = "chat-deepseek"
+	if _, err := f.service.Chat(context.Background(), f.plaintext, request); err != nil {
+		t.Fatal(err)
+	}
+	period := time.Now().UTC().Format("2006-01-02")
+	balance := f.state.Balance(f.project.ID, period, testTimezoneVersion)
+	if balance.ReservedMicrosUSD != 0 || balance.InputTokens != 10 || balance.OutputTokens != 5 {
+		t.Fatalf("unexpected balance: %#v", balance)
+	}
+	// The same 2 + 8 + 5 arithmetic as the test above. Stated as a bound as well
+	// as an exact figure because the bound is the defect: 20 is what settling
+	// every prompt token at the miss rate costs.
+	if balance.CommittedMicrosUSD != 13 {
+		t.Fatalf("committed %d micro-USD, want 13", balance.CommittedMicrosUSD)
+	}
+	if balance.CommittedMicrosUSD >= 20 {
+		t.Fatalf("committed %d micro-USD, the whole prompt at the miss rate", balance.CommittedMicrosUSD)
+	}
+}
+
 // A caller's own cancel must not count against the deployment's availability:
 // classified as "connect" it fed the circuit breaker, so a client that hung up
 // early could mark a healthy upstream unhealthy for everyone else.

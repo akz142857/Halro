@@ -358,8 +358,14 @@ func (renderer *ResponseStreamRenderer) Accept(event semantic.Event) ([]openaiap
 			renderer.termination = output.Termination
 		}
 		for _, content := range output.Content {
+			// The kind is named because without it this refusal says only that
+			// something was wrong with a stream the caller cannot see. A DeepSeek
+			// route reached it by thinking on a request that was never allowed to
+			// ask for reasoning, and "only supports output text" gave no way to
+			// tell that from a tool call or a malformed chunk. A content kind is a
+			// fixed enum, not provider text, so naming it leaks nothing.
 			if content.Kind != semantic.ContentText {
-				return nil, errors.New("Phase 1A Responses streaming only supports output text")
+				return nil, fmt.Errorf("Phase 1A Responses streaming only supports output text, and the provider stream carried %s", content.Kind)
 			}
 			if !renderer.itemStarted {
 				events = append(events, renderer.startItemEvents()...)
