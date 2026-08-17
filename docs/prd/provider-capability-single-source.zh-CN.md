@@ -1,8 +1,16 @@
 # 适用能力改由服务端统一下发（设计提案）
 
-状态：**已完成**（分支 `feat/provider-capability-single-source`）。
+状态：**已完成并合入 `main`**（分支 `feat/provider-capability-single-source`，PR #182，合入提交 `99d89bc`）。
 第 1–5 步与 §3.3 的服务端拆分全部落地，§8 的两个开放问题也已给出实现答案——
 见文末「实施记录」与「第二轮：§3.3 与开放问题」。
+归档：2026-08-17 从 `docs/todo/` 移入本目录。归档时按合入后的代码复核了正文的主要断言：
+`internal/domain/provider_table.go` 与 `provider_connection.go` 存在，
+`GET /admin/api/v1/provider-profiles` 挂在 `internal/app/runtime.go:1414`，
+`providerInput` 已无 `bindings` 字段，端点下发 `capability_dependencies` 与
+`capability_opt_in_warnings`，`capabilities_ambiguous` / `capabilities_unservable` /
+`capabilities_limit_too_large` / `capabilities_limit_unavailable` 四个具名拒绝均在代码与测试里。
+正文其余部分保留实施当时的原文，不随后续改动更新——它记的是决定过程。
+本文关闭了 [`adaptation-open-items`](adaptation-open-items.zh-CN.md) §2 的「能力上限有三份真相」。
 建立日期：2026-08-16
 修订日期：2026-08-17（第二稿：权威数据的存储形态定为 Go 声明式表；Base URL / region 进 `config.yaml`）
 　　　　　2026-08-16（第一稿评审：后端 / 前端 / 安全 / API 契约 / 操作员体验 / 事实核查 六角色）

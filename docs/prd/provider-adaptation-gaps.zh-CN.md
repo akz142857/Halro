@@ -3,8 +3,10 @@
 状态：**#0 已修；资源模型已定（ADR 0021）；#3 代码完成待真实验证；#4 已决定不做；#1/#2/媒体证据阻塞于凭据；#3b 未排期；§5 评审开出的十条全部已修（2026-08-14）**
 未完成项以 [`adaptation-open-items`](adaptation-open-items.zh-CN.md) 为准，本文是决定过程的记录
 归档：2026-08-14 从 `docs/todo/` 移入本目录。归档的是**决定过程**，不是把开着的项算成关掉的：
-#1（Converse 工具）与 #2（第二供应商）仍阻塞于凭据，#3b 未排期，「能力上限有三份真相」的重复
-仍在（§5.1 收紧的是执行那一半）。逐条以 [`adaptation-open-items`](adaptation-open-items.zh-CN.md) §2 为准。
+#1（Converse 工具）与 #2（第二供应商）仍阻塞于凭据，#3b 未排期。「能力上限有三份真相」的重复
+在归档时仍在（§5.1 收紧的只是执行那一半），已于 2026-08-17 由
+[`provider-capability-single-source`](provider-capability-single-source.zh-CN.md) 关闭。
+逐条以 [`adaptation-open-items`](adaptation-open-items.zh-CN.md) §2 为准。
 建立日期：2026-08-13
 来源：[`docs/review/260813`](../review/260813/README.md) 摸底的 #2、#4、#5、#6
 范围：`internal/provider/{anthropic,bedrock}`、`internal/compatibility`、`internal/gateway`、`docs/compatibility`
@@ -347,6 +349,12 @@ audience 由基址推导，形如 `https://api.anthropic.com:443:anthropic`。`k
 本节说的**重复**那一半没动：Admin API 仍然只回传已选能力，前端仍然要自己算可选范围。两件事独立，
 修了前者不代表后者不再是问题；恰恰相反，执行收紧后，前端算错上限的后果从"少显示一个勾选框"变成
 "操作者勾了但后端 400"，可见度更高了。
+
+**2026-08-17：重复那一半也修掉了**，走的正是本节说的那条路——Admin API 直接给出上限
+（`GET /admin/api/v1/provider-profiles`），前端不再自己算。三份表收敛成
+`internal/domain/provider_table.go` 一份，前端下发什么渲染什么。见
+[`provider-capability-single-source`](provider-capability-single-source.zh-CN.md)。
+本节以上文字保留原样，是当时的判断记录。
 
 ### 首次真实运行暴露的两个控制台缺口（2026-08-13；2026-08-14 复核后一条修掉、一条撤销）
 

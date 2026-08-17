@@ -55,7 +55,8 @@ ADR 保留在 `docs/adr/` 顶层：这是业界通用路径，且 `tools/m11/rel
 | [Amazon Bedrock Mantle 接入评估与开发计划](prd/amazon-bedrock-mantle.zh-CN.md) | Phase 0–2 与验收清单已实施，见 [ADR 0007](adr/0007-bedrock-mantle-profiles.md)；Phase 3 的 smoke harness 已交付但从未执行，真实证据归 [provider real matrix](verification/provider-real-matrix.md) 跟踪 |
 | [Provider 适配缺口 — 待决与待建](prd/provider-adaptation-gaps.zh-CN.md) | 决定过程的记录。#0 与 §5 十条已修；#4 已关闭；#1/#2 阻塞于凭据、#3b 未排期、能力上限三份真相仍在，逐条见下面的未完成项清单 |
 | [Anthropic Message Batches 实施方案](prd/anthropic-batches-plan.zh-CN.md) | 五个切片全部完成，见 [ADR 0021](adr/0021-provider-resource-upstream-twin.md)；真实账号端到端只走到创建成功，结果核对从未完成，§5.1 记的批处理窗口在 2026-08-15 00:10:43 关闭 |
-| [适配链条的未完成项](prd/adaptation-open-items.zh-CN.md) | 上面两份归档时留下的未完成项清单：§1 八条已修，§2 四项等外部凭据或排期，§3 是一处撤销的记录 |
+| [适配链条的未完成项](prd/adaptation-open-items.zh-CN.md) | 上面两份归档时留下的未完成项清单：§1 八条已修，§2 「能力上限三份真相」已由下面一份关闭，其余三项等外部凭据或排期，§3 是一处撤销的记录 |
+| [适用能力改由服务端统一下发](prd/provider-capability-single-source.zh-CN.md) | 两轮全部实施并合入（PR #182）。六处 switch 收敛成 `internal/domain/provider_table.go`，新增只读端点 `GET /admin/api/v1/provider-profiles`，控制台不再镜像能力矩阵；请求契约改为扁平能力集，`bindings` 由服务端拆分——这是 API 形状变更，见 §10.8 |
 
 ## 里程碑与证据 · [`milestones/`](milestones/)
 

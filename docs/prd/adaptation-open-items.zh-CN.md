@@ -1,6 +1,6 @@
 # 适配链条的未完成项
 
-状态：**§1 八条全部已修（2026-08-14）；§2 四项等外部条件；§3 是一处撤销的记录**
+状态：**§1 八条全部已修（2026-08-14）；§2 四项等外部条件，两项排期问题中的「能力上限有三份真相」已于 2026-08-17 关闭；§3 是一处撤销的记录**
 归档：2026-08-14 从 `docs/todo/` 移入本目录。**归档不等于关闭**——§2 的四项与两项排期问题
 在归档时逐条仍然成立，只是它们等的是外部凭据或一次独立改动，留在待办目录里也不会前进。
 其中批处理端到端那一项还带着时限：批处理窗口在 2026-08-15 00:10:43 关闭，归档时（17:14）
@@ -165,14 +165,14 @@ app 侧不必另改：注册失败已经落到既有的 `withheldTargetRejected`
 | Bedrock Converse 工具调用（#1） | Bedrock Runtime 的 SigV4 凭据 | 还要先决定按 Profile 放宽还是引入模型级能力证据 |
 | 非文本模态第二供应商（#2） | Azure OpenAI 凭据 | 最小方案是复用现有适配器的 azure 分支加一个 media-resources profile |
 
-另有两项是**排期问题而非阻塞**：
+另有两项是**排期问题而非阻塞**，其中第二项已于 2026-08-17 关闭：
 
 - **Anthropic Files API（#3b）** 未排期。与批处理无依赖，价值在 Messages 的文档/PDF 输入，
   需要 `files-api-2025-04-14` beta 头并与既有的每连接 beta 令牌允许列表衔接。
-- **能力上限有三份真相**。`domain.DefaultProviderCapabilitiesForProfile`、
-  `domain.MaxProviderCapabilitiesForProfile` 与 `web/src/pages/ProvidersPage.tsx` 里手抄的表，
-  没有任何东西阻止漂移（2026-08-13 已经漂过一次）。正确修法是 Admin API 直接给出上限、前端不再自己算，
-  那是一块涉及 Admin 响应形状与控制台表单的独立改动。§1 的修复收紧的是执行那一半，重复这一半没动。
+- ~~**能力上限有三份真相**~~。**2026-08-17 已关闭**，修法正是这里预告的那一条：Admin API 直接
+  给出上限（`GET /admin/api/v1/provider-profiles`），前端不再自己算。权威表收敛到
+  `internal/domain/provider_table.go`，`ProvidersPage.tsx` 里手抄的能力表、不可变 Profile 名单与
+  OpenAI 拆分集合全部删除。见 [`provider-capability-single-source`](provider-capability-single-source.zh-CN.md)。
 
 ---
 
