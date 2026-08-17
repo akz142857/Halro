@@ -2524,7 +2524,7 @@ func enrichSettlement(result *budget.Settlement, providerErr error, startedAt, c
 	case errors.Is(providerErr, context.DeadlineExceeded):
 		result.ErrorClass = string(provider.ErrorTimeout)
 	case errors.Is(providerErr, context.Canceled):
-		result.ErrorClass = "canceled"
+		result.ErrorClass = string(provider.ErrorCanceled)
 	default:
 		result.ErrorClass = string(provider.ErrorUnknown)
 	}

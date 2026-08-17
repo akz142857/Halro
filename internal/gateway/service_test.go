@@ -1820,3 +1820,24 @@ func TestChatSettlesCachedPromptTokensAtTheCacheReadRate(t *testing.T) {
 		t.Fatalf("unexpected balance: %#v", balance)
 	}
 }
+
+// A caller's own cancel must not count against the deployment's availability:
+// classified as "connect" it fed the circuit breaker, so a client that hung up
+// early could mark a healthy upstream unhealthy for everyone else.
+func TestACallerCancelIsNotAnAvailabilityFailure(t *testing.T) {
+	canceled := &provider.Error{
+		Class:     provider.ErrorCanceled,
+		Ambiguous: true,
+		Cause:     context.Canceled,
+	}
+	if err := availabilityFailure(canceled); err != nil {
+		t.Fatalf("a caller cancel was counted as an availability failure: %v", err)
+	}
+	connect := &provider.Error{Class: provider.ErrorConnect, Retryable: true}
+	if err := availabilityFailure(connect); err == nil {
+		t.Fatal("a genuine connect failure must still count")
+	}
+	if retryable(canceled) {
+		t.Fatal("a canceled request must not be retried")
+	}
+}

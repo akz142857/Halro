@@ -154,11 +154,8 @@ func (a *Adapter) ListInvocationTargets(ctx context.Context, query domain.Target
 	request.Header.Set("Accept", "application/json")
 	response, err := a.client.Do(request)
 	if err != nil {
-		class := provider.ErrorConnect
-		if errors.Is(err, context.DeadlineExceeded) {
-			class = provider.ErrorTimeout
-		}
-		return nil, &provider.Error{Class: class, Retryable: true, Message: "model catalog request failed", Cause: err}
+		class := provider.TransportClass(err)
+		return nil, &provider.Error{Class: class, Retryable: class != provider.ErrorCanceled, Message: "model catalog request failed", Cause: err}
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
@@ -254,11 +251,8 @@ func (a *Adapter) Probe(ctx context.Context, providerModel string) error {
 	request.Header.Set("Accept", "application/json")
 	response, err := a.client.Do(request)
 	if err != nil {
-		class := provider.ErrorConnect
-		if errors.Is(err, context.DeadlineExceeded) {
-			class = provider.ErrorTimeout
-		}
-		return &provider.Error{Class: class, Retryable: true, Message: "provider probe failed", Cause: err}
+		class := provider.TransportClass(err)
+		return &provider.Error{Class: class, Retryable: class != provider.ErrorCanceled, Message: "provider probe failed", Cause: err}
 	}
 	defer response.Body.Close()
 	// Azure has no universal, non-billable data-plane discovery endpoint. A
@@ -311,10 +305,7 @@ func (a *Adapter) Chat(ctx context.Context, call provider.ChatCall) (openaiapi.C
 
 	response, err := a.client.Do(request)
 	if err != nil {
-		class := provider.ErrorConnect
-		if errors.Is(err, context.DeadlineExceeded) {
-			class = provider.ErrorTimeout
-		}
+		class := provider.TransportClass(err)
 		return openaiapi.ChatCompletionResponse{}, &provider.Error{
 			Class:     class,
 			Retryable: class == provider.ErrorConnect || class == provider.ErrorTimeout,
@@ -373,10 +364,7 @@ func (a *Adapter) Embed(ctx context.Context, call provider.EmbeddingCall) (opena
 	request.Header.Set("X-Request-ID", call.RequestID)
 	response, err := a.client.Do(request)
 	if err != nil {
-		class := provider.ErrorConnect
-		if errors.Is(err, context.DeadlineExceeded) {
-			class = provider.ErrorTimeout
-		}
+		class := provider.TransportClass(err)
 		return openaiapi.EmbeddingResponse{}, &provider.Error{
 			Class:     class,
 			Retryable: class == provider.ErrorConnect || class == provider.ErrorTimeout,
@@ -446,10 +434,7 @@ func (a *Adapter) ChatStream(
 	request.Header.Set("X-Request-ID", call.RequestID)
 	response, err := a.client.Do(request)
 	if err != nil {
-		class := provider.ErrorConnect
-		if errors.Is(err, context.DeadlineExceeded) {
-			class = provider.ErrorTimeout
-		}
+		class := provider.TransportClass(err)
 		return nil, &provider.Error{
 			Class: class, Retryable: class == provider.ErrorConnect || class == provider.ErrorTimeout,
 			Ambiguous: !provider.Unsent(err), Message: "provider stream request failed", Cause: err,

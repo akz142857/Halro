@@ -37,7 +37,28 @@ const (
 	ErrorConnect        ErrorClass = "connect"
 	ErrorMalformed      ErrorClass = "malformed_response"
 	ErrorUnknown        ErrorClass = "unknown"
+	// ErrorCanceled is the caller abandoning the request, not the upstream
+	// failing it. The string matches what the gateway already records for a
+	// cancellation it classifies itself.
+	ErrorCanceled ErrorClass = "canceled"
 )
+
+// TransportClass names the failure of a request attempt that produced no HTTP
+// response. Cancellation gets its own class: reporting it as a connection
+// failure sent operators chasing network problems the upstream never had, and
+// let a caller's own cancel count against the deployment's availability
+// breaker. It says nothing about ambiguity — a cancel mid-response may still
+// have been served upstream, so callers keep deriving that from Unsent.
+func TransportClass(err error) ErrorClass {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return ErrorCanceled
+	case errors.Is(err, context.DeadlineExceeded):
+		return ErrorTimeout
+	default:
+		return ErrorConnect
+	}
+}
 
 type Error struct {
 	Class             ErrorClass

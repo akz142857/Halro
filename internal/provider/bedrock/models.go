@@ -3,7 +3,6 @@ package bedrock
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -97,11 +96,8 @@ func (a *Adapter) ListInvocationTargets(ctx context.Context, query domain.Target
 	}
 	response, err := a.client.Do(request)
 	if err != nil {
-		class := provider.ErrorConnect
-		if errors.Is(err, context.DeadlineExceeded) {
-			class = provider.ErrorTimeout
-		}
-		return nil, &provider.Error{Class: class, Retryable: true, Message: "Bedrock model catalog request failed", Cause: err}
+		class := provider.TransportClass(err)
+		return nil, &provider.Error{Class: class, Retryable: class != provider.ErrorCanceled, Message: "Bedrock model catalog request failed", Cause: err}
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {

@@ -451,6 +451,23 @@ func TestChatPropagatesCancellation(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context cancellation, got %v", err)
 	}
+	// A cancel is the caller abandoning the request, not a connection failure.
+	// Classified as "connect" it read as an upstream network problem and
+	// counted against the deployment's availability breaker; it stays
+	// ambiguous because the upstream may have served the request anyway.
+	var classified *provider.Error
+	if !errors.As(err, &classified) {
+		t.Fatalf("expected *provider.Error, got %T", err)
+	}
+	if classified.Class != provider.ErrorCanceled {
+		t.Fatalf("class=%q, want %q", classified.Class, provider.ErrorCanceled)
+	}
+	if classified.Retryable {
+		t.Fatal("a canceled request must not be marked retryable")
+	}
+	if !classified.Ambiguous {
+		t.Fatal("a cancel after the request was sent must stay ambiguous")
+	}
 }
 
 func TestEmbeddingsMapsModelAndDecodesUsage(t *testing.T) {

@@ -303,7 +303,8 @@ func (a *Adapter) inferenceResourcesDo(ctx context.Context, method, operation, r
 	}
 	response, err := a.client.Do(request)
 	if err != nil {
-		return inferenceResourcesHTTPResult{}, &provider.Error{Class: provider.ErrorConnect, Retryable: true, Message: "provider request failed", Cause: err}
+		class := provider.TransportClass(err)
+		return inferenceResourcesHTTPResult{}, &provider.Error{Class: class, Retryable: class != provider.ErrorCanceled, Message: "provider request failed", Cause: err}
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {

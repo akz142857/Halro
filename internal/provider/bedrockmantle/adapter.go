@@ -369,11 +369,8 @@ func malformed(message string, cause error, ambiguous bool) error {
 	return &provider.Error{Class: provider.ErrorMalformed, Message: message, Cause: cause, Ambiguous: ambiguous}
 }
 func transportError(message string, err error, ambiguous bool) error {
-	class := provider.ErrorConnect
-	if errors.Is(err, context.DeadlineExceeded) {
-		class = provider.ErrorTimeout
-	}
+	class := provider.TransportClass(err)
 	// A caller claiming ambiguity is still bounded by whether the request could
 	// have reached Mantle at all; a failed dial ran nothing.
-	return &provider.Error{Class: class, Retryable: true, Ambiguous: ambiguous && !provider.Unsent(err), Message: message, Cause: err}
+	return &provider.Error{Class: class, Retryable: class != provider.ErrorCanceled, Ambiguous: ambiguous && !provider.Unsent(err), Message: message, Cause: err}
 }

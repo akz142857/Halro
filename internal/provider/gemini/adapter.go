@@ -673,11 +673,8 @@ func malformed(message string, cause error) *provider.Error {
 }
 
 func transportError(message string, err error) *provider.Error {
-	class := provider.ErrorConnect
-	if errors.Is(err, context.DeadlineExceeded) {
-		class = provider.ErrorTimeout
-	}
-	return &provider.Error{Class: class, Retryable: true, Ambiguous: !provider.Unsent(err), Message: message, Cause: err}
+	class := provider.TransportClass(err)
+	return &provider.Error{Class: class, Retryable: class != provider.ErrorCanceled, Ambiguous: !provider.Unsent(err), Message: message, Cause: err}
 }
 
 func httpError(status int, body io.Reader) *provider.Error {

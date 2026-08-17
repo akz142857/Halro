@@ -12,6 +12,26 @@ import (
 	"github.com/akz142857/Halro/internal/safetransport"
 )
 
+func TestTransportClassSeparatesTheCallerFromTheNetwork(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		err  error
+		want ErrorClass
+	}{
+		{"caller canceled", context.Canceled, ErrorCanceled},
+		{"wrapped cancel from the HTTP client", fmt.Errorf("Post %q: %w", "https://provider.example/v1/chat/completions", context.Canceled), ErrorCanceled},
+		{"deadline", context.DeadlineExceeded, ErrorTimeout},
+		{"dial refused", &net.OpError{Op: "dial", Err: errors.New("connection refused")}, ErrorConnect},
+		{"opaque fault", errors.New("stream ended early"), ErrorConnect},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := TransportClass(testCase.err); got != testCase.want {
+				t.Fatalf("TransportClass(%v) = %q, want %q", testCase.err, got, testCase.want)
+			}
+		})
+	}
+}
+
 func TestUnsentSeparatesSetupFailuresFromPossiblyExecutedOnes(t *testing.T) {
 	for _, testCase := range []struct {
 		name string
