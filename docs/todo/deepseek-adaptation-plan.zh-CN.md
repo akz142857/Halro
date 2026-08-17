@@ -1,7 +1,9 @@
 # DeepSeek 适配方案 — 已接入，但与真实上游不符
 
-状态：**提案待评审**；六条差异已对着代码核过，上游契约按官方文档核过（2026-08-14），**未跑过真实账号**
+状态：**提案待评审**；上游契约按官方文档核过（2026-08-14），**未跑过真实账号**
 建立日期：2026-08-14
+修订日期：2026-08-17（对着当日 `main` 重核六条：四条原样成立；§2.5 的缓存档位已落地，正文按现状重写，
+　　　　　并因此改变了 §2.4 的性质与顺序；§2.6 已由能力矩阵单一真相关闭，保留为已关闭记录）
 范围：`internal/modelcatalog`、`internal/compatibility`、`internal/openaiapi`、`internal/provider/openai`、`internal/domain`
 相关：[适配链条的未完成项](../prd/adaptation-open-items.zh-CN.md)、[Provider 适配缺口](../prd/provider-adaptation-gaps.zh-CN.md)
 
@@ -19,6 +21,7 @@ Profile：类型 `deepseek`、Access Surface `deepseek-api`、Bearer 静态凭�
 
 所以要回答的不是「怎么接」，而是另一个问题：**这条已经在跑的链，哪些地方与今天的真实上游不符。**
 2026-08-14 逐条核对下来有六处，其中两处会让账目算错、三处会让调用方拿到 200 但语义已经变了。
+2026-08-17 重核：**四处原样成立，一处（§2.5）因缓存档位落地而改变形状，一处（§2.6）已关闭。**
 
 执行上它落在一个特殊位置：DeepSeek 走的是「直接用 OpenAI wire」那条分支
 （`internal/app/providers.go:657` 与 OpenAI、openai-compatible 共用适配器；
@@ -118,45 +121,81 @@ DeepSeek 不发这个结构，它发的是 `prompt_cache_hit_tokens` / `prompt_c
 
 Anthropic（`internal/provider/anthropic/adapter.go:414`）、Bedrock
 （`internal/provider/bedrock/adapter.go:721`）、Mantle 都在记这个数，只有 DeepSeek 这一路是空的。
-这一条只关乎「记不记得下来」，不涉及计价——计价是 §2.5，两件事要分开做。
 
-### 2.5 缓存与分时价位没有落点（跨供应商，非 DeepSeek 独有）
+**2026-08-17 起这一条不再只是「记不记得下来」。** 提案时缓存命中即使记下来也没有费率可用，所以
+本条与 §2.5 被刻意分开。缓存档位当天落地后（`DeploymentPriceVersion.CachedInputMicrosPerMillion`，
+`internal/domain/pricing.go:199`；拆档计价见 `internal/domain/pricing_cost.go` 的
+`CalculateUSDTokensV1`），费率已经在跑，缺的只剩这个解码：**DeepSeek 报的缓存命中恒为 0，
+于是每一次命中都按未命中价结算。** 按 §1 的价差，那一段贵约 50 倍。
 
-`DeploymentPriceVersion` 只有 `InputMicrosPerMillion` / `OutputMicrosPerMillion` /
-`FixedRequestMicrosUSD`（`internal/domain/models.go:885-886`），
-`CalculateUSDTokensV1` 就是这三项相加（`internal/domain/pricing_cost.go:31-46`）。
+这把本条从「为将来的计价留输入」变成「今天的账就是错的，而修法只差一个解码」——
+它因此排到最前面（见 §3）。
 
-也就是说：**即使 §2.4 把缓存命中数记下来，账本也仍会按未命中价给它计费。** 在 DeepSeek 上这个
-偏差约 50 倍（命中价约为未命中价的 1/50），在 Anthropic 与 Bedrock 上是同一个洞、倍数小一些。
-分时折扣是第二个维度——价格版本没有时间轴，账目会随时段整体偏离最多一倍。
+### 2.5 缓存档位已落地，分时价位仍没有落点（跨供应商，非 DeepSeek 独有）
 
-**这一条明确不作为 DeepSeek 适配的副作用来做。** 它改的是计价模型与价格版本的持久结构，
-影响每一个供应商与既有的价格记录，属于独立决定（与 `CLAUDE.md` 对 Beta 上限的要求同类：
-放宽或改变契约不能顺手发生）。本方案只负责把它记下来，并保证 §2.4 的记录先到位——
-没有记录，将来任何计价方案都没有输入。
+**提案时（2026-08-14）**：`DeploymentPriceVersion` 只有 `InputMicrosPerMillion` /
+`OutputMicrosPerMillion` / `FixedRequestMicrosUSD`，两个缓存维度都无处安放，所以本条被划为
+「不作为 DeepSeek 适配的副作用来做」的独立决定。
 
-### 2.6 能力上限的三份真相同样适用
+**2026-08-17 起，两个维度已经分开：**
 
-`DefaultProviderCapabilitiesForProfile`、`MaxProviderCapabilitiesForProfile` 与
-`web/src/pages/ProvidersPage.tsx` 里手抄的表——DeepSeek 的能力集在这三处各存一份。这不是本方案
-新增的问题，逐条记在
-[适配链条的未完成项 §2](../prd/adaptation-open-items.zh-CN.md)。§2.1 若改动 DeepSeek 的能力集，
-三处要一起改，否则控制台会出现「勾了但后端 400」。
+- **缓存档位已落地。** `DeploymentPriceVersion` / `DeploymentPriceProposal` / `PriceSnapshot`
+  都有了 `CachedInputMicrosPerMillion`（`internal/domain/pricing.go:199`），
+  `CalculateUSDTokensV1` 按 `(input - cached) × input_rate + cached × cached_rate + …` 拆档
+  （`internal/domain/pricing_cost.go`），见 [ADR 0022](../adr/0022-cache-read-input-pricing.md)。
+  **对 DeepSeek 的意义：费率已经能表达命中价，唯一缺口是 §2.4 的解码。** 这正是把 §2.4 提到
+  片 1 的理由。
+- **分时折扣仍没有落点，但缺的不是时间轴。** `DeploymentPriceVersion.EffectiveFrom`
+  （`internal/domain/pricing.go:202`）本来就在，价格版本可以在某个时刻整体切换。缺的是
+  **按每日时段重复的折扣**——一条「非高峰减半」的规则需要周期性调度，而不是再来一个版本。
+  这仍然是独立决定：它改的是价格版本的持久结构与所有供应商的既有记录，属于
+  `CLAUDE.md` 说的「契约变更不能顺手发生」那一类。
+
+**本方案对分时折扣仍然只负责记录，不实施**（见 §5）。写这一节时要避免的两个错：
+说「计价没有缓存档位」（已经有了），和说「价格版本没有时间轴」（`EffectiveFrom` 一直在）。
+
+### 2.6 ~~能力上限的三份真相同样适用~~（已关闭）
+
+**2026-08-17 关闭。** 提案时 DeepSeek 的能力集存在 `DefaultProviderCapabilitiesForProfile`、
+`MaxProviderCapabilitiesForProfile` 与 `web/src/pages/ProvidersPage.tsx` 三处。现已收敛为
+`internal/domain/provider_table.go` 一张表（DeepSeek 见 `deepSeekSet`，defaults 与 ceiling 同源），
+控制台不再手抄，能力矩阵由 `GET /admin/api/v1/provider-profiles` 下发。见
+[适用能力改由服务端统一下发](../prd/provider-capability-single-source.zh-CN.md)。
+
+**对本方案的影响**：§2.1 若改动 DeepSeek 的能力集，**改 `provider_table.go` 一处即可**，
+前端自动跟随，不再需要三处同步，也不再有「勾了但后端 400」这个失败模式。
 
 ## 3. 切片划分
 
-顺序是依赖顺序，不是优先级。片 1、2 不需要凭据，片 5 需要。
+2026-08-17 重排。原顺序是纯依赖顺序；现在片 1 换成用量解码，因为缓存档位落地后它是唯一一条
+**有真实金额偏差、修法明确、不依赖凭据**的。片 1–4 不需要凭据，片 5 需要。
 
 | # | 内容 | 判据 | 是否需要真实凭据 |
 |---|---|---|---|
-| 1 | 目录订正：模型名换成 `deepseek-v4-flash` / `deepseek-v4-pro`，上下文 1M、输出 384K，删掉 reasoner 专属条目 | 目录里没有上游列不出的模型名 | 否 |
+| 1 | 用量解码：`prompt_cache_hit_tokens` / `prompt_cache_miss_tokens` → `SetCachedPromptTokens` | 缓存命中不再恒为 0；命中 + 未命中 = `prompt_tokens`；结算按命中价而不是未命中价 | 否（假上游可验证形状，真实账号才验证语义） |
 | 2 | 字段申报：DeepSeek 从 OpenAI-wire 直通分支拆出，按 §1 接受列表申报；`user` 改渲染为 `user_id`；manifest 三处同步 | 接受列表之外的字段，要么被申报、要么被渲染成上游认识的形状，不存在第三种 | 否 |
 | 3 | thinking 映射：语义 ReasoningEffort → `thinking:{type,reasoning_effort}`；映射接上后再改 manifest 那句 `thinking` unsupported | 打开 Reasoning 能力的部署，发出的请求里带 `thinking` | 否 |
-| 4 | 用量解码：`prompt_cache_hit_tokens` / `prompt_cache_miss_tokens` → `SetCachedPromptTokens` | 缓存命中不再恒为 0；命中 + 未命中 = `prompt_tokens` | 否（假上游可验证形状，真实账号才验证语义） |
+| 4 | 目录订正：模型名换成 `deepseek-v4-flash` / `deepseek-v4-pro`，上下文 1M、输出 384K，删掉 reasoner 专属条目 | 目录里没有上游列不出的模型名 | 否，但**建议等片 5 的真实 `GET /models`**（见下） |
 | 5 | 真实账号 smoke：matrix runner 已有 `HALRO_MATRIX_DEEPSEEK_` 这一档，跑一次非流式、一次流式、一次带 thinking、一次重复前缀看缓存命中 | 四项都拿到真实响应，且 §1 的每条推断各自被证实或推翻 | **是** |
+
+**片 4 排在最后是刻意的。** 它写死的是上下文与输出上限，而 Token Guard、预算与 `max_tokens`
+截断都读这两个数：写错的代价比其余几片都高，而它们眼下**只有文档依据**。若真实凭据一时拿不到，
+片 4 可以先做「删掉上游列不出的模型名」这一半，把新模型的上限留到片 5 之后再填。
 
 **片 5 之外的四片都不构成完成。** §1 全部来自文档，文档与真实上游不一致这件事在这个仓库里已经
 发生过三次（见[批处理方案 §5](../prd/anthropic-batches-plan.zh-CN.md)）。
+
+### 3.0 评审前先确认：修的路径与在跑的路径是不是同一条
+
+本方案六处差异修的全是 **`deepseek.chat.v1` 直连 profile**（`api.deepseek.com`，Bearer 静态凭据）。
+
+2026-08-17 在一台开发实例上抽查当日用量分区时发现：其中的 `deepseek.v3.2` 调用走的是
+**`bedrock.mantle.openai.chat.v1`**，即经 AWS Bedrock Mantle 提供的 DeepSeek，而不是直连 profile。
+样本只有一天七条，**不足以证明没有人用直连**；但它足以说明评审时要先问一句：
+
+- 直连 profile 今天有没有真实流量？若没有、且短期不会启用，片 1–4 的紧迫性要重新排。
+- 若 DeepSeek 主要经 Mantle 使用，则 §2.4 的缓存解码在 Mantle 那条路上是否同样缺失，
+  是一个本方案没有覆盖、但金额后果相同的问题——**需要单独核实，不要假设两条路一样**。
 
 ### 3.1 pre-1.0.0 的处理方式
 
@@ -174,11 +213,18 @@ Anthropic（`internal/provider/anthropic/adapter.go:414`）、Bedrock
 - 字段申报那一片的测试必须**双向**：不支持的要申报，能透传的要断言不申报——只查前一半的表
   发现不了漏申报（这正是 Mantle `messages[].name` 那条的成因，见
   [Provider 适配缺口 §5.1](../prd/provider-adaptation-gaps.zh-CN.md)）
-- 前端 `ProvidersPage.tsx` 的能力表若随 §2.6 改动，`npm run build` 后一并提交 `internal/webui/dist`
+- 片 1 的判据要一路断到**结算金额**，不能只断到解码：解码正确而费率没接上、或接上了却仍按未命中
+  价结算，都是这条要挡的（缓存档位见 §2.5）。一条命中 + 未命中混合的用量，其
+  `CommittedMicrosUSD` 应当低于同样 token 数全按未命中价算出的值
+- 能力集若随 §2.1 改动，改 `internal/domain/provider_table.go` 一处即可，控制台由端点下发自动跟随
+  （§2.6 已关闭）。**本方案预计不触碰 `web/src`，因此也不应产生 `internal/webui/dist` 的改动**；
+  若产生了，说明改错了地方
 
 ## 5. 明确不做的
 
-- **不引入缓存档位与分时价位**（§2.5）。独立决定，涉及价格版本的持久结构与所有供应商
+- **不引入分时价位**（§2.5）。独立决定，涉及价格版本的持久结构与所有供应商。
+  缓存档位已不在此列——它已于 2026-08-17 落地，本方案片 1 要做的是把 DeepSeek 的命中数**喂给**
+  这个已有的费率，而不是新建计价结构
 - **不接 DeepSeek 的 Anthropic 兼容端点**。同一个供应商出现第二条 Access Surface 会让路由、
   凭据绑定与能力上限各多一份真相，收益是 SDK 兼容而 Halro 的北向已经提供了 `/v1/messages`。
   要做也应当是一次独立评审。**注意：本条未核实该端点当前是否仍存在**，评审时先核
