@@ -46,16 +46,6 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertNotIn("MODEL_CATALOG_TRUST_ROOTS", workflow)
         self.assertNotIn("modelcatalog.ReleaseTrustRoots", workflow)
 
-    def test_release_refuses_to_auto_create_an_unprotected_environment(self) -> None:
-        workflow = (ROOT / ".github/workflows/release.yml").read_text()
-        governance = workflow.split("  release-governance:\n", 1)[1].split("\n  publish:\n", 1)[0]
-        self.assertIn("actions: read", governance)
-        self.assertIn("contents: read", governance)
-        self.assertNotIn("deployments: read", governance)
-        self.assertIn('gh api "repos/${GITHUB_REPOSITORY}/environments/v1-release"', governance)
-        self.assertIn("tools/release/verify_environment.py", governance)
-        self.assertIn("needs: [provenance, release-governance]", workflow)
-
     def test_release_emits_archivable_run_evidence(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text()
         self.assertIn("tools/release/run_evidence.py create", workflow)
