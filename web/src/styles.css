@@ -1442,7 +1442,24 @@ select {
 }
 textarea { resize: vertical; }
 .form-actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 7px; }
-.form-actions > .button.ghost { order: 0; }
+/* The buttons are the fixed part of an action bar. Everything beside them —
+   what the save will do, what is still blocking it — is explanation, and
+   explanation is what gives when the row runs out of room; it already carries
+   min-width: 0 for exactly that. Without this the two shrink together, and the
+   longer the footer's explanation grows the narrower the commit gets: on the
+   deployment form it squeezed a two-character cancel into two lines and broke
+   "保存为停用" across the middle of a word. A button whose label wraps stops
+   reading as the thing you press. */
+.form-actions > .button { flex: 0 0 auto; white-space: nowrap; }
+/* A ghost button is borderless because it usually sits in a dense row where a
+   box on every control would be noise. An action bar is the opposite case:
+   there are exactly two controls, one of them is a solid primary, and the other
+   is the way out of the form. Left borderless beside that block, cancel read as
+   a caption rather than a button, and only grew an edge once the pointer was
+   already on it — which is too late to tell you it is clickable. The resting
+   border is the one hover was already drawing, so hover still differs by its
+   background tint. */
+.form-actions > .button.ghost { order: 0; border-color: var(--line-strong); }
 .form-actions > .button.primary, .form-actions > .button.danger { order: 1; }
 /* Like the other modal forms: the form itself drops the modal's margin so the
    sticky footer can reach both edges, and the fields carry the padding. */
