@@ -1,7 +1,8 @@
 # 适用能力改由服务端统一下发（设计提案）
 
-状态：**已实施**（分支 `feat/provider-capability-single-source`，5 个提交）。
-第 1–5 步全部落地，§3.3 的服务端拆分**仍未做**——见文末「实施记录」。
+状态：**已完成**（分支 `feat/provider-capability-single-source`）。
+第 1–5 步与 §3.3 的服务端拆分全部落地，§8 的两个开放问题也已给出实现答案——
+见文末「实施记录」与「第二轮：§3.3 与开放问题」。
 建立日期：2026-08-16
 修订日期：2026-08-17（第二稿：权威数据的存储形态定为 Go 声明式表；Base URL / region 进 `config.yaml`）
 　　　　　2026-08-16（第一稿评审：后端 / 前端 / 安全 / API 契约 / 操作员体验 / 事实核查 六角色）
@@ -351,7 +352,7 @@ GET /admin/api/v1/provider-profiles        （requireAdmin；与现有 GET /prov
 > 正确层次是测试期保证：`web/src/i18n/i18n.test.tsx` 已有键审计机制，§6 的不变量测试加一条
 > 「端点 `capability_names` 每项在 zh-CN 与 en-US 都有 `capabilities.*` 文案」即可。
 
-### 3.3 提交语义收敛（必做，可后置为独立 PR）
+### 3.3 提交语义收敛（必做，可后置为独立 PR）——**已实施，规则见 §10.1**
 
 **初稿把这一步标为「可选」，评审判定这会让一个双轨中间态无限期存在，与 pre-1.0 原则
 冲突。本稿改为必做。**
@@ -551,7 +552,7 @@ servers vary"（`models.go:610-611`）——一个跑 vLLM 且确实支持工具
   §5 的故障正是只有真实控制台载荷才踩得到的。
 - push 前过一次完整 gate，含 `git diff --exit-code -- internal/webui/dist`。
 
-## 8. 开放问题
+## 8. 开放问题（均已在 §10.4 关闭）
 
 > 已关闭：**权威数据的存储形态**（Go 声明式表 vs YAML 配置文件）→ 见 §4.3，采纳 Go 表。
 > **Bedrock region 的处置** → 见 §3.1 注 A，进 `config.yaml`，省略即保持 us-east-1。
@@ -605,7 +606,11 @@ servers vary"（`models.go:610-611`）——一个跑 vLLM 且确实支持工具
 两边漂移即失败。手写 fixture 只能测到写的人对矩阵的想象，而"对矩阵的想象与服务端不符"
 正是本提案要消灭的东西。
 
-### 仍未做：§3.3 的服务端拆分
+### 已补做：§3.3 的服务端拆分（下一节记录）
+
+以下小节是第一轮实施结束时的状态记录，保留原文以说明后续决定的来龙去脉。
+
+### 第一轮结束时的未完成项：§3.3 的服务端拆分
 
 前端现在提交的仍是 bindings，只不过**拆分规则不再硬编码**——它由端点下发的各 profile
 ceiling 推导（能力归入 ceiling 覆盖它的那个 profile）。§2 的「删除镜像」目标因此已达成，
@@ -637,7 +642,7 @@ Bedrock runtime 的 profile 都由操作员在「能力实现」里显式选定�
    临时状态，已在 `admin_providers.go` 注释里写明）改为**拒收或不再发送**。
 4. 需要一次请求契约评审——这是 API 形状变更，且 pre-1.0 可原地改，值得单独一个 PR。
 
-### 其他遗留
+### 第一轮结束时的其他遗留
 
 - `providers.bedrock.region` 之外，`defaultBaseURL` 对 `azure_openai` 与 `openai_compatible`
   仍返回 `https://api.openai.com`。这是搬迁前就有的行为，原样保留了（纯迁移不改行为），
@@ -645,3 +650,200 @@ Bedrock runtime 的 profile 都由操作员在「能力实现」里显式选定�
   或要求显式填写，属独立的小改动。
 - §8 的两个开放问题仍然开放：`provider_executed_tools` 的出网警示文案、端点故障的运维
   含义（后者已部分缓解——失败时页面顶部报错、创建按钮禁用并给出原因，但没有重试入口）。
+
+---
+
+## 10. 第二轮：§3.3 与开放问题（2026-08-17）
+
+第一轮遗留的每一项都做完了。这一轮改了请求契约，因此**是 API 形状变更**，pre-1.0 原地改，
+不保留旧字段。
+
+### 10.1 请求契约：只发扁平能力，服务端决定由哪个 profile 承担
+
+`providerInput` 的 `bindings` 字段**删除**（`internal/app/admin_providers.go`）。
+`decodeAdminJSON` 拒绝未知字段，所以旧客户端发 `bindings` 会拿到 400，而不是被静默忽略——
+这就是 §3.3 rule 3 的终局，也让 §5 那条「接受但完全忽略」的临时状态随之消失（该处注释一并删除）。
+
+拆分规则落在 `internal/domain/provider_connection.go`，与 ceiling 同一张表：
+
+1. **候选集** = 与锚点 profile 同 (type, access surface, credential scheme) 的全部 profile，
+   锚点排第一。这正是 handler 对每个 binding 强制的凭据一致性规则，因此拆分产物必然通过校验。
+2. **锚点优先**：锚点 ceiling 能提供的能力一律归锚点。
+3. 锚点不能提供时，归**唯一**能提供它的同组 profile；**多个都能提供则 400 拒绝并指名**
+   （`capabilities_ambiguous`），不按表序默认选一个。
+4. 没有任何候选能提供 → 400 并指名（`capabilities_unservable`）。§3.3 rule 1，不静默丢弃。
+
+**与 §9 预告规则的差异，及原因。** §9 当时写的是「显式选定 profile → 单个 binding」。
+实施时改为上面的「锚点优先 + 唯一性」，因为前者会**收窄今天已有的能力**：Bedrock runtime
+的四个 profile（Converse / Titan Embed / Titan Image / Nova）ceiling 互斥，一条连接同时提供
+它们在改造前就能做到，退回「一个连接一个 profile」等于逼操作员为同一份凭据建四条连接。
+锚点优先在 Mantle 那组同样给出正确答案——它把共享能力判给操作员选中的那个 profile，
+而不是表里第一个。这顺带修掉了一个**改造前就存在、当时没被发现的缺陷**：控制台选
+「Mantle Responses」时，拆分按表序把 chat 判给了 Mantle Chat profile。
+
+### 10.2 数值上限归 profile，不再随扁平集流动
+
+`max_context_tokens` / `max_output_tokens` 是 profile 的属性，不是连接的属性：
+
+- 每个 binding 取**自己 profile** 的上限（全仓库只有 Titan Embed 声明了 8192）。
+- 请求里的值**只能收窄本来就有上限的 profile**，绝不会给一个没有上限的 profile 造出一个。
+- 超出该 profile 上限 → 400 并指名（`capabilities_unservable`）。
+- 请求了一个**这条连接上没有任何 profile 能承载**的上限 → 400 并指名
+  （`capabilities_limit_unavailable`），文案指向「令牌上限属于模型规格，请在部署里声明」。
+  不静默丢弃：否则调用方拿到 201，会以为这条连接被限住了，而它并没有。
+- 端点下发的 `connection_ceiling` 数值取**同组中最严的已声明上限**（Bedrock runtime 组是
+  8192），因为那才是保存会接受的最大值；报「无限制」会让表单给出一个必被拒的数字。
+
+**这是 review 抓到的一个真缺陷，不是提案时的设计**（详见 §10.9 第 1 条）：第一版实现里
+「请求值 > 0 就套到每个 binding」，而连接的存储摘要 `BindingsCapabilitiesSummary` 取的是
+各 binding 的**最大值**，于是读回来的 8192 在下一次保存时被套到 Converse 聊天 binding 上——
+控制台每次编辑都会走这条回路，一次「什么都没改」的保存就把聊天上下文限到了 8192。
+这正是本节声称修掉的那个缺陷，只是换了条路径重新出现。
+
+### 10.3 端点新增字段
+
+`GET /admin/api/v1/provider-profiles` 每个 profile 增加 `connection_ceiling`、
+`connection_defaults`、`combines_with`；顶层增加 `capability_opt_in_warnings`。
+
+`connection_ceiling` **不是**同组 ceiling 的并集：多个 profile 都能提供的能力会被排除，
+因为 10.1 规则 3 会拒绝它。前端只渲染这个集合，所以「表单能勾但保存被拒」在结构上不可能发生
+（`TestAdminProviderProfilesServesTheConnectionLevelSets` 用同一个 domain 函数校验这条）。
+
+前端相应删除 `splitCapabilitiesAcrossProfiles` 与自己算并集的 `unionOf`，
+`combinableProfiles` 改为读 `combines_with`。
+
+### 10.4 §8 开放问题的答案
+
+- **`provider_executed_tools` 的出网警示**：端点下发 `capability_opt_in_warnings`（domain
+  `CapabilityOptInWarnings()`），前端在勾中时用既有 `notice warning` 陈述后果，措辞面向
+  操作员（「上游可以自己执行工具并为此额外访问网络……不经过 Halro，不受出站主机限制，
+  也不会出现在审计记录里」），复选框旁另有一行短标注。标注位只作为开关，UI 文案是前端资产。
+- **端点故障的运维含义**：服务商页与部署表单的能力编辑器在读不到矩阵时给出**重试入口**
+  （`ErrorState` 的 action），不再只有「刷新页面」这一条路。失败仍然 fail-closed：表单不渲染，
+  但服务商列表照常可读。
+
+### 10.5 §9 之外补上的两处缺口
+
+- **i18n 覆盖不变量**（原 §6 第 4 步要求、第一轮漏掉）：`i18n.test.tsx` 新增一条，用端点
+  golden fixture 断言 `capability_names` 每一项在 zh-CN 与 en-US 都有 `capabilities.*` 文案，
+  且没有多余文案。反向验证：两个语言里同时删掉一项文案时，键位 parity 测试**不会**失败，
+  这条会。
+- **`DeploymentsPage` 的第二份 chat 依赖**：`updateDeploymentCapability` 里硬编码的
+  `chatFeatures` 删除，改用与服务商表单同一个 `updateCapabilitySelection(catalog, …)`，
+  依赖规则来自端点的 `capability_requires_chat`。
+
+### 10.6 Azure / 兼容服务器的默认 Base URL
+
+两者的 `BaseURLTemplate` 改为空：Azure 的地址是资源专属域名，兼容服务器是自建地址，
+`https://api.openai.com` 对两者都是**看起来合理**的错误预填，而 Base URL 恰是操作员最不会
+复查的字段。
+
+### 10.7 验证
+
+- `go test ./...`、`go vet ./...` 全绿；前端 typecheck + 336 个 vitest + build，
+  `internal/webui/dist` 已重新内嵌。
+- **反向验证**（不失败的反向验证不算证据，每次都先确认编辑真的落到文件上）：
+  歧义改成按表序取第一个 → 歧义测试失败；不可提供改成不拒绝 → 两条 app 测试失败；
+  删掉一项能力文案（单语言与双语言各试一次）→ 新的 i18n 覆盖测试失败；
+  去掉出网警示块 → 控制台测试失败。
+- **真实二进制**（临时数据目录，未触碰本机 `data/`）：新装实例走完首次设置，用真实 Admin
+  API 建连接——扁平集得到两个 binding（chat/embeddings/streaming 与 images/files，
+  `max_context_tokens` 为 0）；发 `bindings` 数组返回 400；`rerank` 返回
+  `capabilities_unservable` 并指名；选中 Mantle Responses 再勾 `reasoning` 返回
+  `capabilities_ambiguous`，不勾则得到**选中那个 profile** 的单 binding；
+  端点实际下发的 Azure 预填地址为空、Mantle Responses 的 `connection_ceiling` 不含 `reasoning`。
+- **真实二进制复验 §10.9 第 1 条**：建一条同时带 Converse 与 Titan Embed 的 Bedrock 连接
+  （摘要 ctx 读回来是 8192），再把读回的记录原样 PUT 回去——两种写法都试了：控制台现在的
+  写法（清零两个上限）与旧写法（原样回传 8192），Converse binding 的上下文上限都仍是 0，
+  只有 Titan binding 是 8192。
+
+### 10.8 这一轮的行为变更（部署前需知道）
+
+1. Admin API 的 `POST/PUT /providers` **不再接受 `bindings`**；改发扁平 `capabilities`。
+   自建脚本与 Terraform 类调用方需要跟着改。
+2. 省略 `capabilities` 的请求，含义是「该 profile 自身的 defaults」（单 binding），
+   与控制台表单预勾的连接级并集不同——后者是表单起点，前者是「调用方什么都没说」。
+3. Azure OpenAI 与 `openai_compatible` 新建连接时不再预填 Base URL，必须自己填。
+4. **连接层不再能声明令牌上限**：只有声明了上限的 profile（今天只有 Titan Embed）能被收窄，
+   其余会以 `capabilities_limit_unavailable` 拒绝并指名；填得比 profile 允许的还大则是
+   `capabilities_limit_too_large`。模型的上下文/输出上限在**部署**里声明——部署表单本来就有
+   这一节。控制台的连接表单相应去掉了这两个输入框，已收窄的值不会被后续编辑放宽。
+5. **新建连接只预勾所选 profile 自己的能力**：Bedrock 不再一上来就声明嵌入 / 图像 / 异步视频，
+   OpenAI 不再一上来就声明六项媒体能力。它们仍在可勾范围内，改成操作员显式选择。
+6. **端点的 `capability_requires_chat` 换成 `capability_dependencies`**（依赖图，
+   含 `stream_usage → streaming`）。自建调用方若读过前者需要跟着改。
+7. 已存储的连接不受影响：这一轮没有改任何存储格式，也不需要重新初始化数据目录。
+
+### 10.9 code review 抓到并已修复的问题
+
+第二轮实现完成后跑了一次 review，以下每条都已修复，并各自补了测试：
+
+1. **数值上限经存储摘要回流**（严重）。见 §10.2 的说明。修法：上限只能收窄已有上限的
+   profile；无处承载则 400 指名；控制台不再显示也不再回传这两个字段。
+   测试：`TestSavingAConnectionUnchangedDoesNotMoveABoundBetweenProfiles`、
+   `TestABoundNoProfileHoldsIsRefused`、`TestATokenLimitNoProfileHoldsIsRefusedByName`。
+   真实二进制复验：读回摘要（ctx 8192）原样保存，Converse binding 仍是 0。
+2. **`max_output_tokens` 同源问题**：会与 Titan 的 ctx 8192 组合成 `out > ctx`，被
+   `ProviderInstance.Validate` 以一句不指认字段的话拒绝。同一修法覆盖。
+3. **`connection_ceiling` 的数值口径与保存不一致**：原来取最宽（0=无限制），而保存按最严
+   的那个 profile 拒绝。改为取最严的已声明上限（`tighterLimit`）。
+   测试：`TestConnectionCeilingReportsTheBoundASaveEnforces`。
+4. **部署表单把「矩阵还在加载」画成了红色错误**：`catalogReady` 在 pending 与 error 两态
+   都是 undefined。改为 pending 显示 `Loading`、error 才显示带重试的 `CapabilityMatrixError`。
+5. **`validateProvider` 里硬编码顿号**：改用 `common.listSeparator`，英文界面不再出现
+   `Vision、Tools`。
+6. **凭据行的「轮换」按钮在矩阵读不到时不可用却没禁用**：补 `disabled` 与 `matrixUnavailable`
+   提示，与「＋ 凭据 / ＋ 服务商」一致。
+7. **列表行的启停仍在回传 `bindings`**（会 400，而前端测试 mock 掉了 API 所以看不见）。
+   改为只发扁平能力且清零上限；并在服务端补
+   `TestTheRowToggleSendsAPayloadTheServerStillAccepts` —— 这条测试的意义正是：控制台单侧
+   改动打不破的契约，要有一条服务端测试按行启停的真实载荷去打。
+8. **`setProfileID("bedrock.runtime.converse.text.v1")` 是最后一处控制台里的矩阵字面量**，
+   改为 `defaultProfileID(catalog, "bedrock")`。
+9. **`internal/config/config.go` 的 godoc 挂错了类型**（`ModelCatalog` 的注释被 `Providers`
+   截走），归位。
+
+review 还指出 Bedrock「能力实现」选择器不再决定连接声明什么（选 Titan Image 也会预勾整组）。
+第一轮核对时判断这不是本次改动引入的（分支上的 `connectionDefaults` 一直取并集），
+**第二轮把它当成缺陷修掉了**——见 §10.10 第 2 条。
+
+### 10.10 第二轮 review 抓到并已修复的问题
+
+对修复后的工作区又跑了一次 review，7 条全部修复：
+
+1. **收窄过的令牌上限被无关编辑悄悄放宽**（中）。`boundedLimit` 在请求值为 0 时回填 profile
+   的完整上限，而控制台现在**总是**发 0（表单和列表启停都发），于是一条把 Titan Embed 收窄到
+   4096 的连接，只要启停一次就变回 8192——`internal/gateway/service.go` 的
+   `filterTokenCapabilities` 读这个值，等于悄悄拆掉操作员设的路由护栏。
+   修法：请求未提及时保留该 binding 已存的值（`retainedLimit`），明确写了值才改。
+   测试 `TestANarrowedBoundSurvivesAnEditThatDoesNotMentionIt`（含反向验证）。
+2. **新建 Bedrock 连接会默认声明 Titan / Nova 的能力**（中）。`ConnectionDefaults` 取同组并集，
+   于是新建连接一保存就向路由声明嵌入、图像生成、异步视频——账号可能根本没有这些模型的权限，
+   而 CLAUDE.md 明确要求 Bedrock Beta 的能力面不得随手放宽。改为**只取锚点 profile 自己的
+   defaults**；上限仍然提供这些能力，勾选变成操作员的动作，「能力实现」选择器也重新有了意义。
+   测试 `TestNewConnectionDefaultsToTheProfileThatWasPicked`。
+3. **省略 `capabilities` 的 PUT 会重写连接**（低/中）。多 binding 的守卫删掉后，一次只改名字的
+   PUT 会把能力集重置成锚点 defaults——OpenAI 连接因此丢掉 media binding，并把操作员收窄过的
+   chat 能力放回去，返回 200 且只字不提。改为：更新时省略即**沿用当前已存的能力集**，
+   只有创建才从 profile defaults 起步。测试 `TestAPutThatOmitsCapabilitiesKeepsTheConnectionIntact`。
+4. **服务商行的「编辑」按钮在矩阵读不到时是死的**（低）：补 `disabled` 与原因提示，
+   与「＋ 新建」「轮换」一致。
+5. **`connection_ceiling` 的数值字段承诺了保存不一定接受的值**（低）：能不能声明上限取决于勾了
+   哪些能力（承载它的是那个 profile），所以连接级不再给数值，一律 0，并在注释里写明这不是
+   「无限制」而是「这不是连接级的问题」；每个 profile 自己的上限仍在 `ceiling` 里下发。
+   同时把「超出上限」从 `capabilities_unservable` 拆成 `capabilities_limit_too_large`——
+   「这个连接无法提供最大上下文令牌」既不准确也没指出该怎么办。
+6. **显式指定的 `profile_id` 会被静默替换**（低）：选中的实现如果一个能力都没落上，
+   连接的 profile 投影会取第一个 binding，于是返回一个调用方没要过的 profile_id。
+   改为 400 并说明原因，与紧邻的歧义拒绝保持同一种态度。
+7. **`CapabilityRequiresChat` 的注释与内容都不准**（低）：它自称镜像 `Validate`，而 `Validate`
+   只强制 streaming→chat；真正的完整规则在 `modelcatalog.ValidateDependencies`，且包含
+   **`stream_usage → streaming`——下发的清单漏了这一条**，表单因此能勾出「有流式用量、没有流式」
+   的组合，等到建部署时才被拒。改为下发完整的依赖图 `capability_dependencies`
+   （直接依赖，不展开传递），前端两处表单按图做双向闭包联动。
+
+真实二进制复验（临时数据目录）：收窄到 4096 的连接经「控制台式编辑」与「只改名 PUT」两种写法后
+仍是 4096；converse 的 `connection_defaults` 只有 chat/streaming/stream_usage 而 ceiling 仍offer
+嵌入与图像；`connection_ceiling` 的 ctx 为 0；选 Titan Image 却只勾 chat 被具名拒绝；
+上限填 100000 返回 `capabilities_limit_too_large`；端点下发的 `stream_usage` 依赖为 `["streaming"]`。
+
