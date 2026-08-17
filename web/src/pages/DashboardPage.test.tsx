@@ -27,7 +27,10 @@ describe("DashboardPage", () => {
     expect(panel.querySelector('li[aria-current="step"]')).toHaveTextContent("发布可调用模型");
     expect(within(panel).getByRole("link", { name: "配置模型与路由" })).toHaveAttribute("href", "/admin/deployments?intent=create&onboarding=first-request");
     expect(screen.queryByLabelText("今日关键指标")).not.toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "实时运行状态" })).toBeVisible();
+    // Before the first real request every runtime channel reads the same empty
+    // instance the checklist is already describing, so the strip only competes
+    // with the one action the page is asking for.
+    expect(screen.queryByRole("region", { name: "实时运行状态" })).not.toBeInTheDocument();
   });
 
   it("drops the checklist only after the first successful request", async () => {

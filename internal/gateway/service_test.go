@@ -1778,3 +1778,45 @@ func assertRefusedBeforeProviderIO(
 		t.Fatalf("%s reached the provider: %d calls", what, adapter.calls-before)
 	}
 }
+
+// The provider reports how much of the prompt it served from its own cache, and
+// the Deployment now carries a rate for exactly that span. Settling the whole
+// prompt at the ordinary input rate — which is what happened before the rate
+// existed — over-charges by the difference between the two rates, here tenfold
+// on eight of ten prompt tokens.
+func TestChatSettlesCachedPromptTokensAtTheCacheReadRate(t *testing.T) {
+	f := newFixture(t, 1_000)
+	defer f.close()
+	if err := f.registry.Register(provider.Target{
+		ID: "target_cached", DeploymentID: "dep_target_cached",
+		PublicModel: "chat-cached", ProviderModel: "provider-model", Adapter: f.adapter,
+		InputMicrosPerMillion:       1_000_000,
+		CachedInputMicrosPerMillion: 100_000,
+		OutputMicrosPerMillion:      2_000_000,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f.project.AllowedModels = append(f.project.AllowedModels, "chat-cached")
+	if err := f.service.auth.Refresh(context.Background(), source{
+		keys: []domain.GatewayKey{f.key}, projects: []domain.Project{f.project},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	usage := &openaiapi.Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15}
+	usage.SetCachedPromptTokens(8)
+	f.adapter.response.Usage = usage
+	request := chatRequest()
+	request.Model = "chat-cached"
+	if _, err := f.service.Chat(context.Background(), f.plaintext, request); err != nil {
+		t.Fatal(err)
+	}
+	period := time.Now().UTC().Format("2006-01-02")
+	balance := f.state.Balance(f.project.ID, period, testTimezoneVersion)
+	// 2 uncached prompt tokens at $1/M, 8 cached at $0.10/M rounded up to one
+	// micro-USD, and 5 output tokens at $2/M. The same call with nothing cached
+	// commits 20.
+	if balance.ReservedMicrosUSD != 0 || balance.CommittedMicrosUSD != 13 ||
+		balance.InputTokens != 10 || balance.OutputTokens != 5 {
+		t.Fatalf("unexpected balance: %#v", balance)
+	}
+}

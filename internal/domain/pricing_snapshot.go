@@ -15,23 +15,28 @@ import (
 // one provider attempt. Pointer-valued terms preserve the distinction between
 // a known zero-cost free price and an unknown price.
 type PriceSnapshot struct {
-	PricingSelectedAt      time.Time            `json:"pricing_selected_at"`
-	PriceEvidenceStatus    PriceEvidenceStatus  `json:"price_evidence_status"`
-	CostValueStatus        CostValueStatus      `json:"cost_value_status"`
-	PriceVersionID         string               `json:"price_version_id,omitempty"`
-	PriceVersion           *uint64              `json:"price_version,omitempty"`
-	BillingMode            BillingMode          `json:"billing_mode,omitempty"`
-	Currency               string               `json:"currency,omitempty"`
-	FormulaVersion         PriceFormulaVersion  `json:"formula_version,omitempty"`
-	InputMicrosPerMillion  *int64               `json:"input_micros_per_million,omitempty"`
-	OutputMicrosPerMillion *int64               `json:"output_micros_per_million,omitempty"`
-	FixedRequestMicrosUSD  *int64               `json:"fixed_request_micros_usd,omitempty"`
-	EffectiveFrom          *time.Time           `json:"effective_from,omitempty"`
-	SourceType             PriceSourceType      `json:"source_type,omitempty"`
-	SourceAssurance        PriceSourceAssurance `json:"source_assurance,omitempty"`
-	SourceContentSHA256    string               `json:"source_content_sha256,omitempty"`
-	SourceReference        string               `json:"source_reference,omitempty"`
-	SourceWithoutArchive   bool                 `json:"source_without_archive,omitempty"`
+	PricingSelectedAt     time.Time           `json:"pricing_selected_at"`
+	PriceEvidenceStatus   PriceEvidenceStatus `json:"price_evidence_status"`
+	CostValueStatus       CostValueStatus     `json:"cost_value_status"`
+	PriceVersionID        string              `json:"price_version_id,omitempty"`
+	PriceVersion          *uint64             `json:"price_version,omitempty"`
+	BillingMode           BillingMode         `json:"billing_mode,omitempty"`
+	Currency              string              `json:"currency,omitempty"`
+	FormulaVersion        PriceFormulaVersion `json:"formula_version,omitempty"`
+	InputMicrosPerMillion *int64              `json:"input_micros_per_million,omitempty"`
+	// CachedInputMicrosPerMillion is required on a versioned snapshot. A missing
+	// term would price the cached span at zero, so a snapshot that lacks it is
+	// refused rather than read as free — the same fail-closed rule the other
+	// billing terms already follow.
+	CachedInputMicrosPerMillion *int64               `json:"cached_input_micros_per_million,omitempty"`
+	OutputMicrosPerMillion      *int64               `json:"output_micros_per_million,omitempty"`
+	FixedRequestMicrosUSD       *int64               `json:"fixed_request_micros_usd,omitempty"`
+	EffectiveFrom               *time.Time           `json:"effective_from,omitempty"`
+	SourceType                  PriceSourceType      `json:"source_type,omitempty"`
+	SourceAssurance             PriceSourceAssurance `json:"source_assurance,omitempty"`
+	SourceContentSHA256         string               `json:"source_content_sha256,omitempty"`
+	SourceReference             string               `json:"source_reference,omitempty"`
+	SourceWithoutArchive        bool                 `json:"source_without_archive,omitempty"`
 }
 
 // Clone returns a deep copy suitable for crossing an accounting/WAL boundary.
@@ -44,6 +49,10 @@ func (s PriceSnapshot) Clone() PriceSnapshot {
 	if s.InputMicrosPerMillion != nil {
 		value := *s.InputMicrosPerMillion
 		clone.InputMicrosPerMillion = &value
+	}
+	if s.CachedInputMicrosPerMillion != nil {
+		value := *s.CachedInputMicrosPerMillion
+		clone.CachedInputMicrosPerMillion = &value
 	}
 	if s.OutputMicrosPerMillion != nil {
 		value := *s.OutputMicrosPerMillion
@@ -95,11 +104,13 @@ func NewVersionedPriceSnapshot(price DeploymentPriceVersion, selectedAt time.Tim
 	}
 	selectedAt = selectedAt.UTC()
 	version, input, output, fixed, effective := price.Version, price.InputMicrosPerMillion, price.OutputMicrosPerMillion, price.FixedRequestMicrosUSD, price.EffectiveFrom
+	cached := price.CachedInputMicrosPerMillion
 	snapshot := PriceSnapshot{
 		PricingSelectedAt: selectedAt, PriceEvidenceStatus: PriceEvidenceVersioned, CostValueStatus: CostValueKnown,
 		PriceVersionID: price.ID, PriceVersion: &version, BillingMode: price.BillingMode,
 		Currency: price.Currency, FormulaVersion: price.FormulaVersion,
-		InputMicrosPerMillion: &input, OutputMicrosPerMillion: &output, FixedRequestMicrosUSD: &fixed,
+		InputMicrosPerMillion: &input, CachedInputMicrosPerMillion: &cached,
+		OutputMicrosPerMillion: &output, FixedRequestMicrosUSD: &fixed,
 		EffectiveFrom: &effective, SourceType: price.Source.Type, SourceAssurance: price.Source.Assurance,
 		SourceContentSHA256: price.Source.ContentSHA256, SourceReference: price.Source.Reference,
 		SourceWithoutArchive: price.Source.AssertedWithoutArchive,
@@ -118,7 +129,8 @@ func (s PriceSnapshot) Validate() error {
 	switch s.PriceEvidenceStatus {
 	case PriceEvidenceVersioned:
 		if s.CostValueStatus != CostValueKnown || s.PriceVersionID == "" || s.PriceVersion == nil || *s.PriceVersion == 0 ||
-			s.EffectiveFrom == nil || s.InputMicrosPerMillion == nil || s.OutputMicrosPerMillion == nil || s.FixedRequestMicrosUSD == nil {
+			s.EffectiveFrom == nil || s.InputMicrosPerMillion == nil || s.CachedInputMicrosPerMillion == nil ||
+			s.OutputMicrosPerMillion == nil || s.FixedRequestMicrosUSD == nil {
 			return errors.New("versioned price snapshot is incomplete")
 		}
 		if s.EffectiveFrom.IsZero() || !isUTC(*s.EffectiveFrom) || s.EffectiveFrom.After(s.PricingSelectedAt) {
@@ -127,15 +139,17 @@ func (s PriceSnapshot) Validate() error {
 		price := DeploymentPriceVersion{
 			ID: s.PriceVersionID, DeploymentID: "snapshot", Version: *s.PriceVersion, Revision: 1,
 			BillingMode: s.BillingMode, Currency: s.Currency, FormulaVersion: s.FormulaVersion,
-			InputMicrosPerMillion: *s.InputMicrosPerMillion, OutputMicrosPerMillion: *s.OutputMicrosPerMillion,
-			FixedRequestMicrosUSD: *s.FixedRequestMicrosUSD, EffectiveFrom: *s.EffectiveFrom,
+			InputMicrosPerMillion: *s.InputMicrosPerMillion, CachedInputMicrosPerMillion: *s.CachedInputMicrosPerMillion,
+			OutputMicrosPerMillion: *s.OutputMicrosPerMillion,
+			FixedRequestMicrosUSD:  *s.FixedRequestMicrosUSD, EffectiveFrom: *s.EffectiveFrom,
 			CreatedBy: "snapshot", CreatedAt: s.PricingSelectedAt,
 			Source: PriceSource{Type: s.SourceType, Assurance: s.SourceAssurance, ReceivedAt: s.PricingSelectedAt,
 				ContentSHA256: s.SourceContentSHA256, Reference: "snapshot", AssertedWithoutArchive: true},
 		}
 		// Source-type-specific optional evidence is intentionally not reconstructed;
 		// validate the immutable billing terms directly.
-		if price.InputMicrosPerMillion < 0 || price.OutputMicrosPerMillion < 0 || price.FixedRequestMicrosUSD < 0 {
+		if price.InputMicrosPerMillion < 0 || price.CachedInputMicrosPerMillion < 0 ||
+			price.OutputMicrosPerMillion < 0 || price.FixedRequestMicrosUSD < 0 {
 			return errors.New("price snapshot amounts cannot be negative")
 		}
 		manualWithoutArchive := s.SourceType == PriceSourceManual && s.SourceAssurance == PriceAssuranceAsserted &&
@@ -152,11 +166,13 @@ func (s PriceSnapshot) Validate() error {
 		}
 		switch s.BillingMode {
 		case BillingModeMetered:
-			if *s.InputMicrosPerMillion == 0 && *s.OutputMicrosPerMillion == 0 && *s.FixedRequestMicrosUSD == 0 {
+			if *s.InputMicrosPerMillion == 0 && *s.CachedInputMicrosPerMillion == 0 &&
+				*s.OutputMicrosPerMillion == 0 && *s.FixedRequestMicrosUSD == 0 {
 				return errors.New("metered snapshot requires a positive component")
 			}
 		case BillingModeFree:
-			if *s.InputMicrosPerMillion != 0 || *s.OutputMicrosPerMillion != 0 || *s.FixedRequestMicrosUSD != 0 {
+			if *s.InputMicrosPerMillion != 0 || *s.CachedInputMicrosPerMillion != 0 ||
+				*s.OutputMicrosPerMillion != 0 || *s.FixedRequestMicrosUSD != 0 {
 				return errors.New("free snapshot components must be zero")
 			}
 		default:
@@ -164,7 +180,8 @@ func (s PriceSnapshot) Validate() error {
 		}
 	case PriceEvidenceUnknown:
 		if s.CostValueStatus != CostValueUnknown || s.PriceVersion != nil || s.PriceVersionID != "" ||
-			s.InputMicrosPerMillion != nil || s.OutputMicrosPerMillion != nil || s.FixedRequestMicrosUSD != nil ||
+			s.InputMicrosPerMillion != nil || s.CachedInputMicrosPerMillion != nil ||
+			s.OutputMicrosPerMillion != nil || s.FixedRequestMicrosUSD != nil ||
 			s.SourceType != "" || s.SourceAssurance != "" || s.SourceContentSHA256 != "" || s.SourceReference != "" || s.SourceWithoutArchive {
 			return errors.New("unknown price snapshot must not contain known price terms")
 		}
@@ -174,20 +191,27 @@ func (s PriceSnapshot) Validate() error {
 	return nil
 }
 
-func (s PriceSnapshot) Calculate(inputTokens, outputTokens int64) (PriceCostBreakdown, error) {
+// Calculate prices one attempt against this frozen snapshot. cachedInputTokens
+// is the subset of inputTokens the provider served from cache; callers that
+// cannot know it yet pass zero and are charged the ordinary input rate for the
+// whole prompt.
+func (s PriceSnapshot) Calculate(inputTokens, cachedInputTokens, outputTokens int64) (PriceCostBreakdown, error) {
 	if err := s.Validate(); err != nil {
 		return PriceCostBreakdown{}, err
 	}
 	if s.CostValueStatus != CostValueKnown {
 		return PriceCostBreakdown{}, ErrPriceUnavailable
 	}
-	if inputTokens < 0 || outputTokens < 0 {
+	if inputTokens < 0 || cachedInputTokens < 0 || outputTokens < 0 {
 		return PriceCostBreakdown{}, errors.New("token counts cannot be negative")
+	}
+	if cachedInputTokens > inputTokens {
+		return PriceCostBreakdown{}, errors.New("cached input tokens cannot exceed input tokens")
 	}
 	if s.BillingMode == BillingModeFree {
 		return PriceCostBreakdown{}, nil
 	}
-	input, err := ceilTokenComponent(inputTokens, *s.InputMicrosPerMillion)
+	input, err := ceilInputComponents(inputTokens, cachedInputTokens, *s.InputMicrosPerMillion, *s.CachedInputMicrosPerMillion)
 	if err != nil {
 		return PriceCostBreakdown{}, err
 	}

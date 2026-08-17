@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/akz142857/Halro/internal/anthropicapi"
 	"github.com/akz142857/Halro/internal/auth"
@@ -29,6 +30,14 @@ type nativeMessagesFake struct {
 	streamEvents []anthropicapi.RawStreamEvent
 	tokenCount   []byte
 	countCalls   int
+	// ledgerState is the accounting state the fixture wired this fake into, so a
+	// test can assert what the native path actually settled without every fixture
+	// helper growing a return value for it.
+	ledgerState *ledger.State
+	// response and streamUsage override what the upstream reports, so a test can
+	// exercise a usage shape the default script does not produce.
+	response    []byte
+	streamUsage *anthropicapi.Usage
 }
 
 func (fake *nativeMessagesFake) Type() string {
@@ -49,6 +58,9 @@ func (*nativeMessagesFake) Embed(context.Context, provider.EmbeddingCall) (opena
 }
 func (fake *nativeMessagesFake) MessagesNative(_ context.Context, call provider.NativeMessageCall) (provider.NativeMessageResult, error) {
 	fake.payload = append([]byte(nil), call.Payload...)
+	if fake.response != nil {
+		return provider.NativeMessageResult{Payload: append([]byte(nil), fake.response...)}, nil
+	}
 	return provider.NativeMessageResult{Payload: []byte(`{"id":"msg_provider","type":"message","role":"assistant","content":[{"type":"thinking","thinking":"hidden","signature":"opaque-sig"},{"type":"text","text":"ok"}],"model":"claude-provider","stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":4,"output_tokens":1}}`)}, nil
 }
 func (fake *nativeMessagesFake) MessagesNativeStream(_ context.Context, call provider.NativeMessageCall, emit func(anthropicapi.RawStreamEvent) error) (*anthropicapi.Usage, error) {
@@ -68,6 +80,9 @@ func (fake *nativeMessagesFake) MessagesNativeStream(_ context.Context, call pro
 		if err := emit(event); err != nil {
 			return nil, err
 		}
+	}
+	if fake.streamUsage != nil {
+		return fake.streamUsage, nil
 	}
 	return &anthropicapi.Usage{InputTokens: 2, OutputTokens: 1}, nil
 }
@@ -116,7 +131,7 @@ func newNativeMessagesFixtureFull(t *testing.T, profileID domain.ProviderProfile
 		t.Fatal(err)
 	}
 	manifest, _ := provider.BuiltinProfile(profileID)
-	fake := &nativeMessagesFake{providerType: manifest.ProviderType}
+	fake := &nativeMessagesFake{providerType: manifest.ProviderType, ledgerState: state}
 	capabilities := domain.DefaultProviderCapabilitiesForProfile(manifest.ProviderType, profileID)
 	bridge, err := provider.NewLegacyAdapterBridge(fake, manifest, domain.EvidenceForCapabilities(capabilities, domain.EvidenceVerified))
 	if err != nil {
@@ -497,4 +512,46 @@ func TestNativeMessagesGatesProviderExecutedToolsOnTheConnectionCapability(t *te
 			t.Fatalf("tool did not reach the provider: %s", fake.payload)
 		}
 	})
+}
+
+// Anthropic reports input_tokens net of both cache tiers. The native path used
+// to copy that field straight onto the settlement, so a request whose prompt was
+// almost entirely served from cache was recorded as the few tokens that were
+// not, with no cache tiers at all — the ledger lost the prompt and the
+// Deployment's cache-read rate never applied to anything.
+func TestNativeMessagesSettlesTheWholePromptAcrossCacheTiers(t *testing.T) {
+	for _, streaming := range []bool{false, true} {
+		name := "unary"
+		if streaming {
+			name = "stream"
+		}
+		t.Run(name, func(t *testing.T) {
+			service, fake, key, closeFixture := newNativeMessagesFixture(t)
+			defer closeFixture()
+			fake.response = []byte(`{"id":"msg_provider","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"model":"claude-provider","stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":5,"cache_read_input_tokens":90,"cache_creation_input_tokens":5,"output_tokens":1}}`)
+			fake.streamUsage = &anthropicapi.Usage{InputTokens: 5, CacheReadInputTokens: 90, CacheCreationInputTokens: 5, OutputTokens: 1}
+			body := `{"model":"claude","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`
+			if streaming {
+				body = `{"model":"claude","max_tokens":64,"stream":true,"messages":[{"role":"user","content":"hi"}]}`
+			}
+			request, err := anthropicapi.DecodeMessageRequest(bytes.NewBufferString(body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if streaming {
+				err = service.MessagesNativeStream(context.Background(), key, anthropicapi.SupportedVersion, nil, request, func(anthropicapi.RawStreamEvent) error { return nil })
+			} else {
+				_, err = service.MessagesNative(context.Background(), key, anthropicapi.SupportedVersion, nil, request)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			period := time.Now().UTC().Format("2006-01-02")
+			balance := fake.ledgerState.Balance("project_native", period, testTimezoneVersion)
+			// 5 + 90 + 5 prompt tokens, not the 5 Anthropic reports net of caching.
+			if balance.InputTokens != 100 || balance.OutputTokens != 1 {
+				t.Fatalf("balance=%#v", balance)
+			}
+		})
+	}
 }

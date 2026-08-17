@@ -504,7 +504,7 @@ func (s *Service) startAttempt(
 }
 
 func accountingTermsFromSnapshot(price domain.DeploymentPriceVersion, snapshot domain.PriceSnapshot, target provider.Target, inputTokens, outputTokens int64) (int64, ledger.LeaseMode, *domain.PriceSnapshot, provider.Target, error) {
-	cost, err := snapshot.Calculate(inputTokens, outputTokens)
+	cost, err := snapshot.Calculate(inputTokens, 0, outputTokens)
 	if err != nil {
 		return 0, "", nil, target, gatewayError("accounting_error", "unable to estimate request cost", http.StatusServiceUnavailable, err)
 	}
@@ -514,6 +514,7 @@ func accountingTermsFromSnapshot(price domain.DeploymentPriceVersion, snapshot d
 	}
 	priced := target
 	priced.InputMicrosPerMillion = *snapshot.InputMicrosPerMillion
+	priced.CachedInputMicrosPerMillion = *snapshot.CachedInputMicrosPerMillion
 	priced.OutputMicrosPerMillion = *snapshot.OutputMicrosPerMillion
 	priced.FixedRequestMicrosUSD = *snapshot.FixedRequestMicrosUSD
 	return cost.TotalCostMicrosUSD, mode, &snapshot, priced, nil
@@ -533,7 +534,7 @@ func (s *Service) prepareAccountingLease(ctx context.Context, target provider.Ta
 	if err != nil {
 		return 0, "", nil, target, gatewayError("accounting_error", "unable to snapshot request price", http.StatusServiceUnavailable, err)
 	}
-	cost, err := snapshot.Calculate(inputTokens, outputTokens)
+	cost, err := snapshot.Calculate(inputTokens, 0, outputTokens)
 	if err != nil {
 		return 0, "", nil, target, gatewayError("accounting_error", "unable to estimate request cost", http.StatusServiceUnavailable, err)
 	}
@@ -543,6 +544,7 @@ func (s *Service) prepareAccountingLease(ctx context.Context, target provider.Ta
 	}
 	priced := target
 	priced.InputMicrosPerMillion = *snapshot.InputMicrosPerMillion
+	priced.CachedInputMicrosPerMillion = *snapshot.CachedInputMicrosPerMillion
 	priced.OutputMicrosPerMillion = *snapshot.OutputMicrosPerMillion
 	priced.FixedRequestMicrosUSD = *snapshot.FixedRequestMicrosUSD
 	return cost.TotalCostMicrosUSD, mode, &snapshot, priced, nil
@@ -1232,7 +1234,7 @@ func (s *Service) MessagesNative(ctx context.Context, plaintextKey, version stri
 		}
 	}
 	if message.ID != "" {
-		usage := semantic.Usage{InputTokens: message.Usage.InputTokens, OutputTokens: message.Usage.OutputTokens, TotalTokens: message.Usage.InputTokens + message.Usage.OutputTokens, Source: semantic.UsageProviderReported}
+		usage := nativeAnthropicUsage(message.Usage)
 		semanticResult.Usage = &usage
 	}
 	settlement := settlementForResult(semanticResult, providerErr, inputTokens, outputTokens, attempt.pricingTarget, attempt.accounting.ReservationMicrosUSD)
@@ -1390,7 +1392,8 @@ func (s *Service) MessagesNativeStream(ctx context.Context, plaintextKey, versio
 	deliveredBytes := gate.delivered
 	semanticUsage := (*semantic.Usage)(nil)
 	if usage != nil {
-		semanticUsage = &semantic.Usage{InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, TotalTokens: usage.InputTokens + usage.OutputTokens, Source: semantic.UsageProviderReported}
+		converted := nativeAnthropicUsage(*usage)
+		semanticUsage = &converted
 	}
 	settlement := streamSettlement(semanticUsage, providerErr, emitted, inputTokens, outputTokens,
 		estimateInputTokens(deliveredBytes), attempt.pricingTarget, attempt.accounting.ReservationMicrosUSD)
@@ -2084,9 +2087,12 @@ func (s *Service) finalizeRequest(request budget.Request, outcome string) error 
 }
 
 func estimateReservation(inputTokens, outputTokens int64, target provider.Target) (int64, error) {
-	reservation, err := budget.EstimateCostMicros(
-		inputTokens, outputTokens, target.InputMicrosPerMillion, target.OutputMicrosPerMillion,
-	)
+	// A reservation is taken before the provider answers, so no cache read has
+	// been reported yet and the whole prompt reserves at the ordinary input rate.
+	reservation, err := budget.EstimateCostMicros(budget.TokenCost{
+		InputTokens: inputTokens, OutputTokens: outputTokens,
+		InputMicrosPerMillion: target.InputMicrosPerMillion, OutputMicrosPerMillion: target.OutputMicrosPerMillion,
+	})
 	if err != nil {
 		return 0, gatewayError("accounting_error", "unable to estimate request cost", 503, err)
 	}
@@ -2235,7 +2241,9 @@ func (s *Service) captureTokenGuardPricingView(
 			if err != nil {
 				return 0, "", gatewayError("accounting_error", "candidate pricing snapshot is invalid", http.StatusServiceUnavailable, err)
 			}
-			cost, err := snapshot.Calculate(inputTokens, outputTokens)
+			// Token Guard bounds what a request may cost before it runs, so it
+			// prices every candidate as if nothing were served from cache.
+			cost, err := snapshot.Calculate(inputTokens, 0, outputTokens)
 			if err != nil {
 				return 0, "", gatewayError("accounting_error", "candidate cost could not be calculated", http.StatusServiceUnavailable, err)
 			}
@@ -2432,32 +2440,59 @@ func settlementForResult(
 	return result
 }
 
-// recordUsageTiers copies the provider's token breakdown onto the settlement and
-// marks the cost estimated whenever a cache tier was reported.
+// nativeAnthropicUsage translates a Messages usage block into the semantic
+// convention, which the native path has to do for itself because nothing
+// translates its payload.
 //
-// The tiers are priced very differently upstream — a cache read is a fraction of
-// the input rate and a cache write a premium on it — but a Deployment carries a
-// single input rate, so charging every prompt token at it is knowingly wrong for
-// the cached span. Flagging that is what keeps the ledger honest: the number is
-// an upper bound rather than a silent mis-charge, and CostEstimated is the
-// existing signal operators already filter on. Once a pricing version can express
-// the tiers, this flag is what identifies the rows worth re-rating.
+// Anthropic reports input_tokens net of both cache tiers. Copying that field
+// straight across under-reports the prompt by whatever the cache served — most
+// of it on an agent workload — and leaves the tiers empty, so the cache-read
+// rate never applies and the ledger records a prompt that never existed. The
+// compatibility mapping already recovers the full span this way; the native path
+// was reading the same field with the other meaning.
+func nativeAnthropicUsage(usage anthropicapi.Usage) semantic.Usage {
+	promptTokens := usage.PromptTokens()
+	return semantic.Usage{
+		InputTokens:           promptTokens,
+		CachedInputTokens:     usage.CacheReadInputTokens,
+		CacheWriteInputTokens: usage.CacheCreationInputTokens,
+		OutputTokens:          usage.OutputTokens,
+		ReasoningTokens:       usage.ThinkingTokens,
+		TotalTokens:           promptTokens + usage.OutputTokens,
+		Source:                semantic.UsageProviderReported,
+	}
+}
+
+// recordUsageTiers copies the provider's token breakdown onto the settlement and
+// marks the cost estimated whenever a tier is reported that the price cannot
+// express.
+//
+// A cache read now has its own rate on the price version, so a cached span is
+// charged at what it actually costs and needs no such flag. A cache *write*
+// still does: upstreams bill it at a premium over the input rate — 1.25x on
+// Anthropic's table — and a Deployment has no term for it, so those tokens are
+// charged at the ordinary input rate and the row is marked estimated. That is an
+// under-charge rather than an upper bound, which is exactly why it must stay
+// visible: CostEstimated is the signal that identifies the rows worth re-rating
+// once a price version can express the write tier.
 func recordUsageTiers(result *budget.Settlement, usage semantic.Usage) {
 	result.ProviderCachedInputTokens = usage.CachedInputTokens
 	result.ProviderCacheWriteInputTokens = usage.CacheWriteInputTokens
 	result.ProviderReasoningTokens = usage.ReasoningTokens
-	if usage.CachedInputTokens > 0 || usage.CacheWriteInputTokens > 0 {
+	if usage.CacheWriteInputTokens > 0 {
 		result.CostEstimated = true
 	}
 }
 
 func setSettlementCost(result *budget.Settlement, target provider.Target, reservationMicrosUSD int64) {
-	cost, err := budget.EstimateCostMicros(
-		result.ProviderInputTokens,
-		result.ProviderOutputTokens,
-		target.InputMicrosPerMillion,
-		target.OutputMicrosPerMillion,
-	)
+	cost, err := budget.EstimateCostMicros(budget.TokenCost{
+		InputTokens:                 result.ProviderInputTokens,
+		CachedInputTokens:           result.ProviderCachedInputTokens,
+		OutputTokens:                result.ProviderOutputTokens,
+		InputMicrosPerMillion:       target.InputMicrosPerMillion,
+		CachedInputMicrosPerMillion: target.CachedInputMicrosPerMillion,
+		OutputMicrosPerMillion:      target.OutputMicrosPerMillion,
+	})
 	if err != nil {
 		result.CommittedMicrosUSD = reservationMicrosUSD
 		result.CostEstimated = true

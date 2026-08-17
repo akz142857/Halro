@@ -21,7 +21,7 @@ import (
 	bbolt "go.etcd.io/bbolt"
 )
 
-const schemaVersion uint64 = 29
+const schemaVersion uint64 = 30
 
 // legacyCapabilityEvidence is the evidence tier this project used before
 // capability evidence was durable metadata. The domain no longer accepts it, so
@@ -729,6 +729,71 @@ var migrations = []migration{
 		}
 		return migrationStep(step, "after_project_allowed_models")
 	}},
+	// A price version gained a cache-read rate. Records written before it have
+	// no such term, and decoding a missing term as zero would retroactively make
+	// every cached prompt token free — so the value is reconstructed instead:
+	// until this migration a cached token was billed at the ordinary input rate,
+	// and copying that rate across is the only reading that leaves existing
+	// prices charging exactly what they charged yesterday.
+	//
+	// Proposals carry a digest over their own billing terms, so a backfilled
+	// proposal is re-digested; leaving the old digest would make every stored
+	// proposal fail validation on the next read.
+	{version: 30, name: "deployment_price_cached_input_rate", up: func(tx *bbolt.Tx, step func(string) error) error {
+		if err := migrationStep(step, "before_deployment_price_cached_input_rate"); err != nil {
+			return err
+		}
+		if err := rewriteBucketIfPresent(tx, bucketDeploymentPriceVersions, backfillCachedInputRate); err != nil {
+			return err
+		}
+		if err := rewriteBucketIfPresent(tx, bucketDeploymentPriceProposals, func(record map[string]json.RawMessage) error {
+			if err := backfillCachedInputRate(record); err != nil {
+				return err
+			}
+			return redigestPriceProposal(record)
+		}); err != nil {
+			return err
+		}
+		return migrationStep(step, "after_deployment_price_cached_input_rate")
+	}},
+}
+
+// backfillCachedInputRate copies a record's input rate onto the cache-read rate
+// it predates. A record that already carries the term is left alone.
+func backfillCachedInputRate(record map[string]json.RawMessage) error {
+	if _, present := record["cached_input_micros_per_million"]; present {
+		return nil
+	}
+	input, ok := record["input_micros_per_million"]
+	if !ok {
+		return errors.New("price record has no input rate to reconstruct a cache-read rate from")
+	}
+	record["cached_input_micros_per_million"] = input
+	return nil
+}
+
+// redigestPriceProposal recomputes a proposal's evidence digest after its
+// billing terms were brought forward. The digest is computed from the decoded
+// proposal, exactly as validation computes it.
+func redigestPriceProposal(record map[string]json.RawMessage) error {
+	encoded, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+	var proposal domain.DeploymentPriceProposal
+	if err := json.Unmarshal(encoded, &proposal); err != nil {
+		return err
+	}
+	digest, err := proposal.ComputeDigest()
+	if err != nil {
+		return err
+	}
+	patched, err := json.Marshal(digest)
+	if err != nil {
+		return err
+	}
+	record["digest"] = patched
+	return nil
 }
 
 // newCapabilityEvidenceMembers names the capabilities added to the dictionary by

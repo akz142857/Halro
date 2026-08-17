@@ -100,7 +100,7 @@
 - 充当 Provider 最终发票、税务或应付账款系统；
 - 自动保证公开价与企业合同价一致；
 - 汇率换算、多币种会计、税费、信用额度或预付余额；
-- 按缓存输入、Batch、长上下文、Priority Tier、地域阶梯量、峰谷时段分别计价；
+- 按 Batch、长上下文、Priority Tier、地域阶梯量、峰谷时段分别计价（缓存输入已按 ADR 0022 加入价格公式，不再属于非目标；缓存写入仍未定价）；
 - 根据生成内容质量、延迟或业务价值动态定价；
 - 修改 Provider 返回的 Token 数；
 - 自动抓取网页后无需人工确认直接激活价格；
@@ -263,6 +263,7 @@ Proposal 最小 schema 包含：Provider、模型/Deployment 身份、Region、�
   "currency": "USD",
   "formula_version": "usd_token_v1",
   "input_micros_per_million": 400000,
+  "cached_input_micros_per_million": 40000,
   "output_micros_per_million": 1600000,
   "fixed_request_micros_usd": 0,
   "effective_from": "2026-09-01T00:00:00Z",
@@ -393,6 +394,7 @@ Go 领域模型必须使用显式 tagged union、指针或 option 类型表达 n
   "currency": "USD",
   "formula_version": "usd_token_v1",
   "input_micros_per_million": 400000,
+  "cached_input_micros_per_million": 40000,
   "output_micros_per_million": 1600000,
   "fixed_request_micros_usd": 0,
   "effective_from": "2026-09-01T00:00:00Z",
@@ -446,6 +448,7 @@ Accounting Lease、PriceSnapshot 和 `AttemptStarted` 尚未 durable 时禁止�
 - `currency`；
 - `price_formula_version`；
 - `input_micros_per_million`；
+- `cached_input_micros_per_million`；
 - `output_micros_per_million`；
 - `fixed_request_micros_usd`；
 - `input_cost_micros_usd`；
@@ -474,7 +477,9 @@ Accounting Lease、PriceSnapshot 和 `AttemptStarted` 尚未 durable 时禁止�
 `usd_token_v1`：
 
 ```text
-input_cost_micro_usd  = ceil(input_tokens  × input_micro_usd_per_million  / 1,000,000)
+uncached_input_tokens = input_tokens - cached_input_tokens
+input_cost_micro_usd  = ceil(uncached_input_tokens × input_micro_usd_per_million        / 1,000,000)
+                      + ceil(cached_input_tokens   × cached_input_micro_usd_per_million / 1,000,000)
 output_cost_micro_usd = ceil(output_tokens × output_micro_usd_per_million / 1,000,000)
 total_micro_usd       = input_cost + output_cost + fixed_request_micro_usd
 ```
@@ -482,10 +487,11 @@ total_micro_usd       = input_cost + output_cost + fixed_request_micro_usd
 要求：
 
 - 全程使用 checked integer arithmetic；中间乘积使用 `bits.Mul64`/`bits.Div64`、`big.Int` 或等价宽整数，不能因为中间 `int64` 乘法溢出而拒绝最终本可表示的结果；
-- 输入和输出分量分别向上取整到 1 micro-USD；
+- 缓存命中与未命中的输入分量、以及输出分量，各自独立向上取整到 1 micro-USD（见 ADR 0022）；`cached_input_tokens` 是 `input_tokens` 的子集，绝不叠加；尚不知道拆分的路径（预留、Token Guard、崩溃恢复）一律按未命中价计整段提示词；
+- `input_cost_micros_usd` 报告整段提示词成本，缓存拆分由 attempt 的 `provider_cached_input_tokens` 与价格快照还原；
 - 不允许二进制浮点参与 Ledger 权威计算；
 - 前端十进制 USD 必须严格转换为 micro-USD，超过 6 位小数时拒绝而不是静默四舍五入；
-- `free` 版本三个金额必须全部为零，但仍记录已知价格状态和版本 ID；
+- `free` 版本四个金额必须全部为零，但仍记录已知价格状态和版本 ID；
 - `CostEstimated` 继续表示 Token 或调用结果不确定导致的保守成本，不表示单价来源可信度；
 - 价格证据状态与 Token/成本估算状态必须分开表达。
 
@@ -598,6 +604,7 @@ free/unknown 的 Token Guard 行为：free 的估算成本为已知零；unknown
     "currency": "USD",
     "formula_version": "usd_token_v1",
     "input_micros_per_million": 600000,
+    "cached_input_micros_per_million": 60000,
     "output_micros_per_million": 2400000,
     "fixed_request_micros_usd": 0,
     "input_tokens": 30,

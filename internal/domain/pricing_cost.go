@@ -9,6 +9,11 @@ import (
 
 const microsPerUSD = int64(1_000_000)
 
+// PriceCostBreakdown reports the cost of one attempt by component.
+// InputCostMicrosUSD covers the whole prompt — the span billed at the ordinary
+// input rate plus the cached span billed at the cache-read rate — because the
+// two are always charged against the same budget and the split is already
+// reconstructible from the attempt's cached token count and its price snapshot.
 type PriceCostBreakdown struct {
 	InputCostMicrosUSD  int64 `json:"input_cost_micros_usd"`
 	OutputCostMicrosUSD int64 `json:"output_cost_micros_usd"`
@@ -17,10 +22,19 @@ type PriceCostBreakdown struct {
 }
 
 // CalculateUSDTokensV1 applies usd_token_v1 with exact integer arithmetic and
-// rounds the input and output components independently up to one micro-USD.
-func CalculateUSDTokensV1(inputTokens, outputTokens int64, price DeploymentPriceVersion) (PriceCostBreakdown, error) {
-	if inputTokens < 0 || outputTokens < 0 {
+// rounds each priced component independently up to one micro-USD.
+//
+// cachedInputTokens is a subset of inputTokens, following semantic.Usage: the
+// span the provider served from cache is billed at the cache-read rate and the
+// remainder at the ordinary input rate. Callers that do not know the split yet —
+// a reservation taken before the provider answers, a lease recovered from its
+// prepared bounds — pass zero and are charged the higher rate throughout.
+func CalculateUSDTokensV1(inputTokens, cachedInputTokens, outputTokens int64, price DeploymentPriceVersion) (PriceCostBreakdown, error) {
+	if inputTokens < 0 || cachedInputTokens < 0 || outputTokens < 0 {
 		return PriceCostBreakdown{}, errors.New("token counts cannot be negative")
+	}
+	if cachedInputTokens > inputTokens {
+		return PriceCostBreakdown{}, errors.New("cached input tokens cannot exceed input tokens")
 	}
 	if err := price.Validate(); err != nil {
 		return PriceCostBreakdown{}, err
@@ -28,7 +42,7 @@ func CalculateUSDTokensV1(inputTokens, outputTokens int64, price DeploymentPrice
 	if price.BillingMode == BillingModeFree {
 		return PriceCostBreakdown{}, nil
 	}
-	input, err := ceilTokenComponent(inputTokens, price.InputMicrosPerMillion)
+	input, err := ceilInputComponents(inputTokens, cachedInputTokens, price.InputMicrosPerMillion, price.CachedInputMicrosPerMillion)
 	if err != nil {
 		return PriceCostBreakdown{}, err
 	}
@@ -46,6 +60,27 @@ func CalculateUSDTokensV1(inputTokens, outputTokens int64, price DeploymentPrice
 		InputCostMicrosUSD: input, OutputCostMicrosUSD: output,
 		FixedCostMicrosUSD: price.FixedRequestMicrosUSD, TotalCostMicrosUSD: total.Int64(),
 	}, nil
+}
+
+// ceilInputComponents prices the uncached and cached spans of one prompt,
+// rounding each up independently before adding them. Rounding per tier rather
+// than on the sum keeps the result identical whichever caller computes it —
+// the gateway's settlement and the ledger's re-derivation must agree to the
+// micro-USD or the settlement is rejected as not matching its price snapshot.
+func ceilInputComponents(inputTokens, cachedInputTokens, microsPerMillion, cachedMicrosPerMillion int64) (int64, error) {
+	uncached, err := ceilTokenComponent(inputTokens-cachedInputTokens, microsPerMillion)
+	if err != nil {
+		return 0, err
+	}
+	cached, err := ceilTokenComponent(cachedInputTokens, cachedMicrosPerMillion)
+	if err != nil {
+		return 0, err
+	}
+	sum := new(big.Int).Add(big.NewInt(uncached), big.NewInt(cached))
+	if !sum.IsInt64() {
+		return 0, errors.New("token price component overflows int64 micro-USD")
+	}
+	return sum.Int64(), nil
 }
 
 func ceilTokenComponent(tokens, microsPerMillion int64) (int64, error) {

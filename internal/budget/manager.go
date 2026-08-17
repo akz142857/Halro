@@ -586,7 +586,7 @@ func (m *Manager) settle(ctx context.Context, eventID string, attempt Attempt, s
 		copy := attempt.PriceSnapshot.Clone()
 		priceSnapshot = &copy
 		if copy.CostValueStatus == domain.CostValueKnown && settlement.Outcome != "recovered_not_started" {
-			cost, costErr := copy.Calculate(settlement.ProviderInputTokens, settlement.ProviderOutputTokens)
+			cost, costErr := copy.Calculate(settlement.ProviderInputTokens, settlement.ProviderCachedInputTokens, settlement.ProviderOutputTokens)
 			if costErr != nil {
 				return costErr
 			}
@@ -691,7 +691,11 @@ func (m *Manager) RecoverPendingLeases(ctx context.Context) error {
 				Outcome: "recovered_started_unknown_result", OccurredAt: event.OccurredAt,
 			}
 			if event.PriceSnapshot != nil && event.PriceSnapshot.CostValueStatus == domain.CostValueKnown {
-				cost, err := event.PriceSnapshot.Calculate(event.PreparedInputTokens, event.PreparedOutputTokens)
+				// Nothing is known about how much of a recovered attempt's prompt
+				// the provider served from cache, so none of it is: the whole
+				// prompt is charged at the ordinary input rate, which is the
+				// conservative reading of an ambiguous outcome.
+				cost, err := event.PriceSnapshot.Calculate(event.PreparedInputTokens, 0, event.PreparedOutputTokens)
 				if err != nil {
 					return fmt.Errorf("recover attempt %q: %w", event.AttemptID, err)
 				}
@@ -800,19 +804,48 @@ func (m *Manager) appendApplyRecord(ctx context.Context, event ledger.Event) (le
 	return record, nil
 }
 
-func EstimateCostMicros(inputTokens, outputTokens, inputMicrosPerMillion, outputMicrosPerMillion int64) (int64, error) {
-	if inputTokens < 0 || outputTokens < 0 || inputMicrosPerMillion < 0 || outputMicrosPerMillion < 0 {
+// TokenCost is one attempt's priced tokens together with the rates they are
+// billed at. CachedInputTokens is a subset of InputTokens — the span the
+// provider served from its own cache — and is billed at
+// CachedInputMicrosPerMillion instead of the ordinary input rate. Callers that
+// do not know the split, such as a reservation taken before the provider
+// answers, leave it zero and pay the ordinary rate for the whole prompt.
+type TokenCost struct {
+	InputTokens                 int64
+	CachedInputTokens           int64
+	OutputTokens                int64
+	InputMicrosPerMillion       int64
+	CachedInputMicrosPerMillion int64
+	OutputMicrosPerMillion      int64
+}
+
+// EstimateCostMicros rounds each priced span up independently, matching
+// domain.PriceSnapshot.Calculate exactly: a settlement whose committed amount
+// disagrees with the snapshot by even one micro-USD is rejected as not matching
+// its frozen price.
+func EstimateCostMicros(cost TokenCost) (int64, error) {
+	if cost.InputTokens < 0 || cost.CachedInputTokens < 0 || cost.OutputTokens < 0 ||
+		cost.InputMicrosPerMillion < 0 || cost.CachedInputMicrosPerMillion < 0 || cost.OutputMicrosPerMillion < 0 ||
+		cost.CachedInputTokens > cost.InputTokens {
 		return 0, ErrInvalidAmount
 	}
-	inputCost, err := multiplyDivideCeil(inputTokens, inputMicrosPerMillion, 1_000_000)
+	inputCost, err := multiplyDivideCeil(cost.InputTokens-cost.CachedInputTokens, cost.InputMicrosPerMillion, 1_000_000)
 	if err != nil {
 		return 0, err
 	}
-	outputCost, err := multiplyDivideCeil(outputTokens, outputMicrosPerMillion, 1_000_000)
+	cachedCost, err := multiplyDivideCeil(cost.CachedInputTokens, cost.CachedInputMicrosPerMillion, 1_000_000)
 	if err != nil {
 		return 0, err
 	}
-	return checkedAdd(inputCost, outputCost)
+	promptCost, err := checkedAdd(inputCost, cachedCost)
+	if err != nil {
+		return 0, err
+	}
+	outputCost, err := multiplyDivideCeil(cost.OutputTokens, cost.OutputMicrosPerMillion, 1_000_000)
+	if err != nil {
+		return 0, err
+	}
+	return checkedAdd(promptCost, outputCost)
 }
 
 func multiplyDivideCeil(left, right, divisor int64) (int64, error) {

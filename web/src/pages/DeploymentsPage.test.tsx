@@ -756,6 +756,60 @@ describe("deployment price panel", () => {
     await waitFor(() => expect(screen.queryByText(PRICE_BLOCKER)).not.toBeInTheDocument());
   });
 
+  // The cache-read rate has no server-side default: an omitted term would be a
+  // 400, and a term the form quietly filled with the input rate would over-charge
+  // every cached prompt. It is sent explicitly, and an adjustment opens on the
+  // rate the current version already carries rather than on zero.
+  it("sends the cache-read rate with every price version it creates", async () => {
+    vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [activePriceVersion()], next_cursor: "" });
+    const create = vi.spyOn(api, "createDeploymentPrice").mockResolvedValue(activePriceVersion());
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "查看详情" }));
+    fireEvent.click(await screen.findByRole("button", { name: "调整价格" }));
+    expect(await screen.findByLabelText(/^缓存输入 USD \/ 百万令牌/)).toHaveValue("0.1");
+    fireEvent.change(screen.getByLabelText(/^缓存输入 USD \/ 百万令牌/), { target: { value: "0.5" } });
+    fireEvent.click(screen.getByRole("button", { name: "下一步：核对" }));
+    expect(await screen.findByText("$0.1 → $0.5")).toBeVisible();
+    fireEvent.change(await screen.findByLabelText("当前密码"), { target: { value: "pw" } });
+    fireEvent.click(screen.getByRole("button", { name: "确认并创建价格版本" }));
+
+    await waitFor(() => expect(create).toHaveBeenCalled());
+    expect(create.mock.calls[0][1]).toMatchObject({ input_usd_per_million: "1", cached_input_usd_per_million: "0.5" });
+  });
+
+  // The detail panel is where an operator reads what a deployment charges. It
+  // listed input, output and fixed and stopped there, so the rate that decides
+  // most of a cache-heavy bill was invisible outside the edit form.
+  it("reads the cache-read rate out on the deployment detail panel", async () => {
+    vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [activePriceVersion()], next_cursor: "" });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "查看详情" }));
+    const cached = (await screen.findByText("缓存输入价格")).closest("div")!;
+    expect(within(cached).getByText("US$0.10")).toBeVisible();
+    expect(within(cached).getByText("USD / 百万令牌")).toBeVisible();
+  });
+
+  // A first price is the case with nothing to copy from, and zero is the one
+  // default that would be wrong: it gives every cached prompt token away. The
+  // field follows the input rate — what a cached token cost before the rate
+  // existed — until the operator lowers it deliberately.
+  it("defaults an untouched cache-read rate to the input rate rather than zero", async () => {
+    vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [], next_cursor: "" });
+    const create = vi.spyOn(api, "createDeploymentPrice").mockResolvedValue(activePriceVersion());
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "为 Deployment dep_1 设置价格" }));
+    fireEvent.change(await screen.findByLabelText("输入 USD / 百万令牌"), { target: { value: "5" } });
+    expect(screen.getByLabelText(/^缓存输入 USD \/ 百万令牌/)).toHaveValue("5");
+    fireEvent.click(screen.getByRole("button", { name: "下一步：核对" }));
+    fireEvent.change(await screen.findByLabelText("当前密码"), { target: { value: "pw" } });
+    fireEvent.click(screen.getByRole("button", { name: "确认并创建价格版本" }));
+
+    await waitFor(() => expect(create).toHaveBeenCalled());
+    expect(create.mock.calls[0][1]).toMatchObject({ input_usd_per_million: "5", cached_input_usd_per_million: "5" });
+  });
+
   // The server refuses any version that is not strictly later than every
   // non-cancelled one. The form used to open on "immediately" regardless, so a
   // deployment carrying a scheduled version offered a path whose only possible
@@ -858,7 +912,8 @@ describe("deployment price panel", () => {
 function activePriceVersion(): DeploymentPriceVersion {
   return {
     id: "price_1", deployment_id: "dep_1", version: 3, revision: 1, billing_mode: "metered", currency: "USD",
-    formula_version: "usd_tokens_v1", input_micros_per_million: 1_000_000, output_micros_per_million: 2_000_000,
+    formula_version: "usd_tokens_v1", input_micros_per_million: 1_000_000, cached_input_micros_per_million: 100_000,
+    output_micros_per_million: 2_000_000,
     fixed_request_micros_usd: 0, effective_from: "2026-08-01T00:00:00Z",
     source: { type: "manual", assurance: "asserted", reference: "temporary_estimate" }, status: "active",
   };

@@ -42,7 +42,7 @@ func TestAdminDeploymentPriceLifecycleUsesVersionedTimelineAndAuditIntent(t *tes
 	body := map[string]any{
 		"billing_mode": "metered", "currency": "USD",
 		"current_password":      "correct horse battery staple",
-		"input_usd_per_million": "0.40", "output_usd_per_million": "1.60", "fixed_request_usd": "0",
+		"input_usd_per_million": "0.40", "cached_input_usd_per_million": "0.04", "output_usd_per_million": "1.60", "fixed_request_usd": "0",
 		"effective_from": effective.Format(time.RFC3339),
 		"source": map[string]any{
 			"type": "manual", "reference": "official_public_price", "asserted_without_archive": true,
@@ -156,7 +156,7 @@ func TestImmediateFreePriceUsesServerTimeAndIsImmediatelySelectable(t *testing.T
 	now := time.Date(2026, 8, 10, 6, 0, 0, 0, time.UTC)
 	price, err := priceVersionFromInput("price_immediate", "deployment_immediate", "admin", now, createPriceInput{
 		BillingMode: domain.BillingModeFree, Currency: "USD",
-		InputUSDPerMillion: "0", OutputUSDPerMillion: "0", FixedRequestUSD: "0",
+		InputUSDPerMillion: "0", CachedInputUSDPerMillion: "0", OutputUSDPerMillion: "0", FixedRequestUSD: "0",
 		EffectiveImmediately: true,
 		Source:               priceSourceInput{Type: domain.PriceSourceManual, Reference: "temporary_estimate", AssertedWithoutArchive: true},
 	})
@@ -200,7 +200,7 @@ func TestAdminImmediateFreePriceIsActiveAndIdempotent(t *testing.T) {
 	cookie, csrf := loginAdminForTest(t, runtime)
 	body := map[string]any{
 		"billing_mode": "free", "currency": "USD",
-		"input_usd_per_million": "0", "output_usd_per_million": "0", "fixed_request_usd": "0",
+		"input_usd_per_million": "0", "cached_input_usd_per_million": "0", "output_usd_per_million": "0", "fixed_request_usd": "0",
 		"effective_immediately": true, "current_password": "correct horse battery staple",
 		"source": map[string]any{"type": "manual", "reference": "temporary_estimate", "asserted_without_archive": true},
 	}
@@ -308,7 +308,7 @@ func TestPriceCreationAuditCarriesTheSameSourceEvidenceWhicheverWayItTakesEffect
 	price := func(extra map[string]any) map[string]any {
 		body := map[string]any{
 			"billing_mode": "metered", "currency": "USD", "current_password": "correct horse battery staple",
-			"input_usd_per_million": "0.40", "output_usd_per_million": "1.60", "fixed_request_usd": "0",
+			"input_usd_per_million": "0.40", "cached_input_usd_per_million": "0.04", "output_usd_per_million": "1.60", "fixed_request_usd": "0",
 			"source": source,
 		}
 		for key, value := range extra {
@@ -378,7 +378,7 @@ func TestPriceCreationRequiresExactlyOneWayOfTakingEffect(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			body := map[string]any{
 				"billing_mode": "metered", "currency": "USD", "current_password": "correct horse battery staple",
-				"input_usd_per_million": "0.40", "output_usd_per_million": "1.60", "fixed_request_usd": "0",
+				"input_usd_per_million": "0.40", "cached_input_usd_per_million": "0.04", "output_usd_per_million": "1.60", "fixed_request_usd": "0",
 				"source": map[string]any{"type": "manual", "reference": "official_public_price", "asserted_without_archive": true},
 			}
 			for key, value := range testCase.when {
@@ -425,7 +425,7 @@ func TestAdminFreePriceRequiresReauthentication(t *testing.T) {
 	defer runtime.Close()
 	cookie, csrf := loginAdminForTest(t, runtime)
 	request := adminRequest(t, http.MethodPost, "/admin/api/v1/deployments/missing/prices", map[string]any{
-		"billing_mode": "free", "currency": "USD", "input_usd_per_million": "0", "output_usd_per_million": "0", "fixed_request_usd": "0",
+		"billing_mode": "free", "currency": "USD", "input_usd_per_million": "0", "cached_input_usd_per_million": "0", "output_usd_per_million": "0", "fixed_request_usd": "0",
 		"effective_from": time.Now().UTC().Add(time.Hour).Format(time.RFC3339),
 		"source":         map[string]any{"type": "manual", "reference": "free tier", "asserted_without_archive": true},
 	})
@@ -462,7 +462,7 @@ func TestAdminPriceProposalNeverActivatesUntilReviewedAndAdopted(t *testing.T) {
 	cookie, csrf := loginAdminForTest(t, runtime)
 	now := time.Now().UTC()
 	body := map[string]any{
-		"billing_mode": "metered", "currency": "USD", "input_usd_per_million": "0.50",
+		"billing_mode": "metered", "currency": "USD", "input_usd_per_million": "0.50", "cached_input_usd_per_million": "0.05",
 		"output_usd_per_million": "2.00", "fixed_request_usd": "0", "match": "exact",
 		"expires_at": now.Add(24 * time.Hour).Format(time.RFC3339), "warnings": []string{"LLM-extracted; verify source before adoption"},
 		"source": map[string]any{
@@ -537,7 +537,7 @@ func TestAdoptingAPriceProposalTakesEffectOnTheSameTermsAsCreatingOne(t *testing
 	runtime, bootstrap, cookie, csrf := openPricingRuntimeForTest(t, "Proposal adoption")
 	now := time.Now().UTC()
 	proposalRequest := adminRequest(t, http.MethodPost, "/admin/api/v1/deployments/"+bootstrap.DeploymentID+"/price-proposals", map[string]any{
-		"billing_mode": "metered", "currency": "USD", "input_usd_per_million": "0.50",
+		"billing_mode": "metered", "currency": "USD", "input_usd_per_million": "0.50", "cached_input_usd_per_million": "0.05",
 		"output_usd_per_million": "2.00", "fixed_request_usd": "0", "match": "exact",
 		"expires_at": now.Add(24 * time.Hour).Format(time.RFC3339),
 		"source": map[string]any{

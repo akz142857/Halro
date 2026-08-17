@@ -319,6 +319,7 @@ func run(arguments []string, logger *slog.Logger) error {
 		projectName := flags.String("project-name", "Default", "project display name")
 		dailyBudget := flags.Int64("daily-budget-micros-usd", 0, "daily budget in micro-USD; zero is unlimited")
 		inputPrice := flags.Int64("input-micros-per-million", 0, "input price in micro-USD per million tokens")
+		cachedInputPrice := flags.Int64("cached-input-micros-per-million", -1, "cache-read input price in micro-USD per million tokens; leave unset to bill cached tokens at the input price")
 		outputPrice := flags.Int64("output-micros-per-million", 0, "output price in micro-USD per million tokens")
 		billingMode := flags.String("billing-mode", "", "billing mode: metered or free; required when both prices are zero")
 		if err := flags.Parse(arguments[1:]); err != nil {
@@ -340,7 +341,8 @@ func run(arguments []string, logger *slog.Logger) error {
 			ProviderModel: *providerModel, PublicModel: *publicModel,
 			ProjectName: *projectName, DailyBudgetMicrosUSD: *dailyBudget,
 			BillingMode:           domain.BillingMode(*billingMode),
-			InputMicrosPerMillion: *inputPrice, OutputMicrosPerMillion: *outputPrice,
+			InputMicrosPerMillion: *inputPrice, CachedInputMicrosPerMillion: statedPrice(*cachedInputPrice),
+			OutputMicrosPerMillion: *outputPrice,
 		}, secret)
 		if err != nil {
 			return err
@@ -988,4 +990,14 @@ func runHealthcheckWithClient(rawURL string, timeout time.Duration, client *http
 		return fmt.Errorf("readiness endpoint returned status %d", response.StatusCode)
 	}
 	return nil
+}
+
+// statedPrice turns a bootstrap price flag into "stated" or "not stated". The
+// flag's negative default is the only way a command line can say nothing about a
+// price; zero is a real rate and must never stand in for silence.
+func statedPrice(value int64) *int64 {
+	if value < 0 {
+		return nil
+	}
+	return &value
 }

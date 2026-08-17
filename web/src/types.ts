@@ -757,6 +757,7 @@ export interface PriceSnapshot {
   currency?: string;
   formula_version?: string;
   input_micros_per_million?: number;
+  cached_input_micros_per_million?: number;
   output_micros_per_million?: number;
   fixed_request_micros_usd?: number;
   effective_from?: string;
@@ -776,6 +777,7 @@ export interface DeploymentPriceVersion {
   currency: "USD";
   formula_version: string;
   input_micros_per_million: number;
+  cached_input_micros_per_million: number;
   output_micros_per_million: number;
   fixed_request_micros_usd: number;
   effective_from: string;
@@ -793,6 +795,7 @@ export interface DeploymentPriceProposal {
 	billing_mode: "metered" | "free";
 	currency: "USD";
 	input_micros_per_million: number;
+	cached_input_micros_per_million: number;
 	output_micros_per_million: number;
 	fixed_request_micros_usd: number;
 	source: { type: string; assurance: string; content_sha256: string; reference?: string; uri?: string };

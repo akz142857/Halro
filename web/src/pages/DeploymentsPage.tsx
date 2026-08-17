@@ -319,6 +319,10 @@ function DeploymentRow({
         <dl className="deployment-facts">
           <DeploymentFact label={t("deployments.priceStatus")} value={activePrice ? activePrice.billing_mode === "free" ? t("deployments.freePrice") : t("deployments.versionedPrice") : prices.isPending ? t("common.loading") : t("deployments.unknownPrice")} meta={activePrice ? `v${activePrice.version} · ${dateTime(activePrice.effective_from)}` : t("deployments.priceRequired")} unset={!activePrice} />
           {(deployment.capabilities.chat || deployment.capabilities.embeddings) && <DeploymentFact label={t("deployments.inputPrice")} value={activePrice ? money(activePrice.input_micros_per_million) : t("deployments.notConfigured")} meta={t("deployments.perMillionTokens")} unset={!activePrice} />}
+          {/* Shown even when it equals the input rate: that is itself the fact
+              worth reading, since it means cached prompt tokens are not priced
+              separately on this deployment. */}
+          {(deployment.capabilities.chat || deployment.capabilities.embeddings) && <DeploymentFact label={t("deployments.cachedInputPrice")} value={activePrice ? money(activePrice.cached_input_micros_per_million) : t("deployments.notConfigured")} meta={t("deployments.perMillionTokens")} unset={!activePrice} />}
           {(deployment.capabilities.chat || deployment.capabilities.embeddings) && <DeploymentFact label={t("deployments.outputPrice")} value={activePrice ? money(activePrice.output_micros_per_million) : t("deployments.notConfigured")} meta={t("deployments.perMillionTokens")} unset={!activePrice} />}
           {activePrice && <DeploymentFact label={t("deployments.fixedPrice")} value={money(activePrice.fixed_request_micros_usd)} meta={t("deployments.perRequest")} />}
           <DeploymentFact label={t("deployments.concurrency")} value={deployment.max_concurrency || t("deployments.unlimited")} meta={t("deployments.deploymentScope")} />
@@ -477,6 +481,13 @@ function PriceVersionForm({ deployment, current, blocking, onClose }: { deployme
   const [step, setStep] = useState<"details" | "confirm">("details");
   const [mode, setMode] = useState<"metered" | "free">(current?.billing_mode ?? "metered");
   const [input, setInput] = useState(current ? priceInputValue(current.input_micros_per_million) : "0");
+  // Null means the operator has not touched the cache-read rate, and it then
+  // tracks the input rate: that is what a cached token cost before the term
+  // existed, and what migration 30 wrote onto every price that predates it.
+  // Defaulting the field to zero instead would give cached prompts away to
+  // anyone who filled in the other two rates and moved on.
+  const [cachedInput, setCachedInput] = useState<string | null>(current ? priceInputValue(current.cached_input_micros_per_million) : null);
+  const cachedInputValue = cachedInput ?? input;
   const [output, setOutput] = useState(current ? priceInputValue(current.output_micros_per_million) : "0");
   const [fixed, setFixed] = useState(current ? priceInputValue(current.fixed_request_micros_usd) : "0");
   // A scheduled version already occupies the end of the timeline, so the only
@@ -500,7 +511,7 @@ function PriceVersionForm({ deployment, current, blocking, onClose }: { deployme
   const idempotencyKey = useRef(crypto.randomUUID());
   const confirmSummary = useRef<HTMLElement>(null);
   const submitError = useRef<HTMLDivElement>(null);
-  const validPrice = mode === "free" || ([input, output, fixed].every(validUSD) && [input, output, fixed].some((value) => Number(value) > 0));
+  const validPrice = mode === "free" || ([input, cachedInputValue, output, fixed].every(validUSD) && [input, cachedInputValue, output, fixed].some((value) => Number(value) > 0));
   const scheduledTimestamp = Date.parse(zonedInputToISO(effective, timeZone));
   const validEffective = effectiveMode === "now"
     ? !blocking
@@ -508,6 +519,8 @@ function PriceVersionForm({ deployment, current, blocking, onClose }: { deployme
   const sourceNeedsNote = sourceKind === "official_public_price" || sourceKind === "contract_price";
   const validSource = !sourceNeedsNote || sourceNote.trim() !== "";
   const validDetails = validPrice && validEffective && validSource;
+  // The worked example prices a prompt with no cache hit, which is what a first
+  // request costs; the cache-read rate only ever lowers it from here.
   const exampleCost = mode === "free" ? 0 : Number(input) / 1000 + Number(output) / 2000 + Number(fixed);
   const effectiveLabel = effectiveMode === "now" ? t("deployments.effectiveNow") : validEffective ? dateTime(new Date(scheduledTimestamp).toISOString()) : "—";
   // Someone adjusting a live price is changing what every request costs from
@@ -517,6 +530,7 @@ function PriceVersionForm({ deployment, current, blocking, onClose }: { deployme
   const previousPrice = current
     ? {
         input: priceInputValue(current.input_micros_per_million),
+        cachedInput: priceInputValue(current.cached_input_micros_per_million),
         output: priceInputValue(current.output_micros_per_million),
         fixed: priceInputValue(current.fixed_request_micros_usd),
       }
@@ -527,6 +541,7 @@ function PriceVersionForm({ deployment, current, blocking, onClose }: { deployme
     mutationFn: () => api.createDeploymentPrice(deployment.id, {
       billing_mode: mode, currency: "USD",
       input_usd_per_million: mode === "free" ? "0" : input,
+      cached_input_usd_per_million: mode === "free" ? "0" : cachedInputValue,
       output_usd_per_million: mode === "free" ? "0" : output,
       fixed_request_usd: mode === "free" ? "0" : fixed,
       ...(effectiveMode === "now"
@@ -592,6 +607,13 @@ function PriceVersionForm({ deployment, current, blocking, onClose }: { deployme
             <Field label={t("deployments.inputUSD")}><input inputMode="decimal" required value={input} onChange={(event) => setInput(event.target.value)} /></Field>
             <Field label={t("deployments.outputUSD")}><input inputMode="decimal" required value={output} onChange={(event) => setOutput(event.target.value)} /></Field>
           </div>
+          {/* Every provider that reports a cache-read tier bills it well below
+              the input rate, so this field is asked for beside the other two
+              rather than hidden: left at the input rate it over-charges cached
+              prompts, and left at zero it gives them away. */}
+          <div className="price-form-grid">
+            <Field label={t("deployments.cachedInputUSD")} hint={t("deployments.cachedInputHint")}><input inputMode="decimal" required value={cachedInputValue} onChange={(event) => setCachedInput(event.target.value)} /></Field>
+          </div>
           <details className="price-advanced">
             <summary>{t("deployments.advancedPricing")}</summary>
             <Field label={t("deployments.fixedRequestUSD")}><input inputMode="decimal" required value={fixed} onChange={(event) => setFixed(event.target.value)} /></Field>
@@ -617,7 +639,7 @@ function PriceVersionForm({ deployment, current, blocking, onClose }: { deployme
           {current && <p>{t("deployments.currentPriceVersion", { version: current.version })}</p>}
           <dl>
             <div><dt>{t("deployments.billingMode")}</dt><dd>{mode === "free" ? t("deployments.freeLabel") : t("deployments.meteredLabel")}</dd></div>
-            {mode === "metered" && <><div><dt>{t("deployments.inputUSD")}</dt><dd>{priceCell(previousPrice?.input, input)}</dd></div><div><dt>{t("deployments.outputUSD")}</dt><dd>{priceCell(previousPrice?.output, output)}</dd></div><div><dt>{t("deployments.fixedRequestUSD")}</dt><dd>{priceCell(previousPrice?.fixed, fixed)}</dd></div></>}
+            {mode === "metered" && <><div><dt>{t("deployments.inputUSD")}</dt><dd>{priceCell(previousPrice?.input, input)}</dd></div><div><dt>{t("deployments.cachedInputUSD")}</dt><dd>{priceCell(previousPrice?.cachedInput, cachedInputValue)}</dd></div><div><dt>{t("deployments.outputUSD")}</dt><dd>{priceCell(previousPrice?.output, output)}</dd></div><div><dt>{t("deployments.fixedRequestUSD")}</dt><dd>{priceCell(previousPrice?.fixed, fixed)}</dd></div></>}
             <div><dt>{t("deployments.effectiveFrom")}</dt><dd>{effectiveLabel}</dd></div>
             <div><dt>{t("deployments.priceSourceKind")}</dt><dd>{t(`deployments.sourceKinds.${sourceKind === "official_public_price" ? "officialPublicPrice" : sourceKind === "contract_price" ? "contractPrice" : sourceKind === "internal_cost" ? "internalCost" : "temporaryEstimate"}`)}</dd></div>
             <div><dt>{t("deployments.sourceAssurance")}</dt><dd>{t("deployments.assertedSource")}</dd></div>

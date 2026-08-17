@@ -464,7 +464,7 @@ func loadProviderRegistryWithCatalog(
 		if !route.Enabled || route.DeletedAt != nil {
 			continue
 		}
-		inputPrice, outputPrice, fixedPrice := int64(0), int64(0), int64(0)
+		inputPrice, cachedInputPrice, outputPrice, fixedPrice := int64(0), int64(0), int64(0), int64(0)
 		deploymentID := route.DeploymentID
 		bindingID := ""
 		deploymentLimit := int64(0)
@@ -565,10 +565,11 @@ func loadProviderRegistryWithCatalog(
 			}
 			if priceErr == nil {
 				inputPrice = price.InputMicrosPerMillion
+				cachedInputPrice = price.CachedInputMicrosPerMillion
 				outputPrice = price.OutputMicrosPerMillion
 				fixedPrice = price.FixedRequestMicrosUSD
 			} else {
-				inputPrice, outputPrice, fixedPrice = 0, 0, 0
+				inputPrice, cachedInputPrice, outputPrice, fixedPrice = 0, 0, 0, 0
 			}
 			deploymentLimit = deployment.MaxConcurrency
 			capabilities = deploymentCapabilities(deployment, adapters[bindingID])
@@ -599,26 +600,27 @@ func loadProviderRegistryWithCatalog(
 			}
 		}
 		if err := registry.Register(provider.Target{
-			ID:                     route.ID,
-			DeploymentID:           deploymentID,
-			ProviderID:             providerID,
-			BindingID:              bindingID,
-			PublicModel:            route.PublicModel,
-			ProviderModel:          providerModel,
-			AccessSurface:          deploymentByID[deploymentID].AccessSurface,
-			ProfileID:              deploymentByID[deploymentID].ProfileID,
-			Region:                 deploymentByID[deploymentID].Region,
-			Adapter:                adapter,
-			InputMicrosPerMillion:  inputPrice,
-			OutputMicrosPerMillion: outputPrice,
-			FixedRequestMicrosUSD:  fixedPrice,
-			Priority:               route.Priority,
-			Strategy:               route.Strategy,
-			Capabilities:           capabilities,
-			CapabilityEvidence:     deploymentByID[deploymentID].CapabilityEvidence.Clone(),
-			AllowedAnthropicBetas:  append([]string(nil), instanceByID[providerID].AllowedAnthropicBetas...),
-			MaxConcurrency:         providerLimits[providerID],
-			DeploymentConcurrency:  deploymentLimit,
+			ID:                          route.ID,
+			DeploymentID:                deploymentID,
+			ProviderID:                  providerID,
+			BindingID:                   bindingID,
+			PublicModel:                 route.PublicModel,
+			ProviderModel:               providerModel,
+			AccessSurface:               deploymentByID[deploymentID].AccessSurface,
+			ProfileID:                   deploymentByID[deploymentID].ProfileID,
+			Region:                      deploymentByID[deploymentID].Region,
+			Adapter:                     adapter,
+			InputMicrosPerMillion:       inputPrice,
+			CachedInputMicrosPerMillion: cachedInputPrice,
+			OutputMicrosPerMillion:      outputPrice,
+			FixedRequestMicrosUSD:       fixedPrice,
+			Priority:                    route.Priority,
+			Strategy:                    route.Strategy,
+			Capabilities:                capabilities,
+			CapabilityEvidence:          deploymentByID[deploymentID].CapabilityEvidence.Clone(),
+			AllowedAnthropicBetas:       append([]string(nil), instanceByID[providerID].AllowedAnthropicBetas...),
+			MaxConcurrency:              providerLimits[providerID],
+			DeploymentConcurrency:       deploymentLimit,
 		}); err != nil {
 			report.Dangling = append(report.Dangling, referenceWithholding{
 				RouteID: route.ID, DeploymentID: deploymentID,

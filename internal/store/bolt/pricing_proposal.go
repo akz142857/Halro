@@ -198,8 +198,9 @@ func (s *Store) AdoptDeploymentPriceProposal(ctx context.Context, deploymentID, 
 		price = domain.DeploymentPriceVersion{
 			ID: priceID, DeploymentID: proposal.DeploymentID, Version: current + 1,
 			BillingMode: proposal.BillingMode, Currency: proposal.Currency, FormulaVersion: proposal.FormulaVersion,
-			InputMicrosPerMillion: proposal.InputMicrosPerMillion, OutputMicrosPerMillion: proposal.OutputMicrosPerMillion,
-			FixedRequestMicrosUSD: proposal.FixedRequestMicrosUSD, EffectiveFrom: effectiveFrom.UTC(), Source: proposal.Source,
+			InputMicrosPerMillion: proposal.InputMicrosPerMillion, CachedInputMicrosPerMillion: proposal.CachedInputMicrosPerMillion,
+			OutputMicrosPerMillion: proposal.OutputMicrosPerMillion,
+			FixedRequestMicrosUSD:  proposal.FixedRequestMicrosUSD, EffectiveFrom: effectiveFrom.UTC(), Source: proposal.Source,
 			CreatedBy: actor, CreatedAt: now.UTC(), Revision: 1,
 		}
 		latest, latestErr := selectLatestNonCancelledPriceTx(tx, proposal.DeploymentID)
@@ -230,7 +231,7 @@ func (s *Store) AdoptDeploymentPriceProposal(ctx context.Context, deploymentID, 
 		effective := price.EffectiveFrom.UTC()
 		intent.DeploymentID, intent.PriceVersion, intent.EffectiveFrom = price.DeploymentID, price.Version, &effective
 		intent.RecordSource(price.Source)
-		intent.ChangeSummary = fmt.Sprintf("before={proposal:%s} after={price:%s,billing:%s,input:%d,output:%d,fixed:%d}", proposal.ID, price.ID, price.BillingMode, price.InputMicrosPerMillion, price.OutputMicrosPerMillion, price.FixedRequestMicrosUSD)
+		intent.ChangeSummary = fmt.Sprintf("before={proposal:%s} after={price:%s,billing:%s,input:%d,cached_input:%d,output:%d,fixed:%d}", proposal.ID, price.ID, price.BillingMode, price.InputMicrosPerMillion, price.CachedInputMicrosPerMillion, price.OutputMicrosPerMillion, price.FixedRequestMicrosUSD)
 		return putPricingAuditIntentTx(tx, intent)
 	})
 	return proposal, price, err

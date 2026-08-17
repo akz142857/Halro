@@ -21,17 +21,24 @@ import (
 )
 
 type BootstrapOptions struct {
-	ProviderName           string
-	ProviderType           domain.ProviderType
-	ProviderBaseURL        string
-	ProviderAPIVersion     string
-	ProviderModel          string
-	PublicModel            string
-	ProjectName            string
-	DailyBudgetMicrosUSD   int64
-	BillingMode            domain.BillingMode
-	InputMicrosPerMillion  int64
-	OutputMicrosPerMillion int64
+	ProviderName          string
+	ProviderType          domain.ProviderType
+	ProviderBaseURL       string
+	ProviderAPIVersion    string
+	ProviderModel         string
+	PublicModel           string
+	ProjectName           string
+	DailyBudgetMicrosUSD  int64
+	BillingMode           domain.BillingMode
+	InputMicrosPerMillion int64
+	// CachedInputMicrosPerMillion prices prompt tokens the provider serves from
+	// its own cache. Nil means the operator did not state one, and bootstrap then
+	// charges cached tokens at the ordinary input rate — the conservative
+	// reading, and the one that matches what they asked for when they named a
+	// single input price. A pointer rather than a sentinel so that omitting the
+	// field cannot mean "cached tokens are free".
+	CachedInputMicrosPerMillion *int64
+	OutputMicrosPerMillion      int64
 }
 
 type BootstrapResult struct {
@@ -124,6 +131,10 @@ func Bootstrap(ctx context.Context, cfg config.Config, options BootstrapOptions,
 	}
 	now := time.Now().UTC()
 	billingMode := options.BillingMode
+	cachedInputMicrosPerMillion := options.InputMicrosPerMillion
+	if options.CachedInputMicrosPerMillion != nil {
+		cachedInputMicrosPerMillion = *options.CachedInputMicrosPerMillion
+	}
 	if billingMode == "" && (options.InputMicrosPerMillion > 0 || options.OutputMicrosPerMillion > 0) {
 		billingMode = domain.BillingModeMetered
 	}
@@ -164,7 +175,7 @@ func Bootstrap(ctx context.Context, cfg config.Config, options BootstrapOptions,
 			),
 			Enabled: true, CreatedAt: now, UpdatedAt: now,
 		},
-		Price: bootstrapPriceVersion(priceID, deploymentID, billingMode, options, now),
+		Price: bootstrapPriceVersion(priceID, deploymentID, billingMode, options, cachedInputMicrosPerMillion, now),
 		Route: domain.Route{
 			ID: routeID, PublicModel: options.PublicModel, DeploymentID: deploymentID,
 			Enabled: true, CreatedAt: now, UpdatedAt: now,
@@ -187,13 +198,14 @@ func Bootstrap(ctx context.Context, cfg config.Config, options BootstrapOptions,
 	}, nil
 }
 
-func bootstrapPriceVersion(priceID, deploymentID string, billingMode domain.BillingMode, options BootstrapOptions, now time.Time) domain.DeploymentPriceVersion {
-	evidence := sha256.Sum256([]byte(fmt.Sprintf("halro:bootstrap-pricing:v1:%s:%d:%d", billingMode, options.InputMicrosPerMillion, options.OutputMicrosPerMillion)))
+func bootstrapPriceVersion(priceID, deploymentID string, billingMode domain.BillingMode, options BootstrapOptions, cachedInputMicrosPerMillion int64, now time.Time) domain.DeploymentPriceVersion {
+	evidence := sha256.Sum256([]byte(fmt.Sprintf("halro:bootstrap-pricing:v1:%s:%d:%d:%d", billingMode, options.InputMicrosPerMillion, cachedInputMicrosPerMillion, options.OutputMicrosPerMillion)))
 	return domain.DeploymentPriceVersion{
 		ID: priceID, DeploymentID: deploymentID, Version: 1, Revision: 1,
 		BillingMode: billingMode, Currency: "USD", FormulaVersion: domain.PriceFormulaUSDTokensV1,
-		InputMicrosPerMillion: options.InputMicrosPerMillion, OutputMicrosPerMillion: options.OutputMicrosPerMillion,
-		EffectiveFrom: now, CreatedBy: "bootstrap", CreatedAt: now,
+		InputMicrosPerMillion: options.InputMicrosPerMillion, CachedInputMicrosPerMillion: cachedInputMicrosPerMillion,
+		OutputMicrosPerMillion: options.OutputMicrosPerMillion,
+		EffectiveFrom:          now, CreatedBy: "bootstrap", CreatedAt: now,
 		Source: domain.PriceSource{
 			Type: domain.PriceSourceManual, Assurance: domain.PriceAssuranceAsserted,
 			ReceivedAt: now, ContentSHA256: "sha256:" + hex.EncodeToString(evidence[:]),

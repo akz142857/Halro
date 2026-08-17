@@ -240,23 +240,24 @@ const (
 )
 
 type Target struct {
-	ID                     string
-	DeploymentID           string
-	ProviderID             string
-	BindingID              string
-	PublicModel            string
-	ProviderModel          string
-	AccessSurface          domain.AccessSurface
-	ProfileID              domain.ProviderProfileID
-	Region                 string
-	Adapter                Adapter
-	InputMicrosPerMillion  int64
-	OutputMicrosPerMillion int64
-	FixedRequestMicrosUSD  int64
-	Priority               int
-	Strategy               string
-	Capabilities           Capabilities
-	CapabilityEvidence     domain.CapabilityEvidenceSet
+	ID                          string
+	DeploymentID                string
+	ProviderID                  string
+	BindingID                   string
+	PublicModel                 string
+	ProviderModel               string
+	AccessSurface               domain.AccessSurface
+	ProfileID                   domain.ProviderProfileID
+	Region                      string
+	Adapter                     Adapter
+	InputMicrosPerMillion       int64
+	CachedInputMicrosPerMillion int64
+	OutputMicrosPerMillion      int64
+	FixedRequestMicrosUSD       int64
+	Priority                    int
+	Strategy                    string
+	Capabilities                Capabilities
+	CapabilityEvidence          domain.CapabilityEvidenceSet
 	// AllowedAnthropicBetas is the set of anthropic-beta tokens this connection
 	// may forward. Routing checks a request's tokens against it before any
 	// provider work, so an unaccepted beta fails closed rather than reaching the

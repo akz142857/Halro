@@ -28,31 +28,35 @@ const (
 // DeploymentPriceProposal is evidence for human review. It is never consulted
 // by price selection or the Gateway request path.
 type DeploymentPriceProposal struct {
-	ID                     string              `json:"id"`
-	DeploymentID           string              `json:"deployment_id"`
-	ProviderID             string              `json:"provider_id"`
-	ProviderModel          string              `json:"provider_model"`
-	Region                 string              `json:"region,omitempty"`
-	Tier                   string              `json:"tier,omitempty"`
-	BillingMode            BillingMode         `json:"billing_mode"`
-	Currency               string              `json:"currency"`
-	FormulaVersion         PriceFormulaVersion `json:"formula_version"`
-	InputMicrosPerMillion  int64               `json:"input_micros_per_million"`
-	OutputMicrosPerMillion int64               `json:"output_micros_per_million"`
-	FixedRequestMicrosUSD  int64               `json:"fixed_request_micros_usd"`
-	Source                 PriceSource         `json:"source"`
-	FetchedAt              time.Time           `json:"fetched_at"`
-	Warnings               []string            `json:"warnings,omitempty"`
-	Match                  PriceProposalMatch  `json:"match"`
-	ExpiresAt              time.Time           `json:"expires_at"`
-	Digest                 string              `json:"digest"`
-	Status                 PriceProposalStatus `json:"status"`
-	CreatedBy              string              `json:"created_by"`
-	CreatedAt              time.Time           `json:"created_at"`
-	AdoptedPriceVersionID  string              `json:"adopted_price_version_id,omitempty"`
-	ReviewedBy             string              `json:"reviewed_by,omitempty"`
-	ReviewedAt             *time.Time          `json:"reviewed_at,omitempty"`
-	Revision               uint64              `json:"revision"`
+	ID                    string              `json:"id"`
+	DeploymentID          string              `json:"deployment_id"`
+	ProviderID            string              `json:"provider_id"`
+	ProviderModel         string              `json:"provider_model"`
+	Region                string              `json:"region,omitempty"`
+	Tier                  string              `json:"tier,omitempty"`
+	BillingMode           BillingMode         `json:"billing_mode"`
+	Currency              string              `json:"currency"`
+	FormulaVersion        PriceFormulaVersion `json:"formula_version"`
+	InputMicrosPerMillion int64               `json:"input_micros_per_million"`
+	// CachedInputMicrosPerMillion mirrors the adopted price version's cache-read
+	// term, so adopting a proposal produces a complete price rather than one
+	// that silently prices cached prompt tokens at zero.
+	CachedInputMicrosPerMillion int64               `json:"cached_input_micros_per_million"`
+	OutputMicrosPerMillion      int64               `json:"output_micros_per_million"`
+	FixedRequestMicrosUSD       int64               `json:"fixed_request_micros_usd"`
+	Source                      PriceSource         `json:"source"`
+	FetchedAt                   time.Time           `json:"fetched_at"`
+	Warnings                    []string            `json:"warnings,omitempty"`
+	Match                       PriceProposalMatch  `json:"match"`
+	ExpiresAt                   time.Time           `json:"expires_at"`
+	Digest                      string              `json:"digest"`
+	Status                      PriceProposalStatus `json:"status"`
+	CreatedBy                   string              `json:"created_by"`
+	CreatedAt                   time.Time           `json:"created_at"`
+	AdoptedPriceVersionID       string              `json:"adopted_price_version_id,omitempty"`
+	ReviewedBy                  string              `json:"reviewed_by,omitempty"`
+	ReviewedAt                  *time.Time          `json:"reviewed_at,omitempty"`
+	Revision                    uint64              `json:"revision"`
 }
 
 func (p DeploymentPriceProposal) Validate() error {
@@ -70,13 +74,15 @@ func (p DeploymentPriceProposal) Validate() error {
 		}
 	}
 	if p.Currency != "USD" || p.FormulaVersion != PriceFormulaUSDTokensV1 ||
-		p.InputMicrosPerMillion < 0 || p.OutputMicrosPerMillion < 0 || p.FixedRequestMicrosUSD < 0 {
+		p.InputMicrosPerMillion < 0 || p.CachedInputMicrosPerMillion < 0 || p.OutputMicrosPerMillion < 0 || p.FixedRequestMicrosUSD < 0 {
 		return errors.New("invalid price proposal candidate")
 	}
-	if p.BillingMode == BillingModeMetered && p.InputMicrosPerMillion == 0 && p.OutputMicrosPerMillion == 0 && p.FixedRequestMicrosUSD == 0 {
+	if p.BillingMode == BillingModeMetered && p.InputMicrosPerMillion == 0 && p.CachedInputMicrosPerMillion == 0 &&
+		p.OutputMicrosPerMillion == 0 && p.FixedRequestMicrosUSD == 0 {
 		return errors.New("metered proposal requires a positive component")
 	}
-	if p.BillingMode == BillingModeFree && (p.InputMicrosPerMillion != 0 || p.OutputMicrosPerMillion != 0 || p.FixedRequestMicrosUSD != 0) {
+	if p.BillingMode == BillingModeFree && (p.InputMicrosPerMillion != 0 || p.CachedInputMicrosPerMillion != 0 ||
+		p.OutputMicrosPerMillion != 0 || p.FixedRequestMicrosUSD != 0) {
 		return errors.New("free proposal components must be zero")
 	}
 	if p.BillingMode != BillingModeMetered && p.BillingMode != BillingModeFree {

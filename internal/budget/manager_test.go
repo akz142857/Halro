@@ -49,7 +49,7 @@ func testPriceSnapshot(t testing.TB, mode domain.BillingMode) *domain.PriceSnaps
 			Reference: "test", AssertedWithoutArchive: true},
 	}
 	if mode == domain.BillingModeMetered {
-		price.InputMicrosPerMillion, price.OutputMicrosPerMillion = 1_000_000, 2_000_000
+		price.InputMicrosPerMillion, price.CachedInputMicrosPerMillion, price.OutputMicrosPerMillion = 1_000_000, 100_000, 2_000_000
 	}
 	snapshot, err := domain.NewVersionedPriceSnapshot(price, now)
 	if err != nil {
@@ -316,14 +316,14 @@ func TestThousandConcurrentReservationsNeverOversell(t *testing.T) {
 }
 
 func TestEstimateCostRoundsUpAndRejectsOverflow(t *testing.T) {
-	cost, err := EstimateCostMicros(1, 1, 1, 1)
+	cost, err := EstimateCostMicros(TokenCost{InputTokens: 1, OutputTokens: 1, InputMicrosPerMillion: 1, OutputMicrosPerMillion: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cost != 2 {
 		t.Fatalf("cost=%d", cost)
 	}
-	if _, err := EstimateCostMicros(1<<62, 0, 4, 0); err == nil {
+	if _, err := EstimateCostMicros(TokenCost{InputTokens: 1 << 62, InputMicrosPerMillion: 4}); err == nil {
 		t.Fatal("expected overflow")
 	}
 }
@@ -433,4 +433,79 @@ func mustResolver(t testing.TB, timezone string) *PeriodResolver {
 		t.Fatalf("resolver for %s: %v", timezone, err)
 	}
 	return resolver
+}
+
+// The gateway computes a settlement's committed amount with EstimateCostMicros
+// and Settle re-derives it from the frozen price snapshot; a settlement whose
+// two answers differ by one micro-USD is rejected outright. The two formulas
+// therefore have to round the cached and uncached spans the same way, which is
+// only visible when a split leaves both spans with a fractional remainder.
+func TestEstimateCostMatchesTheSnapshotOnASplitPrompt(t *testing.T) {
+	snapshot := testPriceSnapshot(t, domain.BillingModeMetered)
+	for _, tokens := range []struct{ input, cached, output int64 }{
+		{1_000_000, 0, 0}, {1_000_000, 1_000_000, 0}, {1_000_001, 333_333, 7}, {3, 1, 1}, {0, 0, 0},
+	} {
+		estimated, err := EstimateCostMicros(TokenCost{
+			InputTokens: tokens.input, CachedInputTokens: tokens.cached, OutputTokens: tokens.output,
+			InputMicrosPerMillion:       *snapshot.InputMicrosPerMillion,
+			CachedInputMicrosPerMillion: *snapshot.CachedInputMicrosPerMillion,
+			OutputMicrosPerMillion:      *snapshot.OutputMicrosPerMillion,
+		})
+		if err != nil {
+			t.Fatalf("tokens=%#v err=%v", tokens, err)
+		}
+		settled, err := snapshot.Calculate(tokens.input, tokens.cached, tokens.output)
+		if err != nil {
+			t.Fatalf("tokens=%#v err=%v", tokens, err)
+		}
+		if estimated+*snapshot.FixedRequestMicrosUSD != settled.TotalCostMicrosUSD {
+			t.Fatalf("tokens=%#v estimated=%d settled=%d", tokens, estimated, settled.TotalCostMicrosUSD)
+		}
+	}
+}
+
+// A settlement carrying cached tokens has to survive Settle's re-derivation, and
+// cost less than the same prompt with nothing served from cache. Before the
+// cache-read rate existed the two were identical.
+func TestSettlementChargesCachedPromptTokensAtTheCacheReadRate(t *testing.T) {
+	manager, state, closeLog := newTestManager(t)
+	defer closeLog()
+	ctx := context.Background()
+	snapshot := testPriceSnapshot(t, domain.BillingModeMetered)
+	cost, err := snapshot.Calculate(1_000_000, 900_000, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	uncached, err := snapshot.Calculate(1_000_000, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cost.TotalCostMicrosUSD >= uncached.TotalCostMicrosUSD {
+		t.Fatalf("cached prompt cost %d is not below the uncached %d", cost.TotalCostMicrosUSD, uncached.TotalCostMicrosUSD)
+	}
+	request, err := manager.BeginRequest(ctx, "project_cached", "request_cached")
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, err := manager.ReserveLeaseDetailed(ctx, request, 0, LeaseSpec{
+		Mode: ledger.LeaseModeMetered, ReservationMicrosUSD: uncached.TotalCostMicrosUSD,
+		PriceSnapshot: snapshot, PreparedInputTokens: 1_000_000,
+		TokenGuardPricingViewDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}, AttemptMetadata{DeploymentID: "dep_test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.MarkStarted(ctx, attempt); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Settle(ctx, attempt, Settlement{
+		CommittedMicrosUSD: cost.TotalCostMicrosUSD, ProviderInputTokens: 1_000_000,
+		ProviderCachedInputTokens: 900_000, Outcome: "ok",
+	}); err != nil {
+		t.Fatalf("settling a cached attempt at the cache-read rate was refused: %v", err)
+	}
+	balance := state.Balance("project_cached", request.Period.ID, request.Period.TimezoneVersion)
+	if balance.CommittedMicrosUSD != cost.TotalCostMicrosUSD || balance.ReservedMicrosUSD != 0 {
+		t.Fatalf("balance=%#v want committed=%d", balance, cost.TotalCostMicrosUSD)
+	}
 }

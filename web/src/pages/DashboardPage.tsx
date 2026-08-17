@@ -165,17 +165,17 @@ export function DashboardPage() {
               <AnomalyList items={recentAnomalies} labels={resourceLabels} empty={t("dashboard.noAnomaliesToday")} />
             </article>
           </section>
+
+          <section className="panel internal-status-panel" aria-label={t("dashboard.internalStatus")}>
+            <div className="internal-status-title"><p className="eyebrow">{t("dashboard.channels")}</p><h2>{t("dashboard.internalStatus")}</h2></div>
+            <StatusRow label={t("dashboard.trafficAcceptance")} ok={acceptingTraffic} value={acceptingTraffic ? t("dashboard.accepting") : t("dashboard.notAccepting")} />
+            <StatusRow label={t("dashboard.activeRequests")} ok={dashboard.usage.active_requests === 0 ? undefined : true} value={compactNumber(dashboard.usage.active_requests)} />
+            <StatusRow label={t("dashboard.alertDelivery")} ok={alertEndpoints === 0 || unknownAlertEndpoints > 0 || dashboard.alerts.Queued > 0 && !alertNeedsAttention ? undefined : !alertNeedsAttention} value={alertStatus} />
+            <StatusRow label={t("dashboard.durableAccounting")} ok={durablePathHealthy} value={durablePathStatus} />
+            <div className="panel-footnote">{t("dashboard.autoRefresh")}</div>
+          </section>
         </>
       )}
-
-      <section className="panel internal-status-panel" aria-label={t("dashboard.internalStatus")}>
-        <div className="internal-status-title"><p className="eyebrow">{t("dashboard.channels")}</p><h2>{t("dashboard.internalStatus")}</h2></div>
-        <StatusRow label={t("dashboard.trafficAcceptance")} ok={acceptingTraffic} value={acceptingTraffic ? t("dashboard.accepting") : t("dashboard.notAccepting")} />
-        <StatusRow label={t("dashboard.activeRequests")} ok={dashboard.usage.active_requests === 0 ? undefined : true} value={compactNumber(dashboard.usage.active_requests)} />
-        <StatusRow label={t("dashboard.alertDelivery")} ok={alertEndpoints === 0 || unknownAlertEndpoints > 0 || dashboard.alerts.Queued > 0 && !alertNeedsAttention ? undefined : !alertNeedsAttention} value={alertStatus} />
-        <StatusRow label={t("dashboard.durableAccounting")} ok={durablePathHealthy} value={durablePathStatus} />
-        <div className="panel-footnote">{t("dashboard.autoRefresh")}</div>
-      </section>
     </>
   );
 }
