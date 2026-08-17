@@ -510,6 +510,16 @@ model_catalog:
   # @description.en-US Maximum exact model entries in one verified manifest.
   max_entries: 10000
 
+# What varies by deployment about reaching an upstream. What a provider can do
+# is fixed by the build and is not configurable.
+providers:
+  bedrock:
+    # @title.zh-CN Bedrock 区域
+    # @title.en-US Bedrock region
+    # @description.zh-CN 新建 Bedrock 连接时表单预填的区域；不影响已保存的连接，也不授予任何访问权限。
+    # @description.en-US Region prefilled when creating a Bedrock connection. Saved connections are unaffected, and it grants no access.
+    region: us-east-1
+
 logging:
   # @title.zh-CN 日志级别
   # @title.en-US Log level

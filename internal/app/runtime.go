@@ -1408,6 +1408,10 @@ func (r *Runtime) adminRouter() http.Handler {
 	router.With(r.requireAdminMutation).Put("/admin/api/v1/credentials/{id}", r.updateAdminCredential)
 	router.With(r.requireAdminMutation).Delete("/admin/api/v1/credentials/{id}", r.deleteAdminCredential)
 	router.With(r.requireAdmin).Get("/admin/api/v1/providers", r.listAdminProviders)
+	// Compile-time metadata about what this build can serve. Same bar as the
+	// other Admin reads — a read_only role may fetch it, since it is what any
+	// connection form needs before it can offer anything.
+	router.With(r.requireAdmin).Get("/admin/api/v1/provider-profiles", r.getAdminProviderProfiles)
 	router.With(r.requireAdmin).Get("/admin/api/v1/model-catalog", r.getAdminModelCatalog)
 	router.With(r.requireAdminMutation).Post("/admin/api/v1/model-catalog/refresh", r.refreshAdminModelCatalog)
 	router.With(r.requireAdminMutation).Post("/admin/api/v1/providers", r.createAdminProvider)

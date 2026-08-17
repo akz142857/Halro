@@ -363,6 +363,61 @@ export interface ProviderCapabilities {
   max_output_tokens: number;
 }
 
+/** One profile as the server describes it, from GET /provider-profiles.
+ *
+ * `ceiling` is what an operator may turn on; `defaults` is what a new connection
+ * starts with. `default_base_url` arrives already resolved for this deployment —
+ * the region is substituted server-side, so this is a value to put straight into
+ * the form. */
+export interface ProviderProfileDescriptor {
+  id: string;
+  access_surface: AccessSurface;
+  credential_scheme: CredentialScheme;
+  default_base_url: string;
+  immutable: boolean;
+  defaults: ProviderCapabilities;
+  ceiling: ProviderCapabilities;
+  /** What a whole connection anchored on this profile may turn on, and what it
+   * starts with. One connection can span profiles — an OpenAI key serves the
+   * chat endpoints and the media ones — and which profile serves what is the
+   * server's answer, so these arrive resolved rather than as something to
+   * recompute from the two sets above. */
+  connection_ceiling: ProviderCapabilities;
+  connection_defaults: ProviderCapabilities;
+  /** The other profiles a connection anchored here carries. */
+  combines_with: string[];
+}
+
+export interface ProviderTypeDescriptor {
+  type: ProviderType;
+  default_profile_id: string;
+  profiles: ProviderProfileDescriptor[];
+}
+
+/** What this build can serve. Everything a connection form needs to decide what
+ * to offer comes from here rather than from constants in this bundle: the two
+ * used to be kept in step by hand, and both directions of drift were bad — a
+ * console wider than the server offers capabilities whose save is refused
+ * without saying which, a console narrower hides capabilities that work. */
+export interface ProviderProfilesCatalog {
+  /** The capability keys. Not a display order: how they are arranged and what
+   * they are called in a given language stay with this bundle. */
+  capability_names: string[];
+  /** What each capability needs alongside it, as the server enforces it, so the
+   * form can present the rule instead of discovering it on refusal. Direct
+   * dependencies: stream usage names streaming, streaming names chat. */
+  capability_dependencies: Record<string, string[]>;
+  /** Capabilities a form has to say something about before they are ticked.
+   * provider_executed_tools is one: enabling it accepts upstream egress that
+   * never passes through Halro's transport. The wording is this bundle's; which
+   * capabilities need it is not. */
+  capability_opt_in_warnings: string[];
+  provider_types: ProviderTypeDescriptor[];
+}
+
+/** One profile a saved connection serves through. This is reported, never sent:
+ * a form submits one flat capability set and the server decides which profile
+ * carries each part of it. */
 export interface ProviderBinding {
   id?: string;
   profile_id: string;

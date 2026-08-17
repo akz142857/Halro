@@ -210,6 +210,17 @@ model_catalog:
   max_compression_ratio: 20
   max_entries: 10000
 
+# What varies by deployment about reaching an upstream. What a provider can do
+# is fixed by the build and is not configurable here.
+#
+# The region fills in the Bedrock endpoints the console offers when you create a
+# connection — bedrock-runtime.<region>.amazonaws.com and its siblings. Setting
+# it saves retyping the URL for every Bedrock connection; it grants nothing on
+# its own, and you can still enter any endpoint on the form.
+providers:
+  bedrock:
+    region: us-east-1
+
 # The process log. Records are redacted before they are written — no
 # authorization headers, provider or gateway keys, prompts, response bodies or
 # raw source IPs — whatever is set here.

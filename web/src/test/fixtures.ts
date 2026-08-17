@@ -32,3 +32,10 @@ export function emptyWritePath(overrides: Partial<WritePathSummary> = {}): Write
     ...overrides,
   };
 }
+
+// What GET /admin/api/v1/provider-profiles actually answers, generated from the
+// running endpoint by TestProviderProfilesGoldenMatchesConsoleFixture and
+// checked in. Hand-writing it would test an idea of the matrix rather than the
+// matrix, and a console built against a wrong idea of it is exactly the drift
+// serving the matrix removes. That Go test fails when the two diverge.
+export { default as providerProfilesFixture } from "./provider-profiles.golden.json";

@@ -64,6 +64,10 @@ export const zhCN = {
     capabilityDetectionChanged: "能力识别结果已变化，请使用最新结果后重试。",
     capabilityDetectionTargetMismatch: "能力识别结果不属于当前服务商、模型或能力接口，请重新确认模型。",
     capabilitiesExceedDetection: "所选能力超出了已验证范围；普通流程只能关闭已识别的能力。",
+    capabilitiesUnservable: "这个连接无法提供：{{capabilities}}。请取消勾选，或改用支持它的服务商类型。",
+    capabilitiesAmbiguous: "这个连接上有多个能力实现都能提供：{{capabilities}}。请在“能力实现”里指定由哪一个提供。",
+    capabilitiesLimitUnavailable: "这个连接上没有任何能力实现可以限定：{{capabilities}}。令牌上限属于模型规格，请在部署里声明。",
+    capabilitiesLimitTooLarge: "填写的值超出了承载它的能力实现所允许的上限：{{capabilities}}。请改小后重试。",
     capabilityDetectionCooldown: "该模型刚刚验证过，请稍后再强制刷新。",
     capabilityDetectionRateLimited: "你在一分钟内启动了过多模型验证，请稍后重试。",
     ambiguousCapabilityBinding: "该模型可通过多个能力接口调用。请选择实际接口后再确认模型。",
@@ -671,6 +675,8 @@ export const zhCN = {
   },
   capabilities: {
     chat: "对话", streaming: "流式", embeddings: "向量嵌入", moderations: "内容审核", images: "图像", transcriptions: "音频转写", speech: "语音合成", files: "文件", batches: "批处理", rerank: "重排", async_generate: "异步生成", tools: "工具调用", vision: "视觉", json_mode: "JSON 模式", developer_role: "开发者角色", reasoning: "推理", stream_usage: "流式用量", provider_executed_tools: "服务商侧执行工具",
+    // 不是复选框，但服务端在拒绝一次保存时会点名，所以同样需要人话。
+    max_context_tokens: "最大上下文令牌", max_output_tokens: "最大输出令牌",
   },
   usage: {
     eyebrow: "持久化计费", title: "用量与调用", description: "记录每次服务商尝试的项目、模型、令牌、成本与终态，支持多维度筛选。",
@@ -885,6 +891,11 @@ export const zhCN = {
     validationCredentialRequired: "请选择加密凭据；下拉为空时，先为该服务商类型和访问面保存一份凭据。",
     validationCredentialBaseURL: "地址绑定不匹配",
     validationCapabilityRequired: "至少启用一项能力，否则没有模型部署能路由到这个服务商。",
+    validationCapabilityUnservable: "这个连接无法提供：{{capabilities}}。请取消勾选，或改用支持它的服务商类型。",
+    matrixUnavailable: "暂时读不到本实例支持的能力清单，无法新建。请重试，或确认登录状态仍然有效。",
+    capabilityEgressTag: "会放行上游自行联网",
+    capabilityEgressWarning: "已开启会放行上游自行联网的能力",
+    capabilityEgressWarningDescription: "{{capabilities}}：开启后，上游可以自己执行工具并为此额外访问网络。这部分流量不经过 Halro，不受出站主机限制，也不会出现在审计记录里。只在信任该服务商这样做时开启。",
     validationProjectFormat: "必须是 AWS 签发的 proj_ 开头加字母数字的 ID；留空则使用账户默认项目。",
     validationBetaTooMany: "一个连接最多允许 {{max}} 个 beta token。",
     validationBetaTooLong: "每个 beta token 最长 {{max}} 个字符。",
@@ -897,7 +908,6 @@ export const zhCN = {
     rotateSecurely: "安全轮换", saveEncrypted: "加密保存", editProvider: "编辑服务商", createProvider: "创建服务商", credentialRequired: "需要先创建凭据",
     credentialRequiredDescription: "关闭此窗口，使用“＋ 凭据”保存一个绑定受众的密钥。", providerName: "服务商名称", type: "类型", baseURL: "基础地址（Base URL）", baseURLBoundHint: "所选凭据绑定的是 {{credential}}。", apiVersion: "API 版本", apiVersionHint: "显式固定 Azure 数据面 API 版本；升级时由管理员变更",
     maxConcurrency: "服务商最大并发", maxConcurrencyHint: "0 表示不限；用于保护上游账户和模型部署", capabilityLimit: "启用的能力", unsupportedByInterface: "此接口类型不支持",
-    maxContext: "最大上下文令牌", maxContextHint: "0 表示服务商未声明限制", maxOutput: "最大输出令牌", maxOutputHint: "不得大于上下文令牌",
     encryptedCredential: "加密凭据", enable: "启用服务商", save: "保存并热加载", createAndLoad: "创建并热加载",
   },
   policies: {

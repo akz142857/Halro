@@ -35,6 +35,7 @@ type Config struct {
 	Metrics        Metrics        `yaml:"metrics"`
 	Audit          Audit          `yaml:"audit"`
 	ModelCatalog   ModelCatalog   `yaml:"model_catalog"`
+	Providers      Providers      `yaml:"providers"`
 	Logging        Logging        `yaml:"logging"`
 }
 
@@ -196,6 +197,62 @@ type ModelCapabilityDetection struct {
 	ProviderConcurrency int      `yaml:"provider_concurrency"`
 	MaxProviderCalls    int      `yaml:"max_provider_calls"`
 	CreateRPM           int      `yaml:"create_rpm"`
+}
+
+// Providers holds what varies by deployment about reaching an upstream, as
+// opposed to what a provider can do. Capabilities are a claim about compiled
+// code and stay in internal/domain; an AWS region is a deployment choice and
+// belongs to whoever runs the instance.
+//
+// Nothing here grants access. These values only prefill the Admin console's
+// connection form — an operator can already type any endpoint — and the outbound
+// host allowlist is derived from the saved connection, never from a default.
+type Providers struct {
+	Bedrock BedrockProvider `yaml:"bedrock"`
+}
+
+// BedrockProvider carries the region every Bedrock endpoint is addressed by.
+// The value was hardcoded to us-east-1 in the console, so an operator anywhere
+// else retyped the URL on every connection they created.
+type BedrockProvider struct {
+	Region string `yaml:"region"`
+}
+
+// DefaultBedrockRegion is what an omitted providers.bedrock.region means. It is
+// the value the console used to hardcode, so an existing config that says
+// nothing keeps behaving exactly as it did.
+const DefaultBedrockRegion = "us-east-1"
+
+// maxBedrockRegionLength bounds the substituted label. Real region names are far
+// shorter; the bound exists so a pasted blob cannot become an endpoint host.
+const maxBedrockRegionLength = 64
+
+// validBedrockRegion accepts the shape AWS region names actually take —
+// lowercase letters, digits and single hyphens between them — and refuses
+// everything else, including the empty string, a leading or trailing hyphen, and
+// anything containing a dot, a slash, or a colon.
+func validBedrockRegion(region string) bool {
+	if region == "" || len(region) > maxBedrockRegionLength {
+		return false
+	}
+	if region[0] == '-' || region[len(region)-1] == '-' {
+		return false
+	}
+	previousHyphen := false
+	for _, character := range region {
+		switch {
+		case character >= 'a' && character <= 'z', character >= '0' && character <= '9':
+			previousHyphen = false
+		case character == '-':
+			if previousHyphen {
+				return false
+			}
+			previousHyphen = true
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // ModelCatalog governs optional signed background catalog updates. The remote
@@ -418,6 +475,14 @@ func (c *Config) Normalize() error {
 	}
 	if c.Gateway.PricingClockForwardTolerance == 0 {
 		c.Gateway.PricingClockForwardTolerance = Duration(DefaultPricingClockForwardTolerance)
+	}
+	// Existing configuration files predate providers.bedrock.region. Omitting it
+	// means the region the console used to hardcode, not "no region", which would
+	// produce an unreachable endpoint host.
+	if strings.TrimSpace(c.Providers.Bedrock.Region) == "" {
+		c.Providers.Bedrock.Region = DefaultBedrockRegion
+	} else {
+		c.Providers.Bedrock.Region = strings.TrimSpace(c.Providers.Bedrock.Region)
 	}
 	if c.Gateway.SourceRateLimit.MaxTrackedSources == 0 {
 		// Omitting the ceiling means "whatever is sane", not "track nothing".
@@ -652,6 +717,14 @@ func (c Config) Validate(opts LoadOptions) error {
 		} else if _, err := hex.DecodeString(strings.TrimPrefix(pin, "sha256:")); err != nil {
 			problems = append(problems, errors.New("model_catalog.pinned_revision must be a sha256 digest"))
 		}
+	}
+	// The region is substituted into an endpoint host, so it is bounded to what
+	// an AWS region name can contain. A value carrying a dot or a slash would not
+	// name a region, it would move the host — and while this only prefills a form
+	// the operator can edit, a prefilled endpoint is the one they are least
+	// likely to look at twice.
+	if !validBedrockRegion(c.Providers.Bedrock.Region) {
+		problems = append(problems, errors.New("providers.bedrock.region must be an AWS region name such as us-east-1"))
 	}
 	if c.TLS.Enabled {
 		if c.TLS.CertFile == "" || c.TLS.KeyFile == "" {

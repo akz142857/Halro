@@ -1262,17 +1262,6 @@ func evidenceRank(value domain.CapabilityEvidence) int {
 	}
 }
 
-func capabilitySubset(candidate, available domain.ProviderCapabilities) bool {
-	return domain.ProviderCapabilitiesSubset(candidate, available)
-}
-
-func capabilityLimitSubset(candidate, available int64) bool {
-	if available == 0 {
-		return candidate >= 0
-	}
-	return candidate > 0 && candidate <= available
-}
-
 func (r *Runtime) validateDeploymentCanDeactivate(request *http.Request, deploymentID string, willBeEnabled bool) error {
 	if willBeEnabled {
 		return nil

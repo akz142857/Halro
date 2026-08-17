@@ -54,12 +54,36 @@ function credentialMismatchValues(error: ApiError) {
   return { message: mismatch.message, credential, provider, name: name as string };
 }
 
+// A capability set the connection cannot carry. The server names the
+// capabilities by key, which is how it has to travel — the reader's language is
+// this bundle's business — so the sentence is assembled from the same
+// `capabilities.*` copy the checkboxes use rather than echoing
+// `provider_executed_tools` at an operator.
+const capabilityRefusals: Record<string, string> = {
+  capabilities_unservable: "errors.capabilitiesUnservable",
+  capabilities_ambiguous: "errors.capabilitiesAmbiguous",
+  capabilities_limit_unavailable: "errors.capabilitiesLimitUnavailable",
+  capabilities_limit_too_large: "errors.capabilitiesLimitTooLarge",
+};
+
+function capabilityRefusal(t: TFunction, error: ApiError) {
+  const message = capabilityRefusals[error.code];
+  if (!message) return "";
+  const payload = error.payload as Record<string, unknown> | undefined;
+  const names = typeof payload?.capabilities === "string" ? payload.capabilities.split(",").filter(Boolean) : [];
+  if (!names.length) return "";
+  const listed = names.map((name) => t(`capabilities.${name}`)).join(t("common.listSeparator"));
+  return t(message, { capabilities: listed });
+}
+
 export function localizedError(t: TFunction, error: unknown) {
   if (!(error instanceof ApiError)) return t("errors.network");
   const mismatch = credentialMismatchValues(error);
   if (mismatch) {
     return t(mismatch.message, { credential: mismatch.credential, provider: mismatch.provider, name: mismatch.name });
   }
+  const capabilities = capabilityRefusal(t, error);
+  if (capabilities) return capabilities;
   const codeMessages: Record<string, string> = {
     deployment_price_unavailable: "errors.deploymentPriceUnavailable",
     price_effective_from_conflict: "errors.priceEffectiveConflict",
@@ -121,6 +145,9 @@ export function errorDetail(error: unknown) {
   // in the wrong language. It stays visible when the values did not arrive and
   // the message fell back to the generic one.
   if (credentialMismatchValues(error)) return "";
+  // Same reasoning: the translated sentence already names the capabilities, and
+  // the server's original names them in implementation spelling.
+  if (capabilityRefusals[error.code]) return "";
   // A forwarded upstream reply is the whole point of the message; show it at any status.
   if (error.detail) return error.detail;
   const detailed = error.status === 400 || error.status === 409 || error.status === 422;

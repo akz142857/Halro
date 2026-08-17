@@ -41,6 +41,7 @@ import type {
   UsageAttempt,
   DeploymentPriceVersion,
   DeploymentPriceProposal,
+  ProviderProfilesCatalog,
 } from "./types";
 
 const API_ROOT = "/admin/api/v1";
@@ -208,6 +209,11 @@ export const api = {
     request<SystemStatus>("/system/status").then((value) => value.data),
   systemConfig: () =>
     request<SystemConfig>("/system/config").then((value) => value.data),
+  /** What this build can serve: capability keys, and per profile the defaults, the
+   * ceiling and the endpoint to offer. Compile-time data plus one config value, so
+   * it never changes while a session is open — fetch it once and keep it. */
+  providerProfiles: () =>
+    request<ProviderProfilesCatalog>("/provider-profiles").then((value) => value.data),
   modelCatalog: () => request<ModelCatalogInfo>("/model-catalog").then((value) => value.data),
   refreshModelCatalog: () => request<{ status: ModelCatalogInfo["status"] }>("/model-catalog/refresh", json("POST")).then((value) => value.data),
   settings: () => request<RuntimeSettings>("/settings"),

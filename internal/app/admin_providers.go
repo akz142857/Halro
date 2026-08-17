@@ -35,20 +35,27 @@ type credentialInput struct {
 }
 
 type providerInput struct {
-	Name                  string                           `json:"name"`
-	Type                  domain.ProviderType              `json:"type"`
-	BaseURL               string                           `json:"base_url"`
-	APIVersion            string                           `json:"api_version,omitempty"`
-	CredentialID          string                           `json:"credential_id"`
-	AccessSurface         domain.AccessSurface             `json:"access_surface,omitempty"`
-	ProfileID             domain.ProviderProfileID         `json:"profile_id,omitempty"`
-	CredentialScheme      domain.CredentialScheme          `json:"credential_scheme,omitempty"`
-	BedrockProjectID      string                           `json:"bedrock_project_id,omitempty"`
-	AllowedAnthropicBetas []string                         `json:"allowed_anthropic_betas,omitempty"`
-	Capabilities          *domain.ProviderCapabilities     `json:"capabilities,omitempty"`
-	Bindings              *[]domain.ProviderProfileBinding `json:"bindings,omitempty"`
-	MaxConcurrency        int64                            `json:"max_concurrency"`
-	Enabled               bool                             `json:"enabled"`
+	Name                  string                   `json:"name"`
+	Type                  domain.ProviderType      `json:"type"`
+	BaseURL               string                   `json:"base_url"`
+	APIVersion            string                   `json:"api_version,omitempty"`
+	CredentialID          string                   `json:"credential_id"`
+	AccessSurface         domain.AccessSurface     `json:"access_surface,omitempty"`
+	ProfileID             domain.ProviderProfileID `json:"profile_id,omitempty"`
+	CredentialScheme      domain.CredentialScheme  `json:"credential_scheme,omitempty"`
+	BedrockProjectID      string                   `json:"bedrock_project_id,omitempty"`
+	AllowedAnthropicBetas []string                 `json:"allowed_anthropic_betas,omitempty"`
+	// One flat set for the whole connection. Which profile ends up serving each
+	// capability is the server's answer (domain.AssignConnectionCapabilities),
+	// not the caller's: a connection can span profiles — an OpenAI key serves the
+	// chat endpoints and the media ones — and when the caller supplied the split
+	// itself, the rule for it lived in the console and nowhere else. There is
+	// deliberately no bindings field to send alongside this; decodeAdminJSON
+	// refuses unknown fields, so a caller still sending one is told rather than
+	// having it silently overridden.
+	Capabilities   *domain.ProviderCapabilities `json:"capabilities,omitempty"`
+	MaxConcurrency int64                        `json:"max_concurrency"`
+	Enabled        bool                         `json:"enabled"`
 }
 
 type routeInput struct {
@@ -257,10 +264,6 @@ func (r *Runtime) updateAdminProvider(writer http.ResponseWriter, request *http.
 	}
 	if current.Revision != expected {
 		adminPreconditionFailed(writer)
-		return
-	}
-	if len(current.EffectiveProfileBindings()) > 1 && input.Bindings == nil {
-		adminBadRequest(writer, "bindings are required when updating a provider with multiple profile bindings")
 		return
 	}
 	if input.Type != current.Type {
@@ -1179,6 +1182,20 @@ type credentialMatchError struct {
 func (e credentialMatchError) Error() string { return e.err.Error() }
 func (e credentialMatchError) Unwrap() error { return e.err }
 
+// capabilityAssignmentError marks a capability set no connection of this shape
+// can carry. It names the capabilities rather than only the fact, because the
+// operator's next action is to untick one of them — and it carries them as keys
+// so the console can print them in the reader's language instead of echoing
+// `provider_executed_tools` at them.
+type capabilityAssignmentError struct {
+	code         string
+	capabilities []string
+	err          error
+}
+
+func (e capabilityAssignmentError) Error() string { return e.err.Error() }
+func (e capabilityAssignmentError) Unwrap() error { return e.err }
+
 // adminProviderInputError answers a rejected provider payload. Most refusals
 // are self-explanatory in context and stay code-less; the ones that are not
 // carry a stable code so the console can localise them.
@@ -1191,6 +1208,13 @@ func adminProviderInputError(writer http.ResponseWriter, err error) {
 	var credentialMatch credentialMatchError
 	if errors.As(err, &credentialMatch) {
 		adminBadRequestFields(writer, credentialMatch.code, err.Error(), credentialMatch.fields)
+		return
+	}
+	var capabilities capabilityAssignmentError
+	if errors.As(err, &capabilities) {
+		adminBadRequestFields(writer, capabilities.code, err.Error(), map[string]string{
+			"capabilities": strings.Join(capabilities.capabilities, ","),
+		})
 		return
 	}
 	adminBadRequest(writer, err.Error())
@@ -1316,79 +1340,179 @@ func (r *Runtime) providerFromInput(
 		MaxConcurrency:        input.MaxConcurrency,
 		Enabled:               input.Enabled, CreatedAt: createdAt, UpdatedAt: updatedAt,
 	}
-	if input.Capabilities == nil {
-		instance.Capabilities = domain.DefaultProviderCapabilitiesForProfile(input.Type, profile.ProfileID)
-	} else {
-		instance.Capabilities = *input.Capabilities
-		if !instance.Capabilities.AnyOperation() {
-			return domain.ProviderInstance{}, errors.New("provider must declare at least one operation capability")
-		}
-		// Every profile has a ceiling, not only the immutable ones. The check used
-		// to run for those alone, which left the console's checkbox list as the
-		// only thing preventing a direct API caller from declaring a capability
-		// the adapter cannot serve — routing would then offer that connection for
-		// an operation it answers with an error.
-		if !capabilitySubset(instance.Capabilities, domain.MaxProviderCapabilitiesForProfile(input.Type, profile.ProfileID)) {
-			if domain.IsImmutableCapabilityProfile(profile.ProfileID) {
-				return domain.ProviderInstance{}, errors.New("provider capabilities exceed the immutable operation profile")
-			}
-			return domain.ProviderInstance{}, errors.New("provider capabilities exceed what this profile can serve")
+	// One flat set in, one binding per profile that will serve part of it out.
+	// The caller says what the connection should do; which profile does it is
+	// read from the matrix, so the console, a script, and a restore all get the
+	// same answer to a question none of them has to know how to ask.
+	//
+	// Omitting the field means "leave this alone", never "reset it". On an update
+	// it resolves to what the connection already serves, so a rename-only PUT
+	// keeps every binding and every narrowing the operator applied; resolving to
+	// the profile's defaults instead dropped an OpenAI connection's media binding
+	// and re-widened its chat capabilities, with a 200 and nothing said. Only a
+	// create, which has nothing to preserve, starts from the defaults of the
+	// profile the request named.
+	requested := domain.DefaultProviderCapabilitiesForProfile(input.Type, profile.ProfileID)
+	if len(currentBindings) > 0 {
+		requested, _ = domain.BindingsCapabilitiesSummary(currentBindings)
+	}
+	if input.Capabilities != nil {
+		requested = *input.Capabilities
+	}
+	assignment := domain.AssignConnectionCapabilities(input.Type, profile.ProfileID, requested)
+	// Refused, not filtered. Intersecting the request with what the connection
+	// can serve is the natural implementation and the wrong one: it stores a
+	// connection that does less than was asked for, and nothing tells the caller
+	// which capability went missing.
+	if len(assignment.Unservable) > 0 {
+		return domain.ProviderInstance{}, capabilityAssignmentError{
+			code:         "capabilities_unservable",
+			capabilities: assignment.Unservable,
+			err: fmt.Errorf("this connection cannot serve %s",
+				strings.Join(assignment.Unservable, ", ")),
 		}
 	}
-	instance.CapabilityEvidence = preserveCapabilityEvidence(instance.Capabilities, currentEvidence)
-	if input.Bindings != nil {
-		if len(*input.Bindings) == 0 {
-			return domain.ProviderInstance{}, errors.New("provider must contain at least one profile binding")
+	// Several profiles on this connection could serve it and the operator did not
+	// say which. Choosing by table order would bind the connection to a protocol
+	// nobody picked, so the request is refused and names the capability.
+	if len(assignment.Ambiguous) > 0 {
+		return domain.ProviderInstance{}, capabilityAssignmentError{
+			code:         "capabilities_ambiguous",
+			capabilities: assignment.Ambiguous,
+			err: fmt.Errorf("more than one capability implementation on this connection can serve %s",
+				strings.Join(assignment.Ambiguous, ", ")),
 		}
-		instance.Bindings = append([]domain.ProviderProfileBinding(nil), (*input.Bindings)...)
-		for index := range instance.Bindings {
-			binding := &instance.Bindings[index]
-			binding.ProviderID = id
-			binding.ID = domain.DefaultProviderProfileBindingID(id, binding.ProfileID)
-			profile, ok := domain.ResolveProviderProfile(input.Type, binding.ProfileID)
-			if !ok {
-				return domain.ProviderInstance{}, errors.New("provider binding profile is not implemented")
-			}
-			binding.AccessSurface, binding.CredentialScheme = profile.AccessSurface, profile.CredentialScheme
-			if binding.CredentialScheme != credential.Scheme || binding.AccessSurface != credential.AccessSurface {
-				return domain.ProviderInstance{}, errors.New("provider binding credential profile does not match connection")
-			}
-			if !domain.ProviderCapabilitiesSubset(binding.Capabilities, domain.MaxProviderCapabilitiesForProfile(input.Type, binding.ProfileID)) {
-				if domain.IsImmutableCapabilityProfile(binding.ProfileID) {
-					return domain.ProviderInstance{}, errors.New("provider binding capabilities exceed the immutable operation profile")
-				}
-				return domain.ProviderInstance{}, errors.New("provider binding capabilities exceed what this profile can serve")
-			}
-			var previous domain.CapabilityEvidenceSet
-			for _, current := range currentBindings {
-				if current.ID == binding.ID && current.ProfileID == binding.ProfileID {
-					previous = current.CapabilityEvidence
-					break
-				}
-			}
-			binding.CapabilityEvidence = preserveCapabilityEvidence(binding.Capabilities, previous)
-		}
-		for index, binding := range instance.Bindings {
-			if binding.Enabled {
-				if index != 0 {
-					instance.Bindings[0], instance.Bindings[index] = instance.Bindings[index], instance.Bindings[0]
-				}
-				break
-			}
-		}
-		primary := instance.Bindings[0]
-		instance.ProfileID, instance.AccessSurface, instance.CredentialScheme = primary.ProfileID, primary.AccessSurface, primary.CredentialScheme
-		instance.Capabilities, instance.CapabilityEvidence = domain.BindingsCapabilitiesSummary(instance.Bindings)
-	} else {
-		instance.Bindings = []domain.ProviderProfileBinding{{
-			ID: domain.DefaultProviderProfileBindingID(id, instance.ProfileID), ProviderID: id,
-			ProfileID: instance.ProfileID, AccessSurface: instance.AccessSurface,
-			CredentialScheme: instance.CredentialScheme, Capabilities: instance.Capabilities,
-			CapabilityEvidence: instance.CapabilityEvidence.Clone(), Enabled: instance.Enabled,
-		}}
-		instance.Capabilities, instance.CapabilityEvidence = domain.BindingsCapabilitiesSummary(instance.Bindings)
 	}
+	// A token limit only exists where a profile declares one. Asking this
+	// connection to hold one it has nowhere to put is refused rather than
+	// dropped: the alternative stores a connection the caller believes is
+	// bounded and nothing on it is. Model token specifications belong to the
+	// Deployment, which declares them per model.
+	if len(assignment.Unboundable) > 0 {
+		return domain.ProviderInstance{}, capabilityAssignmentError{
+			code:         "capabilities_limit_unavailable",
+			capabilities: assignment.Unboundable,
+			err: fmt.Errorf("no capability implementation on this connection bounds %s",
+				strings.Join(assignment.Unboundable, ", ")),
+		}
+	}
+	// Asked for a larger bound than the profile that would hold it allows. Its
+	// own refusal, because the fix is a smaller number rather than a dropped
+	// field, and "cannot serve maximum context tokens" describes neither.
+	if len(assignment.Exceeded) > 0 {
+		return domain.ProviderInstance{}, capabilityAssignmentError{
+			code:         "capabilities_limit_too_large",
+			capabilities: assignment.Exceeded,
+			err: fmt.Errorf("this connection cannot bound %s that high",
+				strings.Join(assignment.Exceeded, ", ")),
+		}
+	}
+	if len(assignment.Assignments) == 0 {
+		return domain.ProviderInstance{}, errors.New("provider must declare at least one operation capability")
+	}
+	// The caller named an implementation and none of the enabled capabilities
+	// land on it. Refused rather than quietly re-pointed: the connection's
+	// profile projection is taken from the first binding below, so accepting it
+	// would answer 201 with a profile_id the caller did not ask for — the same
+	// silent substitution the ambiguity check above exists to prevent.
+	if input.ProfileID != "" && !slices.ContainsFunc(assignment.Assignments,
+		func(a domain.ProfileCapabilityAssignment) bool { return a.ProfileID == input.ProfileID }) {
+		return domain.ProviderInstance{}, errors.New("the selected capability implementation serves none of the enabled capabilities")
+	}
+	instance.Bindings = make([]domain.ProviderProfileBinding, 0, len(assignment.Assignments))
+	for _, assigned := range assignment.Assignments {
+		bound, ok := domain.ResolveProviderProfile(input.Type, assigned.ProfileID)
+		if !ok {
+			return domain.ProviderInstance{}, errors.New("provider binding profile is not implemented")
+		}
+		binding := domain.ProviderProfileBinding{
+			ID:               domain.DefaultProviderProfileBindingID(id, assigned.ProfileID),
+			ProviderID:       id,
+			ProfileID:        assigned.ProfileID,
+			AccessSurface:    bound.AccessSurface,
+			CredentialScheme: bound.CredentialScheme,
+			Capabilities:     assigned.Capabilities,
+			// A binding exists because it carries capabilities, so it is enabled
+			// even when the connection is not. Tying it to the connection's own flag
+			// would empty the stored capability summary the moment an operator
+			// disables a connection — and the form reads that summary back, so
+			// re-enabling would come up with nothing ticked.
+			Enabled: true,
+		}
+		if binding.CredentialScheme != credential.Scheme || binding.AccessSurface != credential.AccessSurface {
+			return domain.ProviderInstance{}, errors.New("provider binding credential profile does not match connection")
+		}
+		// A bound the operator already narrowed survives an edit that says nothing
+		// about it. The console sends zero for both limits — it has no field for
+		// them — so without this, disabling and re-enabling a connection widened a
+		// Titan Embed binding from a chosen 4096 back to the profile's full 8192,
+		// removing a routing guard nobody asked to remove.
+		binding.Capabilities.MaxContextTokens = retainedLimit(
+			requested.MaxContextTokens, binding.Capabilities.MaxContextTokens,
+			storedBindingLimits(currentBindings, binding.ID, assigned.ProfileID).MaxContextTokens)
+		binding.Capabilities.MaxOutputTokens = retainedLimit(
+			requested.MaxOutputTokens, binding.Capabilities.MaxOutputTokens,
+			storedBindingLimits(currentBindings, binding.ID, assigned.ProfileID).MaxOutputTokens)
+		binding.CapabilityEvidence = preserveCapabilityEvidence(
+			binding.Capabilities, previousBindingEvidence(currentBindings, binding.ID, assigned.ProfileID, currentEvidence),
+		)
+		instance.Bindings = append(instance.Bindings, binding)
+	}
+	primary := instance.Bindings[0]
+	instance.ProfileID, instance.AccessSurface, instance.CredentialScheme = primary.ProfileID, primary.AccessSurface, primary.CredentialScheme
+	instance.Capabilities, instance.CapabilityEvidence = domain.BindingsCapabilitiesSummary(instance.Bindings)
 	return instance, instance.Validate()
+}
+
+// retainedLimit keeps a narrower bound the connection already carried when the
+// request does not speak about it. A request that names a value wins, and a
+// binding that did not exist before keeps what the assignment gave it.
+func retainedLimit(requested, assigned, stored int64) int64 {
+	if requested > 0 || stored <= 0 {
+		return assigned
+	}
+	if assigned > 0 && stored > assigned {
+		return assigned
+	}
+	return stored
+}
+
+// storedBindingLimits is what this binding carried before the edit, if it
+// existed. A binding being added now has nothing to retain.
+func storedBindingLimits(
+	current []domain.ProviderProfileBinding,
+	bindingID string,
+	profileID domain.ProviderProfileID,
+) domain.ProviderCapabilities {
+	for _, binding := range current {
+		if binding.ID == bindingID && binding.ProfileID == profileID {
+			return binding.Capabilities
+		}
+	}
+	return domain.ProviderCapabilities{}
+}
+
+// previousBindingEvidence finds what was already known about this binding's
+// capabilities, so a detection result survives an unrelated edit.
+//
+// The fallback to the connection's own evidence covers the record written before
+// bindings existed, whose evidence lives on the instance: without it, editing
+// such a connection would demote every verified capability back to declared.
+func previousBindingEvidence(
+	current []domain.ProviderProfileBinding,
+	bindingID string,
+	profileID domain.ProviderProfileID,
+	instanceEvidence domain.CapabilityEvidenceSet,
+) domain.CapabilityEvidenceSet {
+	for _, binding := range current {
+		if binding.ID == bindingID && binding.ProfileID == profileID {
+			return binding.CapabilityEvidence
+		}
+	}
+	if len(current) == 0 {
+		return instanceEvidence
+	}
+	return nil
 }
 
 func preserveCapabilityEvidence(capabilities domain.ProviderCapabilities, current domain.CapabilityEvidenceSet) domain.CapabilityEvidenceSet {

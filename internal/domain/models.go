@@ -589,87 +589,33 @@ func (p ProviderInstance) Validate() error {
 	return errors.Join(problems...)
 }
 
+// DefaultProviderCapabilities is what a provider type implies before a profile
+// is chosen. Prefer DefaultProviderCapabilitiesForProfile: this one cannot see
+// which profile a connection will run on, and for Anthropic it is deliberately
+// narrower than the profile's own defaults. See providerTypeRow.
 func DefaultProviderCapabilities(providerType ProviderType) ProviderCapabilities {
-	switch providerType {
-	case ProviderOpenAI, ProviderAzureOpenAI:
-		return ProviderCapabilities{
-			Chat: true, Streaming: true, Embeddings: true, Tools: true,
-			Vision: true, JSONMode: true, DeveloperRole: true, Reasoning: true,
-			StreamUsage: true,
-		}
-	case ProviderAnthropic:
-		// JSONMode covers Anthropic's schema-backed structured outputs, which the
-		// Messages profile now carries through output_config.format.
-		return ProviderCapabilities{Chat: true, Streaming: true, Tools: true, Vision: true, JSONMode: true, Reasoning: true, StreamUsage: true}
-	case ProviderDeepSeek:
-		return ProviderCapabilities{
-			Chat: true, Streaming: true, Tools: true, JSONMode: true,
-			Reasoning: true, StreamUsage: true,
-		}
-	case ProviderOpenAICompatible:
-		// Compatibility servers vary. These conservative defaults preserve the
-		// two core OpenAI endpoints; optional features must be explicitly enabled.
-		return ProviderCapabilities{Chat: true, Streaming: true, Embeddings: true}
-	case ProviderGemini:
-		// Beta profile intentionally declares only the translated text subset.
-		return ProviderCapabilities{Chat: true, Streaming: true, Embeddings: true, DeveloperRole: true}
-	case ProviderBedrock:
-		// Beta profile intentionally declares only Converse text chat and usage.
-		return ProviderCapabilities{Chat: true, Streaming: true, StreamUsage: true}
-	default:
-		return ProviderCapabilities{}
-	}
+	return providerTypeIndex[providerType].LegacyDefaults
 }
 
+// DefaultProviderCapabilitiesForProfile is what a new connection on this profile
+// starts with. An unregistered profile falls back to the type, which is what a
+// caller that has not chosen one yet passes.
 func DefaultProviderCapabilitiesForProfile(providerType ProviderType, profileID ProviderProfileID) ProviderCapabilities {
-	switch profileID {
-	case ProfileOpenAIMediaResources:
-		return ProviderCapabilities{Moderations: true, Images: true, Transcriptions: true, Speech: true, Files: true, Batches: true}
-	case ProfileBedrockInvokeTitanEmbedV2:
-		return ProviderCapabilities{Embeddings: true, MaxContextTokens: 8192}
-	case ProfileBedrockInvokeTitanImageV2:
-		return ProviderCapabilities{Images: true}
-	case ProfileBedrockAgentRerankCohere35:
-		return ProviderCapabilities{Rerank: true}
-	case ProfileBedrockAsyncNovaReel:
-		return ProviderCapabilities{AsyncGenerate: true}
-	case ProfileBedrockMantleOpenAIChat:
-		return ProviderCapabilities{Chat: true, Streaming: true, Tools: true, Vision: true, JSONMode: true, DeveloperRole: true, Reasoning: true, StreamUsage: true}
-	case ProfileBedrockMantleOpenAIResponses:
-		// Phase 1C deliberately exposes only the stateless Responses subset. The
-		// current canonical response mapper cannot preserve reasoning items.
-		return ProviderCapabilities{Chat: true, Streaming: true, Tools: true, Vision: true, JSONMode: true, DeveloperRole: true, StreamUsage: true}
-	case ProfileAnthropicMessages:
-		// Files and batches ride with this profile because Anthropic serves both
-		// on the same connection. The file half is stored by Halro and never
-		// uploaded — Anthropic batches carry their requests inline — so the
-		// capability says the deployment can be given a file, not that Anthropic
-		// will hold one. See ADR 0021.
-		return ProviderCapabilities{Chat: true, Streaming: true, Tools: true, Vision: true, JSONMode: true, Reasoning: true, StreamUsage: true, Files: true, Batches: true}
-	case ProfileBedrockMantleAnthropicMessages:
-		return ProviderCapabilities{Chat: true, Streaming: true, Tools: true, Vision: true, Reasoning: true, StreamUsage: true}
-	default:
-		return DefaultProviderCapabilities(providerType)
+	if row, ok := profileIndex[profileID]; ok {
+		return row.Defaults
 	}
+	return DefaultProviderCapabilities(providerType)
 }
 
 // MaxProviderCapabilitiesForProfile is the most a profile can be declared to do.
 //
-// It is deliberately not the same function as the defaults. The defaults answer
-// "what does a new connection start with"; the ceiling answers "what may an
-// operator turn on at all". Collapsing the two makes every optional capability
-// either always-on or unreachable, and provider_executed_tools has to be
-// neither: the profile supports it, and enabling it means accepting upstream
-// egress that never passes through SafeTransport, so the operator opts in.
-//
-// The Bedrock Mantle profiles keep ceiling == defaults on purpose. Their sets
-// are fixed by the build and widening one is a separate contract review.
+// It is deliberately not the same value as the defaults; see profileRow for why
+// the two are separate columns of the table rather than one with a modifier.
 func MaxProviderCapabilitiesForProfile(providerType ProviderType, profileID ProviderProfileID) ProviderCapabilities {
-	ceiling := DefaultProviderCapabilitiesForProfile(providerType, profileID)
-	if profileID == ProfileAnthropicMessages {
-		ceiling.ProviderExecutedTools = true
+	if row, ok := profileIndex[profileID]; ok {
+		return row.Ceiling
 	}
-	return ceiling
+	return DefaultProviderCapabilities(providerType)
 }
 
 // Deployment is a concrete model endpoint hosted by a Provider instance.

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -62,12 +63,9 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 		http.MethodPost, "/admin/api/v1/providers", "", map[string]any{
 			"name": "OpenAI media", "type": "openai", "base_url": "https://api.openai.com",
 			"credential_id": credential.ID, "enabled": true,
-			"bindings": []map[string]any{
-				{"id": "forged-chat", "profile_id": domain.ProfileOpenAIChatEmbeddings, "enabled": false, "capabilities": map[string]any{}},
-				{"id": "forged-media", "profile_id": domain.ProfileOpenAIMediaResources, "enabled": true,
-					"capabilities":        map[string]any{"images": true, "files": true},
-					"capability_evidence": map[string]any{"images": domain.EvidenceVerified}},
-			},
+			// Only media capabilities: the chat profile receives nothing and is not
+			// bound at all, so the connection's primary profile is the media one.
+			"capabilities": map[string]any{"images": true, "files": true},
 		})
 	if mediaOnlyResponse.Code != http.StatusCreated {
 		t.Fatalf("media-only provider create status=%d body=%s", mediaOnlyResponse.Code, mediaOnlyResponse.Body.String())
@@ -77,26 +75,26 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	if mediaOnly.ProfileID != domain.ProfileOpenAIMediaResources || !mediaOnly.Capabilities.Images || !mediaOnly.Capabilities.Files ||
-		len(mediaOnly.Bindings) != 2 || mediaOnly.Bindings[0].ID != domain.DefaultProviderProfileBindingID(mediaOnly.ID, domain.ProfileOpenAIMediaResources) ||
+		len(mediaOnly.Bindings) != 1 || mediaOnly.Bindings[0].ID != domain.DefaultProviderProfileBindingID(mediaOnly.ID, domain.ProfileOpenAIMediaResources) ||
 		mediaOnly.Bindings[0].CapabilityEvidence["images"] != domain.EvidenceDeclared {
 		t.Fatalf("media-only provider was not canonicalized: %#v", mediaOnly)
 	}
-	allDisabled := performAdminMutation(t, runtime, cookie, csrf,
+	noCapabilities := performAdminMutation(t, runtime, cookie, csrf,
 		http.MethodPost, "/admin/api/v1/providers", "", map[string]any{
-			"name": "Disabled bindings", "type": "openai", "base_url": "https://api.openai.com",
+			"name": "Nothing enabled", "type": "openai", "base_url": "https://api.openai.com",
 			"credential_id": credential.ID, "enabled": true,
-			"bindings": []map[string]any{{"profile_id": domain.ProfileOpenAIChatEmbeddings, "enabled": false, "capabilities": map[string]any{}}},
+			"capabilities": map[string]any{},
 		})
-	if allDisabled.Code != http.StatusBadRequest {
-		t.Fatalf("all-disabled bindings accepted: %d %s", allDisabled.Code, allDisabled.Body.String())
+	if noCapabilities.Code != http.StatusBadRequest {
+		t.Fatalf("a connection serving nothing was accepted: %d %s", noCapabilities.Code, noCapabilities.Body.String())
 	}
 	multiBindingResponse := performAdminMutation(t, runtime, cookie, csrf,
 		http.MethodPost, "/admin/api/v1/providers", "", map[string]any{
 			"name": "OpenAI complete", "type": "openai", "base_url": "https://api.openai.com",
 			"credential_id": credential.ID, "enabled": true,
-			"bindings": []map[string]any{
-				{"profile_id": domain.ProfileOpenAIChatEmbeddings, "enabled": true, "capabilities": map[string]any{"chat": true, "streaming": true, "embeddings": true}},
-				{"profile_id": domain.ProfileOpenAIMediaResources, "enabled": true, "capabilities": map[string]any{"images": true, "files": true, "batches": true}},
+			"capabilities": map[string]any{
+				"chat": true, "streaming": true, "embeddings": true,
+				"images": true, "files": true, "batches": true,
 			},
 		})
 	if multiBindingResponse.Code != http.StatusCreated {
@@ -120,11 +118,14 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 		map[string]any{
 			"name": "OpenAI", "type": "openai", "base_url": "https://api.openai.com",
 			"credential_id": credential.ID, "max_concurrency": int64(3), "enabled": true,
+			// No token limits: no OpenAI profile declares one, so the connection has
+			// nowhere to hold them. The model's limits are declared on the
+			// Deployment, and TestATokenLimitNoProfileHoldsIsRefusedByName covers
+			// what happens to a caller who sends them here.
 			"capabilities": map[string]any{
 				"chat": true, "streaming": true, "embeddings": true, "tools": true,
 				"vision": true, "json_mode": true, "developer_role": true,
 				"reasoning": true, "stream_usage": true,
-				"max_context_tokens": int64(128), "max_output_tokens": int64(64),
 			},
 		},
 	)
@@ -808,10 +809,42 @@ func TestAdminBedrockTitanEmbeddingProfilePinsModelFamily(t *testing.T) {
 	if credentialResponse.Code != http.StatusCreated || json.Unmarshal(credentialResponse.Body.Bytes(), &credential) != nil {
 		t.Fatalf("credential status=%d body=%s", credentialResponse.Code, credentialResponse.Body.String())
 	}
+	// Titan Embed serves embeddings and nothing else, so chat cannot land on it —
+	// not even when the same request asks for both. It goes to the Converse
+	// profile, which is a separate binding with its own adapter, and the Titan
+	// binding stays exactly what the profile allows.
+	alsoChat := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost, "/admin/api/v1/providers", "", map[string]any{
+		"name": "Titan and chat", "type": "bedrock", "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+		"credential_id": credential.ID, "profile_id": domain.ProfileBedrockInvokeTitanEmbedV2, "enabled": true,
+		"capabilities": map[string]any{"chat": true, "embeddings": true},
+	})
+	if alsoChat.Code != http.StatusCreated {
+		t.Fatalf("chat alongside embeddings status=%d body=%s", alsoChat.Code, alsoChat.Body.String())
+	}
+	var combined domain.ProviderInstance
+	if err := json.Unmarshal(alsoChat.Body.Bytes(), &combined); err != nil {
+		t.Fatal(err)
+	}
+	for _, binding := range combined.Bindings {
+		switch binding.ProfileID {
+		case domain.ProfileBedrockInvokeTitanEmbedV2:
+			if binding.Capabilities.Chat || !binding.Capabilities.Embeddings {
+				t.Fatalf("chat was declared on the Titan profile: %#v", binding.Capabilities)
+			}
+		case domain.ProfileBedrockConverseText:
+			if !binding.Capabilities.Chat || binding.Capabilities.Embeddings {
+				t.Fatalf("the converse binding carries the wrong set: %#v", binding.Capabilities)
+			}
+		default:
+			t.Fatalf("unexpected binding profile %q", binding.ProfileID)
+		}
+	}
+	// Vision is served by no profile this credential can reach, so it is refused
+	// rather than quietly left out of every binding.
 	forgedCapabilities := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost, "/admin/api/v1/providers", "", map[string]any{
 		"name": "Forged Titan", "type": "bedrock", "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
 		"credential_id": credential.ID, "profile_id": domain.ProfileBedrockInvokeTitanEmbedV2, "enabled": true,
-		"capabilities": map[string]any{"chat": true, "embeddings": true, "max_context_tokens": int64(8192)},
+		"capabilities": map[string]any{"embeddings": true, "vision": true, "max_context_tokens": int64(8192)},
 	})
 	if forgedCapabilities.Code != http.StatusBadRequest {
 		t.Fatalf("forged capabilities status=%d body=%s", forgedCapabilities.Code, forgedCapabilities.Body.String())
@@ -1002,34 +1035,27 @@ func createEffectiveMeteredPriceForTest(t *testing.T, runtime *Runtime, deployme
 
 // Provider and Deployment both refuse to leave service while something
 // downstream names them. The Profile Binding level had no such rule, and it is
-// the level the console actually drives: the provider form derives each
-// binding's enabled flag from which capabilities are ticked, so unticking chat
-// and embeddings on a provider whose deployment runs on that interface used to
-// be accepted, land in the store, and leave a deployment bound to a binding that
-// produces no adapter.
+// the level the console actually drives: unticking chat and embeddings on a
+// provider whose deployment runs on that interface used to be accepted, land in
+// the store, and leave a deployment bound to a binding that produces no adapter.
+//
+// Under the flat contract that edit is spelled as a capability set that no
+// longer needs the chat profile — the binding is not switched off, it stops
+// existing — and it has to be refused for the same reason.
 func TestProviderRefusesToSwitchOffAnInterfaceADeploymentRunsOn(t *testing.T) {
 	runtime, bootstrap, session := verifyingProviderRuntime(t)
 	instance, err := runtime.store.GetProvider(context.Background(), bootstrap.ProviderID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	chat := instance.EffectiveProfileBindings()[0]
-	chat.ProfileID = domain.ProfileOpenAIChatEmbeddings
-	chat.Capabilities = domain.DefaultProviderCapabilitiesForProfile(domain.ProviderOpenAI, chat.ProfileID)
-	chat.CapabilityEvidence = domain.EvidenceForCapabilities(chat.Capabilities, domain.EvidenceDeclared)
-	media := chat
-	media.ProfileID = domain.ProfileOpenAIMediaResources
-	media.ID = domain.DefaultProviderProfileBindingID(instance.ID, media.ProfileID)
-	media.Capabilities = domain.DefaultProviderCapabilitiesForProfile(domain.ProviderOpenAI, media.ProfileID)
-	media.CapabilityEvidence = domain.EvidenceForCapabilities(media.Capabilities, domain.EvidenceDeclared)
-
-	// Chat off, media on: the Provider record itself stays valid, which is why
-	// domain validation never caught this.
-	chat.Enabled, media.Enabled = false, true
+	// Media only: the chat profile receives nothing, so the connection would keep
+	// no binding for the deployment to run on. The Provider record itself stays
+	// valid, which is why domain validation never caught this.
 	body := map[string]any{
 		"name": instance.Name, "type": instance.Type, "base_url": instance.BaseURL,
 		"credential_id": instance.CredentialID, "max_concurrency": instance.MaxConcurrency,
-		"enabled": true, "bindings": []domain.ProviderProfileBinding{chat, media},
+		"enabled":      true,
+		"capabilities": map[string]any{"images": true, "files": true},
 	}
 	request := adminMutationRequest(t, http.MethodPut, "/admin/api/v1/providers/"+instance.ID, session, body)
 	request.Header.Set("If-Match", revisionETag(instance.Revision))
@@ -1061,37 +1087,52 @@ func TestProviderRefusesToSwitchOffAnInterfaceADeploymentRunsOn(t *testing.T) {
 	}
 }
 
-func TestOmittingAReferencedBindingIsRefusedLikeSwitchingItOff(t *testing.T) {
+// Enabling or disabling a connection from the list sends the stored record back
+// with one field flipped, and that payload is not the connection form's. It has
+// to keep working, and it is the shape a console-only change breaks silently:
+// the console's own tests mock the API, so a field the server no longer accepts
+// costs nothing there and 400s every toggle in production.
+func TestTheRowToggleSendsAPayloadTheServerStillAccepts(t *testing.T) {
 	runtime, bootstrap, session := verifyingProviderRuntime(t)
 	instance, err := runtime.store.GetProvider(context.Background(), bootstrap.ProviderID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	chat := instance.EffectiveProfileBindings()[0]
-	media := chat
-	media.ID = domain.DefaultProviderProfileBindingID(instance.ID, domain.ProfileOpenAIMediaResources)
-	media.ProfileID = domain.ProfileOpenAIMediaResources
-	media.Capabilities = domain.DefaultProviderCapabilitiesForProfile(domain.ProviderOpenAI, media.ProfileID)
-	media.CapabilityEvidence = domain.EvidenceForCapabilities(media.Capabilities, domain.EvidenceDeclared)
+	capabilities := map[string]any{}
+	encoded, err := json.Marshal(instance.Capabilities)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(encoded, &capabilities); err != nil {
+		t.Fatal(err)
+	}
 	body := map[string]any{
 		"name": instance.Name, "type": instance.Type, "base_url": instance.BaseURL,
-		"credential_id": instance.CredentialID, "max_concurrency": instance.MaxConcurrency,
-		"enabled": true, "bindings": []domain.ProviderProfileBinding{media},
+		"credential_id": instance.CredentialID, "access_surface": instance.AccessSurface,
+		"profile_id": instance.ProfileID, "credential_scheme": instance.CredentialScheme,
+		"capabilities": capabilities, "max_concurrency": instance.MaxConcurrency,
+		// Toggled on rather than off: this connection has a live deployment, and
+		// switching it off is refused by a different rule that would hide whether
+		// the payload itself is acceptable.
+		"enabled": true,
 	}
 	request := adminMutationRequest(t, http.MethodPut, "/admin/api/v1/providers/"+instance.ID, session, body)
 	request.Header.Set("If-Match", revisionETag(instance.Revision))
 	response := httptest.NewRecorder()
 	runtime.adminRouter().ServeHTTP(response, request)
-	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "binding_referenced_by_deployment") {
-		t.Fatalf("omitted referenced binding status=%d body=%s", response.Code, response.Body.String())
+	if response.Code != http.StatusOK {
+		t.Fatalf("the row toggle was refused: status=%d body=%s", response.Code, response.Body.String())
 	}
-	stored, err := runtime.store.GetProvider(context.Background(), instance.ID)
-	if err != nil || stored.Revision != instance.Revision {
-		t.Fatalf("refused omission changed provider revision=%d err=%v", stored.Revision, err)
+	var toggled domain.ProviderInstance
+	if err := json.Unmarshal(response.Body.Bytes(), &toggled); err != nil {
+		t.Fatal(err)
+	}
+	if !toggled.Enabled || len(toggled.Bindings) == 0 || !toggled.Capabilities.Chat {
+		t.Fatalf("the toggle changed more than the enabled flag: %#v", toggled)
 	}
 }
 
-func TestEmptyBindingsAreRefusedBeforeLegacyFallback(t *testing.T) {
+func TestAConnectionThatServesNothingIsRefused(t *testing.T) {
 	runtime, bootstrap, session := verifyingProviderRuntime(t)
 	instance, err := runtime.store.GetProvider(context.Background(), bootstrap.ProviderID)
 	if err != nil {
@@ -1100,58 +1141,83 @@ func TestEmptyBindingsAreRefusedBeforeLegacyFallback(t *testing.T) {
 	body := map[string]any{
 		"name": instance.Name, "type": instance.Type, "base_url": instance.BaseURL,
 		"credential_id": instance.CredentialID, "max_concurrency": instance.MaxConcurrency,
-		"enabled": instance.Enabled, "bindings": []domain.ProviderProfileBinding{},
-		"profile_id": instance.ProfileID, "access_surface": instance.AccessSurface,
-		"credential_scheme": instance.CredentialScheme, "capabilities": instance.Capabilities,
+		"enabled": instance.Enabled, "profile_id": instance.ProfileID,
+		"access_surface": instance.AccessSurface, "credential_scheme": instance.CredentialScheme,
+		"capabilities": map[string]any{},
 	}
 	request := adminMutationRequest(t, http.MethodPut, "/admin/api/v1/providers/"+instance.ID, session, body)
 	request.Header.Set("If-Match", revisionETag(instance.Revision))
 	response := httptest.NewRecorder()
 	runtime.adminRouter().ServeHTTP(response, request)
-	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "at least one profile binding") {
-		t.Fatalf("empty bindings status=%d body=%s", response.Code, response.Body.String())
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "at least one operation capability") {
+		t.Fatalf("a connection serving nothing status=%d body=%s", response.Code, response.Body.String())
 	}
 	stored, err := runtime.store.GetProvider(context.Background(), instance.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if stored.Revision != instance.Revision || len(stored.EffectiveProfileBindings()) == 0 {
-		t.Fatalf("empty binding refusal changed provider: %#v", stored)
+		t.Fatalf("the refusal changed the provider: %#v", stored)
 	}
 }
 
-// Switching off an interface nothing runs on is ordinary configuration and must
-// still work, or the guard above would make multi-interface providers uneditable.
-func TestProviderAllowsSwitchingOffAnUnusedInterface(t *testing.T) {
+// Dropping an interface nothing runs on is ordinary configuration and must still
+// work, or the guard above would make multi-interface providers uneditable.
+func TestProviderAllowsDroppingAnUnusedInterface(t *testing.T) {
 	runtime, bootstrap, session := verifyingProviderRuntime(t)
 	instance, err := runtime.store.GetProvider(context.Background(), bootstrap.ProviderID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	chat := instance.EffectiveProfileBindings()[0]
-	chat.ProfileID = domain.ProfileOpenAIChatEmbeddings
-	chat.Capabilities = domain.DefaultProviderCapabilitiesForProfile(domain.ProviderOpenAI, chat.ProfileID)
-	chat.CapabilityEvidence = domain.EvidenceForCapabilities(chat.Capabilities, domain.EvidenceDeclared)
-	media := chat
-	media.ProfileID = domain.ProfileOpenAIMediaResources
-	media.ID = domain.DefaultProviderProfileBindingID(instance.ID, media.ProfileID)
-	media.Capabilities = domain.DefaultProviderCapabilitiesForProfile(domain.ProviderOpenAI, media.ProfileID)
-	media.CapabilityEvidence = domain.EvidenceForCapabilities(media.Capabilities, domain.EvidenceDeclared)
-
-	// The deployment runs on chat, so switching media off costs nothing.
-	chat.Enabled, media.Enabled = true, false
-	body := map[string]any{
-		"name": instance.Name, "type": instance.Type, "base_url": instance.BaseURL,
-		"credential_id": instance.CredentialID, "max_concurrency": instance.MaxConcurrency,
-		"enabled": true, "bindings": []domain.ProviderProfileBinding{chat, media},
+	edit := func(capabilities map[string]any, revision uint64) *httptest.ResponseRecorder {
+		body := map[string]any{
+			"name": instance.Name, "type": instance.Type, "base_url": instance.BaseURL,
+			"credential_id": instance.CredentialID, "max_concurrency": instance.MaxConcurrency,
+			"enabled": true, "capabilities": capabilities,
+		}
+		request := adminMutationRequest(t, http.MethodPut, "/admin/api/v1/providers/"+instance.ID, session, body)
+		request.Header.Set("If-Match", revisionETag(revision))
+		response := httptest.NewRecorder()
+		runtime.adminRouter().ServeHTTP(response, request)
+		return response
 	}
-	request := adminMutationRequest(t, http.MethodPut, "/admin/api/v1/providers/"+instance.ID, session, body)
-	request.Header.Set("If-Match", revisionETag(instance.Revision))
-	response := httptest.NewRecorder()
-	runtime.adminRouter().ServeHTTP(response, request)
 
-	if response.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	// What the connection already serves, which the deployment was built against.
+	current := map[string]any{}
+	encoded, err := json.Marshal(instance.Capabilities)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(encoded, &current); err != nil {
+		t.Fatal(err)
+	}
+	withImages := maps.Clone(current)
+	withImages["images"] = true
+
+	// Add the media interface alongside the chat one the deployment runs on.
+	added := edit(withImages, instance.Revision)
+	if added.Code != http.StatusOK {
+		t.Fatalf("adding an interface status=%d body=%s", added.Code, added.Body.String())
+	}
+	var withMedia domain.ProviderInstance
+	if err := json.Unmarshal(added.Body.Bytes(), &withMedia); err != nil {
+		t.Fatal(err)
+	}
+	if len(withMedia.Bindings) != 2 {
+		t.Fatalf("images did not add a media binding: %#v", withMedia.Bindings)
+	}
+
+	// The deployment runs on chat, so dropping media again costs nothing.
+	dropped := edit(current, withMedia.Revision)
+	if dropped.Code != http.StatusOK {
+		t.Fatalf("dropping an unused interface status=%d body=%s", dropped.Code, dropped.Body.String())
+	}
+	var withoutMedia domain.ProviderInstance
+	if err := json.Unmarshal(dropped.Body.Bytes(), &withoutMedia); err != nil {
+		t.Fatal(err)
+	}
+	if len(withoutMedia.Bindings) != 1 || withoutMedia.Bindings[0].ProfileID != domain.ProfileOpenAIChatEmbeddings {
+		t.Fatalf("the media binding survived: %#v", withoutMedia.Bindings)
 	}
 }
 
