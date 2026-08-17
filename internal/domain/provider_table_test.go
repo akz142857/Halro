@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -168,10 +169,45 @@ func TestOnlyAnthropicMessagesHasAWiderCeiling(t *testing.T) {
 	}
 }
 
-// The dependency list handed to callers has to be the rule that is actually
-// enforced, or a form built from it offers combinations the save will refuse.
-func TestCapabilityRequiresChatMatchesValidation(t *testing.T) {
-	for _, name := range CapabilityRequiresChat() {
+// The dependencies handed to callers have to be the rule that is actually
+// enforced, or a form built from them offers combinations the save will refuse.
+//
+// Enforcement is split across two boundaries and the published contract has to
+// cover both: ProviderInstance.Validate refuses streaming without chat, and
+// modelcatalog.ValidateDependencies — which every deployment crosses — refuses
+// the rest, including stream usage without streaming. Naming only one of them is
+// how the published list came to be missing that link.
+func TestCapabilityDependenciesAreEnforcedSomewhere(t *testing.T) {
+	dependencies := CapabilityDependencies()
+	if got := dependencies["stream_usage"]; len(got) != 1 || got[0] != "streaming" {
+		t.Errorf("stream_usage depends on %v, want streaming — the deployment boundary enforces it", got)
+	}
+	for name, needs := range dependencies {
+		if !slices.Contains(CapabilityNames(), name) {
+			t.Errorf("%q has dependencies but is not a capability", name)
+		}
+		for _, need := range needs {
+			if !slices.Contains(CapabilityNames(), need) {
+				t.Errorf("%q depends on %q, which is not a capability", name, need)
+			}
+		}
+	}
+	// Every dependency has to bottom out, or a form applying them loops.
+	for name := range dependencies {
+		seen := map[string]bool{name: true}
+		queue := append([]string(nil), dependencies[name]...)
+		for len(queue) > 0 {
+			next := queue[0]
+			queue = queue[1:]
+			if seen[next] {
+				t.Fatalf("%q depends on itself through %q", name, next)
+			}
+			seen[next] = true
+			queue = append(queue, dependencies[next]...)
+		}
+	}
+	// The half this package enforces, checked against the real write boundary.
+	for _, name := range []string{"streaming"} {
 		capabilities := ProviderCapabilities{}
 		if !setCapabilityForTest(&capabilities, name) {
 			t.Fatalf("%q is not a capability name", name)
@@ -186,17 +222,20 @@ func TestCapabilityRequiresChatMatchesValidation(t *testing.T) {
 	}
 }
 
-// The endpoints moved from the console into the table, so they must resolve to
-// exactly what the console used to hardcode. These are transcribed from what
-// ProvidersPage.tsx offered — a wrong prefill sends a credential to the wrong
-// host, and it is the field an operator is least likely to re-read.
+// Every profile's prefilled endpoint, pinned. A wrong prefill sends a credential
+// to the wrong host, and it is the field an operator is least likely to re-read.
+//
+// Azure OpenAI and the compatibility type deliberately offer nothing. They used
+// to inherit api.openai.com from the console, which no deployment of either ever
+// wants: an Azure endpoint is the resource's own host, and a compatibility
+// server is by definition somewhere Halro does not know about.
 func TestResolvedEndpointsMatchWhatTheConsoleOffered(t *testing.T) {
 	const region = "us-east-1"
 	want := map[ProviderProfileID]string{
 		ProfileOpenAIChatEmbeddings:           "https://api.openai.com",
 		ProfileOpenAIMediaResources:           "https://api.openai.com",
-		ProfileAzureChatEmbeddings:            "https://api.openai.com",
-		ProfileOpenAICompatible:               "https://api.openai.com",
+		ProfileAzureChatEmbeddings:            "",
+		ProfileOpenAICompatible:               "",
 		ProfileAnthropicMessages:              "https://api.anthropic.com",
 		ProfileDeepSeekChat:                   "https://api.deepseek.com",
 		ProfileGeminiText:                     "https://generativelanguage.googleapis.com",

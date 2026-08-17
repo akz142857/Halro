@@ -67,6 +67,20 @@ type providerProfileView struct {
 	Immutable      bool                   `json:"immutable"`
 	Defaults       providerCapabilityView `json:"defaults"`
 	Ceiling        providerCapabilityView `json:"ceiling"`
+	// What a whole connection anchored on this profile may turn on, and what it
+	// starts with. One connection can span several profiles — an OpenAI key
+	// serves the chat endpoints and the media ones — and the rule for which
+	// profile serves what lives in the domain table, so the answer is computed
+	// there and sent, not recomputed by every caller from the per-profile sets
+	// above. A capability several of the connection's profiles could serve is
+	// absent from ConnectionCeiling on purpose: the save would be refused as
+	// ambiguous, and a form must not offer a tick that cannot be saved.
+	ConnectionCeiling  providerCapabilityView `json:"connection_ceiling"`
+	ConnectionDefaults providerCapabilityView `json:"connection_defaults"`
+	// CombinesWith names the other profiles a connection anchored here can carry,
+	// which is what makes the two sets above readable: it says where a capability
+	// the anchor does not serve would go.
+	CombinesWith []domain.ProviderProfileID `json:"combines_with"`
 }
 
 type providerTypeView struct {
@@ -80,10 +94,17 @@ type providerProfilesView struct {
 	// and what they are called in a given language stay with whoever renders
 	// them.
 	CapabilityNames []string `json:"capability_names"`
-	// CapabilityRequiresChat is the dependency the server enforces. Sending it
-	// means a form can present the rule instead of discovering it on refusal.
-	CapabilityRequiresChat []string           `json:"capability_requires_chat"`
-	ProviderTypes          []providerTypeView `json:"provider_types"`
+	// CapabilityDependencies is what each capability needs alongside it, as the
+	// server enforces it. Sending it means a form can present the rule instead
+	// of discovering it on refusal. Direct dependencies only: stream_usage names
+	// streaming, and streaming names chat.
+	CapabilityDependencies map[string][]string `json:"capability_dependencies"`
+	// CapabilityOptInWarnings names the capabilities a form must say something
+	// about before it is ticked, rather than rendering as one more checkbox. The
+	// wording is the renderer's; the list is the server's, so a capability that
+	// gains this property does not depend on the console being edited too.
+	CapabilityOptInWarnings []string           `json:"capability_opt_in_warnings"`
+	ProviderTypes           []providerTypeView `json:"provider_types"`
 }
 
 // The view is assembled per request rather than memoised. It is fifteen rows of
@@ -93,14 +114,21 @@ type providerProfilesView struct {
 func buildProviderProfilesView(region string) providerProfilesView {
 	profilesByType := make(map[domain.ProviderType][]providerProfileView)
 	for _, profile := range domain.AllProviderProfiles() {
+		combines := make([]domain.ProviderProfileID, 0)
+		for _, peer := range domain.ConnectionProfiles(profile.Type, profile.ID)[1:] {
+			combines = append(combines, peer.ID)
+		}
 		profilesByType[profile.Type] = append(profilesByType[profile.Type], providerProfileView{
-			ID:               profile.ID,
-			AccessSurface:    profile.AccessSurface,
-			CredentialScheme: profile.CredentialScheme,
-			DefaultBaseURL:   domain.ResolveBaseURL(profile.ID, region),
-			Immutable:        profile.Immutable,
-			Defaults:         providerCapabilityViewOf(profile.Defaults),
-			Ceiling:          providerCapabilityViewOf(profile.Ceiling),
+			ID:                 profile.ID,
+			AccessSurface:      profile.AccessSurface,
+			CredentialScheme:   profile.CredentialScheme,
+			DefaultBaseURL:     domain.ResolveBaseURL(profile.ID, region),
+			Immutable:          profile.Immutable,
+			Defaults:           providerCapabilityViewOf(profile.Defaults),
+			Ceiling:            providerCapabilityViewOf(profile.Ceiling),
+			ConnectionCeiling:  providerCapabilityViewOf(domain.ConnectionCeiling(profile.Type, profile.ID)),
+			ConnectionDefaults: providerCapabilityViewOf(domain.ConnectionDefaults(profile.Type, profile.ID)),
+			CombinesWith:       combines,
 		})
 	}
 	types := make([]providerTypeView, 0, len(domain.AllProviderTypes()))
@@ -113,9 +141,10 @@ func buildProviderProfilesView(region string) providerProfilesView {
 		})
 	}
 	return providerProfilesView{
-		CapabilityNames:        domain.CapabilityNames(),
-		CapabilityRequiresChat: domain.CapabilityRequiresChat(),
-		ProviderTypes:          types,
+		CapabilityNames:         domain.CapabilityNames(),
+		CapabilityDependencies:  domain.CapabilityDependencies(),
+		CapabilityOptInWarnings: domain.CapabilityOptInWarnings(),
+		ProviderTypes:           types,
 	}
 }
 

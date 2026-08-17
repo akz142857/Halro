@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 
 	"github.com/akz142857/Halro/internal/config"
@@ -70,6 +71,66 @@ func TestAdminProviderProfilesServesEveryTableRow(t *testing.T) {
 	}
 }
 
+// The connection-level sets are what a form actually renders, and they are the
+// server's own answer rather than something a caller recomputes from the
+// per-profile ones. Two properties matter, and both are checked against the
+// domain functions the write path uses: the ceiling a form offers is exactly the
+// one a save accepts, and the defaults a form starts with are inside it.
+func TestAdminProviderProfilesServesTheConnectionLevelSets(t *testing.T) {
+	runtime, cookie := providerProfilesFixture(t)
+	view := fetchProviderProfiles(t, runtime, cookie)
+
+	for _, providerType := range view.ProviderTypes {
+		for _, profile := range providerType.Profiles {
+			wantCeiling := domain.ConnectionCeiling(providerType.Type, profile.ID)
+			if profile.ConnectionCeiling != providerCapabilityViewOf(wantCeiling) {
+				t.Errorf("%s connection ceiling differs from the domain answer: %#v", profile.ID, profile.ConnectionCeiling)
+			}
+			wantDefaults := domain.ConnectionDefaults(providerType.Type, profile.ID)
+			if profile.ConnectionDefaults != providerCapabilityViewOf(wantDefaults) {
+				t.Errorf("%s connection defaults differ from the domain answer: %#v", profile.ID, profile.ConnectionDefaults)
+			}
+			// Everything a form may tick has to survive the split, or the form can
+			// produce a save the server refuses — the failure this endpoint exists
+			// to make impossible.
+			assignment := domain.AssignConnectionCapabilities(providerType.Type, profile.ID, wantCeiling)
+			if len(assignment.Unservable) != 0 || len(assignment.Ambiguous) != 0 {
+				t.Errorf("%s offers capabilities the save refuses: %+v", profile.ID, assignment)
+			}
+			peers := domain.ConnectionProfiles(providerType.Type, profile.ID)
+			if len(profile.CombinesWith) != len(peers)-1 {
+				t.Errorf("%s combines with %d profiles, the table says %d", profile.ID, len(profile.CombinesWith), len(peers)-1)
+			}
+		}
+	}
+}
+
+// A capability whose consequence is not visible in a checkbox has to arrive
+// marked, or the console has to keep its own list of which ones those are — the
+// second copy this endpoint exists to remove.
+func TestAdminProviderProfilesMarksTheCapabilitiesThatNeedAWarning(t *testing.T) {
+	runtime, cookie := providerProfilesFixture(t)
+	view := fetchProviderProfiles(t, runtime, cookie)
+
+	known := make(map[string]bool, len(view.CapabilityNames))
+	for _, name := range view.CapabilityNames {
+		known[name] = true
+	}
+	if len(view.CapabilityOptInWarnings) == 0 {
+		t.Fatal("no capability was marked as needing a warning")
+	}
+	for _, name := range view.CapabilityOptInWarnings {
+		if !known[name] {
+			t.Errorf("%q is marked for a warning but is not a served capability", name)
+		}
+	}
+	// Enabling it accepts upstream egress that never passes through
+	// SafeTransport, which is not something a checkbox conveys on its own.
+	if !slices.Contains(view.CapabilityOptInWarnings, "provider_executed_tools") {
+		t.Errorf("provider_executed_tools was served unmarked: %v", view.CapabilityOptInWarnings)
+	}
+}
+
 // The numeric limits decide whether a save is accepted — Titan Embed refuses a
 // context above 8192 and refuses zero — so they have to survive the round trip.
 // A boolean-only projection would leave a caller unable to fill the field at all.
@@ -104,13 +165,19 @@ func TestAdminProviderProfilesResolvesTheConfiguredRegion(t *testing.T) {
 		domain.ProfileBedrockConverseText:     "https://bedrock-runtime.eu-central-1.amazonaws.com",
 		domain.ProfileBedrockMantleOpenAIChat: "https://bedrock-mantle.eu-central-1.api.aws",
 		domain.ProfileOpenAIChatEmbeddings:    "https://api.openai.com",
+		// Two profiles have no endpoint to offer, and an empty field is the honest
+		// answer: an Azure OpenAI resource and a compatibility server both live
+		// wherever the operator put them.
+		domain.ProfileAzureChatEmbeddings: "",
+		domain.ProfileOpenAICompatible:    "",
 	}
 	for _, providerType := range view.ProviderTypes {
 		for _, profile := range providerType.Profiles {
-			if expected, checked := want[profile.ID]; checked && profile.DefaultBaseURL != expected {
+			expected, checked := want[profile.ID]
+			if checked && profile.DefaultBaseURL != expected {
 				t.Errorf("%s endpoint is %q, want %q", profile.ID, profile.DefaultBaseURL, expected)
 			}
-			if profile.DefaultBaseURL == "" {
+			if !checked && profile.DefaultBaseURL == "" {
 				t.Errorf("%s was served with no endpoint", profile.ID)
 			}
 		}
@@ -129,13 +196,25 @@ func TestAdminProviderProfilesCarriesTheChatDependency(t *testing.T) {
 	for _, name := range view.CapabilityNames {
 		known[name] = true
 	}
-	if len(view.CapabilityRequiresChat) == 0 {
-		t.Fatal("no chat dependency was served")
+	if len(view.CapabilityDependencies) == 0 {
+		t.Fatal("no capability dependencies were served")
 	}
-	for _, name := range view.CapabilityRequiresChat {
+	for name, needs := range view.CapabilityDependencies {
 		if !known[name] {
-			t.Errorf("%q depends on chat but is not a served capability name", name)
+			t.Errorf("%q has dependencies but is not a served capability name", name)
 		}
+		for _, need := range needs {
+			if !known[need] {
+				t.Errorf("%q depends on %q, which is not a served capability name", name, need)
+			}
+		}
+	}
+	// The link a flat "requires chat" list could not carry: stream usage stands
+	// on streaming, which stands on chat. A form that only knew the first hop
+	// offered stream usage with chat and no streaming, and the deployment
+	// refused it.
+	if got := view.CapabilityDependencies["stream_usage"]; len(got) != 1 || got[0] != "streaming" {
+		t.Errorf("stream_usage depends on %v, want streaming", got)
 	}
 }
 

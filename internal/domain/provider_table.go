@@ -118,10 +118,13 @@ var profileTable = []profileRow{
 		Ceiling:         withProviderExecutedTools(anthropicMessagesSet),
 	},
 	{
+		// No endpoint to offer: an Azure OpenAI deployment lives on the resource's
+		// own host. Prefilling api.openai.com there was inherited from the console
+		// and was wrong in the worst way a prefill can be — plausible, and the one
+		// field an operator is least likely to re-read before saving.
 		ID: ProfileAzureChatEmbeddings, Type: ProviderAzureOpenAI,
 		Surface: SurfaceAzureOpenAI, Scheme: CredentialAzureAPIKey,
-		BaseURLTemplate: "https://api.openai.com",
-		Defaults:        openAIChatSet, Ceiling: openAIChatSet,
+		Defaults: openAIChatSet, Ceiling: openAIChatSet,
 	},
 	{
 		ID: ProfileDeepSeekChat, Type: ProviderDeepSeek,
@@ -133,10 +136,11 @@ var profileTable = []profileRow{
 		// Compatibility servers vary. These conservative defaults preserve the two
 		// core OpenAI endpoints; anything else has to be established per server,
 		// which capability detection does — not asserted in a table.
+		// Also no endpoint: a compatibility server is by definition somewhere else,
+		// and the whole point of this type is that Halro does not know where.
 		ID: ProfileOpenAICompatible, Type: ProviderOpenAICompatible,
 		Surface: SurfaceOpenAICompatible, Scheme: CredentialBearerStatic,
-		BaseURLTemplate: "https://api.openai.com",
-		Defaults:        openAICompatibleSet, Ceiling: openAICompatibleSet,
+		Defaults: openAICompatibleSet, Ceiling: openAICompatibleSet,
 	},
 	{
 		// Beta profile intentionally declares only the translated text subset.
@@ -334,12 +338,44 @@ func AllProviderTypes() []ProviderType {
 // The capability key list is already exported as CapabilityNames in
 // invocation_target.go; this file does not add a second one.
 
-// CapabilityRequiresChat returns the capabilities that cannot be enabled without
-// chat. It is the same rule ProviderCapabilities.Validate enforces; exporting it
-// lets a caller present the dependency instead of discovering it on refusal.
-func CapabilityRequiresChat() []string {
-	return []string{
-		"streaming", "tools", "vision", "json_mode",
-		"developer_role", "reasoning", "stream_usage", "provider_executed_tools",
+// CapabilityDependencies returns, per capability, what has to be on with it.
+//
+// This is the whole rule, not one half of it. It used to be a flat "these
+// require chat" list, which was wrong twice: it claimed to mirror
+// ProviderInstance.Validate, which only enforces streaming→chat, and it left out
+// stream_usage→streaming, which modelcatalog.ValidateDependencies does enforce —
+// so a form built from it could offer stream usage without streaming and have
+// the deployment refuse it later.
+//
+// Dependencies are direct, not transitive: a caller enabling stream_usage has to
+// walk to streaming and from there to chat. Keeping them direct is what lets a
+// caller present the reason ("streaming needs chat") rather than a flat set.
+func CapabilityDependencies() map[string][]string {
+	return map[string][]string{
+		"streaming":               {"chat"},
+		"tools":                   {"chat"},
+		"vision":                  {"chat"},
+		"json_mode":               {"chat"},
+		"developer_role":          {"chat"},
+		"reasoning":               {"chat"},
+		"provider_executed_tools": {"chat"},
+		"stream_usage":            {"streaming"},
 	}
+}
+
+// CapabilityOptInWarnings returns the capabilities whose consequence a checkbox
+// does not show.
+//
+// provider_executed_tools is the one: enabling it accepts that the upstream may
+// run tools of its own and reach the network to do so, and that traffic never
+// passes through SafeTransport — no host allowlist, no DNS pinning, nothing in
+// the audit trail. Every other capability changes what Halro will relay; this
+// one changes who else gets to make requests. A ceiling that permits it and a
+// default that leaves it off is only half the answer: the operator turning it on
+// has to be told what they are accepting, at the moment they do it.
+//
+// It is a list of keys, not sentences. What to say about it belongs to whoever
+// renders it, in the reader's language.
+func CapabilityOptInWarnings() []string {
+	return []string{"provider_executed_tools"}
 }

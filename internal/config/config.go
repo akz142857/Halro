@@ -199,8 +199,6 @@ type ModelCapabilityDetection struct {
 	CreateRPM           int      `yaml:"create_rpm"`
 }
 
-// ModelCatalog governs optional signed background catalog updates. The remote
-// endpoint, host allowlist and signature trust roots are compiled into Halro.
 // Providers holds what varies by deployment about reaching an upstream, as
 // opposed to what a provider can do. Capabilities are a claim about compiled
 // code and stay in internal/domain; an AWS region is a deployment choice and
@@ -257,6 +255,8 @@ func validBedrockRegion(region string) bool {
 	return true
 }
 
+// ModelCatalog governs optional signed background catalog updates. The remote
+// endpoint, host allowlist and signature trust roots are compiled into Halro.
 type ModelCatalog struct {
 	Enabled             bool     `yaml:"enabled"`
 	RefreshInterval     Duration `yaml:"refresh_interval"`

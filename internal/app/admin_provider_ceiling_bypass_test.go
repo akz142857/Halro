@@ -8,18 +8,17 @@ import (
 	"github.com/akz142857/Halro/internal/domain"
 )
 
-// PutProvider bounds the capabilities field against the profile's ceiling and
-// then, when the payload carries bindings, replaces that field with the summary
-// of them. The ceiling only ever looked at the field, and the binding-level
-// check only at the immutable profiles, so the bindings array was a way to
-// declare a capability the profile does not serve and have it become the
-// connection's declaration — with evidence recorded as though an operator had
-// been entitled to state it.
+// A capability set beyond what the connection can serve is refused, and there is
+// no second way in.
 //
-// The two halves of this test are the same capability set arriving by the two
-// routes. They have to agree; when they did not, the console's checkbox list
-// was the only thing keeping a direct API caller inside the ceiling.
-func TestProviderBindingsCannotDeclareBeyondTheProfileCeiling(t *testing.T) {
+// There used to be: the payload could carry a bindings array, whose contents
+// became the connection's declaration while the ceiling check only ever looked
+// at the capabilities field — so a direct API caller could declare a capability
+// the profile does not serve, with evidence recorded as though an operator had
+// been entitled to state it. The array is gone; a caller sending one is told so
+// rather than having it quietly overridden, and the flat set is bounded by the
+// same table that decides which profile serves what.
+func TestProviderCapabilitiesCannotExceedWhatTheConnectionServes(t *testing.T) {
 	cfg := testConfig(t)
 	runtime, _ := openRuntimeWithPolicyForTest(t, cfg)
 	cookie, csrf := loginAdminForTest(t, runtime)
@@ -49,19 +48,6 @@ func TestProviderBindingsCannotDeclareBeyondTheProfileCeiling(t *testing.T) {
 		"chat": true, "streaming": true, "stream_usage": true, "tools": true, "vision": true,
 	}
 
-	viaBindings := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost, "/admin/api/v1/providers", "", map[string]any{
-		"name": "Bedrock via bindings", "type": "bedrock",
-		"base_url":      "https://bedrock-runtime.us-east-1.amazonaws.com",
-		"credential_id": credential.ID, "enabled": true,
-		"bindings": []map[string]any{{
-			"profile_id": domain.ProfileBedrockConverseText, "enabled": true, "capabilities": beyond,
-		}},
-	})
-	if viaBindings.Code != http.StatusBadRequest {
-		t.Fatalf("the bindings array carried a capability past the ceiling: status=%d body=%s",
-			viaBindings.Code, viaBindings.Body.String())
-	}
-
 	viaCapabilities := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost, "/admin/api/v1/providers", "", map[string]any{
 		"name": "Bedrock via capabilities", "type": "bedrock",
 		"base_url":      "https://bedrock-runtime.us-east-1.amazonaws.com",
@@ -71,21 +57,47 @@ func TestProviderBindingsCannotDeclareBeyondTheProfileCeiling(t *testing.T) {
 		t.Fatalf("the capabilities field carried a capability past the ceiling: status=%d body=%s",
 			viaCapabilities.Code, viaCapabilities.Body.String())
 	}
+	// Named, not merely refused: the operator's next action is to untick one of
+	// these, and a message that does not say which leaves them guessing across
+	// eighteen checkboxes.
+	var refusal struct {
+		Code         string `json:"code"`
+		Capabilities string `json:"capabilities"`
+	}
+	if err := json.Unmarshal(viaCapabilities.Body.Bytes(), &refusal); err != nil {
+		t.Fatal(err)
+	}
+	if refusal.Code != "capabilities_unservable" || refusal.Capabilities != "tools,vision" {
+		t.Fatalf("the refusal did not name the capabilities: %s", viaCapabilities.Body.String())
+	}
 
-	// Narrowing through the same array stays legal, so the fix is a ceiling and
-	// not a fixed value: an operator who knows this connection must not stream
-	// still has to be able to say so.
+	// The other route in is gone rather than bounded: a caller sending bindings
+	// is refused the request, not silently given a connection assembled from
+	// something else.
+	viaBindings := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost, "/admin/api/v1/providers", "", map[string]any{
+		"name": "Bedrock via bindings", "type": "bedrock",
+		"base_url":      "https://bedrock-runtime.us-east-1.amazonaws.com",
+		"credential_id": credential.ID, "enabled": true,
+		"bindings": []map[string]any{{
+			"profile_id": domain.ProfileBedrockConverseText, "enabled": true, "capabilities": beyond,
+		}},
+	})
+	if viaBindings.Code != http.StatusBadRequest {
+		t.Fatalf("a bindings array was still accepted: status=%d body=%s",
+			viaBindings.Code, viaBindings.Body.String())
+	}
+
+	// Narrowing stays legal, so the rule is a ceiling and not a fixed value: an
+	// operator who knows this connection must not stream still has to be able to
+	// say so.
 	within := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost, "/admin/api/v1/providers", "", map[string]any{
 		"name": "Bedrock within its ceiling", "type": "bedrock",
 		"base_url":      "https://bedrock-runtime.us-east-1.amazonaws.com",
 		"credential_id": credential.ID, "enabled": true,
-		"bindings": []map[string]any{{
-			"profile_id": domain.ProfileBedrockConverseText, "enabled": true,
-			"capabilities": map[string]any{"chat": true},
-		}},
+		"capabilities": map[string]any{"chat": true},
 	})
 	if within.Code != http.StatusCreated {
-		t.Fatalf("a binding narrower than its ceiling was refused: status=%d body=%s",
+		t.Fatalf("a capability set narrower than the ceiling was refused: status=%d body=%s",
 			within.Code, within.Body.String())
 	}
 }
