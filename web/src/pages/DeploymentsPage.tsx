@@ -17,7 +17,8 @@ import {
 } from "../components";
 import { money, useInstantFormatter } from "../format";
 import { isoToZonedInput, useAccountingTimeZone, zonedInputToISO } from "../timezone";
-import type { CapabilityPreflight, CapabilityReview, Deployment, DeploymentPriceVersion, DeploymentTargetKind, DeploymentVariant, ModelCapabilityDetection, Provider, ProviderBinding, ProviderCapabilities, ResolvedInvocationTarget } from "../types";
+import type { CapabilityPreflight, CapabilityReview, Deployment, DeploymentPriceVersion, DeploymentTargetKind, DeploymentVariant, ModelCapabilityDetection, Provider, ProviderBinding, ProviderCapabilities, ProviderProfilesCatalog, ResolvedInvocationTarget } from "../types";
+import { updateCapabilitySelection, useProviderProfiles } from "../hooks/useProviderProfiles";
 import { useTranslation } from "react-i18next";
 import { useNotify } from "../notifications";
 import { useIsReadOnly } from "../session";
@@ -748,6 +749,11 @@ function DeploymentForm({
   const dateTime = useInstantFormatter();
   const source = current ?? template;
   const { notify } = useNotify();
+  // Which capabilities cannot stand without chat is the server's rule, and this
+  // form used to keep its own copy of the list. A capability added to the rule
+  // upstream would have left this form offering a combination the save refuses.
+  const capabilityCatalog = useProviderProfiles();
+  const catalogReady = capabilityCatalog.isSuccess ? capabilityCatalog.data : undefined;
   const enabledProviders = providers.filter((provider) => provider.enabled || provider.id === source?.provider_id);
   const [name, setName] = useState(current?.name ?? (template ? `${template.name} v2` : ""));
   const [providerID, setProviderID] = useState(source?.provider_id ?? enabledProviders[0]?.id ?? "");
@@ -1304,7 +1310,9 @@ function DeploymentForm({
             {!current && selectedVariant && !manualDeclaration && !detection && <details className="capability-disclosure capability-advanced">
               <summary><span>{t("deployments.capabilityNarrowing")}</span><strong>{t("providers.selectedCapabilities", { count: selectedCapabilityNames.length })}</strong></summary>
               <p className="capability-advanced-note">{t("deployments.inheritedCapabilitiesHint")}</p>
-              <CapabilitySubsetEditor capabilities={capabilities} ceiling={selectedVariant.capabilities} onChange={changeCapabilities} />
+              {catalogReady && <CapabilitySubsetEditor catalog={catalogReady} capabilities={capabilities} ceiling={selectedVariant.capabilities} onChange={changeCapabilities} />}
+              {!catalogReady && !capabilityCatalog.isError && <Loading />}
+              {capabilityCatalog.isError && <CapabilityMatrixError query={capabilityCatalog} />}
             </details>}
             {!current && noVariant && <div className="notice warning"><strong>{t("deployments.noVariantTitle")}</strong><span>{t("deployments.noVariantDescription")}</span><Link className="notice-link" href="/admin/providers">{t("deployments.openProviders")}</Link></div>}
             {!current && resolvedTarget?.resolution_state === "conflicting" && <div className="notice warning"><strong>{t("deployments.resolutionConflictTitle")}</strong><span>{t("deployments.resolutionConflictDescription")}</span></div>}
@@ -1404,7 +1412,13 @@ function DeploymentForm({
                 {(detectCapabilities.isError || detectionQuery.isError || cancelDetection.isError) && <ErrorState error={detectCapabilities.error || detectionQuery.error || cancelDetection.error} />}
               </div>
             )}
-            {providerModel.trim() !== "" && (current || manualDeclaration || detection?.status === "completed" && anyOperation) && <div className="capability-disclosure capability-advanced">
+            {/* The checkboxes enforce the server's chat dependency, which arrives
+                with the matrix; without it the form would be guessing at which
+                combinations save. */}
+            {providerModel.trim() !== "" && (current || manualDeclaration || detection?.status === "completed" && anyOperation) && capabilityCatalog.isError && (
+              <CapabilityMatrixError query={capabilityCatalog} />
+            )}
+            {providerModel.trim() !== "" && catalogReady && (current || manualDeclaration || detection?.status === "completed" && anyOperation) && <div className="capability-disclosure capability-advanced">
               <header>
                 <span>{t("deployments.enabledCapabilities")}</span>
                 <div className="deployment-capability-header-actions">
@@ -1434,7 +1448,7 @@ function DeploymentForm({
                             type="checkbox"
                             disabled={unavailable && !capabilities[name]}
                             checked={capabilities[name]}
-                            onChange={(event) => changeCapabilities(updateDeploymentCapability(capabilities, name, event.target.checked))}
+                            onChange={(event) => changeCapabilities(updateCapabilitySelection(catalogReady, capabilities, name, event.target.checked))}
                           />
                           <span>{t(`capabilities.${name}`)}{unavailable && <small>{t("providers.unsupportedByInterface")}</small>}</span>
                         </label>;
@@ -1577,7 +1591,20 @@ function CapabilitySummary({ capabilities, sources }: { capabilities: ProviderCa
   </div>;
 }
 
-function CapabilitySubsetEditor({ capabilities, ceiling, onChange }: {
+// The capability matrix failed to load, so the checkboxes cannot be drawn: they
+// enforce the server's chat dependency, and a form guessing at that offers
+// combinations the save refuses. Failing closed is the point; the retry is what
+// keeps it from meaning "reload the page and hope".
+function CapabilityMatrixError({ query }: { query: ReturnType<typeof useProviderProfiles> }) {
+  const { t } = useTranslation();
+  return <ErrorState
+    error={query.error}
+    action={<button type="button" className="button ghost" disabled={query.isFetching} onClick={() => query.refetch()}>{t("common.retry")}</button>}
+  />;
+}
+
+function CapabilitySubsetEditor({ catalog, capabilities, ceiling, onChange }: {
+  catalog: ProviderProfilesCatalog;
   capabilities: ProviderCapabilities;
   ceiling: ProviderCapabilities;
   onChange: (next: ProviderCapabilities) => void;
@@ -1596,7 +1623,7 @@ function CapabilitySubsetEditor({ capabilities, ceiling, onChange }: {
               type="checkbox"
               disabled={!ceiling[name] && !capabilities[name]}
               checked={capabilities[name]}
-              onChange={(event) => onChange(updateDeploymentCapability(capabilities, name, event.target.checked))}
+              onChange={(event) => onChange(updateCapabilitySelection(catalog, capabilities, name, event.target.checked))}
             />
             <span>{t(`capabilities.${name}`)}</span>
           </label>)}
@@ -1679,13 +1706,3 @@ function catalogEditCeiling(deployment: Deployment): ProviderCapabilities | null
   return ceiling;
 }
 
-function updateDeploymentCapability(current: ProviderCapabilities, capability: keyof ProviderCapabilities, enabled: boolean): ProviderCapabilities {
-  const next = { ...current, [capability]: enabled };
-  const chatFeatures = ["streaming", "tools", "vision", "json_mode", "developer_role", "reasoning", "stream_usage"] as const;
-  if (capability === "chat" && !enabled) {
-    for (const feature of chatFeatures) next[feature] = false;
-  } else if (capability !== "chat" && chatFeatures.includes(capability as typeof chatFeatures[number]) && enabled) {
-    next.chat = true;
-  }
-  return next;
-}

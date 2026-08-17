@@ -1566,8 +1566,6 @@ textarea { resize: vertical; }
 .capability-option small { display: block; margin-top: 3px; color: var(--muted-2); font-size: var(--font-size-xs); }
 .capability-option.unavailable { background: color-mix(in srgb, var(--surface) 94%, var(--color-shadow-base)); cursor: default; }
 .capability-option.unavailable input:disabled { opacity: .45; }
-.capability-limits { padding: 16px; border-top: 1px solid var(--line); }
-.capability-limits > .field { margin: 0; }
 .provider-form > .notice { margin: 18px 24px 0; }
 /* Sticky form footer, one rule rather than one per form. An opaque surface,
    because a translucent panel colour let the fields scroll through the bar in

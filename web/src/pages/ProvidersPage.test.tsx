@@ -45,25 +45,33 @@ describe("ProvidersPage profile and credential bindings", () => {
     expect(screen.queryByRole("heading", { name: "凭据 1" })).not.toBeInTheDocument();
   });
 
-  it("submits the registered OpenAI provider profile instead of the northbound profile", async () => {
+  // What the form submits is one flat capability set and nothing about profiles.
+  // An OpenAI connection spans two of them, and which capability each one serves
+  // is the server's answer — this form knowing it is what let the two drift.
+  it("submits one flat capability set and no profile split", async () => {
     const create = vi.spyOn(api, "createProvider").mockResolvedValue({} as never);
     renderPage();
 
     fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
     fireEvent.change(screen.getByLabelText("服务商名称"), { target: { value: "OpenAI" } });
+    // Offered and left off: the media capabilities belong to a profile this
+    // credential can also reach, and turning one on is the operator's move.
+    expect(screen.getByRole("checkbox", { name: /图像/ })).not.toBeChecked();
     fireEvent.click(screen.getByRole("button", { name: "创建并热加载" }));
 
     await waitFor(() => expect(create).toHaveBeenCalledOnce());
-    expect(create.mock.calls[0][0]).toMatchObject({
-      type: "openai",
-      profile_id: "openai.chat-embeddings.v1",
-      credential_id: openAICredential.id,
-      bindings: expect.arrayContaining([
-        expect.objectContaining({ profile_id: "openai.chat-embeddings.v1", enabled: true }),
-        expect.objectContaining({ profile_id: "openai.media-resources.v1", enabled: true }),
-      ]),
-    });
-    expect(create.mock.calls[0][0]).not.toMatchObject({ profile_id: "openai.chat-completions.v1" });
+    const submitted = create.mock.calls[0][0] as Record<string, unknown>;
+    expect(submitted).toMatchObject({ type: "openai", credential_id: openAICredential.id });
+    expect(submitted.bindings).toBeUndefined();
+    expect(submitted.profile_id).toBeUndefined();
+    // A new connection starts with what the profile it lands on declares, not
+    // with the union across the credential's profiles: the media capabilities
+    // are offered and left off, so nothing is advertised to the router that the
+    // operator did not choose.
+    expect(submitted.capabilities).toMatchObject({ chat: true, embeddings: true, images: false });
+    // The numeric bounds belong to the profile that serves the capability, so
+    // the form neither shows nor sends them.
+    expect(submitted.capabilities).toMatchObject({ max_context_tokens: 0, max_output_tokens: 0 });
   });
 
   it("tests every enabled capability binding as one persisted provider snapshot", async () => {
@@ -227,8 +235,11 @@ describe("ProvidersPage profile and credential bindings", () => {
       enabled: false,
       credential_id: openAICredential.id,
       profile_id: "openai.chat-embeddings.v1",
-      bindings: expect.arrayContaining([expect.objectContaining({ profile_id: "openai.chat-embeddings.v1" })]),
+      capabilities: expect.objectContaining({ chat: true }),
     }), 7);
+    // Nothing about the profile split travels back: the server refuses a
+    // bindings array, so sending one would turn every row toggle into a 400.
+    expect((update.mock.calls[0][1] as Record<string, unknown>).bindings).toBeUndefined();
   });
 
   it("requires a credential before a provider can be created", async () => {
@@ -760,6 +771,55 @@ describe("ProvidersPage profile and credential bindings", () => {
     const egress = await screen.findByRole("checkbox", { name: /服务商侧执行工具/ });
     expect(egress).not.toBeChecked();
     expect(egress).not.toBeDisabled();
+  });
+
+  // Every other capability decides what Halro relays; this one decides who else
+  // gets to make requests, and the traffic it admits never passes through
+  // Halro's transport. A checkbox row conveys none of that, so the consequence
+  // is stated where it is accepted — in what it means, not what it is called.
+  it("states what provider-executed tools admits, at the moment it is turned on", async () => {
+    const anthropicCredential: Credential = {
+      id: "credential_anthropic",
+      name: "Anthropic production",
+      type: "anthropic",
+      access_surface: "anthropic-api",
+      scheme: "anthropic.x-api-key",
+      bound_base_url: "https://api.anthropic.com:443",
+      secret_configured: true,
+      key_version: 1,
+      revision: 1,
+    };
+    vi.mocked(api.credentials).mockResolvedValue({ items: [anthropicCredential], next_cursor: "" });
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
+    fireEvent.change(screen.getByLabelText("类型"), { target: { value: "anthropic" } });
+    const egress = await screen.findByRole("checkbox", { name: /服务商侧执行工具/ });
+    expect(screen.queryByText(/这部分流量不经过 Halro/)).not.toBeInTheDocument();
+
+    fireEvent.click(egress);
+
+    expect(await screen.findByText(/这部分流量不经过 Halro/)).toBeVisible();
+    // Named in the reader's language, not as the implementation spells it.
+    expect(screen.queryByText(/provider_executed_tools/)).not.toBeInTheDocument();
+  });
+
+  // Without the matrix the forms cannot open at all, which makes a failed fetch
+  // the difference between editing connections and not. Reloading the page is
+  // not an answer an operator should have to find on their own.
+  it("offers a retry when the capability matrix cannot be read", async () => {
+    vi.mocked(api.providerProfiles).mockRejectedValueOnce(new ApiError(503, "request failed (503)"));
+    renderPage();
+
+    const retry = await screen.findByRole("button", { name: "重试" });
+    vi.mocked(api.providerProfiles).mockClear();
+    fireEvent.click(retry);
+
+    await waitFor(() => expect(api.providerProfiles).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByRole("button", { name: "重试" })).not.toBeInTheDocument());
+    // And the connection form opens again once it arrives.
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
+    expect(await screen.findByLabelText("服务商名称")).toBeVisible();
   });
 
   // A credential is encrypted against the endpoint it was saved for, so a base

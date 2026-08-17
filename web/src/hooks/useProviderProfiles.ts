@@ -56,12 +56,11 @@ export function defaultProfileID(catalog: ProviderProfilesCatalog, type: Provide
   return catalog.provider_types.find((entry) => entry.type === type)?.default_profile_id ?? "";
 }
 
-/** Profiles a connection of this type may combine.
+/** Profiles a connection anchored on this one carries.
  *
- * The server requires every binding to match the connection's own surface and
- * credential scheme, so only profiles sharing those can sit on one connection.
- * Deriving it from the descriptors keeps this rule in one place — the server's —
- * rather than restating which profiles happen to go together. */
+ * Which profiles go together is the server's rule — every binding has to match
+ * the connection's credential — and it says so per profile, so this reads the
+ * answer instead of re-deriving it from surfaces and schemes. */
 export function combinableProfiles(
   catalog: ProviderProfilesCatalog,
   type: ProviderType,
@@ -69,49 +68,44 @@ export function combinableProfiles(
 ): ProviderProfileDescriptor[] {
   const anchor = findProfile(catalog, type, profileID);
   if (!anchor) return [];
-  return profilesForType(catalog, type).filter(
-    (profile) =>
-      profile.access_surface === anchor.access_surface &&
-      profile.credential_scheme === anchor.credential_scheme,
-  );
+  const peers = anchor.combines_with
+    .map((id) => findProfile(catalog, type, id))
+    .filter((profile): profile is ProviderProfileDescriptor => Boolean(profile));
+  return [anchor, ...peers];
 }
 
-function unionOf(profiles: ProviderProfileDescriptor[], key: "ceiling" | "defaults"): ProviderCapabilities {
-  const union = { ...emptyCapabilities };
-  for (const profile of profiles) {
-    for (const name of Object.keys(union) as (keyof ProviderCapabilities)[]) {
-      const value = profile[key][name];
-      if (typeof value === "number") {
-        union[name] = Math.max(union[name] as number, value) as never;
-      } else if (value) {
-        union[name] = true as never;
-      }
-    }
-  }
-  return union;
-}
-
-/** What an operator may turn on for this connection: the union over every profile
- * it can combine. For a type with one profile that is just its ceiling. */
+/** What an operator may turn on for this connection.
+ *
+ * Served, not computed. It is not simply the union of the profiles' ceilings: a
+ * capability that several of them could serve has no unambiguous home in a flat
+ * set, so the server refuses it — and this set is exactly what the server will
+ * accept, which is the only property a form needs. */
 export function connectionCeiling(
   catalog: ProviderProfilesCatalog,
   type: ProviderType,
   profileID: string,
 ): ProviderCapabilities {
-  return unionOf(combinableProfiles(catalog, type, profileID), "ceiling");
+  return findProfile(catalog, type, profileID)?.connection_ceiling ?? emptyCapabilities;
 }
 
-/** What a new connection starts with: the union of the same profiles' defaults. */
+/** What a new connection anchored here starts with. */
 export function connectionDefaults(
   catalog: ProviderProfilesCatalog,
   type: ProviderType,
   profileID: string,
 ): ProviderCapabilities {
-  return unionOf(combinableProfiles(catalog, type, profileID), "defaults");
+  return findProfile(catalog, type, profileID)?.connection_defaults ?? emptyCapabilities;
 }
 
-/** Applies the server's chat dependency so the form cannot offer a combination
- * the save will refuse. */
+/** Applies the server's capability dependencies so the form cannot offer a
+ * combination the save will refuse.
+ *
+ * The dependencies arrive direct rather than flattened — stream usage names
+ * streaming, streaming names chat — so both directions are walked to a fixed
+ * point: turning one on turns on everything it stands on, and turning one off
+ * takes down everything standing on it. Flattening was the earlier shape and it
+ * lost the middle of the chain: stream usage could be ticked with chat and no
+ * streaming, which the deployment then refused. */
 export function updateCapabilitySelection(
   catalog: ProviderProfilesCatalog,
   current: ProviderCapabilities,
@@ -119,73 +113,66 @@ export function updateCapabilitySelection(
   enabled: boolean,
 ): ProviderCapabilities {
   const next = { ...current, [capability]: enabled };
-  const dependents = catalog.capability_requires_chat as (keyof ProviderCapabilities)[];
-  if (capability === "chat" && !enabled) {
-    for (const dependent of dependents) next[dependent] = false as never;
-  } else if (enabled && dependents.includes(capability)) {
-    next.chat = true;
+  const dependencies = catalog.capability_dependencies;
+  if (enabled) {
+    for (let changed = true; changed;) {
+      changed = false;
+      for (const [name, needs] of Object.entries(dependencies)) {
+        if (!next[name as keyof ProviderCapabilities]) continue;
+        for (const need of needs) {
+          if (next[need as keyof ProviderCapabilities]) continue;
+          next[need as keyof ProviderCapabilities] = true as never;
+          changed = true;
+        }
+      }
+    }
+    return next;
+  }
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const [name, needs] of Object.entries(dependencies)) {
+      if (!next[name as keyof ProviderCapabilities]) continue;
+      if (needs.every((need) => next[need as keyof ProviderCapabilities])) continue;
+      next[name as keyof ProviderCapabilities] = false as never;
+      changed = true;
+    }
   }
   return next;
 }
 
-/** Splits one capability set across the profiles that will carry it.
+/** What the form has ticked that this connection cannot serve.
  *
- * Each capability goes to the profile whose ceiling admits it. Where the
- * operator has named a profile — Bedrock, whose form asks which implementation
- * to use — there is one candidate and the split is the identity. Where they have
- * not, as with OpenAI, the candidates' ceilings are disjoint, so each capability
- * has exactly one home.
+ * The form submits one flat set and the server decides which profile serves
+ * each capability, so there is nothing to split here. What is still worth doing
+ * locally is naming a capability the connection cannot carry before the save
+ * goes out: the server refuses it too, but the form can point at the checkbox.
  *
- * The numeric limits follow the profile that carries chat, or the only profile
- * that bounds them; a profile whose ceiling leaves them unbounded and serves no
- * chat has nothing to apply them to.
- *
- * Anything the operator enabled that no candidate can serve is returned in
- * `unservable` rather than dropped. The server refuses such a request, and a
- * form that quietly discarded it would be showing a saved connection that does
- * less than what was ticked. */
-export function splitCapabilitiesAcrossProfiles(
+ * Nothing is filtered on the way out. A form that quietly dropped an enabled
+ * capability would save a connection that does less than what was ticked. */
+export function unservableCapabilities(
   catalog: ProviderProfilesCatalog,
   type: ProviderType,
   profileID: string,
   capabilities: ProviderCapabilities,
-): { bindings: { profile_id: string; enabled: boolean; capabilities: ProviderCapabilities }[]; unservable: string[] } {
-  const candidates = combinableProfiles(catalog, type, profileID);
-  const names = booleanCapabilityNames(catalog);
-  const perProfile = new Map<string, ProviderCapabilities>(
-    candidates.map((profile) => [profile.id, { ...emptyCapabilities }]),
-  );
-  const unservable: string[] = [];
+): (keyof ProviderCapabilities)[] {
+  const ceiling = connectionCeiling(catalog, type, profileID);
+  return booleanCapabilityNames(catalog).filter((name) => capabilities[name] && !ceiling[name]);
+}
 
-  for (const name of names) {
-    if (!capabilities[name]) continue;
-    const home = candidates.find((profile) => profile.ceiling[name]);
-    if (!home) {
-      unservable.push(name);
-      continue;
-    }
-    (perProfile.get(home.id) as ProviderCapabilities)[name] = true as never;
-  }
+/** Whether anything at all is ticked, which the server requires. */
+export function anyCapabilityEnabled(
+  catalog: ProviderProfilesCatalog,
+  capabilities: ProviderCapabilities,
+): boolean {
+  return booleanCapabilityNames(catalog).some((name) => capabilities[name]);
+}
 
-  for (const profile of candidates) {
-    const assigned = perProfile.get(profile.id) as ProviderCapabilities;
-    const bounds = profile.ceiling.max_context_tokens > 0 || profile.ceiling.max_output_tokens > 0;
-    if (assigned.chat || bounds) {
-      assigned.max_context_tokens = capabilities.max_context_tokens;
-      assigned.max_output_tokens = capabilities.max_output_tokens;
-    }
-  }
-
-  const bindings = candidates
-    .map((profile) => ({
-      profile_id: profile.id,
-      capabilities: perProfile.get(profile.id) as ProviderCapabilities,
-    }))
-    .map((binding) => ({
-      ...binding,
-      enabled: booleanCapabilityNames(catalog).some((name) => binding.capabilities[name]),
-    }))
-    .filter((binding) => binding.enabled);
-
-  return { bindings, unservable };
+/** Capabilities whose consequence a checkbox does not show, as the server names
+ * them. What to say about one is the console's business; which ones need saying
+ * is not. */
+export function capabilityNeedsOptInWarning(
+  catalog: ProviderProfilesCatalog,
+  name: keyof ProviderCapabilities,
+): boolean {
+  return catalog.capability_opt_in_warnings.includes(name as string);
 }

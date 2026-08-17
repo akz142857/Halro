@@ -64,6 +64,10 @@ export const enUS = {
     capabilityDetectionChanged: "This capability result changed. Use the latest result and try again.",
     capabilityDetectionTargetMismatch: "This capability result belongs to a different provider, model, or capability interface. Confirm the model again.",
     capabilitiesExceedDetection: "The selection exceeds the verified capabilities. The standard flow can only turn detected capabilities off.",
+    capabilitiesUnservable: "This connection cannot serve: {{capabilities}}. Clear them, or use a provider type that supports them.",
+    capabilitiesAmbiguous: "More than one capability implementation on this connection can serve: {{capabilities}}. Choose which one should serve it under “Capability implementation”.",
+    capabilitiesLimitUnavailable: "No capability implementation on this connection can bound: {{capabilities}}. Token limits are a model specification — declare them on the deployment.",
+    capabilitiesLimitTooLarge: "The value exceeds what the implementation holding it allows: {{capabilities}}. Lower it and try again.",
     capabilityDetectionCooldown: "This model was verified recently. Wait before forcing another refresh.",
     capabilityDetectionRateLimited: "You started too many model verifications in one minute. Try again shortly.",
     ambiguousCapabilityBinding: "This model can use more than one capability interface. Choose the actual interface before confirming the model.",
@@ -671,6 +675,9 @@ export const enUS = {
   },
   capabilities: {
     chat: "Chat", streaming: "Streaming", embeddings: "Embeddings", moderations: "Moderations", images: "Images", transcriptions: "Transcriptions", speech: "Speech", files: "Files", batches: "Batches", rerank: "Rerank", async_generate: "Async generation", tools: "Tools", vision: "Vision", json_mode: "JSON mode", developer_role: "Developer role", reasoning: "Reasoning", stream_usage: "Stream usage", provider_executed_tools: "Provider-executed tools",
+    // Not checkboxes, but the server names them when it refuses a save, so they
+    // need words too.
+    max_context_tokens: "Maximum context tokens", max_output_tokens: "Maximum output tokens",
   },
   usage: {
     eyebrow: "Durable accounting", title: "Usage & Requests", description: "Project, model, tokens, cost, and terminal state for every provider attempt, with filters across all of them.",
@@ -887,6 +894,9 @@ export const enUS = {
     validationCapabilityRequired: "Enable at least one capability, otherwise no deployment can route to this provider.",
     validationCapabilityUnservable: "This connection cannot serve: {{capabilities}}. Clear them, or use a provider type that supports them.",
     matrixUnavailable: "The list of capabilities this instance supports could not be read, so nothing can be created yet. Retry, or check that you are still signed in.",
+    capabilityEgressTag: "Lets the upstream reach the network itself",
+    capabilityEgressWarning: "One capability lets the upstream reach the network itself",
+    capabilityEgressWarningDescription: "{{capabilities}}: with this on, the upstream may run tools of its own and make its own network requests to do so. That traffic does not pass through Halro, is not held to the outbound host limits, and does not appear in the audit trail. Turn it on only where you trust the provider to do this.",
     validationProjectFormat: "Must be proj_ followed by letters and digits, as issued by AWS. Leave it empty to use the account default project.",
     validationBetaTooMany: "At most {{max}} beta tokens can be allowed on one connection.",
     validationBetaTooLong: "Each beta token must be at most {{max}} characters.",
@@ -899,7 +909,6 @@ export const enUS = {
     rotateSecurely: "Rotate securely", saveEncrypted: "Save encrypted", editProvider: "Edit provider", createProvider: "Create provider", credentialRequired: "Create a credential first",
     credentialRequiredDescription: "Close this dialog and use “＋ Credential” to save an audience-bound secret.", providerName: "Provider name", type: "Type", baseURL: "Base URL", baseURLBoundHint: "The selected credential is sealed to {{credential}}.", apiVersion: "API version", apiVersionHint: "Pin the Azure data-plane API version explicitly; an administrator changes it during upgrades",
     maxConcurrency: "Provider maximum concurrency", maxConcurrencyHint: "0 means unlimited; protects the upstream account and deployments", capabilityLimit: "Enabled capabilities", unsupportedByInterface: "Not supported by this interface",
-    maxContext: "Maximum context tokens", maxContextHint: "0 means the provider has not declared a limit", maxOutput: "Maximum output tokens", maxOutputHint: "Cannot exceed context tokens",
     encryptedCredential: "Encrypted credential", enable: "Enable provider", save: "Save and hot-reload", createAndLoad: "Create and hot-reload",
   },
   policies: {

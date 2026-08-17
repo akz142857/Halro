@@ -377,6 +377,15 @@ export interface ProviderProfileDescriptor {
   immutable: boolean;
   defaults: ProviderCapabilities;
   ceiling: ProviderCapabilities;
+  /** What a whole connection anchored on this profile may turn on, and what it
+   * starts with. One connection can span profiles — an OpenAI key serves the
+   * chat endpoints and the media ones — and which profile serves what is the
+   * server's answer, so these arrive resolved rather than as something to
+   * recompute from the two sets above. */
+  connection_ceiling: ProviderCapabilities;
+  connection_defaults: ProviderCapabilities;
+  /** The other profiles a connection anchored here carries. */
+  combines_with: string[];
 }
 
 export interface ProviderTypeDescriptor {
@@ -394,12 +403,21 @@ export interface ProviderProfilesCatalog {
   /** The capability keys. Not a display order: how they are arranged and what
    * they are called in a given language stay with this bundle. */
   capability_names: string[];
-  /** Capabilities that cannot be enabled without chat, as the server enforces
-   * it, so the form can present the rule instead of discovering it on refusal. */
-  capability_requires_chat: string[];
+  /** What each capability needs alongside it, as the server enforces it, so the
+   * form can present the rule instead of discovering it on refusal. Direct
+   * dependencies: stream usage names streaming, streaming names chat. */
+  capability_dependencies: Record<string, string[]>;
+  /** Capabilities a form has to say something about before they are ticked.
+   * provider_executed_tools is one: enabling it accepts upstream egress that
+   * never passes through Halro's transport. The wording is this bundle's; which
+   * capabilities need it is not. */
+  capability_opt_in_warnings: string[];
   provider_types: ProviderTypeDescriptor[];
 }
 
+/** One profile a saved connection serves through. This is reported, never sent:
+ * a form submits one flat capability set and the server decides which profile
+ * carries each part of it. */
 export interface ProviderBinding {
   id?: string;
   profile_id: string;

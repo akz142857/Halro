@@ -24,14 +24,16 @@ import { isoToZonedInput, useAccountingTimeZone, zonedInputToISO } from "../time
 import { useNotify } from "../notifications";
 import type { AccessSurface, Credential, CredentialScheme, Provider, ProviderCapabilities, ProviderProfilesCatalog, ProviderType } from "../types";
 import {
+  anyCapabilityEnabled,
   booleanCapabilityNames,
+  capabilityNeedsOptInWarning,
   combinableProfiles,
   connectionCeiling,
   connectionDefaults,
   defaultProfileID,
   findProfile,
   profilesForType,
-  splitCapabilitiesAcrossProfiles,
+  unservableCapabilities,
   updateCapabilitySelection,
   useProviderProfiles,
 } from "../hooks/useProviderProfiles";
@@ -173,8 +175,28 @@ export function ProvidersPage() {
       />
       <OnboardingContextBanner />
       {pending && <Loading />}
+      {/* The forms need the matrix and there is no offline copy of it, so a
+          failed fetch is the difference between editing connections and not.
+          That makes a retry part of the message rather than something the
+          operator has to reload the page to reach — a session that expired
+          mid-visit comes back on one click. */}
       {(credentials.isError || providers.isError || catalog.isError) && (
-        <ErrorState error={credentials.error || providers.error || catalog.error} />
+        <ErrorState
+          error={credentials.error || providers.error || catalog.error}
+          action={
+            <button
+              className="button ghost"
+              disabled={credentials.isFetching || providers.isFetching || catalog.isFetching}
+              onClick={() => {
+                if (credentials.isError) credentials.refetch();
+                if (providers.isError) providers.refetch();
+                if (catalog.isError) catalog.refetch();
+              }}
+            >
+              {t("common.retry")}
+            </button>
+          }
+        />
       )}
       {!pending && (
         <div className="provider-tabs-shell">
@@ -192,7 +214,7 @@ export function ProvidersPage() {
             {!!providerItems.length && <ResourceToolbar query={providerQuery} onQueryChange={setProviderQuery} queryPlaceholder={t("providers.searchProviders")} count={t("providers.resultCount", { visible: filteredProviders.length, total: providerItems.length })} status={providerStatus} onStatusChange={setProviderStatus} />}
             {!!providerItems.length && !filteredProviders.length && <EmptyState title={t("providers.noMatches")}>{t("providers.noMatchesDescription")}</EmptyState>}
             {filteredProviders.map((provider) => (
-              <ProviderRow provider={provider} credential={credentialItems.find((credential) => credential.id === provider.credential_id)} highlighted={Boolean(focusedProviderCredentialID && provider.credential_id === focusedProviderCredentialID)} key={provider.id} onCredentialClick={() => { setFocusedCredentialID(provider.credential_id); selectView("credentials"); }} onEdit={() => setEditingProvider(provider)} />
+              <ProviderRow provider={provider} credential={credentialItems.find((credential) => credential.id === provider.credential_id)} editable={catalog.isSuccess} highlighted={Boolean(focusedProviderCredentialID && provider.credential_id === focusedProviderCredentialID)} key={provider.id} onCredentialClick={() => { setFocusedCredentialID(provider.credential_id); selectView("credentials"); }} onEdit={() => setEditingProvider(provider)} />
             ))}
           </section>}
           {activeView === "credentials" && <section id="credentials-panel" role="tabpanel" aria-labelledby="credentials-tab" className="panel provider-resource-panel">
@@ -237,7 +259,7 @@ function providerViewFromURL(): "providers" | "credentials" {
   return new URLSearchParams(window.location.search).get("view") === "credentials" ? "credentials" : "providers";
 }
 
-function ProviderRow({ provider, credential, highlighted, onCredentialClick, onEdit }: { provider: Provider; credential?: Credential; highlighted: boolean; onCredentialClick: () => void; onEdit: () => void }) {
+function ProviderRow({ provider, credential, editable, highlighted, onCredentialClick, onEdit }: { provider: Provider; credential?: Credential; editable: boolean; highlighted: boolean; onCredentialClick: () => void; onEdit: () => void }) {
   const { t } = useTranslation();
   const readOnly = useIsReadOnly();
   const [expanded, setExpanded] = useState(false);
@@ -265,8 +287,12 @@ function ProviderRow({ provider, credential, highlighted, onCredentialClick, onE
       access_surface: provider.access_surface,
       profile_id: provider.profile_id,
       credential_scheme: provider.credential_scheme,
-      capabilities: provider.capabilities,
-      ...(provider.bindings?.length ? { bindings: provider.bindings } : {}),
+      // Enabling or disabling must not restate the connection. Bindings are the
+      // server's answer to the capability set and are not sent back at all; the
+      // token limits are dropped for the same reason the form drops them — the
+      // stored summary reports the loosest bound across the bindings, so echoing
+      // it hands one profile's bound to the others.
+      capabilities: { ...provider.capabilities, max_context_tokens: 0, max_output_tokens: 0 },
       max_concurrency: provider.max_concurrency,
       enabled: !provider.enabled,
     }, provider.revision),
@@ -305,7 +331,10 @@ function ProviderRow({ provider, credential, highlighted, onCredentialClick, onE
         <div className="resource-row-state provider-compact-status"><span className={`resource-state ${provider.enabled ? "enabled" : ""}`}>{provider.enabled ? t("providers.enabled") : t("providers.off")}</span></div>
         <div className="row-actions provider-compact-actions">
           <InlineTestControl state={testState} latency={testLatency} disabled={!provider.enabled} title={totalTargets ? t("providers.testSummary", { healthy: healthyTargets ?? 0, total: totalTargets, latency: testLatency ?? 0 }) : undefined} onTest={() => testMutation.mutate()} />
-          <button className="button ghost" disabled={readOnly} onClick={onEdit}>{t("common.edit")}</button>
+          {/* Editing opens a form built from the served matrix. Without it the
+              click would set state and render nothing, so the reason is on the
+              button — the same treatment the create and rotate buttons get. */}
+          <button className="button ghost" disabled={readOnly || !editable} title={!editable ? t("providers.matrixUnavailable") : undefined} onClick={onEdit}>{t("common.edit")}</button>
           <button className="button ghost provider-expand" aria-expanded={expanded} aria-controls={`provider-details-${provider.id}`} onClick={() => setExpanded((value) => !value)}>{expanded ? t("providers.collapseDetails") : t("providers.expandDetails")}</button>
           {provider.enabled ? <ConfirmButton className="button ghost" label={t("common.disable")} title={t("providers.disableTitle")} confirmLabel={t("providers.disableConfirm", { name: provider.name })} disabled={stateMutation.isPending} onConfirm={() => stateMutation.mutateAsync()} /> : <button className="button ghost" disabled={stateMutation.isPending} onClick={() => stateMutation.mutate()}>{t("common.enable")}</button>}
           <OverflowMenu label={t("providers.moreActions")}><ConfirmButton label={t("common.delete")} confirmLabel={t("providers.deleteProvider", { name: provider.name })} disabled={deleteMutation.isPending} requireStepUp onConfirm={(reauth) => deleteMutation.mutateAsync(reauth)} /></OverflowMenu>
@@ -379,7 +408,10 @@ function CredentialRow({ credential, useCount, highlighted, catalog, onUsageClic
         <div className="resource-fact credential-usage"><small>{t("providers.usage")}</small>{useCount > 0 ? <button className="resource-link" onClick={onUsageClick}>{t("providers.credentialUsage", { count: useCount })} →</button> : <strong>{t("providers.credentialUsage", { count: useCount })}</strong>}</div>
         <div className="resource-fact credential-generation"><small>{t("providers.generation")}</small><strong>{t("providers.keyGeneration", { version: credential.key_version })}</strong></div>
         <div className="row-actions credential-actions">
-          <button className="button ghost" onClick={() => setRotating(true)}>{t("providers.rotate")}</button>
+          {/* Rotating opens the same form, which needs the matrix; without it the
+              click would set state and render nothing. Say so on the button
+              rather than letting it look broken. */}
+          <button className="button ghost" disabled={!catalog} title={!catalog ? t("providers.matrixUnavailable") : undefined} onClick={() => setRotating(true)}>{t("providers.rotate")}</button>
           <button className="button ghost credential-expand" aria-expanded={expanded} aria-controls={`credential-details-${credential.id}`} onClick={() => setExpanded((value) => !value)}>{expanded ? t("providers.collapseDetails") : t("providers.expandDetails")}</button>
           <OverflowMenu label={t("providers.moreActions")}><ConfirmButton label={t("common.delete")} confirmLabel={useCount > 0
               ? t("providers.deleteCredentialInUse", { name: credential.name, count: useCount })
@@ -612,10 +644,13 @@ function ProviderForm({
   const visibleCapabilities = capabilityNames.filter((capability) => capabilities[capability]);
   const configurableCapabilities = capabilityNames.filter((capability) => capabilityCeiling[capability] || capabilities[capability]);
   const selectedSurface = type === "bedrock" ? findProfile(catalog, "bedrock", profileID)?.access_surface : undefined;
-  // Where the ticked capabilities land. `unservable` is what no profile on this
-  // connection can serve; the save is refused locally rather than sent to be
-  // refused remotely without naming the capability.
-  const profileSplit = splitCapabilitiesAcrossProfiles(catalog, type, anchorProfile, capabilities);
+  // What is ticked that this connection cannot serve. The server refuses these
+  // too, and names them; catching it here points at the checkbox instead.
+  const unservable = unservableCapabilities(catalog, type, anchorProfile, capabilities);
+  // Ticked capabilities whose consequence is not visible in a checkbox.
+  const warnedCapabilities = capabilityNames.filter(
+    (capability) => capabilities[capability] && capabilityNeedsOptInWarning(catalog, capability),
+  );
   // The header is only ever sent by the native Anthropic Messages path, which is
   // a property of the profile rather than the surface: Bedrock Mantle also
   // carries OpenAI chat and responses profiles, and a token stored on one of
@@ -659,15 +694,21 @@ function ProviderForm({
           ? { bedrock_project_id: normalizeBedrockProjectID(bedrockProjectID) }
           : {}),
       } : {}),
-      // One connection can span more than one profile — an OpenAI key serves both
-      // the chat endpoints and the media ones — so what the operator ticked is
-      // sorted into a binding per profile that can serve it. Which profile that
-      // is comes from the served ceilings, not from a list kept here.
-      ...(profileSplit.bindings.length > 1
-        ? { profile_id: profileSplit.bindings[0].profile_id, bindings: profileSplit.bindings }
-        : {}),
+      // One flat set. A connection can span more than one profile — an OpenAI key
+      // serves both the chat endpoints and the media ones — and sorting the
+      // ticked capabilities into a binding per profile is the server's job:
+      // doing it here is what made this form's idea of the matrix a second
+      // authority over what a connection may be.
       ...(type === "azure_openai" ? { api_version: apiVersion } : {}),
-      credential_id: credentialID, capabilities, max_concurrency: maxConcurrency, enabled,
+      // Token limits are left out deliberately, and zeroed rather than passed
+      // through. They belong to the profile that declares one — only Titan Embed
+      // does — and the connection's stored summary reports the loosest of them,
+      // so echoing what was read back would hand one profile's bound to every
+      // other one on the connection. The model's own limits are declared on the
+      // Deployment.
+      credential_id: credentialID,
+      capabilities: { ...capabilities, max_context_tokens: 0, max_output_tokens: 0 },
+      max_concurrency: maxConcurrency, enabled,
       ...(supportsAnthropicBetas ? { allowed_anthropic_betas: parseBetaTokens(anthropicBetas) } : {}),
       };
       return current
@@ -726,8 +767,8 @@ function ProviderForm({
             const nextErrors = validateProvider({
               name, credentialID, bedrockProjectID,
               mantle: selectedSurface === "bedrock-mantle",
-              anyCapability: profileSplit.bindings.length > 0,
-              unservable: profileSplit.unservable,
+              anyCapability: anyCapabilityEnabled(catalog, capabilities),
+              unservable,
               anthropicBetas: supportsAnthropicBetas ? anthropicBetas : "",
             }, t);
             if (!nextErrors.credentialID && credentialBaseURLMismatch) nextErrors.credentialID = credentialBaseURLMismatch;
@@ -745,7 +786,7 @@ function ProviderForm({
               const next = event.target.value as ProviderType;
               setType(next);
               setBaseURL(endpointForType(catalog, next));
-              setProfileID("bedrock.runtime.converse.text.v1");
+              setProfileID(defaultProfileID(catalog, "bedrock"));
               setCredentialID(credentials.find((credential) => credential.type === next && (next !== "bedrock" || credential.access_surface === "bedrock-runtime"))?.id ?? "");
               setCapabilities(connectionDefaults(catalog, next, defaultProfileID(catalog, next)));
             }}>
@@ -804,8 +845,20 @@ function ProviderForm({
                 <div className="capability-disclosure capability-advanced">
                   <header><span>{t("providers.advancedCapabilities")}</span><strong>{t("providers.selectedCapabilities", { count: visibleCapabilities.length })}</strong></header>
                   <p className="capability-advanced-note">{t("providers.advancedCapabilitiesHint")}</p>
-                  <div className="capability-grid">{configurableCapabilities.map((capability) => { const unavailable = !capabilityCeiling[capability]; return <label className={`capability-option ${unavailable ? "unavailable" : ""}`} key={capability}><input type="checkbox" disabled={unavailable && !capabilities[capability]} checked={Boolean(capabilities[capability])} onChange={(event) => setCapabilities(updateCapabilitySelection(catalog, capabilities, capability, event.target.checked))} /><span>{t(`capabilities.${capability}`)}{unavailable && <small>{t("providers.unsupportedByInterface")}</small>}</span></label>; })}</div>
-                  <div className="form-grid capability-limits"><Field label={t("providers.maxContext")} hint={t("providers.maxContextHint")}><input min="0" type="number" value={capabilities.max_context_tokens} onChange={(event) => setCapabilities({ ...capabilities, max_context_tokens: Number(event.target.value) })} /></Field><Field label={t("providers.maxOutput")} hint={t("providers.maxOutputHint")}><input min="0" type="number" value={capabilities.max_output_tokens} onChange={(event) => setCapabilities({ ...capabilities, max_output_tokens: Number(event.target.value) })} /></Field></div>
+                  <div className="capability-grid">{configurableCapabilities.map((capability) => { const unavailable = !capabilityCeiling[capability]; const warned = capabilityNeedsOptInWarning(catalog, capability); return <label className={`capability-option ${unavailable ? "unavailable" : ""}`} key={capability}><input type="checkbox" disabled={unavailable && !capabilities[capability]} checked={Boolean(capabilities[capability])} onChange={(event) => setCapabilities(updateCapabilitySelection(catalog, capabilities, capability, event.target.checked))} /><span>{t(`capabilities.${capability}`)}{unavailable && <small>{t("providers.unsupportedByInterface")}</small>}{!unavailable && warned && <small>{t("providers.capabilityEgressTag")}</small>}</span></label>; })}</div>
+                  {/* Every other capability decides what Halro will relay. These
+                      decide who else gets to make requests, and a checkbox row
+                      shows nothing of that — so the consequence is stated where
+                      it is accepted, in what it means rather than what it is
+                      called. Which capabilities these are comes from the server. */}
+                  {warnedCapabilities.length > 0 && (
+                    <div className="notice warning">
+                      <strong>{t("providers.capabilityEgressWarning")}</strong>
+                      <span>{t("providers.capabilityEgressWarningDescription", {
+                        capabilities: warnedCapabilities.map((capability) => t(`capabilities.${capability}`)).join(t("common.listSeparator")),
+                      })}</span>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -897,7 +950,7 @@ function validateProvider(
   // ticked, and the form can.
   if (value.unservable.length) {
     errors.capabilities = t("providers.validationCapabilityUnservable", {
-      capabilities: value.unservable.map((name) => t(`capabilities.${name}`)).join("、"),
+      capabilities: value.unservable.map((name) => t(`capabilities.${name}`)).join(t("common.listSeparator")),
     });
   }
   if (value.mantle) {
@@ -932,8 +985,3 @@ function omitError(errors: Record<string, string>, key: string) {
   const { [key]: _removed, ...rest } = errors;
   return rest;
 }
-
-// Which profile carries which capability used to be two hardcoded sets here.
-// splitCapabilitiesAcrossProfiles derives it from the served ceilings instead:
-// each capability goes to the profile that can serve it, and anything no profile
-// can serve comes back named rather than dropped.
