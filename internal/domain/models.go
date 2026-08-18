@@ -200,6 +200,13 @@ func (p *Project) SetRevision(value uint64) { p.Revision = value }
 // future front end — hits the same limit. The web form mirrors this value.
 const MaxProjectNameLength = 128
 
+// MaxProjectAllowedModels bounds the alias list. Every Gateway request scans it
+// to decide whether the alias is permitted, so an unbounded list is work on the
+// hot path that an Admin write can grow without limit. It is far above any real
+// topology: an instance with more aliases than this has more public models than
+// the console can meaningfully present.
+const MaxProjectAllowedModels = 256
+
 func (p Project) Validate() error {
 	var problems []error
 	if p.ID == "" {
@@ -209,6 +216,32 @@ func (p Project) Validate() error {
 		problems = append(problems, errors.New("project name is required"))
 	} else if len([]rune(name)) > MaxProjectNameLength {
 		problems = append(problems, errors.New("project name is too long"))
+	}
+	// The alias list is a durable field like any other, so its rules belong
+	// here rather than only in the Admin handler that happens to write it.
+	// Cross-referencing an alias against the routes that provide it stays in
+	// the handler — that needs the store — but shape does not.
+	if len(p.AllowedModels) > MaxProjectAllowedModels {
+		problems = append(problems, errors.New("allowed_models has too many entries"))
+	}
+	seenAlias := make(map[string]struct{}, len(p.AllowedModels))
+	for _, alias := range p.AllowedModels {
+		if strings.TrimSpace(alias) == "" {
+			problems = append(problems, errors.New("allowed_models must not contain an empty alias"))
+			continue
+		}
+		if alias != strings.TrimSpace(alias) {
+			problems = append(problems, errors.New("allowed_models alias must not be padded with whitespace: "+alias))
+			continue
+		}
+		if _, repeated := seenAlias[alias]; repeated {
+			// A repeat is not merely redundant: it is a second answer to "which
+			// aliases may this project call" that no reader reconciles, and it
+			// silently doubles the scan every request pays.
+			problems = append(problems, errors.New("allowed_models repeats alias "+alias))
+			continue
+		}
+		seenAlias[alias] = struct{}{}
 	}
 	for name, value := range map[string]int64{
 		"rpm":                     p.RPM,
