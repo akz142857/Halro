@@ -625,7 +625,10 @@ function PriceVersionForm({ deployment, current, blocking, onClose }: { deployme
               the input rate, so this field is asked for beside the other two
               rather than hidden: left at the input rate it over-charges cached
               prompts, and left at zero it gives them away. */}
-          <div className="price-form-grid">
+          {/* Alone in the two-column grid this field left half the row empty and
+              wrapped its own three-line explanation into the other half. The row
+              spans instead, and the box keeps the width of the two above it. */}
+          <div className="price-form-grid price-cached-row">
             <Field label={t("deployments.cachedInputUSD")} hint={t("deployments.cachedInputHint")}><input inputMode="decimal" required value={cachedInputValue} onChange={(event) => setCachedInput(event.target.value)} /></Field>
           </div>
           {/* Some providers publish peak and off-peak rates. Without this the
@@ -784,7 +787,7 @@ function PriceScheduleFields({ schedule, onChange, problem, baseRates }: {
     if (!schedule) return;
     onChange({ ...schedule, windows: schedule.windows.map((window, position) => (position === index ? { ...window, ...patch } : window)) });
   };
-  return <section className="price-schedule">
+  return <section className={schedule ? "price-schedule open" : "price-schedule"}>
     <label className="price-schedule-toggle">
       <input
         type="checkbox"
@@ -803,43 +806,55 @@ function PriceScheduleFields({ schedule, onChange, problem, baseRates }: {
       />
       <span><strong>{t("deployments.priceSchedule")}</strong><small>{t("deployments.priceScheduleHint")}</small></span>
     </label>
-    {schedule && <>
-      <Field label={t("deployments.scheduleTimezone")} hint={t("deployments.scheduleTimezoneHint")}>
+    {schedule && <div className="price-schedule-body">
+      {/* A missing zone is the zone field's problem, so it is reported on the
+          field. Collected with the window problems at the foot of the card it
+          sat a full schedule away from the box it names. */}
+      <Field
+        label={t("deployments.scheduleTimezone")}
+        hint={t("deployments.scheduleTimezoneHint")}
+        error={problem === "timezone" ? t("deployments.scheduleProblem.timezone") : undefined}
+      >
         <input value={schedule.timezone} onChange={(event) => onChange({ ...schedule, timezone: event.target.value })} placeholder="Asia/Shanghai" />
       </Field>
-      <table className="price-schedule-table">
-        <thead><tr>
-          <th scope="col">{t("deployments.scheduleStart")}</th>
-          <th scope="col">{t("deployments.scheduleEnd")}</th>
-          <th scope="col">{t("deployments.inputUSD")}</th>
-          <th scope="col">{t("deployments.cachedInputUSD")}</th>
-          <th scope="col">{t("deployments.outputUSD")}</th>
-          <th scope="col">{t("deployments.fixedRequestUSD")}</th>
-          <th scope="col"><span className="visually-hidden">{t("deployments.scheduleWindowActions")}</span></th>
-        </tr></thead>
-        <tbody>
-          {schedule.windows.map((window, index) => <tr key={index}>
-            <td><input value={window.start} onChange={(event) => update(index, { start: event.target.value })} placeholder="09:00" aria-label={t("deployments.scheduleStart")} /></td>
-            <td><input value={window.end} onChange={(event) => update(index, { end: event.target.value })} placeholder="12:00" aria-label={t("deployments.scheduleEnd")} /></td>
-            <td><input inputMode="decimal" value={window.input} onChange={(event) => update(index, { input: event.target.value })} aria-label={t("deployments.inputUSD")} /></td>
-            <td><input inputMode="decimal" value={window.cachedInput} onChange={(event) => update(index, { cachedInput: event.target.value })} aria-label={t("deployments.cachedInputUSD")} /></td>
-            <td><input inputMode="decimal" value={window.output} onChange={(event) => update(index, { output: event.target.value })} aria-label={t("deployments.outputUSD")} /></td>
-            <td><input inputMode="decimal" value={window.fixed} onChange={(event) => update(index, { fixed: event.target.value })} aria-label={t("deployments.fixedRequestUSD")} /></td>
-            <td><button type="button" className="button ghost" onClick={() => onChange({ ...schedule, windows: schedule.windows.filter((_, position) => position !== index) })}>{t("deployments.removeScheduleWindow")}</button></td>
-          </tr>)}
-        </tbody>
-      </table>
-      <div className="form-actions">
+      {/* Both rules hold for every window, so they are stated once. Repeating
+          them per card turned a two-window schedule into four lines of the same
+          sentence and buried the rates between them. */}
+      <p className="price-schedule-note">{t("deployments.scheduleTimeHint")} {t("deployments.scheduleRateUnit")}</p>
+      {/* One window is a card rather than a table row. Six rate columns plus a
+          remove button never fit the modal's width, so the table could only
+          scroll sideways — which hides the very columns being compared and puts
+          the start time out of view while the operator types a rate. */}
+      {schedule.windows.map((window, index) => <fieldset className="price-schedule-window" key={index}>
+        <legend>{t("deployments.scheduleWindowLabel", { index: index + 1 })}</legend>
+        <div className="price-schedule-window-head">
+          <div className="price-schedule-range">
+            <label><span>{t("deployments.scheduleStart")}</span><input value={window.start} onChange={(event) => update(index, { start: event.target.value })} placeholder="09:00" inputMode="numeric" /></label>
+            <label><span>{t("deployments.scheduleEnd")}</span><input value={window.end} onChange={(event) => update(index, { end: event.target.value })} placeholder="12:00" inputMode="numeric" /></label>
+          </div>
+          {/* Ghost rendered as borderless grey text floating at the far edge of
+              the card, which read as a caption rather than as the destructive
+              control it is. */}
+          <button type="button" className="button danger-text" onClick={() => onChange({ ...schedule, windows: schedule.windows.filter((_, position) => position !== index) })}>{t("deployments.removeScheduleWindow")}</button>
+        </div>
+        <div className="price-schedule-rates">
+          <label><span>{t("deployments.scheduleRateInput")}</span><input inputMode="decimal" value={window.input} onChange={(event) => update(index, { input: event.target.value })} aria-label={t("deployments.inputUSD")} /></label>
+          <label><span>{t("deployments.scheduleRateCachedInput")}</span><input inputMode="decimal" value={window.cachedInput} onChange={(event) => update(index, { cachedInput: event.target.value })} aria-label={t("deployments.cachedInputUSD")} /></label>
+          <label><span>{t("deployments.scheduleRateOutput")}</span><input inputMode="decimal" value={window.output} onChange={(event) => update(index, { output: event.target.value })} aria-label={t("deployments.outputUSD")} /></label>
+          <label><span>{t("deployments.scheduleRateFixed")}</span><input inputMode="decimal" value={window.fixed} onChange={(event) => update(index, { fixed: event.target.value })} aria-label={t("deployments.fixedRequestUSD")} /></label>
+        </div>
+      </fieldset>)}
+      <div className="price-schedule-actions">
         <button type="button" className="button secondary" onClick={() => onChange({ ...schedule, windows: [...schedule.windows, { start: "14:00", end: "18:00", ...baseRates }] })}>
           {t("deployments.addScheduleWindow")}
         </button>
       </div>
       {/* Saying which rate covers the rest of the day is the difference between
-          a table the operator can reason about and one where the uncovered
+          a schedule the operator can reason about and one where the uncovered
           hours are an unmarked hole. */}
       <p className="field-hint">{t("deployments.scheduleBaseHint", { input: baseRates.input, output: baseRates.output })}</p>
-      {problem && <p className="field-hint error">{t(`deployments.scheduleProblem.${problem}`)}</p>}
-    </>}
+      {problem && problem !== "timezone" && <p className="field-hint error">{t(`deployments.scheduleProblem.${problem}`)}</p>}
+    </div>}
   </section>;
 }
 
