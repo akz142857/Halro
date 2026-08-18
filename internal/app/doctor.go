@@ -379,13 +379,26 @@ func checkDoctorTopology(ctx context.Context, cfg config.Config, store *boltstor
 		deploymentBinding[item.ID] = bindingID
 		deploymentEnabled[item.ID] = item.Enabled && item.DeletedAt == nil && providerEnabled[item.ProviderID]
 		if item.Enabled && item.DeletedAt == nil {
-			if _, err := store.SelectDeploymentPriceVersion(ctx, item.ID, pricingSelectedAt); err != nil {
+			price, err := store.SelectDeploymentPriceVersion(ctx, item.ID, pricingSelectedAt)
+			if err != nil {
 				add("pricing_readiness", "fail", fmt.Sprintf("enabled deployment %q has no effective versioned price: %v", item.ID, err))
 				return
+			}
+			// A price that bills by time of day needs its provider's zone at
+			// request time. Losing it does not stop billing — the attempt is
+			// charged at the dearest rung instead — so nothing else would
+			// report it, and the deployment would quietly over-bill until
+			// someone reconciled an invoice.
+			if price.Schedule != nil {
+				if _, zoneErr := time.LoadLocation(price.Schedule.Timezone); zoneErr != nil {
+					add("pricing_schedule_zone", "fail", fmt.Sprintf("deployment %q prices by time of day in %q, which this binary cannot resolve; attempts are being billed at the dearest rate", item.ID, price.Schedule.Timezone))
+					return
+				}
 			}
 		}
 	}
 	add("pricing_readiness", "pass", "all enabled deployments have an effective versioned price")
+	add("pricing_schedule_zone", "pass", "every time-of-day price schedule resolves its provider timezone")
 	checkDoctorCapabilityDrift(providers, deployments, add)
 	active := 0
 	for _, item := range routes {

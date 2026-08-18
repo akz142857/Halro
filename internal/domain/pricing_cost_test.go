@@ -3,14 +3,20 @@ package domain
 import (
 	"math"
 	"testing"
+	"time"
 )
+
+// priceTestInstant is a fixed instant for prices that bill one rate around the
+// clock: they resolve to the same tier whatever it is, and pinning it keeps
+// these cases from depending on when the suite runs.
+var priceTestInstant = time.Date(2026, 8, 18, 10, 0, 0, 0, time.UTC)
 
 func TestCalculateUSDTokensV1RoundsComponentsIndependently(t *testing.T) {
 	price := validPriceVersion(t, "price_formula", 1, "2026-08-04T00:00:00Z")
 	price.InputMicrosPerMillion = 400_000
 	price.OutputMicrosPerMillion = 1_600_000
 	price.FixedRequestMicrosUSD = 3
-	cost, err := CalculateUSDTokensV1(1, 0, 1, price)
+	cost, err := CalculateUSDTokensV1(1, 0, 1, price, priceTestInstant)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,11 +29,11 @@ func TestCalculateUSDTokensV1UsesWideIntermediateAndRejectsFinalOverflow(t *test
 	price := validPriceVersion(t, "price_wide", 1, "2026-08-04T00:00:00Z")
 	price.InputMicrosPerMillion = math.MaxInt64
 	price.OutputMicrosPerMillion = 0
-	cost, err := CalculateUSDTokensV1(1_000_000, 0, 0, price)
+	cost, err := CalculateUSDTokensV1(1_000_000, 0, 0, price, priceTestInstant)
 	if err != nil || cost.TotalCostMicrosUSD != math.MaxInt64 {
 		t.Fatalf("wide intermediate cost=%#v err=%v", cost, err)
 	}
-	if _, err := CalculateUSDTokensV1(1_000_001, 0, 0, price); err == nil {
+	if _, err := CalculateUSDTokensV1(1_000_001, 0, 0, price, priceTestInstant); err == nil {
 		t.Fatal("expected final int64 overflow")
 	}
 }
@@ -36,7 +42,7 @@ func TestCalculateUSDTokensV1KeepsExplicitFreeKnown(t *testing.T) {
 	price := validPriceVersion(t, "price_free_formula", 1, "2026-08-04T00:00:00Z")
 	price.BillingMode = BillingModeFree
 	price.InputMicrosPerMillion, price.CachedInputMicrosPerMillion, price.OutputMicrosPerMillion = 0, 0, 0
-	cost, err := CalculateUSDTokensV1(math.MaxInt64, math.MaxInt64, math.MaxInt64, price)
+	cost, err := CalculateUSDTokensV1(math.MaxInt64, math.MaxInt64, math.MaxInt64, price, priceTestInstant)
 	if err != nil || cost != (PriceCostBreakdown{}) {
 		t.Fatalf("free cost=%#v err=%v", cost, err)
 	}
@@ -53,7 +59,7 @@ func TestCalculateUSDTokensV1PricesTheCachedSpanAtTheCacheReadRate(t *testing.T)
 	price.CachedInputMicrosPerMillion = 500_000
 	price.OutputMicrosPerMillion = 0
 	price.FixedRequestMicrosUSD = 0
-	cost, err := CalculateUSDTokensV1(1_000_000, 800_000, 0, price)
+	cost, err := CalculateUSDTokensV1(1_000_000, 800_000, 0, price, priceTestInstant)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +67,7 @@ func TestCalculateUSDTokensV1PricesTheCachedSpanAtTheCacheReadRate(t *testing.T)
 	if cost.InputCostMicrosUSD != 1_400_000 || cost.TotalCostMicrosUSD != 1_400_000 {
 		t.Fatalf("cost=%#v", cost)
 	}
-	uncached, err := CalculateUSDTokensV1(1_000_000, 0, 0, price)
+	uncached, err := CalculateUSDTokensV1(1_000_000, 0, 0, price, priceTestInstant)
 	if err != nil || uncached.TotalCostMicrosUSD != 5_000_000 {
 		t.Fatalf("uncached cost=%#v err=%v", uncached, err)
 	}
@@ -73,7 +79,7 @@ func TestCalculateUSDTokensV1PricesTheCachedSpanAtTheCacheReadRate(t *testing.T)
 func TestCalculateUSDTokensV1RejectsCachedTokensExceedingTheInput(t *testing.T) {
 	price := validPriceVersion(t, "price_cached_overrun", 1, "2026-08-04T00:00:00Z")
 	price.CachedInputMicrosPerMillion = 40_000
-	if _, err := CalculateUSDTokensV1(10, 11, 0, price); err == nil {
+	if _, err := CalculateUSDTokensV1(10, 11, 0, price, priceTestInstant); err == nil {
 		t.Fatal("priced more cached tokens than the prompt contained")
 	}
 }

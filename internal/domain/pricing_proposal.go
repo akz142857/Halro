@@ -41,22 +41,27 @@ type DeploymentPriceProposal struct {
 	// CachedInputMicrosPerMillion mirrors the adopted price version's cache-read
 	// term, so adopting a proposal produces a complete price rather than one
 	// that silently prices cached prompt tokens at zero.
-	CachedInputMicrosPerMillion int64               `json:"cached_input_micros_per_million"`
-	OutputMicrosPerMillion      int64               `json:"output_micros_per_million"`
-	FixedRequestMicrosUSD       int64               `json:"fixed_request_micros_usd"`
-	Source                      PriceSource         `json:"source"`
-	FetchedAt                   time.Time           `json:"fetched_at"`
-	Warnings                    []string            `json:"warnings,omitempty"`
-	Match                       PriceProposalMatch  `json:"match"`
-	ExpiresAt                   time.Time           `json:"expires_at"`
-	Digest                      string              `json:"digest"`
-	Status                      PriceProposalStatus `json:"status"`
-	CreatedBy                   string              `json:"created_by"`
-	CreatedAt                   time.Time           `json:"created_at"`
-	AdoptedPriceVersionID       string              `json:"adopted_price_version_id,omitempty"`
-	ReviewedBy                  string              `json:"reviewed_by,omitempty"`
-	ReviewedAt                  *time.Time          `json:"reviewed_at,omitempty"`
-	Revision                    uint64              `json:"revision"`
+	CachedInputMicrosPerMillion int64 `json:"cached_input_micros_per_million"`
+	OutputMicrosPerMillion      int64 `json:"output_micros_per_million"`
+	FixedRequestMicrosUSD       int64 `json:"fixed_request_micros_usd"`
+	// Schedule mirrors the adopted price version's time-of-day rule for the
+	// same reason the cache-read term does: adoption copies the proposal
+	// verbatim, so a proposal that could not carry the rule would silently
+	// adopt a round-the-clock price from evidence that says otherwise.
+	Schedule              *PriceSchedule      `json:"schedule,omitempty"`
+	Source                PriceSource         `json:"source"`
+	FetchedAt             time.Time           `json:"fetched_at"`
+	Warnings              []string            `json:"warnings,omitempty"`
+	Match                 PriceProposalMatch  `json:"match"`
+	ExpiresAt             time.Time           `json:"expires_at"`
+	Digest                string              `json:"digest"`
+	Status                PriceProposalStatus `json:"status"`
+	CreatedBy             string              `json:"created_by"`
+	CreatedAt             time.Time           `json:"created_at"`
+	AdoptedPriceVersionID string              `json:"adopted_price_version_id,omitempty"`
+	ReviewedBy            string              `json:"reviewed_by,omitempty"`
+	ReviewedAt            *time.Time          `json:"reviewed_at,omitempty"`
+	Revision              uint64              `json:"revision"`
 }
 
 func (p DeploymentPriceProposal) Validate() error {
@@ -87,6 +92,14 @@ func (p DeploymentPriceProposal) Validate() error {
 	}
 	if p.BillingMode != BillingModeMetered && p.BillingMode != BillingModeFree {
 		return errors.New("invalid price proposal billing mode")
+	}
+	if p.Schedule != nil {
+		if p.BillingMode == BillingModeFree {
+			return errors.New("a free price proposal cannot carry a time-of-day schedule")
+		}
+		if err := p.Schedule.Validate(p.BillingMode); err != nil {
+			return err
+		}
 	}
 	if p.Match != PriceProposalMatchExact && p.Match != PriceProposalMatchLikely && p.Match != PriceProposalMatchAmbiguous {
 		return errors.New("invalid price proposal match status")

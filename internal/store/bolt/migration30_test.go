@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/akz142857/Halro/internal/domain"
 	bbolt "go.etcd.io/bbolt"
@@ -99,7 +100,7 @@ func TestMigration30ReconstructsTheCacheReadRateFromTheInputRate(t *testing.T) {
 	}
 	// The rate a migrated price charges is the rate it charged yesterday: a
 	// prompt with cached tokens costs exactly what it did before the term existed.
-	cost, err := domain.CalculateUSDTokensV1(1_000_000, 400_000, 0, price)
+	cost, err := domain.CalculateUSDTokensV1(1_000_000, 400_000, 0, price, time.Now().UTC())
 	if err != nil || cost.InputCostMicrosUSD != 5_000_000 {
 		t.Fatalf("migrated price re-rates existing traffic: cost=%#v err=%v", cost, err)
 	}

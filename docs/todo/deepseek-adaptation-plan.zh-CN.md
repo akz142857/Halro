@@ -180,6 +180,13 @@ Anthropic（`internal/provider/anthropic/adapter.go:414`）、Bedrock
 **本方案对分时折扣仍然只负责记录，不实施**（见 §5）。写这一节时要避免的两个错：
 说「计价没有缓存档位」（已经有了），和说「价格版本没有时间轴」（`EffectiveFrom` 一直在）。
 
+> **2026-08-18 更新：能力已具备，本方案的范围不变。** 分时折扣经
+> [独立评审](../prd/time-of-day-pricing-review.zh-CN.md)后已实施，见
+> [ADR 0023](../adr/0023-time-of-day-pricing.md)：价格版本可携带按供应商本地时段的费率表。
+> 也就是说操作者现在**可以**把 DeepSeek 的高峰（北京时间 9:00–12:00 与 14:00–18:00）
+> 与非高峰分别填成两档，不必再在一个固定价里二选一。这是配置动作，不是本方案的交付物——
+> 本方案仍然只负责把这条事实记清楚。
+
 ### 2.6 ~~能力上限的三份真相同样适用~~（已关闭）
 
 **2026-08-17 关闭。** 提案时 DeepSeek 的能力集存在 `DefaultProviderCapabilitiesForProfile`、

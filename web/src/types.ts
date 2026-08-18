@@ -760,12 +760,40 @@ export interface PriceSnapshot {
   cached_input_micros_per_million?: number;
   output_micros_per_million?: number;
   fixed_request_micros_usd?: number;
+  // Present only when the price version bills by time of day. The four terms
+  // above are already this rung's rates; this says which rung, so a settled
+  // attempt can be explained without re-reading the rule table.
+  schedule_tier?: PriceScheduleTier;
   effective_from?: string;
   source_type?: string;
   source_assurance?: string;
   source_content_sha256?: string;
   source_reference?: string;
   source_without_archive?: boolean;
+}
+
+export interface PriceScheduleTier {
+  timezone: string;
+  source: "base" | "window" | "zone_unavailable";
+  start_minute?: number;
+  end_minute?: number;
+  local_minute?: number;
+}
+
+export interface PriceWindow {
+  start_minute: number;
+  end_minute: number;
+  input_micros_per_million: number;
+  cached_input_micros_per_million: number;
+  output_micros_per_million: number;
+  fixed_request_micros_usd: number;
+}
+
+// Windows are disjoint and sorted, and they need not cover the day: an instant
+// no window covers is billed at the version's own four terms.
+export interface PriceSchedule {
+  timezone: string;
+  windows: PriceWindow[];
 }
 
 export interface DeploymentPriceVersion {
@@ -780,6 +808,7 @@ export interface DeploymentPriceVersion {
   cached_input_micros_per_million: number;
   output_micros_per_million: number;
   fixed_request_micros_usd: number;
+  schedule?: PriceSchedule;
   effective_from: string;
   source: { type: string; assurance: string; content_sha256?: string; reference?: string; uri?: string };
   status: "active" | "scheduled" | "superseded" | "cancelled";

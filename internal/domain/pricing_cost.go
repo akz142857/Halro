@@ -5,6 +5,7 @@ import (
 	"math"
 	"math/big"
 	"strings"
+	"time"
 )
 
 const microsPerUSD = int64(1_000_000)
@@ -29,7 +30,15 @@ type PriceCostBreakdown struct {
 // remainder at the ordinary input rate. Callers that do not know the split yet —
 // a reservation taken before the provider answers, a lease recovered from its
 // prepared bounds — pass zero and are charged the higher rate throughout.
-func CalculateUSDTokensV1(inputTokens, cachedInputTokens, outputTokens int64, price DeploymentPriceVersion) (PriceCostBreakdown, error) {
+//
+// selectedAt is the instant the price is being applied at, and it is a required
+// argument rather than an optional refinement: a price version can bill
+// different rates at different times of day, and there is no defensible answer
+// to "what does this cost" that does not say when. It is unused by a version
+// that carries no schedule. Callers pricing an already-settled attempt do not
+// come through here at all — they call PriceSnapshot.Calculate, which reads the
+// rung frozen at reservation instead of consulting a clock a second time.
+func CalculateUSDTokensV1(inputTokens, cachedInputTokens, outputTokens int64, price DeploymentPriceVersion, selectedAt time.Time) (PriceCostBreakdown, error) {
 	if inputTokens < 0 || cachedInputTokens < 0 || outputTokens < 0 {
 		return PriceCostBreakdown{}, errors.New("token counts cannot be negative")
 	}
@@ -42,23 +51,38 @@ func CalculateUSDTokensV1(inputTokens, cachedInputTokens, outputTokens int64, pr
 	if price.BillingMode == BillingModeFree {
 		return PriceCostBreakdown{}, nil
 	}
-	input, err := ceilInputComponents(inputTokens, cachedInputTokens, price.InputMicrosPerMillion, price.CachedInputMicrosPerMillion)
+	return price.TierAt(selectedAt).Calculate(inputTokens, cachedInputTokens, outputTokens)
+}
+
+// Calculate is the one place usd_token_v1 arithmetic lives. A price version
+// resolves to a tier before pricing and a settled snapshot carries the tier it
+// was pinned to, so both arrive here with four literal rates and neither can
+// drift from the other by a micro-USD — which matters, because a settlement
+// whose amount disagrees with its reservation's is rejected outright.
+func (t PriceTier) Calculate(inputTokens, cachedInputTokens, outputTokens int64) (PriceCostBreakdown, error) {
+	if inputTokens < 0 || cachedInputTokens < 0 || outputTokens < 0 {
+		return PriceCostBreakdown{}, errors.New("token counts cannot be negative")
+	}
+	if cachedInputTokens > inputTokens {
+		return PriceCostBreakdown{}, errors.New("cached input tokens cannot exceed input tokens")
+	}
+	input, err := ceilInputComponents(inputTokens, cachedInputTokens, t.InputMicrosPerMillion, t.CachedInputMicrosPerMillion)
 	if err != nil {
 		return PriceCostBreakdown{}, err
 	}
-	output, err := ceilTokenComponent(outputTokens, price.OutputMicrosPerMillion)
+	output, err := ceilTokenComponent(outputTokens, t.OutputMicrosPerMillion)
 	if err != nil {
 		return PriceCostBreakdown{}, err
 	}
 	total := new(big.Int).SetInt64(input)
 	total.Add(total, big.NewInt(output))
-	total.Add(total, big.NewInt(price.FixedRequestMicrosUSD))
+	total.Add(total, big.NewInt(t.FixedRequestMicrosUSD))
 	if !total.IsInt64() || total.Sign() < 0 {
 		return PriceCostBreakdown{}, errors.New("price calculation overflows int64 micro-USD")
 	}
 	return PriceCostBreakdown{
 		InputCostMicrosUSD: input, OutputCostMicrosUSD: output,
-		FixedCostMicrosUSD: price.FixedRequestMicrosUSD, TotalCostMicrosUSD: total.Int64(),
+		FixedCostMicrosUSD: t.FixedRequestMicrosUSD, TotalCostMicrosUSD: total.Int64(),
 	}, nil
 }
 

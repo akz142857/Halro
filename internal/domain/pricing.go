@@ -196,16 +196,21 @@ type DeploymentPriceVersion struct {
 	// every cached token. It is a required term, not an optional refinement:
 	// omitting it would read as "cached tokens are free", which is the one
 	// wrong answer this field exists to prevent.
-	CachedInputMicrosPerMillion int64       `json:"cached_input_micros_per_million"`
-	OutputMicrosPerMillion      int64       `json:"output_micros_per_million"`
-	FixedRequestMicrosUSD       int64       `json:"fixed_request_micros_usd"`
-	EffectiveFrom               time.Time   `json:"effective_from"`
-	Source                      PriceSource `json:"source"`
-	CreatedBy                   string      `json:"created_by"`
-	CreatedAt                   time.Time   `json:"created_at"`
-	CancelledBy                 string      `json:"cancelled_by,omitempty"`
-	CancelledAt                 *time.Time  `json:"cancelled_at,omitempty"`
-	Revision                    uint64      `json:"revision"`
+	CachedInputMicrosPerMillion int64 `json:"cached_input_micros_per_million"`
+	OutputMicrosPerMillion      int64 `json:"output_micros_per_million"`
+	FixedRequestMicrosUSD       int64 `json:"fixed_request_micros_usd"`
+	// Schedule makes the four terms above the rates that apply outside every
+	// window it declares, instead of the rates that apply all day. It is nil on
+	// a price that bills one rate around the clock, which is what every price
+	// written before schedules existed decodes to and how it keeps billing.
+	Schedule      *PriceSchedule `json:"schedule,omitempty"`
+	EffectiveFrom time.Time      `json:"effective_from"`
+	Source        PriceSource    `json:"source"`
+	CreatedBy     string         `json:"created_by"`
+	CreatedAt     time.Time      `json:"created_at"`
+	CancelledBy   string         `json:"cancelled_by,omitempty"`
+	CancelledAt   *time.Time     `json:"cancelled_at,omitempty"`
+	Revision      uint64         `json:"revision"`
 }
 
 func (p *DeploymentPriceVersion) GetRevision() uint64      { return p.Revision }
@@ -237,8 +242,16 @@ func (p DeploymentPriceVersion) Validate() error {
 		if p.InputMicrosPerMillion != 0 || p.CachedInputMicrosPerMillion != 0 || p.OutputMicrosPerMillion != 0 || p.FixedRequestMicrosUSD != 0 {
 			problems = append(problems, errors.New("free price components must all be zero"))
 		}
+		if p.Schedule != nil {
+			problems = append(problems, errors.New("a free price cannot carry a time-of-day schedule"))
+		}
 	default:
 		problems = append(problems, errors.New("price billing mode is invalid"))
+	}
+	if p.Schedule != nil {
+		if err := p.Schedule.Validate(p.BillingMode); err != nil {
+			problems = append(problems, err)
+		}
 	}
 	if p.EffectiveFrom.IsZero() || !isUTC(p.EffectiveFrom) {
 		problems = append(problems, errors.New("price effective_from must be a non-zero UTC time"))
