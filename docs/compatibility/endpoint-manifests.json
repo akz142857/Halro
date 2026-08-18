@@ -113,6 +113,7 @@
           "DeepSeek speaks this wire format but accepts a smaller member list, so the fields it has no place for are rejected before provider I/O rather than sent and ignored",
           "user is carried as DeepSeek's user_id",
           "reasoning_effort and response_format are declared unsupported at field granularity because support is value-dependent: none maps to thinking.type=disabled and the low and high rungs map to thinking.reasoning_effort with thinking enabled, while minimal, medium and xhigh have no DeepSeek rung; json_object maps to response_format and json_schema has no DeepSeek counterpart",
+          "max_completion_tokens is value-dependent too: it counts reasoning tokens and DeepSeek's max_tokens does not, so it is carried as max_tokens on a request with thinking off and rejected before provider I/O on one with thinking on, or on one that already carries max_tokens",
           "n and parallel_tool_calls are value-dependent in the same way: n=1 and parallel_tool_calls=true are what omitting the member already means, and only n\u003e1 and a request to run tools one at a time are rejected"
         ]
       },
@@ -471,13 +472,12 @@
         "profile_id": "deepseek.chat.v1",
         "status": "compatible",
         "unsupported_request_fields": [
-          "max_output_tokens",
           "parallel_tool_calls",
           "text.format"
         ],
         "declared_transforms": [
           "Responses items are mapped through the DeepSeek Chat ProviderPrimitive",
-          "max_output_tokens is a completion budget that counts reasoning, and DeepSeek has only max_tokens, so it is rejected before provider I/O rather than renamed into a different limit",
+          "max_output_tokens is carried as DeepSeek's max_tokens: it is a completion budget that counts reasoning, and this endpoint rejects the reasoning request field outright, so nothing served here thinks and the two bound the same tokens",
           "parallel_tool_calls is value-dependent: true is what omitting the member already means, and only a request to run tools one at a time is rejected",
           "text.format is value-dependent: DeepSeek has json_object and no schema mode, so a schema is rejected before provider I/O",
           "user is carried as DeepSeek's user_id"
@@ -728,10 +728,13 @@
           "tool_choice",
           "thinking",
           "metadata",
-          "service_tier"
+          "service_tier",
+          "output_config.effort",
+          "output_config.format"
         ],
         "declared_transforms": [
-          "portable text Messages content is mapped through Gemini generateContent"
+          "portable text Messages content is mapped through Gemini generateContent",
+          "output_config.effort and output_config.format are this endpoint's spelling of reasoning_effort and response_format, which this profile declares unsupported at every value, so a request carrying either is routed away before provider I/O"
         ]
       },
       {
@@ -743,10 +746,13 @@
           "tool_choice",
           "thinking",
           "metadata",
-          "service_tier"
+          "service_tier",
+          "output_config.effort",
+          "output_config.format"
         ],
         "declared_transforms": [
-          "portable text Messages content is mapped through Bedrock Converse"
+          "portable text Messages content is mapped through Bedrock Converse",
+          "output_config.effort and output_config.format are this endpoint's spelling of reasoning_effort and response_format, which this profile declares unsupported at every value, so a request carrying either is routed away before provider I/O"
         ]
       },
       {
@@ -770,18 +776,25 @@
           "top_k",
           "thinking",
           "metadata",
-          "service_tier"
+          "service_tier",
+          "output_config.effort"
         ],
         "declared_transforms": [
           "portable Messages content is mapped through stateless Bedrock Mantle Responses",
-          "streaming requests with tools are rejected before provider I/O"
+          "streaming requests with tools are rejected before provider I/O",
+          "output_config.effort is this endpoint's spelling of reasoning_effort, which the stateless Responses primitive does not carry, so a request carrying it is routed away before provider I/O"
         ]
       },
       {
         "profile_id": "bedrock.mantle.anthropic.messages.v1",
         "status": "compatible",
+        "unsupported_request_fields": [
+          "output_config.effort",
+          "output_config.format"
+        ],
         "declared_transforms": [
-          "native mode preserves validated Anthropic content blocks, thinking signatures, and events"
+          "native mode preserves validated Anthropic content blocks, thinking signatures, and events",
+          "output_config is unsupported in portable mode only: this profile shares the Anthropic wire form and could carry the member, but its Mantle Beta capability ceiling is fixed by the build and widening it is a separate contract review, so a portable request carrying effort or format is routed away before provider I/O while native mode forwards the member verbatim"
         ]
       }
     ]

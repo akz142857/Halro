@@ -6,6 +6,8 @@
 　　　　　并因此改变了 §2.4 的性质与顺序；§2.6 已由能力矩阵单一真相关闭，保留为已关闭记录）
 实施日期：2026-08-17（片 1–4；实施中发现方案本身写错四处，记在 §6）
 文档复核：2026-08-18（第一次真正抓取官方文档；§1 有四处不准，其中两处已是实现缺陷，均已修，记在 §7）
+挂账清理：2026-08-18 晚（§6.1 的 `/v1/responses` 收窄已解除，§6.2 的 manifest 缺口已补齐——实际有四个
+　　　　　profile 而不是两个，§5 的分时折扣转为独立评审提案；均记在 §10）
 范围：`internal/modelcatalog`、`internal/compatibility`、`internal/openaiapi`、`internal/provider/openai`、`internal/domain`
 相关：[适配链条的未完成项](../prd/adaptation-open-items.zh-CN.md)、[Provider 适配缺口](../prd/provider-adaptation-gaps.zh-CN.md)
 
@@ -209,7 +211,7 @@ Anthropic（`internal/provider/anthropic/adapter.go:414`）、Bedrock
 | 2 | 字段申报：DeepSeek 从 OpenAI-wire 直通分支拆出，按 §1 接受列表申报；`user` 改渲染为 `user_id`；manifest 三处同步 | 接受列表之外的字段，要么被申报、要么被渲染成上游认识的形状，不存在第三种 | 否 | **已实现**（比方案多一个字段，见 §6.1；`parallel_tool_calls` 的粒度改了一次，见 §6.5） |
 | 3 | thinking 映射：语义 ReasoningEffort → `thinking:{type,reasoning_effort}`；映射接上后再改 manifest 那句 `thinking` unsupported | 打开 Reasoning 能力的部署，发出的请求里带 `thinking` | 否 | **已实现**；manifest 那句**不改**，理由见 §6.2 |
 | 4 | 目录订正：模型名换成 `deepseek-v4-flash` / `deepseek-v4-pro`，上下文 1M、输出 384K，删掉 reasoner 专属条目 | 目录里没有上游列不出的模型名 | 否，但**建议等片 5 的真实 `GET /models`** | **已实现**（未等片 5，见 §6.4） |
-| 5 | 真实账号 smoke：matrix runner 已有 `HALRO_MATRIX_DEEPSEEK_` 这一档，跑一次非流式、一次流式、一次带 thinking、一次重复前缀看缓存命中 | 四项都拿到真实响应，且 §1 的每条推断各自被证实或推翻 | **是** | **未做**；四项的断言已写进 `TestRealProviderSmoke`，缺的只是凭据 |
+| 5 | 真实账号 smoke：matrix runner 已有 `HALRO_MATRIX_DEEPSEEK_` 这一档，跑一次非流式、一次流式、一次带 thinking、一次重复前缀看缓存命中 | 四项都拿到真实响应，且 §1 的每条推断各自被证实或推翻 | **是** | **未做**；四项的断言已写进 `TestRealProviderSmoke`，缺的只是凭据。命令与本机 DNS 阻塞点见 [§10.3](#103-片-5-仍然缺凭据但阻塞点已经查清) |
 
 **片 4 排在最后是刻意的。** 它写死的是上下文与输出上限，而 Token Guard、预算与 `max_tokens`
 截断都读这两个数：写错的代价比其余几片都高，而它们眼下**只有文档依据**。若真实凭据一时拿不到，
@@ -305,6 +307,10 @@ DeepSeek 的 `max_tokens` 是另一个量，把前者当后者发就是悄悄改
 `max_output_tokens` 的请求，从此不再路由到 DeepSeek**。这是个真实的收窄，代价明确、修法要等片 5
 把 `max_tokens` 的语义核实清楚。manifest 的 responses 覆盖里已按此申报。
 
+> **收窄已于 2026-08-18 晚解除，且不必等片 5，见 [§10.1](#101-61-的收窄已解除按值申报而不是按字段)。**
+> 两个限额只在「有东西在思考」时是两个量；思考关着时它们界定同一批 token，而 `/v1/responses`
+> 那条路上没有任何请求在思考。
+
 **多算的两个是 `frequency_penalty` / `presence_penalty`。** §2.2 说文档明写它们「不再支持」，
 这没错；但 `openaiapi.ChatCompletionRequest` 根本没有这两个字段，Halro 从来没往上游发过它们。
 这一条对本方案是空的。
@@ -327,6 +333,8 @@ DeepSeek 的 `max_tokens` 是另一个量，把前者当后者发就是悄悄改
 **顺带发现、本方案未修**：Gemini 与 Converse 在 `/v1/messages` 那份覆盖里也没申报
 `output_config.effort`，而它们的 `provider_fields.go` 分支是无条件申报 `reasoning_effort` 的。
 两者不一致，属于同形的另一处 manifest 缺口，需要单独一次评审。
+
+> **已于 2026-08-18 晚补上，且实际不止这两处，见 [§10.2](#102-62-顺带发现的-manifest-缺口已补一共四个-profile)。**
 
 ### 6.3 `none` 档按失败关闭处理
 
@@ -512,3 +520,99 @@ Messages 用 `output_config.effort`，`low` / `high` 两档。
 「默认 `enabled`」来自 API 参考页，仍未经真实账号确认；片 5 的探针（发 `none`、断言
 `reasoning_tokens == 0`）是它唯一的真实证据。但**本条修复不依赖那个默认值是否为真**：
 未指定即显式关闭，无论上游默认是什么，行为都确定。
+
+## 10. 2026-08-18 晚：清掉两条挂账，把第三条转成独立评审
+
+清的是 §6.1 的收窄与 §6.2 的 manifest 缺口——两条都不需要真实凭据，之前挂着是因为被当成
+「要等片 5」和「要单独评审」。前者其实只差一个按值判断，后者只差一条双向测试。
+
+### 10.1 §6.1 的收窄已解除：按值申报，而不是按字段
+
+`max_completion_tokens` 从「一律申报」改成按值：
+
+- **思考关着时携带**，渲染成 `max_tokens`。两个限额只在有东西思考时是两个量；没有推理，
+  「整次生成的预算」与「回答的预算」界定的是同一批 token。
+- **思考开着时仍然申报**。这一半仍然没有依据——DeepSeek 的 `max_tokens` 在思考开启时到底算不算
+  思维链，是片 5 该问清楚的，在那之前把总预算当成回答预算发就是悄悄改小了调用方的请求。
+- **两个限额同时出现时仍然申报**。DeepSeek 只有一个成员，替调用方二选一不是这一层的事。
+
+于是 `/v1/responses` 的收窄整个消失：那条北向**明确拒绝** `reasoning` 请求字段
+（`internal/openaiapi/responses.go:133`），所以它上面没有任何请求在思考，
+`max_output_tokens` 一律按 `max_tokens` 送达。manifest 的 responses 覆盖相应改口——
+它现在申报的是一条 transform（携带），不再是一条不支持。
+
+申报与渲染器同时改，两边都有测试，反向验证时各自变红
+（`TestDeepSeekServesResponsesRequestsThatBoundTheirOutput`、
+`TestDeepSeekRefusesOneOutputLimitForTwoQuantities`）。
+
+### 10.2 §6.2 顺带发现的 manifest 缺口已补：一共四个 profile
+
+先写了一条**双向**契约测试再改 manifest，测试是这么写的：对 `/v1/messages` 的每个 portable
+profile，把一个带 `output_config` 的请求**走真实的那条链**（`DecodePortable` → OpenAI wire →
+`DecodeGenerate`），看它是否被 `UnsupportedGenerateFields` 判为不支持，再与 manifest 覆盖里
+是否列了这个字段对照——**列而不申报、申报而不列，两个方向都是失败**
+（`internal/compatibility/manifest_portable_coverage_test.go`）。
+
+它一跑就说明缺口比 §6.2 记的多一倍：
+
+| profile | 缺的字段 |
+|---|---|
+| `gemini.generate-content.text.v1beta` | `output_config.effort`、`output_config.format` |
+| `bedrock.runtime.converse.text.v1` | `output_config.effort`、`output_config.format` |
+| `bedrock.mantle.openai.responses.v1` | `output_config.effort` |
+| `bedrock.mantle.anthropic.messages.v1` | `output_config.effort`、`output_config.format` |
+
+**这不是路由行为的缺陷，是公开声明的缺陷**：这四个 profile 本来就会把带 effort 或 format 的
+portable 请求路由走，只是 manifest 没说——读 manifest 的操作者会以为它们服务这个字段。
+DeepSeek（§6.2 当时改的那条）和 Anthropic 本来就是对的：后者的 `max` 档在到达路由之前
+就已经死在 OpenAI 阶梯上，所以它没有需要申报的东西。
+
+同一形状的测试也给 `/v1/responses` 补了一条（`max_output_tokens` 与 `text.format`），
+正是它盯住 §10.1 那次改口——写错方向会立刻变红。
+
+`docs/compatibility/endpoint-manifests.json` 已随之重新生成。
+
+### 10.3 片 5 仍然缺凭据，但阻塞点已经查清
+
+**这台开发机上的 DNS 现在仍然是 §8 那个状态**（2026-08-18 复核）：系统解析器把
+`api.deepseek.com` 解成 `198.18.4.112`（fake-ip 段），而 `dig` 直接问 DNS 拿到的是
+`123.125.246.121` / `116.140.43.136`。SafeTransport 自己解析、自己校验，会在发出任何字节之前拒绝。
+
+跑片 5 之前先解决这一侧，二选一：
+
+1. 在 mihomo / Clash Party 里把 `api.deepseek.com` 同时加进 **`fake-ip-filter`** 和直连规则，
+   然后 `sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder`；
+2. 或把 DNS 模式从 `fake-ip` 换成 `redir-host`。
+
+**不要放宽 `deniedPrefixes`**（§8）。
+
+DNS 通了之后，一条命令跑完片 5 的四项：
+
+```bash
+HALRO_REAL_PROVIDER_SMOKE=1 \
+HALRO_SMOKE_PROFILE=deepseek \
+HALRO_SMOKE_BASE_URL=https://api.deepseek.com \
+HALRO_SMOKE_API_KEY='<真实 key>' \
+HALRO_SMOKE_MODEL=deepseek-v4-flash \
+go test ./internal/provider/openai/ -run TestRealProviderSmoke -count=1 -v
+```
+
+`HALRO_SMOKE_BASE_URL` 不带路径——`versionedPath` 会补 `/v1`。用量约六次请求：非流式、流式、
+带 thinking、`none`、两次重复前缀（缓存探针要跑两次才有命中）。加
+`HALRO_SMOKE_CAPABILITY_DETECTION=1` 会额外触发能力探测（§6.6 那条路），会多花钱。
+
+跑完要回填的四条推断：`thinking` 的拼写、`none` 是否真的关得掉（断言
+`reasoning_tokens == 0`）、缓存计数器的拼写与 `hit + miss = prompt_tokens` 的约定、
+以及思考开启时 `max_tokens` 算不算思维链（§10.1 留下的那一半）。
+
+### 10.4 §5 的分时折扣：出了独立评审提案，仍然不实施
+
+按 §5 的原意，它不作为 DeepSeek 适配的副作用发生。现在把它从「记录一句」升级成一份可评审的提案：
+[分时价位独立评审提案](../prd/time-of-day-pricing-review.zh-CN.md)。
+
+提案里最硬的一条是本方案没预见到的：**结算事件的价格快照必须与预留时刻的逐字节一致**
+（`samePriceSnapshot`，`internal/ledger/event.go:492`，校验在 `event.go:358-361`），
+所以跨越时段边界的请求不能在结算时重新选档——那会被 Ledger 直接拒绝。档位只能在预留时刻定，
+并写进快照。任何「结算时看一眼时钟」的实现都是错的。
+
+§5 的另外两条（Anthropic 兼容端点、原生 Responses）维持不做，理由与已核实的事实仍在 §5。
