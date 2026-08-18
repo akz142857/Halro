@@ -231,3 +231,10 @@ Ledger **不用改代码**——`samePriceSnapshot` 是 JSON 全等比较，新�
 | 预览能回答"哪个时刻的成本" | `TestScheduledPriceRoundTripsThroughTheAdminAPIAndPricesEveryTier` |
 | 用量明细说得出 billed 在哪一档 | 前端 `billedTierLabel` 用例 |
 | 固定价行为不变 | `TestFixedPriceSnapshotCarriesNoScheduleTier`、`TestRecordsWrittenBeforeSchedulesDecodeAndHashUnchanged`（旧记录解码后编码逐字节一致，摘要不变） |
+
+**对真实数据目录的验证**（2026-08-18，本次改动构建的二进制，对开发机既有 `data/`）：
+`halro doctor` 23 项全过（`pricing_readiness` 通过即既有价格版本被新结构正常读出，
+新增的 `pricing_schedule_zone` 存在且通过）；`halro ledger verify` `ChainVerified: true`、
+20 帧全部认证、head sequence 20 @ offset 20582；随后用新二进制重启并通过 `/health/ready`。
+**既有数据目录无需迁移即可被新构建打开并服务**——这是"不需要重新初始化"这条最直接的证据，
+单元测试再多也替代不了它。
