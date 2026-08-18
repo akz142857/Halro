@@ -47,7 +47,17 @@ func TestDeepSeekDeclaresEveryFieldItCannotCarryAndNoneItCan(t *testing.T) {
 		{"n", func(r *semantic.GenerateRequest) { r.Candidates = &candidates }},
 		{"seed", func(r *semantic.GenerateRequest) { r.Seed = &seed }},
 		{"parallel_tool_calls", func(r *semantic.GenerateRequest) { r.ParallelTools = &serial }},
-		{"max_completion_tokens", func(r *semantic.GenerateRequest) { r.CompletionTokenLimit = &limit }},
+		// A completion budget counts reasoning tokens, so it is a different bound
+		// from max_tokens exactly while something is thinking.
+		{"max_completion_tokens", func(r *semantic.GenerateRequest) {
+			r.CompletionTokenLimit = &limit
+			r.ReasoningEffort = "high"
+		}},
+		// Two output bounds, one member to put them in.
+		{"max_completion_tokens", func(r *semantic.GenerateRequest) {
+			r.CompletionTokenLimit = &limit
+			r.VisibleOutputTokenLimit = &limit
+		}},
 		{"reasoning_effort", func(r *semantic.GenerateRequest) { r.ReasoningEffort = "medium" }},
 		{"reasoning_effort", func(r *semantic.GenerateRequest) { r.ReasoningEffort = "minimal" }},
 		{"reasoning_effort", func(r *semantic.GenerateRequest) { r.ReasoningEffort = "xhigh" }},
@@ -78,6 +88,13 @@ func TestDeepSeekDeclaresEveryFieldItCannotCarryAndNoneItCan(t *testing.T) {
 			r.ParallelTools = &parallel
 		}},
 		{"max_tokens", func(r *semantic.GenerateRequest) { r.VisibleOutputTokenLimit = &visible }},
+		// Nothing is thinking, so the completion budget and max_tokens bound the
+		// same tokens and the limit is carried instead of costing the route.
+		{"max_completion_tokens", func(r *semantic.GenerateRequest) { r.CompletionTokenLimit = &visible }},
+		{"max_completion_tokens", func(r *semantic.GenerateRequest) {
+			r.CompletionTokenLimit = &visible
+			r.ReasoningEffort = "none"
+		}},
 		{"stop", func(r *semantic.GenerateRequest) { r.Stop = []string{"END"} }},
 		{"tools", func(r *semantic.GenerateRequest) {
 			r.Tools = []semantic.Tool{{Name: "lookup", Schema: json.RawMessage(`{"type":"object"}`)}}
@@ -313,6 +330,65 @@ func TestDeepSeekReachesReasoningThroughTheThinkingSwitch(t *testing.T) {
 	}
 	if body.Thinking.ReasoningEffort != "" {
 		t.Fatalf("a disabled switch carried a depth: %#v", body.Thinking)
+	}
+}
+
+// The narrowing that came with declaring max_completion_tokens: /v1/responses
+// decodes max_output_tokens into the completion budget, so every Responses
+// request that bounded its output was routed away from DeepSeek. It is also the
+// path where the budget provably counts nothing but the answer — that endpoint
+// rejects the `reasoning` request field outright, so nothing on it thinks — and
+// a bound over the answer is what DeepSeek's max_tokens is.
+func TestDeepSeekServesResponsesRequestsThatBoundTheirOutput(t *testing.T) {
+	limit := int64(256)
+	canonical, err := openaiwire.DecodeResponseGenerate(openaiapi.ResponseRequest{
+		Model: "deepseek", Input: json.RawMessage(`"hi"`), MaxOutputTokens: &limit,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if canonical.CompletionTokenLimit == nil {
+		t.Fatal("max_output_tokens no longer decodes into the completion budget; this test is watching the wrong field")
+	}
+	if fields := compatibility.UnsupportedGenerateFields(domain.ProfileDeepSeekChat, canonical); len(fields) != 0 {
+		t.Fatalf("a Responses request that bounded its output was routed away from DeepSeek: %v", fields)
+	}
+	body, err := compatibility.RenderDeepSeekChatRequest(mustRenderDeepSeek(t, canonical))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body.MaxTokens == nil || *body.MaxTokens != limit {
+		t.Fatalf("the caller's output bound did not reach the wire: %#v", body.MaxTokens)
+	}
+	if body.Thinking == nil || body.Thinking.Type != "disabled" {
+		t.Fatalf("the limit was carried onto a request that thinks, where it means something else: %#v", body.Thinking)
+	}
+}
+
+// The other half of the same value-dependence: with thinking on, a completion
+// budget and max_tokens are different quantities, so the limit is refused rather
+// than quietly re-scoped to the answer alone. What DeepSeek's max_tokens counts
+// once thinking is on is a slice 5 question; this holds until it is answered.
+func TestDeepSeekRefusesOneOutputLimitForTwoQuantities(t *testing.T) {
+	limit := int64(256)
+	thinking := deepSeekBaseRequest()
+	thinking.CompletionTokenLimit = &limit
+	thinking.ReasoningEffort = "high"
+	thinking.Requirements = thinking.DeriveRequirements()
+	if fields := compatibility.UnsupportedGenerateFields(domain.ProfileDeepSeekChat, thinking); !slices.Contains(fields, "max_completion_tokens") {
+		t.Fatalf("a completion budget was admitted onto a thinking request: %v", fields)
+	}
+	if _, err := compatibility.RenderDeepSeekChatRequest(mustRenderDeepSeek(t, thinking)); err == nil {
+		t.Fatal("the renderer re-scoped a completion budget to the answer alone")
+	}
+	both := deepSeekBaseRequest()
+	both.CompletionTokenLimit, both.VisibleOutputTokenLimit = &limit, &limit
+	both.Requirements = both.DeriveRequirements()
+	if fields := compatibility.UnsupportedGenerateFields(domain.ProfileDeepSeekChat, both); !slices.Contains(fields, "max_completion_tokens") {
+		t.Fatalf("two output bounds were admitted onto one member: %v", fields)
+	}
+	if _, err := compatibility.RenderDeepSeekChatRequest(mustRenderDeepSeek(t, both)); err == nil {
+		t.Fatal("the renderer chose between two limits the caller set")
 	}
 }
 
