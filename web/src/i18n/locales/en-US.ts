@@ -46,6 +46,13 @@ export const enUS = {
     loadingMore: "Loading more",
   },
   notifications: { region: "System notifications", dismiss: "Dismiss notification" },
+  timeZonePicker: {
+    listLabel: "Time zones",
+    count_one: "{{count}} zone",
+    count_other: "{{count}} zones",
+    noMatches: "No matching zone. You can still type an IANA name; the server validates it.",
+    unknownZone: "This browser does not recognise that zone name — check the spelling. The server has the final say.",
+  },
   testControl: { idle: "Not tested", running: "Testing…", successPlain: "Passed", success: "Passed · {{latency}}ms", failure: "Failed", stale: "Retest needed",
     reasons: { authentication: "The upstream rejected this credential (authentication or authorization failed)", rate_limit: "The upstream is rate limiting; retry later", timeout: "Timed out waiting for the upstream", provider_5xx: "The upstream returned a server error", bad_request: "The upstream rejected the probe request", bad_request_local: "Halro refused this probe before sending it upstream", connect: "Could not connect to the upstream (DNS, TLS or network)", malformed_response: "The upstream response could not be parsed", unknown: "The connection test failed for an unclassified reason" },
     refusals: { adapter_unavailable: "This binding never built a connection: the credential or endpoint could not produce an adapter. The usual cause is an AWS credential whose region disagrees with the bound endpoint — check the credential this binding uses.", binding_profile_incompatible: "This binding's capability implementation is not one this build ships. Pick an implementation again and save.", capability_ceiling_exceeded: "This binding declares more than its capability implementation allows. Turn off the extra capabilities and save.", endpoint_rejected: "This provider's endpoint no longer satisfies the outbound policy. Check the address, or allow_private_provider_endpoints.", binding_adapter_missing: "This binding has no adapter right now. Save the provider again, or check the server log.", probe_requires_deployment: "This binding has no enabled deployment, so the connection test has no model to probe with. Create and enable a deployment on it first." } },

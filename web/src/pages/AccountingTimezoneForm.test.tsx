@@ -31,6 +31,20 @@ function settings(overrides: Partial<AccountingSettings> = {}): AccountingSettin
 describe("AccountingTimezoneForm", () => {
   afterEach(() => vi.restoreAllMocks());
 
+  // The zone used to be spelled from memory into a bare text box, and a typo
+  // only surfaced as a rejected submission. Picking from the browser's own list
+  // is what makes the name right before anything is sent.
+  it("fills the zone from the picker rather than requiring it be spelled", () => {
+    renderWithClient(<AccountingTimezoneForm settings={settings()} />);
+    const zone = screen.getByLabelText(/目标时区/);
+
+    fireEvent.change(zone, { target: { value: "berlin" } });
+    fireEvent.click(screen.getByRole("option", { name: /Europe\/Berlin/ }));
+
+    expect(zone).toHaveValue("Europe/Berlin");
+    expect(screen.getByRole("button", { name: "安排变更" })).toBeEnabled();
+  });
+
   // A change here moves money between days, so the confirmation must state the
   // consequences rather than leaving an administrator to infer them.
   it("states when the change applies and what it does not touch before scheduling", async () => {

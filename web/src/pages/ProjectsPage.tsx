@@ -410,7 +410,11 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
     retained.forEach((value) => options.set(value, { enabledCount: 0, strategies: new Set() }));
     availableRoutes.data?.forEach((route) => {
       const existing = options.get(route.public_model) ?? { enabledCount: 0, strategies: new Set<string>() };
-      if (route.enabled) existing.enabledCount += 1;
+      // Both readings come from the enabled routes only. Counting the strategy
+      // of a disabled route made a retired row with a different strategy hide
+      // the label entirely, beside a count that had already ignored that row.
+      if (!route.enabled) return;
+      existing.enabledCount += 1;
       existing.strategies.add(route.strategy || "ordered");
       options.set(route.public_model, existing);
     });

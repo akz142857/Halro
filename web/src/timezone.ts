@@ -132,3 +132,57 @@ export function zonedInputToISO(value: string, timeZone: string): string {
   instant = wall - zoneOffsetMillis(instant, timeZone);
   return new Date(instant).toISOString();
 }
+
+/**
+ * Every IANA zone name this browser can offer for selection.
+ *
+ * The server is the authority on which names are acceptable — it validates
+ * against its own tzdata — but it has no way to publish the list: Go's
+ * embedded database is a zip with no enumeration API, and reading the host's
+ * zoneinfo directory is exactly the dependency embedding it removes. The
+ * browser already carries a full copy for Intl, so the picker is built from
+ * that and costs the bundle nothing.
+ *
+ * Returns an empty list on an engine without `supportedValuesOf`, which the
+ * caller renders as a plain text field rather than an empty menu.
+ */
+export function supportedTimeZones(): string[] {
+  if (zoneNames) return zoneNames;
+  try {
+    zoneNames = Intl.supportedValuesOf?.("timeZone") ?? [];
+  } catch {
+    zoneNames = [];
+  }
+  return zoneNames;
+}
+
+let zoneNames: string[] | undefined;
+
+/**
+ * The zone's current UTC offset, as "UTC+08:00".
+ *
+ * A list of 400-odd names is only searchable if you already know the name. The
+ * offset is what an operator checking a provider's billing hours actually
+ * recognises, so it is rendered beside every option. Cached because the picker
+ * asks for the same zone on every keystroke; a session left open across a DST
+ * transition keeps showing the offset that was in force when it first asked,
+ * which is a label being an hour stale, not a stored value being wrong.
+ */
+export function zoneOffsetLabel(zone: string): string {
+  const cached = offsetLabels.get(zone);
+  if (cached !== undefined) return cached;
+  let label = "";
+  try {
+    const name = new Intl.DateTimeFormat("en-US", { timeZone: zone, timeZoneName: "longOffset" })
+      .formatToParts(new Date())
+      .find((part) => part.type === "timeZoneName")?.value ?? "";
+    // longOffset yields "GMT+08:00", and "GMT" alone at zero offset.
+    label = name === "GMT" ? "UTC+00:00" : name.replace("GMT", "UTC");
+  } catch {
+    label = "";
+  }
+  offsetLabels.set(zone, label);
+  return label;
+}
+
+const offsetLabels = new Map<string, string>();

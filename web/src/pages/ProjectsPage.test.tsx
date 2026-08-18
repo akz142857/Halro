@@ -84,6 +84,23 @@ describe("projects page", () => {
     expect(screen.getByRole("checkbox", { name: /embedding/ })).toBeVisible();
   });
 
+  // The count already ignored disabled routes; the strategy beside it did not,
+  // so one retired row with the other strategy blanked the label rather than
+  // describing the routes that actually serve the alias.
+  it("describes the alias by its enabled routes alone", async () => {
+    vi.mocked(api.allRoutes).mockResolvedValue([
+      { id: "rt_live", public_model: "chat", strategy: "round_robin", enabled: true },
+      { id: "rt_live_two", public_model: "chat", strategy: "round_robin", enabled: true },
+      { id: "rt_retired", public_model: "chat", strategy: "ordered", enabled: false },
+    ] as never);
+
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "创建第一个项目" }));
+
+    expect(await screen.findByText("允许的模型别名（路由入口）")).toBeVisible();
+    expect(await screen.findByRole("checkbox", { name: /chat/ })).toHaveAccessibleName(/2 条已启用路由 · 轮询/);
+  });
+
   it("places project enablement in the footer action area", async () => {
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "创建第一个项目" }));

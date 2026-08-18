@@ -1,9 +1,10 @@
-import { cloneElement, Component, isValidElement, useEffect, useId, useRef, useState, type ReactElement, type ReactNode } from "react";
+import { cloneElement, Component, isValidElement, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactElement, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { ApiError } from "./api";
 import { useTranslation } from "react-i18next";
 import { useIsReadOnly, useSession } from "./session";
 import { errorDetail, localizedError } from "./i18n/errors";
+import { isSupportedTimeZone, supportedTimeZones, zoneOffsetLabel } from "./timezone";
 
 export function PageHeader({
   eyebrow,
@@ -629,5 +630,208 @@ export function ReauthFields({
         />
       </Field>
     </>
+  );
+}
+
+/**
+ * An IANA zone name field backed by the browser's own zone list.
+ *
+ * Deliberately a suggestion list over a free text input, not a closed select.
+ * The list comes from the browser's tzdata and the value is validated by the
+ * server's, and the two are not the same build: `supportedValuesOf` reports
+ * only canonical names, so an alias the server accepts (Asia/Calcutta) is
+ * absent from it, and an older engine is missing whatever zones were added
+ * after it shipped. A closed menu would refuse names the server considers
+ * perfectly good. Typing always wins; the list is only there so the operator
+ * does not have to remember how a name is spelled.
+ */
+// Room the menu keeps between itself and the field, and between itself and the
+// edge of the viewport; the height it will take when there is room, and the
+// least it will squeeze into before flipping to the other side of the field.
+const MENU_GAP = 4;
+const MENU_MARGIN = 12;
+const MENU_MAX_HEIGHT = 288;
+// Below this the menu is not worth opening downwards, so it flips instead.
+const MENU_MIN_HEIGHT = 176;
+
+export function TimeZoneField({
+  label,
+  hint,
+  error,
+  value,
+  onChange,
+  required = false,
+  disabled = false,
+}: {
+  label: string;
+  hint?: string;
+  error?: string;
+  value: string;
+  onChange: (value: string) => void;
+  required?: boolean;
+  disabled?: boolean;
+}) {
+  const { t } = useTranslation();
+  const inputID = useId();
+  const listID = useId();
+  const descriptionID = useId();
+  const shell = useRef<HTMLDivElement>(null);
+  const options = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(-1);
+  const [anchor, setAnchor] = useState<CSSProperties | null>(null);
+  const zones = supportedTimeZones();
+  const enumerable = zones.length > 0;
+  const visible = useMemo(() => {
+    // Matched with "_" as a space so "new york" finds America/New_York, which
+    // is how the city is spelled everywhere except in the zone name.
+    //
+    // Case-folded with toLowerCase, not toLocaleLowerCase: zone names are ASCII
+    // and the host locale is not the console's. Folding them in the host's
+    // locale turns the "I" of Indian/Maldives into a dotless "ı" on a Turkish
+    // machine, so a typed "indian" — already lowercase, and left alone — stops
+    // matching the very zone it names.
+    const query = value.trim().toLowerCase().replace(/[\s_]+/g, " ");
+    if (!query) return zones;
+    return zones.filter((zone) => zone.toLowerCase().replace(/_/g, " ").includes(query));
+  }, [zones, value]);
+  useEffect(() => {
+    if (!open) return;
+    const closeOnOutsideInteraction = (event: PointerEvent) => {
+      const target = event.target as Node;
+      // The list is portalled out of the shell, so "outside" is both of them.
+      if (!shell.current?.contains(target) && !options.current?.contains(target)) {
+        setOpen(false);
+        setActiveIndex(-1);
+      }
+    };
+    document.addEventListener("pointerdown", closeOnOutsideInteraction);
+    return () => document.removeEventListener("pointerdown", closeOnOutsideInteraction);
+  }, [open]);
+  // Anchored on measurement rather than on the shell, because every ancestor
+  // that could contain it also clips it: the price modal scrolls its own body,
+  // and a card on the settings page ends well above the foot of the list. An
+  // absolutely positioned menu is cut off by the first of those; a fixed one
+  // placed against the input's box on screen is not, and can also be flipped
+  // above the field and shortened to whatever room the viewport actually has.
+  useLayoutEffect(() => {
+    if (!open) { setAnchor(null); return; }
+    const measure = () => {
+      const box = shell.current?.getBoundingClientRect();
+      if (!box) return;
+      const room = { below: window.innerHeight - box.bottom - MENU_MARGIN, above: box.top - MENU_MARGIN };
+      const flip = room.below < MENU_MIN_HEIGHT && room.above > room.below;
+      setAnchor({
+        left: box.left,
+        width: box.width,
+        // MENU_MIN_HEIGHT decides which side to open on, not how short the
+        // menu may get: when neither side reaches it, holding the floor would
+        // push rows off the screen where nothing can scroll them back.
+        maxHeight: Math.max(0, Math.min(MENU_MAX_HEIGHT, flip ? room.above : room.below)),
+        ...(flip ? { bottom: window.innerHeight - box.top + MENU_GAP } : { top: box.bottom + MENU_GAP }),
+      });
+    };
+    measure();
+    // Capture, so the modal scrolling its own body moves the menu with the
+    // field rather than leaving it behind on screen.
+    window.addEventListener("scroll", measure, true);
+    window.addEventListener("resize", measure);
+    return () => {
+      window.removeEventListener("scroll", measure, true);
+      window.removeEventListener("resize", measure);
+    };
+  }, [open]);
+  useEffect(() => {
+    if (activeIndex < 0) return;
+    options.current?.querySelector<HTMLElement>(`[data-zone-index="${activeIndex}"]`)?.scrollIntoView?.({ block: "nearest" });
+  }, [activeIndex]);
+  const choose = (zone: string) => {
+    onChange(zone);
+    setOpen(false);
+    setActiveIndex(-1);
+  };
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (!enumerable) return;
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setOpen(true);
+      setActiveIndex((index) => Math.min(index + 1, visible.length - 1));
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setOpen(true);
+      setActiveIndex((index) => index <= 0 ? Math.max(visible.length - 1, 0) : index - 1);
+    } else if (event.key === "Enter" && open && activeIndex >= 0 && visible[activeIndex]) {
+      event.preventDefault();
+      choose(visible[activeIndex]);
+    } else if (event.key === "Escape" && open) {
+      event.preventDefault();
+      event.stopPropagation();
+      setOpen(false);
+      setActiveIndex(-1);
+    }
+  };
+  // Only worth saying once the operator has stopped typing a name that goes
+  // nowhere; it is a warning, not a gate, for the same reason the list is open.
+  const unrecognised = Boolean(value.trim()) && !isSupportedTimeZone(value.trim());
+  const offset = !unrecognised && value.trim() ? zoneOffsetLabel(value.trim()) : "";
+  const note = error || (unrecognised ? t("timeZonePicker.unknownZone") : "") || hint;
+  return (
+    <div className="field timezone-field">
+      <label htmlFor={inputID}>{label}</label>
+      <div className={`timezone-input-shell ${open ? "open" : ""}`} ref={shell}>
+        <input
+          id={inputID}
+          required={required}
+          disabled={disabled}
+          spellCheck={false}
+          autoComplete="off"
+          value={value}
+          role={enumerable ? "combobox" : undefined}
+          aria-autocomplete={enumerable ? "list" : undefined}
+          aria-expanded={enumerable ? open : undefined}
+          aria-controls={enumerable ? listID : undefined}
+          aria-activedescendant={open && activeIndex >= 0 ? `${listID}-option-${activeIndex}` : undefined}
+          aria-describedby={note ? descriptionID : undefined}
+          aria-invalid={error ? true : undefined}
+          placeholder="Asia/Shanghai"
+          onFocus={() => { if (enumerable) setOpen(true); }}
+          onClick={() => { if (enumerable) setOpen(true); }}
+          onChange={(event) => { onChange(event.target.value); setOpen(enumerable); setActiveIndex(-1); }}
+          onKeyDown={onKeyDown}
+        />
+        {offset && <span className="timezone-offset" aria-hidden="true">{offset}</span>}
+        {enumerable && <span className="timezone-input-icon" aria-hidden="true" />}
+        {enumerable && open && anchor && createPortal(
+          <div className="timezone-options" style={anchor} id={listID} ref={options} role="listbox" aria-label={t("timeZonePicker.listLabel")}>
+            <div className="timezone-options-meta" role="presentation">{t("timeZonePicker.count", { count: visible.length })}</div>
+            {visible.length ? visible.map((zone, index) => (
+              <button
+                className={index === activeIndex ? "active" : ""}
+                id={`${listID}-option-${index}`}
+                data-zone-index={index}
+                key={zone}
+                role="option"
+                aria-selected={value.trim() === zone}
+                // Out of the tab order on purpose: the list is driven by the
+                // arrow keys through aria-activedescendant, and 400-odd zones
+                // left tabbable would sit between the field and the next
+                // control — inside the price modal, between the field and Save.
+                tabIndex={-1}
+                aria-label={zoneOffsetLabel(zone) ? `${zone} ${zoneOffsetLabel(zone)}` : zone}
+                type="button"
+                onMouseDown={(event) => event.preventDefault()}
+                onMouseEnter={() => setActiveIndex(index)}
+                onClick={() => choose(zone)}
+              >
+                <span>{zone}</span>
+                <small>{zoneOffsetLabel(zone)}</small>
+              </button>
+            )) : <div className="timezone-options-empty" role="presentation">{t("timeZonePicker.noMatches")}</div>}
+          </div>,
+          document.body,
+        )}
+      </div>
+      {note && <small id={descriptionID} className={error || unrecognised ? "field-error" : ""}>{note}</small>}
+    </div>
   );
 }

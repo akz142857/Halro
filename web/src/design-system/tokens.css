@@ -116,6 +116,9 @@
   --z-sticky: 10;
   --z-dropdown: 100;
   --z-modal: 500;
+  /* Menus a field opens: portalled to the body, so they have to clear the
+     dialog whose field opened them. */
+  --z-popover: 600;
   --z-toast: 800;
   --z-skip-link: 1000;
 }

@@ -756,6 +756,34 @@ describe("deployment price panel", () => {
     await waitFor(() => expect(screen.queryByText(PRICE_BLOCKER)).not.toBeInTheDocument());
   });
 
+  // The provider zone decides which hours a window means, and it used to be
+  // typed from memory into a bare box where a typo only surfaced as a rejected
+  // submission. Picked from the list, the name reaching the server is one the
+  // engine already resolved.
+  it("carries the zone picked from the list into the created version", async () => {
+    vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [activePriceVersion()], next_cursor: "" });
+    const create = vi.spyOn(api, "createDeploymentPrice").mockResolvedValue(activePriceVersion());
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "查看详情" }));
+    fireEvent.click(await screen.findByRole("button", { name: "调整价格" }));
+    fireEvent.click(await screen.findByRole("checkbox", { name: /分时价位/ }));
+
+    const zone = screen.getByLabelText("供应商时区");
+    fireEvent.change(zone, { target: { value: "berlin" } });
+    fireEvent.click(screen.getByRole("option", { name: /Europe\/Berlin/ }));
+    expect(zone).toHaveValue("Europe/Berlin");
+
+    fireEvent.click(screen.getByRole("button", { name: "下一步：核对" }));
+    fireEvent.change(await screen.findByLabelText("当前密码"), { target: { value: "pw" } });
+    fireEvent.click(screen.getByRole("button", { name: "确认并创建价格版本" }));
+
+    await waitFor(() => expect(create).toHaveBeenCalled());
+    expect(create.mock.calls[0][1]).toMatchObject({
+      schedule: { timezone: "Europe/Berlin", windows: [{ start: "09:00", end: "12:00" }] },
+    });
+  });
+
   // The cache-read rate has no server-side default: an omitted term would be a
   // 400, and a term the form quietly filled with the input rate would over-charge
   // every cached prompt. It is sent explicitly, and an adjustment opens on the

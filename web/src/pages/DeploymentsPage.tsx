@@ -12,6 +12,7 @@ import {
   OverflowMenu,
   PageHeader,
   StatusDot,
+  TimeZoneField,
   useDirty,
   type ReauthValues,
 } from "../components";
@@ -810,13 +811,13 @@ function PriceScheduleFields({ schedule, onChange, problem, baseRates }: {
       {/* A missing zone is the zone field's problem, so it is reported on the
           field. Collected with the window problems at the foot of the card it
           sat a full schedule away from the box it names. */}
-      <Field
+      <TimeZoneField
         label={t("deployments.scheduleTimezone")}
         hint={t("deployments.scheduleTimezoneHint")}
         error={problem === "timezone" ? t("deployments.scheduleProblem.timezone") : undefined}
-      >
-        <input value={schedule.timezone} onChange={(event) => onChange({ ...schedule, timezone: event.target.value })} placeholder="Asia/Shanghai" />
-      </Field>
+        value={schedule.timezone}
+        onChange={(timezone) => onChange({ ...schedule, timezone })}
+      />
       {/* Both rules hold for every window, so they are stated once. Repeating
           them per card turned a two-window schedule into four lines of the same
           sentence and buried the rates between them. */}

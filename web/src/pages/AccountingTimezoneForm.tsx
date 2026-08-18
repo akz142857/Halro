@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNotify } from "../notifications";
 import { api } from "../api";
-import { ErrorState, Field, Modal } from "../components";
+import { ErrorState, Modal, TimeZoneField } from "../components";
 import { useInstantFormatter } from "../format";
 import { useIsReadOnly } from "../session";
 import type { AccountingSettings } from "../types";
@@ -96,14 +96,13 @@ export function AccountingTimezoneForm({ settings }: { settings: AccountingSetti
         </div>
       )}
       <form className="settings-form" aria-busy={busy} onSubmit={(event) => { event.preventDefault(); setConfirming(true); }}>
-        <Field label={t("settings.accountingZoneLabel")} hint={t("settings.accountingZoneHint")}>
-          <input
-            required
-            value={timezone}
-            spellCheck={false}
-            onChange={(event) => { schedule.reset(); setTimezone(event.target.value); }}
-          />
-        </Field>
+        <TimeZoneField
+          required
+          label={t("settings.accountingZoneLabel")}
+          hint={t("settings.accountingZoneHint")}
+          value={timezone}
+          onChange={(value) => { schedule.reset(); setTimezone(value); }}
+        />
         {schedule.isError && <ErrorState error={schedule.error} />}
         {cancel.isError && <ErrorState error={cancel.error} />}
         <div className="form-actions">

@@ -46,6 +46,13 @@ export const zhCN = {
     loadingMore: "正在加载更多",
   },
   notifications: { region: "系统通知", dismiss: "关闭通知" },
+  timeZonePicker: {
+    listLabel: "时区列表",
+    count_one: "{{count}} 个时区",
+    count_other: "{{count}} 个时区",
+    noMatches: "无匹配时区。仍可直接输入 IANA 名称，由服务端校验。",
+    unknownZone: "此浏览器不认识该时区名，请检查拼写。最终以服务端校验为准。",
+  },
   testControl: { idle: "尚未测试", running: "测试中…", successPlain: "通过", success: "通过 · {{latency}}ms", failure: "失败", stale: "需重测",
     reasons: { authentication: "上游拒绝了这份凭据（认证或授权失败）", rate_limit: "上游限流，稍后重试", timeout: "等待上游响应超时", provider_5xx: "上游返回服务端错误", bad_request: "上游拒绝了这次探测请求", bad_request_local: "Halro 在发往上游之前拒绝了这次探测", connect: "无法建立到上游的连接（DNS、TLS 或网络）", malformed_response: "上游响应无法解析", unknown: "连接测试失败，原因未分类" },
     refusals: { adapter_unavailable: "这个绑定没有建立起连接：凭据或端点无法构建出适配器。最常见的是 AWS 凭据里的 region 与绑定地址不一致，请检查该绑定使用的凭据。", binding_profile_incompatible: "这个绑定的能力实现与当前版本内置的 Profile 不兼容，请重新选择能力实现后保存。", capability_ceiling_exceeded: "这个绑定声明的能力超出该能力实现允许的上限，请取消多余能力后保存。", endpoint_rejected: "这个服务商的地址不再符合当前的出站策略，请检查地址或 allow_private_provider_endpoints 设置。", binding_adapter_missing: "这个绑定当前没有可用的适配器，请重新保存该服务商或查看服务端日志。", probe_requires_deployment: "这个绑定还没有启用的模型部署，连接测试没有可探测的模型。请先为它创建并启用一个模型部署，再测试。" } },
