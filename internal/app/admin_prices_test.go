@@ -599,3 +599,115 @@ func TestAdoptingAPriceProposalTakesEffectOnTheSameTermsAsCreatingOne(t *testing
 		t.Fatalf("adoption audit lost the proposal's source evidence: %#v", records[0])
 	}
 }
+
+// A price that bills by time of day has to survive the whole Admin path — the
+// operator's clock strings in, a stored rule table out — and the preview has to
+// answer for a named instant rather than for "now", because with a schedule
+// there is no single cost.
+func TestScheduledPriceRoundTripsThroughTheAdminAPIAndPricesEveryTier(t *testing.T) {
+	cfg := testConfig(t)
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := BootstrapAdmin(context.Background(), cfg, "admin", []byte("correct horse battery staple")); err != nil {
+		t.Fatal(err)
+	}
+	bootstrap, err := Bootstrap(context.Background(), cfg, BootstrapOptions{
+		ProviderName: "DeepSeek", ProviderType: domain.ProviderOpenAI,
+		ProviderBaseURL: "https://api.deepseek.com", ProviderModel: "deepseek-chat", PublicModel: "chat",
+		ProjectName: "Pricing", BillingMode: domain.BillingModeFree,
+	}, []byte("provider-secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := Open(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	cookie, csrf := loginAdminForTest(t, runtime)
+	effective := time.Now().UTC().Add(time.Hour).Truncate(time.Second)
+	// Off-peak is the version's own rate and peak is the window, matching how
+	// the provider publishes it: a discount away from the standard price.
+	body := map[string]any{
+		"billing_mode": "metered", "currency": "USD",
+		"current_password":      "correct horse battery staple",
+		"input_usd_per_million": "0.20", "cached_input_usd_per_million": "0.02", "output_usd_per_million": "0.80", "fixed_request_usd": "0",
+		"schedule": map[string]any{
+			"timezone": "Asia/Shanghai",
+			"windows": []map[string]any{
+				{"start": "09:00", "end": "12:00", "input_usd_per_million": "0.40", "cached_input_usd_per_million": "0.04", "output_usd_per_million": "1.60", "fixed_request_usd": "0"},
+				{"start": "14:00", "end": "18:00", "input_usd_per_million": "0.40", "cached_input_usd_per_million": "0.04", "output_usd_per_million": "1.60", "fixed_request_usd": "0"},
+			},
+		},
+		"effective_from": effective.Format(time.RFC3339),
+		"source":         map[string]any{"type": "manual", "reference": "official_public_price", "asserted_without_archive": true},
+	}
+	request := adminRequest(t, http.MethodPost, "/admin/api/v1/deployments/"+bootstrap.DeploymentID+"/prices", body)
+	request.AddCookie(cookie)
+	request.Header.Set("X-CSRF-Token", csrf)
+	request.Header.Set("Idempotency-Key", "create-scheduled-price-1")
+	created := httptest.NewRecorder()
+	runtime.adminRouter().ServeHTTP(created, request)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create scheduled price status=%d body=%s", created.Code, created.Body.String())
+	}
+	var stored domain.DeploymentPriceVersion
+	if err := json.Unmarshal(created.Body.Bytes(), &stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored.Schedule == nil || stored.Schedule.Timezone != "Asia/Shanghai" || len(stored.Schedule.Windows) != 2 {
+		t.Fatalf("stored schedule=%#v", stored.Schedule)
+	}
+	if stored.Schedule.Windows[0].StartMinute != 9*60 || stored.Schedule.Windows[1].EndMinute != 18*60 {
+		t.Fatalf("clock strings did not become minutes: %#v", stored.Schedule.Windows)
+	}
+	// The audit trail carries the rule, not just the fact that one exists.
+	auditResponse := authenticatedAdminGet(t, runtime, cookie, "/admin/api/v1/audit")
+	if !bytes.Contains(auditResponse.Body.Bytes(), []byte("Asia/Shanghai")) || !bytes.Contains(auditResponse.Body.Bytes(), []byte("540-720")) {
+		t.Fatalf("audit omitted the schedule: %s", auditResponse.Body.String())
+	}
+
+	previewAt := func(instant string) map[string]any {
+		previewBody := map[string]any{}
+		for key, value := range body {
+			previewBody[key] = value
+		}
+		previewBody["input_tokens"], previewBody["output_tokens"], previewBody["at"] = 1_000_000, 0, instant
+		response := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost,
+			"/admin/api/v1/deployments/"+bootstrap.DeploymentID+"/prices/preview", "", previewBody)
+		if response.Code != http.StatusOK {
+			t.Fatalf("preview status=%d body=%s", response.Code, response.Body.String())
+		}
+		var result struct {
+			Cost  domain.PriceCostBreakdown `json:"cost"`
+			Tiers []struct {
+				Source   string                    `json:"source"`
+				Start    string                    `json:"start"`
+				End      string                    `json:"end"`
+				Selected bool                      `json:"selected"`
+				Cost     domain.PriceCostBreakdown `json:"cost"`
+			} `json:"tiers"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		selected := ""
+		for _, tier := range result.Tiers {
+			if tier.Selected {
+				selected = tier.Source + tier.Start
+			}
+		}
+		return map[string]any{"cost": result.Cost.TotalCostMicrosUSD, "tiers": len(result.Tiers), "selected": selected}
+	}
+	// 02:00Z is 10:00 in Shanghai and inside the morning peak.
+	peak := previewAt("2026-08-18T02:00:00Z")
+	if peak["cost"] != int64(400_000) || peak["selected"] != "window09:00" || peak["tiers"] != 3 {
+		t.Fatalf("peak preview=%#v", peak)
+	}
+	// 05:00Z is 13:00, the gap between the two peaks, billed at the base rate.
+	gap := previewAt("2026-08-18T05:00:00Z")
+	if gap["cost"] != int64(200_000) || gap["selected"] != "base" {
+		t.Fatalf("gap preview=%#v", gap)
+	}
+}

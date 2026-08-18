@@ -75,20 +75,28 @@ func (s InstanceAccountingSettings) EffectiveTimezoneAt(instant time.Time) (stri
 // against whatever the host is set to, which would make the boundary a property
 // of the machine rather than of the instance.
 func ValidateAccountingTimezone(value string) error {
+	return validateIANAZoneName("accounting timezone", value)
+}
+
+// validateIANAZoneName is the shared rule. The callers stay separate on
+// purpose: the accounting timezone decides where a billing period starts, and a
+// price schedule's timezone is the provider's own authority for what "9am"
+// means. They are validated the same way and are never each other's default.
+func validateIANAZoneName(kind, value string) error {
 	if strings.TrimSpace(value) == "" {
-		return errors.New("accounting timezone is required")
+		return fmt.Errorf("%s is required", kind)
 	}
 	if value != strings.TrimSpace(value) {
-		return errors.New("accounting timezone must not be padded with whitespace")
+		return fmt.Errorf("%s must not be padded with whitespace", kind)
 	}
 	if value == "Local" {
-		return errors.New("accounting timezone must not be Local; it would depend on the host")
+		return fmt.Errorf("%s must not be Local; it would depend on the host", kind)
 	}
 	if isFixedOffsetZone(value) {
-		return errors.New("accounting timezone must be an IANA name, not a fixed offset")
+		return fmt.Errorf("%s must be an IANA name, not a fixed offset", kind)
 	}
 	if _, err := time.LoadLocation(value); err != nil {
-		return fmt.Errorf("accounting timezone %q is not a known IANA name", value)
+		return fmt.Errorf("%s %q is not a known IANA name", kind, value)
 	}
 	return nil
 }

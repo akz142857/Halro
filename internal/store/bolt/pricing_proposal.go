@@ -203,6 +203,13 @@ func (s *Store) AdoptDeploymentPriceProposal(ctx context.Context, deploymentID, 
 			FixedRequestMicrosUSD:  proposal.FixedRequestMicrosUSD, EffectiveFrom: effectiveFrom.UTC(), Source: proposal.Source,
 			CreatedBy: actor, CreatedAt: now.UTC(), Revision: 1,
 		}
+		// The adopted version owns its own copy of the rule table. Sharing the
+		// proposal's slice would leave two records pointing at one array, and
+		// the version is the thing every price snapshot is re-derived from.
+		if proposal.Schedule != nil {
+			adopted := proposal.Schedule.Clone()
+			price.Schedule = &adopted
+		}
 		latest, latestErr := selectLatestNonCancelledPriceTx(tx, proposal.DeploymentID)
 		if latestErr != nil && !errors.Is(latestErr, domain.ErrPriceUnavailable) {
 			return latestErr
@@ -231,7 +238,7 @@ func (s *Store) AdoptDeploymentPriceProposal(ctx context.Context, deploymentID, 
 		effective := price.EffectiveFrom.UTC()
 		intent.DeploymentID, intent.PriceVersion, intent.EffectiveFrom = price.DeploymentID, price.Version, &effective
 		intent.RecordSource(price.Source)
-		intent.ChangeSummary = fmt.Sprintf("before={proposal:%s} after={price:%s,billing:%s,input:%d,cached_input:%d,output:%d,fixed:%d}", proposal.ID, price.ID, price.BillingMode, price.InputMicrosPerMillion, price.CachedInputMicrosPerMillion, price.OutputMicrosPerMillion, price.FixedRequestMicrosUSD)
+		intent.ChangeSummary = fmt.Sprintf("before={proposal:%s} after={price:%s,billing:%s,input:%d,cached_input:%d,output:%d,fixed:%d}", proposal.ID, price.ID, price.BillingMode, price.InputMicrosPerMillion, price.CachedInputMicrosPerMillion, price.OutputMicrosPerMillion, price.FixedRequestMicrosUSD) + price.Schedule.AuditSummary()
 		return putPricingAuditIntentTx(tx, intent)
 	})
 	return proposal, price, err

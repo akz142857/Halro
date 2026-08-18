@@ -565,3 +565,75 @@ func newStoredPrice(id, deploymentID string, effective time.Time) domain.Deploym
 			Reference: "contract schedule", AssertedWithoutArchive: true},
 	}
 }
+
+// A price that bills by time of day still has to survive the check the backup
+// validator runs: re-derive the snapshot from the stored version and the pinned
+// instant, and require the digests to match. This exercises the stored record
+// and the real pin path rather than a hand-built snapshot, because the property
+// under test is precisely that the two agree.
+func TestScheduledPricePinReDerivesThroughTheBackupValidator(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	seedPricingDeployment(t, store, "dep_schedule", 0, 0, 0)
+	now := time.Date(2026, 8, 4, 2, 30, 0, 0, time.UTC) // 10:30 in Shanghai, peak
+	price := newStoredPrice("price_schedule", "dep_schedule", now.Add(-time.Hour))
+	price.CachedInputMicrosPerMillion = 40_000
+	price.Schedule = &domain.PriceSchedule{
+		Timezone: "Asia/Shanghai",
+		Windows: []domain.PriceWindow{{
+			StartMinute: 9 * 60, EndMinute: 12 * 60,
+			InputMicrosPerMillion: 800_000, CachedInputMicrosPerMillion: 80_000,
+			OutputMicrosPerMillion: 3_200_000,
+		}},
+	}
+	if _, err := store.CreateDeploymentPriceVersion(ctx, price); err != nil {
+		t.Fatal(err)
+	}
+	_, snapshot, pin, err := store.PrepareDeploymentPricePin(ctx, "dep_schedule", "att_schedule", now, 2*time.Second, 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.InputMicrosPerMillion == nil || *snapshot.InputMicrosPerMillion != 800_000 {
+		t.Fatalf("pin took the wrong rung: %#v", snapshot.InputMicrosPerMillion)
+	}
+	if snapshot.ScheduleTier == nil || snapshot.ScheduleTier.Source != domain.PriceTierWindow {
+		t.Fatalf("pin recorded no window provenance: %#v", snapshot.ScheduleTier)
+	}
+	digest, err := snapshot.Digest()
+	if err != nil || digest != pin.SnapshotSHA256 {
+		t.Fatalf("digest=%q pin=%q err=%v", digest, pin.SnapshotSHA256, err)
+	}
+	if err := store.db.View(func(tx *bbolt.Tx) error {
+		return validateSnapshotAgainstPrice(tx.Bucket(bucketDeploymentPriceVersions), snapshot)
+	}); err != nil {
+		t.Fatalf("backup validation rejected a scheduled price snapshot: %v", err)
+	}
+	// An instant outside the window takes the base rate — the rule is being
+	// read per pin, not resolved once and cached. It runs against its own
+	// deployment because moving one deployment's selection two hours forward in
+	// a fraction of a second is the wall-clock jump the pin path quarantines.
+	seedPricingDeployment(t, store, "dep_schedule_off", 0, 0, 0)
+	offPeakPrice := price
+	offPeakPrice.ID, offPeakPrice.DeploymentID = "price_schedule_off", "dep_schedule_off"
+	offPeakPrice.Schedule = &domain.PriceSchedule{Timezone: price.Schedule.Timezone, Windows: price.Schedule.Windows}
+	if _, err := store.CreateDeploymentPriceVersion(ctx, offPeakPrice); err != nil {
+		t.Fatal(err)
+	}
+	offPeak := time.Date(2026, 8, 4, 4, 30, 0, 0, time.UTC) // 12:30 Shanghai
+	_, later, _, err := store.PrepareDeploymentPricePin(ctx, "dep_schedule_off", "att_off_peak", offPeak, 2*time.Second, 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if later.InputMicrosPerMillion == nil || *later.InputMicrosPerMillion != 400_000 {
+		t.Fatalf("off-peak pin = %#v, want the base rate", later.InputMicrosPerMillion)
+	}
+	if err := store.db.View(func(tx *bbolt.Tx) error {
+		return validateSnapshotAgainstPrice(tx.Bucket(bucketDeploymentPriceVersions), later)
+	}); err != nil {
+		t.Fatalf("backup validation rejected the off-peak snapshot: %v", err)
+	}
+}

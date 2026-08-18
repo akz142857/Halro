@@ -579,6 +579,19 @@ h3 { margin-bottom: 0; font-size: var(--font-size-lg); }
 .price-advanced { margin: 0 0 18px; border: 1px solid var(--line); }
 .price-advanced summary { padding: 14px; color: var(--color-text-secondary); font-size: var(--font-size-sm); font-weight: var(--font-weight-semibold); cursor: pointer; }
 .price-advanced .field { margin: 0; padding: 0 14px 14px; }
+/* Time-of-day pricing. The toggle reads as one row so the schedule is visibly
+   an addition to the rates above it rather than a replacement for them. */
+.price-schedule { margin: 0 0 var(--space-5); }
+.price-schedule-toggle { display: flex; gap: var(--space-2); align-items: flex-start; padding: var(--space-3); border: 1px solid var(--line); cursor: pointer; }
+.price-schedule-toggle span { display: flex; flex-direction: column; gap: var(--space-1); }
+.price-schedule-toggle small { color: var(--color-text-secondary); font-size: var(--font-size-xs); line-height: var(--line-height-normal); }
+/* The rate columns are narrow and numerous; the table scrolls inside itself so
+   a six-column window never widens the modal. */
+.price-schedule-table { display: block; width: 100%; margin: var(--space-3) 0; overflow-x: auto; border-collapse: collapse; }
+.price-schedule-table th { padding: var(--space-1) var(--space-2); color: var(--color-text-secondary); font-size: var(--font-size-xs); font-weight: var(--font-weight-semibold); text-align: left; white-space: nowrap; }
+.price-schedule-table td { padding: var(--space-1) var(--space-2) var(--space-1) 0; }
+.price-schedule-table input { min-width: var(--space-16); }
+.price-schedule-summary { margin: var(--space-1) 0 0; padding-left: var(--space-4); color: var(--color-text-secondary); font-size: var(--font-size-xs); line-height: var(--line-height-normal); }
 .price-version-form .field > span { font-size: var(--font-size-sm); font-weight: var(--font-weight-semibold); }
 .price-version-form input, .price-version-form select, .price-version-form textarea { font-size: var(--font-size-md); }
 .price-version-form textarea { min-height: 92px; line-height: var(--line-height-normal); }

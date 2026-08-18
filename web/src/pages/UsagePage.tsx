@@ -6,7 +6,7 @@ import { compactNumber, money, useInstantFormatter } from "../format";
 import { Link } from "../navigation";
 import { useTranslation } from "react-i18next";
 import { useAccountingTimeZone, zonedInputToISO } from "../timezone";
-import type { UsageAttempt } from "../types";
+import type { PriceScheduleTier, UsageAttempt } from "../types";
 
 export function UsagePage() {
   const { t } = useTranslation();
@@ -147,6 +147,22 @@ export function UsagePage() {
   );
 }
 
+function clockOf(minute: number) {
+  return `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
+}
+
+// Names the rung a settled attempt was billed at. The zone-unavailable case is
+// called out rather than smoothed over: it means the attempt was billed at the
+// dearest rate the version could express because its zone could not be
+// resolved, and that is worth someone looking into.
+export function billedTierLabel(tier: PriceScheduleTier, t: (key: string, values?: Record<string, unknown>) => string) {
+  if (tier.source === "window" && tier.start_minute != null && tier.end_minute != null) {
+    return t("usage.billedWindow", { start: clockOf(tier.start_minute), end: clockOf(tier.end_minute), timezone: tier.timezone });
+  }
+  if (tier.source === "base") return t("usage.billedBase", { timezone: tier.timezone });
+  return t("usage.billedZoneUnavailable", { timezone: tier.timezone });
+}
+
 // The pricing evidence disclosure shows how a settled attempt's cost was
 // reached: the price snapshot it billed against and the input/output/fixed
 // components that summed to it.
@@ -160,6 +176,10 @@ function CostCell({ attempt }: { attempt: UsageAttempt }) {
         <summary>{t("usage.costEvidence")}</summary>
         <small>
           {attempt.price_snapshot?.price_version_id ? `${attempt.price_snapshot.price_version_id} · v${attempt.price_snapshot.price_version}` : attempt.price_evidence_status}<br />
+          {/* Two attempts with identical token counts can settle at different
+              amounts once a price bills by time of day. Without the rung, that
+              difference has no explanation anywhere the operator can reach. */}
+          {attempt.price_snapshot?.schedule_tier && <>{billedTierLabel(attempt.price_snapshot.schedule_tier, t)}<br /></>}
           {attempt.input_cost_micros_usd == null ? "" : t("usage.formulaComponents", { input: money(attempt.input_cost_micros_usd), output: money(attempt.output_cost_micros_usd ?? 0), fixed: money(attempt.fixed_cost_micros_usd ?? 0) })}
         </small>
       </details>

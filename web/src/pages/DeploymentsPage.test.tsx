@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError, api } from "../api";
 import i18n from "../i18n";
 import type { AdminRole, Deployment, DeploymentPriceVersion, DeploymentVariant, InvocationTargetCatalog, Provider, ProviderCapabilities, ResolvedInvocationTarget, Session } from "../types";
-import { DeploymentsPage, OVERDUE_SCHEDULED_PRICE_REFRESH_MS, PRICE_FETCH_BATCH_SIZE, priceFetchDelay, scheduledPriceRefreshInterval } from "./DeploymentsPage";
+import { DeploymentsPage, OVERDUE_SCHEDULED_PRICE_REFRESH_MS, PRICE_FETCH_BATCH_SIZE, clockToMinute, minuteToClock, priceFetchDelay, scheduleDraftProblem, scheduledPriceRefreshInterval } from "./DeploymentsPage";
 import { DEFAULT_TIME_ZONE, isoToZonedInput } from "../timezone";
 
 const emptyCapabilities: ProviderCapabilities = {
@@ -979,5 +979,37 @@ describe("capability grouping stays complete", () => {
 
     const duplicated = drawn.filter((name, index) => drawn.indexOf(name) !== index);
     expect(duplicated, "capabilities drawn in more than one group").toEqual([]);
+  });
+});
+
+describe("time-of-day price schedule editing", () => {
+  const window = (start: string, end: string) => ({ start, end, input: "0.4", cachedInput: "0.04", output: "1.6", fixed: "0" });
+
+  it("reads and writes clock times only as whole HH:MM, with 24:00 as the end of the day", () => {
+    expect(clockToMinute("09:00")).toBe(540);
+    expect(clockToMinute("24:00")).toBe(1440);
+    expect(minuteToClock(1080)).toBe("18:00");
+    // A wrapping span is two windows, so nothing past the end of the day parses.
+    expect(clockToMinute("24:01")).toBeNull();
+    expect(clockToMinute("9:00")).toBeNull();
+    expect(clockToMinute("09:60")).toBeNull();
+    expect(clockToMinute("")).toBeNull();
+  });
+
+  it("blocks the table the server would reject, and names which rule failed", () => {
+    const valid = { timezone: "Asia/Shanghai", windows: [window("09:00", "12:00"), window("14:00", "18:00")] };
+    expect(scheduleDraftProblem(valid)).toBeUndefined();
+    // The provider zone has no defensible default, so an empty one blocks.
+    expect(scheduleDraftProblem({ ...valid, timezone: "  " })).toBe("timezone");
+    expect(scheduleDraftProblem({ ...valid, windows: [] })).toBe("windows");
+    expect(scheduleDraftProblem({ ...valid, windows: [window("12:00", "09:00")] })).toBe("time");
+    expect(scheduleDraftProblem({ ...valid, windows: [window("09:00", "09:00")] })).toBe("time");
+    expect(scheduleDraftProblem({ ...valid, windows: [{ ...window("09:00", "12:00"), output: "-1" }] })).toBe("rate");
+    expect(scheduleDraftProblem({ ...valid, windows: [{ ...window("09:00", "12:00"), input: "0", cachedInput: "0", output: "0", fixed: "0" }] })).toBe("rate");
+    // Overlap is caught whichever order the rows happen to be in on screen.
+    expect(scheduleDraftProblem({ ...valid, windows: [window("09:00", "12:00"), window("11:00", "18:00")] })).toBe("overlap");
+    expect(scheduleDraftProblem({ ...valid, windows: [window("14:00", "18:00"), window("09:00", "15:00")] })).toBe("overlap");
+    // Touching windows are disjoint: the end is exclusive.
+    expect(scheduleDraftProblem({ ...valid, windows: [window("09:00", "12:00"), window("12:00", "18:00")] })).toBeUndefined();
   });
 });

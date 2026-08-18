@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math/big"
 	"strings"
 	"time"
 )
@@ -28,15 +27,24 @@ type PriceSnapshot struct {
 	// term would price the cached span at zero, so a snapshot that lacks it is
 	// refused rather than read as free — the same fail-closed rule the other
 	// billing terms already follow.
-	CachedInputMicrosPerMillion *int64               `json:"cached_input_micros_per_million,omitempty"`
-	OutputMicrosPerMillion      *int64               `json:"output_micros_per_million,omitempty"`
-	FixedRequestMicrosUSD       *int64               `json:"fixed_request_micros_usd,omitempty"`
-	EffectiveFrom               *time.Time           `json:"effective_from,omitempty"`
-	SourceType                  PriceSourceType      `json:"source_type,omitempty"`
-	SourceAssurance             PriceSourceAssurance `json:"source_assurance,omitempty"`
-	SourceContentSHA256         string               `json:"source_content_sha256,omitempty"`
-	SourceReference             string               `json:"source_reference,omitempty"`
-	SourceWithoutArchive        bool                 `json:"source_without_archive,omitempty"`
+	CachedInputMicrosPerMillion *int64 `json:"cached_input_micros_per_million,omitempty"`
+	OutputMicrosPerMillion      *int64 `json:"output_micros_per_million,omitempty"`
+	FixedRequestMicrosUSD       *int64 `json:"fixed_request_micros_usd,omitempty"`
+	// ScheduleTier names the rung of the price version's time-of-day schedule
+	// that produced the four terms above, and is nil exactly when the version
+	// carries no schedule — so a fixed price's snapshot is byte-identical to
+	// what it was before schedules existed, digest included.
+	//
+	// The terms themselves are already the selected rung's, which is why
+	// nothing that reads a snapshot has to know about schedules to price
+	// against one.
+	ScheduleTier         *PriceScheduleTier   `json:"schedule_tier,omitempty"`
+	EffectiveFrom        *time.Time           `json:"effective_from,omitempty"`
+	SourceType           PriceSourceType      `json:"source_type,omitempty"`
+	SourceAssurance      PriceSourceAssurance `json:"source_assurance,omitempty"`
+	SourceContentSHA256  string               `json:"source_content_sha256,omitempty"`
+	SourceReference      string               `json:"source_reference,omitempty"`
+	SourceWithoutArchive bool                 `json:"source_without_archive,omitempty"`
 }
 
 // Clone returns a deep copy suitable for crossing an accounting/WAL boundary.
@@ -65,6 +73,10 @@ func (s PriceSnapshot) Clone() PriceSnapshot {
 	if s.EffectiveFrom != nil {
 		value := *s.EffectiveFrom
 		clone.EffectiveFrom = &value
+	}
+	if s.ScheduleTier != nil {
+		value := s.ScheduleTier.Clone()
+		clone.ScheduleTier = &value
 	}
 	return clone
 }
@@ -103,14 +115,21 @@ func NewVersionedPriceSnapshot(price DeploymentPriceVersion, selectedAt time.Tim
 		return PriceSnapshot{}, err
 	}
 	selectedAt = selectedAt.UTC()
-	version, input, output, fixed, effective := price.Version, price.InputMicrosPerMillion, price.OutputMicrosPerMillion, price.FixedRequestMicrosUSD, price.EffectiveFrom
-	cached := price.CachedInputMicrosPerMillion
+	// The rung is chosen here and nowhere else. Settlement re-reads the snapshot
+	// rather than the clock, because the Ledger compares a settlement's snapshot
+	// byte for byte with the reservation's: an attempt that starts before a
+	// window boundary and finishes after it would otherwise settle against a
+	// different rung and be rejected outright.
+	tier := price.TierAt(selectedAt)
+	version, effective := price.Version, price.EffectiveFrom
+	input, cached := tier.InputMicrosPerMillion, tier.CachedInputMicrosPerMillion
+	output, fixed := tier.OutputMicrosPerMillion, tier.FixedRequestMicrosUSD
 	snapshot := PriceSnapshot{
 		PricingSelectedAt: selectedAt, PriceEvidenceStatus: PriceEvidenceVersioned, CostValueStatus: CostValueKnown,
 		PriceVersionID: price.ID, PriceVersion: &version, BillingMode: price.BillingMode,
 		Currency: price.Currency, FormulaVersion: price.FormulaVersion,
 		InputMicrosPerMillion: &input, CachedInputMicrosPerMillion: &cached,
-		OutputMicrosPerMillion: &output, FixedRequestMicrosUSD: &fixed,
+		OutputMicrosPerMillion: &output, FixedRequestMicrosUSD: &fixed, ScheduleTier: tier.Provenance,
 		EffectiveFrom: &effective, SourceType: price.Source.Type, SourceAssurance: price.Source.Assurance,
 		SourceContentSHA256: price.Source.ContentSHA256, SourceReference: price.Source.Reference,
 		SourceWithoutArchive: price.Source.AssertedWithoutArchive,
@@ -135,6 +154,11 @@ func (s PriceSnapshot) Validate() error {
 		}
 		if s.EffectiveFrom.IsZero() || !isUTC(*s.EffectiveFrom) || s.EffectiveFrom.After(s.PricingSelectedAt) {
 			return errors.New("price snapshot effective_from is invalid")
+		}
+		if s.ScheduleTier != nil {
+			if err := s.ScheduleTier.Validate(); err != nil {
+				return err
+			}
 		}
 		price := DeploymentPriceVersion{
 			ID: s.PriceVersionID, DeploymentID: "snapshot", Version: *s.PriceVersion, Revision: 1,
@@ -181,7 +205,7 @@ func (s PriceSnapshot) Validate() error {
 	case PriceEvidenceUnknown:
 		if s.CostValueStatus != CostValueUnknown || s.PriceVersion != nil || s.PriceVersionID != "" ||
 			s.InputMicrosPerMillion != nil || s.CachedInputMicrosPerMillion != nil ||
-			s.OutputMicrosPerMillion != nil || s.FixedRequestMicrosUSD != nil ||
+			s.OutputMicrosPerMillion != nil || s.FixedRequestMicrosUSD != nil || s.ScheduleTier != nil ||
 			s.SourceType != "" || s.SourceAssurance != "" || s.SourceContentSHA256 != "" || s.SourceReference != "" || s.SourceWithoutArchive {
 			return errors.New("unknown price snapshot must not contain known price terms")
 		}
@@ -202,29 +226,18 @@ func (s PriceSnapshot) Calculate(inputTokens, cachedInputTokens, outputTokens in
 	if s.CostValueStatus != CostValueKnown {
 		return PriceCostBreakdown{}, ErrPriceUnavailable
 	}
-	if inputTokens < 0 || cachedInputTokens < 0 || outputTokens < 0 {
-		return PriceCostBreakdown{}, errors.New("token counts cannot be negative")
-	}
-	if cachedInputTokens > inputTokens {
-		return PriceCostBreakdown{}, errors.New("cached input tokens cannot exceed input tokens")
-	}
 	if s.BillingMode == BillingModeFree {
+		if inputTokens < 0 || cachedInputTokens < 0 || outputTokens < 0 || cachedInputTokens > inputTokens {
+			return PriceCostBreakdown{}, errors.New("token counts are invalid")
+		}
 		return PriceCostBreakdown{}, nil
 	}
-	input, err := ceilInputComponents(inputTokens, cachedInputTokens, *s.InputMicrosPerMillion, *s.CachedInputMicrosPerMillion)
-	if err != nil {
-		return PriceCostBreakdown{}, err
-	}
-	output, err := ceilTokenComponent(outputTokens, *s.OutputMicrosPerMillion)
-	if err != nil {
-		return PriceCostBreakdown{}, err
-	}
-	total := new(big.Int).SetInt64(input)
-	total.Add(total, big.NewInt(output))
-	total.Add(total, big.NewInt(*s.FixedRequestMicrosUSD))
-	if !total.IsInt64() || total.Sign() < 0 {
-		return PriceCostBreakdown{}, errors.New("price calculation overflows int64 micro-USD")
-	}
-	return PriceCostBreakdown{InputCostMicrosUSD: input, OutputCostMicrosUSD: output,
-		FixedCostMicrosUSD: *s.FixedRequestMicrosUSD, TotalCostMicrosUSD: total.Int64()}, nil
+	// The snapshot's four terms are already the rung that was pinned at
+	// reservation, whether or not the version behind it bills by time of day.
+	// Pricing reads them; it never re-reads a clock.
+	return PriceTier{
+		InputMicrosPerMillion: *s.InputMicrosPerMillion, CachedInputMicrosPerMillion: *s.CachedInputMicrosPerMillion,
+		OutputMicrosPerMillion: *s.OutputMicrosPerMillion, FixedRequestMicrosUSD: *s.FixedRequestMicrosUSD,
+		Provenance: s.ScheduleTier,
+	}.Calculate(inputTokens, cachedInputTokens, outputTokens)
 }

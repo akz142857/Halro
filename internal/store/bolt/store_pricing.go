@@ -368,7 +368,7 @@ func (s *Store) createDeploymentPriceVersion(ctx context.Context, price domain.D
 			effective := price.EffectiveFrom.UTC()
 			intent.DeploymentID, intent.PriceVersion, intent.EffectiveFrom = price.DeploymentID, price.Version, &effective
 			intent.RecordSource(price.Source)
-			intent.ChangeSummary = fmt.Sprintf("before=none after={billing:%s,input:%d,cached_input:%d,output:%d,fixed:%d}", price.BillingMode, price.InputMicrosPerMillion, price.CachedInputMicrosPerMillion, price.OutputMicrosPerMillion, price.FixedRequestMicrosUSD)
+			intent.ChangeSummary = fmt.Sprintf("before=none after={billing:%s,input:%d,cached_input:%d,output:%d,fixed:%d}", price.BillingMode, price.InputMicrosPerMillion, price.CachedInputMicrosPerMillion, price.OutputMicrosPerMillion, price.FixedRequestMicrosUSD) + price.Schedule.AuditSummary()
 			if err := putPricingAuditIntentTx(tx, *intent); err != nil {
 				return err
 			}

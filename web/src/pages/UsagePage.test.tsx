@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
-import { UsagePage } from "./UsagePage";
+import { UsagePage, billedTierLabel } from "./UsagePage";
 
 describe("UsagePage request correlation", () => {
   beforeEach(() => {
@@ -72,5 +72,24 @@ describe("UsagePage model filter", () => {
       // "" is the all-models option; the alias only history knows about is kept.
       expect(options).toEqual(["", "chat", "embed", "retired-alias"]);
     });
+  });
+});
+
+describe("billed price tier", () => {
+  // The label is what makes two identically sized attempts with different costs
+  // explainable, so it must name the rung and never silently render as blank.
+  const label = (key: string, values?: Record<string, unknown>) => `${key}:${JSON.stringify(values ?? {})}`;
+
+  it("names the window, the out-of-window rate, and the fail-closed fallback", () => {
+    expect(billedTierLabel({ timezone: "Asia/Shanghai", source: "window", start_minute: 540, end_minute: 720, local_minute: 600 }, label))
+      .toBe('usage.billedWindow:{"start":"09:00","end":"12:00","timezone":"Asia/Shanghai"}');
+    expect(billedTierLabel({ timezone: "Asia/Shanghai", source: "base", local_minute: 780 }, label))
+      .toBe('usage.billedBase:{"timezone":"Asia/Shanghai"}');
+    expect(billedTierLabel({ timezone: "Asia/Shanghai", source: "zone_unavailable" }, label))
+      .toBe('usage.billedZoneUnavailable:{"timezone":"Asia/Shanghai"}');
+    // A window rung missing its bounds is a damaged record, not a reason to
+    // claim an hour it cannot evidence.
+    expect(billedTierLabel({ timezone: "Asia/Shanghai", source: "window" }, label))
+      .toBe('usage.billedZoneUnavailable:{"timezone":"Asia/Shanghai"}');
   });
 });

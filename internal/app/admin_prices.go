@@ -39,18 +39,90 @@ type priceSourceInput struct {
 	SignatureSHA256        string                 `json:"signature_sha256,omitempty"`
 }
 
+// priceWindowInput is one rung of a time-of-day schedule as the console sends
+// it: local clock strings the operator typed, and USD-per-million decimals in
+// the same shape as the base rates beside them.
+type priceWindowInput struct {
+	Start                    string `json:"start"`
+	End                      string `json:"end"`
+	InputUSDPerMillion       string `json:"input_usd_per_million"`
+	CachedInputUSDPerMillion string `json:"cached_input_usd_per_million"`
+	OutputUSDPerMillion      string `json:"output_usd_per_million"`
+	FixedRequestUSD          string `json:"fixed_request_usd"`
+}
+
+type priceScheduleInput struct {
+	Timezone string             `json:"timezone"`
+	Windows  []priceWindowInput `json:"windows"`
+}
+
 type createPriceInput struct {
-	BillingMode              domain.BillingMode `json:"billing_mode"`
-	Currency                 string             `json:"currency"`
-	InputUSDPerMillion       string             `json:"input_usd_per_million"`
-	CachedInputUSDPerMillion string             `json:"cached_input_usd_per_million"`
-	OutputUSDPerMillion      string             `json:"output_usd_per_million"`
-	FixedRequestUSD          string             `json:"fixed_request_usd"`
-	EffectiveFrom            time.Time          `json:"effective_from"`
-	EffectiveImmediately     bool               `json:"effective_immediately,omitempty"`
-	Source                   priceSourceInput   `json:"source"`
-	CurrentPassword          string             `json:"current_password,omitempty"`
-	TOTPCode                 string             `json:"totp_code,omitempty"`
+	BillingMode              domain.BillingMode  `json:"billing_mode"`
+	Currency                 string              `json:"currency"`
+	InputUSDPerMillion       string              `json:"input_usd_per_million"`
+	CachedInputUSDPerMillion string              `json:"cached_input_usd_per_million"`
+	OutputUSDPerMillion      string              `json:"output_usd_per_million"`
+	FixedRequestUSD          string              `json:"fixed_request_usd"`
+	Schedule                 *priceScheduleInput `json:"schedule,omitempty"`
+	EffectiveFrom            time.Time           `json:"effective_from"`
+	EffectiveImmediately     bool                `json:"effective_immediately,omitempty"`
+	Source                   priceSourceInput    `json:"source"`
+	CurrentPassword          string              `json:"current_password,omitempty"`
+	TOTPCode                 string              `json:"totp_code,omitempty"`
+}
+
+// priceScheduleFromInput parses the operator's window table. The clock strings
+// are parsed here rather than in the domain so the stored rule stays minutes
+// from midnight — one representation, comparable and hashable, with no room for
+// "09:00" and "9:00" to be the same window with two digests.
+func priceScheduleFromInput(input *priceScheduleInput) (*domain.PriceSchedule, error) {
+	if input == nil {
+		return nil, nil
+	}
+	schedule := domain.PriceSchedule{Timezone: strings.TrimSpace(input.Timezone)}
+	for index, window := range input.Windows {
+		start, err := parseClockMinute(window.Start)
+		if err != nil {
+			return nil, fmt.Errorf("schedule window %d start: %w", index, err)
+		}
+		end, err := parseClockMinute(window.End)
+		if err != nil {
+			return nil, fmt.Errorf("schedule window %d end: %w", index, err)
+		}
+		rates := [4]int64{}
+		for position, value := range []string{window.InputUSDPerMillion, window.CachedInputUSDPerMillion, window.OutputUSDPerMillion, window.FixedRequestUSD} {
+			micros, err := domain.ParseUSDMicros(value)
+			if err != nil {
+				return nil, fmt.Errorf("schedule window %d: %w", index, err)
+			}
+			rates[position] = micros
+		}
+		schedule.Windows = append(schedule.Windows, domain.PriceWindow{
+			StartMinute: start, EndMinute: end,
+			InputMicrosPerMillion: rates[0], CachedInputMicrosPerMillion: rates[1],
+			OutputMicrosPerMillion: rates[2], FixedRequestMicrosUSD: rates[3],
+		})
+	}
+	return &schedule, nil
+}
+
+// parseClockMinute accepts "HH:MM" and the single end-of-day spelling "24:00",
+// which is how a window that runs to midnight is written without pretending the
+// next day's 00:00 belongs to it.
+func parseClockMinute(value string) (int, error) {
+	value = strings.TrimSpace(value)
+	hour, minute, found := strings.Cut(value, ":")
+	if !found || len(hour) != 2 || len(minute) != 2 {
+		return 0, errors.New("time of day must be written HH:MM")
+	}
+	parsed, err := time.Parse("15:04", value)
+	if err != nil {
+		if value == "24:00" {
+			return 24 * 60, nil
+		}
+		return 0, errors.New("time of day must be a valid HH:MM clock time")
+	}
+	return parsed.Hour()*60 + parsed.Minute(), nil
 }
 
 type priceVersionView struct {
@@ -208,12 +280,28 @@ func (r *Runtime) cancelAdminDeploymentPrice(writer http.ResponseWriter, request
 	writeJSON(writer, http.StatusOK, price)
 }
 
+// priceTierPreview is one rung of a previewed price priced against the same
+// token counts, so the operator compares the rungs rather than a single number
+// whose hour they have to infer.
+type priceTierPreview struct {
+	Source   domain.PriceTierSource    `json:"source"`
+	Timezone string                    `json:"timezone,omitempty"`
+	Start    string                    `json:"start,omitempty"`
+	End      string                    `json:"end,omitempty"`
+	Selected bool                      `json:"selected"`
+	Cost     domain.PriceCostBreakdown `json:"cost"`
+}
+
 func (r *Runtime) previewAdminDeploymentPrice(writer http.ResponseWriter, request *http.Request) {
 	var input struct {
 		createPriceInput
 		InputTokens       int64 `json:"input_tokens"`
 		CachedInputTokens int64 `json:"cached_input_tokens"`
 		OutputTokens      int64 `json:"output_tokens"`
+		// At is the instant to price at. A price that bills by time of day has
+		// no single cost, so the answer is meaningless without one; an omitted
+		// At is read as "now" rather than as "any time".
+		At time.Time `json:"at,omitempty"`
 	}
 	if err := decodeAdminJSON(request, &input); err != nil {
 		writePriceError(writer, errors.New("invalid price request"))
@@ -227,12 +315,79 @@ func (r *Runtime) previewAdminDeploymentPrice(writer http.ResponseWriter, reques
 		return
 	}
 	price.Version, price.Revision = 1, 1
-	cost, err := domain.CalculateUSDTokensV1(input.InputTokens, input.CachedInputTokens, input.OutputTokens, price)
+	at := now
+	if !input.At.IsZero() {
+		at = input.At.UTC()
+	}
+	cost, err := domain.CalculateUSDTokensV1(input.InputTokens, input.CachedInputTokens, input.OutputTokens, price, at)
 	if err != nil {
 		writePriceError(writer, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{"canonical_price": price, "cost": cost})
+	tiers, err := previewPriceTiers(price, at, input.InputTokens, input.CachedInputTokens, input.OutputTokens)
+	if err != nil {
+		writePriceError(writer, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"canonical_price": price, "at": at, "cost": cost, "tiers": tiers})
+}
+
+// previewPriceTiers prices every rung the version can select, marking the one
+// that answers `at`. A version with no schedule has exactly one rung, which is
+// what the console showed before schedules existed.
+func previewPriceTiers(price domain.DeploymentPriceVersion, at time.Time, inputTokens, cachedInputTokens, outputTokens int64) ([]priceTierPreview, error) {
+	selected := price.TierAt(at)
+	selectedStart := -1
+	if selected.Provenance != nil && selected.Provenance.StartMinute != nil {
+		selectedStart = *selected.Provenance.StartMinute
+	}
+	timezone := ""
+	if price.Schedule != nil {
+		timezone = price.Schedule.Timezone
+	}
+	previews := make([]priceTierPreview, 0, 1)
+	base := domain.PriceTier{
+		InputMicrosPerMillion: price.InputMicrosPerMillion, CachedInputMicrosPerMillion: price.CachedInputMicrosPerMillion,
+		OutputMicrosPerMillion: price.OutputMicrosPerMillion, FixedRequestMicrosUSD: price.FixedRequestMicrosUSD,
+	}
+	baseCost, err := priceTierCost(price.BillingMode, base, inputTokens, cachedInputTokens, outputTokens)
+	if err != nil {
+		return nil, err
+	}
+	previews = append(previews, priceTierPreview{
+		Source: domain.PriceTierBase, Timezone: timezone, Cost: baseCost,
+		Selected: selectedStart < 0 && (selected.Provenance == nil || selected.Provenance.Source == domain.PriceTierBase),
+	})
+	if price.Schedule == nil {
+		return previews, nil
+	}
+	for _, window := range price.Schedule.Windows {
+		tier := domain.PriceTier{
+			InputMicrosPerMillion: window.InputMicrosPerMillion, CachedInputMicrosPerMillion: window.CachedInputMicrosPerMillion,
+			OutputMicrosPerMillion: window.OutputMicrosPerMillion, FixedRequestMicrosUSD: window.FixedRequestMicrosUSD,
+		}
+		windowCost, err := priceTierCost(price.BillingMode, tier, inputTokens, cachedInputTokens, outputTokens)
+		if err != nil {
+			return nil, err
+		}
+		previews = append(previews, priceTierPreview{
+			Source: domain.PriceTierWindow, Timezone: price.Schedule.Timezone,
+			Start: formatClockMinute(window.StartMinute), End: formatClockMinute(window.EndMinute),
+			Selected: window.StartMinute == selectedStart, Cost: windowCost,
+		})
+	}
+	return previews, nil
+}
+
+func priceTierCost(mode domain.BillingMode, tier domain.PriceTier, inputTokens, cachedInputTokens, outputTokens int64) (domain.PriceCostBreakdown, error) {
+	if mode == domain.BillingModeFree {
+		return domain.PriceCostBreakdown{}, nil
+	}
+	return tier.Calculate(inputTokens, cachedInputTokens, outputTokens)
+}
+
+func formatClockMinute(minute int) string {
+	return fmt.Sprintf("%02d:%02d", minute/60, minute%60)
 }
 
 func (r *Runtime) confirmRestoredDeploymentPricing(writer http.ResponseWriter, request *http.Request) {
@@ -284,6 +439,7 @@ type createPriceProposalInput struct {
 	CachedInputUSDPerMillion string                    `json:"cached_input_usd_per_million"`
 	OutputUSDPerMillion      string                    `json:"output_usd_per_million"`
 	FixedRequestUSD          string                    `json:"fixed_request_usd"`
+	Schedule                 *priceScheduleInput       `json:"schedule,omitempty"`
 	Tier                     string                    `json:"tier,omitempty"`
 	Warnings                 []string                  `json:"warnings,omitempty"`
 	Match                    domain.PriceProposalMatch `json:"match"`
@@ -351,6 +507,11 @@ func (r *Runtime) createAdminDeploymentPriceProposal(writer http.ResponseWriter,
 		writePriceError(writer, err)
 		return
 	}
+	schedule, err := priceScheduleFromInput(input.Schedule)
+	if err != nil {
+		writePriceError(writer, err)
+		return
+	}
 	admin := request.Context().Value(adminContextKey{}).(adminRequestContext)
 	keyDigest := pricingIdempotencyDigest(admin.session.Username, deployment.ID, "proposal:"+key)
 	proposalID := deterministicMutationID("proposal", keyDigest)
@@ -359,7 +520,7 @@ func (r *Runtime) createAdminDeploymentPriceProposal(writer http.ResponseWriter,
 		Region: deployment.Region, Tier: strings.TrimSpace(input.Tier), BillingMode: input.BillingMode,
 		Currency: strings.ToUpper(strings.TrimSpace(input.Currency)), FormulaVersion: domain.PriceFormulaUSDTokensV1,
 		InputMicrosPerMillion: inputMicros, CachedInputMicrosPerMillion: cachedInputMicros,
-		OutputMicrosPerMillion: outputMicros, FixedRequestMicrosUSD: fixedMicros,
+		OutputMicrosPerMillion: outputMicros, FixedRequestMicrosUSD: fixedMicros, Schedule: schedule,
 		Source: source, FetchedAt: now, Warnings: input.Warnings, Match: input.Match, ExpiresAt: input.ExpiresAt.UTC(),
 		Status: domain.PriceProposalPending, CreatedBy: admin.session.Username, CreatedAt: now, Revision: 1,
 	}
@@ -378,7 +539,7 @@ func (r *Runtime) createAdminDeploymentPriceProposal(writer http.ResponseWriter,
 		return
 	}
 	intent.DeploymentID = proposal.DeploymentID
-	intent.ChangeSummary = fmt.Sprintf("proposal=%s match=%s tier=%s billing=%s input=%d cached_input=%d output=%d fixed=%d", proposal.ID, proposal.Match, proposal.Tier, proposal.BillingMode, proposal.InputMicrosPerMillion, proposal.CachedInputMicrosPerMillion, proposal.OutputMicrosPerMillion, proposal.FixedRequestMicrosUSD)
+	intent.ChangeSummary = fmt.Sprintf("proposal=%s match=%s tier=%s billing=%s input=%d cached_input=%d output=%d fixed=%d", proposal.ID, proposal.Match, proposal.Tier, proposal.BillingMode, proposal.InputMicrosPerMillion, proposal.CachedInputMicrosPerMillion, proposal.OutputMicrosPerMillion, proposal.FixedRequestMicrosUSD) + proposal.Schedule.AuditSummary()
 	proposal, effectiveIntent, replayed, err := r.store.CreateDeploymentPriceProposal(request.Context(), proposal, intent, keyDigest)
 	if err != nil {
 		writePriceError(writer, err)
@@ -591,11 +752,15 @@ func priceVersionFromInput(priceID, deploymentID, actor string, now time.Time, i
 	if err != nil {
 		return domain.DeploymentPriceVersion{}, err
 	}
+	schedule, err := priceScheduleFromInput(input.Schedule)
+	if err != nil {
+		return domain.DeploymentPriceVersion{}, err
+	}
 	price := domain.DeploymentPriceVersion{
 		ID: priceID, DeploymentID: deploymentID, BillingMode: input.BillingMode,
 		Currency: strings.ToUpper(strings.TrimSpace(input.Currency)), FormulaVersion: domain.PriceFormulaUSDTokensV1,
 		InputMicrosPerMillion: inputMicros, CachedInputMicrosPerMillion: cachedInputMicros,
-		OutputMicrosPerMillion: outputMicros, FixedRequestMicrosUSD: fixedMicros,
+		OutputMicrosPerMillion: outputMicros, FixedRequestMicrosUSD: fixedMicros, Schedule: schedule,
 		EffectiveFrom: effectiveFrom, Source: source, CreatedBy: actor, CreatedAt: now,
 	}
 	validation := price

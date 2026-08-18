@@ -17,7 +17,7 @@ import {
 } from "../components";
 import { money, useInstantFormatter } from "../format";
 import { isoToZonedInput, useAccountingTimeZone, zonedInputToISO } from "../timezone";
-import type { CapabilityPreflight, CapabilityReview, Deployment, DeploymentPriceVersion, DeploymentTargetKind, DeploymentVariant, ModelCapabilityDetection, Provider, ProviderBinding, ProviderCapabilities, ProviderProfilesCatalog, ResolvedInvocationTarget } from "../types";
+import type { CapabilityPreflight, CapabilityReview, Deployment, DeploymentPriceVersion, DeploymentTargetKind, DeploymentVariant, ModelCapabilityDetection, PriceSchedule, Provider, ProviderBinding, ProviderCapabilities, ProviderProfilesCatalog, ResolvedInvocationTarget } from "../types";
 import { updateCapabilitySelection, useProviderProfiles } from "../hooks/useProviderProfiles";
 import { useTranslation } from "react-i18next";
 import { useNotify } from "../notifications";
@@ -325,6 +325,14 @@ function DeploymentRow({
           {(deployment.capabilities.chat || deployment.capabilities.embeddings) && <DeploymentFact label={t("deployments.cachedInputPrice")} value={activePrice ? money(activePrice.cached_input_micros_per_million) : t("deployments.notConfigured")} meta={t("deployments.perMillionTokens")} unset={!activePrice} />}
           {(deployment.capabilities.chat || deployment.capabilities.embeddings) && <DeploymentFact label={t("deployments.outputPrice")} value={activePrice ? money(activePrice.output_micros_per_million) : t("deployments.notConfigured")} meta={t("deployments.perMillionTokens")} unset={!activePrice} />}
           {activePrice && <DeploymentFact label={t("deployments.fixedPrice")} value={money(activePrice.fixed_request_micros_usd)} meta={t("deployments.perRequest")} />}
+          {/* With a schedule the three rates above are only what applies
+              outside the windows, so leaving them to stand alone would read as
+              the whole price. */}
+          {activePrice?.schedule && <DeploymentFact
+            label={t("deployments.priceSchedule")}
+            value={t("deployments.scheduleWindowCount", { count: activePrice.schedule.windows.length })}
+            meta={`${activePrice.schedule.timezone} · ${activePrice.schedule.windows.map((window) => `${minuteToClock(window.start_minute)}–${minuteToClock(window.end_minute)}`).join(" ")}`}
+          />}
           <DeploymentFact label={t("deployments.concurrency")} value={deployment.max_concurrency || t("deployments.unlimited")} meta={t("deployments.deploymentScope")} />
           {deployment.region && <DeploymentFact label={t("deployments.region")} value={deployment.region} meta={t("deployments.deploymentScope")} />}
           <DeploymentFact label={t("deployments.context")} value={deployment.capabilities.max_context_tokens || t("deployments.upstreamApplies")} meta={deployment.capabilities.max_context_tokens ? t("deployments.tokens") : t("deployments.undeclared")} />
@@ -353,7 +361,7 @@ function DeploymentRow({
             </header>
             {!!scheduledPrices.length && <div className="deployment-pricing-list">
               {scheduledPrices.map((price) => <div key={price.id}>
-                <span><code>v{price.version}</code><small>{dateTime(price.effective_from)} · {price.billing_mode}</small></span>
+                <span><code>v{price.version}</code><small>{dateTime(price.effective_from)} · {price.billing_mode}{price.schedule ? ` · ${t("deployments.scheduleWindowCount", { count: price.schedule.windows.length })}` : ""}</small></span>
                 <button className="button ghost" disabled={readOnly || cancelPrice.isPending} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={() => cancelPrice.mutate(price)}>{t("common.cancel")}</button>
               </div>)}
             </div>}
@@ -490,6 +498,11 @@ function PriceVersionForm({ deployment, current, blocking, onClose }: { deployme
   const cachedInputValue = cachedInput ?? input;
   const [output, setOutput] = useState(current ? priceInputValue(current.output_micros_per_million) : "0");
   const [fixed, setFixed] = useState(current ? priceInputValue(current.fixed_request_micros_usd) : "0");
+  // A schedule is off unless the provider actually charges by time of day. The
+  // four rates above are then what applies outside every window, which is why
+  // the windows are edited underneath them rather than replacing them.
+  const [schedule, setSchedule] = useState<ScheduleDraft | null>(current?.schedule ? scheduleToDraft(current.schedule) : null);
+  const scheduleProblem = schedule ? scheduleDraftProblem(schedule) : undefined;
   // A scheduled version already occupies the end of the timeline, so the only
   // reachable choice is a later scheduled time — the form opens on it rather
   // than on an "immediately" the server is bound to refuse.
@@ -518,7 +531,7 @@ function PriceVersionForm({ deployment, current, blocking, onClose }: { deployme
     : Number.isFinite(scheduledTimestamp) && scheduledTimestamp > Date.now() && (!Number.isFinite(blockingFrom) || scheduledTimestamp > blockingFrom);
   const sourceNeedsNote = sourceKind === "official_public_price" || sourceKind === "contract_price";
   const validSource = !sourceNeedsNote || sourceNote.trim() !== "";
-  const validDetails = validPrice && validEffective && validSource;
+  const validDetails = validPrice && validEffective && validSource && !scheduleProblem;
   // The worked example prices a prompt with no cache hit, which is what a first
   // request costs; the cache-read rate only ever lowers it from here.
   const exampleCost = mode === "free" ? 0 : Number(input) / 1000 + Number(output) / 2000 + Number(fixed);
@@ -544,6 +557,7 @@ function PriceVersionForm({ deployment, current, blocking, onClose }: { deployme
       cached_input_usd_per_million: mode === "free" ? "0" : cachedInputValue,
       output_usd_per_million: mode === "free" ? "0" : output,
       fixed_request_usd: mode === "free" ? "0" : fixed,
+      ...(mode === "metered" && schedule ? { schedule: draftToScheduleRequest(schedule) } : {}),
       ...(effectiveMode === "now"
         ? { effective_immediately: true }
         : { effective_from: confirmedEffective }),
@@ -614,6 +628,10 @@ function PriceVersionForm({ deployment, current, blocking, onClose }: { deployme
           <div className="price-form-grid">
             <Field label={t("deployments.cachedInputUSD")} hint={t("deployments.cachedInputHint")}><input inputMode="decimal" required value={cachedInputValue} onChange={(event) => setCachedInput(event.target.value)} /></Field>
           </div>
+          {/* Some providers publish peak and off-peak rates. Without this the
+              operator can only enter one number, and which way the accounting
+              is wrong is decided by which number they happen to pick. */}
+          <PriceScheduleFields schedule={schedule} onChange={setSchedule} problem={scheduleProblem} baseRates={{ input, cachedInput: cachedInputValue, output, fixed }} />
           <details className="price-advanced">
             <summary>{t("deployments.advancedPricing")}</summary>
             <Field label={t("deployments.fixedRequestUSD")}><input inputMode="decimal" required value={fixed} onChange={(event) => setFixed(event.target.value)} /></Field>
@@ -640,6 +658,18 @@ function PriceVersionForm({ deployment, current, blocking, onClose }: { deployme
           <dl>
             <div><dt>{t("deployments.billingMode")}</dt><dd>{mode === "free" ? t("deployments.freeLabel") : t("deployments.meteredLabel")}</dd></div>
             {mode === "metered" && <><div><dt>{t("deployments.inputUSD")}</dt><dd>{priceCell(previousPrice?.input, input)}</dd></div><div><dt>{t("deployments.cachedInputUSD")}</dt><dd>{priceCell(previousPrice?.cachedInput, cachedInputValue)}</dd></div><div><dt>{t("deployments.outputUSD")}</dt><dd>{priceCell(previousPrice?.output, output)}</dd></div><div><dt>{t("deployments.fixedRequestUSD")}</dt><dd>{priceCell(previousPrice?.fixed, fixed)}</dd></div></>}
+            {mode === "metered" && schedule && <div>
+              <dt>{t("deployments.priceSchedule")}</dt>
+              <dd>
+                <span>{t("deployments.scheduleZoneSummary", { timezone: schedule.timezone })}</span>
+                <ul className="price-schedule-summary">
+                  {schedule.windows.map((window, index) => <li key={index}>
+                    {t("deployments.scheduleWindowSummary", { start: window.start, end: window.end, input: window.input, output: window.output })}
+                  </li>)}
+                  <li>{t("deployments.scheduleBaseSummary", { input, output })}</li>
+                </ul>
+              </dd>
+            </div>}
             <div><dt>{t("deployments.effectiveFrom")}</dt><dd>{effectiveLabel}</dd></div>
             <div><dt>{t("deployments.priceSourceKind")}</dt><dd>{t(`deployments.sourceKinds.${sourceKind === "official_public_price" ? "officialPublicPrice" : sourceKind === "contract_price" ? "contractPrice" : sourceKind === "internal_cost" ? "internalCost" : "temporaryEstimate"}`)}</dd></div>
             <div><dt>{t("deployments.sourceAssurance")}</dt><dd>{t("deployments.assertedSource")}</dd></div>
@@ -658,6 +688,159 @@ function PriceVersionForm({ deployment, current, blocking, onClose }: { deployme
       </>}
     </form>
   </Modal>;
+}
+
+// The draft keeps the operator's own strings — "09:00", "0.27" — so a half-typed
+// window is representable. It becomes minutes and micro-USD only on submit.
+export interface ScheduleWindowDraft {
+  start: string;
+  end: string;
+  input: string;
+  cachedInput: string;
+  output: string;
+  fixed: string;
+}
+
+export interface ScheduleDraft {
+  timezone: string;
+  windows: ScheduleWindowDraft[];
+}
+
+export function minuteToClock(minute: number) {
+  return `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
+}
+
+// Returns null for anything that is not a whole HH:MM on the clock. "24:00" is
+// accepted as the exclusive end of the last window, which is how a span that
+// runs to midnight is written without claiming the next day's 00:00.
+export function clockToMinute(value: string): number | null {
+  const match = /^(\d{2}):(\d{2})$/.exec(value.trim());
+  if (!match) return null;
+  const [hour, minute] = [Number(match[1]), Number(match[2])];
+  if (minute > 59) return null;
+  const total = hour * 60 + minute;
+  return total <= 24 * 60 ? total : null;
+}
+
+function scheduleToDraft(schedule: PriceSchedule): ScheduleDraft {
+  return {
+    timezone: schedule.timezone,
+    windows: schedule.windows.map((window) => ({
+      start: minuteToClock(window.start_minute),
+      end: minuteToClock(window.end_minute),
+      input: priceInputValue(window.input_micros_per_million),
+      cachedInput: priceInputValue(window.cached_input_micros_per_million),
+      output: priceInputValue(window.output_micros_per_million),
+      fixed: priceInputValue(window.fixed_request_micros_usd),
+    })),
+  };
+}
+
+function draftToScheduleRequest(draft: ScheduleDraft) {
+  // Sorted here as well as validated: the server stores the table in order and
+  // hashes it into every price snapshot, so the order the rows happen to be on
+  // screen must not decide the digest.
+  const windows = [...draft.windows].sort((left, right) => (clockToMinute(left.start) ?? 0) - (clockToMinute(right.start) ?? 0));
+  return {
+    timezone: draft.timezone.trim(),
+    windows: windows.map((window) => ({
+      start: window.start.trim(), end: window.end.trim(),
+      input_usd_per_million: window.input, cached_input_usd_per_million: window.cachedInput,
+      output_usd_per_million: window.output, fixed_request_usd: window.fixed,
+    })),
+  };
+}
+
+// Mirrors the server's rule table check so the operator is told which row is
+// wrong while they can still see it, rather than being handed one rejected
+// submission. The server stays the authority; this is not a substitute for it.
+export function scheduleDraftProblem(draft: ScheduleDraft): "timezone" | "windows" | "time" | "rate" | "overlap" | undefined {
+  if (!draft.timezone.trim()) return "timezone";
+  if (!draft.windows.length) return "windows";
+  const bounds: Array<[number, number]> = [];
+  for (const window of draft.windows) {
+    const start = clockToMinute(window.start);
+    const end = clockToMinute(window.end);
+    if (start === null || end === null || start >= end) return "time";
+    if (![window.input, window.cachedInput, window.output, window.fixed].every(validUSD)) return "rate";
+    if (![window.input, window.cachedInput, window.output, window.fixed].some((value) => Number(value) > 0)) return "rate";
+    bounds.push([start, end]);
+  }
+  bounds.sort((left, right) => left[0] - right[0]);
+  for (let index = 1; index < bounds.length; index += 1) {
+    if (bounds[index][0] < bounds[index - 1][1]) return "overlap";
+  }
+  return undefined;
+}
+
+function PriceScheduleFields({ schedule, onChange, problem, baseRates }: {
+  schedule: ScheduleDraft | null;
+  onChange: (value: ScheduleDraft | null) => void;
+  problem?: string;
+  baseRates: { input: string; cachedInput: string; output: string; fixed: string };
+}) {
+  const { t } = useTranslation();
+  const update = (index: number, patch: Partial<ScheduleWindowDraft>) => {
+    if (!schedule) return;
+    onChange({ ...schedule, windows: schedule.windows.map((window, position) => (position === index ? { ...window, ...patch } : window)) });
+  };
+  return <section className="price-schedule">
+    <label className="price-schedule-toggle">
+      <input
+        type="checkbox"
+        checked={!!schedule}
+        onChange={(event) => onChange(event.target.checked
+          // The zone starts empty and the form blocks until it is filled. It is
+          // the provider's zone, and neither this browser's nor the instance's
+          // accounting zone is a defensible guess at it — a wrong default here
+          // silently shifts every peak hour.
+          //
+          // A new window copies the rates already on screen, so the operator
+          // edits real numbers rather than four empty boxes that would read as
+          // free until filled.
+          ? { timezone: "", windows: [{ start: "09:00", end: "12:00", ...baseRates }] }
+          : null)}
+      />
+      <span><strong>{t("deployments.priceSchedule")}</strong><small>{t("deployments.priceScheduleHint")}</small></span>
+    </label>
+    {schedule && <>
+      <Field label={t("deployments.scheduleTimezone")} hint={t("deployments.scheduleTimezoneHint")}>
+        <input value={schedule.timezone} onChange={(event) => onChange({ ...schedule, timezone: event.target.value })} placeholder="Asia/Shanghai" />
+      </Field>
+      <table className="price-schedule-table">
+        <thead><tr>
+          <th scope="col">{t("deployments.scheduleStart")}</th>
+          <th scope="col">{t("deployments.scheduleEnd")}</th>
+          <th scope="col">{t("deployments.inputUSD")}</th>
+          <th scope="col">{t("deployments.cachedInputUSD")}</th>
+          <th scope="col">{t("deployments.outputUSD")}</th>
+          <th scope="col">{t("deployments.fixedRequestUSD")}</th>
+          <th scope="col"><span className="visually-hidden">{t("deployments.scheduleWindowActions")}</span></th>
+        </tr></thead>
+        <tbody>
+          {schedule.windows.map((window, index) => <tr key={index}>
+            <td><input value={window.start} onChange={(event) => update(index, { start: event.target.value })} placeholder="09:00" aria-label={t("deployments.scheduleStart")} /></td>
+            <td><input value={window.end} onChange={(event) => update(index, { end: event.target.value })} placeholder="12:00" aria-label={t("deployments.scheduleEnd")} /></td>
+            <td><input inputMode="decimal" value={window.input} onChange={(event) => update(index, { input: event.target.value })} aria-label={t("deployments.inputUSD")} /></td>
+            <td><input inputMode="decimal" value={window.cachedInput} onChange={(event) => update(index, { cachedInput: event.target.value })} aria-label={t("deployments.cachedInputUSD")} /></td>
+            <td><input inputMode="decimal" value={window.output} onChange={(event) => update(index, { output: event.target.value })} aria-label={t("deployments.outputUSD")} /></td>
+            <td><input inputMode="decimal" value={window.fixed} onChange={(event) => update(index, { fixed: event.target.value })} aria-label={t("deployments.fixedRequestUSD")} /></td>
+            <td><button type="button" className="button ghost" onClick={() => onChange({ ...schedule, windows: schedule.windows.filter((_, position) => position !== index) })}>{t("deployments.removeScheduleWindow")}</button></td>
+          </tr>)}
+        </tbody>
+      </table>
+      <div className="form-actions">
+        <button type="button" className="button secondary" onClick={() => onChange({ ...schedule, windows: [...schedule.windows, { start: "14:00", end: "18:00", ...baseRates }] })}>
+          {t("deployments.addScheduleWindow")}
+        </button>
+      </div>
+      {/* Saying which rate covers the rest of the day is the difference between
+          a table the operator can reason about and one where the uncovered
+          hours are an unmarked hole. */}
+      <p className="field-hint">{t("deployments.scheduleBaseHint", { input: baseRates.input, output: baseRates.output })}</p>
+      {problem && <p className="field-hint error">{t(`deployments.scheduleProblem.${problem}`)}</p>}
+    </>}
+  </section>;
 }
 
 function validUSD(value: string) {
