@@ -987,6 +987,15 @@ type deploymentPricingState struct {
 	clockMu  sync.Mutex
 	clock    pricingClockObservation
 	hasClock bool
+	// timelineMu guards the audited timeline cache below. The timeline is
+	// immutable between Admin mutations, and auditing it means decoding every
+	// version ever created, so the Gateway keeps the audited copy rather than
+	// rebuilding it on each request. Every write path that changes a version
+	// record drops it; a single process owns the data directory, so no other
+	// writer can leave it stale.
+	timelineMu     sync.Mutex
+	timeline       []domain.DeploymentPriceVersion
+	timelineLoaded bool
 }
 
 type pricingClockObservation struct {
@@ -1319,6 +1328,11 @@ func (s *Store) PutBootstrap(ctx context.Context, records *BootstrapRecords) err
 				if err := putDeploymentPriceVersionTx(tx, records.Price); err != nil {
 					return err
 				}
+				// The deployment is created by this same transaction, so nothing
+				// can hold an audited timeline for it yet. Dropped anyway: the
+				// rule is that every path writing a version record drops the
+				// cache, and an exception here is one an audit has to re-derive.
+				s.invalidateDeploymentPricingTimeline(records.Deployment.ID)
 				return tx.Bucket(bucketDeploymentPriceNext).Put([]byte(records.Deployment.ID), versionKey(records.Price.Version))
 			},
 			func() error {

@@ -273,44 +273,86 @@ func (p DeploymentPriceVersion) Validate() error {
 	return errors.Join(problems...)
 }
 
+// AuditPriceTimeline checks a deployment's whole price timeline for the faults
+// that make any selection from it meaningless: a version that no longer
+// validates, one that belongs to another deployment, two versions claiming the
+// same effective instant, or two claiming the same version number.
+//
+// Split out from selection because it is a pure function of the timeline's
+// contents, while selection also depends on the instant asked about. The
+// Gateway audits a timeline once per change and then selects from the audited
+// copy on every request; running the audit per request re-read and re-decoded
+// every version ever created, at a cost that grew with each price change.
+func AuditPriceTimeline(versions []DeploymentPriceVersion, deploymentID string) error {
+	if strings.TrimSpace(deploymentID) == "" {
+		return errors.New("deployment id is required")
+	}
+	seenEffective := make(map[[12]byte]string, len(versions))
+	seenVersion := make(map[uint64]string, len(versions))
+	for index := range versions {
+		candidate := versions[index]
+		if err := candidate.Validate(); err != nil {
+			return fmt.Errorf("price version %q: %w", candidate.ID, err)
+		}
+		if candidate.DeploymentID != deploymentID {
+			return fmt.Errorf("price version %q belongs to another deployment", candidate.ID)
+		}
+		timeKey := canonicalPriceTime(candidate.EffectiveFrom)
+		if previous, exists := seenEffective[timeKey]; exists && previous != candidate.ID {
+			return fmt.Errorf("%w: duplicate effective time", ErrPriceTimelineConflict)
+		}
+		seenEffective[timeKey] = candidate.ID
+		if previous, exists := seenVersion[candidate.Version]; exists && previous != candidate.ID {
+			return fmt.Errorf("%w: duplicate version", ErrPriceTimelineConflict)
+		}
+		seenVersion[candidate.Version] = candidate.ID
+	}
+	return nil
+}
+
+// SelectAuditedPriceVersion picks the version in force at selectedAt from a
+// timeline AuditPriceTimeline has already accepted. Callers holding an
+// unaudited timeline must use SelectDeploymentPriceVersion instead: selecting
+// from a self-contradicting timeline is how the same request gets two different
+// prices depending on iteration order.
+func SelectAuditedPriceVersion(versions []DeploymentPriceVersion, selectedAt time.Time) (DeploymentPriceVersion, error) {
+	if selectedAt.IsZero() || !isUTC(selectedAt) {
+		return DeploymentPriceVersion{}, errors.New("UTC pricing_selected_at is required")
+	}
+	// The winner is carried as an index rather than a pointer to a copy: the
+	// copy escaped, so a timeline in ascending effective order allocated once
+	// per version on a path the Gateway walks for every candidate.
+	selected := -1
+	for index := range versions {
+		candidate := &versions[index]
+		if candidate.CancelledAt != nil || candidate.EffectiveFrom.After(selectedAt) {
+			continue
+		}
+		if selected < 0 {
+			selected = index
+			continue
+		}
+		best := &versions[selected]
+		if candidate.EffectiveFrom.After(best.EffectiveFrom) ||
+			(candidate.EffectiveFrom.Equal(best.EffectiveFrom) && (candidate.Version > best.Version ||
+				(candidate.Version == best.Version && candidate.ID > best.ID))) {
+			selected = index
+		}
+	}
+	if selected < 0 {
+		return DeploymentPriceVersion{}, ErrPriceUnavailable
+	}
+	return versions[selected], nil
+}
+
 func SelectDeploymentPriceVersion(versions []DeploymentPriceVersion, deploymentID string, selectedAt time.Time) (DeploymentPriceVersion, error) {
 	if strings.TrimSpace(deploymentID) == "" || selectedAt.IsZero() || !isUTC(selectedAt) {
 		return DeploymentPriceVersion{}, errors.New("deployment id and UTC pricing_selected_at are required")
 	}
-	var selected *DeploymentPriceVersion
-	seenEffective := make(map[[12]byte]string)
-	seenVersion := make(map[uint64]string)
-	for index := range versions {
-		candidate := versions[index]
-		if err := candidate.Validate(); err != nil {
-			return DeploymentPriceVersion{}, fmt.Errorf("price version %q: %w", candidate.ID, err)
-		}
-		if candidate.DeploymentID != deploymentID {
-			return DeploymentPriceVersion{}, fmt.Errorf("price version %q belongs to another deployment", candidate.ID)
-		}
-		timeKey := canonicalPriceTime(candidate.EffectiveFrom)
-		if previous, exists := seenEffective[timeKey]; exists && previous != candidate.ID {
-			return DeploymentPriceVersion{}, fmt.Errorf("%w: duplicate effective time", ErrPriceTimelineConflict)
-		}
-		seenEffective[timeKey] = candidate.ID
-		if previous, exists := seenVersion[candidate.Version]; exists && previous != candidate.ID {
-			return DeploymentPriceVersion{}, fmt.Errorf("%w: duplicate version", ErrPriceTimelineConflict)
-		}
-		seenVersion[candidate.Version] = candidate.ID
-		if candidate.CancelledAt != nil || candidate.EffectiveFrom.After(selectedAt) {
-			continue
-		}
-		if selected == nil || candidate.EffectiveFrom.After(selected.EffectiveFrom) ||
-			(candidate.EffectiveFrom.Equal(selected.EffectiveFrom) && (candidate.Version > selected.Version ||
-				(candidate.Version == selected.Version && candidate.ID > selected.ID))) {
-			copy := candidate
-			selected = &copy
-		}
+	if err := AuditPriceTimeline(versions, deploymentID); err != nil {
+		return DeploymentPriceVersion{}, err
 	}
-	if selected == nil {
-		return DeploymentPriceVersion{}, ErrPriceUnavailable
-	}
-	return *selected, nil
+	return SelectAuditedPriceVersion(versions, selectedAt)
 }
 
 func DerivePriceLifecycle(versions []DeploymentPriceVersion, deploymentID string, selectedAt time.Time) (map[string]PriceLifecycleStatus, error) {

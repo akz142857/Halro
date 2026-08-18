@@ -241,6 +241,11 @@ func (s *Store) AdoptDeploymentPriceProposal(ctx context.Context, deploymentID, 
 		intent.ChangeSummary = fmt.Sprintf("before={proposal:%s} after={price:%s,billing:%s,input:%d,cached_input:%d,output:%d,fixed:%d}", proposal.ID, price.ID, price.BillingMode, price.InputMicrosPerMillion, price.CachedInputMicrosPerMillion, price.OutputMicrosPerMillion, price.FixedRequestMicrosUSD) + price.Schedule.AuditSummary()
 		return putPricingAuditIntentTx(tx, intent)
 	})
+	// Adoption appends a version like any other creation, so the audited copy
+	// the Gateway selects against has to be rebuilt.
+	if err == nil {
+		s.invalidateDeploymentPricingTimeline(deploymentID)
+	}
 	return proposal, price, err
 }
 
