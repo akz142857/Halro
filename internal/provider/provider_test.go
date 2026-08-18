@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/akz142857/Halro/internal/domain"
@@ -449,5 +450,90 @@ func TestRegistryRefusesATargetWithNoCapabilityInCommon(t *testing.T) {
 	}
 	if !target.Capabilities.Chat || target.Capabilities.Tools {
 		t.Fatalf("capabilities=%#v", target.Capabilities)
+	}
+}
+
+// Rotation is now handed out by an atomic counter under the read lock rather
+// than by mutating registry state under the write lock. Concurrent callers must
+// still each get their own starting target: two requests handed the same start
+// is the load imbalance round-robin exists to prevent, and it is the failure a
+// non-atomic counter produces only under contention.
+func TestRoundRobinHandsEveryConcurrentCallerADistinctStart(t *testing.T) {
+	registry := NewRegistry()
+	adapter := &registryAdapter{}
+	const targets = 4
+	for index := 0; index < targets; index++ {
+		if err := registry.Register(Target{
+			ID: fmt.Sprintf("route_%d", index), DeploymentID: fmt.Sprintf("dep_%d", index),
+			PublicModel: "chat", ProviderModel: fmt.Sprintf("model_%d", index),
+			Adapter: adapter, Priority: index, Strategy: "round_robin",
+			Capabilities: Capabilities{Chat: true, Streaming: true},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	const cycles = 50
+	starts := make([]string, targets*cycles)
+	var waiting sync.WaitGroup
+	for index := range starts {
+		waiting.Add(1)
+		go func() {
+			defer waiting.Done()
+			candidates := registry.ResolveCandidates("chat")
+			if len(candidates) != targets {
+				t.Errorf("candidates=%d", len(candidates))
+				return
+			}
+			starts[index] = candidates[0].ID
+		}()
+	}
+	waiting.Wait()
+
+	counts := map[string]int{}
+	for _, start := range starts {
+		counts[start]++
+	}
+	if len(counts) != targets {
+		t.Fatalf("only %d of %d targets were ever started from: %v", len(counts), targets, counts)
+	}
+	// Every target starts exactly `cycles` times, because the counter advances
+	// once per call and no two calls can read the same value.
+	for id, count := range counts {
+		if count != cycles {
+			t.Fatalf("%s started %d times, want %d: %v", id, count, cycles, counts)
+		}
+	}
+}
+
+// A hot reload swaps the registry wholesale, and the rotation counters go with
+// it. Preserved deliberately: the counter belongs to the target set it rotates,
+// and carrying it across a reload would offset it against a different one.
+func TestRoundRobinCounterResetsWithTheRegistry(t *testing.T) {
+	build := func() *Registry {
+		registry := NewRegistry()
+		adapter := &registryAdapter{}
+		for index := 0; index < 2; index++ {
+			if err := registry.Register(Target{
+				ID: fmt.Sprintf("route_%d", index), DeploymentID: fmt.Sprintf("dep_%d", index),
+				PublicModel: "chat", ProviderModel: fmt.Sprintf("model_%d", index),
+				Adapter: adapter, Priority: index, Strategy: "round_robin",
+				Capabilities: Capabilities{Chat: true, Streaming: true},
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return registry
+	}
+	live := build()
+	if got := live.ResolveCandidates("chat")[0].ID; got != "route_0" {
+		t.Fatalf("first start %q", got)
+	}
+	if got := live.ResolveCandidates("chat")[0].ID; got != "route_1" {
+		t.Fatalf("second start %q", got)
+	}
+	live.Replace(build())
+	if got := live.ResolveCandidates("chat")[0].ID; got != "route_0" {
+		t.Fatalf("start after reload %q; the counter did not come with the new target set", got)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"net"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/akz142857/Halro/internal/anthropicapi"
@@ -292,7 +293,9 @@ type Target struct {
 type Registry struct {
 	mu      sync.RWMutex
 	targets map[string][]Target
-	next    map[string]uint64
+	// next holds one rotation counter per public model, created when the alias
+	// is first registered so the resolve path never has to insert into the map.
+	next map[string]*atomic.Uint64
 	// adapters are keyed by binding identity. Legacy registrations use the
 	// Provider ID as their binding identity.
 	adapters         map[string]Adapter
@@ -308,7 +311,7 @@ type Registry struct {
 
 func NewRegistry() *Registry {
 	return &Registry{
-		targets: make(map[string][]Target), next: make(map[string]uint64),
+		targets: make(map[string][]Target), next: make(map[string]*atomic.Uint64),
 		adapters:         make(map[string]Adapter),
 		providerBindings: make(map[string][]string),
 		health:           make(map[string]bool),
@@ -442,6 +445,9 @@ func (r *Registry) Register(target Target) error {
 		}
 	}
 	r.targets[target.PublicModel] = append(r.targets[target.PublicModel], target)
+	if r.next[target.PublicModel] == nil {
+		r.next[target.PublicModel] = new(atomic.Uint64)
+	}
 	slices.SortFunc(r.targets[target.PublicModel], func(left, right Target) int {
 		if left.Priority != right.Priority {
 			return left.Priority - right.Priority
@@ -483,23 +489,24 @@ func (r *Registry) ResolveCandidatesFor(publicModel string, operation Operation)
 
 func (r *Registry) ResolveCandidatesForEvidence(publicModel string, operation Operation, minimum domain.CapabilityEvidence) []Target {
 	r.mu.RLock()
+	defer r.mu.RUnlock()
 	targets := r.resolveCandidatesLocked(publicModel, operation, minimum)
-	r.mu.RUnlock()
 	if len(targets) < 2 || targets[0].Strategy != "round_robin" {
 		return targets
 	}
-
-	// Round-robin is the only resolution strategy that mutates registry state.
-	// Re-resolve after upgrading the lock so a concurrent reload cannot rotate a
-	// stale candidate snapshot.
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	targets = r.resolveCandidatesLocked(publicModel, operation, minimum)
-	if len(targets) < 2 || targets[0].Strategy != "round_robin" {
+	// The rotation counter is atomic and the counters map is only written while
+	// the write lock is held, so the snapshot and the offset it is rotated by
+	// come from one read-locked pass. This used to resolve a second time under
+	// the write lock — the counter was plain registry state, and rotating a
+	// snapshot taken before the upgrade could have rotated one a reload had
+	// already replaced. The re-resolve doubled the cost of every round-robin
+	// request and serialised them behind the write lock; taking the counter out
+	// of the locked state removes the reason for both.
+	counter := r.next[publicModel]
+	if counter == nil {
 		return targets
 	}
-	offset := int(r.next[publicModel] % uint64(len(targets)))
-	r.next[publicModel]++
+	offset := int((counter.Add(1) - 1) % uint64(len(targets)))
 	return append(targets[offset:], targets[:offset]...)
 }
 
@@ -770,7 +777,7 @@ func (r *Registry) Replace(next *Registry) []Adapter {
 	replacementHealth := next.health
 	replacementUnavailable := next.unavailable
 	next.targets = make(map[string][]Target)
-	next.next = make(map[string]uint64)
+	next.next = make(map[string]*atomic.Uint64)
 	next.adapters = make(map[string]Adapter)
 	next.providerBindings = make(map[string][]string)
 	next.health = make(map[string]bool)
@@ -836,7 +843,7 @@ func (r *Registry) Close() {
 		}
 	}
 	r.targets = make(map[string][]Target)
-	r.next = make(map[string]uint64)
+	r.next = make(map[string]*atomic.Uint64)
 	r.adapters = make(map[string]Adapter)
 	r.providerBindings = make(map[string][]string)
 	r.health = make(map[string]bool)
