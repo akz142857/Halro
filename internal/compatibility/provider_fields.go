@@ -124,11 +124,21 @@ func UnsupportedGenerateFields(profileID domain.ProviderProfileID, request seman
 		// omitting the member already gets, the way n=1 is; asking for tools to be
 		// run one at a time is the thing DeepSeek has no member for.
 		add(request.ParallelTools != nil && !*request.ParallelTools, "parallel_tool_calls")
-		// DeepSeek has max_tokens and nothing that counts reasoning against the
-		// same budget. Rendering the completion limit as max_tokens would change
-		// what the caller asked for, so the two limits are kept distinct and the
-		// one DeepSeek cannot express is declared.
-		add(request.CompletionTokenLimit != nil, "max_completion_tokens")
+		// Value-dependent, and the value is another field: a completion budget
+		// counts reasoning tokens and DeepSeek's max_tokens does not, so the two
+		// are the same bound exactly while thinking is off. Declaring it
+		// unconditionally routed away every /v1/responses request that budgeted
+		// its output — that endpoint rejects the `reasoning` field outright, so
+		// its requests never think, and the limit it decodes is this one.
+		// Carrying it when thinking is on would be the opposite mistake: a bound
+		// the caller set over answer-plus-reasoning would silently become a bound
+		// over the answer alone.
+		//
+		// Two output limits in one request stay declared, because DeepSeek has
+		// one member for them and choosing between them is not this layer's call.
+		add(request.CompletionTokenLimit != nil &&
+			(deepSeekThinkingIsOn(request.ReasoningEffort) || request.VisibleOutputTokenLimit != nil),
+			"max_completion_tokens")
 		// DeepSeek has json_object and no schema mode, so support is value-
 		// dependent the way it is on the Anthropic profile: a schema request is
 		// routed away rather than sent to a surface that would refuse it after

@@ -39,6 +39,11 @@ import (
 // silently ignored; the second is a rename, which is carried rather than
 // declared.
 //
+// max_completion_tokens belongs to both groups depending on the request:
+// carried as max_tokens while thinking is off, because the two then bound the
+// same tokens, and declared unsupported while thinking is on, because they do
+// not.
+//
 // Everything here is read from DeepSeek's published API documentation and has
 // not been confirmed against a live account. See
 // docs/todo/deepseek-adaptation-plan.zh-CN.md.
@@ -64,6 +69,14 @@ var deepSeekPortableEfforts = append([]string{deepSeekThinkingOff},
 // deepSeekThinkingOff is the portable ladder's name for "do not think", which
 // DeepSeek spells as a type rather than a depth.
 const deepSeekThinkingOff = "none"
+
+// deepSeekThinkingIsOn reports whether the rendered body will have thinking
+// switched on. It is what tells the two output limits apart: with nothing
+// thinking, a budget for the whole completion and a budget for the answer bound
+// the same tokens.
+func deepSeekThinkingIsOn(effort string) bool {
+	return effort != "" && effort != deepSeekThinkingOff
+}
 
 // DeepSeekThinking is DeepSeek's reasoning switch. It replaced the older
 // "use a different model" arrangement, which is why the semantic effort ladder
@@ -120,12 +133,33 @@ func RenderDeepSeekChatRequest(request openaiapi.ChatCompletionRequest) (DeepSee
 	if request.ParallelToolCalls != nil && !*request.ParallelToolCalls {
 		return DeepSeekChatRequest{}, errors.New("DeepSeek Chat Completions cannot disable parallel tool calls")
 	}
+	// max_completion_tokens is a budget for everything a completion generates,
+	// reasoning included; DeepSeek's max_tokens bounds the answer. Those are two
+	// different quantities while thinking is on, and one quantity while it is
+	// off — so the limit is carried in the second case and refused in the first,
+	// rather than renamed unconditionally into a limit that means something else.
+	//
+	// The off case is not a corner: /v1/responses rejects the `reasoning` request
+	// field outright, so every request arriving from there has thinking switched
+	// off, and refusing the limit there took DeepSeek out of the candidate set
+	// for any Responses request that budgeted its output at all.
+	//
+	// Two limits at once has no single member to land in, and picking one would
+	// be the silent rewrite this file exists to prevent.
+	maxTokens := request.MaxTokens
 	if request.MaxCompletionTokens != nil {
-		return DeepSeekChatRequest{}, errors.New("DeepSeek Chat Completions does not accept max_completion_tokens")
+		switch {
+		case deepSeekThinkingIsOn(request.ReasoningEffort):
+			return DeepSeekChatRequest{}, errors.New("DeepSeek Chat Completions cannot bound reasoning and answer with one limit")
+		case request.MaxTokens != nil:
+			return DeepSeekChatRequest{}, errors.New("DeepSeek Chat Completions has one output limit and the request carries two")
+		default:
+			maxTokens = request.MaxCompletionTokens
+		}
 	}
 	result := DeepSeekChatRequest{
 		Model: request.Model, Messages: request.Messages,
-		MaxTokens: request.MaxTokens, ResponseFormat: request.ResponseFormat,
+		MaxTokens: maxTokens, ResponseFormat: request.ResponseFormat,
 		Stop: request.Stop, Stream: request.Stream, StreamOptions: request.StreamOptions,
 		Temperature: request.Temperature, TopP: request.TopP,
 		Tools: request.Tools, ToolChoice: request.ToolChoice,
