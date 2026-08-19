@@ -407,7 +407,6 @@ func testConfig(t *testing.T) config.Config {
 			RouteTotalTimeout:            config.Duration(2 * time.Minute),
 			AttemptConnectTimeout:        config.Duration(5 * time.Second),
 			AttemptResponseHeaderTimeout: config.Duration(time.Minute),
-			StreamIdleTimeout:            config.Duration(time.Minute),
 			DownstreamWriteTimeout:       config.Duration(15 * time.Second),
 			StreamMaxDuration:            config.Duration(10 * time.Minute),
 			MaxTotalAttempts:             3,

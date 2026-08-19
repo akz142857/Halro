@@ -153,7 +153,7 @@ admin:
     # @title.en-US Maximum provider calls
     # @description.zh-CN 单次检测允许发起的计费服务商调用上限。
     # @description.en-US Maximum billable provider calls allowed per detection.
-    max_provider_calls: 8
+    max_provider_calls: 10
     # @title.zh-CN 每管理员创建速率
     # @title.en-US Creation rate per administrator
     # @description.zh-CN 每位管理员每分钟可启动的新检测任务上限；目录、缓存和幂等复用不计入。
@@ -168,8 +168,8 @@ usage:
   durability: "balanced"
   # @title.zh-CN 记账时区
   # @title.en-US Accounting timezone
-  # @description.zh-CN 用量账期和日界线采用的 IANA 时区。
-  # @description.en-US IANA timezone used for usage periods and day boundaries.
+  # @description.zh-CN 仅在首次初始化时作为记账时区的初值。此后以实例设置为准，改这里不再生效；halro doctor 会报告两者不一致。
+  # @description.en-US Seeds the accounting timezone at first initialisation only. The instance setting governs afterwards and this value no longer applies; halro doctor reports when the two disagree.
   timezone: "Asia/Shanghai"
   # @title.zh-CN WAL 队列容量
   # @title.en-US WAL queue capacity
@@ -244,11 +244,6 @@ gateway:
   # @description.zh-CN 单次上游尝试等待响应头的最长时间。
   # @description.en-US Maximum time an upstream attempt waits for response headers.
   attempt_response_header_timeout: 60s
-  # @title.zh-CN 流空闲超时
-  # @title.en-US Stream idle timeout
-  # @description.zh-CN 流式响应无数据活动后终止连接的时间。
-  # @description.en-US Inactivity period after which a streaming response is terminated.
-  stream_idle_timeout: 60s
   # @title.zh-CN 下游写入超时
   # @title.en-US Downstream write timeout
   # @description.zh-CN 向客户端写入单次响应数据允许的时间。

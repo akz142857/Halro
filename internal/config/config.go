@@ -284,7 +284,6 @@ type Gateway struct {
 	RouteTotalTimeout             Duration        `yaml:"route_total_timeout"`
 	AttemptConnectTimeout         Duration        `yaml:"attempt_connect_timeout"`
 	AttemptResponseHeaderTimeout  Duration        `yaml:"attempt_response_header_timeout"`
-	StreamIdleTimeout             Duration        `yaml:"stream_idle_timeout"`
 	DownstreamWriteTimeout        Duration        `yaml:"downstream_write_timeout"`
 	StreamMaxDuration             Duration        `yaml:"stream_max_duration"`
 	MaxTotalAttempts              int             `yaml:"max_total_attempts"`
@@ -885,7 +884,6 @@ func (c Config) Validate(opts LoadOptions) error {
 		"gateway.route_total_timeout":             c.Gateway.RouteTotalTimeout,
 		"gateway.attempt_connect_timeout":         c.Gateway.AttemptConnectTimeout,
 		"gateway.attempt_response_header_timeout": c.Gateway.AttemptResponseHeaderTimeout,
-		"gateway.stream_idle_timeout":             c.Gateway.StreamIdleTimeout,
 		"gateway.downstream_write_timeout":        c.Gateway.DownstreamWriteTimeout,
 		"gateway.stream_max_duration":             c.Gateway.StreamMaxDuration,
 		"gateway.health_probe_interval":           c.Gateway.HealthProbeInterval,

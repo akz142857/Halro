@@ -37,7 +37,6 @@ gateway:
   route_total_timeout: 120s
   attempt_connect_timeout: 5s
   attempt_response_header_timeout: 60s
-  stream_idle_timeout: 60s
   downstream_write_timeout: 15s
   stream_max_duration: 10m
   max_total_attempts: 3

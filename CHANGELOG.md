@@ -47,6 +47,17 @@ semantic versioning.
 - **`tls.cert_file` and `tls.key_file` are replaced by a `tls.certificates`
   list.** The old keys are removed rather than deprecated.
 
+- **`gateway.stream_idle_timeout` is removed.** It was declared, defaulted,
+  validated as positive, and documented as the inactivity period after which a
+  streaming response is terminated — and nothing read it. No such timeout was
+  ever enforced. What does bound a stream is `gateway.downstream_write_timeout`,
+  re-armed on every emitted event, so a client that stops reading is cut off,
+  and `gateway.stream_max_duration` with `gateway.route_total_timeout` for the
+  stream and the request as wholes. An upstream that sends headers and then goes
+  quiet is bounded only by those totals — it was never bounded by the removed
+  key either. A setting that quietly does nothing is worse than an absent one,
+  so it is gone rather than kept with a note.
+
 ### Operator impact
 
 - **`config.yaml` must be edited; the data directory is untouched.** Unknown
@@ -61,6 +72,11 @@ semantic versioning.
       - cert_file: /etc/halro/tls/fullchain.pem
         key_file: /etc/halro/tls/privkey.pem
   ```
+
+- **Delete `gateway.stream_idle_timeout` from `config.yaml`** for the same
+  reason — unknown fields are refused, so leaving it in stops the process.
+  Nothing it claimed to do is lost, because it never did it, and no other
+  setting needs adjusting to compensate.
 
 - **Rotating the Metrics client CA takes two signals, in order.** Concatenate the
   old and new CA and `SIGHUP`; move each scraper to its new client certificate;
