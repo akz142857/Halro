@@ -1,10 +1,13 @@
 package app
 
 import (
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -12,6 +15,19 @@ import (
 
 	"github.com/akz142857/Halro/internal/config"
 )
+
+// certificateExpiryWarning is how much life a certificate must have left before
+// its remaining validity stops being worth mentioning. One threshold serves the
+// reload log, `halro doctor`, and the alert rule shipped in deploy/observability,
+// so the three cannot disagree about when an operator should have acted.
+const certificateExpiryWarning = 30 * 24 * time.Hour
+
+// unmatchedNameThrottle bounds how often an unmatched server name reaches the
+// log. That name is chosen by whoever dialled the port, so an internet-facing
+// listener under a scanner could otherwise push every record an operator needs
+// out of a size-bounded file. Suppressed occurrences are counted and reported
+// with the next record rather than being lost.
+const unmatchedNameThrottle = time.Minute
 
 // certificateSource is one configured keypair. The files are read again on every
 // reload; the paths themselves are fixed for the life of the process, because
@@ -38,6 +54,11 @@ type certificateDescription struct {
 	// from ClientHelloInfo.ServerName would be attacker-controlled and unbounded.
 	Name     string
 	NotAfter time.Time
+	// Fingerprint is a prefix of the leaf's SHA-256, which is what an operator
+	// verifying a rotation reads back out of `openssl s_client`. It identifies
+	// which file is in force; it discloses nothing, because the certificate it
+	// summarizes is sent to every client that connects.
+	Fingerprint string
 }
 
 // certificateHolder serves the current bundle and swaps it atomically. The read
@@ -46,13 +67,19 @@ type certificateDescription struct {
 type certificateHolder struct {
 	sources []certificateSource
 	current atomic.Pointer[certificateBundle]
+	logger  *slog.Logger
+	// unmatchedLoggedUnixNano and unmatchedSuppressed implement the throttle
+	// described above. Both are read from the handshake path, so neither may
+	// take a lock.
+	unmatchedLoggedUnixNano atomic.Int64
+	unmatchedSuppressed     atomic.Uint64
 }
 
-func newCertificateHolder(entries []config.TLSCertificate) (*certificateHolder, error) {
+func newCertificateHolder(entries []config.TLSCertificate, logger *slog.Logger) (*certificateHolder, error) {
 	if len(entries) == 0 {
 		return nil, errors.New("no TLS certificates configured")
 	}
-	holder := &certificateHolder{sources: make([]certificateSource, 0, len(entries))}
+	holder := &certificateHolder{sources: make([]certificateSource, 0, len(entries)), logger: logger}
 	for _, entry := range entries {
 		holder.sources = append(holder.sources, certificateSource{certFile: entry.CertFile, keyFile: entry.KeyFile})
 	}
@@ -71,6 +98,7 @@ func (h *certificateHolder) reload() error {
 		return err
 	}
 	h.current.Store(bundle)
+	logCertificateLifetimes(h.logger, "serving", bundle.describe, time.Now())
 	return nil
 }
 
@@ -105,7 +133,28 @@ func (h *certificateHolder) getCertificate(hello *tls.ClientHelloInfo) (*tls.Cer
 			return certificate, nil
 		}
 	}
+	h.warnUnmatchedName(name)
 	return bundle.fallback, nil
+}
+
+// warnUnmatchedName records that a client asked for a name nothing declares.
+// The name goes to the log and never to a metric label: it is the one value
+// here an outsider chooses.
+func (h *certificateHolder) warnUnmatchedName(name string) {
+	if h.logger == nil {
+		return
+	}
+	now := time.Now().UnixNano()
+	previous := h.unmatchedLoggedUnixNano.Load()
+	// Two handshakes may pass the window check together; the compare-and-swap
+	// decides which of them writes, and the loser is counted like any other
+	// suppressed occurrence.
+	if now-previous < int64(unmatchedNameThrottle) || !h.unmatchedLoggedUnixNano.CompareAndSwap(previous, now) {
+		h.unmatchedSuppressed.Add(1)
+		return
+	}
+	h.logger.Warn("no certificate declares the requested server name; answering with the first entry",
+		"server_name", name, "suppressed_since_last", h.unmatchedSuppressed.Swap(0))
 }
 
 func buildCertificateBundle(sources []certificateSource) (*certificateBundle, error) {
@@ -153,6 +202,7 @@ func buildCertificateBundle(sources []certificateSource) (*certificateBundle, er
 		}
 		bundle.describe = append(bundle.describe, certificateDescription{
 			Name: describeName(names, index), NotAfter: leaf.NotAfter,
+			Fingerprint: certificateFingerprint(leaf),
 		})
 	}
 	return bundle, nil
@@ -207,12 +257,15 @@ type metricsTLSHolder struct {
 	certFile     string
 	keyFile      string
 	clientCAFile string
+	logger       *slog.Logger
 	current      atomic.Pointer[tls.Config]
 	description  atomic.Pointer[certificateDescription]
 }
 
-func newMetricsTLSHolder(cfg config.MetricsTLS) (*metricsTLSHolder, error) {
-	holder := &metricsTLSHolder{certFile: cfg.CertFile, keyFile: cfg.KeyFile, clientCAFile: cfg.ClientCAFile}
+func newMetricsTLSHolder(cfg config.MetricsTLS, logger *slog.Logger) (*metricsTLSHolder, error) {
+	holder := &metricsTLSHolder{
+		certFile: cfg.CertFile, keyFile: cfg.KeyFile, clientCAFile: cfg.ClientCAFile, logger: logger,
+	}
 	if err := holder.reload(); err != nil {
 		return nil, err
 	}
@@ -247,7 +300,12 @@ func (h *metricsTLSHolder) reload() error {
 		ClientCAs:    clientCAs,
 		NextProtos:   []string{"h2", "http/1.1"},
 	})
-	h.description.Store(&certificateDescription{Name: describeName(certificateNames(leaf), 0), NotAfter: leaf.NotAfter})
+	description := certificateDescription{
+		Name: describeName(certificateNames(leaf), 0), NotAfter: leaf.NotAfter,
+		Fingerprint: certificateFingerprint(leaf),
+	}
+	h.description.Store(&description)
+	logCertificateLifetimes(h.logger, "metrics", []certificateDescription{description}, time.Now())
 	return nil
 }
 
@@ -269,4 +327,44 @@ func (h *metricsTLSHolder) describe() []certificateDescription {
 		return nil
 	}
 	return []certificateDescription{*description}
+}
+
+// certificateFingerprint is the leading bytes of the leaf's SHA-256, rendered
+// the way `openssl x509 -fingerprint` renders the whole digest. A prefix is
+// enough to tell two files apart during a rotation and short enough to read
+// out of a log line.
+func certificateFingerprint(leaf *x509.Certificate) string {
+	sum := sha256.Sum256(leaf.Raw)
+	return hex.EncodeToString(sum[:8])
+}
+
+// logCertificateLifetimes reports what was just published. An expired
+// certificate is still accepted — refusing it would take away the one mechanism
+// an operator has to replace material without a restart, and whether it is
+// usable is the client's decision to make — but it is never accepted silently,
+// because the reload would otherwise look like it worked.
+//
+// Only the name, the expiry, and a digest prefix are written. Private key bytes
+// are never logged, and neither is the file path's content.
+func logCertificateLifetimes(logger *slog.Logger, scope string, descriptions []certificateDescription, now time.Time) {
+	if logger == nil {
+		return
+	}
+	for _, description := range descriptions {
+		attributes := []any{
+			"scope", scope, "name", description.Name,
+			"not_after", description.NotAfter.UTC().Format(time.RFC3339),
+			"fingerprint", description.Fingerprint,
+		}
+		remaining := description.NotAfter.Sub(now)
+		switch {
+		case remaining <= 0:
+			logger.Error("TLS certificate is expired and is being served anyway", attributes...)
+		case remaining < certificateExpiryWarning:
+			logger.Warn("TLS certificate is close to expiry",
+				append(attributes, "days_left", int(remaining.Hours()/24))...)
+		default:
+			logger.Info("TLS certificate loaded", attributes...)
+		}
+	}
 }

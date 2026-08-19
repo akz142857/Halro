@@ -942,7 +942,32 @@ export interface SystemStatus {
   usage_watermark: Record<string, number>;
   time_context: TimeContext;
   activation?: ActivationStatus;
+  reload?: ReloadStatus;
   tzdata?: { source: string; path?: string; version: string; fingerprint: string; zones: string[] };
+}
+
+// What SIGHUP last did, and what is actually being served. A configuration that
+// can change without a restart makes the file on disk an unreliable answer to
+// "what is in force", and this is the reliable one.
+export interface ReloadStatus {
+  items: Array<{
+    item: "tls" | "metrics_tls" | "log_level" | "log_file";
+    // False where this deployment has nothing of the kind — no TLS, no log
+    // file. Without it, "never reloaded" and "not configured" look identical,
+    // and only one of them is worth investigating.
+    applies: boolean;
+    successes: number;
+    failures: number;
+    last_success: string | null;
+  }>;
+  certificates: Array<{
+    scope: "serving" | "metrics";
+    name: string;
+    not_after: string;
+    // The leading bytes of the certificate's SHA-256, matching what
+    // `openssl x509 -fingerprint` reads back from outside.
+    fingerprint: string;
+  }>;
 }
 
 export type ActivationDomain = "topology" | "auth" | "redaction" | "token_guard";

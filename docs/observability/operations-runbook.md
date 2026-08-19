@@ -197,11 +197,15 @@ a public Prometheus UI or unrestricted API. Useful checks include:
 1. Read `halro_tls_certificate_expiry_seconds` by `scope` and `name` to identify
    which certificate is short. `scope="serving"` is the Gateway and Admin
    listeners; `scope="metrics"` is the mutually authenticated scrape endpoint.
-2. Obtain the replacement and write it over the configured `cert_file` and
-   `key_file`. Write both before signalling: the pair is read together.
+2. Obtain the replacement and write it over the `cert_file` and `key_file` of
+   the matching `tls.certificates` entry. Write both before signalling: the
+   pair is read together, and a reload that finds only one of them replaced
+   keeps the whole previous set.
 3. Send `SIGHUP` (`systemctl reload halro`, or `kill -HUP <pid>`). Confirm
    `halro_reload_total{item="tls",status="success"}` increased and that the
-   expiry gauge moved. Existing connections are not interrupted.
+   expiry gauge moved. The `TLS certificate loaded` record carries the new
+   fingerprint, which is what `openssl s_client | openssl x509 -fingerprint`
+   reads back from the outside. Existing connections are not interrupted.
 4. If the reload reports an error, the previous certificate is still being
    served — the instance is not down. Fix the files and signal again.
 

@@ -10,6 +10,8 @@ import (
 	"crypto/x509/pkix"
 	"encoding/hex"
 	"encoding/pem"
+	"io"
+	"log/slog"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -91,7 +93,7 @@ func TestCertificateHolderSelectsBySNI(t *testing.T) {
 	second, secondPrint := writeKeypair(t, directory, "console", expiry, "console.example.com")
 	third, thirdPrint := writeKeypair(t, directory, "apps", expiry, "*.apps.example.com")
 
-	holder, err := newCertificateHolder([]config.TLSCertificate{first, second, third})
+	holder, err := newCertificateHolder([]config.TLSCertificate{first, second, third}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +123,7 @@ func TestCertificateHolderReloadReplacesTheServedCertificate(t *testing.T) {
 	directory := t.TempDir()
 	expiry := time.Now().Add(time.Hour)
 	entry, firstPrint := writeKeypair(t, directory, "serving", expiry, "halro.example.com")
-	holder, err := newCertificateHolder([]config.TLSCertificate{entry})
+	holder, err := newCertificateHolder([]config.TLSCertificate{entry}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +147,7 @@ func TestCertificateHolderKeepsTheOldBundleWhenReloadFails(t *testing.T) {
 	expiry := time.Now().Add(time.Hour)
 	first, firstPrint := writeKeypair(t, directory, "a", expiry, "a.example.com")
 	second, _ := writeKeypair(t, directory, "b", expiry, "b.example.com")
-	holder, err := newCertificateHolder([]config.TLSCertificate{first, second})
+	holder, err := newCertificateHolder([]config.TLSCertificate{first, second}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,17 +173,17 @@ func TestCertificateHolderRefusesAmbiguousAndUnreachableEntries(t *testing.T) {
 	expiry := time.Now().Add(time.Hour)
 	first, _ := writeKeypair(t, directory, "first", expiry, "halro.example.com")
 	duplicate, _ := writeKeypair(t, directory, "duplicate", expiry, "halro.example.com")
-	if _, err := newCertificateHolder([]config.TLSCertificate{first, duplicate}); err == nil {
+	if _, err := newCertificateHolder([]config.TLSCertificate{first, duplicate}, nil); err == nil {
 		t.Fatal("two certificates claiming the same name were accepted")
 	}
 
 	anonymous, _ := writeKeypair(t, directory, "anonymous", expiry)
-	if _, err := newCertificateHolder([]config.TLSCertificate{first, anonymous}); err == nil {
+	if _, err := newCertificateHolder([]config.TLSCertificate{first, anonymous}, nil); err == nil {
 		t.Fatal("a later certificate with no DNS name was accepted despite being unselectable")
 	}
 	// The same certificate is fine as the first entry: that slot is reached
 	// without a name.
-	if _, err := newCertificateHolder([]config.TLSCertificate{anonymous}); err != nil {
+	if _, err := newCertificateHolder([]config.TLSCertificate{anonymous}, nil); err != nil {
 		t.Fatalf("a single nameless certificate was refused as the fallback: %v", err)
 	}
 }
@@ -190,7 +192,7 @@ func TestCertificateHolderDescribesExpiryFromTheCertificate(t *testing.T) {
 	directory := t.TempDir()
 	expiry := time.Now().Add(72 * time.Hour).Truncate(time.Second)
 	entry, _ := writeKeypair(t, directory, "serving", expiry, "halro.example.com")
-	holder, err := newCertificateHolder([]config.TLSCertificate{entry})
+	holder, err := newCertificateHolder([]config.TLSCertificate{entry}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +232,7 @@ func TestMetricsTLSHolderRotatesCertificateAndClientCATogether(t *testing.T) {
 
 	holder, err := newMetricsTLSHolder(config.MetricsTLS{
 		Enabled: true, CertFile: certPath, KeyFile: keyPath, ClientCAFile: caPath,
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -321,7 +323,7 @@ func TestChangedOutsideReloadableIgnoresTheLogLevel(t *testing.T) {
 func TestMetricsListenerFallsBackToTheServerCertificate(t *testing.T) {
 	directory := t.TempDir()
 	entry, print := writeKeypair(t, directory, "serving", time.Now().Add(time.Hour), "halro.example.com")
-	holder, err := newCertificateHolder([]config.TLSCertificate{entry})
+	holder, err := newCertificateHolder([]config.TLSCertificate{entry}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -358,7 +360,10 @@ func TestCertificateHolderIsSafeUnderConcurrentHandshakes(t *testing.T) {
 	directory := t.TempDir()
 	expiry := time.Now().Add(time.Hour)
 	entry, _ := writeKeypair(t, directory, "serving", expiry, "halro.example.com")
-	holder, err := newCertificateHolder([]config.TLSCertificate{entry})
+	// A real logger, because the unmatched-name path below carries its own
+	// throttle state and a nil logger would return before ever touching it.
+	holder, err := newCertificateHolder([]config.TLSCertificate{entry},
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -394,4 +399,91 @@ func TestCertificateHolderIsSafeUnderConcurrentHandshakes(t *testing.T) {
 	}
 	close(stop)
 	readers.Wait()
+}
+
+// TestCertificateHolderWarnsOnceForAnUnmatchedName covers the diagnostic that
+// makes the fallback answer readable — an operator whose client reports a name
+// mismatch needs the server side to agree — and the bound that keeps it from
+// becoming a denial of service. The name is chosen by whoever dialled the port.
+func TestCertificateHolderWarnsOnceForAnUnmatchedName(t *testing.T) {
+	directory := t.TempDir()
+	entry, _ := writeKeypair(t, directory, "api", time.Now().Add(time.Hour), "api.example.com")
+	var buffer safeBuffer
+	holder, err := newCertificateHolder([]config.TLSCertificate{entry},
+		slog.New(slog.NewTextHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 5 {
+		if _, err := holder.getCertificate(&tls.ClientHelloInfo{ServerName: "scan-target.example.com"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A declared name and a connection with no SNI at all are both answered
+	// exactly, so neither may produce the warning.
+	if _, err := holder.getCertificate(&tls.ClientHelloInfo{ServerName: "api.example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := holder.getCertificate(&tls.ClientHelloInfo{}); err != nil {
+		t.Fatal(err)
+	}
+	records := strings.Count(buffer.String(), "no certificate declares")
+	if records != 1 {
+		t.Fatalf("five unmatched handshakes produced %d records, want 1: %q", records, buffer.String())
+	}
+	if !strings.Contains(buffer.String(), "server_name=scan-target.example.com") {
+		t.Fatalf("the record does not name what was asked for: %q", buffer.String())
+	}
+
+	// Simulate the throttle window elapsing. The occurrences held back in the
+	// meantime must be reported rather than dropped, or the log would understate
+	// a scan as a single stray connection.
+	holder.unmatchedLoggedUnixNano.Store(0)
+	if _, err := holder.getCertificate(&tls.ClientHelloInfo{ServerName: "scan-target.example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buffer.String(), "suppressed_since_last=4") {
+		t.Fatalf("the suppressed occurrences were not carried forward: %q", buffer.String())
+	}
+}
+
+// TestCertificateLifetimesAreReportedWhenPublished pins the failure semantics:
+// an expired keypair is still served — refusing it would remove the one way to
+// replace material without a restart — but it never publishes quietly.
+func TestCertificateLifetimesAreReportedWhenPublished(t *testing.T) {
+	cases := []struct {
+		name     string
+		notAfter time.Time
+		want     string
+	}{
+		{"expired", time.Now().Add(-time.Hour), "level=ERROR"},
+		{"close to expiry", time.Now().Add(10 * 24 * time.Hour), "level=WARN"},
+		{"healthy", time.Now().Add(90 * 24 * time.Hour), "level=INFO"},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			directory := t.TempDir()
+			entry, fingerprint := writeKeypair(t, directory, "api", testCase.notAfter, "api.example.com")
+			var buffer safeBuffer
+			holder, err := newCertificateHolder([]config.TLSCertificate{entry},
+				slog.New(slog.NewTextHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelDebug})))
+			if err != nil {
+				t.Fatalf("an expiring certificate must still load: %v", err)
+			}
+			if got := servedFingerprint(t, holder, "api.example.com"); got != fingerprint {
+				t.Fatal("the certificate was not published")
+			}
+			if !strings.Contains(buffer.String(), testCase.want) {
+				t.Fatalf("expected a %s record, got %q", testCase.want, buffer.String())
+			}
+			if !strings.Contains(buffer.String(), "name=api.example.com") {
+				t.Fatalf("the record does not identify the certificate: %q", buffer.String())
+			}
+			// The digest prefix is what an operator compares against
+			// `openssl s_client` to confirm which file is in force.
+			if !strings.Contains(buffer.String(), "fingerprint="+fingerprint[:16]) {
+				t.Fatalf("the record does not carry the fingerprint: %q", buffer.String())
+			}
+		})
+	}
 }

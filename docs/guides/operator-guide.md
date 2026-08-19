@@ -148,6 +148,13 @@ name was missing rather than the opaque handshake failure a refusal would
 produce. Two entries claiming the same name are refused at load: an ambiguous
 mapping is harder to diagnose than a missing one.
 
+`tls.certificates` replaced the older `tls.cert_file` and `tls.key_file`
+scalars, and the old keys are gone rather than deprecated: unknown YAML fields
+are refused, so a configuration still carrying them stops the process at load
+with `field cert_file not found in type config.TLS`. Rewrite the block as the list
+above — one entry with the two paths reproduces the previous behaviour exactly.
+The data directory is untouched by this; only `config.yaml` needs editing.
+
 `trust_proxy_headers` must stay `false` in this shape. Clients connect directly,
 so their address is the peer address; a trusted-proxy range that no client
 falls into does nothing but obscure the topology.
@@ -171,15 +178,18 @@ security:
   trusted_proxy_cidrs: ["127.0.0.1/32"]
 ```
 
-Two settings decide whether this works, and both fail quietly when wrong:
+Two settings decide whether this works, and configuration validation checks
+neither of them:
 
-`admin.external_origin` is **required** behind a proxy. The Admin console checks
-that a mutating request's `Origin` matches this instance's own origin; with the
-setting empty, Halro derives that origin from the connection it received, which
-is plaintext, and compares `http://…` against the browser's `https://…`. Every
-Admin mutation is then rejected as cross-origin, with nothing in the
-configuration check to hint at why. The value must match the browser's address
-bar exactly, including the port whenever it is not the scheme default —
+`admin.external_origin` is **required** behind a proxy. Halro checks the
+browser's `Origin` against this instance's own origin; with the setting empty it
+derives that origin from the connection it received, which behind a proxy is
+plaintext, and compares `http://…` against the browser's `https://…`. The check
+guards the sign-in itself as well as every later mutation, so the symptom is not
+a subtle one — sign-in returns `origin rejected` and nobody gets in at all,
+while configuration validation says nothing about why. The value must match the
+browser's address bar exactly, including the port whenever it is not the scheme
+default —
 `https://halro.example.com` behind a proxy on 443, `https://halro.example.com:8081`
 when Halro serves 8081 itself.
 
@@ -226,6 +236,50 @@ has to pass streaming through untouched: disable response buffering and set read
 timeouts longer than the longest streamed response (`proxy_buffering off;` and
 `proxy_read_timeout` for nginx; Caddy needs neither).
 
+### Endpoints and client base URLs
+
+Paths come from the code and are the same in both shapes. There is no `/api`
+prefix in front of the Gateway: its paths are the OpenAI and Anthropic paths
+unchanged, which is what protocol compatibility means here — an SDK changes its
+base URL and nothing else.
+
+| Listener | Paths |
+| --- | --- |
+| Gateway | `POST /v1/chat/completions`, `/v1/responses`, `/v1/embeddings`, `/v1/moderations`, `/v1/images/generations`, `/v1/audio/speech`, `/v1/audio/transcriptions`, `/v1/rerank` |
+| Gateway (async and batch) | `/v1/files`, `/v1/batches`, `/v1/async/invocations` and their GET and cancel sub-paths |
+| Gateway (Anthropic) | `POST /v1/messages`, `POST /v1/messages/count_tokens` |
+| Gateway | `GET /health/live`, `GET /health/ready`, `GET /` |
+| Admin | `/admin`, `/admin/*` (the console), `/admin/api/v1/*`, `GET /health/live`, `GET /health/ready` |
+| Metrics | `GET /metrics`, `GET /health/live`, and `GET /audit/anchors` when the dead-man anchor sink is enabled |
+
+The two SDKs disagree about where `/v1` belongs, and the disagreement is theirs
+rather than Halro's: the OpenAI client appends `/chat/completions` to whatever
+base URL it is given, while the Anthropic client appends `/v1/messages`.
+
+```python
+from openai import OpenAI
+from anthropic import Anthropic
+
+# OpenAI SDK: the base URL carries /v1
+OpenAI(base_url="https://halro.example.com/v1", api_key="gw_...")
+
+# Anthropic SDK: the base URL does not
+Anthropic(base_url="https://halro.example.com", api_key="gw_...")
+```
+
+```bash
+curl https://halro.example.com/v1/chat/completions \
+  -H "Authorization: Bearer gw_..." \
+  -H "Content-Type: application/json" \
+  -d '{"model":"<public alias>","messages":[{"role":"user","content":"hi"}]}'
+```
+
+`model` is the public alias the Project allows, never the upstream model
+identifier: an application holds a Gateway Key and an alias and never sees the
+Provider credential behind either. Where Halro terminates TLS on its own port,
+the base URL carries that port — `https://halro.example.com:8080/v1`. The
+path-split proxy above is how a deployment avoids a port number in the URL.
+
 ### Reloading without a restart
 
 `SIGHUP` replaces a fixed set of material in place. It is not "re-read the
@@ -269,6 +323,22 @@ That is deliberate: refusing to serve because a *replacement* was bad would turn
 a fixable mistake into an outage. `halro doctor --config <path>` runs the same
 certificate check offline and can be used while the instance is serving.
 
+Each published certificate is logged with its first DNS name, its expiry, and a
+prefix of its SHA-256 — the same digest `openssl s_client -connect host:port |
+openssl x509 -fingerprint -noout` reads back, so a rotation can be confirmed
+from either end. A certificate with less than 30 days left is logged as a
+warning and one already expired as an error; both are still served, because
+refusing them would remove the mechanism needed to replace them. The same
+fingerprint appears under `reload.certificates` in
+`/admin/api/v1/system/status`, which answers "which file is in force" when the
+path has been written over since startup.
+
+A client asking for a name no certificate declares is answered with the first
+entry and logged as a warning naming what was asked for. That record is rate
+limited to one per minute with a count of what it stood in for: the name is
+chosen by whoever dialled the port, and an exposed listener under a scanner
+would otherwise push everything else out of a size-bounded log.
+
 Rotating the Metrics client CA takes two signals, in this order:
 
 1. Concatenate the old and new CA into `metrics.tls.client_ca_file`, `SIGHUP`.
@@ -292,9 +362,13 @@ For the log file, have the rotator signal after it renames:
 certificates by restarting.
 
 Because the running configuration can now differ from the file on disk, the
-console reports what is actually in force: `/admin/api/v1/system/config` renders
-the effective values and, with `/admin/api/v1/system/status`, the per-item
-outcome and timestamp of the last reload. `halro_reload_last_success_timestamp_seconds`
+console reports what is actually in force. Settings → Diagnostics carries a
+Certificates and reloading card: one row per certificate with its expiry and
+fingerprint, and one row per reloadable item with when it was last applied —
+items this deployment has nothing to reload keep their row and say so, so
+"never ran" and "not configured" do not read alike. The same data is on
+`/admin/api/v1/system/status`, and `/admin/api/v1/system/config` renders the
+effective values rather than re-reading the file. `halro_reload_last_success_timestamp_seconds`
 carries the same answer to Prometheus. A reload also logs, once, which
 configuration sections changed on disk in ways it could not apply — the restart
 list, discovered at the moment someone expected the edit to take.

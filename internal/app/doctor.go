@@ -298,12 +298,6 @@ func doctorDataLockFailure(dataDir string, err error) string {
 	}
 }
 
-// certificateExpiryWarning is how much life a certificate must have left before
-// its remaining validity stops being worth mentioning. It matches the alert
-// threshold shipped in deploy/observability, so the two do not disagree about
-// when an operator should have acted.
-const certificateExpiryWarning = 30 * 24 * time.Hour
-
 func checkDoctorCertificates(cfg config.Config, add func(string, string, string)) {
 	if cfg.TLS.Enabled {
 		sources := make([]certificateSource, 0, len(cfg.TLS.Certificates))
@@ -321,7 +315,10 @@ func checkDoctorCertificates(cfg config.Config, add func(string, string, string)
 	if !cfg.Metrics.Enabled || !cfg.Metrics.TLS.Enabled {
 		return
 	}
-	holder, err := newMetricsTLSHolder(cfg.Metrics.TLS)
+	// The check's own verdict is the output here, so the holder is built
+	// without a log: repeating it as a record would duplicate what doctor is
+	// about to print, and doctor is not the serving process.
+	holder, err := newMetricsTLSHolder(cfg.Metrics.TLS, nil)
 	if err != nil {
 		add("metrics_tls_certificate", "fail", err.Error())
 		return

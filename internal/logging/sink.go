@@ -56,6 +56,11 @@ type Sink struct {
 	// degraded is set after the first failed write, so the fallback is told once
 	// what went wrong rather than once per record.
 	degraded bool
+	// absence says why there is no file to write to. "Closed" and "the reopen
+	// failed" send records to the same fallback but mean opposite things to
+	// whoever is reading it, and the fallback notice is the only place either
+	// one is stated.
+	absence error
 }
 
 // DirPerm and FilePerm keep the log as private as the data directory beside it.
@@ -98,7 +103,11 @@ func (s *Sink) Write(record []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.file == nil {
-		return s.writeFallback(record, errors.New("log sink is closed"))
+		cause := s.absence
+		if cause == nil {
+			cause = errors.New("log sink is closed")
+		}
+		return s.writeFallback(record, cause)
 	}
 	// Rotate before the write rather than after it, so the limit bounds the file
 	// that exists rather than the one that existed a record ago. An empty file is
@@ -186,30 +195,37 @@ func generationPath(path string, generation int) string {
 // A failed reopen leaves the sink without a file rather than holding the stale
 // descriptor: continuing to write into a renamed file is what the caller was
 // trying to stop, and Write already falls back to stderr when there is no file.
+// A failure to close the old descriptor is reported but does not abandon the
+// reopen — the point of the call is to be writing to the path again, and the
+// close is the part that has already stopped mattering.
 func (s *Sink) Reopen() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var closeErr error
 	if s.file != nil {
 		if err := s.file.Close(); err != nil {
-			s.file = nil
-			return fmt.Errorf("close log file: %w", err)
+			closeErr = fmt.Errorf("close log file: %w", err)
 		}
 		s.file = nil
 	}
+	fail := func(err error) error {
+		s.absence = errors.Join(closeErr, err)
+		return s.absence
+	}
 	if err := os.MkdirAll(filepath.Dir(s.path), DirPerm); err != nil {
-		return fmt.Errorf("create log directory: %w", err)
+		return fail(fmt.Errorf("create log directory: %w", err))
 	}
 	file, err := os.OpenFile(s.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, FilePerm)
 	if err != nil {
-		return fmt.Errorf("open log file: %w", err)
+		return fail(fmt.Errorf("open log file: %w", err))
 	}
 	info, err := file.Stat()
 	if err != nil {
 		file.Close()
-		return fmt.Errorf("measure log file: %w", err)
+		return fail(fmt.Errorf("measure log file: %w", err))
 	}
-	s.file, s.size, s.degraded = file, info.Size(), false
-	return nil
+	s.file, s.size, s.degraded, s.absence = file, info.Size(), false, nil
+	return closeErr
 }
 
 func (s *Sink) Close() error {
@@ -219,6 +235,6 @@ func (s *Sink) Close() error {
 		return nil
 	}
 	err := s.file.Close()
-	s.file = nil
+	s.file, s.absence = nil, errors.New("log sink is closed")
 	return err
 }

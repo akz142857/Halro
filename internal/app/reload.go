@@ -1,6 +1,8 @@
 package app
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -10,6 +12,7 @@ import (
 	"time"
 
 	"github.com/akz142857/Halro/internal/config"
+	"gopkg.in/yaml.v3"
 )
 
 // Reloadable names every item SIGHUP may replace. The list is closed on
@@ -135,6 +138,14 @@ func (r *Runtime) Reload() error {
 		r.logger.Info("reload item applied", "item", item)
 	}
 
+	// The file is read once, before any item runs, because two things need it
+	// and they are not the same thing: the log level is one item's material,
+	// while the report of what a reload could *not* apply describes the whole
+	// signal. Deriving the second from the first would have made an operator's
+	// only notice of a restart-only edit depend on whether this deployment
+	// happens to reload a log level at all.
+	next, configErr := r.readReloadConfig()
+
 	var reloadServing, reloadMetricsTLS, reloadLevel, reopenLog func() error
 	if r.reload.serving != nil {
 		reloadServing = r.reload.serving.reload
@@ -145,7 +156,13 @@ func (r *Runtime) Reload() error {
 	// The level is read out of the configuration file, so without a path there
 	// is nowhere for a new value to come from.
 	if r.reload.logControls != nil && r.reload.configPath != "" {
-		reloadLevel = r.reloadLogLevel
+		reloadLevel = func() error {
+			if configErr != nil {
+				return configErr
+			}
+			r.applyLogLevel(next)
+			return nil
+		}
 	}
 	if r.reload.logControls != nil && r.reload.logControls.HasFile() {
 		reopenLog = r.reload.logControls.ReopenFile
@@ -159,11 +176,17 @@ func (r *Runtime) Reload() error {
 	return errors.Join(problems...)
 }
 
-// reloadLogLevel re-reads the configuration file for one scalar. The whole file
-// is parsed and validated first: applying a level out of a file that would be
-// refused on startup would mean the running process took a setting from a
-// configuration it could not actually run.
-func (r *Runtime) reloadLogLevel() error {
+// readReloadConfig re-reads the whole configuration file. It is parsed and
+// validated in full even though one scalar is all that will be taken from it:
+// applying a value out of a file that would be refused on startup would mean
+// the running process took a setting from a configuration it cannot actually
+// run. Everything outside the allowlist that changed is reported once, because
+// the alternative is an operator who edited a key, sent a signal, and has no
+// way to learn that the running process still holds the old value.
+func (r *Runtime) readReloadConfig() (config.Config, error) {
+	if r.reload.configPath == "" {
+		return config.Config{}, nil
+	}
 	next, err := config.Load(r.reload.configPath, config.LoadOptions{
 		// The listeners are already bound; re-deciding whether they may bind is
 		// not this function's business, and the override flags that governed it
@@ -171,26 +194,30 @@ func (r *Runtime) reloadLogLevel() error {
 		SkipListenerValidation: true,
 	})
 	if err != nil {
-		return fmt.Errorf("re-read configuration: %w", err)
+		return config.Config{}, fmt.Errorf("re-read configuration: %w", err)
 	}
-	// Everything outside the allowlist that changed on disk is reported once,
-	// here, because the alternative is an operator who edited a key, sent a
-	// signal, and has no way to learn that the running process still holds the
-	// old value.
 	if changed := changedOutsideReloadable(r.config, next); len(changed) > 0 {
 		r.logger.Warn("configuration changed in ways a reload cannot apply; restart to take them up",
 			"sections", changed)
 	}
+	return next, nil
+}
+
+// applyLogLevel moves the live level and leaves a record of the move.
+func (r *Runtime) applyLogLevel(next config.Config) {
 	level := next.Logging.SlogLevel()
-	if level == r.reload.logControls.Level() {
-		return nil
+	previous := r.reload.logControls.Level()
+	if level == previous {
+		return
 	}
-	// Written at Info so it survives a reload that raises the level away from
-	// Debug: without it, a later reader of a quiet log cannot tell whether the
-	// process was quiet or merely configured to be.
-	r.logger.Info("log level changed", "from", r.reload.logControls.Level().String(), "to", level.String())
 	r.reload.logControls.SetLevel(level)
-	return nil
+	// Written at whichever of the two levels is more severe, so the record
+	// survives under both the setting it left and the setting it arrived at.
+	// An Info record written before the change is dropped by exactly the
+	// transition that matters most — warn to debug — and a later reader of the
+	// verbose stretch is then unable to tell when it began.
+	r.logger.Log(context.Background(), max(level, previous, slog.LevelInfo),
+		"log level changed", "from", previous.String(), "to", level.String())
 }
 
 // effectiveConfig is the configuration as it is actually in force, which is no
@@ -235,6 +262,10 @@ type certificateStatus struct {
 	Scope    string    `json:"scope"`
 	Name     string    `json:"name"`
 	NotAfter time.Time `json:"not_after"`
+	// Fingerprint answers "which file is actually in force" after a rotation,
+	// which is the question the console cannot otherwise settle: the path on
+	// disk may have been written over since.
+	Fingerprint string `json:"fingerprint"`
 }
 
 // reloadStatus is what the console shows so the running state can be compared
@@ -266,6 +297,7 @@ func (r *Runtime) reloadStatus() map[string]any {
 		for _, description := range r.reload.serving.describe() {
 			certificates = append(certificates, certificateStatus{
 				Scope: "serving", Name: description.Name, NotAfter: description.NotAfter.UTC(),
+				Fingerprint: description.Fingerprint,
 			})
 		}
 	}
@@ -273,6 +305,7 @@ func (r *Runtime) reloadStatus() map[string]any {
 		for _, description := range r.reload.metricsTLS.describe() {
 			certificates = append(certificates, certificateStatus{
 				Scope: "metrics", Name: description.Name, NotAfter: description.NotAfter.UTC(),
+				Fingerprint: description.Fingerprint,
 			})
 		}
 	}
@@ -286,14 +319,11 @@ func (r *Runtime) reloadStatus() map[string]any {
 func changedOutsideReloadable(current, next config.Config) []string {
 	current.Logging.Level = ""
 	next.Logging.Level = ""
-	if reflect.DeepEqual(current, next) {
-		return nil
-	}
 	currentValue, nextValue := reflect.ValueOf(current), reflect.ValueOf(next)
 	structType := currentValue.Type()
 	var sections []string
 	for index := range structType.NumField() {
-		if reflect.DeepEqual(currentValue.Field(index).Interface(), nextValue.Field(index).Interface()) {
+		if sameConfigSection(currentValue.Field(index).Interface(), nextValue.Field(index).Interface()) {
 			continue
 		}
 		name := structType.Field(index).Tag.Get("yaml")
@@ -304,4 +334,19 @@ func changedOutsideReloadable(current, next config.Config) []string {
 	}
 	sort.Strings(sections)
 	return sections
+}
+
+// sameConfigSection compares two sections as the configuration file would spell
+// them. reflect.DeepEqual is the wrong instrument here: it separates an absent
+// list from an empty one, and a warning that names a section nobody edited
+// teaches an operator to stop reading the warning.
+func sameConfigSection(current, next any) bool {
+	currentBytes, currentErr := yaml.Marshal(current)
+	nextBytes, nextErr := yaml.Marshal(next)
+	if currentErr != nil || nextErr != nil {
+		// A section that cannot be rendered must not silently pass as
+		// unchanged; fall back to the structural answer.
+		return reflect.DeepEqual(current, next)
+	}
+	return bytes.Equal(currentBytes, nextBytes)
 }

@@ -36,7 +36,7 @@ func TestMetricsTLSConfigRequiresAndVerifiesClientCertificates(t *testing.T) {
 
 	holder, err := newMetricsTLSHolder(halroconfig.MetricsTLS{
 		Enabled: true, CertFile: certPath, KeyFile: keyPath, ClientCAFile: caPath,
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

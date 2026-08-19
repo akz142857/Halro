@@ -1,10 +1,12 @@
 package app
 
 import (
+	"bytes"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -39,7 +41,7 @@ func TestReloadAppliesEachItemIndependently(t *testing.T) {
 	directory := t.TempDir()
 	expiry := time.Now().Add(time.Hour)
 	entry, firstPrint := writeKeypair(t, directory, "serving", expiry, "halro.example.com")
-	holder, err := newCertificateHolder([]config.TLSCertificate{entry})
+	holder, err := newCertificateHolder([]config.TLSCertificate{entry}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +83,7 @@ func TestReloadAppliesEachItemIndependently(t *testing.T) {
 func TestReloadKeepsServingWhenOneItemFails(t *testing.T) {
 	directory := t.TempDir()
 	entry, firstPrint := writeKeypair(t, directory, "serving", time.Now().Add(time.Hour), "halro.example.com")
-	holder, err := newCertificateHolder([]config.TLSCertificate{entry})
+	holder, err := newCertificateHolder([]config.TLSCertificate{entry}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,4 +211,96 @@ func writeConfigFile(t *testing.T, path string, cfg config.Config) {
 	if err := os.WriteFile(path, payload, 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// levelledLogControls wires the level the way the live process wires it: what a
+// reload sets is what the next record is filtered against. The stub above keeps
+// the level in a plain field, which cannot show whether the record announcing a
+// change survives the change.
+type levelledLogControls struct {
+	variable *slog.LevelVar
+}
+
+func (c *levelledLogControls) SetLevel(level slog.Level) { c.variable.Set(level) }
+func (c *levelledLogControls) Level() slog.Level         { return c.variable.Level() }
+func (c *levelledLogControls) HasFile() bool             { return false }
+func (c *levelledLogControls) ReopenFile() error         { return nil }
+
+// TestLogLevelChangeIsRecordedInBothDirections covers the reason the record
+// exists: someone reading a stretch of verbose log has to be able to tell when
+// it started. Raising verbosity from a level above info is exactly the case an
+// Info record written before the change would lose.
+func TestLogLevelChangeIsRecordedInBothDirections(t *testing.T) {
+	cases := []struct{ name, from, to string }{
+		{"raising verbosity", "warn", "debug"},
+		{"lowering verbosity", "debug", "warn"},
+		{"to the quietest level", "warn", "error"},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			cfg := testConfig(t)
+			cfg.Logging = config.Logging{
+				Level: testCase.from, Format: config.LogFormatJSON,
+				Output: config.LogOutputStderr, MaxSizeMB: 64, MaxFiles: 5,
+			}
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			edited := cfg
+			edited.Logging.Level = testCase.to
+			writeConfigFile(t, path, edited)
+
+			variable := new(slog.LevelVar)
+			variable.Set(namedLevel(t, testCase.from))
+			var buffer safeBuffer
+			runtime := &Runtime{
+				logger: slog.New(slog.NewTextHandler(&buffer, &slog.HandlerOptions{Level: variable})),
+				config: cfg,
+				reload: reloadRuntime{configPath: path, logControls: &levelledLogControls{variable: variable}},
+			}
+			if err := runtime.Reload(); err != nil {
+				t.Fatalf("reload failed: %v", err)
+			}
+			if variable.Level() != namedLevel(t, testCase.to) {
+				t.Fatalf("level is %s, want %s", variable.Level(), testCase.to)
+			}
+			if !strings.Contains(buffer.String(), "log level changed") {
+				t.Fatalf("the %s transition left no record: %q", testCase.name, buffer.String())
+			}
+			// Only the level was edited, so nothing may be reported as
+			// needing a restart. A configuration built in memory and one
+			// parsed back from YAML differ in how they spell an empty list,
+			// and a warning naming a section nobody touched is a warning
+			// operators learn to skip.
+			if strings.Contains(buffer.String(), "cannot apply") {
+				t.Fatalf("an unedited section was reported as restart-only: %q", buffer.String())
+			}
+		})
+	}
+}
+
+func namedLevel(t *testing.T, name string) slog.Level {
+	t.Helper()
+	var level slog.Level
+	if err := level.UnmarshalText([]byte(name)); err != nil {
+		t.Fatal(err)
+	}
+	return level
+}
+
+// safeBuffer exists because slog may be written from more than one goroutine in
+// these tests; bytes.Buffer is not safe for that on its own.
+type safeBuffer struct {
+	mu      sync.Mutex
+	content bytes.Buffer
+}
+
+func (b *safeBuffer) Write(payload []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.content.Write(payload)
+}
+
+func (b *safeBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.content.String()
 }

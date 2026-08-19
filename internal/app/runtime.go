@@ -1281,14 +1281,14 @@ func (r *Runtime) listenerTLSConfig(name string) *tls.Config {
 // openTLSMaterial loads every configured keypair once, before the first bind.
 func (r *Runtime) openTLSMaterial() error {
 	if r.config.TLS.Enabled && r.reload.serving == nil {
-		holder, err := newCertificateHolder(r.config.TLS.Certificates)
+		holder, err := newCertificateHolder(r.config.TLS.Certificates, r.logger)
 		if err != nil {
 			return err
 		}
 		r.reload.serving = holder
 	}
 	if r.config.Metrics.Enabled && r.config.Metrics.TLS.Enabled && r.reload.metricsTLS == nil {
-		holder, err := newMetricsTLSHolder(r.config.Metrics.TLS)
+		holder, err := newMetricsTLSHolder(r.config.Metrics.TLS, r.logger)
 		if err != nil {
 			return err
 		}

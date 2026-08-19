@@ -392,6 +392,41 @@ describe("SettingsPage system configuration pane", () => {
     expect(screen.getByText("≈ 9.04 请求/秒")).toBeInTheDocument();
   });
 
+  // The panel exists because the file on disk stopped being the answer to
+  // "what is in force". Every item keeps its row, including the ones this
+  // deployment has nothing to reload, so "never ran" and "not configured" do
+  // not read the same.
+  it("reports what the last reload did and which certificate is being served", async () => {
+    vi.spyOn(api, "systemConfig").mockResolvedValue({ yaml: "" } as never);
+    vi.spyOn(api, "systemStatus").mockResolvedValue({
+      build: { version: "1.0.0", commit: "abc", date: "2026-08-19" },
+      accounting_status: 0, draining: false, wal: {}, write_path: emptyWritePath(),
+      audit: {}, alerts: {}, usage_watermark: {},
+      reload: {
+        items: [
+          { item: "tls", applies: true, successes: 2, failures: 1, last_success: "2026-08-19T09:00:00Z" },
+          { item: "metrics_tls", applies: false, successes: 0, failures: 0, last_success: null },
+          { item: "log_level", applies: true, successes: 0, failures: 0, last_success: null },
+          { item: "log_file", applies: true, successes: 1, failures: 0, last_success: "2026-08-19T09:00:00Z" },
+        ],
+        certificates: [
+          { scope: "serving", name: "halro.example.com", not_after: "2026-09-01T00:00:00Z", fingerprint: "b67dfa5e1c2d3e4f" },
+        ],
+      },
+    } as never);
+    window.history.replaceState({}, "", "/admin/settings/diagnostics");
+    renderWithClient(<SettingsPage />);
+
+    expect(await screen.findByText(/证书与热重载/)).toBeInTheDocument();
+    // The fingerprint is the only field that distinguishes the file in force
+    // from the one the path now points at.
+    expect(screen.getByText("b67dfa5e1c2d3e4f")).toBeInTheDocument();
+    expect(screen.getByText(/halro\.example\.com/)).toBeInTheDocument();
+    expect(screen.getByText("本部署未配置")).toBeInTheDocument();
+    expect(screen.getByText("尚未重载过")).toBeInTheDocument();
+    expect(screen.getByText("失败 1 次")).toBeInTheDocument();
+  });
+
   it("shows why data-plane traffic is refused while activation is stale", async () => {
     vi.spyOn(api, "systemStatus").mockResolvedValue({
       build: { version: "1.0.0", commit: "abc", date: "2026-08-11" },

@@ -414,7 +414,7 @@ func (h *certificateHolder) get(hello *tls.ClientHelloInfo) (*tls.Certificate, e
 }
 ```
 
-`buildBundle` 在加载时校验：每张证书能解析、私钥匹配、SAN 非空；**同一个名字被两张证书声明即拒绝整份 bundle** —— 歧义的 SNI 映射比缺证书更难排查。索引在重载时一次建好，握手路径只做 map 查找，不做字符串解析以外的工作。
+`buildBundle` 在加载时校验：每张证书能解析、私钥匹配；**同一个名字被两张证书声明即拒绝整份 bundle** —— 歧义的 SNI 映射比缺证书更难排查。无 DNS 名的证书只在列表首项被接受（它靠 fallback 位置仍可达），出现在其余位置则拒绝整份 bundle —— 那张证书永远选不中，静默忽略等于让操作者以为它在生效。索引在重载时一次建好，握手路径只做 map 查找，不做字符串解析以外的工作。
 
 **Metrics 持有者（证书与 client CA 一次发布）**：
 
@@ -511,7 +511,7 @@ HTTP/2 那条是重点：`net/http` 在 `Serve` 与 `ServeTLS` 两条路径上�
 | --- | --- |
 | 启动时证书不可加载 | 拒绝启动（与当前一致） |
 | `SIGHUP` 后新证书解析失败 / 证书与私钥不匹配 | **保留旧证书继续服务**，记录 error 日志，失败计数 +1 |
-| `SIGHUP` 后新证书可加载但已过期 | 接受并发布，同时记 error 日志与告警 —— 拒绝会让操作者失去用重载修复的手段，而是否可用应由客户端的信任决策决定 |
+| `SIGHUP` 后新证书可加载但已过期 | 接受并发布，同时记 error 日志与告警 —— 拒绝会让操作者失去用重载修复的手段，而是否可用应由客户端的信任决策决定。启动时的首次加载走同一条日志路径 |
 | 新证书剩余有效期 < 30 天 | 接受，记 warn 日志 |
 | bundle 中任一张证书加载失败 | **整份 bundle 不发布**，旧 bundle 全部继续服务。部分发布会造成「一半新一半旧」的不可解释状态 |
 | 两张证书声明同一个名字 | 拒绝该次重载（启动时则拒绝启动）：歧义的 SNI 映射比缺证书更难排查 |
@@ -527,7 +527,7 @@ HTTP/2 那条是重点：`net/http` 在 `Serve` 与 `ServeTLS` 两条路径上�
 | 返回 error 拒绝握手 | `remote error: tls: internal error` | 语义上更"干净"，但错误信息对排障毫无帮助，Go 无法发送更贴切的 `unrecognized_name` 告警 |
 | **返回 fallback 证书**（推荐） | `x509: certificate is valid for api.example.com, not foo.example.com` | 诊断信息直接指出问题。证书是公开信息，返回一张名字不匹配的证书不构成任何泄露，客户端的名字校验照常拒绝连接 |
 
-采用后者。同时在服务端记一条 warn，带上请求的 `ServerName` —— 但**只进日志，不进指标标签**：该值由客户端控制，作为标签会造成无界基数。
+采用后者。同时在服务端记一条 warn，带上请求的 `ServerName` —— 但**只进日志，不进指标标签**：该值由客户端控制，作为标签会造成无界基数。同理，该值由客户端控制也意味着日志本身要限速：实现里限为**每分钟一条**，并在下一条里带上期间被抑制的次数，否则一次端口扫描就能把体积受限的日志文件冲干净。
 
 ### 6.7 可观测性
 
@@ -541,7 +541,7 @@ HTTP/2 那条是重点：`net/http` 在 `Serve` 与 `ServeTLS` 两条路径上�
 
 - `deploy/observability/` 增加「证书 30 天内过期」与「重载失败」两条告警规则；`make observability-check` 会校验该配置。
 - `halro doctor` 增加 `tls_certificates` 与 `metrics_tls_certificate` 两项离线检查：加载失败即 fail，剩余有效期不足 30 天即 warn，已过期即 fail。
-- `/admin/api/v1/system/config` 与 `/admin/api/v1/system/status` 报告**当前生效值**与每项最后一次成功重载时间，不得重新读一遍 config.yaml 当作现状（§6.3 末尾）。
+- `/admin/api/v1/system/config` 与 `/admin/api/v1/system/status` 报告**当前生效值**与每项最后一次成功重载时间，不得重新读一遍 config.yaml 当作现状（§6.3 末尾）。`reload.certificates` 每项还带 SHA-256 前缀指纹 —— 路径可能已被覆盖写过，指纹是唯一能回答「现在在跑的到底是哪一份文件」的字段，且与 `openssl s_client` 读回的值可直接比对。
 - 证书轮换属于运维事件而非租户事件，走日志与指标即可，**不进** append-only 审计流。日志只记文件路径、`NotAfter`、指纹前缀，不记私钥任何字节。
 
 ### 6.8 验证计划
@@ -583,6 +583,20 @@ go vet ./internal/app/
 | 非可重载键改动（`server.max_header_bytes`） | 出现 `configuration changed in ways a reload cannot apply`，`sections=[server]` |
 | `/metrics` 暴露 | 三个新序列齐全；一次 `SIGHUP` 后 `tls` / `log_level` / `log_file` 各 +1，`metrics_tls` 保持 0（未配置） |
 | `halro doctor` 在实例运行时 | `tls_certificates` 报 warn（29 天），随后在 `data_lock` 失败 —— 与 §6.7 描述一致 |
+
+**补充实机验证（诊断日志落地后，同样是真实二进制 + `SIGHUP`）：**
+
+| 项 | 结果 |
+| --- | --- |
+| 启动加载两张证书 | 19 天的那张记 `WARN` + `days_left=19`，200 天的那张记 `INFO`，均带名字、`NotAfter` 与指纹 |
+| 日志指纹与外部读数是否一致 | 日志 `fingerprint=c0b7330ce0c0a14d`，`openssl x509 -fingerprint -sha256` 读回 `C0:B7:33:0C:E0:C0:A1:4D…`，逐字节相同 |
+| 换上已过期证书后 `SIGHUP` | `ERROR` `TLS certificate is expired and is being served anyway`，且握手确实换成了该张 —— 接受而不静默 |
+| 随后写坏私钥再 `SIGHUP` | `reload item failed` + `reload completed with failures`，握手仍是上一张，`halro_reload_total{item="tls",status="error"}` 为 1 |
+| SNI 选择（`halro.test` / `console.test` / 未声明名 / 无 SNI） | 分别得到 certA / console / certA（fallback）/ certA |
+| 未声明的 SNI | `WARN` 带 `server_name=nope.test` 与 `suppressed_since_last=0` |
+| `logging.level` warn→debug | 留下 `log level changed`（改动前这一档会被自己的级别过滤掉） |
+| 非可重载键改动（`server.max_header_bytes`） | `sections=[server]`，把该告警从 `log_level` 项里提出来之后仍然成立 |
+| 全局 TLS 打开而 `metrics.tls` 关闭时的 `/metrics` | 仍以服务证书走 HTTPS，`halro_tls_certificate_expiry_seconds` 两条序列齐全 —— §9 记录的那个回归未复发 |
 
 并发正确性另有 `-race` 下 8 读 goroutine × 20 次重载的测试；反向注入一个未同步的影子字段确认该测试会报 `DATA RACE`。
 
@@ -664,6 +678,11 @@ go vet ./internal/app/
 3. **`halro doctor` 只做离线证书检查**，不报告运行中进程的重载状态 —— 它需要独占锁，见 §6.7。
 4. **`Runtime` 字段用一个 `reloadRuntime` 子结构承载**，而不是平铺五个字段。`runtime_scale_test.go` 的宽度闸门按「一个子系统一个字段」计数，预算从 68 提到 69 并写明理由。
 5. **`SIGHUP` 监听器改到 `ready` 回调里安装**。原先在 `app.Open` 之后立即安装，而证书是在 `RunWithReady` 里加载的 —— 这中间到达的信号会与启动写入并发读同一份材料。`ready` 在证书加载完、监听器绑定后、开始 Serve 前调用，是唯一正确的时点。
+6. **列表首项允许无 DNS 名**，其余位置拒绝。首项本身就是无 SNI 连接的应答者，靠位置而非名字可达；而后续位置上的一张无名证书永远选不中，接受它等于静默忽略操作者配置的一张证书。指标标签退化为 `certificate-0`。
+7. **未匹配 SNI 的 warn 做了限速**（每分钟一条 + 抑制计数）。原稿只写「记一条 warn」，但该记录的内容与频率都由对端决定，不限速时一次扫描即可把体积受限的日志冲掉 —— 这与「不记高基数标签」是同一条理由的两种表现。
+8. **级别变更记录写在 `SetLevel` 之后，取新旧级别的较高者作为严重级**。原先按 Info 写在变更之前，恰好会被「从高于 info 的级别调低到 debug」这一档吞掉 —— 也就是最需要它的那一档：读到一段 debug 日志的人无从判断它从何时开始。
+9. **「哪些改动重载管不了」的告警从 `log_level` 一项中提出来**，改由 `Reload` 统一在读取配置文件后发出。挂在单项里意味着该提示的存在与否取决于这套部署是否恰好在重载日志级别，而它描述的是整个信号。
+10. **配置分节比较按 YAML 编码而非 `reflect.DeepEqual`**。后者把「缺省的列表」与「空列表」判为不同，会报出一个没人改过的分节 —— 一条误报的 restart 提示会直接教会操作者忽略这条提示。
 
 **实机验证中发现并修复的一个回归**：改造前 `metrics` 监听器在 `metrics.tls` 关闭而全局 `tls.enabled` 打开时，会复用全局证书走 TLS（旧代码的 `else if r.config.TLS.Enabled` 分支覆盖了它）。第一版改造把它变成了明文 —— 而 `cmd/halro/stats.go:275` 与 `main.go:926` 仍按 `cfg.TLS.Enabled` 拼 `https://.../metrics`。这个问题单元测试没有暴露，是用真实二进制 curl `/metrics` 拿到 `status=000` 才发现的。已修复并补 `TestMetricsListenerFallsBackToTheServerCertificate` 钉住，反向注入旧分支确认该测试会失败。
 
@@ -673,6 +692,6 @@ go vet ./internal/app/
 
 1. ~~**`Reload` 的部分失败如何对外表达。**~~ 已定：逐项列出。`/admin/api/v1/system/status` 的 `reload.items` 每项带 `applies` / `successes` / `failures` / `last_success`，`applies` 把「这套部署没有这一项」与「从未成功过」分开。`halro doctor` 不参与（见 §6.7）。
 2. **fallback 证书的选取规则。** 当前定为「列表第一项」。多证书部署下这意味着配置顺序有语义，容易被后续编辑无意改变。是否要改成显式 `default: true` 标记？倾向保持隐式并在文档中写明，但需要在校验里对「列表为空」以外的歧义情形给出明确报错。
-3. **`logging.level` 可在运行中变化后，日志本身的可追溯性。** 排障时看到一段 info 级日志，无法判断当时是否处于 debug 期。是否在每次级别变更时写一条不可降级的 info 记录（含新旧级别与时间）？倾向要。
+3. ~~**`logging.level` 可在运行中变化后，日志本身的可追溯性。**~~ 已定并实现：每次变更写一条记录，含新旧级别；严重级取新旧两者的较高者，因此在变更前后的两套设置下都能留存（见 §9.8）。
 4. **Windows 上的等价手段。** `SIGHUP` 在该平台永不投递（§6.2），意味着 Windows 部署只能重启换证。是否需要一个平台特定的触发方式（命名管道 / 服务控制码），还是文档写明限制即可？倾向后者 —— 该平台不是本项目的主要部署目标。
 5. **`tls.certificates` 列表变更（增删条目、改路径）是否要求重启。** 当前定为要求重启（§6.3 只重载文件内容，不重载路径与拓扑）。但「加一张新证书」是相当常见的操作，全量重启的代价与它的频率是否匹配，值得在实施后按实际使用情况复审。
