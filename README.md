@@ -64,6 +64,101 @@ For SDK examples and the complete Admin workflow, read the
 [简体中文](docs/guides/user-guide.zh-CN.md). For deployment, upgrades, backup,
 recovery, and hardening, use the [Operator Guide](docs/guides/operator-guide.md).
 
+## Run with Docker
+
+Every tag publishes multi-architecture images (`linux/amd64`, `linux/arm64`):
+
+```bash
+docker pull ghcr.io/akz142857/halro:v0.2.0
+docker pull ghcr.io/akz142857/halro-deadman:v0.2.0   # the independent watchdog, deployed separately
+```
+
+`latest` follows the newest tag; pin by digest for anything you deploy:
+
+```text
+ghcr.io/akz142857/halro@sha256:aaa3bfa22ea0bb032bddccacd2ed2f4fda978165db14d5ce3198601f51e29f91
+```
+
+The runtime is distroless with no shell, runs as uid 65532, and its
+`ENTRYPOINT` is the `halro` binary. The default command is
+`serve --config /etc/halro/config.yaml`, and `serve` never initializes storage,
+so the first run is an explicit `init`.
+
+Configuration is never merged with built-in defaults — a partial file is
+rejected key by key — so start from the complete annotated
+[`configs/config.example.yaml`](configs/config.example.yaml), or from the
+`config.yaml` that a local `make start` writes, and change the three values
+whose defaults are wrong for a container:
+
+```yaml
+server:
+  # Container loopback would refuse every request arriving through -p.
+  gateway_listen: "0.0.0.0:8080"
+storage:
+  # A child of the mount; the mount point itself must not be the data directory.
+  data_dir: "/var/lib/halro/data"
+  master_key:
+    file: "/run/secrets/halro-master.key"
+```
+
+Initialize once, with `/run/secrets` writable so `init` can create the
+file-mode Master Key at `0600`:
+
+```bash
+mkdir -p ./halro-secrets
+sudo chown 65532:65532 ./halro-secrets && chmod 700 ./halro-secrets
+docker volume create halro-data
+
+docker run --rm --user 65532:65532 \
+  -v "$PWD/config.yaml:/etc/halro/config.yaml:ro" \
+  -v "$PWD/halro-secrets:/run/secrets" \
+  -v halro-data:/var/lib/halro \
+  ghcr.io/akz142857/halro:v0.2.0 init --config /etc/halro/config.yaml
+```
+
+Then serve, publishing only the Gateway on host loopback:
+
+```bash
+docker run -d --name halro --user 65532:65532 \
+  -v "$PWD/config.yaml:/etc/halro/config.yaml:ro" \
+  -v "$PWD/halro-secrets:/run/secrets:ro" \
+  -v halro-data:/var/lib/halro \
+  -p 127.0.0.1:8080:8080 \
+  ghcr.io/akz142857/halro:v0.2.0 serve --config /etc/halro/config.yaml \
+    -allow-insecure-public-listen
+```
+
+`-allow-insecure-public-listen` covers Gateway plaintext only and exists
+because of the `0.0.0.0` bind above — neither alone is enough, and together
+they describe a host-local development boundary, not a public one. Admin and
+Metrics stay on container loopback in this shape; publish them only after
+enabling TLS and mounting the certificate, key, and Metrics client CA.
+
+Two container facts that bite:
+
+- **One replica, always.** Halro is single-writer over one data directory.
+  Mount the persistent parent at `/var/lib/halro`, and give Kubernetes
+  `replicas: 1` with a `Recreate` strategy — never a rolling update.
+- **`healthy` is not reachability.** `HEALTHCHECK` calls a readiness URL from
+  inside the container, so it proves the process is ready, not that a published
+  port, certificate name, firewall, or reverse proxy works. Probe the external
+  address separately, and set `HALRO_HEALTH_URL` to an HTTPS name the mounted
+  certificate covers once TLS is on.
+
+Registry images carry no cosign signature or registry attestation. The signed
+and attested artifacts are the release archives, so when you need that
+provenance chain verify `halro-container-<arch>.tar.gz` as described in
+[Verify release downloads](#verify-release-downloads) and load it directly
+instead of pulling:
+
+```bash
+gzip -dc halro-container-amd64.tar.gz | docker load
+```
+
+Full container guidance — TLS, key custody, the backup and restore layout, and
+the Kubernetes manifest — is in the
+[Operator Guide](docs/guides/operator-guide.md#optional-container-image).
+
 ## Data durability and encrypted backup
 
 Container or Pod replacement is safe only when the complete

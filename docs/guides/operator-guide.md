@@ -527,15 +527,19 @@ the binary and an owned data directory into the non-root distroless runtime.
 No shell or package manager is present in the final image.
 
 The CI workflow rebuilds the image and verifies its version command, runtime
-UID/GID, and healthcheck metadata. Tagged releases also attach a signed,
-checksummed `halro-container.tar.gz`; load it with
-`gzip -dc halro-container.tar.gz | docker load`.
+UID/GID, and healthcheck metadata. Tagged releases push
+`ghcr.io/akz142857/halro` and `ghcr.io/akz142857/halro-deadman` as
+multi-architecture images (`linux/amd64`, `linux/arm64`) and also attach signed,
+checksummed `halro-container-<arch>.tar.gz` archives; load one with
+`gzip -dc halro-container-amd64.tar.gz | docker load`.
 
-Halro 1.0.0 does not publish an official registry image. To use the shipped
-Kubernetes manifest, load the archive, tag and push it into a registry governed
-by your deployment, then replace the manifest's explicit
-`ghcr.io/OWNER/halro@sha256:REPLACE_WITH_REVIEWED_DIGEST` placeholder with the
-reviewed digest from that registry. Do not deploy the placeholder verbatim.
+The registry images themselves are not cosign-signed and carry no registry
+attestation — the signed, attested artifacts are those archives. Pull the
+published image by digest, or verify an archive and mirror it into a registry
+governed by your deployment. Either way, replace the shipped Kubernetes
+manifest's `ghcr.io/OWNER/halro@sha256:REPLACE_WITH_REVIEWED_DIGEST`
+placeholder with the digest you actually reviewed. Do not deploy the
+placeholder verbatim.
 
 ```bash
 docker build -t halro:v1.0.0 .
