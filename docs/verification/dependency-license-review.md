@@ -89,8 +89,16 @@ document is deliberately refreshed with the new inventory and hashes.
 
 - `go.mod`: `c853d9c61d0b14ad5c3a14f78b4b85bfe99e0dc0`
 - `go.sum`: `adea23025a66a068f3dc7797a8fe60d452283c8b`
-- `web/package.json`: `c787f8550d2502c78ec1230dae8274af1c28b0b5`
-- `web/package-lock.json`: `67b51f9e802a9cbf3d0587a6145d9a20fc156a2b`
+- `web/package.json`: `7c3a692df887a0f4814633b58815213d2a4da25d`
+- `web/package-lock.json`: `69127f543e714d8395c03b668efba5e24eff8172`
+
+The two web hashes moved for `chore(release): v0.2.0`, which bumped the
+`version` field in both files and changed nothing else — no dependency was
+added, removed, or upgraded, so the inventory above still describes the
+reviewed tree and the review date is unchanged. The gate hashes whole files
+rather than dependency sections, which is the right trade: it cannot be talked
+out of noticing a change, at the cost of occasionally flagging one that carries
+no dependency in it.
 
 CI also runs `govulncheck`, npm audits, bundle scanning, repository notice
 checks, and artifact SBOM generation. Those checks complement license review;
