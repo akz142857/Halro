@@ -6,6 +6,152 @@ semantic versioning.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-19
+
+### Added
+
+- A price version can bill by time of day. It carries an optional schedule of
+  disjoint daily windows in the provider's own IANA zone; its four rate terms
+  become the rates outside every window, so a price with no schedule bills
+  exactly as it did before. The rung is chosen at reservation and never
+  re-read, so an attempt spanning a boundary settles against the snapshot its
+  reservation pinned. `POST /prices/preview` takes an `at` instant and returns
+  every rung priced. An unresolvable zone bills the per-term maximum across the
+  rungs rather than refusing or guessing an hour, and `halro doctor` reports it
+  as `pricing_schedule_zone`. See ADR 0023.
+
+- The cached span of a prompt is priced at its own rate. Price versions,
+  proposals and snapshots carry `cached_input_micros_per_million`, and cost is
+  `(input - cached) x input_rate + cached x cached_rate + output x output_rate
+  + fixed_request_cost`. An attempt with a cache tier is no longer marked
+  estimated, because the number is now exact. See ADR 0022.
+
+- A Bedrock deployment chooses its own region. Endpoint templates live in the
+  profile table with a region placeholder instead of being hardcoded in the
+  browser, so an operator outside `us-east-1` no longer retypes the URL for
+  every Bedrock connection.
+
+- The Admin API serves the provider capability matrix, including the
+  connection-level capability sets and the full dependency graph, so a caller
+  that is not this console can produce a connection this console can.
+
+- Both time zone fields in the console — the provider zone on a price schedule
+  and the accounting zone in instance settings — offer a searchable list of
+  IANA names with each zone's current UTC offset. It is a suggestion list over
+  a free text input, not a closed menu: the browser's database and the server's
+  are not the same build, so a typed name the server accepts is warned about
+  rather than blocked, and an engine that cannot enumerate degrades to the
+  plain field this replaces.
+
+- Container images are multi-architecture (`linux/amd64` and `linux/arm64`) and
+  are published to `ghcr.io` by the release workflow, for both `halro` and
+  `halro-deadman`. Release creation is idempotent, so a rerun on the same tag
+  no longer fails.
+
+### Changed
+
+- A provider connection is created from one flat capability set. The `bindings`
+  array is gone from the request and the server decides which profile serves
+  each capability: to the anchor profile whenever it can serve it, otherwise to
+  the one peer that can. Several peers and no anchor is refused by name rather
+  than resolved by table order, and a capability no profile can serve is
+  refused rather than dropped. Token limits stay per binding, because they
+  belong to the profile — a request can only narrow a profile that already
+  declares one.
+
+- DeepSeek is served by its own adaptation instead of the OpenAI-compatible
+  passthrough it shared. Its cache split arrives as `prompt_cache_hit_tokens`
+  and `prompt_cache_miss_tokens`, so every hit used to decode as zero and
+  settle at the miss rate — thirty times the published price for that span. The
+  accepted field list is narrowed to what the upstream takes (no `n`, `seed`,
+  `parallel_tool_calls`, top-level `reasoning_effort` or `response_format`
+  schema mode; the end-user reference is `user_id`), so a caller no longer gets
+  `200` for a request that never happened as written. Reasoning maps to
+  `thinking.reasoning_effort`, and an unasked request sends
+  `thinking.type=disabled` rather than inheriting the upstream default.
+
+- `max_completion_tokens` is carried to DeepSeek as `max_tokens` when thinking
+  is off, where the two bound the same tokens, and still refused when thinking
+  is on or the request already carries `max_tokens`. Declaring the loss
+  unconditionally had taken DeepSeek out of the candidate set for every
+  `/v1/responses` request that budgeted its output.
+
+- Gemini, Bedrock Converse, Mantle Responses and Mantle Anthropic now declare in
+  the published endpoint manifests that they route a portable Messages request
+  away when it carries `output_config.effort` or `.format`. The routing
+  behaviour is unchanged; the manifest was silent about it.
+
+- A request the caller abandoned mid-flight is classified as canceled rather
+  than as a connection failure. A cancel is never retryable and is not an
+  availability failure, so a client that hangs up early no longer penalises a
+  healthy upstream's circuit breaker or reads as an upstream network problem.
+  An attempt already sent stays ambiguous, so its conservative accounting is
+  unchanged.
+
+- A project's `allowed_models` list is validated for shape on write. Duplicate,
+  empty and whitespace-padded entries are refused, and the list is bounded —
+  the Gateway scans it on every request, so an Admin write should not be able to
+  make every request arbitrarily more expensive.
+
+- Selecting the price version in force no longer re-audits the whole timeline on
+  every call. The audit is unchanged and none of its fail-closed behaviour is
+  weakened; its result is held per deployment and dropped by all four write
+  paths. A 60-version timeline costs 243 ns and no allocations where it cost
+  386 µs and 1,895 allocations, and a failed audit is deliberately not cached.
+
+- Round-robin candidate resolution takes a single read-locked pass instead of
+  resolving twice and serialising behind the write lock. Eight candidates cost
+  4.4 µs / 41 allocations where they cost 9.4 µs / 82. Rotation order is
+  unchanged.
+
+### Fixed
+
+- The console's form action bar no longer squeezes its own buttons: a long
+  explanation beside them used to crush a two-character cancel onto two lines,
+  and the cancel button now carries a resting border rather than growing one
+  only on hover.
+
+- The time-of-day price form is laid out for the width it has. The schedule
+  toggle renders as a checkbox rather than a 44px box spanning the row, each
+  window is a card instead of a seven-column table that could only scroll
+  sideways, the price modal takes the 900px the deployment form takes, and the
+  missing-timezone error is reported on the field it names.
+
+- A project's alias card counts the strategy of enabled routes only. One
+  retired row carrying the other strategy blanked the label, beside a count
+  that had already ignored that row.
+
+### Operator impact
+
+- **Storage schema 30 upgrades in place; no re-initialisation.** It backfills
+  the new cached-input rate on existing price versions with their own input
+  rate — which is what they were charging — rather than defaulting it to zero,
+  which would retroactively make cached tokens free. Proposals are re-digested
+  so the backfill does not invalidate them.
+
+- **Time-of-day pricing needs no migration.** Both new fields are absent when
+  unset, so existing price versions decode as round-the-clock and existing
+  snapshots re-encode byte-identically, digest included.
+
+- **Admin provider create and update no longer accept `bindings`.** Send the
+  flat capability set and let the server split it. The token limit inputs are
+  gone from the connection form; a model's own limits are declared on the
+  deployment.
+
+- **The DeepSeek profile's catalog models changed.** `deepseek-chat` and
+  `deepseek-reasoner` no longer appear in DeepSeek's documentation and are
+  replaced by `deepseek-v4-flash` and `deepseek-v4-pro`, not kept alongside
+  them. A deployment still naming a retired model reads as not covered by the
+  catalog and asks its operator to declare or re-detect its capabilities; no
+  data-directory re-initialisation is involved. The two names remain in the
+  generic OpenAI-compatible profile's list, which is a different profile.
+
+- **Bedrock model discovery still needs the control-plane host allowed**, and a
+  Bedrock deployment now carries its own region. Existing connections keep the
+  endpoint they were saved with.
+
+## [0.1.0] - 2026-08-16
+
 ### Added
 
 - A deployment now records which capabilities an operator switched off, apart
@@ -276,5 +422,7 @@ to act on.
 - A file, batch or async creation interrupted before the provider was called can
   be retried after a restart, instead of holding its idempotency key for days.
 
-[Unreleased]: https://github.com/akz142857/Halro/compare/v1.0.0-rc.1...main
+[Unreleased]: https://github.com/akz142857/Halro/compare/v0.2.0...main
+[0.2.0]: https://github.com/akz142857/Halro/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/akz142857/Halro/compare/v1.0.0-rc.1...v0.1.0
 [1.0.0-rc.1]: https://github.com/akz142857/Halro/releases/tag/v1.0.0-rc.1
