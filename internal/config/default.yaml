@@ -31,8 +31,14 @@ server:
 tls:
   # Required before any listener may bind a routable address.
   enabled: false
-  cert_file: ""
-  key_file: ""
+  # One entry per keypair. The first entry answers connections that arrive
+  # without SNI; every other entry is selected by the names its certificate
+  # declares, so Gateway and Admin may use different hostnames.
+  # Replace the file with the paths and remove this empty list:
+  #   certificates:
+  #     - cert_file: /etc/halro/tls/fullchain.pem
+  #       key_file: /etc/halro/tls/privkey.pem
+  certificates: []
 
 storage:
   data_dir: ./data
@@ -78,7 +84,9 @@ usage:
   # "balanced" batches accounting writes; "strict" fsyncs every one of them,
   # which costs throughput and loses nothing on a crash.
   durability: balanced
-  # Decides where a day ends for daily budgets and usage reporting. IANA name.
+  # Seeds the accounting timezone at first initialisation only. After that the
+  # instance setting governs — change it in the console, not here; `halro
+  # doctor` reports when this file and the instance disagree. IANA name.
   # Storage is unaffected: Parquet partitions and retention are always UTC.
   timezone: UTC
   wal_queue_capacity: 4096
@@ -103,7 +111,6 @@ gateway:
   route_total_timeout: 2m0s
   attempt_connect_timeout: 5s
   attempt_response_header_timeout: 1m0s
-  stream_idle_timeout: 1m0s
   # How long a client may take to accept what the gateway is writing. Applied
   # per write, so it bounds a stalled reader without cutting a long stream.
   downstream_write_timeout: 15s

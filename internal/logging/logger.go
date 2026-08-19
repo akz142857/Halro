@@ -23,10 +23,55 @@ func Bootstrap() *slog.Logger {
 // Every logger this returns is wrapped by safelog. Redaction is not a setting:
 // the configuration decides where records go and how verbose they are, never
 // whether a credential may appear in one.
-func Open(cfg config.Config) (*slog.Logger, func() error, error) {
-	options := &slog.HandlerOptions{Level: cfg.Logging.SlogLevel()}
+// Controls is the part of a live logger that may change without rebuilding it:
+// how verbose it is, and which file it holds open. Everything else about the
+// log — where records go, how they are encoded, what redacts them — is fixed
+// when the process starts, because changing it would change what the records
+// already written mean.
+type Controls struct {
+	level *slog.LevelVar
+	sink  *Sink
+}
+
+// SetLevel changes the minimum severity for records written from now on. The
+// underlying LevelVar is read atomically on every record, so this is safe to
+// call while the log is in use.
+func (c *Controls) SetLevel(level slog.Level) {
+	c.level.Set(level)
+}
+
+func (c *Controls) Level() slog.Level {
+	return c.level.Level()
+}
+
+// HasFile reports whether there is a file to reopen. Callers use it to tell
+// "nothing to do" apart from "done", so a reload does not claim work it skipped.
+func (c *Controls) HasFile() bool {
+	return c.sink != nil
+}
+
+// ReopenFile reopens the configured log file. See Sink.Reopen for why this
+// exists rather than watching the path.
+func (c *Controls) ReopenFile() error {
+	if c.sink == nil {
+		return nil
+	}
+	return c.sink.Reopen()
+}
+
+func (c *Controls) Close() error {
+	if c.sink == nil {
+		return nil
+	}
+	return c.sink.Close()
+}
+
+func Open(cfg config.Config) (*slog.Logger, *Controls, error) {
+	level := new(slog.LevelVar)
+	level.Set(cfg.Logging.SlogLevel())
+	options := &slog.HandlerOptions{Level: level}
 	var writers []io.Writer
-	closeSink := func() error { return nil }
+	controls := &Controls{level: level}
 	if cfg.Logging.WritesStderr() {
 		writers = append(writers, os.Stderr)
 	}
@@ -40,10 +85,10 @@ func Open(cfg config.Config) (*slog.Logger, func() error, error) {
 			Fallback: os.Stderr,
 		})
 		if err != nil {
-			return nil, closeSink, err
+			return nil, controls, err
 		}
 		writers = append(writers, sink)
-		closeSink = sink.Close
+		controls.sink = sink
 	}
 	var destination io.Writer
 	switch len(writers) {
@@ -64,5 +109,5 @@ func Open(cfg config.Config) (*slog.Logger, func() error, error) {
 	} else {
 		handler = slog.NewJSONHandler(destination, options)
 	}
-	return safelog.New(handler), closeSink, nil
+	return safelog.New(handler), controls, nil
 }

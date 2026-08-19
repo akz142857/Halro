@@ -6,6 +6,87 @@ semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- **TLS material is replaced on `SIGHUP` rather than on restart.** The signal
+  reloads a closed list: the certificates and their keys, the Metrics
+  certificate together with its client CA, `logging.level`, and the log file
+  handle. Everything else still needs a restart, because a reload replaces
+  material and never semantics — who is trusted as a proxy, which origin the
+  console is, and where the data directory lives are not things that should
+  change without one. Items apply independently and a failure keeps that item's
+  previous value, so a bad replacement certificate leaves the old one serving
+  instead of taking the instance down. In-flight connections are not
+  interrupted. `SIGHUP` is never delivered on Windows; that platform still
+  restarts to change a certificate.
+
+- **Several certificates, selected by the name the client asks for.** Gateway
+  and Admin can use different hostnames without one certificate having to cover
+  both. Connections that arrive without SNI are answered by the first entry, and
+  a name nothing declares is answered by it too, so the client's own name check
+  reports which name was missing rather than an opaque handshake failure. Two
+  entries claiming one name are refused at load.
+
+- **The log file follows the rotate-then-signal convention.** `logrotate` renames
+  the file and sends `SIGHUP`; Halro reopens the path. `logging.level` can be
+  changed the same way, and every change is recorded in the log at a severity
+  both the old and the new setting admit.
+
+- **New observability for all of the above.**
+  `halro_tls_certificate_expiry_seconds`, `halro_reload_total`, and
+  `halro_reload_last_success_timestamp_seconds`, plus alert rules for a
+  certificate expiring within 30 days, one that has expired, and a failing
+  reload. `halro doctor` gains `tls_certificates` and `metrics_tls_certificate`,
+  which run before the data lock is taken and therefore answer while the
+  instance is serving. `/admin/api/v1/system/config` renders the values actually
+  in force rather than re-reading the file, and reports per item when each was
+  last applied.
+
+### Changed
+
+- **`tls.cert_file` and `tls.key_file` are replaced by a `tls.certificates`
+  list.** The old keys are removed rather than deprecated.
+
+- **`gateway.stream_idle_timeout` is removed.** It was declared, defaulted,
+  validated as positive, and documented as the inactivity period after which a
+  streaming response is terminated — and nothing read it. No such timeout was
+  ever enforced. What does bound a stream is `gateway.downstream_write_timeout`,
+  re-armed on every emitted event, so a client that stops reading is cut off,
+  and `gateway.stream_max_duration` with `gateway.route_total_timeout` for the
+  stream and the request as wholes. An upstream that sends headers and then goes
+  quiet is bounded only by those totals — it was never bounded by the removed
+  key either. A setting that quietly does nothing is worse than an absent one,
+  so it is gone rather than kept with a note.
+
+### Operator impact
+
+- **`config.yaml` must be edited; the data directory is untouched.** Unknown
+  YAML fields are refused, so an unedited file stops the process at load with
+  `field cert_file not found in type config.TLS`. One list entry carrying the two
+  paths reproduces the previous behaviour exactly:
+
+  ```yaml
+  tls:
+    enabled: true
+    certificates:
+      - cert_file: /etc/halro/tls/fullchain.pem
+        key_file: /etc/halro/tls/privkey.pem
+  ```
+
+- **Delete `gateway.stream_idle_timeout` from `config.yaml`** for the same
+  reason — unknown fields are refused, so leaving it in stops the process.
+  Nothing it claimed to do is lost, because it never did it, and no other
+  setting needs adjusting to compensate.
+
+- **Rotating the Metrics client CA takes two signals, in order.** Concatenate the
+  old and new CA and `SIGHUP`; move each scraper to its new client certificate;
+  reduce the file to the new CA and `SIGHUP` again. Doing the last step first
+  refuses every scraper that has not moved yet.
+
+- **Changing a certificate's *path* is still a restart.** `SIGHUP` reloads the
+  bytes behind the configured paths, not the paths themselves, so adding an
+  entry to `tls.certificates` needs one.
+
 ## [0.2.0] - 2026-08-19
 
 ### Added

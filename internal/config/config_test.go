@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -22,8 +23,7 @@ server:
   max_request_bytes: 10485760
 tls:
   enabled: false
-  cert_file: ""
-  key_file: ""
+  certificates: []
 storage:
   data_dir: "./data"
   metadata_file: "halro.db"
@@ -37,7 +37,6 @@ gateway:
   route_total_timeout: 120s
   attempt_connect_timeout: 5s
   attempt_response_header_timeout: 60s
-  stream_idle_timeout: 60s
   downstream_write_timeout: 15s
   stream_max_duration: 10m
   max_total_attempts: 3
@@ -296,8 +295,7 @@ func TestMetricsNonLoopbackRequiresDedicatedMutualTLS(t *testing.T) {
 		t.Fatal("non-loopback plaintext Metrics listener was accepted")
 	}
 	cfg.TLS.Enabled = true
-	cfg.TLS.CertFile = "gateway.crt"
-	cfg.TLS.KeyFile = "gateway.key"
+	cfg.TLS.Certificates = []TLSCertificate{{CertFile: "gateway.crt", KeyFile: "gateway.key"}}
 	cfg.Metrics.CredentialFile = "metrics-credentials.json"
 	if err := cfg.Normalize(); err != nil {
 		t.Fatal(err)
@@ -509,5 +507,106 @@ func TestPricingClockRollbackToleranceHasAFloor(t *testing.T) {
 	cfg.Gateway.PricingClockRollbackTolerance = Duration(MinPricingClockRollbackTolerance)
 	if err := cfg.Validate(LoadOptions{}); err != nil {
 		t.Fatalf("the floor itself was rejected: %v", err)
+	}
+}
+
+// loadTLSFixture returns validConfig with its tls block replaced, normalized and
+// validated the way Load does. Listener validation is skipped so these cases
+// speak only about the certificate list.
+func loadTLSFixture(t *testing.T, tlsBlock string) error {
+	t.Helper()
+	raw := strings.Replace(validConfig, "tls:\n  enabled: false\n  certificates: []\n", tlsBlock, 1)
+	if raw == validConfig {
+		t.Fatal("tls block was not substituted; the fixture drifted")
+	}
+	cfg, err := Decode(strings.NewReader(raw))
+	if err != nil {
+		return err
+	}
+	if err := cfg.Normalize(); err != nil {
+		return err
+	}
+	return cfg.Validate(LoadOptions{SkipListenerValidation: true})
+}
+
+func TestTLSCertificateListValidation(t *testing.T) {
+	cases := []struct {
+		name      string
+		tlsBlock  string
+		wantError bool
+	}{
+		{
+			name:      "single entry is accepted",
+			tlsBlock:  "tls:\n  enabled: true\n  certificates:\n    - cert_file: \"/etc/halro/a.pem\"\n      key_file: \"/etc/halro/a.key\"\n",
+			wantError: false,
+		},
+		{
+			name:      "several entries are accepted",
+			tlsBlock:  "tls:\n  enabled: true\n  certificates:\n    - cert_file: \"/etc/halro/a.pem\"\n      key_file: \"/etc/halro/a.key\"\n    - cert_file: \"/etc/halro/b.pem\"\n      key_file: \"/etc/halro/b.key\"\n",
+			wantError: false,
+		},
+		{
+			name:      "enabled with an empty list is refused",
+			tlsBlock:  "tls:\n  enabled: true\n  certificates: []\n",
+			wantError: true,
+		},
+		{
+			name:      "an entry missing its key is refused",
+			tlsBlock:  "tls:\n  enabled: true\n  certificates:\n    - cert_file: \"/etc/halro/a.pem\"\n",
+			wantError: true,
+		},
+		{
+			name:      "the same certificate listed twice is refused",
+			tlsBlock:  "tls:\n  enabled: true\n  certificates:\n    - cert_file: \"/etc/halro/a.pem\"\n      key_file: \"/etc/halro/a.key\"\n    - cert_file: \"/etc/halro/a.pem\"\n      key_file: \"/etc/halro/other.key\"\n",
+			wantError: true,
+		},
+		{
+			name:      "certificates while TLS is disabled are refused",
+			tlsBlock:  "tls:\n  enabled: false\n  certificates:\n    - cert_file: \"/etc/halro/a.pem\"\n      key_file: \"/etc/halro/a.key\"\n",
+			wantError: true,
+		},
+		{
+			name:      "the legacy scalar keys are no longer accepted",
+			tlsBlock:  "tls:\n  enabled: true\n  cert_file: \"/etc/halro/a.pem\"\n  key_file: \"/etc/halro/a.key\"\n",
+			wantError: true,
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			err := loadTLSFixture(t, testCase.tlsBlock)
+			if testCase.wantError && err == nil {
+				t.Fatal("configuration was accepted but should have been refused")
+			}
+			if !testCase.wantError && err != nil {
+				t.Fatalf("configuration was refused: %v", err)
+			}
+		})
+	}
+}
+
+func TestTLSCertificateListIsBounded(t *testing.T) {
+	var builder strings.Builder
+	builder.WriteString("tls:\n  enabled: true\n  certificates:\n")
+	for index := 0; index <= MaxTLSCertificates; index++ {
+		fmt.Fprintf(&builder, "    - cert_file: \"/etc/halro/%d.pem\"\n      key_file: \"/etc/halro/%d.key\"\n", index, index)
+	}
+	if err := loadTLSFixture(t, builder.String()); err == nil {
+		t.Fatalf("a list of %d certificates was accepted", MaxTLSCertificates+1)
+	}
+}
+
+func TestTLSCertificatePathsAreMadeAbsolute(t *testing.T) {
+	raw := strings.Replace(validConfig, "tls:\n  enabled: false\n  certificates: []\n",
+		"tls:\n  enabled: true\n  certificates:\n    - cert_file: \"./tls/a.pem\"\n      key_file: \"./tls/a.key\"\n", 1)
+	cfg, err := Decode(strings.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	entry := cfg.TLS.Certificates[0]
+	if !strings.HasPrefix(entry.CertFile, "/") || !strings.HasPrefix(entry.KeyFile, "/") {
+		t.Fatalf("relative certificate paths survived normalization: %+v", entry)
 	}
 }

@@ -192,6 +192,49 @@ a public Prometheus UI or unrestricted API. Useful checks include:
    recent terminal detections with a failure ratio at or below 50 percent
    before resolving the incident.
 
+### HalroTLSCertificateExpiringSoon
+
+1. Read `halro_tls_certificate_expiry_seconds` by `scope` and `name` to identify
+   which certificate is short. `scope="serving"` is the Gateway and Admin
+   listeners; `scope="metrics"` is the mutually authenticated scrape endpoint.
+2. Obtain the replacement and write it over the `cert_file` and `key_file` of
+   the matching `tls.certificates` entry. Write both before signalling: the
+   pair is read together, and a reload that finds only one of them replaced
+   keeps the whole previous set.
+3. Send `SIGHUP` (`systemctl reload halro`, or `kill -HUP <pid>`). Confirm
+   `halro_reload_total{item="tls",status="success"}` increased and that the
+   expiry gauge moved. The `TLS certificate loaded` record carries the new
+   fingerprint, which is what `openssl s_client | openssl x509 -fingerprint`
+   reads back from the outside. Existing connections are not interrupted.
+4. If the reload reports an error, the previous certificate is still being
+   served — the instance is not down. Fix the files and signal again.
+
+### HalroTLSCertificateExpired
+
+1. Treat as an outage: clients are refusing the handshake, not the server.
+2. Follow HalroTLSCertificateExpiringSoon from step 2. No restart is required,
+   and restarting will not help if the files on disk are still the expired ones.
+3. If no replacement is available yet, the instance cannot serve TLS. Do not
+   fall back to plaintext on a routable address; the configuration refuses it.
+
+### HalroReloadFailing
+
+1. Break down `halro_reload_total{status="error"}` by `item`. The previous value
+   for that item is still in force, so this is drift rather than an outage.
+2. Read the process log for `reload item failed`; it names the item and the
+   underlying error without quoting file contents.
+3. `item="tls"` or `item="metrics_tls"`: the keypair or client CA on disk does
+   not load. `halro doctor --config <path>` reports the same check offline and
+   can be run while the instance serves.
+4. `item="log_level"`: the configuration file no longer validates, so the level
+   was not taken from it. The whole file is checked before one value is used —
+   fix the unrelated error the log names.
+5. `item="log_file"`: the log path could not be reopened. Check the directory's
+   ownership and permissions (`0700` directory, `0600` file).
+6. After fixing, signal again and require one `status="success"` increase for
+   the affected item, plus a `halro_reload_last_success_timestamp_seconds`
+   that moves.
+
 ## Credential rotation
 
 1. Generate a new active Metrics credential with a bounded overlap.

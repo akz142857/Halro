@@ -7,7 +7,7 @@ import { ErrorState, Loading, PageHeader, StatusDot } from "../components";
 import { useInstantFormatter } from "../format";
 import { navigate, usePathname } from "../navigation";
 import { useIsReadOnly, useSession } from "../session";
-import type { ModelCatalogInfo, SystemConfigEntry, WritePathSummary } from "../types";
+import type { ModelCatalogInfo, ReloadStatus, SystemConfigEntry, WritePathSummary } from "../types";
 import { AdminUsersSection } from "./AdminUsersSection";
 import { AccountingTimezoneForm } from "./AccountingTimezoneForm";
 import { AppearanceForm } from "./AppearanceForm";
@@ -176,6 +176,7 @@ function DiagnosticsPane({ status, accountingLabels, metricLabels }: { status: A
             </dl>
             {activation.stale && <p>{t("settings.activationRecovery")}</p>}
           </details>}
+          {status.reload && <ReloadCard reload={status.reload} />}
           <details className="panel system-card diagnostic-details" open>
             <summary><span>{t("settings.auditHead")}</span><strong>{t("settings.chainCheckpoint")}</strong></summary>
             <dl>
@@ -186,6 +187,54 @@ function DiagnosticsPane({ status, accountingLabels, metricLabels }: { status: A
           </details>
     </div>
   </section>;
+}
+
+// What SIGHUP last replaced, and which certificate is actually being served.
+// Once material can change without a restart, the file on disk stops being an
+// answer to "what is in force" — the process is, and this is where it says so.
+function ReloadCard({ reload }: { reload: ReloadStatus }) {
+  const { t } = useTranslation();
+  const formatInstant = useInstantFormatter();
+  const now = Date.now();
+  const expiries = reload.certificates.map((certificate) => ({
+    ...certificate,
+    daysLeft: Math.floor((new Date(certificate.not_after).getTime() - now) / 86_400_000),
+  }));
+  const failing = reload.items.some((item) => item.failures > 0);
+  const expiring = expiries.some((certificate) => certificate.daysLeft < 30);
+  return <details id="reload" className="panel system-card diagnostic-details" open>
+    <summary>
+      <span>{t("settings.reloadTitle")}</span>
+      <strong><StatusDot ok={!failing && !expiring} />{t(failing ? "settings.reloadFailing" : expiring ? "settings.reloadExpiringSoon" : "settings.reloadHealthy")}</strong>
+    </summary>
+    <p>{t("settings.reloadDescription")}</p>
+    <dl>
+      {expiries.map((certificate) => <div key={`${certificate.scope}:${certificate.name}`}>
+        <dt>{t(`settings.reloadScopes.${certificate.scope}`)} · {certificate.name}</dt>
+        <dd>
+          {formatInstant(certificate.not_after, "full")}
+          {certificate.daysLeft < 30 && <span className="badge warning">{certificate.daysLeft <= 0
+            ? t("settings.reloadExpired")
+            : t("settings.reloadDaysLeft", { count: certificate.daysLeft })}</span>}
+          {" "}<code>{certificate.fingerprint}</code>
+        </dd>
+      </div>)}
+      {/* Every item keeps its row. An item this deployment does not have is
+          said so explicitly, because a missing row and a never-reloaded one
+          read the same and only one of them is a question. */}
+      {reload.items.map((item) => <div key={item.item}>
+        <dt>{t(`settings.reloadItems.${item.item}`)}</dt>
+        <dd>
+          {!item.applies
+            ? t("settings.reloadNotConfigured")
+            : item.last_success
+              ? formatInstant(item.last_success, "full")
+              : t("settings.reloadNever")}
+          {item.failures > 0 && <span className="badge warning">{t("settings.reloadFailureCount", { count: item.failures })}</span>}
+        </dd>
+      </div>)}
+    </dl>
+  </details>;
 }
 
 // The durable write path. This is the answer to "what is this instance doing

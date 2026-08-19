@@ -31,7 +31,7 @@ func TestRuntimeFailsClosedWhenHostHardeningFails(t *testing.T) {
 		return hostsecurity.Report{}, errors.New("simulated host hardening failure")
 	}
 	t.Cleanup(func() { hardenRuntimeCommand = previous })
-	err := runRuntime(config.Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)), false)
+	err := runRuntime(config.Config{}, "config.yaml", slog.New(slog.NewTextHandler(io.Discard, nil)), false)
 	if err == nil || !strings.Contains(err.Error(), "before Master Key unlock") {
 		t.Fatalf("runRuntime error=%v", err)
 	}

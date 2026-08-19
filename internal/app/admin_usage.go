@@ -420,6 +420,10 @@ func (r *Runtime) adminSystemStatus(writer http.ResponseWriter, request *http.Re
 		// somewhere an operator can read it. A stale runtime is refusing data
 		// plane traffic; the pending count is the audit backlog behind it.
 		"activation": r.activation.status(),
+		// A configuration that can change without a restart needs a place that
+		// says when it last did; otherwise the file on disk is the only visible
+		// answer and it may no longer be the running one.
+		"reload": r.reloadStatus(),
 	}
 	if pending, err := r.store.PendingAdminAuditIntentCount(request.Context()); err == nil {
 		payload["pending_admin_audit"] = pending
@@ -442,7 +446,10 @@ func (r *Runtime) adminSystemConfig(writer http.ResponseWriter, request *http.Re
 	if !ok {
 		return
 	}
-	rendered, err := yaml.Marshal(r.config)
+	// The effective configuration, not the loaded one: a reload may have moved
+	// the log level since startup, and this screen is where an operator goes to
+	// find out what is in force.
+	rendered, err := yaml.Marshal(r.effectiveConfig())
 	if err != nil {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": "config render failed"})
 		return
@@ -450,6 +457,7 @@ func (r *Runtime) adminSystemConfig(writer http.ResponseWriter, request *http.Re
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"yaml":         string(rendered),
 		"entries":      describeSystemConfig(referenceconfigs.ExampleYAML, rendered),
+		"reload":       r.reloadStatus(),
 		"time_context": timing,
 	})
 }

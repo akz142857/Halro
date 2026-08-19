@@ -41,7 +41,13 @@ const (
 	// reflect the store is read on the data-plane hot path and written by every
 	// admin mutation, so it belongs to the Runtime rather than to any one
 	// handler; it is one grouped tracker, not a field per snapshot.
-	runtimeFieldBudget = 68
+	// 69: reload. Raised deliberately, and by one rather than five: the
+	// certificate holders, the configuration path a reloadable scalar is read
+	// from, the live log handle, and the per-item outcome record are one
+	// subsystem behind reloadRuntime. They belong to the Runtime because the
+	// listeners read the material on every handshake and the metrics renderer
+	// reads the record.
+	runtimeFieldBudget = 69
 	runtimeMutexBudget = 10
 )
 

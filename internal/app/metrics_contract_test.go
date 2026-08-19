@@ -34,6 +34,17 @@ func assertMetricsExpositionContract(t *testing.T, body string) {
 		// Constant for the life of a process; they identify the node's time
 		// zone rules so a fleet can be checked for agreement.
 		"source": {}, "fingerprint": {},
+		// Reload items are a compile-time list, and the certificate scope is one
+		// of two listeners.
+		"item": {}, "scope": {},
+	}
+	// scopedLabels are admitted on the named family only. "name" is bounded
+	// here because it comes from a certificate the operator configured — at
+	// most config.MaxTLSCertificates of them, and never the ServerName a client
+	// sends. On any other family it would be the generic unbounded label this
+	// pass exists to catch, so it is not allowed to spread by precedent.
+	scopedLabels := map[string]map[string]struct{}{
+		"name": {"halro_tls_certificate_expiry_seconds": {}},
 	}
 	scanner := bufio.NewScanner(strings.NewReader(body))
 	for scanner.Scan() {
@@ -61,6 +72,12 @@ func assertMetricsExpositionContract(t *testing.T, body string) {
 		family := metricFamily(match[1], types)
 		families[family] = struct{}{}
 		for _, label := range labelPattern.FindAllStringSubmatch(match[2], -1) {
+			if permitted, scoped := scopedLabels[label[1]]; scoped {
+				if _, ok := permitted[family]; !ok {
+					t.Fatalf("metric %s may not carry label %q", match[1], label[1])
+				}
+				continue
+			}
 			if _, ok := allowedLabels[label[1]]; !ok {
 				t.Fatalf("metric %s has undeclared label %q", match[1], label[1])
 			}

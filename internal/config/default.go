@@ -69,7 +69,6 @@ func Default() Config {
 			RouteTotalTimeout:             Duration(2 * time.Minute),
 			AttemptConnectTimeout:         Duration(5 * time.Second),
 			AttemptResponseHeaderTimeout:  Duration(time.Minute),
-			StreamIdleTimeout:             Duration(time.Minute),
 			DownstreamWriteTimeout:        Duration(15 * time.Second),
 			StreamMaxDuration:             Duration(10 * time.Minute),
 			MaxTotalAttempts:              3,

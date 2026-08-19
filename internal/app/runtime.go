@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,7 +11,6 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
-	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -125,6 +123,10 @@ type Runtime struct {
 	// /metrics or nobody finds out for months.
 	anchorLastEmitUnix atomic.Int64
 	anchorEmitFailures atomic.Uint64
+	// reload owns everything SIGHUP may replace. It is one field rather than
+	// five because the material, the sources it comes from, and the record of
+	// what was applied are one subsystem, and Runtime is already wide.
+	reload reloadRuntime
 }
 
 type capabilityResolutionRuntime struct {
@@ -982,13 +984,10 @@ func (r *Runtime) warnAboutReachableWorkbench() {
 func (r *Runtime) RunWithReady(ctx context.Context, ready func() error) error {
 	r.warnAboutReachableWorkbench()
 	r.warnAboutMissingAnchorSink()
-	var metricsTLSConfig *tls.Config
-	if r.config.Metrics.Enabled && r.config.Metrics.TLS.Enabled {
-		var err error
-		metricsTLSConfig, err = r.metricsTLSConfig()
-		if err != nil {
-			return err
-		}
+	// Certificates are loaded before any listener binds. A keypair that cannot
+	// be read is a refusal to start, not a listener that comes up in the clear.
+	if err := r.openTLSMaterial(); err != nil {
+		return err
 	}
 	servers := []*http.Server{
 		r.server("gateway", r.config.Server.GatewayListen, r.gatewayRouter()),
@@ -1039,10 +1038,12 @@ func (r *Runtime) RunWithReady(ctx context.Context, ready func() error) error {
 		go func() {
 			r.logger.Info("listener started", "address", item.server.Addr)
 			var err error
-			if item.name == "metrics" && r.config.Metrics.TLS.Enabled {
-				err = item.server.Serve(tls.NewListener(item.listener, metricsTLSConfig.Clone()))
-			} else if r.config.TLS.Enabled {
-				err = item.server.ServeTLS(item.listener, r.config.TLS.CertFile, r.config.TLS.KeyFile)
+			// ServeTLS with empty file names uses the server's own TLSConfig,
+			// which is where the reloadable certificate source lives. It also
+			// keeps net/http's HTTP/2 setup, which a hand-rolled tls.NewListener
+			// would have to reproduce.
+			if item.server.TLSConfig != nil {
+				err = item.server.ServeTLS(item.listener, "", "")
 			} else {
 				err = item.server.Serve(item.listener)
 			}
@@ -1129,28 +1130,6 @@ func (r *Runtime) recordShutdownTruncatedAttempts(delta uint64) error {
 	}
 	r.logger.Warn("graceful shutdown budget expired with active Provider attempts", "truncated_attempts", delta, "total", total)
 	return nil
-}
-
-func (r *Runtime) metricsTLSConfig() (*tls.Config, error) {
-	certificate, err := tls.LoadX509KeyPair(r.config.Metrics.TLS.CertFile, r.config.Metrics.TLS.KeyFile)
-	if err != nil {
-		return nil, fmt.Errorf("load metrics TLS keypair: %w", err)
-	}
-	caPayload, err := os.ReadFile(r.config.Metrics.TLS.ClientCAFile)
-	if err != nil {
-		return nil, fmt.Errorf("read metrics client CA: %w", err)
-	}
-	clientCAs := x509.NewCertPool()
-	if !clientCAs.AppendCertsFromPEM(caPayload) {
-		return nil, errors.New("metrics client CA contains no certificates")
-	}
-	return &tls.Config{
-		MinVersion:   tls.VersionTLS12,
-		Certificates: []tls.Certificate{certificate},
-		ClientAuth:   tls.RequireAndVerifyClientCert,
-		ClientCAs:    clientCAs,
-		NextProtos:   []string{"h2", "http/1.1"},
-	}, nil
 }
 
 func (r *Runtime) Close() error {
@@ -1277,7 +1256,45 @@ func (r *Runtime) server(name, address string, handler http.Handler) *http.Serve
 		ReadTimeout:       r.config.Server.ReadBodyTimeout.Value(),
 		MaxHeaderBytes:    r.config.Server.MaxHeaderBytes,
 		ErrorLog:          slog.NewLogLogger(r.logger.Handler(), slog.LevelError),
+		TLSConfig:         r.listenerTLSConfig(name),
 	}
+}
+
+// listenerTLSConfig returns nil for a listener that serves plaintext, which is
+// what RunWithReady reads to decide between ServeTLS and Serve.
+func (r *Runtime) listenerTLSConfig(name string) *tls.Config {
+	// Dedicated Metrics material wins where it is configured: it is mutually
+	// authenticated against a client CA the other listeners know nothing about.
+	if name == "metrics" && r.reload.metricsTLS != nil {
+		return r.reload.metricsTLS.serverConfig()
+	}
+	// Otherwise the Metrics listener falls back to the server certificate, the
+	// same as Gateway and Admin. Without this, enabling tls without also
+	// enabling metrics.tls would quietly move /metrics back to plaintext — and
+	// `halro stats` would still be addressing it as https.
+	if r.reload.serving == nil {
+		return nil
+	}
+	return &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: r.reload.serving.getCertificate}
+}
+
+// openTLSMaterial loads every configured keypair once, before the first bind.
+func (r *Runtime) openTLSMaterial() error {
+	if r.config.TLS.Enabled && r.reload.serving == nil {
+		holder, err := newCertificateHolder(r.config.TLS.Certificates, r.logger)
+		if err != nil {
+			return err
+		}
+		r.reload.serving = holder
+	}
+	if r.config.Metrics.Enabled && r.config.Metrics.TLS.Enabled && r.reload.metricsTLS == nil {
+		holder, err := newMetricsTLSHolder(r.config.Metrics.TLS, r.logger)
+		if err != nil {
+			return err
+		}
+		r.reload.metricsTLS = holder
+	}
+	return nil
 }
 
 // gatewayHandler reuses one route tree. gatewayRouter builds a fresh one, which is fine

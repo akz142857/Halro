@@ -52,16 +52,11 @@ tls:
   # @description.zh-CN 是否为 Gateway 入站连接启用 TLS。
   # @description.en-US Enables TLS for inbound Gateway connections.
   enabled: false
-  # @title.zh-CN TLS 证书文件
-  # @title.en-US TLS certificate file
-  # @description.zh-CN Gateway TLS 证书链文件路径。
-  # @description.en-US Path to the Gateway TLS certificate chain.
-  cert_file: ""
-  # @title.zh-CN TLS 私钥文件
-  # @title.en-US TLS private-key file
-  # @description.zh-CN Gateway TLS 私钥文件路径。
-  # @description.en-US Path to the Gateway TLS private key.
-  key_file: ""
+  # @title.zh-CN TLS 证书列表
+  # @title.en-US TLS certificate list
+  # @description.zh-CN 每项一对证书链与私钥文件。第一项用于没有 SNI 的连接；其余各项按证书声明的名字选择，因此 Gateway 与 Admin 可以使用不同域名。
+  # @description.en-US One certificate chain and private key per entry. The first entry answers connections that arrive without SNI; every other entry is selected by the names its certificate declares, so Gateway and Admin may use different hostnames.
+  certificates: []
 
 storage:
   # @title.zh-CN 数据目录
@@ -158,7 +153,7 @@ admin:
     # @title.en-US Maximum provider calls
     # @description.zh-CN 单次检测允许发起的计费服务商调用上限。
     # @description.en-US Maximum billable provider calls allowed per detection.
-    max_provider_calls: 8
+    max_provider_calls: 10
     # @title.zh-CN 每管理员创建速率
     # @title.en-US Creation rate per administrator
     # @description.zh-CN 每位管理员每分钟可启动的新检测任务上限；目录、缓存和幂等复用不计入。
@@ -173,8 +168,8 @@ usage:
   durability: "balanced"
   # @title.zh-CN 记账时区
   # @title.en-US Accounting timezone
-  # @description.zh-CN 用量账期和日界线采用的 IANA 时区。
-  # @description.en-US IANA timezone used for usage periods and day boundaries.
+  # @description.zh-CN 仅在首次初始化时作为记账时区的初值。此后以实例设置为准，改这里不再生效；halro doctor 会报告两者不一致。
+  # @description.en-US Seeds the accounting timezone at first initialisation only. The instance setting governs afterwards and this value no longer applies; halro doctor reports when the two disagree.
   timezone: "Asia/Shanghai"
   # @title.zh-CN WAL 队列容量
   # @title.en-US WAL queue capacity
@@ -249,11 +244,6 @@ gateway:
   # @description.zh-CN 单次上游尝试等待响应头的最长时间。
   # @description.en-US Maximum time an upstream attempt waits for response headers.
   attempt_response_header_timeout: 60s
-  # @title.zh-CN 流空闲超时
-  # @title.en-US Stream idle timeout
-  # @description.zh-CN 流式响应无数据活动后终止连接的时间。
-  # @description.en-US Inactivity period after which a streaming response is terminated.
-  stream_idle_timeout: 60s
   # @title.zh-CN 下游写入超时
   # @title.en-US Downstream write timeout
   # @description.zh-CN 向客户端写入单次响应数据允许的时间。

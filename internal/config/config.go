@@ -121,10 +121,23 @@ type Server struct {
 }
 
 type TLS struct {
-	Enabled  bool   `yaml:"enabled"`
+	Enabled bool `yaml:"enabled"`
+	// Certificates is ordered, and the order carries meaning: the first entry
+	// answers connections that arrive without SNI, which is what a health check
+	// dialling the address rather than the name does. Every other entry is
+	// reached only by the names its certificate declares.
+	Certificates []TLSCertificate `yaml:"certificates"`
+}
+
+type TLSCertificate struct {
 	CertFile string `yaml:"cert_file"`
 	KeyFile  string `yaml:"key_file"`
 }
+
+// MaxTLSCertificates bounds the list so a malformed file cannot ask the process
+// to open an unbounded number of keypairs at startup. A gateway serving more
+// than a handful of distinct names belongs behind a proxy that terminates TLS.
+const MaxTLSCertificates = 16
 
 type Storage struct {
 	DataDir      string    `yaml:"data_dir"`
@@ -271,7 +284,6 @@ type Gateway struct {
 	RouteTotalTimeout             Duration        `yaml:"route_total_timeout"`
 	AttemptConnectTimeout         Duration        `yaml:"attempt_connect_timeout"`
 	AttemptResponseHeaderTimeout  Duration        `yaml:"attempt_response_header_timeout"`
-	StreamIdleTimeout             Duration        `yaml:"stream_idle_timeout"`
 	DownstreamWriteTimeout        Duration        `yaml:"downstream_write_timeout"`
 	StreamMaxDuration             Duration        `yaml:"stream_max_duration"`
 	MaxTotalAttempts              int             `yaml:"max_total_attempts"`
@@ -509,16 +521,24 @@ func (c *Config) Normalize() error {
 			return fmt.Errorf("storage.master_key.file: %w", err)
 		}
 	}
-	if c.TLS.CertFile != "" {
-		c.TLS.CertFile, err = cleanAbsolutePath(c.TLS.CertFile)
-		if err != nil {
-			return fmt.Errorf("tls.cert_file: %w", err)
-		}
+	// An explicit empty list and an absent key describe the same thing. Folding
+	// one onto the other keeps the first-run template comparable to Default().
+	if len(c.TLS.Certificates) == 0 {
+		c.TLS.Certificates = nil
 	}
-	if c.TLS.KeyFile != "" {
-		c.TLS.KeyFile, err = cleanAbsolutePath(c.TLS.KeyFile)
-		if err != nil {
-			return fmt.Errorf("tls.key_file: %w", err)
+	for index := range c.TLS.Certificates {
+		entry := &c.TLS.Certificates[index]
+		if entry.CertFile != "" {
+			entry.CertFile, err = cleanAbsolutePath(entry.CertFile)
+			if err != nil {
+				return fmt.Errorf("tls.certificates[%d].cert_file: %w", index, err)
+			}
+		}
+		if entry.KeyFile != "" {
+			entry.KeyFile, err = cleanAbsolutePath(entry.KeyFile)
+			if err != nil {
+				return fmt.Errorf("tls.certificates[%d].key_file: %w", index, err)
+			}
 		}
 	}
 	for name, value := range map[string]*string{
@@ -727,11 +747,28 @@ func (c Config) Validate(opts LoadOptions) error {
 		problems = append(problems, errors.New("providers.bedrock.region must be an AWS region name such as us-east-1"))
 	}
 	if c.TLS.Enabled {
-		if c.TLS.CertFile == "" || c.TLS.KeyFile == "" {
-			problems = append(problems, errors.New("tls.cert_file and tls.key_file are required when TLS is enabled"))
+		if len(c.TLS.Certificates) == 0 {
+			problems = append(problems, errors.New("tls.certificates requires at least one entry when TLS is enabled"))
 		}
-	} else if c.TLS.CertFile != "" || c.TLS.KeyFile != "" {
-		problems = append(problems, errors.New("tls cert/key cannot be set while TLS is disabled"))
+		if len(c.TLS.Certificates) > MaxTLSCertificates {
+			problems = append(problems, fmt.Errorf("tls.certificates accepts at most %d entries", MaxTLSCertificates))
+		}
+		seen := make(map[string]struct{}, len(c.TLS.Certificates))
+		for index, entry := range c.TLS.Certificates {
+			if entry.CertFile == "" || entry.KeyFile == "" {
+				problems = append(problems, fmt.Errorf("tls.certificates[%d] requires both cert_file and key_file", index))
+				continue
+			}
+			// The same keypair listed twice would build two identical names and
+			// be refused later as a duplicate, which reads as a certificate
+			// problem rather than a configuration one. Say it here instead.
+			if _, exists := seen[entry.CertFile]; exists {
+				problems = append(problems, fmt.Errorf("tls.certificates[%d].cert_file is listed more than once", index))
+			}
+			seen[entry.CertFile] = struct{}{}
+		}
+	} else if len(c.TLS.Certificates) > 0 {
+		problems = append(problems, errors.New("tls.certificates cannot be set while TLS is disabled"))
 	}
 
 	if !opts.SkipListenerValidation {
@@ -847,7 +884,6 @@ func (c Config) Validate(opts LoadOptions) error {
 		"gateway.route_total_timeout":             c.Gateway.RouteTotalTimeout,
 		"gateway.attempt_connect_timeout":         c.Gateway.AttemptConnectTimeout,
 		"gateway.attempt_response_header_timeout": c.Gateway.AttemptResponseHeaderTimeout,
-		"gateway.stream_idle_timeout":             c.Gateway.StreamIdleTimeout,
 		"gateway.downstream_write_timeout":        c.Gateway.DownstreamWriteTimeout,
 		"gateway.stream_max_duration":             c.Gateway.StreamMaxDuration,
 		"gateway.health_probe_interval":           c.Gateway.HealthProbeInterval,
