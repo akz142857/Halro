@@ -223,3 +223,31 @@ groups:
         annotations:
           summary: Halro requests are queueing on one project's accounting lock
           runbook_url: /docs/observability/operations-runbook.md#halroaccountingprojectlocksaturated
+      # Certificate lifetime is measured against the scrape's own clock rather
+      # than a recorded rule, so a stopped Halro produces no series and is
+      # covered by HalroTargetDown instead of firing here as well.
+      - alert: HalroTLSCertificateExpiringSoon
+        expr: (halro_tls_certificate_expiry_seconds - time()) < 2592000
+        for: 15m
+        labels: {severity: warning, service: halro, owner: sre, category: availability}
+        annotations:
+          summary: A Halro TLS certificate expires within 30 days
+          runbook_url: /docs/observability/operations-runbook.md#halrotlscertificateexpiringsoon
+      - alert: HalroTLSCertificateExpired
+        expr: (halro_tls_certificate_expiry_seconds - time()) <= 0
+        for: 5m
+        labels: {severity: critical, service: halro, owner: sre, category: availability}
+        annotations:
+          summary: A Halro TLS certificate has expired and clients are being refused
+          runbook_url: /docs/observability/operations-runbook.md#halrotlscertificateexpired
+      # A failed reload means the process kept what it had, so this is a warning
+      # about drift between the files on disk and what is in force — not an
+      # outage. The paired expiry alerts above are what catch the consequence if
+      # the drift is a certificate that never got replaced.
+      - alert: HalroReloadFailing
+        expr: increase(halro_reload_total{status="error"}[15m]) > 0
+        for: 5m
+        labels: {severity: warning, service: halro, owner: sre, category: availability}
+        annotations:
+          summary: A Halro SIGHUP reload item is failing and the previous value is still in force
+          runbook_url: /docs/observability/operations-runbook.md#halroreloadfailing

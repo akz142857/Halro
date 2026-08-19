@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/akz142857/Halro/internal/audit"
+	halroconfig "github.com/akz142857/Halro/internal/config"
 )
 
 func TestAdminSetupCreatesFirstUserAndSessionOnce(t *testing.T) {
@@ -99,8 +100,7 @@ func TestAdminSetupRequiresTransientTokenForPublicAdmin(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.Server.AdminListen = "0.0.0.0:18081"
 	cfg.TLS.Enabled = true
-	cfg.TLS.CertFile = "/tmp/cert.pem"
-	cfg.TLS.KeyFile = "/tmp/key.pem"
+	cfg.TLS.Certificates = []halroconfig.TLSCertificate{{CertFile: "/tmp/cert.pem", KeyFile: "/tmp/key.pem"}}
 	if err := Initialize(cfg); err != nil {
 		t.Fatal(err)
 	}

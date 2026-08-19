@@ -3,6 +3,7 @@ package logging
 import (
 	"bytes"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -228,5 +229,82 @@ func TestOpenRefusesAnUnusableConfiguration(t *testing.T) {
 				t.Fatal("an unusable sink was opened")
 			}
 		})
+	}
+}
+
+// TestSinkReopenFollowsARenamedFile is the logrotate convention: the file is
+// moved out from under the process, which keeps writing into a descriptor whose
+// name nobody will look at again until it is told to open the path afresh.
+func TestSinkReopenFollowsARenamedFile(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "halro.log")
+	sink, err := OpenSink(Options{Path: path, MaxSizeBytes: 1 << 20, MaxFiles: 3, Fallback: io.Discard})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sink.Close()
+	if _, err := sink.Write([]byte("before\n")); err != nil {
+		t.Fatal(err)
+	}
+	rotated := path + ".moved"
+	if err := os.Rename(path, rotated); err != nil {
+		t.Fatal(err)
+	}
+	// Without Reopen this write lands in the renamed file, which is the failure
+	// the whole mechanism exists to prevent.
+	if err := sink.Reopen(); err != nil {
+		t.Fatalf("reopen failed: %v", err)
+	}
+	if _, err := sink.Write([]byte("after\n")); err != nil {
+		t.Fatal(err)
+	}
+	current, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(current) != "after\n" {
+		t.Fatalf("records written after reopen went elsewhere: %q", current)
+	}
+	moved, err := os.ReadFile(rotated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(moved) != "before\n" {
+		t.Fatalf("the renamed file lost or gained records: %q", moved)
+	}
+}
+
+// TestSinkReopenResetsTheSizeAccounting guards the rotation limit: a reopened
+// file starts empty, and a sink still carrying the old size would rotate the
+// fresh file far too early.
+func TestSinkReopenResetsTheSizeAccounting(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "halro.log")
+	sink, err := OpenSink(Options{Path: path, MaxSizeBytes: 32, MaxFiles: 2, Fallback: io.Discard})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sink.Close()
+	if _, err := sink.Write([]byte(strings.Repeat("a", 30) + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(path, path+".moved"); err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.Reopen(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sink.Write([]byte("short\n")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(generationPath(path, 1)); err == nil {
+		t.Fatal("the reopened file was rotated on its first small write")
+	}
+	current, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(current) != "short\n" {
+		t.Fatalf("unexpected contents after reopen: %q", current)
 	}
 }

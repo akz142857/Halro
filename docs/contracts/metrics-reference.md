@@ -106,6 +106,9 @@ an authentication boundary.
 | `halro_deployment_active_requests` | gauge | `deployment_id` |
 | `halro_deployment_concurrency_limit` | gauge | `deployment_id` |
 | `halro_deployment_up` | gauge | `deployment_id` |
+| `halro_tls_certificate_expiry_seconds` | gauge | `scope`, `name` |
+| `halro_reload_total` | counter | `item`, `status` |
+| `halro_reload_last_success_timestamp_seconds` | gauge | `item` |
 | `halro_build_info` | gauge | `version`, `commit` |
 | `halro_tzdata_info` | gauge | `source`, `version`, `fingerprint` |
 | `halro_accounting_timezone_version` | gauge | none |
@@ -205,6 +208,22 @@ User-controlled Project, Key, Route, model, request ID, source IP, and raw error
 values are deliberately excluded. Provider/Deployment IDs are bounded managed
 identifiers. `halro_deployment_up` is absent until the first active probe;
 absence must not be interpreted as healthy.
+
+`halro_tls_certificate_expiry_seconds` reports when a served certificate stops
+being valid. `scope` is `serving` (the Gateway and Admin listeners, which share
+one certificate list) or `metrics`; a listener serving plaintext contributes no
+series. `name` is the certificate's own first DNS name, so the label set is
+bounded by the `tls.certificates` entries the operator wrote down. The name a
+client offers during the handshake is never used as a label value.
+
+`halro_reload_total` and `halro_reload_last_success_timestamp_seconds` describe
+what `SIGHUP` did, per item: `tls`, `metrics_tls`, `log_level`, `log_file`. The
+item list is compiled in, so every item is present from the first scrape.
+Items are applied independently, and a failure keeps that item's previous value
+— so a rising `status="error"` count means the process is still serving the
+material it had before, not that it stopped. The timestamp gauge is absent for
+an item until one reload of it has succeeded; an item that does not apply to the
+deployment (no TLS, no log file) never records either outcome.
 
 `halro_activation_stale` is always present. A value of `1` means at least one
 live topology, authentication, redaction, or Token Guard snapshot is known to

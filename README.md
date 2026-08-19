@@ -134,6 +134,14 @@ they describe a host-local development boundary, not a public one. Admin and
 Metrics stay on container loopback in this shape; publish them only after
 enabling TLS and mounting the certificate, key, and Metrics client CA.
 
+Halro has no built-in certificate issuance: `tls.certificates` names keypairs
+it loads, and obtaining or renewing them belongs to whatever already does that
+here — certbot, an internal CA, or a reverse proxy such as Caddy that terminates
+TLS in front of a loopback-bound Halro. Replacing the files and sending `SIGHUP`
+swaps the certificate without a restart. Both shapes, and which settings each
+one requires, are in
+[TLS and inbound exposure](docs/guides/operator-guide.md#tls-and-inbound-exposure).
+
 Two container facts that bite:
 
 - **One replica, always.** Halro is single-writer over one data directory.

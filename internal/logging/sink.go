@@ -178,6 +178,40 @@ func generationPath(path string, generation int) string {
 	return fmt.Sprintf("%s.%d", path, generation)
 }
 
+// Reopen closes the current file and opens Path again. It exists for the
+// rotate-then-signal convention external tooling uses: logrotate renames the
+// file out from under the process, which keeps writing to a descriptor pointing
+// at a name nobody will read again until it is told to look at the path afresh.
+//
+// A failed reopen leaves the sink without a file rather than holding the stale
+// descriptor: continuing to write into a renamed file is what the caller was
+// trying to stop, and Write already falls back to stderr when there is no file.
+func (s *Sink) Reopen() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.file != nil {
+		if err := s.file.Close(); err != nil {
+			s.file = nil
+			return fmt.Errorf("close log file: %w", err)
+		}
+		s.file = nil
+	}
+	if err := os.MkdirAll(filepath.Dir(s.path), DirPerm); err != nil {
+		return fmt.Errorf("create log directory: %w", err)
+	}
+	file, err := os.OpenFile(s.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, FilePerm)
+	if err != nil {
+		return fmt.Errorf("open log file: %w", err)
+	}
+	info, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return fmt.Errorf("measure log file: %w", err)
+	}
+	s.file, s.size, s.degraded = file, info.Size(), false
+	return nil
+}
+
 func (s *Sink) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

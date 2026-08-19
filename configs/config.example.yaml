@@ -52,16 +52,11 @@ tls:
   # @description.zh-CN 是否为 Gateway 入站连接启用 TLS。
   # @description.en-US Enables TLS for inbound Gateway connections.
   enabled: false
-  # @title.zh-CN TLS 证书文件
-  # @title.en-US TLS certificate file
-  # @description.zh-CN Gateway TLS 证书链文件路径。
-  # @description.en-US Path to the Gateway TLS certificate chain.
-  cert_file: ""
-  # @title.zh-CN TLS 私钥文件
-  # @title.en-US TLS private-key file
-  # @description.zh-CN Gateway TLS 私钥文件路径。
-  # @description.en-US Path to the Gateway TLS private key.
-  key_file: ""
+  # @title.zh-CN TLS 证书列表
+  # @title.en-US TLS certificate list
+  # @description.zh-CN 每项一对证书链与私钥文件。第一项用于没有 SNI 的连接；其余各项按证书声明的名字选择，因此 Gateway 与 Admin 可以使用不同域名。
+  # @description.en-US One certificate chain and private key per entry. The first entry answers connections that arrive without SNI; every other entry is selected by the names its certificate declares, so Gateway and Admin may use different hostnames.
+  certificates: []
 
 storage:
   # @title.zh-CN 数据目录

@@ -370,7 +370,49 @@ func (r *Runtime) writeMetrics(ctx context.Context, writer http.ResponseWriter) 
 		fmt.Fprintf(output, "halro_deployment_up{deployment_id=%s} %d\n",
 			strconv.Quote(deploymentID), value)
 	}
+	r.writeReloadMetrics(output)
 	return output.Flush()
+}
+
+// writeReloadMetrics exposes certificate lifetimes and what the last SIGHUP
+// did. Both series carry only label values that come from configuration or from
+// the certificates themselves: a label taken from a handshake's ServerName
+// would be chosen by whoever dialled the port, which is exactly the unbounded
+// cardinality this exposition must not have.
+func (r *Runtime) writeReloadMetrics(output *bufio.Writer) {
+	metricHeader(output, "halro_tls_certificate_expiry_seconds", "gauge",
+		"Unix time at which a served TLS certificate stops being valid.")
+	if r.reload.serving != nil {
+		writeCertificateExpiry(output, "serving", r.reload.serving.describe())
+	}
+	if r.reload.metricsTLS != nil {
+		writeCertificateExpiry(output, "metrics", r.reload.metricsTLS.describe())
+	}
+
+	reloads := r.reload.state.snapshot()
+	metricHeader(output, "halro_reload_total", "counter", "SIGHUP reload outcomes by item.")
+	for _, item := range reloadItems {
+		state := reloads[item]
+		// status rather than result, to match halro_requests_total and every
+		// other outcome series in this exposition.
+		fmt.Fprintf(output, "halro_reload_total{item=%s,status=\"success\"} %d\n", strconv.Quote(item), state.success)
+		fmt.Fprintf(output, "halro_reload_total{item=%s,status=\"error\"} %d\n", strconv.Quote(item), state.failure)
+	}
+	metricHeader(output, "halro_reload_last_success_timestamp_seconds", "gauge",
+		"Unix time of the last successful reload of an item; absent until one has succeeded.")
+	for _, item := range reloadItems {
+		if state := reloads[item]; state.lastSuccessUnix > 0 {
+			fmt.Fprintf(output, "halro_reload_last_success_timestamp_seconds{item=%s} %d\n",
+				strconv.Quote(item), state.lastSuccessUnix)
+		}
+	}
+}
+
+func writeCertificateExpiry(output *bufio.Writer, scope string, descriptions []certificateDescription) {
+	for _, description := range descriptions {
+		fmt.Fprintf(output, "halro_tls_certificate_expiry_seconds{scope=%s,name=%s} %d\n",
+			strconv.Quote(scope), strconv.Quote(description.Name), description.NotAfter.Unix())
+	}
 }
 
 func (r *Runtime) writeKMSMetrics(output *bufio.Writer) {

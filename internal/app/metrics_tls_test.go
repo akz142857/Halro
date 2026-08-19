@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	halroconfig "github.com/akz142857/Halro/internal/config"
 )
 
 func TestMetricsTLSConfigRequiresAndVerifiesClientCertificates(t *testing.T) {
@@ -32,20 +34,24 @@ func TestMetricsTLSConfigRequiresAndVerifiesClientCertificates(t *testing.T) {
 	}
 	writePEM(t, keyPath, "PRIVATE KEY", keyDER)
 
-	runtime := &Runtime{}
-	runtime.config.Metrics.TLS.Enabled = true
-	runtime.config.Metrics.TLS.CertFile = certPath
-	runtime.config.Metrics.TLS.KeyFile = keyPath
-	runtime.config.Metrics.TLS.ClientCAFile = caPath
-	config, err := runtime.metricsTLSConfig()
+	holder, err := newMetricsTLSHolder(halroconfig.MetricsTLS{
+		Enabled: true, CertFile: certPath, KeyFile: keyPath, ClientCAFile: caPath,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.MinVersion != tls.VersionTLS12 || config.ClientAuth != tls.RequireAndVerifyClientCert {
-		t.Fatalf("unexpected Metrics TLS policy: %#v", config)
+	// The listener installs a configuration that resolves per handshake, so the
+	// policy assertions below read what a client would actually be met with.
+	config := holder.serverConfig()
+	published, err := config.GetConfigForClient(&tls.ClientHelloInfo{})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if len(config.ClientCAs.Subjects()) != 1 {
-		t.Fatalf("client CA subjects=%d", len(config.ClientCAs.Subjects()))
+	if published.MinVersion != tls.VersionTLS12 || published.ClientAuth != tls.RequireAndVerifyClientCert {
+		t.Fatalf("unexpected Metrics TLS policy: %#v", published)
+	}
+	if len(published.ClientCAs.Subjects()) != 1 {
+		t.Fatalf("client CA subjects=%d", len(published.ClientCAs.Subjects()))
 	}
 
 	clientCertificate, clientKey := createClientCertificate(t, caCertificate, caKey)

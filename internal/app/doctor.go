@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -76,6 +77,13 @@ func DoctorWithOptions(ctx context.Context, cfg config.Config, options DoctorOpt
 		add("source_rate_limit", "warn",
 			"gateway.source_rate_limit.requests_per_minute is 0, so anonymous request volume is unbounded before authentication")
 	}
+
+	// Certificates are checked before the data lock, so this still answers on an
+	// instance that is currently serving: "is the keypair on disk one the server
+	// would accept, and when does it expire" is exactly the question an operator
+	// asks while the process is up. It uses the same builder the listener does,
+	// so a pass here means the running process would accept the same files.
+	checkDoctorCertificates(cfg, add)
 
 	dataLock, err := lock.AcquireExistingReadOnly(cfg.Storage.DataDir)
 	if err != nil {
@@ -288,6 +296,63 @@ func doctorDataLockFailure(dataDir string, err error) string {
 	default:
 		return fmt.Sprintf("cannot acquire the offline data lock for %q: %v", dataDir, err)
 	}
+}
+
+// certificateExpiryWarning is how much life a certificate must have left before
+// its remaining validity stops being worth mentioning. It matches the alert
+// threshold shipped in deploy/observability, so the two do not disagree about
+// when an operator should have acted.
+const certificateExpiryWarning = 30 * 24 * time.Hour
+
+func checkDoctorCertificates(cfg config.Config, add func(string, string, string)) {
+	if cfg.TLS.Enabled {
+		sources := make([]certificateSource, 0, len(cfg.TLS.Certificates))
+		for _, entry := range cfg.TLS.Certificates {
+			sources = append(sources, certificateSource{certFile: entry.CertFile, keyFile: entry.KeyFile})
+		}
+		bundle, err := buildCertificateBundle(sources)
+		if err != nil {
+			add("tls_certificates", "fail", err.Error())
+		} else {
+			status, detail := describeCertificateLifetimes(bundle.describe)
+			add("tls_certificates", status, detail)
+		}
+	}
+	if !cfg.Metrics.Enabled || !cfg.Metrics.TLS.Enabled {
+		return
+	}
+	holder, err := newMetricsTLSHolder(cfg.Metrics.TLS)
+	if err != nil {
+		add("metrics_tls_certificate", "fail", err.Error())
+		return
+	}
+	status, detail := describeCertificateLifetimes(holder.describe())
+	add("metrics_tls_certificate", status, detail)
+}
+
+func describeCertificateLifetimes(descriptions []certificateDescription) (string, string) {
+	if len(descriptions) == 0 {
+		return "fail", "no certificate was loaded"
+	}
+	now := time.Now()
+	status := "pass"
+	parts := make([]string, 0, len(descriptions))
+	for _, description := range descriptions {
+		remaining := description.NotAfter.Sub(now)
+		switch {
+		case remaining <= 0:
+			status = "fail"
+			parts = append(parts, fmt.Sprintf("%s expired on %s", description.Name, description.NotAfter.UTC().Format(time.RFC3339)))
+		case remaining < certificateExpiryWarning:
+			if status != "fail" {
+				status = "warn"
+			}
+			parts = append(parts, fmt.Sprintf("%s expires in %d days", description.Name, int(remaining.Hours()/24)))
+		default:
+			parts = append(parts, fmt.Sprintf("%s valid for %d more days", description.Name, int(remaining.Hours()/24)))
+		}
+	}
+	return status, strings.Join(parts, "; ")
 }
 
 func validateDoctorKeySlots(ctx context.Context, cfg config.Config, store *boltstore.Store) error {

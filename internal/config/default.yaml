@@ -31,8 +31,14 @@ server:
 tls:
   # Required before any listener may bind a routable address.
   enabled: false
-  cert_file: ""
-  key_file: ""
+  # One entry per keypair. The first entry answers connections that arrive
+  # without SNI; every other entry is selected by the names its certificate
+  # declares, so Gateway and Admin may use different hostnames.
+  # Replace the file with the paths and remove this empty list:
+  #   certificates:
+  #     - cert_file: /etc/halro/tls/fullchain.pem
+  #       key_file: /etc/halro/tls/privkey.pem
+  certificates: []
 
 storage:
   data_dir: ./data

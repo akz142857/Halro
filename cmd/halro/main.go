@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	// Embeds the IANA database so zone resolution is a property of this binary
@@ -229,7 +230,7 @@ func run(arguments []string, logger *slog.Logger) error {
 			fmt.Fprintln(os.Stdout, "Initialized Halro system storage")
 			printMasterKeyCustodyNotice(os.Stdout, cfg)
 		}
-		return runRuntime(cfg, logger, true)
+		return runRuntime(cfg, *configPath, logger, true)
 	case "stats":
 		flags := flag.NewFlagSet("stats", flag.ContinueOnError)
 		configPath := flags.String("config", "config.yaml", "configuration file")
@@ -306,7 +307,7 @@ func run(arguments []string, logger *slog.Logger) error {
 		if *allowInsecure {
 			logger.Warn("insecure public Gateway override enabled")
 		}
-		return runRuntime(cfg, logger, false)
+		return runRuntime(cfg, *configPath, logger, false)
 	case "bootstrap":
 		flags := flag.NewFlagSet("bootstrap", flag.ContinueOnError)
 		configPath := flags.String("config", "config.yaml", "configuration file")
@@ -878,13 +879,13 @@ func writeRestoreStatus(output io.Writer, result app.RestoreResult) {
 // second and their verdict goes to the terminal — but a serving process is the
 // one that has to answer questions hours later, and it is the only one whose
 // configuration was read before it started writing.
-func runRuntime(cfg config.Config, logger *slog.Logger, printGuide bool) error {
-	configured, closeLog, err := logging.Open(cfg)
+func runRuntime(cfg config.Config, configPath string, logger *slog.Logger, printGuide bool) error {
+	configured, logControls, err := logging.Open(cfg)
 	if err != nil {
 		return fmt.Errorf("open log destination: %w", err)
 	}
 	defer func() {
-		if err := closeLog(); err != nil {
+		if err := logControls.Close(); err != nil {
 			fmt.Fprintf(os.Stderr, "halro: close log file: %v\n", err)
 		}
 	}()
@@ -914,9 +915,24 @@ func runRuntime(cfg config.Config, logger *slog.Logger, printGuide bool) error {
 		return err
 	}
 	defer runtime.Close()
-	ready := func() error { return nil }
+	runtime.SetReloadSources(configPath, logControls)
+	// SIGHUP is only answered once the runtime has loaded its certificates and
+	// bound its listeners, which is exactly what the ready hook marks. Starting
+	// the watcher any earlier would let a signal read the material while startup
+	// is still writing it.
+	var stopReloads func()
+	defer func() {
+		if stopReloads != nil {
+			stopReloads()
+		}
+	}()
+	ready := func() error {
+		stopReloads = watchReloadSignal(runtime, logger)
+		return nil
+	}
 	if printGuide {
 		ready = func() error {
+			stopReloads = watchReloadSignal(runtime, logger)
 			status, err := runtime.SetupStatus(ctx)
 			if err != nil {
 				return err
@@ -946,6 +962,44 @@ func runRuntime(cfg config.Config, logger *slog.Logger, printGuide bool) error {
 		}
 	}
 	return runtime.RunWithReady(ctx, ready)
+}
+
+// watchReloadSignal answers SIGHUP for as long as the returned stop has not
+// been called. It is a separate channel from the shutdown notifier on purpose:
+// a reload must not be able to cancel the run context, and a shutdown must not
+// wait on a reload that is still reading files.
+//
+// SIGHUP is defined on Windows but never delivered there, so this costs one
+// idle goroutine on that platform and needs no build tag.
+func watchReloadSignal(runtime *app.Runtime, logger *slog.Logger) func() {
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGHUP)
+	done := make(chan struct{})
+	var once sync.Once
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			case <-signals:
+				logger.Info("reload requested")
+				if err := runtime.Reload(); err != nil {
+					// Already logged per item; this line says the signal as a
+					// whole did not fully succeed, which is what an operator
+					// watching the terminal after sending it is waiting for.
+					logger.Error("reload completed with failures", "error", err)
+					continue
+				}
+				logger.Info("reload completed")
+			}
+		}
+	}()
+	return func() {
+		once.Do(func() {
+			signal.Stop(signals)
+			close(done)
+		})
+	}
 }
 
 func runHealthcheck(rawURL string, timeout time.Duration) error {

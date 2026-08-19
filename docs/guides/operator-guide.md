@@ -66,7 +66,9 @@ metered prices shown above. Bootstrap stores those terms as Price Version 1.
 
 Default listeners are loopback-only. To expose Halro, use TLS and an
 authenticated reverse proxy with an explicitly configured origin/trusted proxy
-boundary. Admin and Metrics must never use public plaintext listeners.
+boundary. Admin and Metrics must never use public plaintext listeners. Both
+supported shapes, and the settings each one requires, are in
+[TLS and inbound exposure](#tls-and-inbound-exposure).
 When Gateway proxy headers are enabled, every request received from a trusted
 proxy must carry a syntactically valid `X-Forwarded-For` chain. Missing or
 malformed chains are rejected with HTTP 400 so CIDR authorization and Token
@@ -108,6 +110,195 @@ fallback remains available for explicitly classified non-ambiguous failures.
 This fail-closed behavior is not configurable in v1; changing it requires an
 end-to-end idempotency contract with the upstream Provider.
 
+### TLS and inbound exposure
+
+There are two supported shapes, and "serve plaintext on a routable address" is
+not a third — configuration validation refuses it. A listener may bind a
+non-loopback address only when TLS is enabled; `-allow-insecure-public-listen`
+covers the Gateway listener alone and exists for a host-local boundary such as
+`docker run -p 127.0.0.1:8080:8080`, not for a network.
+
+**Halro terminates TLS.** Certificates come from whatever already issues them
+here — certbot, acme.sh, an internal CA, configuration management. Halro loads
+them; it does not obtain them.
+
+```yaml
+tls:
+  enabled: true
+  certificates:
+    - cert_file: /etc/halro/tls/fullchain.pem
+      key_file: /etc/halro/tls/privkey.pem
+server:
+  gateway_listen: 0.0.0.0:8080
+  admin_listen: 0.0.0.0:8081
+  metrics_listen: 127.0.0.1:9090
+admin:
+  external_origin: https://halro.example.com:8081
+security:
+  trust_proxy_headers: false
+```
+
+`tls.certificates` is a list, and the order matters: the first entry answers
+connections that arrive without SNI — a health check dialling the address rather
+than the name — and every other entry is selected by the DNS names its own
+certificate declares. Gateway and Admin may therefore use different hostnames
+without one certificate having to cover both. A server name that matches nothing
+is answered with the first entry, so the client's own name check reports which
+name was missing rather than the opaque handshake failure a refusal would
+produce. Two entries claiming the same name are refused at load: an ambiguous
+mapping is harder to diagnose than a missing one.
+
+`trust_proxy_headers` must stay `false` in this shape. Clients connect directly,
+so their address is the peer address; a trusted-proxy range that no client
+falls into does nothing but obscure the topology.
+
+**A reverse proxy terminates TLS.** This is the default recommendation. The
+certificate lifetime then lives outside Halro's failure domain: a renewal that
+fails does not touch the Gateway process, and Caddy or Traefik will obtain and
+renew certificates without Halro having to.
+
+```yaml
+tls:
+  enabled: false
+server:
+  gateway_listen: 127.0.0.1:8080
+  admin_listen: 127.0.0.1:8081
+  metrics_listen: 127.0.0.1:9090
+admin:
+  external_origin: https://halro.example.com
+security:
+  trust_proxy_headers: true
+  trusted_proxy_cidrs: ["127.0.0.1/32"]
+```
+
+Two settings decide whether this works, and both fail quietly when wrong:
+
+`admin.external_origin` is **required** behind a proxy. The Admin console checks
+that a mutating request's `Origin` matches this instance's own origin; with the
+setting empty, Halro derives that origin from the connection it received, which
+is plaintext, and compares `http://…` against the browser's `https://…`. Every
+Admin mutation is then rejected as cross-origin, with nothing in the
+configuration check to hint at why. The value must match the browser's address
+bar exactly, including the port whenever it is not the scheme default —
+`https://halro.example.com` behind a proxy on 443, `https://halro.example.com:8081`
+when Halro serves 8081 itself.
+
+Setting `admin.external_origin` also makes the one-time setup token mandatory
+for first-run initialization; the loopback shortcut applies only to an instance
+that is not reachable by name. Plan for it on a first deployment rather than
+discovering it at the console.
+
+`trusted_proxy_cidrs` must contain the address the proxy actually connects
+from. In a container network that is rarely `127.0.0.1`. Get it wrong and CIDR
+authorization and Token Guard silently evaluate the proxy's address instead of
+the client's — no error, just the wrong answer. With `trust_proxy_headers`
+enabled, every request from a trusted proxy must also carry a syntactically
+valid `X-Forwarded-For`; a missing or malformed chain is rejected with 400
+rather than falling back to a source Halro cannot vouch for.
+
+The Gateway needs no hostname configuration of its own. It authenticates with a
+Gateway Key rather than a browser session, so nothing about it depends on
+knowing its own external address; the hostname matters only to the certificate.
+Its paths are the ones the OpenAI and Anthropic APIs use — `/v1/chat/completions`,
+`/v1/messages`, and so on — with `/health/live` and `/health/ready` beside them.
+The Admin listener serves `/admin` and `/admin/api/v1/*`. Because those prefixes
+do not overlap, one hostname can carry both:
+
+```
+halro.example.com {
+	handle /health/* {
+		reverse_proxy 127.0.0.1:8080
+	}
+	handle /v1/* {
+		reverse_proxy 127.0.0.1:8080
+	}
+	handle {
+		reverse_proxy 127.0.0.1:8081
+	}
+}
+```
+
+`/health/*` exists on both listeners, so route it deliberately. Do not strip the
+`/v1` prefix: Halro and every SDK work from the API's absolute paths. The console
+is served under `connect-src 'self'`, so its page and its API must remain on one
+origin — `/admin` and `/admin/api` cannot be split across hostnames. A proxy also
+has to pass streaming through untouched: disable response buffering and set read
+timeouts longer than the longest streamed response (`proxy_buffering off;` and
+`proxy_read_timeout` for nginx; Caddy needs neither).
+
+### Reloading without a restart
+
+`SIGHUP` replaces a fixed set of material in place. It is not "re-read the
+configuration": the list below is closed, and everything outside it still
+requires a restart.
+
+| Reloaded on `SIGHUP` | Notes |
+| --- | --- |
+| `tls.certificates` file contents | All entries are loaded together, then published in one step |
+| `metrics.tls` certificate and client CA | Published as one pair, never one without the other |
+| `logging.level` | Read from the configuration file, which must still validate as a whole |
+| The log file handle | For the rotate-then-signal convention external tooling uses |
+
+Not reloaded, and why: listener addresses need a fresh bind; `server.*` timeouts
+live on running HTTP servers; `security.trust_proxy_headers`,
+`security.trusted_proxy_cidrs`, and `admin.external_origin` decide who is
+believed and who may act, and a change to that should leave a restart in the
+record rather than ride along on a signal; `storage.*` and Master Key settings
+are the consistency and key boundary. The rule is that a reload replaces
+material, never semantics. Note that the *paths* in `tls.certificates` are not
+reloadable either — only the bytes behind them. Adding a certificate to the list
+is a restart.
+
+Rotating a certificate:
+
+```bash
+# write both files first: the pair is read together
+install -m 0600 new-fullchain.pem /etc/halro/tls/fullchain.pem
+install -m 0600 new-privkey.pem   /etc/halro/tls/privkey.pem
+systemctl reload halro     # or: kill -HUP $(pidof halro)
+```
+
+Under systemd, `ExecReload=/bin/kill -HUP $MAINPID`. With certbot or acme.sh, do
+it from the deploy hook (`--deploy-hook`), so the signal follows the files. In
+flight connections are not interrupted; new handshakes use the new certificate.
+
+Each item is applied independently, and a failure keeps that item's previous
+value. A keypair that does not load leaves the old certificate serving and
+records `halro_reload_total{item="tls",status="error"}` — the instance stays up.
+That is deliberate: refusing to serve because a *replacement* was bad would turn
+a fixable mistake into an outage. `halro doctor --config <path>` runs the same
+certificate check offline and can be used while the instance is serving.
+
+Rotating the Metrics client CA takes two signals, in this order:
+
+1. Concatenate the old and new CA into `metrics.tls.client_ca_file`, `SIGHUP`.
+   Both old and new scrapers are now accepted.
+2. Move each scraper to its new client certificate.
+3. Reduce the file to the new CA alone, `SIGHUP`. The old identity is refused.
+
+Doing step 3 first refuses every scraper that has not moved yet.
+
+For the log file, have the rotator signal after it renames:
+
+```
+/var/lib/halro/logs/halro.log {
+    postrotate
+        /bin/kill -HUP $(cat /run/halro.pid)
+    endscript
+}
+```
+
+`SIGHUP` is defined but never delivered on Windows; that platform changes
+certificates by restarting.
+
+Because the running configuration can now differ from the file on disk, the
+console reports what is actually in force: `/admin/api/v1/system/config` renders
+the effective values and, with `/admin/api/v1/system/status`, the per-item
+outcome and timestamp of the last reload. `halro_reload_last_success_timestamp_seconds`
+carries the same answer to Prometheus. A reload also logs, once, which
+configuration sections changed on disk in ways it could not apply — the restart
+list, discovered at the moment someone expected the edit to take.
+
 ### Logging
 
 The process log is JSON on stderr at `info` by default, which suits systemd and
@@ -134,10 +325,11 @@ a transport policy rejection, a response it would not decode — carries no
 Provider body and is logged with its cause, which is the case where an operator
 most needs it.
 
-Unknown YAML fields and invalid durations are rejected. Listener, TLS, storage,
-egress, proxy, and Metrics-auth changes require restart. The Admin Settings page
-only changes the explicitly writable runtime settings. Always run `config check`
-before restart.
+Unknown YAML fields and invalid durations are rejected. Listener, storage,
+egress, proxy, and Metrics-auth changes require restart, as do the certificate
+*paths* — `SIGHUP` reloads the bytes behind them and the log level, and nothing
+else. The Admin Settings page only changes the explicitly writable runtime
+settings. Always run `config check` before restart.
 
 `server.shutdown_timeout` is shared by the Gateway, Admin, and Metrics
 listeners and must be at least `gateway.route_total_timeout`. When omitted by

@@ -34,6 +34,13 @@ func assertMetricsExpositionContract(t *testing.T, body string) {
 		// Constant for the life of a process; they identify the node's time
 		// zone rules so a fleet can be checked for agreement.
 		"source": {}, "fingerprint": {},
+		// Reload items are a compile-time list, and the certificate scope is one
+		// of two listeners.
+		"item": {}, "scope": {},
+		// A certificate's own first DNS name. Bounded by config.MaxTLSCertificates
+		// entries the operator wrote down, never by anything a client sends: the
+		// handshake's ServerName is deliberately not used as a label value.
+		"name": {},
 	}
 	scanner := bufio.NewScanner(strings.NewReader(body))
 	for scanner.Scan() {
