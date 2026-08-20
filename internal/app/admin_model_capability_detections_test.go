@@ -375,6 +375,14 @@ func (d *fixedCapabilityDetector) DetectCapability(_ context.Context, target pro
 func TestCapabilityDetectionAPIIsExplicitCachedAndCreatesUntestedSnapshot(t *testing.T) {
 	runtime, bootstrap := bootstrapForCapabilityTest(t)
 	runtime.config.Admin.ModelCapabilityDetection.CreateRPM = 1
+	// The create limiter's window is a wall-clock minute. Seconds of real time
+	// pass between the first create and the one that must be throttled — the
+	// detection has to finish and its metrics have to appear — so an unpinned
+	// clock crossing a minute boundary hands the third request a fresh window
+	// and it is accepted instead. Pinning makes the assertion about the limiter
+	// rather than about where the run happened to land in the minute.
+	pinned := time.Date(2026, time.August, 7, 9, 30, 30, 0, time.UTC)
+	runtime.now = func() time.Time { return pinned }
 	instance, err := runtime.store.GetProvider(context.Background(), bootstrap.ProviderID)
 	if err != nil {
 		t.Fatal(err)

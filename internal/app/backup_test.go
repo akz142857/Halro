@@ -291,7 +291,7 @@ func TestOfflineEncryptedBackupCapturesConsistentManifestAndAudit(t *testing.T) 
 				Source: "verified_probe", Results: map[string]domain.CapabilityProbeResult{}, MaxProviderCalls: 8,
 				CreatedBy: "admin", IdempotencyKeyHash: "sha256:backup-key", RequestHash: "sha256:backup-request",
 				CreatedAt: now, UpdatedAt: now,
-			})
+			}, now)
 		}
 	}
 	closeErr := store.Close()

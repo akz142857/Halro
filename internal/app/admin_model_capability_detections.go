@@ -183,7 +183,7 @@ func (r *Runtime) createAdminModelCapabilityDetection(writer http.ResponseWriter
 		detection.Recommended = modelcatalog.Clamp(entry.Capabilities, binding.Capabilities)
 		detection.MaxProviderCalls, detection.CompletedAt = 0, &now
 	}
-	detection, replayed, err := r.store.CreateModelCapabilityDetection(request.Context(), detection)
+	detection, replayed, err := r.store.CreateModelCapabilityDetection(request.Context(), detection, now)
 	if errors.Is(err, boltstore.ErrIdempotencyConflict) {
 		writeJSON(writer, http.StatusConflict, map[string]string{"error": err.Error(), "code": "idempotency_conflict"})
 		return

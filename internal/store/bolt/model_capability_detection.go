@@ -18,8 +18,10 @@ type capabilityDetectionIdempotency struct {
 
 // CreateModelCapabilityDetection atomically installs the job and both lookup
 // indexes. It is the single-flight and idempotency serialization point across
-// browser tabs and concurrent HTTP handlers.
-func (s *Store) CreateModelCapabilityDetection(ctx context.Context, detection domain.ModelCapabilityDetection) (domain.ModelCapabilityDetection, bool, error) {
+// browser tabs and concurrent HTTP handlers. The caller supplies now because
+// reuse-freshness has to be judged on the same clock that stamped the expiry
+// it compares against; reading the wall clock here would let the two disagree.
+func (s *Store) CreateModelCapabilityDetection(ctx context.Context, detection domain.ModelCapabilityDetection, now time.Time) (domain.ModelCapabilityDetection, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return domain.ModelCapabilityDetection{}, false, err
 	}
@@ -51,7 +53,7 @@ func (s *Store) CreateModelCapabilityDetection(ctx context.Context, detection do
 				if err := json.Unmarshal(raw, &existing); err != nil {
 					return err
 				}
-				if existing.Status == domain.DetectionQueued || existing.Status == domain.DetectionRunning || (!detection.ForceRefresh && existing.Fresh(time.Now().UTC())) {
+				if existing.Status == domain.DetectionQueued || existing.Status == domain.DetectionRunning || (!detection.ForceRefresh && existing.Fresh(now.UTC())) {
 					record, err := json.Marshal(capabilityDetectionIdempotency{RequestHash: detection.RequestHash, DetectionID: existing.ID})
 					if err != nil {
 						return err

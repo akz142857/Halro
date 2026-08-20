@@ -86,29 +86,29 @@ func TestCapabilityDetectionCreateIsIdempotentAndSingleFlight(t *testing.T) {
 	defer store.Close()
 	now := time.Now().UTC()
 	original := storedDetection(now)
-	created, replayed, err := store.CreateModelCapabilityDetection(context.Background(), original)
+	created, replayed, err := store.CreateModelCapabilityDetection(context.Background(), original, time.Now().UTC())
 	if err != nil || replayed || created.Revision != 1 {
 		t.Fatalf("created=%#v replayed=%v err=%v", created, replayed, err)
 	}
 	retry := original
 	retry.ID = "mcd_retry"
-	got, replayed, err := store.CreateModelCapabilityDetection(context.Background(), retry)
+	got, replayed, err := store.CreateModelCapabilityDetection(context.Background(), retry, time.Now().UTC())
 	if err != nil || !replayed || got.ID != original.ID {
 		t.Fatalf("got=%#v replayed=%v err=%v", got, replayed, err)
 	}
 	conflict := retry
 	conflict.RequestHash = "sha256:different"
-	if _, _, err := store.CreateModelCapabilityDetection(context.Background(), conflict); !errors.Is(err, ErrIdempotencyConflict) {
+	if _, _, err := store.CreateModelCapabilityDetection(context.Background(), conflict, time.Now().UTC()); !errors.Is(err, ErrIdempotencyConflict) {
 		t.Fatalf("err=%v", err)
 	}
 	otherKey := retry
 	otherKey.IdempotencyKeyHash = "sha256:other-key"
-	got, replayed, err = store.CreateModelCapabilityDetection(context.Background(), otherKey)
+	got, replayed, err = store.CreateModelCapabilityDetection(context.Background(), otherKey, time.Now().UTC())
 	if err != nil || !replayed || got.ID != original.ID {
 		t.Fatalf("singleflight got=%#v replayed=%v err=%v", got, replayed, err)
 	}
 	otherKey.RequestHash = "sha256:different-after-singleflight"
-	if _, _, err := store.CreateModelCapabilityDetection(context.Background(), otherKey); !errors.Is(err, ErrIdempotencyConflict) {
+	if _, _, err := store.CreateModelCapabilityDetection(context.Background(), otherKey, time.Now().UTC()); !errors.Is(err, ErrIdempotencyConflict) {
 		t.Fatalf("singleflight idempotency conflict err=%v", err)
 	}
 
@@ -135,7 +135,7 @@ func TestCapabilityDetectionCreateIsIdempotentAndSingleFlight(t *testing.T) {
 			candidate := storedDetection(now)
 			candidate.ID = fmt.Sprintf("mcd_race_%d", index)
 			candidate.IdempotencyKeyHash = fmt.Sprintf("sha256:race-key-%d", index)
-			stored, replayed, err := racing.CreateModelCapabilityDetection(context.Background(), candidate)
+			stored, replayed, err := racing.CreateModelCapabilityDetection(context.Background(), candidate, time.Now().UTC())
 			if err != nil {
 				t.Errorf("racer %d: %v", index, err)
 				return
@@ -238,7 +238,7 @@ func TestCapabilityDetectionRecoveryInterruptsWithoutReplayingCalls(t *testing.T
 	d.ProviderCalls = 1
 	d.Calls = []domain.DetectionProviderCall{{Sequence: 1, BindingID: d.BindingID, Capability: "chat", ProbeKind: "minimal_chat", Status: "running", StartedAt: &now}}
 	d.Results["chat"] = domain.CapabilityProbeResult{Status: domain.ProbeInconclusive, BindingID: d.BindingID, ProbeKind: "minimal_chat", StartedAt: &now}
-	d, _, err = store.CreateModelCapabilityDetection(context.Background(), d)
+	d, _, err = store.CreateModelCapabilityDetection(context.Background(), d, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,7 +287,7 @@ func TestEveryInFlightDetectionIsInterruptedAcrossManyPages(t *testing.T) {
 		d.Results["chat"] = domain.CapabilityProbeResult{
 			Status: domain.ProbeInconclusive, BindingID: d.BindingID, ProbeKind: "minimal_chat", StartedAt: &now,
 		}
-		if _, _, err := store.CreateModelCapabilityDetection(context.Background(), d); err != nil {
+		if _, _, err := store.CreateModelCapabilityDetection(context.Background(), d, time.Now().UTC()); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -296,7 +296,7 @@ func TestEveryInFlightDetectionIsInterruptedAcrossManyPages(t *testing.T) {
 	settled := storedDetection(now)
 	settled.ID, settled.IdempotencyKeyHash, settled.SelectionFingerprint = "mcd_settled", "sha256:key-settled", "sha256:selection-settled"
 	settled.Status, settled.CompletedAt = domain.DetectionFailed, &now
-	if _, _, err := store.CreateModelCapabilityDetection(context.Background(), settled); err != nil {
+	if _, _, err := store.CreateModelCapabilityDetection(context.Background(), settled, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
 
