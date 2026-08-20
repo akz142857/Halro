@@ -1,6 +1,6 @@
-# DeepSeek 适配方案 — 已接入，但与真实上游不符
+# DeepSeek 适配方案 — 与真实上游对齐，已由真实账号证实
 
-状态：**片 1–4 已实现，片 5 未做**（无真实凭据）；上游契约已按官方文档逐条抓取核对（2026-08-18），仍未跑过真实账号
+状态：**片 1–5 全部完成**（2026-08-20 真实账号跑通）；上游契约已按官方文档逐条抓取核对（2026-08-18），并已被真实响应证实
 建立日期：2026-08-14
 修订日期：2026-08-17（对着当日 `main` 重核六条：四条原样成立；§2.5 的缓存档位已落地，正文按现状重写，
 　　　　　并因此改变了 §2.4 的性质与顺序；§2.6 已由能力矩阵单一真相关闭，保留为已关闭记录）
@@ -9,7 +9,9 @@
 挂账清理：2026-08-18 晚（§6.1 的 `/v1/responses` 收窄已解除，§6.2 的 manifest 缺口已补齐——实际有四个
 　　　　　profile 而不是两个，§5 的分时折扣转为独立评审提案；均记在 §10）
 范围：`internal/modelcatalog`、`internal/compatibility`、`internal/openaiapi`、`internal/provider/openai`、`internal/domain`
-相关：[适配链条的未完成项](../prd/adaptation-open-items.zh-CN.md)、[Provider 适配缺口](../prd/provider-adaptation-gaps.zh-CN.md)
+真实账号：2026-08-20（片 5 跑通，三条推断被证实、无一被推翻；证据与仍未测量的那一条记在 §11）
+归档日期：2026-08-20
+相关：[适配链条的未完成项](adaptation-open-items.zh-CN.md)、[Provider 适配缺口](provider-adaptation-gaps.zh-CN.md)、[Real-account Provider matrix](../verification/provider-real-matrix.md)
 
 ## 0. 这份方案要回答什么
 
@@ -63,7 +65,7 @@ DeepSeek 专属代码**。这既是它当初接得快的原因，也是这六处
 另有分时折扣，文档记为非高峰时段减半，2026-08-16 起生效。**具体数值以官方页面为准，本文不做定价数据源。**
 
 > 这一节全部来自文档，**没有一条经过真实账号验证**。这条链上一次真实运行的教训写在
-> [批处理方案 §5](../prd/anthropic-batches-plan.zh-CN.md)：同一天里假上游三次没能拦住真实缺陷。
+> [批处理方案 §5](anthropic-batches-plan.zh-CN.md)：同一天里假上游三次没能拦住真实缺陷。
 > 所以 §4 的验证不是收尾，是完成条件。
 
 ### 1.1 2026-08-18 第一次真正抓了官方文档，本节四处不准（详见 §7）
@@ -183,7 +185,7 @@ Anthropic（`internal/provider/anthropic/adapter.go:414`）、Bedrock
 说「计价没有缓存档位」（已经有了），和说「价格版本没有时间轴」（`EffectiveFrom` 一直在）。
 
 > **2026-08-18 更新：能力已具备，本方案的范围不变。** 分时折扣经
-> [独立评审](../prd/time-of-day-pricing-review.zh-CN.md)后已实施，见
+> [独立评审](time-of-day-pricing-review.zh-CN.md)后已实施，见
 > [ADR 0023](../adr/0023-time-of-day-pricing.md)：价格版本可携带按供应商本地时段的费率表。
 > 也就是说操作者现在**可以**把 DeepSeek 的高峰（北京时间 9:00–12:00 与 14:00–18:00）
 > 与非高峰分别填成两档，不必再在一个固定价里二选一。这是配置动作，不是本方案的交付物——
@@ -195,7 +197,7 @@ Anthropic（`internal/provider/anthropic/adapter.go:414`）、Bedrock
 `MaxProviderCapabilitiesForProfile` 与 `web/src/pages/ProvidersPage.tsx` 三处。现已收敛为
 `internal/domain/provider_table.go` 一张表（DeepSeek 见 `deepSeekSet`，defaults 与 ceiling 同源），
 控制台不再手抄，能力矩阵由 `GET /admin/api/v1/provider-profiles` 下发。见
-[适用能力改由服务端统一下发](../prd/provider-capability-single-source.zh-CN.md)。
+[适用能力改由服务端统一下发](provider-capability-single-source.zh-CN.md)。
 
 **对本方案的影响**：§2.1 若改动 DeepSeek 的能力集，**改 `provider_table.go` 一处即可**，
 前端自动跟随，不再需要三处同步，也不再有「勾了但后端 400」这个失败模式。
@@ -211,14 +213,14 @@ Anthropic（`internal/provider/anthropic/adapter.go:414`）、Bedrock
 | 2 | 字段申报：DeepSeek 从 OpenAI-wire 直通分支拆出，按 §1 接受列表申报；`user` 改渲染为 `user_id`；manifest 三处同步 | 接受列表之外的字段，要么被申报、要么被渲染成上游认识的形状，不存在第三种 | 否 | **已实现**（比方案多一个字段，见 §6.1；`parallel_tool_calls` 的粒度改了一次，见 §6.5） |
 | 3 | thinking 映射：语义 ReasoningEffort → `thinking:{type,reasoning_effort}`；映射接上后再改 manifest 那句 `thinking` unsupported | 打开 Reasoning 能力的部署，发出的请求里带 `thinking` | 否 | **已实现**；manifest 那句**不改**，理由见 §6.2 |
 | 4 | 目录订正：模型名换成 `deepseek-v4-flash` / `deepseek-v4-pro`，上下文 1M、输出 384K，删掉 reasoner 专属条目 | 目录里没有上游列不出的模型名 | 否，但**建议等片 5 的真实 `GET /models`** | **已实现**（未等片 5，见 §6.4） |
-| 5 | 真实账号 smoke：matrix runner 已有 `HALRO_MATRIX_DEEPSEEK_` 这一档，跑一次非流式、一次流式、一次带 thinking、一次重复前缀看缓存命中 | 四项都拿到真实响应，且 §1 的每条推断各自被证实或推翻 | **是** | **未做**；四项的断言已写进 `TestRealProviderSmoke`，缺的只是凭据。命令与本机 DNS 阻塞点见 [§10.3](#103-片-5-仍然缺凭据但阻塞点已经查清) |
+| 5 | 真实账号 smoke：matrix runner 已有 `HALRO_MATRIX_DEEPSEEK_` 这一档，跑一次非流式、一次流式、一次带 thinking、一次重复前缀看缓存命中 | 四项都拿到真实响应，且 §1 的每条推断各自被证实或推翻 | **是** | **已完成**（2026-08-20，`deepseek-v4-flash`）；结果见 [§11](#11-2026-08-20片-5-跑通了) |
 
 **片 4 排在最后是刻意的。** 它写死的是上下文与输出上限，而 Token Guard、预算与 `max_tokens`
 截断都读这两个数：写错的代价比其余几片都高，而它们眼下**只有文档依据**。若真实凭据一时拿不到，
 片 4 可以先做「删掉上游列不出的模型名」这一半，把新模型的上限留到片 5 之后再填。
 
 **片 5 之外的四片都不构成完成。** §1 全部来自文档，文档与真实上游不一致这件事在这个仓库里已经
-发生过三次（见[批处理方案 §5](../prd/anthropic-batches-plan.zh-CN.md)）。
+发生过三次（见[批处理方案 §5](anthropic-batches-plan.zh-CN.md)）。
 
 ### 3.0 评审前先确认：修的路径与在跑的路径是不是同一条
 
@@ -247,7 +249,7 @@ Anthropic（`internal/provider/anthropic/adapter.go:414`）、Bedrock
   （退回旧行为确认变红，`-count=1`，且断言脚本替换真的落了）
 - 字段申报那一片的测试必须**双向**：不支持的要申报，能透传的要断言不申报——只查前一半的表
   发现不了漏申报（这正是 Mantle `messages[].name` 那条的成因，见
-  [Provider 适配缺口 §5.1](../prd/provider-adaptation-gaps.zh-CN.md)）
+  [Provider 适配缺口 §5.1](provider-adaptation-gaps.zh-CN.md)）
 - 片 1 的判据要一路断到**结算金额**，不能只断到解码：解码正确而费率没接上、或接上了却仍按未命中
   价结算，都是这条要挡的（缓存档位见 §2.5）。一条命中 + 未命中混合的用量，其
   `CommittedMicrosUSD` 应当低于同样 token 数全按未命中价算出的值
@@ -608,7 +610,7 @@ go test ./internal/provider/openai/ -run TestRealProviderSmoke -count=1 -v
 ### 10.4 §5 的分时折扣：出了独立评审提案，仍然不实施
 
 按 §5 的原意，它不作为 DeepSeek 适配的副作用发生。现在把它从「记录一句」升级成一份可评审的提案：
-[分时价位独立评审提案](../prd/time-of-day-pricing-review.zh-CN.md)。
+[分时价位独立评审提案](time-of-day-pricing-review.zh-CN.md)。
 
 提案里最硬的一条是本方案没预见到的：**结算事件的价格快照必须与预留时刻的逐字节一致**
 （`samePriceSnapshot`，`internal/ledger/event.go:492`，校验在 `event.go:358-361`），
@@ -616,3 +618,41 @@ go test ./internal/provider/openai/ -run TestRealProviderSmoke -count=1 -v
 并写进快照。任何「结算时看一眼时钟」的实现都是错的。
 
 §5 的另外两条（Anthropic 兼容端点、原生 Responses）维持不做，理由与已核实的事实仍在 §5。
+
+---
+
+## 11. 2026-08-20：片 5 跑通了
+
+`TestRealProviderSmoke` 对 `https://api.deepseek.com` 跑通，模型 `deepseek-v4-flash`，
+代码在 `13d55ff`。三条推断被真实响应证实，**没有一条被推翻**——这是本方案第一次出现这种结果，
+前面每一次核对（§6、§7、§9）都推翻了至少一条。
+
+| 推断 | 来源 | 真实结果 |
+| --- | --- | --- |
+| `thinking` 是推理开关的拼写 | 官方文档（§7.1） | **成立**。`low` 档请求被接受，`reasoning_content` 有值，计费 39 个 reasoning token。拼写错会以拒绝的形式暴露，因为 DeepSeek 不接受 OpenAI wire 的顶层 `reasoning_effort` |
+| `none` 真的关得掉思考 | 只有推测（§7.1、§9.4 留下的探针） | **成立**。reasoning token 为 0，且这是断言不是日志。文档写的默认是思考开着，所以这条要是不成立，明确拒绝推理的调用方会被一直悄悄计费 |
+| 缓存计数器的拼写，以及 `hit + miss = prompt_tokens` | 官方文档（§2.4、§1） | **成立**。重复前缀第二次：`prompt_tokens` 1208 = `prompt_cache_hit_tokens` 1152 + `prompt_cache_miss_tokens` 56。命中读成 0 会按未命中价结算，而这中间是 30 倍（§7.3） |
+
+### 11.1 仍然没有测量的那一条
+
+§10.1 留下的那一半——**思考开着时 DeepSeek 的 `max_tokens` 算不算思维链**——片 5 没有回答。
+smoke 的 thinking 探针带 `max_tokens` 256 发出去，只断言这次调用成功，从没测量回答是否被
+思维链占掉的份额截断。
+
+现状不因此不安全：Halro 在这种情况下申报 `max_completion_tokens`，即按「`max_tokens` 只管回答」
+的保守读法处理；反过来把总预算当成回答预算发，才会悄悄改小调用方的请求。所以今天没有任何东西
+依赖这条的答案——但它是一个选择，不是一次测量，这里如实记着。
+
+### 11.2 §10.3 的 DNS 阻塞点已经不在
+
+那一节记的 fake-ip 解析问题在这台机器上已经解决，片 5 得以跑起来。`deniedPrefixes` 没有放宽，
+SafeTransport 的校验一行未动——这一点也是 §8 当时坚持的。
+
+Admin 控制台的连接测试同日对 `deepseek-v4-pro` 与 `deepseek-v4-flash` 双双通过。那条探测走的是
+`GET /v1/models/{model}`（`internal/provider/openai/adapter.go:256-265`），因此顺带证实了片 4
+的目录订正：这两个模型名上游列得出，§6.4 里「没等片 5 就改目录」这个决定是对的。
+
+证据另记一份在 [Real-account Provider matrix](../verification/provider-real-matrix.md)。
+需要注意那不是 GA 发版证据：这次是直接跑 `TestRealProviderSmoke`，没有走
+`tests/provider-matrix`、没有 `-commit` 绑定、没有归档 evidence 文件，发版闸门对这个 profile
+仍然是开着的。

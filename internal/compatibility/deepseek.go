@@ -46,7 +46,7 @@ import (
 //
 // Everything here is read from DeepSeek's published API documentation and has
 // not been confirmed against a live account. See
-// docs/todo/deepseek-adaptation-plan.zh-CN.md.
+// docs/prd/deepseek-adaptation-plan.zh-CN.md.
 
 // DeepSeekEffortLevels is the depth ladder DeepSeek accepts once thinking is
 // on. Off is not a rung on it — that is thinking.type — which is why `none`

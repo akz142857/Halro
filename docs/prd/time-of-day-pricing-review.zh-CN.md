@@ -20,7 +20,7 @@
 一个 §6 未列出、实施时才发现的连带改动：`CalculateUSDTokensV1` 增加了时刻入参。
 "这笔多少钱"在有分时的价格下没有不带时刻的答案，与其让某个调用方静默用 base 费率，
 不如让签名在每个调用点上把这个问题问出来。
-触发来源：[DeepSeek 适配方案 §2.5 / §5 / §7.4](../todo/deepseek-adaptation-plan.zh-CN.md)
+触发来源：[DeepSeek 适配方案 §2.5 / §5 / §7.4](deepseek-adaptation-plan.zh-CN.md)
 范围：`internal/domain`（价格版本、价格快照、计价公式）、`internal/ledger`、`internal/budget`、
 `internal/app/admin_prices.go`、Admin Console 的价格编辑——**逐处影响面见 §6**，
 它比"模型部署页的价格设置"要宽
@@ -197,7 +197,7 @@ Ledger **不用改代码**——`samePriceSnapshot` 是 JSON 全等比较，新�
 ## 7. 不在本文范围
 
 - **DeepSeek 的 Anthropic 兼容端点**与**原生 Responses 端点**：各自是独立评审，
-  理由与已核实的事实记在[适配方案 §5](../todo/deepseek-adaptation-plan.zh-CN.md)。
+  理由与已核实的事实记在[适配方案 §5](deepseek-adaptation-plan.zh-CN.md)。
   前者会把认不出的模型名静默兜底成 `deepseek-v4-flash`，与 Halro 的成本归属前提冲突，
   那是它自己评审的第一个议题。
 - **阶梯计价（按用量分段）与承诺折扣**：形状不同，不要顺手合并进来。理由不只是"范围太大"，

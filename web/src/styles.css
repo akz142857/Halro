@@ -881,11 +881,17 @@ h3 { margin-bottom: 0; font-size: var(--font-size-lg); }
    ties it to the control above it. It is still bounded rather than sized by its
    content: a long upstream reason has to wrap instead of widening the
    fixed-width test control. */
-.provider-row > .row-test-failure {
-  grid-column: 2 / -1; justify-self: end; max-width: min(46rem, 100%);
+.row-test-failure {
+  max-width: min(46rem, 100%);
   margin: 4px 0 0; padding-left: 10px; border-left: 2px solid var(--danger);
   color: var(--danger); font-size: var(--font-size-xs); line-height: 1.4; overflow-wrap: anywhere;
 }
+/* Only the provider row places it on a grid; everywhere else it is a block that
+   follows the control and reads from the left edge like the rest of the row. */
+.provider-row > .row-test-failure { grid-column: 2 / -1; justify-self: end; }
+/* The route table puts the control in a cell, so the sentence stacks under it
+   instead of joining the flex line of buttons beside it. */
+.inline-test-cell { display: flex; flex-direction: column; align-items: flex-start; }
 .provider-expanded-content { grid-column: 2 / -1; padding: 18px 0 6px; border-top: 1px solid var(--line); }
 .provider-row, .credential-row, .deployment-row { overflow-anchor: none; }
 .provider-expanded-content .provider-facts { margin-top: 0; }
@@ -966,7 +972,7 @@ td small, td code { display: block; margin-top: 4px; color: var(--muted); }
 .model-cell { display: grid; grid-template-columns: auto 1fr; column-gap: 8px; align-items: center; }
 .model-cell code { grid-column: 2; }
 .route-row-actions { width: 100%; min-width: 400px; align-items: center; }
-.route-row-actions > .inline-test-control { margin-right: 18px; }
+.route-row-actions > .inline-test-control, .route-row-actions > .inline-test-cell { margin-right: 18px; }
 .route-management-actions { margin-left: auto; justify-content: flex-end; }
 .route-table th:last-child, .route-table td:last-child { text-align: right; }
 .inline-status { display: inline-flex; align-items: center; gap: 7px; text-transform: uppercase; font: var(--font-size-xs) var(--mono); }
@@ -2055,6 +2061,7 @@ textarea { resize: vertical; }
   /* Narrow layout stacks the row, so the control is no longer to the right of
      anything and the reason returns to the reading edge. */
   .provider-row > .row-test-failure { grid-column: 1; justify-self: start; max-width: 100%; }
+  .row-test-failure { max-width: 100%; }
   .provider-expanded-content .provider-facts { grid-template-columns: 1fr; }
   .provider-expanded-runtime { align-items: flex-start; flex-direction: column; }
   .credential-row { grid-template-areas: "identity" "usage" "generation" "actions" "details"; grid-template-columns: 1fr; row-gap: 12px; }

@@ -14,6 +14,7 @@ import {
   StatusDot,
   TimeZoneField,
   useDirty,
+  useTestFailureReason,
   type ReauthValues,
 } from "../components";
 import { money, useInstantFormatter } from "../format";
@@ -217,13 +218,20 @@ function DeploymentRow({
   const testFailed = deployment.last_test_status === "unhealthy" && deployment.last_test_revision === deployment.revision;
   const testState = test.isPending
     ? "running"
-    : testFailed
+    // A test that never reached the store — a 409 on a revision that moved, a
+    // transport failure — leaves `last_test_status` describing an older run, so
+    // reading only the record would report the previous verdict for a request
+    // that just failed.
+    : test.isError
       ? "failure"
-      : testIsCurrent
-        ? "success"
-        : deployment.last_test_status === "healthy"
-        ? "stale"
-        : "idle";
+      : testFailed
+        ? "failure"
+        : testIsCurrent
+          ? "success"
+          : deployment.last_test_status === "healthy"
+          ? "stale"
+          : "idle";
+  const testFailureReason = useTestFailureReason(test.error, testFailed ? deployment.last_test_error_class : undefined);
   const evidence = evidenceSummary(deployment.capability_evidence).map((value) => t(`deployments.evidenceValues.${value}`));
   const review = deployment.capability_review;
   const routeBlocked = activeRouteCount > 0;
@@ -316,6 +324,11 @@ function DeploymentRow({
           </OverflowMenu>
         </div>
       </div>
+      {/* The reason belongs in the row that failed, not behind the expander:
+          the operator is looking at the button they just pressed. */}
+      {testState === "failure" && testFailureReason && (
+        <p className="row-test-failure" role="status">{testFailureReason}</p>
+      )}
       {expanded && <div id={`deployment-details-${deployment.id}`} className="deployment-details">
         <dl className="deployment-facts">
           <DeploymentFact label={t("deployments.priceStatus")} value={activePrice ? activePrice.billing_mode === "free" ? t("deployments.freePrice") : t("deployments.versionedPrice") : prices.isPending ? t("common.loading") : t("deployments.unknownPrice")} meta={activePrice ? `v${activePrice.version} · ${dateTime(activePrice.effective_from)}` : t("deployments.priceRequired")} unset={!activePrice} />

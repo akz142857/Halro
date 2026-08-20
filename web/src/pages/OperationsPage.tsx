@@ -13,6 +13,7 @@ import {
   PageHeader,
   StatusDot,
   useDirty,
+  useWebhookTestFailureReason,
   type InlineTestState,
   type ReauthValues,
 } from "../components";
@@ -192,6 +193,9 @@ function AlertRow({
   const testState: InlineTestState = test.isPending
     ? "running"
     : test.isSuccess ? "success" : test.isError ? "failure" : "idle";
+  // The dispatcher classified this failure; a bare "Failed" throws that away and
+  // sends the operator to a log that only repeats it.
+  const testFailureReason = useWebhookTestFailureReason(test.error);
   return (
     <>
       <div className="alert-row">
@@ -258,7 +262,12 @@ function AlertRow({
           endpoint stopped receiving events when it has not. */}
       {remove.isError && <ErrorState error={remove.error} />}
       {toggle.isError && <ErrorState error={toggle.error} />}
-      {test.isError && <ErrorState error={test.error} />}
+      {/* The classified reason replaces the generic failure notice rather than
+          joining it: two boxes saying the request failed, one of them without
+          the classification, is less readable than the one that has it. */}
+      {test.isError && (testFailureReason
+        ? <p className="row-test-failure" role="status">{testFailureReason}</p>
+        : <ErrorState error={test.error} />)}
     </>
   );
 }
