@@ -81,6 +81,36 @@ Gemini and Bedrock are Beta and therefore do not satisfy or block the GA matrix,
 but each has a separate opt-in real smoke test under its adapter package. Run
 those when the corresponding Beta is included in an RC deployment.
 
+## DeepSeek: the two extra assertions passed on a real account (2026-08-20)
+
+Run on `13d55ff` against `https://api.deepseek.com` with `deepseek-v4-flash`,
+through `TestRealProviderSmoke` directly rather than through
+`tests/provider-matrix`. **This is adaptation evidence, not GA matrix evidence**:
+it carries no `-commit` binding and produced no archived evidence file, so the
+release gate above is still open for this profile.
+
+What it established, none of which a fake upstream could:
+
+- `thinking` is the spelling. The request was accepted at the `low` rung and came
+  back with `reasoning_content` present and 39 reasoning tokens billed. A wrong
+  spelling would have surfaced as a refusal.
+- `none` really turns it off: 0 reasoning tokens, asserted rather than logged. The
+  documented default is thinking on, so a caller who declined reasoning and was
+  billed for it anyway would have been silent.
+- The cache counters are spelled as documented and the tiers sum:
+  `prompt_tokens` 1208 = `prompt_cache_hit_tokens` 1152 + `prompt_cache_miss_tokens`
+  56 on the repeated prefix. A hit read as zero settles at the miss rate, which
+  DeepSeek prices at thirty times the hit rate.
+
+Still not established, and outside what this smoke asks: whether DeepSeek's
+`max_tokens` counts the thinking chain when thinking is on. The thinking probe
+sends `max_tokens` 256 and only asserts the call succeeds; it never measures
+whether the answer was truncated by the chain's share. Halro declares
+`max_completion_tokens` in that case, which is the conservative reading — sending
+the total as the answer budget would quietly shrink the caller's request — so
+nothing depends on the answer today, but the declaration is a choice rather than
+a measurement.
+
 ## Invocation-target resolution RC checks
 
 For an RC that includes the cross-provider selection flow, archive a second
