@@ -96,6 +96,30 @@ export function useTestFailureReason(error: unknown, persistedErrorClass?: strin
   return parts.join(" · ");
 }
 
+// The alert dispatcher answers in its own shape — a delivery reason code, the
+// endpoint's status code and a snippet of what it replied — so the probe reader
+// above cannot describe it: with no `error_class` it would call a dead webhook
+// host a request Halro refused before sending. This turns the dispatcher's own
+// classification into a sentence and keeps the endpoint's reply beside it,
+// which is the part that separates a wrong URL from a rejected payload.
+export function useWebhookTestFailureReason(error: unknown) {
+  const { t } = useTranslation();
+  const payload = error instanceof ApiError
+    ? error.payload as { code?: string; status_code?: number; response?: string; error?: string } | undefined
+    : undefined;
+  if (!payload) return "";
+  const code = payload.code || "";
+  // A disabled endpoint answers 409 with a message and no code; that message is
+  // then the whole explanation.
+  if (!code && !payload.error) return "";
+  const parts = [code
+    ? t(`testControl.delivery.${code}`, { defaultValue: t("testControl.delivery.delivery_failed") })
+    : payload.error as string];
+  if (payload.status_code) parts.push(`HTTP ${payload.status_code}`);
+  if (payload.response) parts.push(payload.response);
+  return parts.join(" · ");
+}
+
 export function EmptyState({
   title,
   children,

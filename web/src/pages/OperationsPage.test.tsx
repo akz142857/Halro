@@ -161,6 +161,27 @@ describe("operations page", () => {
     expect(await screen.findByText("无法完成请求")).toBeVisible();
   });
 
+  // "Failed" alone sent the operator to a log that only repeats it: the
+  // dispatcher had already classified the failure and the endpoint had already
+  // answered, and the row showed neither.
+  it("says how a webhook delivery test failed and what the endpoint answered", async () => {
+    vi.mocked(api.alertsPage).mockResolvedValue({ items: [webhook()], next_cursor: "" } as never);
+    vi.spyOn(api, "testAlert").mockRejectedValue(new ApiError(502, "alert delivery test failed", "http_client_error", '{"error":"unknown channel"}', {
+      error: "alert delivery test failed", code: "http_client_error",
+      status_code: 404, response: '{"error":"unknown channel"}',
+    }));
+
+    renderPage();
+    const row = (await screen.findByText("Security operations")).closest(".alert-row")!;
+    fireEvent.click(within(row as HTMLElement).getByRole("button", { name: "测试" }));
+
+    const reason = await screen.findByText(/Webhook 端点拒绝了这次投递/);
+    expect(reason).toHaveTextContent("HTTP 404");
+    expect(reason).toHaveTextContent("unknown channel");
+    // One box, not the classified sentence beside a generic "request failed".
+    expect(screen.queryByText("无法完成请求")).not.toBeInTheDocument();
+  });
+
   it("keeps a test result attached to the row that produced it", async () => {
     // A page-wide notice cannot say which endpoint answered.
     vi.mocked(api.alertsPage).mockResolvedValue({

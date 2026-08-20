@@ -629,6 +629,66 @@ describe("deployment invocation target workflow", () => {
 
 });
 
+describe("deployment connection test", () => {
+  beforeEach(() => {
+    vi.spyOn(api, "providers").mockResolvedValue({ items: [provider], next_cursor: "" });
+    vi.spyOn(api, "routes").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [], next_cursor: "" });
+  });
+
+  afterEach(() => vi.restoreAllMocks());
+
+  // A failed test used to be a red word with nothing behind it: the response
+  // carried the class and the upstream's own reply, and the row dropped both.
+  it("says why a deployment connection test failed", async () => {
+    vi.spyOn(api, "deployments").mockResolvedValue({ items: [existingDeployment], next_cursor: "" });
+    vi.spyOn(api, "testDeployment").mockRejectedValue(new ApiError(502, "request failed (502)", "", "", {
+      status: "unhealthy", error_class: "authentication", provider_status: 401,
+      provider_code: "invalid_api_key", error_detail: "provider error (401): incorrect api key provided",
+    }));
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "测试" }));
+    const reason = await screen.findByText(/上游拒绝了这份凭据/);
+    expect(reason).toHaveTextContent("HTTP 401");
+    expect(reason).toHaveTextContent("invalid_api_key");
+    expect(reason).toHaveTextContent("incorrect api key provided");
+  });
+
+  // The store keeps the class of the last failure, so a reload has to explain
+  // the red word it is still showing.
+  it("explains a failure the record remembers, without a test in this session", async () => {
+    vi.spyOn(api, "deployments").mockResolvedValue({
+      items: [deployment("dep_1", { last_test_status: "unhealthy", last_test_revision: 1, last_test_error_class: "connect" })],
+      next_cursor: "",
+    });
+    renderPage();
+
+    expect(await screen.findByText(/无法建立到上游的连接/)).toBeVisible();
+  });
+
+  // The record still describes the previous run when the request never reached
+  // the store, so reading it alone reports the wrong verdict for the click the
+  // operator just made.
+  it("reports a test that never reached the store rather than the record's older verdict", async () => {
+    vi.spyOn(api, "deployments").mockResolvedValue({
+      items: [deployment("dep_1", { last_test_status: "healthy", last_test_revision: 1 })],
+      next_cursor: "",
+    });
+    vi.spyOn(api, "testDeployment").mockRejectedValue(
+      new ApiError(409, "deployment changed during validation; test the current revision again", "", "", {
+        error: "deployment changed during validation; test the current revision again",
+      }),
+    );
+    renderPage();
+
+    expect(await screen.findByText("通过")).toBeVisible();
+    fireEvent.click(await screen.findByRole("button", { name: "测试" }));
+    expect(await screen.findByText(/Halro 在发往上游之前拒绝了这次探测/)).toHaveTextContent("deployment changed during validation");
+    expect(screen.queryByText("通过")).not.toBeInTheDocument();
+  });
+});
+
 describe("deployment price lifecycle refresh", () => {
   it("refreshes immediately after the nearest scheduled price becomes effective", () => {
     const now = Date.parse("2026-08-10T06:00:00Z");

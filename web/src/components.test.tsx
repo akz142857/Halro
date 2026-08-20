@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ApiError } from "./api";
-import { ConfirmButton, ErrorState, InlineTestControl, useTestFailureReason } from "./components";
+import { ConfirmButton, ErrorState, InlineTestControl, useTestFailureReason, useWebhookTestFailureReason } from "./components";
 
 describe("ErrorState", () => {
   it("turns an ambiguous capability interface response into an actionable localized instruction", () => {
@@ -124,5 +124,38 @@ describe("useTestFailureReason", () => {
   it("falls back to the server's sentence for a class it has no wording for", () => {
     render(<Reason error={refusal("some_future_reason")} />);
     expect(screen.getByText(/provider binding adapter is unavailable/)).toBeVisible();
+  });
+});
+
+// The alert dispatcher answers in its own shape, with no `error_class`, so the
+// probe reader would call a dead webhook host a request Halro refused before
+// sending — naming the wrong side of the failure.
+describe("useWebhookTestFailureReason", () => {
+  function Reason({ error }: { error: unknown }) {
+    return <>{useWebhookTestFailureReason(error)}</>;
+  }
+  const failure = (code: string, extra: Record<string, unknown> = {}) =>
+    new ApiError(502, "alert delivery test failed", code, "", { error: "alert delivery test failed", code, ...extra });
+
+  it("names the dispatcher's classification and keeps the endpoint's reply beside it", () => {
+    render(<Reason error={failure("http_client_error", { status_code: 403, response: '{"error":"forbidden"}' })} />);
+    expect(screen.getByText(/Webhook 端点拒绝了这次投递 · HTTP 403 · \{"error":"forbidden"\}/)).toBeVisible();
+  });
+
+  it("does not describe a transport failure as a refusal Halro made", () => {
+    render(<Reason error={failure("transport_error")} />);
+    expect(screen.getByText(/无法连接到这个 Webhook 地址/)).toBeVisible();
+    expect(screen.queryByText(/Halro 在发往上游之前拒绝/)).not.toBeInTheDocument();
+  });
+
+  it("falls back to the unclassified sentence for a reason it has no wording for", () => {
+    render(<Reason error={failure("some_future_reason")} />);
+    expect(screen.getByText(/投递失败，原因未分类/)).toBeVisible();
+  });
+
+  // A disabled endpoint is refused before any delivery, with a message and no code.
+  it("carries a refusal that arrived without a reason code", () => {
+    render(<Reason error={new ApiError(409, "alert webhook is disabled", "", "", { error: "alert webhook is disabled" })} />);
+    expect(screen.getByText("alert webhook is disabled")).toBeVisible();
   });
 });

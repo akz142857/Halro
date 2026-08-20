@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { api } from "../api";
+import { ApiError, api } from "../api";
 import type { Deployment, Provider, Route } from "../types";
 import { RoutesPage } from "./RoutesPage";
 
@@ -50,6 +50,45 @@ describe("RoutesPage", () => {
   // Whether the alias answers requests is the state the save commits, so it
   // belongs in the bar that commits it, saying what it will do. A stylesheet
   // regression that breaks this structure is invisible to a typecheck.
+  // A failed route test showed a red word and dropped the class and upstream
+  // reply the response carried, leaving the operator with nothing to act on.
+  it("says why a route test failed", async () => {
+    const route = {
+      id: "route_chat", public_model: "chat", deployment_id: "deployment_gpt",
+      priority: 10, strategy: "ordered", enabled: true, revision: 1, created_at: "", updated_at: "",
+    } as Route;
+    vi.spyOn(api, "routes").mockResolvedValue({ items: [route], next_cursor: "" });
+    vi.spyOn(api, "deployments").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "providers").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "testRoute").mockRejectedValue(new ApiError(502, "request failed (502)", "", "", {
+      status: "unhealthy", error_class: "rate_limit", provider_status: 429,
+      provider_code: "rate_limit_exceeded", error_detail: "provider error (429): too many requests",
+    }));
+    renderPage();
+
+    const row = (await screen.findByText("chat")).closest("tr")!;
+    fireEvent.click(within(row).getByRole("button", { name: "测试" }));
+
+    const reason = await within(row).findByText(/上游限流/);
+    expect(reason).toHaveTextContent("HTTP 429");
+    expect(reason).toHaveTextContent("too many requests");
+  });
+
+  it("explains a route failure the record remembers, without a test in this session", async () => {
+    const route = {
+      id: "route_chat", public_model: "chat", deployment_id: "deployment_gpt",
+      priority: 10, strategy: "ordered", enabled: true, revision: 2,
+      last_test_status: "unhealthy", last_test_revision: 2, last_test_error_class: "timeout",
+      created_at: "", updated_at: "",
+    } as Route;
+    vi.spyOn(api, "routes").mockResolvedValue({ items: [route], next_cursor: "" });
+    vi.spyOn(api, "deployments").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "providers").mockResolvedValue({ items: [], next_cursor: "" });
+    renderPage();
+
+    expect(await screen.findByText(/等待上游响应超时/)).toBeVisible();
+  });
+
   it("states the routing state in the save bar rather than as a bare checkbox", async () => {
     const route = {
       id: "route_chat", public_model: "chat", deployment_id: "deployment_gpt",

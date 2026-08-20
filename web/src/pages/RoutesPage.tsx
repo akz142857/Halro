@@ -12,6 +12,7 @@ import {
   PageHeader,
   StatusDot,
   useDirty,
+  useTestFailureReason,
   type ReauthValues,
 } from "../components";
 import type { InlineTestState } from "../components";
@@ -203,7 +204,17 @@ function RouteTestAction({ route }: { route: Route }) {
           : route.last_test_status
             ? "stale"
             : "idle";
-  return <InlineTestControl state={state} latency={test.data?.latency_ms ?? route.last_test_latency_millis} disabled={!route.enabled} onTest={() => test.mutate()} />;
+  const failureReason = useTestFailureReason(test.error, persistedTestIsCurrent ? route.last_test_error_class : undefined);
+  return (
+    // The control and its reason stack, so a wrapped sentence pushes the rest of
+    // the action row down rather than sitting between the buttons.
+    <div className="inline-test-cell">
+      <InlineTestControl state={state} latency={test.data?.latency_ms ?? route.last_test_latency_millis} disabled={!route.enabled} onTest={() => test.mutate()} />
+      {state === "failure" && failureReason && (
+        <p className="row-test-failure" role="status">{failureReason}</p>
+      )}
+    </div>
+  );
 }
 
 function RouteForm({ current, deployments, onClose }: { current?: Route; deployments: Deployment[]; onClose: () => void }) {
