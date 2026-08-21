@@ -369,4 +369,17 @@ describe("component styling reaches the markup", () => {
     const unstyled = Array.from(used).filter((name) => !defined.has(name)).sort();
     expect(unstyled.length, `unstyled classes: ${unstyled.join(", ")}`).toBeLessThanOrEqual(unstyledClassBaseline);
   });
+
+  // A length flex-basis binds to the parent's main axis, so one declaration is a
+  // width inside a row and a height inside a column. This control is used in
+  // both: a row of buttons on the provider and deployment lists, and
+  // .inline-test-cell — a column — in the route table. A 196px basis was read as
+  // a height there and stretched every route row from 77px to 229px. The width
+  // is declared outright, so the basis has to stay axis-neutral.
+  it("keeps the inline test control's flex basis axis-neutral", () => {
+    const rule = read("./styles.css").match(/^\.inline-test-control \{([^}]*)\}/m)?.[1];
+    expect(rule, ".inline-test-control base rule not found").toBeDefined();
+    expect(rule).toMatch(/width:\s*196px/);
+    expect(rule).toMatch(/flex:\s*0\s+0\s+auto/);
+  });
 });

@@ -140,7 +140,13 @@ h3 { margin-bottom: 0; font-size: var(--font-size-lg); }
 .badge.muted { color: var(--color-text-tertiary); border-color: var(--line-strong); background: var(--overlay-hover); }
 .status-dot { display: inline-block; width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--danger); }
 .status-dot.ok { background: var(--color-status-success-icon); box-shadow: 0 0 7px var(--accent-glow); }
-.inline-test-control { display: grid; grid-template-columns: 56px 132px; align-items: center; width: 196px; flex: 0 0 196px; gap: 8px; contain: layout; }
+/* flex-basis is auto, not 196px, because the basis lands on whichever axis the
+   parent runs. This control sits in a row of buttons on the provider and
+   deployment lists, where a 196px basis was the width -- and in the route
+   table it sits in .inline-test-cell, a column, where the same 196px became
+   the height and stretched every route row to 229px. The width below already
+   fixes the width, so the basis had nothing left to say. */
+.inline-test-control { display: grid; grid-template-columns: 56px 132px; align-items: center; width: 196px; flex: 0 0 auto; gap: 8px; contain: layout; }
 .inline-test-control > .button { width: 56px; min-height: 36px; padding: 0 6px; }
 .inline-test-result { display: flex; align-items: center; min-width: 0; gap: 7px; overflow: hidden; color: var(--muted); font: var(--font-size-xs)/1.25 var(--font-sans); text-overflow: ellipsis; white-space: nowrap; transition: color .15s, opacity .15s; }
 .inline-test-result > span { width: 6px; height: 6px; flex: 0 0 6px; background: var(--muted-2); border-radius: 50%; }
