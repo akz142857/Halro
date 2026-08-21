@@ -472,8 +472,24 @@ func (r *Runtime) runCapabilityDetection(parent context.Context, detectionID str
 		probeContext := ctx
 		probeCancel := func() {}
 		if deadline, ok := ctx.Deadline(); ok {
-			remainingProbes := len(plan.Probes) - probeIndex
-			fairShare := time.Until(deadline) / time.Duration(remainingProbes)
+			// Share what is left among the probes that can actually run next,
+			// not every probe the plan lists. In these plans everything is
+			// gated on chat, so chat failing skips the rest without spending a
+			// call — and dividing evenly gave the one probe that always runs,
+			// and that all the others wait on, the smallest share: a seventh of
+			// the budget on a plan of seven. A frontier reasoning model cannot
+			// answer a non-streaming completion in that, so detection reported
+			// a timeout for a model that works. A probe whose dependencies are
+			// established is bounded by the attempt timeout instead, and one
+			// still waiting on an unresolved dependency is not counted, because
+			// it may never be asked at all.
+			runnable := 0
+			for _, pending := range plan.Probes[probeIndex:] {
+				if probeDependenciesSupported(d.Results, pending.DependsOn) {
+					runnable++
+				}
+			}
+			fairShare := time.Until(deadline) / time.Duration(max(runnable, 1))
 			probeTimeout := min(fairShare, r.config.Gateway.AttemptResponseHeaderTimeout.Value())
 			if probeTimeout > 0 {
 				probeContext, probeCancel = context.WithTimeout(ctx, probeTimeout)

@@ -8,10 +8,12 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/akz142857/Halro/internal/config"
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/openaiapi"
 	"github.com/akz142857/Halro/internal/provider"
@@ -338,6 +340,78 @@ func (d *scriptedCapabilityDetector) DetectCapability(_ context.Context, target 
 }
 
 type fixedCapabilityDetector struct{ calls atomic.Int64 }
+
+// budgetRecordingDetector answers instantly and records how much time each
+// probe was actually given, which is the property under test. Its plan mirrors
+// the real chat interface: one root, and every other capability gated on it.
+type budgetRecordingDetector struct {
+	fixedCapabilityDetector
+	mu      sync.Mutex
+	budgets map[string]time.Duration
+}
+
+func (*budgetRecordingDetector) CapabilityDetectionPlan(target provider.ModelCapabilityDetectionTarget) (provider.CapabilityDetectionPlan, error) {
+	if target.ProviderModel == "" || target.BindingID == "" || target.RiskTier != "safe_automatic" {
+		return provider.CapabilityDetectionPlan{}, errors.New("capability detection target does not match adapter profile")
+	}
+	probes := []provider.CapabilityProbe{{Capability: "chat", Kind: "minimal_chat", MaxOutputTokens: 8, MayBill: true}}
+	for _, dependent := range []string{"streaming", "tools", "json_mode", "developer_role", "vision"} {
+		probes = append(probes, provider.CapabilityProbe{Capability: dependent, Kind: dependent,
+			DependsOn: []string{"chat"}, MaxOutputTokens: 8, MayBill: true})
+	}
+	return provider.CapabilityDetectionPlan{ContractVersion: provider.CapabilityDetectorContractVersion, Probes: probes, MaxCalls: len(probes)}, nil
+}
+
+func (d *budgetRecordingDetector) DetectCapability(ctx context.Context, target provider.ModelCapabilityDetectionTarget, probe provider.CapabilityProbe) domain.CapabilityProbeResult {
+	d.calls.Add(1)
+	d.mu.Lock()
+	if d.budgets == nil {
+		d.budgets = map[string]time.Duration{}
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		d.budgets[probe.Capability] = time.Until(deadline)
+	}
+	d.mu.Unlock()
+	return domain.CapabilityProbeResult{Status: domain.ProbeSupported, Evidence: domain.EvidenceVerified, BindingID: target.BindingID, ProbeKind: probe.Kind}
+}
+
+func (d *budgetRecordingDetector) budgetFor(capability string) time.Duration {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.budgets[capability]
+}
+
+// The probe every other probe waits on used to be given the smallest share of
+// the budget. Every capability in a chat plan depends on chat, so chat failing
+// skips the rest without spending a call — yet the budget was divided by the
+// number of probes the plan listed, leaving chat a sixth of the total here and
+// a seventh on the real Bedrock Mantle plan. A frontier reasoning model needs
+// longer than that for one non-streaming completion, so a model that works was
+// reported as a timeout on every capability.
+func TestRootProbeIsBoundedByTheAttemptTimeoutNotAFractionOfTheBudget(t *testing.T) {
+	runtime, instance, chat, _ := twoInterfaceProviderForTest(t)
+	detector := &budgetRecordingDetector{}
+	registerBindingDetectors(t, runtime, instance, map[string]provider.Adapter{chat.ID: detector})
+	runtime.config.Admin.ModelCapabilityDetection.TotalTimeout = config.Duration(90 * time.Second)
+	runtime.config.Gateway.AttemptResponseHeaderTimeout = config.Duration(60 * time.Second)
+
+	completed := runDetectionForTest(t, runtime, instance, "slow-reasoning-model")
+	if completed.Status != domain.DetectionCompleted {
+		t.Fatalf("status=%s", completed.Status)
+	}
+	// The even split gave the root 90s/6 = 15s. It is now bounded by the
+	// attempt timeout, which is the same bound one gateway attempt gets.
+	root := detector.budgetFor("chat")
+	if root < 45*time.Second {
+		t.Fatalf("root probe was given %s of a 90s budget with a 60s attempt timeout", root)
+	}
+	// The dependents still share what the root left, so this is a reallocation
+	// and not a removal of the bound.
+	dependent := detector.budgetFor("streaming")
+	if dependent <= 0 || dependent >= root {
+		t.Fatalf("dependent probe was given %s against a root share of %s", dependent, root)
+	}
+}
 
 type lateCapabilityDetector struct {
 	fixedCapabilityDetector
