@@ -46,7 +46,7 @@ is linked into the Go runtime.
 
 | Package | Version | License |
 |---|---:|---|
-| `@hookform/resolvers` | 5.7.1 | MIT |
+| `@hookform/resolvers` | 5.9.1 | MIT |
 | `@tanstack/react-query` | 5.101.4 | MIT |
 | `i18next` | 26.3.6 | MIT |
 | `qrcode` | 1.5.4 | MIT |
@@ -62,6 +62,17 @@ The Admin UI lockfile contains no CC-BY package. Its 12 MPL-2.0 entries are
 dev-only CSS build tooling and are not present in the generated Admin UI bundle
 or final container. Source and build environments still retain their upstream
 license metadata; this review does not relabel them as runtime dependencies.
+
+The lockfile also carries nineteen `@typescript/typescript-<os>-<arch>` platform
+binaries, Apache-2.0, at the same version as the `typescript` devDependency they
+are optional dependencies of. They stopped carrying npm's `dev` marker when the
+tree was recomputed for the `@hookform/resolvers` bump, so `npm ci --omit=dev`
+now installs them where it previously did not. They are compiler binaries, they
+are not imported by any module the bundler follows, and release archives and the
+container copy `internal/webui/dist` rather than `node_modules` — so nothing
+they contain reaches a distributed artifact. Recorded here because the flag
+change is a real change to the production install tree, not because the licence
+surface of what ships moved.
 
 The independent packages under `tests/compatibility/` install official SDK test
 clients in CI. They are excluded from the embedded Admin UI inventory and are
@@ -89,13 +100,15 @@ document is deliberately refreshed with the new inventory and hashes.
 
 - `go.mod`: `c853d9c61d0b14ad5c3a14f78b4b85bfe99e0dc0`
 - `go.sum`: `adea23025a66a068f3dc7797a8fe60d452283c8b`
-- `web/package.json`: `7c3a692df887a0f4814633b58815213d2a4da25d`
-- `web/package-lock.json`: `69127f543e714d8395c03b668efba5e24eff8172`
+- `web/package.json`: `648bbf8d73e1c3966119f4dd9309794d78296968`
+- `web/package-lock.json`: `6ee4092665530ba23f859005b2d8c6aabf5fb463`
 
-The two web hashes moved for `chore(release): v0.2.0`, which bumped the
-`version` field in both files and changed nothing else — no dependency was
-added, removed, or upgraded, so the inventory above still describes the
-reviewed tree and the review date is unchanged. The gate hashes whole files
+The two web hashes last moved for `@hookform/resolvers` 5.7.1 to 5.9.1, which
+is MIT at both versions and pulled in no new package; the only other movement in
+the lockfile was the dev-marker change on the TypeScript platform binaries
+described above. Before that they moved for `chore(release): v0.2.0`, which
+bumped the `version` field in both files and changed nothing else. The gate
+hashes whole files
 rather than dependency sections, which is the right trade: it cannot be talked
 out of noticing a change, at the cost of occasionally flagging one that carries
 no dependency in it.
