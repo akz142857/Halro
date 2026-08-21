@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { lazy, Suspense, useEffect, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { api, ApiError } from "./api";
 import { Layout } from "./Layout";
@@ -7,20 +7,30 @@ import { Login } from "./Login";
 import { Setup } from "./Setup";
 import { ErrorBoundary, Loading } from "./components";
 import { navigate, usePathname } from "./navigation";
-import { DashboardPage } from "./pages/DashboardPage";
-import { DeploymentsPage } from "./pages/DeploymentsPage";
-import { OperationsPage } from "./pages/OperationsPage";
-import { PoliciesPage } from "./pages/PoliciesPage";
-import { ProjectsPage } from "./pages/ProjectsPage";
-import { ProvidersPage } from "./pages/ProvidersPage";
-import { RoutesPage } from "./pages/RoutesPage";
-import { SettingsPage } from "./pages/SettingsPage";
-import { UsagePage } from "./pages/UsagePage";
-import { MasterKeyCustodyPage } from "./pages/MasterKeyCustodyPage";
-import { DeveloperPage } from "./pages/DeveloperPage";
 import { applyLocale, applyPreference, resolveLocale } from "./i18n";
 import { applyAppearance, normalizeAppearance, resetAppearance } from "./theme";
 import { adoptTimeContext, resetAccountingTimeZone } from "./timezone";
+
+// Every page used to be imported statically, which put all eleven of them in
+// the entry chunk even though a session opens one. They are reached by dynamic
+// import instead, so a page's code is fetched when its path is; the bundle
+// budget in web/scripts/check-bundle.mjs measures the initial graph by reading
+// index.html, so a page split out this way leaves that budget by construction.
+//
+// Spelled out one by one rather than through a helper: lazy() keeps each
+// page's own prop types this way, which matters for the one page that takes a
+// prop — SettingsPage is also rendered directly for the MFA setup gate.
+const DashboardPage = lazy(() => import("./pages/DashboardPage").then((module) => ({ default: module.DashboardPage })));
+const DeploymentsPage = lazy(() => import("./pages/DeploymentsPage").then((module) => ({ default: module.DeploymentsPage })));
+const OperationsPage = lazy(() => import("./pages/OperationsPage").then((module) => ({ default: module.OperationsPage })));
+const PoliciesPage = lazy(() => import("./pages/PoliciesPage").then((module) => ({ default: module.PoliciesPage })));
+const ProjectsPage = lazy(() => import("./pages/ProjectsPage").then((module) => ({ default: module.ProjectsPage })));
+const ProvidersPage = lazy(() => import("./pages/ProvidersPage").then((module) => ({ default: module.ProvidersPage })));
+const RoutesPage = lazy(() => import("./pages/RoutesPage").then((module) => ({ default: module.RoutesPage })));
+const SettingsPage = lazy(() => import("./pages/SettingsPage").then((module) => ({ default: module.SettingsPage })));
+const UsagePage = lazy(() => import("./pages/UsagePage").then((module) => ({ default: module.UsagePage })));
+const MasterKeyCustodyPage = lazy(() => import("./pages/MasterKeyCustodyPage").then((module) => ({ default: module.MasterKeyCustodyPage })));
+const DeveloperPage = lazy(() => import("./pages/DeveloperPage").then((module) => ({ default: module.DeveloperPage })));
 
 export function App() {
   const { t } = useTranslation();
@@ -127,10 +137,18 @@ export function App() {
     );
   }
   if (session.data.mfa_setup_required) {
-    return <Layout username={session.data.username} restricted><SettingsPage mfaSetupRequired /></Layout>;
+    return <Layout username={session.data.username} restricted><PageChunk><SettingsPage mfaSetupRequired /></PageChunk></Layout>;
   }
   // Keyed by path so navigating away from a crashed page recovers on its own.
-  return <Layout username={session.data.username}><ErrorBoundary key={path}><Route path={path} /></ErrorBoundary></Layout>;
+  return <Layout username={session.data.username}><ErrorBoundary key={path}><PageChunk><Route path={path} /></PageChunk></ErrorBoundary></Layout>;
+}
+
+// The wait for a page's own chunk. It sits inside the Layout and inside the
+// error boundary, so the navigation stays on screen while the chunk arrives and
+// a chunk that fails to load is caught the same way a page that throws is.
+function PageChunk({ children }: { children: ReactNode }) {
+  const { t } = useTranslation();
+  return <Suspense fallback={<div className="page-chunk-pending"><Loading label={t("common.loading")} /></div>}>{children}</Suspense>;
 }
 
 function Route({ path }: { path: string }) {
