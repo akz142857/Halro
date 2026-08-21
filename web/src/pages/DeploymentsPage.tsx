@@ -1362,6 +1362,19 @@ function DeploymentForm({
       return result.status === "inconclusive" || result.status === "not_probed" && result.probe_kind !== "risk_policy";
     })
     : [];
+  // What every probe on the resolved interface actually came back with. A
+  // failure used to be explained only by what identification asked, which is
+  // empty by construction when there is a single interface to identify — the
+  // one case where the outcomes below are the only record of why it failed.
+  // Same risk_policy filter as above: those rows are capabilities the plan
+  // never meant to reach, not outcomes.
+  const failedProbeOutcomes = detection?.status === "failed"
+    ? deploymentCapabilityNames.flatMap((name) => {
+      const result = detection.capabilities?.[name];
+      if (!result || result.probe_kind === "risk_policy") return [];
+      return [{ name, status: result.status, errorClass: result.error_class }];
+    })
+    : [];
   // What the save will record, not what the form happens to display: widening
   // sends mode=operator_declared, so the source shown has to say so too.
   const capabilityEvidenceSource = manualDeclaration || widening
@@ -1617,18 +1630,41 @@ function DeploymentForm({
                       const binding = selectableBindings.find((item) => item.id === candidate.binding_id);
                       return <li key={candidate.binding_id}>
                         <strong>{binding ? bindingLabel(binding, t) : candidate.profile_id}</strong>
+                        {/* Identification is skipped outright when there is one
+                            interface — nothing to tell it apart from — so this
+                            candidate carries no probe by design. Reporting that
+                            as "no probe was sent" reads as the failure itself. */}
                         <span>{candidate.capability
                           ? t("deployments.detectionCandidateOutcome", {
                             capability: t(`capabilities.${candidate.capability}`),
                             status: t(`deployments.detectionProbeStatus.${candidate.status}`),
                           })
-                          : t("deployments.detectionCandidateNotAsked")}</span>
+                          : detection.binding_candidates.length === 1
+                            ? t("deployments.detectionCandidateSingleInterface")
+                            : t("deployments.detectionCandidateNotAsked")}</span>
                         <small>{t("deployments.detectionCandidateVerifiable", {
                           capabilities: (candidate.verifiable ?? []).map((name) => t(`capabilities.${name}`)).join("、") || t("deployments.detectionCandidateVerifiableNone"),
                         })}</small>
                       </li>;
                     })}
                   </ul>}
+                  {/* The outcomes themselves. Identification answers which
+                      interface, never why the capabilities did not establish,
+                      so without this the reason a detection failed was in the
+                      record and nowhere on the screen. */}
+                  {!!failedProbeOutcomes.length && <>
+                    <span>{t("deployments.detectionProbeOutcomesTitle")}</span>
+                    <ul className="detection-candidate-outcomes">
+                      {failedProbeOutcomes.map((outcome) => <li key={outcome.name}>
+                        <strong>{t("deployments.detectionCandidateOutcome", {
+                          capability: t(`capabilities.${outcome.name}`),
+                          status: t(`deployments.detectionProbeStatus.${outcome.status}`),
+                        })}</strong>
+                        {!!outcome.errorClass && <span>{t(`testControl.reasons.${outcome.errorClass}`, { defaultValue: t("testControl.reasons.unknown") })}</span>}
+                      </li>)}
+                    </ul>
+                  </>}
+                  {detection.status === "failed" && !failedProbeOutcomes.length && <span>{t("deployments.detectionProbeNoneRan")}</span>}
                   <div className="form-actions"><button type="button" className="button ghost" onClick={() => { resetDetection(); setManualDeclaration(true); }}>{t("deployments.advancedManualDeclaration")}</button></div>
                 </div>}
                 {/* What a model cannot do is the complement of the capability

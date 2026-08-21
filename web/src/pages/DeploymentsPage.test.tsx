@@ -547,6 +547,41 @@ describe("deployment invocation target workflow", () => {
     expect(within(card as HTMLElement).getByRole("button", { name: "手动配置" })).toBeVisible();
   });
 
+  // With one interface there is nothing to identify, so identification is
+  // skipped and the candidate carries no probe — which used to be the only
+  // thing a failed detection showed, reading as "no probe was sent" when the
+  // capability probes had in fact all run and all been refused upstream.
+  it("shows why each capability probe failed when there was only one interface", async () => {
+    vi.spyOn(api, "createModelCapabilityDetection").mockImplementation(async (_id, body) => ({
+      id: "single", status: "failed" as const, source: "verified_probe" as const, provider_id: provider.id,
+      provider_model: unknown.target_id, binding_id: "b-chat", profile_id: "openai.chat-embeddings.v1",
+      provider_calls: 2, max_provider_calls: 10,
+      binding_candidates: [
+        { binding_id: "b-chat", profile_id: "openai.chat-embeddings.v1", access_surface: "openai-api", model_revision: "sha256:a", verifiable: ["chat", "streaming"], status: "not_probed" as const, answered: false },
+      ],
+      capabilities: {
+        chat: { status: "inconclusive" as const, error_class: "bad_request", probe_kind: "minimal_chat" },
+        streaming: { status: "not_probed" as const, probe_kind: "minimal_stream" },
+        images: { status: "not_probed" as const, probe_kind: "risk_policy" },
+      },
+      recommended_capabilities: emptyCapabilities,
+      selection_revision: (body as { selection_revision: string }).selection_revision, revision: 2,
+    }));
+    await openCreate();
+    await choose("GPT Future");
+    await startDetection();
+
+    const card = (await screen.findByText("未能可靠识别能力")).closest(".notice")!;
+    expect(card.textContent).not.toContain("未发出探测");
+    expect(card.textContent).toContain("只有这一个接口，无需先做识别");
+    // The reason, which is the whole point: the upstream refused the request.
+    expect(card.textContent).toContain("对话 → 无法确认");
+    expect(card.textContent).toContain("上游拒绝了这次探测请求");
+    expect(card.textContent).toContain("流式 → 未检测");
+    // A capability the plan never meant to reach is not an outcome.
+    expect(card.textContent).not.toContain("图像生成 →");
+  });
+
   it("makes advanced onboarding choose a real interface and only narrow its ceiling", async () => {
     const create = vi.spyOn(api, "createDeployment").mockResolvedValue({} as never);
     await openCreate();
