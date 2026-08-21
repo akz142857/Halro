@@ -17,18 +17,27 @@ module and lock files.
 
 | Module | Version | License | Distribution scope |
 |---|---:|---|---|
-| `github.com/aws/aws-sdk-go-v2` | 1.43.5 | Apache-2.0 | runtime |
-| `github.com/aws/aws-sdk-go-v2/config` | 1.32.36 | Apache-2.0 | runtime |
-| `github.com/aws/aws-sdk-go-v2/credentials` | 1.19.35 | Apache-2.0 | runtime |
-| `github.com/aws/aws-sdk-go-v2/service/kms` | 1.55.5 | Apache-2.0 | runtime |
-| `github.com/aws/smithy-go` | 1.27.7 | Apache-2.0 | runtime |
+| `github.com/aws/aws-sdk-go-v2` | 1.43.6 | Apache-2.0 | runtime |
+| `github.com/aws/aws-sdk-go-v2/config` | 1.32.37 | Apache-2.0 | runtime |
+| `github.com/aws/aws-sdk-go-v2/credentials` | 1.19.36 | Apache-2.0 | runtime |
+| `github.com/aws/aws-sdk-go-v2/service/kms` | 1.55.6 | Apache-2.0 | runtime |
+| `github.com/aws/smithy-go` | 1.27.8 | Apache-2.0 | runtime |
 | `github.com/go-chi/chi/v5` | 5.3.1 | MIT | runtime |
 | `github.com/google/jsonschema-go` | 0.4.3 | MIT | test/release tooling |
 | `github.com/parquet-go/parquet-go` | 0.32.0 | Apache-2.0 | runtime |
 | `go.etcd.io/bbolt` | 1.5.0 | MIT | runtime |
-| `golang.org/x/crypto` | 0.54.0 | BSD-3-Clause | runtime |
+| `golang.org/x/crypto` | 0.55.0 | BSD-3-Clause | runtime |
 | `golang.org/x/sys` | 0.47.0 | BSD-3-Clause | runtime |
 | `gopkg.in/yaml.v3` | 3.0.1 | MIT and Apache-2.0 | runtime |
+
+The 2026-08-21 refresh moved six direct versions and added, removed, and
+relicensed nothing: the module path sets in `go.mod` and `go.sum` are identical
+to the reviewed tree before it, so every row above is a version change rather
+than an inventory change. Five are AWS SDK patch releases on the KMS custody
+path described below. The sixth is `golang.org/x/crypto` 0.54.0 to 0.55.0, and
+the runtime links exactly two packages from that module — `argon2` and
+`blake2b` — both of which are byte-identical between the two versions, as is
+the module LICENSE. Nothing that reaches the binary changed.
 
 The AWS KMS custody path is part of this review. The linked AWS SDK config and
 credential modules can resolve environment, shared-file, web-identity,
@@ -87,12 +96,13 @@ CI runs `scripts/check-dependency-license-review.sh`. These are Git blob hashes
 of the reviewed dependency inputs; a dependency change cannot pass until this
 document is deliberately refreshed with the new inventory and hashes.
 
-- `go.mod`: `c853d9c61d0b14ad5c3a14f78b4b85bfe99e0dc0`
-- `go.sum`: `adea23025a66a068f3dc7797a8fe60d452283c8b`
+- `go.mod`: `5759531ea56103e64bbc3f981947d7592fa7973a`
+- `go.sum`: `54bfd4b3cca98c81e2a0660047fe49e1f0cbe098`
 - `web/package.json`: `7c3a692df887a0f4814633b58815213d2a4da25d`
 - `web/package-lock.json`: `69127f543e714d8395c03b668efba5e24eff8172`
 
-The two web hashes moved for `chore(release): v0.2.0`, which bumped the
+The Go hashes moved for the six-module bump recorded above. The two web hashes
+moved for `chore(release): v0.2.0`, which bumped the
 `version` field in both files and changed nothing else — no dependency was
 added, removed, or upgraded, so the inventory above still describes the
 reviewed tree and the review date is unchanged. The gate hashes whole files
