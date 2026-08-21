@@ -44,8 +44,15 @@ Mantle 的三个 Profile 反而更宽：
 | `bedrock.runtime.invoke.titan-image-v2.v1` | Images |
 | `bedrock.agent-runtime.rerank.cohere-v3-5.v1` | Rerank |
 | `bedrock.runtime.async.nova-reel-v1.v1` | AsyncGenerate（需显式 S3 输出） |
-| `bedrock.mantle.openai.chat.v1` | Chat、Streaming、Tools、Vision、JSON、DeveloperRole、**Reasoning**、StreamUsage |
+| `bedrock.mantle.chat.v1` | Chat、Streaming、Tools、Vision、JSON、DeveloperRole、**Reasoning**、StreamUsage |
+| `bedrock.mantle.openai.chat.v1` | 同上（能力相同，路由不同） |
+| `bedrock.mantle.responses.v1` | 同上，但**没有 Reasoning** |
 | `bedrock.mantle.openai.responses.v1` | 同上，但**没有 Reasoning** |
+
+两个 chat Profile 与两个 responses Profile 的能力集合完全相同，区别只在它们寻址的
+路由：不带 `openai.` 的走默认 `/v1`，带 `openai.` 的走 `/openai/v1`。一个模型只在
+其中一条路由上应答，选错会被上游以 ``model `x` isn't supported on this route`` 拒绝。
+路由无法从模型 ID 推断，实测依据见 `docs/verification/provider-real-matrix.md`。
 | `bedrock.mantle.anthropic.messages.v1` | Chat、Streaming、Tools、Vision、Reasoning、StreamUsage |
 
 Mantle Responses 少一项 Reasoning 是有原因的，不是遗漏：它只参与 Halro 的无状态层、

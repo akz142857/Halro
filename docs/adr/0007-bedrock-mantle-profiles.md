@@ -143,3 +143,54 @@ other authentication failure — is not retried and not failed over.
 existed, and absent means the account default, which is exactly what those
 providers did. Nothing stored changes meaning, so there is no schema version to
 bump and no data directory to rebuild.
+
+## Amendment, 2026-08-21: five profiles, because the route is not derivable
+
+The decision above registers three profiles and pins one request path to each.
+Probing a real Mantle account on 2026-08-21 over all 50 models it lists showed
+that pinning is right and the count is wrong.
+
+Mantle serves `/v1`, `/openai/v1` and `/anthropic/v1` from one origin. The first
+two speak the same OpenAI wire shape over **disjoint** model sets — 38 models on
+`/v1`, 11 on `/openai/v1` — and a request sent to the wrong one is refused with
+``model `x` isn't supported on this route``. So a single
+`bedrock.mantle.openai.chat.v1` cannot serve the surface: whichever route it
+picks, the other route's models are unreachable.
+
+Nothing in the request identifies the route. The model identifier does not: the
+`openai.` prefix spans both routes (`openai.gpt-oss-20b` on `/v1`,
+`openai.gpt-5.6-sol` on `/openai/v1`), the `google.` prefix splits by generation
+(`gemma-3-*` on `/v1`, `gemma-4-*` on `/openai/v1`), and `xai.grok-4.3` sits on
+`/openai/v1` with nothing else from its vendor. The model list does not either:
+`GET /v1/models/{id}` returns `id`, `status`, `owned_by` and `data_retention`,
+and no route.
+
+The route is therefore a property of the profile, one profile per (route, wire
+shape), and the registry becomes five:
+
+- `bedrock.mantle.chat.v1` uses `/v1/chat/completions`;
+- `bedrock.mantle.openai.chat.v1` uses `/openai/v1/chat/completions`;
+- `bedrock.mantle.responses.v1` uses `/v1/responses`;
+- `bedrock.mantle.openai.responses.v1` uses `/openai/v1/responses`;
+- `bedrock.mantle.anthropic.messages.v1` uses `/anthropic/v1/messages`, unchanged.
+
+The two `openai.`-named profiles keep their identifiers and change meaning: they
+addressed `/v1` before this amendment and address `/openai/v1` after it. Their
+manifest revision goes to 2 to say so. **An existing Mantle Provider instance
+must be re-created**: one bound to `bedrock.mantle.openai.chat.v1` for a model
+such as `qwen.qwen3-32b` now names a route that model cannot answer on, and the
+correct profile for it is `bedrock.mantle.chat.v1`. This is a pre-1.0 change made
+in place; no compatibility shim is kept.
+
+The capability sets are unchanged and stay shared between each route pair. The
+route decides which models are reachable, not what the wire shape can express.
+
+Two smaller corrections from the same run. The Anthropic Messages route accepts a
+bearer `Authorization` as well as `x-api-key` — Halro continues to send
+`x-api-key` and clear the others, but the ADR's implication that the route
+requires it was never true of the service. And `store:false` was confirmed to be
+echoed back as `false` by the real endpoint, with `true` the default when the
+member is omitted, so sending it is load-bearing rather than decorative.
+
+Evidence: `docs/verification/provider-real-matrix.md`, section "AWS Bedrock
+Mantle: measured against a real account (2026-08-21)".

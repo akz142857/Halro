@@ -83,8 +83,10 @@ Mantle 不是从零接入：三个 profile 已注册并接入适配器。但原�
 
 | Profile | 请求路径 | API-key 认证 | 显式资源头 |
 |---|---|---|---|
-| `bedrock.mantle.openai.chat.v1` | `/v1/chat/completions` | `Authorization: Bearer` | `OpenAI-Project` |
-| `bedrock.mantle.openai.responses.v1` | `/v1/responses` | `Authorization: Bearer` | `OpenAI-Project` |
+| `bedrock.mantle.chat.v1` | `/v1/chat/completions` | `Authorization: Bearer` | `OpenAI-Project` |
+| `bedrock.mantle.openai.chat.v1` | `/openai/v1/chat/completions` | `Authorization: Bearer` | `OpenAI-Project` |
+| `bedrock.mantle.responses.v1` | `/v1/responses` | `Authorization: Bearer` | `OpenAI-Project` |
+| `bedrock.mantle.openai.responses.v1` | `/openai/v1/responses` | `Authorization: Bearer` | `OpenAI-Project` |
 | `bedrock.mantle.anthropic.messages.v1` | `/anthropic/v1/messages` | `x-api-key` | `anthropic-workspace` |
 
 Workspaces 与 Projects 是同一种 Bedrock Project 资源在不同协议中的名称。每个账户有
@@ -123,8 +125,10 @@ Halro 的具体实现是否符合契约，但不能用单次 smoke 代替协议�
 
 | Profile ID | 适配器 | 默认能力 ceiling（`internal/domain/models.go:523-530`） |
 |---|---|---|
-| `bedrock.mantle.openai.chat.v1` | `openai` | Chat/Streaming/Tools/Vision/JSONMode/DeveloperRole/Reasoning/StreamUsage |
-| `bedrock.mantle.openai.responses.v1` | `bedrockmantle.ResponsesAdapter` | 同上但无 Reasoning |
+| `bedrock.mantle.chat.v1` | `openai` | Chat/Streaming/Tools/Vision/JSONMode/DeveloperRole/Reasoning/StreamUsage |
+| `bedrock.mantle.openai.chat.v1` | `openai`（`OperationPathPrefix=openai/v1`） | 同上 |
+| `bedrock.mantle.responses.v1` | `bedrockmantle.ResponsesAdapter` | 同上但无 Reasoning |
+| `bedrock.mantle.openai.responses.v1` | `bedrockmantle.ResponsesAdapter`（`OperationPathPrefix=openai/v1`） | 同上但无 Reasoning |
 | `bedrock.mantle.anthropic.messages.v1` | `anthropic` | Chat/Streaming/Tools/Vision/Reasoning/StreamUsage |
 
 已有边界：
