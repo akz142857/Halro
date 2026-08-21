@@ -24,15 +24,16 @@ import (
 const maxResponseBytes = 16 << 20
 
 type Adapter struct {
-	endpoint         *url.URL
-	authorizer       provider.Authorizer
-	client           *http.Client
-	providerType     string
-	apiVersion       string
-	azure            bool
-	deepSeek         bool
-	capabilities     provider.Capabilities
-	bedrockProjectID string
+	endpoint            *url.URL
+	authorizer          provider.Authorizer
+	client              *http.Client
+	providerType        string
+	apiVersion          string
+	azure               bool
+	deepSeek            bool
+	capabilities        provider.Capabilities
+	bedrockProjectID    string
+	operationPathPrefix string
 }
 
 func New(endpoint *url.URL, apiKey []byte, client *http.Client) (*Adapter, error) {
@@ -58,6 +59,18 @@ type Options struct {
 	// BedrockProjectID is set only for Bedrock Mantle providers, and only when
 	// they address a project other than the account default.
 	BedrockProjectID string
+	// OperationPathPrefix addresses an upstream whose inference operations do
+	// not sit directly under the base URL's own path. It exists for Bedrock
+	// Mantle, which serves its models from two routes on one host — the default
+	// /v1 and a second /openai/v1 — with each model on exactly one of them and
+	// no way to tell which from the model list. The route therefore has to be
+	// fixed by the profile, and one of the two cannot be reached by the default
+	// join.
+	//
+	// Empty for every other provider, and empty means the previous behaviour
+	// exactly: OpenAI, Azure, DeepSeek and compatibility servers keep joining
+	// operations onto their configured base URL untouched.
+	OperationPathPrefix string
 }
 
 func NewWithOptions(options Options) (*Adapter, error) {
@@ -101,8 +114,9 @@ func NewWithOptions(options Options) (*Adapter, error) {
 		endpoint: endpoint, authorizer: authorizer, client: client,
 		providerType: options.ProviderType, apiVersion: options.APIVersion,
 		azure: options.Azure, deepSeek: options.ProviderType == string(domain.ProviderDeepSeek),
-		capabilities:     options.Capabilities,
-		bedrockProjectID: options.BedrockProjectID,
+		capabilities:        options.Capabilities,
+		bedrockProjectID:    options.BedrockProjectID,
+		operationPathPrefix: strings.Trim(options.OperationPathPrefix, "/"),
 	}, nil
 }
 
@@ -526,6 +540,10 @@ func (a *Adapter) operationURL(providerModel, operation string) url.URL {
 		query := endpoint.Query()
 		query.Set("api-version", a.apiVersion)
 		endpoint.RawQuery = query.Encode()
+		return endpoint
+	}
+	if a.operationPathPrefix != "" {
+		endpoint.Path = basePath + "/" + a.operationPathPrefix + "/" + operation
 		return endpoint
 	}
 	endpoint.Path = versionedPath(basePath, operation)

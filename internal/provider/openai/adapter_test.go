@@ -205,6 +205,7 @@ func TestProfileOperationURLs(t *testing.T) {
 		operation  string
 		azure      bool
 		apiVersion string
+		prefix     string
 		want       string
 	}{
 		{
@@ -230,6 +231,20 @@ func TestProfileOperationURLs(t *testing.T) {
 			want: "https://llm.internal/openai/v1/chat/completions",
 		},
 		{
+			// Bedrock Mantle serves each model from exactly one of two routes on
+			// one host, so the route is fixed by the profile rather than joined
+			// from the base. The base stays the bare origin because that is what
+			// the credential is bound to.
+			name: "bedrock mantle openai route", base: "https://bedrock-mantle.us-east-2.api.aws",
+			model: "openai.gpt-5.6-sol", operation: "chat/completions", prefix: "openai/v1",
+			want: "https://bedrock-mantle.us-east-2.api.aws/openai/v1/chat/completions",
+		},
+		{
+			name: "bedrock mantle default route", base: "https://bedrock-mantle.us-east-2.api.aws",
+			model: "qwen.qwen3-32b", operation: "chat/completions", prefix: "v1",
+			want: "https://bedrock-mantle.us-east-2.api.aws/v1/chat/completions",
+		},
+		{
 			name: "azure deployment", base: "https://resource.openai.azure.com",
 			model: "embedding/prod", operation: "embeddings", azure: true,
 			apiVersion: "2025-01-01",
@@ -241,6 +256,7 @@ func TestProfileOperationURLs(t *testing.T) {
 			endpoint, _ := url.Parse(test.base)
 			adapter := &Adapter{
 				endpoint: endpoint, azure: test.azure, apiVersion: test.apiVersion,
+				operationPathPrefix: test.prefix,
 			}
 			operationURL := adapter.operationURL(test.model, test.operation)
 			got := operationURL.String()
