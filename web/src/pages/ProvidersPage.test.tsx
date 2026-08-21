@@ -488,7 +488,9 @@ describe("ProvidersPage profile and credential bindings", () => {
   // them and have the request accepted. The backend now refuses that; the form
   // must not present it as a choice in the first place.
   it.each([
+    "bedrock.mantle.chat.v1",
     "bedrock.mantle.openai.chat.v1",
+    "bedrock.mantle.responses.v1",
     "bedrock.mantle.openai.responses.v1",
     "bedrock.mantle.anthropic.messages.v1",
   ])("presents %s capabilities as fixed rather than selectable", async (profile) => {
