@@ -346,7 +346,7 @@ func defaultTargetKind(providerType domain.ProviderType, profile domain.Provider
 		return domain.TargetAzureDeployment
 	case providerType == domain.ProviderOpenAICompatible:
 		return domain.TargetCustomEndpointModel
-	case providerType == domain.ProviderBedrock && profile != domain.ProfileBedrockMantleOpenAIChat && profile != domain.ProfileBedrockMantleOpenAIResponses && profile != domain.ProfileBedrockMantleAnthropicMessages:
+	case providerType == domain.ProviderBedrock && !domain.IsBedrockMantleProfile(profile):
 		return domain.TargetBedrockFoundationModel
 	default:
 		return domain.TargetModelID

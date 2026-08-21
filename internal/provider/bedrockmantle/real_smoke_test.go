@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,7 +26,13 @@ import (
 //	HALRO_SMOKE_BASE_URL=https://bedrock-mantle.<region>.api.aws
 //	HALRO_SMOKE_API_KEY=<Bedrock API key>
 //	HALRO_SMOKE_MODEL=<exact upstream model id>
-//	HALRO_SMOKE_MANTLE_PROFILE=chat|responses|messages
+//	HALRO_SMOKE_MANTLE_PROFILE=chat|openai-chat|responses|openai-responses|messages
+//
+// The chat and responses values name the default /v1 route; the openai-
+// prefixed ones name the second /openai/v1 route. A model reaches exactly one
+// of the two, so pairing HALRO_SMOKE_BEDROCK_MODEL with the wrong value here
+// is refused upstream rather than silently served.
+//
 //	HALRO_SMOKE_BEDROCK_PROJECT_ID=<proj_...>   (optional; empty means default)
 //
 // One run proves one cell of the matrix in docs/verification/provider-real-matrix.md:
@@ -59,32 +66,42 @@ func TestRealProviderSmoke(t *testing.T) {
 	defer cancel()
 
 	switch wire := os.Getenv("HALRO_SMOKE_MANTLE_PROFILE"); wire {
-	case "chat":
+	case "chat", "openai-chat":
+		chatProfile := domain.ProfileBedrockMantleChat
+		if wire == "openai-chat" {
+			chatProfile = domain.ProfileBedrockMantleOpenAIChat
+		}
 		authorizer, err := provider.NewStaticHeaderAuthorizer(domain.CredentialBedrockAPIKey, "Authorization", "Bearer ", []byte(apiKey), "api-key", "x-api-key")
 		if err != nil {
 			t.Fatal(err)
 		}
 		adapter, err := openaiprovider.NewWithOptions(openaiprovider.Options{
 			Endpoint: endpoint, Authorizer: authorizer, Client: client,
-			ProviderType:     string(domain.ProviderBedrock),
-			CredentialScheme: domain.CredentialBedrockAPIKey,
-			BedrockProjectID: projectID,
-			Capabilities:     domainCapabilities(domain.ProfileBedrockMantleOpenAIChat),
+			ProviderType:        string(domain.ProviderBedrock),
+			CredentialScheme:    domain.CredentialBedrockAPIKey,
+			BedrockProjectID:    projectID,
+			Capabilities:        domainCapabilities(chatProfile),
+			OperationPathPrefix: smokeMantlePrefix(wire),
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer adapter.Close()
 		smokeChatBoth(ctx, t, adapter, model)
-	case "responses":
+	case "responses", "openai-responses":
+		responsesProfile := domain.ProfileBedrockMantleResponses
+		if wire == "openai-responses" {
+			responsesProfile = domain.ProfileBedrockMantleOpenAIResponses
+		}
 		authorizer, err := provider.NewStaticHeaderAuthorizer(domain.CredentialBedrockAPIKey, "Authorization", "Bearer ", []byte(apiKey), "api-key", "x-api-key")
 		if err != nil {
 			t.Fatal(err)
 		}
 		adapter, err := NewResponses(ResponsesOptions{
 			Endpoint: endpoint, Authorizer: authorizer, Client: client,
-			BedrockProjectID: projectID,
-			Capabilities:     domainCapabilities(domain.ProfileBedrockMantleOpenAIResponses),
+			BedrockProjectID:    projectID,
+			Capabilities:        domainCapabilities(responsesProfile),
+			OperationPathPrefix: smokeMantlePrefix(wire),
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -110,7 +127,7 @@ func TestRealProviderSmoke(t *testing.T) {
 		defer adapter.Close()
 		smokeChatBoth(ctx, t, adapter, model)
 	default:
-		t.Fatalf("HALRO_SMOKE_MANTLE_PROFILE must be chat, responses, or messages (got %q)", wire)
+		t.Fatalf("HALRO_SMOKE_MANTLE_PROFILE must be chat, openai-chat, responses, openai-responses, or messages (got %q)", wire)
 	}
 }
 
@@ -181,3 +198,12 @@ func domainCapabilities(profileID domain.ProviderProfileID) provider.Capabilitie
 }
 
 func smokePointer[T any](value T) *T { return &value }
+
+// smokeMantlePrefix maps the selector to the route the profile addresses. The
+// empty string is the default /v1 join the adapters already do.
+func smokeMantlePrefix(wire string) string {
+	if strings.HasPrefix(wire, "openai-") {
+		return "openai/v1"
+	}
+	return ""
+}

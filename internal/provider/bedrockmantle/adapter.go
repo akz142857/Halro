@@ -31,14 +31,19 @@ type ResponsesOptions struct {
 	// default Bedrock project, which is the only reachable one until an
 	// operator names another.
 	BedrockProjectID string
+	// OperationPathPrefix names the route this profile addresses. Mantle serves
+	// Responses from both /v1/responses and /openai/v1/responses, on disjoint
+	// model sets, so the profile fixes which one. Empty means the default /v1.
+	OperationPathPrefix string
 }
 
 type ResponsesAdapter struct {
-	endpoint         *url.URL
-	authorizer       provider.Authorizer
-	client           *http.Client
-	capabilities     provider.Capabilities
-	bedrockProjectID string
+	endpoint            *url.URL
+	authorizer          provider.Authorizer
+	client              *http.Client
+	capabilities        provider.Capabilities
+	bedrockProjectID    string
+	operationPathPrefix string
 }
 
 func ValidateEndpoint(endpoint *url.URL) error {
@@ -73,6 +78,7 @@ func NewResponses(options ResponsesOptions) (*ResponsesAdapter, error) {
 	return &ResponsesAdapter{
 		endpoint: &endpoint, authorizer: options.Authorizer, client: options.Client,
 		capabilities: options.Capabilities, bedrockProjectID: options.BedrockProjectID,
+		operationPathPrefix: strings.Trim(options.OperationPathPrefix, "/"),
 	}, nil
 }
 
@@ -237,7 +243,9 @@ func (adapter *ResponsesAdapter) do(ctx context.Context, requestID string, paylo
 func (adapter *ResponsesAdapter) operationURL(operation string) string {
 	endpoint := *adapter.endpoint
 	base := strings.TrimRight(endpoint.Path, "/")
-	if strings.HasSuffix(base, "/v1") {
+	if adapter.operationPathPrefix != "" {
+		endpoint.Path = base + "/" + adapter.operationPathPrefix + "/" + operation
+	} else if strings.HasSuffix(base, "/v1") {
 		endpoint.Path = base + "/" + operation
 	} else {
 		endpoint.Path = base + "/v1/" + operation

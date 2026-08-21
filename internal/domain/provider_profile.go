@@ -24,18 +24,27 @@ const (
 )
 
 const (
-	ProfileOpenAIChatEmbeddings           ProviderProfileID = "openai.chat-embeddings.v1"
-	ProfileAnthropicMessages              ProviderProfileID = "anthropic.messages.2023-06-01"
-	ProfileAzureChatEmbeddings            ProviderProfileID = "azure-openai.chat-embeddings.v1"
-	ProfileDeepSeekChat                   ProviderProfileID = "deepseek.chat.v1"
-	ProfileOpenAICompatible               ProviderProfileID = "openai-compatible.chat-embeddings.v1"
-	ProfileGeminiText                     ProviderProfileID = "gemini.generate-content.text.v1beta"
-	ProfileBedrockConverseText            ProviderProfileID = "bedrock.runtime.converse.text.v1"
-	ProfileBedrockInvokeTitanEmbedV2      ProviderProfileID = "bedrock.runtime.invoke.titan-embed-text-v2.v1"
-	ProfileOpenAIMediaResources           ProviderProfileID = "openai.media-resources.v1"
-	ProfileBedrockInvokeTitanImageV2      ProviderProfileID = "bedrock.runtime.invoke.titan-image-v2.v1"
-	ProfileBedrockAgentRerankCohere35     ProviderProfileID = "bedrock.agent-runtime.rerank.cohere-v3-5.v1"
-	ProfileBedrockAsyncNovaReel           ProviderProfileID = "bedrock.runtime.async.nova-reel-v1.v1"
+	ProfileOpenAIChatEmbeddings       ProviderProfileID = "openai.chat-embeddings.v1"
+	ProfileAnthropicMessages          ProviderProfileID = "anthropic.messages.2023-06-01"
+	ProfileAzureChatEmbeddings        ProviderProfileID = "azure-openai.chat-embeddings.v1"
+	ProfileDeepSeekChat               ProviderProfileID = "deepseek.chat.v1"
+	ProfileOpenAICompatible           ProviderProfileID = "openai-compatible.chat-embeddings.v1"
+	ProfileGeminiText                 ProviderProfileID = "gemini.generate-content.text.v1beta"
+	ProfileBedrockConverseText        ProviderProfileID = "bedrock.runtime.converse.text.v1"
+	ProfileBedrockInvokeTitanEmbedV2  ProviderProfileID = "bedrock.runtime.invoke.titan-embed-text-v2.v1"
+	ProfileOpenAIMediaResources       ProviderProfileID = "openai.media-resources.v1"
+	ProfileBedrockInvokeTitanImageV2  ProviderProfileID = "bedrock.runtime.invoke.titan-image-v2.v1"
+	ProfileBedrockAgentRerankCohere35 ProviderProfileID = "bedrock.agent-runtime.rerank.cohere-v3-5.v1"
+	ProfileBedrockAsyncNovaReel       ProviderProfileID = "bedrock.runtime.async.nova-reel-v1.v1"
+	// Bedrock Mantle serves one host through three routes, and a model reaches
+	// exactly one of them. /v1 and /openai/v1 both speak the OpenAI wire shape,
+	// so the wire shape cannot pick the route and the model list does not carry
+	// it either — GET /v1/models/{id} returns id, status, owned_by and
+	// data_retention, and no route. The route is therefore fixed by the profile,
+	// one profile per (route, wire shape). Measured 2026-08-21 against a real
+	// account, 50 models: 38 on /v1, 11 on /openai/v1, 1 on /anthropic/v1.
+	ProfileBedrockMantleChat              ProviderProfileID = "bedrock.mantle.chat.v1"
+	ProfileBedrockMantleResponses         ProviderProfileID = "bedrock.mantle.responses.v1"
 	ProfileBedrockMantleOpenAIChat        ProviderProfileID = "bedrock.mantle.openai.chat.v1"
 	ProfileBedrockMantleOpenAIResponses   ProviderProfileID = "bedrock.mantle.openai.responses.v1"
 	ProfileBedrockMantleAnthropicMessages ProviderProfileID = "bedrock.mantle.anthropic.messages.v1"
@@ -246,11 +255,19 @@ func NormalizeBedrockProjectID(value string) string {
 //
 // This is the single spelling of that list. It used to live in the Admin layer
 // alone, which meant the ceiling was only enforced where the Admin API happened
-// to look — the three Bedrock Mantle profiles were missing from it, so an
-// operator could declare Mantle capabilities beyond what the profile supports
-// and have them reach capability detection and the data plane.
+// to look — the Bedrock Mantle profiles were missing from it, so an operator
+// could declare Mantle capabilities beyond what the profile supports and have
+// them reach capability detection and the data plane.
 func IsImmutableCapabilityProfile(id ProviderProfileID) bool {
 	return profileIndex[id].Immutable
+}
+
+// IsBedrockMantleProfile reports whether a profile addresses the Bedrock Mantle
+// surface. Mantle spans five profiles across three routes, and spelling that
+// list out at each call site is how one of them gets left behind — which is the
+// same mistake IsImmutableCapabilityProfile above exists to prevent.
+func IsBedrockMantleProfile(id ProviderProfileID) bool {
+	return profileIndex[id].Surface == SurfaceBedrockMantle
 }
 
 // ProviderCapabilitiesSubset is the single authoritative subset check used at

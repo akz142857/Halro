@@ -80,7 +80,9 @@ func profileAllowsPrimitive(profileID domain.ProviderProfileID, operation Operat
 		domain.ProfileBedrockInvokeTitanImageV2:      {OperationImages: PrimitiveBedrockTitanImageV2},
 		domain.ProfileBedrockAgentRerankCohere35:     {OperationRerank: PrimitiveBedrockAgentRerankCohere35},
 		domain.ProfileBedrockAsyncNovaReel:           {OperationAsyncInvoke: PrimitiveBedrockAsyncNovaReel},
+		domain.ProfileBedrockMantleChat:              {OperationChat: PrimitiveBedrockMantleOpenAIChat, OperationChatStream: PrimitiveBedrockMantleOpenAIChatStream},
 		domain.ProfileBedrockMantleOpenAIChat:        {OperationChat: PrimitiveBedrockMantleOpenAIChat, OperationChatStream: PrimitiveBedrockMantleOpenAIChatStream},
+		domain.ProfileBedrockMantleResponses:         {OperationChat: PrimitiveBedrockMantleOpenAIResponses, OperationChatStream: PrimitiveBedrockMantleOpenAIResponsesStream},
 		domain.ProfileBedrockMantleOpenAIResponses:   {OperationChat: PrimitiveBedrockMantleOpenAIResponses, OperationChatStream: PrimitiveBedrockMantleOpenAIResponsesStream},
 		domain.ProfileBedrockMantleAnthropicMessages: {OperationChat: PrimitiveBedrockMantleAnthropicMessages, OperationChatStream: PrimitiveBedrockMantleAnthropicMessagesStream, OperationMessages: PrimitiveBedrockMantleAnthropicMessages, OperationMessagesStream: PrimitiveBedrockMantleAnthropicMessagesStream},
 	}
@@ -441,14 +443,30 @@ func BuiltinProfile(id domain.ProviderProfileID) (ProfileManifest, bool) {
 		domain.ProfileBedrockInvokeTitanImageV2:  {ID: domain.ProfileBedrockInvokeTitanImageV2, Revision: 1, ProviderType: domain.ProviderBedrock, AccessSurface: domain.SurfaceBedrockRuntime, CredentialScheme: domain.CredentialAWSSigV4Explicit, Operations: []Operation{OperationImages}, PrimitiveBindings: []PrimitiveBinding{{OperationImages, semantic.OperationImage, PrimitiveBedrockTitanImageV2}}},
 		domain.ProfileBedrockAgentRerankCohere35: {ID: domain.ProfileBedrockAgentRerankCohere35, Revision: 1, ProviderType: domain.ProviderBedrock, AccessSurface: domain.SurfaceBedrockAgentRuntime, CredentialScheme: domain.CredentialAWSSigV4Explicit, Operations: []Operation{OperationRerank}, PrimitiveBindings: []PrimitiveBinding{{OperationRerank, semantic.OperationRerank, PrimitiveBedrockAgentRerankCohere35}}},
 		domain.ProfileBedrockAsyncNovaReel:       {ID: domain.ProfileBedrockAsyncNovaReel, Revision: 1, ProviderType: domain.ProviderBedrock, AccessSurface: domain.SurfaceBedrockRuntime, CredentialScheme: domain.CredentialAWSSigV4Explicit, Operations: []Operation{OperationAsyncInvoke}, PrimitiveBindings: []PrimitiveBinding{{OperationAsyncInvoke, semantic.OperationAsyncGenerate, PrimitiveBedrockAsyncNovaReel}}},
-		domain.ProfileBedrockMantleOpenAIChat: {
-			ID: domain.ProfileBedrockMantleOpenAIChat, Revision: 1, ProviderType: domain.ProviderBedrock,
+		domain.ProfileBedrockMantleChat: {
+			ID: domain.ProfileBedrockMantleChat, Revision: 1, ProviderType: domain.ProviderBedrock,
 			AccessSurface: domain.SurfaceBedrockMantle, CredentialScheme: domain.CredentialBedrockAPIKey,
 			Operations:        []Operation{OperationChat, OperationChatStream},
 			PrimitiveBindings: []PrimitiveBinding{{OperationChat, semantic.OperationGenerate, PrimitiveBedrockMantleOpenAIChat}, {OperationChatStream, semantic.OperationGenerate, PrimitiveBedrockMantleOpenAIChatStream}},
 		},
+		// Revision 2: this profile addressed /v1 until the route split. It now
+		// addresses /openai/v1, and the models it used to carry moved to
+		// bedrock.mantle.chat.v1.
+		domain.ProfileBedrockMantleOpenAIChat: {
+			ID: domain.ProfileBedrockMantleOpenAIChat, Revision: 2, ProviderType: domain.ProviderBedrock,
+			AccessSurface: domain.SurfaceBedrockMantle, CredentialScheme: domain.CredentialBedrockAPIKey,
+			Operations:        []Operation{OperationChat, OperationChatStream},
+			PrimitiveBindings: []PrimitiveBinding{{OperationChat, semantic.OperationGenerate, PrimitiveBedrockMantleOpenAIChat}, {OperationChatStream, semantic.OperationGenerate, PrimitiveBedrockMantleOpenAIChatStream}},
+		},
+		domain.ProfileBedrockMantleResponses: {
+			ID: domain.ProfileBedrockMantleResponses, Revision: 1, ProviderType: domain.ProviderBedrock,
+			AccessSurface: domain.SurfaceBedrockMantle, CredentialScheme: domain.CredentialBedrockAPIKey,
+			Operations:        []Operation{OperationChat, OperationChatStream},
+			PrimitiveBindings: []PrimitiveBinding{{OperationChat, semantic.OperationGenerate, PrimitiveBedrockMantleOpenAIResponses}, {OperationChatStream, semantic.OperationGenerate, PrimitiveBedrockMantleOpenAIResponsesStream}},
+		},
+		// Revision 2: see the chat profile above — same route move.
 		domain.ProfileBedrockMantleOpenAIResponses: {
-			ID: domain.ProfileBedrockMantleOpenAIResponses, Revision: 1, ProviderType: domain.ProviderBedrock,
+			ID: domain.ProfileBedrockMantleOpenAIResponses, Revision: 2, ProviderType: domain.ProviderBedrock,
 			AccessSurface: domain.SurfaceBedrockMantle, CredentialScheme: domain.CredentialBedrockAPIKey,
 			Operations:        []Operation{OperationChat, OperationChatStream},
 			PrimitiveBindings: []PrimitiveBinding{{OperationChat, semantic.OperationGenerate, PrimitiveBedrockMantleOpenAIResponses}, {OperationChatStream, semantic.OperationGenerate, PrimitiveBedrockMantleOpenAIResponsesStream}},
