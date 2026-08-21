@@ -13,7 +13,7 @@
     "check:artifacts": "node scripts/check-artifacts.mjs"
   },
   "dependencies": {
-    "@hookform/resolvers": "5.7.1",
+    "@hookform/resolvers": "5.9.1",
     "@tanstack/react-query": "5.101.4",
     "i18next": "26.3.6",
     "qrcode": "^1.5.4",
