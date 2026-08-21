@@ -200,6 +200,22 @@ func TestDeleteAdminUserRejectsSelfAndLastAdministrator(t *testing.T) {
 	}
 }
 
+// readOnlyExemptionBudget bounds the one hand-maintained thing the sweep below
+// depends on.
+//
+// The sweep itself cannot rot: it walks the routes chi actually has, so a new
+// write endpoint is in scope the moment it is registered. The exemption map is
+// the exception to that, and it is also the way coverage would erode without
+// anyone noticing — adding a route to it makes the sweep pass, and a sweep that
+// passes reads as a sweep that checked.
+//
+// So the size is a budget rather than a consequence. Raising it is allowed;
+// raising it silently is not. Each entry below is either an action on the
+// caller's own account, scoped server-side by admin.session.Username rather
+// than by anything in the path, or a pre-session route that no authenticated
+// role reaches.
+const readOnlyExemptionBudget = 15
+
 // TestReadOnlyRoleCannotReachAnyRegisteredMutationRoute is a table-driven
 // sweep across every mutation route the admin router has registered, rather
 // than a maintained per-endpoint list — the two-tier RBAC decision
@@ -253,6 +269,18 @@ func TestReadOnlyRoleCannotReachAnyRegisteredMutationRoute(t *testing.T) {
 		"POST /admin/api/v1/session/mfa/recovery-code": true,
 		"DELETE /admin/api/v1/session/mfa/challenge":   true,
 	}
+	if len(selfService) > readOnlyExemptionBudget {
+		t.Fatalf("the role sweep exempts %d routes, budget %d — raise readOnlyExemptionBudget deliberately, "+
+			"stating why the new route is the caller's own account or is reached before a session exists",
+			len(selfService), readOnlyExemptionBudget)
+	}
+	// An exemption matching no registered route is the same rot from the other
+	// side: it exempts nothing today and silently exempts whatever is
+	// registered at that path tomorrow.
+	unused := make(map[string]bool, len(selfService))
+	for key := range selfService {
+		unused[key] = true
+	}
 	parameter := regexp.MustCompile(`\{[^}]+\}`)
 	routes, ok := runtime.adminRouter().(chi.Routes)
 	if !ok {
@@ -271,6 +299,7 @@ func TestReadOnlyRoleCannotReachAnyRegisteredMutationRoute(t *testing.T) {
 		}
 		key := method + " " + parameter.ReplaceAllString(path, "{}")
 		if selfService[key] {
+			delete(unused, key)
 			return nil
 		}
 		tested++
@@ -294,5 +323,8 @@ func TestReadOnlyRoleCannotReachAnyRegisteredMutationRoute(t *testing.T) {
 	}
 	if tested < 40 {
 		t.Fatalf("only swept %d mutation routes — the walk likely missed most of adminRouter()", tested)
+	}
+	for key := range unused {
+		t.Errorf("%q is exempt from the role sweep but matches no registered route — delete the exemption", key)
 	}
 }
