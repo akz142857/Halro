@@ -195,6 +195,18 @@ var profileTable = []profileRow{
 		// The Bedrock Mantle profiles keep ceiling == defaults on purpose. Their
 		// sets are fixed by the build and widening one is a separate contract
 		// review.
+		//
+		// The chat and responses sets are shared by both route profiles: the route
+		// decides which models are reachable, not what the wire shape can express.
+		// Which models a route carries is recorded in the model catalogue, and a
+		// model's own capabilities are narrowed from this ceiling by detection.
+		ID: ProfileBedrockMantleChat, Type: ProviderBedrock,
+		Surface: SurfaceBedrockMantle, Scheme: CredentialBedrockAPIKey,
+		BaseURLTemplate: bedrockMantleEndpoint,
+		Immutable:       true,
+		Defaults:        mantleOpenAIChatSet, Ceiling: mantleOpenAIChatSet,
+	},
+	{
 		ID: ProfileBedrockMantleOpenAIChat, Type: ProviderBedrock,
 		Surface: SurfaceBedrockMantle, Scheme: CredentialBedrockAPIKey,
 		BaseURLTemplate: bedrockMantleEndpoint,
@@ -205,6 +217,13 @@ var profileTable = []profileRow{
 		// Phase 1C deliberately exposes only the stateless Responses subset. The
 		// current canonical response mapper cannot preserve reasoning items, which
 		// is the one capability this row does not share with the chat profile.
+		ID: ProfileBedrockMantleResponses, Type: ProviderBedrock,
+		Surface: SurfaceBedrockMantle, Scheme: CredentialBedrockAPIKey,
+		BaseURLTemplate: bedrockMantleEndpoint,
+		Immutable:       true,
+		Defaults:        mantleOpenAIResponsesSet, Ceiling: mantleOpenAIResponsesSet,
+	},
+	{
 		ID: ProfileBedrockMantleOpenAIResponses, Type: ProviderBedrock,
 		Surface: SurfaceBedrockMantle, Scheme: CredentialBedrockAPIKey,
 		BaseURLTemplate: bedrockMantleEndpoint,

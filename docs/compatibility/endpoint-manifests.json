@@ -69,7 +69,9 @@
       "openai-compatible.chat-embeddings.v1",
       "gemini.generate-content.text.v1beta",
       "bedrock.runtime.converse.text.v1",
+      "bedrock.mantle.chat.v1",
       "bedrock.mantle.openai.chat.v1",
+      "bedrock.mantle.responses.v1",
       "bedrock.mantle.openai.responses.v1",
       "bedrock.mantle.anthropic.messages.v1"
     ],
@@ -157,8 +159,27 @@
         ]
       },
       {
+        "profile_id": "bedrock.mantle.chat.v1",
+        "status": "compatible"
+      },
+      {
         "profile_id": "bedrock.mantle.openai.chat.v1",
         "status": "compatible"
+      },
+      {
+        "profile_id": "bedrock.mantle.responses.v1",
+        "status": "compatible",
+        "unsupported_request_fields": [
+          "n",
+          "stop",
+          "seed",
+          "reasoning_effort"
+        ],
+        "declared_transforms": [
+          "Chat messages are mapped to stateless Responses input items",
+          "store=false is always sent upstream",
+          "streaming requests with tools are rejected before provider I/O"
+        ]
       },
       {
         "profile_id": "bedrock.mantle.openai.responses.v1",
@@ -438,7 +459,9 @@
       "openai-compatible.chat-embeddings.v1",
       "gemini.generate-content.text.v1beta",
       "bedrock.runtime.converse.text.v1",
+      "bedrock.mantle.chat.v1",
       "bedrock.mantle.openai.chat.v1",
+      "bedrock.mantle.responses.v1",
       "bedrock.mantle.openai.responses.v1",
       "bedrock.mantle.anthropic.messages.v1"
     ],
@@ -520,10 +543,24 @@
         ]
       },
       {
+        "profile_id": "bedrock.mantle.chat.v1",
+        "status": "compatible",
+        "declared_transforms": [
+          "Responses items are mapped through Bedrock Mantle Chat Completions"
+        ]
+      },
+      {
         "profile_id": "bedrock.mantle.openai.chat.v1",
         "status": "compatible",
         "declared_transforms": [
           "Responses items are mapped through Bedrock Mantle Chat Completions"
+        ]
+      },
+      {
+        "profile_id": "bedrock.mantle.responses.v1",
+        "status": "compatible",
+        "declared_transforms": [
+          "stateless Responses are sent directly with store=false"
         ]
       },
       {
@@ -651,7 +688,9 @@
       "openai-compatible.chat-embeddings.v1",
       "gemini.generate-content.text.v1beta",
       "bedrock.runtime.converse.text.v1",
+      "bedrock.mantle.chat.v1",
       "bedrock.mantle.openai.chat.v1",
+      "bedrock.mantle.responses.v1",
       "bedrock.mantle.openai.responses.v1",
       "bedrock.mantle.anthropic.messages.v1"
     ],
@@ -756,6 +795,19 @@
         ]
       },
       {
+        "profile_id": "bedrock.mantle.chat.v1",
+        "status": "compatible",
+        "unsupported_request_fields": [
+          "top_k",
+          "thinking",
+          "metadata",
+          "service_tier"
+        ],
+        "declared_transforms": [
+          "portable Messages content is mapped through Bedrock Mantle Chat Completions"
+        ]
+      },
+      {
         "profile_id": "bedrock.mantle.openai.chat.v1",
         "status": "compatible",
         "unsupported_request_fields": [
@@ -766,6 +818,23 @@
         ],
         "declared_transforms": [
           "portable Messages content is mapped through Bedrock Mantle Chat Completions"
+        ]
+      },
+      {
+        "profile_id": "bedrock.mantle.responses.v1",
+        "status": "compatible",
+        "unsupported_request_fields": [
+          "stop_sequences",
+          "top_k",
+          "thinking",
+          "metadata",
+          "service_tier",
+          "output_config.effort"
+        ],
+        "declared_transforms": [
+          "portable Messages content is mapped through stateless Bedrock Mantle Responses",
+          "streaming requests with tools are rejected before provider I/O",
+          "output_config.effort is this endpoint's spelling of reasoning_effort, which the stateless Responses primitive does not carry, so a request carrying it is routed away before provider I/O"
         ]
       },
       {

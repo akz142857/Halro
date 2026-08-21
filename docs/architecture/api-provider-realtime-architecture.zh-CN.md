@@ -601,7 +601,9 @@ bedrock.runtime.converse.text.v1
 bedrock.runtime.invoke.<model-family>.v1
 bedrock.runtime.async-invoke.v1
 bedrock.runtime.nova-sonic-bidirectional.v1
+bedrock.mantle.chat.v1
 bedrock.mantle.openai.chat.v1
+bedrock.mantle.responses.v1
 bedrock.mantle.openai.responses.v1
 bedrock.mantle.anthropic.messages.v1
 ```
@@ -653,8 +655,10 @@ Profile 必须声明允许的认证集合和 Header。`bedrock-runtime` 与 `bed
 当前 Runtime/Agent Runtime Profile 均按操作与模型族隔离；不存在任意 JSON `InvokeModel`
 透传。Phase 1C 另外实现三个 Mantle Profile：
 
-- `bedrock.mantle.openai.chat.v1` → `/v1/chat/completions`；
-- `bedrock.mantle.openai.responses.v1` → `/v1/responses`，始终发送 `store:false`；
+- `bedrock.mantle.chat.v1` → `/v1/chat/completions`；
+- `bedrock.mantle.openai.chat.v1` → `/openai/v1/chat/completions`；
+- `bedrock.mantle.responses.v1` → `/v1/responses`，始终发送 `store:false`；
+- `bedrock.mantle.openai.responses.v1` → `/openai/v1/responses`，始终发送 `store:false`；
 - `bedrock.mantle.anthropic.messages.v1` → `/anthropic/v1/messages`，支持 Native Thinking
   Signature Round-trip。
 

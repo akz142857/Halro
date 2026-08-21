@@ -227,7 +227,10 @@ Anthropic（`internal/provider/anthropic/adapter.go:414`）、Bedrock
 本方案六处差异修的全是 **`deepseek.chat.v1` 直连 profile**（`api.deepseek.com`，Bearer 静态凭据）。
 
 2026-08-17 在一台开发实例上抽查当日用量分区时发现：其中的 `deepseek.v3.2` 调用走的是
-**`bedrock.mantle.openai.chat.v1`**，即经 AWS Bedrock Mantle 提供的 DeepSeek，而不是直连 profile。
+**Bedrock Mantle 上的 Chat Completions profile**，即经 AWS Bedrock Mantle 提供的 DeepSeek，
+而不是直连 profile。（该抽查时这个 profile 叫 `bedrock.mantle.openai.chat.v1`；2026-08-21 的
+路由拆分之后，`deepseek.v3.1` 与 `deepseek.v3.2` 实测在 Mantle 的默认 `/v1` 路由上应答，
+对应的 profile 是 `bedrock.mantle.chat.v1`。）
 样本只有一天七条，**不足以证明没有人用直连**；但它足以说明评审时要先问一句：
 
 - 直连 profile 今天有没有真实流量？若没有、且短期不会启用，片 1–4 的紧迫性要重新排。
@@ -561,10 +564,11 @@ profile，把一个带 `output_config` 的请求**走真实的那条链**（`Dec
 |---|---|
 | `gemini.generate-content.text.v1beta` | `output_config.effort`、`output_config.format` |
 | `bedrock.runtime.converse.text.v1` | `output_config.effort`、`output_config.format` |
+| `bedrock.mantle.responses.v1` | `output_config.effort` |
 | `bedrock.mantle.openai.responses.v1` | `output_config.effort` |
 | `bedrock.mantle.anthropic.messages.v1` | `output_config.effort`、`output_config.format` |
 
-**这不是路由行为的缺陷，是公开声明的缺陷**：这四个 profile 本来就会把带 effort 或 format 的
+**这不是路由行为的缺陷，是公开声明的缺陷**：这几个 profile 本来就会把带 effort 或 format 的
 portable 请求路由走，只是 manifest 没说——读 manifest 的操作者会以为它们服务这个字段。
 DeepSeek（§6.2 当时改的那条）和 Anthropic 本来就是对的：后者的 `max` 档在到达路由之前
 就已经死在 OpenAI 阶梯上，所以它没有需要申报的东西。

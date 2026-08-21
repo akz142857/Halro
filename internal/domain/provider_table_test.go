@@ -60,7 +60,7 @@ func TestEveryProfileRowResolves(t *testing.T) {
 }
 
 // Several profiles share one (type, surface, scheme): OpenAI chat and media, the
-// four Bedrock runtime profiles, the three Mantle profiles. A stored credential
+// four Bedrock runtime profiles, the five Mantle profiles. A stored credential
 // carries only surface and scheme, so resolution has to be deterministic and has
 // to land on the primary — table order, not map order.
 func TestCredentialResolutionPrefersThePrimaryProfile(t *testing.T) {
@@ -72,7 +72,9 @@ func TestCredentialResolutionPrefersThePrimaryProfile(t *testing.T) {
 	}{
 		{ProviderOpenAI, SurfaceOpenAI, CredentialBearerStatic, ProfileOpenAIChatEmbeddings},
 		{ProviderBedrock, SurfaceBedrockRuntime, CredentialAWSSigV4Explicit, ProfileBedrockConverseText},
-		{ProviderBedrock, SurfaceBedrockMantle, CredentialBedrockAPIKey, ProfileBedrockMantleOpenAIChat},
+		// The default /v1 route is the primary: it carries 38 of the 50 models the
+		// account lists, and it is the one reached without a path prefix.
+		{ProviderBedrock, SurfaceBedrockMantle, CredentialBedrockAPIKey, ProfileBedrockMantleChat},
 		{ProviderBedrock, SurfaceBedrockAgentRuntime, CredentialAWSSigV4Explicit, ProfileBedrockAgentRerankCohere35},
 	}
 	for _, test := range cases {
@@ -130,7 +132,9 @@ func TestImmutableProfileSet(t *testing.T) {
 		ProfileBedrockInvokeTitanImageV2:      true,
 		ProfileBedrockAgentRerankCohere35:     true,
 		ProfileBedrockAsyncNovaReel:           true,
+		ProfileBedrockMantleChat:              true,
 		ProfileBedrockMantleOpenAIChat:        true,
+		ProfileBedrockMantleResponses:         true,
 		ProfileBedrockMantleOpenAIResponses:   true,
 		ProfileBedrockMantleAnthropicMessages: true,
 	}
@@ -244,7 +248,9 @@ func TestResolvedEndpointsMatchWhatTheConsoleOffered(t *testing.T) {
 		ProfileBedrockInvokeTitanImageV2:      "https://bedrock-runtime.us-east-1.amazonaws.com",
 		ProfileBedrockAsyncNovaReel:           "https://bedrock-runtime.us-east-1.amazonaws.com",
 		ProfileBedrockAgentRerankCohere35:     "https://bedrock-agent-runtime.us-east-1.amazonaws.com",
+		ProfileBedrockMantleChat:              "https://bedrock-mantle.us-east-1.api.aws",
 		ProfileBedrockMantleOpenAIChat:        "https://bedrock-mantle.us-east-1.api.aws",
+		ProfileBedrockMantleResponses:         "https://bedrock-mantle.us-east-1.api.aws",
 		ProfileBedrockMantleOpenAIResponses:   "https://bedrock-mantle.us-east-1.api.aws",
 		ProfileBedrockMantleAnthropicMessages: "https://bedrock-mantle.us-east-1.api.aws",
 	}

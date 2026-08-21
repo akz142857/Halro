@@ -56,6 +56,47 @@ func TestValidateEndpointPinsRegionalMantleOrigin(t *testing.T) {
 	}
 }
 
+// The Responses profiles differ only in the route they address. Two models —
+// openai.gpt-oss-20b and openai.gpt-oss-120b — answer on /v1/responses, and the
+// eleven models on the second route answer on /openai/v1/responses; a request
+// sent to the wrong one is refused with "isn't supported on this route", never
+// silently served. The prefix therefore has to reach the request path, and the
+// default has to stay the bare /v1 join.
+func TestResponsesAdapterAddressesTheRouteTheProfileFixed(t *testing.T) {
+	for _, test := range []struct {
+		name, prefix, want string
+	}{
+		{name: "default route", prefix: "", want: "/v1/responses"},
+		{name: "openai route", prefix: "openai/v1", want: "/openai/v1/responses"},
+		{name: "slashes are trimmed", prefix: "/openai/v1/", want: "/openai/v1/responses"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			endpoint, _ := url.Parse("https://bedrock-mantle.us-east-1.api.aws")
+			authorizer, err := provider.NewStaticHeaderAuthorizer(domain.CredentialBedrockAPIKey, "Authorization", "Bearer ", []byte("bedrock-key"), "api-key", "x-api-key")
+			if err != nil {
+				t.Fatal(err)
+			}
+			seen := ""
+			transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				seen = request.URL.Path
+				body := `{"id":"resp_1","object":"response","created_at":7,"status":"completed","model":"openai.gpt-oss-20b","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"hi","annotations":[],"logprobs":[]}]}],"usage":{"input_tokens":1,"input_tokens_details":{},"output_tokens":1,"output_tokens_details":{},"total_tokens":2}}`
+				return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
+			})
+			adapter, err := NewResponses(ResponsesOptions{Endpoint: endpoint, Authorizer: authorizer, Client: &http.Client{Transport: transport}, Capabilities: provider.Capabilities{Chat: true}, OperationPathPrefix: test.prefix})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer adapter.Close()
+			if _, err := adapter.Chat(context.Background(), provider.ChatCall{RequestID: "request_1", ProviderModel: "openai.gpt-oss-20b", Request: openaiapi.ChatCompletionRequest{Model: "public", Messages: []openaiapi.Message{{Role: "user", Content: openaiapi.TextContent("hi")}}}}); err != nil {
+				t.Fatal(err)
+			}
+			if seen != test.want {
+				t.Fatalf("request path is %q, want %q", seen, test.want)
+			}
+		})
+	}
+}
+
 func TestResponsesAdapterUsesMantleWireAndDisablesStorage(t *testing.T) {
 	adapter := testAdapter(t, roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		if request.Method != http.MethodPost || request.URL.Path != "/v1/responses" {

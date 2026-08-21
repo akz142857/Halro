@@ -200,10 +200,10 @@ func targetKindAllowedForProfile(providerType domain.ProviderType, profile domai
 			return kind == domain.TargetBedrockFoundationModel ||
 				kind == domain.TargetBedrockInferenceProfile ||
 				kind == domain.TargetBedrockProvisionedThroughput
-		case domain.ProfileBedrockMantleOpenAIChat, domain.ProfileBedrockMantleOpenAIResponses,
-			domain.ProfileBedrockMantleAnthropicMessages:
-			return kind == domain.TargetModelID
 		default:
+			if domain.IsBedrockMantleProfile(profile) {
+				return kind == domain.TargetModelID
+			}
 			return kind == domain.TargetBedrockFoundationModel
 		}
 	default:

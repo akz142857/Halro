@@ -630,7 +630,7 @@ ceiling 推导（能力归入 ceiling 覆盖它的那个 profile）。§2 的「
 | --- | --- | --- |
 | `openai` / `openai-api` / `bearer.static` | 2 | **互斥**（chat 集 vs media 集） |
 | `bedrock` / `bedrock-runtime` / `sigv4` | 4 | **互斥**（对话 / 嵌入 / 图像 / 异步各一） |
-| `bedrock` / `bedrock-mantle` / `api-key` | 3 | **重叠严重**（三者共享 chat/streaming/tools/vision/stream_usage） |
+| `bedrock` / `bedrock-mantle` / `api-key` | 5 | **重叠严重**（五者共享 chat/streaming/tools/vision/stream_usage；其中两对只有寻址路由不同，能力集合完全相同） |
 
 所以自动拆分对前两组无歧义、对第三组有歧义。**但第三组不需要自动拆分**：Mantle 与
 Bedrock runtime 的 profile 都由操作员在「能力实现」里显式选定，只产生一个 binding。

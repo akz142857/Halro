@@ -92,7 +92,7 @@ func UnsupportedGenerateFields(profileID domain.ProviderProfileID, request seman
 		add(request.OutputFormat != nil, "response_format")
 		add(request.ReasoningEffort != "", "reasoning_effort")
 		add(request.EndUserRef != "", "user")
-	case domain.ProfileBedrockMantleOpenAIResponses:
+	case domain.ProfileBedrockMantleResponses, domain.ProfileBedrockMantleOpenAIResponses:
 		add(hasFailedToolResult(request), "messages[].content[].is_error")
 		// A Responses message item has no author name to put one in — the Name
 		// field on the item carries a function's name, not a speaker's — so the
@@ -150,7 +150,7 @@ func UnsupportedGenerateFields(profileID domain.ProviderProfileID, request seman
 		add(request.ReasoningEffort != "" && !slices.Contains(deepSeekPortableEfforts, request.ReasoningEffort), "reasoning_effort")
 		// `user` is absent on purpose. DeepSeek carries the same concept as
 		// user_id, so it is renamed by the renderer rather than declared lost.
-	case domain.ProfileOpenAIChatEmbeddings, domain.ProfileAzureChatEmbeddings, domain.ProfileOpenAICompatible, domain.ProfileBedrockMantleOpenAIChat:
+	case domain.ProfileOpenAIChatEmbeddings, domain.ProfileAzureChatEmbeddings, domain.ProfileOpenAICompatible, domain.ProfileBedrockMantleChat, domain.ProfileBedrockMantleOpenAIChat:
 		// These profiles use the OpenAI-compatible wire representation directly.
 		// The one thing that representation has no place for is a tool result the
 		// caller marked as failed: an OpenAI tool message is its text and nothing

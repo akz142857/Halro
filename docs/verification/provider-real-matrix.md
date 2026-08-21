@@ -252,43 +252,168 @@ This repaired the request path, not only the probe: Chat, Converse streaming,
 Titan invoke, rerank and async-invoke all signed through the same function and
 had all never reached a real account.
 
-## AWS Bedrock Mantle: no real-account evidence (2026-08-12)
+## AWS Bedrock Mantle: measured against a real account (2026-08-21)
 
-The three Bedrock Mantle profiles — `bedrock.mantle.openai.chat.v1`,
-`bedrock.mantle.openai.responses.v1`, `bedrock.mantle.anthropic.messages.v1` —
-have **no real-account evidence at any commit**. The matrix runner does not
-cover them, no `HALRO_MATRIX_BEDROCK_MANTLE_...` prefix exists, and no request
-from this build has reached a real Bedrock Mantle endpoint.
+The Mantle profiles had **no real-account evidence at any commit** until
+2026-08-21. Every path, capability and credential claim came from AWS
+documentation and this repository's own fake servers. On 2026-08-21 the surface
+was probed directly with `curl` against a real Bedrock Mantle endpoint, over all
+50 models the account lists.
 
-What is pinned instead, entirely against fake servers:
+Read the scope precisely. What follows is evidence about **the service**: which
+routes exist, which models answer on them, and which request members are
+accepted. It is **not** evidence that Halro's own request path reaches that
+service end to end — the matrix runner still has no Mantle coverage, and
+`tests/provider-matrix` has still never been run against this endpoint. The
+section below on running the smoke remains outstanding work.
 
-- request paths `/v1/chat/completions`, `/v1/responses`, `/anthropic/v1/messages`;
-- credential rendering: bearer `Authorization` on the OpenAI-shaped profiles,
-  `x-api-key` on the Anthropic Messages profile, with the other credential
-  headers explicitly cleared;
-- `anthropic-version` pinned on the Messages profile, `store:false` on Responses;
-- no project or workspace header on any profile, so requests are associated with
-  the account's default Bedrock project;
-- 401 and 403 classified as authentication failures that are neither retried nor
-  failed over to another deployment;
-- probe cost shape: the OpenAI-shaped profiles read one model's metadata, while
-  the Messages profile issues a real one-token inference call.
+### Three routes on one host, and the model picks one
 
-These come from AWS documentation and this repository's code. They are contract
-tests, not evidence: they prove Halro sends what the documentation describes,
-not that the service accepts it.
+Mantle serves `/v1`, `/openai/v1` and `/anthropic/v1` from a single origin. The
+first two speak the same OpenAI wire shape, so the wire shape cannot select
+between them, and a model reaches exactly one:
+
+| route | models | refusal when addressed wrongly |
+| --- | --- | --- |
+| `/v1` | 38 | ``model `x` isn't supported on this route`` |
+| `/openai/v1` | 11 | ``model `x` isn't supported on this route`` |
+| `/anthropic/v1` | 1 | `The model 'x' does not support the '/v1/responses' API` |
+
+The two refusal wordings are the service's, verbatim, and they come from
+different validators. Neither is silent: a request sent to the wrong route is
+refused, never served by a fallback.
+
+**The route cannot be derived from the model identifier.** This is the finding
+that shapes the design, and it has four independent counterexamples:
+
+| model | identifier suggests | actually answers on |
+| --- | --- | --- |
+| `openai.gpt-oss-20b`, `openai.gpt-oss-120b` | `/openai/v1` | `/v1` |
+| `openai.gpt-5.6-sol` and every other `openai.gpt-5.x` | `/openai/v1` | `/openai/v1` |
+| `google.gemma-3-*` (4 models) | — | `/v1` |
+| `google.gemma-4-*` (3 models) | same vendor as gemma-3 | `/openai/v1` |
+| `xai.grok-4.3` | nothing puts it with the OpenAI models | `/openai/v1` |
+
+The model list does not carry the route either: `GET /v1/models/{id}` answers
+with `id`, `object`, `status`, `owned_by`, `created` and `data_retention`, and
+nothing about which route serves it. So the route is fixed by the Provider
+Profile, which is why there are five Mantle profiles rather than three.
+
+### What each model answers, measured
+
+Streaming was reachable on **49 of 49** chat models, `text/event-stream` in every
+case. Stateless Responses was reachable on **13 of 49**.
+
+The sharpest capability counterexample sits inside one vendor's own family:
+`openai.gpt-oss-20b` and `-120b` serve Responses, while `openai.gpt-oss-safeguard-20b`
+and `-120b` — same vendor, same route, adjacent names — do not.
+
+| model | route | Responses |
+| --- | --- | --- |
+| `anthropic.claude-haiku-4-5` | `/anthropic/v1` | no |
+| `google.gemma-4-26b-a4b` | `/openai/v1` | yes |
+| `google.gemma-4-31b` | `/openai/v1` | yes |
+| `google.gemma-4-e2b` | `/openai/v1` | yes |
+| `openai.gpt-5.4` | `/openai/v1` | yes |
+| `openai.gpt-5.4-2026-03-05` | `/openai/v1` | yes |
+| `openai.gpt-5.5` | `/openai/v1` | yes |
+| `openai.gpt-5.5-2026-04-23` | `/openai/v1` | yes |
+| `openai.gpt-5.6-luna` | `/openai/v1` | yes |
+| `openai.gpt-5.6-sol` | `/openai/v1` | yes |
+| `openai.gpt-5.6-terra` | `/openai/v1` | yes |
+| `xai.grok-4.3` | `/openai/v1` | yes |
+| `deepseek.v3.1` | `/v1` | no |
+| `deepseek.v3.2` | `/v1` | no |
+| `google.gemma-3-12b-it` | `/v1` | no |
+| `google.gemma-3-27b-it` | `/v1` | no |
+| `google.gemma-3-4b-it` | `/v1` | no |
+| `minimax.minimax-m2` | `/v1` | no |
+| `minimax.minimax-m2.1` | `/v1` | no |
+| `minimax.minimax-m2.5` | `/v1` | no |
+| `mistral.devstral-2-123b` | `/v1` | no |
+| `mistral.magistral-small-2509` | `/v1` | no |
+| `mistral.ministral-3-14b-instruct` | `/v1` | no |
+| `mistral.ministral-3-3b-instruct` | `/v1` | no |
+| `mistral.ministral-3-8b-instruct` | `/v1` | no |
+| `mistral.mistral-large-3-675b-instruct` | `/v1` | no |
+| `mistral.voxtral-mini-3b-2507` | `/v1` | no |
+| `mistral.voxtral-small-24b-2507` | `/v1` | no |
+| `moonshotai.kimi-k2-thinking` | `/v1` | no |
+| `moonshotai.kimi-k2.5` | `/v1` | no |
+| `nvidia.nemotron-nano-12b-v2` | `/v1` | no |
+| `nvidia.nemotron-nano-3-30b` | `/v1` | no |
+| `nvidia.nemotron-nano-9b-v2` | `/v1` | no |
+| `nvidia.nemotron-super-3-120b` | `/v1` | no |
+| `openai.gpt-oss-120b` | `/v1` | yes |
+| `openai.gpt-oss-20b` | `/v1` | yes |
+| `openai.gpt-oss-safeguard-120b` | `/v1` | no |
+| `openai.gpt-oss-safeguard-20b` | `/v1` | no |
+| `qwen.qwen3-235b-a22b-2507` | `/v1` | no |
+| `qwen.qwen3-32b` | `/v1` | no |
+| `qwen.qwen3-coder-30b-a3b-instruct` | `/v1` | no |
+| `qwen.qwen3-coder-480b-a35b-instruct` | `/v1` | no |
+| `qwen.qwen3-coder-next` | `/v1` | no |
+| `qwen.qwen3-next-80b-a3b-instruct` | `/v1` | no |
+| `qwen.qwen3-vl-235b-a22b-instruct` | `/v1` | no |
+| `writer.palmyra-vision-7b` | `/v1` | no |
+| `zai.glm-4.6` | `/v1` | no |
+| `zai.glm-4.7` | `/v1` | no |
+| `zai.glm-4.7-flash` | `/v1` | no |
+| `zai.glm-5` | `/v1` | no |
+
+### Request members
+
+- `max_completion_tokens` was accepted by **all 49** chat models on their own
+  route. `max_tokens` was not: `openai.gpt-5.6-*`, `google.gemma-4-*` and
+  `xai.grok-4.3` refuse it with `Unsupported parameter: 'max_tokens' is not
+  supported with this model`. The two are therefore not interchangeable, and
+  `max_completion_tokens` is the one to send everywhere.
+- `store:false` was sent on `/openai/v1/responses` and echoed back as
+  `"store":false`. The pin holds. Left unset, the service defaults to
+  `"store":true`, so sending it explicitly is doing real work.
+
+### Corrections to what was previously pinned
+
+- **The Anthropic Messages route accepts either credential header.** Both a
+  bearer `Authorization` and an `x-api-key` returned 200 on
+  `/anthropic/v1/messages`. The previous text described `x-api-key` as what the
+  route requires; it is what Halro sends, and clearing the other headers remains
+  the safer behaviour, but the exclusivity was never true of the service.
+- **Model metadata is not a cheap capability oracle.** The previous cost-shape
+  note said the OpenAI-shaped profiles probe by reading one model's metadata.
+  That read succeeds, but it carries neither the route nor any capability, so it
+  cannot answer the question a probe is asking. Establishing what a Mantle model
+  supports costs a real inference call.
+
+### Not yet established
+
+- `data_retention` on the model object offers `allowed_modes`
+  `["default", "provider_data_share"]` with `mode: "default"` and
+  `source: "model_default"`. What `provider_data_share` means for data
+  handling, and whether Halro should ever select it, is unreviewed.
+- Mantle returns response members with no OpenAI counterpart — `billing.payer`,
+  `output[].phase`, `reasoning.context`, `prompt_cache_retention`,
+  `service_tier` — and `usage` carries `cache_write_tokens`, `cached_tokens`
+  and `reasoning_tokens` details. Halro re-authors responses through the
+  canonical model, so none of these reach a client today. Whether the usage
+  details should reach accounting is a separate question and is **not** answered
+  by this run.
+- No streaming Responses call, no tool call, and no multi-turn conversation was
+  probed. Only single-turn chat and single-turn Responses were.
 
 ### Running the Mantle smoke when it is authorised
 
-The harness exists; no run has happened. It is opt-in twice over: the matrix
+The harness exists; no run has happened. Probing the service with `curl`, as the
+section above records, is not the same as exercising Halro's own request path,
+and this remains the way to do the latter. It is opt-in twice over: the matrix
 runner ignores Beta profiles unless asked, and the smoke itself skips unless
 every variable is set.
 
 ```bash
 export HALRO_MATRIX_BEDROCK_MANTLE_BASE_URL="https://bedrock-mantle.<region>.api.aws"
 export HALRO_MATRIX_BEDROCK_MANTLE_API_KEY="<dedicated, budget-limited Bedrock API key>"
-export HALRO_MATRIX_BEDROCK_MANTLE_MODEL="<exact upstream model id>"
-export HALRO_MATRIX_BEDROCK_MANTLE_MANTLE_PROFILE="chat"   # or responses, messages
+export HALRO_MATRIX_BEDROCK_MANTLE_MODEL="<exact upstream model id, on the route the profile names>"
+export HALRO_MATRIX_BEDROCK_MANTLE_MANTLE_PROFILE="chat"   # or openai-chat, responses, openai-responses, messages
 # optional; omit to exercise the account default project
 export HALRO_MATRIX_BEDROCK_MANTLE_BEDROCK_PROJECT_ID="proj_..."
 

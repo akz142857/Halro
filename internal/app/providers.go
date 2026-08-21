@@ -711,21 +711,26 @@ func newProviderBindingAdapterWithClient(instance domain.ProviderInstance, bindi
 			if err == nil {
 				adapter, err = bedrockprovider.New(bedrockprovider.Options{Endpoint: endpoint, Authorizer: authorizer, Client: client, ProfileID: binding.ProfileID})
 			}
-		case domain.ProfileBedrockMantleOpenAIChat:
+		// The two chat profiles and the two responses profiles differ only in the
+		// route they address. The prefix is a property of the profile, never of
+		// the model identifier: openai.gpt-oss-20b sits on the default route while
+		// openai.gpt-5.6-sol sits on /openai/v1, and google.gemma-3-* and
+		// google.gemma-4-* likewise split across the two.
+		case domain.ProfileBedrockMantleChat, domain.ProfileBedrockMantleOpenAIChat:
 			err = bedrockmantleprovider.ValidateEndpoint(endpoint)
 			if err == nil {
 				authorizer, err = provider.NewStaticHeaderAuthorizer(binding.CredentialScheme, "Authorization", "Bearer ", plaintext, "api-key", "x-api-key")
 			}
 			if err == nil {
-				adapter, err = openaiprovider.NewWithOptions(openaiprovider.Options{Endpoint: endpoint, Authorizer: authorizer, Client: client, ProviderType: string(domain.ProviderBedrock), CredentialScheme: binding.CredentialScheme, Capabilities: capabilities, BedrockProjectID: instance.BedrockProjectID})
+				adapter, err = openaiprovider.NewWithOptions(openaiprovider.Options{Endpoint: endpoint, Authorizer: authorizer, Client: client, ProviderType: string(domain.ProviderBedrock), CredentialScheme: binding.CredentialScheme, Capabilities: capabilities, BedrockProjectID: instance.BedrockProjectID, OperationPathPrefix: mantleOperationPathPrefix(binding.ProfileID)})
 			}
-		case domain.ProfileBedrockMantleOpenAIResponses:
+		case domain.ProfileBedrockMantleResponses, domain.ProfileBedrockMantleOpenAIResponses:
 			err = bedrockmantleprovider.ValidateEndpoint(endpoint)
 			if err == nil {
 				authorizer, err = provider.NewStaticHeaderAuthorizer(binding.CredentialScheme, "Authorization", "Bearer ", plaintext, "api-key", "x-api-key")
 			}
 			if err == nil {
-				adapter, err = bedrockmantleprovider.NewResponses(bedrockmantleprovider.ResponsesOptions{Endpoint: endpoint, Authorizer: authorizer, Client: client, Capabilities: capabilities, BedrockProjectID: instance.BedrockProjectID})
+				adapter, err = bedrockmantleprovider.NewResponses(bedrockmantleprovider.ResponsesOptions{Endpoint: endpoint, Authorizer: authorizer, Client: client, Capabilities: capabilities, BedrockProjectID: instance.BedrockProjectID, OperationPathPrefix: mantleOperationPathPrefix(binding.ProfileID)})
 			}
 		case domain.ProfileBedrockMantleAnthropicMessages:
 			err = bedrockmantleprovider.ValidateEndpoint(endpoint)
@@ -749,6 +754,20 @@ func newProviderBindingAdapterWithClient(instance domain.ProviderInstance, bindi
 		return nil, err
 	}
 	return adapter, nil
+}
+
+// mantleOperationPathPrefix returns the route a Bedrock Mantle profile
+// addresses. The empty string is the default /v1 route the adapters already
+// join onto the base URL; "openai/v1" is the second route, reachable no other
+// way. Measured against a real account on 2026-08-21 — see
+// docs/verification/provider-real-matrix.md.
+func mantleOperationPathPrefix(profileID domain.ProviderProfileID) string {
+	switch profileID {
+	case domain.ProfileBedrockMantleOpenAIChat, domain.ProfileBedrockMantleOpenAIResponses:
+		return "openai/v1"
+	default:
+		return ""
+	}
 }
 
 func matchingBindingID(instance domain.ProviderInstance, profileID domain.ProviderProfileID) string {
