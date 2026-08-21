@@ -344,6 +344,43 @@ describe("deployment invocation target workflow", () => {
   // answer, so asking it first put the operator in front of the one thing they
   // cannot know — and got it wrong irreversibly, since the target is immutable
   // after creation.
+  // The window is the server's to keep, so the console cannot know whether this
+  // session still holds one. It attempts without credentials and reveals the
+  // fields only when the answer says it must — which keeps the consequence
+  // stated on every detection while asking for a password only when the proof
+  // has actually lapsed.
+  it("asks for a password only once the server says the elevation lapsed", async () => {
+    const detected = {
+      id: "picked", status: "queued" as const, source: "verified_probe" as const, provider_id: provider.id, provider_model: unknown.target_id,
+      binding_candidates: [], provider_calls: 0, max_provider_calls: 10,
+      capabilities: {}, recommended_capabilities: emptyCapabilities,
+      selection_revision: "", revision: 1,
+    };
+    const detect = vi.spyOn(api, "createModelCapabilityDetection")
+      .mockRejectedValueOnce(new ApiError(401, "recent re-authentication required", "recent_reauth_required"))
+      .mockImplementation(async (_id, body) => ({
+        ...detected, selection_revision: (body as { selection_revision: string }).selection_revision,
+      }));
+    await openCreate();
+    await choose("GPT Future");
+
+    fireEvent.click(screen.getByRole("button", { name: "识别能力" }));
+    const dialog = await screen.findByRole("alertdialog");
+    // First attempt: consequence stated, no credentials collected.
+    expect(within(dialog).queryByLabelText(/^当前密码/)).toBeNull();
+    fireEvent.click(within(dialog).getByRole("button", { name: "识别能力" }));
+
+    // The refusal is not reported as a failure; it turns into the request for
+    // credentials it actually is, in the dialog the operator already has open.
+    const password = await within(dialog).findByLabelText(/^当前密码/);
+    fireEvent.change(password, { target: { value: "a passphrase" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "识别能力" }));
+
+    await waitFor(() => expect(detect).toHaveBeenCalledTimes(2));
+    expect(detect.mock.calls[0][3]).toEqual({ currentPassword: "", totpCode: "" });
+    expect(detect.mock.calls[1][3]).toMatchObject({ currentPassword: "a passphrase" });
+  });
+
   it("never asks which interface to use before anything has been verified", async () => {
     const detect = vi.spyOn(api, "createModelCapabilityDetection").mockImplementation(async (_id, body) => ({
       id: "picked", status: "queued", source: "verified_probe", provider_id: provider.id, provider_model: unknown.target_id,
@@ -1071,13 +1108,15 @@ function renderPage(role: AdminRole = "administrator") {
   return render(<QueryClientProvider client={queryClient}><DeploymentsPage /></QueryClientProvider>);
 }
 
-// Detection spends the operator's Provider credential, so the console asks who
-// is spending it before the call goes out. Every test that starts a detection
-// goes through the same two steps a person does.
+// Detection spends the operator's Provider credential, so the console states
+// the consequence before the call goes out. It no longer collects a password up
+// front: the server remembers a recent proof for a window, so the fields appear
+// only if the attempt comes back asking for them. Every test that starts a
+// detection goes through the same steps a person does.
 async function startDetection(label = "识别能力") {
   fireEvent.click(screen.getByRole("button", { name: label }));
   const dialog = await screen.findByRole("alertdialog");
-  fireEvent.change(within(dialog).getByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
+  expect(within(dialog).queryByLabelText(/^当前密码/)).toBeNull();
   fireEvent.click(within(dialog).getByRole("button", { name: label }));
 }
 

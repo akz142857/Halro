@@ -79,6 +79,13 @@ admin:
     # against the one that did.
     max_provider_calls: 10
     create_rpm: 6
+    # How long one proven re-authentication keeps letting the same admin session
+    # start detections without proving itself again. Detection spends the
+    # Provider credential outside any project budget and writes capability
+    # evidence a Deployment adopts, so it is guarded — this amortises the guard
+    # over the sitting an operator spends configuring rather than dropping it.
+    # Bound to the session, never to the account. Set 0s to ask every time.
+    elevation_window: 10m
 
 usage:
   # "balanced" batches accounting writes; "strict" fsyncs every one of them,

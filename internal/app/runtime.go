@@ -99,24 +99,30 @@ type Runtime struct {
 	adminSetupRate      adminRateState
 	adminStepUpMu       sync.Mutex
 	adminStepUp         map[string]adminLoginWindow
-	setupMu             sync.Mutex
-	setupToken          string
-	setupTokenNeeded    bool
-	backgroundCtx       context.Context
-	backgroundCancel    context.CancelFunc
-	backgroundWait      sync.WaitGroup
-	usage               *usage.Aggregate
-	usageCollector      *usage.Collector
-	usageExporter       *usage.Exporter
-	periods             *budget.PeriodResolver
-	closeOnce           sync.Once
-	closeErr            error
-	draining            atomic.Bool
-	runtimeSettings     atomic.Pointer[domain.RuntimeSettings]
-	uiSettings          atomic.Pointer[domain.InstanceUISettings]
-	instanceID          string
-	anchorAuthorizer    *bearercred.Authorizer
-	anchorAuthFailed    atomic.Uint64
+	// Kept in memory on purpose rather than on the session record: an elevation
+	// that survived a restart would be one the operator never granted to the
+	// process now holding it, and the durable session schema stays untouched.
+	// Lock and map travel together in one field so this stays one entry in the
+	// breadth this type is allowed, rather than two.
+	adminElevation   adminElevationState
+	setupMu          sync.Mutex
+	setupToken       string
+	setupTokenNeeded bool
+	backgroundCtx    context.Context
+	backgroundCancel context.CancelFunc
+	backgroundWait   sync.WaitGroup
+	usage            *usage.Aggregate
+	usageCollector   *usage.Collector
+	usageExporter    *usage.Exporter
+	periods          *budget.PeriodResolver
+	closeOnce        sync.Once
+	closeErr         error
+	draining         atomic.Bool
+	runtimeSettings  atomic.Pointer[domain.RuntimeSettings]
+	uiSettings       atomic.Pointer[domain.InstanceUISettings]
+	instanceID       string
+	anchorAuthorizer *bearercred.Authorizer
+	anchorAuthFailed atomic.Uint64
 	// Anchoring is fail-open on purpose: a witness that cannot be reached must
 	// not stop the gateway. That makes it the one subsystem whose total
 	// failure is indistinguishable from working, so these have to reach
@@ -600,6 +606,7 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		adminLogin:          adminRateState{windows: make(map[string]adminLoginWindow)},
 		adminSetupRate:      adminRateState{windows: make(map[string]adminLoginWindow)},
 		adminStepUp:         make(map[string]adminLoginWindow),
+		adminElevation:      adminElevationState{grants: make(map[[32]byte]adminElevationGrant)},
 		setupToken:          setupToken,
 		setupTokenNeeded:    setupRequiresToken(cfg),
 		usage:               usageAggregate,

@@ -2,7 +2,10 @@ package app
 
 import (
 	"net/http"
+	"sync"
 	"time"
+
+	"github.com/akz142857/Halro/internal/domain"
 )
 
 // adminStepUpFailuresPerMinute bounds how many times one account may present
@@ -207,4 +210,108 @@ func (r *Runtime) auditStepUp(username, outcome, reason string) {
 	); err != nil {
 		r.logger.Error("admin re-authentication audit failed", "error", err)
 	}
+}
+
+// adminElevationGrant is one session's proven re-authentication, remembered for
+// as long as the configured window.
+//
+// Generation is carried with it because a session identifier alone does not say
+// the session is still the one that proved itself: an account whose password
+// changes bumps the generation, and the grant made before that must not answer
+// for the session after it.
+// adminElevationState is the lock and the grants it guards, kept together so
+// neither can be reached without the other.
+type adminElevationState struct {
+	mu     sync.Mutex
+	grants map[[32]byte]adminElevationGrant
+}
+
+type adminElevationGrant struct {
+	expiresAt  time.Time
+	generation uint64
+}
+
+// requireDetectionStepUp is requireStepUpMaterial with the answer remembered
+// for the configured window.
+//
+// Capability detection is guarded because it spends the Provider credential
+// outside project accounting and writes capability evidence a Deployment
+// adopts. Neither becomes untrue on the second detection, so the guard is not
+// dropped — it is amortised. An operator configuring six Deployments proves
+// themselves once instead of typing a password and a TOTP code six times, and a
+// session that has not proved itself inside the window still proves itself now.
+//
+// Only this endpoint reads the window. Deletes and the edits that weaken a
+// protection in force keep asking every time, because those are the actions
+// whose damage is done the moment the request lands, where detection's is
+// bounded by MaxProviderCalls and visible in the audit trail either way.
+func (r *Runtime) requireDetectionStepUp(
+	writer http.ResponseWriter, request *http.Request, material stepUpMaterial,
+) bool {
+	admin := request.Context().Value(adminContextKey{}).(adminRequestContext)
+	if r.detectionElevated(admin.session, r.clockNow()) {
+		return true
+	}
+	if !r.requireStepUpMaterial(writer, request, material) {
+		return false
+	}
+	r.elevateDetection(admin.session, r.clockNow())
+	return true
+}
+
+// detectionElevated reports whether this exact session proved itself recently
+// enough. Every uncertainty answers false: an absent grant, an expired one, one
+// belonging to a superseded generation, and a window configured to zero.
+func (r *Runtime) detectionElevated(session domain.AdminSession, now time.Time) bool {
+	window := r.detectionElevationWindow()
+	if window <= 0 {
+		return false
+	}
+	r.adminElevation.mu.Lock()
+	defer r.adminElevation.mu.Unlock()
+	grant, ok := r.adminElevation.grants[session.IDHash]
+	if !ok || grant.generation != session.Generation || !now.Before(grant.expiresAt) {
+		return false
+	}
+	return true
+}
+
+// elevateDetection records a proven re-authentication. The window runs from the
+// proof rather than from the last use, so a long sitting asks again instead of
+// holding itself open.
+func (r *Runtime) elevateDetection(session domain.AdminSession, now time.Time) {
+	window := r.detectionElevationWindow()
+	if window <= 0 {
+		return
+	}
+	r.adminElevation.mu.Lock()
+	defer r.adminElevation.mu.Unlock()
+	// Swept here rather than on a timer: the map is only ever written on a
+	// successful step-up, so this runs rarely and keeps the map proportional to
+	// the sessions actually elevating.
+	for id, grant := range r.adminElevation.grants {
+		if !now.Before(grant.expiresAt) {
+			delete(r.adminElevation.grants, id)
+		}
+	}
+	r.adminElevation.grants[session.IDHash] = adminElevationGrant{
+		expiresAt:  now.Add(window),
+		generation: session.Generation,
+	}
+}
+
+// clearDetectionElevation drops a session's grant. Signing out ends the
+// elevation with the session that earned it rather than leaving it to expire.
+func (r *Runtime) clearDetectionElevation(session domain.AdminSession) {
+	r.adminElevation.mu.Lock()
+	defer r.adminElevation.mu.Unlock()
+	delete(r.adminElevation.grants, session.IDHash)
+}
+
+func (r *Runtime) detectionElevationWindow() time.Duration {
+	window := r.config.Admin.ModelCapabilityDetection.ElevationWindow
+	if window == nil {
+		return 0
+	}
+	return window.Value()
 }
