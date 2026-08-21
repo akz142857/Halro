@@ -159,6 +159,11 @@ admin:
     # @description.zh-CN 每位管理员每分钟可启动的新检测任务上限；目录、缓存和幂等复用不计入。
     # @description.en-US Maximum new detection jobs per administrator per minute; catalog, cache, and idempotent reuse do not count.
     create_rpm: 6
+    # @title.zh-CN 能力识别提权窗口
+    # @title.en-US Capability detection elevation window
+    # @description.zh-CN 一次身份重新验证之后，同一个管理会话可以在多久之内继续发起能力识别而无需再次验证。绑定到该会话，不绑定到账户；设为 0s 则每次都要求验证。
+    # @description.en-US How long one proven re-authentication keeps letting the same admin session start capability detections. Bound to that session, never to the account; 0s asks every time.
+    elevation_window: 10m0s
 
 usage:
   # @title.zh-CN 用量持久性

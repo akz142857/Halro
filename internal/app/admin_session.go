@@ -170,6 +170,11 @@ func (r *Runtime) logoutAdmin(writer http.ResponseWriter, request *http.Request)
 		writeJSON(writer, http.StatusServiceUnavailable, map[string]string{"error": "session unavailable"})
 		return
 	}
+	// Signing out ends the detection elevation with the session that earned it.
+	// Leaving it to expire would be harmless — the grant is keyed by session and
+	// the session is gone — but only by accident, and this does not depend on
+	// that reasoning staying true.
+	r.clearDetectionElevation(admin.session)
 	if err := r.appendAdminAudit(
 		"admin_user", admin.session.Username, "admin.logout", "admin_session", "",
 		"success", "",

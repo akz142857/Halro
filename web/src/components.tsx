@@ -378,6 +378,7 @@ export function ConfirmButton({
   disabled,
   disabledReason,
   requireStepUp = false,
+  stepUpOnDemand = false,
 }: {
   label: string;
   confirmLabel: string;
@@ -394,6 +395,14 @@ export function ConfirmButton({
   // dialog that states the consequence — an operator confirms and proves who
   // they are in one step rather than being sent to a second prompt.
   requireStepUp?: boolean;
+  // Asks for credentials only once the server has said it needs them.
+  //
+  // The dialog serves two purposes, and they are not the same purpose: it
+  // states the consequence, and it proves who is asking. Where the server
+  // remembers a recent proof for a window — capability detection does — the
+  // second is already satisfied while the first is not, so the consequence is
+  // still stated and the fields appear only if the attempt comes back asking.
+  stepUpOnDemand?: boolean;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -408,9 +417,19 @@ export function ConfirmButton({
   const [reauth, setReauth] = useState<ReauthValues>({ currentPassword: "", totpCode: "" });
   const [pending, setPending] = useState(false);
   const [failure, setFailure] = useState<unknown>(null);
+  // Starts false only when the server may already be satisfied. Once the
+  // server has asked, it stays asked for this dialog: a second attempt that
+  // silently dropped the fields would read as the console losing the request.
+  const [stepUpAsked, setStepUpAsked] = useState(!stepUpOnDemand);
   // Cleared on the way out rather than left in state: the password must not
   // survive a dialog the operator closed.
-  const close = () => { setReauth({ currentPassword: "", totpCode: "" }); setFailure(null); setPending(false); setOpen(false); };
+  const close = () => {
+    setReauth({ currentPassword: "", totpCode: "" });
+    setFailure(null);
+    setPending(false);
+    setStepUpAsked(!stepUpOnDemand);
+    setOpen(false);
+  };
   const submit = async () => {
     setFailure(null);
     setPending(true);
@@ -423,6 +442,15 @@ export function ConfirmButton({
       // the spent code in the field invites retrying it and reading the second
       // refusal as a wrong password.
       setReauth((values) => ({ ...values, totpCode: "" }));
+      // The first attempt of an on-demand dialog carries no credentials by
+      // design, so the server asking for them is the expected answer rather
+      // than a failure to report. Anything else is reported as usual.
+      const asksForStepUp = error instanceof ApiError && error.code === "recent_reauth_required";
+      if (asksForStepUp && !stepUpAsked) {
+        setStepUpAsked(true);
+        setPending(false);
+        return;
+      }
       setFailure(error);
       setPending(false);
     }
@@ -445,7 +473,7 @@ export function ConfirmButton({
         >
           <form className="confirmation-dialog" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
             <p id={consequenceID}>{confirmLabel}</p>
-            {requireStepUp && <ReauthFields values={reauth} onChange={setReauth} description={t("auth.stepUpDestructive")} />}
+            {requireStepUp && stepUpAsked && <ReauthFields values={reauth} onChange={setReauth} description={t("auth.stepUpDestructive")} />}
             {Boolean(failure) && <ErrorState error={failure} />}
             {Boolean(failure) && requireStepUp && <p className="form-note">{t("auth.stepUpRetryNeedsNewCode")}</p>}
             <div className="form-actions">
@@ -453,7 +481,7 @@ export function ConfirmButton({
               <button
                 type="button"
                 className="button danger"
-                disabled={pending || (requireStepUp && !reauth.currentPassword)}
+                disabled={pending || (requireStepUp && stepUpAsked && !reauth.currentPassword)}
                 onClick={submit}
               >{pending ? t("common.working") : label}</button>
             </div>

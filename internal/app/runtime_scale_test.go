@@ -47,7 +47,12 @@ const (
 	// subsystem behind reloadRuntime. They belong to the Runtime because the
 	// listeners read the material on every handshake and the metrics renderer
 	// reads the record.
-	runtimeFieldBudget = 69
+	// 70: adminElevation. Raised deliberately, and by one rather than two: the
+	// lock and the grants it guards are one field, and they belong to the
+	// Runtime because a grant is scoped to this process by design — an
+	// elevation that outlived a restart would be one the operator never gave
+	// the process now holding it.
+	runtimeFieldBudget = 70
 	runtimeMutexBudget = 10
 )
 
