@@ -509,3 +509,62 @@ func TestSettlementChargesCachedPromptTokensAtTheCacheReadRate(t *testing.T) {
 		t.Fatalf("balance=%#v want committed=%d", balance, cost.TotalCostMicrosUSD)
 	}
 }
+
+// Settlement commits the provider's true cost even when it exceeds the
+// attempt's reservation and the project's daily ceiling. This is deliberate,
+// not an oversight: the tokens were consumed, so capping the committed value
+// would silently refund real spend, and the price-snapshot consistency check
+// would reject a capped value as inconsistent with the reported tokens. The
+// budget holds the line one step later — the overshoot lands in the balance
+// and the next admission refuses. This test pins all three facts so the
+// overshoot path stays visibly intentional.
+func TestSettlementCommitsTrueCostBeyondTheReservation(t *testing.T) {
+	manager, state, closeLog := newTestManager(t)
+	defer closeLog()
+	snapshot := testPriceSnapshot(t, domain.BillingModeMetered)
+	const dailyBudgetMicrosUSD = 100
+	request, err := manager.BeginRequest(context.Background(), "project_overshoot", "request_overshoot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 10 input at 1 micro + 20 output at 2 micros: a 50-micro reservation.
+	attempt, err := manager.ReserveLeaseDetailed(context.Background(), request, dailyBudgetMicrosUSD, LeaseSpec{
+		Mode: ledger.LeaseModeMetered, ReservationMicrosUSD: 50, PriceSnapshot: snapshot,
+		PreparedInputTokens: 10, PreparedOutputTokens: 20,
+		TokenGuardPricingViewDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}, AttemptMetadata{DeploymentID: "dep_test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.MarkStarted(context.Background(), attempt); err != nil {
+		t.Fatal(err)
+	}
+	// The provider served ten times the estimated output.
+	cost, err := snapshot.Calculate(10, 0, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cost.TotalCostMicrosUSD <= dailyBudgetMicrosUSD {
+		t.Fatalf("fixture no longer overshoots the budget: cost=%d", cost.TotalCostMicrosUSD)
+	}
+	if err := manager.Settle(context.Background(), attempt, Settlement{
+		ProviderInputTokens: 10, ProviderOutputTokens: 200,
+		CommittedMicrosUSD: cost.TotalCostMicrosUSD, Outcome: "success",
+	}); err != nil {
+		t.Fatalf("settling the true cost beyond the reservation must succeed: %v", err)
+	}
+	balance := state.Balance("project_overshoot", request.Period.ID, request.Period.TimezoneVersion)
+	if balance.CommittedMicrosUSD != cost.TotalCostMicrosUSD {
+		t.Fatalf("committed=%d, want the true cost %d", balance.CommittedMicrosUSD, cost.TotalCostMicrosUSD)
+	}
+	if balance.ReservedMicrosUSD != 0 {
+		t.Fatalf("settlement left a reservation behind: %d", balance.ReservedMicrosUSD)
+	}
+	followUp, err := manager.BeginRequest(context.Background(), "project_overshoot", "request_after_overshoot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.ReserveAttemptDetailed(context.Background(), followUp, dailyBudgetMicrosUSD, 1, AttemptMetadata{}); !errors.Is(err, ErrExceeded) {
+		t.Fatalf("admission after the overshoot = %v, want ErrExceeded", err)
+	}
+}
