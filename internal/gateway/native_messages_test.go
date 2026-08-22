@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -110,6 +112,10 @@ func newNativeMessagesFixtureForProfile(t *testing.T, profileID domain.ProviderP
 }
 
 func newNativeMessagesFixtureFull(t *testing.T, profileID domain.ProviderProfileID, adjust func(*provider.Capabilities), allowedBetas ...string) (*Service, *nativeMessagesFake, string, func()) {
+	return newNativeMessagesFixtureWithLedgerOptions(t, profileID, adjust, ledger.Options{ChainKey: testChainKey}, allowedBetas...)
+}
+
+func newNativeMessagesFixtureWithLedgerOptions(t *testing.T, profileID domain.ProviderProfileID, adjust func(*provider.Capabilities), options ledger.Options, allowedBetas ...string) (*Service, *nativeMessagesFake, string, func()) {
 	t.Helper()
 	project := domain.Project{ID: "project_native", Name: "Native", Enabled: true, AllowedModels: []string{"claude"}, DailyBudgetMicrosUSD: 1000000, MaxInputTokens: 10000, MaxOutputTokens: 1000}
 	plaintext, key, err := auth.GenerateGatewayKey(project.ID, "test", nil)
@@ -121,7 +127,7 @@ func newNativeMessagesFixtureFull(t *testing.T, profileID domain.ProviderProfile
 		t.Fatal(err)
 	}
 	status := ledger.NewStatus()
-	log, err := ledger.OpenWithOptions(filepath.Join(t.TempDir(), "native.wal"), status, ledger.Options{ChainKey: testChainKey})
+	log, err := ledger.OpenWithOptions(filepath.Join(t.TempDir(), "native.wal"), status, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -551,6 +557,71 @@ func TestNativeMessagesSettlesTheWholePromptAcrossCacheTiers(t *testing.T) {
 			// 5 + 90 + 5 prompt tokens, not the 5 Anthropic reports net of caching.
 			if balance.InputTokens != 100 || balance.OutputTokens != 1 {
 				t.Fatalf("balance=%#v", balance)
+			}
+		})
+	}
+}
+
+// budgetedFaultDurability lets a fixed number of durable writes through and
+// fails the rest, so a test can pick the exact accounting stage that breaks.
+type budgetedFaultDurability struct {
+	file   *os.File
+	allow  int
+	writes int
+}
+
+func (d *budgetedFaultDurability) Write(payload []byte) (int, error) {
+	d.writes++
+	if d.writes > d.allow {
+		return 0, syscall.ENOSPC
+	}
+	return d.file.Write(payload)
+}
+
+func (d *budgetedFaultDurability) Sync() error { return d.file.Sync() }
+
+// A fatal pre-provider failure on the native path must reach the client with
+// its own status and code. These errors used to funnel through
+// mapProviderError and arrive as a generic 502 provider_error, so a policy or
+// accounting refusal read as a provider outage — inviting retries of requests
+// that must not be retried, against a provider that was never unhealthy.
+//
+// The one allowed durable write is the request-accepted event; the attempt
+// reservation is the write that fails, which makes startAttempt — not
+// beginRequestRun — the stage that errors. That placement is what the test is
+// about: beginRequestRun's error already returned unmapped.
+func TestNativeMessagesKeepFatalPreProviderErrorStatus(t *testing.T) {
+	for name, streaming := range map[string]bool{"messages": false, "stream": true} {
+		t.Run(name, func(t *testing.T) {
+			options := ledger.Options{ChainKey: testChainKey, MaxBatch: 1,
+				WrapDurability: func(file *os.File) ledger.DurabilityWriter {
+					return &budgetedFaultDurability{file: file, allow: 1}
+				},
+			}
+			service, fake, key, closeFixture := newNativeMessagesFixtureWithLedgerOptions(t, domain.ProfileAnthropicMessages, nil, options)
+			defer closeFixture()
+			body := `{"model":"claude","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`
+			if streaming {
+				body = `{"model":"claude","max_tokens":64,"stream":true,"messages":[{"role":"user","content":"hi"}]}`
+			}
+			request, err := anthropicapi.DecodeMessageRequest(bytes.NewBufferString(body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if streaming {
+				err = service.MessagesNativeStream(context.Background(), key, anthropicapi.SupportedVersion, nil, request, func(anthropicapi.RawStreamEvent) error { return nil })
+			} else {
+				_, err = service.MessagesNative(context.Background(), key, anthropicapi.SupportedVersion, nil, request)
+			}
+			var gatewayErr *Error
+			if !errors.As(err, &gatewayErr) {
+				t.Fatalf("expected a gateway error, got %v", err)
+			}
+			if gatewayErr.Code != "accounting_unavailable" || gatewayErr.HTTPStatus != 503 {
+				t.Fatalf("fatal pre-provider error lost its mapping: code=%q status=%d", gatewayErr.Code, gatewayErr.HTTPStatus)
+			}
+			if fake.payload != nil {
+				t.Fatal("a request that failed accounting reached the provider")
 			}
 		})
 	}
