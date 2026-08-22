@@ -123,7 +123,20 @@ jobs:
               echo "::error::${target} does not exist in ${package}; the fuzz list is stale"
               exit 1
             fi
-            go test "${package}" -run '^$' -fuzz "^${target}$" -fuzztime 40s
+            # A genuine finding writes its reproducer under testdata/fuzz
+            # before the run fails; the coordinator's deadline race at
+            # -fuzztime expiry writes nothing (observed on the slower CI
+            # runners: FAIL "context deadline exceeded" at exactly 40s, no
+            # new input, seeds byte-identical to the checked-in corpus). Only
+            # the empty-handed failure earns one retry — a crasher still
+            # fails the job on its first run.
+            if ! go test "${package}" -run '^$' -fuzz "^${target}$" -fuzztime 40s; then
+              if find "${package#./}/testdata/fuzz" -type f -newer go.mod 2>/dev/null | grep -q .; then
+                exit 1
+              fi
+              echo "::warning::${target} failed with no reproducer written; retrying once for the fuzztime-expiry race"
+              go test "${package}" -run '^$' -fuzz "^${target}$" -fuzztime 40s
+            fi
             echo "::endgroup::"
           done
       # A crash that only exists as an expiring artifact is found once and then
