@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -32,7 +33,16 @@ type snapshotData struct {
 }
 
 type Snapshot struct {
-	current atomic.Pointer[snapshotData]
+	// refreshMu serializes Refresh end to end, so the store read and the
+	// install travel together: the snapshot installed last is always the
+	// snapshot read last. Without it, two concurrent refreshes — the
+	// background activation-recovery loop and an admin mutation's own
+	// refresh — race last-writer-wins, and the loser's older read can land
+	// after the winner's newer one, silently restoring a Gateway Key the
+	// operator just watched being revoked. Authenticate stays lock-free:
+	// it only ever loads the pointer.
+	refreshMu sync.Mutex
+	current   atomic.Pointer[snapshotData]
 }
 
 func NewSnapshot() *Snapshot {
@@ -45,6 +55,8 @@ func NewSnapshot() *Snapshot {
 }
 
 func (s *Snapshot) Refresh(ctx context.Context, source SnapshotSource) error {
+	s.refreshMu.Lock()
+	defer s.refreshMu.Unlock()
 	projects, err := source.ListProjects(ctx)
 	if err != nil {
 		return err
