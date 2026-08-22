@@ -2590,16 +2590,22 @@ func streamSettlement(
 		result.CostEstimated = true
 	} else {
 		var classified *provider.Error
-		if errors.As(providerErr, &classified) && classified.Ambiguous {
-			// Nothing was delivered, so there is nothing to bound the estimate
-			// with: an ambiguous failure means the request may have been served
-			// in full upstream, and that is what the reservation covers.
-			result.ProviderInputTokens = estimatedInputTokens
-			result.ProviderOutputTokens = estimatedOutputTokens
-			result.PreparedOutputTokens = estimatedOutputTokens
-			result.TokenEstimated = true
-			result.CostEstimated = true
+		if !errors.As(providerErr, &classified) || !classified.Ambiguous {
+			// A definitive failure with nothing delivered and no usage means
+			// the provider never served this attempt, so there is no cost to
+			// commit — not even the fixed per-request fee, which pays for a
+			// request the provider actually received. This mirrors how
+			// settlementForResult treats the same outcome.
+			return result
 		}
+		// Nothing was delivered, so there is nothing to bound the estimate
+		// with: an ambiguous failure means the request may have been served
+		// in full upstream, and that is what the reservation covers.
+		result.ProviderInputTokens = estimatedInputTokens
+		result.ProviderOutputTokens = estimatedOutputTokens
+		result.PreparedOutputTokens = estimatedOutputTokens
+		result.TokenEstimated = true
+		result.CostEstimated = true
 	}
 	setSettlementCost(&result, target, reservationMicrosUSD)
 	return result
