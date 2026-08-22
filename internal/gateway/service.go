@@ -331,7 +331,17 @@ func (run *requestRun) recordProviderResult(providerErr error, settlement budget
 // once per candidate, on every request, for as long as the budget stays spent.
 // The callers return on budget.ErrExceeded rather than continuing.
 func (s *Service) exhaustedAttemptsError(lastErr error) error {
+	var fatal *Error
 	switch {
+	case errors.As(lastErr, &fatal):
+		// startAttempt's fatal failures — token_guard_blocked, accounting
+		// unavailability — arrive already mapped, with the status and code the
+		// policy decision chose. Re-mapping them through mapProviderError would
+		// report a policy refusal as a 502 provider outage, inviting clients to
+		// retry requests that must not be retried. The multi-target loops check
+		// this themselves before retrying; the single-target native paths rely
+		// on this case.
+		return fatal
 	case errors.Is(lastErr, budget.ErrExceeded):
 		s.rejections.budget.Add(1)
 		return gatewayError("budget_exceeded", "daily budget exceeded", 403, lastErr)
