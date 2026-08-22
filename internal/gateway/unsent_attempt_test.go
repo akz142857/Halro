@@ -78,6 +78,53 @@ func TestAttemptThatReachedTheProviderStillStopsAndSettles(t *testing.T) {
 	}
 }
 
+// The streaming path had the same defect one layer down: a definitively-unsent
+// attempt settled with zero tokens, but the cost formula still added the
+// deployment's fixed per-request fee, so fixed-fee pricing charged the project
+// for every connect failure.
+func TestUnreachableProviderStreamIsNotChargedTheFixedFee(t *testing.T) {
+	fixedFee := provider.Target{FixedRequestMicrosUSD: 250}
+	settlement := streamSettlement(
+		nil, refusedConnection(), false,
+		1_000, 2_000, 0, fixedFee, 5_000,
+	)
+	if settlement.CommittedMicrosUSD != 0 {
+		t.Fatalf("a stream that never reached the provider committed cost: %#v", settlement)
+	}
+	if settlement.ProviderInputTokens != 0 || settlement.ProviderOutputTokens != 0 {
+		t.Fatalf("a stream that never reached the provider was billed for tokens: %#v", settlement)
+	}
+	if settlement.TokenEstimated || settlement.CostEstimated {
+		t.Fatalf("a stream that never reached the provider produced an estimated charge: %#v", settlement)
+	}
+	if settlement.Outcome != "provider_error" {
+		t.Fatalf("settlement outcome = %q, want provider_error", settlement.Outcome)
+	}
+}
+
+// An ambiguous streaming failure must keep settling conservatively — the
+// request may have been served in full upstream, and that work includes the
+// fixed fee.
+func TestAmbiguousStreamFailureStillSettlesConservatively(t *testing.T) {
+	cause := &net.OpError{Op: "read", Err: errors.New("connection reset by peer")}
+	inFlight := &provider.Error{
+		Class:     provider.ErrorMalformed,
+		Ambiguous: !provider.Unsent(cause),
+		Cause:     cause,
+	}
+	fixedFee := provider.Target{FixedRequestMicrosUSD: 250}
+	settlement := streamSettlement(
+		nil, inFlight, false,
+		1_000, 2_000, 0, fixedFee, 5_000,
+	)
+	if !settlement.TokenEstimated || !settlement.CostEstimated {
+		t.Fatalf("an ambiguous stream failure was not settled conservatively: %#v", settlement)
+	}
+	if settlement.CommittedMicrosUSD < fixedFee.FixedRequestMicrosUSD {
+		t.Fatalf("an ambiguous stream failure dropped the fixed fee: %#v", settlement)
+	}
+}
+
 // policyRefusedConnection is the error an adapter produces when SafeTransport
 // declines to dial at all — a Provider base URL resolving inside the network
 // while private endpoints are off refuses every request this way.
