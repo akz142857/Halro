@@ -564,6 +564,16 @@ func (m *Manager) Settle(ctx context.Context, attempt Attempt, settlement Settle
 	return m.settle(ctx, eventID, attempt, settlement)
 }
 
+// settle deliberately does not bound CommittedMicrosUSD by the attempt's
+// reservation. The reservation is an admission-time estimate; the provider
+// bills for the tokens it actually served, and when it reports more billable
+// output than PreparedOutputTokens estimated, the true cost is what the ledger
+// must record — capping it at the reservation would silently refund real
+// spend, and the price-snapshot check below would reject the capped value as
+// inconsistent with the reported tokens. The settling write may therefore push
+// a project past its daily ceiling; the overshoot is bounded by one attempt's
+// worth of under-estimation, and admission refuses further attempts once the
+// balance reflects it.
 func (m *Manager) settle(ctx context.Context, eventID string, attempt Attempt, settlement Settlement) error {
 	if settlement.CommittedMicrosUSD < 0 ||
 		settlement.ProviderInputTokens < 0 ||
