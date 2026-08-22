@@ -574,6 +574,17 @@ func (l *Log) writeBatch(batch []appendRequest) {
 		previousHash = nextHash
 		watermarks[index] = Watermark{Generation: 1, Offset: offset, Sequence: sequence}
 	}
+	// Position the write at the committed tail the log tracks, never at
+	// wherever the shared descriptor's cursor happens to sit. Replay scans
+	// this same descriptor, and a scan that stopped early — a canceled visit,
+	// a corrupt frame — leaves the cursor mid-file; a write that trusted it
+	// would land inside already-durable frames and silently overwrite them.
+	if _, err := l.file.Seek(l.offset, io.SeekStart); err != nil {
+		l.status.MarkUnavailable()
+		l.appendErrors.Add(uint64(len(batch)))
+		respondBatch(batch, nil, fmt.Errorf("seek ledger tail: %w", err))
+		return
+	}
 	if err := writeFull(l.durability, encoded.Bytes()); err != nil {
 		l.status.MarkUnavailable()
 		l.appendErrors.Add(uint64(len(batch)))
