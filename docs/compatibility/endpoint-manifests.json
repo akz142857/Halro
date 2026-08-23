@@ -174,9 +174,11 @@
         "profile_id": "bedrock.mantle.responses.v1",
         "status": "compatible",
         "unsupported_request_fields": [
+          "messages[].name",
           "n",
           "stop",
           "seed",
+          "tools",
           "reasoning_effort"
         ],
         "declared_transforms": [
@@ -189,9 +191,11 @@
         "profile_id": "bedrock.mantle.openai.responses.v1",
         "status": "compatible",
         "unsupported_request_fields": [
+          "messages[].name",
           "n",
           "stop",
           "seed",
+          "tools",
           "reasoning_effort"
         ],
         "declared_transforms": [
@@ -566,6 +570,9 @@
       {
         "profile_id": "bedrock.mantle.responses.v1",
         "status": "compatible",
+        "unsupported_request_fields": [
+          "tools"
+        ],
         "declared_transforms": [
           "stateless Responses are sent directly with store=false"
         ]
@@ -573,6 +580,9 @@
       {
         "profile_id": "bedrock.mantle.openai.responses.v1",
         "status": "compatible",
+        "unsupported_request_fields": [
+          "tools"
+        ],
         "declared_transforms": [
           "stateless Responses are sent directly with store=false"
         ]
@@ -836,6 +846,7 @@
           "stop_sequences",
           "top_k",
           "thinking",
+          "tools",
           "metadata",
           "service_tier",
           "output_config.effort"
@@ -853,6 +864,7 @@
           "stop_sequences",
           "top_k",
           "thinking",
+          "tools",
           "metadata",
           "service_tier",
           "output_config.effort"

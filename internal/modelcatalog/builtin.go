@@ -52,6 +52,7 @@ var builtinOnce = sync.OnceValues(func() (*Catalog, error) {
 		anthropicModels(),
 		geminiModels(),
 		bedrockConverseModels(),
+		bedrockMantleModels(),
 		openAICompatibleModels(),
 	)...)
 })
@@ -150,6 +151,12 @@ func vision(capabilities *domain.ProviderCapabilities) {
 	capabilities.Vision = true
 	capabilities.FetchedImage = true
 }
+
+// visionInline is vision without the fetch. Bedrock reads an image from the
+// bytes a request carries and retrieves nothing, so an entry resolved against a
+// Mantle profile may not claim fetched_image — the profile's ceiling does not
+// carry it, and Validate refuses an entry that exceeds its ceiling.
+func visionInline(capabilities *domain.ProviderCapabilities)  { capabilities.Vision = true }
 func reasoning(capabilities *domain.ProviderCapabilities)     { capabilities.Reasoning = true }
 func developerRole(capabilities *domain.ProviderCapabilities) { capabilities.DeveloperRole = true }
 
@@ -173,6 +180,21 @@ func openAIChatModels() []Entry {
 		builtinEntry(provider, profile, "gpt-5", with(chat(400_000, 128_000), vision, developerRole, reasoning)),
 		builtinEntry(provider, profile, "gpt-5-mini", with(chat(400_000, 128_000), vision, developerRole, reasoning)),
 		builtinEntry(provider, profile, "gpt-5-nano", with(chat(400_000, 128_000), vision, developerRole, reasoning)),
+		// The 5.4 generation onward. Each model's own page states 1,050,000
+		// context and 128,000 max output, text and image input, reasoning with an
+		// effort ladder, function calling and structured outputs.
+		//
+		// developer_role is deliberately absent: these pages list the supported
+		// features and none of them names it. That is an absence of evidence
+		// rather than evidence of absence, and the seeding policy resolves it the
+		// same way either way — an entry that under-claims costs an operator one
+		// deliberate declaration, an entry that over-claims routes a request to a
+		// provider that refuses it.
+		builtinEntry(provider, profile, "gpt-5.4", with(chat(1_050_000, 128_000), vision, reasoning)),
+		builtinEntry(provider, profile, "gpt-5.5", with(chat(1_050_000, 128_000), vision, reasoning)),
+		builtinEntry(provider, profile, "gpt-5.6-sol", with(chat(1_050_000, 128_000), vision, reasoning)),
+		builtinEntry(provider, profile, "gpt-5.6-terra", with(chat(1_050_000, 128_000), vision, reasoning)),
+		builtinEntry(provider, profile, "gpt-5.6-luna", with(chat(1_050_000, 128_000), vision, reasoning)),
 	}
 }
 
@@ -270,17 +292,28 @@ func deepSeekModels() []Entry {
 // Sources reviewed 2026-08-09:
 //   - https://platform.claude.com/docs/en/about-claude/models/overview
 //   - https://platform.claude.com/docs/en/about-claude/models/model-ids-and-versions
+//
+// Refreshed 2026-08-23 from the models overview: the 5 generation is added, and
+// claude-sonnet-4-6's max output corrected from 64k to the 128k the table
+// states. Every current Claude model takes text and image input, and the direct
+// API accepts a url image source as readily as base64, so `vision` credits both
+// halves here.
 func anthropicModels() []Entry {
 	const provider, profile = domain.ProviderAnthropic, domain.ProfileAnthropicMessages
 	claude := func(contextTokens, outputTokens int64) domain.ProviderCapabilities {
 		return domain.ProviderCapabilities{
-			Chat: true, Streaming: true, StreamUsage: true, Tools: true, Vision: true, Reasoning: true,
+			Chat: true, Streaming: true, StreamUsage: true, Tools: true,
+			Vision: true, FetchedImage: true, Reasoning: true,
 			MaxContextTokens: contextTokens, MaxOutputTokens: outputTokens,
 		}
 	}
 	return []Entry{
+		builtinEntry(provider, profile, "claude-fable-5", claude(1_000_000, 128_000)),
+		builtinEntry(provider, profile, "claude-opus-5", claude(1_000_000, 128_000)),
+		builtinEntry(provider, profile, "claude-sonnet-5", claude(1_000_000, 128_000)),
+		builtinEntry(provider, profile, "claude-opus-4-8", claude(1_000_000, 128_000)),
 		builtinEntry(provider, profile, "claude-opus-4-7", claude(1_000_000, 128_000)),
-		builtinEntry(provider, profile, "claude-sonnet-4-6", claude(1_000_000, 64_000)),
+		builtinEntry(provider, profile, "claude-sonnet-4-6", claude(1_000_000, 128_000)),
 		builtinEntry(provider, profile, "claude-haiku-4-5-20251001", claude(200_000, 64_000)),
 	}
 }
@@ -339,6 +372,38 @@ func bedrockConverseModels() []Entry {
 // model names do not inherit native-only tools, JSON, reasoning or token limits.
 // These exact IDs are also the choices offered when an operator maps a custom
 // endpoint alias to a reviewed underlying model.
+// bedrockMantleModels covers the OpenAI-family models Bedrock serves on its
+// Mantle endpoint. The catalog had no entry for any of them, so every Mantle
+// deployment resolved as "not covered" and its operator had to declare the
+// capabilities by hand — which is what forces a widening, a revalidation, and a
+// route taken out of service to turn one capability on.
+//
+// Two things about these entries are not guesses and are easy to get wrong:
+//
+//   - The context window is Bedrock's, not OpenAI's. GPT-5.5 is 272K here and
+//     1,050,000 on the direct API. Carrying the direct number over would let a
+//     request four times too large through the deployment's own ceiling.
+//   - Vision without the fetch. Bedrock reads an image from the bytes a request
+//     carries and retrieves nothing, so these claim vision and not fetched_image
+//     — which is also all the Mantle profile ceilings permit.
+//
+// Max output is absent from the model card ("N/A"), so it is left undeclared
+// rather than invented; zero means the upstream limit applies.
+//
+// The profile is the Responses one because the card says so: Chat Completions,
+// Converse and Invoke are all marked unsupported for this model, and it answers
+// on the openai/v1 path that ProfileBedrockMantleOpenAIResponses addresses.
+//
+// Sources reviewed 2026-08-23, documentation only — no live account:
+//   - https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html
+//   - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-55.html
+func bedrockMantleModels() []Entry {
+	const provider, profile = domain.ProviderBedrock, domain.ProfileBedrockMantleOpenAIResponses
+	return []Entry{
+		builtinEntry(provider, profile, "openai.gpt-5.5", with(chat(272_000, 0), visionInline)),
+	}
+}
+
 func openAICompatibleModels() []Entry {
 	const provider, profile = domain.ProviderOpenAICompatible, domain.ProfileOpenAICompatible
 	compatibleChat := domain.ProviderCapabilities{Chat: true, Streaming: true}

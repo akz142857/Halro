@@ -685,6 +685,18 @@ func (attempt *activeAttempt) reportBreaker(providerErr error) {
 }
 
 type RejectionMetrics struct {
+	// RouteCapability counts requests refused because no target behind the
+	// public model could serve what was asked. It is a policy outcome like the
+	// others here, not an internal fault: the route is configured, the key is
+	// good, and the request names something the deployments behind it do not
+	// declare.
+	//
+	// It is counted rather than recorded per request on purpose. The refusal
+	// happens before the first ledger write, so there is no usage record to
+	// carry it, and creating one would mean writing a request that never
+	// started — changing what the ledger means by "request" and opening a cheap
+	// write path for anything holding a valid key.
+	RouteCapability       uint64
 	RPM                   uint64
 	TPM                   uint64
 	ProjectConcurrency    uint64
@@ -695,6 +707,7 @@ type RejectionMetrics struct {
 }
 
 type rejectionCounters struct {
+	routeCapability       atomic.Uint64
 	rpm                   atomic.Uint64
 	tpm                   atomic.Uint64
 	projectConcurrency    atomic.Uint64
@@ -825,7 +838,8 @@ func NewServiceWithOptions(
 
 func (s *Service) RejectionMetrics() RejectionMetrics {
 	return RejectionMetrics{
-		RPM: s.rejections.rpm.Load(), TPM: s.rejections.tpm.Load(),
+		RouteCapability: s.rejections.routeCapability.Load(),
+		RPM:             s.rejections.rpm.Load(), TPM: s.rejections.tpm.Load(),
 		ProjectConcurrency:    s.rejections.projectConcurrency.Load(),
 		ProviderConcurrency:   s.rejections.providerConcurrency.Load(),
 		DeploymentConcurrency: s.rejections.deploymentConcurrency.Load(),
@@ -899,7 +913,7 @@ func (s *Service) Chat(
 	targets = filterGenerateProfileCompatibility(targets, canonical)
 	targets = filterPrimitiveTargets(targets, provider.OperationChat)
 	if len(targets) == 0 {
-		return openaiapi.ChatCompletionResponse{}, unservableError(
+		return openaiapi.ChatCompletionResponse{}, s.unservableError(
 			"model route does not support the requested chat capabilities",
 			unservableReasons(candidates, canonical, provider.OperationChat),
 		)
@@ -1497,7 +1511,7 @@ func (s *Service) prepareNativeMessages(ctx context.Context, plaintextKey, versi
 	nativeCandidates := targets
 	targets = filterSemanticCapabilities(targets, requirements)
 	if len(targets) == 0 {
-		return auth.AuthResult{}, provider.Target{}, nil, 0, 0, unservableError(
+		return auth.AuthResult{}, provider.Target{}, nil, 0, 0, s.unservableError(
 			"model route does not support the requested Anthropic Messages capabilities",
 			missingCapabilities(nativeCandidates, requirements),
 		)
@@ -1791,7 +1805,7 @@ func (s *Service) ChatStream(
 	targets = filterGenerateProfileCompatibility(targets, canonical)
 	targets = filterPrimitiveTargets(targets, provider.OperationChatStream)
 	if len(targets) == 0 {
-		return unservableError(
+		return s.unservableError(
 			"model route does not support the requested chat capabilities",
 			unservableReasons(candidates, canonical, provider.OperationChatStream),
 		)
@@ -2336,7 +2350,8 @@ func (s *Service) unknownPricePolicyEvidence(principal auth.AuthResult) (*domain
 // The names are safe to return because none of them is caller data: capability
 // keys are the same vocabulary the console shows, and the field names are the
 // ones docs/compatibility/endpoint-manifests.json already publishes.
-func unservableError(message string, reasons []string) *Error {
+func (s *Service) unservableError(message string, reasons []string) *Error {
+	s.rejections.routeCapability.Add(1)
 	if len(reasons) > 0 {
 		message += ": " + strings.Join(reasons, ", ")
 	}

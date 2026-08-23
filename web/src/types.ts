@@ -180,6 +180,10 @@ export interface Dashboard {
   };
   governance: {
     policy_rejections: {
+      /** Refused because no target behind the public model could serve what was
+       * asked — a configured route, a good key, and a request naming something
+       * the deployments behind it do not declare. */
+      route_capability: number;
       rpm: number;
       tpm: number;
       project_concurrency: number;

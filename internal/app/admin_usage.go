@@ -156,6 +156,7 @@ type pricingGovernanceSummary struct {
 }
 
 type policyRejectionSummary struct {
+	RouteCapability       uint64 `json:"route_capability"`
 	RPM                   uint64 `json:"rpm"`
 	TPM                   uint64 `json:"tpm"`
 	ProjectConcurrency    uint64 `json:"project_concurrency"`
@@ -232,12 +233,13 @@ func (r *Runtime) dashboardGovernance(request *http.Request, now time.Time, peri
 
 func summarizeRejections(source gatewaycore.RejectionMetrics) policyRejectionSummary {
 	result := policyRejectionSummary{
-		RPM: source.RPM, TPM: source.TPM, ProjectConcurrency: source.ProjectConcurrency,
+		RouteCapability: source.RouteCapability,
+		RPM:             source.RPM, TPM: source.TPM, ProjectConcurrency: source.ProjectConcurrency,
 		ProviderConcurrency:   source.ProviderConcurrency,
 		DeploymentConcurrency: source.DeploymentConcurrency,
 		Budget:                source.Budget, TokenGuard: source.TokenGuard,
 	}
-	result.Total = result.RPM + result.TPM + result.ProjectConcurrency +
+	result.Total = result.RouteCapability + result.RPM + result.TPM + result.ProjectConcurrency +
 		result.ProviderConcurrency + result.DeploymentConcurrency + result.Budget + result.TokenGuard
 	return result
 }

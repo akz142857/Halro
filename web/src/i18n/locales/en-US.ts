@@ -701,6 +701,7 @@ export const enUS = {
     },
     controlPlane: "Control plane", governanceExecution: "Governance execution", budgetWatermark: "Highest budget watermark", capacityWatermark: "Highest concurrency watermark",
     noLimitedProjects: "No enabled project has a daily budget", noLimitedResources: "No enabled resource has a concurrency limit", rejectionComposition: "Policy rejection mix",
+    routeCapabilityShort: "Capability",
     budgetShort: "Budget", concurrencyShort: "Concurrency", rejectionsSinceStartup: "Rejection counters are cumulative since process start.", committedAndReserved: "Committed cost + in-flight reservations",
     capacityScopes: { project: "Project concurrency", provider: "Provider concurrency", deployment: "Deployment concurrency" },
     usageAttribution: "Usage attribution", topConsumers: "Today's Top 5", breakdownDimension: "Attribution dimension", breakdownSort: "Sort metric", errors: "Failures",
