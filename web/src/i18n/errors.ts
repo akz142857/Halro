@@ -98,6 +98,10 @@ export function localizedError(t: TFunction, error: unknown) {
     capability_detection_rate_limited: "errors.capabilityDetectionRateLimited",
     ambiguous_capability_binding: "errors.ambiguousCapabilityBinding",
     no_detectable_binding: "errors.noDetectableBinding",
+    // A 409 whose generic headline sends the operator to refresh, which cannot
+    // help: nothing changed underneath them, and the edit stays refused until
+    // the routes are dealt with.
+    capability_expansion_requires_revalidation: "errors.capabilityExpansionRequiresRevalidation",
     // The server names the deployment in the detail, so this stays a headline and
     // the detail is deliberately left visible underneath it.
     binding_referenced_by_deployment: "errors.bindingReferencedByDeployment",
