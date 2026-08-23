@@ -117,6 +117,24 @@ export function DeveloperPage() {
   );
   const code = useMemo(() => sampleBody && gatewayURLValid ? codeExample(language, gatewayURL, path, sampleBody) : "", [gatewayURL, gatewayURLValid, language, path, sampleBody]);
   const running = execution.outcome === "running";
+  // Headers land before the body does, so the wait is only over the body pane;
+  // switching to headers mid-flight should show what has already arrived.
+  const waitingForFirstBytes = running && responseView === "body" && execution.body === "";
+  // What the pane is showing, so the button copies what the reader is looking at
+  // rather than a second opinion about it.
+  const visibleResponse = responseView === "body"
+    ? execution.body || (execution.outcome === "failed" ? execution.error ?? "" : "")
+    : execution.headers;
+  const [responseCopyStatus, setResponseCopyStatus] = useState("");
+  const copyResponse = async () => {
+    if (!visibleResponse) return;
+    try {
+      await navigator.clipboard.writeText(visibleResponse);
+      setResponseCopyStatus(t("developer.copied"));
+    } catch {
+      setResponseCopyStatus(t("developer.copyFailed"));
+    }
+  };
   const responseStreaming = execution.outcome === "idle" ? isStreaming : execution.streaming === true;
   // The Gateway URL only feeds the code sample; the real call always enters this Runtime,
   // so an unusable URL must not block sending.
@@ -156,6 +174,11 @@ export function DeveloperPage() {
     const timer = setTimeout(() => setCopyStatus(""), copyStatusTimeoutMillis);
     return () => clearTimeout(timer);
   }, [copyStatus]);
+  useEffect(() => {
+    if (!responseCopyStatus) return;
+    const timer = setTimeout(() => setResponseCopyStatus(""), copyStatusTimeoutMillis);
+    return () => clearTimeout(timer);
+  }, [responseCopyStatus]);
   // Picking a language is only meaningful if the sample is on screen, so reveal it.
   const selectLanguage = (next: Language) => {
     setLanguage(next);
@@ -561,14 +584,43 @@ export function DeveloperPage() {
               <div id={`developer-response-panel-${responseView}`} role="tabpanel" aria-labelledby={`developer-response-tab-${responseView}`}>
                 {/* The live region is mounted up front and empty while idle: a region inserted
                     together with its text is not announced by most screen readers. */}
-                <div className={`developer-execution-status ${execution.outcome}`} role="status" aria-live="polite" aria-atomic="true">
-                  {execution.outcome === "idle" ? "" : `${executionLabel}${execution.error && execution.error !== executionLabel ? ` · ${execution.error}` : ""}${executionHint ? ` · ${executionHint}` : ""}`}
+                <div className="developer-execution-bar">
+                  <div className={`developer-execution-status ${execution.outcome}`} role="status" aria-live="polite" aria-atomic="true">
+                    {execution.outcome === "idle" ? "" : `${executionLabel}${execution.error && execution.error !== executionLabel ? ` · ${execution.error}` : ""}${executionHint ? ` · ${executionHint}` : ""}`}
+                  </div>
+                  {/* Outside the live region on purpose: a control inside it is
+                      re-announced with every status change, talking over the
+                      status it sits next to. */}
+                  {visibleResponse !== "" && (
+                    <button
+                      type="button"
+                      className="button ghost developer-response-copy"
+                      onClick={copyResponse}
+                      aria-label={t(responseView === "body" ? "developer.copyResponseBody" : "developer.copyResponseHeaders")}
+                    >
+                      <CopyIcon />
+                    </button>
+                  )}
+                  {/* Beside the control rather than inside it, matching the code
+                      sample's copy: a live region nested in a button is an
+                      unusual shape for one page to have two of. */}
+                  <span className="developer-response-copy-status" role="status" aria-live="polite">{responseCopyStatus}</span>
                 </div>
                 {execution.outcome === "idle" ? <div className="developer-response-empty" data-view={responseView}>
                   <span aria-hidden="true">{responseView === "body" ? "{ }" : "H"}</span>
                   <div><strong>{t("developer.awaitingResponse")}</strong><p>{responseView === "body" ? t("developer.awaitingBody") : t("developer.awaitingHeaders")}</p></div>
+                </div> : waitingForFirstBytes ? <div className="developer-response-waiting">
+                  {/* "The body is empty" is a finding, and while the request is in
+                      flight it is the wrong one: nothing has arrived yet. A
+                      standard response shows nothing at all until it completes,
+                      so without this the panel reads as an answer. */}
+                  <span className="loading-bar" aria-hidden="true" />
+                  <div>
+                    <strong>{t(responseStreaming ? "developer.waitingForFirstEvent" : "developer.waitingForResponse")}</strong>
+                    <p>{t("developer.waitingDescription")}</p>
+                  </div>
                 </div> : <div className="developer-response-result">
-                  <pre tabIndex={0} role="region" aria-label={responseView === "body" ? t("developer.responseBody") : t("developer.responseHeaders")}><code>{responseView === "body" ? execution.body || (execution.outcome === "failed" ? execution.error : "") || t("developer.emptyResponseBody") : execution.headers || t("developer.awaitingHeaders")}</code></pre>
+                  <pre tabIndex={0} role="region" aria-label={responseView === "body" ? t("developer.responseBody") : t("developer.responseHeaders")}><code>{responseView === "body" ? execution.body || (execution.outcome === "failed" ? execution.error : "") || t(execution.outcome === "cancelled" ? "developer.cancelledBeforeBody" : "developer.emptyResponseBody") : execution.headers || t("developer.awaitingHeaders")}</code></pre>
                 </div>}
               </div>
               <footer className="developer-response-footnote">{t("developer.responseDescription")}</footer>
@@ -577,6 +629,14 @@ export function DeveloperPage() {
         </div>
       )}
     </section>
+  );
+}
+
+function CopyIcon() {
+  return (
+    <svg className="developer-copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M9 9h10v10H9zM5 15V5h10" />
+    </svg>
   );
 }
 

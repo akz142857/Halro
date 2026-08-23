@@ -271,6 +271,67 @@ describe("DeveloperPage", () => {
     expect(new URLSearchParams(window.location.search).get("request_id")).toBe("req_debug_1");
   });
 
+  // "The body is empty" is a finding, and in flight it is the wrong one: nothing
+  // has arrived yet. A standard response shows nothing at all until it completes,
+  // so the panel used to read as an answer for the whole of a slow call.
+  it("says it is waiting rather than reporting an empty body", async () => {
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
+    vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });
+    let answer: (value: Response) => void = () => {};
+    vi.spyOn(api, "developerExecute").mockImplementation(() => new Promise<Response>((resolve) => { answer = resolve; }));
+    vi.spyOn(api, "usageRequest").mockRejectedValue(new Error("no usage"));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
+    await screen.findByRole("option", { name: "support-chat" });
+    fireEvent.change(screen.getByLabelText("Gateway Key"), { target: { value: "gw_debug_secret" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "发送请求" }));
+    expect(await screen.findByText("等待上游返回")).toBeVisible();
+    expect(screen.queryByText("响应体为空")).not.toBeInTheDocument();
+
+    answer(new Response(JSON.stringify({ id: "resp_1" }), {
+      status: 200, headers: { "Content-Type": "application/json" },
+    }));
+    expect(await screen.findByText(/resp_1/)).toBeVisible();
+    expect(screen.queryByText("等待上游返回")).not.toBeInTheDocument();
+  });
+
+  // The response is the thing an operator takes away — into a bug report, a
+  // ticket, a message to a provider. Selecting it out of a scrolling pre is
+  // work, and work at the end of a debugging session is where a detail gets
+  // dropped.
+  it("copies the pane on screen, and only once there is something to copy", async () => {
+    const clipboard = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText: clipboard } });
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
+    vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });
+    vi.spyOn(api, "developerExecute").mockResolvedValue(new Response(
+      JSON.stringify({ id: "resp_copy" }),
+      { status: 200, headers: { "Content-Type": "application/json", "X-Request-ID": "req_copy" } },
+    ));
+    vi.spyOn(api, "usageRequest").mockRejectedValue(new Error("no usage"));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
+    await screen.findByRole("option", { name: "support-chat" });
+
+    // Nothing has run, so there is nothing to offer.
+    expect(screen.queryByRole("button", { name: "复制响应体" })).toBeNull();
+
+    fireEvent.change(screen.getByLabelText("Gateway Key"), { target: { value: "gw_debug_secret" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送请求" }));
+    expect(await screen.findByText("请求已完成")).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "复制响应体" }));
+    await waitFor(() => expect(clipboard).toHaveBeenCalledWith(expect.stringContaining("resp_copy")));
+
+    // The headers pane offers its own, and copies what that pane shows rather
+    // than whatever was copied last.
+    fireEvent.click(screen.getByRole("tab", { name: "响应头" }));
+    fireEvent.click(screen.getByRole("button", { name: "复制响应头" }));
+    await waitFor(() => expect(clipboard).toHaveBeenLastCalledWith(expect.stringContaining("req_copy")));
+    expect(clipboard).toHaveBeenLastCalledWith(expect.not.stringContaining("resp_copy"));
+  });
+
   it("renders SSE data and cancels an in-flight request", async () => {
     vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
     vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });
@@ -294,6 +355,11 @@ describe("DeveloperPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "发送请求" }));
     fireEvent.click(await screen.findByRole("button", { name: "取消请求" }));
     expect(await screen.findByText("请求已取消")).toBeVisible();
+    // "The body is empty" is a finding about a response that arrived. A request
+    // cancelled before one did has none to report on, and saying it is empty
+    // reads as an answer about the provider.
+    expect(screen.getByText("已取消，未收到响应体")).toBeVisible();
+    expect(screen.queryByText("响应体为空")).not.toBeInTheDocument();
     expect(execute).toHaveBeenCalledTimes(2);
   });
 
