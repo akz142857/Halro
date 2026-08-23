@@ -178,7 +178,7 @@ func TestBuiltinCoversReviewedProviderFamiliesConservatively(t *testing.T) {
 	}{
 		{
 			key:  Key{ProviderType: domain.ProviderAnthropic, Profile: domain.ProfileAnthropicMessages, Model: "claude-sonnet-4-6"},
-			want: domain.ProviderCapabilities{Chat: true, Streaming: true, Tools: true, Vision: true, Reasoning: true, StreamUsage: true, MaxContextTokens: 1_000_000, MaxOutputTokens: 64_000},
+			want: domain.ProviderCapabilities{Chat: true, Streaming: true, Tools: true, Vision: true, FetchedImage: true, Reasoning: true, StreamUsage: true, MaxContextTokens: 1_000_000, MaxOutputTokens: 128_000},
 		},
 		{
 			key:  Key{ProviderType: domain.ProviderGemini, Profile: domain.ProfileGeminiText, Model: "gemini-2.5-pro"},
@@ -696,6 +696,39 @@ func TestTheAuthoringExampleIsNotAboutToExpire(t *testing.T) {
 // The ceiling gained vision so one model could claim it. The other two must not
 // have gained it with the ceiling: a catalog that widened by profile rather than
 // by model would put vision on models DeepSeek answers with a 400.
+// A Mantle deployment used to resolve as "not covered by the catalog", which is
+// what forces an operator to declare capabilities by hand — and a hand
+// declaration is a widening, which costs a revalidation and a route taken out of
+// service to turn one capability on.
+//
+// The two numbers this entry gets from Bedrock rather than from OpenAI are the
+// ones worth pinning: the context window is Bedrock's 272K and not the direct
+// API's 1,050,000, and vision is claimed without the fetch, because Bedrock
+// reads the bytes a request carries and retrieves nothing.
+func TestTheMantleModelIsCoveredWithBedrocksOwnNumbers(t *testing.T) {
+	entry, ok := Builtin().Lookup(Key{
+		ProviderType: domain.ProviderBedrock,
+		Profile:      domain.ProfileBedrockMantleOpenAIResponses,
+		Model:        "openai.gpt-5.5",
+	})
+	if !ok {
+		t.Fatal("openai.gpt-5.5 is not covered by the builtin catalog")
+	}
+	if entry.Capabilities.MaxContextTokens != 272_000 {
+		t.Errorf("context window = %d, want Bedrock's 272000 rather than the direct API's", entry.Capabilities.MaxContextTokens)
+	}
+	if !entry.Capabilities.Vision {
+		t.Error("the model card lists image input and the entry does not claim vision")
+	}
+	if entry.Capabilities.FetchedImage {
+		t.Error("Bedrock does not fetch an image, and the Mantle ceiling does not carry fetched_image")
+	}
+	// Absent from the card, so left to the upstream rather than invented.
+	if entry.Capabilities.MaxOutputTokens != 0 {
+		t.Errorf("max output = %d, want it undeclared", entry.Capabilities.MaxOutputTokens)
+	}
+}
+
 func TestOnlyTheDeepSeekVisionModelClaimsVision(t *testing.T) {
 	catalog := Builtin()
 	for model, want := range map[string]bool{
