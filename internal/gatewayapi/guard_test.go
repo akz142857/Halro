@@ -36,7 +36,7 @@ func rejectingHandler(t *testing.T) (*Handler, *bool) {
 	reached := false
 	handler, err := NewWithOptions(&fakeService{}, Options{
 		MaxRequestBytes: 4 << 20,
-		AuthorizeKey:    func(string) error { return errors.New("no such key") },
+		AuthorizeKey:    func(string) (int64, error) { return 0, errors.New("no such key") },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -80,12 +80,105 @@ func TestGuardRejectsAnUnknownKeyWithoutReadingTheBody(t *testing.T) {
 	}
 }
 
+// A Project's own request-size ceiling was stored, shown, and never applied to
+// anything: only the instance-wide limit bounded a body, so the per-project
+// control was a governance knob that governed nothing. It has to bind at the
+// guard, because that is the first moment the key names a Project and the last
+// moment before the body is read.
+func TestGuardAppliesTheProjectRequestCeiling(t *testing.T) {
+	handler, err := NewWithOptions(&fakeService{}, Options{
+		MaxRequestBytes: 4 << 20,
+		AuthorizeKey:    func(string) (int64, error) { return 512, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	send := func(size int) error {
+		request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+			strings.NewReader(strings.Repeat("x", size)))
+		request.Header.Set("Authorization", "Bearer gw_valid_key_that_is_long_enough")
+		var readErr error
+		handler.GuardOpenAI(http.HandlerFunc(func(_ http.ResponseWriter, passed *http.Request) {
+			_, readErr = io.ReadAll(passed.Body)
+		})).ServeHTTP(httptest.NewRecorder(), request)
+		return readErr
+	}
+
+	if err := send(512); err != nil {
+		t.Fatalf("a body inside the project ceiling was refused: %v", err)
+	}
+	err = send(513)
+	var tooLarge *http.MaxBytesError
+	if !errors.As(err, &tooLarge) {
+		t.Fatalf("a body past the project ceiling read cleanly: %v", err)
+	}
+	if tooLarge.Limit != 512 {
+		t.Fatalf("body was bounded at %d, not the project ceiling", tooLarge.Limit)
+	}
+}
+
+// The endpoint wraps the body a second time with the instance ceiling. The two
+// limits have to compose — the tighter one stopping the read, the refusal still
+// arriving as the envelope every oversized body gets.
+func TestProjectCeilingRefusesThroughTheEndpointEnvelope(t *testing.T) {
+	handler, err := NewWithOptions(&fakeService{}, Options{
+		MaxRequestBytes: 4 << 20,
+		AuthorizeKey:    func(string) (int64, error) { return 256, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := `{"model":"chat","messages":[{"role":"user","content":"` + strings.Repeat("x", 512) + `"}]}`
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	request.Header.Set("Authorization", "Bearer gw_valid_key_that_is_long_enough")
+	response := httptest.NewRecorder()
+
+	handler.GuardOpenAI(http.HandlerFunc(handler.ChatCompletions)).ServeHTTP(response, request)
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (%s)", response.Code, response.Body)
+	}
+	var envelope openaiapi.ErrorEnvelope
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("refusal is not a parsable envelope: %v (%s)", err, response.Body)
+	}
+	if envelope.Error.Code != "request_too_large" {
+		t.Fatalf("code = %q, want request_too_large", envelope.Error.Code)
+	}
+}
+
+// A Project that declares no ceiling of its own, or one looser than the
+// instance's, must not end up with a tighter bound than the instance set.
+func TestGuardKeepsTheInstanceCeilingWhenTheProjectIsLooser(t *testing.T) {
+	for name, projectBytes := range map[string]int64{"unset": 0, "looser": 1 << 20} {
+		t.Run(name, func(t *testing.T) {
+			handler, err := NewWithOptions(&fakeService{}, Options{
+				MaxRequestBytes: 4096,
+				AuthorizeKey:    func(string) (int64, error) { return projectBytes, nil },
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+				strings.NewReader(strings.Repeat("x", 4096)))
+			request.Header.Set("Authorization", "Bearer gw_valid_key_that_is_long_enough")
+			var readErr error
+			handler.GuardOpenAI(http.HandlerFunc(func(_ http.ResponseWriter, passed *http.Request) {
+				_, readErr = io.ReadAll(passed.Body)
+			})).ServeHTTP(httptest.NewRecorder(), request)
+			if readErr != nil {
+				t.Fatalf("the instance ceiling was tightened to the project's: %v", readErr)
+			}
+		})
+	}
+}
+
 // The guard stands in front of the authoritative check, so it must never be the
 // reason a legitimate request fails.
 func TestGuardPassesAKeyItCanAuthenticate(t *testing.T) {
 	handler, err := NewWithOptions(&fakeService{}, Options{
 		MaxRequestBytes: 4 << 20,
-		AuthorizeKey:    func(string) error { return nil },
+		AuthorizeKey:    func(string) (int64, error) { return 0, nil },
 	})
 	if err != nil {
 		t.Fatal(err)

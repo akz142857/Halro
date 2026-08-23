@@ -472,9 +472,12 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		SourceLimiter:     sourceLimiter,
 		// The same snapshot the service authenticates against, so the guard
 		// cannot turn away a request the service would have accepted.
-		AuthorizeKey: func(plaintextKey string) error {
-			_, err := authSnapshot.Authenticate(plaintextKey, time.Now())
-			return err
+		AuthorizeKey: func(plaintextKey string) (int64, error) {
+			principal, err := authSnapshot.Authenticate(plaintextKey, time.Now())
+			if err != nil {
+				return 0, err
+			}
+			return principal.Project.MaxRequestBytes, nil
 		},
 	})
 	if err != nil {

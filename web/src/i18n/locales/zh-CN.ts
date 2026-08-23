@@ -884,6 +884,7 @@ export const zhCN = {
     credentials: "内部凭据", gatewayKeys: "网关密钥", createKey: "＋ 创建密钥", loadingKeys: "正在读取密钥", noKeys: "这个项目还没有可用密钥。",
     created: "创建于 {{date}}", keyDisableTitle: "禁用网关密钥？", keyDisableConfirm: "确认禁用网关密钥“{{name}}”？使用该密钥的新请求将立即被拒绝。", keyDeleteConfirm: "确认永久停用密钥“{{name}}”？此操作不能恢复。",
     edit: "编辑项目", createTitle: "创建项目", name: "名称", aliases: "允许的模型别名（路由入口）", aliasesHint: "选择项目可以调用的公共模型别名。每个别名由一个或多个模型路由提供；项目不会绑定具体路由或上游模型。", loadingModels: "正在读取路由入口", unavailableAlias: "没有已启用路由", noConfiguredModels: "还没有可选路由入口", noConfiguredModelsDescription: "请先在路由页面配置并启用至少一个公共模型别名。", openRoutes: "前往路由配置 →", selectedAliases: "已选择 {{count}} 个", enabledRouteCount: "{{count}} 条已启用路由", maxConcurrency: "最大并发",
+    maxRequestKB: "单请求体上限（KB）", maxRequestKBHint: "0 表示跟随实例上限。图片以 base64 随请求发送时，体积约为原图的 1.37 倍。",
     dailyBudgetUSD: "每日预算（USD）", enable: "启用项目", noBinding: "不绑定", redactionPolicy: "脱敏策略", tokenGuardPolicy: "令牌防护策略", rpm: "每分钟请求数（RPM）", tpm: "每分钟令牌数（TPM）", allowedCIDR: "允许的 CIDR",
     basicInfo: "基本信息", basicInfoDescription: "定义项目名称及允许访问的模型范围。", capacityControls: "容量与预算", capacityControlsDescription: "限制请求速率、并发量和每日费用。", securityControls: "安全与访问", securityControlsDescription: "配置项目状态、请求防护、脱敏和网络边界。", enableDescription: "启用后项目及其网关密钥可以处理请求。",
     cidrHint: "限制可以使用此项目网关密钥的来源 IP。可输入单个 IPv4、IPv6 或 CIDR 网段；留空表示不限制。多个值用逗号或换行分隔。", cidrPlaceholder: "例如：203.0.113.25/32\n10.0.0.0/8", save: "保存并热加载", createSubmit: "创建项目",

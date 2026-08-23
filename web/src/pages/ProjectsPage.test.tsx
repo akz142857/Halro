@@ -313,6 +313,29 @@ describe("projects page", () => {
     expect(screen.getByText("Inference")).toBeVisible();
   });
 
+  // The Gateway now applies this ceiling to the body, so the console has to be
+  // able to set it — and a new project must not be handed a tighter limit than
+  // the instance's that nobody chose.
+  it("sends the project request-body ceiling, defaulting to the instance limit", async () => {
+    vi.mocked(api.projectsPage).mockResolvedValue({ items: [], next_cursor: "" } as never);
+    vi.mocked(api.allRoutes).mockResolvedValue([
+      { id: "rt_1", public_model: "chat", enabled: true, revision: 1 },
+    ] as never);
+    const createProject = vi.spyOn(api, "createProject").mockResolvedValue({ data: project(), etag: '"1"' } as never);
+
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "创建第一个项目" }));
+    fireEvent.change(screen.getByLabelText("名称"), { target: { value: "Inference" } });
+    fireEvent.click(await screen.findByRole("checkbox", { name: /chat/ }));
+    const ceiling = screen.getByLabelText(/单请求体上限/);
+    expect(ceiling).toHaveValue(0);
+
+    fireEvent.change(ceiling, { target: { value: "2048" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建项目" }));
+    await waitFor(() => expect(createProject).toHaveBeenCalledOnce());
+    expect(createProject.mock.calls[0][0]).toMatchObject({ max_request_bytes: 2048 * 1024 });
+  });
+
   it("rejects an unparsable CIDR before the request leaves the browser", async () => {
     vi.mocked(api.projectsPage).mockResolvedValue({ items: [], next_cursor: "" } as never);
     vi.mocked(api.allRoutes).mockResolvedValue([

@@ -306,7 +306,7 @@ type Handler struct {
 	writeTimeout       time.Duration
 	trustProxy         bool
 	trustedProxies     []netip.Prefix
-	authorizeKey       func(string) error
+	authorizeKey       func(string) (int64, error)
 	sourceLimit        SourceLimiter
 }
 
@@ -334,7 +334,14 @@ type Options struct {
 	// It must be cheap and must reject only what full authentication would also
 	// reject — it is a guard in front of the real check, never a substitute for
 	// it.
-	AuthorizeKey func(plaintextKey string) error
+	//
+	// It also reports the request-size ceiling the key's Project declares, zero
+	// meaning the Project sets none. That ceiling belongs to a Project, and the
+	// Project is not known until the key has authenticated, so this is the
+	// earliest point at which it can bound a body — which is the only point that
+	// matters, because a limit applied after the body is read has already paid
+	// for the bytes it was meant to refuse.
+	AuthorizeKey func(plaintextKey string) (maxRequestBytes int64, err error)
 
 	// SourceLimiter, when supplied, bounds request starts per source address
 	// ahead of authentication. Leaving it nil leaves the data plane unbounded
@@ -978,7 +985,18 @@ func (h *Handler) guardKey(next http.Handler, deny http.HandlerFunc) http.Handle
 		// response, and anything this guard cannot settle is left to the
 		// authoritative check behind it.
 		key, present := anthropicGatewayKey(request.Header)
-		if !present || h.authorizeKey(key) == nil {
+		if !present {
+			next.ServeHTTP(writer, request)
+			return
+		}
+		if projectBytes, err := h.authorizeKey(key); err == nil {
+			// The endpoint behind applies the instance ceiling to the same body.
+			// Wrapping here rather than replacing it there keeps both in force:
+			// whichever is smaller stops the read first, and either way the
+			// endpoint reports the *http.MaxBytesError as request_too_large.
+			if projectBytes > 0 && projectBytes < h.maxRequestBytes {
+				request.Body = http.MaxBytesReader(writer, request.Body, projectBytes)
+			}
 			next.ServeHTTP(writer, request)
 			return
 		}
