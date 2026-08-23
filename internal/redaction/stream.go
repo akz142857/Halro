@@ -40,6 +40,15 @@ type rollingString struct {
 	width    int
 	pending  string
 	tool     bool
+	// unescaper and unescaped mirror a tool-argument channel with its JSON
+	// string escapes decoded. Fragments are matched in their raw form so they
+	// can be transformed without corrupting partial JSON syntax, but a client
+	// reconstitutes the arguments by decoding them, so a secret carrying a
+	// single escape inside it passes every raw pattern and still arrives whole.
+	// The mirror is matched as well, and can only reject: rewriting a raw
+	// fragment from a decoded offset is exactly what the raw pass avoids.
+	unescaper jsonUnescaper
+	unescaped string
 }
 
 func (e *Engine) NewStream(policyID string) (*Stream, error) {
@@ -73,11 +82,12 @@ func (e *Engine) NewStream(policyID string) (*Stream, error) {
 	}, nil
 }
 
-// Process returns zero or more safe chunks. A terminal chunk may produce a
-// preceding synthetic delta that flushes the protected suffix.
+// Process returns zero or more safe chunks. A terminal chunk produces a
+// synthetic delta that flushes the protected suffix, before it when the chunk
+// carries no text of its own and after it when it does.
 func (s *Stream) Process(chunk openaiapi.ChatCompletionResponse) ([]openaiapi.ChatCompletionResponse, error) {
 	chunk = cloneResponse(chunk)
-	var before []openaiapi.ChatCompletionResponse
+	var leading, trailing []openaiapi.ChatCompletionResponse
 	for choiceIndex := range chunk.Choices {
 		choice := &chunk.Choices[choiceIndex]
 		state := s.choice(choice.Index)
@@ -96,15 +106,28 @@ func (s *Stream) Process(chunk openaiapi.ChatCompletionResponse) ([]openaiapi.Ch
 			if err != nil {
 				return nil, err
 			}
-			if flushed != nil {
-				before = append(before, *flushed)
+			switch {
+			case flushed == nil:
+			case deltaCarriesOutput(message):
+				// The flush holds the newest bytes of this choice, so once the
+				// terminal chunk carries text of its own the flush has to
+				// follow it — emitting it first delivers the tail of the
+				// message ahead of its head, and the client concatenates deltas
+				// in arrival order. The terminal marker rides along with the
+				// flush so it still arrives last.
+				flushed.Choices[0].FinishReason = choice.FinishReason
+				choice.FinishReason = nil
+				trailing = append(trailing, *flushed)
+			default:
+				leading = append(leading, *flushed)
 			}
 		}
 	}
+	result := leading
 	if meaningfulStreamChunk(chunk) {
-		before = append(before, chunk)
+		result = append(result, chunk)
 	}
-	return before, nil
+	return append(result, trailing...), nil
 }
 
 // Flush emits all remaining protected suffixes after a successful provider
@@ -281,6 +304,11 @@ func (r *rollingString) Push(piece string, final bool) (string, error) {
 	if len(r.pending)+len(piece) > maxStreamPendingBytes {
 		return "", fmt.Errorf("stream redaction buffer exceeds %d bytes", maxStreamPendingBytes)
 	}
+	if r.tool {
+		if err := r.scanUnescaped(piece, final); err != nil {
+			return "", err
+		}
+	}
 	r.pending += piece
 	cut := len(r.pending)
 	if !final {
@@ -300,6 +328,35 @@ func (r *rollingString) Push(piece string, final bool) (string, error) {
 		return r.engine.processToolFragment(r.policyID, "outbound", prefix)
 	}
 	return r.engine.processString(r.policyID, "outbound", prefix)
+}
+
+// scanUnescaped matches the decoded mirror of a tool-argument channel and fails
+// closed on a hit. It keeps the trailing width-1 bytes of the mirror so a value
+// that only becomes a match once decoded is still seen whole when it spans two
+// fragments, and it runs before any of the fragment is released so the match
+// cannot be delivered first and refused afterwards.
+func (r *rollingString) scanUnescaped(piece string, final bool) error {
+	decoded := r.unescaper.push(piece)
+	if final {
+		decoded += r.unescaper.flush()
+	}
+	if decoded == "" {
+		return nil
+	}
+	window := r.unescaped + decoded
+	for _, rule := range r.rules {
+		if rule.rule.Action == "detect_only" || !rule.matches(window) {
+			continue
+		}
+		return &MatchError{
+			RuleID: rule.rule.ID, Category: category(rule.rule), Scope: "outbound",
+		}
+	}
+	if keep := max(r.width-1, 0); len(window) > keep {
+		window = window[len(window)-keep:]
+	}
+	r.unescaped = window
+	return nil
 }
 
 func (r *rollingString) safeCut(cut int) int {
@@ -385,6 +442,15 @@ func applyMessageMeta(message, stored *openaiapi.Message) {
 	stored.Role = ""
 	stored.Name = ""
 	stored.ToolCallID = ""
+}
+
+// deltaCarriesOutput reports whether a redacted delta still holds text the
+// client will concatenate, which is what decides where the flush belongs.
+func deltaCarriesOutput(message *openaiapi.Message) bool {
+	if message == nil {
+		return false
+	}
+	return len(message.Content) > 0 || message.ReasoningContent != "" || len(message.ToolCalls) > 0
 }
 
 func meaningfulStreamChunk(chunk openaiapi.ChatCompletionResponse) bool {
