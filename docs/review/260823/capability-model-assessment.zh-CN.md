@@ -16,83 +16,101 @@
 
 一句话总括：**运营者能编辑的能力模型，和真正决定路由的能力模型，是两个不同的模型，而控制台只显示前一个。** 三条论点都指向这同一处断裂的不同侧面。
 
+> 上表是 2026-08-23 实施**之前**的判定，保留原样作为起点记录。实施之后的逐条复核见下一节
+> 「完成度复核」——那一节的数字是对合并后的 main 重新测量的。
+
 ---
 
-## 完成度（2026-08-23 实施后复核）
+## 完成度复核（2026-08-23，实测）
 
-本文提出 P0/P1/P2 三级建议，其中 P0 的一项、P1 的两步已实施。**三条论点都没有全部完成**，逐条如下。数字是实施后重新量的，不是文中原始数据。
+问题被再次提出：三条论点是否全部修复、本文的任务是否全部完成。这一节是对**合并后的 main** 重新测量的结果，不引用实施过程中的中间数字。
 
-| 论点 | 状态 | 已关闭的 | 仍然存在的 |
-|---|---|---|---|
-| 1 全能力模型 | **大部分已关闭** | ①② 命名统一、合成一张配对表、漏配对会红；一个事实（能取图）从 ③ 移入 ① 并因此在控制台可见；能力字典收敛成一张访问器表——拷贝 4 → 2，手写转换器 3 → 0，按名字的 switch 6 → 0 | ③ 字段清单与 ④ 发布清单仍是独立表示（它们承载的是没有能力对应的字段级事实，收敛属于 P2 第二阶段） |
-| 2 独立适配域 | **部分** | 六个登记点里最后一个静默的（字段规则）改成按 profile 登记，漏登记会指名报错；一个新 profile 加进表后，缺哪一层由测试逐条点出来 | 六处登记仍是六处——物理合并被包依赖方向挡住（见下）；清单仍是 20 端点 × 65 条手写 coverage |
-| 3 服务端构建 | **已关闭** | 字段级限制已发布到控制台并在勾选处显示；前端的三份镜像现在各有双向守卫，服务端加一项能力时三个都会红 | 守卫仍是 CI 期而非运行时，但链条是闭合的（见下） |
+结论先说：**论点 3 已关闭，论点 1 大部分关闭，论点 2 部分关闭。本文的建议清单有两项未做。**
 
-论点 3 的守卫链，逐环列出，因为"构建期而非运行时"这句话本身容易被读成有缺口：
+| 论点 | 判定 |
+|---|---|
+| 1 全能力模型 | **大部分关闭** —— 能力本身收敛到一处，加一项能力的每个落点都有测试兜住；但"能力"与"字段"仍是两套表示 |
+| 2 独立适配域 | **部分** —— 六处登记仍是六处，物理合并被包依赖方向挡住；但遗漏不再静默，五处由测试点名、一处运行时明确报错 |
+| 3 服务端构建 | **已关闭** |
 
-1. 服务端改了能力字典 → 不重新生成 golden，`TestProviderProfilesGoldenMatchesConsoleFixture` 失败
-2. 重新生成 golden → `useProviderProfiles.test.ts` 比对 `emptyCapabilities` 的键集，类型没跟上就失败
-3. 同上 → `i18n.test.tsx` 比对两个 locale 的 `capabilities.*`，任一语言缺文案就失败
-4. 同上 → `DeploymentsPage.test.tsx` 比对分组，没有分组画它就失败
+### 测量方法
 
-四环都是双向的（服务端有前端没有、前端有服务端没有，各自报错）。CI 不可能在漂移状态下通过。类型那一环的主体是 `emptyCapabilities` 而不是接口本身，因为类型没有运行时形状——但它是该类型的完整字面量，TypeScript 已经强制它与接口一一对应，所以比对它的键就是比对接口。
+不数 grep，直接做两个实验：往代码里真加一项能力、真加一个平台，然后看**编译和测试到底拦不拦得住、拦在哪里**。下面的表格是实验输出，不是估算。
 
-值得记下的是这一环之前为什么是缺口：接口漏一个字段时 `tsc --noEmit` **一声不吭**（反向验证实测），字段只是不存在，于是每条有类型的路径都会静默忽略服务端发来的这项能力。
+### 实验一：加一项能力
 
-加 `fetched_image` 时动了 20 余个文件，其中两处按名字枚举的地方（`admin_deployments.go` 的 `capabilitiesEnabledByName`、`models.go` 里逐字段 OR 的绑定汇总）是靠测试失败才发现的——它们是 P2 第一阶段的直接动因。
+往 `ProviderCapabilities` 加一个 `audio_input bool`，其余一概不动。
 
-### P2 第一阶段实测（2026-08-23）
+`go build ./...` **通过** —— 没有任何编译期强制。随后：
 
-`internal/domain/capability_dictionary.go` 是现在唯一写下"能力名 ↔ 存储成员"的地方。名字列表、按名读、按名写、证据投影、证据校验、子集判断、差异报告，原先是七处各自枚举同一批名字，现在全部走这张表。
+| 必须改的地方 | 由谁拦下 |
+|---|---|
+| `domain/models.go` 结构体成员 | （实验的起点） |
+| `domain/capability_dictionary.go` 访问器表 | `TestTheDictionaryCoversEveryCapabilityMember` |
+| `modelcatalog/catalog.go` 的 `CapabilityNames`（顺序独立，条目摘要依赖它） | `TestCapabilityNamesCoverTheDomainStruct` |
+| 控制台 golden 快照 | `TestProviderProfilesGoldenMatchesConsoleFixture` |
+| `web/src/types.ts` 与 `emptyCapabilities` | `useProviderProfiles.test.ts` |
+| 两个 locale 的 `capabilities.*` | `i18n.test.tsx` |
+| `DeploymentsPage.tsx` 的分组清单 | `DeploymentsPage.test.tsx` |
 
-| 指标 | 之前 | 现在 |
-|---|---|---|
-| `ProviderCapabilities` 拷贝 | 4（Go 3 + TS 1） | **2**（Go 1 + TS 1，后者有守卫） |
-| 手写逐字段转换器 | 3 | **0** |
-| 按名字枚举的 switch/map | 6 | **0** |
+**六个落点，六个都有测试点名。** 前端那三道要等 golden 重新生成之后才会红——这不是缺口而是链条：服务端没同步时第一道就拦住了，压根不会广播这项能力。
 
-`provider.Capabilities` 与 `app.providerCapabilityView` 都成了 `domain.ProviderCapabilities` 的类型别名——它们的字段和 json tag 本来就逐一相同，"只为保持一致而存在的拷贝"长的就是这个样子。
+对照本文原始测量的"加一项能力要动 23 个文件、其中两处靠测试失败才发现"：文件数降到六，而"靠测试失败才发现"从缺陷变成了**设计**——每一处都是被指名报出来的，报错信息带文件名。
 
-两个新守卫用反射而不是又一份清单：结构体加了 bool 成员而字典没加、或两个名字指向同一个成员，都会红。两种都做了反向验证。
+### 实验二：加一个平台
 
-顺带查出一处被拷贝掩盖的分歧：`provider.Capabilities.AnyOperation()` 把 `Streaming` 算作一项操作，`domain` 版不算。合并后按 domain 的定义——流式是对话的修饰而非独立操作——这收紧了注册表的一道闸门，方向是 fail-closed。
+往 profile 表加一行 `acme.chat.v1`，其余一概不动。`go build ./...` 同样通过，然后：
 
-### P2 第二阶段：为什么不是"一份描述"，而是"漏了就红"（2026-08-23）
+| 漏掉的登记 | 由谁拦下 |
+|---|---|
+| `provider/profile.go` 的 profile manifest | `TestCeilingWithinProfileManifestOperations` |
+| `compatibility/provider_fields.go` 的字段规则 | `TestEveryProfileRegistersItsOwnFieldRules`（报错里直接写了该改哪个文件） |
+| 端点清单 coverage | `TestEveryChatProfileAppearsInAnEndpointManifest` |
+| `provider_table_test.go` 的端点期望 | `TestResolvedEndpointsMatchWhatTheConsoleOffered` |
+| 控制台 golden | `TestProviderProfilesGoldenMatchesConsoleFixture` |
+| `app/providers.go` 的适配器构造 | **没有测试**——运行时报 `provider profile is not implemented` |
 
-本文原先的设想是"一个平台一份描述，注册时提供，六处登记收敛成一处"。实施时发现**物理合并做不到**，原因是包依赖方向：
+六处里五处在测试期被点名，第六处在运行时明确报错。没有一处是静默的。
 
-- 能力上限、访问面、凭据方案在 `domain`
-- Operation → Primitive 绑定在 `provider`（`provider` 依赖 `domain`）
-- 字段规则是对 `semantic.GenerateRequest` 的闭包，在 `compatibility`（也依赖 `domain`）
-- 适配器构造在 `app`（依赖全部）
+### 三条论点的逐条判定
 
-一份能同时装下这四样的结构体必须住在一个被这四个包都导入的地方，而它又要引用它们的类型——是环。要真做，得新开一个顶层包并把 `semantic`/`provider` 的类型上移，或者走代码生成。两者都不是这一轮的规模，而且前者会把"谁定义什么"这件事搅乱。
+**论点 1 —— 大部分关闭。**
 
-所以第二阶段改为攻击真正的痛点：**六处登记不痛，静默地漏掉其中一处才痛。**
+关掉的：能力的**存储与命名**收敛到 `capability_dictionary.go` 一张表（19 项 + 2 个上限），拷贝从 4 份降到 2 份（Go 1 + TS 1，后者有守卫），手写逐字段转换器 3 → 0，按名字枚举的 switch/map 6 → 0；`semantic.Requirements`（13 个成员）与能力共用字典的名字，配对集中在一张表且漏配对会红。
 
-盘点下来，六处里已经有守卫的是 profile manifest（`TestCeilingWithinProfileManifestOperations`，走 domain 表）和端点 coverage（`EndpointCompatibilityManifest.Validate` 要求覆盖每个 profile）。唯一静默的是字段规则：一个新 profile 落到 `default` 分支后**看起来是工作的**——平台跑得起来、纯文本能过，工具、图片、结构化输出被拒且没有任何东西说明为什么。
+没关掉的：**"能力"和"字段"仍是两套表示**。有能力对应的事实（vision、fetched_image、tools…）走 ①②；没有能力对应的事实（seed、n、stop、detail）走 ③ 的 8 组字段规则和 ④ 的 20 端点 × 65 条 coverage。一个读者要回答"这个平台支不支持 X"，仍然要知道 X 属于哪一类。
 
-它现在是按 profile 登记的表（`generateFieldRules`），`legacyFieldRules` 保留为普通函数，所以"登记过"和"回落了"可区分。配套两个测试都走 domain 表而不是自带清单：
+这不是疏漏而是边界问题：`seed` 不是一项能力，把它塞进能力字典会让"能力"这个词失去意义。真正的收敛要求 ③ 能从平台描述里生成，那是论点 2 的事。
 
-- 表里有、字段规则没登记 → `newplatform.chat.v1 serves chat but declares no generate field rules; register it in provider_fields.go`
-- 表里有、任何端点清单都不覆盖 → `newplatform.chat.v1 is in the profile table and reachable through no endpoint manifest`
-- 反向：登记了表里没有的 profile → 同样报错（留着的规则会静默收养下一个复用该标识符的 profile）
+**论点 2 —— 部分关闭。**
 
-反向验证用的是真的往表里塞一个新平台，两条都如实点名。
+关掉的：遗漏不再静默（见实验二）。
 
-**剩下的**：③ 字段清单（11 个 profile 分支）与 ④ 发布清单（20 端点 × 65 条）仍是独立表示。它们承载的是没有能力对应的字段级事实（seed、n、detail），收敛它们属于 P2 第二阶段，和论点 2 是同一件事。
+没关掉的：六处登记仍是六处。本文原本设想的"一份平台描述"**做不到**，原因是包依赖方向——能力上限在 `domain`，Operation→Primitive 绑定在 `provider`，字段规则是对 `semantic.GenerateRequest` 的闭包在 `compatibility`，适配器构造在 `app`。一份装得下这四样的结构体必须被这四个包都导入，同时又引用它们的类型，是环。要做得新开顶层包并把 `semantic`/`provider` 的类型上移，或走代码生成。
 
-### 建议清单的逐项状态
+清单 coverage 仍是 65 条手写。
+
+**论点 3 —— 已关闭。**
+
+服务端发布能力键集、依赖关系、opt-in 警告、以及字段级请求约束；前端的三份镜像各有双向守卫，实验一里三道全部如实报红。守卫在 CI 期而非运行时，但链条闭合：服务端改了不同步 golden，Go 测试红；同步了 golden 而前端没跟上，前端三个测试红。
+
+### 本文建议清单的最终状态
 
 | 项 | 状态 |
 |---|---|
 | P0-1 发布字段级限制给控制台 | **已实施** |
-| P0-2 拒绝原因入用量记录 | **未做**，文中已重新定级为接近 P1（账本事件是持久化 schema） |
-| P0-3 模型目录做厚 + 覆盖率可见 | **一半已存在**（能力证据来源标签），**一半未做**（把目录做厚需逐个模型核对官方文档，是资料工作） |
-| P1 收敛表示 | **两步都已实施**，范围如上表 |
+| P0-2 拒绝原因入用量记录 | **未做**。本文最初定级为 P0 是判断失误：账本事件是持久化 schema，加一列要 bump 格式版本并走迁移，代价接近 P1。建议与其取值域一起设计，不要先定一套临时枚举 |
+| P0-3 模型目录做厚 + 覆盖率可见 | **一半已实施**（能力证据来源标签区分 `builtin_catalog` 与 `operator_declared`），**一半未做**（把目录做厚需逐个模型核对官方文档，是资料工作而非代码工作） |
+| P1 收敛表示 | **两步都已实施** |
 | P2 第一阶段 能力字典收敛 | **已实施** |
-| P2 第二阶段 登记完整性 | **已实施**（见下：物理合并不可行，改为让遗漏发声） |
-| P2 第三阶段 清单 coverage 由描述生成 | **未做** |
+| P2 第二阶段 登记完整性 | **已实施**（物理合并不可行，改为让遗漏发声） |
+| P2 第三阶段 清单由描述生成 | **未做**。它与"一份平台描述"是同一件事，都要先解开上面那个包依赖环 |
+
+两项未做：P0-2 与 P2 第三阶段；一项半做：P0-3。
+
+### 什么时候该做剩下的
+
+P2 第三阶段的收益随平台数量线性增长，而代价是一次性的。现在是 12 个 profile；如果下一个接入平台已经在计划里，先做它比先接平台便宜。如果没有，它就是一笔可以等的债——而且现在这笔债**不会静默扩大**，因为每一处遗漏都会报出来。
 
 ---
 
