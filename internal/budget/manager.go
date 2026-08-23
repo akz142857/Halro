@@ -564,6 +564,28 @@ func (m *Manager) Settle(ctx context.Context, attempt Attempt, settlement Settle
 	return m.settle(ctx, eventID, attempt, settlement)
 }
 
+// unservedSettlement reports an attempt that produced nothing: no tokens, no
+// cost, and an outcome that is not a success. Such an attempt owes nothing, and
+// that includes the fixed per-request fee — the fee pays for a request an
+// upstream actually received.
+//
+// The price-snapshot check below has to skip it rather than re-derive a cost.
+// Re-deriving one made every deterministic failure unsettleable the moment a
+// price version carried a fixed fee: the reservation stayed pending for the
+// life of the process, the caller was told accounting was unavailable instead of
+// what the provider said, and restart recovery then charged the whole prepared
+// estimate for an attempt the gateway had already established produced nothing.
+// A settlement claiming success still has to match the frozen formula, so a
+// served request cannot dodge the fee by reporting no tokens.
+func unservedSettlement(settlement Settlement) bool {
+	return settlement.CommittedMicrosUSD == 0 &&
+		settlement.ProviderInputTokens == 0 &&
+		settlement.ProviderOutputTokens == 0 &&
+		settlement.ProviderCachedInputTokens == 0 &&
+		settlement.ProviderCacheWriteInputTokens == 0 &&
+		settlement.Outcome != "success"
+}
+
 // settle deliberately does not bound CommittedMicrosUSD by the attempt's
 // reservation. The reservation is an admission-time estimate; the provider
 // bills for the tokens it actually served, and when it reports more billable
@@ -595,7 +617,7 @@ func (m *Manager) settle(ctx context.Context, eventID string, attempt Attempt, s
 	if attempt.PriceSnapshot != nil {
 		copy := attempt.PriceSnapshot.Clone()
 		priceSnapshot = &copy
-		if copy.CostValueStatus == domain.CostValueKnown && settlement.Outcome != "recovered_not_started" {
+		if copy.CostValueStatus == domain.CostValueKnown && !unservedSettlement(settlement) {
 			cost, costErr := copy.Calculate(settlement.ProviderInputTokens, settlement.ProviderCachedInputTokens, settlement.ProviderOutputTokens)
 			if costErr != nil {
 				return costErr
