@@ -98,14 +98,15 @@ document is deliberately refreshed with the new inventory and hashes.
 
 - `go.mod`: `5759531ea56103e64bbc3f981947d7592fa7973a`
 - `go.sum`: `54bfd4b3cca98c81e2a0660047fe49e1f0cbe098`
-- `web/package.json`: `7c3a692df887a0f4814633b58815213d2a4da25d`
-- `web/package-lock.json`: `69127f543e714d8395c03b668efba5e24eff8172`
+- `web/package.json`: `5095111d843d2904d227a6150a5e798124cdd7c5`
+- `web/package-lock.json`: `a5d111d431624d71d10e4e8cb75392382245c885`
 
 The Go hashes moved for the six-module bump recorded above. The two web hashes
-moved for `chore(release): v0.2.0`, which bumped the
-`version` field in both files and changed nothing else — no dependency was
-added, removed, or upgraded, so the inventory above still describes the
-reviewed tree and the review date is unchanged. The gate hashes whole files
+moved for `chore(release): v0.2.0` and again for `chore(release): v0.3.0`, each
+of which bumped the `version` field in both files and changed nothing else — no
+dependency was added, removed, or upgraded, so the inventory above still
+describes the reviewed tree and the review date is unchanged. The gate hashes
+whole files
 rather than dependency sections, which is the right trade: it cannot be talked
 out of noticing a change, at the cost of occasionally flagging one that carries
 no dependency in it.
