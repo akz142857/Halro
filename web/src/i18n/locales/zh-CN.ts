@@ -198,6 +198,8 @@ export const zhCN = {
     codeUnavailable: "修正 Gateway 地址或原始 JSON 后即可生成代码。",
     copied: "代码已复制",
     copyFailed: "复制失败",
+    copyResponseBody: "复制响应体",
+    copyResponseHeaders: "复制响应头",
     secretBoundary: "示例通过 HALRO_API_KEY 环境变量读取密钥，不会显示或保存明文 Gateway Key。",
     sendRequest: "发送请求",
     cancelRequest: "取消请求",

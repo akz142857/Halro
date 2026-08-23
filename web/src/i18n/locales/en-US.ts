@@ -198,6 +198,8 @@ export const enUS = {
     codeUnavailable: "Fix the Gateway URL or raw JSON to generate code.",
     copied: "Code copied",
     copyFailed: "Copy failed",
+    copyResponseBody: "Copy the response body",
+    copyResponseHeaders: "Copy the response headers",
     secretBoundary: "Examples read the key from HALRO_API_KEY. Plaintext Gateway Keys are never displayed or stored.",
     sendRequest: "Send request",
     cancelRequest: "Cancel request",

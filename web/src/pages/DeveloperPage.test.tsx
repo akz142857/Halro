@@ -296,6 +296,42 @@ describe("DeveloperPage", () => {
     expect(screen.queryByText("等待上游返回")).not.toBeInTheDocument();
   });
 
+  // The response is the thing an operator takes away — into a bug report, a
+  // ticket, a message to a provider. Selecting it out of a scrolling pre is
+  // work, and work at the end of a debugging session is where a detail gets
+  // dropped.
+  it("copies the pane on screen, and only once there is something to copy", async () => {
+    const clipboard = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText: clipboard } });
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
+    vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });
+    vi.spyOn(api, "developerExecute").mockResolvedValue(new Response(
+      JSON.stringify({ id: "resp_copy" }),
+      { status: 200, headers: { "Content-Type": "application/json", "X-Request-ID": "req_copy" } },
+    ));
+    vi.spyOn(api, "usageRequest").mockRejectedValue(new Error("no usage"));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
+    await screen.findByRole("option", { name: "support-chat" });
+
+    // Nothing has run, so there is nothing to offer.
+    expect(screen.queryByRole("button", { name: "复制响应体" })).toBeNull();
+
+    fireEvent.change(screen.getByLabelText("Gateway Key"), { target: { value: "gw_debug_secret" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送请求" }));
+    expect(await screen.findByText("请求已完成")).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "复制响应体" }));
+    await waitFor(() => expect(clipboard).toHaveBeenCalledWith(expect.stringContaining("resp_copy")));
+
+    // The headers pane offers its own, and copies what that pane shows rather
+    // than whatever was copied last.
+    fireEvent.click(screen.getByRole("tab", { name: "响应头" }));
+    fireEvent.click(screen.getByRole("button", { name: "复制响应头" }));
+    await waitFor(() => expect(clipboard).toHaveBeenLastCalledWith(expect.stringContaining("req_copy")));
+    expect(clipboard).toHaveBeenLastCalledWith(expect.not.stringContaining("resp_copy"));
+  });
+
   it("renders SSE data and cancels an in-flight request", async () => {
     vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
     vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });
