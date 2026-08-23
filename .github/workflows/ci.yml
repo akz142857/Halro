@@ -130,8 +130,18 @@ jobs:
             # new input, seeds byte-identical to the checked-in corpus). Only
             # the empty-handed failure earns one retry — a crasher still
             # fails the job on its first run.
+            #
+            # "This run wrote it" is tracked-ness, not mtime. A committed seed
+            # is tracked and a crasher go writes is not, whereas `-newer
+            # go.mod` asked a question about checkout order: actions/checkout
+            # writes go.mod before internal/, so every committed seed came out
+            # newer and the retry below never once ran for the two packages
+            # that have a corpus — sse and safelog, which are the packages the
+            # retry was added for. No --exclude-standard: anything untracked
+            # under testdata/fuzz counts, so a future ignore rule cannot hide
+            # a crasher behind a retry.
             if ! go test "${package}" -run '^$' -fuzz "^${target}$" -fuzztime 40s; then
-              if find "${package#./}/testdata/fuzz" -type f -newer go.mod 2>/dev/null | grep -q .; then
+              if [ -n "$(git ls-files --others -- "${package#./}/testdata/fuzz")" ]; then
                 exit 1
               fi
               echo "::warning::${target} failed with no reproducer written; retrying once for the fuzztime-expiry race"
@@ -153,7 +163,7 @@ jobs:
             echo "::group::${file}"
             cat "${file}"
             echo "::endgroup::"
-          done < <(find internal -path '*/testdata/fuzz/*' -type f -newer go.mod)
+          done < <(git ls-files --others -- internal | grep '/testdata/fuzz/' || true)
           if [ "${found}" -eq 1 ]; then
             echo "::notice::Commit the files above under testdata/fuzz to pin these as regression seeds."
           fi
