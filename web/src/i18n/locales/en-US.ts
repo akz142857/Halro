@@ -822,6 +822,8 @@ export const enUS = {
     detectionProviderRepairTitle: "The provider could not complete verification",
     detectionProviderRepairDescription: "The current credential, permissions, or provider availability are insufficient. Fix the provider configuration first; advanced declaration cannot bypass this result.",
     capabilityGroupSelected: "{{selected}} / {{total}} enabled",
+    capabilityGroupBlocked_one: "{{count}} needs the connection first",
+    capabilityGroupBlocked_other: "{{count}} need the connection first",
     capabilityGroups: {
       operations: { title: "Operations", description: "Top-level operations a deployment can execute and routing can select." },
       modalities: { title: "Modalities", description: "Content types the model can directly understand or generate within an operation." },

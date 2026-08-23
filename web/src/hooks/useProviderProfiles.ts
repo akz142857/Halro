@@ -77,7 +77,7 @@ export function interfaceCeiling(
     for (const profile of type.profiles) {
       if (!wanted.has(profile.id)) continue;
       for (const name of booleanCapabilityNames(catalog)) {
-        if (profile.ceiling[name]) ceiling[name] = true as never;
+        if (profile.ceiling[name]) ceiling[name] = true;
       }
     }
   }
@@ -85,10 +85,21 @@ export function interfaceCeiling(
 }
 
 /** Capability keys, excluding the two numeric limits, which are not checkboxes. */
-export function booleanCapabilityNames(catalog: ProviderProfilesCatalog): (keyof ProviderCapabilities)[] {
+/** The capability keys that are a yes or a no.
+ *
+ * ProviderCapabilities mixes them with the two numeric bounds, and the mix is
+ * what made a cast necessary to write into it by name. Naming the boolean half
+ * as a type moves that from a cast the compiler cannot check to a fact it can:
+ * a numeric key reaching a boolean write is a compile error rather than a `true`
+ * silently landing in max_context_tokens. */
+export type BooleanCapabilityName = {
+  [K in keyof ProviderCapabilities]: ProviderCapabilities[K] extends boolean ? K : never;
+}[keyof ProviderCapabilities];
+
+export function booleanCapabilityNames(catalog: ProviderProfilesCatalog): BooleanCapabilityName[] {
   return catalog.capability_names.filter(
     (name) => name !== "max_context_tokens" && name !== "max_output_tokens",
-  ) as (keyof ProviderCapabilities)[];
+  ) as BooleanCapabilityName[];
 }
 
 export function profilesForType(catalog: ProviderProfilesCatalog, type: ProviderType): ProviderProfileDescriptor[] {

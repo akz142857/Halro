@@ -821,6 +821,8 @@ export const zhCN = {
     detectionProviderRepairTitle: "服务商暂时无法完成验证",
     detectionProviderRepairDescription: "当前凭据、权限或服务可用性不足。请先修复服务商配置；此结果不能通过高级声明绕过。",
     capabilityGroupSelected: "{{selected}} / {{total}} 项启用",
+    capabilityGroupBlocked_one: "{{count}} 项需先在连接上启用",
+    capabilityGroupBlocked_other: "{{count}} 项需先在连接上启用",
     capabilityGroups: {
       operations: { title: "操作", description: "部署可以直接执行并用于路由筛选的顶层操作。" },
       modalities: { title: "模态", description: "模型在操作中能够直接理解或生成的内容类型。" },

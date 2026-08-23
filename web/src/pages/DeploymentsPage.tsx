@@ -1722,11 +1722,20 @@ function DeploymentForm({
                 {deploymentCapabilityGroups.map((group) => {
                   const names = group.capabilities.filter((name) => configurableCapabilityNames.includes(name));
                   if (!names.length) return null;
-                  const selected = names.filter((name) => capabilities[name]).length;
+                  // The counter reads as "how many of the ones you can turn on",
+                  // so its denominator has to exclude the ones this form cannot
+                  // turn on at all. Counting them in read as three unticked boxes
+                  // when they are three boxes belonging to another screen.
+                  const tickable = names.filter((name) => capabilityCeiling[name] || capabilities[name]);
+                  const blocked = names.length - tickable.length;
+                  const selected = tickable.filter((name) => capabilities[name]).length;
                   return <section className="deployment-capability-group" aria-labelledby={`capability-group-${group.id}`} key={group.id}>
                     <header>
                       <strong id={`capability-group-${group.id}`}>{t(`deployments.capabilityGroups.${group.id}.title`)}</strong>
-                      <span>{t("deployments.capabilityGroupSelected", { selected, total: names.length })}</span>
+                      <span>
+                        {t("deployments.capabilityGroupSelected", { selected, total: tickable.length })}
+                        {blocked > 0 && ` · ${t("deployments.capabilityGroupBlocked", { count: blocked })}`}
+                      </span>
                     </header>
                     <div className="deployment-capabilities capability-grid" data-count={names.length}>
                       {names.map((name) => {

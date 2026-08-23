@@ -199,6 +199,11 @@ describe("deployment invocation target workflow", () => {
     // several capabilities can be in this state at once, and an operator reading
     // one row must not have to guess which note belongs to it.
     expect(box.closest("label")).toHaveTextContent("先在服务商连接上启用");
+    // The group counter reads as "how many of the ones you can turn on", so a box
+    // belonging to another screen must not sit in its denominator.
+    const modality = screen.getByLabelText(/远程图片抓取/).closest("section");
+    expect(modality).toHaveTextContent("0 / 1 项启用");
+    expect(modality).toHaveTextContent("1 项需先在连接上启用");
   });
 
   // Routing refuses on a member this interface cannot carry, and the form used to
