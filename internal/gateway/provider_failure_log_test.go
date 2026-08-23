@@ -79,6 +79,37 @@ func TestAnUpstreamRefusalIsLoggedWithoutItsResponseBody(t *testing.T) {
 	}
 }
 
+// The adapter goes out of its way to keep the upstream's identifier apart from
+// its prose — the code, and the parameter it names, are the parts an operator can
+// act on. They were extracted and then dropped: the log carried status and
+// nothing else, so a 400 read as "the provider refused it" with no way to learn
+// which field it refused.
+func TestAnUpstreamRefusalIsLoggedWithTheCodeItNamed(t *testing.T) {
+	f := newFixture(t, 10_000)
+	defer f.close()
+	logs := &bytes.Buffer{}
+	f.service.logger = safelog.New(slog.NewJSONHandler(logs, nil))
+	f.adapter.err = &provider.Error{
+		Class:        provider.ErrorBadRequest,
+		StatusCode:   400,
+		ProviderCode: "invalid_image_url:messages[0].content[1].image_url",
+		Message:      "provider error (400): Error while downloading https://example.test/photo.png",
+	}
+
+	if _, err := f.service.Chat(context.Background(), f.plaintext, chatRequest()); err == nil {
+		t.Fatal("the provider failure did not reach the caller")
+	}
+
+	logged := logs.String()
+	if !strings.Contains(logged, `"provider_code":"invalid_image_url:messages[0].content[1].image_url"`) {
+		t.Fatalf("the identifier the upstream named was not logged: %s", logged)
+	}
+	// The sentence beside it is still a response body.
+	if strings.Contains(logged, "Error while downloading") {
+		t.Fatalf("an upstream response body was written to the log: %s", logged)
+	}
+}
+
 // A service built without a logger must not panic on the first failure. Tests
 // and embedders construct one that way, and a nil logger reached only on the
 // error path is the shape that survives every green run.

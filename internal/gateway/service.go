@@ -618,6 +618,15 @@ func (attempt *activeAttempt) logProviderFailure(providerErr error) {
 		if classified.StatusCode > 0 {
 			attributes = append(attributes, "provider_status", classified.StatusCode)
 		}
+		// The adapter separates the upstream's identifier from its prose for
+		// exactly this line: the sentence is a response body and stays inside the
+		// error, while `code` — and the parameter it refused, joined to it — is
+		// what an operator can act on. Logging status without it says a request
+		// was refused without saying for what, and leaves them bisecting a body
+		// they did not write.
+		if classified.ProviderCode != "" {
+			attributes = append(attributes, "provider_code", classified.ProviderCode)
+		}
 		if classified.ProviderRequestID != "" {
 			attributes = append(attributes, "provider_request_id", classified.ProviderRequestID)
 		}
