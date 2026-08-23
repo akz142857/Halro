@@ -91,6 +91,119 @@ describe("DeveloperPage", () => {
     expect(screen.getByRole("button", { name: "SSE 流式" })).toBeDisabled();
   });
 
+  it("sends a remote image URL as multimodal content on both chat contracts", async () => {
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
+    vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });
+    const execute = vi.spyOn(api, "developerExecute").mockResolvedValue(new Response(
+      JSON.stringify({ id: "resp_1" }), { status: 200, headers: { "Content-Type": "application/json" } },
+    ));
+    vi.spyOn(api, "usageRequest").mockRejectedValue(new Error("no usage"));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
+    await screen.findByRole("option", { name: "support-chat" });
+
+    fireEvent.change(screen.getByLabelText("图片输入"), { target: { value: "ftp://example.com/photo.png" } });
+    fireEvent.click(screen.getByRole("button", { name: "添加" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("请输入 http(s) 图片地址");
+
+    fireEvent.change(screen.getByLabelText("图片输入"), { target: { value: "https://example.com/a/photo.png" } });
+    fireEvent.click(screen.getByRole("button", { name: "添加" }));
+    expect(screen.getByRole("list", { name: "已添加的图片" })).toHaveTextContent("photo.png");
+    // Nothing remote is fetched to build a preview; the CSP forbids it and reaching the
+    // image from the console would not prove the provider can reach it either.
+    expect(document.querySelector(".developer-image-list img")).toBeNull();
+
+    fireEvent.change(screen.getByLabelText("Gateway Key"), { target: { value: "gw_debug_secret" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送请求" }));
+    await waitFor(() => expect(execute).toHaveBeenCalled());
+    expect(execute.mock.calls[0][2]).toEqual({
+      model: "support-chat",
+      stream: false,
+      input: [{
+        type: "message",
+        role: "user",
+        content: [
+          { type: "input_text", text: "用一句话说明 Halro 如何路由这个请求。" },
+          { type: "input_image", image_url: "https://example.com/a/photo.png" },
+        ],
+      }],
+    });
+
+    fireEvent.change(screen.getByLabelText("API 协议"), { target: { value: "chat" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送请求" }));
+    await waitFor(() => expect(execute).toHaveBeenCalledTimes(2));
+    expect(execute.mock.calls[1][2]).toEqual({
+      model: "support-chat",
+      stream: false,
+      messages: [{
+        role: "user",
+        content: [
+          { type: "text", text: "用一句话说明 Halro 如何路由这个请求。" },
+          { type: "image_url", image_url: { url: "https://example.com/a/photo.png" } },
+        ],
+      }],
+    });
+
+    // Embeddings has no multimodal input, so the picture must not follow it there.
+    fireEvent.change(screen.getByLabelText("API 协议"), { target: { value: "embeddings" } });
+    expect(screen.queryByLabelText("图片输入")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "发送请求" }));
+    await waitFor(() => expect(execute).toHaveBeenCalledTimes(3));
+    expect(execute.mock.calls[2][2]).toEqual({ model: "support-chat", input: "用一句话说明 Halro 如何路由这个请求。" });
+  });
+
+  it("carries a local file as a data URL but keeps the base64 out of the code sample", async () => {
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
+    vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080", max_request_bytes: 10 << 20 });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const view = render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
+    await screen.findByRole("option", { name: "support-chat" });
+
+    const file = screen.getByLabelText("选择本地文件");
+    fireEvent.change(file, { target: { files: [new File(["not-a-real-png"], "shot.png", { type: "image/png" })] } });
+    expect(await screen.findByText("shot.png")).toBeVisible();
+    expect(document.querySelector(".developer-image-list img")).toHaveAttribute("src", expect.stringContaining("data:image/png;base64,"));
+
+    fireEvent.click(screen.getByRole("button", { name: "展开代码" }));
+    const code = view.container.querySelector(".developer-code")?.textContent ?? "";
+    expect(code).toContain("data:image/png;base64,<BASE64_OF_shot.png>");
+    expect(code).not.toContain(btoa("not-a-real-png"));
+
+    // Raw JSON is what gets sent, so it holds the real bytes rather than the placeholder.
+    fireEvent.click(screen.getByRole("tab", { name: "原始 JSON" }));
+    const raw = screen.getByRole("textbox", { name: /原始请求 JSON/ }) as HTMLTextAreaElement;
+    expect(raw.value).toContain(btoa("not-a-real-png"));
+    expect(raw.value).not.toContain("BASE64_OF_");
+  });
+
+  it("refuses a file that is not an image and a body past the instance request limit", async () => {
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
+    vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080", max_request_bytes: 512 });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
+    await screen.findByRole("option", { name: "support-chat" });
+    fireEvent.change(screen.getByLabelText("Gateway Key"), { target: { value: "gw_debug_secret" } });
+
+    fireEvent.change(screen.getByLabelText("选择本地文件"), {
+      target: { files: [new File(["report"], "report.pdf", { type: "application/pdf" })] },
+    });
+    expect(await screen.findByRole("alert")).toHaveTextContent("只能选择图片文件。");
+    expect(screen.queryByRole("list", { name: "已添加的图片" })).toBeNull();
+
+    // A file too large to send is refused before it is read, not after it has been
+    // turned into base64.
+    fireEvent.change(screen.getByLabelText("选择本地文件"), {
+      target: { files: [new File(["x".repeat(2048)], "big.png", { type: "image/png" })] },
+    });
+    expect(await screen.findByRole("alert")).toHaveTextContent("超过实例请求体上限 512 B");
+
+    // A URL small enough to attach can still push the body past the limit.
+    fireEvent.change(screen.getByLabelText("图片输入"), { target: { value: `https://example.com/${"p".repeat(400)}.png` } });
+    fireEvent.click(screen.getByRole("button", { name: "添加" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "发送请求" })).toBeDisabled());
+    expect(screen.getByText(/超过实例上限 512 B/)).toBeVisible();
+  });
+
   it("resets raw JSON when the endpoint changes and supports keyboard tab navigation", async () => {
     vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
     vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });

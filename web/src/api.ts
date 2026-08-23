@@ -360,7 +360,7 @@ export const api = {
   deployments: () =>
     request<Page<Deployment>>("/deployments").then((value) => value.data),
   developerConfig: () =>
-    request<{ gateway_base_url: string; enabled?: boolean }>("/developer/config").then((value) => value.data),
+    request<{ gateway_base_url: string; enabled?: boolean; max_request_bytes?: number }>("/developer/config").then((value) => value.data),
   developerExecute: (endpoint: string, gatewayKey: string, value: unknown, streaming: boolean, signal: AbortSignal) => {
     const headers = new Headers({
       "Accept": streaming ? "text/event-stream" : "application/json",

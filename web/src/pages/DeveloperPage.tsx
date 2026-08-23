@@ -28,6 +28,17 @@ interface ExecutionState {
   error?: string;
 }
 
+/** An image the request carries. An inline image travels as a data URL built in this
+ * page; a remote one is only a URL — the console never fetches it, the provider does. */
+interface ImageInput {
+  id: string;
+  name: string;
+  url: string;
+  inline: boolean;
+  mediaType: string;
+  bytes: number;
+}
+
 const languages: Language[] = ["curl", "javascript", "python", "go", "java"];
 const maxResponseBytes = 1 << 20;
 // Re-rendering the whole body on every chunk is O(n²) over a long stream; sample instead.
@@ -51,6 +62,9 @@ export function DeveloperPage() {
   const [model, setModel] = useState("");
   const [endpoint, setEndpoint] = useState<Endpoint>("responses");
   const [input, setInput] = useState(() => t("developer.defaultInput"));
+  const [images, setImages] = useState<ImageInput[]>([]);
+  const [imageURL, setImageURL] = useState("");
+  const [imageProblem, setImageProblem] = useState("");
   // Debugging defaults to a standard response: it is the simpler thing to read back.
   const [stream, setStream] = useState(false);
   const [requestMode, setRequestMode] = useState<RequestMode>("form");
@@ -84,14 +98,24 @@ export function DeveloperPage() {
 
   // Embeddings cannot stream, but the preference survives so switching back restores it.
   const streamRequested = stream && endpoint !== "embeddings";
-  const formBody = useMemo(() => requestBody(endpoint, model, input, streamRequested), [endpoint, input, model, streamRequested]);
-  const [rawJSON, setRawJSON] = useState(() => JSON.stringify(requestBody("responses", "", t("developer.defaultInput"), false), null, 2));
+  // Embeddings has no multimodal input, so images stay out of its body — and survive the
+  // detour, the way the streaming preference does.
+  const formImages = useMemo(() => endpoint === "embeddings" ? [] : images, [endpoint, images]);
+  const formBody = useMemo(() => requestBody(endpoint, model, input, streamRequested, formImages), [endpoint, formImages, input, model, streamRequested]);
+  const [rawJSON, setRawJSON] = useState(() => JSON.stringify(requestBody("responses", "", t("developer.defaultInput"), false, []), null, 2));
   const parsedJSON = useMemo(() => parseJSON(rawJSON), [rawJSON]);
   const body = requestMode === "json" ? parsedJSON.value : formBody;
   const isStreaming = endpoint !== "embeddings" && body?.stream === true;
   const path = endpoint === "chat" ? "/v1/chat/completions" : `/v1/${endpoint}`;
   const gatewayURLValid = validGatewayBaseURL(gatewayURL);
-  const code = useMemo(() => body && gatewayURLValid ? codeExample(language, gatewayURL, path, body) : "", [body, gatewayURL, gatewayURLValid, language, path]);
+  // A local file is megabytes of base64: pasted into an integration sample it drowns the
+  // request it is meant to explain, so the sample names the file where the real request
+  // carries its bytes.
+  const sampleBody = useMemo(
+    () => requestMode === "json" ? body : requestBody(endpoint, model, input, streamRequested, formImages.map(sampleImage)),
+    [body, endpoint, formImages, input, model, requestMode, streamRequested],
+  );
+  const code = useMemo(() => sampleBody && gatewayURLValid ? codeExample(language, gatewayURL, path, sampleBody) : "", [gatewayURL, gatewayURLValid, language, path, sampleBody]);
   const running = execution.outcome === "running";
   const responseStreaming = execution.outcome === "idle" ? isStreaming : execution.streaming === true;
   // The Gateway URL only feeds the code sample; the real call always enters this Runtime,
@@ -101,7 +125,13 @@ export function DeveloperPage() {
     !model ? t("developer.publicModel") : "",
     !gatewayKey.trim() ? t("developer.gatewayKey") : "",
   ].filter(Boolean);
-  const canSend = missingRequirements.length === 0;
+  // An inline image is base64, so the body outgrows the Gateway's limit long before the
+  // file looks large. Measure what will actually be sent rather than spend a round trip
+  // on a 413.
+  const requestBytes = useMemo(() => body ? byteLength(JSON.stringify(body)) : 0, [body]);
+  const requestLimit = developerConfig.data?.max_request_bytes ?? 0;
+  const oversized = requestLimit > 0 && requestBytes > requestLimit;
+  const canSend = missingRequirements.length === 0 && !oversized;
   const executionLabel = execution.outcome === "running" ? t("developer.requestRunning") :
     execution.outcome === "completed" ? t("developer.requestCompleted") :
       execution.outcome === "httpError" ? t("developer.requestHTTPError", { status: execution.status ?? "" }) :
@@ -139,7 +169,7 @@ export function DeveloperPage() {
   const selectEndpoint = (next: Endpoint) => {
     setEndpoint(next);
     if (requestMode === "json") {
-      setRawJSON(JSON.stringify(requestBody(next, model, input, stream && next !== "embeddings"), null, 2));
+      setRawJSON(JSON.stringify(requestBody(next, model, input, stream && next !== "embeddings", next === "embeddings" ? [] : images), null, 2));
     }
   };
   const queryClient = useQueryClient();
@@ -166,6 +196,45 @@ export function DeveloperPage() {
       notify({ tone: "success", title: t("developer.notifyKeyCreated"), description: created.data.metadata.name });
     },
   });
+  const addImageURL = () => {
+    const image = imageFromURL(imageURL.trim());
+    if (!image) {
+      setImageProblem(t("developer.imageURLInvalid"));
+      return;
+    }
+    if (requestLimit > 0 && image.bytes > requestLimit) {
+      setImageProblem(t("developer.imageTooLarge", { name: image.name, limit: formatBytes(requestLimit) }));
+      return;
+    }
+    setImageProblem("");
+    setImages((current) => [...current, image]);
+    setImageURL("");
+  };
+  const addImageFiles = async (files: FileList | null) => {
+    const accepted: ImageInput[] = [];
+    let problem = "";
+    for (const file of Array.from(files ?? [])) {
+      if (!file.type.startsWith("image/")) {
+        problem = t("developer.imageFileType");
+        continue;
+      }
+      // Refuse before reading: a file too large to send is also large enough to
+      // stall the page while it is turned into base64.
+      if (requestLimit > 0 && base64Bytes(file.size) > requestLimit) {
+        problem = t("developer.imageTooLarge", { name: file.name, limit: formatBytes(requestLimit) });
+        continue;
+      }
+      try {
+        const url = await readDataURL(file);
+        accepted.push({ id: crypto.randomUUID(), name: file.name, url, inline: true, mediaType: file.type, bytes: byteLength(url) });
+      } catch {
+        problem = t("developer.imageReadFailed");
+      }
+    }
+    setImageProblem(problem);
+    if (accepted.length) setImages((current) => [...current, ...accepted]);
+  };
+  const removeImage = (id: string) => setImages((current) => current.filter((image) => image.id !== id));
   const cancelExecution = () => executionController.current?.abort();
   const execute = async () => {
     if (!body || !canSend || running) return;
@@ -338,6 +407,67 @@ export function DeveloperPage() {
                   <Field label={t("developer.input")}>
                     <textarea rows={6} value={input} placeholder={t("developer.inputPlaceholder")} onChange={(event) => setInput(event.target.value)} />
                   </Field>
+                  {endpoint !== "embeddings" && (
+                    <div className="field developer-image-field">
+                      <label htmlFor="developer-image-url">{t("developer.images")}</label>
+                      <div className="developer-image-add">
+                        <input
+                          id="developer-image-url"
+                          type="url"
+                          value={imageURL}
+                          spellCheck={false}
+                          placeholder={t("developer.imageURLPlaceholder")}
+                          aria-describedby="developer-image-hint"
+                          onChange={(event) => setImageURL(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key !== "Enter") return;
+                            event.preventDefault();
+                            addImageURL();
+                          }}
+                        />
+                        <button type="button" className="button secondary" disabled={!imageURL.trim()} onClick={addImageURL}>{t("developer.addImage")}</button>
+                        {/* The visible control is a label bound to the file input, which
+                            stays in the accessibility tree behind it: a button that
+                            forwarded the click would leave the input unnamed. */}
+                        <label className="button ghost developer-image-file" htmlFor="developer-image-file">{t("developer.chooseImageFile")}</label>
+                        <input
+                          id="developer-image-file"
+                          className="visually-hidden"
+                          type="file"
+                          accept="image/*"
+                          multiple
+                          onChange={(event) => {
+                            void addImageFiles(event.target.files);
+                            // Clearing it lets the same file be picked again after a removal.
+                            event.target.value = "";
+                          }}
+                        />
+                      </div>
+                      {imageProblem && <small className="developer-image-problem" role="alert">{imageProblem}</small>}
+                      {images.length > 0 && (
+                        <ul className="developer-image-list" aria-label={t("developer.imageList")}>
+                          {images.map((image) => (
+                            <li key={image.id}>
+                              {/* Only a data URL is previewed: the console's CSP allows no
+                                  remote image, and fetching one here would not prove the
+                                  provider can reach it either. */}
+                              {image.inline
+                                ? <img src={image.url} alt="" />
+                                : <span className="developer-image-remote" aria-hidden="true">URL</span>}
+                              <div>
+                                <strong title={image.inline ? image.name : image.url}>{image.name}</strong>
+                                <small>{image.inline ? formatBytes(image.bytes) : t("developer.imageRemote")}</small>
+                              </div>
+                              <button type="button" className="button ghost" onClick={() => removeImage(image.id)}>
+                                {t("developer.removeImage")}
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                      <small id="developer-image-hint">{t("developer.imagesHint")}</small>
+                    </div>
+                  )}
                   <div className="developer-response-mode">
                     <span>{t("developer.responseMode")}</span>
                     <div role="group" aria-label={t("developer.responseMode")}>
@@ -357,6 +487,7 @@ export function DeveloperPage() {
               <div><small>{t("developer.method")}</small><strong>POST</strong></div>
               <div><small>{t("developer.path")}</small><code>{path}</code></div>
               <div><small>{t("developer.auth")}</small><strong>{t("developer.authValue")}</strong></div>
+              <div><small>{t("developer.bodySize")}</small><strong>{requestLimit > 0 ? `${formatBytes(requestBytes)} / ${formatBytes(requestLimit)}` : formatBytes(requestBytes)}</strong></div>
             </div>
             <div className="developer-send-bar">
               <p className="developer-send-note">{t("developer.costReminder")}</p>
@@ -373,7 +504,9 @@ export function DeveloperPage() {
                 )}
               </div>
               <p className="developer-send-missing" role="status">
-                {!running && missingRequirements.length ? t("developer.missingRequirements", { fields: missingRequirements.join("、") }) : ""}
+                {running ? "" :
+                  missingRequirements.length ? t("developer.missingRequirements", { fields: missingRequirements.join("、") }) :
+                    oversized ? t("developer.requestTooLarge", { size: formatBytes(requestBytes), limit: formatBytes(requestLimit) }) : ""}
               </p>
             </div>
             </div>
@@ -496,10 +629,68 @@ function parseJSON(value: string): { value?: Record<string, unknown>; error: boo
   }
 }
 
-function requestBody(endpoint: Endpoint, model: string, input: string, stream: boolean) {
-  if (endpoint === "chat") return { model, messages: [{ role: "user", content: input }], stream };
+function requestBody(endpoint: Endpoint, model: string, input: string, stream: boolean, images: readonly ImageInput[]) {
   if (endpoint === "embeddings") return { model, input };
-  return { model, input, stream };
+  if (endpoint === "chat") {
+    const content = images.length
+      ? [{ type: "text", text: input }, ...images.map((image) => ({ type: "image_url", image_url: { url: image.url } }))]
+      : input;
+    return { model, messages: [{ role: "user", content }], stream };
+  }
+  if (!images.length) return { model, input, stream };
+  // Responses carries the image on the message item, and its content parts are decoded
+  // strictly: image_url is the URL itself, not an object.
+  const content = [
+    { type: "input_text", text: input },
+    ...images.map((image) => ({ type: "input_image", image_url: image.url })),
+  ];
+  return { model, input: [{ type: "message", role: "user", content }], stream };
+}
+
+/** The integration sample stands in for the base64 rather than reprinting it. */
+function sampleImage(image: ImageInput): ImageInput {
+  return image.inline ? { ...image, url: `data:${image.mediaType};base64,<BASE64_OF_${image.name}>` } : image;
+}
+
+function imageFromURL(value: string): ImageInput | null {
+  const inline = /^data:(image\/[a-z0-9.+-]+);base64,[A-Za-z0-9+/]+={0,2}$/i.exec(value);
+  if (inline) {
+    const mediaType = inline[1].toLowerCase();
+    return { id: crypto.randomUUID(), name: `image.${mediaType.slice("image/".length)}`, url: value, inline: true, mediaType, bytes: byteLength(value) };
+  }
+  try {
+    const parsed = new URL(value);
+    // Credentials in the URL would be handed to the provider verbatim and echoed back in
+    // the code sample, so they are refused rather than carried.
+    if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || parsed.username || parsed.password) return null;
+    const name = parsed.pathname.split("/").filter(Boolean).pop();
+    return { id: crypto.randomUUID(), name: name || parsed.host, url: value, inline: false, mediaType: "", bytes: byteLength(value) };
+  } catch {
+    return null;
+  }
+}
+
+function readDataURL(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("image file is unreadable"));
+    reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("image file is unreadable"));
+    reader.readAsDataURL(file);
+  });
+}
+
+function base64Bytes(size: number) {
+  return Math.ceil(size / 3) * 4;
+}
+
+function byteLength(value: string) {
+  return new TextEncoder().encode(value).length;
+}
+
+function formatBytes(value: number) {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function languageLabel(language: Language) {
