@@ -271,6 +271,31 @@ describe("DeveloperPage", () => {
     expect(new URLSearchParams(window.location.search).get("request_id")).toBe("req_debug_1");
   });
 
+  // "The body is empty" is a finding, and in flight it is the wrong one: nothing
+  // has arrived yet. A standard response shows nothing at all until it completes,
+  // so the panel used to read as an answer for the whole of a slow call.
+  it("says it is waiting rather than reporting an empty body", async () => {
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
+    vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });
+    let answer: (value: Response) => void = () => {};
+    vi.spyOn(api, "developerExecute").mockImplementation(() => new Promise<Response>((resolve) => { answer = resolve; }));
+    vi.spyOn(api, "usageRequest").mockRejectedValue(new Error("no usage"));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
+    await screen.findByRole("option", { name: "support-chat" });
+    fireEvent.change(screen.getByLabelText("Gateway Key"), { target: { value: "gw_debug_secret" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "发送请求" }));
+    expect(await screen.findByText("等待上游返回")).toBeVisible();
+    expect(screen.queryByText("响应体为空")).not.toBeInTheDocument();
+
+    answer(new Response(JSON.stringify({ id: "resp_1" }), {
+      status: 200, headers: { "Content-Type": "application/json" },
+    }));
+    expect(await screen.findByText(/resp_1/)).toBeVisible();
+    expect(screen.queryByText("等待上游返回")).not.toBeInTheDocument();
+  });
+
   it("renders SSE data and cancels an in-flight request", async () => {
     vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
     vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });

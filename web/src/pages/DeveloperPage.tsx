@@ -117,6 +117,9 @@ export function DeveloperPage() {
   );
   const code = useMemo(() => sampleBody && gatewayURLValid ? codeExample(language, gatewayURL, path, sampleBody) : "", [gatewayURL, gatewayURLValid, language, path, sampleBody]);
   const running = execution.outcome === "running";
+  // Headers land before the body does, so the wait is only over the body pane;
+  // switching to headers mid-flight should show what has already arrived.
+  const waitingForFirstBytes = running && responseView === "body" && execution.body === "";
   const responseStreaming = execution.outcome === "idle" ? isStreaming : execution.streaming === true;
   // The Gateway URL only feeds the code sample; the real call always enters this Runtime,
   // so an unusable URL must not block sending.
@@ -567,6 +570,16 @@ export function DeveloperPage() {
                 {execution.outcome === "idle" ? <div className="developer-response-empty" data-view={responseView}>
                   <span aria-hidden="true">{responseView === "body" ? "{ }" : "H"}</span>
                   <div><strong>{t("developer.awaitingResponse")}</strong><p>{responseView === "body" ? t("developer.awaitingBody") : t("developer.awaitingHeaders")}</p></div>
+                </div> : waitingForFirstBytes ? <div className="developer-response-waiting">
+                  {/* "The body is empty" is a finding, and while the request is in
+                      flight it is the wrong one: nothing has arrived yet. A
+                      standard response shows nothing at all until it completes,
+                      so without this the panel reads as an answer. */}
+                  <span className="loading-bar" aria-hidden="true" />
+                  <div>
+                    <strong>{t(responseStreaming ? "developer.waitingForFirstEvent" : "developer.waitingForResponse")}</strong>
+                    <p>{t("developer.waitingDescription")}</p>
+                  </div>
                 </div> : <div className="developer-response-result">
                   <pre tabIndex={0} role="region" aria-label={responseView === "body" ? t("developer.responseBody") : t("developer.responseHeaders")}><code>{responseView === "body" ? execution.body || (execution.outcome === "failed" ? execution.error : "") || t("developer.emptyResponseBody") : execution.headers || t("developer.awaitingHeaders")}</code></pre>
                 </div>}

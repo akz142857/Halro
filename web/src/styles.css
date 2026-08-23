@@ -1724,6 +1724,12 @@ textarea { resize: vertical; }
 .loading-bar { position: relative; width: 42px; height: 2px; overflow: hidden; background: var(--line); }
 .loading-bar::after { content: ""; position: absolute; width: 50%; height: 100%; background: var(--lime); animation: load 1s infinite ease-in-out; }
 @keyframes load { from { transform: translateX(-110%); } to { transform: translateX(220%); } }
+/* The waiting state runs for as long as a provider takes, which is the longest
+   any of these animations is on screen. A reader who asked for less motion gets
+   a bar that still says "something is in flight" without the travel. */
+@media (prefers-reduced-motion: reduce) {
+	.loading-bar::after { animation: none; width: 100%; opacity: .55; }
+}
 .boot { min-height: 100vh; display: grid; place-content: center; justify-items: center; gap: 18px; }
 .not-found { padding: 15vh 0; }
 .crash-panel { margin: 32px 0; padding: 28px 30px; background: var(--surface-panel); border: 1px solid var(--color-status-danger-border); border-left-width: 3px; }
@@ -1845,6 +1851,10 @@ textarea { resize: vertical; }
 .developer-response-empty > span { display: grid; flex: 0 0 42px; width: 42px; height: 42px; place-items: center; border: 1px solid var(--accent-border); border-radius: var(--radius-md); color: var(--color-action-primary); background: var(--accent-tint); font: var(--font-size-sm) var(--mono); }
 .developer-response-empty strong { font-size: var(--font-size-md); }
 .developer-response-empty p { max-width: 560px; margin: 7px 0 0; color: var(--muted); font-size: var(--font-size-xs); line-height: 1.55; }
+.developer-response-waiting { display: flex; align-items: center; gap: var(--space-3); min-height: 300px; padding: var(--space-5) var(--space-6); }
+.developer-response-waiting > div { display: grid; gap: var(--space-1); }
+.developer-response-waiting strong { color: var(--text); font-size: var(--font-size-sm); }
+.developer-response-waiting p { margin: 0; color: var(--muted); font-size: var(--font-size-xs); line-height: 1.55; }
 .developer-response-result { min-height: 220px; background: var(--surface-deep); }
 .developer-execution-status { min-height: 36px; padding: 11px 18px; border-bottom: 1px solid var(--line); color: var(--muted); background: var(--surface); font: var(--font-size-xs) var(--font-sans); }
 .developer-execution-status.completed { color: var(--lime); }
