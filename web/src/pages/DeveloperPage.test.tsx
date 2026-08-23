@@ -355,6 +355,11 @@ describe("DeveloperPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "发送请求" }));
     fireEvent.click(await screen.findByRole("button", { name: "取消请求" }));
     expect(await screen.findByText("请求已取消")).toBeVisible();
+    // "The body is empty" is a finding about a response that arrived. A request
+    // cancelled before one did has none to report on, and saying it is empty
+    // reads as an answer about the provider.
+    expect(screen.getByText("已取消，未收到响应体")).toBeVisible();
+    expect(screen.queryByText("响应体为空")).not.toBeInTheDocument();
     expect(execute).toHaveBeenCalledTimes(2);
   });
 

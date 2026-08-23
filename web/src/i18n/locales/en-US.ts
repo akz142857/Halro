@@ -210,6 +210,7 @@ export const enUS = {
     responseTruncated: "Response exceeded 1 MiB; further reading was cancelled",
     missingResponseBody: "The server returned no readable response body",
     emptyResponseBody: "The response body is empty",
+    cancelledBeforeBody: "Cancelled before a response body arrived",
     response: "Response inspector",
     responseDescription: "Shows the real HTTP status, Request ID, end-to-end latency, headers, and body. SSE events appear incrementally in arrival order.",
     responseMetadata: "Response metadata",

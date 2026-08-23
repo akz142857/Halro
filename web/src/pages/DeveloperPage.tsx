@@ -599,9 +599,12 @@ export function DeveloperPage() {
                       aria-label={t(responseView === "body" ? "developer.copyResponseBody" : "developer.copyResponseHeaders")}
                     >
                       <CopyIcon />
-                      <span role="status" aria-live="polite">{responseCopyStatus}</span>
                     </button>
                   )}
+                  {/* Beside the control rather than inside it, matching the code
+                      sample's copy: a live region nested in a button is an
+                      unusual shape for one page to have two of. */}
+                  <span className="developer-response-copy-status" role="status" aria-live="polite">{responseCopyStatus}</span>
                 </div>
                 {execution.outcome === "idle" ? <div className="developer-response-empty" data-view={responseView}>
                   <span aria-hidden="true">{responseView === "body" ? "{ }" : "H"}</span>
@@ -617,7 +620,7 @@ export function DeveloperPage() {
                     <p>{t("developer.waitingDescription")}</p>
                   </div>
                 </div> : <div className="developer-response-result">
-                  <pre tabIndex={0} role="region" aria-label={responseView === "body" ? t("developer.responseBody") : t("developer.responseHeaders")}><code>{responseView === "body" ? execution.body || (execution.outcome === "failed" ? execution.error : "") || t("developer.emptyResponseBody") : execution.headers || t("developer.awaitingHeaders")}</code></pre>
+                  <pre tabIndex={0} role="region" aria-label={responseView === "body" ? t("developer.responseBody") : t("developer.responseHeaders")}><code>{responseView === "body" ? execution.body || (execution.outcome === "failed" ? execution.error : "") || t(execution.outcome === "cancelled" ? "developer.cancelledBeforeBody" : "developer.emptyResponseBody") : execution.headers || t("developer.awaitingHeaders")}</code></pre>
                 </div>}
               </div>
               <footer className="developer-response-footnote">{t("developer.responseDescription")}</footer>

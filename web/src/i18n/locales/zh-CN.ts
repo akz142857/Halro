@@ -210,6 +210,7 @@ export const zhCN = {
     responseTruncated: "响应超过 1 MiB，已截断并取消继续读取",
     missingResponseBody: "服务端没有返回可读取的响应体",
     emptyResponseBody: "响应体为空",
+    cancelledBeforeBody: "已取消，未收到响应体",
     response: "响应检查器",
     responseDescription: "展示真实 HTTP 状态、Request ID、端到端耗时、响应头和响应正文；SSE 事件按到达顺序增量显示。",
     responseMetadata: "响应元数据",
