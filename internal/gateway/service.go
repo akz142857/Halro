@@ -899,7 +899,7 @@ func (s *Service) Chat(
 	if err != nil {
 		return openaiapi.ChatCompletionResponse{}, gatewayError("invalid_request_error", "redacted request cannot be represented safely", 400, err)
 	}
-	inputTokens := estimateInputTokens(request.EstimatedInputBytes())
+	inputTokens := estimateGenerateInputTokens(request.EstimatedInputBytes(), canonical)
 	if principal.Project.MaxInputTokens > 0 && inputTokens > principal.Project.MaxInputTokens {
 		return openaiapi.ChatCompletionResponse{}, gatewayError("token_limit_exceeded", "estimated input tokens exceed the project limit", 400, nil)
 	}
@@ -1790,7 +1790,7 @@ func (s *Service) ChatStream(
 	if err != nil {
 		return gatewayError("invalid_request_error", "redacted request cannot be represented safely", 400, err)
 	}
-	inputTokens := estimateInputTokens(request.EstimatedInputBytes())
+	inputTokens := estimateGenerateInputTokens(request.EstimatedInputBytes(), canonical)
 	if principal.Project.MaxInputTokens > 0 && inputTokens > principal.Project.MaxInputTokens {
 		return gatewayError("token_limit_exceeded", "estimated input tokens exceed the project limit", 400, nil)
 	}
@@ -2688,6 +2688,28 @@ func estimateInputTokens(bytes int64) int64 {
 		return 1
 	}
 	return (bytes + 3) / 4
+}
+
+// estimateGenerateInputTokens is estimateInputTokens for a request that may carry
+// images. The wire bytes include each image's URL — a data URL is the whole
+// picture in base64 — and counting that as text is how a 400 KB photograph became
+// a six-figure token estimate. Take those bytes back out and charge each image the
+// ceiling in semantic instead.
+func estimateGenerateInputTokens(bytes int64, request semantic.GenerateRequest) int64 {
+	images := int64(0)
+	for _, message := range request.Messages {
+		for _, part := range message.Content {
+			if part.Kind != semantic.ContentInputImage {
+				continue
+			}
+			images++
+			bytes -= int64(len(part.URL))
+		}
+	}
+	if images == 0 {
+		return estimateInputTokens(bytes)
+	}
+	return estimateInputTokens(bytes) + images*semantic.ImageInputTokenCeiling
 }
 
 func addTokens(left, right int64) (int64, error) {

@@ -1172,6 +1172,62 @@ func TestSemanticCapabilityFilterRequiresTheCapabilityItFiltersOn(t *testing.T) 
 	}
 }
 
+// A data URL is the picture itself in base64. Counting it at the text ratio put a
+// modest photograph six figures of tokens over a project limit no provider would
+// have applied, and that same estimate bounds the deployment context window, the
+// TPM lease and the budget reservation.
+func TestImageInputIsEstimatedAtItsCeilingNotItsEncodedLength(t *testing.T) {
+	dataURL := "data:image/png;base64," + strings.Repeat("A", 400_000)
+	withImage := semantic.GenerateRequest{Messages: []semantic.Message{{
+		Role: semantic.RoleUser,
+		Content: []semantic.Content{
+			{Kind: semantic.ContentText, Text: "describe this"},
+			{Kind: semantic.ContentInputImage, URL: dataURL},
+		},
+	}}}
+	// The wire bytes the facade would report: the whole body, image included.
+	wireBytes := int64(len(dataURL) + len("describe this") + 64)
+
+	estimate := estimateGenerateInputTokens(wireBytes, withImage)
+	if estimate > semantic.ImageInputTokenCeiling+64 {
+		t.Fatalf("image estimated at %d tokens; the ceiling is %d", estimate, semantic.ImageInputTokenCeiling)
+	}
+	if estimate <= semantic.ImageInputTokenCeiling {
+		t.Fatalf("image estimated at %d tokens, which does not charge the ceiling plus its prompt", estimate)
+	}
+	if plain := estimateInputTokens(wireBytes); plain <= estimate*10 {
+		t.Fatalf("the text estimate %d was not the outsized one this replaces", plain)
+	}
+
+	// Two images cost two ceilings, and a request without one is untouched.
+	twoImages := withImage
+	twoImages.Messages = []semantic.Message{{Role: semantic.RoleUser, Content: append(
+		append([]semantic.Content{}, withImage.Messages[0].Content...),
+		semantic.Content{Kind: semantic.ContentInputImage, URL: dataURL},
+	)}}
+	if got := estimateGenerateInputTokens(wireBytes+int64(len(dataURL)), twoImages); got-estimate != semantic.ImageInputTokenCeiling {
+		t.Fatalf("second image added %d tokens", got-estimate)
+	}
+	textOnly := semantic.GenerateRequest{Messages: []semantic.Message{{
+		Role: semantic.RoleUser, Content: []semantic.Content{{Kind: semantic.ContentText, Text: "hello"}},
+	}}}
+	if got := estimateGenerateInputTokens(400, textOnly); got != estimateInputTokens(400) {
+		t.Fatalf("a request without an image estimated %d, not %d", got, estimateInputTokens(400))
+	}
+}
+
+// A remote URL is a few dozen bytes either way, but it is still not prose, and a
+// request that carries one is still asking a model to look at a picture.
+func TestRemoteImageURLAlsoChargesTheCeiling(t *testing.T) {
+	request := semantic.GenerateRequest{Messages: []semantic.Message{{
+		Role:    semantic.RoleUser,
+		Content: []semantic.Content{{Kind: semantic.ContentInputImage, URL: "https://example.invalid/a.png"}},
+	}}}
+	if got := estimateGenerateInputTokens(120, request); got < semantic.ImageInputTokenCeiling {
+		t.Fatalf("remote image estimated %d tokens", got)
+	}
+}
+
 func TestTokenCapabilityFilterHonorsContextAndOutputLimits(t *testing.T) {
 	targets := []provider.Target{
 		{ID: "small", Capabilities: provider.Capabilities{MaxContextTokens: 100, MaxOutputTokens: 20}},

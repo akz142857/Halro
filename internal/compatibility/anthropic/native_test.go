@@ -8,6 +8,7 @@ import (
 	"github.com/akz142857/Halro/internal/anthropicapi"
 	"github.com/akz142857/Halro/internal/compatibility"
 	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/semantic"
 )
 
 func TestNativeEnvelopePreservesThinkingSignature(t *testing.T) {
@@ -62,8 +63,39 @@ func TestNativeRequirementsCountDocumentsAsMultimodalInput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !NativeRequirements(request).InputImage {
+	if !NativeRequirements(request).Vision {
 		t.Fatal("a document input did not declare multimodal input")
+	}
+}
+
+// Native is the mode that carries an image as base64 inside the payload, so the
+// governance estimate is where a picture priced as prose does its damage: the
+// project input limit, the deployment context window, the TPM lease and the
+// budget reservation are all measured against this number.
+func TestNativeGovernanceEstimatesAnInlineImageAtItsCeiling(t *testing.T) {
+	base64Image := strings.Repeat("A", 400_000)
+	payload := []byte(`{"model":"m","max_tokens":10,"messages":[{"role":"user","content":[{"type":"text","text":"describe this"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"` + base64Image + `"}}]}]}`)
+	governance, err := extractNativeGovernance(compatibility.NativeRequest, payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if governance.EstimatedInputTokens > semantic.ImageInputTokenCeiling+64 {
+		t.Fatalf("inline image estimated at %d tokens; the ceiling is %d",
+			governance.EstimatedInputTokens, semantic.ImageInputTokenCeiling)
+	}
+	if governance.EstimatedInputTokens <= semantic.ImageInputTokenCeiling {
+		t.Fatalf("inline image estimated at %d tokens, which does not charge the ceiling plus its prompt",
+			governance.EstimatedInputTokens)
+	}
+
+	// A payload with no image is still measured the old way, byte for byte.
+	textOnly := []byte(`{"model":"m","max_tokens":10,"messages":[{"role":"user","content":"hello"}]}`)
+	plain, err := extractNativeGovernance(compatibility.NativeRequest, textOnly)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.EstimatedInputTokens != int64((len(textOnly)+3)/4) {
+		t.Fatalf("text-only payload estimated %d tokens for %d bytes", plain.EstimatedInputTokens, len(textOnly))
 	}
 }
 

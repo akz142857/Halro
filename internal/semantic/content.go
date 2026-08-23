@@ -6,6 +6,53 @@ import (
 
 const MaxToolArgumentsBytes = 1 << 20
 
+// ImageInputTokenCeiling is what one image input contributes to a pre-flight
+// token estimate.
+//
+// An image arrives either as a URL or as base64, and neither is prose: charging
+// the encoded bytes at the text ratio estimates six figures of tokens for a
+// picture every provider bills in the hundreds. That estimate is not advisory —
+// it is what the project input limit, the deployment context window, the TPM
+// lease and the budget reservation are all measured against, so an image that
+// is counted as text is refused before it reaches a provider that would have
+// accepted it happily.
+//
+// The value is a ceiling over the published image accounting of the providers
+// this gateway routes to — OpenAI's high-detail tiling tops out at 1,445 tokens
+// on gpt-4o and 2,500 patches on the 5-series, Anthropic's (w×h)/750 caps near
+// 1,600 — so the guards stay conservative. It is deliberately not a per-provider
+// table: a pre-flight estimate that tried to model each provider's tiling would
+// claim a precision it cannot have before the image is decoded, and settlement
+// uses provider-reported usage regardless.
+const ImageInputTokenCeiling = 2500
+
+// Inline reports whether this content carries its bytes rather than an address
+// somebody has to go and get. Only an image has the distinction today, and it is
+// answered here because Content owns the URL: the routing filter, the token
+// estimate and every wire renderer were each deciding it separately, and a data
+// URL that one of them read as an address is how an inline picture reached a
+// provider as a link to nowhere.
+func (c Content) Inline() bool {
+	// The scheme is case-insensitive (RFC 3986 §3.1), and a sender that spells it
+	// `DATA:` is still carrying its bytes. Compared by hand rather than with
+	// strings.EqualFold because this package's import allowlist is an executable
+	// architecture rule, and five ASCII bytes are not worth widening it for.
+	const scheme = "data:"
+	if len(c.URL) < len(scheme) {
+		return false
+	}
+	for index := 0; index < len(scheme); index++ {
+		actual := c.URL[index]
+		if actual >= 'A' && actual <= 'Z' {
+			actual += 'a' - 'A'
+		}
+		if actual != scheme[index] {
+			return false
+		}
+	}
+	return true
+}
+
 type Role string
 
 const (
