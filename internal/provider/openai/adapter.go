@@ -610,9 +610,20 @@ func classifyHTTPError(status int, refusal upstreamRefusal) *provider.Error {
 	case status == http.StatusTooManyRequests:
 		result.Class = provider.ErrorRateLimit
 		result.Retryable = true
-	case status >= 500:
+	case status == http.StatusServiceUnavailable:
+		// A stated refusal to take the request on. Nothing ran, so a fallback
+		// deployment can serve it and the attempt owes nothing.
 		result.Class = provider.ErrorProvider5xx
 		result.Retryable = true
+	case status >= 500:
+		// The request reached the upstream and no authoritative result came
+		// back. A 500 can be raised part-way through a generation, and a 502 or
+		// 504 comes from the edge while the origin may still be running and
+		// billing. Retrying would duplicate that generation and settling it as
+		// free would hide the charge, so it is ambiguous — the same answer the
+		// Bedrock and Gemini profiles already give for their own 5xx.
+		result.Class = provider.ErrorProvider5xx
+		result.Ambiguous = true
 	default:
 		result.Class = provider.ErrorBadRequest
 	}

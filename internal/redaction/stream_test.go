@@ -1,7 +1,9 @@
 package redaction
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -65,6 +67,56 @@ func TestRollingStreamReplacesMandatorySecretAcrossChunks(t *testing.T) {
 	}
 }
 
+func TestRollingStreamKeepsByteOrderWhenTerminalChunkCarriesContent(t *testing.T) {
+	stream, err := NewDefault().NewStream("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The mandatory rules alone hold back a couple of kilobytes, so both halves
+	// have to be larger than that for the flush to overlap the terminal chunk.
+	whole := countedText(1000)
+	first, second := whole[:len(whole)/2], whole[len(whole)/2:]
+	finish := "stop"
+	var output strings.Builder
+	for _, chunk := range []openaiapi.ChatCompletionResponse{
+		textDelta(first, nil), textDelta(second, &finish),
+	} {
+		chunks, processErr := stream.Process(chunk)
+		if processErr != nil {
+			t.Fatal(processErr)
+		}
+		for index, safe := range chunks {
+			if safe.Choices[0].FinishReason != nil && index != len(chunks)-1 {
+				t.Fatalf("terminal marker was not the last chunk: %#v", chunks)
+			}
+		}
+		appendStreamText(&output, chunks)
+	}
+	if got := output.String(); got != whole {
+		t.Fatalf("stream text was reordered: diverges from the provider text at byte %d",
+			divergence(got, whole))
+	}
+}
+
+// countedText builds a string whose every ten bytes name their own position, so
+// a transposition of two equally sized runs cannot hide.
+func countedText(segments int) string {
+	var value strings.Builder
+	for index := range segments {
+		fmt.Fprintf(&value, "%09d ", index)
+	}
+	return value.String()
+}
+
+func divergence(got, want string) int {
+	for index := range min(len(got), len(want)) {
+		if got[index] != want[index] {
+			return index
+		}
+	}
+	return min(len(got), len(want))
+}
+
 func TestRollingStreamRejectsUnicodeDictionaryAcrossChunks(t *testing.T) {
 	engine := streamTestEngine(t, domain.RedactionRule{
 		ID: "deny", Name: "Deny", Kind: "dictionary", Dictionary: []string{"高度机密"},
@@ -114,6 +166,72 @@ func TestRollingStreamRejectsTransformInParallelToolArgumentFragments(t *testing
 	}
 	if !errors.Is(err, ErrPolicyRejected) {
 		t.Fatalf("streaming tool argument transform did not fail closed: %v", err)
+	}
+}
+
+// A tool call's arguments reach the client as a JSON document it decodes, so an
+// escaped character inside a secret defeats every pattern in the raw fragment
+// and is reconstituted downstream. The unary path decodes before matching and
+// catches it; the streaming path has to reach the same verdict.
+func TestRollingStreamRejectsEscapedSecretThatUnaryPathRedacts(t *testing.T) {
+	const arguments = `{"note":"sk-ant-\u0061pi03aaaaaaaaaaaaaaaa"}`
+	var reconstituted struct {
+		Note string `json:"note"`
+	}
+	if err := json.Unmarshal([]byte(arguments), &reconstituted); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(reconstituted.Note, "sk-ant-api03") {
+		t.Fatalf("fixture does not reconstitute a secret: %q", reconstituted.Note)
+	}
+	unary := NewDefault().SanitizeOutboundChat(toolMessage(arguments))
+	if got := unary.Choices[0].Message.ToolCalls[0].Function.Arguments; strings.Contains(got, "sk-ant-") {
+		t.Fatalf("unary baseline no longer redacts the escaped secret: %q", got)
+	}
+	// Split mid-escape so the incremental decoder has to carry the partial
+	// sequence across fragments.
+	zero := 0
+	stream, err := NewDefault().NewStream("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, piece := range []string{`{"note":"sk-ant-\u00`, `61pi03aaaaaaaaaaaaaaaa"}`} {
+		if _, err = stream.Process(toolDelta(&zero, piece)); err != nil {
+			break
+		}
+	}
+	if err == nil {
+		_, err = stream.Flush()
+	}
+	if !errors.Is(err, ErrPolicyRejected) {
+		t.Fatalf("escaped secret passed the streaming mandatory baseline: %v", err)
+	}
+}
+
+func TestRollingStreamPassesToolArgumentsWithOrdinaryEscapes(t *testing.T) {
+	zero := 0
+	stream, err := NewDefault().NewStream("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunks, err := stream.Process(toolDelta(&zero, `{"note":"line\none\ttwo \"quoted\" 中文 😀"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	flushed, err := stream.Flush()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output strings.Builder
+	for _, chunk := range append(chunks, flushed...) {
+		for _, choice := range chunk.Choices {
+			for _, call := range choice.Delta.ToolCalls {
+				output.WriteString(call.Function.Arguments)
+			}
+		}
+	}
+	if got := output.String(); got != `{"note":"line\none\ttwo \"quoted\" 中文 😀"}` {
+		t.Fatalf("escaped tool arguments were altered: %q", got)
 	}
 }
 
@@ -209,6 +327,18 @@ func toolDelta(index *int, arguments string) openaiapi.ChatCompletionResponse {
 		Choices: []openaiapi.Choice{{
 			Index: 0, Delta: &openaiapi.Message{ToolCalls: []openaiapi.ToolCall{{
 				Index: index, Type: "function",
+				Function: openaiapi.ToolCallFunction{Name: "lookup", Arguments: arguments},
+			}}},
+		}},
+	}
+}
+
+func toolMessage(arguments string) openaiapi.ChatCompletionResponse {
+	return openaiapi.ChatCompletionResponse{
+		ID: "completion", Object: "chat.completion", Model: "provider",
+		Choices: []openaiapi.Choice{{
+			Index: 0, Message: &openaiapi.Message{Role: "assistant", ToolCalls: []openaiapi.ToolCall{{
+				ID: "call_1", Type: "function",
 				Function: openaiapi.ToolCallFunction{Name: "lookup", Arguments: arguments},
 			}}},
 		}},

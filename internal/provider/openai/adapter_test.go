@@ -423,20 +423,25 @@ func TestFakeProviderHTTPErrorMatrix(t *testing.T) {
 		status    int
 		class     provider.ErrorClass
 		retryable bool
+		ambiguous bool
 	}{
-		{http.StatusBadRequest, provider.ErrorBadRequest, false},
-		{http.StatusUnauthorized, provider.ErrorAuthentication, false},
-		{http.StatusForbidden, provider.ErrorAuthentication, false},
-		{http.StatusRequestTimeout, provider.ErrorTimeout, true},
-		{http.StatusTooManyRequests, provider.ErrorRateLimit, true},
-		{http.StatusInternalServerError, provider.ErrorProvider5xx, true},
-		{http.StatusBadGateway, provider.ErrorProvider5xx, true},
-		{http.StatusServiceUnavailable, provider.ErrorProvider5xx, true},
+		{http.StatusBadRequest, provider.ErrorBadRequest, false, false},
+		{http.StatusUnauthorized, provider.ErrorAuthentication, false, false},
+		{http.StatusForbidden, provider.ErrorAuthentication, false, false},
+		{http.StatusRequestTimeout, provider.ErrorTimeout, true, false},
+		{http.StatusTooManyRequests, provider.ErrorRateLimit, true, false},
+		// A stated refusal to serve retries; anything else past dispatch may
+		// have run upstream, so it neither retries nor settles as free.
+		{http.StatusServiceUnavailable, provider.ErrorProvider5xx, true, false},
+		{http.StatusInternalServerError, provider.ErrorProvider5xx, false, true},
+		{http.StatusBadGateway, provider.ErrorProvider5xx, false, true},
+		{http.StatusGatewayTimeout, provider.ErrorProvider5xx, false, true},
 	}
 	for _, test := range tests {
 		t.Run(http.StatusText(test.status), func(t *testing.T) {
 			got := classifyHTTPError(test.status, upstreamRefusal{Message: "synthetic provider failure"})
-			if got.Class != test.class || got.Retryable != test.retryable || got.StatusCode != test.status {
+			if got.Class != test.class || got.Retryable != test.retryable ||
+				got.Ambiguous != test.ambiguous || got.StatusCode != test.status {
 				t.Fatalf("status=%d error=%#v", test.status, got)
 			}
 		})

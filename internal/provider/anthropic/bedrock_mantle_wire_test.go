@@ -118,13 +118,19 @@ func TestBedrockMantleMessagesClassifiesTheStatusMatrix(t *testing.T) {
 		status    int
 		class     provider.ErrorClass
 		retryable bool
+		ambiguous bool
 	}{
-		{401, provider.ErrorAuthentication, false},
-		{403, provider.ErrorAuthentication, false},
-		{400, provider.ErrorBadRequest, false},
-		{429, provider.ErrorRateLimit, true},
-		{500, provider.ErrorProvider5xx, true},
-		{529, provider.ErrorProvider5xx, true},
+		{401, provider.ErrorAuthentication, false, false},
+		{403, provider.ErrorAuthentication, false, false},
+		{400, provider.ErrorBadRequest, false, false},
+		{429, provider.ErrorRateLimit, true, false},
+		// 529 is a stated overload refusal and retries; a 500 or an edge 502
+		// leaves the generation's fate unknown, so it does neither.
+		{529, provider.ErrorProvider5xx, true, false},
+		{503, provider.ErrorProvider5xx, true, false},
+		{500, provider.ErrorProvider5xx, false, true},
+		{502, provider.ErrorProvider5xx, false, true},
+		{504, provider.ErrorProvider5xx, false, true},
 	} {
 		adapter := newMantleMessagesAdapter(t, func(writer http.ResponseWriter, _ *http.Request) {
 			writer.Header().Set("x-amzn-requestid", "aws-request-matrix")
@@ -136,8 +142,10 @@ func TestBedrockMantleMessagesClassifiesTheStatusMatrix(t *testing.T) {
 		if !errors.As(err, &classified) {
 			t.Fatalf("status %d was not classified: %v", test.status, err)
 		}
-		if classified.Class != test.class || classified.Retryable != test.retryable {
-			t.Fatalf("status %d classified as %s retryable=%v", test.status, classified.Class, classified.Retryable)
+		if classified.Class != test.class || classified.Retryable != test.retryable ||
+			classified.Ambiguous != test.ambiguous {
+			t.Fatalf("status %d classified as %s retryable=%v ambiguous=%v",
+				test.status, classified.Class, classified.Retryable, classified.Ambiguous)
 		}
 		if classified.ProviderRequestID != "aws-request-matrix" {
 			t.Fatalf("status %d lost the AWS request id: %q", test.status, classified.ProviderRequestID)

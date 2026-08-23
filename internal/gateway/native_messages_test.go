@@ -115,7 +115,36 @@ func newNativeMessagesFixtureFull(t *testing.T, profileID domain.ProviderProfile
 	return newNativeMessagesFixtureWithLedgerOptions(t, profileID, adjust, ledger.Options{ChainKey: testChainKey}, allowedBetas...)
 }
 
+// newNativeMessagesFixtureWithPrice wires a committed price version behind the
+// native route, which is what production does and what the plain fixture — with
+// no price selector at all — cannot exercise.
+func newNativeMessagesFixtureWithPrice(t *testing.T, rate, fixed int64) (*Service, *nativeMessagesFake, string, func()) {
+	t.Helper()
+	selectedAt := time.Now().UTC()
+	return newNativeMessagesFixtureWithServiceOptions(t, domain.ProfileAnthropicMessages, ServiceOptions{
+		Pricing: &fakePricePinStore{price: domain.DeploymentPriceVersion{
+			ID: "price_native", DeploymentID: "dep_route_native", Version: 1, Revision: 1,
+			BillingMode: domain.BillingModeMetered, Currency: "USD", FormulaVersion: domain.PriceFormulaUSDTokensV1,
+			InputMicrosPerMillion: rate, OutputMicrosPerMillion: rate, FixedRequestMicrosUSD: fixed,
+			EffectiveFrom: selectedAt.Add(-time.Hour), CreatedBy: "test", CreatedAt: selectedAt.Add(-time.Hour),
+			Source: domain.PriceSource{Type: domain.PriceSourceManual, Assurance: domain.PriceAssuranceAsserted,
+				ReceivedAt: selectedAt.Add(-time.Hour), ContentSHA256: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				Reference: "test", AssertedWithoutArchive: true},
+		}},
+	})
+}
+
+func newNativeMessagesFixtureWithServiceOptions(t *testing.T, profileID domain.ProviderProfileID, options ServiceOptions) (*Service, *nativeMessagesFake, string, func()) {
+	t.Helper()
+	return newNativeMessagesFixtureComplete(t, profileID, nil, ledger.Options{ChainKey: testChainKey}, options)
+}
+
 func newNativeMessagesFixtureWithLedgerOptions(t *testing.T, profileID domain.ProviderProfileID, adjust func(*provider.Capabilities), options ledger.Options, allowedBetas ...string) (*Service, *nativeMessagesFake, string, func()) {
+	t.Helper()
+	return newNativeMessagesFixtureComplete(t, profileID, adjust, options, ServiceOptions{}, allowedBetas...)
+}
+
+func newNativeMessagesFixtureComplete(t *testing.T, profileID domain.ProviderProfileID, adjust func(*provider.Capabilities), options ledger.Options, serviceOptions ServiceOptions, allowedBetas ...string) (*Service, *nativeMessagesFake, string, func()) {
 	t.Helper()
 	project := domain.Project{ID: "project_native", Name: "Native", Enabled: true, AllowedModels: []string{"claude"}, DailyBudgetMicrosUSD: 1000000, MaxInputTokens: 10000, MaxOutputTokens: 1000}
 	plaintext, key, err := auth.GenerateGatewayKey(project.ID, "test", nil)
@@ -151,11 +180,42 @@ func newNativeMessagesFixtureWithLedgerOptions(t *testing.T, profileID domain.Pr
 	if err := registry.Register(provider.Target{ID: "route_native", DeploymentID: "dep_route_native", ProviderID: "provider_native", PublicModel: "claude", ProviderModel: "claude-provider", AccessSurface: manifest.AccessSurface, ProfileID: profileID, Adapter: bridge, Capabilities: targetCapabilities, AllowedAnthropicBetas: allowedBetas, InputMicrosPerMillion: 1000, OutputMicrosPerMillion: 1000}); err != nil {
 		t.Fatal(err)
 	}
-	service, err := NewService(snapshot, registry, accounting)
+	service, err := NewServiceWithOptions(snapshot, registry, accounting, serviceOptions)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return service, fake, plaintext, func() { _ = log.Close() }
+}
+
+// Outbound redaction refusing a response is Halro's verdict on work the
+// provider already did and billed. Settling that attempt at zero released the
+// reservation and recorded nothing, so a caller whose prompts reliably elicit
+// matching output could spend the operator's upstream budget without any of it
+// reaching the ledger or the project's daily total.
+func TestNativeMessagesChargesProviderUsageWhenOutboundRedactionRefuses(t *testing.T) {
+	service, fake, key, closeFixture := newNativeMessagesFixture(t)
+	defer closeFixture()
+	fake.response = []byte(`{"id":"msg_provider","type":"message","role":"assistant","content":[{"type":"text","text":"the key is sk-ant-api03aaaaaaaaaaaaaaaaaaaa"}],"model":"claude-provider","stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":4,"output_tokens":1}}`)
+	request, err := anthropicapi.DecodeMessageRequest(bytes.NewBufferString(`{"model":"claude","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.MessagesNative(context.Background(), key, anthropicapi.SupportedVersion, nil, request)
+	var gatewayErr *Error
+	if !errors.As(err, &gatewayErr) {
+		t.Fatalf("a refused response did not produce a gateway error: %v", err)
+	}
+	if gatewayErr.Code != "sensitive_output_detected" || gatewayErr.HTTPStatus != 422 {
+		t.Fatalf("a policy refusal read as something else: code=%q status=%d", gatewayErr.Code, gatewayErr.HTTPStatus)
+	}
+	period := time.Now().UTC().Format("2006-01-02")
+	balance := fake.ledgerState.Balance("project_native", period, testTimezoneVersion)
+	if balance.InputTokens != 4 || balance.OutputTokens != 1 {
+		t.Fatalf("a served attempt was refunded instead of charged: %#v", balance)
+	}
+	if balance.ReservedMicrosUSD != 0 {
+		t.Fatalf("the reservation outlived the attempt: %#v", balance)
+	}
 }
 
 func TestNativeMessagesPinsBedrockMantleAnthropicProfile(t *testing.T) {
@@ -437,6 +497,52 @@ func TestMessagesCountTokensCallsTheProviderAndSettlesAtZero(t *testing.T) {
 	// and in particular no stream flag is invented for an endpoint without one.
 	if !bytes.Contains(fake.payload, []byte(`"model":"claude"`)) || bytes.Contains(fake.payload, []byte(`"stream"`)) {
 		t.Fatalf("payload was re-authored: %s", fake.payload)
+	}
+}
+
+// count_tokens prepares no tokens, so an ordinary metered price derives a zero
+// reservation — which the Ledger refuses for a metered lease — and a zero
+// settlement, which the frozen snapshot refuses whenever the price carries a
+// fixed per-request fee. The endpoint was unusable on any priced deployment: the
+// first shape 503s before the provider is called, the second strands the lease
+// for the life of the process.
+func TestMessagesCountTokensRunsUnderEveryMeteredPriceShape(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		rate      int64
+		fixed     int64
+		committed int64
+	}{
+		// Anthropic does not bill count_tokens, so a per-token price charges
+		// nothing for it. A fixed per-request fee is a different statement — this
+		// is a request to the deployment — and is owed.
+		{"per token", 1_000_000, 0, 0},
+		{"per token with request fee", 1_000_000, 250, 250},
+		{"request fee only", 0, 250, 250},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			service, fake, key, closeFixture := newNativeMessagesFixtureWithPrice(t, test.rate, test.fixed)
+			defer closeFixture()
+			request, err := anthropicapi.DecodeMessageRequest(bytes.NewBufferString(`{"model":"claude","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			count, err := service.MessagesCountTokens(context.Background(), key, anthropicapi.SupportedVersion, nil, request)
+			if err != nil {
+				t.Fatalf("count_tokens failed on a priced deployment: %v", err)
+			}
+			if count.InputTokens != 42 {
+				t.Fatalf("count=%#v", count)
+			}
+			period := time.Now().UTC().Format("2006-01-02")
+			balance := fake.ledgerState.Balance("project_native", period, testTimezoneVersion)
+			if balance.CommittedMicrosUSD != test.committed || balance.ReservedMicrosUSD != 0 {
+				t.Fatalf("balance=%#v want committed=%d", balance, test.committed)
+			}
+			if fake.ledgerState.PendingReservations() != 0 {
+				t.Fatalf("the count_tokens lease was stranded: pending=%d", fake.ledgerState.PendingReservations())
+			}
+		})
 	}
 }
 

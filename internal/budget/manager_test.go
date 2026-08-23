@@ -109,6 +109,44 @@ func TestLeaseDeepCopiesSnapshotAndFixedOnlySettlementIsValidated(t *testing.T) 
 	}
 }
 
+// The gateway settles a deterministic provider failure at zero tokens and zero
+// cost, on the rule that a request the upstream did not serve owes nothing —
+// the fixed per-request fee included. Re-deriving that fee from the snapshot and
+// refusing the mismatch left the lease pending for the life of the process and
+// handed the caller an accounting error in place of the provider's own, and the
+// reservation was then charged in full by restart recovery.
+func TestFailedAttemptSettlesAtZeroUnderFixedRequestFee(t *testing.T) {
+	manager, state, closeLog := newTestManager(t)
+	defer closeLog()
+	snapshot := testPriceSnapshot(t, domain.BillingModeMetered)
+	*snapshot.InputMicrosPerMillion, *snapshot.OutputMicrosPerMillion, *snapshot.FixedRequestMicrosUSD = 0, 0, 250
+	request, err := manager.BeginRequest(context.Background(), "project_failed", "request_failed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, err := manager.ReserveLeaseDetailed(context.Background(), request, 10_000, LeaseSpec{
+		Mode: ledger.LeaseModeMetered, ReservationMicrosUSD: 250, PriceSnapshot: snapshot,
+		PreparedInputTokens: 10, PreparedOutputTokens: 20,
+		TokenGuardPricingViewDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}, AttemptMetadata{DeploymentID: "dep_test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.MarkStarted(context.Background(), attempt); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Settle(context.Background(), attempt, Settlement{
+		Outcome: "provider_error", ErrorClass: "bad_request", HTTPStatus: 400,
+	}); err != nil {
+		t.Fatalf("a failed attempt could not be settled: %v", err)
+	}
+	balance := state.Balance("project_failed", request.Period.ID, request.Period.TimezoneVersion)
+	if balance.ReservedMicrosUSD != 0 || balance.CommittedMicrosUSD != 0 || state.PendingReservations() != 0 {
+		t.Fatalf("the failed attempt did not release its reservation: %#v pending=%d",
+			balance, state.PendingReservations())
+	}
+}
+
 func TestRecoverStartedLeaseUsesFrozenPriceAndPreparedBounds(t *testing.T) {
 	manager, state, closeLog := newTestManager(t)
 	defer closeLog()

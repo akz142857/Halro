@@ -652,20 +652,30 @@ func decodeHTTPError(response *http.Response) error {
 	payload, _ := readLimited(response.Body, 1<<20)
 	var envelope anthropicapi.ErrorResponse
 	_ = json.Unmarshal(payload, &envelope)
-	class, retryable := provider.ErrorBadRequest, false
-	switch response.StatusCode {
-	case 401, 403:
+	class, retryable, ambiguous := provider.ErrorBadRequest, false, false
+	switch status := response.StatusCode; {
+	case status == 401 || status == 403:
 		class = provider.ErrorAuthentication
-	case 429:
+	case status == 429:
 		class, retryable = provider.ErrorRateLimit, true
-	case 500, 502, 503, 504, 529:
+	case status == 503 || status == 529:
+		// Stated capacity refusals — 529 is Anthropic's own "overloaded". Both
+		// say the upstream declined to take the request on, so a fallback
+		// deployment can serve it and the attempt owes nothing.
 		class, retryable = provider.ErrorProvider5xx, true
+	case status >= 500:
+		// The request reached the upstream and no authoritative result came
+		// back. A 500 can be raised part-way through a generation, and a 502 or
+		// 504 comes from the edge while the origin may still be running and
+		// billing. Retrying would duplicate that generation and settling it as
+		// free would hide the charge, so it is ambiguous.
+		class, ambiguous = provider.ErrorProvider5xx, true
 	}
 	message := envelope.Error.Message
 	if message == "" {
 		message = http.StatusText(response.StatusCode)
 	}
-	return &provider.Error{Class: class, StatusCode: response.StatusCode, Retryable: retryable, Message: message, ProviderRequestID: upstreamRequestID(response.Header), ProviderCode: envelope.Error.Type, RetryAfter: parseRetryAfter(response.Header)}
+	return &provider.Error{Class: class, StatusCode: response.StatusCode, Retryable: retryable, Ambiguous: ambiguous, Message: message, ProviderRequestID: upstreamRequestID(response.Header), ProviderCode: envelope.Error.Type, RetryAfter: parseRetryAfter(response.Header)}
 }
 
 func upstreamRequestID(header http.Header) string {
