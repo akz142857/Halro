@@ -1933,10 +1933,22 @@
               "endpoint_id": "openai.chat-completions.v1",
               "path": "/v1/chat/completions",
               "unsupported_request_fields": [
+                "messages[].name",
                 "n",
                 "stop",
                 "seed",
+                "tools",
                 "reasoning_effort"
+              ]
+            },
+            {
+              "declared_transforms": [
+                "stateless Responses are sent directly with store=false"
+              ],
+              "endpoint_id": "openai.responses.stateless.v1",
+              "path": "/v1/responses",
+              "unsupported_request_fields": [
+                "tools"
               ]
             },
             {
@@ -1951,6 +1963,7 @@
                 "stop_sequences",
                 "top_k",
                 "thinking",
+                "tools",
                 "metadata",
                 "service_tier",
                 "output_config.effort"
@@ -2072,10 +2085,22 @@
               "endpoint_id": "openai.chat-completions.v1",
               "path": "/v1/chat/completions",
               "unsupported_request_fields": [
+                "messages[].name",
                 "n",
                 "stop",
                 "seed",
+                "tools",
                 "reasoning_effort"
+              ]
+            },
+            {
+              "declared_transforms": [
+                "stateless Responses are sent directly with store=false"
+              ],
+              "endpoint_id": "openai.responses.stateless.v1",
+              "path": "/v1/responses",
+              "unsupported_request_fields": [
+                "tools"
               ]
             },
             {
@@ -2090,6 +2115,7 @@
                 "stop_sequences",
                 "top_k",
                 "thinking",
+                "tools",
                 "metadata",
                 "service_tier",
                 "output_config.effort"
