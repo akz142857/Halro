@@ -172,6 +172,35 @@ describe("deployment invocation target workflow", () => {
   // is re-resolved, so nothing but the operator can establish a capability the
   // deployment never recorded. The form used to send the widened set with no
   // mode at all, and the only possible outcome was model_capabilities_unknown
+  // A capability the interface could serve and the connection has not enabled
+  // used to be left out of the form entirely — so a capability added to a
+  // profile after the connection was made had nowhere to be turned on. The
+  // Gateway names it in the refusal, the operator opens this form, and there is
+  // no box. It is drawn as unavailable now, with the step that unblocks it.
+  it("offers a capability the connection has not enabled, and says where to enable it", async () => {
+    // The connection carries vision but not the fetch, which is the state
+    // migration 31 leaves every existing connection in.
+    const seeing: ProviderCapabilities = { ...chatCapabilities, vision: true, fetched_image: false };
+    vi.mocked(api.providers).mockResolvedValue({
+      items: [{
+        ...provider, capabilities: seeing,
+        bindings: [{ id: "b-chat", profile_id: "openai.chat-embeddings.v1", enabled: true, capabilities: seeing }],
+      } as Provider],
+      next_cursor: "",
+    });
+    vi.mocked(api.deployments).mockResolvedValue({ items: [existingDeployment], next_cursor: "" });
+    vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [], next_cursor: "" });
+    renderPage();
+
+    fireEvent.click((await screen.findAllByRole("button", { name: "编辑" }))[0]);
+    const box = await screen.findByLabelText(/远程图片抓取/);
+    expect(box).toBeDisabled();
+    // The reason travels with the box rather than sitting somewhere on the page:
+    // several capabilities can be in this state at once, and an operator reading
+    // one row must not have to guess which note belongs to it.
+    expect(box.closest("label")).toHaveTextContent("先在服务商连接上启用");
+  });
+
   // Routing refuses on a member this interface cannot carry, and the form used to
   // say nothing about it. The list is the server's — the same coverage the
   // published manifest carries.

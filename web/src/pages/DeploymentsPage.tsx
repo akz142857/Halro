@@ -20,7 +20,7 @@ import {
 import { money, useInstantFormatter } from "../format";
 import { isoToZonedInput, useAccountingTimeZone, zonedInputToISO } from "../timezone";
 import type { CapabilityPreflight, CapabilityReview, Deployment, DeploymentPriceVersion, DeploymentTargetKind, DeploymentVariant, ModelCapabilityDetection, PriceSchedule, Provider, ProviderBinding, ProviderCapabilities, ProviderProfilesCatalog, ResolvedInvocationTarget } from "../types";
-import { profileRequestConstraints, updateCapabilitySelection, useProviderProfiles } from "../hooks/useProviderProfiles";
+import { interfaceCeiling, profileRequestConstraints, updateCapabilitySelection, useProviderProfiles } from "../hooks/useProviderProfiles";
 import { useTranslation } from "react-i18next";
 import { useNotify } from "../notifications";
 import { useIsReadOnly } from "../session";
@@ -1245,7 +1245,6 @@ function DeploymentForm({
   const capabilityCeiling = catalogCeiling
     ? pinnedBinding ? intersectCapabilityCeilings(catalogCeiling, bindingCeiling) : catalogCeiling
     : bindingCeiling;
-  const configurableCapabilityNames = deploymentCapabilityNames.filter((name) => capabilityCeiling[name] || capabilities[name]);
   // A capability tick is only half of what routing applies. The other half — the
   // members this interface cannot carry — was computed on the server, refused on
   // by the Gateway, and shown nowhere, so an operator ticked vision and met the
@@ -1253,6 +1252,17 @@ function DeploymentForm({
   const activeProfileIDs = pinnedBinding
     ? [pinnedBinding.profile_id]
     : selectableBindings.map((binding) => binding.profile_id);
+  // What the interface could serve, which is not what this connection has turned
+  // on. A capability neither the ceiling nor the deployment carries used to be
+  // left out of the form entirely, so a capability added to a profile after the
+  // connection was made had nowhere to be enabled: the refusal names it, the
+  // operator opens this form, and there is no box. Drawn as unavailable with the
+  // reason instead — the connection is where it is turned on, and saying so is
+  // the difference between a dead end and a next step.
+  const servableCeiling = catalogReady ? interfaceCeiling(catalogReady, activeProfileIDs) : capabilityCeiling;
+  const configurableCapabilityNames = deploymentCapabilityNames.filter(
+    (name) => capabilityCeiling[name] || capabilities[name] || servableCeiling[name],
+  );
   const requestConstraints = catalogReady ? profileRequestConstraints(catalogReady, activeProfileIDs) : [];
   const targetLabel = t(`deployments.targetLabels.${targetKind}`);
   const modelCatalogEnumerable = Boolean(!identityLocked && targetCatalog.data?.discovery.can_enumerate);
@@ -1721,6 +1731,8 @@ function DeploymentForm({
                     <div className="deployment-capabilities capability-grid" data-count={names.length}>
                       {names.map((name) => {
                         const unavailable = !capabilityCeiling[name];
+                        // Two different dead ends, and only one of them is one.
+                        const reason = servableCeiling[name] ? "deployments.enableOnConnection" : "providers.unsupportedByInterface";
                         return <label className={`capability-option ${unavailable ? "unavailable" : ""}`} key={name}>
                           <input
                             type="checkbox"
@@ -1728,7 +1740,7 @@ function DeploymentForm({
                             checked={capabilities[name]}
                             onChange={(event) => changeCapabilities(updateCapabilitySelection(catalogReady, capabilities, name, event.target.checked))}
                           />
-                          <span>{t(`capabilities.${name}`)}{unavailable && <small>{t("providers.unsupportedByInterface")}</small>}</span>
+                          <span>{t(`capabilities.${name}`)}{unavailable && <small>{t(reason)}</small>}</span>
                         </label>;
                       })}
                     </div>

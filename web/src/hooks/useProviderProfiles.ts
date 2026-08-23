@@ -61,6 +61,29 @@ export function profileRequestConstraints(
   return constraints;
 }
 
+/** What the profiles in play could serve, whether or not the connection has
+ * turned it on.
+ *
+ * This is the difference between "this interface cannot do it" and "this
+ * connection has not enabled it yet". Only the second is something an operator
+ * can act on, and a form that shows neither leaves a capability unreachable. */
+export function interfaceCeiling(
+  catalog: ProviderProfilesCatalog,
+  profileIDs: readonly string[],
+): ProviderCapabilities {
+  const wanted = new Set(profileIDs);
+  const ceiling = { ...emptyCapabilities };
+  for (const type of catalog.provider_types) {
+    for (const profile of type.profiles) {
+      if (!wanted.has(profile.id)) continue;
+      for (const name of booleanCapabilityNames(catalog)) {
+        if (profile.ceiling[name]) ceiling[name] = true as never;
+      }
+    }
+  }
+  return ceiling;
+}
+
 /** Capability keys, excluding the two numeric limits, which are not checkboxes. */
 export function booleanCapabilityNames(catalog: ProviderProfilesCatalog): (keyof ProviderCapabilities)[] {
   return catalog.capability_names.filter(
