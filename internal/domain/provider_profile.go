@@ -65,11 +65,6 @@ const (
 	EvidenceUnsupported CapabilityEvidence = "unsupported"
 )
 
-var capabilityNames = []string{
-	"chat", "streaming", "embeddings", "tools", "vision", "fetched_image", "json_mode",
-	"developer_role", "reasoning", "stream_usage", "provider_executed_tools", "moderations", "images", "transcriptions", "speech", "files", "batches", "rerank", "async_generate",
-}
-
 type CapabilityEvidenceSet map[string]CapabilityEvidence
 
 type ProviderProfileDefaults struct {
@@ -121,20 +116,12 @@ func ResolveCredentialProfile(providerType ProviderType, surface AccessSurface, 
 }
 
 func EvidenceForCapabilities(capabilities ProviderCapabilities, enabled CapabilityEvidence) CapabilityEvidenceSet {
-	result := make(CapabilityEvidenceSet, len(capabilityNames))
-	values := map[string]bool{
-		"chat": capabilities.Chat, "streaming": capabilities.Streaming,
-		"embeddings": capabilities.Embeddings, "tools": capabilities.Tools,
-		"vision": capabilities.Vision, "fetched_image": capabilities.FetchedImage, "json_mode": capabilities.JSONMode,
-		"developer_role": capabilities.DeveloperRole, "reasoning": capabilities.Reasoning,
-		"stream_usage": capabilities.StreamUsage, "provider_executed_tools": capabilities.ProviderExecutedTools,
-		"moderations": capabilities.Moderations, "images": capabilities.Images, "transcriptions": capabilities.Transcriptions, "speech": capabilities.Speech, "files": capabilities.Files, "batches": capabilities.Batches, "rerank": capabilities.Rerank, "async_generate": capabilities.AsyncGenerate,
-	}
-	for _, name := range capabilityNames {
-		if values[name] {
-			result[name] = enabled
+	result := make(CapabilityEvidenceSet, len(capabilityFields))
+	for _, field := range capabilityFields {
+		if *field.Value(&capabilities) {
+			result[field.Name] = enabled
 		} else {
-			result[name] = EvidenceUnsupported
+			result[field.Name] = EvidenceUnsupported
 		}
 	}
 	return result
@@ -154,9 +141,10 @@ func NormalizeCapabilityEvidence(capabilities ProviderCapabilities, existing Cap
 	}
 	return result
 }
+
 func capabilityEnabled(c ProviderCapabilities, name string) bool {
-	values := map[string]bool{"chat": c.Chat, "streaming": c.Streaming, "embeddings": c.Embeddings, "tools": c.Tools, "vision": c.Vision, "fetched_image": c.FetchedImage, "json_mode": c.JSONMode, "developer_role": c.DeveloperRole, "reasoning": c.Reasoning, "stream_usage": c.StreamUsage, "provider_executed_tools": c.ProviderExecutedTools, "moderations": c.Moderations, "images": c.Images, "transcriptions": c.Transcriptions, "speech": c.Speech, "files": c.Files, "batches": c.Batches, "rerank": c.Rerank, "async_generate": c.AsyncGenerate}
-	return values[name]
+	value, _ := CapabilityValue(c, name)
+	return value
 }
 
 // MaxBedrockProjectIDLength bounds the stored identifier. AWS project IDs are
@@ -273,26 +261,12 @@ func IsBedrockMantleProfile(id ProviderProfileID) bool {
 // ProviderCapabilitiesSubset is the single authoritative subset check used at
 // API and storage boundaries.
 func ProviderCapabilitiesSubset(candidate, available ProviderCapabilities) bool {
-	return (!candidate.Chat || available.Chat) &&
-		(!candidate.Streaming || available.Streaming) &&
-		(!candidate.Embeddings || available.Embeddings) &&
-		(!candidate.Moderations || available.Moderations) &&
-		(!candidate.Images || available.Images) &&
-		(!candidate.Transcriptions || available.Transcriptions) &&
-		(!candidate.Speech || available.Speech) &&
-		(!candidate.Files || available.Files) &&
-		(!candidate.Batches || available.Batches) &&
-		(!candidate.Rerank || available.Rerank) &&
-		(!candidate.AsyncGenerate || available.AsyncGenerate) &&
-		(!candidate.Tools || available.Tools) &&
-		(!candidate.Vision || available.Vision) &&
-		(!candidate.FetchedImage || available.FetchedImage) &&
-		(!candidate.JSONMode || available.JSONMode) &&
-		(!candidate.DeveloperRole || available.DeveloperRole) &&
-		(!candidate.Reasoning || available.Reasoning) &&
-		(!candidate.StreamUsage || available.StreamUsage) &&
-		(!candidate.ProviderExecutedTools || available.ProviderExecutedTools) &&
-		capabilityLimitSubset(candidate.MaxContextTokens, available.MaxContextTokens) &&
+	for _, field := range capabilityFields {
+		if *field.Value(&candidate) && !*field.Value(&available) {
+			return false
+		}
+	}
+	return capabilityLimitSubset(candidate.MaxContextTokens, available.MaxContextTokens) &&
 		capabilityLimitSubset(candidate.MaxOutputTokens, available.MaxOutputTokens)
 }
 
@@ -332,20 +306,13 @@ func (e CapabilityEvidenceSet) Validate(capabilities ProviderCapabilities) error
 			return fmt.Errorf("invalid capability evidence %q for %s", value, name)
 		}
 	}
-	values := map[string]bool{
-		"chat": capabilities.Chat, "streaming": capabilities.Streaming,
-		"embeddings": capabilities.Embeddings, "tools": capabilities.Tools,
-		"vision": capabilities.Vision, "fetched_image": capabilities.FetchedImage, "json_mode": capabilities.JSONMode,
-		"developer_role": capabilities.DeveloperRole, "reasoning": capabilities.Reasoning,
-		"stream_usage": capabilities.StreamUsage, "provider_executed_tools": capabilities.ProviderExecutedTools,
-		"moderations": capabilities.Moderations, "images": capabilities.Images, "transcriptions": capabilities.Transcriptions, "speech": capabilities.Speech, "files": capabilities.Files, "batches": capabilities.Batches, "rerank": capabilities.Rerank, "async_generate": capabilities.AsyncGenerate,
-	}
-	for name, enabled := range values {
-		if enabled && e[name] == EvidenceUnsupported {
-			return fmt.Errorf("enabled capability %s cannot be unsupported", name)
+	for _, field := range capabilityFields {
+		enabled := *field.Value(&capabilities)
+		if enabled && e[field.Name] == EvidenceUnsupported {
+			return fmt.Errorf("enabled capability %s cannot be unsupported", field.Name)
 		}
-		if !enabled && e[name] != EvidenceUnsupported {
-			return fmt.Errorf("disabled capability %s must be unsupported", name)
+		if !enabled && e[field.Name] != EvidenceUnsupported {
+			return fmt.Errorf("disabled capability %s must be unsupported", field.Name)
 		}
 	}
 	return nil

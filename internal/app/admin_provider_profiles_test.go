@@ -49,10 +49,10 @@ func TestAdminProviderProfilesServesEveryTableRow(t *testing.T) {
 			got.Immutable != want.Immutable {
 			t.Errorf("%s identity differs from the table: %#v", want.ID, got)
 		}
-		if got.Defaults != providerCapabilityViewOf(want.Defaults) {
+		if got.Defaults != want.Defaults {
 			t.Errorf("%s defaults differ from the table: %#v", want.ID, got.Defaults)
 		}
-		if got.Ceiling != providerCapabilityViewOf(want.Ceiling) {
+		if got.Ceiling != want.Ceiling {
 			t.Errorf("%s ceiling differs from the table: %#v", want.ID, got.Ceiling)
 		}
 	}
@@ -85,11 +85,11 @@ func TestAdminProviderProfilesServesTheConnectionLevelSets(t *testing.T) {
 	for _, providerType := range view.ProviderTypes {
 		for _, profile := range providerType.Profiles {
 			wantCeiling := domain.ConnectionCeiling(providerType.Type, profile.ID)
-			if profile.ConnectionCeiling != providerCapabilityViewOf(wantCeiling) {
+			if profile.ConnectionCeiling != wantCeiling {
 				t.Errorf("%s connection ceiling differs from the domain answer: %#v", profile.ID, profile.ConnectionCeiling)
 			}
 			wantDefaults := domain.ConnectionDefaults(providerType.Type, profile.ID)
-			if profile.ConnectionDefaults != providerCapabilityViewOf(wantDefaults) {
+			if profile.ConnectionDefaults != wantDefaults {
 				t.Errorf("%s connection defaults differ from the domain answer: %#v", profile.ID, profile.ConnectionDefaults)
 			}
 			// Everything a form may tick has to survive the split, or the form can

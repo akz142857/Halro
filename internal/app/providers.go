@@ -680,7 +680,7 @@ func newBindingClient(cfg config.Config, binding domain.ProviderProfileBinding, 
 // branches broke nothing.
 func newProviderBindingAdapterWithClient(instance domain.ProviderInstance, binding domain.ProviderProfileBinding, endpoint *url.URL, plaintext []byte, client *http.Client) (provider.Adapter, error) {
 	var err error
-	capabilities := providerCapabilities(binding.Capabilities)
+	capabilities := binding.Capabilities
 	var adapter provider.Adapter
 	var authorizer provider.Authorizer
 	switch instance.Type {
@@ -795,20 +795,6 @@ func adapterForDeployment(registry *provider.Registry, instance domain.ProviderI
 	// Compatibility for extension registries that still expose exactly one
 	// Provider-keyed adapter. AdapterForProvider fails closed when ambiguous.
 	return registry.AdapterForProvider(instance.ID)
-}
-
-func providerCapabilities(capabilities domain.ProviderCapabilities) provider.Capabilities {
-	return provider.Capabilities{
-		Chat: capabilities.Chat, Streaming: capabilities.Streaming, Embeddings: capabilities.Embeddings,
-		Moderations: capabilities.Moderations, Images: capabilities.Images, Transcriptions: capabilities.Transcriptions,
-		Speech: capabilities.Speech, Files: capabilities.Files, Batches: capabilities.Batches,
-		Rerank: capabilities.Rerank, AsyncGenerate: capabilities.AsyncGenerate, Tools: capabilities.Tools,
-		Vision: capabilities.Vision, FetchedImage: capabilities.FetchedImage,
-		JSONMode: capabilities.JSONMode, DeveloperRole: capabilities.DeveloperRole,
-		Reasoning: capabilities.Reasoning, StreamUsage: capabilities.StreamUsage,
-		ProviderExecutedTools: capabilities.ProviderExecutedTools,
-		MaxContextTokens:      capabilities.MaxContextTokens, MaxOutputTokens: capabilities.MaxOutputTokens,
-	}
 }
 
 func deploymentCapabilities(deployment domain.Deployment, adapter provider.Adapter) provider.Capabilities {

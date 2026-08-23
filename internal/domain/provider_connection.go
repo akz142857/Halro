@@ -275,44 +275,5 @@ func enabledCapabilityNames(capabilities ProviderCapabilities) []string {
 }
 
 func setCapabilityEnabled(c *ProviderCapabilities, name string, value bool) {
-	switch name {
-	case "chat":
-		c.Chat = value
-	case "streaming":
-		c.Streaming = value
-	case "embeddings":
-		c.Embeddings = value
-	case "tools":
-		c.Tools = value
-	case "vision":
-		c.Vision = value
-	case "fetched_image":
-		c.FetchedImage = value
-	case "json_mode":
-		c.JSONMode = value
-	case "developer_role":
-		c.DeveloperRole = value
-	case "reasoning":
-		c.Reasoning = value
-	case "stream_usage":
-		c.StreamUsage = value
-	case "provider_executed_tools":
-		c.ProviderExecutedTools = value
-	case "moderations":
-		c.Moderations = value
-	case "images":
-		c.Images = value
-	case "transcriptions":
-		c.Transcriptions = value
-	case "speech":
-		c.Speech = value
-	case "files":
-		c.Files = value
-	case "batches":
-		c.Batches = value
-	case "rerank":
-		c.Rerank = value
-	case "async_generate":
-		c.AsyncGenerate = value
-	}
+	SetCapability(c, name, value)
 }

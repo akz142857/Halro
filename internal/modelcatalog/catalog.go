@@ -680,91 +680,12 @@ func capabilityValue(capabilities domain.ProviderCapabilities, name string) stri
 }
 
 func booleanValue(capabilities domain.ProviderCapabilities, name string) bool {
-	switch name {
-	case "chat":
-		return capabilities.Chat
-	case "embeddings":
-		return capabilities.Embeddings
-	case "moderations":
-		return capabilities.Moderations
-	case "images":
-		return capabilities.Images
-	case "transcriptions":
-		return capabilities.Transcriptions
-	case "speech":
-		return capabilities.Speech
-	case "files":
-		return capabilities.Files
-	case "batches":
-		return capabilities.Batches
-	case "rerank":
-		return capabilities.Rerank
-	case "async_generate":
-		return capabilities.AsyncGenerate
-	case "streaming":
-		return capabilities.Streaming
-	case "tools":
-		return capabilities.Tools
-	case "vision":
-		return capabilities.Vision
-	case "fetched_image":
-		return capabilities.FetchedImage
-	case "json_mode":
-		return capabilities.JSONMode
-	case "developer_role":
-		return capabilities.DeveloperRole
-	case "reasoning":
-		return capabilities.Reasoning
-	case "stream_usage":
-		return capabilities.StreamUsage
-	case "provider_executed_tools":
-		return capabilities.ProviderExecutedTools
-	default:
-		return false
-	}
+	value, _ := domain.CapabilityValue(capabilities, name)
+	return value
 }
 
 func setBoolean(capabilities *domain.ProviderCapabilities, name string) {
-	switch name {
-	case "chat":
-		capabilities.Chat = true
-	case "embeddings":
-		capabilities.Embeddings = true
-	case "moderations":
-		capabilities.Moderations = true
-	case "images":
-		capabilities.Images = true
-	case "transcriptions":
-		capabilities.Transcriptions = true
-	case "speech":
-		capabilities.Speech = true
-	case "files":
-		capabilities.Files = true
-	case "batches":
-		capabilities.Batches = true
-	case "rerank":
-		capabilities.Rerank = true
-	case "async_generate":
-		capabilities.AsyncGenerate = true
-	case "streaming":
-		capabilities.Streaming = true
-	case "tools":
-		capabilities.Tools = true
-	case "vision":
-		capabilities.Vision = true
-	case "fetched_image":
-		capabilities.FetchedImage = true
-	case "json_mode":
-		capabilities.JSONMode = true
-	case "developer_role":
-		capabilities.DeveloperRole = true
-	case "reasoning":
-		capabilities.Reasoning = true
-	case "stream_usage":
-		capabilities.StreamUsage = true
-	case "provider_executed_tools":
-		capabilities.ProviderExecutedTools = true
-	}
+	domain.SetCapability(capabilities, name, true)
 }
 
 func limitValue(capabilities domain.ProviderCapabilities, name string) int64 {

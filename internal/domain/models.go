@@ -429,25 +429,11 @@ func BindingsCapabilitiesSummary(bindings []ProviderProfileBinding) (ProviderCap
 			continue
 		}
 		c := binding.Capabilities
-		summary.Chat = summary.Chat || c.Chat
-		summary.Streaming = summary.Streaming || c.Streaming
-		summary.Embeddings = summary.Embeddings || c.Embeddings
-		summary.Moderations = summary.Moderations || c.Moderations
-		summary.Images = summary.Images || c.Images
-		summary.Transcriptions = summary.Transcriptions || c.Transcriptions
-		summary.Speech = summary.Speech || c.Speech
-		summary.Files = summary.Files || c.Files
-		summary.Batches = summary.Batches || c.Batches
-		summary.Rerank = summary.Rerank || c.Rerank
-		summary.AsyncGenerate = summary.AsyncGenerate || c.AsyncGenerate
-		summary.Tools = summary.Tools || c.Tools
-		summary.Vision = summary.Vision || c.Vision
-		summary.FetchedImage = summary.FetchedImage || c.FetchedImage
-		summary.JSONMode = summary.JSONMode || c.JSONMode
-		summary.DeveloperRole = summary.DeveloperRole || c.DeveloperRole
-		summary.Reasoning = summary.Reasoning || c.Reasoning
-		summary.StreamUsage = summary.StreamUsage || c.StreamUsage
-		summary.ProviderExecutedTools = summary.ProviderExecutedTools || c.ProviderExecutedTools
+		for _, field := range capabilityFields {
+			if *field.Value(&c) {
+				*field.Value(&summary) = true
+			}
+		}
 		if c.MaxContextTokens > summary.MaxContextTokens {
 			summary.MaxContextTokens = c.MaxContextTokens
 		}
