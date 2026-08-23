@@ -764,6 +764,7 @@ export const zhCN = {
     validationPassed: "验证通过", validationFailed: "验证失败", validationExpired: "配置已变更，需重新验证", notValidated: "尚未验证", notTested: "尚未测试", lastTest: "{{time}} · {{latency}}ms", upstreamTarget: "上游调用目标", routeDependency: "路由依赖", activeRoutes: "{{count}} 条启用路由 →", noActiveRoutes: "无启用路由", status: "状态", routeBlocked: "请先停用引用该部署的模型路由", testRequired: "请先测试当前版本", disableTitle: "禁用模型部署？", disableConfirm: "确认禁用模型部署“{{name}}”？该部署将立即停止接收新的模型请求。", notConfigured: "未配置", unlimited: "不限", upstreamApplies: "以上游为准", undeclared: "部署未声明", deploymentScope: "部署级", perMillionTokens: "USD / 百万令牌", perRequest: "USD / 请求", tokens: "令牌", fixedPrice: "固定费用", capabilityCount: "{{count}} 项能力", technicalDetails: "技术详情", accessSurface: "访问面", profile: "能力配置", deploymentID: "部署 ID", bindingID: "绑定 ID", moreActions: "更多操作", evidenceValues: { verified: "已验证", declared: "已声明" },
     edit: "编辑模型部署", createTitle: "创建模型部署", createReplacementTitle: "创建替代部署", createReplacement: "创建替代", saveReplacement: "保存替代部署", providerRequired: "需要可用服务商", providerRequiredDescription: "先在服务商页面创建并启用一个上游连接。", openProviders: "前往服务商配置 →",
     name: "部署名称", provider: "服务商", binding: "能力接口", bindingHint: "切换接口会保留当前模型和兼容能力；不被新接口支持的能力会关闭，接口相关的旧识别结果会失效。", detectionBindingLabel: "调用接口", detectionBindingHint: "本次能力识别和之后的全部流量都走这个接口；部署创建后不能更换。", interfaceAdvanced: "能力接口", interfaceAutomatic: "自动选择", interfaceAdvancedHint: "请选择实际调用接口。Halro 会带出该接口的能力上限；你只能关闭不需要的能力，不能扩大。", selectionSpansInterfaces: "没有单一能力接口能承载全部所选能力", selectionSpansInterfacesDescription: "一个部署只运行在一个接口上。请收窄所选能力，或为剩余能力另建一个部署。", upstreamModel: "上游模型 ID", upstreamModelHint: "填写服务商识别的准确模型 ID；Azure OpenAI 填写 Deployment 名称。", capabilitySubset: "模型能力（只能是所选能力接口的子集）",
+    enableOnConnection: "先在服务商连接上启用",
     requestConstraints: "这个能力接口载不动的请求成员",
     requestConstraintsHint: "能力勾选说明这个接口能做什么；下面这些是它仍然无法承载的请求成员。网关在调用上游之前就按这些声明拒绝，所以勾了能力也不代表带这些成员的请求能通过。",
     maxContext: "最大上下文令牌", maxContextHint: "0 表示不在部署层声明，运行时仍受上游限制", maxOutputTokens: "最大输出令牌", maxOutputHint: "0 表示不在部署层声明，运行时仍受上游限制；填写后不得超过最大上下文令牌",
@@ -826,6 +827,8 @@ export const zhCN = {
     detectionProviderRepairTitle: "服务商暂时无法完成验证",
     detectionProviderRepairDescription: "当前凭据、权限或服务可用性不足。请先修复服务商配置；此结果不能通过高级声明绕过。",
     capabilityGroupSelected: "{{selected}} / {{total}} 项启用",
+    capabilityGroupBlocked_one: "{{count}} 项需先在连接上启用",
+    capabilityGroupBlocked_other: "{{count}} 项需先在连接上启用",
     capabilityGroups: {
       operations: { title: "操作", description: "部署可以直接执行并用于路由筛选的顶层操作。" },
       modalities: { title: "模态", description: "模型在操作中能够直接理解或生成的内容类型。" },
