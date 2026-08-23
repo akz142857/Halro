@@ -298,6 +298,7 @@ func (r *Runtime) writeMetrics(ctx context.Context, writer http.ResponseWriter) 
 		reason string
 		value  uint64
 	}{
+		{"route_capability", rejections.RouteCapability},
 		{"rpm", rejections.RPM},
 		{"tpm", rejections.TPM},
 		{"project_concurrency", rejections.ProjectConcurrency},

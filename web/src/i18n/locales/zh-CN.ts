@@ -701,6 +701,7 @@ export const zhCN = {
     },
     controlPlane: "控制平面", governanceExecution: "治理执行", budgetWatermark: "最高预算水位", capacityWatermark: "最高并发水位",
     noLimitedProjects: "没有设置每日预算的启用项目", noLimitedResources: "没有设置并发上限的启用资源", rejectionComposition: "策略拒绝构成",
+    routeCapabilityShort: "能力不匹配",
     budgetShort: "预算", concurrencyShort: "并发", rejectionsSinceStartup: "拒绝计数为进程启动以来的累计值。", committedAndReserved: "已提交费用 + 进行中预留",
     capacityScopes: { project: "项目并发", provider: "Provider 并发", deployment: "Deployment 并发" },
     usageAttribution: "消耗归因", topConsumers: "今日 Top 5", breakdownDimension: "归因维度", breakdownSort: "排序指标", errors: "失败",

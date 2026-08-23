@@ -133,6 +133,11 @@ export function DashboardPage() {
                   <span>{t("dashboard.budgetShort")} {compactNumber(dashboard.governance.policy_rejections.budget)}</span>
                   <span>{t("dashboard.concurrencyShort")} {compactNumber(concurrencyRejections(dashboard.governance.policy_rejections))}</span>
                   <span>Token Guard {compactNumber(dashboard.governance.policy_rejections.token_guard)}</span>
+                  {/* The one refusal here that is a configuration answer rather
+                      than a pressure reading: the route is up and the key is
+                      good, and no deployment behind the public model declares
+                      what the request asked for. */}
+                  <span>{t("dashboard.routeCapabilityShort")} {compactNumber(dashboard.governance.policy_rejections.route_capability)}</span>
                 </div>
                 <small>{t("dashboard.rejectionsSinceStartup")}</small>
               </div>
