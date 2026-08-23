@@ -51,3 +51,35 @@ Two things this does not license. A push still gets a genuine full gate, includi
 commit added on top of already-gated code does not require re-running anything —
 markdown cannot change a test result, and re-running it is exactly the dead
 waiting this policy exists to prevent.
+
+## The embedded bundle is generated, and is treated as generated
+
+`internal/webui/dist` is the built `web/` bundle compiled into the Go binary. It
+is committed, so it looks like source in every `git` view, and it is not. Two
+rules follow from that, and both have cost real time in this repository.
+
+**Commit it in the same commit as the `web/src` change that produced it.** It is
+easy to miss because the obvious command misses it: `git add -A -- web` stages
+nothing under `internal/`, so a frontend change commits cleanly, passes review,
+and fails CI on drift. Stage it by name, or use `git add -A` from the repository
+root. `git diff --exit-code -- internal/webui/dist` before the push is the check
+that catches it.
+
+**Never hand-merge a conflict in it — delete it and rebuild.** Two branches that
+both touch the console produce different content-hashed filenames for the same
+sources, so a merge presents dozens of conflicts between files that are not
+different versions of each other but different builds of the same thing. There is
+no correct resolution to pick, and a spliced bundle corresponds to no source tree
+at all. Resolve by taking either side wholesale, rebuilding from the merged
+sources, and committing that:
+
+```bash
+rm -rf internal/webui/dist
+git checkout origin/main -- internal/webui/dist
+cd web && npm run build && cd ..
+git add -A internal/webui/dist
+```
+
+The sources themselves are ordinary text and merge ordinarily; check that they
+carry both branches' changes before rebuilding, because the rebuild will happily
+produce a bundle from a bad merge too.
