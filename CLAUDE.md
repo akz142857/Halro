@@ -127,6 +127,8 @@ for shared UI, `web/src/i18n` for zh-CN/en, `web/src/pages` for screens. CSRF ma
 and secrets are kept in memory only — never persisted to browser storage (the production
 bundle is scanned for secret canaries). Rebuild with `npm run build` and commit the
 resulting `internal/webui/dist` whenever `web/src` changes — CI fails on drift.
+It is a generated artifact: `AGENTS.md` says how to keep it from being missed,
+and why a merge conflict in it is resolved by rebuilding rather than by hand.
 
 ## Invariants to preserve (violations are the highest-severity class of bug here)
 
