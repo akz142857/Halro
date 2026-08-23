@@ -156,12 +156,22 @@ func UnsupportedGenerateFields(profileID domain.ProviderProfileID, request seman
 		add(request.ReasoningEffort != "" && !slices.Contains(deepSeekPortableEfforts, request.ReasoningEffort), "reasoning_effort")
 		// `user` is absent on purpose. DeepSeek carries the same concept as
 		// user_id, so it is renamed by the renderer rather than declared lost.
-	case domain.ProfileOpenAIChatEmbeddings, domain.ProfileAzureChatEmbeddings, domain.ProfileOpenAICompatible, domain.ProfileBedrockMantleChat, domain.ProfileBedrockMantleOpenAIChat:
+	case domain.ProfileOpenAIChatEmbeddings, domain.ProfileAzureChatEmbeddings, domain.ProfileOpenAICompatible:
 		// These profiles use the OpenAI-compatible wire representation directly.
 		// The one thing that representation has no place for is a tool result the
 		// caller marked as failed: an OpenAI tool message is its text and nothing
 		// else, so is_error would be dropped and the model would read a failure as
 		// a successful answer.
+		add(hasFailedToolResult(request), "messages[].content[].is_error")
+	case domain.ProfileBedrockMantleChat, domain.ProfileBedrockMantleOpenAIChat:
+		// Bedrock's inability to fetch an image used to be declared here, once per
+		// northbound endpoint, in each endpoint's own name for the same member.
+		// Three spellings of one fact was the evidence that it did not belong in
+		// this layer: it is not a property of a request field, it is a property of
+		// the target. It is a capability now — fetched_image, absent from every
+		// Mantle ceiling — so those requests are refused by the same filter that
+		// refuses a target with no vision at all, and an operator sees the rule as
+		// a checkbox instead of meeting it as a refusal.
 		add(hasFailedToolResult(request), "messages[].content[].is_error")
 	default:
 		// Legacy or extension adapters do not have profile-level proof for optional

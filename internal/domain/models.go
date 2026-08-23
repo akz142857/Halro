@@ -442,6 +442,7 @@ func BindingsCapabilitiesSummary(bindings []ProviderProfileBinding) (ProviderCap
 		summary.AsyncGenerate = summary.AsyncGenerate || c.AsyncGenerate
 		summary.Tools = summary.Tools || c.Tools
 		summary.Vision = summary.Vision || c.Vision
+		summary.FetchedImage = summary.FetchedImage || c.FetchedImage
 		summary.JSONMode = summary.JSONMode || c.JSONMode
 		summary.DeveloperRole = summary.DeveloperRole || c.DeveloperRole
 		summary.Reasoning = summary.Reasoning || c.Reasoning
@@ -477,10 +478,22 @@ type ProviderCapabilities struct {
 	AsyncGenerate  bool `json:"async_generate"`
 	Tools          bool `json:"tools"`
 	Vision         bool `json:"vision"`
-	JSONMode       bool `json:"json_mode"`
-	DeveloperRole  bool `json:"developer_role"`
-	Reasoning      bool `json:"reasoning"`
-	StreamUsage    bool `json:"stream_usage"`
+	// FetchedImage is the half of vision that says where the picture comes from.
+	// Vision means the target can read an image; this means it will go and get
+	// one the request only names. They are not the same claim and no provider
+	// treats them as one: Bedrock reads bytes a request carries and fetches
+	// nothing, while OpenAI, Anthropic and DeepSeek do both.
+	//
+	// It was a per-profile request-field declaration before, which put half of
+	// one fact in a layer the console never showed. A capability an operator can
+	// see, tick and be refused on by the same rule is the whole point of the
+	// distinction existing at all — and it is spelled once here rather than three
+	// times, once per northbound endpoint's name for the same member.
+	FetchedImage  bool `json:"fetched_image"`
+	JSONMode      bool `json:"json_mode"`
+	DeveloperRole bool `json:"developer_role"`
+	Reasoning     bool `json:"reasoning"`
+	StreamUsage   bool `json:"stream_usage"`
 	// ProviderExecutedTools admits tools the upstream runs itself — web_search,
 	// web_fetch, code_execution. Enabling it means accepting that this connection
 	// originates network calls Halro never sees and SafeTransport never filters,

@@ -7,12 +7,17 @@ import (
 )
 
 type Requirements struct {
-	Streaming          bool `json:"streaming,omitempty"`
-	StreamUsage        bool `json:"stream_usage,omitempty"`
-	Tools              bool `json:"tools,omitempty"`
-	ParallelTools      bool `json:"parallel_tools,omitempty"`
-	InputImage         bool `json:"input_image,omitempty"`
-	StructuredJSON     bool `json:"structured_json,omitempty"`
+	Streaming     bool `json:"streaming,omitempty"`
+	StreamUsage   bool `json:"stream_usage,omitempty"`
+	Tools         bool `json:"tools,omitempty"`
+	ParallelTools bool `json:"parallel_tools,omitempty"`
+	Vision        bool `json:"vision,omitempty"`
+	// FetchedImage is set by a request that names an image instead of carrying
+	// it. It is a separate requirement because it is a separate claim about the
+	// target: reading a picture and going to get one are different things, and a
+	// target that does only the first must not be handed the second.
+	FetchedImage       bool `json:"fetched_image,omitempty"`
+	JSONMode           bool `json:"json_mode,omitempty"`
 	DeveloperRole      bool `json:"developer_role,omitempty"`
 	Reasoning          bool `json:"reasoning,omitempty"`
 	Seed               bool `json:"seed,omitempty"`
@@ -145,7 +150,7 @@ func (request GenerateRequest) Validate() error {
 func (request GenerateRequest) DeriveRequirements() Requirements {
 	structuredJSON := request.OutputFormat != nil && (request.OutputFormat.Kind == OutputJSONObject || request.OutputFormat.Kind == OutputJSONSchema)
 	parallelTools := request.ParallelTools != nil && *request.ParallelTools
-	result := Requirements{Streaming: request.Stream, StreamUsage: request.IncludeUsage, Tools: len(request.Tools) > 0 || request.ToolChoice != nil || parallelTools, ParallelTools: parallelTools, StructuredJSON: structuredJSON, Reasoning: request.ReasoningEffort != "", Seed: request.Seed != nil, MultipleCandidates: request.Candidates != nil && *request.Candidates > 1, EndUserReference: request.EndUserRef != ""}
+	result := Requirements{Streaming: request.Stream, StreamUsage: request.IncludeUsage, Tools: len(request.Tools) > 0 || request.ToolChoice != nil || parallelTools, ParallelTools: parallelTools, JSONMode: structuredJSON, Reasoning: request.ReasoningEffort != "", Seed: request.Seed != nil, MultipleCandidates: request.Candidates != nil && *request.Candidates > 1, EndUserReference: request.EndUserRef != ""}
 	for _, message := range request.Messages {
 		if message.Role == RoleDeveloper {
 			result.DeveloperRole = true
@@ -153,7 +158,10 @@ func (request GenerateRequest) DeriveRequirements() Requirements {
 		for _, part := range message.Content {
 			switch part.Kind {
 			case ContentInputImage:
-				result.InputImage = true
+				result.Vision = true
+				if !part.Inline() {
+					result.FetchedImage = true
+				}
 			case ContentToolCall, ContentToolResult:
 				result.Tools = true
 			case ContentReasoning:

@@ -8,8 +8,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 
+	"github.com/akz142857/Halro/internal/compatibility"
 	"github.com/akz142857/Halro/internal/config"
 	"github.com/akz142857/Halro/internal/domain"
 )
@@ -128,6 +130,57 @@ func TestAdminProviderProfilesMarksTheCapabilitiesThatNeedAWarning(t *testing.T)
 	// SafeTransport, which is not something a checkbox conveys on its own.
 	if !slices.Contains(view.CapabilityOptInWarnings, "provider_executed_tools") {
 		t.Errorf("provider_executed_tools was served unmarked: %v", view.CapabilityOptInWarnings)
+	}
+}
+
+// A capability tick and a request constraint are two halves of one model, and
+// only the first was ever served. Routing refuses on the second — Bedrock reads
+// an image and does not fetch one — so a console that cannot see it offers a
+// tick and then reports the Gateway's refusal as a surprise.
+func TestAdminProviderProfilesServesTheConstraintsRoutingApplies(t *testing.T) {
+	runtime, cookie := providerProfilesFixture(t)
+	view := fetchProviderProfiles(t, runtime, cookie)
+
+	constraints := map[domain.ProviderProfileID][]compatibility.ProfileRequestConstraint{}
+	for _, providerType := range view.ProviderTypes {
+		for _, profile := range providerType.Profiles {
+			constraints[profile.ID] = profile.RequestConstraints
+		}
+	}
+
+	mantle := constraints[domain.ProfileBedrockMantleOpenAIChat]
+	if len(mantle) == 0 {
+		t.Fatal("the Mantle chat profile served no constraints")
+	}
+	found := false
+	for _, constraint := range mantle {
+		if constraint.Path == "" || constraint.EndpointID == "" {
+			t.Fatalf("a constraint arrived without the endpoint it belongs to: %#v", constraint)
+		}
+		if slices.Contains(constraint.UnsupportedRequestFields, "thinking") {
+			found = true
+			// The sentence is what makes the field name actionable; a bare
+			// identifier tells an operator which member and not why.
+			if len(constraint.DeclaredTransforms) == 0 {
+				t.Errorf("the constraint arrived with no explanation: %#v", constraint)
+			}
+		}
+		// The image-fetch limit left this layer for the capability model, and
+		// declaring it in both would route a request away twice for one reason.
+		for _, field := range constraint.UnsupportedRequestFields {
+			if strings.Contains(field, "image_url") {
+				t.Errorf("the fetch limit is still served as a field: %q", field)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("the Mantle constraints were not served: %#v", mantle)
+	}
+
+	// A profile that declares nothing says nothing, rather than sending rows an
+	// operator has to read to learn there is no rule.
+	if declared := constraints[domain.ProfileOpenAIChatEmbeddings]; len(declared) > 1 {
+		t.Errorf("the OpenAI chat profile served %d constraint rows", len(declared))
 	}
 }
 

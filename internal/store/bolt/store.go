@@ -21,7 +21,7 @@ import (
 	bbolt "go.etcd.io/bbolt"
 )
 
-const schemaVersion uint64 = 30
+const schemaVersion uint64 = 31
 
 // legacyCapabilityEvidence is the evidence tier this project used before
 // capability evidence was durable metadata. The domain no longer accepts it, so
@@ -756,6 +756,60 @@ var migrations = []migration{
 		}
 		return migrationStep(step, "after_deployment_price_cached_input_rate")
 	}},
+	// fetched_image splits vision into what a target can read and what it will go
+	// and get. Every record that predates it records it as unsupported and nobody
+	// is credited with it, which is the same shape migration 28 used for
+	// provider_executed_tools.
+	//
+	// It is deliberately not backfilled from vision, even though a connection that
+	// declared vision on OpenAI did in fact accept a fetched image before this
+	// split. Backfilling would have to know each record's profile ceiling to avoid
+	// crediting a Bedrock connection with something it cannot do, and a migration
+	// that reaches across buckets to decide what a record may claim is a migration
+	// that can get it wrong silently. Off for everyone is wrong in the direction
+	// that refuses rather than the one that forwards a request doomed upstream,
+	// and it costs one deliberate tick where the capability is really wanted.
+	{version: 31, name: "fetched_image_capability", up: func(tx *bbolt.Tx, step func(string) error) error {
+		if err := migrationStep(step, "before_fetched_image_capability"); err != nil {
+			return err
+		}
+		backfill := func(record map[string]json.RawMessage) error {
+			if err := backfillCapabilityEvidence(record, "capability_evidence", fetchedImageEvidenceMembers); err != nil {
+				return err
+			}
+			return patchArrayMember(record, "bindings", func(binding map[string]json.RawMessage) error {
+				return backfillCapabilityEvidence(binding, "capability_evidence", fetchedImageEvidenceMembers)
+			})
+		}
+		if err := rewriteBucketIfPresent(tx, bucketProviders, backfill); err != nil {
+			return err
+		}
+		if err := rewriteBucketIfPresent(tx, bucketDeployments, func(record map[string]json.RawMessage) error {
+			if err := backfillCapabilityEvidence(record, "capability_evidence", fetchedImageEvidenceMembers); err != nil {
+				return err
+			}
+			encoded, ok := record["model_capability_snapshot"]
+			if !ok {
+				return nil
+			}
+			var snapshot map[string]json.RawMessage
+			if err := json.Unmarshal(encoded, &snapshot); err != nil {
+				return err
+			}
+			if err := backfillCapabilityEvidence(snapshot, "evidence", fetchedImageEvidenceMembers); err != nil {
+				return err
+			}
+			updated, err := json.Marshal(snapshot)
+			if err != nil {
+				return err
+			}
+			record["model_capability_snapshot"] = updated
+			return nil
+		}); err != nil {
+			return err
+		}
+		return migrationStep(step, "after_fetched_image_capability")
+	}},
 }
 
 // backfillCachedInputRate copies a record's input rate onto the cache-read rate
@@ -800,7 +854,16 @@ func redigestPriceProposal(record map[string]json.RawMessage) error {
 // migration 28. Each is recorded as unsupported on records that predate it.
 var newCapabilityEvidenceMembers = []string{"provider_executed_tools"}
 
+// fetchedImageEvidenceMembers is migration 31's equivalent. Kept apart from the
+// list above because a record written between 28 and 31 already has the first
+// member and needs only the second.
+var fetchedImageEvidenceMembers = []string{"fetched_image"}
+
 func backfillEvidenceMember(object map[string]json.RawMessage, field string) error {
+	return backfillCapabilityEvidence(object, field, newCapabilityEvidenceMembers)
+}
+
+func backfillCapabilityEvidence(object map[string]json.RawMessage, field string, members []string) error {
 	encoded, ok := object[field]
 	if !ok || len(encoded) == 0 {
 		return nil
@@ -813,7 +876,7 @@ func backfillEvidenceMember(object map[string]json.RawMessage, field string) err
 		return nil
 	}
 	changed := false
-	for _, name := range newCapabilityEvidenceMembers {
+	for _, name := range members {
 		if _, present := evidence[name]; present {
 			continue
 		}

@@ -3,6 +3,7 @@ package app
 import (
 	"net/http"
 
+	"github.com/akz142857/Halro/internal/compatibility"
 	"github.com/akz142857/Halro/internal/domain"
 )
 
@@ -26,6 +27,7 @@ type providerCapabilityView struct {
 	Embeddings            bool  `json:"embeddings"`
 	Tools                 bool  `json:"tools"`
 	Vision                bool  `json:"vision"`
+	FetchedImage          bool  `json:"fetched_image"`
 	JSONMode              bool  `json:"json_mode"`
 	DeveloperRole         bool  `json:"developer_role"`
 	Reasoning             bool  `json:"reasoning"`
@@ -46,7 +48,7 @@ type providerCapabilityView struct {
 func providerCapabilityViewOf(c domain.ProviderCapabilities) providerCapabilityView {
 	return providerCapabilityView{
 		Chat: c.Chat, Streaming: c.Streaming, Embeddings: c.Embeddings, Tools: c.Tools,
-		Vision: c.Vision, JSONMode: c.JSONMode, DeveloperRole: c.DeveloperRole,
+		Vision: c.Vision, FetchedImage: c.FetchedImage, JSONMode: c.JSONMode, DeveloperRole: c.DeveloperRole,
 		Reasoning: c.Reasoning, StreamUsage: c.StreamUsage,
 		ProviderExecutedTools: c.ProviderExecutedTools,
 		Moderations:           c.Moderations, Images: c.Images, Transcriptions: c.Transcriptions,
@@ -81,6 +83,13 @@ type providerProfileView struct {
 	// which is what makes the two sets above readable: it says where a capability
 	// the anchor does not serve would go.
 	CombinesWith []domain.ProviderProfileID `json:"combines_with"`
+	// RequestConstraints is the half of the capability model that routing applies
+	// and nothing ever showed. A capability tick says what the profile can do; a
+	// constraint says which member of a request it still cannot carry — Bedrock
+	// reads an image and does not fetch one — and the Gateway refuses on it before
+	// any provider call. Sending it means the form can state the rule where the
+	// tick is made, instead of the operator meeting it as a refused request.
+	RequestConstraints []compatibility.ProfileRequestConstraint `json:"request_constraints"`
 }
 
 type providerTypeView struct {
@@ -129,6 +138,7 @@ func buildProviderProfilesView(region string) providerProfilesView {
 			ConnectionCeiling:  providerCapabilityViewOf(domain.ConnectionCeiling(profile.Type, profile.ID)),
 			ConnectionDefaults: providerCapabilityViewOf(domain.ConnectionDefaults(profile.Type, profile.ID)),
 			CombinesWith:       combines,
+			RequestConstraints: compatibility.ProfileRequestConstraints(profile.ID),
 		})
 	}
 	types := make([]providerTypeView, 0, len(domain.AllProviderTypes()))

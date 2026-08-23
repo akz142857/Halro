@@ -1222,6 +1222,8 @@ func capabilitiesEnabledByName(value domain.ProviderCapabilities, name string) b
 		return value.Tools
 	case "vision":
 		return value.Vision
+	case "fetched_image":
+		return value.FetchedImage
 	case "json_mode":
 		return value.JSONMode
 	case "developer_role":

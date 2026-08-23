@@ -723,6 +723,8 @@ func setCapability(value *domain.ProviderCapabilities, name string) {
 		value.Tools = true
 	case "vision":
 		value.Vision = true
+	case "fetched_image":
+		value.FetchedImage = true
 	case "json_mode":
 		value.JSONMode = true
 	case "developer_role":

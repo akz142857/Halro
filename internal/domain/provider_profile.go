@@ -66,7 +66,7 @@ const (
 )
 
 var capabilityNames = []string{
-	"chat", "streaming", "embeddings", "tools", "vision", "json_mode",
+	"chat", "streaming", "embeddings", "tools", "vision", "fetched_image", "json_mode",
 	"developer_role", "reasoning", "stream_usage", "provider_executed_tools", "moderations", "images", "transcriptions", "speech", "files", "batches", "rerank", "async_generate",
 }
 
@@ -125,7 +125,7 @@ func EvidenceForCapabilities(capabilities ProviderCapabilities, enabled Capabili
 	values := map[string]bool{
 		"chat": capabilities.Chat, "streaming": capabilities.Streaming,
 		"embeddings": capabilities.Embeddings, "tools": capabilities.Tools,
-		"vision": capabilities.Vision, "json_mode": capabilities.JSONMode,
+		"vision": capabilities.Vision, "fetched_image": capabilities.FetchedImage, "json_mode": capabilities.JSONMode,
 		"developer_role": capabilities.DeveloperRole, "reasoning": capabilities.Reasoning,
 		"stream_usage": capabilities.StreamUsage, "provider_executed_tools": capabilities.ProviderExecutedTools,
 		"moderations": capabilities.Moderations, "images": capabilities.Images, "transcriptions": capabilities.Transcriptions, "speech": capabilities.Speech, "files": capabilities.Files, "batches": capabilities.Batches, "rerank": capabilities.Rerank, "async_generate": capabilities.AsyncGenerate,
@@ -155,7 +155,7 @@ func NormalizeCapabilityEvidence(capabilities ProviderCapabilities, existing Cap
 	return result
 }
 func capabilityEnabled(c ProviderCapabilities, name string) bool {
-	values := map[string]bool{"chat": c.Chat, "streaming": c.Streaming, "embeddings": c.Embeddings, "tools": c.Tools, "vision": c.Vision, "json_mode": c.JSONMode, "developer_role": c.DeveloperRole, "reasoning": c.Reasoning, "stream_usage": c.StreamUsage, "provider_executed_tools": c.ProviderExecutedTools, "moderations": c.Moderations, "images": c.Images, "transcriptions": c.Transcriptions, "speech": c.Speech, "files": c.Files, "batches": c.Batches, "rerank": c.Rerank, "async_generate": c.AsyncGenerate}
+	values := map[string]bool{"chat": c.Chat, "streaming": c.Streaming, "embeddings": c.Embeddings, "tools": c.Tools, "vision": c.Vision, "fetched_image": c.FetchedImage, "json_mode": c.JSONMode, "developer_role": c.DeveloperRole, "reasoning": c.Reasoning, "stream_usage": c.StreamUsage, "provider_executed_tools": c.ProviderExecutedTools, "moderations": c.Moderations, "images": c.Images, "transcriptions": c.Transcriptions, "speech": c.Speech, "files": c.Files, "batches": c.Batches, "rerank": c.Rerank, "async_generate": c.AsyncGenerate}
 	return values[name]
 }
 
@@ -286,6 +286,7 @@ func ProviderCapabilitiesSubset(candidate, available ProviderCapabilities) bool 
 		(!candidate.AsyncGenerate || available.AsyncGenerate) &&
 		(!candidate.Tools || available.Tools) &&
 		(!candidate.Vision || available.Vision) &&
+		(!candidate.FetchedImage || available.FetchedImage) &&
 		(!candidate.JSONMode || available.JSONMode) &&
 		(!candidate.DeveloperRole || available.DeveloperRole) &&
 		(!candidate.Reasoning || available.Reasoning) &&
@@ -334,7 +335,7 @@ func (e CapabilityEvidenceSet) Validate(capabilities ProviderCapabilities) error
 	values := map[string]bool{
 		"chat": capabilities.Chat, "streaming": capabilities.Streaming,
 		"embeddings": capabilities.Embeddings, "tools": capabilities.Tools,
-		"vision": capabilities.Vision, "json_mode": capabilities.JSONMode,
+		"vision": capabilities.Vision, "fetched_image": capabilities.FetchedImage, "json_mode": capabilities.JSONMode,
 		"developer_role": capabilities.DeveloperRole, "reasoning": capabilities.Reasoning,
 		"stream_usage": capabilities.StreamUsage, "provider_executed_tools": capabilities.ProviderExecutedTools,
 		"moderations": capabilities.Moderations, "images": capabilities.Images, "transcriptions": capabilities.Transcriptions, "speech": capabilities.Speech, "files": capabilities.Files, "batches": capabilities.Batches, "rerank": capabilities.Rerank, "async_generate": capabilities.AsyncGenerate,

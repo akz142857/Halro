@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -111,7 +112,7 @@ func TestOperatorDeclaredProfileBindingCannotExceedItsCeiling(t *testing.T) {
 		{"converse text gains tools", ProfileBedrockConverseText, func(c *ProviderCapabilities) { c.Tools = true }},
 		{"converse text gains vision", ProfileBedrockConverseText, func(c *ProviderCapabilities) { c.Vision = true }},
 		{"gemini gains tools", ProfileGeminiText, func(c *ProviderCapabilities) { c.Tools = true }},
-		{"deepseek gains vision", ProfileDeepSeekChat, func(c *ProviderCapabilities) { c.Vision = true }},
+		{"deepseek gains embeddings", ProfileDeepSeekChat, func(c *ProviderCapabilities) { c.Embeddings = true }},
 		{"openai compatible gains tools", ProfileOpenAICompatible, func(c *ProviderCapabilities) { c.Tools = true }},
 		{"anthropic messages gains embeddings", ProfileAnthropicMessages, func(c *ProviderCapabilities) { c.Embeddings = true }},
 	} {
@@ -148,6 +149,69 @@ func TestAnthropicBindingMayOptIntoProviderExecutedTools(t *testing.T) {
 	capabilities.ProviderExecutedTools = true
 	if err := bindingForTest(defaults, capabilities).Validate("prov_1", providerType, false); err != nil {
 		t.Fatalf("opting into provider-executed tools was rejected: %v", err)
+	}
+}
+
+// The second ceiling opt-in, and the same shape as the first: DeepSeek serves
+// images on one model and refuses them on every other, so a new connection does
+// not claim vision and an operator whose deployment points at the vision model
+// can turn it on. Bounding bindings by the defaults would make that unreachable
+// while the wire path already carries the image.
+func TestDeepSeekBindingMayOptIntoVision(t *testing.T) {
+	providerType, defaults, ok := RegisteredProviderProfile(ProfileDeepSeekChat)
+	if !ok {
+		t.Fatal("the DeepSeek chat profile is not registered")
+	}
+	capabilities := DefaultProviderCapabilitiesForProfile(providerType, ProfileDeepSeekChat)
+	if capabilities.Vision {
+		t.Fatal("vision is meant to be off until the operator opts in")
+	}
+	capabilities.Vision = true
+	if err := bindingForTest(defaults, capabilities).Validate("prov_1", providerType, false); err != nil {
+		t.Fatalf("opting into vision was rejected: %v", err)
+	}
+}
+
+// Reading a picture and going to get one are different claims, and the profile
+// table is where the difference is now stated. It used to be a request-field
+// declaration in the compatibility layer — invisible to the console, spelled
+// once per northbound endpoint — and a target that could see an image was
+// therefore offered every image, including the ones it would have had to fetch.
+func TestOnlyTheProfilesThatFetchDeclareFetchedImage(t *testing.T) {
+	for _, test := range []struct {
+		profile ProviderProfileID
+		fetches bool
+	}{
+		{ProfileOpenAIChatEmbeddings, true},
+		{ProfileAzureChatEmbeddings, true},
+		{ProfileAnthropicMessages, true},
+		{ProfileDeepSeekChat, true},
+		{ProfileBedrockMantleChat, false},
+		{ProfileBedrockMantleOpenAIChat, false},
+		{ProfileBedrockMantleResponses, false},
+		{ProfileBedrockMantleOpenAIResponses, false},
+		{ProfileBedrockMantleAnthropicMessages, false},
+	} {
+		t.Run(string(test.profile), func(t *testing.T) {
+			providerType, _, ok := RegisteredProviderProfile(test.profile)
+			if !ok {
+				t.Fatalf("%s is not a registered profile", test.profile)
+			}
+			ceiling := MaxProviderCapabilitiesForProfile(providerType, test.profile)
+			if !ceiling.Vision {
+				t.Fatalf("%s does not carry vision, so the split says nothing here", test.profile)
+			}
+			if ceiling.FetchedImage != test.fetches {
+				t.Fatalf("%s fetched_image = %v, want %v", test.profile, ceiling.FetchedImage, test.fetches)
+			}
+		})
+	}
+
+	// Fetching is a mode of seeing: nothing may claim it without vision, and the
+	// dependency the console renders says so rather than leaving the form to
+	// discover it on refusal.
+	if want := []string{"vision"}; !slices.Equal(CapabilityDependencies()["fetched_image"], want) {
+		t.Fatalf("fetched_image depends on %v, want %v", CapabilityDependencies()["fetched_image"], want)
 	}
 }
 

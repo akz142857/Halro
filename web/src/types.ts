@@ -352,6 +352,9 @@ export interface ProviderCapabilities {
   async_generate: boolean;
   tools: boolean;
   vision: boolean;
+  /** Whether the target will retrieve an image the request only names, as
+   * opposed to reading one the request carries. Bedrock does the second only. */
+  fetched_image: boolean;
   json_mode: boolean;
   developer_role: boolean;
   reasoning: boolean;
@@ -386,6 +389,20 @@ export interface ProviderProfileDescriptor {
   connection_defaults: ProviderCapabilities;
   /** The other profiles a connection anchored here carries. */
   combines_with: string[];
+  /** The half of the capability model routing applies and nothing used to show.
+   * A capability tick says what this interface can do; a constraint says which
+   * member of a request it still cannot carry, and the Gateway refuses on it
+   * before any provider call. */
+  request_constraints: ProfileRequestConstraint[];
+}
+
+/** One endpoint's worth of members a profile has declared it cannot carry, in
+ * that endpoint's own spelling of the field. */
+export interface ProfileRequestConstraint {
+  endpoint_id: string;
+  path: string;
+  unsupported_request_fields: string[];
+  declared_transforms?: string[];
 }
 
 export interface ProviderTypeDescriptor {

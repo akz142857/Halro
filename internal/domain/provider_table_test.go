@@ -150,24 +150,37 @@ func TestImmutableProfileSet(t *testing.T) {
 	}
 }
 
-// Only the Anthropic Messages profile may be widened past its defaults, and only
-// by provider-executed tools. Enabling that accepts upstream egress which never
-// passes through SafeTransport, so it must stay an opt-in on one profile rather
-// than drift into being every profile's ceiling.
-func TestOnlyAnthropicMessagesHasAWiderCeiling(t *testing.T) {
+// A ceiling wider than its defaults is an opt-in an operator can reach, so each
+// one is named here and nothing else may have a gap at all. Two exist, for two
+// different reasons: provider-executed tools accept upstream egress that never
+// passes through SafeTransport, and DeepSeek serves images on one model while
+// answering every other with a 400. Both stay opt-ins on one profile rather than
+// drifting into being every profile's ceiling — and provider-executed tools in
+// particular must never appear in a second ceiling, whatever else is added here.
+func TestOnlyNamedProfilesHaveAWiderCeiling(t *testing.T) {
+	optIn := map[ProviderProfileID]func(ProviderCapabilities) ProviderCapabilities{
+		ProfileAnthropicMessages: withProviderExecutedTools,
+		ProfileDeepSeekChat:      withVision,
+	}
 	for _, profile := range AllProviderProfiles() {
-		widened := profile.Defaults != profile.Ceiling
-		if profile.ID == ProfileAnthropicMessages {
-			if !widened || !profile.Ceiling.ProviderExecutedTools || profile.Defaults.ProviderExecutedTools {
-				t.Errorf("anthropic messages ceiling is not provider-executed-tools opt-in: %#v", profile)
+		widen, named := optIn[profile.ID]
+		if !named {
+			if profile.Defaults != profile.Ceiling {
+				t.Errorf("%s ceiling differs from its defaults:\n defaults=%#v\n ceiling=%#v",
+					profile.ID, profile.Defaults, profile.Ceiling)
+			}
+			if profile.Ceiling.ProviderExecutedTools {
+				t.Errorf("%s allows provider-executed tools", profile.ID)
 			}
 			continue
 		}
-		if widened {
-			t.Errorf("%s ceiling differs from its defaults:\n defaults=%#v\n ceiling=%#v",
+		// The gap is exactly the declared opt-in — not merely non-empty, which
+		// would let a second capability ride in beside the one that was reviewed.
+		if profile.Defaults == profile.Ceiling || widen(profile.Defaults) != profile.Ceiling {
+			t.Errorf("%s ceiling is not the opt-in it is named for:\n defaults=%#v\n ceiling=%#v",
 				profile.ID, profile.Defaults, profile.Ceiling)
 		}
-		if profile.Ceiling.ProviderExecutedTools {
+		if profile.ID != ProfileAnthropicMessages && profile.Ceiling.ProviderExecutedTools {
 			t.Errorf("%s allows provider-executed tools", profile.ID)
 		}
 	}

@@ -894,11 +894,15 @@ func (s *Service) Chat(
 	if err != nil {
 		return openaiapi.ChatCompletionResponse{}, gatewayError("invalid_request_error", "request cannot be represented safely", 400, err)
 	}
+	candidates := targets
 	targets = filterSemanticCapabilities(targets, canonical.Requirements)
 	targets = filterGenerateProfileCompatibility(targets, canonical)
 	targets = filterPrimitiveTargets(targets, provider.OperationChat)
 	if len(targets) == 0 {
-		return openaiapi.ChatCompletionResponse{}, gatewayError("unsupported_feature", "model route does not support the requested chat capabilities", 400, nil)
+		return openaiapi.ChatCompletionResponse{}, unservableError(
+			"model route does not support the requested chat capabilities",
+			unservableReasons(candidates, canonical, provider.OperationChat),
+		)
 	}
 	request, err = s.redactor.ProcessInboundChat(principal.Project.RedactionPolicyID, request)
 	if err != nil {
@@ -1490,9 +1494,13 @@ func (s *Service) prepareNativeMessages(ctx context.Context, plaintextKey, versi
 	// bearing; deriving them only inside the governance envelope, which is built
 	// for an already-chosen target, left them as decoration.
 	requirements := anthropicwire.NativeRequirements(request)
+	nativeCandidates := targets
 	targets = filterSemanticCapabilities(targets, requirements)
 	if len(targets) == 0 {
-		return auth.AuthResult{}, provider.Target{}, nil, 0, 0, gatewayError("unsupported_feature", "model route does not support the requested Anthropic Messages capabilities", 400, nil)
+		return auth.AuthResult{}, provider.Target{}, nil, 0, 0, unservableError(
+			"model route does not support the requested Anthropic Messages capabilities",
+			missingCapabilities(nativeCandidates, requirements),
+		)
 	}
 	// The beta allowlist is per connection, so it is checked once a target is
 	// chosen and before any provider work — an unaccepted beta costs nothing —
@@ -1778,11 +1786,15 @@ func (s *Service) ChatStream(
 	if err != nil {
 		return gatewayError("invalid_request_error", "request cannot be represented safely", 400, err)
 	}
+	candidates := targets
 	targets = filterSemanticCapabilities(targets, canonical.Requirements)
 	targets = filterGenerateProfileCompatibility(targets, canonical)
 	targets = filterPrimitiveTargets(targets, provider.OperationChatStream)
 	if len(targets) == 0 {
-		return gatewayError("unsupported_feature", "model route does not support the requested chat capabilities", 400, nil)
+		return unservableError(
+			"model route does not support the requested chat capabilities",
+			unservableReasons(candidates, canonical, provider.OperationChatStream),
+		)
 	}
 	if !s.redactor.AllowsStreaming(principal.Project.RedactionPolicyID) {
 		return gatewayError(
@@ -2316,16 +2328,111 @@ func (s *Service) unknownPricePolicyEvidence(principal auth.AuthResult) (*domain
 	return evidence, evidence.Validate()
 }
 
+// unservableError names what a route could not serve. The filters compute every
+// reason and used to discard all of them, which left a refusal that says a
+// request was turned away without saying what about it — the operator's next
+// move is a bisect of a body they may not have written.
+//
+// The names are safe to return because none of them is caller data: capability
+// keys are the same vocabulary the console shows, and the field names are the
+// ones docs/compatibility/endpoint-manifests.json already publishes.
+func unservableError(message string, reasons []string) *Error {
+	if len(reasons) > 0 {
+		message += ": " + strings.Join(reasons, ", ")
+	}
+	return gatewayError("unsupported_feature", message, 400, nil)
+}
+
+// unservableReasons collects, across every candidate the route offered, the
+// capability each one lacked, the request member its profile cannot carry, and
+// the operation it does not implement. Every candidate is reported because every
+// candidate was dropped: naming only the first would send an operator to fix one
+// deployment while the rest of the route fails for other reasons.
+func unservableReasons(candidates []provider.Target, request semantic.GenerateRequest, operation provider.Operation) []string {
+	reasons := newReasonSet()
+	for _, target := range candidates {
+		reasons.addAll(missingCapabilities([]provider.Target{target}, request.Requirements))
+		reasons.addAll(compatibility.UnsupportedGenerateFields(target.ProfileID, request))
+		if _, ok := target.ResolveOperation(operation); !ok {
+			reasons.add(string(operation))
+		}
+	}
+	return reasons.values
+}
+
+func missingCapabilities(candidates []provider.Target, requirements semantic.Requirements) []string {
+	reasons := newReasonSet()
+	for _, target := range candidates {
+		// Table order, not map order: a refusal that lists its reasons
+		// differently each time is a refusal an operator cannot diff.
+		for _, pairing := range capabilityRequirements {
+			if pairing.required(requirements) && !pairing.served(target.Capabilities) {
+				reasons.add(pairing.name)
+			}
+		}
+	}
+	return reasons.values
+}
+
+type reasonSet struct {
+	seen   map[string]struct{}
+	values []string
+}
+
+func newReasonSet() *reasonSet { return &reasonSet{seen: map[string]struct{}{}} }
+
+func (r *reasonSet) add(value string) {
+	if _, exists := r.seen[value]; exists || value == "" {
+		return
+	}
+	r.seen[value] = struct{}{}
+	r.values = append(r.values, value)
+}
+
+func (r *reasonSet) addAll(values []string) {
+	for _, value := range values {
+		r.add(value)
+	}
+}
+
+// capabilityRequirements pairs what a request needs with the capability that
+// serves it, under the name the console and the model catalogue already use.
+//
+// It is one table because it used to be two: the filter matched requirement to
+// capability in a boolean expression, and the refusal that names what a route
+// could not serve rebuilt the same pairing in its own list. Two copies of a
+// mapping is a mapping that drifts, and the drift is silent — a requirement
+// paired in one place and forgotten in the other either refuses without saying
+// why or does not refuse at all.
+//
+// The two sides also used to be spelled differently, requirement InputImage
+// against capability vision and StructuredJSON against json_mode, so the table
+// was the only place the reader could learn they were the same thing. They share
+// the dictionary's names now, and TestEveryCapabilityShapedRequirementIsPaired
+// holds a new one to being either paired here or listed as deliberately not.
+var capabilityRequirements = []struct {
+	name     string
+	required func(semantic.Requirements) bool
+	served   func(provider.Capabilities) bool
+}{
+	{"tools", func(r semantic.Requirements) bool { return r.Tools }, func(c provider.Capabilities) bool { return c.Tools }},
+	{"vision", func(r semantic.Requirements) bool { return r.Vision }, func(c provider.Capabilities) bool { return c.Vision }},
+	{"fetched_image", func(r semantic.Requirements) bool { return r.FetchedImage }, func(c provider.Capabilities) bool { return c.FetchedImage }},
+	{"json_mode", func(r semantic.Requirements) bool { return r.JSONMode }, func(c provider.Capabilities) bool { return c.JSONMode }},
+	{"developer_role", func(r semantic.Requirements) bool { return r.DeveloperRole }, func(c provider.Capabilities) bool { return c.DeveloperRole }},
+	{"reasoning", func(r semantic.Requirements) bool { return r.Reasoning }, func(c provider.Capabilities) bool { return c.Reasoning }},
+	{"stream_usage", func(r semantic.Requirements) bool { return r.StreamUsage }, func(c provider.Capabilities) bool { return c.StreamUsage }},
+	{"provider_executed_tools", func(r semantic.Requirements) bool { return r.ProviderExecutedTools }, func(c provider.Capabilities) bool { return c.ProviderExecutedTools }},
+}
+
 func filterSemanticCapabilities(targets []provider.Target, requirements semantic.Requirements) []provider.Target {
 	return slices.DeleteFunc(slices.Clone(targets), func(target provider.Target) bool {
-		capabilities := target.Capabilities
-		return (requirements.Tools && !capabilities.Tools) ||
-			(requirements.InputImage && !capabilities.Vision) ||
-			(requirements.StructuredJSON && !capabilities.JSONMode) ||
-			(requirements.DeveloperRole && !capabilities.DeveloperRole) ||
-			(requirements.Reasoning && !capabilities.Reasoning) ||
-			(requirements.StreamUsage && !capabilities.StreamUsage) ||
-			(requirements.ProviderExecutedTools && !capabilities.ProviderExecutedTools)
+		for _, pairing := range capabilityRequirements {
+			if pairing.required(requirements) && !pairing.served(target.Capabilities) {
+				return true
+			}
+		}
+		return false
 	})
 }
 

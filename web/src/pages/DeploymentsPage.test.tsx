@@ -12,7 +12,7 @@ import { DEFAULT_TIME_ZONE, isoToZonedInput } from "../timezone";
 const emptyCapabilities: ProviderCapabilities = {
   chat: false, streaming: false, embeddings: false, moderations: false, images: false,
   transcriptions: false, speech: false, files: false, batches: false, rerank: false,
-  async_generate: false, tools: false, vision: false, json_mode: false,
+  async_generate: false, tools: false, vision: false, fetched_image: false, json_mode: false,
   developer_role: false, reasoning: false, stream_usage: false, provider_executed_tools: false,
   max_context_tokens: 0, max_output_tokens: 0,
 };
@@ -172,6 +172,35 @@ describe("deployment invocation target workflow", () => {
   // is re-resolved, so nothing but the operator can establish a capability the
   // deployment never recorded. The form used to send the widened set with no
   // mode at all, and the only possible outcome was model_capabilities_unknown
+  // Routing refuses on a member this interface cannot carry, and the form used to
+  // say nothing about it. The list is the server's — the same coverage the
+  // published manifest carries.
+  //
+  // The image-fetch limit is deliberately not the example any more: it stopped
+  // being a request field and became a capability, so it is a checkbox on this
+  // same form now. What is left here is the genuinely field-level loss, which is
+  // exactly what this surface is for.
+  it("shows the request members the selected interface cannot carry", async () => {
+    const mantleCapabilities: ProviderCapabilities = { ...chatCapabilities, vision: true };
+    vi.mocked(api.providers).mockResolvedValue({
+      items: [{
+        ...provider, capabilities: mantleCapabilities,
+        bindings: [{ id: "b-mantle", profile_id: "bedrock.mantle.openai.chat.v1", enabled: true, capabilities: mantleCapabilities }],
+      } as Provider],
+      next_cursor: "",
+    });
+    vi.mocked(api.deployments).mockResolvedValue({ items: [existingDeployment], next_cursor: "" });
+    vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [], next_cursor: "" });
+    renderPage();
+
+    fireEvent.click((await screen.findAllByRole("button", { name: "编辑" }))[0]);
+    const constraints = await screen.findByRole("region", { name: "这个能力接口载不动的请求成员" });
+    // A member the Gateway refuses on, named where the tick is made, with the
+    // endpoint it belongs to beside it.
+    expect(within(constraints).getAllByText("thinking").length).toBeGreaterThan(0);
+    expect(within(constraints).getAllByText("/v1/messages").length).toBeGreaterThan(0);
+  });
+
   // with no way forward on screen. Ticking the box is the claim — the save
   // carries it, under a button that names what it commits.
   it("sends an edit that widens capabilities as an operator declaration", async () => {

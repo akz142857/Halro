@@ -201,6 +201,13 @@ func TestBuiltinCoversReviewedProviderFamiliesConservatively(t *testing.T) {
 			want: domain.ProviderCapabilities{Chat: true, Streaming: true, Tools: true, JSONMode: true, Reasoning: true, StreamUsage: true, MaxContextTokens: 1_000_000, MaxOutputTokens: 384_000},
 		},
 		{
+			// The one DeepSeek model that accepts an image. Its two siblings above
+			// answer one with a 400, which is why the claim lives per model and not
+			// on the profile's defaults.
+			key:  Key{ProviderType: domain.ProviderDeepSeek, Profile: domain.ProfileDeepSeekChat, Model: "deepseek-v4-flash-vision-exp"},
+			want: domain.ProviderCapabilities{Chat: true, Streaming: true, Tools: true, JSONMode: true, Reasoning: true, Vision: true, FetchedImage: true, StreamUsage: true, MaxContextTokens: 1_000_000, MaxOutputTokens: 384_000},
+		},
+		{
 			key:  Key{ProviderType: domain.ProviderDeepSeek, Profile: domain.ProfileDeepSeekChat, Model: "deepseek-v4-pro"},
 			want: domain.ProviderCapabilities{Chat: true, Streaming: true, Tools: true, JSONMode: true, Reasoning: true, StreamUsage: true, MaxContextTokens: 1_000_000, MaxOutputTokens: 384_000},
 		},
@@ -683,5 +690,27 @@ func TestTheAuthoringExampleIsNotAboutToExpire(t *testing.T) {
 	if remaining := time.Until(example.ExpiresAt); remaining < 90*24*time.Hour {
 		t.Fatalf("the authoring example expires at %s (%.0f days away); push it out before the runbook stops working",
 			example.ExpiresAt.Format(time.RFC3339), remaining.Hours()/24)
+	}
+}
+
+// The ceiling gained vision so one model could claim it. The other two must not
+// have gained it with the ceiling: a catalog that widened by profile rather than
+// by model would put vision on models DeepSeek answers with a 400.
+func TestOnlyTheDeepSeekVisionModelClaimsVision(t *testing.T) {
+	catalog := Builtin()
+	for model, want := range map[string]bool{
+		"deepseek-v4-flash":            false,
+		"deepseek-v4-pro":              false,
+		"deepseek-v4-flash-vision-exp": true,
+	} {
+		entry, ok := catalog.Lookup(Key{
+			ProviderType: domain.ProviderDeepSeek, Profile: domain.ProfileDeepSeekChat, Model: model,
+		})
+		if !ok {
+			t.Fatalf("%s is not covered by the builtin catalog", model)
+		}
+		if entry.Capabilities.Vision != want {
+			t.Fatalf("%s vision = %v, want %v", model, entry.Capabilities.Vision, want)
+		}
 	}
 }

@@ -80,6 +80,7 @@ export const zhCN = {
     capabilityDetectionRateLimited: "你在一分钟内启动了过多模型验证，请稍后重试。",
     ambiguousCapabilityBinding: "该模型可通过多个能力接口调用。请选择实际接口后再确认模型。",
     noDetectableBinding: "当前能力接口不支持自动识别，请使用高级手动声明。",
+    capabilityExpansionRequiresRevalidation: "新增能力需要重新验证，所以这个部署必须先离开路由。请先停用指向它的启用中路由再保存；或者取消新勾的能力，只做收窄。",
     bindingReferencedByDeployment: "有模型部署正在这个能力接口上运行，所以它不能关闭。请先停用或删除下面这个部署。",
     routeReferencedByProject: "这是该别名最后一条路由，还有项目允许应用请求它。请先从下面这个项目的可用模型中移除该别名。",
     credentialBaseURLMismatch: "这份凭据加密时绑定的是 {{credential}}，而当前连接的基础地址是 {{provider}}。凭据只能用于绑定时的那个端点：把基础地址改回 {{credential}}，或改选一份为 {{provider}} 保存的凭据。",
@@ -709,7 +710,7 @@ export const zhCN = {
     httpError: "上游 HTTP", routeFallback: "发生路由回退", requestRetry: "发生请求重试", unknownContext: "上下文不可用",
   },
   capabilities: {
-    chat: "对话", streaming: "流式", embeddings: "向量嵌入", moderations: "内容审核", images: "图像", transcriptions: "音频转写", speech: "语音合成", files: "文件", batches: "批处理", rerank: "重排", async_generate: "异步生成", tools: "工具调用", vision: "视觉", json_mode: "JSON 模式", developer_role: "开发者角色", reasoning: "推理", stream_usage: "流式用量", provider_executed_tools: "服务商侧执行工具",
+    chat: "对话", streaming: "流式", embeddings: "向量嵌入", moderations: "内容审核", images: "图像", transcriptions: "音频转写", speech: "语音合成", files: "文件", batches: "批处理", rerank: "重排", async_generate: "异步生成", tools: "工具调用", vision: "视觉", fetched_image: "远程图片抓取", json_mode: "JSON 模式", developer_role: "开发者角色", reasoning: "推理", stream_usage: "流式用量", provider_executed_tools: "服务商侧执行工具",
     // 不是复选框，但服务端在拒绝一次保存时会点名，所以同样需要人话。
     max_context_tokens: "最大上下文令牌", max_output_tokens: "最大输出令牌",
   },
@@ -756,6 +757,8 @@ export const zhCN = {
     validationPassed: "验证通过", validationFailed: "验证失败", validationExpired: "配置已变更，需重新验证", notValidated: "尚未验证", notTested: "尚未测试", lastTest: "{{time}} · {{latency}}ms", upstreamTarget: "上游调用目标", routeDependency: "路由依赖", activeRoutes: "{{count}} 条启用路由 →", noActiveRoutes: "无启用路由", status: "状态", routeBlocked: "请先停用引用该部署的模型路由", testRequired: "请先测试当前版本", disableTitle: "禁用模型部署？", disableConfirm: "确认禁用模型部署“{{name}}”？该部署将立即停止接收新的模型请求。", notConfigured: "未配置", unlimited: "不限", upstreamApplies: "以上游为准", undeclared: "部署未声明", deploymentScope: "部署级", perMillionTokens: "USD / 百万令牌", perRequest: "USD / 请求", tokens: "令牌", fixedPrice: "固定费用", capabilityCount: "{{count}} 项能力", technicalDetails: "技术详情", accessSurface: "访问面", profile: "能力配置", deploymentID: "部署 ID", bindingID: "绑定 ID", moreActions: "更多操作", evidenceValues: { verified: "已验证", declared: "已声明" },
     edit: "编辑模型部署", createTitle: "创建模型部署", createReplacementTitle: "创建替代部署", createReplacement: "创建替代", saveReplacement: "保存替代部署", providerRequired: "需要可用服务商", providerRequiredDescription: "先在服务商页面创建并启用一个上游连接。", openProviders: "前往服务商配置 →",
     name: "部署名称", provider: "服务商", binding: "能力接口", bindingHint: "切换接口会保留当前模型和兼容能力；不被新接口支持的能力会关闭，接口相关的旧识别结果会失效。", detectionBindingLabel: "调用接口", detectionBindingHint: "本次能力识别和之后的全部流量都走这个接口；部署创建后不能更换。", interfaceAdvanced: "能力接口", interfaceAutomatic: "自动选择", interfaceAdvancedHint: "请选择实际调用接口。Halro 会带出该接口的能力上限；你只能关闭不需要的能力，不能扩大。", selectionSpansInterfaces: "没有单一能力接口能承载全部所选能力", selectionSpansInterfacesDescription: "一个部署只运行在一个接口上。请收窄所选能力，或为剩余能力另建一个部署。", upstreamModel: "上游模型 ID", upstreamModelHint: "填写服务商识别的准确模型 ID；Azure OpenAI 填写 Deployment 名称。", capabilitySubset: "模型能力（只能是所选能力接口的子集）",
+    requestConstraints: "这个能力接口载不动的请求成员",
+    requestConstraintsHint: "能力勾选说明这个接口能做什么；下面这些是它仍然无法承载的请求成员。网关在调用上游之前就按这些声明拒绝，所以勾了能力也不代表带这些成员的请求能通过。",
     maxContext: "最大上下文令牌", maxContextHint: "0 表示不在部署层声明，运行时仍受上游限制", maxOutputTokens: "最大输出令牌", maxOutputHint: "0 表示不在部署层声明，运行时仍受上游限制；填写后不得超过最大上下文令牌",
     concurrencyLimit: "并发上限", concurrencyHint: "0 表示不在部署层限制并发，仅受服务商自身限制", inputUSD: "输入 USD / 百万令牌", outputUSD: "输出 USD / 百万令牌", cachedInputUSD: "缓存输入 USD / 百万令牌", cachedInputHint: "服务商从自身缓存返回的提示词令牌单价；通常远低于输入价。未修改时跟随输入价，填 0 表示缓存命中不计费", fixedRequestUSD: "每请求固定 USD", fixedRequestHint: "用于媒体、重排、文件、批处理和异步操作", region: "区域", regionHint: "区域化 Bedrock 配置必填；通常从服务商端点自动推导",
     enable: "启用模型部署", save: "保存并热加载", saveWithDeclaration: "声明并保存", createAndLoad: "创建并热加载", saveDisabled: "保存为停用", saveBlocked: "尚未完成", saveBlockers: { name: "填写部署名称", model: "选择或输入模型", interface: "选择能力接口", detection: "识别能力或使用高级接入", resolution: "确认调用接口和能力", operation: "至少保留一项核心能力", limits: "检查运行限制" },

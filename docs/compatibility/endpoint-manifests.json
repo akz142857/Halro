@@ -11,6 +11,8 @@
       "model",
       "messages",
       "messages[].name",
+      "messages[].content[].image_url",
+      "messages[].content[].detail",
       "stream",
       "stream_options",
       "temperature",
@@ -89,10 +91,12 @@
           "seed",
           "response_format",
           "reasoning_effort",
-          "user"
+          "user",
+          "messages[].content[].detail"
         ],
         "declared_transforms": [
           "portable Chat content is mapped to Anthropic Messages blocks",
+          "an Anthropic image source is base64, url, or file and has no member for the OpenAI fidelity hint, so detail is rejected before provider I/O at any value other than auto rather than dropped from a request that paid for it",
           "response_format and reasoning_effort are declared unsupported at field granularity because support is value-dependent: json_schema maps to output_config.format and the low/medium/high/xhigh/max ladder maps to output_config.effort, while json_object and any effort outside that ladder have no Anthropic representation and are routed away before provider I/O"
         ]
       },
@@ -205,10 +209,13 @@
           "seed",
           "response_format",
           "reasoning_effort",
-          "user"
+          "user",
+          "messages[].content[].detail"
         ],
         "declared_transforms": [
-          "portable Chat content is mapped to Bedrock Mantle Anthropic Messages blocks"
+          "portable Chat content is mapped to Bedrock Mantle Anthropic Messages blocks",
+          "an Anthropic image source is base64, url, or file and has no member for the OpenAI fidelity hint, so detail is rejected before provider I/O at any value other than auto rather than dropped from a request that paid for it",
+          "Anthropic states that only base64-encoded image sources are available on Amazon Bedrock, so an image_url naming an address to fetch is rejected before provider I/O while a data URL is carried as a base64 source"
         ]
       }
     ]
@@ -324,7 +331,6 @@
       "input[].output",
       "input[].content[].type",
       "input[].content[].text",
-      "input[].content[].image_url",
       "input[].content[].detail",
       "instructions",
       "stream",
@@ -478,7 +484,8 @@
         "status": "compatible",
         "unsupported_request_fields": [
           "text.format",
-          "user"
+          "user",
+          "input[].content[].detail"
         ],
         "declared_transforms": [
           "Responses items are mapped through the Anthropic Messages ProviderPrimitive"
@@ -575,9 +582,11 @@
         "status": "compatible",
         "unsupported_request_fields": [
           "text.format",
-          "user"
+          "user",
+          "input[].content[].detail"
         ],
         "declared_transforms": [
+          "an Anthropic image source is base64, url, or file and has no member for the OpenAI fidelity hint, so detail is rejected before provider I/O at any value other than auto rather than dropped from a request that paid for it",
           "Responses items are mapped through Bedrock Mantle Anthropic Messages"
         ]
       }

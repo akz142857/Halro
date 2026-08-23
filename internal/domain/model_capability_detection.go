@@ -329,6 +329,8 @@ func setCapability(c *ProviderCapabilities, name string, value bool) {
 		c.Tools = value
 	case "vision":
 		c.Vision = value
+	case "fetched_image":
+		c.FetchedImage = value
 	case "json_mode":
 		c.JSONMode = value
 	case "developer_role":

@@ -177,6 +177,7 @@ type Capabilities struct {
 	AsyncGenerate  bool
 	Tools          bool
 	Vision         bool
+	FetchedImage   bool
 	JSONMode       bool
 	DeveloperRole  bool
 	Reasoning      bool
