@@ -47,8 +47,21 @@ func (s *Service) accountedInferenceResources(ctx context.Context, principal aut
 	if policyRejected {
 		providerErr = nil
 	}
-	settlement := budget.Settlement{ProviderInputTokens: inputUnits, TokenEstimated: true, CostEstimated: true}
-	setSettlementCost(&settlement, attempt.pricingTarget, attempt.accounting.ReservationMicrosUSD)
+	// A definitive provider failure commits nothing — the rule the chat, stream
+	// and embedding paths already follow and `unsent_attempt_test.go` pins.
+	// Committing the full estimate unconditionally charged the Project for calls
+	// no provider received: a refused dial or a SafeTransport policy rejection
+	// billed as much as a served request, once per attempt.
+	settlement := budget.Settlement{Outcome: "success"}
+	if providerErr != nil {
+		settlement.Outcome = "provider_error"
+	}
+	if providerErr == nil || ambiguousProviderFailure(providerErr) {
+		settlement.ProviderInputTokens = inputUnits
+		settlement.TokenEstimated = true
+		settlement.CostEstimated = true
+		setSettlementCost(&settlement, attempt.pricingTarget, attempt.accounting.ReservationMicrosUSD)
+	}
 	if err := attempt.finish(providerErr, settlement); err != nil {
 		return err
 	}

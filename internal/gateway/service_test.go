@@ -1440,6 +1440,61 @@ func TestChatStreamUsesPublicModelAndSettlesUsage(t *testing.T) {
 	}
 }
 
+// A tool-forced turn can deliver its whole output as call arguments, which the
+// delivered-byte count ignored. The estimate was then capped at the one-token
+// floor, so a client that dropped the connection before the usage frame left the
+// ledger recording a single token against everything the provider generated and
+// billed — repeatable at will, and invisible to budget enforcement.
+func TestAbortedToolArgumentStreamIsNotBilledAsOneToken(t *testing.T) {
+	f := newFixture(t, 1_000)
+	defer f.close()
+	f.adapter.streamUsage = nil
+	f.adapter.streamChunks = nil
+	for index := range 4 {
+		f.adapter.streamChunks = append(
+			f.adapter.streamChunks, toolArgumentChunk(index, strings.Repeat("a", 2000)),
+		)
+	}
+	request := chatRequest()
+	request.Stream = true
+	received := 0
+	err := f.service.ChatStream(context.Background(), f.plaintext, request,
+		func(openaiapi.ChatCompletionResponse) error {
+			received++
+			if received == 2 {
+				return errors.New("client went away")
+			}
+			return nil
+		})
+	if err == nil {
+		t.Fatal("an aborted stream reported success")
+	}
+	period := time.Now().UTC().Format("2006-01-02")
+	balance := f.state.Balance(f.project.ID, period, testTimezoneVersion)
+	// chatRequest asks for 20 output tokens and the delivered arguments exceed
+	// that, so the estimate stands rather than being capped down to the floor.
+	if balance.OutputTokens != 20 {
+		t.Fatalf("tool-call output was not accounted: %#v", balance)
+	}
+}
+
+func toolArgumentChunk(index int, arguments string) openaiapi.ChatCompletionResponse {
+	callIndex := 0
+	call := openaiapi.ToolCall{
+		Index:    &callIndex,
+		Function: openaiapi.ToolCallFunction{Arguments: arguments},
+	}
+	if index == 0 {
+		call.ID, call.Type, call.Function.Name = "call_1", "function", "lookup"
+	}
+	return openaiapi.ChatCompletionResponse{
+		ID: "chunk", Object: "chat.completion.chunk", Model: "provider-model",
+		Choices: []openaiapi.Choice{{
+			Index: 0, Delta: &openaiapi.Message{Role: "assistant", ToolCalls: []openaiapi.ToolCall{call}},
+		}},
+	}
+}
+
 func TestChatStreamFallsBackOnlyBeforeFirstPayload(t *testing.T) {
 	f := newFixture(t, 10_000)
 	defer f.close()

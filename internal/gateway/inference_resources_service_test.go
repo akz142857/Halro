@@ -109,17 +109,18 @@ func (s *inferenceResourcesMemoryStore) ProviderResourceByIdempotency(_ context.
 }
 
 type inferenceResourcesAdapter struct {
-	providerType string
-	fileCalls    int
-	getFileCalls int
-	deleteCalls  int
-	fileErr      error
-	getFileErr   error
-	deleteErr    error
-	file         provider.FileObject
-	batch        provider.BatchObject
-	transcript   provider.TranscriptionResult
-	image        provider.ImageResult
+	providerType  string
+	fileCalls     int
+	getFileCalls  int
+	deleteCalls   int
+	fileErr       error
+	getFileErr    error
+	deleteErr     error
+	file          provider.FileObject
+	batch         provider.BatchObject
+	transcript    provider.TranscriptionResult
+	transcribeErr error
+	image         provider.ImageResult
 }
 
 func (a *inferenceResourcesAdapter) Type() string { return a.providerType }
@@ -140,7 +141,7 @@ func (a *inferenceResourcesAdapter) GenerateImage(context.Context, provider.Imag
 	return a.image, nil
 }
 func (a *inferenceResourcesAdapter) Transcribe(context.Context, provider.TranscriptionCall) (provider.TranscriptionResult, error) {
-	return a.transcript, nil
+	return a.transcript, a.transcribeErr
 }
 func (a *inferenceResourcesAdapter) Synthesize(context.Context, provider.SpeechCall) (provider.SpeechResult, error) {
 	return provider.SpeechResult{}, nil
@@ -276,6 +277,34 @@ func TestInferenceResourcesAsyncCancelRequiresRecordedOwner(t *testing.T) {
 	f.store.resources[resource.ID] = resource
 	_, err := f.service.CancelAsyncInvoke(context.Background(), f.plaintext, resource.ID)
 	assertGatewayCode(t, err, "resource_owner_unavailable")
+}
+
+// A Phase 2 call the provider never received must commit nothing, the rule the
+// chat, stream and embedding paths already follow. Committing the full estimate
+// regardless of the error class charged the Project for a refused dial or a
+// SafeTransport policy rejection, once per failed call, against work no upstream
+// ever did.
+func TestInferenceResourcesUnsentFailureIsNotBilled(t *testing.T) {
+	adapter := &inferenceResourcesAdapter{
+		providerType:  string(domain.ProviderOpenAI),
+		transcribeErr: &provider.Error{Class: provider.ErrorConnect, Retryable: true, Message: "dial refused"},
+	}
+	f := newInferenceResourcesServiceFixture(t, domain.ProfileOpenAIMediaResources, adapter, inferenceResourcesTargetFor("audio", adapter), nil)
+	defer f.close()
+	audio := make([]byte, 512)
+	copy(audio, []byte("ID3\x04\x00\x00\x00\x00\x00\x15"))
+	_, err := f.service.Transcription(context.Background(), f.plaintext, "audio", provider.TranscriptionCall{Filename: "audio.mp3", ContentType: "audio/mpeg", Data: audio})
+	if err == nil {
+		t.Fatal("a call the provider never received reported success")
+	}
+	period := time.Now().UTC().Format("2006-01-02")
+	balance := f.state.Balance(f.project.ID, period, testTimezoneVersion)
+	if balance.CommittedMicrosUSD != 0 || balance.InputTokens != 0 {
+		t.Fatalf("an unsent call was billed: %#v", balance)
+	}
+	if balance.ReservedMicrosUSD != 0 {
+		t.Fatalf("the reservation outlived the attempt: %#v", balance)
+	}
 }
 
 func TestInferenceResourcesTranscriptionAppliesOutboundRedaction(t *testing.T) {

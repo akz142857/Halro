@@ -522,12 +522,21 @@ func accountingTermsFromSnapshot(price domain.DeploymentPriceVersion, snapshot d
 	if price.BillingMode == domain.BillingModeFree {
 		mode = ledger.LeaseModeFree
 	}
+	reservation := cost.TotalCostMicrosUSD
+	if mode == ledger.LeaseModeMetered && reservation == 0 {
+		// A metered lease has to reserve something — the Ledger refuses one that
+		// reserves nothing — and an operation with no span to price still opens
+		// an attempt: count_tokens prepares zero tokens, so an ordinary metered
+		// price derives zero and the endpoint could not run at all. The unpriced
+		// path floors the same way; this one did not.
+		reservation = 1
+	}
 	priced := target
 	priced.InputMicrosPerMillion = *snapshot.InputMicrosPerMillion
 	priced.CachedInputMicrosPerMillion = *snapshot.CachedInputMicrosPerMillion
 	priced.OutputMicrosPerMillion = *snapshot.OutputMicrosPerMillion
 	priced.FixedRequestMicrosUSD = *snapshot.FixedRequestMicrosUSD
-	return cost.TotalCostMicrosUSD, mode, &snapshot, priced, nil
+	return reservation, mode, &snapshot, priced, nil
 }
 
 func (s *Service) prepareAccountingLease(ctx context.Context, target provider.Target, inputTokens, outputTokens int64) (int64, ledger.LeaseMode, *domain.PriceSnapshot, provider.Target, error) {
@@ -544,20 +553,7 @@ func (s *Service) prepareAccountingLease(ctx context.Context, target provider.Ta
 	if err != nil {
 		return 0, "", nil, target, gatewayError("accounting_error", "unable to snapshot request price", http.StatusServiceUnavailable, err)
 	}
-	cost, err := snapshot.Calculate(inputTokens, 0, outputTokens)
-	if err != nil {
-		return 0, "", nil, target, gatewayError("accounting_error", "unable to estimate request cost", http.StatusServiceUnavailable, err)
-	}
-	mode := ledger.LeaseModeMetered
-	if snapshot.BillingMode == domain.BillingModeFree {
-		mode = ledger.LeaseModeFree
-	}
-	priced := target
-	priced.InputMicrosPerMillion = *snapshot.InputMicrosPerMillion
-	priced.CachedInputMicrosPerMillion = *snapshot.CachedInputMicrosPerMillion
-	priced.OutputMicrosPerMillion = *snapshot.OutputMicrosPerMillion
-	priced.FixedRequestMicrosUSD = *snapshot.FixedRequestMicrosUSD
-	return cost.TotalCostMicrosUSD, mode, &snapshot, priced, nil
+	return accountingTermsFromSnapshot(price, snapshot, target, inputTokens, outputTokens)
 }
 
 func (attempt *activeAttempt) finish(providerErr error, settlement budget.Settlement) error {
@@ -1256,6 +1252,7 @@ func (s *Service) MessagesNative(ctx context.Context, plaintextKey, version stri
 	result, providerErr := adapter.MessagesNative(ctx, provider.NativeMessageCall{RequestID: run.requestID, ProviderModel: target.ProviderModel, Version: version, Betas: betas, Payload: payload})
 	var message anthropicapi.Message
 	var semanticResult semantic.GenerateResult
+	var redactionErr error
 	if providerErr == nil {
 		registry, _ := anthropicwire.NewNativeSchemaRegistry()
 		identity := nativeIdentity(principal, target, request.Model)
@@ -1266,7 +1263,20 @@ func (s *Service) MessagesNative(ctx context.Context, plaintextKey, version stri
 			safePayload, _ := responseEnvelope.PayloadFor(target.ProfileID, 1, compatibility.NativeResponse)
 			message, providerErr = anthropicapi.DecodeMessage(safePayload)
 			if providerErr == nil {
-				providerErr = s.checkNativeOutboundRedaction(principal, safePayload)
+				// A policy refusal is Halro's verdict on a response the provider
+				// served and billed, so it settles the attempt on that usage and
+				// answers the caller in its own terms. Folding it into providerErr
+				// settled a completed generation at zero — a silent refund of real
+				// upstream spend, repeatable by any caller whose prompts elicit
+				// matching output. An inspection that could not run is a different
+				// answer and stays a provider failure.
+				switch inspectErr := s.checkNativeOutboundRedaction(principal, safePayload); {
+				case inspectErr == nil:
+				case errors.Is(inspectErr, redaction.ErrPolicyRejected):
+					redactionErr = inspectErr
+				default:
+					providerErr = inspectErr
+				}
 			}
 		}
 	}
@@ -1279,8 +1289,11 @@ func (s *Service) MessagesNative(ctx context.Context, plaintextKey, version stri
 		return anthropicapi.Message{}, err
 	}
 	outcome := "success"
-	if providerErr != nil {
+	switch {
+	case providerErr != nil:
 		outcome = "provider_error"
+	case redactionErr != nil:
+		outcome = "policy_rejected"
 	}
 	if err := run.finalize(outcome); err != nil {
 		return anthropicapi.Message{}, gatewayError("accounting_unavailable", "request accounting could not be finalized", 503, err)
@@ -1288,17 +1301,23 @@ func (s *Service) MessagesNative(ctx context.Context, plaintextKey, version stri
 	if providerErr != nil {
 		return anthropicapi.Message{}, terminalProviderError(providerErr)
 	}
+	if redactionErr != nil {
+		return anthropicapi.Message{}, gatewayError(
+			"sensitive_output_detected", "provider output violated redaction policy", 422, redactionErr,
+		)
+	}
 	message.Model = request.Model
 	return message, nil
 }
 
 // MessagesCountTokens serves Anthropic's count_tokens. Anthropic does not bill
-// it, and Halro settles it at zero cost — but it still runs the whole admission
-// path: authentication, project policy, routing, redaction, and a real ledger
-// attempt. The endpoint sends the caller's prompt to the provider on the
-// operator's credential, so leaving it off the ledger would put a class of
-// provider calls outside the record that every other call is held to. What the
-// entry says is that it happened and cost nothing.
+// it, so it settles at whatever the pinned price charges a request that
+// generated nothing — nothing at all under an ordinary per-token price, and the
+// operator's fixed per-request fee where one is configured. It still runs the
+// whole admission path: authentication, project policy, routing, redaction, and
+// a real ledger attempt. The endpoint sends the caller's prompt to the provider
+// on the operator's credential, so leaving it off the ledger would put a class
+// of provider calls outside the record every other call is held to.
 func (s *Service) MessagesCountTokens(ctx context.Context, plaintextKey, version string, betas []string, request anthropicapi.MessageRequest) (anthropicapi.TokenCount, error) {
 	if request.Stream {
 		return anthropicapi.TokenCount{}, gatewayError("invalid_request_error", "count_tokens does not stream", 400, nil)
@@ -1326,8 +1345,8 @@ func (s *Service) MessagesCountTokens(ctx context.Context, plaintextKey, version
 		return anthropicapi.TokenCount{}, err
 	}
 	defer run.close()
-	// Zero prepared tokens is what makes the reservation zero: nothing is
-	// generated, so there is no span to price.
+	// Zero prepared tokens: nothing is generated, so there is no span to price.
+	// The lease still reserves the floor a metered lease requires.
 	attempt, err := s.startAttempt(ctx, run, target, 0, 0, 0, 0, 1)
 	if err != nil {
 		return anthropicapi.TokenCount{}, s.exhaustedAttemptsError(err)
@@ -1339,15 +1358,35 @@ func (s *Service) MessagesCountTokens(ctx context.Context, plaintextKey, version
 	}
 	result, providerErr := adapter.CountTokensNative(ctx, provider.NativeMessageCall{RequestID: run.requestID, ProviderModel: target.ProviderModel, Version: version, Betas: betas, Payload: payload})
 	var count anthropicapi.TokenCount
+	var redactionErr error
 	if providerErr == nil {
 		count, providerErr = anthropicapi.DecodeTokenCount(result.Payload)
 		if providerErr == nil {
-			providerErr = s.checkNativeOutboundRedaction(principal, result.Payload)
+			// A policy refusal is Halro's verdict, not a provider outage, and it
+			// gets the same answer here as on the Messages path.
+			switch inspectErr := s.checkNativeOutboundRedaction(principal, result.Payload); {
+			case inspectErr == nil:
+			case errors.Is(inspectErr, redaction.ErrPolicyRejected):
+				redactionErr = inspectErr
+			default:
+				providerErr = inspectErr
+			}
 		}
 	}
-	settlement := budget.Settlement{Outcome: "success", ProviderInputTokens: count.InputTokens}
+	// The number this endpoint returns is its answer, not a span the provider
+	// billed for, so the attempt reports no provider tokens. What it owes is
+	// whatever the frozen price charges a request with no span — nothing, unless
+	// the operator priced a fixed per-request fee, which a count_tokens call
+	// incurs like any other request. Committing a hard zero instead left the
+	// settlement inconsistent with the pinned snapshot and stranded the lease.
+	settlement := budget.Settlement{Outcome: "success"}
 	if providerErr != nil {
-		settlement = budget.Settlement{Outcome: "provider_error"}
+		settlement.Outcome = "provider_error"
+	} else {
+		if redactionErr != nil {
+			settlement.Outcome = "policy_rejected"
+		}
+		setSettlementCost(&settlement, attempt.pricingTarget, attempt.accounting.ReservationMicrosUSD)
 	}
 	if err := attempt.finish(providerErr, settlement); err != nil {
 		return anthropicapi.TokenCount{}, err
@@ -1357,6 +1396,11 @@ func (s *Service) MessagesCountTokens(ctx context.Context, plaintextKey, version
 	}
 	if providerErr != nil {
 		return anthropicapi.TokenCount{}, terminalProviderError(providerErr)
+	}
+	if redactionErr != nil {
+		return anthropicapi.TokenCount{}, gatewayError(
+			"sensitive_output_detected", "provider output violated redaction policy", 422, redactionErr,
+		)
 	}
 	return count, nil
 }
@@ -2536,6 +2580,17 @@ func authorizeSource(ctx context.Context, project domain.Project) error {
 	return gatewayError("source_not_allowed", "request source is not allowed for this project", 403, nil)
 }
 
+// ambiguousProviderFailure reports a failure the provider may still have
+// executed. It is the single test that decides whether a failed attempt owes
+// anything: a definitive failure commits nothing, an ambiguous one is settled
+// on the reservation because the work may have been done — and billed —
+// upstream. Every settlement path asks it, so none of them can drift into
+// refunding a served attempt or charging for one that never ran.
+func ambiguousProviderFailure(err error) bool {
+	var classified *provider.Error
+	return errors.As(err, &classified) && classified.Ambiguous
+}
+
 func settlementForResult(
 	response semantic.GenerateResult,
 	providerErr error,
@@ -2547,8 +2602,7 @@ func settlementForResult(
 	result := budget.Settlement{Outcome: "success"}
 	if providerErr != nil {
 		result.Outcome = "provider_error"
-		var classified *provider.Error
-		if !errors.As(providerErr, &classified) || !classified.Ambiguous {
+		if !ambiguousProviderFailure(providerErr) {
 			return result
 		}
 		if validSemanticUsage(response.Usage) {
@@ -2681,8 +2735,7 @@ func embeddingSettlement(
 	result := budget.Settlement{Outcome: "success"}
 	if providerErr != nil {
 		result.Outcome = "provider_error"
-		var classified *provider.Error
-		if !errors.As(providerErr, &classified) || !classified.Ambiguous {
+		if !ambiguousProviderFailure(providerErr) {
 			return result
 		}
 		if validSemanticUsage(response.Usage) {
@@ -2730,8 +2783,7 @@ func streamSettlement(
 		result.TokenEstimated = true
 		result.CostEstimated = true
 	} else {
-		var classified *provider.Error
-		if !errors.As(providerErr, &classified) || !classified.Ambiguous {
+		if !ambiguousProviderFailure(providerErr) {
 			// A definitive failure with nothing delivered and no usage means
 			// the provider never served this attempt, so there is no cost to
 			// commit — not even the fixed per-request fee, which pays for a
@@ -2752,8 +2804,19 @@ func streamSettlement(
 	return result
 }
 
-// deliveredChunkBytes measures the assistant text a chunk carried. Everything
-// else in the frame is protocol the provider was not asked to generate.
+// deliveredChunkBytes measures what the provider generated into a chunk, which
+// is the only bound the gateway holds on an attempt whose usage never arrived.
+//
+// Tool-call arguments and reasoning text count: they are generated tokens the
+// upstream bills for, and a tool-forced turn can be made entirely of them. While
+// only Delta.Content counted, a stream that delivered nothing else measured zero
+// bytes, the estimate was capped at the one-token floor, and the ledger recorded
+// a token against thousands the operator was charged — a shortfall any caller
+// could repeat by dropping the connection before the usage frame.
+//
+// A tool call's identity is not counted: the stream redactor re-sends the merged
+// call metadata with every fragment, so its name and id would be added once per
+// chunk for a value the provider generated once.
 func deliveredChunkBytes(chunk openaiapi.ChatCompletionResponse) int64 {
 	total := int64(0)
 	for _, choice := range chunk.Choices {
@@ -2762,9 +2825,13 @@ func deliveredChunkBytes(chunk openaiapi.ChatCompletionResponse) int64 {
 		}
 		if text, ok := openaiapi.DecodeTextContent(choice.Delta.Content); ok {
 			total += int64(len(text))
-			continue
+		} else {
+			total += int64(len(choice.Delta.Content))
 		}
-		total += int64(len(choice.Delta.Content))
+		total += int64(len(choice.Delta.ReasoningContent))
+		for _, call := range choice.Delta.ToolCalls {
+			total += int64(len(call.Function.Arguments))
+		}
 	}
 	return total
 }
