@@ -3,6 +3,7 @@ package app
 import (
 	"net/http"
 
+	"github.com/akz142857/Halro/internal/compatibility"
 	"github.com/akz142857/Halro/internal/domain"
 )
 
@@ -20,41 +21,13 @@ import (
 // is the domain table itself, walked through AllProviderProfiles so a profile
 // added there cannot be missing here.
 
-type providerCapabilityView struct {
-	Chat                  bool  `json:"chat"`
-	Streaming             bool  `json:"streaming"`
-	Embeddings            bool  `json:"embeddings"`
-	Tools                 bool  `json:"tools"`
-	Vision                bool  `json:"vision"`
-	JSONMode              bool  `json:"json_mode"`
-	DeveloperRole         bool  `json:"developer_role"`
-	Reasoning             bool  `json:"reasoning"`
-	StreamUsage           bool  `json:"stream_usage"`
-	ProviderExecutedTools bool  `json:"provider_executed_tools"`
-	Moderations           bool  `json:"moderations"`
-	Images                bool  `json:"images"`
-	Transcriptions        bool  `json:"transcriptions"`
-	Speech                bool  `json:"speech"`
-	Files                 bool  `json:"files"`
-	Batches               bool  `json:"batches"`
-	Rerank                bool  `json:"rerank"`
-	AsyncGenerate         bool  `json:"async_generate"`
-	MaxContextTokens      int64 `json:"max_context_tokens"`
-	MaxOutputTokens       int64 `json:"max_output_tokens"`
-}
-
-func providerCapabilityViewOf(c domain.ProviderCapabilities) providerCapabilityView {
-	return providerCapabilityView{
-		Chat: c.Chat, Streaming: c.Streaming, Embeddings: c.Embeddings, Tools: c.Tools,
-		Vision: c.Vision, JSONMode: c.JSONMode, DeveloperRole: c.DeveloperRole,
-		Reasoning: c.Reasoning, StreamUsage: c.StreamUsage,
-		ProviderExecutedTools: c.ProviderExecutedTools,
-		Moderations:           c.Moderations, Images: c.Images, Transcriptions: c.Transcriptions,
-		Speech: c.Speech, Files: c.Files, Batches: c.Batches, Rerank: c.Rerank,
-		AsyncGenerate:    c.AsyncGenerate,
-		MaxContextTokens: c.MaxContextTokens, MaxOutputTokens: c.MaxOutputTokens,
-	}
-}
+// The capability sets are the domain type itself. This endpoint's job is to
+// publish the dictionary, so a projection with its own copy of every member
+// was a second place to add a capability and a second place to forget one —
+// and its json tags were already identical, which is what a copy that exists
+// only to be kept identical looks like. The golden fixture is the review gate:
+// a domain change that alters this answer shows up in its diff.
+type providerCapabilityView = domain.ProviderCapabilities
 
 type providerProfileView struct {
 	ID               domain.ProviderProfileID `json:"id"`
@@ -81,6 +54,13 @@ type providerProfileView struct {
 	// which is what makes the two sets above readable: it says where a capability
 	// the anchor does not serve would go.
 	CombinesWith []domain.ProviderProfileID `json:"combines_with"`
+	// RequestConstraints is the half of the capability model that routing applies
+	// and nothing ever showed. A capability tick says what the profile can do; a
+	// constraint says which member of a request it still cannot carry — Bedrock
+	// reads an image and does not fetch one — and the Gateway refuses on it before
+	// any provider call. Sending it means the form can state the rule where the
+	// tick is made, instead of the operator meeting it as a refused request.
+	RequestConstraints []compatibility.ProfileRequestConstraint `json:"request_constraints"`
 }
 
 type providerTypeView struct {
@@ -124,11 +104,12 @@ func buildProviderProfilesView(region string) providerProfilesView {
 			CredentialScheme:   profile.CredentialScheme,
 			DefaultBaseURL:     domain.ResolveBaseURL(profile.ID, region),
 			Immutable:          profile.Immutable,
-			Defaults:           providerCapabilityViewOf(profile.Defaults),
-			Ceiling:            providerCapabilityViewOf(profile.Ceiling),
-			ConnectionCeiling:  providerCapabilityViewOf(domain.ConnectionCeiling(profile.Type, profile.ID)),
-			ConnectionDefaults: providerCapabilityViewOf(domain.ConnectionDefaults(profile.Type, profile.ID)),
+			Defaults:           profile.Defaults,
+			Ceiling:            profile.Ceiling,
+			ConnectionCeiling:  domain.ConnectionCeiling(profile.Type, profile.ID),
+			ConnectionDefaults: domain.ConnectionDefaults(profile.Type, profile.ID),
 			CombinesWith:       combines,
+			RequestConstraints: compatibility.ProfileRequestConstraints(profile.ID),
 		})
 	}
 	types := make([]providerTypeView, 0, len(domain.AllProviderTypes()))

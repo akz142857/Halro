@@ -1083,7 +1083,7 @@ func TestChatRejectsUnsupportedSemanticCapabilityBeforeProviderCall(t *testing.T
 
 func TestChatCapabilityFilterSelectsOnlyCompatibleFallback(t *testing.T) {
 	all := provider.Capabilities{
-		Chat: true, Streaming: true, Tools: true, Vision: true, JSONMode: true,
+		Chat: true, Streaming: true, Tools: true, Vision: true, FetchedImage: true, JSONMode: true,
 		DeveloperRole: true, Reasoning: true, StreamUsage: true,
 	}
 	targets := []provider.Target{
@@ -1159,7 +1159,7 @@ func TestSemanticCapabilityFilterRequiresTheCapabilityItFiltersOn(t *testing.T) 
 	bare := provider.Target{ID: "bare", DeploymentID: "dep_bare", Capabilities: provider.Capabilities{Chat: true, Streaming: true}}
 
 	for _, requirement := range []semantic.Requirements{
-		{Tools: true}, {InputImage: true}, {StructuredJSON: true},
+		{Tools: true}, {Vision: true}, {JSONMode: true},
 		{DeveloperRole: true}, {Reasoning: true}, {StreamUsage: true},
 	} {
 		filtered := filterSemanticCapabilities([]provider.Target{capable, bare}, requirement)
@@ -1169,6 +1169,62 @@ func TestSemanticCapabilityFilterRequiresTheCapabilityItFiltersOn(t *testing.T) 
 	}
 	if filtered := filterSemanticCapabilities([]provider.Target{bare}, semantic.Requirements{Streaming: true}); len(filtered) != 1 {
 		t.Fatal("a plain streaming requirement dropped a chat target")
+	}
+}
+
+// A data URL is the picture itself in base64. Counting it at the text ratio put a
+// modest photograph six figures of tokens over a project limit no provider would
+// have applied, and that same estimate bounds the deployment context window, the
+// TPM lease and the budget reservation.
+func TestImageInputIsEstimatedAtItsCeilingNotItsEncodedLength(t *testing.T) {
+	dataURL := "data:image/png;base64," + strings.Repeat("A", 400_000)
+	withImage := semantic.GenerateRequest{Messages: []semantic.Message{{
+		Role: semantic.RoleUser,
+		Content: []semantic.Content{
+			{Kind: semantic.ContentText, Text: "describe this"},
+			{Kind: semantic.ContentInputImage, URL: dataURL},
+		},
+	}}}
+	// The wire bytes the facade would report: the whole body, image included.
+	wireBytes := int64(len(dataURL) + len("describe this") + 64)
+
+	estimate := estimateGenerateInputTokens(wireBytes, withImage)
+	if estimate > semantic.ImageInputTokenCeiling+64 {
+		t.Fatalf("image estimated at %d tokens; the ceiling is %d", estimate, semantic.ImageInputTokenCeiling)
+	}
+	if estimate <= semantic.ImageInputTokenCeiling {
+		t.Fatalf("image estimated at %d tokens, which does not charge the ceiling plus its prompt", estimate)
+	}
+	if plain := estimateInputTokens(wireBytes); plain <= estimate*10 {
+		t.Fatalf("the text estimate %d was not the outsized one this replaces", plain)
+	}
+
+	// Two images cost two ceilings, and a request without one is untouched.
+	twoImages := withImage
+	twoImages.Messages = []semantic.Message{{Role: semantic.RoleUser, Content: append(
+		append([]semantic.Content{}, withImage.Messages[0].Content...),
+		semantic.Content{Kind: semantic.ContentInputImage, URL: dataURL},
+	)}}
+	if got := estimateGenerateInputTokens(wireBytes+int64(len(dataURL)), twoImages); got-estimate != semantic.ImageInputTokenCeiling {
+		t.Fatalf("second image added %d tokens", got-estimate)
+	}
+	textOnly := semantic.GenerateRequest{Messages: []semantic.Message{{
+		Role: semantic.RoleUser, Content: []semantic.Content{{Kind: semantic.ContentText, Text: "hello"}},
+	}}}
+	if got := estimateGenerateInputTokens(400, textOnly); got != estimateInputTokens(400) {
+		t.Fatalf("a request without an image estimated %d, not %d", got, estimateInputTokens(400))
+	}
+}
+
+// A remote URL is a few dozen bytes either way, but it is still not prose, and a
+// request that carries one is still asking a model to look at a picture.
+func TestRemoteImageURLAlsoChargesTheCeiling(t *testing.T) {
+	request := semantic.GenerateRequest{Messages: []semantic.Message{{
+		Role:    semantic.RoleUser,
+		Content: []semantic.Content{{Kind: semantic.ContentInputImage, URL: "https://example.invalid/a.png"}},
+	}}}
+	if got := estimateGenerateInputTokens(120, request); got < semantic.ImageInputTokenCeiling {
+		t.Fatalf("remote image estimated %d tokens", got)
 	}
 }
 
@@ -1754,6 +1810,117 @@ func TestMantleTargetRefusesUnservableRequestsBeforeProviderIO(t *testing.T) {
 		`[{"type":"image_url","image_url":{"url":"https://example.invalid/image.png"}}]`,
 	)}}
 	assertRefusedBeforeProviderIO(t, service, f.plaintext, vision, mantle, "image input")
+}
+
+// The declaration only matters if it stops the request here. A Mantle target that
+// declares vision still cannot fetch a picture, so the remote address is refused
+// with no provider call and no budget spent — while the same target serves the
+// same image inlined, which is the shape the console produces for a local file.
+func TestMantleRefusesAnImageItWouldHaveToFetchAndServesAnInlinedOne(t *testing.T) {
+	f := newFixture(t, 10_000)
+	defer f.close()
+	ceiling := domain.DefaultProviderCapabilitiesForProfile(domain.ProviderBedrock, domain.ProfileBedrockMantleOpenAIChat)
+	f.registry = provider.NewRegistry()
+	mantle := &fakeAdapter{response: f.adapter.response, profileID: domain.ProfileBedrockMantleOpenAIChat}
+	if err := f.registry.Register(provider.Target{
+		ID: "target_mantle", DeploymentID: "dep_mantle", PublicModel: "chat", ProviderModel: "provider-model",
+		Adapter: mantle, ProfileID: domain.ProfileBedrockMantleOpenAIChat,
+		// Vision at the profile ceiling: the target can see an image. What it
+		// cannot do is go and get one.
+		Capabilities: provider.Capabilities{
+			Chat: ceiling.Chat, Streaming: ceiling.Streaming, Tools: ceiling.Tools, Vision: ceiling.Vision,
+			JSONMode: ceiling.JSONMode, DeveloperRole: ceiling.DeveloperRole,
+			Reasoning: ceiling.Reasoning, StreamUsage: ceiling.StreamUsage,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewServiceWithOptions(f.service.auth, f.registry, f.accounting, ServiceOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	remote := chatRequest()
+	remote.Messages = []openaiapi.Message{{Role: "user", Content: json.RawMessage(
+		`[{"type":"image_url","image_url":{"url":"https://example.invalid/photo.jpg"}}]`,
+	)}}
+	assertRefusedBeforeProviderIO(t, service, f.plaintext, remote, mantle, "a remote image URL")
+
+	inline := chatRequest()
+	inline.Messages = []openaiapi.Message{{Role: "user", Content: json.RawMessage(
+		`[{"type":"image_url","image_url":{"url":"data:image/png;base64,aGk="}}]`,
+	)}}
+	if _, err := service.Chat(context.Background(), f.plaintext, inline); err != nil {
+		t.Fatalf("an inlined image was refused: %v", err)
+	}
+	if mantle.calls != 1 {
+		t.Fatalf("the inlined image reached the provider %d time(s)", mantle.calls)
+	}
+}
+
+// A refusal that does not name its reason sends the operator to bisect a request
+// body. Every reason is already computed by the filters, and each one is an
+// identifier — a capability key the console shows, or a request field the
+// published manifest lists — so the refusal can carry them.
+//
+// Both reasons here are capability keys, which is what moving the fetch limit
+// out of the field layer bought: the operator is told "fetched_image, vision"
+// and can find both as ticks on the deployment form, instead of being handed one
+// endpoint's spelling of a member and left to work out which box it belongs to.
+func TestUnservableRouteNamesTheCapabilityAndFieldItRefused(t *testing.T) {
+	f := newFixture(t, 10_000)
+	defer f.close()
+	f.registry = provider.NewRegistry()
+	// One target that can see an image but cannot fetch one, and one that can
+	// fetch but was never given vision. Neither can serve the request, and an
+	// operator sent to fix only one of them fixes nothing.
+	mantle := &fakeAdapter{response: f.adapter.response, profileID: domain.ProfileBedrockMantleOpenAIChat}
+	if err := f.registry.Register(provider.Target{
+		ID: "target_mantle", DeploymentID: "dep_mantle", PublicModel: "chat", ProviderModel: "provider-model",
+		Adapter: mantle, ProfileID: domain.ProfileBedrockMantleOpenAIChat,
+		Capabilities: provider.Capabilities{Chat: true, Streaming: true, Vision: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	blind := &fakeAdapter{response: f.adapter.response, profileID: domain.ProfileOpenAIChatEmbeddings}
+	if err := f.registry.Register(provider.Target{
+		ID: "target_blind", DeploymentID: "dep_blind", PublicModel: "chat", ProviderModel: "provider-model",
+		Adapter: blind, ProfileID: domain.ProfileOpenAIChatEmbeddings, Priority: 1,
+		Capabilities: provider.Capabilities{Chat: true, Streaming: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewServiceWithOptions(f.service.auth, f.registry, f.accounting, ServiceOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := chatRequest()
+	request.Messages = []openaiapi.Message{{Role: "user", Content: json.RawMessage(
+		`[{"type":"image_url","image_url":{"url":"https://example.invalid/photo.jpg"}}]`,
+	)}}
+	_, err = service.Chat(context.Background(), f.plaintext, request)
+	var classified *Error
+	if !errors.As(err, &classified) {
+		t.Fatalf("the route did not refuse the request: %v", err)
+	}
+	if classified.Code != "unsupported_feature" {
+		t.Fatalf("code = %q", classified.Code)
+	}
+	for _, named := range []string{"fetched_image", "vision"} {
+		if !strings.Contains(classified.Message, named) {
+			t.Fatalf("the refusal does not name %s: %q", named, classified.Message)
+		}
+	}
+	if mantle.calls != 0 || blind.calls != 0 {
+		t.Fatal("a target the route could not serve was called anyway")
+	}
+
+	// A route that can serve the request still answers it, and the reason list
+	// only appears on a refusal.
+	if _, err := service.Chat(context.Background(), f.plaintext, chatRequest()); err != nil {
+		t.Fatalf("a servable request was refused: %v", err)
+	}
 }
 
 func assertRefusedBeforeProviderIO(

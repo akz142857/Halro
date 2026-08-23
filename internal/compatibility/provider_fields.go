@@ -27,19 +27,23 @@ func intersectSorted(left, right []string) []string {
 	return result
 }
 
-// UnsupportedGenerateFields returns northbound fields that the selected
-// provider profile cannot represent without silent semantic loss.
-func UnsupportedGenerateFields(profileID domain.ProviderProfileID, request semantic.GenerateRequest) []string {
-	var unsupported []string
-	seen := map[string]struct{}{}
-	add := func(condition bool, field string) {
-		if _, exists := seen[field]; condition && !exists {
-			unsupported = append(unsupported, field)
-			seen[field] = struct{}{}
+// generateFieldRules is what each profile declares it cannot carry, registered
+// by profile rather than matched in a switch.
+//
+// A switch answers the question and hides whether it was asked: a profile added
+// to the domain table and forgotten here fell to the legacy branch, which is
+// fail-closed and therefore silent — the platform would run, serve plain text,
+// and refuse tools, images and structured output with nothing to say why. A
+// registry makes the omission enumerable, and TestEveryProfileIsRegistered
+// names the profile and this file when one is missing.
+var generateFieldRules = func() map[domain.ProviderProfileID]func(add fieldSink, request semantic.GenerateRequest) {
+	rules := map[domain.ProviderProfileID]func(add fieldSink, request semantic.GenerateRequest){}
+	register := func(rule func(add fieldSink, request semantic.GenerateRequest), profiles ...domain.ProviderProfileID) {
+		for _, profileID := range profiles {
+			rules[profileID] = rule
 		}
 	}
-	switch profileID {
-	case domain.ProfileGeminiText:
+	register(func(add fieldSink, request semantic.GenerateRequest) {
 		add(hasNamedMessage(request), "messages[].name")
 		add(hasFailedToolResult(request), "messages[].content[].is_error")
 		add(request.Seed != nil, "seed")
@@ -49,7 +53,8 @@ func UnsupportedGenerateFields(profileID domain.ProviderProfileID, request seman
 		add(request.OutputFormat != nil, "response_format")
 		add(request.ReasoningEffort != "", "reasoning_effort")
 		add(request.EndUserRef != "", "user")
-	case domain.ProfileBedrockConverseText:
+	}, domain.ProfileGeminiText)
+	register(func(add fieldSink, request semantic.GenerateRequest) {
 		add(hasNamedMessage(request), "messages[].name")
 		add(hasFailedToolResult(request), "messages[].content[].is_error")
 		add(request.Candidates != nil && *request.Candidates > 1, "n")
@@ -60,8 +65,14 @@ func UnsupportedGenerateFields(profileID domain.ProviderProfileID, request seman
 		add(request.OutputFormat != nil, "response_format")
 		add(request.ReasoningEffort != "", "reasoning_effort")
 		add(request.EndUserRef != "", "user")
-	case domain.ProfileAnthropicMessages:
+	}, domain.ProfileBedrockConverseText)
+	register(func(add fieldSink, request semantic.GenerateRequest) {
 		add(hasNamedMessage(request), "messages[].name")
+		// Anthropic's image source is base64, url, or file — there is no member
+		// for OpenAI's fidelity hint. Writing it in anyway made the whole request
+		// invalid; dropping it silently would change what the caller asked for and
+		// what it costs them.
+		add(hasImageDetail(request), "messages[].content[].detail")
 		add(hasDeveloperMessage(request), "messages[].role=developer")
 		add(request.Candidates != nil && *request.Candidates > 1, "n")
 		add(request.Seed != nil, "seed")
@@ -80,7 +91,9 @@ func UnsupportedGenerateFields(profileID domain.ProviderProfileID, request seman
 		// reservation, naming a field the caller never sent.
 		add(request.ReasoningEffort != "" && !slices.Contains(portableEffortLevels, request.ReasoningEffort), "reasoning_effort")
 		add(request.EndUserRef != "", "user")
-	case domain.ProfileBedrockMantleAnthropicMessages:
+	}, domain.ProfileAnthropicMessages)
+	register(func(add fieldSink, request semantic.GenerateRequest) {
+		add(hasImageDetail(request), "messages[].content[].detail")
 		// The Mantle Beta profile shares this wire representation and could carry
 		// output_config, but its capability ceiling is fixed by the build and
 		// widening it is a separate contract review. Until that happens the
@@ -92,7 +105,8 @@ func UnsupportedGenerateFields(profileID domain.ProviderProfileID, request seman
 		add(request.OutputFormat != nil, "response_format")
 		add(request.ReasoningEffort != "", "reasoning_effort")
 		add(request.EndUserRef != "", "user")
-	case domain.ProfileBedrockMantleResponses, domain.ProfileBedrockMantleOpenAIResponses:
+	}, domain.ProfileBedrockMantleAnthropicMessages)
+	register(func(add fieldSink, request semantic.GenerateRequest) {
 		add(hasFailedToolResult(request), "messages[].content[].is_error")
 		// A Responses message item has no author name to put one in — the Name
 		// field on the item carries a function's name, not a speaker's — so the
@@ -106,7 +120,8 @@ func UnsupportedGenerateFields(profileID domain.ProviderProfileID, request seman
 		add(request.Seed != nil, "seed")
 		add(request.Stream && len(request.Tools) > 0, "tools")
 		add(request.ReasoningEffort != "", "reasoning_effort")
-	case domain.ProfileDeepSeekChat:
+	}, domain.ProfileBedrockMantleResponses, domain.ProfileBedrockMantleOpenAIResponses)
+	register(func(add fieldSink, request semantic.GenerateRequest) {
 		// DeepSeek speaks this wire format but accepts a smaller set of members
 		// than OpenAI does; deepseek.go holds the list and the renderer that has
 		// to agree with it. Sharing OpenAI's branch declared none of the gap, so
@@ -150,32 +165,83 @@ func UnsupportedGenerateFields(profileID domain.ProviderProfileID, request seman
 		add(request.ReasoningEffort != "" && !slices.Contains(deepSeekPortableEfforts, request.ReasoningEffort), "reasoning_effort")
 		// `user` is absent on purpose. DeepSeek carries the same concept as
 		// user_id, so it is renamed by the renderer rather than declared lost.
-	case domain.ProfileOpenAIChatEmbeddings, domain.ProfileAzureChatEmbeddings, domain.ProfileOpenAICompatible, domain.ProfileBedrockMantleChat, domain.ProfileBedrockMantleOpenAIChat:
+	}, domain.ProfileDeepSeekChat)
+	register(func(add fieldSink, request semantic.GenerateRequest) {
 		// These profiles use the OpenAI-compatible wire representation directly.
 		// The one thing that representation has no place for is a tool result the
 		// caller marked as failed: an OpenAI tool message is its text and nothing
 		// else, so is_error would be dropped and the model would read a failure as
 		// a successful answer.
 		add(hasFailedToolResult(request), "messages[].content[].is_error")
-	default:
-		// Legacy or extension adapters do not have profile-level proof for optional
-		// fields. Permit only the portable text/model core and fail closed for
-		// everything whose semantics an adapter could otherwise silently discard.
-		add(hasNamedMessage(request), "messages[].name")
-		add(hasDeveloperMessage(request), "messages[].role")
-		add(hasNonTextContent(request), "messages[].content")
+	}, domain.ProfileOpenAIChatEmbeddings, domain.ProfileAzureChatEmbeddings, domain.ProfileOpenAICompatible)
+	register(func(add fieldSink, request semantic.GenerateRequest) {
+		// Bedrock's inability to fetch an image used to be declared here, once per
+		// northbound endpoint, in each endpoint's own name for the same member.
+		// Three spellings of one fact was the evidence that it did not belong in
+		// this layer: it is not a property of a request field, it is a property of
+		// the target. It is a capability now — fetched_image, absent from every
+		// Mantle ceiling — so those requests are refused by the same filter that
+		// refuses a target with no vision at all, and an operator sees the rule as
+		// a checkbox instead of meeting it as a refusal.
 		add(hasFailedToolResult(request), "messages[].content[].is_error")
-		// Scalar Chat Completions controls remain part of the legacy OpenAI-wire
-		// adapter contract. Their conversion is declared (never lossless), while
-		// richer optional semantics stay fail-closed until a profile is supplied.
-		add(request.Seed != nil, "seed")
-		add(len(request.Tools) > 0, "tools")
-		add(request.ToolChoice != nil, "tool_choice")
-		add(request.ParallelTools != nil, "parallel_tool_calls")
-		add(request.OutputFormat != nil, "response_format")
-		add(request.ReasoningEffort != "", "reasoning_effort")
-		add(request.EndUserRef != "", "user")
-		add(request.IncludeUsage, "stream_options")
+	}, domain.ProfileBedrockMantleChat, domain.ProfileBedrockMantleOpenAIChat)
+	return rules
+}()
+
+// legacyFieldRules is what an unregistered profile falls back to: permit the
+// portable text core and refuse everything whose semantics an adapter could
+// otherwise silently discard. It is a plain function rather than a registry
+// entry so that "registered" and "fell back" stay distinguishable — the
+// completeness test reads exactly that difference.
+func legacyFieldRules(add fieldSink, request semantic.GenerateRequest) {
+	// Legacy or extension adapters do not have profile-level proof for optional
+	// fields. Permit only the portable text/model core and fail closed for
+	// everything whose semantics an adapter could otherwise silently discard.
+	add(hasNamedMessage(request), "messages[].name")
+	add(hasDeveloperMessage(request), "messages[].role")
+	add(hasNonTextContent(request), "messages[].content")
+	add(hasFailedToolResult(request), "messages[].content[].is_error")
+	// Scalar Chat Completions controls remain part of the legacy OpenAI-wire
+	// adapter contract. Their conversion is declared (never lossless), while
+	// richer optional semantics stay fail-closed until a profile is supplied.
+	add(request.Seed != nil, "seed")
+	add(len(request.Tools) > 0, "tools")
+	add(request.ToolChoice != nil, "tool_choice")
+	add(request.ParallelTools != nil, "parallel_tool_calls")
+	add(request.OutputFormat != nil, "response_format")
+	add(request.ReasoningEffort != "", "reasoning_effort")
+	add(request.EndUserRef != "", "user")
+	add(request.IncludeUsage, "stream_options")
+}
+
+// fieldSink records a field the profile cannot carry, once.
+type fieldSink func(condition bool, field string)
+
+// RegisteredGenerateProfiles lists the profiles that declare their own field
+// rules, for the completeness test that holds the table and this file together.
+func RegisteredGenerateProfiles() []domain.ProviderProfileID {
+	profiles := make([]domain.ProviderProfileID, 0, len(generateFieldRules))
+	for profileID := range generateFieldRules {
+		profiles = append(profiles, profileID)
+	}
+	return profiles
+}
+
+// UnsupportedGenerateFields returns northbound fields that the selected
+// provider profile cannot represent without silent semantic loss.
+func UnsupportedGenerateFields(profileID domain.ProviderProfileID, request semantic.GenerateRequest) []string {
+	var unsupported []string
+	seen := map[string]struct{}{}
+	add := func(condition bool, field string) {
+		if _, exists := seen[field]; condition && !exists {
+			unsupported = append(unsupported, field)
+			seen[field] = struct{}{}
+		}
+	}
+	if rule, registered := generateFieldRules[profileID]; registered {
+		rule(add, request)
+	} else {
+		legacyFieldRules(add, request)
 	}
 	return unsupported
 }
@@ -207,6 +273,21 @@ func hasDeveloperMessage(request semantic.GenerateRequest) bool {
 	for _, message := range request.Messages {
 		if message.Role == semantic.RoleDeveloper {
 			return true
+		}
+	}
+	return false
+}
+
+// hasImageDetail reports a fidelity hint that would be lost. OpenAI's default is
+// auto, which is what omitting the member already means, so only a request that
+// asked for something else is refused — the same rule the value-dependent fields
+// on the DeepSeek profile follow.
+func hasImageDetail(request semantic.GenerateRequest) bool {
+	for _, message := range request.Messages {
+		for _, part := range message.Content {
+			if part.Kind == semantic.ContentInputImage && part.Detail != "" && part.Detail != "auto" {
+				return true
+			}
 		}
 	}
 	return false

@@ -80,7 +80,7 @@ func ResolveBaseURL(profileID ProviderProfileID, region string) string {
 var (
 	openAIChatSet = ProviderCapabilities{
 		Chat: true, Streaming: true, Embeddings: true, Tools: true,
-		Vision: true, JSONMode: true, DeveloperRole: true, Reasoning: true,
+		Vision: true, FetchedImage: true, JSONMode: true, DeveloperRole: true, Reasoning: true,
 		StreamUsage: true,
 	}
 	// Files and batches ride with the Anthropic connection because Anthropic
@@ -89,7 +89,7 @@ var (
 	// capability says the deployment can be given a file, not that Anthropic will
 	// hold one. See ADR 0021.
 	anthropicMessagesSet = ProviderCapabilities{
-		Chat: true, Streaming: true, Tools: true, Vision: true, JSONMode: true,
+		Chat: true, Streaming: true, Tools: true, Vision: true, FetchedImage: true, JSONMode: true,
 		Reasoning: true, StreamUsage: true, Files: true, Batches: true,
 	}
 	openAIMediaSet = ProviderCapabilities{
@@ -127,10 +127,17 @@ var profileTable = []profileRow{
 		Defaults: openAIChatSet, Ceiling: openAIChatSet,
 	},
 	{
+		// Vision is reachable but not assumed. DeepSeek serves images on one model
+		// and answers every other one with a 400, so the ceiling admits it and the
+		// defaults do not: a connection claims what its models do, and the model
+		// catalogue is where that per-model claim is recorded. Widening the
+		// defaults instead would have every DeepSeek connection assert vision on
+		// the strength of a single experimental model.
 		ID: ProfileDeepSeekChat, Type: ProviderDeepSeek,
 		Surface: SurfaceDeepSeek, Scheme: CredentialBearerStatic,
 		BaseURLTemplate: "https://api.deepseek.com",
-		Defaults:        deepSeekSet, Ceiling: deepSeekSet,
+		Defaults:        deepSeekSet,
+		Ceiling:         withVision(deepSeekSet),
 	},
 	{
 		// Compatibility servers vary. These conservative defaults preserve the two
@@ -249,6 +256,11 @@ var (
 	bedrockConverseSet  = ProviderCapabilities{Chat: true, Streaming: true, StreamUsage: true}
 	titanEmbedSet       = ProviderCapabilities{Embeddings: true, MaxContextTokens: 8192}
 
+	// No FetchedImage on any Mantle set: Bedrock reads an image from the bytes a
+	// request carries and never retrieves one on the caller's behalf. Halro must
+	// not close that gap by fetching the address itself — that would make the
+	// gateway retrieve a caller-supplied URL, which is the request forgery
+	// SafeTransport's allowlists exist to prevent.
 	mantleOpenAIChatSet = ProviderCapabilities{
 		Chat: true, Streaming: true, Tools: true, Vision: true, JSONMode: true,
 		DeveloperRole: true, Reasoning: true, StreamUsage: true,
@@ -265,6 +277,15 @@ var (
 
 func withProviderExecutedTools(base ProviderCapabilities) ProviderCapabilities {
 	base.ProviderExecutedTools = true
+	return base
+}
+
+// withVision is the DeepSeek ceiling opt-in. It carries both halves because the
+// one DeepSeek model that sees an image accepts it either way — inline as a data
+// URL, or as an https address it retrieves itself.
+func withVision(base ProviderCapabilities) ProviderCapabilities {
+	base.Vision = true
+	base.FetchedImage = true
 	return base
 }
 
@@ -371,9 +392,12 @@ func AllProviderTypes() []ProviderType {
 // caller present the reason ("streaming needs chat") rather than a flat set.
 func CapabilityDependencies() map[string][]string {
 	return map[string][]string{
-		"streaming":               {"chat"},
-		"tools":                   {"chat"},
-		"vision":                  {"chat"},
+		"streaming": {"chat"},
+		"tools":     {"chat"},
+		"vision":    {"chat"},
+		// Fetching is a mode of seeing: a target that cannot read an image has
+		// nothing to fetch one for. Same shape as stream_usage over streaming.
+		"fetched_image":           {"vision"},
 		"json_mode":               {"chat"},
 		"developer_role":          {"chat"},
 		"reasoning":               {"chat"},

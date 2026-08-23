@@ -696,42 +696,7 @@ func dependencyClosure(value domain.ProviderCapabilities) domain.ProviderCapabil
 }
 
 func setCapability(value *domain.ProviderCapabilities, name string) {
-	switch name {
-	case "chat":
-		value.Chat = true
-	case "streaming":
-		value.Streaming = true
-	case "embeddings":
-		value.Embeddings = true
-	case "moderations":
-		value.Moderations = true
-	case "images":
-		value.Images = true
-	case "transcriptions":
-		value.Transcriptions = true
-	case "speech":
-		value.Speech = true
-	case "files":
-		value.Files = true
-	case "batches":
-		value.Batches = true
-	case "rerank":
-		value.Rerank = true
-	case "async_generate":
-		value.AsyncGenerate = true
-	case "tools":
-		value.Tools = true
-	case "vision":
-		value.Vision = true
-	case "json_mode":
-		value.JSONMode = true
-	case "developer_role":
-		value.DeveloperRole = true
-	case "reasoning":
-		value.Reasoning = true
-	case "stream_usage":
-		value.StreamUsage = true
-	}
+	domain.SetCapability(value, name, true)
 }
 
 func normalizeInvocationTargets(items []domain.InvocationTargetDescriptor) []domain.InvocationTargetDescriptor {

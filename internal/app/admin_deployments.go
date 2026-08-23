@@ -1211,44 +1211,8 @@ func deploymentCapabilityEvidence(capabilities domain.ProviderCapabilities,
 }
 
 func capabilitiesEnabledByName(value domain.ProviderCapabilities, name string) bool {
-	switch name {
-	case "chat":
-		return value.Chat
-	case "streaming":
-		return value.Streaming
-	case "embeddings":
-		return value.Embeddings
-	case "tools":
-		return value.Tools
-	case "vision":
-		return value.Vision
-	case "json_mode":
-		return value.JSONMode
-	case "developer_role":
-		return value.DeveloperRole
-	case "reasoning":
-		return value.Reasoning
-	case "stream_usage":
-		return value.StreamUsage
-	case "moderations":
-		return value.Moderations
-	case "images":
-		return value.Images
-	case "transcriptions":
-		return value.Transcriptions
-	case "speech":
-		return value.Speech
-	case "files":
-		return value.Files
-	case "batches":
-		return value.Batches
-	case "rerank":
-		return value.Rerank
-	case "async_generate":
-		return value.AsyncGenerate
-	default:
-		return false
-	}
+	enabled, _ := domain.CapabilityValue(value, name)
+	return enabled
 }
 
 func evidenceRank(value domain.CapabilityEvidence) int {

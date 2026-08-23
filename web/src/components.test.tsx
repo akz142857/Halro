@@ -11,6 +11,20 @@ describe("ErrorState", () => {
     expect(screen.queryByText(/capability interface cannot be determined/)).not.toBeInTheDocument();
   });
 
+  // The generic 409 headline tells the operator to refresh, and refreshing
+  // cannot help: nothing changed underneath them, and the edit stays refused
+  // until the routes are dealt with. The only actionable sentence used to be
+  // the server's untranslated English underneath it.
+  it("says which routes block a capability expansion instead of offering a refresh", () => {
+    render(<ErrorState error={new ApiError(
+      409,
+      "enabling additional capabilities requires revalidation, so the deployment must leave routing first; disable its active routes, or narrow capabilities instead",
+      "capability_expansion_requires_revalidation",
+    )} />);
+    expect(screen.getByText(/请先停用指向它的启用中路由再保存/)).toBeVisible();
+    expect(screen.queryByText("数据已被其他操作修改，请刷新后重试。")).not.toBeInTheDocument();
+  });
+
   it("explains a Gateway Key replay without exposing the server's English sentinel", () => {
     render(<ErrorState error={new ApiError(
       409,

@@ -122,7 +122,7 @@ func TestGenerateRequestRoundTripUsesCanonicalFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !canonical.Requirements.DeveloperRole || !canonical.Requirements.InputImage || !canonical.Requirements.Tools || !canonical.Requirements.StructuredJSON {
+	if !canonical.Requirements.DeveloperRole || !canonical.Requirements.Vision || !canonical.Requirements.Tools || !canonical.Requirements.JSONMode {
 		t.Fatalf("requirements=%#v", canonical.Requirements)
 	}
 	rendered, err := RenderGenerateRequest(canonical, "provider-model")
@@ -140,7 +140,7 @@ func TestTextOutputDoesNotRequireStructuredJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if request.Requirements.StructuredJSON {
+	if request.Requirements.JSONMode {
 		t.Fatal("plain text output incorrectly requires structured JSON")
 	}
 	if !request.Requirements.Tools || !request.Requirements.ParallelTools {

@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api";
 import type {
+  ProfileRequestConstraint,
   ProviderCapabilities,
   ProviderProfileDescriptor,
   ProviderProfilesCatalog,
@@ -28,10 +29,37 @@ export const emptyCapabilities: ProviderCapabilities = {
   chat: false, streaming: false, embeddings: false, moderations: false,
   images: false, transcriptions: false, speech: false, files: false,
   batches: false, rerank: false, async_generate: false, tools: false,
-  vision: false, json_mode: false, developer_role: false, reasoning: false,
+  vision: false, fetched_image: false, json_mode: false, developer_role: false, reasoning: false,
   stream_usage: false, provider_executed_tools: false,
   max_context_tokens: 0, max_output_tokens: 0,
 };
+
+/** What the profiles in play have declared they cannot carry.
+ *
+ * Keyed by the profiles a deployment could actually run on, because that is the
+ * question being asked at the moment a capability is ticked: this interface can
+ * see an image, and still cannot fetch one. Deduplicated by endpoint so two
+ * bindings on the same profile do not state the same rule twice. */
+export function profileRequestConstraints(
+  catalog: ProviderProfilesCatalog,
+  profileIDs: readonly string[],
+): (ProfileRequestConstraint & { profile_id: string })[] {
+  const wanted = new Set(profileIDs);
+  const seen = new Set<string>();
+  const constraints: (ProfileRequestConstraint & { profile_id: string })[] = [];
+  for (const type of catalog.provider_types) {
+    for (const profile of type.profiles) {
+      if (!wanted.has(profile.id)) continue;
+      for (const constraint of profile.request_constraints ?? []) {
+        const key = `${profile.id}\u0000${constraint.endpoint_id}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        constraints.push({ ...constraint, profile_id: profile.id });
+      }
+    }
+  }
+  return constraints;
+}
 
 /** Capability keys, excluding the two numeric limits, which are not checkboxes. */
 export function booleanCapabilityNames(catalog: ProviderProfilesCatalog): (keyof ProviderCapabilities)[] {

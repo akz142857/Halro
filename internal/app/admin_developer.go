@@ -13,6 +13,11 @@ import (
 type developerConfigView struct {
 	GatewayBaseURL string `json:"gateway_base_url"`
 	Enabled        bool   `json:"enabled"`
+	// The workbench can attach a local image, which travels as base64 inside the
+	// request body. Reporting the limit it will be measured against lets the
+	// console refuse an oversized body itself instead of spending a round trip
+	// on a 413.
+	MaxRequestBytes int64 `json:"max_request_bytes"`
 }
 
 // The workbench makes the Admin listener carry data-plane traffic, which bypasses network
@@ -23,8 +28,9 @@ func (r *Runtime) developerWorkbenchEnabled() bool {
 
 func (r *Runtime) getAdminDeveloperConfig(writer http.ResponseWriter, request *http.Request) {
 	writeJSON(writer, http.StatusOK, developerConfigView{
-		GatewayBaseURL: r.developerGatewayBaseURL(request),
-		Enabled:        r.developerWorkbenchEnabled(),
+		GatewayBaseURL:  r.developerGatewayBaseURL(request),
+		Enabled:         r.developerWorkbenchEnabled(),
+		MaxRequestBytes: r.config.Server.MaxRequestBytes,
 	})
 }
 

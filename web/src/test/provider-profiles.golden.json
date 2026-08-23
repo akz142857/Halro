@@ -3,6 +3,9 @@
     "developer_role": [
       "chat"
     ],
+    "fetched_image": [
+      "vision"
+    ],
     "json_mode": [
       "chat"
     ],
@@ -31,6 +34,7 @@
     "embeddings",
     "tools",
     "vision",
+    "fetched_image",
     "json_mode",
     "developer_role",
     "reasoning",
@@ -60,6 +64,7 @@
             "chat": true,
             "developer_role": true,
             "embeddings": true,
+            "fetched_image": true,
             "files": false,
             "images": false,
             "json_mode": true,
@@ -85,6 +90,7 @@
             "chat": true,
             "developer_role": true,
             "embeddings": true,
+            "fetched_image": true,
             "files": true,
             "images": true,
             "json_mode": true,
@@ -107,6 +113,7 @@
             "chat": true,
             "developer_role": true,
             "embeddings": true,
+            "fetched_image": true,
             "files": false,
             "images": false,
             "json_mode": true,
@@ -131,6 +138,7 @@
             "chat": true,
             "developer_role": true,
             "embeddings": true,
+            "fetched_image": true,
             "files": false,
             "images": false,
             "json_mode": true,
@@ -148,7 +156,22 @@
             "vision": true
           },
           "id": "openai.chat-embeddings.v1",
-          "immutable": false
+          "immutable": false,
+          "request_constraints": [
+            {
+              "declared_transforms": [
+                "portable Messages content is mapped through OpenAI Chat Completions"
+              ],
+              "endpoint_id": "anthropic.messages.2023-06-01",
+              "path": "/v1/messages",
+              "unsupported_request_fields": [
+                "top_k",
+                "thinking",
+                "metadata",
+                "service_tier"
+              ]
+            }
+          ]
         },
         {
           "access_surface": "openai-api",
@@ -158,6 +181,7 @@
             "chat": false,
             "developer_role": false,
             "embeddings": false,
+            "fetched_image": false,
             "files": true,
             "images": true,
             "json_mode": false,
@@ -183,6 +207,7 @@
             "chat": true,
             "developer_role": true,
             "embeddings": true,
+            "fetched_image": true,
             "files": true,
             "images": true,
             "json_mode": true,
@@ -205,6 +230,7 @@
             "chat": false,
             "developer_role": false,
             "embeddings": false,
+            "fetched_image": false,
             "files": true,
             "images": true,
             "json_mode": false,
@@ -229,6 +255,7 @@
             "chat": false,
             "developer_role": false,
             "embeddings": false,
+            "fetched_image": false,
             "files": true,
             "images": true,
             "json_mode": false,
@@ -246,7 +273,8 @@
             "vision": false
           },
           "id": "openai.media-resources.v1",
-          "immutable": true
+          "immutable": true,
+          "request_constraints": []
         }
       ],
       "type": "openai"
@@ -262,6 +290,7 @@
             "chat": true,
             "developer_role": false,
             "embeddings": false,
+            "fetched_image": true,
             "files": true,
             "images": false,
             "json_mode": true,
@@ -285,6 +314,7 @@
             "chat": true,
             "developer_role": false,
             "embeddings": false,
+            "fetched_image": true,
             "files": true,
             "images": false,
             "json_mode": true,
@@ -307,6 +337,7 @@
             "chat": true,
             "developer_role": false,
             "embeddings": false,
+            "fetched_image": true,
             "files": true,
             "images": false,
             "json_mode": true,
@@ -331,6 +362,7 @@
             "chat": true,
             "developer_role": false,
             "embeddings": false,
+            "fetched_image": true,
             "files": true,
             "images": false,
             "json_mode": true,
@@ -348,7 +380,39 @@
             "vision": true
           },
           "id": "anthropic.messages.2023-06-01",
-          "immutable": false
+          "immutable": false,
+          "request_constraints": [
+            {
+              "declared_transforms": [
+                "portable Chat content is mapped to Anthropic Messages blocks",
+                "an Anthropic image source is base64, url, or file and has no member for the OpenAI fidelity hint, so detail is rejected before provider I/O at any value other than auto rather than dropped from a request that paid for it",
+                "response_format and reasoning_effort are declared unsupported at field granularity because support is value-dependent: json_schema maps to output_config.format and the low/medium/high/xhigh/max ladder maps to output_config.effort, while json_object and any effort outside that ladder have no Anthropic representation and are routed away before provider I/O"
+              ],
+              "endpoint_id": "openai.chat-completions.v1",
+              "path": "/v1/chat/completions",
+              "unsupported_request_fields": [
+                "messages[].name",
+                "n",
+                "seed",
+                "response_format",
+                "reasoning_effort",
+                "user",
+                "messages[].content[].detail"
+              ]
+            },
+            {
+              "declared_transforms": [
+                "Responses items are mapped through the Anthropic Messages ProviderPrimitive"
+              ],
+              "endpoint_id": "openai.responses.stateless.v1",
+              "path": "/v1/responses",
+              "unsupported_request_fields": [
+                "text.format",
+                "user",
+                "input[].content[].detail"
+              ]
+            }
+          ]
         }
       ],
       "type": "anthropic"
@@ -364,6 +428,7 @@
             "chat": true,
             "developer_role": true,
             "embeddings": true,
+            "fetched_image": true,
             "files": false,
             "images": false,
             "json_mode": true,
@@ -387,6 +452,7 @@
             "chat": true,
             "developer_role": true,
             "embeddings": true,
+            "fetched_image": true,
             "files": false,
             "images": false,
             "json_mode": true,
@@ -409,6 +475,7 @@
             "chat": true,
             "developer_role": true,
             "embeddings": true,
+            "fetched_image": true,
             "files": false,
             "images": false,
             "json_mode": true,
@@ -433,6 +500,7 @@
             "chat": true,
             "developer_role": true,
             "embeddings": true,
+            "fetched_image": true,
             "files": false,
             "images": false,
             "json_mode": true,
@@ -450,7 +518,22 @@
             "vision": true
           },
           "id": "azure-openai.chat-embeddings.v1",
-          "immutable": false
+          "immutable": false,
+          "request_constraints": [
+            {
+              "declared_transforms": [
+                "portable Messages content is mapped through Azure Chat Completions"
+              ],
+              "endpoint_id": "anthropic.messages.2023-06-01",
+              "path": "/v1/messages",
+              "unsupported_request_fields": [
+                "top_k",
+                "thinking",
+                "metadata",
+                "service_tier"
+              ]
+            }
+          ]
         }
       ],
       "type": "azure_openai"
@@ -466,6 +549,7 @@
             "chat": true,
             "developer_role": false,
             "embeddings": false,
+            "fetched_image": true,
             "files": false,
             "images": false,
             "json_mode": true,
@@ -480,7 +564,7 @@
             "streaming": true,
             "tools": true,
             "transcriptions": false,
-            "vision": false
+            "vision": true
           },
           "combines_with": [],
           "connection_ceiling": {
@@ -489,6 +573,7 @@
             "chat": true,
             "developer_role": false,
             "embeddings": false,
+            "fetched_image": true,
             "files": false,
             "images": false,
             "json_mode": true,
@@ -503,7 +588,7 @@
             "streaming": true,
             "tools": true,
             "transcriptions": false,
-            "vision": false
+            "vision": true
           },
           "connection_defaults": {
             "async_generate": false,
@@ -511,6 +596,7 @@
             "chat": true,
             "developer_role": false,
             "embeddings": false,
+            "fetched_image": false,
             "files": false,
             "images": false,
             "json_mode": true,
@@ -535,6 +621,7 @@
             "chat": true,
             "developer_role": false,
             "embeddings": false,
+            "fetched_image": false,
             "files": false,
             "images": false,
             "json_mode": true,
@@ -552,7 +639,60 @@
             "vision": false
           },
           "id": "deepseek.chat.v1",
-          "immutable": false
+          "immutable": false,
+          "request_constraints": [
+            {
+              "declared_transforms": [
+                "DeepSeek speaks this wire format but accepts a smaller member list, so the fields it has no place for are rejected before provider I/O rather than sent and ignored",
+                "user is carried as DeepSeek's user_id",
+                "reasoning_effort and response_format are declared unsupported at field granularity because support is value-dependent: none maps to thinking.type=disabled and the low and high rungs map to thinking.reasoning_effort with thinking enabled, while minimal, medium and xhigh have no DeepSeek rung; json_object maps to response_format and json_schema has no DeepSeek counterpart",
+                "max_completion_tokens is value-dependent too: it counts reasoning tokens and DeepSeek's max_tokens does not, so it is carried as max_tokens on a request with thinking off and rejected before provider I/O on one with thinking on, or on one that already carries max_tokens",
+                "n and parallel_tool_calls are value-dependent in the same way: n=1 and parallel_tool_calls=true are what omitting the member already means, and only n\u003e1 and a request to run tools one at a time are rejected"
+              ],
+              "endpoint_id": "openai.chat-completions.v1",
+              "path": "/v1/chat/completions",
+              "unsupported_request_fields": [
+                "n",
+                "seed",
+                "max_completion_tokens",
+                "parallel_tool_calls",
+                "response_format",
+                "reasoning_effort"
+              ]
+            },
+            {
+              "declared_transforms": [
+                "Responses items are mapped through the DeepSeek Chat ProviderPrimitive",
+                "max_output_tokens is carried as DeepSeek's max_tokens: it is a completion budget that counts reasoning, and this endpoint rejects the reasoning request field outright, so nothing served here thinks and the two bound the same tokens",
+                "parallel_tool_calls is value-dependent: true is what omitting the member already means, and only a request to run tools one at a time is rejected",
+                "text.format is value-dependent: DeepSeek has json_object and no schema mode, so a schema is rejected before provider I/O",
+                "user is carried as DeepSeek's user_id"
+              ],
+              "endpoint_id": "openai.responses.stateless.v1",
+              "path": "/v1/responses",
+              "unsupported_request_fields": [
+                "parallel_tool_calls",
+                "text.format"
+              ]
+            },
+            {
+              "declared_transforms": [
+                "portable Messages content is mapped through DeepSeek Chat Completions",
+                "output_config.effort and output_config.format are declared unsupported at field granularity because support is value-dependent: none, low and high reach DeepSeek's thinking switch while minimal, medium and xhigh have no rung, and DeepSeek has json_object but no schema mode",
+                "thinking stays unsupported for the same reason it is on every other portable profile — it is the Anthropic-native block config, which only native mode forwards; DeepSeek's own thinking switch is reached through output_config.effort"
+              ],
+              "endpoint_id": "anthropic.messages.2023-06-01",
+              "path": "/v1/messages",
+              "unsupported_request_fields": [
+                "top_k",
+                "thinking",
+                "metadata",
+                "service_tier",
+                "output_config.effort",
+                "output_config.format"
+              ]
+            }
+          ]
         }
       ],
       "type": "deepseek"
@@ -568,6 +708,7 @@
             "chat": true,
             "developer_role": false,
             "embeddings": true,
+            "fetched_image": false,
             "files": false,
             "images": false,
             "json_mode": false,
@@ -591,6 +732,7 @@
             "chat": true,
             "developer_role": false,
             "embeddings": true,
+            "fetched_image": false,
             "files": false,
             "images": false,
             "json_mode": false,
@@ -613,6 +755,7 @@
             "chat": true,
             "developer_role": false,
             "embeddings": true,
+            "fetched_image": false,
             "files": false,
             "images": false,
             "json_mode": false,
@@ -637,6 +780,7 @@
             "chat": true,
             "developer_role": false,
             "embeddings": true,
+            "fetched_image": false,
             "files": false,
             "images": false,
             "json_mode": false,
@@ -654,7 +798,22 @@
             "vision": false
           },
           "id": "openai-compatible.chat-embeddings.v1",
-          "immutable": false
+          "immutable": false,
+          "request_constraints": [
+            {
+              "declared_transforms": [
+                "portable Messages content is mapped through an OpenAI-compatible primitive"
+              ],
+              "endpoint_id": "anthropic.messages.2023-06-01",
+              "path": "/v1/messages",
+              "unsupported_request_fields": [
+                "top_k",
+                "thinking",
+                "metadata",
+                "service_tier"
+              ]
+            }
+          ]
         }
       ],
       "type": "openai_compatible"
@@ -670,6 +829,7 @@
             "chat": true,
             "developer_role": true,
             "embeddings": true,
+            "fetched_image": false,
             "files": false,
             "images": false,
             "json_mode": false,
@@ -693,6 +853,7 @@
             "chat": true,
             "developer_role": true,
             "embeddings": true,
+            "fetched_image": false,
             "files": false,
             "images": false,
             "json_mode": false,
@@ -715,6 +876,7 @@
             "chat": true,
             "developer_role": true,
             "embeddings": true,
+            "fetched_image": false,
             "files": false,
             "images": false,
             "json_mode": false,
@@ -739,6 +901,7 @@
             "chat": true,
             "developer_role": true,
             "embeddings": true,
+            "fetched_image": false,
             "files": false,
             "images": false,
             "json_mode": false,
@@ -756,7 +919,69 @@
             "vision": false
           },
           "id": "gemini.generate-content.text.v1beta",
-          "immutable": false
+          "immutable": false,
+          "request_constraints": [
+            {
+              "declared_transforms": [
+                "developer messages are merged into Gemini system_instruction"
+              ],
+              "endpoint_id": "openai.chat-completions.v1",
+              "path": "/v1/chat/completions",
+              "unsupported_request_fields": [
+                "messages[].name",
+                "seed",
+                "tools",
+                "tool_choice",
+                "parallel_tool_calls",
+                "response_format",
+                "reasoning_effort",
+                "user"
+              ]
+            },
+            {
+              "declared_transforms": [
+                "token usage is locally estimated when Gemini omits usage"
+              ],
+              "endpoint_id": "openai.embeddings.v1",
+              "path": "/v1/embeddings",
+              "unsupported_request_fields": [
+                "encoding_format",
+                "user"
+              ]
+            },
+            {
+              "declared_transforms": [
+                "instructions are mapped to a developer message and merged into Gemini system_instruction"
+              ],
+              "endpoint_id": "openai.responses.stateless.v1",
+              "path": "/v1/responses",
+              "unsupported_request_fields": [
+                "tools",
+                "tool_choice",
+                "parallel_tool_calls",
+                "text.format",
+                "user"
+              ]
+            },
+            {
+              "declared_transforms": [
+                "portable text Messages content is mapped through Gemini generateContent",
+                "output_config.effort and output_config.format are this endpoint's spelling of reasoning_effort and response_format, which this profile declares unsupported at every value, so a request carrying either is routed away before provider I/O"
+              ],
+              "endpoint_id": "anthropic.messages.2023-06-01",
+              "path": "/v1/messages",
+              "unsupported_request_fields": [
+                "top_k",
+                "tools",
+                "tool_choice",
+                "thinking",
+                "metadata",
+                "service_tier",
+                "output_config.effort",
+                "output_config.format"
+              ]
+            }
+          ]
         }
       ],
       "type": "gemini"
@@ -772,6 +997,7 @@
             "chat": true,
             "developer_role": false,
             "embeddings": false,
+            "fetched_image": false,
             "files": false,
             "images": false,
             "json_mode": false,
@@ -799,6 +1025,7 @@
             "chat": true,
             "developer_role": false,
             "embeddings": true,
+            "fetched_image": false,
             "files": false,
             "images": true,
             "json_mode": false,
@@ -821,6 +1048,7 @@
             "chat": true,
             "developer_role": false,
             "embeddings": false,
+            "fetched_image": false,
             "files": false,
             "images": false,
             "json_mode": false,
@@ -845,6 +1073,7 @@
             "chat": true,
             "developer_role": false,
             "embeddings": false,
+            "fetched_image": false,
             "files": false,
             "images": false,
             "json_mode": false,
@@ -862,7 +1091,60 @@
             "vision": false
           },
           "id": "bedrock.runtime.converse.text.v1",
-          "immutable": false
+          "immutable": false,
+          "request_constraints": [
+            {
+              "declared_transforms": [
+                "Bedrock stop reasons are normalized to OpenAI finish reasons"
+              ],
+              "endpoint_id": "openai.chat-completions.v1",
+              "path": "/v1/chat/completions",
+              "unsupported_request_fields": [
+                "messages[].name",
+                "n",
+                "seed",
+                "tools",
+                "tool_choice",
+                "parallel_tool_calls",
+                "response_format",
+                "reasoning_effort",
+                "user"
+              ]
+            },
+            {
+              "declared_transforms": [
+                "instructions are mapped to a developer message",
+                "Bedrock stop reasons are normalized to Responses status"
+              ],
+              "endpoint_id": "openai.responses.stateless.v1",
+              "path": "/v1/responses",
+              "unsupported_request_fields": [
+                "tools",
+                "tool_choice",
+                "parallel_tool_calls",
+                "text.format",
+                "user"
+              ]
+            },
+            {
+              "declared_transforms": [
+                "portable text Messages content is mapped through Bedrock Converse",
+                "output_config.effort and output_config.format are this endpoint's spelling of reasoning_effort and response_format, which this profile declares unsupported at every value, so a request carrying either is routed away before provider I/O"
+              ],
+              "endpoint_id": "anthropic.messages.2023-06-01",
+              "path": "/v1/messages",
+              "unsupported_request_fields": [
+                "top_k",
+                "tools",
+                "tool_choice",
+                "thinking",
+                "metadata",
+                "service_tier",
+                "output_config.effort",
+                "output_config.format"
+              ]
+            }
+          ]
         },
         {
           "access_surface": "bedrock-runtime",
@@ -872,6 +1154,7 @@
             "chat": false,
             "developer_role": false,
             "embeddings": true,
+            "fetched_image": false,
             "files": false,
             "images": false,
             "json_mode": false,
@@ -899,6 +1182,7 @@
             "chat": true,
             "developer_role": false,
             "embeddings": true,
+            "fetched_image": false,
             "files": false,
             "images": true,
             "json_mode": false,
@@ -921,6 +1205,7 @@
             "chat": false,
             "developer_role": false,
             "embeddings": true,
+            "fetched_image": false,
             "files": false,
             "images": false,
             "json_mode": false,
@@ -945,6 +1230,7 @@
             "chat": false,
             "developer_role": false,
             "embeddings": true,
+            "fetched_image": false,
             "files": false,
             "images": false,
             "json_mode": false,
@@ -962,7 +1248,25 @@
             "vision": false
           },
           "id": "bedrock.runtime.invoke.titan-embed-text-v2.v1",
-          "immutable": true
+          "immutable": true,
+          "request_constraints": [
+            {
+              "declared_transforms": [
+                "only one string input is accepted",
+                "dimensions are limited to 256, 512, or 1024",
+                "native requests force normalized float embeddings",
+                "Bedrock inputTextTokenCount is mapped to OpenAI usage"
+              ],
+              "endpoint_id": "openai.embeddings.v1",
+              "path": "/v1/embeddings",
+              "unsupported_request_fields": [
+                "input",
+                "encoding_format",
+                "dimensions",
+                "user"
+              ]
+            }
+          ]
         },
         {
           "access_surface": "bedrock-runtime",
@@ -972,6 +1276,7 @@
             "chat": false,
             "developer_role": false,
             "embeddings": false,
+            "fetched_image": false,
             "files": false,
             "images": true,
             "json_mode": false,
@@ -999,6 +1304,7 @@
             "chat": true,
             "developer_role": false,
             "embeddings": true,
+            "fetched_image": false,
             "files": false,
             "images": true,
             "json_mode": false,
@@ -1021,6 +1327,7 @@
             "chat": false,
             "developer_role": false,
             "embeddings": false,
+            "fetched_image": false,
             "files": false,
             "images": true,
             "json_mode": false,
@@ -1045,6 +1352,7 @@
             "chat": false,
             "developer_role": false,
             "embeddings": false,
+            "fetched_image": false,
             "files": false,
             "images": true,
             "json_mode": false,
@@ -1062,7 +1370,8 @@
             "vision": false
           },
           "id": "bedrock.runtime.invoke.titan-image-v2.v1",
-          "immutable": true
+          "immutable": true,
+          "request_constraints": []
         },
         {
           "access_surface": "bedrock-agent-runtime",
@@ -1072,6 +1381,7 @@
             "chat": false,
             "developer_role": false,
             "embeddings": false,
+            "fetched_image": false,
             "files": false,
             "images": false,
             "json_mode": false,
@@ -1095,6 +1405,7 @@
             "chat": false,
             "developer_role": false,
             "embeddings": false,
+            "fetched_image": false,
             "files": false,
             "images": false,
             "json_mode": false,
@@ -1117,6 +1428,7 @@
             "chat": false,
             "developer_role": false,
             "embeddings": false,
+            "fetched_image": false,
             "files": false,
             "images": false,
             "json_mode": false,
@@ -1141,6 +1453,7 @@
             "chat": false,
             "developer_role": false,
             "embeddings": false,
+            "fetched_image": false,
             "files": false,
             "images": false,
             "json_mode": false,
@@ -1158,7 +1471,8 @@
             "vision": false
           },
           "id": "bedrock.agent-runtime.rerank.cohere-v3-5.v1",
-          "immutable": true
+          "immutable": true,
+          "request_constraints": []
         },
         {
           "access_surface": "bedrock-runtime",
@@ -1168,6 +1482,7 @@
             "chat": false,
             "developer_role": false,
             "embeddings": false,
+            "fetched_image": false,
             "files": false,
             "images": false,
             "json_mode": false,
@@ -1195,6 +1510,7 @@
             "chat": true,
             "developer_role": false,
             "embeddings": true,
+            "fetched_image": false,
             "files": false,
             "images": true,
             "json_mode": false,
@@ -1217,6 +1533,7 @@
             "chat": false,
             "developer_role": false,
             "embeddings": false,
+            "fetched_image": false,
             "files": false,
             "images": false,
             "json_mode": false,
@@ -1241,6 +1558,7 @@
             "chat": false,
             "developer_role": false,
             "embeddings": false,
+            "fetched_image": false,
             "files": false,
             "images": false,
             "json_mode": false,
@@ -1258,7 +1576,8 @@
             "vision": false
           },
           "id": "bedrock.runtime.async.nova-reel-v1.v1",
-          "immutable": true
+          "immutable": true,
+          "request_constraints": []
         },
         {
           "access_surface": "bedrock-mantle",
@@ -1268,6 +1587,7 @@
             "chat": true,
             "developer_role": true,
             "embeddings": false,
+            "fetched_image": false,
             "files": false,
             "images": false,
             "json_mode": true,
@@ -1296,6 +1616,7 @@
             "chat": true,
             "developer_role": true,
             "embeddings": false,
+            "fetched_image": false,
             "files": false,
             "images": false,
             "json_mode": true,
@@ -1318,6 +1639,7 @@
             "chat": true,
             "developer_role": true,
             "embeddings": false,
+            "fetched_image": false,
             "files": false,
             "images": false,
             "json_mode": true,
@@ -1342,6 +1664,7 @@
             "chat": true,
             "developer_role": true,
             "embeddings": false,
+            "fetched_image": false,
             "files": false,
             "images": false,
             "json_mode": true,
@@ -1359,7 +1682,22 @@
             "vision": true
           },
           "id": "bedrock.mantle.chat.v1",
-          "immutable": true
+          "immutable": true,
+          "request_constraints": [
+            {
+              "declared_transforms": [
+                "portable Messages content is mapped through Bedrock Mantle Chat Completions"
+              ],
+              "endpoint_id": "anthropic.messages.2023-06-01",
+              "path": "/v1/messages",
+              "unsupported_request_fields": [
+                "top_k",
+                "thinking",
+                "metadata",
+                "service_tier"
+              ]
+            }
+          ]
         },
         {
           "access_surface": "bedrock-mantle",
@@ -1369,6 +1707,7 @@
             "chat": true,
             "developer_role": true,
             "embeddings": false,
+            "fetched_image": false,
             "files": false,
             "images": false,
             "json_mode": true,
@@ -1397,6 +1736,7 @@
             "chat": true,
             "developer_role": true,
             "embeddings": false,
+            "fetched_image": false,
             "files": false,
             "images": false,
             "json_mode": true,
@@ -1419,6 +1759,7 @@
             "chat": true,
             "developer_role": true,
             "embeddings": false,
+            "fetched_image": false,
             "files": false,
             "images": false,
             "json_mode": true,
@@ -1443,6 +1784,7 @@
             "chat": true,
             "developer_role": true,
             "embeddings": false,
+            "fetched_image": false,
             "files": false,
             "images": false,
             "json_mode": true,
@@ -1460,7 +1802,22 @@
             "vision": true
           },
           "id": "bedrock.mantle.openai.chat.v1",
-          "immutable": true
+          "immutable": true,
+          "request_constraints": [
+            {
+              "declared_transforms": [
+                "portable Messages content is mapped through Bedrock Mantle Chat Completions"
+              ],
+              "endpoint_id": "anthropic.messages.2023-06-01",
+              "path": "/v1/messages",
+              "unsupported_request_fields": [
+                "top_k",
+                "thinking",
+                "metadata",
+                "service_tier"
+              ]
+            }
+          ]
         },
         {
           "access_surface": "bedrock-mantle",
@@ -1470,6 +1827,7 @@
             "chat": true,
             "developer_role": true,
             "embeddings": false,
+            "fetched_image": false,
             "files": false,
             "images": false,
             "json_mode": true,
@@ -1498,6 +1856,7 @@
             "chat": true,
             "developer_role": true,
             "embeddings": false,
+            "fetched_image": false,
             "files": false,
             "images": false,
             "json_mode": true,
@@ -1520,6 +1879,7 @@
             "chat": true,
             "developer_role": true,
             "embeddings": false,
+            "fetched_image": false,
             "files": false,
             "images": false,
             "json_mode": true,
@@ -1544,6 +1904,7 @@
             "chat": true,
             "developer_role": true,
             "embeddings": false,
+            "fetched_image": false,
             "files": false,
             "images": false,
             "json_mode": true,
@@ -1561,7 +1922,41 @@
             "vision": true
           },
           "id": "bedrock.mantle.responses.v1",
-          "immutable": true
+          "immutable": true,
+          "request_constraints": [
+            {
+              "declared_transforms": [
+                "Chat messages are mapped to stateless Responses input items",
+                "store=false is always sent upstream",
+                "streaming requests with tools are rejected before provider I/O"
+              ],
+              "endpoint_id": "openai.chat-completions.v1",
+              "path": "/v1/chat/completions",
+              "unsupported_request_fields": [
+                "n",
+                "stop",
+                "seed",
+                "reasoning_effort"
+              ]
+            },
+            {
+              "declared_transforms": [
+                "portable Messages content is mapped through stateless Bedrock Mantle Responses",
+                "streaming requests with tools are rejected before provider I/O",
+                "output_config.effort is this endpoint's spelling of reasoning_effort, which the stateless Responses primitive does not carry, so a request carrying it is routed away before provider I/O"
+              ],
+              "endpoint_id": "anthropic.messages.2023-06-01",
+              "path": "/v1/messages",
+              "unsupported_request_fields": [
+                "stop_sequences",
+                "top_k",
+                "thinking",
+                "metadata",
+                "service_tier",
+                "output_config.effort"
+              ]
+            }
+          ]
         },
         {
           "access_surface": "bedrock-mantle",
@@ -1571,6 +1966,7 @@
             "chat": true,
             "developer_role": true,
             "embeddings": false,
+            "fetched_image": false,
             "files": false,
             "images": false,
             "json_mode": true,
@@ -1599,6 +1995,7 @@
             "chat": true,
             "developer_role": true,
             "embeddings": false,
+            "fetched_image": false,
             "files": false,
             "images": false,
             "json_mode": true,
@@ -1621,6 +2018,7 @@
             "chat": true,
             "developer_role": true,
             "embeddings": false,
+            "fetched_image": false,
             "files": false,
             "images": false,
             "json_mode": true,
@@ -1645,6 +2043,7 @@
             "chat": true,
             "developer_role": true,
             "embeddings": false,
+            "fetched_image": false,
             "files": false,
             "images": false,
             "json_mode": true,
@@ -1662,7 +2061,41 @@
             "vision": true
           },
           "id": "bedrock.mantle.openai.responses.v1",
-          "immutable": true
+          "immutable": true,
+          "request_constraints": [
+            {
+              "declared_transforms": [
+                "Chat messages are mapped to stateless Responses input items",
+                "store=false is always sent upstream",
+                "streaming requests with tools are rejected before provider I/O"
+              ],
+              "endpoint_id": "openai.chat-completions.v1",
+              "path": "/v1/chat/completions",
+              "unsupported_request_fields": [
+                "n",
+                "stop",
+                "seed",
+                "reasoning_effort"
+              ]
+            },
+            {
+              "declared_transforms": [
+                "portable Messages content is mapped through stateless Bedrock Mantle Responses",
+                "streaming requests with tools are rejected before provider I/O",
+                "output_config.effort is this endpoint's spelling of reasoning_effort, which the stateless Responses primitive does not carry, so a request carrying it is routed away before provider I/O"
+              ],
+              "endpoint_id": "anthropic.messages.2023-06-01",
+              "path": "/v1/messages",
+              "unsupported_request_fields": [
+                "stop_sequences",
+                "top_k",
+                "thinking",
+                "metadata",
+                "service_tier",
+                "output_config.effort"
+              ]
+            }
+          ]
         },
         {
           "access_surface": "bedrock-mantle",
@@ -1672,6 +2105,7 @@
             "chat": true,
             "developer_role": false,
             "embeddings": false,
+            "fetched_image": false,
             "files": false,
             "images": false,
             "json_mode": false,
@@ -1700,6 +2134,7 @@
             "chat": true,
             "developer_role": false,
             "embeddings": false,
+            "fetched_image": false,
             "files": false,
             "images": false,
             "json_mode": false,
@@ -1722,6 +2157,7 @@
             "chat": true,
             "developer_role": false,
             "embeddings": false,
+            "fetched_image": false,
             "files": false,
             "images": false,
             "json_mode": false,
@@ -1746,6 +2182,7 @@
             "chat": true,
             "developer_role": false,
             "embeddings": false,
+            "fetched_image": false,
             "files": false,
             "images": false,
             "json_mode": false,
@@ -1763,7 +2200,52 @@
             "vision": true
           },
           "id": "bedrock.mantle.anthropic.messages.v1",
-          "immutable": true
+          "immutable": true,
+          "request_constraints": [
+            {
+              "declared_transforms": [
+                "portable Chat content is mapped to Bedrock Mantle Anthropic Messages blocks",
+                "an Anthropic image source is base64, url, or file and has no member for the OpenAI fidelity hint, so detail is rejected before provider I/O at any value other than auto rather than dropped from a request that paid for it",
+                "Anthropic states that only base64-encoded image sources are available on Amazon Bedrock, so an image_url naming an address to fetch is rejected before provider I/O while a data URL is carried as a base64 source"
+              ],
+              "endpoint_id": "openai.chat-completions.v1",
+              "path": "/v1/chat/completions",
+              "unsupported_request_fields": [
+                "messages[].name",
+                "n",
+                "seed",
+                "response_format",
+                "reasoning_effort",
+                "user",
+                "messages[].content[].detail"
+              ]
+            },
+            {
+              "declared_transforms": [
+                "an Anthropic image source is base64, url, or file and has no member for the OpenAI fidelity hint, so detail is rejected before provider I/O at any value other than auto rather than dropped from a request that paid for it",
+                "Responses items are mapped through Bedrock Mantle Anthropic Messages"
+              ],
+              "endpoint_id": "openai.responses.stateless.v1",
+              "path": "/v1/responses",
+              "unsupported_request_fields": [
+                "text.format",
+                "user",
+                "input[].content[].detail"
+              ]
+            },
+            {
+              "declared_transforms": [
+                "native mode preserves validated Anthropic content blocks, thinking signatures, and events",
+                "output_config is unsupported in portable mode only: this profile shares the Anthropic wire form and could carry the member, but its Mantle Beta capability ceiling is fixed by the build and widening it is a separate contract review, so a portable request carrying effort or format is routed away before provider I/O while native mode forwards the member verbatim"
+              ],
+              "endpoint_id": "anthropic.messages.2023-06-01",
+              "path": "/v1/messages",
+              "unsupported_request_fields": [
+                "output_config.effort",
+                "output_config.format"
+              ]
+            }
+          ]
         }
       ],
       "type": "bedrock"

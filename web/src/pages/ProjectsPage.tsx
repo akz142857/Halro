@@ -44,6 +44,7 @@ const projectSchema = (t: TFunction) => z.object({
   tpm: z.coerce.number().int().min(0),
   concurrency: z.coerce.number().int().min(0),
   budget: z.coerce.number().min(0),
+  requestKB: z.coerce.number().int().min(0),
   cidrs: z.string().refine(
     (value) => splitValues(value).every(isCIDR),
     { message: t("projects.cidrInvalid") },
@@ -435,6 +436,10 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
       tpm: current?.tpm ?? 100_000,
       concurrency: current?.max_concurrency ?? 8,
       budget: (current?.daily_budget_micros_usd ?? 50_000_000) / 1_000_000,
+      // A new project declares no ceiling of its own: the instance already sets
+      // one, and inventing a tighter number the operator never chose is how a
+      // limit surprises them.
+      requestKB: Math.round((current?.max_request_bytes ?? 0) / 1024),
       routes: current?.allowed_models ?? [],
       cidrs: (current?.allowed_cidrs ?? []).join(", "),
       tokenGuardPolicyID: current?.token_guard_policy_id ?? "",
@@ -461,7 +466,7 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
       daily_budget_micros_usd: Math.round(value.budget * 1_000_000),
       max_input_tokens: current?.max_input_tokens ?? 128_000,
       max_output_tokens: current?.max_output_tokens ?? 16_384,
-      max_request_bytes: current?.max_request_bytes ?? 1_048_576,
+      max_request_bytes: value.requestKB * 1024,
       max_stream_duration_seconds: current ? Math.round(current.max_stream_duration / 1_000_000_000) : 600,
       allowed_cidrs: splitValues(value.cidrs),
       redaction_policy_id: value.redactionPolicyID,
@@ -524,6 +529,7 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
             <Field label={t("projects.tpm")}><input type="number" {...register("tpm")} /></Field>
             <Field label={t("projects.maxConcurrency")}><input type="number" {...register("concurrency")} /></Field>
             <Field label={t("projects.dailyBudgetUSD")}><input type="number" step="0.01" {...register("budget")} /></Field>
+            <Field label={t("projects.maxRequestKB")} hint={t("projects.maxRequestKBHint")}><input type="number" min={0} {...register("requestKB")} /></Field>
           </div>
         </section>
         <section className="project-form-section" aria-labelledby="project-security-title">

@@ -20,7 +20,7 @@ import {
 import { money, useInstantFormatter } from "../format";
 import { isoToZonedInput, useAccountingTimeZone, zonedInputToISO } from "../timezone";
 import type { CapabilityPreflight, CapabilityReview, Deployment, DeploymentPriceVersion, DeploymentTargetKind, DeploymentVariant, ModelCapabilityDetection, PriceSchedule, Provider, ProviderBinding, ProviderCapabilities, ProviderProfilesCatalog, ResolvedInvocationTarget } from "../types";
-import { updateCapabilitySelection, useProviderProfiles } from "../hooks/useProviderProfiles";
+import { profileRequestConstraints, updateCapabilitySelection, useProviderProfiles } from "../hooks/useProviderProfiles";
 import { useTranslation } from "react-i18next";
 import { useNotify } from "../notifications";
 import { useIsReadOnly } from "../session";
@@ -937,7 +937,7 @@ type SelectableBinding = ProviderBinding & { id: string };
 // actually serves.
 const deploymentCapabilityGroups = [
   { id: "operations", capabilities: ["chat", "embeddings", "moderations", "images", "transcriptions", "speech", "rerank", "async_generate"] },
-  { id: "modalities", capabilities: ["vision"] },
+  { id: "modalities", capabilities: ["vision", "fetched_image"] },
   { id: "protocol", capabilities: ["streaming", "tools", "json_mode", "developer_role", "reasoning", "stream_usage", "provider_executed_tools"] },
   { id: "managed", capabilities: ["files", "batches"] },
 ] as const;
@@ -1246,6 +1246,14 @@ function DeploymentForm({
     ? pinnedBinding ? intersectCapabilityCeilings(catalogCeiling, bindingCeiling) : catalogCeiling
     : bindingCeiling;
   const configurableCapabilityNames = deploymentCapabilityNames.filter((name) => capabilityCeiling[name] || capabilities[name]);
+  // A capability tick is only half of what routing applies. The other half — the
+  // members this interface cannot carry — was computed on the server, refused on
+  // by the Gateway, and shown nowhere, so an operator ticked vision and met the
+  // rest as a refused request.
+  const activeProfileIDs = pinnedBinding
+    ? [pinnedBinding.profile_id]
+    : selectableBindings.map((binding) => binding.profile_id);
+  const requestConstraints = catalogReady ? profileRequestConstraints(catalogReady, activeProfileIDs) : [];
   const targetLabel = t(`deployments.targetLabels.${targetKind}`);
   const modelCatalogEnumerable = Boolean(!identityLocked && targetCatalog.data?.discovery.can_enumerate);
   const modelCatalogLoading = targetCatalog.isPending || refreshTargetCatalog.isPending;
@@ -1727,6 +1735,29 @@ function DeploymentForm({
                   </section>;
                 })}
               </fieldset>
+              {requestConstraints.length > 0 && (
+                <section className="deployment-request-constraints" aria-labelledby="deployment-request-constraints-title">
+                  <header>
+                    <strong id="deployment-request-constraints-title">{t("deployments.requestConstraints")}</strong>
+                    <p>{t("deployments.requestConstraintsHint")}</p>
+                  </header>
+                  <ul>
+                    {requestConstraints.map((constraint) => (
+                      <li key={`${constraint.profile_id}-${constraint.endpoint_id}`}>
+                        <code className="deployment-constraint-path">{constraint.path}</code>
+                        <div className="deployment-constraint-fields">
+                          {constraint.unsupported_request_fields.map((field) => <code key={field}>{field}</code>)}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                  {/* The sentences are why, and the same reason is declared on
+                      every endpoint it applies to. Printing it once per endpoint
+                      made the block read as three rules where there is one. */}
+                  {[...new Set(requestConstraints.flatMap((constraint) => constraint.declared_transforms ?? []))]
+                    .map((transform) => <small key={transform}>{transform}</small>)}
+                </section>
+              )}
             </div>}
             {widening && <div className="notice warning deployment-capability-declaration" aria-live="polite">
               <strong>{t("deployments.widenDeclarationTitle")}</strong>
@@ -1921,6 +1952,7 @@ function emptyCapabilities(): ProviderCapabilities {
     async_generate: false,
     tools: false,
     vision: false,
+    fetched_image: false,
     json_mode: false,
     developer_role: false,
     reasoning: false,

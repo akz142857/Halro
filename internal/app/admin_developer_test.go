@@ -48,6 +48,19 @@ func (s *developerGatewayService) Embeddings(ctx context.Context, key string, re
 	return openaiapi.EmbeddingResponse{Object: "list", Model: request.Model, Data: []openaiapi.EmbeddingData{}}, nil
 }
 
+// The console builds request bodies that can carry a base64 image, so it has to know
+// the size the Gateway will actually measure them against rather than guess one.
+func TestDeveloperConfigReportsTheServerRequestLimit(t *testing.T) {
+	runtime := &Runtime{config: config.Config{Server: config.Server{
+		GatewayListen: "127.0.0.1:8080", AdminListen: "127.0.0.1:8081", MaxRequestBytes: 10 << 20,
+	}}}
+	response := httptest.NewRecorder()
+	runtime.getAdminDeveloperConfig(response, httptest.NewRequest("GET", "/admin/api/v1/developer/config", nil))
+	if !strings.Contains(response.Body.String(), `"max_request_bytes":10485760`) {
+		t.Fatalf("config did not report the request limit: %s", response.Body.String())
+	}
+}
+
 func TestDeveloperGatewayBaseURLUsesGatewayListenerNotAdminOrigin(t *testing.T) {
 	// A loopback listener is unreachable under any other host, so the admin origin must not
 	// replace it: the integrating application runs alongside the Gateway by definition.

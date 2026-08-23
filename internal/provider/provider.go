@@ -163,36 +163,14 @@ type Adapter interface {
 	Close()
 }
 
-type Capabilities struct {
-	Chat           bool
-	Streaming      bool
-	Embeddings     bool
-	Moderations    bool
-	Images         bool
-	Transcriptions bool
-	Speech         bool
-	Files          bool
-	Batches        bool
-	Rerank         bool
-	AsyncGenerate  bool
-	Tools          bool
-	Vision         bool
-	JSONMode       bool
-	DeveloperRole  bool
-	Reasoning      bool
-	StreamUsage    bool
-	// ProviderExecutedTools admits tools the upstream runs itself. It is the one
-	// capability here that describes egress rather than formatting: the provider
-	// makes its own network calls, outside SafeTransport's host allowlist.
-	ProviderExecutedTools bool
-	MaxContextTokens      int64
-	MaxOutputTokens       int64
-}
-
-func (c Capabilities) AnyOperation() bool {
-	return c.Chat || c.Streaming || c.Embeddings || c.Moderations || c.Images ||
-		c.Transcriptions || c.Speech || c.Files || c.Batches || c.Rerank || c.AsyncGenerate
-}
+// Capabilities is the domain's capability set under this package's name.
+//
+// It was a field-for-field copy, kept in step by a hand-written converter in
+// the composition root. The copy bought nothing — the two were never allowed to
+// differ, and the registry is fed from stored domain records — while costing a
+// second place to remember when a capability is added, which is one of the
+// places that was in fact forgotten.
+type Capabilities = domain.ProviderCapabilities
 
 type CapabilityReporter interface {
 	Capabilities() Capabilities

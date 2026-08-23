@@ -52,7 +52,7 @@ func validateNativePayload(kind compatibility.NativePayloadKind, payload json.Ra
 }
 
 func extractNativeGovernance(kind compatibility.NativePayloadKind, payload json.RawMessage) (compatibility.NativeDerivedGovernance, error) {
-	result := compatibility.NativeDerivedGovernance{EstimatedInputTokens: int64((len(payload) + 3) / 4)}
+	result := compatibility.NativeDerivedGovernance{EstimatedInputTokens: estimateNativeTokens(int64(len(payload)))}
 	if kind != compatibility.NativeRequest {
 		return result, nil
 	}
@@ -60,9 +60,59 @@ func extractNativeGovernance(kind compatibility.NativePayloadKind, payload json.
 	if err != nil {
 		return result, err
 	}
+	result.EstimatedInputTokens = estimateNativeInputTokens(int64(len(payload)), request)
 	result.EstimatedOutputTokens = request.MaxTokens
 	result.Requirements = NativeRequirements(request)
 	return result, nil
+}
+
+func estimateNativeTokens(payloadBytes int64) int64 {
+	if payloadBytes <= 0 {
+		return 1
+	}
+	return (payloadBytes + 3) / 4
+}
+
+// estimateNativeInputTokens keeps a picture from being priced as prose. Native is
+// the mode that carries an image as base64 inside the payload, so charging the
+// whole payload at the text ratio put a 400 KB photograph six figures of tokens
+// over a project limit it would never have reached at Anthropic's own accounting.
+// Take each image's encoded source back out and charge it the ceiling instead.
+func estimateNativeInputTokens(payloadBytes int64, request anthropicapi.MessageRequest) int64 {
+	images := int64(0)
+	for _, message := range request.Messages {
+		for _, block := range message.Content {
+			// A PDF rides the same multimodal pipeline as an image and is billed
+			// the same way, which is why NativeRequirements treats them alike.
+			if block.Type != "image" && block.Type != "document" {
+				continue
+			}
+			images++
+			payloadBytes -= int64(len(nativeSourcePayload(block.Source)))
+		}
+	}
+	if images == 0 {
+		return estimateNativeTokens(payloadBytes)
+	}
+	return estimateNativeTokens(payloadBytes) + images*semantic.ImageInputTokenCeiling
+}
+
+// nativeSourcePayload reports the encoded bytes a source carries — the base64 for
+// an inline source, the address for a fetched one. An unreadable source counts as
+// nothing, which leaves the estimate where it already was rather than crediting a
+// request for bytes it did not explain.
+func nativeSourcePayload(raw json.RawMessage) string {
+	var source struct {
+		Data string `json:"data"`
+		URL  string `json:"url"`
+	}
+	if len(raw) == 0 || json.Unmarshal(raw, &source) != nil {
+		return ""
+	}
+	if source.Data != "" {
+		return source.Data
+	}
+	return source.URL
 }
 
 // NativeRequirements derives what a native request needs from a target. It is
@@ -80,7 +130,7 @@ func NativeRequirements(request anthropicapi.MessageRequest) semantic.Requiremen
 	}
 	if request.OutputConfig != nil {
 		requirements.Reasoning = requirements.Reasoning || request.OutputConfig.Effort != ""
-		requirements.StructuredJSON = len(request.OutputConfig.Format) > 0
+		requirements.JSONMode = len(request.OutputConfig.Format) > 0
 	}
 	for _, message := range request.Messages {
 		for _, block := range message.Content {
@@ -89,7 +139,7 @@ func NativeRequirements(request anthropicapi.MessageRequest) semantic.Requiremen
 				// A PDF is decoded by the same multimodal pipeline as an image; a
 				// target that cannot see one cannot read the other, so declaring
 				// only images under-reported what the request needs.
-				requirements.InputImage = true
+				requirements.Vision = true
 			case "tool_use", "tool_result":
 				requirements.Tools = true
 			case "thinking", "redacted_thinking":

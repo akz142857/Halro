@@ -140,11 +140,11 @@ func decodeMessage(message anthropicapi.MessageParam) ([]semantic.Message, error
 		case "text":
 			current.Content = append(current.Content, semantic.Content{Kind: semantic.ContentText, Text: block.Text})
 		case "image":
-			url, detail, err := decodeURLSource(block.Source)
+			url, err := decodeImageSource(block.Source)
 			if err != nil {
 				return nil, err
 			}
-			current.Content = append(current.Content, semantic.Content{Kind: semantic.ContentInputImage, URL: url, Detail: detail})
+			current.Content = append(current.Content, semantic.Content{Kind: semantic.ContentInputImage, URL: url})
 		case "tool_use":
 			current.Content = append(current.Content, semantic.Content{Kind: semantic.ContentToolCall, CallID: block.ID, Name: block.Name, Arguments: string(block.Input)})
 		case "tool_result":
@@ -167,12 +167,43 @@ func decodeMessage(message anthropicapi.MessageParam) ([]semantic.Message, error
 	return result, nil
 }
 
-func decodeURLSource(raw json.RawMessage) (string, string, error) {
-	var source struct{ Type, URL, Detail string }
-	if err := json.Unmarshal(raw, &source); err != nil || source.Type != "url" || strings.TrimSpace(source.URL) == "" {
-		return "", "", errors.New("portable image input requires an Anthropic URL source")
+// decodeImageSource carries an Anthropic image source into the one string the
+// portable model has for it. A base64 source becomes the data URL that says the
+// same thing — media type and bytes, nothing added, nothing lost — which is what
+// lets it be rendered back for a provider that wants it inline and forwarded as
+// an OpenAI data URL for one that wants it there.
+//
+// Rejecting base64 outright is what this replaces. It is the source Anthropic's
+// own examples lead with and the only one their Bedrock and Vertex deployments
+// accept, so portable mode refused the ordinary way to send a picture and
+// accepted only the way two of the three platforms cannot serve.
+func decodeImageSource(raw json.RawMessage) (string, error) {
+	var source struct {
+		Type      string `json:"type"`
+		URL       string `json:"url"`
+		MediaType string `json:"media_type"`
+		Data      string `json:"data"`
 	}
-	return source.URL, source.Detail, nil
+	if err := json.Unmarshal(raw, &source); err != nil {
+		return "", errors.New("image source is not readable")
+	}
+	switch source.Type {
+	case "url":
+		if strings.TrimSpace(source.URL) == "" {
+			return "", errors.New("Anthropic URL image source has no url")
+		}
+		return source.URL, nil
+	case "base64":
+		if strings.TrimSpace(source.Data) == "" || !strings.HasPrefix(source.MediaType, "image/") {
+			return "", errors.New("Anthropic base64 image source needs an image media_type and data")
+		}
+		return "data:" + source.MediaType + ";base64," + source.Data, nil
+	default:
+		// A file source names something held by one provider's Files API. There
+		// is no portable identifier for it, and inventing one would send another
+		// provider an id it has never seen.
+		return "", errors.New("portable image input requires a url or base64 Anthropic source")
+	}
 }
 
 func decodeToolResult(raw json.RawMessage) (string, error) {
@@ -445,6 +476,41 @@ func renderOutputFormat(format semantic.OutputFormat) (json.RawMessage, error) {
 	}
 }
 
+// renderImageSource writes the source Anthropic actually defines. Every image was
+// previously written as a url source, so an inline picture arrived as an address
+// beginning "data:" that no platform could fetch, and the detail hint OpenAI
+// carries was written into a member Anthropic's schema does not have — one
+// unknown field is enough for the whole request to be refused. detail has no
+// Anthropic counterpart, so the profile declares it lost rather than smuggling it.
+func renderImageSource(url string) (json.RawMessage, error) {
+	if mediaType, data, inline := splitDataURL(url); inline {
+		return json.Marshal(map[string]any{"type": "base64", "media_type": mediaType, "data": data})
+	}
+	return json.Marshal(map[string]any{"type": "url", "url": url})
+}
+
+// splitDataURL reads back exactly what decodeImageSource writes, and the same
+// shape an OpenAI-side caller sends for a local file.
+func splitDataURL(value string) (mediaType, data string, ok bool) {
+	const scheme = "data:"
+	if len(value) < len(scheme) || !strings.EqualFold(value[:len(scheme)], scheme) {
+		return "", "", false
+	}
+	rest := value[len(scheme):]
+	separator := strings.Index(rest, ",")
+	if separator < 0 {
+		return "", "", false
+	}
+	meta, payload := rest[:separator], rest[separator+1:]
+	if !strings.HasSuffix(meta, ";base64") {
+		// A data URL can hold percent-encoded bytes instead. Anthropic has no
+		// source for that, so it stays an address and the profile that cannot
+		// fetch one says so.
+		return "", "", false
+	}
+	return strings.TrimSuffix(meta, ";base64"), payload, true
+}
+
 func renderMessage(message semantic.Message) (anthropicapi.MessageParam, error) {
 	result := anthropicapi.MessageParam{Role: string(message.Role)}
 	if message.Role == semantic.RoleTool {
@@ -455,7 +521,10 @@ func renderMessage(message semantic.Message) (anthropicapi.MessageParam, error) 
 		case semantic.ContentText:
 			result.Content = append(result.Content, anthropicapi.ContentBlock{Type: "text", Text: part.Text})
 		case semantic.ContentInputImage:
-			source, _ := json.Marshal(map[string]any{"type": "url", "url": part.URL, "detail": part.Detail})
+			source, err := renderImageSource(part.URL)
+			if err != nil {
+				return result, err
+			}
 			result.Content = append(result.Content, anthropicapi.ContentBlock{Type: "image", Source: source})
 		case semantic.ContentToolCall:
 			input := json.RawMessage(part.Arguments)

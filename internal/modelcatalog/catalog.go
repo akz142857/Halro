@@ -213,8 +213,16 @@ func targetKindAllowedForProfile(providerType domain.ProviderType, profile domai
 
 // Ceiling returns the profile capability ceiling a claim for this key may not
 // exceed.
+//
+// It reads the ceiling, not the defaults. The two columns differ wherever a
+// profile carries something a new connection does not claim by default —
+// provider-executed tools on Anthropic Messages, vision on DeepSeek — and
+// bounding the catalog by the defaults made every such opt-in unstateable here.
+// That is the wrong half of the table for this check: the bound a claim must
+// respect is the one ProviderProfileBinding.Validate applies, and per-model
+// claims are exactly what the gap between the columns exists to carry.
 func (k Key) Ceiling() domain.ProviderCapabilities {
-	return domain.DefaultProviderCapabilitiesForProfile(k.ProviderType, k.Profile)
+	return domain.MaxProviderCapabilitiesForProfile(k.ProviderType, k.Profile)
 }
 
 // Entry is a resolved capability claim for one key.
@@ -542,6 +550,7 @@ func ValidateDependencies(capabilities domain.ProviderCapabilities) error {
 		{"streaming", capabilities.Streaming},
 		{"tools", capabilities.Tools},
 		{"vision", capabilities.Vision},
+		{"fetched_image", capabilities.FetchedImage},
 		{"json_mode", capabilities.JSONMode},
 		{"developer_role", capabilities.DeveloperRole},
 		{"reasoning", capabilities.Reasoning},
@@ -651,7 +660,7 @@ func (c *Catalog) Len() int { return len(c.ordered) }
 var CapabilityNames = []string{
 	"chat", "embeddings", "moderations", "images", "transcriptions", "speech",
 	"files", "batches", "rerank", "async_generate",
-	"streaming", "tools", "vision", "json_mode", "developer_role", "reasoning", "stream_usage",
+	"streaming", "tools", "vision", "fetched_image", "json_mode", "developer_role", "reasoning", "stream_usage",
 	"provider_executed_tools",
 	"max_context_tokens", "max_output_tokens",
 }
@@ -671,87 +680,12 @@ func capabilityValue(capabilities domain.ProviderCapabilities, name string) stri
 }
 
 func booleanValue(capabilities domain.ProviderCapabilities, name string) bool {
-	switch name {
-	case "chat":
-		return capabilities.Chat
-	case "embeddings":
-		return capabilities.Embeddings
-	case "moderations":
-		return capabilities.Moderations
-	case "images":
-		return capabilities.Images
-	case "transcriptions":
-		return capabilities.Transcriptions
-	case "speech":
-		return capabilities.Speech
-	case "files":
-		return capabilities.Files
-	case "batches":
-		return capabilities.Batches
-	case "rerank":
-		return capabilities.Rerank
-	case "async_generate":
-		return capabilities.AsyncGenerate
-	case "streaming":
-		return capabilities.Streaming
-	case "tools":
-		return capabilities.Tools
-	case "vision":
-		return capabilities.Vision
-	case "json_mode":
-		return capabilities.JSONMode
-	case "developer_role":
-		return capabilities.DeveloperRole
-	case "reasoning":
-		return capabilities.Reasoning
-	case "stream_usage":
-		return capabilities.StreamUsage
-	case "provider_executed_tools":
-		return capabilities.ProviderExecutedTools
-	default:
-		return false
-	}
+	value, _ := domain.CapabilityValue(capabilities, name)
+	return value
 }
 
 func setBoolean(capabilities *domain.ProviderCapabilities, name string) {
-	switch name {
-	case "chat":
-		capabilities.Chat = true
-	case "embeddings":
-		capabilities.Embeddings = true
-	case "moderations":
-		capabilities.Moderations = true
-	case "images":
-		capabilities.Images = true
-	case "transcriptions":
-		capabilities.Transcriptions = true
-	case "speech":
-		capabilities.Speech = true
-	case "files":
-		capabilities.Files = true
-	case "batches":
-		capabilities.Batches = true
-	case "rerank":
-		capabilities.Rerank = true
-	case "async_generate":
-		capabilities.AsyncGenerate = true
-	case "streaming":
-		capabilities.Streaming = true
-	case "tools":
-		capabilities.Tools = true
-	case "vision":
-		capabilities.Vision = true
-	case "json_mode":
-		capabilities.JSONMode = true
-	case "developer_role":
-		capabilities.DeveloperRole = true
-	case "reasoning":
-		capabilities.Reasoning = true
-	case "stream_usage":
-		capabilities.StreamUsage = true
-	case "provider_executed_tools":
-		capabilities.ProviderExecutedTools = true
-	}
+	domain.SetCapability(capabilities, name, true)
 }
 
 func limitValue(capabilities domain.ProviderCapabilities, name string) int64 {

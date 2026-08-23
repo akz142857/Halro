@@ -141,7 +141,15 @@ func with(base domain.ProviderCapabilities, apply ...func(*domain.ProviderCapabi
 	return base
 }
 
-func vision(capabilities *domain.ProviderCapabilities)        { capabilities.Vision = true }
+// vision credits both halves. Every model this catalog covers with vision is on
+// a platform that retrieves an address as readily as it reads bytes — OpenAI,
+// Anthropic direct, DeepSeek. A platform that reads only bytes has no
+// fetched_image at its ceiling, and Clamp takes it back off there, so the entry
+// does not have to know which platform it will be resolved against.
+func vision(capabilities *domain.ProviderCapabilities) {
+	capabilities.Vision = true
+	capabilities.FetchedImage = true
+}
 func reasoning(capabilities *domain.ProviderCapabilities)     { capabilities.Reasoning = true }
 func developerRole(capabilities *domain.ProviderCapabilities) { capabilities.DeveloperRole = true }
 
@@ -210,8 +218,8 @@ func openAIMediaModels() []Entry {
 	}
 }
 
-// deepSeekModels cover the DeepSeek chat profile, whose ceiling carries no
-// vision and no embeddings.
+// deepSeekModels cover the DeepSeek chat profile, whose ceiling carries vision
+// but no embeddings.
 //
 // Both entries carry reasoning, which is the whole difference from the previous
 // pair. DeepSeek used to split reasoning off into its own model — deepseek-chat
@@ -227,15 +235,29 @@ func openAIMediaModels() []Entry {
 // capability review working, not a failure, and it needs no data-directory
 // re-initialisation.
 //
-// Sources reviewed 2026-08-14, documentation only — no live account:
+// Vision is on exactly one of the three. DeepSeek documents that only the vision
+// model accepts images and that every other model answers one with a 400, which
+// is the whole reason the profile admits vision at its ceiling and withholds it
+// from the defaults: this list is where the per-model claim lives, so a
+// Deployment on either text model cannot pick vision up by association.
+//
+// The vision model carries `-exp` in its own published identifier. That is
+// DeepSeek's name for it, not a hedge added here, and the seeding policy asks
+// for the exact identifier documentation gives — an entry keyed on anything
+// looser would promote whatever DeepSeek ships under that prefix next.
+//
+// Sources reviewed 2026-08-23, documentation only — no live account:
 //   - https://api-docs.deepseek.com/api/list-models
 //   - https://api-docs.deepseek.com/api/create-chat-completion
 //   - https://api-docs.deepseek.com/guides/reasoning_model
+//   - https://api-docs.deepseek.com/guides/vision
+//   - https://api-docs.deepseek.com/quick_start/pricing
 func deepSeekModels() []Entry {
 	const provider, profile = domain.ProviderDeepSeek, domain.ProfileDeepSeekChat
 	return []Entry{
 		builtinEntry(provider, profile, "deepseek-v4-flash", with(chat(1_000_000, 384_000), reasoning)),
 		builtinEntry(provider, profile, "deepseek-v4-pro", with(chat(1_000_000, 384_000), reasoning)),
+		builtinEntry(provider, profile, "deepseek-v4-flash-vision-exp", with(chat(1_000_000, 384_000), reasoning, vision)),
 	}
 }
 

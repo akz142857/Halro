@@ -110,9 +110,9 @@ func TestLimitAnthropicShedsInAnthropicsEnvelope(t *testing.T) {
 func TestLimiterShedsBeforeTheGuardAuthenticates(t *testing.T) {
 	authenticated := false
 	handler := limitedHandler(t, &countingLimiter{}, func(options *Options) {
-		options.AuthorizeKey = func(string) error {
+		options.AuthorizeKey = func(string) (int64, error) {
 			authenticated = true
-			return errors.New("no such key")
+			return 0, errors.New("no such key")
 		}
 	})
 	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", newCountingBody(64))
