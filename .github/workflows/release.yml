@@ -318,7 +318,7 @@ jobs:
             halro-deadman-container-arm64.tar.gz
 
   provenance:
-    needs: [binaries, container]
+    needs: [prepare, binaries, container]
     runs-on: ubuntu-latest
     permissions:
       attestations: write
@@ -374,7 +374,14 @@ jobs:
           for artifact in halro-* halro.spdx.json checksums.txt; do
             cosign sign-blob --yes --bundle "${artifact}.sigstore.json" "${artifact}"
           done
+      # The manifest pins the version tag this run releases, which on a dispatch
+      # run is not the ref the run was started from — that one names the branch.
+      # A dry run signs a manifest for a tag it will not create, so its artifact
+      # is named apart from a real release's; the run id inside the manifest is
+      # what ties either to the run that produced it.
       - name: Generate and sign release-run evidence manifest
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           set -euo pipefail
           mkdir -p evidence
@@ -384,7 +391,7 @@ jobs:
             --run-id "${GITHUB_RUN_ID}" \
             --run-attempt "${GITHUB_RUN_ATTEMPT}" \
             --commit "${GITHUB_SHA}" \
-            --ref "${GITHUB_REF}" \
+            --ref "refs/tags/${VERSION}" \
             --workflow-ref "${GITHUB_WORKFLOW_REF}"
           cosign sign-blob --yes \
             --bundle evidence/release-run-evidence.json.sigstore.json \
@@ -396,7 +403,7 @@ jobs:
           retention-days: 90
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-run-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          name: release-run-evidence-${{ github.run_id }}-${{ github.run_attempt }}${{ needs.prepare.outputs.publish == 'true' && '' || '-dry-run' }}
           path: evidence
           retention-days: 90
 
