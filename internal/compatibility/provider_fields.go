@@ -62,6 +62,11 @@ func UnsupportedGenerateFields(profileID domain.ProviderProfileID, request seman
 		add(request.EndUserRef != "", "user")
 	case domain.ProfileAnthropicMessages:
 		add(hasNamedMessage(request), "messages[].name")
+		// Anthropic's image source is base64, url, or file — there is no member
+		// for OpenAI's fidelity hint. Writing it in anyway made the whole request
+		// invalid; dropping it silently would change what the caller asked for and
+		// what it costs them.
+		add(hasImageDetail(request), "messages[].content[].detail")
 		add(hasDeveloperMessage(request), "messages[].role=developer")
 		add(request.Candidates != nil && *request.Candidates > 1, "n")
 		add(request.Seed != nil, "seed")
@@ -81,6 +86,7 @@ func UnsupportedGenerateFields(profileID domain.ProviderProfileID, request seman
 		add(request.ReasoningEffort != "" && !slices.Contains(portableEffortLevels, request.ReasoningEffort), "reasoning_effort")
 		add(request.EndUserRef != "", "user")
 	case domain.ProfileBedrockMantleAnthropicMessages:
+		add(hasImageDetail(request), "messages[].content[].detail")
 		// The Mantle Beta profile shares this wire representation and could carry
 		// output_config, but its capability ceiling is fixed by the build and
 		// widening it is a separate contract review. Until that happens the
@@ -207,6 +213,21 @@ func hasDeveloperMessage(request semantic.GenerateRequest) bool {
 	for _, message := range request.Messages {
 		if message.Role == semantic.RoleDeveloper {
 			return true
+		}
+	}
+	return false
+}
+
+// hasImageDetail reports a fidelity hint that would be lost. OpenAI's default is
+// auto, which is what omitting the member already means, so only a request that
+// asked for something else is refused — the same rule the value-dependent fields
+// on the DeepSeek profile follow.
+func hasImageDetail(request semantic.GenerateRequest) bool {
+	for _, message := range request.Messages {
+		for _, part := range message.Content {
+			if part.Kind == semantic.ContentInputImage && part.Detail != "" && part.Detail != "auto" {
+				return true
+			}
 		}
 	}
 	return false

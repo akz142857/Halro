@@ -33,6 +33,75 @@ func TestDecodePortableMapsClientTools(t *testing.T) {
 	}
 }
 
+// base64 is the source Anthropic's own examples lead with and the only one its
+// Bedrock and Vertex deployments accept, and portable mode used to refuse it
+// outright while writing every image back as a url source — so an inline picture
+// became an address beginning "data:" that no platform could fetch.
+func TestPortableImageSourcesRoundTripBothWays(t *testing.T) {
+	inline := `{"model":"portable","max_tokens":16,"messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"aGk="}},{"type":"text","text":"what is this"}]}]}`
+	request, err := anthropicapi.DecodeMessageRequest(bytes.NewBufferString(inline))
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := DecodePortable(request)
+	if err != nil {
+		t.Fatalf("a base64 image was refused: %v", err)
+	}
+	image := canonical.Messages[0].Content[0]
+	if image.Kind != semantic.ContentInputImage || image.URL != "data:image/png;base64,aGk=" {
+		t.Fatalf("base64 source carried as %#v", image)
+	}
+
+	// Back out to the same source it came in as — media type and bytes, nothing
+	// added, nothing lost.
+	rendered, err := renderMessage(canonical.Messages[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var source map[string]string
+	if err := json.Unmarshal(rendered.Content[0].Source, &source); err != nil {
+		t.Fatal(err)
+	}
+	if source["type"] != "base64" || source["media_type"] != "image/png" || source["data"] != "aGk=" {
+		t.Fatalf("inline image rendered as %v", source)
+	}
+	// Anthropic's source schema has no detail member, and one unknown field is
+	// enough for the whole request to be refused.
+	if _, present := source["detail"]; present {
+		t.Fatalf("a member Anthropic does not define was written into the source: %v", source)
+	}
+
+	// A remote address still renders as the url source the direct API fetches.
+	remote := semantic.Message{Role: semantic.RoleUser, Content: []semantic.Content{
+		{Kind: semantic.ContentInputImage, URL: "https://example.test/a.png"},
+	}}
+	rendered, err = renderMessage(remote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source = nil
+	if err := json.Unmarshal(rendered.Content[0].Source, &source); err != nil {
+		t.Fatal(err)
+	}
+	if source["type"] != "url" || source["url"] != "https://example.test/a.png" {
+		t.Fatalf("remote image rendered as %v", source)
+	}
+}
+
+// A file source names something one provider's Files API holds. There is no
+// portable identifier for it, so it is refused rather than forwarded to a
+// provider that has never seen the id.
+func TestPortableImageRejectsAFileSource(t *testing.T) {
+	request, err := anthropicapi.DecodeMessageRequest(bytes.NewBufferString(
+		`{"model":"portable","max_tokens":16,"messages":[{"role":"user","content":[{"type":"image","source":{"type":"file","file_id":"file_1"}}]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodePortable(request); err == nil {
+		t.Fatal("a file image source was accepted as portable")
+	}
+}
+
 func TestDecodePortableRejectsSignedThinking(t *testing.T) {
 	request, err := anthropicapi.DecodeMessageRequest(bytes.NewBufferString(`{"model":"portable","max_tokens":128,"messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"x","signature":"sig"}]},{"role":"user","content":"continue"}]}`))
 	if err != nil {
@@ -77,7 +146,7 @@ func TestOutputConfigRoundTripsThroughTheSemanticModel(t *testing.T) {
 	}
 	// The derived requirements are what routing filters on; without them a
 	// structured-output request could land on a provider that cannot honour it.
-	if !canonical.Requirements.StructuredJSON || !canonical.Requirements.Reasoning {
+	if !canonical.Requirements.JSONMode || !canonical.Requirements.Reasoning {
 		t.Fatalf("requirements not derived: %#v", canonical.Requirements)
 	}
 	rendered, err := RenderPortableRequest(canonical, "claude-provider")

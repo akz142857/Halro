@@ -3,6 +3,7 @@ package compatibility
 import (
 	"encoding/json"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/akz142857/Halro/internal/domain"
@@ -86,6 +87,76 @@ func TestBedrockMantleResponsesRejectsOnlyUnrepresentableChatFields(t *testing.T
 	}
 	if fields := UnsupportedGenerateFields(domain.ProfileBedrockMantleOpenAIChat, request); len(fields) != 0 {
 		t.Fatalf("Mantle Chat unexpectedly rejected OpenAI wire fields: %v", fields)
+	}
+}
+
+// Anthropic's image source is base64, url, or file — there is no member for the
+// OpenAI fidelity hint. It used to be written into the source anyway, which is an
+// unknown field and enough for the whole request to be refused.
+func TestAnthropicShapedProfilesDeclareTheImageDetailTheyCannotCarry(t *testing.T) {
+	withDetail := func(detail string) semantic.GenerateRequest {
+		return semantic.GenerateRequest{Messages: []semantic.Message{{
+			Role: semantic.RoleUser,
+			Content: []semantic.Content{{
+				Kind: semantic.ContentInputImage, URL: "https://example.test/a.png", Detail: detail,
+			}},
+		}}}
+	}
+	for _, profileID := range []domain.ProviderProfileID{
+		domain.ProfileAnthropicMessages,
+		domain.ProfileBedrockMantleAnthropicMessages,
+	} {
+		if fields := UnsupportedGenerateFields(profileID, withDetail("high")); !slices.Contains(fields, "messages[].content[].detail") {
+			t.Fatalf("%s did not declare the detail hint it drops: %v", profileID, fields)
+		}
+		// auto is what omitting the member already means, so it costs the caller
+		// nothing and must not route them away from a provider.
+		for _, unset := range []string{"", "auto"} {
+			if fields := UnsupportedGenerateFields(profileID, withDetail(unset)); slices.Contains(fields, "messages[].content[].detail") {
+				t.Fatalf("%s refused detail=%q, which asks for the default: %v", profileID, unset, fields)
+			}
+		}
+	}
+	// The profiles whose wire form has the member carry it.
+	if fields := UnsupportedGenerateFields(domain.ProfileOpenAIChatEmbeddings, withDetail("high")); slices.Contains(fields, "messages[].content[].detail") {
+		t.Fatalf("the OpenAI profile declared a member it carries: %v", fields)
+	}
+}
+
+// Where Bedrock's inability to fetch an image is no longer stated.
+//
+// It lived here as a request-field declaration, once per northbound endpoint, in
+// each endpoint's own name for the same member — and three spellings of one fact
+// was the evidence that it is a property of the target, not of a field. It is a
+// capability now, so this layer must stay out of it: declaring it in both places
+// would route a request away twice for one reason and put the fact back on a
+// surface the console cannot show.
+func TestTheImageFetchLimitIsNoLongerAFieldDeclaration(t *testing.T) {
+	remote := semantic.GenerateRequest{Messages: []semantic.Message{{
+		Role:    semantic.RoleUser,
+		Content: []semantic.Content{{Kind: semantic.ContentInputImage, URL: "https://example.test/photo.jpg"}},
+	}}}
+	for _, profileID := range []domain.ProviderProfileID{
+		domain.ProfileBedrockMantleChat,
+		domain.ProfileBedrockMantleOpenAIChat,
+		domain.ProfileBedrockMantleResponses,
+		domain.ProfileBedrockMantleOpenAIResponses,
+		domain.ProfileBedrockMantleAnthropicMessages,
+	} {
+		for _, field := range UnsupportedGenerateFields(profileID, remote) {
+			if strings.Contains(field, "image_url") {
+				t.Errorf("%s still declares the fetch limit as a field: %q", profileID, field)
+			}
+		}
+	}
+	// What this layer does still carry about an image is the member Anthropic's
+	// source has no place for, which is a genuine field-level loss.
+	withDetail := semantic.GenerateRequest{Messages: []semantic.Message{{
+		Role:    semantic.RoleUser,
+		Content: []semantic.Content{{Kind: semantic.ContentInputImage, URL: "https://example.test/a.png", Detail: "high"}},
+	}}}
+	if fields := UnsupportedGenerateFields(domain.ProfileAnthropicMessages, withDetail); !slices.Contains(fields, "messages[].content[].detail") {
+		t.Fatalf("the detail hint stopped being declared: %v", fields)
 	}
 }
 
