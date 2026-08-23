@@ -6,6 +6,8 @@ semantic versioning.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-24
+
 ### Added
 
 - **TLS material is replaced on `SIGHUP` rather than on restart.** The signal
@@ -42,6 +44,40 @@ semantic versioning.
   in force rather than re-reading the file, and reports per item when each was
   last applied.
 
+- **Each Bedrock Mantle route is its own Provider Profile.** Mantle serves `/v1`,
+  `/openai/v1` and `/anthropic/v1` from one origin, and the first two speak the
+  same OpenAI wire shape over disjoint model sets — so the wire shape cannot
+  select between them and a request sent to the wrong one is refused upstream.
+  Measured across the 50 models the region serves, 38 answer on `/v1` and 11 on
+  `/openai/v1`, and the split does not follow the model identifier. The route is
+  therefore fixed by the profile, and the console names the route rather than
+  the wire shape when you pick one. A profile can now fix its operation path
+  prefix; it is empty for every other provider, which keeps their URLs exactly
+  as they were.
+
+- **Fetching an image is a capability.** A Deployment states whether its
+  interface may retrieve an image the request names by address, the Gateway
+  refuses by that capability instead of failing downstream, and the developer
+  workbench can send an image — a remote URL or a local file turned into a data
+  URL in the page — without hand-writing the multimodal body. The request
+  summary shows the body size against the instance limit, so an oversized image
+  is refused before it costs a round trip.
+
+- **Capability detection asks for step-up once per sitting.** A password and a
+  TOTP code were required on every run, which an operator configuring six
+  Deployments typed six times during first-time setup. One proof now covers
+  `admin.model_capability_detection.elevation_window` (default 10m). The guard
+  is unchanged in what it protects: the grant is bound to the session and its
+  generation, never to the account, so a second session inherits nothing and
+  changing a password invalidates it. An explicit `0s` asks every time.
+
+- **`halro_route_capability_refusals_total`.** A route that cannot serve what was
+  asked was counted nowhere, and it is the one refusal that reports a
+  configuration answer rather than a pressure reading: the route is up, the key
+  is good, and no deployment behind the public model declares what the request
+  named. It now appears in the dashboard's rejection composition alongside every
+  other policy outcome.
+
 ### Changed
 
 - **`tls.cert_file` and `tls.key_file` are replaced by a `tls.certificates`
@@ -57,6 +93,85 @@ semantic versioning.
   quiet is bounded only by those totals — it was never bounded by the removed
   key either. A setting that quietly does nothing is worse than an absent one,
   so it is gone rather than kept with a note.
+
+- **A post-dispatch 5xx from OpenAI or Anthropic is ambiguous.** 500, 502 and 504
+  were retryable and non-ambiguous, so the attempt was refunded in full *and*
+  re-sent to the same and fallback targets while the origin may still have been
+  generating — duplicating a completion the operator pays for while the ledger
+  recorded nothing for each try. They are now neither retried nor settled as
+  free, which is what the correctness contract says a dispatched request with no
+  authoritative result is, and what the Bedrock and Gemini profiles already did.
+  503 and Anthropic's 529 are unchanged: both are stated refusals to take the
+  request on, so a fallback can serve them and the attempt owes nothing.
+
+- **Outbound redaction refusing a native response answers 422.** Native
+  `/v1/messages` and `count_tokens` returned a generic 502 `provider_error` for a
+  policy decision, which read as a provider outage and invited retries of a
+  request that must not be retried. They now return 422
+  `sensitive_output_detected`, as the portable and native streaming paths already
+  did.
+
+### Fixed
+
+- **An interrupted Replay could make the next Append overwrite durable ledger
+  frames.** `writeBatch` trusted the OS file cursor to sit at the committed tail,
+  but a Replay whose visit callback returns early — exactly what usage catch-up
+  produces when its budget runs out — leaves the cursor mid-file. The next batch
+  was written inside already-durable frames, with the write and the fsync both
+  reporting success; the damage surfaced only at the next restart, when the chain
+  scan refused the file. The writer now seeks to the offset the log itself
+  tracks. Live-reproduced, and fixed before this release.
+
+- **A revoked Gateway Key could be resurrected by a concurrent snapshot
+  refresh.** Two refreshes run in production — the background activation-recovery
+  loop and every admin key mutation — and the result was installed with a bare
+  atomic store, so a read that started before a revocation committed and finished
+  after it could land last. The operator watched the revocation succeed and the
+  key kept authenticating. Refreshes are now serialized from the store read
+  through the install; authentication itself stays lock-free.
+
+- **Seven settlement and redaction defects found by a pre-release audit.** A
+  served native Messages response refused by outbound redaction settled at zero
+  and released its reservation, so a caller whose prompts elicit matching output
+  could spend the operator's upstream budget with none of it reaching the ledger.
+  An aborted tool-call stream settled at one output token, because the delivered
+  byte count saw only assistant text and not tool arguments or reasoning. The
+  Phase 2 endpoints — Moderations, Images, Speech, Transcription, Rerank —
+  committed the full estimate whatever the provider returned, billing a refused
+  dial like a served request. A JSON-escaped secret in streamed tool arguments
+  passed every mandatory pattern and was reconstituted by the client's decoder,
+  while the same response was redacted when requested non-streaming. Stream
+  redaction delivered the tail of a message ahead of its head whenever the
+  terminal chunk also carried text. And a price version with a fixed request fee
+  made every deterministic failure unsettleable, stranding the reservation until
+  a restart that then charged the full prepared estimate.
+
+- **A definitively unsent stream no longer pays the fixed request fee.** A
+  streaming attempt that failed before any byte reached the provider settled with
+  zero tokens but still fell through to the fixed per-request fee, overcharging
+  on every connect failure.
+
+- **A fatal pre-provider error keeps its own status on the native path.** A Token
+  Guard block or an accounting failure was re-mapped into a generic 502
+  `provider_error`, so clients retried requests that must not be retried and
+  operators debugged a provider that was never unhealthy.
+
+- **`count_tokens` runs on a priced deployment.** It prepares no tokens, which
+  derived a zero reservation the ledger refuses for a metered lease, and a zero
+  settlement the frozen snapshot refuses under a fixed request fee — a 503 before
+  the provider on the first shape and a stranded lease on the second.
+
+- **A capability probe gets the whole remaining budget.** The per-probe timeout
+  divided what was left by every probe the plan listed, which gave the chat probe
+  that all the others wait on the smallest share — a seventh of 90s on the Mantle
+  plan. A frontier reasoning model cannot answer one completion in 12.9s, so a
+  model that works was reported as a timeout on every capability.
+
+- **The console says why a connection test or a capability detection failed**,
+  not only that it did; the deployment form draws a capability the connection has
+  not enabled yet, together with the step that unblocks it; and the workbench
+  response panel says it is waiting rather than reporting an empty body. Admin
+  pages are fetched when their path is opened rather than all eleven at load.
 
 ### Operator impact
 
@@ -86,6 +201,28 @@ semantic versioning.
 - **Changing a certificate's *path* is still a restart.** `SIGHUP` reloads the
   bytes behind the configured paths, not the paths themselves, so adding an
   entry to `tls.certificates` needs one.
+
+- **Storage schema 31 upgrades in place on the first start; no
+  re-initialisation.** Verified by opening a data directory a v0.2.0 binary
+  created. `halro doctor` does not migrate, though — run against a v0.2.0
+  directory before that first start it reports `metadata: fail — metadata schema
+  version 30 does not match required version 31`, which is the strict check
+  doing its job rather than damage. Start once, then run `doctor`.
+
+- **Fetching an image is off on every existing connection.** Migration 31 does
+  not turn a new capability on for material it never verified. The Gateway names
+  `fetched_image` in the refusal; enable it on the connection, then on the
+  deployment.
+
+- **Fallback no longer covers OpenAI or Anthropic 500, 502 and 504.** If your
+  deployment relied on a standby target absorbing those, the traffic now fails to
+  the caller instead, and the attempt is charged conservatively rather than
+  refunded. 503 and 529 still fail over. This is the deliberate trade: retrying a
+  request the upstream may already be billing duplicates the charge.
+
+- **A price version with `fixed_request_usd` now charges it on `count_tokens`,**
+  which is a request to the deployment like any other. Per-token prices still
+  charge nothing for that endpoint.
 
 ## [0.2.0] - 2026-08-19
 
@@ -503,7 +640,8 @@ to act on.
 - A file, batch or async creation interrupted before the provider was called can
   be retried after a restart, instead of holding its idempotency key for days.
 
-[Unreleased]: https://github.com/akz142857/Halro/compare/v0.2.0...main
+[Unreleased]: https://github.com/akz142857/Halro/compare/v0.3.0...main
+[0.3.0]: https://github.com/akz142857/Halro/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/akz142857/Halro/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/akz142857/Halro/compare/v1.0.0-rc.1...v0.1.0
 [1.0.0-rc.1]: https://github.com/akz142857/Halro/releases/tag/v1.0.0-rc.1

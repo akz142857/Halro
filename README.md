@@ -69,8 +69,8 @@ recovery, and hardening, use the [Operator Guide](docs/guides/operator-guide.md)
 Every tag publishes multi-architecture images (`linux/amd64`, `linux/arm64`):
 
 ```bash
-docker pull ghcr.io/akz142857/halro:v0.2.0
-docker pull ghcr.io/akz142857/halro-deadman:v0.2.0   # the independent watchdog, deployed separately
+docker pull ghcr.io/akz142857/halro:v0.3.0
+docker pull ghcr.io/akz142857/halro-deadman:v0.3.0   # the independent watchdog, deployed separately
 ```
 
 `latest` follows the newest tag; pin by digest for anything you deploy:
@@ -113,7 +113,7 @@ docker run --rm --user 65532:65532 \
   -v "$PWD/config.yaml:/etc/halro/config.yaml:ro" \
   -v "$PWD/halro-secrets:/run/secrets" \
   -v halro-data:/var/lib/halro \
-  ghcr.io/akz142857/halro:v0.2.0 init --config /etc/halro/config.yaml
+  ghcr.io/akz142857/halro:v0.3.0 init --config /etc/halro/config.yaml
 ```
 
 Then serve, publishing only the Gateway on host loopback:
@@ -124,7 +124,7 @@ docker run -d --name halro --user 65532:65532 \
   -v "$PWD/halro-secrets:/run/secrets:ro" \
   -v halro-data:/var/lib/halro \
   -p 127.0.0.1:8080:8080 \
-  ghcr.io/akz142857/halro:v0.2.0 serve --config /etc/halro/config.yaml \
+  ghcr.io/akz142857/halro:v0.3.0 serve --config /etc/halro/config.yaml \
     -allow-insecure-public-listen
 ```
 
