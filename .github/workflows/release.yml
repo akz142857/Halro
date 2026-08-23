@@ -2,6 +2,16 @@ name: release
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, e.g. v0.3.0"
+        required: true
+        type: string
+      dry_run:
+        description: "Run every gate and build every artifact, but publish nothing"
+        required: false
+        default: false
+        type: boolean
   push:
     tags:
       - "v*"
@@ -10,14 +20,79 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.version || github.ref }}
   cancel-in-progress: false
 
 env:
   GOTOOLCHAIN: go1.26.6
 
 jobs:
+  # prepare is the one place a release version is decided, so the tag push and
+  # the Actions-UI dispatch cannot drift into disagreeing about what is being
+  # released. Everything downstream reads needs.prepare.outputs.version rather
+  # than github.ref_name, which names a branch on a dispatch run.
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      publish: ${{ steps.resolve.outputs.publish }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Resolve and validate the version being released
+        id: resolve
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if [ "${EVENT}" = "push" ]; then
+            version="${GITHUB_REF_NAME}"
+            publish=true
+          else
+            version="${INPUT_VERSION}"
+            publish=true
+            if [ "${INPUT_DRY_RUN}" = "true" ]; then
+              publish=false
+            fi
+            # Releasing from anywhere else would publish ':latest' from a ref
+            # nobody reviewed as the release.
+            if [ "${GITHUB_REF}" != "refs/heads/${DEFAULT_BRANCH}" ]; then
+              echo "::error::release from ${DEFAULT_BRANCH} only; this run is on ${GITHUB_REF}"
+              exit 1
+            fi
+          fi
+          if ! printf '%s' "${version}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$'; then
+            echo "::error::version must look like v1.2.3 or v1.2.3-rc.1, got '${version}'"
+            exit 1
+          fi
+          # A dispatch creates its own tag later, so one that already exists means
+          # the version was typed twice — refuse before spending the whole matrix.
+          if [ "${EVENT}" = "workflow_dispatch" ] && git rev-parse -q --verify "refs/tags/${version}" >/dev/null 2>&1; then
+            echo "::error::tag ${version} already exists"
+            exit 1
+          fi
+          # The changelog is what an operator reads to decide whether to upgrade.
+          # Tagging without it is the mistake this catches, and it is cheap here.
+          if ! grep -Fq "## [${version#v}]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no '## [${version#v}]' section for ${version}"
+            exit 1
+          fi
+          printf 'version=%s\n' "${version}" >>"${GITHUB_OUTPUT}"
+          printf 'publish=%s\n' "${publish}" >>"${GITHUB_OUTPUT}"
+          {
+            printf '### Halro %s\n\n' "${version}"
+            printf '| | |\n|---|---|\n'
+            printf '| publish | `%s` |\n' "${publish}"
+            printf '| ref | `%s` |\n' "${GITHUB_REF}"
+            printf '| commit | `%s` |\n' "${GITHUB_SHA}"
+          } >>"${GITHUB_STEP_SUMMARY}"
+
   quality:
+    needs: prepare
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -39,6 +114,7 @@ jobs:
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
 
   sdk-compatibility:
+    needs: prepare
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -81,6 +157,7 @@ jobs:
           go -C tests/compatibility/go test ./...
 
   stress:
+    needs: prepare
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -92,6 +169,7 @@ jobs:
         run: HALRO_STRESS=1 go test ./tests/stress -run TestThousandConcurrentSSEConnectionsCleanup -count=1 -v
 
   web:
+    needs: prepare
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -114,7 +192,7 @@ jobs:
           path: internal/webui/dist
 
   binaries:
-    needs: [quality, sdk-compatibility, web, stress]
+    needs: [prepare, quality, sdk-compatibility, web, stress]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -143,7 +221,7 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: "0"
-          RELEASE_VERSION: ${{ github.ref_name }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
           RELEASE_COMMIT: ${{ github.sha }}
         run: |
           SOURCE_DATE_EPOCH=$(git show -s --format=%ct "${RELEASE_COMMIT}")
@@ -174,7 +252,7 @@ jobs:
           path: release/halro-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
 
   container:
-    needs: [quality, sdk-compatibility, stress]
+    needs: [prepare, quality, sdk-compatibility, stress]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -186,13 +264,17 @@ jobs:
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
       - name: Build release container images per architecture
         env:
-          RELEASE_VERSION: ${{ github.ref_name }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
           RELEASE_COMMIT: ${{ github.sha }}
         run: |
           SOURCE_DATE_EPOCH=$(git show -s --format=%ct "${RELEASE_COMMIT}")
           RELEASE_DATE=$(date -u -d "@${SOURCE_DATE_EPOCH}" +%Y-%m-%dT%H:%M:%SZ)
           export SOURCE_DATE_EPOCH RELEASE_DATE
-          IMAGE_TAG=${RELEASE_VERSION//\//-}
+          # prepare validated the version against a strict semver pattern, so it
+          # carries nothing an image tag has to be protected from. The image tag
+          # and the release tag being the same string is what lets container-push
+          # find these archives by name.
+          IMAGE_TAG=${RELEASE_VERSION}
           for arch in amd64 arm64; do
             docker buildx build \
               --platform linux/${arch} \
@@ -319,8 +401,8 @@ jobs:
           retention-days: 90
 
   publish:
-    needs: provenance
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [prepare, provenance]
+    if: needs.prepare.outputs.publish == 'true'
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -351,20 +433,35 @@ jobs:
               --bundle "${artifact}.sigstore.json" \
               "${artifact}"
           done
+      # A dispatch run tags here rather than at the start, so every gate has
+      # passed and every artifact has been built, signed and verified before the
+      # version exists in the repository. A release that fails leaves no tag to
+      # retract, and no tag that a reader could mistake for a published one.
+      - name: Create the release tag
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${VERSION}" -m "Halro ${VERSION}" "${GITHUB_SHA}"
+          git push origin "refs/tags/${VERSION}"
       - name: Publish GitHub release
-        if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
-          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
-            echo "release ${GITHUB_REF_NAME} already exists; skipping creation"
+          set -euo pipefail
+          if gh release view "${VERSION}" >/dev/null 2>&1; then
+            echo "release ${VERSION} already exists; skipping creation"
           else
-            gh release create "${GITHUB_REF_NAME}" release/* --verify-tag --generate-notes --title "Halro ${GITHUB_REF_NAME}"
+            gh release create "${VERSION}" release/* --verify-tag --generate-notes --title "Halro ${VERSION}"
           fi
 
   container-push:
-    needs: publish
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [prepare, publish]
+    if: needs.prepare.outputs.publish == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -375,9 +472,10 @@ jobs:
       - name: Push release container images from the published assets
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           set -euo pipefail
-          tag="${GITHUB_REF_NAME}"
+          tag="${VERSION}"
           gh release download "${tag}" --repo "${GITHUB_REPOSITORY}" \
             -p 'halro-container-*.tar.gz' -p 'halro-deadman-container-*.tar.gz' -p checksums.txt
           sha256sum --check --ignore-missing checksums.txt

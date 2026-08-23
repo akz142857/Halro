@@ -160,3 +160,23 @@ without a fail-closed refusal.
 
 **Non-blocking**: everything else — filed as issues, listed in the record,
 shipped with eyes open.
+
+## 6. Publish
+
+The verdict is a judgement; publishing is a button. Once `chore(release): vX.Y.Z`
+is on the default branch — the changelog section, the README image tags, the web
+package version, and the dependency-license drift hashes that version bump moves
+— open **Actions → release → Run workflow**, leave the branch on `main`, and type
+the version. `dry_run` runs every gate and builds, signs and attests every
+artifact while publishing nothing, which is how a release is rehearsed.
+
+The run refuses before spending the build matrix if the version is not `vX.Y.Z`,
+if that tag already exists, if the run is not on the default branch, or if
+`CHANGELOG.md` has no section for it. The tag is created in the publish job, so
+it appears only once every gate has passed and every artifact has been built,
+signed and verified — a release that fails leaves no tag to retract and none that
+a reader could mistake for a published one.
+
+Pushing a `vX.Y.Z` tag publishes the same way, for a release driven from a
+terminal. Both entry points resolve the version in the same `prepare` job, so
+they cannot disagree about what is being released.
