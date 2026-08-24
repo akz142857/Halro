@@ -144,7 +144,7 @@ export function RedactionPoliciesSection({
   return (
     <section className="policy-management-panel" role="tabpanel" id={panelID} aria-labelledby={labelledBy} aria-label={labelledBy ? undefined : t("redaction.title")}>
       <div className="filter-bar policy-filter-bar">
-        <label><span>{t("policyManagement.search")}</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("policyManagement.searchPlaceholder")} /></label>
+        <label><span>{t("policyManagement.search")}</span><input autoComplete="off" value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("policyManagement.searchPlaceholder")} /></label>
         <label><span>{t("policyManagement.status")}</span><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">{t("policyManagement.all")}</option><option value="enabled">{t("common.enabled")}</option><option value="disabled">{t("common.disabled")}</option></select></label>
         <label><span>{t("policyManagement.mode")}</span><select value={mode} onChange={(event) => setMode(event.target.value)}><option value="">{t("policyManagement.all")}</option><option value="strict">{t("redaction.strictBadge")}</option><option value="bounded_stream">{t("redaction.boundedBadge")}</option><option value="detect_only_stream">{t("redaction.detectStreamBadge")}</option></select></label>
         <button className="button primary" disabled={readOnly} onClick={() => setEditing("new")}>{t("redaction.create")}</button>
@@ -377,7 +377,7 @@ function RedactionPolicyForm({
       }}>
         <div className="redaction-form-scroll">
         <section className="redaction-policy-basics">
-          <Field label={t("redaction.name")} error={submitted && !name.trim() ? t("redaction.policyNameRequired") : undefined}><input ref={nameField} data-modal-initial required value={name} onChange={(event) => setName(event.target.value)} /></Field>
+          <Field label={t("redaction.name")} error={submitted && !name.trim() ? t("redaction.policyNameRequired") : undefined}><input autoComplete="off" ref={nameField} data-modal-initial required value={name} onChange={(event) => setName(event.target.value)} /></Field>
           <fieldset className="redaction-streaming-options">
             <legend>{t("redaction.streaming")}</legend>
             <div className="policy-action-cards redaction-streaming-cards">
@@ -415,7 +415,7 @@ function RedactionPolicyForm({
           <div className="redaction-rules-layout">
             <aside className="redaction-rule-browser">
               <div className="redaction-rule-filters">
-                <input aria-label={t("redaction.searchRules")} placeholder={t("redaction.searchRulesPlaceholder")} value={ruleSearch} onChange={(event) => setRuleSearch(event.target.value)} />
+                <input autoComplete="off" aria-label={t("redaction.searchRules")} placeholder={t("redaction.searchRulesPlaceholder")} value={ruleSearch} onChange={(event) => setRuleSearch(event.target.value)} />
                 <select aria-label={t("redaction.ruleStatus")} value={ruleStatus} onChange={(event) => setRuleStatus(event.target.value as typeof ruleStatus)}>
                   <option value="all">{t("redaction.allRules")}</option>
                   <option value="enabled">{t("common.enabled")}</option>
@@ -476,7 +476,7 @@ function RedactionPolicyForm({
                   </div>
                 </header>
                 <div className="redaction-rule-fields form-grid">
-                <Field label={t("redaction.ruleName")} error={selectedProblems.includes("name") ? t("redaction.ruleProblems.name") : undefined}><input required value={selectedRule.name} onChange={(event) => updateRule(selectedIndex, { name: event.target.value })} /></Field>
+                <Field label={t("redaction.ruleName")} error={selectedProblems.includes("name") ? t("redaction.ruleProblems.name") : undefined}><input autoComplete="off" required value={selectedRule.name} onChange={(event) => updateRule(selectedIndex, { name: event.target.value })} /></Field>
                 <Field label={t("redaction.type")}>
                   <select value={selectedRule.kind} onChange={(event) => {
                     const kind = event.target.value as EditableRule["kind"];
@@ -499,10 +499,10 @@ function RedactionPolicyForm({
                     </select>
                   </Field>
                 )}
-                {selectedRule.kind === "regex" && <Field label={t("redaction.expression")} error={selectedProblems.includes("expression") ? t("redaction.ruleProblems.expression") : undefined}><input value={selectedRule.pattern ?? ""} onChange={(event) => updateRule(selectedIndex, { pattern: event.target.value })} /></Field>}
+                {selectedRule.kind === "regex" && <Field label={t("redaction.expression")} error={selectedProblems.includes("expression") ? t("redaction.ruleProblems.expression") : undefined}><input autoComplete="off" value={selectedRule.pattern ?? ""} onChange={(event) => updateRule(selectedIndex, { pattern: event.target.value })} /></Field>}
                 {selectedRule.kind === "dictionary" && (
                   <Field label={t("redaction.dictionaryItems")} error={selectedProblems.includes("dictionary") ? t("redaction.ruleProblems.dictionary") : undefined}>
-                    <textarea rows={5} value={(selectedRule.dictionary ?? []).join("\n")} onChange={(event) => updateRule(selectedIndex, { dictionary: event.target.value.split("\n") })} />
+                    <textarea autoComplete="off" rows={5} value={(selectedRule.dictionary ?? []).join("\n")} onChange={(event) => updateRule(selectedIndex, { dictionary: event.target.value.split("\n") })} />
                   </Field>
                 )}
                 <Field label={t("redaction.action")}>
@@ -513,8 +513,8 @@ function RedactionPolicyForm({
                     <option value="reject" disabled={mode === "detect_only_stream"}>{t("redaction.reject")}</option>
                   </select>
                 </Field>
-                {selectedRule.action === "replace" && <Field label={t("redaction.replacement")} error={selectedProblems.includes("replacement") ? t("redaction.ruleProblems.replacement") : undefined}><input maxLength={256} value={selectedRule.replacement ?? ""} onChange={(event) => updateRule(selectedIndex, { replacement: event.target.value })} /></Field>}
-                <Field label={t("redaction.priority")} hint={t("redaction.priorityHint")} error={selectedProblems.includes("priority") ? t("redaction.ruleProblems.priority") : undefined}><input min="0" max="10000" step="1" type="number" value={Number.isNaN(selectedRule.priority) ? "" : selectedRule.priority} onChange={(event) => updateRule(selectedIndex, { priority: event.target.value === "" ? Number.NaN : Number(event.target.value) })} /></Field>
+                {selectedRule.action === "replace" && <Field label={t("redaction.replacement")} error={selectedProblems.includes("replacement") ? t("redaction.ruleProblems.replacement") : undefined}><input autoComplete="off" maxLength={256} value={selectedRule.replacement ?? ""} onChange={(event) => updateRule(selectedIndex, { replacement: event.target.value })} /></Field>}
+                <Field label={t("redaction.priority")} hint={t("redaction.priorityHint")} error={selectedProblems.includes("priority") ? t("redaction.ruleProblems.priority") : undefined}><input autoComplete="off" min="0" max="10000" step="1" type="number" value={Number.isNaN(selectedRule.priority) ? "" : selectedRule.priority} onChange={(event) => updateRule(selectedIndex, { priority: event.target.value === "" ? Number.NaN : Number(event.target.value) })} /></Field>
                 <fieldset className="scope-checks">
                   <legend>{t("redaction.scope")}</legend>
                   {(["inbound", "outbound"] as const).map((scope) => (
@@ -582,7 +582,7 @@ function RedactionPolicyTest({ policy, onClose }: { policy: RedactionPolicy; onC
           </select>
         </Field>
         <Field label={t("redaction.content")} hint={t("redaction.contentHint")}>
-          <textarea rows={6} value={input} onChange={(event) => setInput(event.target.value)} />
+          <textarea autoComplete="off" rows={6} value={input} onChange={(event) => setInput(event.target.value)} />
         </Field>
         {result && (
           <div className={`preview-result ${result.match_count ? "violated" : ""}`}>

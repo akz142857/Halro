@@ -538,7 +538,7 @@ function CredentialForm({
           footer can stick to both edges, and the body carries the padding. */}
       <form className="provider-credential-form" onSubmit={submit} autoComplete="off">
         <div className="provider-credential-form-body">
-        <Field label={t("providers.credentialName")}><input autoFocus value={name} onChange={(event) => setName(event.target.value)} /></Field>
+        <Field label={t("providers.credentialName")}><input autoComplete="off" autoFocus value={name} onChange={(event) => setName(event.target.value)} /></Field>
         <Field label={t("providers.providerType")}>
           <select value={type} disabled={Boolean(current)} onChange={(event) => {
             const next = event.target.value as ProviderType;
@@ -563,7 +563,7 @@ function CredentialForm({
           </Field>
         )}
         <Field label={t("providers.boundURL")} hint={t("providers.boundURLHint")}>
-          <input inputMode="url" value={baseURL} onChange={(event) => setBaseURL(event.target.value)} />
+          <input autoComplete="off" inputMode="url" value={baseURL} onChange={(event) => setBaseURL(event.target.value)} />
         </Field>
         <Field
           label={current ? t("providers.newSecret") : type === "bedrock" && bedrockSurface !== "bedrock-mantle" ? t("providers.awsCredentialJSON") : t("providers.providerSecret")}
@@ -583,7 +583,7 @@ function CredentialForm({
           />
         </Field>
         <Field label={t("providers.credentialExpiry")} hint={t("providers.credentialExpiryHint")}>
-          <input type="datetime-local" value={expiresAt} onChange={(event) => setExpiresAt(event.target.value)} />
+          <input autoComplete="off" type="datetime-local" value={expiresAt} onChange={(event) => setExpiresAt(event.target.value)} />
         </Field>
         {mutation.isError && (
           <div ref={submitError} tabIndex={-1} className="form-submit-error"><ErrorState error={mutation.error} /></div>
@@ -780,7 +780,7 @@ function ProviderForm({
           <section className="provider-form-section" aria-labelledby="provider-connection-title">
             <header><h3 id="provider-connection-title">{t("providers.connectionSection")}</h3><p>{t("providers.connectionSectionDescription")}</p></header>
             <div className="form-grid">
-          <Field label={t("providers.providerName")} error={errors.name}><input autoFocus value={name} onChange={(event) => { setName(event.target.value); setErrors((previous) => omitError(previous, "name")); }} /></Field>
+          <Field label={t("providers.providerName")} error={errors.name}><input autoComplete="off" autoFocus value={name} onChange={(event) => { setName(event.target.value); setErrors((previous) => omitError(previous, "name")); }} /></Field>
           <Field label={t("providers.type")}>
             <select value={type} onChange={(event) => {
               const next = event.target.value as ProviderType;
@@ -810,22 +810,22 @@ function ProviderForm({
             </Field>
           )}
           <Field label={t("providers.baseURL")} hint={credentialBaseURLMismatch ? t("providers.baseURLBoundHint", { credential: credentialBoundURL }) : undefined}>
-            <input value={baseURL} onChange={(event) => { setBaseURL(event.target.value); setErrors((previous) => omitError(previous, "credentialID")); }} />
+            <input autoComplete="off" value={baseURL} onChange={(event) => { setBaseURL(event.target.value); setErrors((previous) => omitError(previous, "credentialID")); }} />
           </Field>
           {type === "azure_openai" && (
             <Field label={t("providers.apiVersion")} hint={t("providers.apiVersionHint")}>
-              <input value={apiVersion} onChange={(event) => setAPIVersion(event.target.value)} required />
+              <input autoComplete="off" value={apiVersion} onChange={(event) => setAPIVersion(event.target.value)} required />
             </Field>
           )}
           {supportsAnthropicBetas && (
             <Field label={t("providers.anthropicBetas")} hint={t("providers.anthropicBetasHint")} error={errors.anthropicBetas}>
-              <input value={anthropicBetas} placeholder={t("providers.anthropicBetasPlaceholder")} onChange={(event) => { setAnthropicBetas(event.target.value); setErrors((previous) => omitError(previous, "anthropicBetas")); }} />
+              <input autoComplete="off" value={anthropicBetas} placeholder={t("providers.anthropicBetasPlaceholder")} onChange={(event) => { setAnthropicBetas(event.target.value); setErrors((previous) => omitError(previous, "anthropicBetas")); }} />
             </Field>
           )}
           {selectedSurface === "bedrock-mantle" && (
             <>
               <Field label={t("providers.bedrockProject")} hint={t("providers.bedrockProjectHint")} error={errors.bedrockProjectID}>
-                <input value={bedrockProjectID} placeholder={t("providers.bedrockProjectPlaceholder")} onChange={(event) => { setBedrockProjectID(event.target.value); setErrors((previous) => omitError(previous, "bedrockProjectID")); }} />
+                <input autoComplete="off" value={bedrockProjectID} placeholder={t("providers.bedrockProjectPlaceholder")} onChange={(event) => { setBedrockProjectID(event.target.value); setErrors((previous) => omitError(previous, "bedrockProjectID")); }} />
               </Field>
               {profileID === "bedrock.mantle.anthropic.messages.v1" && (
                 <div className="notice warning">
@@ -867,7 +867,7 @@ function ProviderForm({
             <header><h3 id="provider-capacity-title">{t("providers.capacitySection")}</h3><p>{t("providers.capacitySectionDescription")}</p></header>
             <div className="form-grid">
           <Field label={t("providers.maxConcurrency")} hint={t("providers.maxConcurrencyHint")}>
-            <input
+            <input autoComplete="off"
               type="number"
               min="0"
               value={maxConcurrency}

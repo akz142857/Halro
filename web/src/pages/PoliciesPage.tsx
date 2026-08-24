@@ -112,7 +112,7 @@ export function PoliciesPage() {
         </div>
       {tab === "token" && <section className="policy-management-panel" role="tabpanel" id={policyPanelID("token")} aria-labelledby={policyTabID("token")}>
         <div className="filter-bar policy-filter-bar">
-          <label><span>{t("policyManagement.search")}</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("policyManagement.searchPlaceholder")} /></label>
+          <label><span>{t("policyManagement.search")}</span><input autoComplete="off" value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("policyManagement.searchPlaceholder")} /></label>
           <label><span>{t("policyManagement.status")}</span><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">{t("policyManagement.all")}</option><option value="enabled">{t("common.enabled")}</option><option value="disabled">{t("common.disabled")}</option></select></label>
           <label><span>{t("policies.action")}</span><select value={action} onChange={(event) => setAction(event.target.value)}><option value="">{t("policyManagement.all")}</option><option value="observe">{t("policies.observe")}</option><option value="alert">{t("policies.alert")}</option><option value="temporary_block">{t("policies.temporaryBlock")}</option></select></label>
           <button className="button primary" disabled={readOnly} onClick={() => setEditing("new")}>{t("policies.create")}</button>
@@ -356,7 +356,7 @@ function PolicyForm({
         <section className="policy-form-section policy-basics-section">
           <header><div><h3>{t("policies.identitySection")}</h3><p>{t("policies.identityDescription")}</p></div></header>
           <div className="policy-basics-name">
-            <Field label={t("policies.name")} error={errors.name}><input autoFocus data-modal-initial value={name} onChange={(event) => setName(event.target.value)} /></Field>
+            <Field label={t("policies.name")} error={errors.name}><input autoComplete="off" autoFocus data-modal-initial value={name} onChange={(event) => setName(event.target.value)} /></Field>
           </div>
           {/* A group rather than a fieldset: the legend box interrupts the section
               border it sits on, and the radios already have a name binding them
@@ -518,7 +518,7 @@ function NumberInput({
   set: (value: number) => void;
   step?: string;
 } & Omit<InputHTMLAttributes<HTMLInputElement>, "value" | "onChange" | "type" | "step">) {
-  return <input {...inputProps} type="number" min="0" step={step} value={value} onChange={(event) => set(Number(event.target.value))} />;
+  return <input autoComplete="off" {...inputProps} type="number" min="0" step={step} value={value} onChange={(event) => set(Number(event.target.value))} />;
 }
 
 type PolicyValues = {
