@@ -858,21 +858,15 @@ func providerRequestID(header http.Header) string {
 }
 
 func safeProviderCode(value string) string {
+	// AWS names an exception by a qualified type — a coral service name and a
+	// "#", or a URL-shaped one — and only the last segment identifies it. That
+	// trim is Bedrock's; the bound and the character set are everyone's, so
+	// they live in provider and are applied here rather than restated.
 	value = strings.TrimSpace(value)
 	if index := strings.LastIndexAny(value, "#/"); index >= 0 {
 		value = value[index+1:]
 	}
-	if len(value) > 128 {
-		return ""
-	}
-	for _, char := range value {
-		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') ||
-			(char >= '0' && char <= '9') || strings.ContainsRune("._:-", char) {
-			continue
-		}
-		return ""
-	}
-	return value
+	return provider.SafeProviderIdentifier(value)
 }
 
 func retryAfter(header http.Header, now time.Time) time.Duration {

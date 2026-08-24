@@ -154,8 +154,16 @@ func (a *Adapter) modelCatalogURL() (url.URL, error) {
 	}
 	endpoint := *a.endpoint
 	basePath := strings.TrimRight(endpoint.Path, "/")
-	// The same base-is-literal rule as versionedPath, so discovery and the
-	// operation it discovers for cannot disagree about the URL.
+	// The same route the operations use, for the same reason versionedPath
+	// exists: discovery and the operation it discovers for must not disagree
+	// about the URL. This used to skip the prefix, so a profile that pins one —
+	// Bedrock Mantle's chat routes sit under /openai/v1 — enumerated against
+	// <base>/v1/models while every call it enumerated for went to
+	// <base>/openai/v1/…, and the mismatch was silent.
+	if a.operationPathPrefix != "" {
+		endpoint.Path = basePath + "/" + a.operationPathPrefix + "/models"
+		return endpoint, nil
+	}
 	endpoint.Path = versionedPath(basePath, "models")
 	return endpoint, nil
 }

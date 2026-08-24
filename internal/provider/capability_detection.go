@@ -12,7 +12,19 @@ import (
 	"github.com/akz142857/Halro/internal/semantic"
 )
 
-const CapabilityDetectorContractVersion = "capability-detector-v1"
+// CapabilityDetectorContractVersion is part of the detection selection
+// fingerprint, so bumping it stops a stored result from being reused under
+// semantics that did not produce it. v2 is the first version whose bad-request
+// classifier reads the code half of a joined provider identifier — a v1 result
+// recorded "inconclusive" where v2 would record "unsupported".
+// maxDetectionProbes bounds how many possibly billable calls one plan may ask
+// for. It is a cost ceiling, not a capability ceiling: a profile that serves
+// more than this many probeable capabilities gets the ones the plan lists and
+// defers the rest by name, so raising the ceiling stays a decision somebody
+// makes rather than a silent truncation nobody sees.
+const maxDetectionProbes = 8
+
+const CapabilityDetectorContractVersion = "capability-detector-v2"
 
 type ModelCapabilityDetectionTarget struct {
 	ProviderModel string
@@ -35,6 +47,12 @@ type CapabilityDetectionPlan struct {
 	ContractVersion string            `json:"contract_version"`
 	Probes          []CapabilityProbe `json:"probes"`
 	MaxCalls        int               `json:"max_calls"`
+	// Deferred names capabilities the profile can serve and the call budget
+	// could not fit. The budget used to drop them by returning early, which is
+	// indistinguishable from a capability the plan deliberately never reaches —
+	// and the two are recorded differently, because one is a policy and the
+	// other is a ceiling somebody may want raised.
+	Deferred []string `json:"deferred,omitempty"`
 }
 
 type CapabilityDetector interface {
@@ -63,9 +81,11 @@ func (b *LegacyAdapterBridge) CapabilityDetectionPlan(target ModelCapabilityDete
 		return CapabilityDetectionPlan{}, errors.New("capability detection target does not match adapter profile")
 	}
 	c := b.Capabilities()
-	probes := make([]CapabilityProbe, 0, 8)
+	probes := make([]CapabilityProbe, 0, maxDetectionProbes)
+	var deferred []string
 	add := func(capability, kind string, dependencies ...string) {
-		if len(probes) == 8 {
+		if len(probes) == maxDetectionProbes {
+			deferred = append(deferred, capability)
 			return
 		}
 		probes = append(probes, CapabilityProbe{Capability: capability, Kind: kind, DependsOn: dependencies,
@@ -101,10 +121,18 @@ func (b *LegacyAdapterBridge) CapabilityDetectionPlan(target ModelCapabilityDete
 	if c.Rerank {
 		add("rerank", "rerank")
 	}
+	// Reasoning is added last on purpose. It is the probe whose criterion is the
+	// softest — an upstream that ignores the parameter answers exactly like one
+	// that has no reasoning to report — so when the budget cannot fit every
+	// capability the profile serves, this is the one to give up. Ordering is the
+	// whole mechanism: add() fills until the ceiling and defers the rest.
+	if c.Reasoning {
+		add("reasoning", "reasoning_effort", "chat")
+	}
 	if len(probes) == 0 {
 		return CapabilityDetectionPlan{}, errors.New("adapter profile has no safe automatic capability probes")
 	}
-	return CapabilityDetectionPlan{ContractVersion: CapabilityDetectorContractVersion, Probes: probes, MaxCalls: len(probes)}, nil
+	return CapabilityDetectionPlan{ContractVersion: CapabilityDetectorContractVersion, Probes: probes, MaxCalls: len(probes), Deferred: deferred}, nil
 }
 
 func (b *LegacyAdapterBridge) DetectCapability(ctx context.Context, target ModelCapabilityDetectionTarget, probe CapabilityProbe) domain.CapabilityProbeResult {
@@ -183,6 +211,28 @@ func (b *LegacyAdapterBridge) DetectCapability(ctx context.Context, target Model
 		if err == nil && len(response.Choices) > 0 {
 			result.Status, result.Evidence = domain.ProbeSupported, domain.EvidenceVerified
 		}
+	case "reasoning_effort":
+		// The evidence has to be something only a reasoning model produces. An
+		// upstream that does not reason answers this request exactly like any
+		// other — same shape, same fields — so "it did not refuse the parameter"
+		// proves nothing and is not accepted here. What is accepted is the
+		// upstream reporting a reasoning span it billed for, or returning
+		// reasoning content alongside the answer. Both are things the model did,
+		// not things it declined to complain about.
+		//
+		// The effort level is the lowest the ladder offers above "none": the
+		// probe is asking whether reasoning happens at all, and paying for a
+		// deep one to learn that would be paying for the wrong answer.
+		request.ReasoningEffort = "minimal"
+		var response openaiapi.ChatCompletionResponse
+		response, err = b.Chat(ctx, ChatCall{RequestID: "capability-detection", ProviderModel: target.ProviderModel, Request: request})
+		if err == nil && len(response.Choices) > 0 && response.Choices[0].Message != nil {
+			reasoned := response.Usage != nil && response.Usage.ReasoningTokens() > 0
+			reasoned = reasoned || strings.TrimSpace(response.Choices[0].Message.ReasoningContent) != ""
+			if reasoned {
+				result.Status, result.Evidence = domain.ProbeSupported, domain.EvidenceVerified
+			}
+		}
 	case "embedding":
 		var response openaiapi.EmbeddingResponse
 		response, err = b.Embed(ctx, EmbeddingCall{RequestID: "capability-detection", ProviderModel: target.ProviderModel,
@@ -215,8 +265,31 @@ func (b *LegacyAdapterBridge) DetectCapability(ctx context.Context, target Model
 	default:
 		result.Status = domain.ProbeNotProbed
 	}
+	// The upstream answered and the answer did not carry the evidence. Every
+	// case above only ever upgrades the status, and the zero value it starts
+	// from is "could not tell" — which is what a refused request Halro could
+	// not read looks like too. Those are opposite situations with opposite next
+	// steps, and folding them together left the second one with no record at
+	// all: ErrorClass is written only on the error path, so a tool probe whose
+	// reply simply carried no tool call left nothing behind but the word
+	// "inconclusive".
+	if err == nil && result.Status == domain.ProbeInconclusive {
+		result.Status = domain.ProbeAssertionFailed
+	}
 	if err != nil {
 		result.Status, result.Evidence, result.ErrorClass = classifyCapabilityProbeError(err), "", capabilityProbeErrorClass(err)
+		// What the upstream said about the request, in identifiers only. The
+		// class says what kind of failure it was; these two say which request
+		// and which field, which is the part an operator can act on. The
+		// sentence beside them is a provider response body and stays inside the
+		// error — this record is durable and is served to the console.
+		var classified *Error
+		if errors.As(err, &classified) {
+			if classified.StatusCode >= 100 && classified.StatusCode <= 599 {
+				result.ProviderStatus = classified.StatusCode
+			}
+			result.ProviderCode = SafeProviderIdentifier(classified.ProviderCode)
+		}
 	}
 	return result
 }
@@ -240,7 +313,18 @@ func classifyCapabilityProbeError(err error) domain.CapabilityProbeStatus {
 	case ErrorBadRequest:
 		// Only a structured, reviewed provider code is accepted as a stable
 		// unsupported verdict. Free-form error text is never inspected.
-		if strings.EqualFold(providerError.ProviderCode, "unsupported_parameter") || strings.EqualFold(providerError.ProviderCode, "unsupported_value") {
+		//
+		// The identifier arrives joined to the parameter it names —
+		// "unsupported_parameter:image_url" — because the refused field is the
+		// half an operator can act on and the error contract has one identifier
+		// field to carry both. Comparing the whole string therefore matched only
+		// when the upstream named no parameter, and an OpenAI-shaped body always
+		// names one: every refused probe on that family (OpenAI, OpenAI-compatible
+		// endpoints, both Bedrock Mantle routes) landed as inconclusive, and this
+		// branch was unreachable. The verdict belongs to the code, so compare the
+		// code and let the parameter travel with it.
+		code, _, _ := strings.Cut(providerError.ProviderCode, ":")
+		if strings.EqualFold(code, "unsupported_parameter") || strings.EqualFold(code, "unsupported_value") {
 			return domain.ProbeUnsupported
 		}
 		return domain.ProbeInconclusive

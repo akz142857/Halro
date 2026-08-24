@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -82,6 +83,56 @@ func (e *Error) Error() string {
 
 func (e *Error) Unwrap() error {
 	return e.Cause
+}
+
+// MaxProviderIdentifierLength bounds an identifier the upstream chose. The
+// value is read from a provider response body, so it is attacker-influenceable
+// in the same sense every upstream field is; anything longer than this is not
+// an identifier.
+const MaxProviderIdentifierLength = 128
+
+// SafeProviderIdentifier narrows an upstream-chosen identifier to something a
+// log, a durable record and a console cell can all hold.
+//
+// The bound and the character set were written twice already — once for Bedrock
+// exception names, once for the connection-test log attributes — and a third
+// copy was about to be written for the probe results this now feeds. The rule
+// is the same in all three places: an identifier is short and is made of the
+// characters identifiers are made of; a value that is neither is not an
+// identifier and is dropped rather than trimmed, because a truncated identifier
+// is a different identifier.
+//
+// The code and the parameter it names are narrowed separately. They arrive
+// joined ("unsupported_parameter:messages[0].content") and the parameter is the
+// half most likely to carry something outside the set — a JSON path with
+// brackets, say. Narrowing the pair as one string would drop the code with it,
+// losing the half that decides the verdict to keep company with the half that
+// only annotates it.
+func SafeProviderIdentifier(value string) string {
+	code, parameter, joined := strings.Cut(strings.TrimSpace(value), ":")
+	if code = boundedIdentifier(code); code == "" || !joined {
+		return code
+	}
+	if parameter = boundedIdentifier(parameter); parameter == "" {
+		return code
+	}
+	return code + ":" + parameter
+}
+
+func boundedIdentifier(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > MaxProviderIdentifierLength {
+		return ""
+	}
+	for _, char := range value {
+		switch {
+		case char >= 'a' && char <= 'z', char >= 'A' && char <= 'Z', char >= '0' && char <= '9':
+		case char == '.' || char == '_' || char == '-':
+		default:
+			return ""
+		}
+	}
+	return value
 }
 
 // Unsent reports whether a transport error happened before any byte of the

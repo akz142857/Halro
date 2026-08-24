@@ -83,8 +83,15 @@ type providerProfilesView struct {
 	// about before it is ticked, rather than rendering as one more checkbox. The
 	// wording is the renderer's; the list is the server's, so a capability that
 	// gains this property does not depend on the console being edited too.
-	CapabilityOptInWarnings []string           `json:"capability_opt_in_warnings"`
-	ProviderTypes           []providerTypeView `json:"provider_types"`
+	CapabilityOptInWarnings []string `json:"capability_opt_in_warnings"`
+	// CapabilityModalities and NonModalCapabilities render Halro's capability
+	// vocabulary as the input/output view a model catalogue uses. The mapping is
+	// the server's for the same reason the dependencies above are: the console
+	// is not the only thing that will ever want it, and a second copy in the
+	// browser is a second thing to keep true.
+	CapabilityModalities []domain.CapabilityModality `json:"capability_modalities"`
+	NonModalCapabilities []string                    `json:"non_modal_capabilities"`
+	ProviderTypes        []providerTypeView          `json:"provider_types"`
 }
 
 // The view is assembled per request rather than memoised. It is fifteen rows of
@@ -125,6 +132,8 @@ func buildProviderProfilesView(region string) providerProfilesView {
 		CapabilityNames:         domain.CapabilityNames(),
 		CapabilityDependencies:  domain.CapabilityDependencies(),
 		CapabilityOptInWarnings: domain.CapabilityOptInWarnings(),
+		CapabilityModalities:    domain.CapabilityModalities(),
+		NonModalCapabilities:    domain.NonModalCapabilities(),
 		ProviderTypes:           types,
 	}
 }

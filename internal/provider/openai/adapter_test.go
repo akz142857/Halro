@@ -267,6 +267,38 @@ func TestProfileOperationURLs(t *testing.T) {
 	}
 }
 
+// Discovery has to address the same route the operations do. A profile that
+// pins a route — Bedrock Mantle's two Mantle routes on one host — enumerated
+// against the default one, so the model list and the calls made against that
+// list came from different places and nothing said so.
+func TestModelCatalogAddressesTheProfileRoute(t *testing.T) {
+	for _, test := range []struct {
+		name, base, prefix, want string
+	}{
+		{"default route", "https://api.openai.com", "", "https://api.openai.com/v1/models"},
+		{"literal base path", "https://llm.internal/api/paas/v4", "", "https://llm.internal/api/paas/v4/models"},
+		{"bedrock mantle openai route", "https://bedrock-mantle.us-east-2.api.aws", "openai/v1", "https://bedrock-mantle.us-east-2.api.aws/openai/v1/models"},
+		{"bedrock mantle default route", "https://bedrock-mantle.us-east-2.api.aws", "v1", "https://bedrock-mantle.us-east-2.api.aws/v1/models"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			endpoint, _ := url.Parse(test.base)
+			adapter := &Adapter{endpoint: endpoint, operationPathPrefix: test.prefix}
+			catalog, err := adapter.modelCatalogURL()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := catalog.String(); got != test.want {
+				t.Fatalf("catalog URL=%q want=%q", got, test.want)
+			}
+			// Same prefix, same host, same route as the operation it discovers for.
+			operation := adapter.operationURL("model", "chat/completions")
+			if catalogBase, operationBase := strings.TrimSuffix(catalog.Path, "models"), strings.TrimSuffix(operation.Path, "chat/completions"); catalogBase != operationBase {
+				t.Fatalf("discovery route %q does not match operation route %q", catalogBase, operationBase)
+			}
+		})
+	}
+}
+
 func TestConnectionProbeUsesNonBillableEndpoint(t *testing.T) {
 	wantURL := "https://provider.example/v1/models/org%2Fgpt-test"
 	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {

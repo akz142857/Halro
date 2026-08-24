@@ -111,6 +111,94 @@ func (adapter *ResponsesAdapter) Probe(ctx context.Context, _ string) error {
 	return err
 }
 
+// maxCatalogEntries bounds a model list Halro did not write. The entries feed a
+// cache and a console list, and an upstream that answers with more than this is
+// not describing an account an operator is choosing a model from.
+const maxCatalogEntries = 2000
+
+// maxCatalogResponseBytes is far below the operation ceiling on purpose: this is
+// a list of identifiers, not a generation.
+const maxCatalogResponseBytes = 1 << 20
+
+func (adapter *ResponsesAdapter) InvocationTargetDiscovery() domain.InvocationTargetDiscoveryCapabilities {
+	return domain.InvocationTargetDiscoveryCapabilities{
+		TargetKinds:  []domain.DeploymentTargetKind{domain.TargetModelID},
+		CanEnumerate: true, CanDescribe: true, CanVerify: true,
+	}
+}
+
+// ListInvocationTargets enumerates the models this Mantle route serves.
+//
+// What it deliberately does not do is claim anything about them. The
+// OpenAI-shaped /v1/models answer carries an identifier and an owner and
+// nothing else — no modalities, no context window — so MapCapabilityClaims is
+// not implemented here. A claim derived from an identifier is a guess wearing
+// declared evidence, which is worse than the absence it would be covering up:
+// the absence is visible and a wrong claim is not.
+func (adapter *ResponsesAdapter) ListInvocationTargets(ctx context.Context, _ domain.TargetQuery) ([]domain.InvocationTargetDescriptor, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, adapter.operationURL("models"), nil)
+	if err != nil {
+		return nil, badRequest("create Mantle model catalog request", err)
+	}
+	request.Header.Set("Accept", "application/json")
+	provider.ApplyBedrockProject(request, provider.HeaderBedrockOpenAIProject, adapter.bedrockProjectID)
+	if err := adapter.authorizer.Authorize(request, nil); err != nil {
+		return nil, &provider.Error{Class: provider.ErrorAuthentication, Message: "authorize Mantle model catalog request", Cause: err}
+	}
+	response, err := adapter.client.Do(request)
+	if err != nil {
+		return nil, transportError("Mantle model catalog request failed", err, false)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, decodeHTTPError(response, false)
+	}
+	payload, err := readLimited(response.Body, maxCatalogResponseBytes)
+	if err != nil {
+		return nil, malformed("read Mantle model catalog response", err, false)
+	}
+	var catalog struct {
+		Data []struct {
+			ID      string `json:"id"`
+			OwnedBy string `json:"owned_by"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(payload, &catalog); err != nil {
+		return nil, malformed("decode Mantle model catalog response", err, false)
+	}
+	if len(catalog.Data) > maxCatalogEntries {
+		return nil, malformed("Mantle model catalog exceeded the entry limit", nil, false)
+	}
+	now := time.Now().UTC()
+	targets := make([]domain.InvocationTargetDescriptor, 0, len(catalog.Data))
+	for _, model := range catalog.Data {
+		id := strings.TrimSpace(model.ID)
+		if id == "" || len(id) > 512 {
+			continue
+		}
+		targets = append(targets, domain.InvocationTargetDescriptor{
+			TargetID: id, TargetKind: domain.TargetModelID, DisplayName: id,
+			OwnedBy: strings.TrimSpace(model.OwnedBy), CanonicalModelRef: id,
+			Lifecycle: domain.TargetLifecycleUnknown, MetadataSource: domain.MetadataSourceNone,
+			Availability: domain.AvailabilityAvailable, FetchedAt: now,
+		})
+	}
+	return targets, nil
+}
+
+func (adapter *ResponsesAdapter) DescribeInvocationTarget(ctx context.Context, target domain.InvocationTargetDescriptor) (domain.InvocationTargetDescriptor, error) {
+	items, err := adapter.ListInvocationTargets(ctx, domain.TargetQuery{TargetKind: target.TargetKind})
+	if err != nil {
+		return domain.InvocationTargetDescriptor{}, err
+	}
+	for _, item := range items {
+		if item.TargetID == strings.TrimSpace(target.TargetID) {
+			return item, nil
+		}
+	}
+	return domain.InvocationTargetDescriptor{}, &provider.Error{Class: provider.ErrorBadRequest, Message: "invocation target was not found"}
+}
+
 func (adapter *ResponsesAdapter) Chat(ctx context.Context, call provider.ChatCall) (openaiapi.ChatCompletionResponse, error) {
 	canonical, err := openaiwire.DecodeGenerate(call.Request)
 	if err != nil {
@@ -338,7 +426,31 @@ func decodeHTTPError(response *http.Response, ambiguous bool) error {
 	if message == "" {
 		message = http.StatusText(response.StatusCode)
 	}
-	return &provider.Error{Class: class, StatusCode: response.StatusCode, Retryable: retryable, Ambiguous: ambiguous && response.StatusCode >= 500, Message: message, ProviderRequestID: providerRequestID(response.Header), RetryAfter: retryAfter(response.Header)}
+	return &provider.Error{Class: class, StatusCode: response.StatusCode, Retryable: retryable, Ambiguous: ambiguous && response.StatusCode >= 500, Message: message, ProviderCode: refusalCode(envelope), ProviderRequestID: providerRequestID(response.Header), RetryAfter: retryAfter(response.Header)}
+}
+
+// refusalCode is the machine-readable half of an OpenAI-shaped refusal, which is
+// the shape Mantle answers in. It is kept apart from the sentence beside it for
+// the reason the attempt log exists: the sentence is a provider response body
+// and never leaves the error, while the code — joined to the parameter it names
+// — is the one part an operator can act on. Reading only the sentence left every
+// Mantle refusal logged as a bare status, so a rejected field said a request was
+// refused without saying for what, on a request Halro assembled rather than the
+// operator.
+func refusalCode(envelope openaiapi.ErrorEnvelope) string {
+	code := strings.TrimSpace(envelope.Error.Code)
+	if code == "" {
+		// Not every OpenAI-shaped upstream fills `code`; `type` is the coarser
+		// identifier the same bodies always carry.
+		code = strings.TrimSpace(envelope.Error.Type)
+	}
+	if envelope.Error.Param == nil || code == "" {
+		return code
+	}
+	if param := strings.TrimSpace(*envelope.Error.Param); param != "" {
+		return code + ":" + param
+	}
+	return code
 }
 
 func providerRequestID(header http.Header) string {

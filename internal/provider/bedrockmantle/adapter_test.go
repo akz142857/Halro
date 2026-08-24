@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -157,6 +158,60 @@ func TestResponsesAdapterValidatesStreamLifecycleAndUsage(t *testing.T) {
 	}
 }
 
+// Enumeration and claim production are separate jobs, and this route can only
+// do the first: the OpenAI-shaped catalog carries an identifier and an owner,
+// so any capability read off it would be a guess wearing declared evidence.
+func TestResponsesAdapterEnumeratesWithoutClaimingAnything(t *testing.T) {
+	var requested string
+	adapter := testAdapter(t, roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		requested = request.URL.String()
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}},
+			Body: io.NopCloser(strings.NewReader(`{"object":"list","data":[{"id":"openai.gpt-5.6-luna","owned_by":"openai"},{"id":"  ","owned_by":"x"},{"id":"moonshotai.kimi-k2.5"}]}`))}, nil
+	}))
+	discovery := adapter.InvocationTargetDiscovery()
+	if !discovery.CanEnumerate || !discovery.CanDescribe || !discovery.CanVerify {
+		t.Fatalf("discovery does not advertise enumeration: %#v", discovery)
+	}
+	targets, err := adapter.ListInvocationTargets(context.Background(), domain.TargetQuery{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requested != "https://bedrock-mantle.us-east-1.api.aws/v1/models" {
+		t.Fatalf("catalog addressed %q", requested)
+	}
+	if len(targets) != 2 || targets[0].TargetID != "openai.gpt-5.6-luna" || targets[1].TargetID != "moonshotai.kimi-k2.5" {
+		t.Fatalf("targets=%#v", targets)
+	}
+	for _, target := range targets {
+		// No metadata means no metadata source. A target that claimed one would
+		// let a downstream merge treat emptiness as an answer.
+		if target.MetadataSource != domain.MetadataSourceNone {
+			t.Fatalf("target %q claims a metadata source", target.TargetID)
+		}
+		if len(target.Metadata.InputModalities) != 0 || len(target.Metadata.OutputModalities) != 0 || len(target.Metadata.SupportedOperations) != 0 {
+			t.Fatalf("target %q invented metadata: %#v", target.TargetID, target.Metadata)
+		}
+	}
+	// The claim mapper is the thing that must not exist on this route.
+	if _, ok := any(adapter).(provider.ProviderMetadataMapper); ok {
+		t.Fatal("Mantle Responses claims capabilities it has no evidence for")
+	}
+}
+
+func TestResponsesAdapterBoundsTheModelCatalog(t *testing.T) {
+	entries := make([]string, maxCatalogEntries+1)
+	for index := range entries {
+		entries[index] = `{"id":"m` + strconv.Itoa(index) + `"}`
+	}
+	adapter := testAdapter(t, roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}},
+			Body: io.NopCloser(strings.NewReader(`{"object":"list","data":[` + strings.Join(entries, ",") + `]}`))}, nil
+	}))
+	if _, err := adapter.ListInvocationTargets(context.Background(), domain.TargetQuery{}); err == nil {
+		t.Fatal("an unbounded catalog was accepted")
+	}
+}
+
 func TestResponsesAdapterMapsRetryableAWSFailure(t *testing.T) {
 	adapter := testAdapter(t, roundTripFunc(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: 429, Header: http.Header{"Retry-After": []string{"2"}, "X-Amzn-Requestid": []string{"aws-request-2"}}, Body: io.NopCloser(strings.NewReader(`{"error":{"message":"quota"}}`))}, nil
@@ -293,6 +348,42 @@ func TestResponsesAdapterClassifiesTheMantleStatusMatrix(t *testing.T) {
 		if strings.Contains(classified.Message, "access_denied") {
 			t.Fatalf("status %d carried the provider error type into the message: %q", test.status, classified.Message)
 		}
+		// The type is kept, out of the sentence and in the identifier field the
+		// attempt log prints. A refusal that reaches the operator as a bare
+		// status says a request was refused without saying for what.
+		if classified.ProviderCode != "access_denied" {
+			t.Fatalf("status %d dropped the refusal identifier: %q", test.status, classified.ProviderCode)
+		}
+	}
+}
+
+// The parameter a refusal names is the part an operator acts on, and Mantle
+// answers in the OpenAI error shape, so both halves arrive on the wire. The
+// sentence is a provider response body and stays inside the error; the code,
+// joined to the parameter, is what leaves it. "unsupported_parameter" without
+// the field names a category, not something to change.
+func TestResponsesAdapterKeepsTheRefusedParameterInTheIdentifier(t *testing.T) {
+	adapter := testAdapter(t, roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: 400,
+			Header:     http.Header{"X-Amzn-Requestid": []string{"aws-request-param"}},
+			Body: io.NopCloser(strings.NewReader(
+				`{"error":{"message":"Unsupported parameter: 'max_completion_tokens'.","type":"invalid_request_error","param":"max_completion_tokens","code":"unsupported_parameter"}}`)),
+		}, nil
+	}))
+	_, err := adapter.Chat(context.Background(), mantleChatCall())
+	var classified *provider.Error
+	if !errors.As(err, &classified) {
+		t.Fatalf("refusal was not classified: %v", err)
+	}
+	if classified.Class != provider.ErrorBadRequest || classified.ProviderRequestID != "aws-request-param" {
+		t.Fatalf("unexpected classification: class=%s request_id=%q", classified.Class, classified.ProviderRequestID)
+	}
+	if classified.ProviderCode != "unsupported_parameter:max_completion_tokens" {
+		t.Fatalf("refusal identifier lost the parameter: %q", classified.ProviderCode)
+	}
+	if strings.Contains(classified.ProviderCode, "Unsupported parameter") {
+		t.Fatalf("provider sentence reached the identifier: %q", classified.ProviderCode)
 	}
 }
 

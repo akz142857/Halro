@@ -434,6 +434,16 @@ func (r *Runtime) runCapabilityDetection(parent context.Context, detectionID str
 		r.finishDetectionWithoutProbe(d, domain.DetectionFailed)
 		return
 	}
+	// A capability the profile serves and the call budget could not fit is
+	// recorded before any probe runs, under its own probe kind. It is not the
+	// same thing as a capability the plan deliberately never reaches — that one
+	// is a policy, this one is a ceiling — and writing it now means it survives
+	// a detection that is cancelled or fails partway.
+	for _, name := range plan.Deferred {
+		if _, carried := d.Results[name]; !carried {
+			d.Results[name] = domain.CapabilityProbeResult{Status: domain.ProbeNotProbed, BindingID: d.BindingID, ProbeKind: "probe_budget"}
+		}
+	}
 	for probeIndex, probe := range plan.Probes {
 		current, getErr := r.store.GetModelCapabilityDetection(ctx, d.ID)
 		if getErr != nil {
@@ -710,17 +720,24 @@ func (r *Runtime) spendDetectionProbe(ctx context.Context, d domain.ModelCapabil
 
 // probeOutcomeRank orders probe outcomes by how much they tell the operator.
 // A supported probe settles the interface. A rejected credential or an
-// unreachable provider names something they can fix. "Could not tell" and
-// "was not asked" name nothing, so they never displace either.
+// unreachable provider names something they can fix. An upstream that answered
+// without showing the capability at least proves the interface answers, which
+// is more than "could not tell" — and "was not asked" names nothing at all, so
+// neither of those two ever displaces something an operator can act on.
+//
+// The numbers are compared against each other and nowhere else; they are spaced
+// only so a new outcome can be placed without renumbering its neighbours.
 func probeOutcomeRank(status domain.CapabilityProbeStatus) int {
 	switch status {
 	case domain.ProbeSupported:
-		return 5
+		return 6
 	case domain.ProbeUnauthorized:
-		return 4
+		return 5
 	case domain.ProbeUnavailable:
-		return 3
+		return 4
 	case domain.ProbeUnsupported:
+		return 3
+	case domain.ProbeAssertionFailed:
 		return 2
 	case domain.ProbeInconclusive:
 		return 1
