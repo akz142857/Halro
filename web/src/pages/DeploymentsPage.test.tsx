@@ -543,6 +543,105 @@ describe("deployment invocation target workflow", () => {
     expect(screen.queryByText("明确不支持")).not.toBeInTheDocument();
   });
 
+  // Three greys with three different next steps. Going to the connection does
+  // nothing for a capability the connection already carries, and re-running
+  // identification does nothing for a probe that came back refused — one label
+  // for all three sent the operator somewhere with nothing to do there.
+  it("names which dead end each unavailable capability is in", async () => {
+    const detected = {
+      id: "mcd", status: "completed" as const, source: "verified_probe" as const,
+      provider_id: provider.id, provider_model: unknown.target_id, binding_id: "b-chat",
+      profile_id: "openai.chat-embeddings.v1", binding_candidates: [], provider_calls: 4, max_provider_calls: 8,
+      capabilities: {
+        chat: { status: "supported" as const, evidence: "verified" as const, probe_kind: "chat" },
+        stream_usage: { status: "inconclusive" as const, probe_kind: "stream_usage" },
+        tools: { status: "unsupported" as const, probe_kind: "tool_call" },
+      },
+      recommended_capabilities: { ...emptyCapabilities, chat: true }, selection_revision: "selection", revision: 3,
+    };
+    vi.spyOn(api, "createModelCapabilityDetection").mockImplementation(async (_id, body) => ({ ...detected, selection_revision: (body as { selection_revision: string }).selection_revision }));
+    await openCreate();
+    await choose("GPT Future");
+    await startDetection();
+    expect(await screen.findByLabelText("对话")).toBeChecked();
+    // Enabled on the connection, probed, and the run settled nothing.
+    expect(screen.getByRole("checkbox", { name: /^流式用量/ }).closest("label")).toHaveTextContent("本次识别没有验证出来");
+    // Enabled on the connection, probed, and refused upstream.
+    expect(screen.getByRole("checkbox", { name: /^工具调用/ }).closest("label")).toHaveTextContent("本次识别判定不支持");
+    // The interface serves it; this connection is what never turned it on.
+    expect(screen.getByRole("checkbox", { name: /^视觉/ }).closest("label")).toHaveTextContent("先在服务商连接上启用");
+  });
+
+  // "Never reached" and "reached, settled nothing" are different answers with
+  // different next steps: one is fixed by identifying again, the other cannot
+  // be, because there is no probe to run. The server has always told them
+  // apart; the form used to collapse them back together.
+  it("does not offer a re-run for a capability the plan never reached", async () => {
+    const detected = {
+      id: "mcd", status: "completed" as const, source: "verified_probe" as const,
+      provider_id: provider.id, provider_model: unknown.target_id, binding_id: "b-chat",
+      profile_id: "openai.chat-embeddings.v1", binding_candidates: [], provider_calls: 3, max_provider_calls: 8,
+      capabilities: {
+        chat: { status: "supported" as const, evidence: "verified" as const, probe_kind: "chat" },
+        stream_usage: { status: "inconclusive" as const, probe_kind: "stream_usage", error_class: "rate_limit" },
+        // The plan ran out of calls before this one — not a risk_policy row, so
+        // it is an outcome the operator is owed, but not one a retry fixes.
+        tools: { status: "not_probed" as const, probe_kind: "tool_call" },
+      },
+      recommended_capabilities: { ...emptyCapabilities, chat: true }, selection_revision: "selection", revision: 3,
+    };
+    vi.spyOn(api, "createModelCapabilityDetection").mockImplementation(async (_id, body) => ({ ...detected, selection_revision: (body as { selection_revision: string }).selection_revision }));
+    await openCreate();
+    await choose("GPT Future");
+    await startDetection();
+    expect(await screen.findByLabelText("对话")).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /^工具调用/ }).closest("label")).toHaveTextContent("本次识别没有探测该能力");
+    expect(screen.getByRole("checkbox", { name: /^流式用量/ }).closest("label")).toHaveTextContent("本次识别没有验证出来");
+    // The reason a probe settled nothing is in the same response object, and
+    // used to be rendered only for a detection that failed outright.
+    const banner = screen.getByText(/验证没有得出结论/).closest(".notice")!;
+    expect(banner).toHaveTextContent("流式用量 → 无法确认");
+    expect(banner).toHaveTextContent("上游限流，稍后重试");
+    // A capability with no recorded error class adds no row.
+    expect(banner).not.toHaveTextContent("工具调用 → 未检测");
+  });
+
+  // Six outcomes, six next steps. One sentence for all of them sent the
+  // operator to re-run identification for cases nothing about a re-run touches.
+  it("gives each probe outcome its own next step", async () => {
+    const detected = {
+      id: "mcd", status: "completed" as const, source: "verified_probe" as const,
+      provider_id: provider.id, provider_model: unknown.target_id, binding_id: "b-chat",
+      profile_id: "openai.chat-embeddings.v1", binding_candidates: [], provider_calls: 4, max_provider_calls: 8,
+      capabilities: {
+        chat: { status: "supported" as const, evidence: "verified" as const, probe_kind: "chat" },
+        // Answered, and the answer carried no tool call. A re-run sends the
+        // identical request.
+        tools: { status: "assertion_failed" as const, probe_kind: "tool_call" },
+        // Refused, and Halro could not read the refusal. Worth re-running.
+        stream_usage: { status: "inconclusive" as const, probe_kind: "stream_usage" },
+        // Not the model's answer at all.
+        streaming: { status: "unavailable" as const, probe_kind: "minimal_stream", error_class: "timeout" },
+      },
+      recommended_capabilities: { ...emptyCapabilities, chat: true }, selection_revision: "selection", revision: 3,
+    };
+    vi.spyOn(api, "createModelCapabilityDetection").mockImplementation(async (_id, body) => ({ ...detected, selection_revision: (body as { selection_revision: string }).selection_revision }));
+    await openCreate();
+    await choose("GPT Future");
+    await startDetection();
+    expect(await screen.findByLabelText("对话")).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /^工具调用/ }).closest("label")).toHaveTextContent("上游应答里没有该能力的证据");
+    expect(screen.getByRole("checkbox", { name: /^流式用量/ }).closest("label")).toHaveTextContent("本次识别没有验证出来");
+    expect(screen.getByRole("checkbox", { name: /^流式($|[^用])/ }).closest("label")).toHaveTextContent("本次识别时上游不可达");
+    // Every one of them is an outcome the capability editor cannot express, so
+    // every one of them is named in the banner rather than silently dropped.
+    const banner = screen.getByText(/验证没有得出结论/).closest(".notice")!;
+    for (const capability of ["工具调用", "流式用量", "流式"]) {
+      expect(banner).toHaveTextContent(capability);
+    }
+    expect(banner).toHaveTextContent("流式 → 暂时不可用");
+  });
+
   it("adopts a reused detection even when the shared job carries an older client selection token", async () => {
     const queued = {
       id: "cached", status: "queued" as const, source: "verified_probe" as const,
@@ -762,6 +861,80 @@ describe("deployment invocation target workflow", () => {
     expect(within(summary).getByText("Halro's reviewed model catalog")).toBeVisible();
   });
 
+});
+
+// The card is a layout change, not a scope change. Two facts on it decide
+// whether a deployment serves traffic at all, and a third is the reason two of
+// its own buttons are disabled — a card that dropped them would look tidier and
+// answer less than the row it replaced.
+describe("deployment card keeps what the row decided", () => {
+  beforeEach(() => {
+    vi.spyOn(api, "providers").mockResolvedValue({ items: [provider], next_cursor: "" });
+    vi.spyOn(api, "routes").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "invocationTargets").mockResolvedValue(catalog([]));
+    vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [], next_cursor: "" });
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    window.history.replaceState({}, "", "/admin/deployments");
+  });
+
+  it("carries drift, state words, routes and price on the card itself", async () => {
+    vi.spyOn(api, "deployments").mockResolvedValue({
+      items: [deployment("dep_card", {
+        enabled: true,
+        capabilities: { ...chatCapabilities, vision: true, max_context_tokens: 272_000, max_output_tokens: 16_000 },
+        capability_evidence: { chat: "verified", vision: "declared" },
+        capability_review: {
+          state: "drifted", source: "verified_probe", status: "known", model_revision: "r1", catalog_covered: true,
+        },
+      })],
+      next_cursor: "",
+    });
+    renderPage();
+
+    const card = (await screen.findByText("Deployment dep_card")).closest("article.deployment-card") as HTMLElement;
+    // Enabled says "not routing" when the snapshot drifted, so the correction
+    // has to sit beside the flag rather than behind an expander.
+    expect(within(card).getByText("能力已不再受支持")).toBeVisible();
+    // Colour is never the only signal: the state exists as words too, in the
+    // state cell rather than anywhere the word happens to appear.
+    expect(card.querySelector(".resource-state")).toHaveTextContent("启用");
+    // The disabled reason for Disable and Delete.
+    expect(within(card).getByText("路由依赖")).toBeVisible();
+    // The precondition for enabling at all.
+    expect(within(card).getByText("价格设置")).toBeVisible();
+    // Token limits are abbreviated the way a model catalogue abbreviates them.
+    expect(card).toHaveTextContent("272K 上下文");
+    expect(card).toHaveTextContent("16K 最大输出");
+    // The model id keeps a name for an assistive reader now that its column label is gone.
+    expect(within(card).getByLabelText(/上游调用目标: gpt-chat/)).toBeVisible();
+  });
+
+  it("draws modality marks from the server mapping and never as the whole capability set", async () => {
+    vi.spyOn(api, "deployments").mockResolvedValue({
+      items: [deployment("dep_marks", {
+        capabilities: { ...chatCapabilities, vision: true },
+        capability_evidence: { chat: "verified", vision: "declared" },
+      })],
+      next_cursor: "",
+    });
+    renderPage();
+
+    const card = (await screen.findByText("Deployment dep_marks")).closest("article.deployment-card") as HTMLElement;
+    // Each mark names its direction, its modality and the evidence behind it,
+    // so the glyph is never the only thing carrying the fact.
+    // The marks appear once the profile bundle lands: the mapping is the
+    // server's, and drawing them from a guess before it arrives is the drift
+    // this whole arrangement exists to avoid.
+    expect(await within(card).findByLabelText("输入：文本（已验证）")).toBeVisible();
+    expect(within(card).getByLabelText("输入：图像（已声明）")).toBeVisible();
+    expect(within(card).getByLabelText("输出：文本（已验证）")).toBeVisible();
+    // streaming, tools and stream_usage express no modality at all. Without the
+    // count beside the marks they would read as absent rather than as protocol
+    // features the marks cannot draw.
+    expect(within(card).getByText("5 项能力")).toBeVisible();
+  });
 });
 
 describe("deployment connection test", () => {

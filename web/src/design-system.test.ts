@@ -161,7 +161,7 @@ describe("design system themes", () => {
   const bareSizeValueBaseline = 724;
 
   it("does not add bare spacing or radius values beyond the current baseline", () => {
-    const styles = read("./styles.css") + read("./design-system/resource-list.css");
+    const styles = read("./styles.css") + read("./design-system/resource-list.css") + read("./design-system/resource-card.css");
     const declarations = styles.matchAll(
       /\b(?:gap|row-gap|column-gap|padding|padding-top|padding-right|padding-bottom|padding-left|margin|margin-top|margin-right|margin-bottom|margin-left|border-radius|inset)\s*:\s*([^;{}]*)/g,
     );
@@ -333,7 +333,7 @@ describe("component styling reaches the markup", () => {
   const unstyledClassBaseline = 12;
 
   it("does not add class names the stylesheets never style", () => {
-    const cssFiles = ["./styles.css", "./design-system/index.css", "./design-system/components.css", "./design-system/resource-list.css", "./design-system/tokens.css"];
+    const cssFiles = ["./styles.css", "./design-system/index.css", "./design-system/components.css", "./design-system/resource-list.css", "./design-system/resource-card.css", "./design-system/tokens.css"];
     let css = "";
     for (const file of cssFiles) {
       try {

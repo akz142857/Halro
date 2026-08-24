@@ -1,0 +1,121 @@
+/*
+ * Resource cards (design-system component contract).
+ *
+ * A card is a layout, not a second type system. Everything inside it keeps the
+ * hierarchy resource-list.css states — identity name at --font-size-md, fact
+ * value one step down, labels quieter than the facts they name — and reuses the
+ * same .resource-identity / .resource-fact / .resource-row-state / .row-actions
+ * classes. Only the container changes: a row lays its cells out along one line
+ * and a card stacks them in a tile.
+ *
+ * That is deliberate. A list that grows its own typography is exactly the drift
+ * resource-list.css was written to stop, and a card grid is not a reason to
+ * start again. A page that adopts this file owns which facts appear and in what
+ * order; it does not own the type or the spacing inside a cell.
+ *
+ * Usage:
+ *   <div class="resource-card-grid">
+ *     <article class="resource-card" id="…">
+ *       <div class="resource-card-head">                 identity + state
+ *       <div class="resource-card-body">                 machine facts, marks
+ *       <div class="resource-card-facts">                labelled facts
+ *       <div class="resource-card-actions">              row actions
+ *     </article>
+ *   </div>
+ *
+ * A card that expands spans the full grid width rather than growing taller than
+ * its neighbours, so opening one never re-flows the tiles around it.
+ */
+.resource-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(clamp(17rem, 26vw, 22rem), 1fr));
+  gap: var(--space-4);
+  align-items: start;
+}
+.resource-card {
+  display: grid;
+  grid-template-rows: auto auto 1fr auto;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-4) var(--space-5);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-raised);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-normal);
+  overflow-anchor: none;
+}
+.resource-card.expanded { grid-column: 1 / -1; }
+.resource-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.resource-card-head > .resource-identity { min-width: 0; }
+.resource-card-head > .resource-row-state {
+  display: grid;
+  flex: 0 0 auto;
+  justify-items: end;
+  gap: var(--space-1);
+  text-align: right;
+}
+.resource-card-body {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.resource-card-body > code {
+  overflow: hidden;
+  color: var(--color-text-primary);
+  font: var(--font-size-sm) var(--mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.resource-card-spec {
+  color: var(--color-text-tertiary);
+  font: var(--font-size-xs) var(--mono);
+}
+.resource-card-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(6.5rem, 1fr));
+  gap: var(--space-3);
+  min-width: 0;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border-default);
+}
+.resource-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border-default);
+}
+
+/*
+ * Modality marks.
+ *
+ * The row reads "what goes in, what comes out": input marks, an arrow, output
+ * marks. Each mark is an inline SVG rather than an emoji — an emoji cannot be
+ * themed, contrast-checked or sized on the type scale, and renders as a
+ * different picture on every platform.
+ *
+ * The glyph is never the only signal: every mark carries its own accessible
+ * label naming the modality, the direction and the evidence behind it, and the
+ * evidence is drawn as fill rather than colour so it survives a monochrome
+ * rendering. Solid is verified, outline is declared.
+ */
+.modality-marks {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 1.25rem;
+  color: var(--color-text-secondary);
+}
+.modality-mark { display: inline-flex; flex: 0 0 auto; }
+.modality-mark > svg { width: 1rem; height: 1rem; }
+.modality-mark[data-evidence="declared"] { color: var(--color-text-tertiary); }
+.modality-arrow { flex: 0 0 auto; color: var(--color-text-tertiary); font: var(--font-size-xs) var(--mono); }
+.modality-marks-empty { color: var(--color-text-tertiary); font-size: var(--font-size-xs); }

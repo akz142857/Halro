@@ -433,6 +433,16 @@ export interface ProviderProfilesCatalog {
    * never passes through Halro's transport. The wording is this bundle's; which
    * capabilities need it is not. */
   capability_opt_in_warnings: string[];
+  /** Halro's capability vocabulary rendered as the input/output view a model
+   * catalogue uses. Served rather than derived in the browser: the mapping is
+   * not obvious (transcriptions is an operation whose input is audio, speech is
+   * text-to-audio and so has no input row of its own), and a second copy here
+   * would be a second thing to keep true. Capabilities within a row are any-of. */
+  capability_modalities: { direction: "input" | "output"; modality: string; capabilities: string[] }[];
+  /** Capabilities that describe the protocol rather than the data, listed rather
+   * than left over — so a modality view can say "these are not missing, they are
+   * not modalities" instead of silently omitting them. */
+  non_modal_capabilities: string[];
   provider_types: ProviderTypeDescriptor[];
 }
 
@@ -581,7 +591,7 @@ export interface InvocationTargetCatalog {
   cached: boolean;
 }
 
-export type CapabilityProbeStatus = "supported" | "unsupported" | "inconclusive" | "unavailable" | "unauthorized" | "not_probed" | "canceled";
+export type CapabilityProbeStatus = "supported" | "unsupported" | "inconclusive" | "unavailable" | "unauthorized" | "not_probed" | "canceled" | "assertion_failed";
 
 export interface DetectionBindingCandidate {
   binding_id: string;
@@ -615,7 +625,7 @@ export interface ModelCapabilityDetection {
   completed_at?: string;
   expires_at?: string;
   cancel_requested_at?: string;
-  capabilities: Record<string, { status: CapabilityProbeStatus; evidence?: CapabilityEvidence; error_class?: string; probe_kind: string }>;
+  capabilities: Record<string, { status: CapabilityProbeStatus; evidence?: CapabilityEvidence; error_class?: string; provider_status?: number; provider_code?: string; probe_kind: string }>;
   recommended_capabilities: ProviderCapabilities;
   selection_revision?: string;
   revision: number;
