@@ -36,6 +36,7 @@ jobs:
     outputs:
       version: ${{ steps.resolve.outputs.version }}
       publish: ${{ steps.resolve.outputs.publish }}
+      evidence_suffix: ${{ steps.resolve.outputs.evidence_suffix }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -81,8 +82,18 @@ jobs:
             echo "::error::CHANGELOG.md has no '## [${version#v}]' section for ${version}"
             exit 1
           fi
-          printf 'version=%s\n' "${version}" >>"${GITHUB_OUTPUT}"
-          printf 'publish=%s\n' "${publish}" >>"${GITHUB_OUTPUT}"
+          # Decided here rather than with an Actions '&& x || y', which picks the
+          # right-hand side whenever the left one is falsy — and '' is falsy, so
+          # that shape labelled every run a rehearsal, real releases included.
+          evidence_suffix=""
+          if [ "${publish}" != "true" ]; then
+            evidence_suffix="-dry-run"
+          fi
+          {
+            printf 'version=%s\n' "${version}"
+            printf 'publish=%s\n' "${publish}"
+            printf 'evidence_suffix=%s\n' "${evidence_suffix}"
+          } >>"${GITHUB_OUTPUT}"
           {
             printf '### Halro %s\n\n' "${version}"
             printf '| | |\n|---|---|\n'
@@ -403,7 +414,7 @@ jobs:
           retention-days: 90
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-run-evidence-${{ github.run_id }}-${{ github.run_attempt }}${{ needs.prepare.outputs.publish == 'true' && '' || '-dry-run' }}
+          name: release-run-evidence-${{ github.run_id }}-${{ github.run_attempt }}${{ needs.prepare.outputs.evidence_suffix }}
           path: evidence
           retention-days: 90
 
