@@ -35,7 +35,7 @@ describe("token guard policy workflow", () => {
     fireEvent.click(await screen.findByRole("button", { name: "＋ 新建令牌防护策略" }));
 
     expect(screen.getByLabelText("启用此策略")).not.toBeChecked();
-    expect(screen.getByText("启用此策略 · 禁用").closest(".sticky-form-actions")).toContainElement(screen.getByLabelText("启用此策略"));
+    expect(screen.getByText("启用此策略 · 已禁用").closest(".sticky-form-actions")).toContainElement(screen.getByLabelText("启用此策略"));
     expect(screen.getByLabelText("高级设置")).not.toBeChecked();
     expect(screen.getByText("自适应检测默认开启")).toBeVisible();
     expect(screen.getByLabelText("高级设置").compareDocumentPosition(screen.getByLabelText("启用此策略")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -238,7 +238,7 @@ describe("token guard policy workflow", () => {
   it("shows enabled state and project bindings in the compact table", async () => {
     vi.mocked(api.tokenGuardPoliciesPage).mockResolvedValue({ items: [policy], next_cursor: "" });
     renderPage();
-    expect(await screen.findByRole("cell", { name: "启用" })).toBeVisible();
+    expect(await screen.findByRole("cell", { name: "已启用" })).toBeVisible();
     expect(screen.getByText("2 个项目")).toBeVisible();
   });
 

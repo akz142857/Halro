@@ -163,7 +163,7 @@ describe("deployment invocation target workflow", () => {
     vi.mocked(api.deployments).mockResolvedValue({ items: [existingDeployment], next_cursor: "" });
     vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [], next_cursor: "" });
     renderPage();
-    fireEvent.click((await screen.findAllByRole("button", { name: "编辑" }))[0]);
+    fireEvent.click((await screen.findAllByRole("button", { name: /^编辑/ }))[0]);
     expect(await screen.findByText("保存后立即热加载")).toBeVisible();
     expect(screen.getByText(/保存会立即热加载这个部署的配置/)).toBeVisible();
   });
@@ -192,7 +192,7 @@ describe("deployment invocation target workflow", () => {
     vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [], next_cursor: "" });
     renderPage();
 
-    fireEvent.click((await screen.findAllByRole("button", { name: "编辑" }))[0]);
+    fireEvent.click((await screen.findAllByRole("button", { name: /^编辑/ }))[0]);
     const box = await screen.findByLabelText(/远程图片抓取/);
     expect(box).toBeDisabled();
     // The reason travels with the box rather than sitting somewhere on the page:
@@ -227,7 +227,7 @@ describe("deployment invocation target workflow", () => {
     vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [], next_cursor: "" });
     renderPage();
 
-    fireEvent.click((await screen.findAllByRole("button", { name: "编辑" }))[0]);
+    fireEvent.click((await screen.findAllByRole("button", { name: /^编辑/ }))[0]);
     const constraints = await screen.findByRole("region", { name: "这个能力接口载不动的请求成员" });
     // A member the Gateway refuses on, named where the tick is made, with the
     // endpoint it belongs to beside it.
@@ -251,7 +251,7 @@ describe("deployment invocation target workflow", () => {
     const update = vi.spyOn(api, "updateDeployment").mockResolvedValue({} as never);
     renderPage();
 
-    fireEvent.click((await screen.findAllByRole("button", { name: "编辑" }))[0]);
+    fireEvent.click((await screen.findAllByRole("button", { name: /^编辑/ }))[0]);
     fireEvent.click(await screen.findByLabelText("文件"));
     expect(screen.getByText("新增能力需要管理员声明")).toBeVisible();
     expect(screen.queryByText("尚未完成")).not.toBeInTheDocument();
@@ -286,7 +286,7 @@ describe("deployment invocation target workflow", () => {
     vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [], next_cursor: "" });
     renderPage();
 
-    fireEvent.click((await screen.findAllByRole("button", { name: "编辑" }))[0]);
+    fireEvent.click((await screen.findAllByRole("button", { name: /^编辑/ }))[0]);
     fireEvent.click(await screen.findByLabelText("文件"));
     expect(screen.getByText("开启能力需要重新验证")).toBeVisible();
     expect(screen.getByText(/请先停用这些路由/)).toBeVisible();
@@ -904,16 +904,26 @@ describe("deployment card keeps what the row decided", () => {
     // Colour is never the only signal: the state exists as words too, in the
     // state cell rather than anywhere the word happens to appear.
     expect(card.querySelector(".resource-state")).toHaveTextContent("启用");
-    // The disabled reason for Disable and Delete, which exists above zero.
-    expect(within(card).getByText("路由依赖")).toBeVisible();
-    // The precondition for enabling at all — stated because it is missing. The
-    // price read has to land first: while it is in flight nothing is missing yet.
-    expect(await within(card).findByText("价格设置")).toBeVisible();
+    // Routed deployments cannot be disabled, and the bar's own button is what
+    // says so rather than a menu the operator has to open to find out.
+    const disable = within(card).getByRole("button", { name: /^禁用/ });
+    expect(disable).toBeDisabled();
+    expect(disable).toHaveAttribute("title", "请先停用引用该部署的模型路由");
+    // A disabled button is skipped in tab order, so the reason is in the
+    // accessibility tree as well as the tooltip.
+    expect(card.querySelector(`#${disable.getAttribute("aria-describedby")}`)).toHaveTextContent("请先停用引用该部署的模型路由");
+    // The route count is the reason those controls refuse, and it is stated at
+    // the control rather than a third time as a fact on every tile; the drawer
+    // keeps the count itself.
+    expect(within(card).queryByText("路由依赖")).not.toBeInTheDocument();
+    // Drift outranks the missing price, so the price is counted rather than
+    // shown — nothing is dropped silently. The price read has to land first:
+    // while it is in flight nothing is missing yet.
+    expect(await within(card).findByRole("button", { name: /^\+1/ })).toBeVisible();
     // Token limits are abbreviated the way a model catalogue abbreviates them.
-    expect(card).toHaveTextContent("272K 上下文");
-    expect(card).toHaveTextContent("16K 最大输出");
+    expect(card).toHaveTextContent("272K/16K");
     // The model id keeps a name for an assistive reader now that its column label is gone.
-    expect(within(card).getByLabelText(/上游调用目标: gpt-chat/)).toBeVisible();
+    expect(within(card).getByText("上游调用目标：")).toBeInTheDocument();
   });
 
   // A card that carried "已设置 · 不限 · 无启用路由" spent two lines saying nothing
@@ -936,12 +946,133 @@ describe("deployment card keeps what the row decided", () => {
     expect(within(card).queryByText("以上游为准")).not.toBeInTheDocument();
     // Provider and upstream model are one identity line now.
     expect(within(card).getByText(/OpenAI production/)).toHaveTextContent("gpt-chat");
-    // Enable and disable moved into the menu; the visible bar is test, edit and
-    // the way into the drawer.
-    const menu = card.querySelector(".row-overflow-menu") as HTMLElement;
-    expect(within(menu).getByRole("button", { name: "禁用" })).toBeInTheDocument();
+    // The bar is edit, the way into the drawer, the state change, and the test
+    // control at its far end. The menu is in the card's head and holds only
+    // what the bar does not.
     expect(Array.from(card.querySelectorAll(".deployment-compact-actions > .button")).map((button) => button.textContent))
-      .toEqual(["编辑", "查看详情"]);
+      .toEqual(["编辑", "查看详情", "禁用"]);
+    const head = card.querySelector(".resource-card-head") as HTMLElement;
+    expect(within(head).getByLabelText(/^更多操作/)).toBeInTheDocument();
+    // The state word ends the action bar rather than trailing the name: it is
+    // the answer to the control beside it.
+    const bar = card.querySelector(".resource-card-actions") as HTMLElement;
+    expect(bar.lastElementChild).toHaveClass("resource-state");
+    expect(bar.lastElementChild).toHaveTextContent("已启用");
+    const menu = card.querySelector(".row-overflow-menu") as HTMLElement;
+    expect(Array.from(menu.querySelectorAll(".button")).map((button) => button.textContent))
+      .toEqual(["创建替代", "删除"]);
+  });
+
+  // Enabling and disabling are one click from the bar, not two through a menu —
+  // and the enable precondition that used to live on the menu row has to travel
+  // with the button, or the console offers a click the server will refuse.
+  it("changes state from the card's action bar", async () => {
+    vi.spyOn(api, "deployments").mockResolvedValue({
+      items: [
+        deployment("dep_on", { enabled: true }),
+        deployment("dep_untested", { enabled: false }),
+      ],
+      next_cursor: "",
+    });
+    vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [activePriceVersion()], next_cursor: "" });
+    const update = vi.spyOn(api, "updateDeployment").mockResolvedValue({} as never);
+    renderPage();
+
+    const enabledCard = (await screen.findByText("Deployment dep_on")).closest("article.deployment-card") as HTMLElement;
+    // The head reports the state; the bar's button is named for what it does.
+    expect(enabledCard.querySelector(".resource-state")).toHaveTextContent("启用");
+    fireEvent.click(within(enabledCard).getByRole("button", { name: /^禁用/ }));
+    await waitFor(() => expect(update).toHaveBeenCalledOnce());
+    expect(update).toHaveBeenCalledWith("dep_on", expect.objectContaining({ enabled: false }), 1);
+
+    // Untested: enabling is refused, and the button says why rather than
+    // sending a request the server answers with a 409.
+    const untestedCard = (await screen.findByText("Deployment dep_untested")).closest("article.deployment-card") as HTMLElement;
+    expect(untestedCard.querySelector(".resource-state")).toHaveTextContent("禁用");
+    const enable = within(untestedCard).getByRole("button", { name: /^启用/ });
+    expect(enable).toBeDisabled();
+    expect(enable).toHaveAttribute("title", "请先测试当前版本");
+  });
+
+  // Thirty nameless <article>s were thirty stops that announced nothing, and a
+  // status region per card announced a bare "失败" with no way to tell which
+  // card produced it.
+  it("names each card and lets one region speak for the grid", async () => {
+    vi.spyOn(api, "deployments").mockResolvedValue({ items: [deployment("dep_named", { enabled: true })], next_cursor: "" });
+    vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [activePriceVersion()], next_cursor: "" });
+    renderPage();
+
+    const card = (await screen.findByText("Deployment dep_named")).closest("article.deployment-card") as HTMLElement;
+    const heading = within(card).getByRole("heading", { level: 3 });
+    expect(heading).toHaveTextContent("Deployment dep_named");
+    expect(card).toHaveAttribute("aria-labelledby", heading.id);
+    // Every control on the card says which deployment it acts on, and the
+    // visible word leads the accessible name so speech input still matches it.
+    expect(within(card).getByRole("button", { name: "编辑 — Deployment dep_named" })).toBeVisible();
+    expect(within(card).getByRole("button", { name: "测试 — Deployment dep_named" })).toBeVisible();
+    // One region for the grid, not one per card.
+    expect(document.querySelectorAll("[role=\"status\"][aria-live]")).toHaveLength(1);
+    expect(within(card).queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  // The Test control reports the verdict it produced, and only that: a probe
+  // failure outranks a passing manual test on the line beside it, but the
+  // button must not go red for a test that passed.
+  it("colours the test control by its own verdict, not by the card's condition", async () => {
+    vi.spyOn(api, "deployments").mockResolvedValue({
+      items: [
+        deployment("dep_pass", { enabled: true, last_test_status: "healthy", last_test_revision: 1, last_test_latency_millis: 151 }),
+        deployment("dep_fail", { enabled: true, last_test_status: "unhealthy", last_test_revision: 1, last_test_error_class: "connect" }),
+        deployment("dep_probe", {
+          enabled: true, last_test_status: "healthy", last_test_revision: 1, last_test_latency_millis: 151,
+          probe: { state: "unhealthy", observed_at: "2026-08-25T02:00:00Z", error_class: "connect" },
+        }),
+        // A verdict against a revision that has since moved no longer applies,
+        // so it stays neutral rather than reading as current health.
+        deployment("dep_stale", { enabled: true, last_test_status: "healthy", last_test_revision: 0 }),
+      ],
+      next_cursor: "",
+    });
+    vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [activePriceVersion()], next_cursor: "" });
+    renderPage();
+
+    await screen.findByText("Deployment dep_stale");
+    const verdict = (id: string) => {
+      const card = screen.getByText(`Deployment ${id}`).closest("article.deployment-card") as HTMLElement;
+      return within(card).getByRole("button", { name: /^测试/ }).getAttribute("data-test-state");
+    };
+    expect(verdict("dep_pass")).toBe("success");
+    expect(verdict("dep_fail")).toBe("failure");
+    expect(verdict("dep_probe")).toBe("success");
+    expect(verdict("dep_stale")).toBe("stale");
+  });
+
+  // The card is a fixed number of slots so that slot n of one tile is the same
+  // subgrid track as slot n of its neighbour. A conditional fifth child, or one
+  // appended after the action bar, breaks that alignment for the whole band —
+  // which is what a failure sentence below the bar used to do.
+  it("renders the same slots whatever is wrong with the deployment", async () => {
+    vi.spyOn(api, "deployments").mockResolvedValue({
+      items: [
+        deployment("dep_quiet_slots", { enabled: true, last_test_status: "healthy", last_test_revision: 1 }),
+        deployment("dep_loud_slots", {
+          enabled: true, last_test_status: "unhealthy", last_test_revision: 1, last_test_error_class: "connect",
+          probe: { state: "unhealthy", observed_at: "2026-08-25T02:00:00Z", error_class: "connect" },
+          capabilities: { ...chatCapabilities, max_context_tokens: 272_000 },
+        }),
+      ],
+      next_cursor: "",
+    });
+    vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [activePriceVersion()], next_cursor: "" });
+    renderPage();
+
+    await screen.findByText("Deployment dep_loud_slots");
+    const slots = (id: string) => {
+      const card = screen.getByText(`Deployment ${id}`).closest("article.deployment-card") as HTMLElement;
+      return Array.from(card.children).map((child) => child.className.split(" ")[0]);
+    };
+    expect(slots("dep_quiet_slots")).toEqual(["resource-card-head", "deployment-condition", "deployment-spec", "resource-card-actions"]);
+    expect(slots("dep_loud_slots")).toEqual(slots("dep_quiet_slots"));
   });
 
   // A tile that grew to full width pushed every card after it down the page,
@@ -954,7 +1085,7 @@ describe("deployment card keeps what the row decided", () => {
     vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [activePriceVersion()], next_cursor: "" });
     renderPage();
 
-    const open = await screen.findByRole("button", { name: "查看详情" });
+    const open = await screen.findByRole("button", { name: /^查看详情/ });
     const card = open.closest("article.deployment-card") as HTMLElement;
     // A dialog is not a disclosure: the control must not claim an expanded state.
     expect(open).not.toHaveAttribute("aria-expanded");
@@ -984,7 +1115,7 @@ describe("deployment card keeps what the row decided", () => {
     vi.spyOn(api, "deployments").mockResolvedValue({ items: [existingDeployment], next_cursor: "" });
     vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [activePriceVersion()], next_cursor: "" });
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "查看详情" }));
+    fireEvent.click(await screen.findByRole("button", { name: /^查看详情/ }));
 
     const drawer = await screen.findByRole("dialog", { name: "Deployment dep_1 详情" });
     expect(drawer.querySelector(".detail-status")).toBeNull();
@@ -1012,7 +1143,7 @@ describe("deployment card keeps what the row decided", () => {
     });
     vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [activePriceVersion()], next_cursor: "" });
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "查看详情" }));
+    fireEvent.click(await screen.findByRole("button", { name: /^查看详情/ }));
 
     const drawer = await screen.findByRole("dialog", { name: "Deployment dep_1 详情" });
     expect(within(drawer).getByText("最近手动测试")).toBeVisible();
@@ -1042,7 +1173,7 @@ describe("deployment card keeps what the row decided", () => {
     });
     vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [activePriceVersion()], next_cursor: "" });
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "查看详情" }));
+    fireEvent.click(await screen.findByRole("button", { name: /^查看详情/ }));
 
     const drawer = await screen.findByRole("dialog", { name: "Deployment dep_1 详情" });
     const notice = drawer.querySelector(".deployment-capability-review") as HTMLElement;
@@ -1082,9 +1213,13 @@ describe("deployment card keeps what the row decided", () => {
     renderPage();
 
     const card = (await screen.findByText("Deployment dep_1")).closest("article.deployment-card") as HTMLElement;
-    expect(within(card).getByText("主动探测未通过")).toBeVisible();
+    // The probe is what decides routing, so it outranks the manual test that
+    // passed — the card must not report 1336ms of health for a deployment the
+    // router has already dropped. The classified reason rides the same line.
+    expect(within(card).getByText(/主动探测未通过 · 无法建立到上游的连接/)).toBeVisible();
+    expect(card).not.toHaveTextContent("1336ms");
 
-    fireEvent.click(within(card).getByRole("button", { name: "查看详情" }));
+    fireEvent.click(within(card).getByRole("button", { name: /^查看详情/ }));
     const drawer = await screen.findByRole("dialog", { name: "Deployment dep_1 详情" });
     expect(within(drawer).getByText("未通过")).toBeVisible();
     // The consequence, and the classified reason — the same wording a failed
@@ -1102,7 +1237,7 @@ describe("deployment card keeps what the row decided", () => {
     });
     vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [activePriceVersion()], next_cursor: "" });
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "查看详情" }));
+    fireEvent.click(await screen.findByRole("button", { name: /^查看详情/ }));
 
     const drawer = await screen.findByRole("dialog", { name: "Deployment dep_1 详情" });
     expect(within(drawer).getByText("尚未探测")).toBeVisible();
@@ -1124,7 +1259,7 @@ describe("deployment card keeps what the row decided", () => {
       next_cursor: "",
     });
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "查看详情" }));
+    fireEvent.click(await screen.findByRole("button", { name: /^查看详情/ }));
 
     const drawer = await screen.findByRole("dialog", { name: "Deployment dep_1 详情" });
     // A free price is stated by the version that fixed it and nowhere else: no
@@ -1158,7 +1293,7 @@ describe("deployment card keeps what the row decided", () => {
     });
     vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [activePriceVersion()], next_cursor: "" });
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "查看详情" }));
+    fireEvent.click(await screen.findByRole("button", { name: /^查看详情/ }));
 
     const drawer = await screen.findByRole("dialog", { name: "Deployment dep_1 详情" });
     for (const heading of ["计费", "能力", "运行与限制", "连接与标识"]) {
@@ -1241,7 +1376,7 @@ describe("deployment connection test", () => {
     }));
     renderPage();
 
-    fireEvent.click(await screen.findByRole("button", { name: "测试" }));
+    fireEvent.click(await screen.findByRole("button", { name: /^测试/ }));
     const reason = await screen.findByText(/上游拒绝了这份凭据/);
     expect(reason).toHaveTextContent("HTTP 401");
     expect(reason).toHaveTextContent("invalid_api_key");
@@ -1276,7 +1411,7 @@ describe("deployment connection test", () => {
     renderPage();
 
     expect(await screen.findByText("通过")).toBeVisible();
-    fireEvent.click(await screen.findByRole("button", { name: "测试" }));
+    fireEvent.click(await screen.findByRole("button", { name: /^测试/ }));
     expect(await screen.findByText(/Halro 在发往上游之前拒绝了这次探测/)).toHaveTextContent("deployment changed during validation");
     expect(screen.queryByText("通过")).not.toBeInTheDocument();
   });
@@ -1372,11 +1507,12 @@ describe("deployment price panel", () => {
       .mockRejectedValueOnce(new ApiError(503, "unavailable", "store_unavailable"))
       .mockResolvedValue({ items: [], next_cursor: "" });
     renderPage();
-    const alert = await screen.findByRole("alert");
-    expect(within(alert).getByText("不可用")).toBeVisible();
-    fireEvent.click(within(alert).getByRole("button", { name: "重试" }));
+    // Not knowing whether a price exists is not the same as knowing one is
+    // missing, so the card says which and the line itself is the retry.
+    const retry = await screen.findByRole("button", { name: "不可用" });
+    fireEvent.click(retry);
     await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole("button", { name: "不可用" })).not.toBeInTheDocument());
   });
 
   // The blocker is the refused enable attempt's error, so it used to outlive the
@@ -1395,8 +1531,7 @@ describe("deployment price panel", () => {
     const create = vi.spyOn(api, "createDeploymentPrice").mockResolvedValue(activePriceVersion());
     renderPage();
 
-    fireEvent.click(await screen.findByLabelText("更多操作"));
-    fireEvent.click(await screen.findByRole("button", { name: "启用" }));
+    fireEvent.click(await screen.findByRole("button", { name: /^启用/ }));
     expect(await screen.findByText(PRICE_BLOCKER)).toBeVisible();
 
     fireEvent.click(screen.getByRole("button", { name: "设置价格" }));
@@ -1421,7 +1556,7 @@ describe("deployment price panel", () => {
     const create = vi.spyOn(api, "createDeploymentPrice").mockResolvedValue(activePriceVersion());
     renderPage();
 
-    fireEvent.click(await screen.findByRole("button", { name: "查看详情" }));
+    fireEvent.click(await screen.findByRole("button", { name: /^查看详情/ }));
     fireEvent.click(await screen.findByRole("button", { name: "调整价格" }));
     fireEvent.click(await screen.findByRole("checkbox", { name: /分时价位/ }));
 
@@ -1449,7 +1584,7 @@ describe("deployment price panel", () => {
     const create = vi.spyOn(api, "createDeploymentPrice").mockResolvedValue(activePriceVersion());
     renderPage();
 
-    fireEvent.click(await screen.findByRole("button", { name: "查看详情" }));
+    fireEvent.click(await screen.findByRole("button", { name: /^查看详情/ }));
     fireEvent.click(await screen.findByRole("button", { name: "调整价格" }));
     expect(await screen.findByLabelText(/^缓存输入 USD \/ 百万令牌/)).toHaveValue("0.1");
     fireEvent.change(screen.getByLabelText(/^缓存输入 USD \/ 百万令牌/), { target: { value: "0.5" } });
@@ -1468,7 +1603,7 @@ describe("deployment price panel", () => {
   it("reads the cache-read rate out on the deployment detail panel", async () => {
     vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [activePriceVersion()], next_cursor: "" });
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "查看详情" }));
+    fireEvent.click(await screen.findByRole("button", { name: /^查看详情/ }));
     const cached = (await screen.findByText("缓存输入价格")).closest("div")!;
     expect(within(cached).getByText("US$0.10")).toBeVisible();
     expect(within(cached).getByText("USD / 百万令牌")).toBeVisible();
@@ -1483,7 +1618,7 @@ describe("deployment price panel", () => {
     const create = vi.spyOn(api, "createDeploymentPrice").mockResolvedValue(activePriceVersion());
     renderPage();
 
-    fireEvent.click(await screen.findByRole("button", { name: "为 Deployment dep_1 设置价格" }));
+    fireEvent.click(await screen.findByRole("button", { name: "未设置价格" }));
     fireEvent.change(await screen.findByLabelText("输入 USD / 百万令牌"), { target: { value: "5" } });
     expect(screen.getByLabelText(/^缓存输入 USD \/ 百万令牌/)).toHaveValue("5");
     fireEvent.click(screen.getByRole("button", { name: "下一步：核对" }));
@@ -1502,7 +1637,7 @@ describe("deployment price panel", () => {
     vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [scheduledPriceVersion()], next_cursor: "" });
     renderPage();
 
-    fireEvent.click(await screen.findByRole("button", { name: "为 Deployment dep_1 设置价格" }));
+    fireEvent.click(await screen.findByRole("button", { name: "未设置价格" }));
 
     expect(await screen.findByRole("option", { name: "立即生效（从现在起按此价计费）" })).toBeDisabled();
     expect(screen.getByLabelText("何时生效")).toHaveValue("scheduled");
@@ -1515,7 +1650,7 @@ describe("deployment price panel", () => {
     const create = vi.spyOn(api, "createDeploymentPrice");
     renderPage();
 
-    fireEvent.click(await screen.findByRole("button", { name: "为 Deployment dep_1 设置价格" }));
+    fireEvent.click(await screen.findByRole("button", { name: "未设置价格" }));
     fireEvent.change(await screen.findByLabelText("输入 USD / 百万令牌"), { target: { value: "5" } });
     // The field reads in the accounting zone, so the value it is given has to be
     // written in that zone too.
@@ -1539,7 +1674,7 @@ describe("deployment price panel", () => {
     );
     renderPage();
 
-    fireEvent.click(await screen.findByRole("button", { name: "为 Deployment dep_1 设置价格" }));
+    fireEvent.click(await screen.findByRole("button", { name: "未设置价格" }));
     fireEvent.change(await screen.findByLabelText("输入 USD / 百万令牌"), { target: { value: "5" } });
     fireEvent.click(screen.getByRole("button", { name: "下一步：核对" }));
     fireEvent.change(await screen.findByLabelText("当前密码"), { target: { value: "pw" } });
@@ -1566,7 +1701,7 @@ describe("deployment price panel", () => {
       next_cursor: "",
     });
     renderPage("read_only");
-    fireEvent.click(await screen.findByRole("button", { name: "查看详情" }));
+    fireEvent.click(await screen.findByRole("button", { name: /^查看详情/ }));
     // Each scheduled row carries a cancel button, so its accessible name names
     // the version rather than being one of several identical "取消".
     for (const name of ["调整价格", "确认恢复价格", "取消价格版本 v4"]) {
@@ -1582,7 +1717,7 @@ describe("deployment price panel", () => {
   it("closes only the top dialog when the price form is open over the details drawer", async () => {
     vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [activePriceVersion()], next_cursor: "" });
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "查看详情" }));
+    fireEvent.click(await screen.findByRole("button", { name: /^查看详情/ }));
     fireEvent.click(await screen.findByRole("button", { name: "调整价格" }));
     expect(await screen.findByLabelText("输入 USD / 百万令牌")).toBeVisible();
 
@@ -1597,7 +1732,7 @@ describe("deployment price panel", () => {
   it("shows the price being replaced and that an immediate version cannot be canceled", async () => {
     vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [activePriceVersion()], next_cursor: "" });
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "查看详情" }));
+    fireEvent.click(await screen.findByRole("button", { name: /^查看详情/ }));
     fireEvent.click(await screen.findByRole("button", { name: "调整价格" }));
     fireEvent.change(await screen.findByLabelText("输入 USD / 百万令牌"), { target: { value: "5" } });
     fireEvent.click(screen.getByRole("button", { name: "下一步：核对" }));

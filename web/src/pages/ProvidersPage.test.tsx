@@ -277,12 +277,12 @@ describe("ProvidersPage profile and credential bindings", () => {
     expect(bar).not.toBeNull();
     expect(bar).toContainElement(screen.getByRole("button", { name: "创建并热加载" }));
     expect(bar).toContainElement(screen.getByRole("button", { name: "取消" }));
-    expect(within(bar as HTMLElement).getByText("启用服务商 · 启用")).toBeVisible();
+    expect(within(bar as HTMLElement).getByText("启用服务商 · 已启用")).toBeVisible();
     expect(within(bar as HTMLElement).getByText("启用后，模型部署可以使用这个上游连接。")).toBeVisible();
 
     // Turning it off has to change what the bar says it will do, not just the box.
     fireEvent.click(toggle);
-    expect(within(bar as HTMLElement).getByText("启用服务商 · 禁用")).toBeVisible();
+    expect(within(bar as HTMLElement).getByText("启用服务商 · 已禁用")).toBeVisible();
     expect(within(bar as HTMLElement).getByText("模型部署无法使用这个上游连接")).toBeVisible();
   });
 

@@ -481,16 +481,69 @@ h3 { margin-bottom: 0; font-size: var(--font-size-lg); }
    rather than butted against the panel edge. */
 .deployment-list { background: var(--surface-panel); border: 1px solid var(--line); }
 .deployment-grid { padding: var(--space-4); }
-/* The marks and the capability count read as one line: the marks say what shape
-   of data crosses the boundary, the count says how many capabilities exist at
-   all — including the ones no modality can express. */
-.deployment-card-marks { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); }
-/* The two states that outrank the enabled flag, led rather than tucked into a
-   second right-hand column. */
-.deployment-card-alerts { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); }
+/*
+ * Slot 2 — the condition line.
+ *
+ * One line saying the worst thing true of this deployment, and the control that
+ * can change the answer. It replaced five separate signals (a dot beside the
+ * name, a drift chip, a probe chip, a price cell, a test verdict) that could all
+ * be true at once, were rendered wherever they fitted, and used two different
+ * colour vocabularies — so a disabled-but-passing deployment showed a red mark
+ * above a green one. The ladder that ranks them is deploymentCondition.ts.
+ *
+ * The dot is the card's only coloured mark, and it never carries meaning alone:
+ * the text beside it says the same thing in words.
+ */
+/* Dot, text, then whatever else this card has to put on the line. Fixed columns
+   left a phantom track — and its gap — on every card without a +N chip. */
+.deployment-condition { display: grid; grid-auto-flow: column; grid-template-columns: auto minmax(0, 1fr); grid-auto-columns: auto; align-items: center; gap: var(--space-2); min-width: 0; }
+.deployment-condition-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted-2); }
+.deployment-condition-text { overflow: hidden; color: var(--color-text-secondary); font-size: var(--font-size-xs); font-weight: var(--font-weight-medium); line-height: var(--line-height-normal); text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+/* Acting on the condition is a click on its text. It is underlined at rest, not
+   on hover: a control told apart from the text beside it by hue alone is a
+   colour-only signal. */
+button.deployment-condition-text { padding: 0; background: transparent; border: 0; cursor: pointer; text-decoration: underline dotted; text-underline-offset: .25em; }
+button.deployment-condition-text:hover { text-decoration-style: solid; }
+.deployment-condition[data-severity="blocked"] > .deployment-condition-dot { background: var(--color-status-danger-icon); }
+.deployment-condition[data-severity="blocked"] > .deployment-condition-text { color: var(--color-status-danger-text); }
+.deployment-condition[data-severity="warn"] > .deployment-condition-dot { background: var(--color-status-warning-icon); }
+.deployment-condition[data-severity="warn"] > .deployment-condition-text { color: var(--color-status-warning-text); }
+.deployment-condition[data-severity="ok"] > .deployment-condition-dot { background: var(--color-status-success-icon); box-shadow: 0 0 6px var(--accent-glow); }
+.deployment-condition[data-severity="ok"] > .deployment-condition-text { color: var(--color-status-success-text); }
+.deployment-condition[data-severity="running"] > .deployment-condition-dot { background: var(--color-status-warning-icon); animation: test-pulse 1s ease-in-out infinite; }
+/* What the shown condition outranks. A count, not a hidden state: the drawer it
+   opens is where the rest of them are written out. */
+.deployment-condition-more { padding: 1px 7px; color: var(--muted); background: var(--overlay-hover); border: 1px solid var(--line); border-radius: var(--radius-pill); font-size: var(--font-size-xs); white-space: nowrap; cursor: pointer; }
+.deployment-condition-test { min-height: 34px; padding: 0 10px; white-space: nowrap; }
+/* The control carries its own last verdict. Colour is redundant here, never the
+   only signal: the same verdict is written out in words on the line beside it,
+   and it is the text token rather than the icon one because this is 12px text.
+   A stale or running test stays neutral — a verdict that no longer applies to
+   the current revision must not read as one that does. */
+.deployment-condition-test[data-test-state="success"] { color: var(--color-status-success-text); }
+.deployment-condition-test[data-test-state="failure"] { color: var(--color-status-danger-text); }
+/*
+ * Slot 3 — the spec line.
+ *
+ * What the model is, in the order an operator checks it. One line that clips
+ * rather than wraps: a slot that can become two lines makes every card in its
+ * band two lines tall, and the exact figures are in the drawer. Concurrency is
+ * last because it is the first thing a narrow card should give up.
+ */
+.deployment-spec { display: flex; align-items: baseline; gap: var(--space-2); min-width: 0; margin: 0; overflow: hidden; color: var(--color-text-tertiary); font-size: var(--font-size-xs); line-height: var(--line-height-normal); white-space: nowrap; }
+.deployment-spec > * { flex: 0 0 auto; }
+.deployment-spec > * + *::before { content: "·"; margin-right: var(--space-2); color: var(--line-strong); }
+/* A segment of a line here, not a block of its own, so the marks stop wrapping
+   and keep their evidence weight on one row. */
+.deployment-spec > .modality-marks { flex-wrap: nowrap; min-height: 0; }
 .resource-identity > small > code { color: inherit; font: inherit; font-family: var(--font-mono); }
-.deployment-card-marks > small { color: var(--color-text-tertiary); font-size: var(--font-size-xs); }
-.deployment-card > .row-test-failure { margin: 0; }
+/* The head carries the state word and the menu of everything the action bar
+   does not: replace and delete. The 44px hit area stays 44px and is pulled out
+   of the flow instead, so the corner control does not set the height of the
+   line the deployment's name sits on, and its box ends on the card's own right
+   edge rather than a menu-button's width inside it. */
+.resource-card-head > .deployment-card-state { display: flex; align-items: center; gap: var(--space-2); }
+.deployment-card-state > .row-overflow { margin: -10px -10px -10px 0; }
 /* Two names for one control bar; they differ only in horizontal padding, and
    used to differ in label size too until the type floor brought them together. */
 .deployment-toolbar, .resource-toolbar { display: flex; align-items: end; gap: 12px; padding: 12px 18px; border-bottom: 1px solid var(--line); }
@@ -500,7 +553,6 @@ h3 { margin-bottom: 0; font-size: var(--font-size-lg); }
 .deployment-search { flex: 1 1 320px; max-width: 520px; }
 .deployment-result-count { margin-left: auto; padding: 9px 4px; color: var(--muted); font: var(--font-size-xs) var(--mono); white-space: nowrap; }
 .deployment-list > .empty-state { border: 0; }
-.deployment-fact-price { min-width: 0; }
 .deployment-price-value, .deployment-price-link { overflow: hidden; font-size: var(--font-size-sm); font-weight: var(--font-weight-semibold); line-height: var(--line-height-normal); text-align: left; text-overflow: ellipsis; white-space: nowrap; }
 .deployment-price-value { color: var(--color-text-tertiary); }
 .deployment-price-link { width: fit-content; max-width: 100%; padding: 0; color: var(--color-action-primary); background: transparent; border: 0; cursor: pointer; }
@@ -511,11 +563,11 @@ h3 { margin-bottom: 0; font-size: var(--font-size-lg); }
    starts and wraps inside it. Held on one line it was the widest thing in the
    card by far, and a grid column takes the width of its widest row: the whole
    card — name, target, facts — was dragged out past its own border. */
-.deployment-compact-actions { justify-content: flex-start; align-items: center; flex-wrap: wrap; }
 .deployment-compact-actions .button { flex: 0 0 auto; min-height: 36px; padding-right: 10px; padding-left: 10px; white-space: nowrap; }
-/* Test is a result, not an action: it keeps its own line above the buttons so
-   the verdict and its latency stay readable at every card width. */
-.deployment-compact-actions > .inline-test-control { flex: 0 0 100%; width: auto; margin-right: 0; }
+/* The state word ends the bar on the card's right edge, opposite the controls.
+   Pushed there by a margin rather than by justify-content, so the buttons keep
+   the left edge when the bar wraps at the narrow end of the track. */
+.deployment-compact-actions > .resource-state { margin-left: auto; padding-left: var(--space-2); }
 /*
  * Details drawer.
  *
@@ -946,7 +998,7 @@ h3 { margin-bottom: 0; font-size: var(--font-size-lg); }
    instead of joining the flex line of buttons beside it. */
 .inline-test-cell { display: flex; flex-direction: column; align-items: flex-start; }
 .provider-expanded-content { grid-column: 2 / -1; padding: 18px 0 6px; border-top: 1px solid var(--line); }
-.provider-row, .credential-row, .deployment-row { overflow-anchor: none; }
+.provider-row, .credential-row { overflow-anchor: none; }
 .provider-expanded-content .provider-facts { margin-top: 0; }
 .provider-technical-details > strong { display: block; color: var(--color-text-secondary); font-size: var(--font-size-xs); }
 /* One fact per row wasted the width and pushed the value to the far edge of the
@@ -1985,10 +2037,6 @@ textarea { resize: vertical; }
   .resource-column > .resource-list { max-height: 52vh; }
   .governance-lower-grid { grid-template-columns: 1fr; }
   .deployment-compact-actions .button { min-height: 34px; }
-  .deployment-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .deployment-facts > div { border-right: 0; border-bottom: 1px solid var(--line); }
-  .deployment-facts > div:nth-child(odd) { border-right: 1px solid var(--line); }
-  .deployment-facts > div:last-child { grid-column: 1 / -1; border-right: 0; border-bottom: 0; }
   .provider-row { grid-template-columns: auto minmax(0, 1fr); }
   .policy-card-grid { grid-template-columns: 1fr; }
   .section-heading { align-items: flex-start; flex-direction: column; }
@@ -2047,11 +2095,9 @@ textarea { resize: vertical; }
   .redaction-footer-state { width: 100%; justify-content: space-between; gap: var(--space-3); }
   .redaction-save-summary { text-align: right; }
   .metric-grid { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
-  .deployment-facts { grid-template-columns: 1fr; }
   .deployment-toolbar { align-items: stretch; flex-direction: column; }
   .deployment-search { flex-basis: auto; max-width: none; }
   .deployment-result-count { margin-left: 0; }
-  .deployment-facts > div, .deployment-facts > div:nth-child(odd), .deployment-facts > div:last-child { grid-column: auto; border-right: 0; }
   .price-mode-options, .price-form-grid { grid-template-columns: 1fr; }
   .price-cached-row > .field > input, .price-advanced .field > input { max-width: none; }
   /* Four rate boxes on a phone leave about 50px each, which cannot show a

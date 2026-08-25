@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { ApiError, api } from "../api";
 import {
   ConfirmButton,
@@ -17,7 +17,7 @@ import {
   useTestFailureReason,
   type ReauthValues,
 } from "../components";
-import { exactNumber, money, useInstantFormatter } from "../format";
+import { exactNumber, formatAge, money, useInstantFormatter } from "../format";
 import { isoToZonedInput, useAccountingTimeZone, zonedInputToISO } from "../timezone";
 import type { CapabilityPreflight, CapabilityReview, Deployment, DeploymentPriceVersion, DeploymentTargetKind, DeploymentVariant, ModelCapabilityDetection, PriceSchedule, Provider, ProviderBinding, ProviderCapabilities, ProviderProfilesCatalog, ResolvedInvocationTarget } from "../types";
 import { interfaceCeiling, profileRequestConstraints, updateCapabilitySelection, useProviderProfiles } from "../hooks/useProviderProfiles";
@@ -28,6 +28,8 @@ import { useNotify } from "../notifications";
 import { useIsReadOnly } from "../session";
 import { Link } from "../navigation";
 import { hasOnboardingCreateIntent, OnboardingContextBanner } from "../OnboardingContext";
+import { deploymentCondition } from "./deploymentCondition";
+import { localizedError } from "../i18n/errors";
 
 export function DeploymentsPage() {
   const { t } = useTranslation();
@@ -36,6 +38,9 @@ export function DeploymentsPage() {
   const [replacement, setReplacement] = useState<Deployment>();
   const [query, setQuery] = useState(() => new URLSearchParams(window.location.search).get("q") ?? "");
   const [status, setStatus] = useState<"all" | "enabled" | "disabled" | "attention">("all");
+  // What the grid's single live region is currently saying. Cards publish here
+  // rather than each owning a region of its own.
+  const [announcement, setAnnouncement] = useState("");
   const deployments = useQuery({ queryKey: ["deployments"], queryFn: api.deployments });
   const providers = useQuery({ queryKey: ["providers"], queryFn: api.providers });
   const routes = useQuery({ queryKey: ["routes"], queryFn: api.routes });
@@ -111,10 +116,17 @@ export function DeploymentsPage() {
                   activeRouteCount={activeRouteCounts.get(deployment.id) ?? 0}
                   onEdit={() => setEditing(deployment)}
                   onReplace={() => { setReplacement(deployment); setEditing("new"); }}
+                  onAnnounce={setAnnouncement}
                 />
               ))}
             </div>
           ) : <EmptyState title={t("deployments.noMatches")}>{t("deployments.noMatchesDescription")}</EmptyState>}
+          {/* One live region for the whole grid, naming the deployment it is
+              speaking about. A region per card is fifty registered regions that
+              announce a bare "失败" with no way to tell which card produced
+              it — and announce again whenever a filter keystroke remounts
+              them. */}
+          <p className="sr-only" role="status" aria-live="polite">{announcement}</p>
         </section>
       )}
       {editing && providers.isSuccess && (
@@ -138,6 +150,50 @@ function tokenCount(tokens: number) {
   return String(tokens);
 }
 
+/*
+ * Enable and disable, as one button in the card's action bar.
+ *
+ * The button is named for what a click does, not for the state it leaves — the
+ * state is the word in the card's head, which reports and does not act. One
+ * button rather than two, because only one of the pair is ever available and a
+ * greyed-out twin beside it says nothing the label does not.
+ *
+ * Neither direction confirms. Disabling is refused outright while any enabled
+ * route still points at the deployment (see routeBlocked), so what remains
+ * reachable here is a deployment nothing routes through, and one click undoes
+ * one click. Enabling wants a test of the current revision, and a blocked
+ * button states why in the accessibility tree as well as its tooltip, because
+ * a disabled button carries no tooltip in some browsers and is skipped in tab
+ * order.
+ */
+function DeploymentStateToggle({ name, enabled, pending, blockedReason, onToggle }: {
+  name: string;
+  enabled: boolean;
+  pending: boolean;
+  blockedReason?: string;
+  onToggle: () => void;
+}) {
+  const { t } = useTranslation();
+  const readOnly = useIsReadOnly();
+  const reasonID = useId();
+  const reason = readOnly ? t("navigation.readOnlyAction") : blockedReason;
+  const blocked = Boolean(reason);
+  return (
+    <>
+      <button
+        type="button"
+        className="button ghost"
+        disabled={blocked || pending}
+        title={blocked ? reason : undefined}
+        aria-describedby={blocked ? reasonID : undefined}
+        aria-label={t(enabled ? "deployments.disableDeployment" : "deployments.enableDeployment", { name })}
+        onClick={onToggle}
+      >{enabled ? t("common.disable") : t("common.enable")}</button>
+      {blocked && <span id={reasonID} className="sr-only">{reason}</span>}
+    </>
+  );
+}
+
 function DeploymentRow({
   deployment,
   listIndex,
@@ -145,6 +201,7 @@ function DeploymentRow({
   activeRouteCount,
   onEdit,
   onReplace,
+  onAnnounce,
 }: {
   deployment: Deployment;
   listIndex: number;
@@ -152,10 +209,14 @@ function DeploymentRow({
   activeRouteCount: number;
   onEdit: () => void;
   onReplace: () => void;
+  /** Publishes into the page's single live region — see the card's test effect. */
+  onAnnounce: (message: string) => void;
 }) {
   const { t } = useTranslation();
   const dateTime = useInstantFormatter();
   const readOnly = useIsReadOnly();
+  const nameID = useId();
+  const conditionID = useId();
   const [details, setDetails] = useState(false);
   const [pricing, setPricing] = useState(false);
 	const [confirmingRestore, setConfirmingRestore] = useState(false);
@@ -255,10 +316,70 @@ function DeploymentRow({
   const testVerdict = testState === "success" && deployment.last_test_latency_millis !== undefined
     ? t("testControl.success", { latency: deployment.last_test_latency_millis })
     : testState === "success" ? t("testControl.successPlain") : t(`testControl.${testState}`);
-  // The price cell is on the card to say a price is missing. While the read is
-  // still in flight nothing is missing yet, and rendering the cell then would
-  // put a row on every card for as long as the batch takes and remove it again.
+  // The card says a price is missing. While the read is still in flight nothing
+  // is missing yet, and saying so then would put a condition on every card for
+  // as long as the batch takes and take it back again.
   const priceNeedsAttention = !prices.isPending && !activePrice;
+  // The card's one line about itself: the worst thing true of this deployment,
+  // and how much it outranks. See deploymentCondition.ts for the ladder.
+  const condition = deploymentCondition({ deployment, testState, priceMissing: priceNeedsAttention, priceUnknown: prices.isError });
+  const conditionAge = formatAge(condition.observedAt);
+  // A classified reason is a sentence, and the line is one clipped row: the
+  // reason is still on the card, starting where the operator is already
+  // reading, and the tooltip carries the part the width cut off. The drawer
+  // keeps the whole of it either way.
+  const conditionDetail = condition.key === "testControl.failure"
+    ? testFailureReason
+    : condition.key === "deployments.probeUnhealthyShort"
+      ? probeReason
+      : condition.key === "deployments.pricingQuarantinedShort"
+        ? deployment.pricing_quarantine_reason
+        : undefined;
+  const conditionText = [t(condition.key, condition.params ?? {}), conditionDetail, conditionAge]
+    .filter(Boolean).join(t("common.dotSeparator"));
+  // A read-only session reads the condition and acts on none of it, so the line
+  // stays text rather than offering a control the server would refuse.
+  const conditionAct = readOnly
+    ? undefined
+    : condition.action === "price"
+      ? () => setPricing(true)
+      : condition.action === "restorePricing"
+        ? () => setConfirmingRestore(true)
+        : condition.action === "retryPrice"
+          ? () => { void prices.refetch(); }
+          : condition.action === "drawer"
+            ? () => setDetails(true)
+            : undefined;
+  // One line of machine facts, in the order an operator checks them. It clips
+  // rather than wraps: a band that can become two lines is what made every card
+  // in a row a different height.
+  const tokenSpec = [
+    deployment.capabilities.max_context_tokens ? tokenCount(deployment.capabilities.max_context_tokens) : "",
+    deployment.capabilities.max_output_tokens ? tokenCount(deployment.capabilities.max_output_tokens) : "",
+  ].filter(Boolean).join("/");
+  // A verdict that arrives while nothing announces it is a click with no
+  // answer. The page owns one live region for the whole grid — fifty cards each
+  // owning one announced anonymously, and announced again on every filter
+  // keystroke that remounted them.
+  const settledTest = useRef(testState);
+  useEffect(() => {
+    if (settledTest.current === "running" && testState !== "running") {
+      onAnnounce(t("deployments.testAnnouncement", { name: deployment.name, verdict: conditionText }));
+    }
+    settledTest.current = testState;
+  }, [testState, conditionText, deployment.name, onAnnounce, t]);
+  // Enable, disable and delete report through the notification channel their
+  // successes already use. A failed mutation is a transient answer to a click,
+  // not a property of the deployment, and rendering it inside the card put a
+  // block below the action bar that broke the one alignment the grid keeps.
+  const stateError = state.error;
+  const removeError = remove.error;
+  useEffect(() => {
+    if (stateError) notify({ tone: "error", title: t("common.requestFailed"), description: localizedError(t, stateError) });
+  }, [stateError, notify, t]);
+  useEffect(() => {
+    if (removeError) notify({ tone: "error", title: t("common.requestFailed"), description: localizedError(t, removeError) });
+  }, [removeError, notify, t]);
   // Newest first, and cancelled versions stay out: they never took effect and
   // never will, so they are not part of what this deployment charged.
   const evidenceOf = (capability: string) => deployment.capability_evidence[capability] ?? "unrecorded";
@@ -269,133 +390,105 @@ function DeploymentRow({
     .slice()
     .sort((first, second) => second.effective_from.localeCompare(first.effective_from));
   return (
-    <article id={`deployment-${deployment.id}`} className="resource-card deployment-card">
+    <article id={`deployment-${deployment.id}`} className="resource-card deployment-card" aria-labelledby={nameID}>
+      {/* Slot 1 — who this is. Two lines, always, so slot 2 starts at the same
+          height on every card in the row. */}
       <div className="resource-card-head">
         <div className="resource-identity">
-          {/* The dot is aria-hidden, so the state also has to exist as words.
-              It used to rely on the state column beside it; a card that kept
-              only the dot would have made enabled/disabled a colour. */}
-          <span><StatusDot ok={deployment.enabled} /><strong>{deployment.name}</strong></span>
+          {/* A heading, so a screen reader can walk the grid card by card, and
+              the article's accessible name. Thirty nameless articles were
+              thirty stops that announced nothing. */}
+          <h3 id={nameID}>{deployment.name}</h3>
           {/* Provider and upstream model are one identity, not two lines: which
-              connection, and which model on it. A bare mono string also
-              announces as an identifier with no context, so the label the row
-              used to print beside it becomes its accessible name. */}
+              connection, and which model on it. The label that names the mono
+              string is real text — aria-label on a <code> has no role to attach
+              to and browsers drop it. */}
           <small>
             {providerName}
             {" · "}
-            <code aria-label={`${t("deployments.upstreamTarget")}: ${deployment.provider_model}`} title={deployment.provider_model}>{deployment.provider_model}</code>
+            <span className="sr-only">{t("deployments.upstreamTarget")}{t("common.labelSeparator")}</span>
+            <code title={deployment.provider_model}>{deployment.provider_model}</code>
           </small>
         </div>
-        {/* One trailing accessory. The warnings used to stack under it as a
-            second right-aligned column, which put two unrelated kinds of thing
-            in the same corner and made every card read as a two-column table. */}
-        <div className="resource-row-state">
-          <span className={`resource-state ${deployment.enabled ? "enabled" : ""}`}>{deployment.enabled ? t("common.enabled") : t("common.disabled")}</span>
+        {/* The actions that are neither daily nor undoable. The state word used
+            to sit here too; it reads better at the foot beside the control that
+            changes it — see the action bar. */}
+        <div className="resource-row-state deployment-card-state">
+          <OverflowMenu label={t("deployments.moreActionsFor", { name: deployment.name })}>
+            <button className="button ghost" disabled={readOnly} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={onReplace}>{t("deployments.createReplacement")}</button>
+            <ConfirmButton label={t("common.delete")} confirmLabel={t("deployments.deleteConfirm", { name: deployment.name })} requireStepUp onConfirm={(reauth) => remove.mutateAsync(reauth)} disabled={remove.isPending || routeBlocked} disabledReason={routeBlocked ? t("deployments.routeBlocked") : undefined} />
+          </OverflowMenu>
         </div>
       </div>
-      <div className="resource-card-body">
-        {/* Both of these decide whether the deployment routes at all, whatever
-            the enabled flag says — drift is dropped from the router's
-            candidates, and so is a deployment the probe has failed. They lead
-            the body because they outrank everything under them. */}
-        {(review && review.state !== "current") || probe?.state === "unhealthy" ? (
-          <div className="deployment-card-alerts">
-            {review && review.state !== "current" && (
-              <small className="capability-review-state" data-state={review.state}>
-                {review.state === "drifted" ? t("deployments.capabilitiesUnsupported") : t("deployments.capabilitiesToReview")}
-              </small>
-            )}
-            {probe?.state === "unhealthy" && (
-              <small className="capability-review-state" data-state="drifted">{t("deployments.probeUnhealthyShort")}</small>
-            )}
-          </div>
-        ) : null}
-        {/* Only when the deployment declares limits. "以上游为准" is the absence
-            of a fact written out as one; the drawer is where an operator goes
-            to confirm that nothing was declared. */}
-        {(deployment.capabilities.max_context_tokens || deployment.capabilities.max_output_tokens) ? (
-          <span className="resource-card-spec">{[
-            deployment.capabilities.max_context_tokens ? t("deployments.contextSummary", { tokens: tokenCount(deployment.capabilities.max_context_tokens) }) : "",
-            deployment.capabilities.max_output_tokens ? t("deployments.maxOutputSummary", { tokens: tokenCount(deployment.capabilities.max_output_tokens) }) : "",
-          ].filter(Boolean).join(t("common.listSeparator"))}</span>
-        ) : null}
-        {/* What goes in and what comes out. The mapping is the server's; this
-            only draws it. Protocol capabilities have no modality to draw, so
-            the count beside the marks is what keeps them from reading as
-            absent — the marks are a modality view, not a capability summary. */}
-        <span className="deployment-card-marks">
-          <ModalityMarks catalog={profiles.data} capabilities={deployment.capabilities} evidence={deployment.capability_evidence} />
-          <small>{t("deployments.capabilityCount", { count: capabilities.length })}</small>
-        </span>
+      {/* Slot 2 — the worst thing true of this deployment, and the control that
+          changes the answer. One line whatever is wrong, so the card's verdict
+          is always at the same height and the dot is the only coloured mark on
+          the card. What it outranks is counted, never dropped. */}
+      <div className="deployment-condition" data-severity={condition.severity}>
+        <span className="deployment-condition-dot" aria-hidden="true" />
+        {conditionAct ? (
+          <button type="button" className="deployment-condition-text" id={conditionID} title={conditionText} onClick={conditionAct}>{conditionText}</button>
+        ) : (
+          <span className="deployment-condition-text" id={conditionID} title={conditionText}>{conditionText}</span>
+        )}
+        {condition.suppressed > 0 && (
+          <button
+            type="button"
+            className="deployment-condition-more"
+            aria-label={t("deployments.moreConditions", { count: condition.suppressed, name: deployment.name })}
+            onClick={() => setDetails(true)}
+          >+{condition.suppressed}</button>
+        )}
+        <button
+          type="button"
+          className="button ghost deployment-condition-test"
+          // The button reports its own last verdict, not the card's condition:
+          // a probe failure can outrank a manual test that passed, and tinting
+          // the control red for something it did not measure would say the test
+          // failed when it did not.
+          data-test-state={testState}
+          disabled={readOnly || testState === "running"}
+          title={readOnly ? t("navigation.readOnlyAction") : undefined}
+          aria-describedby={conditionID}
+          aria-label={t("deployments.testDeployment", { name: deployment.name })}
+          onClick={() => test.mutate()}
+        >{t("common.test")}</button>
       </div>
-      {/* Facts appear when they are not the uneventful answer. "已设置 · 不限 ·
-          无启用路由" is two lines of a card saying nothing needs doing, and it
-          was on every card. What §13.2 required of them still holds, because
-          each one is required exactly when it is not the quiet case: the price
-          is the precondition for enabling and matters when it is missing, and
-          the route count is the disabled reason for Disable and Delete and
-          exists only above zero. */}
-      {(priceNeedsAttention || deployment.max_concurrency > 0 || activeRouteCount > 0) && <div className="resource-card-facts">
-        {priceNeedsAttention && <div className="resource-fact deployment-fact-price">
-          <small>{t("deployments.priceSetting")}</small>
-          {prices.isError ? (
-            // Without a way back this cell was a dead end: it neither told an
-            // assistive reader that something failed nor offered the one action
-            // that can fix it.
-            <span className="deployment-price-value" role="alert">
-              <span>{t("deployments.priceUnavailable")}</span>
-              <button className="button ghost" type="button" disabled={prices.isFetching} onClick={() => prices.refetch()}>{t("common.retry")}</button>
-            </span>
-          ) : (
-            <button
-              className="deployment-price-link missing"
-              type="button"
-              disabled={readOnly}
-              title={readOnly ? t("navigation.readOnlyAction") : t("deployments.priceRequired")}
-              aria-label={t("deployments.setDeploymentPrice", { name: deployment.name })}
-              onClick={() => setPricing(true)}
-            >{t("deployments.priceNotConfigured")}</button>
-          )}
-        </div>}
-        {deployment.max_concurrency > 0 && <div className="resource-fact">
-          <small>{t("deployments.concurrency")}</small>
-          <strong>{deployment.max_concurrency}</strong>
-        </div>}
-        {activeRouteCount > 0 && <div className="resource-fact">
-          <small>{t("deployments.routeDependency")}</small>
-          <Link className="resource-link" href="/admin/routes">{t("deployments.activeRoutesCompact", { count: activeRouteCount })} →</Link>
-        </div>}
-      </div>}
+      {/* Slot 3 — what this model is, on one clipped line. The exact figures are
+          in the drawer; concurrency is last because it is the first thing a
+          narrow card should give up. */}
+      <p className="deployment-spec">
+        <ModalityMarks catalog={profiles.data} capabilities={deployment.capabilities} evidence={deployment.capability_evidence} />
+        <span>{t("deployments.capabilityCount", { count: capabilities.length })}</span>
+        {tokenSpec && <span>{tokenSpec}</span>}
+        {deployment.max_concurrency > 0 && <span>{t("deployments.concurrencyCompact", { count: deployment.max_concurrency })}</span>}
+      </p>
+      {/* Slot 4 — what an operator does to a deployment they are working on.
+          ConfirmButton gates itself; these do not, so a read-only session was
+          shown controls that would 403 on click. §7.3 also requires a disabled
+          control to say why, so each carries the reason. */}
       <div className="resource-card-actions row-actions deployment-compact-actions">
-        {/* Test, enable and create-replacement are writes. ConfirmButton
-            gates itself; these three did not, so a read-only session was
-            shown three controls that would 403 on click. §7.3 also requires a
-            disabled control to say why, so each carries the reason. */}
-        <InlineTestControl state={testState} latency={deployment.last_test_latency_millis} onTest={() => test.mutate()} disabled={readOnly} title={readOnly ? t("navigation.readOnlyAction") : undefined} />
-        <button className="button ghost" disabled={readOnly} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={onEdit}>{t("common.edit")}</button>
+        <button className="button ghost" disabled={readOnly} title={readOnly ? t("navigation.readOnlyAction") : undefined} aria-label={t("deployments.editDeployment", { name: deployment.name })} onClick={onEdit}>{t("common.edit")}</button>
         {/* A dialog, not a disclosure: the label never changes and the card
             never resizes, so aria-expanded would describe a state the card no
             longer has. */}
-        <button className="button ghost" aria-haspopup="dialog" onClick={() => setDetails(true)}>{t("deployments.expandDetails")}</button>
-        {/* One visible action apiece and everything else in the menu. Enable and
-            disable moved in: they are deliberate, infrequent, and each carries a
-            precondition it has to explain, which a menu row has room for and a
-            button in a row of four does not. */}
-        <OverflowMenu label={t("deployments.moreActions")}>
-          {deployment.enabled ? (
-            <ConfirmButton className="button ghost" label={t("common.disable")} title={t("deployments.disableTitle")} confirmLabel={t("deployments.disableConfirm", { name: deployment.name })} disabled={state.isPending || routeBlocked} disabledReason={routeBlocked ? t("deployments.routeBlocked") : undefined} onConfirm={() => state.mutateAsync()} />
-          ) : (
-            <button className="button ghost" title={readOnly ? t("navigation.readOnlyAction") : !testIsCurrent ? t("deployments.testRequired") : undefined} disabled={readOnly || state.isPending || !testIsCurrent} onClick={() => state.mutate()}>{t("common.enable")}</button>
-          )}
-          <button className="button ghost" disabled={readOnly} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={onReplace}>{t("deployments.createReplacement")}</button>
-          <ConfirmButton label={t("common.delete")} confirmLabel={t("deployments.deleteConfirm", { name: deployment.name })} requireStepUp onConfirm={(reauth) => remove.mutateAsync(reauth)} disabled={remove.isPending || routeBlocked} disabledReason={routeBlocked ? t("deployments.routeBlocked") : undefined} />
-        </OverflowMenu>
+        <button className="button ghost" aria-haspopup="dialog" aria-label={t("deployments.viewDeploymentDetails", { name: deployment.name })} onClick={() => setDetails(true)}>{t("deployments.expandDetails")}</button>
+        <DeploymentStateToggle
+          name={deployment.name}
+          enabled={deployment.enabled}
+          pending={state.isPending}
+          blockedReason={deployment.enabled
+            ? (routeBlocked ? t("deployments.routeBlocked") : undefined)
+            : (!testIsCurrent ? t("deployments.testRequired") : undefined)}
+          onToggle={() => state.mutate()}
+        />
+        {/* The state the deployment is in, at the end of the bar that changes
+            it: the button says what a click does, the word says where the
+            deployment stands. Last in the bar and last in the reading order,
+            because it is the answer to the control beside it rather than an
+            accessory of the name three lines above. */}
+        <span className={`resource-state ${deployment.enabled ? "enabled" : ""}`}>{deployment.enabled ? t("common.enabled") : t("common.disabled")}</span>
       </div>
-      {/* The reason belongs in the row that failed, not behind the expander:
-          the operator is looking at the button they just pressed. */}
-      {testState === "failure" && testFailureReason && (
-        <p className="row-test-failure" role="status">{testFailureReason}</p>
-      )}
       {details && <Modal drawer title={t("deployments.detailsTitle", { name: deployment.name })} onClose={() => setDetails(false)}>
         <div className="detail-drawer">
           <section className="detail-section">

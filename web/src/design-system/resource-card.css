@@ -15,13 +15,21 @@
  *
  * Usage:
  *   <div class="resource-card-grid">
- *     <article class="resource-card" id="…">
+ *     <article class="resource-card" id="…">        --resource-card-slots: 4
  *       <div class="resource-card-head">                 identity + state
  *       <div class="resource-card-body">                 machine facts, marks
  *       <div class="resource-card-facts">                labelled facts
  *       <div class="resource-card-actions">              row actions
  *     </article>
  *   </div>
+ *
+ * A card is a fixed number of slots, and every card in the grid declares the
+ * same number. That is not a formality: the card is a row subgrid, so slot n is
+ * the same parent track for every tile in a band and the bands line up across
+ * the row. A card that renders a conditional block as a fifth child, or appends
+ * one after the action bar, breaks that alignment for every tile beside it — a
+ * page with more to say raises --resource-card-slots and gives the extra slot a
+ * name, rather than adding a child the grid did not budget for.
  *
  * A card never grows. Detail that does not fit belongs in a drawer beside the
  * grid — see .modal.drawer — so opening one tile never re-flows the tiles
@@ -30,27 +38,41 @@
 .resource-card-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(clamp(17rem, 26vw, 22rem), 1fr));
-  gap: var(--space-4);
-  /* Every tile in a row is as tall as the tallest one in it. Sized to their own
-     content they ended at different heights, so the row had a ragged lower edge
-     and no two action bars sat on the same line — and which card is tall says
-     nothing about the deployment, only about how many of its facts happened to
-     need saying. */
+  /* The row gutter is the parent's, and a card's own slots are parent rows now,
+     so this is also what separates one band of cards from the next. It is wider
+     than the gap between a card's slots (below) — a tile has to read as one
+     thing before it reads as four. */
+  column-gap: var(--space-4);
+  row-gap: var(--space-5);
+  /* Every tile in a row is as tall as the tallest one in it, and — see the
+     subgrid below — every slot inside it lines up with the same slot in its
+     neighbours. Sized to their own content the tiles ended at different heights
+     with a ragged lower edge; sized only at the outer box they were equal
+     rectangles whose insides still landed wherever their content put them,
+     which is worse, because equal boxes advertise that the contents are not. */
   align-items: stretch;
 }
 .resource-card {
-  /* A column, so the card can be taller than its content: the groups stack from
-     the top and the action bar is pushed to the bottom edge (see
-     .resource-card-actions), which is what keeps the bars aligned across a row.
+  /* A row subgrid over the grid's own tracks: the card claims one parent row per
+     slot, so slot n of one card and slot n of its neighbour are the same track
+     and share a height. That is the whole alignment mechanism — nothing here
+     sets a height, and a slot no card in the band renders costs nothing.
+     A page declares how many slots its card has; four is the contract's shape
+     (head, body, facts, actions) and the default.
      Children are capped at the card's width — without that, one unwrappable
      child sets the width for everything above it and the whole card renders
      past its own border into the tile beside it. */
-  display: flex;
-  flex-direction: column;
+  grid-row: span var(--resource-card-slots, 4);
+  display: grid;
+  grid-template-rows: subgrid;
   /* Groups inside a card are separated by space. A hairline divides a list of
      like items; drawn inside one tile it cuts the tile into pieces, which is how
-     three facts and two controls came to look like three panels. */
-  gap: var(--space-5);
+     three facts and two controls came to look like three panels. The gap is
+     smaller than the grid's own, so a tile reads as one thing before it reads
+     as four. A subgrid's own gap overrides the parent's gutters for the tracks
+     it spans, so this applies inside a card and the parent's wider one applies
+     between cards. */
+  row-gap: var(--space-3);
   min-width: 0;
   padding: var(--space-5);
   border: 1px solid var(--color-border-default);
@@ -58,7 +80,11 @@
   background: var(--color-surface-raised);
   font-size: var(--font-size-sm);
   line-height: var(--line-height-normal);
-  overflow-anchor: none;
+  /* See "Pointing at a card" at the foot of this file. */
+  transition:
+    border-color var(--motion-duration-fast) var(--motion-easing-standard),
+    box-shadow var(--motion-duration-normal) var(--motion-easing-standard),
+    transform var(--motion-duration-normal) var(--motion-easing-standard);
 }
 .resource-card > * { min-width: 0; }
 .resource-card-head {
@@ -108,8 +134,11 @@
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-1);
-  /* Sits on the card's bottom edge however tall the row made the card. */
-  margin-top: auto;
+  /* The last slot is the bottom of the card, so the bar needs no auto margin to
+     find it. `margin-top: auto` also dragged every later sibling down with it,
+     which is how a failure sentence rendered after the bar came to push the bar
+     off the line its neighbours sat on. */
+  align-self: end;
 }
 
 /*
@@ -142,3 +171,27 @@
 }
 .modality-arrow { flex: 0 0 auto; color: var(--color-text-tertiary); font: var(--font-size-xs) var(--mono); }
 .modality-marks-empty { color: var(--color-text-tertiary); font-size: var(--font-size-xs); }
+
+/*
+ * Pointing at a card.
+ *
+ * A card carries several controls, so the operator needs to know which tile
+ * their next click belongs to before they make it. Border and elevation move
+ * together; the surface stays put, because a tile that also repaints its
+ * background reads as selected rather than pointed at, and nothing here is
+ * selectable. :focus-within gives keyboard traversal the same answer the
+ * pointer gets — tabbing into a card's Test button marks that card too.
+ */
+.resource-card:hover,
+.resource-card:focus-within {
+  border-color: var(--color-border-strong);
+  box-shadow: var(--shadow-raised);
+  transform: translateY(-2px);
+}
+/* The lift is decoration; the border and the shadow carry the meaning, so
+   reduced motion keeps those and drops the movement. */
+@media (prefers-reduced-motion: reduce) {
+  .resource-card { transition: none; }
+  .resource-card:hover,
+  .resource-card:focus-within { transform: none; }
+}

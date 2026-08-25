@@ -85,11 +85,11 @@ describe("read-only role", () => {
 
     // Disabling a project revokes every gateway key under it, which is exactly the
     // kind of control a read-only session must not be offered.
-    const disable = await screen.findByRole("button", { name: "禁用" });
+    const disable = await screen.findByRole("button", { name: /^禁用/ });
     expect(disable).toBeDisabled();
     expect(disable).toHaveAttribute("title", readOnlyReason);
-    expect(screen.getByRole("button", { name: "编辑" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "编辑" })).toHaveAttribute("title", readOnlyReason);
+    expect(screen.getByRole("button", { name: /^编辑/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^编辑/ })).toHaveAttribute("title", readOnlyReason);
   });
 
   it("leaves the same action available to an administrator", async () => {
@@ -98,7 +98,7 @@ describe("read-only role", () => {
     renderAs("administrator", <ProjectsPage />);
 
     expect(await screen.findByRole("button", { name: "＋ 新建项目" })).toBeEnabled();
-    expect(await screen.findByRole("button", { name: "禁用" })).toBeEnabled();
+    expect(await screen.findByRole("button", { name: /^禁用/ })).toBeEnabled();
   });
 
   // The three status switches added with the policy console carried a `readOnly ||`
@@ -135,7 +135,7 @@ describe("read-only role", () => {
         expect(control).toHaveAttribute("title", readOnlyReason);
       }
     }
-    expect(screen.getAllByRole("button", { name: "测试" })[0]).toBeEnabled();
+    expect(screen.getAllByRole("button", { name: /^测试/ })[0]).toBeEnabled();
   });
 
   // ConfirmButton backs every destructive action in the console, so honouring
@@ -157,10 +157,10 @@ describe("read-only role", () => {
     const row = (await screen.findByText("chat")).closest("tr");
     expect(row).not.toBeNull();
     expect(within(row!).getByRole("button", { name: "删除" })).toBeDisabled();
-    expect(within(row!).getByRole("button", { name: "编辑" })).toBeDisabled();
+    expect(within(row!).getByRole("button", { name: /^编辑/ })).toBeDisabled();
     // Reading has to stay unimpeded — a read-only console that cannot test a
     // route is not read-only, it is broken.
-    expect(within(row!).getByRole("button", { name: "测试" })).toBeEnabled();
+    expect(within(row!).getByRole("button", { name: /^测试/ })).toBeEnabled();
   });
 
   // Disabled with a stated reason, not hidden. Every other page tells a
@@ -302,16 +302,17 @@ describe("destructive step-up", () => {
 
     // The test is healthy and current, so nothing but the role should be
     // holding these back.
-    for (const name of ["测试", "为 GPT 设置价格", "启用", "编辑", "＋ 新建模型部署"]) {
+    for (const name of [/^测试/, /^启用/, /^编辑/, "＋ 新建模型部署"]) {
       expect(await screen.findByRole("button", { name })).toBeDisabled();
     }
-    expect(screen.getByText("价格设置")).toBeVisible();
-    expect(screen.getByText("未设置")).toBeVisible();
-    fireEvent.click(screen.getByLabelText("更多操作"));
+    // The missing price is the card's condition line, and a read-only session
+    // reads it as text rather than being offered the form behind it.
+    expect(screen.getByText("未设置价格").tagName).toBe("SPAN");
+    fireEvent.click(screen.getByLabelText(/^更多操作/));
     expect(screen.getByRole("button", { name: "创建替代" })).toBeDisabled();
 
     // A disabled control has to say why it is disabled.
-    expect(screen.getByRole("button", { name: "编辑" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: /^编辑/ })).toHaveAttribute(
       "title", "只读账户无法执行此操作。");
   });
 
@@ -341,9 +342,9 @@ describe("destructive step-up", () => {
 
     renderAs("administrator", <DeploymentsPage />);
 
-    expect(await screen.findByText("未设置")).toBeVisible();
+    expect(await screen.findByText("未设置价格")).toBeVisible();
     expect(screen.queryByText("价格版本")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "为 GPT 设置价格" }));
+    fireEvent.click(screen.getByRole("button", { name: "未设置价格" }));
     const dialog = await screen.findByRole("dialog", { name: "设置价格" });
     fireEvent.click(within(dialog).getByRole("radio", { name: /^免费/ }));
     fireEvent.click(within(dialog).getByRole("button", { name: "下一步：核对" }));
@@ -391,7 +392,7 @@ describe("destructive step-up", () => {
 
     // A configured price needs nothing from the operator, so the card does not
     // carry it at all — the cell exists to say a price is missing.
-    const open = await screen.findByRole("button", { name: "查看详情" });
+    const open = await screen.findByRole("button", { name: /^查看详情/ });
     expect(screen.queryByText("价格设置")).not.toBeInTheDocument();
     expect(screen.queryByText("价格版本")).not.toBeInTheDocument();
 
@@ -430,7 +431,7 @@ describe("destructive step-up", () => {
     ));
 
     renderAs("administrator", <DeploymentsPage />);
-    fireEvent.click(await screen.findByRole("button", { name: "启用" }));
+    fireEvent.click(await screen.findByRole("button", { name: /^启用/ }));
 
     const error = await screen.findByRole("alert");
     expect(within(error).getByText("该部署没有已生效的价格版本。设置价格后再启用；如模型免费，请明确选择“免费”。")).toBeVisible();

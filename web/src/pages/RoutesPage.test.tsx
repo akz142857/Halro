@@ -110,12 +110,12 @@ describe("RoutesPage", () => {
     expect(bar).not.toBeNull();
     expect(bar).toContainElement(screen.getByRole("button", { name: "保存并热加载" }));
     expect(bar).toContainElement(screen.getByRole("button", { name: "取消" }));
-    expect(within(bar as HTMLElement).getByText("启用模型路由 · 启用")).toBeVisible();
+    expect(within(bar as HTMLElement).getByText("启用模型路由 · 已启用")).toBeVisible();
     expect(within(bar as HTMLElement).getByText("应用可以用“chat”请求这个部署")).toBeVisible();
 
     // Turning it off has to change what the bar says it will do, not just the box.
     fireEvent.click(toggle);
-    expect(within(bar as HTMLElement).getByText("启用模型路由 · 禁用")).toBeVisible();
+    expect(within(bar as HTMLElement).getByText("启用模型路由 · 已禁用")).toBeVisible();
     expect(within(bar as HTMLElement).getByText("应用请求这个别名会被拒绝")).toBeVisible();
   });
 
@@ -129,7 +129,7 @@ describe("RoutesPage", () => {
     renderPage();
 
     const row = (await screen.findByText("chat")).closest("tr");
-    expect(within(row!).getByText("启用")).toHaveClass("resource-state", "enabled");
+    expect(within(row!).getByText("已启用")).toHaveClass("resource-state", "enabled");
     fireEvent.click(within(row!).getByRole("button", { name: "禁用" }));
 
     // The last enabled route for an alias is the one whose removal stops the
@@ -168,8 +168,8 @@ describe("RoutesPage", () => {
     renderPage();
 
     const row = (await screen.findByText("chat")).closest("tr");
-    expect(within(row!).getByText("禁用")).toHaveClass("resource-state");
-    expect(within(row!).getByText("禁用")).not.toHaveClass("enabled");
+    expect(within(row!).getByText("已禁用")).toHaveClass("resource-state");
+    expect(within(row!).getByText("已禁用")).not.toHaveClass("enabled");
     fireEvent.click(within(row!).getByRole("button", { name: "启用" }));
 
     await waitFor(() => expect(update).toHaveBeenCalledWith(

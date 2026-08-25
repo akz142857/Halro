@@ -108,7 +108,7 @@ describe("projects page", () => {
     const enable = screen.getByRole("checkbox", { name: /启用项目/ });
     const actions = screen.getByRole("button", { name: "创建项目" }).closest<HTMLElement>(".sticky-form-actions")!;
     expect(actions).toContainElement(enable);
-    expect(within(actions).getByText("启用项目 · 启用")).toBeVisible();
+    expect(within(actions).getByText("启用项目 · 已启用")).toBeVisible();
   });
 
   it("renders a project whose allowed_models came back as null", async () => {
@@ -169,7 +169,7 @@ describe("projects page", () => {
     const update = vi.spyOn(api, "updateProject").mockResolvedValue({ ...current, enabled: nextEnabled } as never);
 
     renderPage();
-    expect(await screen.findByText(enabled ? "启用" : "禁用", { selector: ".detail-title .badge" })).toHaveClass(enabled ? "good" : "muted");
+    expect(await screen.findByText(enabled ? "已启用" : "已禁用", { selector: ".detail-title .badge" })).toHaveClass(enabled ? "good" : "muted");
     fireEvent.click(await screen.findByRole("button", { name: actionLabel }));
     // Disabling a project revokes every gateway key under it at once, so it asks
     // first; enabling one restores nothing that was not already configured.

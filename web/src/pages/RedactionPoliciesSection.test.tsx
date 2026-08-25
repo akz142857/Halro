@@ -16,7 +16,7 @@ describe("RedactionPoliciesSection form safety", () => {
     const dialog = screen.getByRole("dialog", { name: "创建脱敏策略" });
     const actions = dialog.querySelector<HTMLElement>(".redaction-form-actions")!;
     expect(within(actions).getByRole("checkbox", { name: "启用此策略" })).not.toBeChecked();
-    expect(within(dialog).getByText("启用此策略 · 禁用")).toBeInTheDocument();
+    expect(within(dialog).getByText("启用此策略 · 已禁用")).toBeInTheDocument();
 
     fireEvent.change(within(dialog).getByLabelText("策略名称"), { target: { value: "Safe stream" } });
     fireEvent.click(within(dialog).getByRole("radio", { name: /仅检测/ }));
