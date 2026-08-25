@@ -342,7 +342,7 @@ describe("destructive step-up", () => {
     renderAs("administrator", <DeploymentsPage />);
 
     expect(await screen.findByText("未设置")).toBeVisible();
-    expect(screen.queryByText("不可变价格时间线")).not.toBeInTheDocument();
+    expect(screen.queryByText("价格版本")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "为 GPT 设置价格" }));
     const dialog = await screen.findByRole("dialog", { name: "设置价格" });
     fireEvent.click(within(dialog).getByRole("radio", { name: /^免费/ }));
@@ -357,7 +357,7 @@ describe("destructive step-up", () => {
     expect(createPrice.mock.calls[0][1]).not.toHaveProperty("effective_from");
   });
 
-  it("expands details from the configured value in the price setup column", async () => {
+  it("says nothing about a price that is set, and reads it out in the drawer", async () => {
     const capabilities = {
       chat: true, streaming: true, embeddings: false, moderations: false, images: false,
       transcriptions: false, speech: false, files: false, batches: false, rerank: false,
@@ -389,12 +389,16 @@ describe("destructive step-up", () => {
 
     renderAs("administrator", <DeploymentsPage />);
 
-    const configured = await screen.findByRole("button", { name: "查看 GPT 的价格详情" });
-    expect(configured).toHaveTextContent("已设置");
-    expect(screen.queryByText("不可变价格时间线")).not.toBeInTheDocument();
-    fireEvent.click(configured);
-    expect(await screen.findByText("不可变价格时间线")).toBeVisible();
-    expect(screen.getByRole("button", { name: "收起详情" })).toHaveAttribute("aria-expanded", "true");
+    // A configured price needs nothing from the operator, so the card does not
+    // carry it at all — the cell exists to say a price is missing.
+    const open = await screen.findByRole("button", { name: "查看详情" });
+    expect(screen.queryByText("价格设置")).not.toBeInTheDocument();
+    expect(screen.queryByText("价格版本")).not.toBeInTheDocument();
+
+    fireEvent.click(open);
+
+    expect(await screen.findByText("价格版本")).toBeVisible();
+    expect(screen.getByRole("dialog", { name: "GPT 详情" })).toBeVisible();
   });
 
   it("offers price setup inside the enable error when no effective price exists", async () => {

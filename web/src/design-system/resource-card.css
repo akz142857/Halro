@@ -23,21 +23,36 @@
  *     </article>
  *   </div>
  *
- * A card that expands spans the full grid width rather than growing taller than
- * its neighbours, so opening one never re-flows the tiles around it.
+ * A card never grows. Detail that does not fit belongs in a drawer beside the
+ * grid — see .modal.drawer — so opening one tile never re-flows the tiles
+ * around it or moves the card the operator is pointing at.
  */
 .resource-card-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(clamp(17rem, 26vw, 22rem), 1fr));
   gap: var(--space-4);
-  align-items: start;
+  /* Every tile in a row is as tall as the tallest one in it. Sized to their own
+     content they ended at different heights, so the row had a ragged lower edge
+     and no two action bars sat on the same line — and which card is tall says
+     nothing about the deployment, only about how many of its facts happened to
+     need saying. */
+  align-items: stretch;
 }
 .resource-card {
-  display: grid;
-  grid-template-rows: auto auto 1fr auto;
-  gap: var(--space-3);
+  /* A column, so the card can be taller than its content: the groups stack from
+     the top and the action bar is pushed to the bottom edge (see
+     .resource-card-actions), which is what keeps the bars aligned across a row.
+     Children are capped at the card's width — without that, one unwrappable
+     child sets the width for everything above it and the whole card renders
+     past its own border into the tile beside it. */
+  display: flex;
+  flex-direction: column;
+  /* Groups inside a card are separated by space. A hairline divides a list of
+     like items; drawn inside one tile it cuts the tile into pieces, which is how
+     three facts and two controls came to look like three panels. */
+  gap: var(--space-5);
   min-width: 0;
-  padding: var(--space-4) var(--space-5);
+  padding: var(--space-5);
   border: 1px solid var(--color-border-default);
   border-radius: var(--radius-lg);
   background: var(--color-surface-raised);
@@ -45,7 +60,7 @@
   line-height: var(--line-height-normal);
   overflow-anchor: none;
 }
-.resource-card.expanded { grid-column: 1 / -1; }
+.resource-card > * { min-width: 0; }
 .resource-card-head {
   display: flex;
   align-items: baseline;
@@ -56,22 +71,24 @@
 .resource-card-head > .resource-identity { min-width: 0; }
 .resource-card-head > .resource-row-state {
   display: grid;
-  flex: 0 0 auto;
+  /* A row gives the state a column of its own; a card gives it whatever the name
+     leaves. It may shrink, and a state sentence longer than that wraps rather
+     than being clipped — a truncated state is the one label on the card an
+     operator cannot afford to half-read. */
+  flex: 0 1 auto;
+  min-width: 0;
   justify-items: end;
   gap: var(--space-1);
   text-align: right;
+}
+.resource-card-head > .resource-row-state > small {
+  overflow: visible;
+  white-space: normal;
 }
 .resource-card-body {
   display: grid;
   gap: var(--space-2);
   min-width: 0;
-}
-.resource-card-body > code {
-  overflow: hidden;
-  color: var(--color-text-primary);
-  font: var(--font-size-sm) var(--mono);
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .resource-card-spec {
   color: var(--color-text-tertiary);
@@ -79,43 +96,49 @@
 }
 .resource-card-facts {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(6.5rem, 1fr));
+  /* 5.5rem keeps three facts on one line inside the narrowest card track; the
+     values inside a fact ellipsize, so a narrower track shortens a value rather
+     than overflowing the card. */
+  grid-template-columns: repeat(auto-fit, minmax(5.5rem, 1fr));
   gap: var(--space-3);
   min-width: 0;
-  padding-top: var(--space-3);
-  border-top: 1px solid var(--color-border-default);
 }
 .resource-card-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-1);
-  padding-top: var(--space-3);
-  border-top: 1px solid var(--color-border-default);
+  /* Sits on the card's bottom edge however tall the row made the card. */
+  margin-top: auto;
 }
 
 /*
  * Modality marks.
  *
- * The row reads "what goes in, what comes out": input marks, an arrow, output
- * marks. Each mark is an inline SVG rather than an emoji — an emoji cannot be
- * themed, contrast-checked or sized on the type scale, and renders as a
- * different picture on every platform.
+ * The row reads "what goes in, what comes out": input modalities, an arrow,
+ * output modalities. They are words, not pictures — five hand-drawn 16px glyphs
+ * needed a hover to be understood, and a legend with extra steps is not a
+ * legend. Two characters of Chinese, or one short word, is smaller than the icon
+ * it replaced and needs nothing explaining it.
  *
- * The glyph is never the only signal: every mark carries its own accessible
- * label naming the modality, the direction and the evidence behind it, and the
- * evidence is drawn as fill rather than colour so it survives a monochrome
- * rendering. Solid is verified, outline is declared.
+ * Evidence is weight, never colour alone: verified is set heavier than declared,
+ * so the distinction survives a monochrome rendering, and every mark still
+ * carries an accessible label naming the direction, the modality and the
+ * evidence behind it.
  */
 .modality-marks {
   display: flex;
-  align-items: center;
-  gap: var(--space-2);
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-2);
   min-height: 1.25rem;
   color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
 }
-.modality-mark { display: inline-flex; flex: 0 0 auto; }
-.modality-mark > svg { width: 1rem; height: 1rem; }
-.modality-mark[data-evidence="declared"] { color: var(--color-text-tertiary); }
+.modality-mark { flex: 0 0 auto; font-weight: var(--font-weight-medium); }
+.modality-mark[data-evidence="declared"] {
+  color: var(--color-text-tertiary);
+  font-weight: var(--font-weight-regular);
+}
 .modality-arrow { flex: 0 0 auto; color: var(--color-text-tertiary); font: var(--font-size-xs) var(--mono); }
 .modality-marks-empty { color: var(--color-text-tertiary); font-size: var(--font-size-xs); }

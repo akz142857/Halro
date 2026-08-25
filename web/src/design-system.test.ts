@@ -328,9 +328,27 @@ describe("component styling reaches the markup", () => {
 
   // A class name in the markup with no rule anywhere renders at whatever the
   // cascade happens to give it, which is how an introductory sentence ended up
-  // outweighing the dialog heading above it. jsdom cannot see that, so this is
-  // a ratchet like the spacing one: the count may fall, never rise.
-  const unstyledClassBaseline = 12;
+  // outweighing the dialog heading above it.
+  //
+  // This used to be a count ("may fall, never rise"), which a rename can walk
+  // straight through: drop four names and add one and the total falls while a
+  // live element is left unstyled. The ledger below is the debt that exists
+  // today; a name may leave it, and a name that wants to join it has to be
+  // added deliberately.
+  const KNOWN_UNSTYLED_CLASSES = [
+    "account-footer",
+    "anomaly-panel",
+    "appearance-preview-",
+    "attribution-panel",
+    "auth-challenge-form",
+    "chart-panel",
+    "developer-page",
+    "enrollment-form",
+    "provider-expand",
+    "providers-page",
+    "setup-page",
+    "technical",
+  ];
 
   it("does not add class names the stylesheets never style", () => {
     const cssFiles = ["./styles.css", "./design-system/index.css", "./design-system/components.css", "./design-system/resource-list.css", "./design-system/resource-card.css", "./design-system/tokens.css"];
@@ -367,7 +385,77 @@ describe("component styling reaches the markup", () => {
     visit(dirname(fileURLToPath(new URL(stylesPath, import.meta.url))));
 
     const unstyled = Array.from(used).filter((name) => !defined.has(name)).sort();
-    expect(unstyled.length, `unstyled classes: ${unstyled.join(", ")}`).toBeLessThanOrEqual(unstyledClassBaseline);
+    expect(unstyled).toEqual(KNOWN_UNSTYLED_CLASSES.filter((name) => unstyled.includes(name)));
+  });
+
+  // `.resource-fact` centres its content, which is right for a cell on a row and
+  // wrong for a cell in a stack: one neighbour wrapping to two lines makes the
+  // grid row taller and every shorter fact in it gets centred, so a line of
+  // labels stops being a line. jsdom has no layout, so the declaration is the
+  // thing to hold.
+  it("starts every drawer fact at the top of its row", () => {
+    const rule = read("./styles.css").match(/^\.detail-fact \{([^}]*)\}/m)?.[1];
+    expect(rule, ".detail-fact base rule not found").toBeDefined();
+    expect(rule).toMatch(/align-content:\s*start/);
+  });
+
+  // Renaming the drawer's content wrapper left this rule pointing at the old
+  // name, and the whole panel lost its inset: headings and facts ran into the
+  // left edge while the header above them kept its own padding. Nothing else
+  // catches it — the wrapper still had a rule (its grid), just not this one,
+  // and jsdom has no layout to measure.
+  it("insets the drawer body the way the drawer header is inset", () => {
+    const styles = read("./styles.css");
+    const bodies = [...styles.matchAll(/\.modal\.drawer > \.([a-z-]+) \{([^}]*)\}/g)];
+    const inset = bodies.find(([, , body]) => /padding:/.test(body));
+    expect(inset, ".modal.drawer > .<wrapper> rule with a padding not found").toBeDefined();
+    const wrapper = inset![1];
+    const markup = read("./pages/DeploymentsPage.tsx");
+    expect(markup, `.modal.drawer > .${wrapper} styles a wrapper the drawer no longer renders`)
+      .toContain(`className="${wrapper}"`);
+  });
+
+  // The deployment cards shipped with an action bar held on a single line
+  // (flex-wrap: nowrap) whose min-content width was larger than the card track.
+  // The card was a grid then, so its single column grew to the bar and took the
+  // head, the target and the fact strip with it, out past the card's own border
+  // and under the tile beside it. Two declarations keep that from happening
+  // again — every child is capped at the card's width, and nothing inside a card
+  // refuses to wrap.
+  it("caps a resource card's children at the card's own width", () => {
+    const css = read("./design-system/resource-card.css");
+    expect(css, "the rule capping card children was removed").toMatch(/^\.resource-card > \* \{[^}]*min-width:\s*0/m);
+    const rule = css.match(/^\.resource-card \{([^}]*)\}/m)?.[1];
+    expect(rule, ".resource-card base rule not found").toBeDefined();
+    expect(rule).toMatch(/min-width:\s*0/);
+  });
+
+  // A row of tiles ends on one line only if every tile in it is the height of
+  // the tallest, and the action bars line up only if the card can be taller than
+  // its content and still pin them to the bottom.
+  it("gives every card in a row the same height and its actions the bottom edge", () => {
+    const css = read("./design-system/resource-card.css");
+    const grid = css.match(/^\.resource-card-grid \{([^}]*)\}/m)?.[1];
+    expect(grid, ".resource-card-grid base rule not found").toBeDefined();
+    expect(grid).not.toMatch(/align-items:\s*(start|flex-start|baseline)/);
+    const actions = css.match(/^\.resource-card-actions \{([^}]*)\}/m)?.[1];
+    expect(actions, ".resource-card-actions base rule not found").toBeDefined();
+    expect(actions).toMatch(/margin-top:\s*auto/);
+  });
+
+  it("lets every card action bar wrap inside its card", () => {
+    const styles = read("./styles.css");
+    let checked = 0;
+    for (const rule of styles.matchAll(/([^{}]+)\{([^}]*)\}/g)) {
+      const [, selector, body] = rule;
+      if (!/deployment-compact-actions/.test(selector)) continue;
+      checked++;
+      expect(body, `${selector.trim()} stops the card action bar wrapping`).not.toMatch(/flex-wrap:\s*nowrap/);
+      // Scrolling the bar sideways hides controls behind a gesture no pointer
+      // announces; inside a card there is room to wrap instead.
+      expect(body, `${selector.trim()} scrolls the card action bar sideways`).not.toMatch(/overflow(-x)?:\s*auto/);
+    }
+    expect(checked, "no .deployment-compact-actions rules were found to check").toBeGreaterThan(0);
   });
 
   // A length flex-basis binds to the parent's main axis, so one declaration is a

@@ -713,9 +713,19 @@ export interface Deployment {
 	pricing_quarantined?: boolean;
 	pricing_quarantine_reason?: string;
   capability_review: CapabilityReview;
+  /** What the active probe last said. `not_probed` is its own state: a
+   * deployment stays eligible for routing until a probe has actually failed. */
+  probe?: DeploymentProbe;
   /** Capabilities the operator switched off, kept apart from the ones nothing
    * ever established. */
   operator_disabled?: string[];
+}
+
+export interface DeploymentProbe {
+  state: "healthy" | "unhealthy" | "not_probed";
+  observed_at?: string;
+  /** Classified only — never the upstream's sentence about the request. */
+  error_class?: string;
 }
 
 export type DeploymentTargetKind =

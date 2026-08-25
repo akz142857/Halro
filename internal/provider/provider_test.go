@@ -254,12 +254,12 @@ func TestRegistryExcludesActivelyUnhealthyDeploymentAndRecovers(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	registry.SetDeploymentHealthy("dep_primary", false)
+	registry.SetDeploymentProbe("dep_primary", DeploymentProbe{Healthy: false})
 	candidates := registry.ResolveCandidates("chat")
 	if len(candidates) != 1 || candidates[0].DeploymentID != "dep_fallback" {
 		t.Fatalf("unhealthy deployment was not excluded: %#v", candidates)
 	}
-	registry.SetDeploymentHealthy("dep_primary", true)
+	registry.SetDeploymentProbe("dep_primary", DeploymentProbe{Healthy: true})
 	if candidates = registry.ResolveCandidates("chat"); len(candidates) != 2 || candidates[0].DeploymentID != "dep_primary" {
 		t.Fatalf("healthy deployment did not recover: %#v", candidates)
 	}

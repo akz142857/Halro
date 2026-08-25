@@ -60,6 +60,24 @@ describe("admin accessibility baseline", () => {
     expect(close).toHaveBeenCalledOnce();
   });
 
+  // A panel that has scrolled to its end hands the leftover wheel distance to the
+  // document, so reading to the bottom of a details drawer used to scroll the page
+  // behind it out from under the operator. The document is held still for as long
+  // as any dialog is open — the count matters, because a price form closing over
+  // an open drawer must not hand scrolling back while the drawer is still there.
+  it("holds the page still while dialogs are open and gives it back when the last one closes", () => {
+    const outer = render(<Modal title="部署详情" drawer onClose={vi.fn()}><p>细节</p></Modal>);
+    expect(document.documentElement.style.overflowY).toBe("hidden");
+    expect(document.querySelector(".modal.drawer")).toBeInTheDocument();
+
+    const inner = render(<Modal title="设置价格" onClose={vi.fn()}><button>保存</button></Modal>);
+    inner.unmount();
+    expect(document.documentElement.style.overflowY).toBe("hidden");
+
+    outer.unmount();
+    expect(document.documentElement.style.overflowY).toBe("");
+  });
+
   it("closes a modal with nothing filled in without asking", () => {
     const close = vi.fn();
     render(<Modal title="创建 Deployment" onClose={close}><button>保存</button></Modal>);

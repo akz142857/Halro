@@ -708,25 +708,35 @@ func (r *Runtime) logProbeResultWriteFailure(kind, id string, err error) {
 
 // logProbeFailure records a connection test the operator ran and the upstream
 // refused. Without it the only trace of a failed test is an audit action name,
-// which says a test failed and never why.
-//
-// What it does not write is the upstream's own sentence. That text is a provider
-// response body, which this repo does not persist anywhere outside its one-time
-// response — the operator who ran the test still reads it in the reply, where it
-// lives for one request rather than on disk. A pattern denylist is not a basis
-// for writing an upstream body to a log file: it knows the credential formats it
-// was told about, and the one thing an upstream is most likely to echo is the
-// key it just refused. A refusal Halro produced itself carries no provider body
-// and is the case the sentence was added for, so that one is still logged.
+// which says a test failed and never why. What may be said about the failure
+// itself is probeFailureAttributes' decision, not this function's.
 func (r *Runtime) logProbeFailure(kind, id, bindingID string, failure probeFailure, latencyMS int64) {
-	attributes := []any{
-		kind + "_id", id,
-		"error_class", string(failure.Class),
-		"latency_ms", latencyMS,
-	}
+	attributes := []any{kind + "_id", id, "latency_ms", latencyMS}
 	if bindingID != "" {
 		attributes = append(attributes, "binding_id", bindingID)
 	}
+	r.logger.Warn(kind+" connection test failed", append(attributes, probeFailureAttributes(failure)...)...)
+}
+
+// probeFailureAttributes is everything about a failed probe that may be written
+// to the process log, and it is deliberately the only place that decides so —
+// every probe, manual or periodic, logs through here.
+//
+// What it leaves out is the upstream's own sentence. That text is a provider
+// response body, which this repo does not persist anywhere outside its one-time
+// response — the operator who ran a test still reads it in the reply, and the
+// console reads it redacted through probeFailure.Reason, both of which live for
+// one request rather than on disk. A pattern denylist is not a basis for writing
+// an upstream body to a log file: it knows the credential formats it was told
+// about, and the one thing an upstream is most likely to echo is the key it just
+// refused.
+//
+// Reason is admitted only when no response came back at all. With no status
+// there was no upstream body to quote, so the sentence is one Halro wrote — a
+// dial failure, a refusal to probe — and withholding it would leave the line
+// with nothing but a class.
+func probeFailureAttributes(failure probeFailure) []any {
+	attributes := []any{"error_class", string(failure.Class)}
 	if failure.Status > 0 {
 		attributes = append(attributes, "provider_status", failure.Status)
 	}
@@ -739,7 +749,7 @@ func (r *Runtime) logProbeFailure(kind, id, bindingID string, failure probeFailu
 	if failure.Reason != "" && failure.Status == 0 {
 		attributes = append(attributes, "reason", failure.Reason)
 	}
-	r.logger.Warn(kind+" connection test failed", attributes...)
+	return attributes
 }
 
 func providerProbeModel(instance domain.ProviderInstance, providerID, bindingID string, deployments []domain.Deployment, routes []domain.Route) string {

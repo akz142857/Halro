@@ -10,6 +10,16 @@ export function compactNumber(value: number) {
     .format(value || 0);
 }
 
+/**
+ * A count read as an exact figure rather than at a glance: grouped, never
+ * abbreviated. The cards abbreviate token limits because a tile has a width;
+ * the details drawer is where the operator goes to read the actual number, and
+ * `1050000` unseparated is the one form that is harder to read than either.
+ */
+export function exactNumber(value: number) {
+  return new Intl.NumberFormat(locale()).format(value || 0);
+}
+
 export function money(micros: number) {
   return new Intl.NumberFormat(locale(), {
     style: "currency",

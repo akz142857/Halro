@@ -329,7 +329,7 @@ type Registry struct {
 	// Provider ID as their binding identity.
 	adapters         map[string]Adapter
 	providerBindings map[string][]string
-	health           map[string]bool
+	health           map[string]DeploymentProbe
 	// Why a provider or binding has no adapter here, keyed by binding identity
 	// and by Provider ID for a provider-wide exclusion. It lives beside the
 	// adapters rather than next to the load report so it swaps with them: a
@@ -343,7 +343,7 @@ func NewRegistry() *Registry {
 		targets: make(map[string][]Target), next: make(map[string]*atomic.Uint64),
 		adapters:         make(map[string]Adapter),
 		providerBindings: make(map[string][]string),
-		health:           make(map[string]bool),
+		health:           make(map[string]DeploymentProbe),
 		unavailable:      make(map[string]string),
 	}
 }
@@ -542,8 +542,8 @@ func (r *Registry) ResolveCandidatesForEvidence(publicModel string, operation Op
 func (r *Registry) resolveCandidatesLocked(publicModel string, operation Operation, minimum domain.CapabilityEvidence) []Target {
 	targets := cloneTargets(r.targets[publicModel])
 	targets = slices.DeleteFunc(targets, func(target Target) bool {
-		healthy, probed := r.health[target.DeploymentID]
-		return target.DeploymentID != "" && probed && !healthy
+		probe, probed := r.health[target.DeploymentID]
+		return target.DeploymentID != "" && probed && !probe.Healthy
 	})
 	return filterByOperation(targets, operation, minimum)
 }
@@ -650,23 +650,38 @@ func cloneTargets(targets []Target) []Target {
 	return result
 }
 
-// SetDeploymentHealthy updates active-probe health. Unknown deployments remain
+// DeploymentProbe is the last active probe result for one deployment.
+//
+// It carries why as well as whether, because the verdict alone leaves an
+// operator with a deployment that is enabled, tested and priced and still takes
+// no traffic. The reason is the classified error only: a probe failure's
+// sentence is the upstream's prose about the request, and it stays inside the
+// error rather than being copied into state the console and the logs read.
+type DeploymentProbe struct {
+	Healthy    bool
+	ObservedAt time.Time
+	// Empty when healthy. The classified form the console already has wording
+	// for, so a probe failure and a manual test failure read the same way.
+	ErrorClass string
+}
+
+// SetDeploymentProbe records an active-probe result. Unknown deployments remain
 // eligible so startup and transient probe scheduling cannot black-hole traffic.
-func (r *Registry) SetDeploymentHealthy(deploymentID string, healthy bool) {
+func (r *Registry) SetDeploymentProbe(deploymentID string, probe DeploymentProbe) {
 	if deploymentID == "" {
 		return
 	}
 	r.mu.Lock()
-	r.health[deploymentID] = healthy
+	r.health[deploymentID] = probe
 	r.mu.Unlock()
 }
 
-func (r *Registry) DeploymentHealth() map[string]bool {
+func (r *Registry) DeploymentProbes() map[string]DeploymentProbe {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	result := make(map[string]bool, len(r.health))
-	for deploymentID, healthy := range r.health {
-		result[deploymentID] = healthy
+	result := make(map[string]DeploymentProbe, len(r.health))
+	for deploymentID, probe := range r.health {
+		result[deploymentID] = probe
 	}
 	return result
 }
@@ -809,7 +824,7 @@ func (r *Registry) Replace(next *Registry) []Adapter {
 	next.next = make(map[string]*atomic.Uint64)
 	next.adapters = make(map[string]Adapter)
 	next.providerBindings = make(map[string][]string)
-	next.health = make(map[string]bool)
+	next.health = make(map[string]DeploymentProbe)
 	next.unavailable = make(map[string]string)
 	next.mu.Unlock()
 
@@ -823,9 +838,9 @@ func (r *Registry) Replace(next *Registry) []Adapter {
 	r.providerBindings = replacementProviderBindings
 	r.health = replacementHealth
 	r.unavailable = replacementUnavailable
-	for deploymentID, healthy := range oldHealth {
+	for deploymentID, probe := range oldHealth {
 		if _, exists := r.health[deploymentID]; !exists {
-			r.health[deploymentID] = healthy
+			r.health[deploymentID] = probe
 		}
 	}
 	r.mu.Unlock()
@@ -875,7 +890,7 @@ func (r *Registry) Close() {
 	r.next = make(map[string]*atomic.Uint64)
 	r.adapters = make(map[string]Adapter)
 	r.providerBindings = make(map[string][]string)
-	r.health = make(map[string]bool)
+	r.health = make(map[string]DeploymentProbe)
 	for adapter := range adapters {
 		adapter.Close()
 	}

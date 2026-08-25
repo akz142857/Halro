@@ -16,7 +16,7 @@ import (
 func TestChatReportsUnhealthyUpstreamAsUnavailableNotUnsupported(t *testing.T) {
 	f := newFixture(t, 1_000)
 	defer f.close()
-	f.registry.SetDeploymentHealthy("dep_target_1", false)
+	f.registry.SetDeploymentProbe("dep_target_1", provider.DeploymentProbe{Healthy: false})
 
 	_, err := f.service.Chat(context.Background(), f.plaintext, chatRequest())
 	var gatewayErr *Error
@@ -34,7 +34,7 @@ func TestChatReportsUnhealthyUpstreamAsUnavailableNotUnsupported(t *testing.T) {
 	}
 
 	// Recovery is symmetric: a healthy probe restores ordinary resolution.
-	f.registry.SetDeploymentHealthy("dep_target_1", true)
+	f.registry.SetDeploymentProbe("dep_target_1", provider.DeploymentProbe{Healthy: true})
 	if _, err := f.service.Chat(context.Background(), f.plaintext, chatRequest()); err != nil {
 		t.Fatalf("healthy target refused: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestSupportsOperationIgnoresProbeHealth(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	registry.SetDeploymentHealthy("dep_h", false)
+	registry.SetDeploymentProbe("dep_h", provider.DeploymentProbe{Healthy: false})
 	if candidates := registry.ResolveCandidatesFor("alias", provider.OperationChat); len(candidates) != 0 {
 		t.Fatalf("unhealthy target still resolved: %#v", candidates)
 	}

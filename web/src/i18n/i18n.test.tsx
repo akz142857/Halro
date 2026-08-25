@@ -226,7 +226,6 @@ const KNOWN_UNREFERENCED = [
     "deployments.hideCapabilityEditor",
     "deployments.importProposal",
     "deployments.importedProposalWarning",
-    "deployments.lastTest",
     "deployments.manualTarget",
     "deployments.modelStatus.conflicting",
     "deployments.modelStatus.known",

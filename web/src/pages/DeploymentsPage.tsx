@@ -17,12 +17,13 @@ import {
   useTestFailureReason,
   type ReauthValues,
 } from "../components";
-import { money, useInstantFormatter } from "../format";
+import { exactNumber, money, useInstantFormatter } from "../format";
 import { isoToZonedInput, useAccountingTimeZone, zonedInputToISO } from "../timezone";
 import type { CapabilityPreflight, CapabilityReview, Deployment, DeploymentPriceVersion, DeploymentTargetKind, DeploymentVariant, ModelCapabilityDetection, PriceSchedule, Provider, ProviderBinding, ProviderCapabilities, ProviderProfilesCatalog, ResolvedInvocationTarget } from "../types";
 import { interfaceCeiling, profileRequestConstraints, updateCapabilitySelection, useProviderProfiles } from "../hooks/useProviderProfiles";
 import { ModalityMarks } from "../ModalityMarks";
 import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { useNotify } from "../notifications";
 import { useIsReadOnly } from "../session";
 import { Link } from "../navigation";
@@ -130,7 +131,7 @@ export function DeploymentsPage() {
 
 // Token counts on a card are read at a glance, so they are abbreviated the way
 // every model catalogue abbreviates them. The exact figure stays available in
-// the expanded facts, which is where an operator goes to check one.
+// the details drawer, which is where an operator goes to check one.
 function tokenCount(tokens: number) {
   if (tokens >= 1_000_000) return `${Math.round(tokens / 100_000) / 10}M`;
   if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}K`;
@@ -155,15 +156,15 @@ function DeploymentRow({
   const { t } = useTranslation();
   const dateTime = useInstantFormatter();
   const readOnly = useIsReadOnly();
-  const [expanded, setExpanded] = useState(false);
+  const [details, setDetails] = useState(false);
   const [pricing, setPricing] = useState(false);
 	const [confirmingRestore, setConfirmingRestore] = useState(false);
   const queryClient = useQueryClient();
-  // The collapsed price column is worth having, but a fifty-row page must not
-  // turn into fifty simultaneous price reads — each one runs a lifecycle
-  // derivation server-side. Rows load in bounded batches instead, and an
-  // expanded row jumps its queue because the operator is looking at it.
-  const priceSlotReady = useDeferredSlot(expanded ? 0 : priceFetchDelay(listIndex));
+  // The card's price fact is worth having, but a fifty-card page must not turn
+  // into fifty simultaneous price reads — each one runs a lifecycle derivation
+  // server-side. Cards load in bounded batches instead, and the card whose
+  // details are open jumps the queue because the operator is looking at it.
+  const priceSlotReady = useDeferredSlot(details ? 0 : priceFetchDelay(listIndex));
   // Cached with staleTime Infinity and shared across every card, so asking per
   // card costs one fetch for the page rather than one per deployment.
   const profiles = useProviderProfiles();
@@ -247,45 +248,77 @@ function DeploymentRow({
           ? "stale"
           : "idle";
   const testFailureReason = useTestFailureReason(test.error, testFailed ? deployment.last_test_error_class : undefined);
-  const evidence = evidenceSummary(deployment.capability_evidence).map((value) => t(`deployments.evidenceValues.${value}`));
+  const probe = deployment.probe;
+  const probeReason = useTestFailureReason(undefined, probe?.state === "unhealthy" ? probe.error_class : undefined);
   const review = deployment.capability_review;
   const routeBlocked = activeRouteCount > 0;
+  const testVerdict = testState === "success" && deployment.last_test_latency_millis !== undefined
+    ? t("testControl.success", { latency: deployment.last_test_latency_millis })
+    : testState === "success" ? t("testControl.successPlain") : t(`testControl.${testState}`);
+  // The price cell is on the card to say a price is missing. While the read is
+  // still in flight nothing is missing yet, and rendering the cell then would
+  // put a row on every card for as long as the batch takes and remove it again.
+  const priceNeedsAttention = !prices.isPending && !activePrice;
+  // Newest first, and cancelled versions stay out: they never took effect and
+  // never will, so they are not part of what this deployment charged.
+  const evidenceOf = (capability: string) => deployment.capability_evidence[capability] ?? "unrecorded";
+  const evidenceKinds = new Set(capabilities.map(evidenceOf));
+  const uniformEvidence = evidenceKinds.size === 1 ? [...evidenceKinds][0] : undefined;
+  const priceTimeline = priceItems
+    .filter((price) => price.status !== "cancelled")
+    .slice()
+    .sort((first, second) => second.effective_from.localeCompare(first.effective_from));
   return (
-    <article id={`deployment-${deployment.id}`} className={`resource-card deployment-card ${expanded ? "expanded" : ""}`}>
+    <article id={`deployment-${deployment.id}`} className="resource-card deployment-card">
       <div className="resource-card-head">
         <div className="resource-identity">
           {/* The dot is aria-hidden, so the state also has to exist as words.
               It used to rely on the state column beside it; a card that kept
               only the dot would have made enabled/disabled a colour. */}
           <span><StatusDot ok={deployment.enabled} /><strong>{deployment.name}</strong></span>
-          <small>{providerName}</small>
+          {/* Provider and upstream model are one identity, not two lines: which
+              connection, and which model on it. A bare mono string also
+              announces as an identifier with no context, so the label the row
+              used to print beside it becomes its accessible name. */}
+          <small>
+            {providerName}
+            {" · "}
+            <code aria-label={`${t("deployments.upstreamTarget")}: ${deployment.provider_model}`} title={deployment.provider_model}>{deployment.provider_model}</code>
+          </small>
         </div>
+        {/* One trailing accessory. The warnings used to stack under it as a
+            second right-aligned column, which put two unrelated kinds of thing
+            in the same corner and made every card read as a two-column table. */}
         <div className="resource-row-state">
           <span className={`resource-state ${deployment.enabled ? "enabled" : ""}`}>{deployment.enabled ? t("common.enabled") : t("common.disabled")}</span>
-          {/* A drifted deployment is not routing whatever the enabled flag says,
-              so the state that decides that has to be on the card. It outranks
-              the modality marks: those describe what it could do, this decides
-              whether it does anything at all. */}
-          {review && review.state !== "current" && (
-            <small className="capability-review-state" data-state={review.state}>
-              {review.state === "drifted" ? t("deployments.capabilitiesUnsupported") : t("deployments.capabilitiesToReview")}
-            </small>
-          )}
-          {/* A drifted deployment is not routing whatever the enabled flag says,
-              so the state that decides that has to be on the card. It outranks
-              the modality marks: those describe what it could do, this decides
-              whether it does anything at all. */}
         </div>
       </div>
       <div className="resource-card-body">
-        {/* A bare mono string on a card announces as an identifier with no
-            context. The label the row used to print beside it becomes the
-            accessible name instead of disappearing with the column. */}
-        <code aria-label={`${t("deployments.upstreamTarget")}: ${deployment.provider_model}`} title={deployment.provider_model}>{deployment.provider_model}</code>
-        <span className="resource-card-spec">{[
-          deployment.capabilities.max_context_tokens ? t("deployments.contextSummary", { tokens: tokenCount(deployment.capabilities.max_context_tokens) }) : "",
-          deployment.capabilities.max_output_tokens ? t("deployments.maxOutputSummary", { tokens: tokenCount(deployment.capabilities.max_output_tokens) }) : "",
-        ].filter(Boolean).join(t("common.listSeparator")) || t("deployments.upstreamApplies")}</span>
+        {/* Both of these decide whether the deployment routes at all, whatever
+            the enabled flag says — drift is dropped from the router's
+            candidates, and so is a deployment the probe has failed. They lead
+            the body because they outrank everything under them. */}
+        {(review && review.state !== "current") || probe?.state === "unhealthy" ? (
+          <div className="deployment-card-alerts">
+            {review && review.state !== "current" && (
+              <small className="capability-review-state" data-state={review.state}>
+                {review.state === "drifted" ? t("deployments.capabilitiesUnsupported") : t("deployments.capabilitiesToReview")}
+              </small>
+            )}
+            {probe?.state === "unhealthy" && (
+              <small className="capability-review-state" data-state="drifted">{t("deployments.probeUnhealthyShort")}</small>
+            )}
+          </div>
+        ) : null}
+        {/* Only when the deployment declares limits. "以上游为准" is the absence
+            of a fact written out as one; the drawer is where an operator goes
+            to confirm that nothing was declared. */}
+        {(deployment.capabilities.max_context_tokens || deployment.capabilities.max_output_tokens) ? (
+          <span className="resource-card-spec">{[
+            deployment.capabilities.max_context_tokens ? t("deployments.contextSummary", { tokens: tokenCount(deployment.capabilities.max_context_tokens) }) : "",
+            deployment.capabilities.max_output_tokens ? t("deployments.maxOutputSummary", { tokens: tokenCount(deployment.capabilities.max_output_tokens) }) : "",
+          ].filter(Boolean).join(t("common.listSeparator"))}</span>
+        ) : null}
         {/* What goes in and what comes out. The mapping is the server's; this
             only draws it. Protocol capabilities have no modality to draw, so
             the count beside the marks is what keeps them from reading as
@@ -295,19 +328,17 @@ function DeploymentRow({
           <small>{t("deployments.capabilityCount", { count: capabilities.length })}</small>
         </span>
       </div>
-      <div className="resource-card-facts">
-        <div className="resource-fact deployment-fact-price">
+      {/* Facts appear when they are not the uneventful answer. "已设置 · 不限 ·
+          无启用路由" is two lines of a card saying nothing needs doing, and it
+          was on every card. What §13.2 required of them still holds, because
+          each one is required exactly when it is not the quiet case: the price
+          is the precondition for enabling and matters when it is missing, and
+          the route count is the disabled reason for Disable and Delete and
+          exists only above zero. */}
+      {(priceNeedsAttention || deployment.max_concurrency > 0 || activeRouteCount > 0) && <div className="resource-card-facts">
+        {priceNeedsAttention && <div className="resource-fact deployment-fact-price">
           <small>{t("deployments.priceSetting")}</small>
-          {prices.isPending ? (
-            <span className="deployment-price-value">{t("common.loading")}</span>
-          ) : activePrice ? (
-            <button
-              className="deployment-price-link configured"
-              type="button"
-              aria-label={t("deployments.viewDeploymentPrice", { name: deployment.name })}
-              onClick={() => setExpanded(true)}
-            >{t("deployments.priceConfigured")}</button>
-          ) : prices.isError ? (
+          {prices.isError ? (
             // Without a way back this cell was a dead end: it neither told an
             // assistive reader that something failed nor offered the one action
             // that can fix it.
@@ -325,21 +356,16 @@ function DeploymentRow({
               onClick={() => setPricing(true)}
             >{t("deployments.priceNotConfigured")}</button>
           )}
-        </div>
-        <div className="resource-fact deployment-fact-concurrency">
+        </div>}
+        {deployment.max_concurrency > 0 && <div className="resource-fact">
           <small>{t("deployments.concurrency")}</small>
-          <strong>{deployment.max_concurrency || t("deployments.unlimited")}</strong>
-        </div>
-        {/* Kept on the card because it is the disabled reason for both Disable
-            and Delete below. Behind the expander it would have left two dead
-            controls whose explanation was one click away. */}
-        <div className="resource-fact deployment-fact-routes">
+          <strong>{deployment.max_concurrency}</strong>
+        </div>}
+        {activeRouteCount > 0 && <div className="resource-fact">
           <small>{t("deployments.routeDependency")}</small>
-          {activeRouteCount
-            ? <Link className="resource-link" href="/admin/routes">{t("deployments.activeRoutesCompact", { count: activeRouteCount })} →</Link>
-            : <strong>{t("deployments.noActiveRoutes")}</strong>}
-        </div>
-      </div>
+          <Link className="resource-link" href="/admin/routes">{t("deployments.activeRoutesCompact", { count: activeRouteCount })} →</Link>
+        </div>}
+      </div>}
       <div className="resource-card-actions row-actions deployment-compact-actions">
         {/* Test, enable and create-replacement are writes. ConfirmButton
             gates itself; these three did not, so a read-only session was
@@ -347,21 +373,20 @@ function DeploymentRow({
             disabled control to say why, so each carries the reason. */}
         <InlineTestControl state={testState} latency={deployment.last_test_latency_millis} onTest={() => test.mutate()} disabled={readOnly} title={readOnly ? t("navigation.readOnlyAction") : undefined} />
         <button className="button ghost" disabled={readOnly} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={onEdit}>{t("common.edit")}</button>
-        <button className="button ghost deployment-expand" aria-expanded={expanded} aria-controls={`deployment-details-${deployment.id}`} onClick={() => setExpanded((value) => !value)}>
-          <span>{expanded ? t("deployments.collapseDetails") : t("deployments.expandDetails")}</span>
-          {/* Reserves the width of the other label so toggling never resizes the card. */}
-          <span aria-hidden="true">{expanded ? t("deployments.expandDetails") : t("deployments.collapseDetails")}</span>
-        </button>
-        {/* The sizer keeps enable and disable cards equally wide so the grid does not jump. */}
-        <span className="deployment-state-toggle">
+        {/* A dialog, not a disclosure: the label never changes and the card
+            never resizes, so aria-expanded would describe a state the card no
+            longer has. */}
+        <button className="button ghost" aria-haspopup="dialog" onClick={() => setDetails(true)}>{t("deployments.expandDetails")}</button>
+        {/* One visible action apiece and everything else in the menu. Enable and
+            disable moved in: they are deliberate, infrequent, and each carries a
+            precondition it has to explain, which a menu row has room for and a
+            button in a row of four does not. */}
+        <OverflowMenu label={t("deployments.moreActions")}>
           {deployment.enabled ? (
             <ConfirmButton className="button ghost" label={t("common.disable")} title={t("deployments.disableTitle")} confirmLabel={t("deployments.disableConfirm", { name: deployment.name })} disabled={state.isPending || routeBlocked} disabledReason={routeBlocked ? t("deployments.routeBlocked") : undefined} onConfirm={() => state.mutateAsync()} />
           ) : (
             <button className="button ghost" title={readOnly ? t("navigation.readOnlyAction") : !testIsCurrent ? t("deployments.testRequired") : undefined} disabled={readOnly || state.isPending || !testIsCurrent} onClick={() => state.mutate()}>{t("common.enable")}</button>
           )}
-          <span className="button ghost deployment-state-sizer" aria-hidden="true">{deployment.enabled ? t("common.enable") : t("common.disable")}</span>
-        </span>
-        <OverflowMenu label={t("deployments.moreActions")}>
           <button className="button ghost" disabled={readOnly} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={onReplace}>{t("deployments.createReplacement")}</button>
           <ConfirmButton label={t("common.delete")} confirmLabel={t("deployments.deleteConfirm", { name: deployment.name })} requireStepUp onConfirm={(reauth) => remove.mutateAsync(reauth)} disabled={remove.isPending || routeBlocked} disabledReason={routeBlocked ? t("deployments.routeBlocked") : undefined} />
         </OverflowMenu>
@@ -371,76 +396,159 @@ function DeploymentRow({
       {testState === "failure" && testFailureReason && (
         <p className="row-test-failure" role="status">{testFailureReason}</p>
       )}
-      {expanded && <div id={`deployment-details-${deployment.id}`} className="deployment-details">
-        <dl className="deployment-facts">
-          <DeploymentFact label={t("deployments.priceStatus")} value={activePrice ? activePrice.billing_mode === "free" ? t("deployments.freePrice") : t("deployments.versionedPrice") : prices.isPending ? t("common.loading") : t("deployments.unknownPrice")} meta={activePrice ? `v${activePrice.version} · ${dateTime(activePrice.effective_from)}` : t("deployments.priceRequired")} unset={!activePrice} />
-          {(deployment.capabilities.chat || deployment.capabilities.embeddings) && <DeploymentFact label={t("deployments.inputPrice")} value={activePrice ? money(activePrice.input_micros_per_million) : t("deployments.notConfigured")} meta={t("deployments.perMillionTokens")} unset={!activePrice} />}
-          {/* Shown even when it equals the input rate: that is itself the fact
-              worth reading, since it means cached prompt tokens are not priced
-              separately on this deployment. */}
-          {(deployment.capabilities.chat || deployment.capabilities.embeddings) && <DeploymentFact label={t("deployments.cachedInputPrice")} value={activePrice ? money(activePrice.cached_input_micros_per_million) : t("deployments.notConfigured")} meta={t("deployments.perMillionTokens")} unset={!activePrice} />}
-          {(deployment.capabilities.chat || deployment.capabilities.embeddings) && <DeploymentFact label={t("deployments.outputPrice")} value={activePrice ? money(activePrice.output_micros_per_million) : t("deployments.notConfigured")} meta={t("deployments.perMillionTokens")} unset={!activePrice} />}
-          {activePrice && <DeploymentFact label={t("deployments.fixedPrice")} value={money(activePrice.fixed_request_micros_usd)} meta={t("deployments.perRequest")} />}
-          {/* With a schedule the three rates above are only what applies
-              outside the windows, so leaving them to stand alone would read as
-              the whole price. */}
-          {activePrice?.schedule && <DeploymentFact
-            label={t("deployments.priceSchedule")}
-            value={t("deployments.scheduleWindowCount", { count: activePrice.schedule.windows.length })}
-            meta={`${activePrice.schedule.timezone} · ${activePrice.schedule.windows.map((window) => `${minuteToClock(window.start_minute)}–${minuteToClock(window.end_minute)}`).join(" ")}`}
-          />}
-          <DeploymentFact label={t("deployments.concurrency")} value={deployment.max_concurrency || t("deployments.unlimited")} meta={t("deployments.deploymentScope")} />
-          {deployment.region && <DeploymentFact label={t("deployments.region")} value={deployment.region} meta={t("deployments.deploymentScope")} />}
-          <DeploymentFact label={t("deployments.context")} value={deployment.capabilities.max_context_tokens || t("deployments.upstreamApplies")} meta={deployment.capabilities.max_context_tokens ? t("deployments.tokens") : t("deployments.undeclared")} />
-          <DeploymentFact label={t("deployments.maxOutput")} value={deployment.capabilities.max_output_tokens || t("deployments.upstreamApplies")} meta={deployment.capabilities.max_output_tokens ? t("deployments.tokens") : t("deployments.undeclared")} />
-        </dl>
-        <CapabilityReviewNotice review={review} />
-        {/* Every write in this panel is gated the way the compact row's price
-            action already is; §7.3 also requires the disabled control to say
-            why, so each one carries the reason. */}
-        {deployment.pricing_quarantined && <div className="notice warning deployment-pricing-warning"><strong>{t("deployments.pricingQuarantined")}</strong><span>{deployment.pricing_quarantine_reason}</span><button className="button ghost" disabled={readOnly} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={() => setConfirmingRestore(true)}>{t("deployments.confirmRestoredPricing")}</button></div>}
-        {prices.isError && <ErrorState
-          className="deployment-card-error"
-          error={prices.error}
-          action={<button className="button secondary" type="button" disabled={prices.isFetching} onClick={() => prices.refetch()}>{t("common.retry")}</button>}
-        />}
-        <div className="deployment-pricing-grid single">
-          <section className="deployment-pricing-panel">
-            <header>
-              <div>
-                <strong>{t("deployments.priceTimeline")}</strong>
-                <small>{activePrice
-                  ? t("deployments.priceSourceSummary", { type: activePrice.source.type, assurance: activePrice.source.assurance, reference: activePrice.source.reference || "—" })
-                  : prices.isError ? t("deployments.priceUnavailable") : prices.isPending ? t("common.loading") : t("deployments.noPriceVersions")}</small>
-              </div>
-              <button className="button secondary deployment-pricing-action" disabled={readOnly} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={() => setPricing(true)}>{activePrice ? t("deployments.adjustPrice") : t("deployments.setPrice")}</button>
-            </header>
-            {!!scheduledPrices.length && <div className="deployment-pricing-list">
-              {scheduledPrices.map((price) => <div key={price.id}>
-                <span><code>v{price.version}</code><small>{dateTime(price.effective_from)} · {price.billing_mode}{price.schedule ? ` · ${t("deployments.scheduleWindowCount", { count: price.schedule.windows.length })}` : ""}</small></span>
-                <button className="button ghost" disabled={readOnly || cancelPrice.isPending} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={() => cancelPrice.mutate(price)}>{t("common.cancel")}</button>
-              </div>)}
+      {details && <Modal drawer title={t("deployments.detailsTitle", { name: deployment.name })} onClose={() => setDetails(false)}>
+        <div className="detail-drawer">
+          <section className="detail-section">
+            <div className="detail-section-head">
+              <h3>{t("deployments.sectionBilling")}</h3>
+              <button className="button secondary" disabled={readOnly} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={() => setPricing(true)}>{activePrice ? t("deployments.adjustPrice") : t("deployments.setPrice")}</button>
+            </div>
+            {deployment.pricing_quarantined && <div className="notice warning"><strong>{t("deployments.pricingQuarantined")}</strong><span>{deployment.pricing_quarantine_reason}</span><button className="button ghost" disabled={readOnly} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={() => setConfirmingRestore(true)}>{t("deployments.confirmRestoredPricing")}</button></div>}
+            {prices.isError && <ErrorState
+              error={prices.error}
+              action={<button className="button secondary" type="button" disabled={prices.isFetching} onClick={() => prices.refetch()}>{t("common.retry")}</button>}
+            />}
+            {/* A free price needs no rate grid at all — the version row in the
+                timeline below states it once, with the date and the source that
+                fixed it. Repeating it here made the same fact appear three times
+                on one screen, counting the status strip. */}
+            {(activePrice?.billing_mode === "metered" || !activePrice) && <div className="detail-facts">
+              {activePrice?.billing_mode === "metered" && (deployment.capabilities.chat || deployment.capabilities.embeddings) && <>
+                <DetailFact label={t("deployments.inputPrice")} value={money(activePrice.input_micros_per_million)} meta={t("deployments.perMillionTokens")} />
+                {/* Shown even when it equals the input rate: that is itself the
+                    fact worth reading, since it means cached prompt tokens are
+                    not priced separately on this deployment. */}
+                <DetailFact label={t("deployments.cachedInputPrice")} value={money(activePrice.cached_input_micros_per_million)} meta={t("deployments.perMillionTokens")} />
+                <DetailFact label={t("deployments.outputPrice")} value={money(activePrice.output_micros_per_million)} meta={t("deployments.perMillionTokens")} />
+              </>}
+              {activePrice?.billing_mode === "metered" && <DetailFact label={t("deployments.fixedPrice")} value={money(activePrice.fixed_request_micros_usd)} meta={t("deployments.perRequest")} />}
+              {/* With a schedule the rates above are only what applies outside
+                  the windows, so leaving them to stand alone would read as the
+                  whole price. */}
+              {activePrice?.schedule && <DetailFact
+                label={t("deployments.priceSchedule")}
+                value={t("deployments.scheduleWindowCount", { count: activePrice.schedule.windows.length })}
+                meta={`${activePrice.schedule.timezone} · ${activePrice.schedule.windows.map((window) => `${minuteToClock(window.start_minute)}–${minuteToClock(window.end_minute)}`).join(" ")}`}
+              />}
+              {!activePrice && <DetailFact
+                label={t("deployments.priceStatus")}
+                value={prices.isPending ? t("common.loadingShort") : prices.isError ? t("deployments.priceUnavailable") : t("deployments.priceNotConfigured")}
+                meta={t("deployments.priceRequired")}
+                unset
+              />}
             </div>}
+            {/* The panel used to promise a timeline and render only the versions
+                that had not taken effect yet, so the one in force and everything
+                it replaced were invisible. The read already returns them. */}
+            <div className="detail-subhead"><strong>{t("deployments.priceTimeline")}</strong></div>
+            {priceTimeline.length ? (
+              <ol className="detail-timeline">
+                {priceTimeline.map((price) => (
+                  <li key={price.id} data-status={price.status}>
+                    <code>v{price.version}</code>
+                    <div>
+                      <strong>{t(`deployments.priceVersionStatus.${price.status}`)} · {t(price.billing_mode === "free" ? "deployments.freeLabel" : "deployments.meteredLabel")}</strong>
+                      <small>{dateTime(price.effective_from)} · {priceSourceWords(price.source, t)}{price.schedule ? ` · ${t("deployments.scheduleWindowCount", { count: price.schedule.windows.length })}` : ""}</small>
+                    </div>
+                    {price.status === "scheduled" && <button
+                      className="button ghost"
+                      // Every scheduled row carries this button, so the visible
+                      // word cannot be the whole accessible name.
+                      aria-label={t("deployments.cancelPriceVersion", { version: price.version })}
+                      disabled={readOnly || cancelPrice.isPending}
+                      title={readOnly ? t("navigation.readOnlyAction") : undefined}
+                      onClick={() => cancelPrice.mutate(price)}
+                    >{t("common.cancel")}</button>}
+                  </li>
+                ))}
+              </ol>
+            ) : <p className="detail-empty">{prices.isPending ? t("common.loadingShort") : prices.isError ? t("deployments.priceUnavailable") : t("deployments.noPriceVersions")}</p>}
           </section>
+
+          <section className="detail-section">
+            <div className="detail-section-head">
+              <h3>{t("deployments.capabilities")}</h3>
+              <small>{[
+                t("deployments.capabilityCount", { count: capabilities.length }),
+                uniformEvidence ? t("deployments.uniformEvidence", { evidence: t(`deployments.evidenceValues.${uniformEvidence}`) }) : "",
+              ].filter(Boolean).join(" · ")}</small>
+            </div>
+            {/* Every capability, with what establishes it. The card truncates
+                because a tile has a width; the drawer is the one place that can
+                list them all, so truncating here answered nothing.
+                The evidence column only appears when there is something to
+                compare — eight rows all reading "已声明" is one fact printed
+                eight times, and it says it in the section head instead. */}
+            {capabilities.length ? (
+              <ul className="detail-capability-list" aria-label={t("deployments.capabilities")}>
+                {capabilities.map((capability) => (
+                  <li key={capability}>
+                    <span>{t(`capabilities.${capability}`)}</span>
+                    {!uniformEvidence && <small data-evidence={evidenceOf(capability)}>
+                      {t(`deployments.evidenceValues.${evidenceOf(capability)}`)}
+                    </small>}
+                  </li>
+                ))}
+              </ul>
+            ) : <p className="detail-empty">{t("deployments.noCapabilities")}</p>}
+            <CapabilityReviewNotice review={review} readOnly={readOnly} onEdit={() => { setDetails(false); onEdit(); }} />
+          </section>
+
+          <section className="detail-section">
+            <div className="detail-section-head"><h3>{t("deployments.sectionRuntime")}</h3></div>
+            <div className="detail-facts">
+              <DetailFact label={t("deployments.status")} value={deployment.enabled ? t("common.enabled") : t("common.disabled")} unset={!deployment.enabled} />
+              {/* The state that decides routing today. A manual test can be days
+                  old; this is what the router acted on last. */}
+              <DetailFact
+                label={t("deployments.probe")}
+                value={t(`deployments.probeStates.${probe?.state ?? "not_probed"}`)}
+                meta={probe?.state === "unhealthy"
+                  ? [t("deployments.probeUnhealthyMeta"), probeReason].filter(Boolean).join(" · ")
+                  : probe?.state === "healthy"
+                    ? probe.observed_at ? dateTime(probe.observed_at) : undefined
+                    : t("deployments.probeNotProbedMeta")}
+                unset={probe?.state === "unhealthy"}
+              />
+              <DetailFact
+                label={t("deployments.lastTest")}
+                value={testVerdict}
+                meta={testState === "failure" && testFailureReason ? testFailureReason : deployment.last_tested_at ? dateTime(deployment.last_tested_at) : undefined}
+                unset={testState === "failure"}
+              />
+              <DetailFact
+                label={t("deployments.routeDependency")}
+                value={activeRouteCount ? t("deployments.activeRoutesEnabled", { count: activeRouteCount }) : t("deployments.noActiveRoutes")}
+              />
+              <DetailFact label={t("deployments.concurrency")} value={deployment.max_concurrency || t("deployments.unlimited")} />
+              {deployment.region && <DetailFact label={t("deployments.region")} value={deployment.region} />}
+              <DetailFact label={t("deployments.context")} value={deployment.capabilities.max_context_tokens ? exactNumber(deployment.capabilities.max_context_tokens) : t("deployments.upstreamApplies")} meta={deployment.capabilities.max_context_tokens ? t("deployments.tokens") : t("deployments.undeclared")} />
+              <DetailFact label={t("deployments.maxOutput")} value={deployment.capabilities.max_output_tokens ? exactNumber(deployment.capabilities.max_output_tokens) : t("deployments.upstreamApplies")} meta={deployment.capabilities.max_output_tokens ? t("deployments.tokens") : t("deployments.undeclared")} />
+            </div>
+          </section>
+
+          {/* Identifiers were behind a disclosure, which put one extra click in
+              front of the one thing an operator opens the drawer for while
+              reading a log line. Last is far enough. */}
+          <section className="detail-section">
+            <div className="detail-section-head"><h3>{t("deployments.sectionConnection")}</h3></div>
+            <div className="detail-facts">
+              <DetailFact label={t("deployments.provider")} value={providerName} href={`/admin/providers#provider-${deployment.provider_id}`} />
+              <DetailFact label={t("deployments.upstreamTarget")} value={deployment.provider_model} mono />
+              {/* The question this answers is which API shape a client has to
+                  speak, so it is named and worded that way rather than by the
+                  internal surface id. */}
+              <DetailFact label={t("deployments.compatibleInterface")} value={t(`deployments.accessSurfaces.${deployment.access_surface}`, { defaultValue: deployment.access_surface })} />
+              {/* The revision number is Halro's optimistic-concurrency counter,
+                  the same kind of internal identifier as the profile and binding
+                  ids. What an operator reads it for is "has anyone changed this,
+                  and when" — which is the timestamp, not the counter. */}
+              {deployment.updated_at && <DetailFact label={t("deployments.lastUpdated")} value={dateTime(deployment.updated_at)} />}
+            </div>
+          </section>
+
         </div>
-        <div className="deployment-capability-summary deployment-capability-strip">
-          <strong>{t("deployments.capabilityCount", { count: capabilities.length })}</strong>
-          <div className="capability-list" aria-label={t("deployments.capabilities")}>
-            {capabilities.slice(0, 5).map((capability) => <span className="badge" key={capability}>{t(`capabilities.${capability}`)}</span>)}
-            {capabilities.length > 5 && <span className="badge">+{capabilities.length - 5}</span>}
-          </div>
-        </div>
-        <details className="technical-details deployment-technical-details">
-          <summary>{t("deployments.technicalDetails")}</summary>
-          <dl>
-            <div><dt>{t("deployments.accessSurface")}</dt><dd><code>{deployment.access_surface}</code></dd></div>
-            <div><dt>{t("deployments.profile")}</dt><dd><code>{deployment.profile_id}</code></dd></div>
-            <div><dt>{t("deployments.deploymentID")}</dt><dd><code>{deployment.id}</code></dd></div>
-            {deployment.binding_id && <div><dt>{t("deployments.bindingID")}</dt><dd><code>{deployment.binding_id}</code></dd></div>}
-            <div><dt>{t("deployments.evidence")}</dt><dd>{evidence.length ? evidence.join(" / ") : "—"}</dd></div>
-          </dl>
-        </details>
-      </div>}
+      </Modal>}
       {(remove.isError || state.isError) && <ErrorState
         className="deployment-card-error"
         error={remove.error || state.error}
@@ -454,47 +562,6 @@ function DeploymentRow({
   );
 }
 
-// The saved capability answer and what supports it now can diverge without the
-// deployment being touched, so the console states which it is rather than
-// leaving the operator to infer it from a deployment that stopped serving.
-function CapabilityReviewNotice({ review }: { review: CapabilityReview | undefined }) {
-  const { t } = useTranslation();
-  if (!review || review.state === "current") return null;
-  const drifted = review.state === "drifted";
-  const unavailable = review.state === "catalog_unavailable";
-  const names = (values: string[] | undefined) =>
-    (values ?? []).map((name) => t(`capabilities.${name}`)).join(t("common.listSeparator"));
-  return (
-    <div className={`notice ${drifted ? "warning" : ""} deployment-capability-review`}>
-      <strong>{drifted ? t("deployments.capabilitiesUnsupported") : unavailable ? t("deployments.catalogUnavailableTitle") : t("deployments.capabilitiesToReview")}</strong>
-      <span>{t(`deployments.reviewReasons.${review.reason ?? "catalog_revision_advanced"}`)}</span>
-      <dl className="deployment-review-facts">
-        <div>
-          <dt>{t("deployments.capabilitySource")}</dt>
-          <dd>{t(`deployments.capabilitySources.${review.source}`, { defaultValue: review.source })}</dd>
-        </div>
-        <div>
-          <dt>{t("deployments.noLongerSupported")}</dt>
-          <dd>{names(review.no_longer_supported) || "—"}</dd>
-        </div>
-        <div>
-          <dt>{t("deployments.availableForReview")}</dt>
-          <dd>{names(review.available_for_review) || "—"}</dd>
-        </div>
-        <div>
-          <dt>{t("deployments.switchedOff")}</dt>
-          <dd>{names(review.operator_disabled) || "—"}</dd>
-        </div>
-      </dl>
-      <span className="deployment-review-consequence">
-        {drifted ? t("deployments.driftedConsequence") : unavailable ? t("deployments.catalogUnavailableConsequence") : t("deployments.reviewAvailableConsequence")}
-      </span>
-    </div>
-  );
-}
-
-// What the narrowing would do to live routing, listed per route so the operator
-// confirms against the actual consequence rather than a warning about one.
 function CapabilityImpactNotice({ impact }: { impact: CapabilityPreflight }) {
   const { t } = useTranslation();
   const removed = impact.removed_capabilities.map((name) => t(`capabilities.${name}`)).join(t("common.listSeparator"));
@@ -515,6 +582,64 @@ function CapabilityImpactNotice({ impact }: { impact: CapabilityPreflight }) {
   );
 }
 
+// What the deployment claims, against what establishes it now.
+//
+// The panel used to open with two sentences of explanation, list five facts —
+// three of them usually a dash — and close with a third sentence, without ever
+// saying what to do. It now states the disagreement as the capability names it
+// is about, one line each, and carries the one action that resolves it.
+//
+// Two things are kept because they change what the reader should do, and only
+// in the state where they do: drift says why (a profile that narrowed cannot be
+// fixed by editing, a catalog that dropped the model can) and what it costs
+// (that deployment is not serving traffic). A review costs nothing and needs
+// neither.
+function CapabilityReviewNotice({ review, readOnly, onEdit }: { review: CapabilityReview | undefined; readOnly: boolean; onEdit: () => void }) {
+  const { t } = useTranslation();
+  if (!review || review.state === "current") return null;
+  const drifted = review.state === "drifted";
+  const unavailable = review.state === "catalog_unavailable";
+  const names = (values: string[] | undefined) =>
+    (values ?? []).map((name) => t(`capabilities.${name}`)).join(t("common.listSeparator"));
+  const offered = review.available_for_review ?? [];
+  // Claimed here and not established by the catalog. Under drift that means
+  // nothing supports it any more; under review it means the catalog disagrees
+  // with a declaration that is still being served — a different fact, and it
+  // used to wear the same label and the same warning colour as the first.
+  const disputed = review.no_longer_supported ?? [];
+  const switchedOff = review.operator_disabled ?? [];
+  const title = drifted
+    ? t("deployments.capabilitiesUnsupported")
+    : unavailable
+      ? t("deployments.catalogUnavailableTitle")
+      // A title that says "new capabilities" over a panel whose loudest line is
+      // a disagreement describes half of what happened.
+      : disputed.length ? t("deployments.capabilitiesDisagree") : t("deployments.capabilitiesToReview");
+  return (
+    <div className={`notice ${drifted ? "warning" : ""} ${unavailable ? "" : "has-action"} deployment-capability-review`}>
+      <div className="notice-copy">
+        <strong>{title}</strong>
+        {drifted && <span>{t(`deployments.reviewReasons.${review.reason ?? "catalog_revision_advanced"}`)}</span>}
+        <div className="capability-review-rows">
+          {!!offered.length && <div><small>{t("deployments.canEnable")}</small><span>{names(offered)}</span></div>}
+          {!!disputed.length && <div>
+            <small>{drifted ? t("deployments.noLongerSupported") : t("deployments.catalogDisputes")}</small>
+            <span>{names(disputed)}{drifted ? "" : ` · ${t("deployments.stillServing")}`}</span>
+          </div>}
+          {!!switchedOff.length && <div><small>{t("deployments.switchedOff")}</small><span>{names(switchedOff)}</span></div>}
+        </div>
+        {drifted && <span>{t("deployments.driftedConsequence")}</span>}
+        {unavailable && <span>{t("deployments.catalogUnavailableConsequence")}</span>}
+      </div>
+      {/* The instruction was "turn a capability on and retest", and following it
+          meant closing the drawer and finding the card again. */}
+      {!unavailable && <div className="notice-action">
+        <button className="button secondary" disabled={readOnly} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={onEdit}>{t("deployments.editCapabilities")}</button>
+      </div>}
+    </div>
+  );
+}
+
 function RestorePricingConfirm({ deployment, onClose }: { deployment: Deployment; onClose: () => void }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
@@ -529,13 +654,51 @@ function RestorePricingConfirm({ deployment, onClose }: { deployment: Deployment
 	</form></Modal>;
 }
 
-function DeploymentFact({ label, value, meta, unset = false }: { label: string; value: string | number; meta: string; unset?: boolean }) {
+// One fact in the details drawer: label, value, and an optional line naming the
+// unit or the scope the value is in.
+//
+// It is a `.resource-fact` — the same label/value typography the cards and the
+// resource lists use, from resource-list.css. Only two things differ, and both
+// follow from the container: a drawer has no column to keep to, so the value
+// wraps instead of ellipsizing, and a fact that is missing something the
+// deployment needs says so in the warning colour.
+function DetailFact({ label, value, meta, unset = false, mono = false, href }: {
+  label: string;
+  value: string | number;
+  meta?: string;
+  unset?: boolean;
+  mono?: boolean;
+  href?: string;
+}) {
   return (
-    <div>
-      <dt>{label}</dt>
-      <dd className={unset ? "unset" : undefined}><span>{value}</span><small>{meta}</small></dd>
+    <div className={`resource-fact detail-fact ${unset ? "unset" : ""}`}>
+      <small>{label}</small>
+      {href
+        ? <Link className="resource-link" href={href}>{value} →</Link>
+        : mono ? <code>{value}</code> : <strong>{value}</strong>}
+      {meta ? <small className="detail-fact-meta">{meta}</small> : null}
     </div>
   );
+}
+
+// The version's provenance in words. `manual · asserted · temporary_estimate`
+// is three identifiers from three different enums; printed raw it reads as a
+// system trace rather than as an answer to "how much do we trust this price".
+const PRICE_SOURCE_KINDS: Record<string, string> = {
+  official_public_price: "officialPublicPrice",
+  contract_price: "contractPrice",
+  internal_cost: "internalCost",
+  temporary_estimate: "temporaryEstimate",
+};
+
+function priceSourceWords(source: DeploymentPriceVersion["source"], t: TFunction): string {
+  const reference = (source.reference ?? "").trim();
+  const kind = PRICE_SOURCE_KINDS[reference];
+  return [
+    kind ? t(`deployments.sourceKinds.${kind}`) : reference,
+    t(`deployments.priceSourceTypes.${source.type}`, { defaultValue: source.type }),
+    t(`deployments.priceAssurances.${source.assurance}`, { defaultValue: source.assurance }),
+  ].filter(Boolean).join(" · ");
 }
 
 function PriceVersionForm({ deployment, current, blocking, onClose }: { deployment: Deployment; current?: DeploymentPriceVersion; blocking?: DeploymentPriceVersion; onClose: () => void }) {
@@ -962,11 +1125,6 @@ function useDeferredSlot(delayMillis: number): boolean {
     return () => clearTimeout(timer);
   }, [delayMillis]);
   return ready;
-}
-
-function evidenceSummary(evidence: Record<string, string>) {
-  const values = [...new Set(Object.values(evidence).filter((value) => value !== "unsupported"))];
-  return values;
 }
 
 type SelectableBinding = ProviderBinding & { id: string };

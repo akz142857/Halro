@@ -484,7 +484,11 @@ h3 { margin-bottom: 0; font-size: var(--font-size-lg); }
 /* The marks and the capability count read as one line: the marks say what shape
    of data crosses the boundary, the count says how many capabilities exist at
    all — including the ones no modality can express. */
-.deployment-card-marks { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.deployment-card-marks { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); }
+/* The two states that outrank the enabled flag, led rather than tucked into a
+   second right-hand column. */
+.deployment-card-alerts { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); }
+.resource-identity > small > code { color: inherit; font: inherit; font-family: var(--font-mono); }
 .deployment-card-marks > small { color: var(--color-text-tertiary); font-size: var(--font-size-xs); }
 .deployment-card > .row-test-failure { margin: 0; }
 /* Two names for one control bar; they differ only in horizontal padding, and
@@ -496,17 +500,6 @@ h3 { margin-bottom: 0; font-size: var(--font-size-lg); }
 .deployment-search { flex: 1 1 320px; max-width: 520px; }
 .deployment-result-count { margin-left: auto; padding: 9px 4px; color: var(--muted); font: var(--font-size-xs) var(--mono); white-space: nowrap; }
 .deployment-list > .empty-state { border: 0; }
-.deployment-row {
-  overflow: visible; padding: var(--resource-row-padding-block) var(--resource-row-padding-inline); border-bottom: 1px solid var(--line);
-  font-size: var(--font-size-sm); line-height: var(--line-height-normal);
-}
-.deployment-row:last-child { border-bottom: 0; }
-/* The details block stays outside this grid so expanding never resizes the columns. */
-.deployment-row-main {
-  display: grid; align-items: center;
-  grid-template-columns: minmax(140px, .9fr) minmax(120px, .75fr) minmax(84px, .45fr) minmax(100px, .55fr) minmax(76px, .4fr) minmax(70px, .4fr) auto;
-  gap: var(--resource-row-column-gap); min-height: 3.375rem;
-}
 .deployment-fact-price { min-width: 0; }
 .deployment-price-value, .deployment-price-link { overflow: hidden; font-size: var(--font-size-sm); font-weight: var(--font-weight-semibold); line-height: var(--line-height-normal); text-align: left; text-overflow: ellipsis; white-space: nowrap; }
 .deployment-price-value { color: var(--color-text-tertiary); }
@@ -514,34 +507,91 @@ h3 { margin-bottom: 0; font-size: var(--font-size-lg); }
 .deployment-price-link.missing { color: var(--color-status-warning-text); }
 .deployment-price-link:hover:not(:disabled) { text-decoration: underline; text-underline-offset: 0.2em; }
 .deployment-price-link:disabled { color: var(--color-text-tertiary); cursor: not-allowed; }
-.deployment-compact-actions { justify-content: flex-end; align-items: center; flex-wrap: nowrap; }
+/* The bar sits at the foot of a card, so it starts where the rest of the card
+   starts and wraps inside it. Held on one line it was the widest thing in the
+   card by far, and a grid column takes the width of its widest row: the whole
+   card — name, target, facts — was dragged out past its own border. */
+.deployment-compact-actions { justify-content: flex-start; align-items: center; flex-wrap: wrap; }
 .deployment-compact-actions .button { flex: 0 0 auto; min-height: 36px; padding-right: 10px; padding-left: 10px; white-space: nowrap; }
-.deployment-compact-actions > .inline-test-control { margin-right: 14px; }
-.deployment-state-toggle { display: grid; flex: 0 0 auto; align-items: center; justify-items: center; }
-.deployment-state-toggle > * { grid-area: 1 / 1; }
-.deployment-state-sizer { display: grid; place-items: center; visibility: hidden; white-space: nowrap; }
-.deployment-expand { display: grid; align-items: center; justify-items: center; min-width: 78px; }
-.deployment-expand > span { grid-area: 1 / 1; white-space: nowrap; }
-.deployment-expand > span[aria-hidden] { visibility: hidden; }
-.deployment-details { margin-top: 14px; padding-top: 18px; border-top: 1px solid var(--line); }
-.deployment-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); margin: 0; padding: 0; border: 1px solid var(--line); }
-.deployment-facts > div { display: grid; align-content: start; min-width: 0; padding: 15px 17px; border-top: 0; border-right: 1px solid var(--line); }
-.deployment-facts > div:last-child { border-right: 0; }
-.deployment-facts dt { color: var(--muted); font-size: var(--font-size-xs); font-weight: var(--font-weight-semibold); letter-spacing: .02em; }
-.deployment-facts dd { display: grid; gap: 5px; margin: 9px 0 0; overflow-wrap: anywhere; text-align: left; }
-.deployment-facts dd > span { color: var(--text); font: var(--font-weight-semibold) var(--font-size-md) var(--mono); }
-.deployment-facts dd > small { color: var(--muted-2); font: var(--font-size-xs) var(--mono); }
-.deployment-facts dd.unset > span { color: var(--color-status-warning-text); }
-.deployment-pricing-warning { margin: 14px 0 0; }
+/* Test is a result, not an action: it keeps its own line above the buttons so
+   the verdict and its latency stay readable at every card width. */
+.deployment-compact-actions > .inline-test-control { flex: 0 0 100%; width: auto; margin-right: 0; }
+/*
+ * Details drawer.
+ *
+ * One column, four sections, one way of writing a fact. What it replaced put
+ * three typographies in one panel — a fact grid, a review panel with its own
+ * grid, and identifiers styled by the global `dl div` rule — so the same kind
+ * of thing was read three different ways depending on which section it landed in.
+ *
+ * The facts are `.resource-fact`, the design system's own label/value pair, so
+ * the drawer inherits the type scale rather than growing a second one. A drawer
+ * has no column width to keep to, which is the only reason anything here
+ * overrides it: values wrap instead of ellipsizing.
+ */
+.detail-drawer { display: grid; gap: var(--space-6); }
+.detail-section { display: grid; gap: var(--space-3); }
+.detail-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); padding-bottom: var(--space-2); border-bottom: 1px solid var(--line); }
+.detail-section-head > h3 { margin: 0; font-size: var(--font-size-md); font-weight: var(--font-weight-semibold); letter-spacing: -.01em; }
+.detail-section-head > small { color: var(--muted); font-size: var(--font-size-xs); }
+.detail-section-head > .button { flex: 0 0 auto; min-height: 32px; padding: 0 12px; font-size: var(--font-size-sm); }
+.detail-subhead { margin-top: var(--space-2); color: var(--color-text-secondary); font-size: var(--font-size-sm); }
+.detail-subhead > strong { font-weight: var(--font-weight-semibold); }
+.detail-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: var(--space-4) var(--space-4); min-width: 0; }
+/*
+ * A fact in a row is one cell on a fixed-height line, so `.resource-fact`
+ * centres its content. Stacked into a drawer grid that is exactly wrong: one
+ * neighbour whose value wraps to two lines makes the whole grid row taller, and
+ * every shorter cell in that row gets centred inside it — labels that should
+ * read as a line drift out of alignment with each other. Every fact starts at
+ * the top of its row instead.
+ */
+.detail-fact { align-content: start; }
+.detail-fact > strong, .detail-fact > code, .detail-fact > small, .detail-fact > .resource-link { overflow: visible; white-space: normal; overflow-wrap: anywhere; line-height: var(--line-height-normal); }
+.detail-fact > .resource-link { width: auto; }
+/*
+ * Weight is not spent on facts. A card gives its fact values emphasis because
+ * each tile carries three of them and they are the thing to read at a glance; a
+ * drawer section carries eight, and eight emphasised values are eight
+ * unemphasised ones. So the values here are body text — Apple's own arrangement
+ * for an inspector: caption label, regular value, and hierarchy from colour and
+ * position rather than from ink.
+ */
+.detail-fact > strong, .detail-fact > code { font-weight: var(--font-weight-regular); }
+.detail-fact-meta { color: var(--muted-2); }
+.detail-fact.unset > strong, .detail-fact.unset > code { color: var(--color-status-warning-text); }
+.detail-empty { margin: 0; color: var(--muted-2); font-size: var(--font-size-xs); }
+/* Every price version this deployment ever charged under, newest first. */
+.detail-timeline { display: grid; margin: 0; padding: 0; list-style: none; border: 1px solid var(--line); }
+.detail-timeline > li { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3); border-bottom: 1px solid var(--line); }
+.detail-timeline > li:last-child { border-bottom: 0; }
+.detail-timeline > li[data-status="active"] { background: var(--surface-inset); }
+.detail-timeline > li > code { flex: 0 0 auto; color: var(--color-text-secondary); font: var(--font-size-xs) var(--mono); }
+.detail-timeline > li > div { display: grid; min-width: 0; gap: var(--space-1); margin-right: auto; }
+/* Semibold, not the browser's bold: a version's status is a headline, and
+   every heading in this drawer is set at the same weight. */
+.detail-timeline > li strong { color: var(--text); font-size: var(--font-size-sm); font-weight: var(--font-weight-semibold); }
+.detail-timeline > li small { color: var(--muted); font-size: var(--font-size-xs); line-height: 1.5; overflow-wrap: anywhere; }
+.detail-timeline > li > .button { flex: 0 0 auto; }
+/* Every capability with what establishes it. The card truncates because a tile
+   has a width; this list is the one place that can state all of them. */
+.detail-capability-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: 0 var(--space-4); margin: 0; padding: 0; list-style: none; }
+.detail-capability-list > li { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); padding: var(--space-2) 0; border-bottom: 1px solid var(--line); }
+.detail-capability-list > li > span { color: var(--text); font-size: var(--font-size-sm); }
+.detail-capability-list > li > small { flex: 0 0 auto; color: var(--muted-2); font-size: var(--font-size-xs); }
+.detail-capability-list > li > small[data-evidence="verified"] { color: var(--color-status-success-text); }
+.detail-capability-list > li > small[data-evidence="unsupported"] { color: var(--color-status-warning-text); }
 /* Capability review: the saved answer versus what supports it now. */
 .capability-review-state { font-size: var(--font-size-xs); font-weight: var(--font-weight-semibold); letter-spacing: .02em; }
 .capability-review-state[data-state="drifted"] { color: var(--color-status-warning-text); }
 .capability-review-state[data-state="review_available"] { color: var(--muted); }
-.deployment-capability-review { margin: var(--space-4) 0 0; }
-.deployment-review-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--space-3); margin: var(--space-3) 0 0; }
-.deployment-review-facts > div { display: grid; align-content: start; gap: var(--space-1); min-width: 0; }
-.deployment-review-facts dt { color: var(--muted); font-size: var(--font-size-xs); font-weight: var(--font-weight-semibold); letter-spacing: .02em; }
-.deployment-review-facts dd { margin: 0; color: var(--text); font-size: var(--font-size-sm); overflow-wrap: anywhere; }
+.deployment-capability-review { margin: 0; }
+/* One line per disagreement: the capability names are the content, the label in
+   front of them says which side of the comparison they are on. */
+.capability-review-rows { display: grid; gap: var(--space-1); margin-top: var(--space-1); }
+.capability-review-rows > div { display: flex; gap: var(--space-3); }
+.capability-review-rows small { flex: 0 0 auto; min-width: 5rem; color: var(--muted-2); font-size: var(--font-size-xs); }
+.capability-review-rows span { color: var(--text); font-size: var(--font-size-xs); line-height: 1.5; }
 .deployment-review-consequence { margin-top: var(--space-3); color: var(--muted); font-size: var(--font-size-xs); line-height: 1.5; }
 /* Sits directly under the capability grid, which has its own border; without
    the gap the two boxes read as one control. */
@@ -564,23 +614,6 @@ h3 { margin-bottom: 0; font-size: var(--font-size-lg); }
 .deployment-impact-list > li > small { margin-left: auto; color: var(--muted-2); font-size: var(--font-size-xs); }
 .deployment-impact-list > li[data-sole="true"] { border-color: var(--color-status-warning-border); }
 .deployment-impact-list > li[data-sole="true"] > small { color: var(--color-status-warning-text); }
-.deployment-pricing-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 14px 0 0; }
-.deployment-pricing-grid.single { grid-template-columns: 1fr; }
-.deployment-pricing-panel { min-width: 0; background: var(--surface-inset); border: 1px solid var(--line); }
-.deployment-pricing-panel > header { display: flex; min-height: 78px; align-items: center; justify-content: space-between; gap: 18px; padding: 16px 18px; }
-.deployment-pricing-panel > header > div { display: grid; min-width: 0; gap: 6px; }
-.deployment-pricing-panel > header strong { color: var(--text); font-size: var(--font-size-md); }
-.deployment-pricing-panel > header small { max-width: 540px; color: var(--muted); font-size: var(--font-size-xs); line-height: 1.5; }
-.deployment-pricing-action { min-height: 34px; flex: 0 0 auto; padding: 0 11px; font-size: var(--font-size-sm); }
-.deployment-pricing-empty { display: flex; min-height: 58px; align-items: center; padding: 14px 18px; color: var(--muted-2); border-top: 1px solid var(--line); font-size: var(--font-size-xs); }
-.deployment-pricing-list { border-top: 1px solid var(--line); }
-.deployment-pricing-list > div { display: flex; min-height: 58px; align-items: center; justify-content: space-between; gap: 14px; padding: 10px 14px 10px 18px; border-bottom: 1px solid var(--line); }
-.deployment-pricing-list > div:last-child { border-bottom: 0; }
-.deployment-pricing-list > div > span:first-child { display: grid; min-width: 0; gap: 4px; }
-.deployment-pricing-list code { color: var(--text); font-size: var(--font-size-sm); }
-.deployment-pricing-list small { color: var(--muted-2); font-size: var(--font-size-xs); overflow-wrap: anywhere; }
-.deployment-pricing-row-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 4px; }
-.deployment-pricing-list .button { min-height: 32px; padding: 0 9px; font-size: var(--font-size-xs); }
 /* Six rate boxes per schedule window, plus a two-column rate grid above them,
    never had room at the modal's default 620px — the same width the deployment
    form already takes for the same reason. */
@@ -708,12 +741,7 @@ h3 { margin-bottom: 0; font-size: var(--font-size-lg); }
 .deployment-capability-summary small { color: var(--muted); font-size: var(--font-size-xs); }
 .deployment-capability-summary-tags { display: flex; min-width: 0; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
 .deployment-capability-summary-tags span { padding: 3px 7px; color: var(--muted); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-pill); font-size: var(--font-size-xs); white-space: nowrap; }
-.capability-list { display: flex; flex-wrap: wrap; gap: 6px; padding: 0; }
-.deployment-capability-strip { grid-template-columns: max-content minmax(0, 1fr); margin-top: var(--space-3); border-radius: 0; }
-.deployment-capability-strip .capability-list { min-width: 0; align-items: center; }
-.deployment-technical-details { margin: 14px 0 2px; }
-.deployment-technical-details dl { padding: 0; }
-.deployment-row > .deployment-card-error { margin-top: 14px; border-left-width: 3px; }
+.deployment-card > .deployment-card-error { margin: 0; border-left-width: 3px; }
 .deployment-form { display: grid; gap: 0; }
 .deployment-form-section { min-width: 0; padding: var(--space-5) var(--space-6); border: 0; border-bottom: 1px solid var(--line); }
 .deployment-form-section > header { margin-bottom: var(--space-4); }
@@ -1500,7 +1528,17 @@ dd { margin: 0; font: var(--font-size-xs) var(--mono); text-align: right; overfl
   position: fixed; inset: 0; z-index: 100; display: grid; place-items: center;
   padding: 20px; background: var(--scrim); backdrop-filter: blur(10px);
 }
-.modal { width: min(620px, 100%); max-height: calc(100dvh - 40px); overflow-y: auto; scrollbar-width: none; background: var(--surface-overlay-solid); border: 1px solid var(--line-strong); box-shadow: var(--shadow-modal); }
+.modal { width: min(620px, 100%); max-height: calc(100dvh - 40px); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; background: var(--surface-overlay-solid); border: 1px solid var(--line-strong); box-shadow: var(--shadow-modal); }
+/* A drawer is the modal moored to one edge: same surface, same trap, but full
+   height against the right side so the card it was opened from stays in place
+   behind it. The backdrop stops centring and stops insetting — the panel runs
+   to all three edges it touches. */
+.drawer-backdrop { place-items: stretch end; padding: 0; }
+.modal.drawer { width: min(clamp(30rem, 34vw, 46rem), 100%); height: 100dvh; max-height: none; border-top: 0; border-right: 0; border-bottom: 0; animation: drawer-in .18s ease-out; }
+.modal.drawer > header { position: sticky; top: 0; z-index: 4; background: var(--surface-overlay-solid); }
+.modal.drawer > header h2 { overflow: hidden; font-size: var(--font-size-lg); text-overflow: ellipsis; white-space: nowrap; }
+.modal.drawer > .detail-drawer { margin: 0; padding: 20px 24px; }
+@keyframes drawer-in { from { transform: translateX(1.5rem); opacity: 0; } to { transform: none; opacity: 1; } }
 .modal::-webkit-scrollbar { display: none; }
 .modal.dangerous { width: min(560px, 100%); }
 .modal.wide { width: min(760px, 100%); }
@@ -1911,8 +1949,6 @@ textarea { resize: vertical; }
   .provider-runtime .row-actions { justify-self: start; }
   .provider-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .provider-facts > div:nth-child(2) { border-right: 0; }
-  .deployment-row-main { grid-template-columns: minmax(130px, .9fr) minmax(110px, .7fr) minmax(96px, .5fr) minmax(76px, .4fr) minmax(64px, .35fr) auto; }
-  .deployment-fact-concurrency { display: none; }
   .developer-workbench { grid-template-columns: 1fr; }
 }
 @media (max-width: 820px) {
@@ -1948,14 +1984,7 @@ textarea { resize: vertical; }
   .resource-column { position: static; max-height: none; }
   .resource-column > .resource-list { max-height: 52vh; }
   .governance-lower-grid { grid-template-columns: 1fr; }
-  .deployment-row-main { grid-template-columns: minmax(130px, 1fr) minmax(110px, .7fr) minmax(76px, .4fr) minmax(60px, .35fr) auto; }
-  .deployment-fact-routes { display: none; }
-  .deployment-compact-actions { min-width: 0; overflow-x: auto; overflow-y: hidden; }
-  .deployment-compact-actions::-webkit-scrollbar { height: 0; }
   .deployment-compact-actions .button { min-height: 34px; }
-  .deployment-compact-actions > .inline-test-control { width: auto; flex: 0 0 auto; grid-template-columns: 56px; margin-right: 10px; }
-  .deployment-compact-actions > .inline-test-control .inline-test-result { display: none; }
-  .deployment-pricing-grid { grid-template-columns: 1fr; }
   .deployment-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .deployment-facts > div { border-right: 0; border-bottom: 1px solid var(--line); }
   .deployment-facts > div:nth-child(odd) { border-right: 1px solid var(--line); }
@@ -2022,11 +2051,6 @@ textarea { resize: vertical; }
   .deployment-toolbar { align-items: stretch; flex-direction: column; }
   .deployment-search { flex-basis: auto; max-width: none; }
   .deployment-result-count { margin-left: 0; }
-  .deployment-row-main { grid-template-columns: minmax(0, 1fr) auto; row-gap: 10px; }
-  .deployment-fact-target { display: none; }
-  .deployment-compact-actions { grid-column: 1 / -1; justify-content: flex-start; }
-  .deployment-compact-actions .button { width: auto; }
-  .deployment-compact-actions > .inline-test-control { margin-right: 8px; }
   .deployment-facts > div, .deployment-facts > div:nth-child(odd), .deployment-facts > div:last-child { grid-column: auto; border-right: 0; }
   .price-mode-options, .price-form-grid { grid-template-columns: 1fr; }
   .price-cached-row > .field > input, .price-advanced .field > input { max-width: none; }

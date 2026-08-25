@@ -154,6 +154,7 @@ func (r *Runtime) listAdminDeployments(writer http.ResponseWriter, request *http
 		adminStoreError(writer)
 		return
 	}
+	probes := r.providers.DeploymentProbes()
 	active := make([]adminDeploymentView, 0, len(items))
 	for _, item := range items {
 		if item.DeletedAt == nil {
@@ -165,6 +166,7 @@ func (r *Runtime) listAdminDeployments(writer http.ResponseWriter, request *http
 			item.PricingQuarantined, item.PricingQuarantineReason = quarantined, reason
 			active = append(active, adminDeploymentView{
 				Deployment: item, CapabilityReview: reviewForDeploymentWithCatalogState(instances, item, r.effectiveModelCatalog(), r.modelCatalogUnavailable()),
+				Probe: probeView(probes, item.ID),
 			})
 		}
 	}
@@ -190,6 +192,7 @@ func (r *Runtime) getAdminDeployment(writer http.ResponseWriter, request *http.R
 	writer.Header().Set("ETag", revisionETag(item.Revision))
 	writeJSON(writer, http.StatusOK, adminDeploymentView{
 		Deployment: item, CapabilityReview: reviewForDeploymentWithCatalogState(instances, item, r.effectiveModelCatalog(), r.modelCatalogUnavailable()),
+		Probe: probeView(r.providers.DeploymentProbes(), item.ID),
 	})
 }
 

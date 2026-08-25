@@ -363,9 +363,9 @@ func (r *Runtime) writeMetrics(ctx context.Context, writer http.ResponseWriter) 
 			strconv.Quote(deploymentID), activeDeployments[deploymentID])
 	}
 	metricHeader(output, "halro_deployment_up", "gauge", "Latest active-probe health by Deployment; absent means not yet probed.")
-	for deploymentID, healthy := range r.providers.DeploymentHealth() {
+	for deploymentID, probe := range r.providers.DeploymentProbes() {
 		value := 0
-		if healthy {
+		if probe.Healthy {
 			value = 1
 		}
 		fmt.Fprintf(output, "halro_deployment_up{deployment_id=%s} %d\n",

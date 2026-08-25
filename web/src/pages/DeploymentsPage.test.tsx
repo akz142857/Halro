@@ -880,6 +880,10 @@ describe("deployment card keeps what the row decided", () => {
   });
 
   it("carries drift, state words, routes and price on the card itself", async () => {
+    vi.spyOn(api, "routes").mockResolvedValue({
+      items: [{ id: "route_1", public_model: "gpt", deployment_id: "dep_card", priority: 0, strategy: "ordered", enabled: true, revision: 1, created_at: "", updated_at: "" }],
+      next_cursor: "",
+    });
     vi.spyOn(api, "deployments").mockResolvedValue({
       items: [deployment("dep_card", {
         enabled: true,
@@ -900,15 +904,289 @@ describe("deployment card keeps what the row decided", () => {
     // Colour is never the only signal: the state exists as words too, in the
     // state cell rather than anywhere the word happens to appear.
     expect(card.querySelector(".resource-state")).toHaveTextContent("启用");
-    // The disabled reason for Disable and Delete.
+    // The disabled reason for Disable and Delete, which exists above zero.
     expect(within(card).getByText("路由依赖")).toBeVisible();
-    // The precondition for enabling at all.
-    expect(within(card).getByText("价格设置")).toBeVisible();
+    // The precondition for enabling at all — stated because it is missing. The
+    // price read has to land first: while it is in flight nothing is missing yet.
+    expect(await within(card).findByText("价格设置")).toBeVisible();
     // Token limits are abbreviated the way a model catalogue abbreviates them.
     expect(card).toHaveTextContent("272K 上下文");
     expect(card).toHaveTextContent("16K 最大输出");
     // The model id keeps a name for an assistive reader now that its column label is gone.
     expect(within(card).getByLabelText(/上游调用目标: gpt-chat/)).toBeVisible();
+  });
+
+  // A card that carried "已设置 · 不限 · 无启用路由" spent two lines saying nothing
+  // needed doing, on every card in the grid. Each of those facts is on the card
+  // for a reason that only exists in its unquiet state.
+  it("says nothing about facts that need nothing", async () => {
+    vi.spyOn(api, "deployments").mockResolvedValue({
+      items: [deployment("dep_quiet", { enabled: true, max_concurrency: 0 })],
+      next_cursor: "",
+    });
+    vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [activePriceVersion()], next_cursor: "" });
+    renderPage();
+
+    const card = (await screen.findByText("Deployment dep_quiet")).closest("article.deployment-card") as HTMLElement;
+    await waitFor(() => expect(within(card).queryByText("价格设置")).not.toBeInTheDocument());
+    expect(within(card).queryByText("并发上限")).not.toBeInTheDocument();
+    expect(within(card).queryByText("路由依赖")).not.toBeInTheDocument();
+    expect(card.querySelector(".resource-card-facts")).toBeNull();
+    // Nothing was declared, and the absence is not written out as a fact.
+    expect(within(card).queryByText("以上游为准")).not.toBeInTheDocument();
+    // Provider and upstream model are one identity line now.
+    expect(within(card).getByText(/OpenAI production/)).toHaveTextContent("gpt-chat");
+    // Enable and disable moved into the menu; the visible bar is test, edit and
+    // the way into the drawer.
+    const menu = card.querySelector(".row-overflow-menu") as HTMLElement;
+    expect(within(menu).getByRole("button", { name: "禁用" })).toBeInTheDocument();
+    expect(Array.from(card.querySelectorAll(".deployment-compact-actions > .button")).map((button) => button.textContent))
+      .toEqual(["编辑", "查看详情"]);
+  });
+
+  // A tile that grew to full width pushed every card after it down the page,
+  // so reading one deployment moved the rest — including the card the operator
+  // was pointing at. The details open beside the grid instead: the card stays
+  // exactly where it was, and closing the drawer puts focus back on the control
+  // that opened it.
+  it("opens the details in a drawer beside the card rather than growing the card", async () => {
+    vi.spyOn(api, "deployments").mockResolvedValue({ items: [existingDeployment], next_cursor: "" });
+    vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [activePriceVersion()], next_cursor: "" });
+    renderPage();
+
+    const open = await screen.findByRole("button", { name: "查看详情" });
+    const card = open.closest("article.deployment-card") as HTMLElement;
+    // A dialog is not a disclosure: the control must not claim an expanded state.
+    expect(open).not.toHaveAttribute("aria-expanded");
+    // jsdom does not focus a clicked button the way a browser does, and the
+    // control's focus is what the drawer has to give back.
+    open.focus();
+    fireEvent.click(open);
+
+    const drawer = await screen.findByRole("dialog", { name: "Deployment dep_1 详情" });
+    expect(drawer).toHaveClass("drawer");
+    expect(within(drawer).getByText("价格版本")).toBeVisible();
+    // The details are in the drawer, and nothing of them was left in the card.
+    expect(card.querySelector(".deployment-details")).toBeNull();
+    expect(card).not.toHaveClass("expanded");
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(document.activeElement).toBe(open);
+  });
+
+  // The boxed strip that opened the drawer is gone: with everything healthy it
+  // was six reassuring values and no answer to "what do I do", which is how an
+  // operator reads a panel twice and still asks what it is for. What lived only
+  // there — enabled state, both health verdicts, the route count — moved into
+  // the section that describes how this deployment runs.
+  it("keeps every fact the readiness strip held, in the runtime section", async () => {
+    vi.spyOn(api, "deployments").mockResolvedValue({ items: [existingDeployment], next_cursor: "" });
+    vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [activePriceVersion()], next_cursor: "" });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "查看详情" }));
+
+    const drawer = await screen.findByRole("dialog", { name: "Deployment dep_1 详情" });
+    expect(drawer.querySelector(".detail-status")).toBeNull();
+    const runtime = within(drawer).getByRole("heading", { name: "运行与限制" }).closest("section") as HTMLElement;
+    for (const label of ["状态", "主动探测", "最近手动测试", "路由依赖", "并发上限", "上下文窗口", "输出上限"]) {
+      expect(within(runtime).getByText(label), label).toBeVisible();
+    }
+  });
+
+  // Two of these used to overstate what they knew: the test verdict is a manual
+  // test that can be days old — the 30-second probe that actually removes a
+  // deployment from the router's candidates is the state beside it — and the
+  // route count only ever counted enabled routes without saying so.
+  it("does not let a manual test read as health, and says which routes it counts", async () => {
+    vi.spyOn(api, "deployments").mockResolvedValue({
+      items: [deployment("dep_1", { enabled: true, last_test_status: "healthy", last_test_revision: 1, last_test_latency_millis: 1336, last_tested_at: "2026-08-23T02:52:00Z" })],
+      next_cursor: "",
+    });
+    vi.spyOn(api, "routes").mockResolvedValue({
+      items: [
+        { id: "route_1", public_model: "gpt", deployment_id: "dep_1", priority: 0, strategy: "ordered", enabled: true, revision: 1, created_at: "", updated_at: "" },
+        { id: "route_2", public_model: "gpt-legacy", deployment_id: "dep_1", priority: 1, strategy: "ordered", enabled: false, revision: 1, created_at: "", updated_at: "" },
+      ],
+      next_cursor: "",
+    });
+    vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [activePriceVersion()], next_cursor: "" });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "查看详情" }));
+
+    const drawer = await screen.findByRole("dialog", { name: "Deployment dep_1 详情" });
+    expect(within(drawer).getByText("最近手动测试")).toBeVisible();
+    expect(within(drawer).getByText("通过 · 1336ms")).toBeVisible();
+    // One of the two routes is disabled, and the label says which kind it counts.
+    expect(within(drawer).getByText("1 条启用路由")).toBeVisible();
+  });
+
+  // The review panel used to open with two sentences, list five facts — three of
+  // them a dash — and close with a third sentence, without ever saying what to
+  // do. And it gave the same label and the same warning colour to two different
+  // facts: "nothing supports this any more" and "the catalog disagrees with a
+  // declaration we are still serving".
+  it("states a capability disagreement as capabilities, and offers the one action that resolves it", async () => {
+    vi.spyOn(api, "deployments").mockResolvedValue({
+      items: [deployment("dep_1", {
+        capabilities: { ...chatCapabilities, developer_role: true },
+        capability_review: {
+          state: "review_available", source: "operator_declared", status: "known", model_revision: "r1",
+          catalog_covered: true, catalog_source: "builtin_catalog",
+          available_for_review: ["vision", "reasoning"],
+          no_longer_supported: ["developer_role"],
+          reason: "catalog_establishes_less",
+        },
+      })],
+      next_cursor: "",
+    });
+    vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [activePriceVersion()], next_cursor: "" });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "查看详情" }));
+
+    const drawer = await screen.findByRole("dialog", { name: "Deployment dep_1 详情" });
+    const notice = drawer.querySelector(".deployment-capability-review") as HTMLElement;
+    // The title covers the loudest thing in the panel, not half of it.
+    expect(within(notice).getByText("目录与你的声明不一致")).toBeVisible();
+    expect(within(notice).getByText("可开启")).toBeVisible();
+    expect(within(notice).getByText("视觉、推理")).toBeVisible();
+    // Not "no longer supported", and not a warning: it is still being served.
+    expect(within(notice).getByText("目录不认可")).toBeVisible();
+    expect(within(notice).getByText(/开发者角色 · 仍按你的声明运行/)).toBeVisible();
+    expect(notice).not.toHaveClass("warning");
+    // The rows the panel has nothing to say about are gone, along with the
+    // provenance cells and the closing sentence.
+    expect(within(notice).queryByText("已由管理员关闭")).not.toBeInTheDocument();
+    expect(within(notice).queryByText("保存的答案来自哪里")).not.toBeInTheDocument();
+
+    // The instruction was "turn a capability on and retest"; following it used to
+    // mean closing the drawer and finding the card again.
+    fireEvent.click(within(notice).getByRole("button", { name: "去编辑能力" }));
+    expect(await screen.findByRole("dialog", { name: "编辑模型部署" })).toBeVisible();
+    expect(screen.queryByRole("dialog", { name: "Deployment dep_1 详情" })).not.toBeInTheDocument();
+  });
+
+  // The state that decides routing today, and the one the console could not see
+  // until the Admin API reported it: a failing probe takes the deployment out of
+  // the router's candidates while enabled, tested and priced all still read as
+  // they did. The card carries it for the same reason it carries drift.
+  it("reports a failing active probe on the card and says what it costs in the drawer", async () => {
+    vi.spyOn(api, "deployments").mockResolvedValue({
+      items: [deployment("dep_1", {
+        enabled: true, last_test_status: "healthy", last_test_revision: 1, last_test_latency_millis: 1336,
+        probe: { state: "unhealthy", observed_at: "2026-08-25T02:00:00Z", error_class: "connect" },
+      })],
+      next_cursor: "",
+    });
+    vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [activePriceVersion()], next_cursor: "" });
+    renderPage();
+
+    const card = (await screen.findByText("Deployment dep_1")).closest("article.deployment-card") as HTMLElement;
+    expect(within(card).getByText("主动探测未通过")).toBeVisible();
+
+    fireEvent.click(within(card).getByRole("button", { name: "查看详情" }));
+    const drawer = await screen.findByRole("dialog", { name: "Deployment dep_1 详情" });
+    expect(within(drawer).getByText("未通过")).toBeVisible();
+    // The consequence, and the classified reason — the same wording a failed
+    // manual test gets, never the upstream's own sentence.
+    expect(within(drawer).getByText(/已移出路由候选 · 无法建立到上游的连接/)).toBeVisible();
+  });
+
+  // Not probed is not a failure: a deployment stays eligible until a probe has
+  // actually said otherwise, and reporting it as unhealthy would have the
+  // console claim an outage every restart.
+  it("distinguishes a deployment no probe has reached yet", async () => {
+    vi.spyOn(api, "deployments").mockResolvedValue({
+      items: [deployment("dep_1", { enabled: true, probe: { state: "not_probed" } })],
+      next_cursor: "",
+    });
+    vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [activePriceVersion()], next_cursor: "" });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "查看详情" }));
+
+    const drawer = await screen.findByRole("dialog", { name: "Deployment dep_1 详情" });
+    expect(within(drawer).getByText("尚未探测")).toBeVisible();
+    expect(within(drawer).getByText("还没跑过探测，暂不影响路由")).toBeVisible();
+    expect(screen.queryByText("主动探测未通过")).not.toBeInTheDocument();
+  });
+
+  // The panel this replaced listed four rows of US$0.00 for a free deployment,
+  // and called itself a timeline while rendering only the versions that had not
+  // taken effect yet — so the version actually in force, and everything it
+  // replaced, were the two things it did not show.
+  it("states a free price once and lists every version the deployment charged under", async () => {
+    vi.spyOn(api, "deployments").mockResolvedValue({ items: [existingDeployment], next_cursor: "" });
+    vi.spyOn(api, "deploymentPrices").mockResolvedValue({
+      items: [
+        { ...activePriceVersion(), id: "price_free", version: 4, billing_mode: "free", status: "active", effective_from: "2026-08-20T00:00:00Z" },
+        { ...activePriceVersion(), id: "price_old", version: 3, status: "superseded", effective_from: "2026-08-01T00:00:00Z" },
+      ],
+      next_cursor: "",
+    });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "查看详情" }));
+
+    const drawer = await screen.findByRole("dialog", { name: "Deployment dep_1 详情" });
+    // A free price is stated by the version that fixed it and nowhere else: no
+    // rate grid, and no "billing mode" cell repeating the row below it.
+    expect(within(drawer).queryByText("输入价格")).not.toBeInTheDocument();
+    expect(within(drawer).queryByText("缓存输入价格")).not.toBeInTheDocument();
+    expect(within(drawer).queryByText("计费方式")).not.toBeInTheDocument();
+
+    const timeline = drawer.querySelector("ol.detail-timeline") as HTMLElement;
+    expect(within(timeline).getByText("v4")).toBeVisible();
+    expect(within(timeline).getByText(/生效中/)).toBeVisible();
+    // The superseded version is the history the old panel dropped.
+    expect(within(timeline).getByText("v3")).toBeVisible();
+    expect(within(timeline).getByText(/已被替代/)).toBeVisible();
+    // manual · asserted · temporary_estimate is three identifiers from three
+    // enums; the drawer says what they mean.
+    expect(within(timeline).getAllByText(/临时估算 · 管理员录入 · Halro 未验证/).length).toBe(2);
+  });
+
+  // The card truncates its capabilities because a tile has a width, and the
+  // identifiers used to sit behind a disclosure — which put an extra click in
+  // front of the one thing the drawer gets opened for while reading a log line.
+  it("lists every capability with its evidence, and states the upstream target", async () => {
+    vi.spyOn(api, "deployments").mockResolvedValue({
+      items: [deployment("dep_1", {
+        capabilities: { ...chatCapabilities, vision: true, json_mode: true },
+        capability_evidence: { chat: "verified", vision: "declared" },
+        updated_at: "2026-08-23T02:52:00Z",
+      })],
+      next_cursor: "",
+    });
+    vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [activePriceVersion()], next_cursor: "" });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "查看详情" }));
+
+    const drawer = await screen.findByRole("dialog", { name: "Deployment dep_1 详情" });
+    for (const heading of ["计费", "能力", "运行与限制", "连接与标识"]) {
+      expect(within(drawer).getByRole("heading", { name: heading })).toBeVisible();
+    }
+    const list = within(drawer).getByRole("list", { name: "能力" });
+    // chat, streaming, tools, stream_usage, vision, json_mode — all six, not five and a "+1".
+    expect(within(list).getAllByRole("listitem")).toHaveLength(6);
+    expect(within(within(list).getByText("对话").closest("li") as HTMLElement).getByText("已验证")).toBeVisible();
+    expect(within(within(list).getByText("视觉").closest("li") as HTMLElement).getByText("已声明")).toBeVisible();
+    // Nothing established this one either way; that is not the same as declared.
+    expect(within(within(list).getByText("流式").closest("li") as HTMLElement).getByText("未记录证据")).toBeVisible();
+
+    expect(within(drawer).getByText("上游调用目标")).toBeVisible();
+    expect(within(drawer).getByText("gpt-chat")).toBeVisible();
+    // The provider link lands on the provider itself, not on the top of the list.
+    expect(within(drawer).getByRole("link", { name: /OpenAI production/ }))
+      .toHaveAttribute("href", "/admin/providers#provider-provider_openai");
+    expect(within(drawer).queryByText("技术详情")).not.toBeInTheDocument();
+    // Internal identifiers were dropped on purpose: the profile and binding ids
+    // name Halro's own wiring, and the evidence summary said in one word what
+    // the capability list above now says per capability.
+    // The revision counter went the same way: what an operator reads it for is
+    // when the deployment last changed, which is the timestamp beside it.
+    expect(within(drawer).getByText("最近更新")).toBeVisible();
+    for (const dropped of ["能力配置", "绑定 ID", "部署 ID", "能力证据", "修订号"]) {
+      expect(within(drawer).queryByText(dropped), dropped).not.toBeInTheDocument();
+    }
   });
 
   it("draws modality marks from the server mapping and never as the whole capability set", async () => {
@@ -923,11 +1201,18 @@ describe("deployment card keeps what the row decided", () => {
 
     const card = (await screen.findByText("Deployment dep_marks")).closest("article.deployment-card") as HTMLElement;
     // Each mark names its direction, its modality and the evidence behind it,
-    // so the glyph is never the only thing carrying the fact.
+    // so what is on screen is never the only thing carrying the fact.
     // The marks appear once the profile bundle lands: the mapping is the
-    // server's, and drawing them from a guess before it arrives is the drift
+    // server's, and writing them from a guess before it arrives is the drift
     // this whole arrangement exists to avoid.
     expect(await within(card).findByLabelText("输入：文本（已验证）")).toBeVisible();
+    // The modality is written out, not drawn: five 16px glyphs needed a hover to
+    // be understood, and evidence rides on weight rather than on colour alone.
+    const marks = card.querySelector(".modality-marks") as HTMLElement;
+    expect(marks).toHaveTextContent("文本");
+    expect(marks).toHaveTextContent("图像");
+    expect(marks.querySelector("svg")).toBeNull();
+    expect(within(card).getByLabelText("输入：图像（已声明）")).toHaveAttribute("data-evidence", "declared");
     expect(within(card).getByLabelText("输入：图像（已声明）")).toBeVisible();
     expect(within(card).getByLabelText("输出：文本（已验证）")).toBeVisible();
     // streaming, tools and stream_usage express no modality at all. Without the
@@ -1110,6 +1395,7 @@ describe("deployment price panel", () => {
     const create = vi.spyOn(api, "createDeploymentPrice").mockResolvedValue(activePriceVersion());
     renderPage();
 
+    fireEvent.click(await screen.findByLabelText("更多操作"));
     fireEvent.click(await screen.findByRole("button", { name: "启用" }));
     expect(await screen.findByText(PRICE_BLOCKER)).toBeVisible();
 
@@ -1120,7 +1406,9 @@ describe("deployment price panel", () => {
     fireEvent.click(screen.getByRole("button", { name: "确认并创建价格版本" }));
 
     await waitFor(() => expect(create).toHaveBeenCalled());
-    expect(await screen.findByRole("button", { name: "查看 Deployment dep_1 的价格详情" })).toBeVisible();
+    // The price fact was on the card because it was missing. Once it exists the
+    // card has nothing to say about it, and the whole cell goes.
+    await waitFor(() => expect(screen.queryByText("价格设置")).not.toBeInTheDocument());
     await waitFor(() => expect(screen.queryByText(PRICE_BLOCKER)).not.toBeInTheDocument());
   });
 
@@ -1279,11 +1567,29 @@ describe("deployment price panel", () => {
     });
     renderPage("read_only");
     fireEvent.click(await screen.findByRole("button", { name: "查看详情" }));
-    for (const name of ["调整价格", "确认恢复价格", "取消"]) {
+    // Each scheduled row carries a cancel button, so its accessible name names
+    // the version rather than being one of several identical "取消".
+    for (const name of ["调整价格", "确认恢复价格", "取消价格版本 v4"]) {
       const control = await screen.findByRole("button", { name });
       expect(control).toBeDisabled();
       expect(control).toHaveAttribute("title", "只读账户无法执行此操作。");
     }
+  });
+
+  // The price form opens on top of the details drawer, and both dialogs listen
+  // for Escape on the document. Only the one on top may answer it: a key that
+  // closed the drawer underneath would take the half-filled form with it.
+  it("closes only the top dialog when the price form is open over the details drawer", async () => {
+    vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [activePriceVersion()], next_cursor: "" });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "查看详情" }));
+    fireEvent.click(await screen.findByRole("button", { name: "调整价格" }));
+    expect(await screen.findByLabelText("输入 USD / 百万令牌")).toBeVisible();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    await waitFor(() => expect(screen.queryByLabelText("输入 USD / 百万令牌")).not.toBeInTheDocument());
+    expect(screen.getByRole("dialog", { name: "Deployment dep_1 详情" })).toBeVisible();
   });
 
   // Confirming an immediate price change is the last point at which it can be
