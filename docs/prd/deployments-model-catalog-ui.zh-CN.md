@@ -1511,3 +1511,161 @@ facts 不丢，按「在抽屉里还有没有别的落脚点」分流：
 i18n 删掉五个随之作废的键（`priceSetting`、`setDeploymentPrice`、`contextSummary`、
 `maxOutputSummary`、`activeRoutesCompact`），新增结论行与可访问名所需的键（中英同步）。
 前端全套 421 项通过（新增 9 项：阶梯 7 项 + 卡片具名与单一 live region + 四槽恒定）。
+
+## 15. 「创建模型部署」对话框：能力从哪来，以及为什么现在它是空的（2026-08-25）
+
+### 15.1 现场
+
+截图里的这次创建：服务商 `AWS-Mantle-OpenAI`（绑定 `/openai/v1` 路由），模型 ID
+`deepseek.v3.1`，能力区三段全空（操作 0/1、模态 0/1、特性 0/6），底部红字「至少选择一个
+核心操作能力」。
+
+**这个部署即使建出来也调不通。** `deepseek.v3.1` 只在 `/v1` 路由上服务（2026-08-21 逐模型
+实测，见 `docs/verification/provider-real-matrix.md`），发到 `/openai/v1` 会被上游以
+``model `deepseek.v3.1` isn't supported on this route`` 拒绝，不会回退。表单当前不拦，也不
+提示——它把一个「路由选错了」的问题，呈现成了一个「你还没勾能力」的问题。
+
+### 15.2 前置事实：四家上游到底给不给能力元数据
+
+这是决定对话框能做到什么的硬约束，逐个核对过代码与线上返回：
+
+| 服务商 | 目录端点返回什么 | Halro 的映射 |
+| --- | --- | --- |
+| OpenAI | `id` / `object` / `created` / `owned_by`，无能力、无窗口 | 无。`openai/adapter.go:258` 写死 `MetadataSource: none` |
+| DeepSeek | 同上（复用同一 adapter） | 无 |
+| Anthropic | **有能力报告**：`image_input`、`thinking`、`structured_outputs`、`batch`、`pdf_input`、`citations`、`code_execution`、`context_management`、`effort` | `anthropic/adapter.go:228`，映射 4 项 → vision / reasoning / json_mode / batches；chat 与 streaming 由「它是 Messages 端点」推得；**工具调用没有字段，因此不 claim** |
+| AWS Bedrock 控制面 | **半有**：`inputModalities`、`outputModalities`、`inferenceTypesSupported` | `bedrock/models.go:137`，只能推出 chat 与 vision |
+| AWS Bedrock Mantle | 只有 `id` / `owned_by`，连上下文窗口都没有 | `bedrockmantle/adapter.go:134` 明确不实现映射：从标识符推能力是「披着 declared 外衣的猜测」 |
+| Gemini | **有**：`supportedGenerationMethods` + `inputTokenLimit` + `outputTokenLimit` | `gemini/adapter.go:239` → chat / streaming / embeddings |
+| Azure OpenAI | 数据面没有通用目录 | `modelCatalogURL` 直接拒绝 |
+
+两条与既有结论的衔接，免得这一节读起来像没查过前文：
+
+- **Mantle 拿不到控制面那半份元数据，这是已经查实的死路。** §11.6 F5 记下三重独立阻塞：
+  控制平面允许清单只对 `SurfaceBedrockRuntime` 放宽，`ControlPlaneHostFor` 只认
+  `bedrock-runtime.` 前缀，而 Mantle 绑定是 `SurfaceBedrockMantle`、主机形如
+  `bedrock-mantle.<region>.api.aws`，推不出任何控制平面主机。所以上表 Bedrock 控制面那行
+  的「半有」，对 Mantle 服务商**一项都不适用**——它的能力来源只剩内置目录与探测两条。
+- **F4 里写的枚举端点已经变了。** 那一期写的是 `operationURL("models")`；2026-08-25 实测
+  `/openai/v1/models` 返回 404 而 `/v1/models` 返回 200，枚举与连接测试已改走
+  `catalogURL()`（账号级 `/v1`），推理仍按 profile 固定路由。证据见
+  `docs/verification/provider-real-matrix.md`「目录是账号级，不是路由级」。
+
+结论：**六家里只有两家给能力，一家给一半，三家什么都不给。** 所以能力永远有四个来源——
+上游元数据、内置目录、探测、管理员声明——而对话框现在一处都没有说明某一格是哪来的，空的时候
+也不说是为什么空。这不是可选的信息层，这是这个界面唯一要回答的问题。
+
+### 15.3 诊断
+
+**D1 组合列表已经拿到了答案，渲染时把它丢了。** `GET /providers/{id}/invocation-targets`
+不带 `binding_id` 时会对服务商的**每个**绑定做一次解析，返回的每个 item 都带
+`resolution_state` 与 `variants`（`admin_invocation_targets.go:97`、类型见
+`web/src/types.ts:553`）。也就是说「这 50 个模型里哪些这个服务商真能承载、由哪个接口承载」
+是**已经在响应体里**的。而选项渲染只有一行 `<strong>{model.display_name}</strong>`
+（`DeploymentsPage.tsx:1835`）。列表里 37 个只在 `/v1`、11 个只在 `/openai/v1` 的模型，
+外观完全一致。
+
+**D2 「目录不认识它」和「目录认识它，但在另一条路由上」被压成了同一个状态。** 解析只对
+服务商已绑定的接口查目录（`admin_invocation_targets.go:515` 的 `mergeKey` 取
+`binding.ProfileID`），从不反问「目录里这个模型登记在哪些 profile 下」。于是
+`deepseek.v3.1` + 只绑了 `bedrock.mantle.openai.chat.v1` 的服务商 → 无 claim →
+`claimsExist` 为假 → `resolution_state = unknown`，操作者收到的建议是「手工声明，或跑一次
+识别」。而正确答案目录里就有：这个模型登记在 `bedrock.mantle.chat.v1` 下，操作者要做的是
+换一个绑定了那条接口的服务商，一次识别都不用跑。
+
+这两种情况的下一步动作完全相反，压成一个状态之后，界面把操作者推向了错的那一个。
+
+**D3 探测在这个场景下也答不出来，而且要花钱。** 「返回识别」会向 `/openai/v1/chat/completions`
+发一次真实调用，被上游按路由拒绝。按 `classifyCapabilityProbeError` 的分类，只有 provider
+code 是 `unsupported_parameter` / `unsupported_value` 才判 `unsupported`，其余 `ErrorBadRequest`
+一律 `inconclusive`——路由拒绝几乎肯定不在那两个 code 里（**未实测，需验证**）。结果是：
+花掉一次可能计费的调用，拿回「无法判定」，而答案本来就在目录里。
+
+**D4 能力区的「空」有三种，界面一视同仁。** ①上游根本不给元数据（Mantle、OpenAI、DeepSeek）；
+②目录没有这一条（本次补种后，Mantle 只剩 `zai.glm-4.6`）；③目录有，但被接口 ceiling
+夹掉了。三者的下一步不同——第一种只能靠目录或探测，第二种要么换模型要么声明，第三种是接口
+选错了。现在三种都渲染成同一片未勾选的方框。
+
+**D5 「至少选择一个核心操作能力」把上游的沉默转写成了操作者的疏忽。** 这句红字出现的时刻，
+操作者什么都没做错：他选了一个真实存在的模型，上游不肯说它能做什么。要求应该出现在有能力
+可选的时候；没有来源的时候，界面该说的是「谁都没告诉我这个模型能做什么，你可以：换绑定 /
+跑识别（会计费）/ 自己声明」。
+
+**D6 Bedrock 控制面给了流式字段，我们没接。** `ListFoundationModels` 的
+`responseStreamingSupported` 是明确的布尔量，`bedrock/models.go` 解析时只取了
+`inputModalities`、`outputModalities`、`inferenceTypesSupported` 三项。这是一项白给的
+declared 证据，成本为零。
+
+### 15.4 方案
+
+**S1 组合列表分档（纯前端，数据已在手）。** 每个选项按其 `resolution_state` 归档，档位在
+列表内分组，不隐藏任何模型：
+
+```
+可直接创建      解析出唯一变体，选项右侧标出承载它的接口名
+需要先声明      unknown —— 目录与上游都没说，创建时要走声明或识别
+本服务商不承载  no_variant / covered_elsewhere —— 标出「由 X 接口服务」
+```
+
+排序把「可直接创建」放最前。**不隐藏**第三档：操作者是照着 AWS 控制台的名字来找的，
+搜不到会以为 Halro 的目录坏了。
+
+**S2 解析补一个状态：`covered_elsewhere`。** 当前服务商的任何绑定都解析不出变体时，再用
+（provider_type, target_kind, model）去目录里反查它登记在哪些 profile 下。查到就返回
+`covered_elsewhere` 并带上 profile 列表；查不到才是 `unknown`。前端据此把 D2 那句错误的
+建议换成一句可执行的：「该模型由 `bedrock.mantle.chat.v1` 服务，当前服务商绑定的是
+`bedrock.mantle.openai.chat.v1`；请改选绑定了前者的服务商，或在服务商里启用该接口」，
+并给出直达链接。
+
+这条依赖本次刚种进内置目录的 60 条 Mantle 条目——路由信息就是靠它们才在进程内可查的。
+
+**S3 能力区空态按 D4 的三种分别说明**，每种带对应的下一步动作，且写明识别会计费、上限是
+`MaxVerificationCalls`（这个值已经在 `discovery.max_verification_calls` 里）。
+
+**S4 每一格能力标出来源。** 四态：上游元数据（declared）、内置目录（declared）、探测
+（verified）、管理员声明（operator_declared）。`CapabilityClaim.source` 已经随每个变体返回
+（`web/src/types.ts:518`），前端目前没有把它渲染出来。**不预勾**任何没有来源的能力——这条既有约束
+本次不动摇，理由写在 `DeploymentsPage.tsx:1292`：从服务商 ceiling 预填，正是当初让部署
+claim 出模型并不具备的能力的那个习惯。
+
+**S5 接上 `responseStreamingSupported`**，让 Bedrock 控制面多给一项 streaming 的 declared
+证据。
+
+### 15.5 明确不做
+
+- **不按名字猜能力。** 「模型 ID 里有 vision 就勾视觉」这类推断一次都不做，理由与
+  `bedrockmantle/adapter.go:134` 相同。
+- **不自动跑识别。** 识别是计费动作，只在操作者按下时发生，且事先说明会打几次调用。
+- **不因为路由不匹配就禁用保存。** 目录可能过期、操作者可能知道我们不知道的事；给的是
+  一条挡在路上的说明加一个直达链接，不是一把锁。
+- **不在这一版做价格预填。** 价格是部署级、带来源审计的操作者输入，预填等于替他签字。
+
+### 15.6 分期与验收
+
+| 期 | 内容 | 依赖 |
+| --- | --- | --- |
+| P0 | S1 组合列表分档 | 无，数据已在响应体里 |
+| P1 | S2 `covered_elsewhere` + 指路文案 | 内置目录的 Mantle 条目（已完成） |
+| P2 | S3 空态三分 + S4 来源徽标 | 无 |
+| P3 | S5 Bedrock 流式字段 | 无 |
+
+验收（每条都要能在没有真实凭据的情况下用测试证明）：
+
+1. 服务商绑定 `/openai/v1`、模型选 `deepseek.v3.1` 时，列表把它归入「本服务商不承载」，
+   且解析返回 `covered_elsewhere` 与 `bedrock.mantle.chat.v1`。
+2. 同一个服务商选 `openai.gpt-5.6-sol` 时归入「可直接创建」，能力区非空且每格标出来源为
+   「内置目录」。
+3. `zai.glm-4.6`（目录故意不收，见 `builtin.go` 注释）归入「需要先声明」，空态给出的三个
+   动作里包含「自己声明」。
+4. Anthropic 服务商上的模型，能力来源标为「上游元数据」，且工具调用**不**被勾上——上游
+   没有这个字段。
+5. 任何一档下，都没有一个能力是在无来源的情况下被预先勾上的。
+
+### 15.7 待定
+
+- D3 那条需要一次实测：Mantle 按路由拒绝时返回的 provider code 到底是什么。如果它落在
+  `unsupported_parameter` / `unsupported_value` 之外（预期如此），那么「路由不匹配」这件事
+  探测永远判不出来，S2 就不只是省一次调用，而是唯一能给出答案的路径。
+- Anthropic 的 `pdf_input`、`citations`、`code_execution`、`context_management`、`effort`
+  五项在 Halro 的能力词典里没有对应项（`anthropic/adapter.go:249` 已记录）。要不要在详情里
+  原样展示「上游还声明了这些，Halro 不承载」，属于能力词典演进的范围，另议。
