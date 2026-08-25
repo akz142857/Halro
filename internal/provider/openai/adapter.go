@@ -608,7 +608,7 @@ func validAzureDeployment(value string) bool {
 // parameter was refused without saying which, and the operator is left to bisect
 // a request they did not write.
 func classifyHTTPError(status int, refusal upstreamRefusal) *provider.Error {
-	result := &provider.Error{StatusCode: status, Message: "provider rejected request", ProviderCode: refusal.Code}
+	result := &provider.Error{StatusCode: status, ProviderCode: refusal.Code}
 	switch {
 	case status == http.StatusUnauthorized || status == http.StatusForbidden:
 		result.Class = provider.ErrorAuthentication
@@ -635,10 +635,31 @@ func classifyHTTPError(status int, refusal upstreamRefusal) *provider.Error {
 	default:
 		result.Class = provider.ErrorBadRequest
 	}
-	if refusal.Message != "" {
-		result.Message = fmt.Sprintf("provider error (%d): %s", status, refusal.Message)
-	}
+	result.Message = fmt.Sprintf("provider error (%d): %s", status, refusalSentence(refusal))
 	return result
+}
+
+// refusalSentence is the part of the message after the status code. When the
+// upstream wrote a sentence it is quoted verbatim; when it did not, the stand-in
+// says which silence this was, because the two send an operator to different
+// places. A body that is not an OpenAI-shaped envelope usually means the thing
+// answering is not the provider API — a proxy, a CDN, or a path that does not
+// exist upstream — while a well-formed envelope with an empty message means the
+// provider itself declined to say why.
+//
+// The stand-in must never borrow another status code's name. Reading back
+// "provider error (404): Bad Gateway" costs an operator the one fact the line
+// carried, because the status says the route was not found and the sentence
+// says a gateway failed, and only one of them is true.
+func refusalSentence(refusal upstreamRefusal) string {
+	switch {
+	case refusal.Message != "":
+		return refusal.Message
+	case refusal.Unreadable:
+		return "upstream sent no OpenAI-shaped error body"
+	default:
+		return "upstream sent no error message"
+	}
 }
 
 // upstreamRefusal is the machine-readable part of an OpenAI-shaped error body,
@@ -646,16 +667,22 @@ func classifyHTTPError(status int, refusal upstreamRefusal) *provider.Error {
 type upstreamRefusal struct {
 	Message string
 	Code    string
+	// Unreadable records that the body could not be parsed as an OpenAI error
+	// envelope at all, as opposed to parsing into one that carried no sentence.
+	// Only the message the upstream actually wrote belongs in Message, so that a
+	// stand-in Halro authored can never be mistaken for something a provider
+	// said.
+	Unreadable bool
 }
 
 func limitedErrorMessage(reader io.Reader) upstreamRefusal {
 	payload, err := io.ReadAll(io.LimitReader(reader, 4096))
 	if err != nil {
-		return upstreamRefusal{}
+		return upstreamRefusal{Unreadable: true}
 	}
 	var envelope openaiapi.ErrorEnvelope
 	if json.Unmarshal(payload, &envelope) != nil {
-		return upstreamRefusal{Message: http.StatusText(http.StatusBadGateway)}
+		return upstreamRefusal{Unreadable: true}
 	}
 	refusal := upstreamRefusal{Message: envelope.Error.Message, Code: strings.TrimSpace(envelope.Error.Code)}
 	if refusal.Code == "" {
@@ -669,9 +696,6 @@ func limitedErrorMessage(reader io.Reader) upstreamRefusal {
 	// has, in a shape the console and log already accept.
 	if param := strings.TrimSpace(pointerValue(envelope.Error.Param)); param != "" && refusal.Code != "" {
 		refusal.Code += ":" + param
-	}
-	if refusal.Message == "" {
-		refusal.Message = http.StatusText(http.StatusBadGateway)
 	}
 	return refusal
 }

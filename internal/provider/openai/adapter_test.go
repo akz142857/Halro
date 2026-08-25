@@ -480,6 +480,78 @@ func TestFakeProviderHTTPErrorMatrix(t *testing.T) {
 	}
 }
 
+// TestUpstreamRefusalMessageMatchesStatus covers the sentence half of a
+// classified refusal: whatever fills it, it must be either something the
+// upstream actually wrote or a stand-in that agrees with the status beside it.
+// The regression this pins down shipped a stand-in reading "Bad Gateway" onto
+// every unparseable body, so a probe against a path the upstream does not have
+// logged "provider error (404): Bad Gateway" — two different failures in one
+// line, sending the operator to look for a gateway that was never involved.
+func TestUpstreamRefusalMessageMatchesStatus(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		body   string
+		want   string
+	}{
+		{
+			name:   "upstream sentence is quoted verbatim",
+			status: http.StatusNotFound,
+			body:   `{"error":{"message":"The model does not exist","code":"model_not_found"}}`,
+			want:   "provider error (404): The model does not exist",
+		},
+		{
+			// What a proxy, a CDN, or a route the upstream does not serve
+			// returns: a body that never parses as an OpenAI envelope.
+			name:   "html body names no status but its own",
+			status: http.StatusNotFound,
+			body:   "<html><head><title>404 Not Found</title></head></html>",
+			want:   "provider error (404): upstream sent no OpenAI-shaped error body",
+		},
+		{
+			name:   "empty body names no status but its own",
+			status: http.StatusNotFound,
+			body:   "",
+			want:   "provider error (404): upstream sent no OpenAI-shaped error body",
+		},
+		{
+			// Shaped correctly, but the provider declined to say why. That is a
+			// different fact from the body being unreadable, and an operator
+			// chasing the two looks in different places.
+			name:   "well-formed envelope with no sentence",
+			status: http.StatusNotFound,
+			body:   `{"error":{"code":"model_not_found"}}`,
+			want:   "provider error (404): upstream sent no error message",
+		},
+		{
+			name:   "a real 502 still reads as one",
+			status: http.StatusBadGateway,
+			body:   "<html>502</html>",
+			want:   "provider error (502): upstream sent no OpenAI-shaped error body",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := classifyHTTPError(test.status, limitedErrorMessage(strings.NewReader(test.body)))
+			if got.Message != test.want {
+				t.Fatalf("message = %q, want %q", got.Message, test.want)
+			}
+			// The stand-in is Halro's own prose, so nothing stops a later edit
+			// from reaching for another status name again. Reject any that is
+			// not this response's own.
+			for status := 400; status < 600; status++ {
+				name := http.StatusText(status)
+				if name == "" || status == test.status {
+					continue
+				}
+				if strings.Contains(got.Message, name) {
+					t.Fatalf("message %q borrows the name of status %d (%q)", got.Message, status, name)
+				}
+			}
+		})
+	}
+}
+
 func TestChatPropagatesCancellation(t *testing.T) {
 	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		<-request.Context().Done()
