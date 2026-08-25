@@ -98,6 +98,49 @@ func TestResponsesAdapterAddressesTheRouteTheProfileFixed(t *testing.T) {
 	}
 }
 
+// The catalogue is not on the route the profile pins. Measured on a real Mantle
+// account, 2026-08-25 (us-east-2): GET /v1/models is 200 while GET
+// /openai/v1/models is 404. Following the operation prefix into discovery
+// therefore 404'd both the model list and the connection test on every
+// /openai/v1 profile, while inference on that route was fine.
+func TestCatalogAndProbeStayOnV1WhileOperationsFollowTheProfileRoute(t *testing.T) {
+	endpoint, _ := url.Parse("https://bedrock-mantle.us-east-1.api.aws")
+	authorizer, err := provider.NewStaticHeaderAuthorizer(domain.CredentialBedrockAPIKey, "Authorization", "Bearer ", []byte("bedrock-key"), "api-key", "x-api-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var seen []string
+	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		seen = append(seen, request.URL.Path)
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}},
+			Body: io.NopCloser(strings.NewReader(`{"object":"list","data":[{"id":"openai.gpt-5.5","owned_by":"openai"}]}`))}, nil
+	})
+	adapter, err := NewResponses(ResponsesOptions{Endpoint: endpoint, Authorizer: authorizer, Client: &http.Client{Transport: transport},
+		Capabilities: provider.Capabilities{Chat: true}, OperationPathPrefix: "openai/v1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer adapter.Close()
+	if err := adapter.Probe(context.Background(), "openai.gpt-5.5"); err != nil {
+		t.Fatal(err)
+	}
+	targets, err := adapter.ListInvocationTargets(context.Background(), domain.TargetQuery{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 1 || targets[0].TargetID != "openai.gpt-5.5" {
+		t.Fatalf("unexpected targets: %#v", targets)
+	}
+	for _, path := range seen {
+		if path != "/v1/models" {
+			t.Fatalf("discovery addressed %q, want /v1/models", path)
+		}
+	}
+	if len(seen) != 2 {
+		t.Fatalf("expected a probe and a catalog request, saw %v", seen)
+	}
+}
+
 func TestResponsesAdapterUsesMantleWireAndDisablesStorage(t *testing.T) {
 	adapter := testAdapter(t, roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		if request.Method != http.MethodPost || request.URL.Path != "/v1/responses" {

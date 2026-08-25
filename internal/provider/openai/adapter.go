@@ -154,16 +154,29 @@ func (a *Adapter) modelCatalogURL() (url.URL, error) {
 	}
 	endpoint := *a.endpoint
 	basePath := strings.TrimRight(endpoint.Path, "/")
-	// The same route the operations use, for the same reason versionedPath
-	// exists: discovery and the operation it discovers for must not disagree
-	// about the URL. This used to skip the prefix, so a profile that pins one —
-	// Bedrock Mantle's chat routes sit under /openai/v1 — enumerated against
-	// <base>/v1/models while every call it enumerated for went to
-	// <base>/openai/v1/…, and the mismatch was silent.
-	if a.operationPathPrefix != "" {
-		endpoint.Path = basePath + "/" + a.operationPathPrefix + "/models"
-		return endpoint, nil
-	}
+	// Discovery ignores the operation route prefix on purpose, because on the
+	// one upstream that pins a prefix the catalogue is not route-scoped.
+	// Measured against a real Bedrock Mantle account on 2026-08-25, us-east-2:
+	//
+	//	GET /v1/models                        200
+	//	GET /openai/v1/models                 404
+	//	GET /v1/models/openai.gpt-5.5         200
+	//	GET /openai/v1/models/openai.gpt-5.5  404
+	//
+	// Addressing the catalogue at the operation route was meant to stop
+	// discovery and the calls it discovers for from disagreeing about the URL.
+	// The route they disagree about has no catalogue at all, so that reading
+	// 404'd every model list and every connection test on the two /openai/v1
+	// Mantle profiles — which is how it was found.
+	//
+	// The disagreement cannot be removed here, because it belongs to the
+	// service: Mantle lists the account's models once and serves each of them
+	// from exactly one route, and the list does not say which. So a profile
+	// pinned to /openai/v1 enumerates models that route will refuse. What keeps
+	// that from being silent is the upstream itself — a model addressed on the
+	// wrong route is refused with "isn't supported on this route", never served
+	// by a fallback — and a connection test passing here means the model exists
+	// on the account, not that this route serves it.
 	endpoint.Path = versionedPath(basePath, "models")
 	return endpoint, nil
 }

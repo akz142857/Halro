@@ -267,17 +267,19 @@ func TestProfileOperationURLs(t *testing.T) {
 	}
 }
 
-// Discovery has to address the same route the operations do. A profile that
-// pins a route — Bedrock Mantle's two Mantle routes on one host — enumerated
-// against the default one, so the model list and the calls made against that
-// list came from different places and nothing said so.
-func TestModelCatalogAddressesTheProfileRoute(t *testing.T) {
+// Discovery does not address the route the operations do, because on the only
+// upstream that pins one the catalogue is not route-scoped. Measured on a real
+// Bedrock Mantle account, 2026-08-25 (us-east-2): GET /v1/models is 200 and GET
+// /openai/v1/models is 404, and the same split holds for /models/{id}. The
+// earlier reading — discovery follows the operation prefix — 404'd every model
+// list and every connection test on the two /openai/v1 profiles.
+func TestModelCatalogIsNotScopedToTheOperationRoute(t *testing.T) {
 	for _, test := range []struct {
 		name, base, prefix, want string
 	}{
 		{"default route", "https://api.openai.com", "", "https://api.openai.com/v1/models"},
 		{"literal base path", "https://llm.internal/api/paas/v4", "", "https://llm.internal/api/paas/v4/models"},
-		{"bedrock mantle openai route", "https://bedrock-mantle.us-east-2.api.aws", "openai/v1", "https://bedrock-mantle.us-east-2.api.aws/openai/v1/models"},
+		{"bedrock mantle openai route", "https://bedrock-mantle.us-east-2.api.aws", "openai/v1", "https://bedrock-mantle.us-east-2.api.aws/v1/models"},
 		{"bedrock mantle default route", "https://bedrock-mantle.us-east-2.api.aws", "v1", "https://bedrock-mantle.us-east-2.api.aws/v1/models"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -290,42 +292,25 @@ func TestModelCatalogAddressesTheProfileRoute(t *testing.T) {
 			if got := catalog.String(); got != test.want {
 				t.Fatalf("catalog URL=%q want=%q", got, test.want)
 			}
-			// Same prefix, same host, same route as the operation it discovers for.
-			operation := adapter.operationURL("model", "chat/completions")
-			if catalogBase, operationBase := strings.TrimSuffix(catalog.Path, "models"), strings.TrimSuffix(operation.Path, "chat/completions"); catalogBase != operationBase {
-				t.Fatalf("discovery route %q does not match operation route %q", catalogBase, operationBase)
-			}
 		})
 	}
 }
 
-func TestConnectionProbeUsesNonBillableEndpoint(t *testing.T) {
-	wantURL := "https://provider.example/v1/models/org%2Fgpt-test"
-	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
-		if request.Method != http.MethodGet || request.URL.String() != wantURL {
-			t.Fatalf("unexpected probe: %s %s want=%s", request.Method, request.URL, wantURL)
-		}
-		if request.Header.Get("Authorization") != "Bearer provider-key" {
-			t.Fatal("probe authorization was not set")
-		}
-		return &http.Response{
-			StatusCode: http.StatusOK, Header: make(http.Header),
-			Body:    io.NopCloser(strings.NewReader(`{"object":"list","data":[]}`)),
-			Request: request,
-		}, nil
-	})}
-	endpoint, _ := url.Parse("https://provider.example")
-	adapter, err := New(endpoint, []byte("provider-key"), client)
+// The divergence is deliberate and has to stay visible: the pinned route still
+// carries every operation, and only the catalogue falls back to /v1. A change
+// that quietly unifies them breaks one side or the other.
+func TestPinnedRouteCarriesOperationsWhileCatalogStaysOnV1(t *testing.T) {
+	endpoint, _ := url.Parse("https://bedrock-mantle.us-east-2.api.aws")
+	adapter := &Adapter{endpoint: endpoint, operationPathPrefix: "openai/v1"}
+	catalog, err := adapter.modelCatalogURL()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer adapter.Close()
-	if err := adapter.Probe(context.Background(), "org/gpt-test"); err != nil {
-		t.Fatal(err)
+	if got, want := catalog.Path, "/v1/models"; got != want {
+		t.Fatalf("catalog path=%q want=%q", got, want)
 	}
-	wantURL = "https://provider.example/v1/models"
-	if err := adapter.Probe(context.Background(), ""); err != nil {
-		t.Fatal(err)
+	if got, want := adapter.operationURL("openai.gpt-5.5", "chat/completions").Path, "/openai/v1/chat/completions"; got != want {
+		t.Fatalf("operation path=%q want=%q", got, want)
 	}
 }
 

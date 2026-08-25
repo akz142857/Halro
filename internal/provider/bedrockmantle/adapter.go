@@ -90,7 +90,7 @@ func (adapter *ResponsesAdapter) Close() {
 }
 
 func (adapter *ResponsesAdapter) Probe(ctx context.Context, _ string) error {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, adapter.operationURL("models"), nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, adapter.catalogURL(), nil)
 	if err != nil {
 		return badRequest("create Mantle probe", err)
 	}
@@ -136,7 +136,7 @@ func (adapter *ResponsesAdapter) InvocationTargetDiscovery() domain.InvocationTa
 // declared evidence, which is worse than the absence it would be covering up:
 // the absence is visible and a wrong claim is not.
 func (adapter *ResponsesAdapter) ListInvocationTargets(ctx context.Context, _ domain.TargetQuery) ([]domain.InvocationTargetDescriptor, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, adapter.operationURL("models"), nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, adapter.catalogURL(), nil)
 	if err != nil {
 		return nil, badRequest("create Mantle model catalog request", err)
 	}
@@ -326,6 +326,26 @@ func (adapter *ResponsesAdapter) do(ctx context.Context, requestID string, paylo
 		return nil, decodeHTTPError(response, true)
 	}
 	return response, nil
+}
+
+// catalogURL addresses the account's model catalogue, which is not scoped to
+// the route this profile pins. Measured against a real Mantle account on
+// 2026-08-25, us-east-2: GET /v1/models answers 200 and GET /openai/v1/models
+// answers 404, as does /openai/v1/models/{id} for a model that route serves.
+// Discovery and the connection test therefore address /v1 whatever route the
+// profile fixes for inference; see the same note on the OpenAI adapter's
+// modelCatalogURL for what that costs — an /openai/v1 profile lists models it
+// will not serve, and the upstream refuses them at call time rather than
+// falling back.
+func (adapter *ResponsesAdapter) catalogURL() string {
+	endpoint := *adapter.endpoint
+	base := strings.TrimRight(endpoint.Path, "/")
+	if strings.HasSuffix(base, "/v1") {
+		endpoint.Path = base + "/models"
+	} else {
+		endpoint.Path = base + "/v1/models"
+	}
+	return endpoint.String()
 }
 
 func (adapter *ResponsesAdapter) operationURL(operation string) string {
