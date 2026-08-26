@@ -676,6 +676,31 @@ func (r *Registry) SetDeploymentProbe(deploymentID string, probe DeploymentProbe
 	r.mu.Unlock()
 }
 
+// RetainDeploymentProbes drops the probe result of every deployment not named.
+//
+// Nothing else removes one. Replace carries forward whatever it does not
+// overwrite, which is right — a reload must not report a healthy deployment as
+// unprobed — but it means a deleted deployment kept its last verdict for the
+// life of the process, and the metrics exporter kept emitting
+// halro_deployment_up for an ID that no longer exists. A label set that only
+// ever grows is the shape this repo bans by name.
+//
+// The caller is the probe loop, which reads the deployment list from the store
+// and is therefore the only place that knows which IDs are still real.
+func (r *Registry) RetainDeploymentProbes(deploymentIDs []string) {
+	live := make(map[string]struct{}, len(deploymentIDs))
+	for _, id := range deploymentIDs {
+		live[id] = struct{}{}
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for id := range r.health {
+		if _, ok := live[id]; !ok {
+			delete(r.health, id)
+		}
+	}
+}
+
 func (r *Registry) DeploymentProbes() map[string]DeploymentProbe {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

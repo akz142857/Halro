@@ -39,10 +39,17 @@ func (r *Runtime) probeDeployments(ctx context.Context) {
 	if timeout <= 0 {
 		timeout = 15 * time.Second
 	}
+	// This loop holds the only authoritative list of deployments the registry
+	// ever sees, so it is where a probe result outliving its deployment is
+	// caught. Collected before the probes run and applied after, so a record
+	// written during this pass is not pruned by a list read before it.
+	live := make([]string, 0, len(deployments))
+	defer func() { r.providers.RetainDeploymentProbes(live) }()
 	for _, deployment := range deployments {
 		if !deployment.Enabled || deployment.DeletedAt != nil {
 			continue
 		}
+		live = append(live, deployment.ID)
 		instance, instanceErr := r.store.GetProvider(ctx, deployment.ProviderID)
 		if instanceErr != nil || !instance.Enabled || instance.DeletedAt != nil {
 			r.recordDeploymentProbe(deployment.ID, errProviderUnavailable)
