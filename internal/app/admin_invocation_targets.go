@@ -95,7 +95,7 @@ type bindingTargetCatalog struct {
 // whenever a read-only admin opened the create form. Spending it is the POST
 // next door, behind requireAdminMutation, where the console says so first.
 func (r *Runtime) listAdminInvocationTargets(writer http.ResponseWriter, request *http.Request) {
-	r.writeInvocationTargetCatalog(writer, request, false)
+	r.writeInvocationTargetCatalog(writer, request, catalogCachedOnly)
 }
 
 // Bypassing the cache is not a read: it spends the operator's provider
@@ -109,10 +109,10 @@ func (r *Runtime) listAdminInvocationTargets(writer http.ResponseWriter, request
 // cross-site attacker free to use a form-shaped POST. The method is the thing
 // that carries the CSRF defence here.
 func (r *Runtime) refreshAdminInvocationTargets(writer http.ResponseWriter, request *http.Request) {
-	r.writeInvocationTargetCatalog(writer, request, true)
+	r.writeInvocationTargetCatalog(writer, request, catalogAlwaysDial)
 }
 
-func (r *Runtime) writeInvocationTargetCatalog(writer http.ResponseWriter, request *http.Request, refresh bool) {
+func (r *Runtime) writeInvocationTargetCatalog(writer http.ResponseWriter, request *http.Request, listAccess catalogAccess) {
 	providerID := chi.URLParam(request, "id")
 	instance, err := r.store.GetProvider(request.Context(), providerID)
 	if err != nil || instance.DeletedAt != nil {
@@ -128,7 +128,7 @@ func (r *Runtime) writeInvocationTargetCatalog(writer http.ResponseWriter, reque
 		adminBadRequest(writer, err.Error())
 		return
 	}
-	results := r.fetchInvocationTargetCatalogs(request.Context(), instance, bindings, refresh)
+	results := r.fetchInvocationTargetCatalogs(request.Context(), instance, bindings, listAccess)
 	catalog := r.effectiveModelCatalog()
 	evaluatedAt := r.clockNow().UTC()
 	response := aggregateInvocationTargetsWithCatalog(instance, results, evaluatedAt, catalog)
@@ -176,7 +176,7 @@ func (r *Runtime) resolveAdminInvocationTarget(writer http.ResponseWriter, reque
 	}
 	targetKind := domain.DeploymentTargetKind(strings.TrimSpace(request.URL.Query().Get("target_kind")))
 	canonicalRef := strings.TrimSpace(request.URL.Query().Get("canonical_model_ref"))
-	results := r.fetchInvocationTargetCatalogs(request.Context(), instance, bindings, false)
+	results := r.fetchInvocationTargetCatalogs(request.Context(), instance, bindings, catalogDialOnMiss)
 	evaluatedAt := r.clockNow().UTC()
 	if canonicalRef != "" {
 		for resultIndex := range results {
@@ -305,7 +305,31 @@ func invocationTargetBindings(instance domain.ProviderInstance, bindingID string
 	return bindings, nil
 }
 
-func (r *Runtime) fetchInvocationTargetCatalogs(ctx context.Context, instance domain.ProviderInstance, bindings []domain.ProviderProfileBinding, refresh bool) []bindingTargetCatalog {
+// catalogAccess says what a caller of the invocation-target catalogue is allowed
+// to spend.
+//
+// It replaced a single `refresh bool`, which could not tell the two reading
+// endpoints apart. The GET is behind a session and not a role, so a cache miss
+// there must end the read rather than dial — a read-only admin opening the
+// create form would otherwise spend the operator's credential once per binding.
+// Resolution is a POST behind requireAdminMutation and its own comment says it
+// "may enumerate a cold catalog", but it shared the read's flag and so never
+// dialled: on a cold cache every Bedrock model the seed does not carry resolved
+// to unknown, and the console told the operator that refreshing would not help,
+// which was the opposite of true.
+type catalogAccess int
+
+const (
+	// catalogCachedOnly answers from the cache or not at all.
+	catalogCachedOnly catalogAccess = iota
+	// catalogDialOnMiss answers from the cache when it is warm and dials when it
+	// is not. The caller has already been charged for being a mutation.
+	catalogDialOnMiss
+	// catalogAlwaysDial ignores a warm cache. This is what refreshing means.
+	catalogAlwaysDial
+)
+
+func (r *Runtime) fetchInvocationTargetCatalogs(ctx context.Context, instance domain.ProviderInstance, bindings []domain.ProviderProfileBinding, access catalogAccess) []bindingTargetCatalog {
 	results := make([]bindingTargetCatalog, len(bindings))
 	slots := make(chan struct{}, invocationTargetFetchConcurrency)
 	var wait sync.WaitGroup
@@ -315,14 +339,14 @@ func (r *Runtime) fetchInvocationTargetCatalogs(ctx context.Context, instance do
 			defer wait.Done()
 			slots <- struct{}{}
 			defer func() { <-slots }()
-			results[index] = r.fetchInvocationTargetCatalog(ctx, instance, binding, refresh)
+			results[index] = r.fetchInvocationTargetCatalog(ctx, instance, binding, access)
 		}()
 	}
 	wait.Wait()
 	return results
 }
 
-func (r *Runtime) fetchInvocationTargetCatalog(ctx context.Context, instance domain.ProviderInstance, binding domain.ProviderProfileBinding, refresh bool) bindingTargetCatalog {
+func (r *Runtime) fetchInvocationTargetCatalog(ctx context.Context, instance domain.ProviderInstance, binding domain.ProviderProfileBinding, access catalogAccess) bindingTargetCatalog {
 	result := bindingTargetCatalog{binding: binding}
 	credentialRevision := uint64(0)
 	if r.store != nil {
@@ -359,7 +383,7 @@ func (r *Runtime) fetchInvocationTargetCatalog(ctx context.Context, instance dom
 	}
 	cacheKey := instance.ID + "\x00" + binding.ID
 	now := time.Now().UTC()
-	if !refresh {
+	if access != catalogAlwaysDial {
 		r.capabilityResolution.mu.Lock()
 		cached, found := r.capabilityResolution.invocationTargets[cacheKey]
 		r.capabilityResolution.mu.Unlock()
@@ -368,15 +392,16 @@ func (r *Runtime) fetchInvocationTargetCatalog(ctx context.Context, instance dom
 			result.fetchedAt, result.expiresAt, result.cached = cached.FetchedAt, cached.ExpiresAt, true
 			return result
 		}
-		// A miss ends the read here. It used to fall through and dial, which
-		// made the GET's own comment false and put a billable upstream call
-		// behind an endpoint that checks a session and not a role: a read-only
-		// admin opening the create form spent the operator's provider
-		// credential once per binding, without a control on the screen that
-		// said so. Refreshing is the POST next door, which is behind
-		// requireAdminMutation and says what it costs.
-		result.notCached = true
-		return result
+		if access == catalogCachedOnly {
+			// A miss ends the read here. Falling through would put a billable
+			// upstream call behind an endpoint that checks a session and not a
+			// role: a read-only admin opening the create form would spend the
+			// operator's provider credential once per binding, without a control
+			// on the screen that said so. Dialling is for the two callers that
+			// are behind requireAdminMutation and say what they cost.
+			result.notCached = true
+			return result
+		}
 	}
 	timeout := r.config.Gateway.AttemptResponseHeaderTimeout.Value()
 	if timeout <= 0 {

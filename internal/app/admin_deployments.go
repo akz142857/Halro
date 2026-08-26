@@ -879,7 +879,7 @@ func (r *Runtime) resolveDeploymentVariant(ctx context.Context, instance domain.
 	if credentialErr != nil {
 		return deploymentResolution{}, errors.New("deployment provider credential is unavailable")
 	}
-	results := r.fetchInvocationTargetCatalogs(ctx, instance, bindings, true)
+	results := r.fetchInvocationTargetCatalogs(ctx, instance, bindings, catalogAlwaysDial)
 	for index, binding := range bindings {
 		result := results[index]
 		var bindingTarget domain.InvocationTargetDescriptor

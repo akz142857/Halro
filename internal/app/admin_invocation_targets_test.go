@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -390,10 +391,10 @@ func TestInvocationTargetCacheRejectsOlderLateRefresh(t *testing.T) {
 	runtime := &Runtime{providers: registry, config: config.Default(), capabilityMetrics: newCapabilityMetrics()}
 	firstDone := make(chan bindingTargetCatalog, 1)
 	go func() {
-		firstDone <- runtime.fetchInvocationTargetCatalog(context.Background(), instance, binding, true)
+		firstDone <- runtime.fetchInvocationTargetCatalog(context.Background(), instance, binding, catalogAlwaysDial)
 	}()
 	<-adapter.firstStarted
-	newer := runtime.fetchInvocationTargetCatalog(context.Background(), instance, binding, true)
+	newer := runtime.fetchInvocationTargetCatalog(context.Background(), instance, binding, catalogAlwaysDial)
 	close(adapter.releaseFirst)
 	older := <-firstDone
 	if len(newer.items) != 1 || newer.items[0].TargetID != "newer" || len(older.items) != 1 || older.items[0].TargetID != "newer" {
@@ -410,7 +411,7 @@ func TestSaveResolutionRefreshRejectsRemovedTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime := &Runtime{providers: registry, config: config.Default(), capabilityMetrics: newCapabilityMetrics(), now: time.Now}
-	listed := aggregateInvocationTargets(instance, runtime.fetchInvocationTargetCatalogs(context.Background(), instance, []domain.ProviderProfileBinding{binding}, true), runtime.clockNow().UTC())
+	listed := aggregateInvocationTargets(instance, runtime.fetchInvocationTargetCatalogs(context.Background(), instance, []domain.ProviderProfileBinding{binding}, catalogAlwaysDial), runtime.clockNow().UTC())
 	target := findTarget(t, listed, "gpt-4o")
 	if len(target.Variants) != 1 {
 		t.Fatalf("listing did not resolve one variant: %#v", target)
@@ -446,7 +447,7 @@ func TestInvocationTargetFetchIsConcurrencyBounded(t *testing.T) {
 	cfg := config.Default()
 	cfg.Gateway.AttemptResponseHeaderTimeout = config.Duration(250 * time.Millisecond)
 	runtime := &Runtime{providers: registry, config: cfg, capabilityMetrics: newCapabilityMetrics()}
-	results := runtime.fetchInvocationTargetCatalogs(context.Background(), instance, instance.Bindings, true)
+	results := runtime.fetchInvocationTargetCatalogs(context.Background(), instance, instance.Bindings, catalogAlwaysDial)
 	if peak.Load() > int64(invocationTargetFetchConcurrency) || peak.Load() < 2 {
 		t.Fatalf("peak=%d cap=%d", peak.Load(), invocationTargetFetchConcurrency)
 	}
@@ -800,5 +801,72 @@ func TestCoveredElsewhereDoesNotOverwriteTheStatesAboveIt(t *testing.T) {
 	}, testResolutionInstant)
 	if item := findTarget(t, response, served.TargetID); item.ResolutionState != domain.ResolutionResolved {
 		t.Fatalf("a model this binding serves resolved as %q", item.ResolutionState)
+	}
+}
+
+// Resolution is a POST behind requireAdminMutation and its own comment says it
+// "may enumerate a cold catalog". It shared the read's flag and so never
+// dialled: on a cold cache every model the seeded catalogue does not carry
+// resolved to unknown, and the console then told the operator that refreshing
+// would not help — the opposite of true, and it pushed them toward declaring
+// capabilities by hand or paying for a detection run.
+//
+// The target below is deliberately absent from the builtin catalogue. A seeded
+// one resolves without enumerating and would prove nothing.
+func TestResolutionEnumeratesAColdCatalogueWhileTheReadStillDoesNot(t *testing.T) {
+	const target = "vendor.model-the-catalogue-never-heard-of-v1"
+	adapter := &listingTargetAdapter{targets: []domain.InvocationTargetDescriptor{
+		{TargetID: target, TargetKind: domain.TargetModelID},
+	}}
+	registry := provider.NewRegistry()
+	binding := testBinding("binding", domain.ProviderOpenAI, domain.ProfileOpenAIChatEmbeddings)
+	instance := domain.ProviderInstance{ID: "provider", Type: domain.ProviderOpenAI, Enabled: true,
+		Bindings: []domain.ProviderProfileBinding{binding}}
+	if err := registry.RegisterBindingAdapter(instance.ID, binding.ID, adapter); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &Runtime{providers: registry, config: config.Default(), capabilityMetrics: newCapabilityMetrics()}
+
+	// The read is behind a session and not a role, so a miss still ends it. This
+	// half is what the dialling half must not undo.
+	read := runtime.fetchInvocationTargetCatalog(context.Background(), instance, binding, catalogCachedOnly)
+	if !read.notCached || len(read.items) != 0 {
+		t.Fatalf("a cold read reached the provider: %#v", read)
+	}
+
+	// Same cold cache, and this caller has already been charged for being a
+	// mutation.
+	resolve := runtime.fetchInvocationTargetCatalog(context.Background(), instance, binding, catalogDialOnMiss)
+	if resolve.notCached || len(resolve.items) != 1 || resolve.items[0].TargetID != target {
+		t.Fatalf("a cold resolution did not enumerate: %#v", resolve)
+	}
+
+	// And once warm it answers from the cache rather than dialling again —
+	// dial-on-miss is not dial-always.
+	warm := runtime.fetchInvocationTargetCatalog(context.Background(), instance, binding, catalogDialOnMiss)
+	if !warm.cached || len(warm.items) != 1 {
+		t.Fatalf("a warm resolution dialled again: %#v", warm)
+	}
+}
+
+// The handler's own choice of access mode, which is where the defect actually
+// lived: the mode semantics above were never wrong, the resolution endpoint just
+// asked for the wrong one.
+func TestTheResolutionHandlerAsksToDialOnAMiss(t *testing.T) {
+	source, err := os.ReadFile("admin_invocation_targets.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(source)
+	start := strings.Index(body, "func (r *Runtime) resolveAdminInvocationTarget(")
+	if start < 0 {
+		t.Fatal("the resolution handler was renamed; this assertion needs updating")
+	}
+	handler := body[start:]
+	if end := strings.Index(handler, "\n}\n"); end > 0 {
+		handler = handler[:end]
+	}
+	if !strings.Contains(handler, "catalogDialOnMiss") {
+		t.Fatal("the resolution handler no longer asks to dial on a cache miss")
 	}
 }
