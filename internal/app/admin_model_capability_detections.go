@@ -439,10 +439,27 @@ func (r *Runtime) runCapabilityDetection(parent context.Context, detectionID str
 	// same thing as a capability the plan deliberately never reaches — that one
 	// is a policy, this one is a ceiling — and writing it now means it survives
 	// a detection that is cancelled or fails partway.
+	deferred := false
 	for _, name := range plan.Deferred {
 		if _, carried := d.Results[name]; !carried {
 			d.Results[name] = domain.CapabilityProbeResult{Status: domain.ProbeNotProbed, BindingID: d.BindingID, ProbeKind: "probe_budget"}
+			deferred = true
 		}
+	}
+	// Written before the first probe runs, because the probe loop opens by
+	// re-reading the detection from the store and assigning over d — an
+	// in-memory entry would be replaced by the stored map on the first
+	// iteration and never seen again. finalizeCapabilityDetection then filled
+	// the missing name in as "risk_policy", which the console filters out of
+	// both the unestablished-capability banner and the failed-probe list, so a
+	// capability the budget cut disappeared from the page entirely. It is the
+	// one kind an operator can act on: raise the ceiling, or declare it by hand.
+	if deferred {
+		stored, err := r.store.PutModelCapabilityDetection(ctx, d, d.Revision)
+		if err != nil {
+			return
+		}
+		d = stored
 	}
 	for probeIndex, probe := range plan.Probes {
 		current, getErr := r.store.GetModelCapabilityDetection(ctx, d.ID)
