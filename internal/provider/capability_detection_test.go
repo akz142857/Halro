@@ -3,9 +3,11 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/akz142857/Halro/internal/compatibility"
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/openaiapi"
 	"github.com/akz142857/Halro/internal/semantic"
@@ -450,4 +452,108 @@ func capabilitiesFromDomain(declared domain.ProviderCapabilities) Capabilities {
 		AsyncGenerate:    declared.AsyncGenerate,
 		MaxContextTokens: declared.MaxContextTokens, MaxOutputTokens: declared.MaxOutputTokens,
 	}
+}
+
+// The reasoning probe asked for effort "minimal", which is a rung on the OpenAI
+// ladder and on no other. Anthropic accepts low through max and DeepSeek accepts
+// low, high and max, so both refused it while the request was still being
+// rendered — inside the process, before anything left it. The refusal carried no
+// provider code, so it could only be classified inconclusive, and every run paid
+// a call from the budget to learn nothing.
+//
+// The fixtures elsewhere in this file do not render, which is why they never saw
+// it. This one renders through each profile's own wire mapping, because that is
+// the step that used to fail.
+func TestTheReasoningProbeAsksForADepthItsOwnWireFormatAccepts(t *testing.T) {
+	for name, test := range map[string]struct {
+		profile domain.ProviderProfileID
+		ladder  []string
+	}{
+		"openai":      {domain.ProfileOpenAIChatEmbeddings, openaiapi.ReasoningEffortLevels},
+		"azure":       {domain.ProfileAzureChatEmbeddings, openaiapi.ReasoningEffortLevels},
+		"mantle chat": {domain.ProfileBedrockMantleOpenAIChat, openaiapi.ReasoningEffortLevels},
+		"deepseek":    {domain.ProfileDeepSeekChat, compatibility.DeepSeekEffortLevels},
+	} {
+		t.Run(name, func(t *testing.T) {
+			effort, askable := reasoningProbeEffort(test.profile)
+			if !askable {
+				t.Fatalf("%s no longer asks about reasoning at all", test.profile)
+			}
+			if !slices.Contains(test.ladder, effort) {
+				t.Fatalf("effort %q is not on %s's ladder %v", effort, test.profile, test.ladder)
+			}
+			if effort == "none" {
+				t.Fatal("the probe asked the model not to think, which cannot verify that it can")
+			}
+		})
+	}
+
+	// DeepSeek is the case that refused at render time. Rendering it is the
+	// assertion; a ladder-membership check alone would pass on a value the
+	// renderer still rejected for some other reason.
+	effort, _ := reasoningProbeEffort(domain.ProfileDeepSeekChat)
+	rendered, err := compatibility.RenderDeepSeekChatRequest(openaiapi.ChatCompletionRequest{
+		Model:           "deepseek-chat",
+		Messages:        []openaiapi.Message{{Role: "user", Content: openaiapi.TextContent("Reply briefly.")}},
+		ReasoningEffort: effort,
+	})
+	if err != nil {
+		t.Fatalf("the DeepSeek probe request does not render: %v", err)
+	}
+	if rendered.Thinking == nil || rendered.Thinking.Type != "enabled" {
+		t.Fatalf("the probe did not turn thinking on: %#v", rendered.Thinking)
+	}
+}
+
+// Anthropic's answer comes back as a signed thinking block and the portable Chat
+// mapping refuses that by design. The probe reaches the adapter through exactly
+// that mapping, so asking would only move the failure from the request to the
+// response — still after paying for it.
+func TestTheReasoningProbeIsNotPlannedWhereItsAnswerCannotBeRead(t *testing.T) {
+	for _, profile := range []domain.ProviderProfileID{
+		domain.ProfileAnthropicMessages, domain.ProfileBedrockMantleAnthropicMessages,
+	} {
+		if _, askable := reasoningProbeEffort(profile); askable {
+			t.Fatalf("%s plans a reasoning probe whose answer it cannot decode", profile)
+		}
+		manifest, ok := BuiltinProfile(profile)
+		if !ok {
+			t.Fatalf("%s has no manifest", profile)
+		}
+		declared := domain.MaxProviderCapabilitiesForProfile(manifest.ProviderType, profile)
+		if !declared.Reasoning {
+			t.Fatalf("%s stopped declaring reasoning, so this assertion proves nothing", profile)
+		}
+		adapter := &typedReasoningAdapter{providerType: string(manifest.ProviderType)}
+		bridge, err := NewLegacyAdapterBridge(adapter, manifest,
+			domain.EvidenceForCapabilities(declared, domain.EvidenceDeclared))
+		if err != nil {
+			t.Fatal(err)
+		}
+		plan, err := bridge.CapabilityDetectionPlan(ModelCapabilityDetectionTarget{
+			ProviderModel: "model", BindingID: "binding", ProfileID: profile, RiskTier: "safe_automatic",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, probe := range plan.Probes {
+			if probe.Capability == "reasoning" {
+				t.Fatalf("%s planned a reasoning probe: %#v", profile, probe)
+			}
+		}
+	}
+}
+
+// typedReasoningAdapter is the profile's own provider type with reasoning on,
+// which is the shape the plan builder reads. capabilityDetectorAdapter is fixed
+// to OpenAI and cannot be bridged to an Anthropic manifest.
+type typedReasoningAdapter struct {
+	Adapter
+	providerType string
+}
+
+func (a *typedReasoningAdapter) Type() string { return a.providerType }
+func (a *typedReasoningAdapter) Close()       {}
+func (a *typedReasoningAdapter) Capabilities() Capabilities {
+	return Capabilities{Chat: true, Streaming: true, Tools: true, Vision: true, JSONMode: true, Reasoning: true, StreamUsage: true}
 }

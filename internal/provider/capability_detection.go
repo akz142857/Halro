@@ -7,16 +7,12 @@ import (
 	"math"
 	"strings"
 
+	"github.com/akz142857/Halro/internal/compatibility"
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/openaiapi"
 	"github.com/akz142857/Halro/internal/semantic"
 )
 
-// CapabilityDetectorContractVersion is part of the detection selection
-// fingerprint, so bumping it stops a stored result from being reused under
-// semantics that did not produce it. v2 is the first version whose bad-request
-// classifier reads the code half of a joined provider identifier — a v1 result
-// recorded "inconclusive" where v2 would record "unsupported".
 // maxDetectionProbes bounds how many possibly billable calls one plan may ask
 // for. It is a cost ceiling, not a capability ceiling: a profile that serves
 // more than this many probeable capabilities gets the ones the plan lists and
@@ -24,7 +20,21 @@ import (
 // makes rather than a silent truncation nobody sees.
 const maxDetectionProbes = 8
 
-const CapabilityDetectorContractVersion = "capability-detector-v2"
+// CapabilityDetectorContractVersion is part of the detection selection
+// fingerprint, so bumping it stops a stored result from being reused under
+// semantics that did not produce it.
+//
+// v2 was the first version whose bad-request classifier reads the code half of
+// a joined provider identifier — a v1 result recorded "inconclusive" where v2
+// would record "unsupported".
+//
+// v3 changed what the reasoning probe asks and where it is asked at all. A v2
+// result recorded reasoning as inconclusive on Anthropic and DeepSeek because
+// the depth it sent was not on their ladders, and it charged for the privilege;
+// v3 sends a depth each wire format accepts and does not ask Anthropic, whose
+// answer the portable mapping cannot read. Reusing a v2 result would carry that
+// verdict forward as though something had measured it.
+const CapabilityDetectorContractVersion = "capability-detector-v3"
 
 type ModelCapabilityDetectionTarget struct {
 	ProviderModel string
@@ -127,12 +137,55 @@ func (b *LegacyAdapterBridge) CapabilityDetectionPlan(target ModelCapabilityDete
 	// capability the profile serves, this is the one to give up. Ordering is the
 	// whole mechanism: add() fills until the ceiling and defers the rest.
 	if c.Reasoning {
-		add("reasoning", "reasoning_effort", "chat")
+		if _, askable := reasoningProbeEffort(b.manifest.ID); askable {
+			add("reasoning", "reasoning_effort", "chat")
+		}
 	}
 	if len(probes) == 0 {
 		return CapabilityDetectionPlan{}, errors.New("adapter profile has no safe automatic capability probes")
 	}
 	return CapabilityDetectionPlan{ContractVersion: CapabilityDetectorContractVersion, Probes: probes, MaxCalls: len(probes), Deferred: deferred}, nil
+}
+
+// reasoningProbeEffort is the shallowest depth above "none" that the profile's
+// own wire format accepts, and whether the probe can be asked at all.
+//
+// It was the literal "minimal", which is a rung on the OpenAI ladder and on no
+// other. Anthropic accepts low through max and DeepSeek accepts low, high and
+// max, so both refused the probe while it was still being rendered — inside the
+// process, before any request left it. The refusal arrived as a bad request
+// carrying no provider code, so the classifier could only call it inconclusive,
+// and every run spent a call from the budget to learn nothing. The probe is the
+// one asking whether reasoning happens at all, so it wants the cheapest rung
+// rather than a deep one; which rung that is belongs to the wire format, not to
+// a constant here.
+//
+// Anthropic is not asked. Its answer comes back as a signed thinking block and
+// the portable Chat mapping refuses that by design — the probe reaches the
+// adapter through exactly that mapping, so a valid depth would only move the
+// failure from the request to the response, still after paying. A capability
+// the plan cannot read is one the plan should not pay for; it is left to the
+// same treatment as every other capability no probe reaches.
+func reasoningProbeEffort(profile domain.ProviderProfileID) (string, bool) {
+	switch profile {
+	case domain.ProfileAnthropicMessages, domain.ProfileBedrockMantleAnthropicMessages:
+		return "", false
+	case domain.ProfileDeepSeekChat:
+		return shallowestEffort(compatibility.DeepSeekEffortLevels), true
+	default:
+		return shallowestEffort(openaiapi.ReasoningEffortLevels), true
+	}
+}
+
+// shallowestEffort reads the cheapest depth off a wire format's own ladder.
+// "none" is not a depth — it is the request not to think.
+func shallowestEffort(ladder []string) string {
+	for _, level := range ladder {
+		if level != "none" {
+			return level
+		}
+	}
+	return ""
 }
 
 func (b *LegacyAdapterBridge) DetectCapability(ctx context.Context, target ModelCapabilityDetectionTarget, probe CapabilityProbe) domain.CapabilityProbeResult {
@@ -223,7 +276,11 @@ func (b *LegacyAdapterBridge) DetectCapability(ctx context.Context, target Model
 		// The effort level is the lowest the ladder offers above "none": the
 		// probe is asking whether reasoning happens at all, and paying for a
 		// deep one to learn that would be paying for the wrong answer.
-		request.ReasoningEffort = "minimal"
+		effort, askable := reasoningProbeEffort(target.ProfileID)
+		if !askable {
+			return result
+		}
+		request.ReasoningEffort = effort
 		var response openaiapi.ChatCompletionResponse
 		response, err = b.Chat(ctx, ChatCall{RequestID: "capability-detection", ProviderModel: target.ProviderModel, Request: request})
 		if err == nil && len(response.Choices) > 0 && response.Choices[0].Message != nil {
