@@ -127,7 +127,12 @@ func boundedIdentifier(value string) string {
 	for _, char := range value {
 		switch {
 		case char >= 'a' && char <= 'z', char >= 'A' && char <= 'Z', char >= '0' && char <= '9':
-		case char == '.' || char == '_' || char == '-':
+		// Brackets are in the set because the parameter half is a JSON path and
+		// that is what a JSON path is made of. The comment above already named
+		// "messages[0].content" as the shape to expect while the set rejected
+		// it, so every upstream that answered with an indexed path lost the
+		// annotation this field exists to carry.
+		case char == '.' || char == '_' || char == '-' || char == '[' || char == ']':
 		default:
 			return ""
 		}

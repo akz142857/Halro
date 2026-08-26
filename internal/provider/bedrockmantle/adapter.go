@@ -465,12 +465,12 @@ func refusalCode(envelope openaiapi.ErrorEnvelope) string {
 		code = strings.TrimSpace(envelope.Error.Type)
 	}
 	if envelope.Error.Param == nil || code == "" {
-		return code
+		return provider.SafeProviderIdentifier(code)
 	}
 	if param := strings.TrimSpace(*envelope.Error.Param); param != "" {
-		return code + ":" + param
+		return provider.SafeProviderIdentifier(code + ":" + param)
 	}
-	return code
+	return provider.SafeProviderIdentifier(code)
 }
 
 func providerRequestID(header http.Header) string {

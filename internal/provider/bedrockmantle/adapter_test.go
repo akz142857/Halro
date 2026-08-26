@@ -519,3 +519,33 @@ func mantleChatCall() provider.ChatCall {
 		},
 	}
 }
+
+// The code reaches a log attribute, a durable probe result and a console cell,
+// and each of those takes whatever the adapter hands it. An upstream is free to
+// answer with a wall of text, or with the credential it has just rejected —
+// which is exactly what the gateway's own logging comment says it will not rely
+// on a pattern denylist to catch. So it is bounded where it is born.
+func TestAnUpstreamRefusalCodeIsBoundedBeforeItLeavesTheAdapter(t *testing.T) {
+	for name, test := range map[string]struct {
+		code, param, want string
+	}{
+		"an ordinary refusal":  {"unsupported_parameter", "image_url", "unsupported_parameter:image_url"},
+		"an indexed JSON path": {"invalid_image_url", "messages[0].content[1].image_url", "invalid_image_url:messages[0].content[1].image_url"},
+		// The half that decides the verdict survives the half that only annotates it.
+		"a sentence in param":  {"unsupported_parameter", "the messages you sent", "unsupported_parameter"},
+		"an echoed credential": {"invalid_api_key", "sk-" + strings.Repeat("a", 200), "invalid_api_key"},
+		"a wall of text":       {strings.Repeat("x", 4096), "", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			envelope := openaiapi.ErrorEnvelope{}
+			envelope.Error.Code = test.code
+			if test.param != "" {
+				param := test.param
+				envelope.Error.Param = &param
+			}
+			if got := refusalCode(envelope); got != test.want {
+				t.Fatalf("refusalCode = %q, want %q", got, test.want)
+			}
+		})
+	}
+}

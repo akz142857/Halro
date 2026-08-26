@@ -211,11 +211,24 @@ func TestCapabilityProbeRecordsTheUpstreamIdentifiersAndNotItsSentence(t *testin
 		t.Fatalf("provider sentence reached the record: %#v", result)
 	}
 
-	// Narrowed at capture, so nothing downstream has to re-derive the rule. The
-	// parameter half is dropped on its own — losing it must not take the code
-	// half with it, because the code is what decides the verdict.
+	// An indexed JSON path is the shape the parameter half actually arrives in,
+	// and it is the half an operator needs: "unsupported_parameter" alone names
+	// a category, not a field. It survives narrowing intact.
 	adapter.errorFor["tools"] = &Error{Class: ErrorBadRequest, StatusCode: 400,
 		ProviderCode: "unsupported_parameter:messages[0].content"}
+	if result = bridge.DetectCapability(context.Background(), target, probe); result.ProviderCode != "unsupported_parameter:messages[0].content" {
+		t.Fatalf("the refused parameter was lost: %q", result.ProviderCode)
+	}
+	if result.Status != domain.ProbeUnsupported {
+		t.Fatalf("verdict changed with the parameter: %s", result.Status)
+	}
+
+	// Narrowed at capture, so nothing downstream has to re-derive the rule. A
+	// parameter genuinely outside the set is dropped on its own — losing it must
+	// not take the code half with it, because the code is what decides the
+	// verdict and the parameter only annotates it.
+	adapter.errorFor["tools"] = &Error{Class: ErrorBadRequest, StatusCode: 400,
+		ProviderCode: `unsupported_parameter:the "messages" field you sent`}
 	if result = bridge.DetectCapability(context.Background(), target, probe); result.ProviderCode != "unsupported_parameter" {
 		t.Fatalf("code half not salvaged: %q", result.ProviderCode)
 	}

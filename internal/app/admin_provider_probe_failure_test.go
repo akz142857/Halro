@@ -182,7 +182,7 @@ func TestProbeIdentifiersAreBoundedAndNarrow(t *testing.T) {
 		{"a real provider code", "AccessDeniedException", "AccessDeniedException"},
 		{"a request id", "req-42:0000-abc.1", "req-42:0000-abc.1"},
 		{"surrounding whitespace", "  ThrottlingException\n", "ThrottlingException"},
-		{"an oversized value", strings.Repeat("a", maxProbeIdentifierLength+1), ""},
+		{"an oversized value", strings.Repeat("a", provider.MaxProviderIdentifierLength+1), ""},
 		{"prose smuggled through an identifier", "not authorized with " + bedrockKeyCanary, ""},
 		{"an empty value", "   ", ""},
 	} {

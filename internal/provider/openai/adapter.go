@@ -710,6 +710,12 @@ func limitedErrorMessage(reader io.Reader) upstreamRefusal {
 	if param := strings.TrimSpace(pointerValue(envelope.Error.Param)); param != "" && refusal.Code != "" {
 		refusal.Code += ":" + param
 	}
+	// Narrowed where it is born. The code reaches a log attribute, a durable
+	// probe result and a console cell, and every one of those inherits whatever
+	// this returns — an upstream that answers with a wall of text, or with the
+	// credential it has just rejected, would otherwise be writing it into all
+	// three. Bounding it here means no consumer has to remember to.
+	refusal.Code = provider.SafeProviderIdentifier(refusal.Code)
 	return refusal
 }
 

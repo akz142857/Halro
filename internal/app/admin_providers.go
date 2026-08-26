@@ -571,14 +571,6 @@ type probeFailure struct {
 // want four kilobytes of it.
 const maxProbeReasonLength = 300
 
-// maxProbeIdentifierLength bounds the two identifiers the upstream names itself
-// by. Both are decoded from an upstream body or header read under a megabyte
-// limit, and both travel into a log line and a console cell; a hostile or
-// misconfigured host answering with a multi-kilobyte `error.type` should not be
-// able to write it to disk. Real values are short — `AccessDeniedException`,
-// a request UUID.
-const maxProbeIdentifierLength = 120
-
 // persistedProbeClass is the class a failed connection test stores.
 //
 // The record keeps a class and nothing else — no upstream status, no sentence —
@@ -618,8 +610,8 @@ func describeProbeFailure(err error) probeFailure {
 	if errors.As(err, &classified) {
 		failure.Class = classified.Class
 		failure.Status = classified.StatusCode
-		failure.Code = probeIdentifier(classified.ProviderCode)
-		failure.RequestID = probeIdentifier(classified.ProviderRequestID)
+		failure.Code = provider.SafeProviderIdentifier(classified.ProviderCode)
+		failure.RequestID = provider.SafeProviderIdentifier(classified.ProviderRequestID)
 		return failure
 	}
 	// Nothing classified this, so nothing established which side of the
@@ -633,21 +625,6 @@ func describeProbeFailure(err error) probeFailure {
 // outside the shape real provider codes and request IDs take is dropped rather
 // than trimmed, because a value that is not one of those is not an identifier
 // and has no business in a log attribute.
-func probeIdentifier(value string) string {
-	trimmed := strings.TrimSpace(value)
-	if trimmed == "" || len(trimmed) > maxProbeIdentifierLength {
-		return ""
-	}
-	for _, r := range trimmed {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
-		case r == '.' || r == '_' || r == '-' || r == ':':
-		default:
-			return ""
-		}
-	}
-	return trimmed
-}
 
 // probeReason unwraps the cause a provider error carries. provider.Error.Error
 // returns its own headline and stops there, so a transport refusal arrived as
