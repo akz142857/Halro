@@ -304,6 +304,14 @@ func TestConnectionCeilingIsAssignableAndBounded(t *testing.T) {
 				t.Errorf("%s: binding on %s exceeds its profile ceiling: %+v",
 					profile.ID, assigned.ProfileID, assigned.Capabilities)
 			}
+			// Subset and unambiguous were not enough. A binding that received only
+			// modifiers is inside every ceiling and still refused by the write
+			// boundary, which is exactly how provider-executed tools reached the
+			// OpenAI connection form as a tick that answered 400 on every save.
+			if !assigned.Capabilities.AnyOperation() {
+				t.Errorf("%s: ticking its whole ceiling produces a binding on %s that declares no operation: %+v",
+					profile.ID, assigned.ProfileID, assigned.Capabilities)
+			}
 		}
 	}
 }

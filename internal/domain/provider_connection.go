@@ -173,10 +173,31 @@ func exceeds(requested, ceiling int64) bool {
 // matrix is served rather than copied.
 func ConnectionCeiling(providerType ProviderType, anchor ProviderProfileID) ProviderCapabilities {
 	candidates := ConnectionProfiles(providerType, anchor)
-	var ceiling ProviderCapabilities
+	homes := make([]ProviderCapabilities, len(candidates))
 	for _, name := range capabilityNames {
 		if home, ambiguous := homeForCapability(candidates, name); home >= 0 && !ambiguous {
-			setCapabilityEnabled(&ceiling, name, true)
+			setCapabilityEnabled(&homes[home], name, true)
+		}
+	}
+	var ceiling ProviderCapabilities
+	for index := range homes {
+		// A peer whose whole share is modifiers cannot become a binding: the
+		// write boundary refuses one that declares no operation, so offering its
+		// capabilities breaks the promise this function exists to keep. It is not
+		// hypothetical — provider-executed tools live on the OpenAI Responses
+		// profile and chat is served by the chat profile that anchors the group,
+		// so the tick reached the form and every save of it answered 400.
+		//
+		// The anchor is exempt: it is what the connection is anchored to, and a
+		// group whose anchor serves no operation is a profile-table defect rather
+		// than something a form should route around.
+		if index > 0 && !homes[index].AnyOperation() {
+			continue
+		}
+		for _, name := range capabilityNames {
+			if capabilityEnabled(homes[index], name) {
+				setCapabilityEnabled(&ceiling, name, true)
+			}
 		}
 	}
 	// The token limits stay zero, and that is not "unbounded" — it is "this is
