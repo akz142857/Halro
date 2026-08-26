@@ -326,12 +326,16 @@ func (e *Engine) processContent(policyID, scope string, parts []semantic.Content
 	for index := range result {
 		part := &result[index]
 		switch part.Kind {
-		case semantic.ContentText, semantic.ContentToolResult:
+		case semantic.ContentText, semantic.ContentToolResult, semantic.ContentReasoning:
 			text, err := e.ProcessText(policyID, scope, part.Text)
 			if err != nil {
 				return parts, err
 			}
-			part.Text = text
+			citations, err := e.processCitations(policyID, scope, part.Citations, text != part.Text)
+			if err != nil {
+				return parts, err
+			}
+			part.Text, part.Citations = text, citations
 		case semantic.ContentInputImage:
 			// The address is caller-supplied text and was inside the content the
 			// Chat pass rewrote. A data URL carries the picture and nothing a rule
@@ -347,12 +351,75 @@ func (e *Engine) processContent(policyID, scope string, parts []semantic.Content
 				return parts, err
 			}
 			part.Arguments = arguments
+		case semantic.ContentProviderToolCall:
+			// The query is the model's own words, drawn from the conversation it
+			// was given, so it carries whatever that conversation carried. It
+			// reaches the caller as action.query — a string no other pass on this
+			// path rewrites, which is the same shape the image address above is
+			// guarded for.
+			text, err := e.ProcessText(policyID, scope, part.Text)
+			if err != nil {
+				return parts, err
+			}
+			part.Text = text
+		default:
+			// A kind added to the vocabulary without a case here would reach the
+			// caller with neither the Project policy nor the mandatory baseline
+			// applied, on the one traversal whose purpose is to catch a secret in
+			// provider output. Silence is the fail-open; refusing is the only
+			// honest reading of "this pass does not know what that part holds".
+			return parts, fmt.Errorf("redaction cannot traverse content kind %q", part.Kind)
 		}
 		if err := e.validateMandatory(part.CallID); err != nil {
 			return parts, err
 		}
 		if err := e.validateMandatory(part.Name); err != nil {
 			return parts, err
+		}
+	}
+	return result, nil
+}
+
+// processCitations rewrites the sources attributed to a span of text.
+//
+// The URL and the title are provider-supplied strings that reach the caller
+// untouched by every other pass on this path; a citation URL carries a token in
+// its query string exactly as an image address can.
+//
+// The offsets are the harder half. Redaction changes the length of the text it
+// rewrites and leaves no diff to map an old span onto the new one. A stale span
+// is not merely out of range: when the replacement is longer than what it
+// replaced, the span still validates and now covers different words, so a source
+// ends up attributed to a sentence that never cited it. When the text changed at
+// all, every span therefore collapses to zero length — which is what the inbound
+// decoder already does with a span it cannot place. The source is still
+// reported; the false precision is not.
+func (e *Engine) processCitations(
+	policyID, scope string,
+	citations []semantic.Citation,
+	textChanged bool,
+) ([]semantic.Citation, error) {
+	if len(citations) == 0 {
+		return citations, nil
+	}
+	// The caller's slice is shared with the message that was routed, and on a
+	// retry with the message that will be routed again. Copying the header is not
+	// enough for a member the traversal edits.
+	result := make([]semantic.Citation, len(citations))
+	copy(result, citations)
+	for index := range result {
+		citation := &result[index]
+		url, err := e.ProcessText(policyID, scope, citation.URL)
+		if err != nil {
+			return citations, err
+		}
+		title, err := e.ProcessText(policyID, scope, citation.Title)
+		if err != nil {
+			return citations, err
+		}
+		citation.URL, citation.Title = url, title
+		if textChanged {
+			citation.StartIndex, citation.EndIndex = 0, 0
 		}
 	}
 	return result, nil
