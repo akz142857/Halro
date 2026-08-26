@@ -69,6 +69,7 @@ func (m ProfileManifest) Validate() error {
 func profileAllowsPrimitive(profileID domain.ProviderProfileID, operation Operation, primitive Primitive) bool {
 	expected := map[domain.ProviderProfileID]map[Operation]Primitive{
 		domain.ProfileOpenAIChatEmbeddings:           {OperationChat: PrimitiveOpenAIChatCompletions, OperationChatStream: PrimitiveOpenAIChatStream, OperationEmbeddings: PrimitiveOpenAIEmbeddings},
+		domain.ProfileOpenAIResponses:                {OperationChat: PrimitiveOpenAIResponses},
 		domain.ProfileAnthropicMessages:              {OperationChat: PrimitiveAnthropicMessages, OperationChatStream: PrimitiveAnthropicMessagesStream, OperationMessages: PrimitiveAnthropicMessages, OperationMessagesStream: PrimitiveAnthropicMessagesStream, OperationFiles: PrimitiveHalroLocalFiles, OperationBatches: PrimitiveAnthropicMessageBatches},
 		domain.ProfileAzureChatEmbeddings:            {OperationChat: PrimitiveAzureChatCompletions, OperationChatStream: PrimitiveAzureChatStream, OperationEmbeddings: PrimitiveAzureEmbeddings},
 		domain.ProfileDeepSeekChat:                   {OperationChat: PrimitiveDeepSeekChat, OperationChatStream: PrimitiveDeepSeekChatStream},
@@ -120,6 +121,13 @@ func (s operationSet) Resolve(operation Operation) (OperationAdapter, bool) {
 		case semantic.OperationGenerate:
 			if binding.LegacyOperation == OperationMessages || binding.LegacyOperation == OperationMessagesStream {
 				return nativeOperationPrimitive{adapter: s.adapter, primitive: binding.Primitive, operation: binding.LegacyOperation}, true
+			}
+			if semanticGenerationPrimitives[binding.Primitive] {
+				generator, ok := unwrapSemanticGenerator(s.adapter)
+				if !ok {
+					return nil, false
+				}
+				return semanticGenerationPrimitive{adapter: generator, primitive: binding.Primitive, operation: binding.LegacyOperation}, true
 			}
 			return legacyGenerationPrimitive{adapter: s.adapter, primitive: binding.Primitive, operation: binding.LegacyOperation}, true
 		case semantic.OperationEmbed:
@@ -385,6 +393,12 @@ func BuiltinProfile(id domain.ProviderProfileID) (ProfileManifest, bool) {
 			AccessSurface: domain.SurfaceOpenAI, CredentialScheme: domain.CredentialBearerStatic,
 			Operations:        []Operation{OperationChat, OperationChatStream, OperationEmbeddings},
 			PrimitiveBindings: []PrimitiveBinding{{OperationChat, semantic.OperationGenerate, PrimitiveOpenAIChatCompletions}, {OperationChatStream, semantic.OperationGenerate, PrimitiveOpenAIChatStream}, {OperationEmbeddings, semantic.OperationEmbed, PrimitiveOpenAIEmbeddings}},
+		},
+		domain.ProfileOpenAIResponses: {
+			ID: domain.ProfileOpenAIResponses, Revision: 1, ProviderType: domain.ProviderOpenAI,
+			AccessSurface: domain.SurfaceOpenAI, CredentialScheme: domain.CredentialBearerStatic,
+			Operations:        []Operation{OperationChat},
+			PrimitiveBindings: []PrimitiveBinding{{OperationChat, semantic.OperationGenerate, PrimitiveOpenAIResponses}},
 		},
 		domain.ProfileAnthropicMessages: {
 			ID: domain.ProfileAnthropicMessages, Revision: 2, ProviderType: domain.ProviderAnthropic,

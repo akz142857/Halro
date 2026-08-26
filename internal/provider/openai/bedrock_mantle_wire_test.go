@@ -122,7 +122,7 @@ func newMantleChatAdapter(t *testing.T, client *http.Client) *Adapter {
 		Endpoint: endpoint, Authorizer: authorizer, Client: client,
 		ProviderType:     string(domain.ProviderBedrock),
 		CredentialScheme: domain.CredentialBedrockAPIKey,
-		Capabilities:     provider.Capabilities{Chat: true, Streaming: true, Tools: true, Vision: true, JSONMode: true, DeveloperRole: true, Reasoning: true, StreamUsage: true},
+		Capabilities:     provider.Capabilities{Chat: true, Streaming: true, Tools: true, Vision: true, JSONObject: true, StructuredOutputs: true, DeveloperRole: true, Reasoning: true, StreamUsage: true},
 	})
 	if err != nil {
 		t.Fatal(err)

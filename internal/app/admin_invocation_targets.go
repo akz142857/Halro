@@ -777,7 +777,8 @@ func catalogClaimFromCapabilities(source modelcatalog.Source, claims []domain.Ca
 
 func dependencyClosure(value domain.ProviderCapabilities) domain.ProviderCapabilities {
 	if !value.Chat {
-		value.Streaming, value.Tools, value.Vision, value.JSONMode = false, false, false, false
+		value.Streaming, value.Tools, value.Vision = false, false, false
+		value.JSONObject, value.StructuredOutputs = false, false
 		value.DeveloperRole, value.Reasoning, value.StreamUsage = false, false, false
 	}
 	if !value.Streaming {

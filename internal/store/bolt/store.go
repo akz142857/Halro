@@ -21,7 +21,7 @@ import (
 	bbolt "go.etcd.io/bbolt"
 )
 
-const schemaVersion uint64 = 31
+const schemaVersion uint64 = 32
 
 // legacyCapabilityEvidence is the evidence tier this project used before
 // capability evidence was durable metadata. The domain no longer accepts it, so
@@ -810,6 +810,185 @@ var migrations = []migration{
 		}
 		return migrationStep(step, "after_fetched_image_capability")
 	}},
+	// json_mode becomes json_object and structured_outputs. It described two
+	// claims no provider serves as one — a schema-less mode that only promises
+	// parseable JSON, and a schema the upstream enforces — so a record carrying
+	// the old switch cannot say which of them its target actually has.
+	//
+	// Both halves are recorded as unsupported for everyone, the same shape
+	// migrations 28 and 31 used, and for the same reason 31 gave: the honest
+	// reconstruction would have to read each record's profile and decide on its
+	// behalf what it may claim, and a migration that decides that silently is a
+	// migration that can be silently wrong. Off refuses a request; on forwards
+	// one that the upstream will reject after the budget is already reserved.
+	// The cost is one deliberate tick per deployment that really wants it, and
+	// the console now offers the two halves separately to tick.
+	//
+	// Capabilities and evidence move together because Validate holds them to a
+	// biconditional — an enabled capability may not be unsupported and a
+	// disabled one may not be anything else — so patching either alone would
+	// leave every record refusing to load. operator_disabled is swept for the
+	// same reason: it names capabilities, and an unknown name there is a
+	// validation failure rather than a stale entry nobody reads.
+	//
+	// Stored detections are dropped rather than patched. Their results are keyed
+	// by capability name and their fingerprints carry the detector contract
+	// version, which moved to v4 with this split: a v3 record's json_mode result
+	// answers a question no longer asked, because that probe sent response_format
+	// json_object and established nothing about a schema.
+	{version: 32, name: "structured_output_capability_split", up: func(tx *bbolt.Tx, step func(string) error) error {
+		if err := migrationStep(step, "before_structured_output_capability_split"); err != nil {
+			return err
+		}
+		splitRecord := func(record map[string]json.RawMessage) error {
+			if err := splitJSONModeCapabilities(record, "capabilities"); err != nil {
+				return err
+			}
+			return splitJSONModeEvidence(record, "capability_evidence")
+		}
+		if err := rewriteBucketIfPresent(tx, bucketProviders, func(record map[string]json.RawMessage) error {
+			if err := splitRecord(record); err != nil {
+				return err
+			}
+			return patchArrayMember(record, "bindings", splitRecord)
+		}); err != nil {
+			return err
+		}
+		if err := rewriteBucketIfPresent(tx, bucketDeployments, func(record map[string]json.RawMessage) error {
+			if err := splitRecord(record); err != nil {
+				return err
+			}
+			if err := dropDisabledCapability(record, "operator_disabled", "json_mode"); err != nil {
+				return err
+			}
+			encoded, ok := record["model_capability_snapshot"]
+			if !ok {
+				return nil
+			}
+			var snapshot map[string]json.RawMessage
+			if err := json.Unmarshal(encoded, &snapshot); err != nil {
+				return err
+			}
+			if err := splitJSONModeCapabilities(snapshot, "capabilities"); err != nil {
+				return err
+			}
+			if err := splitJSONModeEvidence(snapshot, "evidence"); err != nil {
+				return err
+			}
+			updated, err := json.Marshal(snapshot)
+			if err != nil {
+				return err
+			}
+			record["model_capability_snapshot"] = updated
+			return nil
+		}); err != nil {
+			return err
+		}
+		for _, name := range [][]byte{bucketModelCapabilityDetections, bucketCapabilityDetectionIdem, bucketCapabilityDetectionIndex} {
+			if tx.Bucket(name) != nil {
+				if err := tx.DeleteBucket(name); err != nil {
+					return err
+				}
+			}
+			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
+				return err
+			}
+		}
+		return migrationStep(step, "after_structured_output_capability_split")
+	}},
+}
+
+// splitJSONModeCapabilities replaces a stored capability set's json_mode member
+// with the two that succeed it, both off. The old member is deleted rather than
+// left beside them: an unknown key would survive every read that decodes into
+// the struct and reappear in nothing, which is a record that disagrees with
+// itself on disk.
+func splitJSONModeCapabilities(object map[string]json.RawMessage, field string) error {
+	encoded, ok := object[field]
+	if !ok || len(encoded) == 0 {
+		return nil
+	}
+	var capabilities map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &capabilities); err != nil {
+		return err
+	}
+	if capabilities == nil {
+		return nil
+	}
+	delete(capabilities, "json_mode")
+	for _, name := range jsonModeSuccessors {
+		capabilities[name] = json.RawMessage("false")
+	}
+	updated, err := json.Marshal(capabilities)
+	if err != nil {
+		return err
+	}
+	object[field] = updated
+	return nil
+}
+
+// splitJSONModeEvidence is the evidence half of the same move. Both successors
+// are unsupported because both capabilities are off, which is the only pairing
+// CapabilityEvidenceSet.Validate accepts.
+func splitJSONModeEvidence(object map[string]json.RawMessage, field string) error {
+	encoded, ok := object[field]
+	if !ok || len(encoded) == 0 {
+		return nil
+	}
+	var evidence map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &evidence); err != nil {
+		return err
+	}
+	if evidence == nil {
+		return nil
+	}
+	delete(evidence, "json_mode")
+	for _, name := range jsonModeSuccessors {
+		evidence[name] = json.RawMessage(`"` + string(domain.EvidenceUnsupported) + `"`)
+	}
+	updated, err := json.Marshal(evidence)
+	if err != nil {
+		return err
+	}
+	object[field] = updated
+	return nil
+}
+
+// jsonModeSuccessors names what json_mode became.
+var jsonModeSuccessors = []string{"json_object", "structured_outputs"}
+
+// dropDisabledCapability removes one name from a stored list of capabilities an
+// operator switched off. A name the dictionary no longer carries fails
+// validation on the next read, and the capability it referred to is off for
+// everybody after this migration anyway, so there is nothing to carry forward.
+func dropDisabledCapability(record map[string]json.RawMessage, field, name string) error {
+	encoded, ok := record[field]
+	if !ok || len(encoded) == 0 {
+		return nil
+	}
+	var names []string
+	if err := json.Unmarshal(encoded, &names); err != nil {
+		return err
+	}
+	kept := make([]string, 0, len(names))
+	for _, value := range names {
+		if value != name {
+			kept = append(kept, value)
+		}
+	}
+	if len(kept) == len(names) {
+		return nil
+	}
+	if len(kept) == 0 {
+		delete(record, field)
+		return nil
+	}
+	updated, err := json.Marshal(kept)
+	if err != nil {
+		return err
+	}
+	record[field] = updated
+	return nil
 }
 
 // backfillCachedInputRate copies a record's input rate onto the cache-read rate

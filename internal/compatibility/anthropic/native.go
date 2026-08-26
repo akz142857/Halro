@@ -130,7 +130,9 @@ func NativeRequirements(request anthropicapi.MessageRequest) semantic.Requiremen
 	}
 	if request.OutputConfig != nil {
 		requirements.Reasoning = requirements.Reasoning || request.OutputConfig.Effort != ""
-		requirements.JSONMode = len(request.OutputConfig.Format) > 0
+		// output_config.format is a schema Anthropic enforces, which is
+		// structured_outputs. There is no schema-less half of it to raise.
+		requirements.StructuredOutputs = len(request.OutputConfig.Format) > 0
 	}
 	for _, message := range request.Messages {
 		for _, block := range message.Content {

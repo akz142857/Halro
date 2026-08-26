@@ -155,11 +155,15 @@ func TestImmutableProfileSet(t *testing.T) {
 // different reasons: provider-executed tools accept upstream egress that never
 // passes through SafeTransport, and DeepSeek serves images on one model while
 // answering every other with a 400. Both stay opt-ins on one profile rather than
-// drifting into being every profile's ceiling — and provider-executed tools in
-// particular must never appear in a second ceiling, whatever else is added here.
+// drifting into being every profile's ceiling. Provider-executed tools are named
+// on exactly two, and the second one was a decision rather than a spread: OpenAI
+// serves web search on the Responses endpoint and nowhere else, which is why
+// that profile exists at all. A third would have to be argued for here, in this
+// list, rather than appearing in a table row nobody re-read.
 func TestOnlyNamedProfilesHaveAWiderCeiling(t *testing.T) {
 	optIn := map[ProviderProfileID]func(ProviderCapabilities) ProviderCapabilities{
 		ProfileAnthropicMessages: withProviderExecutedTools,
+		ProfileOpenAIResponses:   withProviderExecutedTools,
 		ProfileDeepSeekChat:      withVision,
 	}
 	for _, profile := range AllProviderProfiles() {
@@ -180,7 +184,8 @@ func TestOnlyNamedProfilesHaveAWiderCeiling(t *testing.T) {
 			t.Errorf("%s ceiling is not the opt-in it is named for:\n defaults=%#v\n ceiling=%#v",
 				profile.ID, profile.Defaults, profile.Ceiling)
 		}
-		if profile.ID != ProfileAnthropicMessages && profile.Ceiling.ProviderExecutedTools {
+		if profile.ID != ProfileAnthropicMessages && profile.ID != ProfileOpenAIResponses &&
+			profile.Ceiling.ProviderExecutedTools {
 			t.Errorf("%s allows provider-executed tools", profile.ID)
 		}
 	}
@@ -257,6 +262,7 @@ func TestResolvedEndpointsMatchWhatTheConsoleOffered(t *testing.T) {
 		ProfileDeepSeekChat:                   "https://api.deepseek.com",
 		ProfileGeminiText:                     "https://generativelanguage.googleapis.com",
 		ProfileBedrockConverseText:            "https://bedrock-runtime.us-east-1.amazonaws.com",
+		ProfileOpenAIResponses:                "https://api.openai.com",
 		ProfileBedrockInvokeTitanEmbedV2:      "https://bedrock-runtime.us-east-1.amazonaws.com",
 		ProfileBedrockInvokeTitanImageV2:      "https://bedrock-runtime.us-east-1.amazonaws.com",
 		ProfileBedrockAsyncNovaReel:           "https://bedrock-runtime.us-east-1.amazonaws.com",
@@ -309,8 +315,10 @@ func setCapabilityForTest(c *ProviderCapabilities, name string) bool {
 		c.Tools = true
 	case "vision":
 		c.Vision = true
-	case "json_mode":
-		c.JSONMode = true
+	case "json_object":
+		c.JSONObject = true
+	case "structured_outputs":
+		c.StructuredOutputs = true
 	case "developer_role":
 		c.DeveloperRole = true
 	case "reasoning":

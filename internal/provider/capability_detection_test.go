@@ -1,8 +1,11 @@
 package provider
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"image/png"
 	"slices"
 	"strings"
 	"testing"
@@ -77,7 +80,7 @@ func (a *reasoningDetectorAdapter) Chat(_ context.Context, call ChatCall) (opena
 func (a *capabilityDetectorAdapter) Type() string { return string(domain.ProviderOpenAI) }
 func (a *capabilityDetectorAdapter) Close()       {}
 func (a *capabilityDetectorAdapter) Capabilities() Capabilities {
-	return Capabilities{Chat: true, Streaming: true, Embeddings: true, Tools: true, Vision: true, JSONMode: true, DeveloperRole: true, StreamUsage: true}
+	return Capabilities{Chat: true, Streaming: true, Embeddings: true, Tools: true, Vision: true, JSONObject: true, StructuredOutputs: true, DeveloperRole: true, StreamUsage: true}
 }
 func (a *capabilityDetectorAdapter) Chat(_ context.Context, call ChatCall) (openaiapi.ChatCompletionResponse, error) {
 	a.requests = append(a.requests, call.Request)
@@ -118,7 +121,7 @@ func TestLegacyProfileCapabilityDetectorHasBoundedSideEffectFreePlan(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.MaxCalls > 8 || len(plan.Probes) > 8 {
+	if plan.MaxCalls > maxDetectionProbes || len(plan.Probes) > maxDetectionProbes {
 		t.Fatalf("plan=%#v", plan)
 	}
 	for _, probe := range plan.Probes {
@@ -155,11 +158,53 @@ func TestCapabilityDetectorDoesNotTreatFreeFormBadRequestAsUnsupported(t *testin
 // has and the parameter is the half an operator acts on. The verdict is the
 // code's, so it has to survive the parameter being appended.
 //
-// This is driven through the bridge rather than the classifier alone: the bug
-// this pins was a classifier that read a whole string an adapter had already
-// joined, and a test that asserted only the joined string passed happily while
-// the verdict it decided never changed.
-func TestCapabilityDetectorReadsTheCodeHalfOfAJoinedRefusal(t *testing.T) {
+// The status matters as much as the code. Both adapters that answer in this
+// shape reach their bad-request class as the fall-through of a status switch, so
+// a 404 or a 413 arrives looking exactly like a refused body — and an empty code
+// is what a body that is not an OpenAI envelope at all decodes to.
+func TestRefusalFromOpenAIBodyReadsTheCodeHalfOfAJoinedRefusal(t *testing.T) {
+	for _, test := range []struct {
+		status int
+		code   string
+		want   RefusalKind
+	}{
+		{400, "unsupported_parameter", RefusalUnsupported},
+		{400, "unsupported_parameter:image_url", RefusalUnsupported},
+		{400, "unsupported_value:input_image", RefusalUnsupported},
+		{400, "UNSUPPORTED_PARAMETER:image_url", RefusalUnsupported},
+		{422, "unsupported_parameter:image_url", RefusalUnsupported},
+		// A code that does not name the field as unsupported leaves the refusal
+		// unattributed whether or not it names a parameter. Splitting must not
+		// widen what counts as a verdict on its own.
+		{400, "invalid_request_error:image_url", RefusalInvalid},
+		{422, "invalid_request_error", RefusalInvalid},
+		// Not a refusal of the request body: the model name was wrong, the route
+		// does not exist, the payload was too large. None of them says anything
+		// about the field a probe is asking about.
+		{404, "model_not_found", RefusalNone},
+		{413, "request_too_large", RefusalNone},
+		// Nothing the upstream chose was decoded.
+		{400, "", RefusalNone},
+		{400, "   ", RefusalNone},
+	} {
+		if got := RefusalFromOpenAIBody(test.status, test.code); got != test.want {
+			t.Fatalf("status %d code %q mapped to %s, want %s", test.status, test.code, got, test.want)
+		}
+	}
+}
+
+// The verdict a failed probe records comes from the normalized refusal kind and
+// from whether anything established that the rest of the request was good.
+//
+// Both halves matter and the second is the one that is easy to lose. Three of
+// the four profile families cannot name the field they refused — one exception
+// name, one request-error type, one RPC status, each covering an unsupported
+// field and a model that does not exist alike — so reading every unattributed
+// refusal as "unsupported" would report a typo in a model ID as a capability the
+// model lacks. A dependent probe is its baseline plus one field and the runner
+// reached it only because that baseline was verified, which is what makes the
+// refusal attributable.
+func TestCapabilityDetectorClassifiesRefusalByKindAndBaseline(t *testing.T) {
 	manifest, _ := BuiltinProfile(domain.ProfileOpenAIChatEmbeddings)
 	adapter := &capabilityDetectorAdapter{errorFor: map[string]error{}}
 	bridge, err := NewLegacyAdapterBridge(adapter, manifest, domain.EvidenceForCapabilities(domain.DefaultProviderCapabilities(domain.ProviderOpenAI), domain.EvidenceDeclared))
@@ -168,23 +213,26 @@ func TestCapabilityDetectorReadsTheCodeHalfOfAJoinedRefusal(t *testing.T) {
 	}
 	target := ModelCapabilityDetectionTarget{ProviderModel: "unknown", BindingID: "binding", ProfileID: manifest.ID, RiskTier: "safe_automatic"}
 	for _, test := range []struct {
-		code string
-		want domain.CapabilityProbeStatus
+		name      string
+		refusal   RefusalKind
+		dependsOn []string
+		want      domain.CapabilityProbeStatus
 	}{
-		{"unsupported_parameter", domain.ProbeUnsupported},
-		{"unsupported_parameter:image_url", domain.ProbeUnsupported},
-		{"unsupported_value:input_image", domain.ProbeUnsupported},
-		{"UNSUPPORTED_PARAMETER:image_url", domain.ProbeUnsupported},
-		// A code Halro has not reviewed stays inconclusive whether or not it
-		// names a parameter. Splitting must not widen what counts as a verdict.
-		{"invalid_request_error:image_url", domain.ProbeInconclusive},
-		{"model_not_found", domain.ProbeInconclusive},
-		{"", domain.ProbeInconclusive},
+		{"named field, no baseline", RefusalUnsupported, nil, domain.ProbeUnsupported},
+		{"named field, baseline", RefusalUnsupported, []string{"chat"}, domain.ProbeUnsupported},
+		{"unattributed, baseline", RefusalInvalid, []string{"chat"}, domain.ProbeUnsupported},
+		{"unattributed, no baseline", RefusalInvalid, nil, domain.ProbeInconclusive},
+		// Nothing structured at all — a refusal Halro raised about its own
+		// rendering, or a body it could not read — never becomes a verdict, not
+		// even with a baseline behind it.
+		{"unclassified, baseline", RefusalNone, []string{"chat"}, domain.ProbeInconclusive},
+		{"unclassified, no baseline", RefusalNone, nil, domain.ProbeInconclusive},
 	} {
-		adapter.errorFor["tools"] = &Error{Class: ErrorBadRequest, StatusCode: 400, ProviderCode: test.code, Message: "arbitrary upstream text"}
-		result := bridge.DetectCapability(context.Background(), target, CapabilityProbe{Capability: "tools", Kind: "tool_call"})
+		adapter.errorFor["tools"] = &Error{Class: ErrorBadRequest, StatusCode: 400, Refusal: test.refusal, Message: "arbitrary upstream text"}
+		result := bridge.DetectCapability(context.Background(), target,
+			CapabilityProbe{Capability: "tools", Kind: "tool_call", DependsOn: test.dependsOn})
 		if result.Status != test.want {
-			t.Fatalf("code %q classified as %s, want %s", test.code, result.Status, test.want)
+			t.Fatalf("%s: classified as %s, want %s", test.name, result.Status, test.want)
 		}
 	}
 }
@@ -217,7 +265,7 @@ func TestCapabilityProbeRecordsTheUpstreamIdentifiersAndNotItsSentence(t *testin
 	// and it is the half an operator needs: "unsupported_parameter" alone names
 	// a category, not a field. It survives narrowing intact.
 	adapter.errorFor["tools"] = &Error{Class: ErrorBadRequest, StatusCode: 400,
-		ProviderCode: "unsupported_parameter:messages[0].content"}
+		ProviderCode: "unsupported_parameter:messages[0].content", Refusal: RefusalUnsupported}
 	if result = bridge.DetectCapability(context.Background(), target, probe); result.ProviderCode != "unsupported_parameter:messages[0].content" {
 		t.Fatalf("the refused parameter was lost: %q", result.ProviderCode)
 	}
@@ -230,7 +278,7 @@ func TestCapabilityProbeRecordsTheUpstreamIdentifiersAndNotItsSentence(t *testin
 	// not take the code half with it, because the code is what decides the
 	// verdict and the parameter only annotates it.
 	adapter.errorFor["tools"] = &Error{Class: ErrorBadRequest, StatusCode: 400,
-		ProviderCode: `unsupported_parameter:the "messages" field you sent`}
+		ProviderCode: `unsupported_parameter:the "messages" field you sent`, Refusal: RefusalUnsupported}
 	if result = bridge.DetectCapability(context.Background(), target, probe); result.ProviderCode != "unsupported_parameter" {
 		t.Fatalf("code half not salvaged: %q", result.ProviderCode)
 	}
@@ -323,12 +371,13 @@ func TestReasoningProbeAcceptsOnlyProducedEvidence(t *testing.T) {
 // A budget that cannot fit every capability the profile serves says which ones
 // it dropped. Returning early instead made a ceiling look like a policy.
 func TestCapabilityDetectionPlanNamesWhatTheBudgetDropped(t *testing.T) {
-	// This profile serves eight probeable capabilities plus reasoning, which is
+	// This profile serves nine probeable capabilities plus reasoning, which is
 	// one more than the budget. Reasoning is added last precisely so it is the
 	// one deferred.
 	manifest, _ := BuiltinProfile(domain.ProfileOpenAIChatEmbeddings)
 	adapter := &resourceCapabilityDetectorAdapter{capabilities: Capabilities{
-		Chat: true, Streaming: true, StreamUsage: true, Tools: true, JSONMode: true,
+		Chat: true, Streaming: true, StreamUsage: true, Tools: true,
+		JSONObject: true, StructuredOutputs: true,
 		DeveloperRole: true, Vision: true, Embeddings: true, Reasoning: true,
 	}}
 	bridge, err := NewLegacyAdapterBridge(adapter, manifest, domain.EvidenceForCapabilities(domain.DefaultProviderCapabilities(domain.ProviderOpenAI), domain.EvidenceDeclared))
@@ -421,7 +470,8 @@ func TestCapabilityDetectionPlanStaysInsideTheProfileCeiling(t *testing.T) {
 		}
 		declared := map[string]bool{
 			"chat": ceiling.Chat, "streaming": ceiling.Streaming, "stream_usage": ceiling.StreamUsage,
-			"tools": ceiling.Tools, "json_mode": ceiling.JSONMode, "developer_role": ceiling.DeveloperRole,
+			"tools": ceiling.Tools, "json_object": ceiling.JSONObject,
+			"structured_outputs": ceiling.StructuredOutputs, "developer_role": ceiling.DeveloperRole,
 			"vision": ceiling.Vision, "embeddings": ceiling.Embeddings, "reasoning": ceiling.Reasoning,
 			"moderations": ceiling.Moderations, "rerank": ceiling.Rerank,
 		}
@@ -444,7 +494,8 @@ func (*bedrockCapabilityDetectorAdapter) Type() string { return string(domain.Pr
 func capabilitiesFromDomain(declared domain.ProviderCapabilities) Capabilities {
 	return Capabilities{
 		Chat: declared.Chat, Streaming: declared.Streaming, Embeddings: declared.Embeddings,
-		Tools: declared.Tools, Vision: declared.Vision, JSONMode: declared.JSONMode,
+		Tools: declared.Tools, Vision: declared.Vision,
+		JSONObject: declared.JSONObject, StructuredOutputs: declared.StructuredOutputs,
 		DeveloperRole: declared.DeveloperRole, Reasoning: declared.Reasoning,
 		StreamUsage: declared.StreamUsage, Moderations: declared.Moderations,
 		Images: declared.Images, Transcriptions: declared.Transcriptions, Speech: declared.Speech,
@@ -555,5 +606,41 @@ type typedReasoningAdapter struct {
 func (a *typedReasoningAdapter) Type() string { return a.providerType }
 func (a *typedReasoningAdapter) Close()       {}
 func (a *typedReasoningAdapter) Capabilities() Capabilities {
-	return Capabilities{Chat: true, Streaming: true, Tools: true, Vision: true, JSONMode: true, Reasoning: true, StreamUsage: true}
+	return Capabilities{Chat: true, Streaming: true, Tools: true, Vision: true, JSONObject: true, StructuredOutputs: true, Reasoning: true, StreamUsage: true}
+}
+
+// The probe's own picture has to be a picture. The one this replaces was a
+// corrupt PNG — its IDAT chunk failed both its CRC and the zlib stream's
+// checksum — and nothing noticed, because lenient decoders accept it and the
+// only test that touched the vision probe used a fake adapter that never looked
+// at the bytes. A strict upstream refused it, and the refusal was recorded as
+// the model not supporting vision.
+//
+// Decoding it here is the check that could not have passed in that state.
+func TestCapabilityProbeImageIsAValidPNG(t *testing.T) {
+	const prefix = "data:image/png;base64,"
+	if !strings.HasPrefix(CapabilityProbeImage, prefix) {
+		t.Fatalf("probe image is not an inline PNG data URL: %q", CapabilityProbeImage[:min(len(CapabilityProbeImage), 32)])
+	}
+	// Inline, so a probe never asks an upstream to go and fetch anything.
+	if strings.Contains(CapabilityProbeImage, "://") {
+		t.Fatalf("probe image names a remote address")
+	}
+	raw, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(CapabilityProbeImage, prefix))
+	if err != nil {
+		t.Fatalf("probe image is not base64: %v", err)
+	}
+	// image/png verifies every chunk CRC and the compressed stream's checksum,
+	// which is exactly what the old image failed.
+	decoded, err := png.Decode(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("probe image does not decode: %v", err)
+	}
+	bounds := decoded.Bounds()
+	if bounds.Dx() < 8 || bounds.Dy() < 8 {
+		t.Fatalf("probe image is %dx%d; nothing establishes that every upstream accepts one smaller than 8x8", bounds.Dx(), bounds.Dy())
+	}
+	if len(raw) > 2048 {
+		t.Fatalf("probe image is %d bytes, past what a bounded probe should carry", len(raw))
+	}
 }

@@ -5,7 +5,7 @@ package domain
 //
 // The two vocabularies are not isomorphic and this file is the only place that
 // admits it. Halro's capabilities are operations and protocol features — chat,
-// tools, json_mode; a model catalogue elsewhere in the industry describes the
+// tools, json_object; a model catalogue elsewhere in the industry describes the
 // same models as inputs and outputs — text in, image in, text out. Rendering
 // the second from the first needs a mapping, and a mapping written twice
 // diverges, so it is written here, served to whoever renders it, and pinned by
@@ -67,7 +67,7 @@ var capabilityModalities = []CapabilityModality{
 // to the dictionary has to be placed deliberately in one list or the other and
 // cannot fall through unnoticed.
 var nonModalCapabilities = []string{
-	"streaming", "tools", "json_mode", "developer_role", "reasoning",
+	"streaming", "tools", "json_object", "structured_outputs", "developer_role", "reasoning",
 	"stream_usage", "provider_executed_tools", "files", "batches",
 	"max_context_tokens", "max_output_tokens",
 }

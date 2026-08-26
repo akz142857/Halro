@@ -687,7 +687,15 @@ func newProviderBindingAdapterWithClient(instance domain.ProviderInstance, bindi
 	case domain.ProviderOpenAI, domain.ProviderOpenAICompatible, domain.ProviderDeepSeek:
 		authorizer, err = provider.NewStaticHeaderAuthorizer(binding.CredentialScheme, "Authorization", "Bearer ", plaintext, "api-key")
 		if err == nil {
-			adapter, err = openaiprovider.NewWithOptions(openaiprovider.Options{Endpoint: endpoint, Authorizer: authorizer, Client: client, ProviderType: string(instance.Type), Capabilities: capabilities})
+			// The Responses profile is the same credential against a different
+			// endpoint, so it shares this adapter and differs by the surface it is
+			// built for. Which surface a connection addresses is the profile's to
+			// say and no request's.
+			adapter, err = openaiprovider.NewWithOptions(openaiprovider.Options{
+				Endpoint: endpoint, Authorizer: authorizer, Client: client,
+				ProviderType: string(instance.Type), Capabilities: capabilities,
+				Responses: binding.ProfileID == domain.ProfileOpenAIResponses,
+			})
 		}
 	case domain.ProviderAnthropic:
 		authorizer, err = provider.NewStaticHeaderAuthorizer(binding.CredentialScheme, "x-api-key", "", plaintext, "Authorization")
@@ -811,7 +819,8 @@ func deploymentCapabilities(deployment domain.Deployment, adapter provider.Adapt
 		Tools:                 available.Tools && declared.Tools,
 		Vision:                available.Vision && declared.Vision,
 		FetchedImage:          available.FetchedImage && declared.FetchedImage,
-		JSONMode:              available.JSONMode && declared.JSONMode,
+		JSONObject:            available.JSONObject && declared.JSONObject,
+		StructuredOutputs:     available.StructuredOutputs && declared.StructuredOutputs,
 		DeveloperRole:         available.DeveloperRole && declared.DeveloperRole,
 		Reasoning:             available.Reasoning && declared.Reasoning,
 		StreamUsage:           available.StreamUsage && declared.StreamUsage,

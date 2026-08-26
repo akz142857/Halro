@@ -112,8 +112,25 @@ func (r *Runtime) createAdminModelCapabilityDetection(writer http.ResponseWriter
 		region = providerRegion(instance)
 	}
 	catalogCandidates, probeCandidates, err := r.capabilityDetectionCandidates(instance, input.modelCapabilityDetectionInput, region)
+	// A refresh is the operator declining an answer that already exists. It
+	// declines the stored detection the fingerprint would otherwise replay, and
+	// it declines the catalog's review for the same reason: both are answers
+	// from before, and the thing being asked for is what the upstream says now.
+	// Everything that makes this cost real — the step-up proof above, the
+	// cooldown below, the call ceiling — is already in the path.
+	verify := input.ForceRefresh
+	catalogKnown := len(catalogCandidates) == 1 && !verify
+	resolved := probeCandidates
+	switch {
+	case catalogKnown:
+		resolved = catalogCandidates
+	case len(catalogCandidates) == 1:
+		// The catalog names the interface, so a verification does not have to
+		// spend anything identifying one. It probes there and nowhere else.
+		resolved = candidatesForBinding(probeCandidates, catalogCandidates[0].binding.ID)
+	}
 	if err == nil {
-		err = capabilityCandidateError(catalogCandidates, probeCandidates)
+		err = capabilityCandidateError(catalogCandidates, resolved)
 	}
 	if err != nil {
 		code := "no_detectable_binding"
@@ -122,11 +139,6 @@ func (r *Runtime) createAdminModelCapabilityDetection(writer http.ResponseWriter
 		}
 		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": err.Error(), "code": code})
 		return
-	}
-	catalogKnown := len(catalogCandidates) == 1
-	resolved := probeCandidates
-	if catalogKnown {
-		resolved = catalogCandidates
 	}
 	candidates := make([]domain.DetectionBindingCandidate, 0, len(resolved))
 	candidateIDs := make([]string, 0, len(resolved))
@@ -157,6 +169,20 @@ func (r *Runtime) createAdminModelCapabilityDetection(writer http.ResponseWriter
 		}
 		cooldown := r.config.Admin.ModelCapabilityDetection.RefreshCooldown.Value()
 		for _, item := range items {
+			// The cooldown bounds spending, and the catalog answer spends
+			// nothing: counting it made the first verification of a covered
+			// model unaskable for the whole window — the free answer locking out
+			// the paid one it exists to be checked against.
+			//
+			// It is identified by the ceiling it was written with rather than by
+			// the calls it has made. A queued or running detection has also made
+			// none yet, all the way through the semaphore wait, so exempting on
+			// calls-so-far let concurrent refreshes each see nothing and all
+			// proceed. MaxProviderCalls is zero only on the catalog path, and
+			// the config refuses anything below one for a detection that probes.
+			if item.MaxProviderCalls == 0 {
+				continue
+			}
 			if item.SelectionFingerprint == fingerprint && now.Sub(item.UpdatedAt) < cooldown {
 				writeJSON(writer, http.StatusTooManyRequests, map[string]string{"error": "capability detection refresh is cooling down", "code": "capability_detection_cooldown"})
 				return
@@ -178,6 +204,14 @@ func (r *Runtime) createAdminModelCapabilityDetection(writer http.ResponseWriter
 		MaxProviderCalls: r.config.Admin.ModelCapabilityDetection.MaxProviderCalls, CreatedBy: admin.session.Username,
 		IdempotencyKeyHash: hashCanonical(map[string]any{"actor": admin.session.Username, "key": key}), RequestHash: requestHash,
 		SelectionRevision: input.SelectionRevision, ForceRefresh: input.ForceRefresh, CreatedAt: now, UpdatedAt: now}
+	if len(catalogCandidates) == 1 && verify {
+		// What the verification is being measured against. The probes decide
+		// every capability they reach; this is what stands for the ones no probe
+		// is allowed to ask about.
+		match := catalogCandidates[0]
+		baseline := modelcatalog.Clamp(match.entry.Capabilities, match.binding.Capabilities)
+		detection.Baseline = &baseline
+	}
 	if catalogKnown {
 		// The catalog already names the interface, so there is nothing to
 		// identify and nothing to spend.
@@ -299,9 +333,14 @@ func (r *Runtime) capabilityDetectionCandidates(instance domain.ProviderInstance
 		if !found {
 			entry = modelcatalog.Unknown(modelcatalog.Key{ProviderType: instance.Type, Profile: binding.ProfileID, TargetKind: input.TargetKind, Model: input.ProviderModel, Region: region})
 		}
+		// A catalog hit and a probeable interface are not alternatives. The
+		// catalog answers for free and is what an ordinary detection uses, but
+		// an operator can ask for the same model to be measured against the
+		// upstream — the catalog is a review of what a model was, and a
+		// deployment runs against what it is. Building only one of the two here
+		// is what made that impossible to ask for.
 		if found && (entry.Source == modelcatalog.SourceBuiltin || entry.Source == modelcatalog.SourceSignedCatalog) {
 			catalogCandidates = append(catalogCandidates, candidate{binding: binding, adapter: adapter, entry: entry})
-			continue
 		}
 		detector, ok := capabilityDetectorFor(adapter)
 		if !ok {
@@ -317,6 +356,15 @@ func (r *Runtime) capabilityDetectionCandidates(instance domain.ProviderInstance
 		}
 	}
 	return catalogCandidates, detectionCandidates, nil
+}
+
+func candidatesForBinding(candidates []detectionCandidate, bindingID string) []detectionCandidate {
+	for _, item := range candidates {
+		if item.binding.ID == bindingID {
+			return []detectionCandidate{item}
+		}
+	}
+	return nil
 }
 
 func capabilityDetectorFor(adapter provider.Adapter) (provider.CapabilityDetector, bool) {
@@ -351,11 +399,16 @@ func (r *Runtime) startCapabilityDetection(id string, detectors map[string]provi
 // capabilityCandidateError reports the cases identification cannot rescue. A
 // model seeded into the catalog under two interfaces is a seeding conflict, not
 // a question to put to the operator, so it stays a refusal.
-func capabilityCandidateError(catalogCandidates, probeCandidates []detectionCandidate) error {
+// capabilityCandidateError judges what the detection actually resolved to, not
+// what the catalog happens to know. A verification asks the upstream about a
+// model the catalog already covers, so "the catalog knows this one" is not an
+// answer to whether anything can be probed — resolved is the list that decides,
+// and it is empty exactly when nothing can run.
+func capabilityCandidateError(catalogCandidates, resolved []detectionCandidate) error {
 	switch {
 	case len(catalogCandidates) > 1:
 		return errAmbiguousCapabilityBinding
-	case len(catalogCandidates) == 1 || len(probeCandidates) > 0:
+	case len(resolved) > 0:
 		return nil
 	default:
 		return errNoDetectableCapabilityBinding
@@ -782,10 +835,17 @@ func (r *Runtime) finalizeCapabilityDetection(d domain.ModelCapabilityDetection)
 			d.Results[name] = domain.CapabilityProbeResult{Status: domain.ProbeNotProbed, BindingID: d.BindingID, ProbeKind: "risk_policy"}
 		}
 	}
-	recommended := capabilitiesFromProbeResults(d.Results)
+	recommended := domain.RecommendedFromProbes(d.Baseline, d.Results)
 	recommended.MaxContextTokens, recommended.MaxOutputTokens = d.Recommended.MaxContextTokens, d.Recommended.MaxOutputTokens
 	d.Recommended = recommended
-	if d.Recommended.AnyOperation() {
+	// A verification that answered nothing is a failed verification, whatever
+	// the baseline it carried through says. The recommendation alone cannot see
+	// that: silence keeps the catalog's claim, so a run whose every probe came
+	// back 401 on a revoked credential recommends the whole catalog entry and
+	// looks exactly like a run that measured it. It would then be stored as
+	// verified_probe with a fresh TTL — a source that is drift-exempt and is the
+	// only one allowed to claim verified evidence — on the strength of nothing.
+	if d.Recommended.AnyOperation() && domain.AnyProbeSupported(d.Results) {
 		expires := now.Add(r.config.Admin.ModelCapabilityDetection.FreshTTL.Value())
 		d.Status, d.ExpiresAt = domain.DetectionCompleted, &expires
 	} else {
@@ -859,16 +919,6 @@ func (r *Runtime) recordCapabilityDetectionTerminal(d domain.ModelCapabilityDete
 		started = *d.StartedAt
 	}
 	r.capabilityMetrics.recordDetectionFinish(string(instance.Type), string(d.Status), d.Source, d.Results, d.ProviderCalls, d.UpdatedAt.Sub(started))
-}
-
-func capabilitiesFromProbeResults(results map[string]domain.CapabilityProbeResult) domain.ProviderCapabilities {
-	c := domain.ProviderCapabilities{}
-	enabled := func(name string) bool { return results[name].Status == domain.ProbeSupported }
-	c.Chat, c.Streaming, c.Embeddings, c.Moderations = enabled("chat"), enabled("streaming"), enabled("embeddings"), enabled("moderations")
-	c.Images, c.Transcriptions, c.Speech, c.Files = enabled("images"), enabled("transcriptions"), enabled("speech"), enabled("files")
-	c.Batches, c.Rerank, c.AsyncGenerate, c.Tools = enabled("batches"), enabled("rerank"), enabled("async_generate"), enabled("tools")
-	c.Vision, c.JSONMode, c.DeveloperRole, c.Reasoning, c.StreamUsage = enabled("vision"), enabled("json_mode"), enabled("developer_role"), enabled("reasoning"), enabled("stream_usage")
-	return c
 }
 
 func detectionAuditMetadata(d domain.ModelCapabilityDetection) map[string]any {

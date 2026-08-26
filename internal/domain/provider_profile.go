@@ -25,6 +25,7 @@ const (
 
 const (
 	ProfileOpenAIChatEmbeddings       ProviderProfileID = "openai.chat-embeddings.v1"
+	ProfileOpenAIResponses            ProviderProfileID = "openai.responses.v1"
 	ProfileAnthropicMessages          ProviderProfileID = "anthropic.messages.2023-06-01"
 	ProfileAzureChatEmbeddings        ProviderProfileID = "azure-openai.chat-embeddings.v1"
 	ProfileDeepSeekChat               ProviderProfileID = "deepseek.chat.v1"

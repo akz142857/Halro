@@ -78,9 +78,16 @@ func ResolveBaseURL(profileID ProviderProfileID, region string) string {
 }
 
 var (
+	// Both JSON halves are at the OpenAI ceiling and both are prefilled, because
+	// which of them a given OpenAI model serves is a per-model fact rather than a
+	// per-connection one: everything from gpt-4o-2024-08-06 onward enforces a
+	// schema, and the models before it take json_object only. The catalogue
+	// carries the per-model claim and detection verifies it; the connection-level
+	// answer is "this account reaches models that do both".
 	openAIChatSet = ProviderCapabilities{
 		Chat: true, Streaming: true, Embeddings: true, Tools: true,
-		Vision: true, FetchedImage: true, JSONMode: true, DeveloperRole: true, Reasoning: true,
+		Vision: true, FetchedImage: true, JSONObject: true, StructuredOutputs: true,
+		DeveloperRole: true, Reasoning: true,
 		StreamUsage: true,
 	}
 	// Files and batches ride with the Anthropic connection because Anthropic
@@ -88,9 +95,33 @@ var (
 	// never uploaded — Anthropic batches carry their requests inline — so the
 	// capability says the deployment can be given a file, not that Anthropic will
 	// hold one. See ADR 0021.
+	//
+	// No JSONObject: Anthropic has no schema-less JSON mode. Messages carries a
+	// schema through output_config.format and enforces it, which is exactly
+	// structured_outputs and nothing else. Declaring the absent half used to be a
+	// per-profile request-field rule; it is a capability now, so a json_object
+	// request is refused by the same filter that refuses a target with no chat.
 	anthropicMessagesSet = ProviderCapabilities{
-		Chat: true, Streaming: true, Tools: true, Vision: true, FetchedImage: true, JSONMode: true,
-		Reasoning: true, StreamUsage: true, Files: true, Batches: true,
+		Chat: true, Streaming: true, Tools: true, Vision: true, FetchedImage: true,
+		StructuredOutputs: true,
+		Reasoning:         true, StreamUsage: true, Files: true, Batches: true,
+	}
+	// The Responses profile is the same account reached through a different
+	// endpoint, and the difference in what it can do is the point of it being a
+	// separate profile rather than a flag on the one above.
+	//
+	// Provider-executed tools are here and nowhere else on OpenAI: web search is
+	// a Responses tool, and running it means the upstream originates network
+	// calls that never pass through SafeTransport — so it sits at the ceiling and
+	// not in the defaults, the same shape the Anthropic profile uses.
+	//
+	// Absent on purpose: streaming, because this profile binds no stream
+	// primitive; embeddings, which live on the chat profile; and reasoning,
+	// because the canonical response mapper cannot preserve reasoning items and a
+	// claim it cannot carry is a request that fails after the budget is reserved.
+	openAIResponsesSet = ProviderCapabilities{
+		Chat: true, Tools: true, Vision: true, FetchedImage: true,
+		JSONObject: true, StructuredOutputs: true, DeveloperRole: true,
 	}
 	openAIMediaSet = ProviderCapabilities{
 		Moderations: true, Images: true, Transcriptions: true,
@@ -109,8 +140,17 @@ var profileTable = []profileRow{
 		Defaults:        openAIChatSet, Ceiling: openAIChatSet,
 	},
 	{
-		// JSONMode covers Anthropic's schema-backed structured outputs, which the
-		// Messages profile carries through output_config.format.
+		// Ordered after the chat profile deliberately: the two share one (type,
+		// surface, scheme), and a stored credential resolves to the first match.
+		// Moving this row above it would silently re-point every existing OpenAI
+		// connection at a different endpoint.
+		ID: ProfileOpenAIResponses, Type: ProviderOpenAI,
+		Surface: SurfaceOpenAI, Scheme: CredentialBearerStatic,
+		BaseURLTemplate: "https://api.openai.com",
+		Defaults:        openAIResponsesSet,
+		Ceiling:         withProviderExecutedTools(openAIResponsesSet),
+	},
+	{
 		ID: ProfileAnthropicMessages, Type: ProviderAnthropic,
 		Surface: SurfaceAnthropic, Scheme: CredentialAnthropicAPIKey,
 		BaseURLTemplate: "https://api.anthropic.com",
@@ -247,8 +287,10 @@ var profileTable = []profileRow{
 }
 
 var (
+	// No StructuredOutputs: DeepSeek serves json_object and has no schema mode.
+	// This too was a per-profile request-field rule before the split.
 	deepSeekSet = ProviderCapabilities{
-		Chat: true, Streaming: true, Tools: true, JSONMode: true,
+		Chat: true, Streaming: true, Tools: true, JSONObject: true,
 		Reasoning: true, StreamUsage: true,
 	}
 	openAICompatibleSet = ProviderCapabilities{Chat: true, Streaming: true, Embeddings: true}
@@ -261,12 +303,19 @@ var (
 	// not close that gap by fetching the address itself — that would make the
 	// gateway retrieve a caller-supplied URL, which is the request forgery
 	// SafeTransport's allowlists exist to prevent.
+	// Both JSON halves, because both is what the single json_mode bit these sets
+	// carried before the split already routed here. Splitting it is a change to
+	// how a request is described, not to which requests a Mantle profile accepts,
+	// and narrowing either half would be a widening's mirror image — a Beta
+	// ceiling moving without the contract review that pins it.
 	mantleOpenAIChatSet = ProviderCapabilities{
-		Chat: true, Streaming: true, Tools: true, Vision: true, JSONMode: true,
+		Chat: true, Streaming: true, Tools: true, Vision: true,
+		JSONObject: true, StructuredOutputs: true,
 		DeveloperRole: true, Reasoning: true, StreamUsage: true,
 	}
 	mantleOpenAIResponsesSet = ProviderCapabilities{
-		Chat: true, Streaming: true, Tools: true, Vision: true, JSONMode: true,
+		Chat: true, Streaming: true, Tools: true, Vision: true,
+		JSONObject: true, StructuredOutputs: true,
 		DeveloperRole: true, StreamUsage: true,
 	}
 	mantleAnthropicSet = ProviderCapabilities{
@@ -309,7 +358,7 @@ var providerTypeTable = []providerTypeRow{
 	{ProviderOpenAI, ProfileOpenAIChatEmbeddings, openAIChatSet},
 	{ProviderAnthropic, ProfileAnthropicMessages, ProviderCapabilities{
 		Chat: true, Streaming: true, Tools: true, Vision: true,
-		JSONMode: true, Reasoning: true, StreamUsage: true,
+		StructuredOutputs: true, Reasoning: true, StreamUsage: true,
 	}},
 	{ProviderAzureOpenAI, ProfileAzureChatEmbeddings, openAIChatSet},
 	{ProviderDeepSeek, ProfileDeepSeekChat, deepSeekSet},
@@ -397,8 +446,12 @@ func CapabilityDependencies() map[string][]string {
 		"vision":    {"chat"},
 		// Fetching is a mode of seeing: a target that cannot read an image has
 		// nothing to fetch one for. Same shape as stream_usage over streaming.
-		"fetched_image":           {"vision"},
-		"json_mode":               {"chat"},
+		"fetched_image": {"vision"},
+		// Two capabilities, not one over the other: Anthropic enforces a schema
+		// and has no schema-less mode, so structured_outputs cannot be made to
+		// depend on json_object without describing Anthropic wrongly.
+		"json_object":             {"chat"},
+		"structured_outputs":      {"chat"},
 		"developer_role":          {"chat"},
 		"reasoning":               {"chat"},
 		"provider_executed_tools": {"chat"},

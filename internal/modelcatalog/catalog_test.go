@@ -198,18 +198,18 @@ func TestBuiltinCoversReviewedProviderFamiliesConservatively(t *testing.T) {
 		},
 		{
 			key:  Key{ProviderType: domain.ProviderDeepSeek, Profile: domain.ProfileDeepSeekChat, Model: "deepseek-v4-flash"},
-			want: domain.ProviderCapabilities{Chat: true, Streaming: true, Tools: true, JSONMode: true, Reasoning: true, StreamUsage: true, MaxContextTokens: 1_000_000, MaxOutputTokens: 384_000},
+			want: domain.ProviderCapabilities{Chat: true, Streaming: true, Tools: true, JSONObject: true, Reasoning: true, StreamUsage: true, MaxContextTokens: 1_000_000, MaxOutputTokens: 384_000},
 		},
 		{
 			// The one DeepSeek model that accepts an image. Its two siblings above
 			// answer one with a 400, which is why the claim lives per model and not
 			// on the profile's defaults.
 			key:  Key{ProviderType: domain.ProviderDeepSeek, Profile: domain.ProfileDeepSeekChat, Model: "deepseek-v4-flash-vision-exp"},
-			want: domain.ProviderCapabilities{Chat: true, Streaming: true, Tools: true, JSONMode: true, Reasoning: true, Vision: true, FetchedImage: true, StreamUsage: true, MaxContextTokens: 1_000_000, MaxOutputTokens: 384_000},
+			want: domain.ProviderCapabilities{Chat: true, Streaming: true, Tools: true, JSONObject: true, Reasoning: true, Vision: true, FetchedImage: true, StreamUsage: true, MaxContextTokens: 1_000_000, MaxOutputTokens: 384_000},
 		},
 		{
 			key:  Key{ProviderType: domain.ProviderDeepSeek, Profile: domain.ProfileDeepSeekChat, Model: "deepseek-v4-pro"},
-			want: domain.ProviderCapabilities{Chat: true, Streaming: true, Tools: true, JSONMode: true, Reasoning: true, StreamUsage: true, MaxContextTokens: 1_000_000, MaxOutputTokens: 384_000},
+			want: domain.ProviderCapabilities{Chat: true, Streaming: true, Tools: true, JSONObject: true, Reasoning: true, StreamUsage: true, MaxContextTokens: 1_000_000, MaxOutputTokens: 384_000},
 		},
 	}
 	for _, test := range tests {
@@ -854,8 +854,8 @@ func TestSeededMantleModelsClaimOnlyWhatWasMeasured(t *testing.T) {
 		if !capabilities.Chat || !capabilities.Streaming {
 			t.Errorf("%s claims neither chat nor streaming", entry.Key.Model)
 		}
-		if capabilities.Tools || capabilities.JSONMode || capabilities.Vision ||
-			capabilities.DeveloperRole || capabilities.Reasoning || capabilities.StreamUsage {
+		if capabilities.Tools || capabilities.JSONObject || capabilities.StructuredOutputs ||
+			capabilities.Vision || capabilities.DeveloperRole || capabilities.Reasoning || capabilities.StreamUsage {
 			t.Errorf("%s on %s claims an unmeasured capability: %#v", entry.Key.Model, entry.Key.Profile, capabilities)
 		}
 		if capabilities.MaxContextTokens <= 0 {

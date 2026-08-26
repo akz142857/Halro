@@ -678,8 +678,7 @@ func transportError(message string, err error) *provider.Error {
 }
 
 func httpError(status int, body io.Reader) *provider.Error {
-	_, _ = io.Copy(io.Discard, io.LimitReader(body, 4096))
-	result := &provider.Error{StatusCode: status, Message: fmt.Sprintf("Gemini error (%d)", status)}
+	result := &provider.Error{StatusCode: status, Message: fmt.Sprintf("Gemini error (%d)", status), ProviderCode: refusalCode(body)}
 	switch {
 	case status == http.StatusUnauthorized || status == http.StatusForbidden:
 		result.Class = provider.ErrorAuthentication
@@ -690,7 +689,62 @@ func httpError(status int, body io.Reader) *provider.Error {
 	case status >= 500:
 		result.Class, result.Ambiguous = provider.ErrorProvider5xx, true
 	default:
+		// Google's RPC status names the class of refusal, not the field:
+		// INVALID_ARGUMENT is the answer to an unsupported generation parameter
+		// and to a request whose model does not exist. The field violation
+		// joined to it says where, when the body carries one, but it is an
+		// annotation — the verdict stays unattributed, and only a caller that
+		// already knows the rest of the request was accepted can read a
+		// capability out of it.
+		//
+		// This branch is also where every status the switch does not map lands,
+		// 404 included, and where a body that is not a Google RPC envelope
+		// arrives with no status decoded. Neither is the upstream refusing this
+		// request body, so neither names a kind.
 		result.Class = provider.ErrorBadRequest
+		if (status == http.StatusBadRequest || status == http.StatusUnprocessableEntity) && result.ProviderCode != "" {
+			result.Refusal = provider.RefusalInvalid
+		}
 	}
 	return result
+}
+
+// refusalCode is the machine-readable half of a Google RPC error body. The body
+// used to be drained and discarded, which kept the connection reusable and left
+// every Gemini refusal as a bare status: an operator reading "Gemini error (400)"
+// is told a request was refused and nothing about what in it was refused.
+//
+// Only identifiers are taken. The RPC status is one, the violated field path is
+// one, and the description beside them is a sentence Google wrote about the
+// request — that half stays out, here as everywhere else.
+func refusalCode(body io.Reader) string {
+	payload, err := io.ReadAll(io.LimitReader(body, 4096))
+	if err != nil {
+		return ""
+	}
+	var envelope struct {
+		Error struct {
+			Status  string `json:"status"`
+			Details []struct {
+				FieldViolations []struct {
+					Field string `json:"field"`
+				} `json:"fieldViolations"`
+			} `json:"details"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(payload, &envelope) != nil {
+		return ""
+	}
+	code := strings.TrimSpace(envelope.Error.Status)
+	if code == "" {
+		return ""
+	}
+	for _, detail := range envelope.Error.Details {
+		for _, violation := range detail.FieldViolations {
+			if field := strings.TrimSpace(violation.Field); field != "" {
+				return provider.SafeProviderIdentifier(code + ":" + field)
+			}
+		}
+	}
+	return provider.SafeProviderIdentifier(code)
 }

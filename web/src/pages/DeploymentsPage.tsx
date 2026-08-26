@@ -20,7 +20,7 @@ import {
 import { exactNumber, formatAge, money, useInstantFormatter } from "../format";
 import { isoToZonedInput, useAccountingTimeZone, zonedInputToISO } from "../timezone";
 import type { CapabilityPreflight, CapabilityReview, Deployment, DeploymentPriceVersion, DeploymentTargetKind, DeploymentVariant, ModelCapabilityDetection, PriceSchedule, Provider, ProviderBinding, ProviderCapabilities, ProviderProfilesCatalog, ResolutionState, ResolvedInvocationTarget } from "../types";
-import { interfaceCeiling, profileRequestConstraints, updateCapabilitySelection, useProviderProfiles } from "../hooks/useProviderProfiles";
+import { interfaceCeiling, updateCapabilitySelection, useProviderProfiles } from "../hooks/useProviderProfiles";
 import { ModalityMarks } from "../ModalityMarks";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
@@ -1206,7 +1206,7 @@ type SelectableBinding = ProviderBinding & { id: string };
 const deploymentCapabilityGroups = [
   { id: "operations", capabilities: ["chat", "embeddings", "moderations", "images", "transcriptions", "speech", "rerank", "async_generate"] },
   { id: "modalities", capabilities: ["vision", "fetched_image"] },
-  { id: "protocol", capabilities: ["streaming", "tools", "json_mode", "developer_role", "reasoning", "stream_usage", "provider_executed_tools"] },
+  { id: "protocol", capabilities: ["streaming", "tools", "json_object", "structured_outputs", "developer_role", "reasoning", "stream_usage", "provider_executed_tools"] },
   { id: "managed", capabilities: ["files", "batches"] },
 ] as const;
 
@@ -1406,6 +1406,27 @@ function DeploymentForm({
     detection?.status === "completed"
     && Object.values(detection.capabilities).some((result) => result.status === "unauthorized" || result.status === "unavailable"),
   );
+  // What a verification moved. The baseline is what the catalogue claimed when
+  // the run was asked for, the recommendation is what the run decided, and the
+  // difference is the only reason to have paid for it. It is null for a
+  // detection of a model the catalogue does not cover: there was nothing to
+  // measure against, so nothing moved — the probes are the whole claim.
+  const verification = useMemo(() => {
+    const baseline = detection?.baseline_capabilities;
+    if (!detection || !baseline) return null;
+    const answered = (name: string) => ["supported", "unsupported"].includes(detection.capabilities[name]?.status ?? "");
+    return {
+      measured: deploymentCapabilityNames.filter(answered),
+      gained: deploymentCapabilityNames.filter((name) => detection.recommended_capabilities[name] && !baseline[name]),
+      lost: deploymentCapabilityNames.filter((name) => !detection.recommended_capabilities[name] && baseline[name]),
+      // Kept disjoint from `lost` on purpose: a claim the probes never answered
+      // can still be switched off by the dependency clamp — stream_usage when
+      // streaming is refused, vision when chat is — and reporting the same
+      // capability as both "refused upstream" and "still on the catalogue's
+      // claim" describes two different outcomes for one row.
+      carried: deploymentCapabilityNames.filter((name) => baseline[name] && !answered(name) && detection.recommended_capabilities[name]),
+    };
+  }, [detection]);
   useEffect(() => {
     if (!detection || detection.revision <= appliedDetectionRevision.current) return;
     const belongsToAcceptedRequest = detection.id === capabilityDetection?.id
@@ -1433,11 +1454,18 @@ function DeploymentForm({
   // who is spending it. The step-up material travels with the mutation rather
   // than in component state: it must not outlive the click that supplied it.
   const detectCapabilities = useMutation({
-    mutationFn: ({ requestedSelectionRevision, reauth }: { requestedSelectionRevision: string; reauth: ReauthValues }) =>
+    mutationFn: ({ requestedSelectionRevision, reauth, verify }: { requestedSelectionRevision: string; reauth: ReauthValues; verify?: boolean }) =>
       api.createModelCapabilityDetection(providerID, {
         provider_model: providerModel.trim(), target_kind: targetKind, region: region.trim(),
-        ...(detectionBindingID ? { binding_id: detectionBindingID } : {}), risk_tier: "safe_automatic",
+        // A verification runs on the interface the catalogue already names, so
+        // it says which one rather than paying to identify one that is not in
+        // question.
+        ...(detectionBindingID || verify && bindingID ? { binding_id: detectionBindingID || bindingID } : {}), risk_tier: "safe_automatic",
         selection_revision: requestedSelectionRevision,
+        // The refresh is what declines the answers that already exist — the
+        // stored result and the catalogue's review alike — and asks the upstream
+        // instead.
+        ...(verify ? { force_refresh: true } : {}),
       }, detectionIdempotencyKey.current, reauth),
     onSuccess: (result, { requestedSelectionRevision }) => {
       if (requestedSelectionRevision !== selectionRevision) return;
@@ -1465,6 +1493,18 @@ function DeploymentForm({
     setResolutionRequiresConfirmation(false);
     return detectCapabilities.mutateAsync({ requestedSelectionRevision: nextSelection, reauth });
   };
+  // Verifying a catalogue claim is the same detection, asked about a model the
+  // catalogue already answered for. It is deliberately not automatic: the
+  // catalogue costs nothing and is right most of the time, and this spends the
+  // operator's credential to find out where it is not.
+  const verifyCatalogClaims = (reauth: ReauthValues) => {
+    const nextSelection = crypto.randomUUID();
+    setCapabilityDetection(null);
+    appliedDetectionRevision.current = 0;
+    detectionIdempotencyKey.current = crypto.randomUUID();
+    setSelectionRevision(nextSelection);
+    return detectCapabilities.mutateAsync({ requestedSelectionRevision: nextSelection, reauth, verify: true });
+  };
   const value = () => ({
     name: name.trim(),
     provider_id: providerID,
@@ -1474,7 +1514,12 @@ function DeploymentForm({
     target_kind: targetKind,
     capabilities,
     ...(widening || declaringBeyondVariant || declaredModel && manualDeclaration ? { mode: "operator_declared" } : {}),
-    ...(declaredModel && detection?.status === "completed" ? {
+    // Every completed detection pins the write to itself, whether it answered
+    // for a model the catalogue does not cover or verified one it does. Pinning
+    // only the first left a verification's own findings to be validated against
+    // the catalogue claims it was run to check, and anything it established
+    // beyond them was refused.
+    ...(detection?.status === "completed" ? {
       capability_detection_id: detection.id,
       capability_detection_revision: detection.revision,
     } : {}),
@@ -1482,7 +1527,7 @@ function DeploymentForm({
     // this write to the claims it was resolved from, and the server refuses a
     // capability set that exceeds them. Sending both would be asking the server
     // to honour a pin and break it in the same request.
-    ...(!current && !manualDeclaration && !detection && !declaringBeyondVariant && selectedVariant
+    ...(!current && !manualDeclaration && detection?.status !== "completed" && !declaringBeyondVariant && selectedVariant
       ? { resolution_revision: selectedVariant.revision } : {}),
     region: region.trim(),
     max_concurrency: maxConcurrency,
@@ -1641,7 +1686,6 @@ function DeploymentForm({
     }
     return "deployments.notDeclaredByModel";
   };
-  const requestConstraints = catalogReady ? profileRequestConstraints(catalogReady, activeProfileIDs) : [];
   const targetLabel = t(`deployments.targetLabels.${targetKind}`);
   const modelCatalogEnumerable = Boolean(!identityLocked && targetCatalog.data?.discovery.can_enumerate);
   const modelCatalogLoading = targetCatalog.isPending || refreshTargetCatalog.isPending;
@@ -1794,6 +1838,21 @@ function DeploymentForm({
         || (result.status === "not_probed" && result.probe_kind !== "risk_policy");
       if (!unestablished) return [];
       return [{ name, status: result.status, errorClass: result.error_class, providerStatus: result.provider_status, providerCode: result.provider_code }];
+    })
+    : [];
+  // What the upstream refused outright, and which field it named doing it.
+  //
+  // A refusal is the one probe outcome the console used to state without
+  // evidence: "this model does not support it", full stop. That reads as
+  // Halro's judgement when it is the upstream's, and an operator whose model
+  // card says otherwise has nowhere to look. The identifiers are recorded per
+  // probe — they are the half that says which request and which field — so they
+  // are shown for the same reason they are shown on every other outcome.
+  const refusedCapabilities = detection?.status === "completed"
+    ? deploymentCapabilityNames.flatMap((name) => {
+      const result = detection.capabilities[name];
+      if (result?.status !== "unsupported") return [];
+      return [{ name, status: result.status, providerStatus: result.provider_status, providerCode: result.provider_code }];
     })
     : [];
   // What every probe on the resolved interface actually came back with. A
@@ -1996,8 +2055,28 @@ function DeploymentForm({
           {identityLocked && <div className="notice"><strong>{t("deployments.targetLocked")}</strong><span>{t("deployments.targetLockedDescription")}</span></div>}
             </div>
           </section>
-          <section className="deployment-form-section" aria-labelledby="deployment-capabilities-heading">
-            <header><h3 id="deployment-capabilities-heading">{t("deployments.capabilitySection")}</h3><p>{t("deployments.capabilitySectionDescription")}</p></header>
+          <section className="deployment-form-section deployment-capability-section" aria-labelledby="deployment-capabilities-heading">
+            <header className="deployment-capability-section-header">
+              <div>
+                <h3 id="deployment-capabilities-heading">{t("deployments.capabilitySection")}</h3>
+                <p>{t("deployments.capabilitySectionDescription")}</p>
+              </div>
+              {/* Beside the capabilities it re-decides, rather than in a card of
+                  its own: the catalogue answers for free and is right most of the
+                  time, so measuring is an action on what is already shown, not a
+                  step of the flow. The call ceiling it may spend is stated in the
+                  confirmation, before anything is spent. */}
+              {!current && selectedVariant && !manualDeclaration && !detection && <ConfirmButton
+                className="button ghost"
+                label={detectCapabilities.isPending ? t("common.working") : t("deployments.verifyClaims")}
+                title={t("deployments.verifyClaims")}
+                confirmLabel={t("deployments.verifySpendConfirm", { count: targetCatalog.data?.discovery.max_verification_calls ?? 0 })}
+                disabled={!targetCatalog.data?.discovery.can_verify || detectCapabilities.isPending}
+                requireStepUp
+                stepUpOnDemand
+                onConfirm={verifyCatalogClaims}
+              />}
+            </header>
             {!providerModel.trim() && <div className="deployment-capability-empty">
               <strong>{t("deployments.selectModelFirst")}</strong>
             </div>}
@@ -2029,6 +2108,10 @@ function DeploymentForm({
               <details><summary>{t("deployments.technicalDetails")}</summary><code>{resolvedTarget.variants.map((variant) => variant.profile_id).join(" · ")}</code></details>
             </fieldset>}
             {!current && selectedVariant && !manualDeclaration && !detection && <CapabilitySummary capabilities={capabilities} sources={claimSources(selectedVariant)} />}
+            {/* The catalogue answers for free and is right most of the time, so
+                measuring is offered rather than performed: this spends the
+                operator's credential on the model to find out where the review
+                and the account disagree. */}
             {!current && selectedVariant && !manualDeclaration && !detection && <details className="capability-disclosure capability-advanced">
               <summary><span>{t("deployments.capabilityNarrowing")}</span><strong>{t("providers.selectedCapabilities", { count: selectedCapabilityNames.length })}</strong></summary>
               <p className="capability-advanced-note">{t("deployments.inheritedCapabilitiesHint")}</p>
@@ -2037,7 +2120,7 @@ function DeploymentForm({
                   turned on where connections are edited, and the manual editor
                   below already says so; a capability the connection carries and
                   the catalogue merely did not record belongs here. */}
-              {catalogReady && <CapabilitySubsetEditor catalog={catalogReady} capabilities={capabilities} ceiling={bindingCeiling} claimed={selectedVariant.capabilities} onChange={changeCapabilities} />}
+              {catalogReady && <CapabilitySubsetEditor catalog={catalogReady} capabilities={capabilities} ceiling={bindingCeiling} onChange={changeCapabilities} />}
               {!catalogReady && !capabilityCatalog.isError && <Loading />}
               {capabilityCatalog.isError && <CapabilityMatrixError query={capabilityCatalog} />}
             </details>}
@@ -2048,8 +2131,19 @@ function DeploymentForm({
             </div>}
             {!current && noVariant && <div className="notice warning"><strong>{t("deployments.noVariantTitle")}</strong><span>{t("deployments.noVariantDescription")}</span><Link className="notice-link" href="/admin/providers">{t("deployments.openProviders")}</Link></div>}
             {!current && resolvedTarget?.resolution_state === "conflicting" && <div className="notice warning"><strong>{t("deployments.resolutionConflictTitle")}</strong><span>{t("deployments.resolutionConflictDescription")}</span></div>}
-            {!current && declaredModel && !manualDeclaration && (
+            {/* A verification runs on a model the catalogue does cover, so the
+                panel cannot be gated on the model being undeclared any more —
+                that gate hid a running detection's own progress, cancel and
+                failure reporting for every model the catalogue knows.
+
+                The region itself is mounted before it has anything to say. A
+                live region inserted together with its first content is not
+                reliably announced, and on this path the first content is
+                "detecting capabilities" — the one line whose whole purpose is to
+                be heard without looking. */}
+            {!current && !manualDeclaration && (
               <div className="capability-detection-panel" aria-live="polite">
+                {(declaredModel || detection) && <>
                 {!detection && <>
                   <div className="capability-onboarding-card">
                     <header>
@@ -2097,13 +2191,22 @@ function DeploymentForm({
                       </select>
                     </Field>
                     <div className="form-actions">
-                      <button type="button" className="button ghost" onClick={() => { resetDetection(); setManualDeclaration(true); }}>{t("deployments.advancedManualDeclaration")}</button>
+                      {declaredModel && <button type="button" className="button ghost" onClick={() => { resetDetection(); setManualDeclaration(true); }}>{t("deployments.advancedManualDeclaration")}</button>}
                       <ConfirmButton className="button primary" label={detectCapabilities.isPending ? t("common.working") : t("deployments.confirmDetectionBinding")} title={t("deployments.confirmDetectionBinding")} confirmLabel={t("deployments.detectionSpendConfirm")} disabled={!detectionBindingID || detectCapabilities.isPending} requireStepUp stepUpOnDemand onConfirm={confirmDetectionBinding} />
                     </div>
                   </div>
                 </div>}
                 {detection?.status === "completed" && !anyOperation && detectionNeedsProviderRepair && <div className="notice warning"><strong>{t("deployments.detectionProviderRepairTitle")}</strong><span>{t("deployments.detectionProviderRepairDescription")}</span><Link className="notice-link" href="/admin/providers">{t("deployments.openProviders")}</Link></div>}
-                {detection?.status === "completed" && !anyOperation && !detectionNeedsProviderRepair && <div className="notice warning"><strong>{t("deployments.detectionInconclusiveTitle")}</strong><span>{t("deployments.detectionInconclusiveDescription")}</span><div className="form-actions"><button type="button" className="button ghost" onClick={() => { resetDetection(); setManualDeclaration(true); }}>{t("deployments.advancedManualDeclaration")}</button></div></div>}
+                {/* Manual declaration answers "the catalogue does not cover this
+                    model"; it is not an answer to "the verification of a covered
+                    model came back empty", where the claims being checked are
+                    still there to go back to. Offering it there dropped the
+                    operator into a mode with no variant pin, no detection pin
+                    and no way out. */}
+                {detection?.status === "completed" && !anyOperation && !detectionNeedsProviderRepair && <div className="notice warning"><strong>{t("deployments.detectionInconclusiveTitle")}</strong><span>{t("deployments.detectionInconclusiveDescription")}</span><div className="form-actions">
+                  {declaredModel && <button type="button" className="button ghost" onClick={() => { resetDetection(); setManualDeclaration(true); }}>{t("deployments.advancedManualDeclaration")}</button>}
+                  {verification && <button type="button" className="button ghost" onClick={resetDetection}>{t("deployments.keepCatalogueClaims")}</button>}
+                </div></div>}
                 {/* A failure is not "the model is broken". Detection can only
                     ask what its plan has probes for, so a model whose real work
                     is generating images or transcribing audio is asked text
@@ -2114,6 +2217,15 @@ function DeploymentForm({
                 {detection && ["failed", "canceled", "interrupted"].includes(detection.status) && <div className="notice warning">
                   <strong>{t(`deployments.detectionStatus.${detection.status}`)}</strong>
                   <span>{t("deployments.detectionUnverifiableDescription")}</span>
+                  {/* A verification that could not finish says nothing about the
+                      model, so the claims it was checking are still the best
+                      answer available and going back to them is one click. This
+                      is the catalogued model's escape; manual declaration is the
+                      uncovered model's, and neither is offered in the other's
+                      situation. */}
+                  {verification && <div className="form-actions">
+                    <button type="button" className="button ghost" onClick={resetDetection}>{t("deployments.keepCatalogueClaims")}</button>
+                  </div>}
                   {detection.status === "failed" && !!detection.binding_candidates?.length && <ul className="detection-candidate-outcomes">
                     {detection.binding_candidates.map((candidate) => {
                       const binding = selectableBindings.find((item) => item.id === candidate.binding_id);
@@ -2154,7 +2266,24 @@ function DeploymentForm({
                     </ul>
                   </>}
                   {detection.status === "failed" && !failedProbeOutcomes.length && <span>{t("deployments.detectionProbeNoneRan")}</span>}
-                  <div className="form-actions"><button type="button" className="button ghost" onClick={() => { resetDetection(); setManualDeclaration(true); }}>{t("deployments.advancedManualDeclaration")}</button></div>
+                  {declaredModel && <div className="form-actions"><button type="button" className="button ghost" onClick={() => { resetDetection(); setManualDeclaration(true); }}>{t("deployments.advancedManualDeclaration")}</button></div>}
+                </div>}
+                {!!refusedCapabilities.length && <div className="notice" role="status">
+                  <strong>{t("deployments.detectionRefusedTitle", {
+                    capabilities: refusedCapabilities.map((outcome) => t(`capabilities.${outcome.name}`)).join(t("common.listSeparator")),
+                  })}</strong>
+                  <span>{t("deployments.detectionRefusedDescription")}</span>
+                  {refusedCapabilities.some((outcome) => outcome.providerStatus || outcome.providerCode) && <ul className="detection-candidate-outcomes">
+                    {refusedCapabilities.map((outcome) => <li key={outcome.name}>
+                      <strong>{t(`capabilities.${outcome.name}`)}</strong>
+                      {/* Identifiers only — the upstream's own sentence never
+                          reaches this cell, here as everywhere else. */}
+                      <small className="technical">{t("deployments.detectionProbeUpstream", {
+                        status: outcome.providerStatus || t("common.unknown"),
+                        code: outcome.providerCode || t("common.none"),
+                      })}</small>
+                    </li>)}
+                  </ul>}
                 </div>}
                 {/* What a model cannot do is the complement of the capability
                     editor below, so listing it twice only adds rows nobody acts
@@ -2187,8 +2316,19 @@ function DeploymentForm({
                     </li>)}
                   </ul>}
                 </div>}
+                {detection?.status === "completed" && verification && <div className="notice">
+                  <strong>{t("deployments.verificationDoneTitle", { count: verification.measured.length })}</strong>
+                  {verification.gained.length > 0 && <span>{t("deployments.verificationGained", { capabilities: verification.gained.map((name) => t(`capabilities.${name}`)).join(t("common.dotSeparator")) })}</span>}
+                  {verification.lost.length > 0 && <span>{t("deployments.verificationLost", { capabilities: verification.lost.map((name) => t(`capabilities.${name}`)).join(t("common.dotSeparator")) })}</span>}
+                  {/* Said out loud, because it is the half a measured set is
+                      easiest to misread: what no probe could ask about still
+                      stands on the catalogue's claim, and is not a finding. */}
+                  {verification.carried.length > 0 && <span>{t("deployments.verificationCarried", { capabilities: verification.carried.map((name) => t(`capabilities.${name}`)).join(t("common.dotSeparator")) })}</span>}
+                  {verification.gained.length === 0 && verification.lost.length === 0 && <span>{t("deployments.verificationAgrees")}</span>}
+                </div>}
                 {detection?.status === "completed" && detection.expires_at && <small className="technical detection-freshness">{t("deployments.detectionFreshUntil", { date: dateTime(detection.expires_at) })}</small>}
                 {(detectCapabilities.isError || detectionQuery.isError || cancelDetection.isError) && <ErrorState error={detectCapabilities.error || detectionQuery.error || cancelDetection.error} />}
+                </>}
               </div>
             )}
             {/* The checkboxes enforce the server's chat dependency, which arrives
@@ -2252,29 +2392,6 @@ function DeploymentForm({
                   </section>;
                 })}
               </fieldset>
-              {requestConstraints.length > 0 && (
-                <section className="deployment-request-constraints" aria-labelledby="deployment-request-constraints-title">
-                  <header>
-                    <strong id="deployment-request-constraints-title">{t("deployments.requestConstraints")}</strong>
-                    <p>{t("deployments.requestConstraintsHint")}</p>
-                  </header>
-                  <ul>
-                    {requestConstraints.map((constraint) => (
-                      <li key={`${constraint.profile_id}-${constraint.endpoint_id}`}>
-                        <code className="deployment-constraint-path">{constraint.path}</code>
-                        <div className="deployment-constraint-fields">
-                          {constraint.unsupported_request_fields.map((field) => <code key={field}>{field}</code>)}
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                  {/* The sentences are why, and the same reason is declared on
-                      every endpoint it applies to. Printing it once per endpoint
-                      made the block read as three rules where there is one. */}
-                  {[...new Set(requestConstraints.flatMap((constraint) => constraint.declared_transforms ?? []))]
-                    .map((transform) => <small key={transform}>{transform}</small>)}
-                </section>
-              )}
             </div>}
             {widening && <div className="notice warning deployment-capability-declaration" aria-live="polite">
               <strong>{t("deployments.widenDeclarationTitle")}</strong>
@@ -2433,24 +2550,23 @@ function CapabilityMatrixError({ query }: { query: ReturnType<typeof useProvider
 /**
  * The capability editor for a model the catalogue resolved.
  *
- * `ceiling` is what the interface can carry and decides which rows exist.
- * `claimed` is what something actually said about this model and decides which
- * are ticked — nothing is ever pre-ticked from the ceiling, because filling a
- * form from what an interface permits is how deployments came to claim
- * capabilities their model does not have.
+ * `ceiling` is what the interface can carry and decides which rows exist;
+ * `capabilities` is what the deployment claims and decides which are ticked.
+ * Nothing is ever pre-ticked from the ceiling, because filling a form from what
+ * an interface permits is how deployments came to claim capabilities their
+ * model does not have.
  *
  * The two used to be the same value, and the row list was the narrower one. A
  * model whose catalogue entry says chat and streaming rendered two rows, so
  * vision — carried by the interface, present in the model, absent from the
- * entry — could not be turned on here at all. Listing the ceiling and ticking
- * the claims keeps both halves: what is known is marked as known, and what is
- * merely unrecorded stays available to an operator who knows better.
+ * entry — could not be turned on here at all. Listing the ceiling keeps a
+ * capability that is merely unrecorded available to an operator who knows
+ * better.
  */
-function CapabilitySubsetEditor({ catalog, capabilities, ceiling, claimed, onChange }: {
+function CapabilitySubsetEditor({ catalog, capabilities, ceiling, onChange }: {
   catalog: ProviderProfilesCatalog;
   capabilities: ProviderCapabilities;
   ceiling: ProviderCapabilities;
-  claimed: ProviderCapabilities;
   onChange: (next: ProviderCapabilities) => void;
 }) {
   const { t } = useTranslation();
@@ -2469,13 +2585,7 @@ function CapabilitySubsetEditor({ catalog, capabilities, ceiling, claimed, onCha
               checked={capabilities[name]}
               onChange={(event) => onChange(updateCapabilitySelection(catalog, capabilities, name, event.target.checked))}
             />
-            <span>
-              {t(`capabilities.${name}`)}
-              {/* Marked, not hidden: an unrecorded capability is one nothing has
-                  spoken about, which is a different thing from one that was
-                  checked and found missing. */}
-              {!claimed[name] && <small className="capability-unclaimed">{t("deployments.capabilityUnclaimed")}</small>}
-            </span>
+            <span>{t(`capabilities.${name}`)}</span>
           </label>)}
         </div>
       </section>;
@@ -2502,7 +2612,8 @@ function emptyCapabilities(): ProviderCapabilities {
     tools: false,
     vision: false,
     fetched_image: false,
-    json_mode: false,
+    json_object: false,
+    structured_outputs: false,
     developer_role: false,
     reasoning: false,
     stream_usage: false,

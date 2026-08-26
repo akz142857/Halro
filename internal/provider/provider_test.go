@@ -396,7 +396,7 @@ func TestUnprofiledAdapterIsRejected(t *testing.T) {
 		ID: "legacy", DeploymentID: "dep_legacy", PublicModel: "chat", ProviderModel: "model", Adapter: &bareAdapter{},
 		Capabilities: Capabilities{
 			Chat: true, Streaming: true, Embeddings: true, Tools: true, Vision: true,
-			JSONMode: true, DeveloperRole: true, Reasoning: true, StreamUsage: true,
+			JSONObject: true, StructuredOutputs: true, DeveloperRole: true, Reasoning: true, StreamUsage: true,
 		},
 	})
 	if err == nil {

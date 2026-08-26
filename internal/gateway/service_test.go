@@ -484,7 +484,13 @@ func TestGatewayReconcilesEstimatedTPMAgainstProviderUsage(t *testing.T) {
 		Model: "chat", MaxCompletionTokens: &maxTokens,
 		Messages: []openaiapi.Message{{Role: "user", Content: openaiapi.TextContent("hello")}},
 	}
-	estimated := estimateInputTokens(request.EstimatedInputBytes()) + maxTokens
+	// Measured on the semantic request, which is what the hot path reserves
+	// against: every facade reaches it through the same estimate now.
+	canonical, err := openaiwire.DecodeGenerate(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	estimated := estimateInputTokens(canonical.EstimatedInputBytes()) + maxTokens
 	f.project.TPM = estimated + 3
 	if err := f.service.auth.Refresh(context.Background(), source{
 		keys: []domain.GatewayKey{f.key}, projects: []domain.Project{f.project},
@@ -892,6 +898,126 @@ func TestChatAuthenticatesRoutesReservesAndSettles(t *testing.T) {
 	}
 }
 
+// The Responses facade decodes its own wire form and enters the generation hot
+// path directly. It used to write itself as a Chat request first, which is what
+// carried it past the Project's redaction policy — so the thing worth pinning is
+// that dropping the translation did not drop the inspection with it.
+// A tool the upstream runs itself is egress the operator has to have accepted.
+// The request names it, routing sees it as a requirement, and a connection that
+// never declared the capability is not a candidate — so the refusal happens
+// before any provider call and before any reservation.
+func TestWebSearchIsRefusedByARouteThatNeverAcceptedUpstreamEgress(t *testing.T) {
+	f := newFixture(t, 1_000)
+	defer f.close()
+	calls := f.adapter.calls
+	_, err := f.service.Responses(context.Background(), f.plaintext, openaiapi.ResponseRequest{
+		Model: "chat", Input: json.RawMessage(`"who won?"`),
+		Tools: []openaiapi.ResponseTool{{Type: openaiapi.ProviderExecutedToolWebSearch}},
+	})
+	var gatewayErr *Error
+	if !errors.As(err, &gatewayErr) || gatewayErr.Code != "unsupported_feature" {
+		t.Fatalf("error=%v", err)
+	}
+	if !strings.Contains(gatewayErr.Message, "provider_executed_tools") &&
+		!strings.Contains(err.Error(), "provider_executed_tools") {
+		t.Fatalf("the refusal does not name what was missing: %v", err)
+	}
+	if f.adapter.calls != calls {
+		t.Fatal("a request for upstream egress reached a provider anyway")
+	}
+}
+
+func TestResponsesInputIsRedactedWithoutBecomingAChatRequest(t *testing.T) {
+	f := newFixture(t, 1_000_000)
+	defer f.close()
+	policy := domain.RedactionPolicy{
+		ID: "redaction_responses", Name: "PII", Enabled: true, Mode: "bounded_stream",
+		Rules: []domain.RedactionRule{{
+			ID: "phone", Name: "Phone", Kind: "builtin", Builtin: "china_phone",
+			Scopes: []string{"inbound", "outbound"}, Action: "mask", Enabled: true,
+		}},
+	}
+	engine, err := redaction.New([]domain.RedactionPolicy{policy})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.service.redactor = engine
+	f.project.RedactionPolicyID = policy.ID
+	plaintext, key, err := auth.GenerateGatewayKey(f.project.ID, "redaction", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.service.auth.Refresh(context.Background(), source{
+		keys: []domain.GatewayKey{key}, projects: []domain.Project{f.project},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	maxOutput := int64(20)
+	if _, err := f.service.Responses(context.Background(), plaintext, openaiapi.ResponseRequest{
+		Model: "chat", Input: json.RawMessage(`"call 13800138000"`), MaxOutputTokens: &maxOutput,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got := string(f.adapter.lastChatRequest.Messages[0].Content)
+	if !strings.Contains(got, "••••8000") || strings.Contains(got, "13800138000") {
+		t.Fatalf("a Responses input reached the provider unmasked: %s", got)
+	}
+}
+
+// Capability filtering runs on the requirements the caller's request derived,
+// and redaction runs after it. Masking inside a data URL turns bytes the request
+// carried into an address somebody has to fetch, which is a capability the
+// chosen target was never filtered for — so the request is refused rather than
+// quietly executed against a route it no longer matches.
+func TestRedactionThatChangesWhatARequestRequiresIsRefused(t *testing.T) {
+	f := newFixture(t, 1_000_000)
+	defer f.close()
+	policy := domain.RedactionPolicy{
+		ID: "redaction_image", Name: "URL", Enabled: true, Mode: "bounded_stream",
+		Rules: []domain.RedactionRule{{
+			ID: "scheme", Name: "Scheme", Kind: "regex", Pattern: "data:image/png;base64,",
+			Scopes: []string{"inbound"}, Action: "mask", Enabled: true,
+		}},
+	}
+	engine, err := redaction.New([]domain.RedactionPolicy{policy})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.service.redactor = engine
+	f.project.RedactionPolicyID = policy.ID
+	plaintext, key, err := auth.GenerateGatewayKey(f.project.ID, "redaction", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.service.auth.Refresh(context.Background(), source{
+		keys: []domain.GatewayKey{key}, projects: []domain.Project{f.project},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// A target that can read an image it is handed and cannot go and get one:
+	// the distinction the masked URL crosses.
+	replacement := provider.NewRegistry()
+	if err := replacement.Register(provider.Target{
+		ID: "target_1", DeploymentID: "dep_target_1", PublicModel: "chat", ProviderModel: "provider-model",
+		Adapter: f.adapter, Capabilities: provider.Capabilities{Chat: true, Vision: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f.registry.Replace(replacement)
+	calls := f.adapter.calls
+	request := chatRequest()
+	request.Messages[0].Content = json.RawMessage(
+		`[{"type":"image_url","image_url":{"url":"data:image/png;base64,iVBORw0KGgo="}}]`)
+	_, err = f.service.Chat(context.Background(), plaintext, request)
+	var gatewayErr *Error
+	if !errors.As(err, &gatewayErr) || gatewayErr.Code != "sensitive_data_detected" {
+		t.Fatalf("error=%v", err)
+	}
+	if f.adapter.calls != calls {
+		t.Fatal("the rerouted request reached a provider anyway")
+	}
+}
+
 func TestResponsesUsesGenerationHotPathAndRestoresPublicModel(t *testing.T) {
 	f := newFixture(t, 1_000)
 	defer f.close()
@@ -1083,7 +1209,8 @@ func TestChatRejectsUnsupportedSemanticCapabilityBeforeProviderCall(t *testing.T
 
 func TestChatCapabilityFilterSelectsOnlyCompatibleFallback(t *testing.T) {
 	all := provider.Capabilities{
-		Chat: true, Streaming: true, Tools: true, Vision: true, FetchedImage: true, JSONMode: true,
+		Chat: true, Streaming: true, Tools: true, Vision: true, FetchedImage: true,
+		JSONObject: true, StructuredOutputs: true,
 		DeveloperRole: true, Reasoning: true, StreamUsage: true,
 	}
 	targets := []provider.Target{
@@ -1154,12 +1281,12 @@ func TestProfileCompatibilityFilterRejectsFieldsThatWouldBeDropped(t *testing.T)
 func TestSemanticCapabilityFilterRequiresTheCapabilityItFiltersOn(t *testing.T) {
 	capable := provider.Target{ID: "capable", DeploymentID: "dep_capable", Capabilities: provider.Capabilities{
 		Chat: true, Streaming: true, Tools: true, Vision: true,
-		JSONMode: true, DeveloperRole: true, Reasoning: true, StreamUsage: true,
+		JSONObject: true, StructuredOutputs: true, DeveloperRole: true, Reasoning: true, StreamUsage: true,
 	}}
 	bare := provider.Target{ID: "bare", DeploymentID: "dep_bare", Capabilities: provider.Capabilities{Chat: true, Streaming: true}}
 
 	for _, requirement := range []semantic.Requirements{
-		{Tools: true}, {Vision: true}, {JSONMode: true},
+		{Tools: true}, {Vision: true}, {JSONObject: true}, {StructuredOutputs: true},
 		{DeveloperRole: true}, {Reasoning: true}, {StreamUsage: true},
 	} {
 		filtered := filterSemanticCapabilities([]provider.Target{capable, bare}, requirement)
@@ -1845,8 +1972,9 @@ func TestMantleTargetRefusesUnservableRequestsBeforeProviderIO(t *testing.T) {
 		// do and which is what makes the capability filter observable here.
 		Capabilities: provider.Capabilities{
 			Chat: ceiling.Chat, Streaming: ceiling.Streaming, Tools: ceiling.Tools, Vision: false,
-			JSONMode: ceiling.JSONMode, DeveloperRole: ceiling.DeveloperRole,
-			Reasoning: ceiling.Reasoning, StreamUsage: ceiling.StreamUsage,
+			JSONObject: ceiling.JSONObject, StructuredOutputs: ceiling.StructuredOutputs,
+			DeveloperRole: ceiling.DeveloperRole,
+			Reasoning:     ceiling.Reasoning, StreamUsage: ceiling.StreamUsage,
 		},
 	}); err != nil {
 		t.Fatal(err)
@@ -1884,8 +2012,9 @@ func TestMantleRefusesAnImageItWouldHaveToFetchAndServesAnInlinedOne(t *testing.
 		// cannot do is go and get one.
 		Capabilities: provider.Capabilities{
 			Chat: ceiling.Chat, Streaming: ceiling.Streaming, Tools: ceiling.Tools, Vision: ceiling.Vision,
-			JSONMode: ceiling.JSONMode, DeveloperRole: ceiling.DeveloperRole,
-			Reasoning: ceiling.Reasoning, StreamUsage: ceiling.StreamUsage,
+			JSONObject: ceiling.JSONObject, StructuredOutputs: ceiling.StructuredOutputs,
+			DeveloperRole: ceiling.DeveloperRole,
+			Reasoning:     ceiling.Reasoning, StreamUsage: ceiling.StreamUsage,
 		},
 	}); err != nil {
 		t.Fatal(err)

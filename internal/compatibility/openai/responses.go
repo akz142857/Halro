@@ -37,6 +37,12 @@ func DecodeResponseGenerate(request openaiapi.ResponseRequest) (semantic.Generat
 	}
 	result.Messages = append(result.Messages, messages...)
 	for _, tool := range request.Tools {
+		if tool.Type == openaiapi.ProviderExecutedToolWebSearch {
+			result.Tools = append(result.Tools, semantic.Tool{
+				Name: semantic.ProviderToolWebSearch, Execution: semantic.ToolExecutionProvider,
+			})
+			continue
+		}
 		result.Tools = append(result.Tools, semantic.Tool{Name: tool.Name, Description: tool.Description, Schema: bytes.Clone(tool.Parameters)})
 	}
 	result.ToolChoice, err = decodeResponseToolChoice(request.ToolChoice)
@@ -59,20 +65,34 @@ func DecodeResponseGenerate(request openaiapi.ResponseRequest) (semantic.Generat
 
 func validateResponseTools(tools []semantic.Tool, choice *semantic.ToolChoice) error {
 	names := make(map[string]struct{}, len(tools))
+	functionTools := 0
 	for _, tool := range tools {
 		if _, duplicate := names[tool.Name]; duplicate {
-			return errors.New("function tool names must be unique")
+			return errors.New("tool names must be unique")
 		}
 		names[tool.Name] = struct{}{}
+		if !tool.ProviderExecuted() {
+			functionTools++
+		}
 	}
 	if choice == nil || choice.Mode == semantic.ToolChoiceAuto || choice.Mode == semantic.ToolChoiceNone {
 		return nil
 	}
-	if len(tools) == 0 {
+	// tool_choice selects among tools the caller will be called back about. A
+	// provider-executed tool is not one of those, so it cannot satisfy a choice
+	// that demands one — counting it would let `required` through on a request
+	// with nothing for the model to call.
+	if functionTools == 0 {
 		return errors.New("tool_choice requires at least one function tool")
 	}
 	if choice.Mode == semantic.ToolChoiceNamed {
-		if _, ok := names[choice.Name]; !ok {
+		named := false
+		for _, tool := range tools {
+			if !tool.ProviderExecuted() && tool.Name == choice.Name {
+				named = true
+			}
+		}
+		if !named {
 			return errors.New("named tool_choice does not match a declared function tool")
 		}
 	}
@@ -202,6 +222,7 @@ func RenderResponseResult(result semantic.GenerateResult, request openaiapi.Resp
 	if err := result.Validate(); err != nil {
 		return openaiapi.Response{}, err
 	}
+	var err error
 	if len(result.Choices) != 1 {
 		return openaiapi.Response{}, errors.New("Responses requires exactly one generated candidate")
 	}
@@ -217,7 +238,10 @@ func RenderResponseResult(result semantic.GenerateResult, request openaiapi.Resp
 	if response.Status == "completed" {
 		response.CompletedAt = &completedAt
 	}
-	response.Output = renderResponseOutput(response.ID, result.Choices[0].Message, result.Choices[0].Termination)
+	response.Output, err = renderResponseOutput(response.ID, result.Choices[0].Message, result.Choices[0].Termination)
+	if err != nil {
+		return openaiapi.Response{}, err
+	}
 	response.Usage = renderResponseUsage(result.Usage)
 	return response, nil
 }
@@ -255,28 +279,63 @@ func baseResponse(id string, created int64, model string, request openaiapi.Resp
 	}
 }
 
-func renderResponseOutput(responseIDValue string, message semantic.Message, termination string) []openaiapi.ResponseOutputItem {
+func renderResponseOutput(responseIDValue string, message semantic.Message, termination string) ([]openaiapi.ResponseOutputItem, error) {
 	var text strings.Builder
 	items := make([]openaiapi.ResponseOutputItem, 0, len(message.Content)+1)
+	annotations := []openaiapi.ResponseAnnotation{}
 	toolNumber := 0
 	for _, content := range message.Content {
 		switch content.Kind {
 		case semantic.ContentText:
+			// Every text part lands in one output item, so each part's spans move
+			// by however much text precedes it. Rebasing here is the only place
+			// that knows both numbers; a citation left on its part's own offsets
+			// would point at whatever happened to be at that index in the joined
+			// answer.
+			offset := text.Len()
+			for _, citation := range content.Citations {
+				annotations = append(annotations, openaiapi.ResponseAnnotation{
+					Type: openaiapi.AnnotationURLCitation, URL: citation.URL, Title: citation.Title,
+					StartIndex: citation.StartIndex + offset, EndIndex: citation.EndIndex + offset,
+				})
+			}
 			text.WriteString(content.Text)
 		case semantic.ContentToolCall:
 			items = append(items, openaiapi.ResponseOutputItem{ID: responseItemID("fc", responseIDValue, toolNumber), Type: "function_call", Status: "completed", CallID: content.CallID, Name: content.Name, Arguments: content.Arguments})
 			toolNumber++
+		case semantic.ContentProviderToolCall:
+			if content.Name != semantic.ProviderToolWebSearch {
+				return nil, errors.New("provider-executed tool cannot be represented by Responses")
+			}
+			item := openaiapi.ResponseOutputItem{
+				ID: content.CallID, Type: openaiapi.OutputItemWebSearchCall, Status: content.Status,
+			}
+			if content.Text != "" {
+				item.Action = &openaiapi.ResponseToolAction{Type: openaiapi.ToolActionSearch, Query: content.Text}
+			}
+			items = append(items, item)
+		default:
+			// Reasoning is the kind this reaches today, and Phase 1A rejects a
+			// request that could produce it. Returning the answer without it would
+			// be this endpoint deciding on the caller's behalf that the part it
+			// cannot render did not matter.
+			return nil, errors.New("content kind cannot be represented by Responses")
 		}
 	}
 	if text.Len() > 0 || len(items) == 0 {
-		outputContent := openaiapi.ResponseOutputContent{Type: "output_text", Text: text.String(), Annotations: []any{}, Logprobs: []any{}}
+		outputContent := openaiapi.ResponseOutputContent{Type: "output_text", Text: text.String(), Annotations: annotations, Logprobs: []any{}}
 		if termination == "refusal" {
+			if len(annotations) > 0 {
+				return nil, errors.New("a refusal cannot carry citations")
+			}
 			outputContent = openaiapi.ResponseOutputContent{Type: "refusal", Refusal: text.String()}
 		}
 		messageItem := openaiapi.ResponseOutputItem{ID: responseItemID("msg", responseIDValue, 0), Type: "message", Status: "completed", Role: "assistant", Content: []openaiapi.ResponseOutputContent{outputContent}}
 		items = append([]openaiapi.ResponseOutputItem{messageItem}, items...)
+	} else if len(annotations) > 0 {
+		return nil, errors.New("citations have no text to annotate")
 	}
-	return items
+	return items, nil
 }
 
 func renderResponseUsage(usage *semantic.Usage) *openaiapi.ResponseUsage {
@@ -393,7 +452,7 @@ func (renderer *ResponseStreamRenderer) Complete() ([]openaiapi.ResponseStreamEv
 		events = append(events, renderer.startItemEvents()...)
 	}
 	outputIndex, contentIndex := 0, 0
-	content := openaiapi.ResponseOutputContent{Type: "output_text", Text: renderer.text.String(), Annotations: []any{}, Logprobs: []any{}}
+	content := openaiapi.ResponseOutputContent{Type: "output_text", Text: renderer.text.String(), Annotations: []openaiapi.ResponseAnnotation{}, Logprobs: []any{}}
 	item := renderer.item("completed")
 	events = append(events,
 		renderer.event("response.output_text.done", func(event *openaiapi.ResponseStreamEvent) {
@@ -434,7 +493,7 @@ func (renderer *ResponseStreamRenderer) startItemEvents() []openaiapi.ResponseSt
 	renderer.itemStarted = true
 	outputIndex, contentIndex := 0, 0
 	item := renderer.item("in_progress")
-	part := openaiapi.ResponseOutputContent{Type: "output_text", Text: "", Annotations: []any{}, Logprobs: []any{}}
+	part := openaiapi.ResponseOutputContent{Type: "output_text", Text: "", Annotations: []openaiapi.ResponseAnnotation{}, Logprobs: []any{}}
 	return []openaiapi.ResponseStreamEvent{
 		renderer.event("response.output_item.added", func(event *openaiapi.ResponseStreamEvent) { event.OutputIndex, event.Item = &outputIndex, &item }),
 		renderer.event("response.content_part.added", func(event *openaiapi.ResponseStreamEvent) {
@@ -444,7 +503,7 @@ func (renderer *ResponseStreamRenderer) startItemEvents() []openaiapi.ResponseSt
 }
 
 func (renderer *ResponseStreamRenderer) item(status string) openaiapi.ResponseOutputItem {
-	return openaiapi.ResponseOutputItem{ID: renderer.itemID(), Type: "message", Status: status, Role: "assistant", Content: []openaiapi.ResponseOutputContent{{Type: "output_text", Text: renderer.text.String(), Annotations: []any{}, Logprobs: []any{}}}}
+	return openaiapi.ResponseOutputItem{ID: renderer.itemID(), Type: "message", Status: status, Role: "assistant", Content: []openaiapi.ResponseOutputContent{{Type: "output_text", Text: renderer.text.String(), Annotations: []openaiapi.ResponseAnnotation{}, Logprobs: []any{}}}}
 }
 
 func (renderer *ResponseStreamRenderer) itemID() string {

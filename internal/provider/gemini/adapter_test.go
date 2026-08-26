@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/openaiapi"
 	"github.com/akz142857/Halro/internal/provider"
 	"github.com/akz142857/Halro/internal/semantic"
@@ -194,3 +195,93 @@ func testAdapter(t *testing.T, endpoint string) *Adapter {
 }
 
 func serverClient() *http.Client { return &http.Client{} }
+
+// A Gemini refusal used to reach the operator as a bare "Gemini error (400)":
+// the body was drained and discarded, so the one part that says which field was
+// refused was thrown away with the sentence beside it. Only identifiers are
+// kept — the RPC status and the violated field path — and the description
+// Google wrote about the request is not one.
+func TestGeminiRefusalKeepsIdentifiersAndDropsTheSentence(t *testing.T) {
+	body := `{"error":{"code":400,"message":"secret-key echoed","status":"INVALID_ARGUMENT",` +
+		`"details":[{"@type":"type.googleapis.com/google.rpc.BadRequest","fieldViolations":` +
+		`[{"field":"generation_config.thinking_config","description":"thinking is not supported by this model"}]}]}}`
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusBadRequest)
+		_, _ = writer.Write([]byte(body))
+	}))
+	defer server.Close()
+	adapter := testAdapter(t, server.URL)
+	defer adapter.Close()
+	_, err := adapter.Chat(context.Background(), provider.ChatCall{
+		RequestID: "req_error", ProviderModel: "gemini-test",
+		Request: openaiapi.ChatCompletionRequest{Messages: []openaiapi.Message{{Role: "user", Content: openaiapi.TextContent("hi")}}},
+	})
+	var classified *provider.Error
+	if !errors.As(err, &classified) || classified.Class != provider.ErrorBadRequest {
+		t.Fatalf("error=%v classified=%#v", err, classified)
+	}
+	if classified.ProviderCode != "INVALID_ARGUMENT:generation_config.thinking_config" {
+		t.Fatalf("refusal identifier lost: %q", classified.ProviderCode)
+	}
+	// The RPC status names the class of refusal, not the field, so the refusal
+	// stays unattributed however specific the field violation beside it looks.
+	if classified.Refusal != provider.RefusalInvalid {
+		t.Fatalf("refusal kind=%q", classified.Refusal)
+	}
+	if strings.Contains(err.Error(), "secret-key") || strings.Contains(classified.ProviderCode, "not supported") {
+		t.Fatalf("provider sentence reached the error: %v / %q", err, classified.ProviderCode)
+	}
+
+	// A refusal that is not about the request body carries no kind, and a body
+	// that is not a Google RPC envelope carries no identifier.
+	throttled := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusTooManyRequests)
+		_, _ = writer.Write([]byte(`<html>too many</html>`))
+	}))
+	defer throttled.Close()
+	limited := testAdapter(t, throttled.URL)
+	defer limited.Close()
+	_, err = limited.Chat(context.Background(), provider.ChatCall{
+		RequestID: "req_error", ProviderModel: "gemini-test",
+		Request: openaiapi.ChatCompletionRequest{Messages: []openaiapi.Message{{Role: "user", Content: openaiapi.TextContent("hi")}}},
+	})
+	if !errors.As(err, &classified) || classified.Refusal != provider.RefusalNone || classified.ProviderCode != "" {
+		t.Fatalf("classified=%#v", classified)
+	}
+}
+
+// End to end: the adapter reads Google's RPC status, the detector turns the
+// normalized kind into a capability answer. Gemini's error body used to be
+// discarded outright, so this family could never record anything but
+// "inconclusive" for a refused probe.
+func TestGeminiRefusalBecomesAnUnsupportedVerdictOnlyForADependentProbe(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusBadRequest)
+		_, _ = writer.Write([]byte(`{"error":{"code":400,"message":"not supported","status":"INVALID_ARGUMENT",` +
+			`"details":[{"@type":"type.googleapis.com/google.rpc.BadRequest","fieldViolations":[{"field":"system_instruction"}]}]}}`))
+	}))
+	defer server.Close()
+	adapter := testAdapter(t, server.URL)
+	defer adapter.Close()
+	manifest, ok := provider.BuiltinProfile(domain.ProfileGeminiText)
+	if !ok {
+		t.Fatal("profile missing")
+	}
+	capabilities := domain.DefaultProviderCapabilitiesForProfile(domain.ProviderGemini, domain.ProfileGeminiText)
+	bridge, err := provider.NewLegacyAdapterBridge(adapter, manifest, domain.EvidenceForCapabilities(capabilities, domain.EvidenceDeclared))
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := provider.ModelCapabilityDetectionTarget{ProviderModel: "gemini-test", BindingID: "binding", ProfileID: manifest.ID, RiskTier: "safe_automatic"}
+
+	dependent := bridge.DetectCapability(context.Background(), target,
+		provider.CapabilityProbe{Capability: "developer_role", Kind: "developer_message", DependsOn: []string{"chat"}, MaxOutputTokens: 16})
+	if dependent.Status != domain.ProbeUnsupported {
+		t.Fatalf("dependent probe recorded %s, want unsupported: %#v", dependent.Status, dependent)
+	}
+	root := bridge.DetectCapability(context.Background(), target,
+		provider.CapabilityProbe{Capability: "chat", Kind: "minimal_chat", MaxOutputTokens: 16})
+	if root.Status != domain.ProbeInconclusive {
+		t.Fatalf("baseline probe recorded %s, want inconclusive: %#v", root.Status, root)
+	}
+}

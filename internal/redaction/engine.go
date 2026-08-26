@@ -14,6 +14,7 @@ import (
 
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/openaiapi"
+	"github.com/akz142857/Halro/internal/semantic"
 )
 
 var (
@@ -253,34 +254,108 @@ func (e *Engine) Test(policyID, input, scope string) ([]Match, error) {
 	return result, nil
 }
 
-func (e *Engine) ProcessInboundChat(
+// ProcessInboundGenerate applies the Project policy to a request on its way
+// upstream, on the portable representation rather than on one facade's wire
+// form.
+//
+// It replaces a Chat-shaped pass that every facade had to become before it
+// could be inspected. That worked while Chat Completions was the only shape a
+// request could take, and it fixed the vocabulary at whatever Chat can express:
+// a content kind the Chat wire has no member for could not reach a redactor
+// that walked Chat messages. Walking the semantic content parts instead means
+// one traversal covers every facade, and a new content kind has one place to be
+// added rather than one place per endpoint.
+//
+// What is inspected is unchanged from that pass, member for member: text, the
+// address an image is named by, and tool-call arguments are rewritten; a tool
+// call's identifier and a message's name are refused rather than rewritten,
+// because a rewritten identifier no longer refers to anything.
+//
+// Reasoning text is not inspected, which is also unchanged. It arrives as its
+// own member rather than inside message content, and the Chat pass never
+// covered it. Bringing it in is a policy change and belongs to whoever decides
+// that, not to the traversal that was moved.
+func (e *Engine) ProcessInboundGenerate(
 	policyID string,
-	request openaiapi.ChatCompletionRequest,
-) (openaiapi.ChatCompletionRequest, error) {
-	for index := range request.Messages {
-		message := &request.Messages[index]
-		var err error
-		message.Content, err = e.processRaw(policyID, "inbound", message.Content)
+	request semantic.GenerateRequest,
+) (semantic.GenerateRequest, error) {
+	messages := make([]semantic.Message, len(request.Messages))
+	copy(messages, request.Messages)
+	for index := range messages {
+		if err := e.validateMandatory(messages[index].Name); err != nil {
+			return request, err
+		}
+		content, err := e.processContent(policyID, "inbound", messages[index].Content)
 		if err != nil {
 			return request, err
 		}
-		if err := e.validateMandatory(message.ToolCallID); err != nil {
-			return request, err
+		messages[index].Content = content
+	}
+	request.Messages = messages
+	return request, nil
+}
+
+// ProcessOutboundGenerateResult is the same traversal on the way back.
+func (e *Engine) ProcessOutboundGenerateResult(
+	policyID string,
+	result semantic.GenerateResult,
+) (semantic.GenerateResult, error) {
+	choices := make([]semantic.GenerateChoice, len(result.Choices))
+	copy(choices, result.Choices)
+	for index := range choices {
+		content, err := e.processContent(policyID, "outbound", choices[index].Message.Content)
+		if err != nil {
+			return result, err
 		}
-		if err := e.validateMandatory(message.Name); err != nil {
-			return request, err
-		}
-		for callIndex := range message.ToolCalls {
-			arguments, err := e.processToolArguments(
-				policyID, "inbound", message.ToolCalls[callIndex].Function.Arguments,
-			)
+		choices[index].Message.Content = content
+	}
+	result.Choices = choices
+	return result, nil
+}
+
+// processContent copies before it rewrites. The caller's slice is the request
+// that was routed and, on a retry, the request that will be routed again; a
+// traversal that edited it in place would hand the second attempt content the
+// first one's policy had already transformed.
+func (e *Engine) processContent(policyID, scope string, parts []semantic.Content) ([]semantic.Content, error) {
+	if len(parts) == 0 {
+		return parts, nil
+	}
+	result := make([]semantic.Content, len(parts))
+	copy(result, parts)
+	for index := range result {
+		part := &result[index]
+		switch part.Kind {
+		case semantic.ContentText, semantic.ContentToolResult:
+			text, err := e.ProcessText(policyID, scope, part.Text)
 			if err != nil {
-				return request, err
+				return parts, err
 			}
-			message.ToolCalls[callIndex].Function.Arguments = arguments
+			part.Text = text
+		case semantic.ContentInputImage:
+			// The address is caller-supplied text and was inside the content the
+			// Chat pass rewrote. A data URL carries the picture and nothing a rule
+			// matches; a remote one can carry a token in a query string.
+			url, err := e.ProcessText(policyID, scope, part.URL)
+			if err != nil {
+				return parts, err
+			}
+			part.URL = url
+		case semantic.ContentToolCall:
+			arguments, err := e.processToolArguments(policyID, scope, part.Arguments)
+			if err != nil {
+				return parts, err
+			}
+			part.Arguments = arguments
+		}
+		if err := e.validateMandatory(part.CallID); err != nil {
+			return parts, err
+		}
+		if err := e.validateMandatory(part.Name); err != nil {
+			return parts, err
 		}
 	}
-	return request, nil
+	return result, nil
 }
 
 func (e *Engine) ProcessInboundEmbedding(
@@ -312,6 +387,15 @@ func (e *Engine) ProcessJSON(policyID, scope string, value json.RawMessage) (jso
 	return e.processRaw(policyID, scope, value)
 }
 
+// ProcessOutboundChat is the outbound pass for the streaming path, which is
+// still Chat-shaped: a Stream rewrites Chat chunks, so its unary twin has to
+// speak the same shape to be comparable — TestStreamMatchesUnaryRedaction is
+// that comparison and it is the reason both exist.
+//
+// The unary generate path does not use it; that side reads
+// ProcessOutboundGenerateResult and is measured on the semantic result. The two
+// share every transform below them, so the split is in what they walk rather
+// than in what the policy does.
 func (e *Engine) ProcessOutboundChat(
 	policyID string,
 	response openaiapi.ChatCompletionResponse,
@@ -341,13 +425,8 @@ func (e *Engine) ProcessOutboundChat(
 	return response, nil
 }
 
-// Compatibility wrappers keep the mandatory secret baseline available to
-// callers without an assigned Project policy.
-func (e *Engine) ValidateInboundChat(request openaiapi.ChatCompletionRequest) error {
-	_, err := e.ProcessInboundChat("", request)
-	return err
-}
-
+// SanitizeOutboundChat keeps the mandatory secret baseline available to callers
+// without an assigned Project policy.
 func (e *Engine) ValidateInboundEmbedding(request openaiapi.EmbeddingRequest) error {
 	_, err := e.ProcessInboundEmbedding("", request)
 	return err

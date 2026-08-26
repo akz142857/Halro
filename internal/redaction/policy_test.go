@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/akz142857/Halro/internal/domain"
-	"github.com/akz142857/Halro/internal/openaiapi"
+	"github.com/akz142857/Halro/internal/semantic"
 )
 
 func TestCompilePolicyRejectsUnboundedStreamingEnforcement(t *testing.T) {
@@ -78,30 +78,29 @@ func TestPolicyMasksStructuredJSONAndRejectsWithoutReturningOriginal(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := openaiapi.ChatCompletionRequest{
-		Model: "chat",
-		Messages: []openaiapi.Message{{
-			Role: "user", Content: json.RawMessage(`{"contact":"13800138000"}`),
-			ToolCalls: []openaiapi.ToolCall{{
-				Type: "function", Function: openaiapi.ToolCallFunction{
-					Name: "lookup", Arguments: `{"contact":"13800138000"}`,
-				},
-			}},
+	request := semantic.GenerateRequest{
+		RequestedModel: "chat",
+		Messages: []semantic.Message{{
+			Role: semantic.RoleUser,
+			Content: []semantic.Content{
+				{Kind: semantic.ContentText, Text: "contact 13800138000"},
+				{Kind: semantic.ContentToolCall, CallID: "call_1", Name: "lookup", Arguments: `{"contact":"13800138000"}`},
+			},
 		}},
 	}
-	request, err = engine.ProcessInboundChat(policy.ID, request)
+	request, err = engine.ProcessInboundGenerate(policy.ID, request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(request.Messages[0].Content) != `{"contact":"••••8000"}` {
-		t.Fatalf("unexpected masked request: %s", request.Messages[0].Content)
+	if request.Messages[0].Content[0].Text != "contact ••••8000" {
+		t.Fatalf("unexpected masked request: %s", request.Messages[0].Content[0].Text)
 	}
-	if got := request.Messages[0].ToolCalls[0].Function.Arguments; got != `{"contact":"••••8000"}` ||
+	if got := request.Messages[0].Content[1].Arguments; got != `{"contact":"••••8000"}` ||
 		!json.Valid([]byte(got)) {
 		t.Fatalf("tool arguments were not structurally redacted: %s", got)
 	}
-	request.Messages[0].Content = openaiapi.TextContent("这是高度机密内容")
-	if _, err := engine.ProcessInboundChat(policy.ID, request); !errors.Is(err, ErrPolicyRejected) {
+	request.Messages[0].Content[0].Text = "这是高度机密内容"
+	if _, err := engine.ProcessInboundGenerate(policy.ID, request); !errors.Is(err, ErrPolicyRejected) {
 		t.Fatalf("dictionary reject error=%v", err)
 	}
 	matches, err := engine.Test(policy.ID, "高度机密和13800138000", "inbound")

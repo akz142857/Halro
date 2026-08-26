@@ -18,23 +18,56 @@ import (
 // more than this many probeable capabilities gets the ones the plan lists and
 // defers the rest by name, so raising the ceiling stays a decision somebody
 // makes rather than a silent truncation nobody sees.
-const maxDetectionProbes = 8
+//
+// It was 8 while json_mode was one capability. Splitting it into json_object and
+// structured_outputs adds exactly one probeable capability to every profile that
+// serves both, so the budget grew by exactly one: at 8 the OpenAI plan would have
+// pushed embeddings out to make room for the new half, which is a capability
+// silently stopping being verified as a side effect of naming it properly.
+const maxDetectionProbes = 9
+
+// CapabilityProbeImage is the picture every vision probe sends: fixed,
+// public-domain data compiled into the binary, so no administrator input and no
+// external URL is ever incorporated into a probe.
+//
+// It is exported so a test can decode it. That is not incidental — the image it
+// replaces was a corrupt PNG. Its IDAT chunk failed both its CRC and the zlib
+// stream's own checksum, and it had been that way for as long as the probe
+// existed. Lenient decoders take it, which is why it looked fine; Bedrock
+// Mantle's does not, and answered `+"`validation_error: Invalid or unsupported image format`"+`.
+// A refused vision probe on a model that reads images perfectly well was then
+// recorded as "unsupported" and carried into the deployment's saved
+// capabilities. Measured against a real account on 2026-08-26; see
+// docs/verification/provider-real-matrix.md.
+//
+// 8x8 rather than 1x1 because nothing establishes that every upstream accepts a
+// single-pixel image, and eight squared costs 72 bytes.
+const CapabilityProbeImage = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAD0lEQVR42mNowAEYhpYEAILzYAEllbNjAAAAAElFTkSuQmCC"
 
 // CapabilityDetectorContractVersion is part of the detection selection
 // fingerprint, so bumping it stops a stored result from being reused under
-// semantics that did not produce it.
+// semantics that did not produce it. Each number is spent once, because a
+// stored result names the one it was produced under.
 //
-// v2 was the first version whose bad-request classifier reads the code half of
-// a joined provider identifier — a v1 result recorded "inconclusive" where v2
-// would record "unsupported".
+// v2 was the first version whose bad-request classifier read the code half of a
+// joined provider identifier — a v1 result recorded "inconclusive" where v2
+// recorded "unsupported".
 //
 // v3 changed what the reasoning probe asks and where it is asked at all. A v2
 // result recorded reasoning as inconclusive on Anthropic and DeepSeek because
 // the depth it sent was not on their ladders, and it charged for the privilege;
 // v3 sends a depth each wire format accepts and does not ask Anthropic, whose
-// answer the portable mapping cannot read. Reusing a v2 result would carry that
-// verdict forward as though something had measured it.
-const CapabilityDetectorContractVersion = "capability-detector-v3"
+// answer the portable mapping cannot read.
+//
+// v4 classifies a refusal by the normalized kind every adapter now reports,
+// rather than by an OpenAI-shaped code only that family emits: on Anthropic,
+// Bedrock and Gemini a v3 result recorded "inconclusive" everywhere v4 records
+// "unsupported". It supersedes the code-half comparison v2 introduced.
+//
+// v5 splits json_mode into json_object and structured_outputs, so a v4 result
+// carries an answer to a question no longer asked — its json_mode probe sent
+// response_format json_object and proved nothing about a schema.
+const CapabilityDetectorContractVersion = "capability-detector-v5"
 
 type ModelCapabilityDetectionTarget struct {
 	ProviderModel string
@@ -113,8 +146,11 @@ func (b *LegacyAdapterBridge) CapabilityDetectionPlan(target ModelCapabilityDete
 	if c.Tools {
 		add("tools", "tool_call", "chat")
 	}
-	if c.JSONMode {
-		add("json_mode", "json_object", "chat")
+	if c.JSONObject {
+		add("json_object", "json_object", "chat")
+	}
+	if c.StructuredOutputs {
+		add("structured_outputs", "json_schema", "chat")
 	}
 	if c.DeveloperRole {
 		add("developer_role", "developer_message", "chat")
@@ -248,6 +284,29 @@ func (b *LegacyAdapterBridge) DetectCapability(ctx context.Context, target Model
 				}
 			}
 		}
+	case "json_schema":
+		// A schema-backed probe has to be refusable to be worth its call. The
+		// schema names one required property and forbids the rest, and strict is
+		// set, so an upstream that only has the schema-less mode rejects the
+		// response_format outright rather than answering with something that
+		// happens to parse. That refusal is the evidence — an answer that parses
+		// as JSON would also come back from a json_object-only model told to
+		// return JSON, which is why the json_object probe cannot stand in for
+		// this one.
+		request.Messages[0].Content = openaiapi.TextContent("Return the fixed value.")
+		request.ResponseFormat = json.RawMessage(`{"type":"json_schema","json_schema":{"name":"halro_probe","strict":true,"schema":{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"],"additionalProperties":false}}}`)
+		var response openaiapi.ChatCompletionResponse
+		response, err = b.Chat(ctx, ChatCall{RequestID: "capability-detection", ProviderModel: target.ProviderModel, Request: request})
+		if err == nil && len(response.Choices) > 0 && response.Choices[0].Message != nil {
+			if content, ok := openaiapi.DecodeTextContent(response.Choices[0].Message.Content); ok {
+				var object struct {
+					OK *bool `json:"ok"`
+				}
+				if json.Unmarshal([]byte(content), &object) == nil && object.OK != nil {
+					result.Status, result.Evidence = domain.ProbeSupported, domain.EvidenceVerified
+				}
+			}
+		}
 	case "developer_message":
 		request.Messages = append([]openaiapi.Message{{Role: "developer", Content: openaiapi.TextContent("Be brief.")}}, request.Messages...)
 		var response openaiapi.ChatCompletionResponse
@@ -256,9 +315,7 @@ func (b *LegacyAdapterBridge) DetectCapability(ctx context.Context, target Model
 			result.Status, result.Evidence = domain.ProbeSupported, domain.EvidenceVerified
 		}
 	case "inline_image":
-		// A 1x1 transparent PNG is fixed, public-domain data. No administrator
-		// input or external URL is ever incorporated into the probe.
-		request.Messages[0].Content = json.RawMessage(`[{"type":"text","text":"Describe briefly."},{"type":"image_url","image_url":{"url":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+XwV0WQAAAABJRU5ErkJggg=="}}]`)
+		request.Messages[0].Content = json.RawMessage(`[{"type":"text","text":"Describe briefly."},{"type":"image_url","image_url":{"url":"` + CapabilityProbeImage + `"}}]`)
 		var response openaiapi.ChatCompletionResponse
 		response, err = b.Chat(ctx, ChatCall{RequestID: "capability-detection", ProviderModel: target.ProviderModel, Request: request})
 		if err == nil && len(response.Choices) > 0 {
@@ -334,7 +391,7 @@ func (b *LegacyAdapterBridge) DetectCapability(ctx context.Context, target Model
 		result.Status = domain.ProbeAssertionFailed
 	}
 	if err != nil {
-		result.Status, result.Evidence, result.ErrorClass = classifyCapabilityProbeError(err), "", capabilityProbeErrorClass(err)
+		result.Status, result.Evidence, result.ErrorClass = classifyCapabilityProbeError(err, probe), "", capabilityProbeErrorClass(err)
 		// What the upstream said about the request, in identifiers only. The
 		// class says what kind of failure it was; these two say which request
 		// and which field, which is the part an operator can act on. The
@@ -351,7 +408,11 @@ func (b *LegacyAdapterBridge) DetectCapability(ctx context.Context, target Model
 	return result
 }
 
-func classifyCapabilityProbeError(err error) domain.CapabilityProbeStatus {
+// classifyCapabilityProbeError turns a failed probe into a verdict about the
+// capability, which is a narrower question than what went wrong: only an answer
+// attributable to the field under test is allowed to say "unsupported", and
+// everything else says so little that it has to stay unverified.
+func classifyCapabilityProbeError(err error, probe CapabilityProbe) domain.CapabilityProbeStatus {
 	if errors.Is(err, context.Canceled) {
 		return domain.ProbeCanceled
 	}
@@ -368,23 +429,33 @@ func classifyCapabilityProbeError(err error) domain.CapabilityProbeStatus {
 	case ErrorRateLimit, ErrorTimeout, ErrorProvider5xx, ErrorConnect:
 		return domain.ProbeUnavailable
 	case ErrorBadRequest:
-		// Only a structured, reviewed provider code is accepted as a stable
-		// unsupported verdict. Free-form error text is never inspected.
+		// Free-form error text is never inspected. What is read is the refusal
+		// kind the adapter derived from the upstream's own structured identifiers,
+		// which is the one thing every profile family can be asked in the same
+		// terms.
 		//
-		// The identifier arrives joined to the parameter it names —
-		// "unsupported_parameter:image_url" — because the refused field is the
-		// half an operator can act on and the error contract has one identifier
-		// field to carry both. Comparing the whole string therefore matched only
-		// when the upstream named no parameter, and an OpenAI-shaped body always
-		// names one: every refused probe on that family (OpenAI, OpenAI-compatible
-		// endpoints, both Bedrock Mantle routes) landed as inconclusive, and this
-		// branch was unreachable. The verdict belongs to the code, so compare the
-		// code and let the parameter travel with it.
-		code, _, _ := strings.Cut(providerError.ProviderCode, ":")
-		if strings.EqualFold(code, "unsupported_parameter") || strings.EqualFold(code, "unsupported_value") {
+		// RefusalUnsupported stands alone: the upstream named the field or value
+		// as one it does not serve, and only an OpenAI-shaped body says that
+		// much.
+		//
+		// RefusalInvalid is the answer the other three families give — one
+		// exception name, one request-error type, one RPC status, each covering
+		// an unsupported field and a nonexistent model alike. It becomes a
+		// verdict only for a probe that depends on another: a dependent probe is
+		// its baseline plus the field under test, the runner reached it only
+		// because that baseline was verified supported on this same interface,
+		// so the refusal belongs to the field that was added. A probe with no
+		// dependency has nothing establishing that the rest of the request was
+		// good, and stays inconclusive rather than reporting a model that does
+		// not exist as a capability that is missing.
+		switch {
+		case providerError.Refusal == RefusalUnsupported:
 			return domain.ProbeUnsupported
+		case providerError.Refusal == RefusalInvalid && len(probe.DependsOn) > 0:
+			return domain.ProbeUnsupported
+		default:
+			return domain.ProbeInconclusive
 		}
-		return domain.ProbeInconclusive
 	default:
 		return domain.ProbeInconclusive
 	}

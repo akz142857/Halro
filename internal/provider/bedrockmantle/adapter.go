@@ -446,7 +446,9 @@ func decodeHTTPError(response *http.Response, ambiguous bool) error {
 	if message == "" {
 		message = http.StatusText(response.StatusCode)
 	}
-	return &provider.Error{Class: class, StatusCode: response.StatusCode, Retryable: retryable, Ambiguous: ambiguous && response.StatusCode >= 500, Message: message, ProviderCode: refusalCode(envelope), ProviderRequestID: providerRequestID(response.Header), RetryAfter: retryAfter(response.Header)}
+	code := refusalCode(envelope)
+	refusal := provider.RefusalFromOpenAIBody(response.StatusCode, code)
+	return &provider.Error{Class: class, StatusCode: response.StatusCode, Retryable: retryable, Ambiguous: ambiguous && response.StatusCode >= 500, Message: message, ProviderCode: code, Refusal: refusal, ProviderRequestID: providerRequestID(response.Header), RetryAfter: retryAfter(response.Header)}
 }
 
 // refusalCode is the machine-readable half of an OpenAI-shaped refusal, which is

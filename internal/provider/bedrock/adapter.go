@@ -819,7 +819,13 @@ func classifyHTTP(response *http.Response) *provider.Error {
 	case "accessdeniedexception", "unrecognizedclientexception":
 		result.Class = provider.ErrorAuthentication
 	case "validationexception":
-		result.Class = provider.ErrorBadRequest
+		// The one Bedrock exception that is a refusal of the request body. It
+		// names the exception and never the field inside the request that caused
+		// it — an unsupported inference parameter and a malformed message list
+		// are both this — so the refusal stands unattributed, and only what
+		// already knows the rest of the request was good can read a capability
+		// verdict out of it.
+		result.Class, result.Refusal = provider.ErrorBadRequest, provider.RefusalInvalid
 	default:
 		switch {
 		case status == http.StatusUnauthorized || status == http.StatusForbidden:
@@ -903,7 +909,7 @@ func streamException(eventType string, header http.Header, payload []byte) *prov
 	_ = json.Unmarshal(payload, &details)
 	switch strings.ToLower(eventType) {
 	case "validationexception":
-		return &provider.Error{Class: provider.ErrorBadRequest, Message: "Bedrock rejected the stream request", ProviderRequestID: requestID, ProviderCode: code}
+		return &provider.Error{Class: provider.ErrorBadRequest, Message: "Bedrock rejected the stream request", ProviderRequestID: requestID, ProviderCode: code, Refusal: provider.RefusalInvalid}
 	case "throttlingexception":
 		return &provider.Error{Class: provider.ErrorRateLimit, Retryable: true, Message: "Bedrock stream is temporarily unavailable", ProviderRequestID: requestID, ProviderCode: code, RetryAfter: retryAfter(header, time.Now())}
 	case "modeltimeoutexception":

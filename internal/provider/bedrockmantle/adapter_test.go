@@ -549,3 +549,42 @@ func TestAnUpstreamRefusalCodeIsBoundedBeforeItLeavesTheAdapter(t *testing.T) {
 		})
 	}
 }
+
+// Mantle answers in the OpenAI error shape, which is the one shape that can name
+// the refused field as unsupported. That distinction is what a capability probe
+// spends: an unattributed refusal only becomes a verdict when a baseline probe
+// already proved the rest of the request good, and a named one stands alone.
+func TestResponsesAdapterMapsTheRefusalKindFromTheCode(t *testing.T) {
+	for _, test := range []struct {
+		status int
+		body   string
+		want   provider.RefusalKind
+	}{
+		{400, `{"error":{"message":"no","code":"unsupported_parameter","param":"reasoning"}}`, provider.RefusalUnsupported},
+		{400, `{"error":{"message":"no","code":"unsupported_value","param":"reasoning.effort"}}`, provider.RefusalUnsupported},
+		{400, `{"error":{"message":"no","type":"invalid_request_error"}}`, provider.RefusalInvalid},
+		// Not a refusal of the request body. ErrorBadRequest is the
+		// fall-through of the status switch, so this arrives looking exactly
+		// like a 400 and must not be read as one.
+		{404, `{"error":{"message":"no","code":"model_not_found"}}`, provider.RefusalNone},
+		// Neither an unreadable body nor an envelope with no identifier says
+		// anything about the request.
+		{400, `<html>bad gateway</html>`, provider.RefusalNone},
+		{400, `{"error":{"message":"no"}}`, provider.RefusalNone},
+		// Not a refusal of the request body at all.
+		{429, `{"error":{"message":"slow down","type":"rate_limit_error"}}`, provider.RefusalNone},
+		{500, `{"error":{"message":"boom"}}`, provider.RefusalNone},
+	} {
+		adapter := testAdapter(t, roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: test.status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(test.body))}, nil
+		}))
+		_, err := adapter.Chat(context.Background(), mantleChatCall())
+		var classified *provider.Error
+		if !errors.As(err, &classified) {
+			t.Fatalf("status %d was not classified: %v", test.status, err)
+		}
+		if classified.Refusal != test.want {
+			t.Fatalf("status %d body %s mapped to %q, want %q", test.status, test.body, classified.Refusal, test.want)
+		}
+	}
+}

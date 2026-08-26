@@ -13,7 +13,7 @@ import { DEFAULT_TIME_ZONE, isoToZonedInput } from "../timezone";
 const emptyCapabilities: ProviderCapabilities = {
   chat: false, streaming: false, embeddings: false, moderations: false, images: false,
   transcriptions: false, speech: false, files: false, batches: false, rerank: false,
-  async_generate: false, tools: false, vision: false, fetched_image: false, json_mode: false,
+  async_generate: false, tools: false, vision: false, fetched_image: false, json_object: false, structured_outputs: false,
   developer_role: false, reasoning: false, stream_usage: false, provider_executed_tools: false,
   max_context_tokens: 0, max_output_tokens: 0,
 };
@@ -207,37 +207,8 @@ describe("deployment invocation target workflow", () => {
     expect(modality).toHaveTextContent("1 项需先在连接上启用");
   });
 
-  // Routing refuses on a member this interface cannot carry, and the form used to
-  // say nothing about it. The list is the server's — the same coverage the
-  // published manifest carries.
-  //
-  // The image-fetch limit is deliberately not the example any more: it stopped
-  // being a request field and became a capability, so it is a checkbox on this
-  // same form now. What is left here is the genuinely field-level loss, which is
-  // exactly what this surface is for.
-  it("shows the request members the selected interface cannot carry", async () => {
-    const mantleCapabilities: ProviderCapabilities = { ...chatCapabilities, vision: true };
-    vi.mocked(api.providers).mockResolvedValue({
-      items: [{
-        ...provider, capabilities: mantleCapabilities,
-        bindings: [{ id: "b-mantle", profile_id: "bedrock.mantle.openai.chat.v1", enabled: true, capabilities: mantleCapabilities }],
-      } as Provider],
-      next_cursor: "",
-    });
-    vi.mocked(api.deployments).mockResolvedValue({ items: [existingDeployment], next_cursor: "" });
-    vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [], next_cursor: "" });
-    renderPage();
-
-    fireEvent.click((await screen.findAllByRole("button", { name: /^编辑/ }))[0]);
-    const constraints = await screen.findByRole("region", { name: "这个能力接口载不动的请求成员" });
-    // A member the Gateway refuses on, named where the tick is made, with the
-    // endpoint it belongs to beside it.
-    expect(within(constraints).getAllByText("thinking").length).toBeGreaterThan(0);
-    expect(within(constraints).getAllByText("/v1/messages").length).toBeGreaterThan(0);
-  });
-
-  // with no way forward on screen. Ticking the box is the claim — the save
-  // carries it, under a button that names what it commits.
+  // Ticking a box past what the catalogue recorded is the claim, and the save
+  // carries it under a button that names what it commits.
   it("sends an edit that widens capabilities as an operator declaration", async () => {
     const resourceCapabilities: ProviderCapabilities = { ...chatCapabilities, files: true, batches: true };
     vi.mocked(api.providers).mockResolvedValue({
@@ -393,6 +364,149 @@ describe("deployment invocation target workflow", () => {
     expect(await screen.findByText("当前服务商尚未启用可承载此目标的调用接口")).toBeVisible();
     expect(screen.getByRole("link", { name: "前往服务商配置 →" })).toHaveAttribute("href", "/admin/providers");
     expect(screen.queryByRole("button", { name: "识别能力" })).not.toBeInTheDocument();
+  });
+
+  // The catalogue is a review of what a model was, and an account can behave
+  // otherwise. Verifying is the operator paying to find out where the two
+  // disagree — which is only worth anything if the run says what it measured and
+  // what it merely carried forward.
+  it("verifies a catalogued model against the provider and keeps what it never probed", async () => {
+    const catalogued = { ...chatCapabilities, vision: true };
+    vi.mocked(api.invocationTargets).mockResolvedValue(catalog([target("gpt-chat", [variant("gpt-chat", "b-chat", catalogued)], "resolved", "GPT Chat")]));
+    const create = vi.spyOn(api, "createDeployment").mockResolvedValue({} as never);
+    const detect = vi.spyOn(api, "createModelCapabilityDetection").mockImplementation(async (_id, body) => ({
+      id: "verified", status: "completed" as const, source: "verified_probe" as const,
+      provider_id: provider.id, provider_model: "gpt-chat", binding_candidates: [], binding_id: "b-chat",
+      provider_calls: 4, max_provider_calls: 10,
+      capabilities: {
+        chat: { status: "supported" as const, evidence: "verified" as const, probe_kind: "minimal_chat" },
+        streaming: { status: "supported" as const, evidence: "verified" as const, probe_kind: "minimal_stream" },
+        stream_usage: { status: "supported" as const, evidence: "verified" as const, probe_kind: "stream_usage" },
+        tools: { status: "unsupported" as const, probe_kind: "tool_call" },
+        reasoning: { status: "supported" as const, evidence: "verified" as const, probe_kind: "reasoning_effort" },
+        vision: { status: "not_probed" as const, probe_kind: "risk_policy" },
+      },
+      baseline_capabilities: catalogued,
+      recommended_capabilities: { ...catalogued, tools: false, reasoning: true },
+      expires_at: "2026-08-30T00:00:00Z",
+      selection_revision: (body as { selection_revision: string }).selection_revision, revision: 2,
+    }));
+    await openCreate();
+    fireEvent.change(screen.getByLabelText("部署名称"), { target: { value: "Chat" } });
+    await choose("GPT Chat");
+    expect(await screen.findByText("5 项能力可用")).toBeVisible();
+
+    await startDetection("实测校验");
+    await waitFor(() => expect(detect).toHaveBeenCalledOnce());
+    // It declines the answers that already exist, and runs where the catalogue
+    // already says the model runs rather than paying to identify an interface.
+    expect(detect.mock.calls[0][1]).toMatchObject({ force_refresh: true, binding_id: "b-chat", provider_model: "gpt-chat" });
+
+    expect(await screen.findByText("实测完成：已验证 5 项能力")).toBeVisible();
+    expect(screen.getByText("实测新增：推理")).toBeVisible();
+    expect(screen.getByText("上游拒绝，已关闭：工具调用")).toBeVisible();
+    // The half that is easiest to misread: a capability no probe may ask about
+    // is not a capability the run found missing.
+    expect(screen.getByText("本次未实测，沿用目录声明：视觉")).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "保存为停用" }));
+    await waitFor(() => expect(create).toHaveBeenCalledOnce());
+    const payload = create.mock.calls[0][0] as Record<string, unknown>;
+    // The write is pinned to the verification, not to the claims it just
+    // checked: the server validates the capability set against whichever one the
+    // request names, and reasoning exists in only one of them.
+    expect(payload).toMatchObject({ capability_detection_id: "verified", capability_detection_revision: 2 });
+    expect(payload).not.toHaveProperty("resolution_revision");
+    expect(payload.capabilities).toMatchObject({ chat: true, reasoning: true, vision: true, tools: false });
+  });
+
+  // "This model does not support it" is the upstream's answer, not Halro's, and
+  // an operator whose model card says otherwise needs to see which field it
+  // named. The identifiers are recorded per probe; the refusal used to be the
+  // one outcome that stated a conclusion without showing them.
+  it("shows what the provider returned when it refused a capability", async () => {
+    const catalogued = { ...chatCapabilities, vision: true };
+    vi.mocked(api.invocationTargets).mockResolvedValue(catalog([target("gpt-chat", [variant("gpt-chat", "b-chat", catalogued)], "resolved", "GPT Chat")]));
+    vi.spyOn(api, "createModelCapabilityDetection").mockImplementation(async (_id, body) => ({
+      id: "refused-vision", status: "completed" as const, source: "verified_probe" as const,
+      provider_id: provider.id, provider_model: "gpt-chat", binding_candidates: [], binding_id: "b-chat",
+      provider_calls: 2, max_provider_calls: 10,
+      capabilities: {
+        chat: { status: "supported" as const, evidence: "verified" as const, probe_kind: "minimal_chat" },
+        vision: { status: "unsupported" as const, error_class: "bad_request", provider_status: 400, provider_code: "unsupported_value:messages", probe_kind: "inline_image" },
+      },
+      baseline_capabilities: catalogued,
+      recommended_capabilities: { ...catalogued, vision: false },
+      expires_at: "2026-08-30T00:00:00Z",
+      selection_revision: (body as { selection_revision: string }).selection_revision, revision: 2,
+    }));
+    await openCreate();
+    fireEvent.change(screen.getByLabelText("部署名称"), { target: { value: "Chat" } });
+    await choose("GPT Chat");
+    await startDetection("实测校验");
+
+    expect(await screen.findByText("视觉：上游明确拒绝")).toBeVisible();
+    // The identifier, not the sentence beside it: which request and which field.
+    expect(screen.getByText("上游 400 · unsupported_value:messages")).toBeVisible();
+  });
+
+  // The console distinguishes a verification from an ordinary detection by the
+  // baseline the record carries. Nothing else does: an ordinary detection of a
+  // model the catalogue does not cover has findings too, and reporting them as
+  // "established beyond the catalogue" describes a comparison that never
+  // happened.
+  it("shows no verification result for an ordinary detection", async () => {
+    vi.spyOn(api, "createModelCapabilityDetection").mockImplementation(async (_id, body) => ({
+      id: "plain", status: "completed" as const, source: "verified_probe" as const,
+      provider_id: provider.id, provider_model: unknown.target_id, binding_candidates: [], binding_id: "b-chat",
+      provider_calls: 1, max_provider_calls: 10,
+      capabilities: { chat: { status: "supported" as const, evidence: "verified" as const, probe_kind: "minimal_chat" } },
+      recommended_capabilities: { ...emptyCapabilities, chat: true },
+      expires_at: "2026-08-30T00:00:00Z",
+      selection_revision: (body as { selection_revision: string }).selection_revision, revision: 2,
+    }));
+    await openCreate();
+    await choose("GPT Future");
+    await startDetection();
+
+    expect(await screen.findByLabelText("对话")).toBeChecked();
+    expect(screen.queryByText(/实测完成/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "沿用目录声明" })).not.toBeInTheDocument();
+  });
+
+  // A verification that could not finish measured nothing, so the claims it was
+  // checking are still the best answer available. Manual declaration is the
+  // other model's escape — for a catalogued model it drops the operator into a
+  // mode with no variant pin and no detection pin, and no way back.
+  it("returns a failed verification to the catalogue's claims rather than to manual declaration", async () => {
+    const catalogued = { ...chatCapabilities, vision: true };
+    vi.mocked(api.invocationTargets).mockResolvedValue(catalog([target("gpt-chat", [variant("gpt-chat", "b-chat", catalogued)], "resolved", "GPT Chat")]));
+    const create = vi.spyOn(api, "createDeployment").mockResolvedValue({} as never);
+    vi.spyOn(api, "createModelCapabilityDetection").mockImplementation(async (_id, body) => ({
+      id: "refused", status: "failed" as const, source: "verified_probe" as const,
+      provider_id: provider.id, provider_model: "gpt-chat", binding_candidates: [], binding_id: "b-chat",
+      provider_calls: 1, max_provider_calls: 10,
+      capabilities: { chat: { status: "unauthorized" as const, error_class: "authentication", probe_kind: "minimal_chat" } },
+      baseline_capabilities: catalogued,
+      recommended_capabilities: emptyCapabilities,
+      selection_revision: (body as { selection_revision: string }).selection_revision, revision: 2,
+    }));
+    await openCreate();
+    fireEvent.change(screen.getByLabelText("部署名称"), { target: { value: "Chat" } });
+    await choose("GPT Chat");
+    await startDetection("实测校验");
+
+    expect(await screen.findByText("未能可靠识别能力")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "手动配置" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "沿用目录声明" }));
+
+    expect(await screen.findByText("5 项能力可用")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "保存为停用" }));
+    await waitFor(() => expect(create).toHaveBeenCalledOnce());
+    const payload = create.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload).not.toHaveProperty("capability_detection_id");
+    expect(payload).toMatchObject({ resolution_revision: "sha256:gpt-chat:b-chat" });
+    expect(payload.capabilities).toMatchObject({ chat: true, vision: true });
   });
 
   it("offers only verification and advanced onboarding for an unknown target", async () => {
@@ -935,12 +1049,11 @@ describe("deployment invocation target workflow", () => {
 
     fireEvent.click(await screen.findByText("高级设置：收窄能力"));
     const unrecorded = await screen.findByRole("checkbox", { name: /工具调用/ });
-    // Present, selectable, and marked as something nothing has recorded — an
-    // unrecorded capability is not a capability found missing.
+    // Present and selectable: an unrecorded capability is not a capability
+    // found missing, so the row stays open to an operator who knows better.
     expect(unrecorded).toBeEnabled();
     expect(unrecorded).not.toBeChecked();
     expect(screen.getByRole("checkbox", { name: /对话/ })).toBeChecked();
-    expect(within(unrecorded.closest("label") as HTMLElement).getByText("目录未记录")).toBeVisible();
   });
 
   // Ticking past the claims changes who is answering for the capability, and
@@ -1460,7 +1573,7 @@ describe("deployment card keeps what the row decided", () => {
   it("lists every capability with its evidence, and states the upstream target", async () => {
     vi.spyOn(api, "deployments").mockResolvedValue({
       items: [deployment("dep_1", {
-        capabilities: { ...chatCapabilities, vision: true, json_mode: true },
+        capabilities: { ...chatCapabilities, vision: true, json_object: true, structured_outputs: true },
         capability_evidence: { chat: "verified", vision: "declared" },
         updated_at: "2026-08-23T02:52:00Z",
       })],
@@ -1475,8 +1588,9 @@ describe("deployment card keeps what the row decided", () => {
       expect(within(drawer).getByRole("heading", { name: heading })).toBeVisible();
     }
     const list = within(drawer).getByRole("list", { name: "能力" });
-    // chat, streaming, tools, stream_usage, vision, json_mode — all six, not five and a "+1".
-    expect(within(list).getAllByRole("listitem")).toHaveLength(6);
+    // chat, streaming, tools, stream_usage, vision, json_object, structured_outputs —
+    // all seven, not six and a "+1".
+    expect(within(list).getAllByRole("listitem")).toHaveLength(7);
     expect(within(within(list).getByText("对话").closest("li") as HTMLElement).getByText("已验证")).toBeVisible();
     expect(within(within(list).getByText("视觉").closest("li") as HTMLElement).getByText("已声明")).toBeVisible();
     // Nothing established this one either way; that is not the same as declared.

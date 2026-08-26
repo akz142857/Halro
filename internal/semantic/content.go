@@ -71,7 +71,26 @@ const (
 	ContentToolCall   ContentKind = "tool_call"
 	ContentToolResult ContentKind = "tool_result"
 	ContentReasoning  ContentKind = "reasoning"
+	// ContentProviderToolCall records a tool the upstream ran on its own during
+	// the turn. It is not a call anybody is expected to answer — by the time it
+	// is reported it has already happened — but it is the only evidence the
+	// caller gets that their request originated traffic Halro never saw, so it
+	// is carried rather than summarised away.
+	ContentProviderToolCall ContentKind = "provider_tool_call"
 )
+
+// Citation is a source a provider-executed tool attributed part of the answer
+// to. The span is a half-open byte range into the text part that carries it.
+//
+// It travels with the text rather than beside it because the two are one claim:
+// an answer with its citations removed reads as the model's own knowledge, which
+// is a different statement about where it came from.
+type Citation struct {
+	URL        string `json:"url"`
+	Title      string `json:"title,omitempty"`
+	StartIndex int    `json:"start_index,omitempty"`
+	EndIndex   int    `json:"end_index,omitempty"`
+}
 
 // Content is the smallest portable content vocabulary needed by the current
 // Chat Completions profiles. Provider-native payloads are never stored here.
@@ -90,6 +109,12 @@ type Content struct {
 	// feeding a failed tool result to a model as if it had succeeded changes what
 	// the model is answering.
 	ToolError bool `json:"tool_error,omitempty"`
+	// Status is how a provider-executed tool call ended. It is only meaningful
+	// on ContentProviderToolCall.
+	Status string `json:"status,omitempty"`
+	// Citations are the sources attributed to this text. Only meaningful on
+	// ContentText.
+	Citations []Citation `json:"citations,omitempty"`
 }
 
 type Message struct {
@@ -109,8 +134,14 @@ func (message Message) Validate() error {
 	for _, part := range message.Content {
 		switch part.Kind {
 		case ContentText:
-			if part.URL != "" || part.Detail != "" || part.CallID != "" || part.Name != "" || part.Arguments != "" {
+			if part.URL != "" || part.Detail != "" || part.CallID != "" || part.Name != "" || part.Arguments != "" || part.Status != "" {
 				return errors.New("semantic text content has unrelated fields")
+			}
+			for _, citation := range part.Citations {
+				if citation.URL == "" || citation.StartIndex < 0 || citation.EndIndex < citation.StartIndex ||
+					citation.EndIndex > len(part.Text) {
+					return errors.New("semantic citation does not point into its text")
+				}
 			}
 		case ContentReasoning:
 			reasoningParts++
@@ -135,8 +166,23 @@ func (message Message) Validate() error {
 			if toolResultCallID != part.CallID {
 				return errors.New("semantic tool result message has multiple call ids")
 			}
+		case ContentProviderToolCall:
+			// Text carries what the tool was asked, which is the model's own words
+			// and the only part of the call a reader can check. The upstream's
+			// identifier for the call is kept so a caller can match it against
+			// their own logs of the same turn.
+			if message.Role != RoleAssistant || part.CallID == "" || part.Name == "" || part.Status == "" ||
+				part.URL != "" || part.Detail != "" || part.Arguments != "" || len(part.Citations) > 0 {
+				return errors.New("semantic provider tool call is invalid")
+			}
 		default:
 			return errors.New("semantic content kind is invalid")
+		}
+		if part.Kind != ContentText && len(part.Citations) > 0 {
+			return errors.New("semantic citations are only carried by text")
+		}
+		if part.Kind != ContentProviderToolCall && part.Status != "" {
+			return errors.New("semantic status is only carried by a provider tool call")
 		}
 	}
 	if reasoningParts > 1 {

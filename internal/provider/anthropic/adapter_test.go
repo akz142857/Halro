@@ -302,3 +302,68 @@ func TestChatStreamTerminationUsesSemanticVocabulary(t *testing.T) {
 		})
 	}
 }
+
+// Anthropic answers every refused request with one type, so a refusal here can
+// never attribute itself to the field that caused it. Reporting it as
+// unattributed is the whole point: a model that does not exist and an
+// unsupported tool block arrive identically.
+func TestAnthropicBadRequestRefusalIsUnattributed(t *testing.T) {
+	adapter := newTestAdapter(t, func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusBadRequest)
+		_, _ = writer.Write([]byte(`{"type":"error","error":{"type":"invalid_request_error","message":"tools: unsupported for this model"}}`))
+	})
+	_, err := adapter.MessagesNative(context.Background(), provider.NativeMessageCall{RequestID: "req", ProviderModel: "claude", Version: anthropicapi.SupportedVersion, Payload: []byte(`{"model":"public","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}`)})
+	var classified *provider.Error
+	if !errors.As(err, &classified) || classified.Class != provider.ErrorBadRequest || classified.Refusal != provider.RefusalInvalid {
+		t.Fatalf("unexpected error: %#v", classified)
+	}
+	if classified.ProviderCode != "invalid_request_error" {
+		t.Fatalf("refusal identifier lost: %q", classified.ProviderCode)
+	}
+
+	unauthorized := newTestAdapter(t, func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusUnauthorized)
+		_, _ = writer.Write([]byte(`{"type":"error","error":{"type":"authentication_error","message":"bad key"}}`))
+	})
+	_, err = unauthorized.MessagesNative(context.Background(), provider.NativeMessageCall{RequestID: "req", ProviderModel: "claude", Version: anthropicapi.SupportedVersion, Payload: []byte(`{"model":"public","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}`)})
+	if !errors.As(err, &classified) || classified.Refusal != provider.RefusalNone {
+		t.Fatalf("a rejected credential carried a refusal kind: %#v", classified)
+	}
+}
+
+// The verdict a probe records, end to end: the adapter maps Anthropic's refusal
+// onto the normalized kind, and the detector turns that into a capability
+// answer. The two halves are worth testing joined, because each is convincing
+// on its own while the pair is what contract v3 actually claims — before it,
+// every refused probe on this family recorded "inconclusive".
+func TestAnthropicRefusalBecomesAnUnsupportedVerdictOnlyForADependentProbe(t *testing.T) {
+	adapter := newTestAdapter(t, func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusBadRequest)
+		_, _ = writer.Write([]byte(`{"type":"error","error":{"type":"invalid_request_error","message":"tools: unsupported for this model"}}`))
+	})
+	manifest, ok := provider.BuiltinProfile(domain.ProfileAnthropicMessages)
+	if !ok {
+		t.Fatal("profile missing")
+	}
+	capabilities := domain.DefaultProviderCapabilitiesForProfile(domain.ProviderAnthropic, domain.ProfileAnthropicMessages)
+	bridge, err := provider.NewLegacyAdapterBridge(adapter, manifest, domain.EvidenceForCapabilities(capabilities, domain.EvidenceDeclared))
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := provider.ModelCapabilityDetectionTarget{ProviderModel: "claude", BindingID: "binding", ProfileID: manifest.ID, RiskTier: "safe_automatic"}
+
+	dependent := bridge.DetectCapability(context.Background(), target,
+		provider.CapabilityProbe{Capability: "tools", Kind: "tool_call", DependsOn: []string{"chat"}, MaxOutputTokens: 16})
+	if dependent.Status != domain.ProbeUnsupported {
+		t.Fatalf("dependent probe recorded %s, want unsupported: %#v", dependent.Status, dependent)
+	}
+
+	// The same refusal, with nothing establishing that the rest of the request
+	// was good. Anthropic answers a nonexistent model with this exact type, so
+	// the only honest verdict is that nothing was established.
+	root := bridge.DetectCapability(context.Background(), target,
+		provider.CapabilityProbe{Capability: "chat", Kind: "minimal_chat", MaxOutputTokens: 16})
+	if root.Status != domain.ProbeInconclusive {
+		t.Fatalf("baseline probe recorded %s, want inconclusive: %#v", root.Status, root)
+	}
+}

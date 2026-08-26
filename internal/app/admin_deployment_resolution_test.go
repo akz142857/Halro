@@ -356,7 +356,7 @@ func TestResolveCustomEndpointThroughCompatibleCatalogOnly(t *testing.T) {
 	if !resolution.mapped || !resolution.declared || resolution.capabilities != wanted {
 		t.Fatalf("resolution=%#v", resolution)
 	}
-	if resolution.capabilities.Tools || resolution.capabilities.JSONMode || resolution.capabilities.Reasoning {
+	if resolution.capabilities.Tools || resolution.capabilities.StructuredOutputs || resolution.capabilities.Reasoning {
 		t.Fatalf("native-only capabilities leaked into compatible target: %#v", resolution.capabilities)
 	}
 	wider := domain.ProviderCapabilities{Chat: true, Streaming: true, Embeddings: true}

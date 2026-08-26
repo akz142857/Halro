@@ -615,7 +615,11 @@ func (r *Runtime) deploymentFromInput(request *http.Request, deploymentID string
 		snapshot.CatalogRevision = r.effectiveModelCatalog().Revision()
 		snapshot.Capabilities = modelcatalog.Clamp(resolution.entry.Capabilities, resolution.binding.Capabilities)
 	}
-	snapshot.Evidence = domain.SnapshotEvidence(snapshot)
+	if detected != nil {
+		snapshot.Evidence = domain.DetectionSnapshotEvidence(snapshot, *detected)
+	} else {
+		snapshot.Evidence = domain.SnapshotEvidence(snapshot)
+	}
 
 	var priorDisabled []string
 	if prior != nil {

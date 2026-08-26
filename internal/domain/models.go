@@ -475,11 +475,24 @@ type ProviderCapabilities struct {
 	// see, tick and be refused on by the same rule is the whole point of the
 	// distinction existing at all — and it is spelled once here rather than three
 	// times, once per northbound endpoint's name for the same member.
-	FetchedImage  bool `json:"fetched_image"`
-	JSONMode      bool `json:"json_mode"`
-	DeveloperRole bool `json:"developer_role"`
-	Reasoning     bool `json:"reasoning"`
-	StreamUsage   bool `json:"stream_usage"`
+	FetchedImage bool `json:"fetched_image"`
+	// JSONObject and StructuredOutputs are the two halves of what used to be one
+	// json_mode switch, and no provider serves them as one thing. JSONObject is
+	// the schema-less mode that only promises the answer parses as JSON;
+	// StructuredOutputs is a schema the upstream enforces — OpenAI's json_schema,
+	// Anthropic's output_config.format.
+	//
+	// One switch could not describe any of the three providers honestly.
+	// Anthropic has the schema and no schema-less mode at all, DeepSeek has the
+	// schema-less mode and no schema, and on OpenAI the split is per model rather
+	// than per connection. A deployment that declared json_mode on the strength
+	// of the half it has was routed the other half and refused upstream, after
+	// the budget reservation, naming a field its operator never chose.
+	JSONObject        bool `json:"json_object"`
+	StructuredOutputs bool `json:"structured_outputs"`
+	DeveloperRole     bool `json:"developer_role"`
+	Reasoning         bool `json:"reasoning"`
+	StreamUsage       bool `json:"stream_usage"`
 	// ProviderExecutedTools admits tools the upstream runs itself — web_search,
 	// web_fetch, code_execution. Enabling it means accepting that this connection
 	// originates network calls Halro never sees and SafeTransport never filters,
@@ -930,9 +943,9 @@ func (d Deployment) Validate() error {
 	if !d.Capabilities.AnyOperation() {
 		problems = append(problems, errors.New("deployment must declare at least one operation capability"))
 	}
-	if (d.Capabilities.Streaming || d.Capabilities.Tools || d.Capabilities.Vision || d.Capabilities.JSONMode ||
-		d.Capabilities.DeveloperRole || d.Capabilities.Reasoning || d.Capabilities.StreamUsage ||
-		d.Capabilities.ProviderExecutedTools) && !d.Capabilities.Chat {
+	if (d.Capabilities.Streaming || d.Capabilities.Tools || d.Capabilities.Vision || d.Capabilities.JSONObject ||
+		d.Capabilities.StructuredOutputs || d.Capabilities.DeveloperRole || d.Capabilities.Reasoning ||
+		d.Capabilities.StreamUsage || d.Capabilities.ProviderExecutedTools) && !d.Capabilities.Chat {
 		problems = append(problems, errors.New("deployment chat features require chat capability"))
 	}
 	if d.Capabilities.StreamUsage && !d.Capabilities.Streaming {

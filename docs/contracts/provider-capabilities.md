@@ -7,7 +7,9 @@ Each immutable Deployment snapshot declares:
 - streaming;
 - tools;
 - vision;
-- JSON response;
+- JSON object (the schema-less mode, which only promises parseable JSON);
+- structured outputs (a schema the upstream enforces);
+- provider-executed tools (tools the upstream runs itself);
 - developer role;
 - reasoning;
 - usage in stream;
@@ -19,11 +21,15 @@ Unsupported capabilities produce a stable request error. Provider implementation
 
 The Gateway derives requirements from the actual request before any Provider
 call: tools/tool messages, multimodal image parts, JSON response formats,
-developer messages, reasoning fields, and streamed usage. It removes
-incompatible fallback candidates while preserving route order. If no candidate
-remains it returns `unsupported_feature` without calling an upstream. Estimated
-input plus requested output must also fit both token limits; otherwise it
-returns `token_limit_exceeded` before reservation or upstream I/O.
+developer messages, reasoning fields, and streamed usage. The two JSON formats
+are separate requirements against separate capabilities — `json_object` and
+`json_schema` — because no provider serves both halves and one requirement
+could not keep a schema request off a target that has only the schema-less
+mode. It removes incompatible fallback candidates while preserving route
+order. If no candidate remains it returns `unsupported_feature` without
+calling an upstream. Estimated input plus requested output must also fit both
+token limits; otherwise it returns `token_limit_exceeded` before reservation
+or upstream I/O.
 
 Provider capability declarations are an upper bound. A Deployment may narrow
 boolean capabilities and token limits but cannot expand them. `0` means that no
@@ -58,6 +64,32 @@ Rules the catalog holds to:
   to `unknown` with no capabilities, never to the profile ceiling. An explicit
   safe capability detection may create `verified_probe` evidence; the advanced
   fallback remains an operator declaration.
+- **A covered model can still be measured.** An operator may verify a model the
+  catalog already answers for. The verification probes on the interface the
+  catalog names, replaces every capability a probe established, and carries the
+  catalog's claim for the ones no probe reached — silence never deletes a claim,
+  and the capabilities a probe may never ask about (images, speech,
+  transcriptions, files, batches, async generate) are all in that set. The
+  resulting snapshot carries evidence per capability: `verified` where a probe
+  answered, `declared` where the claim was carried through.
+- **A refusal becomes "unsupported" only when it is attributable.** Provider
+  error prose is never read. Each Adapter maps its own refusal identifiers onto
+  one normalized kind: the field named as unsupported (only OpenAI-shaped bodies
+  say this), or the request refused without saying which part. The second is a
+  capability verdict only for a probe whose baseline was already verified on the
+  same interface — its request is that baseline plus the field under test —
+  because on Anthropic, Bedrock and Gemini a nonexistent model and an
+  unsupported field refuse identically. An unattributed kind is reported only
+  when the status is one that refuses a request body and the upstream's own
+  structured identifier decoded: every Adapter reaches its bad-request class as
+  the fall-through of a status switch, and a body that could not be read is not
+  the upstream saying anything at all.
+- **A verification that established nothing fails.** Carrying the baseline
+  through means a run whose every probe was refused recommends the whole catalog
+  entry, which is indistinguishable from having measured it. At least one probe
+  must have answered "supported" before the run may complete as
+  `verified_probe` — the one source permitted to claim verified evidence, and
+  the one exempt from catalog drift.
 - **Exact model matching.** A prefix or family rule must never promote an
   unknown future model to known capabilities. An entry with no region applies to
   every region, which is itself a claim that the capability does not vary by
@@ -128,9 +160,10 @@ edit into a spurious conflict.
 | Profile | Stage | Chat | Stream | Embeddings | Tools/Vision/JSON | Authentication |
 |---|---|---:|---:|---:|---:|---|
 | OpenAI | GA | yes | yes | yes | yes | Bearer key |
-| Anthropic Messages | GA | yes | yes | no | tools/vision/reasoning | `x-api-key` |
+| OpenAI Responses | GA | yes | no | no | tools/vision/JSON, plus web search at the ceiling | Bearer key |
+| Anthropic Messages | GA | yes | yes | no | tools/vision/reasoning/structured outputs, no JSON object | `x-api-key` |
 | Azure OpenAI | GA | yes | yes | yes | yes | `api-key` |
-| DeepSeek | GA | yes | yes | no by default | tools/JSON | Bearer key |
+| DeepSeek | GA | yes | yes | no by default | tools/JSON object, no structured outputs | Bearer key |
 | OpenAI-compatible | GA | yes | yes | yes | opt-in | Bearer key |
 | Gemini generateContent | Beta | text | yes | float | not declared | `x-goog-api-key` |
 | AWS Bedrock Converse | Beta | text | yes | no | not declared | SigV4, encrypted static JSON |
@@ -146,14 +179,14 @@ edit into a spurious conflict.
 The Gemini Beta adapter translates text messages, system instructions,
 generation limits, stop sequences, finish reasons, usage metadata, SSE chunks,
 and string/string-array embeddings. It deliberately rejects multimodal content,
-tool messages/calls, JSON mode, and base64 embedding output until their semantic
-contracts and redaction behavior have dedicated tests. API keys are sent only
+tool messages/calls, both JSON output modes, and base64 embedding output until
+their semantic contracts and redaction behavior have dedicated tests. API keys are sent only
 in the header, never in query strings.
 
 The Bedrock Converse adapter translates system/developer, user, and assistant
 text messages; normalizes output text, finish reasons, and token usage; and
 validates AWS EventStream prelude and message CRCs before emitting semantic
-chunks. It rejects tool, vision, JSON-mode, embedding, unknown-event, and
+chunks. It rejects tool, vision, JSON-output, embedding, unknown-event, and
 truncated-stream inputs instead of silently downgrading them. The separate Titan
 Text Embeddings V2 InvokeModel profile accepts one string and validates the
 versioned native schema, dimensions, float vector and token usage. It rejects

@@ -18,9 +18,12 @@ import (
 )
 
 const (
-	MinReadableSchema           = 1
-	MaxReadableSchema           = 1
-	CapabilityDictionaryVersion = 1
+	MinReadableSchema = 1
+	MaxReadableSchema = 1
+	// v2 splits json_mode into json_object and structured_outputs. A catalog
+	// published under v1 names a capability this reader no longer carries, and
+	// its entries cannot be read as either half.
+	CapabilityDictionaryVersion = 2
 	SignatureAlgorithmEd25519   = "ed25519"
 )
 

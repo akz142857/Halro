@@ -288,7 +288,11 @@ func TestConverseStreamRejectsTruncatedAndNonTextStreams(t *testing.T) {
 
 func TestBedrockStreamExceptionClassification(t *testing.T) {
 	validation := streamException("validationException", http.Header{}, nil)
-	if validation.Class != provider.ErrorBadRequest || validation.Retryable || validation.Ambiguous {
+	// The refusal kind is asserted here rather than only on the HTTP path: both
+	// streaming probes carry a dependency, so losing it on this path would
+	// silently return them to "inconclusive" for every refused stream.
+	if validation.Class != provider.ErrorBadRequest || validation.Retryable || validation.Ambiguous ||
+		validation.Refusal != provider.RefusalInvalid {
 		t.Fatalf("validation=%#v", validation)
 	}
 	model := streamException("modelStreamErrorException", http.Header{}, nil)
@@ -301,7 +305,9 @@ func TestBedrockStreamExceptionClassification(t *testing.T) {
 	}
 	header := http.Header{"Retry-After": []string{"5"}}
 	throttled := streamException("throttlingException", header, nil)
-	if throttled.Class != provider.ErrorRateLimit || throttled.RetryAfter != 5*time.Second {
+	// Not a refusal of the request body, so it names no kind.
+	if throttled.Class != provider.ErrorRateLimit || throttled.RetryAfter != 5*time.Second ||
+		throttled.Refusal != provider.RefusalNone {
 		t.Fatalf("throttled=%#v", throttled)
 	}
 	unknown := streamException("futureException", http.Header{}, nil)
@@ -644,5 +650,58 @@ func TestProbeWithoutAModelIsRefusedOnlyByProfilesThatAddressOne(t *testing.T) {
 	}
 	if err := titan.Probe(context.Background(), ""); err == nil {
 		t.Fatal("a model-addressed probe accepted an empty model")
+	}
+}
+
+// Bedrock names the exception, never the field inside the request that caused
+// it: an unsupported inference parameter and a malformed message list are both
+// ValidationException. The refusal is therefore reported as unattributed, which
+// is what keeps a capability probe from reading a nonexistent model as a
+// missing capability.
+func TestBedrockBadRequestRefusalIsUnattributed(t *testing.T) {
+	classified := classifyHTTP(jsonResponse(http.StatusBadRequest, `{"__type":"ValidationException","message":"toolConfig is not supported"}`))
+	if classified.Class != provider.ErrorBadRequest || classified.Refusal != provider.RefusalInvalid {
+		t.Fatalf("classification=%#v", classified)
+	}
+	// Only a refusal of the request body carries a kind. A throttle is not the
+	// upstream saying anything about what was in the request.
+	throttled := classifyHTTP(jsonResponse(http.StatusTooManyRequests, `{"__type":"ThrottlingException"}`))
+	if throttled.Refusal != provider.RefusalNone {
+		t.Fatalf("throttle carried a refusal kind: %#v", throttled)
+	}
+}
+
+// End to end, because each half is convincing alone and the pair is the claim:
+// the adapter maps ValidationException onto the normalized kind and the detector
+// turns that into a capability answer. Before contract v3 every refused probe on
+// this family recorded "inconclusive", whatever Bedrock had said.
+func TestBedrockRefusalBecomesAnUnsupportedVerdictOnlyForADependentProbe(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return jsonResponse(http.StatusBadRequest, `{"__type":"ValidationException","message":"streaming is not supported for this model"}`), nil
+	})}
+	adapter := newTestAdapter(t, client)
+	defer adapter.Close()
+	manifest, ok := provider.BuiltinProfile(domain.ProfileBedrockConverseText)
+	if !ok {
+		t.Fatal("profile missing")
+	}
+	capabilities := domain.DefaultProviderCapabilitiesForProfile(domain.ProviderBedrock, domain.ProfileBedrockConverseText)
+	bridge, err := provider.NewLegacyAdapterBridge(adapter, manifest, domain.EvidenceForCapabilities(capabilities, domain.EvidenceDeclared))
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := provider.ModelCapabilityDetectionTarget{ProviderModel: "model", BindingID: "binding", ProfileID: manifest.ID, RiskTier: "safe_automatic"}
+
+	dependent := bridge.DetectCapability(context.Background(), target,
+		provider.CapabilityProbe{Capability: "streaming", Kind: "minimal_stream", DependsOn: []string{"chat"}, MaxOutputTokens: 16})
+	if dependent.Status != domain.ProbeUnsupported {
+		t.Fatalf("dependent probe recorded %s, want unsupported: %#v", dependent.Status, dependent)
+	}
+	// A model that does not exist is refused with the same exception, so a probe
+	// with nothing behind it establishes nothing.
+	root := bridge.DetectCapability(context.Background(), target,
+		provider.CapabilityProbe{Capability: "chat", Kind: "minimal_chat", MaxOutputTokens: 16})
+	if root.Status != domain.ProbeInconclusive {
+		t.Fatalf("baseline probe recorded %s, want inconclusive: %#v", root.Status, root)
 	}
 }
