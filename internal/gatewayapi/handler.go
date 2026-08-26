@@ -688,8 +688,15 @@ func (h *Handler) renderAnthropicGatewayError(writer http.ResponseWriter, err er
 		return
 	}
 	setRetryAfter(writer, gatewayError.RetryAfter)
+	// 529 is Anthropic's own overload status, and it is read from the status
+	// line rather than from the body. The upstream's `error.code` used to be
+	// accepted here too, which let a string an upstream chose decide the status
+	// Halro returns to a client — and one path delivers that string with no
+	// status at all behind it: a Mantle Responses stream error event fills
+	// ProviderCode straight from the event, so an event naming itself
+	// `overloaded_error` rewrote a 502 into a 529 that no upstream ever sent.
 	var providerError *provider.Error
-	if errors.As(err, &providerError) && (providerError.StatusCode == 529 || providerError.ProviderCode == "overloaded_error") {
+	if errors.As(err, &providerError) && providerError.StatusCode == 529 {
 		writeAnthropicError(writer, 529, "overloaded_error", gatewayError.Message, requestID)
 		return
 	}
