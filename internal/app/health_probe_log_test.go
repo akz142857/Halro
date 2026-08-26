@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -139,5 +140,32 @@ func TestPeriodicDeploymentProbeLogsNoUpstreamBody(t *testing.T) {
 
 	if refused := logs.String(); !strings.Contains(refused, `"reason"`) || !strings.Contains(refused, "198.18.4.6") {
 		t.Fatalf("a refusal Halro produced itself was not logged with its cause: %s", refused)
+	}
+
+	// The third shape, and the one the rule above cannot read: an error that
+	// never went through classification at all. It has no upstream status
+	// either, so "no status means Halro wrote it" admits it on the same terms
+	// as the dial failure above — while nothing has established that Halro
+	// wrote it. Every in-tree adapter classifies its failures; the registry
+	// also serves adapters it did not compile, and one returning plain prose
+	// holding a response body had it written out once per probe interval.
+	logs.Reset()
+	adapter.err = errors.New(
+		"upstream refused: not authorized to call this project with " + bedrockKeyCanary)
+	runtime.probeDeployments(context.Background())
+
+	unclassified := logs.String()
+	// Reported, and with enough to chase: a test that only asserts the absence
+	// of the sentence is satisfied by a loop that logs nothing at all.
+	if !strings.Contains(unclassified, "active deployment probe failed") ||
+		!strings.Contains(unclassified, `"error_class":"unknown"`) ||
+		!strings.Contains(unclassified, `"error_type":"*errors.errorString"`) {
+		t.Fatalf("an unclassified probe failure was not reported by type: %s", unclassified)
+	}
+	if strings.Contains(unclassified, "not authorized to call this project") {
+		t.Fatalf("an unclassified error's text was written to the log: %s", unclassified)
+	}
+	if strings.Contains(unclassified, bedrockKeyCanary) {
+		t.Fatalf("periodic probe log leaked a credential: %s", unclassified)
 	}
 }

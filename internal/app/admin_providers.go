@@ -559,6 +559,11 @@ type probeFailure struct {
 	Code      string
 	RequestID string
 	Reason    string
+	// Type names the Go type of a failure that arrived unclassified, and is
+	// empty for every classified one. It exists because the absence of an
+	// upstream status means two different things on those two paths, and
+	// probeFailureAttributes has to tell them apart.
+	Type string
 }
 
 // maxProbeReasonLength bounds the upstream sentence. Provider error bodies are
@@ -615,7 +620,12 @@ func describeProbeFailure(err error) probeFailure {
 		failure.Status = classified.StatusCode
 		failure.Code = probeIdentifier(classified.ProviderCode)
 		failure.RequestID = probeIdentifier(classified.ProviderRequestID)
+		return failure
 	}
+	// Nothing classified this, so nothing established which side of the
+	// boundary wrote the sentence it carries. The type is recorded instead, and
+	// the log reads it in place of the text.
+	failure.Type = fmt.Sprintf("%T", err)
 	return failure
 }
 
@@ -735,6 +745,15 @@ func (r *Runtime) logProbeFailure(kind, id, bindingID string, failure probeFailu
 // there was no upstream body to quote, so the sentence is one Halro wrote — a
 // dial failure, a refusal to probe — and withholding it would leave the line
 // with nothing but a class.
+//
+// That inference needs a classified error to stand on. An unclassified one
+// never went through the classification that decides what may be said about it,
+// so it is either Halro's own error or an adapter that did not honour the
+// contract, and from here the two are indistinguishable — one of them can be
+// holding a response body. Its Go type goes in and its text stays out: a type
+// name is produced by the code rather than by an upstream, and it answers what
+// this line is actually asked, which is what produced a failure nothing
+// classified.
 func probeFailureAttributes(failure probeFailure) []any {
 	attributes := []any{"error_class", string(failure.Class)}
 	if failure.Status > 0 {
@@ -745,6 +764,9 @@ func probeFailureAttributes(failure probeFailure) []any {
 	}
 	if failure.RequestID != "" {
 		attributes = append(attributes, "provider_request_id", failure.RequestID)
+	}
+	if failure.Type != "" {
+		return append(attributes, "error_type", failure.Type)
 	}
 	if failure.Reason != "" && failure.Status == 0 {
 		attributes = append(attributes, "reason", failure.Reason)
